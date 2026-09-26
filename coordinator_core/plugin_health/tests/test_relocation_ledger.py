@@ -86,12 +86,6 @@ def test_load_relocation_ledger_skips_entry_missing_required_key(tmp_path: Path)
     assert entries[0].old_path == good["old_path"]
 
 
-# Direct coverage for the
-# `retired`-disposition load path and `RelocationEntry.describe()`, neither
-# of which had a direct test in this file before (both were exercised only
-# transitively, if at all, via `bin_inventory_gate.py`'s disposed-stem
-# outcome, which does not assert on the loaded entry's own typed fields or
-# `.describe()`'s exact string output).
 def test_load_relocation_ledger_parses_retired_entry_typed_fields(tmp_path: Path) -> None:
     ledger_path = tmp_path / "ledger.json"
     _write_ledger(ledger_path, [_retired_entry(successor="check_bin_inventory_gate")])
@@ -103,7 +97,6 @@ def test_load_relocation_ledger_parses_retired_entry_typed_fields(tmp_path: Path
     assert entry.retired_at == "2026-07-27"
     assert entry.successor == "check_bin_inventory_gate"
     assert entry.reason == "test fixture retirement"
-    # A retired entry has no relocation -- the "moved"-only fields stay blank.
     assert entry.new_repo == ""
     assert entry.new_path == ""
 
@@ -138,8 +131,6 @@ def test_describe_retired_entry_without_successor() -> None:
         retired_at="2026-07-27",
     )
     described = entry.describe()
-    # The retirement date carries its own age: a reader who checks a "retired
-    # at" date against today is the reader this render exists for.
     assert described.startswith("deliberately retired at 2026-07-27 (")
     assert "days ago)" in described
     assert described.endswith("(test fixture retirement); no successor")
@@ -161,9 +152,6 @@ def test_describe_retired_entry_with_successor() -> None:
     )
 
 
-# The skip-on-invalid-disposition
-# branch had no test confirming an unrecognized `disposition` value is
-# silently dropped rather than raised or mis-typed as `"moved"`.
 def test_load_relocation_ledger_skips_entry_with_unknown_disposition(tmp_path: Path) -> None:
     ledger_path = tmp_path / "ledger.json"
     good = _entry()
@@ -183,8 +171,6 @@ def test_find_relocation_matches_bare_old_path(tmp_path: Path) -> None:
 
 
 def test_find_relocation_matches_cockpit_shaped_stale_probe(tmp_path: Path) -> None:
-    """The exact stale-path shape the incident named: a leading `../<repo>/`
-    traversal segment prefixing the same bare path."""
     ledger_path = tmp_path / "ledger.json"
     _write_ledger(ledger_path, [_entry()])
     found = rl.find_relocation(
@@ -267,23 +253,7 @@ def test_integrity_ok_on_empty_ledger(tmp_path: Path) -> None:
 
 
 @pytest.mark.real_home  # live-tree oracle: resolves the real CLAUDE_KLABAUTER_ROOT via the machine-local
-# registry, which the suite-root `_quarantine_real_home` autouse fixture would otherwise hide —
-# turning this oracle into an unconditional skip. Read-only (integrity check performs no writes),
-# which is the marker's own sanctioned use per conftest.py's docstring.
 def test_real_tracked_ledger_passes_integrity() -> None:
-    """The tracked `docs/install/relocation-ledger.json` (backfilled with the
-    validate-install-contract entry that prompted this module) must resolve
-    against the real, live claude-klabauter tree -- no tmp_path fixture. SKIPS (visibly,
-    via pytest.skip) rather than passing when claude-klabauter's own root cannot be
-    resolved on this machine, mirroring `fleet_reachability`'s skip-not-fail
-    contract for an unresolvable root.
-
-    The skip is deliberately a `pytest.skip` and not a bare `return`: this
-    test's entire value is asserting against the real tree, so a run in which
-    it did not assert must be distinguishable from a run in which it did. A
-    bare `return` reports as a pass, making "no oracle was available" read
-    identically to "the oracle held" -- the vacuous-signal failure this
-    module's own subject matter is about."""
     try:
         ledger_path = rl.default_ledger_path()
     except RuntimeError as exc:

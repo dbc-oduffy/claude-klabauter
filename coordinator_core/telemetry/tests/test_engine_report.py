@@ -1,7 +1,3 @@
-"""Tests for coordinator_core.telemetry.engine_report — the supported,
-rotation-aware read surface promoted from cost_census.py's private
-mechanism (spec backlink:
-docs/plans/2026-08-19-warm-engine-gets-an-honest-instrument.md C1)."""
 
 from __future__ import annotations
 
@@ -42,7 +38,6 @@ def test_latency_percentiles_and_per_op_over_synthetic_corpus(monkeypatch, tmp_p
         {"op": "op.a", "t_start": now - 9, "elapsed_ms": 200.0, "kind": "complete"},
         {"op": "op.a", "t_start": now - 8, "elapsed_ms": 300.0, "kind": "complete"},
         {"op": "op.b", "t_start": now - 7, "elapsed_ms": 900.0, "kind": "complete"},
-        # a "started" row must never contribute a latency value
         {"op": "op.a", "t_start": now - 6, "kind": "started", "corr_id": "x"},
     ]
     _write_jsonl(sink, rows)
@@ -60,7 +55,6 @@ def test_latency_percentiles_and_per_op_over_synthetic_corpus(monkeypatch, tmp_p
     assert per_op["op.b"]["n"] == 1
     assert per_op["op.b"]["max_ms"] == 900.0
 
-    # "some.other.op" style hot-path-only limiting must NOT apply here —
     # every op present shows up, unlike cost_census.HOT_PATH_OPS.
     assert "op.a" in per_op and "op.b" in per_op
 
@@ -78,7 +72,6 @@ def test_iter_sink_entries_spans_rotated_generations(monkeypatch, tmp_path):
         [{"op": "op.old", "t_start": now - 100, "elapsed_ms": 20.0, "kind": "complete"}],
     )
 
-    # Reading only the live file would have missed the older generation.
     live_only = list(
         engine_report.iter_sink_entries(
             sink_paths=[logs_dir / "op-latency.jsonl"]
@@ -117,9 +110,8 @@ def test_iter_sink_entries_missing_sink_yields_nothing(monkeypatch, tmp_path):
 
 
 def test_percentile_takes_fractions_not_percentiles():
-    vals = [float(i) for i in range(1, 101)]  # 1..100
+    vals = [float(i) for i in range(1, 101)]
     assert engine_report._percentile(vals, 0.50) == 51.0
-    # Passing 95 (not 0.95) silently returns the max — documented gotcha.
     assert engine_report._percentile(vals, 95) == 100.0
 
 
@@ -130,8 +122,8 @@ def test_route_distribution_unstamped_never_lands_in_by_route():
         {"op": "op.a", "route": "warm_server", "kind": "complete"},
         {"op": "op.a", "route": "in_process", "kind": "complete"},
         {"op": "op.b", "route": None, "kind": "complete"},
-        {"op": "op.b", "kind": "complete"},  # route key absent entirely
-        {"op": "op.c", "route": "warm_server", "kind": "started"},  # not complete
+        {"op": "op.b", "kind": "complete"},
+        {"op": "op.c", "route": "warm_server", "kind": "started"},
     ]
     result = engine_report.route_distribution(entries, coverage_floor=0.5)
 
@@ -141,14 +133,12 @@ def test_route_distribution_unstamped_never_lands_in_by_route():
     assert result["by_route"] == {"warm_server": 2, "in_process": 1}
     assert "unstamped" not in result["by_route"]
 
-    # coverage reported separately from share, and share excludes unstamped.
     assert result["coverage"] == 3 / 5
     assert result["warm_share_of_routed"] == 2 / 3
     assert result["verdict"] == "ok"
 
 
 def test_route_distribution_at_real_corpus_coverage_is_unknown():
-    # Today's measured live-corpus coverage: 413/160,861 = 0.257% (DR-328).
     complete_rows = [{"op": "op.a", "kind": "complete"} for _ in range(160_861 - 413)]
     routed_rows = [
         {"op": "op.a", "route": "warm_server", "kind": "complete"} for _ in range(413)
@@ -160,7 +150,6 @@ def test_route_distribution_at_real_corpus_coverage_is_unknown():
     assert result["complete"] == 160_861
     assert result["routed"] == 413
     assert abs(result["coverage"] - 413 / 160_861) < 1e-9
-    # share is still reported even though the verdict can't rely on it.
     assert result["warm_share_of_routed"] == 1.0
     assert result["verdict"] == "unknown"
     assert "coverage" in result["verdict_reason"]
@@ -175,7 +164,6 @@ def test_route_distribution_empty_corpus_is_unknown_not_crash():
 
 
 def test_route_distribution_default_min_complete_rows_is_back_compat():
-    # An existing-shaped call (no min_complete_rows) is byte-identical.
     entries = [
         {"op": "op.a", "route": "warm_server", "kind": "complete"},
         {"op": "op.a", "route": "in_process", "kind": "complete"},
@@ -236,13 +224,6 @@ def test_route_distribution_row_count_and_coverage_reasons_are_distinguishable()
 
 
 def test_route_distribution_zero_rows_refuses_under_both_minimums():
-    # A 0-row window already refuses via the coverage floor's
-    # `if complete else 0.0` guard regardless of the row-count minimum —
-    # the one input where the two guards overlap. At min_complete_rows=0
-    # the row-count check never fires (0 < 0 is false), so the coverage
-    # reason is the one that surfaces; at min_complete_rows=50 the
-    # row-count check fires first (row-count runs BEFORE coverage), so
-    # that reason surfaces instead. Pin which reason fires at each.
     result_default = engine_report.route_distribution(
         [], coverage_floor=0.05, min_complete_rows=0
     )
@@ -266,7 +247,7 @@ def test_process_fanout_overall_and_per_op():
         {"op": "op.a", "pid": 200, "kind": "complete"},
         {"op": "op.b", "pid": 200, "kind": "complete"},
         {"op": "op.b", "pid": 300, "kind": "complete"},
-        {"op": "op.c", "pid": 400, "kind": "started"},  # not complete, excluded
+        {"op": "op.c", "pid": 400, "kind": "started"},
     ]
     result = engine_report.process_fanout(entries)
 
@@ -289,8 +270,8 @@ def test_outcome_split_unknown_outcome_lands_in_other():
         {"op": "op.a", "outcome": "ok", "kind": "complete"},
         {"op": "op.a", "outcome": "error", "kind": "complete"},
         {"op": "op.b", "outcome": "timeout", "kind": "complete"},
-        {"op": "op.b", "outcome": "partial_mutation", "kind": "complete"},  # unrecognised
-        {"op": "op.c", "outcome": "ok", "kind": "started"},  # not complete, excluded
+        {"op": "op.b", "outcome": "partial_mutation", "kind": "complete"},
+        {"op": "op.c", "outcome": "ok", "kind": "started"},
     ]
     result = engine_report.outcome_split(entries)
 
@@ -336,18 +317,13 @@ def test_engine_telemetry_report_composes_every_section(monkeypatch, tmp_path):
 def test_warm_share_since_buckets_routed_rows_since_publish_stamp():
     since_ts = 1000.0
     entries = [
-        # before the publish stamp — excluded entirely.
         {"route": "warm_server", "t_start": 999.0, "kind": "complete"},
-        # bucket 0: [1000, 2800)
         {"route": "warm_server", "t_start": 1000.0, "kind": "complete"},
         {"route": "in_process", "t_start": 1500.0, "kind": "complete"},
-        # bucket 1: [2800, 4600)
         {"route": "warm_server", "t_start": 2900.0, "kind": "complete"},
         {"route": "warm_server", "t_start": 3000.0, "kind": "complete"},
-        # unstamped row in range — must not land in any bucket.
         {"route": None, "t_start": 1200.0, "kind": "complete"},
         {"t_start": 1200.0, "kind": "complete"},
-        # non-complete row in range — excluded.
         {"route": "warm_server", "t_start": 1200.0, "kind": "started"},
     ]
 

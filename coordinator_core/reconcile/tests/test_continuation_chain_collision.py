@@ -43,13 +43,7 @@ def _record(path, *, stub_id="stub-01", state="in_flight", **fields):
     return record
 
 
-# --------------------------------------------------------------------------
-# collapse_to_chain_heads — the shared primitive
-# --------------------------------------------------------------------------
-
-
 def test_stamped_supersession_loses_to_the_live_head():
-    """Signal (1)/(2): `deployment_state: continued` + `continued_into`."""
     superseded = _record(
         "archive/handoffs/2026-08/a.md",
         state="continued",
@@ -62,14 +56,6 @@ def test_stamped_supersession_loses_to_the_live_head():
 
 
 def test_unstamped_predecessor_loses_to_the_successor_that_names_it():
-    """Signal (3), and the one that makes the collapse total.
-
-    The successor's `predecessor` field is written when the successor is MINTED; the
-    predecessor's own `continued` stamp is a separate later step that is not always
-    reached. 4 of the 10 records in the corpus above carried a successor naming them
-    while carrying no supersession stamp of their own — trusting only the stamp left
-    all four competing with the real head.
-    """
     unstamped = _record("state/handoffs/a.md", state="shipped", blocks=["dep-01"])
     head = _record(
         "state/handoffs/b.md",
@@ -81,7 +67,6 @@ def test_unstamped_predecessor_loses_to_the_successor_that_names_it():
 
 
 def test_fan_in_legs_are_superseded_by_the_leg_that_names_them():
-    """`additional_predecessors` carries the fan-in legs beyond the primary."""
     leg_a = _record("state/handoffs/a.md", state="shipped")
     leg_b = _record("state/handoffs/b.md", state="shipped")
     head = _record(
@@ -94,9 +79,6 @@ def test_fan_in_legs_are_superseded_by_the_leg_that_names_them():
 
 
 def test_predecessor_none_sentinel_supersedes_nothing():
-    """`coordinator-doc-new` emits the literal `predecessor: none` when the flag is
-    not passed. Treating it as a path would index a `none` basename and, worse, read
-    as a real up-edge."""
     only = _record("state/handoffs/none", predecessor="none")
 
     assert collapse_to_chain_heads([only]) == [only]
@@ -113,8 +95,6 @@ def test_a_fully_superseded_group_returns_the_group_not_nothing():
 
 
 def test_a_genuine_collision_survives_the_collapse_undecided():
-    """Two unrelated records sharing an unprefixed `stub_id`, no continuation edge
-    between them: NOT this function's job to disambiguate, and it does not try."""
     a = _record("state/handoffs/family-a.md")
     b = _record("state/handoffs/family-b.md")
 
@@ -122,22 +102,13 @@ def test_a_genuine_collision_survives_the_collapse_undecided():
 
 
 def test_records_with_no_path_field_fall_back_to_the_stamp():
-    """Signal (3) needs a path-shaped field to match on; (1)/(2) still apply without
-    one. A caller whose collector attaches no path must not lose the stamped case."""
     superseded = {"stub_id": "s", "deployment_state": "continued", "continued_into": "b.md"}
     head = {"stub_id": "s", "deployment_state": "in_flight"}
 
     assert collapse_to_chain_heads([superseded, head]) == [head]
 
 
-# --------------------------------------------------------------------------
-# compute-time — _index_by_id / _has_asymmetry
-# --------------------------------------------------------------------------
-
-
 def test_index_resolves_the_stub_to_the_live_head_not_the_last_appended():
-    """The exact ordering that produced the defect: archived-and-superseded appended
-    AFTER the live head, which is what `_collect_all_handoffs_for_gate_index` does."""
     head = _record(
         "state/handoffs/head.md",
         blocks=["dep-01"],
@@ -156,9 +127,6 @@ def test_index_resolves_the_stub_to_the_live_head_not_the_last_appended():
 
 
 def test_symmetric_edge_on_the_head_stops_reading_as_asymmetry():
-    """End-to-end at compute time: the dependent's gate check against a chain whose
-    head DOES name it back. Before the collapse this returned True — a symmetric
-    graph reported as `blocks/blocked_by asymmetry detected — data defect`."""
     head = _record(
         "state/handoffs/head.md",
         kind="roadmap-baton",
@@ -180,19 +148,12 @@ def test_symmetric_edge_on_the_head_stops_reading_as_asymmetry():
 
 
 def test_a_genuinely_severed_edge_still_reports_asymmetry():
-    """The collapse must not make `_has_asymmetry` unable to fire. A head that really
-    does not name the dependent back is still a data defect."""
     head = _record("state/handoffs/head.md", kind="roadmap-baton", blocks=[])
     dependent = {"stub_id": "dep-01", "blocked_by": ["stub-01"]}
 
     index = _index_by_id([head])
 
     assert _has_asymmetry(dependent, ["stub-01"], index) is True
-
-
-# --------------------------------------------------------------------------
-# act-time — _resolve_blocker_deployment_state
-# --------------------------------------------------------------------------
 
 
 _FM = """---
@@ -215,8 +176,6 @@ def _write(path: Path, *, stub_id, state, extra=""):
 
 
 def test_act_time_resolves_a_continuation_chain_to_its_head(tmp_path):
-    """Was `<ambiguous-duplicate-id>` — a permanent `_gate_cascade_clear` wedge
-    presenting as an integrity guard."""
     from coordinator_core.ops.handoff_transition import _resolve_blocker_deployment_state
 
     _write(
@@ -243,8 +202,6 @@ def test_act_time_resolves_a_continuation_chain_to_its_head(tmp_path):
 
 
 def test_act_time_still_fails_loud_on_a_genuine_duplicate_id(tmp_path):
-    """The ambiguity guard is narrowed, never relaxed: two records sharing a
-    `stub_id` with no continuation edge between them remain unresolvable."""
     from coordinator_core.ops.handoff_transition import (
         _AMBIGUOUS_BLOCKER_SENTINEL,
         _resolve_blocker_deployment_state,
@@ -259,9 +216,6 @@ def test_act_time_still_fails_loud_on_a_genuine_duplicate_id(tmp_path):
 
 
 def test_act_time_and_compute_time_agree_on_the_same_chain(tmp_path):
-    """The two resolvers exist to answer the same question and previously disagreed.
-    Pin that they now agree on one corpus, so a future change to either that
-    reintroduces the split fails here rather than in a wedged ceremony."""
     from coordinator_core.ops.handoff_transition import _resolve_blocker_deployment_state
     from coordinator_core.reconcile.handoff_corpus import (
         _collect_all_handoffs_for_gate_index,

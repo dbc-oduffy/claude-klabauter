@@ -128,17 +128,6 @@ _LOG = logging.getLogger(__name__)
 
 
 def _resolve_active_sibling_paths() -> list[Path]:
-    """Every registered, active, resolved-path-deduped sibling repo path.
-
-    "Active" per `capability_index.py`'s own resolution: a registered
-    `repos.*` key whose value is a non-empty path that IS an existing
-    directory. Iterates `sorted(read_registry_repos().items())` so
-    enumeration order (and therefore which registry key "wins" a dedup) is
-    deterministic across runs rather than dict-order-dependent -- mirrors
-    `capability_index._enumerate_repo_paths`'s own discipline.
-
-    `RegistryReadError` propagates uncaught (module negative-spec).
-    """
     resolved_paths: list[Path] = []
     for _key, path_str in sorted(read_registry_repos().items()):
         if not path_str:
@@ -156,22 +145,6 @@ def _resolve_active_sibling_paths() -> list[Path]:
 def build_fleet_work_state(
     *, snapshot: Optional[dict] = None
 ) -> dict[str, Any]:
-    """Aggregate `build_work_state` across every active, deduped sibling.
-
-    `snapshot`: an already-taken `harness_registry.snapshot()` read, for a
-    caller that has already hoisted one for another purpose in the same
-    call (e.g. a future combined fleet read). When omitted, this function
-    takes exactly ONE snapshot itself, above the per-repo loop (AC9's own
-    hoist requirement) -- never per-repo.
-
-    Returns:
-        {"repos": {<resolved-path-str>: {"held": [...], "unclaimed": [...], "review_due": [...]}},
-         "errors": [{"target_root": <str>, "reason": <str>}, ...]}
-        `errors` carries one entry per sibling skipped for not being a git
-        repository (AC7/AC9b) or whose `build_work_state` call itself
-        raised (the per-repo degrade path, AC9) -- never a dropped sibling
-        with no trace.
-    """
     if snapshot is None:
         try:
             from coordinator_core.session import harness_registry
@@ -186,22 +159,10 @@ def build_fleet_work_state(
 
     for repo_path in _resolve_active_sibling_paths():
         key = str(repo_path)
-        # Walk-only pre-check (never spawns) -- routes a non-git sibling
-        # straight into the degrade path before touching build_work_state
-        # (AC7, AC9b, AC10).
         common = _walk_git_common_dir(str(repo_path))
         if common is None:
             errors.append({"target_root": key, "reason": "not a git repository"})
             continue
-        # A registered `repos.*` entry
-        # pointing at a subdirectory of a repo (or a linked worktree) passes
-        # the walk-only pre-check above (which WALKS UP) but is not itself
-        # the main worktree root; without normalizing through
-        # `main_worktree_root`, `build_work_state` would silently scan an
-        # empty `<subdir>/state/handoffs` and report a confident, well-formed
-        # all-empty repo instead of degrading into `errors[]` -- the same
-        # defect class as fdc07bb2, now fixed here the same way C3 fixed it
-        # for `session.work_state`.
         try:
             target = main_worktree_root(Path(common))
         except ValueError as exc:

@@ -1,20 +1,3 @@
-"""
-test_check_atlas_watch_drift.py — pytest unit tests for
-coordinator_core.ops.check_atlas_watch_drift.
-
-Port source: coordinator/tests/test_atlas_watch_drift.py (DoE-claude, bash-oracle
-subprocess tests) — reauthored here as direct in-process calls against the
-ported Python module (`run(argv, cwd=...)`), same fixtures/assertions.
-
-Spec backlink: docs/plans/2026-06-04-architecture-audit-atlas-refresh-gate.md § C2
-Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
-
-Isolation: every test builds a fresh fixture git repo under tmp_path with the
-expected `docs/architecture/systems/` layout and calls `run()` with cwd=repo.
-
-Negative-spec: tests do NOT touch the real ~/.claude/docs/architecture/systems/
-tree or the operator's working tree.
-"""
 
 import os
 import subprocess
@@ -28,24 +11,11 @@ from coordinator_core.ops import check_atlas_watch_drift
 from coordinator_core.ops.check_atlas_watch_drift import run
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Declared, not excused: this file spawns real git because the ported bash-oracle
-# contract (test_atlas_watch_drift.py, DoE-claude) depends on real commit/mtime
-# state in `docs/architecture/systems/` that `check_atlas_watch_drift.run()` reads
-# via git plumbing -- no mock stands in for that. Each test builds its own fresh
-# tmp_path repo via `_init_repo`, so mutation-heavy staleness scenarios need
 # per-test isolation, not a module-scope hoist. The spawn ratchet's `_BASELINE` is
-# shrink-only pre-existing residue and is explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
-# ---------------------------------------------------------------------------
-# Fixture helpers
-# ---------------------------------------------------------------------------
-
-
 def _init_repo(root):
-    """Initialize a minimal git repo at `root` and return (root_str, systems_dir_str)."""
     root = str(root)
     subprocess.run(["git", "init", "-q", root], check=True, **no_console_passthrough_kwargs())
     subprocess.run(["git", "-C", root, "config", "user.email", "test@example.com"], check=True, **no_console_passthrough_kwargs())
@@ -76,11 +46,6 @@ def _write_watch(systems_dir, name, body):
     with open(path, "w", encoding="utf-8") as f:
         f.write(body)
     return path
-
-
-# ---------------------------------------------------------------------------
-# AC8 — per-system line emission, mixed .watch.sh presence
-# ---------------------------------------------------------------------------
 
 
 def test_emits_per_system_line(tmp_path):
@@ -123,11 +88,6 @@ def test_emits_per_system_line(tmp_path):
     assert len(lines) == 3, lines
 
 
-# ---------------------------------------------------------------------------
-# AC8b — non-zero exit -> ERROR, never silently FRESH
-# ---------------------------------------------------------------------------
-
-
 def test_nonzero_exit_emits_error(tmp_path):
     today = date.today().isoformat()
     repo, systems = _init_repo(tmp_path)
@@ -153,9 +113,7 @@ def test_nonzero_exit_emits_error(tmp_path):
     assert not any(ln.startswith("FRESH delta") for ln in lines), lines
 
 
-# ---------------------------------------------------------------------------
 # AC8c — malformed stdout -> MALFORMED, never silently FRESH
-# ---------------------------------------------------------------------------
 
 
 def test_malformed_stdout_emits_malformed(tmp_path):
@@ -229,11 +187,6 @@ def test_leading_blank_line_still_malformed(tmp_path):
     assert any(ln.startswith("MALFORMED golf2:") for ln in lines), lines
 
 
-# ---------------------------------------------------------------------------
-# STALE walk default-on (and --no-stale-walk suppression)
-# ---------------------------------------------------------------------------
-
-
 def test_stale_walk_default_on(tmp_path):
     repo, systems = _init_repo(tmp_path)
 
@@ -255,10 +208,6 @@ def test_stale_walk_default_on(tmp_path):
 
 
 def test_stale_walk_missing_last_attested_emits_stale_not_skip(tmp_path):
-    """A page with no `last_attested:` frontmatter at all must not be a
-    silent skip — it is maximally unattested, and the walk must say so,
-    honestly distinguishable from the dated-and-aged case (no ISO date, no
-    numeric age)."""
     repo, systems = _init_repo(tmp_path)
 
     _write_atlas(systems, "kilo", last_mapped=None, last_attested=None)
@@ -272,8 +221,6 @@ def test_stale_walk_missing_last_attested_emits_stale_not_skip(tmp_path):
 
 
 def test_stale_walk_unparseable_last_attested_groups_with_missing(tmp_path):
-    """A present-but-unparseable `last_attested:` value groups with the
-    absent case rather than getting a third line shape."""
     repo, systems = _init_repo(tmp_path)
 
     path = os.path.join(systems, "lima.md")
@@ -308,14 +255,6 @@ def test_stale_walk_threshold_configurable(tmp_path):
     assert not any(ln.startswith("STALE hotel") for ln in lines_legacy), lines_legacy
 
 
-# ---------------------------------------------------------------------------
-# Always returns rc 0 (informational contract)
-# ---------------------------------------------------------------------------
-
-
-# Named a blind spot: no test covered
-# _watch_line's subprocess.run timeout bound (module docstring's "never
-# blocks a caller pipeline" contract). Covers the fix, not just the fixture.
 def test_watch_script_timeout_emits_error_not_hang(tmp_path, monkeypatch):
     monkeypatch.setattr(check_atlas_watch_drift, "_SUBPROCESS_TIMEOUT_SECS", 1)
     today = date.today().isoformat()
@@ -354,11 +293,6 @@ def test_always_exits_zero_even_with_failures(tmp_path):
 
     _, rc = run([], cwd=Path(repo))
     assert rc == 0
-
-
-# ---------------------------------------------------------------------------
-# CLI arg parsing errors (informational — still rc 0)
-# ---------------------------------------------------------------------------
 
 
 def test_missing_stale_days_value_emits_error(tmp_path):

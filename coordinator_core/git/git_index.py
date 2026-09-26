@@ -73,22 +73,12 @@ __all__ = [
 
 _SIGNATURE = b"DIRC"
 _SUPPORTED_VERSIONS = (2, 3)
-#: ctime(8) mtime(8) dev(4) ino(4) mode(4) uid(4) gid(4) size(4) sha1(20)
 #: flags(2) = 62, EXCLUDING the optional v3 extended-flags halfword --
 #: identical layout to `git_state._ENTRY_FIXED_LEN`.
 _ENTRY_FIXED_LEN = 62
 
 
 class IndexStatusEntry(NamedTuple):
-    """One index entry's stat identity: `(mode, size, mtime_seconds,
-    mtime_nanoseconds)`.
-
-    `mtime_nsec` is the sub-second half of the index's 8-byte mtime field.
-    It is `0` both when the entry genuinely landed on a second boundary and
-    when the writing git had no sub-second stat to record at all, so a
-    reader cannot tell those apart -- see `scoped_status` for why that
-    forces the comparison to be guarded rather than unconditional.
-    """
 
     mode: int
     size: int
@@ -97,12 +87,6 @@ class IndexStatusEntry(NamedTuple):
 
 
 class IndexIdentity(NamedTuple):
-    """One index entry's FULL identity -- the union `parse_index_identity`
-    walks for: the stat triple both `IndexStatusEntry` and git's
-    `ce_match_stat` work from, PLUS the blob sha `git_state.IndexEntry`
-    carries. Neither of the two pre-existing readers returns both, which is
-    the whole reason a caller needing both axes was paying two walks.
-    """
 
     mode: int
     sha: str
@@ -112,30 +96,14 @@ class IndexIdentity(NamedTuple):
 
 
 class IndexParseError(ValueError):
-    """Raised instead of ever returning a partial or empty result for a
-    malformed or truncated index. See module negative-spec.
-    """
+    pass
 
 
 class IndexV4Unsupported(IndexParseError):
-    """Raised for an index v4 file specifically -- prefix-compressed names
-    are refused rather than guessed at. See module docstring.
-    """
+    pass
 
 
 def parse_index_stat(repo: Union[str, Path]) -> Dict[str, IndexStatusEntry]:
-    """Parse `resolve_git_dir(repo)/index` directly (no `git` spawn) into
-    `{path: IndexStatusEntry(mode, size, mtime, mtime_nsec)}`.
-
-    Handles index v2 and v3 (extended per-entry flags) only. Raises
-    `IndexV4Unsupported` for a v4 index, and `IndexParseError` for any
-    other bad signature, unsupported version, or structural truncation --
-    never returns a partial or empty dict for a malformed file.
-
-    A genuinely absent index file (no `.git/index` at all -- an unborn
-    repo before the first `git add`) is the one legitimate empty-result
-    case: this returns `{}` rather than raising.
-    """
     return {
         path: IndexStatusEntry(
             mode=e.mode, size=e.size, mtime=e.mtime, mtime_nsec=e.mtime_nsec
@@ -260,11 +228,6 @@ def _parse_index_bytes(
     entries: Dict[str, IndexIdentity] = {}
     offset = 12
 
-    # Membership is tested on the RAW name bytes, so a skipped entry costs
-    # neither a `.decode()` nor a NamedTuple construction -- those two are
-    # most of the per-entry cost, and on a scoped call almost every entry is
-    # skipped. Mirrors the `surrogateescape` dialect the hit path decodes
-    # with, so a non-UTF-8 path round-trips to the same key either way.
     wanted_bytes: Optional[set] = None
     if wanted is not None:
         wanted_bytes = {p.encode("utf-8", "surrogateescape") for p in wanted}
@@ -276,10 +239,6 @@ def _parse_index_bytes(
         if offset + _ENTRY_FIXED_LEN > len(raw):
             raise IndexParseError(f"{index_path}: truncated entry at offset {offset}")
 
-        # ONLY `flags` is needed to step over an entry -- it carries the name
-        # length. The stat/sha fields are unpacked below, AFTER the membership
-        # test, because on a scoped walk almost every entry is skipped and
-        # unpacking four fields to discard them is most of the per-entry cost.
         flags = struct.unpack(">H", raw[offset + 60 : offset + 62])[0]
         offset += _ENTRY_FIXED_LEN
 
@@ -379,9 +338,6 @@ def scoped_status(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, str
     Raises `IndexV4Unsupported` / `IndexParseError` exactly as
     `parse_index_stat` does -- this function does not swallow either.
     """
-    # `wanted=paths`: this function asks about its own pathspec and nothing
-    # else, so materialising the whole index to answer about a handful of
-    # paths was pure waste -- see `parse_index_identity` for the measurement.
     entries = parse_index_identity(repo, wanted=paths)
     repo_path = Path(repo)
     verdicts: Dict[str, str] = {}
@@ -409,48 +365,6 @@ def scoped_status(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, str
 
 
 def diff_index_name_status(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, str]:
-    """`{path: "A"|"M"|"D"}` for `paths` (repo-relative) -- the in-process,
-    pathspec-scoped replacement for `git diff --cached --name-status`
-    (without `--find-renames`; a caller needing rename pairing keeps that
-    as its own concern -- see below). An unchanged path is simply absent
-    from the result, exactly like git's own name-status output never lists
-    a clean path.
-
-    Comparison is by `(mode, sha)` identity only -- both sides are
-    already-computed git object identities, so this never hashes worktree
-    bytes and never opens a blob's content. The staged side comes from
-    `coordinator_core.git.git_state.read_index` (the FULL v2/v3/v4 index
-    parse, including sha -- this module's OWN `parse_index_stat` is the
-    wrong tool here: it deliberately carries no sha and refuses v4
-    outright, neither of which a content-identity diff can tolerate). The
-    HEAD side comes from `git_state.head_blobs`, the one retained spawn in
-    the git package, already scoped to `paths` and memoised per `(repo,
-    head_sha, paths)` by that module -- this function spawns nothing of
-    its own.
-
-    Verdicts:
-      staged only (no HEAD counterpart)             -> `"A"`
-      HEAD only (no staged counterpart)              -> `"D"`
-      present on both sides, `(mode, sha)` differs   -> `"M"`
-      present on both sides, `(mode, sha)` identical -> absent from result
-
-    NO cache of its own -- every call re-reads the index fresh (via
-    `read_index`'s own "no cache" negative-spec) and calls `head_blobs`
-    fresh every time, relying entirely on THAT module's memoisation for
-    spawn-avoidance. This matters for a specific ordering property: the
-    dead `diff --cached --name-status` call this replaces was invoked
-    TWICE per commit, with a `git add` landing between the two calls, and
-    the two calls are NOT duplicates -- the second must observe the newly
-    staged path. A single cached diff result served to both call sites
-    would silently answer the second call with pre-`git add` staged state,
-    a correctness bug already declined once on this surface. A caller
-    wanting the post-`git add` picture MUST call this function again after
-    staging, not reuse an earlier result.
-
-    Raises `git_state.IndexParseError` exactly as `read_index` does for a
-    malformed, unsupported, or unmerged index -- never returns a partial
-    or silently-wrong result for one.
-    """
     index_snapshot = _read_full_index(repo)
     head_entries = head_blobs(repo, paths)
 

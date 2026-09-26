@@ -158,7 +158,7 @@ from coordinator_core.reconcile.gate_eval import evaluate_gate_triage
 AGING_THRESHOLD_DAYS = 14
 RECHECK_COOLDOWN_DAYS = 7
 
-_PROG = "handoff-gate-aging.sh"  # literal program-name prefix — see negative-spec
+_PROG = "handoff-gate-aging.sh"
 
 
 def _parse_date(value: str) -> Optional[date]:
@@ -171,14 +171,6 @@ def _parse_date(value: str) -> Optional[date]:
 
 
 def check_one(path: Path, today: date) -> Tuple[str, int]:
-    """Evaluate the 14d/7d aging predicate for one handoff file.
-
-    Returns (stdout_line_or_empty, rc) where rc is 0 (not stale / no error) or
-    2 (parse error). STALE detection is communicated by a non-empty
-    stdout_line, matching the bash script's "empty stdout + rc" duality —
-    the printed `STALE: ...` line and the rc are independent signals so a
-    directory scan can distinguish stale-hits from parse-errors per file.
-    """
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -425,14 +417,6 @@ def scan_triage(target: str, today: Optional[date] = None) -> List[Dict[str, Any
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: arg validation, scan, print, return rc.
-
-    `--triage` (AC4, opt-in, additive-only): swaps the print/rc path from the
-    pre-existing `scan`/`check_one` STALE predicate (module docstring
-    negative-spec — unchanged, byte-identical without the flag) to
-    `scan_triage`'s three-way `signal`. Never the default — a caller that
-    passes no flag gets exactly today's output shape and rc arbitration.
-    """
     if not argv:
         print(f"{_PROG}: missing argument: <handoff-path-or-directory>", file=sys.stderr)
         return 2

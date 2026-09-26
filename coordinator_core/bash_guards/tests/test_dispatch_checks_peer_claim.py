@@ -36,9 +36,6 @@ REAL_NAME = "claude-klabauter-65"
 
 class TestWriterNameThreeRungLadder:
     def test_rung1_recorded_name_renders_without_registry_lookup(self, monkeypatch):
-        """Rung 1: ``fact.writer_name`` present -- rendered directly, no
-        ``harness_registry.lookup`` call at all (the durable, machine-
-        independent answer the plan exists to add)."""
 
         def _boom(_sid):
             raise AssertionError("rung 1 must not fall through to lookup()")
@@ -59,9 +56,6 @@ class TestWriterNameThreeRungLadder:
     def test_rung2_falls_back_to_live_registry_lookup_when_unrecorded(
         self, monkeypatch
     ):
-        """Rung 2: no recorded name (pre-C1 claim) -- resolves via a live
-        ``harness_registry.lookup`` instead, and says so distinctly from a
-        rung-1 recorded name."""
 
         class _Record:
             name = "claude-klabauter-b3"
@@ -75,19 +69,12 @@ class TestWriterNameThreeRungLadder:
         )
         sentence = dispatch_checks._format_owner_sentence(fact, {})
         assert "claude-klabauter-b3" in sentence
-        # The subject slot shrinks to the short (8-char) sid once a name
-        # resolves -- see `_owner_display_id`'s docstring. No rung marker
-        # -- rung 1 and rung 2 render identically, see
-        # `_owner_writer_name_clause`'s docstring.
         assert REAL_SID[:8] in sentence
         assert REAL_SID not in sentence
         assert " -- w:claude-klabauter-b3" in sentence
         assert "UNNAMED" not in sentence
 
     def test_rung3_unnamed_when_neither_rung_resolves(self, monkeypatch):
-        """Rung 3: no recorded name and no live registry match -- an
-        explicit UNNAMED marker, visually distinct from a bare sid, never
-        printed as though it were an address."""
         monkeypatch.setattr(
             "coordinator_core.session.harness_registry.lookup", lambda sid: None
         )
@@ -98,9 +85,6 @@ class TestWriterNameThreeRungLadder:
         assert "UNNAMED" in sentence
 
     def test_lookup_exception_degrades_to_unnamed_not_a_crash(self, monkeypatch):
-        """A resolver exception (registry unavailable/corrupt) degrades to
-        rung 3 -- Check 5 is advisory infrastructure and must never turn a
-        lookup failure into a guard crash."""
         monkeypatch.setattr(
             "coordinator_core.session.harness_registry.lookup",
             lambda sid: (_ for _ in ()).throw(OSError("registry unreadable")),
@@ -114,9 +98,6 @@ class TestWriterNameThreeRungLadder:
 
 class TestWriterNameNegativeSpec:
     def test_never_instructs_re_resolve_from_stored_session_uuid(self, monkeypatch):
-        """Anti-scope: the stale-name warning must never tell the reader to
-        re-resolve from the stored session UUID -- that sid is, by
-        hypothesis, precisely the one that no longer resolves."""
         monkeypatch.setattr(
             "coordinator_core.session.harness_registry.lookup", lambda sid: None
         )
@@ -132,9 +113,6 @@ class TestWriterNameNegativeSpec:
             assert "stored session uuid" not in sentence.lower()
 
     def test_recorded_name_never_asserted_as_present_tense_reachable(self):
-        """A recorded name is provenance, not a live address -- the
-        rendering must not claim present-tense reachability (e.g. "is
-        live at", "reachable now")."""
         fact = OwnerFact(
             owner=REAL_SID,
             liveness="live",
@@ -166,8 +144,6 @@ class TestWriterNameNegativeSpec:
     def test_six_owner_classes_keep_current_meanings_with_name_additive(
         self, monkeypatch
     ):
-        """A name is additive to the subject clause -- it must not change
-        which of the six classes a rendering belongs to."""
         monkeypatch.setattr(
             "coordinator_core.session.harness_registry.lookup", lambda sid: None
         )
@@ -197,11 +173,6 @@ class TestWriterNameBudgetBoundary:
     def test_load_bearing_prefix_survives_truncation_over_a_long_name(
         self, monkeypatch
     ):
-        """AT the budget boundary, not just well under it: an oversized
-        writer name must not push the load-bearing liveness verdict (which
-        sits FIRST in the assembled sentence) out of the truncated result --
-        truncation degrades the additive name tail, never the safety-
-        relevant prefix."""
         monkeypatch.setattr(
             "coordinator_core.session.harness_registry.lookup", lambda sid: None
         )
@@ -213,12 +184,7 @@ class TestWriterNameBudgetBoundary:
             writer_name=huge_name,
         )
         sentence = dispatch_checks._format_owner_sentence(fact, {})
-        # `_truncate_to_budget` cuts to the budget then appends a 3-byte
-        # ellipsis marker (pre-existing behavior, not this chunk's), so the
-        # precedent check (`test_all_owner_class_renderings_stay_within_
-        # shipped_message_budget`) asserts against the wider
         # MESSAGE_PROSE_CAP_BYTES, not the tighter owner-clause budget --
-        # matched here rather than re-litigated.
         assert len(sentence.encode("utf-8")) <= MESSAGE_PROSE_CAP_BYTES
         assert "confirmed live" in sentence
 
@@ -259,9 +225,7 @@ class TestWriterNameBudgetBoundary:
             sentence = dispatch_checks._format_owner_sentence(fact, {})
             assert fact.owner[:8] in sentence, sentence
             assert fact.owner not in sentence, sentence
-            # The load-bearing verdict survives the budget, always.
             assert verdict in sentence, (fact.claim_source, sentence)
-            # And so does the whole name -- never a `w:proj…` fragment.
             assert REAL_NAME in sentence, (fact.claim_source, sentence)
             assert "…" not in sentence, (fact.claim_source, sentence)
             assert len(sentence.encode("utf-8")) <= (
@@ -271,14 +235,6 @@ class TestWriterNameBudgetBoundary:
     def test_all_six_owner_classes_render_name_and_verdict_intact(
         self, monkeypatch
     ):
-        """Bug 616e4449f90c's own TARGET, as a standalone pin: for the six
-        ``session``/``agent`` x live/dead/undetermined owner classes
-        (crossed, not the docstring's six-way claim_source taxonomy), the
-        full writer name AND the liveness verdict both survive intact --
-        neither is truncated to a fragment. Fixtures use a real-shaped
-        36-char sid, per this suite's own module docstring: the original
-        defect survived review on a 9-char fake that never touched the
-        budget."""
         monkeypatch.setattr(
             "coordinator_core.session.harness_registry.lookup", lambda sid: None
         )
@@ -303,8 +259,6 @@ class TestWriterNameBudgetBoundary:
                 ), (claim_source, liveness, sentence)
 
     def test_real_sid_and_real_name_both_survive_intact_at_rung2(self, monkeypatch):
-        """Same as rung-1 sibling test, but resolved via the live-lookup
-        rung rather than a recorded name."""
 
         class _Record:
             name = REAL_NAME
@@ -343,18 +297,10 @@ class TestWriterNameBudgetBoundary:
     def test_owner_clause_fits_budget_at_the_boundary_with_realistic_long_name(
         self, monkeypatch
     ):
-        """AT the budget boundary, not merely well under it: a realistic
-        (not adversarially huge) long session/hostname-shaped writer name
-        must still land within ``_owner_clause_budget_bytes()`` once the
-        clause is truncated -- the boundary itself, not just headroom
-        under it, is what this pins."""
         monkeypatch.setattr(
             "coordinator_core.session.harness_registry.lookup", lambda sid: None
         )
         budget = dispatch_checks._owner_clause_budget_bytes()
-        # A realistic long hostname-shaped name, sized to straddle the
-        # budget boundary exactly (neither trivially short nor
-        # adversarially oversized).
         realistic_long_name = "claude-klabauter-executor-fleet-node" * 3
         assert len(realistic_long_name.encode("utf-8")) >= budget
         fact = OwnerFact(
@@ -364,20 +310,12 @@ class TestWriterNameBudgetBoundary:
             writer_name=realistic_long_name,
         )
         sentence = dispatch_checks._format_owner_sentence(fact, {})
-        # `_truncate_to_budget` cuts to the budget then appends a 3-byte
-        # ellipsis marker (pre-existing behavior -- see the precedent test
-        # above), so the boundary check is against the wider
         # MESSAGE_PROSE_CAP_BYTES, not the tighter owner-clause budget.
         assert len(sentence.encode("utf-8")) <= MESSAGE_PROSE_CAP_BYTES
         assert len(sentence.encode("utf-8")) <= budget + len("…".encode("utf-8"))
 
 
 class TestOwnerNameProvenanceNote:
-    """C3 follow-up fix 1 (EM-adjudicated break-class): the ``" -- w:"``
-    name clause is not itself an explicit staleness warning -- the
-    warning lives, unbudgeted, in ``_owner_name_provenance_note``, called
-    by every deny/warn template that interpolates an
-    ``_format_owner_sentence()`` result."""
 
     def test_note_present_when_owner_sentence_names_someone(self):
         fact = OwnerFact(
@@ -420,11 +358,6 @@ class TestOwnerNameProvenanceNote:
         monkeypatch.setattr(
             "coordinator_core.session.harness_registry.lookup", lambda sid: None
         )
-        # A name short enough that the " -- w:" prefix survives
-        # _truncate_to_budget intact (unlike the earlier adversarial-huge
-        # case, whose whole point is that the clause gets cut) -- this
-        # test is about the coupling firing when the clause IS present,
-        # not about surviving an oversized name.
         fact = OwnerFact(
             owner=REAL_SID,
             liveness="live",
@@ -446,9 +379,6 @@ class TestOwnerNameProvenanceNote:
         assert "stored session uuid" not in note.lower()
         assert "orphan" not in note.lower()
 
-    # Spawns a real external `git` process; runs at cadence gates, not
-    # per-commit. Spawn ratchet:
-    # coordinator_core/tests/test_no_new_spawning_tests.py
     @pytest.mark.spawns_process
     @pytest.mark.cadence
     def test_deny_and_warn_templates_carry_the_warning(self, monkeypatch, tmp_path):
@@ -536,13 +466,9 @@ class TestOwnerNameProvenanceNote:
         _git(root, "add", "sibling.txt")
         _git(root, "commit", "-q", "-m", "seed sibling.txt")
 
-        # Peer's live claim carries a resolvable writer name, so the
-        # rendered owner_sentence actually names someone and the
-        # provenance note fires -- the case the deleted test targeted.
         _claim(root, other_sid, "sibling.txt", name=REAL_NAME)
         _git(root, "rm", "-q", "sibling.txt")
 
-        # Plain strict-mode deny: this session never claimed the path.
         monkeypatch.setenv("COORDINATOR_SCOPE_STRICT", "1")
         result = bash_dispatch.evaluate_payload_json(
             _em_payload(root, sid, 'git commit -m "rm sibling"')
@@ -553,7 +479,6 @@ class TestOwnerNameProvenanceNote:
         assert "owned by" in out["permissionDecisionReason"]
         assert "provenance" in out["permissionDecisionReason"].lower()
 
-        # Warn-only advisory: same shape, strict mode switched off.
         monkeypatch.delenv("COORDINATOR_SCOPE_STRICT", raising=False)
         monkeypatch.setenv("COORDINATOR_SCOPE_STRICT_OFF", "1")
         result = bash_dispatch.evaluate_payload_json(
@@ -565,9 +490,7 @@ class TestOwnerNameProvenanceNote:
         assert "Strict mode would block" in out["additionalContext"]
         assert "provenance" in out["additionalContext"].lower()
 
-        # Contested strict-mode deny: this session ALSO claims the same
         # path, so it lands in the CONTESTED branch instead of the plain
-        # owned-by-another-session one.
         monkeypatch.delenv("COORDINATOR_SCOPE_STRICT_OFF", raising=False)
         monkeypatch.setenv("COORDINATOR_SCOPE_STRICT", "1")
         _claim(root, sid, "sibling.txt")
@@ -582,18 +505,6 @@ class TestOwnerNameProvenanceNote:
 
 
 class TestLivenessBasisYieldsToName:
-    """The live arm's BASIS clause must never be the reason a name is
-    dropped.
-
-    Every test above passes ``{}`` for ``live_verdicts``, so
-    ``_owner_liveness_basis`` returns ``None`` and the basis clause is
-    never rendered -- which is exactly how the defect survived the whole
-    C3 suite. Reported from example-cockpit-repo 2026-09-02: a blocked EM was
-    handed ``session b4681734 (confirmed live via harness-registry)`` with
-    no ``-- w:`` and no ``-- UNNAMED``, the bare-sid-as-address rendering
-    the ladder's anti-scope forbids, because the 21-byte basis clause
-    consumed the bytes the 24-byte name clause needed.
-    """
 
     @staticmethod
     def _verdicts(sid, basis):
@@ -627,8 +538,6 @@ class TestLivenessBasisYieldsToName:
         assert " -- w:doe-claude-b8" in sentence
 
     def test_unnamed_marker_still_renders_under_a_basis(self, monkeypatch):
-        """Negative control: dropping the basis must not be confused with
-        having no name. An unresolvable owner still says UNNAMED."""
         monkeypatch.setattr(
             "coordinator_core.session.harness_registry.lookup", lambda sid: None
         )
@@ -641,14 +550,6 @@ class TestLivenessBasisYieldsToName:
         assert "UNNAMED" in sentence
 
     def test_an_unfittable_resolved_name_truncates_rather_than_vanishing(self):
-        """A resolved name too long for the budget renders a MARKED truncation,
-        never nothing and never UNNAMED.
-
-        The three-way precedence this pins, worst-last: full name > truncated
-        name > UNNAMED > bare sid. UNNAMED is rung 3's marker and means no name
-        resolved; reusing it for a name that resolved but did not fit would make
-        the two indistinguishable.
-        """
         long_name = "an-absurdly-long-session-name-that-no-registry-would-ever-hand-out"
         fact = OwnerFact(
             owner=REAL_SID,
@@ -661,21 +562,12 @@ class TestLivenessBasisYieldsToName:
         )
         assert " -- w:" in sentence
         assert "UNNAMED" not in sentence
-        assert long_name not in sentence  # it truncated
-        assert long_name[:12] in sentence  # but enough survives to read
+        assert long_name not in sentence
+        assert long_name[:12] in sentence
         assert len(sentence.encode("utf-8")) <= dispatch_checks._owner_clause_budget_bytes()
 
     def test_no_live_owner_clause_ever_ends_in_a_bare_sid(self):
-        """The invariant the reported defect broke, stated once: a live
-        owner clause carries an address or an explicit UNNAMED -- never a
-        sid alone."""
         for basis in ("harness-registry", "harness-registry-elsewhere", "stable-pid"):
-            # Names deliberately span the whole-or-nothing threshold, which
-            # measured at 35 bytes on 2026-09-03. The three fleet names this
-            # test originally carried (19/25/22 bytes) ALL sat under it, so it
-            # asserted a universal it never exercised: a resolved name over the
-            # threshold rendered neither " -- w:" nor UNNAMED, which is the bare
-            # sid this very assertion forbids. The last two entries are over.
             for name in (
                 None,
                 "x-3",
@@ -697,10 +589,6 @@ class TestLivenessBasisYieldsToName:
 
 
 class TestBulkForeignIndexRefusal:
-    """At 11,534 foreign staged paths (measured 2026-09-02 on this branch) the
-    per-file unstage remedy stops being advice: following it to completion
-    destroys a peer's in-flight change. These pin what the refusal must and
-    must not say at that size."""
 
     NOTE = " (name via harness-registry)"
 
@@ -710,9 +598,6 @@ class TestBulkForeignIndexRefusal:
         )
 
     def test_it_never_names_the_per_file_remedy(self):
-        """The negative spec. Following `git restore --staged` per file here is
-        an hour of work whose successful completion is the loss of the peer's
-        change."""
         assert "restore --staged" not in self._msg()
         assert "Unstage it" not in self._msg()
 
@@ -736,7 +621,6 @@ class TestBulkForeignIndexRefusal:
         msg = self._msg()
         assert "no `git commit` form succeeds" in msg
         assert "pathspec does not narrow" in msg
-        # The narrowing is only honest if the alternative is actually named.
         assert "coordinator-safe-commit.py" in msg
 
     def test_it_names_the_safe_route_with_its_glob_warning_attached(self):
@@ -755,7 +639,6 @@ class TestBulkForeignIndexRefusal:
         assert "77 staged paths" in self._msg(77)
 
     def test_it_names_the_peer_so_the_operator_can_ask_them(self):
-        """`Ask them` is only actionable if the message says who."""
         msg = self._msg()
         assert "claude-klabauter-6c" in msg
         assert "Ask them" in msg

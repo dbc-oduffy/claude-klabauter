@@ -1,23 +1,3 @@
-"""test_chunk_commits_forwarder_cwd.py — `coordinator/bin/chunk-commits`
-must resolve a relative `plan_path` against the CALLER's cwd, not the op
-process's.
-
-Regression coverage for the bug fixed alongside this test: the forwarder
-passed `plan_path` through to `ceremony.chunk_commits` verbatim, and the op
-resolves a relative path with `Path(plan_path).resolve()` against ITS OWN
-process cwd — which, through this forwarder, is the engine root, not the
-caller's cwd. A caller in repo B asking about a relative plan path that only
-exists in repo A got repo A's answer (or, worse, a *silent* empty list at
-exit 0 when the path happened to also parse in the engine's own tree) — see
-this file's own commit for the two failure shapes. This test drives the
-forwarder's real `main()` in-process (never a spawned interpreter — see
-CLAUDE.md's machine-load-norm note) with cwd set to repo B, and asserts a
-relative path resolves in repo B, never repo A.
-
-Negative-spec: do NOT collapse this to a single-repo test. The bug is
-invisible with only one repo on disk — the forwarder's cwd and the plan's
-repo are the same thing until a second repo exists to disambiguate them.
-"""
 
 from __future__ import annotations
 
@@ -33,9 +13,7 @@ import pytest
 from coordinator_core.ops.ceremony import chunk_commits as chunk_commits_op
 
 
-# Declared, not excused: this file spawns real processes because the behaviour under
 # test IS the spawn. _BASELINE is shrink-only pre-existing residue and is explicitly
-# not the route for a new file -- test_no_new_spawning_tests.py Rule 2.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -121,8 +99,6 @@ def cli_module(monkeypatch, tmp_path):
             os.chdir(engine_root)
             return chunk_commits_op._handler(params)
         except (ValueError, RuntimeError) as exc:
-            # Mirrors cc_invoke.route()'s own envelope ladder, which turns any
-            # handler-raised exception into a RuntimeError for main()'s catch.
             raise RuntimeError(str(exc)) from exc
         finally:
             os.chdir(caller_cwd)
@@ -156,13 +132,6 @@ def test_relative_plan_path_resolves_against_callers_cwd_not_repo_a(
     captured = capsys.readouterr()
     assert b_chunk_sha in captured.out
     assert a_chunk_sha not in captured.out
-    # The dangerous shape this test exists to pin: `engine_root` (the
-    # `cli_module` fixture's stand-in for the op process's own cwd) also
-    # contains a plan at this exact relative path with its OWN distinct
-    # chunk commit. If the forwarder's absolutization were dropped, the op
-    # would resolve against `engine_root` instead of repo_b and answer with
-    # the engine's commit at exit 0 — silently, no error raised at all. The
-    # engine's sha must never appear in a correctly-absolutized answer.
     assert engine_chunk_sha not in captured.out
 
 

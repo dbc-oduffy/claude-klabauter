@@ -1,9 +1,3 @@
-"""
-Tests for coordinator_core.diff_scoped_tests -- see that module's own
-docstring for the "changed test file" definition and the append-only
-contract this exercises. Spec backlink: PM-ratified scope cut, sizing
-record state/sizings/2026-07-30-diff-scoped-routine-ceremony-gates.yaml.
-"""
 
 from __future__ import annotations
 
@@ -20,8 +14,6 @@ from coordinator_core.diff_scoped_tests import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -41,9 +33,6 @@ def _git(args, cwd):
 
 
 def _init_repo(tmp_path):
-    """A minimal git repo with a pinned testpaths and one committed test
-    file, matching this repo's own layout closely enough for the
-    testpaths-membership filter to exercise realistically."""
     _git(["init", "-q"], tmp_path)
     _git(["config", "user.email", "test@example.com"], tmp_path)
     _git(["config", "user.name", "Test"], tmp_path)
@@ -63,9 +52,6 @@ def _init_repo(tmp_path):
     _git(["add", "-A"], tmp_path)
     _git(["commit", "-q", "-m", "initial"], tmp_path)
     return tmp_path
-
-
-# --- find_changed_test_files -------------------------------------------------
 
 
 def test_no_changed_test_files_returns_empty(tmp_path):
@@ -129,9 +115,6 @@ def test_multiple_changed_test_files_sorted(tmp_path):
     ]
 
 
-# --- append_test_paths --------------------------------------------------------
-
-
 def test_append_test_paths_empty_list_returns_unchanged():
     assert append_test_paths(_MARKER_CMD, []) == _MARKER_CMD
 
@@ -153,18 +136,12 @@ def test_append_test_paths_quotes_path_with_space():
     assert result == _MARKER_CMD + " 'pkg/weird dir/test_x.py'"
 
 
-# --- rc=5 contract -------------------------------------------------------------
-
-
 def test_pytest_no_tests_collected_constant_matches_pytest_contract():
     assert PYTEST_NO_TESTS_COLLECTED == 5
 
 
 def test_rc5_reproduces_against_real_pytest(tmp_path):
-    """Pin the sharp edge named in the brief: a real pytest invocation whose
-    marker filter deselects the only named file exits 5, not 0 and not
-    nonzero-for-a-different-reason."""
-    pytest_bin = pytest.importorskip("pytest")  # ensure pytest importable
+    pytest_bin = pytest.importorskip("pytest")
     del pytest_bin
     test_dir = tmp_path / "pkg"
     test_dir.mkdir()
@@ -194,15 +171,7 @@ def test_rc5_reproduces_against_real_pytest(tmp_path):
     assert proc.returncode == PYTEST_NO_TESTS_COLLECTED
 
 
-# --- C3: source-only-diff narrowing (docs/plans/2026-07-30-diff-scoped- ----
-# --- ceremony-gates-elegant.md) ---------------------------------------------
-
-
 def _init_repo_with_mappable_source(tmp_path):
-    """A repo like `_init_repo`, but the committed source file has a
-    covering test under the same testpaths root (`pkg/test_mod.py`) -- so a
-    change to ONLY the source file (never itself a test file) is the
-    source-only-diff case C3 wires up."""
     _git(["init", "-q"], tmp_path)
     _git(["config", "user.email", "test@example.com"], tmp_path)
     _git(["config", "user.name", "Test"], tmp_path)
@@ -244,9 +213,6 @@ def test_compute_diff_scoped_paths_unions_changed_test_and_mapped_source(tmp_pat
         "def test_b():\n    assert True\n"
     )
     _git(["add", "-A"], root)
-    # Leave test_existing_direct.py staged (a changed test file) alongside
-    # the unstaged mod.py change (a changed source file) -- both legs fire
-    # in the same diff, and both must appear in the union.
 
     paths, fully_mapped = compute_diff_scoped_paths(str(root))
     assert paths == ["pkg/test_existing_direct.py", "pkg/test_mod.py"]

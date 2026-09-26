@@ -1,13 +1,3 @@
-"""Coverage for the 2026-08-10 PM ruling on `_compute_fresh_output_path`'s
-standalone-mint slug derivation (baton_assemble's naming defect fix):
-plan/predecessor artifact -> this session's own sizing object ->
-caller-supplied title -> a non-colliding shortid, NEVER the literal
-`"untitled"`.
-
-Spec backlink: this session's dispatch brief (baton-assemble naming defect,
-2026-08-10) plus the PM's mid-task amendment adding the sizing-object
-derivation tier.
-"""
 from __future__ import annotations
 
 import os
@@ -25,11 +15,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
-# Declared, not excused: this file spawns a real process (git/python) because
-# the property under test is that binary's own behaviour, which no fixture
 # stands in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
-# residue and is explicitly not the route for a new file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -107,10 +93,9 @@ class TestStandaloneNoTitleNoSizing(_GitRepoFixture):
         basename = Path(path).stem
         self.assertNotEqual(basename.split("-", 3)[-1], "untitled")
         self.assertIn("untitled-", basename)
-        # date-<8charhex>
         suffix = basename.rsplit("untitled-", 1)[-1]
         self.assertEqual(len(suffix), 8)
-        int(suffix, 16)  # raises if not hex
+        int(suffix, 16)
 
 
 class TestStandaloneWithTitle(_GitRepoFixture):
@@ -137,7 +122,6 @@ class TestSessionSizingDerivation(_GitRepoFixture):
 
     def test_different_session_sizing_not_picked(self) -> None:
         # negative: a sizing authored by a DIFFERENT session must not
-        # be picked up by this session's derivation.
         other_session = "22222222-2222-2222-2222-222222222222"
         self._commit_sizing("2026-08-10-someone-elses-sizing.yaml", other_session)
         self._set_session_env(
@@ -166,13 +150,6 @@ class TestSessionSizingDerivation(_GitRepoFixture):
 
 class TestOutputPathDeterminism(_GitRepoFixture):
     def test_repeated_derivation_is_stable(self) -> None:
-        # `apply()` recomputes `brief()` in-process from the same
-        # `(kind, artifact_path)` -- brief/apply path agreement rests on
-        # `_compute_fresh_output_path` returning the SAME candidate for
-        # identical inputs on repeated invocation within one day. Exercised
-        # directly (not through `brief()`) so this test does not also
-        # depend on `resolve_operator_config()`'s machine-local settings
-        # resolution, which is unrelated to this derivation.
         session_id = "66666666-6666-6666-6666-666666666666"
         self._commit_sizing("2026-08-10-path-agreement-check.yaml", session_id)
         self._set_session_env(COORDINATOR_SESSION_ID=session_id)

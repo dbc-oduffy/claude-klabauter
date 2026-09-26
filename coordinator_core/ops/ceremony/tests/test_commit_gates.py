@@ -1,36 +1,3 @@
-"""
-coordinator_core.ops.ceremony.tests.test_commit_gates
-
-Tests for commit_gates.py -- the native ports of the deleted
-`check-workstream-complete-deletion-blocks.sh` and `dirty-tree-gate.sh`
-(the C3 chunk of the `wsc_tail` rebuild,
-docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md).
-
-Coverage (parity-oracle assertions, per the deleted
-`tests/wsc-asic/test-wsc-commit-parity.sh` recovered from
-`DoE:85006468^:coordinator/tests/wsc-asic/test-wsc-commit-parity.sh`):
-  (c)  deletion_block_gate passes on a well-formed message (Kept block only,
-       no staged deletions).
-  (c2) deletion_block_gate fails on a malformed message (Deleted-claimed path
-       that was never staged for deletion).
-  (e)  deletion_block_gate does NOT false-positive on a concurrent sibling's
-       staged deletion that falls OUTSIDE gate_paths -- the F3 inverse check
-       is scoped, not whole-index.
-
-Plus native additions beyond the recovered oracle (the oracle only exercised
-the bash CLI end-to-end; these pin the Python module's own unit-level
-contract):
-  skip_gate_when_empty         -- empty gate_paths + no Step 2.67 block skips
-                                   the gate entirely (never scored ambiguous-pass).
-  kept_claim_missing           -- Kept-claimed path absent from HEAD and staged
-                                   set is a mismatch.
-  kept_line_malformed          -- a Kept-block line with no em-dash separator
-                                   is flagged, not silently treated as a path.
-  parse_step267_blocks_*       -- blank-line-inside-block grouping, block-header
-                                   termination.
-
-Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C3 (AC10).
-"""
 
 from __future__ import annotations
 
@@ -51,9 +18,6 @@ from coordinator_core.ops.ceremony.commit_gates import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# Real-git spawn is load-bearing: these gates classify real staged/HEAD
-# state, which a mocked git cannot faithfully reproduce. Per-test repo
-# fixtures since these tests mutate the index and HEAD.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _EM_DASH = " — "
@@ -79,11 +43,6 @@ def _seed_file(repo: Path, rel_path: str, content: str) -> None:
 
 
 def _make_conflicted_repo(tmp_path: Path) -> Path:
-    """A repo whose index carries an unmerged (stage != 0) entry -- an
-    ordinary mid-merge-conflict state, not a malformed index. `read_index`
-    raises `IndexParseError` on this by contract (git_state.py:47-50); F1
-    fixture repos exercise that this is a live, unresolved-merge condition,
-    never a crash."""
     repo = _init_repo(tmp_path)
     _seed_file(repo, "conflict.md", "base\n")
     _git(["add", "--", "conflict.md"], repo)
@@ -102,20 +61,8 @@ def _make_conflicted_repo(tmp_path: Path) -> Path:
     _seed_file(repo, "conflict.md", "main change\n")
     _git(["commit", "-q", "-am", "main change"], repo)
 
-    # Left deliberately unresolved -- `git merge` exits non-zero here, which
-    # is the point: the index now carries stage-1/2/3 entries for
-    # conflict.md, never committed or resolved.
     subprocess.run(["git", "merge", "-q", "side"], cwd=str(repo), capture_output=True, text=True, **no_console_creationflags())
     return repo
-
-
-# ---------------------------------------------------------------------------
-# _parse_cli_args pathspec separator normalisation (2026-08-26 bug-backlog,
-# P2+P3) -- the one shared choke point every caller of the CLI passes
-# through, so normalisation lives here rather than at any one builder, and
-# platform-conditional because a backslash is a legal POSIX filename
-# character.
-# ---------------------------------------------------------------------------
 
 
 def test_parse_cli_args_normalises_backslashes_to_forward_slashes_on_windows(monkeypatch):
@@ -128,11 +75,6 @@ def test_parse_cli_args_leaves_backslashes_untouched_on_posix(monkeypatch):
     monkeypatch.setattr(_cg.os, "name", "posix")
     parsed = _cg._parse_cli_args(["msg.txt", "--", "weird\\name.md"])
     assert parsed == ("msg.txt", ["weird\\name.md"])
-
-
-# ---------------------------------------------------------------------------
-# parse_step267_blocks / has_step267_block
-# ---------------------------------------------------------------------------
 
 
 def test_parse_blocks_deleted_and_kept():
@@ -187,11 +129,6 @@ def test_has_step267_block_false_on_plain_message():
     assert has_step267_block("subject\n\nprose only\n") is False
 
 
-# ---------------------------------------------------------------------------
-# deletion_block_gate -- assertion (c): PASS on well-formed message
-# ---------------------------------------------------------------------------
-
-
 def test_deletion_gate_assertion_c_passes_well_formed_no_staged_deletions(tmp_path):
     repo = _init_repo(tmp_path)
     _seed_file(repo, "tasks/my-feature/todo.md", "content")
@@ -211,11 +148,6 @@ def test_deletion_gate_assertion_c_passes_well_formed_no_staged_deletions(tmp_pa
     outcome = deletion_block_gate(msg, gate_paths=["tasks/my-feature/todo.md"], cwd=repo)
     assert outcome.passed is True
     assert outcome.diagnostics == []
-
-
-# ---------------------------------------------------------------------------
-# deletion_block_gate -- assertion (c2): FAIL on malformed message
-# ---------------------------------------------------------------------------
 
 
 def test_deletion_gate_assertion_c2_fails_unstaged_deleted_claim(tmp_path):
@@ -238,19 +170,9 @@ def test_deletion_gate_assertion_c2_fails_unstaged_deleted_claim(tmp_path):
     assert any("NOT staged for deletion" in d for d in outcome.diagnostics)
 
 
-# ---------------------------------------------------------------------------
-# deletion_block_gate -- Assertion-1 recognizes a staged RENAME source as
-# "staged for deletion" (2026-08-06 fix, live incident: commit `64acc1254`,
-# a move-set of changelog/review-trail files into an archive directory,
-# refused with "Deleted-claim NOT staged for deletion" for every moved path).
-# See `commit_gates._parse_name_status_rename_sources`'s own docstring for
-# the full root-cause writeup.
-# ---------------------------------------------------------------------------
-
-
 def test_deletion_gate_assertion_1_recognizes_staged_rename_source(tmp_path):
     repo = _init_repo(tmp_path)
-    content = "content block\n" * 40  # long/repetitive enough for git's rename detector
+    content = "content block\n" * 40
     _seed_file(repo, "week-changelog/2026-07-20.md", content)
     _git(["add", "-A"], repo)
     _git(["commit", "-q", "-m", "seed"], repo)
@@ -270,8 +192,6 @@ def test_deletion_gate_assertion_1_recognizes_staged_rename_source(tmp_path):
         repo,
     )
 
-    # Confirm git itself paired this into a rename, not a D+A pair -- the
-    # precondition this test exists to cover.
     name_status = subprocess.run(
         ["git", "diff", "--cached", "--name-status", "-M"],
         cwd=str(repo), capture_output=True, text=True, check=True,
@@ -293,11 +213,6 @@ def test_deletion_gate_assertion_1_recognizes_staged_rename_source(tmp_path):
 
 
 def test_deletion_gate_assertion_3_unrelated_rename_still_needs_no_block(tmp_path):
-    """The widened Assertion-1 set must NOT leak into Assertion-3 (F3): an
-    ordinary content-preserving rename, staged with no Deleted claim at all
-    in the message, must still pass -- exactly as it did before this fix
-    (see `commit_gates` module docstring's negative-spec, "Rename lines are
-    intentionally excluded", which stays true for Assertion-3)."""
     repo = _init_repo(tmp_path)
     content = "content block\n" * 40
     _seed_file(repo, "a.md", content)
@@ -314,12 +229,6 @@ def test_deletion_gate_assertion_3_unrelated_rename_still_needs_no_block(tmp_pat
     assert outcome.diagnostics == []
 
 
-# ---------------------------------------------------------------------------
-# deletion_block_gate -- assertion (e): scoped F3, sibling deletion outside
-# gate_paths never trips the gate
-# ---------------------------------------------------------------------------
-
-
 def test_deletion_gate_assertion_e_sibling_deletion_outside_scope_not_tripped(tmp_path):
     repo = _init_repo(tmp_path)
     sibling_del_file = "tasks/sibling-session/scratch.md"
@@ -334,19 +243,11 @@ def test_deletion_gate_assertion_e_sibling_deletion_outside_scope_not_tripped(tm
     _seed_file(repo, e_commit_file, "updated lesson")
     _git(["add", "--", e_commit_file], repo)
 
-    # No Step 2.67 block at all (subject-only session) -- the message the
-    # deleted parity test's wsc-commit.sh caller would compose when only
-    # --subject is passed.
     msg = "workstream-complete: e-fixture\n"
 
     outcome = deletion_block_gate(msg, gate_paths=[e_commit_file], cwd=repo)
     assert outcome.passed is True
     assert outcome.diagnostics == []
-
-
-# ---------------------------------------------------------------------------
-# deletion_block_gate -- native unit additions
-# ---------------------------------------------------------------------------
 
 
 def test_deletion_gate_skip_when_empty_gate_paths_and_no_block(tmp_path):
@@ -409,11 +310,6 @@ def test_deletion_gate_f3_inverse_check_trips_on_own_unblocked_deletion(tmp_path
 
 
 def test_deletion_gate_unmerged_index_entry_refuses_not_crashes(tmp_path):
-    """F1 (code-review, P1): `read_index` raises `IndexParseError` on ANY
-    unmerged (stage != 0) index entry -- an ordinary mid-merge-conflict repo
-    state. Assertion-2's index read (only reached when the message carries a
-    Kept-claim) must degrade to a refusal, never propagate the raise up
-    through `commit_pipeline.commit()` and crash the op."""
     repo = _make_conflicted_repo(tmp_path)
 
     msg = (
@@ -428,11 +324,6 @@ def test_deletion_gate_unmerged_index_entry_refuses_not_crashes(tmp_path):
     assert any("staged index unreadable" in d for d in outcome.diagnostics)
 
 
-# ---------------------------------------------------------------------------
-# carry_gate
-# ---------------------------------------------------------------------------
-
-
 def _seed_handoff(repo: Path, rel_path: str, frontmatter_body: str) -> None:
     _seed_file(
         repo,
@@ -442,8 +333,6 @@ def _seed_handoff(repo: Path, rel_path: str, frontmatter_body: str) -> None:
 
 
 def test_carry_gate_skips_when_no_handoff_in_gate_paths(tmp_path):
-    """AC5: an empty filtered set (no `state/handoffs/*.md` in `gate_paths`)
-    skips entirely -- no file read at all."""
     repo = _init_repo(tmp_path)
     outcome = carry_gate(repo, gate_paths=["a/one.md", "state/other/x.md"])
     assert outcome == GateOutcome(passed=True, skipped=True, diagnostics=[])
@@ -456,8 +345,6 @@ def test_carry_gate_empty_gate_paths_skips(tmp_path):
 
 
 def test_carry_gate_well_formed_carried_items_passes(tmp_path):
-    """AC4: well-formed carried_items (non-terminal `carried`, plus a
-    terminal `closed` WITH a disposition_detail) commits normally."""
     repo = _init_repo(tmp_path)
     _seed_handoff(
         repo,
@@ -476,11 +363,6 @@ def test_carry_gate_well_formed_carried_items_passes(tmp_path):
 
 
 def test_carry_gate_absent_carried_items_key_passes(tmp_path):
-    """AC4: a handoff with NO `carried_items` key at all is a legitimate
-    green -- absence is not the vacuous-pass hazard named in the plan's
-    Anti-scope (that hazard concerned authoring-time validation with no
-    staged-path precondition; this gate only ever fires on a staged
-    handoff)."""
     repo = _init_repo(tmp_path)
     _seed_handoff(repo, "state/handoffs/2026-08-10-y.md", "")
     outcome = carry_gate(repo, gate_paths=["state/handoffs/2026-08-10-y.md"])
@@ -488,8 +370,6 @@ def test_carry_gate_absent_carried_items_key_passes(tmp_path):
 
 
 def test_carry_gate_terminal_disposition_missing_detail_refuses(tmp_path):
-    """AC1: a terminal disposition (`blocked`) with no disposition_detail is
-    a REFUSAL."""
     repo = _init_repo(tmp_path)
     _seed_handoff(
         repo,
@@ -506,8 +386,6 @@ def test_carry_gate_terminal_disposition_missing_detail_refuses(tmp_path):
 
 
 def test_carry_gate_missing_carry_id_refuses(tmp_path):
-    """AC2: a missing carry_id refuses, delegating to evaluate_gate rather
-    than re-implementing the rule."""
     repo = _init_repo(tmp_path)
     _seed_handoff(
         repo,
@@ -522,7 +400,6 @@ def test_carry_gate_missing_carry_id_refuses(tmp_path):
 
 
 def test_carry_gate_unrecognized_disposition_refuses(tmp_path):
-    """AC2: a disposition outside the sanctioned set refuses."""
     repo = _init_repo(tmp_path)
     _seed_handoff(
         repo,
@@ -538,8 +415,6 @@ def test_carry_gate_unrecognized_disposition_refuses(tmp_path):
 
 
 def test_carry_gate_preserves_violation_lines_verbatim(tmp_path):
-    """AC3: `evaluate_gate`'s own violation text reaches `diagnostics`
-    unchanged, prefixed only with the handoff path -- no re-wording."""
     from coordinator_core.ops.handoff_carry_gate import evaluate_gate
 
     items = [{"description": "no id", "disposition": "carried"}]
@@ -558,8 +433,6 @@ def test_carry_gate_preserves_violation_lines_verbatim(tmp_path):
 
 
 def test_carry_gate_refusal_includes_restage_hint(tmp_path):
-    """AC6: a refusal's diagnostics tell the operator the path is left
-    unstaged and must be re-staged after the fix."""
     repo = _init_repo(tmp_path)
     _seed_handoff(
         repo,
@@ -581,13 +454,6 @@ def test_carry_gate_pass_has_no_restage_hint(tmp_path):
 
 
 def test_carry_gate_unreadable_handoff_refuses(tmp_path):
-    """AC7: a staged handoff path that EXISTS on disk but cannot be read
-    (here: the path is a directory, not a readable file) is a REFUSAL, not
-    a silent pass -- fail-loud matches `evaluate_gate`'s own never-fail-open
-    contract. Deliberately NOT a missing path -- see
-    `test_carry_gate_staged_deletion_path_absent_from_worktree_passes`
-    below (AC8) for why an ABSENT path is a different case (a legitimate
-    skip, not this refusal) that must not be conflated with this one."""
     repo = _init_repo(tmp_path)
     handoff_as_dir = repo / "state" / "handoffs" / "2026-08-10-unreadable.md"
     handoff_as_dir.mkdir(parents=True)
@@ -618,8 +484,6 @@ def test_carry_gate_staged_deletion_path_absent_from_worktree_passes(tmp_path):
 
 
 def test_carry_gate_unparseable_frontmatter_refuses(tmp_path):
-    """AC7: a handoff with no parseable YAML frontmatter block is a
-    REFUSAL."""
     repo = _init_repo(tmp_path)
     _seed_file(repo, "state/handoffs/2026-08-10-f.md", "no frontmatter here\n")
     outcome = carry_gate(repo, gate_paths=["state/handoffs/2026-08-10-f.md"])
@@ -628,8 +492,6 @@ def test_carry_gate_unparseable_frontmatter_refuses(tmp_path):
 
 
 def test_carry_gate_only_filters_handoff_paths(tmp_path):
-    """Non-handoff paths in `gate_paths` are ignored -- only
-    `state/handoffs/*.md` entries are read."""
     repo = _init_repo(tmp_path)
     _seed_handoff(repo, "state/handoffs/2026-08-10-g.md", "")
     outcome = carry_gate(
@@ -638,10 +500,6 @@ def test_carry_gate_only_filters_handoff_paths(tmp_path):
     )
     assert outcome == GateOutcome(passed=True, skipped=False, diagnostics=[])
 
-
-# ---------------------------------------------------------------------------
-# op_scope_coverage_gate
-# ---------------------------------------------------------------------------
 
 _REGISTRY_RELPATH = "coordinator_core/ops/_registry_map.py"
 _OP_SCOPES_RELPATH = "coordinator_core/op_scopes.py"
@@ -659,7 +517,6 @@ def _seed_registry_map(repo: Path, op_names, *, valid: bool = True) -> None:
         )
     else:
         # A dict spelled via a name that isn't OP_MODULE_MAP, so the target
-        # binding is genuinely absent -- simulates a rename/restructure.
         p.write_text("SOME_OTHER_NAME = {}\n", encoding="utf-8")
 
 
@@ -678,9 +535,6 @@ def _seed_op_scopes(repo: Path, op_scope_pairs, *, valid: bool = True) -> None:
 
 
 def test_op_scope_gate_skips_when_registry_map_not_staged(tmp_path):
-    """Scope filter: `_registry_map.py` absent from `gate_paths` -> skip, no
-    file read at all -- a commit that doesn't touch the registry has nothing
-    to say."""
     repo = _init_repo(tmp_path)
     outcome = op_scope_coverage_gate(repo, gate_paths=["some/other/file.py"])
     assert outcome == GateOutcome(passed=True, skipped=True, diagnostics=[])
@@ -713,21 +567,14 @@ def test_op_scope_gate_passes_when_all_classified(tmp_path):
 
 
 def test_op_scope_gate_absence_class_registry_map_deleted_skips(tmp_path):
-    """Absence class 1: `_registry_map.py` staged in gate_paths but ABSENT from
-    the worktree (a staged deletion) -> skip, not refuse."""
     repo = _init_repo(tmp_path)
-    # Never write the file at all -- mirrors a staged deletion where the
-    # worktree copy is already gone by gate time.
     outcome = op_scope_coverage_gate(repo, gate_paths=[_REGISTRY_RELPATH])
     assert outcome == GateOutcome(passed=True, skipped=True, diagnostics=[])
 
 
 def test_op_scope_gate_absence_class_op_scopes_missing_refuses(tmp_path):
-    """Absence class 2: `op_scopes.py` absent from the worktree -> refuse,
-    never a silent pass -- the gate cannot verify coverage without it."""
     repo = _init_repo(tmp_path)
     _seed_registry_map(repo, ["op.a"])
-    # op_scopes.py deliberately never written.
     outcome = op_scope_coverage_gate(repo, gate_paths=[_REGISTRY_RELPATH])
     assert outcome.passed is False
     assert outcome.skipped is False
@@ -782,9 +629,6 @@ def test_op_scope_gate_refuses_on_double_module_level_rebind(tmp_path):
 
 
 def test_op_scope_gate_same_named_local_does_not_count_as_second_binding(tmp_path):
-    """A same-named local variable inside a function is NOT a module-level
-    binding and must not trip the multiplicity refusal -- only `tree.body`
-    (module-level statements) counts."""
     repo = _init_repo(tmp_path)
     p = repo / _REGISTRY_RELPATH
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -802,10 +646,6 @@ def test_op_scope_gate_same_named_local_does_not_count_as_second_binding(tmp_pat
 
 
 def test_op_scope_gate_op_scopes_present_but_unreadable_refuses(tmp_path, monkeypatch):
-    """Present-but-unreadable, not absent: `op_scopes.py` exists on disk but
-    raises `OSError` on read (permissions, encoding I/O failure, transient FS
-    error) -> refuse, naming the path or the read failure -- a predicate the
-    gate cannot evaluate must never fall through to 'no violations'."""
     repo = _init_repo(tmp_path)
     _seed_registry_map(repo, ["op.a"])
     _seed_op_scopes(repo, [("op.a", "none")])
@@ -829,9 +669,6 @@ def test_op_scope_gate_op_scopes_present_but_unreadable_refuses(tmp_path, monkey
 
 
 def test_op_scope_gate_registry_map_present_but_unreadable_refuses(tmp_path, monkeypatch):
-    """Mirrored present-but-unreadable case on the registry-map side:
-    `_registry_map.py` exists but raises `OSError` on read -> refuse, naming
-    the path or the read failure, same as the op_scopes.py side."""
     repo = _init_repo(tmp_path)
     _seed_registry_map(repo, ["op.a"])
 
@@ -851,37 +688,6 @@ def test_op_scope_gate_registry_map_present_but_unreadable_refuses(tmp_path, mon
         _REGISTRY_RELPATH in line and "simulated unreadable file" in line
         for line in outcome.diagnostics
     )
-
-
-# ---------------------------------------------------------------------------
-# C3 equivalence fixture -- pre-re-point vs post-re-point parity
-#
-# C3 re-pointed deletion_block_gate's Kept-claim (Assertion-2)
-# HEAD-membership leg onto `coordinator_core.git.git_state` (head_blobs) with
-# no `git` process, but landed with NO new tests -- the pre-existing tests
-# above predate the re-point and were never written to catch it changing an
-# answer. This section is that missing equivalence proof: an oracle,
-# reconstructed verbatim from the pre-re-point implementation (recovered via
-# `git show 69f92af34^:coordinator_core/ops/ceremony/commit_gates.py`), run
-# side-by-side with the live gate over the shapes the re-point's own module
-# docstring calls out as load-bearing for the Kept-claim leg (a clean path,
-# a path with a space, a non-ASCII path, a symlink, and a submodule
-# gitlink).
-#
-# (This section originally also covered `dirty_tree_gate`'s companion
-# staged-classification re-point with a matching oracle and a wider shape
-# set -- mode-only divergence, content divergence, staged/worktree/add/
-# delete, a CRLF EOL-phantom. That half was deleted alongside
-# `dirty_tree_gate` itself under the brightline kill bar: the function had
-# no production caller, so its equivalence proof went with it. The
-# `deletion_block_gate` half below is untouched and still current.)
-#
-# The oracle reuses `parse_step267_blocks`, `_parse_name_status_deletions`,
-# and `_parse_name_status_rename_sources` (helpers the re-point did NOT
-# touch) and only re-implements the one leg that changed: the Kept-claim
-# HEAD-membership check (was an unscoped `git ls-tree -r HEAD --name-only`
-# walk, not the blob-type-filtered `head_blobs()`).
-# ---------------------------------------------------------------------------
 
 
 def _old_deletion_block_gate(
@@ -958,9 +764,6 @@ def _git_stdout(args, cwd) -> str:
     ).stdout.strip()
 
 
-# --- deletion_block_gate Kept-claim shape builders --------------------------
-
-
 def _shape_clean(tmp_path):
     repo = _init_repo(tmp_path)
     _seed_file(repo, "clean.txt", "unchanged\n")
@@ -995,7 +798,6 @@ def _shape_symlink(tmp_path):
     _seed_file(repo, "README.md", "x")
     _git(["add", "--", "README.md"], repo)
     _git(["commit", "-q", "-m", "seed"], repo)
-    # cacheinfo needs stdin text, not argv -- git hash-object reads stdin.
     proc = subprocess.run(
         ["git", "hash-object", "-w", "--stdin"],
         cwd=str(repo), input="target.txt", capture_output=True, text=True, check=True,

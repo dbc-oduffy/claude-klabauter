@@ -1,11 +1,3 @@
-"""Tests for the ``key_results[]`` line scraper in ``coordinator_core.goals.reassess_krs``.
-
-Regression home for the 2026-09-06 defect reported by doe-claude-em
-(`state/cross-repo/inbox/2026-09-06-doe-claude-em-reassess-goal-krs-inline-enum-comment-defeats-the-only-transition.md`):
-docgen's `goal` template scaffolds `status: not-started  # not-started | ...`,
-the scraper captured that hint into the value, and `process_kr_entry`'s exact
-compare then made the op's only transition unreachable.
-"""
 
 from __future__ import annotations
 
@@ -17,8 +9,6 @@ from coordinator_core.goals.reassess_krs import (
     strip_inline_comment,
 )
 
-# The literal docgen `goal` template emits — see
-# coordinator_core/ops/docgen/templates/goal.json.
 SCAFFOLDED_GOAL = """schema: goal
 id: "goal-scaffolded"
 title: "A scaffolded goal"
@@ -45,7 +35,6 @@ def test_strip_inline_comment_keeps_a_hash_inside_quotes():
 
 
 def test_strip_inline_comment_keeps_a_hash_with_no_leading_whitespace():
-    """A `#` not preceded by whitespace does not open a YAML comment."""
     assert strip_inline_comment("colour#ff0000") == "colour#ff0000"
 
 
@@ -65,13 +54,10 @@ def test_scaffolded_status_parses_to_the_bare_enum_member():
     assert kr_status == "not-started"
     assert kr_status in KR_STATUS_ENUM
     assert kr_weekly == "true"
-    # The quoted text keeps its quotes — the _extract_keywords parity quirk
-    # depends on that, and comment-stripping must not disturb it.
     assert kr_text == '"ship the widget pipeline"'
 
 
 def test_scaffolded_goal_can_reach_in_progress_on_movement():
-    """The defect: this transition was unreachable for any scaffolded goal."""
     _, _, kr_status, kr_weekly = parse_kr_block(extract_key_results(SCAFFOLDED_GOAL))[0]
     result = process_kr_entry(
         "kr-1", "ship the widget pipeline", kr_status, kr_weekly, "shipped the widget pipeline"

@@ -33,17 +33,6 @@ import pytest
 
 
 def assert_control_is_structurally_distinct(control: dict, treatment: dict) -> None:
-    """Raise `ValueError` if `control` is structurally indistinguishable
-    from `treatment` on all three of M6's named axes: total module count,
-    `coordinator_core.*` module count, and spawn count.
-
-    Each arm dict is expected to carry `module_count`, `coordinator_core_module_count`,
-    and `spawn_count`. A control that matches the treatment on ALL THREE is
-    the exact "paid the same import tax as the treatment" failure P8
-    records -- a control differing on even one axis is doing SOME isolating
-    work and is accepted here; judging whether that one axis is the right
-    one is a human review call, not this guard's job.
-    """
     axes = ("module_count", "coordinator_core_module_count", "spawn_count")
     missing = [axis for axis in axes if axis not in control or axis not in treatment]
     if missing:

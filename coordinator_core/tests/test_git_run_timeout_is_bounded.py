@@ -46,12 +46,6 @@ from coordinator_core.git import run as git_run
 
 
 class _NeverDrainingProc:
-    """A child whose reader threads never reach EOF — CPython's hazard, staged.
-
-    `communicate(timeout=...)` raises on the first (bounded) call, exactly as
-    the real one does. A SECOND call — the unbounded re-drain — blocks
-    forever, which is the behaviour that makes the real thing hang.
-    """
 
     returncode = -9
 
@@ -93,7 +87,6 @@ def _install(monkeypatch) -> _NeverDrainingProc:
 
 
 def test_a_timed_out_git_call_returns_instead_of_re_draining(monkeypatch) -> None:
-    """The whole point. The call comes back; it does not re-enter the drain."""
     proc = _install(monkeypatch)
 
     result = git_run.run_git(["rev-parse", "--show-toplevel"], cwd=".")
@@ -104,9 +97,6 @@ def test_a_timed_out_git_call_returns_instead_of_re_draining(monkeypatch) -> Non
 
 
 def test_the_timed_out_child_is_killed_and_reaped_under_a_bound(monkeypatch) -> None:
-    """Kill then a BOUNDED wait. `wait` only reaps the process — it does not
-    join the reader threads — so an inherited handle cannot park us there,
-    and the bound means even a kill that did not take releases the caller."""
     proc = _install(monkeypatch)
 
     git_run.run_git(["status", "--porcelain"], cwd=".")
@@ -117,10 +107,6 @@ def test_the_timed_out_child_is_killed_and_reaped_under_a_bound(monkeypatch) -> 
 
 
 def test_the_pipes_are_closed_on_the_timeout_path(monkeypatch) -> None:
-    """The hazard the superseded comment correctly named: a wrapper that
-    reimplements the timeout around a raw `Popen` is how a fed stdin leaks a
-    pipe on the failure path. Answered by using `Popen` as a context manager,
-    so `__exit__` runs on the timeout path too."""
     proc = _install(monkeypatch)
 
     git_run.run_git(["rev-parse", "HEAD"], cwd=".")
@@ -129,9 +115,6 @@ def test_the_pipes_are_closed_on_the_timeout_path(monkeypatch) -> None:
 
 
 def test_a_timed_out_call_yields_no_bytes(monkeypatch) -> None:
-    """A timed-out git call discards whatever the dead child wrote. Callers
-    read `timed_out`, never partial output, and a partial capture from a
-    killed process is not a value any branch should be tempted by."""
     _install(monkeypatch)
 
     result = git_run.run_git(["log", "--oneline"], cwd=".")
@@ -141,9 +124,6 @@ def test_a_timed_out_call_yields_no_bytes(monkeypatch) -> None:
 
 
 def test_a_reaping_wait_that_itself_times_out_still_returns(monkeypatch) -> None:
-    """Belt and braces: if even the bounded reap expires, the caller is still
-    released with a truthful timed-out result rather than an exception
-    escaping the seam."""
     proc = _install(monkeypatch)
 
     def _wait(timeout=None):

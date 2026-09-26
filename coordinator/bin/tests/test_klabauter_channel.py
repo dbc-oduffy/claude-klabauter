@@ -1,20 +1,3 @@
-"""test_klabauter_channel — binds `klabauter-channel.py`'s report/mutate
-contract to real assertions.
-
-Every external boundary `klabauter-channel.py` calls is stubbed: `git` via
-`subprocess.run`, the machine-local registry via `cli_shared.machine_local_get`,
-`engine.target` via `_resolve_claude_klabauter.resolve_engine_target`, and path equality
-via `same_path` — no real process, registry file, or git repo is touched.
-Mirrors `test_klabauter_promote.py`'s own stub-at-the-boundary discipline.
-
-Covers: the report path on a clean matching tree; the absent-`engine.target`
-report (must not read as a mismatch); and each refusal — dirty tree, unset/
-unresolvable registry key, nonexistent remote branch, and the publish-mirror
-refusal — asserting no mutation (no `fetch`/`checkout` call) occurred in
-every refusal case.
-
-Run: python -m pytest coordinator/bin/tests/test_klabauter_channel.py -q
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -47,7 +30,6 @@ def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> subpr
 
 
 class _GitSpy:
-    """Stubs every `git -C <tree> ...` call `klabauter-channel.py` makes."""
 
     def __init__(
         self,
@@ -106,9 +88,6 @@ def _install_stubs(
 
     monkeypatch.setattr(_mod.subprocess, "run", spy)
     monkeypatch.setattr(_mod.cli_shared, "machine_local_get", lambda key: registry.get(key))
-    # Finding 9 (staff-eng C8 review): `_is_publish_mirror`/
-    # `_declared_track_ref_branch` now read in-process via `registry_get`,
-    # not the `cli_shared.machine_local_get` CLI shell-out.
     monkeypatch.setattr(_mod, "registry_get", lambda key: registry.get(key))
     monkeypatch.setattr(_mod._resolve_claude_klabauter, "resolve_engine_target", lambda *a, **k: declared_target)
     monkeypatch.setattr(_mod, "same_path", lambda a, b: same_path_result)
@@ -119,10 +98,6 @@ def _install_stubs(
 def _mutating_calls(spy: _GitSpy) -> List[List[str]]:
     return [c for c in spy.calls if "fetch" in c or "checkout" in c]
 
-
-# ---------------------------------------------------------------------------
-# Report path.
-# ---------------------------------------------------------------------------
 
 def test_report_clean_matching_tree(monkeypatch, capsys):
     spy = _install_stubs(
@@ -169,10 +144,6 @@ def test_report_unregistered_tree_is_not_an_error(monkeypatch, capsys):
 
 
 def test_report_on_publish_mirror_mismatch_names_track_ref_not_set(monkeypatch, capsys):
-    """Finding 4 (staff-eng C8 review): the report path must not recommend
-    `--set` on a publish mirror whose declared branch disagrees with
-    engine.target -- that command would then be refused (Finding 3). It
-    names the track_ref lever instead."""
     _install_stubs(
         monkeypatch,
         declared_target="main",
@@ -192,10 +163,6 @@ def test_report_on_publish_mirror_mismatch_names_track_ref_not_set(monkeypatch, 
     assert "klabauter-channel --set" not in out
     assert _mod._TRACK_REF_KEY in out
 
-
-# ---------------------------------------------------------------------------
-# --set refusals — each asserts NO mutation occurred (no fetch/checkout).
-# ---------------------------------------------------------------------------
 
 def test_set_refuses_dirty_tree_no_mutation(monkeypatch, capsys):
     spy = _install_stubs(

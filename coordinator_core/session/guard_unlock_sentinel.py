@@ -119,35 +119,12 @@ from typing import Any, Dict, Optional
 _SENTINEL_PREFIX = "coordinator-guard-unlock-"
 
 #: REMOVED 2026-09-03: ``_SETTINGS_ROOT_WIKI_POINTER``, the settings-root
-#: wiki-directory pointer this module used to render. It went unread when
-#: item 9 stopped rendering any doc pointer here, and it can never come
-#: back: ``message_register._rules`` B8 leg (d) grades a pointer into the
-#: override-key/unlock doc surface a gate-referent, which is what item 9
-#: measured. Item 11's render carries the guard NAME instead, and no path.
-#:
-#: DR-290 form 2 (the literal, never-expanded settings-root pointer) is NOT
 #: lost with it -- ``bash_guards._override_doc.OVERRIDE_KEYS_DOC_DISPLAY``
-#: is that exact string plus the page filename, is live, and is the pointer
-#: readers actually receive. Cite THAT constant as the canonical form; the
-#: three comments here and in ``_override_doc`` that used to cite this one
-#: as the shape that "already ships" were describing an exemplar that had
-#: stopped shipping.
 
 _UNSAFE_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
 
 
 def _sanitize_component(value: str) -> str:
-    """Slugify a path-filename component; never lets a separator through.
-
-    Guard module names and session ids are ``[a-z0-9_]`` by construction,
-    but this does not assume it: anything outside the safe set (path
-    separators, ``..``, whitespace, null bytes, and ``.``) is replaced with
-    ``_`` rather than passed through. Note this means a literal ``_`` DOES
-    survive sanitization unmodified — so ``_`` (and any run of it, e.g.
-    ``__``) is never collision-free as a join separator between two
-    sanitized components; see ``sentinel_path``, which joins on ``.``
-    instead, a character this function always strips.
-    """
     cleaned = _UNSAFE_CHARS.sub("_", value)
     return cleaned or "_"
 
@@ -183,23 +160,6 @@ def sentinel_path(session_id: str, guard_name: str) -> Path:
 
 
 def consume(session_id: str, guard_name: str) -> bool:
-    """One-shot consume the unlock for ``(session_id, guard_name)``.
-
-    Returns True exactly once per grant: if the sentinel exists, it is
-    unlinked and True is returned; a second call for the same pair (no new
-    sentinel written in between) returns False, so a denied write is
-    re-denied on retry (AC3).
-
-    Race-safe by construction: ``Path.unlink()`` is the atomic OS operation
-    that decides ownership when two callers race on the same path — the
-    caller whose unlink succeeds observes True, the other observes
-    ``FileNotFoundError`` and is normalized to False below.
-
-    Never raises. Every failure mode — the file already gone, a permissions
-    error, an unresolvable temp directory — is caught here and returned as
-    False, because a crash in this function would fail its caller's guard
-    OPEN, which is the one direction a hard-deny guard must not fail in.
-    """
     try:
         path = sentinel_path(session_id, guard_name)
     except Exception:
@@ -530,12 +490,7 @@ def annotate_deny(
     augmentation that crashed would turn that settled deny into an engine
     crash.
     """
-    # Item 11 (2026-09-03): render the firing guard's NAME, nothing else.
-    # Not a reversal of items 3/4/7/9 -- those removed the bypass RECIPE and
-    # the pointer at the unlock doc surface, and both stay removed. A guard
     # name is IDENTITY, not an affordance: nothing can be written with it,
-    # no button is named by it, and B8 grades it clean (measured, see the
-    # docstring's item 11) precisely because it is not a gate-referent.
     del doc_display, agent_id, git_root, session_id
     if not guard_name:
         return out

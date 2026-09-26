@@ -72,10 +72,6 @@ from coordinator_core.warm.entry_seam import WarmGuardOutcome, try_warm_guard_di
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-#: Same fixture command `ops/tests/test_warm_guard_evaluate.py` uses: needs no git
-#: repository, no filesystem target, no network, and denies unconditionally via
-#: `check_no_verify` with no override present -- the smallest payload that proves
-#: "a deny still denies" without depending on this suite's own working-tree state.
 _DENY_CMD = "git commit --no-verify -m x -- foo.py"
 
 
@@ -91,10 +87,6 @@ def _deny_event() -> dict:
 
 
 def _assert_cold_path_still_denies() -> None:
-    """The cold path this AC's parity clause is measured against, driven directly
-    (never through `try_warm_guard_dispatch`, which the arms below have already
-    proven returns no verdict of its own): a caller that received `hit=False`
-    falls through to exactly this call, unmodified."""
     out = evaluate_payload_json(json.dumps(_deny_event()))
     assert isinstance(out, dict)
     hso = out.get("hookSpecificOutput")
@@ -103,9 +95,6 @@ def _assert_cold_path_still_denies() -> None:
 
 
 def _assert_no_respawn_side_effect(monkeypatch: pytest.MonkeyPatch) -> list:
-    """Wires the shared "no incidental disk footprint" pin every arm below
-    reuses. Returns the spy list so the calling test can assert it stayed empty
-    AFTER driving `try_warm_guard_dispatch`."""
     calls: list = []
     monkeypatch.setattr(client, "_live_tree_cold", True)
     monkeypatch.setattr(client, "_spawned_this_process", False)
@@ -114,13 +103,6 @@ def _assert_no_respawn_side_effect(monkeypatch: pytest.MonkeyPatch) -> list:
 
 
 def test_warm_disabled_falls_open_with_cold_path_parity(monkeypatch: pytest.MonkeyPatch):
-    """Arm 1: warm genuinely disabled, exercised via the established seam
-    (`settings.registry_get` monkeypatched as a module attribute -- ~10 existing
-    tests use this exact pattern; `registry_get` is a deferred delegate but stays
-    module-level and patchable per its own docstring). `client.try_warm_dispatch`
-    is left completely unstubbed: the "warm off" branch inside `_try_warm_dispatch
-    _inner` is what produces the miss here, not a fake standing in for it.
-    """
     spawn_calls = _assert_no_respawn_side_effect(monkeypatch)
     monkeypatch.delenv(settings.ENV_VAR, raising=False)
     monkeypatch.setattr(settings, "registry_get", lambda key: None)
@@ -136,14 +118,6 @@ def test_warm_disabled_falls_open_with_cold_path_parity(monkeypatch: pytest.Monk
 
 
 def test_no_resident_server_falls_open_with_cold_path_parity(monkeypatch: pytest.MonkeyPatch):
-    """Arm 2, AS ITSELF -- distinct from "no door" below. `client._open_pipe`
-    raises `ConnectionRefusedError`: per that module's own documented anti-storm
-    table, this is the "a door exists but nothing answers behind it" outcome (a
-    hard-killed server's corpse socket file, or a Windows named pipe nobody is
-    serving) -- a different real-world precondition from "no endpoint was ever
-    created", even though `_try_warm_dispatch_inner` folds both into the same
-    except clause and the same `_spawn_once` trigger.
-    """
     spawn_calls = _assert_no_respawn_side_effect(monkeypatch)
     monkeypatch.setattr(client, "is_warm_enabled", lambda: True)
     monkeypatch.setattr(client, "engine_token", lambda: "test-ac4-no-resident-server-token")
@@ -161,14 +135,6 @@ def test_no_resident_server_falls_open_with_cold_path_parity(monkeypatch: pytest
 
 
 def test_no_door_falls_open_with_cold_path_parity(monkeypatch: pytest.MonkeyPatch):
-    """Arm 3, AS ITSELF -- no endpoint exists at all (`FileNotFoundError`, ENOENT).
-    `test_entry_seam.py ::
-    test_try_warm_guard_dispatch_falls_open_when_the_door_is_absent` already pins
-    the bare `WarmGuardOutcome(hit=False)` fact for this exact fault; this test
-    adds the parity clause that one does not assert: that the cold path a caller
-    falls through to on this outcome still denies, and that the fail-open branch
-    left no disk footprint of its own.
-    """
     spawn_calls = _assert_no_respawn_side_effect(monkeypatch)
     monkeypatch.setattr(client, "is_warm_enabled", lambda: True)
     monkeypatch.setattr(client, "engine_token", lambda: "test-ac4-no-door-token")

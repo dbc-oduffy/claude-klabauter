@@ -1,25 +1,3 @@
-"""test_query_records.py — colocated coverage for coordinator/bin/query-records.py.
-
-Scope: CLI-layer behavior only — argument parsing, `--status` composition
-into `--where`, `--where` operator-grammar pass-through parity, and the
-fail-loud contract for unported `.js` flags. Does NOT exercise the live
-`records.query` engine op (that's `coordinator_core/ops/tests/
-test_records_query.py`'s job) — `route_mutation` is monkeypatched here so
-these tests run with no engine-root / repo dependency.
-
-Spec backlink: pln-python-ize-claude-klabauter-bin-oracles--218413 § A2
-
-Converted from a hand-rolled runner (`query-records.test.py`) to a pytest-collectable
-module — the module was already unittest.TestCase-shaped, so this is a rename plus removal
-of the `unittest.main()` harness (pytest collects the TestCase classes directly).
-
-`route_mutation` / `_resolve_repo_root` / `_no_legacy` are not `qr` module
-attributes — `query-records.py`'s `main()` imports them from
-`coordinator/bin/lib/records_query.py` inside the function body (so the bin
-module binds `coordinator_core` before touching it; see that import's own
-comment). Patches below target `records_query_lib` — the module those
-in-function imports actually resolve against — not `qr`.
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -42,9 +20,6 @@ import records_query as records_query_lib  # noqa: E402
 
 
 class WhereOperatorGrammarParityTests(unittest.TestCase):
-    """`--where`'s operator characters must reach the op's params dict
-    byte-verbatim — this trampoline does not parse or rewrite the grammar,
-    the engine does (coordinator_core/ops/records_query.py._parse_where)."""
 
     def setUp(self) -> None:
         self._captured_params: dict | None = None
@@ -107,10 +82,6 @@ class WhereOperatorGrammarParityTests(unittest.TestCase):
         self.assertEqual(self._captured_params["format"], "markdown-list")
 
     def test_root_overrides_resolved_repo_root(self) -> None:
-        # query-records.py's `--root` handling is `os.path.abspath(args.root)`
-        # (coordinator/bin/query-records.py) -- repo_root is a filesystem path
-        # fed straight into git-touching ops, legitimately OS-native, not a
-        # POSIX-contract surface. Expect the native-normalized form.
         rc = self._run(["--type", "handoff", "--root", "/tmp/some-other-repo"])
         self.assertEqual(rc, 0)
         self.assertEqual(
@@ -147,8 +118,6 @@ class WhereOperatorGrammarParityTests(unittest.TestCase):
         self.assertEqual(self._captured_params["limit"], 7)
 
     def test_limit_omitted_sends_no_limit_key(self) -> None:
-        """Omitting the flag must not synthesize one — the op's own default
-        (50) is what applies, and a trampoline-side default would shadow it."""
         self._run(["--type", "lesson"])
         assert self._captured_params is not None
         self.assertNotIn("limit", self._captured_params)
@@ -164,9 +133,6 @@ class WhereOperatorGrammarParityTests(unittest.TestCase):
         self.assertNotIn("--limit", qr._UNPORTED_FLAGS)
 
     def test_status_value_containing_and_fails_loud(self) -> None:
-        # A status value that itself
-        # contains " AND " must fail loud, not silently compose into a
-        # second where-clause conjunct.
         with self.assertRaises(SystemExit) as ctx:
             self._run(["--type", "debt", "--status", "open AND urgent"])
         self.assertNotEqual(ctx.exception.code, 0)
@@ -174,9 +140,6 @@ class WhereOperatorGrammarParityTests(unittest.TestCase):
 
 
 class OutputSerializationTests(unittest.TestCase):
-    """`--format json`/markdown-list
-    stdout serialization had zero test coverage (every prior test's fake
-    `route_mutation` returned `{"records": ""}` unconditionally)."""
 
     def setUp(self) -> None:
         self._orig_route_mutation = records_query_lib.route_mutation
@@ -223,9 +186,6 @@ class OutputSerializationTests(unittest.TestCase):
 
 
 class ListSchemasTests(unittest.TestCase):
-    """`--list-schemas` had zero test
-    coverage despite being one of two novel capabilities the module
-    docstring calls out."""
 
     def _run(self, argv: list[str]) -> tuple[int, str, str]:
         stdout, stderr = io.StringIO(), io.StringIO()
@@ -304,8 +264,6 @@ class ListSchemasTests(unittest.TestCase):
         orig_cc_invoke = sys.modules.get("cc_invoke")
         orig_ops_records_query = sys.modules.get("coordinator_core.ops.records_query")
         sys.modules["cc_invoke"] = fake_cc_invoke
-        # Force the in-function import to fail regardless of whether the real
-        # coordinator_core package is importable from this process's sys.path.
         sys.modules["coordinator_core.ops.records_query"] = None
         try:
             rc, out, err = self._run(["--list-schemas"])
@@ -356,17 +314,11 @@ class UnportedFlagFailLoudTests(unittest.TestCase):
         self.assertIn("--show-toplevel: not ported — claude-klabauter BIG_PORT", stderr)
 
     def test_fleet_equals_form_fails_loud(self) -> None:
-        # The docstring claims a bare
-        # `--fleet=1` form (split on first `=`) is caught too, but no test
-        # exercised the `--flag=value` shape.
         code, stderr = self._run_capture_stderr(["--type", "debt", "--fleet=1"])
         self.assertNotEqual(code, 0)
         self.assertIn("--fleet: not ported — claude-klabauter BIG_PORT", stderr)
 
     def test_unported_flag_wins_even_before_missing_type_error(self) -> None:
-        # Ordering: the unported-flag scan runs BEFORE argparse, so it fires
-        # even on an otherwise-invalid invocation (no --type given) — the
-        # unported-flag message must never be masked by a different error.
         code, stderr = self._run_capture_stderr(["--validate-all"])
         self.assertNotEqual(code, 0)
         self.assertIn("--validate-all: not ported — claude-klabauter BIG_PORT", stderr)

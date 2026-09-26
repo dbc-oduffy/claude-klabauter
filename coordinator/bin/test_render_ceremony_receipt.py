@@ -1,14 +1,3 @@
-"""test_render_ceremony_receipt.py — Tier T tests for render-ceremony-receipt.py.
-
-Fixtures receipt dicts and writes them to a temp directory; never reads live
-state/ceremony/ artifacts. Loads the hyphenated CLI module by file path, the
-same pattern test_check_doctrine_citations.py uses for its own sibling.
-
-Negative-spec: does not invoke any subprocess and does not depend on
-receipt_schema.py's factory helpers being importable (a fixture dict here is
-allowed to omit `unknown` entirely, unlike make_empty_op_tail's always-present
-posture, specifically to exercise the graceful-absent rendering path).
-"""
 from __future__ import annotations
 
 import contextlib
@@ -61,7 +50,6 @@ class RenderCeremonyReceiptTests(unittest.TestCase):
             rc = _module.main(["render-ceremony-receipt.py", path])
         return rc, out.getvalue(), err.getvalue()
 
-    # --- AC 1: unknown renders, distinctly from every other partition ---
 
     def test_unknown_entries_render_distinctly(self) -> None:
         receipt = _receipt(
@@ -81,13 +69,11 @@ class RenderCeremonyReceiptTests(unittest.TestCase):
         self.assertIn("UNKNOWN", out)
         self.assertIn("u1", out)
         self.assertIn("u2", out)
-        # Distinct section header from ACTED/SKIPPED, not merged into either.
         unknown_idx = out.index("UNKNOWN")
         acted_idx = out.index("ACTED")
         skipped_idx = out.index("SKIPPED")
         self.assertNotEqual(unknown_idx, acted_idx)
         self.assertNotEqual(unknown_idx, skipped_idx)
-        # u1/u2 must not appear under the ACTED or SKIPPED sections.
         acted_block = out[acted_idx:skipped_idx]
         self.assertNotIn("u1", acted_block)
 
@@ -109,7 +95,6 @@ class RenderCeremonyReceiptTests(unittest.TestCase):
         self.assertNotIn("mystery", acted_line)
         self.assertNotIn("mystery", skipped_line)
 
-    # --- AC 2: graceful-absent — no unknown key vs. empty unknown[] ---
 
     def test_missing_unknown_key_renders_not_tracked(self) -> None:
         receipt = _receipt(
@@ -140,7 +125,6 @@ class RenderCeremonyReceiptTests(unittest.TestCase):
         _, out, _ = self._run(path)
         unknown_line = [ln for ln in out.splitlines() if "UNKNOWN" in ln][0]
         rest = out[out.index(unknown_line) + len(unknown_line):]
-        # "(none)" appears on the UNKNOWN line itself, not "not tracked".
         self.assertIn("(none)", unknown_line)
         self.assertNotIn("not tracked", unknown_line)
 
@@ -162,7 +146,6 @@ class RenderCeremonyReceiptTests(unittest.TestCase):
         _, out_empty, _ = self._run(self._write("r6.json", empty_receipt))
         self.assertNotEqual(out_absent, out_empty)
 
-    # --- AC 3: missing / malformed receipt refuses loudly ---
 
     def test_missing_receipt_file_exits_nonzero_and_names_path(self) -> None:
         missing_path = os.path.join(self._tmpdir.name, "does-not-exist.json")
@@ -189,7 +172,6 @@ class RenderCeremonyReceiptTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn(path, err)
 
-    # --- AC 4: unknown does not influence exit code ---
 
     def test_unknown_present_and_nonempty_still_exits_zero(self) -> None:
         receipt = _receipt(
@@ -207,7 +189,6 @@ class RenderCeremonyReceiptTests(unittest.TestCase):
         self.assertEqual(err, "")
 
     def test_failed_critical_present_still_exits_zero_render_is_not_a_gate(self) -> None:
-        # This CLI is a renderer, not the exit predicate — failed_critical is
         # the hard-exit-1 partition for the CEREMONY, not for this reader.
         receipt = _receipt(
             {

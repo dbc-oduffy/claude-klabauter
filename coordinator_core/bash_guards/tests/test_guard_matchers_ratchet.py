@@ -115,19 +115,9 @@ from coordinator_core.bash_guards.roster import guard_roster
 _PACKAGE_DIR = pathlib.Path(__file__).resolve().parent.parent
 _REFERENCE_DOC = "docs/reference/guard-tool-name-membership.md § 3"
 
-#: Same non-guard-module exclusion `test_tool_name_membership.py` already
-#: uses -- dispatch.py/dispatch_checks.py are the dispatcher itself,
-#: commit_tripwires.py is a library `dispatch_checks.py` calls internally,
 #: none of the three register their own `MATCHERS` contract. Governs only
-#: `_scoped_module_stems()` / `test_discovery_found_the_expected_scope`'s
-#: module-declaration count -- NOT `_actual_matchers()`'s enforcement
-#: scope, which now covers every `guard_roster()` id including the inline
-#: entries `dispatch.py`/`dispatch_checks.py` back.
 _NON_GUARD_MODULES = {"dispatch.py", "dispatch_checks.py", "commit_tripwires.py"}
 
-#: See module docstring's "Population note". Kept to one name, not a
-#: general-purpose skip list -- a second entry here would need the same
-#: level of on-disk justification as this one carries.
 _EXCLUDED_INAPPLICABLE_DECLARATION = {"block_dev_repo_sentinel_removal"}
 
 HELD_PENDING_TOKENIZER_FIX = "held-pending-tokenizer-fix"
@@ -135,7 +125,6 @@ BASH_ONLY_BY_CONSTRUCTION = "bash-only-by-construction"
 NOT_YET_CONVERTED = "not-yet-converted"
 DUAL_DECLARING_BASH_DETECTING = "dual-declaring-bash-detecting"
 
-#: kinds that mark a Bash-only declaration (bucket 2 of AC8's partition).
 _BASH_ONLY_KINDS = frozenset({BASH_ONLY_BY_CONSTRUCTION, NOT_YET_CONVERTED})
 
 
@@ -146,13 +135,7 @@ class _Expected:
     reason: Optional[str] = None
 
 
-#: The full tracked population (AC1, AC5, AC8) -- all 53 live `guard_
-#: roster()` registrations, inline and module-backed alike. Full-universe,
-#: dialect-reading entries carry no `kind`; every Bash-only entry and every
-#: dual-declaring-but-Bash-detecting entry carries a machine-
-#: distinguishable `kind` plus prose (AC5, AC7, AC8).
 EXPECTED: Dict[str, _Expected] = {
-    # -- full-universe, dialect-reading (26) --
     "block-approval-sentinel-creation": _Expected(("Bash", "PowerShell")),
     "block-disarm-marker-sentinel-creation": _Expected(("Bash", "PowerShell")),
     "block-illegal-filename": _Expected(("Bash", "PowerShell")),
@@ -171,9 +154,6 @@ EXPECTED: Dict[str, _Expected] = {
     "plumbing-and-loops": _Expected(("Bash", "PowerShell")),
     "bump-foreign-repo-write": _Expected(("Bash", "PowerShell")),
     "bump-outside-repo-write": _Expected(("Bash", "PowerShell")),
-    # Bucket A, already landed dialect-aware by a concurrent chunk (C2) as
-    # of this ratchet's authoring session -- verified live via
-    # guard_roster(), not carried over from an earlier read of dispatch.py.
     "no-verify": _Expected(("Bash", "PowerShell")),
     "destructive-rm": _Expected(("Bash", "PowerShell")),
     "destructive-git-orphan": _Expected(("Bash", "PowerShell")),
@@ -183,12 +163,7 @@ EXPECTED: Dict[str, _Expected] = {
     "guard-repo-setup-claude-home-refusal": _Expected(("Bash", "PowerShell")),
     "guard-host-subagent-bash-spawn-shapes": _Expected(("Bash", "PowerShell")),
     # p4-verb-fence: full-universe (`MATCHERS = COMMAND_TOOL_NAMES`) and
-    # dialect-reading -- resolves its dialect via `_dialect.dialect_from_
-    # tool_name`/`resolve_segments_for_dialect` (per docs/reference/guard-
-    # tool-name-membership.md § 3), never inferred from command text alone.
     "p4-verb-fence": _Expected(("Bash", "PowerShell")),
-    # -- Bash-only by construction, never a conversion candidate (11) --
-    # docs/reference/guard-tool-name-membership.md § 8's Bucket C table.
     "guard-host-subagent-bash-ban": _Expected(
         ("Bash",),
         BASH_ONLY_BY_CONSTRUCTION,
@@ -265,31 +240,13 @@ EXPECTED: Dict[str, _Expected] = {
         "vocabulary to widen onto -- reclassified from a temporary gap "
         "to permanently Bash-only.",
     ),
-    # -- Bash-only, NOT permanently correct: a real, temporary gap (6) --
-    # Bucket D, WIRED by C9 (2026-08-26). Both entries already read the
-    # dialect at their registered leg and simply never declared it; C9
-    # changed the declaration only, with no detection work. They move here
-    # to bucket (1) -- dual-declaring AND dialect-reading -- because that
     # is now literally true of both. Leaving them at NOT_YET_CONVERTED
-    # after the widening is what turned this ratchet red: the gate is
-    # comparing the live registration against this table, which is exactly
-    # the regrowth it exists to catch, fired against its own plan.
     "block-dev-repo-sentinel-removal-advisory": _Expected(
         ("Bash", "PowerShell"),
     ),
-    # Full-universe from birth: the false-green it catches is dialect-neutral,
-    # and the guard reuses block_stash_destruction's existing PowerShell leg
-    # rather than declaring a Bash-only hold it would later have to widen off.
     "stash-apply-verification-advisory": _Expected(
         ("Bash", "PowerShell"),
     ),
-    # Registered full-universe and dialect-reading from birth, but never
-    # classified here -- which is what the ratchet caught (2026-08-30: the
-    # guard is in `guard_roster()` and absent from this table). No `kind`:
-    # `block_fleet_delegation_creation` imports `dialect_from_tool_name` and
-    # routes a recognized non-bash dialect through
-    # `_detector.evaluate_for_dialect`, so it genuinely detects on both
-    # dialects rather than merely declaring both.
     "block-fleet-delegation-creation": _Expected(
         ("Bash", "PowerShell"),
     ),
@@ -302,40 +259,12 @@ EXPECTED: Dict[str, _Expected] = {
     "git-no-optional-locks": _Expected(
         ("Bash", "PowerShell"),
     ),
-    # Bucket B, WIRED by C4 (2026-08-26): the four git-shaped advisories.
-    # git's argv is byte-identical across dialects, so these fire on the
-    # same argv under both -- the PowerShell-applicability audit these rows
-    # were waiting on IS the C4 conversion plus its own per-entry test
-    # (test_git_shaped_advisories_fire_under_both.py). Moved to bucket (1).
     "validate-commit": _Expected(
         ("Bash", "PowerShell"),
     ),
     # -- formerly dual-declaring-but-Bash-detecting (9), now CONVERTED
-    # (C8's second pass, Finding 7 of the recensus record) -- moved to
-    # bucket (1). state/audits/2026-08-26-guard-detection-language-
-    # dependence-recensus.md Findings 2 (six module-backed) and 3 (three
     # inline) found these nine declaring `COMMAND_TOOL_NAMES` with zero
-    # `_dialect` references. The first C8 pass measured only base-argv
-    # identity and wrongly read eight of the nine as correct-as-drafted;
-    # re-measured against the PowerShell `Start-Process` anti-bypass
-    # surface specifically (the same surface that gapped
-    # `destructive-git-revert`, whose own base argv also matched
-    # identically), seven were REAL detection gaps and are now converted
-    # (a dialect-gated `_dialect.tokenize_command` +
-    # `expand_start_process_invocations` pass, narrowly scoped to
-    # `Start-Process`, ahead of each entry's existing Bash-shaped
-    # pipeline). The ninth, `destructive-git-revert-advisory`, is a thin
-    # wrapper over the SAME `_check_destructive_git_revert_full` function
-    # `destructive-git-revert`'s hard-deny leg calls, so the first C8
-    # pass's fix already covered it too -- a genuine no-change verdict,
-    # confirmed empirically, not re-derived. All nine now demonstrably
-    # branch on dialect at detection time, which is bucket (1)'s test.
     # Moving them here (rather than leaving DUAL_DECLARING_BASH_DETECTING
-    # with a corrected reason) is what bucket (1)'s own definition
-    # requires once detection genuinely branches on dialect -- see
-    # `test_dual_declaring_bash_detecting_kind_is_pinned` below, now
-    # asserting the empty set for the same reason Bucket D's two entries
-    # moved here under C9 above.
     "block-noncanonical-branch-creation": _Expected(
         ("Bash", "PowerShell"),
     ),
@@ -357,18 +286,7 @@ EXPECTED: Dict[str, _Expected] = {
     "git-commit-safe-commit-advise": _Expected(
         ("Bash", "PowerShell"),
     ),
-    # merged in from origin/main (C2, docs/plans/2026-09-02-a-write-that-
-    # discards-what-you-never-saw.md); live in guard_roster() with
     # matchers=COMMAND_TOOL_NAMES (full-universe) but unclassified here
-    # until this reconciliation. `check_stale_write`'s own candidate
-    # resolver (`_stale_write_shape_candidates`) tokenizes via the generic
-    # `_command_tokenizer.resolve_command_positions` and looks for a bare
-    # `>` redirect or a bare `tee` invocation -- zero `_dialect`/
-    # `resolve_segments_for_dialect` references anywhere in the check or
-    # its candidate resolver, the same signature the 2026-08-26 recensus
-    # used to name the other nine dual-declaring-but-Bash-detecting
-    # members. Chain-eligible for a PowerShell payload but detects with
-    # Bash-shaped `>`/`tee` argv shapes only -- bucket (3), not bucket (1).
     "stale-write": _Expected(
         ("Bash", "PowerShell"),
         DUAL_DECLARING_BASH_DETECTING,
@@ -419,12 +337,6 @@ def _actual_matchers() -> Dict[str, Tuple[str, ...]]:
 def _compare(
     actual: Dict[str, Tuple[str, ...]], expected: Dict[str, _Expected]
 ) -> List[str]:
-    """The two-directional comparison (AC2, AC3, AC4). One shared function
-    so a narrowing, a held-guard widening, and an unclassified new guard
-    all fail through the same, single code path -- there is no separate
-    "widen" branch to accidentally leave un-symmetric with the "narrow"
-    one.
-    """
     failures: List[str] = []
     actual_ids = set(actual)
     expected_ids = set(expected)
@@ -506,7 +418,6 @@ def test_every_registered_guard_is_classified():
 
 
 def test_guard_matchers_ratchet():
-    """AC8: green at HEAD, no guard module edited."""
     actual = _actual_matchers()
     failures = _compare(actual, EXPECTED)
     assert not failures, "\n".join(failures)
@@ -555,10 +466,6 @@ def test_every_entry_is_in_exactly_one_partition_bucket():
 
 def test_powershell_via_bash_kind_is_pinned_and_carries_no_remediation(
 ) -> None:
-    """AC6: `guard_powershell_via_bash`'s entry can never be silently
-    "fixed" -- its kind is asserted directly (not merely implied by which
-    bucket it happens to land in), and its reason text is checked for the
-    words a remediation suggestion would use."""
     entry = EXPECTED["powershell-via-bash-guard"]
     assert entry.matchers == ("Bash",)
     assert entry.kind == BASH_ONLY_BY_CONSTRUCTION
@@ -569,13 +476,6 @@ def test_powershell_via_bash_kind_is_pinned_and_carries_no_remediation(
 
 
 def test_held_cohort_kinds_are_uniform_and_distinct_from_by_construction():
-    """AC5, AC11: the kinds are machine-distinguishable and do not
-    collapse into one "allowed Bash-only" set -- even now that the
-    `held-pending-tokenizer-fix` cohort has been discharged and that kind
-    is empty. The kind constant and its distinctness from
-    `bash-only-by-construction` and `not-yet-converted` are still pinned;
-    a future held guard lands in a non-empty set again without
-    re-deriving the discipline."""
     held = [
         gid
         for gid, exp in EXPECTED.items()
@@ -589,15 +489,6 @@ def test_held_cohort_kinds_are_uniform_and_distinct_from_by_construction():
         gid for gid, exp in EXPECTED.items() if exp.kind == NOT_YET_CONVERTED
     }
     assert len(by_construction) == 11
-    # EMPTY as of 2026-08-26, and that is this plan's terminal state, not a
-    # dropped assertion: pln-the-destructive-core-learns-th-d5ade0 converted
-    # every entry that was carrying `not-yet-converted` -- Bucket B's four
-    # git-shaped advisories (C4), Bucket D's two built-but-not-wired entries
-    # (C9), and Bucket A's five (C2/C3, of which `runaway-find` moved to
-    # `bash-only-by-construction` instead). The pin stays at an exact count
-    # rather than being deleted, so a NEW entry parked here is visible as a
-    # change to this line, with the same "write the reason down" pressure
-    # the non-empty cohort carried.
     assert len(not_yet_converted) == 0
     assert by_construction.isdisjoint(not_yet_converted)
     assert set(held).isdisjoint(by_construction)
@@ -649,9 +540,6 @@ def test_dual_declaring_bash_detecting_kind_is_pinned():
 
 
 def test_narrowing_a_full_universe_guard_is_detected():
-    """AC2, proven able to fail: a positive control built from a real
-    snapshot of the live registration, narrowed in a LOCAL copy only --
-    never mutates a real guard module."""
     actual = dict(_actual_matchers())
     victim = "block-approval-sentinel-creation"
     assert actual[victim] == ("Bash", "PowerShell")
@@ -661,9 +549,6 @@ def test_narrowing_a_full_universe_guard_is_detected():
 
 
 def test_widening_a_held_guard_is_detected():
-    """AC3, proven able to fail: widening a Bash-only entry must fail too
-    -- the ratchet is two-directional, not a floor. Uses
-    `powershell-via-bash-guard`, a Bash-only-by-construction entry."""
     actual = dict(_actual_matchers())
     victim = "powershell-via-bash-guard"
     assert actual[victim] == ("Bash",)

@@ -53,40 +53,17 @@ from coordinator_core.session import liveness
 from coordinator_core.session import scope
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
-# Every test in this file spawns the real `js_bridge_cli` entrypoint as a
-# subprocess (`_run_cli`) to exercise its actual process-boundary transport
-# contract (argv, env, exit code, stdout/stderr) -- an in-process call would
-# not observe that boundary, which is the property under test. Each test
-# also builds its own repo via `_make_repo(tmp_path)`, since `core.git_root()`
-# and session-hub resolution read real git state no mock stands in for.
-# `tmp_path` is function-scoped and tests write session/claim state under
-# reused session ids, so the repo fixture stays per-test rather than hoisted
 # to module scope. The spawn ratchet's `_BASELINE` is shrink-only
-# pre-existing residue and is explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _CLI_MODULE = "coordinator_core.session.js_bridge_cli"
 
-# Repo root (four parents up from this file: tests/ -> session/ ->
-# coordinator_core/ -> repo root), so the spawned ``-m`` invocation can
-# resolve ``coordinator_core`` regardless of the CLI's own cwd (which is
-# deliberately set to the FIXTURE repo, not this repo, in every test below).
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# Env vars that would let the ambient test-harness session (this pytest
-# process is itself very likely running inside a live Claude Code session)
-# leak into a spawned CLI's session resolution. Stripped by default so every
-# test's live/dead session set is attributable ONLY to the fixtures it wrote.
 _SESSION_ENV_VARS = ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "COORDINATOR_SESSION_ID")
 
 
 def _run_cli(repo, args, env=None):
-    """Spawn the real ``js_bridge_cli`` entrypoint as a subprocess, cwd'd at
-    ``repo``, with ambient session env vars stripped unless explicitly
-    supplied via ``env``. This is the ONE seam in this file that actually
-    crosses a process boundary — every assertion downstream of this call is
-    exercising transport, not logic."""
     full_env = dict(os.environ)
     for key in _SESSION_ENV_VARS:
         full_env.pop(key, None)
@@ -123,11 +100,6 @@ def _write_session(repo, sid, meta: dict):
 
 
 def _self_lstart_meta():
-    """Build a live-session meta fixture off THIS test process's own birth
-    instant, portable across POSIX (``ps -o lstart=``) and Windows
-    (``core._win_create_time_epoch``) — mirrors ``test_js_bridge_cli.py``'s
-    ``TestLiveSessionIds`` fixture so the in-process/subprocess comparison
-    below exercises a genuinely live PID on both platforms, not a mock."""
     if core._IS_WINDOWS:
         epoch = core._win_create_time_epoch(os.getpid())
         assert epoch, "psutil create_time() must succeed on a live test process"
@@ -146,11 +118,6 @@ def _self_lstart_meta():
     return {"stable_pid": str(os.getpid()), "stable_pid_lstart": lstart}
 
 
-# ---------------------------------------------------------------------------
-# live-session-ids
-# ---------------------------------------------------------------------------
-
-
 class TestLiveSessionIdsTransport:
     def test_no_sessions_matches_in_process_empty_result(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -162,9 +129,6 @@ class TestLiveSessionIdsTransport:
         assert result.stdout == ""
 
     def test_stdout_payload_matches_in_process_result_sorted(self, tmp_path):
-        """Two sessions (one live, one long-dead) exercise both the
-        multi-line stdout shape and the sort-for-determinism divergence the
-        CLI module docstring documents against the (unsorted) JS original."""
         repo = _make_repo(tmp_path)
         _write_session(repo, "sidLive", _self_lstart_meta())
         _write_session(
@@ -174,16 +138,11 @@ class TestLiveSessionIdsTransport:
         )
 
         expected = sorted(liveness.live_session_ids(cwd=str(repo)))
-        assert expected == ["sidLive"]  # sanity: fixture actually discriminates
+        assert expected == ["sidLive"]
 
         result = _run_cli(repo, ["live-session-ids"])
         assert result.returncode == 0
         assert result.stdout.splitlines() == expected
-
-
-# ---------------------------------------------------------------------------
-# claim-path
-# ---------------------------------------------------------------------------
 
 
 class TestClaimPathTransport:
@@ -197,8 +156,6 @@ class TestClaimPathTransport:
         touched_inprocess = inprocess_dir / "touched.txt"
         touched_subprocess = subprocess_dir / "touched.txt"
 
-        # In-process oracle for THIS input (not an external oracle — the
-        # library entry point this CLI transport is a thin shell over).
         js_bridge_cli.main(["claim-path", str(touched_inprocess), entry])
         js_bridge_cli.main(["claim-path", str(touched_inprocess), entry])
 
@@ -207,9 +164,6 @@ class TestClaimPathTransport:
 
         assert result1.returncode == 0
         assert result2.returncode == 0
-        # Both sides write the record, not the legacy file, and both fold to a
-        # single surviving claim at the read — the repeated call is deduped by
-        # last-verb-wins rather than at the write.
         lines_subprocess, _d1 = scope._read_touch_record_as_legacy_lines(
             subprocess_dir / scope._TOUCH_RECORD_FILENAME
         )
@@ -231,11 +185,6 @@ class TestClaimPathTransport:
         assert "requires exactly 2 args" in result.stderr
 
 
-# ---------------------------------------------------------------------------
-# self-claim
-# ---------------------------------------------------------------------------
-
-
 class TestSelfClaimTransport:
     def test_touched_file_matches_in_process_result(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -251,8 +200,6 @@ class TestSelfClaimTransport:
         )
         assert result.returncode == 0
 
-        # `self_claim` has written the record, not the retired `touched.txt`,
-        # since C6; the seam re-renders it as an event line to parse.
         sink = (
             repo / ".git" / "coordinator-sessions" / "sidA" / scope._TOUCH_RECORD_FILENAME
         )
@@ -271,27 +218,12 @@ class TestSelfClaimTransport:
         assert "requires exactly 1 arg" in result.stderr
 
     def test_no_session_never_exits_nonzero(self, tmp_path):
-        """No live session to attribute to (fail-open, best-effort contract)
-        must still map to exit 0 — never a raised exception surfaced as a
-        non-zero process exit."""
         repo = _make_repo(tmp_path)
         result = _run_cli(repo, ["self-claim", "coordinator/baz.py"])
         assert result.returncode == 0
 
 
-# ---------------------------------------------------------------------------
-# exit-code mapping — explicit, across every reachable error/edge argv shape
-# ---------------------------------------------------------------------------
-
-
 class TestExitCodeMapping:
-    """``js_bridge_cli.main`` documents (module docstring, Negative-spec
-    bullet 3) that it NEVER raises and NEVER exits non-zero, even on a
-    resolution failure. This class asserts that contract explicitly, as a
-    spawned process exit code (``subprocess.CompletedProcess.returncode``),
-    for every argv shape reachable without a live session. This is the
-    assertion the mandatory exit-code-inversion sensitivity check (see the
-    chunk report) flips locally to prove the suite actually watches it."""
 
     @pytest.mark.parametrize(
         "argv,expect_stderr_substring",
@@ -311,8 +243,6 @@ class TestExitCodeMapping:
         assert expect_stderr_substring in result.stderr
 
     def test_success_argv_also_maps_to_exit_zero(self, tmp_path):
-        """Same mapping, success arm: there is exactly one exit code in this
-        CLI's contract, and it applies uniformly across both arms."""
         repo = _make_repo(tmp_path)
         result = _run_cli(repo, ["live-session-ids"])
         assert result.returncode == 0

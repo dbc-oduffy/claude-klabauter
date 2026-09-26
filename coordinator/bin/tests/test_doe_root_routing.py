@@ -34,13 +34,6 @@ import tempfile as _tempfile
 import unittest.mock
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Path setup — locate CLIs and lib relative to this test file.
-# test file: coordinator/bin/tests/test_doe_root_routing.py
-# CLIs:      coordinator/bin/coordinator-lesson-promote
-#            coordinator/bin/coordinator-queue-append
-# lib:       coordinator/bin/lib/
-# ---------------------------------------------------------------------------
 _TESTS_DIR = Path(__file__).resolve().parent
 _BIN_DIR = _TESTS_DIR.parent
 _LIB_DIR = _BIN_DIR / "lib"
@@ -50,12 +43,10 @@ _QUEUE_APPEND_PATH = _BIN_DIR / "coordinator-queue-append.py"
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
-# Load coordinator_registry for unit-testing doe_root() directly.
 import coordinator_registry as _reg  # noqa: E402
 
 
 def _load_cli(path: Path, module_name: str):
-    """Load a CLI (no .py extension) as a Python module for unit testing."""
     loader = importlib.machinery.SourceFileLoader(module_name, str(path))
     spec = importlib.util.spec_from_loader(module_name, loader)
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
@@ -67,9 +58,7 @@ _lesson_cli = _load_cli(_LESSON_PROMOTE_PATH, "coordinator_lesson_promote")
 _queue_cli = _load_cli(_QUEUE_APPEND_PATH, "coordinator_queue_append")
 
 
-# ---------------------------------------------------------------------------
 # AC1-pos — doe_root() resolves from DOE_ROOT env override
-# ---------------------------------------------------------------------------
 
 
 def test_doe_root_returns_env_override():
@@ -83,7 +72,6 @@ def test_doe_root_returns_env_override():
 def test_doe_root_strips_empty_env():
     """doe_root() ignores DOE_ROOT='' (empty string is not a valid override)."""
     # Also clears REPO_DOE_CLAUDE (rung 1b) so this machine's real ambient
-    # override doesn't win before the mocked machine-local rung is reached.
     with (
         unittest.mock.patch.dict(os.environ, {"DOE_ROOT": "", "REPO_DOE_CLAUDE": ""}, clear=False),
         unittest.mock.patch.object(_reg, "_registry_machine_local_get", return_value="/ml/doe"),
@@ -123,11 +111,6 @@ def test_doe_root_raises_when_unresolvable():
             raise AssertionError("expected _DoeUnresolvable to be raised")
 
 
-# ---------------------------------------------------------------------------
-# AC1-pos — lesson-promote._outbox_root() routes to $(doe_root)/state/lessons-outbox
-# ---------------------------------------------------------------------------
-
-
 def test_outbox_root_under_doe_state():
     """_outbox_root() returns $(doe_root)/state/lessons-outbox when DOE_ROOT is set."""
     fake_doe = "/fake/doe"
@@ -148,13 +131,6 @@ def test_outbox_root_env_override_wins():
 
 
 def test_outbox_root_raises_doe_unresolvable():
-    """_outbox_root() propagates _DoeUnresolvable when doe_root() cannot resolve.
-
-    See test_doe_root_raises_when_unresolvable's docstring — the
-    codename-free pointer/marketplace-cache/flat-layout rungs must also be
-    stubbed to "" so a real on-box `.doe-root` pointer doesn't make
-    "unresolvable" unreachable.
-    """
     env_clean = {k: v for k, v in os.environ.items()
                  if k not in ("DOE_ROOT", "REPO_DOE_CLAUDE", "LESSON_PROMOTE_OUTBOX_ROOT",
                                "CLAUDE_PLUGIN_ROOT")}
@@ -171,11 +147,6 @@ def test_outbox_root_raises_doe_unresolvable():
             pass
         else:
             raise AssertionError("expected _DoeUnresolvable to be raised")
-
-
-# ---------------------------------------------------------------------------
-# AC1-pos — queue-append._output_path() central branch routes to $(doe_root)/state/...
-# ---------------------------------------------------------------------------
 
 
 def test_central_improvement_queue_under_doe():
@@ -224,7 +195,6 @@ def test_central_scope_raises_doe_unresolvable():
 
 
 def test_project_scope_unaffected(tmp_path):
-    """Project-scope (cwd-relative) path is not routed through doe_root()."""
     tmpdir = str(tmp_path)
     with (
         unittest.mock.patch.object(_queue_cli, "_current_repo_root", return_value=tmpdir),
@@ -240,17 +210,6 @@ def test_project_scope_unaffected(tmp_path):
     assert result.startswith(os.path.join(tmpdir, "state", "improvement-queue")), (
         f"Project-scope path should be under {tmpdir}/state/improvement-queue, got: {result}"
     )
-
-
-# ---------------------------------------------------------------------------
-# AC2-cold — lesson-promote CLI cold-path: WARN + exit 0, no file written
-#
-# Tests the CALLING CLI's main() entry point with the CC seam simulated absent
-# (mock _cc_route calls legacy_fn directly) and machine-local stub returning
-# nothing for repos.doe_claude. This exercises the full entry-point chain —
-# main() → legacy_fn() → _write_entry() → _outbox_root() → doe_root() → raise —
-# per lesson state/lessons/2026-07-05-universal-test-the-resolver-entry-point.yaml.
-# ---------------------------------------------------------------------------
 
 
 def _make_cold_env(tmpdir: str) -> dict[str, str]:
@@ -297,8 +256,8 @@ def _make_cold_env(tmpdir: str) -> dict[str, str]:
             "    print('')\n"
             "sys.exit(0)\n"
         )
-    cold_home = os.path.join(tmpdir, "_cold_claude_home")  # deliberately absent
-    cold_settings_home = os.path.join(tmpdir, "_cold_settings_home")  # deliberately absent
+    cold_home = os.path.join(tmpdir, "_cold_claude_home")
+    cold_settings_home = os.path.join(tmpdir, "_cold_settings_home")
     cold_registry_dir = os.path.join(tmpdir, "_cold_registry_dir")
     os.makedirs(cold_registry_dir, exist_ok=True)
     return {
@@ -310,13 +269,6 @@ def _make_cold_env(tmpdir: str) -> dict[str, str]:
 
 
 def _assert_cold_env_doe_root_unresolvable(cold_env: dict[str, str]) -> None:
-    """Prove the cold env is genuinely cold before invoking a CLI under it.
-
-    A cold-path test that silently stops being cold (e.g. a new resolver
-    rung added later that reads yet another unneutralized env/pointer seam)
-    must fail loud here rather than pass by accident while writing to a real
-    peer repo.
-    """
     with unittest.mock.patch.dict(os.environ, cold_env, clear=True):
         try:
             resolved = _reg.doe_root()
@@ -329,12 +281,6 @@ def _assert_cold_env_doe_root_unresolvable(cold_env: dict[str, str]) -> None:
 
 
 def _resolvable_doe_lessons_outbox() -> str | None:
-    """Return the REAL, ambient doe_root()'s lessons-outbox dir, or None.
-
-    Used only to assert cold-path tests write nothing there — never to
-    write. Resolved under the *real* environment (no mocking), mirroring
-    what a non-cold invocation on this host would resolve to.
-    """
     try:
         return os.path.join(_reg.doe_root(), "state", "lessons-outbox")
     except Exception:
@@ -342,7 +288,6 @@ def _resolvable_doe_lessons_outbox() -> str | None:
 
 
 def _resolvable_claude_klabauter_improvement_queue() -> str | None:
-    """Return the REAL, ambient claude_klabauter_root()'s improvement-queue dir, or None."""
     try:
         root = _queue_cli._claude_klabauter_root()
     except Exception:
@@ -351,13 +296,6 @@ def _resolvable_claude_klabauter_improvement_queue() -> str | None:
 
 
 def _assert_no_stray_files(before: dict[str, set[str]], after: dict[str, set[str]]) -> None:
-    """Assert no NEW file appeared in any tracked real-world directory.
-
-    `before`/`after` map directory path -> set of file basenames present at
-    that snapshot time (missing directories map to an empty set). Do not
-    hardcode any specific peer-repo path — directories that fail to resolve
-    on this host are skipped cleanly via the None-returning resolvers above.
-    """
     for _dir, _before_names in before.items():
         _after_names = after.get(_dir, set())
         _new = _after_names - _before_names
@@ -397,7 +335,6 @@ def _run_cold_lesson(tmpdir: str) -> tuple[int, str]:
     captured_err = io.StringIO()
 
     def fake_route(op, params, repo_root, legacy_fn):
-        # Simulate seam-absent: call legacy_fn directly.
         return legacy_fn()
 
     with (
@@ -455,17 +392,6 @@ def test_lesson_promote_cold_warn_to_stderr(tmp_path):
 
 
 def test_lesson_promote_cold_no_file_written(tmp_path):
-    """Cold path: no file written (neither DoE nor claude-klabauter path), asserted
-    against BOTH the sandbox tmp_path AND the real, ambient
-    lessons-outbox directory this host would otherwise resolve to.
-
-    A bare `tmp_path.rglob("*.yaml") == []` check is vacuously true even
-    while the write lands in a real peer repo's live outbox — see this
-    file's `_make_cold_env` docstring for the incident this reproduces.
-    `_resolvable_doe_lessons_outbox()` resolves under the REAL (unmocked)
-    environment, mirroring what a non-cold invocation on this host would
-    target, and skips cleanly (empty snapshot) if it does not resolve.
-    """
     real_outbox = _resolvable_doe_lessons_outbox()
     _, before_names = _snapshot_dir(real_outbox)
     _run_cold_lesson(str(tmp_path))
@@ -477,13 +403,6 @@ def test_lesson_promote_cold_no_file_written(tmp_path):
         {real_outbox: after_names} if real_outbox else {},
     )
 
-
-# ---------------------------------------------------------------------------
-# AC2-cold — queue-append CLI cold-path: WARN + exit 0, no file written
-#
-# Same pattern: main() with seam-absent simulation. queue-append.main() uses
-# parse_args() with no argv param, so sys.argv is patched via mock.
-# ---------------------------------------------------------------------------
 
 _CENTRAL_IQ_ARGV = [
     "coordinator-queue-append",
@@ -499,16 +418,11 @@ _CENTRAL_IQ_ARGV = [
 
 
 def _run_cold_queue(tmpdir: str) -> str:
-    """Invoke queue-append main() with seam-absent simulation and cold env.
-
-    Returns captured_stderr. main() returns None on graceful paths.
-    """
     cold_env = _make_cold_env(tmpdir)
     _assert_cold_env_doe_root_unresolvable(cold_env)
     captured_err = io.StringIO()
 
     def fake_route(op, params, repo_root, legacy_fn):
-        # Simulate seam-absent: call legacy_fn directly.
         return legacy_fn()
 
     with (
@@ -558,20 +472,10 @@ def test_queue_append_cold_warn_to_stderr(tmp_path):
     err = _run_cold_queue(str(tmp_path))
     assert "warn:" in err, "cold-path must emit 'warn:' to stderr"
     assert "engine root unresolvable" in err, "cold-path WARN must mention the engine root"
-    # Two assertions, two distinct regressions: the line above covers the WARN
-    # prefix, this one the Remediation block. Reword the prefix and only the
-    # first fails; drop the env var from the remediation and only this one does.
-    # The token is what an operator has to act on, so it is the worse of the
-    # two to lose silently.
     assert "COORDINATOR_ENGINE_ROOT" in err, "cold-path WARN must name the engine-root env var"
 
 
 def test_queue_append_cold_no_file_written(tmp_path):
-    """Cold central invocation: no file written anywhere, asserted against
-    BOTH the sandbox tmp_path AND the real, ambient improvement-queue
-    directory this host would otherwise resolve to — see
-    test_lesson_promote_cold_no_file_written's docstring for why a bare
-    tmp_path-only check is vacuous."""
     real_queue = _resolvable_claude_klabauter_improvement_queue()
     _, before_names = _snapshot_dir(real_queue)
     _run_cold_queue(str(tmp_path))
@@ -582,16 +486,6 @@ def test_queue_append_cold_no_file_written(tmp_path):
         {real_queue: before_names} if real_queue else {},
         {real_queue: after_names} if real_queue else {},
     )
-
-
-# ---------------------------------------------------------------------------
-# AC2-native-skip — lesson-promote CLI native path: skipped:true → WARN + exit 0
-#
-# Exercises the State-2 (coordinator_core present) skipped:true branch at
-# lesson-promote lines 618-628. coordinator_core returns {"skipped": True}
-# when DoE is unresolvable from the native side — the CLI must WARN + exit 0
-# and write nothing, matching the legacy-path _DoeUnresolvable contract.
-# ---------------------------------------------------------------------------
 
 
 def _cold_env_patch():
@@ -634,14 +528,9 @@ _cold_env_patch = _contextlib.contextmanager(_cold_env_patch)
 
 
 def _run_native_skip_lesson() -> tuple[int, str]:
-    """Invoke lesson-promote main() with coordinator_core returning skipped:true.
-
-    Returns (return_code, captured_stderr).
-    """
     captured_err = io.StringIO()
 
     def fake_route_skip(op, params, repo_root, legacy_fn):
-        # Simulate State-2 (coordinator_core present) returning skipped:true.
         return {"skipped": True, "reason": "doe root unresolvable"}
 
     with (
@@ -682,20 +571,10 @@ def test_lesson_promote_native_skip_warns_doe_root():
     assert "DOE_ROOT" in err, "WARN must mention DOE_ROOT"
 
 
-# ---------------------------------------------------------------------------
-# AC2-native-skip — queue-append CLI native path: skipped:true → WARN + exit 0
-# ---------------------------------------------------------------------------
-
-
 def _run_native_skip_queue() -> str:
-    """Invoke queue-append main() with coordinator_core returning skipped:true.
-
-    Returns captured_stderr. main() returns None on graceful paths.
-    """
     captured_err = io.StringIO()
 
     def fake_route_skip(op, params, repo_root, legacy_fn):
-        # Simulate State-2 (coordinator_core present) returning skipped:true.
         return {"skipped": True, "reason": "doe root unresolvable"}
 
     with (
@@ -747,26 +626,15 @@ def test_queue_append_native_skip_warns_doe_root():
     err = _run_native_skip_queue()
     assert "warn:" in err, "must emit 'warn:' to stderr"
     assert "engine root unresolvable" in err, "WARN must mention the engine root"
-    # See test_queue_append_cold_warn_to_stderr: prefix and remediation token
-    # fail on different regressions, so both are asserted.
     assert "COORDINATOR_ENGINE_ROOT" in err, "WARN must name the engine-root env var"
 
 
 def test_queue_append_native_skip_no_file_written(tmp_path):
-    """Native skipped:true → no file written anywhere."""
     _run_native_skip_queue()
     written = list(tmp_path.rglob("*.yaml"))
     assert written == [], f"native skipped:true must write NO files; found: {written}"
 
 
-# ---------------------------------------------------------------------------
-# C2: coordinator_registry's three machine-local read sites bound to the
-# in-process reader (machine_local_impl_resolve.registry_get), CLI subprocess
-# spawn retained as the fallback rung. AC3-AC6 below.
-#
-# Spec backlink: state/dispatch-briefs/2026-08-20-doe-root-rung-2-stops-
-# spawning/C2.md
-# ---------------------------------------------------------------------------
 import shutil as _shutil  # noqa: E402
 import tempfile as _tempfile  # noqa: E402
 
@@ -805,9 +673,6 @@ def test_doe_root_rung2_in_process_zero_spawn(tmp_path, monkeypatch):
 
 
 def test_doe_root_rung2_registry_beats_codename_free_rungs(monkeypatch):
-    """AC4: with the registry naming root A and a codename-free rung also
-    resolving to root B, doe_root() returns A — the 2026-08-10 precedence
-    regression test; must pass before and after this chunk's edit."""
     monkeypatch.setattr(_reg, "_registry_machine_local_get", lambda key: "A" if key == "repos.doe_claude" else None)
     monkeypatch.setattr(_reg, "_mp_doe_root_pointer_rung", lambda: "B")
     monkeypatch.setattr(_reg, "_mp_marketplace_cache_rung", lambda: "")
@@ -818,22 +683,11 @@ def test_doe_root_rung2_registry_beats_codename_free_rungs(monkeypatch):
 
 
 def test_doe_root_rung2_backslash_form_passes_through_unchanged(tmp_path, monkeypatch):
-    """AC4b: with registry.local.toml storing repos.doe_claude in
-    backslash-drive form, doe_root() returns exactly what
-    machine_local_impl_resolve.registry_get() itself computes for that same
-    stored value — the value-level normalization is owned by registry_get
-    (C1), and doe_root()/_registry_machine_local_get() must pass it through
-    unchanged rather than re-deriving or re-splitting it. This is a
-    pass-through equivalence check (doe_root() doesn't re-derive or mangle
-    registry_get's output), NOT a proof of normalization-parity with the
-    real CLI — that equivalence is pinned separately by
-    test_machine_local_registry_reader_parity.py, not re-pinned here.
-    """
     _clear_doe_env(monkeypatch)
     reg_dir = str(tmp_path / "registry")
     _seed_registry_local_toml(
         reg_dir,
-        '"repos.doe_claude" = "X:\\\\DoE-claude\\\\worktree"\n',  # abs-path-ok: synthetic TOML fixture value, not a real repo reference
+        '"repos.doe_claude" = "X:\\\\DoE-claude\\\\worktree"\n',
     )
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", reg_dir)
 
@@ -849,8 +703,6 @@ def test_doe_root_rung2_backslash_form_passes_through_unchanged(tmp_path, monkey
 
 
 def test_doe_root_rung2_cli_fallback_fires_on_none(monkeypatch):
-    """AC5: with registry_get monkeypatched to return None, the CLI spawn
-    still fires and its value is returned."""
     _clear_doe_env(monkeypatch)
     monkeypatch.setattr(_reg, "_mlir_registry_get", lambda key: None)
 
@@ -871,13 +723,6 @@ def test_doe_root_rung2_cli_fallback_fires_on_none(monkeypatch):
     assert result == "/spawned/doe/root"
 
 
-# ---------------------------------------------------------------------------
-# AC6: same zero-spawn assertion for the module-scope manifest bootstrap
-# (the hand-rolled `for _ml_cand in _mlir_machine_local_bin_candidates()`
-# loop), exercised via a fresh import under a seeded registry and an absent
-# co-located manifest.
-# ---------------------------------------------------------------------------
-
 _MANIFEST_FIXTURE_BODY = (
     '{"docTypes": [], "queueTypes": [], '
     '"identity": {"repoAliases": [], "centralReceiverIds": ["x-em"]}}'
@@ -885,13 +730,6 @@ _MANIFEST_FIXTURE_BODY = (
 
 
 def _build_bootstrap_fixture_tree(root: str) -> str:
-    """Build a copy of coordinator_registry.py + machine_local_impl_resolve.py
-    under <root>/coordinator/bin/lib/, with NO <root>/coordinator/schemas —
-    so the co-located manifest rung is genuinely absent, forcing the
-    split-repo bootstrap block (including this chunk's edited loop) to run.
-
-    Returns the copied coordinator_registry.py path.
-    """
     fixture_lib_dir = os.path.join(root, "coordinator", "bin", "lib")
     os.makedirs(fixture_lib_dir)
     for _name in ("coordinator_registry.py", "machine_local_impl_resolve.py"):
@@ -900,11 +738,6 @@ def _build_bootstrap_fixture_tree(root: str) -> str:
 
 
 def test_doe_root_module_bootstrap_zero_spawn(monkeypatch):
-    """AC6: fresh import of the module-scope manifest bootstrap, with the
-    registry naming a `repos.doe_claude` root that carries a real manifest —
-    the hand-rolled `_mlir_machine_local_bin_candidates()` spawn loop must
-    not fire, and no `.exists()` candidate in that loop's body may be
-    reached via subprocess.run either."""
     _tmp = _tempfile.mkdtemp(prefix="c2-ac6-bootstrap-fixture-")
     try:
         fake_doe_root = os.path.join(_tmp, "fake-doe-claude")

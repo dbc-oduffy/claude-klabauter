@@ -61,7 +61,6 @@ from typing import List, Sequence
 
 
 def _fail_open(deliverable_id: str, message: str) -> int:
-    """Log a skip diagnostic to stderr and return the fail-open exit code (0)."""
     print(
         f"coordinator-render-rollup: {message} for deliverable_id={deliverable_id} (skip)",
         file=sys.stderr,
@@ -70,20 +69,6 @@ def _fail_open(deliverable_id: str, message: str) -> int:
 
 
 def main(argv: Sequence[str]) -> int:
-    """CLI entry point: ``main(["<deliverable_id>", "<repo_root>"]) -> exit code``.
-
-    Mirrors the original bash helper's contract exactly:
-      - Missing or empty ``deliverable_id``/``repo_root`` -> usage error, exit 1
-        (the only non-zero exit path; matches ``${1:?...}``/``${2:?...}``).
-      - Any failure past argument parsing (repo resolution, op import, op
-        exception, malformed result shape) -> fail-open skip: diagnostic on
-        stderr, no stdout, exit 0.
-      - ``resolution_mode != "direct"`` -> silent skip, exit 0, no stdout.
-      - Empty ``advances_initiatives`` -> silent skip, exit 0, no stdout
-        (omit-on-empty is the common case, not a warning).
-      - Otherwise: one "advances initiative <label> (<id>)" line per distinct
-        initiative id, in first-occurrence order, exit 0.
-    """
     if len(argv) < 2 or not argv[0] or not argv[1]:
         print(
             "coordinator-render-rollup: <deliverable_id> and <repo_root> are required "
@@ -125,15 +110,6 @@ def main(argv: Sequence[str]) -> int:
     if not isinstance(advances, list):
         return 0
 
-    # scan_incomplete: additive optional field, absent == False. Not yet emitted
-    # by deliverable_rollup._handler (frozen v1.0 wire shape, see
-    # test_handler_payload_wire_shape_omits_scan_incomplete) -- this widens the
-    # render side ahead of the writer flip per the widen-before-flip sequencing.
-    # Spec backlink: cross-repo memo 2026-07-22 (claude-klabauter-em),
-    # "deliverable-rollup contract: propose additive scan_incomplete field".
-    # `is True` rather than `bool(...)`
-    # so a future non-bool truthy sentinel (e.g. a string) fails to trip
-    # "(partial scan)" silently -- strict bool-only semantics once the writer flips.
     scan_incomplete = result.get("scan_incomplete", False) is True
 
     lines: List[str] = []

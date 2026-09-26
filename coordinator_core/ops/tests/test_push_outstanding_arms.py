@@ -29,7 +29,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(args, cwd) -> None:
-    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # popup-intentional-last-resort
+    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     subprocess.run(
         ["git", *args],
         cwd=str(cwd),
@@ -112,9 +112,6 @@ def test_noop_arm_and_network_arm_emit_distinguishable_identities(monkeypatch, t
 
 
 def test_noop_arm_still_spawns_zero_git_processes_with_telemetry_wired(monkeypatch, tmp_path):
-    """The property that makes the no-op arm cheap -- zero git spawns -- must
-    survive the telemetry addition. Proven the same way the module docstring
-    proves it elsewhere: fail loudly on any `git` invocation."""
     calls = _patch_recorder(monkeypatch)
     repo = _make_repo_with_remote(tmp_path, branch="work/zero-spawn")
 
@@ -131,8 +128,6 @@ def test_noop_arm_still_spawns_zero_git_processes_with_telemetry_wired(monkeypat
 
 
 def test_network_arm_records_the_network_identity(monkeypatch, tmp_path):
-    """An outstanding commit delegating to `push_with_retry` records the
-    network-arm identity, not the no-op one."""
     calls = _patch_recorder(monkeypatch)
     repo = _make_repo_with_remote(tmp_path)
     _seed_file(repo, "second.txt", "more")
@@ -153,8 +148,6 @@ def test_network_arm_records_the_network_identity(monkeypatch, tmp_path):
 
 
 def test_arm_recording_never_breaks_dispatch_on_failure(monkeypatch, tmp_path):
-    """A telemetry sink failure must not surface to the caller -- the
-    outstanding-work decision is what matters, never the census row."""
     repo = _make_repo_with_remote(tmp_path, branch="work/telemetry-fails")
 
     def _raise(**kwargs):

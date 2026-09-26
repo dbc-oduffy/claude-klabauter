@@ -68,9 +68,7 @@ from coordinator_core.tracker_entities import (
 )
 from coordinator_core.tracker_projection import DEFAULT_CLOSURE_FIDELITY
 
-# ---------------------------------------------------------------------------
 # JSON-RPC handler
-# ---------------------------------------------------------------------------
 
 
 @register_op("tracker.assert_code_complete")
@@ -115,7 +113,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     common_dir = Path(repo_root)
     worktree = main_worktree_root(common_dir)
 
-    # D3: optional repo_root consistency check (contract §3.3 doctrine).
     mismatch = check_repo_root(params.get("repo_root"), common_dir)
     if mismatch:
         return {"asserted": False, "reason": mismatch}
@@ -150,25 +147,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     source_observation_id = params.get("source_observation_id")
 
-    # An item whose closure_fidelity the caller does not declare folds to
     # DEFAULT_CLOSURE_FIDELITY ("verify-with-effort") per
-    # DR-closure-fidelity-tier-axis D4, which is the tier that can never
-    # auto-assert. Defaulting here fails SAFE: the absent-input case degrades
-    # to suggest rather than minting a false auto. Resolving the real value
-    # from projected state stays the caller's job -- this module holds its
-    # negative-spec import boundary and does not read the store to find it.
     closure_fidelity = params.get("closure_fidelity", DEFAULT_CLOSURE_FIDELITY)
-    # Reuse the single enum guard
-    # (tracker_entities.reject_invalid_closure_fidelity) instead of a second
-    # inline membership check; re-raised as ValueError to preserve this op's
-    # documented wire contract (see docstring `Raises:`).
     try:
-        # The guard's message hardcodes
-        # "item_closure_fidelity_set" as the payload noun even though this
-        # call validates a tracker.assert_code_complete wire param, not an
-        # item_closure_fidelity_set construction; accepted as a mild,
-        # non-blocking inaccuracy rather than widening the shared guard's
-        # signature for its other caller (tracker_entities.py set()).
         reject_invalid_closure_fidelity(closure_fidelity, action="assert code_complete for")
     except TrackerEntityError as exc:
         raise ValueError(str(exc)) from exc

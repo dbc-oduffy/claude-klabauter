@@ -81,13 +81,6 @@ def test_appx_stub_removal_clause_is_delete_not_write():
 
 
 def test_agent_helper_forwarder_triple_clause_is_shaped_not_flattened():
-    """Narrowed 2026-08-29 (docs/plans/2026-08-26-every-forwarder-that-can-
-    reach-the-door-does.md C12): the ps1-launcher-class plan's C4 had
-    widened this clause from a `.py`/`.cmd` pair to a `.py`/`.cmd`/`.ps1`
-    triple. DR-365 condemns both the `.cmd` and `.ps1` legs outright, so
-    the generator this clause describes now writes only the extensionless
-    POSIX-shaped forwarder -- still one clause, off the SAME discovery
-    mechanism, not a renumbered one."""
     clause = target.WRITE_SURFACE.clauses[3]
     assert isinstance(clause, ShapedClause)
     assert clause.discovered_by == "_derive_agent_helper_target_map"
@@ -97,16 +90,11 @@ def test_agent_helper_forwarder_triple_clause_is_shaped_not_flattened():
 
 
 def test_percolation_clauses_are_shaped_and_manifest_independent():
-    """Both percolation clauses must be SHAPED (not a static filename list)
-    so this test — and the declaration — never varies with what
-    `setup-templates-manifest.py` happens to list today."""
     files_clause, hook_clause = target.WRITE_SURFACE.clauses[4], target.WRITE_SURFACE.clauses[5]
     for clause in (files_clause, hook_clause):
         assert isinstance(clause, ShapedClause)
         assert clause.entry_template.kind == "file-path"
         assert ".claude/setup" in clause.entry_template.path
-        # No hardcoded template filename anywhere in the declaration —
-        # only a placeholder segment.
         assert "<relative-" in clause.entry_template.path
 
 
@@ -118,10 +106,6 @@ def test_percolation_clauses_use_distinct_manifest_attrs():
 
 
 def test_percolation_clauses_express_write_strategy_via_reason():
-    """`write_strategy` (force/careful/refuse) has no dedicated field on
-    `WriteSurfaceEntry` — it is expressed via the free-text `reason`
-    field, and the two clauses' reasons must differ (force_overwrite is
-    unconditional for hook files, conditional for template files)."""
     files_clause, hook_clause = target.WRITE_SURFACE.clauses[4], target.WRITE_SURFACE.clauses[5]
     assert files_clause.entry_template.reason
     assert hook_clause.entry_template.reason
@@ -227,8 +211,6 @@ def test_tracked_ml_files_clause_recomputed_from_source_constant():
 
 
 def test_ml_concern_baseline_clauses_use_source_constants():
-    """Clauses 17-19 — unreal.toml, registry.toml (seed leg), hardware.toml —
-    each a single-entry STATIC clause pathed off its own source constant."""
     unreal_clause, registry_seed_clause, hardware_clause = target.WRITE_SURFACE.clauses[16:19]
     for clause, name in (
         (unreal_clause, target._ML_UNREAL_TOML_NAME),
@@ -244,8 +226,6 @@ def test_ml_concern_baseline_clauses_use_source_constants():
 
 
 def test_settings_manifest_clause_uses_source_constant():
-    """Clause 20 — settings-manifest.md, installed via `_install_one` with
-    `force_overwrite=False` (preserve-on-diff)."""
     clause = target.WRITE_SURFACE.clauses[19]
     assert isinstance(clause, StaticClause)
     assert len(clause.entries) == 1
@@ -255,9 +235,6 @@ def test_settings_manifest_clause_uses_source_constant():
 
 
 def test_concerns_structured_key_clause_is_structured_file_key_not_file_path():
-    """Clause 21 — `_register_hardware_concern`'s in-place merge of
-    "hardware" into registry.toml's `concerns` array — must be
-    `structured-file-key`, distinct from clause 18's whole-file seed."""
     clause = target.WRITE_SURFACE.clauses[20]
     assert isinstance(clause, StaticClause)
     assert len(clause.entries) == 1
@@ -268,8 +245,6 @@ def test_concerns_structured_key_clause_is_structured_file_key_not_file_path():
 
 
 def test_whoami_tree_copy_clause_is_shaped():
-    """Clause 22 — the coordinator-whoami/ tree copy — must be SHAPED
-    (`_iter_whoami_files` discovers the file set per run)."""
     clause = target.WRITE_SURFACE.clauses[21]
     assert isinstance(clause, ShapedClause)
     assert "_iter_whoami_files" in clause.discovered_by
@@ -278,9 +253,6 @@ def test_whoami_tree_copy_clause_is_shaped():
 
 
 def test_legacy_whoami_delete_and_compat_pointer_clauses_are_distinct():
-    """Clauses 23-24 — the legacy coordinator-whoami dir delete and its
-    replacement compat pointer — share a path but are distinct effects
-    (delete vs. write), never collapsed into one clause."""
     delete_clause, pointer_clause = target.WRITE_SURFACE.clauses[22], target.WRITE_SURFACE.clauses[23]
     assert isinstance(delete_clause, StaticClause)
     assert isinstance(pointer_clause, StaticClause)
@@ -294,7 +266,6 @@ def test_legacy_whoami_delete_and_compat_pointer_clauses_are_distinct():
 
 
 def test_whoami_src_machine_local_key_clause():
-    """Clause 25 — the `coordinator.whoami_src` machine-local key."""
     clause = target.WRITE_SURFACE.clauses[24]
     assert isinstance(clause, StaticClause)
     assert len(clause.entries) == 1
@@ -304,10 +275,6 @@ def test_whoami_src_machine_local_key_clause():
 
 
 def test_legacy_venv_delete_clause_is_distinct_from_ensure_venv_surface():
-    """Clause 26 — the legacy `.coordinator-venv` delete leg is substrate's
-    own surface, distinct from `ensure_venv`'s declared current-venv
-    surface (creation, interpreter-pin key, build-lock sidecar) — this
-    module never re-declares that."""
     clause = target.WRITE_SURFACE.clauses[25]
     assert isinstance(clause, StaticClause)
     assert clause.effect == "delete"
@@ -319,15 +286,6 @@ def test_legacy_venv_delete_clause_is_distinct_from_ensure_venv_surface():
 
 
 def test_no_new_clause_restates_a_bin_dir_or_ensure_venv_surface():
-    """Sanity guard: none of clauses 16-27 accidentally re-declare the
-    `<settings-home>/bin/` surface (clauses 4/7-14) or the CURRENT
-    `<settings-home>/.coordinator-venv` tree (ensure_venv's own surface).
-
-    Bounded to exactly that range (not left open-ended past clause 27) —
-    clause 29 (chunk C5, the `hook-sitepackages.txt` pointer) is a
-    deliberate, distinct NEW entry under `<settings-home>/bin/`, not a
-    restatement of clauses 4/7-14's territory, so it must fall outside this
-    guard's slice rather than trip it."""
     for clause in target.WRITE_SURFACE.clauses[15:27]:
         entries = clause.entries if isinstance(clause, StaticClause) else (clause.entry_template,)
         for entry in entries:
@@ -337,11 +295,6 @@ def test_no_new_clause_restates_a_bin_dir_or_ensure_venv_surface():
 
 
 def test_fnm_step_clause_uses_stated_reason_escape_hatch():
-    """Clause 27 — `_fnm_step`'s brew/curl third-party `fnm` installer leg
-    — must be declared (not omitted for lacking an honest kind), via the
-    stated-reason escape hatch: `kind="file-path"` (least-dishonest choice)
-    with a `reason` that names both installer paths, the guard, and that
-    the actual on-disk footprint is not enumerable from here."""
     clause = target.WRITE_SURFACE.clauses[26]
     assert isinstance(clause, StaticClause)
     assert len(clause.entries) == 1
@@ -350,21 +303,11 @@ def test_fnm_step_clause_uses_stated_reason_escape_hatch():
     assert entry.effect == "write"
     assert "brew install fnm" in entry.reason
     assert "fnm.vercel.app" in entry.reason
-    # Restored (P2): undisclosed
-    # removal, unrelated to C4's stated scope; substrate.py's fnm reason
-    # text still contains both substrings verbatim.
     assert "_refuse_machine_mutation" in entry.reason
     assert "cannot enumerate" in entry.reason
 
 
 def test_ps1_policy_status_clause_is_static_and_retired():
-    """Clause 28 (formerly ps1-launcher-class plan C4, AC13) — the durable
-    `.ps1` execution-policy status file, `<settings-home>/ps1-policy-gate-
-    status.json`. RETIRED 2026-08-29 (docs/plans/2026-08-26-every-forwarder-
-    that-can-reach-the-door-does.md C12, DR-365): nothing writes this file
-    anymore, but the clause stays declared -- unwritten -- so a stale
-    pre-C12 status file remains a recognized prune candidate rather than an
-    orphan outside `_prune_orphaned_static_bin_names`."""
     clause = target.WRITE_SURFACE.clauses[27]
     assert isinstance(clause, StaticClause)
     assert len(clause.entries) == 1

@@ -1,16 +1,3 @@
-"""test_assembled_mirror_gate_wiring -- wiring tests for
-`coordinator/bin/publish.py::dispatch_end_of_run_assembled_mirror_gate` and
-its exemption-ledger loader `_load_assembled_mirror_gate_exemptions`.
-
-Chunk C3 (docs/plans/2026-08-28-a-dropped-module-must-not-leave-its-test-
-behind.md) gives C2's `run_assembled_mirror_gate` a production call site.
-These tests prove the WIRING fires through the driver-level function (real
-`run_assembled_mirror_gate`, a genuine `pytest --collect-only` subprocess
-against scratch trees) and that the declared-exemption ledger behaves as
-specified: an undeclared refusal is FATAL, a declared one is a WARNING.
-
-Run: python -m pytest coordinator/lib/percolate/tests/test_assembled_mirror_gate_wiring.py -q
-"""
 
 from __future__ import annotations
 
@@ -40,14 +27,6 @@ publish = _load_publish_module()
 
 
 class _ResolvedTargetStub:
-    """Minimal stand-in for `publish.ResolvedTarget` -- `.name` (read by
-    `dispatch_end_of_run_assembled_mirror_gate` for exemption lookup) and
-    `.source_dir` (read by the same function to build the source-root list
-    it now passes to `find_modules_missing_tests` for the C6 coverage
-    WARN). `source_dir` defaults to a throwaway path -- these tests assert
-    on the pass/refuse verdict, never on coverage-WARN content, so any
-    walkable-or-not path is sufficient; `find_modules_missing_tests`
-    tolerates a nonexistent root (`Path.rglob` yields nothing)."""
 
     def __init__(self, name, source_dir=None):
         self.name = name
@@ -80,14 +59,6 @@ def _write_collectable_tree(root: Path) -> None:
 
 
 def _write_colliding_tree(root: Path) -> None:
-    """A tree whose collection genuinely errors -- module-scope code that
-    raises on import, the exact klabauter#3 shape this whole plan exists
-    to catch.
-
-    Carries `coordinator_core/` at its root, same as `_write_collectable_
-    tree`, so this is a CONTENT verdict (collection ran, and errored) --
-    never `isolation_unverified` -- and so remains eligible for the
-    exemption lookup these tests exercise."""
     root.mkdir(parents=True, exist_ok=True)
     (root / "coordinator_core").mkdir(parents=True, exist_ok=True)
     (root / "pytest.ini").write_text(
@@ -111,13 +82,6 @@ class TestEndOfRunAssembledMirrorGateLeg:
         assert ok is True
 
     def test_clean_tree_with_no_source_rows_skips_coverage_leg(self, tmp_path):
-        """P2 regression (code review, 2026-08-30): `rows_by_repo_root.get
-        (repo_root, [])` empty (no row keyed to this repo root) used to fall
-        back to `source_roots or [repo_root]` -- comparing the assembled
-        mirror against ITSELF, silently reinstating the exact source-vs-
-        mirror conflation this gate exists to kill. The coverage leg must
-        now abstain out loud instead of emitting a WARN it cannot stand
-        behind."""
         import io
 
         repo_root = tmp_path / "repo"
@@ -150,9 +114,6 @@ class TestEndOfRunAssembledMirrorGateLeg:
         assert "claude-klabauter" in captured.err
 
     def test_target_filtered_collision_still_hard_fails(self, tmp_path, monkeypatch, capsys):
-        """Same judgement call as the sibling end-of-run legs (§
-        `dispatch_end_of_run_argv_parity_gate`'s own docstring): --target
-        filtering must not soften a genuine collection failure to advisory."""
         repo_root = tmp_path / "repo"
         _write_colliding_tree(repo_root)
         monkeypatch.setattr(publish, "_load_assembled_mirror_gate_exemptions", lambda: {})
@@ -186,9 +147,6 @@ class TestEndOfRunAssembledMirrorGateLeg:
         assert "known debt, tracked separately" in out_buffer.getvalue()
 
     def test_exemption_on_a_different_row_does_not_cover_this_root(self, tmp_path, monkeypatch, capsys):
-        """A declared exemption is keyed by row name -- it must not blanket-
-        cover every repo root, only the one(s) whose contributing rows it
-        actually names."""
         repo_root = tmp_path / "repo"
         _write_colliding_tree(repo_root)
         monkeypatch.setattr(
@@ -255,18 +213,7 @@ class TestEndOfRunAssembledMirrorGateLeg:
     def test_exempted_row_with_isolation_unverified_result_still_fails(
         self, tmp_path, monkeypatch, capsys
     ):
-        """The OSS-lane exemption entry that once made this shape coverable
-        is retired (`assembled_mirror_gate_exemptions` stays `[]` going
-        forward -- the structural `not_applicable` verdict now serves the
-        non-engine-mirror case this entry existed for). With that use case
-        gone, an isolation_unverified result reaching this branch is only
-        ever a genuine bug -- a row whose declared scope claims
-        `coordinator_core` while its tree lacks it -- and must stay
-        non-exemptible exactly like a timeout: it carries no claim about
-        the tree for any exemption to waive. `ok` stays False even with a
-        declared exemption on the row."""
         repo_root = tmp_path / "repo"
-        # Deliberately no coordinator_core/ dir -- isolation_unverified.
         repo_root.mkdir(parents=True, exist_ok=True)
         (repo_root / "pytest.ini").write_text(
             "[pytest]\ntestpaths = .\n", encoding="utf-8", newline="\n"
@@ -345,9 +292,6 @@ class TestEndOfRunAssembledMirrorGateLeg:
     def test_declared_scope_includes_engine_and_tree_lacks_it_still_refuses(
         self, tmp_path, monkeypatch, capsys
     ):
-        """The second arm: declared scope DOES claim coordinator_core for
-        this repo_root, tree lacks it -- NOT absolved. Still the
-        pre-existing isolation_unverified refusal."""
         repo_root = tmp_path / "repo"
         repo_root.mkdir(parents=True, exist_ok=True)
         (repo_root / "pytest.ini").write_text(
@@ -406,11 +350,6 @@ class TestEndOfRunAssembledMirrorGateLeg:
     def test_declared_scope_lookup_failure_is_incomplete_never_not_applicable(
         self, tmp_path, monkeypatch, capsys
     ):
-        """A `TargetsError` resolving the declared row set must NOT be read
-        as 'coordinator_core is not in scope' -- that would let a broken
-        targets file silently waive this gate on itself. Falls back to the
-        safe default (as if every destination declares the engine), so a
-        missing coordinator_core/ directory keeps refusing."""
         repo_root = tmp_path / "repo"
         repo_root.mkdir(parents=True, exist_ok=True)
         (repo_root / "pytest.ini").write_text(
@@ -469,7 +408,7 @@ class TestLoadAssembledMirrorGateExemptions:
         path = tmp_path / "declarations.yaml"
         path.write_text(
             "assembled_mirror_gate_exemptions:\n"
-            "  - name: claude-klabauter\n"  # missing reason -- malformed
+            "  - name: claude-klabauter\n"
             "  - name: valid-row\n"
             "    reason: a real reason\n",
             encoding="utf-8",
@@ -484,16 +423,6 @@ class TestLoadAssembledMirrorGateExemptions:
         assert exemptions == {}
 
     def test_real_declarations_file_loads_without_raising(self):
-        """The actual `setup/publish-allowlist-declarations.yaml` must parse
-        and expose its `assembled_mirror_gate_exemptions` list -- proves the
-        top-level key does not collide with the existing `rows:` schema.
-
-        Asserted as shape, not as a fixed membership: the loader degrades a
-        malformed entry to silence (see its own docstring), so an empty dict
-        here is indistinguishable from an unreadable ledger. Every declared
-        entry carrying a non-empty reason is the property worth pinning --
-        the ledger's own comment requires a stated reason per row, and that
-        is what a silent degradation would drop."""
         real_path = _REPO_ROOT / "setup" / "publish-allowlist-declarations.yaml"
         exemptions = publish._load_assembled_mirror_gate_exemptions(real_path)
         assert isinstance(exemptions, dict)
@@ -535,7 +464,6 @@ class TestCoverageLegHonoursRatifiedDenials:
         assert filtered.examined_count == 1674, "denominator must survive the filter"
 
     def test_undenied_gap_still_reported(self):
-        """The filter must not become a blanket mute -- a real gap survives."""
         from percolate.assembled_mirror_gate import ModuleTestCoverageReport
 
         coverage = ModuleTestCoverageReport(
@@ -552,11 +480,6 @@ class TestCoverageLegHonoursRatifiedDenials:
         assert filtered.missing == ("coordinator_core/ops/really_missing.py",)
 
     def test_denial_only_silences_the_subject_it_names(self):
-        """Matching is by derived `test_<stem>.py`, never a prefix or substring.
-
-        A denial of `test_foo.py` must not silence `foo_helper.py`, whose
-        derived test name is `test_foo_helper.py`.
-        """
         from percolate.assembled_mirror_gate import ModuleTestCoverageReport
 
         coverage = ModuleTestCoverageReport(

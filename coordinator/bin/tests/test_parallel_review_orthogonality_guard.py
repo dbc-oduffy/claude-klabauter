@@ -37,8 +37,6 @@ from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -159,17 +157,7 @@ def _load_guard_module():
 
 class TestStaticFailureMarkerDrift(unittest.TestCase):
     def test_guard_marker_matches_verify_op_static_failure_line(self):
-        # Finding 1 (code-reviewer, this slice): the guard's
         # `_STATIC_FAILURE_MARKER` is a hand-duplicated copy of the verify
-        # op's own terminal line for a failing static check, with no shared
-        # source of truth. An importable-constant or distinct-exit-code fix
-        # was weighed and rejected (see dispatch report — engine-import cost
-        # on a deliberately thin bin wrapper, and the verify CLI's exit code
-        # is documented parity-critical against the retired bash oracle).
-        # This test is the substitute: it fails loudly, at the contract
-        # layer, the moment the two strings drift, instead of surfacing as a
-        # silently-crossed refusal message the way the bug this commit fixed
-        # did.
         guard = _load_guard_module()
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -183,7 +171,7 @@ class TestStaticFailureMarkerDrift(unittest.TestCase):
                 "---\n",
                 encoding="utf-8",
             )
-            agents_dir = Path(tmp) / "agents"  # deliberately not created -> FAIL
+            agents_dir = Path(tmp) / "agents"
             out_lines, passed = static_check(skill_file, agents_dir)
 
         self.assertFalse(passed)
@@ -200,31 +188,14 @@ class TestStaticFailureMarkerDrift(unittest.TestCase):
 
 class TestGuardStatic(unittest.TestCase):
     def test_static_ok_against_real_repo(self):
-        # T1 — deliberately LIVE, not fixtured: the lens-domain manifest is
-        # DoE-claude's (coordinator/skills/parallel-code-review/SKILL.md,
-        # resolved by coordinator_doe_root()), and asserting the real sibling
-        # tree is this case's whole subject. A red here is a cross-repo drift
-        # report addressed to that repo, not a defect in this one — pinning it
-        # to a fixture would delete the canary. The guard runs from
-        # coordinator/bin/ regardless of cwd (Path(__file__)-relative).
         proc = _run_cli(["guard"])
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         self.assertIn("OK (static)", proc.stdout)
 
 
 class TestGuardChunkManifest(unittest.TestCase):
-    """Chunk-mode cases, each on a fixture DoE root (`_make_doe_fixture`).
-
-    The static check runs first and short-circuits, so on the live sibling
-    tree these three assert the sibling's manifest table, not chunk
-    disjointness — T3 read as "partitions overlap" over a two-line manifest
-    that plainly does not overlap.
-    """
 
     def test_missing_manifest_is_chunk_mode_refusal(self):
-        # T2 — a manifest path that doesn't exist fails in the CHUNK leg, so
-        # the guard's refusal line must be the chunk-mode message. Reaching
-        # that leg at all requires the static check to pass first.
         with tempfile.TemporaryDirectory() as tmp:
             doe = _make_doe_fixture(tmp)
             proc = _run_cli(
@@ -238,10 +209,6 @@ class TestGuardChunkManifest(unittest.TestCase):
             self.assertNotIn("Lens-orthogonality assertion failed", proc.stderr)
 
     def test_static_failure_under_chunk_mode_names_the_static_check(self):
-        # T2b — the crossed-message case: --chunk-manifest given, but the
-        # STATIC check is what refused. Naming the mode instead of the failing
-        # check told the operator their partitions overlapped when the
-        # manifest table was missing, and the manifest was never opened.
         with tempfile.TemporaryDirectory() as tmp:
             doe = _make_doe_fixture(tmp)
             skill = os.path.join(
@@ -259,7 +226,6 @@ class TestGuardChunkManifest(unittest.TestCase):
             self.assertNotIn("Chunk partitions are not disjoint", proc.stderr)
 
     def test_disjoint_manifest_passes(self):
-        # T3
         with tempfile.TemporaryDirectory() as tmp:
             doe = _make_doe_fixture(tmp)
             manifest = os.path.join(tmp, "chunk-manifest.tsv")
@@ -270,7 +236,6 @@ class TestGuardChunkManifest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, msg=proc.stderr)
 
     def test_overlapping_manifest_fails(self):
-        # T4 — same file in two chunks must trip the refusal.
         with tempfile.TemporaryDirectory() as tmp:
             doe = _make_doe_fixture(tmp)
             manifest = os.path.join(tmp, "chunk-manifest.tsv")
@@ -287,7 +252,6 @@ class TestGuardChunkManifest(unittest.TestCase):
 
 class TestSnapshot(unittest.TestCase):
     def test_snapshot_derives_head_sha_path_and_writes_findings_dir(self):
-        # T5 + T6
         with tempfile.TemporaryDirectory() as tmp:
             _init_repo_with_commit(tmp)
             with open(os.path.join(tmp, "seed.txt"), "a", encoding="utf-8") as f:

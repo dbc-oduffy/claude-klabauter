@@ -69,10 +69,6 @@ def _collect_trackers(mock_qr, tmp_path: Path, records: list[dict]):
     return trackers_section.collect(ctx)
 
 
-# ---------------------------------------------------------------------------
-# handoffs.py
-# ---------------------------------------------------------------------------
-
 @patch("coordinator_core.ops.emit.sections.handoffs.human_axis_vendored", return_value=False)
 @patch("coordinator_core.ops.emit.sections.handoffs._query_records")
 def test_handoffs_switch_off_omits_human_keys_entirely(mock_qr, _mock_flag, tmp_path: Path) -> None:
@@ -130,10 +126,6 @@ def test_handoffs_switch_on_null_when_frontmatter_absent(mock_qr, _mock_flag, tm
 def test_handoffs_switch_off_is_byte_identical_to_flag_absent_frontmatter(
     mock_qr, _mock_flag, tmp_path: Path
 ) -> None:
-    """The behavioural leg AC7 depends on: a record whose frontmatter carries NO
-    human_* keys at all, emitted with the switch off, produces exactly the same dict
-    shape as one whose frontmatter DOES carry them — the switch, not the frontmatter,
-    is what gates the key's presence."""
     without_fm, _ = _collect_handoffs(
         mock_qr, tmp_path,
         [{"path": "state/handoffs/x.md", "frontmatter": _base_handoff_fm()}],
@@ -149,10 +141,6 @@ def test_handoffs_switch_off_is_byte_identical_to_flag_absent_frontmatter(
     )
     assert without_fm == with_fm
 
-
-# ---------------------------------------------------------------------------
-# trackers.py
-# ---------------------------------------------------------------------------
 
 def _base_tracker_fm(**overrides) -> dict:
     fm = {"title": "Test Tracker", "created": "2026-08-20", "status": "active"}
@@ -200,10 +188,6 @@ def test_trackers_switch_off_is_byte_identical_to_flag_absent_frontmatter(
     with_fm, _ = _collect_trackers(mock_qr, tmp_path, mock_qr.return_value)
     assert without_fm == with_fm
 
-
-# ---------------------------------------------------------------------------
-# _shared.human_axis_vendored — the switch itself
-# ---------------------------------------------------------------------------
 
 def test_flag_defaults_off_when_registry_key_unresolved():
     with patch("coordinator_core.ops.emit.sections._shared.registry_get", return_value=None):

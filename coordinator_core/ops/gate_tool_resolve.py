@@ -65,9 +65,7 @@ import dataclasses
 import shutil
 from typing import Optional
 
-# One tool name per DoD dimension leg that shells out. Kept as a plain
 # mapping (not an enum) so a caller can iterate `KNOWN_TOOLS` for a
-# provisioning-status report without importing a dimension module.
 KNOWN_TOOLS: dict[str, str] = {
     "mypy": "pip install mypy",
     "ruff": "pip install ruff",

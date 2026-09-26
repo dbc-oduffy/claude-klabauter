@@ -84,21 +84,13 @@ from coordinator_core.contract import apply_base
 from coordinator_core.learn_lessons_pipeline import CONSUMES_MANIFEST, brief
 from coordinator_core.learn_lessons_pipeline.run_stamp import stamp_run_complete
 
-#: This assembler's own name for `apply_base.assert_dispatchable`'s
 #: `ASSEMBLER_DISPATCHABLE` lookup (§ C5) — matches the key
-#: `learn_lessons_pipeline.ops` registers under.
 ASSEMBLER_NAME = "learn_lessons_pipeline"
 
 #: The `coordinator/bin` directory holding every `CONSUMES_MANIFEST`
-#: script, resolved from THIS module's own location — never `repo_root`,
-#: never `Path.cwd()` (see `cli_dispatch.resolve_cli_script_root`'s own
-#: docstring for why).
 _CLI_SCRIPT_ROOT = resolve_cli_script_root()
 
 #: The two `CONSUMES_MANIFEST` members whose own call graph does a bare
-#: `import lib` and therefore need `coordinator/bin` on `sys.path` (with a
-#: foreign `lib` evicted from `sys.modules`) BEFORE `load_cli_module` runs.
-#: `extract-lessons.py` needs neither — it carries no `import lib`.
 _NEEDS_BIN_IMPORTABLE = frozenset({"age-sweep-lessons", "lessons-outbox-drain"})
 
 _LOADED_MODULES: dict[str, ModuleType] = {}
@@ -140,9 +132,6 @@ def _load(cli_name: str) -> ModuleType:
 
 
 def _run_cli(cli_name: str, args: list[str], repo_root: Path) -> dict[str, Any]:
-    """Invokes `cli_name`'s `main(argv)` in-process via the shared
-    `cli_dispatch.invoke_cli_main` primitive and raises on a non-zero exit
-    — the halt mechanism itself (§ module docstring)."""
     module = _load(cli_name)
     exit_code, stdout, stderr, _exit_class = invoke_cli_main(module, args)
     if exit_code != 0:
@@ -166,10 +155,6 @@ def _dispatch_age_sweep_lessons(args: list[str], repo_root: Path) -> dict[str, A
 
 
 #: The closed dispatch table over `CONSUMES_MANIFEST` — never `getattr`,
-#: never `importlib.import_module` on a brief-derived string (§ module
-#: docstring). Keys are the three distinct CLI script names, not the five
-#: `cli:` directive ids C3 emits (two of the five directives share one
-#: script each).
 _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     "extract-lessons": _dispatch_extract_lessons,
     "lessons-outbox-drain": _dispatch_lessons_outbox_drain,
@@ -187,17 +172,11 @@ def _dispatch_stamp_run_complete(args: list[str], repo_root: Path) -> dict[str, 
     return {"sentinel": str(sentinel)}
 
 
-#: The single `op:` verb this package's `directives[]` may name — kept
 #: disjoint from `_CLI_DISPATCH` (§ module docstring negative-spec).
 _OP_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     "stamp-run-complete": _dispatch_stamp_run_complete,
 }
 
-#: The single `dispatch_table` `execute_directives` resolves both `cli`
-#: and `op` directives against — `resolve_cli`/`resolve_op` each look up
-#: their own key namespace in this ONE dict (§ apply_base docstring: "ONE
-#: resolution pass with a two-valued key, not a second dispatch
-#: mechanism").
 _DISPATCH_TABLE: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     **_CLI_DISPATCH,
     **_OP_DISPATCH,

@@ -140,22 +140,7 @@ _HEADER_COMMENT = (
 )
 
 
-# ---------------------------------------------------------------------------
-# Repo-root discovery for the locked_rmw lock sidecar
-# ---------------------------------------------------------------------------
-
-
 def _find_repo_root(target: Path) -> Optional[Path]:
-    """Walk upward from target's parent looking for a ``.git`` entry.
-
-    Returns the first ancestor directory containing a ``.git`` file-or-directory
-    (a linked worktree's ``.git`` is a file; a main checkout's is a directory —
-    either satisfies ``locked_rmw``'s ``repo_root`` contract, since it only
-    needs a path inside the repo to resolve ``git rev-parse --git-common-dir``
-    against). Returns None if no such ancestor exists (target is not inside any
-    git repo) — mirrors ``self_persist_findings._find_repo_root``'s identical
-    walk for the sibling none-scoped C1a op.
-    """
     node = target.parent
     while True:
         if (node / ".git").exists():
@@ -166,18 +151,7 @@ def _find_repo_root(target: Path) -> Optional[Path]:
         node = parent
 
 
-# ---------------------------------------------------------------------------
-# Document parse / merge / serialize
-# ---------------------------------------------------------------------------
-
-
 def _parse_existing(old_text: str) -> dict:
-    """Parse the identity file's current text into a mapping.
-
-    Empty/whitespace-only text (fresh file under missing_ok=True) parses to
-    ``{}``. A non-mapping YAML document (e.g. a bare scalar or list) is
-    rejected — the identity file's contract is a flat key/value mapping.
-    """
     if not old_text.strip():
         return {}
     loaded = yaml.safe_load(old_text)
@@ -192,15 +166,6 @@ def _parse_existing(old_text: str) -> dict:
 
 
 def _serialize(doc: dict) -> str:
-    """Render *doc* back into the identity file's on-disk shape.
-
-    ``version`` is forced first (defaulting to 1 if absent from *doc*) to
-    match the bash oracle's own field order; every other key follows in
-    *doc*'s own (insertion-preserving) order. ``sort_keys=False`` on the
-    ``yaml.safe_dump`` call is load-bearing — alphabetizing would reorder
-    ``operator_name``/``engagement_posture`` on every merge and make an
-    otherwise-identical rerun byte-different.
-    """
     ordered: dict = {"version": doc.get("version", 1)}
     for key, value in doc.items():
         if key == "version":
@@ -208,11 +173,6 @@ def _serialize(doc: dict) -> str:
         ordered[key] = value
     body = yaml.safe_dump(ordered, sort_keys=False, default_flow_style=False)
     return f"{_HEADER_COMMENT}\n{body}"
-
-
-# ---------------------------------------------------------------------------
-# Op handler
-# ---------------------------------------------------------------------------
 
 
 @register_op("install.write_identity_file")
@@ -308,12 +268,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Error-shape helper
-# ---------------------------------------------------------------------------
-
-
 def _err(msg: str, *, path: str) -> dict:
-    """Return an exit_code=1 error reply dict."""
     _LOG.warning("install.write_identity_file: %s", msg)
     return {"exit_code": 1, "written": False, "path": path, "error": msg}

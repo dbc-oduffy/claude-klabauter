@@ -1,13 +1,3 @@
-"""
-Tests for coordinator_core.ops.query_completions.
-
-Spec backlink: docs/plans/2026-05-19-completion-log-phase1-foundational-loop.md § Chunk 2
-
-Node-subprocess retirement: this module now calls
-``coordinator_core.ops.ceremony.records_query.query_records`` in-process, so
-these tests drive the native path against real ``tmp_path`` completion-log
-fixtures instead of mocking a ``node`` subprocess spawn.
-"""
 
 from __future__ import annotations
 
@@ -35,7 +25,7 @@ def test_help_first_arg_prints_wrapper_usage_and_exits_zero():
         rc = query_completions.main(["--help"])
     assert rc == 0
     assert "query-completions.sh — Query completion-log entries." in buf.getvalue()
-    assert "--type" not in buf.getvalue().split("\n")[0]  # sanity: not query-records' own help
+    assert "--type" not in buf.getvalue().split("\n")[0]
 
 
 def test_h_first_arg_also_triggers_help():
@@ -84,10 +74,6 @@ def test_format_json_emits_bare_stringify_array(tmp_path: Path):
                 "title": "Entry C",
                 "nature": "fix",
                 "liveness": "LIVE",
-                # "archived" is injected onto every record's frontmatter,
-                # always present (coordinator_core/ops/records_query.py's own
-                # module docstring, same collection-origin injection as
-                # "liveness" -- not optional, not type-specific).
                 "archived": False,
             },
         }
@@ -202,14 +188,7 @@ def test_detect_root_falls_back_to_cwd_when_git_fails(tmp_path: Path, monkeypatc
     assert result == tmp_path
 
 
-# ---------------------------------------------------------------------------
-# `commits` display coercion -- cross-repo/archive/2026-08-16-example-retrieval-repo-em-
-# ceremony-cli-defects-found-running-workweek-complete.md § 1. An all-digit
-# short SHA is an int after YAML parse, and `", ".join` raised on it inside
 # `/workstream-complete`'s MANDATORY LoE gate: a display concern took down a
-# gate. These pin the formatter, not the producers -- the sender's own point
-# is that quoting at the source would not make the formatter safe.
-# ---------------------------------------------------------------------------
 
 
 def test_all_digit_short_sha_renders_instead_of_raising():
@@ -222,9 +201,6 @@ def test_mixed_int_and_str_shas_all_render():
 
 
 def test_a_bare_string_is_not_iterated_character_by_character():
-    """The failure mode most likely to survive review, because it does not
-    raise: `", ".join("abc1234")` returns `a, b, c, 1, 2, 3, 4` and looks like
-    seven commits."""
     assert query_completions._format_commits("abc1234") == "abc1234"
 
 
@@ -234,14 +210,10 @@ def test_absent_and_empty_stay_no_commit():
 
 
 def test_a_non_int_non_str_scalar_still_renders():
-    """Coercion is total on purpose -- narrowing to `int` would leave the same
-    crash one YAML scalar away."""
     assert query_completions._format_commits([True]) == "True"
 
 
 def test_the_formatter_survives_an_all_digit_sha_end_to_end(tmp_path: Path):
-    """The crash was reached through `_format_completion_markdown`, not by
-    calling the helper directly -- pin the path the gate actually takes."""
     _write_completion(
         tmp_path,
         "2026-08",

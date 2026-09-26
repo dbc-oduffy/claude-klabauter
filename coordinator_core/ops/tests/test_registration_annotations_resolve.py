@@ -36,14 +36,10 @@ import pytest
 
 from coordinator_core.ipc import get_op_handler
 
-#: `registers "a.b", "c.d" (provenance)` -- the shape every annotating entry in
-#: the eager-import table uses. Only quoted, dotted names are treated as claims;
-#: prose around them is ignored.
 _OP_NAME_RE = re.compile(r'"([a-z_][a-z0-9_]*(?:\.[a-z0-9_]+)+)"')
 
 
 def _advertised_ops():
-    """(module_path, op_name) for every op name an annotation claims."""
     from coordinator_core.ops import _EAGER_OP_MODULES  # noqa: PLC0415
 
     out = []
@@ -51,8 +47,6 @@ def _advertised_ops():
         module_path, note = entry[0], (entry[1] if len(entry) > 1 else "")
         if not note or "registers" not in note:
             continue
-        # Only the text AFTER the word "registers" names ops; provenance tails
-        # routinely mention other ops as context.
         claim = note.split("registers", 1)[1]
         for name in _OP_NAME_RE.findall(claim):
             out.append((module_path, name))
@@ -60,23 +54,12 @@ def _advertised_ops():
 
 
 def test_the_table_advertises_something():
-    """Guard the guard: a parse that silently matches nothing would make every
-    assertion below vacuously true, which is how this class of test rots."""
     advertised = _advertised_ops()
     assert len(advertised) > 20, f"parsed only {len(advertised)} advertised ops -- parser drift?"
 
 
 @pytest.mark.parametrize("module_path,op_name", _advertised_ops())
 def test_advertised_op_resolves(module_path, op_name):
-    """An op the table names must be dispatchable, or the table is lying.
-
-    A killed op is the common case and it fails here loudly: `get_op_handler`
-    raises `OpSuspendedError` for one that was suspended, and returns None for
-    one whose name no longer exists at all. Both are the same defect from a
-    reader's side -- the table says it is there and it is not.
-
-    Remedy is always the annotation, never a resurrection: strike the name.
-    """
     try:
         handler = get_op_handler(op_name, {})
     except Exception as exc:  # noqa: BLE001 -- the message IS the finding
@@ -92,34 +75,8 @@ def test_advertised_op_resolves(module_path, op_name):
     )
 
 
-# ---------------------------------------------------------------------------
-# The HEAD leg: an annotation cannot be committed ahead of the op it names
-# ---------------------------------------------------------------------------
-#
-# The worktree leg above is green on a tree whose HEAD is red, and that is not
-# a corner case -- it is how the fourth recurrence happened, hours after the
-# guard shipped. On 2026-08-26 commit `1e1f9f50d` added
-# `registers "session.audit_unreapable"` to the eager-import table and
-# published it, while that op's implementation (`ops/session/reap.py`,
-# `_registry_map.py`, `op_scopes.py`) sat uncommitted in a peer's working tree.
-# `get_op_handler` resolved the name -- from the worktree -- so every assertion
-# above passed. The published engine, built from HEAD, returned
 # METHOD_NOT_FOUND, and `reap.py` there contained zero occurrences of the op
-# its own annotation advertised.
-#
-# On a branch ~50 concurrent sessions share, "the worktree has it" says nothing
-# about whether HEAD does. What the fleet dispatches into is built from HEAD,
-# so HEAD is the tree this claim has to be true of.
-#
-# Content check, not an import: HEAD's code is not importable in-process, and
 # an op may register through `_REGISTRY_MAP` or through a decorator in its own
-# module. Requiring the quoted name to appear in HEAD's copy of EITHER is
-# robust to both registration styles and still catches the exact signature
-# above -- zero occurrences anywhere.
-#
-# Two git spawns total (`ls-tree`, then one batched `cat-file --batch`), never
-# one per advertised op: a per-item spawn here is what
-# `coordinator_core.tests.test_no_unbatched_per_item_git_spawn` is watching.
 
 _REGISTRY_MAP_PATH = "coordinator_core/ops/_registry_map.py"
 
@@ -129,13 +86,11 @@ def _repo_root():
 
 
 def _module_candidate_paths(module_path):
-    """The repo-relative files that could hold *module_path*'s registrations."""
     stem = module_path.replace(".", "/")
     return (f"{stem}.py", f"{stem}/__init__.py")
 
 
 def _advertised_at_head(table):
-    """`_advertised_ops`' logic against a table read from HEAD instead of memory."""
     out = []
     for entry in table:
         module_path, note = entry[0], (entry[1] if len(entry) > 1 else "")
@@ -148,12 +103,6 @@ def _advertised_at_head(table):
 
 
 def _parse_cat_file_batch(stdout, paths):
-    """`git cat-file --batch` output -> {repo-relative path: decoded source}.
-
-    Records arrive in request order, each as ``<sha> <type> <size>\\n`` followed
-    by ``<size>`` bytes and a newline; a missing object emits a single
-    ``<request> missing`` line instead, consuming one request with no payload.
-    """
     out = {}
     pos = 0
     for path in paths:
@@ -174,12 +123,6 @@ def _parse_cat_file_batch(stdout, paths):
 
 
 def _head_annotation_failures(advertised, contents):
-    """Every advertised name HEAD's own sources do not mention.
-
-    Split out of the test body so the comparison is exercisable against
-    synthetic content -- a guard whose only run is against a green tree cannot
-    show it would go red on a broken one.
-    """
     registry_src = contents.get(_REGISTRY_MAP_PATH, "")
 
     failures = []
@@ -205,8 +148,6 @@ def _head_annotation_failures(advertised, contents):
 
 
 def test_head_leg_goes_red_on_the_shape_it_exists_to_catch():
-    """The 2026-08-26 signature, reconstructed: the annotation names an op the
-    committed module and the committed registry map both say nothing about."""
     advertised = [("coordinator_core.ops.session.reap", "session.audit_unreapable")]
 
     served = {
@@ -223,12 +164,10 @@ def test_head_leg_goes_red_on_the_shape_it_exists_to_catch():
     assert len(failures) == 1
     assert "session.audit_unreapable" in failures[0]
 
-    # Registered through the map rather than a decorator in the module: served.
     via_map = {
         "coordinator_core/ops/session/reap.py": "def audit(): ...",
         _REGISTRY_MAP_PATH: '{"session.audit_unreapable": "coordinator_core.ops.session.reap"}',
     }
     assert _head_annotation_failures(advertised, via_map) == []
 
-    # The module named by the annotation was never committed at all.
     assert len(_head_annotation_failures(advertised, {_REGISTRY_MAP_PATH: "{}"})) == 1

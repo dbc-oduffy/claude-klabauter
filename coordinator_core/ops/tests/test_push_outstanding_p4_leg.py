@@ -1,20 +1,3 @@
-"""
-test_push_outstanding_p4_leg.py — pytest coverage for the p4 leg C3 adds to
-`coordinator_core.ops.push_outstanding`.
-
-Spec backlink: docs/plans/2026-09-12-perforce-second-class-commit-and-shelve.md § C3, § D4.
-
-Scope: the leg's own gating/wiring logic in `push_outstanding.py` --
-`_is_p4_repo`, `_p4_leg_precheck`, `_p4_leg_execute`, the `session_id`
-parameter, and the `push.outstanding.p4`/`push.outstanding.p4:no-session`
-telemetry arms. `coordinator_core.p4.shelve`'s own reconcile/revert/shelve
-sequence is `test_shelve.py`'s scope, not this file's -- here it is
-monkeypatched at the module boundary.
-
-Asserts both named arms (D4/C3 row body): a session-supplied invocation
-shelves; a session-less invocation (the cadence shape) takes zero p4
-spawns and names the skip.
-"""
 
 from __future__ import annotations
 
@@ -34,7 +17,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(args, cwd) -> None:
-    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # popup-intentional-last-resort
+    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     subprocess.run(
         ["git", *args],
         cwd=str(cwd),
@@ -72,8 +55,6 @@ def _fail_if_called(name):
 
 
 class _RecordingTelemetry:
-    """Captures every `record_op_latency` call so a test can assert which
-    arm/op fired without touching the real telemetry sink."""
 
     def __init__(self, monkeypatch):
         self.calls = []
@@ -118,7 +99,7 @@ class TestSessionlessInvocationTakesZeroP4SpawnsAndNamesTheSkip:
 
         outcome = push_outstanding(repo, session_id=None)
 
-        assert outcome.exit_code == 0  # nothing-outstanding (HEAD == upstream, no remote at all -> falls through)
+        assert outcome.exit_code == 0
         no_session_calls = [c for c in telemetry.calls if c["op"] == push_outstanding_mod._ARM_P4_NO_SESSION]
         assert len(no_session_calls) == 1
 
@@ -146,11 +127,6 @@ class TestSessionSuppliedInvocationShelves:
         monkeypatch.setattr(
             p4_session_change_mod, "ensure_session_change", lambda root, sid: 101
         )
-        # No remote is configured on this fixture repo, so the real
-        # `push_with_retry` would itself decline `push:no-remote` -- which
-        # would then (correctly) gate the p4 leg off and defeat this test's
-        # own purpose. Force the git leg to see a genuine outstanding-work
-        # decision and a landed push instead.
         monkeypatch.setattr(
             push_outstanding_mod, "_upstream_sha", lambda root, branch: "somethingelse"
         )
@@ -227,9 +203,6 @@ class TestGatedOnNoRemoteNeverNoUpstream:
                 "p4_shelved_sha": None,
             },
         )
-        # A genuinely different sha, so the git leg's zero-spawn no-op
-        # return is NOT taken and `push_with_retry` runs -- monkeypatched
-        # here to report the `push:no-remote` outcome the leg must gate on.
         monkeypatch.setattr(
             push_outstanding_mod,
             "push_with_retry",
@@ -254,11 +227,6 @@ class TestGatedOnNoRemoteNeverNoUpstream:
 
 
 class TestPrecheckIsExceptionIsolated:
-    """`_p4_leg_precheck` must be as
-    structurally exception-isolated as `_p4_leg_execute`. A raise from any
-    callee it reaches (here `workspace.session_change`) must not propagate
-    into the git leg, and the returned `PushOutcome` must still report the
-    genuine git result."""
 
     def test_precheck_raise_does_not_propagate_or_alter_git_outcome(self, monkeypatch, repo):
         monkeypatch.setattr(push_outstanding_mod, "_is_p4_repo", lambda root: True)

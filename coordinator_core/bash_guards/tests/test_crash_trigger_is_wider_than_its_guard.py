@@ -35,16 +35,12 @@ from coordinator_core.bash_guards.dispatch import (
     evaluate_payload_json,
 )
 
-# Drives the real dispatcher, which spawns; runs at cadence gates.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
 
-# (guard name, command the guard denies). Every mapped guard appears at least
-# once; the two historical bypasses appear under their own ids.
 DENIED_COMMANDS = [
     ("no-verify", "git commit --no-verify -m wip"),
     ("destructive-git-orphan", "git reset --hard HEAD~3"),
@@ -66,7 +62,6 @@ def _dispatcher_decision(cmd: str):
 
 @pytest.mark.parametrize("guard_name,cmd", DENIED_COMMANDS)
 def test_trigger_matches_every_command_its_guard_denies(guard_name: str, cmd: str) -> None:
-    """The invariant, and it is host-invariant: the trigger is a pure text test."""
     assert not _crash_deny_is_out_of_class(guard_name, cmd), (
         f"{guard_name}'s trigger is NARROWER than its guard: {cmd!r} is within the class "
         "the guard polices but would be skipped on the crash path"
@@ -96,8 +91,6 @@ def test_unmapped_guard_and_a_raising_transform_fail_toward_denial() -> None:
 
 
 def test_an_empty_command_is_skippable_not_denied() -> None:
-    # Pinned because the mapping's own docstring said the opposite for a while:
-    # no token can be present in an empty command and there is nothing to deny.
     assert _crash_deny_is_out_of_class("destructive-rm", "") is True
 
 
@@ -111,5 +104,4 @@ def test_every_mapped_guard_has_at_least_one_case() -> None:
 
 
 def test_a_command_outside_the_class_is_still_skippable() -> None:
-    # The mapping's whole point: a crashed git guard must not deny `echo`.
     assert _crash_deny_is_out_of_class("destructive-git-revert", "echo hello") is True

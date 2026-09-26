@@ -50,7 +50,6 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
-# Module name has hyphens, so import via importlib rather than a bare `import`.
 _SPEC = importlib.util.spec_from_file_location(
     "coordinator_artifact_subject",
     os.path.join(_THIS_DIR, "coordinator-artifact-subject.py"),
@@ -61,17 +60,7 @@ _SPEC.loader.exec_module(_MOD)  # type: ignore[union-attr]
 coordinator_artifact_subject = _MOD.coordinator_artifact_subject
 
 
-# ---------------------------------------------------------------------------
-# (description, path, expected_stdout, expected_rc) — the classification table.
-# Grouping comments preserve the original suite's section headers so a reader
-# can still see which spec requirement each block discharges.
-#
-# The third element is the SUT's stdout, not a separate token:
-# `coordinator_artifact_subject` returns (stdout, stderr, returncode), so the
-# "empty stdout" case below asserts exactly what its description claims.
-# ---------------------------------------------------------------------------
 _CLASSIFICATION_CASES = [
-    # --- Install-chain collision (two distinct cases required by spec) ---
     ("claude-klabauter install script -> engine", "claude-klabauter/install.sh", "engine", 0),
     (
         "coordinator commands/install.md -> doctrine",
@@ -79,28 +68,24 @@ _CLASSIFICATION_CASES = [
         "doctrine",
         0,
     ),
-    # --- Claude-Klabauter-addressed memo -> engine ---
     (
         "to-claude-klabauter memo -> engine",
         "state/memos/to-claude-klabauter-pcore-roadmap-q3.md",
         "engine",
         0,
     ),
-    # --- Cross-cutting: DR-207-shaped artifact ---
     (
         "DR-207-shaped artifact -> cross-cutting + rc=2",
         "docs/decisions/DR-207-tri-plane-contract-boundary.md",
         "cross-cutting",
         2,
     ),
-    # --- Cross-cutting: fleet-spine emitter-binding plan ---
     (
         "fleet-spine emitter-binding plan -> cross-cutting + rc=2",
         "docs/plans/2026-07-04-fleet-spine-emitter-binding.md",
         "cross-cutting",
         2,
     ),
-    # --- Clear doctrine cases (at least one required by spec) ---
     (
         "skills/** file -> doctrine",
         "plugins/coordinator-claude/coordinator/skills/handoff/SKILL.md",
@@ -126,7 +111,6 @@ _CLASSIFICATION_CASES = [
         "doctrine",
         0,
     ),
-    # --- Clear engine cases (at least one required by spec) ---
     (
         "coordinator_core/** -> engine",
         "coordinator_core/session_control/dispatcher.py",
@@ -146,10 +130,6 @@ _CLASSIFICATION_CASES = [
         "engine",
         0,
     ),
-    # coordinator-doctrine mcp-server path must NOT
-    # misclassify as engine; Phase 2 pre-emption in coordinator_artifact_subject
-    # routes coordinator-plugin and docs/wiki mcp-server paths to doctrine
-    # before the narrowed engine MCP pattern fires.
     (
         "coordinator-plugin mcp-server wiki -> doctrine (not engine)",
         "plugins/coordinator-claude/coordinator/docs/wiki/mcp-server-configuration.md",
@@ -162,7 +142,6 @@ _CLASSIFICATION_CASES = [
         "doctrine",
         0,
     ),
-    # --- Install-chain edge cases (slug variants) ---
     (
         "skills/repo-setup -> doctrine",
         "plugins/coordinator-claude/coordinator/skills/repo-setup/SKILL.md",
@@ -175,15 +154,9 @@ _CLASSIFICATION_CASES = [
         "engine",
         0,
     ),
-    # --- Usage error (rc=1 contract) ---
-    # no-arg / empty-arg usage-error path was
-    # untested; consumers (W2.3 coordinator_state_root) rely on rc=1 to
-    # detect bad calls.
     ("empty arg -> rc=1, empty stdout", "", "", 1),
 ]
 
-# Cross-cutting verdicts must ALSO emit remediation stderr — a bare rc=2 with
-# a silent stderr leaves the operator with a rejection and no next step.
 _STDERR_REQUIRED_CASES = [
     (
         "DR-207-shaped artifact emits stderr remediation",
@@ -202,7 +175,6 @@ _STDERR_REQUIRED_CASES = [
     ids=[desc for desc, _p, _out, _rc in _CLASSIFICATION_CASES],
 )
 def test_classification(path: str, expected_stdout: str, expected_rc: int) -> None:
-    """Each spec case classifies to its expected stdout verdict and rc."""
     got_stdout, _stderr, got_rc = coordinator_artifact_subject(path)
     assert (got_stdout, got_rc) == (expected_stdout, expected_rc), (
         f'path="{path}" expected stdout="{expected_stdout}" rc={expected_rc}; '
@@ -216,18 +188,12 @@ def test_classification(path: str, expected_stdout: str, expected_rc: int) -> No
     ids=[desc for desc, _p in _STDERR_REQUIRED_CASES],
 )
 def test_cross_cutting_emits_stderr_remediation(path: str) -> None:
-    """A cross-cutting verdict carries rc=2 AND non-empty remediation stderr."""
     _stdout, stderr, rc = coordinator_artifact_subject(path)
     assert rc == 2, f'path="{path}" expected rc=2, got rc={rc}'
     assert stderr, f'path="{path}" rc=2 but stderr was empty'
 
 
 def test_empty_arg_usage_error_names_the_function() -> None:
-    """An empty path is a usage error (rc=1) whose stderr names the caller.
-
-    Consumers (W2.3 coordinator_state_root) rely
-    on rc=1 to detect bad calls, and on the name to locate the bad call.
-    """
     _stdout, stderr, rc = coordinator_artifact_subject("")
     assert rc == 1, f"expected rc=1 for empty arg, got rc={rc}"
     assert "coordinator_artifact_subject" in stderr, (

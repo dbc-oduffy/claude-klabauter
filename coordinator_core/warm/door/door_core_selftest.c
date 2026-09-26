@@ -55,8 +55,7 @@ static void check_hash(const char *what, const char *data, const char *want) {
     check_str(what, out, want);
 }
 
-/* Runs one envelope through the reader and asserts the full verdict tuple.
- * `want_exit` is only consulted when `want_success` is 1. */
+
 static void check_envelope(const char *what, const char *json,
                            int want_success, int want_have_error,
                            long want_code, long want_exit,
@@ -87,35 +86,21 @@ static void check_envelope(const char *what, const char *json,
                    (int)rf.stdout_buf.len, rf.stdout_buf.data, want_stdout);
         }
     }
-    /* Both buffers are allocated on EVERY call, success or not -- freeing
-     * them unconditionally is the contract door_core.h states, and this
-     * selftest is also where that contract gets exercised under a leak
-     * checker (`valgrind`, or clang's `-fsanitize=address`). */
+    
     free(rf.stdout_buf.data);
     free(rf.stderr_buf.data);
 }
 
 int main(void) {
-    /* ---- 1. SHA-1 byte-identity with hashlib.sha1(...).hexdigest()[:16].
-     * Published vectors: SHA1("") = da39a3ee5e6b4b0d3255bfef95601890afd80709,
-     * SHA1("abc") = a9993e364706816aba3e25717850c26c9cd0d89d. */
+    
     check_hash("sha1/empty", "", "da39a3ee5e6b4b0d");
     check_hash("sha1/abc", "abc", "a9993e364706816a");
-    /* SHA1("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")
-     *   = 84983e441c3bd26ebaae4aa1f95129e5e54670f1 -- the multi-block
-     * vector, which is the one that exercises the padding/length path the
-     * two real call shapes (a stamp file, an engine-root path) also hit. */
+    
     check_hash("sha1/multiblock",
                "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
                "84983e441c3bd26e");
-    /* SHA1("a" x 1000000) is too slow to be worth it here; the 55/56/64-byte
-     * boundary is the one that actually breaks hand-written SHA-1, and the
-     * three vectors above straddle it (0, 3, 56 bytes). */
+    
 
-    /* ---- 2. Sidecar trailing-whitespace trim. This is a SHA-1 input for
-     * the clone hash (see door_core.h); a divergence between the two doors
-     * that call it would derive different socket names from the same
-     * sidecar file, silently and permanently. */
     {
         char a[] = "root\n\r \t";
         check_int("trim/mixed_trailing", (long)trim_sidecar_trailing(a, strlen(a)), 4);
@@ -133,8 +118,7 @@ int main(void) {
         check_str("trim/interior_preserved_bytes", d, "ro ot");
     }
 
-    /* ---- 3. Envelope reader.
-     *      name                 json                                                              ok he code    exit stdout */
+    
     check_envelope("ok",
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"stdout\":\"hi\\n\",\"stderr\":\"\",\"exit_code\":0}}",
         1, 0, 0, 0, "hi\n");
@@ -144,8 +128,7 @@ int main(void) {
     check_envelope("ok_unknown_members",
         "{\"result\":{\"stdout\":\"o\",\"extra\":{\"a\":[1,2,{\"b\":\"c\"}]},\"stderr\":\"\",\"exit_code\":0}}",
         1, 0, 0, 0, "o");
-    /* THE TRAP: stdout CONTENT containing the word "error" must not be read
-     * as a top-level error key. This is why the reader is depth-aware. */
+    
     check_envelope("ok_stdout_says_error",
         "{\"result\":{\"stdout\":\"the word error appears here\",\"stderr\":\"\",\"exit_code\":0}}",
         1, 0, 0, 0, "the word error appears here");
@@ -180,26 +163,14 @@ int main(void) {
     check_int("classify/-32601_no_method", is_provably_undispatched(JSONRPC_METHOD_NOT_FOUND), 1);
     check_int("classify/-32002_skew", is_provably_undispatched(JSONRPC_ENGINE_SKEW), 1);
     check_int("classify/-32003_untrusted", is_provably_undispatched(JSONRPC_UNTRUSTED_CALLER), 1);
-    /* The stamp gate is `dispatch_message`'s first statement, ahead of the
-     * `_dispatch_message_impl` await that could ever produce -32601 or
-     * -32006. A 0 here is the door telling an operator a never-dispatched
-     * request may have completed. */
+    
     check_int("classify/-32005_unstamped", is_provably_undispatched(JSONRPC_UNSTAMPED_ENGINE_ROOT), 1);
-    /* Refused one branch BEFORE the -32601 lookup above, so at least as
-     * strong a proof of non-dispatch. A 0 here is the door telling an
-     * operator a suspended commit may have landed. */
+    
     check_int("classify/-32006_suspended", is_provably_undispatched(JSONRPC_OP_SUSPENDED), 1);
-    /* The warm-load allowlist test is `_resolve_entrypoint_script`'s first
-     * statement, ahead of the module import and of the target CLI's `main`.
-     * A 0 here puts every non-allowlisted name back on a `.cmd` interpreter
-     * trampoline -- the second entrypoint the 2026-08-29 ruling deletes. */
+    
     check_int("classify/-32007_not_warm_loadable",
               is_provably_undispatched(JSONRPC_ENTRYPOINT_NOT_WARM_LOADABLE), 1);
-    /* The settings-home comparison is one arm of one `if` in `_serve_line`,
-     * whose other arm is the dispatch call -- refusing proves non-dispatch.
-     * A 0 here fails the invocation with -32004 instead of running it cold
-     * in the caller's own environment, which is where the home the caller
-     * named actually resolves. */
+    
     check_int("classify/-32008_settings_home_mismatch",
               is_provably_undispatched(JSONRPC_SETTINGS_HOME_MISMATCH), 1);
     check_int("classify/-32602_invalid_params", is_provably_undispatched(-32602), 0);
@@ -209,9 +180,7 @@ int main(void) {
     check_int("classify/0", is_provably_undispatched(0), 0);
     check_int("classify/unknown", is_provably_undispatched(-31337), 0);
 
-    /* ---- 5. The refusal envelope, including escaping of a detail that
-     * carries every character JSON requires escaped. A malformed envelope
-     * here is a caller that cannot read why its op was refused. */
+    
     {
         buf_t env;
         if (!buf_init(&env, 512)) { printf("FAIL buf_init\n"); return 1; }
@@ -225,9 +194,7 @@ int main(void) {
             failures++;
             printf("FAIL envelope/trailing_newline\n");
         }
-        /* Round-trip it through the reader: the envelope this door emits
-         * must be one this door could read back as an error carrying
-         * -32004, and -32004 must NOT be re-runnable. */
+        
         result_fields_t rf;
         int have_error = 0;
         long code = 0;
@@ -241,12 +208,7 @@ int main(void) {
         free(env.data);
     }
 
-    /* ---- 6. The stdin-bound params route (door_core.h). A door that
-     * misses this shape delivers the request warm, where the payload's
-     * stream does not exist -- and the failure surfaces post-delivery, as
-     * a -32004 telling the caller a mutation may have completed. A door
-     * that over-matches it pays a cold spawn for a route that works warm.
-     * Both directions are asserted. */
+    
     {
         const char *pair[] = {"door.exe", "ping", "--params-file", "-"};
         check_int("params_stdin/separated_pair",
@@ -264,19 +226,17 @@ int main(void) {
         check_int("params_stdin/real_path_is_not_stdin",
                   door_argv_declares_params_stdin(4, real_file), 0);
 
-        /* A trailing bare flag is argparse's error to report; falling
-         * through cold for it would only relocate the same message. */
+        
         const char *trailing[] = {"door.exe", "ping", "--params-file"};
         check_int("params_stdin/trailing_bare_flag",
                   door_argv_declares_params_stdin(3, trailing), 0);
 
-        /* A lone `-` that no `--params-file` introduces. */
+        
         const char *lone_dash[] = {"door.exe", "ping", "-"};
         check_int("params_stdin/lone_dash",
                   door_argv_declares_params_stdin(3, lone_dash), 0);
 
-        /* argv[0] is never forwarded, so an image path that happens to
-         * spell the flag is not a caller declaration. */
+        
         const char *argv0_only[] = {"--params-file=-"};
         check_int("params_stdin/argv0_excluded",
                   door_argv_declares_params_stdin(1, argv0_only), 0);
@@ -289,11 +249,7 @@ int main(void) {
                   door_argv_declares_params_stdin(3, NULL), 0);
     }
 
-    /* ---- 6b. The advisory hook-mode flag (door_core.h). A door that
-     * misses this shape wraps a legitimately silent advisory row's cold
-     * fall-through back into `emit_hook_pass_loudly`'s loud envelope; a
-     * door that over-matches it silences a guard row that should have
-     * stayed loud. */
+    
     {
         const char *before_op[] = {"door.exe", "--advisory", "hooks.some_hook"};
         check_int("advisory/flag_before_op",
@@ -303,8 +259,7 @@ int main(void) {
         check_int("advisory/no_flag_is_not_advisory",
                   door_argv_declares_advisory(2, guard), 0);
 
-        /* argv[0] is never forwarded, so an image path that happens to
-         * spell the flag is not a caller declaration. */
+        
         const char *argv0_only[] = {"--advisory"};
         check_int("advisory/argv0_excluded",
                   door_argv_declares_advisory(1, argv0_only), 0);
@@ -313,31 +268,20 @@ int main(void) {
                   door_argv_declares_advisory(2, NULL), 0);
     }
 
-    /* ---- 7. The stdin-reading basename gate (door_core.h). Mirrors
-     * check 6's shape: a door that misses a listed name delivers a
-     * stdin-reading entrypoint warm, where `sys.stdin` is None; a door
-     * that over-matches pays a cold spawn for a route that works warm. */
+    
     {
         check_int("stdin_basename/listed",
                   door_basename_declares_stdin_read("claims-emit"), 1);
 
-        /* Review: coordinator-overengineering-reviewer finding 5 (EM-applied)
-         * -- this used to be duplicated as "unlisted" with an identical call
-         * and expectation; the unresolvable-basename case below is the one
-         * that carries meaning (see its comment), so the plain duplicate was
-         * deleted. */
-
+        
         check_int("stdin_basename/empty_string",
                   door_basename_declares_stdin_read(""), 0);
 
-        /* A prefix of a listed name is the substring bug this shape
-         * invites -- "claims" must not match "claims-emit". */
+        
         check_int("stdin_basename/prefix_of_listed_is_not_a_match",
                   door_basename_declares_stdin_read("claims"), 0);
 
-        /* Comparison policy is exact strcmp (door_core.h's own comment):
-         * a case-variant of a listed name is NOT a match, on either
-         * platform's compile of this shared table. */
+        
         check_int("stdin_basename/case_variant_is_not_a_match",
                   door_basename_declares_stdin_read("Claims-Emit"), 0);
 

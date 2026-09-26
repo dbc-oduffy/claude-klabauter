@@ -65,7 +65,7 @@ from coordinator_core.install.write_surface import (
 )
 from coordinator_core.session.declared_writes import declare_write
 
-GENERATES = []  # appends only to the operator's ~/.zshrc or ~/.bashrc, outside any git repo
+GENERATES = []
 
 _PROG = "install-shell-init-guard-seam"
 
@@ -146,9 +146,6 @@ def resolve_claude_klabauter_clone() -> str:
 
 
 def _shell_coverage_note() -> str:
-    """Which shells the POSIX block this seam writes actually covers, when that
-    is not all of them. Empty on platforms where the rc file IS the operator's
-    shell init."""
     if os.name == "nt" and not os.environ.get("MSYSTEM"):
         return " — POSIX shells only; PowerShell sessions are NOT covered"
     return ""
@@ -239,9 +236,7 @@ def main(argv: List[str]) -> int:
         print(f"shell_init_guard: failed ({exc})")
         return 1
 
-    # DR-276: declared AFTER the write lands, matching the append-integrator-
     # dispositions reference — the contract is a report of what was ACTUALLY
-    # written, not of an intended surface.
     declare_write(rc_path)
 
     print(f"shell_init_guard: installed ({rc_path}{_shell_coverage_note()})")

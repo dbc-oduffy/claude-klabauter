@@ -1,21 +1,3 @@
-"""
-coordinator_core.ops.tests.test_deferral_detect_orphan_memo
-
-Tests for the pure classify_orphan_memos() decision core of the
-"deferral.detect_orphan_memo" op, plus the registered-op wiring (_handler)
-against a tmp_path fixture repo tree.
-
-Coverage (acceptance-mapped per tasks/hidden-deferral-detectors/design.md §
-Detector 2):
-  (a) open+ask+aging+unowned memo -> flagged ("orphans_found", offer present).
-  (b) open+proposal+aging+OWNED memo (source_memo: reference in a plan,
-      replicating the memo-tool-rebuild ownership pattern) -> NOT flagged.
-  (c) fyi/consult kind -> NOT flagged (kind not in {ask, proposal}).
-  (d) status: actioned -> NOT flagged.
-  (e) age < threshold -> NOT flagged.
-  (f) no inbox dir / empty inbox -> clean, no crash.
-  (g) _handler wiring smoke test via direct call with repo_root=tmp_path.
-"""
 
 from __future__ import annotations
 
@@ -178,12 +160,8 @@ class TestClassifyOrphanMemosCore:
         assert basenames == {"2026-07-17-first.md", "2026-07-16-second.md"}
 
     def test_slug_substring_inside_unrelated_word_not_owned(self):
-        """A generic slug must not match as
-        a plain substring of an unrelated longer word; the match has to be
-        word/token-boundary-anchored."""
         basename = "2026-07-17-list.md"
         memos = [_memo(basename, kind="ask")]
-        # "list" is a substring of "checklist" but not a word-boundary match.
         owning_text = "See the project checklist for details.\n"
         result = classify_orphan_memos(memos, owning_text=owning_text, today=TODAY)
         assert result["state"] == "orphans_found"
@@ -196,11 +174,6 @@ class TestClassifyOrphanMemosCore:
         assert result == {"state": "clean"}
 
     def test_basename_anchored_match_still_owns(self):
-        """Basename false-positive collision is structurally rare (hyphens
-        in the basename already create word boundaries around most
-        embeddings), so this pins the anchoring is applied without
-        regressing the legitimate-match path — code-reviewer Finding 2's
-        "anchor it too if cheap" for the basename branch."""
         basename = "2026-07-17-widget.md"
         memos = [_memo(basename, kind="ask")]
         owning_text = f"source_memo: {basename}\n"
@@ -208,9 +181,6 @@ class TestClassifyOrphanMemosCore:
         assert result == {"state": "clean"}
 
     def test_future_created_date_still_flagged_not_silently_clean(self):
-        """A fat-fingered future `created:`
-        date yields negative age_days; it must not silently suppress a real
-        orphan by never clearing the age threshold."""
         memos = [_memo("2026-07-17-future.md", kind="ask", created="2099-01-01")]
         result = classify_orphan_memos(memos, owning_text="", today=TODAY)
         assert result["state"] == "orphans_found"
@@ -295,17 +265,11 @@ class TestReadOwningText:
 
 
 class TestHandoffOwnershipScoping:
-    """A memo merely name-dropped in
-    passing by a handoff must NOT read as OWNED via the loose topic-slug
-    match; only a full-basename reference in a handoff counts."""
 
     def test_slug_name_drop_in_handoff_does_not_own(self):
         basename = "2026-07-17-some-topic-slug.md"
         memos = [_memo(basename, kind="ask")]
         full_owning_text = "Handoff prose: read the some-topic-slug memo, noted it.\n"
-        # owning_text_slug excludes handoffs (production _handler behavior);
-        # here we simulate that by passing an empty slug-eligible blob while
-        # the full (basename-eligible) blob still contains the handoff prose.
         result = classify_orphan_memos(
             memos, owning_text=full_owning_text, today=TODAY, owning_text_slug=""
         )
@@ -321,9 +285,6 @@ class TestHandoffOwnershipScoping:
         assert result == {"state": "clean"}
 
     def test_handler_end_to_end_handoff_name_drop_not_owned(self, tmp_path):
-        """End-to-end via _handler: a handoff that only name-drops the
-        memo's topic slug in prose (no full basename, no plans/decisions
-        reference) must NOT suppress the orphan finding."""
         basename = "2026-07-17-name-dropped.md"
         inbox = tmp_path / "cross-repo" / "inbox"
         _write_memo(inbox, basename, kind="ask", status="open", created="2026-07-17")
@@ -411,9 +372,6 @@ class TestHandlerWiring:
         assert result == {"state": "clean"}
 
     def test_string_age_threshold_param_coerced_via_handler(self, tmp_path):
-        """age_threshold_days must be coerced to
-        int; a string (plausible on the standalone `python3 -m` path) would
-        otherwise TypeError on `age_days < age_threshold_days`."""
         inbox = tmp_path / "cross-repo" / "inbox"
         _write_memo(inbox, "2026-07-17-str-threshold.md", kind="ask", status="open",
                     created="2026-07-17")
@@ -429,18 +387,10 @@ class TestHandlerWiring:
             {"today": "2026-07-21", "age_threshold_days": "not-a-number"},
             repo_root=tmp_path,
         )
-        # falls back to the default threshold (3d); memo is 4d old -> flagged.
         assert result["state"] == "orphans_found"
 
 
-# ---------------------------------------------------------------------------
-# Unscannable owning-artifact directory — silent-success guard
-# (silent-enumeration audit). Path.glob() silently swallows PermissionError
-# even on a flat, non-recursive pattern (empirically re-verified: a
-# chmod-000 dir yields an empty iterator from glob(), no exception) — a
-# dropped owning dir must not read as "this memo has no owning artifact"
 # (a false ORPHANED verdict); it must downgrade to "indeterminate".
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(
@@ -469,10 +419,6 @@ def test_read_owning_text_unreadable_plans_dir_reports_scan_error(tmp_path):
     reason="chmod 0o000 permission denial is not reliable on Windows or as root",
 )
 def test_handler_downgrades_to_indeterminate_when_owning_dir_unreadable(tmp_path):
-    """A dropped docs/plans/ (the actual owning artifact) must not read as
-    a confident orphan — the memo IS owned by a plan under the unscanned
-    directory, but the scan failure must surface as indeterminate, not a
-    silently-wrong "orphans_found" OR a silently-wrong "clean"."""
     basename = "2026-07-17-would-be-owned.md"
     inbox = tmp_path / "cross-repo" / "inbox"
     _write_memo(inbox, basename, kind="ask", status="open", created="2026-07-17")
@@ -500,19 +446,6 @@ def test_handler_state_clean_when_scan_fully_succeeds(tmp_path):
     assert result == {"state": "clean"}
 
 
-# ---------------------------------------------------------------------------
-# Unscannable cross-repo/inbox/ — silent-enumeration audit for the PRIMARY
-# input surface (Review: code-reviewer Finding 2). `os.listdir` DOES raise
-# `PermissionError` correctly here (unlike glob()), but the previous
-# `_read_inbox_memos` converted that raised exception into a bare `[]` with
-# zero signal propagated to `_handler`, so `classify_orphan_memos([], ...)`
-# returned a confident "clean" verdict for a scan that never actually ran —
-# a much higher-severity miss than an unreadable owning-artifact dir, since
-# it silently suppresses the entire detector rather than merely risking a
-# false orphan.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.skipif(
     sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
     reason="chmod 0o000 permission denial is not reliable on Windows or as root",
@@ -538,9 +471,6 @@ def test_read_inbox_memos_unreadable_dir_reports_degraded(tmp_path):
     reason="chmod 0o000 permission denial is not reliable on Windows or as root",
 )
 def test_handler_downgrades_to_indeterminate_when_inbox_unreadable(tmp_path):
-    """An unreadable cross-repo/inbox/ must downgrade the result to
-    "indeterminate", NEVER a confident "clean" — a dropped inbox means the
-    detector cannot even enumerate its primary input surface."""
     inbox = tmp_path / "cross-repo" / "inbox"
     inbox.mkdir(parents=True)
     (inbox / "2026-07-21-would-be-orphan.md").write_text("unused", encoding="utf-8")

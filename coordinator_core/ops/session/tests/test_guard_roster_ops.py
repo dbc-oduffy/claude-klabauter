@@ -33,13 +33,8 @@ from coordinator_core.ops.session.guard_roster_ops import (
     list_ported_advisory_ops,
 )
 
-# `test_list_ported_advisory_ops_is_exhaustive_under_lazy_ops_in_a_fresh_interpreter`
-# spawns a real `sys.executable -c` fresh interpreter because the
-# exhaustiveness property -- that `list_ported_advisory_ops` still resolves
 # all six ops when `_REGISTRY` starts empty -- only exists in a process with
 # no prior op imports, which no same-process mock can reproduce. The spawn ratchet's `_BASELINE` is
-# shrink-only pre-existing residue and is explicitly not the route for this
-# file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -68,7 +63,6 @@ def test_list_ported_advisory_ops_returns_all_six_ops_as_plain_data():
         assert entry.module
         assert entry.qualname
 
-    # Plain-data check: JSON-serialisable after a trivial coercion.
     plain = [
         {"id": e.id, "module": e.module, "qualname": e.qualname} for e in entries
     ]
@@ -107,9 +101,6 @@ def test_list_ported_advisory_ops_is_exhaustive_under_lazy_ops_in_a_fresh_interp
 
 
 def test_unresolvable_advisory_op_raises_rather_than_truncating(monkeypatch):
-    """A caller must be able to tell "no advisory ops" from "eager
-    resolution failed" -- simulate by monkeypatching `get_op_handler` to
-    return None for one name, never by breaking the real registry."""
     from coordinator_core import ipc as _ipc
 
     real_get_op_handler = _ipc.get_op_handler
@@ -135,9 +126,6 @@ def test_unresolvable_advisory_op_raises_rather_than_truncating(monkeypatch):
 
 
 def test_eager_import_failure_raises_advisory_roster_unavailable(monkeypatch):
-    """The other named failure mode: eager import itself raising must also
-    surface as `AdvisoryRosterUnavailable`, not propagate a bare exception
-    or silently return a short/empty tuple."""
 
     def _boom():
         raise RuntimeError("synthetic eager-import failure for this test")

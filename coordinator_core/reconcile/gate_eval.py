@@ -581,39 +581,16 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from coordinator_core.frontmatter.baton_class import canonical_kind
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 
-#: deployment_state values that stop re-evaluation of a blocker edge (mirrors the
-#: live `deployment_state` enum's terminal subset). `abandoned`/`continued`/`closed`
-#: are terminal but do NOT clear a gate — see CLEAR predicate (rule 1).
 #: SSOT: coordinator_core.lifecycle_constants.HANDOFF_TERMINAL_DEPLOYMENT.
 _TERMINAL_STATES: frozenset = HANDOFF_TERMINAL_DEPLOYMENT
 
 _SHIPPED_STATE = "shipped"
 _ABANDONED_STATE = "abandoned"
-#: DR-084 dual-vocabulary, intentionally permanent: `abandoned` (old) sits
-#: alongside `continued`/`closed` (new). All three are terminal-but-not-shipped:
-#: rule (2) treats any of them identically (never clears, always surfaces) —
-#: dual-tolerant read, no write path in this module. See
-#: coordinator_core/lifecycle_constants.py module docstring for the exit
-#: condition (9d00b459 is the incident of record).
 _NON_SHIPPED_TERMINAL_STATES: frozenset = frozenset(
     {_ABANDONED_STATE, "continued", "closed"}
 )
 
 
-#: Durable `handoff_id` shape (see `handoff_transition.py::_resolve_blocker_
-#: deployment_state`, the act-time mutating resolver this compute-time index must
-#: agree with): `hnd-<slug>-<6-hex>`. Pattern-fenced, so a `blocked_by` entry in
-#: this shape is discriminable WITHOUT a lookup — it can only ever be a durable
-#: `handoff_id`, never a `stub_id`/path-stem `id` (those never start with `hnd-`
-#: followed by a 6-hex suffix; verified against today's `sat`/`qsub`/`strang`
-#: roadmap families, none of which use this shape).
-#: Review: code-reviewer (Finding 1, P1) — negative lookahead excludes
-#: placeholder-derived ids. A scaffold-minted id (`hnd-placeholder-replace-with-...-<6-hex>`)
-#: is otherwise well-formed and would resolve against a `blocked_by` entry,
-#: silently clearing it instead of leaving it dangling — the false-clear class
-#: `handoff.schema.json`'s narrow closes only at schema-validation time, not at
-#: this compute-time resolver. See
-#: cross-repo/inbox/2026-08-05-doe-claude-em-placeholder-id-minting-fix-unfiled.md.
 _HANDOFF_ID_PATTERN = re.compile(r"^hnd-(?!placeholder-replace-with)[a-z0-9-]+-[0-9a-f]{6}$")
 
 
@@ -630,20 +607,10 @@ def _path_basename(path: Any) -> Optional[str]:
     return path.replace("\\", "/").rsplit("/", 1)[-1]
 
 
-#: A record whose `deployment_state` says the chain has moved past it. Referenced
-#: by `collapse_to_chain_heads` below and by `_chase_continuation`'s own hop logic.
 _CONTINUED_STATE = "continued"
 
 
 def _predecessor_refs(record: Dict[str, Any]) -> List[str]:
-    """Every path-shaped predecessor reference a handoff record carries.
-
-    `predecessor` (the primary continuation up-edge) plus every entry of
-    `additional_predecessors` (the fan-in legs). The literal `none` is the
-    scaffolder's no-predecessor sentinel (`coordinator-doc-new --type handoff`
-    emits `predecessor: none` when the flag is not passed), never a path, and is
-    excluded here rather than at each call site.
-    """
     values: List[Any] = [record.get("predecessor")]
     extra = record.get("additional_predecessors")
     if isinstance(extra, list):
@@ -724,24 +691,6 @@ def collapse_to_chain_heads(records: Sequence[Dict[str, Any]]) -> List[Dict[str,
 
 
 class _TypedHandoffIndex:
-    """Prefix-discriminated two-index resolver: durable `handoff_id` vs `stub_id`/`id`.
-
-    Mirrors `handoff_transition.py::_resolve_blocker_deployment_state`'s act-time
-    match (`blocker_id in (fm_dict.get("stub_id"), fm_dict.get("handoff_id"))`) at
-    compute time — the two resolvers must agree, or the gate index reads a baton
-    as permanently dangling while the mutating path resolves it fine (the defect
-    this class fixes). Deliberately NOT a single widened flat dict: a `stub_id`
-    namespace (unprefixed per-roadmap-family, e.g. `"01"`) and a `handoff_id`
-    namespace (globally-unique, `hnd-`-prefixed) are two different key spaces: the
-    former is already a documented collision hazard (`_index_by_id`, two families
-    sharing an unprefixed stub_id → last-write-wins), and merging a THIRD key
-    source (`handoff_id`) into that hazard would let a durable id collide with an
-    unrelated stub_id and silently resolve the wrong handoff's `deployment_state`
-    (a false clear or false block, no error, no surface). Keeping the two
-    namespaces in separate dicts and routing lookups by the query key's own shape
-    avoids that collision entirely — a `hnd-...` key can never mean a stub_id, so
-    it never competes for the same slot.
-    """
 
     __slots__ = ("_by_handoff_id", "_by_stub_id", "_by_path_basename")
 
@@ -828,73 +777,17 @@ def _index_by_id(handoffs: Sequence[Dict[str, Any]]) -> "_TypedHandoffIndex":
         hid = h.get("id") or h.get("stub_id")
         if isinstance(hid, str) and hid:
             stub_candidates.setdefault(hid, []).append(h)
-        # C5 continued_into path-fallback support (`get_by_path`): index
-        # whatever path-shaped field the caller's collector attached
-        # (`_path` for the live set; a generic `path` fallback for any other
-        # caller shape). Ambiguous basenames intentionally collide
-        # last-write-wins here, same posture as `by_stub_id` above — ambiguity
-        # is a caller data-collision, not this index's job to disambiguate.
         basename = _path_basename(h.get("_path")) or _path_basename(h.get("path"))
         if basename:
             by_path_basename[basename] = h
     # One `stub_id` names a whole CONTINUATION CHAIN, not one record, so the slot
-    # is resolved from the collapsed head set (`collapse_to_chain_heads`) rather
-    # than by whichever record the caller's walker appended last. That ordering
-    # was never a decision: `_collect_all_handoffs_for_gate_index` appends the
-    # archived half AFTER the live half, so a superseded record beat the live head
-    # on every chain — `_has_asymmetry` then read the head's real `blocks:` list
-    # off a record that had been authored `blocks: []`, and reported a symmetric
-    # graph as a data defect. `[-1]` preserves the documented last-write-wins
-    # posture for whatever survives the collapse: a group with more than one head
-    # is a genuine cross-family `stub_id` collision (this function's docstring
-    # below), unchanged by this and still not detected here.
     for hid, candidates in stub_candidates.items():
         by_stub_id[hid] = collapse_to_chain_heads(candidates)[-1]
     return _TypedHandoffIndex(by_handoff_id, by_stub_id, by_path_basename)
 
 
-#: C13 (docs/plans/2026-08-25-reconcile-open-comes-back-under-the-bar.md § C13):
-#: `_index_by_id(live_and_archived_handoffs)` was being rebuilt from scratch on
-#: EVERY `evaluate_gate`/`evaluate_gate_triage` call over the SAME corpus list
-#: within one sweep (measured: 7 rebuilds over 21 `awaiting_gate` handoffs in one
-#: warm sweep, 29 ms cumulative) — the walk producing `live_and_archived_handoffs`
-#: itself was already built once per sweep by the caller; only the INDEX over
-#: that walk was not. `handoff_reconcile.py`'s sweep loop (the caller driving this
-#: redundancy) is outside this chunk's writes: scope — see the module docstring's
-#: writes-scope note — so this memo lives here, INSIDE gate_eval.py, keyed on the
-#: caller-supplied list's OWN object identity rather than requiring every caller
-#: to thread an extra parameter through. An explicit passed-in index (the
-#: dispatch brief's stated preference) would need every call site across
-#: `handoff_reconcile.py`/`handoff_gate_aging.py`/`ac27_differential_oracle.py` to
-#: change; this module-level memo achieves the identical "build once per sweep"
-#: outcome without widening this chunk's writes: scope, at the cost the brief
-#: itself calls out for a module-level cache: proving a second sweep's corpus can
-#: never be served the first sweep's stale index.
-#:
-#: SCOPING (never-leak-across-sweeps). Keyed on `id(handoffs)`, but — unlike a
-#: naive `id()`-keyed dict — each entry ALSO holds a STRONG reference to the
-#: `handoffs` list object itself (`Tuple[handoffs, index]`, never just the
-#: index). A plain `list` is not weak-referenceable in CPython (`weakref.ref`/
-#: `weakref.finalize` on a bare `list` raises `TypeError`), so the usual
-#: weakref-eviction idiom is unavailable here; holding the strong reference
-#: instead is what makes `id()` reuse safe: CPython can only reuse an id after
-#: an object's refcount reaches zero, and this cache's own strong reference
-#: means that can never happen while the entry is still present under that
 #: key. The eviction path (`_GATE_INDEX_MEMO_MAXSIZE`, LRU via `OrderedDict`)
-#: is therefore the ONLY way an entry's strong reference is ever dropped — and
-#: dropping the reference and dropping the key happen in the exact same
-#: `popitem` call, so the id can never be "free to be reused" while a stale
-#: key for it still lives in the dict. `handoff_reconcile.py`'s `_handler`
-#: constructs a brand-new `all_handoffs` list via `_collect_all_handoffs_for_
-#: gate_index` on every sweep invocation, so a second sweep's corpus is a
 #: DIFFERENT object with a DIFFERENT `id()` in the overwhelmingly common case
-#: regardless of this cache's eviction policy; the strong-reference-plus-LRU
-#: design is the defense for the narrower id-reuse edge case, not the primary
-#: mechanism keeping sweeps apart. The `entry[0] is handoffs` identity check
-#: in `_memoized_index_by_id` is belt-and-braces on top of that: even if some
-#: future caller's id() collision logic changed, a look-up that hits a
-#: differently-identified object at the same key rebuilds rather than trusting
-#: the key alone.
 _GATE_INDEX_MEMO_MAXSIZE = 8
 _index_by_id_memo: "OrderedDict[int, Tuple[Sequence[Dict[str, Any]], _TypedHandoffIndex]]" = (
     OrderedDict()
@@ -927,7 +820,6 @@ def _memoized_index_by_id(handoffs: Sequence[Dict[str, Any]]) -> "_TypedHandoffI
 
 
 def _blocker_deployment_state(blocker: Optional[Dict[str, Any]]) -> Optional[str]:
-    """Return a resolved blocker's `deployment_state`, or None when unresolved."""
     if blocker is None:
         return None
     state = blocker.get("deployment_state")
@@ -964,15 +856,7 @@ def _has_asymmetry(
         if blocker is None:
             continue
         if canonical_kind(blocker.get("kind")) != "roadmap-baton":
-            # C4 widened-eligibility guard: the blocks:/blocked_by symmetry
             # check is a ROADMAP-kind authoring convention (a roadmap blocker
-            # is expected to list every handoff it blocks). A blocker of any
-            # OTHER kind was never expected to maintain that back-reference
-            # at all — widening `evaluate_gate`'s eligibility to ANY kind
-            # would otherwise fire a false-positive asymmetry on every such
-            # edge (a blocker simply not authoring `blocks:` reads
-            # identically to one that authored it wrong). Only a
-            # roadmap-kind blocker is held to the convention.
             continue
         blocker_blocks = blocker.get("blocks") or []
         if not isinstance(blocker_blocks, list):
@@ -985,19 +869,6 @@ def _has_asymmetry(
 def _unresolved_reason(
     unresolved_ids: List[str], scan_incomplete: bool, scan_errors: Sequence[str]
 ) -> str:
-    """Evidence text for a `blocked_by` id absent from the live+archived index.
-
-    # --- Tier 2 (behaviour change -- PM sign-off required) ---
-    Absence from the index is ambiguous: either the id is a genuine dangling ref
-    (data defect), or the archive/handoffs/ subtree behind the index could not be
-    fully scanned (`handoff_reconcile.py`'s `scan_incomplete`/`scan_errors`, added
-    94d8251f) and the id's handoff simply wasn't seen. Asserting "dangling ref —
-    data defect" when the true cause is a scan gap is itself misleading to the EM
-    reading `evidence` — the caller ask (2026-07-22) is that this case must read
-    as "can't confirm", not as a confirmed defect, whenever `scan_incomplete` is
-    True. Verdict/clearing behaviour is unchanged either way (still surface/
-    narrow+surface, never clear) — only the reason text differs.
-    """
     if scan_incomplete:
         return (
             f"cannot confirm blocked_by id(s) {unresolved_ids} resolve — archive "
@@ -1008,34 +879,14 @@ def _unresolved_reason(
         f"dangling blocked_by ref(s) — blocker id(s) unresolvable in "
         f"live+archived index: {unresolved_ids}"
     )
-    # --- end Tier 2 ---
 
 
-#: C7 AC8 — the only disposition value this module honors. See module
-#: docstring "C7 AC8" for the full contract.
 _RESOLVED_WITHOUT_BATON = "resolved_without_baton"
 
 
 def _resolved_without_baton_reason(
     blocker_id: str, dispositions: Optional[Dict[str, Any]]
 ) -> Optional[str]:
-    """Operator-authored reason for `blocker_id`'s `resolved_without_baton`
-    disposition, or `None` if none is recorded (or the record doesn't match
-    the exact recognized shape — see module docstring "C7 AC8").
-
-    `dispositions` is the GATED handoff's own `blocked_by_dispositions` dict
-    (never derived, never auto-populated by this module — an operator hand-
-    edit), threaded in by `_evaluate_structured_gate`/`evaluate_gate_triage`
-    from `handoff.get("blocked_by_dispositions")`. Deliberately strict: only
-    `entry["disposition"] == "resolved_without_baton"` exactly is honored —
-    anything else (missing key, typo, a future disposition vocabulary this
-    module doesn't yet recognize, a non-dict entry) returns `None`, so the
-    caller falls back to treating `blocker_id` as an ordinary unresolved
-    (loud) dangling ref. A missing `reason` string still honors the
-    disposition (the marker itself is what stops re-surfacing) but is called
-    out in the returned text so a reason-less disposition is visibly weaker
-    evidence than an authored one.
-    """
     if not isinstance(dispositions, dict):
         return None
     entry = dispositions.get(blocker_id)
@@ -1047,13 +898,6 @@ def _resolved_without_baton_reason(
     return reason if isinstance(reason, str) and reason.strip() else "no reason authored"
 
 
-#: C5 continued_into chase depth cap. `continued` is authored as a one-hop
-#: redirect in every corpus instance observed (lvv-05 -> its dr084 successor,
-#: one hop) — this cap exists purely as a defensive bound against a pathological
-#: multi-hop chain (each hop itself re-continued), not because multi-hop chains
-#: are expected or supported by any authoring convention. Exceeding it surfaces
-#: (rule: chain exceeds depth cap -> SURFACE, do not loop) rather than raising,
-#: matching this module's conservative-never-guess posture everywhere else.
 _MAX_CONTINUATION_CHASE_DEPTH = 8
 
 
@@ -1300,10 +1144,6 @@ def _classify_blocked_by(
                 shipped_shas.append(sha)
                 evidence.append(f"{blocker_id} shipped (shipped_in={sha!r})")
             else:
-                # C6: a `shipped` terminus with no `shipped_in` has no
-                # clearing provenance to record in the paired arrays — it
-                # surfaces via the seventh bucket instead of entering
-                # `shipped_ids` unconditionally (the original defect).
                 unstamped_shipped_ids.append(blocker_id)
                 evidence.append(
                     f"{blocker_id} shipped but carries no shipped_in — never "
@@ -1313,19 +1153,6 @@ def _classify_blocked_by(
                     "there genuinely is no ship commit"
                 )
         elif state == _CONTINUED_STATE:
-            # C5: `continued` is terminal-but-not-discharge (rule 2) — but
-            # unlike `abandoned`/`closed`, it carries a `continued_into`
-            # pointer to where the work actually went. Chase it to its
-            # terminus before deciding: a `shipped` terminus DOES clear this
-            # edge (with both hops named in evidence, never in the
-            # id/sha arrays — see `_chase_continuation`'s docstring); any
-            # other outcome (still open, depth cap, cycle, unresolved
-            # redirect) falls back to the exact same non-clearing treatment
-            # `abandoned`/`closed` already get. Act-time re-verification is
-            # unaffected — `handoff_transition.py`'s
-            # `_resolve_blocker_deployment_state` re-checks the blocker (and,
-            # per this same rule, must independently re-chase) at mutation
-            # time regardless of what this compute-time pass concluded.
             chase = _chase_continuation(blocker_id, blocker, all_index)
             evidence.extend(chase["evidence"])
             if chase["outcome"] == "shipped":
@@ -1334,9 +1161,6 @@ def _classify_blocked_by(
                     shipped_ids.append(blocker_id)
                     shipped_shas.append(sha)
                 else:
-                    # C6: same rule as the plain-shipped branch above, for a
-                    # `continued` blocker whose chased terminus is shipped
-                    # with no `shipped_in` of its own.
                     unstamped_shipped_ids.append(blocker_id)
                     evidence.append(
                         f"{blocker_id} continued -> chased terminus shipped "
@@ -1472,26 +1296,11 @@ def _evaluate_structured_gate(
     if unresolved_ids:
         evidence.append(_unresolved_reason(unresolved_ids, scan_incomplete, scan_errors))
 
-    # C7 AC8: disposed_ids ALWAYS fold into remaining_blockers alongside
-    # abandoned/still-open/unresolved — a disposition never clears/narrows a
-    # gate by itself (module docstring "C7 AC8"). Because disposed_ids can
-    # only ever ADD to remaining_blockers, never subtract from it, the
-    # "if not remaining_blockers: clear" branch below cannot fire on a
-    # disposition-only remainder — this is structural, not a separate guard.
-    # C6: unstamped_shipped_ids folds in on the same principle — a shipped
-    # terminus with no shipped_in has no clearing provenance to record, so
-    # it can only ever ADD to remaining_blockers, never subtract from it.
     remaining_blockers = (
         abandoned_ids + still_open_ids + unresolved_ids + disposed_ids + unstamped_shipped_ids
     )
 
     if abandoned_ids and not shipped_ids:
-        # Slice-A review Finding 3 (P2): abandoned blocker(s) exist but NOTHING
-        # is actually shipped — there is no edge to narrow (cleared_by_shas
-        # would be empty). A "narrow" verdict that narrows nothing is
-        # misleading to the C8 consumer's verdict taxonomy; this is pure
-        # surface (still_open_ids may be non-empty here — that's fine, they
-        # remain legitimately gated, only the abandoned id needs surfacing).
         return {
             "handoff_id": handoff_id,
             "verdict": "surface",
@@ -1515,10 +1324,6 @@ def _evaluate_structured_gate(
         }
 
     if unstamped_shipped_ids and not shipped_ids:
-        # C6: mirrors the abandoned-and-not-shipped branch above — a shipped-
-        # but-unstamped blocker exists but NOTHING is actually clearable
-        # (cleared_by_shas would be empty), so there is no edge to narrow.
-        # Pure surface (still_open_ids may be non-empty here — that's fine).
         return {
             "handoff_id": handoff_id,
             "verdict": "surface",
@@ -1548,27 +1353,11 @@ def _evaluate_structured_gate(
             "remaining_blockers": remaining_blockers,
             "cleared_blocker_ids": list(shipped_ids),
             "evidence": evidence,
-            # 2026-07-20 claude-central-em false-positive memo, Defect 1
-            # recommendation: parity with the abandoned-id composite above — a
-            # narrow verdict whose remaining_blockers includes a dangling
-            # (unresolvable) ref must not silently rot un-surfaced either.
-            # C6: same parity for a co-blocker that shipped with no
             # shipped_in — the MIXED-CASE RESIDUAL named in the chunk spec:
-            # this narrow verdict applies (narrowing on the with-sha
-            # blocker) but must not leave the no-sha id rotting un-surfaced.
             "also_surface": bool(unresolved_ids or unstamped_shipped_ids),
         }
 
     if unresolved_ids:
-        # Defect 1 recommendation: a `blocked_by` id that resolves nowhere in the
-        # live+archived index is (absent a scan gap) a genuine data defect
-        # (dangling ref), not a benign steady state. Falling through to
-        # `not-cleared` here would silently swallow it — `not-cleared` is
-        # deliberately NOT surfaced by `handoff_reconcile.py` (benign "still
-        # gated, no action" path). Return `surface` instead — `evidence` already
-        # carries the distinct reason line from `_unresolved_reason` (dangling-ref
-        # framing, or scan-gap framing when `scan_incomplete`) — so C4 appends
-        # this to `surfaced[]` for EM judgment either way.
         return {
             "handoff_id": handoff_id,
             "verdict": "surface",
@@ -1594,18 +1383,6 @@ def _evaluate_prose_gate(
     handoff: Dict[str, Any],
     witness_candidates: Sequence[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """Evaluate the PROSE `gate_dependency` fallback path for a non-roadmap handoff.
-
-    Conservative resolution: `witness_candidates` is the caller-supplied set of
-    concrete, checkable pointers the handoff body/frontmatter names (e.g. a sibling
-    handoff/plan `id` the body cites plus its resolved `deployment_state`/`shipped_in`).
-    - Zero candidates -> surface (no concrete pointer given, do not guess).
-    - Exactly one candidate whose deployment_state == shipped -> clear.
-    - Exactly one candidate not yet shipped -> surface (still-gated is EM judgment
-      for prose gates per DoE alignment reply #3 — the op never auto-transitions a
-      prose-path verdict regardless of clear/surface).
-    - More than one candidate -> surface (ambiguous resolution, never guess).
-    """
     handoff_id = handoff.get("id", "<unknown>")
     gate_dependency = handoff.get("gate_dependency", "")
 
@@ -1668,15 +1445,6 @@ def _evaluate_prose_gate(
 
 
 def _gate_evidence_status_to_verdict(status: str) -> str:
-    """Project `reduce_gate_evidence`'s four-way `status` onto `evaluate_gate`'s
-    own clear/surface vocabulary (C6). The prose path has always been binary
-    (`_evaluate_prose_gate` returns only `clear`/`surface`, never `narrow` —
-    there is no partial-list-of-witnesses concept to narrow against, unlike
-    the structured `blocked_by` path) — a `gate_evidence`-driven prose
-    override preserves that same binary shape rather than inventing a new
-    partial-clear state: only `freed` maps to `clear`; `still-blocked`,
-    `indeterminate`, and `review-due` all map to `surface` (never guess which
-    of those three "almost cleared" states is safe to treat as narrow)."""
     return "clear" if status == "freed" else "surface"
 
 
@@ -1792,11 +1560,6 @@ def evaluate_gate(
     sentinel_field = _scaffold_sentinel_field(handoff)
     if sentinel_field is not None:
         # Rule SC (C2, module docstring "C2 SCAFFOLD SENTINEL"): checked
-        # BEFORE every other rule, including rule 0's covers_prose witness —
-        # an unfilled scaffold placeholder is not a human-named gate, so
-        # there is nothing for a gate_evidence block to legitimately cover.
-        # Never `clear` — see module docstring for why that would be strictly
-        # worse than the C1 defect this exists to fix.
         return {
             "handoff_id": handoff_id,
             "verdict": "surface",
@@ -1817,14 +1580,6 @@ def evaluate_gate(
         # BLOCKING_NOTES DOMINANCE — DEMOTED (C4 gate-dependency-template-
         # emission-spec chunk; module docstring "BLOCKING_NOTES DOMINANCE"):
         # `blocking_notes` no longer overrides a SATISFIED STRUCTURED GRAPH —
-        # it now only prevents an EMPTY `blocked_by` from reading as
-        # "nothing gates this" (the vacuous-clear case rule 3 would otherwise
-        # take, and the original Windows-box motivating defect this dominance
-        # exists to fix). `structured_eligible` is False here, so
-        # `blocked_by` is empty by construction — there is no structured
-        # graph for this branch to defer to, and `_all_blocked_by_shipped_
-        # evidence` would return None unconditionally on an empty list (C3
-        # AC3.3), so no staleness addendum is possible or attempted here.
         return {
             "handoff_id": handoff_id,
             "verdict": "surface",
@@ -1841,10 +1596,6 @@ def evaluate_gate(
         }
 
     if has_prose and covers_prose:
-        # Rule 0 (C6): mirrors evaluate_gate_triage's own D2 precedence,
-        # checked first and before structured classification, exactly as
-        # that function checks it — a second, independently-drifting
-        # precedence decision is the sibling-evaluator shape this module
         # exists to avoid (module docstring "C4 RECONCILIATION").
         status, evidence, _leg_results = reduce_gate_evidence(gate_evidence)
         verdict = _gate_evidence_status_to_verdict(status)
@@ -1865,18 +1616,8 @@ def evaluate_gate(
 
     if has_prose and structured_eligible:
         # PROSE-DOMINANCE (C4): reconciled with evaluate_gate_triage's own
-        # precedence rule. Widening eligibility to ANY kind drags the
-        # both-fields population into this mutating evaluator — without this
-        # guard it would silently `clear` a handoff whose real precondition
         # is the untested prose clause. Keys on gate_dependency here — UNTOUCHED
-        # by the C4 (gate-dependency-template-emission-spec) blocking_notes
-        # demotion above: `gate_dependency` dominance still fires unconditionally
-        # whenever `blocked_by` is non-empty, regardless of shipped-state
         # (module docstring "BLOCKING_NOTES DOMINANCE" — only `blocking_notes`
-        # was demoted, never this branch). The verdict itself is STILL always
-        # `surface` here, unconditionally — what C1 (below) adds is that the
-        # all-shipped case now names its own contradiction instead of only
-        # narrating it in prose evidence.
         evidence_lines = [
             f"prose gate_dependency={handoff.get('gate_dependency')!r} present "
             f"alongside blocked_by={list(blocked_by)} — prose gate dominates per "
@@ -1885,13 +1626,6 @@ def evaluate_gate(
         staleness_evidence = _all_blocked_by_shipped_evidence(
             handoff, list(blocked_by), live_and_archived_handoffs
         )
-        # `shipped_blocker_ids` below must mirror the SAME normalized
-        # (str-only) list `_all_blocked_by_shipped_evidence` actually
-        # confirmed all-shipped, not the raw `blocked_by` — otherwise a
-        # non-str member (filtered out inside the helper, Finding 1) would
-        # land in `shipped_blocker_ids` unresolved, breaking the "every
-        # member is, by construction, resolved shipped" invariant the module
-        # docstring documents for this field.
         str_blocked_by = [b for b in blocked_by if isinstance(b, str)]
         result = {
             "handoff_id": handoff_id,
@@ -1908,28 +1642,9 @@ def evaluate_gate(
                 "the prose was never re-checked against that: "
                 + "; ".join(staleness_evidence)
             )
-            # C1 (docs/plans/2026-08-03-gate-dependency-template-emission-
-            # spec.md): the all-shipped case previously appended this
-            # evidence line and then discarded it — no machine-legible
-            # signal recorded that a fully-satisfied structured graph and an
-            # unconditionally-dominating prose clause are now in tension.
-            # `contradiction` names that tension explicitly so a caller (or
-            # an EM scanning `evaluate_gate` output) can find it without
-            # re-parsing evidence prose. It never changes the verdict — a
-            # human, via `handoff.transition gate-recheck --cleared`
-            # (`_gate_recheck` in handoff_transition.py, which retires the
-            # prose non-destructively via `_retire_gate_dependency`), is
-            # still the one who decides stale prose is safe to retire.
             result["contradiction"] = {
                 "kind": "prose-gate-outlived-structured-blockers",
                 "discharge_verb": "handoff.transition gate-recheck --cleared",
-                # Duplicates in `blocked_by` are preserved verbatim here
-                # (Review: code-reviewer, Finding 3, nit) — this mirrors
-                # `blocked_by` itself rather than deduping to a set, since
-                # `shipped_blocker_ids` is documented as "blocked_by, in
-                # blocked_by order" and a caller expecting set semantics
-                # would be reading a different field than the one the
-                # contract doc and DR-266 describe.
                 "shipped_blocker_ids": str_blocked_by,
             }
         return result
@@ -1945,11 +1660,6 @@ def evaluate_gate(
         )
 
     if not has_prose:
-        # Vacuous case (mirrors evaluate_gate_triage's own vacuous-`freed`
-        # branch): blocked_by is empty and there is no prose gate_dependency
-        # either — nothing structurally gates this handoff. LINEAGE IS NOT
-        # GATING (module docstring): predecessor/origin_* fields are never
-        # consulted here — an empty blocked_by is the whole story.
         return {
             "handoff_id": handoff_id,
             "verdict": "clear",
@@ -2010,7 +1720,6 @@ def consumes_gate_evidence(
 
 
 def _has_prose_gate(handoff: Dict[str, Any]) -> bool:
-    """True iff `handoff` carries a non-empty `gate_dependency` one-liner."""
     gate_dependency = handoff.get("gate_dependency")
     return isinstance(gate_dependency, str) and gate_dependency.strip() != ""
 
@@ -2028,12 +1737,8 @@ def _has_blocking_notes(handoff: Dict[str, Any]) -> bool:
     return isinstance(blocking_notes, str) and blocking_notes.strip() != ""
 
 
-#: C2 — `coordinator-doc-new`'s unfilled scaffold default (module docstring
 #: "C2 SCAFFOLD SENTINEL"). The prefix tuple covers the C1 scaffold's own
 #: authored continuation (`PLACEHOLDER — name the condition...`) plus a bare
-#: space separator, without matching a real sentence that merely contains
-#: the word "placeholder" (AC2.3 — see `_is_scaffold_sentinel`, a PREFIX
-#: test, never a substring search).
 _SCAFFOLD_SENTINEL = "PLACEHOLDER"
 _SCAFFOLD_SENTINEL_PREFIXES = ("PLACEHOLDER ", "PLACEHOLDER—", "PLACEHOLDER —")
 
@@ -2057,12 +1762,6 @@ def _is_scaffold_sentinel(value: Any) -> bool:
 
 
 def _scaffold_sentinel_field(handoff: Dict[str, Any]) -> Optional[str]:
-    """Which of `gate_dependency`/`blocking_notes` (if either) carries an
-    unfilled C1 scaffold placeholder — `gate_dependency` checked first,
-    mirroring rule 1's precedence over rule 1a's `blocking_notes`. Returns
-    `None` when neither field is a sentinel (including when a field is
-    empty/whitespace-only, or is authored prose that merely contains the
-    word "placeholder" — see `_is_scaffold_sentinel`)."""
     if _is_scaffold_sentinel(handoff.get("gate_dependency")):
         return "gate_dependency"
     if _is_scaffold_sentinel(handoff.get("blocking_notes")):
@@ -2121,10 +1820,6 @@ def _all_blocked_by_shipped_evidence(
     ) = _classify_blocked_by(
         blocked_by_ids, all_index, handoff.get("blocked_by_dispositions")
     )
-    # C6: a shipped-but-unstamped member (unstamped_shipped_ids) is not
-    # staleness evidence this function can assert either — it has no
-    # clearing provenance, same as an abandoned/unresolved/still-open/
-    # disposed member.
     if abandoned_ids or unresolved_ids or still_open_ids or disposed_ids or unstamped_shipped_ids:
         return None
     if set(shipped_ids) != set(blocked_by_ids):
@@ -2133,11 +1828,6 @@ def _all_blocked_by_shipped_evidence(
 
 
 def _chain_tokens(value: Any) -> List[str]:
-    """Split a completion-log `chain` field into hyphen-delimited tokens.
-
-    Returns `[]` for a non-string/blank value — callers treat that as "no
-    usable chain identity to match against", not a wildcard match.
-    """
     if not isinstance(value, str) or not value.strip():
         return []
     return [t for t in value.strip().split("-") if t]
@@ -2162,24 +1852,6 @@ def _id_is_contiguous_subsequence(id_tokens: Sequence[str], chain_tokens: Sequen
 
 
 def _completion_chain_match_kind(blocker_id: str, chain: Any) -> Optional[str]:
-    """Return `"exact"`, `"fuzzy"`, or `None` for whether a completion-log
-    entry's `chain` field identifies `blocker_id`.
-
-    `"exact"`: `chain == blocker_id` verbatim (e.g. `chain: "strang-02"` for
-    `blocked_by: [strang-02]`) — as solid an identity match as `_index_by_id`'s
-    own exact-key lookup over the handoff corpus; no guessing involved.
-
-    `"fuzzy"`: `blocker_id`'s own hyphen-tokens appear as a contiguous run
-    inside `chain`'s hyphen-tokens, but `chain` itself is a longer, differently-
-    shaped slug (e.g. `chain: "2026-07-04-strang-01-tc3-emission-port-facade-
-    respin"` for `blocked_by: [strang-01]`) — this IS the completion-log
-    corpus's real, observed naming convention (`workstream-complete` authors
-    `chain` as either a bare stub-id or a `<date>-<stub-id-tokens>-<free-text-
-    description>` slug, with no fixed convention chosen consistently across
-    the corpus), but it is a heuristic, not an exact-key match — see
-    `_resolve_blocker_via_completion_log`'s docstring for why this function
-    treats "fuzzy" as evidence-for-a-human, never as auto-resolvable proof.
-    """
     chain_tokens = _chain_tokens(chain)
     if not chain_tokens:
         return None
@@ -2324,34 +1996,10 @@ def _resolve_blocker_via_completion_log(
     return {"resolution": "none", "evidence": None, "candidates": []}
 
 
-#: Equality-checked I/O kinds (C3): `sibling_fact.resolve_leg` observes a
-#: value, this module compares it against the leg's own authored `expected`.
-#: Kebab-case (C1): the ratified authoring form (handoff.schema.json's
-#: `gate_evidence.legs[].kind` closed enum) — a mixed-casing discriminator
-#: is a live typo generator against a closed enum, so this module's own
-#: dispatch vocabulary matches the schema exactly rather than the primitive
-#: snake_case names `sibling_fact`'s internal kind vocabulary still uses
-#: (translated by the caller before this module ever sees a leg).
 _EVIDENCE_EQUALITY_KINDS = frozenset({"file-exists", "frontmatter-field"})
 
-#: Boolean-observed I/O kinds: the caller's re-verification already reduces
-#: to pass/fail (no `expected` value to compare against — there is nothing to
-#: author an "expected" for a re-run pytest node or a re-checked commit SHA),
-#: so `observed is True` alone is the predicate. `commit-ancestor` (C3) is the
-#: original member; the C6 four (`test-node-id`, `probe-op-key`, `commit-sha`,
-#: `sibling-commitment-ref`) join it unchanged from
-#: `coordinator/schemas/cutover.schema.json`'s already-ratified
-#: `confirmed_consumers[].verified_by.kind` discriminated union (DoE-claude,
-#: docs/plans/2026-07-25-cutover-state-machine.md) — this module adopts the
-#: SAME four names rather than inventing a parallel vocabulary for the same
-#: "re-verifiable evidence, not free prose" concept. Resolution (running the
-#: pytest node, re-invoking the op, `git show`-ing the SHA, or reading the
-#: `state/cross-repo-commitments/*.yaml` FK — each a `repo:`-qualified leg,
-#: mirroring `sibling_fact.resolve_leg`'s existing required field for the
-#: other three kinds) is caller-side re-verification, exactly like
 #: `cutover_gate.py`'s `_reverify_*` family; this module remains COMPUTE_ONLY
 #: and performs none of it — see GATE_EVIDENCE PROJECTION in the module
-#: docstring.
 _EVIDENCE_BOOLEAN_KINDS = frozenset(
     {"commit-ancestor", "test-node-id", "probe-op-key", "commit-sha", "sibling-commitment-ref"}
 )
@@ -2669,17 +2317,9 @@ def evaluate_gate_triage(
         "gate_evidence_legs": [],
     }
 
-    # `consult_prose_gates=False`
-    # suppresses this branch entirely so a prose scaffold placeholder never
-    # parks a readiness verdict; every other caller keeps the default `True`
-    # and this line is a no-op for them.
     sentinel_field = _scaffold_sentinel_field(handoff) if consult_prose_gates else None
     if sentinel_field is not None:
         # Rule SC (C2, module docstring "C2 SCAFFOLD SENTINEL"): checked
-        # ahead of every other branch, mirroring `evaluate_gate`'s own
-        # sentinel check — an unfilled scaffold placeholder is never `freed`,
-        # and gets a distinct evidence line instead of the generic
-        # prose/blocking_notes-dominance reason.
         return {
             **base,
             "status": "indeterminate",
@@ -2695,19 +2335,10 @@ def evaluate_gate_triage(
             ],
         }
 
-    # `consult_prose_gates=False`
-    # suppresses the DR-259 demoted-dominance branch below as well, so an
-    # empty `blocked_by` plus a gate NOTE (never a gate) does not read as
-    # `indeterminate`. Default `True` leaves this branch reachable exactly
-    # as before for every other caller.
     if consult_prose_gates and has_blocking_notes and not _is_structured_gate(handoff):
         # BLOCKING_NOTES DOMINANCE — DEMOTED (C4 gate-dependency-template-
         # emission-spec chunk; module docstring "BLOCKING_NOTES DOMINANCE"):
         # `blocking_notes` no longer overrides a SATISFIED STRUCTURED GRAPH —
-        # it only prevents an EMPTY `blocked_by` from reading as vacuously
-        # `freed`. `blocked_by_ids` is empty here by construction
-        # (`_is_structured_gate` is False), mirroring `evaluate_gate`'s own
-        # demotion above.
         blocking_notes = handoff.get("blocking_notes")
         return {
             **base,
@@ -2726,11 +2357,6 @@ def evaluate_gate_triage(
             ],
         }
 
-    # D2 precedence: prose dominates UNLESS gate_evidence explicitly asserts
-    # covers_prose:True, in which case evidence wins and prose is demoted to
-    # commentary. Checked FIRST, before touching structured classification at
-    # all, so the precedence is visible in the code, not merely in branch
-    # ordering of a shared conditional.
     if has_prose and covers_prose:
         status, evidence, leg_results = reduce_gate_evidence(gate_evidence)
         return {
@@ -2749,28 +2375,8 @@ def evaluate_gate_triage(
         }
 
     if has_prose:
-        # Rule 3 precedence, unchanged: a prose gate_dependency, when present
-        # alongside blocked_by and NOT demoted by covers_prose:True, ALWAYS
-        # dominates — indeterminate regardless of structured OR gate_evidence
-        # outcome (a gate_evidence block without covers_prose:True is a
-        # partial backfill and must not silently free the gate — D2a).
-        #
         # CONTRADICTION CARVE-OUT (mirrors evaluate_gate's rule 1, module
-        # docstring "C1"): when EVERY blocked_by member independently
-        # resolves shipped, the dominant prose has gone stale under a
-        # structured graph nobody re-checked it against — the same shape
-        # `evaluate_gate` now names via its `contradiction` key. This
-        # function has no key to add one, so it re-routes the status onto
         # the EXISTING `review-due` member instead of leaving it
-        # indeterminate: `classify_gate` already maps `review-due` to its
-        # own actionable `signal`, already reachable from `scan_triage`'s
-        # rc-1 arm, and already folded into `surface` by `evaluate_gate`'s
-        # own `_gate_evidence_status_to_verdict` — a re-route, not a new
-        # parallel key nobody reads (module docstring "C2" chunk). The
-        # verdict-carrier here is `status`, never a fifth value — same
-        # precondition, same evidence shape as evaluate_gate's contradiction,
-        # keyed on the SAME `_all_blocked_by_shipped_evidence` call so the
-        # two evaluators cannot drift apart.
         staleness_evidence = _all_blocked_by_shipped_evidence(
             handoff, blocked_by_ids, live_and_archived_handoffs
         )
@@ -2827,7 +2433,6 @@ def evaluate_gate_triage(
         }
 
     if not _is_structured_gate(handoff):
-        # Shared predicate (C4) with evaluate_gate's own vacuous-`clear`
         # branch — see module docstring "C4 RECONCILIATION".
         return {
             **base,
@@ -2864,14 +2469,6 @@ def evaluate_gate_triage(
         evidence,
     ) = _classify_blocked_by(blocked_by_ids, all_index, dispositions)
 
-    # Completion-log resolution pass (corpus-gap close): a blocker unresolved
-    # against the handoff-only index may still have durable shipped-evidence
-    # under archive/completed/ (workstream-complete's chain-terminal
-    # completion records — a different schema entirely). Only an unambiguous
-    # EXACT chain match promotes a blocker to shipped_ids; a fuzzy/ambiguous
-    # match stays unresolved but its evidence is surfaced (see
-    # `_resolve_blocker_via_completion_log`'s docstring for the full
-    # exact-vs-fuzzy derivation).
     completion_entries = completion_entries or ()
     still_unresolved_ids: List[str] = []
     for uid in unresolved_ids:
@@ -2928,12 +2525,6 @@ def evaluate_gate_triage(
         }
 
     if disposed_ids:
-        # C7 AC8: a disposed id is neither shipped nor genuinely dangling-
-        # and-unexplained — but a disposition records why a ref won't
-        # resolve, never that the blocked-on work shipped, so this can never
-        # report `freed`. `still-blocked` (not `indeterminate`) so a batch
-        # triage pass doesn't keep re-flagging an already-dispositioned edge
-        # for human attention on every run.
         return {
             **result,
             "status": "still-blocked",
@@ -2947,13 +2538,6 @@ def evaluate_gate_triage(
         }
 
     if unstamped_shipped_ids:
-        # C6: a shipped-but-unstamped terminus (direct or chased) has no
-        # clearing provenance to record — `still-blocked` (not
-        # `indeterminate`, and never through `dead_ids`'s reason text, which
-        # would falsely assert the blocker "never shipped") so a batch
-        # triage pass keeps flagging it for the operator's terminating
-        # action rather than re-surfacing it as an ambiguous dead blocker on
-        # every run.
         return {
             **result,
             "status": "still-blocked",
@@ -2976,36 +2560,15 @@ def evaluate_gate_triage(
 
 
 #: `deployment_state` values that are lifecycle POSITIONS, not readiness (PM
-#: ruling 2026-08-19, § Anti-scope) — `derive_readiness` has no opinion on any
-#: of these and returns (None, None), basis="off-gate-axis". Distinct from
 #: `HANDOFF_TERMINAL_DEPLOYMENT` (the blocked_by-classification terminal set):
-#: `in_flight` is NOT terminal there but IS off the readiness axis here, and
-#: `awaiting_gate`/`ready_to_fire` are ON the readiness axis but not terminal.
 _READINESS_OFF_AXIS_STATES: frozenset = frozenset(
     {"in_flight", "shipped", "continued", "closed"}
 )
 
 #: The `basis` vocabulary `derive_readiness` emits — the CROSS-MODULE
-#: contract a consumer branches on, so it is public rather than a private
-#: literal each consumer re-spells. `coordinator_core.session.work_state.
-#: build_work_state` partitions its `review_due`/`unclaimed` buckets on
-#: exactly these values; duplicated bare string literals on both sides let
-#: this producer's vocabulary drift while every test on both sides stays
-#: green and the `review_due` bucket goes silently, permanently empty
-#: (Review: staff-eng, Finding 9 — the same green-but-wrong class as the
-#: three defects that shipped past this plan's own passing suite).
-#:
 #: `BASIS_BLOCKED_BY_UNRESOLVED` is the one NAMED predicate branch
-#: `derive_readiness` evaluates (module docstring C1 brief:
-#: "required_fields_empty" is deliberately NOT evaluated here — it moves to
-#: the C9 promote call site, where DR-173 actually scopes it). Named so a
-#: caller can tell an EM WHICH mechanical condition fired, per the C1
-#: brief's basis-naming requirement.
 BASIS_BLOCKED_BY_UNRESOLVED = "blocked_by_unresolved"
 
-#: `derive_readiness` takes NO position: `evaluate_gate_triage` reported a
-#: gate whose evidence deadline elapsed and wants a human recheck. Never
-#: readiness, never blocked — its own bucket at the consumer.
 BASIS_REVIEW_DUE = "review-due"
 
 #: The record's `deployment_state` is a lifecycle POSITION, not readiness
@@ -3121,17 +2684,9 @@ def derive_readiness(
             "pickup_ready": True,
             "basis": BASIS_BLOCKED_BY_UNRESOLVED,
         }
-    # status == "review-due": a prompt for a human recheck, never auto-
-    # promoted — see rule above.
     return {"deployment_state": None, "pickup_ready": None, "basis": BASIS_REVIEW_DUE}
 
 
-#: The exact `--gated-predicate` reason strings `coordinator-doc-new` writes
-#: to `blocking_notes` for a DR-173-parked baton (session_baton_promote.py's
-#: `gate_reason` ternary, the ONLY producer of this text) — DR-173's gate has
-#: no `blocked_by` graph node to name, so these three strings are the sole
-#: on-disk signature of "parked because category/summary were unfilled at
-#: promote time", never a general-purpose blocking_notes value.
 DR173_GATED_PREDICATE_TEXTS = (
     "category and summary are unfilled placeholders",
     "category is an unfilled placeholder",
@@ -3166,10 +2721,6 @@ def is_dr173_parked(handoff: Dict[str, Any]) -> bool:
     notes = handoff.get("blocking_notes")
     if not isinstance(notes, str):
         return False
-    # Substring, not exact-match: coordinator-doc-new JOINS an accompanying
-    # --gate-note onto the DR-173 reason with "; " (session_baton_promote.py
-    # `gate_reason` + coordinator-doc-new's `_notes` join), so the on-disk
-    # text can carry the ratified predicate PLUS unrelated advisory prose.
     return any(text in notes for text in DR173_GATED_PREDICATE_TEXTS)
 
 

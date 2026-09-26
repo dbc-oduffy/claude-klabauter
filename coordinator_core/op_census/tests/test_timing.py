@@ -1,13 +1,3 @@
-"""coordinator_core.op_census.tests.test_timing — tests for the process-time
-and invocation-tax axes (C4).
-
-Covers: routed-denominator filtering (DR-332 § Item 2), per-op p50/max
-process-time aggregation and classification, `AxisResult`'s NO_DATA/reason
-invariant, the invocation-tax axis's single-measured-floor shape, and
-`cleared_ops`' exhaustive dispatch over the three `Disposition` states.
-
-Spec backlink: state/dispatch-briefs/2026-08-21-the-census-that-cannot-miss-an-op/C4.md
-"""
 
 from __future__ import annotations
 
@@ -40,7 +30,7 @@ def test_routed_entries_excludes_null_and_missing_route():
     entries = [
         _row("a", 10.0, route="in_process"),
         _row("b", 10.0, route=None),
-        {"op": "c", "elapsed_ms": 10.0},  # no route key at all
+        {"op": "c", "elapsed_ms": 10.0},
         _row("d", 10.0, route="warm_server"),
         _row("e", 10.0, route="bogus_route"),
     ]
@@ -163,12 +153,6 @@ def test_cleared_ops_excludes_op_missing_from_either_axis():
 
 
 class _FakeAxisResult:
-    """Stand-in used only to prove `cleared_ops` has no default branch.
-
-    A real `AxisResult` can never hold an unrecognised disposition (its
-    field is typed `Disposition`), so this duck-types the one attribute
-    `cleared_ops` reads to exercise the else-branch directly.
-    """
 
     def __init__(self, disposition):
         self.disposition = disposition
@@ -181,10 +165,7 @@ def test_cleared_ops_raises_on_unrecognised_disposition():
         cleared_ops(process_time, invocation_tax)
 
 
-# ---------------------------------------------------------------------------
-# measure_invocation_tax_ms shape -- the trampoline cold path, never a bare
 # interpreter (2026-08-23 fix, module docstring's CORRECTED block).
-# ---------------------------------------------------------------------------
 
 
 class _FakeCompletedProcess:
@@ -193,8 +174,6 @@ class _FakeCompletedProcess:
 
 
 def test_measure_invocation_tax_ms_never_passes_dash_S(monkeypatch):
-    """Nothing in production disables `site` -- `-S` inflated the old
-    probe's module count and is not a shape anything runs in."""
     seen_argv = []
 
     def _fake_run(argv, **kwargs):
@@ -210,10 +189,6 @@ def test_measure_invocation_tax_ms_never_passes_dash_S(monkeypatch):
 
 
 def test_measure_invocation_tax_ms_raises_when_child_did_not_arm(monkeypatch):
-    """A child that reports its canary op module WAS imported means op
-    registration was not lazy in that child. This must be proven per sample,
-    never assumed -- an eager sample silently reverts to the bare-interpreter
-    shape this rewrite exists to stop measuring."""
 
     def _fake_run(argv, **kwargs):
         payload = {"process_time_ms": 400.0, "module_count": 600, "canary_op_imported": True}
@@ -235,12 +210,7 @@ def test_measure_invocation_tax_ms_averages_armed_samples(monkeypatch):
     assert measure_invocation_tax_ms(iterations=3) == pytest.approx(10.0)
 
 
-# ---------------------------------------------------------------------------
-# THE regression: the exact failure the bug row named, now detected rather
 # than silently emitted -- every op OVER_BAR on tax must never again produce
-# a silent, permanently-empty `cleared` set (bug row
-# `state/bug-backlog/2026-08-23-op-census-can-never-clear-an-op-invocation-tax-measured-in-the-wrong-shape.yaml`).
-# ---------------------------------------------------------------------------
 
 
 def test_emit_dispositions_raises_when_tax_uniformly_over_bar_across_every_op():

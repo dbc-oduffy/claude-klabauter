@@ -171,18 +171,12 @@ from coordinator_core.ops.handoff_transition import (
 
 _LOG = logging.getLogger(__name__)
 
-# Same vendored schema every other state/handoffs/ writer in this package
 # validates against (handoff_transition.py's own _SCHEMA_PATH) — a roadmap
-# baton IS a handoff record, not a separate schema family.
 _SCHEMA_PATH: Path = (
     Path(__file__).parent.parent / "frontmatter" / "schemas" / "handoff.schema.json"
 )
 
 # Mirrors number_stubs.py's own _ROADMAP_BATON_KIND_WHERE derivation —
-# `kind in (...)` covering the canonical `roadmap-baton` value plus any
-# still-live retired pre-rename spelling(s), derived at import time rather
-# than hand-authored. See coordinator_core/frontmatter/baton_class.py and
-# coordinator_core/tests/test_baton_class_is_the_only_membership_set.py.
 _ROADMAP_BATON_KIND_WHERE = "kind in ({})".format(
     ",".join(kind_values_for_canonical("roadmap-baton"))
 )
@@ -194,14 +188,6 @@ def _err(msg: str) -> dict:
 
 
 def _validate_fm(fm_text: str) -> list:
-    """Parse fm_text as YAML and validate against the vendored handoff schema.
-
-    Same post-mutation gate `handoff_transition.py`'s own `_validate_fm`
-    applies — a round-trip through `schema_validate` confirming the written
-    `blocked_by`/`blocks` value is an ARRAY, not a `serialize_yaml_scalar`-
-    quoted string (AC6), and that nothing else about the record regressed.
-    Returns a (possibly empty) list of error dicts; empty means valid.
-    """
     try:
         fm_dict = yaml.safe_load(fm_text) or {}
     except Exception as exc:  # noqa: BLE001
@@ -209,21 +195,7 @@ def _validate_fm(fm_text: str) -> list:
     return validate_frontmatter(fm_dict, _SCHEMA_PATH)
 
 
-# ---------------------------------------------------------------------------
-# Corpus resolution
-# ---------------------------------------------------------------------------
-
-
 def _collect_roadmap_batons(worktree: Path) -> Tuple[Dict[str, dict], Dict[str, dict]]:
-    """Return (live_by_stub_id, archived_by_stub_id) for ALL roadmap-baton
-    records this worktree's corpus carries — NOT pre-filtered by roadmap_id.
-
-    Corpus-wide (not roadmap_id-scoped) deliberately: the roadmap_id-mismatch
-    refusal (AC7 / staff-eng F8, refusal (3)) needs to tell "does not exist
-    anywhere" apart from "exists, but under a different roadmap_id" — a
-    roadmap_id-scoped query cannot distinguish the two, it would just report
-    the second case as the first.
-    """
     live_records = query_records("handoff", worktree, where=_ROADMAP_BATON_KIND_WHERE)
     arch_records = query_records("handoff-archived", worktree, where=_ROADMAP_BATON_KIND_WHERE)
 
@@ -249,12 +221,6 @@ def _resolve_endpoint(
     arch_by_id: Dict[str, dict],
     label: str,
 ) -> Tuple[Optional[dict], Optional[str]]:
-    """Resolve one endpoint's live record, or a human-readable refusal reason.
-
-    Returns (record, None) on success, or (None, reason) on refusal — see
-    module docstring "Refusal set" for the four distinct non-existence/
-    wrong-corpus/wrong-roadmap refusal shapes this distinguishes.
-    """
     live_rec = live_by_id.get(stub_id)
     arch_rec = arch_by_id.get(stub_id)
 
@@ -298,22 +264,6 @@ def _reachable_via_blocked_by(
     live_by_id: Dict[str, dict],
     arch_by_id: Dict[str, dict],
 ) -> Set[str]:
-    """DFS over the roadmap_id's existing `blocked_by` edges from
-    start_stub_id, traversing live AND archived-corpus nodes.
-
-    Returns the set of stub_ids `start_stub_id` is already, directly or
-    transitively, blocked by. Used to detect whether adding a NEW
-    `dependent blocked_by dependency` edge would close a cycle: if
-    `dependent_stub_id` is already reachable from `dependency_stub_id` this
-    way, `dependency` already (transitively) depends on `dependent`, and the
-    new edge would complete a loop.
-
-    Consults `arch_by_id` when a node isn't found in `live_by_id` (Finding
-    3) — an archived stub is refused as a WRITE target elsewhere (see
-    refusal set), but a chain routing through one must still count as a
-    graph node for cycle detection, or a real cycle could go undetected by
-    silently treating the archived node as a dead end.
-    """
     seen: Set[str] = set()
     stack = [start_stub_id]
     while stack:
@@ -333,22 +283,9 @@ def _reachable_via_blocked_by(
     return seen
 
 
-# ---------------------------------------------------------------------------
-# Single-endpoint array-field write
-# ---------------------------------------------------------------------------
-
-
 def _write_edge_field(
     path: Path, repo_root: Path, field: str, other_stub_id: str,
 ) -> Tuple[bool, Optional[str]]:
-    """Ensure `other_stub_id` is present in `path`'s frontmatter `field`
-    array (`blocked_by` or `blocks`) — inserts if the key is absent
-    (`_insert_fm_array_field`), replaces if present
-    (`_replace_fm_array_field`); never hand-rolled (see module docstring
-    "List-field writes"). Returns (applied, error) — applied=False on a
-    byte-identical idempotent no-op (`other_stub_id` already present, never
-    an error).
-    """
     _state: Dict[str, Any] = {"applied": False}
 
     def mutate(old_text: str) -> str:
@@ -363,18 +300,12 @@ def _write_edge_field(
             raise MutateAbort(f"YAML parse error in frontmatter: {exc}")
 
         current_raw = fm_dict.get(field)
-        # Canonical key-line boundary check (same rule _replace_fm_array_field/
-        # _insert_fm_array_field themselves route through internally) — a
-        # bare substring match on f"{field}:" would be fooled by CRLF or a
-        # coincidental prefix; _fm_key_line_pattern is the single reviewed
-        # boundary-lookahead rule for this (staff-eng Finding D, cited in
-        # handoff_transition.py's own array-field helpers).
         key_present = _fm_key_line_pattern(field).search(fm) is not None
         current_list = _as_list(current_raw)
 
         if other_stub_id in current_list:
             _state["applied"] = False
-            return old_text  # byte-identical -> locked_rmw skips the write
+            return old_text
 
         new_list = current_list + [other_stub_id]
 
@@ -382,11 +313,6 @@ def _write_edge_field(
             fm = _replace_fm_array_field(fm, field, new_list)
         else:
             # staff-eng F7: _replace_fm_array_field is REPLACE-ONLY and
-            # silently no-ops when the key line is absent. A roadmap baton
-            # always carries blocked_by/blocks per schema
-            # (_cf_spinoff_roadmap_requires_graph requires both), so this
-            # branch should not fire in practice, but this op's spec must
-            # not rely on that unstated invariant holding.
             anchor = "blocks" if field == "blocked_by" else "roadmap_id"
             fm = _insert_fm_array_field(fm, field, new_list, anchor)
 
@@ -470,11 +396,6 @@ def _roadmap_id_lock(
         os.close(lock_fd)
 
 
-# ---------------------------------------------------------------------------
-# Synchronous handler body (run off the event loop via asyncio.to_thread)
-# ---------------------------------------------------------------------------
-
-
 def _run_link_stubs(
     *,
     roadmap_id: str,
@@ -508,7 +429,7 @@ def _run_link_stubs(
         if err_msg is not None:
             return _err(err_msg)
 
-        assert dependent_rec is not None and dependency_rec is not None  # narrowed above
+        assert dependent_rec is not None and dependency_rec is not None
 
         dependent_fm = dependent_rec.get("frontmatter") or {}
         dependency_fm = dependency_rec.get("frontmatter") or {}
@@ -536,15 +457,6 @@ def _run_link_stubs(
                 ),
             }
 
-        # Cycle check (AC7) — only meaningful while the edge is not already
-        # fully present (handled above): would completing this edge close a
-        # loop in roadmap_id's own blocked_by graph? If dependent_stub_id is
-        # already reachable FROM dependency_stub_id via existing blocked_by
-        # edges, dependency already (transitively) depends on dependent, and
-        # adding "dependent blocked_by dependency" would complete a cycle.
-        # This whole check, and both writes below, run under the
-        # roadmap_id-scoped lock acquired above (Finding 2) so no concurrent
-        # invocation's snapshot can go stale underneath it.
         reachable_from_dependency = _reachable_via_blocked_by(
             dependency_stub_id, roadmap_id, live_by_id, arch_by_id,
         )
@@ -617,11 +529,6 @@ def _run_link_stubs(
                 f"(roadmap_id={roadmap_id})"
             ),
         }
-
-
-# ---------------------------------------------------------------------------
-# Op handler
-# ---------------------------------------------------------------------------
 
 
 @register_op("roadmap.link_stubs")
@@ -698,11 +605,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     worktree = main_worktree_root(repo_root)
 
-    # asyncio.to_thread for DR-212 D3 async-loop mandate (Finding 1):
-    # _run_link_stubs reads the whole corpus synchronously and, via
-    # _write_edge_field -> locked_rmw, polls a cross-process flock with
     # time.sleep for up to LOCK_TIMEOUT_SECS -- none of that may run
-    # directly in this async body's await-free execution.
     return await asyncio.to_thread(
         _run_link_stubs,
         roadmap_id=roadmap_id,

@@ -75,8 +75,6 @@ from coordinator_core.session.mode_resolution import COORDINATOR_JOB_MODE
 
 __all__ = ["Mode", "EnvEntry", "FORWARDING_SET", "CALLER_PREFIXES", "is_caller_prefixed", "generate_header"]
 
-#: The four modes that exist today -- see module docstring. A fifth mode
-#: is a new row's judgment call, not a value to add here casually.
 Mode = str
 BORROW = "borrow"
 CALLER = "caller"
@@ -86,13 +84,6 @@ _VALID_MODES = (BORROW, CALLER, REFUSE, OVERRIDE)
 
 
 class EnvEntry(NamedTuple):
-    """One declared forwarding-set member: an env var name and its mode.
-
-    Never a bare name -- every entry on the wire has exactly one of the
-    three modes documented at module level, and that mode is what a
-    consumer (Python-side only; see module docstring for why the C legs do
-    not read it) branches on.
-    """
 
     name: str
     mode: Mode
@@ -103,10 +94,6 @@ def _entry(name: str, mode: Mode) -> EnvEntry:
     return EnvEntry(name=name, mode=mode)
 
 
-#: The declared forwarding set -- SSOT. Ordered: the `refuse` entry first
-#: (pre-dispatch, so it is checked before any `borrow`/`override` entry is
-#: even relevant), then the `override` triple in its existing precedence
-#: order, then `borrow` entries.
 FORWARDING_SET: Tuple[EnvEntry, ...] = (
     _entry("COORDINATOR_SETTINGS_HOME", REFUSE),
     *(_entry(name, OVERRIDE) for name in SESSION_ENV_PRECEDENCE),
@@ -117,43 +104,17 @@ FORWARDING_SET: Tuple[EnvEntry, ...] = (
     _entry("MACHINE_LOCAL_IMPL", BORROW),
     _entry("COORDINATOR_ROOT", BORROW),
     _entry("DOE_ROOT", BORROW),
-    # The caller's project. Inherited, a caller that omits it resolves to the
-    # spawning session's repo -- `workday-start-inbox-blitz-assemble` served
-    # claude-klabauter's inbox to four other repos this way on 2026-09-11.
     _entry("CLAUDE_PROJECT_DIR", CALLER),
-    # Execution locality. `coordinator_core.env_locality`'s rung 0 is a
-    # per-CALLER fact, and this server's own `os.environ` belongs to whoever
-    # spawned it -- without this entry an engine-side locality read returns the
-    # daemon's environment, not the session's. Rung 1 is machine-constant and
-    # needs no forwarding, so a missing entry here degrades to a labelled
-    # confidence rather than a confident lie.
     _entry("CLAUDE_CODE_REMOTE", CALLER),
-    # Job mode. `session.mode_resolution`'s resolver reads this to learn
     # what the CALLER was invoked as -- and, same as `CLAUDE_CODE_REMOTE`
-    # above, this server's own `os.environ` belongs to whoever spawned it,
-    # not the session that dispatched the op. Without this entry an
-    # engine-side read returns the daemon's environment, not the session's.
     _entry(COORDINATOR_JOB_MODE, CALLER),
-    # Agent-type host ladder. The documented Phase 5 invocation sets
     # COORDINATOR_AGENT_TYPE_HOST=coordinator; a warm-served CLI reads
-    # os.environ inside the server, which belongs to whoever spawned it, not
-    # the session that dispatched the op -- same reasoning as
     # CLAUDE_CODE_REMOTE and COORDINATOR_JOB_MODE above.
     _entry("COORDINATOR_AGENT_TYPE_HOST", CALLER),
 )
 
 
-#: Per-session guard overrides, forwarded BY PREFIX rather than by name. The
-#: guards own this namespace and add keys to it without telling this module, so
-#: a fixed list here would miss the next key silently -- and miss it in the
-#: permissive-for-nobody direction: an override the caller set arrives as "not
-#: requested", every Bash-guard override on the box becomes a hard wall, and
-#: nothing errors on either side. Each matching name is CALLER-mode: the server's
-#: own values belong to whichever session spawned it, so an omitted name pops.
-#:
-#: The same four prefixes the http header channel carries
 #: (`warm.hook_http.FORWARDED_ENV_PREFIXES` is this tuple). No `FORWARDING_SET`
-#: name may match one -- a name is forwarded by exactly one rule.
 CALLER_PREFIXES: Tuple[str, ...] = (
     "COORDINATOR_ALLOW_",
     "COORDINATOR_OVERRIDE_",
@@ -163,11 +124,6 @@ CALLER_PREFIXES: Tuple[str, ...] = (
 
 
 def is_caller_prefixed(name: str) -> bool:
-    # Strict `>` matches both compiled
-    # door legs (door_posix.c's `name_len > plen`, door.c's `name_len <= plen`
-    # continue-guard); a name equal to a bare prefix carries no suffix and is
-    # not a caller override, so `startswith` alone would diverge from the C
-    # legs on that edge case.
     return any(len(name) > len(prefix) and name.startswith(prefix) for prefix in CALLER_PREFIXES)
 
 
@@ -179,10 +135,6 @@ _HEADER_BANNER = (
     " * will fail the byte-pin test the moment it drifts. */\n"
 )
 
-#: Emitted header shape, X-macro list, NAMES ONLY (see module docstring:
-#: `mode` is Python-side-only data, never C-facing). Each leg `#define`s
-#: its own `X` locally and `#undef`s it after -- see `door_env_set.h`'s own
-#: comment and door.c/door_posix.c for the two expansions.
 _HEADER_GUARD = "COORDINATOR_WARM_DOOR_ENV_SET_H"
 
 

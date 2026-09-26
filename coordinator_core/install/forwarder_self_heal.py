@@ -101,15 +101,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
     writer_id="forwarder-self-heal",
     source_module="coordinator_core.install.forwarder_self_heal",
     clauses=(
-        # Clause 1 — the missing-forwarder writer itself. Which names it
-        # touches is only known at runtime (whatever `coordinator/bin/`
-        # names are absent from `<settings-home>/bin/` THIS invocation),
-        # never enumerable in source — a native door image (`<name>.exe`
-        # on Windows, extensionless `<name>` on POSIX) via
-        # `substrate._cut_over_to_native_door`, or a bare Python forwarder
-        # (extensionless `<name>`) via `substrate._write_agent_forwarder`
-        # on a doorless root. Only names actually missing get written; an
-        # existing forwarder is never rewritten.
         ShapedClause(
             discovered_by="_self_heal_forwarders_inner (diff against coordinator/bin/)",
             entry_template=WriteSurfaceEntry(
@@ -118,9 +109,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 reason="missing agent/skill forwarder, native door image or bare-Python fallback",
             ),
         ),
-        # Clause 2 — the native-forwarder manifest this run's writes are
-        # unioned into (`substrate._union_native_forwarder_manifest`),
-        # under the same lock as clause 1's writes.
         StaticClause(
             entries=(
                 WriteSurfaceEntry(
@@ -130,10 +118,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 ),
             ),
         ),
-        # Clause 3 — the failure ledger `_record_failure` appends to, and
-        # only when the swallowed inner work raised. Machine-scoped (not
-        # the repo), per its own docstring: the failure is a property of
-        # the box, not of whichever clone happened to run.
         StaticClause(
             entries=(
                 WriteSurfaceEntry(
@@ -146,38 +130,10 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
     ),
 )
 
-GENERATES = []  # every clause above writes under <settings_home>/..., a machine-local settings home outside this repo's tracked tree -- never a fixed repo artifact
+GENERATES = []
 
 
 def self_heal_forwarders() -> None:
-    """Best-effort, silent, non-blocking: write any agent-helper forwarder
-    missing from `<settings-home>/bin/` relative to claude-klabauter's own
-    `coordinator/bin/` directory listing. Writes ONLY the missing entries —
-    never rewrites a forwarder that already exists, and never touches the
-    `.ps1` leg, platform-localize, ml/ch families, or the orphan sweep (all
-    out of scope; see module docstring).
-
-    Contract: returns `None` unconditionally. Never raises, never prints,
-    never exits non-zero. A resolution failure (no claude-klabauter root, no
-    settings-home, a permissions error, a lock timeout, anything) is
-    indistinguishable from "nothing was missing" to the caller — by design,
-    since this is a self-heal, not a diagnostic surface (PM ruling: "don't
-    warn about it, just install it").
-
-    The stdout/stderr capture is load-bearing, not belt-and-braces: the
-    installer internals this module reuses print on their own account, and
-    at least one of them fires on the CLEAN path. `_derive_agent_helper_
-    target_map` emits an `[install-substrate] WARNING: duplicate CLI pair`
-    line whenever `coordinator/bin/` holds an extensionless CLI beside its
-    `.py` twin — a condition that is true today and independent of whether
-    any forwarder is missing. Without this capture, wiring the self-heal
-    into session boot would print that warning on EVERY session start,
-    reinstating at boot exactly the class of advisory the PM ruling removed
-    from boot (and which this module exists to make unnecessary). Captured
-    output is discarded, never inspected: a self-heal that cannot fix
-    something stays silent about it, and the real installer's own fail-loud
-    path remains the surface for that.
-    """
     import contextlib
     import io
 
@@ -190,9 +146,6 @@ def self_heal_forwarders() -> None:
         return
 
 
-#: Failure ledger this module appends to when its swallowed work raises.
-#: Under `<settings-home>/state/`, never the repo: this writes on a machine
-#: whose engine may be any clone, and the failure is a property of the BOX.
 _FAILURE_LEDGER_RELATIVE = ("state", "forwarder-self-heal-failures.jsonl")
 
 
@@ -271,24 +224,12 @@ def _self_heal_forwarders_inner() -> None:
     bin_dst = settings_home() / "bin"
 
     if not agent_bin.is_dir() or not bin_dst.is_dir():
-        # Nowhere to derive from, or nowhere to install into (e.g. no
-        # install has ever run) -- not this module's job to bootstrap a
-        # fresh settings-home; a genuinely fresh box gets its forwarders
-        # from the real installer, same as always.
         return
 
     target_map = _derive_agent_helper_target_map(agent_bin)
     if not target_map:
         return
 
-    # HEALS THE NATIVE DOOR IMAGE, NEVER A `.cmd` (PM ruling 2026-08-29 --
-    # one native entrypoint per platform). This path used to regenerate the
-    # `.py`/`.cmd` pair, which made it a SECOND producer of the interpreter
-    # trampolines the installer had already stopped emitting: a rename or a
-    # sweep would drop a `.cmd`, and the next session boot silently put it
-    # back. That is why the live box carried more `.cmd` files (399) than the
-    # generator even knows names for (384). Healing the same artifact the
-    # installer writes is the only shape that does not drift back.
     from coordinator_core.warm.engine_root import is_engine_root
 
     door_root = claude_klabauter_root if is_engine_root(claude_klabauter_root) else None
@@ -312,42 +253,17 @@ def _self_heal_forwarders_inner() -> None:
                         name, bin_dst, False, engine_root=door_root
                     )
                     if cutover is _NO_LAUNCHER_FOR_THIS_NAME:
-                        # No launcher of any kind for this name, so nothing
-                        # was written and nothing goes in the native
-                        # manifest -- `is not None` alone would have
-                        # recorded a write that did not happen.
                         continue
                     if cutover is not None:
                         native_written.add(name)
                         continue
-                # Doorless root: the bare Python forwarder is all that can be
-                # written. Correct on POSIX, and on Windows it is the same
-                # degraded shape the installer leaves for an unstamped root --
-                # not bare-name resolvable, and not papered over with a `.cmd`.
                 _write_agent_forwarder(name, bin_dst / name, False, target=target)
-            # Read-union-write, under the SAME held_lock this loop already
-            # holds -- see `_union_native_forwarder_manifest`'s docstring for
-            # why this must be a union and not `substrate.py`'s full-install
-            # overwrite writer: this loop only ever sees the names missing
-            # THIS invocation, never the complete set.
             _union_native_forwarder_manifest(bin_dst, native_written)
     except LockTimeout:
         return
 
 
 def _installed_forwarder_present(bin_dst: Path, name: str) -> bool:
-    """True if `name` already has a forwarder this platform can actually
-    REACH by bare name -- which is a stricter question than "a file called
-    `name` exists".
-
-    On Windows only `named_forwarder_path` (`name.exe`) counts. The
-    extensionless `name` sitting beside it is the POSIX Python forwarder,
-    carried onto this box by a settings-home synced from a Mac, and PATHEXT
-    gives it no bare-name resolution at all -- treating its presence as
-    coverage is what would let this heal skip every name on a Windows box
-    that has such a sync (this one has ~400 of them). On POSIX the two paths
-    are the same path by construction, so the check collapses to one stat.
-    """
     from coordinator_core.install.door_install import named_forwarder_path
 
     if sys.platform == "win32":

@@ -89,7 +89,7 @@ Default --limit is 50 when omitted; pass --limit 0 for unlimited.
 _SUPPORTED_FLAGS = {"--since", "--where", "--limit", "--format", "--root"}
 _UNSUPPORTED_FLAGS = {"--sort", "--older-than"}
 _VALID_FORMATS = ("markdown-list", "json", "paths")
-_DEFAULT_LIMIT = 50  # query-records.js parseArgs() default (bin/query-records.js:525)
+_DEFAULT_LIMIT = 50
 
 _MISSING = object()
 
@@ -141,11 +141,6 @@ def _format_commits(commits: Any) -> str:
     """
     if not commits:
         return "no-commit"
-    # `str` only, not `(str, bytes)` (review: overengineering-reviewer,
-    # finding #7): `commits` arrives from `parse_frontmatter`'s YAML load,
-    # which never deserialises a scalar to `bytes` -- this function's own
-    # total-coercion argument above already covers a `bytes` value correctly
-    # via the final `str(c)`/`str(commits)` fallback. The `str` guard here
     # exists only to stop a bare string being iterated CHARACTER BY
     # CHARACTER by `", ".join` below.
     if isinstance(commits, str):
@@ -172,13 +167,6 @@ def _format_completion_markdown(records: list) -> str:
 
 
 def _parse_args(argv: List[str]) -> dict:
-    """Normalize ``--flag=value``/``--flag value`` forms and collect known flags.
-
-    Mirrors query-records.js's ``--key=value`` normalization (bin/query-records.js
-    :537-546) so both invocation styles work. Raises ``ValueError`` with a
-    fail-loud message on an unsupported or malformed flag -- caller converts this
-    to a stderr write + exit code 1.
-    """
     normalized: List[str] = []
     for a in argv:
         if a.startswith("--") and "=" in a:
@@ -219,9 +207,6 @@ def _parse_args(argv: List[str]) -> dict:
 
 
 def _detect_root(specified: Optional[str]) -> Path:
-    """Port of query-records.js's ``detectRoot`` (bin/query-records.js:585-591):
-    ``--root`` if given, else ``git rev-parse --show-toplevel``, else cwd.
-    """
     if specified:
         return Path(specified).resolve()
     top = show_toplevel()
@@ -231,7 +216,6 @@ def _detect_root(specified: Optional[str]) -> Path:
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: --help intercept, else query completion records natively."""
     if argv and argv[0] in ("--help", "-h"):
         sys.stdout.write(_HELP_TEXT)
         return 0
@@ -253,10 +237,6 @@ def main(argv: List[str]) -> int:
             limit=opts["limit"],
         )
     except SystemExit as exc:
-        # query_records propagates sys.exit(1) for an unparseable --where clause
-        # or invalid --since value (bin/query-records.js's own parseWhereExpr /
-        # parseSince do the same, stderr message already written) -- same
-        # fail-loud contract as the retired node-forwarding call's exit code.
         return int(exc.code) if isinstance(exc.code, int) else 1
 
     if opts["format"] == "json":

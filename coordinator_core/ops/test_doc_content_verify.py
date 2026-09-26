@@ -1,22 +1,3 @@
-"""
-Tests for coordinator_core.ops.doc_content_verify.
-
-Three required groups (docs/plans/2026-07-28-human-facing-doc-staleness-detector.md
-§ C6b/AC12/AC13, DoE-claude):
-    1. Positive — each v1 citation class is caught when genuinely broken.
-    2. Negative — a known-good cross-repo citation produces no finding, plus
-       one test per exclusion-set category. This group decides whether the
-       gate is ever trusted: measured naively (no negative surface) against
-       this repo's own docs, an absence-only predicate fires on the large
-       majority of citations, most of them correct cross-repo references.
-    3. AC13, both halves: (a) a synthetic fixture reproducing the b644d5a9
-       shape is flagged; (b) a historical replay against DoE-claude's real
-       history at commit b644d5a9 flags the true positive
-       (coordinator/scripts/install-maximalist.py) and does NOT flag the
-       correct-but-cross-repo citation present in the same tree
-       (coordinator/lib/install-substrate.py, verified absent from DoE-claude
-       at that commit and present under the current engine root).
-"""
 
 from __future__ import annotations
 
@@ -34,15 +15,7 @@ from coordinator_core.ops.doc_content_verify import (
     verify_doc_on_disk,
 )
 
-# Declared, not excused: the AC13 historical-replay group (TestAC13HistoricalReplay)
-# spawns real `git show`/`git ls-tree`/`git cat-file` against the actual DoE-claude
-# checkout to prove the citation-verifier against real repo history, not a fixture --
-# no mock stands in for "did this path genuinely exist at commit b644d5a9". The
-# `_doe_repo_available` probe is cached (lru_cache), not per-test, since it fires at
-# collection-adjacent time; the replay itself is read-only plumbing, never checkout/
-# reset, so no per-test isolation is needed beyond that cache. The spawn ratchet's
 # `_BASELINE` is shrink-only pre-existing residue and is explicitly not the route for
-# this file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
 from coordinator_core.engine_root import coordinator_engine_root
@@ -53,11 +26,6 @@ _B644D5A9_SHA = "b644d5a9"
 
 def _findings_reasons(findings):
     return {(f.doc, f.token, f.reason) for f in findings}
-
-
-# ---------------------------------------------------------------------------
-# Group 1 — positive surface
-# ---------------------------------------------------------------------------
 
 
 class TestPositiveSurface:
@@ -122,17 +90,9 @@ class TestPositiveSurface:
         assert findings == []
 
 
-# ---------------------------------------------------------------------------
-# Group 2 — negative surface
-# ---------------------------------------------------------------------------
-
-
 class TestNegativeSurface:
     @pytest.mark.real_home
     def test_known_good_cross_repo_citation_does_not_produce_finding(self):
-        """coordinator/lib/install-substrate.py is absent from a sibling repo's
-        tree but present under the engine root — the canonical case AC12 requires
-        to resolve as `resolves-cross-repo`, never `absent`."""
         claude_klabauter_root = Path(coordinator_engine_root())
         assert (claude_klabauter_root / "coordinator" / "lib" / "install-substrate.py").exists(), (
             "test fixture assumption: install-substrate.py must exist under the engine root "
@@ -143,7 +103,7 @@ class TestNegativeSurface:
         findings = verify_doc(
             "INSTALL.md",
             text,
-            repo_exists=lambda token: False,  # absent from the local (sibling) tree
+            repo_exists=lambda token: False,
             sibling_checkers=[lambda token: (claude_klabauter_root / token).exists()],
         )
         assert findings == []
@@ -189,14 +149,6 @@ class TestNegativeSurface:
         )
         assert findings == []
 
-    # The four tests above call
-    # is_excluded() directly on an un-truncated literal, which passes
-    # against a broken end-to-end implementation (Finding 1) — the fenced-
-    # code-path extractor could truncate the very prefix these tests
-    # exercise before is_excluded() ever sees it. These four route the same
-    # text through verify_doc() inside a real fenced bash block, the one
-    # path where truncation happens, so a regression on Finding 1's fix
-    # fails here even if the unit-level is_excluded() tests still pass.
     def test_exclusion_dollar_prefixed_end_to_end(self):
         text = "```bash\npython3 $CLAUDE_KLABAUTER_ROOT/coordinator/bin/foo.py\n```\n"
         findings = verify_doc("README.md", text, repo_exists=lambda token: False)
@@ -219,25 +171,12 @@ class TestNegativeSurface:
 
     def test_excluded_token_produces_no_finding_even_when_absent_everywhere(self):
         text = "```bash\n/coordinator:install\n```\n"
-        # A bare slash-command has no internal path separator so it is not
-        # even extracted as a fenced-code-path citation; assert directly on
-        # is_excluded to pin the mechanism regardless of extraction shape.
         assert is_excluded("/coordinator:install") is True
         findings = verify_doc("README.md", text, repo_exists=lambda token: False)
         assert findings == []
 
 
-# ---------------------------------------------------------------------------
-# Group 3 — AC13: the motivating incident, synthetic + historical
-# ---------------------------------------------------------------------------
-
-
 class TestDocRelativeResolution:
-    """Plugin-root false-positive class: a doc in a subdirectory (e.g.
-    `coordinator/README.md`) cites paths relative to ITS OWN directory, not
-    the repo root. Measured against DoE-claude's real `coordinator/README.md`
-    this produced 24 of 26 spurious `absent` findings before this piece of
-    the resolution ladder existed."""
 
     def test_plugin_root_doc_relative_citation_present_is_not_flagged(self, tmp_path):
         repo_root = tmp_path / "repo"
@@ -259,8 +198,6 @@ class TestDocRelativeResolution:
         (repo_root / "coordinator" / "README.md").write_text(
             "See [lessons](state/lessons.md) for details.\n"
         )
-        # coordinator/state/lessons.md deliberately not created, and no
-        # repo-root state/lessons.md either — genuinely absent both ways.
 
         findings = verify_doc_on_disk(repo_root, "coordinator/README.md")
 
@@ -271,8 +208,6 @@ class TestDocRelativeResolution:
         (repo_root / "coordinator").mkdir(parents=True)
         outside = tmp_path / "outside-secret.txt"
         outside.write_text("secret\n")
-        # A `../`-escaping token that WOULD resolve if containment were not
-        # enforced (repo_root/coordinator/../../outside-secret.txt).
         (repo_root / "coordinator" / "README.md").write_text(
             "See `../../outside-secret.txt` for details.\n"
         )
@@ -286,15 +221,11 @@ class TestDocRelativeResolution:
 
 class TestAC13MotivatingIncident:
     def test_synthetic_b644d5a9_shape_is_flagged(self, tmp_path):
-        """A doc cites a path that existed when authored and a later commit
-        emptied — the exact shape of the incident that prompted this plan."""
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         (repo_root / "README.md").write_text(
             "```bash\npython3 coordinator/scripts/install-maximalist.py\n```\n"
         )
-        # coordinator/scripts/install-maximalist.py deliberately not created —
-        # simulates the post-b644d5a9 state where the path was emptied.
 
         findings = verify_doc_on_disk(repo_root, "README.md")
 
@@ -335,10 +266,6 @@ def _git_ls_tree_exists(repo_root: str, sha: str, path: str) -> bool:
 
 @functools.lru_cache()
 def _doe_repo_available() -> bool:
-    """Cached lazily (not evaluated at class-decoration time) — the `git
-    cat-file` subprocess this performs would otherwise fire on every pytest
-    collection, including --collect-only and -k-filtered runs that never
-    execute a test in this class."""
     root = _doe_root()
     if not root or not Path(root).is_dir():
         return False
@@ -352,18 +279,11 @@ def _doe_repo_available() -> bool:
 
 
 class TestAC13HistoricalReplay:
-    """Read-only replay via git plumbing (git show / git ls-tree) — never
-    checks out, resets, or otherwise mutates the live DoE-claude working
-    tree, which other sessions may be using concurrently."""
 
     pytestmark = pytest.mark.real_home
 
     @pytest.fixture(autouse=True)
     def _require_doe_repo(self):
-        """Runtime (not collection-time) gate — mirrors the former
-        class-level skipif but defers the git-plumbing probe to first test
-        setup so collection never spawns a process (see
-        _doe_repo_available's docstring)."""
         if not _doe_repo_available():
             pytest.skip(
                 "DoE-claude repo not resolvable/cloned on this machine, or commit b644d5a9 missing"
@@ -410,9 +330,6 @@ class TestAC13HistoricalReplay:
         doe_root = _doe_root()
         text = _git_show(doe_root, _B644D5A9_SHA, "README.md")
 
-        # Feasibility pinned in the plan: git ls-tree at this commit for
-        # coordinator/scripts/ returns empty — the path was genuinely absent
-        # from the DoE-claude tree.
         assert not _git_ls_tree_exists(
             doe_root, _B644D5A9_SHA, "coordinator/scripts/install-maximalist.py"
         )
@@ -421,7 +338,7 @@ class TestAC13HistoricalReplay:
             "README.md",
             text,
             repo_exists=self._repo_exists_at_commit(doe_root, _B644D5A9_SHA),
-            sibling_checkers=[],  # no sibling root resolvable — the fresh-clone case
+            sibling_checkers=[],
         )
 
         assert (
@@ -430,11 +347,6 @@ class TestAC13HistoricalReplay:
         ) in {(f.token, f.reason) for f in findings}
 
     def test_install_maximalist_resolves_cross_repo_when_sibling_root_available(self):
-        """Companion to the test above: on a machine WITH the engine root resolvable
-        (this test's own machine), the same citation legitimately resolves
-        cross-repo and must NOT be reported as a finding — this is the disk
-        fact that makes install-maximalist.py an imperfect AC13 exemplar (see
-        the sibling test's docstring) rather than an "absent everywhere" one."""
         doe_root = _doe_root()
         text = _git_show(doe_root, _B644D5A9_SHA, "README.md")
         claude_klabauter_root = Path(coordinator_engine_root())
@@ -454,12 +366,9 @@ class TestAC13HistoricalReplay:
         doe_root = _doe_root()
         text = _git_show(doe_root, _B644D5A9_SHA, "INSTALL.md")
 
-        # Confirmed absent from DoE-claude's tree at this commit...
         assert not _git_ls_tree_exists(
             doe_root, _B644D5A9_SHA, "coordinator/lib/install-substrate.py"
         )
-        # ...but present under the current engine root — the correct-as-written
-        # cross-repo citation this replay must not flag.
         claude_klabauter_root = Path(coordinator_engine_root())
         assert (claude_klabauter_root / "coordinator" / "lib" / "install-substrate.py").exists()
 

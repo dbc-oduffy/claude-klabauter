@@ -95,18 +95,11 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
-#: The prime exit criterion's own number (plan frontmatter + § C7 body) —
-#: DR-344's 500ms brightline is the PM-ratified bar; this is the tighter,
-#: EM-restated cycle budget that sits inside it with 2.5x headroom.
 CYCLE_PROCESS_TIME_BUDGET_MS = 200.0
 
-#: See module docstring's quantisation section for why 3, not 5.
 N_OUTER = 3
 
-#: Comfortably above the ~4 already-terminal live records this fixture's
 #: own LIVE_STATE_COUNTS distribution produces (closed=1, continued=1,
-#: shipped=2) — cap is never the binding constraint here; the point is that
-#: whatever qualifies gets archived, not that the cap is exercised.
 CAP = 50
 
 
@@ -131,30 +124,11 @@ def _init_repo(root: Path) -> Path:
 def _build_and_commit_fixture(
     root: Path, seed: int, **build_corpus_kwargs: Any
 ) -> Tuple[Path, CorpusFixture]:
-    """Fixture SETUP, excluded from every measured figure below: a fresh
-    real-shaped corpus (`build_corpus`) committed as the repo's baseline,
-    exactly mirroring `test_cycle.py`'s own `repo` fixture shape but at the
-    plan's own real scale rather than a 5-record toy.
-
-    Returns `(repo, fixture)` -- the `CorpusFixture` manifest (2026-08-30,
-    the actioned-memo class gets an occasion, C3) so a caller can assert
-    against the memo family's own records without re-scanning the corpus.
-    """
     repo = _init_repo(root)
     fixture = build_corpus(repo, seed=seed, **build_corpus_kwargs)
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "brightline fixture baseline")
 
-    # Leave behind the archive candidate-index cache that ANY previous cycle
-    # on this checkout would have left, so the measured figure is the
-    # recurring cycle rather than a checkout's one-time initialisation.
-    #
-    # This is setup, not a thumb on the scale: a full `build_index` costs
-    # 171.9ms at 1,470 records and is paid ONCE per checkout, ever, whereas
-    # the budget governs a job that runs on a cadence. Measuring only the
-    # cold pass would report a number the job produces once and never again.
-    # The cold cost is real and is asserted separately by
-    # `test_cold_first_build_is_reported_not_hidden` below.
     common_dir = git_common_dir(repo)
     worktree_root = main_worktree_root(common_dir)
     warm = archive_index_mod.build_index(worktree_root / "archive" / "handoffs")
@@ -227,9 +201,6 @@ def _run_one_cycle(
 
 
 def test_brightline_gate_clears_and_archives_within_budget(tmp_path_factory, monkeypatch):
-    """The prime exit criterion, on the gate-clearing case, over N_OUTER
-    independent real-shaped reps (module docstring's quantisation
-    section)."""
     samples_ms: List[float] = []
     spawn_counts: List[int] = []
     live_read_counts: List[int] = []
@@ -261,14 +232,7 @@ def test_brightline_gate_clears_and_archives_within_budget(tmp_path_factory, mon
             f"record, per cycle, per C3's own contract) -- a re-scan/re-read "
             f"regression. result={result!r}"
         )
-        # C3 (2026-08-30, the actioned-memo class gets an occasion): the ONE
-        # assertion this existing test could not already make -- that a memo
-        # actually moved, and the negative control (a non-terminal memo)
-        # stayed. Everything else (spawn count, process time) is already
-        # covered below over the SAME fixture, now that it carries a memo
-        # corpus too -- a memo-leg dirty-check regression already fails
         # `max_spawns <= GIT_SPAWN_COUNT_TOTAL_RATCHET` below with zero new
-        # test code (this chunk's own brief).
         assert len(result["memos_archived"]) == MEMO_TERMINAL_COUNT, (
             f"rep {rep}: expected all {MEMO_TERMINAL_COUNT} clean fixture memos "
             f"archived (cap={CAP} comfortably exceeds the fixture's memo count): "
@@ -341,26 +305,12 @@ def test_brightline_gate_clears_and_archives_within_budget(tmp_path_factory, mon
 
 
 def test_cap_applies_independently_per_family_not_over_the_union(tmp_path_factory, monkeypatch):
-    """CAP FIXTURE (staff-eng Finding 5, superseded by overengineering-
-    reviewer Finding 1, EM-adjudicated): each family is capped
-    independently, by its own existing planner (`compute_terminal_set` for
-    handoffs, `plan_sweep` for memos), never a shared cap over the union. A
-    fixture exceeding `cap` in BOTH families combined must still archive up
-    to `cap` from EACH family, not `cap` total split between them.
-
-    A single rep, not part of the N_OUTER budget loop above -- this asserts
-    a functional property (which items got archived), not process time or
-    spawn count.
-    """
     root = tmp_path_factory.mktemp("brightline_cap")
     repo, fixture = _build_and_commit_fixture(root, seed=20260830)
 
     small_cap = 2
-    # Sanity: the default fixture shape already exceeds small_cap in BOTH
     # families -- LIVE_STATE_COUNTS's own terminal live records (shipped=2,
     # closed=1, continued=1 == 4) and MEMO_TERMINAL_COUNT=5 actioned memos --
-    # so "archived == cap" below is a genuine cap-slot, never a vacuous count
-    # that just happens to equal the corpus size.
     assert MEMO_TERMINAL_COUNT > small_cap
     terminal_live_count = sum(
         count for state, count in LIVE_STATE_COUNTS.items() if state in TERMINAL_STATES
@@ -427,16 +377,6 @@ def test_memo_overflow_corpus_survives_the_argv_budget_and_dirty_memo_is_retaine
 
 
 def test_warm_cycle_uses_the_cache_and_cold_first_build_is_reported_not_hidden(tmp_path):
-    """The budget above is measured warm, so the cold cost must be stated
-    somewhere or it disappears from the record entirely.
-
-    Two facts, both asserted: the measured cycle really is using the cache
-    (`index_rebuilt is False` -- otherwise the budget test above would be
-    silently measuring a rebuild and passing for the wrong reason), and the
-    cold first build on a fresh checkout costs what it costs. The cold
-    figure is NOT budgeted: it is a once-per-checkout initialisation, not
-    the recurring cycle DR-344 and this plan's criterion govern.
-    """
     cold_repo = _init_repo(tmp_path / "cold")
     build_corpus(cold_repo, seed=9001)
     _git(cold_repo, "add", "-A")

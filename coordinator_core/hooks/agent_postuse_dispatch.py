@@ -104,15 +104,10 @@ from coordinator_core.hooks._envelope import no_advisory, post_advisory
 from coordinator_core.hooks import agent_completion_log, track_dispatched_agents
 
 
-#: Generator-provenance declaration: this op writes nothing itself. Its legs
-#: write only inside <git_common_dir>/coordinator-sessions/ — see their own
 #: GENERATES declarations.
 GENERATES: list = []
 
 
-#: The folded legs, in merge order. A tuple of (label, callable) rather than a
-#: bare list of callables so a leg that raises can name itself in the breadcrumb
-#: below without the caller inferring it from a traceback frame.
 _LEGS = (
     ("agent_completion_log", agent_completion_log.run),
     ("track_dispatched_agents", track_dispatched_agents.run),
@@ -120,37 +115,6 @@ _LEGS = (
 
 
 def _flatten_hook_payload(params: dict) -> dict:
-    """Derive the legs' flat-scalar fields from a raw, nested `PostToolUse(Agent)` payload.
-
-    The flat-union shape both legs already read via `_payload.field()` —
-    `description`, `subagent_type`, `name`, `dispatched_agent_id`,
-    `dispatched_agent_id_snake`, `dispatched_model`, plus whatever top-level
-    scalars a caller already sends (`session_id`) — is left ALONE when no
-    nested `tool_input`/`tool_response` object is present: that is today's
-    caller-side-stub shape (the `command` transport) and must keep working
-    unchanged.
-
-    When either nested key is present, this derives:
-        description                -> tool_input.description
-        subagent_type               -> tool_input.subagent_type
-        name                        -> tool_input.name
-        dispatched_agent_id         -> tool_response.agentId
-        dispatched_agent_id_snake   -> tool_response.agent_id
-        dispatched_model            -> tool_response.resolvedModel
-                                        or tool_response.model
-                                        or tool_input.model
-
-    merged OVER a copy of the original params, so a top-level scalar the
-    caller already sent flat (`session_id`) survives the merge untouched.
-
-    Raises:
-        CallerFacingValidationError: `params` is not a dict, or a present
-        `tool_input`/`tool_response` key is not itself an object -- a shape
-        this adapter cannot derive flat scalars from. This is the "genuinely
-        malformed payload" the -32602 contract must still refuse; widening
-        the handler to accept it silently is the one thing this adapter must
-        not do (see module Negative-spec).
-    """
     if not isinstance(params, dict):
         raise CallerFacingValidationError(
             "hooks.agent_postuse_dispatch: params must be an object, got "
@@ -158,14 +122,8 @@ def _flatten_hook_payload(params: dict) -> dict:
         )
 
     if "tool_input" not in params and "tool_response" not in params:
-        # Already the flat-union shape this op has always accepted -- pass
-        # through unchanged, no caller is broken by this adapter existing.
         return params
 
-    # `or {}` would defeat the refusal below for every FALSY non-object --
-    # `[]`, `""`, `0` would each become `{}` and validate clean, so the guard
-    # would fire only on truthy junk like `[1, 2]`. Default the ABSENT key
-    # only, and let every present value reach the isinstance check as it came.
     tool_input = params.get("tool_input", {})
     tool_response = params.get("tool_response", {})
     if tool_input is None:
@@ -194,17 +152,6 @@ def _flatten_hook_payload(params: dict) -> dict:
 
 
 def _advisory_text(result) -> str:
-    """The advisory prose carried by a leg's return envelope, or "" when it carries none.
-
-    A leg returns one of the `_hook_envelope` shapes. `no_advisory()` is the
-    empty dict, so `.get` chains to "" without a type check; any prose-carrying
-    shape nests its text at `hookSpecificOutput.additionalContext`.
-
-    Returns "" for a non-dict — a leg that returned something unexpected has a
-    defect in its own module, and swallowing it HERE as "no advisory" is the
-    correct disposition for a bookkeeping fan-in: the alternative is one leg's
-    shape bug suppressing its sibling's write.
-    """
     if not isinstance(result, dict):
         return ""
     hso = result.get("hookSpecificOutput")
@@ -215,31 +162,6 @@ def _advisory_text(result) -> str:
 
 @register_op("hooks.agent_postuse_dispatch")
 async def _handler(params: dict, repo_root=None) -> dict:
-    """PostToolUse(Agent) fan-in: the audit-log append plus the dispatched-agent bookkeeping.
-
-    Both legs run concurrently and both are write ops — the product is their
-    on-disk side-effects, and the return is `no_advisory()` unless a leg grows
-    prose (see the module docstring's merge contract).
-
-    Inputs are the union of the legs' own flat-scalar fields, either sent
-    flat already (the `command`-transport caller-side stub) or derived HERE
-    from a raw nested `PostToolUse` payload by `_flatten_hook_payload` (the
-    HTTP transport, which has no stub). Either way the legs themselves still
-    read none of this module's logic — see `agent_completion_log._handler`
-    and `track_dispatched_agents._handler` for the field lists and defaults.
-
-    `_flatten_hook_payload` runs OUTSIDE the `asyncio.gather` below and is not
-    caught by its `return_exceptions=True` — a payload this adapter cannot
-    derive flat scalars from raises `CallerFacingValidationError` straight
-    into the caller as `-32602`, the same disposition a malformed payload
-    already got before this adapter existed.
-
-    A leg that raises is logged to stderr and treated as having emitted no
-    advisory; its sibling still runs and still returns. `asyncio.gather` with
-    `return_exceptions=True` is what buys that — without it the first raising
-    leg cancels the merge and the second leg's write is lost, which the two
-    separate processes this op replaces would never have done.
-    """
     payload = payload_of(params)
     flat_params = _flatten_hook_payload(payload if isinstance(params, dict) else params)
 

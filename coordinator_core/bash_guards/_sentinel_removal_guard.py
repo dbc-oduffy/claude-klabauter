@@ -104,18 +104,13 @@ import re
 import shlex
 from typing import List, Optional, Tuple
 
-#: `reason_class` values -- see module docstring "POSTURE" section.
 REASON_DIRECT = "direct"
 REASON_INDIRECTION = "indirection"
 
-#: Three-way verdict returned by `evaluate()`.
 VERDICT_DENY = "deny"
 VERDICT_ADVISORY = "advisory"
 VERDICT_ALLOW = "allow"
 
-#: Re-export -- the removal-side guard shares the creation-side guards'
-#: indirection-remedy prose rather than carrying its own copy (Review:
-#: overengineering-reviewer -- one constant, one source of truth).
 from coordinator_core.bash_guards._sentinel_creation_guard import (  # noqa: E402
     INDIRECTION_REMEDY,
 )
@@ -141,79 +136,31 @@ from coordinator_core.bash_guards._command_tokenizer import (
 from coordinator_core.bash_guards._dialect import Dialect, resolve_segments_for_dialect
 from coordinator_core.bash_guards._verdict import record_silent
 
-#: Registered guard identity threaded into `_verdict.record_silent` calls
-#: below -- matches `block_dev_repo_sentinel_removal.py`'s own dispatch
-#: registration name (`block-dev-repo-sentinel-removal-advisory`), not this
-#: engine module's filename, so a SILENT declaration reads the same as any
-#: other declaration a test/caller collects for this guard.
 _GUARD_NAME = "block-dev-repo-sentinel-removal-advisory"
 
-#: PowerShell-only verb spellings this guard's Rule 1 (`_remove_arg_denies`)
 #: must ALSO recognize under `Dialect.POWERSHELL`, per
-#: `docs/reference/guard-dialect-coverage.md` row 26: `rm` already fires
-#: unaided because it is a real PowerShell alias (C3's alias-collision
 #: finding) -- `_REMOVE_ARG_COMMANDS` below is unchanged and still matches
-#: it once the tokens themselves are dialect-correct. `unlink` has NO
-#: PowerShell equivalent at all, so this set names the cmdlet/alias
-#: spellings that actually remove a file by positional argument in
-#: PowerShell -- `Remove-Item` (full cmdlet name), `ri`/`rd`/`del` (its
-#: built-in aliases). Compared case-insensitively, same as
 #: `_REMOVE_ARG_COMMANDS`, via `_normalize_executable_basename`'s own
-#: lower-casing.
 _REMOVE_ARG_COMMANDS_POWERSHELL = frozenset({"remove-item", "ri", "rd", "del"})
 
-#: Reason-kind for the one `_tokenize_full_command` failure this module treats
 #: as DENY rather than ADVISORY: the command is past the shared tokenizer's
 #: DoS ceiling (`_command_tokenizer._MAX_TOKENIZABLE_COMMAND_CHARS`) AND names
-#: the sentinel filename in its raw text.
-#:
-#: The two failure causes are NOT symmetric and this module deliberately
-#: separates them. An unterminated quote is an ordinary typo shape that a
 #: person hits by accident, and demoting it to ADVISORY is this module's
-#: stated posture (see "POSTURE" in the module docstring) -- that behavior is
-#: unchanged. Being past the ceiling is not a typo: the largest command-shaped
-#: string this project has ever needed to classify is ~8 KB, so a command
-#: eight times that size which also names the sentinel is not a shape any
 #: honest caller produces, and leaving it at ADVISORY (which renders as
-#: `permissionDecision: allow`) would mean a padded `rm <sentinel>` walks
-#: through the guard the padding was added to defeat.
-#:
 #: Scoped to the OVER-CEILING cause on purpose: every verdict below the
-#: ceiling is bit-identical to what this module returned before the ceiling
-#: existed.
 #: A ``%s`` TEMPLATE, not a finished string -- interpolate
-#: ``self.target_basename`` at every use, the way every other reason in this
-#: module does. A static "naming the sentinel" dropped the one fact the deny
-#: text exists to carry: WHICH sentinel.
 _REASON_OVER_CEILING = "command past the tokenizer size ceiling, naming %s"
 
-#: Commands that remove a named file via a plain positional argument.
 _REMOVE_ARG_COMMANDS = frozenset({"rm", "unlink"})
 
-#: Verbs, as Python identifiers, that a `python -c` payload calls to
-#: actually remove/relocate a file -- as opposed to merely reading its
-#: presence (`exists`, `is_file`, `stat`), which must never deny (see module
-#: docstring -- `resolve_coordinator_clone.py` and `claude_md_budget.py`
-#: both legitimately probe for this sentinel's presence).
 _REMOVAL_VERB_RE = re.compile(r"\b(remove|unlink|rmtree|move|rename|replace)\b", re.IGNORECASE)
 
-#: Python interpreter basenames this guard treats as `-c`-capable.
 _PYTHON_BASENAME_RE = re.compile(r"^python[0-9.]*$")
 
-#: `git` global options that consume a following token as their own
-#: argument (space-separated form only) -- narrow, closed set; matches the
-#: shapes named in the dispatch brief (`git -C <dir> rm ...`). An unknown
-#: `-`/`--`-prefixed flag is treated as taking NO argument here (unlike the
-#: destructive-git classifier's own ambiguity handling), consistent with
-#: this module's advisory-on-ambiguity posture -- worst case a misresolved
-#: subcommand token costs a missed deny, not a wrongly blocked command.
 _GIT_VALUE_FLAGS = frozenset({"-C", "-c"})
 
 
 def _basename(token: str) -> str:
-    """Return `token`'s final path component, splitting on both `/` and
-    `\\` (a Windows path may appear in a command string on any host
-    platform)."""
     base = token.rstrip("/\\")
     base = base.rsplit("/", 1)[-1]
     base = base.rsplit("\\", 1)[-1]
@@ -221,22 +168,14 @@ def _basename(token: str) -> str:
 
 
 class SentinelRemovalDetector:
-    """Detects shell shapes that would remove or relocate-away a single
-    named sentinel file. One instance per protected target basename.
-    """
 
     def __init__(self, target_basename: str) -> None:
         self.target_basename = target_basename
-        # Case-folded, same reasoning as the sibling creation detector's own
-        # `_is_target`/`_mention_re` -- this fleet's primary hazard
-        # filesystem (macOS APFS) is case-insensitive-but-case-preserving.
         self._mention_re = re.compile(re.escape(target_basename), re.IGNORECASE)
 
     def _is_target(self, token: str) -> bool:
         return _basename(token).lower() == self.target_basename.lower()
 
-    #: Passthrough wrapper binaries that run their remaining argv unchanged
-    #: -- same set the sibling creation detector tolerates.
     _PASSTHROUGH_WRAPPERS = frozenset(
         {
             "sudo", "command", "time", "exec", "nice", "nohup", "ionice", "timeout",
@@ -246,13 +185,6 @@ class SentinelRemovalDetector:
 
     @staticmethod
     def _env_skip_index(seg_tokens: List[str]) -> int:
-        """Return the index of the first token in `seg_tokens` that is NOT
-        a leading `VAR=value` environment assignment, an `env` invocation,
-        a no-op passthrough wrapper (plus its own argv), or a `{`/`(`
-        grouping token -- mirrors `SentinelCreationDetector._env_skip_index`
-        exactly (see that method's own docstring for the per-shape
-        rationale); a free function is not shared between the two modules
-        because it lives as a staticmethod on the sibling's own class."""
         env_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
         i = 0
         n = len(seg_tokens)
@@ -294,12 +226,8 @@ class SentinelRemovalDetector:
         dialect-correct (guard-dialect-coverage.md row 26)."""
         base = _normalize_executable_basename(seg_tokens[argv0_idx])
         if dialect is Dialect.POWERSHELL:
-            # `unlink` is a bash-only spelling with no PowerShell alias --
-            # it does not resolve to any real command in PowerShell, so
             # `_REMOVE_ARG_COMMANDS` (bash's `{"rm", "unlink"}`) must NOT be
-            # used verbatim here. `rm` carries over unaided (real alias
             # collision); `_REMOVE_ARG_COMMANDS_POWERSHELL` names the
-            # PowerShell-only spellings (guard-dialect-coverage.md row 26).
             allowed = {"rm"} | _REMOVE_ARG_COMMANDS_POWERSHELL
         else:
             allowed = _REMOVE_ARG_COMMANDS
@@ -343,8 +271,6 @@ class SentinelRemovalDetector:
         return None
 
     def _git_rm_mv_denies(self, seg_tokens: List[str], argv0_idx: int) -> bool:
-        """Rule 3 -- `git rm`/`git mv` (sentinel as source), including
-        `git -C <dir> rm ...`."""
         base = _normalize_executable_basename(seg_tokens[argv0_idx])
         if base != "git":
             return False
@@ -364,8 +290,6 @@ class SentinelRemovalDetector:
         return False
 
     def _find_denies(self, seg_tokens: List[str], argv0_idx: int) -> bool:
-        """Rule 4 -- `find ... -delete` or `find ... -exec rm` whose
-        command text mentions the sentinel."""
         base = _normalize_executable_basename(seg_tokens[argv0_idx])
         if base != "find":
             return False
@@ -381,10 +305,6 @@ class SentinelRemovalDetector:
         return any(self._is_target(tok) for tok in rest)
 
     def _python_dash_c_denies(self, seg_tokens: List[str], argv0_idx: int) -> bool:
-        """Rule 5 -- `python(3|2)? -c <code>` whose payload BOTH mentions
-        the sentinel filename AND calls a removal/move verb -- narrow on
-        purpose: a payload that merely reads the sentinel's presence
-        (`exists`, `is_file`) must never deny (module docstring)."""
         base = _normalize_executable_basename(seg_tokens[argv0_idx])
         if not _PYTHON_BASENAME_RE.match(base):
             return False
@@ -418,19 +338,11 @@ class SentinelRemovalDetector:
             return True
         return False
 
-    # -----------------------------------------------------------------
     # INDIRECTION-WRAPPER PASS -- mirrors `SentinelCreationDetector`'s own
-    # pass structurally (same primitives), but every terminal "cannot
     # examine this payload" branch below resolves to ADVISORY here instead
-    # of the sibling's DENY (module docstring "POSTURE"). A genuine direct
-    # match found by recursing INTO an examinable payload still returns
     # `REASON_DIRECT` (deny) -- only genuinely opaque wrappers get the
-    # weaker verdict.
-    # -----------------------------------------------------------------
 
     def _classify_payload(self, payload: str, depth: int) -> Optional[Tuple[str, str]]:
-        """Leaf classifier for an unwrapped indirection payload. Returns
-        `(verdict, reason_kind)` or `None` if the payload is clean."""
         tokens = _tokenize_full_command(payload)
         mentions_anywhere = bool(self._mention_re.search(payload))
         if tokens is None:

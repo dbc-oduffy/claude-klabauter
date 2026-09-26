@@ -119,9 +119,6 @@ def test_home_dir_prefers_claude_home_override(monkeypatch):
 
 @pytest.mark.parametrize("var", ["COORDINATOR_SETTINGS_HOME", "CLAUDE_HOME"])
 def test_settings_home_rejects_relative_override(monkeypatch, var):
-    """A relative override silently anchored the settings home at the process
-    cwd. Now a fail-loud config error, matching
-    coordinator/lib/claude-home/_claude_home.py."""
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.setenv(var, "relative-dir")
@@ -131,8 +128,6 @@ def test_settings_home_rejects_relative_override(monkeypatch, var):
 
 
 def test_settings_home_rejects_windows_drive_relative_override(monkeypatch):
-    """`C:foo` names a path relative to the cwd ON drive C:, not an absolute
-    path — the Windows form `Path.is_absolute()` correctly rejects."""
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", "C:foo")
 
@@ -141,7 +136,6 @@ def test_settings_home_rejects_windows_drive_relative_override(monkeypatch):
 
 
 def test_legacy_machine_local_dir_rejects_relative_claude_home(monkeypatch):
-    """The legacy-home resolver shares `_home_dir()`, so it validates too."""
     monkeypatch.setenv("CLAUDE_HOME", "relative-dir")
 
     with pytest.raises(ValueError, match="absolute path"):
@@ -199,12 +193,6 @@ def test_legacy_machine_local_dir_is_claude_home_slash_machine_local(monkeypatch
 
 
 def _populated_dir(path: Path) -> Path:
-    """Create `path` holding one file — a machine-local home with actual state.
-
-    Seeding content matters: an empty directory is an absent-or-husk home to
-    `check_machine_local_divergence`, so a test that seeds nothing short-circuits
-    before reaching the behaviour it names.
-    """
     path.mkdir(parents=True, exist_ok=True)
     (path / "registry.toml").write_text("# seeded by test\n")
     return path
@@ -214,29 +202,29 @@ def test_divergence_noop_when_legacy_absent(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "no-claude-home"))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
     _populated_dir(tmp_path / "settings-home" / "machine-local")
-    check_machine_local_divergence()  # must not raise
+    check_machine_local_divergence()
 
 
 def test_divergence_noop_when_legacy_is_empty_husk(tmp_path, monkeypatch):
     claude_home = tmp_path / "claude-home"
-    (claude_home / ".claude" / "machine-local").mkdir(parents=True)  # husk: exists, empty
+    (claude_home / ".claude" / "machine-local").mkdir(parents=True)
     settings_home_dir = tmp_path / "settings-home"
     _populated_dir(settings_home_dir / "machine-local")
 
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
-    check_machine_local_divergence()  # completed migration — must not raise
+    check_machine_local_divergence()
 
 
 def test_divergence_noop_when_new_is_empty_husk(tmp_path, monkeypatch):
     claude_home = tmp_path / "claude-home"
     _populated_dir(claude_home / ".claude" / "machine-local")
     settings_home_dir = tmp_path / "settings-home"
-    (settings_home_dir / "machine-local").mkdir(parents=True)  # husk: exists, empty
+    (settings_home_dir / "machine-local").mkdir(parents=True)
 
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
-    check_machine_local_divergence()  # pre-migration scaffold — must not raise
+    check_machine_local_divergence()
 
 
 def test_divergence_noop_when_new_absent(tmp_path, monkeypatch):
@@ -244,13 +232,13 @@ def test_divergence_noop_when_new_absent(tmp_path, monkeypatch):
     _populated_dir(claude_home / ".claude" / "machine-local")
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home-absent"))
-    check_machine_local_divergence()  # must not raise
+    check_machine_local_divergence()
 
 
 def test_divergence_noop_when_both_absent(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "claude-home-absent"))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home-absent"))
-    check_machine_local_divergence()  # must not raise
+    check_machine_local_divergence()
 
 
 @symlink_capability.requires_symlink_capability
@@ -264,7 +252,7 @@ def test_divergence_noop_when_compat_symlink_resolves_equal(tmp_path, monkeypatc
 
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
-    check_machine_local_divergence()  # symlink resolves equal — must not raise
+    check_machine_local_divergence()
 
 
 def test_divergence_raises_when_both_exist_and_resolve_unequal(tmp_path, monkeypatch):
@@ -309,7 +297,7 @@ def test_claude_config_dir_unset_matches_todays_default(monkeypatch):
 def test_claude_config_divergence_noop_when_unset(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "claude-home"))
-    check_claude_config_divergence()  # must not raise
+    check_claude_config_divergence()
 
 
 def test_claude_config_divergence_noop_when_configured_absent(tmp_path, monkeypatch):
@@ -317,16 +305,16 @@ def test_claude_config_divergence_noop_when_configured_absent(tmp_path, monkeypa
     _populated_dir(claude_home / ".claude")
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config-dir-absent"))
-    check_claude_config_divergence()  # must not raise
+    check_claude_config_divergence()
 
 
 def test_claude_config_divergence_noop_when_default_is_empty_husk(tmp_path, monkeypatch):
     claude_home = tmp_path / "claude-home"
-    (claude_home / ".claude").mkdir(parents=True)  # husk: exists, empty
+    (claude_home / ".claude").mkdir(parents=True)
     configured = _populated_dir(tmp_path / "config-dir")
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(configured))
-    check_claude_config_divergence()  # must not raise
+    check_claude_config_divergence()
 
 
 @symlink_capability.requires_symlink_capability
@@ -339,7 +327,7 @@ def test_claude_config_divergence_noop_when_symlink_resolves_equal(tmp_path, mon
 
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(configured))
-    check_claude_config_divergence()  # symlink resolves equal — must not raise
+    check_claude_config_divergence()
 
 
 def test_claude_config_divergence_raises_on_genuine_divergence(tmp_path, monkeypatch):
@@ -352,14 +340,6 @@ def test_claude_config_divergence_raises_on_genuine_divergence(tmp_path, monkeyp
 
     with pytest.raises(ClaudeConfigDivergenceError, match="DIVERGENT CLAUDE CONFIG DIRS"):
         check_claude_config_divergence()
-
-
-# ---------------------------------------------------------------------------
-# native_path_form — the string-preserving companion. Its whole reason to exist
-# is that the persisted write seams (repos.doe_claude, the .doe-root pointer)
-# must repair MSYS mount form WITHOUT rewriting separators on paths that were
-# already native, so both halves are asserted here.
-# ---------------------------------------------------------------------------
 
 
 def test_native_path_form_repairs_msys_mount_form(monkeypatch):
@@ -397,19 +377,14 @@ def test_native_path_form_leaves_empty_string_empty(monkeypatch):
     assert native_path_form("") == ""
 
 
-# ---------------------------------------------------------------------------
-# reject_doubled_claude_home — the $HOME/.claude footgun, guarded not warned
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "raw",
     [
         "/srv/oper/.claude",
         "/srv/oper/.claude/",
         "/srv/oper/.CLAUDE",
-        r"C:\Users\oper\.claude",  # abs-path-ok: fixture input, not a citation
-        "C:" + "\\Users\\oper\\.claude\\",  # abs-path-ok: fixture input, not a citation
+        r"C:\Users\oper\.claude",
+        "C:" + "\\Users\\oper\\.claude\\",
     ],
 )
 def test_reject_doubled_claude_home_rejects_a_dot_claude_leaf(raw):
@@ -436,15 +411,6 @@ def test_home_dir_rejects_doubled_claude_home(tmp_path, monkeypatch):
         home_dir()
 
 
-# ---------------------------------------------------------------------------
-# RealSettingsHomeLeakError — the conftest.py::_quarantine_real_home backstop
-# (2026-09-18: a pytest run wrote 371 launchers into the real settings-home
-# bin/, corrupted via a since-fixed in-place forwarder write; this is the
-# read-side guard that refuses the resolution outright the next time some
-# call site bypasses quarantine, instead of silently mutating live config).
-# ---------------------------------------------------------------------------
-
-
 def test_settings_home_refuses_the_forbidden_real_path(tmp_path, monkeypatch):
     """`conftest.py` sets `FORBID_REAL_SETTINGS_HOME_ENV` to this operator's
     real settings home for every non-`real_home` test; a resolution that
@@ -458,8 +424,6 @@ def test_settings_home_refuses_the_forbidden_real_path(tmp_path, monkeypatch):
 
 
 def test_settings_home_allows_a_path_distinct_from_the_forbidden_one(tmp_path, monkeypatch):
-    """The guard compares against the exact forbidden path -- an ordinary
-    tmp_path-quarantined resolution (the common case) must not be refused."""
     quarantine = tmp_path / "quarantine"
     quarantine.mkdir()
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
@@ -469,8 +433,6 @@ def test_settings_home_allows_a_path_distinct_from_the_forbidden_one(tmp_path, m
 
 
 def test_settings_home_ignores_an_unset_forbid_env(tmp_path, monkeypatch):
-    """No env var set (the non-pytest / production shape) -- resolver behaves
-    exactly as before, never consulting the guard at all."""
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     monkeypatch.delenv(FORBID_REAL_SETTINGS_HOME_ENV, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))

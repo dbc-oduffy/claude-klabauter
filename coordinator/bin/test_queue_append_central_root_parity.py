@@ -69,12 +69,10 @@ _FAKE_DIGEST12 = "0123456789ab"
 
 
 def _repo_bin_dir() -> str:
-    """Absolute path to the coordinator/bin directory this test lives in."""
     return os.path.dirname(os.path.abspath(__file__))
 
 
 def _repo_root() -> str:
-    """Absolute path to the claude-klabauter repo root (two levels up from bin/)."""
     return os.path.dirname(os.path.dirname(_repo_bin_dir()))
 
 
@@ -83,14 +81,6 @@ def _legacy_cli_path() -> str:
 
 
 def _load_legacy_cli_module():
-    """Load coordinator-queue-append as a module via SourceFileLoader.
-
-    The file has no `.py` extension (it is a naked-Python CLI script), so
-    `importlib.util.spec_from_file_location` cannot infer a loader from the
-    path alone — an explicit `SourceFileLoader` is required. Importing does
-    NOT execute `main()` (guarded by `if __name__ == "__main__":`), so no I/O
-    or subprocess calls happen at import time.
-    """
     path = _legacy_cli_path()
     loader = importlib.machinery.SourceFileLoader(
         "coordinator_queue_append_cli_parity_probe", path
@@ -102,7 +92,6 @@ def _load_legacy_cli_module():
 
 
 def _load_native_op_module():
-    """Import coordinator_core.ops.queue_append (proper package module)."""
     repo_root = _repo_root()
     if repo_root not in sys.path:
         sys.path.insert(0, repo_root)
@@ -178,5 +167,4 @@ def test_central_root_parity() -> None:
             os.environ.pop("QUEUE_APPEND_OUTPUT_ROOT", None)
         else:
             os.environ["QUEUE_APPEND_OUTPUT_ROOT"] = prior_output_root
-
 

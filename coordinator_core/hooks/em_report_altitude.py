@@ -113,17 +113,11 @@ from coordinator_core.hooks.nudge_harness_directive_dispatch import (
     _session_key,
 )
 
-# ---------------------------------------------------------------------------
-# D1 — budget overrun
-# ---------------------------------------------------------------------------
 
 _WORD_BUDGET = 200
 
 _FENCED_CODE_RE = re.compile(r"```.*?```", re.DOTALL)
 
-# A markdown table row: either a data/header row bracketed by pipes, or a
-# separator row made only of pipes/dashes/colons/space (with or without the
-# bracketing pipes) — e.g. "|---|---|" or "---|---".
 _TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
 _TABLE_SEP_RE = re.compile(r"^(?=.*[-|])[\s|:-]+$")
 
@@ -133,22 +127,6 @@ def _is_table_row(line: str) -> bool:
 
 
 def _strip_excluded(text: str) -> str:
-    """Strip fenced code blocks and markdown table rows before word-counting.
-
-    Implements the doctrine carve-out that a reply which is mostly an
-    artifact (a document, a table) is not a verbosity violation even when its
-    raw byte count is large.
-
-    Three known-and-deliberate gaps, all biased toward over-counting (the
-    module's stated safe direction — see the module docstring's D1 risk
-    posture): an unclosed ``` fence leaves its content counted as prose, a
-    GFM table without outer pipes has its data rows counted (only the
-    separator row is still excluded), and an indented 4-space code block is
-    counted as prose. Pinned, not fixed — see
-    test_em_report_altitude.py::test_unclosed_fence_counts_as_prose,
-    ::test_pipeless_table_data_rows_count_but_separator_excluded, and
-    ::test_indented_code_block_counts_as_prose.
-    """
     text = _FENCED_CODE_RE.sub(" ", text)
     kept_lines = [line for line in text.splitlines() if not _is_table_row(line)]
     return "\n".join(kept_lines)
@@ -158,88 +136,40 @@ def _word_count(text: str) -> int:
     return len(_strip_excluded(text).split())
 
 
-# ---------------------------------------------------------------------------
-# D2 — wrong-altitude citation density
-# ---------------------------------------------------------------------------
-
-# Extensions this fleet actually writes source/doc files in. A recognized
-# extension is one of the two ways a token can qualify as a genuine
 # file:line citation (see _FILE_LINE_RE below) — kept as a named constant,
-# not inlined into the regex, so the list is editable without re-reading a
-# regex. Not exhaustive by design; widen it here if a new language lands.
 _SOURCE_FILE_EXTENSIONS = (
     "py", "js", "ts", "tsx", "jsx", "sh", "md", "json", "yaml", "yml",
     "toml", "cpp", "h", "hpp", "rs", "go", "sql",
 )
 _SOURCE_EXT_ALT = "|".join(re.escape(ext) for ext in _SOURCE_FILE_EXTENSIONS)
 
-# file.ext:NNN — a source citation. A bare "some.host:port" or "12:30"
-# timestamp must NOT count (host:port and IP:port shapes have no genuine
-# path separator and no recognized source-file extension), so a token
-# qualifies only via EITHER of two shapes:
-#   1. it contains a path separator before the extension (path/to/foo.py:42)
-#   2. it has no separator, but the extension is on the explicit list above
-#      (foo.py:42)
-# A dotted host with a non-source extension (example.com:8080) and a bare
-# IP:port (127.0.0.1:5432) satisfy neither shape and correctly don't match.
 _FILE_LINE_RE = re.compile(
     r"\b(?:[\w.-]+/)+[\w.-]+\.\w+:\d+\b"
     r"|\b[\w-]+\.(?:" + _SOURCE_EXT_ALT + r"):\d+\b"
 )
 
-# POSIX absolute path — the common home/system roots this fleet's machines
-# actually use. "/Users/..." alone was macOS-only; DoE-claude's CLAUDE.md
-# makes multi-OS support (macOS/Windows/Linux) P0, so a Linux-only path
-# under /home, /opt, /var, /tmp, /usr, or /etc must be recognized too.
-# Rooted on a leading "/" + known segment + "/", specific enough not to need
-# a lookbehind against URL schemes (those use "://", never a bare "/home").
 _POSIX_ABS_PATH_ROOTS = ("Users", "home", "opt", "var", "tmp", "usr", "etc")
 _POSIX_ABS_PATH_RE = re.compile(
     r"/(?:" + "|".join(_POSIX_ABS_PATH_ROOTS) + r")/\S+"
 )
 
-# Windows absolute path — backslash-delimited, so it cannot collide with a
-# "scheme://" URL (those use forward slashes, never "X:\"). Still anchored on
-# a non-word-non-colon lookbehind so a mid-word single letter followed by a
-# colon (unlikely, but see the drive-letter/URL-scheme lesson) never matches.
 _WIN_ABS_PATH_RE = re.compile(r"(?<![:\w])[A-Za-z]:\\\S+")
 
 
 def _citation_count(text: str) -> tuple[int, int]:
-    """Return (file_line_citations, absolute_path_citations). Independent regex
-    passes over the same text — a string that is both an absolute path AND a
-    file:line citation (e.g. "/Users/x/foo.py:42") counts once in each
-    bucket, which is the intended behavior: that shape is exactly the dense
-    "wrong altitude" citation this detector exists to catch."""
     file_line = len(_FILE_LINE_RE.findall(text))
     abs_path = len(_POSIX_ABS_PATH_RE.findall(text)) + len(_WIN_ABS_PATH_RE.findall(text))
     return file_line, abs_path
 
 
-# ---------------------------------------------------------------------------
-# Meta-discussion suppressor — narrow by design (per the sibling op's
-# hard-won lesson: a broad suppressor swallows the real cases). Tokens a
-# normal EM report would never contain.
-# ---------------------------------------------------------------------------
 _META_DISCUSSION = re.compile(
     r"em_report_altitude|hooks\.em_report_altitude",
     re.IGNORECASE,
 )
 
 
-# ---------------------------------------------------------------------------
-# Per-session has-fired sentinel — bark-once, global across both detectors.
-# Same mechanism the earlier taper design used for its running tally, now
-# repurposed as a plain fired/not-fired flag rather than a counter. Best-
-# effort: a sentinel write/read failure must never change op()'s return
-# value for the call in progress — see module docstring.
-# ---------------------------------------------------------------------------
-
 _TALLY_FILENAME = "em-report-altitude-tally.json"
 
-#: Generator-provenance declaration: _mark_fired writes the has-fired
-#: sentinel under <git_common_dir>/coordinator-sessions/<session>/ (inside
-#: .git/) or an env-overridden demo/test dir — never a tracked artifact.
 GENERATES: list = []
 
 
@@ -273,12 +203,6 @@ def _tally_path(payload: dict) -> str | None:
 
 
 def _has_already_fired(payload: dict) -> bool:
-    """Return whether this session has already fired the advisory once.
-
-    No sentinel home resolvable (e.g. no `.git` above `cwd`) degrades to
-    "never fired" — the op may then fire more than once in that session,
-    which is the safe direction for a backstop (see module docstring).
-    """
     path = _tally_path(payload)
     if not path:
         return False
@@ -289,9 +213,6 @@ def _has_already_fired(payload: dict) -> bool:
 
 
 def _mark_fired(payload: dict) -> None:
-    """Best-effort: record that this session has fired. A write failure must
-    never propagate — the caller has already decided to fire this call
-    regardless of whether the marker lands."""
     path = _tally_path(payload)
     if not path:
         return
@@ -300,21 +221,7 @@ def _mark_fired(payload: dict) -> None:
         with open(path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write("1")
     except OSError:
-        pass  # best-effort marker; the call must fire regardless of whether it lands
-
-
-# ---------------------------------------------------------------------------
-# Message composition — pinkie-finger register (PM ruling): an offer, not a
-# finding, and always releasing the EM from fighting the count when the
-# length was warranted. `[comms]` prefix, not `[altitude]` — a word-count
-# advisory has nothing to do with altitude and the old prefix read as noise.
-#
-# Bark-once means every firing is the session's ONLY firing, so every
-# firing gets the full offer form (measurement + the compliant shape + the
-# release clause) — there is no taper left to compress toward. If both
-# detectors trip on the same reply, both blocks are included in the one
-# message rather than picking one.
-# ---------------------------------------------------------------------------
+        pass
 
 
 def _d1_block(word_count: int) -> str:
@@ -364,8 +271,6 @@ def op(payload: dict) -> dict | None:
         if payload.get("stop_hook_active"):
             return None
         if payload.get("agent_id"):
-            # A dispatched subagent's Stop is not an EM->PM message — there is
-            # no PM on the other end of it to calibrate for.
             return None
         if os.environ.get("COORDINATOR_EM_REPORT_ALTITUDE_OFF") == "1":
             return None
@@ -389,29 +294,13 @@ def op(payload: dict) -> dict | None:
 
         message = _compose_message(word_count, file_line, abs_path)
         _mark_fired(payload)
-        # Routed through the shared chokepoint (coordinator_core._hook_envelope) so this
-        # emitter's bytes are captured by capture_session() alongside every other
-        # prose-carrying builder call, per AC12. Routing must sit HERE rather than in the
-        # __main__ probe block: __main__ is the manual path, so instrumenting it leaves the
-        # real caller — the DoE-resident shim, which reads op()'s return directly —
-        # unmeasured. This module's transport is not the harness's hookSpecificOutput JSON
-        # protocol; only ``message`` is ever read, so the envelope is built for measurement
-        # and unwrapped back to the same {"message": <str>} shape. context_only() wraps
-        # ``message`` without altering it, so the unwrapped string is byte-identical.
         envelope = context_only("Stop", message)
         return {"message": envelope["hookSpecificOutput"]["additionalContext"]}
     except Exception:
-        # Fail-open, unconditionally — an advisory op must never turn a
-        # measurement bug into a Stop-path exception.
         return None
 
 
 if __name__ == "__main__":  # pragma: no cover - manual probe path
-    # op() already routes through the shared
-    # envelope chokepoint (see the comment above the context_only() call inside
-    # op()) for C3's corpus measurement; re-wrapping the already-unwrapped
-    # result["message"] here double-records the same message under
-    # capture_session() and diverges from the sibling hooks' __main__ shape.
     result = op(json.load(sys.stdin))
     if result:
         sys.stdout.write(result["message"])

@@ -1,12 +1,3 @@
-"""Tests for coordinator_core.install.prereq_probe.
-
-Independently re-derives expected NDJSON output shape by mocking
-subprocess.run per-probe (does NOT shell out to bash — this module is the
-native port, so a subprocess-parity test would only prove "the port calls
-the same binaries", not correctness of this module's own logic).
-
-Port of: prereq_probe.sh (DoE 290997c7, 2026-07-22)
-"""
 from __future__ import annotations
 
 import json
@@ -29,9 +20,6 @@ def _parse(line: str) -> dict:
     return json.loads(line)
 
 
-# ---------------------------------------------------------------------------
-# probe_git
-# ---------------------------------------------------------------------------
 def test_probe_git_pass():
     with mock.patch.object(pp, "_run", return_value=_cp(0, "git version 2.42.0\n")):
         rec = _parse(pp.probe_git())
@@ -55,9 +43,6 @@ def test_probe_git_broken_stub():
     assert rec["status"] == "fail"
 
 
-# ---------------------------------------------------------------------------
-# probe_python — delegates to manifest_reader.find_python (already-ported sibling)
-# ---------------------------------------------------------------------------
 _CLEAN_PATH = "/usr/local/bin:/usr/bin:/bin"
 
 
@@ -86,12 +71,7 @@ def test_probe_python_fail():
     assert "App execution alias" in rec["remediation"] or "App Execution alias" in rec["remediation"]
 
 
-# ---------------------------------------------------------------------------
-# probe_python — precedence assertion (C3 leg 2), both verdicts
-# ---------------------------------------------------------------------------
 def test_probe_python_precedence_clean_path_passes():
-    """A clean PATH — nothing ahead of the resolved interpreter matching any
-    of the four named stub classes — must still emit `pass`."""
     with mock.patch(
         "coordinator_core.install.manifest_reader.find_python", return_value="python3"
     ), mock.patch.object(pp, "_run", return_value=_cp(0, "Python 3.12.1\n")), mock.patch.object(
@@ -102,14 +82,8 @@ def test_probe_python_precedence_clean_path_passes():
 
 
 def test_probe_python_precedence_appx_alias_fails_arm_b():
-    """Arm B (C1 recorded UNRUN): a live WindowsApps App Execution Alias
-    stub anywhere on PATH is a hard FAIL, regardless of order relative to
-    the resolved interpreter."""
-    alias_dir = r"C:\Users\op\AppData\Local\Microsoft\WindowsApps"  # abs-path-ok: fake fixture PATH entry, never resolved on disk
-    real_dir = r"C:\Python312"  # abs-path-ok: fake fixture PATH entry, never resolved on disk
-    # Literal ";" (Windows' real PATH separator) rather than os.pathsep --
-    # this test runs on a POSIX CI box (os.pathsep == ":"), which would
-    # collide with the "C:" drive-letter colon in these fixture paths.
+    alias_dir = r"C:\Users\op\AppData\Local\Microsoft\WindowsApps"
+    real_dir = r"C:\Python312"
     fake_path = ";".join([real_dir, alias_dir])
     with mock.patch(
         "coordinator_core.install.manifest_reader.find_python", return_value="python3"
@@ -127,8 +101,6 @@ def test_probe_python_precedence_appx_alias_fails_arm_b():
 
 
 def test_probe_python_precedence_shim_class_ahead_fails():
-    """A pyenv shim directory precedes the resolved interpreter on PATH —
-    must FAIL hard, never merely warn."""
     shim_dir = "/home/op/.pyenv/shims"
     real_dir = "/usr/local/bin"
     fake_path = os.pathsep.join([shim_dir, real_dir])
@@ -145,9 +117,6 @@ def test_probe_python_precedence_shim_class_ahead_fails():
     assert "pyenv shim" in rec["detail"]
 
 
-# ---------------------------------------------------------------------------
-# probe_uv — advisory, warn (not fail) on absence
-# ---------------------------------------------------------------------------
 def test_probe_uv_missing_is_warn_not_fail():
     with mock.patch.object(pp, "_run", return_value=None):
         rec = _parse(pp.probe_uv())
@@ -161,9 +130,7 @@ def test_probe_uv_pass():
     assert rec["status"] == "pass"
 
 
-# ---------------------------------------------------------------------------
 # probe_gh — three-step hard gate + optional COORDINATOR_GH_PROBE_REPO sub-probe
-# ---------------------------------------------------------------------------
 def test_probe_gh_pass_no_probe_repo(monkeypatch):
     monkeypatch.delenv("COORDINATOR_GH_PROBE_REPO", raising=False)
     calls = {"n": 0}
@@ -179,7 +146,7 @@ def test_probe_gh_pass_no_probe_repo(monkeypatch):
     with mock.patch.object(pp, "_run", side_effect=fake_run):
         rec = _parse(pp.probe_gh())
     assert rec["status"] == "pass"
-    assert calls["n"] == 2  # no repo sub-probe when env var unset
+    assert calls["n"] == 2
 
 
 def test_probe_gh_unauthenticated():
@@ -213,9 +180,6 @@ def test_probe_gh_repo_subprobe_runs_when_env_set(monkeypatch):
     assert rec["status"] == "pass"
 
 
-# ---------------------------------------------------------------------------
-# probe_ue — env override, then per-OS scan
-# ---------------------------------------------------------------------------
 def test_probe_ue_env_override_hit(monkeypatch, tmp_path):
     engine_dir = tmp_path / "UE_5.4"
     bin_dir = engine_dir / "Engine" / "Binaries" / "Mac"
@@ -245,9 +209,6 @@ def test_probe_ue_not_found_on_path(monkeypatch):
     assert rec["severity"] == "advisory"
 
 
-# ---------------------------------------------------------------------------
-# probe_clone_auth — the heaviest branch; exercise the priority ladder.
-# ---------------------------------------------------------------------------
 def test_probe_clone_auth_gh_wins(monkeypatch):
     monkeypatch.delenv("COORDINATOR_AUTH_PROBE_URL", raising=False)
     with mock.patch.object(pp, "_run", return_value=_cp(0, "")):
@@ -277,11 +238,11 @@ def test_probe_clone_auth_offline_is_inconclusive(monkeypatch):
 
     def fake_run(argv, **kw):
         if argv[:2] in (["gh", "auth"], ["glab", "auth"]):
-            return None  # binaries absent
+            return None
         if argv[0] == "ssh":
             return _cp(1, "", "ssh: connect to host github.com port 22: Network is unreachable")
         if argv[:2] == ["git", "credential"]:
-            return _cp(0, "")  # empty fill, no password=
+            return _cp(0, "")
         if argv == ["git", "--version"]:
             return _cp(0, "git version 2.42.0")
         raise AssertionError(argv)
@@ -299,8 +260,6 @@ def test_probe_clone_auth_no_method_found_is_semi_hard(monkeypatch):
         if argv[:2] in (["gh", "auth"], ["glab", "auth"]):
             return None
         if argv[0] == "ssh":
-            # Reachable but auth explicitly denied — NOT a network error, so
-            # the network-error-only inconclusive branch must not fire.
             return _cp(1, "", "Permission denied (publickey).")
         if argv[:2] == ["git", "credential"]:
             return _cp(0, "")
@@ -321,7 +280,7 @@ def test_probe_clone_auth_git_absent_is_inconclusive(monkeypatch):
         if argv[:2] in (["gh", "auth"], ["glab", "auth"]):
             return None
         if argv[0] == "ssh":
-            return None  # ssh itself absent too
+            return None
         return None
 
     with mock.patch.object(pp, "_run", side_effect=fake_run):
@@ -329,9 +288,6 @@ def test_probe_clone_auth_git_absent_is_inconclusive(monkeypatch):
     assert rec["status"] == "inconclusive"
 
 
-# ---------------------------------------------------------------------------
-# probe_longpaths — non-Windows short-circuit is the common CI case.
-# ---------------------------------------------------------------------------
 def test_probe_longpaths_non_windows():
     with mock.patch.object(pp, "_os_name", return_value="Darwin"):
         rec = _parse(pp.probe_longpaths())
@@ -356,9 +312,6 @@ def test_probe_longpaths_windows_unset():
     assert "<unset>" in rec["detail"]
 
 
-# ---------------------------------------------------------------------------
-# probe_git_lfs
-# ---------------------------------------------------------------------------
 def test_probe_git_lfs_pass():
     def fake_run(argv, **kw):
         if argv == ["git", "--version"]:
@@ -390,9 +343,6 @@ def test_probe_git_lfs_not_configured():
     assert "git lfs install" in rec["remediation"]
 
 
-# ---------------------------------------------------------------------------
-# probe_shell_login_env — macOS-only orphan detector.
-# ---------------------------------------------------------------------------
 def test_probe_shell_login_env_non_macos_short_circuits():
     with mock.patch.object(pp, "_os_name", return_value="Linux"):
         rec = _parse(pp.probe_shell_login_env())
@@ -407,7 +357,6 @@ def test_probe_shell_login_env_bash_orphaned(monkeypatch):
         if argv[0] == "dscl":
             return _cp(0, "UserShell: /bin/bash\n")
         if argv[0] == "/bin/bash":
-            # fresh PATH lacks ~/.local/bin, and no claude line follows.
             return _cp(0, "/usr/bin:/bin\n")
         raise AssertionError(argv)
 
@@ -453,9 +402,6 @@ def test_probe_shell_login_env_non_bash_login_shell():
     assert "not bash" in rec["detail"]
 
 
-# ---------------------------------------------------------------------------
-# probe_all / main — aggregator shape + order.
-# ---------------------------------------------------------------------------
 def test_probe_all_order_and_count():
     names = [
         "git", "python", "uv", "gh", "node", "pwsh", "ue", "clone_auth", "longpaths",
@@ -478,9 +424,6 @@ def test_main_writes_ndjson_and_returns_zero(capsys):
     assert json.loads(out.strip())["name"] == "git"
 
 
-# ---------------------------------------------------------------------------
-# subprocess hardening (A2/A4) — every _run call must carry timeout + stdin guard.
-# ---------------------------------------------------------------------------
 def test_run_passes_timeout_and_stdin_devnull():
     with mock.patch("subprocess.run") as mocked:
         mocked.return_value = _cp(0, "ok")
@@ -500,9 +443,6 @@ def test_run_returns_none_on_oserror():
         assert pp._run(["definitely-not-a-binary"]) is None
 
 
-# ---------------------------------------------------------------------------
-# probe_skill_frontmatter_valid / install.probe_skill_frontmatter_valid
-# ---------------------------------------------------------------------------
 def _write_skill_file(doe_root, *, description="a description", with_frontmatter=True):
     skill_path = doe_root.joinpath("coordinator", "skills", "setup", "SKILL.md")
     skill_path.parent.mkdir(parents=True, exist_ok=True)
@@ -561,7 +501,6 @@ def test_check_skill_frontmatter_valid_empty_description(tmp_path):
 
 
 def test_check_skill_frontmatter_valid_double_invocation_is_stable(tmp_path):
-    """AC7: identical inputs, second invocation is a safe no-op with an identical result."""
     _write_skill_file(tmp_path)
     with mock.patch(
         "coordinator_core.ops.coordinator_doe_root.coordinator_doe_root", return_value=str(tmp_path)
@@ -594,15 +533,10 @@ def test_op_probe_skill_frontmatter_valid_handler(tmp_path):
     with mock.patch(
         "coordinator_core.ops.coordinator_doe_root.coordinator_doe_root", return_value=str(tmp_path)
     ):
-        # Handler is a plain sync `def`
-        # (engine auto-offloads via asyncio.to_thread), called directly.
         result = pp._probe_skill_frontmatter_valid_op({})
     assert result == {"ok": True, "error": None}
 
 
-# ---------------------------------------------------------------------------
-# probe_windows_terminal_presence / install.probe_windows_terminal_presence
-# ---------------------------------------------------------------------------
 def test_check_windows_terminal_presence_non_windows_short_circuits():
     with mock.patch.object(pp.sys, "platform", "darwin"), mock.patch.object(pp, "_run") as run_mock:
         result = pp._check_windows_terminal_presence()
@@ -644,7 +578,6 @@ def test_check_windows_terminal_presence_winget_unavailable():
 
 
 def test_check_windows_terminal_presence_double_invocation_is_stable():
-    """AC7: identical inputs, second invocation is a safe no-op with an identical result."""
     with mock.patch.object(pp.sys, "platform", "win32"), mock.patch("shutil.which", return_value="wt.exe"):
         first = pp._check_windows_terminal_presence()
         second = pp._check_windows_terminal_presence()
@@ -677,23 +610,11 @@ def test_probe_windows_terminal_presence_inconclusive_when_winget_unavailable():
 
 def test_op_probe_windows_terminal_presence_handler():
     with mock.patch.object(pp.sys, "platform", "win32"), mock.patch("shutil.which", return_value="wt.exe"):
-        # Handler is a plain sync `def`
-        # (engine auto-offloads via asyncio.to_thread), called directly.
         result = pp._probe_windows_terminal_presence_op({})
     assert result == {"present": True, "method": "path"}
 
 
-# ---------------------------------------------------------------------------
-# register_op import isolation — this module is vendored by sibling repos
-# (e.g. Example-retrieval-repo-ue-addon) that carry no coordinator_core.ipc; it must
-# import cleanly with a no-op register_op fallback in that environment while
-# still using the real ipc.register_op (and populating ipc's registry) when
-# ipc IS importable, the normal in-repo case.
-# ---------------------------------------------------------------------------
 def test_import_succeeds_and_ops_register_when_ipc_is_importable():
-    """Positive case: normal import uses the real ipc.register_op, and both
-    decorated probe ops land in ipc's registry (unaffected by this module's
-    guarded import)."""
     import importlib
 
     from coordinator_core import ipc as real_ipc
@@ -711,23 +632,9 @@ def test_import_succeeds_and_ops_register_when_ipc_is_importable():
 
 
 def test_import_succeeds_with_register_op_fallback_when_ipc_unimportable(monkeypatch):
-    """Vendor case: coordinator_core.ipc unimportable (e.g. a sibling repo's
-    vendored copy of this module, with no engine tree behind it). The module
-    must still import cleanly, via the no-op register_op fallback, and its
-    two decorated probe functions must still be plain callables.
-
-    sys.modules["coordinator_core.ipc"] = None is the standard forcing idiom:
-    Python treats a None entry as "this import previously failed" and raises
-    ImportError immediately on the next `import coordinator_core.ipc`,
-    without needing to actually delete the installed package.
-    """
     import importlib
     import sys
 
-    # monkeypatch restores both sys.modules entries on teardown (including
-    # the module object this file's own `pp` reference points at, which is
-    # a separate, untouched object from the one `import_module` below
-    # produces) -- no manual reload needed.
     monkeypatch.setitem(sys.modules, "coordinator_core.ipc", None)
     monkeypatch.delitem(sys.modules, "coordinator_core.install.prereq_probe", raising=False)
 
@@ -735,6 +642,5 @@ def test_import_succeeds_with_register_op_fallback_when_ipc_unimportable(monkeyp
     assert callable(fresh._probe_skill_frontmatter_valid_op)
     assert callable(fresh._probe_windows_terminal_presence_op)
     assert fresh.register_op.__module__ != "coordinator_core.ipc"
-    # The fallback decorator returns the function unchanged.
     marker = object()
     assert fresh.register_op("some.op")(marker) is marker

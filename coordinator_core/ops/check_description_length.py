@@ -72,8 +72,6 @@ def _find_skill_md_files(plugins_root: Path) -> List[Path]:
 
 
 def _extract_frontmatter(text: str) -> str:
-    """Mirror `awk '/^---$/{n++; next} n==1'` — lines strictly between the
-    first two `---`-only lines, exclusive of both delimiters."""
     lines = text.splitlines()
     n = 0
     out: List[str] = []
@@ -87,9 +85,6 @@ def _extract_frontmatter(text: str) -> str:
 
 
 def _strip_quotes(value: str) -> str:
-    """Mirror `sed -E 's/^description:[[:space:]]*"?(.*)"?$/\\1/' | sed 's/"$//'`
-    — strip at most one leading and one trailing double-quote, heuristically
-    (not a real YAML unescape)."""
     v = value
     if v.startswith('"'):
         v = v[1:]
@@ -101,7 +96,6 @@ def _strip_quotes(value: str) -> str:
 
 
 def _parse_frontmatter(frontmatter: str) -> Tuple[Optional[str], int, Optional[int]]:
-    """Return (desc, desc_line_count, budget) from a frontmatter block."""
     desc_lines_raw: List[str] = []
     budget: Optional[int] = None
     for line in frontmatter.splitlines():

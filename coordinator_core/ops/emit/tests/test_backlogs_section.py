@@ -1,17 +1,3 @@
-"""Regression tests for coordinator_core.ops.emit.sections.backlogs (+ plans/handoffs smoke).
-
-Covers the list-shaped ``frontmatter`` crash reported in
-cross-repo/inbox/2026-07-12-example-game-repo-em-emit-cadence-backlogs-list-frontmatter-crash.md:
-query-records.js mis-parses a ``body: |`` block containing markdown bullet lines and returns
-``frontmatter`` as a JSON array instead of an object. ``fm = rec.get("frontmatter") or {}``
-does not catch this (a non-empty list is truthy), so ``fm.get(...)`` raised AttributeError and
-aborted the entire cockpit emit (envelope.build has no per-section try/except).
-
-These tests assert the fix: a list-shaped ``frontmatter`` record is routed to the section's
-malformed/quarantine bucket, never raises.
-
-Spec backlink: cross-repo/inbox/2026-07-12-example-game-repo-em-emit-cadence-backlogs-list-frontmatter-crash.md
-"""
 
 from __future__ import annotations
 
@@ -24,8 +10,6 @@ from coordinator_core.ops.emit.sections.plans import collect as plans_collect
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -33,7 +17,6 @@ pytestmark = [
 
 
 def _make_ctx(repo_name: str = "test-org/test-repo") -> MagicMock:
-    """Minimal EmitContext stub sufficient for section collect() calls under test."""
     ctx = MagicMock()
     ctx.repo_name = repo_name
     ctx.repo_root = "/tmp/does-not-exist"
@@ -54,14 +37,8 @@ def _make_ctx(repo_name: str = "test-org/test-repo") -> MagicMock:
     return ctx
 
 
-# ---------------------------------------------------------------------------
-# backlogs.collect — the crash's original site
-# ---------------------------------------------------------------------------
-
 @patch("coordinator_core.ops.emit.sections.backlogs._query_records")
 def test_list_shaped_frontmatter_quarantines_not_raises(mock_qr):
-    """A list-shaped ``frontmatter`` (the query-records.js mis-parse shape) must land in the
-    malformed bucket with a 'missing required field' reason, not raise AttributeError."""
 
     def query_records(ctx, type_tag):
         if type_tag == "bug":
@@ -83,7 +60,6 @@ def test_list_shaped_frontmatter_quarantines_not_raises(mock_qr):
 
 @patch("coordinator_core.ops.emit.sections.backlogs._query_records")
 def test_non_dict_rec_is_skipped_not_raises(mock_qr):
-    """A non-dict record in the raw list (e.g. a bare string) must be skipped, not crash."""
 
     def query_records(ctx, type_tag):
         if type_tag == "debt":
@@ -104,7 +80,6 @@ def test_non_dict_rec_is_skipped_not_raises(mock_qr):
 
 @patch("coordinator_core.ops.emit.sections.backlogs._query_records")
 def test_valid_dict_frontmatter_still_produces_record(mock_qr):
-    """Baseline: a well-formed dict frontmatter still yields a valid record (no regression)."""
 
     def query_records(ctx, type_tag):
         if type_tag == "bug":
@@ -128,13 +103,8 @@ def test_valid_dict_frontmatter_still_produces_record(mock_qr):
     assert records[0]["severity"] == "P2"
 
 
-# ---------------------------------------------------------------------------
-# plans.collect / handoffs.collect — sibling latent bugs (same class), smoke only
-# ---------------------------------------------------------------------------
-
 @patch("coordinator_core.ops.emit.sections.plans._query_plan_records")
 def test_plans_collect_list_shaped_frontmatter_quarantines_not_raises(mock_qr):
-    """plans.py had no isinstance(rec, dict) guard and the same 'or {}' hazard; must not raise."""
     mock_qr.return_value = [{"path": "docs/plans/2026-07-12-x.md", "frontmatter": ["- foo"]}]
     ctx = _make_ctx()
 
@@ -148,7 +118,6 @@ def test_plans_collect_list_shaped_frontmatter_quarantines_not_raises(mock_qr):
 
 @patch("coordinator_core.ops.emit.sections.handoffs._query_records")
 def test_handoffs_collect_list_shaped_frontmatter_quarantines_not_raises(mock_qr):
-    """handoffs.py had no isinstance(rec, dict) guard and the same 'or {}' hazard; must not raise."""
 
     def query_records(ctx, record_type):
         if record_type == "handoff":

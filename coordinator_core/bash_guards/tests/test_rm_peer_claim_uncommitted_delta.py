@@ -34,8 +34,6 @@ from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external `git` process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -60,8 +58,6 @@ def _init_repo(tmp_path: Path) -> str:
 
 
 def _claim(root: str, sid: str, path: str) -> None:
-    """Record ``path`` as TOUCHed by ``sid`` through the canonical writer,
-    mirroring ``test_check5_foreign_hunk.py``'s own ``_claim`` helper."""
     from coordinator_core.session import touch_record
 
     sdir = Path(root) / ".git" / "coordinator-sessions" / sid
@@ -77,10 +73,6 @@ def _claim(root: str, sid: str, path: str) -> None:
 
 class TestUncommittedDeltaGate:
     def test_touched_then_committed_path_is_not_a_live_claim(self, tmp_path, monkeypatch):
-        """A peer TOUCHed and then committed ``a.py`` cleanly; ``b.py`` in the
-        same directory is uncommitted (so `rm -r work/` still reaches the
-        dirty-work branch and the peer-claim scan). ``a.py`` must no longer
-        contest the removal -- it carries no delta right now."""
         root = _init_repo(tmp_path)
         peer_sid = "peer-sess"
         assert core.init(peer_sid, cwd=root)
@@ -126,12 +118,6 @@ class TestUncommittedDeltaGate:
         assert peer_sid in out["permissionDecisionReason"]
 
     def test_degraded_status_probe_still_blocks(self, tmp_path, monkeypatch):
-        """FAIL SAFE: the whole-tree ``git status --porcelain`` probe this
-        gate depends on fails outright -- the pre-existing (unfiltered)
-        contested verdict must stand, never read an unreadable tree as
-        clean. Only the exact no-pathspec status call is broken; every other
-        `_run_git` call in the guard's ladder (root resolution, the
-        per-target dirty-work probe) still succeeds."""
         root = _init_repo(tmp_path)
         peer_sid = "peer-sess"
         assert core.init(peer_sid, cwd=root)
@@ -168,9 +154,6 @@ class TestUncommittedDeltaGate:
     def test_dirty_paths_lookup_is_shared_across_targets_one_status_spawn(
         self, tmp_path, monkeypatch
     ):
-        """Amplification gate (DR-344 / `test_no_unbatched_per_item_git_spawn.py`):
-        the no-pathspec `git status --porcelain` probe this gate adds must cost
-        ONE spawn for the whole `rm` command, never one per target."""
         root = _init_repo(tmp_path)
         peer_sid = "peer-sess"
         assert core.init(peer_sid, cwd=root)

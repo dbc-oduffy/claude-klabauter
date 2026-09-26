@@ -1,13 +1,3 @@
-"""Tests for coordinator_core.git.commit_trailers's closure-fact extractor
-(C1, state/dispatch-briefs/2026-08-22-the-commit-closure-pipe-carries-rows/
-C1.md, AC1/AC2).
-
-Covers the trailing-region bound this chunk introduces: a `Closes:` line
-demoted out of git's own last-paragraph trailer block (successive `-m`
-args) must still record, while a `Closes:`-shaped line sitting OUTSIDE the
-trailing region (a quoted/embedded prior commit message in the body) must
-NOT.
-"""
 
 from __future__ import annotations
 
@@ -18,9 +8,6 @@ from coordinator_core.git.commit_trailers import (
 
 
 def test_demoted_closes_paragraph_still_records():
-    # Built the way `git commit -m subject -m "Closes: RECS-1" -m "Commit-Token: abc"`
-    # produces it: three blank-line-separated paragraphs, `Closes:` sitting
-    # ABOVE the trailer block git itself would parse -- the exact demotion
     # shape DECISION-2 used to miss.
     text = "Subject line\n\nCloses: RECS-1\n\nCommit-Token: abc123\n"
     closes, reverts_sha = extract_closure_facts_from_text(text)
@@ -35,16 +22,12 @@ def test_multi_closes_lines_all_captured():
 
 
 def test_properly_blocked_trailer_records():
-    # A single, correctly-placed trailing trailer block -- git's own parser
-    # would already see this; must keep working under the new extractor.
     text = "Subject\n\nBody paragraph text.\n\nCloses: RECS-3\nCommit-Token: abc123\n"
     closes, _ = extract_closure_facts_from_text(text)
     assert closes == ["RECS-3"]
 
 
 def test_non_line_anchored_closes_does_not_record():
-    # Prose containing "closes" mid-sentence, and a line where the token
-    # isn't anchored at column 0, must never match.
     text = "Subject\n\nThis change closes the loop on the earlier bug.\n"
     closes, _ = extract_closure_facts_from_text(text)
     assert closes == []
@@ -58,8 +41,6 @@ def test_revert_line_captured():
 
 
 def test_quoted_embedded_closes_outside_trailing_region_not_recorded():
-    # A quoted prior commit message sitting in the body, separated from the
-    # trailing region by an ordinary (non-trailer-shaped) paragraph -- the
     # DECISION-2 supersession's named hazard this bound must still close.
     text = (
         "Subject\n\n"

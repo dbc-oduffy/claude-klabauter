@@ -1,16 +1,3 @@
-"""Regression coverage for `maximalist._scaffold_root_is_claude_home`.
-
-state/bug-backlog/2026-08-28-step-7-scaffolds-claude-home-around-a-guard-
-that-would-refuse-it.yaml: Step 7 (scaffold-canonical-structure) calls
-`scaffold_canonical_structure` natively, in-process, against
-`os.path.join(claude_home_dir, ".claude")` -- which is Claude Home itself
-on an ordinary run. `guard_repo_setup_claude_home_refusal` denies exactly
-this write for a Bash-invoked scaffold, but never runs on this native path,
-so the guard's protection was unreachable by construction.
-
-Fixture-only: no real `~/.claude`, no install run, no real settings tree --
-`env` is a plain dict pointed at a `tmp_path` fixture directory.
-"""
 
 from __future__ import annotations
 

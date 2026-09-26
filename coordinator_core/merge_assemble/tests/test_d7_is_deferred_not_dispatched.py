@@ -31,10 +31,6 @@ _BIN = Path(__file__).resolve().parents[3] / "coordinator" / "bin"
 
 
 def _flip_tags_cli():
-    """The REAL `merge-release-notes-derive` module, loaded by path the same
-    way `coordinator/bin/tests/test_merge_release_notes_derive.py` loads it —
-    restating its parser here would let the two drift apart, which is exactly
-    the class of defect this file pins."""
     spec = importlib.util.spec_from_file_location(
         "merge_release_notes_derive_for_d7", _BIN / "merge-release-notes-derive.py"
     )
@@ -55,8 +51,6 @@ def test_d7_is_a_narrated_no_op(tmp_path: Path) -> None:
     assert d7["already_satisfied"] is True
     reason = d7.get("skipped_reason") or ""
     assert reason, "a deferred directive must narrate why — silence is the defect"
-    # The reason has to be actionable: it names the post-merge step and the
-    # facts that do not exist yet.
     assert "Step 10" in reason
     assert "merge_sha" in reason or "merge SHA" in reason
 
@@ -69,10 +63,6 @@ def test_d7_keeps_its_identity_and_ordering_edge(tmp_path: Path) -> None:
 
 
 def test_d7_args_are_underfilled_for_the_real_parser(tmp_path: Path) -> None:
-    """The reason `d7` must not dispatch, asserted against the CLI's actual
-    parser shape rather than a prose claim about it. If someone later gives
-    `flip-tags` defaults for the three post-merge positionals, this test goes
-    red and the deferral can be revisited on evidence."""
     parser = _flip_tags_cli()._build_parser()
     d7 = _d7(tmp_path)
     with pytest.raises(SystemExit):

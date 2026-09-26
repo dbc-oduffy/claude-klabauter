@@ -29,19 +29,6 @@ from typing import Any, Optional, Tuple
 
 from coordinator_core.write_guards.engine import _VALID_CLASSES, _parse_guard_literals
 
-# Shared uncovered-shape statement (C6 of docs/plans/2026-08-29-a-guard-class-
-# flip-announces-itself.md) — the SSOT both the relay memo (C3) and the
-# reference doc (docs/reference/guard-class-relay.md, C5) read verbatim, so
-# the two surfaces cannot announce different coverage. A Python constant does
-# not bind a Markdown file by itself; only the anti-drift test (C4/C6) that
-# asserts this exact string appears in both surfaces enforces the match.
-#
-# States plainly what this relay does and does NOT see: it fires on a
-# module-level CLASS flip in coordinator_core/write_guards/ only. It does
-# NOT fire on an intra-module branch-contract change (the worked example is
-# the C15 shape — a guard whose deny/advisory behaviour changed without its
-# module-level CLASS literal changing), and it does NOT cover bash_guards or
-# hooks.
 UNCOVERED_SHAPE = (
     "This relay fires on a module-level CLASS flip in "
     "coordinator_core/write_guards/; it does NOT fire on an intra-module "
@@ -51,9 +38,6 @@ UNCOVERED_SHAPE = (
 
 
 def _class_only(source: Optional[str]) -> Optional[str]:
-    """Return the guard module's literal `CLASS` value, or `None` when the
-    source is missing, unparseable, non-literal, or lacks a valid CLASS.
-    """
     if source is None:
         return None
     parsed = _parse_guard_literals(source)
@@ -89,33 +73,14 @@ def detect_class_transition(
     return (old_cls, new_cls)
 
 
-# ---------------------------------------------------------------------------
-# Emission (C3) — compose and stage a memo announcing one detected transition.
-#
-# Deliberately calls the registered `memo.draft` / `memo.compose` op
 # functions IN-PROCESS (plain Python import + call), never the
-# `cross-repo-memo` CLI — a subprocess on the commit path is brightline-
-# forbidden (claude-klabauter CLAUDE.md § The brightline). `detect_class_transition`
-# above stays pure; this is the module's separate, additive emission surface.
-# ---------------------------------------------------------------------------
 
 import re as _re
 
-#: Fixed receiver for every guard-class-relay memo (interface fact,
-#: verified by running the op — see this chunk's dispatch brief).
 _MEMO_TO = "doe-claude-em"
 
-#: The claude-klabauter/DoE boundary this memo is scoped to — every guard-class-relay
-#: memo names the same seam, since the relay itself always crosses it.
 _MEMO_SEAM = "claude-klabauter-guard-semantics / DoE-hooks-and-tests boundary"
 
-#: The general ruling governing guard CLASS reclassification
-#: (docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md) —
-#: cited in every emitted memo body as the ruling reference; a specific
-#: transition may additionally be covered by its own module-level ruling
-#: comment (see docs/reference/guard-class-relay.md § two hand-written
-#: remembrance comments), which this generic mechanism does not attempt to
-#: look up per-module.
 _RULING_REFERENCE = (
     "DR-277 (docs/decisions/DR-277-guards-are-advisory-by-default-two-"
     "named.md) governs guard CLASS reclassification generally; a specific "
@@ -136,30 +101,6 @@ def _topic_for(module: str, sha: str) -> str:
 
 
 def stage_class_transition_memo(transition: dict, *, repo_root: Any) -> dict:
-    """Compose and stage a memo announcing one detected guard CLASS
-    transition, via in-process `memo.draft` + `memo.compose` op calls.
-
-    `transition` is one entry from `commit_v2._guard_class_relay_step`'s
-    `transitions` list: `{"module", "old_class", "new_class", "sha"}`.
-    `repo_root` is the git common dir (same value `ceremony.commit_v2`'s own
-    handler receives) — both `memo.draft` and `memo.compose` resolve the
-    calling repo's worktree from it themselves.
-
-    Never raises: every failure mode is caught and returned as a dict for
-    the caller to fold into a NAMED `skips` entry — this is deliberately NOT
-    "never raise" reinterpreted as "silently do nothing" (C2's "never raise"
-    spec must not become indistinguishable from a quiet, broken relay).
-
-    Returns `{"staged": bool, "topic": str, "reason": str | None}`.
-    `"staged": True` covers two cases: a fresh draft was composed and
-    staged, OR a draft already exists at this EXACT topic (same module +
-    same sha — the idempotent no-op: re-detecting an already-announced
-    transition on a re-run is not a new fact, and `reason` names the
-    no-op explicitly rather than reading like a fresh emission). Any other
-    failure (setup error, write error, compose error) returns
-    `"staged": False` with `reason` naming what happened — never silently
-    dropped.
-    """
     from coordinator_core.ops.fleet.memo_compose import _memo_compose
     from coordinator_core.ops.fleet.memo_draft import _memo_draft
 
@@ -200,8 +141,6 @@ def stage_class_transition_memo(transition: dict, *, repo_root: Any) -> dict:
     if draft_failed:
         first_reason = draft_failed[0].get("reason", "")
         if first_reason.startswith("collision"):
-            # Idempotent no-op -- a draft at this exact topic already exists
-            # (same module + same sha already announced). Not an error.
             return {
                 "staged": True, "topic": topic,
                 "reason": f"already staged (collision no-op): {first_reason}",

@@ -35,12 +35,6 @@ from coordinator_core.group_em import obligations, send_pass
 
 
 def test_obligations_are_named_not_merely_counted() -> None:
-    """`for_peer` returns the rows behind the count, and absence stays distinct.
-
-    `undischarged_obligations` already gave a count and already separated None
-    from 0 before this plan; asserting that alone would be a regression test, not
-    a bar. What nothing exposed was WHICH obligations, which is what a wake needs.
-    """
     with tempfile.TemporaryDirectory() as tmp:
         assert obligations.for_peer(tmp, "sess-no-ledger-0000000000000000") is None, (
             "a peer with no ledger must read None -- 'no ledger exists' is not "
@@ -49,8 +43,6 @@ def test_obligations_are_named_not_merely_counted() -> None:
         )
 
         sid = "sess-has-ledger-000000000000000"
-        # `send_pass` no longer aliases `machinery_paths`'s functions/constants
-        # under a private name; this test named `machinery_paths.share_dir`/
         # `LEDGER_FILENAME` directly.
         from coordinator_core.session import machinery_paths
 
@@ -72,11 +64,6 @@ def test_obligations_are_named_not_merely_counted() -> None:
 
 
 def test_empty_tick_records_which_obligation_it_declined_and_why() -> None:
-    """A tick that sends nothing cannot close on an empty result.
-
-    Four empty fields are indistinguishable from a tick that never looked, which
-    is the failure the whole mechanism exists to end.
-    """
     with tempfile.TemporaryDirectory() as tmp:
         digest = send_pass.build_send_digest(
             tmp, roster=[], caller_session_id="sess-caller-0000000000000000"

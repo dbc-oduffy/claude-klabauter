@@ -98,9 +98,6 @@ from __future__ import annotations
 
 from typing import Any
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 
 SCHEMA_VERSION: int = 1
 """Schema version integer — not semver; consistent with session-shape.json convention."""
@@ -119,10 +116,6 @@ VALID_SCOPING_METHODS: frozenset[str] = frozenset(
 )
 """Valid values for the receipt top-level ``scoping_method`` field (C2, additive)."""
 
-# ---------------------------------------------------------------------------
-# Node factory helpers — produce schema-valid node dicts with all keys present
-# ---------------------------------------------------------------------------
-
 
 def make_d_node(
     node_id: str,
@@ -131,13 +124,6 @@ def make_d_node(
     *,
     tail_step: bool = False,
 ) -> dict[str, Any]:
-    """Return a schema-valid D-node dict.
-
-    tail_step=True marks this D-node as belonging to the deterministic tail;
-    these entries feed the op_tail derived view via compute_op_tail().
-    evidence for tail D-nodes should carry the fleet-op result shape:
-    {acted:[], skipped:[], failed:[], ...} so compute_op_tail can aggregate.
-    """
     return {
         "id": node_id,
         "type": "D",
@@ -152,10 +138,6 @@ def make_j_node(
     question: str = "",
     answer: str = "",
 ) -> dict[str, Any]:
-    """Return a schema-valid J-node dict.
-
-    answer="" indicates the question has not yet been answered (phase-1).
-    """
     return {
         "id": node_id,
         "type": "J",
@@ -169,10 +151,6 @@ def make_f_node(
     slot: str = "",
     filled: str = "",
 ) -> dict[str, Any]:
-    """Return a schema-valid F-node dict.
-
-    filled="" indicates the slot has not yet been authored (phase-1).
-    """
     return {
         "id": node_id,
         "type": "F",
@@ -186,17 +164,6 @@ def make_b_node(
     pre_resolved_evidence: dict[str, Any] | None = None,
     em_adjudication: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return a schema-valid B-node dict.
-
-    GENERIC two-slot shape: pre_resolved_evidence and em_adjudication are
-    ceremony-instance-specific blobs.  For wsc: pre_resolved_evidence carries
-    review-wave keys (slice count, partition boundaries, docs-checker inclusion);
-    em_adjudication carries aggregate WARN/BLOCKED + integration disposition.
-    A different ceremony fills different blob content WITHOUT renaming these keys.
-
-    Negative-spec: do NOT add wsc-specific sub-keys (dispatch_plan, adjudication,
-    review_verdict, etc.) to this function — the generality is the invariant.
-    """
     return {
         "id": node_id,
         "type": "B",
@@ -209,17 +176,11 @@ def make_x_node(
     node_id: str,
     missing_signal: str = "",
 ) -> dict[str, Any]:
-    """Return a schema-valid X-node dict (illegible-state gap)."""
     return {
         "id": node_id,
         "type": "X",
         "missing_signal": missing_signal,
     }
-
-
-# ---------------------------------------------------------------------------
-# op_tail helpers
-# ---------------------------------------------------------------------------
 
 
 def make_empty_op_tail(phase: str) -> dict[str, Any]:
@@ -248,45 +209,17 @@ def make_empty_op_tail(phase: str) -> dict[str, Any]:
         "acted": [],
         "skipped": [],
         "failed": [],
-        "failed_critical": [],  # C3: structured critical-class failures (hard-exit-1)
-        "unknown": [],  # legible indeterminacy — not fatal, not the exit predicate
+        "failed_critical": [],
+        "unknown": [],
     }
 
 
 def compute_op_tail(nodes: list[dict[str, Any]], phase: str) -> dict[str, Any]:
-    """Derive the op_tail view from the node ledger.
-
-    Filters D-nodes with tail_step=True, then aggregates their evidence.acted[],
-    evidence.skipped[], evidence.failed[], evidence.failed_critical[], and
-    evidence.unknown[] into five partitions.
-
-    C3 — structured failure-class discriminator:
-      failed[]          environmental-class (tolerant; aggregated from evidence.failed[]).
-                        Critical-class failures do NOT also appear in failed[] — they
-                        appear ONLY in failed_critical[].  Callers MUST NOT check
-                        failed[] to detect critical failures.
-      failed_critical[] critical-class (hard-exit-1; aggregated from
-                        evidence.failed_critical[]).  Absent from pre-C3 evidence dicts —
-                        graceful-absent via .get("failed_critical", []).
-
-    unknown[] — legible indeterminacy, added additively the same way failed_critical
-      was: aggregated from evidence.unknown[], graceful-absent via
-      .get("unknown", []) so pre-existing evidence dicts stay valid.  NOT fatal — does
-      NOT feed the failed_critical exit predicate, and MUST NOT be folded into acted,
-      skipped, or failed by a producer or a future change to this function.
-
-    op_tail is the SINGLE DERIVED VIEW — it is computed here from the ledger and
-    stored in the receipt at emit time.  The ledger (nodes) is the source of truth;
-    op_tail is not stored independently.
-
-    When no tail D-nodes are present, returns make_empty_op_tail(phase) — all
-    empty arrays, fully graceful-absent.
-    """
     acted: list[str] = []
     skipped: list[str] = []
     failed: list[str] = []
-    failed_critical: list[str] = []  # C3: structured critical-class failures
-    unknown: list[str] = []  # legible indeterminacy — not fatal, not the exit predicate
+    failed_critical: list[str] = []
+    unknown: list[str] = []
 
     for node in nodes:
         if node.get("type") != "D" or not node.get("tail_step", False):
@@ -295,22 +228,17 @@ def compute_op_tail(nodes: list[dict[str, Any]], phase: str) -> dict[str, Any]:
         acted.extend(evidence.get("acted", []))
         skipped.extend(evidence.get("skipped", []))
         failed.extend(evidence.get("failed", []))
-        failed_critical.extend(evidence.get("failed_critical", []))  # C3: graceful-absent
-        unknown.extend(evidence.get("unknown", []))  # graceful-absent
+        failed_critical.extend(evidence.get("failed_critical", []))
+        unknown.extend(evidence.get("unknown", []))
 
     return {
         "phase": phase,
         "acted": acted,
         "skipped": skipped,
         "failed": failed,
-        "failed_critical": failed_critical,  # C3: empty list when no critical failures
-        "unknown": unknown,  # empty list when every tail op determined its outcome
+        "failed_critical": failed_critical,
+        "unknown": unknown,
     }
-
-
-# ---------------------------------------------------------------------------
-# Receipt factory
-# ---------------------------------------------------------------------------
 
 
 def make_receipt(
@@ -384,10 +312,6 @@ def make_receipt(
     return receipt
 
 
-# ---------------------------------------------------------------------------
-# Validation
-# ---------------------------------------------------------------------------
-
 _REQUIRED_TOP_FIELDS: tuple[str, ...] = (
     "schema_version",
     "ceremony",
@@ -405,34 +329,11 @@ _OPTIONAL_TOP_FIELDS: tuple[str, ...] = (
     "foreign_commit_count",
 )
 # D1: additive/backward-compat top-level fields — NOT in _REQUIRED_TOP_FIELDS.
-# A receipt with and without an optional field both validate; when present, it
-# is still type-checked below (mirrors op_tail.failed_critical's graceful-absent-
-# but-typed-when-present posture, documented just below).
-# `sid` (review-integrator 2026-07-08 Finding 5) is additive for the same reason:
-# legacy/pre-Finding-5 receipts never carried it and must still validate clean.
-# `scoping_method` / `foreign_commit_count` (C2, wsc concurrent-tree race fix)
-# are additive for the same reason: pre-C2 receipts never carried them and must
 # still validate clean.  scoping_method is enum-checked (VALID_SCOPING_METHODS)
-# only when present; foreign_commit_count is int-checked only when present.
 
 _REQUIRED_OP_TAIL_FIELDS: tuple[str, ...] = ("phase", "acted", "skipped", "failed")
-# `failed_critical` is intentionally ABSENT from
 # _REQUIRED_OP_TAIL_FIELDS for backward-compat with pre-C3 receipts (external tooling,
-# hand-crafted dicts, phase-1 receipts produced before C3 landed).  However,
-# failed_critical is load-bearing for the C3(C) exit predicate — a receipt that passes
-# validate() but omits failed_critical will silently prevent C3(C) from ever firing
-# (op_tail.get("failed_critical") returns None → bool(None) = False).
-# Constraint: make_empty_op_tail() and compute_op_tail() always include failed_critical;
-# external producers must also include it for C3(C) to function correctly.
-# See test_phase2_receipt_schema_valid for the positive assertion that the emitted
-# receipt always carries failed_critical as a list.
-#
-# `unknown` follows the identical posture: intentionally ABSENT from
 # _REQUIRED_OP_TAIL_FIELDS for backward-compat with pre-existing receipts that never
-# carried it — a receipt with and without `unknown` both validate.  Unlike
-# failed_critical, `unknown` feeds no exit predicate; its absence changes no runtime
-# behavior, only legibility.  make_empty_op_tail() and compute_op_tail() always
-# include it.
 
 _NODE_TYPE_REQUIRED: dict[str, tuple[str, ...]] = {
     "D": ("id", "type", "resolving_op", "evidence", "tail_step"),
@@ -444,29 +345,18 @@ _NODE_TYPE_REQUIRED: dict[str, tuple[str, ...]] = {
 
 
 def validate(receipt: dict[str, Any]) -> list[str]:
-    """Validate a receipt dict against the schema.
-
-    Returns a list of human-readable error strings.  An empty list means the
-    receipt is valid.  Callers should treat a non-empty list as a schema error
-    and surface it before attempting to use the receipt.
-
-    This function does NOT perform disk I/O — it validates structure only.
-    """
     errors: list[str] = []
 
     if not isinstance(receipt, dict):
         return [f"receipt must be a dict; got {type(receipt).__name__}"]
 
-    # --- top-level required fields ---
     for field in _REQUIRED_TOP_FIELDS:
         if field not in receipt:
             errors.append(f"required field missing: {field!r}")
 
     if errors:
-        # Cannot proceed with structural checks without the basic fields.
         return errors
 
-    # --- schema_version ---
     sv = receipt["schema_version"]
     if not isinstance(sv, int) or isinstance(sv, bool):
         errors.append(
@@ -475,39 +365,31 @@ def validate(receipt: dict[str, Any]) -> list[str]:
     elif sv < 1:
         errors.append(f"schema_version must be >= 1; got {sv}")
 
-    # --- ceremony ---
     if not isinstance(receipt["ceremony"], str) or not receipt["ceremony"]:
         errors.append("ceremony must be a non-empty string")
 
-    # --- phase (top-level) ---
     top_phase = receipt["phase"]
     if not isinstance(top_phase, str) or not top_phase:
         errors.append("phase must be a non-empty string")
     # VALID_PHASES_TOP was defined but never enforced;
-    # a receipt with phase="garbage" previously passed validation silently.
     elif top_phase not in VALID_PHASES_TOP:
         errors.append(f"phase {top_phase!r} not in {VALID_PHASES_TOP}")
 
-    # --- emitted_at ---
     if not isinstance(receipt["emitted_at"], str) or not receipt["emitted_at"]:
         errors.append("emitted_at must be a non-empty string")
 
-    # --- scope_mode ---
     if not isinstance(receipt["scope_mode"], str):
         errors.append(f"scope_mode must be a string; got {type(receipt['scope_mode']).__name__}")
 
-    # --- applicable_node_ids (optional, additive — D1) ---
     if "applicable_node_ids" in receipt:
         anids = receipt["applicable_node_ids"]
         if not isinstance(anids, list) or not all(isinstance(x, str) for x in anids):
             errors.append("applicable_node_ids must be a list[str] when present")
 
-    # --- sid (optional, additive — Finding 5) ---
     if "sid" in receipt:
         if not isinstance(receipt["sid"], str) or not receipt["sid"]:
             errors.append("sid must be a non-empty string when present")
 
-    # --- scoping_method (optional, additive — C2, wsc concurrent-tree race fix) ---
     if "scoping_method" in receipt:
         sm = receipt["scoping_method"]
         if not isinstance(sm, str) or sm not in VALID_SCOPING_METHODS:
@@ -515,7 +397,6 @@ def validate(receipt: dict[str, Any]) -> list[str]:
                 f"scoping_method {sm!r} not in {sorted(VALID_SCOPING_METHODS)} when present"
             )
 
-    # --- foreign_commit_count (optional, additive — C2, wsc concurrent-tree race fix) ---
     if "foreign_commit_count" in receipt:
         fcc = receipt["foreign_commit_count"]
         if not isinstance(fcc, int) or isinstance(fcc, bool):
@@ -523,7 +404,6 @@ def validate(receipt: dict[str, Any]) -> list[str]:
                 f"foreign_commit_count must be an int when present; got {type(fcc).__name__}"
             )
 
-    # --- op_tail ---
     op_tail = receipt["op_tail"]
     if not isinstance(op_tail, dict):
         errors.append(f"op_tail must be a dict; got {type(op_tail).__name__}")
@@ -531,8 +411,6 @@ def validate(receipt: dict[str, Any]) -> list[str]:
         for tf in _REQUIRED_OP_TAIL_FIELDS:
             if tf not in op_tail:
                 errors.append(f"op_tail missing required field: {tf!r}")
-        # op_tail.phase="" previously passed validation;
-        # an empty phase label is meaningless (schema docstring requires e.g. "archival").
         if "phase" in op_tail and not (isinstance(op_tail["phase"], str) and op_tail["phase"]):
             errors.append("op_tail.phase must be a non-empty string")
         if "acted" in op_tail and not isinstance(op_tail["acted"], list):
@@ -541,18 +419,15 @@ def validate(receipt: dict[str, Any]) -> list[str]:
             errors.append(f"op_tail.skipped must be a list; got {type(op_tail['skipped']).__name__}")
         if "failed" in op_tail and not isinstance(op_tail["failed"], list):
             errors.append(f"op_tail.failed must be a list; got {type(op_tail['failed']).__name__}")
-        # C3: failed_critical is optional in old receipts (graceful-absent); when present, must be a list.
         if "failed_critical" in op_tail and not isinstance(op_tail["failed_critical"], list):
             errors.append(
                 f"op_tail.failed_critical must be a list; got {type(op_tail['failed_critical']).__name__}"
             )
-        # unknown is optional in pre-existing receipts (graceful-absent); when present, must be a list.
         if "unknown" in op_tail and not isinstance(op_tail["unknown"], list):
             errors.append(
                 f"op_tail.unknown must be a list; got {type(op_tail['unknown']).__name__}"
             )
 
-    # --- nodes ---
     nodes = receipt["nodes"]
     if not isinstance(nodes, list):
         errors.append(f"nodes must be a list; got {type(nodes).__name__}")
@@ -572,7 +447,6 @@ def validate(receipt: dict[str, Any]) -> list[str]:
             for k in required_keys:
                 if k not in node:
                     errors.append(f"nodes[{i}] (type={node_type!r}) missing field: {k!r}")
-            # Type-specific structural checks
             if node_type == "D":
                 if "evidence" in node and not isinstance(node["evidence"], dict):
                     errors.append(

@@ -44,20 +44,8 @@ from coordinator_core.win_portability import (
     no_console_passthrough_kwargs,
 )
 
-# Declared, not excused: `dag._git_path_ever_tracked`'s contract is defined in terms
-# of actual `git log --all -- <path>` behaviour (best-effort False on any failure), not
-# a mockable interface -- this file pins the memoization cache's spawn-suppression win
-# against that real behaviour. Each test builds its own repo via `_init_repo` because
-# tests add distinct per-path commit history that would collide if a repo were shared.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
-
-# ---------------------------------------------------------------------------
-# Fixture: clear dag's git-history-ever-tracked cache and reset its generation
-# counter between tests — module-level cache state must not leak between test
-# cases (mirrors test_coverage_dag_archived_repo_root.py's frontmatter-cache
-# fixture convention).
-# ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
 def clear_ever_tracked_cache():
@@ -65,12 +53,6 @@ def clear_ever_tracked_cache():
     yield
     dag._EVER_TRACKED_CACHE.clear()
 
-
-# ---------------------------------------------------------------------------
-# Helper: a minimal real git repo, since _git_path_ever_tracked's contract is
-# defined in terms of actual `git log --all` behaviour (best-effort False on
-# any failure), not a mockable interface.
-# ---------------------------------------------------------------------------
 
 def _init_repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
@@ -92,10 +74,6 @@ def _commit_file(root: Path, rel_path: str, content: str = "x") -> None:
         cwd=root, check=True, **no_console_passthrough_kwargs(),
     )
 
-
-# ---------------------------------------------------------------------------
-# (1) Repeated lookups of the same path spawn git exactly once.
-# ---------------------------------------------------------------------------
 
 class TestRepeatedLookupSpawnsOnce:
     def test_positive_result_cached_after_first_spawn(self, tmp_path, monkeypatch):
@@ -125,15 +103,9 @@ class TestRepeatedLookupSpawnsOnce:
         )
 
 
-# ---------------------------------------------------------------------------
-# (2) A negative result is cached — the expensive case per the measurement
-#     (14 of 20 unique paths in the real corpus are never-tracked).
-# ---------------------------------------------------------------------------
-
 class TestNegativeResultCached:
     def test_never_tracked_path_cached_after_first_spawn(self, tmp_path, monkeypatch):
         root = _init_repo(tmp_path)
-        # Repo must have at least one commit for `git log --all` to be meaningful.
         _commit_file(root, "state/handoffs/other.md")
 
         spawn_count = [0]
@@ -159,12 +131,6 @@ class TestNegativeResultCached:
         )
 
 
-# ---------------------------------------------------------------------------
-# (3) Invalidation after a commit actually re-queries — a path that was
-#     untracked and becomes tracked returns True on the next lookup, not a
-#     stale cached False.
-# ---------------------------------------------------------------------------
-
 class TestInvalidationForcesRequery:
     def test_stale_negative_not_served_after_invalidate(self, tmp_path):
         root = _init_repo(tmp_path)
@@ -172,21 +138,12 @@ class TestInvalidationForcesRequery:
 
         rel_path = "archive/handoffs/newly-tracked.md"
 
-        # First lookup, before the file is ever committed: caches False.
         assert dag._git_path_ever_tracked(rel_path, str(root)) is False
 
-        # Second lookup without invalidation: still served from cache (False),
-        # even though nothing about the repo changed yet — sanity check that
-        # the cache is actually being hit before we test invalidation.
         assert dag._git_path_ever_tracked(rel_path, str(root)) is False
 
-        # Mid-sweep mutation: the path becomes git-tracked (mirrors
-        # archive_and_commit / rm_and_commit committing partway through a
-        # boot_sweep run).
         _commit_file(root, rel_path)
 
-        # WITHOUT invalidation, a naive process-lifetime cache would still
-        # serve the stale False here — this is the hazard the fix must close.
         dag.invalidate_git_history_cache()
 
         assert dag._git_path_ever_tracked(rel_path, str(root)) is True, (
@@ -211,26 +168,9 @@ class TestInvalidationForcesRequery:
         )
 
 
-# ---------------------------------------------------------------------------
-# (4) build_git_history_cache widening (2026-07-29) — the batch-sweep priming
-#     pass must catch a path renamed INTO its final name, not just paths that
-#     were freshly `git add`ed under that exact name. Regression coverage for
-#     the 314-per-path-spawn defect measured against DoE-claude: the prior
-#     `--diff-filter=A`-only pass missed every path whose only appearance
-#     under its current name was as the target side of a detected rename,
-#     forcing every such lookup through _git_path_ever_tracked's per-path
-#     `git log --all -- <path>` fallback.
-# ---------------------------------------------------------------------------
-
 class TestBuildGitHistoryCacheWidening:
     def test_renamed_path_present_in_widened_cache(self, tmp_path):
         root = _init_repo(tmp_path)
-        # Force rename detection ON for `git log`/`git diff` in this repo so
-        # the rename below is generated as a single combined "R" diff-status
-        # entry rather than a plain delete+add — the exact shape that made
-        # the pre-widening --diff-filter=A pass miss the new name (an R entry
-        # is not an "A" entry, so the filter dropped it, and rename detection
-        # means the new name never gets its own separate "A" line either).
         subprocess.run(
             ["git", "config", "diff.renames", "true"], cwd=root, check=True,
             **no_console_passthrough_kwargs(),
@@ -261,9 +201,6 @@ class TestBuildGitHistoryCacheWidening:
         )
 
     def test_modify_only_path_present_in_widened_cache(self, tmp_path):
-        # Sanity check that a path present in the cache from its initial add
-        # commit stays resolvable after a later modify-only commit — the
-        # widened pass must not regress the already-working add case.
         root = _init_repo(tmp_path)
         _commit_file(root, "state/handoffs/modified.md", content="v1")
         _commit_file(root, "state/handoffs/modified.md", content="v2")
@@ -274,11 +211,6 @@ class TestBuildGitHistoryCacheWidening:
         assert "state/handoffs/modified.md" in cache
 
     def test_widened_cache_short_circuits_the_per_path_fallback_spawn(self, tmp_path, monkeypatch):
-        # End-to-end: a path only resolvable via the widened cache (the
-        # rename-target case above) must resolve True through
-        # _memoized_ever_tracked WITHOUT spawning the per-path git fallback —
-        # that fallback subprocess is exactly the 314-spawns-per-run cost
-        # this widening exists to eliminate.
         root = _init_repo(tmp_path)
         subprocess.run(["git", "config", "diff.renames", "true"], cwd=root, check=True, **no_console_passthrough_kwargs())
         _commit_file(root, "state/handoffs/old-name.md")
@@ -314,16 +246,10 @@ class TestBuildGitHistoryCacheWidening:
         )
 
     def test_cache_miss_still_falls_through_to_per_call_resolution(self, tmp_path):
-        # Contract preserved: a cache miss is "unknown, fall through", never
-        # "definitely absent" — a path the widened cache doesn't know about
-        # but that IS git-tracked must still resolve True via the per-call
-        # fallback inside _memoized_ever_tracked.
         root = _init_repo(tmp_path)
         _commit_file(root, "state/handoffs/seed.md")
         _commit_file(root, "state/handoffs/only-in-fallback.md")
 
-        # A cache that's deliberately missing a real path, to simulate a
-        # cache-miss without depending on any specific git edge case.
         sparse_cache = {"state/handoffs/seed.md"}
 
         memo: dict = {}
@@ -337,15 +263,7 @@ class TestBuildGitHistoryCacheWidening:
         )
 
 
-# ---------------------------------------------------------------------------
-# (5) Cache-miss-is-authoritative (2026-07-29 follow-up to the widening above).
 #     A miss against a COMPLETE GitHistoryCache resolves False with ZERO
-#     subprocess spawns — this is the ~308-per-run fallback-spawn elimination.
-#     Every fallback-preserving case named in the dispatch brief is pinned
-#     here: an absent (None) cache, a shallow clone, and a bare object with
-#     no `.complete` attribute at all (any pre-existing caller/test fixture
-#     that built a cache by hand rather than via build_git_history_cache).
-# ---------------------------------------------------------------------------
 
 class TestCacheMissIsAuthoritativeWhenComplete:
     def test_fresh_repo_cache_reports_complete(self, tmp_path):
@@ -408,10 +326,6 @@ class TestCacheMissIsAuthoritativeWhenComplete:
         assert spawn_count[0] == 1, "a None cache must spawn the per-call fallback exactly once"
 
     def test_miss_against_bare_set_with_no_complete_attr_falls_through(self, tmp_path):
-        # A plain set (e.g. a caller-constructed cache, or an older test
-        # fixture such as sparse_cache above) has no `.complete` attribute —
-        # must be treated as incomplete, never authoritative, so a miss
-        # still falls through to the real per-call answer.
         root = _init_repo(tmp_path)
         _commit_file(root, "state/handoffs/seed.md")
         _commit_file(root, "state/handoffs/only-in-fallback.md")
@@ -429,14 +343,6 @@ class TestCacheMissIsAuthoritativeWhenComplete:
         )
 
     def test_shallow_clone_reports_incomplete_and_preserves_fallback(self, tmp_path, monkeypatch):
-        # A depth-1 shallow clone's sole visible commit has no visible parent,
-        # so `git log --name-only` diffs it against an EMPTY tree — meaning a
-        # file still present at that commit shows up in the cache regardless
-        # of shallowness. To get a genuinely-invisible-to-the-shallow-clone
-        # path (proving the completeness check, not just the depth cutoff),
-        # add a file and then DELETE it in an earlier commit than the clone's
-        # boundary — a deleted-then-gone path never appears in ANY tree
-        # snapshot the shallow clone's single visible commit can diff against.
         origin_parent = tmp_path / "origin_repo"
         origin_parent.mkdir()
         origin = _init_repo(origin_parent)
@@ -487,11 +393,6 @@ class TestCacheMissIsAuthoritativeWhenComplete:
         monkeypatch.setattr(dag.subprocess, "run", counting_run)
 
         memo: dict = {}
-        # A miss here MUST still fall through to the per-call fallback rather
-        # than being answered authoritatively as "never tracked" (which would
-        # manufacture a confident false negative for a path that DOES exist
-        # in the origin's full history, just truncated out of this shallow
-        # fetch).
         dag._memoized_ever_tracked(
             "state/handoffs/deleted-early.md", memo, str(shallow), cache,
         )
@@ -501,10 +402,6 @@ class TestCacheMissIsAuthoritativeWhenComplete:
         )
 
     def test_promisor_remote_reports_incomplete(self, tmp_path, monkeypatch):
-        # Partial/filtered clone signal (remote.origin.promisor=true) without
-        # needing a real filter-capable remote server — monkeypatch only the
-        # `git config --get remote.origin.promisor` call itself, letting the
-        # shallow-repository check run for real against a normal repo.
         root = _init_repo(tmp_path)
         _commit_file(root, "state/handoffs/seed.md")
 

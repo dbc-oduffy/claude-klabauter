@@ -92,20 +92,14 @@ def _deny_envelope(tag: str):
     }
 
 
-# Two distinct soft/content-shaped advisory entries, in registration order --
 # used for (a)/(b)/(d)/(e) below. Deliberately DIFFERENT envelope shapes
-# (soft "allow+additionalContext" vs content "allow+additionalContext" with
-# a distinguishable tag) so (d) can assert each survives the aggregate
-# return without being merged/coerced into the other's shape.
 _TWO_ADVISORY_CHAIN = [
     GuardEntry("fake-soft-first", lambda: _soft_envelope("first"), False, GuardBand.ADVISORY_REWRITE),
     GuardEntry("fake-content-second", lambda: _content_envelope("second"), False, GuardBand.ADVISORY_REWRITE),
 ]
 
-# Same two advisories, plus a hard-deny entry registered AFTER both --
 # mirrors the module docstring's own example: "a PLATFORM_CONDITIONED_DENY
 # guard, registered at the tail, denying after an ADVISORY_REWRITE guard
-# upstream already produced an allow+context envelope."
 _ADVISORY_THEN_DENY_CHAIN = list(_TWO_ADVISORY_CHAIN) + [
     GuardEntry(
         "fake-platform-deny",
@@ -121,18 +115,10 @@ def _patch_chain(monkeypatch, chain):
 
 
 def _silent_then_allow(guard_name: str, reason: str):
-    """Stand-in for a C1-shaped guard: records `_verdict.SILENT` on
-    whatever out-of-band collection is currently open (a no-op on the real
-    dispatch path, which never opens one -- see C1's own module docstring)
-    and returns its ordinary allow, `None`, exactly like any guard that
-    never heard of `_verdict` at all."""
     _verdict.record_silent(guard_name, reason)
     return None
 
 
-# A single SILENT-recording guard, alone -- the minimal case for the
-# allow-shape equivalence: dispatch.py makes ZERO edits for C1, so this
-# chain must behave identically, on every path below, to an empty chain.
 _SILENT_RECORDING_CHAIN = [
     GuardEntry(
         "fake-silent-guard",
@@ -142,18 +128,12 @@ _SILENT_RECORDING_CHAIN = [
     ),
 ]
 
-# The same SILENT-recording guard, registered ahead of a real advisory --
-# proves the declaration does not leak into, reorder, or otherwise disturb
-# the aggregate `collect_advisories=True` return.
 _SILENT_THEN_ADVISORY_CHAIN = list(_SILENT_RECORDING_CHAIN) + [
     GuardEntry("fake-soft-first", lambda: _soft_envelope("first"), False, GuardBand.ADVISORY_REWRITE),
 ]
 
 
 class TestAdvisoryAggregationPropertyA:
-    """(a) Two advisory guards both firing on one Bash payload => BOTH
-    returned under ``collect_advisories=True``, in chain order. This is the
-    live production drop the chunk exists to fix."""
 
     def test_both_advisories_collected_in_chain_order(self, monkeypatch):
         _patch_chain(monkeypatch, _TWO_ADVISORY_CHAIN)
@@ -161,19 +141,6 @@ class TestAdvisoryAggregationPropertyA:
         assert result == [_soft_envelope("first"), _content_envelope("second")]
 
     def test_fails_against_pre_c10_behaviour(self, monkeypatch):
-        """Demonstrates the pre-C10 drop directly: the SAME controlled chain,
-        called the way every pre-C10 caller called this function (no
-        ``collect_advisories`` kwarg at all -- which is exactly what a
-        pre-C10 ``evaluate_payload_json`` accepted, since the kwarg did not
-        exist), returns only the FIRST advisory and silently drops the
-        second. This is the "genuine live production drop" property (a)
-        exists to close, reproduced here without relying on the new kwarg --
-        proof that a hypothetical property-(a)-shaped assertion made against
-        the OLD single-envelope return (``result == first envelope`` and
-        nothing more) would have been the only true statement pre-C10, i.e.
-        an assertion of "both returned" genuinely fails against that
-        behaviour.
-        """
         _patch_chain(monkeypatch, _TWO_ADVISORY_CHAIN)
         legacy_shaped_result = dispatch.evaluate_payload_json(_payload())
         assert legacy_shaped_result == _soft_envelope("first")
@@ -181,8 +148,6 @@ class TestAdvisoryAggregationPropertyA:
 
 
 class TestLegacyCallerUnchangedPropertyB:
-    """(b) The legacy caller (flag absent) returns exactly one envelope,
-    unchanged."""
 
     def test_flag_absent_returns_single_first_envelope(self, monkeypatch):
         _patch_chain(monkeypatch, _TWO_ADVISORY_CHAIN)
@@ -197,14 +162,8 @@ class TestLegacyCallerUnchangedPropertyB:
 
 
 class TestHardDenyShortCircuitsPropertyC:
-    """(c) A hard-deny anywhere in the chain short-circuits and is returned
-    alone, discarding already collected advisories."""
 
     def test_trailing_hard_deny_discards_collected_advisories(self, monkeypatch):
-        # Assert explicitly that no real
-        # in-session-unlock sentinel is consulted/consumed on this path,
-        # rather than relying on ambient on-disk state happening to be empty
-        # for a fake guard name that could never have a real sentinel.
         unlock_calls = []
         monkeypatch.setattr(
             dispatch,
@@ -217,30 +176,17 @@ class TestHardDenyShortCircuitsPropertyC:
         assert not isinstance(result, list)
         hso = result["hookSpecificOutput"]
         assert hso["permissionDecision"] == "deny"
-        # The in-session-unlock annotation (`_annotate_unlock`) appends its
-        # own line to a genuine deny's reason at this same seam -- exact
-        # string equality against the raw fake envelope would be asserting
-        # an incidental byte shape, not this property; `in` is the correct
-        # assertion for "this IS the tail deny, un-discarded".
         assert "fake hard deny: tail" in hso["permissionDecisionReason"]
         assert "soft note" not in json.dumps(result)
         assert "content note" not in json.dumps(result)
 
     def test_legacy_caller_never_even_reaches_the_tail_deny(self, monkeypatch):
-        # Legacy (flag absent) short-circuits on the FIRST non-None result,
-        # same as always -- that is the first advisory, not the tail deny;
-        # the deny-short-circuit property under test here is specific to
-        # `collect_advisories=True`'s aggregation continuing the walk past
-        # advisories that a legacy call would have already stopped at.
         _patch_chain(monkeypatch, _ADVISORY_THEN_DENY_CHAIN)
         legacy = dispatch.evaluate_payload_json(_payload())
         assert legacy == _soft_envelope("first")
 
 
 class TestClassDistinctionSurvivesPropertyD:
-    """(d) The soft/content/advisory class distinction survives the
-    aggregate return -- each collected envelope keeps its own distinguishable
-    shape/content rather than being merged or coerced into a common one."""
 
     def test_each_envelope_retains_its_own_distinct_content(self, monkeypatch):
         _patch_chain(monkeypatch, _TWO_ADVISORY_CHAIN)
@@ -253,8 +199,6 @@ class TestClassDistinctionSurvivesPropertyD:
 
 
 class TestAdvisoryFireRecordedOncePerEnvelopePropertyE:
-    """(e) ``_record_advisory_fire`` runs once per returned envelope, not
-    once total."""
 
     def test_recorded_once_per_collected_advisory(self, monkeypatch):
         calls = []
@@ -268,22 +212,12 @@ class TestAdvisoryFireRecordedOncePerEnvelopePropertyE:
         assert calls == ["fake-soft-first", "fake-content-second"]
 
     def test_not_recorded_for_a_discarded_advisory_behind_a_hard_deny(self, monkeypatch):
-        # The two advisories still fire (and are recorded) before the
-        # trailing hard-deny short-circuits the chain; the hard-deny entry
-        # itself is fail_closed=True and is never passed to
-        # `_record_advisory_fire` (that bookkeeping call is gated on
-        # `not fail_closed` in the loop). This asserts the deny entry never
-        # adds a THIRD recorded name, not that the two advisories go
-        # unrecorded.
         calls = []
         monkeypatch.setattr(
             dispatch,
             "_record_advisory_fire",
             lambda name, session_id, cwd: calls.append(name),
         )
-        # Same explicit in-session-unlock
-        # assertion as TestHardDenyShortCircuitsPropertyC above (see there
-        # for rationale).
         unlock_calls = []
         monkeypatch.setattr(
             dispatch,
@@ -300,14 +234,6 @@ class TestAdvisoryFireRecordedOncePerEnvelopePropertyE:
 
 
 class TestSilentNeverReachesDispatchReturnValue:
-    """C1's own test-surface note: this file already exercises the dispatch
-    entry path where the allow-shape equivalence must hold -- this class
-    asserts SILENT never reaches `evaluate_payload_json`'s return value,
-    NOT that `dispatch.py`'s loop changed (it did not; C1 makes zero edits
-    to it). A guard that records `_verdict.SILENT` and returns its ordinary
-    `None` allow must be byte-identical, on both the legacy and the
-    ``collect_advisories=True`` path, to a chain with no such guard at
-    all."""
 
     def test_legacy_path_silent_recording_guard_allows_silently(self, monkeypatch):
         _patch_chain(monkeypatch, _SILENT_RECORDING_CHAIN)
@@ -326,12 +252,6 @@ class TestSilentNeverReachesDispatchReturnValue:
         assert "SILENT" not in json.dumps(result)
 
     def test_declaration_is_observable_only_to_a_caller_that_opens_its_own_collection(self):
-        # The property AC1 actually needs, demonstrated at the collector's
-        # own seam rather than dispatch's: dispatch.py opens NO collection
-        # (it makes zero edits for this chunk), so a declaration made
-        # during a real dispatch is invisible to it -- but a caller (this
-        # test, standing in for C7's structural test) that opens its own
-        # collection around the SAME guard call sees it plainly.
         with _verdict.collecting() as silences:
             _silent_then_allow("fake-silent-guard", "cannot parse PowerShell backtick continuation")
         assert _verdict.was_silent("fake-silent-guard", silences)

@@ -22,14 +22,10 @@ from __future__ import annotations
 
 import ntpath
 
-# `_host_is_windows` is patched on THIS module, not on `_write_bump_sink_shapes`
-# where it is defined: `_write_bump_applicability` imports it by name, so the
-# binding the production code actually reads lives in this namespace.
 from coordinator_core.bash_guards import _write_bump_applicability as applicability
 
 
 def test_posix_tmp_literal_is_dropped_on_windows(monkeypatch):
-    """`None` on Windows, the literal on POSIX -- both branches, unpatched."""
     monkeypatch.setattr(applicability, "_host_is_windows", lambda: True)
     assert applicability._posix_tmp_literal() is None
 
@@ -38,11 +34,6 @@ def test_posix_tmp_literal_is_dropped_on_windows(monkeypatch):
 
 
 def test_drive_relative_tmp_is_not_an_allowed_temp_root_on_windows(monkeypatch):
-    """The consequence, at the surface that actually gates the guard.
-
-    Pins `_all_temp_roots` rather than only the seam above, so that a future
-    caller re-deriving the literal somewhere else still fails here.
-    """
     monkeypatch.setattr(applicability, "_host_is_windows", lambda: True)
     for var in ("TMPDIR", "TEMP", "TMP"):
         monkeypatch.delenv(var, raising=False)
@@ -56,9 +47,5 @@ def test_drive_relative_tmp_is_not_an_allowed_temp_root_on_windows(monkeypatch):
 
 
 def test_posix_branch_still_contributes_the_tmp_literal(monkeypatch):
-    """The negative direction: dropping the literal on Windows must not drop
-    it on POSIX, where `/tmp` is a genuine absolute path and macOS needs it
-    (the `/tmp` -> `/private/tmp` symlink covers the per-session scratchpad
-    that `gettempdir()` alone misses)."""
     monkeypatch.setattr(applicability, "_host_is_windows", lambda: False)
     assert applicability._posix_tmp_literal() == "/tmp"

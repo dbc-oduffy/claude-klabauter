@@ -69,7 +69,6 @@ from coordinator_core.ipc import register_op
 _PathLike = Union[str, Path, None]
 
 _GIT_TIMEOUT = 60
-# `gh` and `git push` are network calls; cap generously but never hang forever.
 _NETWORK_TIMEOUT = 180
 
 _VALID_VISIBILITY = ("private", "public")
@@ -78,7 +77,6 @@ _VALID_VISIBILITY = ("private", "public")
 def _run(
     cmd: list[str], cwd: _PathLike = None, timeout: int = _GIT_TIMEOUT
 ) -> subprocess.CompletedProcess:
-    """Direct list-argv subprocess (CC-1) with hang cap + console suppression."""
     return subprocess.run(
         cmd,
         cwd=str(cwd) if cwd is not None else None,
@@ -95,7 +93,6 @@ def _git(args: list[str], cwd: _PathLike = None, timeout: int = _GIT_TIMEOUT) ->
 
 
 def _gh(args: list[str], cwd: _PathLike = None) -> subprocess.CompletedProcess:
-    """All `gh` CLI traffic funnels through here — the test seam (mock gh)."""
     return _run(["gh", *args], cwd=cwd, timeout=_NETWORK_TIMEOUT)
 
 
@@ -130,16 +127,6 @@ def create_and_push_remote(
     visibility: str,
     remote: str = "origin",
 ) -> dict:
-    """Idempotently ensure GitHub repo *name* exists, local *remote* is
-    configured in *repo_root*, and the current branch is pushed upstream.
-
-    Raises (CC-7 fail-loud, never a silent half-state):
-      ValueError   — invalid params (visibility outside private|public,
-                     empty name, repo_root not a git worktree).
-      RuntimeError — gh create failed for a reason other than
-                     already-exists; url resolution failed; remote-add
-                     failed; push rejected.
-    """
     if not name:
         raise ValueError("repo.create_and_push_remote: `name` is required")
     if visibility not in _VALID_VISIBILITY:
@@ -156,7 +143,6 @@ def create_and_push_remote(
             f"repo.create_and_push_remote: {root} is not a git worktree"
         )
 
-    # Layer 1 — GitHub-side existence check (settlement A3 step 1).
     already_existed = _remote_repo_exists(name, root)
     created = False
     if not already_existed:
@@ -176,8 +162,6 @@ def create_and_push_remote(
         if res.returncode == 0:
             created = True
         elif "already exists" in (res.stderr + res.stdout).lower():
-            # TOCTOU belt-and-suspenders: another creator won the race
-            # between our `gh repo view` probe and this create.
             already_existed = True
         else:
             raise RuntimeError(
@@ -185,9 +169,6 @@ def create_and_push_remote(
                 f"{name!r}: {res.stderr.strip() or res.stdout.strip()}"
             )
 
-    # Layer 2 — local remote entry (settlement A3 step 2). `gh repo create
-    # --source --remote` configures it on the create path; the
-    # already-existed path (and a mocked/partial create) may not have it.
     if _git(["remote", "get-url", remote], cwd=root).returncode != 0:
         url = _remote_repo_url(name, root)
         add = _git(["remote", "add", remote, url], cwd=root)
@@ -197,9 +178,6 @@ def create_and_push_remote(
                 f"{url!r} failed: {add.stderr.strip()}"
             )
 
-    # Step 3 — push runs on BOTH paths (settlement A3 step 3). Push is
-    # inherently idempotent (up-to-date → no-op), which makes the whole op
-    # rerunnable after any partial failure.
     push = _git(["push", "-u", remote, "HEAD"], cwd=root, timeout=_NETWORK_TIMEOUT)
     if push.returncode != 0:
         raise RuntimeError(

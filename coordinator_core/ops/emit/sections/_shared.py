@@ -28,10 +28,6 @@ from typing import Optional
 
 from coordinator_core.machine_resolver import registry_get
 
-# C9 activation switch: whether the downstream consumer (cockpit) has re-vendored a
-# cockpit-contract carrying the human_* axis. Default OFF (unresolved key -> False) —
-# see this function's own docstring for why a flag is owed at all before this key
-# reaches a `.strict()` wire.
 _HUMAN_AXIS_VENDORED_REGISTRY_KEY = "cockpit.human_axis_vendored"
 _TRUTHY_FLAG_VALUES = frozenset({"1", "true", "yes", "on"})
 
@@ -105,9 +101,6 @@ def run_git(repo_root: Path, *args: str) -> Optional[str]:
     return out.stdout.strip() or None
 
 
-# Verdict case-normalization map (bash:685-695). Keys are the raw strings that map to a
-# schema-valid verdict; any raw verdict not present here → quarantine (no mapping).
-# Shared between review_trail.py and rollups.py — extend here when adding a new verdict.
 _VERDICT_MAP = {
     "ok": "ok",
     "OK": "ok",
@@ -119,8 +112,6 @@ _VERDICT_MAP = {
     "WAIVED": "waived",
 }
 
-# Filename time-segment matcher (bash:721): ``^(\d{6,})(?:-(.+))?$`` against the post-date rest.
-# Shared between review_trail.py and rollups.py.
 _TIME_SEG_RE = re.compile(r"^(\d{6,})(?:-(.+))?$")
 
 
@@ -158,7 +149,6 @@ def _validate_review_trail_file(
 
     Parity with bash SECTION 3 heredoc :697-811 / :707-745 (timestamp) / :748-760 (parse).
     """
-    # Parse reviewed_at from filename (bash:707-745).
     bn = os.path.basename(filepath)
     bn_stem = bn[:-5] if bn.endswith(".json") else bn
     rt_date = review_trail_date_prefix(filepath)
@@ -170,7 +160,6 @@ def _validate_review_trail_file(
         hh = time_digits[0:2] if len(time_digits) >= 2 else "00"
         mm = time_digits[2:4] if len(time_digits) >= 4 else "00"
         ss = time_digits[4:6] if len(time_digits) >= 6 else "00"
-        # Reject decoded segments that are not a legal clock time (bash:735).
         if int(hh) > 23 or int(mm) > 59 or int(ss) > 59:
             return None, (
                 f"filename timestamp segment '{time_digits}' does not encode a "
@@ -180,7 +169,6 @@ def _validate_review_trail_file(
     else:
         reviewed_at = f"{rt_date}T00:00:00Z"
 
-    # Read and parse the JSON body (bash:748-760).
     try:
         with open(filepath, encoding="utf-8", errors="replace") as fh:
             body = json.loads(fh.read())

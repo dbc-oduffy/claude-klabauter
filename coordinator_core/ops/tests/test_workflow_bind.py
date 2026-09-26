@@ -1,9 +1,3 @@
-"""Tests for coordinator_core.ops.workflow_bind — `workflow.bind_args`.
-
-The op's whole value is that a bound copy is the SOURCE plus exactly one
-statement. Every test below pins one half of that: the body survives verbatim,
-or a shape that would fail at fire time is refused here instead.
-"""
 
 from __future__ import annotations
 
@@ -37,7 +31,6 @@ def test_binds_args_after_the_meta_block_and_keeps_the_body_verbatim():
     body_at = out.index("const parsedArgs")
     assert meta_end < binding_at < body_at, "binding must sit between meta and body"
 
-    # The body is untouched — not reordered, not rewritten, not re-indented.
     assert SOURCE[SOURCE.index("const parsedArgs") :].rstrip("\n") in out
 
     literal = out[out.index("const args = ") + len("const args = ") :]
@@ -46,9 +39,6 @@ def test_binds_args_after_the_meta_block_and_keeps_the_body_verbatim():
 
 
 def test_meta_block_closes_on_column_zero_brace_not_on_a_brace_in_prose():
-    # The meta literal above carries `}` inside two description strings. A
-    # brace-counting parser closes the block early and binds args INSIDE meta,
-    # which the contract checker then reads as a computed meta.
     out = bind_args(SOURCE, {"k": 1})
     head = out[: out.index("const args = ")]
     assert head.count("phases:") == 1
@@ -77,7 +67,6 @@ def test_an_args_parameter_inside_a_function_is_not_a_top_level_declaration():
         "function f() {\n  const args = 1\n  return args\n}\nawait phase('Run')",
         1,
     )
-    # Indented — shadows nothing this op writes, so it must NOT be refused.
     assert "const args = {" in bind_args(src, {"k": 1})
 
 

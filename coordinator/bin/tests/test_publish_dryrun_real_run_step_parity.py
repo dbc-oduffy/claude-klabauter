@@ -57,7 +57,6 @@ publish = _load_publish_module()
 
 
 def _git(args: "list[str]", cwd: Path) -> None:
-    # popup-safe-env-suppressed
     subprocess.run(
         [
             "git",
@@ -174,20 +173,10 @@ def test_dryrun_and_real_run_phase_sets_differ_by_exactly_the_swap(tmp_path, mon
     dry_run_phases = {phase for (_row, phase, _wall, _cpu) in dry_run_timings}
     real_run_phases = {phase for (_row, phase, _wall, _cpu) in real_run_timings}
 
-    # Every phase reached under dry-run is also reached under a real run —
-    # C1's whole point (staging-tree parity between the two modes).
     assert dry_run_phases.issubset(real_run_phases)
 
-    # The ONLY phase a real run dispatches that dry-run withholds is exactly
-    # the declared real-run-only set — not a superset (some OTHER phase
-    # silently gained real-run-only status) and not a subset (the swap
-    # itself leaked into dry-run).
     assert real_run_phases - dry_run_phases == publish.PROCESS_TARGET_REAL_RUN_ONLY_PHASES
 
-    # Sanity: the declared set is reachable at all under a real run (a typo
-    # in the constant that named a phase label never dispatched would
-    # otherwise pass the subtraction above vacuously if both sides changed
-    # together).
     assert publish.PROCESS_TARGET_REAL_RUN_ONLY_PHASES <= real_run_phases
     assert "_swap_publish_staging_into_dest" in real_run_phases
     assert "_swap_publish_staging_into_dest" not in dry_run_phases

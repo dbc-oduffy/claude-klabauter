@@ -77,7 +77,7 @@ def _handler(params: dict, repo_root=None) -> dict:
             if target.read_text(encoding="utf-8").strip() == root:
                 return no_advisory()
         except OSError:
-            pass  # existing-content check is best-effort; fall through and (re)write the breadcrumb
+            pass
         target.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=target.name + ".")
         try:
@@ -88,7 +88,7 @@ def _handler(params: dict, repo_root=None) -> dict:
             try:
                 os.unlink(tmp_name)
             except OSError:
-                pass  # best-effort tmp-file cleanup; a leftover tmp file does not affect correctness
+                pass
             raise
     except Exception:
         return no_advisory()

@@ -1,13 +1,3 @@
-"""The machine-readable carve-out register: sanctioned shell-shaped spawns.
-
-Parses the single fenced ```yaml shell-out-allowlist``` block out of
-`docs/reference/shell-out-carve-outs.md`. That doc is the register — this
-module reads it, never mints a second parallel list.
-
-Membership is enumerative, not inferred: a site that merely satisfies a
-carve-out class's rationale, without being named by an exact structural
-match, is NOT sanctioned. See `is_sanctioned`.
-"""
 
 from __future__ import annotations
 
@@ -41,10 +31,6 @@ class AllowlistEntry:
 
 
 def load_allowlist(doc: pathlib.Path = DEFAULT_CARVE_OUTS_DOC) -> list[AllowlistEntry]:
-    """Parse the single fenced ```yaml shell-out-allowlist``` block out of the register doc.
-
-    Zero or two-or-more such blocks is an error, not a fallback.
-    """
     text = pathlib.Path(doc).read_text(encoding="utf-8")
     matches = _BLOCK_RE.findall(text)
     if len(matches) != 1:
@@ -95,5 +81,4 @@ def is_sanctioned(site: SpawnSite, entries: Sequence[AllowlistEntry]) -> bool:
 
 
 def unpinned_entries(entries: Sequence[AllowlistEntry]) -> list[AllowlistEntry]:
-    """Entries whose argv_digest is None. The gate and the census both surface these."""
     return [entry for entry in entries if entry.argv_digest is None]

@@ -41,9 +41,6 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def _make_real_git_repo(tmp_path: Path, name: str = "git-repo") -> Path:
-    """A REAL, `git init`'d worktree — `_is_git_worktree` spawns
-    `git rev-parse --is-inside-work-tree`, so a directory-with-a-`.git`-folder
-    fixture is not sufficient; this predicate needs a repo git itself accepts."""
     root = tmp_path / name
     root.mkdir()
     _git(root, "init", "-b", "main")
@@ -57,7 +54,6 @@ def _make_real_git_repo(tmp_path: Path, name: str = "git-repo") -> Path:
 
 
 def _make_real_non_git_dir(tmp_path: Path, name: str = "non-git-dir") -> Path:
-    """Exists, is a directory, is NOT a git worktree at all."""
     root = tmp_path / name
     root.mkdir()
     return root
@@ -72,8 +68,6 @@ def _make_record(root: Path, name: str, status: str) -> Path:
 
 
 class TestSkippedRootLegExercisedForReal:
-    """AC3: one real git worktree, one real-but-non-git directory —
-    `_is_git_worktree` (the predicate under test) is exercised for real."""
 
     def test_git_worktree_walked_non_git_dir_skipped(self, tmp_path, monkeypatch) -> None:
         git_root = _make_real_git_repo(tmp_path, "git-repo")
@@ -99,10 +93,6 @@ class TestSkippedRootLegExercisedForReal:
     def test_queried_root_count_never_equals_the_candidate_total(
         self, tmp_path, monkeypatch
     ) -> None:
-        """AC3's second half, stated as its own assertion: the count is over
-        WALKED roots, so it must be strictly below the candidate total whenever
-        any candidate was skipped. This is the leg that stops a caller
-        presenting the number as a whole-fleet claim (AC10's over-claim bar)."""
         git_root = _make_real_git_repo(tmp_path, "git-repo")
         non_git_a = _make_real_non_git_dir(tmp_path, "non-git-a")
         non_git_b = _make_real_non_git_dir(tmp_path, "non-git-b")

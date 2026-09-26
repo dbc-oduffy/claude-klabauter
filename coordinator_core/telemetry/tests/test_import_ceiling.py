@@ -48,11 +48,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
-# Declared, not excused: this file spawns a real process (git/python) because
-# the property under test is that binary's own behaviour, which no fixture
 # stands in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
-# residue and is explicitly not the route for a new file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -62,22 +58,12 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 _SELF_TIME_RE = re.compile(r"^import time:\s+(\d+)\s+\|\s+\d+\s+\|\s+")
 
-# Generous ceiling (ms): the measured post-fix median on this box sits
-# ~64-70ms, with ambient spikes into the 80s under load; the pre-fix
-# baseline (psutil resident at module scope) sits ~7-8ms higher plus
-# whatever regressed it back. 100ms gives headroom against ambient jitter
-# while still catching a psutil-sized (or larger) regression.
 _SELF_TIME_CEILING_MS = 100.0
 
-# How many spawns feed the best-of-N reading (see the module docstring's
-# "Repeat-and-take-best" rationale). Three keeps the file's own process
-# budget bounded while giving jitter more than one chance to be absent.
 _SELF_TIME_SAMPLES = 3
 
 
 def _sum_self_time_ms(importtime_stderr: str) -> float:
-    """Sum every SELF-time column (microseconds) in one `-X importtime`
-    stderr capture, converted to milliseconds."""
     total_us = 0
     for line in importtime_stderr.splitlines():
         m = _SELF_TIME_RE.match(line)
@@ -111,10 +97,6 @@ def test_import_self_time_stays_below_ceiling():
 
 
 def test_measure_import_self_time_ms_discards_a_noisy_sample(monkeypatch):
-    """One scheduling-delayed spawn among several clean ones must not move
-    the reading — see the module docstring's "Repeat-and-take-best"
-    rationale. Regression coverage for a single-sample reading conflating
-    ambient jitter with a real import-cost regression."""
     readings_us = iter([120_000, 60_000, 95_000])
 
     def _fake_run(*args, **kwargs):
@@ -128,9 +110,6 @@ def test_measure_import_self_time_ms_discards_a_noisy_sample(monkeypatch):
 
 
 def test_psutil_not_imported_by_bare_ping():
-    """psutil (6.31ms self on this box) has no reason to be resident for a
-    bare `ping` — coordinator_core.session.core defers it behind
-    `_psutil()`, called only from liveness paths ping never reaches."""
     proc = subprocess.run(
         [sys.executable, "-c", "import coordinator_core.invoke.__main__; import sys; print('psutil' in sys.modules)"],
         capture_output=True,

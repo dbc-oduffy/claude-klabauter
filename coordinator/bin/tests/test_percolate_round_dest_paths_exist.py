@@ -1,29 +1,3 @@
-"""test_percolate_round_dest_paths_exist.py — chunking + per-row attribution
-coverage for `_dest_paths_exist` (percolate-round.py).
-
-
-Finding 3 (LOW): `_dest_paths_exist` batches every DELETE/REMOVE-tagged row
-of a round into one `git ls-files --error-unmatch -- <paths>` argv with no
-size cap. The sibling site in this same slice,
-`reap-stale-subagent-sidecars.py::_tracked_paths`, was explicitly
-engineered around the ~32KB Windows `CreateProcess` argv ceiling because
-`git ls-files` has no `--pathspec-from-file` support. `_dest_paths_exist`
-now chunks the same way (`_chunk_paths_by_argv_bytes`) -- these tests pin
-that chunking actually happens past the cap, and that per-row attribution
-survives a chunk boundary.
-
-Finding 5 (INFO): no existing test exercised a MIXED tracked/untracked
-batch through `_dest_paths_exist` against a REAL git repo. Per-item
-attribution lost or misaligned in a batched call is the exact class this
-amplification chain has already produced twice, so
-`test_mixed_tracked_and_untracked_batch_real_git_attribution_preserved`
-below constructs 2+ delete candidates spanning both outcomes and asserts
-per-row attribution via a real `git` invocation (never mocked, per
-`test_percolate_round_commit_pathspec.py`'s own real-git precedent for
-exactly this class of defect).
-
-Run: python -m pytest coordinator/bin/tests/test_percolate_round_dest_paths_exist.py -q
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -63,15 +37,7 @@ def _init_real_repo(repo_root: Path) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Finding 3 — chunking past the argv byte cap, per-row attribution across
-# chunk boundaries.
-# ---------------------------------------------------------------------------
-
-
 def test_chunk_paths_by_argv_bytes_splits_past_cap():
-    # 10 paths of ~40 bytes each under a tiny cap forces multiple chunks;
-    # every input path must appear in exactly one chunk, in order.
     paths = [f"some/deletion/candidate/path-{i:03d}.py" for i in range(10)]
     chunks = _mod._chunk_paths_by_argv_bytes(paths, cap=150)
 
@@ -79,7 +45,7 @@ def test_chunk_paths_by_argv_bytes_splits_past_cap():
     flattened = [p for chunk in chunks for p in chunk]
     assert flattened == paths
     for chunk in chunks:
-        assert chunk  # no empty chunk
+        assert chunk
 
 
 def test_chunk_paths_by_argv_bytes_single_chunk_under_cap():
@@ -89,8 +55,6 @@ def test_chunk_paths_by_argv_bytes_single_chunk_under_cap():
 
 
 def test_chunk_paths_by_argv_bytes_never_splits_a_single_path():
-    # A single path longer than the cap still gets its own chunk rather
-    # than being truncated or dropped.
     long_path = "x" * 500
     chunks = _mod._chunk_paths_by_argv_bytes(["short.py", long_path], cap=100)
     assert chunks[-1] == [long_path]
@@ -98,12 +62,6 @@ def test_chunk_paths_by_argv_bytes_never_splits_a_single_path():
 
 
 def test_dest_paths_exist_issues_one_ls_files_spawn_per_chunk(monkeypatch, tmp_path):
-    """Mutation-verify (Finding 3 body): under a small cap, a batch of
-    deletion candidates that all miss the worktree/symlink fast-path must
-    trigger MORE THAN ONE `git ls-files` spawn -- pins the chunking fix.
-    Pre-fix (single unbounded `-- <paths>` argv), this would be exactly
-    one `_run` call regardless of batch size; this test would fail red
-    (asserting `calls == 1`, not `> 1`) against that pre-fix shape."""
     dest = tmp_path / "dest"
     dest.mkdir()
     monkeypatch.setattr(_mod, "_LS_FILES_ARGV_BYTE_CAP", 150)
@@ -115,25 +73,18 @@ def test_dest_paths_exist_issues_one_ls_files_spawn_per_chunk(monkeypatch, tmp_p
         assert "ls-files" in cmd
         chunk = cmd[cmd.index("--") + 1:]
         calls.append(chunk)
-        # Every candidate reported as tracked -- kept.
         return _mod.subprocess.CompletedProcess(cmd, 0, "\n".join(chunk) + "\n", "")
 
     monkeypatch.setattr(_mod, "_run", _fake_run)
     result = _mod._dest_paths_exist(str(dest), rels)
 
     assert len(calls) > 1
-    # Every rel appears in exactly one chunk, and per-row attribution
-    # survives the chunk split.
     seen_across_chunks = [rel for chunk in calls for rel in chunk]
     assert seen_across_chunks == rels
     assert result == {rel: True for rel in rels}
 
 
 def test_dest_paths_exist_chunk_boundary_preserves_mixed_attribution(monkeypatch, tmp_path):
-    """A chunked call where one chunk reports its paths tracked and the
-    NEXT chunk reports its paths NOT tracked must still attribute each
-    `rel` to its own chunk's verdict -- not bleed one chunk's result into
-    another's."""
     dest = tmp_path / "dest"
     dest.mkdir()
     monkeypatch.setattr(_mod, "_LS_FILES_ARGV_BYTE_CAP", 50)
@@ -162,9 +113,6 @@ def test_dest_paths_exist_chunk_boundary_preserves_mixed_attribution(monkeypatch
 
 
 def test_dest_paths_exist_chunk_probe_failure_fails_open_for_only_that_chunk(monkeypatch, tmp_path):
-    """A returncode outside {0, 1} for one chunk (undetermined probe) must
-    fail OPEN for that chunk's rels only -- a sibling chunk's own
-    successful, determinate verdict must not be clobbered."""
     dest = tmp_path / "dest"
     dest.mkdir()
     monkeypatch.setattr(_mod, "_LS_FILES_ARGV_BYTE_CAP", 40)
@@ -192,18 +140,7 @@ def test_dest_paths_exist_chunk_probe_failure_fails_open_for_only_that_chunk(mon
     }
 
 
-# ---------------------------------------------------------------------------
-# Finding 5 — real-git mixed tracked/untracked batch, per-row attribution.
-# ---------------------------------------------------------------------------
-
-
 def test_mixed_tracked_and_untracked_batch_real_git_attribution_preserved(tmp_path):
-    """A single `_dest_paths_exist` call over 2+ delete candidates, some
-    still tracked at dest and some already gone from both worktree and
-    index, against a REAL git repo (never mocked) -- confirms per-row
-    attribution is not lost or misaligned by the batched call. This is
-    exactly the class of bug (per-item attribution corrupted by batching)
-    this amplification chain has already produced twice."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     _init_real_repo(repo_root)
@@ -220,9 +157,9 @@ def test_mixed_tracked_and_untracked_batch_real_git_attribution_preserved(tmp_pa
     result = _mod._dest_paths_exist(
         str(repo_root),
         [
-            "still-tracked.py",       # tracked in the index -- True
-            "never-existed-1.py",     # absent from both -- False
-            "never-existed-2.py",     # absent from both -- False
+            "still-tracked.py",
+            "never-existed-1.py",
+            "never-existed-2.py",
         ],
     )
 
@@ -234,9 +171,6 @@ def test_mixed_tracked_and_untracked_batch_real_git_attribution_preserved(tmp_pa
 
 
 def test_mixed_batch_with_worktree_fast_path_and_git_probe_combined(tmp_path):
-    """A batch mixing the worktree/symlink fast-path (file physically
-    still present at dest) with entries that need the git probe -- both
-    outcome classes attributed correctly within one call."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     _init_real_repo(repo_root)
@@ -251,7 +185,6 @@ def test_mixed_batch_with_worktree_fast_path_and_git_probe_combined(tmp_path):
          "-m", "seed"],
         cwd=str(repo_root), check=True,
     )
-    # Physically removed, still index-tracked (real publish swap shape).
     index_only.unlink()
 
     result = _mod._dest_paths_exist(

@@ -125,50 +125,29 @@ CLASS = "advisory"
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 100
 
-#: Escape hatch — shared name with the
-#: Write/Edit sibling module by design (both arms of one legacy .sh).
 _OVERRIDE_ENV = "COORDINATOR_OVERRIDE_ILLEGAL_FILENAME"
 
-#: Fast-bail probe (reference hook line 352): `grep -qE '\bmv\b|>'`.
 _MV_WORD_RE = re.compile(r"\bmv\b")
 
-#: mv/git mv token-scan tokenizer (reference hook lines 422-437's awk split).
 _TOKEN_SPLIT_RE = re.compile(r"[ \t\n\r\f\v]+")
 
 #: Preceding-char whitelist for a '>' to count as a redirect OPERATOR
 #: (mirrors the retired ``_REDIR_RE``'s ``(?:^|[ \t]|[0-9])`` prefix class):
-#: start-of-command, start-of-line (after '\n'), whitespace, or an fd digit.
-#: '-' and '=' are deliberately excluded, which is what makes '->'/'=>'
-#: arrows fall through untouched — no separate arrow check needed. '&' is
-#: included (review: MINOR-2) so ``&>`` (combined stdout+stderr redirect) is
-#: recognised as an operator instead of being silently missed.
 _REDIR_PRECEDING_OK = set(" \t\n0123456789&")
 
-#: Characters that end an unquoted redirect-target word (mirrors the retired
 #: ``_REDIR_RE``'s target class ``[^ \t>|;&]+`` upper bound). ``\n``/``\r``
 #: are load-bearing (review: BLOCKER-1) -- without them an unquoted target
-#: runs past its own line and swallows the next command as part of the
-#: "filename". ``(``/``)`` (review: NIT-1) keep a process-substitution body
-#: (``tee >(grep foo) < in``) from becoming a candidate at all.
 _REDIR_TARGET_STOP = set(" \t\n\r>|;&()")
 
-#: --out/-o flag-value scan (reference hook lines 463-465).
 _OUT_RE = re.compile(r"(?<![^ \t])(?:--out|-o)[ \t]+(\"[^\"]*\"|'[^']*'|[^ \t]+)", re.MULTILINE)
 
-#: Commands whose ``-o`` is not an output path (``--only-matching``).
 _O_IS_NOT_OUTPUT = frozenset({"grep", "egrep", "fgrep", "zgrep", "rg", "ag", "git"})
 
-#: Glued-on heredoc/process-sub opener strip (reference hook lines 374-392).
 _HEREDOC_GLUE_RE = re.compile(r"<<.*$")
 _PROCSUB_GLUE_RE = re.compile(r"<\(.*$")
 
 
 def _strip_heredocs(cmd: str) -> str:
-    """Port of the reference hook's awk heredoc-body-strip state machine
-    (lines 300-321). Handles ``<<DELIM``, ``<<-DELIM``, ``<<'DELIM'``,
-    ``<<"DELIM"`` open/close, tab-stripping for the ``-`` form. Best-effort:
-    does not handle nested heredocs (same v1 limitation as the reference).
-    """
     out: List[str] = []
     in_hd = False
     delim = ""
@@ -181,10 +160,8 @@ def _strip_heredocs(cmd: str) -> str:
             if check == delim:
                 in_hd = False
                 strip_tabs = False
-            continue  # heredoc-body lines (incl. the delimiter line) are dropped
+            continue
         if "<<" in line:
-            # awk's `sub(/.*<</, "", rest)` — greedy .* anchors at the LAST
-            # occurrence of "<<" in the line, leaving the text after it.
             idx = line.rfind("<<")
             rest = line[idx + 2 :]
             strip_tabs = rest.startswith("-")
@@ -253,18 +230,6 @@ def _tokenize_quote_aware(cmd: str) -> List[str]:
 
 
 def _extract_dest_candidates(cmd: str) -> List[str]:
-    """mv/git-mv 2nd-non-flag-arg scan (originally a port of the reference
-    hook's awk scan at lines 422-437; now reads the quote-INTACT,
-    heredoc-stripped ``cmd`` via ``_tokenize_quote_aware`` instead of the
-    quote-stripped ``cmd_for_scan`` -- the redirect leg's quote-aware
-    substrate, extended to this leg (C3 follow-up:
-    ``docs/plans/2026-08-07-deny-legs-reachable-and-quoted-redirects-visible.md``
-    left this leg on the old quote-blind substrate, which made
-    ``mv a.txt "b?.txt"`` silent because the quoted destination was erased
-    before tokenization ever saw it). State (``in_mv``/``arg_count``)
-    persists across the whole scan, not per-line, matching the awk
-    `BEGIN`-once semantics the original port preserved.
-    """
     dest: List[str] = []
     in_mv = False
     arg_count = 0
@@ -350,15 +315,6 @@ def _extract_redir_candidates(cmd: str) -> List[str]:
     while i < n:
         ch = cmd[i]
         if ch == "\\" and i + 1 < n and in_quote != "'":
-            # Backslash unconditionally escapes the NEXT character, whatever
-            # it is -- consume both and advance. Special-casing "only if the
-            # next char is a quote" desyncs quote-depth tracking on `\\`
-            # (the first backslash escapes the SECOND backslash, so a `"`
-            # immediately following is a REAL delimiter, not an escaped one).
-            # This rule applies at depth 0 and inside "..." only (review:
-            # MAJOR-3) -- bash never processes backslash escapes inside
-            # '...': there `\` is a literal character and the very next `'`
-            # always closes the span, escaped-looking or not.
             i += 2
             continue
         if in_quote is not None:
@@ -377,10 +333,6 @@ def _extract_redir_candidates(cmd: str) -> List[str]:
         if prev not in _REDIR_PRECEDING_OK:
             i += 1
             continue
-        # Two-char operator forms: '>>' (append) and '>|' (noclobber
-        # override, review: MINOR-2) -- both must consume the second
-        # character before target capture starts, or the '|' of '>|' is
-        # misread as the target and immediately terminates it empty.
         op_len = 2 if (i + 1 < n and cmd[i + 1] in (">", "|")) else 1
         j = i + op_len
         while j < n and cmd[j] in (" ", "\t"):
@@ -390,10 +342,6 @@ def _extract_redir_candidates(cmd: str) -> List[str]:
         while j < n:
             tch = cmd[j]
             if tch == "\\" and j + 1 < n and target_quote != "'":
-                # Same escape rule as the top-level scan above -- consume
-                # backslash + next char, EXCEPT inside a single-quoted
-                # target, where bash treats '\' as a literal (review:
-                # MAJOR-3).
                 j += 2
                 continue
             if target_quote is not None:
@@ -409,10 +357,6 @@ def _extract_redir_candidates(cmd: str) -> List[str]:
                 break
             j += 1
         if target_quote is not None:
-            # Ran off the end of the string still inside a quoted target —
-            # unterminated quote. Deliberate silence: emit nothing and stop
-            # scanning entirely, since everything past this point is inside
-            # the unterminated span and unparseable.
             break
         target = cmd[start:j]
         if target:
@@ -462,10 +406,6 @@ def _extract_out_candidates(cmd: str) -> List[str]:
 
 
 def _check_candidate(raw_candidate: str) -> Optional[Tuple[str, str]]:
-    """Port of the reference hook's ``check_candidate`` (lines 369-417) minus
-    the deny/advise emission — returns ``(basename, char_hint)`` on an
-    illegal basename, else ``None`` (safe or un-extractable candidate).
-    """
     candidate = raw_candidate.replace('"', "").replace("'", "")
     candidate = _HEREDOC_GLUE_RE.sub("", candidate)
     candidate = _PROCSUB_GLUE_RE.sub("", candidate)
@@ -486,13 +426,6 @@ def _check_candidate(raw_candidate: str) -> Optional[Tuple[str, str]]:
 
 
 def _safe_suggestion(raw_name: str) -> str:
-    """Port of ``make_deny_msg``'s safe-suggestion pipeline (see module
-    Port-of backlink):
-    ``tr ':?*<>|"\\/' '-' | tr -s '-' | sed 's/^-//; s/-$//' | sed 's/[. ]*$//'``
-    (duplicated from the write_guards sibling's own local copy — both are
-    independent module files per the "one guard = one module file" rule;
-    only ``csn_check``/``is_confined_findings_agent`` are the designated
-    cross-module shared helpers)."""
     illegal = ':?*<>|"\\/'
     translated = "".join("-" if c in illegal else c for c in raw_name)
     squeezed = re.sub(r"-+", "-", translated)
@@ -505,12 +438,6 @@ def _safe_suggestion(raw_name: str) -> str:
 def _make_deny_msg(
     raw_name: str, illegal_char_hint: str, payload: Optional[Dict[str, Any]] = None
 ) -> str:
-    """Compressed reason text (message-size discipline, plan chunk C8):
-    names the offending char, the Windows-breakage consequence, and a
-    ready-to-run rename -- no restated Reference/backstop boilerplate,
-    which duplicated what ``_advisory_ctx`` already said. The override
-    sentence still routes through ``operator_override_note`` (M17,
-    2026-07-30), never hand-written -- see that helper's own docstring."""
     safe_suggestion = _safe_suggestion(raw_name)
     return (
         f"'{raw_name}' has '{illegal_char_hint}' -- illegal on Windows, blocks "
@@ -521,22 +448,12 @@ def _make_deny_msg(
 
 
 def _advisory_ctx(reason: str) -> str:
-    """Non-blocking prefix over ``_make_deny_msg``'s reason (message-size
-    discipline, plan chunk C8) -- the hook-name/backstop-citation tail was
-    cut as decoration once the reason itself states what/why/alternative."""
     return f"ADVISORY (non-blocking): {reason}"
 
 
 def _rewrite_ctx(
     raw_name: str, safe_name: str, illegal_char_hint: str, payload: Optional[Dict[str, Any]] = None
 ) -> str:
-    """Context prose for the ``updatedInput`` rewrite path (C2,
-    ``docs/plans/2026-08-21-the-advisory-band-gets-smaller-cheaper-and-honest.md``
-    AC5): the guard already computes the safe name, so the message states
-    what was applied rather than asking the agent to apply it itself -- no
-    compliance step is needed, matching ``_make_deny_msg``'s char-hint /
-    Windows-breakage framing minus the "Use instead" instruction, which is
-    moot once the rewrite has already happened."""
     return (
         f"'{raw_name}' has '{illegal_char_hint}' -- illegal on Windows, blocks "
         f"`git checkout`. Auto-corrected to '{safe_name}'. "
@@ -552,14 +469,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         tool_name = payload.get("tool_name") or ""
         dialect = dialect_from_tool_name(tool_name)
         if dialect is Dialect.POWERSHELL:
-            # C5 (row 20, `docs/reference/guard-dialect-coverage.md`): this
-            # guard's own heredoc stripper, glued-heredoc/process-substitution
-            # strip, and fd-prefixed redirect scan are all POSIX shell
-            # syntax with no PowerShell equivalent parsed here -- re-using
-            # them against PowerShell input would be a guess, not a
-            # verdict, on a shell this guard's own text scanning was never
-            # built to read. Declares SILENT rather than clean, per the
-            # plan's "prefer SILENT to a guess" mandate.
             record_silent(
                 "block_illegal_filename",
                 "PowerShell dialect: heredoc/process-substitution/redirect "
@@ -577,32 +486,17 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not cmd:
             return None
 
-        # CRLF strip — redundant-but-safe insurance at THIS check function's
-        # own entry, independent of any dispatcher-level strip (recipe §(c):
-        # "the Python port should keep that same double-strip discipline PER
         # CHECK FUNCTION").
         cmd = cmd.replace("\r", "")
 
-        # Join backslash-newline continuations so a split op is one segment
-        # (reference hook lines 289-291).
         cmd = cmd.replace("\\\n", " ")
 
-        # Strip heredoc bodies before scanning for mv/redirect targets.
         cmd = _strip_heredocs(cmd)
 
         # Strip double- then single-quoted spans to build CMD_FOR_SCAN. Order
-        # matters: double-quoted spans first, so an apostrophe inside a
-        # double-quoted body is gone before the single-quote pass.
         cmd_for_scan = re.sub(r'"[^"]*"', "", cmd)
         cmd_for_scan = re.sub(r"'[^']*'", "", cmd_for_scan)
 
-        # Fast bail: no move or redirect-like operator survives in the text
-        # the extractors actually read. ``mv`` is scanned from the
-        # quote-stripped ``cmd_for_scan`` (dest extraction); ``>`` must be
-        # checked against the quote-INTACT ``cmd`` (C3 quote-aware redirect
-        # extraction now reads ``cmd`` directly, not ``cmd_for_scan``) —
-        # bailing on ``cmd_for_scan`` here would under-cover a command whose
-        # only '>' lives inside a quoted redirect target.
         if not (_MV_WORD_RE.search(cmd_for_scan) or ">" in cmd):
             return None
 
@@ -610,22 +504,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         redir_candidates = _extract_redir_candidates(cmd)
         out_candidates = _extract_out_candidates(cmd)
 
-        # First-match-wins across DEST -> REDIR -> OUT, mirroring advise()'s
-        # exit-on-first-match (never "evaluate all, OR the results").
         for raw_candidate in dest_candidates + redir_candidates + out_candidates:
             result = _check_candidate(raw_candidate)
             if result is None:
                 continue
             basename, hint = result
             safe_suggestion = _safe_suggestion(basename)
-            # Apply the already-computed safe name in place (C2, AC5) rather
-            # than asking the agent to adopt it -- but only when the rewrite
-            # is a real, locatable substitution: a non-empty suggestion, with
-            # `basename` a literal substring of the candidate text actually
-            # extracted from `cmd` (always true for this module's three
-            # extractors -- see their own docstrings -- but checked rather
-            # than assumed, per this guard's fail-open discipline) and that
-            # candidate text itself present in `cmd` to rewrite.
             if safe_suggestion and basename in raw_candidate and raw_candidate in cmd:
                 new_candidate = raw_candidate.replace(basename, safe_suggestion, 1)
                 new_cmd = cmd.replace(raw_candidate, new_candidate, 1)
@@ -634,21 +518,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 ctx = _rewrite_ctx(basename, safe_suggestion, hint, payload=payload)
                 return rewrite_input("PreToolUse", updated_input, ctx)
 
-            # Fallback: no safe rewrite could be located (empty suggestion,
-            # or the candidate text is not a literal match in `cmd` -- e.g.
-            # backslash-continuation joins changed the text between
-            # extraction and this point). Advise, same as before this chunk.
             reason = _make_deny_msg(basename, hint, payload=payload)
             ctx = _advisory_ctx(reason)
 
-            # C2 (docs/plans/2026-08-21-the-advisory-band-gets-smaller-cheaper-and-honest.md):
-            # `_make_deny_msg` already computes the sanitized suggestion for the
-            # human-readable reason text; reuse the SAME `_safe_suggestion` call to
-            # rewrite the offending candidate in place, so the fix lands without the
-            # agent having to re-issue the call by hand. Substitution is scoped to the
             # raw candidate substring within the ORIGINAL (unprocessed) command text —
-            # never `cmd`, which has been heredoc-stripped/continuation-joined and is
-            # not a faithful copy of what the caller actually sent.
             safe_basename = _safe_suggestion(basename)
             if basename and safe_basename and basename != safe_basename:
                 original_cmd = tool_input.get("command") or ""
@@ -663,8 +536,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         return None
     except Exception:
-        # Fail-OPEN on any unexpected error — this arm is advisory-only and
-        # best-effort; every extraction failure degrades to "no advisory",
-        # never a guard-level crash (mirrors the reference hook's
-        # `set -uo pipefail` without `-e`).
         return None

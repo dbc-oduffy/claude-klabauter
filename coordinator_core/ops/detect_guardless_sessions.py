@@ -81,22 +81,6 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-# Matches the --plugin-dir flag's VALUE (quoted or bare), not just the
-# flag's presence — a value is required before a command line can be
-# classified guarded at all (Review: coordinatorcode-reviewer-5d457f48 —
-# substring-only test false-positives on an unrelated --plugin-dir and
-# false-negatives a coordinator-guarded process whose value merely doesn't
-# match a hard-coded literal).
-#
-# The quoted alternatives use `(?:\\.|[^"\\])*`/`(?:\\.|[^'\\])*` rather than
-# a bare `[^"]*`/`[^']*` so a backslash immediately before the closing quote
-# is treated as escaping that quote, not as the value's own trailing
-# character — matching Windows CRT argv parsing, where
-# `--plugin-dir="X:\DoE-claude\coordinator\"` (abs-path-ok: illustrative
-# example command line in prose, not a runtime path reference) reads the
-# `\"` as an escaped literal quote and the real value continues past it. A
-# bare `[^"]*` stops at that `\"` and mis-parses the value short (Review:
-# coordinatorcode-reviewer-ad7b843b P2).
 _PLUGIN_DIR_VALUE_RE = re.compile(
     r'--plugin-dir(?:=|\s+)("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|\S+)'
 )
@@ -111,17 +95,6 @@ class ProcessObservation:
 
 @dataclass
 class DetectionResult:
-    """Three-way verdict — `cannot_determine` is always checked first.
-
-    - cannot_determine=True: the probe could not run (non-Windows, probe
-      failure, malformed output). `reason` explains why. `guardless` is
-      always [] in this case and MUST NOT be read as "clean".
-    - cannot_determine=False and guardless == []: probe ran successfully and
-      observed zero guardless claude.exe processes. This IS the clean
-      verdict.
-    - cannot_determine=False and guardless != []: at least one live
-      claude.exe process has no --plugin-dir in its command line.
-    """
 
     cannot_determine: bool
     reason: Optional[str]
@@ -168,11 +141,6 @@ def _plugin_dir_value(command_line: str) -> Optional[str]:
 
 
 def _resolved_coordinator_plugin_dir() -> Optional[str]:
-    """Resolve the coordinator plugin directory the same way the rest of
-    the repo does (`coordinator_core.resolution.facade.resolve_operator_config`
-    -> `doe_root`/`coordinator`), normalized for path comparison. Returns
-    `None` if operator config cannot be resolved (e.g. corrupt/missing
-    registry) — callers fall back to an approximation in that case."""
     try:
         from coordinator_core.resolution.facade import resolve_operator_config
         from coordinator_core.data_root import content_root_for
@@ -200,26 +168,10 @@ def _is_guarded(command_line: str) -> bool:
         if candidate is not None:
             return candidate == resolved
 
-    # Deliberate approximation when operator-config resolution is
-    # unavailable: match a --plugin-dir value that names a directory
-    # literally called "coordinator". False-positive shape: any
-    # --plugin-dir pointing at an unrelated directory that merely happens
-    # to be named "coordinator" reads as guarded when it has nothing to do
-    # with the DoE coordinator plugin (Review: coordinatorcode-reviewer-5d457f48).
     return value.rstrip("/\\").rstrip("\"'").endswith("coordinator")
 
 
 class _CommandLineUnavailable(Exception):
-    """Raised by `_run_process_probe` when a live `claude.exe` process's
-    command line could not be read (`psutil.AccessDenied`).
-
-    Caught by `detect()` and turned into `cannot_determine=True` — an
-    unreadable command line is an observation this module could not make,
-    never a silent "clean" or "guarded" default (see module docstring
-    negative-spec). Measured zero occurrences on this box (55/55 claude.exe
-    command lines readable via psutil 7.2.2), but the guard exists for a
-    claude.exe running as another user.
-    """
 
     def __init__(self, pid: int):
         self.pid = pid
@@ -227,24 +179,9 @@ class _CommandLineUnavailable(Exception):
 
 
 def _run_process_probe() -> List[ProcessObservation]:
-    """Enumerate every live `claude.exe` process and its command line via
-    `psutil` (a hard dependency, see `pyproject.toml`), in-process — no
-    subprocess spawned (see module docstring "Signal chosen").
-
-    Raises `psutil.Error` on an enumeration failure and
-    `_CommandLineUnavailable` if a claude.exe process's cmdline could not be
-    read — both are caught by `detect()` and turned into
-    `cannot_determine=True`.
-    """
     import psutil
 
     observations: List[ProcessObservation] = []
-    # process_iter(attrs=["pid", "name"]) defaults `ad_value=None`, so an
-    # unreadable `name`/`pid` attr comes back as `None` here rather than
-    # raising AccessDenied out of this loop (verified against psutil 7.2.2 —
-    # is what makes that `None` safe to `.lower()` and filter on; the
-    # explicit `proc.cmdline()` try/except a few lines down is a separate,
-    # deliberately-covered AccessDenied path (_CommandLineUnavailable).
     for proc in psutil.process_iter(["pid", "name"]):
         name = (proc.info.get("name") or "").lower()
         if name != "claude.exe":
@@ -254,12 +191,7 @@ def _run_process_probe() -> List[ProcessObservation]:
         except psutil.AccessDenied as exc:
             raise _CommandLineUnavailable(proc.pid) from exc
         except psutil.NoSuchProcess:
-            # process exited between listing and inspection; nothing to check
             continue
-        # `cmdline` is a list[str]; joined with a single space to feed the
-        # existing string-based --plugin-dir matcher (_is_guarded /
-        # _plugin_dir_value) unchanged rather than reshaping it to take a
-        # list.
         command_line = " ".join(cmdline_list)
         observations.append(
             ProcessObservation(
@@ -272,11 +204,6 @@ def _run_process_probe() -> List[ProcessObservation]:
 
 
 def detect(platform_system: Optional[str] = None) -> DetectionResult:
-    """Detect guardless `claude.exe` processes currently live on this host.
-
-    `platform_system` is injectable for tests; defaults to
-    `platform.system()`.
-    """
     system = platform_system if platform_system is not None else platform.system()
     if system != "Windows":
         return DetectionResult(
@@ -291,21 +218,13 @@ def detect(platform_system: Optional[str] = None) -> DetectionResult:
             cannot_determine=True,
             reason=str(exc),
         )
-    except Exception as exc:  # psutil.Error and anything else process-iter can raise
+    except Exception as exc:
         return DetectionResult(
             cannot_determine=True,
             reason=f"psutil process-table enumeration failed: {exc}",
         )
 
     if not observations:
-        # A zero-process result is indistinguishable from a transient
-        # enumeration hiccup that returns an empty collection without
-        # raising. It is also provably wrong: this detector itself runs
-        # from inside a live `claude` session, so the process table cannot
-        # actually contain zero claude.exe rows. Treat it as
-        # cannot_determine, not clean (Review: coordinatorcode-reviewer-
-        # 5d457f48 — the exact collapse-into-clean failure mode this module
-        # exists to prevent).
         return DetectionResult(
             cannot_determine=True,
             reason=(

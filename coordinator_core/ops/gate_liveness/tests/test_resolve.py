@@ -1,9 +1,3 @@
-"""
-Tests for coordinator_core.ops.gate_liveness.resolve — the `gate_liveness.resolve`
-closure_key-join reader (C1).
-
-Spec backlink: docs/plans/2026-08-21-a-discharged-gate-tells-the-row-waiting.md § C1
-"""
 
 from __future__ import annotations
 
@@ -31,7 +25,6 @@ def _write_plan(tmp_path: Path, name: str, rows_yaml: str) -> Path:
 
 
 class TestResolveGateLiveness:
-    """AC3 falsification table — one case per shape the census found."""
 
     def test_no_closure_key_is_undetermined_no_closure_key(self, tmp_path):
         rows = textwrap.dedent(
@@ -121,7 +114,6 @@ class TestResolveGateLiveness:
         assert str(memo_path) == results[0]["evidence"]["memo_path"]
 
     def test_matching_discharge_in_archive_is_discharged(self, tmp_path):
-        """The boot sweep moves actioned memos — archive must still count."""
         rows = textwrap.dedent(
             """\
             - id: C1
@@ -210,7 +202,6 @@ class TestResolveGateLiveness:
         assert results[0]["reason"] == "awaiting-discharge"
 
     def test_from_mismatch_owner_repo_routing_check_fails(self, tmp_path):
-        """A closure_key collision from an unrelated sender must not discharge."""
         rows = textwrap.dedent(
             """\
             - id: C1
@@ -255,7 +246,6 @@ class TestResolveGateLiveness:
         assert results[0]["reason"] == "awaiting-discharge"
 
     def test_status_field_alone_never_discharges(self, tmp_path):
-        """Keys on the discharges block ALONE — never on status:."""
         rows = textwrap.dedent(
             """\
             - id: C1
@@ -297,8 +287,6 @@ class TestResolveGateLiveness:
         assert results[0]["reason"] == "awaiting-discharge"
 
     def test_never_holds(self, tmp_path):
-        """Neither closure_key shape ever produces `holds` — absence of a
-        discharge record is not evidence the blocker is live."""
         rows = textwrap.dedent(
             """\
             - id: C1

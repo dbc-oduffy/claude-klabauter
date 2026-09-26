@@ -32,8 +32,6 @@ from pathlib import Path
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -75,7 +73,6 @@ def _run(
     extra_args: list[str] | None = None,
     cwd: Path | None = None,
 ) -> subprocess.CompletedProcess:
-    """Run the shim with a controlled environment; never raises on non-zero exit."""
     env = os.environ.copy()
     for key in unset:
         env.pop(key, None)
@@ -100,9 +97,6 @@ def _assert_fail_open(result: subprocess.CompletedProcess) -> None:
 
 
 def _init_tmp_repo(tmp_path: Path) -> Path:
-    """A throwaway git repo, deliberately NOT the project root — `coordinator_core` is
-    unimportable from here, so any invoke subprocess run with this as cwd fails to import
-    the module and the shim must fail open rather than propagate the error."""
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(
@@ -116,7 +110,6 @@ def _init_tmp_repo(tmp_path: Path) -> Path:
 
 
 def test_no_session_id(tmp_path: Path) -> None:
-    """Case 1: no session ID anywhere (env unset, no sentinel file) -> exit 0, no output."""
     repo = _init_tmp_repo(tmp_path)
     result = _run(
         env_overrides={"CLAUDE_KLABAUTER_COMMIT_NATURE": ""},
@@ -144,7 +137,6 @@ def test_invoke_subprocess_import_failure(tmp_path: Path) -> None:
 
 
 def test_nature_flag_no_service(tmp_path: Path) -> None:
-    """Case 3: --nature flag accepted, still fails open when the invoke call fails."""
     repo = _init_tmp_repo(tmp_path)
     result = _run(
         env_overrides={"CLAUDE_SESSION_ID": "test-session-smoke"},
@@ -168,27 +160,11 @@ def test_nature_env_no_service(tmp_path: Path) -> None:
 
 
 def test_shim_is_not_exec_bit_bare_invoked() -> None:
-    """Case 5: shim's exec bit is deliberately OFF post-rename (POSIX-exec
-    drain, 2026-08-14).
-
-    POSIX-only: this test always invokes the shim via `[sys.executable,
-    str(_SHIM), ...]` (see `_run` above), so the exec bit is not load-bearing
-    for the test itself. Prior to the rename this asserted the exec bit WAS
-    set as installer hygiene for a bare/shebang-invocable `.sh`; renamed to
-    `bin/claude-klabauter-commit-anchors.py` it has no bare-invocation caller (the
-    `.cmd`/`.ps1` twins resolve their own interpreter), so the exec bit is
-    stripped like every other C6-pattern rename and this asserts that instead
-    of the old executable-hygiene shape."""
     if os.name != "nt":
         assert not os.access(_SHIM, os.X_OK), f"{_SHIM} unexpectedly carries the exec bit"
 
 
 def test_not_a_git_repo_fails_open(tmp_path: Path) -> None:
-    """Bonus current-transport case: cwd resolves to no git repo at all (git rev-parse
-    fails) -> _git_show_toplevel returns None -> shim returns immediately, exit 0, no
-    output. Not present in the bash oracle (which always ran from inside this repo) but
-    exercises the shim's very first fail-open gate.
-    """
     result = _run(
         env_overrides={"CLAUDE_SESSION_ID": "test-session-smoke"},
         cwd=tmp_path,

@@ -64,15 +64,11 @@ from coordinator_core.frontmatter.primitives import (
 from coordinator_core.session.liveness import session_live, session_verdict
 
 _VERDICT_RELEASE = "release"
-#: An `in_progress` memo with an empty `picked_up_by` is malformed, not a
-#: dead-holder candidate — the reaper does not guess who held it.
 _VERDICT_SKIP_EMPTY_HOLDER = "skip_empty_holder"
 
 
 @dataclass
 class Disposition:
-    """One candidate's verdict — the shape both the survey and the CLI
-    consume, mirroring `reap_in_flight_claims.Disposition`."""
 
     path: str
     holder: str
@@ -87,13 +83,6 @@ class MemoSurveyResult:
 
 
 def _release_liveness_basis(holder: str, repo_root: Path) -> str:
-    """The deciding arm behind a RELEASE verdict, recorded in the
-    disposition detail — same shape as
-    `reap_in_flight_claims._release_liveness_basis`, and for the same
-    reason: a bare release with no record of which liveness arm produced
-    the verdict is exactly what the 2026-08-22 handoff-reaper bug left
-    behind. Falls back to `"unknown"` when `session_verdict` returns
-    `None`."""
     verdict = session_verdict(holder, cwd=str(repo_root))
     if verdict is None:
         return "unknown"
@@ -147,9 +136,6 @@ def _survey_dir(memos_dir: Path, repo_root: Path) -> List[Disposition]:
 
 
 def survey(repo_root: Path) -> MemoSurveyResult:
-    """One pass over `state/cross-repo/inbox/*.md` and
-    `state/cross-repo/outbox/*.md`. Performs no mutation;
-    `apply_dispositions()` is the write path."""
     repo_root = Path(repo_root)
     cross_repo = repo_root / "state" / "cross-repo"
 

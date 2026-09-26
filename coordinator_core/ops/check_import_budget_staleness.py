@@ -111,32 +111,12 @@ MANIFEST_RELATIVE_PATH = "coordinator_core/benchmarks/import-budget-manifest.jso
 
 
 def _git_root(cwd: Optional[str] = None) -> Optional[str]:
-    """Resolve a git repo root, or None if not in one.
-
-    Self-contained (same shape as
-    `check_arch_audit_staleness._git_root`) — deliberately does NOT route
-    through `check_weekly_staleness._resolve_state_root`, which resolves a
-    different directory (the coordinator STATE root) owned by a live
-    sibling plan (see module docstring).
-    """
     root = show_toplevel(cwd)
     return root or None
 
 
 def _git_log_since(repo_root: Path, since_date: str, paths: list[str]) -> Optional[str]:
-    """`git log --since=<since_date> -- <paths...>`.
-
-    Returns the command's stdout (possibly empty — a genuinely quiet repo)
-    on success, or None if the git query itself failed (missing binary,
-    non-zero exit, e.g. a shallow clone whose history doesn't reach
-    `since_date`). None is NOT the same as "" — a caller must not fold a
-    failed query into "no movement confirmed" (see `compute_entrypoint_staleness`).
-    """
     if not paths:
-        # Unreachable via the only call
-        # site (compute_entrypoint_staleness returns UNKNOWN before this is
-        # called); kept as belt-and-suspenders for future callers. "" here
-        # means "no paths given", distinct from None (query failure).
         return ""
     try:
         result = subprocess.run(
@@ -168,14 +148,6 @@ def compute_entrypoint_staleness(
     *,
     today: Optional[date] = None,
 ) -> dict[str, Any]:
-    """Pure-ish predicate (one `git log` shell-out) for a single manifest
-    entrypoint entry. Returns a dict with at least a `verdict` key of
-    STALE / FRESH / UNKNOWN.
-
-    UNKNOWN: `measured_at` absent or unparseable, or `measured_paths`
-    absent — the manifest entry doesn't carry what this predicate needs.
-    Never raises on a malformed entry.
-    """
     repo_root = Path(repo_root)
     today = today or date.today()
 
@@ -186,9 +158,6 @@ def compute_entrypoint_staleness(
 
     measured_paths = entry.get("measured_paths")
     if not measured_paths or not isinstance(measured_paths, (list, tuple)):
-        # A truthiness-only check passes
-        # a bare string, which git log then unpacks one pathspec per
-        # character (silent false FRESH); require a list/tuple explicitly.
         return {"entrypoint": entrypoint, "verdict": "UNKNOWN", "reason": "measured_paths missing, empty, or not a list"}
 
     days_since_measured = (today - measured_at).days
@@ -227,7 +196,6 @@ def compute_manifest_staleness(
     *,
     today: Optional[date] = None,
 ) -> dict[str, dict[str, Any]]:
-    """Verdict per entrypoint in *manifest* (its `entrypoints` mapping)."""
     entrypoints = manifest.get("entrypoints") or {}
     return {
         name: compute_entrypoint_staleness(repo_root, name, entry, today=today)

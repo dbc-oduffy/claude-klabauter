@@ -27,8 +27,6 @@ import pytest
 
 from coordinator_core.testing import suite_mutex
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -37,14 +35,12 @@ pytestmark = [
 
 @pytest.fixture(autouse=True)
 def sandboxed_settings_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Repoint the settings home at a per-test temp dir for every test here."""
     home = tmp_path / "settings-home"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
     return home
 
 
 def _write_meta(pid: int, owner: str, started_at: str, cmd: str = "pytest") -> Path:
-    """Materialize a lock dir with fully-specified holder metadata."""
     path = suite_mutex.lock_path()
     path.mkdir(parents=True, exist_ok=True)
     (path / "meta.json").write_text(
@@ -63,12 +59,6 @@ def _iso_ago(seconds: float) -> str:
 
 
 def _dead_pid() -> int:
-    """Return a PID that is reliably not running.
-
-    Allocated by spawning a trivial child and reaping it, so the value is a
-    real, just-exited PID on both POSIX and Windows rather than a guessed
-    constant that might collide with a live process.
-    """
     import subprocess
     import sys
 
@@ -161,7 +151,6 @@ def test_live_pid_past_the_live_holder_ceiling_is_reclaimed() -> None:
 
 
 def test_live_pid_past_stale_ttl_but_within_live_ceiling_is_kept() -> None:
-    """The regression itself: an honest long suite must not be reclaimed."""
     _write_meta(
         pid=os.getpid(),
         owner="slow-but-honest-suite",
@@ -174,8 +163,6 @@ def test_live_pid_past_stale_ttl_but_within_live_ceiling_is_kept() -> None:
 
 
 def test_dead_pid_past_stale_ttl_still_expires_at_the_short_ceiling() -> None:
-    """A holder that cannot be shown alive keeps the short TTL, so a crash
-    never wedges the fleet for the live-holder ceiling's duration."""
     _write_meta(
         pid=_dead_pid(),
         owner="crashed-session",

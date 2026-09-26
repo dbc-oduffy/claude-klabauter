@@ -1,15 +1,3 @@
-"""Unit tests for coordinator_core.snippet_sync.registry.
-
-Covers the schema validation, consumer-resolution ordering (F5), and
-machine-local/file-exists conditional handling ported from the retired
-`coordinator/bin/snippet-registry` bash CLI (477 LoC). Golden-diff parity
-against the live DoE-side registry.toml + 3 bats suites
-(test-snippet-registry{,-conditional,-malformed}.bats) is verified
-separately at build time — this file covers unit-level edges those
-integration suites don't isolate (e.g. content_root override).
-
-Spec backlink: DoE scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 6
-"""
 from __future__ import annotations
 
 import textwrap
@@ -117,7 +105,6 @@ def test_resolve_consumers_ordering_plugin_then_sibling(tmp_path):
     data = reg.load_registry(registry_path)
     plugin_root = tmp_path
     out = reg.resolve_consumers(data, "foo", plugin_root)
-    # Group 1 (plugin-root-relative) alpha, then group 2 (sibling) alpha.
     assert out == [
         str(plugin_root / "agents/aaa.md"),
         str(plugin_root / "agents/zzz.md"),
@@ -142,7 +129,6 @@ def test_resolve_consumers_content_root_override_affects_only_plugin_relative(tm
     content_root = tmp_path / "content-override"
     out = reg.resolve_consumers(data, "foo", plugin_root, content_root=content_root)
     assert str(content_root / "agents/x.md") in out
-    # Sibling path stays anchored to plugin_root regardless of content_root.
     assert str(plugin_root / "../sibling/y.md") in out
     assert str(content_root / "../sibling/y.md") not in out
 
@@ -163,7 +149,7 @@ def test_resolve_consumers_file_exists_conditional_graceful_skip(tmp_path):
     )
     data = reg.load_registry(registry_path)
     out = reg.resolve_consumers(data, "foo", tmp_path)
-    assert out == []  # graceful skip, no exit-nonzero
+    assert out == []
 
 
 def test_resolve_consumers_file_exists_conditional_present(tmp_path):
@@ -222,15 +208,12 @@ def test_resolve_consumers_sibling_plugin_file_exists_anchors_to_home_regardless
     )
     data = reg.load_registry(registry_path)
 
-    # Context 1: plugin_root IS the live-install path (grandparent == plugins/).
     live_install_plugin_root = (
         fake_home / ".claude" / "plugins" / "coordinator-claude" / "coordinator"
     )
     out_live = reg.resolve_consumers(data, "foo", live_install_plugin_root)
     assert out_live == [str(live_install_target)]
 
-    # Context 2: plugin_root IS the DoE SOURCE tree — a wholly different
-    # location bearing no relative-path relationship to the live install.
     source_tree_plugin_root = tmp_path / "some-other-checkout" / "DoE-claude" / "coordinator"
     out_source = reg.resolve_consumers(data, "foo", source_tree_plugin_root)
     assert out_source == [str(live_install_target)]
@@ -389,8 +372,6 @@ def test_get_snippet_meta_defaults_and_t3a_g3f_fields(tmp_path):
 
 
 def test_delivery_inject_is_read_back(tmp_path):
-    """An `inject` row's delivery survives the reader — the signal an orphan check
-    needs to know a pasted sentinel for it is an orphan by construction."""
     registry_path = _write_registry(
         tmp_path,
         """
@@ -407,8 +388,6 @@ def test_delivery_inject_is_read_back(tmp_path):
 
 
 def test_delivery_required_at_schema_v3_but_not_before(tmp_path):
-    """v3 makes `delivery` required so a new row cannot silently mean "paste" by
-    omission; v1/v2 registries predate the field and keep the paste default."""
     body = """
         schema_version = {v}
         [snippet.foo]
@@ -459,13 +438,7 @@ def test_get_snippet_meta_unknown_header_style_fails_loud(tmp_path):
         reg.get_snippet_meta(data, "foo")
 
 
-# ---------------------------------------------------------------------------
-# schema_version 4 — excluded_consumer + eligible_glob (DoE 355255cc3)
-#
 # Both fields are ADDITIVE-OPTIONAL: the v3-shaped-row case below is as
-# load-bearing as the violation cases, because "a v3 row is still valid at v4"
-# is the property that makes this a field-SET bump rather than a value break.
-# ---------------------------------------------------------------------------
 
 _V4_VALID = """
     schema_version = 4
@@ -492,9 +465,6 @@ def test_v4_row_with_both_fields_loads_and_reads_back(tmp_path):
 
 
 def test_v3_shaped_row_is_still_valid_at_v4(tmp_path):
-    """Additive-optional means a row carrying NEITHER new field parses clean at
-    v4 and reads back the same defaults it had at v3 — the bump is a field-SET
-    change, not a value-shape break for existing rows."""
     data = reg.load_registry(
         _write_registry(
             tmp_path,
@@ -515,8 +485,6 @@ def test_v3_shaped_row_is_still_valid_at_v4(tmp_path):
 
 
 def test_v4_schema_version_is_supported(tmp_path):
-    """Regression pin for the break this fix closes: a v4 registry must not
-    fail-loud with the unknown-schema_version exit 3."""
     data = reg.load_registry(_write_registry(tmp_path, _V4_VALID))
     assert data["schema_version"] == 4
 
@@ -588,8 +556,6 @@ def test_excluded_consumer_path_also_in_consumers_is_contradictory(tmp_path):
     ],
 )
 def test_v4_fields_forbidden_on_scan_row(tmp_path, field_block):
-    """sentinel-presence-on-disk IS enrolment on a scan row, so a declared
-    exclusion (or a declared universe) is incoherent, not merely unused."""
     registry_path = _write_registry(
         tmp_path,
         f"""
@@ -678,7 +644,6 @@ def test_eligible_glob_gaps_honour_content_root(tmp_path):
     plugin_root = tmp_path / "plugin"
     registry_path = _write_registry(plugin_root, _V4_VALID)
     data = reg.load_registry(registry_path)
-    # The REAL tree carries a file that is undeclared; the redirect target does not.
     _v4_glob_tree(plugin_root)
     content_root = tmp_path / "redirect"
     (content_root / "agents").mkdir(parents=True)

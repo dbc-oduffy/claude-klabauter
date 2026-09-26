@@ -144,67 +144,20 @@ from coordinator_core.ops.fleet._common import (
 
 _LOG = logging.getLogger(__name__)
 
-# Destination archive family label for the wire envelope (contract §2.1).
 _FAMILY = "handoff"
 
 # Scan-rail refusal reasons. NEGATIVE SPEC: these never reach the cockpit
-# wire. They are `_scan_terminal`'s own refusals, reported through the
-# opt-in `skipped` out-param (and `plan_sweep`'s `scan_skipped`), which no
-# wire-building caller passes — `_handle_act`'s wire `skipped` keeps only
-# the reasons the producer contract already publishes, so AC-4's
-# byte-identity holds without an allowlist for a future reason to drift out
-# of. A rail that refuses a candidate MUST name itself here: a bare
-# `continue` makes "every rail still refuses" and "every rail silently
-# drops everything" indistinguishable from outside, which is how AC-2 was
-# ticked on a mechanism that reported nothing.
-#: Re-exported under this module's own scan-rail naming convention — the
-#: single definition lives in `coordinator_core.ops.ceremony.git_native`
 #: (`REASON_WORKTREE_DIRTY`), shared with `archive_sizings.py`'s identical
-#: gate rather than duplicated (the two copies used to read byte-for-byte
-#: the same string from two module-local constants).
 _SCAN_REASON_WORKTREE_DIRTY = REASON_WORKTREE_DIRTY
 _SCAN_REASON_NOT_TERMINAL = "not-terminal"
-#: A record that IS terminal and was retained anyway, fail-closed, because its
-#: `shipped_in` did not resolve. Its own family and NOT a `not-terminal` one:
-#: grouped under that name it was indistinguishable from the whole live corpus,
-#: which is how two example-cockpit-repo sessions read "77 not-terminal" as "nothing
-#: here was archivable", re-ran the sweep, and restored an archive twice.
 _SCAN_REASON_SHIPPED_IN_UNRESOLVABLE = "shipped-in-unresolvable"
 
-# Recommended cap VALUE for a future caller of this op (session.boot_sweep,
-# a cron trigger, etc.) to pass — NOT consulted by this module as a fallback.
-# This is a CHOICE fitted inside the C0 decomposition's headroom
-# (135ms fixed + N*2ms <= 500ms => N <= 182), not a measurement and not the
-# machine load norm — see state/audits/2026-08-25-the-handoff-archive-op-
-# earns-its-way-back.md § (c)/(d). `cap` itself stays a required param with
-# no default; this constant exists only as a documented recommendation for
-# whichever caller wires this op next.
 _RECOMMENDED_CAP_CHOICE = 150
 
-# Single-flight lock — see `_acquire_sweep_lock`. A stale lock (its own
-# process long gone, e.g. a crash between acquire and release) is broken
-# after this many seconds; sized generously above this op's own <500ms
-# budget so a live, merely-slow invocation is never mistaken for stale.
 _SWEEP_LOCK_STALE_S = 120.0
 
 
-# ---------------------------------------------------------------------------
-# Single-flight rail (staff-eng F5)
-# ---------------------------------------------------------------------------
-
-
 def _sweep_lock_path(common_dir: Path) -> Path:
-    """Derive this op's dedicated O_EXCL single-flight lock path.
-
-    Lives under <common_dir>/coordinator-sessions/ alongside the claim-dir
-    convention (_common.handoff_claim_dir / claim_state._sessions_dir) —
-    the SAME git-common-dir-rooted location, so a linked-worktree caller
-    resolves to the same lock as the main worktree. A dedicated file (not
-    the shed housekeeping-liveness timestamp store) because that store's own
-    negative-spec is explicit: it records THAT a class last ran, never
-    mutex/lock semantics — repurposing it here would be reinterpreting a
-    contract it does not carry, not reusing one.
-    """
     return common_dir / "coordinator-sessions" / "archive-terminal-handoffs.lock"
 
 
@@ -235,9 +188,6 @@ def _acquire_sweep_lock(common_dir: Path) -> Optional[Path]:
             return None
         if age_s <= _SWEEP_LOCK_STALE_S:
             return None
-        # Stale — best-effort break-and-retry once. A concurrent racer
-        # winning the retry is the same "another instance holds it" outcome,
-        # not a correctness problem.
         try:
             lock_path.unlink()
         except OSError:
@@ -257,7 +207,6 @@ def _acquire_sweep_lock(common_dir: Path) -> Optional[Path]:
 
 
 def _release_sweep_lock(lock_path: Optional[Path]) -> None:
-    """Best-effort release — never raises."""
     if lock_path is None:
         return
     try:
@@ -266,28 +215,14 @@ def _release_sweep_lock(lock_path: Optional[Path]) -> None:
         pass
 
 
-# ---------------------------------------------------------------------------
-# Batch git reads — ONE spawn each, positionally reconciled
-# ---------------------------------------------------------------------------
-
-
 _HEX_DIGITS = frozenset("0123456789abcdef")
 
-# Pack .idx v2/v3 magic ("\377tOc") — presence distinguishes v2+ (magic +
-# 4-byte version) from v1 (no magic; the fanout table starts at offset 0).
 _PACK_IDX_MAGIC = b"\xfftOc"
 
-# Only v2 is read for its sha-table layout below. v1 (no magic) is also
-# read, positionally, via a distinct entry stride (see `_sha_in_pack_idx`).
-# Any OTHER version (v3, v4, or anything future) is explicitly unhandled —
-# degrades to unresolvable, never guessed at.
 _SUPPORTED_PACK_IDX_VERSION = 2
 
 
 # A `shipped_in` may be ABBREVIATED. git's own minimum useful abbreviation is
-# 7 hex; anything shorter is refused rather than range-searched, because the
-# match set gets wide enough that "some object starts with this" stops being
-# evidence about the recorded commit at all.
 _MIN_ABBREV_SHA_HEX = 7
 
 
@@ -314,19 +249,6 @@ def _oid_search_range(sha_hex: str) -> Optional[Tuple[bytes, bytes]]:
 
 
 def _sha_in_pack_idx(idx_path: Path, lo_key: bytes, hi_key: bytes) -> bool:
-    """Existence-only binary search over one pack `.idx`'s sorted sha table.
-
-    Answers whether any oid falls in the inclusive `[lo_key, hi_key]` range
-    `_oid_search_range` computed — an exact sha when the two bounds are equal,
-    an abbreviation's prefix range otherwise.
-
-    Reads ONLY the fanout table (1024 bytes) plus the O(log N) sha entries
-    the binary search visits — never the whole file, never a pack's zlib
-    object bodies, never `.git/index`. Raises ValueError/OSError on any
-    unhandled shape (unexpected version, truncated file); the caller treats
-    that as "not found in this idx" and degrades to unresolvable overall —
-    this function never returns a false "found".
-    """
     with open(idx_path, "rb") as f:
         header = f.read(8)
         if len(header) < 8:
@@ -339,9 +261,8 @@ def _sha_in_pack_idx(idx_path: Path, lo_key: bytes, hi_key: bytes) -> bool:
             entry_stride = 20
             sha_field_offset = 0
         else:
-            # v1: no magic — header bytes ARE the first two fanout entries.
             fanout_offset = 0
-            entry_stride = 24  # 4-byte pack-offset + 20-byte sha, interleaved
+            entry_stride = 24
             sha_field_offset = 4
 
         f.seek(fanout_offset)
@@ -355,9 +276,6 @@ def _sha_in_pack_idx(idx_path: Path, lo_key: bytes, hi_key: bytes) -> bool:
         hi = fanout[first_byte]
         shas_start = fanout_offset + 1024
 
-        # Lower-bound search for lo_key, then one containment test: the table
-        # is sorted, so the first entry >= lo_key is the only candidate that
-        # can fall inside [lo_key, hi_key].
         while lo < hi:
             mid = (lo + hi) // 2
             f.seek(shas_start + mid * entry_stride + sha_field_offset)
@@ -378,10 +296,6 @@ def _sha_in_pack_idx(idx_path: Path, lo_key: bytes, hi_key: bytes) -> bool:
         return lo_key <= candidate <= hi_key
 
 
-# Multi-pack-index magic and the two chunk IDs this reader needs: OIDF (the
-# 256-entry fanout) and OIDL (the sorted object-id table). Every other chunk
-# — PNAM, OOFF, LOFF, RIDX, BTMP — is object *location*, which existence does
-# not need.
 _MIDX_MAGIC = b"MIDX"
 _SUPPORTED_MIDX_VERSION = 1
 _MIDX_CHUNK_FANOUT = b"OIDF"
@@ -389,19 +303,6 @@ _MIDX_CHUNK_LOOKUP = b"OIDL"
 
 
 def _sha_in_multi_pack_index(midx_path: Path, lo_key: bytes, hi_key: bytes) -> bool:
-    """Existence-only binary search over a `multi-pack-index`'s sorted oid table.
-
-    Same `[lo_key, hi_key]` range contract as `_sha_in_pack_idx` — an exact
-    sha when the bounds are equal, an abbreviation's prefix range otherwise.
-
-    Same shape and same guarantees as `_sha_in_pack_idx`: reads the 12-byte
-    header, the chunk lookup table, the 1024-byte fanout, and the O(log N)
-    oid entries the search visits — nothing else, and no spawn. Raises
-    ValueError/OSError on any unhandled shape (unsupported version, SHA-256
-    oids, a non-zero base-file count, a missing chunk, truncation); the
-    caller treats that as unresolvable, so this function never returns a
-    false "found".
-    """
     with open(midx_path, "rb") as f:
         header = f.read(12)
         if len(header) < 12:
@@ -411,11 +312,8 @@ def _sha_in_multi_pack_index(midx_path: Path, lo_key: bytes, hi_key: bytes) -> b
         if header[4] != _SUPPORTED_MIDX_VERSION:
             raise ValueError(f"{midx_path}: unsupported midx version {header[4]}")
         if header[5] != 1:
-            # oid version 2 is SHA-256; this reader is SHA-1 only.
             raise ValueError(f"{midx_path}: unsupported oid version {header[5]}")
         if header[7] != 0:
-            # A non-zero base-file count means an incremental MIDX chain,
-            # whose earlier layers this reader does not walk.
             raise ValueError(f"{midx_path}: incremental midx chain unsupported")
 
         num_chunks = header[6]
@@ -442,7 +340,6 @@ def _sha_in_multi_pack_index(midx_path: Path, lo_key: bytes, hi_key: bytes) -> b
         lo = fanout[first_byte - 1] if first_byte > 0 else 0
         hi = fanout[first_byte]
 
-        # Lower-bound search, then one containment test — see `_sha_in_pack_idx`.
         while lo < hi:
             mid = (lo + hi) // 2
             f.seek(lookup_offset + mid * 20)
@@ -464,14 +361,6 @@ def _sha_in_multi_pack_index(midx_path: Path, lo_key: bytes, hi_key: bytes) -> b
 
 
 def _require_out_accumulator(name: str, value: object) -> None:
-    """Refuse a non-list out-accumulator by name.
-
-    `skipped`/`scan_skipped` read like flags and are lists, so `skipped=True`
-    is the natural wrong call. Before this, `is not None` admitted the bool
-    and the first refusal died on `'bool' object has no attribute 'append'`
-    -- deep inside a rail, naming neither the parameter nor the caller
-    (example-store-repo-fb, mise run 20260911T144351).
-    """
     if value is not None and not isinstance(value, list):
         raise TypeError(
             f"{name} is an out-accumulator, not a flag: pass a list to collect "
@@ -552,13 +441,11 @@ def _object_exists_no_spawn(common_dir: Path, sha_hex: str) -> bool:
     objects_dir = common_dir / "objects"
     try:
         if (objects_dir / "info" / "alternates").exists():
-            return False  # unmodeled path — see docstring
+            return False
         pack_dir = objects_dir / "pack"
         if (pack_dir / "multi-pack-index.d").exists():
-            return False  # unmodeled path — see docstring
+            return False
 
-        # Loose lookup is a `stat` for a full sha and one scandir of a single
-        # fanout directory (256th of the loose corpus) for an abbreviation.
         loose_dir = objects_dir / sha[:2]
         if len(sha) == 40:
             if (loose_dir / sha[2:]).is_file():
@@ -580,13 +467,13 @@ def _object_exists_no_spawn(common_dir: Path, sha_hex: str) -> bool:
                 if _sha_in_multi_pack_index(midx_path, lo_key, hi_key):
                     return True
             except (OSError, ValueError):
-                return False  # unmodeled midx layout — see docstring
+                return False
         for idx_path in sorted(pack_dir.glob("*.idx")):
             try:
                 if _sha_in_pack_idx(idx_path, lo_key, hi_key):
                     return True
             except (OSError, ValueError):
-                continue  # this idx unreadable/unsupported — try the rest
+                continue
         return False
     except OSError:
         return False
@@ -662,12 +549,10 @@ def _dirty_relpaths_in_process(worktree: Path, ordered: Sequence[str]) -> Option
     for rel in ordered:
         entry = index.get(rel)
         if entry is None:
-            # Untracked: porcelain's `??`, and a reason to retain.
             dirty.add(rel)
             continue
 
         if head.get(rel) != (entry.mode, entry.sha):
-            # Staged against HEAD (added, or modified-and-staged).
             dirty.add(rel)
             continue
 
@@ -767,63 +652,15 @@ def _dirty_handoff_relpaths(
     )
 
 
-# ---------------------------------------------------------------------------
-# Cheap frontmatter pre-filter (C4, AC-12) — a byte-level answer to
-# `_classify_branch`'s own `status` / `deployment_state` question, paid
-# BEFORE `dag._read_meta`'s full read+sha256+YAML parse, for the ~96% of
-# records that question alone refuses.
-#
-# Spec backlink: state/dispatch-briefs/2026-08-26-the-sweep-stops-paying-
-# for-a-room-it-nev/C4.md (staff-eng Finding 2, option (a); Finding 6's
-# closed fall-through enumeration).
-#
 # THE PRE-FILTER LIVES ENTIRELY HERE. It never replaces, wraps, or narrows
-# `dag._read_meta` — it only decides, per record, whether to call it at all.
 # It may only ever produce a SUPERSET of what `_classify_branch` over a full
-# parse would admit: uncertain always falls through to the full parse, and
-# `_prefilter_qualifies` below mirrors `_classify_branch`'s own True/False
-# formula rather than re-deriving a parallel rule that could drift from it.
-#
-# Negative-spec: does NOT resolve `shipped_in` (Branch B's "shipped"
-# sub-case) — a `deployment_state` already in the terminal set always
-# survives the pre-filter (returns None, "cannot disqualify") regardless of
-# `shipped_in`, deferring that refinement to the full parse + `_classify_
-# branch` exactly as today. Does NOT implement YAML 1.1's yes/no/on/off or
-# timestamp resolution — this repo's own `dag._parse_scalar` doesn't either
-# (only null/~, true/false, int, float), so `_prefilter_plain_scalar` mirrors
-# THAT parser, not the YAML spec.
-# ---------------------------------------------------------------------------
 
-# Bounded read for the pre-filter's own file open — independent of, and
-# never a substitute for, `dag._read_meta`'s full `read_bytes()` (which a
-# pre-filter survivor still pays in full). Sized generously above a normal
-# handoff's frontmatter block; a block-scalar/long-frontmatter file that
-# doesn't fit inside this budget simply finds no closing delimiter and falls
-# through (never guesses).
 _PREFILTER_READ_BYTES = 4096
 
-# Scalar tokens `dag._parse_scalar` resolves to a NON-string value — a
-# pre-filter value equal to one of these (case-sensitive: `_parse_scalar`
-# itself only matches the lowercase literal) is never compared as if it were
-# that literal text.
 _PREFILTER_NON_STRING_SCALARS = frozenset({"null", "~", "true", "false"})
 
 
 def _prefilter_plain_scalar(raw: str) -> Optional[str]:
-    """Return `raw` unchanged iff it is a plain, single-line scalar that
-    `dag._parse_scalar` would ALSO resolve to that exact string — else None
-    (ambiguous; caller must fall through to the full parse).
-
-    Refuses (returns None) a quoted scalar, a block scalar (`|`/`>`), a flow
-    collection (`[`/`{`), an anchor/alias/tag (`&`/`*`/`!`), anything
-    carrying a `#` (a possible inline comment — conservatively refused
-    rather than re-implementing comment-stripping), and anything
-    `_parse_scalar` would coerce to null/bool/int/finite-float rather than a
-    string. A non-finite float (`_parse_scalar`'s own sha-like-string
-    carve-out, e.g. `229e792` overflowing to `inf`) is intentionally NOT
-    refused here — `_parse_scalar` itself falls through to string handling
-    for it, so this function must match that, not merely be more cautious.
-    """
     if not raw or "#" in raw or raw[0] in "'\"|>[{&*!":
         return None
     if raw in _PREFILTER_NON_STRING_SCALARS:
@@ -894,8 +731,7 @@ def _prefilter_scan_disqualifies(path: Path) -> Optional[str]:
         return None
 
     if not chunk.startswith(b"---"):
-        return None  # covers a leading BOM too — the BOM byte(s) shift the
-        # decoded first line away from a literal "---" match below.
+        return None
 
     text = chunk.decode("utf-8", errors="replace")
     lines = text.split("\n")
@@ -908,7 +744,7 @@ def _prefilter_scan_disqualifies(path: Path) -> Optional[str]:
             close_idx = i
             break
     if close_idx is None:
-        return None  # closing delimiter not found inside the read budget
+        return None
 
     block_lines = lines[1:close_idx]
     if any("\t" in ln for ln in block_lines):
@@ -921,7 +757,7 @@ def _prefilter_scan_disqualifies(path: Path) -> Optional[str]:
             continue
         indent = len(ln) - len(ln.lstrip(" "))
         if indent != 0:
-            continue  # nested line — not a top-level key, irrelevant here
+            continue
         colon_idx = stripped.find(":")
         if colon_idx == -1:
             continue
@@ -929,7 +765,7 @@ def _prefilter_scan_disqualifies(path: Path) -> Optional[str]:
         if key not in ("status", "deployment_state"):
             continue
         if key in found_raw:
-            return None  # duplicate key — ambiguous, fall through
+            return None
         found_raw[key] = stripped[colon_idx + 1:].strip()
 
     if "status" not in found_raw or "deployment_state" not in found_raw:
@@ -944,7 +780,7 @@ def _prefilter_scan_disqualifies(path: Path) -> Optional[str]:
     deployment_lower = deployment_scalar.strip().lower()
 
     if _prefilter_qualifies(status_lower, deployment_lower):
-        return None  # cannot disqualify — the full parse decides the rest
+        return None
 
     if deployment_lower == "in_flight" and status_lower in ("claimed", "consumed"):
         return f"{_SCAN_REASON_NOT_TERMINAL}: deployment_state=in_flight — not terminal (archive-safety)"
@@ -952,11 +788,6 @@ def _prefilter_scan_disqualifies(path: Path) -> Optional[str]:
         f"{_SCAN_REASON_NOT_TERMINAL}: status={status_scalar!r} and "
         f"deployment_state={deployment_scalar!r} (not terminal)"
     )
-
-
-# ---------------------------------------------------------------------------
-# Terminality predicate — Branch A / Branch B
-# ---------------------------------------------------------------------------
 
 
 def _classify_branch(meta: dict, shipped_in_resolved: Dict[str, bool]) -> Tuple[Optional[bool], str, str, bool]:
@@ -976,8 +807,6 @@ def _classify_branch(meta: dict, shipped_in_resolved: Dict[str, bool]) -> Tuple[
     normalized_status = (status or "").strip().lower()
     deployment_state = (meta.get("deployment_state") or "").strip().lower()
 
-    # Branch B: terminal deployment_state, regardless of status — checked
-    # first so a record satisfying BOTH branches still qualifies.
     if deployment_state in _TERMINAL_DEPLOYMENT_STATES:
         if deployment_state == "shipped":
             shipped_in = meta.get("shipped_in")
@@ -999,27 +828,7 @@ def _classify_branch(meta: dict, shipped_in_resolved: Dict[str, bool]) -> Tuple[
                 )
         return True, "", deployment_state, True
 
-    # Branch A: status == claimed (dual-tolerant fallback to the
-    # archived-schema grandfather "consumed", per DR-084). Reconciled with
-    # archival._is_terminal_or_archived_child (C3, docs/reference/
-    # handoff-legal-state-table.md § "Ruling: terminality is a
-    # deployment_state question, never a status one"): Branch B above
-    # already qualifies every claimed/consumed record whose
-    # deployment_state is terminal, so by the time control reaches here
-    # deployment_state is definitively NOT a member of
     # _TERMINAL_DEPLOYMENT_STATES. The old test — "terminal unless
-    # deployment_state == in_flight" — silently qualified a reparked baton
-    # (`claimed` + `ready_to_fire`/`awaiting_gate`, a session flipping
-    # deployment_state back without dropping status: claimed) as terminal:
-    # the census-row-1 false positive the table names. `ready_to_fire` and
-    # `awaiting_gate` are exactly as non-terminal as `in_flight` — none of
-    # the three is ever inferred terminal from "not in_flight".
-    #
-    # One exception, preserved on purpose and mirrored from
-    # archival._is_terminal_or_archived_child's own carve-out: a record
-    # with NO deployment_state key at all (absent, pre-DR-084 legacy
-    # shape) never carried the field, so it was never "reparked" — status
-    # alone still decides for it, exactly as it always has.
     if normalized_status in ("claimed", "consumed") and not deployment_state:
         return True, "", "consumed", False
 
@@ -1033,12 +842,6 @@ def _classify_branch(meta: dict, shipped_in_resolved: Dict[str, bool]) -> Tuple[
 
 
 def _terminal_since(meta: dict, handoff_path: Path) -> Optional[str]:
-    """Best-effort RFC3339 terminal_since — reads 'shipped_at', 'claimed_at',
-    'updated', or 'created' frontmatter fields in preference order, falling
-    back to the file's mtime. Returns None on total failure (nullable per
-    contract §2.1). Also the sort key this module orders candidates by
-    (oldest-first — see `_sort_key`).
-    """
     for field in ("shipped_at", "claimed_at", "updated", "created"):
         val = meta.get(field)
         if val:
@@ -1055,16 +858,7 @@ def _terminal_since(meta: dict, handoff_path: Path) -> Optional[str]:
 
 
 def _sort_key(terminal_since: Optional[str]) -> str:
-    """Oldest-first ordering key — a missing terminal_since sorts LAST (never
-    lets an indeterminate timestamp jump the queue ahead of a genuinely old
-    record), so repeated firings drain deterministically.
-    """
     return terminal_since if terminal_since else "9999-99-99T99:99:99Z"
-
-
-# ---------------------------------------------------------------------------
-# Per-family internal — the ONE frontmatter pass
-# ---------------------------------------------------------------------------
 
 
 def _scan_terminal(
@@ -1150,11 +944,7 @@ def _scan_terminal(
     if not live_paths:
         return results
 
-    # Populated LAZILY (C4): a record the cheap pre-filter can already refuse
-    # never pays `dag._read_meta`'s full read+hash+parse here — only a
     # pre-filter SURVIVOR does. The backfill that used to top this up for the
-    # whole live corpus is gone with Check 3: nothing downstream asks about a
-    # non-candidate node any more, so the lazy read is now the only read.
     metas: Dict[str, dict] = {}
     live_set_str: List[str] = [str(p) for p in live_paths]
 
@@ -1162,15 +952,7 @@ def _scan_terminal(
         if skipped is not None:
             skipped.append({"id": candidate_id, "reason": reason})
 
-    # Pass 1 — classify-first (C3, staff-eng Finding 1), now pre-filtered
-    # (C4). Branch A/B qualification is pure-memory (no git spawn, no
-    # no live-session resolution), so it runs over the
-    # WHOLE corpus first and collects only the survivors the remaining,
-    # costlier rails need to see. A record refused here (the bulk of the
-    # live corpus) never reaches the dirty rail below — for a record that is
     # BOTH worktree-dirty AND non-terminal this is a DESIGNED
-    # reason-precedence change (not-terminal wins), not a regression; see
-    # this module's own plan citation.
     prefilter_survivors: List[Tuple[Path, str, dict]] = []
     for p, key in zip(live_paths, live_set_str):
         rel = rel_id(p, worktree_root)
@@ -1182,11 +964,6 @@ def _scan_terminal(
         metas[key] = meta
         prefilter_survivors.append((p, rel, meta))
 
-    # Rail 2 — bounded, git-spawn-free existence reader for every shipped_in
-    # value across the corpus (C10, AC-11). Every "shipped" record survives
-    # the pre-filter above (deployment_state is already in the terminal set),
-    # so scoping this to prefilter_survivors' metas is equivalent to scoping
-    # it to the whole corpus's metas, never a narrower set of shas.
     shipped_in_shas = [
         str(meta.get("shipped_in")).strip()
         for _p, _rel, meta in prefilter_survivors
@@ -1206,8 +983,6 @@ def _scan_terminal(
         return results
 
     # Rail 1 — worktree-dirty exclusion, scoped to SURVIVORS ONLY (C3).
-    # known_dirty_relpaths (in-plane reuse) short-circuits the git status
-    # spawn entirely; see this function's own docstring.
     if known_dirty_relpaths is not None:
         dirty_relpaths = known_dirty_relpaths
     else:
@@ -1223,68 +998,9 @@ def _scan_terminal(
     if not remaining:
         return results
 
-    # The full-corpus metas backfill and the reverse-edge index build that
-    # stood here are GONE with Check 3 (2026-08-28). They existed solely to
-    # answer "does anything still point at this node?", and nothing asks any
-    # more.
-    #
-    # This is the part worth noticing rather than treating as tidy-up: the
-    # backfill was a `dag._read_meta` for EVERY live node not already read --
-    # a per-node frontmatter read over the whole live corpus -- and the index
-    # build was a second pass over the result. Deleting a guard removed a
-    # corpus walk from the sweep, which is the same shape this plan found at
-    # `handoff_reconcile`: the expensive thing was never the job, it was a
-    # question the job did not need to ask.
 
     for p, rel, meta, status_label, _branch_b_qualified in remaining:
-        # Check 3 (childlessness) was DELETED here on 2026-08-28, on the same
-        # PM ruling that removed the guard from `handoff_archive_transition`:
-        # "has a child means nothing to whether it should be archived or not...
-        # either a baton is used up or it's not." This sweep is archival on the
-        # ruling's own words, so the ruling reaches it.
-        #
-        # It had already been half-retired: DR-324 narrowed it so a live
         # SUCCESSION child no longer retained a Branch-B candidate, leaving only
-        # a live `forked_from` spinoff blocking. That surviving half rested on
-        # the claim that archiving would strand the spinoff's origin pointer --
-        # a claim whose citation ("DR-224, AC4") does not resolve and whose
-        # premise is false: see the deletion note in handoff_archive_transition
-        # and the measurement pinned in
-        # coordinator_core/tests/test_coverage_dag_archived_repo_root.py
-        # (TestSpinoffOriginSurvivesArchivalOfItsOrigin).
-        #
-        # The fail-closed `reverse_membership` ValueError arm went with it: once
-        # children do not decide archival, an error computing children is not a
-        # reason to retain forever.
-        #
-        # Check 4 (live claim holder) was DELETED here on 2026-09-04, on the PM
-        # ruling that closes the carve-out the block above had kept open:
-        # "a claim on a baton shouldn't prevent it from getting archived. What
-        # matters is that the baton is complete, not the liveness of the
-        # holder." Same principle as Check 3's deletion, one check later --
-        # completeness is the criterion, holder liveness is not a criterion at
-        # all. Both arms went: the claim-dir arm (cs_claim_holder_live) and the
-        # consumed_by-names-a-live-session fallback, since both were holder
-        # liveness under two different keys.
-        #
-        # It had no protective effect to lose. A holder still mid-work carries a
-        # non-terminal deployment_state, so Check 1 retains that baton on its own
-        # without any help from here; the only shape this check actually caught
-        # was terminal-AND-still-held, i.e. a session that had finished its work
-        # and not yet exited. On that shape it deferred archival of correctly
-        # finished work until some later session swept -- and it made the
-        # quick-wrap close condition (no terminal record left in state/handoffs
-        # when you report) unreachable by the very session that earned it.
-        #
-        # The window it did incidentally cover -- a holder stamping a terminal
-        # state and then reverting it, with the file moving out from under it --
-        # is real but is one this module already accepts for every unclaimed
-        # baton. If it ever needs covering, the shape is a re-read at move time,
-        # not a liveness gate. Deleting this also deleted the sweep's ONE
-        # resolve_live_session_ids() call and its per-candidate claim-dir stat.
-        #
-        # Checks 1/2 (terminality, worktree-clean) are untouched, and so is the
-        # fail-closed shipped_in retention in `_classify_branch`.
 
         terminal_since = _terminal_since(meta, p)
         note = status_label
@@ -1341,10 +1057,6 @@ def plan_sweep(
     `{id, reason}` using the same reason strings that ship today, unchanged.
     """
     _require_out_accumulator("scan_skipped", scan_skipped)
-    # Collected even when the caller wants none: a candidate_id that is absent
-    # from the terminal set was refused by a NAMED rail in this same scan, and
-    # reporting "terminality-drift" instead of that rail's own reason sent an
-    # operator looking for a race that never happened (example-store-repo-fb).
     rails: List[dict] = scan_skipped if scan_skipped is not None else []
     terminal = _scan_terminal(
         worktree_root, common_dir, known_dirty_relpaths=known_dirty_relpaths,
@@ -1373,9 +1085,6 @@ def plan_sweep(
         moves.append(Move(src=handoff_path, dst=dst, candidate_id=cid, force=force))
 
     if candidate_ids is None:
-        # In-plane path: _scan_terminal's own return value is already
-        # oldest-first sorted, so terminal_by_id's iteration order IS the
-        # cap-slotting order.
         ordered_ids = list(terminal_by_id.keys())
         deferred_ids = set(ordered_ids[cap:])
         for cid in ordered_ids:
@@ -1386,20 +1095,13 @@ def plan_sweep(
         return moves, skipped
 
     requested_set = set(candidate_ids)
-    # _scan_terminal's own return value is already oldest-first sorted; the
-    # cap slot for a caller-supplied candidate_id is decided by that order,
-    # NOT by the order candidate_ids happened to arrive in — the FIRST `cap`
     # requested ids in OLDEST-FIRST terminal order get applied, the rest
-    # (still requested, still terminal) are deferred.
     oldest_first_requested = [cid for cid in terminal_by_id if cid in requested_set]
     allowed_ids = set(oldest_first_requested[:cap])
     deferred_ids = set(oldest_first_requested[cap:])
 
     for cid in candidate_ids:
         if cid not in terminal_by_id:
-            # Not in the current terminal set: either already archived
-            # (idempotent replay) or terminality drifted between preview
-            # and act (D2(iv)-equivalent re-verify).
             src_guess = worktree_root / cid
             if not src_guess.exists():
                 skipped.append({"id": cid, "reason": "already-archived"})
@@ -1418,13 +1120,10 @@ def plan_sweep(
             skipped.append({"id": cid, "reason": f"deferred-cap: invocation cap ({cap}) reached"})
             continue
         if cid not in allowed_ids:
-            # Duplicate candidate_id in the caller's list — already
-            # accounted for by its first occurrence; skip cleanly rather
-            # than double-move.
             skipped.append({"id": cid, "reason": "duplicate-candidate-id"})
             continue
         _plan_one(cid)
-        allowed_ids.discard(cid)  # consumed — guards a duplicate id in candidate_ids
+        allowed_ids.discard(cid)
 
     return moves, skipped
 
@@ -1432,40 +1131,11 @@ def plan_sweep(
 def apply_planned_sweep(
     plan_result: "Tuple[List[Move], List[dict]]",
 ) -> Tuple[List[dict], List[dict]]:
-    """`apply_sweep` over `plan_sweep`'s own `(moves, skipped)` pair.
-
-    Exists because `apply_sweep(plan_sweep(...))` is the obvious composition
-    and used to die inside the loop on `'list' object has no attribute
-    'force'` — a shape error wearing a dataclass field's name
-    (example-store-repo-fb, mise run 20260911T144351).
-
-    Negative spec: the skips are DROPPED here, and that is the whole reason
-    this is a second name rather than a second accepted shape on
-    `apply_sweep`. A function that silently accepted either would read, to
-    the next caller passing a pair, as though the skips had been handled;
-    a caller reaching for this name is choosing to report them itself.
-    """
     moves, _skipped = plan_result
     return apply_sweep(moves)
 
 
 def apply_sweep(moves: List[Move]) -> Tuple[List[dict], List[dict]]:
-    """Apply pre-planned moves via `os.replace` only — no git spawn.
-
-    Takes a bare moves list. For `plan_sweep`'s `(moves, skipped)` pair, call
-    `apply_planned_sweep` — see its negative spec for why this signature is
-    not widened to accept both.
-
-    Ensures `dst.parent` exists before each replace. Refuses a non-`force`
-    move onto an existing `dst` (`os.replace` has no fail-if-exists mode, so
-    the force=False fail-on-existing-dst contract is enforced explicitly
-    here — mirrors `archive_and_commit`'s own same-named guard). On
-    `OSError` the item lands in `failed` and the loop continues, matching
-    today's `replace-failed` behaviour.
-
-    Returns (acted, failed) — `acted` items are `{id, archived: True}`;
-    `failed` items are `{id, reason}`.
-    """
     planned: List[Move] = moves
 
     acted: List[dict] = []
@@ -1540,11 +1210,6 @@ def _handle_act(
     )
 
 
-# ---------------------------------------------------------------------------
-# Op handler
-# ---------------------------------------------------------------------------
-
-
 @register_op("fleet.archive_completed_handoffs")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """fleet.archive_completed_handoffs — cap-bounded terminal-handoff archiver.
@@ -1577,12 +1242,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """
     parsed = validate_params(params)
     if isinstance(parsed, dict):
-        return parsed  # exit_code:1 setup-error envelope already built
+        return parsed
 
     mode, dry_run, candidate_ids = parsed
 
-    # `cap` is required — absent/invalid is a setup error, never an
-    # unbounded default (C0's binding cap-axis decision).
     cap = params.get("cap")
     if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
         return build_setup_error_result(
@@ -1604,8 +1267,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     lock_path = _acquire_sweep_lock(common_dir)
     if lock_path is None:
-        # First-class non-error result — the contended case is the design
-        # condition (staff-eng F5), not an edge case.
         if dry_run:
             result = build_dry_run_result(mode, [])
         else:
@@ -1636,9 +1297,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 }
             return result
 
-        # `validate_params` already refuses an absent/empty `candidate_ids` on
-        # the act path, so this narrows a type the contract has already made
-        # non-optional rather than adding a second gate.
         if candidate_ids is None:
             return build_setup_error_result(
                 mode, dry_run,

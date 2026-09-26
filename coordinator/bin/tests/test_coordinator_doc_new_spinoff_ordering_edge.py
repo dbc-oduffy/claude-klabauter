@@ -64,8 +64,6 @@ class ScaffoldSpinoffGatedOpenTest(unittest.TestCase):
         content = _patched_spinoff(gated_open="hnd-earlier-spinoff-abc123")
         self.assertIn("blocked_by:", content)
         self.assertIn("  - \"hnd-earlier-spinoff-abc123\"", content)
-        # A3a-3: the lineage edge stays none-by-design regardless of the
-        # ordering edge -- --gated-open must never leak onto predecessor.
         self.assertIn("predecessor: none", content)
 
     def test_omitted_gated_open_emits_no_blocked_by_key(self):
@@ -79,11 +77,6 @@ class ScaffoldSpinoffGatedOpenTest(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 1)
 
     def test_gated_open_derives_awaiting_gate_readiness(self):
-        """An unresolved blocker (no corpus at scaffold time) derives
-        awaiting_gate/pickup_ready:false via the same derive_readiness
-        evaluator _scaffold_handoff already uses -- the readiness readers
-        (gate_eval, handoff_children.blocked_by_dependents) that already
-        honor blocked_by on any kind now see it on spinoff too."""
         content = _patched_spinoff(gated_open="hnd-earlier-spinoff-abc123")
         self.assertIn("deployment_state: awaiting_gate", content)
         self.assertIn("pickup_ready: false", content)
@@ -97,8 +90,6 @@ class ScaffoldSpinoffGatedOpenUnresolvableEngineTest(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 1)
 
     def test_engine_unresolvable_without_gated_open_still_degrades(self):
-        """No-flag path must not gain an engine dependency it never had --
-        same posture as _scaffold_handoff's own no-flag leg."""
         with mock.patch.object(_cli, "_derive_readiness", None):
             content = _patched_spinoff()
         self.assertIn("deployment_state: ready_to_fire", content)

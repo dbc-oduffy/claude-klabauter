@@ -31,15 +31,7 @@ from coordinator_core.session import claude_md_grant as cmg
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Every test in this file builds its repo via `_make_repo(tmp_path)`, spawning
-# real git (init/config/add/commit) because the production code under test --
-# `core.git_root()`, consulted when resolving where grant state lives -- reads
-# real git state that no mock stands in for. `tmp_path` is function-scoped
-# and tests write grant/session state under reused session ids, so the repo
-# fixture stays per-test rather than hoisted to module scope. The spawn
 # ratchet's `_BASELINE` is shrink-only pre-existing residue and is explicitly
-# not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -61,14 +53,10 @@ def _write_session_meta(repo, sid, meta: dict):
 
 
 def _live_session(repo, sid):
-    """A session whose meta.json makes it read LIVE (fresh last_activity,
-    no stable_pid -> Layer-2 recency path)."""
     return _write_session_meta(repo, sid, {"pid": "999", "last_activity": core.now_iso()})
 
 
 def _dead_session(repo, sid):
-    """A session whose meta.json makes it read DEAD (last_activity far in
-    the past, no stable_pid -> Layer-2 recency path, stale)."""
     return _write_session_meta(
         repo, sid, {"pid": "999", "last_activity": "2000-01-01T00:00:00Z"}
     )
@@ -76,11 +64,6 @@ def _dead_session(repo, sid):
 
 def _grant_file(repo, sid):
     return Path(repo) / ".git" / "coordinator-sessions" / sid / "claude-md-write-grant.json"
-
-
-# ---------------------------------------------------------------------------
-# write_claude_md_write_grant — round-trip, verbatim note, atomicity, validation
-# ---------------------------------------------------------------------------
 
 
 class TestWriteClaudeMdWriteGrant:
@@ -139,21 +122,13 @@ class TestWriteClaudeMdWriteGrantValidation:
             cmg.write_claude_md_write_grant("pm", "", session_id="s1", cwd=str(repo))
 
     def test_unresolvable_session_returns_false_not_raise(self, tmp_path):
-        # Not a git repo at all -> core.session_dir resolves nothing.
         ok = cmg.write_claude_md_write_grant(
             "pm", "ask", session_id="s1", cwd=str(tmp_path / "not-a-repo")
         )
         assert ok is False
 
 
-# ---------------------------------------------------------------------------
-# check_claude_md_write_grant — liveness, no-glob sibling-isolation, fail-closed
-# ---------------------------------------------------------------------------
-
-
 class TestCheckClaudeMdWriteGrantLiveness:
-    """A grant left behind by a crashed session must NOT authorize a
-    CLAUDE.md write."""
 
     def test_live_session_with_valid_grant_is_granted(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -175,9 +150,6 @@ class TestCheckClaudeMdWriteGrantLiveness:
 
 
 class TestCheckClaudeMdWriteGrantNoGlob:
-    """A sibling session's LIVE grant must not authorize the caller — the
-    fleet's shared-branch reality, several EM sessions routinely sharing
-    one working tree."""
 
     def test_sibling_live_grant_does_not_authorize_caller(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -249,7 +221,7 @@ class TestCheckClaudeMdWriteGrantFailClosed:
         )
         granted, record = cmg.check_claude_md_write_grant(cwd=str(repo), session_id="s1")
         assert granted is False
-        assert record is not None  # still returned for audit/denial quoting
+        assert record is not None
 
     def test_session_id_mismatch_reads_ungranted(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -297,11 +269,6 @@ class TestCheckClaudeMdWriteGrantFailClosed:
         assert record is None
 
 
-# ---------------------------------------------------------------------------
-# read_claude_md_write_grant — raw reader, no liveness gate
-# ---------------------------------------------------------------------------
-
-
 class TestReadClaudeMdWriteGrant:
     def test_returns_none_when_absent(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -318,16 +285,7 @@ class TestReadClaudeMdWriteGrant:
         assert record["note"] == "ask"
 
 
-# ---------------------------------------------------------------------------
 # Subagent resolvability — the LOAD-BEARING requirement this module's
-# docstring names: a grant written via the default env-driven session
-# resolution must be visible to a caller using that SAME default
-# resolution path, because that is the exact path a C4 guard evaluation
-# running inside a dispatched subagent's tool-call turn would use (one
-# harness session, many tool-call turns — env vars are process-wide, not
-# per-turn). If this were false, the escape hatch could not reach the
-# path it exists for.
-# ---------------------------------------------------------------------------
 
 
 class TestSubagentResolvability:
@@ -346,22 +304,16 @@ class TestSubagentResolvability:
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "harness-session-1")
         _live_session(repo, "harness-session-1")
 
-        # EM-inline turn: no explicit session_id, resolves via env.
         ok = cmg.write_claude_md_write_grant(
             "pm", "PM said go ahead this session", cwd=str(repo)
         )
         assert ok is True
 
-        # Subagent-context guard turn: also no explicit session_id — same
-        # env var, same harness process, same resolution result.
         granted, record = cmg.check_claude_md_write_grant(cwd=str(repo))
         assert granted is True
         assert record["session_id"] == "harness-session-1"
 
     def test_default_resolution_matches_explicit_resolved_sid(self, tmp_path, monkeypatch):
-        """The default-resolution grant is byte-identical (same session_id
-        field) to one written with the sid resolved and passed explicitly
-        — proves the two call shapes are not silently diverging."""
         repo = _make_repo(tmp_path)
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "harness-session-2")
         _live_session(repo, "harness-session-2")
@@ -375,11 +327,6 @@ class TestSubagentResolvability:
             cwd=str(repo), session_id="harness-session-2"
         )
         assert record_default == record_explicit
-
-
-# ---------------------------------------------------------------------------
-# CLI trampoline — grant | read | check, mirroring tier-u-grant-cli's shape
-# ---------------------------------------------------------------------------
 
 
 class TestCliMain:
@@ -398,9 +345,9 @@ class TestCliMain:
         monkeypatch.chdir(repo)
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "cli-session-2")
         _live_session(repo, "cli-session-2")
-        assert cmg.main(["check"]) == 1  # no grant yet -> exit 1
+        assert cmg.main(["check"]) == 1
         cmg.main(["grant", "pm", "ask"])
-        assert cmg.main(["check"]) == 0  # granted -> exit 0
+        assert cmg.main(["check"]) == 0
 
     def test_unknown_subcommand_exits_two(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)

@@ -99,15 +99,6 @@ def _run_sensor(
     delegation_evidence: bool,
     repo_root: "str | None",
 ) -> None:
-    """Blocking body: tail-read + reduce the transcript, classify, sample the CPU
-    cursor, and write the sibling file. Called ONLY via asyncio.to_thread() from the
-    handler below — never invoked directly from async context.
-
-    Fail-soft: any exception anywhere in this function is caught by the handler's own
-    try/except (never propagated), matching AC12. This function itself also degrades
-    gracefully at each step rather than raising where the underlying library functions
-    already return None/False/[] for a failure.
-    """
     cwd = repo_root or None
     now_epoch = _session_core.now_epoch()
     stamp_iso = _session_core.now_iso()
@@ -116,12 +107,6 @@ def _run_sensor(
         reduced_lines, _any_unparseable, _cap_reached = receiver_state.reduce_transcript_tail(
             transcript_path
         )
-        # The newest record's own timestamp, NOT the file's mtime: the harness
-        # rewrites a stopped session's transcript with untimestamped
-        # bookkeeping rows, which moves mtime forward without the session
-        # acting (`receiver_state.activity_epoch_from_reduced`). mtime remains
-        # the fallback -- an upper bound on idleness -- for a tail in which
-        # nothing carries a timestamp at all.
         transcript_activity = receiver_state.activity_epoch_from_reduced(reduced_lines)
         if transcript_activity is None:
             transcript_activity = _mtime_or_none(transcript_path)
@@ -168,7 +153,6 @@ def _run_sensor(
     )
 
 def _mtime_or_none(path: str) -> "float | None":
-    """os.stat().st_mtime, or None on any OSError. Blocking — see `_run_sensor`."""
     import os
 
     try:
@@ -178,9 +162,6 @@ def _mtime_or_none(path: str) -> "float | None":
 
 
 def _cursor_from_record(record: "dict | None"):
-    """Recover the previously-persisted CpuCursor from a raw receiver-state record, or
-    None when absent/malformed. Local helper — the shape it reads is exactly what
-    `receiver_state.write_receiver_state` wrote."""
     if not isinstance(record, dict):
         return None
     raw_cursor = record.get("cpu_cursor")
@@ -197,17 +178,6 @@ def _cursor_from_record(record: "dict | None"):
 
 @register_op("hooks.receiver_state_sensor")
 async def _handler(params: dict, repo_root=None) -> dict:
-    """Stop/SubagentStop bookkeeping op: write this session's receiver-state verdict.
-
-    Reads session_id/transcript_path/pid/delegation_evidence from the flat-scalar
-    input (see module docstring); resolves the session dir via `repo_root`; runs the
-    entire blocking body (`_run_sensor`) inside `asyncio.to_thread`.
-
-    Returns `no_advisory()` unconditionally — the product is the write side-effect.
-    Never raises: any exception from `_run_sensor` is caught here and swallowed
-    (fail-soft, AC12) — a broken sensor invocation must never surface as a tool-call
-    failure.
-    """
     params = payload_of(params)
     import asyncio
 
@@ -224,9 +194,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
             _run_sensor, session_id, transcript_path, pid_raw, delegation_evidence, repo_root
         )
     except Exception:
-        # Fail-soft (AC12): this op never blocks a tool call and never raises into
-        # its caller. A failed sensor invocation simply leaves the sibling file at
-        # its previous (or absent) state for this session.
         pass
 
     return no_advisory()

@@ -46,7 +46,6 @@ from coordinator_core.contract.decision_object.judgment import (
 
 @dataclass(frozen=True)
 class ReaderResult:
-    """One reader family's contribution to the decision-object envelope."""
 
     directives: list[dict[str, Any]] = field(default_factory=list)
     judgment_points: list[dict[str, Any]] = field(default_factory=list)
@@ -60,18 +59,6 @@ def cap_judgment_points(
     item_label: str,
     list_command: str,
 ) -> list[dict[str, Any]]:
-    """Cap an unbounded per-item judgment-point list at `cap` entries.
-
-    When `len(judgment_points) <= cap`, returns the list unchanged. When the
-    cap binds, returns the first `cap` entries plus EXACTLY ONE overflow
-    judgment point naming how many were withheld and the concrete command
-    that lists them in full (`list_command`) — never a silent truncation
-    that reads as complete.
-
-    Negative-spec: does NOT summarize or count-only the withheld entries in
-    place of the kept ones — the withheld count lives solely on the single
-    overflow judgment point, never duplicated as a top-level aggregate.
-    """
     if len(judgment_points) <= cap:
         return judgment_points
 
@@ -97,13 +84,7 @@ def cap_judgment_points(
 
 
 #: Max rendered length of one interpolated EXTERNAL string, in CODE POINTS —
-#: a plain Python string slice, not a byte-count bound. Mirrors
-#: `coordinator_core.orientation.regenerate_cache`'s
 #: `_HOUSEKEEPING_DETAIL_TRUNCATE_CHARS` precedent and its rationale
-#: verbatim: a byte-based cut risks splitting a multi-byte UTF-8 character
-#: (CJK, emoji) mid-sequence for no real budget gain, since the count cap
-#: above already catches the genuine flood case this exists to backstop
-#: (Review: code-reviewer — Finding 3).
 EXTERNAL_TEXT_TRUNCATE_CHARS = 200
 
 

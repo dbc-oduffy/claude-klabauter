@@ -31,11 +31,6 @@ import pytest
 
 from coordinator_core.warm import client
 
-#: Captured at collection time, before any test's `_warm_on` fixture stubs
-#: `client.engine_token` -- the one test that needs the REAL function
-#: (`test_live_tree_cold_names_the_ruling_once_and_never_spawns`) restores
-#: it from here rather than from `client.engine_token`, which by the time
-#: any test body runs is already the stub.
 _REAL_ENGINE_TOKEN = client.engine_token
 
 
@@ -76,17 +71,6 @@ def _short_warm_runtime_base(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture(autouse=True)
 def _warm_on(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every test in this module opts warmth on and pins the pipe name and
-    engine token, so a test body only has to control `_open_pipe`.
-
-    `engine_token` is stubbed to a fixed value rather than left to compute
-    for real: the real path (`skew.compute_client_token`) raises
-    `UnstampedEngineRootError` against THIS repo's own live working tree
-    (no `_engine_stamp`), which is exactly the condition
-    `test_live_tree_cold_*` below exercises deliberately -- every other
-    test in this module is about the pipe-open/spawn table, not that path,
-    and stubbing it here keeps `_live_tree_cold` false (a "stamped clone")
-    for them."""
     monkeypatch.setattr(client, "is_warm_enabled", lambda: True)
     monkeypatch.setattr(client, "engine_token", lambda: "faketoken")
     monkeypatch.setattr(client.election, "pipe_name", lambda token: r"\\.\pipe\fake")
@@ -99,8 +83,6 @@ def _warm_on(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class _FakePipe:
-    """A minimal stand-in for the `open(pipe, "r+b")` handle -- records
-    what was written and serves canned bytes (or raises) on `readline`."""
 
     def __init__(self, read_result=b'{"jsonrpc":"2.0","id":1,"result":{}}\n', raise_on_write=None):
         self.written = []
@@ -153,15 +135,6 @@ def test_file_not_found_spawns_once_and_goes_cold(monkeypatch: pytest.MonkeyPatc
 def test_spawn_once_consults_should_spawn_and_skips_when_debounced(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """W13 (plan 2026-08-20-a-refusal-cannot-exit-zero.md § C29):
-    `_spawn_once` is not the only path C18's breadcrumb debounce is meant
-    to gate -- `warm_start.py`'s SessionStart trigger already consults it,
-    but every concurrent CLI client that hits `FileNotFoundError` on the
-    same eviction races through its OWN one-per-process `_spawn_once`.
-    Backstop 1 alone does nothing to stop that: it only debounces a single
-    process against itself. `should_spawn` returning False (a young, alive
-    breadcrumb already vouches for an in-flight spawn) must suppress the
-    spawn here too."""
     from coordinator_core.warm import breadcrumb
 
     calls = []
@@ -205,7 +178,7 @@ def test_error_pipe_busy_231_as_plain_oserror_never_spawns(monkeypatch: pytest.M
     (this module's actual implementation) must not."""
     exc = OSError("pipe busy")
     exc.winerror = 231
-    exc.errno = 22  # CPython's winerror->errno table has no entry for 231
+    exc.errno = 22
 
     def _raise_busy(pipe):
         raise exc
@@ -222,12 +195,6 @@ def test_error_pipe_busy_231_as_plain_oserror_never_spawns(monkeypatch: pytest.M
 def test_live_tree_cold_names_the_ruling_once_and_never_spawns(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
-    """C3 (plan 2026-08-20-a-refusal-cannot-exit-zero): an unstamped clone
-    (a live working tree) is not a warm-server host, by DR-315 s2 (PM
-    ruling), corroborated by DR-326/DR-331. The failure site must NAME
-    those DRs, must say so only ONCE across repeated dispatches (not a
-    per-call diagnostic), and must never attempt a spawn for a tree that
-    cannot host a server."""
     from coordinator_core.warm import skew
 
     def _raise_unstamped(repo_root=None):
@@ -243,9 +210,6 @@ def test_live_tree_cold_names_the_ruling_once_and_never_spawns(
     monkeypatch.setattr(
         client, "spawn_detached", lambda repo_root, script, args=None, **kwargs: spawns.append(1) or True
     )
-    # Undo the module-wide `engine_token` stub for THIS test only, so the
-    # real `engine_token()` runs and reaches the (now stubbed)
-    # `skew.compute_client_token` above.
     monkeypatch.setattr(client, "engine_token", _REAL_ENGINE_TOKEN)
 
     assert client.try_warm_dispatch(_MSG) is None
@@ -260,15 +224,6 @@ def test_live_tree_cold_names_the_ruling_once_and_never_spawns(
 
 
 def _drive_one_cold_dispatch(monkeypatch: pytest.MonkeyPatch, exc: Exception) -> None:
-    """Run a single dispatch whose token computation raises `exc` -- the
-    shared body of the cold-reason tests below.
-
-    The preamble past the token is stubbed out wholesale rather than at the
-    transport: on POSIX it computes a socket path, and this suite's
-    quarantined home makes that path exceed `sun_path` on macOS, which is
-    itself a permanent cold condition. Letting it run would mix a second
-    reason into a test about the first. `engine_token()` is still the REAL
-    function, so the classification under test is genuinely exercised."""
     from coordinator_core.warm import skew
 
     def _raise(repo_root=None):
@@ -310,9 +265,6 @@ def test_absent_engine_root_names_the_path_and_cites_no_ruling(
 def test_unstamped_but_present_root_keeps_the_ruling_and_gains_the_path(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, tmp_path
 ) -> None:
-    """The other arm, unchanged in substance: a live working tree that IS on
-    disk is cold BY RULING, and naming DR-315 there is the point. It gains
-    the resolved root so the reader can tell WHICH tree answered."""
     from coordinator_core.warm import skew
 
     present = tmp_path / "live-tree"
@@ -353,9 +305,6 @@ def test_root_exists_unknown_keeps_the_ruling_not_the_absent_path_message(
 def test_cold_reason_survives_past_the_one_shot_print(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
-    """The print is once per process; the REASON is read by a later caller
-    turning a miss into a fatal error. A reason that existed only for the
-    first dispatch would be missing from exactly the message that needs it."""
     from coordinator_core.warm import skew
 
     absent = tmp_path / "not-here"
@@ -369,16 +318,6 @@ def test_cold_reason_survives_past_the_one_shot_print(
 
 
 def test_transient_warm_miss_records_no_cold_reason(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The discriminator the fail-hard caller branches on: an ordinary miss
-    (no pipe, server booting) is transient and MUST leave the reason unset,
-    so "retry in a moment" stays the advice for the case where retrying
-    actually works.
-
-    Stubs the whole preamble rather than just the transport: on POSIX the
-    real preamble computes a socket path first, and this suite's quarantined
-    home makes that path exceed `sun_path` on macOS -- a genuinely permanent
-    condition that would be recorded before any transport stub was reached.
-    The subject here is the classification, not the transport."""
     monkeypatch.setattr(client, "_try_warm_dispatch_inner", lambda msg, *a: None)
 
     assert client.try_warm_dispatch(_MSG) is None
@@ -396,8 +335,8 @@ def test_einval_without_231_never_spawns_and_never_prints(
     stderr write, since it is now a named table row rather than an
     unanticipated exception."""
     exc = OSError("invalid argument")
-    exc.errno = 22  # EINVAL
-    exc.winerror = 1  # explicitly NOT 231, so this exercises the new branch
+    exc.errno = 22
+    exc.winerror = 1
 
     def _raise_einval(pipe):
         raise exc
@@ -448,7 +387,7 @@ def test_broken_pipe_on_both_attempts_goes_cold(monkeypatch: pytest.MonkeyPatch)
         client, "spawn_detached", lambda repo_root, script, args=None, **kwargs: spawns.append(1) or True
     )
     assert client.try_warm_dispatch(_MSG) is None
-    assert spawns == []  # BrokenPipeError is never the spawn trigger
+    assert spawns == []
 
 
 def test_well_formed_success_response_is_used(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -462,10 +401,6 @@ def test_well_formed_success_response_is_used(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_well_formed_error_envelope_is_used_not_treated_as_cold(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A live server's generic error response means "server up" per the
-    table -- it must be returned and used, never mistaken for a dead
-    server (the exact -32603-vs-no-listener confusion the ~49-process
-    storm was caused by)."""
     monkeypatch.setattr(
         client,
         "_open_pipe",
@@ -490,7 +425,7 @@ def test_read_deadline_expiry_goes_cold(monkeypatch: pytest.MonkeyPatch) -> None
 
     class _StuckPipe(_FakePipe):
         def readline(self):
-            threading.Event().wait(client.READ_DEADLINE_SECS + 5)  # never returns in time
+            threading.Event().wait(client.READ_DEADLINE_SECS + 5)
             return b'{"jsonrpc":"2.0","id":1,"result":{}}\n'
 
     monkeypatch.setattr(client, "READ_DEADLINE_SECS", 0.05)
@@ -501,9 +436,6 @@ def test_read_deadline_expiry_goes_cold(monkeypatch: pytest.MonkeyPatch) -> None
 def test_caller_read_deadline_bounds_a_compute_only_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`read_deadline_secs` is how `_wait_for_warm_boot` charges an attempt's
-    read against its own bound. For a compute-only op it bounds the whole
-    read: expiry is a miss, returned inside the caller's budget."""
     import threading
     import time
 
@@ -518,13 +450,6 @@ def test_caller_read_deadline_bounds_a_compute_only_read(
     assert time.monotonic() - t0 < client.READ_DEADLINE_SECS
 
 
-# --- delivered mutations never go cold and never re-send -------------------
-# The 2026-08-19 defect: a `git commit` outran the 2s liveness deadline, the
-# client went cold, and the cold engine re-ran the op -- committing nothing,
-# because the warm server (still finishing) had already committed the paths.
-# The operator was told "no commit landed" about a commit that existed under a
-# token the second execution had never minted. Evidence: peer session
-# 30008a4b, commits e527554b8 / b330d767d. These pin the invariant that closes
 # it: once a MUTATING request is DELIVERED, no re-send and no cold fallback.
 
 _MUTATING_MSG = {
@@ -570,12 +495,6 @@ def test_delivered_mutation_waits_past_the_liveness_deadline(
 def test_delivered_mutation_that_never_answers_is_indeterminate_not_cold(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE FIX, refusal half. Past even the mutation deadline the answer is an
-    honest "it may have happened", never `None` -- `None` is this module's
-    go-cold signal, and going cold re-runs the mutation.
-
-    Mechanism check: reverting the mutation branch makes this return None, which
-    is precisely the state that re-executed a landed commit."""
     import threading
 
     class _StuckPipe(_FakePipe):
@@ -583,11 +502,6 @@ def test_delivered_mutation_that_never_answers_is_indeterminate_not_cold(
             threading.Event().wait(30)
             return b'{"jsonrpc":"2.0","id":1,"result":{}}\n'
 
-    # 0.02s / 0.5s -- a 480ms margin, not the original 30ms one: at this
-    # box's stated 50-70-concurrent-session load norm a thin margin here
-    # flakes under contention (reviewer finding, sidecar dcf219af, SLICE 1).
-    # The StuckPipe's own 30s wait means the test still resolves in ~0.5s
-    # either way -- only the deadline widens, nothing the test asserts does.
     monkeypatch.setattr(client, "READ_DEADLINE_SECS", 0.02)
     monkeypatch.setattr(client, "MUTATION_READ_DEADLINE_SECS", 0.5)
     monkeypatch.setattr(client, "_open_pipe", lambda pipe: _StuckPipe())
@@ -598,10 +512,6 @@ def test_delivered_mutation_that_never_answers_is_indeterminate_not_cold(
 def test_caller_read_deadline_never_cuts_a_delivered_mutation_short(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A caller's lowered read deadline shortens only the liveness probe; the
-    delivered mutation still waits out its own transport deadline and returns
-    the real answer. Cutting it at the caller's bound would mint an
-    indeterminate for an op that was merely slow."""
     import threading
 
     class _SlowPipe(_FakePipe):
@@ -619,10 +529,6 @@ def test_caller_read_deadline_never_cuts_a_delivered_mutation_short(
 def test_broken_pipe_after_delivery_is_not_resent_for_a_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The table's "one re-open" retry is safe only while the server cannot have
-    executed the request. After delivery it is a second execution of a mutation,
-    so the retry must not fire -- pinned by counting opens, not just by the
-    return value."""
     opens = []
 
     def _open(pipe):
@@ -638,9 +544,6 @@ def test_broken_pipe_after_delivery_is_not_resent_for_a_mutation(
 def test_broken_pipe_before_delivery_still_re_opens(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The other side of the same line: a write that never landed leaves a
-    partial frame the server cannot parse as a request, so it cannot have
-    executed. That re-open stays, mutation or not."""
     opens = []
 
     def _open(pipe):
@@ -656,16 +559,6 @@ def test_broken_pipe_before_delivery_still_re_opens(
 def test_zero_byte_close_still_goes_cold_for_a_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The one post-delivery shape that still goes cold for a mutation, and the
-    distinction is evidence rather than convenience: not one byte came back, which
-    is what a connection the server never serviced looks like. That is the common
-    case here, not a corner -- the warm server keeps a single pending listener, so
-    under this box's load norm connections routinely die unserviced, and
-    `flush()` returning only ever proved the bytes left THIS process.
-
-    Regression guard: making this indeterminate turned a large-pathspec commit
-    into an outright failure instead of the cold path it has always taken
-    (`test_large_pathspec_round_trips_end_to_end`)."""
     monkeypatch.setattr(client, "_open_pipe", lambda pipe: _FakePipe(read_result=b""))
     assert client.try_warm_dispatch(_MUTATING_MSG) is None
 
@@ -673,10 +566,6 @@ def test_zero_byte_close_still_goes_cold_for_a_mutation(
 def test_zero_byte_close_after_the_probe_is_indeterminate_for_a_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The residual of (e). An unserviced connection closes at once; a close
-    that arrives after the liveness probe expired came from a server that held
-    the delivered mutation, so it may have landed. Going cold there re-runs it
-    and pays a second full read that no caller ceiling covers."""
     import threading
 
     class _LateClosePipe(_FakePipe):
@@ -694,8 +583,6 @@ def test_zero_byte_close_after_the_probe_is_indeterminate_for_a_mutation(
 def test_malformed_response_is_indeterminate_for_a_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Same reasoning as EOF: an unreadable answer is not evidence of an
-    unperformed op."""
     monkeypatch.setattr(client, "_open_pipe", lambda pipe: _FakePipe(read_result=b"not json\n"))
     _assert_indeterminate(client.try_warm_dispatch(_MUTATING_MSG))
 
@@ -763,13 +650,6 @@ def test_a_ceremony_mutation_gets_a_nonzero_extension_past_the_liveness_probe():
 def test_mutation_deadline_derivation_does_not_outwait_the_ops_own_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A mutating op with a short (default-sized) engine budget must not
-    wait past it -- the whole point of deriving per-op rather than using a
-    flat 120s that outlives the caller's own ~40s kill ceiling for every op
-    but the one the original incident concerned.
-
-    Derivation source is `ipc.mutation_read_deadline_for` -- the unclamped
-    per-op resolution. See the sibling test above."""
     import threading
 
     import coordinator_core.ipc as ipc
@@ -803,9 +683,6 @@ def test_mutation_deadline_override_wins_over_derivation(
 
 
 def test_unclassified_op_is_treated_as_mutating(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fail-closed: an op with no classification entry must be treated as a
-    mutation. Being wrong this way costs one honest error; being wrong the other
-    way executes a mutation twice."""
     monkeypatch.setattr(
         client, "_open_pipe", lambda pipe: _FakePipe(read_result=b"not json\n")
     )
@@ -824,9 +701,6 @@ def test_empty_response_goes_cold(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_unexpected_exception_never_propagates_backstop_two(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Backstop 2: nothing in the preamble may fail in a way that fails the
-    op. Even a wholly unanticipated exception (not one of the table's
-    named rows) must resolve to a cold-path signal, never propagate."""
 
     def _explode(pipe):
         raise RuntimeError("unanticipated transport failure")
@@ -853,17 +727,6 @@ def test_pipe_handle_always_closed(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_request_payload_carries_the_callers_resolved_session_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    """C-warm-identity: the client resolves ITS OWN (true-caller)
-    environment, cold, and attaches it beside `_engine_token` -- this is
-    the sole place identity crosses the wire; the server never re-resolves
-    it from its own environment (state/bug-backlog/2026-08-18-a-warm-
-    server-stamps-every-op-it-serves-eeb801fc6bee.yaml).
-
-    The key is `_caller` (a serialised `CallerContext`), not the bare
-    `_session_id` this asserted before: C1b of docs/plans/2026-08-30-every-
-    op-runs-in-the-callers-environment.md widened both legs to the caller's
-    identity SET and retired that key with no alias, so `_serve_line` reads
-    only `_caller` now."""
     monkeypatch.setattr(client, "_caller_session_id", lambda: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
     fake = _FakePipe()
     monkeypatch.setattr(client, "_open_pipe", lambda pipe: fake)
@@ -874,14 +737,6 @@ def test_request_payload_carries_the_callers_resolved_session_id(monkeypatch: py
 
 
 def test_request_payload_omits_session_id_when_unresolvable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Unresolvable identity (`_caller_session_id()` returns "") must never
-    be sent as an empty string or a fabricated value -- the server-side
-    no-op fallback keys on the value being absent.
-
-    Since C1b the omission is at the FIELD, not at the object: `_caller` is
-    still sent (its `pid` and `cwd` are the caller's own and are resolvable
-    even when the session id is not, and `harness_registry.self_record()`
-    keys off exactly those), with `session_id` left `None` inside it."""
     monkeypatch.setattr(client, "_caller_session_id", lambda: "")
     fake = _FakePipe()
     monkeypatch.setattr(client, "_open_pipe", lambda pipe: fake)
@@ -915,11 +770,6 @@ def test_engine_skew_distinct_from_structural_pin_error() -> None:
 def test_socket_path_too_long_is_a_permanent_reason_not_a_transient_miss(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
-    """THE SECOND ROUTE to the same operator-facing contradiction. A runtime
-    base long enough to blow `sun_path` makes warm permanently unavailable
-    for every call from that base, and cold fallback is disabled -- so the
-    caller must not advise a retry that changes nothing. The reason must
-    carry the path and the byte budget the exception already measured."""
     from coordinator_core.warm.election import SocketPathTooLongError
 
     exc = SocketPathTooLongError(
@@ -939,9 +789,6 @@ def test_socket_path_too_long_is_a_permanent_reason_not_a_transient_miss(
 
 
 def test_other_preamble_failures_stay_transient(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The narrowness is the point: an unanticipated preamble failure is
-    exactly where "this recurs forever" is a guess, and a wrong permanent
-    verdict removes the retry advice that would have worked."""
     monkeypatch.setattr(
         client,
         "_try_warm_dispatch_inner",
@@ -950,13 +797,6 @@ def test_other_preamble_failures_stay_transient(monkeypatch: pytest.MonkeyPatch)
 
     assert client.try_warm_dispatch(_MSG) is None
     assert client.last_cold_reason() is None
-
-
-# ---------------------------------------------------------------------------
-# AC3: the two shared cold-fallback reason-tag buckets, one per
-# `_try_warm_dispatch_inner` None-return site -- never a distinct reason
-# per site.
-# ---------------------------------------------------------------------------
 
 
 def test_warmth_disabled_tags_spawn_triggering_miss(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1037,9 +877,5 @@ def test_broken_pipe_on_both_attempts_tags_drain_window_bucket(
 def test_permanent_reason_folds_into_spawn_triggering_miss_bucket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC3: uses -- never replaces -- `_cold_reason`'s own never-overwrite/
-    first-reason-wins mechanism. A permanent preamble failure happened
-    strictly before any pipe was opened, so it reports the same bucket an
-    ordinary no-pipe/busy miss gets, not a third, unclassified value."""
     monkeypatch.setattr(client, "_cold_reason", "some permanent reason")
     assert client._cold_bucket_for_row() == client.COLD_BUCKET_SPAWN_TRIGGERING_MISS

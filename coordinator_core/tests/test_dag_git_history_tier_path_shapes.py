@@ -39,14 +39,10 @@ _NAME = '2026-07-21_194404_6ffb9c2d-2568-4f12-b1fc-4c727912053f.md'
 
 
 def _cache(*paths: str) -> GitHistoryCache:
-    """A confirmed-complete history cache keyed the way git emits paths:
-    forward slashes, repo-relative, on every platform."""
     return GitHistoryCache(set(paths), complete=True)
 
 
 def test_target_tracked_only_under_state_resolves_from_archive_referrer(tmp_path):
-    """A record living in archive/handoffs/YYYY-MM/ whose predecessor was
-    git-tracked under state/handoffs/ resolves via the git-history tier."""
     repo_root = str(tmp_path)
     handoff_dir = os.path.join(repo_root, 'archive', 'handoffs', '2026-07')
 
@@ -58,9 +54,6 @@ def test_target_tracked_only_under_state_resolves_from_archive_referrer(tmp_path
 
 
 def test_target_tracked_only_under_month_foldered_archive_resolves(tmp_path):
-    """A live record whose predecessor was pruned from disk but git-tracked at
-    archive/handoffs/YYYY-MM/<name> resolves — the month folder need not exist
-    on disk, which is precisely the age-pruned case."""
     repo_root = str(tmp_path)
     handoff_dir = os.path.join(repo_root, 'state', 'handoffs')
 
@@ -72,8 +65,6 @@ def test_target_tracked_only_under_month_foldered_archive_resolves(tmp_path):
 
 
 def test_never_tracked_target_still_unresolvable(tmp_path):
-    """The lint must keep catching real rot: a target absent from a complete
-    history cache resolves to None."""
     repo_root = str(tmp_path)
     handoff_dir = os.path.join(repo_root, 'state', 'handoffs')
 

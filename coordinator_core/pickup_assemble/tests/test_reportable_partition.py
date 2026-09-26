@@ -51,10 +51,6 @@ from coordinator_core import pickup_assemble as pa
 _OPEN_CLOSURE = {"verdict": "open", "reason": "no reply commit found in sender's tree"}
 _UNKNOWN_CLOSURE = {"verdict": "unknown", "reason": "reply-closure check did not run"}
 
-# A real `directives[]` shape this module actually emits alongside
-# `j-reply-closure` (the archived-open-memo branch's `d-action-memo`,
-# gated on the unrelated `j-kind` point) -- j-reply-closure's own
-# dispositions never name any directive id, in this shape or any other.
 _ACTION_MEMO_DIRECTIVES = [
     {
         "id": "d-action-memo",
@@ -74,9 +70,6 @@ def _build_reply_closure_jp(closure: dict) -> dict:
 
 
 def _resolves_any_live_directive(jp, directives) -> bool:
-    """The directive axis alone, isolated from the `reportable` marker, so
-    these tests pin the two facts separately: gates-nothing is a property of
-    the point's `resolves`; demotability is an authoring decision on top."""
     directive_ids = {d.get("id") for d in directives}
     return any(
         r in directive_ids
@@ -108,10 +101,6 @@ class TestJReplyClosureSettlement:
         "directives", [[], _ACTION_MEMO_DIRECTIVES], ids=["no-directives", "with-action-memo-directive"]
     )
     def test_it_stays_asked_because_it_is_never_marked_reportable(self, closure, directives):
-        """Gate-nothing is necessary but not sufficient for demotion. This
-        point carries no `reportable` marker, so `partition_reportable`
-        leaves it in `asked` -- which is the correct outcome here for the
-        reason the next class pins."""
         jp = _build_reply_closure_jp(closure)
         assert jp.get("reportable") is None
         asked, reported = partition_reportable([jp], directives)
@@ -125,34 +114,14 @@ class TestJReplyClosureSettlement:
 
 
 class TestJReplyClosureGatesCoastDespiteGatingNoDirective:
-    """THE FINDING: a point can gate no directive and
-    still gate something -- `gates.coast` -- through a channel
-    `partition_reportable` cannot see, because `compute_coast` gates on
-    mere presence of an id'd point in `judgment_points[]`, not on whether
-    it resolves a directive. This is why `pickup_assemble` has no
-    `_demote_reported_judgment_points` seam: demoting this point would
-    flip `coast` from `blocked` to `clear` and reopen the reply-closure
-    defect `_render_reply_closure` exists to close.
-
-    A future reader tempted to "finish" the demotion by wiring
-    `partition_reportable`'s `reported` bucket into `narration` and
-    dropping it from `judgment_points[]` trips this test immediately:
-    `compute_coast` would report `clear` on a real unclosed-reply
-    envelope.
-    """
 
     def test_reply_closure_point_gates_no_directive_yet_still_blocks_coast(self):
         jp = _build_reply_closure_jp(_OPEN_CLOSURE)
 
-        # Sound on the directive axis: no directive names or is named by it.
         assert not _resolves_any_live_directive(jp, _ACTION_MEMO_DIRECTIVES)
 
-        # And it must never be marked reportable -- that marker is what would
-        # let `partition_reportable` demote it.
         assert jp.get("reportable") is None
 
-        # And yet: a real envelope's judgment_points[] still carries it
-        # (no demotion), so gates.coast still blocks on it.
         judgment_points = [jp]
         coast = pa.compute_coast(judgment_points)
         assert coast["verdict"] == "blocked"
@@ -163,13 +132,6 @@ class TestJReplyClosureGatesCoastDespiteGatingNoDirective:
 
 
 class TestForkComposesFromSharedSeam:
-    """AC8: the fork's constructor pair either composes from the shared
-    seam or is covered by the same census/invariant -- verified here by
-    construction, not by reading the source: both constructors round-trip
-    every shared-seam validation (extra `recommendation` field rejected,
-    `{disposition, rationale}` shape enforced) while preserving this
-    module's own positional signature and `reason`-enum vocabulary the
-    shared seam has no concept of."""
 
     def test_build_judgment_point_delegates_recommendation_shape_validation(self):
         with pytest.raises(ValueError):

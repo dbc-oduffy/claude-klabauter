@@ -104,11 +104,7 @@ _MACHINE_LOCAL_TIMEOUT_SECS = 15
 
 
 class RepoBootstrapError(RuntimeError):
-    """Raised when a required step of the check -> clone -> register ->
-    confirm sequence cannot complete: the `machine-local` CLI is
-    unresolvable, `git clone` itself fails (surfaced from
-    `CloneSiblingRepoError`), a `machine-local set` call fails, or the
-    post-register confirm read-back does not match what was written."""
+    pass
 
 
 def _resolve_machine_local_bin() -> Optional[str]:
@@ -120,14 +116,6 @@ def _resolve_machine_local_bin() -> Optional[str]:
 
 
 def _machine_local_registry_get(machine_local_bin: str, key: str) -> Optional[str]:
-    """Resolve `key` via `machine_resolver.registry_get` first -- zero-spawn,
-    in-process read of the same registry.local.toml over registry.toml chain
-    the `machine-local get <key>` CLI's final rung consults. Falls back to
-    the `machine-local get <key>` CLI subprocess only on a miss, to pick up
-    the CLI's autodiscovery and `path-exceptions.toml` rungs `registry_get`
-    never consults (repos.* is a 4-rung ladder, not a flat registry read --
-    2026-08-16 review finding; see module docstring). A None return means
-    "treat as not registered", never "error"."""
     value = _registry_get(key)
     if value is not None:
         return value
@@ -150,8 +138,6 @@ def _machine_local_registry_get(machine_local_bin: str, key: str) -> Optional[st
 
 
 def _machine_local_set(machine_local_bin: str, key: str, value: str) -> bool:
-    """`machine-local set <key> <value>` — returns whether the call
-    succeeded (rc==0); never raises."""
     try:
         proc = subprocess.run(
             [machine_local_bin, "set", key, value],
@@ -168,18 +154,6 @@ def _machine_local_set(machine_local_bin: str, key: str, value: str) -> bool:
 
 
 def clone_and_register_sibling_repo(repo_key: str, clone_url: str, dest_path: str) -> dict:
-    """Check -> clone -> register -> confirm.
-
-    Returns ``{"cloned": bool, "registered": bool, "path": str,
-    "already_present": bool}``. ``already_present`` is a whole-op-level flag:
-    True only in the vacuous-no-op case (repo key already registered AND the
-    destination already has a `.git` directory) — it is False whenever either
-    half of this call actually did something, even if the OTHER half was a
-    partial-state repair with nothing to do.
-
-    Raises `RepoBootstrapError` on any hard failure — see module docstring
-    § Failure posture.
-    """
     target = normalize_native_path(dest_path)
 
     machine_local_bin = _resolve_machine_local_bin()

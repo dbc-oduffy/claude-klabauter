@@ -1,17 +1,3 @@
-"""test_reap_sessions.py — self-contained test suite for reap-sessions.py.
-
-Native-Python successor to the retired coordinator/bin/tests/test-reap-sessions-wrapper.sh
-and test-coordinator-reap-sessions.sh (DoE f703efad, 2026-07-21; de-bash-coordinator
-campaign, Wave F1, facade collapse). Retargets the bash oracles' contract assertions onto the Python trampoline: session.reap
-dispatch shape (params == {}, never `force`), the negative-spec no-stdout-on-success
-invariant, and the best-effort exit-0-always ceremony even when the transport seam raises.
-
-Runs bash-free: `python3 test_reap_sessions.py` (or via the coordinator test runner).
-Exit 0 = all tests pass; non-zero = at least one failure.
-
-Spec backlink: DoE-claude:pln-session-init-sh-boot-sweep-rea-fff7cc § C1
-Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md § Wave F1 (facade collapse)
-"""
 from __future__ import annotations
 
 import contextlib
@@ -35,12 +21,6 @@ def _pass(label: str) -> None:
 
 
 def _fail(label: str, detail: str = "") -> None:
-    """Fail the enclosing test.
-
-    Negative-spec: this MUST raise. It previously only printed and bumped a
-    module-global counter that nothing ever asserted on, which made every
-    check in this file decorative. Do not "restore" the counting-only shape.
-    """
     global FAIL
     print(f"  FAIL: {label}")
     if detail:
@@ -50,7 +30,6 @@ def _fail(label: str, detail: str = "") -> None:
 
 
 def _load_module():
-    """Import reap-sessions.py as a fresh module object each call."""
     path = os.path.join(SCRIPT_DIR, "reap-sessions.py")
     spec = importlib.util.spec_from_file_location("reap_sessions_under_test", path)
     mod = importlib.util.module_from_spec(spec)
@@ -60,7 +39,6 @@ def _load_module():
 
 
 def _run_main_capturing(mod, argv=None, fake_route=None):
-    """Run mod.main(argv or []) with stdout/stderr captured; optionally fake cc_invoke.route."""
     orig_route = mod.cc_invoke.route
     if fake_route is not None:
         mod.cc_invoke.route = fake_route
@@ -73,10 +51,6 @@ def _run_main_capturing(mod, argv=None, fake_route=None):
     return rc, out.getvalue(), err.getvalue()
 
 
-# ===========================================================================
-# Dispatch shape: session.reap with params == {}, via cc_invoke.route(),
-# never `force` in the payload.
-# ===========================================================================
 def test_dispatches_session_reap_empty_params_no_force(tmp_path):
     mod = _load_module()
     seen = {}
@@ -116,10 +90,6 @@ def test_dispatches_session_reap_empty_params_no_force(tmp_path):
         _fail("dispatch shape: repo_root forwarded from argv", f"got {seen.get('repo_root')!r}")
 
 
-# ===========================================================================
-# Negative-spec: no integer count printed to stdout on success (unlike
-# sweep-terminal-plans.py) — session-init's reaper block does not consume one.
-# ===========================================================================
 def test_no_stdout_on_success(tmp_path):
     mod = _load_module()
 
@@ -144,10 +114,6 @@ def test_no_stdout_on_success(tmp_path):
         _fail("no-stdout-on-success: stderr is empty", f"got {err!r}")
 
 
-# ===========================================================================
-# Transport failure (route() raises RuntimeError) -> still exit 0, WARN to
-# stderr, no stdout. Reaper must never block session start.
-# ===========================================================================
 def test_transport_failure_exits_zero_warns_no_stdout(tmp_path):
     mod = _load_module()
 
@@ -172,9 +138,6 @@ def test_transport_failure_exits_zero_warns_no_stdout(tmp_path):
         _fail("transport failure: stderr mentions session.reap failed (best-effort)", f"got {err!r}")
 
 
-# ===========================================================================
-# repo_root resolution: cannot resolve git repo root -> exit 0, no route() call.
-# ===========================================================================
 def test_unresolvable_repo_root_exits_zero_no_dispatch():
     mod = _load_module()
     called = {"n": 0}
@@ -203,10 +166,6 @@ def test_unresolvable_repo_root_exits_zero_no_dispatch():
         _fail("unresolvable repo_root: stderr explains the failure", f"got {err!r}")
 
 
-# ===========================================================================
-# --repo argv parsing (P089-C1): hand-rolled `--repo <value>` flag handling,
-# in place of the prior `argv[0]` unconditional read.
-# ===========================================================================
 def test_repo_flag_resolves_to_value(tmp_path):
     mod = _load_module()
     seen = {}
@@ -313,8 +272,8 @@ def test_unresolvable_root_returns_zero_and_writes_stderr():
 def test_posix_and_windows_style_paths_resolve_unchanged():
     mod = _load_module()
 
-    posix_path = "/opt/some-repo"  # abs-path-ok: synthetic POSIX-shaped fixture value, not a host path
-    windows_path = "C:\\Users\\some-user\\some-repo"  # abs-path-ok: synthetic Windows-shaped fixture value
+    posix_path = "/opt/some-repo"
+    windows_path = "C:\\Users\\some-user\\some-repo"
 
     if mod._resolve_repo_root(["--repo", posix_path]) == posix_path:
         _pass("multi-os: POSIX-style --repo path resolves unchanged")
@@ -355,8 +314,6 @@ def test_repo_flag_alone_no_value_falls_through_exits_zero():
     mod._resolve_repo_root_orig = mod._resolve_repo_root
     result = mod._resolve_repo_root(["--repo"])
 
-    # `['--repo']` alone must NOT return the literal string "--repo", and
-    # must not raise (e.g. via an IndexError on argv[1]).
     if result != "--repo":
         _pass("'--repo' alone: does not resolve to the literal flag string")
     else:

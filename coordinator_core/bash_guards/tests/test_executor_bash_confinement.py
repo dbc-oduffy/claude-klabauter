@@ -88,7 +88,6 @@ def _payload(command: str, agent_id: str = "deadbeef0123", agent_type: str = _CO
     }
 
 
-#: 2026-08-11 order-dependency fix -- see this module's own docstring
 #: addendum below (`_FAKE_ENUMERATED_TYPES`) for the incident this closes.
 _FAKE_ENUMERATED_TYPES = frozenset({_CONFINED_TYPE, _REVIEWER_TYPE})
 
@@ -174,17 +173,10 @@ def _assert_allowed(result):
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# Bucket 2 (chunk C2 three-way rule) -- commit/push/stash/reset shapes.
-# This guard (block_reviewer_bash_outside_allowlist) now allows an executor
 # unconditionally; the two-guard assertion is that a DIFFERENT, still-live
-# guard independently denies the shapes that remain genuinely dangerous.
-# ---------------------------------------------------------------------------
 
 
 def test_git_commit_denies(monkeypatch):
-    """block_reviewer_bash_outside_allowlist no longer confines executor;
-    block_subagent_commit still denies the commit shape regardless."""
     _confine(monkeypatch)
     _wire_other_guard(monkeypatch, commit_guard)
     payload = _payload('git commit -m "x"')
@@ -228,8 +220,6 @@ def test_git_push_denies(monkeypatch):
 
 
 def test_git_push_force_denies(monkeypatch):
-    """The genuinely destructive push shape -- force-push -- still denies,
-    via block_subagent_destructive_action, unaffected by C2."""
     _confine(monkeypatch)
     _wire_other_guard(monkeypatch, destructive_guard)
     payload = _payload("git push --force origin main")
@@ -251,14 +241,6 @@ def test_git_reset_denies(monkeypatch):
     payload = _payload("git reset --hard")
     _assert_allowed(guard.check(payload))
     _assert_denied(destructive_guard.check(payload))
-
-
-# ---------------------------------------------------------------------------
-# Bucket 1 (chunk C2 three-way rule) -- confinement-POLICY properties,
-# re-keyed to coordinator:code-reviewer (the type that remains confined).
-# Inverting these to "allows" would assert nothing -- the property they
-# protect still matters for the type this guard still confines.
-# ---------------------------------------------------------------------------
 
 
 def test_python3_dash_c_denies_even_with_attacker_shaped_ruleset(monkeypatch):
@@ -307,14 +289,6 @@ def test_python3_dash_m_unlisted_module_denies(monkeypatch):
     assert "http.server" in reason
 
 
-# ---------------------------------------------------------------------------
-# Bucket 3 (chunk C2 three-way rule) -- plain allowlist allow/deny shape
-# cases with no confinement-policy or commit/destructive-guard entanglement.
-# "executor IS confined" becomes "executor is NOT confined while
-# coordinator:code-reviewer still IS" -- both halves asserted per test.
-# ---------------------------------------------------------------------------
-
-
 def test_python3_dash_c_inline_code_allows_executor_denies_reviewer(monkeypatch):
     cmd = 'python3 -c "import os; os.system(\'rm -rf /\')"'
     _confine(monkeypatch)
@@ -332,13 +306,6 @@ def test_python3_dash_e_inline_code_allows_executor_denies_reviewer(monkeypatch)
 
     _confine(monkeypatch, subagent_type=_REVIEWER_TYPE)
     _assert_denied(guard.check(_payload(cmd, agent_type=_REVIEWER_TYPE)))
-
-
-# ---------------------------------------------------------------------------
-# AC2 -- an executor's legitimate work is unaffected. Unchanged by C2: this
-# guard already allowed these shapes for executor before, and continues to
-# (now unconditionally, rather than via a ruleset carve-out).
-# ---------------------------------------------------------------------------
 
 
 def test_python3_dash_m_pytest_allows(monkeypatch):
@@ -413,14 +380,6 @@ def test_coordinator_doc_new_allows(monkeypatch):
         "/x/claude-klabauter/coordinator/bin/coordinator-doc-new.py --type run-report"
     )
     assert guard.check(payload) is None
-
-
-# ---------------------------------------------------------------------------
-# Bucket 3 -- machine-local Tier A. Was policy-gated to executor's ruleset
-# while confined; now a plain "no confinement at all" allow, dual-asserted
-# against coordinator:code-reviewer (still confined, still denies write
-# subcommands).
-# ---------------------------------------------------------------------------
 
 
 def test_machine_local_get_allows(monkeypatch):
@@ -514,16 +473,6 @@ def test_machine_local_bare_no_subcommand_allows_executor_denies_reviewer(monkey
     _assert_denied(guard.check(_payload(cmd, agent_type=_REVIEWER_TYPE)))
 
 
-# ---------------------------------------------------------------------------
-# AC3/AC4 -- coordinator:code-reviewer's existing confinement behaviour is
-# bit-for-bit unchanged by narrowing this set. Structural confirmation that
-# this guard's ruleset overrides are keyed strictly by effective_type: a
-# reviewer-typed payload must NOT pick up executor's former interpreter/
-# script allowances, and removing executor from the SET must not itself
-# alter a single reviewer verdict.
-# ---------------------------------------------------------------------------
-
-
 def test_reviewer_type_unaffected_by_executor_interpreter_allowance(monkeypatch):
     _confine(monkeypatch, subagent_type=_REVIEWER_TYPE)
     payload = _payload("python3 myscript.py", agent_type=_REVIEWER_TYPE)
@@ -531,17 +480,6 @@ def test_reviewer_type_unaffected_by_executor_interpreter_allowance(monkeypatch)
 
 
 def test_reviewer_type_shares_the_executors_pytest_module_allowance(monkeypatch):
-    """Pin the ``interpreter_allowed_modules`` half of the executor/reviewer
-    ruleset, which the script-path test above does not reach.
-
-    (Amendment 2, 2026-08-03, PM ruling: "bash confinement should only be for
-    destructive actions that would degrade a machine.") ``coordinator:code-
-    reviewer`` shares the SAME ``("pytest",)`` module allowance the former
-    ``coordinator:executor`` ruleset override carried, unaffected by C2's
-    later removal of executor from the SET membership itself -- that
-    per-type ruleset resolution (Divergence 9) is orthogonal to SET
-    membership and this test's own scope.
-    """
     _confine(monkeypatch, subagent_type=_REVIEWER_TYPE)
     payload = _payload("python3 -m pytest -q", agent_type=_REVIEWER_TYPE)
     assert guard.check(payload) is None
@@ -564,14 +502,6 @@ def test_reviewer_type_unlisted_module_still_denies(monkeypatch):
     assert "http.server" in reason
 
 
-#: AC4 (chunk C2, load-bearing) -- the full allow/deny verdict table this
-#: file's own tests exercise for coordinator:code-reviewer, captured with
-#: coordinator:executor's SET membership restored (simulating pre-C2) and
-#: compared byte-identical against the SAME table read off the real,
-#: on-disk (post-C2) module state. A change to ANY reviewer verdict here
-#: would mean narrowing the SET for executor had a side effect on the type
-#: that stays confined -- exactly the property C2's body text names as the
-#: load-bearing check.
 _AC4_REVIEWER_VERDICT_COMMANDS = (
     "git status",
     "git show HEAD",
@@ -637,22 +567,7 @@ def test_ac4_reviewer_verdict_table_unchanged_by_removing_executor_from_set(monk
     assert before_table == after_table
 
 
-# ---------------------------------------------------------------------------
-# Deny-message content -- RETIRED 2026-08-03 (DR-125, chunk C2).
 # ``coordinator:executor`` was removed from ``_helpers._CONFINED_FINDINGS_
-# AGENTS``, the SOLE gate this guard consults to decide whether to evaluate
-# a payload at all -- ``guard.check`` now returns ``None`` (allow)
-# unconditionally for any ``coordinator:executor`` payload, so the
-# executor-framed deny-message content this section used to pin (no
-# "review-findings" pin, no findings-agent framing, no "dispatch a separate
-# executor" advice, names what it can run -- originally reported at
-# cross-repo/inbox/2026-08-02-doe-claude-em-executor-confinement-deny-
-# message-addresses-wrong-agent-class.md) can never render again through
-# this guard: there is no longer a deny envelope to read a reason off.
-# ``test_reviewer_executor_deny_message_parity.py``'s
-# ``TestCodeReviewerDenyMessageByteParity`` remains the byte-identical pin
-# for the type that stays confined.
-# ---------------------------------------------------------------------------
 
 
 def test_executor_no_longer_denied_by_this_guard(monkeypatch):
@@ -661,16 +576,7 @@ def test_executor_no_longer_denied_by_this_guard(monkeypatch):
     assert guard.check(payload) is None
 
 
-# ---------------------------------------------------------------------------
-# Structural pin (this plan's C1): every key in
 # ``_DEFAULT_RULESET_TYPE_OVERRIDES`` must be a type ``_is_confined_type``
-# actually confines under the CURRENT, hermetic policy this guard resolves at
-# runtime -- never DoE's ``subagent-sandbox-policy.yaml`` directly, which is
-# non-hermetic (lives in a sibling repo, unresolvable in a cloud container).
-# This is the pin that would have caught Divergence 9 going stale: an
-# override entry surviving the type it was written for being removed from
-# confinement, silently testing a state production cannot reach.
-# ---------------------------------------------------------------------------
 
 
 def test_ruleset_override_keys_are_confined_types(monkeypatch):

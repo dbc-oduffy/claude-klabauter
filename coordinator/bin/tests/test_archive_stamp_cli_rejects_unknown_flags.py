@@ -175,7 +175,6 @@ def test_accepted_set_is_derived_not_hand_listed(cli):
     """
     assert "--kind" in cli._SUBCOMMAND_USAGE["stamp-shipped-in"]
     assert cli._reject_unknown_flags("stamp-shipped-in", ["p.md", "--kind", "successor"]) is None
-    # ...and the same flag is NOT silently accepted on a verb that never declared it.
     assert cli._reject_unknown_flags("repark-handoff", ["p.md", "--kind", "successor"]) == 2
 
 

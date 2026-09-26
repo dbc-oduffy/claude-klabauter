@@ -93,17 +93,15 @@ from coordinator_core.win_portability import is_executable, no_console_creationf
 _CREATIONFLAGS = no_console_creationflags()
 
 # writes only into a brand-new project dir under COORDINATOR_PROJECTS_ROOT or
-# $HOME/Code_Projects, always a fresh separate repo outside claude-klabauter's own tree
 GENERATES = []
 
-_PROG = "new-project-scaffold.sh"  # literal program-name prefix, matches the DoE filename
+_PROG = "new-project-scaffold.sh"
 
 _USAGE = (
     "Usage: new-project-scaffold.sh --name <name> [--parent <dir>] "
     "[--template next-app|empty] [--no-smoke]"
 )
 
-# Timeout budgets (seconds) — addendum rule 2 (unbounded-hang class).
 _GIT_TIMEOUT = 30
 _MACHINE_LOCAL_TIMEOUT = 15
 _RENDER_TREE_TIMEOUT = 120
@@ -111,16 +109,8 @@ _PNPM_INSTALL_TIMEOUT = 900
 _PNPM_TYPECHECK_TIMEOUT = 300
 _PNPM_TEST_TIMEOUT = 300
 
-# Windows-portability triad, addendum rule A4 — suppresses the console-window
-# popup every child subprocess would otherwise flash on Windows. Matches the
-# sibling ops in this wave (migrate_cross_repo_layout.py, orphan_branch_sweep.py).
-
 
 def _resolve_machine_local() -> Optional[str]:
-    """Locate the `machine-local` CLI -- PATH, then the settings-home and
-    legacy install locations. See
-    `_settings_home.resolve_machine_local_cli` for why PATH alone reported
-    "not found" on boxes where the CLI was installed and working."""
     return resolve_machine_local_cli()
 
 
@@ -153,9 +143,6 @@ def _resolve_doe_root() -> Tuple[Optional[str], int]:
     if env_override:
         return env_override, 0
 
-    # Zero-spawn: `registry_get` reads the same registry.local.toml over
-    # registry.toml chain `machine-local get` would, in-process (see
-    # `coordinator_core.machine_resolver.registry_get`).
     value = _registry_get("repos.doe_claude") or ""
     if not value:
         ml_bin = _resolve_machine_local()
@@ -172,7 +159,6 @@ def _resolve_doe_root() -> Tuple[Optional[str], int]:
                 if proc.returncode == 0:
                     value = proc.stdout.strip()
             except (OSError, subprocess.TimeoutExpired):
-                # probe command unavailable/timed out; other candidates still apply
                 pass
     if not value:
         print(f"{_PROG}: could not resolve repos.doe_claude via the registry", file=sys.stderr)
@@ -181,22 +167,6 @@ def _resolve_doe_root() -> Tuple[Optional[str], int]:
 
 
 def _co_located_render_tree() -> Optional[str]:
-    """Locate render-template-tree.py co-located in THIS repo's coordinator/bin.
-
-    render-template-tree.py migrated into this repo in the coordinator/bin
-    executable-surface migration (DoE-claude commit b644d5a9) -- it is now
-    claude-klabauter's OWN sibling executable, not DoE-resident content, so it is
-    resolved relative to this repo unconditionally, ahead of any DoE-root
-    lookup (env override or registry alike). The DoE-root fallback below is
-    kept as a compatibility safety net for a checkout where this co-located
-    sibling is somehow absent.
-    """
-    # is_executable() answers "does this .py file's own mode bit make it
-    # directly launchable" -- true on POSIX (resolve_launchable execs it via
-    # its shebang) but always False on Windows for a .py path, since Windows
-    # never launches a .py file directly (resolve_launchable resolves a
-    # python interpreter for it there regardless of any exec bit). So the
-    # Windows leg only needs existence.
     this_repo_root = Path(__file__).resolve().parents[2]
     candidate = this_repo_root / "coordinator" / "bin" / "render-template-tree.py"
     if candidate.is_file() and (os.name == "nt" or is_executable(candidate)):
@@ -205,8 +175,6 @@ def _co_located_render_tree() -> Optional[str]:
 
 
 def _find_render_tree(doe_root: str) -> Optional[str]:
-    """Locate render-template-tree.py: co-located first, then the DoE root
-    (either content layout — private authoring tree or flat published mirror)."""
     co_located = _co_located_render_tree()
     if co_located is not None:
         return co_located
@@ -220,15 +188,6 @@ def _find_render_tree(doe_root: str) -> Optional[str]:
 
 
 def _register_repo(project_name: str, target: str) -> int:
-    """Self-register the freshly scaffolded repo into machine-local's
-    `repos.<slug>` registry.
-
-    slug = project_name.lower().replace('-', '_'). Calls `machine-local set
-    repos.<slug> <target-abs>` then verifies the round-trip via `machine-local
-    get repos.<slug>`. This is what lets the DoE new-project skill drop its
-    inline Phase 4.5 machine-local fence entirely -- the scaffold now
-    self-registers instead of the caller doing it as a separate ceremony step.
-    """
     slug = project_name.lower().replace("-", "_")
     target_abs = os.path.abspath(target)
 
@@ -256,22 +215,7 @@ def _register_repo(project_name: str, target: str) -> int:
         )
         return 1
 
-    # Round-trip verification read: in-process (zero-spawn -- see
-    # `coordinator_core.machine_resolver.registry_get`) rather than a
-    # `machine-local get` shell-out. Reads the same registry.local.toml the
-    # `set` call above just wrote, synchronously. `machine-local get` itself
-    # POSIX-normalizes its repos.* branch's return value (see
-    # `coordinator_core.ops.gen_doe_root_pointer` module docstring); the raw
-    # `registry_get` read has no such key-specific behaviour, so the same
-    # normalization is applied here explicitly to preserve the CLI's
-    # documented "repos.* round-trips as POSIX regardless of platform"
-    # contract byte-for-byte.
     stored = (_registry_get(f"repos.{slug}") or "").replace(os.sep, "/")
-    # The registry round-trips repos.* values through machine-local as
-    # POSIX-separated strings regardless of platform (registry contract,
-    # not a scaffold decision) -- os.path.abspath() on Windows returns
-    # native backslashes, so compare both sides POSIX-normalized rather
-    # than raw, or every registration on Windows fails verification.
     target_posix = target_abs.replace(os.sep, "/")
     if stored != target_posix:
         print(
@@ -285,7 +229,6 @@ def _register_repo(project_name: str, target: str) -> int:
 
 
 def _parse_args(argv: List[str]) -> Tuple[Optional[dict], int]:
-    """Parse CLI args. Returns (parsed_dict_or_None, exit_code). exit_code is 0 iff parsed is not None."""
     project_name = ""
     parent_dir = ""
     template = "next-app"
@@ -355,11 +298,6 @@ def _resolve_parent_dir(explicit_parent: str) -> str:
 
 
 def _git_init_main(target: str) -> int:
-    """Try `git init -b main`; fall back to `git init` + `symbolic-ref`.
-
-    Faithful to the bash oracle's set -e propagation on the fallback leg — see the
-    module-level negative-spec.
-    """
     try:
         proc = subprocess.run(
             ["git", "init", "-b", "main", target, "--quiet"],
@@ -402,9 +340,6 @@ def _git_init_main(target: str) -> int:
 
 
 def _run_smoke_step(cmd: List[str], cwd: str, timeout: int, label: str) -> int:
-    """Run one pnpm smoke step. Hardcoded exit 1 on any failure — matches the bash
-    oracle's explicit `if ! (...); then echo ERROR...; exit 1; fi` wrapping (the ONE
-    place the oracle overrides the underlying child's exit code)."""
     try:
         proc = subprocess.run(
             cmd, cwd=cwd, timeout=timeout, stdin=subprocess.DEVNULL, **_CREATIONFLAGS
@@ -430,9 +365,6 @@ def main(argv: List[str]) -> int:
     parent_dir = _resolve_parent_dir(parsed["parent_dir"])
     target = os.path.join(parent_dir, project_name)
 
-    # -----------------------------------------------------------------
-    # Pre-flight: fail loud if target is non-empty
-    # -----------------------------------------------------------------
     if os.path.isdir(target):
         try:
             non_empty = bool(os.listdir(target))
@@ -443,25 +375,16 @@ def main(argv: List[str]) -> int:
             print("Remove or rename the existing directory and retry.", file=sys.stderr)
             return 1
 
-    # -----------------------------------------------------------------
-    # Create parent and target directories
-    # -----------------------------------------------------------------
     try:
         os.makedirs(target, exist_ok=True)
     except OSError as exc:
         print(f"{_PROG}: mkdir -p failed for {target}: {exc}", file=sys.stderr)
         return 1
 
-    # -----------------------------------------------------------------
-    # Git init — pin to branch main
-    # -----------------------------------------------------------------
     git_rc = _git_init_main(target)
     if git_rc != 0:
         return git_rc
 
-    # -----------------------------------------------------------------
-    # Template render (next-app only; empty template has no source tree)
-    # -----------------------------------------------------------------
     if template == "next-app":
         doe_root, doe_rc = _resolve_doe_root()
         if doe_root is None:
@@ -505,11 +428,6 @@ def main(argv: List[str]) -> int:
             except (OSError, shutil.Error) as exc:
                 print(f"{_PROG}: copying rendered tree into {target} failed: {exc}", file=sys.stderr)
                 return 1
-            # DR-276: declare every file the copytree actually landed under
-            # `target`, walked post-copy (not the staging tree) so the
-            # declared paths are the real destination this write claims —
-            # a scaffolder writing many files declares each one, not the
-            # target directory once.
             staging_path = Path(staging)
             target_path = Path(target)
             for rendered_file in staging_path.rglob("*"):
@@ -518,9 +436,6 @@ def main(argv: List[str]) -> int:
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
-    # -----------------------------------------------------------------
-    # Seed files (always written, for all templates)
-    # -----------------------------------------------------------------
     coordinator_project_type = "web-dev" if template == "next-app" else "general"
     coordinator_local_path = os.path.join(target, "coordinator.local.md")
     readme_path = os.path.join(target, "README.md")
@@ -532,14 +447,10 @@ def main(argv: List[str]) -> int:
     except OSError as exc:
         print(f"{_PROG}: writing seed files failed: {exc}", file=sys.stderr)
         return 1
-    # DR-276: declared after both writes land — the contract is a report of
     # what was ACTUALLY written, not of an intended surface.
     declare_write(coordinator_local_path)
     declare_write(readme_path)
 
-    # -----------------------------------------------------------------
-    # Smoke (unless --no-smoke) — for next-app only
-    # -----------------------------------------------------------------
     if not no_smoke and template == "next-app":
         print(f"Running smoke checks in {target}...")
         pnpm = shutil.which("pnpm") or "pnpm"
@@ -556,10 +467,6 @@ def main(argv: List[str]) -> int:
 
         print("Smoke checks passed.")
 
-    # -----------------------------------------------------------------
-    # Self-register repos.<slug> in machine-local (kills the DoE-side
-    # inline Phase 4.5 fence entirely).
-    # -----------------------------------------------------------------
     reg_rc = _register_repo(project_name, target)
     if reg_rc != 0:
         return reg_rc

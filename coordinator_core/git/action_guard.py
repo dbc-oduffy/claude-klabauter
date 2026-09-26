@@ -85,11 +85,6 @@ import re
 from typing import Sequence
 
 #: Same word list `bash_guards.commit_tripwires._DELETION_VERBS` validates
-#: (0 false positives over the 699-commit measurement recorded in the row
-#: above) -- kept as its own copy rather than imported, since this module's
-#: own negative spec is zero cross-module coupling beyond the two lazy
-#: `commit.py`/`block_subagent_commit` imports it already carries, and this
-#: predicate needs neither of those.
 _DELETION_VERBS = re.compile(
     r"\b("
     r"delet\w*|remov\w*|rm|retir\w*|drop(s|ped|ping)?|gravestone\w*|"
@@ -107,26 +102,6 @@ def assert_pathspec_shape_permitted(
     include_orphans: bool,
     git_root: str,
 ) -> None:
-    """Consults ONLY the sweeping/orphan/out-of-repo legs
-    (`block_subagent_commit._pathspec_shape_permitted`), which need no
-    caller identity -- this wrapper takes no `session_id` parameter at
-    all, so the ownership leg (`assert_paths_in_session_scope`) is never
-    reachable through it. That leg fails closed on an empty/unverified
-    `session_id`, so calling the ownership-scoped predicate on a route
-    with no verified identity would deny every op-route commit; passing
-    it a caller-supplied `session_id` would launder an unverified identity
-    into the ownership check this seam's negative spec forbids.
-
-    Raises `coordinator_core.git.commit.CommitDeniedByActionGuard` on a
-    sweeping pathspec, orphan adoption, or out-of-repo absolute element --
-    the three shape-only LEG 3 refusals, minus ownership scope. Raised
-    directly as that `CommitRefused` subclass, via a function-body lazy
-    import (review: overengineering-reviewer Finding 7, 2026-08-30) --
-    `commit.commit_paths` calls this with no try/except of its own, and
-    the deny is still catchable both as `CommitDeniedByActionGuard`
-    specifically and as `CommitRefused` generically by every existing
-    caller.
-    """
     from coordinator_core.bash_guards.block_subagent_commit import (
         _pathspec_shape_permitted,
     )
@@ -183,21 +158,6 @@ def assert_noncooperative_identity_available() -> None:
 
 
 def assert_no_undeclared_staged_deletion(paths: Sequence[str], message: str) -> None:
-    """Raises `coordinator_core.git.commit.CommitDeniedByActionGuard` when
-    `paths` (the GENUINE, HEAD-tracked deletions this commit is about to
-    land -- never a declared-but-already-absent path; see `commit_paths`'
-    own `declared_absent_from_head` split) is non-empty and `message` does
-    not mention a removal anywhere in its body.
-
-    `paths` costs its caller nothing extra to supply: `commit_paths` already
-    walks its tree spine to separate a real deletion from a phantom one
-    (`no_delta`/`declared_absent_from_head`), so this reuses that walk
-    rather than adding one of its own -- zero added spawns, zero added
-    reads, matching the bash-route sibling's own cost note.
-
-    Fails open (no raise) on an empty `paths` -- an ordinary commit that
-    declares no deletion pays nothing here, same as the bash-route check.
-    """
     if not paths:
         return
     if _DELETION_VERBS.search(message or ""):

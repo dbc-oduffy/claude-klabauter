@@ -1,20 +1,3 @@
-"""
-Tests for coordinator_core.housekeeping.archive_index — the id -> [path]
-archive candidate index, revalidated by scandir (plan chunk C4).
-
-Covers: build_index's basic id -> path mapping (including the archive's
-both-shapes layout, nested and root-level), revalidate's add/modify/delete
-detection (including the in-place-modify-with-unchanged-size case the spike
-verdict's own probe trap calls out), and the 5ms independent leg budget on
-the ~1,470-record corpus fixture (C1).
-
-Spec backlink: docs/plans/2026-08-29-the-housekeeping-cycle-stops-committing.md
-  § C4.
-
-Negative-spec: this file does NOT test C5's resolver (the act-time re-read
-that turns a candidate into a verdict) — only the index's own build/lookup/
-revalidate mechanics.
-"""
 
 from __future__ import annotations
 
@@ -32,25 +15,13 @@ from coordinator_core.housekeeping.tests.corpus_fixture import build_corpus
 
 
 def _write_record(path: Path, blocker_id: str, body: str = "body\n") -> None:
-    """`blocker_id` is written as `stub_id` -- what the index keys on, and
-    what a gate's `blocked_by` actually names. Deliberately NOT `handoff_id`:
-    an index keyed by handoff_id is one no blocker lookup can ever hit."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    # newline="" disables Windows' \n -> \r\n write-time translation, so a
-    # byte-length comparison between two writes of same-length text (the
-    # unchanged-size in-place-modify test below) is not corrupted by CRLF
-    # expansion.
     path.write_text(
         f"---\nhandoff_id: hnd-for-{blocker_id}\nstub_id: {blocker_id}"
         f"\ndeployment_state: closed\n---\n{body}",
         encoding="utf-8",
         newline="",
     )
-
-
-# ---------------------------------------------------------------------------
-# build_index — basic mechanics
-# ---------------------------------------------------------------------------
 
 
 def test_build_index_maps_id_to_path(tmp_path):
@@ -86,7 +57,6 @@ def test_build_index_missing_id_field_is_omitted_not_an_error(tmp_path):
 
     index = build_index(archive_dir)
     assert index.lookup("anything") == []
-    # the file is still real and stat-tracked, even though it has no id
     assert str(p) in index.stat_by_path
 
 
@@ -105,22 +75,11 @@ def test_build_index_onerror_receives_permission_errors(tmp_path):
     def onerror(err: OSError) -> None:
         seen_errors.append(err)
 
-    # Simulate a scan gap by pointing a sub-scandir at a nonexistent dir via
-    # a broken symlink-free approach: scandir a path that gets removed
-    # mid-flight is hard to force portably, so this asserts the onerror
-    # plumbing directly by invoking scandir on a missing directory through
-    # build_index's own internal walk entrypoint semantics -- the archive
-    # root itself does not exist.
     missing_root = tmp_path / "does-not-exist"
     index = build_index(missing_root, onerror=onerror)
     assert index.by_id == {}
     assert len(seen_errors) == 1
     assert isinstance(seen_errors[0], OSError)
-
-
-# ---------------------------------------------------------------------------
-# revalidate — add / modify / delete detection
-# ---------------------------------------------------------------------------
 
 
 def test_revalidate_detects_a_new_file(tmp_path):
@@ -153,11 +112,6 @@ def test_revalidate_detects_a_deleted_file(tmp_path):
 
 
 def test_revalidate_detects_true_in_place_modify(tmp_path):
-    """Existing file, same name, same directory, content changed -- the
-    probe trap the spike verdict names: assert the target exists BEFORE
-    modifying it, or open(..., 'a') on a path the fixture never created
-    would measure an ADD (which directory-mtime also catches), producing a
-    false pass for the in-place-modify claim this test exists to check."""
     archive_dir = tmp_path / "archive" / "handoffs"
     p = archive_dir / "modme.md"
     _write_record(p, "hnd-before", body="original body\n")
@@ -166,9 +120,6 @@ def test_revalidate_detects_true_in_place_modify(tmp_path):
     index = build_index(archive_dir)
     before_sig = index.stat_by_path[str(p)]
 
-    # Force a distinguishable mtime regardless of filesystem timestamp
-    # resolution -- the correctness claim under test is signature
-    # comparison, not wall-clock timing.
     new_mtime = time.time() + 5
     _write_record(p, "hnd-after", body="original body\n")
     os.utime(p, (new_mtime, new_mtime))
@@ -181,8 +132,6 @@ def test_revalidate_detects_true_in_place_modify(tmp_path):
 
 
 def test_revalidate_detects_in_place_modify_with_unchanged_size(tmp_path):
-    """The spike's own discriminating case: mtime is the ONLY signal when
-    the modified content happens to be exactly the same byte length."""
     archive_dir = tmp_path / "archive" / "handoffs"
     p = archive_dir / "samesize.md"
     _write_record(p, "hnd-aaaa")
@@ -192,7 +141,6 @@ def test_revalidate_detects_in_place_modify_with_unchanged_size(tmp_path):
     before_sig = index.stat_by_path[str(p)]
     before_size = p.stat().st_size
 
-    # "hnd-aaaa" -> "hnd-bbbb": same length, different content.
     with open(p, encoding="utf-8", newline="") as _f:
         text = _f.read().replace("hnd-aaaa", "hnd-bbbb")
     assert len(text.encode("utf-8")) == len(p.read_bytes()), (
@@ -237,11 +185,6 @@ def test_revalidate_id_change_removes_stale_empty_id_entry(tmp_path):
     assert "hnd-old-id" not in index.by_id
     assert index.lookup("hnd-new-id") == [p]
 
-
-# ---------------------------------------------------------------------------
-# Leg budget — 5ms independent, at the real corpus's ~1,470-archived-record
-# scale (C1's corpus fixture).
-# ---------------------------------------------------------------------------
 
 _REVALIDATE_BUDGET_MS = 5.0
 _N_OUTER = 5
@@ -294,14 +237,6 @@ def scaled_index(tmp_path_factory):
 
 
 def test_revalidate_leg_budget_on_full_scale_corpus(scaled_index):
-    """Leg budget, asserted independently (chunk C4 body): 5ms, tighter than
-    the target-shape doc's 20ms row -- the spike measured 1.95ms at 1,470
-    files, so 5ms is still 2.5x headroom. Median CPU (time.process_time)
-    over N_REPS reps of a steady-state (no-change) revalidate pass, matching
-    this repo's own convention for Windows tick-quantised timing
-    (test_head_scan.py-adjacent modules; test_archival_commit_process_
-    budget.py's own k-batching rationale) applied at module scope, not job
-    -object scope, since this leg is pure Python with zero subprocesses."""
     _fixture, index = scaled_index
     assert len(index.stat_by_path) == pytest.approx(1470, rel=0.05), (
         "budget must be measured at the real corpus's ~1,470-archived-record "

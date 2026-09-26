@@ -1,13 +1,3 @@
-"""
-Tests for coordinator_core.ops.verify_scout_inventory_completeness —
-"research.verify_scout_inventory_completeness" op.
-
-Covers the pure existence + min-line-count contract over a throwaway
-tasks/**/scratch/ tree, the common_dir → worktree derivation via a real
-tmp_path git repo (never against the working repo), the structured-error
-premises (malformed expected_files / min_lines), and the AC7
-double-invocation proof.
-"""
 
 from __future__ import annotations
 
@@ -18,8 +8,6 @@ import pytest
 from coordinator_core.ipc import get_op_handler
 from coordinator_core.ops import verify_scout_inventory_completeness as mod
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -33,17 +21,11 @@ def _git(repo, *args):
         check=True,
         capture_output=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )  # popup-safe-env-suppressed
+    )
 
 
 @pytest.fixture
 def repo(tmp_path):
-    """Throwaway git repo whose .git dir is the engine-supplied common_dir.
-
-    Seeds tasks/demo/scratch/ with one 40-line "complete" inventory file and
-    one 5-line "short" inventory file; a third expected entry is never
-    written at all (the "missing" case).
-    """
     root = tmp_path / "repo"
     root.mkdir()
     _git(root, "init")
@@ -63,11 +45,6 @@ def repo(tmp_path):
 
 def _expected(names):
     return [f"tasks/demo/scratch/{name}" for name in names]
-
-
-# ---------------------------------------------------------------------------
-# Pure function — direct worktree arg
-# ---------------------------------------------------------------------------
 
 
 def test_all_present_and_long_enough_is_complete(repo):
@@ -126,17 +103,10 @@ def test_empty_expected_files_is_vacuously_complete(repo):
 
 
 def test_double_invocation_identical_results(repo):
-    """AC7: pure read — two back-to-back calls with identical inputs against
-    an unchanged tree return identical results."""
     expected = _expected(["complete.md", "short.md", "absent.md"])
     first = mod.verify_scout_inventory_completeness(expected, worktree=repo)
     second = mod.verify_scout_inventory_completeness(expected, worktree=repo)
     assert first == second
-
-
-# ---------------------------------------------------------------------------
-# Handler — params validation + common_dir -> worktree derivation
-# ---------------------------------------------------------------------------
 
 
 def test_op_registered_and_handler_contract(repo):

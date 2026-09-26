@@ -90,11 +90,6 @@ from coordinator_core.reconcile.gate_eval import (
 
 
 def _roadmap_handoff(handoff_id: str, blocked_by, blocks=None) -> dict:
-    # Sets BOTH `id` and `handoff_id` to the same durable `hnd-...` value: the
-    # collector only ever synthesizes `id` from a path stem (never `hnd-...`
-    # shaped) in production, so an `hnd-...` fixture id must also populate the
-    # `handoff_id` field or C2c's prefix-discriminated index misses it entirely
-    # (routes to the `handoff_id` sub-index, finds nothing there).
     return {
         "id": handoff_id,
         "handoff_id": handoff_id,
@@ -133,7 +128,6 @@ class TestAllShippedClear:
 
 class TestPartialSatisfactionNarrows:
     def test_one_of_two_shipped_narrows_not_clears(self) -> None:
-        # tc-4 regression guard: blocked_by:[tc-1, tc-5], only tc-1 shipped.
         dependent = _roadmap_handoff(
             "hnd-tc4-000001", blocked_by=["hnd-tc1-000001", "hnd-tc5-000001"]
         )
@@ -162,9 +156,6 @@ class TestAbandonedBlockerSurfaces:
 
 
 class TestAbandonedWithStillOpenNoShippedSurfaces:
-    """Slice-A review Finding 3 (P2): blocked_by:[abandoned, still_open] with NO
-    shipped member must return `surface`, not `narrow` — there is no edge to
-    actually narrow (cleared_by_shas would be empty)."""
 
     def test_abandoned_and_still_open_no_shipped_surfaces_not_narrow(self) -> None:
         dependent = _roadmap_handoff(
@@ -200,7 +191,6 @@ class TestMixedShippedAbandonedComposite:
 class TestAsymmetricGraphFailsLoud:
     def test_blocks_blocked_by_asymmetry_surfaces(self) -> None:
         dependent = _roadmap_handoff("hnd-dep-000004", blocked_by=["hnd-tc1-000003"])
-        # tc1 does NOT list hnd-dep-000004 in its own `blocks` -> asymmetry.
         tc1 = _blocker("hnd-tc1-000003", "shipped", shipped_in="d" * 40, blocks=[])
 
         result = evaluate_gate(dependent, [dependent, tc1])
@@ -264,15 +254,6 @@ class TestProseGateAmbiguousCandidates:
 
 
 class TestEmptyBlockedByNoProseVacuouslyClears:
-    """C4 reconciliation: this previously asserted `verdict == "surface"`
-    (old behavior — empty `blocked_by` fell through to the PROSE fallback
-    path, which surfaces on zero witness_candidates). `evaluate_gate` now
-    routes an empty-`blocked_by`-and-no-prose handoff through the SAME
-    vacuous-`clear` branch `evaluate_gate_triage` already used (for-all over
-    an empty set), rather than the prose fallback — updated deliberately per
-    the C4 dispatch brief, not a silent premise change: this is also the
-    fix for a spinoff with `predecessor`/`origin_*` lineage fields and
-    nothing else gating it (see module docstring "LINEAGE IS NOT GATING")."""
 
     def test_roadmap_handoff_with_empty_blocked_by_and_no_prose_clears(self) -> None:
         handoff = {
@@ -289,12 +270,6 @@ class TestEmptyBlockedByNoProseVacuouslyClears:
 
 
 class TestDanglingBlockedByRefSurfaces:
-    """2026-07-20 claude-central-em false-positive memo, Defect 1 recommendation:
-    an unresolvable `blocked_by` id is a genuine data defect (a dangling ref),
-    not a benign steady state. `not-cleared` is deliberately NOT surfaced by
-    `handoff_reconcile.py` — falling through to it here would silently swallow
-    a real problem. Superseded assertion: this previously asserted
-    `verdict == "not-cleared"`; updated deliberately per the memo."""
 
     def test_unresolvable_blocker_id_now_surfaces_with_dangling_evidence(self) -> None:
         dependent = _roadmap_handoff("hnd-dep-000005", blocked_by=["hnd-ghost-000001"])
@@ -316,11 +291,7 @@ class TestPlaceholderShapedBlockedByDoesNotResolve:
     blocker must surface as dangling, never silently resolve/clear."""
 
     def test_placeholder_shaped_blocker_id_surfaces_as_dangling_not_clear(self) -> None:
-        # Blocker is a real, `shipped` handoff on disk — but its id is
         # placeholder-shaped, so `_HANDOFF_ID_PATTERN` refuses to index it at
-        # all (same as a genuinely absent/never-existed blocker id from the
-        # resolver's point of view): this is what makes the id "dangling"
-        # despite the underlying handoff being real and terminal.
         placeholder_id = "hnd-placeholder-replace-with-one-l-5f04ba"
         dependent = _roadmap_handoff("hnd-dep-000005", blocked_by=[placeholder_id])
 
@@ -332,12 +303,6 @@ class TestPlaceholderShapedBlockedByDoesNotResolve:
 
 
 class TestNamespaceMismatchSymmetricGraphDoesNotSurface:
-    """2026-07-20 claude-central-em false-positive memo, Defect 1: the handoff
-    under evaluation carries a path-stem `id` (injected by `_collect_open_handoffs`
-    when the roadmap stub's frontmatter has no `id:` field of its own) alongside
-    its durable `stub_id`; the blocker's `blocks:[...]` list names the durable
-    `stub_id`, not the path-stem id. This symmetric graph must NOT surface as
-    asymmetry — the previous single-key comparison fired on every such edge."""
 
     def test_stub_id_vs_path_stem_id_symmetric_graph_does_not_surface(self) -> None:
         dependent = {
@@ -364,14 +329,6 @@ class TestNamespaceMismatchSymmetricGraphDoesNotSurface:
 
 
 def _sat_stub(stub_id: str, deployment_state: str, blocked_by, blocks=None, shipped_in=None) -> dict:
-    """Real `sat`-family corpus shape (`state/handoffs/2026-07-28_100000_
-    roadmap-sat-08.md`, `archive/handoffs/2026-07/2026-07-17_160000..160006_
-    roadmap-sat-0{1..7}.md`): `kind: roadmap-baton`, a bare `stub_id`, and NO
-    `id:` frontmatter field of its own (the collector only ever synthesizes a
-    path-stem `id` for these, never `hnd-...`-shaped) — the exact namespace
-    `_has_asymmetry`'s candidate-set fix (`{stub_id, id}` vs. a single key)
-    exists to resolve, unlike `_roadmap_handoff`'s synthetic `hnd-...` shape
-    above."""
     d: Dict[str, Any] = {
         "stub_id": stub_id,
         "kind": "roadmap-baton",
@@ -385,17 +342,6 @@ def _sat_stub(stub_id: str, deployment_state: str, blocked_by, blocks=None, ship
 
 
 class TestSatFamilyOracleAsymmetryFalsePositivesGoToZero:
-    """AC8 (docs/plans/2026-08-25-reconcile-open-comes-back-under-the-bar.md):
-    the 6 `sat`-family rows the ported oracle fixture
-    (`fixtures/stale_record_triage_oracle.yaml`) tags `is_false_positive: true`,
-    `detector_bug: asymmetry_detector_bare_stub_id` — sat-02..sat-07 — must all
-    resolve to NO asymmetry finding against the real, symmetric `sat` graph
-    (reconstructed from the corpus records named in `_sat_stub`'s docstring).
-    AC11 (same chunk): a genuinely asymmetric roadmap-baton edge in the SAME
-    graph shape must still surface — a detector that goes silent on every
-    roadmap-baton edge would pass the six-rows-to-zero half of this test
-    vacuously.
-    """
 
     def _sat_family_corpus(self) -> "List[Dict[str, Any]]":
         sat01 = _sat_stub("sat-01", "continued", blocked_by=[], blocks=["sat-02"])
@@ -413,10 +359,6 @@ class TestSatFamilyOracleAsymmetryFalsePositivesGoToZero:
         sat05 = _sat_stub(
             "sat-05", "shipped", blocked_by=["sat-02"], blocks=["sat-06"], shipped_in="4" * 40,
         )
-        # sat-06 at the ported audit's 2026-07-20 date (blocked by BOTH sat-04
-        # and sat-05, per their own `blocks:` lists above) — the live corpus
-        # since cleared this to `blocked_by: []` once the gate freed, but the
-        # audited row is this earlier, still-gated shape.
         sat06 = _sat_stub("sat-06", "awaiting_gate", blocked_by=["sat-04", "sat-05"], blocks=[])
         sat07 = _sat_stub("sat-07", "awaiting_gate", blocked_by=["sat-04"], blocks=[])
         return [sat01, sat02, sat03, sat04, sat05, sat06, sat07]
@@ -434,9 +376,6 @@ class TestSatFamilyOracleAsymmetryFalsePositivesGoToZero:
         )
 
     def test_genuine_roadmap_baton_asymmetry_still_surfaces(self) -> None:
-        # AC11: sat-09 claims sat-06 blocks it, but sat-06's own `blocks:`
-        # list (above) never names sat-09 back — a real data defect in the
-        # SAME roadmap-baton shape the six rows above now clear correctly.
         corpus = self._sat_family_corpus()
         sat09 = _sat_stub("sat-09", "awaiting_gate", blocked_by=["sat-06"], blocks=[])
         corpus = corpus + [sat09]
@@ -448,9 +387,6 @@ class TestSatFamilyOracleAsymmetryFalsePositivesGoToZero:
 
 
 class TestNarrowWithUnresolvedIdAlsoSurfaces:
-    """Defect 1 narrow-path parity: a `narrow` verdict whose remaining_blockers
-    includes a dangling (unresolvable) id must ALSO carry `also_surface=True`,
-    mirroring the abandoned-id composite (TestMixedShippedAbandonedComposite)."""
 
     def test_shipped_plus_unresolved_narrows_and_also_surfaces(self) -> None:
         dependent = _roadmap_handoff(
@@ -467,12 +403,6 @@ class TestNarrowWithUnresolvedIdAlsoSurfaces:
 
 
 class TestScanIncompleteUnresolvedDoesNotClearNamesScanGap:
-    """2026-07-22 fail-open close: `handoff_reconcile.py`'s `_collect_all_handoffs_for_gate_index`
-    (94d8251f) surfaces `scan_incomplete`/`scan_errors` when the archive/handoffs/
-    subtree behind the gate index couldn't be fully scanned. An unresolvable
-    `blocked_by` id under that condition must still NOT clear — it stays surfaced —
-    but the evidence must name the scan gap rather than assert a confirmed dangling
-    ref, since the id may simply live under the unscanned subtree."""
 
     def test_scan_incomplete_unresolvable_blocker_surfaces_with_scan_gap_reason(self) -> None:
         dependent = _roadmap_handoff("hnd-dep-000011", blocked_by=["hnd-ghost-000011"])
@@ -492,9 +422,6 @@ class TestScanIncompleteUnresolvedDoesNotClearNamesScanGap:
 
 
 class TestScanIncompletePositivelyResolvedStillClears:
-    """Positive resolution off a partial index is not diminished by
-    `scan_incomplete` — finding a shipped blocker proves it exists regardless of
-    what else the scan missed."""
 
     def test_scan_incomplete_all_shipped_still_clears(self) -> None:
         dependent = _roadmap_handoff("hnd-dep-000012", blocked_by=["hnd-tc1-000012"])
@@ -514,8 +441,6 @@ class TestScanIncompletePositivelyResolvedStillClears:
 
 
 class TestScanCompleteBaselineUnchanged:
-    """scan_incomplete defaults to False — the pre-existing dangling-ref framing
-    (data defect, not a scan gap) is unchanged when the caller doesn't pass it."""
 
     def test_scan_complete_unresolvable_blocker_keeps_dangling_reason(self) -> None:
         dependent = _roadmap_handoff("hnd-dep-000013", blocked_by=["hnd-ghost-000013"])
@@ -533,21 +458,10 @@ class TestCycleGuard:
 
         result = evaluate_gate(dependent, [dependent])
 
-        # Bounded one-level walk with a visited-set guard; self-reference resolves
-        # to itself (not shipped) rather than recursing — still-not-cleared, not a
-        # crash or infinite loop.
         assert result["verdict"] in {"not-cleared", "surface"}
 
 
-# ---------------------------------------------------------------------------
-# C4 — reconciliation: evaluate_gate now shares _is_structured_gate with
-# evaluate_gate_triage, widened to ANY kind, with prose-dominance parity.
-# ---------------------------------------------------------------------------
-
-
 class TestWidenedEligibilityNonRoadmapKindClears:
-    """AC5, scenario 1: a `kind: spinoff` baton (NOT `spinoff-roadmap`) with a
-    shipped blocker CLEARS — the widened, kind-independent eligibility."""
 
     def test_non_roadmap_kind_with_shipped_blocker_clears(self) -> None:
         dependent = {
@@ -574,11 +488,6 @@ class TestWidenedEligibilityNonRoadmapKindClears:
 
 
 class TestProseDominanceNeverClearsMutatingPath:
-    """AC5, scenario 2: a baton with BOTH a non-empty `blocked_by` AND a
-    non-empty `gate_dependency` does NOT clear even with all structured
-    members shipped — reconciled parity with `evaluate_gate_triage`'s own
-    precedence rule (strang-03 shape: the prose gate is the real
-    precondition, `blocked_by` merely tracks sibling pattern-proofs)."""
 
     def test_both_blocked_by_and_gate_dependency_all_shipped_does_not_clear(self) -> None:
         dependent = _roadmap_handoff(
@@ -625,10 +534,6 @@ class TestBlockingNotesNoLongerDominatesSatisfiedStructuredSet:
 
 
 class TestBlockingNotesDominatesVacuousEmptyBlockedBy:
-    """The Windows-box regression shape this chunk exists to fix: `awaiting_
-    gate`, `blocked_by: []`, non-empty `blocking_notes` -> NOT clear. Before
-    this fix, the vacuous-empty branch checked only `gate_dependency` and
-    silently cleared a real, unmet, human-checkable gate."""
 
     def test_empty_blocked_by_with_blocking_notes_does_not_vacuously_clear(self) -> None:
         handoff = {
@@ -650,9 +555,6 @@ class TestBlockingNotesDominatesVacuousEmptyBlockedBy:
 
 
 class TestEmptyBlockedByEmptyBlockingNotesStillVacuouslyClears:
-    """Guard against overcorrection: the change must not make every ungated
-    baton sticky — an empty (or absent) `blocking_notes` alongside an empty
-    `blocked_by` and no `gate_dependency` still vacuously clears."""
 
     def test_empty_blocked_by_absent_blocking_notes_clears(self) -> None:
         handoff = {
@@ -683,8 +585,6 @@ class TestEmptyBlockedByEmptyBlockingNotesStillVacuouslyClears:
 
 
 class TestWhitespaceOnlyBlockingNotesIsEmptyNotAGate:
-    """A whitespace-only `blocking_notes` must not park a baton forever —
-    it is treated as empty, exactly as `gate_dependency` already is."""
 
     def test_whitespace_only_blocking_notes_still_vacuously_clears(self) -> None:
         handoff = {
@@ -702,10 +602,6 @@ class TestWhitespaceOnlyBlockingNotesIsEmptyNotAGate:
 
 
 class TestAsymmetryGuardSkipsNonRoadmapKindBlocker:
-    """Blast-radius fix: `_has_asymmetry` assumed every blocker authors a
-    `blocks:` back-reference (a roadmap-kind convention). Widening
-    eligibility to ANY kind means a non-roadmap-kind blocker that never
-    adopted that convention must NOT fire a false-positive asymmetry."""
 
     def test_non_roadmap_kind_blocker_with_no_blocks_field_does_not_surface(self) -> None:
         dependent = {
@@ -716,8 +612,6 @@ class TestAsymmetryGuardSkipsNonRoadmapKindBlocker:
             "blocked_by": ["hnd-asym-guard-blocker-000001"],
             "blocks": [],
         }
-        # Blocker is a non-roadmap kind and carries NO `blocks:` field at all
-        # (the realistic shape for a kind that never adopted the convention).
         blocker = {
             "id": "hnd-asym-guard-blocker-000001",
             "handoff_id": "hnd-asym-guard-blocker-000001",
@@ -732,16 +626,7 @@ class TestAsymmetryGuardSkipsNonRoadmapKindBlocker:
         assert result["cleared_by_shas"] == ["4" * 40]
 
 
-# ---------------------------------------------------------------------------
-# evaluate_gate_triage — freed / still-blocked / indeterminate three-way,
-# added for the stale-awaiting_gate batch-audit use case.
-# ---------------------------------------------------------------------------
-
-#: The "dead" (terminal-but-not-shipped) states, derived from the SAME
 #: schema-backed enum `gate_eval.py` itself reads — HANDOFF_TERMINAL_DEPLOYMENT
-#: minus "shipped". Iterating this set (rather than hard-coding
-#: "abandoned"/"continued"/"closed" literals) means a future enum widening is
-#: automatically exercised by these tests, not silently missed.
 _DEAD_STATES = sorted(HANDOFF_TERMINAL_DEPLOYMENT - {"shipped"})
 
 
@@ -787,8 +672,6 @@ class TestTriagePartialSatisfactionStillBlocked:
 
 
 class TestTriageBlockerItselfAwaitingGateStillBlocked:
-    """Explicit dispatch-brief case: a blocker that is itself still
-    awaiting_gate — genuinely still in the pipeline, not a data anomaly."""
 
     def test_blocker_awaiting_gate_is_still_blocked(self) -> None:
         dependent = _roadmap_handoff("hnd-tri-000004", blocked_by=["hnd-b1-000004"])
@@ -801,9 +684,6 @@ class TestTriageBlockerItselfAwaitingGateStillBlocked:
 
 
 class TestTriageUnresolvableBlockerIndeterminate:
-    """Explicit dispatch-brief case: a blocker id that exists nowhere in the
-    live+archived index — the machine cannot confirm shipped-ness, so this is
-    indeterminate, never freed and never confidently still-blocked."""
 
     def test_unresolvable_blocker_is_indeterminate(self) -> None:
         dependent = _roadmap_handoff("hnd-tri-000005", blocked_by=["hnd-ghost-000005"])
@@ -816,9 +696,6 @@ class TestTriageUnresolvableBlockerIndeterminate:
 
 
 class TestTriageDeadBlockerIndeterminate:
-    """Every terminal-but-not-shipped state (abandoned/continued/closed, derived
-    from the schema-backed enum) makes the dependent indeterminate, never
-    freed — the dependent's premise may be moot and needs a human look."""
 
     def test_dead_blocker_states_are_indeterminate(self) -> None:
         for dead_state in _DEAD_STATES:
@@ -838,7 +715,6 @@ class TestTriageDeadBlockerIndeterminate:
 class TestTriageAsymmetryIndeterminate:
     def test_blocks_blocked_by_asymmetry_is_indeterminate(self) -> None:
         dependent = _roadmap_handoff("hnd-tri-000006", blocked_by=["hnd-b1-000006"])
-        # b1 does NOT list hnd-tri-000006 in its own `blocks` -> asymmetry.
         b1 = _blocker("hnd-b1-000006", "shipped", shipped_in="c" * 40, blocks=[])
 
         result = evaluate_gate_triage(dependent, [dependent, b1])
@@ -878,17 +754,10 @@ class TestTriageProseGateDominanceReroutesToReviewDueWhenStructuredAllShipped:
 
         assert result["status"] == "review-due"
         assert result["has_prose_gate"] is True
-        # Structured classification is never even reached — shipped_ids stays
-        # the base-case empty list, not ["hnd-b1-000007"], demonstrating the
-        # precedence check runs BEFORE the structured walk.
-        # restored, still true.
         assert result["shipped_ids"] == []
 
 
 class TestTriageProseOnlyIndeterminate:
-    """A handoff whose gate is ONLY expressed as free-text gate_dependency
-    (non-roadmap kind, or roadmap kind with empty blocked_by) is
-    indeterminate by construction — never parsed with keyword heuristics."""
 
     def test_prose_only_non_roadmap_handoff_is_indeterminate(self) -> None:
         handoff = {
@@ -934,9 +803,6 @@ class TestTriageBlockingNotesNoLongerDominatesSatisfiedStructuredSet:
 
 
 class TestTriageBlockingNotesDominatesVacuousEmptyBlockedBy:
-    """Triage-side twin of `TestBlockingNotesDominatesVacuousEmptyBlockedBy`
-    — the Windows-box regression shape: `blocked_by: []`, non-empty
-    `blocking_notes` -> `indeterminate`, never vacuously `freed`."""
 
     def test_empty_blocked_by_with_blocking_notes_is_indeterminate_not_freed(self) -> None:
         handoff = _roadmap_handoff("hnd-tri-bn-000002", blocked_by=[])
@@ -966,12 +832,6 @@ class TestTriageEmptyBlockedByEmptyBlockingNotesStillVacuouslyFreed:
         assert result["status"] == "freed"
 
 
-# ---------------------------------------------------------------------------
-# Completion-log resolution source (corpus-gap close): a blocker unresolved
-# against the handoff-only index may still have durable shipped-evidence
-# under archive/completed/ (workstream-complete completion records).
-# ---------------------------------------------------------------------------
-
 def _completion_entry(path: str, chain, chain_terminal: bool, status: str = "pending-release", commits=None) -> dict:
     return {
         "path": path,
@@ -985,8 +845,6 @@ def _completion_entry(path: str, chain, chain_terminal: bool, status: str = "pen
 
 
 class TestTriageCompletionLogExactMatchResolvesShipped:
-    """Exact chain==blocker_id match, chain_terminal:true, non-empty commits ->
-    resolves as shipped-equivalent and can produce `freed`."""
 
     def test_exact_chain_terminal_with_commits_frees(self) -> None:
         dependent = _roadmap_handoff("hnd-tri-comp-000001", blocked_by=["strang-02"])
@@ -1005,10 +863,6 @@ class TestTriageCompletionLogExactMatchResolvesShipped:
 
 
 class TestTriageCompletionLogFuzzyMatchStaysIndeterminate:
-    """A blocker_id embedded as a contiguous token-run inside a LONGER,
-    differently-shaped chain slug (the real strang-01 shape) is a heuristic
-    match — never auto-resolved to shipped, stays indeterminate with the
-    candidate evidence surfaced."""
 
     def test_fuzzy_chain_match_does_not_free(self) -> None:
         dependent = _roadmap_handoff("hnd-tri-comp-000002", blocked_by=["strang-01"])
@@ -1029,9 +883,6 @@ class TestTriageCompletionLogFuzzyMatchStaysIndeterminate:
 
 
 class TestTriageCompletionLogNonTerminalEntryDoesNotResolve:
-    """A completion entry that is NOT chain_terminal must not clear a blocker
-    on its own — an in-progress workstream session entry is not proof the
-    whole chain landed."""
 
     def test_non_chain_terminal_entry_does_not_free(self) -> None:
         dependent = _roadmap_handoff("hnd-tri-comp-000003", blocked_by=["strang-03"])
@@ -1051,10 +902,6 @@ class TestTriageCompletionLogNonTerminalEntryDoesNotResolve:
 
 
 class TestTriageCompletionLogPendingReleaseCountsAsShippedEquivalent:
-    """Explicit derivation check: `status: pending-release` (the ONLY status
-    value ever observed in this corpus) does NOT block the exact-chain-
-    terminal-with-commits resolution — 'shipped' means landed-as-commits,
-    not released-to-users, per the ratified lifecycle_constants precedent."""
 
     def test_pending_release_status_still_resolves_exact_match(self) -> None:
         dependent = _roadmap_handoff("hnd-tri-comp-000004", blocked_by=["qsub-02x"])
@@ -1090,9 +937,6 @@ class TestTriageCompletionLogNoMatchStaysUnresolved:
 
 
 class TestTriageCompletionLogAmbiguousExactMatchesStayIndeterminate:
-    """Two exact chain_terminal+commits-bearing matches for the SAME id ->
-    ambiguous, never guess which one — mirrors the prose-path's own
-    '>1 candidate -> surface' rule."""
 
     def test_multiple_exact_terminal_matches_stay_indeterminate(self) -> None:
         dependent = _roadmap_handoff("hnd-tri-comp-000006", blocked_by=["dup-01"])
@@ -1134,10 +978,6 @@ def _non_roadmap_handoff(handoff_id: str, **extra) -> dict:
 
 
 class TestTriageGateEvidencePrecedenceMatrix:
-    """C3 D2 — the full precedence matrix: prose-only, evidence-only,
-    both-with-covers_prose, both-without-covers_prose, neither. The
-    both-with-covers_prose case is the load-bearing one (evidence wins,
-    prose demoted to commentary)."""
 
     def test_prose_only_is_indeterminate(self) -> None:
         handoff = _non_roadmap_handoff(
@@ -1183,16 +1023,6 @@ class TestTriageGateEvidencePrecedenceMatrix:
         assert "gate_evidence covers_prose:True" in result["reason"]
 
     def test_blocking_notes_dominates_even_when_covers_prose_satisfied(self) -> None:
-        """Regression test, updated for
-        C4's blocking_notes demotion (docs/plans/2026-08-03-gate-dependency-
-        template-emission-spec.md § C4): `blocked_by` is empty on this fixture
-        (`_non_roadmap_handoff` sets no `blocked_by`), so `blocking_notes`
-        dominance still applies in its narrowed, empty-`blocked_by`-only form
-        — `gate_dependency` present + `gate_evidence.covers_prose: True` (the
-        same satisfied-evidence shape that frees in
-        `test_both_with_covers_prose_evidence_wins_and_frees` above) + a
-        non-empty `blocking_notes` must stay `indeterminate`, never `freed`,
-        and must be checked ahead of D2, not after."""
         handoff = _non_roadmap_handoff(
             "hnd-tri-eve-000099", gate_dependency="widget engine migration"
         )
@@ -1210,10 +1040,6 @@ class TestTriageGateEvidencePrecedenceMatrix:
     def test_both_without_covers_prose_stays_indeterminate_even_when_evidence_satisfied(
         self,
     ) -> None:
-        """The D2a guard: a partial gate_evidence backfill (legs resolve, but
-        covers_prose is not asserted True) must NOT silently free a prose
-        gate — this is exactly the inversion the covers_prose gate exists to
-        prevent."""
         handoff = _non_roadmap_handoff(
             "hnd-tri-eve-000004", gate_dependency="widget engine migration"
         )
@@ -1324,37 +1150,7 @@ class TestGateEvidenceEmptyLegsMalformedIndeterminate:
         assert result["status"] == "indeterminate"
 
 
-# ---------------------------------------------------------------------------
-# C9 — lineage-is-not-gating (PM ruling 2026-07-26): predecessor/origin_* must
-# never be read to infer, narrow, or clear a gate. RED by design — the very
-# next chunk rewrites `evaluate_gate`'s routing to fix this; this test only
-# pins the spec and proves today's code trips on it.
-# ---------------------------------------------------------------------------
-
-
 def _real_spinoff_with_lineage_and_no_structured_gate() -> dict:
-    """Modeled on the real, on-disk baton `DoE-claude/state/handoffs/
-    2026-07-08_160001_roadmap-oaxis-01.md` (verified 2026-07-27) — one of the
-    30-of-33 live `awaiting_gate` batons carrying a non-`none` `predecessor`
-    and/or a populated `origin_*` field, per the live-corpus sweep cited in
-    the module docstring's "LINEAGE IS NOT GATING" section. Field names,
-    value shapes (`predecessor: "none"`, `origin_session` a session UUID,
-    `origin_handoff` a `state/handoffs/...` path, `handoff_id`/`stub_id`/
-    `roadmap_id` conventions) are copied verbatim from that real baton.
-
-    One deliberate adaptation from the literal file: the real oaxis-01 baton
-    ALSO carries a non-empty `gate_dependency` prose one-liner ("rag
-    acl-principal axis co-design reply reconciled...") naming a genuinely
-    still-open, unrelated cross-repo gate — that specific instance is not
-    actually ready to fire today, for reasons that have nothing to do with
-    lineage. This fixture omits that field so the scenario isolates exactly
-    the claim under test — an EMPTY `blocked_by` plus lineage fields
-    (`predecessor`/`origin_*`) alone, no other gate of any kind — from the
-    orthogonal, already-covered prose-gate-dominance behavior (see
-    TestTriageProseGateDominatesEvenWhenStructuredClear /
-    TestEmptyBlockedByFallsBackToProseSurface elsewhere in this file). Every
-    other field is the real baton's own shape.
-    """
     return {
         "id": "2026-07-08_160001_roadmap-oaxis-01",
         "handoff_id": "hnd-oaxis-01-cross-repo-vocabulary-7e36b5",
@@ -1402,12 +1198,6 @@ class TestLineageFieldsNeverGateEmptyBlockedBy:
         assert result["remaining_blockers"] == []
 
     def test_triage_projection_already_reports_freed_for_the_same_shape(self) -> None:
-        """Sanity companion (not RED): `evaluate_gate_triage` already treats
-        an empty `blocked_by` with no prose gate as vacuously `freed`,
-        confirming the triage projection does not read lineage fields
-        either — the defect is isolated to `evaluate_gate`'s routing, not
-        to lineage-field leakage in the shared classification primitives
-        (`_classify_blocked_by`/`_has_asymmetry`/`_index_by_id`)."""
         dependent = _real_spinoff_with_lineage_and_no_structured_gate()
 
         result = evaluate_gate_triage(dependent, [dependent])
@@ -1417,16 +1207,6 @@ class TestLineageFieldsNeverGateEmptyBlockedBy:
 
 
 class TestComputeIndexAgreesWithActTimeResolver:
-    """C2c acceptance criterion AC2b: the gate-eval compute index and
-    `handoff_transition._resolve_blocker_deployment_state` (the act-time mutating
-    resolver it must agree with) resolve the SAME `blocked_by` id to the SAME
-    handoff/deployment_state. Before C2c, `_index_by_id` keyed only on `id or
-    stub_id` — a real handoff's synthesized `id` (path stem) never carries the
-    durable `handoff_id` shape the mutating resolver matches against, so every
-    non-roadmap-stub baton read as permanently dangling at compute time while
-    resolving fine at act time. This test builds one real on-disk handoff (as
-    `handoff_transition.py` reads it) and asserts both resolvers land on it.
-    """
 
     def test_same_handoff_id_resolves_to_same_deployment_state_both_resolvers(
         self, tmp_path
@@ -1451,13 +1231,8 @@ class TestComputeIndexAgreesWithActTimeResolver:
             encoding="utf-8",
         )
 
-        # Act-time path: handoff_transition.py re-scans disk fresh.
         act_time_state = _resolve_blocker_deployment_state(blocker_handoff_id, worktree)
 
-        # Compute-time path: gate_eval's index over caller-collected dicts, as
-        # `_collect_open_handoffs`/the archive-scan collector would hand them in
-        # — `id` synthesized from the path stem (never `hnd-...` shaped), the
-        # frontmatter's own `handoff_id` field carried through separately.
         collected = [
             {
                 "id": "2026-07-27-c2c-agreement-check",
@@ -1477,10 +1252,6 @@ class TestComputeIndexAgreesWithActTimeResolver:
         assert compute_time_blocker["handoff_id"] == blocker_handoff_id
 
 
-# ---------------------------------------------------------------------------
-# C5 — continued_into terminus-chase (real lifecycle-vocab corpus shape)
-# ---------------------------------------------------------------------------
-
 _LVV05_STUB_ID = "lvv-05"
 _LVV06_STUB_ID = "lvv-06"
 _TERMINUS_HANDOFF_ID = "hnd-dual-read-claimed-by-consumed--7e3c06"
@@ -1488,9 +1259,6 @@ _TERMINUS_SHA = "cdb5878808f95e1837a9d1e47a1a094b44436f91"
 
 
 def _lvv05_continued(continued_into: str, blocks=None) -> dict:
-    """The real lvv-05 shape: `stub_id` only (no `handoff_id` — matches the
-    actual on-disk frontmatter), `deployment_state: continued`,
-    `continued_into` pointing at its dr084 successor."""
     return {
         "stub_id": _LVV05_STUB_ID,
         "kind": "spinoff-roadmap",
@@ -1502,7 +1270,6 @@ def _lvv05_continued(continued_into: str, blocks=None) -> dict:
 
 
 def _lvv06_dependent(blocked_by=None) -> dict:
-    """The real lvv-06 shape: gated on lvv-05 (+ lvv-03 in the real corpus)."""
     return {
         "stub_id": _LVV06_STUB_ID,
         "handoff_id": "hnd-c5-abandoned-closed-reason-ren-1f686c",
@@ -1515,10 +1282,6 @@ def _lvv06_dependent(blocked_by=None) -> dict:
 
 
 def _terminus(deployment_state: str, shipped_in=None, blocks=None, path=None) -> dict:
-    """The real dr084-skill-layer-dual-read successor shape: a plain `spinoff`
-    (NOT `spinoff-roadmap`), identified only by its durable `handoff_id` — no
-    `blocks:[...]` back-reference to lvv-06 at all (a terminus never authors
-    one; only a roadmap-kind blocker is held to that convention)."""
     d = {
         "handoff_id": _TERMINUS_HANDOFF_ID,
         "kind": "spinoff",
@@ -1534,8 +1297,6 @@ def _terminus(deployment_state: str, shipped_in=None, blocks=None, path=None) ->
 
 
 class TestC5ContinuedIntoStillOpenSurfaces:
-    """The named lvv-05/lvv-06 case: continuation still open at drain time ->
-    must NOT clear."""
 
     def test_open_terminus_narrows_and_surfaces_never_clears(self) -> None:
         lvv05 = _lvv05_continued(continued_into=_TERMINUS_HANDOFF_ID)
@@ -1571,9 +1332,7 @@ class TestC5ContinuedIntoShippedTerminusClears:
         result = evaluate_gate(lvv06, [lvv06, lvv05, terminus])
 
         assert result["verdict"] == "clear"
-        # cleared_by_shas/cleared_blocker_ids stay 1:1-paired against the
         # ORIGINAL blocked_by id (lvv-05), never the terminus id — the
-        # gate-cascade-clear verb requires this pairing.
         assert result["cleared_blocker_ids"] == ["lvv-05"]
         assert result["cleared_by_shas"] == [_TERMINUS_SHA]
         both_hops = [
@@ -1583,12 +1342,9 @@ class TestC5ContinuedIntoShippedTerminusClears:
         assert both_hops, result["evidence"]
 
     def test_asymmetry_check_not_tripped_by_terminus_missing_back_reference(self) -> None:
-        """The terminus carries no `blocks:[...]` naming lvv-06 back at all —
-        this must NOT false-fire asymmetry; only lvv-05's own `blocks:` (which
-        correctly lists lvv-06) is consulted."""
         lvv05 = _lvv05_continued(continued_into=_TERMINUS_HANDOFF_ID, blocks=["lvv-06"])
         lvv06 = _lvv06_dependent(blocked_by=["lvv-05"])
-        terminus = _terminus("shipped", shipped_in=_TERMINUS_SHA)  # no `blocks` at all
+        terminus = _terminus("shipped", shipped_in=_TERMINUS_SHA)
 
         result = evaluate_gate(lvv06, [lvv06, lvv05, terminus])
 
@@ -1597,8 +1353,6 @@ class TestC5ContinuedIntoShippedTerminusClears:
 
 class TestC5ContinuedIntoDepthCap:
     def test_chain_exceeding_depth_cap_surfaces(self) -> None:
-        # Build a straight-line chain of `continued` hops one longer than the
-        # cap, terminating in a `shipped` handoff that is never reached.
         from coordinator_core.reconcile.gate_eval import _MAX_CONTINUATION_CHASE_DEPTH
 
         hop_count = _MAX_CONTINUATION_CHASE_DEPTH + 2
@@ -1653,9 +1407,6 @@ class TestC5ContinuedIntoCycle:
 
 
 class TestC5ContinuedIntoPathFallback:
-    """Pre-existing successors carry no handoff_id — only a `state/handoffs/
-    ...` path. Resolved via basename match against whatever path-shaped field
-    the caller's collector attached; never re-read off disk."""
 
     def test_path_valued_continued_into_resolves_via_basename_and_clears(self) -> None:
         relative_path = "state/handoffs/2026-07-22_152437_dr084-skill-layer-dual-read.md"
@@ -1684,9 +1435,6 @@ class TestC5ContinuedIntoPathFallback:
 
 
 class TestC5TriageProjectionParity:
-    """`evaluate_gate_triage` reuses the SAME `_classify_blocked_by` chase —
-    verify the freed/indeterminate projection matches `evaluate_gate`'s
-    clear/surface outcome on the same corpus shape."""
 
     def test_open_terminus_is_indeterminate_not_freed(self) -> None:
         lvv05 = _lvv05_continued(continued_into=_TERMINUS_HANDOFF_ID)
@@ -1708,9 +1456,6 @@ class TestC5TriageProjectionParity:
 
 
 def _oaxis_handoff(**extra) -> dict:
-    """The C6 motivating record: `blocked_by: []` with a prose gate naming a
-    sibling-REPO fact (example-retrieval-repo is a repo, not a baton — can never be a
-    `blocked_by` slug)."""
     handoff = {
         "id": "oaxis-01",
         "kind": "session-handoff",
@@ -1796,11 +1541,6 @@ class TestC6ExternalGateWitnessedClearsMutatingPath:
         assert any("commitment record not found" in e for e in result["evidence"])
 
     def test_covers_prose_false_falls_back_to_legacy_witness_candidates(self) -> None:
-        """D2a guard, applied to the mutating path too: a partial
-        gate_evidence backfill (leg satisfied) without an explicit
-        `covers_prose: True` must NOT silently free the gate — falls through
-        to the pre-C6 witness_candidates fallback unchanged, which surfaces
-        on zero candidates."""
         handoff = _oaxis_handoff()
         gate_evidence = {
             "covers_prose": False,
@@ -1830,15 +1570,6 @@ class TestC6ExternalGateWitnessedClearsMutatingPath:
         assert result["remaining_blockers"] == []
 
     def test_blocking_notes_dominates_even_when_covers_prose_witnessed(self) -> None:
-        """Regression test, updated for
-        C4's blocking_notes demotion (docs/plans/2026-08-03-gate-dependency-
-        template-emission-spec.md § C4): `_oaxis_handoff` carries `blocked_by:
-        []`, so `blocking_notes` dominance still applies in its narrowed,
-        empty-`blocked_by`-only form — `gate_dependency` present +
-        `gate_evidence.covers_prose: True` (a satisfied witnessed leg, i.e.
-        the exact combination that clears in `test_witnessed_clears` above) +
-        a non-empty `blocking_notes` must NOT resolve to `clear`, and must be
-        checked ahead of the covers_prose Rule 0 branch, not after it."""
         handoff = _oaxis_handoff()
         handoff["blocking_notes"] = "Windows machine required for AC7 verification"
         gate_evidence = {
@@ -1861,10 +1592,6 @@ class TestC6ExternalGateWitnessedClearsMutatingPath:
 
 
 class TestC6ExternalGateCoversProseOverridesStructuredBlockedByToo:
-    """Rule 0 fires before structured routing (mirroring evaluate_gate_triage's
-    own D2 check order) — a `covers_prose: True` evidence block also
-    overrides a NON-empty `blocked_by`, not merely the empty-blocked_by
-    prose-only case."""
 
     def test_non_empty_blocked_by_with_covering_evidence_clears_whole_gate(self) -> None:
         dependent = _roadmap_handoff("hnd-oax-000001", blocked_by=["hnd-tc9-000001"])
@@ -1947,13 +1674,6 @@ class TestC6BooleanObservedKindsRecognizedInTriageToo:
 
 
 class TestC7DisposedDanglingRefDoesNotClearButQuietsEvidence:
-    """C7 AC8 (docs/plans/2026-07-13-claude-klabauter-auto-reconcile-open-handoffs.md
-    § C7): a `blocked_by` id unresolvable in the live+archived index, whose
-    gated handoff carries a `resolved_without_baton` disposition for that id,
-    must stop producing the loud "dangling blocked_by ref(s)" evidence line
-    and must never, by itself, clear the gate — the disposition explains why
-    the ref will never resolve, it does not assert the blocked-on work
-    shipped."""
 
     def test_sole_disposed_blocker_does_not_clear_stays_not_cleared(self) -> None:
         dependent = _roadmap_handoff("hnd-dep-c7-000001", blocked_by=["pcli-01"])
@@ -1990,9 +1710,6 @@ class TestC7DisposedDanglingRefDoesNotClearButQuietsEvidence:
         assert result["verdict"] == "narrow"
         assert result["remaining_blockers"] == ["pcli-03"]
         assert result["cleared_by_shas"] == ["9" * 40]
-        # Quiet: unlike an undispositioned dangling ref (also_surface=True,
-        # TestNarrowWithUnresolvedIdAlsoSurfaces), a disposed id must not
-        # re-trigger the surface signal on every pass.
         assert result["also_surface"] is False
 
     def test_undisposed_dangling_ref_still_fails_loud_alongside_a_disposed_one(self) -> None:
@@ -2022,10 +1739,6 @@ class TestC7DisposedDanglingRefDoesNotClearButQuietsEvidence:
 
 
 class TestC7DisposedDanglingRefTriageProjectionParity:
-    """Same disposition mechanism, `evaluate_gate_triage`'s three-way
-    projection: a disposed-only remainder reports `still-blocked` (never
-    `freed`), and a genuinely dangling+undisposed id still reports
-    `indeterminate` (loud) exactly as before."""
 
     def test_sole_disposed_blocker_is_still_blocked_never_freed(self) -> None:
         handoff = _roadmap_handoff("hnd-dep-c7-tri-000001", blocked_by=["mcollab-01"])
@@ -2072,38 +1785,10 @@ class TestC7DisposedDanglingRefTriageProjectionParity:
         assert result["disposed_ids"] == []
 
 
-# ---------------------------------------------------------------------------
-# C6d — downstream-consequence pin: WHY the roadmap-baton-supersession-hazard
-# plan's C2/C3 (blocked_by_dependents refusal + d6 judgment-point) are
-# load-bearing, not cosmetic. This class pins CURRENT gate_eval.py behaviour
-# and is expected to PASS against HEAD — it is not a red test. It exists to
-# make explicit what only lived implicitly in gate_eval.py's own docstring
-# (rule 2 / module docstring "CLEAR predicate"): a `blocked_by` member
-# stamped `deployment_state: continued` never mechanically clears its
-# dependent's gate on its own — `evaluate_gate` requires SHIPPED
-# specifically, and a `continued` member is only ever rescued by
-# `_chase_continuation` resolving its `continued_into` terminus as
-# genuinely `shipped` (see gate_eval.py's rule 2 exception). Neither
-# `_chase_continuation` nor `_resolve_continuation_target` ever reads
-# `kind` — the discriminator is `deployment_state` alone. When the chased
-# terminus's `deployment_state` is not `shipped`, the chase yields
-# outcome="open" and the dependent surfaces — permanently when that state
-# is itself terminal, across repeat re-evaluation, since
-# nothing in this module writes back a "seen and decided" marker. This is
-# the hazard docs/plans/2026-08-02-roadmap-baton-supersession-hazard.md
-# exists to guard against at supersession time: a candidate roadmap baton
-# force-superseded (flipped to `continued`) while a LIVE dependent still
 # lists it in `blocked_by` leaves that dependent SURFACE-locked forever,
-# never auto-clearing, unless an operator (or C2's refusal / C3's
-# judgment-point) intervenes before the supersession happens.
-# ---------------------------------------------------------------------------
 
 
 def _session_handoff_terminus(deployment_state: str) -> dict:
-    """A session handoff (not a roadmap stub) as a `continued_into` terminus
-    — resolved by durable `handoff_id`, `kind != "spinoff-roadmap"`, and
-    deliberately left at a non-`shipped` deployment_state (the chase reaches
-    it but finds it still open)."""
     return {
         "handoff_id": _TERMINUS_HANDOFF_ID,
         "kind": "session-handoff",
@@ -2112,11 +1797,6 @@ def _session_handoff_terminus(deployment_state: str) -> dict:
 
 
 class TestC6dContinuedBlockerNeverMechanicallyClearsDependent:
-    """Pins the permanent-hazard shape: a `continued` blocker whose chased
-    terminus is a still-open session handoff surfaces the dependent, and
-    stays surfaced identically across repeat re-evaluation passes — there is
-    no mechanism anywhere in this module that ever flips this to `clear`
-    short of the terminus itself shipping."""
 
     def test_continued_blocker_with_open_session_terminus_surfaces_and_stays_surfaced(
         self,
@@ -2137,17 +1817,10 @@ class TestC6dContinuedBlockerNeverMechanicallyClearsDependent:
         assert any(
             "chased to terminus" in e and "not shipped" in e for e in first["evidence"]
         )
-        # The chase never trusts kind — a session-handoff terminus (not a
-        # roadmap stub) is treated identically to any other non-shipped
-        # terminus: still open -> surface, never a clear.
         assert terminus["kind"] != "spinoff-roadmap"
 
 
-# ---------------------------------------------------------------------------
-# C2 — scaffold sentinel (docs/plans/2026-08-03-gate-dependency-template-
 # emission-spec.md § C2): an unfilled coordinator-doc-new `PLACEHOLDER`
-# default is not authored prose and must never clear/free.
-# ---------------------------------------------------------------------------
 
 
 class TestC2ScaffoldSentinelGateDependencySurfacesNeverClears:
@@ -2175,8 +1848,6 @@ class TestC2ScaffoldSentinelGateDependencySurfacesNeverClears:
 
 
 class TestC2ScaffoldSentinelBlockingNotesSurfacesNeverClears:
-    """AC2.2: same as AC2.1 but for `blocking_notes` carrying the C1
-    scaffold's authored placeholder continuation."""
 
     def test_blocking_notes_placeholder_continuation_surfaces(self) -> None:
         handoff = {
@@ -2199,10 +1870,6 @@ class TestC2ScaffoldSentinelBlockingNotesSurfacesNeverClears:
 
 
 class TestC2ScaffoldSentinelWithSatisfiedStructuredSetStillSurfaces:
-    """The sentinel must never clear even when `blocked_by` is populated and
-    every member has shipped — this is the exact "obvious but wrong"
-    implementation the spec warns against (treating the sentinel as "no
-    gate" would let this fall through to the vacuous-clear branch)."""
 
     def test_placeholder_gate_dependency_with_all_shipped_blocked_by_still_surfaces(
         self,
@@ -2273,7 +1940,6 @@ class TestC2ScaffoldSentinelPrefixTestNotSubstring:
         result = evaluate_gate(handoff, [handoff])
 
         # Still surfaces (no witness given) — but via the ORDINARY
-        # `_evaluate_prose_gate` no-witness line, never the sentinel's.
         assert result["verdict"] == "surface"
         assert not any(
             "unfilled" in e and "scaffold placeholder" in e for e in result["evidence"]
@@ -2282,10 +1948,6 @@ class TestC2ScaffoldSentinelPrefixTestNotSubstring:
 
 
 class TestC2WhitespaceIsEmptyBehaviourUnchanged:
-    """AC2.4: a whitespace-only `gate_dependency`/`blocking_notes` is still
-    treated as no gate at all (vacuously clears alongside an empty
-    `blocked_by`) — the sentinel addition must not touch this pre-existing
-    discipline."""
 
     def test_whitespace_only_gate_dependency_still_vacuously_clears(self) -> None:
         handoff = {
@@ -2317,11 +1979,6 @@ class TestC2WhitespaceIsEmptyBehaviourUnchanged:
 
 
 class TestC2TriageProjectionParity:
-    """The sentinel treatment mirrors into `evaluate_gate_triage` too (the
-    module's own "exactly one gate evaluator" discipline — see
-    `TestBlockingNotesDominatesSatisfiedStructuredSet`'s triage sibling
-    elsewhere in this file for the established pattern): `indeterminate`,
-    never `freed`, with the same distinct evidence line."""
 
     def test_placeholder_gate_dependency_empty_blocked_by_is_indeterminate(self) -> None:
         handoff = {
@@ -2339,18 +1996,7 @@ class TestC2TriageProjectionParity:
         assert any("unfilled" in e and "scaffold placeholder" in e for e in result["evidence"])
 
 
-# ---------------------------------------------------------------------------
-# C3 — staleness evidence on dominance (docs/plans/2026-08-03-gate-
-# dependency-template-emission-spec.md § C3): dominance's verdict never
-# changes, but the evidence names it when every structured co-blocker has
-# already shipped out from under the prose.
-# ---------------------------------------------------------------------------
-
-
 class TestC3DominanceStaleEvidenceAllShipped:
-    """AC3.1: dominance fires (rule 1, prose `gate_dependency`) + non-empty
-    `blocked_by` + every member shipped -> verdict stays `surface`, evidence
-    gains an addendum naming each blocker id and its shipping sha."""
 
     def test_prose_dominance_with_all_blocked_by_shipped_names_staleness(self) -> None:
         dependent = _roadmap_handoff(
@@ -2372,8 +2018,6 @@ class TestC3DominanceStaleEvidenceAllShipped:
             for e in result["evidence"]
         )
         assert any("hnd-c3-tc1-000001" in e and "shipped" in e for e in result["evidence"])
-        # C1: the same all-shipped-under-dominance shape also names itself
-        # machine-legibly via `contradiction`, not only in evidence prose.
         assert result["contradiction"] == {
             "kind": "prose-gate-outlived-structured-blockers",
             "discharge_verb": "handoff.transition gate-recheck --cleared",
@@ -2382,13 +2026,6 @@ class TestC3DominanceStaleEvidenceAllShipped:
 
 
 class TestC3StalenessEvidenceNormalizationAgreesAcrossEvaluators:
-    """`evaluate_gate` and
-    `evaluate_gate_triage` must key `_all_blocked_by_shipped_evidence` on the
-    SAME (str-normalized) `blocked_by` precondition, or a non-`str` member
-    (e.g. `None`) lets the two evaluators disagree about whether the
-    contradiction fired. Constructed per the reviewer's own drift scenario:
-    `blocked_by: ["<shipped-id>", None]`. The assertion is that the two
-    evaluators AGREE — not which verdict they land on."""
 
     def test_non_str_blocked_by_member_does_not_drift_staleness_verdict(self) -> None:
         dependent = _roadmap_handoff(
@@ -2451,8 +2088,6 @@ class TestC4BlockingNotesStructuredAllShippedNoLongerNeedsStalenessEvidence:
 
 
 class TestC3DominanceNoStaleClaimWhenOneMemberUnshipped:
-    """AC3.2: at least one `blocked_by` member unshipped -> evidence carries
-    NO staleness claim — never assert staleness we cannot substantiate."""
 
     def test_prose_dominance_with_one_unshipped_member_names_no_staleness(self) -> None:
         dependent = _roadmap_handoff(
@@ -2475,9 +2110,6 @@ class TestC3DominanceNoStaleClaimWhenOneMemberUnshipped:
             "every structured blocked_by member has since shipped" in e
             for e in result["evidence"]
         )
-        # C1: no staleness evidence -> no `contradiction` key at all — absent,
-        # never present-and-None (a `.get(...) is None` check would pass
-        # against a broken implementation that stamped `None` in).
         assert "contradiction" not in result
 
     def test_blocking_notes_dominance_with_unresolved_member_names_no_staleness(self) -> None:
@@ -2497,8 +2129,6 @@ class TestC3DominanceNoStaleClaimWhenOneMemberUnshipped:
 
 
 class TestC3DominanceNoStaleClaimWhenBlockedByEmpty:
-    """AC3.3: dominance + empty `blocked_by` -> unchanged from today, no new
-    evidence line at all."""
 
     def test_prose_dominance_with_empty_blocked_by_gains_no_staleness_line(self) -> None:
         handoff = {
@@ -2544,11 +2174,6 @@ class TestC3DominanceNoStaleClaimWhenBlockedByEmpty:
 
 
 class TestTriageReviewDueRerouteNotFiredWhenOneMemberUnshipped:
-    """Triage-side twin of `TestC3DominanceNoStaleClaimWhenOneMemberUnshipped`
-    (AC3.2): staleness cannot be substantiated when at least one `blocked_by`
-    member is unshipped, so `evaluate_gate_triage` must NOT re-route onto
-    `review-due` — it stays the pre-existing `indeterminate` status, same as
-    before C2's re-route existed."""
 
     def test_prose_gate_with_one_unshipped_member_stays_indeterminate(self) -> None:
         dependent = _roadmap_handoff(
@@ -2570,10 +2195,6 @@ class TestTriageReviewDueRerouteNotFiredWhenOneMemberUnshipped:
 
 
 class TestTriageReviewDueRerouteNotFiredWhenBlockedByEmpty:
-    """Triage-side twin of `TestC3DominanceNoStaleClaimWhenBlockedByEmpty`
-    (AC3.3): an empty `blocked_by` has nothing to have shipped, so
-    `evaluate_gate_triage` must NOT re-route onto `review-due` — it stays
-    the pre-existing `indeterminate` status."""
 
     def test_prose_gate_with_empty_blocked_by_stays_indeterminate(self) -> None:
         handoff = {
@@ -2590,14 +2211,7 @@ class TestTriageReviewDueRerouteNotFiredWhenBlockedByEmpty:
         assert result["status"] == "indeterminate"
 
 
-# ---------------------------------------------------------------------------
-# consumes_gate_evidence — the single-source-of-truth predicate mirroring
-# evaluate_gate's own SC / demoted-1a / rule-0 precedence, exported so
-# handoff_reconcile.py never re-derives it locally (the exact bug class
-# this module's own docstring already records once — see "C4
 # RECONCILIATION" — recurring because a mirror drifted when the precedence
-# order itself moved underneath it, DR-259 + the C2 scaffold sentinel).
-# ---------------------------------------------------------------------------
 
 
 def _io_leg_covers_prose_true(observed: bool = True) -> dict:
@@ -2617,15 +2231,6 @@ def _io_leg_covers_prose_true(observed: bool = True) -> dict:
 
 
 class TestConsumesGateEvidencePostC4UnderReport:
-    """AC5.1: a satisfied, non-empty `blocked_by` + non-empty `blocking_notes`
-    + prose `gate_dependency` + `gate_evidence.covers_prose: True` now DOES
-    reach rule 0 in `evaluate_gate` and its evidence IS consumed (the demoted
-    `blocking_notes` rule 1a only applies when `blocked_by` is empty) — but
-    the OLD locally-reimplemented predicate
-    (`_has_prose_gate(h) and not _has_blocking_notes(h) and ...`) reports
-    `False` here, an under-report. `consumes_gate_evidence` must report
-    `True`, and must agree with `evaluate_gate`'s actual verdict (which
-    clears via rule 0's evidence, not via the structured walk)."""
 
     def _fixture(self):
         dependent = _roadmap_handoff(
@@ -2641,8 +2246,6 @@ class TestConsumesGateEvidencePostC4UnderReport:
         return dependent, blocker, gate_evidence
 
     def test_pre_fix_predicate_would_under_report(self) -> None:
-        """Pins the defect: the old inline expression this module replaces
-        reports False on exactly this shape."""
         dependent, _blocker_h, gate_evidence = self._fixture()
         has_prose = bool(str(dependent.get("gate_dependency") or "").strip())
         has_blocking_notes = bool(str(dependent.get("blocking_notes") or "").strip())
@@ -2670,10 +2273,6 @@ class TestConsumesGateEvidencePostC4UnderReport:
 
 
 class TestConsumesGateEvidenceSentinelOverReport:
-    """AC5.2: an unfilled C1 scaffold sentinel in `gate_dependency` makes
-    `_has_prose_gate` True, so the OLD predicate reports `evidence_consumed=
-    True` — but `evaluate_gate` short-circuits at rule SC and never consults
-    `gate_evidence` at all. `consumes_gate_evidence` must report `False`."""
 
     def _fixture(self):
         handoff = {
@@ -2716,9 +2315,6 @@ class TestConsumesGateEvidenceSentinelOverReport:
 
 
 class TestConsumesGateEvidenceVacuousBlockingNotesUnchanged:
-    """AC5.3: empty `blocked_by` + non-empty `blocking_notes` + prose +
-    `covers_prose: True` -> False (notes still intercept ahead of rule 0 in
-    the vacuous case; unchanged pre-existing behaviour)."""
 
     def test_empty_blocked_by_blocking_notes_intercepts_before_rule_0(self) -> None:
         handoff = {
@@ -2740,7 +2336,6 @@ class TestConsumesGateEvidenceVacuousBlockingNotesUnchanged:
 
 
 class TestConsumesGateEvidenceNoEvidenceOrNotCoveringProse:
-    """AC5.4: no `gate_evidence`, or `covers_prose` absent/False -> False."""
 
     def _dependent(self):
         return {
@@ -2766,14 +2361,6 @@ class TestConsumesGateEvidenceNoEvidenceOrNotCoveringProse:
 
 
 class TestConsumesGateEvidenceAgreesWithEvaluateGateActualBehaviour:
-    """AC5.5 (the anti-drift AC): `consumes_gate_evidence` is pinned against
-    `evaluate_gate`'s ACTUAL behaviour, not a restatement of the predicate —
-    for every field combination below, `consumes_gate_evidence`'s verdict
-    must agree with whether `evaluate_gate` actually reached rule 0 (pinned
-    by the literal "demoted to commentary" marker rule 0 alone emits). A
-    future precedence-order edit to `evaluate_gate` that updates only one of
-    the two functions fails THIS test loudly, not merely the fixed-shape
-    ACs above."""
 
     def _cases(self):
         blocker = _blocker(
@@ -2797,7 +2384,6 @@ class TestConsumesGateEvidenceAgreesWithEvaluateGateActualBehaviour:
             return h
 
         return [
-            # AC5.1 shape: satisfied blocked_by + blocking_notes + prose + covers_prose.
             (
                 _h(
                     blocked_by=["hnd-ac55-tc1-000001"],
@@ -2807,13 +2393,11 @@ class TestConsumesGateEvidenceAgreesWithEvaluateGateActualBehaviour:
                 [blocker],
                 covering,
             ),
-            # AC5.2 shape: scaffold sentinel + covers_prose.
             (
                 _h(blocked_by=[], gate_dependency="PLACEHOLDER"),
                 [],
                 covering,
             ),
-            # AC5.3 shape: empty blocked_by + blocking_notes + prose + covers_prose.
             (
                 _h(
                     blocked_by=[],
@@ -2823,25 +2407,21 @@ class TestConsumesGateEvidenceAgreesWithEvaluateGateActualBehaviour:
                 [],
                 covering,
             ),
-            # AC5.4 shape: no gate_evidence.
             (
                 _h(blocked_by=[], gate_dependency="sibling repo ships the widgetforge feature"),
                 [],
                 None,
             ),
-            # AC5.4 shape: covers_prose False.
             (
                 _h(blocked_by=[], gate_dependency="sibling repo ships the widgetforge feature"),
                 [],
                 non_covering,
             ),
-            # Plain prose-only rule-0 clear (the oaxis-01 shape).
             (
                 _h(blocked_by=[], gate_dependency="sibling repo ships the widgetforge feature"),
                 [],
                 covering,
             ),
-            # Non-empty blocked_by + prose (no blocking_notes) + covers_prose.
             (
                 _h(
                     blocked_by=["hnd-ac55-tc1-000001"],
@@ -2867,24 +2447,7 @@ class TestConsumesGateEvidenceAgreesWithEvaluateGateActualBehaviour:
             )
 
 
-# ---------------------------------------------------------------------------
-# C6 — a shipped blocker with no shipped_in must not enter the cleared set
-# (docs/plans/2026-08-05-c2-supersede-gate-chaseable-terminus.md § C6):
-# `_classify_blocked_by`'s plain-`shipped` and chased-`shipped` branches both
-# appended unconditionally to `shipped_ids` but only conditionally to
-# `shipped_shas`, producing unequal `cleared_blocker_ids`/`cleared_by_shas`
-# arrays. The fix routes a shipped-but-unstamped terminus into a NEW
-# seventh `unstamped_shipped_ids` bucket instead — it surfaces, never
-# clears the paired arrays.
-# ---------------------------------------------------------------------------
-
-
 class TestC6PlainShippedNoShaSurfacesNeverClears:
-    """AC8a: a plain-`shipped` blocker with no `shipped_in` is absent from
-    `cleared_blocker_ids`, present in `remaining_blockers`, and drives
-    verdict `surface` (sole blocker) or `narrow`+`also_surface=True` (a
-    co-blocker is shipped-with-sha) — evidence names both the diagnosis
-    (no shipped_in) and the repair (kind: no-commit)."""
 
     def test_sole_unstamped_shipped_blocker_surfaces(self) -> None:
         dependent = _roadmap_handoff("hnd-c6-plain-000001", blocked_by=["hnd-c6-b1-000001"])
@@ -2930,16 +2493,11 @@ class TestC6PlainShippedNoShaSurfacesNeverClears:
 
 
 class TestC6ChasedShippedNoShaSurfacesNeverClears:
-    """AC8b: the same holds for a `continued` blocker whose CHASE terminus
-    reads `shipped` with no `shipped_in` — absent from `cleared_blocker_ids`,
-    present in `remaining_blockers`, verdict `surface`/`narrow`+
-    `also_surface=True` per the same disjunction, evidence containing the
-    same two substrings."""
 
     def test_sole_chased_unstamped_shipped_terminus_surfaces(self) -> None:
         lvv05 = _lvv05_continued(continued_into=_TERMINUS_HANDOFF_ID)
         lvv06 = _lvv06_dependent(blocked_by=["lvv-05"])
-        terminus = _terminus("shipped")  # no shipped_in
+        terminus = _terminus("shipped")
 
         result = evaluate_gate(lvv06, [lvv06, lvv05, terminus])
 
@@ -2959,7 +2517,7 @@ class TestC6ChasedShippedNoShaSurfacesNeverClears:
         lvv03 = _blocker(
             "lvv-03", "shipped", shipped_in="d" * 40, blocks=["lvv-06", "lvv-07", "lvv-08"]
         )
-        terminus = _terminus("shipped")  # no shipped_in
+        terminus = _terminus("shipped")
 
         result = evaluate_gate(lvv06, [lvv06, lvv05, lvv03, terminus])
 
@@ -2976,9 +2534,6 @@ class TestC6ChasedShippedNoShaSurfacesNeverClears:
 
 
 class TestC6TriageUnstampedShippedNeverThroughDeadIds:
-    """`evaluate_gate_triage` must NOT flip `status` to `indeterminate` via
-    `dead_ids`'s "never shipped" reason text for a shipped-no-sha blocker —
-    it folds into `still-blocked` via its own reason text instead."""
 
     def test_sole_unstamped_shipped_blocker_is_still_blocked_not_indeterminate(
         self,
@@ -2999,7 +2554,7 @@ class TestC6TriageUnstampedShippedNeverThroughDeadIds:
     ) -> None:
         lvv05 = _lvv05_continued(continued_into=_TERMINUS_HANDOFF_ID)
         lvv06 = _lvv06_dependent(blocked_by=["lvv-05"])
-        terminus = _terminus("shipped")  # no shipped_in
+        terminus = _terminus("shipped")
 
         result = evaluate_gate_triage(lvv06, [lvv06, lvv05, terminus])
 
@@ -3011,10 +2566,6 @@ class TestC6TriageUnstampedShippedNeverThroughDeadIds:
 
 
 class TestC6StalenessEvidenceNoneForUnstampedShipped:
-    """`_all_blocked_by_shipped_evidence` returns `None` (not staleness
-    evidence) when the sole `blocked_by` member is shipped-no-sha —
-    exercised via `evaluate_gate`'s prose-dominance path, the sole caller of
-    that helper."""
 
     def test_prose_dominance_with_unstamped_shipped_blocker_asserts_no_staleness(
         self,
@@ -3088,12 +2639,6 @@ class TestC6PairedArrayInvariantMatrix:
         assert len(result["cleared_blocker_ids"]) == len(result["cleared_by_shas"])
 
 
-# =============================================================================
-# C1 (docs/plans/2026-08-19-gate-notes-are-advisory-blocked-by-derives-
-# readiness.md § C1): `derive_readiness`/`derive_readiness_batch`.
-# =============================================================================
-
-
 def _readiness_handoff(deployment_state, blocked_by=None, blocking_notes=None, **extra) -> dict:
     d = {
         "id": extra.pop("id", "hnd-under-test-000001"),
@@ -3150,9 +2695,6 @@ class TestDeriveReadinessFreedReadyToFire:
 
 
 class TestDeriveReadinessEmptyBlockedByVacuouslyFreed:
-    """Empty `blocked_by` falls through to the predicate set (not a shortcut
-    straight to ready_to_fire) — the SAME predicate handles the vacuous
-    for-all-over-the-empty-set case, per the C1 brief."""
 
     def test_empty_blocked_by_no_notes_derives_ready_to_fire(self) -> None:
         handoff = _readiness_handoff("awaiting_gate", blocked_by=[])
@@ -3165,10 +2707,6 @@ class TestDeriveReadinessEmptyBlockedByVacuouslyFreed:
 
 class TestDeriveReadinessReviewDueNoOpinion:
     def test_review_due_status_derives_no_opinion(self) -> None:
-        # Prose gate_dependency alongside an all-shipped blocked_by graph is
-        # `evaluate_gate_triage`'s review-due re-route (contradiction
-        # carve-out) — reproduced here to drive derive_readiness's own
-        # review-due branch, not re-derived independently.
         handoff = _readiness_handoff(
             "awaiting_gate", blocked_by=["hnd-tc1-000001"], gate_dependency="some prose gate"
         )
@@ -3200,17 +2738,8 @@ class TestDeriveReadinessOffGateAxisLifecyclePositions:
 
 
 class TestDeriveReadinessBlockingNotesNeverReadAtAll:
-    """The negative-spec's load-bearing case: `blocking_notes` present, non-
-    prose-dominance-shaped, must not itself change the derivation — enforced
-    via `consult_prose_gates=False` at the delegation, not by this function
-    ever mentioning the field.
-    """
 
     def test_gate_notes_only_no_blocked_by_stays_ready_to_fire(self) -> None:
-        # AC4: a baton carrying only gate notes (no blocked_by) stays
-        # pickup-ready. Pinned against the two live ready_to_fire+notes
-        # records named in the plan's § Problem, BY FIXTURE COPY (not read
-        # off state/ at test time).
         strang_03 = _readiness_handoff(
             "ready_to_fire",
             blocked_by=[],
@@ -3236,9 +2765,6 @@ class TestDeriveReadinessBlockingNotesNeverReadAtAll:
             assert result["basis"] == "blocked_by_unresolved"
 
     def test_unresolved_blocked_by_alongside_blocking_notes_still_blocks_on_the_graph(self) -> None:
-        # Confirms blocking_notes is inert in BOTH directions: it doesn't
-        # free (above) and it doesn't ADD a block either — the structured
-        # graph's own verdict is the only thing that matters.
         handoff = _readiness_handoff(
             "awaiting_gate",
             blocked_by=["hnd-open-000001"],
@@ -3252,11 +2778,6 @@ class TestDeriveReadinessBlockingNotesNeverReadAtAll:
         assert result["pickup_ready"] is False
 
     def test_empty_blocked_by_with_blocking_notes_still_freed_unlike_triage_default(self) -> None:
-        # The DR-259 vacuous-clear-dominance branch that `evaluate_gate_triage`
-        # applies by DEFAULT (consult_prose_gates=True) must NOT leak into
-        # derive_readiness (consult_prose_gates=False) — this is exactly the
-        # AC4-breaking regression Finding 1 fixed. Contrast directly against
-        # the triage default below.
         handoff = _readiness_handoff(
             "awaiting_gate", blocked_by=[], blocking_notes="advisory only, nothing structural"
         )
@@ -3271,11 +2792,7 @@ class TestDeriveReadinessBlockingNotesNeverReadAtAll:
 
 class TestDeriveReadinessScaffoldSentinelNeverConsulted:
     def test_unfilled_scaffold_placeholder_does_not_park_readiness(self) -> None:
-        # consult_prose_gates=False also suppresses the C2 scaffold-sentinel
-        # branch (checked ahead of everything else in evaluate_gate_triage's
         # default path) — an unfilled `PLACEHOLDER` in blocking_notes must
-        # not park derive_readiness's verdict the way it parks the default
-        # triage projection.
         handoff = _readiness_handoff(
             "awaiting_gate",
             blocked_by=[],
@@ -3338,16 +2855,6 @@ class TestDeriveReadinessBatch:
 
 
 class TestGateIndexBuiltOnceForSweep:
-    """C13 (docs/plans/2026-08-25-reconcile-open-comes-back-under-the-bar.md
-    § C13): `_index_by_id(live_and_archived_handoffs)` must be built ONCE per
-    sweep, not once per structured-eligible/prose-dominance-with-staleness-
-    check handoff — the measured redundancy was 7 rebuilds over 21
-    `awaiting_gate` handoffs sharing the SAME `live_and_archived_handoffs`
-    list object. `_memoized_index_by_id` is the fix; these tests assert its
-    memo behaviour directly (call-count reduction, no leak across distinct
-    corpus objects, no leak past a corpus object's own lifetime) rather than
-    the ms-scale timing the brief itself says not to re-measure with a single
-    draw."""
 
     def test_repeated_evaluate_gate_calls_share_one_index_build(self, monkeypatch) -> None:
         import coordinator_core.reconcile.gate_eval as gate_eval_mod
@@ -3394,8 +2901,6 @@ class TestGateIndexBuiltOnceForSweep:
         a = _roadmap_handoff("hnd-a-000011", blocked_by=["hnd-tc1-000011"])
 
         # Two DIFFERENT list objects with equal contents — a second sweep's
-        # freshly-collected corpus must never be served the first sweep's
-        # cached index merely because the contents happen to match.
         corpus_sweep_1 = [tc1, a]
         corpus_sweep_2 = [tc1, a]
 
@@ -3405,23 +2910,13 @@ class TestGateIndexBuiltOnceForSweep:
         assert len(calls) == 2, "distinct corpus objects must each build their own index"
 
     def test_memo_holds_a_strong_reference_so_id_reuse_cannot_stale_hit(self) -> None:
-        """A bare `list` is not weak-referenceable in CPython (`weakref.ref`/
-        `finalize` on one raises `TypeError`), so the memo instead holds a
-        STRONG reference to the corpus object alongside its index — the
-        `id()` of a corpus list still present in the memo can therefore never
-        be reused by an unrelated object while that entry lives (see the
-        `_index_by_id_memo` module docstring). This test locks in the
-        surface of that guarantee: a distinct object that is content-equal to
-        (but not the same object as) an already-memoized corpus never reads
-        the other's cached index — `entry[0] is handoffs` identity, not
-        equality, gates every hit."""
         import coordinator_core.reconcile.gate_eval as gate_eval_mod
 
         tc1 = _blocker("hnd-tc1-000012", "shipped", shipped_in="f" * 40, blocks=["hnd-a-000012"])
         a = _roadmap_handoff("hnd-a-000012", blocked_by=["hnd-tc1-000012"])
 
         corpus_1 = [tc1, a]
-        corpus_2 = [tc1, a]  # content-equal, distinct object
+        corpus_2 = [tc1, a]
 
         index_1 = gate_eval_mod._memoized_index_by_id(corpus_1)
         index_2 = gate_eval_mod._memoized_index_by_id(corpus_2)
@@ -3446,7 +2941,5 @@ class TestGateIndexBuiltOnceForSweep:
             gate_eval_mod._memoized_index_by_id(corpus)
 
         assert len(gate_eval_mod._index_by_id_memo) == maxsize
-        # The FIRST (least-recently-used) corpus must have been evicted to
-        # make room for the (maxsize + 1)th.
         assert id(corpora[0]) not in gate_eval_mod._index_by_id_memo
         assert id(corpora[-1]) in gate_eval_mod._index_by_id_memo

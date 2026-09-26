@@ -51,10 +51,7 @@ def _owner_resolution_to_dict(resolution: "artifact_owner.OwnerResolution") -> D
         "outcome": result.outcome,
         "resolved_session_id": result.session_id,
         "address": result.address,
-        # AC2's claim_live/claim_stage
         # were computed in the dataclass but dropped at this JSON-RPC
-        # boundary; only `source_field == "claim_dir"` populates either
-        # (every other convention names no claim dir of its own to ask).
         "claim_live": resolution.owner.claim_live,
         "claim_stage": resolution.owner.claim_stage,
         "candidates": [

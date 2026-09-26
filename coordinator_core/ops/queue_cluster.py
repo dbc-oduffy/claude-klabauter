@@ -86,13 +86,6 @@ class InvalidSignalError(ValueError):
 
 
 def _item_with_id(rec: dict) -> dict:
-    """Build one ``{id, path, title}`` row from a ``query_records()`` record.
-
-    ``id`` is the record's filename stem -- queue.append's write path mints
-    no separate id field, so the filename stem IS the canonical handle; this
-    is the one place that convention gets surfaced to callers, so they never
-    need to re-derive it from ``path`` themselves.
-    """
     path = rec.get("path", "")
     fm = rec.get("frontmatter") or {}
     return {
@@ -189,12 +182,6 @@ def cluster_records(
     signals: Optional[list[str]] = None,
     min_cluster_size: int = MIN_CLUSTER_SIZE,
 ) -> list[dict]:
-    """Cluster ``records`` over ``signals`` (default: all three) at ``min_cluster_size``.
-
-    Requesting the default signal set at the default floor reproduces
-    ``coordinator_core.clustering.candidates.detect_candidates``'s output
-    exactly, aside from the additional ``id`` key each item now carries.
-    """
     ordered_signals = _normalize_signals(signals)
     clusters: list[dict] = []
     for signal in ordered_signals:

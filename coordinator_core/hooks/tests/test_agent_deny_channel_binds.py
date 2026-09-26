@@ -60,32 +60,14 @@ import coordinator_core.hooks.block_ungranted_opus_subagent as opus_gate_mod
 import coordinator_core.hooks.block_unenumerated_agent_type as mod
 
 # Repo root -- prepended onto PYTHONPATH for the one genuine subprocess spawn
-# below so `coordinator_core.hooks.block_unenumerated_agent_type`'s own
-# module-level `from coordinator_core._hook_envelope import deny` resolves
-# regardless of the spawned child's cwd. Same shape as
 # coordinator_core/tests/test_invoke_main.py::_make_env's _PROJECT_ROOT.
 _PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 
-# test_main_subprocess_contract_exit_and_stdout_shape needs one genuine OS-
-# level subprocess run of main()'s real stdin/stdout/exit-code boundary
-# (per module docstring) -- the in-process monkeypatch runs elsewhere in
-# this file cannot observe the actual process exit-code/stdout channel a
 # real hooks.json registration drives. The spawn ratchet's `_BASELINE` is
-# shrink-only pre-existing residue and is explicitly not the route for this
-# file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _run_main_via_stdin(monkeypatch: pytest.MonkeyPatch, payload: dict) -> "tuple[int, str]":
-    """Drive `main()` in-process through its real stdin/stdout contract --
-    `sys.stdin.read()` in, `sys.stdout.write()` out, `SystemExit` carrying
-    the process exit code -- rather than calling `check()` directly. Kept
-    in-process (not a real subprocess) so the roster can still be injected
-    via monkeypatch; the subprocess-level exit-code/stdout shape is
-    equivalent for what this test pins (envelope JSON + exit code), and an
-    in-process run keeps this file fast and independent of `python`
-    resolution on the host.
-    """
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
     captured = io.StringIO()
     monkeypatch.setattr(sys, "stdout", captured)
@@ -102,14 +84,6 @@ def _patch_roster(monkeypatch: pytest.MonkeyPatch, roster, reason: Optional[str]
 
 
 def test_deny_channel_binds_exit_zero_with_deny_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
-    """THE PIN. An unenumerated `subagent_type` dispatched through the real
-    `main()` stdin/stdout contract must (a) exit 0 -- a deny is
-    communicated via the envelope, never via process exit status, and an
-    exit-1/exit-2 regression here would fail OPEN on any harness wiring
-    that only checks exit status -- and (b) emit
-    `hookSpecificOutput.permissionDecision == "deny"` with a non-empty
-    `permissionDecisionReason` on stdout, valid JSON.
-    """
     _patch_roster(monkeypatch, frozenset({"coordinator:executor"}))
     payload = {
         "tool_name": "Agent",
@@ -136,12 +110,6 @@ def test_deny_channel_binds_exit_zero_with_deny_envelope(monkeypatch: pytest.Mon
 
 
 def test_deny_channel_binds_regardless_of_name_presence(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The channel itself -- not just the guard's own decision logic (that
-    is AC4, pinned in the sibling file) -- must bind identically whether or
-    not `name` is present on the wire. Kept here, not merely duplicated
-    from the sibling file, because this asserts it through the real
-    `main()` I/O path rather than `check()`.
-    """
     _patch_roster(monkeypatch, frozenset({"coordinator:executor"}))
     unnamed_payload = {
         "tool_name": "Agent",
@@ -169,19 +137,7 @@ def test_deny_channel_binds_regardless_of_name_presence(monkeypatch: pytest.Monk
 
 
 def test_enumerated_type_channel_emits_nothing_and_exits_zero(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The complementary shape of the same channel pin: an ALLOWED
-    dispatch must produce no stdout envelope at all (silence, not an
-    explicit `permissionDecision: allow`) and still exit 0 -- the harness
-    contract this guard relies on for the allow path, not merely the deny
-    path.
-    """
     _patch_roster(monkeypatch, frozenset({"coordinator:executor"}))
-    # This probe pins the harness DENY CHANNEL, not the Opus/Fable
-    # persona-or-grant gate composed in alongside it (2026-09-18) -- that
-    # gate has its own dedicated test module,
-    # test_block_ungranted_opus_subagent.py. Stub it to a no-op so this
-    # allow-path assertion is not incidentally coupled to real
-    # pin-resolution/transcript state.
     monkeypatch.setattr(opus_gate_mod, "check", lambda payload: None)
     payload = {
         "tool_name": "Agent",
@@ -195,16 +151,6 @@ def test_enumerated_type_channel_emits_nothing_and_exits_zero(monkeypatch: pytes
 
 
 def test_main_subprocess_contract_exit_and_stdout_shape() -> None:
-    """One genuine OS-level subprocess run of `main()`'s `if __name__ ==
-    "__main__"` entrypoint -- the actual `stdin -> stdout, exit 0`
-    boundary a real `hooks.json` registration drives, not merely the
-    in-process `sys.stdin`/`sys.stdout` monkeypatch used above. Resolves
-    roster for real (no injection possible across a process boundary), so
-    it asserts only the CHANNEL shape -- exit 0 and a well-formed JSON
-    object with `hookSpecificOutput.permissionDecision` when non-silent,
-    or empty stdout when silent -- never a specific deny/allow verdict,
-    since that depends on this host's real DoE-claude/plugin state.
-    """
     payload = {
         "tool_name": "Agent",
         "tool_input": {"subagent_type": "hookprobe-subprocess-channel-pin", "prompt": "do the thing"},

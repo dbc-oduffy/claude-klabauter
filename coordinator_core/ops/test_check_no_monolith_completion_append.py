@@ -1,12 +1,3 @@
-"""
-Tests for coordinator_core.ops.check_no_monolith_completion_append.
-
-Mirrors the bash oracle's own test suite — same eight scenarios, ported to
-pytest against the Python module's scan()/main() directly (no subprocess, no
-bash dependency).
-
-Port of: test-check-no-monolith-completion-append.sh (DoE 894d4bc6, 2026-07-22)
-"""
 
 from __future__ import annotations
 
@@ -171,18 +162,6 @@ def test_root_with_no_recognized_subdirs_exits_2(tmp_path):
 
 
 def _make_open_raise_for(unreadable_path, monkeypatch):
-    """Simulate an unreadable file portably.
-
-    `os.chmod(path, 0o000)` is a POSIX-only unreadable-file simulation: on
-    Windows, chmod's owner-read bit has no enforcement effect (CreateFile
-    still succeeds for the owning process), so the file opens cleanly and
-    the fail-closed path this test exists to exercise never fires --
-    Windows is first-class here, so the file needs to fail to open on every
-    platform, not just POSIX ones. Monkeypatching `builtins.open` to raise
-    OSError for exactly this one path (real `open` for every other path)
-    reproduces the same `except OSError` branch the production code
-    actually guards, without depending on OS permission enforcement.
-    """
     real_open = open
     target = os.path.abspath(str(unreadable_path))
 

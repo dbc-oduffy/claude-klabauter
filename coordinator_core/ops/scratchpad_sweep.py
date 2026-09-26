@@ -207,16 +207,8 @@ from coordinator_core.ops import discover_working_repos as _discover_working_rep
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import liveness as _session_liveness
 
-#: Encoding rule mirrored from ``discover_working_repos._decode_projects_dir_name``'s
-#: docstring ("Path encoding: `:` `\\` `/` `.` -> `-`") — applied FORWARD
-#: (path -> slug) here, never backward. See this module's docstring for why
-#: the forward direction is the only safe one.
 _SLUG_ENCODE_RE = re.compile(r"[:\\/.]")
 
-#: Canonical 8-4-4-4-12 hex UUID shape — the hard, safety-critical filter for
-#: "this directory is a session dir", never a looser check (uuid.UUID() alone
-#: accepts non-canonical forms — bare hex, braces — that a real session dir
-#: basename never takes).
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
@@ -227,22 +219,11 @@ _CLAUDE_DIRNAME = "claude"
 _DEFAULT_TTL_DAYS = 7.0
 _SECONDS_PER_DAY = 86400.0
 
-#: Watchdog ceiling default — matches
 #: ``coordinator_core.ops.cruft_sweep._WATCHDOG_CEILING_SECS_DEFAULT`` so this
-#: module converges on the same convention rather than inventing a second one
-#: (see module docstring's "Watchdog ceiling" note).
 _DEFAULT_WATCHDOG_CEILING_SECS = 300.0
 
 
 class _Watchdog:
-    """Cooperative wall-clock ceiling bail, checked once per session
-    directory (see module docstring's "Watchdog ceiling" note). Same
-    ``check()``/``remaining()`` shape as
-    ``coordinator_core.ops.cruft_sweep._Watchdog`` — duplicated rather than
-    imported so this module stays free of a load-time dependency on
-    ``cruft_sweep`` (which already imports this module lazily, function-local,
-    to adapt it; a module-level import back the other way would invert that
-    and risk a real cycle)."""
 
     def __init__(self, ceiling_secs: Optional[float] = None):
         if ceiling_secs is None:
@@ -251,50 +232,25 @@ class _Watchdog:
         self._start = time.monotonic()
 
     def check(self) -> bool:
-        """Return True to continue, False to bail (ceiling exceeded)."""
         return (time.monotonic() - self._start) < self._ceiling
 
     def remaining(self) -> float:
         return max(self._ceiling - (time.monotonic() - self._start), 0.0)
 
-#: Size-cut pass defaults (surfaced as ``_handler`` params, same style as
 #: ``_DEFAULT_TTL_DAYS`` above) — see module docstring's "Size-cut pass" note.
 _DEFAULT_SIZE_CUT_TARGET_BYTES = 500 * 1024 * 1024
 _DEFAULT_SIZE_CUT_FLOOR_DAYS = 1.0
 
-#: Per-file size predicate defaults — see module docstring's "Per-file size
-#: predicate" note. Grounded in the 2026-08-16 dry-run (1180 entries, 22.79
-#: GB, 4.4 s): 256 MB sits above every ordinary scratch artifact measured and
-#: below all fifty of the large ones the source memo identified. Do not tune
-#: past that without a fresh measurement.
 _DEFAULT_SIZE_CUT_LARGE_FILE_BYTES = 268435456
 _DEFAULT_SIZE_CUT_LARGE_FILE_FLOOR_DAYS = 0.5
 
-# Per-directory error strings are capped so one catastrophically broken
-# directory (thousands of unreadable children) cannot blow up the report.
 _MAX_ERRORS_PER_DIR = 20
 
-#: Archive-shaped basename patterns — see module docstring's "Archive-shaped
-#: exemption" note. Matched against the basename only (never the full path),
-#: case-insensitive, via a single compiled regex rather than a loop of
-#: ``str.endswith`` calls. Covers ``*.tar``, ``*.tar.*`` (so ``.tar.zst``,
-#: ``.tar.gz``, ``.tar.bz2``, ``.tar.xz`` all hit through the same
-#: ``tar(\.\w+)?`` alternative — no need to enumerate every compression
-#: suffix), ``*.tgz``, ``*.zip``, ``*.7z``, ``*.rar``, and bare ``*.zst``
-#: (a zstd-compressed non-tar artifact, e.g. a lone data file). Deliberately
-#: a SHAPE check, not a content/magic-bytes check — this module already
-#: fails safe elsewhere (undeterminable liveness, dry-run default), and a
-#: basename-shape false positive costs nothing worse than an extra size-cut
-#: exemption, never a wrongful deletion.
 _ARCHIVE_SHAPE_RE = re.compile(
     r"\.(tar(\.\w+)?|tgz|zip|7z|rar|zst)$", re.IGNORECASE
 )
 
 #: Sibling cap to ``_MAX_ERRORS_PER_DIR`` — the collected ``archives`` list
-#: per entry is capped so one directory containing thousands of archive-shaped
-#: files cannot blow up the report. ``archive_count``/``archive_bytes`` are
-#: NEVER capped — they must stay accurate even once the list itself is
-#: truncated, since a reader judges risk off the byte total, not the list.
 _MAX_ARCHIVES_PER_DIR = 20
 
 
@@ -407,9 +363,6 @@ def _enumerate_session_dirs(slug_dir: Path) -> List[Path]:
 
 
 def _encode_project_slug(path: str) -> str:
-    """Forward-only path -> slug encoding (never the reverse — see module
-    docstring). Robust to both native Windows backslash form and POSIX
-    forward-slash form alike, since both separators map to the same ``-``."""
     return _SLUG_ENCODE_RE.sub("-", path)
 
 
@@ -479,47 +432,6 @@ def _apply_size_cut(
     large_file_bytes: int = _DEFAULT_SIZE_CUT_LARGE_FILE_BYTES,
     large_file_floor_days: float = _DEFAULT_SIZE_CUT_LARGE_FILE_FLOOR_DAYS,
 ) -> dict:
-    """Second, additive pass over the ``entries`` the TTL loop already
-    produced — prunes whole day-age cohorts oldest-first, from the TTL
-    boundary down to ``floor_days``, if total scratch still exceeds
-    ``target_bytes`` after the TTL gate's own action. Never re-walks disk —
-    reuses the ``bytes``/``age_days``/``largest_file_bytes`` already gathered
-    by ``_scan_dir`` at the caller's liveness-gated eligibility branch
-    (module docstring's "Reuse the existing single walk" constraint).
-
-    Only entries with verdict "too-recent" are eligible candidates (dead,
-    sized, aged inside ``ttl_days`` — i.e. NOT already removed/previewed by
-    the TTL gate, whose own "reclaimable"/"reclaimed" bytes are already
-    excluded from the post-TTL remaining total below). Live / self /
-    undeterminable / no-scratchpad entries are never eligible at any
-    threshold and are never mutated by this pass.
-
-    Per-file size predicate (module docstring's "Per-file size predicate"
-    note): an entry whose ``largest_file_bytes >= large_file_bytes`` is
-    judged against ``large_file_floor_days`` instead of ``floor_days`` — an
-    exact ``age_days`` comparison, never day-rounded, since such an entry is
-    judged individually rather than as part of a same-day cohort of ordinary
-    small files. A directory whose largest file is under the threshold is
-    unaffected: it still needs the whole day cohort to clear the ordinary
-    ``floor_days`` before it is ever eligible.
-
-    Every entry gets ``size_cut_exempt``/``size_cut_exempt_reason`` keys
-    (``False``/``None`` by default) so a reader never hits a missing key.
-
-    Mutates matching ``entries`` in place (verdict/action/bytes-consumed
-    bookkeeping identical in shape to the TTL loop's own reclaim branch) and
-    returns a report dict:
-        {
-          "target_bytes", "floor_days", "total_bytes_all",
-          "remaining_after_ttl", "met" (bool),
-          "cohorts": [ {"age_days": int, "bytes": int, "pruned": bool}, ... ],
-          "settled_at_age_days": int | None,
-          "shortfall_bytes": int,
-          "shortfall_reason": str | None,
-          "bytes_reclaimable": int, "bytes_reclaimed": int,
-          "archive_exempt_entries": int, "archive_exempt_bytes": int,
-        }
-    """
     import math
 
     total_bytes_all = sum(e["bytes"] for e in entries)
@@ -528,19 +440,10 @@ def _apply_size_cut(
     )
     remaining = total_bytes_all - bytes_removed_by_ttl
 
-    # Every entry gets these two keys, unconditionally — a reader must never
-    # hit a missing key regardless of whether this pass ever actually walks a
-    # cohort (e.g. the target-already-met early return below).
     for e in entries:
         e.setdefault("size_cut_exempt", False)
         e.setdefault("size_cut_exempt_reason", None)
 
-    # Live/undeterminable entries are never sized (``_scan_dir`` never runs
-    # for them — the liveness gate short-circuits upstream), so their real
-    # on-disk usage is always excluded from every byte total in this report,
-    # on BOTH the met and unmet branches — a reader must never be able to
-    # read ``met: True`` as "total scratch is under target" when it actually
-    # means "the part we could measure is under target".
     unsized_live_or_undeterminable_count = sum(
         1 for e in entries if e["verdict"] in ("live", "undeterminable")
     )
@@ -558,7 +461,6 @@ def _apply_size_cut(
         "shortfall_reason": None,
         "bytes_reclaimable": 0,
         "bytes_reclaimed": 0,
-        # These two fields measure only sized, non-live/undeterminable entries.
         "unsized_live_or_undeterminable_excluded": unsized_live_or_undeterminable_count > 0,
         "unsized_live_or_undeterminable_count": unsized_live_or_undeterminable_count,
         "archive_exempt_entries": 0,
@@ -570,58 +472,27 @@ def _apply_size_cut(
 
     ttl_floor = int(math.floor(ttl_days))
     # Lowest eligible whole-day cohort for an ORDINARY (non-large-file) entry:
-    # ceil(floor_days), not floor(floor_days) — a fractional floor_days (e.g.
-    # 1.5) must never make the day==1 cohort (ages [1.0, 2.0)) eligible,
-    # since ages 1.0-1.499 are strictly younger than the stated floor —
-    # matches the module's own hard invariant, "nothing younger than
-    # size_cut_floor_days is ever eligible".
     floor_int = int(math.ceil(floor_days))
 
-    # A large-file entry is judged individually via an exact age_days
-    # comparison (see docstring above), so its hard floor is enforced by
-    # that comparison, not by day-rounding — the day-walk's lower bound only
-    # needs to physically REACH its day, hence floor() here rather than the
-    # conservative ceil() used for floor_int above.
     large_file_floor_day_bound = int(math.floor(large_file_floor_days))
     lowest_day = min(floor_int, large_file_floor_day_bound)
 
-    # Group eligible ("too-recent") entries by whole day-age cohort. An
-    # archive-shaped file confers NO exemption here — the 2026-08-11
-    # exemption was reversed by PM ruling 2026-08-16 (module docstring's
-    # "Archive-shaped exemption" note); an archive-carrying entry is judged
-    # by the exact same ordinary/large-file rules as any other entry.
     cohort_entries: dict = {}
     for e in entries:
         if e["verdict"] != "too-recent" or e["age_days"] is None:
             continue
         day = int(math.floor(e["age_days"]))
         if day < lowest_day:
-            # Younger than even the large-file floor extension below —
-            # never eligible at any threshold this pass offers.
             continue
         cohort_entries.setdefault(day, []).append(e)
 
     floor_reached = False
-    # Start at ttl_floor, not ttl_floor - 1: with a fractional ttl_days (e.g.
-    # 7.5), the day==7 cohort (ages [7.0, 7.5)) is legitimately "too-recent"
-    # and must remain visitable — starting one cohort short permanently
-    # exempts it from ever being size-cut. For a whole-number ttl_days this
-    # cohort is always empty (age >= ttl_days is already "reclaimable"), so
-    # the extra iteration is a free no-op. The walk now runs down to
-    # lowest_day, not floor_int - 1, so a large-file entry below the
-    # ordinary floor still gets visited.
     for day in range(ttl_floor, lowest_day - 1, -1):
         if remaining <= target_bytes:
             break
 
         day_entries = cohort_entries.get(day, [])
         if day >= floor_int:
-            # At or above the ordinary floor: the whole cohort is eligible,
-            # exactly as before the per-file predicate existed — EXCEPT a
-            # large-file entry still must clear its own large_file_floor_days
-            # (Review: coordinator:code-reviewer P2 — when large_file_floor_days
-            # exceeds floor_days, a large-file entry could otherwise become
-            # eligible here before reaching its own stated floor).
             eligible_entries = [
                 e
                 for e in day_entries
@@ -629,12 +500,6 @@ def _apply_size_cut(
                 or e["age_days"] >= large_file_floor_days
             ]
         else:
-            # Below the ordinary floor — reachable only via the large-file
-            # extension. An ordinary sibling in the same day cohort is left
-            # untouched (AC2: "nothing changes for a directory whose largest
-            # file is under the threshold"); only entries that themselves
-            # carry a large file AND have reached large_file_floor_days are
-            # eligible.
             eligible_entries = [
                 e
                 for e in day_entries
@@ -649,11 +514,6 @@ def _apply_size_cut(
         cohort_record = {"age_days": day, "bytes": cohort_bytes, "pruned": False}
         report["cohorts"].append(cohort_record)
 
-        # Accumulate only the bytes actually deleted/previewed inside this
-        # loop — NOT the pre-computed cohort_bytes total after the fact. An
-        # entry whose rmtree raises stays on disk (verdict "error") and must
-        # not be subtracted from remaining, or a partial cohort-delete
-        # failure under-counts real remaining usage.
         cohort_bytes_settled = 0
         for e in eligible_entries:
             if reclaim:
@@ -673,9 +533,6 @@ def _apply_size_cut(
                 report["bytes_reclaimable"] += e["bytes"]
                 cohort_bytes_settled += e["bytes"]
 
-        # "pruned" reflects what was actually settled this pass, not merely
-        # that the cohort was visited — a day with no matching entries or
-        # nothing removed must not read as pruned.
         cohort_record["pruned"] = cohort_bytes_settled > 0
 
         remaining -= cohort_bytes_settled
@@ -684,10 +541,6 @@ def _apply_size_cut(
             floor_reached = remaining > target_bytes
 
     if remaining > target_bytes and not floor_reached:
-        # Target unmet and the walk stopped short of the floor for a reason
-        # other than "met" — only possible if there were no cohorts left to
-        # walk (ttl_floor < floor_int), i.e. the floor was already above the
-        # TTL boundary.
         floor_reached = True
 
     report["met"] = remaining <= target_bytes
@@ -720,13 +573,6 @@ def _apply_size_cut(
 
 
 def _warn_if_archive_ttl_reclaim(sid: str, entry: dict, *, previewing: bool) -> None:
-    """"No silent reclaim" property for the TTL gate — see module docstring's
-    "Archive-shaped exemption" note. A no-op when ``entry`` carries no
-    archive-shaped file; otherwise prints a named stderr line (session id,
-    archive count, byte total) whichever of the TTL gate's two outcomes
-    (dry-run preview, or an actual reclaim attempt) is in play. The TTL gate
-    is deliberately NOT exempted from reclaiming an archive-shaped directory
-    once it ages past ``ttl_days`` — this only makes that reclaim loud."""
     if entry.get("archive_count", 0) <= 0:
         return
     verb = "would reclaim" if previewing else "reclaiming"
@@ -847,24 +693,13 @@ def sweep_scratchpads(
 
     for slug_dir in _enumerate_project_slug_dirs(claude_root, project_slugs):
         project_slug = slug_dir.name
-        # Resolved ONCE per project-slug (not per session dir): the owning
-        # repo's root, used as the fixed cwd for every session_live() call
-        # under this slug. A fixed, repeated cwd string also routes every
-        # call through core._sessions_dir_cached's lru_cache — one git spawn
         # per DISTINCT repo root for the whole sweep, not one per directory
-        # and not one per slug (the load-norm win from the earlier fix,
-        # preserved under the corrected per-repo scoping).
         repo_root_for_slug = slug_to_root_map.get(project_slug)
 
         for session_dir in _enumerate_session_dirs(slug_dir):
             sid = session_dir.name
             scratchpad_path = session_dir / _SCRATCHPAD_DIRNAME
 
-            # Cooperative cancellation, checked once per session directory —
-            # BEFORE that directory's own liveness/scan work starts (module
-            # docstring's "Watchdog ceiling" note). Never mid-scan: a
-            # directory whose own _scan_dir walk has already begun always
-            # finishes it.
             if not watchdog_bailed and not watchdog.check():
                 watchdog_bailed = True
                 effective_ceiling = (
@@ -895,12 +730,6 @@ def sweep_scratchpads(
             }
 
             try:
-                # Belt-and-braces: never touch the invoking session's own
-                # scratchpad, regardless of what the liveness/age checks say
-                # — checked BEFORE the watchdog gate below, so a bailed sweep
-                # still correctly identifies its own scratchpad rather than
-                # reporting it "watchdog-bail" (an O(1) check, so it never
-                # meaningfully spends the ceiling's budget).
                 if self_session_id and sid == self_session_id:
                     entry["verdict"] = "self"
                     entries.append(entry)
@@ -920,11 +749,6 @@ def sweep_scratchpads(
                     continue
 
                 if repo_root_for_slug is None:
-                    # Fail SAFE, not fail-open-to-live: this project-slug
-                    # doesn't resolve to exactly one known repo root, so
-                    # liveness cannot be evaluated at all — never reclaimable,
-                    # but reported under its own verdict rather than folded
-                    # into "live" (see module docstring's liveness-scope fix).
                     entry["verdict"] = "undeterminable"
                     entries.append(entry)
                     _bump("undeterminable")
@@ -933,9 +757,6 @@ def sweep_scratchpads(
                 try:
                     live = _session_liveness.session_live(sid, repo_root_for_slug)
                 except Exception:
-                    # Fail OPEN toward "assume alive" — this module's
-                    # established liveness bias (never fail toward a
-                    # wrongful reclamation on an uncertain read).
                     print(
                         f"scratchpad_sweep: session_live raised for {sid}; "
                         f"treating as live (fail-open)",
@@ -1016,18 +837,12 @@ def sweep_scratchpads(
         large_file_bytes=size_cut_large_file_bytes,
         large_file_floor_days=size_cut_large_file_floor_days,
     )
-    # Recompute counts from the (possibly size-cut-mutated) entries — the
-    # per-entry verdict mutations above are the source of truth.
     counts = {}
     for e in entries:
         counts[e["verdict"]] = counts.get(e["verdict"], 0) + 1
     bytes_reclaimable += size_cut_report["bytes_reclaimable"]
     bytes_reclaimed += size_cut_report["bytes_reclaimed"]
 
-    # Flat, cross-entry view of every archive-shaped file this sweep saw —
-    # built from the (possibly size-cut-mutated) entries so "verdict" here
-    # reflects each directory's FINAL disposition, not its pre-size-cut one.
-    # Lets a caller print what is at risk without re-walking disk itself.
     archives_seen: List[dict] = []
     for e in entries:
         for a in e.get("archives", []):

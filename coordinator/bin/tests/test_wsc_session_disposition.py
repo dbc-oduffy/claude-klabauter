@@ -1,27 +1,3 @@
-"""test_wsc_session_disposition.py — unit + integration tests for
-coordinator/bin/wsc-session-disposition.py (M3 chunk WSC-1 of
-docs/plans/2026-07-23-skills-carry-no-code-extirpation.md).
-
-Covers the ported workstream-complete Step 0 resolver: the 5-way
-session-id priority chain, the primary live-consume scan, Detector A
-(archive-provenance), Detector B (git-provenance + foreign-consumer spoof
-guard), and Detector C's pure scope-intersection resolver
-(`_resolve_crash_recovery`) in isolation from the `session-claim-cli`
-subprocess call.
-
-Loaded by file path (`importlib.machinery.SourceFileLoader`) even though
-this module has a `.py` suffix, because its filename contains hyphens and
-is not a valid Python import identifier — same idiom used for the
-extensionless polyglot entrypoints (`session-claim-cli`,
-`archive-stamp-cli`) elsewhere in this test directory.
-
-Spec backlink: DoE-claude:pln-extirpate-pasted-code-from-em--0f42e9
-(M3 chunk WSC-1); ported source:
-DoE-claude coordinator/skills/workstream-complete/SKILL.md Step 0.
-
-Run:
-    python -m pytest coordinator/bin/tests/test_wsc_session_disposition.py -q
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -36,17 +12,7 @@ import pytest
 
 from coordinator_core.claim_state import ClaimState
 
-# Declared, not excused: this file spawns a real git process because the properties
-# under test are real merge-base/log/commit-trailer plumbing (session-id resolution
-# against actual git history, Detector B's git-provenance leg) that no mock stands in
-# for. 33 call sites build their own repo via `_init_repo_with_history`, each inside
-# its own test's `with tempfile.TemporaryDirectory()` block, then layer test-specific
-# commits/trailers on top -- not hoisted to a shared fixture, mirroring the
-# per-test-isolation lesson in test_verify_shipped.py's docstring (many of these tests
-# add distinct session/commit trailers that would collide if a repo were reused). The
 # spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is explicitly not
-# the route for this file -- coordinator_core/tests/test_no_new_spawning_tests.py
-# Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
@@ -63,10 +29,6 @@ def _load_cli_module():
 
 
 wsc = _load_cli_module()
-# Bind the engine names before any test patches one: a `mock.patch.object`
-# taken while a name is still None restores None on exit, after the call
-# inside it has set the idempotence flag -- leaving the module "bound" with
-# an unbound name for every later test.
 wsc._bootstrap_engine_imports()
 
 
@@ -77,8 +39,6 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def _init_repo_with_history(tmp_path: Path) -> Path:
-    """Build a tiny bare 'origin/main' + working repo so merge-base/log
-    plumbing has something real to resolve against. Returns the working repo."""
     origin = tmp_path / "origin.git"
     origin.mkdir()
     _git(origin, "init", "--bare", "-q")
@@ -147,10 +107,6 @@ class TestSessionIdResolution(unittest.TestCase):
             self.assertEqual(wsc.resolve_session_id(repo), "claude-code-session")
 
     def test_sentinel_file_is_ignored_KS3(self):
-        """KS-3 (2026-08-07): the `.current-session-id` sentinel tier was
-        removed — a well-formed sentinel file must NOT be consulted; a
-        well-formed sentinel falls through to the (KS-5) empty-string
-        unresolved report, not a fabricated id."""
         import os
         import tempfile
 
@@ -167,10 +123,6 @@ class TestSessionIdResolution(unittest.TestCase):
             self.assertEqual(sid, "")
 
     def test_unresolved_reports_empty_not_fabricated_KS5(self):
-        """KS-5 (2026-08-07): the epoch-tail fabricated-id fallback was
-        removed — with no tier resolving, resolve_session_id must report the
-        unresolved state honestly (empty string), never a fabricated id
-        indistinguishable from a real one."""
         import os
         import tempfile
 
@@ -183,11 +135,6 @@ class TestSessionIdResolution(unittest.TestCase):
             self.assertEqual(sid, "")
 
     def test_cmd_resolve_refuses_unresolved_sid_KS5(self):
-        """KS-5: `_cmd_resolve` must refuse to run the detector chain (and
-        must NOT print a single-session disposition) when the sid is
-        unresolved — that would read as a clean chain-end coverage gate
-        skip identical to the false clean the fabricated-epoch fallback
-        produced."""
         import argparse
         import os
         import tempfile
@@ -279,9 +226,6 @@ class TestPrimaryScan(unittest.TestCase):
                     "state/handoffs/2026-07-02_second.md",
                 ],
             )
-            # Chain HEAD, not chain root: primary_consumed_handoff picks the
-            # newest match, i.e. the LAST element of the oldest-first sorted
-            # `paths` list.
             self.assertEqual(wsc.primary_consumed_handoff(repo, "sid-multi"), paths[-1])
 
     def test_paths_plural_empty_when_missing_dir(self):
@@ -292,10 +236,6 @@ class TestPrimaryScan(unittest.TestCase):
             self.assertEqual(wsc.primary_consumed_handoff_paths(repo, "sid-123"), [])
 
     # --- HOLDER-MISMATCH PARTITION (2026-08-26) -------------------------
-    # `resolve_claim_state` is stubbed rather than driven through a real
-    # ledger: these cases turn entirely on the ClaimState fields the scan
-    # partitions on, and building a live-holder claim dir would test
-    # `claim_state.py`'s own resolution instead of this partition.
 
     def _scan_with_states(self, states):
         import tempfile
@@ -326,9 +266,6 @@ class TestPrimaryScan(unittest.TestCase):
         )
 
     def test_ledger_claim_whose_mirror_names_a_peer_is_not_adopted(self):
-        """The 2026-08-26 incident: a pickup promoted its ledger claim to
-        `apply` stage and halted before d2 stamped the frontmatter, leaving
-        this session as ledger holder of a peer's in_flight baton."""
         result = self._scan_with_states(
             {"peer-baton.md": self._state("sid-me", "sid-peer")}
         )
@@ -336,8 +273,6 @@ class TestPrimaryScan(unittest.TestCase):
         self.assertEqual(result.mirror_conflicts, ["state/handoffs/peer-baton.md"])
 
     def test_ledger_claim_with_empty_mirror_is_still_adopted(self):
-        """The branch-switch-revert case the ledger-first read exists for —
-        mirror EMPTY, not naming somebody else. Must be untouched."""
         result = self._scan_with_states(
             {"reverted.md": self._state("sid-me", None)}
         )
@@ -352,8 +287,6 @@ class TestPrimaryScan(unittest.TestCase):
         self.assertEqual(result.mirror_conflicts, [])
 
     def test_clean_candidate_survives_alongside_a_conflicted_one(self):
-        """The partition is per-handoff — one bad ledger claim must not
-        suppress a genuine consume."""
         result = self._scan_with_states(
             {
                 "a-peer-baton.md": self._state("sid-me", "sid-peer"),
@@ -386,9 +319,7 @@ class TestDetectorA(unittest.TestCase):
             repo = Path(tmp)
             archive = repo / "archive" / "handoffs"
             archive.mkdir(parents=True)
-            # Matches consumer but no predecessor field -> not a candidate.
             (archive / "no-predecessor.md").write_text("claimed_by: sid-a\n")
-            # Matches both -> candidate.
             (archive / "valid.md").write_text("claimed_by: sid-a\npredecessor: some-sha\n")
             result = wsc.detector_a(repo, "sid-a")
             self.assertEqual(result, "archive/handoffs/valid.md")
@@ -452,8 +383,6 @@ class TestResolveCrashRecovery(unittest.TestCase):
         result, status = wsc._resolve_crash_recovery(
             [(handoff, "dead-sid")], ["coordinator/bin/foo.py"], self.repo_root, diagnostics
         )
-        # _resolve_crash_recovery normalizes an absolute hit to repo-relative
-        # (mirroring the ported bash's normalize-to-repo-relative step) —
         # every downstream consumer expects WSC_CONSUMED_HANDOFF repo-relative.
         self.assertEqual(result, "h1.md")
         self.assertEqual(status, "crash-recovery")
@@ -504,17 +433,8 @@ class TestResolveCrashRecovery(unittest.TestCase):
         self.assertIsNone(result)
         self.assertIsNone(status)
 
-    # -- 2026-08-05-session-shape-attribution-structural-gate C1: every
-    # matched scope entry (not just the first), the NamedTuple match record,
-    # and directory-prefix-matches-many-files-counts-once. Pinned at the
-    # producer, so the consumer-side predicate (coordinator_core.
-    # workstream_complete._session_shape_is_uncertain) cannot silently
-    # regress to a count-based reading without this failing first. --
 
     def test_directory_prefix_matching_many_committed_paths_counts_as_one_matched_entry(self):
-        """A directory scope entry matching MANY committed paths underneath
-        it is ONE matched entry, not one per file -- `_resolve_crash_
-        recovery`'s own `break`-after-first-hit-per-scope-entry semantics."""
         handoff = self._write_handoff("h1.md", ["coordinator/bin/tests"])
         diagnostics: list[str] = []
         outcome = wsc._resolve_crash_recovery(
@@ -555,10 +475,6 @@ class TestResolveCrashRecovery(unittest.TestCase):
         )
 
     def test_match_facts_report_all_matched_entries_on_a_multi_entry_scope(self):
-        """A 2-of-3 scope match reports the real matched count and the real
-        total, not a positionally-unpacked first hit -- the fact C2's
-        breadth predicate (`matched_scope_entry_count == 1 and (scope_size
-        >= 2 or prefix)`) depends on existing at all."""
         handoff = self._write_handoff("h1.md", ["a.py", "b.py", "c.py"])
         diagnostics: list[str] = []
         outcome = wsc._resolve_crash_recovery(
@@ -567,19 +483,10 @@ class TestResolveCrashRecovery(unittest.TestCase):
         self.assertEqual(outcome[1], "crash-recovery")
         self.assertEqual(outcome.match_facts["matched_scope_entry_count"], 2)
         self.assertEqual(outcome.match_facts["scope_size"], 3)
-        # `single_match_kind` only has a stable meaning when exactly one
-        # entry matched -- see `CrashRecoveryOutcome`'s own docstring.
         self.assertIsNone(outcome.match_facts["single_match_kind"])
-        # both matched entries here ("a.py", "b.py") are exact hits.
         self.assertEqual(outcome.match_facts["exact_match_count"], 2)
 
     def test_match_facts_exact_match_count_derived_from_a_mixed_exact_and_prefix_match(self):
-        """The example-market-data-repo live shape reproduced at the producer
-        layer: a multi-entry scope match where SOME matched entries are
-        exact and some are prefix hits -- `exact_match_count` must count
-        only the exact ones, derived from the per-match kind data already
-        computed by this function, not a recomputation of the matching
-        logic."""
         handoff = self._write_handoff("h1.md", ["tests/", "docs/", "a.py"])
         diagnostics: list[str] = []
         outcome = wsc._resolve_crash_recovery(
@@ -594,10 +501,6 @@ class TestResolveCrashRecovery(unittest.TestCase):
         self.assertEqual(outcome.match_facts["exact_match_count"], 1)
 
     def test_match_facts_exact_match_count_zero_on_the_example_market_data_repo_shape(self):
-        """The live regression shape from cross-repo/inbox/2026-08-06-
-        example-market-data-repo-em-wsc-detector-c-false-consume-attribution.md:
-        `matched_scope_entry_count=2`, `scope_size=7`, both matches bare
-        directory prefixes, zero exact hits."""
         handoff = self._write_handoff(
             "h1.md",
             ["tests/", "docs/", "a.py", "b.py", "c.py", "d.py", "e.py"],
@@ -615,11 +518,6 @@ class TestResolveCrashRecovery(unittest.TestCase):
         self.assertEqual(outcome.match_facts["exact_match_count"], 0)
 
     def test_match_facts_one_exact_plus_two_prefix_in_a_7_entry_scope(self):
-        """Producer-side companion to `TestIsCoincidenceProneDetection.
-        test_one_exact_plus_two_prefix_in_a_7_entry_scope_is_coincidence_
-        prone` -- a real `_resolve_crash_recovery` run producing the exact
-        `exact_match_count=1` / `scope_size=7` shape that must flag under
-        the fixed rule."""
         handoff = self._write_handoff(
             "h1.md",
             ["tests/", "docs/", "a.py", "b.py", "c.py", "d.py", "e.py"],
@@ -660,11 +558,6 @@ class TestResolveCrashRecovery(unittest.TestCase):
         self.assertIsNone(outcome.match_facts)
 
     def test_multiple_matches_narrowed_by_own_sid_consume_stamp(self):
-        """Scope-intersection alone is ambiguous across two stale batons, but
-        one of them carries this session's own sid as tracked-frontmatter
-        claimer (the `/pickup` consume-stamp) -- the engine resolves to it
-        deterministically instead of delegating disambiguation to the
-        operator."""
         wsc._bootstrap_engine_imports()
         h1 = self.repo_root / "h1.md"
         h1.write_text(
@@ -685,10 +578,6 @@ class TestResolveCrashRecovery(unittest.TestCase):
         self.assertTrue(any("consume-stamp" in d for d in diagnostics))
 
     def test_multiple_matches_without_a_consume_stamp_still_ambiguous(self):
-        """Regression companion: when no candidate (or more than one)
-        carries this session's own sid as claimer, the ambiguous/WARN
-        fallback is unchanged -- lineage narrowing must not manufacture a
-        resolution where none is actually evidenced."""
         wsc._bootstrap_engine_imports()
         h1 = self.repo_root / "h1.md"
         h1.write_text("predecessor: none\nscope:\n  - coordinator/bin/foo.py\n")
@@ -706,13 +595,6 @@ class TestResolveCrashRecovery(unittest.TestCase):
         self.assertEqual(status, "ambiguous")
 
     def test_baton_match_and_scope_entry_match_are_named_not_positional_tuples(self):
-        """`BatonMatch`/`ScopeEntryMatch` are NamedTuples with the fields
-        `_resolve_crash_recovery` and its callers read by name
-        (`matched_scope_entries`, `scope_size`, `scope_entry`, `hit_path`,
-        `kind`) -- a positionally-unpacked tuple return here is exactly the
-        widening hazard C1's own module docstring names (a wider tuple
-        silently breaking the pre-existing `for path, dead_sid, _hit, _size
-        in matches` unpack)."""
         scope_match = wsc.ScopeEntryMatch(scope_entry="a.py", hit_path="a.py", kind="exact")
         self.assertEqual(scope_match.scope_entry, "a.py")
         self.assertEqual(scope_match.kind, "exact")
@@ -724,11 +606,6 @@ class TestResolveCrashRecovery(unittest.TestCase):
 
 
 class TestIsCoincidenceProneDetection(unittest.TestCase):
-    """`is_coincidence_prone_detection` — the single shared home for the
-    breadth-not-count corroboration predicate, called both from
-    `resolve_disposition`'s memo-preemption gate and (via the loaded-module
-    reference) `coordinator_core.workstream_complete._session_shape_is_
-    uncertain`'s Detector-C branch."""
 
     def test_all_prefix_multi_match_is_coincidence_prone_at_any_count(self):
         self.assertTrue(
@@ -774,8 +651,6 @@ class TestIsCoincidenceProneDetection(unittest.TestCase):
         )
 
     def test_exact_match_count_absent_degrades_to_the_pre_fix_verdict(self):
-        """A stale copy of the producer that predates `exact_match_count`
-        must not newly flag a multi-match as coincidence-prone."""
         self.assertFalse(
             wsc.is_coincidence_prone_detection(
                 {"matched_scope_entry_count": 2, "scope_size": 7}
@@ -786,10 +661,6 @@ class TestIsCoincidenceProneDetection(unittest.TestCase):
         self.assertFalse(wsc.is_coincidence_prone_detection({}))
 
     def test_one_exact_plus_two_prefix_in_a_7_entry_scope_is_coincidence_prone(self):
-        """The 2026-08-06 second-pass regression: extra prefix hits
-        alongside a lone exact hit must NOT silence an already-weak
-        attribution. Pinned as the `is_coincidence_prone_detection` unit
-        that would have caught the miss."""
         self.assertTrue(
             wsc.is_coincidence_prone_detection(
                 {
@@ -801,8 +672,6 @@ class TestIsCoincidenceProneDetection(unittest.TestCase):
         )
 
     def test_two_exact_matches_in_a_7_entry_scope_is_not_coincidence_prone(self):
-        """Two or more exact path matches is real corroboration, regardless
-        of accompanying prefix hits."""
         self.assertFalse(
             wsc.is_coincidence_prone_detection(
                 {
@@ -824,15 +693,6 @@ class TestIsCoincidenceProneDetection(unittest.TestCase):
 
 
 class TestLedgerFirstClaimStateMigration(unittest.TestCase):
-    """C7b (docs/plans/2026-08-07-claim-state-ledger-first-authoritative-
-    read.md): `primary_consumed_handoff_paths`, `detector_a`, and
-    `_foreign_consumer_guard` now resolve claim holder via
-    `coordinator_core.claim_state.resolve_claim_state` (ledger-first, mirror
-    fallback) instead of a private regex read of the frontmatter mirror
-    alone. These tests exercise the case the migration exists for: a claim
-    that survives ONLY in the branch-independent ledger, with the tracked
-    frontmatter mirror desynced (`status: open`, no claimed_by/consumed_by)
-    — invisible to the old mirror-only regex, must now resolve."""
 
     def _write_ledger_claim(self, common_dir, handoff_name: str, session_id: str, claimed_at: str = "") -> None:
         claim_dir = common_dir / "coordinator-sessions" / "handoff-claims" / handoff_name
@@ -842,11 +702,6 @@ class TestLedgerFirstClaimStateMigration(unittest.TestCase):
             (claim_dir / "claimed_at").write_text(claimed_at, encoding="utf-8")
 
     def test_detector_a_fires_for_a_desynced_baton(self):
-        """An archived handoff whose frontmatter mirror is desynced (no
-        claimed_by/consumed_by — the branch-switch-revert shape) but whose
-        ledger still holds a LIVE claim naming this session, plus a
-        `predecessor:` field, must still be found by Detector A. The old
-        mirror-only regex could not see this claim at all."""
         import tempfile
 
         from coordinator_core import claim_state as claim_state_mod
@@ -857,8 +712,6 @@ class TestLedgerFirstClaimStateMigration(unittest.TestCase):
             archive_dir = repo / "archive" / "handoffs"
             archive_dir.mkdir(parents=True)
             handoff = archive_dir / "2026-08-07_desynced.md"
-            # Desynced mirror: no claimed_by/consumed_by at all, only the
-            # predecessor field Detector A's second gate requires.
             handoff.write_text("---\nstatus: open\npredecessor: some-sha\n---\nbody\n")
 
             self._write_ledger_claim(repo / ".git", handoff.name, "sid-ledger-only", "2026-08-07T10:00:00Z")
@@ -883,8 +736,6 @@ class TestLedgerFirstClaimStateMigration(unittest.TestCase):
             archive_dir = repo / "archive" / "handoffs"
             archive_dir.mkdir(parents=True)
             handoff = archive_dir / "2026-08-07_foreign.md"
-            # Desynced mirror: names nobody. Only the ledger names the
-            # (different, live) foreign session.
             handoff.write_text("---\nstatus: open\npredecessor: some-sha\n---\nbody\n")
 
             self._write_ledger_claim(repo / ".git", handoff.name, "sid-foreign-live", "2026-08-07T10:00:00Z")
@@ -899,8 +750,6 @@ class TestLedgerFirstClaimStateMigration(unittest.TestCase):
             self.assertIn("restoration-commit spoof guard", reason)
 
     def test_spoof_guard_permits_own_ledger_only_claim(self):
-        """Regression companion: a ledger-only claim naming THIS session
-        must not be misread as foreign."""
         import tempfile
 
         from coordinator_core import claim_state as claim_state_mod
@@ -924,11 +773,6 @@ class TestLedgerFirstClaimStateMigration(unittest.TestCase):
 
 
 class TestResolveDispositionIntegration(unittest.TestCase):
-    """Integration coverage over a real (tiny) git repo — exercises
-    Detector B's git-provenance scan and its foreign-consumer spoof guard,
-    plus the single-session fallthrough path, without any session-claim-cli
-    dependency (Detector C degrades to indeterminate/no-op automatically
-    since no stale-claim CLI is on the resolution path in this sandbox)."""
 
     def test_single_session_when_nothing_matches(self):
         import tempfile
@@ -941,10 +785,6 @@ class TestResolveDispositionIntegration(unittest.TestCase):
             self.assertEqual(consumed_paths, [])
 
     def test_plural_return_equals_primary_scan_matches_on_multi_consumed(self):
-        """Self-consistency oracle (not cross-package agreement):
-        resolve_disposition's plural return must equal
-        primary_consumed_handoff_paths' own `matches` list for a
-        multi-consumed-handoff session."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1006,13 +846,6 @@ class TestResolveDispositionIntegration(unittest.TestCase):
             archive_dir.mkdir(parents=True)
             handoff = archive_dir / "2026-07-01_other.md"
             # claimed_by names a DIFFERENT session than the one committing —
-            # this is the restoration-commit spoof shape the guard exists for.
-            # Needs real --- frontmatter fences: _foreign_consumer_guard reads
-            # claimed_by via handoff_lifecycle.claim_holder -> _fm_field, which
-            # only scans between a `---`/`---` fence pair (unlike detector_a's
-            # own whole-text regex) — an unfenced body reads back "" and the
-            # guard silently no-ops, which is exactly what happened here before
-            # this fix (disposition came back chain-terminal, not single-session).
             handoff.write_text("---\nclaimed_by: sid-other-session\npredecessor: some-sha\n---\nbody\n")
             _git(repo, "add", "archive/handoffs/2026-07-01_other.md")
             _commit_with_session_trailer(repo, "sid-restorer", "restore handoff")
@@ -1024,15 +857,6 @@ class TestResolveDispositionIntegration(unittest.TestCase):
             self.assertTrue(any("restoration-commit spoof guard" in d for d in diagnostics))
 
     def test_sweep_attributed_commit_not_read_as_own_provenance(self):
-        """2026-08-05 chain-terminal misattribution incident, live repro
-        (session 5bbc9cc8-4b1c-406b-9116-a04ed3692478): a nested
-        `fleet.archive_completed_handoffs` sweep archived ANOTHER session's
-        `archive/handoffs/2026-07/2026-07-10_141606_roadmap-qsub-03.md` via a
-        `fleet: archive 1 completed handoff(s)` commit carrying THIS
-        session's Session-Id trailer purely because the sweep ran inside it.
-        The archived record here carries no claim holder at all (the qsub-03
-        shape) — Detector B must reject the candidate on subject alone,
-        never reach the (also-fixed) foreign-consumer guard."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1061,7 +885,6 @@ class TestResolveDispositionIntegration(unittest.TestCase):
             )
 
     def test_boot_sweep_attributed_commit_also_rejected(self):
-        """Same shape, the second known sweep prefix (session.boot_sweep)."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1083,11 +906,6 @@ class TestResolveDispositionIntegration(unittest.TestCase):
             self.assertEqual(consumed_paths, [])
 
     def test_origin_session_guard_rejects_unclaimed_foreign_record(self):
-        """Defect 1 of the 2026-08-05 incident, in isolation from the sweep
-        subject filter: a NON-sweep-shaped commit archives a record with no
-        claim holder at all, but whose `origin_session:` names a different
-        session. Absence of a claim holder is absence of evidence, not
-        evidence of this session's ownership — the guard must reject."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1201,11 +1019,6 @@ class TestResolveDispositionIntegration(unittest.TestCase):
             )
 
     def test_legitimate_own_claim_and_origin_still_resolves_chain_terminal(self):
-        """Regression guard: the legitimate own-ship-and-archive path (a
-        session's OWN claim stamp AND its own origin_session, via a
-        non-sweep-shaped commit) must still resolve chain-terminal — neither
-        the sweep-subject filter nor the widened origin_session guard may
-        reject a genuinely self-authored archival."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1296,7 +1109,6 @@ class TestResolveDispositionEnvOverride(unittest.TestCase):
             disposition, consumed, diagnostics, consumed_paths = wsc.resolve_disposition(
                 repo, "sid-solo"
             )
-            # The env var cannot downgrade a positive detector result.
             self.assertEqual(disposition, "predecessor-consumed")
             self.assertEqual(len(consumed_paths), 1)
             self.assertTrue(
@@ -1406,10 +1218,6 @@ class TestDispositionResolutionDetectionRecord(unittest.TestCase):
                 os.environ[k] = v
 
     def test_return_is_still_unpackable_as_exactly_four_values(self):
-        """The compatibility pin. `DispositionResolution` is a `tuple`
-        subclass precisely so the widening cannot break the fixed-arity
-        unpack at every existing call site — `detection` is an attribute,
-        never a fifth element."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1464,11 +1272,6 @@ class TestDispositionResolutionDetectionRecord(unittest.TestCase):
             self.assertIn(result.detection["deciding_leg"], wsc.DECIDING_LEGS)
 
     def test_crash_recovery_status_is_the_detector_c_leg_signal(self):
-        """`_resolve_crash_recovery`'s "crash-recovery" status is what
-        `resolve_disposition` promotes to `deciding_leg == "detector-c"`.
-        Pinned at the producing function so the seam's two halves cannot
-        drift apart: the consumer's judgment-point test asserts the same
-        pair from the other side."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1487,22 +1290,12 @@ class TestDispositionResolutionDetectionRecord(unittest.TestCase):
 
 
 class TestResolveDispositionDetectorCLegWiring(unittest.TestCase):
-    """Drives
-    `resolve_disposition()` itself (not `_resolve_crash_recovery` in
-    isolation) through the "detector-c" and "archive" legs and asserts on
-    the REAL `.detection` return value, so the `_detection()` merge at
-    production `resolve_disposition` (the actual wire
-    `compute_session_shape_gate` reads) is pinned end-to-end, not just its
-    two halves separately."""
 
     def test_detector_c_leg_populates_match_facts_on_the_real_detection_record(self):
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
             repo = _init_repo_with_history(Path(tmp))
-            # A committed path this session touched, scoped under a stale
-            # baton's directory-prefix scope entry -> Detector C's single
-            # exact/prefix hit.
             touched = repo / "coordinator" / "bin" / "widget.py"
             touched.parent.mkdir(parents=True)
             touched.write_text("# widget\n")
@@ -1525,19 +1318,6 @@ class TestResolveDispositionDetectorCLegWiring(unittest.TestCase):
             ):
                 result = wsc.resolve_disposition(repo, "sid-crashy")
 
-            # Amended 2026-08-20 (C4, docs/plans/2026-08-20-wsc-identity-
-            # gates-key-on-the-deliverable.md): this fixture's evidence is a
-            # bare directory-prefix hit on a one-entry scope, which is
-            # coincidence-prone, so the caller no longer ADOPTS it -- it falls
-            # through to `single-session`. The assertion below used to read
-            # `predecessor-consumed` and was pinning the fall-through C4
-            # removed, not this test's own subject.
-            #
-            # The subject is unchanged and is what the remaining assertions
-            # cover: the detection record still carries the detector-C leg and
-            # its match facts THROUGH the downgrade. That is the property C4
-            # depends on -- lose it and the downgrade becomes indistinguishable
-            # from a genuine "nothing found" close.
             self.assertEqual(result.disposition, "single-session")
             self.assertEqual(result.detection["deciding_leg"], "detector-c")
             self.assertEqual(result.detection["detector_c_status"], "crash-recovery")
@@ -1583,14 +1363,6 @@ class TestSessionShapeGateRoundTrip(unittest.TestCase):
     this class as end-to-end coverage of the package boundary."""
 
     def test_scalar_and_plural_fields_both_round_trip(self):
-        """Covers the nested `detection` field at its WIDENED shape (2026-08-
-        05-session-shape-attribution-structural-gate C2's `matched_scope_
-        entry_count`/`scope_size`/`single_match_kind` match-facts, folded
-        into the same single nested dict alongside `deciding_leg`/
-        `detector_c_status` -- one nested field, not N new scalars, per the
-        plan's own anti-scope: "add fields as one nested field... a nested
-        record makes 'this field doesn't apply to this detection leg' a
-        key-presence check.")"""
         from coordinator_core.workstream_complete import SessionShapeGate
 
         gate = SessionShapeGate(
@@ -1655,20 +1427,11 @@ class TestFindSessionClaimCli(unittest.TestCase):
             sibling_path = _BIN_DIR / "session-claim-cli.py"
 
             def _fake_access(path, mode):
-                # Force the sibling-entrypoint rung (checked first) to miss --
-                # this test's real bin/ dir DOES carry a live session-claim-cli
-                # (it's the real claude-klabauter checkout), which would otherwise mask
-                # the settings-home fallback rung under test here.
                 if str(path) == str(sibling_path):
                     return False
                 return real_access(path, mode)
 
             def _fake_is_file(self):
-                # `_is_executable` short-circuits to `True` without calling
-                # `os.access` on Windows (os.access(X_OK) is meaningless
-                # there), so the sibling rung's real gate on that platform is
-                # this `.is_file()` check, not the `os.access` patch above --
-                # force it to miss the same way for the same reason.
                 if str(self) == str(sibling_path):
                     return False
                 return real_is_file(self)
@@ -1700,11 +1463,6 @@ class TestMemoPredecessorLeg(unittest.TestCase):
     dispatch brief for why."""
 
     def _stamp_session_start(self, repo: Path, sid: str) -> None:
-        """Pins this session's start time to "now" via the same
-        `.git/coordinator-sessions/<sid>/` claim-dir mtime rung
-        `_resolve_memo_session_start_time`'s ladder checks first — gives
-        deterministic control over the `picked_up_at` gate instead of
-        depending on the merge-base fallback rungs."""
         common = _git(repo, "rev-parse", "--git-common-dir").stdout.strip()
         common_dir = Path(common)
         if not common_dir.is_absolute():
@@ -1736,12 +1494,6 @@ class TestMemoPredecessorLeg(unittest.TestCase):
         return f
 
     def test_ac3_archive_leg_wins_over_memo_predecessor(self):
-        """AC3, first ordering test: a Detector B hit that sets `arch`
-        (survives `_foreign_consumer_guard` AND the archived handoff carries
-        a `predecessor:` field) resolves `predecessor-consumed`, NOT
-        `memo-predecessor`, even with a picked-up memo present — the plan's
-        "Detector A/B ('archive' leg) always wins over the memo leg
-        unconditionally"."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1813,10 +1565,6 @@ class TestMemoPredecessorLeg(unittest.TestCase):
                 result.diagnostics,
             )
             # AC3's operator-facing REQUIREMENT survives its literal wording:
-            # the session still learns it archived a handoff and that the
-            # coverage gate is skipped, restated against the outcome that
-            # actually resolved. Negative-spec: this WARN is not optional
-            # decoration — it is the only signal a session in this shape gets.
             self.assertTrue(
                 any(
                     "archived a handoff this run" in d and "resolved memo-predecessor" in d
@@ -1826,11 +1574,6 @@ class TestMemoPredecessorLeg(unittest.TestCase):
             )
 
     def test_ac3_detector_c_clean_non_coincidence_prone_match_wins_over_memo(self):
-        """AC3 converse: a Detector C clean match that is NOT
-        coincidence-prone (here: `matched_scope_entry_count == 1`,
-        `scope_size == 1`, `single_match_kind == "exact"`) plus a picked-up
-        memo resolves `predecessor-consumed` with `deciding_leg ==
-        "detector-c"` — the memo loses."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1872,12 +1615,6 @@ class TestMemoPredecessorLeg(unittest.TestCase):
             self.assertEqual(result.detection["single_match_kind"], "exact")
 
     def test_ac6_cd272f17_reproduction_coincidence_prone_match_loses_to_memo(self):
-        """AC6: the reproduction built from real frontmatter shape — a
-        Detector C single-entry match against a baton whose entire `scope:`
-        is one entry, `coordinator_core/` (a prefix match, so
-        coincidence-prone), plus a memo naming that session in
-        `picked_up_by`, resolves `memo-predecessor` rather than
-        `predecessor-consumed`."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1921,27 +1658,15 @@ class TestMemoPredecessorLeg(unittest.TestCase):
                 result.detection["memo_path"],
                 "cross-repo/archive/2026-07-17-roadmap-sat-02-pickup.md",
             )
-            # AC4: Detector C's own status/match_facts ride onto the
             # memo-predecessor detection record as DIAGNOSTICS ONLY.
             self.assertEqual(result.detection["detector_c_status"], "crash-recovery")
             self.assertEqual(result.detection["matched_scope_entry_count"], 1)
             self.assertEqual(result.detection["scope_size"], 1)
             self.assertEqual(result.detection["single_match_kind"], "prefix")
-            # consumed_handoff contract: empty on the memo leg.
             self.assertEqual(result.consumed_handoff, "")
             self.assertEqual(result.consumed_handoff_paths, [])
 
     def test_example_market_data_repo_all_prefix_multi_match_loses_to_memo(self):
-        """The scope-extension regression: cross-repo/inbox/2026-08-06-
-        example-market-data-repo-em-wsc-detector-c-false-consume-attribution.md.
-        A single stale baton whose scope has 7 entries, 2 of which (`tests/`,
-        `docs/`) match this session's committed paths via directory prefix
-        and 0 via exact path, plus a memo naming this session in
-        `picked_up_by`. The pre-fix `coincidence_prone` gate
-        (`matched_count == 1 and ...`) was `False` at `matched_count == 2`,
-        so the memo-preemption branch was skipped and this resolved
-        `predecessor-consumed` against a LIVE peer's plan — the exact
-        incident. Must now resolve `memo-predecessor`."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1980,18 +1705,11 @@ class TestMemoPredecessorLeg(unittest.TestCase):
             self.assertEqual(result.disposition, "memo-predecessor")
             self.assertNotEqual(result.disposition, "predecessor-consumed")
             self.assertEqual(result.detection["deciding_leg"], "memo-predecessor")
-            # Detector C's own facts still ride along as diagnostics-only.
             self.assertEqual(result.detection["matched_scope_entry_count"], 2)
             self.assertEqual(result.detection["scope_size"], 7)
             self.assertEqual(result.detection["exact_match_count"], 0)
 
     def test_ac4_memo_predecessor_is_a_settled_fact_not_uncertain(self):
-        """AC4: on a memo-predecessor resolution `.detection` carries
-        `deciding_leg == "memo-predecessor"` and names the memo path,
-        `consumed_handoff` is `""` and `consumed_handoff_paths` is `[]`, and
-        `_session_shape_is_uncertain` returns `False` for it (a settled
-        fact) — no memo/handoff/detector-c evidence competes here, so the
-        leg fires on its own."""
         import tempfile
 
         from coordinator_core.workstream_complete import _session_shape_is_uncertain
@@ -2013,9 +1731,6 @@ class TestMemoPredecessorLeg(unittest.TestCase):
             self.assertFalse(_session_shape_is_uncertain(result.detection))
 
     def test_ac7_no_memo_and_no_handoff_evidence_still_resolves_single_session(self):
-        """AC7: the new leg ADDS an outcome, it does not absorb the existing
-        one — a session with no memo and no handoff evidence at all still
-        resolves `single-session`, `deciding_leg == "none"`."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -2028,11 +1743,6 @@ class TestMemoPredecessorLeg(unittest.TestCase):
             self.assertEqual(result.detection["deciding_leg"], "none")
 
     def test_temporal_gate_rejects_a_memo_picked_up_after_session_start(self):
-        """The temporal gate is load-bearing: an incidental mid-workstream
-        memo claim (`picked_up_at` AFTER the session's own start window)
-        must not preempt a real resolution — the leg does not fire at all,
-        and this session resolves `single-session` exactly as if the memo
-        were absent."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -2050,9 +1760,6 @@ class TestMemoPredecessorLeg(unittest.TestCase):
             self.assertNotIn("memo_path", result.detection)
 
     def test_quoted_numeric_sid_still_matches_picked_up_by(self):
-        """`memo_transition` writes `picked_up_by` with `numeric_quoting=
-        True`, so a purely-numeric sid is written QUOTED — the leg must
-        strip the quotes on read rather than fail a naive equality test."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -2074,16 +1781,6 @@ class TestMemoPredecessorLeg(unittest.TestCase):
             self.assertEqual(result.detection["memo_path"], "cross-repo/inbox/memo-numeric-sid.md")
 
     def test_unresolvable_session_start_with_no_memo_is_byte_identical_to_head(self):
-        """The docstring's
-        "no memo matched at all -> every return path is byte-identical to
-        pre-memo-leg HEAD" claim had an untested exception: `find_memo_
-        predecessor` used to resolve the session-start git ladder BEFORE
-        confirming any `picked_up_by == sid` candidate existed, so an
-        unresolvable session start still emitted a "leg did not fire" NOTE
-        even with zero cross-repo memos present anywhere in the repo. With
-        no memo present, the filesystem scan short-circuits and the git
-        ladder (`_resolve_memo_session_start_time`) must never even run —
-        asserted directly, not just inferred from the diagnostics."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -2104,16 +1801,6 @@ class TestMemoPredecessorLeg(unittest.TestCase):
 
 
 class SessionClaimCliArgvTests(unittest.TestCase):
-    """`session-claim-cli.py` (in-repo sibling) and the settings-home
-    installed `session-claim-cli` shim both carry neither a shebang nor an
-    exec bit post-C6/C4, so a bare-path launch fails on POSIX (no exec
-    permission) exactly as it fails on Windows (CreateProcess WinError 193 —
-    "%1 is not a valid Win32 application" — which also does not read `#!`
-    lines). Detector C must invoke through an interpreter on both platforms.
-    Before the original fix these tests pinned, the Windows OSError escaped
-    `list_stale_claim_handoffs` and crashed `brief()` outright, taking the
-    whole `/workstream-complete` ceremony down rather than degrading
-    detector C."""
 
     def test_py_sibling_routes_through_the_interpreter_on_windows(self):
         with unittest.mock.patch.object(wsc.os, "name", "nt"):
@@ -2122,8 +1809,6 @@ class SessionClaimCliArgvTests(unittest.TestCase):
         self.assertTrue(argv[1].endswith("session-claim-cli.py"))
 
     def test_extensioned_cmd_path_is_invoked_directly_on_windows(self):
-        # A `.cmd`/`.exe` sibling IS directly executable — routing it through
-        # the interpreter would hand Python a batch file to parse.
         with unittest.mock.patch.object(wsc.os, "name", "nt"):
             argv = wsc._session_claim_cli_argv(Path("/bin/session-claim-cli.cmd"))
         self.assertEqual(len(argv), 1)
@@ -2137,24 +1822,6 @@ class SessionClaimCliArgvTests(unittest.TestCase):
 
 
 class TestSessionIdentityImport(unittest.TestCase):
-    """C1 (docs/plans/2026-08-20-wsc-identity-gates-key-on-the-deliverable.md):
-    the plain `coordinator_core.workstream_complete.session_identity` import
-    resolves off this bin script rather than sitting dead.
-
-    AMENDED 2026-08-25 (docs/plans/2026-08-25-the-close-ceremony-inside-the-
-    brightline.md, C1): this class used to prove liveness by asserting that
-    `resolve_disposition` CALLS the reader, via a diagnostic-only
-    `_note_session_deliverable_ids` at the top of every disposition
-    resolution. That call was a `git log --no-merges` full-history walk --
-    296.9ms measured, unbounded, growing with repo age -- run on the close
-    path purely to prove an import was wired, and by its own docstring it
-    could not change the returned disposition. It is gravestoned.
-
-    Liveness is now proved the way it should always have been: the import
-    binding is asserted directly (a test's job), and the reader's remaining
-    consumer is `_resolve_deliverable_id_join` on the detector_c leg, where
-    the value actually gates a decision and therefore earns its cost. The
-    close-path invariant that replaced the old call is pinned below."""
 
     def test_import_resolves_to_the_engine_leaf_module(self):
         self.assertIs(
@@ -2166,18 +1833,6 @@ class TestSessionIdentityImport(unittest.TestCase):
         )
 
     def test_resolve_disposition_does_not_walk_history_for_a_diagnostic(self):
-        """The close-path invariant the gravestone created, pinned so it
-        cannot regress quietly.
-
-        `resolve_disposition` must not reach `session_deliverable_ids` at
-        all: that reader runs an unbounded `git log` from HEAD, and on the
-        close path ~50 concurrent sessions queue behind it. Reintroducing a
-        "cheap diagnostic" call here is exactly the regression this asserts
-        against -- the cost is the history walk, not the NOTE it produced.
-
-        Spying the module-level binding is deliberate: it catches ANY call
-        from this module, not merely a re-added helper of the same name.
-        """
         import tempfile
 
         calls = []
@@ -2210,16 +1865,6 @@ class TestSessionIdentityImport(unittest.TestCase):
         )
 
     def test_disposition_diagnostics_carry_no_deliverable_id_note(self):
-        """Retained deliberately, with its meaning restated.
-
-        It used to assert "the NOTE is absent when no trailer was found",
-        which distinguished two live behaviours. With the walk gravestoned
-        the NOTE is absent unconditionally, so this now pins that the close
-        path emits no Deliverable-Id diagnostic at all. Kept rather than
-        deleted because it is the assertion that goes red if someone
-        reintroduces the diagnostic against a repo that DOES carry a
-        trailer -- the case the sibling spy test covers from the other side.
-        """
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -2270,12 +1915,6 @@ class TestCoincidenceProneCrashRecoveryIsNotAdopted(unittest.TestCase):
         _git(repo, "add", "coordinator/bin/widget.py")
         _commit_with_session_trailer(repo, "sid-coincidence", "touch widget")
 
-        # 9-entry scope: exactly one entry ("coordinator/bin/widget.py")
-        # exactly matches this session's committed path; the other 8 are
-        # unrelated paths this session never touched, driving scope_size=9,
-        # matched_scope_entry_count=1, single_match_kind="exact" -- the
-        # observed shape (exact_match_count=1, scope_size>=2 -> coincidence-
-        # prone per `is_coincidence_prone_detection`).
         stale_handoff = repo / "state" / "handoffs" / "2026-07-01_dead.md"
         stale_handoff.parent.mkdir(parents=True, exist_ok=True)
         scope_lines = "\n".join(f"  - unrelated/path-{i}.py" for i in range(8))
@@ -2310,17 +1949,6 @@ class TestCoincidenceProneCrashRecoveryIsNotAdopted(unittest.TestCase):
             self.assertEqual(result.consumed_handoff, "")
 
     def test_downgrade_path_still_flags_chain_end_as_uncertain(self):
-        """The fail-open this reroute would otherwise cause: emptying
-        `consumed_handoff` must not also erase the evidence that this
-        session's own chain end is uncertain. `deciding_leg` stays
-        "detector-c" (not "none") with `detector_c_status`/match facts
-        intact, so `coordinator_core.workstream_complete.
-        _session_shape_is_uncertain` — the consumer-side predicate that
-        raises `jp-session-shape` for a human to resolve — still fires True
-        for this shape, rather than reading a `deciding_leg: "none"` and
-        treating it identically to a genuine "nothing found" single-session
-        close. A test that only asserted `!= "predecessor-consumed"` would
-        pass while this signal silently went missing."""
         import tempfile
 
         from coordinator_core.workstream_complete import _session_shape_is_uncertain
@@ -2351,20 +1979,8 @@ class TestCoincidenceProneCrashRecoveryIsNotAdopted(unittest.TestCase):
 
 
 class TestDeliverableIdJoinPreferredOverScopePath(unittest.TestCase):
-    """C5 (2026-08-20-wsc-identity-gates-key-on-the-deliverable, item 1
-    AC2): session-shape attribution prefers an exact, unambiguous
-    `deliverable_id` join between the session's own commit trailers and a
-    candidate stale baton's frontmatter over `_resolve_crash_recovery`'s
-    scope-path heuristic. Scope-path matching is exercised as the fallback
-    only — when the join is ambiguous on either side, or no baton carries a
-    matching id."""
 
     def test_ac2_real_baton_with_matching_id_wins_over_scope_sharing_stranger(self):
-        """The observed pair, verbatim from the baton: the real predecessor
-        carries the session's own Deliverable-Id in its frontmatter; the
-        stranger shares one high-fanout scope path with what this session
-        committed but carries no deliverable_id at all. The join must pick
-        the real predecessor, not the scope-path-sharing stranger."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -2459,9 +2075,6 @@ class TestDeliverableIdJoinPreferredOverScopePath(unittest.TestCase):
             )
 
     def test_ambiguous_baton_side_falls_back_to_scope_path(self):
-        """Two candidate batons carry the SAME Deliverable-Id as the
-        session's own commits — ambiguous, not a match; falls through to
-        `None` with a diagnostic naming both candidates."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -2485,9 +2098,6 @@ class TestDeliverableIdJoinPreferredOverScopePath(unittest.TestCase):
             )
 
     def test_no_trailer_resolves_falls_back_to_scope_path(self):
-        """No Deliverable-Id trailer at all on the session's own commits —
-        the join has nothing to key on and must fall through silently
-        (no ambiguity diagnostic; there is nothing to be ambiguous about)."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:

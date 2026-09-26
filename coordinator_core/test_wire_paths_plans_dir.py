@@ -1,10 +1,3 @@
-"""Regression for `coordinator_core.wire_paths.plans_dir` — the single
-fleet-wide plans-directory emitter, called by leg A instead of composing
-`root / "docs" / "plans"` inline.
-
-Spec backlink: cross-repo/archive/2026-08-08-doe-claude-em-plans-path-
-emitter-one-home.md.
-"""
 from __future__ import annotations
 
 from pathlib import Path

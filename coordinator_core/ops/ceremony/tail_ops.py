@@ -94,11 +94,6 @@ commit. See state/kill-ledger.md.
 from __future__ import annotations
 import sys
 
-# Generator-provenance declaration: this module wires/reuses other modules'
-# writes (refresh_roadmap_callout, cs_archive/
-# cs_release_artifact native ports, detached CLI fires) but performs no
-# direct file write of its own to a tracked repo path -- every actual write
-# site lives in the module it delegates to.
 GENERATES = []
 
 import contextlib
@@ -120,35 +115,7 @@ from coordinator_core.ops.ceremony.housekeeping_liveness import (
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
 
-# Import side-effect only: trigger each reused op module's @register_op(...) decorator so
-# get_op_handler(...) below resolves via a direct registry hit rather than its lazy-import
-# fallback (get_op_handler() self-resolves a MISS since 2026-07-25, so this pre-import is
-# belt-and-braces, not strictly required for correctness) -- mirrors the
 # "# noqa: F401 -- trigger registration" idiom used at every call site
-# in the OLD wsc_commit.py). The three fleet archive ops (archive_plans/archive_handoffs/
-# archive_actioned_memos) are NOT imported here for registration any more (C2) -- nothing in
-# this module calls them in-process. The terminal-handoff sweep's live call site
-# (`commit_pipeline.py`'s `_run_in_plane_archive_sweep`, C4) imports
-# `archive_terminal_handoffs.plan_sweep`/`.apply_sweep` directly rather than through this
-# module's registry-handler resolution -- it composes those two pure functions, never the
-# registered `fleet.archive_completed_handoffs` op handler itself.
-#
-# coverage.gate (coordinator_core.ops.coverage_gate) is deliberately NOT
-# pre-imported here any more (K-001, state/kill-ledger.md): the close path no
-# longer calls this op in-process -- see the retired `run_coverage_gate`
-# below this module's own history. The op still exists as mint-only
-# plumbing reachable from `cmd_brightline_gate` (removed, K-007)
-# (coordinator/bin/wsc-coverage-gate-runner.py), which imports and registers
-# it in its own process.
-#
-# review_trail_write (coordinator_core.ops.review_trail_write) is likewise not
-# pre-imported here -- its in-process wiring was removed 2026-08-23 (PM ruling,
-# kill review_trail.write) and this module still performs no call against it.
-# The op itself was later readmitted from suspension by the 2026-08-23 PM
-# ruling and IS registered (coordinator_core/ops/__init__.py registers
-# "review_trail.write") -- it was never deleted outright; see the
-# "review_trail.write" residue comment below for what this module used to
-# wire against it and why re-wiring is a separate decision from readmission.
 
 _LOG = logging.getLogger(__name__)
 
@@ -168,15 +135,6 @@ def _fail(op_label: str, reason: str) -> TailResult:
 
 
 def _ids(items: List[Any]) -> List[str]:
-    """Normalize a fleet-op result list (dicts with 'id', or bare strings) to str ids.
-
-    Review nit fix: a dict lacking BOTH 'id' and 'path' falls back to
-    `str(item)` (a Python-repr of the whole dict) -- widened from a bare
-    `.get("id", str(item))` so a `path`-only fleet-op item (no 'id' key)
-    still yields a sensible identifier instead of degrading straight to a
-    repr. All currently-reused fleet ops emit 'id'-bearing dicts, so this is
-    defensive against future fleet-op shape drift, not a live bug today.
-    """
     return [
         (item.get("id") or item.get("path") or str(item)) if isinstance(item, dict) else str(item)
         for item in items
@@ -184,12 +142,6 @@ def _ids(items: List[Any]) -> List[str]:
 
 
 def fleet_result_to_tail(result: dict, op_label: str) -> TailResult:
-    """Extract acted/skipped/failed string lists from a fleet-op result envelope.
-
-    Treats ``exit_code`` not in ``{0, 2}`` as an op-level failure when ``failed`` is
-    otherwise empty (exit_code 2 is the fleet-op partial-failure code -- individual
-    per-candidate failures are already reflected in the ``failed`` list itself).
-    """
     acted = _ids(result.get("acted", []))
     skipped = _ids(result.get("skipped", []))
     failed = _ids(result.get("failed", []))
@@ -202,27 +154,11 @@ def fleet_result_to_tail(result: dict, op_label: str) -> TailResult:
     return {"acted": acted, "skipped": skipped, "failed": failed, "unknown": unknown}
 
 
-# ---------------------------------------------------------------------------
-# Fleet ops -- confirm-then-act (T1 preview -> T3 act) two-phase wiring
-# ---------------------------------------------------------------------------
-
-
 async def run_fleet_op_two_phase(
     handler_fn: Callable[..., Awaitable[dict]],
     op_label: str,
     common_dir: Path,
 ) -> TailResult:
-    """Run a ``fleet.*`` op (``dry_run:true`` preview -> ``dry_run:false`` act) best-effort.
-
-    Follows the confirmed-then-act fleet-op contract (contract §2.2):
-        T1 preview (``dry_run:true``)  -> discover candidates
-        T3 act     (``dry_run:false``) -> act on the discovered ``candidate_ids``
-
-    When T1 returns no candidates, returns an all-empty result -- no T3 call is made.
-
-    Never raises -- op-level exceptions and non-{0,2} exit codes are captured into
-    ``failed[]`` so a single mis-wired reused op cannot abort the rest of the tail.
-    """
     try:
         preview = await handler_fn(
             {"mode": "already-terminal", "dry_run": True},
@@ -258,26 +194,12 @@ async def _run_fleet_op_by_key(op_key: str, op_label: str, common_dir: Path) -> 
 
 
 # fire_archive_sweeps_detached and _ARCHIVE_SWEEP_SCRIPTS were DELETED here (C4,
-# docs/plans/2026-08-25-the-terminal-handoff-sweep-stops-being-an-op.md § C4) -- the
-# detached on-disk-script archival shape they implemented is replaced by an in-plane
-# fold-in of plan_sweep/apply_sweep's own moved src/dst paths into the ceremony's own
-# commit_paths (`commit_pipeline.run_commit_pipeline`'s `_run_in_plane_archive_sweep`),
-# never a spawned child racing the parent's own commit. See that module for the live
-# call site; this module registers no call site of its own for it any more.
-# ---------------------------------------------------------------------------
-# refresh-roadmap-callout -- disposable sibling render
 # (STEP_2_75, C9 wiring-gap fix, 2026-07-22 -- see wsc_tail.py module docstring)
-# ---------------------------------------------------------------------------
 
 #: Native-port op label (not a JSON-RPC op key -- never goes through get_op_handler),
 #: mirroring the OLD wsc_commit.py's ``_OP_ROADMAP_CALLOUT``.
 OP_ROADMAP_CALLOUT = "node:refresh-roadmap-callout.sh"
 
-# roadmap_id is attacker-influenceable frontmatter on a shared work/* branch and is
-# interpolated into a subprocess arg -- mirrors the DoE pickup skill's allowlist guard.
-# Imported (not re-compiled) from renderers.py, which owns the single canonical
-# copy -- see that module's C8c negative-spec for why this must never be a second
-# compiled definition.
 from coordinator_core.ops.ceremony.renderers import _ROADMAP_ID_ALLOWLIST_RE  # noqa: E402
 
 
@@ -371,9 +293,6 @@ def refresh_roadmap_callout(worktree_root: Path, consumed_handoff_paths: List[st
             failed.append(f"{OP_ROADMAP_CALLOUT}: {reason}")
 
     # Success-path-only liveness stamp (ROADMAP_CALLOUT): only when at least one
-    # consumed handoff's roadmap callout was actually refreshed this pass --
-    # an all-skipped loop (no roadmap_id anywhere, or every callout already
-    # up-to-date) or an all-failed loop must NOT read as "the class ran".
     if acted:
         stamp_liveness(str(worktree_root), _HL_ROADMAP_CALLOUT)
 
@@ -383,15 +302,8 @@ def refresh_roadmap_callout(worktree_root: Path, consumed_handoff_paths: List[st
     }
 
 
-# ---------------------------------------------------------------------------
-# fire_tracker_and_roadmap_detached: refresh_roadmap_callout is fired as a
 # DETACHED CLI spawn rather than run in the BLOCKING wsc_tail.py pre-commit path.
-# ---------------------------------------------------------------------------
 
-#: bin/ CLI name (relative to ``<worktree_root>/coordinator/bin/``) this function
-#: spawns detached -- the SAME occasion CLI `/handoff` SKILL.md and workday-start
-#: already invoke standalone, reused here rather than a second, WSC-only spawn
-#: mechanism.
 _ROADMAP_CALLOUT_CLI_SCRIPT = "refresh-roadmap-callout.py"
 
 
@@ -507,38 +419,11 @@ def fire_tracker_and_roadmap_detached(
     return result
 
 
-# ---------------------------------------------------------------------------
-# This module does not wire coverage.gate's ceremony-close DAG fixpoint walk,
-# and does not wire review_trail.write's in-process call (review_trail_
-# metadata_complete, write_review_trail, write_review_trail_many). Neither is
-# a call site here; re-wiring either is a fresh decision, not a restoration.
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# cs_archive -- native port (session-dir move, idempotent)
-# ---------------------------------------------------------------------------
-
-
 def _sessions_dir(common_dir: Path) -> Path:
-    """``<common_dir>/coordinator-sessions`` -- the Python-convention equivalent of the
-    bash original's ``.git/coordinator-sessions`` (``common_dir`` IS ``<worktree>/.git``
-    for the standard layout -- see ``fleet._common.main_worktree_root``)."""
     return common_dir / "coordinator-sessions"
 
 
 def cs_archive(common_dir: Path, session_id: str) -> TailResult:
-    """Native port of bash ``cs_archive <session_id>``.
-
-    Moves ``<common_dir>/coordinator-sessions/<sid>`` to
-    ``<common_dir>/coordinator-sessions/.archive/<sid>-<today>``. Idempotent: a missing
-    session dir (already archived, or never existed) is a clean no-op, matching the bash
-    original's ``return 0`` on absence -- never a failure.
-
-    Always best-effort: any OSError during the move is captured into ``failed[]``, never
-    raised (mirrors the bash original's ``|| return 1`` -- surfaced here as a soft failure
-    rather than a hard exception so one archive failure cannot abort the rest of the tail).
-    """
     sessions_dir = _sessions_dir(common_dir)
     sdir = sessions_dir / session_id
     if not sdir.is_dir():
@@ -558,22 +443,7 @@ def cs_archive(common_dir: Path, session_id: str) -> TailResult:
         return _fail(OP_CS_ARCHIVE, f"{type(exc).__name__} -- {str(exc)[:160]}")
 
 
-# ---------------------------------------------------------------------------
-# cs_release_artifact -- native port (self-release, holder-identity-checked)
-# ---------------------------------------------------------------------------
-
-
 def _claim_held_by_me(claim_dir: Path, my_session_id: str) -> bool:
-    """Return True iff ``claim_dir`` is currently held by ``my_session_id``.
-
-    Keyed exclusively on the claim dir's ``session_id`` file -- NEVER on pid (see module
-    negative-spec). A claim dir with no ``session_id`` file (legacy pid-only claim, or a
-    dir that vanished mid-check) is treated as NOT held by me; it self-heals to
-    ``session_id`` on the next takeover, same as the bash original's documented behavior.
-
-    Re-reads the file fresh on every call -- calling this twice in sequence around a
-    mutation IS the TOCTOU double-read discipline (see ``cs_release_artifact``).
-    """
     if not my_session_id:
         return False
     session_id_file = claim_dir / "session_id"
@@ -622,15 +492,9 @@ def cs_release_artifact(common_dir: Path, artifact_class: str, basename: str) ->
     worktree_root = main_worktree_root(common_dir)
     my_session_id = resolve_current_session_id(worktree_root) or ""
 
-    # First read: am I the holder at all? -- this IS a determined fact (the op
-    # established it is not the holder), so it stays skipped, not unknown.
     if not _claim_held_by_me(claim_dir, my_session_id):
         return {"acted": [], "skipped": [f"{OP_CS_RELEASE_ARTIFACT}:not-holder"], "failed": [], "unknown": []}
 
-    # Second read (TOCTOU re-check): re-verify immediately before the destructive rm.
-    # A takeover between the two reads flips this to False -- conservative outcome is to
-    # skip the delete (never delete a live peer's claim), but the claim's own disposition
-    # after the takeover is not something this call can establish -- unknown, not skipped.
     if not _claim_held_by_me(claim_dir, my_session_id):
         return {
             "acted": [], "skipped": [], "failed": [],

@@ -1,12 +1,3 @@
-"""Unit tests for coordinator_core.benchmarks.gate.evaluate().
-
-Covers AC3's gate contract: advisory-below-N, relative vs absolute tolerance
-bands, min-vs-target pass/fail boundaries, and the invariant that gate.py
-never consumes a floor_delta (floor subtraction is out of scope for this
-module — see gate.py's module docstring).
-
-Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C8 (AC3).
-"""
 
 from __future__ import annotations
 
@@ -22,8 +13,6 @@ from coordinator_core.benchmarks.record import Tolerance
 
 
 def test_advisory_when_sample_count_below_min_gating_sample_count():
-    """An underpowered sample never gates green or red, even if the observed
-    statistic would clearly pass or fail the band."""
     tolerance = Tolerance(kind="relative", value=0.2)
     verdict = evaluate(
         observed_statistic=10.0,
@@ -36,8 +25,6 @@ def test_advisory_when_sample_count_below_min_gating_sample_count():
 
 
 def test_advisory_at_sample_count_equal_to_min_is_not_advisory():
-    """sample_count == min_gating_sample_count is sufficient to gate (only
-    strictly-below is advisory)."""
     tolerance = Tolerance(kind="relative", value=0.2)
     verdict = evaluate(
         observed_statistic=50.0,
@@ -50,7 +37,6 @@ def test_advisory_at_sample_count_equal_to_min_is_not_advisory():
 
 
 def test_relative_tolerance_band_pass_at_boundary():
-    """band = target_ms * (1 + value); observed == band passes (<=)."""
     tolerance = Tolerance(kind="relative", value=0.2)
     verdict = evaluate(
         observed_statistic=120.0,
@@ -75,7 +61,6 @@ def test_relative_tolerance_band_fail_just_above_boundary():
 
 
 def test_absolute_tolerance_band_pass_at_boundary():
-    """band = target_ms + value; observed == band passes (<=)."""
     tolerance = Tolerance(kind="absolute", value=25.0)
     verdict = evaluate(
         observed_statistic=125.0,
@@ -124,8 +109,6 @@ def test_min_vs_target_fail_well_over_band():
 
 
 def test_tolerance_accepts_dict_shape_not_only_dataclass():
-    """gate.py is decoupled from record.py's concrete Tolerance type — a
-    plain dict with kind/value keys must work identically."""
     tolerance = {"kind": "relative", "value": 0.2}
     verdict = evaluate(
         observed_statistic=100.0,

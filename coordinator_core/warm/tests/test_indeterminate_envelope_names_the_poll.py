@@ -30,9 +30,6 @@ _MSG = {"jsonrpc": "2.0", "id": 1, "method": "some.mutating.op", "params": {}}
 
 
 def test_envelope_without_a_key_omits_data() -> None:
-    """Back-compat / unkeyed-caller shape: no `dispatch_key` argument means
-    no `error.data` at all -- an old call site that has not been threaded
-    through yet must not fabricate a null key."""
     envelope = client._indeterminate_envelope(_MSG, "no response within 5s")
     assert "data" not in envelope["error"]
 
@@ -51,12 +48,10 @@ def test_envelope_message_names_the_exact_poll_invocation() -> None:
 
 
 def test_delivery_claim_stays_withheld_even_with_a_key() -> None:
-    """Negative spec (C5 body): the poll, not this message, is what now
-    knows -- adding the key must not restore "the op ran" as a claim."""
     envelope = client._indeterminate_envelope(_MSG, "no response within 5s", "123-456")
     message = envelope["error"]["message"]
     assert "finding no trace means it is safe to re-run" not in message
-    assert "may have COMPLETED" in message  # unchanged uncertainty, not a claim
+    assert "may have COMPLETED" in message
 
 
 def test_poll_command_is_exactly_reproducible_for_a_given_key() -> None:
@@ -128,9 +123,6 @@ def test_try_warm_dispatch_mints_a_fresh_key_every_call(
 def test_delivered_mutation_indeterminate_carries_the_sent_dispatch_key(
     monkeypatch: pytest.MonkeyPatch, _warm_on: None
 ) -> None:
-    """The end-to-end shape AC-4 checks: a mutation delivered-then-unanswered
-    returns a -32004 whose `error.data.dispatch_key` is the SAME key that
-    was sent on the wire frame, not a fresh one."""
     import threading
 
     class _StuckPipe(_FakePipe):

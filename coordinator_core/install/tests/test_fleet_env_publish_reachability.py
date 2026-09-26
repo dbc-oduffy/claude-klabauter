@@ -57,33 +57,7 @@ from coordinator.lib.percolate.targets import _iter_portable_rows
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _PORTABLE_TARGETS_PATH = _REPO_ROOT / "setup" / "publish-targets.portable"
 
-# The plan's own `scope:` frontmatter list (docs/plans/2026-08-16-one-
-# environment-for-the-fleet.md), copied verbatim rather than parsed off the
-# plan body: the plan body is immutable to this executor (Standing Order 2)
-# and re-parsing YAML-in-markdown frontmatter here would add a second, more
-# fragile dependency on that file's exact shape for no reachability benefit
-# -- the thing under test is the PUBLISH ROW SET's coverage of this list,
-# not the list's own extraction.
-#: FROZEN, and no longer drift-checkable -- this used to be verified against
-#: the plan's own `scope:` frontmatter by
-#: `test_plan_scope_matches_frontmatter_scope_block`, which was retired
 #: 2026-08-29 with `_PLAN_STEM`/`_PLAN_PATH` and the block scanner, because
-#: its oracle no longer exists and cannot: `fleet.archive_completed_plans`
-#: moved the plan to `archive/specs/2026-08/` (a748935102) and the distill
-#: sweep then deleted it per the brightline (c2a5076b49), capturing its
-#: content into `docs/wiki/install-machinery.md`
-#: (`state/distillation-log.md:790`). Nothing about that should be undone.
-#:
-#: So editing this list has no second side to check it any more. If you add
-#: or remove an entry, the reachability tests below still assert every entry
-#: is publishable, and `test_every_plan_scope_path_is_accounted_for` still
-#: assures nothing is silently dropped -- but nothing verifies the list
-#: still matches what the plan actually scoped. Reconcile against
-#: `docs/wiki/install-machinery.md` by hand, and do NOT restore the check by
-#: pointing it at a filename search of `archive/`: a plan and a handoff share
-#: this stem, so a search finds the WRONG KIND of artifact, and if its
-#: frontmatter happens to parse the test goes green against the wrong
-#: document (`state/bug-backlog/2026-08-29-distillation-deletes-artifacts-that-test-059acf5a71c9.yaml`).
 _PLAN_SCOPE = [
     "coordinator_core/install/fleet_env.py",
     "coordinator_core/install/fleet_env_lock.py",
@@ -101,13 +75,6 @@ _PLAN_SCOPE = [
     "scripts/setup.py",
 ]
 
-# `scope:` entries this plan does not itself publish-own: pre-existing files
-# another chunk is responsible for updating/publishing (`shared-fleet-venv-
-# contract.md` is C9's, `scripts/setup.py` is C10's -- see this plan's C11
-# body), plus claude-klabauter's own publish CONFIG files, which are never themselves
-# published TO klabauter (they configure what publishes, and klabauter is
-# not itself a publish source). Excluded from the reachability assertion
-# below with a named reason each, not silently dropped.
 _NOT_THIS_CHUNKS_TO_PUBLISH = {
     "docs/reference/shared-fleet-venv-contract.md": "deliberately NOT published: it documents the settings-home venv's purposes (a)/(c), "
         "which are claude-klabauter-plane concerns. The routing added by C9 is one-way (old doc -> new "
@@ -121,11 +88,6 @@ _NOT_THIS_CHUNKS_TO_PUBLISH = {
 
 
 def _parse_portable_rows(path: Path) -> list[dict[str, str]]:
-    """Parse rows into `{"name", "source_subdir", "dest_subdir", "allowlist"}`.
-
-    Tuple shape (the portable file's own header comment):
-      name|mode|<dest-sigil>|source_subdir|dest_subdir[|native_slugs[|allowlist[|source_map]]]
-    """
     rows = []
     for raw_row in _iter_portable_rows(path):
         fields = raw_row.split("|")
@@ -186,8 +148,6 @@ def _covering_row(rows: list[dict[str, str]], repo_relative_path: str) -> Option
     return None
 
 
-
-
 def _assertable_scope_paths() -> list[str]:
     return [p for p in _PLAN_SCOPE if p not in _NOT_THIS_CHUNKS_TO_PUBLISH]
 
@@ -213,10 +173,6 @@ def test_every_plan_scope_path_is_accounted_for() -> None:
 
 
 def test_demonstration_allowlist_removal_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Demonstrates this test is not vacuous: with `fleet-env.py` removed
-    from `claude-klabauter-coordinator-bin`'s allowlist, the row no longer
-    covers `coordinator/bin/fleet-env.py` -- proves the reachability check
-    above is load-bearing, not a tautology that always passes."""
     rows = _parse_portable_rows(_PORTABLE_TARGETS_PATH)
     mutated = []
     found = False

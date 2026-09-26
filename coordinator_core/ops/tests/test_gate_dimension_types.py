@@ -27,11 +27,6 @@ import subprocess
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Import guards -- MUST precede any test so both modules' registration side
-# effects fire (gate_validate_invocable's @register_op, then this module's
-# register_dimension("types", ...) call).
-# ---------------------------------------------------------------------------
 import coordinator_core.ops.gate_validate_invocable  # noqa: F401
 import coordinator_core.ops.gate_dimension_types as types_dim  # noqa: E402
 
@@ -45,8 +40,6 @@ from coordinator_core.ops.tests._dod_gate_test_helpers import available, unavail
 
 @pytest.fixture(autouse=True)
 def _restore_dimension_registry():
-    """Isolate registry mutations across tests, mirroring
-    test_gate_dimension_latency.py's own fixture."""
     original = dict(_DIMENSION_REGISTRY)
     yield
     _DIMENSION_REGISTRY.clear()
@@ -135,8 +128,6 @@ def test_non_py_files_filtered_out() -> None:
 
 
 def test_run_dimension_wraps_types_check(monkeypatch, tmp_path) -> None:
-    """Sanity check the seam-level wrapper (`_run_dimension`) round-trips
-    this dimension's real check the same as any other registered dimension."""
     monkeypatch.setattr(
         types_dim,
         "resolve_tool",

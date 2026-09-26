@@ -39,12 +39,6 @@ _GENERATED = "generated"
 
 
 def _stamp_provenance(value):
-    """Recursively guarantee every dict encountered carries provenance:"generated".
-
-    Walks lists/dicts inside `value`; any dict missing a `provenance` key (or with a falsy one)
-    is stamped `"generated"` in place. Never overwrites an existing non-empty `provenance` value
-    — the generator upstream is the source of truth when it has already stamped one.
-    """
     if isinstance(value, dict):
         if "provenance" not in value or not value["provenance"]:
             value["provenance"] = _GENERATED
@@ -57,34 +51,11 @@ def _stamp_provenance(value):
 
 
 def write_draft(repo_root: Path, fields: dict) -> Path:
-    """Write `fields` to `<repo_root>/state/strategic/self-description.draft.yaml`.
-
-    Idempotent full overwrite: every call replaces the draft file wholesale (generator-owns-draft
-    model, DEC-3) — never appends to or merges with a prior draft on disk. Creates
-    `state/strategic/` if absent. Guarantees every field dict inside each field-list value of
-    `fields` carries `provenance: "generated"` before serializing (defense-in-depth over the
-    generator's own upstream stamping) — the walk never touches the top-level `fields` dict
-    itself, so no spurious document-root `provenance` key is ever written.
-
-    Args:
-        repo_root: guarded, resolved repo root (see coordinator_core.cartography._guard.path_guard).
-        fields: dict of generatable-subset fields to serialize (e.g. version_highlights,
-            competitors).
-
-    Returns:
-        Path to the written draft file.
-    """
-    # Stamp only the field-list VALUES (version_highlights /
-    # competitors entries), never the top-level `fields` dict itself; the frozen schema has
-    # no top-level `provenance` and is additionalProperties:false at the document root.
     for value in fields.values():
         _stamp_provenance(value)
 
     draft_path = Path(repo_root) / DRAFT_REL
     draft_path.parent.mkdir(parents=True, exist_ok=True)
-    # newline="" disables universal-newline translation — this draft is a
-    # byte-contract consumed downstream; without it, Windows text mode
-    # silently rewrites every embedded "\n" to "\r\n".
     with open(draft_path, "w", encoding="utf-8", newline="") as f:
         f.write(yaml.safe_dump(fields, sort_keys=False))
     return draft_path

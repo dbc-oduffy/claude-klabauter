@@ -45,8 +45,6 @@ import coordinator_data_root as cdr  # noqa: E402
 import coordinator_registry  # noqa: E402
 from coordinator_registry import _DoeUnresolvable  # noqa: E402
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -58,7 +56,6 @@ def test_data_root_colocated_hit(tmp_path, monkeypatch) -> None:
     (coordinator_root / "snippets").mkdir(parents=True)
 
     monkeypatch.setattr(cdr, "_colocated_root", lambda: coordinator_root)
-    # Rung 2 must not even be consulted on a rung-1 hit; make it explode if it is.
     monkeypatch.setattr(
         coordinator_registry,
         "doe_root",
@@ -71,7 +68,7 @@ def test_data_root_colocated_hit(tmp_path, monkeypatch) -> None:
 
 
 def test_data_root_doe_resident_fallback(tmp_path, monkeypatch) -> None:
-    colocated_miss = tmp_path / "claude-klabauter-coordinator"  # exists, but no snippets/ inside
+    colocated_miss = tmp_path / "claude-klabauter-coordinator"
     colocated_miss.mkdir()
     doe_root_dir = tmp_path / "DoE-claude"
     (doe_root_dir / "coordinator" / "snippets").mkdir(parents=True)
@@ -110,7 +107,7 @@ def test_data_root_fail_loud_doe_candidate_missing(tmp_path, monkeypatch) -> Non
     colocated_miss = tmp_path / "claude-klabauter-coordinator"
     colocated_miss.mkdir()
     doe_root_dir = tmp_path / "DoE-claude"
-    doe_root_dir.mkdir()  # exists, but no coordinator/snippets/ inside
+    doe_root_dir.mkdir()
 
     monkeypatch.setattr(cdr, "_colocated_root", lambda: colocated_miss)
     monkeypatch.setattr(cdr, "_cdr_codename_free_root", lambda: "")
@@ -125,16 +122,10 @@ def test_data_root_fail_loud_doe_candidate_missing(tmp_path, monkeypatch) -> Non
 
 
 def test_f2_oss_flat_layout_fallback_when_private_join_absent(tmp_path, monkeypatch) -> None:
-    """F2 regression (2026-08-08, hermetic-ac-reverify) -- when rung 2
-    (`coordinator_registry.doe_root()`) resolves an OSS-flat root (`schemas/`
-    directly under the root, no `coordinator/` segment -- e.g. a real
-    marketplace-cache install), the terminal join must NOT unconditionally
-    insert `coordinator/`. Must stay behaviourally identical to
-    `coordinator_core/data_root.py`'s own fix (AC4)."""
     colocated_miss = tmp_path / "claude-klabauter-coordinator"
     colocated_miss.mkdir()
     doe_root_dir = tmp_path / "flat-doe-root"
-    (doe_root_dir / "snippets").mkdir(parents=True)  # OSS-flat: no coordinator/ prefix
+    (doe_root_dir / "snippets").mkdir(parents=True)
 
     monkeypatch.setattr(cdr, "_colocated_root", lambda: colocated_miss)
     monkeypatch.setattr(cdr, "_cdr_codename_free_root", lambda: "")
@@ -145,9 +136,6 @@ def test_f2_oss_flat_layout_fallback_when_private_join_absent(tmp_path, monkeypa
 
 
 def test_f2_private_layout_still_wins_when_both_would_resolve(tmp_path, monkeypatch) -> None:
-    """F2 regression: the private-layout join must still be tried FIRST --
-    unchanged default behaviour for every existing caller/test resolving a
-    private-layout root."""
     colocated_miss = tmp_path / "claude-klabauter-coordinator"
     colocated_miss.mkdir()
     doe_root_dir = tmp_path / "both-doe-root"
@@ -188,12 +176,6 @@ def test_f6_marketplace_cache_rung_claude_home_matches_registry_twin(tmp_path, m
 
 
 def test_cdr_marketplace_cache_rung_excludes_unparseable_version_dirs(tmp_path, monkeypatch) -> None:
-    """Opaque hash-named cache dirs (e.g. a github-sourced install's commit
-    SHAs) must not out-rank a real semver dir via leading-digit coercion —
-    only strictly numeric, <=3-segment dot-versions are ranking candidates.
-    Pre-fix, `021d0d725330` parsed as (21, 0, 0) and `0371a29ed35d` as
-    (371, 0, 0), so the hash with the longer leading-digit run won on an
-    ordering that reflects nothing about install recency."""
     claude_home_env = tmp_path / "hash-shaped-cache"
     cache_parent = claude_home_env / ".claude" / "plugins" / "cache" / "coordinator-claude" / "coordinator"
     (cache_parent / "0371a29ed35d").mkdir(parents=True)
@@ -230,12 +212,6 @@ def test_f6_flat_layout_rung_claude_home_matches_registry_twin(tmp_path, monkeyp
 
 
 def test_codename_free_ladder_wins_before_registry_rung_real_delegation(tmp_path, monkeypatch) -> None:
-    """Rung 1.5, exercised for real (no stubbing of the ladder itself) — only
-    env vars are redirected to a temp layout, matching the "environment
-    redirection to a temp dir only" constraint. Proves `data_root()` resolves
-    via the codename-free ladder WITHOUT ever calling `coordinator_registry.
-    doe_root()`, which is left unmocked and made to explode if reached.
-    """
     colocated_miss = tmp_path / "claude-klabauter-coordinator"
     colocated_miss.mkdir()
 
@@ -306,13 +282,6 @@ def test_c1e_plugin_root_content_root_normalized_to_repo_root(tmp_path, monkeypa
 
 
 def test_import_is_pure_under_stripped_environment() -> None:
-    """Importing coordinator_data_root must succeed with zero subprocess/env
-    dependency — it must not eagerly import `coordinator_registry` (which
-    eagerly resolves its manifest via a `machine-local` subprocess needing
-    `HOME`) at module top level. A subprocess with `env={}` genuinely
-    exercises a stripped environment (no HOME, no PATH, nothing) rather than
-    mocking anything that would pass regardless of the fix.
-    """
     probe = (
         "import sys; "
         f"sys.path.insert(0, {str(LIB_DIR)!r}); "

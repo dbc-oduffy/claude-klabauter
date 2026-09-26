@@ -1,27 +1,4 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
-"""bin/tests/test_workweek_complete_drift_guards.py
-
-Purpose: unit tests for coordinator/bin/workweek-complete-drift-guards.py —
-the M3 chunk WWC-3 port of four genuine bash-logic fences out of
-DoE-claude's `coordinator/commands/workweek-complete.md`:
-description-length/enabledPlugins-drift advisory dispatch, the change-aware
-dep-manifest CVE-recheck (manifest-presence gate + 14-day window), and the
-console-flash / multi-event-hook guard dispatch pairs. The repo-wide
-ShellCheck sweep (`shellcheck-sweep` subcommand) was removed 2026-08-16 as
-advisory prose that could not pay for its spawn cost — see
-state/kill-ledger.md K-102. The schema-drift-gate subcommand and its
-three-way rc branch were retired outright (P124-C3) — the fact it served
-moved to the doctor's vendor_drift sentinel.
-
-Coverage:
-  test_enabled_plugins_skips_when_settings_json_absent
-  test_enabled_plugins_dispatches_when_settings_json_present
-  test_cve_recheck_no_tracked_manifests_skips
-  test_cve_recheck_manifest_untouched_in_window_skips
-  test_cve_recheck_manifest_changed_in_window_dispatches
-  test_console_flash_guard_missing_sibling_skips_cleanly
-  test_multi_event_hook_guard_missing_sibling_skips_cleanly
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -34,8 +11,6 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -45,7 +20,6 @@ _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
 def _load_module():
-    """Load workweek-complete-drift-guards.py by file path (hyphenated name bypass)."""
     spec = importlib.util.spec_from_file_location(
         "workweek_complete_drift_guards",
         _BIN_DIR / "workweek-complete-drift-guards.py",
@@ -80,11 +54,6 @@ def test_exists() -> None:
     assert (_BIN_DIR / "workweek-complete-drift-guards.py").is_file()
 
 
-# ---------------------------------------------------------------------------
-# enabled-plugins — Step 4f advisory (settings.json presence gate)
-# ---------------------------------------------------------------------------
-
-
 def test_enabled_plugins_skips_when_settings_json_absent(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -104,15 +73,8 @@ def test_enabled_plugins_dispatches_when_settings_json_present(
     rc = _mod.main(["enabled-plugins", "--repo-root", str(tmp_path)])
     assert rc == 0
     out = capsys.readouterr().out
-    # Dispatch happened — banner reports SOME rc from the sibling audit
-    # script, not the "skipped" short-circuit message.
     assert "no .claude/settings.json — skipped" not in out
     assert "enabledPlugins drift advisory" in out
-
-
-# ---------------------------------------------------------------------------
-# cve-recheck — Step 4h change-aware gate
-# ---------------------------------------------------------------------------
 
 
 def test_cve_recheck_no_tracked_manifests_skips(
@@ -135,7 +97,6 @@ def test_cve_recheck_manifest_untouched_in_window_skips(
     _init_repo(tmp_path)
     (tmp_path / "package.json").write_text("{}\n", encoding="utf-8")
     _git(str(tmp_path), "add", "package.json")
-    # Backdate the commit well outside the 14-day window.
     env_args = ["commit", "-q", "-m", "initial", "--date=2020-01-01T00:00:00"]
     subprocess.run(
         ["git", *env_args],
@@ -158,18 +119,13 @@ def test_cve_recheck_manifest_changed_in_window_dispatches(
     _init_repo(tmp_path)
     (tmp_path / "package.json").write_text("{}\n", encoding="utf-8")
     _git(str(tmp_path), "add", "package.json")
-    _git(str(tmp_path), "commit", "-q", "-m", "initial")  # commits now, inside window
+    _git(str(tmp_path), "commit", "-q", "-m", "initial")
 
     rc = _mod.main(["cve-recheck", "--repo-root", str(tmp_path)])
     assert rc == 0
     out = capsys.readouterr().out
     assert "dispatching dep-cve-auditor" in out
     assert "package.json" in out
-
-
-# ---------------------------------------------------------------------------
-# console-flash-guard / multi-event-hook-guard — dispatch pairs, missing-sibling case
-# ---------------------------------------------------------------------------
 
 
 def test_console_flash_guard_missing_sibling_skips_cleanly(

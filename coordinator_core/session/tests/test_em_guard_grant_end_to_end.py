@@ -88,20 +88,11 @@ def _init_repo(tmp_path: Path, name: str) -> Path:
 
 
 def _posix(p) -> str:
-    # The hasattr/PureWindowsPath fallback
-    # was dead code at this file's only call site (`repos["foreign"]` is
-    # always a `pathlib.Path`, which always has `.as_posix()`). No caller
-    # here ever passes a bare string, so the branch is collapsed rather than
-    # kept as untested dead code; still not a hardcoded `\\`-replace.
     return p.as_posix()
 
 
 @pytest.fixture()
 def repos(tmp_path):
-    """Anchor repo (the session's own -- also where the grant module's
-    durable record lands, via `core.session_dir`) and a foreign sibling
-    repo, mirroring `test_bump_foreign_repo_write.py`'s own `repos`
-    fixture."""
     anchor = _init_repo(tmp_path, "anchor")
     foreign = _init_repo(tmp_path, "foreign")
     home = tmp_path / "home"
@@ -137,7 +128,6 @@ def _dispatch_decision(cmd: str, session_id: str, cwd: str) -> str:
 
 
 class TestGrantRouteClearsBumpForeignRepoWriteOnce:
-    """AC-1 (a granted write proceeds) and AC-2 (the grant is one-shot)."""
 
     def test_deny_grant_allow_consumed_record_written_re_deny(self, repos, monkeypatch):
         sid = _unique_sid("em-grant-e2e")
@@ -146,31 +136,18 @@ class TestGrantRouteClearsBumpForeignRepoWriteOnce:
         sentinel = guard_unlock_sentinel.sentinel_path(sid, GUARD_NAME)
 
         try:
-            # 1. Attempt a Bash write bump-foreign-repo-write denies.
             assert _dispatch_decision(cmd, sid, str(repos["anchor"])) == "deny"
 
-            # 2. Run the grant CLI for that guard name -- the in-process
-            # entrypoint `python3 -m coordinator_core.session.em_guard_grant
-            # grant <guard> <reason>` resolves to. `main()` takes no
-            # explicit session/cwd override (matching the real CLI's own
-            # argv shape), so the calling session is resolved the same way
             # the real CLI resolves it: `COORDINATOR_SESSION_ID` plus the
-            # process cwd -- both pinned to this test's own sid/anchor here
-            # so the grant lands where this test's assertions expect it,
-            # never onto whatever ambient session happens to be running
-            # this suite.
             monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
             monkeypatch.chdir(repos["anchor"])
             exit_code = eg.main(["grant", GUARD_NAME, "clearing a genuine cross-repo write"])
             assert exit_code == 0
 
-            # 3. Re-attempt -- it now proceeds (AC-1).
             assert _dispatch_decision(cmd, sid, str(repos["anchor"])) == "allow"
 
-            # 4. The sentinel is gone -- consumed by step 3, not merely read.
             assert not sentinel.exists()
 
-            # 5. The durable grant record gained the entry.
             record = eg.read_em_guard_grant(session_id=sid, cwd=str(repos["anchor"]))
             assert record is not None
             assert record["guard_name"] == GUARD_NAME
@@ -178,7 +155,6 @@ class TestGrantRouteClearsBumpForeignRepoWriteOnce:
             assert record["session_id"] == sid
             assert record["reason"] == "clearing a genuine cross-repo write"
 
-            # 6. Re-attempt a third time -- refused again (AC-2, one-shot).
             assert _dispatch_decision(cmd, sid, str(repos["anchor"])) == "deny"
         finally:
             try:

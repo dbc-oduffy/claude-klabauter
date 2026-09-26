@@ -67,12 +67,6 @@ _mod = _load_module()
 
 
 def test_subject_reports_pathspec_size_not_raw_change_line_count():
-    """The originating defect: 3-4 files actually named in the pathspec,
-    but ~2000 raw change lines scraped from publish.py's dest-comparison
-    output. The subject must show the pathspec's own size (what is about
-    to be committed), never present the raw scrape count as if it were
-    that.
-    """
     real_changes = [("NEW", f"file{i}.py") for i in range(1875)] + [
         ("NEW", f"new{i}.py") for i in range(45)
     ] + [("REMOVE", f"gone{i}.py") for i in range(39)]
@@ -81,28 +75,13 @@ def test_subject_reports_pathspec_size_not_raw_change_line_count():
     subject = _mod._build_commit_subject("claude-klabauter", real_changes, pathspec)
 
     assert "3 file(s) to commit" in subject
-    # The counts size off what the pathspec CARRIES, never off the full
-    # scrape: all three carried paths are added-or-updated, and not one of
-    # the 39 REMOVEs is in the pathspec. No `modified` term exists -- the
-    # producer emits only NEW/REMOVE, so a test that manufactured "UPDATE"
-    # tuples validated a vocabulary production cannot build (that is exactly
-    # how a permanently-zero `0 modified` shipped in sixty subjects).
     assert "3 added-or-updated" in subject
     assert "0 removed" in subject
     assert "1956 reported change(s) not carried" in subject
-    # The raw scrape total (1959) must never appear standing in for the
-    # commit's own file count.
     assert "1959 file(s) to commit" not in subject
 
 
 def test_subject_never_claims_removals_the_commit_does_not_carry():
-    """The public-history defect the DoE-claude memo (2026-08-26) reported:
-    a mirror commit whose subject read "dest diverged on 646 added, 0
-    modified, 67 removed" while the removal side was gated off downstream,
-    so the commit removed nothing. The mirror's git history is public — a
-    subject that asserts removals that never happened is a permanent
-    false record.
-    """
     real_changes = [("NEW", f"a{i}.py") for i in range(3)] + [
         ("REMOVE", f"gone{i}.py") for i in range(67)
     ]
@@ -149,8 +128,6 @@ def test_residual_report_names_both_numbers_when_they_diverge(capsys):
     assert "3 path(s)" in captured.err
     assert "claude-klabauter" in captured.err
     assert captured.out == ""
-    # Stderr alone let a dropped-change round print a bare PASS: the
-    # verdict block counts what this returns.
     assert warning is not None
     assert "1872 change(s) the real run reported were NOT committed" in warning
 
@@ -176,7 +153,6 @@ def test_residual_warning_still_counts_removals_with_the_gate_open(capsys):
 
     assert warning is not None
     assert "23 change(s) the real run reported were NOT committed" in warning
-    # The flag is no longer the explanation, so it must not be blamed.
     assert "_REMOVAL_SIDE_ENABLED" not in warning
     assert "intent vs commit pathspec diverge" in capsys.readouterr().err
 
@@ -196,10 +172,6 @@ def test_carried_partition_is_by_path_not_by_count():
 
 
 def test_round_warnings_degrade_a_clean_pass():
-    """The verdict an operator reads must count the residual gap. Before
-    this, `has_review_warnings` was the ONLY input to the verdict, so a
-    round that dropped every removal still printed `PASS`.
-    """
     assert _mod._round_warnings(has_review_warnings=False, residual_warning=None) == []
 
     only_residual = _mod._round_warnings(

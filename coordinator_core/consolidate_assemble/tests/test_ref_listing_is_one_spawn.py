@@ -1,23 +1,3 @@
-"""The brief enumerates refs ONCE, and that enumeration does not invent a
-branch out of a remote's symbolic HEAD.
-
-`brief()` asks two questions of the ref set — which branches exist, and who
-authored each tip — and used to spawn a separate `git branch -a` for the first
-alongside the `git for-each-ref` that already answered the second. On this repo
-`branch -a` measured 284 ms of the op's 931 ms process time: the single most
-expensive call in a brief, buying a re-listing of refs already in hand.
-
-The consolidation has a trap the old parse dodged by accident and a naive
-rewrite walks straight into. `git branch -a` renders a remote's symbolic HEAD
-as `remotes/origin/HEAD -> origin/main`, which the old parse skipped on the
-`->`. `for-each-ref` has no arrow: `refs/remotes/origin/HEAD` arrives with the
-short name `origin`. Read as a branch it becomes a phantom named `origin`,
-categorized `mine-stale`, dragging a `git log` and a `git show --stat` behind
-it — two extra spawns and a fabricated row in the operator's branch report,
-proposed for deletion.
-
-Spec backlink: CLAUDE.md § The brightline ("git justifies itself per use").
-"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -70,8 +50,6 @@ def test_brief_enumerates_refs_with_a_single_spawn() -> None:
     ca.brief(repo_root=Path("/repo"), run_git=_fake_git(calls))
 
     assert [c for c in calls if c[0] == "for-each-ref"].__len__() == 1
-    # The spawn this consolidation deleted. `git branch --merged <target>` is
-    # a different call with a different job (reachability, batched) and stays.
     assert ["branch", "-a"] not in calls
 
 
@@ -82,15 +60,10 @@ def test_a_remotes_symbolic_head_is_not_a_branch() -> None:
     names = {b["name"] for b in decision_object["gates"]["branches"]}
     assert "origin" not in names, "refs/remotes/origin/HEAD is an alias, not a branch"
     assert names == {"current", "main", "work/peer"}
-    # The phantom's real cost: it categorized as stale work and pulled a
-    # unique-commit walk and a `git show` after it.
     assert not [c for c in calls if c[:2] == ["log", "--oneline"]]
 
 
 def test_local_and_remote_flags_come_from_the_full_refname() -> None:
-    """A local branch may legitimately be named `origin/<something>`. Deciding
-    local-vs-remote from the SHORT name would misfile it as remote-tracking and
-    then resolve its `ref` to a nonexistent `origin/origin/<something>`."""
     rows = [
         ("refs/heads/origin/local-trap", "origin/local-trap", "me@x"),
         ("refs/remotes/origin/real-remote", "origin/real-remote", "me@x"),
@@ -107,8 +80,5 @@ def test_local_and_remote_flags_come_from_the_full_refname() -> None:
 
 
 def test_a_ref_with_no_author_email_still_parses() -> None:
-    """`%(authoremail:trim)` can come back empty. Tab-delimited, that is a
-    present-but-empty third field; space-delimited it was indistinguishable
-    from a missing one."""
     rows = ca.list_branches_from([("refs/heads/orphan", "orphan", "")])
     assert [r["name"] for r in rows] == ["orphan"]

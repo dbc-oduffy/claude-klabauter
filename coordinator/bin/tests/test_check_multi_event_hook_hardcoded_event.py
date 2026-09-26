@@ -1,23 +1,3 @@
-"""tests/test_check_multi_event_hook_hardcoded_event.py — Tests for
-bin/check-multi-event-hook-hardcoded-event.py.
-
-Purpose: Verifies the guard flags a multi-event-registered hook script that
-hardcodes a literal `hookEventName` (exit 1), passes a multi-event script
-that echoes a variable (exit 0), passes a single-event script that
-hardcodes (legitimate — exit 0), does not crash on a registered-but-missing
-script (skip/warn, exit 0), and passes the live repo's real hooks.json
-(regression lock proving the guard is clean against the fixed tree).
-
-Uses synthetic fixture directories (own hooks.json + own script files) for
-every case except the live-tree regression lock — never depends on the
-live repo's real hooks.json contents drifting.
-
-Spec backlink: origin incident 2026-07-20, runtime-tripwire-em-check.py
-hardcoded "hookEventName": "PostToolUse" while registered on Stop,
-UserPromptSubmit, PostToolUse:Agent.
-
-Run: python3 -m pytest <settings-home>/coordinator/bin/tests/test_check_multi_event_hook_hardcoded_event.py
-"""
 
 import json
 import os
@@ -29,8 +9,6 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -60,10 +38,6 @@ def _write(path, content):
 
 
 def _make_fixture(tmp, hooks_config, scripts):
-    """hooks_config: dict for the "hooks" top-level key of hooks.json.
-    scripts: {basename: source_text} written under <tmp>/scripts/.
-    Returns path to the fixture hooks.json.
-    """
     scripts_dir = os.path.join(tmp, "scripts")
     os.makedirs(scripts_dir, exist_ok=True)
     for name, text in scripts.items():
@@ -76,10 +50,6 @@ def _make_fixture(tmp, hooks_config, scripts):
 def _command_for(script_name):
     return "python3 ${{CLAUDE_PLUGIN_ROOT}}/hooks/scripts/{}".format(script_name)
 
-
-# ---------------------------------------------------------------------------
-# Test 1: multi-event script with hardcoded literal -> exit 1, violation reported
-# ---------------------------------------------------------------------------
 
 def test_multi_event_hardcoded_literal_exits_nonzero():
     with tempfile.TemporaryDirectory() as tmp:
@@ -101,10 +71,6 @@ def test_multi_event_hardcoded_literal_exits_nonzero():
         )
 
 
-# ---------------------------------------------------------------------------
-# Test 2: multi-event script echoing a variable -> exit 0
-# ---------------------------------------------------------------------------
-
 def test_multi_event_variable_echo_exits_zero():
     with tempfile.TemporaryDirectory() as tmp:
         script_src = (
@@ -123,10 +89,6 @@ def test_multi_event_variable_echo_exits_zero():
         assert rc == 0, "rc={} out={} err={}".format(rc, out, err)
 
 
-# ---------------------------------------------------------------------------
-# Test 3: single-event script with hardcoded literal -> exit 0 (legitimate)
-# ---------------------------------------------------------------------------
-
 def test_single_event_hardcoded_literal_exits_zero():
     with tempfile.TemporaryDirectory() as tmp:
         script_src = (
@@ -144,10 +106,6 @@ def test_single_event_hardcoded_literal_exits_zero():
         assert rc == 0, "rc={} out={} err={}".format(rc, out, err)
 
 
-# ---------------------------------------------------------------------------
-# Test 4: registered script missing from disk -> exit 0 with a skip/warn, no crash
-# ---------------------------------------------------------------------------
-
 def test_missing_script_skips_gracefully():
     with tempfile.TemporaryDirectory() as tmp:
         hooks_json = _make_fixture(
@@ -156,17 +114,13 @@ def test_missing_script_skips_gracefully():
                 "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": _command_for("ghost.py")}]}],
                 "UserPromptSubmit": [{"matcher": "", "hooks": [{"type": "command", "command": _command_for("ghost.py")}]}],
             },
-            {},  # ghost.py deliberately not written
+            {},
         )
         rc, out, err = _run_guard("--hooks-json", hooks_json)
         assert rc == 0 and ("WARN" in err or "not found" in err), (
             "rc={} out={} err={}".format(rc, out, err)
         )
 
-
-# ---------------------------------------------------------------------------
-# Test 5 (regression lock): the real repo's live hooks.json -> exit 0
-# ---------------------------------------------------------------------------
 
 def test_live_repo_hooks_json_exits_zero():
     if not os.path.isfile(LIVE_HOOKS_JSON):
@@ -175,15 +129,8 @@ def test_live_repo_hooks_json_exits_zero():
     assert rc == 0, "guard exited {} against live hooks.json\nstdout: {}\nstderr: {}".format(rc, out, err)
 
 
-# ---------------------------------------------------------------------------
-# Test 6: negative control — the exact pre-fix bug shape must be caught
-# ---------------------------------------------------------------------------
-
 def test_negative_control_matches_pre_fix_bug_shape():
     with tempfile.TemporaryDirectory() as tmp:
-        # Reproduces the pre-2026-07-20 runtime-tripwire-em-check.py bug:
-        # hardcoded "hookEventName": "PostToolUse" while registered on
-        # Stop, UserPromptSubmit, AND PostToolUse.
         script_src = (
             '"""pre-fix reproduction fixture."""\n'
             "def _emit_advisory(parts):\n"
@@ -207,5 +154,4 @@ def test_negative_control_matches_pre_fix_bug_shape():
         assert rc != 0 and "pre-fix.py" in err and "3 events" in err, (
             "rc={} out={} err={}".format(rc, out, err)
         )
-
 

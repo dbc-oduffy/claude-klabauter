@@ -14,15 +14,7 @@ from coordinator_core.install.write_surface import StaticClause
 from coordinator_core.ops import configure_git as cg
 from coordinator_core.win_portability import no_console_creationflags
 
-# Declared, not excused: this file spawns a real git process because the
-# hardening under test writes real git config (`gc.auto`,
-# `core.checkStat`) and asserts idempotence against a real repeat run --
-# no mock stands in for real git-config read/write. Each test inits its own
-# throwaway repo, so `_init_repo` is not hoisted to module scope -- per-test
-# isolation (idempotent-rerun assertions need a known prior-state repo). The
 # spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
-# explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -85,10 +77,6 @@ def test_partial_prior_config_only_reports_changed_key(tmp_path, monkeypatch, ca
 
 
 def test_unrecognized_first_arg_behaves_as_per_repo_mode(tmp_path, monkeypatch):
-    # The module docstring's
-    # negative-spec claims any first arg other than "--global" is silently treated as
-    # "no flag" (per-repo mode), matching the bash oracle's single-value comparison,
-    # but no test exercised it — every existing test used [] or ["--global"] only.
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
     rc = cg.main(["--globl"])
@@ -98,10 +86,6 @@ def test_unrecognized_first_arg_behaves_as_per_repo_mode(tmp_path, monkeypatch):
 
 
 def test_config_set_failure_exits_1_with_partial_success(tmp_path, monkeypatch, capsys):
-    # The documented
-    # partial-failure exit path (a failure on the second key exits 1 even if the
-    # first key already changed) had zero test coverage — every other test exercised
-    # only success paths. Forces the second key's write to fail deterministically.
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
 
@@ -274,9 +258,6 @@ _HELP_BROWSER_KEYS = ("help.format", "web.browser", "browser.noop.cmd")
 
 
 def _stub_git_config(monkeypatch, initial: dict[tuple[tuple[str, ...], str], str]):
-    """Stub the git-config subprocess seam with an in-memory store keyed on
-    (scope-tuple, key), so triple-write tests don't depend on the host
-    platform or touch real git config."""
     store = dict(initial)
     get_calls: list[tuple[tuple[str, ...], str]] = []
 
@@ -384,8 +365,6 @@ def test_settings_are_gitsetting_records():
     assert by_key["gc.auto"].unset_group is None
 
     # gc.autoDetach only moved auto-gc into the FOREGROUND; gc.auto=0 turns it
-    # off. The old key must be gone entirely, not merely joined -- leaving it
-    # would keep governing maintenance.autoDetach by fallback.
     assert "gc.autoDetach" not in by_key
 
     assert by_key["core.checkStat"].scope == "global"

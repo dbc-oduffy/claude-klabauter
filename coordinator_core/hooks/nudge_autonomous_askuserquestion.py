@@ -69,10 +69,6 @@ _ADVISORY_PREFIX_KEY = "engagement_posture"
 
 
 def _extract_key_from_lines(lines, key: str) -> Optional[str]:
-    """Scan flat `key: value` lines for `key`'s first value, tolerating a leading
-    frontmatter fence and trailing inline comments. Not general YAML parsing —
-    mirrors `_posture.py::_extract_key_from_lines` exactly, on the same class of
-    input (a flat frontmatter/mapping block)."""
     prefix = key + ":"
     for line in lines:
         stripped = line.strip()
@@ -134,9 +130,6 @@ def _resolve_posture(cwd: str, env: Mapping) -> str:
 
 
 def _compose_advisory(posture: str) -> str:
-    """The single unconditional advisory emitted at every firing posture — renders
-    no verdict on the question at hand and blocks nothing. Verbatim port of the
-    source script's `_compose_advisory`."""
     return (
         f"posture={posture}: break-class (approach/naming) decide+report; "
         "direction-class (scope/priority) ask; renders no verdict. "
@@ -185,11 +178,6 @@ def _handler(params: dict, repo_root=None) -> dict:
     if not isinstance(session_id, str) or not session_id:
         return no_advisory()
 
-    # Single-source resolver (`coordinator_core.session.autonomous_sentinel`),
-    # never a hand-rolled `tempfile.gettempdir()` join here -- that module's
-    # own docstring names exactly this drift class: a writer and a reader
-    # each independently deriving "the platform temp dir" once put the
-    # sentinel at two different paths on Windows.
     try:
         sentinel_present = sentinel_path(session_id).is_file()
     except Exception:

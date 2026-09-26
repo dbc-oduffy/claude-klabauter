@@ -73,20 +73,12 @@ from coordinator_core.tests.test_deep_per_item_spawn_worklist import (
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# The deep collector's own plan (docs/plans/2026-08-25-a-collector-that-sees-past-one-hop.md, C6)
-# measures and publishes depths 2 through 4. There is no published depth-5+ figure to widen into,
-# so the oracle is bounded here at the same ceiling that instrument itself is measured at.
-# Imported from the worklist module rather than redeclared, so this ceiling cannot drift out of
-# sync with the figures it is measured against (Review: coordinator:code-reviewer -- F4).
 _MAX_DEPTH = _MAX_PUBLISHED_DEPTH
 
 KnownSiteKey = tuple[str, str, str]
 
 
 class KnownSiteClassification:
-    """The closed four-way split this leg reports. Never a fifth: a row's own location either
-    resolves or it does not, and a resolving row is either seen by one of the two collectors, both,
-    or neither."""
 
     LIVE_DEBT = "live-debt"
     PAST_HORIZON = "past-horizon"
@@ -119,10 +111,6 @@ def _module_dotted(relpath: str) -> str:
 def _site_resolves_in_source(
     site: KnownSiteKey, index: TrackedFileIndex, repo_root: Path
 ) -> tuple[bool, str]:
-    """The path/symbol half of the measurement (AC's own phrasing): does the row's own file and
-    enclosing-function symbol still exist? Reuses C1's AST row resolver
-    (`register_rows.resolve_row`) rather than re-deriving path/AST resolution -- this module adds
-    no second symbol-resolution mechanism."""
     path, enclosing, _callee = site
     dotted = f"{_module_dotted(path)}.{enclosing}"
     row = Row(
@@ -142,10 +130,6 @@ def classify_known_site(
     repo_root: Path,
     deep_keys_unknown_depth: frozenset[KnownSiteKey],
 ) -> KnownSiteAssessment:
-    """Measure one row against the four-way split. Delegates the path/symbol half to
-    `register_rows.resolve_row` and the reachability half to the two existing collectors
-    (unmodified, consulted read-only). Never deletes or re-points -- the four outcomes are
-    reported, and only reported."""
     resolves, detail = _site_resolves_in_source(site, index, repo_root)
     if not resolves:
         return KnownSiteAssessment(
@@ -173,12 +157,8 @@ def classify_known_site(
             )
 
     if site in deep_keys_unknown_depth:
-        # The oracle's widened collector reports this site, but `depth_of` cannot attribute it
-        # a depth at all -- a route d/e/f/g callee naming a locally-bound parameter, never a
         # same-module or imported definition. Reporting this as CLOSURE_CANDIDATE would be the
-        # exact debt-laundering this module's Anti-scope forbids (a live per-item spawn silently
         # dropped as "fixed/gone"); PAST_HORIZON with depth=None reports it honestly instead
-        # (Review: coordinator:code-reviewer -- F1).
         return KnownSiteAssessment(
             site=site,
             classification=KnownSiteClassification.PAST_HORIZON,
@@ -195,13 +175,6 @@ def classify_known_site(
         depth=None,
         detail=f"dark to both the one-hop gate and the deep oracle through depth {_MAX_DEPTH}",
     )
-
-
-# ---------------------------------------------------------------------------
-# Fast unit coverage of the classifier itself, over synthetic fixtures -- no corpus walk, no
-# collector invocation. These pin the four-way split's logic in isolation from the two expensive
-# collectors exercised by the cadence test below.
-# ---------------------------------------------------------------------------
 
 
 def _index_for(repo_root: Path, *relpaths: str) -> TrackedFileIndex:
@@ -296,19 +269,13 @@ def test_classify_known_site_closure_candidate_when_dark_to_both(tmp_path):
     assert assessment.depth is None
 
 
-# ---------------------------------------------------------------------------
 # The real leg: every `_KNOWN_SITES` row, measured against the live corpus and both existing
-# collectors. Never gates, never deletes, never re-points -- publishes what each row is.
-# ---------------------------------------------------------------------------
 
 
 # HORIZON (resolves-or-declares-horizon): `_KNOWN_SITES` is enrolled in
-# `coordinator_core/tests/test_every_register_resolves_or_declares.py`'s core-45 sweep. A green
 # run there establishes only that every `_KNOWN_SITES` row's path/enclosing-symbol subject exists
 # on disk against its declared class -- it does NOT establish that `_KNOWN_SITES` is the right
-# frozen burn-down population, that any future exemption taken here is legitimate, or that a
 # resolving row is still LIVE_DEBT rather than a CLOSURE_CANDIDATE or STALE row this module's own
-# classification below has not yet reported as such.
 
 
 @pytest.mark.cadence
@@ -335,9 +302,6 @@ def test_known_sites_rows_resolve_or_report_depth():
 
     deep_sites, deep_site_depth = deep_find_with_site_depths(_gate_scope_paths(), _MAX_DEPTH)
 
-    # `deep_site_depth` returns `None` (unknown, Review: coordinator:code-reviewer -- F1) for a
-    # route d/e/f/g site whose callee names a locally-bound parameter, never a same-module or
-    # imported definition -- guard the `<= depth` comparison and track those separately rather
     # than letting `None` silently drop a live oracle-reported site to CLOSURE_CANDIDATE.
     deep_keys_by_depth: dict[int, frozenset[KnownSiteKey]] = {}
     for depth in range(2, _MAX_DEPTH + 1):
@@ -359,8 +323,6 @@ def test_known_sites_rows_resolve_or_report_depth():
         for site in _KNOWN_SITES
     }
 
-    # AC6's two first-run cases, both real and already located by hand this session (see module
-    # docstring and the plan's C3 body): these prove the four-way split actually discriminates
     # PAST_HORIZON from STALE, not that every row is frozen to a particular classification.
     write_guards_site = (
         "coordinator_core/write_guards/validate_frontmatter_schema_advisory.py",

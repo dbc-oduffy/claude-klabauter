@@ -53,28 +53,17 @@ _SOURCE_SESSION_IDENTITY = os.path.join(
 
 
 def _build_published_mirror(root: str) -> str:
-    """Assemble a scratch tree shaped like <mirror>/coordinator/{bin,lib}
-    after BOTH row 6 (claude-klabauter-coordinator-bin, dest coordinator/bin)
-    and the new C4 row (claude-klabauter-coordinator-lib, dest coordinator/lib)
-    have published — real file copies off this checkout's source tree, not
-    fixtures, so a drift in the real files' existence fails this suite too.
-    Returns the path to the mirror's `coordinator/bin/` directory.
-    """
     mirror_bin = os.path.join(root, "coordinator", "bin")
     mirror_lib = os.path.join(root, "coordinator", "lib")
 
-    # Row 6 payload slice: coordinator/bin/lib/cc_invoke.py (already shipping).
     os.makedirs(os.path.join(mirror_bin, "lib"), exist_ok=True)
     shutil.copy2(
         _SOURCE_BIN_LIB_CC_INVOKE,
         os.path.join(mirror_bin, "lib", "cc_invoke.py"),
     )
-    # A stand-in for the CLI itself, so __file__-relative math has somewhere
-    # real to compute from.
     open(os.path.join(mirror_bin, "cruft-sweep"), "w", encoding="utf-8").close()
     open(os.path.join(mirror_bin, "identity-cli"), "w", encoding="utf-8").close()
 
-    # New C4 row payload slice: coordinator/lib/{settings_home.py,session/}.
     os.makedirs(os.path.join(mirror_lib, "session"), exist_ok=True)
     shutil.copy2(
         _SOURCE_SETTINGS_HOME,
@@ -92,8 +81,6 @@ _PUBLISH_TARGETS = os.path.join(_REPO_ROOT, "setup", "publish-targets.portable")
 
 
 def _rows():
-    """Parse setup/publish-targets.portable into pipe-split field lists,
-    skipping comments and blanks."""
     with open(_PUBLISH_TARGETS, encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
@@ -103,11 +90,6 @@ def _rows():
 
 
 def test_a_row_publishes_coordinator_lib_to_coordinator_lib():
-    """The layout assertions below build their own mirror shape, so they would
-    all still pass if the C4 row were deleted from the config — they pin the
-    premise, not the thing that produces it. This pins the producer: some row
-    must publish source `coordinator/lib` to dest `coordinator/lib`, or the
-    `<bin>/../lib` leg those tests exercise never exists on a real mirror."""
     matches = [r for r in _rows() if len(r) > 4 and r[3] == "coordinator/lib" and r[4] == "coordinator/lib"]
     assert matches, (
         "no publish-targets row maps source coordinator/lib -> dest coordinator/lib; "
@@ -116,10 +98,6 @@ def test_a_row_publishes_coordinator_lib_to_coordinator_lib():
 
 
 def test_row_five_admits_percolate():
-    """AC8, machine-checked rather than left to the row's own prose: `percolate`
-    is one of coordinator/lib's five tracked top-level directories, and an
-    allowlist omission is invisible to the rot guard (which only verifies that
-    LISTED entries resolve, never that the list is complete)."""
     lib_rows = [r for r in _rows() if len(r) > 6 and r[3] == "coordinator/lib"]
     assert lib_rows, "expected at least one coordinator/lib publish row"
     for row in lib_rows:
@@ -130,17 +108,12 @@ def test_row_five_admits_percolate():
 
 
 def test_source_fixtures_exist():
-    """Sanity: the source-tree files this test copies from are real, so a
-    failure below reflects the published LAYOUT, not a stale fixture path."""
     assert os.path.isfile(_SOURCE_BIN_LIB_CC_INVOKE)
     assert os.path.isfile(_SOURCE_SETTINGS_HOME)
     assert os.path.isfile(_SOURCE_SESSION_IDENTITY)
 
 
 def test_cruft_sweep_bin_lib_resolves(tmp_path):
-    """cruft-sweep's `_LIB_DIR = <bin>/lib` (cc_invoke) — already shipping via
-    row 6, asserted here so a future edit cannot silently regress it while
-    fixing the sibling leg below."""
     mirror_bin = _build_published_mirror(str(tmp_path))
     cli_path = os.path.join(mirror_bin, "cruft-sweep")
 
@@ -163,9 +136,6 @@ def test_cruft_sweep_coordinator_lib_resolves(tmp_path):
 
 
 def test_identity_cli_lib_session_resolves(tmp_path):
-    """identity-cli's `_LIB_DIR = <bin>/../lib/session` (session/identity) —
-    same `<bin>/../lib` leg as above, distinct consumer, distinct target
-    module (session/identity.py rather than settings_home.py)."""
     mirror_bin = _build_published_mirror(str(tmp_path))
     cli_path = os.path.join(mirror_bin, "identity-cli")
 

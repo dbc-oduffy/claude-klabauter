@@ -37,7 +37,6 @@ def _redirect(monkeypatch, tmp_path):
 
 
 def test_in_process_route_honours_the_redirect(_redirect, monkeypatch):
-    """The case the env var exists for: a test isolating its own writes."""
     monkeypatch.delenv(op_latency.ROUTE_ENV, raising=False)
     assert op_latency.execution_route() == op_latency.IN_PROCESS
     assert queue_append._output_root_override() == _redirect
@@ -45,21 +44,13 @@ def test_in_process_route_honours_the_redirect(_redirect, monkeypatch):
 
 @pytest.mark.parametrize("route", [op_latency.WARM_SERVER, op_latency.HTTP_SERVER])
 def test_served_routes_ignore_the_servers_inherited_redirect(_redirect, monkeypatch, route):
-    """The leak: a server process must never redirect a caller's write to a
-    root the CALLER never asked for. Asserted for every non-in-process route,
-    not just `warm_server`, so a future transport cannot reopen the hole by
-    declaring a new route label."""
     monkeypatch.setenv(op_latency.ROUTE_ENV, route)
     assert op_latency.execution_route() == route
-    # The redirect IS set in this process's environment — the point is that a
-    # served handler declines to act on it, not that it was never there.
     assert os.environ[queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV] == _redirect
     assert queue_append._output_root_override() is None
 
 
 def test_absent_env_is_none_on_every_route(monkeypatch):
-    """No redirect set is `None`, not `""` — the caller branches on falsiness
-    and an empty string would `os.path.join` into a relative path."""
     monkeypatch.delenv(queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV, raising=False)
     for route in (op_latency.IN_PROCESS, op_latency.WARM_SERVER):
         monkeypatch.setenv(op_latency.ROUTE_ENV, route)
@@ -67,30 +58,15 @@ def test_absent_env_is_none_on_every_route(monkeypatch):
 
 
 def test_empty_env_value_is_not_treated_as_a_redirect(monkeypatch):
-    """An exported-but-empty var is 'unset', not 'redirect to the cwd'."""
     monkeypatch.setenv(queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV, "")
     monkeypatch.delenv(op_latency.ROUTE_ENV, raising=False)
     assert queue_append._output_root_override() is None
 
 
-# --- Swept-tmp-root refusal (2026-09-18) ------------------------------------
-#
-# Sibling hazard to the warm-server leak above: even on the genuine
 # IN_PROCESS route, `QUEUE_APPEND_OUTPUT_ROOT` can name a temp-dir path a
-# completed pytest run already tore down (a warm engine daemon started
-# mid test-run bakes its spawner's env in forever). Honouring a swept root
-# used to "succeed" anyway, because `os.makedirs(..., exist_ok=True)`
-# silently recreated it — the entry landed in a directory nothing durable
-# ever named, and was reported as written. `_output_root_override` must
-# refuse this shape outright, not fall through to routing it as a real
-# override.
-#
-# Bug: state/bug-backlog/2026-09-18-coordinator-queue-append-writes-into-a-swept-tmp-root.yaml
 
 
 def test_swept_temp_root_refuses_even_in_process(monkeypatch, tmp_path):
-    """A temp-dir override that no longer exists on disk must raise, not be
-    honoured — the exact shape a torn-down pytest tmp_path leaves behind."""
     swept = tmp_path / "already-gone"
     monkeypatch.setenv(queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV, str(swept))
     monkeypatch.delenv(op_latency.ROUTE_ENV, raising=False)
@@ -101,9 +77,6 @@ def test_swept_temp_root_refuses_even_in_process(monkeypatch, tmp_path):
 
 
 def test_live_temp_root_is_still_honoured(monkeypatch, tmp_path):
-    """The negative case: a temp-dir override that DOES exist on disk (a
-    live pytest tmp_path, mid-test) is the ordinary case this env var exists
-    for, and must not be refused."""
     monkeypatch.setenv(queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV, str(tmp_path))
     monkeypatch.delenv(op_latency.ROUTE_ENV, raising=False)
     assert queue_append._output_root_override() == str(tmp_path)
@@ -115,31 +88,16 @@ def test_is_swept_tmp_root_predicate(tmp_path):
     swept = tmp_path / "already-gone"
     assert queue_append._is_swept_tmp_root(str(swept)) is True
     assert queue_append._is_swept_tmp_root(str(live)) is False
-    # A non-temp path that is simply absent (e.g. a normal repo state dir
-    # queue-append is about to os.makedirs) is not "swept" — it was never a
-    # test-isolation root in the first place.
     assert queue_append._is_swept_tmp_root("/no/such/repo/state/debt-backlog") is False
 
 
-# --- Published-mirror refusal (2026-08-21) ---------------------------------
-#
 # Sibling hazard to this module's subject. `QUEUE_APPEND_OUTPUT_ROOT` sends a
-# write somewhere the caller cannot see; the publish identifier transform does
-# the same thing without anyone setting a variable, by rewriting the registry
 # key this op reads so the PUBLISHED engine resolves "the central repo" to
-# itself. Confirmed lost: two working files, gitignored in the mirror, exit 0.
-#
-# Backlink: state/bug-backlog/2026-08-20-central-scope-queue-entries-land-in-the-6a0c80dedc44.yaml
 
 
 def test_claude_klabauter_root_refuses_a_root_that_is_the_published_mirror(monkeypatch):
     from coordinator_core.ops import queue_append as qa
 
-    # Rung 1.5 (`engine.source_root`) is stubbed absent so this exercises the
-    # repo-named registry rung it names. Left live, the machine's own
-    # `engine.source_root` resolves to this checkout and returns before the
-    # rung under test runs at all -- the test would pass or fail on whether
-    # the box happens to have that key, not on the refusal.
     monkeypatch.setattr(qa, "_engine_source_root", lambda: None)
     monkeypatch.setattr(qa, "_machine_local_get", lambda key: "/repos/publish-mirror")
     monkeypatch.setattr(qa, "_is_published_engine_mirror", lambda root: True)
@@ -153,8 +111,6 @@ def test_claude_klabauter_root_refuses_a_root_that_is_the_published_mirror(monke
 def test_claude_klabauter_root_returns_a_live_working_tree_unchanged(monkeypatch):
     from coordinator_core.ops import queue_append as qa
 
-    # Same isolation as the refusal case above: Rung 1.5 stubbed absent so the
-    # synthetic root below is what the repo-named rung returns, not this box's.
     monkeypatch.setattr(qa, "_engine_source_root", lambda: None)
     monkeypatch.setattr(qa, "_machine_local_get", lambda key: "/repos/claude-klabauter")
     monkeypatch.setattr(qa, "_is_published_engine_mirror", lambda root: False)
@@ -164,9 +120,6 @@ def test_claude_klabauter_root_returns_a_live_working_tree_unchanged(monkeypatch
 
 
 def test_mirror_valued_env_override_falls_through_to_the_registry(monkeypatch):
-    """The engine-root variable names the engine CODE root -- the published
-    mirror on a standard install -- so it is never taken as the data home; the
-    registry rung answers instead."""
     from coordinator_core.ops import queue_append as qa
     from coordinator_core.telemetry import op_latency
 
@@ -180,8 +133,6 @@ def test_mirror_valued_env_override_falls_through_to_the_registry(monkeypatch):
 
 
 def test_mirror_valued_env_and_registry_is_still_refused(monkeypatch):
-    """Falling through never lands in the mirror: a mirror-naming registry
-    rung still refuses."""
     from coordinator_core.ops import queue_append as qa
     from coordinator_core.telemetry import op_latency
 
@@ -196,12 +147,6 @@ def test_mirror_valued_env_and_registry_is_still_refused(monkeypatch):
 
 
 def test_transform_proof_key_wins_over_a_mirror_naming_registry(monkeypatch):
-    """The published engine's own Rung 2 names the mirror; Rung 1.5 must win.
-
-    This is the whole point of `engine.source_root`. Simulating the mirror-run
-    engine means making the repo-named lookup return the mirror, which is what
-    the publish transform does to that key.
-    """
     from coordinator_core.ops import queue_append as qa
 
     monkeypatch.setattr(qa, "coordinator_engine_root_env", lambda _name: "")
@@ -212,7 +157,6 @@ def test_transform_proof_key_wins_over_a_mirror_naming_registry(monkeypatch):
 
 
 def test_absent_transform_proof_key_falls_through_to_the_repo_named_rung(monkeypatch):
-    """A consumer install has no such key and must keep today's behaviour."""
     from coordinator_core.ops import queue_append as qa
 
     monkeypatch.setattr(qa, "coordinator_engine_root_env", lambda _name: "")

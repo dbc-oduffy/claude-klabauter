@@ -103,50 +103,20 @@ from typing import Callable, Dict, FrozenSet, Mapping, Optional, Union
 from coordinator_core.session import autonomous_sentinel
 from coordinator_core.session.fleet_mode import read_fleet_mode
 
-#: The advisory variants ``_check_context_pressure_sync`` already
-#: implements: ``"standard"`` is the default handoff-recommending wording;
-#: ``"informational"`` is the autonomous-run wording that replaces the
-#: recommendation rather than appending to it. See module docstring.
 COMPACTION_WARNING_VARIANTS: FrozenSet[str] = frozenset({"standard", "informational"})
 
-#: The wire variable name C1 (``coordinator_core.warm.env_forwarding``)
 #: forwards through the door's ``FORWARDING_SET``. C1 declared it as a bare
 #: string literal inside that module's ``FORWARDING_SET`` tuple rather than
-#: an exported constant, so there is nothing importable to bind here -- this
-#: is the ONE place the wire name is spelled fleet-wide.
-#: ``coordinator_core.warm.env_forwarding`` imports it for its
 #: ``FORWARDING_SET`` entry rather than repeating the literal -- two spellings
 #: that "must stay byte-identical" fail SILENTLY when they drift, because a
-#: forwarded-but-unread variable and an unset one are indistinguishable here:
-#: both fall through to the conservative anchor with nothing raised. The
-#: direction is fixed by the existing layering (``warm`` already imports
-#: ``session``; the reverse would invert it), not by which module names it
-#: first.
 COORDINATOR_JOB_MODE = "COORDINATOR_JOB_MODE"
 
-#: The three job-mode consumers the sizing object names. A frozenset enum,
 #: same shape as ``COMPACTION_WARNING_VARIANTS``.
 JOB_MODE_VALUES: FrozenSet[str] = frozenset({"blitz", "cron", "interactive"})
 
-#: Conservative anchor for ``job_mode``: the only one of the three values
-#: that assumes an operator is present to be surfaced to. Mirrors DoE's
 #: ``_MOST_CAUTIOUS_POSTURE`` (renamed 2026-09-06 from ``_FAIL_OPEN_POSTURE``
-#: -- that vocabulary is not reintroduced here; see
 #: ``coordinator_core.conservatism`` for the fuller RAISE/FALL_BACK split).
-#:
 #: FAIL DIRECTION: FALL_BACK to ``"interactive"``. Declared explicitly here,
-#: beside the anchor, per this chunk's own spec, so a later conservatism
-#: primitive (``cloud-em-01``) can generalise this site without re-deriving
-#: the reasoning:
-#:   - Getting this WRONG toward ``"interactive"`` (the actual mode was
-#:     ``blitz``/``cron``) costs a redundant surface -- an advisory or
-#:     confirmation shown to nobody, wasted but harmless.
-#:   - Getting this wrong the OTHER way (defaulting to ``blitz``/``cron``
-#:     when the actual mode was ``interactive``) costs an unwitnessed
-#:     autonomous act on an attended box -- unbounded and not survivable the
-#:     way a redundant surface is.
-#: That asymmetry is why ``"interactive"`` is the anchor and not, say, the
-#: numerically- or alphabetically-first value.
 _MOST_CAUTIOUS_JOB_MODE: str = "interactive"
 
 ValueType = Union[type, FrozenSet[str]]
@@ -207,13 +177,6 @@ class ModeKey:
 
 
 def _validate_value(raw: object, value_type: ValueType) -> Optional[object]:
-    """Validate ``raw`` against ``value_type``; ``None`` on any mismatch.
-
-    A mismatch (wrong type, or a string outside a declared enum) is treated
-    as malformed input — the same degradation ``fleet_mode.
-    read_fleet_mode()`` already applies to a structurally-wrong record,
-    never a coerced value.
-    """
     if value_type is bool:
         return raw if isinstance(raw, bool) else None
     if isinstance(value_type, frozenset):
@@ -258,8 +221,6 @@ def _compaction_default_for_environment(
         from coordinator_core.env_locality import locality
 
         got = locality(env)
-        # Only a confident cloud reading moves the default. `suspect` abstains
-        # by construction, and so does a low-confidence cloud call.
         if got.call == "cloud" and got.confidence in ("certain", "high"):
             return "informational"
     except Exception:  # pragma: no cover - resolution must never block a mode read
@@ -299,46 +260,19 @@ MODE_KEYS: Dict[str, ModeKey] = {
         default=False,
     ),
     # COST-INCIDENCE: `compaction_warnings` is `fleet-wins`. The strongest
-    # counter-argument is that only the session knows whether its own state
-    # is on disk. It does not carry, for three reasons:
-    #   - That cost lands on the session's own state, not on the ~50 peers'
-    #     shared tree that made `autonomous` session-wins (see that entry).
-    #   - The `informational` variant never withholds the signal: it still
-    #     tells the session that compaction is involuntary and lossy and to
-    #     commit and checkpoint now. The session-state risk is answered in
-    #     the text the session still receives, not by precedence.
-    #   - Session-wins is not constructible here anyway: no session-scoped
-    #     value exists, and `_validate_registry` refuses session-wins with
-    #     `session_pair=None`.
     "compaction_warnings": ModeKey(
         session_pair=None,
         precedence="fleet-wins",
         value_type=COMPACTION_WARNING_VARIANTS,
         default="standard",
-        # Late-bound by name, NOT a direct reference: the entry is a frozen
-        # dataclass built at import time, so a direct reference would freeze
-        # this seam shut and make it unpatchable in tests. The lambda resolves
-        # the name through module globals at call time instead.
         environment_default=lambda env: _compaction_default_for_environment(env),
     ),
     # COST-INCIDENCE: `job_mode` is `environment-wins`. The cost of this key
-    # being wrong lands on whoever consumes the mode a session was actually
-    # invoked as — the baton's Specification states the mode "is asserted by
-    # the environment that launched the session," so a stale fleet-mode
-    # record silently overriding that explicit assertion externalizes a cost
-    # the fleet record was never in a position to bear (`read_fleet_mode` is
-    # fail-open by design and would otherwise surface nothing). This is why
-    # `job_mode` sits on `environment-wins`, distinct from `compaction_
-    # warnings`' `fleet-wins`: that key's environment rung is a tiebreaker
-    # over a static default (see its own module-docstring paragraph above),
-    # while `job_mode`'s environment rung is the caller's own explicit
-    # assertion and must not be shadowed by a stale fleet record.
     "job_mode": ModeKey(
         session_pair=None,
         precedence="environment-wins",
         value_type=JOB_MODE_VALUES,
         default=_MOST_CAUTIOUS_JOB_MODE,
-        # Same late-bound-by-name reasoning as `compaction_warnings` above.
         environment_default=lambda env: _job_mode_from_environment(env),
     ),
 }
@@ -428,18 +362,12 @@ def resolve_mode(
 
     if entry.precedence == "session-wins":
         if entry.session_pair is None:
-            # Unreachable given _validate_registry, but keeps this branch
-            # honest rather than silently falling through to a fleet read.
             return entry.default
         return entry.session_pair(session_id)
 
     def _resolved_environment_value() -> Optional[object]:
         if entry.environment_default is None:
             return None
-        # Defensive: resolving the environment must never block a mode read.
-        # The shipped callables swallow their own failures, but the registry
-        # is an extension point and a future entry's callable is not this
-        # module's to trust.
         try:
             return _validate_value(entry.environment_default(env), entry.value_type)
         except Exception:
@@ -457,7 +385,6 @@ def resolve_mode(
             return entry.session_pair(session_id)
         return entry.default
 
-    # fleet-wins
     fleet_map = read_fleet_mode()
     fleet_value = _validate_value(fleet_map.get(key), entry.value_type)
     if fleet_value is not None:

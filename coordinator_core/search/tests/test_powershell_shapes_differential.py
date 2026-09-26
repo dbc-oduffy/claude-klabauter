@@ -55,10 +55,6 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _resolve_powershell() -> str | None:
-    """Resolve the REAL PowerShell interpreter this file's oracle runs
-    against -- `pwsh` (PowerShell 7+, cross-platform) preferred, `powershell`
-    (Windows PowerShell 5.1) as fallback. Never resolves through
-    `shell=True`/`cmd.exe` (module docstring negative-spec)."""
     found = shutil.which("pwsh")
     if found:
         return found
@@ -68,12 +64,8 @@ def _resolve_powershell() -> str | None:
     return None
 
 
-#: Absolute path to a real PowerShell interpreter, or None when this box has
-#: none resolvable.
 POWERSHELL_EXE = _resolve_powershell()
 
-#: Skip-marker for any test whose verdict depends on running the real
-#: command through a real PowerShell host.
 requires_powershell = pytest.mark.skipif(
     POWERSHELL_EXE is None,
     reason="no PowerShell interpreter resolvable -- the differential oracle cannot run the real command",
@@ -106,9 +98,6 @@ def run_real_powershell(cmd: str, cwd) -> tuple[int, str]:
     proc = subprocess.run(
         [POWERSHELL_EXE, "-NoProfile", "-NonInteractive", "-Command", script],
         capture_output=True,
-        # Bytes, not text: `text=True` applies universal-newline translation,
-        # which would turn a CRLF-vs-LF divergence into a silent agreement --
-        # same reasoning `_posix_shell.run_real` documents for its own call.
         check=False,
         **no_console_creationflags(),
     )
@@ -132,20 +121,11 @@ def tree(tmp_path):
     return tmp_path
 
 
-# --------------------------------------------------------------- Get-Content
-
-
 def _produce_ours(tokens, cwd) -> str | None:
-    """Parse+produce through the in-process module, or None on a refusal --
-    a refusal is always correct (the real command runs unchanged)."""
     try:
         spec = sp.parse_content_segment(tokens)
     except Unanswerable:
         return None
-    # `[Environment]::NewLine` on the box actually running the real command
-    # IS `os.linesep` on that same box (same process, same platform) -- an
-    # explicit, derived value, not a guessed constant (module docstring:
-    # `produce`'s `newline` argument must never be a guessed default).
     import os
 
     return spec.produce(str(cwd), newline=os.linesep)
@@ -239,21 +219,8 @@ def test_get_content_tail(tree):
 
 
 def test_get_content_nonexistent_operand_declines(tree):
-    """A missing operand is a NAMED refusal (`_resolve_operand`'s
-    `os.path.isfile` check), not an approximation of what the real host
-    would print (a real, unresolvable, unhandled `Get-Content` errors to
-    stderr and produces no stdout) -- asserted as the decline itself, same
-    discipline `test_read_shapes_differential.test_sed_range_past_eof_declines`
-    already applies to its own bash sibling."""
     with pytest.raises(Unanswerable):
         sp.parse_content_segment(["Get-Content", "nope.txt"]).produce(str(tree))
-
-
-# ---------------------------------------------------------------- Get-ChildItem
-#
-# `run_childitem`'s own docstring: the enumeration-order equivalence
-# (`os.scandir`/`FindFirstFileW`) only holds on win32 -- both the in-process
-# path and this test's real-host comparison are meaningless off Windows.
 
 
 @pytest.fixture()
@@ -286,9 +253,6 @@ def test_get_childitem_ordering(lsdir):
 @requires_powershell
 @pytest.mark.skipif(sys.platform != "win32", reason="run_childitem enumeration order is only reproduced on win32")
 def test_get_childitem_composed_pipe_count(lsdir):
-    """`Get-ChildItem DIR | Measure-Object` (composed-shape parity, mirrors
-    `test_read_shapes_differential.test_composed_ls_pipe_wc_l`): our own
-    entry count against the real host's own count."""
     spec = sp.parse_childitem_segment(["Get-ChildItem", "lsdir"])
     ours = sp.run_childitem(spec, cwd=str(lsdir))
     _rc, theirs = run_real_powershell(

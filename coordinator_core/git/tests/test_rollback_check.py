@@ -1,13 +1,3 @@
-"""`rollback_check.find_exact_blob_rollbacks`/`refusal` -- AC-P2-2.
-
-History is built in-process via `commit.commit_paths` (itself zero-spawn)
-everywhere that reaches; only repo `init`/`config` and the one merge
-fixture (no in-process merge helper exists) spawn real `git`, matching
-`test_commit_zero_spawn.py`'s own pattern of real git as setup/oracle, spy
-around the call under test. `subprocess` is spied only around the
-`find_exact_blob_rollbacks` call itself, per AC-P2-2's own wording: "a test
-asserts `subprocess` is never entered during the call."
-"""
 
 import hashlib
 import subprocess
@@ -86,8 +76,6 @@ def _commit(repo, path, content, msg):
 
 
 def test_depth_2_single_path_rollback_refused(tmp_path):
-    """v0 -> v1 -> v2 -> revert to v0's exact bytes discards the two most
-    recent changes: one finding at depth 2, refused."""
     repo = _repo(tmp_path)
     v0_commit = _commit(repo, "p.txt", "v0\n", "v0")
     _commit(repo, "p.txt", "v1\n", "v1")
@@ -102,8 +90,6 @@ def test_depth_2_single_path_rollback_refused(tmp_path):
 
 
 def test_lone_depth_1_revert_of_the_latest_change_allowed(tmp_path):
-    """v0 -> v1 -> back to v0 undoes only the latest change: depth 1, and
-    alone it is allowed (the plan's "a lone depth-1 revert stays allowed")."""
     repo = _repo(tmp_path)
     _commit(repo, "p.txt", "v0\n", "v0")
     head = _commit(repo, "p.txt", "v1\n", "v1")
@@ -117,8 +103,6 @@ def test_lone_depth_1_revert_of_the_latest_change_allowed(tmp_path):
 
 
 def test_depth_counts_versions_not_commits(tmp_path):
-    """Commits that never touched the path add no version: reverting its
-    latest change stays depth 1 however many unrelated commits followed."""
     repo = _repo(tmp_path)
     _commit(repo, "p.txt", "v0\n", "v0")
     _commit(repo, "p.txt", "v1\n", "v1")
@@ -133,8 +117,6 @@ def test_depth_counts_versions_not_commits(tmp_path):
 
 
 def test_breadth_3_depth_1_refused_on_breadth_alone(tmp_path):
-    """Three paths each undoing only their latest change -- no single
-    finding at depth >= 2, refused on breadth."""
     repo = _repo(tmp_path)
     for name in ("a.txt", "b.txt", "c.txt"):
         _commit(repo, name, f"{name} old\n", f"{name} old")
@@ -150,10 +132,6 @@ def test_breadth_3_depth_1_refused_on_breadth_alone(tmp_path):
 
 
 def test_status_d_revert_of_in_window_add_undeclared(tmp_path):
-    """`p` did not exist, gets added and then edited, then a later commit's
-    candidate deletes it (new value ABSENT) -- restores the pre-existence
-    state two versions back, a real depth-2 match, detected rather than
-    silently exempted. ABSENT counts as a version."""
     repo = _repo(tmp_path)
     before_add = read_head_sha(repo)
     _commit(repo, "new.txt", "added\n", "add new.txt")
@@ -171,9 +149,6 @@ def test_status_d_revert_of_in_window_add_undeclared(tmp_path):
 
 
 def test_unchanged_paths_are_never_findings(tmp_path):
-    """Three paths whose new value IS head's value restore nothing, so they
-    produce no finding and no breadth-3 refusal. doe-claude-4d hit exactly
-    this: a claim set holding read-only paths refused a one-file commit."""
     repo = _repo(tmp_path)
     (repo / "a.txt").write_text("a\n", encoding="utf-8", newline="\n")
     (repo / "b.txt").write_text("b\n", encoding="utf-8", newline="\n")
@@ -193,7 +168,6 @@ def test_unchanged_paths_are_never_findings(tmp_path):
 
 
 def test_never_tracked_path_declared_absent_is_not_a_finding(tmp_path):
-    """ABSENT for a path HEAD never tracked leaves the tree unchanged."""
     repo = _repo(tmp_path)
     head = _commit(repo, "p.txt", "v\n", "v")
 
@@ -221,7 +195,6 @@ def test_clean_multi_path_edit_no_findings(tmp_path):
 
 
 def test_a_path_left_as_head_has_it_is_not_a_finding(tmp_path):
-    """A new value equal to `head_sha`'s own version changes nothing."""
     repo = _repo(tmp_path)
     head = _commit(repo, "p.txt", "cur\n", "cur")
 
@@ -233,10 +206,6 @@ def test_a_path_left_as_head_has_it_is_not_a_finding(tmp_path):
 
 
 def test_first_parent_only_side_branch_content_never_reported(tmp_path):
-    """A merge commit's first-parent line never sees content that lived
-    only on the merged-in side branch, however deep. The merge commit's OWN
-    tree version of the path counts as one version on the first-parent
-    line."""
     repo = _repo(tmp_path)
     (repo / "p.txt").write_text("r\n", encoding="utf-8", newline="\n")
     _git(repo, "add", "-A")
@@ -256,16 +225,11 @@ def test_first_parent_only_side_branch_content_never_reported(tmp_path):
     _git(repo, "merge", "-q", "-s", "ours", "--no-edit", "side")
     merge_sha = read_head_sha(repo)
 
-    # Side-only content is reachable in history only via the merge's
-    # second parent -- never a version on the first-parent line.
     findings = rollback_check.find_exact_blob_rollbacks(
         _common(repo), merge_sha, {"p.txt": _blob_sha(b"side_only\n")}, window=500
     )
     assert findings == []
 
-    # The merge commit's own tree (kept "a\n" via -s ours) is the current
-    # value, so re-committing it is no finding; the root's "r\n" is still
-    # reachable, deeper, on the first-parent line.
     findings_own = rollback_check.find_exact_blob_rollbacks(
         _common(repo), merge_sha, {"p.txt": _blob_sha(b"a\n")}, window=500
     )
@@ -280,10 +244,6 @@ def test_first_parent_only_side_branch_content_never_reported(tmp_path):
 
 
 def test_default_window_is_1000_not_500():
-    """P2a's spike re-derived one historical firing commit at depth 668 --
-    past the originally-shipped `W=500` default -- and found the correction
-    load-bearing for P2c/P2d/P2e. Pin the corrected default so a future edit
-    cannot silently regress it back to the starved value."""
     import inspect
 
     sig = inspect.signature(rollback_check.find_exact_blob_rollbacks)

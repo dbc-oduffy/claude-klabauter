@@ -58,9 +58,6 @@ _SCRIPT_RELATIVE = "coordinator/bin/coordinator-prepare-commit-msg"
 
 
 def _git_hooks_dir(cwd: str) -> str:
-    """`<git-dir>/hooks`, zero-spawn first via `git_dir`, falling through to a
-    `git rev-parse --git-path hooks` subprocess only if that resolves
-    nothing. Returns "" on any failure."""
     try:
         gd = _git_dir(cwd)
     except Exception:
@@ -121,7 +118,7 @@ def _first_existing(paths: "list[str]") -> str:
             if Path(p).is_file():
                 return p
         except Exception:
-            continue  # per-candidate probe; one unresolvable candidate must not abort the scan
+            continue
     return ""
 
 
@@ -142,7 +139,7 @@ def _handler(params: dict, repo_root=None) -> dict:
         return no_advisory()
 
     if _SHIM_MARKER not in text:
-        return no_advisory()  # not our shim -- never touch a hook we don't recognize
+        return no_advisory()
 
     try:
         this_repo_root = show_toplevel(cwd)
@@ -159,7 +156,7 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     replacement = _first_existing(candidates)
     if not replacement:
-        return no_advisory()  # nothing resolves anywhere -- fail open
+        return no_advisory()
 
     replacement = PureWindowsPath(replacement).as_posix()
     new_first_line_pattern = re.compile(r'SCRIPT="[^"]+"\n')

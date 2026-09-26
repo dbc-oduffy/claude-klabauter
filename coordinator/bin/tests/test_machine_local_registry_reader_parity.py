@@ -78,9 +78,7 @@ def _reset_env(monkeypatch):
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
 
 
-# ---------------------------------------------------------------------------
 # AC2: MACHINE_LOCAL_REGISTRY_DIR-seeded parity cases
-# ---------------------------------------------------------------------------
 
 
 def _parity_case(monkeypatch, tmp_path, key):
@@ -120,14 +118,10 @@ def test_parity_local_over_tracked_shadowed_key(monkeypatch, tmp_path):
 
 
 def test_parity_concerns_prefixed_table_key_absent(monkeypatch, tmp_path):
-    """A key under a `concerns`-prefixed table must be absent from both
-    flattenings — not just the root-level `concerns` table."""
     assert _parity_case(monkeypatch, tmp_path, "concerns.leaked.should_be_absent") is None
 
 
 def test_parity_schema_prefixed_table_key_absent(monkeypatch, tmp_path):
-    """A key under a `schema`-prefixed table must be absent from both
-    flattenings at every nesting level, not only the root."""
     assert _parity_case(monkeypatch, tmp_path, "schema.leaked.should_be_absent") is None
 
 
@@ -145,15 +139,10 @@ def test_parity_env_override(monkeypatch, tmp_path):
     assert mine == theirs == "env-wins"
 
 
-# ---------------------------------------------------------------------------
 # MINOR-1: MACHINE_LOCAL_REGISTRY_DIR unset, COORDINATOR_SETTINGS_HOME pinned
-# ---------------------------------------------------------------------------
 
 
 def test_parity_via_settings_home_not_registry_dir_override(monkeypatch, tmp_path):
-    """The seeded-override cases above short-circuit settings_home() before
-    it ever runs, which is the only place the two readers can structurally
-    diverge. This case is required to exercise that path."""
     _reset_env(monkeypatch)
     settings_home_root = tmp_path / "settings-home"
     settings_home_root.mkdir()
@@ -165,32 +154,19 @@ def test_parity_via_settings_home_not_registry_dir_override(monkeypatch, tmp_pat
     assert mine == theirs == "local-machine"
 
 
-# ---------------------------------------------------------------------------
-# AC4b: repos.* backslash-form normalization
-# ---------------------------------------------------------------------------
-
-
 def test_parity_repos_key_normalizes_backslash_form(monkeypatch, tmp_path):
     _reset_env(monkeypatch)
     reg_dir = _seed_registry_dir(
         tmp_path,
-        # abs-path-ok: synthetic TOML fixture value, not a real repo reference
         r'"repos.doe_claude" = "X:\\DoE-claude\\worktree"' + "\n",
     )
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
     mine = mlir.registry_get("repos.doe_claude")
     theirs = machine_resolver.registry_get("repos.doe_claude")
     assert mine == theirs
-    # The stored value itself carries backslashes; the point of AC4b is that
-    # the return value is unchanged when it is already native drive form
-    # (this is a preservation check, not a forced-forward-slash rewrite) —
-    # cross-check against a genuine MSYS mount-form input below.
 
 
 def test_registry_get_repairs_msys_mount_form_for_repos_key(monkeypatch, tmp_path):
-    """A `repos.*`-shaped value stored in MSYS mount form (`/x/...`) must be
-    returned in native drive form (`X:/...`) — mirrors
-    `gen_doe_root_pointer._resolve_doe_root`'s `native_path_form(...)` wrap."""
     if os.name != "nt":
         import pytest
 
@@ -202,22 +178,12 @@ def test_registry_get_repairs_msys_mount_form_for_repos_key(monkeypatch, tmp_pat
     )
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
     mine = mlir.registry_get("repos.doe_claude")
-    assert mine == "X:/DoE-claude"  # abs-path-ok: synthetic TOML fixture value, not a real repo reference
+    assert mine == "X:/DoE-claude"
 
     # PINNED DIVERGENCE (see module docstring's "Two divergences... ACCEPTED"
-    # list, item 3): the oracle does no normalization anywhere in its body and
-    # returns the raw stored value unrepaired. `mlir.registry_get` repairs it.
-    # This is deliberate — see module docstring — so assert the divergence
-    # explicitly rather than leaving it merely unasserted (which is what let
-    # this exact case go unpinned before this test was extended).
     theirs = machine_resolver.registry_get("repos.doe_claude")
-    assert theirs == "/x/DoE-claude"  # abs-path-ok: synthetic TOML fixture value, not a real repo reference
+    assert theirs == "/x/DoE-claude"
     assert mine != theirs
-
-
-# ---------------------------------------------------------------------------
-# AC1: spawn-free, coordinator_core-free AST assertions
-# ---------------------------------------------------------------------------
 
 
 def _load_module_ast():
@@ -247,9 +213,6 @@ def _function_defs_by_name(tree):
 
 
 def _reachable_helper_names(entry_name, funcs, seen=None):
-    """Collect the transitive set of function names called (by bare Name)
-    from `entry_name`'s body, restricted to functions defined in this same
-    module (so we can walk into their bodies too)."""
     if seen is None:
         seen = set()
     if entry_name in seen or entry_name not in funcs:
@@ -266,12 +229,9 @@ def _has_subprocess_call(node):
     for sub in ast.walk(node):
         if isinstance(sub, ast.Call):
             func = sub.func
-            # subprocess.run(...) / subprocess.Popen(...) / subprocess.call(...)
             if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
                 if func.value.id == "subprocess":
                     return True
-            # os.system(...) is not subprocess.* — out of scope for this AC,
-            # which names "no subprocess.* call node" specifically.
     return False
 
 

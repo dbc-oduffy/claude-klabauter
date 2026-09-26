@@ -26,13 +26,10 @@ from coordinator_core.text.query_record_display import (
 )
 
 
-# ---------------------------------------------------------------------------
 # Unit-level — one renderer call per type, transcribed from TYPE_DISPLAY.
-# ---------------------------------------------------------------------------
 
 
 def test_display_handoff_prefers_deployment_state_over_status():
-    """bin/query-records.js:308 — `fm.deployment_state || fm.status || 'unknown'`."""
     fn = TYPE_DISPLAY["handoff"]
     assert fn("p.md", {"title": "T", "deployment_state": "shipped", "status": "open"}) == (
         "- [T](p.md) — shipped"
@@ -42,7 +39,6 @@ def test_display_handoff_prefers_deployment_state_over_status():
 
 
 def test_display_handoff_archived_shipped_in_suffix():
-    """bin/query-records.js:309."""
     fn = TYPE_DISPLAY["handoff-archived"]
     assert fn("p.md", {"title": "T", "status": "claimed", "shipped_in": "abc123"}) == (
         "- [T](p.md) — claimed (shipped: abc123)"
@@ -51,14 +47,12 @@ def test_display_handoff_archived_shipped_in_suffix():
 
 
 def test_display_plan():
-    """bin/query-records.js:311."""
     fn = TYPE_DISPLAY["plan"]
     assert fn("p.md", {"title": "Plan T", "status": "draft"}) == "- [Plan T](p.md) — draft"
     assert fn("p.md", {}) == "- [p.md](p.md) — unknown"
 
 
 def test_display_cross_repo_memo():
-    """bin/query-records.js:316."""
     fn = TYPE_DISPLAY["cross-repo-memo"]
     assert fn("p.md", {"title": "M", "status": "open", "from": "rag"}) == (
         "- [M](p.md) — open (from rag)"
@@ -67,7 +61,6 @@ def test_display_cross_repo_memo():
 
 
 def test_display_debt():
-    """bin/query-records.js:317."""
     fn = TYPE_DISPLAY["debt"]
     assert fn("p.md", {"title": "D", "severity": "P1", "status": "open", "source": "audit"}) == (
         "- [D](p.md) — P1 open (source: audit)"
@@ -76,7 +69,6 @@ def test_display_debt():
 
 
 def test_display_bug():
-    """bin/query-records.js:320 (Slice-C F4 — surface, not system)."""
     fn = TYPE_DISPLAY["bug"]
     assert fn("p.md", {"title": "B", "severity": "P0", "status": "open", "surface": "cli"}) == (
         "- [B](p.md) — P0 open (surface: cli)"
@@ -85,7 +77,6 @@ def test_display_bug():
 
 
 def test_display_improvement():
-    """bin/query-records.js:321 (Slice-C F4 — proposed_action, not proposed_target)."""
     fn = TYPE_DISPLAY["improvement"]
     assert fn("p.md", {"title": "I", "status": "open", "proposed_action": "refactor X"}) == (
         "- [I](p.md) — open (action: refactor X)"
@@ -94,7 +85,6 @@ def test_display_improvement():
 
 
 def test_display_decision_guide_falsy_count_omits_suffix():
-    """bin/query-records.js:333 — `fm.decision_count ? ... : ''`; 0 is falsy in JS too."""
     fn = TYPE_DISPLAY["decision-guide"]
     assert fn("p.md", {"title": "G", "status": "active", "decision_count": 5}) == (
         "- [G](p.md) — active (5 DRs)"
@@ -104,9 +94,6 @@ def test_display_decision_guide_falsy_count_omits_suffix():
 
 
 def test_display_completion_renders_literal_undefined_for_missing_title_or_nature():
-    """bin/query-records.js:314 — faithful oracle quirk (module docstring):
-    `${fm.title}`/`${fm.nature}` have NO `||` fallback, so a missing field
-    prints the literal string "undefined", not an empty title."""
     fn = TYPE_DISPLAY["completion"]
     assert fn("p.md", {"title": "Shipped X", "nature": "feature", "chain": "c1",
                         "commits": ["abc", "def"]}) == (
@@ -114,22 +101,18 @@ def test_display_completion_renders_literal_undefined_for_missing_title_or_natur
     )
     assert fn("p.md", {"nature": "feature"}) == "- **undefined** [feature] (chain: none) — no-commit"
     assert fn("p.md", {"title": "T"}) == "- **T** [undefined] (chain: none) — no-commit"
-    # Empty commits list is JS-falsy too ('[].join(",")' === '' -> '|| no-commit').
     assert fn("p.md", {"title": "T", "nature": "n", "commits": []}) == (
         "- **T** [n] (chain: none) — no-commit"
     )
 
 
 def test_display_decision():
-    """bin/query-records.js:310."""
     fn = TYPE_DISPLAY["decision"]
     assert fn("p.md", {"title": "D", "status": "accepted"}) == "- [D](p.md) — accepted"
     assert fn("p.md", {}) == "- [p.md](p.md) — unknown"
 
 
 def test_display_review_findings_count_nullish_not_falsy():
-    """bin/query-records.js:312 — `fm.findings_count ?? '?'`, NOT `||`: a
-    findings_count of 0 must render as 0, not fall back to '?'."""
     fn = TYPE_DISPLAY["review"]
     assert fn("p.md", {"title": "R", "reviewer": "the Staff Engineer", "findings_count": 5}) == (
         "- [R](p.md) — reviewer: the Staff Engineer, findings: 5"
@@ -141,16 +124,12 @@ def test_display_review_findings_count_nullish_not_falsy():
 
 
 def test_display_lesson_uses_raw_path_not_basename():
-    """bin/query-records.js:313 — `fm.title || p` (bare `p`, not `path.basename(p)`
-    like every other renderer's fallback)."""
     fn = TYPE_DISPLAY["lesson"]
     assert fn("state/lessons/x.yaml", {"title": "L", "tier": "universal"}) == "- **L** [universal]"
     assert fn("state/lessons/x.yaml", {}) == "- **state/lessons/x.yaml** [untagged]"
 
 
 def test_display_handoff_ledger_dispatch_counts_nullish_not_falsy():
-    """bin/query-records.js:315 — `agent_dispatches`/`opus_dispatches` use `??`;
-    a dispatch count of 0 must render as 0, not '?'."""
     fn = TYPE_DISPLAY["handoff-ledger"]
     assert fn(
         "state/handoffs/h.md#ledger-0",
@@ -176,7 +155,6 @@ def test_display_handoff_ledger_dispatch_counts_nullish_not_falsy():
 
 
 def test_display_research_claim():
-    """bin/query-records.js:337."""
     fn = TYPE_DISPLAY["research-claim"]
     assert fn(
         "docs/research/x.claims.json#claim-0",
@@ -188,8 +166,6 @@ def test_display_research_claim():
 
 
 def test_display_research_synthesis_nullish_score_not_falsy():
-    """bin/query-records.js:336 — `fm.coverage_score ?? '?'`, NOT `||`: a
-    coverage_score of 0 must render as 0, not fall back to '?'."""
     fn = TYPE_DISPLAY["research-synthesis"]
     assert fn("docs/research/x.md", {
         "title": "Widget Research", "pipeline": "web", "coverage_score": 0.82,
@@ -203,8 +179,6 @@ def test_display_research_synthesis_nullish_score_not_falsy():
 
 
 def test_display_coverage_audit_links_basename_nullish_counts():
-    """bin/query-records.js:338 — links on `path.basename(p)`, not `fm.title`
-    (the oracle has no title field for this type); `??` on both counts."""
     fn = TYPE_DISPLAY["coverage-audit"]
     assert fn("docs/research/x-coverage-audit.md", {
         "present_count": 5, "absent_count": 2,
@@ -218,10 +192,6 @@ def test_display_coverage_audit_links_basename_nullish_counts():
 
 
 def test_display_gap_report_undefined_deepening_faithful_oracle_quirk():
-    """bin/query-records.js:339 — links on basename; `??` on gap_count/
-    coverage_score, but `deepening_recommended` has NO fallback at all in the
-    oracle, so a missing value renders the literal string "undefined" (same
-    faithful quirk as `_display_completion`)."""
     fn = TYPE_DISPLAY["gap-report"]
     assert fn("docs/research/x-gap-report.md", {
         "gap_count": 3, "coverage_score": 0.6, "deepening_recommended": True,
@@ -252,11 +222,6 @@ def test_default_display_fallback_uses_link_path_not_basename():
     like every dedicated TYPE_DISPLAY renderer above does."""
     assert _default_display("a/b/p.md", {}) == "- [a/b/p.md](a/b/p.md)"
     assert _default_display("a/b/p.md", {"title": "T"}) == "- [T](a/b/p.md)"
-
-
-# ---------------------------------------------------------------------------
-# Integration-level — real on-disk fixtures through query_records + format_records.
-# ---------------------------------------------------------------------------
 
 
 def _write_yaml(p: Path, body: str) -> Path:
@@ -353,8 +318,6 @@ def test_lesson_fixture_round_trip_yaml_whole_file(tmp_path):
 
 
 def test_handoff_ledger_fixture_round_trip_fragment_path_relativized(tmp_path):
-    """Synthetic type: one Session Ledger block -> one #ledger-N record; the
-    fragment must survive `_relativize_link`'s path resolution untouched."""
     _write_md(
         tmp_path / "state" / "handoffs" / "h1.md",
         "title: A Handoff",
@@ -379,7 +342,6 @@ def test_handoff_ledger_fixture_round_trip_fragment_path_relativized(tmp_path):
 
 
 def test_research_claim_fixture_round_trip_fragment_path_relativized(tmp_path):
-    """Synthetic type: one claims.json array element -> one #claim-N record."""
     import json
 
     claims_path = tmp_path / "docs" / "research" / "2026-07-01-example.claims.json"
@@ -396,10 +358,6 @@ def test_research_claim_fixture_round_trip_fragment_path_relativized(tmp_path):
 
 
 def test_research_synthesis_fixture_round_trip_sibling_exclusion(tmp_path):
-    """The regression this whole change hinges on, exercised through the REAL
-    ceremony pipeline: a `research-synthesis` query over a docs/research/ tree
-    containing all three sibling shapes must expand to ONLY the plain
-    synthesis file's markdown line."""
     _write_md(
         tmp_path / "docs" / "research" / "2026-07-22-widget-research.md",
         "title: Widget Research\npipeline: web\ncoverage_score: 0.82",
@@ -470,12 +428,6 @@ def test_tracker_and_roadmap_fall_back_to_default_display(tmp_path):
     expansion = format_records(records, {"type": "tracker", "format": "markdown-list"},
                                 root=tmp_path, from_dir=tmp_path)
     assert expansion == "- [My Tracker](docs/project-tracker.md)"
-
-
-# ---------------------------------------------------------------------------
-# format — json / paths (bin/query-records.js:1602-1606); no link-rewrite
-# applies to either (markdown-list is the only format linkCtx affects).
-# ---------------------------------------------------------------------------
 
 
 def test_format_paths_returns_bare_repo_relative_paths(tmp_path):

@@ -1,10 +1,3 @@
-"""Tests for `compute_layer_scaffold.check` — the Sub-shape B conformance
-scorer.
-
-Spec: docs/plans/2026-08-13-compute-layer-scaffolder.md, chunk C2 (AC6, AC7,
-AC8, AC9). Spike evidence:
-docs/research/spike-verdicts/2026-08-13-compute-layer-scaffolder-emits-conformant-producer.md.
-"""
 
 from __future__ import annotations
 
@@ -20,11 +13,6 @@ from coordinator_core.ops.compute_layer_scaffold import check
 
 
 def test_ac8_baseline_reproduced_exactly() -> None:
-    """The measured baseline: closed dispatch 6/6, execute_directives 6/6,
-    build_envelope 5/6 (pickup_assemble the miss), no-local-_emit 5/6
-    (baton_assemble the miss), extend_exit_codes 0/6, clean-on-all 0/6. A
-    run disagreeing with this fails until reconciled (AC8) — this test IS
-    that reconciliation gate."""
     report = check.score_fleet()
 
     assert report.clause_tally("closed_cli_dispatch") == (6, 6)
@@ -43,11 +31,6 @@ def test_ac8_pickup_assemble_is_the_build_envelope_miss() -> None:
 
 
 def test_ac8_baton_is_the_only_local_emit_miss() -> None:
-    """`baton_assemble` is the one Sub-shape B module still defining its own
-    `_emit`. `pickup_assemble` was the second until `70b4563035` cut
-    `pickup-assemble brief` over to `coordinator_core.pickup_brief` and
-    deleted the monolith's functions, its `_emit` among them — so its miss
-    is discharged, not waived."""
     scores = {s.module: s for s in check.score_fleet().scores}
     assert scores["baton_assemble"].no_local_emit is False
     for name in (
@@ -61,21 +44,11 @@ def test_ac8_baton_is_the_only_local_emit_miss() -> None:
 
 
 def test_ac6_execute_directives_scores_5_of_5_via_module_qualified_reach() -> None:
-    """Every one of the five producers reaches `execute_directives` through
-    `from coordinator_core.contract import apply_base` then
-    `apply_base.execute_directives(...)` — the module-qualified reach
-    style, not a bare symbol import."""
     passed, total = check.score_fleet().clause_tally("execute_directives")
     assert (passed, total) == (6, 6)
 
 
 def test_ac6_regression_oracle_symbol_only_matcher_scores_0_of_5() -> None:
-    """Pins the exact bug this session's first scorer produced: an AST pass
-    matching ONLY `ast.ImportFrom` bare-symbol names (never the
-    module-qualified `apply_base.execute_directives` attribute-call style)
-    reports the fleet at 0/5, though the true answer is 5/5. If this test
-    ever also reports 5/5, the regression oracle has been silently
-    defeated and no longer proves anything."""
 
     def naive_reaches_execute_directives(tree: ast.Module) -> bool:
         for node in ast.walk(tree):
@@ -99,9 +72,6 @@ def test_ac6_regression_oracle_symbol_only_matcher_scores_0_of_5() -> None:
 
 
 def test_ac7_extend_exit_codes_renders_as_a_distinct_fleet_finding() -> None:
-    """AC7: the ladder clause must render as a FLEET FINDING, structurally
-    distinct from a per-module conformance failure — not merely a
-    differently-labelled row in the same table."""
     report = check.score_fleet()
     rendered = check.render_report(report)
 
@@ -135,9 +105,6 @@ def test_ac9_sub_shape_c_reports_na_never_a_failing_grade() -> None:
 
 
 def test_ac9_na_modules_never_widen_a_clause_denominator() -> None:
-    """A fleet report spanning Sub-shape A/B/C keeps each clause's
-    denominator at the Sub-shape B count only — N/A modules are excluded,
-    never scored as failures."""
     all_modules = check.SUB_SHAPE_B + check.SUB_SHAPE_A + check.SUB_SHAPE_C
     report = check.score_fleet(modules=all_modules)
 

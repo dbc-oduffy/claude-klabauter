@@ -117,18 +117,14 @@ Errors on:
 
 
 class _UsageError(Exception):
-    """Raised for exit-2-class errors (usage/environment); message already
-    written to stderr by the raiser at the point of failure."""
+    pass
 
 
 class _ContentError(Exception):
-    """Raised for exit-1-class errors (content validation); message already
-    written to stderr by the raiser at the point of failure."""
+    pass
 
 
-# ---------------------------------------------------------------------------
 # PLUGIN_ROOT / snippet resolution
-# ---------------------------------------------------------------------------
 
 
 def _resolve_plugin_root() -> str:
@@ -150,11 +146,6 @@ def _resolve_plugin_root() -> str:
     except rcc.ResolveCoordinatorCloneError:
         print(f"skip: _resolve_plugin_root: return rcc.resolve_content_root() failed: {sys.exc_info()[1]}", file=sys.stderr)
         return ""
-
-
-# ---------------------------------------------------------------------------
-# Git preconditions
-# ---------------------------------------------------------------------------
 
 
 def _git_is_inside_work_tree() -> bool:
@@ -193,11 +184,6 @@ def _git_current_branch() -> str:
     return (proc.stdout or "").strip()
 
 
-# ---------------------------------------------------------------------------
-# Spec parsing
-# ---------------------------------------------------------------------------
-
-
 class _Slice:
     __slots__ = ("slice_id", "sidecar_path", "files")
 
@@ -208,11 +194,6 @@ class _Slice:
 
 
 def _parse_rows(spec_content: str, err: List[str]) -> List[Tuple[str, str, str]]:
-    """Parse+validate TSV rows, mirroring the bash oracle's per-row checks in
-    order (empty-field checks, sidecar-exists check). Returns
-    (slice_id, sidecar_path, files_raw_field) tuples. Raises _ContentError on
-    the first malformed/invalid row, matching the oracle's fail-fast, no-partial-
-    output behavior."""
     rows: List[Tuple[str, str, str]] = []
     row_num = 0
     for raw_line in spec_content.split("\n"):
@@ -244,7 +225,6 @@ def _parse_rows(spec_content: str, err: List[str]) -> List[Tuple[str, str, str]]
             )
             err.append("  No output emitted.")
             raise _ContentError()
-        # Dead-code parity with the oracle — see module docstring negative-spec.
         if "\n" in slice_id or "\t" in slice_id:
             err.append(
                 f"fan-out-integrator.sh: ERROR — row {row_num}: slice-id contains newline or tab character."
@@ -290,12 +270,6 @@ def _parse_file_lists(
     slices: List[_Slice] = []
     for slice_id, sidecar_path, files_raw_field in rows:
         parsed: List[str] = []
-        # bash's `IFS=',' read -ra paths_arr <<< "$raw_field"` drops exactly one
-        # trailing empty field when raw_field ends with the delimiter (verified
-        # empirically: "a,b,," -> 3 elements [a,b,""], not Python's naive
-        # str.split(",") 4 elements [a,b,"",""]) — replicate that one-field drop
-        # so a trailing comma doesn't spuriously trip the empty-path-entry error
-        # relative to the oracle.
         raw_parts = files_raw_field.split(",")
         if raw_parts and raw_parts[-1] == "" and files_raw_field.endswith(","):
             raw_parts.pop()
@@ -336,11 +310,6 @@ def _check_overlap(slices: Sequence[_Slice], err: List[str]) -> None:
         raise _ContentError()
 
 
-# ---------------------------------------------------------------------------
-# Peer-scope template header strip
-# ---------------------------------------------------------------------------
-
-
 def _strip_html_comment_header(template: str) -> str:
     body_lines: List[str] = []
     in_html_comment = False
@@ -360,11 +329,6 @@ def _strip_html_comment_header(template: str) -> str:
         leading_blank = False
         body_lines.append(tline)
     return "\n".join(body_lines)
-
-
-# ---------------------------------------------------------------------------
-# Dispatch block emission
-# ---------------------------------------------------------------------------
 
 
 def _build_dispatch_block(
@@ -437,11 +401,6 @@ def _build_dispatch_block(
     lines.append(f"# ===== END BLOCK: {slice_obj.slice_id} =====")
     lines.append("")
     return lines
-
-
-# ---------------------------------------------------------------------------
-# main()
-# ---------------------------------------------------------------------------
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -517,7 +476,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         slice_count = len(slices)
 
-        # EM reminders → stderr (verbatim heredoc shape from the oracle)
         err_lines.append("")
         err_lines.append(
             "--- fan-out-integrator.sh: EM REMINDERS (not for integrator prompts) ---"

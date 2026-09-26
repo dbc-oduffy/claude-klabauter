@@ -1,21 +1,3 @@
-"""Behavioral tests for coordinator_core.write_guards.block_memo_status_hand_edit
--- the memo-status hard-deny guard (see the module's own docstring for the
-design and the incident it closes).
-
-End-to-end-through-the-real-entrypoint bar: `state/improvement-queue/
-2026-07-25-guards-need-an-end-to-end-real-data-veri-5ca31feb2342.yaml` names
-the exact failure mode a guard-that-only-unit-tests-clean avoids -- "a guard
-can be present, registered, green and inert... run the guard through its
-operator entrypoint against real data and confirm it REFUSES something it
-should refuse." Per that bar, the primary test in this module reproduces the
-ACTUAL 2026-07-26 mutation -- an Edit changing `status: open` to
-`status: actioned` on a realistic inbox memo, driven through `guard.check()`
-(the guard's real operator entrypoint, exactly as `write_guards/engine.py`
-invokes it) against a memo body shaped like the live corpus (frontmatter
-fields: title/from/to/created/status/delivery_mode/summary/kind, per
-`cross-repo/inbox/2026-07-26-example-cockpit-repo-em-guard-title-false-positive-and-validator-rehoming.md`)
--- not a bare unit call on an internal helper.
-"""
 
 from __future__ import annotations
 
@@ -28,8 +10,6 @@ from coordinator_core.write_guards import block_memo_status_hand_edit as guard
 
 _OVERRIDE_ENV = "COORDINATOR_OVERRIDE_MEMO_STATUS_HAND_EDIT"
 
-# Shaped like the live corpus, e.g.
-# cross-repo/inbox/2026-07-26-example-cockpit-repo-em-guard-title-false-positive-and-validator-rehoming.md
 _INBOX_MEMO_OPEN = """---
 title: "Indirection guard rejects prose in a memo title"
 from: "example-cockpit-repo-em"
@@ -81,11 +61,6 @@ def _clear_override_env(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _default_no_live_claim(monkeypatch):
-    """Every test gets "no live claim on this memo" by default (the common
-    case in this test suite, which never creates a claim dir) — the reshape
-    gate now requires a live claim to reach the deny leg, so a test that
-    wants the deny path monkeypatches `guard._has_live_claim` back to
-    True explicitly (see TestActualIncidentMutationDenied)."""
     monkeypatch.setattr(guard, "_has_live_claim", lambda cwd, memo_filename: False)
 
 
@@ -95,12 +70,6 @@ def _write_memo(tmp_path: Path, rel_dir: str, name: str, body: str) -> Path:
     memo_path = memo_dir / name
     memo_path.write_text(body, encoding="utf-8")
     return memo_path
-
-
-# ---------------------------------------------------------------------------
-# 1. The actual 2026-07-26 mutation: open -> actioned via Edit on an inbox
-#    memo, driven through the real operator entrypoint.
-# ---------------------------------------------------------------------------
 
 
 class TestActualIncidentMutationDenied:
@@ -151,13 +120,6 @@ class TestActualIncidentMutationDenied:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-# ---------------------------------------------------------------------------
-# 1b. Reshape (2026-08-06): gate on a LIVE CLAIM. The same mutation, with no
-#     live session holding the memo's claim, is no longer blocked — it
-#     degrades to an advisory offer instead. Both directions pinned.
-# ---------------------------------------------------------------------------
-
-
 class TestLiveClaimGate:
     def test_inbox_status_edit_with_no_live_claim_is_advisory_not_denied(
         self, tmp_path, monkeypatch
@@ -166,8 +128,6 @@ class TestLiveClaimGate:
         memo_name = "2026-07-26-example-memo.md"
         _write_memo(tmp_path, "cross-repo/inbox", memo_name, _INBOX_MEMO_OPEN)
         monkeypatch.setattr(guard, "_resolve_git_root", _resolve_root_for(repo_root))
-        # No live claim (the autouse fixture default) — the over-fire case
-        # this reshape closes.
 
         payload = _payload(
             repo_root,
@@ -206,11 +166,7 @@ class TestLiveClaimGate:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_has_live_claim_reads_the_memo_claims_convention(self, tmp_path, monkeypatch):
-        """Real `_has_live_claim` (not monkeypatched): a claim dir that does
-        not exist on disk means no live claim, fail-open, regardless of
-        `cs_claim_holder_live`."""
-        monkeypatch.undo()  # this test exercises the REAL _has_live_claim,
-        # not the autouse fixture's stub — undo it before re-patching below.
+        monkeypatch.undo()
         common_dir = tmp_path / ".git"
         common_dir.mkdir()
         monkeypatch.setattr(guard, "_resolve_git_common_dir", lambda cwd: str(common_dir))
@@ -233,31 +189,16 @@ class TestLiveClaimGate:
             raise RuntimeError("indeterminate liveness read")
 
         monkeypatch.setattr("coordinator_core.liveness.cs_claim_holder_live", _raise)
-        # 2026-08-06 fix (bug-backlog
-        # 2026-08-06-block-memo-status-hand-edit-s-liveness-r-dcd9cece63ff):
         # a cs_claim_holder_live exception is INDETERMINATE, not "no claim"
-        # -- fails toward deny (True), not toward the advisory degrade.
         assert guard._has_live_claim(str(tmp_path), "some-memo.md") is True
 
     def test_has_live_claim_fails_toward_deny_on_unresolved_git_common_dir(
         self, tmp_path, monkeypatch
     ):
-        """2026-08-06 fix (bug-backlog
-        2026-08-06-block-memo-status-hand-edit-s-liveness-r-dcd9cece63ff): an
-        unresolved git-common-dir is indeterminate, not "no claim" -- must
-        fail toward deny (True), matching the module's conservative
-        ambiguous-match direction, not the pre-fix ALLOW-on-error path."""
         monkeypatch.undo()
         monkeypatch.setattr(guard, "_resolve_git_common_dir", lambda cwd: None)
 
         assert guard._has_live_claim(str(tmp_path), "some-memo.md") is True
-
-
-# ---------------------------------------------------------------------------
-# 1c. Reshape (2026-08-06): ANCHOR THE MATCHER. A body-prose line that
-#     merely starts with "status:" is not a genuine frontmatter touch — it
-#     is never a substring of the real on-disk frontmatter block.
-# ---------------------------------------------------------------------------
 
 
 _INBOX_MEMO_WITH_STATUS_LOOKING_BODY_LINE = """---
@@ -288,8 +229,6 @@ class TestMatcherAnchoredToRealFrontmatter:
             _INBOX_MEMO_WITH_STATUS_LOOKING_BODY_LINE,
         )
         monkeypatch.setattr(guard, "_resolve_git_root", _resolve_root_for(repo_root))
-        # Even with a live claim present, an unanchored body-prose match
-        # must not fire at all — this is an anchoring fix, not a class fix.
         monkeypatch.setattr(guard, "_has_live_claim", lambda cwd, memo_filename: True)
 
         payload = _payload(
@@ -314,12 +253,6 @@ class TestMatcherAnchoredToRealFrontmatter:
         assert guard._frontmatter_block(None) is None
 
 
-# ---------------------------------------------------------------------------
-# 2. Design-as-offers: the deny leads with the op, spells out the
-#    disposition flags.
-# ---------------------------------------------------------------------------
-
-
 class TestDenyOffersOp:
     def test_deny_reason_offers_resolve_verb_and_disposition_flags(self, tmp_path, monkeypatch):
         repo_root = tmp_path
@@ -339,9 +272,6 @@ class TestDenyOffersOp:
         result = guard.check(payload)
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
 
-        # The message is capped to 220 measured prose bytes
-        # (docs/plans/2026-08-02-guard-message-size-discipline.md); it keeps
-        # only the runnable alternative, not the full disposition-flag menu.
         assert "resolve-memo" in reason
         assert "--actioned-note" in reason
 
@@ -395,11 +325,6 @@ class TestDenyOffersOp:
             assert "resolve-memo" in cli_mod._SUBCOMMAND_USAGE
         finally:
             sys.modules.pop(spec.name, None)
-
-
-# ---------------------------------------------------------------------------
-# 3. Negatives: outbox draft edit passes, body-only edit passes.
-# ---------------------------------------------------------------------------
 
 
 class TestPassThrough:
@@ -485,7 +410,6 @@ class TestPassThrough:
             },
             "cwd": str(repo_root),
         }
-        # `kind:` is not `status:` — out of this guard's field scope.
         assert guard.check(passthrough_payload) is None
 
     def test_write_with_unchanged_status_value_passes(self, tmp_path, monkeypatch):

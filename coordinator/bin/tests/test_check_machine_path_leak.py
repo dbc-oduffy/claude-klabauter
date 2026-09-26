@@ -30,8 +30,6 @@ from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -60,10 +58,6 @@ def _write(tmpdir, name, content):
     return path
 
 
-# ---------------------------------------------------------------------------
-# Test 1 (AC7): settings.json with /Users/thislaptop/... → hard block (exit != 0)
-# ---------------------------------------------------------------------------
-
 def test_settings_json_with_machine_path_exits_nonzero():
     with tempfile.TemporaryDirectory() as tmp:
         f = _write(tmp, "settings.json", """{
@@ -79,10 +73,6 @@ def test_settings_json_with_machine_path_exits_nonzero():
         rc, _, _ = _run_guard(f)
         assert rc != 0, "guard exited 0 (should block /Users/thislaptop path)"
 
-
-# ---------------------------------------------------------------------------
-# Test 2 (AC6): clean git-URL-only settings.json → exit 0
-# ---------------------------------------------------------------------------
 
 def test_clean_settings_json_exits_zero():
     with tempfile.TemporaryDirectory() as tmp:
@@ -101,10 +91,6 @@ def test_clean_settings_json_exits_zero():
         assert rc == 0, "guard exited {} (should pass)".format(rc)
 
 
-# ---------------------------------------------------------------------------
-# Test 3: working-repos.yaml with a current-$HOME path → WARN stderr, exit 0
-# ---------------------------------------------------------------------------
-
 def test_working_repos_yaml_home_path_warns_but_exits_zero():
     current_home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or "/tmp"
     with tempfile.TemporaryDirectory() as tmp:
@@ -122,19 +108,14 @@ def test_working_repos_yaml_home_path_warns_but_exits_zero():
         assert rc == 0, "guard exited {} (should be 0 for soft warn)".format(rc)
         if "WARN" in err:
             return
-        # No WARN is only acceptable if PyYAML is genuinely absent.
         try:
             import yaml  # noqa: F401
             raise AssertionError(
                 "PyYAML present but no WARN for $HOME-rooted path; stderr was: {}".format(err)
             )
         except ImportError:
-            pass  # guard exited 0 with no WARN — PyYAML absent, fallback mode
+            pass
 
-
-# ---------------------------------------------------------------------------
-# Test 4: settings.json with /home/<name>/ Linux path → exit != 0
-# ---------------------------------------------------------------------------
 
 def test_settings_json_linux_home_path_exits_nonzero():
     with tempfile.TemporaryDirectory() as tmp:
@@ -146,10 +127,6 @@ def test_settings_json_linux_home_path_exits_nonzero():
         assert rc != 0, "guard exited 0 (should block /home/devuser path)"
 
 
-# ---------------------------------------------------------------------------
-# Test 5: non-target filename ignored → exit 0 + "nothing to check"
-# ---------------------------------------------------------------------------
-
 def test_non_target_filename_is_ignored():
     with tempfile.TemporaryDirectory() as tmp:
         f = _write(tmp, "config.json", '{ "path": "/Users/someuser/local/thing" }\n')
@@ -158,10 +135,6 @@ def test_non_target_filename_is_ignored():
             "expected exit 0 + 'nothing to check', got rc={} stdout={}".format(rc, out)
         )
 
-
-# ---------------------------------------------------------------------------
-# Test 6: settings.json with Windows C:/Users/ path → exit != 0
-# ---------------------------------------------------------------------------
 
 def test_settings_json_windows_users_path_exits_nonzero():
     with tempfile.TemporaryDirectory() as tmp:
@@ -177,13 +150,8 @@ def test_settings_json_windows_users_path_exits_nonzero():
         assert rc != 0, "guard exited 0 (should block C:/Users/ path)"
 
 
-# ---------------------------------------------------------------------------
-# Test 7: settings.json with backslash Windows path X:\... → exit != 0
-# ---------------------------------------------------------------------------
-
 def test_settings_json_backslash_windows_path_exits_nonzero():
     with tempfile.TemporaryDirectory() as tmp:
-        # JSON \\ is a single literal backslash → X:\projects\my-plugin
         f = _write(tmp, "settings.json", """{
   "extraKnownMarketplaces": {
     "local-machine-a": {

@@ -95,65 +95,28 @@ from coordinator_core._hook_envelope import allow_advisory
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
-#: Review: code-reviewer -- vestigial attributes kept for readability
-#: consistency with every sibling guard in this package (see
-#: ``guard_grep_via_bash.py``'s own identical comment on why these govern
-#: nothing here); ``dispatch.py`` hardcodes registration/ordering in its own
-#: ``guard_chain`` literal.
 MATCHERS = ("Bash",)
 PRIORITY = 43
 
-#: This guard's OWN escape hatch -- read inline at call time, never
-#: hoisted (this package's established ``_override`` convention).
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_POWERSHELL_VIA_BASH_GUARD"
 
-#: Matches a ``powershell``/``powershell.exe``/``pwsh``/``pwsh.exe`` binary
-#: token at a word boundary, optionally preceded by a path prefix. Anchored
-#: with lookaround rather than requiring leading whitespace so a
-#: segment-initial invocation (start of string) also matches.
 _PS_BINARY = (
     r"(?<![\w.\\/-])(?:[\w./\\:-]*[\\/])?"
     r"(?:powershell(?:\.exe)?|pwsh(?:\.exe)?)(?![\w.-])"
 )
 
-#: Everything between the binary token and the first recognized flag,
-#: consumed one character at a time (e.g. ``-NoProfile``) so the flag
-#: alternation below is forced to match the FIRST ``-c``/``-e``-shaped flag
-#: actually present, not merely the first occurrence anywhere in the
-#: command. Non-greedy and excludes `;`/`&`/`|`/newline so an unrelated
-#: LATER shell segment's own flags are never pulled into this scan.
 _PS_BETWEEN = (
     r"(?:(?!-(?:e(?:ncodedcommand)?|c(?:ommand)?)\b)[^;&|\n])*?"
 )
 
-#: The flag itself -- ``-c``/``-Command`` (script body) or
-#: ``-e``/``-EncodedCommand`` (already-encoded, exempt -- see module
-#: docstring). Exact spellings only, not every PowerShell-legal unambiguous
-#: abbreviation (``-Com``, ``-Comm``, ...) -- a narrower match here only
-#: ever means a missed advisory, never a false one, and PowerShell's own
-#: abbreviation surface is open-ended enough that chasing it would trade a
-#: simple, auditable regex for a guess.
 _PS_FLAG = r"-(?P<flag>e(?:ncodedcommand)?|c(?:ommand)?)\b"
 
-#: The flag's own argument: a single quoted span (double or single),
-#: immediately following the flag modulo horizontal whitespace. Body is
-#: consumed as escaped-pair-or-plain-char so an escaped instance of the
-#: SAME quote character (``\"`` inside a double-quoted span -- exactly the
-#: incident's own shape) is never mistaken for the closing quote. Bash
-#: gives single quotes no escaping meaning at all, and this pattern does
-#: not need any -- the loop still terminates correctly at the first bare
-#: ``'`` for a single-quoted body, since bash quotes single-quoted text
-#: literally with no escape processing to consume prematurely.
 _PS_QUOTED_ARG = r'[ \t]*(?P<quote>["\'])(?P<body>(?:\\.|[^\\])*?)(?P=quote)'
 
 _PS_INVOCATION_RE = re.compile(
     "(?i)" + _PS_BINARY + _PS_BETWEEN + _PS_FLAG + _PS_QUOTED_ARG
 )
 
-#: A `$` not immediately preceded by a backslash -- bash treats `\$` inside
-#: a double-quoted string as a literal dollar sign, not an expansion
-#: trigger, so an escaped one must not count toward "this argument WILL be
-#: expanded."
 _UNESCAPED_DOLLAR_RE = re.compile(r"(?<!\\)\$")
 
 
@@ -196,19 +159,6 @@ def _advisory(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the powershell-via-bash guard against a PreToolUse(Bash)
-    payload.
-
-    Returns ``None`` for every case with nothing actionable to say: no
-    ``powershell``/``pwsh`` invocation at all; a matched invocation whose
-    flag is ``-EncodedCommand``/``-e`` (already encoded, exempt); a matched
-    invocation whose script argument is single-quoted (bash performs no
-    expansion inside single quotes, so nothing is at risk); or a
-    double-quoted argument carrying no unescaped ``$`` (nothing for bash to
-    expand). Returns an advisory-only envelope (every host, never a deny)
-    for the one case that matches the incident this guard exists for: a
-    double-quoted inline script argument containing an unescaped ``$``.
-    """
     cmd = _extract_command(payload)
     if not cmd:
         return None
@@ -219,10 +169,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not match:
         return None
     if match.group("flag").lower().startswith("e"):
-        return None  # -EncodedCommand/-e -- already encoded, nothing to expand
+        return None
     if match.group("quote") != '"':
-        return None  # single-quoted -- bash performs no expansion inside it
+        return None
     if not _UNESCAPED_DOLLAR_RE.search(match.group("body")):
-        return None  # double-quoted, but nothing bash would expand
+        return None
 
     return _advisory(payload=payload)

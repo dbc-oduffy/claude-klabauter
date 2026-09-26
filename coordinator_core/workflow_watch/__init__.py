@@ -1,34 +1,3 @@
-"""
-coordinator_core.workflow_watch — the watcher entry point an EM's Monitor call runs.
-
-Purpose: `python3 -m coordinator_core.workflow_watch` polls a launching session
-transcript and a run journal for one background `Workflow` task until that
-task reaches a terminal state OR this module's own wall-clock cap elapses —
-whichever comes first. It is the mechanism that makes
-`docs/plans/2026-08-30-the-workflow-monitor-outlives-the-run-it-watches.md`'s
-exit criterion true: the watcher is bounded by its own enforced cap,
-independent of whatever `timeout_ms` a model retyped into the Monitor call
-that launched it.
-
-This module owns wiring together already-scoped pieces, not their own
-logic: `terminal.TerminalWatcher` (has task id T's run ended — see
-`terminal.py`'s own module docstring for the two matchers and the fail-safe
-guarantee), `tail.TailReader` (the bounded incremental reader both `terminal`
-and `render` share), `render` (C2 — renders `journal.jsonl` into one short
-stdout line per event), and `stamp` (persists the terminal fact the watcher
-already knows to `journal.jsonl`, either inline the moment this poll loop
-observes it, or via the `--reconcile RUN_DIR` CLI path for a run nobody was
-watching — see `stamp.py`'s own module docstring for both).
-
-Negative-spec: this module does not derive a transcript or journal path from
-projects-root/project-slug/session-id — reconstructing
-`~/.claude/projects/<slug>/<session>.jsonl` from parts re-encodes a
-single-machine path convention this module does not own (see the plan's
-Anti-scope). Both paths arrive verbatim via argv. It does not decide whether
-a run is "done" by any journal balance check (`started == result + failed`)
-— that is the plan's named false-close vector; only `TerminalWatcher`'s two
-positively-matched record shapes end a poll loop with exit code 0.
-"""
 
 from __future__ import annotations
 
@@ -41,19 +10,9 @@ from coordinator_core.workflow_watch.stamp import reconcile as _reconcile_run
 from coordinator_core.workflow_watch.stamp import stamp_terminal
 from coordinator_core.workflow_watch.terminal import TerminalWatcher
 
-# The spike's measured basis: 7.8 microseconds/poll, ~14ms of process time
-# across a 30-minute run at this cadence.
 DEFAULT_POLL_INTERVAL_SECONDS = 1.0
 
-# The wall-clock cap this watcher enforces on itself, independent of any
-# timeout_ms a model may have retyped into the Monitor call that launched
-# it (see the plan's persistent-arming bullet and prime_exit_criterion).
-# Matches the spike's own 30-minute measurement window above.
-#
 # DEFAULT_CAP_MS is this same bound in milliseconds, DERIVED from the seconds
-# value rather than restated, so the two cannot drift apart. The units are not
-# interchangeable and the split is not cosmetic: this module's `--cap` argv is
-# in SECONDS, while the `timeout_ms` the PostToolUse advisory (C4) emits into a
 # Monitor call is in MILLISECONDS. C4 imports DEFAULT_CAP_MS for the Monitor
 # field and DEFAULT_CAP_SECONDS for the `--cap` it writes into the command line.
 DEFAULT_CAP_SECONDS = 30 * 60
@@ -61,12 +20,6 @@ DEFAULT_CAP_MS = int(DEFAULT_CAP_SECONDS * 1000)
 
 
 def _make_renderer(journal_path: str):
-    """Construct C2's journal renderer.
-
-    `render.py` is a sibling module in this same package, landed in the
-    same commit as this file — not an optional dependency, so this is a
-    plain construction, not a best-effort import.
-    """
     return JournalRenderer(journal_path)
 
 
@@ -137,23 +90,6 @@ def _watch(
     poll_interval: float,
     cap_seconds: float,
 ) -> int:
-    """Poll loop. Returns the process exit code per this module's contract:
-
-    - `0` — a terminal record was observed; which of the four statuses it
-      was is printed on the terminal stdout line, never encoded in the
-      exit code (`failed`/`killed` are real detections, not give-ups).
-    - `1` — the wall-clock cap was reached without a terminal record;
-      distinguishable from a real terminal exit by exit code alone, so a
-      Monitor consumer never has to parse stdout to tell "the run ended"
-      from "I gave up."
-
-    On the terminal-record path, this also stamps `journal_path` via
-    `stamp.stamp_terminal` (chunk 1: the watcher already knows the run
-    ended and previously never wrote that fact down). The stamp call is
-    wrapped so nothing it does can change this function's exit code or
-    stop it from returning — `stamp_terminal` is documented fail-safe on
-    its own, but the wrap holds even if a future edit there forgets that.
-    """
     watcher = TerminalWatcher(transcript_path, task_id)
     renderer = _make_renderer(journal_path)
     deadline = time.monotonic() + cap_seconds

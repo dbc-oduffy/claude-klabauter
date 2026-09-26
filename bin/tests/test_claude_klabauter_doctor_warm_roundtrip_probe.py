@@ -40,11 +40,6 @@ _BIN_PROBE = _REPO_ROOT / "bin" / "claude-klabauter-doctor-probe.py"
 
 
 def _load_probe_module() -> Optional[ModuleType]:
-    """Import bin/claude-klabauter-doctor-probe.py as a fresh module via importlib.
-
-    Own module key so this test file's module instance never collides in
-    sys.modules with the sibling warm-probe test files.
-    """
     if not _BIN_PROBE.exists():
         return None
     _KEY = "claude_klabauter_doctor_probe_warm_roundtrip_unit"
@@ -87,7 +82,6 @@ def _is_parseable_probe_result(r: object) -> bool:
 
 
 class TestWarmRoundtripProbeDefaultOff:
-    """`include_live_roundtrip=False` — the flag-default-off path."""
 
     def test_default_off_skips_without_attempting_connection(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -110,7 +104,6 @@ class TestWarmRoundtripProbeDefaultOff:
 
 
 class TestWarmRoundtripProbeHangTimeout:
-    """Thread still alive at the join deadline — a hang, not a clean miss."""
 
     def test_hang_timeout_is_degraded_and_skipped(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -136,9 +129,6 @@ class TestWarmRoundtripProbeHangTimeout:
     def test_hang_timeout_does_not_gate_envelope_overall(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """P1, asserted at the envelope level via `_build_envelope_via_module`
-        (never `_local_reduce_overall` called directly) — the same shape as
-        route_share's own envelope-level regression test."""
         mod = _require_module()
         from coordinator_core.warm import client as warm_client
 
@@ -169,7 +159,6 @@ class TestWarmRoundtripProbeHangTimeout:
 
 
 class TestWarmRoundtripProbeUnexpectedError:
-    """`result_box['error']` — try_warm_dispatch raised despite its own contract."""
 
     def test_unexpected_error_is_degraded_and_skipped(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -197,7 +186,6 @@ class TestWarmRoundtripProbeUnexpectedError:
     def test_unexpected_error_does_not_gate_envelope_overall(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """P1, asserted at the envelope level via `_build_envelope_via_module`."""
         mod = _require_module()
         from coordinator_core.warm import client as warm_client
 

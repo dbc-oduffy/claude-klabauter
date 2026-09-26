@@ -33,12 +33,6 @@ from coordinator_core.ipc import CallerFacingValidationError  # noqa: E402
 
 @pytest.fixture
 def legs(monkeypatch):
-    """Replace both legs with recording stubs; yields the call log.
-
-    Mirrors `test_agent_postuse_dispatch.py::legs` -- patches `_LEGS` so this
-    module stays silent about how the legs are implemented and pins only the
-    params each leg is actually handed.
-    """
     calls: list[tuple[str, dict, object]] = []
 
     def _stub(label, result):
@@ -55,11 +49,6 @@ def legs(monkeypatch):
         return calls
 
     return _install
-
-
-# ---------------------------------------------------------------------------
-# 1. A nested payload of the real shape reaches both legs with the right fields.
-# ---------------------------------------------------------------------------
 
 
 def _nested_payload(**overrides):
@@ -110,12 +99,6 @@ def test_dispatched_model_cascades_when_resolved_model_absent(legs):
     assert flat["dispatched_model"] == "fallback-model"
 
 
-# ---------------------------------------------------------------------------
-# 2. A malformed payload still returns -32602 -- the adapter derives, it does
-#    not widen the accepted shape.
-# ---------------------------------------------------------------------------
-
-
 def test_non_object_tool_input_raises_caller_facing_validation_error(legs):
     legs(("first", no_advisory()), ("second", no_advisory()))
 
@@ -142,26 +125,11 @@ def test_non_dict_params_raises_caller_facing_validation_error(legs):
 
 
 def test_caller_facing_validation_error_is_a_value_error():
-    """-32602 preservation rides on CallerFacingValidationError subclassing ValueError
-    (coordinator_core.ipc's own dispatch_message error-shaping) -- pin the inheritance
-    so a future refactor of that class cannot silently drop this adapter to -32603."""
     assert issubclass(CallerFacingValidationError, ValueError)
     assert getattr(CallerFacingValidationError, "caller_facing_validation", False) is True
 
 
-# ---------------------------------------------------------------------------
-# 3. The flat-union shape that works today still works unchanged.
-# ---------------------------------------------------------------------------
-
-
 def test_flat_union_shape_is_passed_through_unchanged(legs):
-    """No `tool_input`/`tool_response` key -- today's caller-side-stub shape.
-
-    Identity-checked (`is`), not just equality: the adapter must not even copy
-    this shape, so a caller depending on object identity (none does today, but
-    the composition test in test_agent_postuse_dispatch.py already asserts
-    `is`) keeps working.
-    """
     calls = legs(("first", no_advisory()), ("second", no_advisory()))
 
     params = {
@@ -175,9 +143,6 @@ def test_flat_union_shape_is_passed_through_unchanged(legs):
 
 
 def test_flat_union_shape_with_no_fields_at_all_still_works(legs):
-    """Both legs already treat an empty/absent flat payload as fully optional
-    (agent_completion_log/track_dispatched_agents default-and-drop) -- the
-    adapter must not turn an all-absent flat payload into a validation error."""
     calls = legs(("first", no_advisory()), ("second", no_advisory()))
 
     result = asyncio.run(apd._handler({}, repo_root=None))
@@ -188,15 +153,6 @@ def test_flat_union_shape_with_no_fields_at_all_still_works(legs):
 
 @pytest.mark.parametrize("falsy_non_object", [[], "", 0, 0.0, False])
 def test_a_falsy_non_object_is_refused_like_a_truthy_one(falsy_non_object):
-    """The refusal must not depend on the junk being TRUTHY.
-
-    Regression pin. The adapter first read these as
-    `params.get("tool_input") or {}`, which coerced every falsy non-object --
-    `[]`, `""`, `0` -- into `{}` BEFORE the isinstance check ran. The guard
-    then fired only on truthy junk like `[1, 2]`, so the malformed payloads
-    closest to "empty" were the ones that validated clean and reached both
-    legs as a silently-empty flat shape. A guard whose blind spot has the same
-    shape as the defect it screens for reads green forever."""
     with pytest.raises(CallerFacingValidationError):
         apd._flatten_hook_payload(
             {"tool_input": falsy_non_object, "tool_response": {}}
@@ -208,11 +164,6 @@ def test_a_falsy_non_object_is_refused_like_a_truthy_one(falsy_non_object):
 
 
 def test_an_absent_or_null_key_is_not_the_refused_case():
-    """The discriminating control for the pin above.
-
-    Absent and explicit-null are the legitimate shapes a real PostToolUse
-    payload carries; only a PRESENT non-object is malformed. Without this leg
-    the pin above would still pass if the adapter started refusing everything."""
     assert apd._flatten_hook_payload({"tool_input": {"name": "x"}})["name"] == "x"
     assert apd._flatten_hook_payload(
         {"tool_input": None, "tool_response": None}

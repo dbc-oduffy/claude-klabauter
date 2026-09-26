@@ -104,7 +104,7 @@ Seam-routing finding (2026-08-25 terminal-handoff-sweep C5, contributes to AC-9)
 
 from __future__ import annotations
 
-GENERATES = []  # writes session-shape.json under <git_common_dir>/coordinator-sessions/<sid>/, session state living under .git/, never a tracked repo artifact
+GENERATES = []
 
 import sys
 
@@ -126,12 +126,7 @@ from coordinator_core.session import core
 
 _LOG = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# mkdir-lock protocol constants — MUST mirror coordinator-session.sh exactly
 # (_cs_shape_lock_live default _CS_SHAPE_LOCK_STALE_SEC=30; cs_session_shape_set
-# max_attempts=20, sleep 0.1s) so a Python holder and a bash holder agree on
-# staleness/retry behaviour when racing on the same lock dir.
-# ---------------------------------------------------------------------------
 
 _SHAPE_LOCK_STALE_SECONDS: float = 30.0
 _LOCK_MAX_ATTEMPTS: int = 20
@@ -139,11 +134,7 @@ _LOCK_RETRY_SLEEP_SECONDS: float = 0.1
 
 
 class ShapeLockTimeout(Exception):
-    """Raised when the session-shape.lock mkdir lock cannot be acquired.
-
-    Fail-closed: no read, no mutate, no write has occurred against
-    session-shape.json when this is raised.
-    """
+    pass
 
 
 def _now_iso() -> str:
@@ -170,14 +161,6 @@ def _parse_iso_epoch(raw: str) -> Optional[float]:
 
 
 def _lock_live(lock_dir: Path) -> bool:
-    """Return True iff *lock_dir* was claimed recently enough its holder is presumed live.
-
-    Mirrors bash `_cs_shape_lock_live`: reads the lock's own `claimed_at` file
-    (written at acquisition time) rather than any process-liveness check — a
-    session-shape write is a sub-second critical section, so a 30s staleness
-    bound is a generous, purely time-based signal. Missing lock dir, missing
-    claimed_at, or unparseable timestamp all return False (stale/reapable).
-    """
     claimed_at_file = lock_dir / "claimed_at"
     if not lock_dir.is_dir() or not claimed_at_file.is_file():
         return False
@@ -191,26 +174,16 @@ def _lock_live(lock_dir: Path) -> bool:
         return False
     elapsed = datetime.now(tz=timezone.utc).timestamp() - claimed_epoch
     if elapsed < 0:
-        elapsed = 0.0  # clock-skew clamp
+        elapsed = 0.0
     return elapsed < _SHAPE_LOCK_STALE_SECONDS
 
 
 def _try_claim_lock_dir(lock_dir: Path, sid: str) -> bool:
-    """Attempt a single mkdir-based lock claim; write pid/session_id/claimed_at on success.
-
-    Returns True on successful claim, False if the dir already exists (held by
-    another process/thread). Mirrors bash: `mkdir "$lock_dir"` then writes the
-    three metadata files used by _lock_live's staleness check.
-    """
     try:
         lock_dir.mkdir(parents=False, exist_ok=False)
     except FileExistsError:
         print(f"skip: _try_claim_lock_dir: lock_dir.mkdir(parents=False, exist_ok=False) failed: {sys.exc_info()[1]}", file=sys.stderr)
         return False
-    # Metadata writes are best-effort after a successful mkdir claim — a failure
-    # here still leaves the lock held (the mkdir succeeded); staleness-detection
-    # of a metadata-write failure is an acceptable edge (mirrors bash, which
-    # does not roll back the mkdir on a subsequent `echo >` failure either).
     try:
         (lock_dir / "pid").write_text(str(os.getpid()), encoding="utf-8", newline="\n")
         (lock_dir / "session_id").write_text(sid, encoding="utf-8", newline="\n")
@@ -238,9 +211,7 @@ def _acquire_shape_lock(sdir: Path, sid: str) -> Path:
     while attempts < _LOCK_MAX_ATTEMPTS:
         if _try_claim_lock_dir(lock_dir, sid):
             return lock_dir
-        # Lock held — check if holder is still in its critical section.
         if not _lock_live(lock_dir):
-            # Stale/crashed holder — reap and retry immediately (mirrors bash).
             try:
                 shutil.rmtree(str(lock_dir))
             except OSError:
@@ -257,16 +228,11 @@ def _acquire_shape_lock(sdir: Path, sid: str) -> Path:
 
 
 def _release_shape_lock(lock_dir: Path) -> None:
-    """Release the mkdir lock (rm -rf lock_dir) — best-effort, mirrors bash."""
     try:
         shutil.rmtree(str(lock_dir))
     except OSError as exc:
         _LOG.warning("session.record_pickup: failed to release lock %s: %s", lock_dir, exc)
 
-
-# ---------------------------------------------------------------------------
-# Read-modify-write: pickup field + pickup_history ledger
-# ---------------------------------------------------------------------------
 
 def _record_pickup_sync(
     sdir: Path,
@@ -301,13 +267,6 @@ def _record_pickup_sync(
 
     Returns the result envelope (see _handler docstring for wire shape).
     """
-    # `ensure_session`, not `sdir.mkdir`: `sdir` is `<hub>/<sid>`, so creating
-    # it here IS creating a session, and a pickup that mints the directory
-    # without the `meta.json` record leaves a session no peer can see and
-    # `ops/session/reap.py` cannot reap. The hub is handed over pre-resolved --
-    # `_handler` already derived it from `git_common_dir` -- so nothing is
-    # re-derived. The write below is unchanged and still fails through the
-    # caller's own OSError branch if the directory could not be created.
     core.ensure_session(sid, sessions_base=str(sdir.parent), root=worktree_root)
     shape_file = sdir / "session-shape.json"
 
@@ -339,23 +298,22 @@ def _record_pickup_sync(
             pickup_flat["deliverable_id"] = deliverable_id
             history_entry["deliverable_id"] = deliverable_id
 
-        existing["pickup"] = pickup_flat  # top-level-key REPLACE (mirrors bash merge)
+        existing["pickup"] = pickup_flat
 
         history = existing.get("pickup_history")
         if not isinstance(history, list):
             history = []
-        history = history + [history_entry]  # append-only — never mutate prior entries
+        history = history + [history_entry]
         existing["pickup_history"] = history
 
         new_text = json.dumps(existing, indent=None) + "\n"
 
-        # Atomic write: mktemp in the session dir + os.replace (mirrors bash mktemp+mv).
         tmp_fd, tmp_path = tempfile.mkstemp(dir=str(sdir), prefix="session-shape.json.")
         try:
             with os.fdopen(tmp_fd, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(new_text)
             os.replace(tmp_path, str(shape_file))
-            tmp_path = None  # claimed; don't unlink in finally
+            tmp_path = None
         finally:
             if tmp_path is not None:
                 try:
@@ -376,19 +334,9 @@ def _record_pickup_sync(
         _release_shape_lock(lock_dir)
 
 
-# ---------------------------------------------------------------------------
-# Param validation
-# ---------------------------------------------------------------------------
-
 def _validate_params(
     params: dict,
 ) -> tuple[Optional[str], Optional[str], Optional[Path], Optional[str], Optional[dict]]:
-    """Validate params; return (sid, handoff_relpath, target_root, deliverable_id, error_result).
-
-    error_result is None on success — callers check that field to branch.
-    On failure, the first four return values are None/None/None/None and
-    error_result is the exit_code:1 wire envelope to return directly.
-    """
     sid = params.get("sid")
     if not sid or not isinstance(sid, str) or not sid.strip():
         return None, None, None, None, _error_result("sid must be a non-empty string")
@@ -396,11 +344,6 @@ def _validate_params(
     handoff_relpath = params.get("handoff_relpath")
     if not handoff_relpath or not isinstance(handoff_relpath, str) or not handoff_relpath.strip():
         return None, None, None, None, _error_result("handoff_relpath must be a non-empty string")
-    # Defense-in-depth: reject absolute paths and parent-escape — the bash caller
-    # (_hp_rec in cs_consume_handoff) already guards foreign-repo path bleed, but
-    # this op is the write-side security boundary and must not trust a caller-
-    # supplied path blindly (mirrors _resolve_in_repo-style containment used
-    # elsewhere for producer-written JSON paths).
     rel_path = Path(handoff_relpath)
     if rel_path.is_absolute() or ".." in rel_path.parts:
         return None, None, None, None, _error_result(
@@ -418,9 +361,6 @@ def _validate_params(
             f"repo_root does not resolve to an existing path: {exc}"
         )
 
-    # Optional, additive: a non-string or blank value normalizes to None
-    # (omit-rather-than-guess — never a validation error; deliverable_id is
-    # purely advisory and its absence is the common/expected case).
     raw_deliverable_id = params.get("deliverable_id")
     deliverable_id = (
         raw_deliverable_id.strip()
@@ -432,7 +372,6 @@ def _validate_params(
 
 
 def _error_result(reason: str) -> dict:
-    """Build a setup-error result (exit_code:1) — pre-handler failure, no write attempted."""
     _LOG.error("session.record_pickup setup error: %s", reason)
     return {
         "exit_code": 1,
@@ -444,10 +383,6 @@ def _error_result(reason: str) -> dict:
         "repoint_detected": False,
     }
 
-
-# ---------------------------------------------------------------------------
-# Op handler
-# ---------------------------------------------------------------------------
 
 @register_op("session.record_pickup")
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:

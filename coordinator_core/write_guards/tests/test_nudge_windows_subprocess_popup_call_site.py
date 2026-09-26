@@ -41,7 +41,6 @@ from coordinator_core.write_guards import nudge_windows_subprocess_popup as guar
 
 
 def _fires(file_path: str, content: str) -> bool:
-    """True when the popup advisory fires on a Write of ``content``."""
     result = guard.check(
         {"tool_name": "Write", "tool_input": {"file_path": file_path, "content": content}}
     )
@@ -55,7 +54,6 @@ def _fires(file_path: str, content: str) -> bool:
 
 
 class TestFileWideSuppressionNoLongerHidesASibling:
-    """The defect proper: a suppressed spawn standing in front of a bare one."""
 
     def test_suppressed_spawn_does_not_silence_a_bare_sibling(self):
         content = (
@@ -68,7 +66,6 @@ class TestFileWideSuppressionNoLongerHidesASibling:
         )
 
     def test_order_independent_bare_spawn_first(self):
-        """The audit reproduced the defect order-independently; so does the fix."""
         content = (
             "import subprocess\n"
             'subprocess.run(["git", "push"])\n'
@@ -87,8 +84,6 @@ class TestFileWideSuppressionNoLongerHidesASibling:
         )
 
     def test_non_console_target_sibling_is_not_policed(self):
-        """``ls`` is not a console-subsystem target — resolving argv0 per call
-        site must not turn every unsuppressed spawn into a fire."""
         content = (
             "import subprocess\n"
             'subprocess.run(["git", "x"], creationflags=0x08000000)\n'
@@ -97,9 +92,6 @@ class TestFileWideSuppressionNoLongerHidesASibling:
         assert not _fires("clean.py", content)
 
     def test_os_system_console_target_is_unsuppressable_and_fires(self):
-        """``os.system`` accepts no creationflags at all, so a console target
-        routed through it cannot be suppressed — it is not merely unsuppressed
-        here, and a suppressed sibling must not speak for it."""
         content = (
             "import os\n"
             "import subprocess\n"
@@ -154,10 +146,6 @@ class TestNoOpSuppressionIsAlsoPerCallSite:
         assert not _fires("clean.py", content)
 
     def test_opaque_creationflags_variable_keeps_the_file_wide_leg(self):
-        """``creationflags=flags`` is unreadable from its own source, so the
-        AST view is NOT conclusive and the coarse file-wide leg must keep its
-        say. A detector that cannot see a construct must never be the reason
-        the guard goes quiet about it."""
         content = (
             "import subprocess\n"
             "flags = subprocess.DETACHED_PROCESS\n"
@@ -167,7 +155,6 @@ class TestNoOpSuppressionIsAlsoPerCallSite:
 
 
 class TestUnreadableConstructsDegradeToTheRegexPath:
-    """Never-narrow: anything the AST walk cannot resolve falls back, not silent."""
 
     def test_kwargs_splat_is_not_treated_as_a_bare_spawn(self):
         content = (
@@ -182,9 +169,6 @@ class TestUnreadableConstructsDegradeToTheRegexPath:
         assert _fires("broken.py", content)
 
     def test_docstring_only_prose_still_surfaces(self):
-        """DR-077 Case C, re-pinned from the AST side: an AST-only detector
-        finds no call site here, so the regex prose fallback MUST survive.
-        Deleting it to make an AST rewrite pass is the failure this guards."""
         content = '"""Docs: we call subprocess.run(["git", "status"]) somewhere."""\n'
         assert _fires("prose.py", content)
 
@@ -244,7 +228,6 @@ class TestUnrecognizedCallShapesForfeitConclusive:
     """
 
     def test_bare_popen_import_with_detached_process_still_fires(self):
-        """The reviewer's exact repro — ordinary style, not adversarial."""
         content = (
             "import subprocess\n"
             'subprocess.run(["cmd.exe", "/c", "dir"], creationflags=0x08000000)\n'
@@ -360,10 +343,6 @@ class TestUnrecognizedCallShapesForfeitConclusive:
             )
 
     def test_unrecognized_call_without_creationflags_does_not_forfeit(self):
-        """The forfeit is keyed on the kwarg, so ordinary unrelated calls do
-        not gratuitously destroy conclusiveness — otherwise the mirror-defect
-        fix (a prose mention no longer condemning a clean file) would be dead
-        in every real module."""
         content = (
             "import subprocess\n"
             'print("hello")\n'
@@ -407,8 +386,6 @@ class TestSpawnKindRecognizesTheWidenedUniverse:
         assert _fires("bare_check_output.py", content)
 
     def test_os_popen_console_target_now_fires(self):
-        """`os.popen`, like `os.system`, carries no `creationflags` parameter
-        at all -- unsuppressable by construction, same as `os.system`."""
         content = 'import os\nos.popen("git status")\n'
         verdict, _conclusive = guard._analyze_py_call_sites(content)
         assert verdict == guard._AST_FIRE
@@ -505,7 +482,6 @@ class TestKnownResidueSurvivesWideningB:
 
 
 class TestAnalyzerContract:
-    """Direct assertions on the analyzer's own two-value contract."""
 
     def test_no_recognized_call_is_unknown_not_clean(self):
         verdict, conclusive = guard._analyze_py_call_sites("x = 1\n")
@@ -529,9 +505,6 @@ class TestAnalyzerContract:
         assert conclusive is True
 
     def test_ast_targets_stay_in_lockstep_with_the_regex_alternation(self):
-        """The two detectors share one console-target list in two spellings.
-        Drift means the precise one stops seeing a target the coarse one still
-        names — widen both or neither."""
         for name in guard._AST_CONSOLE_TARGET_NAMES:
             assert guard._PY_CONSOLE_TARGET_RE.search(f'"{name}"'), (
                 f"{name} is policed per call site but invisible to the regex"

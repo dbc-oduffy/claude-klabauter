@@ -69,11 +69,6 @@ from coordinator_core.ops.learn_lessons_cutoff import _claude_home
 from coordinator_core.state_root import coordinator_state_root_central
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 
-# module-level alias (not a re-derived duplicate) so this
-# module's own tests can keep monkeypatching a local name; the actual
-# implementation now lives once in coordinator_core.state_root, shared with
-# coordinator_core.ops.central_run_due (previously two independently
-# hand-duplicated copies of the same 3-line wrapper).
 _coordinator_state_root_central = coordinator_state_root_central
 
 _SUBPROCESS_TIMEOUT_SECS = 15
@@ -101,9 +96,6 @@ def _machine_local_run(machine_local: str, *args: str) -> str:
 
 
 def _publish_target_dests(machine_local: str) -> List[str]:
-    """`machine-local get publish.targets` lines are `name|type|source|dest` -- keep
-    field 4 (dest) for any line with >=4 pipe-separated fields. Mirrors:
-    `awk -F'|' 'NF>=4{print $4}'`."""
     out = _machine_local_run(machine_local, "get", "publish.targets")
     dests: List[str] = []
     for line in out.splitlines():
@@ -127,20 +119,6 @@ def _is_publish_target(
 
 
 def _machine_local_dump_repos(machine_local: str) -> Dict[str, str]:
-    """Resolve every `repos.*` key in ONE `dump --prefix repos --format json`
-    call — the batch counterpart to `_registry_roots`' former enumerate-then-
-    `get` loop (one `keys` spawn plus one `get` spawn per key). Same
-    primitive already proven in `coordinator/bin/coordinator-doc-new.py` and
-    `coordinator/bin/lib/cli_shared.py::machine_local_dump_repos`.
-
-    Fails closed to {} on any spawn failure, empty stdout, unparseable JSON,
-    OR a non-zero returncode — a non-zero exit with parseable stdout is a
-    partial/crashed dump, not a value to trust (this is the fixed shape;
-    an earlier revision of the sibling helpers above trusted parseable
-    stdout regardless of returncode, which a code review caught as a silent
-    partial-table read). Callers already tolerate an empty/partial roots
-    list — this degrades exactly like "no machine-local" does.
-    """
     try:
         proc = subprocess.run(
             [machine_local, "dump", "--prefix", "repos", "--format", "json"],
@@ -162,9 +140,6 @@ def _machine_local_dump_repos(machine_local: str) -> Dict[str, str]:
 
 
 def _registry_roots(machine_local: str) -> List[str]:
-    """Resolve every `repos.*` key via ONE batched dump call, skip-absent,
-    minus publish targets. See `_machine_local_dump_repos` for the batching
-    rationale (T3 h4-ops-b deferred item)."""
     roots: List[str] = []
     pub_dests = _publish_target_dests(machine_local)
     for resolved in _machine_local_dump_repos(machine_local).values():
@@ -180,9 +155,6 @@ def _registry_roots(machine_local: str) -> List[str]:
 
 
 def _supplemental_roots(config_path: str) -> List[str]:
-    """Roots between the BEGIN/END learn-lessons-roots sentinel, `- `-prefixed lines,
-    existing dirs only. Mirrors:
-    `sed -n '/BEGIN.../,/END.../p' "$_config" | grep -E '^- ' | sed 's/^- //'`."""
     if not os.path.isfile(config_path):
         return []
     try:
@@ -211,35 +183,15 @@ def _supplemental_roots(config_path: str) -> List[str]:
 
 
 def resolve_roots() -> List[str]:
-    """Public in-process API: the de-duplicated root list, one entry per source
-    per the module contract (§ header). Exposed for native callers (e.g.
-    `coordinator_core.ops.central_run_due`) that previously shelled out to this
-    module's bash oracle predecessor and now import it directly instead."""
     claude_home = _claude_home()
-    # Settings-home-first resolution, mirroring `coordinator_core.bare_forwarder.
-    # forward`'s two-rung ordering: try `<settings-home>/bin/machine-local`
-    # first, fall back to the legacy `<claude_home>/bin/machine-local` rung.
-    # (Deliberately NOT `_settings_home.resolve_machine_local_cli`'s PATH-first
-    # ladder -- a bare `shutil.which("machine-local")` would resolve whatever
-    # is on the CALLING PROCESS's PATH, which on an operator box commonly
     # includes the real settings-home bin dir regardless of which CLAUDE_HOME/
     # COORDINATOR_SETTINGS_HOME a caller or test has pointed elsewhere; the two
-    # explicit rungs below are both env-derived and therefore respect a
     # sandboxed CLAUDE_HOME/COORDINATOR_SETTINGS_HOME the way PATH does not.)
-    #
-    # This module previously hand-rolled a SINGLE-rung probe against ONLY the
-    # legacy `<claude_home>/bin/machine-local` location, which `~/.claude/bin`'s
-    # 2026-07-28 retirement left permanently unable to find a settings-home-
-    # installed CLI. That silently degraded to "no machine-local" on any box
-    # installed post-migration, skipping `_registry_roots()` entirely and
-    # reporting only `claude_home` as if no peers were registered at all --
-    # dbc-oduffy/claude-klabauter#38.
     machine_local_name = "machine-local"
     settings_home_candidate = os.path.join(str(settings_home()), "bin", machine_local_name)
     legacy_candidate = os.path.join(claude_home, "bin", machine_local_name)
     if os.name == "nt":
         # The bare shim is EXTENSION-LESS, so CreateProcess cannot exec it
-        # (WinError 193) — prefer the delivered .cmd sibling on Windows.
         settings_home_candidate = settings_home_candidate + ".cmd"
         legacy_candidate = legacy_candidate + ".cmd"
     if os.path.isfile(settings_home_candidate) and is_executable(settings_home_candidate):

@@ -1,20 +1,3 @@
-"""test_workday_start_handoff_triage.py — path-scoped test suite for
-`workday-start-handoff-triage.py`'s `stale-plans` batching (chunk C15 of
-docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-gate.md).
-
-Covers `_git_last_commit_epochs_batch` (the batched multi-pathspec git-log
-walk that replaced the former per-plan `git log -1 -- <path>` N+1 spawn) and
-`find_stale_executing_plans` end-to-end, including: parity with the previous
-per-path semantics, absence reconciliation (never-committed / untracked
-paths map to None rather than being silently dropped), and the deliberate
-prefix-match / age-threshold behavior preserved from the bash original.
-
-Runs bash-free: `python3 test_workday_start_handoff_triage.py` (or via the
-coordinator test runner). Exit 0 = all tests pass; non-zero = at least one
-failure.
-
-Spec backlink: pln-kill-the-n-1-git-spawn-class-a-88897a § C15
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -25,9 +8,7 @@ import time
 
 import pytest
 
-# Declared, not excused: this file spawns real processes because the behaviour under
 # test IS the spawn. _BASELINE is shrink-only pre-existing residue and is explicitly
-# not the route for a new file -- test_no_new_spawning_tests.py Rule 2.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -49,12 +30,6 @@ def _pass(label: str) -> None:
 
 
 def _fail(label: str, detail: str = "") -> None:
-    """Fail the enclosing test.
-
-    Negative-spec: this MUST raise. It previously only printed and bumped a
-    module-global counter that nothing ever asserted on, which made every
-    check in this file decorative. Do not "restore" the counting-only shape.
-    """
     global FAIL
     print(f"  FAIL: {label}")
     if detail:
@@ -64,7 +39,6 @@ def _fail(label: str, detail: str = "") -> None:
 
 
 def _load_module():
-    """Import workday-start-handoff-triage.py as a fresh module object."""
     path = os.path.join(SCRIPT_DIR, "workday-start-handoff-triage.py")
     spec = importlib.util.spec_from_file_location("workday_start_handoff_triage_under_test", path)
     mod = importlib.util.module_from_spec(spec)
@@ -103,10 +77,6 @@ def _plan_body(status="executing"):
     return f"---\nstatus: {status}\n---\n\nbody\n"
 
 
-# ===========================================================================
-# _git_last_commit_epochs_batch: single multi-pathspec walk, matches
-# `git log -1 -- <path>` per-path semantics.
-# ===========================================================================
 def test_batch_resolves_most_recent_commit_per_path(tmp_path):
     mod = _load_module()
     _init_repo(tmp_path)
@@ -181,15 +151,6 @@ def test_batch_never_committed_path_maps_to_none_not_dropped(tmp_path):
 
 
 def test_batch_conflict_resolution_merge_commit_is_not_stale(tmp_path):
-    """Regression for the merge-suppression trap: `git log --name-only`
-    prints NO file-list line for a merge commit by default, even one that
-    survives history simplification under a pathspec (i.e. genuinely
-    touched the path via conflict resolution) — so without
-    `--diff-merges=first-parent`, the batched matcher would skip past the
-    merge's header (real, current `%ct`) straight to the next, OLDER commit
-    that does print a name line, silently returning a stale timestamp. This
-    pins that the merge commit's own epoch is returned instead.
-    """
     mod = _load_module()
     _init_repo(tmp_path)
     _git(tmp_path, "checkout", "-b", "main")
@@ -260,16 +221,13 @@ def test_batch_empty_input_returns_empty_dict(tmp_path):
     _pass("test_batch_empty_input_returns_empty_dict")
 
 
-# ===========================================================================
-# find_stale_executing_plans: end-to-end, batched-path behavior parity.
-# ===========================================================================
 def test_find_stale_executing_plans_flags_old_executing_plan(tmp_path):
     mod = _load_module()
     _init_repo(tmp_path)
     _write_and_commit(tmp_path, "docs/plans/old.md", _plan_body("executing"), "add old")
 
     old_epoch = int(_git(tmp_path, "log", "-1", "--format=%ct").strip())
-    now = old_epoch + (5 * 86400)  # 5 days later, threshold default is 3
+    now = old_epoch + (5 * 86400)
 
     cwd = os.getcwd()
     os.chdir(tmp_path)
@@ -311,7 +269,6 @@ def test_find_stale_executing_plans_skips_non_executing(tmp_path):
 def test_find_stale_executing_plans_skips_never_committed(tmp_path):
     mod = _load_module()
     _init_repo(tmp_path)
-    # A repo needs at least one commit to have a valid HEAD for `git log`.
     _write_and_commit(tmp_path, "README.md", "seed\n", "seed commit")
 
     plans_dir = tmp_path / "docs" / "plans"
@@ -335,9 +292,6 @@ def test_find_stale_executing_plans_skips_never_committed(tmp_path):
 
 
 def test_find_stale_executing_plans_multiple_plans_all_resolved(tmp_path):
-    """Parity check: with several executing plans in one directory, the
-    batched walk must resolve every one independently (no cross-path
-    contamination from the shared single git-log call)."""
     mod = _load_module()
     _init_repo(tmp_path)
     for name in ("p1.md", "p2.md", "p3.md"):

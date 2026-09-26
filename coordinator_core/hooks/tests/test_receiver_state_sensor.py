@@ -1,11 +1,3 @@
-"""
-coordinator_core.hooks.tests.test_receiver_state_sensor — tests for the thin op
-wrapper over session.receiver_state.
-
-Default tier. Fixture transcripts synthesized in-test.
-
-Spec backlink: docs/plans/2026-08-14-receiver-state-sensor.md § C3
-"""
 
 from __future__ import annotations
 
@@ -26,9 +18,6 @@ def _fake_session_dir(monkeypatch, tmp_path: Path):
         return str(fake_base / sid)
 
     def _fake_ensure_session(sid: str, cwd=None, **kwargs) -> str:
-        # `write_receiver_state` calls `ensure_session` directly (not `session_dir`)
-        # to create the session directory — patch it to the same fake base so the
-        # write never escapes to the real `.git/coordinator-sessions/` hub.
         sdir = fake_base / sid
         sdir.mkdir(parents=True, exist_ok=True)
         return str(sdir)
@@ -99,7 +88,6 @@ class TestHandlerWritesSiblingFile:
             raise RuntimeError("simulated sensor failure")
 
         monkeypatch.setattr(sensor, "_run_sensor", _boom)
-        # Must not raise — fail-soft (AC12).
         result = asyncio.run(
             sensor._handler(
                 {"session_id": "sid-h4", "transcript_path": "whatever"},
@@ -107,14 +95,6 @@ class TestHandlerWritesSiblingFile:
             )
         )
         assert result == {}
-
-
-# `TestTurnObligationWrite`
-# removed. It existed only to pin `_record_turn_obligation`'s gating behaviour, and that
-# function is deleted: the sensor no longer writes its own turn-boundary row to the
-# obligations intake (see the module docstring's SECOND WRITE note, now removed). The
-# `obligations.for_peer`/`record` contract itself is untouched and still covered by
-# `coordinator_core/group_em/tests/`.
 
 
 class TestRegistrationSuffix:
@@ -126,14 +106,6 @@ class TestRegistrationSuffix:
 
 
 class TestTranscriptClockIsNotFileMtime:
-    """The sensor's own copy of the 2026-08-31 defect, driven end to end.
-
-    These assert THROUGH the handler, not against `classify` directly: the
-    defect was which number the sensor passed, so a test that supplies the
-    number itself could not have failed. Each case forces the file's mtime
-    forward the way a bookkeeping rewrite does, and would return the opposite
-    verdict on the pre-fix sensor.
-    """
 
     def _tool_use_transcript(self, tmp_path: Path, stamp: str) -> str:
         return _write_transcript(
@@ -149,8 +121,6 @@ class TestTranscriptClockIsNotFileMtime:
                         },
                     }
                 ),
-                # Untimestamped bookkeeping rows -- what the harness rewrites
-                # onto a stopped session, moving mtime without the session acting.
                 json.dumps({"type": "cost-state"}),
                 json.dumps({"type": "last-prompt"}),
             ],
@@ -166,10 +136,8 @@ class TestTranscriptClockIsNotFileMtime:
 
         _fake_session_dir(monkeypatch, tmp_path)
         now = datetime(2026, 8, 31, 12, 0, 0, tzinfo=timezone.utc)
-        # The tool call went out 10 minutes ago -- far past the 90s grace.
         stamp = (now - timedelta(seconds=600)).isoformat().replace("+00:00", "Z")
         transcript = self._tool_use_transcript(tmp_path, stamp)
-        # ...but a bookkeeping write touched the file 5 seconds ago.
         os.utime(transcript, (now.timestamp() - 5, now.timestamp() - 5))
         monkeypatch.setattr(session_core, "now_epoch", lambda: int(now.timestamp()))
 
@@ -187,8 +155,6 @@ class TestTranscriptClockIsNotFileMtime:
         assert record["reason"].startswith("tool-unanswered")
 
     def test_a_live_tool_call_is_still_producing(self, tmp_path: Path, monkeypatch) -> None:
-        """The correction removes unearned freshness; it must not invent
-        staleness on a session that genuinely just acted."""
         from datetime import datetime, timedelta, timezone
 
         from coordinator_core.session import core as session_core

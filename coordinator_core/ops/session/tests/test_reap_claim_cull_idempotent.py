@@ -32,7 +32,6 @@ from coordinator_core.ops.session import reap
 
 
 def _plant_claim(sessions_dir: Path, subdir: str, name: str) -> Path:
-    """Plant one claim dir with a holder file, as a claimed record leaves it."""
     claim_dir = sessions_dir / subdir / name
     claim_dir.mkdir(parents=True, exist_ok=True)
     (claim_dir / "holder").write_text("dead-session-id\n", encoding="utf-8")
@@ -41,23 +40,13 @@ def _plant_claim(sessions_dir: Path, subdir: str, name: str) -> Path:
 
 @pytest.fixture
 def dead_holder(monkeypatch):
-    """Every claim's holder reads as not-live, on every call."""
     monkeypatch.setattr(reap, "cs_claim_holder_live", lambda _path: False)
-    # handoff-claims takes a frontmatter-reconcile pass before rmtree; it is
-    # not what this test measures, and it reaches outside the tmp hub.
     monkeypatch.setattr(
         reap, "reconcile_dead_handoff_claim_frontmatter", lambda *a, **k: None
     )
 
 
 def test_second_cull_pass_is_a_silent_no_op(tmp_path, dead_holder):
-    """AC: the invariant the brief.py comment asserts but nothing tested.
-
-    Pass 1 reaps every planted claim. Pass 2, against the state pass 1 left,
-    reaps nothing, defers nothing, and fails nothing — the same result a
-    never-claimed hub returns. A double-fire is therefore harmless
-    independent of which ceremonies happen to call it.
-    """
     sessions = tmp_path / "coordinator-sessions"
     planted = [
         _plant_claim(sessions, "handoff-claims", "2026-08-26-a-handoff"),
@@ -85,8 +74,6 @@ def test_second_cull_pass_is_a_silent_no_op(tmp_path, dead_holder):
 
 
 def test_second_cull_pass_leaves_surviving_claims_alone(tmp_path, monkeypatch):
-    """A live holder survives BOTH passes — idempotency must not be reached
-    by the cheap route of "the second pass reaps whatever the first left"."""
     sessions = tmp_path / "coordinator-sessions"
     live = _plant_claim(sessions, "memo-claims", "2026-08-26-live-memo")
     dead = _plant_claim(sessions, "memo-claims", "2026-08-26-dead-memo")
@@ -107,14 +94,6 @@ def test_second_cull_pass_leaves_surviving_claims_alone(tmp_path, monkeypatch):
 
 
 def test_per_repo_wrapper_is_idempotent_too(tmp_path, monkeypatch, dead_holder):
-    """``_reap_claims_for_target`` is the surface the ceremony directive
-    actually fires (via ``session.reap_claims_for_repos``), so the guard runs
-    at that boundary as well — not only on the predicate underneath it.
-
-    ``git_common_dir`` is stubbed to the tmp hub's parent: this test is about
-    a repeated cull, not about git, and calling it for real would put a
-    subprocess spawn on a test that needs none.
-    """
     common_dir = tmp_path / ".git"
     sessions = common_dir / "coordinator-sessions"
     _plant_claim(sessions, "plan-claims", "2026-08-26-a-plan")

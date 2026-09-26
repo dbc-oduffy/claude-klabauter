@@ -66,7 +66,6 @@ from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.pickup_assemble import resolve_archived_basename
 from coordinator_core.plan_assemble.predicates import PredicateContext, undetermined
 
-#: `:38`'s static route -> sizing-wall disposition table. No disk read.
 _SIZING_WALL_DISPOSITION: dict[str, str] = {
     "plan": "route_to_plan",
     "spec-dispatch": "route_to_plan",
@@ -76,16 +75,10 @@ _SIZING_WALL_DISPOSITION: dict[str, str] = {
     "dispatch": "route_to_dispatch",
 }
 
-#: `:34`'s clean-route disqualifying set — a route in this set means `plan`
-#: is not the room for this pass.
 _ROADMAP_PRECONDITION_DISQUALIFYING_ROUTES: frozenset[str] = frozenset(
     {"shape", "roadmap", "pm-decision"}
 )
 
-#: `:50`'s plan-trigger phrase ladder — a handoff body is read as
-#: prescribing a plan if any of these case-insensitive substrings appear.
-#: Deliberately a short, explicit list rather than a single regex knob: a
-#: future addition is a one-line change, not a rewrite of this function.
 _PLAN_TRIGGER_PHRASES: tuple[str, ...] = (
     "prescribes a plan",
     "requires a plan",
@@ -97,7 +90,6 @@ _PLAN_TRIGGER_PHRASES: tuple[str, ...] = (
 
 
 def sizing_object_present(context: PredicateContext) -> dict[str, Any]:
-    """`:30` -> `gates.triage.sizing_object.present`, `.path`."""
     if context.sizing_object_path is None:
         return undetermined("no --sizing-object supplied")
     return {
@@ -107,10 +99,6 @@ def sizing_object_present(context: PredicateContext) -> dict[str, Any]:
 
 
 def sizing_object_arrival(context: PredicateContext) -> dict[str, Any]:
-    """`:32a` -> `gates.triage.sizing_object.arrival`.
-
-    Read exclusively off `context.caller_flags["arrival"]` — never
-    inferred from any artifact. An absent flag is `undetermined`."""
     arrival = context.caller_flags.get("arrival")
     if arrival not in ("fresh_inbound", "return_edge"):
         return undetermined("caller_flags['arrival'] not supplied")
@@ -118,8 +106,6 @@ def sizing_object_arrival(context: PredicateContext) -> dict[str, Any]:
 
 
 def sizing_object_narrative_fields(context: PredicateContext) -> dict[str, Any]:
-    """`:32b` -> `gates.triage.sizing_object.intent`, `.estimate`,
-    `.appetite` — each surfaced verbatim, never backfilled."""
     if context.sizing_frontmatter is None:
         return undetermined("no sizing object frontmatter available")
     return {
@@ -130,8 +116,6 @@ def sizing_object_narrative_fields(context: PredicateContext) -> dict[str, Any]:
 
 
 def route(context: PredicateContext) -> dict[str, Any]:
-    """`:33` -> `gates.triage.route` — surfaces `context.resolved_route`
-    verbatim; never re-derived from the sizing object's other fields."""
     return {"route": context.resolved_route}
 
 
@@ -150,19 +134,12 @@ def roadmap_precondition(context: PredicateContext) -> dict[str, Any]:
 
 
 def sizing_wall_fires(context: PredicateContext) -> dict[str, Any]:
-    """`:37`/`:39` -> `gates.triage.sizing_wall.fires`.
-
-    ONE producer for both contract lines — `:39`'s anti-gaming clause is
-    the same negative artifact-presence check `:37` already performs, not
-    a second one."""
     if context.sizing_object_path is None:
         return {"fires": True}
     return {"fires": context.sizing_frontmatter is None}
 
 
 def sizing_wall_disposition(context: PredicateContext) -> dict[str, Any]:
-    """`:38` -> `gates.triage.sizing_wall.disposition` — static
-    route -> action table lookup, no disk read."""
     disposition = _SIZING_WALL_DISPOSITION.get(context.resolved_route)
     if disposition is None:
         return undetermined(
@@ -203,13 +180,6 @@ def sizing_wall_via_memo(context: PredicateContext) -> dict[str, Any]:
 
 
 def sizing_wall_carveout(context: PredicateContext) -> dict[str, Any]:
-    """`:42` -> `gates.triage.sizing_wall.carveout`.
-
-    Reads the SAME claim-entry signal `gates.claim_grant` already carries
-    in the existing envelope, off `context.caller_flags["claim_grant"]` —
-    this module builds no independent claim-grant resolver. A truthy value
-    means this pass was entered via a claimed handoff/pickup; absence of
-    the key is `undetermined`, never a guess of `none`."""
     if "claim_grant" not in context.caller_flags:
         return undetermined("caller_flags['claim_grant'] not supplied")
     return {
@@ -269,21 +239,6 @@ def handoff_prescribes_plan(context: PredicateContext) -> dict[str, Any]:
 
 
 def _repo_relative_posix(path: Path, repo_root: Path) -> str:
-    """`path` as a repo-relative POSIX string.
-
-    `basis` is emitted data a human and a sibling repo both read, so it
-    carries ONE path shape regardless of host. A bare `str(Path)` yields
-    backslashes on Windows, so the same field reads `state/sizings/x.yaml`
-    from one arm and a backslash-separated form from another — and an
-    absolute path would leak a machine-local root into a shared artifact.
-
-    An out-of-tree path is NOT hypothetical and is why the fallback names
-    rather than echoes: the CLI validates `--sizing-object`/`--plan` with a
-    bare `is_file()` and never confines them under `repo_root`, so a path
-    outside the tree reaches here, fails `relative_to`, and — if echoed —
-    puts the operator's full home directory into emitted data. The fallback
-    keeps the basename, which is all a diagnostic needs, and drops the
-    machine-local prefix, which nothing downstream may see."""
     try:
         return Path(path).resolve().relative_to(Path(repo_root).resolve()).as_posix()
     except (ValueError, OSError):
@@ -291,37 +246,6 @@ def _repo_relative_posix(path: Path, repo_root: Path) -> str:
 
 
 def admission(context: PredicateContext) -> dict[str, Any]:
-    """-> `gates.triage.admission` — `{value, basis, warning}`, the SIZING
-    axis's disposition (`execution` / `sized` / `unsized`), surfaced
-    verbatim from `sizing_disposition.compute_sizing_disposition`. This is
-    the FK resolution `plan-assemble brief` previously left to the caller
-    (see `pln-plan-assemble-admits-instead-o-e441e3`'s Problem): the row
-    that removes the audit step, not a new one.
-
-    Total, not partial — unlike every other row in this module, `admission`
-    never emits the `undetermined` sentinel. `compute_sizing_disposition`
-    is itself total over its `(root, fm)` input (an empty `fm` still
-    resolves to its `unsized`/`basis=None` arm), so there is no missing-
-    input case here for the sentinel to name.
-
-    An explicitly-supplied `context.sizing_object_path` WINS over the
-    inbound artifact's own citations: this row calls the predicate against
-    a synthetic `{"sizing_object": <path>}` frontmatter in that case,
-    never against `context.plan_frontmatter`. Passing the real plan
-    frontmatter through unconditionally would let a `origin_plan_id`/
-    `plan_ids` citation on the plan out-rank an operator's explicit
-    `--sizing-object` inside the predicate's own precedence order (plan-FK
-    before `sizing_object`) — the opposite of AC2's "explicit still wins".
-    Bypassing the plan-FK precedence entirely for this arm, rather than
-    trying to out-rank it from outside, is what keeps this a single call
-    into the shared predicate instead of a second implementation of its
-    ordering.
-
-    Absent `--sizing-object`, this resolves the FK from the inbound
-    artifact's own frontmatter (`context.plan_frontmatter`, or `{}` when no
-    `--plan` was supplied either) — the audit step AC1 removes; the result
-    lands wherever the plan-FK/`deliverable_id`-inheritance/`sizing_object`
-    precedence inside the predicate says it does, unmodified."""
     if context.sizing_object_path is not None:
         fm: dict[str, Any] = {"sizing_object": _repo_relative_posix(context.sizing_object_path, context.repo_root)}
     else:

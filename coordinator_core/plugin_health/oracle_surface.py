@@ -60,20 +60,11 @@ from typing import List, Optional, Set
 
 from coordinator_core.engine_root import coordinator_engine_root
 
-# Extensions (plus the bare/extensionless form) a reserved-family oracle
 # might carry on disk -- mirrors fleet_reachability._KNOWN_ORACLE_EXTENSIONS,
-# duplicated here (not imported) because that tuple is fleet_reachability's
-# own private extension-normalization constant, a distinct concern from this
-# module's disk-existence probe.
 _ORACLE_FILE_EXTENSIONS = ("", ".py", ".js", ".sh", ".cmd")
 
 
 def resolve_agent_bin(claude_klabauter_root: Optional[Path] = None) -> Optional[Path]:
-    """`coordinator/bin/` -- the original, largest leg of the oracle
-    surface. Returns `None` (never raises) when claude-klabauter's own root is
-    unresolvable on this machine, or `coordinator/bin/` itself does not
-    exist -- both callers treat that as their own top-level skip/fail
-    precondition, not an error from this resolver."""
     if claude_klabauter_root is None:
         try:
             claude_klabauter_root = Path(coordinator_engine_root())
@@ -84,14 +75,6 @@ def resolve_agent_bin(claude_klabauter_root: Optional[Path] = None) -> Optional[
 
 
 def resolve_extra_oracle_dirs(claude_klabauter_root: Optional[Path] = None) -> List[Path]:
-    """The two fleet-exposed oracle directories beyond `coordinator/bin/`
-    (see module docstring): `<repo-root>/bin/` and `coordinator/lib/`.
-    Returns `[]` (not an error) when claude-klabauter's own root is unresolvable --
-    a directory that does not exist is likewise not an error, since
-    `_derive_agent_helper_target_map` treats a missing directory as an
-    empty map. Callers pass the RESULT of this straight through as-is; it
-    intentionally does not filter to only existing directories, matching
-    `_derive_agent_helper_target_map`'s own missing-directory tolerance."""
     if claude_klabauter_root is None:
         try:
             claude_klabauter_root = Path(coordinator_engine_root())
@@ -123,10 +106,6 @@ def live_oracle_names(oracle_dirs: List[Path]) -> Set[str]:
     reserved. Restored here by checking real disk existence directly,
     independent of the forwarder-installability question `_derive_agent_
     helper_target_map` answers."""
-    # Lazy import, mirroring fleet_reachability's own precedent: substrate.py
-    # is a live install-surface module, imported at call time rather than
-    # module load so an in-flight edit there can't break this module merely
-    # by being imported alongside it.
     from coordinator_core.install.substrate import (
         _AGENT_HELPER_RESERVED_NAMES,
         _derive_agent_helper_target_map,

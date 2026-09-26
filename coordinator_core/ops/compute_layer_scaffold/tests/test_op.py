@@ -49,19 +49,12 @@ def test_check_mode_returns_rendered_report():
 
 
 def test_check_mode_honors_explicit_modules_param():
-    """The prior
-    assertion (`"1/1" in report or "0/1" in report`) is an OR that passes on
-    either branch, so it only proves a fraction shape is present, never that
-    the correct one is. Assert the specific per-clause fractions pickup_assemble
-    actually scores when it is the sole explicit `modules` entry."""
     result = _compute_layer_scaffold({"mode": "check", "modules": ["pickup_assemble"]})
     assert "report" in result
     report = result["report"]
     assert "closed_cli_dispatch: 1/1" in report
     assert "execute_directives: 1/1" in report
     assert "build_envelope: 0/1" in report
-    # `70b4563035` deleted pickup_assemble's own `_emit` with the rest of the
-    # monolith, so this clause is a pass for it now, not a miss.
     assert "no_local_emit: 1/1" in report
     assert "clean_on_all: 0/1" in report
 

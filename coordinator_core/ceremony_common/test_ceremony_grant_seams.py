@@ -24,10 +24,6 @@ from coordinator_core.merge_assemble import build_directives as merge_build_dire
 from coordinator_core.workday_complete import brief as workday_brief
 from coordinator_core.workweek_complete import brief as workweek_brief
 
-#: workweek names the consumes-manifest CLI (its dispatcher loads that
-#: module and calls `main()` in-process — no spawn); merge names an
-#: in-process verb with no script behind it at all. Both reach the same
-#: `session.grant_directive.run_grant_directive`.
 _GRANT_CLIS = ("tier-u-grant-cli", "tier-u-grant")
 
 
@@ -135,13 +131,11 @@ def test_merge_grant_dispatch_tolerates_exit_1_but_not_usage_or_transport():
     original = grant_directive.run_grant_directive
     merge_apply_original = getattr(merge_apply, "_run_py_script", None)
     try:
-        # Exit 1 -- unresolvable sid. Degrades, never raises.
         grant_directive.run_grant_directive = lambda args: (1, "session id unresolvable")
         result = merge_apply._dispatch_tier_u_grant(["grant"], Path("."))
         assert result["returncode"] == 1
         assert "degraded_reason" in result
 
-        # Exit 2 -- a wrong argv shape built by build_directives. A defect: raise.
         grant_directive.run_grant_directive = lambda args: (2, "bad shape")
         with pytest.raises(RuntimeError):
             merge_apply._dispatch_tier_u_grant(["grant"], Path("."))

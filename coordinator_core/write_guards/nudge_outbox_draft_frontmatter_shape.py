@@ -83,29 +83,12 @@ from coordinator_core.write_guards._repo_root import resolve_repo_root
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
-# advisory/deny-offer band; next slot after nudge_private_git_fact_resolver
-# (200, live-but-not-yet-manifest-registered as of this module's authoring —
-# see docs/wiki/write-guard-priority-bands.md for the band convention).
 PRIORITY = 210
 
-#: state/memo-outbox/<topic>.md — exactly one path segment after
-#: memo-outbox/, so state/memo-outbox/sent/<topic>.md (two segments) never
-#: matches. Case-insensitive: Windows/macOS default filesystems are
-#: case-insensitive, so a differently-cased candidate is the same on-disk
-#: file (mirrors the sibling memo guards' case-fold rationale).
-#: BOTH outbox roots. This pinned only `state/memo-outbox/` until
-#: 2026-09-03; writers moved to `.coordinator-local/memo-outbox/` that
-#: day, so a hand-authored draft at the new root got no shape nudge at
-#: all while this guard's own suite stayed green -- a guard policing an
-#: address the engine had stopped writing to. Same fail-open shape as
-#: `block_home_dir_memo_delivery` / `block_oss_mirror_memo_delivery`
-#: carried until C6 of the memo-channel plan widened them.
 _OUTBOX_DRAFT_RE = re.compile(
     r"(^|/)(state|\.coordinator-local)/memo-outbox/[^/]+\.md$", re.IGNORECASE
 )
 
-#: Read cap for Edit/MultiEdit pre-image reconstruction — outbox drafts are
-#: small hand-authored markdown files, matching sibling guards' caps.
 _MAX_WHOLE_FILE_BYTES = 1024 * 1024
 
 
@@ -157,10 +140,6 @@ def _apply_one_edit(content: str, old_string: Any, new_string: Any) -> Optional[
 def _compute_post_content(
     tool_name: str, tool_input: Dict[str, Any], cand: str, resolved_path: str
 ) -> Optional[str]:
-    """Reconstruct the POST-write content for `cand`, or `None` on any
-    reconstruction failure (skip the advisory) — mirrors the whole-file
-    reconstruction discipline used by sibling advisory guards (e.g.
-    `nudge_prose_queue_append`)."""
     if tool_name == "Write":
         content = tool_input.get("content")
         return content if isinstance(content, str) else None
@@ -176,10 +155,6 @@ def _compute_post_content(
         edits = tool_input.get("edits")
         if not isinstance(edits, list) or not edits:
             return None
-        # MultiEdit's edits[] apply to the ONE file named by tool_input's
-        # top-level file_path — edit entries do not carry their own
-        # file_path (mirrors nudge_prose_queue_append._reconstruct_pre_and_post
-        # and nudge_windows_subprocess_popup's MultiEdit reconstruction).
         post = pre
         for edit in edits:
             if not isinstance(edit, dict):
@@ -212,12 +187,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
 
         cwd = payload.get("cwd") or None
-        # Resolved only when the payload actually supplies a `cwd` — a
-        # missing `cwd` must leave this gate inert rather than falling back
-        # to `resolve_repo_root`'s own process-cwd default, which would
-        # contain-check every candidate against THIS process's repo root
-        # instead of the caller's, a mismatch that is only ever a test
-        # artifact (every real PreToolUse payload carries `cwd`).
         git_root = resolve_repo_root(cwd) if isinstance(cwd, str) and cwd else None
         allowed_roots = [Path(git_root)] if git_root else []
 
@@ -232,9 +201,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
             if allowed_roots:
                 # INTERFACE.md rule 8: reuse contained_path rather than trust
-                # the regex alone — a substring match on an absolute path
-                # outside the repo (e.g. /tmp/anywhere/state/memo-outbox/x.md)
-                # must not be treated as a real outbox draft.
                 if contained_path(Path(resolved), allowed_roots) is None:
                     continue
 
@@ -251,7 +217,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             except Exception:  # noqa: BLE001 — fail-open on an unparseable buffer
                 return None
             if not isinstance(fm, dict):
-                # No frontmatter block yet (mid-authoring) — nothing to advise on.
                 continue
 
             try:
@@ -275,6 +240,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         return None
     except Exception:
-        # Fail-OPEN on any unexpected error — this guard advises only on a
-        # positive shape-violation match, never on an error.
         return None

@@ -62,11 +62,6 @@ def _no_ignore():
 
 
 def _seed(tmp_path: Path) -> "tuple[Path, Path]":
-    """A source and destination whose top level agree on `kept.py` and disagree on
-    `retired.py` -- the destination still carries a CLI the source dropped. One
-    subdirectory on each side keeps this a realistic mirror-mode row rather than a
-    degenerate top-level-only one, and keeps the empty-source mass-delete preflight
-    from firing on a source that would otherwise have zero files."""
     src = tmp_path / "src"
     dst = tmp_path / "dst"
     (src / "sub").mkdir(parents=True)
@@ -93,7 +88,6 @@ class TestSweepIsOptIn:
         assert removed == 0
 
     def test_opt_in_deletes_the_top_level_orphan(self, tmp_path):
-        """The retirement that was unrepresentable before this flag existed."""
         src, dst = _seed(tmp_path)
 
         _synced, removed = publish_sync.sync_mirror(
@@ -104,7 +98,6 @@ class TestSweepIsOptIn:
         assert removed == 1
 
     def test_opt_in_keeps_a_file_the_source_still_has(self, tmp_path):
-        """The sweep is scoped by source membership, not by "top-level file"."""
         src, dst = _seed(tmp_path)
 
         publish_sync.sync_mirror(
@@ -115,10 +108,6 @@ class TestSweepIsOptIn:
         assert (dst / "sub" / "inner.py").is_file()
 
     def test_opt_in_never_touches_a_destination_dotfile(self, tmp_path):
-        """A dotfile at a destination root is publish machinery or repo-owned,
-        never a row's payload -- the copy leg already skips dotfiles on the
-        source side, and the sweep must skip them on the destination side or it
-        deletes the very `.percolate-ignore`/`.gitignore` that governs it."""
         src, dst = _seed(tmp_path)
         (dst / ".gitignore").write_text("*.pyc\n", encoding="utf-8")
 
@@ -166,9 +155,6 @@ class TestSweepIsOptIn:
 
 
 class TestDestIsOwnedSubdirDecidesTheFlag:
-    """`publish._dest_is_owned_subdir` is the only thing standing between this
-    sweep and a destination repo's own root files, so its three answers are
-    pinned individually rather than through a publish round."""
 
     def test_a_repo_root_is_not_an_owned_subdir(self, tmp_path):
         publish = _load_publish_module()
@@ -185,9 +171,6 @@ class TestDestIsOwnedSubdirDecidesTheFlag:
         assert publish._dest_is_owned_subdir(subdir) is True
 
     def test_no_repo_root_anywhere_fails_closed(self, tmp_path):
-        """"Could not determine" must never authorize a delete. A bare
-        `_dest_repo_root(d) != d` reads `None` as not-the-root and sweeps --
-        this is the arm that pins it does not."""
         publish = _load_publish_module()
         orphan_dir = tmp_path / "nowhere" / "under" / "no" / "repo"
         orphan_dir.mkdir(parents=True)

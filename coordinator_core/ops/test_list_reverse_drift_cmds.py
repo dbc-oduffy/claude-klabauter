@@ -70,7 +70,6 @@ def _example_game_repo_registry_cmdless(reg_dir: Path) -> None:
     )
 
 
-# 1. No --scope-repo -> legacy behavior: emit ALL copy_install rows.
 def test_no_scope_emits_all(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "regdir"
     _example_game_repo_registry(reg_dir)
@@ -79,7 +78,6 @@ def test_no_scope_emits_all(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert "example-game-repo|X:/example-game-workbench-repo|" in out
 
 
-# 2. Consumer repo (not the source of any copy_install plugin) -> clean no-op.
 def test_consumer_repo_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "regdir"
     _example_game_repo_registry(reg_dir)
@@ -88,7 +86,6 @@ def test_consumer_repo_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert out == ""
 
 
-# 3. The plugin's own source repo releasing itself -> matches its own row.
 def test_own_source_repo_matches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "regdir"
     _example_game_repo_registry(reg_dir)
@@ -97,8 +94,6 @@ def test_own_source_repo_matches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert "example-game-repo|X:/example-game-workbench-repo|" in out
 
 
-# 4. Meta-repo (.claude under the home directory) gets check-all even though it
-#    sources none of them.
 def test_meta_repo_checks_all(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "regdir"
     _example_game_repo_registry(reg_dir)
@@ -107,8 +102,6 @@ def test_meta_repo_checks_all(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert "example-game-repo|X:/example-game-workbench-repo|" in out
 
 
-# 5. Path normalization — meta-repo via Windows drive form vs $HOME /c/ form.
-#    _norm_path folds MSYS /c/ -> C:/ ONLY under msys/cygwin OSTYPE.
 def test_meta_repo_windows_drive_form(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "regdir"
     _example_game_repo_registry(reg_dir)
@@ -119,9 +112,6 @@ def test_meta_repo_windows_drive_form(tmp_path: Path, monkeypatch: pytest.Monkey
     assert "example-game-repo|X:/example-game-workbench-repo|" in out
 
 
-# 6. Path normalization — own source repo via MSYS /x/ form matches registry X:/ form.
-#    Cross-platform: _norm_path converts the registry's X:/ form to /x/ form on
-#    ALL platforms, so this passes regardless of OSTYPE.
 def test_own_repo_msys_form_matches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "regdir"
     _example_game_repo_registry(reg_dir)
@@ -130,7 +120,6 @@ def test_own_repo_msys_form_matches(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert "example-game-repo|X:/example-game-workbench-repo|" in out
 
 
-# 7. Scope-aware misconfig: a consumer that scopes OUT a cmd-less plugin -> rc=0, NOT rc=3.
 def test_consumer_scopes_out_cmdless_plugin_no_misconfig(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -140,7 +129,6 @@ def test_consumer_scopes_out_cmdless_plugin_no_misconfig(
     assert rc == 0
 
 
-# 8. Scope-aware misconfig: meta-repo seeing a cmd-less copy_install plugin still fails loud.
 def test_meta_repo_cmdless_plugin_misconfig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "regdir"
     _example_game_repo_registry_cmdless(reg_dir)
@@ -149,7 +137,6 @@ def test_meta_repo_cmdless_plugin_misconfig(tmp_path: Path, monkeypatch: pytest.
     assert "reverse-drift gate cannot run" in err
 
 
-# 9. --scope-repo with no path argument -> rc=2 (invocation error).
 def test_scope_repo_missing_arg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "regdir"
     _example_game_repo_registry(reg_dir)
@@ -158,7 +145,6 @@ def test_scope_repo_missing_arg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert "requires a path argument" in err
 
 
-# 10. Unknown argument -> rc=2.
 def test_unknown_arg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "regdir"
     _example_game_repo_registry(reg_dir)
@@ -167,9 +153,7 @@ def test_unknown_arg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert "unknown argument" in err
 
 
-# 11. Production meta-repo topology — HOME on /c/, scope-repo as C:/ drive form,
 #     registry source_path on a DIFFERENT drive (X:). Meta-repo check-all must
-#     still emit the cross-drive row.
 def test_production_metarepo_cross_drive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "regdir"
     _example_game_repo_registry(reg_dir)
@@ -180,18 +164,14 @@ def test_production_metarepo_cross_drive(tmp_path: Path, monkeypatch: pytest.Mon
     assert "example-game-repo|X:/example-game-workbench-repo|" in out
 
 
-# 12. Backslash-form registry source_path (X:\...) matched by a forward-slash scope.
 def test_backslash_source_path_matches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "regdir"
     _example_game_repo_registry(reg_dir, backslash=True)
     out, _err, rc = _run_lister(monkeypatch, reg_dir, tmp_path, ["--scope-repo", "X:/example-game-workbench-repo"])
     assert rc == 0
-    # Output preserves the registry's stored (backslash) source_path verbatim;
-    # the match is on the normalized form, not the emitted text.
     assert "example-game-repo|" in out
 
 
-# 13. Trailing-backslash scope (X:\...\) must still match (F4 path).
 def test_trailing_backslash_scope_matches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "regdir"
     _example_game_repo_registry(reg_dir)
@@ -200,12 +180,6 @@ def test_trailing_backslash_scope_matches(tmp_path: Path, monkeypatch: pytest.Mo
     assert "example-game-repo|X:/example-game-workbench-repo|" in out
 
 
-# ---------------------------------------------------------------------------
-# Additional coverage beyond the bash oracle's 13 cases.
-# ---------------------------------------------------------------------------
-
-
-# 14. No registry file at all -> N/A, rc=0, no output.
 def test_no_registry_file_is_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "empty-regdir"
     reg_dir.mkdir()
@@ -215,7 +189,6 @@ def test_no_registry_file_is_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert err == ""
 
 
-# 15. Non-copy_install plugin (editable_sibling_venv) is excluded regardless of scope.
 def test_non_copy_install_plugin_excluded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "regdir"
     reg_dir.mkdir()
@@ -231,7 +204,6 @@ def test_non_copy_install_plugin_excluded(tmp_path: Path, monkeypatch: pytest.Mo
     assert out == ""
 
 
-# 16. Double-quote in reverse_drift_cmd -> advisory WARNING on stderr, row still emitted.
 def test_double_quote_in_cmd_warns_but_emits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "regdir"
     reg_dir.mkdir()
@@ -248,12 +220,6 @@ def test_double_quote_in_cmd_warns_but_emits(tmp_path: Path, monkeypatch: pytest
     assert "single-quote the value" in err
 
 
-# ---------------------------------------------------------------------------
-# _norm_path unit coverage (the fiddly Windows/MSYS/POSIX fold, ported
-# verbatim from the bash oracle's F1-F4 review-fix comments).
-# ---------------------------------------------------------------------------
-
-
 def test_norm_path_windows_drive_lowercases() -> None:
     assert _norm_path("X:/Claude-Unreal-Example-Game-Repo") == "/x/example-game-workbench-repo"
 
@@ -267,8 +233,6 @@ def test_norm_path_drive_relative() -> None:
 
 
 def test_norm_path_msys_form_off_windows_not_folded() -> None:
-    # POSIX single-letter top-level dir must NOT fold when ostype is unset
-    # (i.e. this session's actual macOS/Linux host).
     assert _norm_path("/a/Foo") == "/a/Foo"
 
 
@@ -285,9 +249,6 @@ def test_norm_path_posix_case_preserved() -> None:
     assert _norm_path("/Users/alice/X/example-retrieval-repo") == "/Users/alice/X/example-retrieval-repo"
 
 
-# 14. Per-key fallthrough: a copy_install row registered only in the tracked
-#     registry.toml is emitted even when a registry.local.toml exists
-#     (previously first-FILE-wins made it invisible).
 def test_row_only_in_tracked_registry_visible(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reg_dir = tmp_path / "regdir"
     reg_dir.mkdir(parents=True)

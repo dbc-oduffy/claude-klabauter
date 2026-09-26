@@ -185,65 +185,28 @@ from coordinator_core.group_em import repo_root_arg
 from coordinator_core.group_em import watch_heartbeat
 from coordinator_core.ops.discover_working_repos import encode_projects_dir_name
 
-#: Below this, a quiet session is simply between turns. Applied here, never remembered.
 FLOOR_MINUTES = 5.0
-#: At or above this, a quiet session is a candidate for a nudge, an exit, or an assignment.
 THRESHOLD_MINUTES = 30.0
-#: mtime/content gap wider than this is called out. Reported, never acted on.
 DIVERGENCE_MINUTES = 5.0
-#: Bounded tail read: enough for the last several turns, never the whole file.
 TAIL_BYTES = 400_000
 #: Hard cap on `last-said`, applied at the EMITTING end. An uncapped field puts
-#: the token cost straight back into the agent's context, which is the whole
-#: thing this instrument removes.
 LAST_SAID_CHARS = 300
-#: Files not touched within this are not this shift's fleet at all.
 STALE_FILE_MINUTES = 1440.0
-#: Content older than this is a finished session, not a stalled one.
 STALE_CONTENT_MINUTES = 180.0
-#: How far a refusal may sit BEHIND the content clock and still be read as the
-#: last thing that happened to this session. A session still being refused
-#: keeps retrying, so its refusal records stay level with its clock; one that
-#: got through leaves the refusal behind. Measured need: the six refusals of
-#: 2026-09-01 carried a `resetsAt` of 18:30Z and all six resumed at 16:42Z, so
-#: the reset stamp alone over-suppresses by ~1.8h and this leg is what expires
-#: the suppression on the peer's own evidence rather than on the harness's
-#: nominal window.
 RATE_LIMIT_STALENESS_MINUTES = 5.0
 
-#: The clock. An unescaped `"timestamp"` key, so a JSON blob quoted inside a
-#: message body cannot inject one.
 _TIMESTAMP = re.compile(r'(?<!\\)"timestamp"\s*:\s*"([^"\\]+)"')
 
-#: How many lines at the end of the tail are scanned for assistant prose. Deep
-#: enough for the last few turns of a tool-heavy session, bounded because the
-#: whole point is not to parse the tail.
 _ASSISTANT_SCAN_LINES = 400
 
-#: A session's own name as some peer wrote it: "claude-klabauter-a9 [3d18b2c0]".
 _SELF_ID = re.compile(r"(claude-klabauter-[0-9a-z]{2})\s*\[([0-9a-f]{6,8})\]", re.IGNORECASE)
 
-#: The harness's own refusal record: `quotaLimits`, its verdict, and the epoch
-#: the window lifts at. Structured spellings only -- a session quoting the
-#: user-facing "You've hit your session limit" sentence in prose is talking
-#: ABOUT a limit, not sitting behind one, and must never be read as refused.
-#: `[^{}]*` holds because `quotaLimits` carries no nested object; a nested one
-#: appearing later fails the match, which reads as "no refusal" -- toward
 #: reporting, the safe direction. Each pattern requires an UNESCAPED quote
 #: before its key, exactly like `_TIMESTAMP`, so a transcript quoting a JSON
-#: blob inside a message body cannot inject one.
 _QUOTA_LIMITS = re.compile(r'(?<!\\)"quotaLimits"\s*:\s*\{([^{}]*)\}')
 _QUOTA_REJECTED = re.compile(r'(?<!\\)"status"\s*:\s*"rejected"')
 _QUOTA_RESETS_AT = re.compile(r'(?<!\\)"resetsAt"\s*:\s*(\d{9,12})')
 
-#: A session naming its own next move -- what a `push` names back at it.
-#: Two arms added 2026-09-01 (C3, overengineering-reviewer finding 5(b)): the
-#: six-alternative whitelist missed the two most ordinary phrasings, both
-#: verified against a live tick that day -- "I'll check the rule" (the plain
-#: modal, any verb, not just the five the original arm named) and "Checking
-#: the rule next" (a present-participle statement whose own "next" already
-#: names the move, matched without anchoring to sentence-start since the
-#: participle need not lead).
 _NEXT_MOVE = re.compile(
     r"(next (?:is|step|up|I)|I'?ll (?:now|next|run|dispatch|start)|about to|"
     r"remains? to|still (?:to|need)|then I|"
@@ -252,20 +215,6 @@ _NEXT_MOVE = re.compile(
     re.IGNORECASE,
 )
 
-#: A session naming a REASON it stopped. A gate is a considered refusal with a
-#: reason; hesitation is the absence of one. These phrases are the difference
-#: between `push` and `hold`, so they live here and not in a prompt.
-#: Peer-dependency arms added 2026-09-01 (C3, overengineering-reviewer finding
-#: 5(a)): the original vocabulary was entirely PM-centric, so a session
-#: blocked on a PEER scored `named_reason=False` and `_nudge_shape` degraded
-#: it to `ask` instead of `hold`. Measured against a live sentence that
-#: matched none of the PM arms: "Nothing pending on my side. The first
-#: end-to-end call is still the one thing neither of us can test until their
-#: half lands, and they'll ping when it has." A false positive here holds a
-#: session that should have been asked; a false negative pushes one that had
-#: correctly stopped -- the harm that does not undo -- so these arms are
-#: deliberately testable alternatives, never a bare verb match, and err
-#: toward matching.
 _NAMED_REASON = re.compile(
     r"(waiting (?:for|on)|blocked (?:by|on)|gated (?:by|on)|awaiting|"
     r"cannot proceed|can'?t proceed|until (?:the )?(?:PM|you|approval|a ruling)|"
@@ -279,11 +228,6 @@ _NAMED_REASON = re.compile(
     re.IGNORECASE,
 )
 
-#: The two ceremonies that mean "this session finished its work", as they
-#: appear in a transcript: the slash-command echo and the per-record skill
-#: attribution the harness stamps. Matched on those structured spellings and
-#: not on bare prose, so a session merely TALKING about workstream-complete
-#: (as this file's own author session did) is not classified as out of work.
 _COMPLETION_SKILLS = ("workstream-complete", "quick-wrap")
 _COMPLETION_ATTRIBUTION = re.compile(
     r'"attributionSkill"\s*:\s*"[^"]*(?:%s)"' % "|".join(_COMPLETION_SKILLS)
@@ -291,23 +235,11 @@ _COMPLETION_ATTRIBUTION = re.compile(
 _COMPLETION_COMMAND = re.compile(
     r"<command-name>[^<]*(?:%s)</command-name>" % "|".join(_COMPLETION_SKILLS)
 )
-#: How many lines at the end of the tail count as "what this session is doing
-#: now". A completion ceremony further back than this is history: the session
-#: wrapped, then took new work.
 _COMPLETION_WINDOW = 40
 
 VERDICT_BETWEEN_TURNS = "between-turns"
 #: An idle-AGE band (FLOOR_MINUTES..THRESHOLD_MINUTES since last turn), NEVER
-#: a watch-ROLE classification -- no code path anywhere in group_em classifies
-#: a session by whether it is running a watch command. This VALUE is compared
-#: inside this module and emitted verbatim into every `peers[].verdict` row
 #: this module hands to its consumer (module docstring's "THE CONSUMER OWNS
-#: THE OUTPUT SHAPE"), so it does NOT change here -- a peer EM misread a
-#: rendered "watch" row as a role and filed a false bug report on it (P103-C5,
-#: docs/research/2026-09-11-group-em-watch-drops-named-live-peers.md); the fix
-#: for THAT is the human-facing render annotation in `_render_row`, not a
-#: value rename, which is filed instead at
-#: state/debt-backlog/2026-09-11-verdict-watch-value-reads-as-a-role.yaml.
 VERDICT_WATCH = "watch"
 VERDICT_ESCALATE = "ESCALATE"
 VERDICT_OUT_OF_WORK = "OUT-OF-WORK"
@@ -315,29 +247,13 @@ VERDICT_GROUP_EM_MOVED = "GROUP-EM-MOVED"
 VERDICT_EXITED = "EXITED"
 VERDICT_UNKNOWN = "UNKNOWN"
 
-#: The CLOSED key set for `UNKNOWN` rows. Keys, never sentences: prose in a
-#: machine field is prose the agent interprets, and interpretation is the drift
-#: this design removes. Add a key when a genuinely new case turns up.
 REASON_LIVENESS_UNRESOLVED = "liveness-unresolved"
 REASON_TRANSCRIPT_UNREADABLE = "transcript-unreadable"
 REASON_NO_RECORDS = "no-records"
 REASON_CLOCK_UNPARSEABLE = "clock-unparseable"
-#: The peer CANNOT act, as distinct from will not: the harness is refusing its
-#: requests and the window has not lifted. A key and not a verdict of its own,
-#: because the consumer's verdict table is closed and this is the answer they
-#: already route to REPORT IT.
 REASON_RATE_LIMITED = "rate-limited"
 #: The two DOWNGRADE keys. A MISSING ENRICHMENT DOWNGRADES TOWARD REPORTING,
-#: NEVER TOWARD SENDING -- the rule that makes a partial build safe. Neither of
-#: these omissions degrades into "the agent knows less"; both degrade into "the
-#: agent does the wrong thing, confidently". Without out-of-work detection those
 #: peers arrive as ESCALATE and the watcher nudges a session that has genuinely
-#: run out, which no nudge fixes and only the Group-EM can answer. Without the
-#: Group-EM's offer log, suppression vanishes and the watcher re-nudges peers the
-#: Group-EM answered an hour ago -- the exact thing the two-session-id split
-#: exists to prevent. So the affected peers become `UNKNOWN` instead, which
-#: routes to REPORT IT: the correct action under partial information, and
-#: omission stays impossible.
 REASON_OUT_OF_WORK_UNDETECTED = "out-of-work-undetected"
 REASON_SUPPRESSION_UNAVAILABLE = "suppression-unavailable"
 UNKNOWN_REASONS = frozenset({
@@ -350,20 +266,7 @@ UNKNOWN_REASONS = frozenset({
     REASON_SUPPRESSION_UNAVAILABLE,
 })
 
-#: Divergence vocabulary. `fixed` (offset constant while both ages climb) means
-#: the transcript stopped being written by its own session; `growing` means
-#: something other than the session is still writing to it. Telling them apart
-#: needs TWO observations and one invocation has one, so a single run emits
-#: `unknown` with the minutes rather than guessing -- and no persistence file is
-#: invented to manufacture a second sample.
-#:
 #: HARD CONSTRAINT -- THIS FIELD IS PURELY DESCRIPTIVE. It never becomes a
-#: verdict, never feeds the EXITED derivation, and no consumer keys an action on
-#: it. The tempting reading -- that a fixed offset corroborates termination --
-#: was tested and REFUTED: of three confirmed corpses one showed 0.0m, one 1.4m
-#: and one 7.4m, while live peers showed 0.0-0.5m. Divergence is neither
-#: necessary nor sufficient for an exit. And the report never takes the minimum
-#: across the two clocks, which would report a suspended fleet as active.
 DIVERGENCE_NONE = "none"
 DIVERGENCE_UNKNOWN = "unknown"
 DIVERGENCE_FIXED = "fixed"
@@ -373,39 +276,18 @@ SHAPE_PUSH = "push"
 SHAPE_ASK = "ask-which-it-is"
 SHAPE_ASSIGN = "assign"
 SHAPE_HOLD = "hold"
-#: CLOSED, exactly like the verdict set and for a sharper reason: a verdict the
-#: watcher cannot place makes it report wrongly, but a shape it cannot place
-#: makes it SEND wrongly, which is the highest-stakes improvisation available to
-#: it. Nothing is added here without the consumer agreeing first.
 NUDGE_SHAPES = frozenset({SHAPE_PUSH, SHAPE_ASK, SHAPE_ASSIGN, SHAPE_HOLD})
 
 UNADDRESSABLE = "UNADDRESSABLE"
 
-#: `named-next-move` vocabulary (DoE-claude bc5b1ba18,
-#: `fleet-watch-idle-report-contract.md` "A whitelist predicate can almost
 #: never emit `none`"). Matching `_NEXT_MOVE` establishes presence; failing to
-#: match establishes NOTHING, because the space of ways to name a next move is
-#: open -- so under this phrase-matching predicate every non-match is
 #: `NEXT_MOVE_UNRESOLVED`, never `NEXT_MOVE_NONE`. `NEXT_MOVE_NONE` is kept
-#: named here because the doc's vocabulary carries it, but no branch in this
-#: module currently derives absence affirmatively (see `_peer_row`), so it is
 #: presently UNREACHABLE from the whitelist path -- that is correct, not a
-#: bug, per the doc's own ruling.
 NEXT_MOVE_NONE = "none"
 NEXT_MOVE_UNRESOLVED = "unresolved"
 
 
 def projects_dir_for(repo_root: str, home: Optional[str] = None) -> str:
-    """The `~/.claude/projects/<encoded-root>/` directory holding this repo's transcripts.
-
-    Derived from `repo_root`, never hardcoded -- the same oracle has to answer
-    for a sibling repo, and a hardcoded directory is a watcher that silently
-    reports the wrong fleet. The encoding is
-    `discover_working_repos.encode_projects_dir_name`, the forward direction of
-    the decode that names those directories, deliberately imported rather than
-    re-spelled: a second slugifier that drifts resolves to a directory that does
-    not exist, which reads downstream as an empty fleet rather than an error.
-    """
     base = home if home is not None else os.path.expanduser("~")
     return os.path.join(base, ".claude", "projects", encode_projects_dir_name(repo_root))
 
@@ -463,12 +345,6 @@ def newest_timestamp(raw_text: str) -> Optional[float]:
 
 
 def _assistant_text(raw_text: str) -> list:
-    """Everything the session actually SAID in the tail, oldest first.
-
-    Only lines that look like assistant records are parsed -- the tail is mostly
-    tool traffic, and paying a JSON parse for all of it to reach a handful of
-    prose blocks is the cost this bounded scan removes.
-    """
     said = []
     for line in raw_text.split("\n")[-_ASSISTANT_SCAN_LINES:]:
         if '"assistant"' not in line:
@@ -493,13 +369,6 @@ def _assistant_text(raw_text: str) -> list:
 
 
 def _name_from_transcript(raw_text: str, session_id: str) -> Optional[str]:
-    """A name only if the transcript states it beside THIS session's id.
-
-    The fallback for sessions the registry no longer lists. The id in the match
-    must prefix `session_id`: a transcript quoting some OTHER peer's name and id
-    must not name this one, and a name is never inferred from the session-id
-    prefix -- that mapping is coincidence and is falsified in the field.
-    """
     for name, ref in _SELF_ID.findall(raw_text):
         if session_id.startswith(ref.lower()):
             return name.lower()
@@ -569,15 +438,6 @@ def rate_limited(raw_text: str, newest: Optional[float], now: float) -> bool:
 
 
 def registry_names() -> Optional[dict]:
-    """`{session_id: name}` for every live session, or None if unreadable.
-
-    None and `{}` are NOT the same answer and must never be collapsed. None
-    means liveness could not be established, and no peer may be called `EXITED`
-    on it. `snapshot()` degrades to `{}` on internal failure by its own
-    documented contract, so an empty result is treated as "could not establish"
-    here too -- the safe direction, since an empty registry alongside live
-    transcripts is not a credible reading.
-    """
     try:
         from coordinator_core.session import harness_registry
         snapshot = harness_registry.snapshot()
@@ -656,17 +516,7 @@ def holder_liveness(repo_root: str, group_em_session_id: Optional[str]) -> Optio
     except Exception:
         return None
     # `live` IS TRI-STATE, and the False arm is the narrow one: True (registry
-    # row, pid confirmed), False (positive evidence the process is gone), None
-    # (we looked and could not establish it). Only `pid_not_running` is evidence
     # of death. `no_registry_record` is REGISTRY ABSENCE, which is box-scoped --
-    # `nomination`'s own docstring calls it "absence of registry evidence, not
-    # evidence of absence, on a fleet that is multi-machine", and `claim`
-    # REFUSES to supersede on it. Collapsing the two into one boolean reports a
-    # Group EM alive on another machine, or one whose messaging gate is off, as
-    # dead: the exact failure AC7 forbids and this function's own docstring
-    # promises against. Found by the criterion-only reader at close-out, after
-    # the falsifier had already gone green on a `live: False` that was itself
-    # wrong.
     if result.live:
         return {"live": True, "reason": result.live_reason}
     if result.live_reason == "pid_not_running":
@@ -675,17 +525,6 @@ def holder_liveness(repo_root: str, group_em_session_id: Optional[str]) -> Optio
 
 
 def _read_group_em_log(repo_root: str, group_em_session_id: Optional[str]) -> tuple:
-    """`(log, available)` -- the Group-EM's offer log, read ONCE per report.
-
-    Per-peer reads meant one file open per peer for a file whose contents do not
-    change mid-report: pure process time on a box the whole fleet shares.
-
-    `available` is False only when the read itself failed. It is NOT False for
-    an empty log, which is a real answer ("this Group-EM has offered nobody"). A
-    failed read means suppression cannot be established, and the peers that
-    would have been nudged are downgraded to `UNKNOWN` rather than nudged
-    again -- toward reporting, never toward sending.
-    """
     if not group_em_session_id:
         return [], True
     try:
@@ -772,8 +611,6 @@ def _verdict(age_minutes: Optional[float], in_registry: Optional[bool],
     if not in_registry:
         return VERDICT_EXITED, None
     # LAST, and only over `ESCALATE`. A refusal explains a stopped clock; it
-    # never explains a missing process, so `EXITED` above still wins -- a
-    # refused peer whose registry row is gone is a corpse, not a waiting one.
     if refused:
         return VERDICT_UNKNOWN, REASON_RATE_LIMITED
     return VERDICT_ESCALATE, None
@@ -812,7 +649,6 @@ def _nudge_shape(verdict: str, addressable: bool, within_cooldown: bool,
 
 
 def _last_record_iso(raw_text: str) -> Optional[str]:
-    """The newest record's timestamp as an ISO stamp -- what an EXITED row dates itself by."""
     newest = newest_timestamp(raw_text)
     if newest is None:
         return None
@@ -822,19 +658,6 @@ def _last_record_iso(raw_text: str) -> Optional[str]:
 
 
 def _divergence(age_minutes: Optional[float], mtime_age_minutes: float) -> tuple:
-    """`(label, minutes)` for the gap between the two clocks.
-
-    `fixed` vs `growing` is the discriminator that matters -- a fixed offset
-    with both ages climbing means the transcript stopped being written by its
-    own session -- but telling them apart needs two observations and one
-    invocation has one. So a gap past tolerance is labelled `unknown` and
-    carries its minutes; the label is never guessed from a single sample, and no
-    persistence file is invented to manufacture a second one.
-
-    Descriptive only: nothing here changes a verdict or feeds the EXITED
-    derivation (the fixed-offset-means-dead reading was tested and refuted), and
-    the minimum across the two clocks is never taken.
-    """
     if age_minutes is None:
         return DIVERGENCE_NONE, None
     gap = abs(mtime_age_minutes - age_minutes)
@@ -847,13 +670,6 @@ def _peer_row(path: str, session_id: str, now: float, names: Optional[dict],
               group_em_log: list, group_em_session_id: Optional[str],
               observed_exits: frozenset = frozenset(),
               suppression_available: bool = True) -> Optional[dict]:
-    """One roster row, or None when the transcript is out of scope entirely.
-
-    None means SCOPE (too old to be this shift's fleet), never a failed
-    classification -- a peer this module cannot classify gets an `UNKNOWN` row
-    with a reason, because a classifier that drops rows makes a broken
-    instrument and a quiet fleet emit identically.
-    """
     try:
         mtime_age = (now - os.path.getmtime(path)) / 60
     except OSError:
@@ -874,9 +690,6 @@ def _peer_row(path: str, session_id: str, now: float, names: Optional[dict],
             else REASON_CLOCK_UNPARSEABLE
         )
 
-    # The EXITED conjunction: this transcript sits under THIS repo's project
-    # directory (true of every path globbed here) AND the session is absent from
-    # THIS box's registry, read successfully. `None` is "could not establish".
     in_registry = (session_id in names) if names is not None else None
     name = (names or {}).get(session_id) or _name_from_transcript(raw_text, session_id)
     out_of_work = age is not None and age >= FLOOR_MINUTES and _is_out_of_work(raw_text)
@@ -886,17 +699,9 @@ def _peer_row(path: str, session_id: str, now: float, names: Optional[dict],
     verdict, reason = _verdict(age, in_registry, out_of_work, clock_reason, observed_exit,
                                rate_limited(raw_text, newest, now))
 
-    # C11: registry absence in the WATCH band. `_verdict`'s ordering never
     # reaches the registry branches below FLOOR..THRESHOLD, by design (the
-    # docstring's guard is correct there -- a peer thirty seconds into a turn
-    # the registry has not caught up with is between turns, not dead). But
-    # `in_registry` is already computed above, so the fact that this WATCH row
     # is absent from a SUCCESSFULLY-read registry (`in_registry is False`,
-    # never `None` -- an unreadable registry stays unknown) is in hand and
-    # must not be silently dropped: the row states it, and the peer stops
     # inflating the `peers` count a crown routes on. Scoped to VERDICT_WATCH
-    # only -- between-turns keeps the docstring's floor guard untouched, and
-    # every other verdict either already resolves liveness itself (EXITED,
     # ESCALATE) or is out of this chunk's remit (OUT-OF-WORK).
     registry_absent = verdict == VERDICT_WATCH and in_registry is False
 
@@ -907,7 +712,6 @@ def _peer_row(path: str, session_id: str, now: float, names: Optional[dict],
     answered, within_cooldown = _group_em_answer(group_em_log, group_em_session_id, session_id, now)
     if verdict == VERDICT_ESCALATE and not suppression_available:
         # Downgrade toward REPORTING. Nudging here would re-nudge whoever the
-        # Group-EM already answered, which is the failure the offer log prevents.
         verdict, reason = VERDICT_UNKNOWN, REASON_SUPPRESSION_UNAVAILABLE
     shape = _nudge_shape(verdict, bool(name), within_cooldown, named_move, named_reason,
                         registry_absent)
@@ -921,37 +725,20 @@ def _peer_row(path: str, session_id: str, now: float, names: Optional[dict],
         "content-age": None if age is None else round(age, 1),
         "mtime-age": round(mtime_age, 1),
         # C11: absent from a SUCCESSFULLY-read registry, in the WATCH band
-        # only (see `registry_absent` above). "absent" or None -- never a
-        # confidence claim, matching every other closed-vocabulary field on
-        # this row. This peer is excluded from `counts.peers` in
-        # `build_report`, and `_nudge_shape` above already refused it a push.
         "registry": "absent" if registry_absent else None,
         "divergence": divergence,
         "divergence-minutes": divergence_minutes,
-        # A corpse that re-escalates every tick reads as a fresh alarm and
-        # trains its reader to skim past the real one. Dating the row fixes that.
         "exited-since": _last_record_iso(raw_text) if exited else None,
         "answered-by-group-em": answered or "no",
         "nudge-shape": shape,
         "address": ("%s [%s]" % (name, session_id[:8])) if name else UNADDRESSABLE,
-        # A dead session is never nudged, so it never carries nudge content.
         "last-said": None if exited else last_said,
-        # `exited` peers carry no nudge content at all (see `last-said` above)
-        # -- not applicable, never computed, so this stays `None`/null rather
-        # than picking a vocabulary value nobody reads. For a LIVE row the
-        # predicate is a phrase whitelist: a match affirmatively establishes
-        # `named_move`, but a non-match establishes nothing about the open
-        # space of ways a session could have named its move, so it renders
         # `NEXT_MOVE_UNRESOLVED`, never `NEXT_MOVE_NONE` (DoE-claude
-        # bc5b1ba18).
         "named-next-move": (
             None if exited
             else named_move[:LAST_SAID_CHARS] if named_move
             else NEXT_MOVE_UNRESOLVED
         ),
-        # The escalation most worth getting right is the one that comes back
-        # unreachable: the verdict stands, the shape holds, and the Group-EM --
-        # who holds ListAgents -- is the one who reaches it.
         "report-to-group-em": verdict in (VERDICT_ESCALATE, VERDICT_OUT_OF_WORK) and not name,
     }
 
@@ -967,24 +754,6 @@ def build_report(
     registry_read: bool = True,
     observed_exits: Optional[frozenset] = None,
 ) -> dict:
-    """The whole answer, as data. The human and `--json` arms both render this.
-
-    `group_em_session_id` is the Group EM's session and `caller_session_id` the
-    process running the poll -- the same id only when the Group-EM polls itself,
-    the same two-id split `group_em.watch` carries. Both are excluded from the
-    roster: reporting the Group-EM to the Group-EM is noise by construction, and the
-    poller flagging itself is worse. It is the Group-EM's offer log, not the
-    caller's, that decides a peer has already been answered.
-
-    `observed_exits` carries exit transitions the CALLER actually saw (session
-    ids or names) -- the primary leg of the EXITED derivation. It is a parameter
-    and not a lookup because no queryable exit event exists in the engine: the
-    Monitor's `EXITED <name>` line lands in the Group-EM's context, not in state.
-    Nothing is persisted to simulate having seen one.
-
-    `names` / `registry_read` are the injection seam for tests; production
-    passes neither and the registry is read here.
-    """
     now = time.time() if now is None else now
     directory = projects_dir or projects_dir_for(repo_root)
     if names is None and registry_read:
@@ -997,9 +766,6 @@ def build_report(
     group_em_log, suppression_available = _read_group_em_log(repo_root, group_em_session_id)
     rows = []
     # GROUP-EM-MOVED short-circuits the roster entirely. The rows would describe a
-    # fleet this watcher no longer has standing over, and a row that is present
-    # is a row something acts on. Still exit 0: a void tick, stated, is a whole
-    # report.
     for path in ([] if moved else sorted(glob.glob(os.path.join(directory, "*.jsonl")))):
         session_id = os.path.basename(path)[:-6]
         if any(session_id.lower().startswith(sid) for sid in excluded):
@@ -1024,38 +790,15 @@ def build_report(
         "floor-minutes": FLOOR_MINUTES,
         "threshold-minutes": THRESHOLD_MINUTES,
         # GROUP-EM-MOVED is the REPORT'S state, not a peer's: it says this whole
-        # tick is void because the standing the watcher watches on is gone. It
-        # is a verdict in the consumer's closed table, carried here as the
-        # top-level `verdict` so the watcher never has to look for it in rows.
         "verdict": VERDICT_GROUP_EM_MOVED if moved else None,
         "group-em-moved": moved,
-        # C3, additive, ours: `None` when not established (no group-em-session-id,
-        # unreadable nomination record, or a record naming a different holder --
-        # `group-em-moved`'s story). Otherwise `{"live": bool, "reason": str}` from
-        # `nomination.is_live`, read off the SAME record `group_em_moved` reads.
         "holder-liveness": holder_live,
-        # THE "INSTEAD OF" CLAUSE, and the reason `holder_live` is read rather
-        # than merely computed. The defect was never that suppression decayed --
         # it is that it decayed SILENTLY, with a stale `answered-by-group-em`
-        # stamp still reading like a Group EM that had just answered. This flag
-        # is what makes the decay speak. Report-level and additive, the same
-        # ownership as `holder-liveness`: it describes OUR input, never the
-        # consumer's per-peer field names or verdict vocabulary, which this
-        # module's header assigns to them and which are untouched here.
-        # True ONLY on confirmed death (`live is False`); an unresolved holder
-        # (`None`) is not evidence and must not raise this.
         "suppression-basis-unreliable": bool(
             holder_live is not None and holder_live.get("live") is False
         ),
         "peers": rows,
         "counts": {
-            # C11: a peer marked `registry: absent` is a fact the row already
-            # states -- it does not also inflate the population a crown routes
-            # on. Excluded here, never dropped from `rows` above (omission is
-            # still impossible; the row itself is the load-bearing half).
-            # Item 63: EXITED is also excluded -- `exited` below already
-            # counts these rows, so a naive `peers` total double-counts a
-            # corpse as a live peer. Mirrors `live`'s filter, just above.
             "peers": sum(
                 1 for row in rows
                 if row["registry"] != "absent" and row["verdict"] != VERDICT_EXITED
@@ -1064,34 +807,12 @@ def build_report(
             "out-of-work": count(VERDICT_OUT_OF_WORK),
             "unknown": count(VERDICT_UNKNOWN),
             "exited": count(VERDICT_EXITED),
-            # Additive, ours: `peers` above still conflates a live roster with
-            # transcripts EXITED has already accounted for elsewhere on this
-            # same counts block, so it is never the number a reader can act on
-            # without first subtracting `exited` (and, for the WATCH band,
-            # filtering `registry: absent` rows by hand -- already excluded
-            # from `peers` but not from a naive `len(rows)`). `live` is struck
-            # from the same rows at the same instant: every row still in
-            # `peers` whose verdict is not EXITED. `summary_line`'s field set
-            # is DoE-owned fixed-form (see its docstring) and stays untouched;
-            # this field exists only on the dict a caller can read directly.
             "live": sum(
                 1 for row in rows
                 if row["registry"] != "absent" and row["verdict"] != VERDICT_EXITED
             ),
-            # P103-C4: `peers` still merges two distinct populations that a
-            # crown routing on a single number cannot tell apart -- a
-            # shrinking fleet (fewer `actionable`) reads identically to a
-            # narrowing filter (more `quiet`). Every row still in `peers`
-            # (`registry != "absent"`, `verdict != EXITED`, per Item 63) falls
             # into EXACTLY ONE of: `quiet` (BETWEEN-TURNS/WATCH -- nothing to
             # act on) or `actionable` (ESCALATE/OUT-OF-WORK/UNKNOWN -- the
-            # Group-EM has a decision to make). `escalate`/`out-of-work`/
-            # `unknown` above already name the actionable split further; this
-            # is the missing name for the quiet half, so `quiet + actionable
-            # == peers == live` holds and nothing is merged without a name.
-            # `summary_line`'s field set stays untouched for the same reason
-            # `live` did: it is DoE-owned fixed-form, additive fields land on
-            # this dict only.
             "quiet": sum(
                 1 for row in rows
                 if row["registry"] != "absent"
@@ -1103,16 +824,7 @@ def build_report(
                 and row["verdict"] in (VERDICT_ESCALATE, VERDICT_OUT_OF_WORK, VERDICT_UNKNOWN)
             ),
         },
-        # THE STRUCK INSTANT, in the return DICT only -- never on `summary_line`
-        # (staff-eng finding 3: `summary_line` is DoE-owned contract, spelled
-        # verbatim at `fleet-watch-idle-report-contract.md:223`; moving what
-        # renders there is C9-gated, not this chunk's to make). `now` is the
-        # SAME clock every row's age was computed against this call, so this is
-        # the instant the `counts` block above was struck, never a re-read.
         # Spelled `as_of`, not `taken_at` -- the falsifier's `_WHEN_TOKEN` does
-        # not match `taken_at` (staff-eng finding 2).
-        # Was a literal copy of
-        # the fromtimestamp/strftime expression; now the shared seam.
         "as_of": watch_heartbeat.iso_instant(now),
     }
 
@@ -1154,10 +866,7 @@ def _render_row(row: dict) -> list:
     divergence = row["divergence"]
     if divergence != DIVERGENCE_NONE and row["divergence-minutes"] is not None:
         divergence = "%s(%.0fm)" % (divergence, row["divergence-minutes"])
-    # Human-facing label only, C5: `row["verdict"]` (the wire value, unchanged
     # -- see VERDICT_WATCH's own docstring) reads as a role to a human unless
-    # it is disambiguated where a human actually reads it. A peer EM read a
-    # rendered `watch` row as "this peer is running the watch" and filed a
     # false bug report on it. `VERDICT_WATCH` alone is annotated; every other
     # verdict word already reads as what it means (`ESCALATE`, `EXITED`,
     # `UNKNOWN`, `OUT-OF-WORK`, `between-turns`).
@@ -1176,9 +885,6 @@ def _render_row(row: dict) -> list:
     if row["exited-since"]:
         lines.append("      EXITED since %s" % row["exited-since"])
     if row["registry"] == "absent":
-        # THE ROW MUST SAY IT, NOT ONLY THE COUNT (C11): a crown reading only
-        # `peers=N` cannot know one row is a corpse the registry has not been
-        # asked about yet; the row itself must carry the fact.
         lines.append("      registry: absent (excluded from peers count)")
     if row["verdict"] in (VERDICT_BETWEEN_TURNS, VERDICT_WATCH):
         return lines
@@ -1194,12 +900,6 @@ def _render_row(row: dict) -> list:
 
 
 def render(report: dict, peer: Optional[str] = None) -> str:
-    """The agent-facing rendering. Same facts as `--json`, no extra judgement.
-
-    `between-turns` peers are counted but not printed per-peer: the contract
-    says the watcher does nothing with them, and printing them is pure context
-    cost.
-    """
     lines = []
     if report["group-em-moved"]:
         lines.append(
@@ -1237,25 +937,14 @@ def _cli(argv: Optional[list] = None) -> int:
         "--repo-root", required=True,
         help="Repository root whose fleet to report. Taken as an argument, never derived "
              "from cwd -- this runs under a harness tool whose working directory is not ours.")
-    # Pre-2026-09-01 spelling; accepted, unadvertised. Rationale + retirement
-    # condition: group_em/tests/test_deprecated_crown_flag_alias.py
-    # Collapsed duplicated 9-line rationale
-    # to a pointer; full argument lives in the test file (also the delete unit).
     parser.add_argument(
         "--group-em-session-id",
         dest="group_em_session_id", default=None,
         help="The Group-EM's session id -- never the watcher's. Excluded from its own "
              "roster, and the owner of the offer log that decides a peer is already "
              "answered.")
-    # `--crown-session-id` is the pre-2026-09-01 spelling, retained as an
     # accepted-but-unadvertised alias (DR-084's `_DEPRECATED_ALIASES` shape).
-    # It is NOT cosmetic back-compat: DoE-claude's fleet-watch agent definition
-    # and group-em skill both instruct agents to pass the old spelling, argparse
-    # hard-errors on an unknown flag, and those agents are dispatched and running.
-    # Dropping it strands every live watcher the moment this lands. Retire it once
-    # the sibling's text has moved -- see the memo
     # cross-repo/archive/...-crown-nomenclature-retired.md. `help=argparse.SUPPRESS`
-    # keeps it out of --help so the canonical spelling is the only one advertised.
     parser.add_argument(
         "--crown-session-id",
         dest="group_em_session_id", default=None, help=argparse.SUPPRESS)
@@ -1289,9 +978,6 @@ def _cli(argv: Optional[list] = None) -> int:
             "--caller-session-id", file=_sys.stderr)
         return 2
 
-    # Same refusal as `watch._cli`, for the same reason and the same shell: this
-    # oracle is run by the same agent, with the same `--repo-root` spelling, and
-    # a report over a root that does not exist reads as a quiet fleet.
     try:
         args.repo_root = repo_root_arg.resolve_repo_root_arg(args.repo_root)
     except repo_root_arg.RepoRootArgError as exc:
@@ -1300,20 +986,12 @@ def _cli(argv: Optional[list] = None) -> int:
         print(f"group-em-idle-report: {exc}", file=_sys.stderr)
         return 2
 
-    # Nothing is printed until the whole report exists: a partial report on a
-    # failed run is indistinguishable from a quiet fleet, which is the one
-    # reading this instrument must never permit.
     try:
         if args.record_offer:
             from coordinator_core.group_em import send_pass
 
             # A DISCARDED RETURN IS SUPPRESSION SILENTLY OFF -- the exact
-            # failure this arm exists to prevent. `record_offers` reports
             # failure by RETURNING the peer ids it did not record (a malformed
-            # id, or an OSError on the append), never by raising; dropping that
-            # value means a batch that recorded NOTHING exits 0 with a
-            # normal-looking report and no cooldown armed, and the next tick
-            # re-nudges every one of them. Found by the criterion-only reader.
             unrecorded = send_pass.record_offers(
                 args.repo_root, args.group_em_session_id, args.record_offer,
                 args.caller_session_id,

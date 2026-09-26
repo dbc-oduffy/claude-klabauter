@@ -104,30 +104,15 @@ CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 42
 
-#: Zero-spawn upward-walk bound (mirrors ``guard_reap_stale_git_lock.py``'s
 #: own ``_MAX_UPWARD_WALK`` -- a plain filesystem bound, not a git-tree
-#: depth guess).
 _MAX_UPWARD_WALK = 50
 
 _P4_BASENAMES = frozenset({"p4", "p4.exe"})
 
-#: Review: coordinator-code-reviewer F1 (P1, confirmed) -- `cmd /c`/`cmd -c`
-#: was special-cased to recurse into the inner command, but `bash -c`,
-#: `sh -c`, `pwsh -Command`/`-c`, and `powershell -Command`/`-c` were not,
-#: so `bash -c "p4 submit"` tokenized cleanly, fell through every branch in
-#: `_classify_segment`, and was ALLOWED -- a fail-open bypass of a
-#: fail-closed fence. Conservative arm taken (not the recursion arm the
-#: reviewer also offered): the inner string handed to a `-c`/`-Command`
-#: interpreter is not reliably argv-shaped the way this fence's own
-#: tokenizer expects, so recursing into it risks a second bypass through
-#: quoting the outer tokenizer normalizes differently. Treated as an
-#: immediate unparseable-invocation deny instead, matching this module's
 #: own "anything unparseable ... denied" posture (see `_GOVERNED_MENTION_RE`
-#: and D6's `-x` handling above).
 _SHELL_DASH_C_BASENAMES = frozenset({"bash", "sh", "pwsh", "powershell"})
 _SHELL_DASH_C_FLAGS = frozenset({"-c", "-command"})
 
-#: D6's read verbs taking no further constraint beyond being invoked at all.
 _P4_SIMPLE_READ_VERBS = frozenset(
     {
         "info", "opened", "diff", "describe", "changes", "files", "fstat",
@@ -136,33 +121,17 @@ _P4_SIMPLE_READ_VERBS = frozenset(
     }
 )
 
-#: D6's session-CL write verbs, each allowed only in the constrained form
-#: named in the module docstring -- see ``_classify_p4_segment``.
 _P4_ADD_LIKE_VERBS = frozenset({"edit", "add", "delete", "move"})
 
-#: D4b -- the fence's own gain: ``reopen -c <CL>`` with at least one path,
-#: constrained like every other write verb here (form only, same as
 #: ``_P4_ADD_LIKE_VERBS`` -- neither this fence nor those verbs validate the
-#: CL NUMBER against the session's own, only that ``-c`` carries a value).
-#: Without this the fence would deny the D4b floor's own remedy.
 _P4_REOPEN_VERB = "reopen"
 
-#: p4 global options that consume the following token as a value, so the
-#: verb resolver must skip both (D6: "skips the binary ... and every global
-#: flag with its value ... and takes the first non-flag token as the verb").
 #: ``-x`` is deliberately EXCLUDED here -- it does not merely take a value,
-#: it makes the real verb unrecoverable from argv (D6's own "anything
-#: unparseable (-x, ...)"), so it is handled as an immediate unparseable
-#: verdict, never skipped-past.
 _P4_GLOBAL_FLAGS_WITH_VALUE = frozenset(
     {"-p", "-u", "-c", "-d", "-H", "-C", "-I", "-Q", "-L", "-z", "-Z", "-s", "-F"}
 )
 _P4_GLOBAL_FLAGS_NO_VALUE = frozenset({"-G"})
 
-#: Denied outright, D7's list verbatim minus the specially-handled multi-word
-#: forms (``reset``, ``submodule``, ``sparse-checkout``, ``read-tree``,
-#: ``checkout-index``), which get their own branches in
-#: ``_classify_git_segment`` below.
 _GIT_DENY_VERBS = frozenset(
     {
         "checkout", "switch", "restore", "stash", "rebase", "merge", "pull",
@@ -172,23 +141,11 @@ _GIT_DENY_VERBS = frozenset(
 
 _GIT_RESET_DENY_FLAGS = ("--hard", "--keep", "--merge")
 
-#: Cheap top-level pre-filter for the "unparseable" verdict on a command the
-#: shared/dialect tokenizer cannot segment at all -- only denies an
 #: UNPARSEABLE command when it plausibly names a surface this fence governs
-#: (a p4 invocation, a git invocation subject to D7, or attrib/chmod),
-#: never an unrelated command this guard has nothing to say about. Covers
 #: D6's own "-x, P4ALIASES, p4vc, git p4" unparseable examples AND the
-#: PowerShell-dialect case where a perfectly ordinary `git checkout --
-#: <path>` fails `resolve_segments_for_dialect` outright (the PowerShell
-#: tokenizer's own `--` handling) -- that failure must still deny under D7,
-#: not silently allow because it happens not to mention p4.
 _GOVERNED_MENTION_RE = re.compile(r"(?i)\bp4(\.exe)?\b|p4vc|P4ALIASES|\bgit\b|\battrib\b|\bchmod\b")
 
 #: D6: "P4ALIASES anywhere in the command text" denies outright -- a caller
-#: setting this env var redefines what a p4 verb even means, which the fence
-#: cannot classify against a fixed allowlist. Checked globally (not scoped to
-#: a resolved p4 command head) because the whole point is that it can arrive
-#: as a leading env assignment ahead of the p4 invocation.
 _P4ALIASES_RE = re.compile(r"P4ALIASES")
 
 _ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -214,11 +171,6 @@ def _find_repo_root_no_spawn(start_cwd: str) -> Optional[str]:
 
 
 def _is_p4_gated(cwd: str) -> bool:
-    """True when ``cwd`` resolves (zero-spawn) to a repo whose
-    ``coordinator.local.md`` declares ``vcs_mirror: p4`` (D1's marker). A
-    repo with no marker anywhere up the tree -- including every git-only
-    repo on the box -- returns ``False`` here, before any command-text
-    parsing below runs."""
     repo_root = _find_repo_root_no_spawn(cwd)
     if repo_root is None:
         return False
@@ -226,9 +178,6 @@ def _is_p4_gated(cwd: str) -> bool:
 
 
 def _skip_env_and_call_operator(tokens: List[str]) -> List[str]:
-    """Strip any leading ``VAR=value`` assignment tokens and a leading
-    PowerShell call operator (``&``, the ``& p4`` spelling named in D6),
-    exposing the true command-position head."""
     i = 0
     n = len(tokens)
     while i < n:
@@ -244,10 +193,6 @@ def _skip_env_and_call_operator(tokens: List[str]) -> List[str]:
 
 
 def _p4_verb_and_args(rest: List[str]) -> Optional[Tuple[str, List[str]]]:
-    """Resolve ``(verb, remaining_args)`` from the argv following the ``p4``
-    binary token, skipping global flags exactly as D6 describes. Returns
-    ``None`` (unparseable) on a bare ``-x``, an unrecognized flag, or no verb
-    at all."""
     i = 0
     n = len(rest)
     while i < n:
@@ -269,9 +214,6 @@ def _p4_verb_and_args(rest: List[str]) -> Optional[Tuple[str, List[str]]]:
 
 
 def _classify_p4_segment(rest: List[str]) -> Optional[str]:
-    """D6's allowlist, applied to the argv after the ``p4``/``p4.exe``
-    binary token. Returns a human-readable deny-kind label, or ``None``
-    (allow)."""
     resolved = _p4_verb_and_args(rest)
     if resolved is None:
         return "unparseable p4 invocation"
@@ -299,14 +241,6 @@ def _classify_p4_segment(rest: List[str]) -> Optional[str]:
     if verb == "revert":
         return None if ("-a" in args or "-c" in args) else "unrecognized p4 verb form (default-deny)"
     if verb == "change":
-        # Was unconditionally
-        # allowed, letting `p4 change -d <CL>` (delete a pending
-        # changelist) and `p4 change -f` (force-edit a changelist's
-        # owner/description) through unconstrained, unlike every sibling
-        # write verb here. Scoped to the forms the session-changelist
-        # machinery actually issues (`change -o`, `change -i` via
-        # `spec_input` -- see `p4/session_change.py`), form only, same
-        # pattern as `reopen`/`shelve` above.
         return None if (args[:1] == ["-o"] or args[:1] == ["-i"]) else "unrecognized p4 verb form (default-deny)"
     if verb == "shelve":
         return None if ("-c" in args or "-r" in args) else "unrecognized p4 verb form (default-deny)"
@@ -323,9 +257,6 @@ def _classify_p4_segment(rest: List[str]) -> Optional[str]:
 
 
 def _classify_git_segment(rest: List[str]) -> Optional[str]:
-    """D7's git worktree-rewrite deny list, applied to the argv after the
-    ``git`` binary token. Returns a human-readable deny-kind label, or
-    ``None`` (allow)."""
     if rest[:1] == ["p4"]:
         return "git p4 (unsupported)"
 
@@ -354,18 +285,12 @@ def _classify_git_segment(rest: List[str]) -> Optional[str]:
 
 
 def _classify_attrib_chmod(head_base: str, rest: List[str]) -> Optional[str]:
-    """The read-only-strip deny (D4a's invariant, protected here): ``attrib
-    -r`` and ``chmod +w`` both strip the read-only bit p4 needs to keep the
-    workspace and the depot consistent."""
     if head_base == "attrib":
         return "attrib -r" if any(t.lower() == "-r" for t in rest) else None
     return "chmod +w" if any("+w" in t for t in rest) else None
 
 
 def _classify_segment(tokens: List[str]) -> Optional[str]:
-    """Classify one shell segment's tokens against p4 (D6), git (D7) and
-    attrib/chmod (read-only-strip deny). Returns a deny-kind label, or
-    ``None`` (allow)."""
     working = _strip_leading_subshell_and_env(tokens)
     working = _skip_env_and_call_operator(working)
     if not working:
@@ -386,23 +311,11 @@ def _classify_segment(tokens: List[str]) -> Optional[str]:
             return _classify_git_segment(inner[1:])
         return None
 
-    # A `-c`/`-Command`/
-    # `-EncodedCommand` interpreter head is treated as an unparseable
-    # invocation (conservative arm) ONLY when the inner string plausibly
-    # names a surface this fence governs -- same "governed mention" gate
     # `_GOVERNED_MENTION_RE` already applies to the top-level unparseable
-    # fallback, so `bash -c "ls"` stays allowed and this cannot become a
-    # blanket nested-shell deny. Never recursed into and never classified
-    # through `_classify_p4_segment`/`_classify_git_segment` -- the inner
-    # string is not reliably argv-shaped the way this fence's tokenizer
-    # expects.
     if head_base in _SHELL_DASH_C_BASENAMES:
         for idx, tok in enumerate(rest):
             flag = tok.lower()
             if flag == "-encodedcommand":
-                # Base64 payload -- plaintext content is unknowable at this
-                # layer, so it is an unconditional unparseable deny (never
-                # a governed-mention check, which would require decoding).
                 return "unparseable invocation (shell -EncodedCommand interpreter)"
             if flag in _SHELL_DASH_C_FLAGS:
                 inner_text = " ".join(rest[idx + 1 :])
@@ -457,12 +370,6 @@ def _evaluate_powershell(cmd: str) -> Optional[str]:
 
 def _deny_reason(deny_kind: str) -> str:
     if deny_kind == "submit":
-        # Register B7: the earlier text routed the reader to "example-game-repo's own
-        # submit tool" -- a repo this caller cannot reach, so it read as a
-        # remedy while naming nothing actionable here. Same failure the
-        # sibling guard messages were corrected for at b8b04c28e2 (name the
-        # remedy that works, not the one that reads as replication). What IS
-        # reachable from here is the shelf and the EM.
         return (
             "BLOCKED: p4 submit -- agents do not submit. This repo mirrors "
             "Perforce for commit/shelve only; the shelved changelist is "
@@ -478,15 +385,6 @@ def _deny_reason(deny_kind: str) -> str:
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the p4 verb fence (D6/D7/S4) against a PreToolUse payload.
-
-    Returns ``None`` (allow) or the nested hard-deny envelope. Deliberately
-    no try/except here -- fail-CLOSED-on-exception is the dispatcher's job
-    for hard-deny guards (``dispatch.py``'s ``guard_chain`` routes an
-    uncaught exception through its own crash-deny wrapper); catching and
-    swallowing an unexpected error into a silent allow here would defeat
-    that contract.
-    """
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
 

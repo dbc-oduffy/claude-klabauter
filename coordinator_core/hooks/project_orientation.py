@@ -127,11 +127,6 @@ _ORIENTATION_STALENESS_DRIFT_MAX_ENTRIES_DEFAULT = 5
 _REFLOG_TAIL_WINDOW_BYTES = 65536
 
 
-# ---------------------------------------------------------------------------
-# payload-scoped helpers (replace the source script's os.environ/cwd reads)
-# ---------------------------------------------------------------------------
-
-
 def _env_get(env: Mapping[str, Any], name: str) -> str:
     val = env.get(name) if isinstance(env, Mapping) else None
     return val if isinstance(val, str) else ""
@@ -157,7 +152,6 @@ def _resolve_repo_root(env: Mapping[str, Any], cwd: str) -> Optional[str]:
 
 
 def _resolve_claude_klabauter_root_fast() -> Optional[str]:
-    """Rung 1.5: a pointer-FILE read only — no ladder, no subprocess."""
     try:
         ptr = settings_home() / "machine-local" / ".claude-klabauter-live-root"
         val = ptr.read_text(encoding="utf-8").strip()
@@ -169,12 +163,6 @@ def _resolve_claude_klabauter_root_fast() -> Optional[str]:
 
 
 def _resolve_state_root(repo_root: Optional[str]) -> str:
-    """Port of `resolve_state_root(repo_root, boot=True)`: the common case
-    (any sibling repo) is a zero-subprocess `<repo_root>/state` join; only
-    when `repo_root` IS the meta-repo (`~/.claude`) does this redirect to
-    the claude-klabauter pointer-file's own `state/` dir. Boot fast-path: no
-    bash-source fallback (the source's rare native-resolver fail-safe is
-    skipped on `boot=True` there too — see its own docstring)."""
     if not repo_root:
         return str(Path(".") / "state")
 
@@ -194,10 +182,6 @@ def _resolve_state_root(repo_root: Optional[str]) -> str:
 
 
 def _branch_boot(repo_root: Optional[str]) -> str:
-    """`head_branch()`'s return shape reconciled to the source script's
-    `_read_current_branch_boot()` contract: `""` (not `"HEAD"`) on a
-    detached HEAD — the source treats detached as "no branch name",
-    matching the old `git rev-parse --abbrev-ref HEAD` failure shape."""
     if not repo_root:
         return ""
     try:
@@ -216,11 +200,6 @@ def _sha_boot(repo_root: Optional[str]) -> str:
         return head_sha(repo_root) or ""
     except Exception:
         return ""
-
-
-# ---------------------------------------------------------------------------
-# Staleness banners (repo map / exec summary / peer re-check / harness drift)
-# ---------------------------------------------------------------------------
 
 
 def _staleness_banner(
@@ -324,7 +303,7 @@ def _peer_recheck_staleness_banner(out: List[str], env: Mapping[str, Any], repo_
             try:
                 text = entry.read_text(encoding="utf-8", errors="replace")
             except Exception:
-                continue  # per-peer-file probe; one unreadable entry must not abort the scan
+                continue
             raw = _extract_cache_field(text, "last_checked")
             epoch = _parse_peer_last_checked_epoch(raw)
             if oldest_epoch is None or epoch < oldest_epoch:
@@ -422,11 +401,6 @@ def _harness_version_drift_banner(out: List[str], env: Mapping[str, Any], repo_r
         )
 
 
-# ---------------------------------------------------------------------------
-# Install/corpus/tier currency banners
-# ---------------------------------------------------------------------------
-
-
 def _local_surface_probe_value(parsed: dict, json_path: str):
     if not isinstance(parsed, dict):
         return None
@@ -476,7 +450,7 @@ def _local_install_surface_banner(out: List[str], env: Mapping[str, Any], repo_r
             target_path = home_dir() / relative_path
             cache_key = str(target_path)
         except Exception:
-            continue  # per-surface probe entry; a malformed path must not abort the scan
+            continue
 
         if cache_key not in file_cache:
             try:
@@ -629,16 +603,6 @@ def _corpus_currency_banner(out: List[str], env: Mapping[str, Any]) -> None:
 
 
 def _load_tier_last_run_module():
-    """Import `coordinator/bin/tier-last-run.py` by file path, DoE-relative.
-
-    Unlike the source script (which resolves this relative to its own
-    `__file__`, a sibling of the file it imports), this hook runs from
-    claude-klabauter's own checkout — `tier-last-run.py` is a DoE-plane script this
-    repo does not carry a copy of. Resolves via the same engine-root
-    primitive this module already imports rather than inventing a second
-    ladder; fails open to `None` (every caller here degrades on `None`,
-    matching the source's own contract) when no DoE checkout is resolvable.
-    """
     try:
         import importlib.util
 
@@ -714,11 +678,6 @@ def _tier_currency_banner(out: List[str], env: Mapping[str, Any], repo_root: Opt
         out.append(f"── {name}: last ran {human_age} ──\n")
 
 
-# ---------------------------------------------------------------------------
-# Engine-resolution banner (REDUCED SCOPE — see module docstring)
-# ---------------------------------------------------------------------------
-
-
 def _resolve_engine_root_with_class() -> tuple:
     try:
         return coordinator_engine_root_with_class()
@@ -747,11 +706,6 @@ def _engine_resolution_banner(out: List[str]) -> None:
         out.append(f"── Engine: published engine mirror{branch_suffix} — this session's hooks resolve to {root} ──\n")
     elif klass == RESOLUTION_LIVE_WORKING_TREE:
         out.append(f"── Engine: sibling LIVE working tree{branch_suffix} — this session's hooks resolve here ──\n")
-
-
-# ---------------------------------------------------------------------------
-# Orientation-cache staleness + cache-present / lightweight branches
-# ---------------------------------------------------------------------------
 
 
 def _extract_cache_field(cache_text: str, key: str) -> str:
@@ -814,7 +768,7 @@ def _orientation_staleness_grace_minutes(env: Mapping[str, Any]) -> float:
         try:
             return float(raw)
         except ValueError:
-            pass  # malformed env override; fall through to the default below
+            pass
     return float(_ORIENTATION_STALENESS_GRACE_MINUTES_DEFAULT)
 
 
@@ -824,7 +778,7 @@ def _orientation_staleness_drift_max_entries(env: Mapping[str, Any]) -> int:
         try:
             return int(raw)
         except ValueError:
-            pass  # malformed env override; fall through to the default below
+            pass
     return int(_ORIENTATION_STALENESS_DRIFT_MAX_ENTRIES_DEFAULT)
 
 
@@ -918,24 +872,8 @@ def _lightweight_branch(out: List[str], repo_root: Optional[str]) -> None:
     out.append("  Full orientation available on next fresh session start.\n")
 
 
-# ---------------------------------------------------------------------------
-# handler
-# ---------------------------------------------------------------------------
-
-
 @register_op("hooks.project_orientation")
 def _handler(params: dict, repo_root=None) -> dict:
-    """SessionStart(startup|clear|compact): the `--lightweight` boot-path
-    banner sequence, ported from the source script's `main()` --lightweight
-    branch verbatim in ordering (module docstring: SCOPE FENCE).
-
-    `payload_of(params)` carries `cwd` and `env` (a flat string->string
-    mapping), reading either shape `params` reaches this handler in —
-    wrapped as `params["payload"]` (the shape `warm/hook_http.py ::
-    payload_from_event` builds) or flat, from the cold chain.
-    Every banner below is independently fail-open, matching the source
-    script's own per-call `try/except: pass` wrapping in `main()`.
-    """
     payload = payload_of(params)
 
     env = payload.get("env")
@@ -962,53 +900,53 @@ def _handler(params: dict, repo_root=None) -> dict:
     try:
         _repomap_staleness_banner(out, env, session_repo_root)
     except Exception:
-        pass  # one optional banner failing must not block SessionStart output
+        pass
     try:
         _exec_summary_staleness_banner(out, env, session_repo_root)
     except Exception:
-        pass  # one optional banner failing must not block SessionStart output
+        pass
     try:
         _peer_recheck_staleness_banner(out, env, session_repo_root)
     except Exception:
-        pass  # one optional banner failing must not block SessionStart output
+        pass
     try:
         _harness_version_drift_banner(out, env, session_repo_root)
     except Exception:
-        pass  # one optional banner failing must not block SessionStart output
+        pass
     try:
         _orientation_cache_staleness_banner(out, env, session_repo_root, cache_text)
     except Exception:
-        pass  # one optional banner failing must not block SessionStart output
+        pass
     try:
         _engine_resolution_banner(out)
     except Exception:
-        pass  # one optional banner failing must not block SessionStart output
+        pass
     try:
         _local_install_surface_banner(out, env, session_repo_root)
     except Exception:
-        pass  # one optional banner failing must not block SessionStart output
+        pass
     try:
         _install_currency_banner(out, env)
     except Exception:
-        pass  # one optional banner failing must not block SessionStart output
+        pass
     try:
         _corpus_currency_banner(out, env)
     except Exception:
-        pass  # one optional banner failing must not block SessionStart output
+        pass
     try:
         _tier_currency_banner(out, env, session_repo_root)
     except Exception:
-        pass  # one optional banner failing must not block SessionStart output
+        pass
 
     try:
         if _handle_cache_present_boot(out, cache_text):
             return context_only("SessionStart", "".join(out))
     except Exception:
-        pass  # cache-present short-circuit is optional; fall through to lightweight branch
+        pass
 
     try:
         _lightweight_branch(out, session_repo_root)
     except Exception:
-        pass  # final optional banner failing must not block SessionStart output
+        pass
 
     return context_only("SessionStart", "".join(out))

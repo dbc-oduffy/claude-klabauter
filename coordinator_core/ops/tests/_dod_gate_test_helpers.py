@@ -50,9 +50,6 @@ from coordinator_core.ops.gate_tool_resolve import ToolResolution
 
 
 def available(tool: str, path: Optional[str] = None) -> ToolResolution:
-    """A `ToolResolution` simulating `tool` present on PATH (or importable,
-    for pytest-cov) -- no real install, no real `shutil.which`/`find_spec`
-    call."""
     return ToolResolution(
         tool=tool, available=True, path=path or f"/fake/bin/{tool}", reason="resolved"
     )
@@ -72,11 +69,6 @@ def unavailable(tool: str, reason: Optional[str] = None) -> ToolResolution:
 def resolve_tool_stub(
     overrides: Dict[str, ToolResolution],
 ) -> Callable[[str], ToolResolution]:
-    """Build a `resolve_tool`-shaped replacement: a tool named in `overrides`
-    returns that literal `ToolResolution`; every other tool defaults to
-    `available()`. Covers the common "one tool absent, the rest present"
-    shape in one call instead of a per-test lambda with an inline
-    if/else branch."""
 
     def _resolve(tool: str) -> ToolResolution:
         if tool in overrides:

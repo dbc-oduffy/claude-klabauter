@@ -61,14 +61,6 @@ EXIT_TRANSPORT_FAILURE = 3
 
 
 def _import_runner():
-    """In-process import, not an RPC invoke — this is a plain local file
-    mutation, same rationale as edit-live-hook.py's own trampoline.
-
-    DR-276: the op is run through `coordinator_core.cli_entry.run_op_main`
-    rather than by calling its `main` directly, so the paths it declares become
-    a session scope-touch claim. Without that, everything this CLI writes is an
-    orphan at the `scoped_git_commit` sink.
-    """
     import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
     from cc_invoke import require_dispatch_engine_on_path
 
@@ -108,11 +100,4 @@ def main(argv: "list[str] | None" = None) -> int:
 
 if __name__ == "__main__":
     # argv is passed EXPLICITLY, not left to `main`'s own `sys.argv[1:]`
-    # fallback: the warm door reads this guard's shape
-    # (`warm.serve_classifier.classify_main_argv_shape`) and answers `--help`
-    # for an argv-less guard from `invoke_from_argv._synthesize_usage` without
-    # ever reaching this file's parser -- so the served `.exe` printed
-    # `usage: append-integrator-dispositions [--help]` and exit 0 while the
-    # `.py` printed the real flag interface. Its callers are AGENTS, which
-    # respond to an empty interface by hand-authoring the block this CLI owns.
     sys.exit(main(sys.argv[1:]))

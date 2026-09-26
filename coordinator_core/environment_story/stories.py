@@ -141,9 +141,7 @@ from __future__ import annotations
 
 from .story import CORE_RULE_IDS, Story, register_story
 
-# The composed prose -- FIXED by the plan, landed verbatim. See the module
 # docstring's "WHAT THIS MODULE COMPOSES" for what was and was not changed
-# in transit (the blockquote marker and its line-wrap only).
 EPHEMERAL_CLOUD_VM_PROSE = "\n\n".join(
     (
         '**Where you are.** A single-tenant ephemeral Linux VM. One job, one EM session, a fresh checkout, no peer sessions and no sibling repositories on the disk. The box is yours for the length of this job and is destroyed when it ends.',
@@ -153,13 +151,8 @@ EPHEMERAL_CLOUD_VM_PROSE = "\n\n".join(
     )
 )
 
-# Derived from `state/audits/2026-09-06-doctrine-rule-class-register.yaml`
 # at build time -- see "WHY A BUILT CONSTANT, NOT A RUNTIME READ" above.
-# Regenerate with: python coordinator/hooks/scripts/_environment_stories.py
-# 1,211 ids: EVERY rule-bearing row id, `genuinely-inapplicable` included --
-# see the module docstring on why nothing is omitted while the ratification
 # DR stands proposed. `CORE_RULE_IDS` is unioned in separately, below, not
-# baked in here, so this constant stays a pure function of the register.
 _EPHEMERAL_CLOUD_VM_REGISTER_RULE_IDS: frozenset[str] = frozenset(
     {
         'rcr-00ff2b33', 'rcr-01480747', 'rcr-01a18c5d', 'rcr-01d0991c', 'rcr-01d963a1', 'rcr-020b34b3',
@@ -373,8 +366,6 @@ EPHEMERAL_CLOUD_VM_STORY = Story(
     rule_ids=_EPHEMERAL_CLOUD_VM_REGISTER_RULE_IDS | CORE_RULE_IDS,
 )
 
-# `register_story` calls `validate_story` on the way in -- a story missing
 # either `CORE_RULE_IDS` member raises `CoreOmissionError` here, at import
-# time, rather than admitting a core-omitting story silently. See
 # "IDEMPOTENT REGISTRATION" above for why re-running this line is safe.
 register_story(EPHEMERAL_CLOUD_VM_STORY)

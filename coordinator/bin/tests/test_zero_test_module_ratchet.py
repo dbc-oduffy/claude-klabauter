@@ -134,8 +134,6 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -144,13 +142,9 @@ pytestmark = [
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(_TESTS_DIR))
-)  # .../coordinator/bin/tests -> .../coordinator/bin -> .../coordinator -> repo root
+)
 _PYPROJECT = os.path.join(_REPO_ROOT, "pyproject.toml")
 
-# pytest's built-in `norecursedirs` default, mirrored so the on-disk oracle
-# walks exactly the tree pytest walks. This repo does not override
-# `norecursedirs` in pyproject.toml; the assertion below fails loud if that
-# ever changes, rather than silently scanning a wider tree than pytest does.
 _PYTEST_NORECURSEDIRS_DEFAULT = (
     "*.egg",
     ".*",
@@ -163,17 +157,7 @@ _PYTEST_NORECURSEDIRS_DEFAULT = (
     "{arch}",
 )
 
-# ---------------------------------------------------------------------------
 # _ZERO_NODE_EXEMPT — files that legitimately contribute zero collected test
-# nodes. Every entry is ONE repo-root-relative file path plus the specific
-# reason THAT file holds no tests. Globs, directory prefixes, and
-# "known offenders" buckets are forbidden: this set exists for structural
-# impossibilities, not for a backlog. It is currently EMPTY — as of
-# 2026-07-28 all 1070 on-disk test modules under `testpaths` contribute at
-# least one node, so the invariant holds with no carve-outs at all. If
-# clearing a failure here needs more than a couple of entries, stop: that
-# means the invariant is mis-stated and the mis-statement is the finding.
-# ---------------------------------------------------------------------------
 _ZERO_NODE_EXEMPT: dict[str, str] = {}
 
 
@@ -187,12 +171,6 @@ def _fail(label: str, detail: str = "") -> None:
 
 
 def _pytest_ini_options() -> dict:
-    """Return pyproject.toml's [tool.pytest.ini_options] table.
-
-    Fails loud rather than defaulting: a guard that falls back to a
-    hardcoded config when it cannot read the real one is asserting against
-    a fiction.
-    """
     try:
         with open(_PYPROJECT, "rb") as fh:
             data = tomllib.load(fh)
@@ -212,7 +190,6 @@ def _pytest_ini_options() -> dict:
 
 
 def _configured_scope() -> tuple[list[str], list[str]]:
-    """Return (testpaths, python_files) as configured — never hardcoded."""
     ini = _pytest_ini_options()
 
     testpaths = ini.get("testpaths")
@@ -247,18 +224,9 @@ def _is_pruned_dir(name: str) -> bool:
 
 
 def _ondisk_test_files(testpaths: list[str], python_files: list[str]) -> set[str]:
-    """Every file under `testpaths` whose basename matches `python_files`.
-
-    Paths are returned repo-root-relative with forward slashes so they
-    compare directly against pytest node ids on every platform.
-    """
     found: set[str] = set()
     for entry in testpaths:
         abs_entry = os.path.join(_REPO_ROOT, *entry.split("/"))
-        # Every current `testpaths` entry is a directory, so this branch is
-        # dead as configured and unexercised by any test here. It exists
-        # because pytest accepts a bare file as a `testpaths` entry, and the
-        # walk below would silently skip one.
         if os.path.isfile(abs_entry):
             if any(
                 fnmatch.fnmatch(os.path.basename(abs_entry), p) for p in python_files
@@ -361,26 +329,9 @@ def _tail(text: str, n: int = 25) -> str:
 
 
 def _really_yields_no_nodes(rel_path: str) -> bool:
-    """Re-collect ONE candidate to confirm it genuinely yields no nodes.
-
-    The two halves of the oracle are separate observations of a tree that
-    several sessions write to concurrently: the on-disk walk runs first, the
-    `--collect-only` subprocess after. A file that lands, moves, or is still
-    being written between the two shows up as a difference without being a
-    defect. Without this second look the guard cries wolf on a shared branch,
-    and a guard that cries wolf gets muted — which would leave the hole it
-    exists to close open again, just with a passing test in front of it.
-
-    Fail-safe direction is deliberate: a candidate that has since vanished, or
-    whose re-collection cannot be completed, returns False (not an offender).
-    A real zero-node module is a standing condition and will be caught on the
-    next run; a transient one must never be reported as a defect. This is the
-    single place in this guard where uncertainty resolves to silence, and it
-    is scoped to one already-identified path — never to the invariant itself.
-    """
     abs_path = os.path.join(_REPO_ROOT, *rel_path.split("/"))
     if not os.path.isfile(abs_path):
-        return False  # vanished between the two observations — a race, not a defect
+        return False
 
     env = _nested_pytest_env()
     proc = subprocess.run(
@@ -393,13 +344,6 @@ def _really_yields_no_nodes(rel_path: str) -> bool:
         env=env,
         **no_console_creationflags(),
     )
-    # pytest exits 5 for "no tests collected" — that is not an error, it is
-    # this guard's positive signal, and reading it as an error is how the
-    # re-verification silently stopped detecting anything the first time it
-    # was written. 0 means nodes were collected (or none, if stdout says so);
-    # anything else is a collection ERROR — a real defect, but of the
-    # a518b11b class, which pytest already fails the run on by itself. Do not
-    # double-report that under this guard's label.
     _NO_TESTS_COLLECTED = 5
     if proc.returncode == _NO_TESTS_COLLECTED:
         return True
@@ -409,12 +353,6 @@ def _really_yields_no_nodes(rel_path: str) -> bool:
 
 
 def test_every_test_module_contributes_at_least_one_node() -> None:
-    """Every on-disk `python_files` match under `testpaths` yields >= 1 node.
-
-    A module that imports cleanly and collects nothing is indistinguishable
-    from a passing module in every tier summary — that is precisely what
-    made 35754b70's nine dead assertions invisible for three days.
-    """
     testpaths, python_files = _configured_scope()
     ondisk = _ondisk_test_files(testpaths, python_files)
 

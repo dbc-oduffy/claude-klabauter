@@ -56,19 +56,8 @@ import re
 
 from coordinator_core.ops.fleet.memo_kinds import VALID_KINDS as _VALID_KINDS
 
-#: Required outbox-draft frontmatter fields. `summary`'s KEY must be present
-#: (value may be empty at draft time — filled in by `memo.compose`); every
-#: other field must be present AND non-empty.
 #: `kind` is REQUIRED on a DRAFT (added 2026-08-30). It was absent from this
-#: tuple while `memo.send` refused any draft lacking it and `memo.draft`
-#: required it at authoring time — so the field was simultaneously optional
-#: and mandatory depending on which check a sender reached first, which cost
-#: a real sender four refusals to compose one memo. This is the OUTBOX
 #: (draft) contract only: the DELIVERED corpus stays lenient per DEC-1
-#: (`contract/emit_memo_schema`), which deliberately excludes `kind` to avoid
-#: retroactively invalidating existing memos. Draft-time strictness and
-#: delivered-time leniency are not in tension — one governs what a sender may
-#: newly author, the other what a reader must accept.
 OUTBOX_REQUIRED_FIELDS = (
     "title",
     "from",
@@ -81,10 +70,8 @@ OUTBOX_REQUIRED_FIELDS = (
 )
 
 # single-sourced from _memo_compose._VALID_KINDS
-# (mirrored across 5 sites; `bug` landed in 2 of them and this copy went stale).
 VALID_KINDS = _VALID_KINDS
 
-#: scoped_to.sha shape — 7-40 hex chars.
 SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 
 

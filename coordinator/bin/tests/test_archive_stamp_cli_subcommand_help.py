@@ -1,29 +1,3 @@
-"""test_archive_stamp_cli_subcommand_help.py — `<subcommand> --help` argv
-parsing for `archive-stamp-cli` (2026-07-28 fix).
-
-Defect this closes: top-level `--help` was handled, but a per-subcommand
-`--help` fell through to that subcommand's own parser, which took the flag as
-the positional path argument — `archive-stamp-cli ship-handoff --help`
-answered with three stacked `handoff_path escapes state/handoffs/: '--help'`
-errors. Since `block_consumed_handoff_edit`'s deny text routes every
-handoff close onto `ship-handoff`, that verb's flags (notably `--sha`) were
-discoverable only by failing into the remediation text twice.
-
-Also covers `_usage_line`: a complete per-subcommand usage string must print
-verbatim, not get the top-level `<subcommand> <args...>` synopsis and the
-full verb list appended to it.
-
-The `_import_module()` seam is NOT monkeypatched here — help must be
-answerable before the engine import, so these tests double as the assertion
-that no engine-root resolution happens on a help path.
-
-Spec backlink: cross-repo memo
-cross-repo/inbox/2026-07-28-example-retrieval-repo-em-consumed-handoff-guard-scaffolds-on-close.md
-§ "Second, smaller item — the CLI the guard forces you onto".
-
-Run:
-    pytest coordinator/bin/tests/test_archive_stamp_cli_subcommand_help.py -v
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -62,7 +36,6 @@ class TestSubcommandHelp(unittest.TestCase):
         self.assertEqual(rc, 0)
         printed = "".join(c.args[0] for c in out.write.call_args_list if c.args)
         self.assertIn("ship-handoff <handoff_path>", printed)
-        # The flag the memo could not discover.
         self.assertIn("--sha", printed)
         self.assertNotIn("escapes state/handoffs/", printed)
 
@@ -79,21 +52,9 @@ class TestSubcommandHelp(unittest.TestCase):
         self.assertEqual(rc, 0)
 
     def test_every_subcommand_has_a_usage_entry(self):
-        # The top-level synopsis and the per-subcommand table must not drift
-        # apart — a verb listed in one and missing from the other is exactly
-        # the discoverability hole this suite exists to close.
-        #
-        # Exception, by design (92c902051, "rename handoff transition verb
         # consume->claim, unconsume->unclaim"): `_cli._DEPRECATED_ALIASES`
-        # names the accepted-but-unadvertised deprecated verbs — deliberately
         # left OUT of the top-level `_SUBCOMMANDS` advertisement, yet still
         # carrying their own `_SUBCOMMAND_USAGE` entry so `<alias> --help`
-        # answers directly rather than falling through to the subcommand's
-        # own parser (the exact failure mode this suite's module docstring
-        # describes). A blanket set-equality assertion would force a false
-        # choice between advertising a deprecated verb and deleting its
-        # still-functioning help text — neither of which matches the
-        # alias-compat design intent.
         listed = {
             v.strip()
             for v in _cli._SUBCOMMANDS.split("\n")[0]
@@ -105,10 +66,6 @@ class TestSubcommandHelp(unittest.TestCase):
         )
 
     def test_resolve_memo_help_enumerates_disposition_flags(self):
-        # Defect this closes: `resolve-memo --help` printed only the bare
-        # usage synopsis with no flag list, so `--superseded-by` was
-        # undiscoverable (state/bug-backlog/2026-08-15-resolve-memo-help-
-        # prints-a-bare-usage-li-a855aaff0f1c.yaml).
         with unittest.mock.patch.object(_cli, "_import_module", _explode):
             with unittest.mock.patch("sys.stdout") as out:
                 rc = _cli.main(["resolve-memo", "--help"])
@@ -119,17 +76,11 @@ class TestSubcommandHelp(unittest.TestCase):
         self.assertIn("mutually exclusive", printed)
 
     def test_bareword_help_is_not_a_subcommand_help_flag(self):
-        # `action-memo` forwards its tail to the engine verbatim; a disposition
-        # value is free to be the string "help", so only the dashed forms count.
         self.assertNotIn("help", _cli._SUBCOMMAND_HELP_FLAGS)
 
 
 class TestDeprecatedAliasDispatch(unittest.TestCase):
-    # Only `--help` exercised the alias table before;
     # nothing proved the rewired `_DEPRECATED_ALIASES.get(subcmd) == "..."`
-    # condition actually dispatches to the same engine call as the canonical
-    # verb. A typo in a map VALUE would silently fall through to bareword
-    # positional handling with every existing test still green.
     def test_consume_handoff_dispatches_like_claim_handoff(self):
         mock_mod = unittest.mock.Mock()
         with unittest.mock.patch.object(_cli, "_import_module", lambda: mock_mod):
@@ -167,7 +118,6 @@ class TestUsageLine(unittest.TestCase):
             rc = _cli._usage_line(_cli._SUBCOMMAND_USAGE["ship-handoff"])
         self.assertEqual(rc, 2)
         printed = "".join(c.args[0] for c in err.write.call_args_list if c.args)
-        # No top-level synopsis, no full verb list appended.
         self.assertNotIn("<subcommand> <args...>", printed)
         self.assertNotIn("repair-archived-shipped-in", printed)
 

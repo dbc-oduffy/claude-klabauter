@@ -1,13 +1,3 @@
-"""Tests for `coordinator_core.warm.server`'s dispatch-ack wiring: the
-`_serve_line` admit/intercept/key-on-error legs, and the `_pool_dispatch`
-done-callback and `_run_dispatch` stamp legs.
-
-Reuses `test_pool_dispatch_deadline.py`'s `_Pool`/`_Future` fakes for the
-stamp legs and `test_server_loop.py`'s `_FakeIO`/`_frame` shape for the
-intercept, per the spec row's own body.
-
-Spec backlink: docs/plans/2026-09-23-warm-dispatch-reconcile.md (C3).
-"""
 
 from __future__ import annotations
 
@@ -19,11 +9,6 @@ import pytest
 from coordinator_core.warm import dispatch_ack, server
 
 pytestmark = [pytest.mark.cadence]
-
-
-# ---------------------------------------------------------------------------
-# Shared fakes (mirrors test_server_loop.py / test_pool_dispatch_deadline.py)
-# ---------------------------------------------------------------------------
 
 
 class _FakeIO:
@@ -82,18 +67,9 @@ def _run_serve_line(io_obj, *, dispatch, version_state=None):
 
 @pytest.fixture(autouse=True)
 def _fresh_ack_store(monkeypatch):
-    """Each test gets its own `AckStore` -- the production one is a
-    module-level singleton, and tests must not see each other's keys."""
-    # boot_ns=0 so small test key mint-times (e.g. "1-555") are not read as
-    # minted before boot -- production boot_ns is a real monotonic_ns value.
     store = dispatch_ack.AckStore(boot_ns=0)
     monkeypatch.setattr(server, "_ack_store", store)
     return store
-
-
-# ---------------------------------------------------------------------------
-# The poll intercept (D5) -- answered without ever reaching `dispatch`
-# ---------------------------------------------------------------------------
 
 
 def test_request_status_is_answered_without_reaching_dispatch(_fresh_ack_store):
@@ -122,17 +98,11 @@ def test_request_status_reflects_an_admitted_key(_fresh_ack_store):
     assert response["result"]["state"] == dispatch_ack.STATE_EXECUTING
 
 
-# ---------------------------------------------------------------------------
-# Admit before dispatch, and the tombstone refusal
-# ---------------------------------------------------------------------------
-
-
 def test_a_keyed_mutating_frame_is_admitted_before_dispatch_runs(_fresh_ack_store):
     seen_key = {}
 
     def _dispatch(msg, *, caller=None, dispatch_key=None):
         seen_key["key"] = dispatch_key
-        # By the time dispatch runs, admit has already happened.
         assert _fresh_ack_store.status(dispatch_key)["state"] == dispatch_ack.STATE_EXECUTING
         return {"jsonrpc": "2.0", "id": msg["id"], "result": "ok"}
 
@@ -182,13 +152,7 @@ def test_a_compute_only_method_is_never_admitted(_fresh_ack_store, monkeypatch):
     _run_serve_line(io_obj, dispatch=_dispatch)
 
     assert _written(io_obj)[0]["result"] == "ok"
-    # Never admitted: a poll for it answers not_received, not executing.
     assert _fresh_ack_store.status("1-999")["state"] == dispatch_ack.STATE_NOT_RECEIVED
-
-
-# ---------------------------------------------------------------------------
-# (a) `_settings_home_refusal` inside `_run_dispatch` stamps not-dispatched
-# ---------------------------------------------------------------------------
 
 
 def test_settings_home_refusal_stamps_not_dispatched_handler_never_ran(_fresh_ack_store, monkeypatch):
@@ -215,19 +179,10 @@ def test_settings_home_refusal_stamps_not_dispatched_handler_never_ran(_fresh_ac
     assert handler_ran == []
     status = _fresh_ack_store.status("1-321")
     assert status == {"state": dispatch_ack.STATE_NOT_RECEIVED, "outcome": dispatch_ack.OUTCOME_NOT_DISPATCHED}
-    # A replay of the same key is refused.
     assert _fresh_ack_store.admit("1-321", "ceremony.commit_v2") is False
 
 
-# ---------------------------------------------------------------------------
-# (b) a pool-worker refusal carrying the private marker
-# ---------------------------------------------------------------------------
-
-
 class _DoneFuture:
-    """A resolved `concurrent.futures.Future` stand-in for the done-callback
-    tests -- `result()`/`exception()`/`cancelled()` only, matching what
-    `_stamp_pool_future` reads."""
 
     def __init__(self, *, result=None, exception=None, cancelled=False):
         self._result = result
@@ -258,12 +213,6 @@ def test_pool_worker_marker_stamps_not_dispatched_and_marker_never_reaches_the_w
     assert _fresh_ack_store.admit("1-555", "ceremony.commit_v2") is False
 
 
-# ---------------------------------------------------------------------------
-# (c) a successful `future.cancel()` in `_pool_dispatch` must never answer
-# `executing`
-# ---------------------------------------------------------------------------
-
-
 class _CancellableFuture:
     def __init__(self):
         self.cancel_called = False
@@ -278,7 +227,6 @@ class _CancellableFuture:
 
     def add_done_callback(self, fn):
         self._callbacks.append(fn)
-        # A real Future invokes done-callbacks once cancelled; model that.
         fn(self)
 
     def cancelled(self):
@@ -312,12 +260,6 @@ def test_successful_cancel_stamps_not_dispatched_never_executing(_fresh_ack_stor
     assert status == {"state": dispatch_ack.STATE_NOT_RECEIVED, "outcome": dispatch_ack.OUTCOME_NOT_DISPATCHED}
 
 
-# ---------------------------------------------------------------------------
-# abandoned / worker-lost surface as unknowable, never finished or
-# not_received
-# ---------------------------------------------------------------------------
-
-
 def test_ipc_internal_op_timeout_stamps_abandoned_via_run_dispatch(_fresh_ack_store, monkeypatch):
     _fresh_ack_store.admit("1-111", "ceremony.commit_v2")
 
@@ -329,8 +271,6 @@ def test_ipc_internal_op_timeout_stamps_abandoned_via_run_dispatch(_fresh_ack_st
         }
 
     monkeypatch.setattr(server, "dispatch_message", _fake_dispatch_message, raising=False)
-    # `_run_dispatch` imports `dispatch_message` from `coordinator_core.ipc`
-    # inside its own body; patch it there.
     import coordinator_core.ipc as ipc_module
 
     monkeypatch.setattr(ipc_module, "dispatch_message", _fake_dispatch_message)

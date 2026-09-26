@@ -53,9 +53,6 @@ from coordinator_core.hooks.day_branch_assert import (  # noqa: E402
 
 
 def test_main_routes_day_branch_assert_subcommand(monkeypatch):
-    """Wiring pin: `main()` must actually reach `cmd_day_branch_assert` for
-    the subcommand name — a subparser that exists but is never dispatched
-    is the silent-skip shape."""
     called = {"hit": False}
 
     def fake_cmd(args):
@@ -72,9 +69,6 @@ def test_main_routes_day_branch_assert_subcommand(monkeypatch):
 
 
 def test_day_branch_assert_calls_the_shared_engine_dispatch(monkeypatch, tmp_path):
-    """`cmd_day_branch_assert` must call `assert_day_branch` itself (the same
-    function C4b's SessionStart shim imports and calls) rather than
-    re-implementing any part of the boot dispatch."""
     calls = []
 
     def fake_assert(repo_root, machine, today, **kwargs):
@@ -127,8 +121,6 @@ def test_day_branch_assert_failed_outcome_exits_nonzero(monkeypatch, tmp_path, c
     assert rc == 1
     out = capsys.readouterr().out
     # The CLI must print banner()'s own rendered text VERBATIM -- not a
-    # second, similar-but-different renderer (AC-1 constraint for this
-    # mid-session path).
     assert fail_message in out
     assert "day-branch NOT cut" in out
 
@@ -148,7 +140,7 @@ def test_day_branch_assert_warn_message_is_bannerrendered_verbatim(monkeypatch, 
 
     rc = _wsdbr.cmd_day_branch_assert(argparse.Namespace(repo_root=str(tmp_path)))
 
-    assert rc == 0  # WARN is reported, not blocking -- same posture as the boot shim
+    assert rc == 0
     out = capsys.readouterr().out
     assert warn_message in out
 
@@ -171,22 +163,10 @@ def test_day_branch_assert_defaults_repo_root_to_cwd(monkeypatch, tmp_path):
     assert calls == [os.getcwd()]
 
 
-# ---------------------------------------------------------------------------
-# The publish leg (2026-09-02). `/workday-start` must leave a day branch that
 # EXISTS and IS PUBLISHED, in one move, with no operator step in between.
-#
-# Before this leg nothing published a boot-cut day branch at all:
-# `assert_day_branch` runs `session_ensure_branch(caller="boot")`, whose
-# contract is no network call, and the `auto_push.push_once` its comment
-# named had had no per-commit caller since C6/C7 of
-# docs/plans/2026-08-30-who-pushes-and-when.md.
-# ---------------------------------------------------------------------------
 
 
 def test_day_branch_assert_publishes_after_asserting(monkeypatch, capsys):
-    """The outcome, not a nudge: the subcommand asserts the branch AND
-    publishes it in the same invocation. A design whose failure mode is "the
-    operator sees a line and runs a command" does not pass this."""
     calls = {}
 
     def _fake_assert(repo_root, machine, today, **kw):
@@ -213,10 +193,6 @@ def test_day_branch_assert_publishes_after_asserting(monkeypatch, capsys):
 
 
 def test_day_branch_assert_publish_is_attempted_even_when_the_cut_failed(monkeypatch):
-    """A FAILED cut does not skip the publish. The two failures are
-    independent -- on 2026-09-02 the branch EXISTED (so there was something
-    to publish) while the assert reported the tree still on main -- and
-    short-circuiting here would have reproduced exactly that gap."""
     monkeypatch.setattr(
         "coordinator_core.hooks.day_branch_assert.assert_day_branch",
         lambda *a, **kw: DayBranchAssertResult(FAILED, "main", "banner text"),

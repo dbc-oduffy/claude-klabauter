@@ -95,11 +95,6 @@ IS_WINDOWS = os.name == "nt"
 IS_DARWIN = sys.platform == "darwin"
 IS_LINUX = sys.platform.startswith("linux")
 
-#: Closed vocabulary. `attended` = somebody's machine. `cloud` = a box that is
-#: not the developer's own (Anthropic-hosted OR a self-hosted runner -- the
-#: documented definition of a cloud session is "any session that runs somewhere
-#: other than the developer's machine", which is precisely the governing
-#: distinction). `suspect` = genuinely undecidable from available signals.
 CALLS = ("attended", "cloud", "suspect")
 CONFIDENCES = ("certain", "high", "medium", "low")
 
@@ -111,11 +106,6 @@ class Locality(NamedTuple):
     basis: str
 
 
-#: Closed vocabulary for `accelerator()`. `none` is a positive finding (no
-#: signal of any accelerator, not merely "didn't look"); `unknown` is the
-#: accelerator ladder's own irreducible band -- a GPU device node present with
-#: no NVIDIA driver/tool signal, e.g. an un-driven passthrough device or a
-#: non-NVIDIA GPU. Collapsing it into `none` would round away a real "maybe".
 ACCEL_CALLS = ("nvidia", "mps", "none", "unknown")
 
 
@@ -126,15 +116,11 @@ class Accel(NamedTuple):
     basis: str
 
 
-# --------------------------------------------------------------- silicon
 _CONSUMER = re.compile(r"Core\(TM\)\s*(i[3579]|Ultra)|Core\s+i[3579]|Ryzen|"
                        r"Apple M\d|Celeron|Pentium|Athlon|Snapdragon", re.I)
 _EXPLICIT_VM = re.compile(r"QEMU Virtual CPU|Common KVM processor|"
                           r"Common 32-bit KVM|Virtual CPU|AMD QEMU", re.I)
 _SERVER = re.compile(r"Xeon|EPYC|Graviton|Altra|Ampere|Neoverse|POWER\d", re.I)
-#: A real server part always carries a SKU designator; QEMU's generic server
-#: models do not. That absence, paired with a synthetic microcode revision, is
-#: the masked-silicon tell that identifies a cloud hypervisor.
 _SKU = re.compile(r"Gold|Silver|Bronze|Platinum|E[357]-|v[2-6]\b|W-|D-|"
                   r"\b\d{4}[A-Z]*\b", re.I)
 _SYNTHETIC_MICROCODE = frozenset({"0x1", "0x0", "1", "0", ""})
@@ -144,14 +130,6 @@ _CLOUD_DMI_VENDORS = ("Amazon EC2", "Google", "Microsoft Corporation",
 
 
 def _silicon_class(brand: str) -> str:
-    """consumer | server-masked | server-real | explicit-vm | unknown.
-
-    `consumer` is the load-bearing one: hypervisors on developer machines run
-    host-passthrough or host-model, so a guest sees the HOST's CPU. Consumer
-    silicon is therefore a direct statement that a person's machine is
-    underneath, however many virtualisation layers sit between -- which is what
-    rescues Docker Desktop, WSL2 and VirtualBox from being called cloud.
-    """
     if not brand:
         return "unknown"
     if _EXPLICIT_VM.search(brand):
@@ -164,11 +142,6 @@ def _silicon_class(brand: str) -> str:
 
 
 def _cpu_brand_linux(proc_cpuinfo: str = "/proc/cpuinfo") -> Tuple[str, str]:
-    """One open + one bounded read + one close. ``/proc/cpuinfo`` is a seq_file
-    that repeats a block per core, so a full read makes the kernel format
-    every core's block -- 4.9 KB on a 4-core box, ~6x that on a 24-core one.
-    Both fields live in the FIRST block, so a bounded read keeps this
-    core-count-independent."""
     try:
         fd = os.open(proc_cpuinfo, os.O_RDONLY)
     except OSError:
@@ -215,14 +188,7 @@ def os_family() -> str:
     return "posix-other"
 
 
-# ---------------------------------------------------------------- rung 0
 def harness_rung(env: Optional[Mapping[str, str]] = None) -> Optional[Locality]:
-    """The documented-contract rung. ``None`` when the harness says nothing.
-
-    Order is by strength of guarantee, not convenience: the two documented
-    variables first, the undocumented corroborators after, and the
-    "Claude Code is here but silent about remoteness" inference last.
-    """
     g = (os.environ if env is None else env).get
     if g("CLAUDE_CODE_REMOTE") == "true":
         return Locality("cloud", "certain", "harness", "CLAUDE_CODE_REMOTE=true")
@@ -239,13 +205,8 @@ def harness_rung(env: Optional[Mapping[str, str]] = None) -> Optional[Locality]:
     return None
 
 
-# ---------------------------------------------------------------- rung 1
 def _machine_rung_uncached(env: Mapping[str, str]) -> Locality:
-    """Short-circuiting, cheapest decisive signal first. The peripheral probes
-    are the expensive part and only run for hosts nothing else settled."""
     if IS_DARWIN:
-        # Anthropic-hosted images are documented Ubuntu 24.04 x86_64, so darwin
-        # is settled at zero syscalls.
         return Locality("attended", "high", "machine",
                         "darwin -- Anthropic-hosted images are Ubuntu x86_64")
     if IS_WINDOWS:
@@ -265,12 +226,9 @@ def _machine_rung_uncached(env: Mapping[str, str]) -> Locality:
         return Locality("suspect", "low", "machine",
                         "unhandled platform %s" % sys.platform)
 
-    # ONE syscall yields the WSL discriminator, the architecture and the host
-    # name. It replaces an open/read/close on /proc/sys/kernel/osrelease.
     release = os.uname().release
     low = release.lower()
     if "microsoft" in low or "wsl" in low:
-        # Highest-stakes case: presents as Linux, needs the WINDOWS guards.
         return Locality("attended", "certain", "machine",
                         "WSL kernel (%s) -- Windows host underneath" % release)
 
@@ -290,17 +248,13 @@ def _machine_rung_uncached(env: Mapping[str, str]) -> Locality:
         with open("/sys/class/dmi/id/sys_vendor", encoding="utf-8") as fh:
             vendor = fh.read().strip()
     except OSError:
-        pass  # DMI sysfs absent (non-Linux or restricted); vendor stays empty
+        pass
     if vendor.startswith(_CLOUD_DMI_VENDORS):
         return Locality("cloud", "high", "machine", "DMI sys_vendor=%s" % vendor)
     if cls == "explicit-vm":
-        # The irreducible band: a hypervisor's own generic brand string
-        # confirms a VM and says nothing about whether a desk or a datacentre
-        # is underneath. `suspect` is the honest answer, not a rounding error.
         return Locality("suspect", "low", "machine",
                         "hypervisor generic brand (%s); host unknown" % brand[:36])
 
-    # Nothing decisive: fall back to whether a human could be sitting here.
     absent = [p for p in ("/dev/input/event0", "/sys/class/drm/card0")
               if not os.path.exists(p)]
     if len(absent) == 2 and not vendor:
@@ -312,9 +266,6 @@ def _machine_rung_uncached(env: Mapping[str, str]) -> Locality:
     return Locality("attended", "medium", "machine", "peripherals present")
 
 
-#: Rung 1 is a fact about the MACHINE, not about a caller, so it is constant
-#: for the life of the process and memoized. Rung 0 is per-caller and is never
-#: cached -- it is already free.
 _MACHINE_CACHE: Dict[str, Locality] = {}
 
 
@@ -329,9 +280,6 @@ def machine_rung(env: Optional[Mapping[str, str]] = None,
 
 def locality(env: Optional[Mapping[str, str]] = None,
              force: bool = False) -> Locality:
-    """The one call sites should use. Rung 0 when the harness speaks, else
-    rung 1. ``env`` is the caller's environment -- engine-side that is
-    ``caller_context.env``, never the warm server's own ``os.environ``."""
     hit = harness_rung(env)
     if hit is not None:
         return hit
@@ -356,7 +304,6 @@ def cross_check(env: Optional[Mapping[str, str]] = None) -> dict:
     }
 
 
-# ------------------------------------------------------------ accelerator
 def _scan_path_for(name: str, env: Mapping[str, str]) -> bool:
     """A ``shutil.which``-style PATH scan with no exec -- ``os.path.isfile``
     checks only, over directories from the PASSED-IN ``env``, never ambient
@@ -385,8 +332,6 @@ def _scan_path_for(name: str, env: Mapping[str, str]) -> bool:
 
 
 def _nvidia_signal(env: Mapping[str, str]) -> Tuple[bool, str]:
-    """One short-circuiting probe chain, cheapest first. Every leg is a stat
-    or a PATH scan -- no exec, per the module's negative spec."""
     if _scan_path_for("nvidia-smi", env):
         return True, "nvidia-smi resolvable on PATH"
     if IS_LINUX:
@@ -408,11 +353,6 @@ def _accelerator_uncached(env: Mapping[str, str]) -> Accel:
         return Accel("nvidia", "high", "probe", basis)
 
     if IS_DARWIN:
-        # No CPU-brand string is available without an exec on macOS; the
-        # architecture word from the same `os.uname()` rung 1 already calls
-        # is the stat-free stand-in for the module's `Apple M\d` consumer
-        # class -- every Apple-Silicon Mac (M1/M2/M3/...) reports arm64,
-        # every Intel Mac reports x86_64.
         machine = os.uname().machine
         if machine == "arm64":
             return Accel("mps", "high", "probe",
@@ -423,30 +363,21 @@ def _accelerator_uncached(env: Mapping[str, str]) -> Accel:
     if IS_LINUX:
         m = machine_rung(env)
         if m.rung == "machine" and "masked server silicon" in m.basis:
-            # A cloud VM's masked server silicon is itself the corroborator:
-            # no accelerator is the expected shape for that class of host.
             return Accel("none", "high", "probe",
                         "server-masked silicon on a cloud host -- no "
                         "accelerator expected")
         if os.path.exists("/dev/dri"):
-            # A GPU device node exists but nothing above named it NVIDIA --
-            # a passthrough device with no driver loaded, or a non-NVIDIA
-            # GPU. The irreducible band; do not round it to `none`.
             return Accel("unknown", "low", "probe",
                         "/dev/dri present with no NVIDIA driver/tool signal")
 
     return Accel("none", "medium", "probe", "no accelerator signal found")
 
 
-#: Machine-constant like rung 1, and memoized the same way.
 _ACCEL_CACHE: Dict[str, Accel] = {}
 
 
 def accelerator(env: Optional[Mapping[str, str]] = None,
                 force: bool = False) -> Accel:
-    """Does this host carry a GPU accelerator? ``nvidia`` / ``mps`` / ``none``
-    / ``unknown``, same confidence/basis shape as ``Locality``. Reports only;
-    what to do about it stays with the caller."""
     if not force and "v" in _ACCEL_CACHE:
         return _ACCEL_CACHE["v"]
     value = _accelerator_uncached(os.environ if env is None else env)

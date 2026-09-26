@@ -1,26 +1,3 @@
-"""
-coordinator_core.ops.ceremony.tests.test_commit_scoped_trailer_replay
-
-Tests AC18 (docs/plans/2026-07-27-computed-commit-mechanism-selection.md
-chunk C10-remainder): `git_native.commit_scoped()`'s diverged (private-
-index) branch lands via `git commit-tree`, which runs no git hooks -- so
-without an explicit replay, a commit landed through that branch would
-silently omit the Session-Id/Deliverable-Id trailers the
-`prepare-commit-msg` hook stamps on every ordinary `git commit` (the agree
-branch). This suite asserts trailer PARITY between the two branches inside
-one session, using real git (mocked git has no index, so the agree/diverged
-distinction this selector exists to compute cannot be exhibited).
-
-Coverage:
-  - parity: an agree-branch commit and a diverged-branch commit in the same
-    session carry equal Session-Id and Deliverable-Id trailers.
-  - red-proof: with the replay call removed, the diverged-branch commit
-    loses both trailers while the agree-branch commit keeps them -- proving
-    the parity assertion actually depends on the fix under test.
-
-Spec backlink: docs/plans/2026-07-27-computed-commit-mechanism-selection.md
-chunk C10-remainder (AC18).
-"""
 
 from __future__ import annotations
 
@@ -37,8 +14,6 @@ from .fixtures.real_git import make_agree_path, make_diverged_path, real_git_rep
 
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -47,20 +22,11 @@ pytestmark = [
 _SESSION_ID = "abcdef12-3456-7890-abcd-ef1234567890"
 _DELIVERABLE_ID = "deliverable-c10-remainder"
 
-# coordinator_core/ops/ceremony/tests/<this file> -> repo root is 4 parents up.
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _REAL_HOOK_SCRIPT = _REPO_ROOT / "coordinator" / "bin" / "coordinator-prepare-commit-msg"
 
 
 def _install_real_prepare_commit_msg_hook(repo: Path) -> None:
-    """Install the ACTUAL production hook
-    (`coordinator/bin/coordinator-prepare-commit-msg`) into this throwaway
-    repo's `.git/hooks/`, so the AGREE branch (plain `git commit`, which
-    fires hooks normally) stamps trailers the same way it does on a real
-    coordinator working tree. `real_git_repo()` inits a bare-bones throwaway
-    repo with no hooks installed at all -- without this, NEITHER branch
-    would carry trailers and the parity assertion below would pass
-    vacuously."""
     assert _REAL_HOOK_SCRIPT.is_file(), f"hook script not found: {_REAL_HOOK_SCRIPT}"
     hooks_dir = Path(
         subprocess.run(
@@ -74,11 +40,6 @@ def _install_real_prepare_commit_msg_hook(repo: Path) -> None:
     ) / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
     hook_path = hooks_dir / "prepare-commit-msg"
-    # Both paths go through `as_posix()` and are quoted: git runs hooks under
-    # its bundled `sh` on Windows too, where a native `C:\...\python.exe`
-    # spelling has its backslashes eaten as shell escapes (the hook then dies
-    # with `exec: C:Usersexample_operatorAppData...: not found`). Forward slashes with a
-    # drive letter are understood by that shell, and are unchanged on POSIX.
     hook_path.write_text(
         '#!/bin/sh\nexec "%s" "%s" "$@"\n'
         % (Path(sys.executable).as_posix(), _REAL_HOOK_SCRIPT.as_posix()),
@@ -101,9 +62,6 @@ def _write_msg(tmp_path: Path, name: str, text: str) -> Path:
 
 
 def _seed_session_shape(repo: Path, session_id: str, deliverable_id: str) -> None:
-    """Write `<git-dir>/coordinator-sessions/<session_id>/session-shape.json`
-    so `_resolve_deliverable_id` (mirrored from the hook) has a
-    `pickup.deliverable_id` to resolve -- verbatim shape the hook expects."""
     git_dir = Path(
         _git(["rev-parse", "--absolute-git-dir"], repo).stdout.strip()
     )
@@ -208,10 +166,6 @@ def test_diverged_branch_resolves_artifact_tier0_deliverable_id(tmp_path, sessio
 
 
 def test_diverged_branch_omits_trailers_without_replay(tmp_path, session_env, monkeypatch):
-    """Red-proof: with the replay call neutered, the diverged branch's
-    commit-tree loses both trailers even though the agree branch (hooks
-    fire normally) still carries them -- proving the parity test above
-    actually exercises the AC18 fix rather than passing vacuously."""
     monkeypatch.setattr(
         git_native, "compute_missing_trailer_args", lambda *args, **kwargs: []
     )

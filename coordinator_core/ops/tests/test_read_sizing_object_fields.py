@@ -28,18 +28,11 @@ from pathlib import Path
 
 import pytest
 
-# Declared, not excused: `_init_worktree` spawns a real `git init` because the
-# op handler resolves `repo_root` via `main_worktree_root`, itself a real git
-# query (`git rev-parse`-shaped) — no fixture stands in for that resolution.
-# Mirrors test_sizing_ship.py's/test_sizing_decline.py's identical rationale.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
 ]
 
-# ---------------------------------------------------------------------------
-# Import guard — MUST precede any test so @register_op fires first.
-# ---------------------------------------------------------------------------
 import coordinator_core.ops.read_sizing_object_fields  # noqa: F401 — fires @register_op
 
 import coordinator_core.ipc as ipc
@@ -75,17 +68,7 @@ premise:
 """
 
 
-# ---------------------------------------------------------------------------
-# (a) fails-the-wrong-way-first: read_frontmatter_field cannot serve
-# ---------------------------------------------------------------------------
-
-
 def test_read_frontmatter_field_cannot_reach_nested_estimate(tmp_path):
-    """Pins the defect this op exists to close: a line-based `^field:`
-    scalar reader over a fenceless sizing-object returns only the raw
-    (empty) suffix of the `estimate:` key line — never the nested
-    `{tshirt, provisional}` mapping beneath it.
-    """
     sizing_path = tmp_path / "a-sizing.yaml"
     sizing_path.write_text(_SIZING_YAML, encoding="utf-8")
 
@@ -97,11 +80,6 @@ def test_read_frontmatter_field_cannot_reach_nested_estimate(tmp_path):
         "op exists to close may have closed itself; re-check before editing "
         "this pin."
     )
-
-
-# ---------------------------------------------------------------------------
-# (b) _read_sizing_object_fields
-# ---------------------------------------------------------------------------
 
 
 def test_read_sizing_object_fields_happy_path(tmp_path):
@@ -141,11 +119,6 @@ def test_read_sizing_object_fields_missing_file_raises(tmp_path):
         _read_sizing_object_fields(str(tmp_path / "does-not-exist.yaml"))
 
 
-# ---------------------------------------------------------------------------
-# (d) op handler
-# ---------------------------------------------------------------------------
-
-
 def test_handler_missing_sizing_path_raises_value_error():
     with pytest.raises(ValueError):
         _handler({}, repo_root=Path("."))
@@ -178,18 +151,7 @@ def test_handler_happy_path(tmp_path):
     assert result["estimate"] == {"tshirt": "M", "provisional": False}
 
 
-# ---------------------------------------------------------------------------
-# (e) real dispatch path — through ipc.dispatch_message, not a direct
-# `_handler(...)` call. B1 (code review, slice B): `sizing.read_object_fields`
 # was absent from `op_scopes.py::_OP_KEY_SCOPE`, so every real JSON-RPC
-# dispatch resolved `scope = "none"` and reached the handler with
-# `repo_root=None` — 100% failure in production despite every test above
-# (which all call `_handler(...)` directly with an explicit `repo_root=`)
-# passing green. Mirrors `test_artifact_emit_scope_touch.py`'s dispatch-path
-# pattern (drive the REAL registered handler end-to-end through
-# `dispatch_message`, not a synthetic stand-in) — the only in-repo precedent
-# found for a scope-table regression test of this shape.
-# ---------------------------------------------------------------------------
 
 
 def test_dispatch_message_resolves_repo_root_and_returns_fields(tmp_path):
@@ -218,7 +180,6 @@ def test_dispatch_message_resolves_repo_root_and_returns_fields(tmp_path):
 
 
 def _init_worktree(tmp_path: Path) -> Path:
-    """Minimal git worktree so `main_worktree_root` resolves without a real repo."""
     import subprocess
 
     from coordinator_core.win_portability import no_console_creationflags

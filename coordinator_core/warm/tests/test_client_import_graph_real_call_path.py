@@ -83,10 +83,6 @@ def test_the_real_call_paths_combined_imports_register_no_ops():
 
 
 def test_invoke_dispatch_alone_registers_no_ops():
-    """Isolates the OTHER half: if this one alone fails while the combined
-    test above passes (impossible, since 0 <= combined), the reader still
-    gets a directly-actionable signal pointing at `invoke.dispatch`/`ipc`
-    specifically rather than at the pair."""
     loaded = _ops_modules_after(
         "import sys;"
         "import coordinator_core.invoke.dispatch;"

@@ -93,18 +93,12 @@ def _allow(file_path, **kw):
 
 
 def _make_plain_clone(tmp_path):
-    """A plain-clone repo root: `<tmp_path>/.git` directory."""
     (tmp_path / ".git").mkdir()
     return tmp_path
 
 
 def _grant_path(repo_root, sid="sess-123"):
     return str(repo_root / ".git" / "coordinator-sessions" / sid / _GRANT_FILENAME)
-
-
-# ---------------------------------------------------------------------------
-# AC12 -- base cases.
-# ---------------------------------------------------------------------------
 
 
 class TestBaseCases:
@@ -137,8 +131,6 @@ class TestBaseCases:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_sibling_path_in_same_session_dir_allowed(self, tmp_path):
-        """Filename-anchored, not directory-anchored: a different file in
-        the SAME `.git/coordinator-sessions/<sid>/` directory is allowed."""
         repo_root = _make_plain_clone(tmp_path)
         sibling = str(
             repo_root
@@ -150,8 +142,6 @@ class TestBaseCases:
         _allow(sibling, cwd=str(repo_root))
 
     def test_similarly_named_file_outside_coordinator_sessions_allowed(self, tmp_path):
-        """Path-anchored, not filename-alone: a same-named file OUTSIDE
-        `.git/coordinator-sessions/` is allowed."""
         repo_root = _make_plain_clone(tmp_path)
         outside = str(repo_root / "somewhere" / "else" / _GRANT_FILENAME)
         _allow(outside, cwd=str(repo_root))
@@ -161,18 +151,8 @@ class TestBaseCases:
         _allow(_grant_path(repo_root), tool_name="Read", cwd=str(repo_root))
 
 
-# ---------------------------------------------------------------------------
-# AC13 -- real scope equals stated scope. DR-104 requirement (2), named
-# precedent: check_blanket_git_add's documented-vs-enforced scope gap.
-# ---------------------------------------------------------------------------
-
-
 class TestScopeEqualsEnforcement:
     def test_denies_exactly_the_grant_record_not_other_files_in_dir(self, tmp_path):
-        """No WIDER: other files in the same session directory are NOT
-        denied -- see `test_sibling_path_in_same_session_dir_allowed` above
-        for the base-case pin; this test names the DR-104 rationale
-        explicitly."""
         repo_root = _make_plain_clone(tmp_path)
         _deny(_grant_path(repo_root, sid="sess-abc"), cwd=str(repo_root))
         _allow(
@@ -193,14 +173,6 @@ class TestScopeEqualsEnforcement:
         repo_root = _make_plain_clone(tmp_path)
         for sid in ("sess-abc", "another-session-id", "0123456789abcdef"):
             _deny(_grant_path(repo_root, sid=sid), cwd=str(repo_root))
-
-
-# ---------------------------------------------------------------------------
-# AC14 -- linked-worktree resolution case. Mirrors
-# coordinator_core/git/test_git_dir.py::
-# test_linked_worktree_absolute_gitdir_with_commondir_resolves_to_common.
-# Pure filesystem writes only -- no `git worktree add` spawn.
-# ---------------------------------------------------------------------------
 
 
 class TestLinkedWorktreeResolution:
@@ -225,14 +197,6 @@ class TestLinkedWorktreeResolution:
         _deny(grant_path, cwd=str(repo_root))
 
     def test_literal_worktree_dot_git_joined_path_is_not_the_check(self, tmp_path):
-        """Negative-spec pin: a LITERAL `<worktree>/.git`-joined path (the
-        naive lexical shape this module's docstring names as the trap) is
-        NOT itself the resolved grant-record path in a linked worktree --
-        the guard must resolve through `commondir`, not match this literal
-        string. Written for symmetry with the case above: confirms the
-        fixture actually diverges the two shapes rather than trivially
-        coinciding.
-        """
         common_dir = tmp_path / "main" / ".git"
         private_gitdir = common_dir / "worktrees" / "wt"
         private_gitdir.mkdir(parents=True)
@@ -252,21 +216,11 @@ class TestLinkedWorktreeResolution:
         )
 
 
-# ---------------------------------------------------------------------------
-# Reviewer findings (coordinatorcode-reviewer-6fca63b7.md, slice
-# grant-record-leg) -- two P1 bypasses in `_is_grant_record_path`: a `..`
-# traversal segment defeating the segment-count check, and a missing
-# case-fold on the containment comparison. Both fixed by mirroring
 # `block_memo_status_hand_edit.py`'s `_TRAVERSAL_RE` reject and
-# `casefold_path` usage.
-# ---------------------------------------------------------------------------
 
 
 class TestTraversalAndCaseFoldBypasses:
     def test_traversal_segment_denied(self, tmp_path):
-        """A `..` segment that lexically resolves onto the grant record
-        must not slip past the naive segment-count check via an inflated
-        segment count."""
         repo_root = _make_plain_clone(tmp_path)
         traversal_path = str(
             repo_root
@@ -280,9 +234,6 @@ class TestTraversalAndCaseFoldBypasses:
         _deny(traversal_path, cwd=str(repo_root))
 
     def test_differently_cased_candidate_denied(self, tmp_path):
-        """A candidate differing only in case from the resolved sessions
-        root must still be caught -- Windows and macOS/APFS are both
-        case-insensitive filesystems."""
         repo_root = _make_plain_clone(tmp_path)
         cased_path = str(
             repo_root
@@ -294,16 +245,6 @@ class TestTraversalAndCaseFoldBypasses:
         _deny(cased_path, cwd=str(repo_root))
 
 
-# ---------------------------------------------------------------------------
-# Reviewer finding (coordinatorcode-reviewer-6fca63b7.md, slice
-# grant-record-leg, P2) -- `_normalize_path`'s `while "//" in normalized`
-# collapse destroys a leading UNC root marker (`\\server\share\...` ->
-# `//server/share/...` -> `/server/share/...`). Fixed by detecting the
-# leading `//` before the collapse and re-establishing it after, so a
-# UNC-rooted candidate and a UNC-rooted `sessions_root` stay comparable.
-# ---------------------------------------------------------------------------
-
-
 class TestUNCPathHandling:
     def test_normalize_path_preserves_unc_leading_slash(self):
         assert guard._normalize_path(
@@ -311,13 +252,6 @@ class TestUNCPathHandling:
         ) == "//server/share/.git/coordinator-sessions/sid/x.json"
 
     def test_unc_shaped_common_dir_still_denies_subagent_write(self, monkeypatch):
-        """Regression pin: a UNC-rooted git common dir and a UNC-rooted
-        candidate path must stay comparable through `_normalize_path`'s
-        slash-collapse -- a network-hosted repo (this codebase's own trees
-        can live on a mapped drive, CLAUDE.md Sec Runtime conventions) must
-        not lose guard coverage because the collapse destroys the UNC root
-        marker on only one side.
-        """
         unc_common_dir = r"\\fileserver\repos\claude-klabauter\.git"
         monkeypatch.setattr(
             guard, "_resolve_git_common_dir", lambda cwd: unc_common_dir
@@ -328,30 +262,8 @@ class TestUNCPathHandling:
         _deny(grant_path, cwd="irrelevant")
 
 
-# ---------------------------------------------------------------------------
-# Registration-reachability -- through the auto-discovery dispatcher, not
-# the module's own check() directly. Pairs with C10's manual
-# _discover_guards() confirmation as a second, independent check.
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Reviewer finding (coordinatorcode-reviewer-93226ffa.md, P1) -- the
-# traversal check must not treat "contains '..'" as an automatic match: an
-# unrelated ..-bearing candidate that never resolves onto the grant record
-# must ALLOW, and one that DOES resolve onto the grant record must still
-# DENY. Both directions pinned here, distinct from
-# `test_traversal_segment_denied` above (which only pins the true-positive
-# side).
-# ---------------------------------------------------------------------------
-
-
 class TestTraversalResolutionScopeEqualsEnforcement:
     def test_unrelated_traversal_path_allowed(self, tmp_path):
-        """A `..`-bearing candidate that has nothing to do with the grant
-        record must ALLOW -- pins the fix for the over-deny regression
-        (any `..`-bearing write anywhere in the repo was unconditionally
-        denied)."""
         repo_root = _make_plain_clone(tmp_path)
         unrelated = str(repo_root / "some" / "dir" / ".." / "other" / "file.py")
         _allow(unrelated, cwd=str(repo_root))

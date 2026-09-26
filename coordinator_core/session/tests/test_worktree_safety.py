@@ -22,15 +22,7 @@ import pytest
 from coordinator_core.session import core, liveness, worktree_safety
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Every test in this file builds its repo via `_make_repo(tmp_path)`, spawning
-# real git (init/config/add/commit) because the production code under test --
-# `core.git_root()` and liveness's session-hub resolution, both consulted by
-# `history_rewrite_verdict` -- reads real git state that no mock stands in
-# for. `tmp_path` is function-scoped and tests write session state under
-# reused session ids, so the repo fixture stays per-test rather than hoisted
 # to module scope. The spawn ratchet's `_BASELINE` is shrink-only
-# pre-existing residue and is explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -122,7 +114,6 @@ class TestHistoryRewriteVerdictUnknownFailClosed:
     def test_unknown_when_self_unresolvable_and_live_set_nonempty(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
         _write_session(repo, "peer-sid", _live_meta())
-        # No env var and no sentinel file in this fresh repo -> self is unresolvable.
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
@@ -137,7 +128,6 @@ class TestHistoryRewriteVerdictUnknownFailClosed:
         repo = _make_repo(tmp_path)
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "env-sid")
         _write_session(repo, "env-sid", _live_meta())
-        # override says we ARE "env-sid" too — should still resolve to ok (self-only).
         v = worktree_safety.history_rewrite_verdict(cwd=str(repo), self_session_id="env-sid")
         assert v.outcome == "ok"
 
@@ -151,11 +141,6 @@ class TestHistoryRewriteVerdictUnknownFailClosed:
         assert v.peer_session_ids == ("peer-sid",)
 
     def test_sentinel_file_ignored_KS3(self, tmp_path, monkeypatch):
-        """KS-3 (2026-08-07): the `.current-session-id` sentinel tier was
-        removed from resolve_self_session_id. A well-formed sentinel file
-        must NOT be consulted — with no env var, self-identity is
-        unresolvable, which (live set non-empty) degrades to "unknown"
-        (fail closed), never "ok" and never a refuse->allow flip."""
         repo = _make_repo(tmp_path)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)

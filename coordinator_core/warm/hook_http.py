@@ -49,25 +49,12 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 from coordinator_core.warm.caller_context import resolve_caller_context
 from coordinator_core.warm.env_forwarding import CALLER_PREFIXES, is_caller_prefixed
 
-#: `hook_event_name` values whose verdict can BLOCK the operation. A missing guard on one of
-#: these is a safety regression; a missing guard on any other event is a lost advisory. The
-#: distinction drives `unreachable_response` and nothing else -- this module never decides
-#: whether a blocking event may ride this transport, which is a cross-repo shape question.
 #: Currently identical to `SERVED_EVENTS` below, coincidentally, not by construction -- the
-#: two encode different facts (what's dispatch-critical vs. what this listener can serve)
 #: and are expected to diverge as `SERVED_EVENTS` widens. Edit only the one you mean to.
 BLOCKING_EVENTS = frozenset({"PreToolUse"})
 
 #: The `hook_event_name` values this LISTENER can actually serve. A fact about our dispatch,
-#: never about the transport: DoE's 2026-08-19 spike (`docs/research/spike-verdicts/
-#: 2026-08-19-http-hook-transport.md`, verdict `viable`) established that the harness POSTs the
-#: full event object -- `hook_event_name` included -- so every event below arrives complete and
-#: is turned away here, not at the wire.
-#:
 #: WHY A SET RATHER THAN A DISPATCH TABLE. The event -> op mapping is 1:many and its source of
-#: truth is DoE's `hooks.json`, where PostToolUse alone names seven ops. A table here would be a
-#: second copy of somebody else's config, drifting silently. Widening this listener means
-#: consuming that mapping, not transcribing it.
 #: Currently identical to `BLOCKING_EVENTS` above, coincidentally -- see its docstring.
 SERVED_EVENTS = frozenset({"PreToolUse"})
 
@@ -88,14 +75,6 @@ def route_for_event(event_name: Optional[str]) -> Optional[str]:
 
 
 def unserved_response(event_name: Optional[str]) -> Dict[str, Any]:
-    """What to answer for an event this listener has no dispatch for.
-
-    Shaped like `unreachable_response` and for the same reason -- the operator sees
-    `systemMessage`, the model sees `additionalContext`, and neither reads as a guard that ran
-    and passed. Distinct from it in cause: the engine is fine and reachable; this listener
-    simply has no route for the event, which is a build gap rather than an outage, and the two
-    must not be diagnosed as one another.
-    """
     label = event_name or "an unnamed event"
     return _with_context(
         {
@@ -107,73 +86,22 @@ def unserved_response(event_name: Optional[str]) -> Dict[str, Any]:
         "for it. It did not pass -- it did not run." % label,
     )
 
-#: The listener's hook endpoint, and the op a bare `/hook` POST routes to. Defined HERE
-#: rather than in `supervisor` because `op_for_path` is the routing decision and the
-#: transport merely applies it; `supervisor` re-exports both under its own names, which
-#: are the ones `write_discovery` publishes and every existing caller already reads.
 HOOK_PATH = "/hook"
 DEFAULT_OP_NAME = "warm_guard.evaluate"
 
-#: The op-name namespaces a hook registration may route to. NOT "any registered op": the hook
-#: endpoint is reachable by anything that can open a loopback socket and present the engine
-#: token, and a registration is a string in a config file a plugin update can rewrite. Holding
-#: it to the hook namespaces means a rewritten registration can at worst reach a different
-#: HOOK op, never `ceremony.*` or a mutating fleet op. Widen this only with a named reason.
 ROUTABLE_OP_PREFIXES = ("hooks.", "session.", "warm_guard.")
 
 #: WIDENED 2026-08-26 (C4), AND THE ORDER MATTERED. The comment above says
-#: "reachable by anything that can open a loopback socket" -- that was true
-#: when it was written and is not any more: `supervisor.parse_request` now
-#: requires the boot cookie on every non-health request (`_cookie_is_valid`,
-#: landed `34a0a556e`), so reaching this fence at all means holding a secret
-#: only this user can read. The fence was the ONLY thing bounding blast
-#: radius while the listener was unauthenticated, which is why it could not
-#: move first and did not.
-#:
-#: What the prefixes could never express: an op CLI wants its READ ops served
-#: warm, and read ops do not share a namespace -- they are spread across
-#: every prefix. So the widening is by CLASS, not by more strings.
 #: `authz.classification.classify` is the authority, its MUTATING default is
-#: fail-closed, and an unclassified op raises `KeyError` which its own
-#: docstring requires HTTP dispatch to treat as DENY. Both are honoured
-#: below.
-#:
 #: STILL NEVER REACHABLE, AND THE SECOND ONE COST A TEST TO FIND: anything
 #: MUTATING, and anything under `ceremony.*` regardless of its class. The
 #: comment above bounds the blast radius of a REWRITTEN REGISTRATION -- a
-#: confused-deputy threat, not a network one -- by naming `ceremony.*`
-#: explicitly. Class alone does not honour that: four ceremony ops classify
 #: COMPUTE_ONLY and a class-only widening quietly admitted them. The
-#: credential answers "who is calling"; it does not answer "was this hook
-#: client aimed somewhere it should not be", so the namespace bound survives
-#: the credential landing and is kept as an explicit denial below.
-#:
-#: Widening past "authenticated reads, outside ceremony" needs its own named
-#: reason and its own review.
 DENIED_OP_PREFIXES = ("ceremony.",)
 
-#: Keys an op result may set that Claude Code splices into the session rather than reading as
-#: a verdict. `systemMessage` reaches the operator; `suppressOutput` is a display hint. Both
-#: are read at the TOP LEVEL of the response body.
-#:
-#: `additionalContext` is NOT in this tuple, and that asymmetry is measured, not stylistic --
-#: see `_with_context`.
 PASSTHROUGH_RESULT_KEYS = ("systemMessage", "suppressOutput")
 
-#: Events whose response the harness REJECTS if it carries `hookSpecificOutput` at all.
-#:
-#: `hookEventName` is validated against a closed enum, and not every event the harness will
-#: DIAL is a member of it. `SessionEnd` is dialled, routes, and runs the op -- and then the
-#: whole response fails validation on the echoed name, taking the op's `additionalContext`
-#: with it. Measured by doe-claude-cd on harness 2.1.258, two-arm paired control against one
-#: listener differing in exactly one field: echoing the name fails, omitting
-#: `hookSpecificOutput` validates clean (DoE-claude
-#: `docs/research/spike-verdicts/2026-09-02-harness-dials-posttooluse-and-sessionend-over-http.md`).
-#:
 #: NEGATIVE SPEC -- THIS IS A LIST OF MEASURED REJECTIONS, NOT A MODEL OF THE ENUM. Do not
-#: "complete" it from the harness's published enum: an event absent from that enum today is
-#: not evidence the harness rejects it, and an event present is not evidence it is dialled.
-#: Both halves are measurements, taken per event, and only `SessionEnd` has been taken.
 EVENTS_REJECTING_HOOK_SPECIFIC_OUTPUT = frozenset({"SessionEnd"})
 
 
@@ -220,30 +148,12 @@ def _with_context(body: Dict[str, Any], context: Optional[str]) -> Dict[str, Any
     body["hookSpecificOutput"] = hso
     return body
 
-#: The env keys guard evaluation actually consults. Forwarding the caller's WHOLE environ
-#: would put arbitrary session secrets on the wire for every hook fire; forwarding nothing
-#: deletes the override boundary. Forwarding the prefixes the guards read is the narrow
-#: middle, and it is a prefix match rather than a fixed list because guards add override
-#: keys without telling this module.
 #: One tuple with the compiled door's prefix rule (`env_forwarding.CALLER_PREFIXES`), so
-#: an override the http leg carries can never be one the door leg drops.
 FORWARDED_ENV_PREFIXES = CALLER_PREFIXES
 
-#: Exact names the HEADER channel carries in addition to the prefixes above -- the env diet
-#: of the ops that actually run over this transport, enumerated rather than pattern-matched.
-#:
 #: WHY A SECOND LIST RATHER THAN A WIDER PREFIX. The prefixes model a NAMESPACE the guards
-#: own and extend without telling this module, so a prefix is the only workable allowlist for
-#: them. These five are the opposite shape: they are OS/harness names this module does not
-#: own, they will never grow by convention, and a prefix that admitted `HOME` would admit
-#: every `HOME*` a session ever exports. Enumerating them is the narrower door, not the wider
-#: one. Add a name here only when an op is measured reading it from `payload["env"]`.
-#:
-#: `hooks.plan_persistence_check` reads the first four; `hooks.nudge_autonomous_askuserquestion`
 #: and `hooks.watchdog_undischarged_next_move` also read `CLAUDE_HOME`, and the former also
 #: reads `COORDINATOR_AUTONOMOUS_ASK_OK`. Both ops' module docstrings named this list's absence
-#: as the reason their env reads could not survive a `command`->`http` flip -- this closes
-#: that, and those docstrings' "does not yet carry this" notes are stale as of this commit.
 FORWARDED_ENV_NAMES = frozenset(
     {
         "CLAUDE_HOME",
@@ -263,13 +173,7 @@ OVERRIDE_CHANNEL_HEADER = "X-Coordinator-Env-Channel"
 OVERRIDE_CANARY_HEADER = "X-Coordinator-Env-Canary"
 #: DoE-claude 041cdc2e8 retired the launcher-only `COORDINATOR_PROBE_CANARY` var for
 #: `${HOME}${USERPROFILE}` -- one of the two is present in every session on every OS with
-#: no launcher/installer export required, whereas a canary only a launcher sets interpolated
-#: empty under a bare `claude` (a container, an OSS install, Claude Code on the web) and read
-#: as a permanent veto, denying every Bash call (coordinator-claude#42 B1). Detection here is
-#: unaffected by the rename: `env_from_headers` only tests the interpolated HEADER STRING for
-#: emptiness, never which env var produced it, so this constant is messaging-only and stays
 #: correct against a registration still sending the old `${COORDINATOR_PROBE_CANARY}` header
-#: during the rollout window before every registration is republished.
 OVERRIDE_CANARY_ENV = "HOME/USERPROFILE"
 OVERRIDE_HEADER_PREFIX = "X-Coordinator-Env-"
 
@@ -384,8 +288,6 @@ def env_from_headers(
             "(see FORWARDED_ENV_PREFIXES / FORWARDED_ENV_NAMES) -- the registration asked "
             "for a value the op would never have seen" % ", ".join(refused)
         )
-    # `refused` empty already proves every key in
-    # `candidates` is forwardable; re-filtering the return line re-derives that proof.
     return dict(candidates), None
 
 
@@ -489,8 +391,6 @@ def op_for_path(path: str) -> Optional[str]:
     if not op or "/" in op:
         return None
     if any(op.startswith(p) for p in DENIED_OP_PREFIXES):
-        # Checked BEFORE the allow tests, never after: a denial that a later
-        # allow can overturn is not a denial.
         return None
     if not any(op.startswith(p) for p in ROUTABLE_OP_PREFIXES):
         if not _is_compute_only(op):
@@ -518,8 +418,6 @@ def _is_compute_only(op: str) -> bool:
 
         return classify(op) is OpClass.COMPUTE_ONLY
     except Exception:  # noqa: BLE001 -- see docstring; KeyError included
-        # ONE CATCH, NOT TWO. `KeyError` is an `Exception`, so splitting them
-        # read as two behaviours where there is one: everything that is not a
         # confirmed COMPUTE_ONLY answer denies.
         return False
 
@@ -573,39 +471,18 @@ def allow_response(event_name: str, result: Optional[Mapping[str, Any]] = None) 
         if result.get(key) is not None:
             body[key] = result[key]
     extra = result.get("hookSpecificOutput")
-    # An op that nested its own output on an event the harness refuses a wrapper for
-    # (`SessionEnd`) has nowhere for it to go -- reinstating the wrapper fails the whole
-    # response, and no placement of `additionalContext` delivers on a terminal event either
-    # (`_envelope`, `_with_context`). Dropped, not reinstated, not lifted.
     if isinstance(extra, Mapping) and "hookSpecificOutput" in body:
         merged = dict(extra)
         merged["hookEventName"] = event_name
         merged.pop("permissionDecision", None)
         merged.pop("permissionDecisionReason", None)
         body["hookSpecificOutput"] = merged
-    # An op that nests its own context has already put it where the harness reads it; one
-    # that returns the plain documented key has not, and that is the shape the module
-    # docstring tells op authors to use. Promote it rather than making every op know. An op
-    # that set BOTH keeps its nested value: it is the more specific declaration of the two.
     if body.get("hookSpecificOutput", {}).get("additionalContext") is not None:
         return body
     return _with_context(body, result.get("additionalContext"))
 
 
 def unreachable_response(event_name: str, detail: str) -> Dict[str, Any]:
-    """What to answer when the guard could not be evaluated at all.
-
-    NOT a deny: this module cannot distinguish "the engine is down" from "the operation is
-    dangerous", and denying on infrastructure failure would take Write/Edit/Bash away from
-    every session the moment the server hiccups -- the unrepairable class that disqualified
-    the door from the registration slot.
-
-    NOT a silent allow either. `systemMessage` surfaces to the operator and
-    `additionalContext` reaches the model, so an unrun guard is visible in the transcript
-    instead of being indistinguishable from a guard that ran and passed. That is this
-    plan's anti-scope stated as code: *a guard that cannot run must never read as a guard
-    that passed.*
-    """
     return _with_context(
         {
             **_envelope(event_name),
@@ -618,7 +495,6 @@ def unreachable_response(event_name: str, detail: str) -> Dict[str, Any]:
 
 
 def is_blocking_event(event_name: Optional[str]) -> bool:
-    """Whether an unrun guard on this event is a safety regression or a lost advisory."""
     return event_name in BLOCKING_EVENTS
 
 
@@ -686,14 +562,7 @@ def _decision_to_response(event_name: str, result: Mapping[str, Any]) -> Dict[st
             or "denied by coordinator guard"
         )
         # A DENY THIS TRANSPORT CANNOT EXPRESS IS REPORTED AS UNRUN, NEVER EMITTED ANYWAY.
-        # `deny_response` bypasses `_envelope` because a deny IS the nested keys; on an
-        # event the harness refuses a wrapper for, emitting them fails validation and the
-        # harness fails open -- so the one path whose whole job is to BLOCK would become a
         # silent no-op exactly when it fires. Unreachable today (`BLOCKING_EVENTS` is
-        # `PreToolUse` alone, and no op on a wrapper-refusing event emits a deny), which is
-        # precisely why it was prose-only until a reviewer asked what enforces it. An
-        # `assert` would not do: `-O` strips it, and the answer to "cannot express this
-        # verdict" is a loud unrun-guard response, not a crash mid-dispatch.
         if event_name in EVENTS_REJECTING_HOOK_SPECIFIC_OUTPUT:
             return unreachable_response(
                 event_name,
@@ -826,30 +695,7 @@ def evaluate_cold(event: Mapping[str, Any]) -> Dict[str, Any]:
         from coordinator_core.session.core import session_identity_override
 
         # THE CALLER'S IDENTITY IS BOUND HERE OR IT IS LOST HERE. This rung is
-        # the only one that evaluates the chain with no per-request scope around
-        # it: the warm rung reaches the chain through `warm/server.py ::
-        # _run_dispatch`, which opens `entry_seam.per_request_state(session_id=
-        # caller.session_id)` from the `_caller` object `build_request` stamps.
-        # This function has no such wrapper, so without this bind every guard
-        # that asks `session.core.resolve_session_id()` gets the environ of
-        # whichever process happens to host this call -- DoE's resident
-        # forwarder, whose environ names the session that spawned it and no
-        # other. That is not a degraded answer, it is a confidently wrong one:
         # `session/grant.py :: check_tier_u_grant` then reads a DIFFERENT
-        # session's grant file, so a live grant reads as absent for its own
-        # holder and, should the spawning session ever hold one in the caller's
-        # repo, as present for everybody else. Reported cross-repo by
-        # example-retrieval-repo-em, 2026-09-02; diagnosis in state/bug-backlog/
-        # 2026-09-02-warm-server-environ-decides-every-callers-session-identity.yaml.
-        #
-        # Measured, and the reason this rung is not the rare case it reads as:
-        # the box's forwarder had served 7988 of 7988 PreToolUse events here,
-        # `forwarded_by_event: {}`, because the HTTP listener's discovery record
-        # was absent. A fallback carrying 100% of traffic is the primary path.
-        #
-        # `session_identity_override` validates the value itself (UUID shape) and
-        # no-ops on None, so a payload with no session id degrades to exactly
-        # today's behaviour rather than fabricating an identity.
         sid = payload.get("session_id")
         with session_identity_override(sid if isinstance(sid, str) else None):
             out = evaluate_payload_json(
@@ -869,13 +715,5 @@ def evaluate_cold(event: Mapping[str, Any]) -> Dict[str, Any]:
 
             record_degrade(kind=KIND_COLD_FAILED, cause=detail)
         except Exception:  # noqa: BLE001 -- the instrument may not be the failure
-            # Deliberately swallowed and deliberately NOT re-raised or upgraded to a
-            # deny. `record_degrade` is best-effort past its own `kind` validation, but
-            # the import above and the telemetry module itself are not covered by that
-            # contract, and this rung is reached precisely when the engine is in a state
-            # where imports fail. Losing the row costs accountability for one degrade;
-            # letting it propagate costs the box its shell. The row is why rung 3 is not
-            # silent, so this is the one place that trade runs the other way -- and the
-            # response below is still loud in the transcript regardless.
             pass
         return unreachable_response(event_name, detail)

@@ -37,11 +37,7 @@ _MACHINE_LOCAL_IMPL_ENV = "MACHINE_LOCAL_IMPL"
 _CLAUDE_HOME_ENV = "CLAUDE_HOME"
 _REGISTRY_KEY = "repos.claude_klabauter"
 
-# ONE consistent subprocess timeout for the shared _machine_local_get, closing
-# the gap named in the improvement-queue row: deliverable_rollup.py pinned a
-# 5s timeout on this identical call shape, queue_append.py/queue_promote.py
-# omitted timeout= entirely.
-_MACHINE_LOCAL_TIMEOUT = 5  # seconds
+_MACHINE_LOCAL_TIMEOUT = 5
 
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -117,15 +113,6 @@ def _machine_local_get(key: str) -> Optional[str]:
     value = result.stdout.strip()
     _machine_local_cache[cache_key] = value
     return value
-
-
-# ---------------------------------------------------------------------------
-# Resolution-rung helpers for the family of _claude_klabauter_root() copies
-# (queue_append.py, deliverable_rollup.py and the other non-test copies).
-# Each is a standalone function: there is no single _claude_klabauter_root() here,
-# because each caller keeps its own raise-versus-degrade policy on an
-# unresolvable or mirror-resolved root.
-# ---------------------------------------------------------------------------
 
 
 def env_override_rung(caller_module_name: str) -> Optional[str]:

@@ -1,25 +1,3 @@
-"""test_session_claim_cli.py — unit test for coordinator/bin/session-claim-cli
-(AC6). Asserts the CLI's exit-code contract in isolation from any live claude-klabauter
-checkout: the imported `claims` module functions are stubbed via a monkeypatch
-of the CLI's own `_import_module` seam, so this suite never requires
-the engine root to resolve or `coordinator_core` to be importable.
-
-Matrix asserted (per docs/plans/2026-07-21-claim-lock-trampoline-flip.md AC2):
-    bool True  -> exit 0
-    bool False -> exit 1
-    transport failure (unresolvable engine root / ImportError) -> exit 3
-    usage error (missing/unknown subcommand, wrong arity) -> exit 2
-
-Loaded by file path (`importlib.util.spec_from_file_location`) since
-`session-claim-cli.py` doesn't sit on `sys.path` as an importable module —
-same load idiom as sibling bin/ unit tests (e.g.
-test_check_install_divergence.py's `_load_divergence_module`).
-
-Converted from a hand-rolled unittest runner to top-level pytest functions
-with a pytest fixture carrying the per-seam monkeypatch/restore.
-
-Spec backlink: docs/plans/2026-07-21-claim-lock-trampoline-flip.md § C1 / AC6.
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -34,10 +12,6 @@ _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
 def _load_cli_module():
-    # session-claim-cli.py doesn't sit on sys.path as an importable module,
-    # so spec_from_file_location can't infer a loader from the filename —
-    # an explicit SourceFileLoader is required (same idiom as
-    # coordinator/bin/tests/test_lesson_add.py).
     loader = importlib.machinery.SourceFileLoader(
         "session_claim_cli", str(_BIN_DIR / "session-claim-cli.py")
     )
@@ -51,8 +25,6 @@ _cli = _load_cli_module()
 
 
 class _StubClaims:
-    """Stand-in for coordinator_core.session.claims — each attribute is a
-    callable the test configures per-case; no live claude-klabauter import required."""
 
     def __init__(self, *, claim_artifact=None, release_artifact=None,
                  clear_claim_if_dead=None, claim_plan=None,
@@ -66,25 +38,18 @@ class _StubClaims:
 
 
 class _StubLiveness:
-    """Stand-in for coordinator_core.session.liveness — mirrors _StubClaims'
-    per-test-configurable-callable shape, on its OWN seam
-    (_cli._import_liveness_module) so these tests never touch the claims stub."""
 
     def __init__(self, *, session_live=None):
         self.session_live = session_live or (lambda *a, **k: True)
 
 
 class _StubStaleClaims:
-    """Stand-in for coordinator_core.session.stale_claims, on its OWN seam
-    (_cli._import_stale_claims_module)."""
 
     def __init__(self, *, list_stale_claim_handoffs=None):
         self.list_stale_claim_handoffs = list_stale_claim_handoffs or (lambda *a, **k: [])
 
 
 class _StubClaimIndex:
-    """Stand-in for coordinator_core.session.claim_index, on its OWN seam
-    (_cli._import_claim_index_module) -- who-claims-path coverage."""
 
     UNANSWERABLE = "__UNANSWERABLE__"
     ABORT_CAUSE_EMPTY_BASE = "empty_base"
@@ -96,11 +61,6 @@ class _StubClaimIndex:
 
 
 class _LookupResultStub(dict):
-    """A minimal stand-in for claim_index._LookupResult carrying the C1
-    ``abort_cause`` attribute alongside plain-dict membership (C2/C3,
-    docs/plans/2026-08-11-claim-index-abort-cause-and-cli-blindness.md) --
-    the real return type is a dict subclass too, so ``.get(path, [])`` in
-    the CLI works identically against this stub."""
 
     def __init__(
         self, mapping, abort_cause, *, recorded_name=None, edit_ts=None,
@@ -110,33 +70,22 @@ class _LookupResultStub(dict):
         self.abort_cause = abort_cause
         self.recorded_name = recorded_name or {}
         self.edit_ts = edit_ts or {}
-        #: path -> {sid: kind}, mirroring the real ``_LookupResult`` field.
-        #: Defaults to empty, which is what a pre-axis corpus looks like -- so
-        #: every case above this one keeps asserting the unknown-kind column
-        #: without being told about the axis.
         self.recorded_kind = recorded_kind or {}
 
 
 class _StubRegistryRecord:
-    """Minimal stand-in for harness_registry.RegistryRecord -- who-claims-
-    path's rung-2 resolution only ever reads ``.name`` off this."""
 
     def __init__(self, name):
         self.name = name
 
 
 class _StubHarnessRegistry:
-    """Stand-in for coordinator_core.session.harness_registry, on its OWN
-    seam (_cli._import_harness_registry_module) -- who-claims-path's C2
-    name-resolution-ladder rung 2 coverage."""
 
     def __init__(self, *, lookup=None):
         self.lookup = lookup or (lambda sid: None)
 
 
 class _StubHolderEvidence:
-    """Stand-in for coordinator_core.session.holder_evidence, on its
-    OWN seam (_cli._import_holder_evidence_module) — AC7/AC8 coverage."""
 
     def __init__(self, *, liveness_basis=None):
         self.liveness_basis = liveness_basis or (lambda *a, **k: "stable-pid")
@@ -144,8 +93,6 @@ class _StubHolderEvidence:
 
 @pytest.fixture()
 def stub_import_module():
-    """Stub `_cli._import_module` (the claims seam) for the test body, then
-    restore the original."""
     orig = _cli._import_module
 
     def _apply(stub_claims):
@@ -210,10 +157,6 @@ def stub_import_holder_evidence_module():
     _cli._import_holder_evidence_module = orig
 
 
-# ---------------------------------------------------------------------------
-# bool -> exit mapping (AC2): True -> 0, False -> 1, per subcommand.
-# ---------------------------------------------------------------------------
-
 def test_claim_artifact_true_exits_0(stub_import_module):
     stub_import_module(_StubClaims(claim_artifact=lambda *a, **k: True))
     rc = _cli.main(["claim-artifact", "handoff", "some-basename"])
@@ -250,19 +193,7 @@ def test_clear_claim_if_dead_false_exits_1(stub_import_module):
     assert rc == 1
 
 
-# ---------------------------------------------------------------------------
-# AC5/AC6: clear-claim-if-dead distinguishes target-not-found from
-# refusal-holder-live, in both output and exit code -- pinned in the shape
-# the field report used (bogus basename, correct basename + live holder,
-# correct basename + dead holder). Fixture-based: `claim_dir_for` is stubbed
-# to join against a tmp_path, never a real machine session store.
-# ---------------------------------------------------------------------------
-
 def _claim_dir_for_under(base):
-    """`claims.claim_dir_for` stub mirroring its own ``<base>/<class>-claims/
-    <basename>`` join, rooted at `base` instead of a real sessions dir --
-    lets these tests assert the CLI's not-found precheck without exercising
-    live git/session resolution."""
 
     def _claim_dir_for(class_, basename, baton_repo_root="", cwd=None):
         return Path(base) / f"{class_}-claims" / basename
@@ -274,8 +205,6 @@ def test_clear_claim_if_dead_bogus_basename_emits_not_found_note_exit_0(
     stub_import_module, tmp_path, capsys
 ):
     # Real claim dir exists under a DIFFERENT basename; the bogus one is not
-    # on disk at all -- mirrors the field report's "claim still present"
-    # (a real claim exists) while the queried basename does not.
     (tmp_path / "plan-claims" / "the-real-plan").mkdir(parents=True)
     stub_import_module(_StubClaims(
         clear_claim_if_dead=lambda *a, **k: True,
@@ -284,11 +213,6 @@ def test_clear_claim_if_dead_bogus_basename_emits_not_found_note_exit_0(
 
     rc = _cli.main(["clear-claim-if-dead", "plan", "bogus-basename"])
 
-    # The not-found note is
-    # distinguished from a refusal by exit code (0 here vs 1 there) and by
-    # the refusal's own distinct message, not by asserting "NOT a refusal"
-    # in prose (a B1 self-legitimacy violation the message no longer
-    # contains).
     assert rc == 0
     err = capsys.readouterr().err
     assert "no claim at" in err
@@ -312,15 +236,6 @@ def test_clear_claim_if_dead_bogus_basename_with_md_suffix_hints_extension_trap(
     assert "no claim at" in err
     assert "'.md' extension" in err
 
-
-# ---------------------------------------------------------------------------
-# release-artifact reaches the SAME silence by a different door:
-# `claims.release_artifact`'s not-the-holder and claim-already-absent legs are
-# documented NO-OP SUCCESS, so a wrong claim key is exit 0 with nothing
-# written and nothing said. The field report that motivated these tests was
-# exactly that -- `release-artifact handoff <slug>` run twice, with and
-# without `.md`, both exiting silently. Same note, same extension hint.
-# ---------------------------------------------------------------------------
 
 def test_release_artifact_bogus_basename_emits_not_found_note_exit_0(
     stub_import_module, tmp_path, capsys
@@ -360,9 +275,6 @@ def test_release_artifact_bogus_basename_with_md_suffix_hints_extension_trap(
 def test_release_artifact_existing_claim_dir_emits_no_not_found_note(
     stub_import_module, tmp_path, capsys
 ):
-    """Negative spec: the note fires on a MISSING claim dir only. A real
-    release against a present claim must stay quiet -- otherwise the note
-    becomes noise on the success path and stops carrying signal."""
     (tmp_path / "handoff-claims" / "real-handoff").mkdir(parents=True)
     stub_import_module(_StubClaims(
         release_artifact=lambda *a, **k: True,
@@ -419,18 +331,10 @@ def test_clear_claim_if_dead_correct_basename_dead_holder_clears_no_not_found_no
     assert "refusing to clear claim" not in err
 
 
-#: The note's actual marker. Three tests used to look for "no claim found",
-#: a string this CLI has never printed, so they passed against a CLI that was
-#: emitting the note they existed to forbid. Named once here rather than
-#: re-spelled per test.
 _NOT_FOUND_MARKER = "no claim at"
 
 
 def _claim_dir_for_sentinel():
-    """`_claim_lookup_dir` swallows every exception by design, so raising
-    from a stubbed `claim_dir_for` proves nothing -- the raise is caught and
-    the test reads as a pass. Record the call instead and assert on the
-    record."""
     calls = []
 
     def _claim_dir_for(class_, basename, baton_repo_root="", cwd=None):
@@ -533,10 +437,6 @@ def test_baton_repo_root_optional_arg_forwarded(stub_import_module):
     assert seen["args"] == ("memo", "foo", "/some/baton/root")
 
 
-# ---------------------------------------------------------------------------
-# Transport failure (unresolvable engine root / ImportError) -> exit 3.
-# ---------------------------------------------------------------------------
-
 def test_runtime_error_from_claude_klabauter_root_resolution_exits_3(stub_import_module):
     def _raise_runtime_error():
         raise RuntimeError("engine root unresolvable in test")
@@ -566,14 +466,7 @@ def test_transport_failure_precedes_subcommand_dispatch_for_claim_plan(stub_impo
     assert rc == 3
 
 
-# ---------------------------------------------------------------------------
-# Usage error (missing/unknown subcommand, wrong arity) -> exit 2.
-# ---------------------------------------------------------------------------
-
 def test_no_argv_exits_2(stub_import_module):
-    # Usage-error paths for a KNOWN subcommand still call _import_module()
-    # first (see the CLI's main() ordering) — stub it to a harmless success
-    # stub so these cases exercise arity/usage validation, not transport.
     stub_import_module(_StubClaims())
     rc = _cli.main([])
     assert rc == 2
@@ -615,18 +508,7 @@ def test_claim_plan_no_args_exits_2(stub_import_module):
     assert rc == 2
 
 
-# ---------------------------------------------------------------------------
 # claim-artifact / release-artifact / clear-claim-if-dead catch the REQUIRED-
-# arg ValueError claims.py raises on an empty class/basename (a
-# syntactically-complete argv — arity passed — but an empty string slipped
-# through, e.g. the d5 baton-assembler directive's ``Path(artifact_path).
-# stem`` on an empty artifact_path) and report it exit 1 with a clean
-# stderr line, the same class of clean failure claim-plan's own boundary
-# check already produces on bad input — never a raw Python traceback out of
-# main(). Without _call_claim_bool's try/except this ValueError would
-# propagate uncaught and pytest would report an ERROR (not a clean
-# assertion failure) — that IS the red-proof for this guard.
-# ---------------------------------------------------------------------------
 
 def test_release_artifact_empty_basename_value_error_exits_1_not_traceback(
     stub_import_module, capsys
@@ -674,10 +556,8 @@ def test_release_artifact_empty_class_value_error_exits_1(stub_import_module, ca
     assert "artifact class required" in err
 
 
-# ---------------------------------------------------------------------------
 # is-session-live exit-code contract: live sid -> 0; dead sid -> _NOT_LIVE
 # (1); malformed/absent sid -> _MALFORMED_SID (4), NEVER the not-live code.
-# ---------------------------------------------------------------------------
 
 def test_live_sid_exits_0(stub_import_liveness_module):
     stub_import_liveness_module(_StubLiveness(session_live=lambda *a, **k: True))
@@ -716,16 +596,12 @@ def test_path_traversal_sid_exits_malformed_code(stub_import_liveness_module):
 
 
 def test_colon_drive_letter_sid_exits_malformed_code(stub_import_liveness_module):
-    # A blocklist of `/`, `\`, `..`, NUL
-    # did not reject a bare drive-letter/colon component, and on Windows
     # `ntpath.join(base, "C:evil")` DISCARDS `base` entirely, a full
-    # containment escape out of the sessions corpus. liveness must never be
-    # consulted for such a sid.
     def _fail_if_called(*a, **k):
         raise AssertionError("liveness must not be consulted for a malformed sid")
 
     stub_import_liveness_module(_StubLiveness(session_live=_fail_if_called))
-    for bad_sid in ("C:evil", "C:\\evil", "C:/Windows/Temp/x"):  # abs-path-ok: attack-shaped sid literals, not a machine path citation
+    for bad_sid in ("C:evil", "C:\\evil", "C:/Windows/Temp/x"):
         rc = _cli.main(["is-session-live", bad_sid])
         assert rc == _cli._MALFORMED_SID
         assert rc != _cli._NOT_LIVE
@@ -740,17 +616,8 @@ def test_missing_sid_arg_exits_usage_error(stub_import_liveness_module):
 def test_unexpected_exception_from_ungarded_callsite_exits_transport_fail_not_1(
     monkeypatch,
 ):
-    # guard-per-callsite structural
-    # fragility. claim-artifact/release-artifact/clear-claim-if-dead route
-    # through `_call_claim_bool`, which only catches `ValueError` (the
-    # required-arg guard) — NOT a general engine failure. Before the
-    # top-level `main` safety net, an unexpected exception here (e.g. an
-    # `OSError` from the underlying claims.py call) propagated uncaught out
-    # of `main`, and an uncaught Python exception exits the interpreter with
     # code 1 — indistinguishable from `_NOT_LIVE`'s "confirmed dead"
-    # verdict, exactly the claim-theft shape this file exists to close. The
     # top-level backstop in `main` must catch it and exit `_TRANSPORT_FAIL`
-    # instead, regardless of which callsite forgot its own guard.
     class _FakeClaimsModule:
         @staticmethod
         def claim_artifact(*a, **k):
@@ -810,8 +677,6 @@ def test_session_live_raise_exits_transport_fail_not_dead(
 def test_who_claims_path_session_live_raise_exits_transport_fail(
     stub_import_claim_index_module, stub_import_liveness_module, capsys
 ):
-    """Same fail-open guard as is-session-live, for who-claims-path's own
-    liveness_mod.session_live call site."""
 
     def _raise(*a, **k):
         raise RuntimeError("simulated unexpected session_live failure")
@@ -827,14 +692,6 @@ def test_who_claims_path_session_live_raise_exits_transport_fail(
     assert out_lines == ["indeterminate"]
 
 
-# ---------------------------------------------------------------------------
-# AC7/AC8/AC9: liveness_basis surfaced alongside the verdict, reusing
-# holder_evidence.liveness_basis (never a second derivation), with the
-# pre-existing live/dead token's position, spelling, and exit codes
-# unchanged from the baseline recorded above (line 1 == "live"/"dead"/
-# "indeterminate"; exit 0/1/2/3/4 unchanged).
-# ---------------------------------------------------------------------------
-
 @pytest.mark.parametrize(
     "basis_value",
     ["harness-registry", "stable-pid", "recency-window", "recency-window-mtime", "unknown"],
@@ -849,7 +706,6 @@ def test_live_sid_reports_liveness_basis_line(
     rc = _cli.main(["is-session-live", "some-sid"])
     assert rc == 0
     out_lines = capsys.readouterr().out.splitlines()
-    # Baseline token (AC9): line 1 is exactly "live", unchanged position/spelling.
     assert out_lines[0] == "live"
     assert out_lines[1] == f"liveness_basis:{basis_value}"
 
@@ -865,7 +721,6 @@ def test_dead_sid_reports_liveness_basis_line(
     assert rc == _cli._NOT_LIVE
     assert rc == 1
     out_lines = capsys.readouterr().out.splitlines()
-    # Baseline token (AC9): line 1 is exactly "dead", unchanged position/spelling.
     assert out_lines[0] == "dead"
     assert out_lines[1] == "liveness_basis:recency-window"
 
@@ -873,10 +728,6 @@ def test_dead_sid_reports_liveness_basis_line(
 def test_live_elsewhere_sid_reports_live_elsewhere_not_dead(
     stub_import_liveness_module, stub_import_holder_evidence_module, capsys
 ):
-    # C1's ripple, unreviewed.
-    # session_live() stays False for a live foreign-repo peer (AC1: unchanged,
-    # unmigrated) but the basis is "harness-registry-elsewhere"; printing
-    # "dead" over that basis reproduces this plan's own Problem statement in
     # this sibling CLI. Exit code is unchanged (_NOT_LIVE) for compat.
     stub_import_liveness_module(_StubLiveness(session_live=lambda *a, **k: False))
     stub_import_holder_evidence_module(
@@ -892,8 +743,6 @@ def test_live_elsewhere_sid_reports_live_elsewhere_not_dead(
 def test_liveness_basis_call_reuses_holder_evidence_not_a_second_derivation(
     stub_import_liveness_module, stub_import_holder_evidence_module
 ):
-    """AC8: the CLI must call holder_evidence.liveness_basis(sid, cwd) — the
-    existing derivation — never compute a basis itself."""
     seen = {}
 
     def _liveness_basis(sid, cwd=None):
@@ -910,9 +759,6 @@ def test_liveness_basis_call_reuses_holder_evidence_not_a_second_derivation(
 def test_liveness_basis_failure_degrades_to_unknown_without_changing_verdict(
     stub_import_liveness_module, stub_import_holder_evidence_module, capsys
 ):
-    """Fail-soft additive output: a basis-derivation failure must not change
-    the live/dead token or exit code (AC9), and must not raise out of the
-    subcommand."""
 
     def _raise(*a, **k):
         raise RuntimeError("holder_evidence import failed in test")
@@ -927,8 +773,6 @@ def test_liveness_basis_failure_degrades_to_unknown_without_changing_verdict(
 
 
 def test_malformed_sid_emits_no_liveness_basis_line(stub_import_liveness_module, capsys):
-    """Malformed/absent sid carries no decided verdict (exit 4) — no basis
-    line is appended; baseline single-line "indeterminate" output unchanged."""
 
     def _fail_if_called(*a, **k):
         raise AssertionError("liveness must not be consulted for a malformed sid")
@@ -941,8 +785,6 @@ def test_malformed_sid_emits_no_liveness_basis_line(stub_import_liveness_module,
 
 
 def test_transport_failure_emits_no_liveness_basis_line(stub_import_liveness_module, capsys):
-    """Transport failure (exit 3) carries no decided verdict — no basis line,
-    no stdout at all, matching the pre-C3 baseline."""
 
     def _raise_runtime_error():
         raise RuntimeError("engine root unresolvable in test")
@@ -952,10 +794,6 @@ def test_transport_failure_emits_no_liveness_basis_line(stub_import_liveness_mod
     assert rc == _cli._TRANSPORT_FAIL
     assert capsys.readouterr().out == ""
 
-
-# ---------------------------------------------------------------------------
-# list-stale-claim-handoffs: emits TAB-delimited path+sid lines, exit 0.
-# ---------------------------------------------------------------------------
 
 def test_no_stale_entries_exits_0_no_output(stub_import_stale_claims_module):
     stub_import_stale_claims_module(_StubStaleClaims(list_stale_claim_handoffs=lambda *a, **k: []))
@@ -989,11 +827,6 @@ def test_list_stale_claim_handoffs_transport_failure_exits_3(stub_import_stale_c
     rc = _cli.main(["list-stale-claim-handoffs"])
     assert rc == _cli._TRANSPORT_FAIL
 
-
-# ---------------------------------------------------------------------------
-# list-claims-by-session: emits TAB-delimited class+basename lines, exit 0.
-# Routes through the claims seam (_import_module), not the stale-claims one.
-# ---------------------------------------------------------------------------
 
 def test_list_claims_by_session_no_matches_exits_0(stub_import_module, capsys):
     stub_import_module(_StubClaims(list_claims_by_session=lambda *a, **k: []))
@@ -1038,12 +871,7 @@ def test_list_claims_by_session_transport_failure_exits_3():
     assert rc == _cli._TRANSPORT_FAIL
 
 
-# ---------------------------------------------------------------------------
 # who-claims-path: reads the PATH-TOUCH plane (claim_index.lookup) + liveness
-# per claimant, TAB-delimited "<sid>\t<live|dead>\t<name>" rows, exit 0. A
-# separate question from list-claims-by-session (artifact-claim store)
-# above — see the CLI's own comment block.
-# ---------------------------------------------------------------------------
 
 def test_who_claims_path_no_claimant_exits_0_no_output(
     stub_import_claim_index_module, stub_import_liveness_module, capsys
@@ -1087,9 +915,6 @@ def test_who_claims_path_rung1_recorded_name_wins_over_live_registry(
     stub_import_claim_index_module, stub_import_liveness_module,
     stub_import_harness_registry_module, capsys,
 ):
-    """C2 resolution ladder rung 1: a name recorded ON the claim is used
-    even when a live registry lookup for the same sid would ALSO resolve --
-    rung 1 is checked first and wins, per the ladder's stated order."""
     from datetime import datetime, timedelta, timezone
 
     ts = datetime.now(timezone.utc) - timedelta(hours=2)
@@ -1122,19 +947,6 @@ def test_who_claims_path_labels_the_kind_of_each_hold(
     stub_import_claim_index_module, stub_import_liveness_module,
     stub_import_harness_registry_module, capsys,
 ):
-    """The fourth column. This CLI is where the safe-commit refusal sends an
-    operator, and until the record carried the distinction that refusal named
-    READERS as holders -- the filed incident (state/bug-queue/2026-09-20-the-
-    touch-record-cannot-distinguish-a-read-touch-from-a-write-touch.yaml) had
-    an operator message two sessions by name over a file only one of them had
-    written.
-
-    All three states in one row set, because the third is the one a partial
-    implementation gets wrong: a claimant absent from ``recorded_kind`` is
-    "unknown-kind", NOT "read". Reads are listed rather than hidden -- this is
-    the inspection instrument, and "nobody is reading this" and "somebody is
-    reading this and it does not block you" are different answers.
-    """
     stub_import_claim_index_module(
         _StubClaimIndex(
             lookup=lambda paths, cwd=None: _LookupResultStub(
@@ -1163,9 +975,6 @@ def test_who_claims_path_labels_the_kind_of_each_hold(
 
 
 def test_the_kind_column_never_takes_down_the_row(capsys):
-    """Additive display output on an already-decided claimant row. A lookup
-    result from an older engine carries no ``recorded_kind`` at all, and the
-    row must still print rather than the whole enumeration failing."""
     class _NoKindField:
         pass
 
@@ -1176,8 +985,6 @@ def test_who_claims_path_rung1_absent_falls_to_rung2_live_registry(
     stub_import_claim_index_module, stub_import_liveness_module,
     stub_import_harness_registry_module, capsys,
 ):
-    """C2 resolution ladder rung 2: no recorded name on the claim (a pre-C1
-    record) falls through to a live harness_registry.lookup(sid)."""
     stub_import_claim_index_module(
         _StubClaimIndex(
             lookup=lambda paths, cwd=None: _LookupResultStub(
@@ -1206,9 +1013,6 @@ def test_who_claims_path_neither_rung_resolves_prints_unnamed_marker(
     stub_import_claim_index_module, stub_import_liveness_module,
     stub_import_harness_registry_module, capsys,
 ):
-    """C2 resolution ladder rung 3: neither a recorded name nor a live
-    registry hit -- a real outcome (a pre-C1 record from an exited
-    session), rendered distinctly from a bare sid."""
     stub_import_claim_index_module(
         _StubClaimIndex(
             lookup=lambda paths, cwd=None: _LookupResultStub(
@@ -1224,10 +1028,8 @@ def test_who_claims_path_neither_rung_resolves_prints_unnamed_marker(
     assert out == (
         f"sess-c\tdead\t{_cli._NO_REGISTRY_RECORD_MARKER}\t{_cli._UNKNOWN_KIND_MARKER}\n"
     )
-    assert "sess-c\t" not in _cli._NO_REGISTRY_RECORD_MARKER  # marker itself is never sid-shaped
+    assert "sess-c\t" not in _cli._NO_REGISTRY_RECORD_MARKER
     # The registry ANSWERED and holds nothing. That is a fact, and it must not
-    # render as the marker for "the registry could not be asked" -- the
-    # rung-2-raise test below pins the other side of the same split.
     assert _cli._NO_REGISTRY_RECORD_MARKER != _cli._NAME_UNRESOLVED_MARKER
 
 
@@ -1235,9 +1037,6 @@ def test_who_claims_path_rung2_registry_raise_degrades_to_unnamed(
     stub_import_claim_index_module, stub_import_liveness_module,
     stub_import_harness_registry_module, capsys,
 ):
-    """Best-effort on rung 2: harness_registry.lookup raising must degrade
-    the name column to the unnamed marker, never take down the row's
-    sid/liveness columns or the command's exit code."""
     stub_import_claim_index_module(
         _StubClaimIndex(
             lookup=lambda paths, cwd=None: _LookupResultStub(
@@ -1258,8 +1057,6 @@ def test_who_claims_path_rung2_registry_raise_degrades_to_unnamed(
         f"sess-d\tlive\t{_cli._NAME_UNRESOLVED_MARKER}\t{_cli._UNKNOWN_KIND_MARKER}\n"
     )
     # A DEGRADATION, not a fact: the registry was never successfully asked, so
-    # this must stay distinguishable from the no-record marker. Asserting only
-    # "the row survived" would let the two collapse back together silently.
     assert _cli._NAME_UNRESOLVED_MARKER != _cli._NO_REGISTRY_RECORD_MARKER
 
 
@@ -1355,10 +1152,6 @@ def test_who_claims_path_unanswerable_reports_which_abort_fired(
 def test_who_claims_path_unanswerable_with_no_abort_cause_reports_unknown(
     stub_import_claim_index_module, stub_import_liveness_module, capsys
 ):
-    """A lookup stand-in that carries no ``abort_cause`` at all (e.g. an
-    older or hand-rolled result object) degrades to printing "unknown"
-    rather than raising ``AttributeError`` — additive output must never
-    take down the existing refusal path."""
     def _fail_if_called(*a, **k):
         raise AssertionError("liveness must not be consulted for an unanswerable path")
 
@@ -1377,10 +1170,6 @@ def test_who_claims_path_unanswerable_with_no_abort_cause_reports_unknown(
 def test_who_claims_path_lookup_raise_exits_transport_fail(
     stub_import_claim_index_module, stub_import_liveness_module, capsys
 ):
-    """claim_index.lookup sits on the same
-    arm this commit hardened for session_live; an unguarded raise there must
-    not escape main() as a bare traceback (which exits 1, indistinguishable
-    from a determinate "confirmed dead"-shaped exit on this CLI)."""
 
     def _raise(paths, cwd=None):
         raise RuntimeError("simulated claim_index.lookup failure")
@@ -1398,12 +1187,6 @@ def test_who_claims_path_multi_claimant_raise_mid_stream_emits_only_indeterminat
     stub_import_claim_index_module, stub_import_liveness_module,
     stub_import_harness_registry_module, capsys,
 ):
-    """With N claimants, a raise on
-    claimant k must not have already printed k-1 well-formed "sid\tstate"
-    rows: that shape reads to a TAB-splitting consumer as a claimant
-    literally named "indeterminate" with an empty state, not an abort
-    marker. Buffering keeps the failure path's stdout exactly
-    ["indeterminate"], same as is-session-live's own contract."""
     stub_import_claim_index_module(
         _StubClaimIndex(
             lookup=lambda paths, cwd=None: {
@@ -1466,11 +1249,6 @@ def test_who_claims_path_transport_failure_exits_3(stub_import_liveness_module):
     assert rc == _cli._TRANSPORT_FAIL
 
 
-# ---------------------------------------------------------------------------
-# --help / -h / help print usage on stdout and exit 0 (bypasses the import
-# seam entirely — never touches transport).
-# ---------------------------------------------------------------------------
-
 def test_help_flag_exits_0(stub_import_module):
     def _fail_if_called():
         raise AssertionError("help flags must not reach _import_module")
@@ -1482,44 +1260,18 @@ def test_help_flag_exits_0(stub_import_module):
         assert rc == 0
 
 
-# ---------------------------------------------------------------------------
 # The advertised verb list must reach the PATH-TOUCH release path.
-#
-# `release-artifact artifact <repo-relative-path>` IS the release verb for a
 # claim `who-claims-path` reports. A peer EM read `_SUBCOMMANDS`, saw eight
-# verbs and no `release-path`, and reported a ledger-derived path claim as
-# having no exit while holding one — twice, across two memos
-# (cross-repo/inbox/2026-08-20-example-retrieval-repo-em-ledger-derived-path-claim-
-# {has-no-release,narrowed}.md). Enumerating verbs without their classes is
-# what made a shipped capability unreachable by reading.
-# ---------------------------------------------------------------------------
 
 
 def test_subcommand_advertisement_names_the_artifact_path_class():
     advert = _cli._SUBCOMMANDS
     assert "artifact" in advert
     assert "release-artifact <class>" in advert
-    # The class token alone is not enough — a reader must be able to tell it
-    # takes a PATH, without reading claims.py.
     assert "PATH" in advert or "path" in advert
 
 
-# ---------------------------------------------------------------------------
-# M2b: claim-query imports route through cc_invoke.require_dispatch_module,
-# so a stale published mirror (state/bug-backlog/2026-09-01-a-new-engine-
-# module-breaks-fleet-wide-claim-queries-until-publish.yaml) reports a
-# diagnosis (cause + "publish the mirror" remedy) instead of a bare
-# ImportError. These tests exercise the REAL cc_invoke.require_dispatch_module
-# (via _cli._dispatch_import) with only the two engine-root resolvers
-# monkeypatched — never a stubbed _import_* seam — so they prove the wiring
-# itself, not just that a stub was configured correctly.
-# ---------------------------------------------------------------------------
-
 def test_dispatch_import_chokepoint_is_reused_by_every_claim_query_seam(monkeypatch):
-    """`_import_module` / `_import_liveness_module` / `_import_stale_claims_
-    module` / `_import_claim_index_module` must all route through the single
-    `_dispatch_import` chokepoint, never re-implement their own bare import —
-    the collapse this item exists to perform."""
     calls = []
     monkeypatch.setattr(_cli, "_dispatch_import", lambda name: calls.append(name) or name)
 
@@ -1536,14 +1288,6 @@ def test_dispatch_import_chokepoint_is_reused_by_every_claim_query_seam(monkeypa
 
 
 def _rig_stale_mirror(monkeypatch, tmp_path, missing_module):
-    """Simulate the stale-mirror condition (source has `missing_module`
-    under `coordinator_core/session/`, the resolved dispatch root does not)
-    against the REAL `cc_invoke.require_dispatch_module` — never a real
-    published mirror. Patches only the two engine-root resolvers cc_invoke
-    itself calls (`require_dispatch_engine_on_path`, `resolve_engine_root`)
-    and `importlib.import_module`, on the cached `cc_invoke` module object
-    `_cli._cc_invoke()` returns, so `_dispatch_import`'s own code path runs
-    unmodified."""
     source_root = tmp_path / "source"
     dispatch_root = tmp_path / "dispatch"
     (source_root / "coordinator_core" / "session").mkdir(parents=True)
@@ -1568,10 +1312,6 @@ def _rig_stale_mirror(monkeypatch, tmp_path, missing_module):
 def test_is_session_live_stale_mirror_reports_diagnosis_not_bare_import_error(
     monkeypatch, tmp_path, capsys
 ):
-    """A claim-QUERY subcommand (is-session-live) against a stale mirror
-    reports the diagnosed cause + remedy, not a bare ImportError, and not
-    the plain-root-resolution-failure message (which would be wrong here —
-    the root resolved fine; the import against it failed)."""
     _rig_stale_mirror(monkeypatch, tmp_path, "liveness")
 
     rc = _cli.main(["is-session-live", "some-sid"])
@@ -1614,15 +1354,6 @@ def test_who_claims_path_claim_index_stale_mirror_reports_diagnosis(
 def test_who_claims_path_name_ladder_stale_mirror_reports_diagnosis_via_backstop(
     monkeypatch, tmp_path, capsys
 ):
-    """The EXACT failure site of the filed incident:
-    `_render_claimant_name`'s `coordinator_core.session.name_ladder` import,
-    reached only once who-claims-path has a live claimant to render a name
-    for. Not locally guarded (see `_render_claimant_name`'s own call site,
-    outside the per-claimant `session_live` try/except) -- it propagates to
-    `main()`'s top-level backstop, same as before this change, but now
-    carrying the diagnosis instead of a bare
-    `ImportError: cannot import name 'name_ladder' from 'coordinator_core.
-    session'` (the row's own quoted traceback)."""
     dotted = _rig_stale_mirror(monkeypatch, tmp_path, "name_ladder")
 
     monkeypatch.setattr(
@@ -1645,9 +1376,6 @@ def test_who_claims_path_name_ladder_stale_mirror_reports_diagnosis_via_backstop
 
 
 def test_stale_mirror_not_in_source_either_never_says_publish(monkeypatch, tmp_path, capsys):
-    """The sibling case (typo / genuinely absent, not a mirror gap): the
-    diagnosis must say "not in source either", never tell the reader to
-    publish."""
     source_root = tmp_path / "source"
     dispatch_root = tmp_path / "dispatch"
     (source_root / "coordinator_core" / "session").mkdir(parents=True)

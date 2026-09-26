@@ -1,7 +1,3 @@
-"""`message_missing_subject`: blank, or a first line that is a KNOWN
-trailer, has no subject. A hyphenated `tool-name: ...` subject is a real
-subject, not a trailer.
-"""
 
 from __future__ import annotations
 
@@ -22,7 +18,6 @@ def test_an_empty_or_whitespace_only_message_has_no_subject(message):
         "Deliverable-Id: some-deliverable",
         "Co-Authored-By: Claude <noreply@anthropic.com>",
         "Signed-off-by: someone <someone@example.com>",
-        # leading blank lines before the trailer must not hide it
         "\n\nSession-Id: 6ab7b0d8-1234-4a12-9abc-1234567890ab\n",
     ],
 )

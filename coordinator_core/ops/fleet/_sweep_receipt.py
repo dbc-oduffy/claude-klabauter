@@ -58,18 +58,14 @@ from typing import Optional
 
 __all__ = ["record_sweep_outcome", "receipt_path", "OUTCOMES"]
 
-#: Closed set. A caller reaching for a sixth value is describing a distinction
-#: the operator does not need -- fold it into `detail` instead.
 OUTCOMES = ("applied", "nothing-to-do", "skipped-gated", "skipped-contended", "failed")
 
 #: Tail retained when the file passes _MAX_BYTES. Small: the question is "is it
-#: working now", and the answer is always in the last few lines per sweep.
 _MAX_BYTES = 256 * 1024
 _KEEP_BYTES = 64 * 1024
 
 
 def receipt_path(common_dir: Path) -> Path:
-    """The receipt file for this checkout. See module docstring for siting."""
     return common_dir / "coordinator-sessions" / "archive-sweeps.receipt.jsonl"
 
 
@@ -81,16 +77,6 @@ def record_sweep_outcome(
     count: int = 0,
     detail: Optional[str] = None,
 ) -> None:
-    """Append one sweep outcome. Never raises -- see module negative-spec.
-
-    `sweep` is the op key the outcome belongs to (e.g.
-    "fleet.archive_completed_plans"), so one file serves every sweep and the
-    operator reads one place rather than three.
-
-    `detail` carries the reason a `failed` or `skipped-*` outcome happened, in
-    whatever words the caller already has. It is free text by design: the
-    caller's own exception string is more use to a human than a re-coded enum.
-    """
     if common_dir is None or outcome not in OUTCOMES:
         return
     try:
@@ -104,8 +90,6 @@ def record_sweep_outcome(
             "count": count,
         }
         if detail:
-            # Bounded: a caller handing over a full traceback must not turn one
-            # receipt line into the whole file's byte budget.
             row["detail"] = detail[:512]
 
         line = json.dumps(row, sort_keys=True) + "\n"

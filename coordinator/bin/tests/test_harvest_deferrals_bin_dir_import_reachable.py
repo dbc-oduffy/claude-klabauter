@@ -62,7 +62,7 @@ import pytest
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_BIN_DIR = os.path.dirname(_THIS_DIR)  # coordinator/bin
+_BIN_DIR = os.path.dirname(_THIS_DIR)
 _HARVEST_CLI = os.path.join(_BIN_DIR, "coordinator-harvest-deferrals.py")
 
 _SUBPROCESS_TIMEOUT_SECS = 30
@@ -130,12 +130,6 @@ def _run_isolated(body: str) -> subprocess.CompletedProcess:
 
 
 def test_bootstrap_reaches_queue_append_locator_without_implicit_bin_dir_on_path() -> None:
-    """`_bootstrap_engine()` must resolve `_queue_append_locator` even when
-    `coordinator/bin` is not already on `sys.path` -- the exact condition
-    in-process dispatch presents, and the exact condition under which the
-    lazy-bootstrap sweep silently reintroduced a 2026-07-27 fix (module
-    docstring comment at the `_queue_append_locator` import site).
-    """
     result = _run_isolated(
         "module._bootstrap_engine()\n"
         "assert 'find_cli_cmd' in module.__dict__\n"
@@ -152,10 +146,6 @@ def test_bootstrap_reaches_queue_append_locator_without_implicit_bin_dir_on_path
 
 
 def test_resolve_cli_cmd_mid_module_entry_does_not_raise() -> None:
-    """A mid-module entry point (`_resolve_cli_cmd`, never `main()`) must
-    independently trigger a bootstrap that reaches `_queue_append_locator` --
-    the invisible-to-`--help`/import/py_compile shape this finding names.
-    """
     result = _run_isolated(
         "module._resolve_cli_cmd('coordinator-queue-append')\n"
         "print('OK')\n"

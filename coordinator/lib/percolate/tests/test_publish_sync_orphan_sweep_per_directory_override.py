@@ -40,9 +40,6 @@ def _no_ignore():
 
 
 def _seed_with_two_orphan_dirs(tmp_path: Path) -> "tuple[Path, Path]":
-    """A shared plugin dir (`kept`) plus two destination-only top-level
-    directories (`orphan_a`, `orphan_b`) absent from source -- the shape
-    the top-level presence preflight fires on for ANY orphan."""
     src = tmp_path / "src"
     dst = tmp_path / "dst"
     (src / "kept").mkdir(parents=True)
@@ -85,9 +82,6 @@ class TestOrphanSweepOverrideParsing:
 
 class TestScopedOverrideExemptsOnlyNamedDirectories:
     def test_unset_still_aborts_on_any_orphan(self, tmp_path, monkeypatch):
-        """Behaviour preservation: no override, both orphans present, real
-        run -- still a FATAL SystemExit(3), unchanged from before this
-        chunk."""
         monkeypatch.delenv("COORDINATOR_OVERRIDE_ORPHAN_SWEEP", raising=False)
         src, dst = _seed_with_two_orphan_dirs(tmp_path)
 
@@ -98,9 +92,6 @@ class TestScopedOverrideExemptsOnlyNamedDirectories:
         assert (dst / "orphan_b").is_dir()
 
     def test_scoping_one_name_still_aborts_for_the_other(self, tmp_path, monkeypatch):
-        """The half that matters: naming ONLY `orphan_a` must not silently
-        arm removal of `orphan_b` too -- the exact all-or-nothing gap this
-        chunk closes."""
         monkeypatch.setenv("COORDINATOR_OVERRIDE_ORPHAN_SWEEP", "orphan_a")
         src, dst = _seed_with_two_orphan_dirs(tmp_path)
 
@@ -122,7 +113,6 @@ class TestScopedOverrideExemptsOnlyNamedDirectories:
         assert removed == 2
 
     def test_blanket_one_still_removes_both_unchanged(self, tmp_path, monkeypatch):
-        """Behaviour preservation for the pre-existing all-or-nothing form."""
         monkeypatch.setenv("COORDINATOR_OVERRIDE_ORPHAN_SWEEP", "1")
         src, dst = _seed_with_two_orphan_dirs(tmp_path)
 

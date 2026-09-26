@@ -42,7 +42,6 @@ def _current_minor_string() -> str:
 
 
 def _mismatched_minor_string() -> str:
-    # Guaranteed not to equal the running interpreter's own minor.
     return f"{sys.version_info.major}.{sys.version_info.minor + 1}"
 
 
@@ -52,8 +51,6 @@ def test_stale_minor_reports_unhealthy(monkeypatch: pytest.MonkeyPatch) -> None:
     defect: a healthy-but-stale-minor environment must rebuild, not be
     honoured forever."""
     monkeypatch.setattr(fleet_env, "LOCK_PYTHON_MINOR", _mismatched_minor_string())
-    # Isolate the minor check from package availability in the test venv --
-    # the running interpreter almost certainly lacks torch/lancedb/etc.
     monkeypatch.setattr(fleet_env, "_FLEET_ENV_IMPORT_PROBES", ())
 
     assert fleet_env._fleet_env_healthy(Path(sys.executable)) is False
@@ -72,10 +69,6 @@ def test_matching_minor_with_no_probes_reports_healthy(monkeypatch: pytest.Monke
 def test_missing_executable_still_reports_unhealthy_before_minor_check(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pre-existing contract, unchanged by this fix: a nonexistent/non-
-    executable `python_bin` fails fast on the `is_executable` gate,
-    never reaching the minor or import probes (this is what keeps a
-    fresh/rebuilding environment's missing exec routine, not an error)."""
     monkeypatch.setattr(fleet_env, "LOCK_PYTHON_MINOR", _current_minor_string())
 
     assert fleet_env._fleet_env_healthy(Path("/nonexistent/does-not-exist/python")) is False
@@ -84,11 +77,6 @@ def test_missing_executable_still_reports_unhealthy_before_minor_check(
 def test_check_only_reports_would_rebuild_on_stale_minor(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """`ensure_fleet_env(check_only=True)` must surface the mismatch as
-    `"would-rebuild"`, not `"ready"` — this is the path an operator or
-    doctor probe actually consults, and is the observed symptom (C6's
-    handoff: `check_only=True` kept reporting `"ready"` on a stale-minor
-    box)."""
     monkeypatch.setattr(fleet_env, "LOCK_PYTHON_MINOR", _mismatched_minor_string())
     monkeypatch.setattr(fleet_env, "_FLEET_ENV_IMPORT_PROBES", ())
     monkeypatch.setattr(fleet_env, "_is_windows_shell", lambda: False)

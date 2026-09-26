@@ -1,26 +1,7 @@
 # name_ladder — the shared three-rung claimant-name RESOLUTION policy behind
-# both coordinator/bin/session-claim-cli.py's `who-claims-path` name column
-# and coordinator_core/bash_guards/dispatch_checks.py's Check 5 owner-name
-# clause. Extracted (state/debt-backlog/2026-09-01-shared-name-resolution-
-# ladder-for-sessio-026b33fcd43d.yaml) after the two independent copies of
-# this ~10-line policy already drifted once within a day of being written.
 # Sharing the RESOLUTION here makes that drift structurally impossible.
-#
 # RESOLUTION ONLY, NEVER RENDERING. This module returns facts
-# (name, rung, reason) -- it prints nothing, formats nothing, and knows
-# nothing about either caller's byte budget or column shape. Each caller
-# keeps its own renderer and import seam for `coordinator_core.session.
-# harness_registry`; see the call sites for the current shape of both.
-#
 # RUNG 2 IS TRANSITIONAL. It exists only as a cheap fallback for a pre-C1
-# claim record written before C1 (docs/plans/2026-09-01-the-claim-record-
-# carries-the-name.md) started stamping a name onto the claim itself, and is
-# correct only for a writer session still resident on THIS box at read time.
-# Its retirement condition is recorded in that same plan: once every claim
-# record in the corpus carries a rung-1 `writer_name` (i.e. no record older
-# than C1's rollout remains reachable), rung 2 and its live-lookup rung
-# become dead code and should be deleted rather than kept "just in case" --
-# see that plan for the specific condition to check before deleting.
 from __future__ import annotations
 
 from typing import Any, Callable, Optional, Tuple
@@ -30,10 +11,6 @@ RUNG_LIVE_LOOKUP = "live-lookup"
 RUNG_UNRESOLVED = "unresolved"
 
 #: Rung-3 sub-reasons -- only meaningful when ``rung == RUNG_UNRESOLVED``.
-#: A caller that does not distinguish rung-3 outcomes (dispatch_checks.py's
-#: Check 5, by budget) is free to ignore ``reason`` entirely; a caller that
-#: does (session-claim-cli.py's ``who-claims-path``) reads it to pick among
-#: its three distinct markers.
 REASON_NO_REGISTRY_RECORD = "no_registry_record"
 REASON_LOOKUP_FAILED = "lookup_failed"
 REASON_UNNAMED_RECORD = "unnamed_record"
@@ -79,9 +56,6 @@ def resolve_name(
     renderers carry that discipline; this function only decides which rung
     answered and why, never how to print it.
     """
-    # Bare truthiness is safe here: both inputs are normalized to
-    # None-or-non-empty-str at harness_registry._parse_one (name_ladder does
-    # not own or enforce this).
     if recorded_name:
         return recorded_name, RUNG_RECORDED, None
 

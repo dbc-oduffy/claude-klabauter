@@ -85,19 +85,16 @@ from coordinator_core.bash_guards._helpers import (
 
 CLASS = "advisory"
 MATCHERS = ["Write"]
-PRIORITY = 160  # deny-offer band; next slot after 110/120/130/140/150 (see nudge_terminal_artifact_edit.py)
+PRIORITY = 160
 
-#: The two irreducible bash legs DoE doctrine names as physics, not
 #: preference -- see module docstring NAMED-EXCEPTION TABLE. Case-folded
-#: basename match, regardless of directory.
 _IRREDUCIBLE_SH_BASENAMES = frozenset(
     {
-        "invoking-shell-bash4-probe.sh",  # a child process cannot observe the invoking shell's own version
-        "claude-machine-local.sh",  # must be `source`d into the parent shell; a Python script cannot do this
+        "invoking-shell-bash4-probe.sh",
+        "claude-machine-local.sh",
     }
 )
 
-#: Vendored/fixture path-segment carve-out -- case-insensitive, anchored to
 #: a full path segment (see module docstring CARVE-OUTS).
 _CARVEOUT_SEGMENTS = frozenset({"tests", "fixtures", "vendor", "node_modules"})
 
@@ -149,9 +146,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if _is_carveout_path(normalized):
             return None
 
-        # Windows-style drive-absolute path (a drive letter followed by a
-        # separator) even on a non-Windows host running this engine --
-        # os.path.isabs alone would not recognize it on a POSIX host.
         resolved = file_path
         if not os.path.isabs(resolved) and not re.match(r"^[A-Za-z]:[\\/]", resolved):
             cwd = payload.get("cwd")
@@ -194,6 +188,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         }
     except Exception:
-        # Fail-OPEN on any unexpected error -- this guard offers only on a
-        # positive new-.sh-file match, never on an error.
         return None

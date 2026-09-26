@@ -58,19 +58,6 @@ from coordinator_core.baton_assemble.apply import apply as _apply
 
 @register_op("baton_assemble.brief")
 async def _baton_assemble_brief(params: dict[str, Any], repo_root: Optional[Path]) -> dict[str, Any]:
-    """Read-only adapter over `baton_assemble.brief()`. Mutates nothing.
-
-    params:
-        kind:                    required str, one of {"handoff", "spinoff"}.
-        artifact_path:           optional str (falsy self-resolves for
-                                  kind="handoff" — see `brief()`'s own
-                                  docstring), default "".
-        decisions:               optional dict, forwarded to `brief(decisions=...)`.
-        title:                   optional str, forwarded to `brief(title=...)`.
-        explicit_deliverable_id: optional str, forwarded to
-                                  `brief(explicit_deliverable_id=...)`.
-        session_id:              optional str, forwarded to `brief(session_id=...)`.
-    """
     try:
         result: BriefResult = _brief(
             kind=params["kind"],

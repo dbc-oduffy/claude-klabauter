@@ -88,7 +88,6 @@ __all__ = ["python_probe_lines", "baked_python_lines"]
 
 
 def _sh_double_quote_escape(value: str) -> str:
-    """Escape `value` for interpolation inside an sh double-quoted string."""
     for char in ("\\", '"', "$", "`"):
         value = value.replace(char, "\\" + char)
     return value
@@ -96,8 +95,6 @@ def _sh_double_quote_escape(value: str) -> str:
 
 def baked_python_lines(var: str = "_py") -> str:
     # foreign-identity: OUT-OF-CLASS — the "claude-klabauter-59" citation at
-    # line 143 below is prose inside this function's docstring, not
-    # agent-facing rendered runtime text (per C6 brief note on this site)
     """Return POSIX-sh source assigning a BAKED interpreter path to `<var>`,
     instead of walking `$PATH` at hook-run time.
 
@@ -176,32 +173,6 @@ def baked_python_lines(var: str = "_py") -> str:
 
 
 def python_probe_lines(var: str = "_py") -> str:
-    """Return POSIX-sh source (one string, internally newline-joined)
-    defining `_py_resolve()` and assigning `<var>="$(_py_resolve)"`.
-
-    `_py_resolve()` walks $PATH directory-by-directory, in candidate order
-    python3 -> python -> py, testing both the bare name and a `.exe`-suffixed
-    form per directory (MSYS/git-bash resolves the extension via
-    `command -v` but a manual `-x` file test does not), and skips any hit
-    whose resolved path contains a `windowsapps` path component
-    (case-insensitive). No-op filtering on POSIX, where that path component
-    never appears.
-
-    The case-insensitive match is a literal `case` bracket-expression glob,
-    NOT a `tr`-based case-fold, and that is load-bearing rather than
-    stylistic: the filter must resolve zero external binaries. A `$(... |
-    tr ...)` fold fails OPEN -- when `tr` is off the hook's PATH the command
-    substitution yields the empty string, the `case` matches nothing, and the
-    stub is selected, which is the exact defect this filter exists to
-    prevent. Observed, not reasoned: the `tr` form returned the WindowsApps
-    stub under a PATH carrying only the stub. Every construct emitted here is
-    a `sh` builtin or reserved word.
-
-    Prints the first surviving candidate's absolute path and
-    returns 0; returns 1 (empty `<var>`) if nothing survives -- callers must
-    already handle an empty `<var>` (missing-interpreter branch), unchanged
-    from the pre-fix probe's own empty-on-failure contract.
-    """
     return "\n".join(
         [
             "_py_resolve() {",

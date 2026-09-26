@@ -25,10 +25,6 @@ import pytest
 from coordinator_core import _hook_envelope
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def _run(result):
     """Run an async coroutine synchronously (no pytest-asyncio needed), or pass a
     plain (already-computed) result straight through — some handlers are `async def`
@@ -101,10 +97,6 @@ def _assert_post_advisory(result: dict) -> None:
     assert "additionalContext" in hso, hso
 
 
-# ---------------------------------------------------------------------------
-# STATIC: envelope builder shapes
-# ---------------------------------------------------------------------------
-
 def test_envelope_all_five_builders_exist() -> None:
     """_envelope exposes all 5 shape builders and each returns the correct D2 shape."""
     from coordinator_core.hooks._envelope import (
@@ -115,38 +107,30 @@ def test_envelope_all_five_builders_exist() -> None:
         post_advisory,
     )
 
-    # Every agent-facing string these builders emit carries the provenance
     # marker — see _hook_envelope.COORDINATOR_PROVENANCE_MARKER for why (an
-    # unmarked imperative in tool output is the signal an agent should refuse,
-    # so coordinator's own traffic must be identifiable AS coordinator's).
     mark = _hook_envelope.COORDINATOR_PROVENANCE_MARKER
 
-    # (a) allow_advisory
     r = allow_advisory("PreToolUse", "advisory text")
     hso = _hso(r)
     assert hso["hookEventName"] == "PreToolUse"
     assert hso["permissionDecision"] == "allow"
     assert hso["additionalContext"] == "%s advisory text" % mark
 
-    # (b) context_only — no permissionDecision
     r = context_only("PreToolUse", "context text")
     hso = _hso(r)
     assert hso["hookEventName"] == "PreToolUse"
     assert hso["additionalContext"] == "%s context text" % mark
     assert "permissionDecision" not in hso
 
-    # (c) no_advisory — empty dict
     r = no_advisory()
     assert r == {}
 
-    # (d) post_advisory — PostToolUse hookEventName
     r = post_advisory("post text")
     hso = _hso(r)
     assert hso["hookEventName"] == "PostToolUse"
     assert hso["additionalContext"] == "%s post text" % mark
     assert "permissionDecision" not in hso
 
-    # (e) deny — permissionDecision:deny + permissionDecisionReason
     r = deny("PreToolUse", "reason text")
     hso = _hso(r)
     assert hso["hookEventName"] == "PreToolUse"
@@ -183,9 +167,7 @@ def test_envelope_no_advisory_is_empty_dict() -> None:
     assert no_advisory() == {}
 
 
-# ---------------------------------------------------------------------------
 # REGISTRY: all 6 hooks.* ops registered after import
-# ---------------------------------------------------------------------------
 
 def test_registry_enumeration_all_five_hooks() -> None:
     """After `import coordinator_core.ops`, all 5 hooks.* methods are in the registry."""
@@ -202,10 +184,6 @@ def test_registry_enumeration_all_five_hooks() -> None:
     for name in expected:
         assert name in _REGISTRY, f"Op not registered: {name!r}. Registered: {sorted(_REGISTRY)}"
 
-
-# ---------------------------------------------------------------------------
-# C1 — nudge_foreground_agent_dispatch
-# ---------------------------------------------------------------------------
 
 def test_foreground_dispatch_non_agent_tool_passes() -> None:
     """tool_name != 'Agent' → no_advisory (gate only fires on Agent dispatches)."""
@@ -234,7 +212,6 @@ def test_foreground_dispatch_background_false_without_tool_input_denies() -> Non
     historical bounce-back rather than passing the foreground dispatch through.
     """
     from coordinator_core.hooks.nudge_foreground_agent_dispatch import _handler
-    # session_id="" so git-root resolution is skipped (no sentinel I/O in tests)
     result = _run(_handler(
         {"tool_name": "Agent", "run_in_background": "false", "session_id": ""}
     ))
@@ -251,9 +228,7 @@ def test_foreground_dispatch_empty_tool_input_denies() -> None:
     _assert_deny(result, "PreToolUse")
 
 
-# non-empty tool_input missing `prompt` is not a safe
 # rewrite target (updatedInput REPLACES the whole argument object); must fall back to deny
-# rather than dispatch a subagent with no instructions.
 def test_foreground_dispatch_tool_input_missing_prompt_denies() -> None:
     """Non-empty tool_input lacking `prompt` → deny fallback, not a corrupted rewrite."""
     from coordinator_core.hooks.nudge_foreground_agent_dispatch import _handler
@@ -315,8 +290,6 @@ def test_foreground_reroute_notice_fires_on_every_reroute(tmp_path) -> None:
     first = _run(_handler(dict(params), repo_root=str(git_root)))
     first_ctx = _hso(first)["additionalContext"]
     assert "AUTO-REROUTED" in first_ctx
-    # EM audience (no agent_id) — the doc-pointer form of the override note is
-    # permitted (plan AC-2), but the mechanism itself must still never render.
     assert "touch" not in first_ctx, first_ctx
     assert ".foreground-ok" not in first_ctx, first_ctx
     assert ".git/coordinator-sessions" not in first_ctx, first_ctx
@@ -348,14 +321,12 @@ def test_calibration_survives_a_fresh_process(tmp_path) -> None:
     git_root.mkdir()
     sid = "test-durable-calibration-01"
 
-    # Process 1: a present-key dispatch calibrates the session.
     assert _run(_handler(
         {"tool_name": "Agent", "run_in_background": "true", "session_id": sid},
         repo_root=str(git_root),
     )) == {}
     assert (git_root / "coordinator-sessions" / sid / ".harness-bg-capable").exists()
 
-    # Process 2: fresh interpreter — in-memory calibration is gone, marker is not.
     mod._BG_CAPABLE_SESSIONS.discard(sid)
     result = _run(_handler(
         {"tool_name": "Agent", "session_id": sid, "tool_input": {"prompt": "go"}},
@@ -382,7 +353,6 @@ def test_present_and_false_calibrates_for_later_absent_call(tmp_path) -> None:
     git_root.mkdir()
     sid = "test-present-false-calibration-01"
 
-    # Call 1: present-and-false — must reroute AND durably calibrate.
     result1 = _run(_handler(
         {"tool_name": "Agent", "run_in_background": "false", "session_id": sid,
          "tool_input": {"prompt": "go"}},
@@ -395,11 +365,8 @@ def test_present_and_false_calibrates_for_later_absent_call(tmp_path) -> None:
         "presence (even false) must write the durable calibration marker"
     )
 
-    # Simulate the next dispatch as a fresh spawn-per-call process: in-memory set is gone,
-    # only the durable marker can carry calibration forward.
     mod._BG_CAPABLE_SESSIONS.discard(sid)
 
-    # Call 2: absent-key, same session — must be acted on (rerouted), not silently passed.
     result2 = _run(_handler(
         {"tool_name": "Agent", "session_id": sid, "tool_input": {"prompt": "go again"}},
         repo_root=str(git_root),
@@ -466,11 +433,8 @@ def test_foreground_dispatch_absent_calibrated_deny() -> None:
     import coordinator_core.hooks.nudge_foreground_agent_dispatch as mod
     from coordinator_core.hooks.nudge_foreground_agent_dispatch import _handler
 
-    # Use a unique session_id to avoid state leakage from other tests
     calibrated_sid = "test-calib-inmemory-aa11bb22"
 
-    # Step 1: present-and-true call — calibrates the session in-memory.
-    # session_id must be non-empty and format-valid for calibration to fire.
     result1 = _run(_handler(
         {"tool_name": "Agent", "run_in_background": "true", "session_id": calibrated_sid}
     ))
@@ -479,9 +443,6 @@ def test_foreground_dispatch_absent_calibrated_deny() -> None:
         "session_id should be in _BG_CAPABLE_SESSIONS after a present-value call"
     )
 
-    # Step 2: absent call on the same session_id — should deny (calibrated absent).
-    # We skip git-root resolution by mocking _resolve_git_root to return "" so no
-    # .foreground-ok path is checked (keeps test hermetic, no real .git I/O).
     import unittest.mock as mock
     with mock.patch.object(mod, "_resolve_git_root", return_value=""):
         result2 = _run(_handler(
@@ -489,7 +450,6 @@ def test_foreground_dispatch_absent_calibrated_deny() -> None:
         ))
     _assert_deny(result2, "PreToolUse")
 
-    # Cleanup: remove the test session_id so it doesn't affect subsequent tests
     mod._BG_CAPABLE_SESSIONS.discard(calibrated_sid)
 
 
@@ -532,10 +492,6 @@ def test_foreground_reroute_notice_carries_no_unlock_mechanism() -> None:
     _assert_no_unlock_mechanism(_hso(result)["additionalContext"], sid)
 
 
-# ---------------------------------------------------------------------------
-# C2 — suggest_sonnet_research
-# ---------------------------------------------------------------------------
-
 def test_sonnet_research_subagent_suppressed() -> None:
     """agent_id present → no_advisory (subagent suppression — already a delegated researcher)."""
     from coordinator_core.hooks.suggest_sonnet_research import _handler
@@ -553,24 +509,11 @@ def test_sonnet_research_fires_allow_advisory() -> None:
 def test_sonnet_research_advisory_shape_correct() -> None:
     """allow_advisory shape: permissionDecision=allow, hookEventName=PreToolUse."""
     from coordinator_core.hooks.suggest_sonnet_research import _handler
-    result = _run(_handler({"agent_id": ""}))  # "" is absent per _payload contract
+    result = _run(_handler({"agent_id": ""}))
     hso = _hso(result)
     assert hso["permissionDecision"] == "allow"
     assert hso["hookEventName"] == "PreToolUse"
 
-
-# _deep_research_plugin_dir()'s content-root
-# resolution branches (success, unresolvable, and the raise-degrades path) were
-# previously unexercised by an assertion: the _handler tests above call through to
-# the real resolver on whatever machine runs the suite rather than proving the
-# degrade contract.
-#
-# These tests patch coordinator_core.resolve_coordinator_clone.resolve_content_root
-# — the native in-process peer the hook now delegates to. The prior version patched
-# the module's `subprocess.run`, which pinned the retired
-# `~/.claude/bin/resolve-coordinator-clone` CLI spawn; that path vanished with the
-# settings-home migration, so resolution failed on every real fire and the hook
-# silently emitted the "plugin absent" advisory variant.
 
 def test_deep_research_plugin_dir_resolves_on_success() -> None:
     """A resolved content root -> pipelines/deep-research beneath it."""
@@ -630,10 +573,6 @@ def test_deep_research_plugin_dir_oserror_degrades_to_none() -> None:
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# C5 — nudge_em_code_dispatch
-# ---------------------------------------------------------------------------
-
 def test_em_code_dispatch_subagent_suppressed() -> None:
     """agent_id present → no_advisory (executors write code; subagent bypass unconditional)."""
     from coordinator_core.hooks.nudge_em_code_dispatch import _handler
@@ -688,10 +627,6 @@ def test_em_code_dispatch_context_only_has_no_permission_decision() -> None:
     assert "permissionDecision" not in _hso(result)
 
 
-# ---------------------------------------------------------------------------
-# C6 — nudge_unauthorized_handoff
-# ---------------------------------------------------------------------------
-
 def test_unauthorized_handoff_non_write_tool_passes() -> None:
     """tool_name != 'Write' → no_advisory (belt-and-braces; hook.json is Write-only)."""
     from coordinator_core.hooks.nudge_unauthorized_handoff import _handler
@@ -734,7 +669,6 @@ def test_unauthorized_handoff_spinoffs_path_fires() -> None:
             "content": "---\nkind: spinoff\n---\n# topic",
         }
     ))
-    # Not an install-leg spinoff (no install_chain_order) → should nudge
     _assert_post_advisory(result)
 
 
@@ -772,10 +706,6 @@ def test_unauthorized_handoff_spinoff_without_chain_order_fires() -> None:
     _assert_post_advisory(result)
 
 
-# ---------------------------------------------------------------------------
-# C7 — postuse_advisory_dispatch
-# ---------------------------------------------------------------------------
-
 def test_postuse_no_session_id_returns_no_advisory() -> None:
     """session_id absent → no_advisory (short-circuit: nothing to check)."""
     from coordinator_core.hooks.postuse_advisory_dispatch import _handler
@@ -796,14 +726,11 @@ def test_postuse_session_no_matching_sentinels_returns_no_advisory() -> None:
     """
     import coordinator_core.hooks.postuse_advisory_dispatch as pad_mod
     from coordinator_core.hooks.postuse_advisory_dispatch import _handler
-    # Use a test-scoped session id to avoid collisions with real sessions
     test_sid = "test-c8-roundtrip-nosentinel-9f3a"
     state_path = pad_mod._advisory_state_path(tempfile.gettempdir(), test_sid)
-    # Clean up any pre-existing durable throttle state from a prior run.
     _unlink_if_exists(state_path)
     result = _run(_handler({"session_id": test_sid, "transcript_path": ""}))
     assert result == {}
-    # Cleanup durable throttle state file written as a side effect of Phase 2.
     _unlink_if_exists(state_path)
 
 
@@ -819,11 +746,9 @@ def test_postuse_merge_contract_both_fire() -> None:
     import coordinator_core.hooks.postuse_advisory_dispatch as pad_mod
     from coordinator_core.hooks.postuse_advisory_dispatch import _handler
 
-    # Build a minimal fake git tree for the runtime-tripwire check
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
 
-        # --- Runtime-tripwire setup ---
         test_sid = "test-c8-merge-12ab34cd"
         agent_dir = tmp / ".git" / "coordinator-sessions" / ".agents" / test_sid
         agent_dir.mkdir(parents=True)
@@ -834,35 +759,24 @@ def test_postuse_merge_contract_both_fire() -> None:
         em_session_dir = tmp / ".git" / "coordinator-sessions" / em_sid
         em_session_dir.mkdir(parents=True)
 
-        # dispatched-agents.txt: agentId\tmodel\tsubagent_type\tdispatched-at
-        # Set dispatched_at far in the past to exceed the threshold
-        past_ts = int(time.time()) - 3600  # 60 min ago — well past any threshold
+        past_ts = int(time.time()) - 3600
         dispatch_file = em_session_dir / "dispatched-agents.txt"
         dispatch_file.write_text(f"{test_sid}\tclaude-sonnet-4-5\texecutor\t{past_ts}\n")
 
-        # --- Context-pressure setup ---
-        # Write a compaction sentinel pointing to a transcript path that is smaller than 85% of pre_size
         transcript = tmp / "transcript.jsonl"
-        # Write a small transcript with a model field so Phase 2 detects the model
         transcript.write_text('{"model": "claude-sonnet-4-5", "role": "assistant", "content": "hi"}\n')
 
-        # Use tempfile.gettempdir() matching the handler's path.
         compaction_sentinel = os.path.join(
             tempfile.gettempdir(), f"compaction-occurred-{test_sid}"
         )
-        pre_size = os.path.getsize(str(transcript)) * 10  # pre_size >> post_size → real compaction
+        pre_size = os.path.getsize(str(transcript)) * 10
         Path(compaction_sentinel).write_text(str(pre_size))
 
-        # Clean up any pre-existing durable state for this test-scoped session id
-        # (fresh id per run, but defensive against a prior interrupted run).
         cp_state_path = pad_mod._advisory_state_path(tempfile.gettempdir(), test_sid)
         rt_bark_sentinel = os.path.join(tempfile.gettempdir(), f"rt-bark-once-{test_sid}")
         _unlink_if_exists(cp_state_path)
         _unlink_if_exists(rt_bark_sentinel)
 
-        # The runtime-tripwire check uses the real git root (which won't have our .agents
-        # dir), so we exercise the MERGE contract by patching _check_runtime_tripwire_sync
-        # to return a known string.
         mock_rt = "RUNTIME TRIPWIRE — test-injected tripwire text"
 
         def fake_rt(session_id, agent_id):
@@ -877,24 +791,17 @@ def test_postuse_merge_contract_both_fire() -> None:
                 }
             ))
 
-        # The handler itself now consumes (deletes) the compaction sentinel —
-        # this is a defensive no-op safety net, not evidence the handler didn't.
         _unlink_if_exists(compaction_sentinel)
-        # Clean up durable throttle/dedup state a Phase 2 call could have written
-        # (Phase 1 returns early here, but guard against that assumption drifting).
         _unlink_if_exists(cp_state_path)
         _unlink_if_exists(rt_bark_sentinel)
 
-    # When both fire, the result is post_advisory with merged text
     hso = _hso(result)
     assert hso["hookEventName"] == "PostToolUse"
     assert "additionalContext" in hso
     context = hso["additionalContext"]
-    # Strengthen from 'or' to separate asserts that verify
-    # BOTH sub-checks fired AND the blank-line separator merge contract is honoured.
     assert "COMPACTION" in context
     assert mock_rt in context
-    assert "\n\n" in context  # blank-line separator as per handler merge-contract docstring
+    assert "\n\n" in context
 
 
 def test_postuse_result_shape_is_post_advisory_when_fires() -> None:
@@ -912,10 +819,6 @@ def test_postuse_result_shape_is_post_advisory_when_fires() -> None:
     _assert_post_advisory(result)
     assert "cp advisory text" in _hso(result)["additionalContext"]
 
-
-# ---------------------------------------------------------------------------
-# C5 — nudge_em_code_dispatch sentinel suppression (B-F5)
-# ---------------------------------------------------------------------------
 
 def test_em_code_dispatch_nudge_ok_sentinel_suppresses(tmp_path) -> None:
     """Bypass 3: coordinator-dispatch-nudge-ok-{sid} sentinel present → no_advisory.
@@ -958,10 +861,6 @@ def test_em_code_dispatch_autonomous_sentinel_suppresses(tmp_path) -> None:
         p.unlink(missing_ok=True)
 
 
-# ---------------------------------------------------------------------------
-# C6 — nudge_unauthorized_handoff transcript suppression (B-F6)
-# ---------------------------------------------------------------------------
-
 def test_unauthorized_handoff_command_tag_in_transcript_suppresses(tmp_path) -> None:
     """Authoring-skill <command-name> tag in transcript → no_advisory (suppressed).
 
@@ -1000,19 +899,6 @@ def test_unauthorized_handoff_coordinator_skill_in_tail_suppresses(tmp_path) -> 
     }))
     assert result == {}
 
-
-# ---------------------------------------------------------------------------
-# dual-home-sentinel-trap C4 — single-home contract for the two dispatch-nudge
-# suppression sentinels (.dispatch-nudge-ok, .autonomous).
-#
-# Spec backlink: pln-dual-home-sentinel-trap-one-re-de4676 § C4.
-#
-# Negative-spec: the negative half of each pair below is the load-bearing
-# assertion — it must go RED the moment anyone re-adds an OR-branch checking
-# a git-tree candidate location for either sentinel. C1/C2 deleted the dead
-# git-tree lanes (`<repo_root>/coordinator-sessions/<sid>/.dispatch-nudge-ok`
-# and `.../.autonomous`) that nothing ever wrote; this is the regression net.
-# ---------------------------------------------------------------------------
 
 def test_dispatch_nudge_ok_tmpdir_only_suppresses() -> None:
     """.dispatch-nudge-ok: writing ONLY the tmpdir home suppresses the nudge."""
@@ -1082,12 +968,6 @@ def test_autonomous_git_tree_only_does_not_suppress(tmp_path) -> None:
     _assert_context_only(result, "PreToolUse")
 
 
-# ---------------------------------------------------------------------------
-# AC10 — op scope-class unchanged by this plan. Assert on mapping VALUES, not
-# on line content — a line-keyed snapshot would pass while checking nothing.
-# This is the only home for AC10 in the whole slate.
-# ---------------------------------------------------------------------------
-
 def test_ac10_nudge_foreground_agent_dispatch_scope_class_unchanged() -> None:
     """op-key scope and authz classification for hooks.nudge_foreground_agent_dispatch
     are untouched by the dual-home-sentinel-trap plan (that op is C5b, out of scope
@@ -1100,10 +980,6 @@ def test_ac10_nudge_foreground_agent_dispatch_scope_class_unchanged() -> None:
         OP_CLASSIFICATION["hooks.nudge_foreground_agent_dispatch"] == OpClass.MUTATING
     )
 
-
-# ---------------------------------------------------------------------------
-# Direct unit coverage of C1 — coordinator_core.session.dispatch_nudge_sentinel.
-# ---------------------------------------------------------------------------
 
 def test_dispatch_nudge_sentinel_negative_spec_names_both_prohibitions() -> None:
     """Module docstring carries a Negative-spec block naming both prohibitions:

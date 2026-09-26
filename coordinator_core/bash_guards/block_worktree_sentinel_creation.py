@@ -80,27 +80,17 @@ from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.conservatism import SafeDirection, declares_safe_direction
 
 CLASS = "hard-deny"
-#: Widened 2026-08-07 (C4e) from `["Bash"]` -- see `block_approval_sentinel_
-#: creation.py`'s identical note. A direct reference to the shared universe
-#: (C2 declaration-form conversion) -- never a copy or re-wrap.
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
-#: The exact basename this guard protects. Never relaxed to a substring/
 #: prefix match -- an unrelated file that merely CONTAINS this string in a
 #: longer name is a DIFFERENT file and is not the worktree-ban override
-#: sentinel the sibling DoE hooks read.
 _TARGET_BASENAME = ".coordinator-override-worktree-guard"
 
-#: Shared detection engine -- see `_sentinel_creation_guard.py` module
-#: docstring. This module is the second guard built on it, after
-#: `block_approval_sentinel_creation.py`.
 _detector = SentinelCreationDetector(_TARGET_BASENAME)
 
 
 def _evaluate(cmd: str, dialect: Optional[Dialect] = None):
-    """See `block_approval_sentinel_creation._evaluate`'s identical note --
-    `dialect=None`/`Dialect.BASH` preserves the exact pre-C4e call shape."""
     if dialect is None or dialect is Dialect.BASH:
         return _detector.evaluate(cmd)
     return _detector.evaluate_for_dialect(
@@ -109,31 +99,11 @@ def _evaluate(cmd: str, dialect: Optional[Dialect] = None):
 
 
 def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
-    # Deliberately does NOT echo `cmd` back into the message and does NOT
-    # name the target basename in either branch below -- both would print
-    # the exact bypass an eager agent could copy-paste, which reads as
-    # sanctioning it rather than blocking it (same discipline as
-    # block-worktree-tool.py's and guard-doctrine-surface-edits.py's own
-    # deny messages). `cmd` stays accepted for call-site symmetry with the
-    # sibling guard, but is intentionally unused here.
-    #
-    # `reason_class` (2026-07-28 diagnosability fix, mirrors
-    # `block_approval_sentinel_creation._deny_reason` -- see
-    # `_sentinel_creation_guard.py` module docstring "REASON CLASS") splits
-    # the single fixed message this function used to return into two
     # truthful ones: REASON_DIRECT means a rule positively matched the
-    # override sentinel, so the "this command would create/modify it"
     # assertion is correct. REASON_INDIRECTION means the payload sits
-    # behind an interpreter/env/xargs/heredoc wrapper this guard cannot
     # examine, so it denies BY CONSTRUCTION -- not because anything was
-    # found. Keep both guards mirrored.
     del cmd
     if reason_class == REASON_INDIRECTION:
-        # `reason_kind` names a shell SHAPE, not a bypass -- but a
-        # recursive indirection verdict can still bottom out one level
-        # down in the direct branch's target-naming string (e.g.
-        # `bash -c "touch <sentinel>"`), so redact the basename out
-        # regardless, rather than trusting the branch alone.
         safe_shape = reason_kind.replace(_TARGET_BASENAME, "<the sentinel>")
         return (
             "[worktree guard] BLOCKED: interpreter/stdin/xargs indirection "
@@ -168,9 +138,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     identity-gated -- fires for every caller including the main-loop EM
     (see module docstring "NOT IDENTITY-GATED").
     """
-    # Deliberately no try/except here -- fail-CLOSED-on-exception is the
-    # dispatcher's job for hard-deny guards; catching and swallowing an
-    # unexpected error into a silent allow here would defeat that contract.
     tool_name = payload.get("tool_name") or ""
     if tool_name not in MATCHERS:
         return None

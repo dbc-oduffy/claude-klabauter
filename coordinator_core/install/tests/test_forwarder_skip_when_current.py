@@ -49,9 +49,6 @@ def _counting_fake_install_door(payload: bytes, calls: list):
     return _install_door
 
 
-# --- Part (a): an already-current name is never unlinked/relinked --------
-
-
 def test_hardlinked_name_already_current_is_not_unlinked_or_relinked(tmp_path, monkeypatch):
     engine_root = tmp_path / "engine"
     _stamp_engine_root(engine_root, "cross-repo-memo")
@@ -75,7 +72,7 @@ def test_hardlinked_name_already_current_is_not_unlinked_or_relinked(tmp_path, m
     dest = door_install.install_named_forwarder(bin_dst, engine_root, "cross-repo-memo")
 
     assert dest == door_install.named_forwarder_path(bin_dst, "cross-repo-memo")
-    assert len(calls) == 2  # install_door is still called per-call when no `source=` is threaded
+    assert len(calls) == 2
 
 
 def test_copy_fallback_name_with_equal_bytes_is_skipped(tmp_path, monkeypatch):
@@ -115,15 +112,10 @@ def test_copy_fallback_name_with_stale_bytes_is_replaced(tmp_path, monkeypatch):
     dest = door_install.named_forwarder_path(bin_dst, "cross-repo-memo")
     dest.write_bytes(b"a-stale-different-image")
 
-    # A fresh door image lands under the same fixed payload this time -- the
-    # slot must be replaced to match it, not left carrying the stale bytes.
     dest = door_install.install_named_forwarder(bin_dst, engine_root, "cross-repo-memo")
 
     door_dst = bin_dst / door_install.DOOR_INSTALLED_NAME
     assert dest.read_bytes() == door_dst.read_bytes() == b"door-v1"
-
-
-# --- Part (b): install_door runs once per loop, not once per name --------
 
 
 def test_install_door_runs_once_per_loop_not_once_per_name(tmp_path, monkeypatch):
@@ -158,12 +150,9 @@ def test_manifest_lists_skipped_names_on_a_second_current_run(tmp_path, monkeypa
     monkeypatch.setattr(door_install, "install_door", _counting_fake_install_door(b"door-v1", calls))
 
     substrate._write_agent_helper_forwarders(target_map, bin_dst, False, engine_root=engine_root)
-    # Second run: both names are already current -- must still be listed in
-    # the manifest (the whole point of the per-name check staying per-name),
-    # even though neither is re-linked.
     substrate._write_agent_helper_forwarders(target_map, bin_dst, False, engine_root=engine_root)
 
     manifest = substrate._read_native_forwarder_manifest(bin_dst)
     assert "cross-repo-memo" in manifest
     assert "coordinator-doc-new" in manifest
-    assert len(calls) == 2  # one install_door per loop, across the two runs
+    assert len(calls) == 2

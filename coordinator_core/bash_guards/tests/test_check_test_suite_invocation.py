@@ -29,8 +29,6 @@ from coordinator_core.session import core as session_core
 from coordinator_core.session import grant as grant_module
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -52,10 +50,6 @@ def repo(tmp_path, monkeypatch):
     (tmp_path / "coordinator_core" / "frontmatter" / "tests").mkdir(parents=True)
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: str(tmp_path))
     monkeypatch.delenv(guard._OVERRIDE_ENV_VAR, raising=False)
-    # Default this fixture's EM to a granted Tier-U session -- these tests
-    # exercise the identity/mutex legs, not the grant leg (which has its own
-    # dedicated `grant_repo` fixture and TestGrantLeg class below, driven
-    # through the real session/grant module rather than this stub).
     monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (True, None))
     return tmp_path
 
@@ -101,7 +95,6 @@ def _assert_allowed(verdict):
     )
 
 
-
 def _reason(out):
     assert out is not None, "expected a deny envelope, got allow"
     hso = out["hookSpecificOutput"]
@@ -127,10 +120,6 @@ def held_mutex(monkeypatch):
         },
     )
 
-
-# ---------------------------------------------------------------------------
-# Subagent identity leg
-# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
     "command",
@@ -183,16 +172,6 @@ def test_subagent_scoped_allowed(repo, free_mutex, command):
     _assert_allowed(guard.check(_payload(command, repo, agent_id=_AGENT_ID)))
 
 
-# ---------------------------------------------------------------------------
-# C4b (docs/reference/guard-dialect-coverage.md row 8) -- keyed on the
-# `pytest` invocation (a Python console-script entry point, same binary
-# name under both dialects, no cmdlet equivalent to collide with). No real
-# PowerShell parse is exercised (this guard has no `_dialect.py` seam) --
-# these are PowerShell-spelled command STRINGS proving the existing
-# bash-tokenizer-based classifier reaches the same verdict either way.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "command",
     [
@@ -226,18 +205,6 @@ def test_top_level_em_powershell_tool_unscoped_suite_denied_without_grant(grant_
     payload["tool_name"] = "PowerShell"
     out = guard.check(payload)
     assert out is not None
-
-
-# ---------------------------------------------------------------------------
-# Start-Process -ArgumentList argv-reconstruction fix (2026-08-07 -- guard
-# bypass measured live via `dispatch.evaluate_payload_json`, see
-# `cross-repo/inbox/2026-08-07-doe-claude-em-powershell-suite-guard-
-# converted-and-wave2-findings.md` Finding 1). Unlike the plain-string
-# PowerShell class above, this shape genuinely needed the `_dialect.py`
-# argv-reconstruction seam: a bare bash-`shlex` pass fuses `-ArgumentList
-# '-m','pytest'` into ONE opaque token (`-m,pytest`), so `pytest` never
-# surfaced as its own argv token to this classifier at all.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -314,7 +281,7 @@ def test_start_process_unresolvable_target_does_not_crash(repo, free_mutex):
     command substitution generally."""
     payload = _payload("Start-Process $target -ArgumentList $args", repo, agent_id=_AGENT_ID)
     payload["tool_name"] = "PowerShell"
-    guard.check(payload)  # must not raise
+    guard.check(payload)
 
 
 def test_subagent_testpaths_root_is_not_a_scope(repo, free_mutex):
@@ -328,12 +295,7 @@ def test_subagent_testpaths_ancestor_is_not_a_scope(repo, free_mutex, command):
     assert guard.check(_payload(command, repo, agent_id=_AGENT_ID)) is not None
 
 
-# ---------------------------------------------------------------------------
-# 2026-08-14 correction: `-k`/scoping-flag laundering of a testpaths-root
-# positional (`pytest tests/ -k "expr"` still collects the whole suite to
 # deselect it -- `-k` filters SELECTION, never COLLECTION). See
-# `_classify_pytest`'s docstring and the module docstring's dated entry.
-# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
     "command",
@@ -399,16 +361,6 @@ def test_subagent_invoke_pester_unscoped_denied(repo, free_mutex, command):
 def test_subagent_invoke_pester_scoped_allowed(repo, free_mutex, command):
     _assert_allowed(guard.check(_payload(command, repo, agent_id=_AGENT_ID)))
 
-
-# ---------------------------------------------------------------------------
-# Pester `-Path`-names-a-directory precision gap (measured against
-# `dispatch.evaluate_payload_json`: bare presence of `-Path` was credited as
-# scope regardless of what it named, so a directory argument ALLOWED for
-# both a subagent -- DR-088 R9, file-and-node-id precision, not directory
-# precision -- and an ungranted top-level EM, neither of which is correct).
-# `_classify_pester` now reuses the same `os.path.isdir` primitive DR-088
-# R9's pytest leg (`_pytest_directory_args`) established.
-# ---------------------------------------------------------------------------
 
 def test_subagent_invoke_pester_path_directory_denied(repo, free_mutex):
     """R9: a `-Path` argument naming a directory is not file/node-id
@@ -511,10 +463,6 @@ def test_heredoc_prose_mentioning_pytest_is_not_misread_as_an_invocation(repo, f
     _assert_allowed(guard.check(_payload(cmd, repo, agent_id=_AGENT_ID)))
 
 
-# ---------------------------------------------------------------------------
-# Package-script arg forwarding (2026-07-30 classifier correction)
-# ---------------------------------------------------------------------------
-
 @pytest.mark.parametrize("base", ["npm", "pnpm", "yarn", "bun"])
 @pytest.mark.parametrize(
     "args",
@@ -598,13 +546,7 @@ def test_deny_omits_package_script_offer_for_non_package_manager(repo, free_mute
     assert "pnpm exec vitest run" not in reason
 
 
-# ---------------------------------------------------------------------------
 # tox/nox spelling-gap fix (2026-08-03) -- both `_RUNNER_PREFILTER_RE` and
-# `_classify_tokens` bypassed BOTH the identity leg and the grant leg for a
-# bare `tox`/`nox` invocation. Spec backlink: `_classify_tox_nox`'s own
-# docstring, and the module docstring's 2026-08-03 classifier-correction
-# note.
-# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
     "command",
@@ -673,10 +615,6 @@ def test_runner_recognized_true_for_tox_and_nox():
     assert guard._runner_recognized(["nox", "-s", "tests"])
 
 
-# ---------------------------------------------------------------------------
-# Top-level EM (no agent_id) + mutex leg
-# ---------------------------------------------------------------------------
-
 def test_top_level_em_allowed_when_mutex_free(repo, free_mutex):
     assert guard.check(_payload("with-suite-mutex -- pytest", repo)) is None
 
@@ -725,13 +663,6 @@ def test_subagent_leg_denies_even_when_mutex_raises(repo, monkeypatch):
     monkeypatch.setitem(sys.modules, "coordinator_core.testing.suite_mutex", fake)
     assert guard.check(_payload("pytest", repo, agent_id=_AGENT_ID)) is not None
 
-
-# ---------------------------------------------------------------------------
-# WRAPPER leg -- a granted Tier-U/F command must actually route through
-# with-suite-mutex, or it is denied naming the wrapped form of the caller's
-# own command. Sited strictly after identity and grant, strictly before
-# mutex (see check()'s own comment at the call site).
-# ---------------------------------------------------------------------------
 
 def test_bare_tier_u_em_command_denied_naming_wrapped_form(grant_repo, free_mutex):
     """AC (bare Tier-U): a granted EM's bare, unscoped ``pytest`` is denied
@@ -876,9 +807,7 @@ def test_wrapper_leg_still_allows_a_legitimately_chained_wrap(grant_repo, free_m
     assert guard.check(_payload(cmd, grant_repo)) is None
 
 
-# ---------------------------------------------------------------------------
 # Identity keying: presence of the TOP-LEVEL agent_id, nothing else
-# ---------------------------------------------------------------------------
 
 def test_nested_tool_response_agent_id_is_not_an_identity(repo, free_mutex):
     """A nested ``tool_response.agent_id`` must not false-positive a main-loop
@@ -905,10 +834,6 @@ def test_workflow_shaped_agent_id_denied_without_any_backpointer(repo, free_mute
     assert guard.check(_payload("pytest", repo, agent_id="a" + "0f1e2d3c4b5a6978")) is not None
 
 
-# ---------------------------------------------------------------------------
-# Escape hatch + non-Bash payloads
-# ---------------------------------------------------------------------------
-
 def test_override_env_allows(repo, free_mutex, monkeypatch):
     monkeypatch.setenv(guard._OVERRIDE_ENV_VAR, "1")
     _assert_allowed(guard.check(_payload("pytest", repo, agent_id=_AGENT_ID)))
@@ -933,10 +858,6 @@ def test_malformed_payload_allowed(repo, free_mutex):
     assert guard.check({"tool_name": "Bash", "tool_input": {"command": ""}}) is None
 
 
-# ---------------------------------------------------------------------------
-# Configured fast_test_cmd / full_test_cmd equality leg
-# ---------------------------------------------------------------------------
-
 def test_configured_cmd_leg_reuses_the_canonical_resolver(repo, free_mutex, monkeypatch):
     """A command the generic classifier would allow is still denied when it
     reproduces a configured tier verbatim."""
@@ -945,8 +866,6 @@ def test_configured_cmd_leg_reuses_the_canonical_resolver(repo, free_mutex, monk
         guard, "_configured_test_cmds",
         lambda root: [guard.ConfiguredCmd("fast_test_cmd", configured, 0)],
     )
-    # The generic classifier reads this as Tier T (a real path scope) and
-    # allows it; the equality leg still catches it as a configured tier.
     assert guard._classify_tokens(
         guard._tokens(configured), ["coordinator_core"], str(repo)
     ) is None
@@ -970,16 +889,6 @@ def test_configured_cmd_leg_degrades_silently_without_a_resolver(tmp_path):
     assert guard._configured_test_cmds(str(tmp_path)) == []
     assert guard._configured_test_cmds(None) == []
 
-
-# ---------------------------------------------------------------------------
-# Regression: a malformed `configured` (e.g. bound to a bare string instead
-# of a list of `ConfiguredCmd` 3-tuples) must degrade this belt-and-braces leg
-# to "no match" rather than crash the whole PreToolUse(Bash) guard chain. This
-# is the exact shape of a fleet-wide guard crash reported by a sibling repo
-# (`ValueError: not enough values to unpack (expected 2, got 1)`), caused by
-# `configured` transiently being a bare `repo_root` string during a prior
-# refactor's edit window -- iterating a string yields 1-char items.
-# ---------------------------------------------------------------------------
 
 def test_matches_configured_cmd_does_not_raise_on_malformed_configured():
     assert guard._matches_configured_cmd(
@@ -1094,20 +1003,6 @@ def test_matches_configured_cmd_containment_requires_all_configured_segments():
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# Regression: sys.modules registration before exec_module (the resolver
-# module uses `@dataclass` at module scope, same as the real
-# coordinator-resolve-validation-cmd.py; on Python versions where dataclasses'
-# `sys.modules.get(cls.__module__)` lookup fires during `exec_module`, a
-# module never registered in sys.modules raises there, and the blanket
-# `except Exception: return []` swallows it -- silently collapsing every
-# Tier-F/Tier-U distinction to Tier U).
-# ---------------------------------------------------------------------------
-
-# The `@dataclass` decorator here is the load-bearing part of this fixture:
-# without a module-scope dataclass this resolver would import cleanly even
-# with the sys.modules-registration bug present, and the regression test
-# would pass whether or not the bug was fixed.
 _MINIMAL_RESOLVER_SRC = '''\
 from __future__ import annotations
 
@@ -1157,9 +1052,7 @@ def test_configured_test_cmds_native_resolving_one_tier_still_gets_the_other_via
         lambda root: [guard.ConfiguredCmd("fast_test_cmd", "native fast cmd", 0)],
     )
     tiers = {entry.tier: entry.cmd for entry in guard._configured_test_cmds(str(tmp_path))}
-    # The native-resolved tier is kept as-is (by-path is never asked for it).
     assert tiers["fast_test_cmd"] == "native fast cmd"
-    # The tier native did NOT resolve is filled in from the by-path shim.
     assert tiers["full_test_cmd"] == "python3 -m pytest"
 
 
@@ -1176,26 +1069,12 @@ def test_configured_test_cmds_resolved_at_most_once_per_check_call(repo, free_mu
         return [guard.ConfiguredCmd("fast_test_cmd", configured_cmd, 0)]
 
     monkeypatch.setattr(guard, "_configured_test_cmds", _counting)
-    # The generic classifier reads this as Tier T (a real path scope) and
-    # allows it; only the configured-cmd equality leg catches it as the
-    # whole suite -- this is the shape that reaches BOTH call sites.
     assert guard._classify_tokens(
         guard._tokens(configured_cmd), ["coordinator_core"], str(repo)
     ) is None
     guard.check(_payload(configured_cmd, repo))
     assert len(calls) == 1
 
-
-# ---------------------------------------------------------------------------
-# Tier-U authorization-grant leg (DR-088 layer 5)
-#
-# Unlike the fixtures above (which monkeypatch `resolve_git_root` to avoid
-# needing a real repo), the grant leg's session resolution
-# (``coordinator_core.session.grant.check_tier_u_grant`` ->
-# ``core.resolve_session_id``/``core.session_dir``) shells out to real git
-# for the common-dir, so these fixtures build an ACTUAL tmp git repo -- same
-# idiom as ``coordinator_core/session/tests/test_grant.py``'s ``_make_repo``.
-# ---------------------------------------------------------------------------
 
 def _make_git_repo(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
@@ -1548,17 +1427,6 @@ class TestGrantLeg:
         assert "Wait for the in-flight suite run" not in reason
 
 
-# ---------------------------------------------------------------------------
-# R6 declaration exit (DR-088 amendment, 2026-07-25) -- a repo may declare its
-# fast tier legitimately unscoped via `fast_tier_unscoped_reason` in
-# coordinator.local.md. This is the fix for the live repro: claude-klabauter's own
-# `fast_test_cmd` (a marker-based filter, no path/node-id scope) classifies
-# Tier U by shape (R1/R2) and, absent this leg, denied the top-level EM
-# outright even though `coordinator.local.md` already carries the
-# declaration and names `check_test_suite_invocation.py` as its intended
-# consumer.
-# ---------------------------------------------------------------------------
-
 _CLAUDE_KLABAUTER_FAST_TEST_CMD = (
     "python3 -m pytest -m 'not cadence and not pending_fix and not designed_red' -n auto"
 )
@@ -1783,18 +1651,7 @@ class TestR6DeclaredUnscopedFastTier:
         out = guard.check(
             _payload("with-suite-mutex -- " + chained, grant_repo)
         )
-        # Prefixing
-        # ONLY the first sub-command with ``with-suite-mutex --`` never wraps
-        # the second: bash parses the top-level ``&&`` as a command
-        # separator BEFORE with-suite-mutex ever sees any argv, and
-        # with-suite-mutex execs its ``--`` operand via a bare ``Popen``,
-        # never a shell that would re-interpret ``&&`` inside it -- so
-        # ``pnpm run test`` genuinely ran unwrapped, holding no mutex. That
         # is the exact WRAPPER-leg hazard the decoy-segment fix closes; a
-        # chained ``fast_test_cmd`` (already a DR-088 config violation per
-        # this test's own history) has no verbatim-chain form that
-        # legitimately satisfies the tightened WRAPPER leg, so this must now
-        # deny naming the still-unwrapped ``pnpm run test`` segment.
         reason = _reason(out)
         assert "Route this through the suite mutex" in reason
         assert "Detected: pnpm test" in reason
@@ -1989,10 +1846,7 @@ class TestConfiguredCmdReachability:
         _assert_allowed(guard.check(
             _payload(command, declared_repo, agent_id=_AGENT_ID)))
 
-    # -----------------------------------------------------------------------
     # Regression: a fast tier that STRICTLY NARROWS the full tier (the natural
-    # way to scope one -- append a path) must stay reachable as Tier F.
-    # -----------------------------------------------------------------------
 
     @pytest.fixture
     def narrowing_repo(self, tmp_path, monkeypatch):
@@ -2034,11 +1888,6 @@ class TestConfiguredCmdReachability:
             "python dev.py test", cwd=str(narrowing_repo))
         assert [m.tier for m in matches] == ["U"]
 
-    # -----------------------------------------------------------------------
-    # regression. A bare single-token
-    # configured `fast_test_cmd` (no declared arguments) must not swallow a
-    # genuinely narrower invocation of that runner into Tier F/U.
-    # -----------------------------------------------------------------------
 
     @pytest.fixture
     def bare_runner_repo(self, tmp_path, monkeypatch):
@@ -2306,17 +2155,6 @@ def test_matches_declared_fast_test_cmd_exact_still_rejects_superset_through_nor
     assert guard._matches_declared_fast_test_cmd(superset_argv, configured) is False
 
 
-# ---------------------------------------------------------------------------
-# R9 -- subagent Tier-T precision leg (DR-088 amendment, 2026-07-28)
-#
-# The ruling: for a caller carrying a top-level ``agent_id``, Tier T is
-# file-and-node-id precision, not directory precision. § Decision always
-# defined Tier T as what the caller "authored or touched"; the mechanism
-# enforced path-scoped and dropped the relevance half. These tests pin both
-# halves of the ruling -- what the leg newly refuses, and the four carve-outs
-# it must not break.
-# ---------------------------------------------------------------------------
-
 @pytest.fixture
 def repo_with_test_dir(repo):
     """``repo`` plus a real on-disk test directory to name as an argument.
@@ -2338,7 +2176,6 @@ def repo_with_test_dir(repo):
         "python3 -m pytest coordinator_core/frontmatter/tests/sub -q",
         ".venv/bin/python -m pytest coordinator_core/frontmatter/tests/sub -q",
         # -k narrows the selection but does not narrow the ARGUMENT: the
-        # ruling is directory-precision, stated literally.
         "pytest coordinator_core/frontmatter/tests/sub -k test_thing",
     ],
 )
@@ -2367,15 +2204,9 @@ def test_r9_deny_instructs_reporting_the_substitution_to_the_dispatcher(
 @pytest.mark.parametrize(
     "command",
     [
-        # Node id -- bounded to one test by construction, permitted touched
-        # or not. This is what keeps executor pre-existing-failure
-        # verification legal.
         "pytest coordinator_core/frontmatter/tests/sub/test_x.py::test_case",
-        # File -- self-bounding.
         "pytest coordinator_core/frontmatter/tests/sub/test_x.py",
-        # No path argument at all.
         "pytest -k schema_validate",
-        # A directory-shaped token that is a FLAG OPERAND, not a positional.
         "pytest --rootdir coordinator_core/frontmatter/tests/sub "
         "coordinator_core/frontmatter/tests/sub/test_x.py::test_case",
     ],
@@ -2454,7 +2285,6 @@ def test_touched_set_read_never_falls_back_to_the_session_level_file(tmp_path, m
     monkeypatch.setattr(
         "coordinator_core.lifecycle.git_common_dir", lambda root: tmp_path / ".git"
     )
-    # Unrecognised agent-id shape -> canonicalization fails closed.
     assert guard._agent_touched_test_files("not-a-valid-agent-id", "sess1", str(tmp_path)) == []
 
 
@@ -2477,16 +2307,6 @@ def test_walk_pytest_args_is_the_single_source_for_operand_grammar():
     assert positionals == ["tests/test_x.py"]
 
 
-# R9 -- unexpanded-glob routearound close (2026-08-03, example-retrieval-repo Finding 2)
-#
-# ``_pytest_directory_args`` decided "this positional names a directory" via
-# a literal ``os.path.isdir`` check, so an unexpanded glob positional (the
-# shell would expand it to the same directory breadth R9 exists to refuse,
-# but the guard sees only the un-expanded pattern) slipped past leg 0
-# entirely. These tests pin the glob-expansion close and its two deliberate
-# posture calls -- files-only and zero-match.
-# ---------------------------------------------------------------------------
-
 @pytest.fixture
 def repo_with_glob_fixtures(repo_with_test_dir):
     """``repo_with_test_dir`` plus files inside the real ``sub`` directory,
@@ -2500,9 +2320,6 @@ def repo_with_glob_fixtures(repo_with_test_dir):
 @pytest.mark.parametrize(
     "command",
     [
-        # Un-expanded glob covering the real `sub` directory -- the shell
-        # would expand this to `coordinator_core/frontmatter/tests/sub`,
-        # exactly the directory-precision shape R9 refuses literally.
         "pytest coordinator_core/frontmatter/*/sub",
         "pytest coordinator_core/frontmatter/tests/*/",
     ],
@@ -2563,15 +2380,7 @@ def test_pytest_directory_args_glob_covering_a_directory_is_returned(repo_with_t
     ]
 
 
-# ---------------------------------------------------------------------------
-# Dynamic prefilter leg (2026-08-10): a repo whose configured test command
 # invokes a runner ``_RUNNER_PREFILTER_RE`` has never heard of must still be
-# gated, without a per-repo hand-patch to the static regex. Pins the real
-# fleet shapes named in the incident report (example-retrieval-repo-ue-addon's
-# ``bin/run-fast-tests.py``/``bin/run-full-test-suite.py --yes``, and
-# example-retrieval-repo's ``run_tier_tests.py``, whose static-regex token was removed
-# by this fix).
-# ---------------------------------------------------------------------------
 
 class TestDynamicPrefilterLeg:
 

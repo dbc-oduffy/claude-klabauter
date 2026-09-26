@@ -115,8 +115,6 @@ from coordinator_core.contract.decision_object.envelope import (
 )
 from coordinator_core.resolution.facade import resolve_operator_config
 
-#: The five mirror-surface cadences `backlog-grind-assemble brief` accepts.
-#: Cadence names WHICH surface is asking, not a severity/depth knob (D-2) —
 #: see the module docstring for the `orient_assemble.CADENCES` naming
 #: reuse. Order matches `_READER_MODULES` below 1:1.
 CADENCES: tuple[str, ...] = (
@@ -127,11 +125,6 @@ CADENCES: tuple[str, ...] = (
     "dogfood",
 )
 
-#: The five reader families this seam wires into `brief()`. Each exposes
-#: `collect(cadence) -> ReaderResult` (directives + judgment_points);
-#: cadence self-gating lives inside each reader's own `collect()`, not
-#: here. Exposed above under the `readers_<cadence-with-underscores>` alias
-#: names the C1 contract test resolves via `getattr`.
 _READER_MODULES = (
     readers_bug_blitz,
     readers_mise_en_place,
@@ -140,33 +133,15 @@ _READER_MODULES = (
     readers_dogfood,
 )
 
-#: Exit-code contract, locally scoped to this CLI (mirrors
-#: `orient_assemble`'s/`pickup_assemble`'s/`baton_assemble`'s own locally-
-#: scoped plain-int convention — the C1 contract test resolves these as
-#: bare module attributes, not an `IntEnum`).
 EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_TRANSPORT_FAIL = 3
 
-#: The one carrier for "which run is asking" (ratified 2026-08-04,
-#: `cross-repo/inbox/2026-08-04-doe-claude-em-mise-run-id-carrier-env-breaks-
-#: windows.md`). A flag rather than an environment variable because
-#: `VAR=value command` is not a line `cmd.exe` parses — the Windows
-#: `backlog-grind-assemble.cmd` launcher is the P0 path — and because each
-#: EM Bash call is a fresh shell, so nothing exported survives to the next.
-#: `readers_mise` spells this string a second time for its own judgment-point
-#: prose; that is a user-facing label, deliberately not imported across the
-#: seam (this package imports the readers, so the reverse edge would be
-#: circular).
 _RUN_ID_FLAG = "--run-id"
 
 
 @dataclass(frozen=True)
 class BriefResult:
-    """`brief()`'s return shape — the computed decision object plus the
-    inputs it was computed from, for a caller (C4's `apply.py`, which
-    recomputes the brief in-process before dispatching) to recover without
-    a second `resolve_operator_config()` round-trip."""
 
     decision_object: dict[str, Any]
     cadence: str
@@ -244,9 +219,6 @@ def brief(
     )
 
 
-#: The usage line, spelled once for both the emitted decision object and
-#: stderr. `--run-id` is offered for every cadence, not documented per
-#: surface — the seam does not know which readers consume it.
 _USAGE_LINE = (
     f"backlog-grind-assemble brief <{'|'.join(CADENCES)}> [--run-id <run-id>]"
 )
@@ -313,12 +285,8 @@ def _main_mint_run_id(rest: list[str]) -> int:
             )
             return EXIT_OK
 
-    # This branch and the
     # unrecognized-cadence branch above both exit EXIT_USAGE (AC5), but now
-    # print distinct messages so an operator can tell a typo from a real
     # cadence nothing mints for yet. The `cadence not in CADENCES` check is
-    # a cadence-vocabulary fact `main()` already tests elsewhere in this
-    # file, not a run-id-shape fact — stays on the AC7-opaque side.
     print(
         "backlog-grind-assemble: no reader claims mint-run-id for cadence "
         f"{cadence!r}",

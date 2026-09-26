@@ -45,13 +45,6 @@ _mod = _load_module()
 
 
 def _run_cmd_round_default_under_held_lock(dest: Path) -> tuple:
-    """Holds the real lock on `dest`, then calls `_cmd_round_default` against
-    that SAME dest -- its own `with _round_held_lock(...)` is the very first
-    thing the function reaches (before any subprocess/branch0 machinery), so
-    this exercises the real timeout path with nothing else stubbed.
-
-    Returns `(rc, elapsed_seconds, stderr_text)`.
-    """
     _mod._bootstrap_engine()
     args = SimpleNamespace(yes=True, invocation_authorized=False, no_publish=False)
     with _mod._round_held_lock(Path(dest), holder_label="peer:percolate-round"):
@@ -82,7 +75,7 @@ def test_default_deny_denies_fast_and_message_is_pointer_only(tmp_path, monkeypa
 
     assert rc == _mod._EXIT_LOCK_BUSY
     assert elapsed < 1.0, f"deny-at-once took {elapsed}s"
-    assert "pid=" in err  # `_describe_holder`'s own holder metadata
+    assert "pid=" in err
 
 
 def test_allow_queue_enters_poll_loop_and_still_denies(tmp_path, monkeypatch):
@@ -101,13 +94,6 @@ def test_allow_queue_enters_poll_loop_and_still_denies(tmp_path, monkeypatch):
     assert rc == _mod._EXIT_LOCK_BUSY
     assert elapsed < 5.0, f"probe wait should be seconds, not the 180s ceiling: {elapsed}s"
     assert "held by" in err
-    # Leg 2 keeps its own
-    # negatives even though leg 1 centralises the content contract onto
-    # wire_contract.lock_busy_message: this exception is a real LockTimeout
-    # raised after an actual multi-attempt poll loop, a genuinely different
-    # `exc` shape (`within {timeout}s`) than leg 1's instant single-try
-    # deny. A regression reintroducing a retry imperative only on the
-    # polling path would be caught by no other test.
     assert "COORDINATOR_ALLOW_PERCOLATE_QUEUE" not in err
     assert "Re-run" not in err
     assert "retry" not in err.lower()
@@ -115,10 +101,6 @@ def test_allow_queue_enters_poll_loop_and_still_denies(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("dest_name", ["dest-a"])
 def test_publish_contention_wait_secs_wired_to_lock_call(tmp_path, monkeypatch, dest_name):
-    """Unit-level pin: `_cmd_round_default`'s lock acquisition passes
-    `publish_contention_wait_secs()`, not the old `_round_lock_wait_secs()`
-    (which always resolved to the full 180s wait regardless of the deny
-    posture)."""
     _mod._bootstrap_engine()
     calls = []
 

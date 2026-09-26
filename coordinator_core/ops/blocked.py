@@ -50,11 +50,10 @@ from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops.ceremony.records_query import query_records
 from coordinator_core.wire_paths import rel_id
 
-_PROG = "blocked.sh"  # literal program-name prefix — matches the DoE filename
+_PROG = "blocked.sh"
 
 
 def _git_repo_root(cwd: Optional[str] = None) -> Optional[str]:
-    """Resolve the git repo root for `cwd` (defaults to process cwd). None if not a repo."""
     return show_toplevel(cwd)
 
 
@@ -70,11 +69,6 @@ def _render_handoff_line(path: str, frontmatter: dict) -> str:
 
 
 def _run_query_records(repo_root: str) -> str:
-    """Native-seam handoff query for blocked/paused; empty string on any failure.
-
-    Mirrors the retired bash/node oracle's `|| true` — a query-records failure is
-    swallowed, never propagated as an error for this section (fail-open, unchanged).
-    """
     try:
         records = query_records(
             "handoff",
@@ -95,7 +89,6 @@ _TODO_MARKERS = ("status: blocked", "status: paused", "blocked:", "waiting on:")
 
 
 def _grep_todo_matches(path: str) -> List[str]:
-    """Return `lineno:line` strings for every line in `path` matching a blocked marker."""
     matches: List[str] = []
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
@@ -110,7 +103,6 @@ def _grep_todo_matches(path: str) -> List[str]:
 
 
 def _find_todo_files(tasks_dir: str) -> List[str]:
-    """Return sorted `tasks/<name>/todo.md` paths — exactly mindepth 2, maxdepth 2."""
     found: List[str] = []
     try:
         entries = sorted(os.listdir(tasks_dir))

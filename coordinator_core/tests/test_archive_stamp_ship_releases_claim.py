@@ -1,19 +1,3 @@
-"""
-coordinator_core.tests.test_archive_stamp_ship_releases_claim — pins C4 of
-docs/plans/2026-09-11-handoff-lifecycle-one-legal-state-table.md: a genuine
-`cs_ship_handoff` ship releases the claim it was holding via the existing
-`coordinator_core.session.claims.release_artifact` seam, and a guard-retained
-call (never reachable today per the live-children guard's removal, but pinned
-for the contract regardless) must NOT release.
-
-Spec backlink: docs/plans/2026-09-11-handoff-lifecycle-one-legal-state-table.md § C4
-
-Negative-spec: does not re-derive `cs_ship_handoff`'s own stamp/flip contract
-(covered by `coordinator_core/test_archive_stamp.py::TestShipHandoff`) — this
-file adds ONLY the claim-release seam this chunk introduces.
-
-Run: python3 -m pytest coordinator_core/tests/test_archive_stamp_ship_releases_claim.py -q (from the repo root)
-"""
 
 from __future__ import annotations
 
@@ -130,9 +114,6 @@ class TestShipReleasesClaim:
         )
 
     def test_a_ship_with_no_prior_claim_is_still_a_clean_success(self, tmp_path):
-        """`release_artifact` no-ops (returns True) on an absent claim — a ship
-        of a handoff nobody claimed through this session's ledger must not be
-        penalized by the release call this chunk adds."""
         repo = tmp_path / "repo"
         _init_repo(repo)
         hp = _seed_handoff(
@@ -147,9 +128,6 @@ class TestShipReleasesClaim:
         assert not _claim_dir(repo, "handoff", "ship-release2.md").exists()
 
     def test_a_refused_ship_never_reaches_the_release_call(self, tmp_path, monkeypatch):
-        """A record the flip would refuse (§ TestShipHandoff's own refusal
-        pair) must leave a held claim untouched — the release call sits
-        strictly after the op's own success verdict, never before it."""
         repo = tmp_path / "repo"
         _init_repo(repo)
         hp = _seed_handoff(
@@ -178,12 +156,6 @@ class TestShipReleasesClaim:
         assert _claim_dir(repo, "handoff", "ship-refused.md").is_dir()
 
     def test_a_retained_outcome_is_never_released(self, monkeypatch, tmp_path):
-        """Direct unit pin on the retain-vs-release branch itself, independent
-        of whether any live path can still produce `retained: True` today
-        (the live-children guard was removed 2026-08-28) — the contract in
-        `cs_ship_handoff`'s own docstring is unconditional: retention must
-        NEVER release. Monkeypatches `_call_handoff_archive_transition` to
-        force the retained shape without depending on guard machinery."""
         repo = tmp_path / "repo"
         _init_repo(repo)
         hp = _seed_handoff(
@@ -222,12 +194,6 @@ class TestShipReleasesClaim:
     def test_release_failure_never_converts_a_successful_ship_into_an_error(
         self, tmp_path, monkeypatch, capsys
     ):
-        """`release_artifact` itself never raises per its own docstring, but
-        this wrapper still guards the import/resolution around it — an
-        unexpected exception there must be reported, never propagated, and
-        the ship's own rc must stay 0 (spec body: 'A failed release is
-        reported, never swallowed, and never converts a successful ship into
-        a non-zero exit')."""
         repo = tmp_path / "repo"
         _init_repo(repo)
         hp = _seed_handoff(

@@ -1,25 +1,3 @@
-"""test_generate_tested_platforms.py — tests for coordinator/bin/generate-tested-platforms.
-
-Drives the generator end-to-end against a scratch repo fixture (temp dir with its
-own `git init`, its own agent-install-manifest.json, and its own
-state/platform-outcomes/ tree) so the real repo's manifest is never touched by a
-test run. Invoked with an explicit `sys.executable` (never relies on the target's
-shebang/exec bit — Windows cannot exec an extensionless polyglot directly, and this
-test must be Windows-clean per the chunk's own execution criterion).
-
-Covers:
-  (a) a passing, fresh entry-point record promotes its platform.
-  (b) dry-run (no --write) writes nothing to the manifest on disk.
-  (c) grandfather clause preserves a pre-existing tested_platforms entry that has
-      zero backing entry-point-surface records.
-  (d) a stale record (surface_sha mismatch) does NOT promote its platform.
-  (e) bonus: a ceremony-hot-path surface (not an entry point) does not promote,
-      even if passing and fresh — proves the entry-point-only scope.
-
-Spec backlink: DoE-claude:pln-platform-verified-is-a-distinc-a076aa § C3a1
-
-Run with: python test_generate_tested_platforms.py
-"""
 
 from __future__ import annotations
 
@@ -38,8 +16,6 @@ from coordinator_core.ops.platform_outcome_records import (
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -55,13 +31,6 @@ FAILURES: list[str] = []
 
 
 def _check(condition: bool, label: str) -> None:
-    """Fail the enclosing test.
-
-    Negative-spec: this MUST raise on a false condition. It previously only
-    printed and bumped a module-global counter that nothing ever asserted on,
-    which made every check routed through it decorative. Do not "restore"
-    the counting-only shape.
-    """
     global TESTS_PASSED, TESTS_FAILED
     if condition:
         TESTS_PASSED += 1
@@ -71,10 +40,6 @@ def _check(condition: bool, label: str) -> None:
         print(f"FAIL: {label}")
         pytest.fail(label, pytrace=False)
 
-
-# ---------------------------------------------------------------------------
-# Fixture helpers
-# ---------------------------------------------------------------------------
 
 _MANIFEST_REL = os.path.join("coordinator", "docs", "install", "agent-install-manifest.json")
 
@@ -89,9 +54,6 @@ def _run_git(repo_root: str, *args: str) -> subprocess.CompletedProcess:
 
 
 def _make_scratch_repo(tested_platforms: list[str]) -> tuple[str, str]:
-    """Create a temp dir, git-init it, commit once, and seed a minimal
-    agent-install-manifest.json with the given tested_platforms. Returns
-    (repo_root, head_sha)."""
     repo_root = tempfile.mkdtemp(prefix="gen-tested-platforms-test-")
     _run_git(repo_root, "init", "-q")
     _run_git(repo_root, "config", "user.email", "test@example.com")
@@ -162,11 +124,6 @@ def _read_manifest(repo_root: str) -> dict:
         return json.load(fh)
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 def test_passing_entry_point_record_promotes() -> None:
     repo_root, sha = _make_scratch_repo(tested_platforms=[])
     try:
@@ -212,7 +169,6 @@ def test_dry_run_writes_nothing() -> None:
 def test_grandfather_preserves_recordless_pre_existing_entry() -> None:
     repo_root, _sha = _make_scratch_repo(tested_platforms=["macos", "linux"])
     try:
-        # Zero records at all on disk (no state/platform-outcomes/ dir).
         proc = _run_generator(repo_root, write=True)
         _check(proc.returncode == 0, f"(c) generator exits 0: {proc.stderr}")
         _check(
@@ -240,7 +196,7 @@ def test_stale_record_does_not_promote() -> None:
             platform="windows",
             machine="machine-b",
             surface="standalone_setup_script",
-            surface_sha="0000000000000000000000000000000000000000",  # deliberately mismatched
+            surface_sha="0000000000000000000000000000000000000000",
             observed_at=stale_observed_at,  # also stale by the SECONDARY rule, by construction
         )
         proc = _run_generator(repo_root, write=True)
@@ -255,15 +211,6 @@ def test_stale_record_does_not_promote() -> None:
 
 
 def test_write_does_not_reflow_unrelated_manifest_content() -> None:
-    """--write must splice only the tested_platforms array's own text region.
-
-    Negative-spec: a whole-file `json.dump` re-serialization would escape the
-    em-dash to `\\u2014`, blow the hand-inlined `present_platforms` array out
-    to one element per line, and (pre-fix) drop the trailing newline. None of
-    that may happen to a field --write was not asked to change.
-
-    cross-repo/archive/2026-08-26-doe-claude-em-generate-tested-platforms-write-reflows-the-manifest.md
-    """
     repo_root, sha = _make_scratch_repo(tested_platforms=[])
     try:
         manifest_path = os.path.join(repo_root, _MANIFEST_REL)
@@ -314,9 +261,6 @@ def test_write_does_not_reflow_unrelated_manifest_content() -> None:
 
 
 def test_hot_path_surface_does_not_promote() -> None:
-    """Bonus (e): a ceremony-hot-path surface (e.g. 'workday-start', C5's KR-2
-    shape) is NOT a manifest-declared entry point and must not promote, even
-    when passing and fresh — proves the entry-point-only scope decision."""
     repo_root, sha = _make_scratch_repo(tested_platforms=[])
     try:
         _write_record(

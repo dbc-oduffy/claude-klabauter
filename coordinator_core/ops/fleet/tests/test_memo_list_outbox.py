@@ -38,8 +38,6 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _run(result):
-    """Run async coroutine synchronously, or pass a plain result through
-    unchanged (some handlers this file exercises are now plain `def`)."""
     if asyncio.iscoroutine(result):
         return asyncio.run(result)
     return result
@@ -52,7 +50,6 @@ def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProc
 
 
 def _make_sender_git_repo(tmp_path: Path) -> Path:
-    """Minimal git repo to serve as the caller repo (common_dir -> worktree)."""
     root = tmp_path / "sender-repo"
     root.mkdir()
     _git(root, "init", "-b", "main")
@@ -71,8 +68,6 @@ def _base_draft_params(**overrides) -> dict:
         "topic": "some-topic",
         "to": "example-retrieval-repo-em",
         "title": "A draft memo",
-        # `kind` is required by memo.draft (it matches memo.send's own gate);
-        # a params dict without it never reaches the behaviour under test.
         "kind": "fyi",
     }
     params.update(overrides)
@@ -80,14 +75,8 @@ def _base_draft_params(**overrides) -> dict:
 
 
 def _snapshot(tmp_path: Path) -> set:
-    """Return the set of all paths (files + dirs) under tmp_path, for a
-    before/after no-write comparison."""
     return {str(p) for p in tmp_path.rglob("*")}
 
-
-# ===========================================================================
-# 1. setup-error envelope on bad params
-# ===========================================================================
 
 class TestSetupErrorEnvelope:
     def test_dry_run_missing(self):
@@ -101,7 +90,6 @@ class TestSetupErrorEnvelope:
         assert result["exit_code"] == 1
 
     def test_dry_run_false_rejected(self):
-        """memo.list_outbox has no act mode — dry_run:false is a setup error."""
         result = _validate_list_outbox_params({"dry_run": False})
         assert isinstance(result, dict)
         assert result["exit_code"] == 1
@@ -117,10 +105,6 @@ class TestSetupErrorEnvelope:
         result = _run(_memo_list_outbox({"dry_run": True}, repo_root=None))
         assert result["exit_code"] == 1
 
-
-# ===========================================================================
-# 2. Empty/absent outbox
-# ===========================================================================
 
 class TestEmptyOutbox:
     def test_no_outbox_dir_yields_empty_candidates(self, tmp_path):
@@ -147,10 +131,6 @@ class TestEmptyOutbox:
         assert result["exit_code"] == 0
         assert result["candidates"] == []
 
-
-# ===========================================================================
-# 3. Drafts written by memo.draft are enumerated with correct fields
-# ===========================================================================
 
 class TestEnumeratesDrafts:
     def test_single_draft_enumerated_with_fields(self, tmp_path):
@@ -213,10 +193,6 @@ class TestEnumeratesDrafts:
         assert candidate["status"] is None
 
 
-# ===========================================================================
-# 4. No-write proof
-# ===========================================================================
-
 class TestNoWriteProof:
     def test_enumeration_leaves_filesystem_unchanged(self, tmp_path):
         sender = _make_sender_git_repo(tmp_path)
@@ -235,14 +211,7 @@ class TestNoWriteProof:
         )
 
 
-# ===========================================================================
-# 5. Store-less-ness architecture test (mirrors memo_list.py's TestNoMemoIndex)
-# ===========================================================================
-
 class TestDualRootRead:
-    """2026-09-03 outbox relocation: writes moved to
-    `.coordinator-local/memo-outbox/`, but hundreds of drafts still sit at
-    the retired `state/memo-outbox/` — enumeration must still find them."""
 
     def test_legacy_root_draft_is_enumerated(self, tmp_path):
         sender = _make_sender_git_repo(tmp_path)

@@ -42,10 +42,6 @@ Negative-spec:
 
 from __future__ import annotations
 
-# Generator-provenance declaration: this op writes diff.patch/head.sha under
-# a caller-supplied findings_dir ("this op only chooses the sub-directory
-# name under it" -- module docstring negative-spec), never a path this
-# module defaults into the tracked repo tree.
 GENERATES = []
 
 from pathlib import Path
@@ -55,22 +51,16 @@ from coordinator_core._settings_home import normalize_native_path
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.git_native import _git
 
-#: Number of leading hex characters of each resolved SHA used to build the
-#: snapshot directory name — long enough to be practically collision-free
-#: for a single repo's diff-snapshot use case, short enough to stay a
-#: readable directory name.
 _SHA_PREFIX_LEN = 12
 
 
 def _error(message: str, **extra: object) -> dict:
-    """Structured-error envelope: contract fields present, values None, plus "error"."""
     result: dict = {"ts_dir": None, "diff_path": None, "head_sha": None, "error": message}
     result.update(extra)
     return result
 
 
 def _resolve_sha(repo_root: Path, ref: str) -> tuple[Optional[str], Optional[str]]:
-    """`git rev-parse <ref>` → (sha, error_message). Exactly one is None."""
     result = _git(["rev-parse", ref], cwd=repo_root)
     if not result.ok:
         return None, f"git rev-parse {ref!r} failed: {result.stderr.strip() or result.returncode}"
@@ -138,9 +128,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     diff_path = ts_dir / "diff.patch"
     head_sha_path = ts_dir / "head.sha"
 
-    # Idempotency short-circuit (AC7 / DEC-7, see module docstring): a prior
-    # call already froze this exact (base_sha, head_sha) pair — trust it
-    # rather than recomputing.
     if head_sha_path.is_file() and diff_path.is_file():
         existing = head_sha_path.read_text(encoding="utf-8").strip()
         if existing == head_sha:

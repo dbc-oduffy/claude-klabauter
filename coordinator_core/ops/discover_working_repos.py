@@ -73,27 +73,10 @@ _CREATIONFLAGS = no_console_creationflags()
 
 _MSYS_DRIVE_RE = re.compile(r"^/([A-Za-z])(/.*)?$")
 
-#: Named so `_emit_form` reads without an escape-in-an-escape.
 BACKSLASH = chr(92)
 
 
 def _fs_probe_path(p: str) -> str:
-    """Convert a path to a form the *running interpreter* can actually stat.
-
-    Every existence probe in this module is built in MSYS/POSIX form
-    ("/x/foo", "/c/Users/..."). That form is valid under Git Bash — the
-    environment the bash oracle ran in — but native Windows Python cannot
-    stat it: `os.path.isdir('/c/Users/<username>')` is False while
-    `os.path.isdir('C:/Users/<username>')` is True (forward slashes are fine;
-    the `/c/` drive-letter-as-directory form is not). On Windows, convert an
-    MSYS drive path ("/x/foo" or bare "/x") back to a form Python can stat
-    ("x:/foo" / "x:/") and leave an already-native path ("X:\\foo" or
-    "X:/foo") alone — it won't match the MSYS pattern, so it round-trips as
-    identity. On non-Windows hosts this is a pure identity function — POSIX
-    paths are POSIX paths there, so today's behavior is unchanged.
-
-    Spec backlink: X:/DoE-claude/tasks/2026-07-20-install-dogfood-friction.md
-    """
     if os.name != "nt":
         return p
     m = _MSYS_DRIVE_RE.match(p)
@@ -104,9 +87,6 @@ def _fs_probe_path(p: str) -> str:
     return f"{drive}:{tail}"
 
 
-# grep -vE '(AppData[\\/]Local[\\/]Temp|^[A-Za-z]:\\?$|/\.claude$)' — Tier A's
-# meta-repo/scratch/bare-drive-root exclusion filter. Ported byte-for-byte
-# from the bash ERE (see module docstring for the greedy-decode context).
 _TIER_A_EXCLUDE_RE = re.compile(r"(AppData[\\/]Local[\\/]Temp|^[A-Za-z]:\\?$|/\.claude$)")
 
 _TIER_B_CANDIDATES: List[str] = [
@@ -153,52 +133,7 @@ def _sort_unique(lines: Iterable[str]) -> List[str]:
     return sorted(set(lines))
 
 
-# ---------------------------------------------------------------------------
-# Gate: is posix_dir the root of a real git repo?
-# ---------------------------------------------------------------------------
-
 def _is_git_root(posix_dir: str) -> bool:
-    """Returns True iff posix_dir is the root of a real git repo.
-
-    Non-spawning seam, not a per-candidate `git -C <dir> rev-parse
-    --show-toplevel`: delegates to `coordinator_core.git.repo_root.
-    show_toplevel`, which WALKS up from `posix_dir` looking for a `.git`
-    entry (dir or file — worktree-safe, same as the direct-spawn form this
-    replaces) and only falls back to a single spawn per distinct resolved
-    cwd if the walk finds nothing, memoized process-lifetime by that module
-    (see its docstring). `_gate_and_dedup` can call this once per candidate
-    dir it gates (spec backlink: this chunk's brief, C12 — "stops probing
-    `git rev-parse --show-toplevel` per candidate dir") — every candidate
-    that IS a real repo root resolves via the walk alone, zero spawns; only
-    candidates with no `.git` anywhere on their own ancestor chain (bogus
-    scratch paths, bare parent dirs) fall through to `show_toplevel`'s
-    single spawn fallback, exactly mirroring what a direct `git rev-parse`
-    there would have done anyway.
-
-    Not realpath — DR-148 (BSD portability of the bash oracle);
-    `os.path.realpath` is the direct Python equivalent of `pwd -P` here
-    (both physically resolve symlinks), so fidelity is preserved.
-    Worktree-safe: the walk (and its spawn fallback) succeeds on both
-    .git-dir repos and .git-file worktrees. Subdirectory-safe: if
-    posix_dir is a subdir of a repo, `toplevel` identifies the repo root,
-    not the subdir, so identity fails and this returns False.
-
-    Identity is established via `os.path.samefile(toplevel, canon)`, not
-    plain string `==` — `show_toplevel` always emits POSIX (forward-slash)
-    separators on its spawn-fallback leg (mirroring `git rev-parse
-    --show-toplevel`), while `os.path.realpath` emits native separators
-    (backslashes on Windows), so a plain `==` never holds on Windows even
-    when the two paths name the same directory on disk (`toplevel=
-    'X:/DoE-claude'` vs `canon='X:\\DoE-claude'`). `samefile` resolves
-    separators, drive-letter case, and 8.3 short names via the filesystem,
-    which is the identity check actually intended here. Falls back to a
-    normcase/normpath string comparison if `samefile` raises `OSError`
-    (e.g. one of the two paths vanished between resolution and the
-    comparison — a real race on a shared tree); returns False only if both
-    approaches fail to establish identity.
-
-    Spec backlink: X:/DoE-claude/tasks/2026-07-20-install-dogfood-friction.md
-    """
     if not os.path.isdir(posix_dir):
         return False
     try:
@@ -217,22 +152,10 @@ def _is_git_root(posix_dir: str) -> bool:
         )
 
 
-# ---------------------------------------------------------------------------
-# Cross-tier dedup key normalization.
-# ---------------------------------------------------------------------------
-
 _DRIVE_FORM_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$")
 
 
 def _to_posix_key(p: str) -> str:
-    """Normalize a path (native "X:\\a\\b", "X:/a/b", or POSIX "/x/a/b") to a
-    POSIX dedup KEY with no trailing slash. The key is the existence-test path
-    AND the cross-tier dedup identity — it collapses the native/POSIX form
-    mismatch that otherwise survives dedup when the same repo surfaces in two
-    tiers (e.g. Tier A native + Tier A.5 registry form). Only the DRIVE LETTER
-    is lowercased (X: and x: are the same drive) — the rest of the path keeps
-    its case so this does not corrupt case-sensitive POSIX paths.
-    """
     m = _DRIVE_FORM_RE.match(p)
     if m:
         drive = m.group(1).lower()
@@ -246,12 +169,6 @@ def _to_posix_key(p: str) -> str:
 
 
 def _emit_form(p: str) -> str:
-    """The single output form for a discovered repo path: forward slashes, no
-    trailing slash, original drive-letter case. Distinct from `_to_posix_key`,
-    which additionally lowercases the drive and rewrites `X:/a` to `/x/a` — that
-    is the internal dedup/existence-probe identity, not something a consumer
-    should ever see.
-    """
     p = p.replace(BACKSLASH, "/")
     while p.endswith("/") and p != "/":
         p = p[:-1]
@@ -259,13 +176,6 @@ def _emit_form(p: str) -> str:
 
 
 def _publish_mirror_keys() -> set:
-    """Dedup keys (`_to_posix_key` form) of every path registered under the
-    machine-local `publish.mirrors.*.path` namespace.
-
-    Best-effort, matching this module's never-block contract: an unreadable
-    registry yields an empty set (discovery proceeds unfiltered) rather than
-    an error.
-    """
     flat = _merged_flat_registry()
     mirrors: set = set()
     for key in flat:
@@ -279,44 +189,10 @@ def _publish_mirror_keys() -> set:
 
 
 def _identities(keys: Iterable[str]) -> set:
-    """Filesystem identities for `keys`, which are `_to_posix_key` forms.
-
-    Used to widen the publish-mirror exclusion past string equality: a
-    mirror reachable under a second spelling (a case variant on a
-    case-insensitive filesystem, the same shape as klabauter#2) is still
-    the mirror, and registering a publish target as a working repo is the
-    failure this exclusion exists to prevent. A key that cannot be stat'd
-    contributes its own string, which is exactly the pre-existing
-    comparison for that entry -- registry paths routinely name trees that
-    do not exist on this box, and that is not an error here (see
-    `_publish_mirror_keys`' best-effort contract).
-    """
     return {dir_identity(_fs_probe_path(k), fallback=k) for k in keys}
 
 
 def _gate_and_dedup(lines: Iterable[str], mirror_keys: Optional[set] = None) -> Iterator[str]:
-    """Filter stdin-equivalent lines to real git roots, deduped by normalized
-    POSIX key, emitting each surviving repo in `_emit_form` (forward slashes).
-    The oracle's preserve-first-seen-native-form behavior is deliberately gone
-    — see the module docstring's Output contract § 1.
-
-    Three filters in one pass:
-      (1) `.git` gate — drops bare parent dirs / scratch paths that pass a
-          plain existence test but are not repos (the Tier-A leak).
-      (2) cross-tier identity dedup — collapses native vs POSIX duplicates of
-          one repo, AND the case-variant spellings a case-insensitive
-          filesystem hands back as two strings for one directory. Identity is
-          the filesystem's own (`path_identity.dir_identity`), not the
-          normalized string: `_to_posix_key` deliberately does not fold case
-          (it cannot — see its docstring), so on macOS/Windows `~/code/repo`
-          and `~/Code/repo` produced two keys for one directory and discovery
-          emitted the repo twice (klabauter#2). The stat is taken only after
-          the `.git` gate has already established the path is a real repo
-          root, so it costs one `os.stat` on a path this loop has stat'd
-          before and adds no spawn.
-      (3) publish-mirror exclusion — a `publish.mirrors.*.path` tree is a
-          publish target, never a working repo (see module docstring).
-    """
     if mirror_keys is None:
         mirror_keys = _publish_mirror_keys()
     mirror_ids = _identities(mirror_keys)
@@ -339,15 +215,7 @@ def _gate_and_dedup(lines: Iterable[str], mirror_keys: Optional[set] = None) -> 
         yield _emit_form(line)
 
 
-# ---------------------------------------------------------------------------
-# Tier A — Claude Code's own activity record.
-# ---------------------------------------------------------------------------
-
 def _tier_a_posix(win: str, fs_root: str) -> str:
-    """Convert a native Windows-form path ("X:\\a\\b") to its POSIX
-    existence-test path (lowercased). With fs_root set, the drive root is
-    replaced by fs_root — a hermetic test seam; empty in production.
-    """
     if fs_root:
         idx = win.find(":\\")
         tail = win[idx + 2:] if idx != -1 else win
@@ -359,21 +227,9 @@ def _tier_a_posix(win: str, fs_root: str) -> str:
 
 
 def _tier_a_greedy_decode(rest: str, drive: str, fs_root: str) -> Optional[str]:
-    """Greedy filesystem-walk disambiguation of a lossy projects-dir
-    remainder.
-
-    Args: rest = post-drive remainder (e.g. "dev-example-stats-repo"), drive = drive
-    letter, fs_root = optional POSIX walk root (test seam; defaults to
-    /<drive>). At each level, consume the LONGEST run of remaining
-    `-`-tokens that names an existing directory; descend; repeat. This
-    resolves hyphen-as-literal vs hyphen-as-separator by what actually exists
-    on disk. Returns the reconstructed native Windows path on a full
-    resolution, None otherwise (fail-safe — a miss never emits a wrong path).
-    """
     root = fs_root if fs_root else f"/{drive.lower()}"
     tokens = rest.split("-")
     n = len(tokens)
-    # Bound the walk so a pathological all-hyphen name can't blow up the search.
     if n > 40:
         return None
     cur = root
@@ -382,7 +238,6 @@ def _tier_a_greedy_decode(rest: str, drive: str, fs_root: str) -> Optional[str]:
     while i < n:
         matched = False
         for j in range(n, i, -1):
-            # cand is rebuilt fresh each j-iteration (longest run first).
             cand = "-".join(tokens[i:j])
             if not cand:
                 continue
@@ -398,54 +253,21 @@ def _tier_a_greedy_decode(rest: str, drive: str, fs_root: str) -> Optional[str]:
             return None
     if not segs:
         return None
-    # Reconstruct the native Windows path (Tier A's output contract): drive +
-    # backslash-joined segments, as cased in the encoded name.
     return f"{drive}:" + "".join(f"\\{seg}" for seg in segs)
 
 
 def encode_projects_dir_name(root: str) -> str:
-    """Encode an absolute repo root the way Claude Code names its
-    ``~/.claude/projects/<basename>/`` directory. The forward direction of
-    `_decode_projects_dir_name`, and the single definition of that mapping:
-    a colon, a backslash, a forward slash and a dot all become `-`, so
-    ``X:/claude-klabauter`` -> ``X--claude-klabauter``.
-
-    Public (unlike the decode) because callers outside this module need to go
-    from a repo root to its transcript directory --
-    `coordinator_core.group_em.idle_report` and
-    `coordinator_core.ops.check_auto_memory_drained` both do. Kept here rather
-    than copied to either: an encode that drifts from the decode beside it is
-    a directory that silently resolves to nothing, which reads downstream as
-    an empty fleet rather than as an error.
-
-    Negative-spec: a separator-only encoding (no colon, no dot) was the
-    original defect -- it silently mismatched every real Windows drive-letter
-    root (``D:`` -> a ``D:-``-prefixed slug against the ``D--`` directory that
-    actually exists on disk), making its caller a permanent no-op on Windows.
-    A test path with no drive-letter colon does NOT exercise that and must not
-    be mistaken for Windows coverage.
-    """
     normalized = str(root).replace("\\", "/").replace(":", "-").replace(".", "-")
     return normalized.replace("/", "-")
 
 
 def _decode_projects_dir_name(base: str) -> tuple:
-    """Decode one ~/.claude/projects/ basename. Returns (drive, rest, decoded).
-
-    Path encoding: `:` `\\` `/` `.` -> `-`. Drive root "X:\\Foo" -> "X--Foo".
-    The encoding is LOSSY: a literal hyphen inside a path segment and a
-    structural separator both encode to `-`. We keep the naive decode as a
-    zero-cost fast path (caller falls back to greedy disambiguation on miss).
-    """
     m = re.match(r"^[A-Za-z]--(.*)$", base)
     if m:
         drive = base[0]
         rest = base[3:]
         decoded = f"{drive}:\\" + rest.replace("-", "\\")
         return drive, rest, decoded
-    # Non-drive-letter entries (POSIX-form, not produced by Claude Code on
-    # Windows): naive decode only, no greedy fallback — out of scope (see
-    # module docstring "Known oracle gap").
     drive = ""
     rest = base
     decoded = base.replace("-", "\\")
@@ -453,14 +275,7 @@ def _decode_projects_dir_name(base: str) -> tuple:
 
 
 def _tier_a() -> List[str]:
-    # Optional hermetic-test seam: POSIX filesystem root that decoded paths
-    # are existence-tested against. Empty in production (real drive roots).
     fs_root = os.environ.get("COORDINATOR_TIER_A_FS_ROOT", "")
-    # Optional hermetic-test seam: overrides the activity-record directory
-    # itself. Empty in production (real `~/.claude/projects`) — without this,
-    # `main()` always reads the live machine's activity record, which is
-    # exactly the non-hermeticity that kept the whole-op spawn count
-    # unmeasured (see this module's spawn-budget test).
     projects_dir_override = os.environ.get("COORDINATOR_TIER_A_PROJECTS_DIR", "")
     projects_dir = (
         Path(projects_dir_override)
@@ -480,10 +295,8 @@ def _tier_a() -> List[str]:
         drive, rest, decoded = _decode_projects_dir_name(base)
         posix = _tier_a_posix(decoded, fs_root)
         if os.path.isdir(_fs_probe_path(posix)):
-            # Fast path: naive decode resolved (no literal hyphens in segments).
             emitted.append(decoded)
         elif drive:
-            # Naive decode missed — disambiguate the lossy encoding against disk.
             greedy = _tier_a_greedy_decode(rest, drive, fs_root)
             if greedy:
                 emitted.append(greedy)
@@ -492,17 +305,7 @@ def _tier_a() -> List[str]:
     return _sort_unique(filtered)[:20]
 
 
-# ---------------------------------------------------------------------------
-# Tier A.5 — machine-local registry repos.* enumeration.
-# ---------------------------------------------------------------------------
-
 def _tier_a5() -> List[str]:
-    """Closes the gap where an operator has registered sibling repos in
-    registry.local.toml but no activity record exists yet (Tier A miss) AND
-    the path doesn't match the dev-folder probe layouts (Tier B miss).
-    Defensive fallback: silently no-op if the registry is unreadable — see
-    `_merged_flat_registry`'s never-block contract.
-    """
     flat = _merged_flat_registry()
     results: List[str] = []
     for key in flat:
@@ -512,8 +315,6 @@ def _tier_a5() -> List[str]:
         val = (val or "").strip()
         if not val:
             continue
-        # Normalize to POSIX form for the existence test (registry values are
-        # commonly stored as native paths like "X:/foo" or "X:\foo").
         posix = re.sub(r"^([A-Za-z]):[\\/]", r"/\1/", val)
         posix = posix.replace("\\", "/").lower()
         if os.path.isdir(posix) or os.path.isdir(val):
@@ -521,25 +322,15 @@ def _tier_a5() -> List[str]:
     return _sort_unique(results)
 
 
-# ---------------------------------------------------------------------------
-# Tier B — common dev-folder layouts.
-# ---------------------------------------------------------------------------
-
 def _tier_b() -> List[str]:
-    """Accept .git as directory OR file (worktrees use a `.git` file
-    containing `gitdir: <path>` — a dir-only test alone misses them).
-    Mirrors `find "$cand" -maxdepth 2 -name .git ... | sed 's|/\\.git$||'`.
-    """
     results: List[str] = []
     for cand in _TIER_B_CANDIDATES:
         cand_expanded = os.path.expanduser(cand)
         if not os.path.isdir(cand_expanded):
             continue
-        # maxdepth 1 relative to cand: cand/.git
         depth1 = os.path.join(cand_expanded, ".git")
         if os.path.isdir(depth1) or os.path.isfile(depth1):
             results.append(cand_expanded)
-        # maxdepth 2 relative to cand: cand/*/.git
         try:
             with os.scandir(cand_expanded) as it:
                 for entry in it:
@@ -554,24 +345,7 @@ def _tier_b() -> List[str]:
     return _sort_unique(results)[:30]
 
 
-# ---------------------------------------------------------------------------
-# Dispatch.
-# ---------------------------------------------------------------------------
-
 def discover_repo_paths() -> List[str]:
-    """Return every working repo this tier dispatch discovers, one entry per
-    repo, in `_emit_form` (forward-slash, no trailing slash) — the exact list
-    `main()` would otherwise only print.
-
-    Extracted so a second caller (`cross-repo-memo --list-receivers`, per
-    klabauter#40) can consume the discovered-repo set in-process to compare
-    it against the addressable-receiver registry, without shelling out to
-    this module and re-parsing its stdout. Same never-block contract as
-    `main()`: an unexpected internal error in any tier degrades that tier to
-    empty (logged to stderr) rather than propagating — a caller comparing
-    against this list must already treat empty as "nothing discovered", not
-    as an error signal, exactly like the pre-existing stdout contract.
-    """
     try:
         a_out = _tier_a()
     except Exception as exc:  # noqa: BLE001 — never-block contract
@@ -584,10 +358,6 @@ def discover_repo_paths() -> List[str]:
         a5_out = []
 
     # Tier A.5 always runs ALONGSIDE the first non-empty tier (A or B). Its
-    # purpose is to close gaps in Tier A — an operator may have registered a
-    # sibling repo in registry.local.toml but lack an activity record for
-    # it, so a strict stop-at-first-non-empty A would mask the registered
-    # repo. Merge + dedup.
     mirror_keys = _publish_mirror_keys()
 
     if a_out:
@@ -604,7 +374,6 @@ def discover_repo_paths() -> List[str]:
         combined = list(b_out) + list(a5_out)
         return _sort_unique(_gate_and_dedup(combined, mirror_keys))
 
-    # All tiers empty — caller handles Tier C interactively.
     return []
 
 
@@ -619,7 +388,7 @@ def main(argv: Sequence[str]) -> int:
     swallowed to stderr rather than propagated, preserving that contract
     (advisory / never-block posture per PORTER-BRIEF-ADDENDUM.md § 3b).
     """
-    del argv  # no CLI flags — mirrors the bash oracle (no arg parsing)
+    del argv
     for line in discover_repo_paths():
         print(line)
     return 0

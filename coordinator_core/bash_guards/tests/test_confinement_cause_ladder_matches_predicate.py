@@ -44,8 +44,6 @@ from coordinator_core.bash_guards import block_reviewer_bash_outside_allowlist a
 
 
 class _Policy:
-    """Minimal stand-in for the loaded ruleset object both functions read
-    `bash_policy` off via `getattr`."""
 
     def __init__(self, bash_policy: Any) -> None:
         self.bash_policy = bash_policy
@@ -53,14 +51,6 @@ class _Policy:
 
 @pytest.fixture
 def roster(monkeypatch: pytest.MonkeyPatch):
-    """Install an explicit healthy roster.
-
-    A bare test environment has no resolvable DoE checkout, so the real
-    `resolve_roster()` returns its `(None, reason)` failure shape and EVERY
-    type would confine by leg 3 — which would make agreement trivial and the
-    test vacuous. Supplying the roster is what keeps the not-confined case
-    reachable.
-    """
 
     def _install(members: Tuple[str, ...]) -> None:
         _helpers._resolve_roster_accessor()
@@ -71,8 +61,6 @@ def roster(monkeypatch: pytest.MonkeyPatch):
     return _install
 
 
-#: (label, effective_type, bash_policy, roster members, expected cause).
-#: One row per leg plus the two ways a ladder can decline to confine.
 _LADDER_CASES: List[Tuple[str, str, Any, Tuple[str, ...], str]] = [
     (
         "leg-1 policy key",
@@ -125,8 +113,6 @@ def test_cause_agrees_with_predicate_on_every_leg(
     members: Tuple[str, ...],
     expected_cause: str,
 ) -> None:
-    """The cause is truthy exactly when the predicate confines, and it names
-    the leg a reader re-deriving the verdict by hand would reach first."""
     roster(members)
     policy = _Policy(bash_policy)
 
@@ -141,9 +127,6 @@ def test_cause_agrees_with_predicate_on_every_leg(
 
 
 def test_a_bash_policy_that_is_not_a_dict_falls_through_identically(roster) -> None:
-    """Leg 1 guards on `isinstance(raw, dict)` in both functions. A ruleset
-    whose `bash_policy` loaded as a scalar must not confine on either side —
-    the shapes agree on the malformed input, not only the well-formed one."""
     roster(("coordinator:enricher",))
     policy = _Policy("not-a-dict")
 
@@ -152,12 +135,6 @@ def test_a_bash_policy_that_is_not_a_dict_falls_through_identically(roster) -> N
 
 
 def test_leg_order_is_the_same_on_both_sides(roster) -> None:
-    """A type satisfying legs 1 AND 2 simultaneously reports the EARLIER leg.
-
-    Order is the thing a hand-collapse would preserve for free and a
-    hand-maintained copy can silently invert, so it gets its own case rather
-    than riding on the parametrized rows, where each type satisfies one leg.
-    """
     roster(("coordinator:code-reviewer",))
     policy = _Policy({"coordinator:code-reviewer": {"allow": []}})
 
@@ -168,13 +145,6 @@ def test_leg_order_is_the_same_on_both_sides(roster) -> None:
 def test_the_cause_never_raises_when_the_resolver_throws(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`_confinement_cause`'s documented degrade-never-raise contract, on the
-    one leg where the predicate has no matching failure mode to agree with.
-
-    `is_confined_by_roster_absence` propagates a throwing resolver, so the
-    two are compared only up to the point the predicate can reach: the cause
-    must still return a string, and the weaker of the two leg-3 claims.
-    """
     _helpers._resolve_roster_accessor()
 
     calls: List[int] = []
@@ -182,9 +152,6 @@ def test_the_cause_never_raises_when_the_resolver_throws(
     def _boom(*_a: Any, **_kw: Any) -> Any:
         calls.append(1)
         if len(calls) == 1:
-            # First call is `is_confined_by_roster_absence`'s, reached from
-            # inside `_confinement_cause`'s leg 3. It must succeed and report
-            # absence, or the second call is never made.
             return (frozenset(("coordinator:enricher",)), None)
         raise OSError("test: roster source vanished between resolves")
 

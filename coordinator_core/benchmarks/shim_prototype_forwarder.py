@@ -33,11 +33,7 @@ def main() -> int:
     declare_benchmark_origin()
     completed = subprocess.run(
         [sys.executable, _DISPATCHER_PATH],
-        # A forwarder's entire job is passthrough, so the hand-rolled
         # CREATE_NO_WINDOW that used to sit here was the worst of both: it
-        # suppressed the popup and then bound the dispatcher's handles to that
-        # window-less console, losing everything it printed on Windows. Gate:
-        # `coordinator_core/tests/test_no_output_swallowing_no_console_spawn.py`.
         **no_console_passthrough_kwargs(),
     )
     return completed.returncode

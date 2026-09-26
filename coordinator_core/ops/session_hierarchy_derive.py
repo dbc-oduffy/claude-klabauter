@@ -47,7 +47,7 @@ Negative-spec:
 
 from __future__ import annotations
 
-MUTATES = ["state/session-hierarchy.*.json"]  # per-machine full-rebuild shard; filename varies by machine_slug(), e.g. state/session-hierarchy.machine-b-local.json / state/session-hierarchy.machine-a.json (both tracked)
+MUTATES = ["state/session-hierarchy.*.json"]
 
 import asyncio
 import json
@@ -74,24 +74,6 @@ _PROG = "derive-session-hierarchy"
 
 
 def _engine_worktree_root() -> Optional[Path]:
-    """Resolve claude-klabauter's OWN worktree root via ``Path(__file__)`` + ``git rev-parse``.
-
-    Mirrors ``engine_version.resolve_engine_sha``'s "always the executing copy"
-    posture. Returns ``None`` (never raises) when git is unavailable or this
-    file's directory is not inside a git repo — callers treat ``None`` as
-    "cannot resolve, do nothing" (same fail-soft posture as
-    ``handoff_lineage_ancestry``'s absent-``repo_root`` branch).
-
-    pre-conversion this called
-    ``git -C <engine_dir> rev-parse --path-format=absolute --show-toplevel``;
-    ``show_toplevel()`` (``coordinator_core.git.repo_root``) does not forward
-    ``--path-format=absolute`` to its own spawn fallback. Verified NOT a
-    regression: ``--show-toplevel``'s own default (no ``--path-format`` flag
-    at all) is already absolute — confirmed against real git, see
-    ``test_show_toplevel_spawn_fallback_matches_path_format_absolute`` in
-    ``coordinator_core/git/test_repo_root.py``. ``--path-format=absolute``
-    was a no-op for this specific form even in the pre-conversion call.
-    """
     engine_dir = Path(__file__).resolve().parent
     out = show_toplevel(str(engine_dir))
     if not out:
@@ -100,12 +82,6 @@ def _engine_worktree_root() -> Optional[Path]:
 
 
 def _atomic_write_json(path: Path, records: List[dict]) -> None:
-    """Full-rebuild atomic write: mkstemp + os.replace (latest-wins, per-machine shard).
-
-    Cross-platform-correct replacement for the bash oracle's ``mv "$TMP" "$OUT"``
-    (POSIX rename) — ``os.replace`` is atomic-on-same-filesystem on Windows too,
-    unlike a bare rename there. Parity-plus, not a behavior change (recipe § 3).
-    """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
     try:
@@ -113,9 +89,7 @@ def _atomic_write_json(path: Path, records: List[dict]) -> None:
             json.dump(records, fh, indent=2)
             fh.write("\n")
         os.replace(tmp, path)
-        # DR-276: declared AFTER the write lands, never before — the contract
         # is a report of what was ACTUALLY written, not of an intended
-        # surface.
         declare_write(path)
     except Exception:
         try:
@@ -127,7 +101,6 @@ def _atomic_write_json(path: Path, records: List[dict]) -> None:
 
 
 def _stats(records: List[dict]) -> dict:
-    """Compute the stderr-summary counts (cosmetic; port verbatim for operator parity)."""
     complete = sum(1 for r in records if (r.get("system") or {}).get("completeness") == "complete")
     partial = sum(1 for r in records if (r.get("system") or {}).get("completeness") == "partial")
     n_session = sum(1 for r in records if r.get("session_type") == "session")
@@ -144,23 +117,10 @@ def _stats(records: List[dict]) -> dict:
 
 
 def _run(worktree_root: Path) -> dict:
-    """Query, derive, write. Returns the stats dict (also the op result payload)."""
     handoffs_active = query_records("handoff", worktree_root, limit=0)
     handoffs_archived = query_records("handoff-archived", worktree_root, limit=0)
-    # 2026-09-06 (docs/plans/2026-09-06-partitioned-close-review-identity-
     # triage.md C1, AC2b): was `os.environ.get("CS_SESSION_ID", "")` — this op
-    # is `@register_op("session_hierarchy.derive")`, so it is warm-reachable
-    # directly, and under a warm-served request `os.environ` names whoever
-    # spawned the resident server, not the session whose request this is.
-    # `resolve_current_session_id` reads the per-request `session_identity_
-    # override` ContextVar first (the caller's real identity, carried across
-    # the wire) and falls back to the same env ladder cold, so the cold
     # (CLI/`main()`) path is unchanged. `CS_SESSION_ID` itself was never a
-    # name any resolver in this repo populates via the warm-carried-identity
-    # mechanism, so retaining it would have kept this stamp permanently
-    # spawner-attributed under warm dispatch. Same shape/consequence as
-    # `ops/queue_append.py`'s own `created_by_session` field (D1's applied
-    # pattern) — this op stamps the identical field name.
     created_by_session = resolve_current_session_id() or ""
 
     records = derive(handoffs_active, handoffs_archived, created_by_session, repo_root=worktree_root)
@@ -198,7 +158,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: resolve the engine worktree, run, print stats to stderr."""
     worktree_root = _engine_worktree_root()
     if worktree_root is None:
         print(f"{_PROG}: engine worktree unresolvable (git rev-parse failed)", file=sys.stderr)

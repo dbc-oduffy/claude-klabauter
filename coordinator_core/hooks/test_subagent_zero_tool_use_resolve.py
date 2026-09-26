@@ -1,19 +1,3 @@
-"""
-coordinator_core.hooks.test_subagent_zero_tool_use_resolve — round-trip tests for
-the Stage-3 pull/poll per-agent resolve op (hooks.subagent_zero_tool_use_resolve).
-
-Covers: (a) a matching record with tool_use_count > 0 resolves "did-work"; (b) a
-matching record with tool_use_count == 0 resolves "zero-tool-use"; (c) a missing or
-unreadable store, a missing agent_id/session_id/repo_root, an absent-for-this-agent
-record, and a malformed tool_use_count all resolve "unknown" with a specific reason
-naming the store path and cause — never a bare/silent pass. Also covers last-match-
-wins on a re-dispatched agent_id, and registration-quad presence for the op key.
-
-All handlers are async; asyncio.run() is used directly in sync test functions — no
-pytest-asyncio dependency, matching coordinator_core/hooks/test_subagent_zero_tool_use_surface.py.
-
-Spec backlink: cross-repo/inbox/2026-07-25-doe-claude-em-zero-tool-use-detection-verdict-viable.md
-"""
 
 from __future__ import annotations
 

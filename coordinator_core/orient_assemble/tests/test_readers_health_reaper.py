@@ -68,11 +68,6 @@ def test_no_subprocess_created_on_this_path():
 
 
 def test_reader_goes_quiet_rather_than_killing_orientation(monkeypatch):
-    """`orient_assemble.__init__` runs every reader's `collect()` in a bare loop
-    with no per-reader guard, so a raise here takes down the whole orientation
-    assemble. survey() walks ~2000 corpus files on a box with dozens of
-    concurrent handoff writers, so an OSError mid-scan is ordinary. The reader
-    must go quiet, not propagate."""
     def _boom(_repo_root):
         raise OSError("handoff vanished mid-scan")
 
@@ -83,16 +78,6 @@ def test_reader_goes_quiet_rather_than_killing_orientation(monkeypatch):
 
 
 def test_an_unexpected_raise_is_not_swallowed_by_the_reader(monkeypatch):
-    """The reader absorbs `OSError` -- the vanishing-file race it is built for
-    -- and nothing else.
-
-    This case asserts the inverse of the one above, and replaces an earlier
-    test that pinned a bare `except Exception` here. Keeping orientation
-    alive across a raising reader is still required, but it is asserted
-    against `orient_assemble.brief()` in
-    `test_brief_survives_a_raising_reader` -- the seam that owns the loop.
-    Holding it here as well is what forced the clause wide enough to hide a
-    real `ModuleNotFoundError` in this very module."""
     def _boom(_repo_root):
         raise RuntimeError("survey blew up")
 
@@ -102,9 +87,6 @@ def test_an_unexpected_raise_is_not_swallowed_by_the_reader(monkeypatch):
 
 
 class _FakeGoalCoverageScanModule:
-    """Test double standing in for the whole `_goal_coverage_scan` module
-    object `_read_goal_coverage` reaches through — every attribute it calls
-    is provided here so no real records-query/bin-file logic ever runs."""
 
     def __init__(self, *, active_goals=None, raise_on_fetch=False, coverage=None):
         self._active_goals = active_goals or []
@@ -130,8 +112,6 @@ class _FakeGoalCoverageScanModule:
 
 
 def test_read_goal_coverage_emits_nothing_when_records_query_raises(monkeypatch):
-    """`_fetch_active_goals` is deliberately fail-loud; the reader must catch
-    the RuntimeError and go quiet rather than kill the whole assemble."""
     fake = _FakeGoalCoverageScanModule(raise_on_fetch=True)
     monkeypatch.setattr(rhr, "_goal_coverage_scan", fake)
 
@@ -178,9 +158,6 @@ def test_read_goal_coverage_emits_nothing_when_no_goal_is_zero_coverage(monkeypa
 
 
 def test_read_trail_scope_emits_nothing_when_no_session_id(monkeypatch):
-    """`_resolve_session_id()` returning empty is legitimate outside a live
-    session — no directive, and `workweek_trail_scope.main` must never be
-    reached from this reader."""
     monkeypatch.setattr(rhr._workweek_trail_scope, "_resolve_session_id", lambda: "")
 
     def _boom(*_args, **_kwargs):
@@ -304,11 +281,6 @@ def test_read_git_maintenance_due_emits_nothing_when_fresh(monkeypatch):
 
 
 def _write_plugin_drift_fixture(tmp_path, *, sentinel_sha="a" * 40, drifted=False):
-    """Build the on-disk layout `_read_plugin_drift` reads: a registry
-    directory, a live-install `version.txt` sentinel, a source
-    `pyproject.toml`, and a refresh-log. All access goes through
-    `_drift`'s own helper functions, monkeypatched below to consult these
-    paths -- the reader itself must never spawn git."""
     registry_dir = tmp_path / "registry"
     registry_dir.mkdir()
     (registry_dir / "registry.toml").write_text("", encoding="utf-8")
@@ -364,10 +336,6 @@ def test_read_plugin_drift_clean_mirror_emits_nothing(monkeypatch, tmp_path):
 
 
 def test_read_plugin_drift_malformed_sentinel_emits_directive(monkeypatch, tmp_path):
-    """The sentinel present-but-malformed leg the reader actually checks
-    (`len(sha) != 40` / non-hex). A wholly ABSENT `version.txt` hits the
-    reader's `continue` branch instead and emits nothing — that is the
-    reader's real behaviour, distinct from this malformed-content case."""
     registry_dir, live_path, source_path = _write_plugin_drift_fixture(
         tmp_path, sentinel_sha="not-a-valid-sha"
     )
@@ -398,9 +366,6 @@ def test_read_plugin_drift_malformed_sentinel_emits_directive(monkeypatch, tmp_p
 
 
 def test_read_plugin_drift_absent_sentinel_emits_nothing(monkeypatch, tmp_path):
-    """A wholly missing `version.txt` hits the reader's `continue` branch,
-    not the drift branch -- pinning the reader's actual behaviour rather
-    than its docstring's broader "absent or malformed" claim."""
     registry_dir, live_path, source_path = _write_plugin_drift_fixture(tmp_path)
     (live_path / "version.txt").unlink()
     monkeypatch.setattr(rhr._drift, "_resolve_registry_dir", lambda: registry_dir)

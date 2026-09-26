@@ -79,7 +79,6 @@ _RECORD_KIND = "zero-tool-use"
 
 
 def _empty_result() -> dict:
-    """Return the pinned empty-result shape for a missing/absent store."""
     return {
         "records": [],
         "record_count": 0,
@@ -89,14 +88,6 @@ def _empty_result() -> dict:
 
 
 def _read_store_sync(store_path: str) -> dict:
-    """Read and filter the per-session store (blocking I/O).
-
-    Called exclusively via asyncio.to_thread() — must not be awaited directly.
-    Returns the pinned result shape: records filtered to kind == "zero-tool-use",
-    in append order; skipped_lines counts lines that failed to parse as a JSON
-    object at all (kind-mismatched lines are NOT counted as skipped — see module
-    negative-spec).
-    """
     if not os.path.exists(store_path):
         return _empty_result()
 
@@ -104,8 +95,6 @@ def _read_store_sync(store_path: str) -> dict:
         with open(store_path, "r", encoding="utf-8") as fh:
             lines = fh.readlines()
     except OSError:
-        # Present-but-unreadable is treated the same as absent for this pure-read
-        # surface op — there is no write-side decision to protect here, unlike the
         # UNKNOWN-vs-zero distinction in hooks.subagent_zero_tool_use.
         return _empty_result()
 

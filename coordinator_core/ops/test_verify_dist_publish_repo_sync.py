@@ -37,7 +37,6 @@ def _build_tree(tmp_path: Path):
     (pub_root / "CHANGED.md").write_text("old content\n", encoding="utf-8")
 
     (dist_toplevel / "NEWFILE.md").write_text("brand new\n", encoding="utf-8")
-    # NEWFILE.md deliberately absent from pub_root -> MISSING
 
     (dist_toplevel / "IGNOREME.md").write_text("infra-owned\n", encoding="utf-8")
     (dist_toplevel / ".percolate-ignore").write_text(
@@ -83,16 +82,9 @@ def test_mismatch_missing_ignored_exits_1(tmp_path, monkeypatch, capsys):
     assert "MISSING    toplevel/NEWFILE.md" in out
     assert "IGNORED    toplevel/IGNOREME.md" in out
     assert "OK         docs/guide.md" in out
-    # the .percolate-ignore file itself is not exempted from the scan (it is
-    # not self-listed in its own ignore file) -- faithfully reproduces the
-    # bash oracle's unfiltered `find -maxdepth 1 -type f` listing, which also
-    # walks .percolate-ignore and reports it MISSING (publish-repo-owned
-    # infra files are not expected to exist source-side under dist/).
     assert "MISSING    toplevel/.percolate-ignore" in out
     assert "checked: 3, mismatched: 1, missing: 2" in out
     assert "DRIFT DETECTED" in out
-    # unicode arrow/em-dash in the drift-detected remediation block must
-    # survive the port unchanged (byte-parity with the bash oracle)
     assert "→ plugins/coordinator/" in out
     assert "report MISMATCH by design — the publish-tree version" in out
 
@@ -289,7 +281,6 @@ def test_check_pair_byte_diff_not_shallow(tmp_path):
     dst = tmp_path / "dst.md"
     src.write_text("same content\n", encoding="utf-8")
     dst.write_text("same content\n", encoding="utf-8")
-    # Force differing mtimes -- a shallow comparison could be fooled by this
     os.utime(dst, (1000000000, 1000000000))
 
     counters = vdprs._Counters()
@@ -301,10 +292,6 @@ def test_check_pair_byte_diff_not_shallow(tmp_path):
 
 
 def test_module_docstring_and_drift_message_have_no_dead_publish_sh_command():
-    # Regression pin: setup/publish.sh was retired repo-wide by DoE-claude's
-    # percolate-python-port work (2026-07-21/22). Neither the module
-    # docstring's "no --fix mode" rationale nor the runtime drift-detected
-    # remediation may still name the dead bash command.
     assert "bash setup/publish.sh" not in vdprs.__doc__
     assert "python coordinator/bin/publish.py <target>" in vdprs.__doc__
 

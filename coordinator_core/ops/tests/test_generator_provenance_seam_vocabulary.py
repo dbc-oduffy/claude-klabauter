@@ -1,16 +1,3 @@
-"""
-Tests for `generator_provenance`'s D5 seam vocabulary (C4,
-docs/plans/2026-09-11-state-writers-claim-through-one-seam.md § C4/D5):
-`_call_is_write`/`_write_target_expr` recognising the claiming seam's four
-names (`replace_text`/`replace_bytes`/`create_exclusive`/
-`append_claimed_line`), reached either as a module attribute of a bound
-`claimed_write` alias or as a bare name from-imported directly, with their
-write target at `args[0]`.
-
-Negative-spec: fixture modules under `tmp_path` only, matching the sibling
-`test_generator_provenance.py` suite -- discovery is never exercised against
-the real repo's generator modules here.
-"""
 
 from __future__ import annotations
 

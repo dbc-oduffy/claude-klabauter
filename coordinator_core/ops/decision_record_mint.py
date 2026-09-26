@@ -135,7 +135,6 @@ _RESERVATIONS_RELDIR = Path("state") / "decision-record-reservations"
 _DR_FILENAME_RE = re.compile(r"^DR-(\d+)(?:-.*)?\.md$", re.IGNORECASE)
 _RESERVATION_FILENAME_RE = re.compile(r"^DR-(\d+)\.reserved$", re.IGNORECASE)
 
-# Frontmatter leads the file; a bounded head read finds `id:` without a full read.
 _FRONTMATTER_MAX_LINES = 20
 _FRONTMATTER_ID_LINE_RE = re.compile(r"^id:\s*(\S+)\s*$")
 _FRONTMATTER_ID_VALUE_RE = re.compile(r"^DR-(\d+)$", re.IGNORECASE)
@@ -157,8 +156,6 @@ def _reservation_path(reservations_dir: Path, number: int) -> Path:
 
 
 def _read_frontmatter_dr_number(path: Path) -> Optional[int]:
-    """Frontmatter `id: DR-<N>` number, or None. Never raises: a malformed
-    record must not break minting."""
     try:
         with open(path, encoding="utf-8") as f:
             for _ in range(_FRONTMATTER_MAX_LINES):
@@ -217,12 +214,10 @@ def _sweep_expired_reservations(reservations_dir: Path) -> None:
             if entry.stat().st_mtime < cutoff:
                 entry.unlink()
         except OSError:
-            # reservation file already gone (or mtime probe failed); nothing to reclaim
             pass
 
 
 def _reserved_max(reservations_dir: Path) -> int:
-    """Highest `N` among reservation files still on disk after the sweep, or 0."""
     if not reservations_dir.is_dir():
         return 0
     best = 0
@@ -282,14 +277,6 @@ def mint_next_dr_id(worktree_root: Path, *, holder: str = "", title: str = "") -
 
 
 def release_dr_id(worktree_root: Path, number: int) -> bool:
-    """Delete the reservation for `number`, if present. Returns whether it existed.
-
-    Explicit early-release path for a caller whose reservation will never
-    reach a DR body (an abandoned plan) — see module docstring's
-    Reclamation section. Never touches `docs/decisions/` itself: releasing
-    a number that has ALREADY been written as a real DR file is a no-op on
-    the (already-vacated-by-the-first-mint-consumer) reservation file only.
-    """
     path = _reservation_path(_reservations_dir(worktree_root), number)
     try:
         path.unlink()
@@ -298,9 +285,7 @@ def release_dr_id(worktree_root: Path, number: int) -> bool:
         return False
 
 
-# ---------------------------------------------------------------------------
 # JSON-RPC handlers
-# ---------------------------------------------------------------------------
 
 
 @register_op("decision_record.mint_id")

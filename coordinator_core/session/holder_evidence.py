@@ -69,28 +69,14 @@ from coordinator_core.session import claim_neighbours
 from coordinator_core.session import core
 from coordinator_core.session import liveness as _liveness
 
-#: Cap on how much of a transcript's tail we ever read, regardless of file
-#: size — a multi-MB transcript must not be fully parsed just to answer
-#: "what were the last few tool calls". 256 KiB comfortably covers the
-#: ~200 most-recent jsonl records on a normal transcript.
 _TRANSCRIPT_TAIL_BYTES = 256 * 1024
 
-#: How many trailing well-formed jsonl records to actually parse once the
-#: tail bytes are decoded — bounds CPU on a transcript with many short lines
-#: inside the byte cap.
 _TRANSCRIPT_TAIL_RECORDS = 200
 
-#: Cap on the number of recent paths returned — most-recent-first.
 _RECENT_PATHS_CAP = 10
 
-#: `tool_use` input keys that name a file-ish path directly.
 _PATH_INPUT_KEYS = ("file_path", "notebook_path", "path")
 
-#: Loose path-shaped token extractor for `command` strings (Bash tool
-#: invocations) — matches a relative/absolute-looking path segment
-#: containing at least one `/` or a recognizable extension. Intentionally
-#: permissive: false positives here just add a noisy `recent_paths` entry,
-#: never a wrong verdict.
 _COMMAND_PATH_RE = re.compile(r"[./A-Za-z0-9_\-]*(?:/[./A-Za-z0-9_\-]+)+")
 
 
@@ -174,15 +160,10 @@ def liveness_basis(holder_sid: str, cwd: Optional[str] = None) -> str:
     return basis
 
 
-#: Back-compat alias — `holder_evidence()` below is this module's own
-#: pre-existing internal caller; kept private-named so no behaviour changes
-#: for it while `liveness_basis` becomes the public entry point.
 _liveness_basis = liveness_basis
 
 
 def _last_activity_age_sec(sdir: str) -> Optional[int]:
-    """Seconds between now and meta.json's `last_activity`, or `None` when
-    the field is absent/unparseable — an evidence gap, not a zero age."""
     last_iso = core.read_meta_field(sdir, "last_activity")
     if not last_iso:
         return None
@@ -199,10 +180,6 @@ def _meta_str_or_none(sdir: str, field: str) -> Optional[str]:
 
 
 def _parse_scope_entry(entry: str) -> tuple[Optional[str], str]:
-    """Local re-derivation of `pickup_assemble._parse_scope_entry`'s split
-    of one `scope:` entry into `(repo_id, path)` — kept as a private copy
-    rather than an upward import (this module sits below `pickup_assemble`'s
-    `__init__`, which is the one importing THIS module, not the reverse)."""
     match = re.match(r"^([A-Za-z0-9_-]+):\s*(.+)$", entry.strip())
     if match is None:
         return None, entry.strip()
@@ -210,13 +187,6 @@ def _parse_scope_entry(entry: str) -> tuple[Optional[str], str]:
 
 
 def _local_scope_paths(scope: list[str]) -> list[str]:
-    """Filter a `scope:`-shaped list down to bare-local (this-repo) path
-    entries, order-preserving. Sibling-repo-qualified entries
-    (`<repo-id>: <path>`) are dropped — `claim_index` only ever resolves
-    THIS repo's claimants (same convention `claim_neighbours.
-    _local_paths_from_scope` uses; kept as a private re-derivation here
-    rather than an upward import, per this module's own layering note on
-    `_parse_scope_entry`)."""
     paths: list[str] = []
     for entry in scope:
         repo_id, path = _parse_scope_entry(entry)
@@ -309,8 +279,6 @@ def _claim_scope_overlap(
 
 
 def _extract_paths_from_tool_use(tool_input: dict, repo_root: Path) -> list[str]:
-    """Pull file-ish paths out of one `tool_use` block's `input` dict,
-    normalized to repo-relative when they resolve under `repo_root`."""
     found: list[str] = []
 
     for key in _PATH_INPUT_KEYS:
@@ -358,8 +326,6 @@ def _read_transcript_tail_records(transcript_path: str) -> list[dict]:
     text = raw.decode("utf-8", errors="replace")
     lines = text.split("\n")
     if truncated and len(lines) > 1:
-        # Only the truncated-read case can start mid-line; a read from byte
-        # 0 has no partial first line to discard.
         lines = lines[1:]
 
     records: list[dict] = []
@@ -531,16 +497,6 @@ def holder_evidence(
         if not want_activity:
             return result
 
-        # Function-local (not module-scope): this is the ONE module-level
-        # `coordinator_core.ops.*` import that used to sit at the top of
-        # this file (before the 2026-08-19 relocation into `session/`), and
-        # it is what closes the import cycle through `ops.__init__`'s
-        # `_eager_import_all()` once `holder_evidence.py` lives in
-        # `session/` and is imported by `session.work_state` — see chunk
-        # C1a's cycle trace. `session/` must not carry a module-level `ops`
-        # import; deferring it here keeps this the ONLY place it happens,
-        # same discipline `liveness.py`'s D5 note already documents for its
-        # own single-import-site invariants.
         from coordinator_core.ops.check_em_environment import _resolve_transcript
 
         home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or ""
@@ -553,11 +509,6 @@ def holder_evidence(
         result["recent_paths"] = recent_paths
         result["recent_paths_source"] = "transcript"
 
-        # Claim-derived, not transcript-derived (C3) — `recent_paths`
-        # plays no part in this computation any more; see
-        # `_claim_scope_overlap`'s docstring for the three-valued
-        # contract and why `scope == []` must stay distinguishable from
-        # `scope is None`.
         result["scope_overlap"] = _claim_scope_overlap(
             holder_sid,
             repo_root,
@@ -567,12 +518,6 @@ def holder_evidence(
         )
         return result
     except Exception as exc:  # noqa: BLE001 - fail-soft is the contract here
-        # Only clobber fields that
-        # were never resolved before the exception fired. A transcript/
-        # recent-paths hiccup after holder_goal/holder_goal_state/
-        # holder_branch were already read must not discard a genuinely
-        # `declared` goal down to `unreadable` — that reintroduces the
-        # conflation holder_goal_state exists to prevent (spec AC3).
         result["evidence_error"] = f"{type(exc).__name__}: {exc}"
         if result["holder_goal_state"] == "unreadable":
             result["holder_goal"] = None

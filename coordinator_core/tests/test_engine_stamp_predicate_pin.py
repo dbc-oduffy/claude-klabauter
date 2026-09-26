@@ -70,8 +70,6 @@ _gen_launcher_shim_module: ModuleType | None = None
 
 
 def _load_doctor_probe() -> ModuleType:
-    """Load `bin/claude-klabauter-doctor-probe.py` by path (never `import` -- the
-    on-disk filename is not a valid module identifier), memoized module-scope."""
     global _doctor_probe_module
     if _doctor_probe_module is not None:
         return _doctor_probe_module
@@ -88,8 +86,6 @@ def _load_doctor_probe() -> ModuleType:
 
 
 def _load_gen_launcher_shim() -> ModuleType:
-    """Load `coordinator/bin/gen-launcher-shim.py` by path -- same hyphenated-
-    filename constraint as `_load_doctor_probe` above, memoized module-scope."""
     global _gen_launcher_shim_module
     if _gen_launcher_shim_module is not None:
         return _gen_launcher_shim_module
@@ -123,13 +119,7 @@ def _all_six_verdicts(monkeypatch, root: Path) -> tuple:
     )
 
 
-#: Declaration for the register-aging sweep (C5,
-#: `docs/plans/2026-08-26-every-register-either-derives-or-fails-on-its-dead-rows.md`):
 #: every row of `_VERDICT_LABELS` names a symbol living inside a parent module, not a
-#: whole module -- most rows as a dotted path (e.g. `warm.engine_root.is_engine_root`),
-#: two (`claude-klabauter-doctor-probe.*`, `gen-launcher-shim.*`) as a hyphenated script filename
-#: loaded via a bespoke loader rather than `import`. Both shapes still resolve because
-#: resolution is suffix-path string matching, not import-legality validation.
 _VERDICT_LABELS__SUBJECT_CLASS = "symbol"
 
 _VERDICT_LABELS = (

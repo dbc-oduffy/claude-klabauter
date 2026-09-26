@@ -149,7 +149,6 @@ from coordinator_core.tracker_projection import fold_person_registry, resolve_al
 # Maps `person_resolver.ALIAS_BUNDLE_KEYS` bundle keys to the
 # `tracker_entities.ALIAS_NAMESPACES` namespace each resolves under — 1:1 on
 # every member. See "ALIAS NAMESPACE MAPPING" in the module docstring for why
-# `github_id` carries a namespace of its own rather than riding under `github`.
 _BUNDLE_KEY_TO_NAMESPACE: dict[str, str] = {
     "github": "github",
     "github_id": "github_id",
@@ -158,34 +157,10 @@ _BUNDLE_KEY_TO_NAMESPACE: dict[str, str] = {
 }
 
 def _mint_person_core(*, bundle: dict[str, str], repo_root: Path) -> dict:
-    """Pure(ish) core: mint a person from an already-resolved alias bundle.
-
-    Returns a structured result dict:
-        {"minted": bool, "reason": str, "person_id": str | None}
-
-    - `minted: False, reason: "empty_bundle"` — *bundle* is empty; DEC-41,
-      no anonymous person minted, `person_id` is None.
-    - `minted: True, reason: "created"` — a new person was minted and all
-      resolved aliases were attached.
-    - `minted: True, reason: "collision_resolved"` — a concurrent session
-      won the mint race; this call emitted nothing further and returns the
-      winner's `person_id`.
-    """
     if not bundle:
         return {"minted": False, "reason": "empty_bundle", "person_id": None}
 
     person_id = mint_person_id()
-    # Track the (namespace, value) of
-    # the alias actually IN FLIGHT when a collision strikes, not a hardcoded
-    # "github" retry. A collision on `github_id`/`display`/`email` AFTER this
-    # call's own `github` alias already landed uncontested must resolve
-    # through the alias that actually collided — resolving `github` in that
-    # case finds THIS call's own orphan, not the true pre-existing winner,
-    # and silently mislabels a real conflict as resolved.
-    # Scope the collision-recoverable
-    # `try` to ONLY the alias-emission loop. `emit_person_created` failing is
-    # not an alias collision (nothing of this call's own has succeeded yet)
-    # and must never attempt an alias-based recovery.
     emit_person_created(person_id, display_name=bundle.get("display", ""), repo_root=repo_root)
 
     collision_namespace: Optional[str] = None
@@ -199,9 +174,6 @@ def _mint_person_core(*, bundle: dict[str, str], repo_root: Path) -> dict:
             emit_person_alias_added(person_id, namespace, raw_value, repo_root=repo_root)
     except TrackerEntityError:
         if collision_namespace is None:
-            # No alias was ever attempted (an empty resolved bundle already
-            # short-circuits above) — unreachable in practice, but re-raise
-            # rather than guess at a recovery target.
             raise
         registry = fold_person_registry(repo_root=repo_root)
         winner_id = resolve_alias(
@@ -218,9 +190,7 @@ def _mint_person_core(*, bundle: dict[str, str], repo_root: Path) -> dict:
     return {"minted": True, "reason": "created", "person_id": person_id}
 
 
-# ---------------------------------------------------------------------------
 # JSON-RPC handler
-# ---------------------------------------------------------------------------
 
 
 @register_op("tracker.mint_person")
@@ -257,7 +227,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     common_dir = Path(repo_root)
     worktree = main_worktree_root(common_dir)
 
-    # D3: optional repo_root consistency check (contract §3.3 doctrine).
     mismatch = check_repo_root(params.get("repo_root"), common_dir)
     if mismatch:
         return {"minted": False, "reason": mismatch, "person_id": None}

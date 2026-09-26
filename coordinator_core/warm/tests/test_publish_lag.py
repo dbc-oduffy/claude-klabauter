@@ -1,11 +1,3 @@
-"""Tests for coordinator_core.warm.skew's publish-lag surface (DR-335).
-
-Spec backlink: docs/decisions/DR-335-publish-lag-is-surfaced-not-shortened.md
-
-All git interaction is monkeypatched -- these tests never spawn a real
-`git` process, so no `spawns_process`/`cadence` marker is needed and the
-suite stays on the fast tier.
-"""
 
 from __future__ import annotations
 
@@ -23,11 +15,6 @@ def _write_stamp(engine_root: Path, sha: str = "abc123") -> None:
     stamp.write_text(f"sha:{sha}\n", encoding="utf-8")
 
 
-# ---------------------------------------------------------------------------
-# read_engine_stamp_sha
-# ---------------------------------------------------------------------------
-
-
 def test_read_engine_stamp_sha_absent_file_returns_none(tmp_path):
     assert skew.read_engine_stamp_sha(tmp_path) is None
 
@@ -42,11 +29,6 @@ def test_read_engine_stamp_sha_malformed_returns_none(tmp_path):
 def test_read_engine_stamp_sha_reads_bare_sha(tmp_path):
     _write_stamp(tmp_path, "deadbeef")
     assert skew.read_engine_stamp_sha(tmp_path) == "deadbeef"
-
-
-# ---------------------------------------------------------------------------
-# publish_lag
-# ---------------------------------------------------------------------------
 
 
 def test_publish_lag_no_stamp_returns_none(tmp_path, monkeypatch):
@@ -131,17 +113,6 @@ def test_publish_lag_below_threshold_minutes_stays_silent(tmp_path, monkeypatch)
 
 
 def test_publish_lag_absorbs_an_ordinary_spawn_oserror(tmp_path, monkeypatch):
-    """Renamed from `..._never_raises_on_unexpected_exception`: `OSError`
-    ("git not found") is the ordinary, expected spawn-failure shape, not
-    the unexpected one -- and it is caught by the same bare
-    `except Exception` this module's outer handler now uses regardless of
-    type. `test_publish_lag_absorbs_a_non_oserror_exception` below is the
-    test that actually exercises the "unexpected" claim (a `ValueError`,
-    previously uncaught). Kept as a separate case rather than folded in:
-    a real git-not-found spawn failure and a corrupt-stamp `ValueError`
-    are different scenarios worth pinning independently, even though both
-    now resolve through the same except clause.
-    """
     _write_stamp(tmp_path)
 
     def fake_run(cmd, **kwargs):
@@ -152,9 +123,6 @@ def test_publish_lag_absorbs_an_ordinary_spawn_oserror(tmp_path, monkeypatch):
 
 
 def test_publish_lag_at_most_two_git_calls_total(tmp_path, monkeypatch):
-    """Amplification-gate-adjacent bound, pinned locally: never more than
-    two subprocess calls for one publish_lag() invocation, matching the
-    DR-335 brief's hard constraint."""
     _write_stamp(tmp_path)
     call_count = 0
 
@@ -172,18 +140,7 @@ def test_publish_lag_at_most_two_git_calls_total(tmp_path, monkeypatch):
     assert call_count <= 2
 
 
-# ---------------------------------------------------------------------------
-# Regression: the oldest-commit call must not use `--reverse ... -1`
-# ---------------------------------------------------------------------------
-
-
 def test_publish_lag_takes_the_oldest_unpublished_commit_not_the_newest(tmp_path, monkeypatch):
-    """git applies a commit limit BEFORE `--reverse`, so `--reverse -1` yields
-    the NEWEST commit. That pins age_minutes near zero on an active branch and
-    silently holds the advisory below its threshold forever -- the signal is
-    disabled while every field still looks populated. Caught live: 97 commits
-    unpublished reported as 0.4 minutes old.
-    """
     _write_stamp(tmp_path, "stamped")
     seen = []
 
@@ -191,7 +148,6 @@ def test_publish_lag_takes_the_oldest_unpublished_commit_not_the_newest(tmp_path
         seen.append(cmd)
         if "rev-list" in cmd:
             return SimpleNamespace(returncode=0, stdout="3\n")
-        # newest first, exactly as `git log` orders it
         return SimpleNamespace(
             returncode=0,
             stdout="2026-08-19T22:00:00+01:00\n"
@@ -213,12 +169,6 @@ def test_publish_lag_takes_the_oldest_unpublished_commit_not_the_newest(tmp_path
 
 
 def test_publish_lag_absorbs_a_non_oserror_exception(tmp_path, monkeypatch):
-    """The docstring promises "any unexpected exception" returns None. The
-    original test injected OSError -- a type already caught by name -- so it
-    passed without covering the claim. A ValueError is the honest probe, and
-    UnicodeDecodeError (a ValueError subclass) is the real-world case: a
-    stamp file carrying invalid UTF-8.
-    """
     _write_stamp(tmp_path, "stamped")
 
     def boom(*a, **k):
@@ -236,10 +186,6 @@ def test_read_engine_stamp_sha_absorbs_invalid_utf8(tmp_path):
 
 
 def test_publish_lag_message_scope_sentence_differs_by_site():
-    """The shared sentence was false at close-out: nothing is executing
-    there. Both sites must still carry one fact and one runnable
-    alternative (guard-messaging.md § Register).
-    """
     lag = skew.PublishLag(
         stamp_sha="abc",
         engine_commits_behind=5,

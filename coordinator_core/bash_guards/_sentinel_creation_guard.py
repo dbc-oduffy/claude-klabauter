@@ -192,25 +192,11 @@ import re
 import shlex
 from typing import List, Optional, Tuple
 
-#: `reason_class` values returned by `evaluate()` -- see the module
-#: docstring "REASON CLASS" section for why this exists and what each
-#: value means for message-safety.
 REASON_DIRECT = "direct"
 REASON_INDIRECTION = "indirection"
 
-#: Shared indirection-remedy clause, one copy for every sentinel guard on
-#: this engine (Review: overengineering-reviewer -- the remedy is generic
-#: shell-invocation guidance with nothing guard-specific left in it once
-#: the explaining/justifying clauses are cut, so it belongs here once
-#: rather than hand-copied per guard; the copy-paste drift this closes was
-#: observed inside a single commit, one guard in the family still carrying
-#: the pre-fix wording while its four siblings had already moved on).
 INDIRECTION_REMEDY = (
     # Opens `_advisory_dedupe._CUE_WINDOW_RE`'s cue window deliberately:
-    # `_message_size` exempts a backticked command only inside one, so the
-    # earlier "rather than naming an interpreter" phrasing was charged 295
-    # prose bytes against a 220 cap for saying the same thing. Measured
-    # 2026-09-12: 252 total / 45 exempt / 207 prose.
     "Use instead: `./path/to/script.sh` -- invoke the script, do not name "
     "an interpreter (`bash path/to/script.sh` is what denies). For a "
     "non-script payload, run its steps directly, not through an "
@@ -237,58 +223,23 @@ from coordinator_core.bash_guards._command_tokenizer import (
 from coordinator_core.bash_guards import _dialect
 from coordinator_core.bash_guards._verdict import record_silent
 
-#: A shell redirection operator, optionally fd-prefixed (`2>`) and/or
-#: duplicated (`>&1`), matched as a PREFIX of a token -- covers both the
-#: bare ("`>` `file`", two tokens) and attached ("`>file`", one token)
-#: forms. `re.match` (not `search`) anchors this at token position 0.
 _REDIR_PREFIX_RE = re.compile(r"^\d*>{1,2}(?:&\d*)?")
 
-#: Commands that can create or overwrite a NAMED file via a plain argument
-#: (as opposed to shell redirection, which is handled separately above).
 _FILE_ARG_COMMANDS = frozenset({"touch", "cp", "mv", "install", "ln", "tee"})
 
-#: PowerShell cmdlet equivalents for the same "creates/overwrites a NAMED
-#: file via a plain argument" semantics (C4e, 2026-08-07 -- guard-dialect-
-#: coverage.md rows 22-24, "Shared sentinel-creation engine"). `cp`/`mv`
-#: already fire via real PowerShell alias collisions (the POSIX set above
-#: matches them unchanged -- see `_normalize_executable_basename`, which
-#: lower-cases every token regardless of dialect), so they are NOT
-#: duplicated here; `touch`, `install`, `ln`, `tee` have no PowerShell
-#: alias, so their cmdlet equivalents are added directly:
-#: `New-Item` (touch/mkdir-shaped creation), `Copy-Item` (cp, listed for
-#: completeness though the `cp` alias already covers the common case),
-#: `Move-Item` (mv, same note), `Set-Content`/`Add-Content` (tee/redirect-
-#: shaped writes). Compared against the SAME `_normalize_executable_
-#: basename`-lower-cased token as the POSIX set -- a PowerShell cmdlet name
-#: never collides with a POSIX binary name, so this widening is safe to
-#: check unconditionally, on BOTH dialects, with no dialect branch needed
-#: for this rule specifically (AC4: adding entries to a set that can never
-#: match real bash argv0 text changes zero bash-leg behavior).
 _FILE_ARG_COMMANDS_POWERSHELL = frozenset(
     {"new-item", "copy-item", "move-item", "set-content", "add-content"}
 )
 
-#: `sed`'s in-place-edit flag, in any of its common spellings: bare `-i`,
-#: GNU `-i.bak`/`-iSUFFIX` (attached), BSD `-i ''` (separate empty-string
-#: arg), or the GNU long form `--in-place`/`--in-place=.bak`.
 _SED_INPLACE_RE = re.compile(r"^(?:-i|--in-place)")
 
-#: Python interpreter basenames this guard treats as `-c`-capable, e.g.
-#: `python`, `python3`, `python3.11`, `python2`.
 _PYTHON_BASENAME_RE = re.compile(r"^python[0-9.]*$")
 
-#: `dd`'s output-file `key=value` operand, e.g. `of=<target>`,
-#: `of=<target> conv=notrunc`. `dd` takes ALL of its operands in `key=value`
 #: form -- unlike `_FILE_ARG_COMMANDS` above, there is no bare positional
-#: filename argument to catch, so `dd` was entirely unguarded by rule 2
-#: until this rule was added (2026-07-28).
 _DD_OF_RE = re.compile(r"^of=(.+)$")
 
 
 def _basename(token: str) -> str:
-    """Return `token`'s final path component, splitting on both `/` and
-    `\\` (a Windows path may appear in a command string on any host
-    platform)."""
     base = token.rstrip("/\\")
     base = base.rsplit("/", 1)[-1]
     base = base.rsplit("\\", 1)[-1]
@@ -296,20 +247,11 @@ def _basename(token: str) -> str:
 
 
 class SentinelCreationDetector:
-    """Detects shell shapes that would create or overwrite a single named
-    sentinel file, per the four rules documented in the module docstring.
-    One instance per protected target basename.
-    """
 
     def __init__(self, target_basename: str) -> None:
         self.target_basename = target_basename
         # Case-INSENSITIVE (2026-07-30, H4 fix, same reasoning as
-        # `_is_target` below): a `python -c` payload or unparseable-legacy
-        # command mentioning the sentinel in a different case
         # (`.COORDINATOR-BASH-GUARDS-DISARMED`) still creates a file the
-        # read side finds on this fleet's case-insensitive-but-case-
-        # preserving default filesystem, so the mention check must not be
-        # case-sensitive either.
         self._mention_re = re.compile(re.escape(target_basename), re.IGNORECASE)
 
     def _is_target(self, token: str) -> bool:
@@ -330,8 +272,6 @@ class SentinelCreationDetector:
         return _basename(token).lower() == self.target_basename.lower()
 
     def _redirect_target_denies(self, seg_tokens: List[str]) -> bool:
-        """Rule 1 -- shell redirection into the sentinel, bare or attached
-        operator form."""
         n = len(seg_tokens)
         for i, tok in enumerate(seg_tokens):
             m = _REDIR_PREFIX_RE.match(tok)
@@ -348,17 +288,8 @@ class SentinelCreationDetector:
                 return True
         return False
 
-    #: Passthrough wrapper binaries that run their remaining argv unchanged
-    #: (BX-13 fix, 2026-07-29, confirmed live): `nice touch <sentinel>` was
-    #: never recognized because only a leading `VAR=value` assignment was
-    #: skipped, not a wrapper TOKEN -- so this guard's argv0-position check
     #: landed on `nice` (not a `_FILE_ARG_COMMANDS` member) and allowed a
-    #: command that still creates the sentinel for real. Same set
     #: `dispatch_checks.py`'s `_BYPASS_PREFIX` already tolerates.
-    #: Widened (2026-07-29, code-reviewer Finding 3) -- see
-    #: `block_subagent_destructive_action.py`'s sibling copy for the full
-    #: rationale: `setsid`/`strace`/`doas`/`busybox` were unrecognized
-    #: passthrough wrappers.
     _PASSTHROUGH_WRAPPERS = frozenset(
         {
             "sudo", "command", "time", "exec", "nice", "nohup", "ionice", "timeout",
@@ -366,48 +297,20 @@ class SentinelCreationDetector:
         }
     )
 
-    #: BX-14 fix (2026-07-29, confirmed live via the real dispatcher): the
-    #: skip above tolerated the wrapper BINARY token but never the wrapper's
-    #: OWN argument(s) -- `timeout 30 touch <sentinel>`, `ionice -c2 touch
-    #: <sentinel>`, `stdbuf -oL touch <sentinel>` all landed argv0 on
     #: `30`/`-c2`/`-oL` (not a `_FILE_ARG_COMMANDS` member), so the create/
-    #: overwrite still happened for real while this guard allowed. Same
     #: flag-set `dispatch_checks.py`'s `_BYPASS_WRAPPER_ARG_FLAGS` uses for
-    #: the identical wrapper-argument gap in `check_no_verify` -- own-module
-    #: copy per this package's no-cross-module-coupling convention.
-    #: `_skip_wrapper_own_argv` itself now lives in `_command_tokenizer.py`
-    #: (2026-07-30, M8 consolidation) -- imported at module scope above
-    #: rather than hand-maintained as a staticmethod here; see that module's
-    #: own docstring for the five-copy history this closes.
 
     @staticmethod
     def _env_skip_index(seg_tokens: List[str]) -> int:
-        """Return the index of the first token in `seg_tokens` that is NOT
-        a leading `VAR=value` environment assignment, an `env` invocation
-        (optionally followed by its own assignments), or a no-op passthrough
-        wrapper (`nice`/`time`/etc., plus that wrapper's OWN argument(s) --
-        see `_skip_wrapper_own_argv`) -- i.e. the real argv0 position for
-        this segment."""
         env_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
         i = 0
         n = len(seg_tokens)
         while i < n:
             # BRACE-GROUPING FIX (2026-07-29, code-reviewer Finding 1,
-            # confirmed live): `{ touch <sentinel>; }` was never peeled here
-            # -- only `VAR=value`/`env`/passthrough-wrapper tokens were. Bash
-            # requires a space after `{` (a reserved word, not an operator),
-            # so `shlex.split` always yields it as its own token; peeling it
-            # exposes the true command-position head, mirroring the sibling
-            # destructive-action guard's identical fix.
             if seg_tokens[i] == "{":
                 i += 1
                 continue
             # PAREN-GROUPING FIX (2026-07-29, EM-run confinement-corpus
-            # pass, confirmed live): `( touch <sentinel>; )` has the exact
-            # same shape as the brace fix directly above -- `(` is
-            # whitespace-separated in the tested shape and, like `{`,
-            # `shlex.split` always yields it as its own token, so it was
-            # never peeled here either.
             if seg_tokens[i] == "(":
                 i += 1
                 continue
@@ -430,17 +333,12 @@ class SentinelCreationDetector:
         return i
 
     def _file_arg_command_denies(self, seg_tokens: List[str], argv0_idx: int) -> bool:
-        """Rule 2 -- `touch`/`cp`/`mv`/`install`/`ln`/`tee` with the
-        sentinel as ANY argument (source or destination; default-deny
-        posture, see module docstring)."""
         base = _normalize_executable_basename(seg_tokens[argv0_idx])
         if base not in _FILE_ARG_COMMANDS and base not in _FILE_ARG_COMMANDS_POWERSHELL:
             return False
         return any(self._is_target(tok) for tok in seg_tokens[argv0_idx + 1 :])
 
     def _sed_inplace_denies(self, seg_tokens: List[str], argv0_idx: int) -> bool:
-        """Rule 3 -- `sed -i` (any in-place-flag spelling) with the
-        sentinel as an argument."""
         base = _normalize_executable_basename(seg_tokens[argv0_idx])
         if base != "sed":
             return False
@@ -451,8 +349,6 @@ class SentinelCreationDetector:
         return any(self._is_target(tok) for tok in rest)
 
     def _python_dash_c_denies(self, seg_tokens: List[str], argv0_idx: int) -> bool:
-        """Rule 4 -- `python(3|2)? -c <code>` (bare or attached `-ccode`)
-        whose payload mentions the sentinel filename as a substring."""
         base = _normalize_executable_basename(seg_tokens[argv0_idx])
         if not _PYTHON_BASENAME_RE.match(base):
             return False
@@ -502,26 +398,12 @@ class SentinelCreationDetector:
         return False
 
     def _evaluate_legacy(self, cmd: str) -> bool:
-        """Narrow free-text fallback for an unparseable command
-        (unbalanced quoting) that still mentions the sentinel's basename
-        -- fails CLOSED (deny), same asymmetric posture as the parsed
-        path."""
         return bool(self._mention_re.search(cmd))
 
-    # -----------------------------------------------------------------
     # INDIRECTION-WRAPPER PASS (2026-07-28 addition -- see module
     # docstring "INDIRECTION-WRAPPER HARDENING"). Reuses
-    # `block_subagent_destructive_action`'s tokenizer/segmenter/env-strip/
-    # interpreter-normalization/depth-cap primitives, driven by THIS
-    # detector's own leaf classifier (`_classify_payload`, which re-runs
-    # the base four-plus-dd rules and then recurses into this same pass).
-    # -----------------------------------------------------------------
 
     def _classify_payload(self, payload: str, depth: int) -> Optional[str]:
-        """Leaf classifier for an unwrapped indirection payload (a `-c`
-        string, or an `env`-stripped remainder): re-run the base rules,
-        then recurse into any further indirection nested inside it.
-        Returns a deny_kind label, or `None` if the payload is clean."""
         tokens = _tokenize_full_command(payload)
         if tokens is None:
             if self._evaluate_legacy(payload):
@@ -535,17 +417,10 @@ class SentinelCreationDetector:
                 return verdict
         return None
 
-    #: Heads `xargs` may run without denying: pure reads (plus `echo`, which
-    #: writes only to stdout). None of them can create a file whatever
-    #: arguments stdin assembles, and the segment's own redirects are checked
-    #: before this pass. Shared by every sentinel guard on this detector --
-    #: it lived only on the approval guard's subclass until 2026-09-19, when
-    #: the worktree guard denied a read-only `git diff | xargs wc -l`.
     _XARGS_READ_ONLY_HEADS = frozenset(
         {"cat", "ls", "stat", "test", "head", "tail", "wc", "file", "grep", "echo"}
     )
 
-    #: `xargs` options that consume the NEXT token as their operand. An
     #: option outside this set and `_XARGS_BARE_OPTIONS` fails closed.
     _XARGS_OPERAND_OPTIONS = frozenset(
         {
@@ -606,8 +481,6 @@ class SentinelCreationDetector:
     def _evaluate_segment_indirection(
         self, seg_tokens: List[str], pipe_before: bool, depth: int
     ):
-        """Admit `xargs <read-only head>` (see `_xargs_runs_read_only_head`);
-        every other shape takes the indirection walk."""
         if self._xargs_runs_read_only_head(seg_tokens):
             return None
         return self._evaluate_segment_indirection_walk(seg_tokens, pipe_before, depth)
@@ -615,20 +488,11 @@ class SentinelCreationDetector:
     def _evaluate_segment_indirection_walk(
         self, seg_tokens: List[str], pipe_before: bool, depth: int
     ) -> Optional[str]:
-        """Detect an interpreter/env/xargs indirection shape at THIS
-        segment's head and, where the shape is reliably unwrappable,
-        recurse the unwrapped payload back through `_classify_payload`.
-        Mirrors `block_subagent_destructive_action._evaluate_wrapper_
-        indirection`'s shape walk (same primitives, sentinel-specific leaf
-        classifier -- see module docstring)."""
         if depth > _MAX_INDIRECTION_DEPTH:
             return "indirection nesting too deep (fails closed)"
         if not seg_tokens:
             return None
 
-        # Bare `VAR=1 <indirection-shape>` (no literal `env` word) -- skip
-        # past leading assignments to find the real argv0 for THIS pass,
-        # same skip this detector's base rules already use.
         argv0_idx = self._env_skip_index(seg_tokens)
         if argv0_idx >= len(seg_tokens):
             return None
@@ -683,11 +547,6 @@ class SentinelCreationDetector:
                     f"{norm_head} <file> (interpreter-invoked script -- "
                     "indirection wrapper, script content unexamined)"
                 )
-            # python/python3 without `-c` (e.g. `python3 -m pytest`) is not
-            # an enumerated bypass shape -- allow, do not recurse (recursing
-            # on unchanged text would just re-match this same branch until
-            # the depth cap denies, the opposite of "not an enumerated
-            # shape").
             return None
 
         if was_env_wrapped or env_assignment_stripped:
@@ -700,23 +559,11 @@ class SentinelCreationDetector:
         """Return `(deny, reason_kind, reason_class)` for a raw command
         string. `reason_class` is one of `REASON_DIRECT` / `REASON_
         INDIRECTION` / `""` (allow) -- see module docstring "REASON CLASS"."""
-        # Heredoc bodies are stdin DATA, not shell command tokens (a benign
-        # heredoc write whose body happens to mention the sentinel's
-        # basename in prose must not deny) -- strip them before
-        # classification, same as the sibling destructive-action guard.
-        # An interpreter FED by a heredoc (`bash <<'EOF' ... EOF`) still
-        # denies: the residual `bash <<'EOF'` line matches the
-        # interpreter-invoked-script indirection shape below.
         cmd_norm = _strip_heredoc_bodies(cmd)
 
         tokens = _tokenize_full_command(cmd_norm)
         if tokens is None:
             if self._evaluate_legacy(cmd_norm):
-                # The raw text directly mentions the sentinel basename (no
-                # indirection layer stood between the guard and that
-                # mention) -- classified DIRECT even though it took the
-                # unparseable-quoting fallback path, not the tokenized
-                # `_segment_denies` path.
                 return (
                     True,
                     "unparseable shell shape mentioning the sentinel filename",
@@ -774,18 +621,11 @@ class SentinelCreationDetector:
             return self.evaluate(cmd)
 
         if dialect is not _dialect.Dialect.POWERSHELL:
-            # Absent/unrecognized dialect -- SILENT, never a bash default
-            # (plan Anti-scope; mirrors `_dialect.tokenize_command`'s own
-            # "no recognized dialect" branch).
             record_silent(guard_name, "no recognized dialect (dialect=%r)" % (dialect,))
             return False, "", ""
 
         segments = _dialect.resolve_segments_for_dialect(cmd, dialect, guard_name=guard_name)
         if segments is None:
-            # SILENT already recorded by `resolve_segments_for_dialect`
-            # (ImportError, `has_error` parse residue, etc.) -- see
-            # `_dialect.py`'s own docstring for the three SILENT-routing
-            # cases this delegates to.
             return False, "", ""
 
         for seg_tokens, _pipe_before in segments:

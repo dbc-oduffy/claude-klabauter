@@ -18,22 +18,11 @@ from coordinator_core.ops.fleet._memo_summary import (
 )
 
 
-# ---------------------------------------------------------------------------
-# has_prose_body / multi-line comment stripping
-#
-# Regression, DoE-claude 2026-08-30: a memo reached them as frontmatter plus
-# four empty comment blocks, `summary:` holding a fragment of the draft warning
-# itself. Two causes, both here: the comment predicate was anchored per-line so
-# multi-line blocks leaked their interiors as "prose", and nothing on the send
-# path ever asked whether the body had prose in it at all.
-# ---------------------------------------------------------------------------
-
 def test_draft_placeholder_body_has_no_prose():
     assert has_prose_body(_BODY_PLACEHOLDER) is False
 
 
 def test_draft_placeholder_body_derives_no_summary():
-    # The interior of a spanning comment must never become a memo's summary.
     assert derive_prose_summary(_BODY_PLACEHOLDER) == ""
 
 
@@ -52,8 +41,6 @@ def test_multi_line_comment_interior_is_not_prose():
 
 
 def test_unterminated_comment_does_not_leak_its_tail():
-    # An unterminated `<!--` swallows the rest of the body rather than leaking
-    # everything after it as prose.
     assert has_prose_body("<!-- opened and never closed\nstill inside\n") is False
 
 
@@ -68,16 +55,10 @@ def test_prose_body_is_prose():
 
 
 def test_placeholder_is_exactly_99_chars():
-    # The ruler's own prose claims "99 characters" — assert it rather than
-    # trust it (plan C1: "a ruler that lies about its own length is worse
-    # than no ruler").
     assert len(SUMMARY_PLACEHOLDER) == 99
 
 
 def test_placeholder_has_double_space_after_first_sentence():
-    # The double space is what makes the count come out — pin it so a future
-    # whitespace-normalizing edit is caught here rather than silently
-    # shortening the ruler by one char.
     assert "characters.  this is 99" in SUMMARY_PLACEHOLDER
 
 
@@ -98,8 +79,6 @@ def test_is_placeholder_summary_true_for_empty_string():
 
 
 def test_is_placeholder_summary_false_for_near_miss_quoting_ruler_words():
-    # Anti-scope: a real summary that happens to quote the ruler's words
-    # must NOT be swallowed by a substring/prefix match.
     near_miss = f"See also: {SUMMARY_PLACEHOLDER}"
     assert is_placeholder_summary(near_miss) is False
 

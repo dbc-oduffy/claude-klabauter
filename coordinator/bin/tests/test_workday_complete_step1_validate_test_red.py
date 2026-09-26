@@ -98,14 +98,9 @@ class EmitTestRedRecordTest(unittest.TestCase):
         with mock.patch.object(
             mod, "write_test_red_record", side_effect=RuntimeError("locked state/ dir")
         ), mock.patch.object(mod, "_git_head_sha", return_value="deadbeef"):
-            # Must not raise.
             mod._emit_test_red_record(0, "", 0)
 
     def test_t4_main_exit_code_unchanged_by_emitter_failure(self) -> None:
-        """The verdict/exit-code path is unaffected whether the test-red
-        write succeeds or raises -- exercised end-to-end through main()
-        with the resolver and fast-test spawn seams stubbed to a fixed
-        test-failure shape (rc=3, classify_rc=3)."""
         mod = _load_cli_module()
 
         fake_resolve = type("R", (), {"returncode": 0, "stdout": f"{mod.shlex.quote(sys.executable)} -c \"pass\"\n"})()

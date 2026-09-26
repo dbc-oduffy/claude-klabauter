@@ -40,8 +40,6 @@ from coordinator_core.ops.orphan_branch_sweep import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -104,21 +102,11 @@ def _commit(repo: Path, name: str, msg: str) -> None:
     _git(repo, "commit", "-q", "-m", msg)
 
 
-# ---------------------------------------------------------------------------
-# severity_rank
-# ---------------------------------------------------------------------------
-
-
 def test_severity_rank_ordering():
     assert _severity_rank("OK") == 0
     assert _severity_rank("WARNING") == 1
     assert _severity_rank("CRITICAL") == 2
     assert _severity_rank("garbage") == 0
-
-
-# ---------------------------------------------------------------------------
-# CLI surface: --help, unknown arg, not-a-git-repo
-# ---------------------------------------------------------------------------
 
 
 def test_help_exits_zero(capsys):
@@ -143,23 +131,13 @@ def test_outside_git_repo_exits_zero_silent(tmp_path, capsys, monkeypatch):
     assert out == ""
 
 
-# ---------------------------------------------------------------------------
-# rev-list --count argv shape (the P1 fix)
-# ---------------------------------------------------------------------------
-
-
 def test_unmerged_count_uses_separate_revs(tmp_path, monkeypatch):
-    """`git rev-list --count <sha> ^<ref>` MUST be two argv entries — not one
-    combined string ("<sha> ^<ref>"), which git rejects as an ambiguous
-    argument and which subprocess.run (list-argv, no shell) would otherwise
-    silently mis-pass as a single unresolvable token."""
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
     tip = _git(repo, "rev-parse", "HEAD").stdout.strip()
 
-    # Two-arg form (correct) succeeds and returns a real count.
     count = _rev_list_count(tip, "^main")
-    assert count == 0  # tip IS main's HEAD here — nothing unmerged
+    assert count == 0
 
     _commit(repo, "g.txt", "second")
     tip2 = _git(repo, "rev-parse", "HEAD").stdout.strip()
@@ -170,25 +148,11 @@ def test_unmerged_count_uses_separate_revs(tmp_path, monkeypatch):
 
     assert _rev_list_count(branch_tip, "^main") == 1
 
-    # The buggy one-string form must NOT silently succeed with a wrong count —
-    # git rejects it outright, and _rev_list_count's own error handling
-    # degrades that rejection to 0 (matching the surrounding classify logic's
-    # existing `|| echo 0` fail-open posture) rather than raising.
     bad = _rev_list_count(f"{branch_tip} ^main")
     assert bad == 0
 
 
-# ---------------------------------------------------------------------------
-# End-to-end classification via main() — mirrors the golden JS suite's 3 cases,
-# using a stubbed `gh` on PATH exactly like the DoE-side parity harness.
-# ---------------------------------------------------------------------------
-
-
 def _write_gh_stub(bin_dir: Path, pr_map: dict) -> None:
-    """Stub `gh pr list`, handling BOTH shapes production code now issues:
-    the per-branch fallback (`--head <branch>`, one PR object, unchanged)
-    and the batched call (no `--head`, every mapped PR with `headRefName`
-    set — the shape `main`'s batch primitive expects)."""
     bin_dir.mkdir(parents=True, exist_ok=True)
     map_file = bin_dir / "pr-map.json"
     map_file.write_text(json.dumps(pr_map))
@@ -222,8 +186,6 @@ def _write_gh_stub(bin_dir: Path, pr_map: dict) -> None:
 
 
 def _dated_commit(repo: Path, name: str, msg: str, ts: int) -> None:
-    """Commit with an explicit author+committer date (UTC), avoiding any race
-    with the real wall clock `now` the script reads at run time."""
     date_str = time.strftime("%Y-%m-%dT%H:%M:%S+0000", time.gmtime(ts))
     (repo / name).write_text(msg)
     _git(repo, "add", ".")
@@ -239,16 +201,8 @@ def test_end_to_end_critical_warning_ok(tmp_path, monkeypatch, capsys):
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
 
-    # All fixture timestamps anchor 10 days before test-run time and only ever
-    # step FORWARD from that fixed base — never against the real wall clock —
-    # so nothing here races the `now = int(time.time())` the script reads at
-    # run time (a `merged_at_ts + N` scheme keyed off a live commit's own
-    # timestamp flaked: sub-second test execution meant "post-merge" commits
-    # could land in the FUTURE relative to the script's own `now`, silently
-    # flipping orphan_after_merge to 0 depending on scheduler jitter).
     base_ts = int(time.time()) - 10 * 86400
 
-    # cleanmerged: merged PR, no commits after merge -> OK
     _git(repo, "checkout", "-q", "-b", "work/test/cleanmerged")
     _git(repo, "checkout", "-q", "main")
     _git(repo, "merge", "--no-ff", "-q", "work/test/cleanmerged", "-m", "merge cleanmerged")
@@ -264,7 +218,6 @@ def test_end_to_end_critical_warning_ok(tmp_path, monkeypatch, capsys):
         _dated_commit(repo, f"post{i}.txt", f"post{i}", merged_at_ts + 60 + i * 10)
     _git(repo, "checkout", "-q", "main")
 
-    # no-pr-stale: no PR, old branch name, ahead of main -> WARNING
     stale_branch = "work/testmachine/2020-01-01"
     _git(repo, "checkout", "-q", "-b", stale_branch)
     _dated_commit(repo, "stale.txt", "stale", base_ts - 3 * 86400)
@@ -288,33 +241,10 @@ def test_end_to_end_critical_warning_ok(tmp_path, monkeypatch, capsys):
     assert by_branch.get("work/test/cleanmerged", {}).get("severity", "OK") == "OK"
 
 
-# ---------------------------------------------------------------------------
-# Amplification-gate deliverable: `main`'s per-branch ahead-count
-# (`git rev-list --count main..tip`) and per-branch PR lookup (`gh pr list
-# --head <branch>`) are now each folded into ONE batched call outside the
-# per-branch loop (`git for-each-ref --format=%(ahead-behind:<main>)` and one
-# unscoped `gh pr list --json ...,headRefName`) — see the amplification gate
-# keys ('main', '_git') / ('main', '_run') in
 # coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py::_KNOWN_SITES.
-# This pins PROCESS COUNT DOES NOT GROW WITH N: each batch primitive must
-# fire exactly once for the whole sweep, whatever the branch count, mirroring
-# test_schema_drift_watch.py::TestSchemaAdvisoryBatch::
-# test_process_count_does_not_grow_with_the_set.
-# ---------------------------------------------------------------------------
 
 
 def test_process_count_does_not_grow_with_the_set(tmp_path, monkeypatch):
-    """Counts spawns via a `_run`-level interceptor rather than a PATH-shadowed
-    `gh` stub script: on this host a real `gh.EXE` is installed, and Windows'
-    extension-less-executable PATH search does not shadow it with a bare
-    (no-extension) stub file the way POSIX exec does — a pre-existing
-    environment gap this test sidesteps rather than depends on (verified:
-    the existing `_write_gh_stub`-based tests fail identically against the
-    workstream merge-base, unrelated to this chunk's edits). `gh` calls are
-    answered in-process here; only the real `git for-each-ref` batch call is
-    allowed to actually spawn, so this test still exercises the genuine
-    batched git primitive end to end.
-    """
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
 
@@ -354,13 +284,7 @@ def test_process_count_does_not_grow_with_the_set(tmp_path, monkeypatch):
     )
 
 
-# ---------------------------------------------------------------------------
-# Faithful oracle-bug repro: current-branch `"* "` marker is not stripped by
-# the bash-equivalent regex, so a qualifying branch that is ALSO the checked-
-# out HEAD is silently dropped from seen_branches. See module docstring
 # negative-spec. NOT a fix target — this is a NEGATIVE-SPEC regression test:
-# if this starts passing (branch appears), the faithful-repro contract broke.
-# ---------------------------------------------------------------------------
 
 
 def test_current_branch_dropped_oracle_bug(tmp_path, monkeypatch, capsys):
@@ -375,19 +299,7 @@ def test_current_branch_dropped_oracle_bug(tmp_path, monkeypatch, capsys):
     assert out == ""
 
 
-# ---------------------------------------------------------------------------
-# --severity-min filtering and --format text, positive (populated) cases.
-#
-# Ported from coordinator/tests/plugin-ecosystem/orphan-sweep.test.js:
-#   "--severity-min critical suppresses WARNING entries" (its :303) and
-#   "text format emits readable lines" (its :323) — the two JS-suite
-#   assertions NOT already covered above by test_end_to_end_critical_warning_ok
-#   (which only ever calls main() with --severity-min ok) or
-#   test_current_branch_dropped_oracle_bug (--format text but always-empty
-#   output, so it never exercises the per-severity line-prefix contract).
-# See module docstring: byte-parity verified against this same JS suite
 # during the 2026-07-17 BIG_PORT port.
-# ---------------------------------------------------------------------------
 
 
 def _plant_critical_and_warning_branches(tmp_path: Path, monkeypatch) -> tuple[Path, str]:
@@ -454,15 +366,6 @@ def test_text_format_emits_readable_lines(tmp_path, monkeypatch, capsys):
         )
 
 
-# ---------------------------------------------------------------------------
-# C1c quartet: compute_descendant_tip / detect_unpushed_commits /
-# list_unmerged_work_branches / verify_commit_in_review_window.
-#
-# All git exercised here runs ONLY inside a throwaway repo under tmp_path
-# (via _init_repo/_commit above) — never against the real working repo.
-# ---------------------------------------------------------------------------
-
-
 def test_compute_descendant_tip_single_line_history(tmp_path):
     repo = _init_repo(tmp_path)
     root = _git(repo, "rev-parse", "HEAD").stdout.strip()
@@ -472,7 +375,6 @@ def test_compute_descendant_tip_single_line_history(tmp_path):
     result = compute_descendant_tip([root, tip], cwd=repo)
     assert result == {"descendant_tip": tip, "diverged": False}
 
-    # Idempotent: identical inputs, identical output on a second call.
     assert compute_descendant_tip([root, tip], cwd=repo) == result
 
 
@@ -507,12 +409,9 @@ def test_detect_unpushed_commits_no_origin_counts_all(tmp_path):
     _commit(repo, "a.txt", "a")
     _commit(repo, "b.txt", "b")
 
-    # No origin ref: falls back to a full rev-list count on the branch —
-    # includes the repo's initial commit, not just the 2 new ones.
     result = detect_unpushed_commits("work/test/nofetch", cwd=repo)
     assert result == {"branch": "work/test/nofetch", "ahead_count": 3, "has_origin": False}
 
-    # Idempotent: repeated call over unchanged history returns the same result.
     assert detect_unpushed_commits("work/test/nofetch", cwd=repo) == result
 
 
@@ -520,8 +419,6 @@ def test_detect_unpushed_commits_with_origin_ref(tmp_path):
     repo = _init_repo(tmp_path)
     _git(repo, "checkout", "-q", "-b", "work/test/withorigin")
     _commit(repo, "a.txt", "a")
-    # Simulate an already-fetched origin/<branch> ref without a real remote:
-    # write the ref directly (no network call, no `git fetch`).
     tip = _git(repo, "rev-parse", "HEAD").stdout.strip()
     _git(repo, "update-ref", "refs/remotes/origin/work/test/withorigin", tip)
 
@@ -547,7 +444,6 @@ def test_detect_unpushed_commits_defaults_to_current_branch(tmp_path):
     _git(repo, "checkout", "-q", "-b", "feature/test/current")
     _commit(repo, "a.txt", "a")
 
-    # No origin ref: full rev-list count includes the initial commit too.
     result = detect_unpushed_commits(None, cwd=repo)
     assert result["branch"] == "feature/test/current"
     assert result["ahead_count"] == 2
@@ -568,7 +464,6 @@ def test_list_unmerged_work_branches_scopes_by_machine_case_insensitive(tmp_path
     branches = list_unmerged_work_branches("machineone", "main", cwd=repo)
     assert branches == ["work/MachineOne/topic-a"]
 
-    # Idempotent: no state mutated by the read, second call matches.
     assert list_unmerged_work_branches("machineone", "main", cwd=repo) == branches
 
 
@@ -596,14 +491,10 @@ def test_verify_commit_in_review_window_inclusive_upper_exclusive_lower(tmp_path
     _commit(repo, "b.txt", "b")
     upper = _git(repo, "rev-parse", "HEAD").stdout.strip()
 
-    # Middle commit strictly between lower (exclusive) and upper (inclusive).
     assert verify_commit_in_review_window(middle, lower, upper, cwd=repo) == {"in_window": True}
-    # Upper bound itself counts (inclusive-upper).
     assert verify_commit_in_review_window(upper, lower, upper, cwd=repo) == {"in_window": True}
-    # Lower bound itself does NOT count (exclusive-lower).
     assert verify_commit_in_review_window(lower, lower, upper, cwd=repo) == {"in_window": False}
 
-    # Idempotent: repeated identical call, identical result.
     assert verify_commit_in_review_window(middle, lower, upper, cwd=repo) == {"in_window": True}
 
 
@@ -615,15 +506,10 @@ def test_verify_commit_in_review_window_outside_range(tmp_path):
     _commit(repo, "b.txt", "b")
     upper = _git(repo, "rev-parse", "HEAD").stdout.strip()
 
-    # root predates lower -> not in window.
     assert verify_commit_in_review_window(root, lower, upper, cwd=repo) == {"in_window": False}
 
 
-# ---------------------------------------------------------------------------
-# Registered handler surface (async register_op wrappers) — same fixtures,
 # invoked through the JSON-RPC-shaped entry points via asyncio.run, matching
-# this repo's existing async-handler test convention.
-# ---------------------------------------------------------------------------
 
 
 def test_compute_descendant_tip_handler(tmp_path):
@@ -682,28 +568,11 @@ def test_verify_commit_in_review_window_handler(tmp_path):
     assert result == {"in_window": True}
 
 
-# ---------------------------------------------------------------------------
-# s5 batching (commit 40dd999f8) -- `main`'s batched author/committer-date
-# read (`git log --no-walk --format=%H%x1f%ae%x1f%ct <shas...>`) and its
-# per-branch fallback. amp-review-s5 (WARN): no test exercised this new
-# batch/fallback branch logic. `_git` is monkeypatched (wrapping the real
-# implementation, recording every call) rather than the whole `main()`
-# pipeline being re-derived, so these tests observe exactly what argv
-# reaches git.
-# ---------------------------------------------------------------------------
-
-
 def _no_gh(monkeypatch) -> None:
-    """Keep `gh_available` False so severity classification only depends on
-    age/ahead-of-main, not a PR stub -- irrelevant to what these tests pin."""
     monkeypatch.setattr(obs.shutil, "which", lambda name: None if name == "gh" else None)
 
 
 def _recording_git(monkeypatch, intercept):
-    """Wrap `obs._git` so every call is logged, with an optional
-    `intercept(args) -> CompletedProcess | None` hook that can fake a
-    specific call's result (return None to fall through to the real `_git`).
-    Returns the shared call-log list."""
     real_git = obs._git
     calls: list[list[str]] = []
 
@@ -719,17 +588,6 @@ def _recording_git(monkeypatch, intercept):
 
 
 def test_batched_author_date_read_is_one_no_walk_call_not_per_branch(tmp_path, monkeypatch):
-    """Two branches with distinct tips must resolve author+committer-date
-    through exactly ONE `git log --no-walk --format=%H%x1f%ae%x1f%ct <shas>`
-    call carrying both tip shas, never the pre-batch per-branch
-    `git log -1 --format=%ae <sha>` / `--format=%ct <sha>` pair.
-
-    Fails against the pre-batch implementation: that shape never issues a
-    `--no-walk` call at all and instead issues 2 `git log -1 --format=%ae`
-    and 2 `git log -1 --format=%ct` calls (one pair per branch) -- both the
-    "exactly one --no-walk call" and "zero per-branch log -1 calls"
-    assertions below fail on it.
-    """
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
     _no_gh(monkeypatch)
@@ -763,19 +621,6 @@ def test_batched_author_date_read_is_one_no_walk_call_not_per_branch(tmp_path, m
 
 
 def test_forced_batch_failure_routes_every_branch_through_fallback(tmp_path, monkeypatch, capsys):
-    """A whole-command non-zero exit from the batched `--no-walk` call must
-    disable `batch_ok` and route EVERY branch through the pre-existing
-    per-branch fallback (`git log -1 --format=%ae` / `--format=%ct`), which
-    must still resolve the correct severity/age for each branch.
-
-    Note (per-report): this does NOT discriminate against the pre-batch
-    implementation -- the fallback path reproduces exactly what pre-batch
-    code always did (per-branch `git log -1` calls), so pre-batch code
-    would pass this same assertion. It pins that the NEW fallback branch
-    (unreachable before this commit existed) is correct, not that it
-    differs from the old behavior -- the batching regression itself is
-    covered by the test above.
-    """
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
     _no_gh(monkeypatch)
@@ -808,17 +653,6 @@ def test_forced_batch_failure_routes_every_branch_through_fallback(tmp_path, mon
 
 
 def test_duplicate_tip_shas_both_resolve_through_batch(tmp_path, monkeypatch, capsys):
-    """Two branches sharing one tip sha must both correctly resolve through
-    the batched path -- the dict-keyed `%H` lookup makes `--no-walk`'s
-    reordering harmless and de-dupes the distinct-sha argv, but must not
-    drop or cross-wire either branch's result.
-
-    Note (per-report): does not discriminate against the pre-batch
-    implementation -- pre-batch resolved each branch independently and
-    would produce the same per-branch values for two branches sharing a
-    tip. Kept because it pins the dedup/dict-keyed-lookup behavior the
-    review verified by inspection but wanted a test pinning.
-    """
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
     _no_gh(monkeypatch)
@@ -827,8 +661,6 @@ def test_duplicate_tip_shas_both_resolve_through_batch(tmp_path, monkeypatch, ca
     _git(repo, "checkout", "-q", "-b", "work/test/dup-a")
     _dated_commit(repo, "dup.txt", "dup", base_ts)
     shared_tip = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    # dup-b branches off the exact same commit -- no new commit -- so both
-    # branches share one tip sha.
     _git(repo, "checkout", "-q", "-b", "work/test/dup-b")
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == shared_tip
     _git(repo, "checkout", "-q", "main")
@@ -851,19 +683,11 @@ def test_duplicate_tip_shas_both_resolve_through_batch(tmp_path, monkeypatch, ca
 
 
 def test_missing_batch_line_falls_through_to_existing_now_default(tmp_path, monkeypatch, capsys):
-    """A sha absent from an otherwise-successful batch response (dropped or
-    malformed line) must fall through to the exact pre-existing per-item
-    default (`age_h` computed from `now`, i.e. ~0), not raise or silently
-    misreport the real (much older) commit age. `user.email` is stubbed
-    empty here so the author-identity filter (which would otherwise also
-    default to "" on a missing line and drop the branch before age is even
-    observable) doesn't mask the assertion.
-    """
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
     _no_gh(monkeypatch)
 
-    base_ts = int(time.time()) - 40 * 86400  # 40 days old
+    base_ts = int(time.time()) - 40 * 86400
     _git(repo, "checkout", "-q", "-b", "work/test/malformed")
     _dated_commit(repo, "m.txt", "m", base_ts)
     _git(repo, "checkout", "-q", "main")
@@ -877,38 +701,24 @@ def test_missing_batch_line_falls_through_to_existing_now_default(tmp_path, monk
 
     calls = _recording_git(monkeypatch, intercept)
 
-    rc = main(["--format", "json", "--severity-min", "ok"])  # default --max-age-days 30
+    rc = main(["--format", "json", "--severity-min", "ok"])
     assert rc == 0
     out = capsys.readouterr().out
     lines = [json.loads(ln) for ln in out.splitlines() if ln.strip()]
     by_branch = {ln["branch"]: ln for ln in lines}
 
-    # The real commit is 40 days old -- if the batch-miss default did NOT
-    # fire, this branch would exceed --max-age-days 30 and be dropped
-    # entirely. Its presence, with age_h ~ 0, is the proof the "" / now
-    # default took over rather than the true (much older) committer date.
     assert "work/test/malformed" in by_branch
     assert by_branch["work/test/malformed"]["age_h"] <= 1
 
-    # Confirm this went through the successful-batch-but-missing-entry path,
-    # not the whole-command-failure fallback exercised above.
     per_branch_ct = [c for c in calls if c[:2] == ["log", "-1"] and c[2] == "--format=%ct"]
     assert per_branch_ct == [], "expected the batch-hit/missing-line path, not the per-branch fallback"
 
 
-# ---------------------------------------------------------------------------
 # The CRITICAL classification must be clearable by its own remedy. `gh pr list`
 # orders newest-first, so reading a list POSITION (`prs[-1]`) selected the
-# oldest of the five most recent PRs: a fresh PR opened to track the commits
-# that outlived an already-merged one prepends to the list and was never the
-# element read, leaving the sweep reporting the long-merged PR forever. Pins
-# selection by `number`, not position.
-# ---------------------------------------------------------------------------
 
 
 def _write_multi_pr_gh_stub(bin_dir: Path, pr_map: dict) -> None:
-    """Like `_write_gh_stub`, but each branch maps to a LIST of PR objects,
-    emitted newest-first exactly as `gh pr list` orders them."""
     bin_dir.mkdir(parents=True, exist_ok=True)
     map_file = bin_dir / "multi-pr-map.json"
     map_file.write_text(json.dumps(pr_map))
@@ -957,8 +767,6 @@ def test_newest_pr_wins_over_an_older_merged_one(tmp_path, monkeypatch, capsys):
     _git(repo, "checkout", "-q", "main")
 
     gh_stub_dir = tmp_path / "stub-bin"
-    # Newest-first, as `gh pr list` emits: the OPEN tracking PR for the
-    # post-merge commits, then the long-merged one.
     _write_multi_pr_gh_stub(gh_stub_dir, {
         branch: [
             {"number": 15, "state": "OPEN", "mergedAt": None},

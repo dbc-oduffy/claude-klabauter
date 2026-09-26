@@ -58,14 +58,6 @@ __all__ = [
 
 
 def is_engine_root(path: Path) -> bool:
-    """True iff `path` carries a valid `coordinator_core/_engine_stamp`.
-
-    "Valid" means readable and non-empty -- the stamp's own contract is
-    that only its bytes matter (see `skew.write_engine_stamp`), so this
-    predicate does not parse or otherwise interpret its contents beyond
-    confirming there is a real stamp there, not an empty or unreadable
-    file left behind by a partial write.
-    """
     stamp = _engine_stamp_path(Path(path))
     try:
         stamp_bytes = stamp.read_bytes()

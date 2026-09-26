@@ -51,8 +51,6 @@ from coordinator_core.win_portability import (
     no_console_passthrough_kwargs,
 )
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -61,42 +59,27 @@ pytestmark = [
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _BASELINE = "6277a0550"
 
-# AC6 asks "did the CENSUS touch a keep-hard guard?", not "did anyone touch
 # it on this shared branch?". A plain _BASELINE..HEAD range sweep catches
-# every commit landed by every concurrent session sharing this tree over
-# that window -- including unrelated plans' chunks -- and goes red on any of
-# them touching a keep-hard module's path for reasons that have nothing to
-# do with the census. (Observed: 50fb58816, "C9b: import diet on nine
 # write_guards modules", a pure import-deferral from the UNRELATED
-# 2026-08-06-windows-hot-path-less-work-per-interpreter.md plan, touched
-# guard_doctrine_surface_edits.py and made a naive range sweep fail here.)
-#
-# So: identify the census's OWN commits by their recorded `disposition_ref`
-# shas on this plan's spine (docs/plans/2026-08-06-apply-guard-class-census.md,
-# `- id: C<n>` entries), not by a subject-line pattern or a raw range. Diff
-# each keep-hard module against ONLY that fixed commit set. A future reader
-# tempted to simplify this back to a plain range sweep: don't -- that
-# reintroduces false reds from any other session's concurrent, unrelated
-# commits on this same branch.
 _CENSUS_COMMITS = (
-    "f3ca180e6",  # C1
-    "679ea50f0",  # C2
-    "18d5a571c",  # C3
-    "768bc8a52",  # C4
-    "a69586381",  # C5
-    "c52e9c58f",  # C7
-    "cea9e5cde",  # C9
-    "02d9057c5",  # C10
-    "018f8b371",  # C11
-    "30caac162",  # C12
-    "042571418",  # C12A
-    "d1113d2b8",  # C13
-    "b4a375273",  # C14
-    "b27e894a5",  # C16
-    "ef26a3998",  # C18
-    "4fc6f1cb7",  # C19
-    "a3eefd105",  # C20
-    "71065167f",  # C21
+    "f3ca180e6",
+    "679ea50f0",
+    "18d5a571c",
+    "768bc8a52",
+    "a69586381",
+    "c52e9c58f",
+    "cea9e5cde",
+    "02d9057c5",
+    "018f8b371",
+    "30caac162",
+    "042571418",
+    "d1113d2b8",
+    "b4a375273",
+    "b27e894a5",
+    "ef26a3998",
+    "4fc6f1cb7",
+    "a3eefd105",
+    "71065167f",
 )
 
 # --- write_guards: byte-identity is NOT the bar; CLASS/PRIORITY pinned ----
@@ -113,8 +96,6 @@ _WRITE_KEEP_HARD = {
 }
 
 # --- bash_guards: (band, fail_closed, advisory_value); NO_CONTENT_DIFF for
-# every entry except the two named message-text exceptions, and the
-# EM-ruled destructive-action module (class-stability only, diff allowed).
 _BASH_KEEP_HARD_NO_DIFF = {
     "block_subagent_commit.py": (GuardBand.CONFINEMENT_DENY, True, AdvisoryValue.NOT_COST_ARGUED),
     "block_stash_destruction.py": (GuardBand.CONFINEMENT_DENY, True, AdvisoryValue.NOT_COST_ARGUED),
@@ -126,13 +107,9 @@ _BASH_KEEP_HARD_NO_DIFF = {
     "check_test_suite_invocation.py": (GuardBand.CONFINEMENT_DENY, True, AdvisoryValue.NOT_COST_ARGUED),
 }
 
-# Message-string-only edits PASS: diff allowed, class/band/fail_closed/
-# advisory_value must be unchanged from these pinned values.
 _BASH_KEEP_HARD_CLASS_STABLE_ONLY = {
     "guard_multiprobe_banner.py": (GuardBand.PLATFORM_CONDITIONED_DENY, True, AdvisoryValue.HOST_INDEPENDENT),
     "guard_plumbing_and_loops.py": (GuardBand.PLATFORM_CONDITIONED_DENY, True, AdvisoryValue.WINDOWS_COST_ONLY),
-    # EM ruling this session (see module docstring above) -- reshaped by
-    # C18d, NOT on the plan's own byte-identity list; class-stability only.
     "block_subagent_destructive_action.py": (GuardBand.CONFINEMENT_DENY, True, AdvisoryValue.NOT_COST_ARGUED),
 }
 
@@ -153,10 +130,6 @@ _ENTRY_NAME_BY_MODULE = {
 
 @functools.lru_cache()
 def _has_baseline() -> bool:
-    """Cached lazily (not evaluated to build a module-level pytestmark) — the
-    `git cat-file` probes here would otherwise fire on every pytest
-    collection, including --collect-only and -k-filtered runs that never
-    execute a test in this module."""
     result = subprocess.run(
         ["git", "cat-file", "-e", _BASELINE],
         cwd=str(_REPO_ROOT),
@@ -179,9 +152,6 @@ def _has_baseline() -> bool:
 
 @pytest.fixture(autouse=True)
 def _require_baseline():
-    """Runtime (not collection-time) gate — mirrors the former module-level
-    pytestmark but defers the git-plumbing probe to first test setup so
-    collection never spawns a process (see _has_baseline's docstring)."""
     if not _has_baseline():
         pytest.skip(
             "plan baseline commit %s (or a recorded census disposition_ref) not "

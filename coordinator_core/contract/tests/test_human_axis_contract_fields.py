@@ -32,7 +32,6 @@ _BASE_PROVENANCE = {
 
 
 def _base_handoff_kwargs() -> dict:
-    """Minimal required-field set for a valid HandoffSummary, human_* omitted."""
     return dict(
         repo="acme/widgets",
         coordinator_root_path=".",
@@ -103,10 +102,6 @@ def test_handoff_summary_human_fields_accept_a_value():
 
 
 def test_handoff_summary_human_owner_mirrors_tracker_summary_human_owner():
-    """C2: `HandoffSummary.human_owner` mirrors `TrackerSummary.human_owner` — same
-    optional/nullable shape, and it never touches `owner` (the pre-existing
-    workstream/EM owner field), same non-repurposing rule as human_assignee/
-    human_claimant above."""
     kwargs = _base_handoff_kwargs()
     kwargs["human_owner"] = "ghi789jkl"
     model = HandoffSummary(**kwargs)
@@ -115,8 +110,6 @@ def test_handoff_summary_human_owner_mirrors_tracker_summary_human_owner():
 
 
 def test_handoff_summary_human_fields_never_widen_owner():
-    """`owner` keeps its pre-existing type/semantics — adding human_* is additive, not
-    a repurposing of the existing key."""
     kwargs = _base_handoff_kwargs()
     kwargs["human_assignee"] = "abc123def"
     model = HandoffSummary(**kwargs)
@@ -156,14 +149,10 @@ def test_tracker_summary_human_owner_accepts_a_value():
     )
     dumped = model.model_dump()
     assert dumped["human_owner"] == "abc123def"
-    # `owner` is untouched by the new key — still the pre-existing free-text value.
     assert dumped["owner"] == "platform-team"
 
 
 def test_human_fields_are_optional_nullable_not_required_with_null():
-    """The x-zod-nullable-optional marker (json_schema_extra) is present on all three
-    fields, distinguishing them from D9 required-with-null fields on the same entities
-    (e.g. `owner`, which carries no such marker and is a plain required key)."""
     for field_name in ("human_assignee", "human_claimant", "human_owner"):
         field = HandoffSummary.model_fields[field_name]
         assert field.json_schema_extra == {"x-zod-nullable-optional": True}

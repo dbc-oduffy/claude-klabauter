@@ -43,16 +43,11 @@ def test_refuses_when_a_candidate_is_still_on_disk(tmp_path):
 
     msg = str(excinfo.value)
     assert live in msg
-    # The message must say what to do, not merely that it refused: a refusal an
-    # operator cannot act on is what sends them looking for an override.
     assert "declared_payload" in msg
-    # Only the on-disk path is named — a genuine orphan is not a defect.
     assert "gone/from/disk.py" not in msg
 
 
 def test_binary_in_a_declared_directory_is_caught(tmp_path):
-    """`door.exe`'s shape: the class AC2 exists to fix, kept here so a
-    regression in AC2 surfaces as a loud refusal rather than a deletion."""
     (tmp_path / "coordinator_core" / "warm" / "door").mkdir(parents=True)
     binary = "coordinator_core/warm/door/door.exe"
     (tmp_path / binary).write_bytes(b"MZ\x90\x00")
@@ -62,8 +57,6 @@ def test_binary_in_a_declared_directory_is_caught(tmp_path):
 
 
 def test_genuine_orphans_pass_through(tmp_path):
-    """The point of the removal side still works: paths at HEAD and absent
-    from disk are exactly what it exists to delete."""
     _mod._refuse_removals_present_on_disk(
         tmp_path, ["bin/migrated-away.py", "skills/repo-setup/residue/x.md"]
     )
@@ -74,9 +67,6 @@ def test_empty_candidate_set_is_a_noop(tmp_path):
 
 
 def test_refusal_is_loud_not_a_silent_skip(tmp_path):
-    """The distinction claude-central-em asked for explicitly. A silent-skip
-    implementation would drop the live path and return the rest; this must
-    raise instead, so a wrong operand set cannot look like a clean round."""
     (tmp_path / "live.py").write_text("x\n", encoding="utf-8")
 
     with pytest.raises(_mod.RemovalCandidateOnDiskError):
@@ -84,8 +74,6 @@ def test_refusal_is_loud_not_a_silent_skip(tmp_path):
 
 
 def test_message_caps_the_list_but_reports_the_true_count(tmp_path):
-    """A mis-scope can name thousands. The message stays readable without
-    understating how much was refused."""
     names = []
     for i in range(25):
         rel = f"payload-{i:02d}.py"
@@ -101,10 +89,4 @@ def test_message_caps_the_list_but_reports_the_true_count(tmp_path):
 
 
 def test_removal_side_is_enabled(tmp_path):
-    """The flag was flipped ON by PM ruling, 2026-08-26, after both mirrors
-    were measured on the fixed walk (66 candidates at coordinator-claude, all
-    verified retired; 0 at claude-klabauter). This assertion did its job --
-    it said so out loud, and the flip is a deliberate edit to this line rather
-    than a silent constant change. It stays, inverted, for the same reason in
-    the other direction."""
     assert _mod._REMOVAL_SIDE_ENABLED is True

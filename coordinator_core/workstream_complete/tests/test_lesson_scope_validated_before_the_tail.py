@@ -36,7 +36,6 @@ def _lesson(**over) -> dict:
 
 
 def test_the_reported_value_is_refused_before_any_directive_is_built() -> None:
-    """`"local"` — the exact value that cost them both lessons."""
     with pytest.raises(ValueError) as exc:
         build_lesson_capture_directives({"lessons": [_lesson(scope="local")]})
     message = str(exc.value)
@@ -45,9 +44,6 @@ def test_the_reported_value_is_refused_before_any_directive_is_built() -> None:
 
 
 def test_the_refusal_names_the_valid_set_so_the_caller_can_fix_it_blind() -> None:
-    """A refusal that says only "invalid" makes the caller go read the CLI's
-    argparse help — which is what the value came from being guessed in the
-    first place."""
     with pytest.raises(ValueError) as exc:
         build_lesson_capture_directives({"lessons": [_lesson(scope="local")]})
     message = str(exc.value)
@@ -56,8 +52,6 @@ def test_the_refusal_names_the_valid_set_so_the_caller_can_fix_it_blind() -> Non
 
 
 def test_the_refusal_names_which_entry_is_wrong() -> None:
-    """A close can carry several lessons; "one of them is invalid" is not
-    actionable on a list of four."""
     with pytest.raises(ValueError) as exc:
         build_lesson_capture_directives(
             {"lessons": [_lesson(), _lesson(), _lesson(scope="local")]}
@@ -78,15 +72,10 @@ def test_every_valid_scope_still_builds(scope: str) -> None:
 
 @pytest.mark.parametrize("scope", ["", None, "  ", "Universal", "wiki_only"])
 def test_near_misses_and_empties_are_refused_too(scope) -> None:
-    """Case and separator variants are the likely near-misses (`Universal`,
-    `wiki_only`), and an absent scope must not silently reach a `--scope ''`
-    argv. All refused by the same arm."""
     with pytest.raises(ValueError):
         build_lesson_capture_directives({"lessons": [_lesson(scope=scope)]})
 
 
 def test_no_lessons_is_not_an_error() -> None:
-    """The overwhelmingly common close: the guard must cost a plan-less,
-    lesson-less session nothing."""
     assert build_lesson_capture_directives({}) == []
     assert build_lesson_capture_directives({"lessons": []}) == []

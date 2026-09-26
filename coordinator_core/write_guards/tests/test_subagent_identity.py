@@ -1,14 +1,3 @@
-"""Tests for coordinator_core.write_guards._subagent_identity.
-
-Covers ``_resolve_subagent_identity``'s four branches, with particular focus
-on branch (d) — the already-canonical ``<name>@session-<short>`` shape folded
-in from ``coordinator_core.hooks.track_touched_files``'s copy (C9,
-docs/plans/2026-08-25-the-touched-files-record-gets-a-designed-shape.md).
-Before this fold, branch (d) fail-closed to ``""`` here even though the
-harness hands back exactly this shape verbatim on dispatch, and
-``normalize_teammate_agent_id`` already existed to rebuild it against the
-live session.
-"""
 
 from __future__ import annotations
 
@@ -41,7 +30,6 @@ class TestNamedTeammate:
 
 
 class TestAlreadyCanonicalTeammate:
-    """Branch (d) — the fold-in this chunk performs."""
 
     def test_rebuilds_against_live_session_when_short_stale(self) -> None:
         agent_id = "probe2-teammate@session-11111111"

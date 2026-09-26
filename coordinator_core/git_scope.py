@@ -82,11 +82,6 @@ __all__ = [
     "FOREIGN_REPO_GIT_TIMEOUT_SECONDS",
 ]
 
-#: The git environment variables that scope git to a repository. Every one of
-#: these beats `-C`-based discovery, so all of them are stripped before a
-#: foreign-repo probe. `GIT_DIR` is the one that fires in the wild (git exports
-#: it to hooks); the rest are here because leaving any of them in place leaves
-#: the same hole open through a narrower door.
 REPO_SCOPING_ENV_VARS = (
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -100,51 +95,24 @@ REPO_SCOPING_ENV_VARS = (
 )
 
 #: Tri-state probe verdicts. PROBE_NO and PROBE_UNKNOWN are DIFFERENT claims and
-#: must never render as the same sentence: NO asserts the target answered and
-#: the answer was negative; UNKNOWN asserts only that this process failed to
-#: find out, and says nothing whatever about the target.
 PROBE_YES = "yes"
 PROBE_NO = "no"
 PROBE_UNKNOWN = "unknown"
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-#: The single dial for every probe in this module, and the only one — no caller
-#: passes a `timeout=`. Every call here is a local object-database read against
-#: an already-resolved path, measured at 26.9ms for `git -C <repo> rev-parse
-#: HEAD` on the reference box (DR-344 § 4), so 2.0 is the same clamp value
 #: `ipc.py :: CEREMONY_BUDGET_SECS` holds an entire op to. A probe that cannot
-#: answer a local object-database question inside a whole ceremony's budget is
-#: an UNKNOWN, not something to wait on.
-#:
-#: Negative-spec: this number may be lowered, never raised (DR-349 § 3). A site
-#: that cannot live inside it is a defect report about that site, not a case for
-#: widening the dial for every other caller.
 FOREIGN_REPO_GIT_TIMEOUT_SECONDS = 2.0
 
-#: Memo for `foreign_repo_unusable_reason`, keyed on
-#: `(os.path.realpath(repo_path), os.getpid())`. A path does not stop being a
-#: git repository inside one process, and the schema-drift, cockpit-freshness
-#: and emit surfaces were each re-probing the same DoE clone from scratch with
-#: no cache between them. The pid is part of
-#: the key so a `fork`ed child, which inherits this dict wholesale, re-probes
-#: rather than trusting its parent's answer.
 _UNUSABLE_REASON_MEMO: "dict[tuple[str, int], Optional[str]]" = {}
 
 
 def scoped_git_env(base: Optional[dict] = None) -> dict:
-    """Return *base* (default `os.environ`) minus every repo-scoping git var.
-
-    Pass as `env=` to any `git -C <foreign-repo>` call this module does not
-    wrap. Without it, `-C` is not actually scoping anything — see the module
-    docstring.
-    """
     source = os.environ if base is None else base
     return {k: v for k, v in source.items() if k not in REPO_SCOPING_ENV_VARS}
 
 
 def _first_line(text: str) -> str:
-    """First non-empty line of git's stderr, for embedding in a one-line reason."""
     for line in (text or "").splitlines():
         stripped = line.strip()
         if stripped:
@@ -205,20 +173,10 @@ def foreign_repo_unusable_reason(
 
 
 def reset_foreign_repo_probe_memo() -> None:
-    """Drop every memoised `foreign_repo_unusable_reason` answer.
-
-    For tests that build, mutate, or delete a fixture repository between probes
-    in one process — the one case the memo's stated trade does not cover.
-    """
     _UNUSABLE_REASON_MEMO.clear()
 
 
 def _probe_foreign_repo(root: str, timeout: float) -> Optional[str]:
-    """One `rev-parse --absolute-git-dir`, then a pure-path confinement check.
-
-    The un-memoised body of `foreign_repo_unusable_reason`; that function's
-    docstring carries the contract.
-    """
     try:
         probe = subprocess.run(
             ["git", "-C", root, "rev-parse", "--absolute-git-dir"],
@@ -299,37 +257,6 @@ def scoped_cat_file_batch(
     repo_path: "str | Path",
     tokens: Sequence[str],
 ) -> "Optional[dict[str, Optional[str]]]":
-    """Read N `<ref>:<path>` blobs out of a foreign repo in ONE process.
-
-    The batch primitive `git show <ref>:<path>` lacks. `cat-file --batch` takes
-    its tokens on stdin and emits `<oid> <type> <size>\\n<contents>\\n` per
-    resolved token and `<token> <reason>\\n` per unresolved one, so N vendored
-    files cost one spawn instead of N — the amplification
-    `coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py` exists to
-    catch.
-
-    Returns token -> blob text, with None for a token git reported as
-    missing/ambiguous, or None for the WHOLE batch when git could not run at
-    all. A caller must tell those two apart: the first is "this one file is
-    unresolvable", the second is "no comparison ran", and reporting the second
-    as the first is the confident-false-claim defect this module exists to
-    prevent.
-
-    Binary-exact by construction: the record framing is byte-counted, so the
-    payload is sliced by `<size>` out of raw stdout and decoded afterwards.
-    Parsing a text stream instead desynchronises the framing on any blob whose
-    bytes do not round-trip through the locale codec.
-
-    Never raises — an OSError, a timeout, or a non-zero exit all fold into None.
-    Run `foreign_repo_unusable_reason` first: this call does not confirm the
-    repo is the one you meant, it only reads it.
-
-    Not to be confused with `ops/ceremony/git_native.py :: cat_file_batch`, which
-    reads N paths at ONE ref out of the AMBIENT repo and deliberately inherits the
-    ambient git environment. This one takes whole `<ref>:<path>` tokens (so a
-    caller may mix refs) and strips the repo-scoping environment, which is the
-    whole reason a foreign-repo read cannot use that one.
-    """
     tokens = list(tokens)
     if not tokens:
         return {}
@@ -357,12 +284,10 @@ def scoped_cat_file_batch(
             continue
         header = out[pos:newline].decode("utf-8", errors="replace").split()
         pos = newline + 1
-        # `<oid> <type> <size>` is the only resolved shape; anything shorter is a
-        # `<token> missing`/`<token> ambiguous` line, which carries no payload to skip.
         if len(header) != 3 or not header[2].isdigit():
             blobs[token] = None
             continue
         size = int(header[2])
         blobs[token] = out[pos:pos + size].decode("utf-8", errors="replace")
-        pos += size + 1  # the trailing newline git appends after each blob
+        pos += size + 1
     return blobs

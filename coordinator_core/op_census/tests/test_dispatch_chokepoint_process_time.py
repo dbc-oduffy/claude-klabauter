@@ -66,8 +66,6 @@ def _dispatch(op):
 
 
 def test_an_op_invoked_through_no_outer_entry_point_still_records(sink) -> None:
-    """The coverage gap itself: a bare `dispatch_message` call records nothing
-    but `started`/`complete` before this. It must now carry both brightline axes."""
     @ipc.register_op("test.chokepoint_bare")
     def _h(params, repo_root=None):
         _burn(120)
@@ -82,9 +80,6 @@ def test_an_op_invoked_through_no_outer_entry_point_still_records(sink) -> None:
 
 
 def test_a_parent_does_not_absorb_its_children_cpu(sink) -> None:
-    """`process_time()` is process-wide, so a naive parent delta contains every
-    child's CPU — an op composing three others would read as the cost of all
-    four, and the brightline would convict the wrong one."""
     @ipc.register_op("test.chokepoint_kid")
     def _kid(params, repo_root=None):
         _burn(300)
@@ -100,8 +95,6 @@ def test_a_parent_does_not_absorb_its_children_cpu(sink) -> None:
     dad = _process_rows(sink, "test.chokepoint_dad")[0]["process_ms"]
     kid = _process_rows(sink, "test.chokepoint_kid")[0]["process_ms"]
     assert 300 <= kid < 500, kid
-    # The parent's own 500ms, NOT 800ms. Generous upper bound: this asserts the
-    # child was excluded, not the resolution of the platform's CPU clock.
     assert 400 <= dad < 700, dad
 
 
@@ -125,8 +118,6 @@ def test_an_awaiting_ancestor_is_not_contamination(sink) -> None:
 
 
 def test_a_concurrent_sibling_downgrades_the_scope(sink) -> None:
-    """The honest half: threads sharing one `process_time()` clock genuinely do
-    contaminate each other, and the row must say so rather than overclaim."""
     @ipc.register_op("test.sibling")
     def _h(params, repo_root=None):
         _burn(150)
@@ -143,11 +134,6 @@ def test_a_concurrent_sibling_downgrades_the_scope(sink) -> None:
 
 
 def test_a_sibling_contained_entirely_within_a_span_is_still_caught(sink) -> None:
-    """The case two-point sampling missed (slice-a Finding 1): a sibling that
-    both starts and finishes strictly INSIDE a longer dispatch's span. Neither
-    of the old sample points saw it, yet its CPU was in the long op's delta, so
-    the row claimed `per_op_handler` — the narrowest scope, the one the
-    brightline is read in — while carrying another op's CPU."""
     started = threading.Event()
 
     @ipc.register_op("test.contained_long")
@@ -164,7 +150,7 @@ def test_a_sibling_contained_entirely_within_a_span_is_still_caught(sink) -> Non
     t = threading.Thread(target=lambda: _dispatch("test.contained_long"))
     t.start()
     assert started.wait(timeout=5)
-    time.sleep(0.05)          # land wholly inside the long op's span
+    time.sleep(0.05)
     _dispatch("test.contained_short")
     t.join()
 
@@ -188,14 +174,8 @@ def test_the_active_dispatch_list_survives_a_raising_handler(sink) -> None:
 
 
 def test_meter_never_blends_measurement_scopes() -> None:
-    """Three scopes measure three different spans. Averaging across them yields
-    a number in no unit at all — the hazard `measurement_scope` exists to stop."""
     from coordinator_core.op_census import meter
 
-    # All three, not just the default: `meter` re-declares these literals, so a
-    # rename on one side alone would silently desync its filter from the values
-    # actually written to disk, and rows would read as "no samples" rather than
-    # "a literal drifted" (slice-a Finding 4).
     assert meter.SCOPE_PER_OP_HANDLER == ipc.MEASUREMENT_SCOPE_PER_OP_HANDLER
     assert meter.SCOPE_PER_OP_PROCESS == ipc.MEASUREMENT_SCOPE_PER_OP_PROCESS
     assert meter.SCOPE_PROCESS_WIDE == ipc.MEASUREMENT_SCOPE_PROCESS_WIDE

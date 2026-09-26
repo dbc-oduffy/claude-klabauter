@@ -144,9 +144,6 @@ class TestClassifyPartialStranglesFindings:
 
     def test_verb_absent_from_shipped_native_op_never_counted_shipped(self):
         # "list" has no shipped_native_op entry at all in DR210_MANIFEST_ENTRY —
-        # shipped_check is only ever consulted for verbs WITH a declared shipped path
-        # ("send" here), and "list" must never land in the shipped set regardless of
-        # what shipped_check would otherwise say.
         seen_paths = []
 
         def _shipped_check(path):
@@ -178,8 +175,6 @@ class TestClassifyPartialStranglesFindings:
         assert "send" not in seen_verbs
 
     def test_offer_names_covering_plan_via_attribution(self):
-        # code-reviewer Finding 4: planned_check returning a plan path restores "via <plan>"
-        # attribution in the offer, per design.md § Detector 1's output example.
         result = classify_partial_strangles(
             [DR210_MANIFEST_ENTRY],
             shipped_check=lambda path: path == "coordinator_core/ops/fleet/memo_send.py",
@@ -190,14 +185,11 @@ class TestClassifyPartialStranglesFindings:
             ),
         )
         # "compose" is UNPLANNED here (planned_check returns None for it) so the finding
-        # still fires, but the planned segment names the covering plan.
         assert "via 2026-07-21-memo-tool-rebuild-full-ownership" in result["offer"]
         finding = result["findings"][0]
         assert set(finding["planned"]) == {"list", "draft"}
 
     def test_offer_falls_back_gracefully_when_planned_check_returns_truthy_non_string(self):
-        # A test double / caller returning a bare `True` (planned, attribution unknown) must
-        # not crash offer rendering — verb is counted planned with no "via" suffix.
         result = classify_partial_strangles(
             [DR210_MANIFEST_ENTRY],
             shipped_check=lambda path: path == "coordinator_core/ops/fleet/memo_send.py",
@@ -314,11 +306,6 @@ class TestClassifyPartialStranglesMixedArbitration:
         assert len(result["notices"]) == 2
 
 
-# ---------------------------------------------------------------------------
-# I/O boundary: _extract_fenced_manifest_block / _parse_manifest_candidate
-# ---------------------------------------------------------------------------
-
-
 MANIFEST_BLOCK_TEXT = """# Some DR
 
 ## Strangler endpoint manifest (machine-readable)
@@ -362,21 +349,12 @@ class TestParseManifestCandidate:
             "docs/decisions/DR-999-some-strangler.md", "# No manifest block\n"
         )
         assert candidate["kind"] == "indeterminate"
-        # No strangler_id is known for an indeterminate candidate (there's no manifest
-        # to read one from) — slug is the full basename-minus-extension, unprefix-stripped.
         assert candidate["slug"] == "DR-999-some-strangler"
 
     def test_unparseable_yaml_is_indeterminate_not_a_crash(self):
         bad_text = "```yaml strangler-endpoint\n:::not valid yaml:::\n  - [unterminated\n```\n"
         candidate = _parse_manifest_candidate("docs/decisions/DR-777-bad.md", bad_text)
         assert candidate["kind"] == "indeterminate"
-
-
-# ---------------------------------------------------------------------------
-# Real-tree fixtures: tmp_path-rooted repo trees exercising the full scan +
-# shipped_check + planned_check I/O boundary via _scan_manifest_candidates /
-# _make_shipped_check / _make_planned_check, and end-to-end via _handler.
-# ---------------------------------------------------------------------------
 
 
 def _write(path: Path, text: str) -> None:
@@ -433,8 +411,6 @@ class TestScanManifestCandidatesRealFixture(object):
 
     def test_dr210_fixture_without_plan_flags_unplanned(self, tmp_path):
         _seed_dr210_fixture(tmp_path)
-        # No memo-tool-rebuild plan seeded — proves the pre-plan-existing state would
-        # have been caught.
 
         manifests, _scan_errors = _scan_manifest_candidates(tmp_path)
         shipped_check = _make_shipped_check(tmp_path)
@@ -448,10 +424,6 @@ class TestScanManifestCandidatesRealFixture(object):
         assert finding["shipped"] == ["send"]
 
     def test_docs_decisions_doc_with_no_fence_is_not_a_candidate_at_all(self, tmp_path):
-        # 2026-07-21 pivot: discovery is opt-in by fence presence, not filename-glob — a
-        # docs/decisions/*.md doc with NO strangler-endpoint fence is simply not scanned in,
-        # never surfaced as "indeterminate". This closes the ~25-review-sidecar /
-        # ~13-legacy-plan noise wall the old *strangl*/*strang* filename-glob produced.
         _write(
             tmp_path / "docs" / "decisions" / "DR-999-legacy-strangler.md",
             "---\ntitle: legacy strangler\n---\n\n# DR-999 — legacy strangler\n\nNo manifest here.\n",
@@ -466,8 +438,6 @@ class TestScanManifestCandidatesRealFixture(object):
         assert result["state"] == "clean"
 
     def test_docs_decisions_doc_with_fence_but_unparseable_yaml_is_indeterminate(self, tmp_path):
-        # Opted-in (fence present) but broken (bad YAML) — THIS is the only shape
-        # "indeterminate" fires for post-pivot.
         _write(
             tmp_path / "docs" / "decisions" / "DR-999-broken-strangler.md",
             (
@@ -489,8 +459,6 @@ class TestScanManifestCandidatesRealFixture(object):
     def test_no_filename_filter_arbitrary_decisions_basename_with_fence_is_discovered(
         self, tmp_path
     ):
-        # Discovery is fence-presence, not a *strangl* filename glob — a DR whose filename
-        # doesn't contain "strangl" at all is still discovered iff it carries the fence.
         _write(
             tmp_path / "docs" / "decisions" / "DR-500-totally-unrelated-name.md",
             (
@@ -509,14 +477,10 @@ class TestScanManifestCandidatesRealFixture(object):
     def test_mixed_multi_strangler_real_fixture_arbitration(self, tmp_path):
         _seed_dr210_fixture(tmp_path)
         _seed_memo_tool_rebuild_plan(tmp_path)
-        # A docs/decisions/*.md doc with NO fence at all is not a candidate (opt-in
-        # discovery) — confirms it contributes neither a finding nor a notice.
         _write(
             tmp_path / "docs" / "decisions" / "DR-000-unrelated-no-fence.md",
             "---\ntitle: unrelated\n---\n\n# DR-000\n\nNothing strangler-shaped here at all.\n",
         )
-        # A fenced-but-broken manifest — this is the only shape "indeterminate" fires for
-        # post-pivot (opted-in via fence presence, but the block fails to parse).
         _write(
             tmp_path / "docs" / "decisions" / "DR-777-broken.md",
             (
@@ -524,11 +488,6 @@ class TestScanManifestCandidatesRealFixture(object):
                 "```yaml strangler-endpoint\n:::not valid yaml:::\n  - [unterminated\n```\n"
             ),
         )
-        # A second, unplanned strangler manifest — DR-only home is now the enforced rule
-        # (manifest home == docs/decisions/ ONLY; docs/plans/ is never scanned for
-        # manifests), so the self-masking hazard the old workaround comment named
-        # ("a manifest in docs/plans/ would trivially self-satisfy planned_check") is now
-        # structurally impossible rather than merely avoided by test-fixture placement.
         _write(
             tmp_path / "docs" / "decisions" / "DR-strang-99-other-strangler.md",
             (
@@ -542,8 +501,6 @@ class TestScanManifestCandidatesRealFixture(object):
 
         manifests, _scan_errors = _scan_manifest_candidates(tmp_path)
         assert len(manifests) == 3
-        # DR-000 (no fence) contributed nothing; DR-777 (fenced, broken) is the sole
-        # indeterminate candidate; DR-210 + strang-99 are the two manifest candidates.
         kinds = sorted(m["kind"] for m in manifests)
         assert kinds == ["indeterminate", "manifest", "manifest"]
 
@@ -551,21 +508,15 @@ class TestScanManifestCandidatesRealFixture(object):
         planned_check = _make_planned_check(tmp_path)
         result = classify_partial_strangles(manifests, shipped_check, planned_check)
 
-        # finding > indeterminate > clean: strang-99 has unplanned verbs -> finding wins.
         assert result["state"] == "partial_strangles_found"
         strangler_ids = {f["strangler_id"] for f in result["findings"]}
         assert "strang-99" in strangler_ids
-        assert "DR-210" not in strangler_ids  # DR-210 is clean in this fixture
+        assert "DR-210" not in strangler_ids
         assert "notices" in result
         assert any(n["path"].endswith("DR-777-broken.md") for n in result["notices"])
         assert not any(n["path"].endswith("DR-000-unrelated-no-fence.md") for n in result["notices"])
 
     def test_manifest_cannot_live_in_docs_plans_by_construction(self, tmp_path):
-        # A manifest embedded in a docs/plans/*.md file is never discovered as a manifest
-        # candidate at all — _scan_manifest_candidates only ever reads docs/decisions/.
-        # This is the structural closure of Finding 1 (self-satisfying planned_check via a
-        # plan-hosted manifest): the hazard cannot recur because the manifest home and the
-        # planned-evidence scan surface are disjoint by construction, not by convention.
         _write(
             tmp_path / "docs" / "plans" / "2026-07-21-strang-manifest-in-plan.md",
             (
@@ -606,8 +557,6 @@ class TestMakeShippedCheck:
 
 class TestMakePlannedCheck:
     def test_returns_covering_plan_path_when_plan_references_strangler_and_verb(self, tmp_path):
-        # planned_check now returns Optional[str] (the covering plan's relative path), not
-        # bool — code-reviewer Finding 4: restores "via <plan>" offer attribution.
         _seed_memo_tool_rebuild_plan(tmp_path)
         planned_check = _make_planned_check(tmp_path)
         expected = "docs/plans/2026-07-21-memo-tool-rebuild-full-ownership.md"
@@ -633,11 +582,6 @@ class TestMakePlannedCheck:
         assert planned_check("list", "DR-210") is None
 
 
-# ---------------------------------------------------------------------------
-# Registered-op handler wiring
-# ---------------------------------------------------------------------------
-
-
 class TestHandlerWiring:
     def test_handler_smoke_against_fixture_tree(self, tmp_path, monkeypatch):
         _seed_dr210_fixture(tmp_path)
@@ -659,30 +603,13 @@ class TestHandlerWiring:
         assert set(result["findings"][0]["unplanned"]) == {"list", "draft", "compose"}
 
     def test_handler_against_real_repo_tree_self_test(self):
-        # End-to-end self-test: the REAL seeded DR-210 manifest in THIS repo, against
-        # the REAL memo-tool-rebuild-full-ownership.md plan, must read clean (or at
-        # minimum must not raise and must return a valid three-state result) — proves
-        # the seeded manifest block (design.md § Detector 1's self-test requirement) is
-        # actually parseable and the detector runs clean end-to-end against real disk.
         repo_root = Path(__file__).resolve().parents[3]
         result = _handler({}, repo_root=repo_root)
         assert result["state"] in ("clean", "partial_strangles_found", "indeterminate")
-        # DR-210's own manifest must be found and parseable (not swallowed as indeterminate
-        # for THIS strangler specifically), and — since C1 (list/draft/compose) is planned
-        # by the real memo-tool-rebuild plan on disk — DR-210 itself must not appear in the
-        # findings list even if OTHER unrelated *strang* docs on disk are indeterminate.
         finding_ids = {f["strangler_id"] for f in result.get("findings", [])}
         assert "DR-210" not in finding_ids
 
     def test_handler_against_real_repo_tree_emits_no_review_sidecar_or_legacy_plan_noise(self):
-        # the Staff Engineer Finding 5 (real-tree noise regression): the pre-pivot filename-glob scan
-        # (`docs/decisions/*strangl*.md` + `docs/plans/*strang*.md`) scooped ~25 review
-        # sidecars (*.the Staff Engineer-review.md, *.sonnet-review.md, *.prior-art-check.md,
-        # *.plan-coverage-check.md, *.phase0.md) and ~13 landed legacy strangle plans into a
-        # 38-notice "indeterminate" wall — live-verified on this repo pre-fix. Post-pivot,
-        # opt-in-by-fence discovery scoped to docs/decisions/ must emit ZERO such noise and
-        # ZERO indeterminate notices on the real tree (no un-manifested doc is even a
-        # candidate, so nothing here is "opted-in-but-broken" either).
         repo_root = Path(__file__).resolve().parents[3]
         result = _handler({}, repo_root=repo_root)
 
@@ -698,15 +625,6 @@ class TestHandlerWiring:
             assert not notice["path"].endswith(noisy_suffixes), notice["path"]
         assert len(notices) == 0
         assert result["state"] != "indeterminate"
-
-
-# ---------------------------------------------------------------------------
-# Unscannable docs/decisions/ — silent-success guard (silent-enumeration
-# audit). Path.glob() silently swallows PermissionError even on a flat,
-# non-recursive pattern (empirically re-verified: a chmod-000 dir yields an
-# empty iterator from glob(), no exception) — an unreadable docs/decisions/
-# must not be indistinguishable from "genuinely no strangler manifests here".
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(
@@ -746,8 +664,6 @@ def test_handler_flags_scan_incomplete_on_unreadable_decisions_dir(tmp_path):
     finally:
         os.chmod(decisions_dir, original_mode)
 
-    # A genuinely clean scan must never be confused with a degraded one — the
-    # detector's three-state "clean" is reserved for a PROVEN-empty corpus.
     assert result["scan_incomplete"] is True, (
         "scan_incomplete must be True when docs/decisions/ cannot be scanned — "
         f"got {result.get('scan_incomplete')!r}"
@@ -761,15 +677,7 @@ def test_handler_scan_incomplete_false_on_clean_scan(tmp_path):
     assert result["scan_errors"] == []
 
 
-# ---------------------------------------------------------------------------
-# Unscannable docs/plans/ — silent-enumeration audit for the planned-evidence
-# scan (Review: code-reviewer Finding 1). `_planned_check` previously used
-# `Path.glob("*.md")`, which silently swallows `PermissionError` while walking
-# — an unreadable docs/plans/ read as "no plan mentions this verb", which
-# INVERTS the detector's three-state contract: a scan-degraded verb reads as
 # a confident UNPLANNED finding instead of an indeterminate one. Mirrors the
-# docs/decisions/ round-trip tests above.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(
@@ -811,9 +719,6 @@ def test_handler_flags_scan_incomplete_on_unreadable_plans_dir(tmp_path):
     finally:
         os.chmod(plans_dir, original_mode)
 
-    # An unreadable docs/plans/ must downgrade the result to scan_incomplete=True — DR-210's
-    # unplanned verbs must never be reported as a confident finding when the planned-evidence
-    # half of the scan was actually blind, not genuinely clean.
     assert result["scan_incomplete"] is True, (
         "scan_incomplete must be True when docs/plans/ cannot be scanned — "
         f"got {result.get('scan_incomplete')!r}"

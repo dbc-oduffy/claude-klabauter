@@ -1,22 +1,3 @@
-"""coordinator_core.install.tests.test_fleet_env_probe_diagnostic —
-`_fleet_env_healthy`'s opt-in `diagnostic` dict, and the pre-swap
-`FleetEnvError` in `ensure_fleet_env` that renders it.
-
-Purpose: the pre-swap caller rmtree's the build tree the moment the health
-probe returns False, so before this the failure printed one canned line and
-destroyed the only evidence of why (observed on the 2026-09-05 Linux cloud
-dogfood, where the hidden cause turned out to be the 3.14 lock not building —
-docs/reference/linux-cloud-dogfood-friction.md). This proves the probe's
-output is captured on every False path and reaches the raised error.
-
-Negative-spec:
-    - Does NOT build a real fleet environment or spawn `uv` —
-      `_provision_uv_environment` is stubbed to plant a `python` pointing at
-      `sys.executable`, and the import probes are monkeypatched to one module
-      that cannot exist.
-    - Does NOT re-test the minor-mismatch gate; that is
-      `test_fleet_env_healthy_minor_check.py`'s surface.
-"""
 
 from __future__ import annotations
 

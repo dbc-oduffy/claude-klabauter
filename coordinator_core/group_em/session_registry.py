@@ -41,7 +41,6 @@ from typing import NamedTuple, Optional
 
 
 class RegistryRow(NamedTuple):
-    """One harness registry record, normalised."""
 
     session_id: str
     name: str
@@ -52,15 +51,12 @@ class RegistryRow(NamedTuple):
 
 
 def registry_dir() -> Path:
-    """Directory holding the per-live-session records."""
     override = os.environ.get("CLAUDE_CONFIG_DIR")
     root = Path(override) if override else Path.home() / ".claude"
     return root / "sessions"
 
 
 def parse_row(path: Path) -> Optional[RegistryRow]:
-    """One registry record from a single file, or None if unreadable/malformed -- the directory
-    is written by concurrent sessions, so a torn record is an expected transient."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -85,7 +81,6 @@ def parse_row(path: Path) -> Optional[RegistryRow]:
 
 
 def read_rows(directory: Optional[Path] = None) -> list[RegistryRow]:
-    """Every parseable record in the registry, via a full directory scan. Never spawns."""
     directory = directory or registry_dir()
     rows: list[RegistryRow] = []
     try:
@@ -100,7 +95,6 @@ def read_rows(directory: Optional[Path] = None) -> list[RegistryRow]:
 
 
 def _pid_alive_windows(pid: int) -> bool:
-    """Kernel liveness query on Windows."""
     import ctypes
 
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -119,7 +113,6 @@ def _pid_alive_windows(pid: int) -> bool:
 
 
 def _pid_alive_posix(pid: int) -> bool:
-    """Signal-0 liveness query. `PermissionError` means the process exists under another user."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -132,7 +125,6 @@ def _pid_alive_posix(pid: int) -> bool:
 
 
 def pid_alive(pid: int) -> bool:
-    """True if `pid` names a live process. Never spawns; never raises."""
     if pid <= 0:
         return False
     arm = _pid_alive_windows if os.name == "nt" else _pid_alive_posix
@@ -142,11 +134,6 @@ def pid_alive(pid: int) -> bool:
 def find_registry_row(
     session_id: str, directory: Optional[Path] = None
 ) -> Optional[RegistryRow]:
-    """The registry row for `session_id`, via a full directory scan on every call -- never
-    cached. The scan is ~2 ms against ~40 ms of interpreter start for the CLI process this
-    typically runs in, and a cached "who holds this" answer that survives a stand-down or a
-    release is worse than no answer -- see the module docstring's negative spec.
-    """
     for row in read_rows(directory):
         if row.session_id == session_id:
             return row
@@ -156,13 +143,6 @@ def find_registry_row(
 def is_live(
     record: dict, registry_dir: Optional[Path] = None
 ) -> tuple[bool, Optional[RegistryRow]]:
-    """Liveness is a join, never a stored pid.
-
-    `record` is any dict carrying a `session_id` key. No registry record for that `session_id`
-    => not live (never confused with "the session is gone" being proven -- it simply is not
-    evidence either way beyond "not live now"). Registry record present but its `pid` is dead =>
-    not live, and distinguishable from the no-record case by the returned row being non-None.
-    """
     session_id = str(record.get("session_id") or "")
     if not session_id:
         return False, None
@@ -175,16 +155,6 @@ def is_live(
 def liveness_annotation(
     record: dict, registry_dir: Optional[Path] = None
 ) -> tuple[bool, str, str]:
-    """The three-way live/live_reason/human-state ladder shared by every ``who()``-style reader
-    (`group-em-nomination.py`, `navi-singleton.py`) that annotates a holder record fresh, never
-    cached. Built on `is_live`, distinguishing its two not-live causes for the reader: no
-    registry row for this `session_id` at all, versus a row present but its `pid` no longer
-    running.
-
-    Returns ``(live, live_reason, live_state)`` -- ``live_reason`` is one of ``"live"``,
-    ``"no_registry_record"``, ``"pid_not_running"``; ``live_state`` is the human sentence
-    fragment each caller's status message embeds.
-    """
     live, row = is_live(record, registry_dir)
     if live:
         return True, "live", "live"

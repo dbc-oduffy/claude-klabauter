@@ -77,12 +77,6 @@ Negative-spec:
 
 from __future__ import annotations
 
-#: Extended-length prefixes in both separator styles a caller might hand in
-#: (raw backslash form straight off Windows, or already forward-slash
-#: normalized). Checked case-insensitively -- `resolve()`/`realpath` casing
-#: of the literal marker/``UNC`` token is not guaranteed. The UNC variant
-#: MUST be checked before the bare variant in each style, since the UNC form
-#: is itself a superset prefix of the bare one.
 _EXTENDED_LENGTH_UNC_PREFIX_BACKSLASH = "\\\\?\\UNC\\"
 _EXTENDED_LENGTH_PREFIX_BACKSLASH = "\\\\?\\"
 _EXTENDED_LENGTH_UNC_PREFIX_SLASH = "//?/unc/"
@@ -90,19 +84,6 @@ _EXTENDED_LENGTH_PREFIX_SLASH = "//?/"
 
 
 def strip_extended_length_prefix(raw: str) -> str:
-    """Strip Windows' extended-length path prefix (plain and UNC form),
-    preserving whichever separator style ``raw`` used.
-
-    Plain form drops the leading marker, leaving the drive-letter path that
-    follows it untouched (backslash or forward-slash, matching the input).
-    UNC form collapses its ``UNC`` segment down to the bare UNC path's own
-    leading double-separator (``\\\\<server>\\<share>`` or
-    ``//<server>/<share>``), not to nothing.
-
-    A no-op on POSIX-shaped input (no recognized prefix) and idempotent
-    (stripping an already-stripped string returns it unchanged). Never
-    raises: pure `str` slicing on any `str` input.
-    """
     lowered = raw.lower()
     if lowered.startswith(_EXTENDED_LENGTH_UNC_PREFIX_BACKSLASH.lower()):
         return "\\\\" + raw[len(_EXTENDED_LENGTH_UNC_PREFIX_BACKSLASH):]
@@ -116,21 +97,6 @@ def strip_extended_length_prefix(raw: str) -> str:
 
 
 def casefold_path(raw: str) -> str:
-    """Backslash -> forward-slash, strip a Windows extended-length prefix
-    (plain or UNC form), then Unicode casefold. Order is load-bearing:
-    separators normalize first so the prefix check has one shape to match,
-    the prefix strips second so it never survives into the casefolded
-    result, and casefold runs last over whatever remains.
-
-    Apply to BOTH the candidate path and every allowed-root string before
-    either is wrapped in `Path(...)` and passed to
-    `coordinator_core.ops._path_guard.contained_path` — casefolding only one
-    side reopens the gap this helper exists to close, and the same is true
-    of the extended-length-prefix strip: a candidate whose `resolve()` added
-    the prefix compared against a root string that never carries one is
-    exactly the desync `state/handoffs/2026-08-03-windows-extended-length-
-    prefix-desync.md` describes.
-    """
     normalized = raw.replace("\\", "/")
     stripped = strip_extended_length_prefix(normalized)
     return stripped.casefold()

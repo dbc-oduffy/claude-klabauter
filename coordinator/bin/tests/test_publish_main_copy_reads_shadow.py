@@ -55,8 +55,6 @@ def _stub_out_unrelated_gates(monkeypatch, publish):
 
 
 def test_main_copy_gate_result_source_dir_is_the_shadow_not_raw_source(monkeypatch, tmp_path):
-    """The un-allowlisted (MAIN) row's `GateResult.source_dir` is the
-    materialized shadow path — never `target.source_dir` itself."""
     raw_source = tmp_path / "raw-source-checkout"
     raw_source.mkdir()
     dest_dir = tmp_path / "dest"

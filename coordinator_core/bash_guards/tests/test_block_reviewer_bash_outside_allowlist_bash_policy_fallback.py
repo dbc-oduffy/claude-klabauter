@@ -68,14 +68,6 @@ def _assert_denied(result):
     return result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-# ---------------------------------------------------------------------------
-# AC11 -- lookup-miss / unreadable / malformed all fall back to the PRIOR
-# hardcoded confinement, never to ALLOW. `git commit` is the pinned probe:
-# it is on no read-only allowlist, hardcoded or policy-declared, in any of
-# these scenarios, so a regression to fail-OPEN would flip this to allow.
-# ---------------------------------------------------------------------------
-
-
 def test_bash_policy_path_absent_still_denies_git_commit(tmp_path, monkeypatch):
     _confine(monkeypatch)
     missing_path = tmp_path / "does-not-exist.yaml"
@@ -86,9 +78,6 @@ def test_bash_policy_path_absent_still_denies_git_commit(tmp_path, monkeypatch):
 
 def test_bash_policy_file_unreadable_still_denies_git_commit(tmp_path, monkeypatch):
     _confine(monkeypatch)
-    # A directory at the policy path is unreadable as a file -- read_text()
-    # raises IsADirectoryError (an OSError subclass), the same failure shape
-    # engine.load_policy() catches for a genuinely permission-denied file.
     unreadable = tmp_path / "policy-is-a-directory"
     unreadable.mkdir()
     payload = _payload('git commit -m "x"')
@@ -99,8 +88,6 @@ def test_bash_policy_file_unreadable_still_denies_git_commit(tmp_path, monkeypat
 def test_bash_policy_malformed_top_level_still_denies_git_commit(tmp_path, monkeypatch):
     _confine(monkeypatch)
     policy_file = tmp_path / "policy.yaml"
-    # Top-level YAML is a list, not a mapping -- engine.load_policy()
-    # returns an empty Policy for any non-dict top-level document.
     policy_file.write_text("- not\n- a\n- mapping\n", encoding="utf-8")
     payload = _payload('git commit -m "x"')
     reason = _assert_denied(guard.check(payload, policy_path=str(policy_file)))
@@ -108,24 +95,9 @@ def test_bash_policy_malformed_top_level_still_denies_git_commit(tmp_path, monke
 
 
 def test_bash_policy_entry_missing_keys_still_denies_git_commit(tmp_path, monkeypatch):
-    # NOTE (review finding 3, 2026-07-27): this fixture is intentionally a
-    # single-key dict, so it exercises _validate_ruleset's `except (KeyError,
     # TypeError)` MISSING-KEY path, not the isinstance/_is_str_list
-    # type-validation branches -- those are covered separately below by the
-    # *_still_denies_git_commit/_unlisted_command tests fed by
-    # _well_formed_ruleset_with_override, which supply a fixture that is
-    # otherwise complete and well-formed but carries exactly one type
-    # violation. (Renamed from
-    # test_bash_policy_malformed_entry_value_still_denies_git_commit, whose
-    # old name implied it probed value-type validation; it never reached
-    # that code.)
     _confine(monkeypatch)
     policy_file = tmp_path / "policy.yaml"
-    # bash_policy: is a dict, and carries a dict-valued entry for the
-    # confined type (survives engine.load_policy()'s non-dict-value filter)
-    # -- but the entry itself is missing every required ruleset key.
-    # _validate_ruleset must reject this and _resolve_ruleset must fall back
-    # to _default_ruleset(), not raise, and not silently drop enforcement.
     policy_file.write_text(
         "bash_policy:\n"
         f"  {_CONFINED_TYPE}:\n"
@@ -138,20 +110,12 @@ def test_bash_policy_entry_missing_keys_still_denies_git_commit(tmp_path, monkey
 
 
 def test_bash_policy_entry_missing_keys_still_denies_unlisted_command(tmp_path, monkeypatch):
-    # Same missing-key fixture shape as above (see that test's NOTE), but
-    # probing the Tier B scaffolder path (an arbitrary non-allowlisted
-    # command) instead of the git Tier A path -- confirms the fallback
-    # ruleset governs BOTH tiers, not just the git-specific one. This
-    # fixture also short-circuits on the KeyError path, not the
-    # isinstance/_is_str_list branches -- see
-    # test_bash_policy_entry_missing_keys_still_denies_git_commit's NOTE.
-    # (Renamed from test_bash_policy_malformed_entry_still_denies_unlisted_command.)
     _confine(monkeypatch)
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(
         "bash_policy:\n"
         f"  {_CONFINED_TYPE}:\n"
-        "    scaffolder_binary: 123\n",  # wrong type -- must be a non-empty str
+        "    scaffolder_binary: 123\n",
         encoding="utf-8",
     )
     payload = _payload("rm -rf /")
@@ -159,19 +123,7 @@ def test_bash_policy_entry_missing_keys_still_denies_unlisted_command(tmp_path, 
     assert "coordinator-doc-new" in reason
 
 
-# ---------------------------------------------------------------------------
-# AC11, type-validation branches (review finding 3, 2026-07-27): the two
-# tests above both short-circuit on _validate_ruleset's missing-key
-# `except (KeyError, TypeError)` leg, never reaching the isinstance/
 # _is_str_list checks. Each fixture below is otherwise COMPLETE and
-# well-formed -- every required key present, every other value valid -- but
-# carries exactly ONE type violation, so it can only be caught by the
-# isinstance/_is_str_list branches these tests exist to pin. A regression
-# that accidentally widened one of those checks (e.g. dropped the per-item
-# str check on a list, or the isinstance(..., dict) check on
-# git_global_options) would not be caught by the missing-key tests above,
-# but must be caught here.
-# ---------------------------------------------------------------------------
 
 _WELL_FORMED_RULESET: Dict[str, Any] = {
     "git_readonly_subcommands": ["show", "log"],
@@ -196,9 +148,6 @@ def _well_formed_ruleset_with_override(**overrides: Any) -> str:
 
 
 def test_bash_policy_non_str_list_element_still_denies_git_commit(tmp_path, monkeypatch):
-    # Otherwise-well-formed entry; git_readonly_subcommands carries one
-    # non-str element (an int) inside an otherwise-valid str list --
-    # _is_str_list must reject this per-element, not just check "is a list".
     _confine(monkeypatch)
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(
@@ -223,9 +172,6 @@ def test_bash_policy_non_str_list_element_still_denies_unlisted_command(tmp_path
 
 
 def test_bash_policy_empty_scaffolder_field_still_denies_git_commit(tmp_path, monkeypatch):
-    # Otherwise-well-formed entry; scaffolder_binary is a str (passes
-    # isinstance) but empty -- the `and scaffolder_binary` truthiness check
-    # must reject it, not just the isinstance check.
     _confine(monkeypatch)
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(
@@ -250,10 +196,6 @@ def test_bash_policy_empty_scaffolder_field_still_denies_unlisted_command(tmp_pa
 
 
 def test_bash_policy_non_dict_git_global_options_still_denies_git_commit(tmp_path, monkeypatch):
-    # Otherwise-well-formed entry; git_global_options is a plain string
-    # instead of the required {value_taking: [...], no_value: [...]}
-    # mapping -- the `isinstance(git_global, dict)` guard must reject this
-    # before ever calling .get() on it.
     _confine(monkeypatch)
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(
@@ -277,18 +219,7 @@ def test_bash_policy_non_dict_git_global_options_still_denies_unlisted_command(t
     assert "coordinator-doc-new" in reason
 
 
-# ---------------------------------------------------------------------------
-# Divergence 14 (2026-08-10): the enforced ruleset is now hard-pinned in
 # code (`_default_ruleset()`/`_DEFAULT_RULESET_TYPE_OVERRIDES`) -- a
-# well-formed `bash_policy:` YAML entry for a confined type's RULESET no
-# longer changes the ALLOW/DENY decision at all, in EITHER direction. This
-# is the fix for the confinement-editable-by-its-own-subject defect (a
-# confined agent's own Edit tool could rewrite this YAML and the very next
-# Bash call honoured the rewrite) -- these two tests used to prove the
-# opposite (that the policy genuinely widened/narrowed the surface); they
-# now pin that a YAML ruleset entry is INERT for enforcement, which is the
-# whole point of the fix. See _resolve_ruleset's own comment.
-# ---------------------------------------------------------------------------
 
 
 def _well_formed_policy_yaml(readonly_fs_binaries) -> str:
@@ -317,13 +248,9 @@ def test_well_formed_policy_ruleset_does_not_grant_a_binary_the_hardcoded_fallba
     _confine(monkeypatch)
     payload = _payload("sed -n 1p some-file.txt")
 
-    # Without an injected policy path, the hardcoded fallback governs --
     # "sed" is not in _READONLY_FS_BINARIES, so this denies.
     assert _assert_denied(guard.check(payload)) is not None
 
-    # A YAML policy that adds "sed" to readonly_fs_binaries: no longer has
-    # any effect -- the ruleset is code-pinned now (Divergence 14), so the
-    # SAME command still denies even with that entry present.
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(
         _well_formed_policy_yaml(["ls", "sed"]), encoding="utf-8"
@@ -339,30 +266,15 @@ def test_well_formed_policy_ruleset_does_not_narrow_git_subcommands_relative_to_
     _confine(monkeypatch)
     payload = _payload("git log")
 
-    # Hardcoded fallback: "log" is a read-only subcommand -- allowed.
     assert guard.check(payload) is None
 
-    # A YAML policy whose git_readonly_subcommands omits "log" (only "show"
-    # is declared) no longer narrows the surface (Divergence 14) -- the
-    # SAME command still allows, because the ruleset is code-pinned and this
-    # YAML entry is never consulted for enforcement.
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(_well_formed_policy_yaml(["ls"]), encoding="utf-8")
     result = guard.check(payload, policy_path=str(policy_file))
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# Regression, updated for Divergence 14 (2026-08-10): a pre-existing
-# ``bash_policy:`` YAML entry for a confined type -- authored before
 # ``_DEFAULT_RULESET_TYPE_OVERRIDES`` grew an entry for that same type --
-# has never been able to shadow the Python-side override, and as of
-# Divergence 14 this is unconditionally true: the YAML ruleset entry is
-# never consulted for enforcement at all (see ``_resolve_ruleset``'s own
-# comment), so there is nothing left for it to shadow. This test now pins
-# that outcome directly rather than via the original green-tests-inert-
-# production layering story (retained in the comment below for history).
-# ---------------------------------------------------------------------------
 
 
 def test_preexisting_policy_entry_does_not_shadow_newer_interpreter_override(
@@ -371,14 +283,7 @@ def test_preexisting_policy_entry_does_not_shadow_newer_interpreter_override(
     _confine(monkeypatch)
     payload = _payload("python3 -m pytest -q")
 
-    # A well-formed bash_policy: entry for coordinator:code-reviewer that
-    # carries NEITHER interpreter_allowed_modules NOR
-    # interpreter_allow_scripts -- exactly what a policy row authored before
     # the pytest grant existed looks like (both keys are OPTIONAL per
-    # _validate_ruleset, defaulting to the conservative deny-more value so
-    # an already-deployed row does not fail validation). Under Divergence 14
-    # this entry is never consulted for enforcement at all, so its presence
-    # is inert either way -- the pytest allowance comes exclusively from
     # _DEFAULT_RULESET_TYPE_OVERRIDES via _default_ruleset() now.
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(_well_formed_policy_yaml(["ls"]), encoding="utf-8")
@@ -392,17 +297,10 @@ def test_preexisting_policy_entry_does_not_shadow_newer_interpreter_override(
         "about it; it must not silently shadow it."
     )
 
-    # The rest of that pre-existing policy row's OWN declared surface is now
-    # INERT for enforcement (Divergence 14) -- "log" IS in the hardcoded
-    # fallback's git_readonly_subcommands regardless of what this fixture's
-    # YAML declares, so it allows, not denies, unlike the pre-Divergence-14
-    # version of this test.
     other_payload = _payload("git log")
     other_result = guard.check(other_payload, policy_path=str(policy_file))
     assert other_result is None
 
-    # And the unconditional python3 -c/-e inline-code deny is untouched by
-    # this layering -- it is never gated by ruleset content at all.
     inline_payload = _payload('python3 -c "import os"')
     inline_result = guard.check(inline_payload, policy_path=str(policy_file))
     assert inline_result is not None

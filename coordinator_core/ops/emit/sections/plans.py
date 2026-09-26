@@ -69,40 +69,17 @@ from coordinator_core.ops.emit.deliverable_status import plan_review_verified
 
 from ._shared import normalize_frontmatter
 
-# Precedence tiering for resolving `reviewer` when a plan has MORE THAN ONE reviewed sidecar
-# (measured: 1 of 27 reviewed plans today — 2026-07-08-backlog-opened-closed-emission.md has
-# both a the Staff Engineer-review and a sonnet-review).
-#
-# PRIMARY signal (Review: code-reviewer Finding 3, 2026-07-21): each sidecar's own `kind:`
-# frontmatter field. `kind: sonnet-review` marks an LLM co-reviewer's self/model pass; any
-# OTHER kind (`staff-eng-review`, `eng-director-review`, or an as-yet-unseen kind) marks a
-# named human/staff review, which is the more authoritative verdict — robust to any future
-# named staff reviewer (the Data Science Reviewer, the UX Reviewer, sid, the Front-End Reviewer, ...) with zero roster maintenance, unlike a
 # hardcoded persona-name list. An UNRECOGNIZED non-`sonnet-review` kind still ranks at the
-# staff tier (never silently falls to "plain" or below `sonnet-review` — Finding 3's explicit
-# robustness ask) because the absence-of-evidence ("this isn't a known staff kind") is weaker
-# than the presence-of-evidence ("this isn't the model kind").
 _REVIEWER_SIDECAR_MODEL_KIND = "sonnet-review"
 _REVIEWER_SIDECAR_KIND_STAFF_TIER = 0
 
 # FALLBACK signal — filename-substring matching, used ONLY when a sidecar carries no `kind:`
-# frontmatter field at all (legacy/freeform review markdown with no frontmatter block —
-# measured on disk 2026-07-21: e.g. `*.sonnet-review.md`/`*.review.md` files that are bare
-# prose with no `---` fence). Named-marker ORDER (the Staff Engineer, eng-director, the Director of Engineering) is undocumented
-# precedent carried over unchanged from the pre-`kind` implementation (Review: code-reviewer
-# Finding 4 residual — no real-world named-vs-named collision has been measured to justify
-# reordering; a plain ".review.md" sidecar with no named-reviewer marker sits between the
-# named tier and the model-marker tier). Matched by substring against the sidecar's suffix
-# segment (case-insensitive); an unrecognized future marker falls back to the "plain" tier.
 _REVIEWER_SIDECAR_PRIORITY: tuple[str, ...] = ("patrik", "eng-director", "zoli")
 _REVIEWER_SIDECAR_PLAIN_TIER = 100
 _REVIEWER_SIDECAR_MODEL_MARKERS: tuple[str, ...] = ("sonnet",)
 _REVIEWER_SIDECAR_MODEL_TIER = 200
 
-# PlanStatus enum, kept in parity with coordinator_core/frontmatter/schemas/plan.schema.json's
-# own `status` enum (originally the frozen 9-value bash:1616 / 1672 set, plus `closed_partial` —
 # terminal/archivable per lifecycle_constants.PLAN_ARCHIVABLE_STATUS). Order-insensitive
-# membership set.
 _PLAN_STATUS_ENUM = frozenset({
     "draft",
     "reviewed",
@@ -161,7 +138,6 @@ def _is_str(value) -> bool:
 
 
 def _valid(fm: dict) -> bool:
-    """Record passes when title/created/author/status are strings AND status ∈ enum (bash:1611)."""
     return (
         _is_str(fm.get("title"))
         and _is_str(fm.get("created"))
@@ -196,16 +172,6 @@ def _sidecar_priority(suffix: str, kind: "str | None") -> int:
 
 
 def _resolve_reviewer(ctx: EmitContext, path: "str | None") -> "str | None":
-    """Resolve ``PlanSummary.reviewer`` by joining same-stem review sidecars (dead-join fix).
-
-    Globs ``<plan-dir>/<stem>.*.md`` next to the plan file, keeps only candidates whose
-    suffix segment contains "review" (case-insensitive — excludes sibling sidecar families
-    like ``.plan-coverage-check.md`` / ``.prior-art-check.md``), reads each candidate's own
-    ``reviewer:`` (and ``kind:``) frontmatter fields via ``frontmatter.primitives``, and
-    returns the highest-priority non-empty value per ``_sidecar_priority`` (ties broken by
-    filename ascending, for full determinism). Returns ``None`` (D9 present-as-null) when the
-    plan has no reviewed sidecar — the common case — never a malformed/quarantine condition.
-    """
     if not path:
         return None
     plan_path = Path(path)
@@ -224,7 +190,6 @@ def _resolve_reviewer(ctx: EmitContext, path: "str | None") -> "str | None":
         try:
             text = candidate.read_text(encoding="utf-8", errors="replace")
         except OSError:
-            # Unreadable review-file candidate -- skip it, try the next candidate.
             continue
         split = split_frontmatter(text)
         if split is None:
@@ -242,11 +207,6 @@ def _resolve_reviewer(ctx: EmitContext, path: "str | None") -> "str | None":
 
 
 def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
-    """Build (records, malformed) for the ``plans`` envelope key.
-
-    records — valid PlanSummary dicts; malformed — quarantine dicts. Emit-derived fields
-    (last_meaningful_activity / workstream_type / shipped_sha / deliverable_status) are null.
-    """
     raw = _query_plan_records(ctx)
 
     records: list[dict] = []
@@ -270,33 +230,21 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
                     "author": fm["author"],
                     "status": fm["status"],
                     "scope_mode": fm.get("scope_mode"),
-                    # Direct authorship (0 today) always wins; else join the review sidecar.
                     "reviewer": fm.get("reviewer") or _resolve_reviewer(ctx, path),
                     "branch": fm.get("branch"),
-                    # Direct authorship (0 today) always wins; else `_apply_superseded_by`
-                    # (second pass below, before this function returns) fills the reverse
-                    # `supersedes` edge.
                     "superseded_by": fm.get("superseded_by"),
-                    # Staging-only: raw forward `supersedes` edge (scalar path or list of
-                    # paths), popped unconditionally by `_apply_superseded_by` — this schema
-                    # is strict/`additionalProperties: false` (see module docstring).
                     "_supersedes_raw": fm.get("supersedes"),
-                    # source maps roadmap_id for roadmap-sourced plans (bash:1632).
                     "source": fm.get("source") if fm.get("source") is not None else fm.get("roadmap_id"),
-                    # Deliverable spine identity + authored facets (C4a/C4b).
                     "deliverable_id": fm.get("deliverable_id"),
                     "plan_id": fm.get("plan_id"),
                     "initiative": fm.get("initiative"),
                     "caption": fm.get("caption"),
                     "status_reason": fm.get("status_reason"),
                     "owner": fm.get("owner"),
-                    # Emit-DERIVED — stamped later (C3/enrich), null in collect().
                     "last_meaningful_activity": None,
                     "workstream_type": None,
                     "shipped_sha": None,
                     "deliverable_status": None,
-                    # Derives from frontmatter alone, so it resolves here rather than in the
-                    # enrich pass the two fields above wait for.
                     "review_verified": plan_review_verified(fm),
                     "provenance": ctx.provenance("local_fs", path=path, derivation="parsed"),
                 }
@@ -306,7 +254,6 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
                 {
                     "path": path,
                     "reason": _MALFORMED_REASON,
-                    # jq ``$fm | keys`` returns sorted keys (bash:1677).
                     "frontmatter_keys": sorted(fm.keys()),
                 }
             )
@@ -317,43 +264,6 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
 
 
 def _apply_superseded_by(records: list[dict]) -> None:
-    """Second pass: derive ``superseded_by`` as the reverse edge of authored ``supersedes``
-    (dead-join fix, 2026-07-21; relocated from ``resolvers.py`` same day — Review: code-reviewer
-    Finding 1 — intra-section self-join, not a cross-section enrichment).
-
-    Purpose: nothing authors the backward edge directly (asking authors to double-write both
-    directions is redundant and drift-prone), so it is derived here: if plan A declares
-    ``supersedes: B`` (or ``supersedes: [B, C, ...]``), then B's (and C's, ...)
-    ``superseded_by`` becomes A's ``path``. Mutates ``records`` in place; must run AFTER the
-    caller's first pass has built every record (this function needs the full plan set in
-    scope, which ``collect()`` already has via one ``_query_plan_records(ctx)`` call).
-
-    ``superseded_by`` holds a plan ``path`` (not a ``plan_id``) — confirmed against
-    ``PlanSummary.superseded_by``'s docstring ("Path to the superseding plan") and the
-    existing (0-occurrence) authored values, which are already ``docs/plans/...md`` paths.
-
-    Authored-wins precedence: a plan that directly authors ``superseded_by`` in its own
-    frontmatter (future-proofing; 0 today) is NEVER overwritten by the derived edge.
-
-    Self-supersession guard (Review: code-reviewer Finding 5): a plan whose ``supersedes``
-    names its OWN path is not treated as superseding itself — such a self-target is dropped
-    while building the forward index, so it can never stamp a record's ``superseded_by`` with
-    its own ``path``.
-
-    Multiple-supersession precedence (unexercised in current data — 0 collisions measured
-    2026-07-21, but the rule is written so a future collision resolves deterministically):
-    when more than one plan declares ``supersedes`` against the SAME target path, the
-    most-recently-``created`` superseding plan wins (last-supersession-wins — the newest
-    plan is presumed the most current supersession); ties are broken by ``path`` ascending.
-
-    The staging ``_supersedes_raw`` key is POPPED from every record unconditionally (whether
-    or not it produced a reverse edge) — the PlanSummary schema is ``.strict()``
-    (``additionalProperties: false``); a leaked staging key would reject the whole envelope
-    at the consumer's Zod parse. No staging key is ever visible in ``collect()``'s return value.
-
-    Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P10
-    """
-    # Pop the staging key from every record first, building the forward index as we go.
     forward: dict[str, list[str]] = {}
     for record in records:
         raw = record.pop("_supersedes_raw", None)
@@ -372,12 +282,10 @@ def _apply_superseded_by(records: list[dict]) -> None:
 
     for record in records:
         if record.get("superseded_by") is not None:
-            # Authored-wins — never overwrite a directly-authored value.
             continue
         superseding = forward.get(record["path"])
         if not superseding:
             continue
-        # last-supersession-wins: newest `created` wins; ties broken by path ascending.
         superseding_sorted = sorted(
             superseding,
             key=lambda p: (created_by_path.get(p) or "", p),

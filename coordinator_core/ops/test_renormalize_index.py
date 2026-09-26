@@ -27,8 +27,6 @@ import pytest
 from coordinator_core.ops import renormalize_index as rni
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -36,8 +34,6 @@ pytestmark = [
 
 
 def _git(cwd, *args, **kwargs):
-    # Caller kwargs win over the helper's
-    # own suppression instead of colliding on a shared key (e.g. creationflags).
     run_kwargs = {**no_console_creationflags(), **kwargs}
     return subprocess.run(
         ["git", "-C", str(cwd), *args],
@@ -93,9 +89,6 @@ def test_not_a_git_repo(tmp_path):
 
 
 def test_clean_tree_is_noop(tmp_path, capsys):
-    # Locks the "stdout is always empty, messages
-    # on stderr only" contract; a future print(...) without file=sys.stderr would show
-    # up on stdout and this test would catch it.
     d = _new_repo(tmp_path)
     rc = rni.main([], cwd=str(d))
     assert rc == 0
@@ -194,9 +187,6 @@ def test_index_lock_present_defers(tmp_path):
 
 
 def test_phantom_dirty_entry_cleared_or_skipped(tmp_path, capsys):
-    """Section B (mined from the bash oracle's phantom fixture). Skip-guarded exactly
-    as the oracle skip-guards it: the EOL phantom (size-only, content-equal dirty
-    status) is a Git-for-Windows/NTFS artifact this platform may not exhibit."""
     d = _new_repo(tmp_path)
     _lf(d / "phantom.txt")
     _lf(d / "realB.txt")
@@ -227,18 +217,11 @@ def test_phantom_dirty_entry_cleared_or_skipped(tmp_path, capsys):
     assert "phantom.txt" not in _staged_names(d)
     assert "realB.txt" in _worktree_diff_names(d)
     assert _rev_parse(d, ":sibB.txt") == sib_staged_before
-    # The refreshed-phantom success path is the
-    # other case the dispatch brief called out for the stdout-empty contract.
     captured = capsys.readouterr()
     assert captured.out == ""
 
 
 def test_leading_dash_filename_add_pathspec_safe(tmp_path):
-    """`_git_add_pathspec_from_stdin`'s docstring
-    documents "safe for leading-dash / space-containing names" (the NUL-safe
-    pathspec-from-stdin approach can't be misparsed as a git flag) but no existing test
-    exercised a leading-dash name; this directly locks that hazard against the helper
-    that actually does the staging."""
     d = _new_repo(tmp_path)
     _lf(d / "-rf.txt")
     _git(d, "add", "-A")
@@ -251,13 +234,6 @@ def test_leading_dash_filename_add_pathspec_safe(tmp_path):
 
 
 def test_git_add_refresh_failure_exits_1(tmp_path, monkeypatch):
-    """No existing test drove
-    `_git_add_pathspec_from_stdin` to return False (the documented `git add
-    --ignore-errors` refresh-failure exit-1 branch). A genuine EOL phantom can't be
-    manufactured cross-platform (see test_phantom_dirty_entry_cleared_or_skipped), so
-    `_git_ls_files_modified` is monkeypatched to force `ghost.txt` (untouched, still
-    present in the worktree) into the phantom set, reaching the `git add` staging step
-    with a real `git diff`/worktree-existence classification around it."""
     d = _new_repo(tmp_path)
     _lf(d / "ghost.txt")
     _git(d, "add", "-A")
@@ -284,9 +260,6 @@ def test_git_add_refresh_failure_exits_1(tmp_path, monkeypatch):
     ],
 )
 def test_first_probe_failure_exits_1(tmp_path, monkeypatch, helper_name, expected_snippet):
-    """No test exercised any of the `git diff`/
-    `git ls-files` subprocess-failure exit-1 branches; this covers the two first-pass
-    probes (snapshot 1 `git diff` and `git ls-files -m`)."""
     d = _new_repo(tmp_path)
 
     monkeypatch.setattr(rni, helper_name, lambda cwd=None: None)
@@ -301,16 +274,10 @@ def test_first_probe_failure_exits_1(tmp_path, monkeypatch, helper_name, expecte
 
 
 def test_second_diff_probe_failure_exits_1(tmp_path, monkeypatch):
-    """Covers the third exit-1 branch: the
-    re-confirmation `git diff` (snapshot 2) taken immediately before staging."""
     d = _new_repo(tmp_path)
     _lf(d / "phantom.txt")
     _git(d, "add", "-A")
     _git(d, "commit", "-qm", "fixture")
-    # A stat-modified-but-not-content-different entry is not reproducible cross-platform
-    # (see test_phantom_dirty_entry_cleared_or_skipped); it suffices here to force at
-    # least one non-empty phantom candidate via a monkeypatched ls-files result so
-    # execution reaches the snapshot-2 probe, independent of platform EOL behavior.
     monkeypatch.setattr(rni, "_git_ls_files_modified", lambda cwd=None: ["phantom.txt"])
 
     call_count = {"n": 0}

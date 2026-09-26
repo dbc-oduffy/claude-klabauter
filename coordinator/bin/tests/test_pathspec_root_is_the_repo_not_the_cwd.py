@@ -21,8 +21,6 @@ from pathlib import Path
 
 import pytest
 
-# This file now builds a real repo and `_split_paths_for_commit_v2` spawns
-# one `git ls-tree`, so it declares itself to the spawn ratchet.
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NO_WINDOW = (
@@ -43,14 +41,6 @@ spec.loader.exec_module(safe_commit)
 
 
 def _repo(tmp_path):
-    """A REAL repo, not a bare `.git` mkdir.
-
-    Upgraded 2026-08-31: `_split_paths_for_commit_v2` now asks HEAD whether a
-    missing path is a deletion or a bad path, so a fixture whose `.git` is an
-    empty directory cannot answer and every probe fails closed. `pkg/gone.py`
-    is committed and then removed, which is what 'a genuinely absent path'
-    has to mean once absence alone stopped being sufficient.
-    """
     root = tmp_path / "r"
     (root / "pkg" / "sub").mkdir(parents=True)
     (root / "pkg" / "kept.py").write_text("x\n", encoding="utf-8")
@@ -90,12 +80,6 @@ def test_a_present_path_is_not_declared_deleted_from_a_subdirectory(
 
     assert present == ["pkg/kept.py"]
     assert deleted == []
-    # The regression stays legible, but the old shape is no longer reachable
-    # to pin: `_split_paths_for_commit_v2` stopped inferring a deletion from
-    # a failed probe (committer-P0 fix 2), so the wrong-cwd call now REFUSES
-    # where it used to return `([], ["pkg/kept.py"])` and delete the file.
-    # Asserting the refusal pins strictly more than the old tuple did -- it
-    # says the silent-deletion path is gone, not merely that it was wrong.
     with pytest.raises(SystemExit) as exc:
         safe_commit._split_paths_for_commit_v2(os.getcwd(), ["pkg/kept.py"])
     assert exc.value.code == 1

@@ -121,18 +121,7 @@ _LOG = logging.getLogger(__name__)
 _DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2})-\d{2}-")
 
 
-# ---------------------------------------------------------------------------
-# Plain-YAML reader — improvement-queue files are plain YAML (no --- fences),
-# same shape as state/bug-backlog/*.yaml.
-# ---------------------------------------------------------------------------
-
 def _read_plain_yaml(path: Path) -> dict:
-    """Read a plain-YAML improvement-queue file and return its content as a dict.
-
-    Returns {} on any parse error, missing file, or non-mapping content —
-    the `created:` fallback in `_archive_month` degrades gracefully when
-    this returns {}.
-    """
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             data = yaml.safe_load(fh)
@@ -165,35 +154,16 @@ def _archive_month(path: Path) -> str:
 
 
 def _reply(*, exit_code: int, archived: bool, dest: Optional[str], error: Optional[str] = None) -> dict:
-    """Build the {archived, dest, exit_code, error} response envelope."""
     return {"exit_code": exit_code, "archived": archived, "dest": dest, "error": error}
 
 
-# ---------------------------------------------------------------------------
-# Batch handler (2026-08-06, F9 fix) — see module docstring, § Batch addition.
-# ---------------------------------------------------------------------------
-
 async def _handle_batch(worktree: Path, queue_dir: Path, entry_paths: list, dry_run: bool) -> dict:
-    """Batch variant of the single-entry handler: git-mv every caller-named
-    closed improvement-queue entry into archive/improvement-queue/YYYY-MM/ in
-    ONE commit, instead of one commit per entry.
-
-    dry_run:true  → per-item dest preview; mutates nothing.
-    dry_run:false → ONE archive_and_commit call over every item that resolved
-                    to an existing, not-yet-archived source path; per-item
-                    outcome always reported in items[], never collapsed.
-
-    See module docstring § Batch addition for the full response shape.
-    """
     items: List[dict] = []
-    resolved: List[Tuple[str, Path, Path]] = []  # (id, contained_src, dest)
+    resolved: List[Tuple[str, Path, Path]] = []
 
     for entry_path_raw in entry_paths:
         raw = entry_path_raw.strip() if isinstance(entry_path_raw, str) else ""
         if not raw:
-            # Echo the same normalized
-            # `raw` every other branch reports, not the unstripped/untyped
-            # entry_path_raw, for a consistent per-item id shape.
             items.append({"id": raw, "dest": None, "error": "empty entry_path"})
             continue
 
@@ -219,14 +189,10 @@ async def _handle_batch(worktree: Path, queue_dir: Path, entry_paths: list, dry_
         exit_code = 2 if any(it["error"] for it in items) else 0
         return {"exit_code": exit_code, "archived": None, "dest": None, "items": items}
 
-    # ---- dry_run:false — act ----
     by_id = {it["id"]: it for it in items}
     moves: List[Move] = []
 
     for raw, contained, dest in resolved:
-        # Already-archived (source gone) or destination already present
-        # (concurrent archive / replay edge-case): idempotent no-op, same as
-        # the single-entry path — never a failed git-mv.
         if not contained.exists() or dest.exists():
             by_id[raw]["archived"] = False
             continue
@@ -246,18 +212,11 @@ async def _handle_batch(worktree: Path, queue_dir: Path, entry_paths: list, dry_
 
     for it in items:
         if "archived" not in it:
-            # Never reached resolved/moves (e.g. an empty-id or path-traversal
-            # item already carrying its own error) — always False, never
-            # silently absent from the per-item report.
             it["archived"] = False
 
     exit_code = 1 if any(it.get("error") for it in items) else 0
     return {"exit_code": exit_code, "archived": None, "dest": None, "items": items}
 
-
-# ---------------------------------------------------------------------------
-# Handler
-# ---------------------------------------------------------------------------
 
 @register_op("fleet.archive_queue_entry")
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
@@ -345,13 +304,10 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if dry_run:
         return _reply(exit_code=0, archived=False, dest=dest_rel)
 
-    # ---- dry_run:false — act ----
 
-    # Already-archived (source gone): idempotent replay.
     if not contained.exists():
         return _reply(exit_code=0, archived=False, dest=dest_rel)
 
-    # Destination already present (concurrent archive or replay edge-case).
     if dest.exists():
         return _reply(exit_code=0, archived=False, dest=dest_rel)
 

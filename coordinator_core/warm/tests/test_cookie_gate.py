@@ -30,9 +30,6 @@ from coordinator_core.warm import cookie, supervisor
 
 
 class _Ctx:
-    """Minimal stand-in for `_ServerContext`: the cookie gate reads only
-    `engine_root`, and binding a real context would drag in election and
-    skew state this file has no use for."""
 
     in_flight = None
 
@@ -43,8 +40,6 @@ class _Ctx:
 
 @pytest.fixture
 def live_listener(tmp_path):
-    """A real listener over a real cookie, on a real socket. Yields
-    `(port, token)`."""
     token = cookie.ensure(tmp_path)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), supervisor._make_handler(_Ctx(tmp_path)))
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -57,8 +52,6 @@ def live_listener(tmp_path):
 
 
 def _request(port, path, headers=None, method="POST"):
-    """Raw socket, because the header shapes under test (absent, repeated)
-    are ones urllib will not produce. Returns the status line."""
     crlf = "\r\n"
     lines = [f"{method} {path} HTTP/1.1", f"Host: 127.0.0.1:{port}"]
     lines.extend(headers or [])
@@ -78,7 +71,6 @@ def _request(port, path, headers=None, method="POST"):
 
 
 def _still_serving(port, token) -> bool:
-    """The assertion that separates a refusal from an eviction."""
     status = _request(
         port,
         supervisor.HEALTH_PATH,
@@ -123,8 +115,6 @@ def test_a_wrong_cookie_is_refused(live_listener):
 
 
 def test_a_repeated_cookie_header_is_refused(live_listener):
-    """Smuggling shape, same treatment the Host pin gives a repeated Host:
-    refuse rather than pick a value a downstream reader might disagree with."""
     port, token = live_listener
     status = _request(
         port,
@@ -135,8 +125,6 @@ def test_a_repeated_cookie_header_is_refused(live_listener):
     assert _still_serving(port, token)
 
     # CASE-FOLDING, ASSERTED RATHER THAN ASSUMED. `get_all` is case-insensitive
-    # per the stdlib, which is what makes one lower-cased duplicate still count
-    # as a repeat -- the refusal leans on that and should say so.
     lowered = _request(
         port,
         supervisor.HOOK_PATH,
@@ -160,18 +148,12 @@ def test_the_listener_survives_a_burst_of_refusals(live_listener):
 
 
 def test_health_is_exempt_and_that_exemption_is_narrow(live_listener):
-    """`check_health` runs before a caller has reason to have read the
-    cookie, and `/health` returns a fixed literal. The exemption is one
-    path, one method: the same path under POST is NOT exempt."""
     port, _token = live_listener
     assert "200" in _request(port, supervisor.HEALTH_PATH, method="GET")
     assert "401" in _request(port, supervisor.HEALTH_PATH, method="POST")
 
 
 def test_an_unreadable_expected_cookie_refuses_every_caller(live_listener, tmp_path):
-    """FAIL CLOSED AFTER BOOT, TOO. `_assert_credential_ready` covers boot;
-    this covers the cookie being removed under a running listener. The
-    listener must refuse rather than admit, and must still be serving."""
     port, token = live_listener
     cookie.cookie_path(tmp_path).unlink()
     try:
@@ -181,16 +163,9 @@ def test_an_unreadable_expected_cookie_refuses_every_caller(live_listener, tmp_p
     finally:
         restored = cookie.mint(tmp_path)
     # THE STILL-SERVING HALF, ON THE BRANCH THAT MOST NEEDS IT. This is the
-    # one refusal driven by the SERVER's own state rather than the caller's
-    # header, so "did the listener survive it" is least obvious here and was
-    # the assertion originally missing. Checked after the mint, because
-    # `_still_serving` presents a cookie and there has to be one to present.
     assert _still_serving(port, restored)
 
 
 def test_the_gate_is_not_defeated_by_an_unrouted_path(live_listener):
-    """The check is in `parse_request`, ahead of routing, so it covers a
-    path no `do_*` method serves -- the lapse an add-a-handler change would
-    otherwise introduce."""
     port, _token = live_listener
     assert "401" in _request(port, "/not-a-route")

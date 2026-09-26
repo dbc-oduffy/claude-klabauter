@@ -74,10 +74,6 @@ def _set_fake_home(monkeypatch, home_path):
 
 
 def _wire_git_root(monkeypatch, root):
-    """Short-circuits ``_run_git`` so ``check_blanket_git_add`` resolves the
-    invoking command's git root to ``root`` without spawning a real ``git``
-    subprocess.
-    """
 
     def _fake_run_git(args, cwd=None, timeout=2.0, extra_env=None):
         assert args == ["rev-parse", "--show-toplevel"]
@@ -87,21 +83,10 @@ def _wire_git_root(monkeypatch, root):
 
 
 def _wire_hazard(monkeypatch, *, is_hazard):
-    """Short-circuits the hazard discriminator itself so
-    ``check_blanket_git_add``'s own deny/allow wiring can be pinned
-    independently of ``_is_hazard_repo``'s real (filesystem/registry-backed)
-    classification logic -- see that function's own dedicated tests below.
-    """
     monkeypatch.setattr(guard, "_is_hazard_repo", lambda root: is_hazard)
 
 
 def _check(monkeypatch, tmp_path, cmd, *, hazard, session_id="sess1"):
-    """``hazard`` directly selects whether ``_is_hazard_repo`` reports this
-    invocation's git root as a hazard repo (the ~/.claude / fleet-registry
-    case) or not (the OSS-consumer case) -- the git root value itself is
-    inert once ``_is_hazard_repo`` is wired, so a single placeholder path
-    suffices for every test in this section.
-    """
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
     _wire_git_root(monkeypatch, str(root))
@@ -121,12 +106,6 @@ def _denies(monkeypatch, tmp_path, cmd, **kw):
 def _allows_in_hazard_repo(monkeypatch, tmp_path, cmd, **kw):
     result = _check(monkeypatch, tmp_path, cmd, hazard=True, **kw)
     assert result is None, f"expected ALLOW for: {cmd!r}, got {result!r}"
-
-
-# ---------------------------------------------------------------------------
-# Core scope pin (re-scoped): DENY only where ``_is_hazard_repo`` reports a
-# hazard; every previously-covered blanket shape must still deny there.
-# ---------------------------------------------------------------------------
 
 
 def test_blanket_add_dash_a_denies_in_hazard_repo(monkeypatch, tmp_path):
@@ -150,21 +129,11 @@ def test_blanket_add_dash_dash_update_denies_in_hazard_repo(monkeypatch, tmp_pat
 
 
 def test_bundled_short_flags_dash_f_a_denies_in_hazard_repo(monkeypatch, tmp_path):
-    """Bundled short flags (``-fA``) -- ``A`` present among the bundled
-    chars is still a blanket-add trigger.
-    """
     _denies(monkeypatch, tmp_path, "git add -fA")
 
 
 def test_bundled_short_flags_dash_a_u_denies_in_hazard_repo(monkeypatch, tmp_path):
     _denies(monkeypatch, tmp_path, "git add -Au")
-
-
-# ---------------------------------------------------------------------------
-# THE test whose absence caused the over-broad widening: a repo where the
-# hazard discriminator does NOT match (the OSS-consumer case) must ALLOW
-# every one of the same blanket shapes -- the guard is a no-op there.
-# ---------------------------------------------------------------------------
 
 
 def test_blanket_add_dash_a_allows_without_hazard_marker(monkeypatch, tmp_path):
@@ -199,20 +168,8 @@ def test_sh_c_wrapper_allows_without_hazard_marker(monkeypatch, tmp_path):
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# Chained-command segment splitting -- the guard splits on unquoted
-# `;`/`&`/`|` and checks each segment independently.
-# ---------------------------------------------------------------------------
-
-
 def test_chained_command_blanket_add_denies_in_hazard_repo(monkeypatch, tmp_path):
     _denies(monkeypatch, tmp_path, "git status && git add -A && git commit -m x")
-
-
-# ---------------------------------------------------------------------------
-# Wrapper-unwrap forms -- `sh -c`/`env`/`nice` etc. must still be caught
-# wherever the guard fires.
-# ---------------------------------------------------------------------------
 
 
 def test_sh_c_wrapper_denies_in_hazard_repo(monkeypatch, tmp_path):
@@ -221,17 +178,6 @@ def test_sh_c_wrapper_denies_in_hazard_repo(monkeypatch, tmp_path):
 
 def test_env_wrapper_denies_in_hazard_repo(monkeypatch, tmp_path):
     _denies(monkeypatch, tmp_path, "env git add -A")
-
-
-# ---------------------------------------------------------------------------
-# example-market-data-repo-em scoped-commit-guard-asymmetry finding (2026-08-03
-# relay): a `-C <dir>`/`--git-dir=...`/other git GLOBAL option sitting
-# between `git` and `add` previously escaped this guard entirely -- the
-# top-of-function short-circuit and the per-segment matcher both required
-# "add" literally adjacent to "git", so any global option in between
-# silently allowed the identical blanket sweep. These shapes must deny
-# wherever the equivalent option-free shape already denies.
-# ---------------------------------------------------------------------------
 
 
 def test_dash_c_global_option_dash_a_denies_in_hazard_repo(monkeypatch, tmp_path):
@@ -247,18 +193,10 @@ def test_git_dir_global_option_denies_in_hazard_repo(monkeypatch, tmp_path):
 
 
 def test_dash_c_global_option_scoped_add_allows_in_hazard_repo(monkeypatch, tmp_path):
-    """A `-C <dir>` prefix does not itself make a genuinely scoped add
-    blanket -- the option-free equivalent (`git add -- path/to/file`) is
-    already an ALLOW, and this must stay symmetric with it."""
     _allows_in_hazard_repo(monkeypatch, tmp_path, "git -C /some/dir add -- path/to/file")
 
 
 def test_dash_c_value_used_to_resolve_git_root_cwd(monkeypatch, tmp_path):
-    """The hazard-repo probe runs against the LAST `-C <dir>` value
-    preceding `add`, not the guard process's own cwd -- so the command's
-    OWN declared target repo is what gets hazard-classified, per
-    `_bt_blanket_add_dash_c_cwd`'s "last -C wins" contract.
-    """
     seen_cwd = {}
 
     def _fake_run_git(args, cwd=None, timeout=2.0, extra_env=None):
@@ -268,21 +206,10 @@ def test_dash_c_value_used_to_resolve_git_root_cwd(monkeypatch, tmp_path):
     monkeypatch.setattr(guard, "_run_git", _fake_run_git)
     monkeypatch.setattr(guard, "_is_hazard_repo", lambda root: True)
 
-    # A platform-derived absolute path (``tmp_path``-rooted), not a second
-    # hardcoded literal -- ``_bt_blanket_add_dash_c_cwd`` returns an
-    # ``os.path.isabs`` value unchanged, so the expectation is exactly this
-    # same value on every platform, POSIX or Windows.
     explicit_target = str(tmp_path / "explicit" / "target")
     guard.check_blanket_git_add("git -C %s add -A" % explicit_target, "sess1")
 
     assert seen_cwd["cwd"] == explicit_target
-
-
-# ---------------------------------------------------------------------------
-# example-market-data-repo-em scoped-commit-guard-asymmetry finding: `:/`/`:/.`
-# are git's own "magic pathspec" for the top of the working tree -- the
-# identical blast radius as `.`/`-A`, just spelled differently.
-# ---------------------------------------------------------------------------
 
 
 def test_magic_pathspec_colon_slash_denies_in_hazard_repo(monkeypatch, tmp_path):
@@ -293,20 +220,6 @@ def test_magic_pathspec_colon_slash_dot_denies_in_hazard_repo(monkeypatch, tmp_p
     _denies(monkeypatch, tmp_path, "git add :/.")
 
 
-# ---------------------------------------------------------------------------
-# example-market-data-repo-em scoped-commit-guard-asymmetry finding: an absolute
-# pathspec that resolves to the repo root itself is `.` written a different
-# way. A DEEPER absolute path (a genuinely scoped subtree) must stay ALLOW --
-# this guard is not widened into shapes that are genuinely scoped.
-# ---------------------------------------------------------------------------
-
-
-#: FIXED 2026-09-01, `pending_fix` retired with the defect. The guard used to
-#: strip every backslash out of its operand text, which on `nt` deleted the
-#: separators in a drive-absolute operand so it no longer matched the
-#: absolute-pathspec arm at all. The strip is now POSIX-only (a backslash is an
-#: escape there, not a separator). Formerly known-red group
-#: "dispatch-checks-windows-path".
 def test_absolute_pathspec_equal_to_repo_root_denies_in_hazard_repo(monkeypatch, tmp_path):
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
@@ -330,9 +243,6 @@ def test_absolute_pathspec_trailing_slash_equal_to_repo_root_denies_in_hazard_re
 
 
 def test_absolute_pathspec_denies_in_the_backslash_spelling(monkeypatch, tmp_path):
-    """The actual regression, stated in the spelling a Windows operator types.
-    `_wire_git_root` hands back a real `tmp_path` root, so the operand and the
-    resolved root differ only in separator -- which is the whole bug."""
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
     _wire_git_root(monkeypatch, str(root))
@@ -344,9 +254,6 @@ def test_absolute_pathspec_denies_in_the_backslash_spelling(monkeypatch, tmp_pat
 
 
 def test_both_separator_spellings_reach_the_same_verdict(monkeypatch, tmp_path):
-    """The property the guard owes, and the one a per-spelling test cannot
-    state: a verdict may not depend on which separator was typed for the same
-    path. Before the fix these two disagreed."""
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
     _wire_git_root(monkeypatch, str(root))
@@ -357,8 +264,6 @@ def test_both_separator_spellings_reach_the_same_verdict(monkeypatch, tmp_path):
 
 
 def test_a_scoped_subtree_in_the_backslash_spelling_still_passes(monkeypatch, tmp_path):
-    """False-positive floor. Preserving separators must not convert the
-    root-not-subtree asymmetry into a denial for a genuinely scoped add."""
     root = tmp_path / "repo"
     (root / "sub").mkdir(parents=True, exist_ok=True)
     _wire_git_root(monkeypatch, str(root))
@@ -368,9 +273,6 @@ def test_a_scoped_subtree_in_the_backslash_spelling_still_passes(monkeypatch, tm
 
 
 def test_absolute_pathspec_subdirectory_allows_in_hazard_repo(monkeypatch, tmp_path):
-    """A genuinely scoped absolute path (a subtree, not the repo root
-    itself) must stay ALLOW -- negative spec for the repo-root closure
-    above."""
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
     _wire_git_root(monkeypatch, str(root))
@@ -408,12 +310,6 @@ def test_explicit_pathspec_separator_at_repo_root_still_denies_in_hazard_repo(
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-# ---------------------------------------------------------------------------
-# Deliberate ALLOW -- scoped adds and dry-runs are not blanket adds anywhere,
-# hazard repo or not.
-# ---------------------------------------------------------------------------
-
-
 def test_scoped_add_allows_in_hazard_repo(monkeypatch, tmp_path):
     _allows_in_hazard_repo(monkeypatch, tmp_path, "git add -- path/to/file1 path/to/file2")
 
@@ -440,29 +336,11 @@ def test_empty_command_allows(monkeypatch, tmp_path):
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# C2 (plan 2026-08-15-blanket-gits-proffer-the-scoped-commit-helper, AC6/
-# AC7): the deny now offers `scoped-git-commit` as a second alternative
-# alongside the pre-existing `git add -- path/to/file` line, for all three
-# matched shapes -- the agent that typed a blanket add is staging in order
-# to commit, and handing back only the narrower add leaves it to reassemble
-# the commit half itself. Register (AC7) is checked directly on the
-# rendered envelope via `measure_envelope`, not eyeballed.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize("cmd", ["git add -A", "git add .", "git add -u"])
 def test_blanket_add_deny_offers_scoped_git_commit(monkeypatch, tmp_path, cmd):
     result = _denies(monkeypatch, tmp_path, cmd)
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "git add -- path/to/file" in reason
-    # The commit half names the trailing-pathspec `git commit` form, NOT
-    # `scoped-git-commit`: that helper and the op it fronted
-    # (`ceremony.scoped_git_commit`) were deleted under DR-344 on 2026-08-23,
-    # and `kill means kill forever`. The message was repointed; this
-    # assertion was not, so it pinned a command an agent could no longer run
-    # -- the exact "named in doctrine with no reachable entrypoint" failure
-    # this guard's own remedy text exists to avoid. Assert the runnable form.
     assert "git commit -m" in reason and " -- path/to/file" in reason
     assert "scoped-git-commit" not in reason
 
@@ -478,15 +356,7 @@ def test_blanket_add_deny_stays_within_prose_cap(monkeypatch, tmp_path, cmd):
 
 
 def test_scoped_add_still_allows_after_offer_change(monkeypatch, tmp_path):
-    """Negative spec: the offer-line change touches only the DENY body --
-    a genuinely scoped `git add -- <path>` must stay an ALLOW, same as
-    before this chunk."""
     _allows_in_hazard_repo(monkeypatch, tmp_path, "git add -- path/to/file")
-
-
-# ---------------------------------------------------------------------------
-# Override escape hatches -- both bypass DENY in a hazard repo.
-# ---------------------------------------------------------------------------
 
 
 def test_override_env_var_allows_in_hazard_repo(monkeypatch, tmp_path):
@@ -499,12 +369,6 @@ def test_safe_commit_internal_blanket_marker_allows_in_hazard_repo(monkeypatch, 
     _allows_in_hazard_repo(monkeypatch, tmp_path, "git add -A")
 
 
-# ---------------------------------------------------------------------------
-# No git root resolvable -- fail-open (not this guard's problem; a hard
-# guard elsewhere owns "git command run outside any git repo").
-# ---------------------------------------------------------------------------
-
-
 def test_unresolvable_git_root_allows(monkeypatch, tmp_path):
     def _fake_run_git(args, cwd=None, timeout=2.0, extra_env=None):
         return 128, ""
@@ -512,14 +376,6 @@ def test_unresolvable_git_root_allows(monkeypatch, tmp_path):
     monkeypatch.setattr(guard, "_run_git", _fake_run_git)
     result = guard.check_blanket_git_add("git add -A", "sess1")
     assert result is None
-
-
-# ---------------------------------------------------------------------------
-# The discriminator itself (``_is_hazard_repo`` and its two building
-# blocks) -- exercised against real (temp) filesystem/registry state, not
-# monkeypatched away, so the classification logic is pinned directly and
-# not merely assumed by the wiring tests above.
-# ---------------------------------------------------------------------------
 
 
 def test_is_hazard_repo_true_for_meta_repo(monkeypatch, tmp_path):
@@ -546,10 +402,6 @@ def test_is_hazard_repo_true_for_registered_fleet_sibling(monkeypatch, tmp_path)
 
 
 def test_is_hazard_repo_false_without_marker(monkeypatch, tmp_path):
-    """The test whose absence caused the original defect: a repo that is
-    neither the meta-repo nor a registered fleet sibling must classify as
-    NOT a hazard -- this is the OSS-consumer-install case.
-    """
     fake_home = tmp_path / "home-unrelated"
     fake_home.mkdir(parents=True)
     _set_fake_home(monkeypatch, fake_home)
@@ -561,11 +413,6 @@ def test_is_hazard_repo_false_without_marker(monkeypatch, tmp_path):
 
 
 def test_is_hazard_repo_fails_open_on_registry_exception(monkeypatch, tmp_path):
-    """The discriminator's own contract: an exception classifying the
-    hazard-registry half degrades to False (not a hazard), never propagates
-    or defaults to True. This is what makes ``check_blanket_git_add``
-    fail-open when the discriminator is unresolvable.
-    """
 
     def _boom():
         raise RuntimeError("settings home unreadable")
@@ -581,12 +428,6 @@ def test_is_hazard_repo_fails_open_on_registry_exception(monkeypatch, tmp_path):
 
 
 def test_check_blanket_git_add_allows_when_discriminator_unresolvable(monkeypatch, tmp_path):
-    """End-to-end fail-open: when the discriminator resolves to "not a
-    hazard" (the only fail-open-consistent outcome -- see
-    ``test_is_hazard_repo_fails_open_on_registry_exception`` for the
-    discriminator's own contract in isolation), ``check_blanket_git_add``
-    allows rather than denies.
-    """
     result = _check(monkeypatch, tmp_path, "git add -A", hazard=False)
     assert result is None
 
@@ -595,18 +436,6 @@ def test_hazard_registry_repo_roots_reads_repos_star_keys(monkeypatch, tmp_path)
     reg_dir = tmp_path / "registry"
     reg_dir.mkdir()
     fake_sibling = tmp_path / "some-fleet-sibling-checkout"
-    # TOML literal strings (single-quoted) do not interpret backslash
-    # escapes -- a plain double-quoted (basic) TOML string does, so
-    # interpolating a raw Windows path (backslash-delimited) into one
-    # produces invalid escape sequences (``\U``, ``\s``, ...) that
-    # ``tomllib`` rejects, and ``_load_toml``'s fail-open ``except
-    # Exception`` silently degrades the whole file to ``{}``. The literal
-    # form keeps this fixture path-separator-agnostic without hardcoding
-    # either separator. POSIX paths (no backslashes) were never at risk from
-    # a double-quoted TOML string -- this is a Windows-path-safety fix, not
-    # a general double-quoted-strings-are-unsafe claim.
-    # Clarify the fixture
-    # comment is Windows-path-specific, not a general TOML-format claim.
     (reg_dir / "registry.toml").write_text(
         "\"repos.claude_klabauter\" = '%s'\n"
         '"repos.example-sim-repo" = ""\n'
@@ -629,22 +458,7 @@ def test_hazard_registry_repo_roots_empty_when_registry_missing(monkeypatch, tmp
     assert guard._hazard_registry_repo_roots() == []
 
 
-# ---------------------------------------------------------------------------
-# `-u` with a pathspec: the narrower spelling of an already-permitted command.
-#
-# `git add -u -- X` is a STRICT SUBSET of `git add -- X` (same paths, minus
-# the untracked files), and the latter has always been permitted. Refusing the
-# narrower spelling protected nothing and pushed committers toward the coarser
-# form -- which is not hypothetical: example-store-repo `176ce18` was committed with
 # a literal three-file pathspec, exactly the discipline SC-DR-014 asks for, and
-# still swept ~164 lines of a peer's in-progress work, because a file pathspec
-# scopes to the FILE and not to the committer's hunks within it. Reported twice
-# in one evening by example-store-repo-em (2026-09-03 cross-repo/inbox,
-# `scoped-commit-guard-the-permitted-form-has-now-caused-the-harm-twice`).
-#
-# `-A` keeps denying with or without a pathspec: it has no subset relation to
-# a permitted form.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -664,21 +478,13 @@ def test_dash_u_with_a_pathspec_allows(monkeypatch, tmp_path, cmd):
 @pytest.mark.parametrize(
     "cmd",
     [
-        # A bare `--` narrows nothing -- the whole tree is still in scope.
         "git add -u --",
-        # Root-shaped pathspecs are `.` written differently. These are the
-        # cases the relaxation must NOT reach: a scoped `-u` now falls
-        # through to the path checks instead of short-circuiting past them,
-        # and these pin that it actually lands there.
         "git add -u -- .",
         "git add -u -- ./",
         "git add -u -- :/",
         "git add -u -- :/.",
-        # `-A` is not `-u`: no subset relation, so a pathspec does not buy it
-        # the same exemption.
         "git add -A -- registry/schema.sql",
         "git add --all -- registry/schema.sql",
-        # Bundled spellings carrying `A` alongside `u` still deny on the `A`.
         "git add -Au -- registry/schema.sql",
     ],
 )
@@ -700,6 +506,4 @@ def test_dash_u_relaxation_does_not_reach_these(monkeypatch, tmp_path, cmd):
     ],
 )
 def test_add_has_narrowing_pathspec(after, expected):
-    """A bare `--` is the negative that matters: it looks like scope and
-    narrows nothing."""
     assert guard._add_has_narrowing_pathspec(after) is expected

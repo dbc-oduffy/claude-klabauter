@@ -27,12 +27,6 @@ def _declared(**extra):
 
 
 def test_undeclared_channel_is_not_a_fault_and_yields_no_overrides():
-    """A legacy registration declares no channel; that is silence, not disarmament.
-
-    Returning a `disarm_reason` here would fail every registration that predates this
-    channel closed, which is the opposite of the safety property -- the guard would stop
-    running for everyone rather than for the one case that is actually broken.
-    """
     env, disarm = hook_http.env_from_headers({"X-Other": "x"})
     assert env == {}
     assert disarm is None
@@ -47,12 +41,6 @@ def test_declared_channel_forwards_the_callers_override():
 
 
 def test_declared_channel_with_empty_canary_disarms_loudly():
-    """The veto case. Channel declared, canary interpolated empty -> refuse, do not allow.
-
-    Mutation check: returning `(env, None)` here makes this test fail, which is the point --
-    an empty canary means the setting ate every override header too, so an `env` built from
-    what survived is a confident answer to a question that was never asked.
-    """
     env, disarm = hook_http.env_from_headers(
         {
             CHANNEL: "declared",
@@ -71,19 +59,6 @@ def test_a_whitespace_canary_is_treated_as_empty():
 
 
 def test_an_unforwardable_name_is_refused_rather_than_dropped():
-    """The header channel is not a wider door than the body one it replaces -- and says so.
-
-    The allowlist is what stops arbitrary session secrets reaching guard code; routing
-    around it by renaming a header would be a privilege escalation dressed as plumbing. The
-    secret still does not reach `env` -- that half is unchanged and is the safety property.
-
-    What changed is the OTHER half. A header under this prefix exists only because someone
-    wrote it plus a matching `allowedEnvVars` entry, so dropping it silently reports a
-    registration as correctly threaded while the op sees nothing -- the permissive
-    direction, the same one the canary veto is loud about. Mutation check: returning
-    `(env, None)` with the good key surviving makes this pass a registration that is
-    misconfigured, which is the exact failure `warm-hook-migration.md` § Step 3 shipped.
-    """
     env, disarm = hook_http.env_from_headers(
         _declared(
             **{
@@ -141,7 +116,6 @@ def test_the_channel_and_canary_headers_are_not_themselves_forwarded():
 
 
 def test_header_names_are_matched_case_insensitively():
-    """HTTP header casing is not preserved end to end; env var names are uppercase."""
     env, disarm = hook_http.env_from_headers(
         {
             CHANNEL.lower(): "declared",
@@ -154,7 +128,6 @@ def test_header_names_are_matched_case_insensitively():
 
 
 def test_an_empty_override_header_is_dropped_rather_than_forwarded_as_empty():
-    """An empty value is not an override; forwarding `""` would let it read as one set."""
     env, disarm = hook_http.env_from_headers(
         _declared(**{"X-Coordinator-Env-COORDINATOR_OVERRIDE_BASH": ""})
     )
@@ -163,12 +136,6 @@ def test_an_empty_override_header_is_dropped_rather_than_forwarded_as_empty():
 
 
 def test_the_disarm_response_says_the_guard_did_not_run():
-    """The refusal must reach the MODEL, not only the operator.
-
-    `additionalContext` is nested-only over this transport (measured); a top-level copy
-    goes nowhere behind a 200, which is how this plan's anti-scope was void over the wire
-    once already.
-    """
     _, disarm = hook_http.env_from_headers({CHANNEL: "declared", CANARY: ""})
     body = hook_http.unreachable_response("PreToolUse", disarm)
     assert "did not run" in body["systemMessage"]

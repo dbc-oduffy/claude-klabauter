@@ -59,11 +59,6 @@ _ROW_START_RE = re.compile(r"^(?P<indent>[ \t]*)-\s+id:\s*(?P<id>.+?)\s*$")
 
 
 def _unquote_row_id(raw: str) -> str:
-    """Strips a single layer of matching quotes off a YAML scalar token --
-    a spine `id:` value is legal either bare (`C1`) or quoted (`"C1"`/
-    `'C1'`); this normalizes both to the same comparison key the rest of
-    this module already uses (`row.get("id")` values are never quoted,
-    since `yaml.safe_load` already stripped them there)."""
     raw = raw.strip()
     if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ("'", '"'):
         return raw[1:-1]
@@ -199,23 +194,11 @@ _COMMIT_REQUIRED_DISPOSITIONS = frozenset({_OPEN, _CODED})
 
 
 def _row_disposition(row: dict) -> str:
-    """Row's disposition, defaulting to 'open' per the schema default (D1).
-    A missing/blank/non-string value degrades to 'open' -- the same
-    tolerant-read posture `plan_tasks_render.py`'s own `_disposition`
-    helper uses for the identical rule (restated here, not imported --
-    that helper is private to its own module and the rule is one line)."""
     value = row.get("disposition")
     return value if isinstance(value, str) and value else _OPEN
 
 
 def _commit_required_chunk_ids(spine_rows: list[Any]) -> list[str]:
-    """Chunk-ids requiring a matching commit under the widened
-    completeness oracle (AC9, D8): a row's disposition must be `open` or
-    `coded` -- `spun_off`/`backlogged`/`wont_do` are excluded exactly the
-    way legacy `deferred: true` always has been. `deferred: true` STAYS
-    excluded independently of any disposition it may also carry (D8's
-    legacy-equivalence -- a deferred row is backlogged-equivalent, never
-    commit-required)."""
     ids: list[str] = []
     for row in spine_rows:
         if not isinstance(row, dict):
@@ -231,14 +214,6 @@ def _commit_required_chunk_ids(spine_rows: list[Any]) -> list[str]:
 
 
 def _plan_deliverable_id(plan_text: str) -> Optional[str]:
-    """Reads the plan's own `deliverable_id:` frontmatter field, unquoted
-    and comment-stripped (`read_fm_field_unquoted` -- the comparison-safe
-    reader, since this value is compared against a git trailer value
-    below, not echoed or rewritten verbatim). Returns `None` when the
-    plan has no parseable frontmatter, or no `deliverable_id:` field at
-    all -- callers treat `None` as "cannot scope the commit search to
-    this plan" (see this module's docstring § Deliverable scoping), never
-    as "scope to nothing" or "fall back to unscoped"."""
     split = split_frontmatter(plan_text)
     if split is None:
         return None
@@ -246,20 +221,6 @@ def _plan_deliverable_id(plan_text: str) -> Optional[str]:
 
 
 def _all_spine_ids(spine_rows: list[Any]) -> list[str]:
-    """Every id the plan's own spine names, regardless of `disposition`/
-    `deferred`. Kept as a standalone reader (used by `cascade_baton_rows.py`
-    and `plan_tasks_spine_drift_check.py`'s own private local copies of the
-    C4-owned join machinery) even though this module's own `_determine_
-    shipped` no longer needs the full candidate set itself (C3, 2026-08-21
-    -- see that function's docstring). Deliberately WIDER than
-    `_commit_required_chunk_ids`'s own filtered subset: a
-    `spun_off`/`backlogged`/legacy-`deferred` row is still a REAL spine id
-    that a commit subject may legitimately reference (e.g. alongside
-    commit-required ids in the same compound subject), and excluding it
-    from the bounding set would only reintroduce a narrower version of the
-    same false-negative this fix closes, for no false-positive benefit --
-    a row not in `_commit_required_chunk_ids` is already never consulted
-    for the missing/shipped verdict regardless of whether it appears here."""
     ids: list[str] = []
     for row in spine_rows:
         if not isinstance(row, dict):
@@ -281,18 +242,6 @@ def _line_ending(line: str) -> str:
 def _row_key_line_indices(
     lines: list[str], start: int, end: int, content_indent: int
 ) -> dict[str, int]:
-    """Within row-span `[start, end)`, finds the line index of each of
-    this row's own `disposition:` / `disposition_ref:` / `disposition_detail:`
-    / `deferred:` keys -- matched ONLY at exactly `content_indent` (the
-    row's own top-level key indent, never a deeper nested line) so a
-    `body: |` block scalar's continuation text that happens to contain
-    one of these words can never be mistaken for the key itself.
-
-    `disposition_detail` is listed BEFORE the bare `disposition` alternative
-    for readability only -- this is defensive, not correctness-load-bearing.
-    Keeps only the FIRST occurrence of each key (a
-    well-formed row never repeats a key; a duplicate is not this
-    function's problem to police)."""
     key_re = re.compile(
         r"^"
         + re.escape(" " * content_indent)
@@ -408,8 +357,6 @@ def _stamp_rows_in_body(
     if missing:
         return None, f"could not locate a row for chunk-id(s) {missing!r} to stamp"
 
-    # Process rows in REVERSE row-order so an earlier row's insertion never
-    # shifts a later row's already-computed line indices out from under it.
     for start, end, chunk_id in sorted(spans, key=lambda s: s[0], reverse=True):
         if chunk_id not in updates:
             continue
@@ -418,24 +365,12 @@ def _stamp_rows_in_body(
 
         dash_line = lines[start]
         dash_indent = len(dash_line) - len(dash_line.lstrip(" \t"))
-        # Measure the row's actual sibling-key
-        # indent instead of assuming yaml.safe_dump's `dash_indent + 2`
-        # default, which this fix exists to stop imposing on the file.
         content_indent = _measure_row_content_indent(lines, start, end, dash_indent)
         newline = _line_ending(dash_line)
 
         keys = _row_key_line_indices(lines, start + 1, end, content_indent)
         pad = " " * content_indent
         disposition_line = f"{pad}disposition: {_CODED}{newline}"
-        # `numeric_quoting=True` is load-bearing, not defensive. An abbreviated
-        # commit sha is hex, so ~2.3% of them ((10/16)**8) are all-digit --
-        # roughly one commit in 43. Emitted bare, YAML parses such a sha as an
-        # INT, and the row then fails plan-tasks.schema.json's `type: string`
-        # on disposition_ref. That is not hypothetical: a real auto-resolve run
-        # (1576648b) wrote `disposition_ref: 17519732` into
-        # docs/plans/2026-07-28-sat-01b-observed-set-fold-actuator.md, and the
-        # write-time spine guard flags it to this day. Same reasoning, same
-        # flag, as `execution_authorized_sha` in review_assemble/exec_auth_stamp.py.
         disposition_ref_line = (
             f"{pad}disposition_ref: {serialize_yaml_scalar(sha, numeric_quoting=True)}{newline}"
         )
@@ -463,19 +398,11 @@ def _stamp_rows_in_body(
         if to_insert:
             insert_at = keys["deferred"] + 1 if "deferred" in keys else end
             if insert_at > 0 and not lines[insert_at - 1].endswith(("\n", "\r\n")):
-                # The line we are about to insert after has no trailing
-                # newline (only possible when it is the body's last line
-                # with no final newline) -- add one so the new line does
-                # not get glued onto the end of it.
                 lines[insert_at - 1] += newline
             lines[insert_at:insert_at] = to_insert
 
     new_body = "".join(lines)
     if not body_ended_with_newline and new_body.endswith(("\n", "\r")):
-        # Restore the body's own trailing-newline property (see this
-        # function's docstring § Trailing-newline preservation): strip
-        # exactly ONE line terminator, `\r\n` before `\n` so a CRLF body
-        # loses the pair rather than being left with a dangling `\r`.
         if new_body.endswith("\r\n"):
             new_body = new_body[:-2]
         else:
@@ -486,9 +413,6 @@ def _stamp_rows_in_body(
 def _row_span_containing(
     spans: list[tuple[int, int, str]], idx: int
 ) -> Optional[tuple[int, int]]:
-    """Finds the `(start, end)` row-span (as returned by `_find_row_spans`)
-    that contains line-index `idx`, or `None` if `idx` falls outside every
-    row (e.g. the body has no rows at all)."""
     for start, end, _chunk_id in spans:
         if start <= idx < end:
             return start, end

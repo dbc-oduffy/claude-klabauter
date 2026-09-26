@@ -21,17 +21,6 @@ import time
 from coordinator_core.group_em import watch_heartbeat
 
 
-#: Every key `read_watch` reads off the record, plus the writes `stamp` makes
-#: for a reader's benefit (`tick_source`, `subscribed_peers`,
-#: `writer_session_id`).
-#:
-#: `writer_session_id` was added 2026-09-01 and is deliberately inside this pin
-#: rather than exempted from it. The sibling reader takes the keys it wants BY
-#: NAME (`record.get(...)`, verified against its own source), so an added key
-#: cannot break it -- but the pin's job is to make any change to this record's
-#: shape a decision someone writes down, and quietly loosening it to "at least
-#: these" would retire that job while looking like a smaller edit than removing
-#: the test.
 _READER_KEYS = {
     "holder_session_id",
     "holder_name",
@@ -41,11 +30,6 @@ _READER_KEYS = {
     "subscribed_peers",
     "declinations",
     "writer_session_id",
-    # Added for item 2 (`--status` false-alive with no process check,
-    # 2026-09-19 memo): self-captured writer process identity, read back by
-    # `process_confirmed_alive`. The DoE reader takes keys by name and
-    # ignores these two; per this pin's own docstring, adding them is still
-    # a decision recorded here rather than a silent shape drift.
     "pid",
     "pid_start_epoch",
 }
@@ -73,15 +57,10 @@ def test_timestamps_parse_in_the_readers_own_format(tmp_path):
     )
     record = _record(tmp_path)
     for field in ("last_tick_at", "next_expected_by"):
-        # `calendar.timegm(time.strptime(...))` is literally what the reader
-        # does; anything it cannot parse degrades that side to `stale`.
         calendar.timegm(time.strptime(record[field], _READER_TIMESTAMP_FORMAT))
 
 
 def test_tick_source_is_the_readers_reserved_monitor_word(tmp_path):
-    """`monitor` is one of the three the DoE writer already declares
-    (`cron` | `monitor` | `entry`) -- a `Monitor`-held watch is legible to the
-    reader with no change on its side."""
     watch_heartbeat.stamp(
         str(tmp_path), holder_session_id="group-em-1", declinations=[], interval_seconds=5.0,
         writer_session_id="w1",
@@ -111,12 +90,10 @@ def test_next_expected_by_is_derived_from_the_interval_not_a_fixed_window(tmp_pa
     deadline = calendar.timegm(
         time.strptime(_record(tmp_path)["next_expected_by"], _READER_TIMESTAMP_FORMAT)
     )
-    assert deadline == 1_000_000 + 900  # three ticks of a 300s interval
+    assert deadline == 1_000_000 + 900
 
 
 def test_a_fast_interval_still_gets_the_grace_floor(tmp_path):
-    """Three ticks of a 5s poll is 15s: shorter than one slow moment under
-    fleet load, and the record would flicker `stale` for no reason."""
     watch_heartbeat.stamp(
         str(tmp_path),
         holder_session_id="group-em-1",
@@ -132,10 +109,6 @@ def test_a_fast_interval_still_gets_the_grace_floor(tmp_path):
 
 
 def test_each_stamp_replaces_the_whole_record_never_accumulates(tmp_path):
-    """`declinations` is THIS tick's rows: an accumulating list is what makes
-    "looked, nothing to do" indistinguishable from "did not look". Both
-    stamps share the same writer/holder/tick_source so the second is not a
-    fresh-and-foreign decline."""
     watch_heartbeat.stamp(
         str(tmp_path),
         holder_session_id="group-em-1",
@@ -152,7 +125,6 @@ def test_each_stamp_replaces_the_whole_record_never_accumulates(tmp_path):
 
 
 def test_stamp_returns_false_rather_than_raising_when_the_path_is_unusable(tmp_path):
-    """A missed tick must never end a watch that is otherwise working."""
     blocker = tmp_path / "state"
     blocker.write_text("not a directory", encoding="utf-8")
     assert watch_heartbeat.stamp(
@@ -162,8 +134,6 @@ def test_stamp_returns_false_rather_than_raising_when_the_path_is_unusable(tmp_p
 
 
 def test_tick_source_is_the_callers_word_when_a_wake_fired_the_tick(tmp_path):
-    """A cron-floor wake and a held poller write the same keys and mean
-    different things about what happens if nobody fires again."""
     watch_heartbeat.stamp(
         str(tmp_path), holder_session_id="group-em-1", declinations=[],
         interval_seconds=1380.0, tick_source="cron", writer_session_id="w1",
@@ -172,9 +142,6 @@ def test_tick_source_is_the_callers_word_when_a_wake_fired_the_tick(tmp_path):
 
 
 def test_an_unknown_tick_source_raises_rather_than_writing_it(tmp_path):
-    """The one argument a caller can get wrong silently. An unknown word reads
-    to the DoE reader as a watch of unknown provenance -- worse than a loud
-    failure at the writer's first run."""
     import pytest as _pytest
 
     with _pytest.raises(ValueError):
@@ -185,10 +152,6 @@ def test_an_unknown_tick_source_raises_rather_than_writing_it(tmp_path):
 
 
 def test_an_omitted_writer_session_id_raises_rather_than_writing_unattributed(tmp_path):
-    """`writer_session_id` became required 2026-09-01: an omitting call used
-    to write `writer_session_id: null`, which is how a crown read its own
-    write back as independent confirmation. Retired deliberately -- see the
-    pin this replaces two tests below."""
     import pytest as _pytest
 
     with _pytest.raises(ValueError):
@@ -217,8 +180,6 @@ def test_the_writer_refuses_to_mint_a_repo_it_was_pointed_at(tmp_path):
 
 
 def test_the_state_leaf_under_a_real_root_is_still_created(tmp_path):
-    """The refusal is one level deep, not a demand that the caller pre-make
-    `state/` -- a first tick in a real repo must still write."""
     assert watch_heartbeat.stamp(
         str(tmp_path), holder_session_id="s", declinations=[], interval_seconds=5.0,
         writer_session_id="w1",
@@ -227,13 +188,6 @@ def test_the_state_leaf_under_a_real_root_is_still_created(tmp_path):
 
 
 def test_the_record_says_which_process_wrote_it_not_only_who_holds_it(tmp_path):
-    """`holder_session_id` is the Group-EM in every case, including ticks a
-    dispatched teammate writes on its behalf -- so it cannot answer "did I
-    write this?". A fleet-watch read back a `subscribed_peers` value its own
-    Group-EM had written minutes earlier and reported it to that Group-EM as
-    independent confirmation (2026-09-01). Whole-file replace plus no writer
-    attribution is what makes an echo indistinguishable from a confirmation.
-    """
     watch_heartbeat.stamp(
         str(tmp_path),
         holder_session_id="group-em-1",
@@ -246,26 +200,12 @@ def test_the_record_says_which_process_wrote_it_not_only_who_holds_it(tmp_path):
     assert record["writer_session_id"] == "teammate-9"
 
 
-# RETIRED 2026-09-01, deliberately, not a silent deletion. This test used to
-# assert `record["writer_session_id"] is None` for an omitting call --
-# `writer_session_id` was Optional and defaulted to None. It is now required
-# (see `test_an_omitted_writer_session_id_raises_rather_than_writing_unattributed`
-# above): an omitting call is how a crown read its own write back as
-# independent confirmation, so the field now populates on every write instead
-# of ever being null. Do not restore the old pin as a "regression" -- the
-# opposite behaviour is the fix.
 def test_every_successful_write_populates_writer_session_id(tmp_path):
     watch_heartbeat.stamp(
         str(tmp_path), holder_session_id="group-em-1", declinations=[], interval_seconds=5.0,
         writer_session_id="w1",
     )
     assert _record(tmp_path)["writer_session_id"] == "w1"
-
-
-# THREE STATES, THREE ANSWERS. The defect these pin: a watch alive and quiet, a
-# watch that died or never started, and a repo nobody ever armed all rendered
-# identically to the only surface a human had (`idle`). A renderer that lets any
-# two of them collapse again is the bug, so each is asserted against the others.
 
 
 def _armed(tmp_path, now, subscribed_peers=1, declinations=None):
@@ -281,7 +221,6 @@ def test_a_quiet_live_watch_reads_alive_not_idle(tmp_path):
     text = watch_heartbeat.human_verdict(_armed(tmp_path, time.time()))
     assert text.startswith("ALIVE")
     assert "claude-klabauter-ad" in text
-    # The quiet itself has to be named, or a reader re-reads silence as a fault.
     assert "Quiet is the normal state" in text
 
 
@@ -315,16 +254,12 @@ def test_an_unreadable_record_says_so_rather_than_never_armed(tmp_path):
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("{ this is not json")
     liveness = watch_heartbeat.read_liveness(str(tmp_path))
-    # The verdict stays the sibling reader's single word; only the detail splits.
     assert liveness["verdict"] == watch_heartbeat.VERDICT_ABSENT
     assert liveness["absent_reason"] == watch_heartbeat.ABSENT_UNREADABLE
     assert "cannot be read" in watch_heartbeat.human_verdict(liveness)
 
 
 def test_the_age_is_read_off_the_z_stamp_as_utc_not_the_local_clock(tmp_path):
-    # A `Z` stamp measured against a local clock invents an hour of staleness on
-    # any box that is not UTC. Both sides here are epoch seconds; a three-second
-    # tick must never render as an hour.
     now = float(int(time.time()))
     text = watch_heartbeat.human_verdict(_armed(tmp_path, now), now_epoch=now + 3.0)
     assert "3 seconds ago" in text
@@ -332,10 +267,6 @@ def test_the_age_is_read_off_the_z_stamp_as_utc_not_the_local_clock(tmp_path):
 
 
 # C1 -- PRIOR-HOLDER TRACE AND FRESH-AND-FOREIGN DECLINE. The falsifier's
-# exact leg-2 sequence: two crown instances stamping in sequence against a
-# throwaway repo_root, with a trace of the first holder surviving in the
-# second's record. Distinct holder AND writer ids on each side, per the
-# falsifier's own baseline.
 
 
 def test_the_falsifiers_two_crown_sequence_carries_the_prior_holder(tmp_path):
@@ -349,8 +280,6 @@ def test_the_falsifiers_two_crown_sequence_carries_the_prior_holder(tmp_path):
         interval_seconds=30.0, now_epoch=1_000_100.0,
         writer_session_id="crown-B-22222222",
     )
-    # A decline here would fail the falsifier by construction (leg 2 opens
-    # with `if not (ok1 and ok2): return False`).
     assert ok1 is True
     assert ok2 is True
     record = _record(tmp_path)
@@ -392,18 +321,6 @@ def test_same_holder_same_writer_different_tick_source_still_writes_the_trace(tm
 
 
 def test_a_same_crown_monitor_is_never_locked_out_by_its_own_cron_tick(tmp_path):
-    """Regression pin for the deadlock a three-field foreignness caused.
-
-    `is_fresh_and_foreign` is holder-or-writer, deliberately NOT `tick_source`.
-    When it also compared `tick_source`, every monitor poll inside a cron
-    record's ~69-minute freshness window was declined -- the standing watch
-    stopped stamping for over an hour after each audit tick and the record it
-    could not refresh read STALE to the whole fleet, which is worse than the
-    clobber the trace exists to make visible.
-
-    Ten consecutive monitor polls at the real ~80s cadence, all inside the
-    cron record's window, must every one of them land.
-    """
     watch_heartbeat.stamp(
         str(tmp_path), holder_session_id="group-em-1", declinations=[],
         interval_seconds=23 * 60.0, now_epoch=1_000_000.0,
@@ -431,8 +348,6 @@ def test_a_first_stamp_carries_no_prior_keys_at_all(tmp_path):
 
 
 def test_a_fresh_foreign_record_is_declined_and_survives_unchanged(tmp_path):
-    """The measured cron-at-18:30 / monitor-at-18:42 case: cron's own
-    `next_expected_by` is still ahead when the foreign writer arrives."""
     watch_heartbeat.stamp(
         str(tmp_path), holder_session_id="group-em-1", declinations=["cron-row"],
         interval_seconds=1380.0, now_epoch=1_000_000.0,
@@ -449,12 +364,6 @@ def test_a_fresh_foreign_record_is_declined_and_survives_unchanged(tmp_path):
 
 
 def test_a_keyless_record_under_the_same_holder_does_not_lock_the_crown_out(tmp_path):
-    """The doctrine plane's `stamp` predates `writer_session_id`, so every
-    `groupem.enter` record lands here without the key. Read as a second party,
-    it refuses the entering session its OWN watch for a whole
-    `next_expected_by` interval -- measured at 23 minutes with nothing
-    watching and `--status` still reporting ALIVE.
-    """
     record = {
         "holder_session_id": "group-em-1",
         "holder_name": None,
@@ -476,7 +385,6 @@ def test_a_keyless_record_under_the_same_holder_does_not_lock_the_crown_out(tmp_
 
 
 def test_a_stale_foreign_record_is_not_declined(tmp_path):
-    """The previous writer is gone; declining here would deadlock the watch."""
     watch_heartbeat.stamp(
         str(tmp_path), holder_session_id="group-em-1", declinations=["cron-row"],
         interval_seconds=30.0, now_epoch=1_000_000.0,
@@ -492,8 +400,6 @@ def test_a_stale_foreign_record_is_not_declined(tmp_path):
 
 
 # ARMED-BANNER SUPPRESSION -- folded in from retired C2. `human_verdict`'s
-# ARMED branch used to render the reassurance line unconditionally, over a
-# record that could have been clobbered to zero population.
 
 
 def test_armed_with_zero_population_suppresses_the_reassurance_and_names_the_zero(tmp_path):
@@ -512,13 +418,6 @@ def test_armed_with_real_population_still_renders_the_reassurance(tmp_path):
     )
     assert text.startswith("ALIVE")
     assert "Quiet is the normal state" in text
-
-
-# DEFECT 1 -- THE TRACE CARRIES WHAT A TICK COUNTED, NOT ONLY WHO WROTE IT.
-# `prior_subscribed_peers` and `prior_declination_count` ride alongside the
-# existing identity `prior_*` keys, on the same trigger (`_writer_identity`
-# disjunction), and must degrade to `None` rather than crash against an
-# older-format prior record that never wrote them.
 
 
 def test_the_trace_carries_what_the_destroyed_tick_counted(tmp_path):
@@ -540,9 +439,6 @@ def test_the_trace_carries_what_the_destroyed_tick_counted(tmp_path):
 
 
 def test_an_older_format_prior_record_without_the_new_scalars_does_not_crash(tmp_path):
-    """A prior record written before this fix has no `subscribed_peers`
-    concept the trace can name -- `.get` returns `None`, not a KeyError, and
-    the trace degrades to "unknown" instead of inventing a count."""
     path = watch_heartbeat.watch_path(str(tmp_path))
     import os
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -554,8 +450,6 @@ def test_an_older_format_prior_record_without_the_new_scalars_does_not_crash(tmp
             "tick_source": "cron",
             "next_expected_by": "1970-01-23T03:34:16Z",
             "writer_session_id": "crown-A-11111111",
-            # no `subscribed_peers` and no `declinations` keys -- both absent,
-            # the pre-fix shape.
         }, fh)
 
     accepted = watch_heartbeat.stamp(
@@ -602,36 +496,11 @@ def test_stamp_accepts_a_writer_that_differs_from_the_holder_by_design(tmp_path)
 
 
 def test_rearm_command_spells_both_required_flags():
-    """C3 (AC 13/14): the ONE machine-consumed re-arm spelling this module
-    hands every non-`armed` verdict (`remedy` in `read_liveness` /
-    `human_verdict`) must carry both the launcher name and
-    `--group-em-session-id` -- the flag that, silently defaulted to the
-    caller, stops the holder's own offer log from suppressing an
-    already-answered peer (`watch.py` module docstring, C3's own defect).
-
-    Pinned twice -- the held form and the `--once` form both carry it -- so
-    a future edit that drops the flag from either fails here, not silently
-    downstream on a reader who copies the wrong half.
-    """
     assert "group-em-watch --repo-root" in watch_heartbeat.REARM_COMMAND
     assert watch_heartbeat.REARM_COMMAND.count("--group-em-session-id") == 2
 
 
 def test_no_advertised_rearm_instruction_in_these_three_files_omits_the_holder_id():
-    """C3 scope guard, over exactly the three files this row may edit --
-    never an unqualified repo-wide grep (AC 13 forbids one satisfiable only
-    by editing historical records under `state/**`).
-
-    `coordinator_core/group_em/watch.py::_cli`'s docstring deliberately shows
-    a bare `python -m coordinator_core.group_em.watch --repo-root <path>`
-    line (its own unimportable anti-example) and the argparse `prog=`
-    string, neither of which is a re-arm instruction a reader would copy to
-    actually restart a watch -- this test does not require either to carry
-    the flag. What it pins is the two lines that ARE re-arm instructions:
-    `_cli`'s dispatched-teammate `python -m` example, and
-    `coordinator/bin/group-em-watch.py`'s own advertised settings-home
-    launcher form.
-    """
     import os
 
     repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
@@ -645,8 +514,6 @@ def test_no_advertised_rearm_instruction_in_these_three_files_omits_the_holder_i
     with open(bin_py, "r", encoding="utf-8") as fh:
         bin_src = fh.read()
 
-    # The dispatched-teammate `python -m` example in `_cli`'s docstring --
-    # the one `python -m` line the module docstring says DOES need the flag.
     dispatched_teammate_idx = watch_src.index(
         "When a dispatched teammate holds the watch"
     )
@@ -658,21 +525,11 @@ def test_no_advertised_rearm_instruction_in_these_three_files_omits_the_holder_i
     )
     assert "--group-em-session-id <the Group-EM's session id>" in dispatched_teammate_line
 
-    # `coordinator/bin/group-em-watch.py`'s own module docstring advertises
-    # the settings-home launcher form -- pinned to still carry the flag.
     assert "group-em-watch --repo-root <root>" in bin_src
     assert "--group-em-session-id <sid>" in bin_src
 
 
-# --- Item 2 (2026-09-19 memo): `--status` false-alive with no process check.
-# `process_confirmed_alive` is the single-machine PID witness -- distinct
-# from item 1's cross-machine holder-identity question, which stays
-# deliberately never PID-keyed (`is_fresh_and_foreign`'s own docstring).
-
-
 def test_process_confirmed_alive_true_for_this_very_process(tmp_path):
-    """`stamp` self-captures pid+epoch when neither is passed; the process
-    stamping IS the test process, which is genuinely alive right now."""
     watch_heartbeat.stamp(
         str(tmp_path), holder_session_id="group-em-1", declinations=[],
         interval_seconds=30.0, writer_session_id="w1",
@@ -682,31 +539,18 @@ def test_process_confirmed_alive_true_for_this_very_process(tmp_path):
 
 
 def test_process_confirmed_alive_false_for_a_recycled_or_dead_pid():
-    """A pid that does not match its own recorded birth instant reads
-    confirmed-DEAD, not merely unknown -- `stable_pid_alive`'s own
-    recycled-pid guard."""
     liveness = {"pid": 99999, "pid_start_epoch": 1}
     assert watch_heartbeat.process_confirmed_alive(liveness) is False
 
 
 def test_process_confirmed_alive_none_without_a_pid():
-    """No `pid` at all (a pre-this-fix record) cannot be confirmed either
-    way -- `None`, never promoted to `True`."""
     assert watch_heartbeat.process_confirmed_alive({}) is None
     assert watch_heartbeat.process_confirmed_alive({"pid": None}) is None
 
 
 def test_process_confirmed_alive_none_with_a_pid_but_no_birth_epoch():
-    """A bare pid with no `pid_start_epoch` must NOT be handed to
-    `stable_pid_alive` -- its own legacy fallback reads a missing epoch AND
-    lstart as unconditionally dead, which would misreport a genuinely alive
-    process as confirmed-gone. Degrade to `None` instead."""
     liveness = {"pid": os.getpid(), "pid_start_epoch": None}
     assert watch_heartbeat.process_confirmed_alive(liveness) is None
-
-
-# --- Item 3 (2026-09-19 memo): `human_verdict` prints the holder's bare
-# name, and two live sessions can share one.
 
 
 def test_human_verdict_names_both_the_holder_and_its_session_id(tmp_path):
@@ -752,12 +596,6 @@ def test_human_verdict_disambiguates_two_holders_sharing_one_name(tmp_path):
     assert "session-b" in text_b
 
 
-# --- Item 4 (2026-09-19 memo): `read_liveness` drops `next_expected_by` /
-# `seconds_overdue` from its payload, so the entry sequence's `watch_liveness`
-# leg (`ops/group_em_enter.py::_run_watch_liveness`, which forwards this dict
-# verbatim) reads green with no deadline information.
-
-
 def test_read_liveness_carries_next_expected_by_when_armed(tmp_path):
     now = time.time()
     watch_heartbeat.stamp(
@@ -782,13 +620,7 @@ def test_read_liveness_carries_next_expected_by_when_stale(tmp_path):
     assert isinstance(liveness["seconds_overdue"], (int, float))
 
 
-# --- C3(a): ALIVE must not vouch for a no-op watch off declinations alone,
-# and must name what actually looked when the tick was an `entry` stamp.
-
-
 def test_declinations_alone_do_not_vouch_for_a_watch_covering_nobody(tmp_path):
-    """An entry tick's declinations alone used to gate the reassurance line
-    even with `subscribed_peers=0` -- declinations are not coverage."""
     watch_heartbeat.stamp(
         str(tmp_path), holder_session_id="group-em-1",
         declinations=[{"session_id": "p1", "name": None, "gate": "cooldown", "reason": "r"}],
@@ -823,13 +655,9 @@ def test_a_monitor_tick_still_says_it_checked_the_fleet(tmp_path):
 
 
 # --- C3(b): `next_expected_by` bases the deadline on the MEASURED cadence,
-# never the caller's declared interval alone, and never widens past what the
-# declared interval would have produced.
 
 
 def test_next_expected_by_falls_back_to_declared_on_the_first_tick():
-    """No observed delta exists yet -- the declared interval is the whole
-    basis, byte-identical to the pre-C3 behaviour."""
     assert watch_heartbeat.next_expected_by(1_000_000.0, 300.0) == (
         watch_heartbeat.next_expected_by(1_000_000.0, 300.0, None)
     )
@@ -846,33 +674,22 @@ def test_next_expected_by_uses_the_observed_delta_when_it_is_tighter():
         watch_heartbeat.next_expected_by(1_000_000.0, 18.0, 18.0),
         _READER_TIMESTAMP_FORMAT,
     ))
-    # Declared 18s alone would floor at 60s (three ticks of 18s is 54s, below
     # the floor); the observed delta must not exceed what the DECLARED
-    # interval basis (80s here, i.e. the caller's actual claim) would have
-    # produced.
     assert deadline_observed <= deadline_declared_only
 
 
 def test_next_expected_by_caps_a_slower_observed_delta_at_the_declared_interval():
-    """The dangerous direction: an observed cadence SLOWER than declared must
-    never widen the deadline past what the declared interval alone would
-    have produced (the cap), or a monitor under-reporting its own slowness
-    lengthens every peer's lockout window by the mismatch factor."""
     capped = watch_heartbeat.next_expected_by(1_000_000.0, 18.0, 80.0)
     uncapped_declared_only = watch_heartbeat.next_expected_by(1_000_000.0, 18.0)
     assert capped == uncapped_declared_only
 
 
 def test_stamp_derives_next_expected_by_from_the_measured_inter_tick_delta(tmp_path):
-    """`stamp` itself measures the gap off the record it is about to
-    replace and feeds it to `next_expected_by`, capped at the declared
-    interval -- not just `next_expected_by` in isolation."""
     watch_heartbeat.stamp(
         str(tmp_path), holder_session_id="group-em-1", declinations=[],
         interval_seconds=80.0, now_epoch=1_000_000.0, writer_session_id="w1",
         tick_source="monitor",
     )
-    # Observed delta is 18s here, tighter than the 80s declared.
     watch_heartbeat.stamp(
         str(tmp_path), holder_session_id="group-em-1", declinations=[],
         interval_seconds=80.0, now_epoch=1_000_018.0, writer_session_id="w1",
@@ -886,9 +703,6 @@ def test_stamp_derives_next_expected_by_from_the_measured_inter_tick_delta(tmp_p
         _READER_TIMESTAMP_FORMAT,
     ))
     assert deadline == expected
-    # And it must be strictly tighter than the declared-only basis would have
-    # produced (80.0 * 3 = 240s), which is the whole point of the measured
-    # basis.
     declared_only = calendar.timegm(time.strptime(
         watch_heartbeat.next_expected_by(1_000_018.0, 80.0), _READER_TIMESTAMP_FORMAT
     ))
@@ -905,9 +719,6 @@ def test_read_liveness_carries_pid_fields_forward(tmp_path):
     assert liveness["pid_start_epoch"] is not None
 
 
-# P103-C2 -- the read-decide-write guard. `stamp` never gates (module
-# docstring): the loser of the guard NEVER blocks or retries, it declines the
-# tick and reports the contention, so these tests assert a False return plus
 # a POLL-ERROR line, never a hang.
 
 
@@ -919,8 +730,6 @@ def _guard_lock_path(tmp_path):
 
 def test_a_contended_guard_declines_and_reports_poll_error(tmp_path, capsys):
     lock_path = _guard_lock_path(tmp_path)
-    # A LIVE holder (this very process) with a hold window far in the
-    # future -- a genuine peer mid-tick, not a crashed one.
     lock_path.write_text(
         json.dumps({"holder_pid": os.getpid(), "hold_until": time.time() + 60.0}),
         encoding="utf-8",
@@ -932,18 +741,12 @@ def test_a_contended_guard_declines_and_reports_poll_error(tmp_path, capsys):
     assert wrote is False
     err = capsys.readouterr().err
     assert "POLL-ERROR" in err
-    # The contended tick never even reached the record -- no file written.
     assert not os.path.exists(watch_heartbeat.watch_path(str(tmp_path)))
-    # The peer's own lock survives -- a decliner must never touch a lock it
-    # does not hold.
     assert lock_path.exists()
 
 
 def test_a_stale_guard_is_taken_over_and_the_tick_still_writes(tmp_path):
     lock_path = _guard_lock_path(tmp_path)
-    # A confirmed-dead holder (999_999_999, the fleet's own dead-pid
-    # convention -- coordinator_core/session/tests/test_day_branch_cut_lock.py)
-    # is taken over immediately, never made to wait out the grace window.
     lock_path.write_text(
         json.dumps({"holder_pid": 999_999_999, "hold_until": time.time() + 60.0}),
         encoding="utf-8",
@@ -965,9 +768,6 @@ def test_a_successful_stamp_releases_its_own_guard(tmp_path):
 
 
 def test_a_declined_stamp_still_releases_its_own_guard(tmp_path):
-    # A fresh-and-foreign record declines before any write -- the guard it
-    # acquired to check that must still be released, or the NEXT tick (this
-    # same holder, ~18s later) would find a lock nobody is coming back for.
     watch_heartbeat.stamp(
         str(tmp_path), holder_session_id="peer", declinations=[],
         interval_seconds=18.0, writer_session_id="peer-w1",
@@ -981,10 +781,6 @@ def test_a_declined_stamp_still_releases_its_own_guard(tmp_path):
 
 
 def test_guard_never_raises_on_a_fresh_unreadable_lock_file_and_declines(tmp_path):
-    # A FRESH unreadable lock (mtime just now) is NOT proof of absence -- it
-    # is indistinguishable from a legitimate holder caught mid-write
-    # (`_acquire_guard`'s own docstring note on the TOCTOU this guards
-    # against). Never raises; declines this tick rather than taking over.
     lock_path = _guard_lock_path(tmp_path)
     lock_path.write_text("not json", encoding="utf-8")
     wrote = watch_heartbeat.stamp(
@@ -996,10 +792,6 @@ def test_guard_never_raises_on_a_fresh_unreadable_lock_file_and_declines(tmp_pat
 
 
 def test_guard_never_raises_on_a_stale_unreadable_lock_file_and_takes_over(tmp_path):
-    # An unreadable lock file whose mtime is long past the hold-plus-grace
-    # window (a genuinely corrupt leftover, e.g. a crash mid-write) is taken
-    # over -- otherwise a corrupt artifact would wedge every future tick
-    # forever, worse than the clobber the guard exists to prevent.
     lock_path = _guard_lock_path(tmp_path)
     lock_path.write_text("not json", encoding="utf-8")
     old = time.time() - 3600.0

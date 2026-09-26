@@ -102,19 +102,10 @@ MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 
 #: PRIORITY 49 -- unique within the HARD-DENY phase (checked against the
 #: full set of hard-deny PRIORITY values at HEAD this session: 5, 10, 20,
-#: 30, 40, 45, 46, 47, 48, 50, 56, 65, 76, 129, 130, 131, 132, 135, 136,
-#: 137 taken -- 47 and 48 already claimed by block_subagent_guard_grant_
-#: write.py and block_confined_agent_write.py respectively). Slotted
-#: immediately after those two nearest siblings in the same grant-adjacent
-#: artifact family, ahead of block_consumed_handoff_edit (50). The phase
-#: runs first-non-None-wins, so relative order among non-overlapping-path
-#: guards has no behavioral effect here -- this is a readability/grouping
-#: choice only.
 PRIORITY = 49
 
 _INTERCEPTED_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
-#: The fixed target filename this guard protects, under settings_home().
 _GRANT_FILENAME = "fleet-delegation.json"
 
 _DENY_REASON = (
@@ -125,7 +116,6 @@ _DENY_REASON = (
 
 
 def _extract_file_path(payload: Dict[str, Any]) -> str:
-    """``file_path``, falling back to ``notebook_path`` for NotebookEdit."""
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         return ""
@@ -133,13 +123,6 @@ def _extract_file_path(payload: Dict[str, Any]) -> str:
 
 
 def _normalize_slashes(file_path: str) -> str:
-    """Backslash -> forward-slash, no other transform -- mirrors the first
-    step of ``block_subagent_grant_record_write._normalize_path`` (this
-    module has no UNC-preservation need: neither ``settings_home()`` nor
-    any realistic ``cwd`` for this guard's callers is a UNC share, and
-    ``casefold_path`` downstream already strips a Windows extended-length
-    prefix on both sides symmetrically).
-    """
     return file_path.replace("\\", "/")
 
 
@@ -150,11 +133,6 @@ def _is_absolute(normalized: str) -> bool:
 
 
 def _resolve_candidate(file_path: str, cwd: Optional[str]) -> str:
-    """Resolve ``file_path`` to an absolute, forward-slash form, joining
-    against ``cwd`` when relative, then lexically collapse ``.``/``..``
-    segments via ``posixpath.normpath`` (pure string manipulation, no
-    filesystem access, no spawn -- safe on the PreToolUse hot path).
-    """
     normalized = _normalize_slashes(file_path)
     if not _is_absolute(normalized):
         base = cwd or "."
@@ -163,10 +141,6 @@ def _resolve_candidate(file_path: str, cwd: Optional[str]) -> str:
 
 
 def _target_path() -> str:
-    """Resolve ``<settings_home()>/fleet-delegation.json`` through the same
-    normalize -> collapse pipeline the candidate goes through, so both
-    sides are comparable strings.
-    """
     joined = _normalize_slashes(str(settings_home() / _GRANT_FILENAME))
     return posixpath.normpath(joined)
 

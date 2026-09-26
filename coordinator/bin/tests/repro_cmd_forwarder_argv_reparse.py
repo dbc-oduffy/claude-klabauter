@@ -37,9 +37,6 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 REPO = Path(__file__).resolve().parents[3]
 ENTRY_SRC = 'import sys\nprint("PAYLOAD " + repr(sys.argv[1:]))\n'
 
-#: Bodies isolating our generator's framing from the bare forwarding line. `minimal` is the
-#: control that decides scope: if it leaks identically, the defect is generic cmd.exe `%*`
-#: behaviour affecting every forwarder, not a quoting slip in our template.
 _CMD_BODIES = {
     "minimal": '@echo off\r\n"{py}" "%~dp0probe-cli.py" %*\r\n',
     "generator-shaped": (
@@ -47,9 +44,6 @@ _CMD_BODIES = {
     ),
 }
 
-#: Left column is the single argument handed to `subprocess.run`; the interesting output is
-#: which file it causes to appear in the caller's cwd. The two `%~dp0`/`execute` rows are the
-#: artifacts the peer P2 was filed on; `a > b` is the negative control that Python quotes.
 _ARG_CASES = {
     "dp0-adjacent": "foo>%~dp0",
     "dp0-stderr": "2>%~dp0",
@@ -87,11 +81,6 @@ def _probe_cmd(src: Path) -> None:
 
 
 def _probe_ps1_twin(src: Path) -> None:
-    """The `.ps1` twin is the candidate fix shape, so it is measured, not assumed clean.
-
-    `render_ps1` splats via `@args` and never re-parses. Loaded by file path because
-    `gen-launcher-shim.py` carries a hyphen and is not importable as a module name.
-    """
     shim_path = REPO / "coordinator" / "bin" / "gen-launcher-shim.py"
     spec = importlib.util.spec_from_file_location("_gen_launcher_shim", shim_path)
     if spec is None or spec.loader is None:

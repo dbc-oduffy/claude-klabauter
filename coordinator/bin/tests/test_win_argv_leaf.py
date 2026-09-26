@@ -1,16 +1,3 @@
-"""test_win_argv_leaf — pytest coverage for the shared Windows-safe argv
-tokenizer, `coordinator/bin/lib/win_argv.py`.
-
-Spec backlink: state/handoffs/2026-08-06-windows-safe-tokenizer-consolidation.md
-— option (c) (consolidate into a leaf module with no transitive weight).
-This is the AC2/AC5 mechanism: a real parametrized corpus over the shared
-implementation (so a future edit to the tokenizer can no longer drift
-between two copies, because there is only one), plus an import-graph guard
-(AC1/AC4) that fails the build if `win_argv` ever stops being leaf-clean —
-the whole reason the shared implementation was allowed to exist without
-paying the ceremony hook's hot-path import budget
-(`coordinator_core/benchmarks/import-budget-manifest.json`).
-"""
 from __future__ import annotations
 
 import subprocess
@@ -19,13 +6,7 @@ from pathlib import Path
 
 import pytest
 
-# test_win_argv_import_graph_stays_leaf_clean needs a genuinely CLEAN
-# subprocess interpreter to inspect sys.modules after importing win_argv --
-# the leaf-clean claim (no coordinator_core/psutil pulled in transitively)
-# cannot be checked in-process, since this test harness's own process
 # already has both loaded. The spawn ratchet's `_BASELINE` is shrink-only
-# pre-existing residue and is explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _LIB_DIR = Path(__file__).parent.parent / "lib"
@@ -34,11 +15,6 @@ if str(_LIB_DIR) not in sys.path:
 
 from win_argv import win_safe_shlex_split  # noqa: E402
 
-# POSIX filesystems treat `\` as an ordinary filename character, not a
-# separator — a Windows-shaped path built from segments joined with
-# backslashes is a faithful stand-in for a real Windows drive-letter path,
-# without hardcoding a platform-specific literal (matches the style in
-# test_refresh_plugin_argv_contract.py).
 _WINDOWS_SHAPED_PATH = "\\".join(["C:", "Users", "bob", "tools", "refresh.exe"])
 
 CASES = [
@@ -56,16 +32,12 @@ CASES = [
     (_WINDOWS_SHAPED_PATH, [_WINDOWS_SHAPED_PATH]),
     (f"{_WINDOWS_SHAPED_PATH} --flag", [_WINDOWS_SHAPED_PATH, "--flag"]),
     (f'"{_WINDOWS_SHAPED_PATH}"', [_WINDOWS_SHAPED_PATH]),
-    ("a\\ b", ["a\\", "b"]),  # negative-spec: escaped-space is NOT one token
+    ("a\\ b", ["a\\", "b"]),
     ("--flag=value", ["--flag=value"]),
     ("a=1 b=2", ["a=1", "b=2"]),
     ("cmd --opt 'quoted arg' trailing", ["cmd", "--opt", "quoted arg", "trailing"]),
     ('mixed "double" and \'single\'', ["mixed", "double", "and", "single"]),
     ("tab\tand\tnewline\nsplit", ["tab", "and", "newline", "split"]),
-    # divergence-from-shlex.split pins (docstring's "Once a backslash is
-    # present" paragraph): backslash is a literal char here, never an
-    # escape, so `"unterminated\"` is a balanced quoted token — shlex.split
-    # raises ValueError on the same input instead.
     ('"unterminated\\"', ["unterminated\\"]),
     ('"a\\\\"', ["a\\\\"]),
 ]
@@ -82,10 +54,10 @@ def test_win_safe_shlex_split_corpus(cmd_str, expected):
         "'unterminated",
         '"unterminated',
         "echo 'unterminated",
-        '"a\\"b"',  # backslash not consumed as escape -> mid-token quote
-        'a\\"b',  # same divergence unquoted
-        '"a\\"b" c',  # shlex.split returns ['a"b', 'c']; we raise
-        '\\"',  # shlex.split returns ['"']; we raise
+        '"a\\"b"',
+        'a\\"b',
+        '"a\\"b" c',
+        '\\"',
     ],
 )
 def test_win_safe_shlex_split_unbalanced_quotes_raise(cmd_str):
@@ -94,11 +66,6 @@ def test_win_safe_shlex_split_unbalanced_quotes_raise(cmd_str):
 
 
 def test_win_argv_import_graph_stays_leaf_clean():
-    """Import `win_argv` in a clean subprocess interpreter and assert its
-    transitive module delta is bounded: `shlex` plus its own stdlib chain
-    only. Neither `coordinator_core*` nor `psutil` may appear in
-    `sys.modules` afterwards — that is the specific trap this leaf module
-    exists to avoid (see the module docstring's negative-spec)."""
     probe = (
         "import sys\n"
         f"sys.path.insert(0, {str(_LIB_DIR)!r})\n"

@@ -67,9 +67,6 @@ class TestListHeldPlanClaims:
     ):
         sessions_dir = _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
-        # Claimed (and named) in reverse temporal order deliberately, to
-        # prove the earliest-`claimed_at` SORT drives the result, not
-        # iteration/name order.
         _write_claim(
             sessions_dir, "2026-08-10-plan-z", "me-sid", "2026-08-10T12:00:00+00:00"
         )
@@ -112,11 +109,6 @@ class TestListHeldPlanClaims:
     def test_per_claim_degradation_orders_known_timestamps_around_unknown(
         self, tmp_path, monkeypatch
     ):
-        """A THIRD claim with its own known `claimed_at`, earlier than
-        `plan-z`'s, still sorts ahead of both -- the unknown-timestamp claim
-        (`plan-a`) sorts LAST regardless of its name, proving the ordering is
-        per-claim (keyed on each claim's own evidence) rather than a
-        set-wide degrade-to-name-order fallback."""
         sessions_dir = _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
         _write_claim(
@@ -216,10 +208,6 @@ class TestResolveClaimedPlanPathUnchanged:
     ):
         sessions_dir = _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
-        # Tier (a) names one of several held claims; it must win outright over
-        # tier (b)'s earliest-claimed_at pick. This is the precedence the
-        # backing check deliberately does NOT disturb: it gates whether tier
-        # (a) may answer, never which rung outranks the other.
         _write_claim(
             sessions_dir, "2026-08-10-plan-b", "me-sid", "2026-08-10T10:00:00+00:00"
         )
@@ -240,10 +228,6 @@ class TestResolveClaimedPlanPathUnchanged:
     def test_tier_a_pointer_without_backing_claim_is_ignored(
         self, tmp_path, monkeypatch
     ):
-        """The released-plan case (doe-claude-em memo, 2026-08-10): the claim
-        was released, the shape pointer was not, so tier (a) named a shipped
-        plan and every consumer of this resolver believed it active. An
-        unbacked pointer must fall through to tier (b)."""
         sessions_dir = _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
         _write_claim(
@@ -263,9 +247,6 @@ class TestResolveClaimedPlanPathUnchanged:
     def test_tier_a_pointer_with_no_claims_at_all_returns_none(
         self, tmp_path, monkeypatch
     ):
-        """The died-mid-plan case: a shape file outlived every claim its
-        session held. Nothing unwinds that pointer, so the resolver must not
-        report a plan as active on the strength of it alone."""
         _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
         monkeypatch.setattr(
@@ -294,16 +275,6 @@ class TestResolveClaimedPlanPathUnchanged:
 
 
 class TestArchiveAwareSlugResolution:
-    """A plan claim records a slug, never a location, and nothing releases it
-    when the plan file moves. `fleet.archive_completed_plans` archives on
-    terminal status ALONE, so a session can hold a live claim on a plan that
-    has been git-mv'd to `archive/specs/<YYYY-MM>/` underneath it.
-
-    Measured on this repo 2026-09-01, before the fix: 44 of 79 plan claims
-    named a `docs/plans/` path with no file behind it; 34 were real plans in
-    `archive/specs/`. Downstream, `baton_assemble` stamped `governing_plan`
-    from that value, so batons carried edges to nothing.
-    """
 
     def _repo(self, tmp_path: Path, monkeypatch) -> Path:
         repo = tmp_path / "repo"
@@ -327,7 +298,6 @@ class TestArchiveAwareSlugResolution:
         )
 
     def test_archive_specs_wins_over_archive_completed(self, tmp_path, monkeypatch):
-        """Resolution order is the tuple's order, not filesystem order."""
         repo = self._repo(tmp_path, monkeypatch)
         for rel in ("archive/specs/2026-08", "archive/completed/2026-07"):
             (repo / rel).mkdir(parents=True)
@@ -346,9 +316,6 @@ class TestArchiveAwareSlugResolution:
         assert claimed_plan._resolve_plan_slug_path(str(repo), "p") == "docs/plans/p.md"
 
     def test_archive_handoffs_is_never_searched(self, tmp_path, monkeypatch):
-        """A plan slug and a handoff basename collide often (7 of this repo's
-        claimed slugs also name a file under `archive/handoffs`). Searching it
-        would hand back a HANDOFF as the session's claimed PLAN."""
         repo = self._repo(tmp_path, monkeypatch)
         dest = repo / "archive" / "handoffs" / "2026-08"
         dest.mkdir(parents=True)
@@ -356,8 +323,6 @@ class TestArchiveAwareSlugResolution:
         assert claimed_plan._resolve_plan_slug_path(str(repo), "p") == "docs/plans/p.md"
 
     def test_unresolvable_slug_falls_back_to_the_live_path(self, tmp_path, monkeypatch):
-        """Never None: the contract is a repo-relative string, always. Deciding
-        what an unresolvable claim MEANS is the caller's job."""
         repo = self._repo(tmp_path, monkeypatch)
         assert (
             claimed_plan._resolve_plan_slug_path(str(repo), "nowhere")
@@ -371,7 +336,6 @@ class TestArchiveAwareSlugResolution:
     def test_held_claim_on_an_archived_plan_reports_the_archive_path(
         self, tmp_path, monkeypatch
     ):
-        """End to end through the enumeration, not just the helper."""
         sessions_dir = _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
         repo = self._repo(tmp_path, monkeypatch)
@@ -387,10 +351,6 @@ class TestArchiveAwareSlugResolution:
         assert held == [("archive/specs/2026-08/2026-08-01-shipped.md", "2026-08-01T10:00:00+00:00")]
 
     def test_shape_pointer_still_backs_an_archived_claim(self, tmp_path, monkeypatch):
-        """`_backed_by_claim` compares on the SLUG. The shape pointer is frozen
-        at claim time and always says `docs/plans/`; tier (b) now says
-        `archive/specs/`. A full-path comparison would call every archived
-        plan's pointer unbacked and silently demote tier (a)."""
         assert claimed_plan._backed_by_claim(
             "docs/plans/p.md", [("archive/specs/2026-08/p.md", None)]
         )

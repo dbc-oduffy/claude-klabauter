@@ -1,17 +1,3 @@
-"""Tests for coordinator_core.hooks.nudge_unrouted_sizing.
-
-Covers the incident replay (a resolved, unblocked sizing route the EM narrated but never
-entered), both hard judgment-halt exemptions (an OPEN appetite fork —
-`appetite_exceeded` in detents with `fork` still null — and pm-decision/xl_exit-null),
-room-invocation suppression for both room shapes (Skill invocation for plan/spec-dispatch,
-dispatched-agents.txt for dispatch), and the never-raise invariant across every failure path.
-
-Also covers `seam: plan->execute-plan` (second seam): an execution-authorized plan
-narrated-and-abandoned before `coordinator:execute-plan` was invoked. Its own boundary
-test suite lives near the bottom of this file, under the "seam: plan->execute-plan"
-banner — the PM-gate boundary (no `execution_authorized_by` -> never fire, regardless
-of status) is asserted first and explicitly, per the dispatch brief's ordering.
-"""
 
 from __future__ import annotations
 
@@ -29,17 +15,8 @@ from coordinator_core.session.scope import _TOUCH_RECORD_FILENAME
 from coordinator_core.session.touch_record import append_event
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Real git spawn is load-bearing: the nudge reads real touched-file/dirty
-# state via git to decide whether the narrated route was ever entered; the
-# repo fixture seeds per-test commit history that must not leak across
-# tests, so it stays per-test rather than module-scoped.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
-# ---------------------------------------------------------------------------
-# Fixture content — the real 2026-07-31 incident sizing-object
-# (state/sizings/2026-07-31-quick-wrap-a-lightweight-end-of-work-cer.yaml, DoE-claude repo),
-# reproduced inline per dispatch brief instruction (do not read it at test time).
-# ---------------------------------------------------------------------------
 
 _INCIDENT_SIZING_YAML = """\
 schema: sizing-object
@@ -70,21 +47,6 @@ def _git_init(repo):
 
 
 def _write_touched(repo, session_id, *rel_paths):
-    """Record a touch the way the reader under test actually reads one.
-
-    Writes `touch-record.jsonl` through `touch_record.append_event`, NOT a
-    bare `touched.txt`. The compat union that read the sibling `touched.txt`
-    was deleted 2026-08-26 (`scope._read_touch_record_as_legacy_lines`, its
-    THE COMPAT UNION IS GONE section), and these fixtures were not moved with
-    it -- so every fire-asserting test in this file went silent against a
-    reader that saw no touches at all, while the never-fires tests kept
-    passing for the wrong reason. This module is `pytest.mark.cadence`,
-    outside the fast tier, which is how that sat unnoticed.
-
-    Going through the writer rather than hand-rolling a JSON line is the
-    point: a fixture that spells the on-disk dialect itself is a second
-    implementation of it, and drifts exactly the way the one above did.
-    """
     sink = repo / ".git" / "coordinator-sessions" / session_id / _TOUCH_RECORD_FILENAME
     for rel in rel_paths:
         append_event(sink, session_id=session_id, agent_id=None, verb="T", path=rel)
@@ -125,7 +87,6 @@ def _sizing_yaml(route="plan", status="sized", fork="null", xl_exit="null", dete
 
 
 def _transcript_with_skill(tmp_path, name, filename="transcript.jsonl"):
-    """Write a transcript whose last assistant turn invoked the Skill tool naming `name`."""
     path = tmp_path / filename
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(json.dumps({"type": "user", "message": {"content": "go"}}) + "\n")
@@ -166,11 +127,6 @@ def _payload(repo, session_id="sess-test", transcript_path=None, **over):
         "cwd": str(repo),
         "stop_hook_active": False,
         "transcript_path": transcript_path or str(repo / "no-transcript.jsonl"),
-        # Default forward-intent tell -- the text half is now a hard precondition
-        # (see module docstring's "Text half" section), and the overwhelming
-        # majority of pre-existing tests below are exercising state-machine logic
-        # unrelated to text, so they carry a generic live tell by default. Tests
-        # for the text half itself override this explicitly.
         "last_assistant_message": "taking it into plan now",
     }
     base.update(over)
@@ -227,11 +183,6 @@ def repo(tmp_path):
     return tmp_path
 
 
-# ---------------------------------------------------------------------------
-# 1. Incident replay
-# ---------------------------------------------------------------------------
-
-
 def test_incident_replay_fires(repo):
     session_id = "sess-incident"
     rel = "state/sizings/2026-07-31-quick-wrap-a-lightweight-end-of-work-cer.yaml"
@@ -243,11 +194,6 @@ def test_incident_replay_fires(repo):
     first_line = result["message"].splitlines()[0]
     assert "route: plan is resolved and unblocked" in first_line
     assert "invoke coordinator:plan now" in first_line
-
-
-# ---------------------------------------------------------------------------
-# 2 & 3. Hard judgment-halt exemptions
-# ---------------------------------------------------------------------------
 
 
 def test_open_appetite_fork_does_not_fire(repo):
@@ -274,12 +220,6 @@ def test_open_appetite_fork_does_not_fire(repo):
 
 
 def test_resolved_appetite_fork_does_not_fire(repo):
-    """`fork` non-null (the PM HAS picked) stays silent — deliberate asymmetry.
-
-    The halt is closed, so a fire would be defensible; silence keeps the
-    criteria change purely false-positive-removing and costs only a missed
-    nudge. Pinned so a later edit flipping it is a deliberate act, not a drift.
-    """
     session_id = "sess-fork-resolved"
     rel = "state/sizings/x.yaml"
     _write_sizing(
@@ -293,9 +233,6 @@ def test_resolved_appetite_fork_does_not_fire(repo):
 
 
 def test_appetite_conform_detent_still_fires(repo):
-    """The exemption must not swallow the normal case: `appetite_conform` means
-    no divergence was ever recorded, so a null `fork` there is genuinely 'no
-    halt', and the incident shape must still be caught."""
     session_id = "sess-conform"
     rel = "state/sizings/x.yaml"
     _write_sizing(
@@ -307,8 +244,6 @@ def test_appetite_conform_detent_still_fires(repo):
 
 
 def test_malformed_detents_does_not_fire(repo):
-    """A non-list `detents` cannot prove no fork is open -> silence, matching
-    every other hard-exemption read's fail-toward-silence posture."""
     session_id = "sess-detents-malformed"
     rel = "state/sizings/x.yaml"
     _write_sizing(
@@ -321,17 +256,7 @@ def test_malformed_detents_does_not_fire(repo):
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# AC12 — the post-size, M+ open-appetite-question halt (sibling to the
-# appetite-fork exemption above, keyed on `post_size_prompt_pending` instead
-# of `appetite_exceeded`).
-# ---------------------------------------------------------------------------
-
-
 def test_open_post_size_prompt_does_not_fire(repo):
-    """A sized M+ object carrying `post_size_prompt_pending` with `fork: null`
-    is a genuine open PM question, not an unentered route -- stays silent.
-    """
     session_id = "sess-post-size-prompt-open"
     rel = "state/sizings/x.yaml"
     _write_sizing(
@@ -345,11 +270,6 @@ def test_open_post_size_prompt_does_not_fire(repo):
 
 
 def test_missing_post_size_prompt_detent_still_fires(repo):
-    """An otherwise-identical object LACKING the detent has no halt open at
-    all -- the ordinary unentered-route incident, and this op must still
-    catch it. Pins that the new exemption is keyed on the positive detent,
-    never on `appetite` (or anything else) being absent.
-    """
     session_id = "sess-post-size-prompt-absent"
     rel = "state/sizings/x.yaml"
     _write_sizing(
@@ -369,11 +289,6 @@ def test_pm_decision_xl_exit_null_does_not_fire(repo):
     _write_touched(repo, session_id, rel)
     result = m.op(_payload(repo, session_id=session_id))
     assert result is None
-
-
-# ---------------------------------------------------------------------------
-# 4. Room already invoked (Skill path) -> silent
-# ---------------------------------------------------------------------------
 
 
 def test_room_invoked_via_skill_does_not_fire(repo):
@@ -406,11 +321,6 @@ def test_unrelated_skill_invocation_does_not_suppress(repo):
     assert result is not None
 
 
-# ---------------------------------------------------------------------------
-# 5. status: routed -> silent
-# ---------------------------------------------------------------------------
-
-
 def test_status_routed_does_not_fire(repo):
     session_id = "sess-routed"
     rel = "state/sizings/x.yaml"
@@ -421,12 +331,6 @@ def test_status_routed_does_not_fire(repo):
 
 
 def test_status_declined_does_not_fire(repo):
-    """2026-08-10 (docs/plans/2026-08-10-a-terminal-status-for-a-declined-sizing.md
-    § C2, AC2): a declined sizing must never be nagged as unrouted. No code
-    change was needed to satisfy this — `_matches_criteria` already gates on
-    `status == "sized"`, which a declined (formerly-routed) sizing never is —
-    this test pins that as an explicit regression rather than an accident of
-    the existing gate shape."""
     session_id = "sess-declined"
     rel = "state/sizings/x.yaml"
     _write_sizing(repo, rel, _sizing_yaml(status="declined"))
@@ -434,11 +338,6 @@ def test_status_declined_does_not_fire(repo):
     result = m.op(_payload(repo, session_id=session_id))
     assert result is None
     assert m._matches_criteria({"status": "declined", "route": "plan", "detents": [], "fork": None, "xl_exit": None}) is False
-
-
-# ---------------------------------------------------------------------------
-# 6. No sizing object written this session -> silent
-# ---------------------------------------------------------------------------
 
 
 def test_no_sizing_object_written_this_session_does_not_fire(repo):
@@ -452,11 +351,6 @@ def test_touched_file_present_but_no_sizing_entries_does_not_fire(repo):
     _write_touched(repo, session_id, "coordinator_core/hooks/foo.py")
     result = m.op(_payload(repo, session_id=session_id))
     assert result is None
-
-
-# ---------------------------------------------------------------------------
-# 7 & 8. Env switch, stop_hook_active, agent_id
-# ---------------------------------------------------------------------------
 
 
 def test_env_hatch_silences(repo, monkeypatch):
@@ -487,11 +381,6 @@ def test_agent_id_present_never_fires(repo):
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# 9. Never raises on malformed / absent inputs
-# ---------------------------------------------------------------------------
-
-
 def test_non_dict_payload_never_raises():
     assert m.op(["not", "a", "dict"]) is None
     assert m.op(None) is None
@@ -517,7 +406,6 @@ def test_absent_sizing_file_does_not_raise_and_does_not_fire(repo):
 
 
 def test_absent_state_dir_does_not_raise(tmp_path):
-    """No .git at all -> no repo root -> silent, never raises."""
     result = m.op(_payload(tmp_path, session_id="sess-no-git"))
     assert result is None
 
@@ -530,7 +418,7 @@ def test_unreadable_transcript_does_not_raise_and_fires(repo):
     result = m.op(
         _payload(repo, session_id=session_id, transcript_path=str(repo / "does-not-exist.jsonl"))
     )
-    assert result is not None  # unreadable transcript -> "no evidence found" -> fires
+    assert result is not None
 
 
 def test_non_dict_message_content_does_not_raise(repo):
@@ -545,11 +433,6 @@ def test_non_dict_message_content_does_not_raise(repo):
     assert result is not None
 
 
-# ---------------------------------------------------------------------------
-# 10. Fire-once
-# ---------------------------------------------------------------------------
-
-
 def test_fires_at_most_once_per_session(repo):
     session_id = "sess-once"
     rel = "state/sizings/x.yaml"
@@ -558,11 +441,6 @@ def test_fires_at_most_once_per_session(repo):
     payload = _payload(repo, session_id=session_id)
     assert m.op(payload) is not None
     assert m.op(payload) is None
-
-
-# ---------------------------------------------------------------------------
-# 11. Leading token names the concrete action
-# ---------------------------------------------------------------------------
 
 
 def test_leading_line_names_concrete_action_for_dispatch_route(repo):
@@ -575,11 +453,6 @@ def test_leading_line_names_concrete_action_for_dispatch_route(repo):
     first_line = result["message"].splitlines()[0]
     assert "[nudge] route: dispatch is resolved and unblocked" in first_line
     assert "dispatch it now" in first_line
-
-
-# ---------------------------------------------------------------------------
-# route: dispatch — room-invocation evidence is dispatched-agents.txt, not a Skill
-# ---------------------------------------------------------------------------
 
 
 def test_dispatch_route_suppressed_by_dispatched_agents_file(repo):
@@ -611,11 +484,6 @@ def test_dispatch_route_fires_when_dispatched_agents_file_empty(repo):
     assert result is not None
 
 
-# ---------------------------------------------------------------------------
-# Multiple sizing writes this session — the matching one wins
-# ---------------------------------------------------------------------------
-
-
 def test_first_matching_sizing_object_among_several_touched(repo):
     session_id = "sess-multi"
     routed_rel = "state/sizings/a-routed.yaml"
@@ -626,11 +494,6 @@ def test_first_matching_sizing_object_among_several_touched(repo):
     result = m.op(_payload(repo, session_id=session_id))
     assert result is not None
     assert unrouted_rel in result["message"]
-
-
-# ---------------------------------------------------------------------------
-# Worktree: `.git` FILE resolves the sentinel root
-# ---------------------------------------------------------------------------
 
 
 def test_worktree_style_git_file_resolves_sentinel_root(tmp_path):
@@ -653,15 +516,6 @@ def test_worktree_style_git_file_resolves_sentinel_root(tmp_path):
     assert sentinel.startswith(str(real_git))
 
 
-# ---------------------------------------------------------------------------
-# Text half — the OVERLAP case is the point: a message carrying both a
-# completion report AND a genuine forward-intent tell must still fire. There is
-# no suppressor to reorder against (see _text_trips_tell's own docstring) --
-# this is a plain positive-match assertion, written first per the dispatch
-# brief because it's the case worth catching.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "msg",
     [
@@ -678,10 +532,6 @@ def test_overlap_completion_report_with_forward_intent_still_fires(repo, msg):
     result = m.op(_payload(repo, session_id=session_id, last_assistant_message=msg))
     assert result is not None
 
-    # The fixture carries both a completion report AND a live forward-intent
-    # tell; _text_trips_tell has no suppressor to reorder against (see its own
-    # docstring), so this is a plain positive-match assertion, not a precedence
-    # check against a second branch.
     assert m._FORWARD_INTENT_RE.search(msg), "fixture must carry a live forward-intent tell"
     assert m._text_trips_tell(msg) is True
 
@@ -709,8 +559,6 @@ def test_pure_forward_intent_fires(repo):
 
 
 def test_state_present_but_no_tell_does_not_fire(repo):
-    """Proves the text half is load-bearing: a genuinely unblocked, unrouted
-    sizing-object alone is no longer enough without a live tell."""
     session_id = "sess-no-tell"
     rel = "state/sizings/x.yaml"
     _write_sizing(repo, rel, _sizing_yaml(route="plan"))
@@ -730,12 +578,6 @@ def test_empty_final_message_does_not_fire(repo):
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# EM-discriminator — house-authoritative subagent check via em-session-id.txt,
-# not `agent_id` alone.
-# ---------------------------------------------------------------------------
-
-
 def test_subagent_via_em_session_id_marker_does_not_fire(repo):
     session_id = "sess-em-marker-subagent"
     rel = "state/sizings/x.yaml"
@@ -748,12 +590,6 @@ def test_subagent_via_em_session_id_marker_does_not_fire(repo):
 
 def test_is_subagent_session_never_raises_on_unresolvable_repo_root():
     assert m._is_subagent_session("sess", "/nonexistent/path/does-not-exist-xyz") is False
-
-
-# ---------------------------------------------------------------------------
-# Legitimate-wait suppression — an in-flight dispatch is a correct wait, not
-# the failure this op targets.
-# ---------------------------------------------------------------------------
 
 
 def test_in_flight_dispatch_running_does_not_fire(repo):
@@ -771,8 +607,6 @@ def test_in_flight_dispatch_running_does_not_fire(repo):
 
 
 def test_in_flight_dispatch_unknown_state_does_not_fire(repo):
-    """An unreadable/absent subagent transcript resolves to "unknown", which
-    counts as in-flight (fail toward waiting), not toward a false all-clear."""
     session_id = "sess-inflight-unknown"
     rel = "state/sizings/x.yaml"
     _write_sizing(repo, rel, _sizing_yaml(route="plan"))
@@ -781,7 +615,6 @@ def test_in_flight_dispatch_unknown_state_does_not_fire(repo):
     transcript.write_text("{}\n", encoding="utf-8")
     now = int(time.time())
     _write_dispatched_agents(repo, session_id, f"agentidunknown\tsonnet\texecutor\t{now}\n")
-    # No subagent transcript written at all -> subagent_arrival_check reads "unknown".
     result = m.op(_payload(repo, session_id=session_id, transcript_path=str(transcript)))
     assert result is None
 
@@ -811,7 +644,7 @@ def test_in_flight_dispatch_aged_out_beyond_staleness_cap_does_not_suppress(repo
     _write_touched(repo, session_id, rel)
     transcript = repo / "parent-aged.jsonl"
     transcript.write_text("{}\n", encoding="utf-8")
-    stale_ts = int(time.time()) - (100 * 60)  # 100 minutes ago > the 90-minute cap
+    stale_ts = int(time.time()) - (100 * 60)
     _write_dispatched_agents(repo, session_id, f"agentidaged\tsonnet\texecutor\t{stale_ts}\n")
     _write_subagent_transcript(transcript, "agentidaged", [_assistant_running_record()])
     result = m.op(_payload(repo, session_id=session_id, transcript_path=str(transcript)))
@@ -830,8 +663,6 @@ def test_in_flight_check_never_raises_on_arrival_check_exception(repo, monkeypat
         raise RuntimeError("boom")
 
     monkeypatch.setattr(m, "_arrival_check", _raise)
-    # An arrival-check failure degrades that row to "unknown" -> in-flight ->
-    # suppressed, and must never raise past op()'s own boundary.
     result = m.op(_payload(repo, session_id=session_id))
     assert result is None
 
@@ -844,42 +675,27 @@ def test_dispatch_rows_never_raises_on_malformed_lines(repo):
     assert m._dispatch_rows(session_id, str(repo)) == []
 
 
-# ---------------------------------------------------------------------------
-# Corrected in-flight determination — `dispatched-agents.txt` is append-only and
-# carries no completion record, so a suppressor keyed on its mere non-emptiness
-# would go permanently silent after an EM's first dispatch of the session. The
-# three-tier resolution (arrived / running / unknown) below is what avoids that:
-# "arrived" never suppresses regardless of elapsed time; "running" suppresses
 # until the hard RUNTIME_TRIPWIRE_MAX_TRACK_MIN cap; "unknown" suppresses only
-# within the row's own per-model runtime-threshold window.
-# ---------------------------------------------------------------------------
 
 
 def test_unknown_state_within_model_window_suppresses(repo):
-    """A spawn inside its model's runtime threshold, with no resolvable arrival
-    state at all, still suppresses -- this is the safe over-suppression tier."""
     session_id = "sess-unknown-in-window"
     rel = "state/sizings/x.yaml"
     _write_sizing(repo, rel, _sizing_yaml(route="plan"))
     _write_touched(repo, session_id, rel)
-    recent_ts = int(time.time()) - (5 * 60)  # 5 min ago, well inside sonnet's 12-min default
+    recent_ts = int(time.time()) - (5 * 60)
     _write_dispatched_agents(repo, session_id, f"agentidwindow\tsonnet\texecutor\t{recent_ts}\n")
-    # No subagent transcript written -> arrival state resolves "unknown".
     result = m.op(_payload(repo, session_id=session_id))
     assert result is None
 
 
 def test_unknown_state_aged_past_model_threshold_fires(repo):
-    """The same row, once it clears its OWN per-model threshold (but still well
-    under the 90-min hard cap), stops suppressing and the nudge fires -- this is
-    the case the earlier (file-presence) brief got backwards."""
     session_id = "sess-unknown-past-window"
     rel = "state/sizings/x.yaml"
     _write_sizing(repo, rel, _sizing_yaml(route="plan"))
     _write_touched(repo, session_id, rel)
-    aged_ts = int(time.time()) - (15 * 60)  # 15 min ago > sonnet's 12-min default, < 90-min cap
+    aged_ts = int(time.time()) - (15 * 60)
     _write_dispatched_agents(repo, session_id, f"agentidpastwindow\tsonnet\texecutor\t{aged_ts}\n")
-    # No subagent transcript written -> arrival state resolves "unknown".
     result = m.op(_payload(repo, session_id=session_id))
     assert result is not None
 
@@ -895,7 +711,7 @@ def test_running_state_past_model_threshold_still_suppresses(repo):
     _write_touched(repo, session_id, rel)
     transcript = repo / "parent-running-past-window.jsonl"
     transcript.write_text("{}\n", encoding="utf-8")
-    aged_ts = int(time.time()) - (20 * 60)  # 20 min ago > sonnet's 12-min default, < 90-min cap
+    aged_ts = int(time.time()) - (20 * 60)
     _write_dispatched_agents(repo, session_id, f"agentidrunlong\tsonnet\texecutor\t{aged_ts}\n")
     _write_subagent_transcript(transcript, "agentidrunlong", [_assistant_running_record()])
     result = m.op(_payload(repo, session_id=session_id, transcript_path=str(transcript)))
@@ -920,8 +736,6 @@ def test_arrived_state_never_suppresses_regardless_of_window(repo):
 
 
 def test_malformed_row_alongside_valid_in_window_row_still_suppresses(repo):
-    """A malformed row must not abort the scan, and a valid in-window row
-    elsewhere in the same file must still suppress."""
     session_id = "sess-malformed-plus-valid"
     rel = "state/sizings/x.yaml"
     _write_sizing(repo, rel, _sizing_yaml(route="plan"))
@@ -972,24 +786,9 @@ def test_runtime_threshold_minutes_env_overridable(monkeypatch):
     assert m._runtime_threshold_minutes("sonnet") == 3
 
 
-# ---------------------------------------------------------------------------
-# F8 — `execute-plan` must never become a member of the SIZING LOBBY's own
-# routable set. Pin the boundary with a test: a red test is a boundary, a
-# docstring is a request. (Review: eng-director/the Director of Engineering F8.)
-#
-# Both of the following are true simultaneously, and this test asserts the
-# one that must never regress: the plan->execute-plan seam IS live (see the
 # "seam: plan->execute-plan" test section below) as its own SEPARATE
-# evaluator (`_find_plan_candidate` / `_plan_execution_authorized_and_active`
-# / `_execute_plan_invoked`), with its own state-read, its own criteria
-# function, and its own room-invocation-evidence function — it was never
 # folded into `_ROUTABLE_ROUTES`, and doing so would be a structural
 # regression: `_ROUTABLE_ROUTES` is the sizing-lobby's route allow-list read
-# off a `state/sizings/*.yaml` object's own `route` field, and `execute-plan`
-# is not, and never will be, a value that field can hold. The two facts
-# coexist because they describe different objects: a sizing-object's `route`
-# vs. a plan's `execution_authorized_by`/`status` frontmatter.
-# ---------------------------------------------------------------------------
 
 
 def test_execute_plan_is_never_a_routable_route():
@@ -997,25 +796,11 @@ def test_execute_plan_is_never_a_routable_route():
 
 
 def test_goal_setting_is_never_a_routable_route():
-    # AC8 (2026-08-07 sizing-ladder-xxl-notch-and-goal-setting-route plan,
-    # C3/C5): `goal-setting` is the sixth notch's terminal room, and it is
     # deliberately excluded from `_ROUTABLE_ROUTES` -- `coordinator:goal-
     # setting` is PM-GATED (DoE-claude coordinator/skills/goal-setting/
     # SKILL.md frontmatter `description: "PM-GATED. ..."`), so nudging an EM
-    # to invoke it unilaterally would nudge them toward something they
-    # cannot do without the PM -- the same reason `pm-decision` and `shape`
-    # are excluded. A bare assertion without this reason would read as
     # arbitrary and invite a later "fix" widening `_ROUTABLE_ROUTES` to
-    # include it.
     assert "goal-setting" not in m._ROUTABLE_ROUTES
-
-
-# ---------------------------------------------------------------------------
-# F3 — curly-apostrophe normalization, symmetric it/this object, and a widened
-# verb set. Fixtures authored FIRST from realistic phrasings the old regex
-# missed (11 of 12 probed), per the dispatch brief.
-# (Review: eng-director/the Director of Engineering F3.)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -1036,14 +821,6 @@ def test_goal_setting_is_never_a_routable_route():
 )
 def test_widened_forward_intent_phrasings_trip_the_tell(msg):
     assert m._text_trips_tell(msg) is True
-
-
-# ---------------------------------------------------------------------------
-# F4 — the tell must co-occur with a route referent in the same sentence. The
-# three probed legitimate PM-question turn-ends below must NOT fire, even
-# though each carries a forward-intent tell somewhere in the message.
-# (Review: eng-director/the Director of Engineering F4.)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -1069,14 +846,7 @@ def test_route_agnostic_forward_intent_does_not_fire_end_to_end(repo):
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# seam: plan->execute-plan — an EM narrating resuming/continuing an
-# already-authorized plan's execution, then stopping without invoking
 # `coordinator:execute-plan`. THE CRITICAL BOUNDARY: never fires when
-# `execution_authorized_by` is absent, regardless of `status` -- that is the
-# pre-execute PM authorization gate doing its job. Boundary tests written
-# first, per the dispatch brief.
-# ---------------------------------------------------------------------------
 
 _PLAN_SLUG = "2026-01-01-a-test-plan"
 _PLAN_REL = f"docs/plans/{_PLAN_SLUG}.md"
@@ -1106,7 +876,6 @@ def _transcript_with_execute_plan_skill(tmp_path, filename="transcript.jsonl"):
 
 
 # 1a/1b. THE PM-GATE BOUNDARY -- no execution_authorized_by -> never fire,
-# whatever the status.
 
 
 def test_plan_no_execution_authorized_by_status_reviewed_does_not_fire(repo):
@@ -1119,17 +888,12 @@ def test_plan_no_execution_authorized_by_status_reviewed_does_not_fire(repo):
 
 
 def test_plan_no_execution_authorized_by_status_approved_does_not_fire(repo):
-    """Same plan, now at status: approved, STILL no stamp -- still silent. This
-    pins the PM-gate boundary explicitly: status alone is never sufficient."""
     session_id = "sess-plan-no-auth-approved"
     _write_plan(repo, _PLAN_REL, _plan_frontmatter(status="approved", execution_authorized_by=None))
     _write_touched(repo, session_id, _PLAN_REL)
     msg = f"Taking this into coordinator:execute-plan now for {_PLAN_SLUG}."
     result = m.op(_payload(repo, session_id=session_id, last_assistant_message=msg))
     assert result is None
-
-
-# 2. Authorized + executing + a forward-intent tell naming execute-plan -> FIRES.
 
 
 def test_plan_authorized_executing_with_tell_fires(repo):
@@ -1144,9 +908,6 @@ def test_plan_authorized_executing_with_tell_fires(repo):
     assert "coordinator:execute-plan" in result["message"]
 
 
-# 3. Authorized + status: shipped (unknown-status hazard) -> does NOT fire.
-
-
 def test_plan_authorized_status_shipped_does_not_fire(repo):
     session_id = "sess-plan-shipped"
     _write_plan(repo, _PLAN_REL, _plan_frontmatter(status="shipped"))
@@ -1155,9 +916,6 @@ def test_plan_authorized_status_shipped_does_not_fire(repo):
     result = m.op(_payload(repo, session_id=session_id, last_assistant_message=msg))
     assert result is None
     assert m._plan_execution_authorized_and_active({"status": "shipped", "execution_authorized_by": "x"}) is False
-
-
-# 4. Each terminal status -> does NOT fire.
 
 
 @pytest.mark.parametrize(
@@ -1172,9 +930,6 @@ def test_plan_terminal_statuses_do_not_fire(repo, status):
     assert result is None
 
 
-# 5. Authorized + executing but NO tell -> does NOT fire (text half load-bearing here too).
-
-
 def test_plan_authorized_executing_no_tell_does_not_fire(repo):
     session_id = "sess-plan-no-tell"
     _write_plan(repo, _PLAN_REL, _plan_frontmatter(status="executing"))
@@ -1184,9 +939,6 @@ def test_plan_authorized_executing_no_tell_does_not_fire(repo):
     assert result is None
 
 
-# 6. Authorized + tell present but names no route referent -> does NOT fire.
-
-
 def test_plan_authorized_tell_without_route_referent_does_not_fire(repo):
     session_id = "sess-plan-no-referent"
     _write_plan(repo, _PLAN_REL, _plan_frontmatter(status="executing"))
@@ -1194,10 +946,6 @@ def test_plan_authorized_tell_without_route_referent_does_not_fire(repo):
     msg = "Next I'll need your call on whether shipped belongs in the enum."
     result = m.op(_payload(repo, session_id=session_id, last_assistant_message=msg))
     assert result is None
-
-
-# 7. Malformed/absent plan frontmatter, unreadable file, no plans touched ->
-# does NOT fire, does NOT raise.
 
 
 def test_plan_malformed_frontmatter_does_not_raise_and_does_not_fire(repo):
@@ -1230,21 +978,10 @@ def test_plan_absent_file_does_not_raise_and_does_not_fire(repo):
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# Verb-prefixed line — Review: code-reviewer (Finding 2), repointed 2026-09-05
-# onto the live dialect. The concern is unchanged and still live: the reader
-# re-renders each jsonl event as `T <ts> <path>` and `_session_touched_lines`
-# strips the verb/timestamp back off (via `parse_touch_event`) so the anchored
 # `_SIZING_PATH_RE`/`_PLAN_PATH_RE` match the path field alone. What changed is
-# only where the event comes from — `touched.txt` is no longer read at all, so
-# a fixture writing one asserted nothing.
-# ---------------------------------------------------------------------------
 
 
 def _write_touched_event_lines(repo, session_id, *rel_paths):
-    """Same writer as `_write_touched` -- kept under its own name because the
-    two tests below are about the verb-stripping leg specifically, not about
-    the touch record generally."""
     _write_touched(repo, session_id, *rel_paths)
 
 
@@ -1275,10 +1012,6 @@ def test_no_plans_touched_this_session_does_not_fire(repo):
     assert result is None
 
 
-# Room-invocation suppression: coordinator:execute-plan already invoked ->
-# silent, even with a live tell and no other suppressor tripped.
-
-
 def test_plan_execute_plan_already_invoked_does_not_fire(repo):
     session_id = "sess-plan-invoked"
     _write_plan(repo, _PLAN_REL, _plan_frontmatter(status="executing"))
@@ -1291,9 +1024,6 @@ def test_plan_execute_plan_already_invoked_does_not_fire(repo):
     assert result is None
 
 
-# Plan slug alone (no skill/route noun) still counts as a route referent.
-
-
 def test_plan_tell_naming_only_the_plan_slug_fires(repo):
     session_id = "sess-plan-slug-referent"
     _write_plan(repo, _PLAN_REL, _plan_frontmatter(status="executing"))
@@ -1301,11 +1031,6 @@ def test_plan_tell_naming_only_the_plan_slug_fires(repo):
     msg = f"Next I'll resume {_PLAN_SLUG}."
     result = m.op(_payload(repo, session_id=session_id, last_assistant_message=msg))
     assert result is not None
-
-
-# EM-only, env hatch, stop_hook_active, subagent, and in-flight-dispatch
-# guards are shared with the sizing->room seam and are proven generically
-# above; this seam-specific case confirms they still apply on the plan path.
 
 
 def test_plan_agent_id_present_never_fires(repo):
@@ -1328,10 +1053,6 @@ def test_plan_fires_at_most_once_per_session(repo):
 
 
 def test_sizing_and_plan_seams_share_one_fire_once_sentinel(repo):
-    """Both a resolved-unrouted sizing-object AND an execution-authorized plan
-    were touched this session; the sizing seam is checked first and fires,
-    claiming the SHARED sentinel -- a fresh op() call for the same session
-    fires nothing more, proving the two seams do not hold independent slots."""
     session_id = "sess-shared-sentinel"
     sizing_rel = "state/sizings/x.yaml"
     _write_sizing(repo, sizing_rel, _sizing_yaml(route="plan"))

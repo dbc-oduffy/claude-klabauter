@@ -32,7 +32,6 @@ from coordinator_core.ops.emit.context import EmitContext
 
 from ._shared import normalize_frontmatter
 
-# The 2-value DecisionGuideLifecycle enum (bash:2043). Order-insensitive membership set.
 _DECISION_GUIDE_STATUS_ENUM = frozenset({"active", "archived"})
 
 _MALFORMED_REASON = (
@@ -63,14 +62,12 @@ def _query_decision_guide_records(ctx: EmitContext) -> list[dict]:
 
 
 def _or_null(value):
-    """Mirror jq // operator — return value unless null/false."""
     if value is None or value is False:
         return None
     return value
 
 
 def _valid(fm: dict) -> bool:
-    """Record passes when title/created/status are strings AND status ∈ enum (bash:2039-2044)."""
     return (
         isinstance(fm.get("title"), str)
         and isinstance(fm.get("created"), str)
@@ -80,11 +77,6 @@ def _valid(fm: dict) -> bool:
 
 
 def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
-    """Build (records, malformed) for the ``decision_guides`` envelope key.
-
-    records — valid DecisionGuideSummary dicts; malformed — quarantine dicts. decision-guide
-    carries no emit-DERIVED fields (single-axis; no LMA / deliverable_status).
-    """
     raw = _query_decision_guide_records(ctx)
 
     records: list[dict] = []
@@ -118,7 +110,6 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
                 {
                     "path": path,
                     "reason": _MALFORMED_REASON,
-                    # jq ``$fm | keys`` returns sorted keys (bash:2082).
                     "frontmatter_keys": sorted(fm.keys()),
                 }
             )

@@ -1,12 +1,3 @@
-"""Behavioral tests for `wiki_changelog_prose_advisory.py`
-(docs/plans/2026-09-07-doctrine-enforcement-surfaces.md, row C5).
-
-Covers: scope-root discrimination (fires only inside the write's OWN
-resolved repo's docs/wiki/, never a bare path-segment match), delta-scoping
-(a matching phrase outside the changed span never fires), each of the three
-stdlib-`re` detectors, the filename-substring exemption, and fail-open on an
-unresolvable repo root / malformed payload.
-"""
 
 from __future__ import annotations
 
@@ -141,10 +132,6 @@ def test_fails_open_when_repo_root_unresolvable(tmp_path):
 
 
 def test_scope_root_is_per_repo_not_bare_segment_match(tmp_path, monkeypatch):
-    """A path containing a `docs/wiki/` segment that does NOT sit under the
-    write's OWN resolved repo root must never fire -- the scope-root
-    discrimination this row's body requires (eng-director F3), distinct
-    from a bare substring/segment match that would arm fleet-wide."""
     repo_a = tmp_path / "repo_a"
     (repo_a / ".git").mkdir(parents=True)
     (repo_a / "docs" / "wiki").mkdir(parents=True)

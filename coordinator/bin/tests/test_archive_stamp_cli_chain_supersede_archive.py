@@ -1,24 +1,3 @@
-"""test_archive_stamp_cli_chain_supersede_archive.py — argv-parsing unit test
-for `archive-stamp-cli chain-archive-handoff` / `supersede-archive-handoff`
-(C8, cockpit §6.2 — the two CLI-reachability gaps: 'chain' and
-supersede-with-continued_into/exclude were reachable in-process via
-handoff.archive_transition but had no archive-stamp-cli verb).
-
-Same idiom as test_archive_stamp_cli_ship_handoff.py: monkeypatches the
-`_import_module()` seam with a recording stand-in, so this suite asserts
-ONLY the argv -> cs_chain_archive_handoff/cs_supersede_archive_handoff
-call-shape translation, never the engine behind it (that is
-coordinator_core/test_archive_stamp.py's TestChainArchiveHandoff /
-TestSupersedeArchiveHandoff job, and coordinator_core/ops/tests/
-test_handoff_archive_transition.py's).
-
-Run:
-    pytest coordinator/bin/tests/test_archive_stamp_cli_chain_supersede_archive.py -v
-
-Renamed from the hyphenated, pytest-uncollectable
-test-archive-stamp-cli-chain-supersede-archive.py to this test_* filename;
-test bodies unchanged (already unittest.TestCase).
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -45,8 +24,6 @@ _cli = _load_cli_module()
 
 
 class _RecordingMod:
-    """Stand-in for coordinator_core.archive_stamp — records the exact
-    kwargs each new verb's underlying function was called with."""
 
     def __init__(self):
         self.chain_calls: list[dict] = []

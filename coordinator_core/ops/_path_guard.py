@@ -79,24 +79,10 @@ from typing import Iterable, Optional
 
 from coordinator_core.write_guards._case_fold_path import strip_extended_length_prefix
 
-#: Allowlist for a single path segment — no separators, no bare traversal.
-#: Note: the regex alone admits the literal string ".." (it contains only
-#: dots), which is why the explicit ``value not in (".", "..")`` check below
-#: is required — the reference implementation's regex-only guard was correct
-#: only because of how it was subsequently used (single-segment join with a
-#: fixed suffix); this shared helper does not rely on that incidental safety.
 _SAFE_ID = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def safe_id(value: str) -> bool:
-    """Return True if ``value`` is a safe single path segment.
-
-    A safe id contains only alphanumerics, ``.``, ``_``, ``-`` (no path
-    separators of any kind) AND is not the bare traversal token ``"."`` or
-    ``".."``. Use this to validate a caller-supplied id/filename-segment
-    BEFORE interpolating it into a path, so a traversal value is rejected
-    outright rather than resolved.
-    """
     return bool(_SAFE_ID.match(value)) and value not in (".", "..")
 
 
@@ -146,8 +132,6 @@ def contained_path(candidate: Path, allowed_roots: Iterable[Path]) -> Optional[P
         print(f"skip: contained_path: candidate.resolve() failed: {sys.exc_info()[1]}", file=sys.stderr)
         return None
     candidate_for_compare = strip_extended_length_prefix(str(resolved))
-    # Hoisted out of the loop;
-    # was rebuilt from the same fixed string on every iteration.
     candidate_compare_path = Path(candidate_for_compare)
     for root in allowed_roots:
         try:
@@ -160,6 +144,5 @@ def contained_path(candidate: Path, allowed_roots: Iterable[Path]) -> Optional[P
             candidate_compare_path.relative_to(Path(root_for_compare))
             return resolved
         except ValueError:
-            # candidate is not under this root; try the next candidate root
             continue
     return None

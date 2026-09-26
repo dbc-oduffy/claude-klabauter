@@ -43,11 +43,7 @@ import pytest
 from coordinator_core.write_guards import block_unauthorized_claude_md_write as guard
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Declared, not excused: this file spawns a real process (git/python) because
-# the property under test is that binary's own behaviour, which no fixture
 # stands in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
-# residue and is explicitly not the route for a new file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -78,9 +74,6 @@ def _clear_override_env(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_grant(monkeypatch):
-    """Default fixture state: calling session holds NO live grant. Tests
-    that need a granted state override this explicitly.
-    """
     monkeypatch.setattr(guard, "check_claude_md_write_grant", lambda cwd: (False, None))
 
 
@@ -94,11 +87,6 @@ def _deny(monkeypatch, file_path, **kw):
 def _allow(monkeypatch, file_path, **kw):
     result = guard.check(_payload(file_path, **kw))
     assert result is None, f"expected ALLOW for: {file_path!r}, got {result!r}"
-
-
-# ---------------------------------------------------------------------------
-# AC8 -- subagent-originated payload (agent_id present) is denied.
-# ---------------------------------------------------------------------------
 
 
 class TestSubagentOriginatedDenied:
@@ -131,25 +119,7 @@ class TestSubagentOriginatedDenied:
         _allow(monkeypatch, "CLAUDE.md", tool_name="Read")
 
 
-# ---------------------------------------------------------------------------
-# AC8 regression pin -- an EM-acquired grant, written via the DEFAULT
-# env-driven acquisition path (``write_claude_md_write_grant`` with no
 # explicit ``session_id``), still authorizes a SUBAGENT-shaped payload on
-# this guard's real ``check_claude_md_write_grant`` predicate -- not the
-# module-monkeypatched shortcut every other test in this file uses. This is
-# the inheritance property the whole plan exists to preserve: EM and
-# dispatched-subagent turns resolve to the SAME session id, so the grant the
-# EM wrote is visible to the guard evaluation a subagent's own tool call
-# triggers, with no separate wiring. Paired with the identical payload
-# absent any grant, asserting DENY, so the allow leg cannot pass for the
-# wrong reason (a mis-shaped payload silently tripping an earlier allow
-# branch). ``test_subagent_write_allowed_with_live_grant`` above already
-# pins the ALLOW shape against a directly-monkeypatched
-# ``check_claude_md_write_grant`` -- what it does NOT cover is the real
-# acquisition path (``write_claude_md_write_grant`` -> disk ->
-# ``check_claude_md_write_grant``) nor the paired no-grant negative; this
-# class adds exactly that missing half.
-# ---------------------------------------------------------------------------
 
 
 def _make_repo(tmp_path):
@@ -177,10 +147,6 @@ def _live_session(repo, sid):
 
 
 class TestSubagentInheritsEmAcquiredGrant:
-    """AC8, respecified per Review Finding 1 off ``TestSubagentResolvability``
-    (module-level, green regardless of this guard) onto this guard's own
-    ``check()`` entrypoint -- the only surface where the acquisition-gate
-    regression this pin exists to catch could actually be observed."""
 
     def test_em_acquired_grant_authorizes_subagent_write(self, tmp_path, monkeypatch):
         from coordinator_core.session import claude_md_grant as cmg
@@ -189,16 +155,11 @@ class TestSubagentInheritsEmAcquiredGrant:
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "ac8-inherit-session")
         _live_session(repo, "ac8-inherit-session")
 
-        # EM-inline turn: default env-driven acquisition, no explicit
-        # session_id -- the exact call shape a granting EM makes.
         granted = cmg.write_claude_md_write_grant(
             "pm", "PM said go ahead this session", cwd=str(repo)
         )
         assert granted is True
 
-        # Restore the REAL predicate for this test only -- every other test
-        # in this file relies on the autouse ``_no_grant`` monkeypatch, but
-        # AC8 is specifically about the real acquisition -> resolution path.
         monkeypatch.setattr(guard, "check_claude_md_write_grant", cmg.check_claude_md_write_grant)
 
         target = repo / "CLAUDE.md"
@@ -213,9 +174,6 @@ class TestSubagentInheritsEmAcquiredGrant:
         assert result is None, f"expected ALLOW (inherited EM grant), got {result!r}"
 
     def test_subagent_write_denied_absent_the_grant(self, tmp_path, monkeypatch):
-        """Paired negative: identical payload, identical session/repo
-        shape, but NO grant written -- proves the allow above is not a
-        mis-shaped payload silently tripping an earlier allow leg."""
         from coordinator_core.session import claude_md_grant as cmg
 
         repo = _make_repo(tmp_path)
@@ -237,20 +195,7 @@ class TestSubagentInheritsEmAcquiredGrant:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-# ---------------------------------------------------------------------------
-# AC9 -- real scope equals stated scope, per path class. Reuses the
-# check_blanket_git_add shape: pin DENY for every claimed-covered class and
-# ALLOW for a representative not-covered class.
-# ---------------------------------------------------------------------------
-
-
 class TestRealScopeEqualsStatedScope:
-    """Every bullet in the module docstring's is_claude_md_class-derived
-    class list, pinned by assertion -- not merely described in prose. This
-    is the check_blanket_git_add defect (doctrine claimed a wider deny
-    scope than the code enforced) in test form, per the guard's own
-    negative-spec.
-    """
 
     @pytest.mark.parametrize(
         "file_path",
@@ -266,17 +211,6 @@ class TestRealScopeEqualsStatedScope:
         _deny(monkeypatch, file_path)
 
     def test_self_referential_scope_doe_claude_own_repo_root_claude_md_denied(self, monkeypatch):
-        """Self-referential scope, resolved deliberately (see module
-        docstring) -- this guard's own authoring repo's root CLAUDE.md is
-        NOT excluded. Excluding it would reproduce the exact
-        stated-vs-real scope gap this guard's negative-spec calls out.
-
-        This is a SCOPE test (is the path matched as CLAUDE.md-class at
-        all), not a direction test -- the growth/shrink comparison is
-        pinned separately (``TestDirectionalDenyGrowthOnly``). Pin growth
-        True here so this scope assertion does not depend on this dev
-        machine's real DoE-claude checkout's CLAUDE.md byte content.
-        """
         monkeypatch.setattr(guard, "_is_growth", lambda *a, **kw: True)
         _deny(monkeypatch, "CLAUDE.md", cwd="/Users/alice/X/DoE-claude")
 
@@ -294,15 +228,7 @@ class TestRealScopeEqualsStatedScope:
         _allow(monkeypatch, file_path)
 
     def test_backslash_path_still_matched(self, monkeypatch):
-        """Windows-style separators normalize before the class check --
-        stated scope must not silently narrow on one platform."""
         _deny(monkeypatch, "coordinator\\CLAUDE.md")
-
-
-# ---------------------------------------------------------------------------
-# AC10 -- the emitted deny text names a concrete alternative and the
-# override path, asserted against the rendered string.
-# ---------------------------------------------------------------------------
 
 
 class TestDenyTextNamesAlternativeAndOverride:
@@ -314,22 +240,12 @@ class TestDenyTextNamesAlternativeAndOverride:
         assert "wiki" in reason.lower()
 
     def test_deny_text_does_not_presuppose_wiki_as_default_alternative(self, monkeypatch):
-        """Regression for the inversion caught in review-integration: the
-        deny text must never read as presupposing wiki-folding as the
-        default fold target -- it names the full hierarchy instead.
-        """
         result = guard.check(_payload("CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "document-bloat-trim.md names the default fold target" not in reason
         assert "default fold target" not in reason
 
     def test_deny_text_no_longer_names_the_grant_cli_override_path(self, monkeypatch):
-        """C4(b), docs/plans/2026-08-13-guard-messages-stop-handing-agents-
-        the-keys.md: the resolved ``grant pm`` invocation is DELETED from
-        the deny text -- a dispatched subagent is, by construction, the one
-        agent forbidden to run it, so rendering it here was a dead affordance
-        the EM ruling removes rather than the thing that made the deny
-        complete."""
         result = guard.check(_payload("CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "coordinator_core.session.claude_md_grant grant pm" not in reason
@@ -337,9 +253,6 @@ class TestDenyTextNamesAlternativeAndOverride:
     def test_deny_text_no_longer_attributes_a_grant_command_to_the_em(
         self, monkeypatch
     ):
-        """The "Unblock (EM runs this, not you):" line and the grant
-        command/precondition beneath it are gone -- "Report BLOCKED to your
-        EM instead" is now the whole remediation; see C4(b)."""
         result = guard.check(_payload("CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "Report BLOCKED to your EM" in reason
@@ -362,9 +275,6 @@ class TestDenyTextNamesAlternativeAndOverride:
         assert "coordinator/CLAUDE.md" in reason
 
     def test_grant_cli_interpolates_the_resolved_claude_klabauter_root(self, monkeypatch):
-        """The resolved-root branch. Asserting only that the module path appears
-        would pass identically on the fallback branch, which is how the original
-        dead-end shipped unnoticed -- pin the interpolated root itself."""
         import coordinator_core.engine_root as mr
 
         monkeypatch.setattr(mr, "coordinator_engine_root", lambda: "/opt/some/claude-klabauter")
@@ -375,7 +285,6 @@ class TestDenyTextNamesAlternativeAndOverride:
         )
 
     def test_grant_cli_falls_back_when_root_unresolvable(self, monkeypatch):
-        """RuntimeError is the resolver's one documented failure."""
         import coordinator_core.engine_root as mr
 
         def _raise():
@@ -393,9 +302,6 @@ class TestDenyTextNamesAlternativeAndOverride:
     def test_grant_cli_never_propagates_an_unexpected_resolver_error(
         self, monkeypatch, capsys
     ):
-        """A raise here would convert a clean block into a crashed PreToolUse
-        guard. An undocumented failure -- a rename, a signature drift -- still
-        falls back, but must say so rather than passing for normal operation."""
         import coordinator_core.engine_root as mr
 
         def _raise():
@@ -412,22 +318,12 @@ class TestDenyTextNamesAlternativeAndOverride:
     def test_grant_cli_falls_back_on_a_shell_unsafe_root(
         self, monkeypatch, hostile_root
     ):
-        """The rendered command is pasted verbatim into a shell. A root that
-        would break out of the double quotes yields a remediation that silently
-        does the wrong thing -- the same defect class this resolution fixes."""
         import coordinator_core.engine_root as mr
 
         monkeypatch.setattr(mr, "coordinator_engine_root", lambda: hostile_root)
         assert guard._grant_cli_invocation() == guard._GRANT_CLI_INVOCATION_FALLBACK
 
     def test_deny_text_never_dead_ends(self, monkeypatch):
-        """Nothing dead-ends -- state why, and give the reader a concrete
-        actionable path (binding, design-as-offers). Per the C4(b) ruling
-        (docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-
-        keys.md), the alternative IS "report BLOCKED to your EM" -- rung-1
-        familiar, no unfamiliar artifact, no inspection needed -- not a
-        rendered grant-CLI invocation or env-override name. AC7 is
-        discharged by the route, not by a runnable command in the text."""
         result = guard.check(_payload("CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "Report BLOCKED to your EM" in reason
@@ -459,25 +355,10 @@ class TestDenyTextNamesAlternativeAndOverride:
         )
 
     def test_deny_text_names_the_structural_reason(self, monkeypatch):
-        """AC6: the deny text names the governed surface it was trying to
-        write, and the structural reason (a property of every subagent on
-        every dispatch, not a judgment on this agent's work)."""
         result = guard.check(_payload("coordinator/CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "coordinator/CLAUDE.md" in reason
         assert "needs a live CLAUDE.md write grant for this session" in reason
-
-
-# ---------------------------------------------------------------------------
-# Directional deny (guard-class census RESHAPE, C18): deny GROWTH only,
-# advise (do not block) on shrink/size-neutral. Both directions pinned
-# against a REAL on-disk file -- Write/Edit go through ``_is_growth``'s own
-# read of ``abs_file_path``, so a payload targeting a nonexistent path
-# always falls into the "cannot determine" -> deny branch (already covered
-# by every test above, all of which target a file that does not exist on
-# disk). These tests use ``tmp_path`` so the growth/shrink comparison
-# actually engages the byte-size measurement.
-# ---------------------------------------------------------------------------
 
 
 class TestDirectionalDenyGrowthOnly:
@@ -572,15 +453,6 @@ class TestDirectionalDenyGrowthOnly:
     def test_advisory_still_attributes_the_grant_step_to_the_em_not_the_reader(
         self, monkeypatch, tmp_path
     ):
-        """AC6/AC7 companion case on the advisory leg (the C18c reshape):
-        the advisory does not block, but that does not exempt it from the
-        same attribution standard AC6 sets for the deny leg -- the grant
-        step is attributed to the EM, not framed as something the reading
-        subagent should itself run. No command is rendered any more (see
-        the sibling test above); the attribution is now carried by
-        directing the agent to report it as a dependency, not by naming a
-        runnable line.
-        """
         target = tmp_path / "CLAUDE.md"
         target.write_text("a much longer original body")
         payload = {
@@ -596,9 +468,6 @@ class TestDirectionalDenyGrowthOnly:
         assert "coordinator_core.session.claude_md_grant grant pm" not in reason
 
     def test_new_file_creation_is_always_growth_and_denied(self, monkeypatch, tmp_path):
-        """A CLAUDE.md-class file that does not yet exist has a 0-byte
-        baseline -- there is no shrink case for content that does not
-        exist yet, so creation is always denied absent a grant."""
         target = tmp_path / "CLAUDE.md"
         assert not target.exists()
         payload = {

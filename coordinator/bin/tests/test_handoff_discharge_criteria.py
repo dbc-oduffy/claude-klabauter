@@ -1,25 +1,3 @@
-"""test_handoff_discharge_criteria.py — unit test for
-`coordinator/bin/handoff-discharge-criteria.py`.
-
-Same idiom as test_handoff_reconcile_close_terminal.py: monkeypatches the
-module's own seams (`_resolve_repo_root`, `cc_invoke.route_mutation`) so this
-suite asserts ONLY the CLI's own argv handling and dispatch logic — both
-target forms (--criterion-id / --position), the mutual-exclusion usage
-error, the missing-target usage error, and the refusal/transport exit-code
-split — not the engine behind `handoff.discharge_criteria` (that op has its
-own test surface under coordinator_core/).
-
-Loaded by file path (`importlib.machinery.SourceFileLoader`) since the CLI
-module has a `.py` extension but is not on `sys.path` as an importable
-package member — same load idiom used across coordinator/bin/tests/.
-
-Spec backlink: coordinator_core/ops/handoff_discharge_criteria.py — the
-pickup/workstream-complete gate interaction the CLI closes the missing-
-forwarder gap for.
-
-Run:
-    pytest coordinator/bin/tests/test_handoff_discharge_criteria.py -v
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -47,8 +25,6 @@ _cli = _load_cli_module()
 
 
 class _RecordingRouteMutation:
-    """Stand-in for cc_invoke.route_mutation — records params, returns a
-    canned result or raises a canned exception."""
 
     def __init__(self):
         self.calls: list[dict] = []

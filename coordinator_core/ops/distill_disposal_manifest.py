@@ -96,59 +96,23 @@ __all__ = [
     "write_disposal_manifest",
 ]
 
-#: Named module-constant mass-throttle threshold (F2): a manifest whose
-#: eligible/total ratio EXCEEDS this value sets the manifest-level
-#: mass_throttle flag — a classifier bug marking most of a scan eligible
-#: produces a manifest a stamp-time human skims past; the throttle is cheap,
-#: mechanical defense-in-depth, not a replacement for the PM stamp.
 MASS_THROTTLE_RATIO: float = 0.5
 
 #: Named module-constant ABSOLUTE mass-throttle floor (2026-07-23 architecture
-#: review § 1a): the plan's own motivating F2 scenario — "a classifier bug
-#: marking 400 files eligible out of 1000" — is a 0.4 ratio and does NOT trip
 #: MASS_THROTTLE_RATIO at any corpus size where the bug doesn't also cross
-#: half the scan. An absolute count OR'd with the ratio test closes that gap:
-#: crossing this many eligible files trips the flag regardless of how large
-#: total_scanned is. Tune from dogfood data later; the number just needs a
-#: name today.
 MASS_THROTTLE_ABSOLUTE: int = 25
 
-#: Named module-constant HARD ceiling on eligible-delete count (2026-07-23
-#: distill-guard memo-class-blind-spots E2 — the mass-throttle-soft-band gap):
 #: MASS_THROTTLE_RATIO/MASS_THROTTLE_ABSOLUTE are a SOFT band — a stamp note
 #: carrying MASS_THROTTLE_ACK_MARKER authorizes an arbitrarily large batch
-#: above that band, with no further ceiling. This constant is the ceiling the
-#: ack cannot lift: `distill_apply_disposal.verify_stamp_and_throttle` refuses
-#: to apply ANY run whose eligible count exceeds this value, even with the
-#: ack present, forcing the run to be split into multiple smaller ones. The
-#: soft band (ratio/absolute -> hard cap) still governs everything below this
-#: line; only the space above it is unconditionally blocked. Tune from
-#: dogfood data later; the number just needs a name today.
 MASS_THROTTLE_HARD_CAP: int = 200
 
-#: Row-count above which eligible paths are additionally grouped into
 #: ``deletion_groups`` chunks (PIPELINE self-check parity — mirrors C10's
-#: ~20-50-file batch band; see module docstring for why this is an additive
-#: key, not a C9 schema field).
 GROUP_THRESHOLD: int = 50
 
 
 def evaluate_candidate_receipts(
     path: Path, repo_root: Path, basis_refs: tuple[str, ...] = ()
 ) -> dict[str, Any]:
-    """Run delete_guard's class-aware guard set (via
-    ``delete_guard.evaluate_candidate_detailed`` — the single dispatch-order
-    authority ``evaluate_candidate`` itself now consumes too, § 2a) against one
-    on-disk candidate and return a disposal-manifest-row-ready dict:
-    ``{"path", "artifact_class", "eligible", "blocked_by", "guards_run"}``.
-
-    ``guards_run`` carries EVERY applicable guard's receipt (pass AND block —
-    AC3), not just the blocking ones — the receipt-shaping this module adds
-    on top of the shared dispatch.
-
-    ``path`` MUST exist on disk and be readable text (UTF-8) — callers are
-    responsible for checking existence first (compute_disposal_manifest does).
-    """
     try:
         needle = rel_id(path, repo_root)
     except ValueError:
@@ -178,16 +142,12 @@ def evaluate_candidate_receipts(
 
 @dataclass(frozen=True)
 class DisposalManifestResult:
-    """Result of compute_disposal_manifest: the fully-assembled disposal-manifest
-    dict (C9 shape, plus the additive deletion_groups key when it applies) plus
-    a small summary-counts dict for the human-facing op result."""
 
     manifest: dict[str, Any]
     counts: dict[str, int]
 
 
 def _normalize_candidate(entry: Any) -> tuple[str, tuple[str, ...]]:
-    """Accept either a bare path string or a {"path", "basis_refs"?} dict."""
     if isinstance(entry, str):
         return entry, ()
     if isinstance(entry, dict):
@@ -208,16 +168,6 @@ def compute_disposal_manifest(
     mass_throttle_absolute: int = MASS_THROTTLE_ABSOLUTE,
     group_threshold: int = GROUP_THRESHOLD,
 ) -> DisposalManifestResult:
-    """Assemble the full disposal-manifest for one distill.assemble_disposal_manifest
-    run over ``candidates`` (each a worktree-root-relative path string, or a
-    {"path", "basis_refs"?} dict — see _normalize_candidate).
-
-    A candidate path absent on disk at assemble time is retained with reason
-    "candidate path absent on disk at assemble time" and no guard is run
-    against it (there is nothing on disk to check) — fail-closed-to-keep
-    (DR-228 § D2a-v's posture, applied at assemble time too, not just apply
-    time).
-    """
     rows: list[dict[str, Any]] = []
     eligible_paths: list[str] = []
 
@@ -270,12 +220,6 @@ def compute_disposal_manifest(
     eligible_count = len(eligible_paths)
     retained_count = total_scanned - eligible_count
 
-    # § 1a fix: absolute floor OR'd with the ratio test — a classifier bug
-    # marking 400 of 1000 files eligible (the plan's own F2 motivating
-    # scenario) is a 0.4 ratio and would never trip a ratio-only test. The
-    # zero-scan case is deliberately NOT a trigger: an empty manifest deletes
-    # nothing (zero blast radius) and should be a clean no-op, not a flag that
-    # trains an operator to type the ack reflexively on the harmless run.
     mass_throttle = eligible_count > mass_throttle_absolute or (
         total_scanned > 0 and (eligible_count / total_scanned) > mass_throttle_ratio
     )
@@ -302,15 +246,6 @@ def compute_disposal_manifest(
 
 
 def write_disposal_manifest(worktree_root: Path, manifest: dict[str, Any]) -> Path:
-    """Write the disposal-manifest to
-    state/scratch/artifact-distillation/<run-id>/disposal-manifest.json,
-    atomically (mkstemp + os.replace — create-or-full-rewrite only, D3/D6(ii)
-    posture, never a partial in-place edit).
-
-    Write-confined: only this run-id's own subdirectory under
-    state/scratch/artifact-distillation/ is touched — never a sibling run-id's
-    directory, never any other state/ path.
-    """
     run_dir = worktree_root / "state" / "scratch" / "artifact-distillation" / manifest["run_id"]
     run_dir.mkdir(parents=True, exist_ok=True)
     target = run_dir / "disposal-manifest.json"
@@ -329,7 +264,6 @@ def write_disposal_manifest(worktree_root: Path, manifest: dict[str, Any]) -> Pa
             try:
                 os.unlink(tmp_path)
             except OSError:
-                # tmp file already gone (or the replace above already consumed it)
                 pass
     return target
 

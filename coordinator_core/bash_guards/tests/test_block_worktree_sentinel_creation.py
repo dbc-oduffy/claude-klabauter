@@ -1,18 +1,3 @@
-"""Tests for coordinator_core.bash_guards.block_worktree_sentinel_creation.
-
-Covers the DENY set (redirection, `touch`/`cp`/`mv`/`install`/`ln`/`tee`,
-`sed -i`, `python -c`), the ALLOW set (reads and `rm`), chaining/env-
-assignment shell shapes, and -- critically -- dispatch-level (end-to-end via
-`dispatch.evaluate_payload_json`) coverage: `offer-git-c`'s allow+
-updatedInput short-circuit is exactly what hid the analogous ordering bug in
-`block_worktree_creation.py`, and a guard-level-only suite would stay green
-while this guard is unreachable for `cd <dir> && <cmd>` shapes.
-
-Pure Python -- no shell spawns, no filesystem writes.
-
-Spec backlink: coordinator_core/bash_guards/block_worktree_sentinel_creation.py
-Precedent test shape: coordinator_core/bash_guards/tests/test_block_approval_sentinel_creation.py
-"""
 
 from __future__ import annotations
 
@@ -261,9 +246,6 @@ class TestDenyMessageDiscipline:
 
 
 class TestReasonClassSpecificMessages:
-    """2026-07-28 diagnosability fix -- mirrors the sibling
-    `test_block_approval_sentinel_creation.py::TestReasonClassSpecific
-    Messages`, same shared detector, same reason-class split."""
 
     def test_direct_deny_message_unchanged(self):
         out = guard.check(_payload("touch %s" % SENTINEL))
@@ -287,14 +269,7 @@ class TestReasonClassSpecificMessages:
         assert "indirection wrapper" in reason
 
     def test_indirection_deny_offers_a_path_forward(self):
-        # test_block_approval_sentinel_creation.py::
-        # test_indirection_deny_names_the_guard_and_offers_a_path_forward)
-        # -- was pinning a verbatim substring of the shared
         # `_sentinel_creation_guard.INDIRECTION_REMEDY` constant, which
-        # cannot catch a regression where the recommended route becomes
-        # something this guard itself denies. Structural check instead:
-        # extract the recommended command from the message and assert this
-        # same guard allows it.
         out = guard.check(_payload("bash bin/install-git-hooks.sh"))
         reason = _reason(out)
         assert "EM/PM" in reason
@@ -311,14 +286,6 @@ class TestReasonClassSpecificMessages:
 
 
 class TestIndirectionWrapperShapesDeny:
-    """2026-07-28 fix -- the confirmed live bypass:
-    ``bash -c "touch <sentinel>"`` created the sentinel successfully before
-    this fix, defeating this guard via one level of interpreter
-    indirection. Covers every shape enumerated in the fix dispatch brief.
-    Same coverage shape as the sibling
-    ``test_block_approval_sentinel_creation.py::TestIndirectionWrapper
-    ShapesDeny`` -- both guards run on the same shared detector.
-    """
 
     def test_bash_dash_c_denies(self):
         _reason(guard.check(_payload('bash -c "touch %s"' % SENTINEL)))
@@ -368,8 +335,6 @@ class TestIndirectionWrapperShapesDeny:
         assert guard.check(_payload('bash -c "echo hello"')) is None
 
     def test_xargs_read_only_head_allows(self):
-        # A read-only head cannot create a file whatever stdin assembles --
-        # the false positive that denied `git diff --name-only | xargs wc -l`.
         assert guard.check(_payload("echo hello | xargs cat")) is None
         assert guard.check(_payload("git diff --name-only a b | xargs wc -l")) is None
 
@@ -383,21 +348,6 @@ class TestIndirectionWrapperShapesDeny:
 
 
 class TestReachableThroughTheDispatchChain:
-    """Guard-level tests are not sufficient for this guard.
-
-    ``guard.check()`` would deny ``cd /tmp && touch
-    .coordinator-override-worktree-guard`` from the first commit, yet the
-    same command could be ALLOWED end-to-end if this guard were registered
-    after ``offer-git-c``: that check rewrites ``cd <dir> && git <sub>``
-    into ``git -C <dir> <sub>`` and returns allow+updatedInput, which
-    short-circuits every later guard. This exact ordering bug was found and
-    fixed for ``block_worktree_creation.py`` and pinned for
-    ``block_approval_sentinel_creation.py`` -- these tests go through
-    ``dispatch.evaluate_payload_json`` so a future reordering that puts a
-    rewrite/offer check ahead of this guard fails loudly here instead of
-    silently disarming the ban. Guard-level tests alone were green
-    throughout the original live bypass and did not catch it.
-    """
 
     @staticmethod
     def _decision(command):
@@ -448,12 +398,6 @@ class TestReachableThroughTheDispatchChain:
         assert self._decision(cmd) == "deny"
 
     def test_registered_ahead_of_offer_git_c(self):
-        """Names the ordering regression explicitly: dispatch.py has no
-        exported guard_chain constant to introspect, so
-        ``test_cd_prefixed_touch_denied_end_to_end`` and
-        ``test_git_dash_c_prefixed_touch_denied_end_to_end`` above ARE this
-        module's ordering-regression coverage. This test exists only to
-        state that intent in words rather than leaving it implicit."""
         assert self._decision("cd /tmp && touch %s" % SENTINEL) == "deny"
 
 
@@ -489,9 +433,6 @@ class TestPowerShellDialect:
         assert silences == []
 
     def test_grammar_gap_shape_records_silent_not_clean(self):
-        """`cmd &> out.txt` is the plan's own named `has_error=True`
-        residue (see `_dialect.py` module docstring) -- must route to
-        SILENT, never a bare clean."""
         from coordinator_core.bash_guards import _verdict
 
         with _verdict.collecting() as silences:

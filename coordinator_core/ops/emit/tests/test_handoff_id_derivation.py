@@ -1,15 +1,3 @@
-"""Regression tests — wire-level ``handoff_id`` derivation (C4) in the ``handoffs``
-emit section.
-
-Every emitted ``HandoffSummary`` record now carries a non-null ``handoff_id`` plus a
-``handoff_id_derivation`` discriminator (``"authored"`` | ``"derived"``). An authored
-frontmatter ``handoff_id`` (shape ``hnd-<slug>-<6hex>``) passes through as-is; anything
-else (absent, blank, malformed) is synthesized deterministically from ``(repo, basename)``
-— see ``sections/handoffs.py``'s ``_derive_handoff_id``/``_resolve_handoff_id`` docstrings
-for the full basename-not-provenance.path rationale.
-
-Spec backlink: DoE-claude:pln-priority-ledger-durable-pm-pri-817d40 § C4
-"""
 
 from __future__ import annotations
 
@@ -59,10 +47,6 @@ def _collect_with_records(mock_qr, tmp_path: Path, records: list[dict], repo_nam
     return handoffs_section.collect(ctx)
 
 
-# ---------------------------------------------------------------------------
-# Unit-level: _resolve_handoff_id / _derive_handoff_id
-# ---------------------------------------------------------------------------
-
 def test_derive_is_deterministic_for_same_repo_and_basename() -> None:
     a = handoffs_section._derive_handoff_id("test-org/test-repo", "state/handoffs/x.md")
     b = handoffs_section._derive_handoff_id("test-org/test-repo", "archive/handoffs/2026-07/x.md")
@@ -98,7 +82,6 @@ def test_derive_slug_falls_back_to_literal_derived_when_empty() -> None:
 
 
 def test_derive_hash_suffix_unchanged_by_slug_widening() -> None:
-    # The 6-hex suffix is still sha1(f"{repo}:{basename}")[:6] — only the slug prefix widened.
     import hashlib
 
     basename = "2026-07-01_100000_sibling-notification-duty.md"
@@ -132,10 +115,6 @@ def test_resolve_falls_through_on_absent_authored_id() -> None:
     assert derivation == "derived"
     assert hid
 
-
-# ---------------------------------------------------------------------------
-# collect()-level: every emitted record carries both fields, never null.
-# ---------------------------------------------------------------------------
 
 @patch("coordinator_core.ops.emit.sections.handoffs._query_records")
 def test_collect_emits_authored_id_when_present(mock_qr, tmp_path: Path) -> None:

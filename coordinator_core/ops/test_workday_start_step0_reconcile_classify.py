@@ -1,13 +1,3 @@
-"""Fast-tier, zero-spawn tests for `_classify_failed_merge` and the
-probe-before-abort ordering in `coordinator_core.ops.workday_start_step0_reconcile`.
-
-No `pytestmark` here (deliberately) -- this module must be collected by
-`fast_test_cmd` and must spawn no subprocess at all; every git call in
-`main`'s failure path is monkeypatched to a fake `_run`, and both
-classification probes are stubbed.
-
-Spec backlink: docs/plans/2026-09-06-engine-publish-lag-hook-gen-forwarder-regen.md :: C4
-"""
 from __future__ import annotations
 
 import subprocess
@@ -23,12 +13,6 @@ def _proc(returncode: int, stdout: str = "", stderr: str = "") -> subprocess.Com
     return subprocess.CompletedProcess(args=["git"], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
-# ---------------------------------------------------------------------------
-# _classify_failed_merge -- all four input combinations against the Design
-# table (docs/plans/2026-09-06-engine-publish-lag-hook-gen-forwarder-regen.md).
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "merge_in_progress,index_readable,expected",
     [
@@ -42,20 +26,7 @@ def test_classify_failed_merge_all_four_combinations(merge_in_progress, index_re
     assert mod._classify_failed_merge(merge_in_progress, index_readable) == expected
 
 
-# ---------------------------------------------------------------------------
-# Shared fake-`_run` harness for the `main()`-level cases below. All of
-# `main`'s git calls up to and including the failing `--no-ff` merge are
-# faked here; only the failure path (probes + abort) is under test.
-# ---------------------------------------------------------------------------
-
-
 def _install_failing_merge_run(monkeypatch, recorder: list[str] | None = None):
-    """Fake `_run` that drives `main` straight to a failed `--no-ff` merge.
-
-    If `recorder` is given, every call appends a short tag naming which git
-    subcommand fired, so ordering/spawn-count assertions can inspect it
-    alongside the probe-name entries appended by the stubbed probes.
-    """
 
     def fake_run(args, env=None):
         if recorder is not None:
@@ -65,11 +36,11 @@ def _install_failing_merge_run(monkeypatch, recorder: list[str] | None = None):
         if args[:2] == ["branch", "--show-current"]:
             return _proc(0, stdout="work/testmachine/2026-01-01\n")
         if args[:2] == ["merge-base", "--is-ancestor"]:
-            return _proc(1)  # not an ancestor -> needs reconcile
+            return _proc(1)
         if args[:2] == ["merge", "--ff-only"]:
-            return _proc(1)  # ff fails -> falls through to --no-ff
+            return _proc(1)
         if args[:2] == ["merge", "--no-ff"]:
-            return _proc(1)  # the failing merge under test
+            return _proc(1)
         if args[:2] == ["merge", "--abort"]:
             return _proc(0)
         raise AssertionError(f"unexpected git invocation in fake _run: {args}")
@@ -93,21 +64,7 @@ def _stub_probes(monkeypatch, merge_in_progress: bool, index_readable: bool, rec
     monkeypatch.setattr(mod, "show_toplevel", lambda: str(Path.cwd()))
 
 
-# ---------------------------------------------------------------------------
-# Ordering: both probes must run BEFORE `merge --abort`. This is the plan's
-# named falsifier -- swapping the probe calls and the abort call in
-# `workday_start_step0_reconcile.main` MUST turn this test red.
-# ---------------------------------------------------------------------------
-
-
 def test_probes_run_before_abort_falsifier(monkeypatch, capsys):
-    """Falsifier: if C3's body is edited so the abort runs before the two
-    probes, this test must fail. It asserts both probe-name entries appear
-    in the shared recorder strictly before the `run:merge` entry that
-    corresponds to the abort call (the third `merge` entry overall, since
-    `--ff-only` and `--no-ff` also record as `run:merge`) -- so an inverted
-    ordering (abort, then probes) is caught, not silently tolerated.
-    """
     recorder: list[str] = []
     _install_failing_merge_run(monkeypatch, recorder)
     _stub_probes(monkeypatch, merge_in_progress=True, index_readable=False, recorder=recorder)
@@ -115,7 +72,6 @@ def test_probes_run_before_abort_falsifier(monkeypatch, capsys):
     rc = mod.main([])
     assert rc == 3
 
-    # The three `run:merge` entries are, in order: --ff-only, --no-ff, --abort.
     merge_indices = [i for i, entry in enumerate(recorder) if entry == "run:merge"]
     assert len(merge_indices) == 3
     abort_index = merge_indices[-1]
@@ -127,12 +83,6 @@ def test_probes_run_before_abort_falsifier(monkeypatch, capsys):
     )
 
 
-# ---------------------------------------------------------------------------
-# Spawn budget: the discrimination itself adds no `_run` invocation -- the
-# failure path invokes `_run` exactly once (the abort) after classification.
-# ---------------------------------------------------------------------------
-
-
 def test_discrimination_adds_no_spawn(monkeypatch):
     recorder: list[str] = []
     _install_failing_merge_run(monkeypatch, recorder)
@@ -142,18 +92,12 @@ def test_discrimination_adds_no_spawn(monkeypatch):
     assert rc == 3
 
     abort_calls = [entry for entry in recorder if entry == "run:merge"]
-    # fetch, branch --show-current, merge-base, merge --ff-only, merge --no-ff, merge --abort
-    # -- three of the six are "run:merge" (ff-only, no-ff, abort); the
-    # discrimination (probes) contributes zero additional `_run` calls.
     assert len(abort_calls) == 3
     total_run_calls = len(recorder)
     assert total_run_calls == 6
 
 
-# ---------------------------------------------------------------------------
-# Exception routing: a probe stub that raises IndexParseError must be caught
 # and must classify as RECONCILE-CONFLICT, not propagate out of `main`.
-# ---------------------------------------------------------------------------
 
 
 def test_index_parse_error_inside_real_index_readable_classifies_as_conflict(monkeypatch, tmp_path, capsys):
@@ -174,14 +118,6 @@ def test_index_parse_error_inside_real_index_readable_classifies_as_conflict(mon
     assert "RECONCILE-CONFLICT branch=work/testmachine/2026-01-01" in out
 
 
-# ---------------------------------------------------------------------------
-# Root resolution: running from a subdirectory classifies identically to
-# running at the root -- `show_toplevel()` is spawn-free and walks upward,
-# so a stubbed `show_toplevel` returning a subdirectory-derived root must
-# not change the outcome.
-# ---------------------------------------------------------------------------
-
-
 def test_root_resolution_from_subdirectory_classifies_identically(monkeypatch, tmp_path):
     subdir = tmp_path / "sub" / "deeper"
     subdir.mkdir(parents=True)
@@ -195,10 +131,6 @@ def test_root_resolution_from_subdirectory_classifies_identically(monkeypatch, t
 
     monkeypatch.setattr(mod, "_merge_in_progress", fake_merge_in_progress)
     monkeypatch.setattr(mod, "_index_readable", lambda repo_root: False)
-    # show_toplevel() walking from a subdirectory resolves to the same root
-    # as walking from the root itself -- simulate that by having the stub
-    # return tmp_path regardless of cwd, matching show_toplevel's own
-    # upward-walk contract.
     monkeypatch.setattr(mod, "show_toplevel", lambda: str(tmp_path))
 
     rc = mod.main([])
@@ -206,12 +138,6 @@ def test_root_resolution_from_subdirectory_classifies_identically(monkeypatch, t
 
     assert out_at_subdir == 3
     assert recorder_root_seen == [Path(tmp_path)]
-
-
-# ---------------------------------------------------------------------------
-# All three arms return 3; conflict arm's stdout/stderr text is unchanged;
-# both new arms' stderr includes the A/B/C-negation note.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(

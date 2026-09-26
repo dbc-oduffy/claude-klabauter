@@ -28,20 +28,11 @@ from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
 
 # Every CONFINEMENT_DENY guard, in registration order. Fails-closed hard
-# denies that must never sit behind a guard that can rewrite (`offer-git-c`
-# and friends short-circuit via allow+updatedInput).
 CONFINEMENT_DENY_NAMES = [
     "no-verify",
     "destructive-git-orphan",
     "destructive-rm",
-    # Arrived live with main's 1d033e514f (C2, docs/plans/2026-09-02-a-write-
-    # that-discards-what-you-never-saw.md) and sits here, between
-    # `destructive-rm` and `destructive-git-clean`, because that is its
-    # registration position in `_build_guard_chain` -- this list is ordered,
     # not alphabetical. CONFINEMENT_DENY is the band it registers with: it is
-    # a hard-deny leg that refuses a whole-file write over content the
-    # session never read, which is the same irreversible-loss posture as its
-    # neighbours here, not an advisory.
     "stale-write",
     "destructive-git-clean",
     "destructive-git-revert",
@@ -52,9 +43,7 @@ CONFINEMENT_DENY_NAMES = [
     "block-subagent-stash-creation",
     "block-approval-sentinel-creation",
     "block-worktree-sentinel-creation",
-    # Near-exact sibling of the entry above (dispatch.py registers it
     # immediately after, same CONFINEMENT_DENY hard-deny posture -- see
-    # block_fleet_delegation_creation.py's own module docstring).
     "block-fleet-delegation-creation",
     "block-disarm-marker-sentinel-creation",
     "block-reviewer-bash-outside-allowlist",
@@ -62,63 +51,29 @@ CONFINEMENT_DENY_NAMES = [
     "block-subagent-commit",
     "check-test-suite-invocation",
     "block-subagent-grant-acquisition",
-    # Near-exact sibling of the entry above (dispatch.py registers it
     # immediately after, same CONFINEMENT_DENY hard-deny posture -- see
     # block_subagent_guard_grant.py's own module docstring "NEAR-EXACT
-    # PORT of block_subagent_grant_acquisition.py").
     "block-subagent-guard-grant",
-    # The four guards rehomed from DoE's in-process fold (C4-C7,
-    # docs/plans/2026-08-28-the-four-folded-bash-guards-get-registered-not-folded.md).
-    # All four are hard-deny confinement, registered in this band by their own
-    # chunks; named here by C12 because no chunk declared this file.
     "guard-repo-setup-claude-home-refusal",
     "guard-host-subagent-bash-ban",
     "guard-host-subagent-bash-spawn-shapes",
     "guard-doctrine-surface-bash-write",
-    # C6 (D6/D7/S4, docs/plans/2026-09-12-perforce-second-class-commit-and-
-    # shelve.md): a fail-closed hard deny on p4 verbs (submit outright,
-    # everything outside cockpit's read/session-CL-write allowlist
-    # default-denied) plus D7's git worktree-rewrite deny and the
-    # attrib/chmod read-only-strip deny, all marker-gated to p4-mirrored
     # repos. Same confinement posture as its CONFINEMENT_DENY neighbors
-    # above -- registered here, not classified by default.
     "p4-verb-fence",
 ]
 
 # Every ADVISORY_REWRITE guard, in registration order. `inprocess-search`
-# must precede every "-rewrite"/"-advise"-suffixed entry (its own
-# registration comment: those return allow+rewrite, which would make its
-# search-answering seam unreachable if registered after them).
 ADVISORY_REWRITE_NAMES = [
-    # The advisory floor's
-    # non-hard-deny leg. Registered immediately after `check-raw-pid-
     # liveness` (the last CONFINEMENT_DENY guard) and before `offer-git-c`,
     # so it is the first ADVISORY_REWRITE entry in physical chain order.
     "destructive-git-revert-advisory",
-    # Two-leg split (2026-08-05, mirrors `destructive-git-revert-advisory`
     # immediately above -- same CONFINEMENT_DENY shadowing hazard,
-    # `state/audits/2026-08-05-confinement-deny-band-return-shapes.md`).
-    # Registered immediately after `destructive-git-revert-advisory` and
-    # before `offer-git-c`.
     "block-dev-repo-sentinel-removal-advisory",
     # ADVISORY, not CONFINEMENT_DENY, and argued that way per DR-277: `git
-    # stash apply` read as a data-loss check yields a false green, but the
-    # harm is a wrong conclusion rather than lost work, and a deny would also
-    # block the EM inspecting an entry it owns. Incident:
-    # state/audits/2026-08-30-why-the-stash-guards-did-not-fire.md.
     "stash-apply-verification-advisory",
     "offer-git-c",
-    # Mechanical leg of the fleet-wide `.git/index.lock` contention
-    # campaign -- registered immediately after `offer-git-c` (physical
-    # chain position, dispatch.py) -- see guard_no_optional_locks.py.
     "git-no-optional-locks",
-    # Self-heal leg of the same fleet-wide `.git/index.lock` contention
-    # campaign, registered immediately after `git-no-optional-locks` in
-    # `dispatch.py` -- a stat-gated, side-effect-only reap that always
-    # returns `None` (never a rewrite or a deny) but is `fail_closed=False`
     # ADVISORY_REWRITE, same as its `git-no-optional-locks` neighbor, per
-    # guard_reap_stale_git_lock.py's own module docstring and dispatch.py's
-    # registration comment.
     "reap-stale-git-lock",
     "validate-commit",
     "inprocess-search",
@@ -133,50 +88,23 @@ ADVISORY_REWRITE_NAMES = [
     "head-tail-plumbing-rewrite",
     "offer-invoke-params-stdin",
     # `grep-via-bash-guard` moved here from PLATFORM_CONDITIONED_DENY_NAMES
-    # (H11(a), 2026-07-30, docs/plans/2026-07-30-os-aware-guard-advisory-
-    # defaults.md) -- its own substitutable/deny branch was removed the
-    # same day (0 denies on either platform, provably unreachable), so it
-    # no longer has deny vocabulary and both its band AND `fail_closed`
-    # flipped (see its own dispatch.py registration comment). Registered
-    # last in THIS list/band, immediately before the two remaining
     # PLATFORM_CONDITIONED_DENY guards, matching its physical chain
-    # position (band contiguity requires the physical move, not just the
-    # label -- see dispatch.py's own comment at this guard's entry).
     "grep-via-bash-guard",
-    # cross-repo/inbox/ dispatch, "Guard powershell-via-bash mangling"
-    # (2026-08-08) -- registered immediately after `grep-via-bash-guard`
-    # (same physical chain position, dispatch.py). Same "never denies"
     # shape as its neighbor, so this band, not PLATFORM_CONDITIONED_DENY.
     "powershell-via-bash-guard",
-    # docs/plans/2026-08-02-write-confinement-guards.md (DoE-claude), chunk
-    # C4 -- the Bash-surface cross-repo write-confinement speed bump.
     # `ADVISORY_REWRITE`, deliberately NOT `CONFINEMENT_DENY`: the blanket-
     # disarm marker can suppress every band except `CONFINEMENT_DENY`, and
-    # registering a deliberately passable bump there would make it the
-    # LEAST passable guard in the suite -- see dispatch.py's own
-    # registration comment for the full rationale (AC19).
     "bump-foreign-repo-write",
     # Same plan, chunk C5 -- the Bash-surface OUTSIDE-repo sibling of the
-    # entry above (fires when a target resolves under NO git root at all,
     # rather than a DIFFERENT one). Same `ADVISORY_REWRITE` rationale,
-    # registered immediately after C4's entry in `dispatch.py` (AC19).
     "bump-outside-repo-write",
-    # C13 (docs/plans/2026-08-06-apply-guard-class-census.md) -- four guard-
     # class-census band flips (CONFINEMENT_DENY -> ADVISORY_REWRITE),
-    # registered at the tail of this band, ahead of the two remaining
     # PLATFORM_CONDITIONED_DENY guards below -- see dispatch.py's own
-    # registration comment for the flip's full rationale, including why
-    # `block-worktree-creation` (also named in the census) is deliberately
-    # NOT here.
     "block-noncanonical-branch-creation",
     "block-subagent-plan-body-bash-write",
     "check-raw-pid-liveness",
 ]
 
-# The two platform-conditioned guards -- `fail_closed=True` (a crash still
-# fails closed) but registered LAST, after every rewrite, per the empirically
-# -tested-and-reverted ordering recorded on their own guard_chain entries.
-# `grep-via-bash-guard` (formerly a third member here) moved to
 # ADVISORY_REWRITE_NAMES above -- H11(a), 2026-07-30.
 PLATFORM_CONDITIONED_DENY_NAMES = [
     "multiprobe-banner",
@@ -191,9 +119,6 @@ _EXPECTED_BAND_BY_NAME = {
 
 
 def _dummy_chain() -> List[GuardEntry]:
-    """Build the real registration with harmless dummy call-time arguments.
-    None of the `fn` closures are ever called here -- only `name`,
-    `fail_closed`, and `band` (registration-time facts) are inspected."""
     return dispatch._build_guard_chain(
         cmd="echo bash-guard-band-membership-probe",
         session_id="band-membership-probe",
@@ -205,8 +130,6 @@ def _dummy_chain() -> List[GuardEntry]:
 
 
 def test_chain_is_readable_and_non_trivial():
-    """Guard the guard: if `_build_guard_chain` stops returning entries,
-    every assertion below would pass vacuously on an empty list."""
     chain = _dummy_chain()
     assert len(chain) > 10, chain
     names = [entry.name for entry in chain]
@@ -215,13 +138,6 @@ def test_chain_is_readable_and_non_trivial():
 
 
 def test_every_registered_guard_carries_a_band():
-    """Every entry the chain literal produces must be a `GuardEntry` whose
-    `band` attribute is a real `GuardBand` member -- a guard registered
-    without a band fails `GuardEntry`'s own required-positional-field
-    construction (unlike `advisory_value`, `band` carries no default),
-    rather than silently defaulting into a band. This is the structural
-    enforcement `_build_guard_chain`'s own typing promises; this test pins
-    it as an executable property, not merely a type hint."""
     chain = _dummy_chain()
     for entry in chain:
         assert isinstance(entry.band, GuardBand), (
@@ -231,9 +147,6 @@ def test_every_registered_guard_carries_a_band():
 
 
 def test_all_named_guards_are_actually_registered():
-    """A typo in any of the three named lists above would silently weaken
-    every other assertion in this file to a no-op against a name that was
-    never checked."""
     chain = _dummy_chain()
     registered = {entry.name for entry in chain}
     all_named = set(CONFINEMENT_DENY_NAMES) | set(ADVISORY_REWRITE_NAMES) | set(PLATFORM_CONDITIONED_DENY_NAMES)
@@ -294,9 +207,6 @@ def test_bands_are_contiguous_and_in_fixed_sequence():
 
 
 def test_platform_conditioned_guards_are_fail_closed_but_registered_last():
-    """The three platform-conditioned guards are `fail_closed=True` (a crash
-    in them still denies) YET registered in the LAST band -- band membership
-    is deliberately NOT derivable from `fail_closed`."""
     chain = _dummy_chain()
     by_name = {entry.name: entry for entry in chain}
     for name in PLATFORM_CONDITIONED_DENY_NAMES:
@@ -343,13 +253,6 @@ def test_advisory_rewrite_guards_never_fail_closed():
 
 
 def test_inprocess_search_precedes_every_rewrite_and_advise_entry():
-    """`inprocess-search` never denies -- it only answers a search in-process
-    -- but every "-rewrite"/"-advise"-suffixed guard returns allow+updatedInput
-    or an advisory that short-circuits the chain before
-    `inprocess-search` would run if registered after them. Its own
-    registration comment: registered after them, "this seam is unreachable
-    for exactly the commands it exists to answer." Pinned here structurally
-    rather than left to a prose comment alone."""
     chain = _dummy_chain()
     order = [entry.name for entry in chain]
     position = {name: i for i, name in enumerate(order)}
@@ -373,7 +276,6 @@ def test_inprocess_search_precedes_every_rewrite_and_advise_entry():
 
 
 def _evaluate_with_crashing_no_verify(command):
-    """Drive the real `evaluate_payload_json` with `check_no_verify` raising."""
     import json
 
     def _boom(*_a, **_kw):
@@ -416,10 +318,6 @@ def test_crash_deny_short_circuits_immediately():
 
 
 def test_crash_deny_is_scoped_to_the_crashed_guard_target_class():
-    """A crashing fail_closed guard must NOT deny a command it could never
-    have denied anyway. This is the property whose absence denied every Bash
-    call in every session on the machine -- twice in three days -- when a
-    git-only guard raised on an arity mismatch."""
     assert _evaluate_with_crashing_no_verify("echo hi") is None
 
 
@@ -466,15 +364,7 @@ def test_every_crash_trigger_guard_is_a_registered_fail_closed_guard():
     )
 
 
-# ---------------------------------------------------------------------------
-# The six shape/platform combinations named in the guard_chain comment's own
-# "Placed AFTER (here): all six shape/platform combinations correctly
-# auto-rewrite first" passage. The 304-cell confinement corpus
-# (test_confinement_attack_corpus.py) exercises confinement SHAPES and would
 # not, on its own, catch a rewrite-vs-deny PLATFORM regression here -- each
-# of the three platform-conditioned guards paired with its own upstream
-# rewrite, on both host_is_windows=True and host_is_windows=False.
-# ---------------------------------------------------------------------------
 
 _SIX_COMBINATIONS = [
     ("grep-via-bash-guard / grep-via-bash-rewrite", 'grep -rn "TODO" .', False),
@@ -511,12 +401,7 @@ def test_rewrite_band_wins_over_platform_conditioned_deny(label, cmd, host_is_wi
     import tempfile
 
     monkeypatch.setenv("COORDINATOR_DISABLE_INPROCESS_SEARCH", "1")
-    # Pointing `tempfile.tempdir` at pytest's per-test tmp_path gives every
-    # cell a fresh state dir, so the assertion depends only on the chain.
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
-    # A unique session id per cell, so no state a guard keys by session id
-    # can leak between cells that intentionally reuse the same command text
-    # across the host_is_windows=True/False pair.
     session_id = "six-combo-probe-%s-%s" % (label, host_is_windows)
     payload = json.dumps(
         {

@@ -53,61 +53,23 @@ from coordinator_core.session import core
 from coordinator_core.session import liveness as _liveness
 
 # _SENTINEL_REL (".git", "coordinator-sessions", ".current-session-id") REMOVED
-# (KS-3, 2026-08-07): the sentinel tier it fed was unsound under concurrency
-# (documented last-writer-wins across concurrent sessions sharing one
-# worktree — coordinator_core/bash_guards/guard_inprocess_search.py ~L84)
-# AND its sole writer (session-init.py, the DoE-claude SessionStart hook)
-# was deleted by PM directive 2026-07-15 — no production writer survives.
-# A stale sid used to subtract nothing from the live peer set here (over-
-# refusal, noisy but fail-closed-safe); removal makes resolve_self_session_id
-# honestly return "" instead, which still routes to the "unknown" (fail
-# closed) branch below whenever the live set is non-empty — no refuse->allow
-# flip.
 
 
 class RewriteVerdict(NamedTuple):
-    """Verdict for a proposed history-rewriting git operation.
-
-    outcome: exactly one of ``"ok"``, ``"refused"``, ``"unknown"``.
-    reason: human-readable one-liner suitable for printing to an operator.
-    peer_session_ids: the live sessions other than self (empty for "ok").
-    """
 
     outcome: str
     reason: str
     peer_session_ids: Tuple[str, ...]
 
 
-# --- Branch-mutation operation kinds (C1) -------------------------------
-#
-# ``branch_mutation_verdict`` answers ONE question -- "do live peers share
-# this worktree?" -- but the ANSWER it should give depends on which mutation
-# the caller is about to perform. Before C1 the predicate answered one
-# question for three structurally different mutations and refused all of
 # them identically. The axis below is REQUIRED and KEYWORD-ONLY so no caller
-# can inherit a permissive default by omission.
-#
 # Only FRESH_CUT_AT_HEAD is narrowed. Every other kind takes the unchanged
-# refuse-under-peers path.
 
-#: Create-and-switch a NEW branch AT CURRENT HEAD. Content-neutral: no file
-#: touched, no index entry changed, HEAD does not move. Requires
-#: ``current_branch`` and is permitted under live peers on ``main`` ONLY.
 FRESH_CUT_AT_HEAD = "FRESH_CUT_AT_HEAD"
 #: Checking out a DIFFERENT existing commit. Moves HEAD under every peer.
 CHECKOUT_EXISTING = "CHECKOUT_EXISTING"
-#: Renaming a branch with a remote delete. Genuinely destructive.
 RENAME_WITH_REMOTE_DELETE = "RENAME_WITH_REMOTE_DELETE"
-#: Catch-all for a branch mutation whose content-neutrality this predicate
-#: cannot establish from its own inputs -- a cut bundled with a reset, or a
 #: cut merely PRESCRIBED to a caller that controls how it is performed. Not
-#: named in the originating plan; added because the two pre-existing
-#: non-ceremony call sites (`coordinator/bin/merge-recovery-and-tag-cut.py`
-#: cuts a recovery branch AND hard-resets main; `pickup_assemble`'s
-#: `compute_branch_gate` prescribes an unqualified cut) are neither of the
-#: three hazardous kinds by name, and mapping them onto one of those would
-#: have been a lie in the argument. Behaviour is identical to the hazardous
-#: kinds: refuse under peers.
 UNQUALIFIED_BRANCH_CUT = "UNQUALIFIED_BRANCH_CUT"
 
 _BRANCH_MUTATION_KINDS = frozenset(
@@ -121,16 +83,6 @@ _BRANCH_MUTATION_KINDS = frozenset(
 
 
 class BranchMutationVerdict(NamedTuple):
-    """Verdict for a proposed branch-cutting operation (creating a NEW
-    branch, as opposed to committing on one already checked out).
-
-    outcome: exactly one of ``"ok"``, ``"refused"``, ``"unknown"``.
-    reason: human-readable one-liner suitable for printing to an operator,
-      naming peers and the branch each is on when ``outcome != "ok"``.
-    peers: ``(session_id, branch)`` pairs for the live peers other than self
-      (empty for "ok"). ``branch`` is ``None`` when that peer's meta.json
-      carries no ``branch`` field.
-    """
 
     outcome: str
     reason: str
@@ -266,11 +218,6 @@ def branch_mutation_verdict(
 
 
 def _peer_branch(sid: str, cwd: Optional[str]) -> Optional[str]:
-    """meta.json's ``branch`` field for ``sid``, or ``None`` when absent —
-    evidence-only, never re-derived from the live git checkout (a peer's
-    recorded branch can legitimately differ from the CURRENT checkout in a
-    shared worktree, and this predicate must not paper over that by
-    substituting the caller's own `git branch --show-current`)."""
     sdir = core.session_dir(sid, cwd)
     if not sdir:
         return None
@@ -299,17 +246,6 @@ def resolve_self_session_id(cwd: Optional[str]) -> str:
 def history_rewrite_verdict(
     cwd: Optional[str] = None, self_session_id: Optional[str] = None
 ) -> RewriteVerdict:
-    """Decide whether a history-rewriting git operation (rebase / force-push) is safe
-    to run against the shared worktree at ``cwd`` right now.
-
-    ``self_session_id``, if passed, overrides both env-var and sentinel-file
-    resolution (exists for testability — lets a caller pin identity without
-    mutating the environment).
-
-    FAIL CLOSED: any failure to establish either the live-session set or this
-    session's own identity (while the live set is non-empty) returns
-    ``outcome="unknown"``, which callers MUST treat exactly like ``"refused"``.
-    """
     try:
         live = _liveness.live_session_ids(cwd)
     except Exception as exc:
@@ -323,7 +259,6 @@ def history_rewrite_verdict(
 
     if not self_sid:
         if not live:
-            # No live sessions at all and no identity to subtract — vacuously safe.
             return RewriteVerdict(outcome="ok", reason="no live sessions", peer_session_ids=())
         return RewriteVerdict(
             outcome="unknown",

@@ -123,17 +123,7 @@ def test_multiline_prose_with_closes_line_survives_verbatim(tmp_path):
     assert "Closes: dlv-example-close-multiline-02" in message
 
 
-# `test_push_mode_never_is_the_kwarg_run_commit_pipeline_actually_receives`
-# (deleted, C4 of docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-
-# the-pipeline-can-go.md): it monkeypatched `commit_pipeline.
-# run_commit_pipeline`, a call `run_close_commit` no longer makes --
-# `directives_commit_tail.py` was already repointed onto
-# `coordinator_core.git.commit.commit_paths` by an earlier chunk, so the spy
-# never fired (pre-existing failure at this chunk's dispatch: `KeyError:
-# 'push_mode'`, not something this chunk introduced). The sibling test below,
-# `test_a_real_close_never_pushes_and_never_touches_a_remote`, already covers
 # the same behavioural claim (`PUSH_MODE_NEVER`'s effect) via real state
-# observation rather than a spy on a dead call path.
 
 
 def test_a_real_close_never_pushes_and_never_touches_a_remote(tmp_path):
@@ -158,10 +148,6 @@ def test_a_real_close_never_pushes_and_never_touches_a_remote(tmp_path):
 
 
 def test_close_commit_carries_co_authored_by(tmp_path):
-    """`apply_missing_trailers` is wired into `run_close_commit`'s own
-    `commit_paths` call (state/cross-repo/inbox/2026-09-23-example-game-repo-em-
-    commit-trailers-owned-by-engine.md) -- pinned end-to-end against a real
-    commit."""
     sid = "45454545-4545-4545-8545-454545454545"
 
     repo = _init_repo(tmp_path)

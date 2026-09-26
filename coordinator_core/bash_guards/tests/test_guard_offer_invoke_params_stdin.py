@@ -1,12 +1,3 @@
-"""Tests for ``check_offer_invoke_params_stdin`` -- the argv-payload →
-``--params-file -`` heredoc rewrite.
-
-The subject-under-test corpus is anchored on the live 2026-07-29 failure
-(a ``ceremony.scoped_git_commit`` payload whose commit message contained
-``C1's`` and ``(build, not harden)``), because the property that matters is
-not "a regex matched" but "the payload the op receives is byte-identical to
-the one the caller wrote, and the shell can no longer see into it."
-"""
 
 from __future__ import annotations
 
@@ -27,20 +18,11 @@ from coordinator_core.bash_guards.guard_offer_invoke_params_stdin import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
-# The two tests below spawn `python3 -m coordinator_core.invoke` as a real
-# subprocess. That child inherits cwd but NOT pytest's rootdir sys.path
-# insertion, so it can only resolve the `coordinator_core` package when cwd
-# is (or is under) the repo root -- from any other cwd it dies with
-# ModuleNotFoundError before it can write anything to stdout. Pinning cwd to
-# the repo root derived from this file's own path makes the subprocess
-# resolvable regardless of the invoking shell's cwd.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 _HAZARDOUS_PAYLOAD = {
@@ -73,15 +55,7 @@ def test_the_live_failure_shape_is_rewritten_not_denied():
     assert "--params-file - <<'CCJSON'" in out["updatedInput"]["command"]
 
 
-# ---------------------------------------------------------------------------
 # C4b (docs/reference/guard-dialect-coverage.md row 10) -- `_INVOKE_RE` is a
-# literal text-pattern match over the raw command string, independent of
-# shell dialect. No real PowerShell parse is exercised (this guard takes a
-# bare `cmd: str`, never a payload/tool_name at all) -- this proves the
-# SAME regex-over-text detection reaches the identical rewrite on a
-# PowerShell-spelled invocation (call-operator prefix, `;`-chained
-# statement ahead of it) as on the bash-spelled one.
-# ---------------------------------------------------------------------------
 
 
 def test_powershell_call_operator_prefixed_invocation_rewritten_same_as_bash():
@@ -105,8 +79,6 @@ def test_powershell_semicolon_chained_invocation_rewritten_same_as_bash():
 
 
 def test_rewrite_preserves_payload_bytes_exactly():
-    """The rung-A claim in the guard's docstring, asserted rather than
-    argued: the heredoc body is the original JSON, unchanged."""
     payload = json.dumps(_HAZARDOUS_PAYLOAD)
     rewritten = _rewritten(check_offer_invoke_params_stdin(_cmd_with(payload)))
     body = rewritten.split("<<'CCJSON'", 1)[1]
@@ -124,30 +96,15 @@ def test_rewrite_keeps_flags_after_the_payload_and_places_heredoc_before_a_pipe(
     )
     first_line = rewritten.split("\n", 1)[0]
     assert first_line.endswith("--repo /r --bare 2>&1 | tail -5")
-    # The heredoc operator must sit inside the invoke command, ahead of the
-    # pipe -- appended at end-of-line it would attach to `tail` instead.
     assert first_line.index("<<'CCJSON'") < first_line.index("| tail -5")
 
 
-#: The two tests below spawn a REAL `python3 -m coordinator_core.invoke`, so
-#: they need the build-stamp carve-out spelled on the command line. Dispatch
 #: from an unstamped tree has been refused with JSON-RPC `-32005` since
-#: `6f3988bc3` (2026-08-21), and `coordinator_core/conftest.py :: pytest_
-#: configure` opts the suite in via `ipc.allow_unstamped_dispatch()` -- but
 #: IN-PROCESS ONLY, deliberately not through the environment, so that a
-#: subprocess cannot silently inherit it. That is exactly right, and it is
-#: also why these two spawned children never got the opt-in: the refusal
-#: envelope replaced `{"ok": true}`, and the tests died on `KeyError: 'ok'`.
-#: The rewrite under test was never broken -- bash parsed it and the child
-#: started every time. Spell the flag here rather than widening the conftest.
 _UNSTAMPED = " --allow-unstamped-dispatch"
 
 
 def test_rewritten_command_is_valid_shell_and_reaches_the_op():
-    """End-to-end: run the rewrite the guard produced. Asserts the two halves
-    together -- bash accepts the command AND the engine's `--params-file -`
-    branch parses the heredoc body. `ping` is used because it is
-    scope-`none` (no repo resolution) and has no side effects."""
     payload = json.dumps({"note": "C1's half (build, not harden)"})
     cmd = (
         "%s -m coordinator_core.invoke ping '%s'%s --bare"
@@ -176,12 +133,6 @@ def test_rewritten_command_is_valid_shell_and_reaches_the_op():
     ],
 )
 def test_rewritten_command_is_valid_shell_for_and_semicolon_and_background(tail):
-    """Extends `test_rewritten_command_is_valid_shell_and_reaches_the_op` to
-    the three shapes Finding 2 named as untested: a trailing `&&`, a
-    trailing `;`, and a backgrounded `&` invocation. `subprocess.run` waits
-    on the pipe's write end regardless of backgrounding, because a forked
-    child inherits the same fd -- the pipe only reaches EOF once every
-    process holding it (including a backgrounded one) has exited."""
     payload = json.dumps({"note": "C1's half (build, not harden)"})
     cmd = (
         "%s -m coordinator_core.invoke ping '%s'%s%s"
@@ -202,8 +153,6 @@ def test_rewritten_command_is_valid_shell_for_and_semicolon_and_background(tail)
 
 
 def test_original_command_is_the_shell_syntax_error_this_guard_exists_for():
-    """Pins the premise. If bash ever stops choking on this shape, the guard's
-    justification changed and this test says so."""
     cmd = _cmd_with(json.dumps(_HAZARDOUS_PAYLOAD))
     proc = subprocess.run(["bash", "-n", "-c", cmd], capture_output=True, text=True, **no_console_creationflags())
     assert proc.returncode != 0
@@ -211,8 +160,6 @@ def test_original_command_is_the_shell_syntax_error_this_guard_exists_for():
 
 
 def test_shell_safe_payload_is_left_alone():
-    """The argv form stays a good transport for machine-generated params --
-    rewriting those would be noise, not safety."""
     assert check_offer_invoke_params_stdin(
         _cmd_with('{"dry_run": true, "limit": 5}')
     ) is None
@@ -226,10 +173,6 @@ def test_oversized_payload_is_rewritten_even_without_an_apostrophe():
 
 
 def test_double_quoted_payload_is_left_alone():
-    """Pins the deliberate non-coverage argued in `_extract_inline_payload`:
-    a double-quoted payload's JSON quotes are backslash-escaped, so the raw
-    span never parses and the rewrite has no proof to stand on. Silence, not
-    a guess."""
     assert check_offer_invoke_params_stdin(
         'python3 -m coordinator_core.invoke ping "{\\"note\\": \\"it\'s\\"}" --bare'
     ) is None
@@ -289,8 +232,6 @@ def test_even_apostrophe_payload_denies_because_the_apostrophes_silently_vanish(
         "python3 -m coordinator_core.invoke ping "
         "'{\"m\":\"isn't,doesn't\"}' --bare"
     )
-    # Premise first: the shell really does silently drop the apostrophes,
-    # leaving one token that is still valid JSON.
     assert shlex.split(cmd)[4] == '{"m":"isnt,doesnt"}'
     assert json.loads(shlex.split(cmd)[4]) == {"m": "isnt,doesnt"}
     verdict = check_offer_invoke_params_stdin(cmd)
@@ -320,23 +261,10 @@ def test_two_adjacent_quoted_tokens_that_merge_into_valid_json_are_not_rewritten
     assert verdict is not None
     out = verdict["hookSpecificOutput"]
     assert out["permissionDecision"] == "deny"
-    # Never a rewrite: the span merged two tokens, so any rewrite would be
-    # guessing at the payload's boundaries.
     assert "updatedInput" not in out
 
 
 def test_heredoc_delimiter_never_appears_inside_the_body():
-    """The heredoc terminates early only if a body line equals the delimiter.
-    A payload trying hardest to cause that still cannot: JSON escapes the
-    newline, so 'CCJSON' is never at line-start in the transported bytes.
-    This is provably unreachable, not merely well-defended: strict
-    `json.loads` (required by `_extract_inline_payload` before any rewrite)
-    rejects a raw newline inside a JSON string, so `payload` can never
-    contain an actual `\\n` byte and the heredoc body is always exactly one
-    line -- the collision loop in `check_offer_invoke_params_stdin` can
-    never fire today. This test asserts the invariant it protects rather
-    than the loop firing, so a future payload shape that DOES collide fails
-    here."""
     payload = json.dumps({"message": "line\nCCJSON\nmore ' apostrophe"})
     rewritten = _rewritten(check_offer_invoke_params_stdin(_cmd_with(payload)))
     delim = rewritten.split("<<'", 1)[1].split("'", 1)[0]
@@ -350,12 +278,6 @@ def test_empty_command_is_untouched(empty):
 
 
 class TestCrossCheckOutcomesEachHaveTheirOwnVerdict:
-    """The cross-check used to be `Optional[bool]`, and the caller named only
-    the `is False` branch -- so the unparseable `None` reached
-    `_allow_rewrite` by NOT being mentioned, and an over-ceiling command
-    would have inherited that same ALLOW when the DoS ceiling was applied.
-    Each of the four named outcomes is pinned here to its verdict, so a
-    future edit cannot re-collapse two of them onto one branch."""
 
     def test_confirmed_span_is_rewritten(self):
         cmd = _cmd_with(json.dumps({"m": "a" * (_gi._ARGV_PAYLOAD_HAZARD_BYTES + 1)}))
@@ -390,9 +312,6 @@ class TestCrossCheckOutcomesEachHaveTheirOwnVerdict:
         assert "updatedInput" in out
 
     def test_over_ceiling_command_denies_instead_of_buying_a_rewrite(self):
-        """Padding past the tokenizer ceiling must not buy an ALLOW from the
-        guard the padding defeats -- and, since a rewrite short-circuits the
-        guard chain, must not skip the bands behind this one either."""
         payload = json.dumps({"m": "x' y" + "A" * (_CEILING + 1)})
         cmd = _cmd_with(payload)
         assert len(cmd) > _CEILING
@@ -405,9 +324,6 @@ class TestCrossCheckOutcomesEachHaveTheirOwnVerdict:
         assert "too large" in out["permissionDecisionReason"]
 
     def test_the_over_ceiling_deny_cannot_fire_below_the_ceiling(self):
-        """Gated on the shared predicate, so the new DENY is invisible to
-        every command in the size band real work occupies. Same payload
-        shape, one byte under."""
         payload = json.dumps({"m": "x' y" + "A" * 4000})
         cmd = _cmd_with(payload)
         assert len(cmd) <= _CEILING

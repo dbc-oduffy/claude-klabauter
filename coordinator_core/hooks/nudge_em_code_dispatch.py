@@ -62,26 +62,15 @@ from coordinator_core.session.dispatch_nudge_sentinel import (
 )
 from coordinator_core.session.mode_resolution import resolve_mode
 
-# ---------------------------------------------------------------------------
-# Doc / data extension denylist — mirrors nudge-em-code-dispatch.js:30-33.
-# Nudge fires on every file whose extension is NOT in this set.  A code-allowlist
-# would silently exclude .sh, .rb, .kt, .sql, .swift, and extensionless scripts.
-# "Guards match conditions, not containers."
-# ---------------------------------------------------------------------------
 _DOC_DATA_EXTENSIONS: frozenset[str] = frozenset([
     ".md", ".yaml", ".yml", ".json", ".txt", ".toml",
     ".csv", ".lock", ".cfg", ".ini",
 ])
 
-#: Generator-provenance declaration: _write_pending_dispatch_artifact writes
-#: coordinator-pending-dispatch-<sid>-<hash>.json under
-#: tempfile.gettempdir() — never a tracked repo artifact; this op is also
-#: read-only per its own negative-spec for sentinel checks.
 GENERATES: list = []
 
 
 def _sanitize_for_hostname(s: str) -> str:
-    """Replace non-alphanumeric/hyphen/underscore chars — mirrors JS hostname sanitize."""
     return re.sub(r"[^a-zA-Z0-9_-]", "-", s)
 
 
@@ -106,16 +95,11 @@ def _resolve_session_id(session_id: str) -> tuple[str, bool]:
 
 
 def _ext_of(file_path: str) -> str:
-    """Return the lowercase extension of file_path (empty string if none)."""
-    # Use PurePosixPath to avoid platform-specific path parsing on Windows
-    # for paths that may use forward slashes from the hook payload.
-    # Body now matches the comment: PurePosixPath, not Path.
     p = PurePosixPath(file_path)
     return p.suffix.lower()
 
 
 def _sentinel_exists(path: str) -> bool:
-    """Blocking check — call only inside asyncio.to_thread."""
     try:
         os.stat(path)
         return True
@@ -125,60 +109,34 @@ def _sentinel_exists(path: str) -> bool:
 
 @register_op("hooks.nudge_em_code_dispatch")
 async def _handler(params: dict, repo_root=None) -> dict:
-    """PreToolUse advisory: nudge the EM toward dispatcher over inline code writes.
-
-    Returns context_only("PreToolUse", msg) when the nudge fires;
-    no_advisory() for all suppression conditions.
-    """
     params = payload_of(params)
-    # asyncio deferred to first use here (not module scope) — this is the only function
-    # in the module touching the asyncio namespace at runtime; a module-scope
-    # `import asyncio` dragged asyncio.base_events (~5ms) into every eager op/hook
-    # import even for callers that never dispatch this PreToolUse hook. Spec:
-    # docs/plans/2026-07-24-canonical-resolution-engine.md task W0-1.
     import asyncio
 
-    # --- Bypass 1: subagent writes are allowed unconditionally ---
-    # agent_id present → executor is supposed to write code; allow silently.
     if present(params, "agent_id"):
         return no_advisory()
 
-    # --- Extract file path (scalar only — MultiEdit edits[] not forwarded) ---
-    # TODO(pcore-04 C5): if MultiEdit edits[] forwarding lands in the hook input
-    #   contract, walk edits[].file_path here the same way JS lines 97-105 do.
     file_path = field(params, "file_path")
     if not file_path:
         return no_advisory()
 
-    # --- Bypass 2: doc/data extension denylist ---
     ext = _ext_of(file_path)
     if ext in _DOC_DATA_EXTENSIONS:
         return no_advisory()
 
-    # --- Resolve session id and sentinel paths ---
     raw_sid = field(params, "session_id")
     session_id, has_true_sid = _resolve_session_id(raw_sid)
 
     nudge_ok_tmp = str(dispatch_nudge_sentinel_path(session_id))
 
-    # --- Bypass 3: dispatch-nudge suppression sentinel ---
     found = await asyncio.to_thread(_sentinel_exists, nudge_ok_tmp)
     if found:
-        return no_advisory()  # sentinel present → suppressed
+        return no_advisory()
 
-    # --- Bypass 4: autonomous-run mode (resolve_mode seam — session-wins key) ---
     autonomous_run = await asyncio.to_thread(resolve_mode, "autonomous", session_id)
     if autonomous_run:
-        return no_advisory()  # autonomous mode → suppress nudge
+        return no_advisory()
 
-    # --- Emit the offer-shaped nudge ---
-    # Leads with the better path (dispatcher), then names the inline carve-out.
-    # Never blocks, never denies.
 
-    # When session_id was absent the resolved sentinel path is pid-scoped and
-    # will not match across re-invocations — append a warning so the EM is not
-    # misled into writing a sentinel that will never be seen again.
-    # (Mirrors JS lines 146-156.)
     sentinel_note = "." if has_true_sid else " (this OS pid only — session_id absent)."
 
     nudge_message = (
@@ -190,39 +148,10 @@ async def _handler(params: dict, repo_root=None) -> dict:
     return context_only("PreToolUse", f"[em-code-dispatch nudge] {nudge_message}")
 
 
-# =============================================================================
-# op(payload) — synchronous, in-process, stdin->stdout trampoline entry point.
-#
-# Purpose: full line-for-line port of nudge-em-code-dispatch.js's `main()`
-# orchestration for the DoE-resident stdin->stdout hook stub
-# (coordinator/hooks/scripts/nudge-em-code-dispatch.py), replacing the `node`
-# cold-spawn on every Write/Edit/MultiEdit (constraint 7, performant-or-dead).
-#
 # This is a DELIBERATELY SEPARATE code path from the `_handler`/register_op
-# async op above: that op is the pcore-04 mcp_tool IPC-daemon integration
-# (flat-scalar `field()`/`present()` payload contract, MultiEdit edits[] NOT
-# forwarded) — a different transport wired to a different (currently unused)
-# consumer. `op()` below consumes the SAME raw PreToolUse JSON payload the JS
-# hook received (nested tool_input, full
-# MultiEdit edits[] array) and reproduces every JS branch, including the F7
 # bootstrap/out-of-repo carve-out, EXT_EXECUTOR_MAP/COORDINATOR_PATH_MARKERS
-# executor-type derivation, and the pending-dispatch artifact write — none of
-# which the pcore-04 op implements. Do not conflate the two; do not route the
-# DoE stub through the async op above.
-#
-# Contract: takes the raw stdin-parsed payload dict, returns a Form-A
-# hookSpecificOutput dict (see context_only()) when the nudge fires, or None
-# for every silent-allow/bypass path. Never raises on well-formed input;
-# callers (the DoE stub) wrap this in a broad try/except for fail-open ALLOW
-# on any resolve/import/run failure per constraint discipline.
-#
-# Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
-# Source: coordinator/hooks/scripts/nudge-em-code-dispatch.js (435 lines, ported whole)
-# =============================================================================
 
-# ---------------------------------------------------------------------------
 # Executor type derivation — extension -> type mapping. Mirrors JS EXT_EXECUTOR_MAP.
-# ---------------------------------------------------------------------------
 _EXT_EXECUTOR_MAP: dict[str, str] = {
     ".py": "python-executor",
     ".js": "js-executor",
@@ -247,7 +176,6 @@ _EXT_EXECUTOR_MAP: dict[str, str] = {
     ".sql": "sql-executor",
 }
 
-# Path markers that signal coordinator-domain files -> coordinator-executor override.
 # Mirrors JS COORDINATOR_PATH_MARKERS.
 _COORDINATOR_PATH_MARKERS: list[str] = [
     "coordinator/",
@@ -255,7 +183,6 @@ _COORDINATOR_PATH_MARKERS: list[str] = [
     "plugins/coordinator",
 ]
 
-# Extensionless filename patterns -> devops-executor. Mirrors JS main()'s regex bank.
 _DEVOPS_FILENAME_RE = re.compile(
     r"^(?:[Mm]akefile|[Dd]ockerfile(?:\..+)?|[Rr]akefile|[Gg]runtfile\.js|[Gg]ulpfile\.js)$"
 )
@@ -292,7 +219,7 @@ def _bootstrap_dirs() -> list[str]:
     try:
         dirs.append(str(settings_home() / "bin"))
     except (ValueError, RuntimeError, OSError):
-        pass  # unresolvable settings home; other candidate dirs below still apply
+        pass
 
     home = os.environ.get("HOME")
     if home:
@@ -306,7 +233,6 @@ def _bootstrap_dirs() -> list[str]:
 
 
 def _is_under_bootstrap_dir(file_path: str) -> bool:
-    """True when file_path sits under one of the bootstrap dirs. Mirrors JS."""
     abs_file = os.path.abspath(file_path)
     for d in _bootstrap_dirs():
         abs_dir = os.path.abspath(d)
@@ -316,19 +242,12 @@ def _is_under_bootstrap_dir(file_path: str) -> bool:
 
 
 def _is_outside_git_work_tree(file_path: str) -> bool:
-    """True when file_path is NOT inside any git work-tree.
-
-    Walks up from the file's containing directory looking for a `.git` entry
-    (file or dir — worktrees/submodules use a `.git` file). Mirrors JS
-    isOutsideGitWorkTree() exactly, including the "existence, not directory-ness"
-    check and the root-of-filesystem termination.
-    """
     d = os.path.abspath(os.path.dirname(file_path))
     root = os.path.splitdrive(d)[0] + os.sep if os.name == "nt" else os.sep
     while True:
         try:
             if os.path.exists(os.path.join(d, ".git")):
-                return False  # found an enclosing .git -> inside a work-tree
+                return False
         except OSError as exc:
             print(f"nudge_em_code_dispatch: cannot stat {d}: {exc} (treating as not found)", file=sys.stderr)
         if d == root:
@@ -337,11 +256,10 @@ def _is_outside_git_work_tree(file_path: str) -> bool:
         if parent == d:
             break
         d = parent
-    return True  # no .git found all the way to the filesystem root
+    return True
 
 
 def _is_bootstrap_or_out_of_repo(file_path: str) -> bool:
-    """F7 carve-out predicate. Mirrors JS isBootstrapOrOutOfRepo()."""
     if _is_under_bootstrap_dir(file_path):
         return True
     if _is_outside_git_work_tree(file_path):
@@ -350,10 +268,6 @@ def _is_bootstrap_or_out_of_repo(file_path: str) -> bool:
 
 
 def _derive_executor_info(file_path: str) -> tuple[str, bool]:
-    """Derive executor type from file extension and path prefix.
-
-    Returns (executor_type, ambiguous). Mirrors JS deriveExecutorInfo().
-    """
     ext = os.path.splitext(file_path)[1].lower()
     basename = os.path.basename(file_path)
     norm_path = file_path.replace("\\", "/")
@@ -372,25 +286,12 @@ def _derive_executor_info(file_path: str) -> tuple[str, bool]:
 
 
 def _describe_edit(payload: dict) -> str:
-    """Payload-derived one-line description of the triggering change.
-
-    Fills the dispatch brief's task line from data the hook already has (tool
-    name, edit shape) instead of inventing intent the hook cannot know — the
-    hook sees WHAT changed, never WHY. Replaces the literal
-    "task: [TODO: describe the specific change you want made to this file]"
-    placeholder (plan 2026-08-01-advisory-firing-shape-predicate.md C5): a
-    brief that hands the agent a TODO names no concrete alternative, which is
-    the same Axis-A defect this plan closes elsewhere in the corpus.
-    """
     tool_name = payload.get("tool_name") or "Write/Edit"
     tool_input = payload.get("tool_input")
     if not isinstance(tool_input, dict):
         tool_input = {}
     edits = tool_input.get("edits")
     if isinstance(edits, list) and edits:
-        # Name the shape of the change
-        # (string replacement) for parity with the Edit/Write branches below,
-        # not merely a count.
         return f"{tool_name}: {len(edits)} string replacement(s) in this call"
     if "old_string" in tool_input:
         return f"{tool_name}: string replacement"
@@ -400,23 +301,6 @@ def _describe_edit(payload: dict) -> str:
 
 
 def _build_dispatch_brief(file_path: str, executor_type: str, edit_description: str) -> str:
-    """Build a ready-to-paste executor dispatch brief. Mirrors JS buildDispatchBrief(),
-    except the task line is filled from `edit_description` (payload-derived, see
-    `_describe_edit`) rather than a `[TODO: ...]` placeholder, and the
-    acceptance-criteria section is dropped rather than left as a second TODO — the
-    hook has no payload-derivable "done condition" to offer in its place.
-
-    TRIMMED (C8c, docs/plans/2026-09-11-trim-the-remaining-over-cap-guard-messages.md):
-    dropped the "## Pre-assembled dispatch brief" header, the `commit:` line, the
-    `---` separator and the "Dispatch: fan-out-dispatch.sh or Agent (...)." line —
-    all restated or redundant with the surrounding nudge_message text in `op()`,
-    which already names file_path and the dispatch doc. `file_path` is likewise
-    dropped from the rendered brief for the same reason (`op()`'s own message
-    states it first) — the parameter stays (builder call/signature unchanged
-    per this chunk's own "trim the text, not the builder calls" constraint),
-    unused in the output. Kept: executor-type/task, the two fields no other
-    line in the envelope carries.
-    """
     del file_path
     return "\n".join(
         [
@@ -429,11 +313,6 @@ def _build_dispatch_brief(file_path: str, executor_type: str, edit_description: 
 def _write_pending_dispatch_artifact(
     session_id: str, file_path: str, executor_type: str, dispatch_brief_text: str
 ) -> None:
-    """Write the pending-dispatch artifact to tempfile.gettempdir().
-
-    Silently no-ops on write failure — the artifact is a convenience, not a
-    gate. Mirrors JS writePendingDispatchArtifact().
-    """
     import tempfile
 
     hash8 = hashlib.sha256(file_path.encode("utf-8")).hexdigest()[:8]
@@ -456,18 +335,10 @@ def _write_pending_dispatch_artifact(
         with open(artifact_path, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(artifact, fh, indent=2)
     except OSError:
-        pass  # best-effort: artifact write failure does not affect the nudge path
+        pass
 
 
 def _resolve_session_id_op(payload: dict) -> str:
-    """Resolve session id per JS resolveSessionId() sanitize-then-fallback logic.
-
-    Differs from `_resolve_session_id()` above (the pcore-04 op's helper,
-    which never sanitizes a non-empty session_id) — JS strips every char
-    outside [A-Za-z0-9_-] from a supplied session_id before using it as a
-    filename component, falling through to the hostname-pid fallback only
-    when sanitization strips it to empty (e.g. "../../..").
-    """
     sid = payload.get("session_id")
     if isinstance(sid, str) and sid.strip():
         safe = re.sub(r"[^A-Za-z0-9_-]", "", sid.strip())
@@ -477,42 +348,12 @@ def _resolve_session_id_op(payload: dict) -> str:
     return f"{hostname}-{os.getpid()}"
 
 
-# ---------------------------------------------------------------------------
-# Semantic-bypass mechanism (AC6) — the size floor for the nudge.
-#
-# Purpose: `op()` had zero occurrences of a length/diff-size/changed-line
-# threshold of any kind — a one-character Edit nudged identically to a
-# full-file rewrite. Plan 2026-08-01-advisory-firing-shape-predicate.md C5
-# REJECTS deriving that floor from a session-local transcript histogram or
-# from recent-commit diff sizes: one session's datapoint, wrong unit (a
-# commit aggregates many Edit calls and excludes reverted ones; the hook
-# sees exactly one tool call), and it measures what happened rather than
 # what SHOULD have been dispatched. This module ships the PLAN-PREFERRED
-# alternative instead of a guessed number: a semantic-bypass mechanism. An
-# edit confined to whitespace, to comment/docstring text, or to a single
-# identifier rename is defensible without a threshold — it is closer to
-# what the nudge is FOR (steering substantive code authorship to a
-# dispatched executor) than any character count would be.
-#
-# Negative-spec: this bypass exists ONLY on `op()`. The async `_handler`
-# above (the pcore-04 mcp_tool op) never receives old_string/new_string or
-# MultiEdit edits[] — see the module's MultiEdit negative-spec — so it has
-# no diff to classify and is unaffected by this mechanism.
-# ---------------------------------------------------------------------------
 
 _WORD_RE = re.compile(r"\w+|\W+")
 
 
 def _tokenize_for_classification(src: str) -> list | None:
-    """Tokenize src, returning (type, string) pairs, or None if unparseable.
-
-    raw-text/line-prefix classification
-    cannot tell a STRING token's content from cosmetic whitespace, or a real
-    `#` COMMENT from a string literal's line that happens to start with `#`.
-    Tokenizing and comparing by token TYPE closes both gaps at once. Returns
-    None on any tokenize failure so the caller can fail toward emitting the
-    nudge rather than guessing at intent from unparseable source.
-    """
     try:
         tokens = list(tokenize.generate_tokens(io.StringIO(src).readline))
     except (tokenize.TokenError, SyntaxError, IndentationError, ValueError):
@@ -521,16 +362,6 @@ def _tokenize_for_classification(src: str) -> list | None:
 
 
 def _is_whitespace_only_diff(old: str, new: str) -> bool:
-    """True when old and new tokenize identically ignoring whitespace-shaped tokens.
-
-    Tokenize-based (Review: code-reviewer Finding 1) rather than raw-text
-    whitespace-stripping: a raw-text strip cannot distinguish cosmetic
-    formatting whitespace from whitespace that is itself a STRING token's
-    semantic content (e.g. `"hello world"` -> `"helloworld"`). Comparing
-    non-NEWLINE/INDENT/DEDENT/NL/COMMENT token streams means a STRING token
-    change is never misclassified as whitespace-only. Unparseable input fails
-    toward NOT bypassing (nudge still fires).
-    """
     old_tokens = _tokenize_for_classification(old)
     new_tokens = _tokenize_for_classification(new)
     if old_tokens is None or new_tokens is None:
@@ -545,18 +376,6 @@ def _is_whitespace_only_diff(old: str, new: str) -> bool:
 
 
 def _is_comment_or_docstring_only_diff(old: str, new: str) -> bool:
-    """True when the only token-stream differences are COMMENT tokens.
-
-    Tokenize-based (Review: code-reviewer Finding 2) rather than line-prefix
-    matching: a `#`-prefixed line inside a triple-quoted STRING is a single
-    STRING token, never a COMMENT token, so it is correctly excluded from this
-    bypass. Only a genuine Python `#` comment classifies as COMMENT. Compares
-    non-comment, non-whitespace-shaped token streams for equality and requires
-    the raw token streams (including comments) to actually differ, so a
-    genuine no-op diff does not count as "comment-only". Unparseable input
-    fails toward NOT bypassing (nudge still fires) — the documented posture
-    this predicate has always claimed.
-    """
     old_tokens = _tokenize_for_classification(old)
     new_tokens = _tokenize_for_classification(new)
     if old_tokens is None or new_tokens is None:
@@ -573,17 +392,6 @@ def _is_comment_or_docstring_only_diff(old: str, new: str) -> bool:
 
 
 def _is_single_token_rename(old: str, new: str) -> bool:
-    """True when old -> new differs by exactly one `\\w+` token in one place.
-
-    Tokenizes on the word / non-word boundary (`_WORD_RE`) so surrounding
-    punctuation and whitespace are preserved as context; the diff must reduce
-    to a single `replace` opcode swapping exactly one identifier-shaped token
-    for a different identifier-shaped token. A rename that recurs at multiple
-    call sites within the SAME old_string/new_string pair is not recognized
-    (the diff would show multiple replace regions) — narrower than "rename",
-    deliberately: it fails toward nudging, never toward silently bypassing an
-    edit this heuristic cannot confirm is rename-shaped.
-    """
     old_tokens = _WORD_RE.findall(old)
     new_tokens = _WORD_RE.findall(new)
     matcher = difflib.SequenceMatcher(a=old_tokens, b=new_tokens, autojunk=False)
@@ -598,9 +406,6 @@ def _is_single_token_rename(old: str, new: str) -> bool:
     if len(old_slice) != 1 or len(new_slice) != 1:
         return False
     old_tok, new_tok = old_slice[0], new_slice[0]
-    # Identifier-shaped (leading letter/underscore), not merely `\w+` — a bare
-    # `\w+` also matches digit-only tokens, which would misclassify a literal
-    # value change ("1" -> "2") as an identifier rename.
     identifier_re = re.compile(r"[A-Za-z_]\w*")
     if not identifier_re.fullmatch(old_tok) or not identifier_re.fullmatch(new_tok):
         return False
@@ -608,12 +413,6 @@ def _is_single_token_rename(old: str, new: str) -> bool:
 
 
 def _is_semantic_bypass_edit(old: str, new: str) -> bool:
-    """True when old -> new is defensible without a size threshold (AC6).
-
-    Covers: no-op (old == new), whitespace-only, comment/docstring-only
-    (heuristic), single-token rename. See the section docstring above for why
-    this replaces a numeric floor.
-    """
     if old == new:
         return True
     if _is_whitespace_only_diff(old, new):
@@ -626,15 +425,6 @@ def _is_semantic_bypass_edit(old: str, new: str) -> bool:
 
 
 def _read_pre_edit_content(file_path: str) -> str | None:
-    """Best-effort read of file_path's ON-DISK content before a Write executes.
-
-    PreToolUse fires before the tool runs, so the file on disk still holds the
-    pre-write content (or does not exist yet, for a brand-new file). Returns
-    None on any failure (missing file, permission, decode error) — the caller
-    then treats the semantic bypass as inapplicable, which fails TOWARD
-    emitting the nudge, never toward silently suppressing it on an unreadable
-    baseline.
-    """
     try:
         with open(file_path, "r", encoding="utf-8") as fh:
             return fh.read()
@@ -643,17 +433,6 @@ def _read_pre_edit_content(file_path: str) -> str | None:
 
 
 def _semantic_bypass_applies(file_path: str, tool_input: dict) -> bool:
-    """Bypass 2.5 predicate for `op()`: does the triggering edit qualify as a
-    semantic-bypass shape (AC6)?
-
-    Edit: classifies old_string/new_string directly.
-    MultiEdit: ALL edits[] entries must individually qualify — one substantive
-      edit among several disqualifies the whole call.
-    Write: reads the file's pre-write content off disk and classifies it
-      against `content`; a brand-new file (nothing to read) never qualifies.
-    Anything else (missing/malformed fields): does not qualify — fails toward
-    the nudge firing, per this module's general fail-open-to-nudge posture.
-    """
     edits = tool_input.get("edits")
     if isinstance(edits, list) and edits:
         pairs: list[tuple[str, str]] = []
@@ -683,17 +462,9 @@ def _semantic_bypass_applies(file_path: str, tool_input: dict) -> bool:
 
 
 def op(payload: dict) -> dict | None:
-    """PreToolUse advisory: nudge the EM toward dispatcher over inline code writes.
-
-    Full line-for-line port of nudge-em-code-dispatch.js's `main()`. Returns a
-    Form-A hookSpecificOutput dict on nudge-fire, None on every silent-allow path.
-    Never raises on well-formed input.
-    """
-    # --- Bypass 1: subagent writes are allowed unconditionally ---
     if "agent_id" in payload:
         return None
 
-    # --- Extract file path (scalar Write, or MultiEdit edits[] scan) ---
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         tool_input = {}
@@ -717,65 +488,38 @@ def op(payload: dict) -> dict | None:
     if not file_path:
         return None
 
-    # --- Bypass 1.5: machine-config / bootstrap / out-of-repo writes (F7) ---
     if _is_bootstrap_or_out_of_repo(file_path):
         return None
 
-    # --- Bypass 2: doc/data extension denylist ---
     ext = os.path.splitext(file_path)[1].lower()
     if ext in _DOC_DATA_EXTENSIONS:
         return None
 
-    # --- Bypass 2.5: semantic-bypass edit (AC6 size floor) ---
     if _semantic_bypass_applies(file_path, tool_input):
         return None
 
-    # --- Resolve session id and sentinel paths ---
     session_id = _resolve_session_id_op(payload)
 
-    # --- Bypass 3: dispatch-nudge suppression sentinel ---
     nudge_ok_sentinel = str(dispatch_nudge_sentinel_path(session_id))
     if _sentinel_exists(nudge_ok_sentinel):
         return None
 
-    # --- Bypass 4: autonomous-run mode (resolve_mode seam — session-wins key) ---
     if resolve_mode("autonomous", session_id):
         return None
 
-    # --- Derive executor type and build dispatch brief ---
     executor_type, ambiguous = _derive_executor_info(file_path)
     edit_description = _describe_edit(payload)
     dispatch_brief_text = _build_dispatch_brief(file_path, executor_type, edit_description)
 
-    # --- Write pending-dispatch artifact for unambiguous single-file cases ---
     if not ambiguous and not multiple_code_files:
         _write_pending_dispatch_artifact(
             session_id, file_path, executor_type, dispatch_brief_text
         )
 
-    # --- Emit the offer-shaped nudge ---
     raw_sid = payload.get("session_id")
     has_true_session_id = isinstance(raw_sid, str) and raw_sid.strip() != ""
 
-    # TRIMMED (C8c, docs/plans/2026-09-11-trim-the-remaining-over-cap-guard-messages.md):
-    # dropped `artifact_note` ("Artifact written."/"") from the rendered message —
-    # the artifact is a best-effort convenience file (see
-    # `_write_pending_dispatch_artifact`'s own docstring), not something the EM
-    # needs stated in the advisory to act on; `ambiguous`/`multiple_code_files`
-    # still gate whether the artifact is written, only its mention in text is
-    # cut. Also dropped "EM, not typist.", "Code write:" -> "Write:", "Dispatch
-    # an executor instead", and the "agent-dispatch-economics.md" doc-pointer
-    # parenthetical — the brief below already names type/task, and the
-    # sentinel path is the one piece of information this message must carry
-    # that nothing else in the envelope does. Measured after this trim: hooks
     # 216 / write_guards 171 prose bytes (both <= MESSAGE_PROSE_CAP_BYTES ==
-    # 220) against the corpus rows in guard_message_corpus.py, on this tree —
-    # the sentinel path embeds session_id, so a session_id longer than this
-    # module's own test-fixture uuid-suffixed one could still push a live
-    # firing over cap; that residual is inherent to the sentinel contract
-    # (`dispatch_nudge_sentinel.sentinel_path`), out of this chunk's scope
-    # (constraint per this chunk's body: "Trim the text, not the builder
-    # calls").
     sentinel_suffix = "." if has_true_session_id else " (this OS pid only — session_id absent)."
 
     nudge_message = (

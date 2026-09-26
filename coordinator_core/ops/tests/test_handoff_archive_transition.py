@@ -78,10 +78,6 @@ class _BaseCase(unittest.TestCase):
 
 
 class ModeDispatchUsageErrorsTest(_BaseCase):
-    """The five usage-error branches that gate `_handler` before any real
-    move is attempted — validated ahead of `handoff_path`/`repo_root`
-    resolution, so no seeded file or worktree state is needed for most of
-    them."""
 
     def test_unknown_mode_is_a_usage_error(self):
         result = self._call({"handoff_path": "x", "mode": "bogus"})
@@ -112,21 +108,11 @@ class ModeDispatchUsageErrorsTest(_BaseCase):
         self.assertIn("mutually exclusive", result.get("error", ""))
 
     def test_mode_omitted_defaults_to_chain(self):
-        # handoff_path also missing -> the early _err short-circuit still
-        # tags the resolved default mode onto the envelope, cheaply proving
-        # the "chain" default without needing a seeded repo.
         result = self._call({})
         self.assertEqual(result.get("mode"), "chain")
 
 
 class ChainModeMovedDispatchTest(_BaseCase):
-    """mode="chain" against a terminal (shipped) candidate reaches
-    `archive_and_commit` and reports the mover's own outcome verbatim —
-    proving the dispatch path itself (containment, terminal-state gate,
-    Move construction) without asserting anything about the mover's real
-    git mechanics (that is `coordinator_core/ops/fleet/tests/test_archive_
-    and_commit_disk_head_drift.py` and this file's sibling `test_archive_
-    and_commit_call_site_coverage.py`'s remit, not this op's)."""
 
     def setUp(self):
         super().setUp()

@@ -1,15 +1,3 @@
-"""coordinator_core.op_census.tests.test_line_count — tests for the
-line-count axis and its frozen high-water ratchet (C5).
-
-Named `test_line_count.py`, not `test_line_count_ratchet.py`, per the
-dispatch-emit terminal-test-scope resolver's exact-stem-match rule
-(`coordinator_core/ops/dispatch_emit/pathspec.py :: _candidate_test_targets`
-maps `line_count.py` -> `tests/test_line_count.py` only) — the ratchet's
-descriptive intent lives in `test_line_count_ratchet` below instead, as a
-test *function* name inside this stem-matched module.
-
-Spec backlink: state/dispatch-briefs/2026-08-21-the-census-that-cannot-miss-an-op/C5.md
-"""
 
 from __future__ import annotations
 
@@ -109,7 +97,7 @@ def test_ratchet_check_allows_at_exactly_the_frozen_high_water():
         over_bar_modules={},
     )
 
-    ratchet_check(distribution)  # must not raise
+    ratchet_check(distribution)
 
 
 def test_ratchet_check_allows_a_shrink():
@@ -120,7 +108,7 @@ def test_ratchet_check_allows_a_shrink():
         over_bar_modules={},
     )
 
-    ratchet_check(distribution)  # must not raise
+    ratchet_check(distribution)
 
 
 def test_line_count_ratchet():
@@ -163,10 +151,6 @@ def test_line_count_ratchet_trips_on_over_bar_count_growth_alone():
 
 
 def test_evaluate_ratchet_never_raises_and_reports_tripped_true_on_growth():
-    """Staff-eng Finding 5: measurement separated from verdict.
-    `evaluate_ratchet` returns a `RatchetOutcome` even when the corpus has
-    grown past the frozen high-water -- `ratchet_check` (raising) is built
-    on top of this, never the reverse."""
     distribution = LineCountDistribution(
         module_count=FROZEN_HIGH_WATER_MODULES + 1,
         total_lines=FROZEN_HIGH_WATER_LINES,

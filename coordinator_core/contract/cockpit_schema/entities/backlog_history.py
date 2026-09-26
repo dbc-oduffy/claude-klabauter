@@ -1,12 +1,3 @@
-"""
-backlog_history time-series block — pydantic port of DoE
-`coordinator/cockpit-contract/src/entities/backlog-history.ts` (Zod source).
-Cockpit's producer-emitted backlog-trend charts; a nested singular object on
-SnapshotEnvelope.
-
-Spec backlink: DoE-claude:pln-land-backloghistory-contract-b-7d3f40
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
-"""
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -18,7 +9,6 @@ _MAX_SAFE_INTEGER = 9007199254740991
 
 
 class DailyPoint(BaseModel):
-    """Single day's backlog counts for one repo — the leaf node of the series."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -29,7 +19,6 @@ class DailyPoint(BaseModel):
 
 
 class RepoSeries(BaseModel):
-    """Per-repo time series — an ordered array of DailyPoints for one repository."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -49,17 +38,10 @@ class RepoSeries(BaseModel):
 
 
 class BacklogHistory(BaseModel):
-    """The complete backlog-trend block emitted onto SnapshotEnvelope."""
 
     model_config = ConfigDict(extra="forbid")
 
     # ISO-8601 UTC timestamp when this block was generated; present-as-null (D9).
-    # Full timestamp (better staleness signal; matches provenance.observed_at);
-    # cockpit truncates to date for display.
     generated_at: IsoDateTime | None
-    # Per-repo backlog time series; required present-but-empty array (D19 pattern) —
-    # emitter emits [] not omit.
     series: list[RepoSeries]
-    # Block-level required non-null provenance; keeps cockpit provenance_fk NOT NULL
-    # satisfied.
     provenance: ProvenanceEnvelope

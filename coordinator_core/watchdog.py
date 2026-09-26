@@ -54,7 +54,6 @@ import time
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-# Windows console-flash suppression (DR-054) — no-op on non-Windows.
 _CREATIONFLAGS = 0
 if sys.platform == "win32":
     _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -100,11 +99,7 @@ def cs_timeout(
         )
         return result.returncode
     except subprocess.TimeoutExpired:
-        # subprocess.run() already sent kill()/TerminateProcess() to the
-        # child on timeout before raising — matches the bash oracle's
         # SIGTERM-then-SIGKILL Branch B behavior in spirit (a hard kill, not
-        # graceful), modulo the D-state caveat above (neither implementation
-        # can force-terminate an uninterruptible-I/O process).
         return 124
     except FileNotFoundError as exc:
         print(f"cs_timeout: command not found: {exc}", file=sys.stderr)
@@ -135,22 +130,10 @@ class Watchdog:
         self._state = _WatchdogState()
 
     def reset(self) -> None:
-        """Clear all watchdog state so a fresh check() cycle can begin."""
         self._state = _WatchdogState()
 
     @staticmethod
     def _now_epoch() -> float:
-        """Seconds since epoch. Degrades to 0.0 with a stderr warning on
-        clock failure, mirroring the bash oracle's `_cw_now_epoch` fail-soft
-        behavior (`date +%s` failure -> warn + `echo 0`, ceiling disabled
-        rather than crashing the caller's loop). `time.time()` is not
-        documented to raise, but CPython does not guarantee it never will
-        (e.g. an unreadable system clock can surface as OSError on some
-        platforms) — this try/except keeps the same degrade contract for
-        that rare case instead of letting the whole watchdog check crash.
-        Prior "never raises" docstring overclaimed
-        parity with the oracle's explicit fail-soft handling.
-        """
         try:
             return time.time()
         except OSError as exc:

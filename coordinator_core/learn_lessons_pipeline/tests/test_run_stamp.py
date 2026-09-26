@@ -1,7 +1,3 @@
-"""Tests for coordinator_core.learn_lessons_pipeline.run_stamp.
-
-Spec backlink: docs/plans/2026-09-11-the-lessons-pipeline-drains-without-a-ha.md § C2
-"""
 
 from __future__ import annotations
 

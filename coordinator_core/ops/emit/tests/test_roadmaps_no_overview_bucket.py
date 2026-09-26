@@ -97,7 +97,6 @@ class TestNoOverviewBucket:
         assert malformed[0]["path"] == "state/roadmap/bad-roadmap/OVERVIEW.md"
 
     def test_no_roadmap_dir_yields_empty_malformed(self, tmp_path: Path) -> None:
-        """No state/roadmap directory at all degrades to no malformed entries, not an error."""
         ctx = _make_ctx(tmp_path)
         with patch(
             "coordinator_core.ops.emit.sections.roadmaps._query_roadmap_records",
@@ -109,7 +108,6 @@ class TestNoOverviewBucket:
         assert malformed == []
 
     def test_non_directory_entries_under_roadmap_root_are_ignored(self, tmp_path: Path) -> None:
-        """A stray file directly under state/roadmap/ is not mistaken for a roadmap directory."""
         roadmap_root = tmp_path / "state" / "roadmap"
         roadmap_root.mkdir(parents=True)
         (roadmap_root / "README.md").write_text("stray file", encoding="utf-8")

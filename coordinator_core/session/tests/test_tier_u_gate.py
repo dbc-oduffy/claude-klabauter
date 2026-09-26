@@ -26,15 +26,7 @@ from coordinator_core.bash_guards import check_test_suite_invocation as guard
 from coordinator_core.session import core, grant, tier_u_gate
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Every test in this file builds its repo via `_make_repo(tmp_path)`, spawning
-# real git (init/config/add/commit) because the production code under test --
-# `core.git_root()`, consulted by the gate's own repo-root resolution --
-# reads real git state that no mock stands in for. `tmp_path` is
-# function-scoped and tests write grant/session state under reused session
-# ids, so the repo fixture stays per-test rather than hoisted to module
 # scope. The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue
-# and is explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -188,8 +180,6 @@ class TestEnforceTierUGate:
         never invoked, on either the refuse or the proceed-with-grant path."""
         repo = _make_repo(tmp_path)
         _live_session(repo, "s1")
-        # Write the grant BEFORE installing the fail-if-called patch, so this
-        # setup call itself doesn't trip the guard.
         grant.write_tier_u_grant("pm", "yes", session_id="s1", cwd=str(repo))
 
         def _fail_if_called(*a, **k):
@@ -197,10 +187,8 @@ class TestEnforceTierUGate:
 
         monkeypatch.setattr(grant, "write_tier_u_grant", _fail_if_called)
 
-        # Refuse path (grant present but for a different session -- s2).
         tier_u_gate.enforce_tier_u_gate("pytest", repo_root=str(repo), session_id="s2")
 
-        # Proceed-with-live-grant path (s1's grant, already on disk above).
         tier_u_gate.enforce_tier_u_gate("pytest", repo_root=str(repo), session_id="s1")
 
     def test_tier_u_gate_module_has_no_write_tier_u_grant_import(self):
@@ -316,7 +304,7 @@ class TestEnforceTierUGate:
         """An absent key, an empty string, or a whitespace-only value is NOT
         a declaration -- the refusal stands."""
         if reason is None:
-            repo = _make_repo(tmp_path)  # no coordinator.local.md at all
+            repo = _make_repo(tmp_path)
         else:
             repo = self._repo_with_declaration(
                 tmp_path, reason=reason, fast_test_cmd="pytest coordinator_core"
@@ -498,11 +486,9 @@ class TestEnforceTierUGate:
         assert resolved.exit_code == 0
         bare_cmd = resolved.cmd
 
-        # Bare form: Tier U, R6-discharged -- untouched by this dispatch.
         bare_matches = guard.classify_command(bare_cmd, cwd=repo_root)
         assert any(m.tier == "U" for m in bare_matches)
 
-        # Diff-scoped form: Tier F, newly gated.
         diff_scoped_cmd = append_test_paths(
             bare_cmd, ["coordinator_core/session/tests/test_tier_u_gate.py"]
         )
@@ -611,9 +597,6 @@ class TestGateCallSitesPinned:
 
         def _fake_run_resolved_command(cmd: str) -> int:
             run_calls.append(cmd)
-            # First (diff-scoped) run collects zero tests -> triggers the
-            # gate_full fallback with the unscoped command; second run
-            # (the fallback itself) passes.
             return PYTEST_NO_TESTS_COLLECTED if len(run_calls) == 1 else 0
 
         mod._run_resolved_command = _fake_run_resolved_command
@@ -633,9 +616,6 @@ class TestGateCallSitesPinned:
 
         mod = self._load_module("_c1_pin_wcs1", self._WCS1_CLI)
 
-        # No bin/check-ubt-build-fresh.sh in this cwd -> UBT gate skips,
-        # isolating this test to Gate 2 (the fast-test resolver + this
-        # module's gate) exactly as production does for a non-UE repo.
         monkeypatch.chdir(tmp_path)
 
         resolved_cmd = "the-bare-resolved-fast-test-cmd"

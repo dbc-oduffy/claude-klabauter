@@ -194,51 +194,23 @@ _PROG = "migrate-handoff-vocabulary"
 
 _LOG = logging.getLogger(__name__)
 
-# Old ∪ new status/deployment_state enums — anything outside these is
-# unclassifiable (fail loud, never guessed at). "superseded" is the permanently
-# grandfathered archived-schema status axis (module docstring) — recognized but
-# never rewritten.
 _KNOWN_STATUSES: Set[str] = {"active", "consumed", "open", "claimed", "superseded"}
 _KNOWN_DEPLOYMENT_STATES: Set[str] = {
     "awaiting_gate", "ready_to_fire", "in_flight", "shipped",
     "abandoned", "continued", "closed",
 }
 
-# deployment_state: superseded is INVALID on every vocabulary (old or new) — it is
-# the handoff STATUS axis's retired 2026-06-26 token (DoE ruling: retirement
-# replacement expression is status: consumed + deployment_state: abandoned)
-# written onto the wrong axis. Observed in example-retrieval-repo's corpus on records dated
-# AFTER that retirement (2026-07-03..07-14) — fleet-migration fallout, not a
-# data-entry error local to that repo. Recognized (not fail-loud) so it can be
 # REPAIRED (normalized to "abandoned" per the 2026-06-26 ruling, then split by
-# the same succession-proof rule) rather than reported unclassifiable — but
-# tracked as its own category (plan["repairs"]) so a reviewer never mistakes a
-# repair for an ordinary vocabulary rename. Distinct from (and must never be
-# confused with) status: superseded, the permanently grandfathered STATUS-axis
-# value on archived records, which this module never touches.
 _DEPLOYMENT_STATE_REPAIRABLE: Set[str] = {"superseded"}
 
 _STATUS_OLD_TO_NEW: Dict[str, str] = {"active": "open", "consumed": "claimed"}
 
-# (old_field, new_field) rename pairs — key name renamed in place, value untouched.
 _FIELD_RENAMES = (("consumed_at", "claimed_at"), ("consumed_by", "claimed_by"))
 
 # Succession edges only — mirrors archive_handoffs.py's _HEIR_EDGE_KINDS, PLUS
-# origin_handoff (added 2026-07-23 per example-cockpit-repo's dr084 memo). A
-# `kind: spinoff` handoff carries `predecessor: none` BY DESIGN (coordinator
-# spinoff-handoff schema — see DoE `docs/wiki/spinoff-handoffs.md` §
-# "predecessor is none by design") and names its parent in `origin_handoff:`
-# instead, so without this edge every spinoff succession looks like an orphan.
 # origin_handoff is a registered walkable edge in dag.EDGE_KIND_META, so
-# referenced_by handles it with no other change once it's unioned in here.
-#
-# forked_from is branch-point/derivation ancestry (DR-224), not succession, and
-# is deliberately excluded: a spinoff does not retire its origin.
 _HEIR_EDGE_KINDS = {"predecessor", "additional_predecessors", "origin_handoff"}
 
-# Generator-provenance: one-shot corpus migrator rewriting an arbitrary,
-# data-dependent subset of state/handoffs/** and archive/handoffs/**
-# frontmatter (see module docstring) -- the corpus-mutator shape.
 MUTATES = ["state/handoffs/**/*.md", "archive/handoffs/**/*.md"]
 
 def _clean_scalar(raw: Optional[str]) -> Optional[str]:
@@ -261,19 +233,6 @@ def _clean_scalar(raw: Optional[str]) -> Optional[str]:
 
 
 def _trailing_comment_text(raw: Optional[str]) -> Optional[str]:
-    """Return the trailing ``# ...`` YAML inline comment on a raw
-    ``read_fm_field`` capture, or None if there is none.
-
-    Deliberately mirrors ``coordinator_core.dag._strip_inline_comment``'s
-    quote-aware comment-boundary rule (a ``#`` opens a comment only when NOT
-    inside a quoted span AND preceded by whitespace AND followed by whitespace
-    or end-of-string) rather than reusing it directly — ``_strip_inline_comment``
-    returns the PREFIX (the value) and discards the comment; this needs the
-    comment itself, purely for report-line purposes (see the
-    ``dropped_comments`` plan/record key). Never used for classification —
-    ``_clean_scalar`` (which does use ``_strip_inline_comment``) is the only
-    classification reader.
-    """
     if raw is None:
         return None
     in_single = False
@@ -296,16 +255,6 @@ _KEY_LINE_RE_CACHE: Dict[str, "re.Pattern[str]"] = {}
 
 
 def _key_line_re(key: str) -> "re.Pattern[str]":
-    """Cached ``^key:`` locator sharing ``frontmatter/primitives.py``'s
-    key-resolution boundary lookahead ``(?=[ \\t]|\\r?$)``.
-
-    The ``\\r?`` half (2026-07-28) is load-bearing, not cosmetic: without it a
-    present-but-empty ``key:\\r\\n`` in a Windows-authored handoff does not
-    match, so ``_rename_fm_key`` cannot locate a key ``read_fm_field`` reports
-    as present — the migration then either no-ops or raises on a file it should
-    have rewritten. No upstream LF-only normalization of handoff text exists to
-    lean on.
-    """
     pattern = _KEY_LINE_RE_CACHE.get(key)
     if pattern is None:
         pattern = re.compile(r"^" + re.escape(key) + r":(?=[ \t]|\r?$)", re.MULTILINE)
@@ -314,29 +263,8 @@ def _key_line_re(key: str) -> "re.Pattern[str]":
 
 
 def _rename_fm_key(fm_text: str, old_key: str, new_key: str) -> str:
-    """Rename a frontmatter key in place, preserving its line position and value.
-
-    Unlike ``remove_fm_field`` + ``insert_fm_field`` (delete-then-append-elsewhere),
-    this substitutes only the ``old_key:`` token at the START of its line — the
-    value (and any would-be block-scalar continuation lines, which this does NOT
-    touch) stays exactly where it was. Mirrors ``e2cf1a08``'s live-data migration,
-    where ``claimed_at``/``claimed_by`` replaced ``consumed_at``/``consumed_by`` at
-    the SAME line, not at a new position.
-
-    No block-scalar guard is needed here (unlike ``replace_fm_field``/
-    ``remove_fm_field``): renaming the key label never touches the value or any
-    continuation line that follows it.
-
-    Raises ValueError if old_key is not present (callers must check
-    ``read_fm_field`` first — mirrors the other primitives' contract of raising
-    on a precondition the caller was responsible for checking).
-    """
     pattern = _key_line_re(old_key)
-    # negative-spec: the replacement MUST stay a callable. `re` processes backslash
     # escapes in a replacement TEMPLATE, so a template built from a runtime value is a
-    # latent crash (`\U`, `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, `\<digit>`) and a
-    # latent mis-group against any backreference. Enforced by
-    # coordinator_core/tests/test_re_sub_replacement_template_is_literal_or_callable.py.
     new_text, count = pattern.subn(lambda _m: new_key + ":", fm_text, count=1)
     if count == 0:
         raise ValueError(f"_rename_fm_key: {old_key!r} not found in frontmatter")
@@ -344,13 +272,6 @@ def _rename_fm_key(fm_text: str, old_key: str, new_key: str) -> str:
 
 
 def _insert_raw_line_after(fm_text: str, after_key: str, raw_line: str) -> str:
-    """Insert a raw (non key:value) line immediately after ``after_key:``'s line.
-
-    Same anchored-insert mechanics as ``insert_fm_field`` (falls back to append-at-
-    end if the anchor is absent), but for a bare comment line — used for the
-    migration-provenance ``# migration: ...`` note, which is not itself a
-    schema-visible field.
-    """
     pattern = _key_line_re(after_key)
     m = pattern.search(fm_text)
     if m is None:
@@ -362,9 +283,6 @@ def _insert_raw_line_after(fm_text: str, after_key: str, raw_line: str) -> str:
 
 
 def _repo_rel(path: Path, repo_root: Path) -> str:
-    """Repo-relative, forward-slash path — matches the ``predecessor:`` field
-    convention already used across the handoff corpus (e.g.
-    ``state/handoffs/2026-07-15_....md``)."""
     try:
         rel = path.resolve().relative_to(repo_root.resolve())
     except ValueError:
@@ -399,20 +317,6 @@ def iter_handoff_files(repo_root: Path) -> List[Path]:
 def _find_successor(
     candidate_path: Path, all_paths: List[Path], state_dir: Path
 ) -> Optional[Path]:
-    """Positive succession proof: a live/archived handoff naming ``candidate_path``
-    via a ``predecessor``/``additional_predecessors``/``origin_handoff`` reverse
-    lineage edge.
-
-    Reuses ``coordinator_core.dag.referenced_by`` — the same primitive
-    ``archival.reverse_membership`` (and, transitively, ``archive_handoffs.py``'s
-    heir-branch classifier) is built on — rather than re-deriving edge resolution.
-    Deterministic on a diamond (>1 successor): lexicographically-first absolute
-    path wins, matching ``archive_handoffs.py``'s ``_classify_heir_children``.
-
-    Returns None on zero referencers OR on a ``referenced_by`` raise (empty
-    ``all_paths``, bad ``handoff_dir``) — fail-closed to the "no successor found"
-    branch (``closed``+``stale``), never silently treated as "found".
-    """
     try:
         result = referenced_by(
             str(candidate_path),
@@ -646,12 +550,6 @@ def _resolve_deliverable_id_successor(
 
 
 def _successor_ref(successor_path: Path, repo_root: Path) -> str:
-    """The value to stamp into ``continued_into``: the successor's own
-    ``handoff_id`` field if present (id-preferred, per the plan's C2 memo item on
-    ``continued_into``'s cross-repo target format), else its repo-relative path
-    (path fallback) — mirrors ``e2cf1a08``'s own migration
-    (``continued_into: hnd-coverage-gate-single-graph-wal-057c56``, an id, not a
-    path, on that record)."""
     try:
         with open(successor_path, "r", encoding="utf-8", errors="replace") as fh:
             text = fh.read()
@@ -671,11 +569,6 @@ def _plan_one(
     state_dir: Path,
     all_paths: List[Path],
 ) -> Optional[Dict[str, Any]]:
-    """Plan one record's migration. Returns None on a genuine no-op (already fully
-    new-vocabulary — the idempotency contract). Raises ValueError on an
-    unclassifiable record (caller converts to a ``failures`` entry) — never
-    guesses, never partially applies.
-    """
     with open(path, "r", encoding="utf-8", newline="") as fh:
         original = fh.read()
 
@@ -684,10 +577,6 @@ def _plan_one(
         raise ValueError("no parseable YAML frontmatter")
 
     fm_text = split.fm_text
-    # Comment-aware: a trailing `# ...` on the status/deployment_state line is
-    # legal YAML and must not change classification (see _clean_scalar). The
-    # `_full` captures are kept alongside for the dropped-comment report (see
-    # _trailing_comment_text) — classification never reads them directly.
     status_raw_full = read_fm_field(fm_text, "status")
     deployment_raw_full = read_fm_field(fm_text, "deployment_state")
     status_raw = _clean_scalar(status_raw_full)
@@ -696,9 +585,6 @@ def _plan_one(
     if status_raw is None or status_raw not in _KNOWN_STATUSES:
         raise ValueError(f"unrecognized status {status_raw!r}")
     if deployment_raw is None:
-        # Required-field defect, not a vocabulary issue — this tool repairs
-        # vocabulary, it does not invent a missing required field. Reported
-        # unfixable-by-this-tool for the owning EM to resolve; never guessed.
         raise ValueError("deployment_state field is absent (required-field defect, not a vocabulary issue)")
     if (
         deployment_raw not in _KNOWN_DEPLOYMENT_STATES
@@ -713,15 +599,6 @@ def _plan_one(
     is_repair = deployment_raw in _DEPLOYMENT_STATE_REPAIRABLE
     is_continued = False
 
-    # AC1 (docs/plans/2026-08-18-supersede-stamps-and-archives-atomically.md,
-    # DR-324 "fifth writer" open item): a record this pass stamps
-    # deployment_state:continued must never be left resident in
-    # state/handoffs/ with no archival discharge. `is_resident` is read here
-    # (cheap containment check, no I/O) so the caller (`apply_migration`) can
-    # single out exactly the records needing that discharge — an
-    # already-archived record (this migrator also rewrites
-    # archive/handoffs/**, see module docstring) has nothing left to move and
-    # is deliberately excluded from that set.
     try:
         path.resolve().relative_to(state_dir.resolve())
         is_resident = True
@@ -751,15 +628,6 @@ def _plan_one(
             changes.append(f"{old_key} → {new_key} (renamed, value preserved: {old_val})")
 
     if deployment_raw == "abandoned" or is_repair:
-        # Ladder: reverse-lineage first (byte-parity with the shipped C5+C8
-        # pass, e2cf1a08 — do NOT reorder), THEN this record's own
-        # superseded_by as a fallback channel (see _resolve_superseded_by),
-        # THEN a deliverable_id join for the roadmap-stub-graduates-into-baton
-        # shape neither earlier rung can see (see
-        # _resolve_deliverable_id_successor). Each rung is only tried when the
-        # one before it found nothing; the rung that actually resolved the
-        # successor is named in the report so a receiving EM can audit a
-        # `continued` verdict without re-deriving it.
         successor = _find_successor(path, all_paths, state_dir)
         successor_rung: Optional[str] = "reverse-lineage" if successor is not None else None
         if successor is None:
@@ -840,9 +708,6 @@ def _plan_one(
         "repair": is_repair,
         "closed_unverified": closed_unverified,
         "_rebuilt": rebuilt,
-        # AC1 discharge target set — see the `is_continued`/`is_resident`
-        # comment above. Internal (not in `_public_record`'s allowlist);
-        # `apply_migration` reads it to single out the archival-discharge pass.
         "_continued_resident": is_continued and is_resident,
     }
 
@@ -1015,30 +880,10 @@ def _discharge_continued_archival(
 def apply_migration(
     plan: Dict[str, Any], *, repo_root: Optional[Path] = None
 ) -> Dict[str, List[str]]:
-    """Write every planned record's rebuilt text, then discharge AC1 for every
-    ``continued``-resident record (see ``_discharge_continued_archival``).
-    Never called for a record with zero planned changes (``plan_migration``
-    excludes those) or for a failure (``failures`` entries carry no
-    ``_rebuilt`` payload to write).
-
-    ``repo_root`` (the git COMMON dir — see `_discharge_continued_archival`'s
-    P9 note) is optional ONLY for a caller that has no archival concern (e.g.
-    a test exercising the plain vocabulary rewrite in isolation) — every real
-    caller (the CLI, the registered op) supplies it. Omitting it skips the
-    AC1 discharge pass entirely rather than guessing a worktree root; the
-    returned report is ``{"archived": [], "retained": [], "warnings": []}`` in
-    that case.
-    """
     undischarged = [
         rec["path"] for rec in plan["records"] if rec.get("_continued_resident")
     ]
     if repo_root is None and undischarged:
-        # AC1 is "one operation, or the writer REFUSES" — and the refusal has to
-        # land BEFORE any byte is written. Refusing after the write loop would
-        # leave exactly the stamped-but-unarchived resident record this plan
-        # exists to eliminate, with an exception on top. A plan with nothing
-        # resident to discharge needs no git at all, which preserves this CLI's
-        # "runs against an arbitrary directory tree" contract.
         raise ValueError(
             "apply_migration: refusing to write "
             f"{len(undischarged)} record(s) stamped deployment_state:continued while "
@@ -1068,9 +913,6 @@ def _public_record(rec: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _print_report(plan: Dict[str, Any], *, apply: bool) -> None:
-    """Prints renames/splits and REPAIRS (invalid deployment_state: superseded
-    values) as two visually distinct sections — a reviewer must never mistake a
-    REPAIR of an invalid value for an ordinary old→new vocabulary rename."""
     verb = "Applying" if apply else "Would update"
     renames = [r for r in plan["records"] if not r["repair"]]
     repairs = [r for r in plan["records"] if r["repair"]]
@@ -1144,13 +986,6 @@ def main(argv: List[str]) -> int:
     plan = plan_migration(root)
     _print_report(plan, apply=apply)
     if apply:
-        # Only resolve a git common dir when the plan actually needs the AC1
-        # discharge pass — this CLI also runs against a plain (non-git)
-        # directory tree (this op's own contract: repo_root is an arbitrary
-        # tree, not necessarily a git worktree), and a plan with zero
-        # continued-resident records has nothing for `apply_migration`'s
-        # discharge pass to do, so it must not fail loud just because
-        # `--root` happens not to be a git repo.
         needs_discharge = any(
             rec.get("_continued_resident") for rec in plan["records"]
         )
@@ -1239,7 +1074,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "failures": plan["failures"],
         "repairs": plan["repairs"],
         "closed_unverified": plan["closed_unverified"],
-        # AC1 discharge report (additive keys — see _discharge_continued_archival).
         "archived": archival["archived"],
         "retained": archival["retained"],
         "archival_warnings": archival["warnings"],

@@ -80,9 +80,6 @@ def test_legacy_directory_removal_is_declared_as_delete_clause():
 
 
 def test_no_delete_clause_for_the_copied_manifest_or_tree_source():
-    """The manifest and tree clauses are copies, not moves — legacy source
-    files are left in place, so only the compat-pointer directory
-    (clause 4) carries a delete effect."""
     delete_clauses = [c for c in target.WRITE_SURFACE.clauses if c.effect == "delete"]
     assert len(delete_clauses) == 1
     assert delete_clauses[0] is target.WRITE_SURFACE.clauses[3]

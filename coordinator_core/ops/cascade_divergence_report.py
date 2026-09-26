@@ -59,10 +59,6 @@ from coordinator_core.ops.fleet._common import main_worktree_root
 
 SCHEMA_VERSION = 1
 
-# Plan-header field extraction (Shape 3, "Plan headers") — a line scan over the
-# frontmatter fence's own text, never a full YAML parse. Mirrors the plan's own
-# census-script regex shape (docs/plans/2026-09-23-cascade-write-provenance.md
-# census row 2/3), reused here rather than re-derived by hand a second time.
 _HEADER_FIELD_RE: Dict[str, "re.Pattern[str]"] = {
     "status": re.compile(r"^status:\s*(.*)$", re.M),
     "deliverable_id": re.compile(r"^deliverable_id:\s*(.*)$", re.M),
@@ -71,18 +67,11 @@ _HEADER_FIELD_RE: Dict[str, "re.Pattern[str]"] = {
 
 
 def _fm_value(raw: str) -> str:
-    """Strip a trailing YAML comment and surrounding quotes; normalise the
-    YAML null spellings to an empty string, mirroring the census script's own
-    `f(t, k)` helper exactly."""
     value = raw.split(" #", 1)[0].strip().strip("\"'")
     return "" if value in ("null", "~", "") else value
 
 
 def _read_plan_header(path: Path) -> Dict[str, str]:
-    """Read `path` up to its closing frontmatter fence (never a fixed byte
-    count — C1 measured a 32,656-byte frontmatter on this tree) and extract
-    `status`/`deliverable_id`/`sizing_object` by line scan. No YAML parse.
-    Returns {} for a non-frontmatter document or an unreadable file."""
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -99,8 +88,6 @@ def _read_plan_header(path: Path) -> Dict[str, str]:
 
 
 def _iter_plan_paths(worktree_root: Path) -> List[Path]:
-    """`docs/plans/*.md` (live) plus `archive/specs/**/*.md` (archived) — the
-    same two sources the plan's own census rows scan (row 2)."""
     paths: List[Path] = []
     plans_dir = worktree_root / "docs" / "plans"
     if plans_dir.is_dir():
@@ -183,9 +170,6 @@ def _collect_handoff_index(
 
 
 def _provenance(fm: dict) -> Optional[Dict[str, Any]]:
-    """`{"advanced_by": ..., "advanced_at": ...}` when the record carries
-    either field, else None — a present value on a non-terminal record is
-    what names a field-level revert (module docstring)."""
     advanced_by = fm.get("advanced_by")
     advanced_at = fm.get("advanced_at")
     if advanced_by is None and advanced_at is None:
@@ -254,9 +238,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     refused: List[Dict[str, Any]] = []
 
     # Sizing candidates — leg (b) is EXEMPT for _SIZING_KIND (no successor-edge
-    # vocabulary reaches a sizing-object), so corpus_metas is None here: the
-    # handoff-corpus index above is never threaded into a sizing candidate's
-    # predicate call.
     for candidate in sizing_candidates:
         sizing_path = candidate["sizing_path"]
         fm = candidate["fm"]
@@ -289,10 +270,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             }
         )
 
-    # Handoff candidates — sourced from the plan-trigger cascade only (this
-    # scan's own read of docs/plans/*.md / archive/specs/**/*.md), never a
-    # separate scan of archive/handoffs/** (that is the handoff-conclusion
-    # trigger, out of scope here).
     implemented_plan_ids: Dict[str, List[Path]] = {}
     for plan_path, header in implemented_plans:
         did = (header.get("deliverable_id") or "").strip()

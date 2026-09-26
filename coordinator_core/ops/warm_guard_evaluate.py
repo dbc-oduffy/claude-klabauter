@@ -90,32 +90,13 @@ from coordinator_core.bash_guards.dispatch import evaluate_payload_json
 from coordinator_core.ipc import register_op
 from coordinator_core.warm.caller_context import resolve_caller_context
 
-#: Memoized `resolution_class` for THIS process. Safe to cache, and the asymmetry with
-#: `policy_file` below is the whole correctness of this pair -- do not "simplify" them into one
-#: helper. `resolution_class` classifies THE ENGINE'S OWN resolution of itself
-#: (`engine_root.coordinator_engine_root_with_class`), so it is a property of this resident
-#: server and cannot vary per caller. `policy_file` is a CALLER fact and must be recomputed
-#: every call: caching it would freeze it to whichever session booted the engine, the exact
-#: hazard DoE's governed-surfaces manifest acceptance was bound to ("read per-call, never
-#: memoized in the resident server") one seam over.
-#:
 #: `""` is the NEGATIVE cache, deliberately distinct from `None`. `coordinator_engine_root_with_class`
 #: pays an unconditional `_load_shim()`/`exec_module` (its own "HOT-PATH SHAPE" note) and this op
-#: runs per Bash tool call, so a plain try/except that retried would re-pay that shim load on
-#: every call forever on a box where resolution fails -- a per-call cost to re-learn a fact that
-#: does not change. Swallowing is licensed here and NOT for `policy_file`: an absent
-#: `resolution_class` only degrades `_crash_deny`'s message phrasing back to its
 #: pre-`resolution_class` text (`dispatch._RESOLUTION_CLASS_PHRASES.get`), never a dropped guard.
 _RESOLUTION_CLASS: Optional[str] = None
 
 
 def _engine_resolution_class() -> Optional[str]:
-    """This engine's own DR-132 resolution class, resolved once per process.
-
-    Returns `None` when unresolvable, which is what every caller predating the
-    `resolution_class` kwarg already passed -- a cosmetic degradation of deny-message
-    phrasing, never a behavioural one.
-    """
     global _RESOLUTION_CLASS
     if _RESOLUTION_CLASS is None:
         try:
@@ -145,11 +126,7 @@ def _policy_file_for(payload: Dict[str, Any]) -> Optional[str]:
         return None
     return str(Path(plugin_root) / "subagent-sandbox-policy.yaml")
 
-#: The no-objection verdict this op ever answers with — an empty result dict. Mirrors
-#: `hook_http.allow_response`'s own "carries no permissionDecision" contract one layer
 #: down: this op speaks JSON-RPC `result`, not the hook response body, so it has no
-#: `hookSpecificOutput` wrapper of its own to omit a key from — the absence of
-#: `permissionDecision` IS the no-objection signal `interpret_result` reads.
 NO_OBJECTION: Dict[str, Any] = {}
 
 

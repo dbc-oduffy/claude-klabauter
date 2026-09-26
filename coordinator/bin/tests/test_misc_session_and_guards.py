@@ -1,19 +1,3 @@
-"""test_misc_session_and_guards.py — unit coverage for
-coordinator/bin/misc-session-and-guards.py (M3 chunk C-MISC port).
-
-Covers the pure-logic paths that were ported off DoE-claude instruction-file
-bash fences: the claim-error peer-vs-infra classifier, the rag-freshness-gate
-check-rag-state/generate-repomap branching, the ~/.claude.json example-retrieval-repo
-CLI/root resolution + silent-skip contract, and the autonomous-sentinel
-enable/disable fail-loud-vs-idempotent branches. The autonomous-sentinel
-tests monkeypatch `_import_resolve_session_id` so this suite never requires
-the engine root to resolve or `coordinator_core` to be importable — same idiom
-used by test_archive_stamp_cli_ship_handoff.py / test_session_claim_cli.py
-for the `_import_module()` seam.
-
-Run:
-    python -m pytest coordinator/bin/tests/test_misc_session_and_guards.py -q
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -95,7 +79,7 @@ class RagFreshnessGateTests(unittest.TestCase):
         with mock.patch.object(_cli.subprocess, "run", return_value=fake_check) as run_mock:
             rc = _cli._cmd_rag_freshness_gate([])
         self.assertEqual(rc, 0)
-        run_mock.assert_called_once()  # only check-rag-state.py, no repomap call
+        run_mock.assert_called_once()
 
     def test_stale_but_generate_repomap_missing_skips_with_message(self):
         fake_check = mock.Mock(returncode=0, stdout="stale\n")
@@ -196,7 +180,7 @@ class RagStalenessSurveyTests(unittest.TestCase):
         m = mock.mock_open(read_data=json.dumps(fake_config))
         with mock.patch.object(Path, "open", m):
             cli, root = _cli._resolve_example_retrieval_repo_cli_and_root()
-        self.assertEqual(cli, "example_retrieval_repo.cli")  # endswith("cli") matches
+        self.assertEqual(cli, "example_retrieval_repo.cli")
         self.assertEqual(root, "/some/project/root")
 
     def test_resolve_example_retrieval_repo_cli_and_root_finds_py_arg(self):

@@ -45,7 +45,6 @@ def _payload(content: str = "import os\n") -> str:
 
 
 def test_signature_parity_between_seam_and_callee() -> None:
-    """Every keyword-only param of `evaluate()` must exist on the seam."""
     inner = inspect.signature(engine.evaluate).parameters
     outer = inspect.signature(engine.evaluate_payload_json).parameters
 
@@ -68,17 +67,11 @@ def test_signature_parity_between_seam_and_callee() -> None:
 
 
 def test_aggregate_keyword_is_accepted_without_raising() -> None:
-    """The literal call shape a dispatcher would write must not raise."""
     engine.evaluate_payload_json(_payload(), aggregate=True)
     engine.evaluate_payload_json(_payload(), aggregate=False)
 
 
 def test_aggregate_is_actually_forwarded_not_merely_accepted() -> None:
-    """Swallowing the keyword would satisfy the test above and change nothing.
-
-    `aggregate=True` must reach `evaluate()`, which is observable in the return
-    SHAPE: a list under aggregate, never a list without it.
-    """
     seen: dict = {}
     real = engine.evaluate
 
@@ -98,8 +91,6 @@ def test_aggregate_is_actually_forwarded_not_merely_accepted() -> None:
 
 
 def test_default_shape_is_unchanged_for_existing_callers() -> None:
-    """Every current caller omits the keyword and must stay byte-identical:
-    the first advisory or None, never a list."""
     out = engine.evaluate_payload_json(_payload())
     assert out is None or isinstance(out, dict)
 

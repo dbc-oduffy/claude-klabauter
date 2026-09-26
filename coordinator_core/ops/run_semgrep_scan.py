@@ -89,25 +89,12 @@ _CREATIONFLAGS = no_console_creationflags()
 _DEFAULT_CONFIG = "auto"
 _STDERR_LOG_TAIL = 2000
 
-# Neither the git-diff scoping call nor the semgrep
-# scan itself carried a timeout; a stuck semgrep run or an unresponsive git
-# invocation wedged this op's worker thread forever. Two separate constants
-# since semgrep (an externally-invoked scanner over caller-supplied files)
-# can legitimately run far longer than a local `git diff`.
 _GIT_TIMEOUT_SECONDS = 30
 _SEMGREP_SITE = "coordinator_core/ops/run_semgrep_scan.py :: _run_semgrep"
 _SEMGREP_TIMEOUT_SECONDS = bound_for(_SEMGREP_SITE)
 
 
 def _diff_scoped_files(repo_root: Path, diff_base: str) -> List[str]:
-    """Return the repo-relative paths `git diff --name-only` reports as changed
-    (added/copied/modified/renamed — deletions excluded, there is nothing on disk
-    for semgrep to scan) between the working tree and *diff_base*.
-
-    Raises ValueError with git's own stderr when *diff_base* does not resolve
-    (unknown ref, corrupt repo) — an unresolvable scope is a caller error, not a
-    silent empty-scope result.
-    """
     try:
         proc = subprocess.run(
             ["git", "diff", "--name-only", "--diff-filter=ACMR", diff_base],
@@ -130,8 +117,6 @@ def _diff_scoped_files(repo_root: Path, diff_base: str) -> List[str]:
             f"ref/commit? stderr: {(proc.stderr or '').strip()[-_STDERR_LOG_TAIL:]}"
         )
     names = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
-    # Defensive: a rename/checkout race can list a path that no longer exists on
-    # disk by the time this runs — semgrep would error on a missing target.
     return [name for name in names if (repo_root / name).exists()]
 
 
@@ -144,7 +129,6 @@ def _severity_counts(findings: List[dict]) -> Dict[str, int]:
 
 
 def _parse_semgrep_json(stdout: str) -> List[dict]:
-    """Map raw `semgrep --json` output to this op's flat finding-dict shape."""
     try:
         payload = json.loads(stdout) if stdout.strip() else {}
     except json.JSONDecodeError as exc:
@@ -171,12 +155,6 @@ def _parse_semgrep_json(stdout: str) -> List[dict]:
 
 
 def _run_semgrep(repo_root: Path, config: str, files: List[str]) -> List[dict]:
-    """Invoke `semgrep --config=<config> --json <files>` and return parsed findings.
-
-    Semgrep's own exit-code contract: 0 = clean scan, 1 = findings reported (both
-    are successful scans, not errors); any other code is a genuine scanner error
-    (bad config, internal crash) and is raised loud rather than swallowed.
-    """
     try:
         proc = subprocess.run(
             ["semgrep", f"--config={config}", "--json", *files],
@@ -223,9 +201,6 @@ def _run_semgrep_scan(params: dict, repo_root: Optional[Path] = None) -> dict:
             "commit the scan scope is diffed against — there is no whole-tree default)"
         )
     if diff_base.startswith("-"):
-        # diff_base is passed positionally
-        # to `git diff` with no `--` separator; a value beginning with `-`
-        # would be misparsed as a git flag rather than a revision.
         raise ValueError(
             f"ci.run_semgrep_scan: diff_base {diff_base!r} looks like a git "
             "option (starts with '-'), not a ref/commit — refusing"
@@ -239,8 +214,6 @@ def _run_semgrep_scan(params: dict, repo_root: Optional[Path] = None) -> dict:
         return {"findings": [], "tier_used": "empty_scope", "severity_counts": {}}
 
     if shutil.which("semgrep") is None:
-        # Fallback tier: semgrep is not installed. See module docstring
-        # "Fallback-tier strategy" — no invented Tier-2 scanner, honest signal.
         print(
             "ci.run_semgrep_scan: semgrep not found on PATH — falling back to "
             "tier_used='unavailable' (no findings scanned)",

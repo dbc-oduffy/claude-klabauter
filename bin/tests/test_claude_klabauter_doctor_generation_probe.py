@@ -55,7 +55,6 @@ _BIN_PROBE = _REPO_ROOT / "bin" / "claude-klabauter-doctor-probe.py"
 
 
 def _load_probe_module() -> Optional[ModuleType]:
-    """Import bin/claude-klabauter-doctor-probe.py as a fresh module via importlib."""
     if not _BIN_PROBE.exists():
         return None
     _KEY = "claude_klabauter_doctor_probe_generation_probe_unit"
@@ -100,20 +99,12 @@ def _is_parseable_probe_result(r: object) -> bool:
 
 
 class _FakeProc:
-    """Stand-in for a psutil.Process yielded by process_iter(attrs).
-
-    Mirrors test_claude_klabauter_doctor_warm_probes.py's fixture exactly — kept
-    local (rather than imported) so this file's fixtures stay self-
-    contained, matching that file's own comment on why the loader pattern
-    is duplicated rather than shared.
-    """
 
     def __init__(self, info: dict) -> None:
         self.info = info
 
 
 def _make_fake_psutil(procs):
-    """Minimal fake psutil exposing only process_iter."""
     import types
 
     fake = types.ModuleType("psutil")
@@ -144,7 +135,6 @@ def _write_breadcrumb_for_root(
 
 
 class TestWarmGenerationProbe:
-    """_run_probe_warm_generation() — AC8."""
 
     def test_claude_klabauter_root_none_is_info_skipped(self) -> None:
         mod = _require_module()
@@ -159,7 +149,6 @@ class TestWarmGenerationProbe:
     def test_no_resident_server_is_cannot_tell(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """No resident warm server at all is a legitimate 'cannot tell'."""
         mod = _require_module()
 
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
@@ -180,7 +169,7 @@ class TestWarmGenerationProbe:
         mod = _require_module()
 
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
-        engine_root = tmp_path  # no breadcrumb written for this root
+        engine_root = tmp_path
         procs = [{"pid": 900, "create_time": 0.0, "cmdline": _server_cmdline(engine_root)}]
         monkeypatch.setitem(sys.modules, "psutil", _make_fake_psutil(procs))
 
@@ -220,18 +209,6 @@ class TestWarmGenerationProbe:
     def test_stale_token_is_a_self_resolving_warn(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AC8 — a stale token is reported without a connect attempt, as a
-        self-resolving observation rather than a fault.
-
-        Classification pin. The stale arm's own remediation says the state
-        "drains on its own ... no direct action is named here", and step-zero
-        `fail` means the checked condition is NOT satisfied with a remediation
-        the reader can run. A state nobody acts on is `warn`, not `fail` —
-        otherwise a healthy box mid-generation-swap prints a fault in the
-        installer's verification block
-        (docs/problems/2026-08-26-what-a-reinstall-on-the-mac-actually-hits.md
-        § 7). Guard: bin/tests/test_probe_status_classification.py.
-        """
         mod = _require_module()
 
         from coordinator_core.warm import skew
@@ -318,13 +295,6 @@ class TestWarmGenerationProbe:
     def test_resident_server_engine_root_differs_from_claude_klabauter_root_uses_own_breadcrumb(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Bug fix: a resident server whose engine root differs from
-        `claude_klabauter_root` must have ITS OWN breadcrumb read — the original
-        defect resolved `claude_klabauter_root`'s breadcrumb regardless of which
-        engine root the resident server actually ran from, so a server
-        running out of a published mirror (no breadcrumb under
-        `claude_klabauter_root`) always read as 'no breadcrumb — cannot tell', even
-        though its own clone had a real breadcrumb on disk."""
         mod = _require_module()
 
         from coordinator_core.warm import skew
@@ -335,7 +305,6 @@ class TestWarmGenerationProbe:
         other_engine_root.mkdir()
 
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
-        # Deliberately NO breadcrumb written for claude_klabauter_root.
         skew.write_engine_stamp(other_engine_root, "sha-mirror-token")
         current_token = skew.compute_client_token(other_engine_root)
         _write_breadcrumb_for_root(
@@ -360,8 +329,6 @@ class TestWarmGenerationProbe:
     def test_multiple_resident_servers_any_stale_is_reported(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Multiple resident servers is a real case: one current + one stale
-        must name the stale pid, not a PASS that hides it."""
         mod = _require_module()
 
         from coordinator_core.warm import skew
@@ -432,8 +399,6 @@ class TestWarmGenerationProbe:
     def test_psutil_never_reaches_election_elect_module_wide(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """No connect and no election, even on the PASS path — not just the
-        stale path AC8 pins."""
         mod = _require_module()
 
         from coordinator_core.warm import election, skew

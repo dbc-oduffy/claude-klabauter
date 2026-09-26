@@ -98,35 +98,24 @@ from coordinator_core.ops.ceremony import tail_ops
 
 
 def _run(coro) -> Any:
-    """Run an async coroutine synchronously."""
     return asyncio.run(coro)
 
 
 def _make_common_dir(tmp_path: Path) -> Path:
-    """<tmp_path>/repo/.git -- mirrors the standard-layout common_dir convention."""
     common_dir = tmp_path / "repo" / ".git"
     common_dir.mkdir(parents=True)
     return common_dir
 
 
-# ---------------------------------------------------------------------------
-# cs_archive
-# ---------------------------------------------------------------------------
-
-
 def test_archive_idempotency(tmp_path):
     common_dir = _make_common_dir(tmp_path)
 
-    # Never existed -- the op cannot tell an already-archived session from one that
-    # never existed, so this is unknown, not a determined skip. Action unchanged:
-    # still a clean early return, no side effect.
     result = tail_ops.cs_archive(common_dir, "sid-never-existed")
     assert result["acted"] == []
     assert result["failed"] == []
     assert result["skipped"] == []
     assert result["unknown"] == [f"{tail_ops.OP_CS_ARCHIVE}:already-archived-or-absent"]
 
-    # Archive once for real, then call again -- second call is the same indeterminate case.
     sdir = common_dir / "coordinator-sessions" / "sid-1"
     sdir.mkdir(parents=True)
     (sdir / "meta.json").write_text("{}", encoding="utf-8")
@@ -158,11 +147,6 @@ def test_archive_moves_session_dir(tmp_path):
     archive_dirs = list((common_dir / "coordinator-sessions" / ".archive").glob("sid-2-*"))
     assert len(archive_dirs) == 1, f"expected exactly one archived dir; got {archive_dirs}"
     assert (archive_dirs[0] / "meta.json").is_file()
-
-
-# ---------------------------------------------------------------------------
-# cs_release_artifact
-# ---------------------------------------------------------------------------
 
 
 def _make_claim(common_dir: Path, artifact_class: str, basename: str, *, held_by: str | None) -> Path:
@@ -214,9 +198,6 @@ def test_release_absent_claim_is_clean_skip(tmp_path, monkeypatch):
 
 
 def test_release_legacy_pid_only_never_held(tmp_path, monkeypatch):
-    """A claim dir with no session_id file (legacy pid-only claim) is NEVER released via
-    cs_release_artifact -- the pid fallback the bash original carried is a permanent
-    in-harness no-op and this native port keys exclusively on session_id (negative-spec)."""
     common_dir = _make_common_dir(tmp_path)
     claim_dir = _make_claim(common_dir, "plan", "legacy-plan", held_by=None)
     (claim_dir / "pid").write_text("12345", encoding="utf-8")
@@ -230,8 +211,6 @@ def test_release_legacy_pid_only_never_held(tmp_path, monkeypatch):
 
 
 def test_release_toctou_takeover_is_noop(tmp_path, monkeypatch):
-    """A takeover between the two _claim_held_by_me reads flips the second read to False;
-    the destructive rm must NOT run."""
     common_dir = _make_common_dir(tmp_path)
     claim_dir = _make_claim(common_dir, "plan", "raced-plan", held_by="MY-SESSION")
 
@@ -244,7 +223,6 @@ def test_release_toctou_takeover_is_noop(tmp_path, monkeypatch):
         calls["n"] += 1
         if calls["n"] == 1:
             return real_check(cdir, my_sid)
-        # Simulate a concurrent takeover landing between the two reads.
         (cdir / "session_id").write_text("NEW-HOLDER", encoding="utf-8")
         return real_check(cdir, my_sid)
 
@@ -252,20 +230,12 @@ def test_release_toctou_takeover_is_noop(tmp_path, monkeypatch):
 
     result = tail_ops.cs_release_artifact(common_dir, "plan", "raced-plan")
 
-    # Peer-safety behaviour is unchanged: the claim dir must still exist afterward --
-    # this is the assertion protecting the conservative never-delete-a-live-peer's-claim
-    # action; only the report (unknown, not skipped) changes.
     assert claim_dir.is_dir(), "a mid-flight takeover must abort the release, not delete it"
     assert result["acted"] == []
     assert result["failed"] == []
     assert result["skipped"] == []
     assert result["unknown"] == [f"{tail_ops.OP_CS_RELEASE_ARTIFACT}:holder-changed-toctou"]
     assert calls["n"] == 2
-
-
-# ---------------------------------------------------------------------------
-# Fleet two-phase wiring (sweep parity + archive_plans/handoffs wiring)
-# ---------------------------------------------------------------------------
 
 
 def test_two_phase_no_candidates_short_circuits(tmp_path):
@@ -350,11 +320,7 @@ def test_unregistered_op_key_is_clean_failure(tmp_path):
     assert result["failed"] == ["fleet.does_not_exist: fleet.does_not_exist not registered"]
 
 
-# ---------------------------------------------------------------------------
 # refresh_roadmap_callout (STEP_2_75, C9 wiring-gap fix; its former
-# render_handoff_tracker sibling was retired 2026-08-14, see
-# docs/plans/2026-08-14-retire-the-handoff-tracker-and-project-tracker-renders.md C2)
-# ---------------------------------------------------------------------------
 
 
 def test_refresh_roadmap_callout_no_consumed_handoffs_is_clean_skip(tmp_path):
@@ -467,11 +433,6 @@ def test_refresh_roadmap_callout_handler_exception_is_failed(tmp_path):
     assert "RuntimeError" in result["failed"][0]
 
 
-# ---------------------------------------------------------------------------
-# fire_tracker_and_roadmap_detached (C5, 2026-07-23 wsc-tail-slim-down)
-# ---------------------------------------------------------------------------
-
-
 def _write_handoff(worktree_root: Path, name: str, roadmap_id: str | None) -> str:
     handoff_dir = worktree_root / "state" / "handoffs"
     handoff_dir.mkdir(parents=True, exist_ok=True)
@@ -516,7 +477,6 @@ def test_fire_tracker_and_roadmap_detached_no_roadmap_ids_is_clean_skip(tmp_path
     with patch.object(tail_ops, "spawn_detached", return_value=True) as mock_spawn:
         result = tail_ops.fire_tracker_and_roadmap_detached(worktree_root, [rel_path])
 
-    # No roadmap id -- no spawn at all.
     assert mock_spawn.call_count == 0
     assert result["failed"] == []
     assert "detached_fire:refresh-roadmap-callout.py:no-roadmap-id" in result["skipped"]
@@ -530,7 +490,6 @@ def test_fire_tracker_and_roadmap_detached_dedupes_roadmap_ids(tmp_path):
     with patch.object(tail_ops, "spawn_detached", return_value=True) as mock_spawn:
         result = tail_ops.fire_tracker_and_roadmap_detached(worktree_root, [rel_a, rel_b])
 
-    # Exactly ONE roadmap-callout fire for the shared id (not two).
     assert mock_spawn.call_count == 1
     assert result["acted"].count("detached_fire:refresh-roadmap-callout.py:goal-example") == 1
 
@@ -546,11 +505,6 @@ def test_fire_tracker_and_roadmap_detached_records_spawn_failure(tmp_path):
     assert len(result["failed"]) == 1
     assert "refresh-roadmap-callout.py" in result["failed"][0]
     assert result["acted"] == []
-
-
-# ---------------------------------------------------------------------------
-# housekeeping-liveness wiring (C17b follow-up)
-# ---------------------------------------------------------------------------
 
 
 def test_refresh_roadmap_callout_success_stamps_roadmap_callout(tmp_path):
@@ -592,5 +546,4 @@ def test_refresh_roadmap_callout_all_skipped_does_not_stamp(tmp_path):
     mock_main.assert_not_called()
     statuses = hl.liveness_status(str(worktree_root))
     assert statuses[hl.ROADMAP_CALLOUT] == hl.STATUS_NEVER_STAMPED
-
 

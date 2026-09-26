@@ -14,7 +14,6 @@ Spec backlink:
   docs/plans/2026-07-06-ceremony-as-pipeline-2-invert-workstream.md § Wave 0
 """
 
-# C2.1 — expose the resolved-state data model at package level for consumers.
 from coordinator_core.ops.ceremony.pipeline_context import (  # noqa: F401
     BranchResolution,
     PipelineContext,

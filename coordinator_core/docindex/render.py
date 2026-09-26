@@ -114,18 +114,14 @@ _CLOSE_RE = re.compile(
     re.escape(_CLOSE_PREFIX) + r"[0-9a-f]{64}" + re.escape(_CLOSE_SUFFIX)
 )
 
-_EMPTY_LIST_SENTINEL = "\u2014"  # em dash, matching the hand-written table's own convention
+_EMPTY_LIST_SENTINEL = "\u2014"
 
 
 class RenderError(ValueError):
-    """Raised when rendering cannot proceed: no delimited region found in the
-    document text, a malformed sentinel pair, or an entry missing a value for
-    a field its index declares.
-    """
+    pass
 
 
 def _escape_cell(text: str) -> str:
-    """Escape a literal ``|`` and any newline before insertion into a table cell."""
     return text.replace("|", "\\|").replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
 
 
@@ -189,13 +185,6 @@ def render(
     spec: IndexSpec,
     entries: Sequence[Mapping[str, object]],
 ) -> str:
-    """Replace the delimited region in ``document_text`` with a freshly
-    emitted table built from ``spec.entry_fields`` and ``entries``.
-
-    Pure: a function of (document_text, spec, entries) -> document_text.
-    Raises ``RenderError`` when the document carries no recognizable
-    sentinel pair, or when an entry lacks a value for a declared field.
-    """
     open_idx = document_text.find(OPEN_SENTINEL)
     if open_idx == -1:
         raise RenderError(

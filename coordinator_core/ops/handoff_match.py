@@ -49,37 +49,11 @@ _LOG = logging.getLogger(__name__)
 
 
 def _collect_handoffs(handoffs_dir: Path) -> List[dict]:
-    """Enumerate ``state/handoffs/*.md`` as ``[{id, title, text}]`` items for ranking.
-
-    For each well-formed handoff the ``id`` field is the filename stem (handoff files are
-    named by timestamp+slug convention, e.g. ``2026-07-02_230112_roadmap-pcore-12.md``).
-    The ``text`` field (haystack) is the handoff's ``title`` frontmatter value, lowercased —
-    sufficient for a "which handoff did you mean?" picker.
-
-    Files with YAML parse errors, non-dict frontmatter, or missing ``title`` fields are
-    quarantined (skipped with a warning).
-
-    Returns ``[]`` when ``handoffs_dir`` is absent (graceful-absent, mirrors
-    ``goals_match.py._collect_goals`` / ``plan_match.py._collect_plans``).
-
-    Negative-spec:
-    - Does NOT mutate any file or coordinator substrate.
-    - Does NOT raise on missing/unreadable/malformed files — quarantines them.
-    - Only reads ``state/handoffs/*.md``; does NOT scan archive/handoffs/ (live only).
-    - The returned ``id`` key is the generic enumerator key; ``_handler`` remaps it to
-      the ``handoff_id`` wire key so the op's output shape is well-typed.
-    """
     items: List[dict] = []
 
     if not handoffs_dir.is_dir():
         return items
 
-    # One WARNING per scan, not per skipped file -- see `QuarantineLog`. Same
-    # collapse as `plan_match._collect_plans` / `goals_match._collect_goals`,
-    # applied here for the same reason and not merely for symmetry: this
-    # enumerator walks the whole live `state/handoffs/` corpus, so any
-    # malformed slice of it scales the same per-file spam into any caller's
-    # stderr.
     quarantine = QuarantineLog("handoff.match_candidates", _LOG)
 
     for fpath in sorted(handoffs_dir.glob("*.md")):
@@ -87,12 +61,10 @@ def _collect_handoffs(handoffs_dir: Path) -> List[dict]:
         quarantine.scanned()
         try:
             raw = fpath.read_text(encoding="utf-8").replace("\r\n", "\n")
-            # Extract only the frontmatter block (between first and second "---" line).
             if raw.startswith("---\n"):
                 parts = raw.split("---\n", 2)
                 fm_text = parts[1]
             else:
-                # No frontmatter block — skip; handoffs without frontmatter are malformed.
                 quarantine.skip(fname, "no YAML frontmatter block")
                 continue
             fm = yaml.safe_load(fm_text)
@@ -109,10 +81,8 @@ def _collect_handoffs(handoffs_dir: Path) -> List[dict]:
             quarantine.skip(fname, "missing required field: title")
             continue
 
-        # Handoff id is the filename stem — the timestamp+slug convention makes this unique.
         handoff_id_val = fpath.stem
 
-        # Haystack: title is sufficient for a "which handoff did you mean?" picker.
         haystack = title_val.lower()
 
         items.append({"id": handoff_id_val, "title": title_val, "text": haystack})
@@ -159,7 +129,7 @@ def _handler(
         return {"candidates": []}
 
     if repo_root is not None:
-        worktree_root = main_worktree_root(repo_root)  # router common_dir → worktree root
+        worktree_root = main_worktree_root(repo_root)
     else:
         _LOG.warning(
             "handoff.match_candidates: no repo_root resolved — "
@@ -168,9 +138,6 @@ def _handler(
         return {"candidates": []}
 
     handoffs_dir = worktree_root / "state" / "handoffs"
-    # _collect_handoffs returns [{id, title, text}] using the generic enumerator protocol.
-    # rank_candidates returns [{id, title, score}]; remap id→handoff_id to produce the
-    # wire key (handoff.match_candidates emits "handoff_id", not "id").
     raw = rank_candidates(text, _collect_handoffs(handoffs_dir))
     candidates = [
         {"handoff_id": entry["id"], "title": entry["title"], "score": entry["score"]}

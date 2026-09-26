@@ -77,13 +77,8 @@ from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 from typing import Optional, Sequence
 
-# Record/field separators for the single-walk log format. git's ``--pretty=format:`` takes
-# the LITERAL strings "%x00"/"%x01" as placeholders and emits the corresponding raw byte in
-# its OUTPUT — the argv passed to Popen must contain the literal 4-char placeholder, never
-# an actual NUL/SOH byte (an embedded NUL in argv raises ValueError at exec time, which the
 # broad except below would swallow as "nothing found"). ``_RECORD_SEP``/``_FIELD_SEP`` are
 # the real bytes we parse FROM git's output; ``_RECORD_SEP_FMT``/``_FIELD_SEP_FMT`` are the
-# placeholder strings we pass INTO the --pretty=format argument.
 _RECORD_SEP = "\x00"
 _FIELD_SEP = "\x01"
 _RECORD_SEP_FMT = "%x00"
@@ -170,7 +165,6 @@ def _walk_last_modified_at(
         try:
             proc.stdout.close()
         except (OSError, ValueError):
-            # Best-effort teardown; stdout already closed is not an error here.
             pass
         proc.terminate()
         proc.wait()
@@ -215,7 +209,7 @@ def batch_last_modified_at_grouped(
     union: set[str] = set()
     for paths in path_groups:
         union.update(p for p in paths if p)
-    from coordinator_core.ops.emit import lma_cache  # local import — avoids an import cycle
+    from coordinator_core.ops.emit import lma_cache
 
     resolved = lma_cache.resolve_last_modified_at(Path(repo_root), union)
     return [

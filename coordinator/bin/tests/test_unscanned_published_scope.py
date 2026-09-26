@@ -68,11 +68,6 @@ def _target(tmp_path: Path, name="t", dest_subdir: str = "dst") -> "publish.Reso
 
 class TestPublishedScopeFalsePositiveFix:
     def test_published_but_unswept_file_still_fails(self, tmp_path, capsys):
-        """Direction 1 (§ module docstring) -- the 2cb8f4103 hole stays
-        closed: a file injected into a dest_dir THIS RUN swapped, but never
-        recorded in the real `scanned` set, is still a hard failure even
-        though `published` is now scoped to swapped dest_dirs rather than
-        the whole repo root."""
         target = _target(tmp_path)
         (target.dest_dir / "injected-after-sweep.py").write_text("print('x')\n", encoding="utf-8")
         section = {"file_surface": {}}
@@ -89,11 +84,6 @@ class TestPublishedScopeFalsePositiveFix:
         assert "unscanned-published check FAILED" in captured.err
 
     def test_unpublished_destination_file_does_not_fail(self, tmp_path, capsys):
-        """Direction 2 (§ module docstring) -- the bug this dispatch fixes: a
-        file that exists under the repo root but under NO dest_dir this run
-        swapped (a prior publish, a --target-excluded sibling, a row a
-        failed pre-sync gate skipped) must not be flagged, even though it
-        has no entry in the real `scanned` set either."""
         target = _target(tmp_path)
         (target.dest_dir / "never-touched-this-run.py").write_text(
             "print('stale')\n", encoding="utf-8"
@@ -104,9 +94,6 @@ class TestPublishedScopeFalsePositiveFix:
             [(target, section)],
             target_filtered=False,
             visited_files_by_repo_root={target.dest_dir: set()},
-            # This run swapped NOTHING for this repo root (empty set) --
-            # simulates every row sharing target.dest_dir's repo root being
-            # skipped/gated/filtered out of this invocation.
             published_dest_dirs_by_repo_root={target.dest_dir: set()},
         )
         assert ok is True
@@ -114,11 +101,6 @@ class TestPublishedScopeFalsePositiveFix:
         assert "never-touched-this-run.py" not in captured.err
 
     def test_target_filtered_run_only_scopes_to_the_filtered_row(self, tmp_path, capsys):
-        """The exact `--target` shape from the dispatch brief's reproduction:
-        a repo root shared by two rows, only one of which this invocation
-        processed (the other's dest_dir never appears in
-        `published_dest_dirs_by_repo_root`). The unfiltered row's
-        pre-existing file must not fail the filtered run's check."""
         repo_root = tmp_path / "dest-repo"
         repo_root.mkdir()
         filtered_dest = repo_root / "sub-a"
@@ -205,11 +187,6 @@ class TestDestAuthoredFilesAreNotPublished:
         assert "their-own-plan.md" not in captured.err
 
     def test_the_same_file_still_fails_when_a_row_did_publish_it(self, tmp_path, capsys):
-        """Fail-closed is preserved, and this is the direction that matters:
-        the discriminator is whether a ROW WROTE the file, never where it sits
-        or what its extension is. The identical path under the identical
-        exclude_prefixes segment is a hard failure once it appears in the
-        published-files set, because then it really did ship untransformed."""
         repo_root = tmp_path / "dest-repo"
         repo_root.mkdir()
         (repo_root / "docs" / "plans").mkdir(parents=True)
@@ -235,9 +212,6 @@ class TestDestAuthoredFilesAreNotPublished:
         assert "unscanned-published check FAILED" in captured.err
 
     def test_published_files_takes_precedence_over_dest_dirs(self, tmp_path, capsys):
-        """The two params are not merged. When both are supplied the
-        files-level set governs -- merging them would silently reinstate the
-        whole-root walk this fix exists to remove."""
         repo_root = tmp_path / "dest-repo"
         repo_root.mkdir()
         stray = repo_root / "not-ours.py"

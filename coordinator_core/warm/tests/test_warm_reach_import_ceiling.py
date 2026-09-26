@@ -66,13 +66,8 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-#: AC3's stated budget. Not a round number chosen for comfort -- the criterion
-#: names 20ms, and the bar moves only when the plan's does.
 CEILING_MS = 20.0
 
-#: The graphs AC3 forbids. Populating an op registry is the client-side cost the
-#: whole transport change exists to stop paying, so reaching either of these from
-#: the warm-reach path defeats the point regardless of what the clock says.
 FORBIDDEN_PREFIXES = ("coordinator_core.ops", "coordinator_core.hooks")
 
 ENTRY_POINT = "coordinator_core.warm.entry_seam"
@@ -91,17 +86,6 @@ class _Node(NamedTuple):
 
 
 def _parse_importtime_tree(stderr: str) -> List[_Node]:
-    """Parse `-X importtime` stderr into depth-carrying rows, in emission order.
-
-    The format is `import time: <self> | <cumulative> | <name>`, where nesting
-    is encoded as TWO SPACES PER LEVEL prefixed to the name, after one leading
-    separator space. Rows are emitted depth-first POST-order (children before
-    their parent), which `_children_of` relies on.
-
-    The header line's non-numeric fields are skipped rather than parsed
-    defensively -- a format change should surface as a failure here, not as a
-    silently empty result.
-    """
     nodes: List[_Node] = []
     for line in stderr.splitlines():
         fields = line.split("|")
@@ -146,7 +130,6 @@ def _find(nodes: List[_Node], name: str) -> int:
 
 
 def _importtime_run() -> List[_Node]:
-    """One cold interpreter under `-X importtime`, parsed into a tree."""
     proc = subprocess.run(
         [sys.executable, "-X", "importtime", "-c", IMPORT_STMT],
         capture_output=True,
@@ -162,9 +145,6 @@ def _batch() -> List[List[_Node]]:
 
 
 def _breakdown(nodes: List[_Node], index: int, limit: int = 6) -> str:
-    """The entry point's real children, costliest first -- what the ceiling
-    message tells a reader to go and look at, rendered so they do not have to
-    reconstruct it from a flat list and get it wrong."""
     kids = sorted(_children_of(nodes, index), key=lambda n: -n.cumulative_ms)[:limit]
     if not kids:
         return "    (no children -- the whole cost is this module's own body)"
@@ -199,14 +179,6 @@ def test_warm_reach_entry_point_imports_under_the_ceiling():
 
 
 def test_the_entry_point_is_not_charged_for_interpreter_startup():
-    """`site` is a depth-0 SIBLING of the entry point, never its parent -- so
-    whatever `site` costs (editable-install finders, .pth hooks, sitecustomize)
-    is not in the number the ceiling above asserts on.
-
-    Pinned because getting this backwards is a one-line mistake with a
-    confident conclusion attached: it turns "our import budget regressed" into
-    "the box is polluted, not our code", and it was made twice in one session
-    before this test existed."""
     nodes = _importtime_run()
     entry_index = _find(nodes, ENTRY_POINT)
     site_index = _find(nodes, "site")

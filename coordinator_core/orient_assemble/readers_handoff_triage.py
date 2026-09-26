@@ -64,49 +64,16 @@ from coordinator_core.orient_assemble.reader_result import (
     truncate_external_text,
 )
 
-#: Cap on `unrecognized_status` diagnostic lines rendered into `detail` —
-#: this bucket is NOT spec'd as "loud, one line per plan" the way P1
-#: `authorized_orphan` is (it's a diagnostic tally, not an actionable
-#: tier), and it grows with disk contents (11 entries on claude-klabauter, 28 on
-#: DoE-claude at time of writing) — bound it the way `cap_judgment_points`
-#: bounds other unbounded per-item lists (Review: code-reviewer — Finding 3).
 _UNRECOGNIZED_STATUS_LINE_CAP = 10
 
-#: Cap on rendered lines for the `ready` / `awaiting-gate` listings. Neither
-#: subcommand is bounded by the source CLI — each is a query over ALL
-#: matching handoffs — and both grow with disk contents; on this branch
-#: `ready` alone rendered 109 lines / ~19.2KB, the single largest
-#: contributor to `brief('session')`'s byte-budget overage (see
-#: state/bug-backlog/2026-08-13-session-brief-byte-budget-assertion-is-r-8733361330d6.yaml).
 #: Bounded post-hoc, the same way `_UNRECOGNIZED_STATUS_LINE_CAP` bounds
-#: the orphan census's diagnostic tier and `_suppress_live_ledger_claims`
-#: already filters this module's rendered text post-hoc rather than
-#: touching the ported query/format logic: keep the query's own first N
-#: lines (never re-sorted or re-ranked here) plus one trailing "+K more"
-#: line naming the exact CLI invocation that lists the rest.
 _READY_LINE_CAP = 15
 _AWAITING_GATE_LINE_CAP = 15
 
-#: The exact separator line `_cmd_awaiting_gate` (`coordinator/bin/
-#: workday-start-handoff-triage.py`) prints between its two concatenated
-#: listings (the full `awaiting_gate` set, then the `--older-than 6d` stale
-#: subset). Used only to SPLIT the captured text before capping each
-#: section independently (Review: code-reviewer — Finding [P2]) — never to
-#: re-derive or reformat either section's content, matching this module's
-#: own "invoke the ported CLI as-is" negative-spec.
 _AWAITING_GATE_SEPARATOR = "--- awaiting_gate, older than 6d ---"
 
 
 def _cap_rendered_lines(text: str, cap: int, *, subcommand: str) -> str:
-    """Cap `text` (a captured, already-rendered markdown-list body) at `cap`
-    lines, appending a blank line and one trailing "+K more" line naming the
-    subcommand that lists the rest when the cap binds. The blank line keeps
-    a markdown renderer from parsing the notice as a continuation of the
-    last kept `- [...]` list item (Review: code-reviewer — Finding [P3],
-    downstream renderer not confirmed cheaply reachable from this slice; the
-    blank-line separation is the safe default regardless of renderer).
-    Returns `text` unchanged when under cap — never re-sorts or re-derives
-    the kept lines' order."""
     lines = text.split("\n")
     if len(lines) <= cap:
         return text
@@ -150,26 +117,14 @@ def _cap_awaiting_gate_listing(text: str, cap: int, *, subcommand: str) -> str:
     stale_part = text[sep_index + len(_AWAITING_GATE_SEPARATOR):].lstrip("\n")
     capped_full = _cap_rendered_lines(full_part, cap, subcommand=subcommand)
     capped_stale = _cap_rendered_lines(stale_part, cap, subcommand=subcommand)
-    # [P3]. An empty full listing with a
-    # non-empty stale subset is reachable (`_cmd_awaiting_gate` prints the
-    # separator only when the stale subset is non-empty, but prints the full
-    # listing unconditionally, including when it's empty) — omit the empty
-    # half instead of joining it in, which would otherwise emit a stray
-    # leading blank line before the separator.
     if not capped_full:
         return f"{_AWAITING_GATE_SEPARATOR}\n{capped_stale}"
     return f"{capped_full}\n{_AWAITING_GATE_SEPARATOR}\n{capped_stale}"
 
-#: Module-locally derived repo root (precedent: readers_health_reaper.py's
 #: own `_REPO_ROOT = Path(__file__).resolve().parents[2]`) — passed
 #: EXPLICITLY to `list_orphaned` below, in-process, so the production
-#: consumer keeps AC14's explicit-repo_root discipline rather than being
-#: routed through the bin CLI's deliberately cwd-relative scope resolution
-#: (see coordinator/bin/list-orphaned-plans.py's own module docstring).
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-#: The source CLI's absolute path — resolved relative to this file, never a
-#: literal device path (portability discipline, AC-16).
 _SOURCE_PATH = (
     Path(__file__).resolve().parents[2]
     / "coordinator"
@@ -204,7 +159,6 @@ _cmd_stale_plans = _handoff_triage._cmd_stale_plans
 _cmd_ready = _handoff_triage._cmd_ready
 _cmd_awaiting_gate = _handoff_triage._cmd_awaiting_gate
 
-#: `_cmd_stale_plans` reads `args.plans_dir`/`args.threshold_days` — mirror
 #: the source CLI's own argparse defaults (`_DEFAULT_PLANS_DIR`,
 #: `_DEFAULT_STALE_THRESHOLD_DAYS`) rather than hardcoding new literals here.
 _STALE_PLANS_DEFAULT_ARGS = argparse.Namespace(
@@ -214,9 +168,6 @@ _STALE_PLANS_DEFAULT_ARGS = argparse.Namespace(
 
 
 def _capture_stdout(cmd_func, args: argparse.Namespace) -> tuple[str, int]:
-    """Run one of the ported `_cmd_*` functions, capturing its stdout as-is
-    (no output-format re-derivation) rather than reimplementing the query
-    logic that produces it."""
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         exit_code = cmd_func(args)
@@ -260,10 +211,6 @@ def _read_stale_plans(repo_root: Optional[Path] = None) -> ReaderResult:
     )
 
 
-#: Extracts the markdown link's `(path)` target off one `_display_handoff`
-#: rendered line — `- [title](link_path) — state` (query_record_display.py's
-#: `_display_handoff`). `link_path` is repo-root-relative (`rel_id`'s own
-#: convention), never a `file://` URI or absolute path.
 _LINK_PATH_RE = re.compile(r"\]\(([^)]+)\)")
 
 
@@ -304,17 +251,6 @@ def _suppress_live_ledger_claims(
     kept: list[str] = []
     for line in lines:
         # Take the RIGHTMOST `](...)` match, not the first (Review:
-        # code-reviewer — Finding 0): `_display_handoff`'s rendered shape is
-        # `- [title](link_path) — state`, and `title` is free text that can
-        # itself contain the literal sequence `](` (e.g. a title reading
-        # `Fix ](broken) link`). A leftmost `re.search` would then extract
-        # garbage from inside the title as `link_path`, causing
-        # `resolve_claim_state` to look up a bogus path, find no ledger
-        # claim, and fail to suppress a genuinely live-claimed baton — the
-        # exact false-negative this suppression exists to prevent. The real
-        # link is always the LAST `](...)` occurrence on the line, since
-        # nothing follows it but the fixed ` — {state}` suffix (state is
-        # drawn from a closed vocabulary that never contains `](`).
         matches = list(_LINK_PATH_RE.finditer(line))
         if matches:
             link_path = matches[-1].group(1)
@@ -323,9 +259,6 @@ def _suppress_live_ledger_claims(
                 handoff_path, common_dir=common_dir, repo_root=root
             )
             if claim_state.source == "ledger":
-                # Live ledger claim (resolve_claim_state only resolves
-                # source="ledger" for a LIVE holder — a dead holder degrades
-                # to "mirror"/"none" per its own negative-spec) — suppress.
                 continue
         kept.append(line)
     return "\n".join(kept)
@@ -352,21 +285,6 @@ def _ready_common_dir(repo_root: Optional[Path] = None) -> Optional[Path]:
 
 
 def _read_ready(repo_root: Optional[Path] = None) -> ReaderResult:
-    """Actionable-now handoffs (`deployment_state=ready_to_fire AND
-    status=open`) — a directive naming the query subcommand that produced
-    the listing, carrying the captured markdown-list with any live-ledger-
-    claimed handoff suppressed (AC11 — see `_suppress_live_ledger_claims`).
-
-    `repo_root`: threaded into both `_ready_common_dir` and
-    `_suppress_live_ledger_claims` (site (c), C4) — `None` preserves prior
-    (claude-klabauter-pinned) behaviour. Also carried onto the `_cmd_ready` Namespace
-    as `repo_root`, matching the source CLI's own `--repo-root` arg (C7
-    correction, 2026-08-29): `_cmd_ready` forwards it to `query_records(...,
-    explicit_root=...)`, so the LISTING QUERY ITSELF now resolves against the
-    caller's root, not just the post-hoc ledger-claim filtering above it —
-    the query previously stayed cwd-relative regardless of what root the
-    caller named, an echo-field parameter with no effect on the CLI's own
-    scan scope."""
     text, _exit_code = _capture_stdout(
         _cmd_ready, argparse.Namespace(repo_root=str(repo_root) if repo_root is not None else None)
     )
@@ -393,20 +311,6 @@ def _read_ready(repo_root: Optional[Path] = None) -> ReaderResult:
 
 
 def _read_awaiting_gate(repo_root: Optional[Path] = None) -> ReaderResult:
-    """Gated handoffs (`deployment_state=awaiting_gate AND status=open`)
-    plus the coarse `--older-than 6d` stale subset — a directive naming the
-    query subcommand, carrying the captured listing as-is. (The
-    load-bearing 14d/7d force-recheck predicate is the separate
-    `handoff-gate-aging` mechanized tool, not reproduced here — matches the
-    source CLI's own documented scope.)
-
-    `repo_root` (C7 correction, 2026-08-29): carried onto the `_cmd_awaiting_
-    gate` Namespace as `repo_root`, matching `_read_ready`'s shape and the
-    source CLI's own `--repo-root` arg — `_cmd_awaiting_gate` forwards it to
-    both `query_records(..., explicit_root=...)` calls. `None` preserves the
-    prior cwd-relative resolution unchanged. Previously accepted no root at
-    all, unlike `_read_ready`'s sibling shape — an asymmetry `collect()` now
-    closes."""
     text, _exit_code = _capture_stdout(
         _cmd_awaiting_gate,
         argparse.Namespace(repo_root=str(repo_root) if repo_root is not None else None),
@@ -452,12 +356,6 @@ def _read_orphaned_plans(repo_root: Optional[Path] = None) -> ReaderResult:
     result = list_orphaned(root, AGING_THRESHOLD_DAYS)
 
     lines: list[str] = []
-    # P1 authorized_orphan is spec'd "loud, one line per plan, no age gate"
-    # (list_orphaned's own docstring) — deliberately left uncapped/
-    # untruncated-in-count here; P1 orphans are expected to stay rare, and
-    # capping this tier would defeat its whole purpose (Review:
-    # code-reviewer — Finding 3). Its external string field is still routed
-    # through truncate_external_text() below (size bound only, not count).
     for entry in result["authorized_orphan"]:
         lines.append(
             f"P1 authorized_orphan: {entry['path']} "
@@ -502,22 +400,6 @@ def _read_orphaned_plans(repo_root: Optional[Path] = None) -> ReaderResult:
 
 
 def collect(cadence: str, *, repo_root: str | None = None) -> ReaderResult:
-    """Compute this reader family's directives/judgment_points.
-
-    `cadence` is accepted for signature parity with sibling reader families
-    (`readers_clean_ops.collect`) but unused here — this reader's severity
-    does not vary by cadence; all four sources run for every cadence.
-
-    `repo_root` is keyword-only, threaded (C4, sites (a)/(b)/(c); C7
-    correction, 2026-08-29, site (d)) into `_read_stale_plans`/`_read_ready`/
-    `_read_awaiting_gate`/`_read_orphaned_plans` only when explicitly given —
-    `None` (the default; every existing caller passes this) calls each with
-    zero arguments, preserving the exact prior call shape and behaviour
-    byte-for-byte. `_read_awaiting_gate` now takes the same `repo_root`
-    keyword as its `_read_ready` sibling (previously accepted none at all —
-    the C7 gap this correction closes: its `records_query.query_records`
-    reach resolved off cwd regardless of the root a caller named).
-    """
     root = Path(repo_root) if repo_root is not None else None
     kwargs: dict[str, Any] = {"repo_root": root} if root is not None else {}
     directives: list[dict[str, Any]] = []

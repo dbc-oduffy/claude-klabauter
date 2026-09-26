@@ -45,9 +45,6 @@ _COUNT_AFTER_PRELOAD = (
 
 
 def _registry_size_after(code: str) -> int:
-    """Run in a FRESH interpreter, never this one: pytest has already
-    imported much of the tree, so an in-process registry check would read
-    the suite's own imports and pass unconditionally."""
     result = subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,

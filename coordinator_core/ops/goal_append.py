@@ -67,27 +67,12 @@ from coordinator_core.ops.emit.resolvers import resolve_context
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.session.claimed_write import append_claimed_line
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 
-# Generator-provenance declaration (C2, generator_provenance.py's AST reader).
-# append_goal() writes central_state_root/goals-log.<machine>.jsonl -- a
-# per-machine shard whose filename is data-dependent (machine hostname slug),
 # so the write SET is not a fixed artifact list; MUTATES over GENERATES.
 MUTATES = ["state/goals-log.*.jsonl"]
 
-# Valid period values.
 _VALID_PERIODS = frozenset({"day", "week", "repo"})
 
-# Valid status values — derived from the contract's GoalStatus Literal
-# (source of truth: coordinator_core/contract/cockpit_schema/entities/goal.py::GoalStatus)
-# so this op cannot drift from the contract's permitted set.
-#
-# Computed lazily (first call to append_goal(), not module scope) — importing
-# cockpit_schema.entities.goal here was pulling the ~40ms pydantic entity tree into
-# every eager op-module load, including the read-only /pickup brief path that never
-# calls append_goal(). Spec: docs/plans/2026-07-24-canonical-resolution-engine.md task W0-1.
 _VALID_STATUSES: Optional[frozenset] = None
 
 
@@ -99,49 +84,20 @@ def _valid_statuses() -> frozenset:
         _VALID_STATUSES = frozenset(GoalStatus.__args__)
     return _VALID_STATUSES
 
-# Log filename template: per-machine append-only shard.
 _LOG_NAME_TEMPLATE = "goals-log.{machine}.jsonl"
 
-# Shape an explicitly-supplied goal_id must match: exactly 12 lowercase hex chars —
-# the SAME shape _goal_id() emits (12-hex-char sha1 prefix), not a looser "any hex
-# string" or a longer-sha-truncate-on-write acceptance. Chosen deliberately over
-# accepting/truncating a longer (e.g. full 40-char) sha1: a truncate-on-accept
-# policy would let two distinct explicit callers each pass a different full hash
-# that happens to share a 12-char prefix and never notice they'd collided on
-# write — silently smaller odds of catching a caller bug than requiring the exact
-# emitted shape up front, which fails loud on anything but the wire-native form.
-# Two producers minting the SAME logical goal (the motivating bug this feature
-# fixes) are expected to agree on the full id string, not merely a prefix.
 _GOAL_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
-# Cross-repo memo naming the upstream (DoE emit-goal-from-artifact.sh) caller bug that
-# motivates the absolute->relative rewrite in _normalize_coordinator_root_path(). Cited
-# in the observability breadcrumb emitted on the absolute-rewrite branch (Finding 2).
 _PHANTOM_REPO_FK_MEMO = (
     "cross-repo/inbox/2026-07-21-example-retrieval-repo-em-goals-repo-fk-coordinator-root-split-latent.md"
 )
 
-# Windows drive-letter absolute form, e.g. "C:\Users\..." or "C:/Users/...".
 _WINDOWS_DRIVE_ABSOLUTE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
-# Git-for-Windows MSYS toplevel form, e.g. "/c/Users/...".
 _MSYS_ABSOLUTE_RE = re.compile(r"^/[A-Za-z]/")
 
 
 def _is_absolute_crp(crp: str) -> bool:
-    """Return True if ``crp`` is absolute by ANY platform's convention.
-
-    ``os.path.isabs`` alone is not airtight cross-platform: on a Windows engine,
-    ``ntpath.isabs`` returns False for MSYS/POSIX-style absolute paths (verified:
-    ``ntpath.isabs('/Users/x/repo') == False``), which would let such a value bypass
-    both the normalizer and the append_goal() guard and reach disk verbatim — the
-    phantom-repo_fk incident this module exists to fix, just on Windows instead of
-    POSIX. This helper is the single absoluteness test both call sites route through
-    so they cannot diverge.
-
-    Catches: the native platform's ``os.path.isabs``, a Windows drive-letter form
-    (``C:\\`` / ``C:/``), an MSYS form (``/c/...``), or any leading-slash form.
-    """
     return bool(
         os.path.isabs(crp)
         or _WINDOWS_DRIVE_ABSOLUTE_RE.match(crp)
@@ -150,17 +106,7 @@ def _is_absolute_crp(crp: str) -> bool:
     )
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
 def _machine_slug(hostname: Optional[str] = None) -> str:
-    """Return the hostname slug used in the log filename.
-
-    Mirrors the bash oracle's machine-slug derivation exactly: lowercase, collapse
-    every run of non-``[a-z0-9]`` characters to a single '-', then strip
-    leading/trailing '-'.
-    """
     raw = hostname if hostname is not None else socket.gethostname()
     raw = (raw or "unknown").lower()
     slug = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
@@ -228,10 +174,6 @@ def _normalize_coordinator_root_path(crp: Optional[str], repo_root: Path) -> str
     )
     return rel
 
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 def append_goal(
     period: str,
@@ -317,7 +259,6 @@ def append_goal(
     Raises:
         ValueError: if period or text or period_value or status is invalid.
     """
-    # Validate required fields.
     period = period.strip() if period else ""
     if not period:
         raise ValueError("period is required (one of: day | week | repo)")
@@ -348,7 +289,6 @@ def append_goal(
             "(e.g. '.' or 'subdir')"
         )
 
-    # Resolve run context for central_state_root and repo_name when not supplied.
     _ctx = None
     if central_state_root is None or repo is None:
         _ctx = resolve_context()
@@ -358,16 +298,12 @@ def append_goal(
     if repo is None:
         repo = _ctx.repo_name  # type: ignore[union-attr]
 
-    # Derive computed fields.
     machine_hostname = hostname if hostname is not None else socket.gethostname()
     declared_by_machine = machine_hostname
     declared_at = _utc_now()
     status = status if status is not None else "active"
-    # Precedence: explicit non-empty goal_id (validated above) wins verbatim; else
-    # derive exactly as before this parameter existed (compatibility invariant).
     goal_id = goal_id if goal_id else _goal_id(repo, coordinator_root_path, period, period_value, text)
 
-    # Assemble the row.
     row: dict = {
         "goal_id": goal_id,
         "repo": repo,
@@ -380,19 +316,13 @@ def append_goal(
         "status": status,
     }
 
-    # Optional passthrough fields (2026-07-13 field map, D9 nullability split — NOT
-    # included in the goal_id content key above; they are metadata, not identity).
     if isinstance(key_results_status, list) and key_results_status:
         row["key_results_status"] = key_results_status
-    # Mirror the key_results_status list guard so a
-    # malformed weekly_perceptible (e.g. the string "true" instead of the bool True) is
-    # quarantined (omitted) rather than written to disk and passed through to the wire.
     if isinstance(weekly_perceptible, bool):
         row["weekly_perceptible"] = weekly_perceptible
     if parent_goal_id:
         row["parent_goal_id"] = parent_goal_id
 
-    # Write to shard — per-machine, append-only, never rewrite.
     machine = _machine_slug(machine_hostname)
     log_file = Path(central_state_root) / _LOG_NAME_TEMPLATE.format(machine=machine)
     Path(central_state_root).mkdir(parents=True, exist_ok=True)
@@ -408,9 +338,7 @@ def append_goal(
     }
 
 
-# ---------------------------------------------------------------------------
 # JSON-RPC handler
-# ---------------------------------------------------------------------------
 
 def _goal_append_batch(
     events: list,
@@ -419,24 +347,6 @@ def _goal_append_batch(
     coordinator_root_path: str,
     central_state_root,
 ) -> dict:
-    """Append N goal events in one call — the batch half of `events` support.
-
-    Each entry of ``events`` carries the SAME per-event fields a single-event
-    call's params dict would (period/period_value/text plus the optional
-    key_results_status/weekly_perceptible/parent_goal_id/status/goal_id);
-    ``repo``/``coordinator_root_path`` are shared across the whole batch,
-    already resolved/normalized by the caller (`_goal_append`) exactly as
-    they are for a single-event call.
-
-    A per-event failure (ValueError from `append_goal()`, or a malformed
-    non-dict entry) does NOT abort the batch — every OTHER event still gets
-    its append attempt, matching the caller's (append-goal-event.py's
-    `--events-file` batch) actual need: an unrelated goal file's bad
-    frontmatter should not block every other goal in the same run. Returns
-    ``{"events": [{"ok": bool, "result"|"error": ...}, ...]}`` in input
-    order — never raises for a per-event failure, only for a malformed
-    ``events`` value itself (see `_goal_append`).
-    """
     outcomes: list[dict] = []
     for i, event in enumerate(events):
         if not isinstance(event, dict):
@@ -541,7 +451,7 @@ def _goal_append(params: dict, repo_root=None) -> dict:
         )
     derived_root = main_worktree_root(repo_root)
     ctx = resolve_context(derived_root)
-    repo = params.get("repo") or ctx.repo_name  # explicit override; internal fallback not reached
+    repo = params.get("repo") or ctx.repo_name
     coordinator_root_path = _normalize_coordinator_root_path(
         params.get("coordinator_root_path", "."), derived_root
     )
@@ -563,7 +473,7 @@ def _goal_append(params: dict, repo_root=None) -> dict:
         text=params.get("text", ""),
         repo=repo,
         coordinator_root_path=coordinator_root_path,
-        central_state_root=ctx.central_state_root,  # explicit override; internal fallback not reached
+        central_state_root=ctx.central_state_root,
         key_results_status=params.get("key_results_status"),
         weekly_perceptible=params.get("weekly_perceptible"),
         parent_goal_id=params.get("parent_goal_id"),

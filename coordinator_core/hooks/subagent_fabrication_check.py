@@ -114,26 +114,10 @@ from coordinator_core.hooks.subagent_arrival_check import (
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
 
-# File-mutating tool names — Bash is deliberately NOT in this set (see the
-# module docstring's false-positive guard #2).
 _MUTATING_TOOL_NAMES = frozenset({"Edit", "Write", "NotebookEdit", "MultiEdit"})
 
 
 def _count_calls_by_name(transcript_path: str) -> dict[str, int] | None:
-    """Return {tool_name: call_count} over every tool_use block in the transcript, or
-    None on an absent/unreadable transcript.
-
-    Mirrors hooks.subagent_zero_tool_use._count_tool_use_blocks's per-line
-    tolerance (a malformed line, or one whose message.content is absent/not a
-    list, contributes nothing and does not abort the count) but buckets by
-    tool NAME rather than returning a bare total — this op needs the
-    Edit/Write/NotebookEdit/MultiEdit vs Bash split, not one number.
-
-    A present-but-empty-of-tool_use transcript is a verified {} (no keys),
-    not None — the file itself was readable; there is nothing ambiguous
-    about a genuinely toolless run. None is reserved for "the file could
-    not be read at all".
-    """
     try:
         with open(transcript_path, "r", encoding="utf-8") as fh:
             lines = fh.readlines()
@@ -148,7 +132,7 @@ def _count_calls_by_name(transcript_path: str) -> dict[str, int] | None:
         try:
             record = json.loads(line)
         except (json.JSONDecodeError, ValueError):
-            continue  # per-line transcript parse; one malformed JSONL line must not abort the scan
+            continue
         if not isinstance(record, dict):
             continue
         message = record.get("message")
@@ -167,20 +151,6 @@ def _count_calls_by_name(transcript_path: str) -> dict[str, int] | None:
 
 
 def _targets_changed(worktree_root: str, target_paths: list[str]) -> bool | None:
-    """True iff ANY target path shows dirty/untracked status right now.
-
-    None (never False-by-default) if the git-status probe could not be
-    completed — a probe failure must never be silently read as "clean",
-    which is the direction that would let this detector fire a false
-    fabrication signal. False only when the probe succeeded and came back
-    empty for every target.
-
-    Routes through the P014-C1 producer (`session_facts._dirty_paths`),
-    pathspec-scoped to `target_paths` — one `git status` invocation covering
-    every target path, same one-spawn-per-check posture as before
-    (P014-C3: `hooks.subagent_fabrication_check`'s budget stays at 1).
-    Imported function-local: this is a cold-path hook module.
-    """
     if not target_paths:
         return None
     from coordinator_core.session.session_facts import _dirty_paths
@@ -192,13 +162,6 @@ def _targets_changed(worktree_root: str, target_paths: list[str]) -> bool | None
 
 
 def verify_target_clean(repo_root: str, target_paths: list[str]) -> str:
-    """One-line, directly-callable EM-side verdict: are target_paths dirty vs HEAD?
-
-    The mechanised form of "git status --porcelain <target>" — the two-second
-    check the incident this op exists to catch never got run. Callable
-    without any hook firing, from a plain Python import or via this module's
-    `python -m` entrypoint (see bottom of file).
-    """
     try:
         worktree_root = str(main_worktree_root(git_common_dir(repo_root)))
     except RuntimeError:

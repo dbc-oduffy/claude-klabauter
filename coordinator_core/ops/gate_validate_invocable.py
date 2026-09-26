@@ -82,21 +82,10 @@ from typing import Callable, Optional
 
 from coordinator_core.ipc import register_op
 
-# ---------------------------------------------------------------------------
-# Op key — pinned literal string. C7 (budget-manifest entry), C8 (template
-# reference), and C9 (reporting) all cite this exact string; never re-derive
-# or rename it locally.
-# ---------------------------------------------------------------------------
 OP_KEY = "gate.validate_invocable"
 
-# JSON result-schema version. Bump ONLY on a shape-breaking change to
-# to_json()'s output (new/renamed/removed top-level or per-dimension key);
-# additive optional keys do not require a bump.
 RESULT_SCHEMA_VERSION = 1
 
-# Fixed dimension order — the five DoD dimensions named by the plan. Order is
-# part of the seam's contract: `dimensions` in the JSON reply is always this
-# order, so a caller diffing two runs never sees dimension reordering noise.
 DIMENSION_NAMES: tuple[str, ...] = ("types", "docstrings", "tests", "review", "latency")
 
 
@@ -128,14 +117,6 @@ class Verdict(str, enum.Enum):
 
 @dataclasses.dataclass(frozen=True)
 class DimensionResult:
-    """One dimension's verdict plus a human-legible detail string.
-
-    `gated_reason` is populated only for `Verdict.SKIPPED` — it is what
-    distinguishes "SKIPPED(gated)" from a bare SKIPPED in the JSON payload
-    (C1's tri-state contract literally spells it `SKIPPED(gated)`; this
-    dataclass carries the parenthetical as a first-class field rather than
-    folding it into `detail` prose a caller would have to string-match).
-    """
 
     dimension: str
     verdict: Verdict
@@ -153,11 +134,6 @@ class DimensionResult:
         return payload
 
 
-# A dimension check receives the changed-file set and the diff base (both as
-# passed to the op) plus repo_root, and returns a DimensionResult. It MAY
-# raise — `_run_dimension()` is what makes that fail-closed, so an individual
-# check implementation is free to raise on any internal error rather than
-# hand-catching everything itself.
 DimensionCheck = Callable[[list[str], Optional[str], Optional[Path]], DimensionResult]
 
 
@@ -199,27 +175,8 @@ def _tests_stub_skipped_gated(
     )
 
 
-# ---------------------------------------------------------------------------
-# Dimension registry — the seam. C2 (types), C3 (docstrings), C5 (review),
-# and C7 (latency) each replace their slot via register_dimension(); C4
-# replaces "tests" (and lifts the SKIPPED(gated) stub once G4 lands). Do NOT
-# inline a real dimension's logic here — that recreates the "five inline
-# implementations" C1 explicitly rules out.
-# ---------------------------------------------------------------------------
 # UNREACHABLE-BY-DEFAULT, for four of the five slots. C2/C3/C5/C7 have all
-# landed and each self-registers at the bottom of this module via an
-# unconditional import, so "types", "docstrings", "review" and "latency" are
-# replaced with their real checks before any caller can observe these stubs.
-# They survive as the fallback the seam is built around -- an import that
 # cannot resolve leaves UNAVAILABLE rather than a missing key -- not as a
-# statement about what is wired.
-#
-# THEIR TEXT MUST NOT SAY "not landed". It did, naming the chunk that had
-# already landed, and cost a session: reading this literal and stopping here
-# yields "the review dimension is a stub, nothing enforces review coverage",
-# which is false and was reported as fact to a PM and a group EM before the
-# registry was inspected at runtime. `register_dimension` at the foot of this
-# module is the second half of the sentence this dict starts.
 _DIMENSION_REGISTRY: dict[str, DimensionCheck] = {
     "types": _stub_unavailable(
         "types", "mypy strict-override ledger unavailable (C2 landed; this slot is "
@@ -266,13 +223,6 @@ def register_dimension(name: str, check: DimensionCheck) -> None:
 def _run_dimension(
     name: str, changed_files: list[str], diff_base: Optional[str], repo_root: Optional[Path]
 ) -> DimensionResult:
-    """Invoke the registered check for `name`, fail-closed.
-
-    Any exception raised by the check — including one from tooling this
-    chunk does not control — is converted into `Verdict.ERROR`, never
-    silently dropped and never mistaken for PASS. See module docstring
-    "Fail-closed on exception".
-    """
     check = _DIMENSION_REGISTRY[name]
     try:
         result = check(changed_files, diff_base, repo_root)
@@ -283,10 +233,6 @@ def _run_dimension(
             detail=f"{type(exc).__name__}: {exc}",
         )
     if result.dimension != name:
-        # A misbehaving registered check named the wrong dimension in its
-        # own result — treat that as an ERROR too rather than silently
-        # relabeling it, since a caller keys the JSON payload by dimension
-        # name and a mismatch would corrupt that lookup.
         return DimensionResult(
             dimension=name,
             verdict=Verdict.ERROR,
@@ -314,12 +260,8 @@ def _overall_verdict(results: list[DimensionResult]) -> Verdict:
     state/lessons/2026-08-07-a-gate-that-measures-a-corpus-must-not-l-*.yaml
     on gates that measure nothing and still say pass).
     """
-    # An empty `results` list
-    # falls through every any() check to a vacuous PASS on zero measurements,
     # the same bug class be57f525e fixed for all-UNAVAILABLE/SKIPPED. Not
     # reachable from the shipped handler (DIMENSION_NAMES is fixed at 5), but
-    # this is a general-purpose helper a future caller could invoke with a
-    # partial/empty list.
     if not results:
         return Verdict.UNAVAILABLE
     if any(r.verdict is Verdict.ERROR for r in results):
@@ -377,10 +319,6 @@ def _gate_validate_invocable(params: dict, repo_root: Optional[Path] = None) -> 
     """
     if "changed_files" not in params:
         raise ValueError("gate.validate_invocable requires param: changed_files")
-    # A bare string param would
-    # silently pass isinstance-free `list(str)` and split into one
-    # single-character "file" per character; police shape at the same
-    # boundary that already polices presence.
     if not isinstance(params["changed_files"], list):
         raise ValueError(
             "gate.validate_invocable param changed_files must be a list[str], "
@@ -396,39 +334,7 @@ def _gate_validate_invocable(params: dict, repo_root: Optional[Path] = None) -> 
     return to_json(overall, results)
 
 
-# ---------------------------------------------------------------------------
-# Landed dimension-implementation imports — bottom-of-module, not top, and not
-# handler-time either. Each implementation module imports names (DimensionResult,
-# Verdict, register_dimension, ...) from THIS module at ITS OWN top level, so a
-# top-of-module import here would be circular. Placing the import block here,
-# after every name a child module imports from this file is already bound,
-# resolves the cycle: by the time Python executes this line, this module is
-# fully defined, so `from coordinator_core.ops.gate_validate_invocable import
-# ...` inside gate_dimension_types/_review/_latency succeeds immediately.
-#
-# This also means `register_dimension()` calls triggered by these imports run
-# exactly once, at this module's own import time — never again, and never as
-# a side effect of a handler call. A caller (a test, or any other code) that
-# calls `register_dimension()` AFTER this module has already been imported
-# now has its registration survive: there is no runtime re-import path left
-# to clobber it. (Previously `_load_dimension_implementations()` ran on every
-# handler call via the import cache being a no-op after the first import —
-# but "first" was whichever call happened first in process, test or handler,
-# which made survival of a test's fake registration order-dependent. See
-# coordinator_core/ops/tests/test_gate_validate_invocable.py and
-# test_gate_dimension_types.py — both orderings, and each file alone, must
-# pass.)
-#
-# Do NOT move this back to the top of the module "to tidy it" — that
-# reintroduces the circular import this block exists to avoid.
-#
-# A dimension whose chunk has not landed has no module to import here and
 # keeps its stub, which is the whole point of the stub being `UNAVAILABLE`
-# rather than absent.
-#
-# Spec backlink: docs/plans/2026-07-20-merge-gate-dod-engine-enforced.md
-# § Chunks C1 ("a dimension seam, not five inline implementations").
-# ---------------------------------------------------------------------------
 from coordinator_core.ops import gate_dimension_docstrings  # noqa: E402,F401
 from coordinator_core.ops import gate_dimension_latency  # noqa: E402,F401
 from coordinator_core.ops import gate_dimension_review  # noqa: E402,F401

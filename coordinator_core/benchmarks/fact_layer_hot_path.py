@@ -66,38 +66,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-#: The new row kind C1 emits (module docstring, `coordinator_core.telemetry.op_latency`
-#: Anti-scope: "no second FILE" — this is a new `kind` value in the existing sink,
-#: not a parallel telemetry file). Neither `pairing_summary` nor `breach_summary`
-#: nor `cost_census` recognises this kind; all three already skip any row whose
-#: `kind` matches neither "started" nor "complete" ("composition" is the sibling
-#: precedent this mirrors).
 FACT_SPAN_KIND = "fact_span"
 
-#: Bound on the op-latency corpus read (task body: "a full-corpus JSON-parse pass
-#: is seconds of process time on a box carrying ~50 peers, and the module already
-#: ships the bounded primitive for this" — `op_latency.py :: tail_entries`). 8MB is
-#: comfortably above one rotated generation's typical "fact_span" row density
-#: (each row is a small per-ceremony breakdown map, not a per-fact row — see C1's
-#: buffered-emission design) while staying a small fraction of the ~140MB/five-
-#: generation corpus this bound exists to avoid parsing in full.
 DEFAULT_TAIL_BYTES = 8 * 1024 * 1024
 
-#: Row cap paired with the byte bound above — belt-and-suspenders against a
-#: pathologically dense generation; `tail_entries` enforces both independently.
 DEFAULT_MAX_ROWS = 20_000
 
-#: Same discipline for the ambient-load sink: it is far smaller per-sample (six
-#: scalar fields, one line per `ambient_sampler` tick, default 30s interval) but
-#: is read with the same bounded primitive rather than assumed free.
 DEFAULT_AMBIENT_TAIL_BYTES = 2 * 1024 * 1024
 DEFAULT_AMBIENT_MAX_ROWS = 20_000
 
-#: The six facts `session_facts.py` serves (module docstring: "SERVES ALL FIVE
-#: `fl-core-02` FACTS ... AND the fold-execution-record sidecar scan"). Stated
-#: once here as the canonical enumeration order every per-fact figure below
-#: reports against, so a consumer never has to reconstruct the set from the
-#: timing corpus (which may not have observed every fact yet).
 FACT_NAMES = (
     "session_magnitude_attributed",
     "session_pickup_kind",
@@ -107,82 +84,24 @@ FACT_NAMES = (
     "session_fold_sidecars",
 )
 
-#: `session_magnitude_attributed` has no production consumer today (AC6's
-#: substrate finding 1 — plan Problem section, "Two substrate facts... verified
-#: this session"). Named here so a reader of the structural/timing tables below
-#: sees the same finding this module's caller (C3) is required to restate, not
-#: a number floating with no context for why its production-row population is
-#: expected to read zero.
 FACT_WITH_NO_PRODUCTION_CONSUMER = "session_magnitude_attributed"
 
-#: The facade's one production call site (Problem section, substrate finding 0):
-#: `quick_wrap_assemble/__init__.py :: brief` calls five of the six facts in
-#: sequence (its own lines "Reads all five close-gate facts off
-#: `coordinator_core.session.session_facts`"). Stated here so a consumer of this
-#: module's figures does not have to re-derive "per-ceremony" means "per this one
-#: call site" from the timing corpus alone.
-#:
-#: The plan body and this stub's roadmap baton both name this site
 #: `_read_close_gate_facts`. NO SUCH FUNCTION EXISTS, in this repo or in git
-#: history — the name is a drafting error carried from the plan's Problem
-#: section into the first draft of this constant. `brief` is the real site,
-#: verified by grep: `_read_close_gate_facts` has zero definitions and zero
-#: callers. Corrected rather than preserved, because a constant naming a
-#: function that does not exist sends the next reader looking for a hot path
-#: that was never there.
 PRODUCTION_CALL_SITE = "coordinator_core/quick_wrap_assemble/__init__.py::brief"
 
-#: Rows whose `fact` is not one of the six served facts are NOT production
-#: measurements and are excluded from every figure this module renders.
-#:
-#: This is not hypothetical: C3's instrumentation-cost measurement ran an ad-hoc
-#: 200-call microbenchmark through the live `record_fact_span`, so the production
-#: sink permanently carries 200 rows named `session_facts.microbench_noop` plus
-#: 200 named `benchmark_probe.microbench`. A reader keying on the
-#: `session_facts.` prefix alone would fold 200 synthetic ~0.00ms rows into the
-#: per-fact and aggregate distributions and report a facade an order of
-#: magnitude cheaper than it is. Allow-list the six real names; never
-#: prefix-match.
 PRODUCTION_FACT_ROW_NAMES = frozenset(f"session_facts.{name}" for name in FACT_NAMES)
-
-
-# ---------------------------------------------------------------------------
-# Structural leg — deterministic call-site counts, not a live corpus.
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class CallSite:
-    """One deterministic git-spawn or file-read call site for a served fact.
 
-    `always` distinguishes an unconditional call (every invocation of the
-    fact pays it) from a conditional one (`always=False`) reached only on
-    some data-dependent branch — e.g. `session_pickup_kind` reads
-    `session-shape.json` on every call, but only reads a picked-up artifact's
-    frontmatter `kind:` when a pickup actually happened. A conditional site's
-    `per_item` flag (when True) means the count scales with a runtime-sized
-    collection (e.g. one file read per held plan claim, per terminal sizing
-    record) rather than being a fixed 0-or-1 — `structural_counts_for` reports
-    such a site's contribution as `None` (unbounded without a live corpus) and
-    names it in `notes` rather than fabricating a number.
-    """
-
-    kind: str  # "git_spawn" | "file_read"
-    call: str  # grep-able call-site name
+    kind: str
+    call: str
     always: bool
     per_item: bool = False
     note: str = ""
 
 
-#: Enumerated by reading `coordinator_core/session/session_facts.py` and
-#: `coordinator_core/ops/ceremony/branch_resolution.py` (2026-08-27, this
-#: chunk) — the deterministic count source the task body asks for, NOT a live
-#: corpus. Each entry cites the call site it counts so a future reader can
-#: re-verify the enumeration against the code rather than trusting this table
-#: blind. `git_common_dir` (an lru-cached, pure-Python upward directory walk —
-#: see its own docstring's "hot path may treat this as zero-spawn") is
-#: deliberately excluded from every `git_spawn` count below: it never shells
-#: out to git.
 STRUCTURAL_CALL_SITES: dict = {
     "session_magnitude_attributed": (
         CallSite(
@@ -298,17 +217,6 @@ STRUCTURAL_CALL_SITES: dict = {
 
 @dataclass(frozen=True)
 class StructuralCounts:
-    """Structural (git-spawn, file-read) counts for one fact.
-
-    `git_spawns_min`/`git_spawns_max` and `file_reads_min`/`file_reads_max`
-    bound the fixed-count call sites (`CallSite.per_item is False`) —
-    `_min` counts only `always=True` sites, `_max` adds every conditional
-    site once. Per-item sites (a count that scales with a runtime-sized
-    collection — held plan claims, terminal sizing records) are NOT folded
-    into either bound; they are reported separately in `per_item_notes` so a
-    reader is never handed a max that quietly assumes some fixed collection
-    size.
-    """
 
     fact: str
     git_spawns_min: int
@@ -356,29 +264,12 @@ def all_structural_counts() -> dict:
     return {name: structural_counts_for(name) for name in FACT_NAMES}
 
 
-# ---------------------------------------------------------------------------
-# Timing leg — read the "fact_span" rows C1 emits.
-# ---------------------------------------------------------------------------
-
-
 def read_fact_span_rows(
     repo_root: Path,
     *,
     tail_bytes: int = DEFAULT_TAIL_BYTES,
     max_rows: int = DEFAULT_MAX_ROWS,
 ) -> list:
-    """Bounded read of every `kind == "fact_span"` row across the live
-    op-latency sink plus its rotated generations.
-
-    Routes through `coordinator_core.telemetry.op_latency.sink_generations`
-    (newest-first) and `tail_entries` (bounded by `tail_bytes`/`max_rows` PER
-    generation) — never a full-corpus parse (task body: "a full-corpus
-    JSON-parse pass is seconds of process time on a box carrying ~50 peers,
-    and the module already ships the bounded primitive for this"). Returns
-    `[]` rather than raising when the sink cannot be resolved or is empty —
-    this is an offline reader over a corpus C1's instrumentation may not have
-    written anything into yet.
-    """
     from coordinator_core.telemetry.op_latency import sink_generations, tail_entries
 
     rows: list = []
@@ -406,17 +297,6 @@ def _is_production_fact_span(entry) -> bool:
 
 @dataclass
 class FactTimingStats:
-    """Process-time distribution for one fact, computed vs degraded split.
-
-    `computed_ms`/`degraded_ms` are the raw elapsed-ms samples for each
-    population — kept separate per C1's own body ("a degraded fact
-    short-circuits and is systematically cheaper"). `p50`/`p95`/`max` below
-    are computed over `computed_ms` only, matching the population the fact
-    layer's steady-state cost describes; a degraded sample's own count and
-    total are still reported (`degraded_count`, `degraded_total_ms`) so a
-    reader can see the degraded population exists without it skewing the
-    computed distribution.
-    """
 
     fact: str
     computed_ms: list = field(default_factory=list)
@@ -435,9 +315,6 @@ class FactTimingStats:
         return sum(self.degraded_ms)
 
     def percentile(self, fraction: float) -> Optional[float]:
-        """Index-based percentile over sorted `computed_ms`, no interpolation
-        (same rule as `op_latency.py::_percentile_idx`, restated here rather
-        than imported — that helper is private to its own module)."""
         if not self.computed_ms:
             return None
         ordered = sorted(self.computed_ms)
@@ -502,7 +379,6 @@ def compute_timing_distributions(rows) -> dict:
     per_fact: dict = {name: FactTimingStats(fact=name) for name in FACT_NAMES}
     aggregate = FactTimingStats(fact="__aggregate__")
 
-    #: sid -> {fact_name: elapsed_ms} for the per-fact shape.
     by_invocation: dict = {}
 
     def _short(fact_name: str) -> str:
@@ -556,27 +432,12 @@ def compute_timing_distributions(rows) -> dict:
     return {"per_fact": per_fact, "aggregate": aggregate}
 
 
-# ---------------------------------------------------------------------------
-# Ambient context join — CONTEXT ONLY, never an adjudication axis.
-# ---------------------------------------------------------------------------
-
-
 def read_ambient_samples(
     repo_root: Path,
     *,
     tail_bytes: int = DEFAULT_AMBIENT_TAIL_BYTES,
     max_rows: int = DEFAULT_AMBIENT_MAX_ROWS,
 ) -> list:
-    """Bounded read of `ambient-load.jsonl` (written by
-    `coordinator_core.benchmarks.ambient_sampler`).
-
-    Same bounded-read discipline as `read_fact_span_rows` — `tail_entries`,
-    never a full parse. `ambient_sampler.py` does not rotate its sink (no
-    generation walk needed), so this reads exactly one file. Returns `[]`
-    when the sink is absent or empty — per DR-fact-layer-measurement-method.md,
-    the sampler may not have accumulated a sink yet when this runs, and that
-    is an observed fact to report, not a reason to block.
-    """
     from coordinator_core.benchmarks.ambient_sampler import _sink_path
     from coordinator_core.lifecycle import git_common_dir
     from coordinator_core.telemetry.op_latency import tail_entries
@@ -591,25 +452,12 @@ def read_ambient_samples(
 
 
 def nearest_ambient_sample(t_start: float, samples: list) -> Optional[dict]:
-    """The ambient sample whose `"t"` is closest to `t_start`, or `None` if
-    `samples` is empty.
-
-    Linear scan — `samples` is bounded by `read_ambient_samples`'s own
-    `max_rows`, so this is never asked to scan an unbounded list.
-    """
     if not samples:
         return None
     return min(samples, key=lambda s: abs(s["t"] - t_start))
 
 
 def join_ambient_context(fact_span_rows: list, ambient_samples: list) -> list:
-    """Nearest-timestamp join of each fact_span row's `t_start` to an ambient
-    sample — CONTEXT ONLY (see module docstring). Returns a list of
-    `{"t_start": float, "sid": str|None, "ambient": dict|None}`, one entry
-    per row carrying a numeric `t_start`; a row with no ambient corpus to
-    join against (or a malformed `t_start`) still appears, with `"ambient":
-    None`, rather than being silently dropped.
-    """
     joined = []
     for row in fact_span_rows:
         if not isinstance(row, dict):
@@ -627,22 +475,8 @@ def join_ambient_context(fact_span_rows: list, ambient_samples: list) -> list:
     return joined
 
 
-# ---------------------------------------------------------------------------
-# Top-level render — assembles the structural + timing (+ ambient context)
-# figures for C3 to state in the artifact. Renders; does not gate.
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class RenderedReport:
-    """The complete rendered figure set this module produces for C3.
-
-    `structural` and `timing` are the two load-independent legs DR-344's
-    amendment requires as the axis. `ambient_context` is the secondary,
-    load-dependent leg DR-fact-layer-measurement-method.md rules taken as
-    context only — kept in its own field so nothing here reads it as an
-    adjudication input.
-    """
 
     structural: dict
     timing: dict
@@ -683,15 +517,6 @@ def render(
     ambient_max_rows: int = DEFAULT_AMBIENT_MAX_ROWS,
     include_ambient: bool = True,
 ) -> RenderedReport:
-    """Assemble the full rendered report: structural counts (pure, no I/O),
-    the timing distributions read from `op-latency*.jsonl`, and (unless
-    `include_ambient=False`) the ambient-context join.
-
-    This is the OFFLINE entry point — it does bounded but real file I/O
-    (`read_fact_span_rows`, `read_ambient_samples`) and its own cost must be
-    stated by the caller (C3) rather than assumed free, per this module's
-    own docstring.
-    """
     structural = all_structural_counts()
     fact_span_rows = read_fact_span_rows(repo_root, tail_bytes=tail_bytes, max_rows=max_rows)
     timing = compute_timing_distributions(fact_span_rows)

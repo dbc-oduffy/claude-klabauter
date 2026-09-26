@@ -48,9 +48,6 @@ __all__ = ["PosixDoorBuildResult", "has_posix_compiler", "build_or_advise"]
 
 
 class PosixDoorBuildResult(NamedTuple):
-    """Outcome of `build_or_advise()`. Exactly one of `output`/`advisory` is
-    set: a build hit populates `output` and leaves `advisory` `None`; a
-    toolchain miss populates `advisory` and leaves `output` `None`."""
 
     built: bool
     output: Optional[Path]
@@ -58,13 +55,6 @@ class PosixDoorBuildResult(NamedTuple):
 
 
 def has_posix_compiler(compiler: Optional[str] = None) -> bool:
-    """Non-raising presence check for a `build_posix.build()`-usable C
-    toolchain. Delegates to `build_posix.py :: _find_compiler` -- the same
-    detector `build()` itself calls -- rather than re-listing its candidate
-    compilers (`clang`, `cc`, `gcc`) here, so this probe can never drift out
-    of sync with what a build actually uses. `_find_compiler` raises
-    `SystemExit` on a miss; that is the only signal converted to `False`
-    here, not caught more broadly."""
     try:
         build_posix._find_compiler(compiler)
     except SystemExit:
@@ -79,16 +69,6 @@ def build_or_advise(
     compiler: Optional[str] = None,
     output: Optional[Path] = None,
 ) -> PosixDoorBuildResult:
-    """Builds the POSIX door when a toolchain is present; otherwise returns
-    a non-fatal advisory naming a runnable script and returns cleanly
-    (never raises on a toolchain miss -- a missing compiler is an optional
-    capability gap on POSIX, not an install failure).
-
-    Windows is not this module's concern -- `door_install.py` keeps
-    prebuilt-first there unchanged, per this chunk's brief. Called on
-    win32, this refuses rather than silently doing nothing, since a caller
-    reaching it on Windows is itself the bug.
-    """
     if sys.platform == "win32":
         raise SystemExit(
             "door_install_posix_build: POSIX-only -- Windows keeps "
@@ -96,27 +76,7 @@ def build_or_advise(
         )
 
     if not has_posix_compiler(compiler):
-        # The remediation names the MODULE route, never the file path.
-        # `build_posix.py` does `from .build import write_sidecar`, so
-        # `python3 <abs path to build_posix.py> <root>` -- what this advisory
-        # used to emit -- dies on `ImportError: attempted relative import with
-        # no known parent package` before it reaches its own argparse. The
-        # module's own usage string already declares `python3 -m
-        # coordinator_core.warm.door.build_posix`; the advisory now agrees with
-        # it. A cold-path remediation that does not run is the failure mode the
-        # runnable-remediation rule exists to prevent (CLAUDE.md § Runtime
-        # conventions), and it is worse than naming nothing, because the
-        # operator burns a cycle on a command that cannot work.
         # `PYTHONPATH=<engine root>` is load-bearing, not decoration. The
-        # module route fixed the relative-import death above, but a bare
-        # `python3 -m coordinator_core.warm.door.build_posix` still dies one
-        # step earlier with `ModuleNotFoundError: No module named
-        # 'coordinator_core'` unless the engine root is importable -- and an
-        # operator reading this advisory is by definition not running from
-        # inside the engine tree. Naming the root twice (once to import the
-        # package, once as the build's argument) is redundant-looking and
-        # correct: they answer different questions, and dropping either one
-        # breaks the command.
         engine_root_str = str(Path(engine_root).resolve())
         advisory = (
             "[door-install] no C compiler found on PATH (checked clang, cc, gcc) -- "
@@ -131,16 +91,5 @@ def build_or_advise(
     built_output = build_posix.build(
         engine_root, python_bin=python_bin, compiler=compiler, output=output
     )
-    # A fresh compile is NOT guaranteed to carry the exec bit -- verified
-    # directly (2026-08-22): `clang -O2 -o out t.c` under `umask 0177`
-    # produces `-rw-------`, zero exec bits at all, not merely a narrowed
-    # group/other mask. This is the only writer on the POSIX fresh-compile
-    # install path (`scripts/setup.py` passes `bin_dst` as `output` here
-    # directly -- no downstream `shutil.copy2` step to inherit a mode from,
-    # unlike `door_install.py`'s prebuilt-copy branch), and this path is
-    # best-effort/advisory throughout, so a stripped exec bit would fail
-    # silently rather than raise. `0o755` matches the mode a default umask
-    # already produces; this just stops depending on the installer's
-    # ambient umask to get there.
     built_output.chmod(0o755)
     return PosixDoorBuildResult(built=True, output=built_output, advisory=None)

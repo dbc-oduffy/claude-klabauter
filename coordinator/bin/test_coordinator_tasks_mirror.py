@@ -1,18 +1,3 @@
-"""test_coordinator_tasks_mirror.py — self-contained test suite for coordinator-tasks-mirror.py.
-
-Exercises the module's write/update
-functions directly (no subprocess, no git-repo fixture required — cmd_init/cmd_update
-take repo_root as an explicit parameter, decoupled from git rev-parse resolution) plus
-the CLI's usage/error paths via subprocess for the argument-parsing surface.
-
-Contract under test:
-    CLI: coordinator/bin/coordinator-tasks-mirror.py
-    Spec backlink: DoE-claude:pln-ceremony-as-pipeline-2-land-th-aa5ace § C1.2
-
-Run with: python3 -m pytest coordinator/bin/test_coordinator_tasks_mirror.py
-
-Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md (Plan C, Wave E3-d)
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -24,8 +9,6 @@ import sys
 import pytest
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -46,13 +29,6 @@ def _pass(label: str) -> None:
 
 
 def _fail(label: str, detail: str = "") -> None:
-    """Fail the enclosing test.
-
-    Negative-spec: this MUST raise. It previously only printed and bumped a
-    module-global counter that nothing ever asserted on, which made every
-    check in this file decorative -- 40 checks that could not fail a run.
-    Do not "restore" the counting-only shape.
-    """
     global FAIL
     print(f"  FAIL: {label}")
     if detail:
@@ -134,8 +110,6 @@ def test_resumption_survival(mod, tmp_path) -> None:
         return
     _pass("mirror written")
 
-    # Simulate a session boundary: read the file from a plain open(), no
-    # module state involved — proves the data is purely on disk.
     with open(mirror_file, encoding="utf-8") as f:
         fresh_read = f.read()
 
@@ -263,7 +237,7 @@ def test_repo_root_flag_reaches_explicit_resolver(mod, monkeypatch) -> None:
     fake_lib.resolve_checked_repo_root = _fake_resolve
     monkeypatch.setitem(sys.modules, "repo_identity", fake_lib)
 
-    fake_root = "not-a-real-path/sibling-repo"  # abs-path-ok: arbitrary opaque fixture string, never resolved to disk
+    fake_root = "not-a-real-path/sibling-repo"
     root, mismatch = mod._resolve_repo_root(fake_root)
     if root == fake_root:
         _pass("explicit_root threaded through and returned as root")
@@ -310,7 +284,7 @@ def test_title_beginning_with_dash_not_misparsed(mod) -> None:
     else:
         _fail("no spurious error", err)
 
-    fake_root = "not-a-real-path/other-repo"  # abs-path-ok: arbitrary opaque fixture string, never resolved to disk
+    fake_root = "not-a-real-path/other-repo"
     args2, repo_root2, err2 = mod._extract_repo_root_flag(
         ["--repo-root", fake_root, "init", "my-name", "--not-a-flag title"]
     )
@@ -397,18 +371,7 @@ def test_cli_end_to_end(mod, tmp_path) -> None:
         _fail("CLI init wrote the mirror file", mirror_file)
 
 
-
-
 def test_sid_resolution_ignores_cwd(tmp_path) -> None:
-    """Pins the invariant the module docstring's cross-repo arm rests on.
-
-    resolve_session_id reads the env ladder ONLY — the `.current-session-id`
-    sentinel tier was removed (KS-4, 2026-08-07) and the `cwd` parameter is
-    vestigial. If a cwd-derived tier were ever reintroduced, a --repo-root
-    invocation whose cwd is a sibling repo would silently file its journal
-    under the SIBLING's session id, with no error. This test fails the moment
-    that becomes possible again.
-    """
     from coordinator_core.session.core import resolve_session_id
 
     print("--- sid-resolution: cwd is never a resolution input")
@@ -439,7 +402,6 @@ def test_sid_resolution_ignores_cwd(tmp_path) -> None:
 
 
 def test_empty_sid_refuses_rather_than_guessing(tmp_path) -> None:
-    """An unresolvable sid must fail loud, never write to state/tasks//."""
     print("--- empty-sid: CLI refuses when the whole env ladder is empty")
     repo = tmp_path / "no-sid"
     repo.mkdir()

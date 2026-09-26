@@ -46,12 +46,8 @@ except ImportError:  # pragma: no cover - exercised only on a broken environment
 
 # Mirrors platform-outcome.schema.json's SECONDARY staleness constant
 # (PLATFORM_OUTCOME_STALENESS_DAYS = 30), named here rather than encoded as a
-# bare magic number, per that schema's own stated convention.
 PLATFORM_OUTCOME_STALENESS_DAYS = 30
 
-# PlatformId vocabulary SSOT: agent-install-manifest.schema.json #/$defs/PlatformId.
-# Canonical ordering used when writing tested_platforms, so a no-op run never
-# reorders an unchanged value into a spurious diff.
 PLATFORM_ENUM_ORDER = ["macos", "linux", "windows"]
 
 REQUIRED_RECORD_FIELDS = [
@@ -74,16 +70,6 @@ def records_root(repo_root: str) -> str:
 
 
 def current_repo_sha(repo_root: str) -> str | None:
-    """HEAD SHA of the repo providing the entry-point surfaces (`repo_root`,
-    which callers may point at a target repo other than claude-klabauter's own
-    checkout). Feeds the PRIMARY staleness rule. Returns None (fail-safe:
-    treats every record as stale) if git is unavailable or the repo has no
-    commits yet.
-
-    `coordinator_core.win_portability` is always importable directly here
-    (this module lives inside coordinator_core itself), unlike the generator
-    script's own historical sys.path dance for the same import.
-    """
     try:
         from coordinator_core.win_portability import leaf_spawn_creationflags
 
@@ -103,12 +89,6 @@ def current_repo_sha(repo_root: str) -> str | None:
 
 
 def entry_point_surfaces(manifest: dict) -> set[str]:
-    """Surface names counted as manifest-declared ENTRY POINTS — compared against
-    the manifest's own top-level key names (`standalone_setup_script`,
-    `programmatic_entry_point`), not free-form script paths, since those two keys
-    are exactly what point 4 defines as the install entry point. Ceremony-hot-
-    path surfaces (C5's KR-2 reader) are deliberately excluded — same record
-    store, disjoint surface set."""
     names: set[str] = set()
     if manifest.get("standalone_setup_script"):
         names.add("standalone_setup_script")
@@ -118,9 +98,6 @@ def entry_point_surfaces(manifest: dict) -> set[str]:
 
 
 def load_record(path: str) -> dict | None:
-    """Parse one platform-outcome YAML record. Returns None (skip, don't crash)
-    on any parse failure or schema-shape mismatch — a malformed record must never
-    take down a consumer's run."""
     if yaml is None:
         return None
     try:
@@ -151,7 +128,7 @@ def is_stale(record: dict, current_sha: str | None, now: datetime) -> bool:
     try:
         observed = datetime.fromisoformat(str(observed_raw).replace("Z", "+00:00"))
     except (ValueError, TypeError):
-        return True  # unparsable timestamp -> fail closed, treat as stale
+        return True
     if observed.tzinfo is None:
         observed = observed.replace(tzinfo=timezone.utc)
     if now - observed > timedelta(days=PLATFORM_OUTCOME_STALENESS_DAYS):
@@ -160,10 +137,6 @@ def is_stale(record: dict, current_sha: str | None, now: datetime) -> bool:
 
 
 def iter_record_paths(records_root_: str):
-    """Yield every state/platform-outcomes/<platform>/<machine>/<surface>.yaml
-    path on disk, in deterministic (sorted) order. Silent (yields nothing) if
-    the records root doesn't exist yet — that is the expected state before any
-    canary has run."""
     if not os.path.isdir(records_root_):
         return
     for platform_name in sorted(os.listdir(records_root_)):
@@ -193,24 +166,11 @@ def derive_tested_platforms(
     current_sha: str | None,
     now: datetime | None = None,
 ) -> tuple[list[str], list[str]]:
-    """Pure derivation (no I/O beyond the records-root walk) — returns
-    (derived_tested_platforms_sorted, advisory_lines).
-
-    Promotion: a platform is included iff it has >=1 PASSING, non-stale record
-    whose `surface` is a manifest-declared entry point.
-
-    Grandfather: a platform already present in manifest['tested_platforms'] that
-    has ZERO entry-point-surface records at all (pass or fail, fresh or stale —
-    no evidence exists yet either way) is preserved with an advisory. A platform
-    with entry-point records that fail or are all stale is NOT grandfathered —
-    that is a legitimate demotion, records exist and don't currently support the
-    claim.
-    """
     surfaces = entry_point_surfaces(manifest)
     existing = list(manifest.get("tested_platforms") or [])
     now = now or datetime.now(timezone.utc)
 
-    seen_entry_platforms: set[str] = set()  # has >=1 entry-point-surface record at all
+    seen_entry_platforms: set[str] = set()
     passing_platforms: set[str] = set()
 
     for path in iter_record_paths(records_root_):
@@ -218,7 +178,7 @@ def derive_tested_platforms(
         if record is None:
             continue
         if record.get("surface") not in surfaces:
-            continue  # not an entry-point surface -> not backing evidence for tested_platforms
+            continue
         platform = record["platform"]
         seen_entry_platforms.add(platform)
         if record.get("outcome") == "pass" and not is_stale(record, current_sha, now):
@@ -232,8 +192,5 @@ def derive_tested_platforms(
         if platform not in seen_entry_platforms:
             derived.add(platform)
             advisories.append(f"grandfathered: {platform} has no backing records")
-        # else: platform has entry-point records but none currently pass/fresh
-        # -> legitimate demotion, not added, no advisory (this is the intended
-        # "failing/stale record removes the claim" behavior).
 
     return _sort_platforms(derived), advisories

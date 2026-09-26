@@ -29,21 +29,21 @@ def _load_module():
 
 def test_home_directory_path_is_a_finding():
     module = _load_module()
-    text = "/Users/dbc-example-operator/repos/claude-klabauter"  # abs-path-ok: fixture data, not a real path reference
+    text = "/Users/dbc-example-operator/repos/claude-klabauter"
     spans = module.permitted_spans(text, "some/file.py")
     assert spans == [], f"home-directory path was wrongly permitted: {spans}"
 
 
 def test_backslash_predecessor_home_path_is_a_finding():
     module = _load_module()
-    text = r"C:\Users\dbc-example-operator/claude-klabauter"  # abs-path-ok: fixture data, not a real path reference
+    text = r"C:\Users\dbc-example-operator/claude-klabauter"
     spans = module.permitted_spans(text, "some/file.py")
     assert spans == [], f"backslash-predecessor home path was wrongly permitted: {spans}"
 
 
 def test_tilde_predecessor_home_path_is_a_finding():
     module = _load_module()
-    text = "~/dbc-example-operator/repos/claude-klabauter"  # abs-path-ok: fixture data, not a real path reference
+    text = "~/dbc-example-operator/repos/claude-klabauter"
     spans = module.permitted_spans(text, "some/file.py")
     assert spans == [], f"tilde-predecessor home path was wrongly permitted: {spans}"
 
@@ -86,9 +86,6 @@ def test_slug_after_punctuation_still_permitted():
 
 
 def test_codename_in_repo_segment_is_a_finding():
-    # The permitted span must cover only the handle, not the repo segment --
-    # an internal codename landing there (e.g. an `owner/.example-doctrine-mirror-repo` slug)
-    # must remain a finding while the handle itself stays permitted.
     module = _load_module()
     text = 'repo: "dbc-oduffy/.example-doctrine-mirror-repo"'
     spans = module.permitted_spans(text, "some/file.py")

@@ -70,8 +70,6 @@ def test_advisory_method_not_found_is_silent(hook_run, monkeypatch):
 
 
 def test_advisory_engine_unreachable_is_silent(hook_run, monkeypatch):
-    """The engine-import-failure leg (not merely method-not-found) is also
-    a failure class the flag's contract covers."""
     import cc_invoke
 
     def _unreachable():
@@ -90,7 +88,6 @@ def test_advisory_engine_unreachable_is_silent(hook_run, monkeypatch):
 
 
 def test_advisory_success_passes_through_unchanged(hook_run, monkeypatch):
-    """A successful advisory result is not swallowed -- only failure is silent."""
     import coordinator_core.ipc as ipc
 
     def _ok(op, params, origin_worktree=None):
@@ -110,7 +107,6 @@ def test_advisory_success_passes_through_unchanged(hook_run, monkeypatch):
 
 
 def test_guard_without_the_flag_stays_loud_on_method_not_found(hook_run, monkeypatch):
-    """No `--advisory` token -- the existing guard contract is unweakened."""
     import coordinator_core.ipc as ipc
 
     def _raise(op, params, origin_worktree=None):

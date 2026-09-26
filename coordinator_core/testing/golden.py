@@ -54,11 +54,7 @@ _KIND_EXTENSIONS = {"text": "txt", "json": "json"}
 
 
 class GoldenMissingError(Exception):
-    """Raised when a golden fixture file is absent (and capture mode is not on).
-
-    Hard failure by design — see module docstring negative-spec. Callers must never
-    catch this and downgrade it to `pytest.skip`.
-    """
+    pass
 
 
 def is_capturing() -> bool:
@@ -67,16 +63,6 @@ def is_capturing() -> bool:
 
 
 def _resolve_goldens_dir() -> Path:
-    """Walk the call stack for the nearest frame outside this module and return the
-    `_goldens/` directory beside that frame's file.
-
-    This is how `load_golden`/`assert_matches_golden` resolve "the calling test
-    suite's own directory" without requiring every call site to pass `__file__`
-    explicitly. Frames belonging to this module itself (e.g. `assert_matches_golden`
-    calling `load_golden` internally) are skipped, so the resolution is correct
-    regardless of how many golden.py-internal layers sit between the real caller and
-    this function.
-    """
     this_file = Path(__file__).resolve()
     for frame_info in inspect.stack():
         candidate = Path(frame_info.filename).resolve()
@@ -100,12 +86,6 @@ def _golden_path(namespace: str, case: str, kind: str) -> Path:
 
 
 def load_golden(namespace: str, case: str, *, kind: str = "text") -> Union[bytes, Any]:
-    """Load a committed golden fixture.
-
-    kind="text" returns the fixture's raw bytes. kind="json" returns the parsed
-    object. Raises `GoldenMissingError` (never `pytest.skip`) if the fixture file is
-    absent — see module docstring negative-spec.
-    """
     path = _golden_path(namespace, case, kind)
     if not path.is_file():
         raise GoldenMissingError(

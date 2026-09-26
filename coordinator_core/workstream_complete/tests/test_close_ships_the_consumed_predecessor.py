@@ -75,9 +75,7 @@ def _ship_directives(directives: list[dict]) -> list[dict]:
     return [d for d in directives if d["id"].startswith("d-ship-consumed-handoff:")]
 
 
-# ---------------------------------------------------------------------------
 # 1. POSITIVE
-# ---------------------------------------------------------------------------
 
 
 def test_resolvable_predecessor_consumed_handoff_emits_the_ship_directive(tmp_path):
@@ -94,9 +92,7 @@ def test_resolvable_predecessor_consumed_handoff_emits_the_ship_directive(tmp_pa
     assert entry["args"] == ["ship-handoff", "state/handoffs/foo.md"]
 
 
-# ---------------------------------------------------------------------------
 # 2. NEGATIVE, DISPOSITION
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -113,20 +109,11 @@ def test_every_other_disposition_emits_no_ship_directive(tmp_path, disposition):
 
 
 def test_predecessor_consumed_with_unresolvable_path_emits_no_ship_directive(tmp_path):
-    # No file written under tmp_path at all -- the absent-file case catches
-    # an emit predicate written against the gate field alone rather than
-    # against resolution, which is the case a `disposition`-only predicate
-    # cannot distinguish from assertion 1's positive fixture.
     gate = _gate(PREDECESSOR_CONSUMED, consumed_handoff_paths=("state/handoffs/does-not-exist.md",))
 
     directives = wsc.build_directives(gate, {}, tmp_path)
 
     assert _ship_directives(directives) == []
-
-
-# ---------------------------------------------------------------------------
-# 3. AC2 -- no truthy best_effort key
-# ---------------------------------------------------------------------------
 
 
 def test_ship_directive_carries_no_truthy_best_effort_key(tmp_path):
@@ -137,15 +124,6 @@ def test_ship_directive_carries_no_truthy_best_effort_key(tmp_path):
 
     entry = _ship_directives(directives)[0]
     assert not entry.get("best_effort")
-
-
-# ---------------------------------------------------------------------------
-# 4. GATE, BOTH ENDS -- checked against `brief()`'s output only (see module
-# docstring). Both legs need the completeness gate to BLOCK (an unticked
-# acceptance criterion) since the `_gated_directive_id` append loop inside
-# `brief()` only runs when `consumed_handoff_completeness_gate.blocks` is
-# True.
-# ---------------------------------------------------------------------------
 
 
 def test_ship_directive_depends_on_the_completeness_judgment_point(tmp_path, monkeypatch):
@@ -188,9 +166,7 @@ def test_completeness_judgment_point_resolves_names_the_ship_id_on_every_arm(tmp
         )
 
 
-# ---------------------------------------------------------------------------
 # 5. ORDERING
-# ---------------------------------------------------------------------------
 
 
 def test_ship_directive_precedes_the_terminal_handoff_sweep(tmp_path):
@@ -205,9 +181,7 @@ def test_ship_directive_precedes_the_terminal_handoff_sweep(tmp_path):
     assert ship_idx < sweep_idx
 
 
-# ---------------------------------------------------------------------------
 # 6. PLURALITY
-# ---------------------------------------------------------------------------
 
 
 def test_two_consumed_handoff_paths_emit_two_distinct_ship_ids(tmp_path):
@@ -225,9 +199,7 @@ def test_two_consumed_handoff_paths_emit_two_distinct_ship_ids(tmp_path):
     assert ship_ids == {"d-ship-consumed-handoff:foo.md", "d-ship-consumed-handoff:bar.md"}
 
 
-# ---------------------------------------------------------------------------
 # 7. NON-OVERLAP
-# ---------------------------------------------------------------------------
 
 
 def test_no_ship_directive_when_the_commit_tail_already_stamps_it(tmp_path, monkeypatch):
@@ -251,15 +223,6 @@ def test_ship_directive_still_emitted_when_shipped_disposition_carries_no_shippe
     tmp_path, monkeypatch
 ):
     # AMENDMENT (C1's F2 review note, docs/plans/2026-09-11-the-memo-
-    # lifecycle-closes-its-own-handoffs.md § C1 body): the suppression must
-    # call `directives_commit_tail.resolve_ship_stamp_candidates` itself
-    # rather than re-deriving a one-conjunct ("disposition == shipped")
-    # approximation. That function also requires a TRUTHY `shipped_in`
-    # before it will treat a basename as a commit-tail candidate -- a
-    # `disposition: shipped` entry with no `shipped_in` is NOT suppressed
-    # here, so this consumed predecessor is still this close's to ship. A
-    # one-conjunct emit predicate (disposition alone) would wrongly suppress
-    # this case and leave the baton stamped by nobody.
     _write_ac_handoff(tmp_path, "state/handoffs/foo.md", "## Acceptance criteria\n\n- [x] one\n")
     monkeypatch.setattr(
         directives_commit_tail, "_held_handoff_basenames", lambda *_a, **_k: ["foo.md"]
@@ -278,9 +241,7 @@ def test_ship_directive_still_emitted_when_shipped_disposition_carries_no_shippe
     assert ship[0]["id"] == "d-ship-consumed-handoff:foo.md"
 
 
-# ---------------------------------------------------------------------------
 # 8. PORTABILITY
-# ---------------------------------------------------------------------------
 
 
 def test_emitted_path_argument_contains_no_backslash(tmp_path):

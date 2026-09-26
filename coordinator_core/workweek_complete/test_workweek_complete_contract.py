@@ -25,9 +25,6 @@ from coordinator_core.workweek_complete import brief as wwc_brief
 
 
 def _all_emitted_directive_clis() -> set[str]:
-    """workweek's `_build_directives` takes no arguments (no conditional
-    branch, unlike workday's C4 day-goal directive) -- one call surfaces
-    the full emission set."""
     return {d["cli"] for d in wwc_brief._build_directives()}
 
 
@@ -60,10 +57,6 @@ def test_every_manifest_entry_is_named_by_at_least_one_directive() -> None:
 
 
 def test_version_consistency_directive_carries_resolved_repo_root(monkeypatch) -> None:
-    """P124-C1 AC4: `d_step4b_4k_version_consistency`'s `args` ==
-    `["--repo-root", <resolved root>]` when the repo root resolves --
-    threaded through the SAME single-resolution helper as cruft-sweep and
-    detect-initiative-candidates, not re-derived independently."""
     monkeypatch.setattr(
         wwc_brief, "_resolve_repo_root_for_doc_staleness", lambda: "/resolved/repo/root"
     )
@@ -74,8 +67,6 @@ def test_version_consistency_directive_carries_resolved_repo_root(monkeypatch) -
 
 
 def test_version_consistency_directive_omits_repo_root_when_unresolved(monkeypatch) -> None:
-    """A resolution failure (None) degrades to an empty args list -- never a
-    literal 'None' string reaching the CLI's argv."""
     monkeypatch.setattr(wwc_brief, "_resolve_repo_root_for_doc_staleness", lambda: None)
     directives = {d["id"]: d for d in wwc_brief._build_directives()}
     entry = directives["d_step4b_4k_version_consistency"]
@@ -83,11 +74,6 @@ def test_version_consistency_directive_omits_repo_root_when_unresolved(monkeypat
 
 
 def test_cruft_sweep_and_initiative_candidates_share_the_same_resolved_root(monkeypatch) -> None:
-    """The three repo-root-needing directives in `_build_directives` --
-    cruft-sweep, detect-initiative-candidates, and version-consistency --
-    all thread the ONE value `_build_directives` resolves per call, rather
-    than each calling `_resolve_repo_root_for_doc_staleness()` on its own
-    (P124-C1's spawn-collapse claim)."""
     calls = {"n": 0}
 
     def _once() -> str:
@@ -116,13 +102,6 @@ def test_cruft_sweep_and_initiative_candidates_share_the_same_resolved_root(monk
 
 
 def test_step2_directive_names_the_validate_gate_cli_fast_subcommand() -> None:
-    """`d_step2_resolve_validation_cmd` must be repointed at the validate
-    gate CLI's `fast` subcommand (`validate-fast-and-packageability`,
-    `args=["fast"]`), not the standalone `coordinator-resolve-validation-cmd`
-    -- pinned literally so a future silent repoint fails loudly (C4a,
-    docs/plans/2026-07-30-diff-scoped-ceremony-gates-elegant.md § Design
-    decision 2 / Problem 3: this is the fix that puts gate 3 on the
-    diff-scoping seam alongside gates 1/2, with zero new CLI surface)."""
     directive = next(
         d for d in wwc_brief._build_directives() if d["id"] == "d_step2_resolve_validation_cmd"
     )
@@ -131,11 +110,6 @@ def test_step2_directive_names_the_validate_gate_cli_fast_subcommand() -> None:
 
 
 def test_reap_claims_for_repos_directive_present() -> None:
-    """Sub-reap (iii), the orphaned-claim-dir cull, has NO production caller
-    other than this directive (`session.reap_claims_for_repos` was cut out
-    of `session.reap`'s `_handler` by PM ruling 2026-08-22 and relocated
-    here) -- deleting this directive silently disables the orphaned-claim
-    cull with no other signal that it happened."""
     clis = {d["cli"] for d in wwc_brief._build_directives()}
     assert "reap-claims-for-repos" in clis, (
         "reap-claims-for-repos directive missing from workweek-complete: "
@@ -144,12 +118,7 @@ def test_reap_claims_for_repos_directive_present() -> None:
     )
 
 
-
-
 def test_drift_guards_bundle_split_carries_correct_per_directive_hard_block() -> None:
-    """`workweek-complete-drift-guards` bundles subcommands of differing
-    severity (Task 2) -- each split-out directive must carry the severity
-    correct for ITS OWN subcommand, not a single shared boolean."""
     directives = {d["id"]: d for d in wwc_brief._build_directives()}
     expected = {
         "d_step4b_4k_description_length": ("description-length", False),
@@ -164,10 +133,6 @@ def test_drift_guards_bundle_split_carries_correct_per_directive_hard_block() ->
 
 
 def test_no_directive_emits_schema_drift_gate() -> None:
-    """P124-C2: the vendored-schema-drift directive is retired -- the
-    requirement it served moved to the doctor probe's `vendor_drift`
-    sentinel key, not to any ceremony-time directive. No directive's args
-    may name `schema-drift-gate`, and the old directive id must not exist."""
     directives = wwc_brief._build_directives()
     assert "d_step4b_4k_schema_drift" not in {d["id"] for d in directives}
     for directive in directives:
@@ -178,20 +143,6 @@ def test_no_directive_emits_schema_drift_gate() -> None:
 
 
 def test_no_directive_bundles_drift_guards_with_empty_args() -> None:
-    """The pre-split single `d_step4b_4k_drift_guards` directive named the
-    bundling CLI with `args=[]` -- an argparse-required-subcommand CLI
-    cannot dispatch on that shape. No directive should reintroduce it.
-
-    Introspects `workweek-complete-drift-guards.py`'s real `argparse` config
-    (`build_parser()`) rather than hand-listing its subcommand names --
-    <!-- Review: coordinatorcode-reviewer-fa856c15 -- prior version only
-    asserted `d["args"]` truthiness against a hand-maintained expectation,
-    which would not catch the next bundled-subcommand CLI shipped with
-    `args=[]` against a `required=True` subparser. This walks the CLI's own
-    parser so a future regression of this shape fails here too. -->
-    a directive naming a bundling CLI with an unrecognized or empty leading
-    arg fails against the CLI's own declared subcommand set, not a copy of
-    it."""
     import importlib.util
 
     bin_dir = os.path.join(
@@ -231,8 +182,6 @@ def test_no_directive_bundles_drift_guards_with_empty_args() -> None:
 
 
 def test_pcli_drift_gate_is_never_a_directive() -> None:
-    """The ceremony doc's own prose: pcli-04 drift gate runs by hand at
-    Step 5, no directive emits its subcommand."""
     for d in wwc_brief._build_directives():
         assert d["args"][:1] != ["pcli-drift-gate"], (
             f"directive {d['id']!r} emits pcli-drift-gate, which must stay a "

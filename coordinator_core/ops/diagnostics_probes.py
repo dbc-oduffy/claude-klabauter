@@ -88,12 +88,6 @@ class DiagnosticsStructuralPin(RuntimeError):
 
 @register_op("diagnostics.always_succeeds")
 def _always_succeeds(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """Rung: success (rc=0, result envelope on stdout). The positive control.
-
-    Returns a fixed literal. `params` and `repo_root` are accepted for handler-signature
-    parity and deliberately ignored — echoing a caller value back is the first step
-    toward this probe having behaviour worth trusting, and it must not have any.
-    """
     return {"probe": "always_succeeds", "ok": True}
 
 

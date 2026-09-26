@@ -124,36 +124,16 @@ logger = logging.getLogger(__name__)
 
 _SUPPORTED_SCHEMA_VERSIONS = (1, 2, 3, 4)
 
-#: Fields introduced by schema_version 4 (DoE 355255cc3). Both are additive-
-#: optional AT v4 and unknown below it.
 _V4_ONLY_FIELDS = ("excluded_consumer", "eligible_glob")
 
 # `delivery` is REQUIRED from schema_version 3 onward; on a v1/v2 registry it is
-# absent everywhere and defaults to "paste", which is what those versions meant
-# implicitly.
 _VALID_DELIVERIES = ("paste", "inject")
 
-# Sibling-plugin (example-game-workbench-repo) file-exists conditional consumers are
 # ALWAYS at the flat live-install layout ($CLAUDE_HOME-or-$HOME/.claude/plugins/
-# example-game-workbench-repo/...), decoupled from plugin_root — mirrors the retired
-# bash oracle's unconditional $HOME anchoring ("Sibling plugin entries keep
-# $HOME because they are always at the flat install layout"). Resolving these
-# relative to plugin_root is only correct when plugin_root itself IS that
-# live-install path; when plugin_root is the DoE SOURCE tree (the real
-# --plugin-dir production resolution path per DoE-claude's own CLAUDE.md), a
-# plugin_root-relative resolution silently lands on a nonexistent/wrong-layout
-# path and all 14 example-game-repo/game-dev conditional consumers vanish with no error.
 _SIBLING_PLUGIN_MARKER = "../../example-game-workbench-repo/"
 
 
 def _sibling_plugin_file_exists_path(cond_path: str) -> Optional[Path]:
-    """Resolve a `example-game-workbench-repo` sibling-plugin file-exists `cond_path`
-    against the live-install plugins root, independent of `plugin_root`.
-
-    Returns None when `cond_path` isn't this shape (e.g. `~`-expansion or a
-    plain relative path) — callers fall back to plugin_root-relative
-    resolution for anything this doesn't claim.
-    """
     if cond_path.startswith("~"):
         return Path(cond_path).expanduser()
     if not cond_path.startswith(_SIBLING_PLUGIN_MARKER):
@@ -173,11 +153,6 @@ _VALID_SEARCH_SCOPES = ("plugin-root", "parent-of-plugin-root")
 
 
 class RegistryError(Exception):
-    """Raised on malformed registry.toml, unknown snippet name, or unsupported schema_version.
-
-    `exit_code` mirrors the bash CLI's contract: 1 usage/parse error,
-    2 unknown snippet name, 3 schema_version mismatch/absent.
-    """
 
     def __init__(self, message: str, exit_code: int = 1) -> None:
         super().__init__(message)
@@ -206,10 +181,7 @@ def _load_toml(registry_path: Path) -> dict[str, Any]:
             "Remediation: pip install tomli (or upgrade to python >= 3.11).",
             exit_code=2,
         ) from exc
-    except Exception as exc:  # tomllib.TOMLDecodeError et al — surface as parse error
-        # Include the exception class name (not just its message) — callers/tests
-        # discriminate "malformed TOML" from other failure classes by type name,
-        # matching the raw traceback the retired bash CLI's python3 heredoc emitted.
+    except Exception as exc:
         raise RegistryError(
             f"snippet-registry: failed to parse {registry_path}: "
             f"{type(exc).__name__}: {exc}",
@@ -241,8 +213,6 @@ def _validate_v4_fields(name: str, entry: dict[str, Any], schema_version: int) -
                 exit_code=1,
             )
 
-    # consumer_source is validated for VALUE in get_snippet_meta; here only the
-    # "scan" case matters, and an unknown value simply isn't "scan".
     if entry.get("consumer_source", "registry") == "scan":
         for field in _V4_ONLY_FIELDS:
             if field in entry:
@@ -320,14 +290,6 @@ def _validate_v4_fields(name: str, entry: dict[str, Any], schema_version: int) -
 
 
 def load_registry(registry_path: Path) -> dict[str, Any]:
-    """Parse + validate registry.toml. Returns the raw `{"schema_version": N, "snippet": {...}}` dict.
-
-    Validates schema_version and, per snippet, the required-field contract
-    (sentinel_begin/sentinel_end/consumers; conditional_consumer path +
-    condition_type, condition_key iff machine-local-key). Raises
-    RegistryError on any violation — mirrors the bash reader's fail-loud
-    Python heredoc.
-    """
     data = _load_toml(registry_path)
 
     schema_version = data.get("schema_version")
@@ -350,10 +312,6 @@ def load_registry(registry_path: Path) -> dict[str, Any]:
                     f"snippet-registry: [snippet.{name}] missing required field '{required}'",
                     exit_code=1,
                 )
-        # presence-only validation let a scalar
-        # `consumers` value (e.g. a bare-string paste-drift typo instead of a
-        # 1-element list) pass silently, then get iterated char-by-char by
-        # resolve_consumers downstream. Fail loud here instead.
         if not isinstance(entry["consumers"], list) or not all(
             isinstance(c, str) for c in entry["consumers"]
         ):
@@ -398,7 +356,6 @@ def load_registry(registry_path: Path) -> dict[str, Any]:
 
 
 def list_snippets(data: dict[str, Any]) -> list[str]:
-    """All enrolled snippet names, alphabetically."""
     return sorted(data.get("snippet", {}).keys())
 
 
@@ -410,11 +367,6 @@ def get_snippet_entry(data: dict[str, Any], name: str) -> dict[str, Any]:
 
 
 def get_snippet_meta(data: dict[str, Any], name: str) -> dict[str, Any]:
-    """T3a-g3f metadata block for `name` (header_style/delivery/fence_aware/allow_insert/
-    consumer_source/search_scope), defaulted + validated against the enumerated axes,
-    plus the schema_version-4 `excluded_consumer` / `eligible_glob` declarations
-    (structurally validated at `load_registry` time, surfaced verbatim here).
-    """
     entry = get_snippet_entry(data, name)
     header_style = entry.get("header_style", "sentinel-embedded")
     if header_style not in _VALID_HEADER_STYLES:
@@ -459,24 +411,11 @@ def get_snippet_meta(data: dict[str, Any], name: str) -> dict[str, Any]:
 
 
 def _ml_get(key: str, machine_local_bin: Optional[str]) -> str:
-    """Best-effort machine-local key resolution. Empty string on any failure —
-    absent sibling repos / absent resolver are routine, not fatal.
-
-    Reads via ``coordinator_core.machine_resolver.registry_get`` (direct
-    tomllib merge of ``registry.local.toml`` over ``registry.toml``,
-    plus the per-key env-override rung) in-process — no ``machine-local``
-    CLI subprocess. ``machine_local_bin`` is retained as the caller's
-    disable switch only (``None``/falsy means "do not resolve", matching
-    the module docstring's `machine_local_bin=None` determinism contract)
-    and is no longer used as a spawn target.
-    """
     if not machine_local_bin:
         return ""
     try:
         value = registry_get(key)
     except Exception as exc:  # pragma: no cover — registry_get is best-effort by contract
-        # Debug (not warning): absent sibling repos / absent registry value
-        # is routine on many machines, not a fault — see docstring.
         logger.debug(
             "snippet-registry: machine-local registry lookup unavailable for key %r "
             "(%s: %s) — treating as empty",
@@ -632,7 +571,6 @@ def resolve_conditional_consumers(
             if fe_path.is_file():
                 out.append(str(fe_path))
             continue
-        # machine-local-key
         cond_key = cond["condition_key"]
         resolved_root = _ml_get(cond_key, machine_local_bin).rstrip("/")
         if not resolved_root:
@@ -645,8 +583,6 @@ def resolve_conditional_consumers(
         full_path = Path(resolved_root) / cond_path
         if full_path.is_file():
             out.append(str(full_path))
-        # If the resolved root exists but the target file doesn't, emit nothing
-        # (file may not be present on this machine's checkout of the sibling).
 
     return out
 
@@ -658,11 +594,6 @@ def list_for(
     *,
     machine_local_bin: Optional[str] = None,
 ) -> list[str]:
-    """Reverse lookup: snippet names whose resolved consumer set includes `target_path`.
-
-    Matches against both the raw registry path (as written) and the resolved
-    absolute path, for unconditional and conditional consumers alike.
-    """
     target = target_path.rstrip("/")
     matched: list[str] = []
 
@@ -682,11 +613,6 @@ def list_for(
                 cond_type = cond["condition_type"]
                 if cond_type == "file-exists":
                     fe_path = _sibling_plugin_file_exists_path(cond_path) or (plugin_root / cond_path)
-                    # Mirror resolve_consumers' existence
-                    # gate (a file-exists conditional consumer is only "active"
-                    # if it currently resolves on disk); otherwise list_for could
-                    # report a snippet as covering a path that verify/resolve_consumers
-                    # would never actually treat as an active consumer here.
                     if (cond_path == target or str(fe_path) == target) and fe_path.is_file():
                         found = True
                         break

@@ -27,9 +27,6 @@ from __future__ import annotations
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Import guard — MUST precede any test so @register_op fires first.
-# ---------------------------------------------------------------------------
 import coordinator_core.ops.gate_validate_invocable  # noqa: F401 — fires @register_op
 
 from coordinator_core.ipc import _REGISTRY
@@ -78,11 +75,6 @@ def _restore_dimension_registry():
     _DIMENSION_REGISTRY.update(original)
 
 
-# ---------------------------------------------------------------------------
-# Tri-state verdict shape
-# ---------------------------------------------------------------------------
-
-
 def test_five_dimensions_in_fixed_order():
     result = _gate_validate_invocable({"changed_files": ["a.py"]})
     assert [d["dimension"] for d in result["dimensions"]] == list(DIMENSION_NAMES)
@@ -126,11 +118,6 @@ def test_default_overall_is_unavailable_with_all_stub_dimensions():
     assert result["overall"] == "UNAVAILABLE"
 
 
-# ---------------------------------------------------------------------------
-# Fail-closed on internal exception
-# ---------------------------------------------------------------------------
-
-
 def test_run_dimension_converts_raised_exception_to_error():
     def _boom(changed_files, diff_base, repo_root):
         raise RuntimeError("dimension tooling crashed")
@@ -163,11 +150,6 @@ def test_mismatched_dimension_label_in_result_is_also_an_error():
     assert "dimension/result name mismatch" in result.detail
 
 
-# ---------------------------------------------------------------------------
-# Dimension seam — register_dimension()
-# ---------------------------------------------------------------------------
-
-
 def test_register_dimension_replaces_a_slot_without_touching_others():
     def _fake_pass(changed_files, diff_base, repo_root):
         return DimensionResult(dimension="review", verdict=Verdict.PASS, detail="stubbed pass")
@@ -189,11 +171,6 @@ def test_register_dimension_rejects_unknown_name():
         register_dimension("bogus", _noop)
 
 
-# ---------------------------------------------------------------------------
-# Overall-verdict precedence
-# ---------------------------------------------------------------------------
-
-
 def test_overall_verdict_precedence_error_beats_fail_beats_pass():
     pass_r = DimensionResult("a", Verdict.PASS, "")
     fail_r = DimensionResult("b", Verdict.FAIL, "")
@@ -204,7 +181,6 @@ def test_overall_verdict_precedence_error_beats_fail_beats_pass():
     assert _overall_verdict([pass_r, unavailable_r, skipped_r]) is Verdict.PASS
     assert _overall_verdict([pass_r, fail_r, unavailable_r]) is Verdict.FAIL
     assert _overall_verdict([pass_r, fail_r, error_r]) is Verdict.ERROR
-    # nothing PASSed and nothing FAILed/ERRORed but something was
     # UNAVAILABLE/SKIPPED — a vacuous PASS is wrong; UNAVAILABLE is honest.
     assert _overall_verdict([unavailable_r, skipped_r]) is Verdict.UNAVAILABLE
 
@@ -227,11 +203,6 @@ def test_fail_dimension_flips_overall_to_fail_end_to_end():
     register_dimension("types", _fake_fail)
     result = _gate_validate_invocable({"changed_files": ["a.py"]})
     assert result["overall"] == "FAIL"
-
-
-# ---------------------------------------------------------------------------
-# to_json() shape + param validation
-# ---------------------------------------------------------------------------
 
 
 def test_to_json_matches_handler_output_shape():

@@ -57,13 +57,6 @@ _SESSION_ID = "sess-c3-boundary"
 
 @pytest.fixture(autouse=True)
 def _clean_temp_scratch_carveout(monkeypatch, tmp_path):
-    """`tmp_path` lives under the REAL system temp dir on every platform
-    this suite runs on -- without repointing the shared classifier's
-    recognized-temp-root primitives, every fixture path built under it
-    would ALSO resolve as the AC9 system-temp carve-out and swallow the
-    old-vs-new distinction this suite exists to prove. Mirrors
-    `test_bump_outside_repo_write.py`'s own `_clean_bump_env` fixture,
-    narrowed to just the temp-root repoint this file's fixtures need."""
     fake_system_temp = tmp_path / "not-the-real-system-temp"
     fake_system_temp.mkdir()
     monkeypatch.setattr(applicability.tempfile, "gettempdir", lambda: str(fake_system_temp))
@@ -74,17 +67,10 @@ def _clean_temp_scratch_carveout(monkeypatch, tmp_path):
 
 
 def _old_sandbox_path(git_root: str, session_id: str) -> str:
-    """The literal join every one of these three guards used to compute,
-    restated here ONLY as the negative fixture this suite probes against --
-    never imported from production, so a stray revert of the repoint cannot
-    make this helper agree with it by construction."""
     return str(Path(git_root) / "state" / "subagent-share" / session_id)
 
 
 def test_new_root_write_is_in_bounds(tmp_path):
-    """A write under the NEW machinery root's subagent-share bucket is
-    treated as in-bounds sandbox territory -- the guard's own verdict
-    (AC9's always-allowed-roots boolean), not its message text."""
     git_root = str(tmp_path)
     new_target = machinery_paths.share_dir(git_root, _SESSION_ID)
     os.makedirs(new_target, exist_ok=True)
@@ -112,9 +98,6 @@ def test_old_root_write_is_no_longer_in_bounds(tmp_path):
 
 
 def test_bump_foreign_repo_write_sandbox_hint_resolves_through_machinery_paths(tmp_path):
-    """`_sandbox_root_hint` (message-hint only, no bounds decision of its
-    own) must agree with `machinery_paths.share_dir`, and must NOT still
-    hand back the old literal join."""
     git_root = str(tmp_path)
 
     hint = bump_foreign_repo_write._sandbox_root_hint(git_root, _SESSION_ID)
@@ -124,8 +107,6 @@ def test_bump_foreign_repo_write_sandbox_hint_resolves_through_machinery_paths(t
 
 
 def test_bump_outside_repo_write_sandbox_root_resolves_through_machinery_paths(tmp_path):
-    """Same pin for `bump_outside_repo_write._sandbox_root` (the function
-    `_target_is_always_allowed` itself calls to build its allow-list)."""
     git_root = str(tmp_path)
 
     sandbox = bump_outside_repo_write._sandbox_root(git_root, _SESSION_ID)
@@ -135,9 +116,6 @@ def test_bump_outside_repo_write_sandbox_root_resolves_through_machinery_paths(t
 
 
 def test_guard_multiprobe_banner_script_hint_resolves_through_machinery_paths(tmp_path):
-    """Same pin for `guard_multiprobe_banner._sandbox_script_hint`, which
-    appends the scratch-script filename onto the SAME machinery-root sandbox
-    directory the other two guards resolve."""
     git_root = str(tmp_path)
 
     hint = guard_multiprobe_banner._sandbox_script_hint(git_root, _SESSION_ID)
@@ -153,8 +131,6 @@ def test_guard_multiprobe_banner_script_hint_resolves_through_machinery_paths(tm
 
 
 def test_sandbox_hints_empty_on_missing_input():
-    """All three hints keep their existing "no fabricated path" contract --
-    `""` when either input is empty, unchanged by the repoint."""
     assert bump_foreign_repo_write._sandbox_root_hint(None, _SESSION_ID) == ""
     assert bump_foreign_repo_write._sandbox_root_hint("/repo", "") == ""
     assert bump_outside_repo_write._sandbox_root(None, _SESSION_ID) == ""

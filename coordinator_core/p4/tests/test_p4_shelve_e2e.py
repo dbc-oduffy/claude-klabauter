@@ -85,9 +85,6 @@ def _free_port() -> int:
 
 
 class _ThrowawayP4d:
-    """Stands up a throwaway `p4d` on a free localhost port, in a scratch
-    server root, and tears it down on exit. Never touches any real p4
-    server -- the port is freshly bound and the root is a fresh tmp_path."""
 
     def __init__(self, server_root: Path):
         self.server_root = server_root
@@ -143,10 +140,6 @@ class _ThrowawayP4d:
     def stop(self) -> None:
         if self._proc is None:
             return
-        # `admin stop` needs `super` access, which this fixture's throwaway
-        # user is never granted (no protections table is ever authored) --
-        # a direct process kill is the correct teardown for a scratch
-        # server nothing else on the box can be talking to.
         self._proc.terminate()
         try:
             self._proc.wait(timeout=5)
@@ -167,12 +160,6 @@ def p4d(tmp_path, monkeypatch):
 
 
 def _p4(p4d_fixture: _ThrowawayP4d, user: str, client: str, args, cwd=None, **kw):
-    # `-d <dir>` names p4's own working directory explicitly rather than
-    # relying on the spawned child's OS-level cwd -- this box's `p4.exe`
-    # resolves relative paths against an inherited `$PWD`-style value when
-    # run from this shell, not the `subprocess.Popen(cwd=...)` argument,
-    # which silently resolved every relative seed path against the test
-    # PROCESS's own cwd instead of the throwaway client root.
     prefix = ["p4", "-p", p4d_fixture.p4port]
     if cwd is not None:
         prefix += ["-d", str(cwd)]
@@ -184,14 +171,6 @@ def _git(args, cwd):
 
 
 def _make_writable(path: Path) -> None:
-    """`p4 submit` leaves a synced/added file read-only (`noallwrite`, this
-    fixture's own client option, matching D5's read-only invariant) --
-    production flips this via the D5 checkout-before-edit guard's own
-    `p4 edit` spawn before a git worktree write ever lands. This fixture
-    exercises the D4 shelve leg in isolation from D5's own guard (a
-    separate row, separately tested), so it stands in for "the guard
-    already ran" with a direct chmod rather than pulling the guard itself
-    into this test's scope."""
     path.chmod(0o644)
 
 
@@ -237,20 +216,10 @@ def _init_git_repo(client_root: Path) -> None:
 
 
 def _add_bare_remote(client_root: Path, tmp_path: Path) -> None:
-    """A local bare repo standing in for the git remote -- push lands for
-    real (a real `git push`), never a network call (D3's own budget note:
-    the remote leg is what makes this op's spawn budget expensive; this
-    fixture pays that cost once, locally, to exercise it honestly)."""
     bare = tmp_path / "origin.git"
     _run(["git", "init", "-q", "--bare", str(bare)])
     _git(["remote", "add", "origin", str(bare)], client_root)
-    # Establish tracking with an upfront publish of the seed commit --
-    # `push_outstanding`'s own no-upstream-ref auto-publish
     # (`ops/ceremony/push.py::publish_day_branch`) is scoped to CANONICAL
-    # day branches only, never an arbitrary `work/*` branch, so a fixture
-    # branch outside that naming scheme needs its upstream set explicitly
-    # once, the same way a genuine first push on a brand-new feature branch
-    # would.
     _git(["push", "-u", "origin", _current_branch(client_root)], client_root)
 
 
@@ -278,25 +247,6 @@ def _register_identity(monkeypatch, tmp_path, repo_key, p4d_fixture, client, use
 
 
 def _prime_session_cl(repo_root: Path, sid: str) -> int:
-    """Mints the session CL (and records `p4_base_sha` off HEAD) BEFORE any
-    edit lands -- production reaches this through D5's checkout-before-edit
-    guard on the session's first touched file, which always fires ahead of
-    the commit that follows it. This e2e test exercises D4's shelve leg in
-    isolation from D5's own guard (a separate row, separately tested), so
-    it stands in for "the guard already primed the session CL" the same way
-    `_make_writable` stands in for "the guard already checked the file
-    out" -- calling `ensure_session_change` here, not inside
-    `push_outstanding`'s own lazy first-use mint, is what keeps
-    `p4_base_sha` anchored at the PRE-edit HEAD rather than the post-commit
-    one D4's path-set derivation (`shelve.py::_path_set`) depends on.
-
-    `update_meta_fields` (D3's writer) is a documented no-op when
-    `meta.json` is absent -- ordinary session lifecycle always creates it at
-    session start, ahead of any op reaching this module, which this
-    fixture stands in for by creating an empty one itself (the same
-    `d.mkdir(); (d / "meta.json").write_text("{}")` shape every other
-    module in this package's own test fixtures use, e.g.
-    `test_shelve.py::sdir`)."""
     from coordinator_core.p4.session_change import ensure_session_change
     from coordinator_core.session.core import session_dir
 
@@ -424,7 +374,7 @@ class TestResumeReusesTheSameCL:
         )
 
         changes = _shelved_changes(p4d, user, client)
-        assert len(changes) == 1, changes  # resume -- never a second CL
+        assert len(changes) == 1, changes
         cl = changes[0]["change"]
         assert _shelved_paths(p4d, user, client, cl) == ["a.txt", "b.txt"]
 
@@ -455,27 +405,12 @@ class TestClosedCLReMintsRatherThanFailing:
         assert len(changes_before) == 1
         session_cl = changes_before[0]["change"]
 
-        # A human/cockpit submits the session's shelved CL out from under
-        # it (D4's re-mint trigger is a classified refusal against the
         # RECORDED base sha becoming unreachable, not a live CL probe --
-        # so this test drives the actual git-side condition that trips it:
-        # the recorded base sha is rewritten out of history, exactly what a
-        # submit-then-reset workflow produces).
         _p4(p4d, user, client, ["unshelve", "-s", session_cl, "-c", session_cl]).check_returncode()
-        # p4 refuses to submit a CL that still carries a shelf ("Change N has
-        # shelved files -- cannot submit."), so the shelf is deleted first.
-        # This is not a test convenience: it is the real sequence a human or
-        # cockpit performs to submit the session's CL, which is the event
-        # this test exists to simulate.
         _p4(p4d, user, client, ["shelve", "-d", "-c", session_cl]).check_returncode()
         # `-c <cl>` and `-d <description>` are MUTUALLY EXCLUSIVE submit
-        # grammars (`p4 help submit`: `submit [...] -c changelist#` is its
-        # own form). The CL already carries the description session_change
-        # minted it with, so submitting it by number needs no `-d`.
         _p4(p4d, user, client, ["submit", "-c", session_cl]).check_returncode()
 
-        # Rewrite the recorded base sha unreachable, forcing D4's loud
-        # re-mint fallback rather than a silent empty-path-set read.
         from coordinator_core.session.core import session_dir, update_meta_fields
 
         monkeypatch.setattr(
@@ -484,15 +419,6 @@ class TestClosedCLReMintsRatherThanFailing:
         )
         sdir = tmp_path / "sdir"
         sdir.mkdir(exist_ok=True)
-        # `update_meta_fields` is a documented no-op when `meta.json` is
-        # absent (`session/core.py::update_meta_fields`) -- this is a FRESH
-        # scratch sdir the fixture just created, so without seeding an empty
-        # object first, the `p4_base_sha` write below silently does nothing,
-        # `_p4_leg_execute` falls back to `head_sha(root)` (the POST-push
-        # HEAD) as the base, `_base_reachable` trivially succeeds against
-        # it, and D4's re-mint branch this test exists to exercise never
-        # fires at all -- measured: `state["p4_base_sha"]` read back as
-        # `None`, not the written all-zero sha.
         (sdir / "meta.json").write_text("{}", encoding="utf-8")
         update_meta_fields(str(sdir), {"p4_base_sha": "0" * 40})
 
@@ -513,13 +439,10 @@ class TestClosedCLReMintsRatherThanFailing:
 
         changes_after = _shelved_changes(p4d, user, client)
         assert len(changes_after) == 1, changes_after
-        assert changes_after[0]["change"] != session_cl  # re-minted, not reused
+        assert changes_after[0]["change"] != session_cl
 
 
 class TestRegisterWorkspaceAgainstRealServer:
-    """`p4.register_workspace` through the real `runner.run` (`-s` tagged
-    output) -- every other e2e leg here seeds the registry by hand and so
-    never exercised the client-spec parse."""
 
     def test_registers_a_real_client(self, monkeypatch, tmp_path, p4d):
         user, client = "bob", "bob-register-ws"

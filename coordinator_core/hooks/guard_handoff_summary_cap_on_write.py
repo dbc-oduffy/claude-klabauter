@@ -63,18 +63,12 @@ except Exception:  # pragma: no cover -- exercised only in a PyYAML-less env
 
 _GUARDED_TOOLS = ("Write", "Edit", "MultiEdit")
 
-#: Directory substring, not a suffix restriction beyond `.md` -- matches
-#: `state/handoffs/` anywhere in the resolved path, including the
-#: `archive/` subtree.
 _SCOPE_DIR = "state/handoffs/"
 
-#: Transcribed from `coordinator/schemas/handoff.schema.json`'s `summary`
-#: property description ("One-line session summary (<=140 chars)").
 _HANDOFF_SUMMARY_CAP = 140
 
 
 def is_in_scope(target: Path) -> bool:
-    """A `.md` file somewhere under a `state/handoffs/` directory."""
     if target.suffix != ".md":
         return False
     posix = target.as_posix()
@@ -82,9 +76,6 @@ def is_in_scope(target: Path) -> bool:
 
 
 def _split_frontmatter(text: str) -> "tuple[dict | None, str]":
-    """Split a `---\\n<yaml>\\n---\\n<body>` document into
-    `(frontmatter_dict, body)`. Returns `(None, text)` on ANY shape
-    mismatch — fail-open."""
     if not text.startswith("---"):
         return None, text
     parts = text.split("---", 2)
@@ -105,8 +96,6 @@ def _split_frontmatter(text: str) -> "tuple[dict | None, str]":
 
 
 def _warn_reason(target: str, length: int) -> str:
-    """The prose diagnosis (the only part `message_envelope.CEILING`
-    counts)."""
     name = Path(target).name
     return (
         f"{name}: summary is {length} chars, over the {_HANDOFF_SUMMARY_CAP}-char "
@@ -116,9 +105,6 @@ def _warn_reason(target: str, length: int) -> str:
 
 @register_op("hooks.guard_handoff_summary_cap_on_write")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PreToolUse(Write|Edit|MultiEdit) op: advise (never deny) when a
-    write leaves a handoff's `summary:` frontmatter over its 140-char
-    cap."""
     params = payload_of(params)
     if params.get("tool_name", "") not in _GUARDED_TOOLS:
         return no_advisory()

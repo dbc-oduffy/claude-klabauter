@@ -95,8 +95,6 @@ def test_settings_json_clean_file(root):
 
 
 def test_working_repos_yaml_soft_warn(root, fake_home):
-    # Basename MUST be exactly "working-repos.yaml" — collect() classifies by
-    # canonical basename, so each variant needs its own subdirectory.
     wr_dir_c = os.path.join(root, "wr-c")
     os.makedirs(wr_dir_c, exist_ok=True)
     wr_file = os.path.join(wr_dir_c, "working-repos.yaml")
@@ -111,7 +109,6 @@ def test_working_repos_yaml_soft_warn(root, fake_home):
 
 
 def test_home_unset_falls_back_to_expanduser(root):
-    # F4 — $HOME unset falls back to os.path.expanduser("~")
     wr_dir_d = os.path.join(root, "wr-d")
     os.makedirs(wr_dir_d, exist_ok=True)
     real_home = os.path.expanduser("~")

@@ -63,22 +63,13 @@ def _write_marker(config_dir, text: str):
     return marker
 
 
-# ---------------------------------------------------------------------------
-# Quiet: marker absent.
-# ---------------------------------------------------------------------------
-
-
 def test_marker_absent_is_quiet(tmp_path):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     assert gsi.evaluate_hooks_kill_switch_announcement(config_dir) == ""
 
 
-# ---------------------------------------------------------------------------
-# Loud while armed, not yet expired -- property 1 + property 4 (route vs
-# answer): the ROUTINE (boot) rendering collapses to one router line; the
 # ON-DEMAND rendering keeps the full pre-2026-07-30 body.
-# ---------------------------------------------------------------------------
 
 
 def test_armed_not_expired_routine_is_one_router_line(tmp_path):
@@ -91,8 +82,6 @@ def test_armed_not_expired_routine_is_one_router_line(tmp_path):
     )
     banner = gsi.evaluate_hooks_kill_switch_announcement(config_dir)
     assert banner != ""
-    # Exactly one non-blank content line -- the router line, not the ~40-line
-    # full body. Blank padding lines are permitted (join(["", line, ""])).
     content_lines = [ln for ln in banner.splitlines() if ln.strip()]
     assert len(content_lines) == 1, f"expected one router line, got: {content_lines!r}"
     assert "Coordinator hook generation is DISABLED" in banner
@@ -101,12 +90,9 @@ def test_armed_not_expired_routine_is_one_router_line(tmp_path):
     assert "not yet reached" in banner
     assert "session.guard_hooks_kill_switch_detail" in banner
     assert "python3 -m coordinator_core.invoke" in banner
-    # The full body's disarm-condition/double-fire detail is NOT in the
-    # routine router line -- that's the whole point of the collapse.
     assert "naked-Python hook migration lands" not in banner
     assert "MET as of 2026-07-28" not in banner
     assert "double-fire status" not in banner
-    # Not yet the escalated past-expiry banner.
     assert "EXPIRED" not in banner
     assert "ACTION REQUIRED" not in banner
 
@@ -128,17 +114,10 @@ def test_armed_not_expired_full_detail_matches_pre_collapse_body(tmp_path):
     assert "naked-Python hook migration lands" in detail
     assert "MET as of 2026-07-28" in detail
     assert "double-fire status" in detail
-    # Not yet the escalated past-expiry banner.
     assert "EXPIRED" not in detail
     assert "ACTION REQUIRED" not in detail
-    # Full detail is meaningfully longer than the routine router line.
     routine = gsi.evaluate_hooks_kill_switch_announcement(config_dir)
     assert len(detail) > len(routine)
-
-
-# ---------------------------------------------------------------------------
-# Escalated past expiry -- property 2 -- and it never disarms.
-# ---------------------------------------------------------------------------
 
 
 def test_expired_marker_escalates_and_stays_armed(tmp_path):
@@ -158,26 +137,17 @@ def test_expired_marker_escalates_and_stays_armed(tmp_path):
     assert "does not disarm itself" in banner
     assert past in banner
 
-    # Never disarms itself: the marker still exists, byte-identical, and a
-    # second call still reports armed (not "" / not silently gone).
     assert marker.is_file()
     assert marker.read_bytes() == before
     assert gsi.evaluate_hooks_kill_switch_announcement(config_dir) != ""
 
 
 def test_expiry_reached_today_counts_as_expired(tmp_path):
-    """`>=`, not `>` -- the day Expires reads is itself already escalated,
-    not one grace day."""
     config_dir = tmp_path / "config"
     today = _dt.date.today().isoformat()
     _write_marker(config_dir, f"Since: 2026-07-14\nExpires: {today}\n")
     banner = gsi.evaluate_hooks_kill_switch_announcement(config_dir)
     assert "ACTION REQUIRED" in banner
-
-
-# ---------------------------------------------------------------------------
-# Malformed content -- property 3 -- fails loud, never fails open.
-# ---------------------------------------------------------------------------
 
 
 def test_missing_expires_line_is_malformed_and_stays_armed(tmp_path):
@@ -187,7 +157,7 @@ def test_missing_expires_line_is_malformed_and_stays_armed(tmp_path):
     assert banner != ""
     assert "MALFORMED" in banner
     assert "ARMED" in banner
-    assert "naked-Python hook migration lands" in banner  # still surfaced
+    assert "naked-Python hook migration lands" in banner
 
 
 def test_empty_marker_is_malformed_and_stays_armed(tmp_path):
@@ -219,17 +189,12 @@ def test_undecodable_marker_is_malformed_not_fatal(tmp_path):
     config_dir.mkdir()
     marker = config_dir / gsi._KILL_SWITCH_MARKER_NAME
     marker.write_bytes(b"\xff\xfe\x00\xff garbage bytes, not utf-8 \x80\x81")
-    # Must never raise -- degrades to the malformed/fail-loud banner.
     banner = gsi.evaluate_hooks_kill_switch_announcement(config_dir)
     assert banner != ""
     assert "MALFORMED" in banner
 
 
-# ---------------------------------------------------------------------------
 # Double-fire status is folded into the FULL-DETAIL banner honestly (reuses
-# the existing detector, never a second resolver). The routine router line
-# never carries this detail -- it only names the command that does.
-# ---------------------------------------------------------------------------
 
 
 def _arm_double_fire_fixture(tmp_path, monkeypatch):
@@ -284,14 +249,7 @@ def test_double_fire_summary_absent_from_routine_router_line(tmp_path, monkeypat
     banner = gsi.evaluate_hooks_kill_switch_announcement(config_dir)
     assert "double-fire status" not in banner
     assert "ALREADY firing twice" not in banner
-    # It still names the surface that WOULD show it.
     assert "session.guard_hooks_kill_switch_detail" in banner
-
-
-# ---------------------------------------------------------------------------
-# Never writes -- settings.json / hooks.json / the marker itself are
-# byte-identical before and after every evaluate call, armed or expired.
-# ---------------------------------------------------------------------------
 
 
 def test_evaluate_never_writes_anything(tmp_path, monkeypatch):
@@ -318,13 +276,7 @@ def test_evaluate_never_writes_anything(tmp_path, monkeypatch):
     assert settings_path.read_bytes() == settings_before
 
 
-# ---------------------------------------------------------------------------
-# The router line names an invocable surface -- prove it actually resolves,
-# not merely that the string looks plausible. Runs the exact command
 # `_KS_DETAIL_COMMAND` embeds (module var, not re-typed here) as a real
-# subprocess against the `session.guard_hooks_kill_switch_detail` op,
-# end-to-end through `coordinator_core.invoke`'s CLI dispatcher.
-# ---------------------------------------------------------------------------
 
 
 def test_router_line_command_actually_resolves(tmp_path):
@@ -342,20 +294,11 @@ def test_router_line_command_actually_resolves(tmp_path):
     _write_marker(config_dir, f"Since: 2026-07-14\nExpires: {future}\n")
 
     # The command _KS_DETAIL_COMMAND embeds, split into argv (no shell
-    # parsing involved -- proves the op resolves, not that a shell string
-    # happens to look right).
     assert gsi._KS_DETAIL_COMMAND == (
         "python3 -m coordinator_core.invoke session.guard_hooks_kill_switch_detail --bare"
     )
-    # `--allow-unstamped-dispatch` is added HERE, to the test's own argv, and
     # deliberately NOT to `_KS_DETAIL_COMMAND` asserted above -- that string is
     # what an operator is told to run, and they run it against a PUBLISHED
-    # engine where the build stamp exists. This tree is a source checkout, so
-    # the engine refuses the dispatch outright ("engine root ... has no build
-    # stamp -- not a published engine ... or pass --allow-unstamped-dispatch
-    # for deliberate manual testing"), which is precisely what this is. Without
-    # the flag the test fails on the tree it runs in rather than on whether the
-    # op resolves, which is the only thing it is asking.
     argv = [
         sys.executable, "-m", "coordinator_core.invoke",
         "session.guard_hooks_kill_switch_detail", "--bare",
@@ -368,11 +311,8 @@ def test_router_line_command_actually_resolves(tmp_path):
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
-    # --bare prints the handler's bare result object (see
-    # coordinator_core/invoke/__main__.py); this op's handler returns
-    # {"text": <str>} (see _handler_kill_switch_detail's own docstring).
     result = _json.loads(proc.stdout)
     text = result["text"]
     assert "Coordinator hook generation is DISABLED" in text
-    assert "double-fire status" in text  # full detail, not the router line
-    assert "MET as of 2026-07-28" in text  # historical-disarm-condition line, full-detail-only
+    assert "double-fire status" in text
+    assert "MET as of 2026-07-28" in text

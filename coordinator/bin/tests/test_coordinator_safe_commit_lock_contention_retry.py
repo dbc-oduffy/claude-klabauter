@@ -1,13 +1,3 @@
-"""`coordinator-safe-commit.py::do_pathspec` -- issue #84 item 4: a
-ledger-only commit failed outright on `.git/index.lock: File exists` under
-concurrent load, with no retry. Pins the bounded retry: a lock-contention-
-shaped `RuntimeError` out of `cc_invoke` is retried (with
-`preflight_reap_stale_lock` run first) up to the fixed backoff schedule,
-and any OTHER `RuntimeError` is never retried.
-
-Loaded by file path (`importlib.machinery.SourceFileLoader`), matching this
-directory's existing hyphenated-module idiom.
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -52,10 +42,6 @@ def _args_for_pathspec(mod, tmp_path):
 
 
 def _stub_cc_invoke_module(monkeypatch, mod, calls, outcomes):
-    """Installs a fake `cc_invoke` module (`from cc_invoke import cc_invoke`)
-    reached via `_bootstrap_engine`'s own sys.path splice, and a fake
-    `lock_preflight.preflight_reap_stale_lock` so the retry loop never
-    touches a real repo or sleeps meaningfully."""
     import sys
 
     def _fake_cc_invoke(op, params, worktree_root):
@@ -70,10 +56,6 @@ def _stub_cc_invoke_module(monkeypatch, mod, calls, outcomes):
     fake_cc_invoke_mod.require_engine_on_path = lambda *_a, **_k: None
     monkeypatch.setitem(sys.modules, "cc_invoke", fake_cc_invoke_mod)
     monkeypatch.setattr(mod, "_bootstrap_engine", lambda: None)
-    # `require_engine_on_path` is a PEP 562-deferred name (`__getattr__`),
-    # only ever bound into `globals()` by a real `_bootstrap_engine()` call --
-    # stubbing that above means it was never bound, so it must be set
-    # directly rather than patched over an existing attribute.
     mod.require_engine_on_path = lambda *_a, **_k: None
 
     fake_lock_preflight_mod = types.ModuleType("coordinator_core.lock_preflight")
@@ -147,6 +129,4 @@ class TestDoPathspecRetriesOnLockContention:
         with pytest.raises(SystemExit) as exc:
             mod.do_pathspec(args)
         assert exc.value.code == 1
-        # Bounded: the fixed 2-entry backoff schedule means exactly 3 total
-        # attempts (1 + 2 retries), never an unbounded loop.
         assert len(calls) == 3

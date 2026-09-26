@@ -93,10 +93,6 @@ def _resolve_ulimit_line(raw_value: str | None) -> tuple[str, str | None]:
     if trimmed.lower() == "unlimited":
         return "ulimit -S -f unlimited", None
 
-    # Review: code-reviewer (Finding 1) — reject sign-prefixed ("+8"), underscore-separated
-    # ("1_000"), and non-ASCII-digit (e.g. Arabic-indic) forms before int() would otherwise
-    # silently accept them; a leading-zero form like "008" still passes (isdigit() is True)
-    # and that's intentional.
     if not (trimmed.isascii() and trimmed.isdigit()):
         comment = f"# coordinator: ignored invalid {_ENV_VAR}={raw_value}"
         return f"ulimit -S -f {_DEFAULT_CAP_BLOCKS}", comment
@@ -115,7 +111,6 @@ def _resolve_ulimit_line(raw_value: str | None) -> tuple[str, str | None]:
 
 
 def main() -> int:
-    """Emit the two guard lines to stdout; never let an exception reach the caller."""
     try:
         import os
 
@@ -131,11 +126,6 @@ def main() -> int:
         if stderr_comment:
             print(stderr_comment, file=sys.stderr)
     except Exception:
-        # The print() calls themselves failed (e.g. broken stdout pipe) --
-        # there is no lower-level channel left to report through, and this
-        # script's whole contract is best-effort stdout eval'd by the
-        # shell, so silence is the only option. main() still returns 0
-        # below so the ~/.bashrc eval seam never sees a nonzero exit.
         pass
 
     return 0
@@ -149,10 +139,5 @@ if __name__ == "__main__":
             print(f"ulimit -S -f {_DEFAULT_CAP_BLOCKS}")
             print(_FAILGLOB_LINE)
         except Exception:
-            # Same last-resort case as main()'s inner guard: if even this
-            # fallback print() fails, there is nowhere left to report it --
-            # fall through to the unconditional sys.exit(0) below so the
-            # eval seam is never left without its two guard lines silently
-            # aborting the whole shell init.
             pass
         sys.exit(0)

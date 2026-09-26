@@ -1,10 +1,3 @@
-"""Tests for `coordinator_core.group_em.session_registry` -- the shared harness registry reader.
-
-No DoE-claude prior-art test file exists for this module (W2-C1 ported the module itself; only
-`test_atomic_record.py` had a sibling to port). Written fresh against `tmp_path`-scoped registry
-directories -- zero subprocess spawns, and `pid_alive` cases use this test process's own pid
-(always live) and a pid of 0 (never valid) rather than spawning anything to prove liveness.
-"""
 from __future__ import annotations
 
 import json
@@ -124,7 +117,6 @@ def test_is_live_true_when_registry_row_has_live_pid(tmp_path):
 
 
 def test_is_live_false_when_registry_row_has_dead_pid(tmp_path):
-    # pid 0 is never a valid live pid per `pid_alive`'s own contract.
     _write_row(tmp_path, "s1", pid=0)
     live, row = sr.is_live({"session_id": "s1"}, tmp_path)
     assert live is False

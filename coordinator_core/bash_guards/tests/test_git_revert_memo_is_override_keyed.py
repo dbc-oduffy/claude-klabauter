@@ -93,12 +93,6 @@ class TestOverrideEnvIdentity:
 def _git_revert_cache_after_one_call(
     payload: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> Dict[Tuple[Any, ...], Any]:
-    """Drive the real registration once and hand back the memo it filled.
-
-    The cache is a closure local, so it is read off the registered entry's own
-    closure rather than reconstructed -- a reconstruction would pin this test's
-    idea of the key, which is the thing under test.
-    """
     sentinel = (None, None)
     monkeypatch.setattr(
         dispatch._dc,
@@ -149,12 +143,8 @@ class TestCacheKeyShape:
 
 
 def test_no_module_scope_env_read_was_introduced() -> None:
-    """``dispatch.py`` reads env only inside function bodies (module docstring
-    § inline ``os.environ.get``). The helper this file pins must not have
-    hoisted an ``import os`` to module scope to get there.
-    """
     assert not hasattr(dispatch, "os"), (
         "os became a module attribute of dispatch.py -- the inline-env-read "
         "invariant in its own module docstring is broken"
     )
-    assert os.environ is not None  # the test module's own import, deliberate
+    assert os.environ is not None

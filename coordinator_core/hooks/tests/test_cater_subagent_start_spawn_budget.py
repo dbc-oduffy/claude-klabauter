@@ -60,11 +60,6 @@ def _init_repo(tmp_path: Path) -> Path:
 
 
 def _count_popen_spawns(fn):
-    """Run *fn* with `subprocess.Popen` (the primitive `subprocess.run`
-    itself delegates to) counted and passed through unmodified -- a single
-    patch point that sees every spawn shape reachable from `fn`, mirroring
-    `_count_op_spawns_both_ways`'s own `all_n` leg in the sibling module this
-    test is modelled on."""
     calls = {"n": 0}
     orig_popen = subprocess.Popen
 
@@ -81,10 +76,6 @@ def _count_popen_spawns(fn):
 
 
 def test_compose_catering_never_spawns_git(tmp_path_factory):
-    """AC1: `compose_catering`, given a payload that reaches BOTH the
-    `resolve_effective_types` leg and the `assemble_contract_blocks_for_
-    payload` leg, issues ZERO `git` subprocesses -- a guard, not a
-    measurement, per the brief."""
     tmp_path = tmp_path_factory.mktemp("cater-spawn-budget")
     repo = _init_repo(tmp_path)
 
@@ -110,10 +101,6 @@ def test_compose_catering_never_spawns_git(tmp_path_factory):
 
 
 def test_compose_catering_never_spawns_git_with_no_git_repo(tmp_path_factory):
-    """Same guard, miss-mode: a `cwd` with no `.git` ancestor at all. The
-    non-spawning walker fails open to `None` here (never a spawn to find
-    out), matching this chunk's own eligibility argument: every leg fed by
-    a missed root degrades to "" / no-blocks, never a wrong verdict."""
     tmp_path = tmp_path_factory.mktemp("cater-spawn-budget-miss")
     no_repo_dir = tmp_path / "not-a-repo"
     no_repo_dir.mkdir()

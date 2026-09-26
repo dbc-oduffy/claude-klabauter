@@ -1,18 +1,3 @@
-"""test_session_identity — pins `session_deliverable_ids` (C1,
-docs/plans/2026-08-20-wsc-identity-gates-key-on-the-deliverable.md) against
-a real git repo: one trailer, several commits sharing one trailer, several
-conflicting trailers (representable, not silently first-wins), zero
-commits, and a trailer demoted outside git's own last-paragraph trailer
-scan (the body-line regex fallback).
-
-Declared, not excused: this file spawns real `git` processes because the
-property under test is git's own trailer-parsing behaviour (including the
-last-paragraph demotion trap), which no fixture stands in for. Mirrors
-`test_directives_commit_tail_peer_committed_paths.py`'s own fixture-repo
-idiom.
-
-Run: python3 -m pytest coordinator_core/workstream_complete/test_session_identity.py -q
-"""
 
 from __future__ import annotations
 
@@ -121,15 +106,9 @@ def test_zero_commits_for_session_is_ok_but_empty(repo):
 
 
 def test_trailer_demoted_outside_last_paragraph_uses_body_fallback(repo):
-    # A blank line ahead of the pipeline's own trailing Session-Id block
-    # pushes the caller-supplied Deliverable-Id line out of git's own
-    # last-paragraph trailer scan (the defect close_out_and_stamp.py
-    # documents and works around — see this module's own docstring).
     message = "chunk A\n\nDeliverable-Id: dlv-gamma\n\nSession-Id: sid-1\n"
     _commit_with_message(repo, "a.txt", "a\n", message)
 
-    # Sanity: confirm git itself really did demote the trailer, so this test
-    # is pinning the real trap and not a fixture artifact.
     trailer_check = _git(
         "log", "-1", "--format=%(trailers:key=Deliverable-Id,valueonly)", cwd=repo
     )

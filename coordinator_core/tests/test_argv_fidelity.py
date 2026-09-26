@@ -1,18 +1,3 @@
-"""
-coordinator_core.tests.test_argv_fidelity
-
-Behavioural tests for coordinator_core.argv_fidelity: the shared
---body/--body-file resolution seam and the newline-argv refusal that
-closes the cmd.exe-truncation class documented in that module's docstring.
-
-Spec backlink: docs/plans/2026-08-20-newline-bearing-argv-fails-loud.md, C1.
-
-The "CLI-integration section" below is a placeholder each wiring chunk
-(C2 coordinator-lesson-add.py, C3 coordinator-lesson-promote.py, C4
-queue-triage.py) extends with one case asserting its own CLI's non-zero
-exit and --body-file substring on a newline-bearing --body. Nothing above
-that marker is theirs to touch.
-"""
 from __future__ import annotations
 
 import pytest
@@ -25,26 +10,7 @@ from coordinator_core.argv_fidelity import (
 )
 
 
-# ---------------------------------------------------------------------------
-# resolve_body
-# ---------------------------------------------------------------------------
-
-
 #: The three cases below load a `coordinator/bin` CLI IN-PROCESS via
-#: `SourceFileLoader`. Those CLIs bootstrap their siblings with a bare
-#: `import lib`, which `coordinator/bin/lib/__init__.py` documents as resolving
-#: "because a script's own directory is `sys.path[0]`" -- true when the CLI is
-#: executed, false when a test loads it by path. Until 2026-09-06 these three
-#: therefore passed only when some EARLIER test in the same worker had already
-#: put those directories on `sys.path`: order-dependent, green or red purely on
-#: how xdist happened to distribute the run. Reproducing the interpreter state a
-#: real invocation provides is the test's job, not a neighbour's side effect.
-#:
-#: A FIXTURE, not a helper that restores on the way out: these CLIs bootstrap
-#: LAZILY (`_bootstrap_imports()` moved off module scope precisely so importing
-#: one would stop mutating the warm server's `sys.path`), so the imports fire
-#: when the test CALLS the CLI, not when it loads it. Restoring at the end of
-#: the load put the path back before the only line that needed it.
 @pytest.fixture
 def bin_cli_loader():
     import importlib.machinery
@@ -53,15 +19,6 @@ def bin_cli_loader():
     from pathlib import Path
 
     bin_dir = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
-    # BOTH directories, and `bin/lib` is the load-bearing one. The CLIs
-    # bootstrap via a bare `import lib`, but TWO packages in this repo are
-    # importable under that bare name -- `coordinator/lib` and
-    # `coordinator/bin/lib` -- and whichever a process imports first wins in
-    # `sys.modules` for its whole life. Under pytest `coordinator/lib` can get
-    # there first (it is in `testpaths`), making the CLI's `import lib` a cache
-    # hit on the WRONG package that never runs the line adding
-    # `coordinator/bin/lib`. Adding it directly makes `cc_invoke` and
-    # `coordinator_registry` resolve regardless of who won that race.
     lib_dir = bin_dir / "lib"
     added = [str(d) for d in (bin_dir, lib_dir) if str(d) not in sys.path]
     for entry in added:
@@ -79,9 +36,6 @@ def bin_cli_loader():
     try:
         yield _load
     finally:
-        # Leave `sys.path` as found -- this suite runs in a warm interpreter
-        # ~50 sessions share, and the neighbour-pollution above is exactly what
-        # this fixture exists to stop; it must not become a source of it.
         for entry in added:
             if entry in sys.path:
                 sys.path.remove(entry)
@@ -151,26 +105,13 @@ def test_resolve_body_custom_flag_name_in_messages():
     assert "--summary-file" in message
 
 
-# ---------------------------------------------------------------------------
-# resolve_optional_prose
-# ---------------------------------------------------------------------------
-
-
 def test_refuse_newline_argv_default_message_names_the_file_sibling():
-    """The default assumes a -file sibling exists, which is right for most callers."""
     with pytest.raises(ArgvFidelityError) as exc:
         refuse_newline_argv("a\nb", flag_name="--body")
     assert "pass --body-file instead." in str(exc.value)
 
 
 def test_refuse_newline_argv_remedy_replaces_the_file_sibling_suggestion():
-    """A flag denied a file leg must not be sent to one that does not exist.
-
-    `coordinator-doc-new --title` is the live case: it earns the refusal but has
-    no `--title-file`, and before `remedy` existed it hand-rolled its own
-    `parser.error` purely to avoid this message -- which also cost it coverage,
-    since the transport probe credits only refusals routed through the seam.
-    """
     with pytest.raises(ArgvFidelityError) as exc:
         refuse_newline_argv(
             "a\nb", flag_name="--title", remedy="pass a single-line --title."
@@ -181,7 +122,6 @@ def test_refuse_newline_argv_remedy_replaces_the_file_sibling_suggestion():
 
 
 def test_refuse_newline_argv_remedy_is_inert_on_a_clean_value():
-    """`remedy` must not change WHEN the refusal fires, only what it says."""
     assert refuse_newline_argv(
         "one line", flag_name="--title", remedy="pass a single-line --title."
     ) is None
@@ -236,11 +176,6 @@ def test_resolve_optional_prose_stdin_sentinel_already_eof_raises(monkeypatch):
         resolve_optional_prose(None, "-", flag_name="--summary")
 
 
-# ---------------------------------------------------------------------------
-# refuse_newline_argv
-# ---------------------------------------------------------------------------
-
-
 def test_refuse_newline_argv_refuses_embedded_newline():
     with pytest.raises(ArgvFidelityError, match="--body-file"):
         refuse_newline_argv("line one\nline two", flag_name="--body")
@@ -260,19 +195,6 @@ def test_refuse_newline_argv_names_the_flag():
     message = str(exc_info.value)
     assert "--summary" in message
     assert "--summary-file" in message
-
-
-# ---------------------------------------------------------------------------
-# CLI-integration section
-#
-# Each wiring chunk (C2, C3, C4) adds ONE case here asserting its own CLI's
-# refusal + --body-file acceptance end to end (subprocess or in-process
-# main() invocation, per that CLI's existing test conventions) -- non-zero
-# exit and the substring "--body-file" in stderr for a newline-bearing
-# --body, and a successful write when --body-file is passed alone. Do not
-# add cases here for CLIs outside this plan's scope (cross-repo-memo.py,
-# coordinator-queue-append.py already ship their own).
-# ---------------------------------------------------------------------------
 
 
 def test_coordinator_lesson_add_refuses_newline_body(capsys, bin_cli_loader):
@@ -299,14 +221,7 @@ def test_coordinator_lesson_add_refuses_newline_body(capsys, bin_cli_loader):
 def test_coordinator_lesson_promote_refuses_newline_body(
     capsys, bin_cli_loader, monkeypatch
 ):
-    # This CLI's lazy bootstrap resolves the claude-klabauter root before argparse ever
-    # runs, and the suite-root home quarantine leaves the machine-local
-    # registry empty by design -- so the refusal under test is unreachable
     # without naming a root. `COORDINATOR_ENGINE_ROOT` is the documented rung-1
-    # override (`coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py`), pointed at
-    # THIS checkout: an explicit, machine-independent answer rather than
-    # `@pytest.mark.real_home`, which is scoped to live-parity oracles and this
-    # is not one -- it asserts a pure argv refusal.
     from pathlib import Path
 
     monkeypatch.setenv(
@@ -319,10 +234,6 @@ def test_coordinator_lesson_promote_refuses_newline_body(
 
     cli_mod = bin_cli_loader("coordinator-lesson-promote.py", "coordinator_lesson_promote_argv_fidelity_test")
 
-    # Refusal fires from post-parse validation, before any schema-derived
-    # write path is reached -- stub the schema.describe lookup so this case
-    # does not depend on engine-root/registry resolution under the suite's
-    # quarantined home.
     cli_mod._describe_schema_node = lambda _schema: {
         "enums": {"change_kind": ["doctrine-edit"]}
     }

@@ -69,9 +69,6 @@ def _patch_reachable(monkeypatch: pytest.MonkeyPatch, reachable: bool) -> None:
 def test_lesson_capture_directive_fires_when_producer_reachable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Reachable (`_engine_stamp` present, or a stamped host): the pre-C11
-    behaviour is unchanged -- the lesson supplied via `decisions["lessons"]`
-    still reaches `directives[]` naming the real CLI."""
     _patch_reachable(monkeypatch, True)
     decision_object = wsc.brief(decisions=_lesson_decisions(), repo_root=tmp_path)
     clis = {d["cli"] for d in decision_object["directives"]}
@@ -86,13 +83,6 @@ def test_lesson_capture_directive_fires_when_producer_reachable(
 def test_lesson_capture_directive_absent_when_producer_unreachable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Unreachable (this clone's actual state, no `_engine_stamp`): AC15's
-    fix. `coordinator-lesson-add`/`coordinator-queue-append` no longer
-    reach `directives[]` even though `decisions["lessons"]` is populated --
-    the mandate this chunk removes -- and the ceremony's OWN documented
-    fallback surfaces via `preflight.lesson_capture_route` in its place,
-    carrying the real vendored `lesson-entry` schema (never a sibling
-    record's field set)."""
     _patch_reachable(monkeypatch, False)
     decision_object = wsc.brief(decisions=_lesson_decisions(), repo_root=tmp_path)
     clis = {d["cli"] for d in decision_object["directives"]}
@@ -114,11 +104,6 @@ def test_lesson_capture_directive_absent_when_producer_unreachable(
 def test_lesson_worth_capturing_resolves_no_phantom_id_when_unreachable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The `lesson-worth-capturing` judgment point's `resolves` list must
-    agree with what `directives[]` actually built -- naming `d-add-lesson-1`
-    while unreachable would be a phantom `resolves` entry
-    (`ceremony_common.test_phantom_resolves_id_sweep`'s own concern), since
-    no directive by that id was ever emitted this pass."""
     _patch_reachable(monkeypatch, False)
     decision_object = wsc.brief(decisions=_lesson_decisions(), repo_root=tmp_path)
     lesson_jp = next(

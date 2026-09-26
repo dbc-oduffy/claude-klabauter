@@ -1,8 +1,3 @@
-"""`commit.commit_paths` attaches a `Session-Id:` trailer when the message
-carries none and a sid resolves -- the fix for dispatched wave-commit agents
-calling `commit_paths` in-process and landing untrailered commits
-(`state/bug-backlog/2026-09-24-wave-commit-agent-called-commit-paths-in-
-fc03df470bcc.yaml`)."""
 
 import subprocess
 

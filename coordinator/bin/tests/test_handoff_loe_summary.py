@@ -1,29 +1,3 @@
-"""test_handoff_loe_summary.py — unit tests for handoff-loe-summary.py, the
-naked-Python port of the /handoff SKILL.md "Get LoE metrics" bash block
-(2026-07 debash campaign, chunk HO-2).
-
-Loaded by file path (`importlib.util.spec_from_file_location`) since the
-module lives at `coordinator/bin/handoff-loe-summary.py` — hyphens in its
-own filename preclude a dotted `import handoff_loe_summary`, so this suite
-uses the identical file-path load idiom the module itself uses to pull in
-its sibling `coordinator-session-loe.py`.
-
-Covers:
-  - `_loe_metrics` success path (fake coordinator-session-loe.py module)
-  - `_loe_metrics` fallback-to-XS path on any exception (no repo / broken
-    sibling module) — the "never fail a handoff over LoE" contract
-  - `_recent_commits` git-failure fallback to ""
-  - `main()` argv parsing end-to-end (JSON emitted on stdout, with LoE/
-    commits/session-id/created all wired through)
-
-Converted from a hand-rolled unittest runner to collectable pytest functions.
-
-Spec backlink: archive/specs/2026-05/2026-05-19-completion-log-phase2-loe-and-handoff-ledger.md
-  § Chunk 4.
-
-Run:
-    python3 -m pytest coordinator/bin/tests/test_handoff_loe_summary.py -v
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -60,14 +34,7 @@ def _fake_session_loe_module(*, git_root, ad, od, em_tokens, tshirt):
     return fake
 
 
-# ---------------------------------------------------------------------------
-# _loe_metrics — success path
-# ---------------------------------------------------------------------------
-
-
 def test_returns_computed_fields(tmp_path):
-    """Real values flow through unmodified when the sibling module loads and
-    computes cleanly."""
     fake = _fake_session_loe_module(
         git_root=str(tmp_path), ad=26, od=4, em_tokens=482000, tshirt="L"
     )
@@ -79,10 +46,6 @@ def test_returns_computed_fields(tmp_path):
 
 
 def test_none_dispatch_counts_normalize_to_zero(tmp_path):
-    """_count_session returns (None, None) when dispatched-agents.txt is
-    absent (null-honesty in the read helper) — the summary CLI still
-    needs a concrete int for the ledger, matching the bash block's
-    implicit `${AD:-0}`-shaped consumption."""
     fake = _fake_session_loe_module(
         git_root=str(tmp_path), ad=None, od=None, em_tokens=None, tshirt="XS"
     )
@@ -90,15 +53,6 @@ def test_none_dispatch_counts_normalize_to_zero(tmp_path):
         result = _mod._loe_metrics("some-session", include_children=False)
     assert result["agent_dispatches"] == 0
     assert result["opus_dispatches"] == 0
-
-
-# ---------------------------------------------------------------------------
-# _loe_metrics — fallback path
-#
-# Any failure computing real metrics degrades to the all-zero/XS fallback —
-# mirrors the bash block's `... 2>/dev/null || echo '{...}'` error-handling
-# ladder; a handoff must never fail to write over this.
-# ---------------------------------------------------------------------------
 
 
 def test_no_git_root_falls_back():
@@ -116,11 +70,6 @@ def test_sibling_module_load_failure_falls_back():
     ):
         result = _mod._loe_metrics("some-session", include_children=False)
     assert result == _mod._FALLBACK_LOE
-
-
-# ---------------------------------------------------------------------------
-# _recent_commits
-# ---------------------------------------------------------------------------
 
 
 def test_git_failure_returns_empty_string():
@@ -146,17 +95,7 @@ def test_joins_sha_lines_space_separated():
         assert _mod._recent_commits(20) == "abc1234 def5678"
 
 
-# ---------------------------------------------------------------------------
-# main() — end-to-end argv -> JSON stdout, with the session-id resolution
-# ladder and _loe_metrics/_recent_commits/_utc_now_iso stubbed out so this
-# suite never needs a real claude-klabauter checkout or git repo.
-# ---------------------------------------------------------------------------
-
-
 def test_explicit_session_id_skips_engine_session_id_resolution():
-    """`--session-id` still bypasses `_resolve_session_id_via_engine` (the
-    session-id ladder), but `_resolve_claude_klabauter_root` IS still called once —
-    unconditionally now — to support the `oneline_row` formatter import."""
     with mock.patch.object(
         _mod, "_loe_metrics", return_value=_mod._FALLBACK_LOE
     ) as mock_loe, mock.patch.object(
@@ -254,13 +193,6 @@ def test_unknown_argument_is_usage_error():
     assert rc == 1
 
 
-# ---------------------------------------------------------------------------
-# _format_oneline_row — best-effort import + delegation to
-# aggregate_chain_loe.format_oneline_row (the single authoritative
-# formatter; this CLI must not hand-format a second copy of the grammar).
-# ---------------------------------------------------------------------------
-
-
 def test_format_oneline_row_none_claude_klabauter_root_returns_none():
     assert _mod._format_oneline_row(None, "abc123def", "L", 5, 1, "2026-07-25T00:00:00Z") is None
 
@@ -279,18 +211,9 @@ def test_format_oneline_row_import_failure_returns_none(tmp_path):
 
 
 def test_format_oneline_row_delegates_to_aggregate_chain_loe():
-    """Real (unmocked) call against the actual claude-klabauter checkout — this repo
-    IS claude-klabauter, so `coordinator_core` is genuinely importable here."""
     root = _mod._resolve_claude_klabauter_root()
     row = _mod._format_oneline_row(root, "abc123def456", "L", 26, 4, "2026-07-25T10:00:00Z")
     assert row == "2026-07-25 | def456 | L | 26d / 4o | <one-line summary — fill in>"
-
-
-# ---------------------------------------------------------------------------
-# Round-trip proof: a row this CLI emits must parse back via
-# aggregate_chain_loe.parse_session_ledgers exactly as the field values
-# that produced it — not eyeballed, asserted against the parsed record.
-# ---------------------------------------------------------------------------
 
 
 def test_oneline_row_round_trips_through_parse_session_ledgers():
@@ -316,11 +239,6 @@ def test_oneline_row_round_trips_through_parse_session_ledgers():
             "created": "2026-07-25",
         }
     ]
-
-
-# ---------------------------------------------------------------------------
-# main() --row-only — prints ONLY the ready-to-paste row, no JSON wrapper.
-# ---------------------------------------------------------------------------
 
 
 def test_row_only_prints_bare_row():

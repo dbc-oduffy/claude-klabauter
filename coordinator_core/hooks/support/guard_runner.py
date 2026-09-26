@@ -50,10 +50,7 @@ from coordinator_core.hooks.support.guard_runner_contract import (
     CHANNEL_DENY,
 )
 
-#: A verdict is the shape both layers speak: `{"channel": ..., "text": ...}`.
 GuardVerdict = Dict[str, str]
-#: `run_guards()` accepts either an already-computed verdict dict, or a
-#: `(name, callable)` pair it invokes itself under exception isolation.
 GuardEntry = Union[GuardVerdict, Tuple[str, Callable[[Any], Optional[GuardVerdict]]]]
 
 
@@ -116,11 +113,6 @@ def run_guards(
 
 
 def envelope_to_verdict(out: Optional[dict]) -> Optional[GuardVerdict]:
-    """Translate an existing `{"hookSpecificOutput": {...}}` envelope (the
-    shape a sibling engine call and a guard's own `message_envelope`
-    -composed stdout already produce) into the `{"channel", "text"}` verdict
-    shape `run_guards()` aggregates. `None` in, `None` out; an envelope with
-    neither a deny nor an additionalContext key also yields `None`."""
     if not out or not isinstance(out, dict):
         return None
     hook_output = out.get("hookSpecificOutput")
@@ -137,12 +129,6 @@ def envelope_to_verdict(out: Optional[dict]) -> Optional[GuardVerdict]:
 
 
 def verdict_to_envelope(result: dict) -> Optional[dict]:
-    """Inverse of `envelope_to_verdict`: fold a `run_guards()` aggregate
-    result back into the ONE `{"hookSpecificOutput": {...}}` envelope a
-    PreToolUse hook may write to stdout (only one hookSpecificOutput
-    envelope per hook process -- clause 10). Returns `None` when the
-    aggregate carries neither a deny nor any advisory text, matching the
-    existing "print nothing on allow" contract."""
     has_deny = result.get("permissionDecision") == "deny"
     has_context = bool(result.get("additionalContext"))
     if not has_deny and not has_context:
@@ -157,10 +143,6 @@ def verdict_to_envelope(result: dict) -> Optional[dict]:
 
 
 def _target_path_from_payload(payload: Any) -> Optional[str]:
-    """Cheap, import-free extraction of the edited path from a raw
-    PreToolUse payload dict -- the input `GuardScopeDescriptor.matches()`
-    is evaluated against (clause 12). Covers the `file_path`/`notebook_path`
-    shapes `tool_input` carries across Write/Edit/MultiEdit/NotebookEdit."""
     if not isinstance(payload, dict):
         return None
     tool_input = payload.get("tool_input")
@@ -197,16 +179,6 @@ class RegisteredGuard:
 
 
 def _invoke_guard_main(main_fn: Callable[[], int], stdin_text: str) -> GuardVerdict:
-    """Runs one guard's `main()` with stdin/stdout/stderr swapped, catches
-    `SystemExit` (clause 1: the runner calls `main()` directly and never
-    lets a guard's own control-flow exit escape), captures the guard's
-    stdout JSON envelope (clause 6: STDERR CAPTURE -- captured here too,
-    per-guard, never forwarded to the real stderr stream directly), and
-    translates the envelope into the `{"channel", "text"}` verdict shape via
-    `envelope_to_verdict`. A guard that raises something other than
-    `SystemExit` propagates -- the caller (`run_guards`, via its
-    `(name, callable)` entry path) is responsible for exception isolation
-    (clause 11); this function's job is translation, not isolation."""
     stdin_buf = io.StringIO(stdin_text)
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
@@ -233,12 +205,6 @@ def _invoke_guard_main(main_fn: Callable[[], int], stdin_text: str) -> GuardVerd
 
 
 def _import_guard_module(guard: RegisteredGuard):
-    """Stage-two import (clause 12): only reached once
-    `guard.descriptor.matches(target_path)` is already `True`. Uses
-    `importlib.util.spec_from_file_location` (not `import_module`) because
-    a guard's `module_path` need not be a valid dotted-import name; the
-    module is registered into `sys.modules[guard.module_key]` so a test can
-    observe the import directly."""
     if guard.module_key in sys.modules:
         return sys.modules[guard.module_key]
     spec = importlib.util.spec_from_file_location(guard.module_key, guard.module_path)
@@ -259,11 +225,6 @@ def build_registry_entries(
     raw_payload_text: str,
     payload: Any,
 ) -> List[Tuple[str, Callable[[Any], GuardVerdict]]]:
-    """Two-stage lazy import (clause 12), realised as a list of
-    `(name, callable)` entries `run_guards()` can consume directly. A
-    guard whose descriptor does NOT match `payload`'s target path never
-    appears here at all -- its module is never imported, because the
-    callable that would import it is never constructed, let alone called."""
     target_path = _target_path_from_payload(payload)
     entries: List[Tuple[str, Callable[[Any], GuardVerdict]]] = []
     for guard in registry:
@@ -273,10 +234,6 @@ def build_registry_entries(
         def _call(_payload: Any, _guard: RegisteredGuard = guard) -> GuardVerdict:
             module = _import_guard_module(_guard)
             if _guard.verdict_attr:
-                # STDERR-verdict path: the guard's own callable already
-                # returns the `{"channel", "text"}` shape (or `None`) given
-                # the parsed payload directly -- no stdin/stdout swap here,
-                # that plumbing is internal to the guard's own callable.
                 verdict_fn = getattr(module, _guard.verdict_attr)
                 return verdict_fn(_payload) or {}
             main_fn = getattr(module, _guard.entry_attr)
@@ -286,10 +243,6 @@ def build_registry_entries(
     return entries
 
 
-#: Enrolment registry: populated by whichever later wave lands the guard
-#: bodies this registry enrols (W4-C5/C6). Left empty here -- see this
-#: module's own docstring for why an empty registry is the correct landing
-#: state for this chunk, not a placeholder to fill in-line.
 REAL_GUARD_REGISTRY: Tuple[RegisteredGuard, ...] = ()
 
 
@@ -299,11 +252,5 @@ def run_registered_guards(
     payload: Any,
     skipped_out: Optional[List[str]] = None,
 ) -> dict:
-    """The dispatcher-facing entrypoint: two-stage lazy import
-    (`build_registry_entries`) feeding the aggregation/exception-isolation
-    core (`run_guards`). Returns the same aggregate shape `run_guards`
-    does; a caller folds this together with any sibling engine verdict via
-    `envelope_to_verdict`/`verdict_to_envelope` so exactly one
-    `hookSpecificOutput` envelope reaches the harness."""
     entries = build_registry_entries(registry, raw_payload_text, payload)
     return run_guards(entries, payload, skipped_out=skipped_out)

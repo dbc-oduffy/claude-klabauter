@@ -40,13 +40,6 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-# --------------------------------------------------------------------------- fixture helpers
-# Shape reused from test_commit_closures_from_ledger.py's ledger-backed fixture pattern
-# (_init_repo / _commit / _mark_origin_main / _append / _closure_test_ctx) — not imported
-# cross-test-file (breaks pytest collection isolation, per F2 review note on the prior
-# git-scan-era version of this file), re-derived locally instead.
-
-
 def _run_git_or_raise(repo_root: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", "-C", str(repo_root), *args],
@@ -59,7 +52,6 @@ def _run_git_or_raise(repo_root: Path, *args: str) -> str:
 
 
 def _init_closure_test_repo(repo_root: Path) -> None:
-    """Init a throwaway git repo with a local identity (no reliance on global git config)."""
     _run_git_or_raise(repo_root, "init", "-q")
     _run_git_or_raise(repo_root, "config", "user.email", "test@example.com")
     _run_git_or_raise(repo_root, "config", "user.name", "Test User")
@@ -67,7 +59,6 @@ def _init_closure_test_repo(repo_root: Path) -> None:
 
 
 def _commit_with_message(repo_root: Path, message: str, content: str) -> str:
-    """Write unique ``content`` to a tracked file and commit ``message``; return the new SHA."""
     (repo_root / "file.txt").write_text(content)
     _run_git_or_raise(repo_root, "add", "-A")
     _run_git_or_raise(repo_root, "commit", "-q", "-m", message)
@@ -79,13 +70,6 @@ def _mark_origin_main(repo_root: Path, sha: str) -> None:
 
 
 def _revert_commit(repo_root: Path, sha: str) -> str:
-    """Run a real ``git revert``, producing git's own auto-generated body linkage line.
-
-    Kept for ``test_revert_of_untracked_commit_yields_no_revert_row`` (out of this
-    dispatch's scope, still passing unmodified) -- it only needs a real revert commit
-    object to exist, never a ledger entry, since its expectation (no rows at all) holds
-    on an empty ledger regardless of mechanism.
-    """
     _run_git_or_raise(repo_root, "revert", "--no-edit", sha)
     return _run_git_or_raise(repo_root, "rev-parse", "HEAD")
 
@@ -111,13 +95,7 @@ def _closure_test_ctx(repo_root: Path):
     )
 
 
-# --------------------------------------------------------------------------- AC9: revert row
 def test_git_revert_yields_marked_revert_row(tmp_path: Path) -> None:
-    """A revert commit whose ledger entry carries ``reverts_sha`` (stamped at write time,
-    C1, off git's own auto-generated 'This reverts commit <sha>' body line) yields TWO rows:
-    the original close row (``reverts_sha`` null) and a revert row carrying the SAME item_id,
-    the revert commit's OWN sha, and ``reverts_sha`` set to the reverted commit's sha
-    (AC9, D4/D8)."""
     _init_closure_test_repo(tmp_path)
     closure_sha = _commit_with_message(tmp_path, "fix: close an item", "content-1\n")
     revert_sha = _commit_with_message(tmp_path, "revert: undo it", "content-1-reverted\n")
@@ -144,18 +122,11 @@ def test_git_revert_yields_marked_revert_row(tmp_path: Path) -> None:
         "reverts_sha must name the reverted (closure) commit, not the revert commit itself"
     )
 
-    # Both rows must validate against the CommitClosure entity (extra="forbid").
     CommitClosure.model_validate(close_row)
     CommitClosure.model_validate(revert_row)
 
 
-# --------------------------------------------------------------------------- AC16: hand-authored revert
 def test_hand_authored_revert_message_yields_no_revert_row(tmp_path: Path) -> None:
-    """A hand-authored revert message has no auto-generated 'This reverts commit <sha>' body
-    line, so C1's ``extract_closure_facts_from_text`` never stamps ``reverts_sha`` for it at
-    write time — its ledger entry carries no ``reverts_sha`` at all. Such a commit therefore
-    produces no revert row — fails safe, never an error (D4's measured coverage limit,
-    AC16)."""
     _init_closure_test_repo(tmp_path)
     closure_sha = _commit_with_message(tmp_path, "fix: close an item", "content-2\n")
     hand_revert_sha = _commit_with_message(
@@ -165,7 +136,6 @@ def test_hand_authored_revert_message_yields_no_revert_row(tmp_path: Path) -> No
     )
     _mark_origin_main(tmp_path, hand_revert_sha)
     _append(tmp_path, "hnd-a", closure_sha, closes=["RECS-7"])
-    # No reverts_sha on hand_revert_sha's entry -- nothing was stamped at write time.
     _append(tmp_path, "hnd-a", hand_revert_sha)
 
     ctx = _closure_test_ctx(tmp_path)
@@ -180,11 +150,7 @@ def test_hand_authored_revert_message_yields_no_revert_row(tmp_path: Path) -> No
     )
 
 
-# --------------------------------------------------------------------------- AC17: unmatched reverted sha
 def test_revert_of_untracked_commit_yields_no_revert_row(tmp_path: Path) -> None:
-    """A real ``git revert`` whose reverted sha names no existing closure row (the reverted
-    commit carried no Closes: trailer) produces no revert row and no close row — the join
-    key matches nothing (AC17)."""
     _init_closure_test_repo(tmp_path)
     plain_sha = _commit_with_message(tmp_path, "chore: unrelated change", "content-3\n")
     revert_sha = _revert_commit(tmp_path, plain_sha)
@@ -197,21 +163,10 @@ def test_revert_of_untracked_commit_yields_no_revert_row(tmp_path: Path) -> None
     assert records == [], f"reverted sha matches no closure row; expected no rows: {records!r}"
 
 
-# NOTE test_pair_walk_stride_matches_widened_three_field_format (formerly here, AC5/G13) was
-# DELETED (2026-08-23, C2 test-retirement pass): it pinned the git-log NUL-delimited pair-walk
-# stride and the ``i += 3`` correction over a fake ``subprocess.run`` stdout -- both artifacts
 # of the retired git-log scan mechanism (no ``_LOG_FORMAT``, no pair-walk, no fake-stdout
-# parsing exist in collect() any more). The malformed-sha-quarantine property it also touched
-# survives and stays covered: test_malformed_sha_shape_is_quarantined_not_emitted in
-# test_commit_closures_from_ledger.py.
 
 
-# --------------------------------------------------------------------------- AC5: single subprocess call
 def test_revert_arm_adds_no_second_subprocess_call(tmp_path: Path) -> None:
-    """The revert arm is a pure post-processing pass over the already-read ledger entries --
-    collect() still performs EXACTLY ONE subprocess call (the reachability ``git rev-list``)
-    even when a revert row is produced (amplification-gate invariant,
-    test_no_unbatched_per_item_git_spawn.py)."""
     _init_closure_test_repo(tmp_path)
     closure_sha = _commit_with_message(tmp_path, "fix: close an item", "content-4\n")
     revert_sha = _commit_with_message(tmp_path, "revert: undo it", "content-4-reverted\n")
@@ -233,10 +188,3 @@ def test_revert_arm_adds_no_second_subprocess_call(tmp_path: Path) -> None:
     )
     assert len(records) == 2
 
-
-# NOTE test_marker_pre_filter_keeps_the_record_set_and_drops_the_rest (formerly here, G5) was
-# DELETED (2026-08-23, C2 test-retirement pass): it called ``commit_closures._extract_closure_
-# commits``, which no longer exists -- the ``--grep`` server-side pre-filter it pinned was part
-# of the retired git-log scan and has no ledger-backed analogue (a ledger read has no "noise
-# commit" to filter: only entries carrying ``closes``/``reverts_sha`` are ever written). No
-# durable property survives this one to re-express.

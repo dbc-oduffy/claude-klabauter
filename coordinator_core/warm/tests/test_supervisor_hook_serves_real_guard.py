@@ -43,11 +43,7 @@ from typing import Optional
 from coordinator_core.warm import cookie, skew, supervisor
 
 
-#: Cookie minted by the most recent `_bind_handler`, so `_post` can present
 #: it without every call site threading it. The listener now REQUIRES the
-#: boot cookie on every non-health request; these tests bind a `tmp_path`
-#: engine root, so reading the AMBIENT cookie here would authenticate
-#: against the wrong root and refuse.
 _BOUND_TOKEN: Optional[str] = None
 
 
@@ -74,25 +70,10 @@ def _post(
 
 
 def _bind_handler(tmp_path: Path, *, dispatch):
-    """Bind `_make_handler`'s `_Handler` to a real loopback socket, backed by a
-    `_ServerContext` whose `dispatch` is the test's own stand-in for the (not yet
-    registered, separately-tracked) warm-side guard op -- see
-    `state/handoffs/2026-08-23-the-warm-guard-op-gets-registered.md`. Everything else
-    (`version_state`, the self-stamped token, in-flight accounting) is the real
-    production wiring; only the op dispatch itself is a fake, standing in for whatever
-    verdict the real guard would have computed.
-
-    `tmp_path` stands in for the engine root, stamped via `skew.write_engine_stamp` --
-    mirrors `test_supervisor.py`'s own convention (module docstring), since the live
-    dev clone this suite runs from carries no build stamp and `compute_client_token`
-    refuses an unstamped root by design (`skew.compute_client_token`'s docstring).
-    """
     from http.server import ThreadingHTTPServer
 
     skew.write_engine_stamp(tmp_path, "sha-test")
     root = tmp_path
-    # Real production wiring includes the credential: `main` generates the
-    # cookie before it binds, so a bound listener always has one.
     global _BOUND_TOKEN
     _BOUND_TOKEN = cookie.ensure(root)
     version_state = skew.ServerVersionState(root)
@@ -137,12 +118,6 @@ def test_a_denied_event_comes_back_denied(tmp_path: Path):
 
 
 def test_server_environ_override_does_not_reach_the_forwarded_verdict(tmp_path: Path, monkeypatch):
-    """AC2. The SERVER's own os.environ carries an override the posted event never
-    carried; the dispatched payload must show an empty env, not the server's.
-
-    Reuses `_deny_dispatch`-shaped capture rather than `_deny_dispatch` itself: the
-    assertion is on what payload the handler HANDED to dispatch, not on the response.
-    """
     monkeypatch.setenv("COORDINATOR_ALLOW_RM", "1")
     seen = {}
 
@@ -173,8 +148,6 @@ def _method_not_found_dispatch(msg, *, caller=None, isolated=False):
 
 
 def test_method_not_found_never_reads_as_an_allow(tmp_path: Path):
-    """The forward-looking half of AC1. An error envelope is not a verdict -- the handler
-    must answer `hook_http.unreachable_response`'s loud shape, not silently allow."""
     httpd, port = _bind_handler(tmp_path, dispatch=_method_not_found_dispatch)
     try:
         status, body = _post(port, {"hook_event_name": "PreToolUse", "tool_name": "Bash"})
@@ -190,9 +163,6 @@ def test_method_not_found_never_reads_as_an_allow(tmp_path: Path):
 
 
 def _no_result_dispatch(msg, *, caller=None, isolated=False):
-    """A well-formed response carrying no `result` object -- e.g. a handler that answered
-    with a bare string. `interpret_result` must treat this as unreachable too, not crash
-    trying to read a decision out of it."""
     return {"jsonrpc": "2.0", "id": msg.get("id"), "result": "ok"}
 
 
@@ -210,8 +180,6 @@ def test_non_object_result_never_reads_as_an_allow(tmp_path: Path):
 
 
 def _echoing_dispatch(msg, *, caller=None, isolated=False):
-    """Answers with the method it was asked for, plus injected content -- so one fake
-    can pin BOTH that the URL chose the op and that the op's output survives."""
     return {
         "jsonrpc": "2.0",
         "id": msg.get("id"),
@@ -223,10 +191,6 @@ def _echoing_dispatch(msg, *, caller=None, isolated=False):
 
 
 def test_the_url_chooses_the_op_end_to_end(tmp_path: Path):
-    """Two registrations on the SAME event must reach two different ops. This is the
-    property `hooks.json` forces: three SessionStart entries, one event name.
-    Uses hooks.track_touched_files (substitute for the retired
-    hooks.session_heartbeat example, same hooks.* routing)."""
     httpd, port = _bind_handler(tmp_path, dispatch=_echoing_dispatch)
     try:
         _, boot = _post(port, {"hook_event_name": "SessionStart", "source": "startup"}, path="/hook/session.boot_sweep")
@@ -238,7 +202,6 @@ def test_the_url_chooses_the_op_end_to_end(tmp_path: Path):
 
 
 def test_an_injecting_hook_injects_over_the_transport(tmp_path: Path):
-    """The regression with no symptom -- 200 with the content silently dropped."""
     httpd, port = _bind_handler(tmp_path, dispatch=_echoing_dispatch)
     try:
         status, body = _post(
@@ -255,8 +218,6 @@ def test_an_injecting_hook_injects_over_the_transport(tmp_path: Path):
 
 
 def test_an_out_of_namespace_path_is_404_not_dispatched(tmp_path: Path):
-    """A rewritten registration must not be able to drive a mutating op through the
-    hook endpoint."""
     import urllib.error
 
     calls = []
@@ -278,7 +239,6 @@ def test_an_out_of_namespace_path_is_404_not_dispatched(tmp_path: Path):
 
 
 def test_a_bare_hook_post_still_reaches_the_guard_op(tmp_path: Path):
-    """Keeps the measured arms in budget-manifest.json quotable after routing landed."""
     seen = []
 
     def _recording_dispatch(msg, *, caller=None, isolated=False):
@@ -294,11 +254,6 @@ def test_a_bare_hook_post_still_reaches_the_guard_op(tmp_path: Path):
 
 
 def test_explicit_guard_op_path_still_refuses_an_event_it_has_no_route_for(tmp_path: Path):
-    """
-    explicitly via `/hook/warm_guard.evaluate` resolves to the SAME `op_name` as the
-    bare `/hook` path, so it must get the same event-eligibility gate -- a SessionStart
-    (no `tool_name`/`tool_input`) posted to the explicit alias must still come back as
-    the unserved shape, never reach the guard's dispatch."""
     seen = []
 
     def _recording_dispatch(msg, *, caller=None, isolated=False):

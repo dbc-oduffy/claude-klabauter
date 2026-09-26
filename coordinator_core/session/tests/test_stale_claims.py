@@ -1,22 +1,3 @@
-"""
-coordinator_core.session.tests.test_stale_claims — tests for
-coordinator_core.session.stale_claims.list_stale_claim_handoffs.
-
-Coverage (per this module's dispatch brief):
-  - a live handoff whose claimer session is DEAD is reported as stale.
-  - a live handoff whose claimer session is LIVE is excluded.
-  - an unclaimed (open) handoff is excluded (no claimer to ask liveness about).
-  - the DR-084 ``consumed_by`` fallback is honored when ``claimed_by`` is absent.
-  - ``claimed_by`` wins over ``consumed_by`` when a record carries both.
-
-Fixture style mirrors coordinator_core/session/tests/test_liveness.py's
-``_make_repo``/``_write_session`` helpers (real git repo + real
-``.git/coordinator-sessions/<sid>/meta.json``, never a liveness stub) — this
-module's whole point is that the enumerator agrees with the REAL
-``session_live`` verdict, not a mocked one.
-
-Spec backlink: cross-repo/inbox/2026-07-23-claude-klabauter-em-wsc-step0-fails-open-crash-recovery.md
-"""
 from __future__ import annotations
 
 import json
@@ -28,8 +9,6 @@ from coordinator_core.session import core, stale_claims
 import pytest
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,

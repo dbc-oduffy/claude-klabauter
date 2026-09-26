@@ -92,12 +92,6 @@ def _resolve_root(explicit_root: str | None) -> str | None:
 
 
 def _extract_basename_from_row(line: str, seen_specs: list[bool]) -> str | None:
-    """Port of the bash original's awk token scan (per-row field split on
-    whitespace). `seen_specs` is a 1-element mutable box mirroring the awk
-    global's persistence ACROSS THE WHOLE matched-line stream of one script
-    invocation (not per-row, not per-process) — see module docstring
-    negative-spec note. Callers must share one box across an entire
-    `main()` invocation and start a fresh box per invocation."""
     for token in line.split():
         if _PATH_TOKEN_ARCHIVE_SPECS_RE.search(token) or (
             _PATH_TOKEN_MD_RE.search(token) and seen_specs[0]

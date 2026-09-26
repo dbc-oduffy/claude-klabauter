@@ -1,10 +1,3 @@
-"""Tests for the C2 fix: `portability_disposition`'s circular depends_on
-edge over d5 (portability-sweep). Also covers the C3 fix: `apply()`
-actually populating the `gates` key its module docstring already claimed
-it filled in.
-
-Spec backlink: pln-the-engine-asks-for-facts-it-a-8709a3, chunk C2, C3
-"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -63,8 +56,6 @@ def test_resolves_depends_on_invariant_catches_dangling_edge() -> None:
             "dispositions": [{"value": "proceed", "resolves": ["dX"]}],
         }
     ]
-    # pytest.raises over bare try/except for
-    # idiomatic style and a clearer failure message on regression.
     with pytest.raises(RuntimeError):
         _assert_resolves_depends_on_invariant(directives, judgment_points)
 
@@ -102,11 +93,6 @@ def test_fill_gate_verdicts_marks_failed_directive_failed_and_rest_pending() -> 
     gates = _fill_gate_verdicts(report)
     assert gates["portability_sweep"] == "failed"
     assert gates["check_no_illegal_paths"] == "pending"
-
-
-# ---------------------------------------------------------------------------
-# D4: `pr-body` args are threaded with resolved --ship-verdict/--release-notes
-# ---------------------------------------------------------------------------
 
 
 def test_d4_pr_body_args_carry_ship_verdict_and_release_notes() -> None:
@@ -151,12 +137,6 @@ def test_resolve_release_notes_text_reads_decisions_override() -> None:
     )
     assert overridden == "notes text"
     assert default == "Release v1.2.3."
-
-
-# ---------------------------------------------------------------------------
-# D5: a missing portability-sweep producer reports "unavailable", not a
-# clean pass — distinct from both "passed" and "failed".
-# ---------------------------------------------------------------------------
 
 
 def test_d5_absent_producer_marks_directive_already_satisfied_with_reason() -> None:

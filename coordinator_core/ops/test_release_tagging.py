@@ -1,11 +1,3 @@
-"""Tests for coordinator_core.ops.release_tagging (ops `release.cut_tag`
-and `release.cut_tag_and_publish`, C0a manifest rows
-`cut-push-annotated-release-tag` / `cut-push-tag-and-publish-gh-release`).
-
-All git activity runs in tmp_path throwaway repos with a local bare
-"origin" (real `git push`/`git tag` exercised); `gh` is never invoked for
-real — the module's `_gh` seam is monkeypatched with a stateful fake.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -55,8 +47,6 @@ def _init_repo_with_origin(tmp_path: Path) -> tuple[Path, Path, str]:
 
 
 class _FakeGh:
-    """Stateful stand-in for the `gh` CLI: 'releases' is a dict of
-    tag -> url; `edit` succeeds only for a tag already in that dict."""
 
     def __init__(self):
         self.releases: dict[str, str] = {}
@@ -93,11 +83,6 @@ def repo_env(tmp_path, monkeypatch):
     return repo, bare, merge_sha, fake
 
 
-# ---------------------------------------------------------------------------
-# release.cut_tag (Mode A)
-# ---------------------------------------------------------------------------
-
-
 def test_cut_tag_creates_and_pushes_annotated_tag(repo_env):
     repo, bare, merge_sha, _fake = repo_env
     out = rt.cut_tag(repo, merge_sha, "v1.0.0")
@@ -110,11 +95,10 @@ def test_cut_tag_creates_and_pushes_annotated_tag(repo_env):
     tags = _git(bare, "tag", "--list").stdout
     assert "v1.0.0" in tags
     tag_obj = _git(bare, "cat-file", "-t", "v1.0.0").stdout.strip()
-    assert tag_obj == "tag"  # annotated, not lightweight
+    assert tag_obj == "tag"
 
 
 def test_cut_tag_double_invocation_is_documented_noop(repo_env):
-    """AC7: second call with identical inputs is a safe no-op."""
     repo, _bare, merge_sha, _fake = repo_env
     first = rt.cut_tag(repo, merge_sha, "v1.0.0")
     assert first["created"] is True
@@ -159,9 +143,6 @@ def test_cut_tag_empty_merge_sha_fails_loud(repo_env):
 
 
 def test_cut_tag_leading_dash_tag_rejected(repo_env):
-    """Tag is passed positionally to
-    several git subcommands with no `--` separator; a value starting with
-    '-' would be misparsed as a git option."""
     repo, _bare, merge_sha, _fake = repo_env
     with pytest.raises(ValueError, match="looks like a git option"):
         rt.cut_tag(repo, merge_sha, "-not-a-tag")
@@ -198,11 +179,6 @@ def test_cut_tag_handler_without_repo_root_fails_loud():
         )
 
 
-# ---------------------------------------------------------------------------
-# release.cut_tag_and_publish (Mode B)
-# ---------------------------------------------------------------------------
-
-
 def test_cut_tag_and_publish_creates_tag_and_release(repo_env):
     repo, bare, merge_sha, fake = repo_env
     out = rt.cut_tag_and_publish(repo, merge_sha, "v1.0.0", "release notes here")
@@ -211,30 +187,24 @@ def test_cut_tag_and_publish_creates_tag_and_release(repo_env):
     assert out["release_created"] is True
     assert out["release_url"] == fake.create_url.format(tag="v1.0.0")
     assert "v1.0.0" in _git(bare, "tag", "--list").stdout
-    # Sequencing: tag-push attempted before the release publish call.
     edit_idx = next(i for i, c in enumerate(fake.calls) if c[:2] == ["release", "edit"])
-    assert edit_idx == 0  # edit is attempted first, then falls back to create
+    assert edit_idx == 0
     assert fake.calls[1][:2] == ["release", "create"]
 
 
 def test_cut_tag_and_publish_double_invocation_is_documented_noop(repo_env):
-    """AC7: rerun after a full success un-drafts (edits) the existing
-    release rather than re-creating it, and does not re-push the tag."""
     repo, _bare, merge_sha, fake = repo_env
     first = rt.cut_tag_and_publish(repo, merge_sha, "v1.0.0", "notes")
     assert first["release_created"] is True
 
     second = rt.cut_tag_and_publish(repo, merge_sha, "v1.0.0", "notes")
     assert second["tag"] == "v1.0.0"
-    assert second["tag_pushed"] is True  # already_at_sha counts as "on origin"
-    assert second["release_created"] is False  # edit path, not re-create
+    assert second["tag_pushed"] is True
+    assert second["release_created"] is False
     assert second["release_url"] == fake.create_url.format(tag="v1.0.0")
 
 
 def test_cut_tag_and_publish_tag_push_failure_blocks_release_call(repo_env, monkeypatch):
-    """A tag-push failure must surface distinctly and never reach the
-    release-publish step (manifest hazard note: sequence tag-push strictly
-    before release-publish)."""
     repo, _bare, merge_sha, fake = repo_env
 
     real_git = rt._git
@@ -247,7 +217,7 @@ def test_cut_tag_and_publish_tag_push_failure_blocks_release_call(repo_env, monk
     monkeypatch.setattr(rt, "_git", _failing_push)
     with pytest.raises(RuntimeError, match="git push"):
         rt.cut_tag_and_publish(repo, merge_sha, "v1.0.0", "notes")
-    assert fake.calls == []  # release-publish never attempted
+    assert fake.calls == []
 
 
 def test_cut_tag_and_publish_handler_registered_and_routes_params(repo_env):

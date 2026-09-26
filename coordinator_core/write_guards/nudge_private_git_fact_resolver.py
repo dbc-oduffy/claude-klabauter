@@ -136,17 +136,12 @@ from coordinator_core.write_guards.nudge_windows_subprocess_popup import (
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
-PRIORITY = 200  # advisory/deny-offer band; next slot after nudge_shell_shaped_spawn (190)
+PRIORITY = 200
 
-#: Hot-path module markers — a hand-rolled resolver outside these never runs
-#: in a live session, so is never a culprit this detector's remit covers.
 _HOT_PATH_MARKERS = ("write_guards/", "bash_guards/", "hooks/", "ops/session/")
 
 #: FIRE-SET: the four walk-only forms, each mapped to its offered importable
 #: symbol. See module docstring "FIRE-SET". `--absolute-git-dir` joined this
-#: set on 2026-08-19: it was silent while `repo_root.absolute_git_dir` always
-#: spawned, and that function is now walk-only, so staying silent would hide a
-#: real elimination rather than avoid a false claim.
 _FIRE_FLAG_TO_OFFER: Dict[str, str] = {
     "--show-toplevel": "coordinator_core.git.repo_root.show_toplevel",
     "--git-dir": "coordinator_core.git.repo_root.git_dir",
@@ -154,9 +149,7 @@ _FIRE_FLAG_TO_OFFER: Dict[str, str] = {
     "--absolute-git-dir": "coordinator_core.git.repo_root.absolute_git_dir",
 }
 
-#: SILENT SET: the two forms that genuinely still spawn. Named here (not merely
 #: absent from `_FIRE_FLAG_TO_OFFER`) so a reader — and the guard's own
-#: self-tests — can see this is a deliberate exclusion, not an oversight.
 _SILENT_FLAGS = frozenset({"--show-prefix", "--is-inside-work-tree"})
 
 _OFFER_TEMPLATE = (
@@ -268,7 +261,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
 
         # One advisory envelope per response (INTERFACE.md) — lead with the
-        # first (lowest-ordinal-in-source-order) fire flag found.
         flag = fire_flags[0]
         symbol = _FIRE_FLAG_TO_OFFER[flag]
         reason = _OFFER_TEMPLATE.format(symbol=symbol, flag=flag, file_path=file_path)
@@ -280,6 +272,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         }
     except Exception:
-        # Fail-OPEN on any unexpected error — this guard offers only on a
-        # positive fire-set match, never on an error.
         return None

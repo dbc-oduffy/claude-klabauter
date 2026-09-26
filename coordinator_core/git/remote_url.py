@@ -90,10 +90,5 @@ def get_remote_url(remote: str = "origin", cwd: Optional[str] = None) -> Optiona
         return None
     value = result.stdout.strip()
     if not value:
-        # A successful `git remote get-url` with empty stdout is not a
-        # documented git behavior (unlike `--show-prefix` at the toplevel
-        # in `repo_root.py`, which legitimately emits ""); treat it as a
-        # failed resolution rather than inventing a "you have a remote
-        # named '' " semantics no caller expects.
         return None
     return value

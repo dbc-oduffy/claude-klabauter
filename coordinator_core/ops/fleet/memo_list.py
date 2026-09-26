@@ -182,9 +182,6 @@ from coordinator_core.ops.fleet._memo_compose import (
 
 _LOG = logging.getLogger(__name__)
 
-# Mode constant for the envelope mode field (memo.list is a single-mode op —
-# it only ever returns the dry_run envelope, matching the fleet contract's
-# mode/dry_run vocabulary rather than inventing a third state).
 _MODE = "list"
 
 
@@ -242,9 +239,6 @@ def _validate_list_params(params: dict):
                 "memo.list: topic, when supplied, must be a string",
             )
         # Same authority memo.send uses (_TOPIC_SLUG_RE, imported — not a
-        # parallel regex) — a preview must fail loud on exactly the topics
-        # memo.send would reject, including empty/whitespace-only, rather
-        # than silently coercing an invalid-but-present topic to "absent".
         if not topic or not _TOPIC_SLUG_RE.fullmatch(topic):
             return build_setup_error_result(
                 _MODE, dry_run,
@@ -269,15 +263,6 @@ def _validate_list_params(params: dict):
 def _central_ids_for_repo_key(
     central_ids: set, manifest_aliases: dict, repo_key: str
 ) -> set:
-    """Central receiver ids (`identity.centralReceiverIds`) that resolve to `repo_key`.
-
-    Mirrors `_memo_resolver.resolve_receiver_inbox()`'s central-fan-in branch
-    (identical alias-or-convention mapping per id) but computed for EVERY
-    registered `repo_key` at once — enumeration needs a machine-readable
-    `is_central` flag per receiver, not a single-winner pick for one `to`
-    (that remains `resolve_receiver_inbox`'s job for the resolution-mode path,
-    which this dispatch does not touch).
-    """
     matches: set = set()
     for cid in central_ids:
         shortname = cid[:-3] if cid.endswith("-em") else cid
@@ -292,13 +277,6 @@ def _central_ids_for_repo_key(
 
 
 def _receiver_shortname_aliases(manifest_aliases: dict, repo_key: str) -> set:
-    """Manifest `repoAliases` shortname forms (bare + `-em`) that map to `repo_key`.
-
-    `receiver_em_to_repo_key()` accepts either form (e.g. `example-game-repo` or
-    `example-game-repo-em` both resolve `repos.example_game_workbench_repo`) — both forms
-    are surfaced here so a caller of `--to` sees every string that actually
-    works, not just one.
-    """
     suffix = repo_key[len("repos."):] if repo_key.startswith("repos.") else repo_key
     out: set = set()
     for shortname, registry_key in manifest_aliases.items():
@@ -327,13 +305,6 @@ def _normalize_registry_path(path_str: str) -> str:
 
 
 def _mirror_paths(mirrors_by_key: dict) -> set:
-    """Normalized path set of every `publish.mirrors.*` entry with a present path.
-
-    Shared by the receiver-exclusion check in `_enumerate_candidates` and
-    (indirectly, via the same `mirrors_by_key` source) `_enumerate_publish_mirrors`
-    — single normalization authority so both sides of the collision agree on
-    what counts as "the same path".
-    """
     return {
         _normalize_registry_path(entry["path"])
         for entry in mirrors_by_key.values()
@@ -411,13 +382,7 @@ def _enumerate_publish_mirrors(mirrors_by_key: Optional[dict] = None) -> list:
             ({hyphenated, em_id, *explicit_aliases}) - redirect_aliases
         )
         if not aliases:
-            # Fully shadowed by redirect classification — the mirror's
-            # entire addressable surface collides with the more-specific
-            # canonical_home_alias truth, so omit the mirror entirely
-            # rather than emit an entry with no addressable id at all.
             continue
-        # em_id must stay internally consistent with the surviving
-        # aliases — never advertise an id step 1 just subtracted away.
         em_id = em_id if em_id in aliases else None
         mirrors.append({
             "kind": "publish_mirror",
@@ -542,19 +507,8 @@ def _enumerate_candidates() -> list:
     receivers = []
     for repo_key, repo_path_str in sorted(all_repos.items()):
         if _normalize_registry_path(repo_path_str) in mirror_paths:
-            # Shadowed by a publish-mirror at the same resolved path — a
-            # send to this repo_key would be refused (mirror precedence on
-            # the send side), so it must not appear as an addressable
-            # receiver here either. It still surfaces via its
-            # `publish_mirror` entry below.
             continue
         repo_path = Path(repo_path_str)
-        # This is where a memo.send to `repo_key` WOULD land -- share the
-        # SAME per-receiver probe `_memo_resolver`'s resolve_receiver_inbox
-        # uses (via `receiver_inbox_root`), not an independently re-spelled
-        # `cross-repo/inbox` literal. Two independent resolutions here would
-        # let `--list-receivers` advertise a target_inbox a send would not
-        # actually use, with nothing going red (C5 constraint).
         corpus_root_str, _ = receiver_inbox_root(str(repo_path))
         inbox_dir = Path(corpus_root_str) / "inbox"
         matched_central_ids = _central_ids_for_repo_key(
@@ -630,11 +584,6 @@ def _resolve_candidate(
     """
     inbox_dir, receiver_repo_path, all_repos = _resolve_receiver_inbox(to)
     if inbox_dir is not None:
-        # canonical_to is the SAME value memo.send stamps into the delivered
-        # memo's `to:` frontmatter field (see _memo_resolver.canonical_receiver_id) —
-        # exposing it here is what lets this dry-run preview and the actual write
-        # agree on the canonicalized addressee rather than each echoing whatever
-        # alias the caller happened to type.
         candidate = {
             "id": to,
             "receiver": to,
@@ -646,20 +595,12 @@ def _resolve_candidate(
         }
         if topic:
             today = datetime.date.today().isoformat()
-            # Root must be
-            # threaded from the caller's own repo_root, not left to the
-            # ambient-cwd fallback, under the warm resident engine (DR-315)
-            # serving several callers' repos out of one process.
             sender = resolve_sender_id(from_id, root=root)
             candidate["resolved_filename"] = _memo_filename(today, sender, topic)
         return candidate
 
     if to.strip().lower() in _read_central_receiver_ids():
         # foreign-identity: NOT-REACHABLE — basis: DELIBERATE INVOCATION, not true
-        # unreachability. `memo.list` resolution mode (`to` supplied) is only reached
-        # via a `memo.send --dry-run`/`memo.list --to` preview an operator deliberately
-        # types; unlike `memo.check_addressee`, no `/pickup` code path calls it
-        # ambiently (audit row 26).
         return {
             "id": to,
             "receiver": to,
@@ -756,7 +697,7 @@ def _memo_list(params: dict, repo_root: Optional[Path] = None) -> dict:
     """
     validated = _validate_list_params(params)
     if isinstance(validated, dict):
-        return validated  # exit_code:1 setup-error envelope
+        return validated
 
     dry_run, to, topic, from_id = validated
 
@@ -780,11 +721,7 @@ def _memo_list(params: dict, repo_root: Optional[Path] = None) -> dict:
     except AmbiguousReceiverError as exc:
         return build_setup_error_result(_MODE, dry_run, f"memo.list: {exc}")
     except ValueError as exc:
-        # Propagated from _memo_filename via resolve_sender_id — a
-        # caller-supplied from_id that sanitizes to an empty sender slug.
-        # Mirrors memo.send's own fail-loud posture for the identical input
         # (see module docstring DEGRADED CASE note) — never a silent
-        # fallback to the engine actor id.
         return build_setup_error_result(_MODE, dry_run, f"memo.list: {exc}")
 
     return build_dry_run_result(_MODE, candidates)

@@ -105,29 +105,6 @@ def commit_own_artifact(
     *,
     caller_label: str,
 ) -> bool:
-    """Stage and commit exactly one path (explicit pathspec), retrying only on
-    `.git/index.lock` contention.
-
-    Args:
-        repo_root: the git worktree root to run `git` from (cwd).
-        rel_path: the SINGLE path this call may stage/commit, relative to
-            `repo_root` (or absolute -- git accepts either as a pathspec run
-            with `cwd=repo_root`). Never widened to a directory or glob.
-        message: the commit subject.
-        caller_label: a short, human-readable identifier for the *caller*
-            (e.g. ``"render-handoff-tracker.py:self-commit"``), recorded in the
-            shared housekeeping-failures log on a terminal failure so a reader
-            can tell which detached render's follow-up commit failed.
-
-    Returns:
-        True  -- a commit landed, OR `rel_path` was already clean (nothing to
-                 commit is a SUCCESS, not a failure -- no commit, no log entry).
-        False -- every retry was exhausted against persistent lock contention,
-                 or a non-lock git failure occurred. A `CHILD FAILED` record has
-                 already been appended to the shared housekeeping-failures log.
-
-    Never raises.
-    """
     root = Path(repo_root)
     last_stderr = ""
 
@@ -151,9 +128,6 @@ def commit_own_artifact(
             )
             return False
 
-        # Nothing staged relative to HEAD -> genuinely no change to commit.
-        # `git diff --cached --quiet` exit-code contract: 0 == no diff (clean),
-        # 1 == diff exists -- this is the success/no-op case, not a failure.
         try:
             diff_result = _run_git(["diff", "--cached", "--quiet", "--", rel_path], root)
         except OSError as exc:
@@ -173,13 +147,6 @@ def commit_own_artifact(
             return False
 
         if commit_result.returncode == 0:
-            # Post-commit claim release (C3, AC1): same worktree, this
-            # session's own sid, single explicit pathspec (rel_path, the
-            # exact scope of the commit just above). Sync call, in place —
-            # this function is entirely synchronous (subprocess.run
-            # throughout, no event loop involved), so there is no
-            # blocking-the-loop concern to offload. A failure here must
-            # never turn an already-landed commit into a reported failure.
             try:
                 release_path = (
                     rel_path if not Path(rel_path).is_absolute()

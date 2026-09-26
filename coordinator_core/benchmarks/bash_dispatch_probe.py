@@ -74,13 +74,6 @@ _ENV_PAYLOAD_KEY = "BASH_DISPATCH_PROBE_PAYLOAD"
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-# ---------------------------------------------------------------------------
-# The command corpus AC3-AC5 name, shared by every measurement below so a
-# reader can see the same three shapes threaded through the floor, the
-# spawn enumeration, and the executed-set baseline.
-# ---------------------------------------------------------------------------
-
-
 def _payload(tool_name: str, command: str, session_id: str) -> Dict[str, Any]:
     return {
         "tool_name": tool_name,
@@ -106,29 +99,11 @@ corpus row corresponds to which AC."""
 
 
 #: A payload whose `tool_name` is not in `_tool_names.COMMAND_TOOL_NAMES`,
-#: so `evaluate_payload_json`'s own C1 master gate (dispatch.py's own
 #: "union check against the DECLARED-matchers set") returns before the
-#: guard chain is even built -- the "chain that spawns nothing" floor leg
-#: AC2 asks for: dispatcher call overhead over the bare interpreter +
-#: import closure, with the guard chain itself never entered.
 _INERT_PAYLOAD: Dict[str, Any] = _payload("Write", "n/a", "bash-dispatch-probe-inert")
 
 
 def _dispatch_cmd(payload: Dict[str, Any]) -> Tuple[list, dict]:
-    """The `[argv], env` pair for one batched-process-time sample against
-    `bash_guards.dispatch::evaluate_payload_json` -- see this module's own
-    docstring for why the payload rides an env var rather than stdin:
-    `batched_process_time_ms` has no per-invocation stdin hook (it spawns
-    every one of its K children identically inside one job object), so the
-    payload must be reachable some OTHER way every one of the K children can
-    read identically. `preuse-bash-dispatch.py` itself feeds
-    `evaluate_payload_json` via stdin in production -- this env-var
-    substitution changes only HOW the same payload string reaches the same
-    function, never the function called or the payload shape (per this
-    chunk's dispatch brief: "Gate instead on
-    `bash_guards.dispatch::evaluate_payload_json` with the same payload
-    shape").
-    """
     script = (
         "import os\n"
         "from coordinator_core.bash_guards.dispatch import evaluate_payload_json\n"
@@ -140,12 +115,6 @@ def _dispatch_cmd(payload: Dict[str, Any]) -> Tuple[list, dict]:
 
 
 def _verify_single_invocation_succeeds(argv: list, env: dict) -> None:
-    """`batched_process_time_ms` reports only the LAST invocation's `rc`
-    (module docstring, trap 2) -- a fast-erroring script would otherwise
-    read as a PASS for every sample but the final one. This runs ONE
-    untimed, unbatched invocation with `check=True` first, so a script that
-    cannot even complete once fails loudly here rather than hiding inside a
-    batched average."""
     subprocess.run(
         argv,
         env=env,
@@ -157,20 +126,8 @@ def _verify_single_invocation_succeeds(argv: list, env: dict) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# AC2 -- the derived floor.
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class FloorMeasurement:
-    """The three components of AC2's derived floor, each a
-    `batched_process_time_ms` result dict (`process_time_ms`/`wall_ms`/
-    `procs_per_call`/`rc`/`k`). Every threshold AC3-AC5's owning chunks
-    write is this floor's `chain_spawns_nothing["process_time_ms"]` plus a
-    STATED margin -- see each threshold's own reasoning at its point of use,
-    never a round number picked for comfort (this chunk's own dispatch
-    brief)."""
 
     bare_interpreter: Dict[str, Any]
     import_closure: Dict[str, Any]
@@ -231,29 +188,15 @@ def measure_derived_floor(k: int = 20) -> FloorMeasurement:
     )
 
 
-# ---------------------------------------------------------------------------
-# AC6 -- full spawn-set enumeration.
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class SpawnRecord:
-    """One `subprocess.Popen` construction observed while
-    `evaluate_payload_json` ran, in-process, against one corpus payload.
-    `argv` is the exact command list/string passed to `Popen`; `stack` is a
-    compact `file:line:function` trail (innermost call last) -- Finding 7's
-    unattributed processes are exactly the spawns a NAMED-spawn trace
-    (grepping for known call sites) cannot see; walking the real call stack
-    at spawn time is the only way to attribute a conditional or retrying
-    site regardless of whether this module's author already knew it was
-    there."""
 
     argv: Tuple[str, ...]
     stack: Tuple[str, ...]
 
 
 def _stack_summary(depth: int = 10) -> Tuple[str, ...]:
-    frames = traceback.extract_stack()[:-2]  # drop this frame and the patched __init__ frame
+    frames = traceback.extract_stack()[:-2]
     tail = frames[-depth:]
     return tuple(
         "%s:%d:%s" % (os.path.basename(f.filename), f.lineno, f.name) for f in tail
@@ -261,14 +204,6 @@ def _stack_summary(depth: int = 10) -> Tuple[str, ...]:
 
 
 class _SpawnRecorder:
-    """Context manager patching `subprocess.Popen.__init__` to log every
-    construction with its call stack, then restoring the original
-    unconditionally. Patches `Popen.__init__` specifically (not
-    `subprocess.run`/`subprocess.call`) because every subprocess-spawning
-    path in the standard library funnels through `Popen` construction --
-    patching there catches `run`, `call`, `check_output`, and a bare
-    `Popen(...)` call alike, in one seam.
-    """
 
     def __init__(self) -> None:
         self.records: List[SpawnRecord] = []
@@ -319,11 +254,6 @@ def enumerate_spawn_set_for_corpus() -> Dict[str, List[SpawnRecord]]:
     return {label: enumerate_spawn_set(payload) for label, payload in CORPUS_PAYLOADS.items()}
 
 
-# ---------------------------------------------------------------------------
-# AC9 -- message-bytes baseline.
-# ---------------------------------------------------------------------------
-
-
 def _resolved_python3_invocation_prefix() -> str:
     from coordinator_core.bash_guards.dispatch_checks import _bt_python3_invocation
 
@@ -367,17 +297,7 @@ def capture_message_baseline() -> Dict[str, int]:
     return baseline
 
 
-# ---------------------------------------------------------------------------
-# AC10 -- roster baseline.
-# ---------------------------------------------------------------------------
-
-
 def capture_roster_baseline() -> Tuple[Dict[str, Any], ...]:
-    """The full `roster.guard_roster()` snapshot -- every `GuardRosterEntry`
-    field (`id`, `matchers`, `band`, `fail_closed`, AND `script`, per AC10's
-    explicit note that a narrower id-and-matchers-only check would miss a
-    `script` regression), as plain, JSON-serialisable dicts sorted by `id`
-    for deterministic ordering."""
     from coordinator_core.bash_guards.roster import guard_roster
 
     entries = sorted(guard_roster(), key=lambda e: e.id)
@@ -393,17 +313,7 @@ def capture_roster_baseline() -> Tuple[Dict[str, Any], ...]:
     )
 
 
-# ---------------------------------------------------------------------------
-# AC11 -- executed-set-and-verdicts baseline.
-# ---------------------------------------------------------------------------
-
-
 def _summarize_verdict(envelope: Optional[Dict[str, Any]]) -> str:
-    """A compact, comparable verdict label for one guard's raw return --
-    `None` (silent allow), `"deny"`/`"allow"`/`"ask"` (a real
-    `hookSpecificOutput.permissionDecision`), or `"advisory"` (a non-`None`
-    envelope carrying prose but no `permissionDecision`, e.g. an
-    `additionalContext`-only rewrite)."""
     if envelope is None:
         return "none"
     hso = envelope.get("hookSpecificOutput") if isinstance(envelope, dict) else None

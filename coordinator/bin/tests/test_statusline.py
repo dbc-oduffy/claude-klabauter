@@ -1,20 +1,3 @@
-"""test_statusline — coverage for `coordinator/bin/statusline.py`: the C3
-pass-through statusline that writes the context-usage sidecar (C1,
-`coordinator_core/session/context_usage_sidecar.py`) and preserves any
-user-configured inner statusline via `coordinator/settings.json`'s
-`statusLineCommand` key.
-
-Every test invokes the script as a subprocess (its real invocation shape —
-Claude Code execs it with the harness JSON on stdin) rather than importing
-it, so the module-level `sys.path` bootstrap and `if __name__ == "__main__"`
-entry point are exercised exactly as they run in production. `TMPDIR` is
-pointed at a per-test directory so sidecar writes (which resolve through
-`tempfile.gettempdir()`) never touch the real machine tempdir.
-
-Spec backlink: C3 of `docs/plans/2026-08-17-the-advisory-reads-the-harness.md`.
-
-Run: python3 -m pytest coordinator/bin/tests/test_statusline.py -q -p no:xdist
-"""
 
 from __future__ import annotations
 
@@ -34,9 +17,6 @@ if str(_REPO_ROOT) not in sys.path:
 
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
-# Every test here drives the statusline wrapper as a real spawned process --
-# the wrapper's whole contract is stdin/stdout fidelity across a process
-# boundary, which a faked process cannot exercise.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _SCRIPT = _BIN_DIR / "statusline.py"
@@ -65,10 +45,6 @@ def _run(stdin_bytes: bytes, tmp_path: Path, extra_env: dict[str, str] | None = 
     env = dict(os.environ)
     env["TMPDIR"] = str(tmp_path)
     # The sidecar lives under the SETTINGS HOME, not a tempdir --
-    # `context_usage_sidecar.sidecar_path` carries that as an explicit
-    # negative-spec ("this is NOT a tempdir path. It was one."). Without this
-    # the CLI wrote into the real ~/.coordinator-claude-settings and the
-    # assertions looked for a file nothing had produced since the move.
     env["COORDINATOR_SETTINGS_HOME"] = str(tmp_path)
     env.pop("COORDINATOR_STATUSLINE_DEBUG", None)
     if extra_env:
@@ -147,7 +123,6 @@ def test_inner_command_invoked_with_identical_stdin_and_stdout_reproduced(tmp_pa
 
     assert result.returncode == 0
     assert result.stdout == b"ECHO:" + _SAMPLE_STDIN
-    # sidecar write (step 1) still happened ahead of the pass-through (step 2)
     assert _sidecar_path(tmp_path, "test-session-abc").exists()
 
 
@@ -160,7 +135,7 @@ def test_inner_command_failure_does_not_crash_the_wrapper(tmp_path):
     result = _run(_SAMPLE_STDIN, tmp_path)
 
     assert result.returncode == 0
-    assert result.stdout  # still produced a visible line, never blank/crash
+    assert result.stdout
 
 
 def test_malformed_stdin_json_does_not_crash(tmp_path):
@@ -169,25 +144,20 @@ def test_malformed_stdin_json_does_not_crash(tmp_path):
     result = _run(b"{not valid json at all", tmp_path)
 
     assert result.returncode == 0
-    assert result.stdout  # own minimal line still produced
-    # no sidecar could have been written — no session_id was resolvable
+    assert result.stdout
     assert list(tmp_path.glob("context-usage-*")) == []
 
 
 def test_sidecar_write_failure_still_yields_a_status_line(tmp_path):
     _SETTINGS_PATH.unlink(missing_ok=True)
 
-    # Point TMPDIR at a file (not a directory) so the sidecar write's
-    # os.replace/write_bytes fails with OSError, exercising the
-    # except Exception: swallow around write_usage without touching its
-    # internals.
     not_a_dir = tmp_path / "not-a-directory"
     not_a_dir.write_text("occupied")
 
     result = _run(_SAMPLE_STDIN, not_a_dir)
 
     assert result.returncode == 0
-    assert result.stdout  # status line still rendered despite the sidecar failure
+    assert result.stdout
 
 
 def test_selftest_prints_resolved_sidecar_path(tmp_path):

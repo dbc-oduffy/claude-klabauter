@@ -74,7 +74,6 @@ class TestOrphanedOpenIsAdoptedBeforeReconcile:
         def fake_p4_run(port, user, client, args, *, spec_input=None):
             spawned.append(list(args))
             if "fstat" in args:
-                # open in CL-A (an exited session's own CL), not effective_cl.
                 return runner.P4Result(
                     ok=True,
                     stdout=_fstat_block("//bob-ws/orphan.uasset", action="edit", change="55"),
@@ -92,10 +91,7 @@ class TestOrphanedOpenIsAdoptedBeforeReconcile:
         reopen_call = next(c for c in spawned if "reopen" in c)
         assert reopen_call[reopen_call.index("-c") + 1] == "101"
         assert "orphan.uasset" in reopen_call
-        # adoption path: fstat, reopen, reconcile, revert, shelve -- 5 spawns.
         assert len(spawned) == 5
-        # never restored to read-only: the file stays open (action present
-        # at step 0), so it is excluded from D4a's restore set.
         assert outcome.restored == 0
 
 
@@ -123,9 +119,6 @@ class TestOtherClientOpenIsNeverReopened:
         def fake_p4_run(port, user, client, args, *, spec_input=None):
             spawned.append(list(args))
             if "fstat" in args:
-                # opened by ANOTHER client -- this client's own fstat record
-                # carries no `change`/`action` at all (that info surfaces
-                # under `otherOpen0`, which this module never reads).
                 return runner.P4Result(
                     ok=True, stdout=_fstat_block("//other-ws/peer.uasset")
                 )
@@ -182,9 +175,3 @@ class TestNoOrphanPathSpendsFourSpawns:
         assert outcome.adopted == 0
         assert len(spawned) == 4
 
-# `TestNegativeWithoutReopenShelveSilentlyOmitsTheFile` used to live here.
-# It monkeypatched `_fstat_records` to a hand-stripped stub, so its
-# assertion followed from the stub by construction and would have passed
-# identically with the adoption branch deleted. Deleted; the real negative
-# is `TestOtherClientOpenIsNeverReopened` above, which feeds real fstat
-# parser output.

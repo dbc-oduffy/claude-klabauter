@@ -1,12 +1,3 @@
-"""test_merge_recovery_and_tag_cut — pytest tests for merge-recovery-and-tag-cut.py.
-
-Covers the two genuinely imperative cores ported from DoE-claude's
-merging-to-main SKILL.md: the idempotent annotated-tag cut (`cut_tag`) and the
-`tag_prefix:` frontmatter parse (`resolve_tag_prefix`), including its
-fail-loud quoted-value branch.
-
-Spec backlink: coordinator/bin/merge-recovery-and-tag-cut.py module docstring.
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -15,17 +6,7 @@ from pathlib import Path
 
 import pytest
 
-# Declared, not excused: 6 of this file's tests spawn a real git process because the
-# property under test is git's own behaviour -- idempotent annotated-tag cut/push
-# (test_cut_tag_*) and branch/HEAD state after a real recovery-branch dance
-# (test_*_verdict_*), neither reproducible against a mock. Each mutation test needs
-# its own fresh repo (tag-cut idempotency, branch creation, and push-landing checks
-# all depend on starting from a known-clean state), so the per-test
-# `_init_repo_with_origin` fixture is not hoisted to module scope -- see
-# test_verify_shipped.py's docstring for the failure mode that hoisting produces here.
 # The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is explicitly
-# not the route for this file -- coordinator_core/tests/test_no_new_spawning_tests.py
-# Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _BIN_DIR = Path(__file__).parent.parent
@@ -47,10 +28,6 @@ resolve_tag_prefix = _mod.resolve_tag_prefix
 cmd_recovery_branch = _mod.cmd_recovery_branch
 
 
-# ---------------------------------------------------------------------------
-# Helpers — minimal git repo + bare "origin" remote factory
-# ---------------------------------------------------------------------------
-
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True
@@ -58,7 +35,6 @@ def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
 
 
 def _init_repo_with_origin(tmp_path: Path) -> Path:
-    """Bare 'origin' remote + a work clone with one commit on main, pushed."""
     origin = tmp_path / "origin.git"
     _git(["init", "--bare", str(origin)], cwd=tmp_path)
 
@@ -76,10 +52,6 @@ def _init_repo_with_origin(tmp_path: Path) -> Path:
     return work
 
 
-# ---------------------------------------------------------------------------
-# cut_tag
-# ---------------------------------------------------------------------------
-
 def test_cut_tag_creates_and_pushes_annotated_tag(tmp_path: Path) -> None:
     work = _init_repo_with_origin(tmp_path)
     head_sha = _git(["rev-parse", "HEAD"], cwd=work).stdout.strip()
@@ -89,19 +61,16 @@ def test_cut_tag_creates_and_pushes_annotated_tag(tmp_path: Path) -> None:
     assert cut is True
     assert merge_sha == head_sha
 
-    # Tag object is annotated (not lightweight) and peels to the commit.
     tag_type = _git(["cat-file", "-t", "v1.0.0"], cwd=work).stdout.strip()
     assert tag_type == "tag"
     peeled = _git(["rev-parse", "v1.0.0^{}"], cwd=work).stdout.strip()
     assert peeled == head_sha
 
-    # Pushed to origin, not just local.
     origin_tags = _git(["ls-remote", "--tags", "origin"], cwd=work).stdout
     assert "refs/tags/v1.0.0" in origin_tags
 
 
 def test_cut_tag_is_idempotent_on_retry(tmp_path: Path) -> None:
-    """Second call against an unchanged origin/main skips — no re-tag error."""
     work = _init_repo_with_origin(tmp_path)
 
     first_cut, first_sha = cut_tag(work, "v1.0.0")
@@ -113,8 +82,6 @@ def test_cut_tag_is_idempotent_on_retry(tmp_path: Path) -> None:
 
 
 def test_cut_tag_must_contain_passes_when_ancestor(tmp_path: Path) -> None:
-    """must_contain set to a descendant of merge_sha: ancestor check passes,
-    tag still cut normally."""
     work = _init_repo_with_origin(tmp_path)
     merge_sha = _git(["rev-parse", "HEAD"], cwd=work).stdout.strip()
 
@@ -132,8 +99,6 @@ def test_cut_tag_must_contain_passes_when_ancestor(tmp_path: Path) -> None:
 
 
 def test_cut_tag_must_contain_fails_loud_when_not_ancestor(tmp_path: Path) -> None:
-    """must_contain pointing at an unrelated commit: refuses to cut, no tag
-    is created."""
     work = _init_repo_with_origin(tmp_path)
     merge_sha = _git(["rev-parse", "HEAD"], cwd=work).stdout.strip()
 
@@ -162,10 +127,6 @@ def _run_git_allow_fail(args: list[str], cwd: Path) -> str:
     )
     return result.stdout
 
-
-# ---------------------------------------------------------------------------
-# resolve_tag_prefix
-# ---------------------------------------------------------------------------
 
 def test_resolve_tag_prefix_extracts_value(tmp_path: Path) -> None:
     config = tmp_path / "coordinator.local.md"
@@ -197,7 +158,7 @@ def test_resolve_tag_prefix_absent_key_returns_empty(tmp_path: Path) -> None:
         "---\n"
         "project_type: general\n"
         "---\n"
-        "tag_prefix: should-not-be-seen\n",  # outside frontmatter — must be ignored
+        "tag_prefix: should-not-be-seen\n",
         encoding="utf-8",
     )
     assert resolve_tag_prefix(config) == ""
@@ -215,16 +176,6 @@ def test_resolve_tag_prefix_quoted_value_fails_loud(tmp_path: Path) -> None:
         resolve_tag_prefix(config)
     assert exc_info.value.code == 1
 
-
-# ---------------------------------------------------------------------------
-# recovery-branch liveness gate
-# ---------------------------------------------------------------------------
-#
-# Spec backlink: coordinator_core.session.worktree_safety.branch_mutation_verdict
-# and its precedent application in coordinator/lib/session_ensure_branch.py
-# (commit bc756ce3f534). This subcommand is strictly worse than that seam
-# because it hard-resets main in addition to switching branches, so it MUST
-# consult the same verdict before its first git mutation.
 
 class _FakeVerdict:
     def __init__(self, outcome: str, reason: str) -> None:

@@ -54,27 +54,10 @@ from coordinator_core.contract.cockpit_schema.entities import (
 )
 from coordinator_core.contract.cockpit_schema.provenance import ProvenanceEnvelope
 
-# Contract version (semver) — MAJOR bump on any breaking field change, MINOR
 # bump on additive/non-breaking changes (see DECISIONS.md two-axis scheme,
 # D19+). Ported verbatim from `index.ts`'s `CONTRACT_VERSION`. Single literal
-# source of truth is `emit_schema.py` — the dependency-free leaf module that
-# must stay independently importable/runnable as the
-# `coordinator-cockpit-emit-schema` console-script entrypoint regardless of
-# this package's registry-wiring state (see that module's top-of-file
-# comment on the still-open canonical re-home question). Re-exported here,
-# not redeclared — but via PEP 562 module `__getattr__` (lazy), NOT a
 # top-of-file `from .emit_schema import CONTRACT_VERSION`. An eager import
-# pulls `emit_schema` into `sys.modules` as a side effect of importing THIS
-# package, which collides with `python -m coordinator_core.contract.
-# cockpit_schema.emit_schema` (DoE's `regen-cockpit-schema.py:208`
-# invocation shape) — runpy finds the submodule already imported under its
-# real name and emits a `RuntimeWarning` on DoE's release-critical
-# regeneration console, straight past their "verify no unexpected drift"
 # line. Lazy attribute access defers the import until `CONTRACT_VERSION` is
-# actually read, so plain `import cockpit_schema` (what happens first during
-# `-m emit_schema`) never touches `emit_schema` at all. A guard test
-# (`tests/test_contract_version_single_source.py`) fails loud if a second
-# literal is ever reintroduced.
 def __getattr__(name: str) -> Any:
     if name == "CONTRACT_VERSION":
         from coordinator_core.contract.cockpit_schema.emit_schema import (
@@ -84,9 +67,6 @@ def __getattr__(name: str) -> Any:
         return CONTRACT_VERSION
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-# Every emittable entity, keyed by stable kebab-case name (used as the JSON
-# Schema filename and the round-trip test label). ProvenanceEnvelope is
-# included as a shared type so the emitted schema set is self-contained.
 # Ported verbatim (key order + key set) from `index.ts`'s `ENTITY_SCHEMAS`.
 ENTITY_SCHEMAS: dict[str, Any] = {
     "provenance-envelope": ProvenanceEnvelope,

@@ -38,8 +38,6 @@ _LIB_DIR = Path(__file__).resolve().parent.parent / "lib"
 
 @pytest.fixture(scope="module")
 def cc_invoke_mod():
-    """Load `cc_invoke` by location, with `bin/lib` on `sys.path` for its own
-    bare sibling imports (`engine_bootstrap` and friends)."""
     if str(_LIB_DIR) not in sys.path:
         sys.path.insert(0, str(_LIB_DIR))
     spec = importlib.util.spec_from_file_location(
@@ -52,8 +50,6 @@ def cc_invoke_mod():
 
 
 def _block(monkeypatch, blocked_prefix: str) -> None:
-    """Make every `coordinator_core...` import under `blocked_prefix` raise
-    ImportError, exactly as a bare interpreter with no engine would."""
     real_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
@@ -68,7 +64,6 @@ def _block(monkeypatch, blocked_prefix: str) -> None:
 
 
 def test_no_engine_at_all_returns_none(cc_invoke_mod, monkeypatch):
-    """The reported crash: nothing under `coordinator_core` is importable."""
     _block(monkeypatch, "coordinator_core")
     assert cc_invoke_mod._try_in_process_warm_reach("engine.drift", {}, ".") is None
 
@@ -104,9 +99,6 @@ def test_each_import_site_degrades_independently(cc_invoke_mod, monkeypatch, blo
 
 
 def test_a_non_import_error_still_propagates(cc_invoke_mod, monkeypatch):
-    """Negative spec: the guards are narrowed to ImportError on the import
-    line, not a blanket swallow. A defect inside `is_warm_enabled()` is a
-    real defect and must not be laundered into a silent cold-spawn."""
     import coordinator_core.warm.settings as settings_mod
 
     def boom():

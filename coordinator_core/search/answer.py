@@ -85,23 +85,10 @@ from coordinator_core.search.sources_read import (
 
 @dataclass
 class ReadSource:
-    """`engine.Source` implementation wrapping a parsed file-read invocation
-    (`sources_read.ReadSpec`). Defined here rather than in `engine.py`: `sources_read`
-    already imports FROM `engine`, so `engine` importing `sources_read` back would be
-    a cycle.
-
-    Says what actually happened in ITS OWN vocabulary ("read in-process, no
-    subprocess spawned") rather than reusing grep's "searched in-process: N file(s)"
-    note -- there is no file count or match rate for a read, so grep's note would
-    either lie or need read-shaped fields grep never populates.
-    """
 
     spec: ReadSpec
 
     def execute(self, cwd: str, stop_after: Optional[int]) -> SourceOutcome:
-        # `stop_after` (the stage pipeline's early-stop bound) has no read-shape
-        # analogue -- a read has no "stop scanning early" concept, it reads the
-        # whole (already render-cap-gated, see `clip` below) file.
         text = self.spec.produce(cwd)
         return SourceOutcome(
             lines=text.splitlines(),
@@ -133,28 +120,15 @@ class ReadSource:
 
     def finalize_note(self, note_base: str, cap_hit: Optional[str], truncated: bool,
                        clipped: bool) -> str:
-        # A read never truncates (declines via `Unanswerable` instead, both in
-        # `execute` and in `clip` above) -- nothing to fold in.
         return note_base
 
 
 @dataclass
 class LsSource:
-    """`engine.Source` implementation wrapping a parsed `ls` invocation
-    (`sources_listdir.LsSpec`). Defined here rather than in `engine.py` for the
-    same reason `ReadSource` is (C3b): `sources_listdir` already imports FROM
-    `engine`, so `engine` importing it back would be a cycle.
-
-    Own vocabulary, same as `ReadSource`: "listed in-process", no file count or
-    match rate to report, and an empty directory listing renders as genuinely
-    empty output rather than grep's "(no matches)".
-    """
 
     spec: LsSpec
 
     def execute(self, cwd: str, stop_after: Optional[int]) -> SourceOutcome:
-        # `stop_after` has no `ls` analogue, same as `ReadSource.execute` -- the
-        # collated entry list is produced whole, never scanned incrementally.
         lines = _run_ls(self.spec, cwd)
         return SourceOutcome(
             lines=lines,
@@ -166,52 +140,22 @@ class LsSource:
         )
 
     def clip(self, body: str) -> Tuple[str, bool]:
-        """A clipped directory listing is not a faithful listing -- decline
-        outright, mirroring `ReadSource.clip` (C3b): unlike a search, a clipped
-        `ls` body looks like a complete listing with no way to tell it was cut."""
         if len(body) <= MAX_RENDER_BYTES:
             return body, False
         raise Unanswerable("ls body exceeds the render cap")
 
     def finalize_note(self, note_base: str, cap_hit: Optional[str], truncated: bool,
                        clipped: bool) -> str:
-        # `ls` never truncates (declines via `Unanswerable` instead, both in
-        # `execute` -- through `sources_listdir.run`'s own decline paths -- and in
-        # `clip` above) -- nothing to fold in.
         return note_base
 
 
 @dataclass
 class PowerShellSource:
-    """`engine.Source` implementation wrapping a parsed PowerShell read/listing
-    invocation (`sources_powershell.ContentSpec`/`ChildItemSpec`, C10b). Defined here
-    rather than in `engine.py` for the same reason `ReadSource`/`LsSource` are:
-    `sources_powershell` already imports FROM `engine`, so `engine` importing it back
-    would be a cycle.
-
-    Own vocabulary, same split as the bash sources: a `ContentSpec` (`Get-Content`)
-    reads like `ReadSource`, a `ChildItemSpec` (`Get-ChildItem`) lists like `LsSource`
-    -- picked at execute-time on `isinstance`, since both specs share this one
-    `Source` wrapper rather than each getting its own (there is exactly one
-    dispatch point, `sources_powershell.parse_powershell_segment`, and mirroring its
-    two-shape union here keeps `_plan_for_powershell` from having to branch twice).
-    """
 
     spec: Union[ContentSpec, ChildItemSpec]
 
     def execute(self, cwd: str, stop_after: Optional[int]) -> SourceOutcome:
-        # `stop_after` has no PowerShell-source analogue, same as
-        # `ReadSource.execute`/`LsSource.execute` -- both `ContentSpec.produce` and
-        # `run_childitem` produce their result whole, never scanned incrementally.
         if isinstance(self.spec, ContentSpec):
-            # `newline=os.linesep`: `[Environment]::NewLine` on the box the real
-            # PowerShell host would have run on IS `os.linesep` on that same box --
-            # this process and that host share one platform, so the value is
-            # DERIVED, not guessed (test_powershell_shapes_differential.py's own
-            # `_produce_ours` establishes the identical resolution against a real
-            # host). `ContentSpec.produce`'s own docstring forbids a caller from
-            # guessing this argument; `os.linesep` is always establishable, so no
-            # decline branch is needed here for the newline resolution itself.
             text = self.spec.produce(cwd, newline=os.linesep)
             return SourceOutcome(
                 lines=text.splitlines(),
@@ -232,30 +176,16 @@ class PowerShellSource:
         )
 
     def clip(self, body: str) -> Tuple[str, bool]:
-        """A clipped PowerShell read/listing is not a faithful one -- decline
-        outright, mirroring `ReadSource.clip`/`LsSource.clip`."""
         if len(body) <= MAX_RENDER_BYTES:
             return body, False
         raise Unanswerable("PowerShell read/listing body exceeds the render cap")
 
     def finalize_note(self, note_base: str, cap_hit: Optional[str], truncated: bool,
                        clipped: bool) -> str:
-        # Neither `Get-Content` nor `Get-ChildItem` truncates here (both decline via
-        # `Unanswerable` instead, in `execute` and in `clip` above) -- nothing to
-        # fold in, mirroring `ReadSource.finalize_note`/`LsSource.finalize_note`.
         return note_base
 
 
 def plan_for(cmd: str, tool_name: str = "Bash") -> Optional[AnswerPlan]:
-    """Build an AnswerPlan for `cmd`, or None if it is not answerable in-process.
-
-    `tool_name` (C10b) selects the dialect: `"PowerShell"` routes through
-    `_plan_for_powershell` and none of the bash branches below; anything else
-    (including the default `"Bash"`, preserving every existing caller's behavior
-    unchanged) takes the pre-existing bash recognition chain. Keyed off the TOOL
-    NAME the guard payload already carries, never off `cmd`'s own basename table --
-    see this module's own docstring negative-spec for why.
-    """
     if not cmd:
         return None
     if tool_name == "PowerShell":
@@ -274,8 +204,6 @@ def plan_for(cmd: str, tool_name: str = "Bash") -> Optional[AnswerPlan]:
 
 
 def _plan_for_grep(classification) -> Optional[AnswerPlan]:
-    """The grep branch, unchanged (AC4) -- kept as its own function so the read
-    branch beside it can be added without touching this logic at all."""
     if not classification.has_shape(_Shape.GREP_VIA_BASH):
         return None
     try:
@@ -287,11 +215,9 @@ def _plan_for_grep(classification) -> Optional[AnswerPlan]:
 
     first_tokens, piped_into = segments[0]
     if piped_into or not first_tokens:
-        return None  # `<cmd> | grep ...` -- the input does not exist until that runs
+        return None
     if os.path.basename(first_tokens[0]) not in GREP_FAMILY:
         return None
-    # Every later segment must be pipe-connected. A `;`/`&&`-joined segment is separate
-    # work sequenced around the grep, and answering only the grep half would drop it.
     if not all(piped for _tokens, piped in segments[1:]):
         return None
 
@@ -415,7 +341,6 @@ def _plan_for_powershell(cmd: str) -> Optional[AnswerPlan]:
 
 
 def answer(cmd: str, cwd: str = ".", tool_name: str = "Bash") -> Optional[str]:
-    """Return the rendered answer for `cmd`, or None to decline."""
     plan = plan_for(cmd, tool_name=tool_name)
     if plan is None:
         return None
@@ -426,9 +351,6 @@ def answer(cmd: str, cwd: str = ".", tool_name: str = "Bash") -> Optional[str]:
     except OSError:
         return None
 
-    # A truncated source feeding a stage that aggregates or reads from the end
-    # produces a confidently wrong number. Decline rather than caveat it -- the
-    # agent has no reason to re-check a plausible-looking result.
     if outcome.truncated and not plan.tolerates_truncation:
         return None
 
@@ -440,9 +362,6 @@ def answer(cmd: str, cwd: str = ".", tool_name: str = "Bash") -> Optional[str]:
             return None
 
     if not plan.stages and outcome.raw_text is not None:
-        # A bare, stage-free read renders from its own raw-text representation,
-        # verbatim -- no line-list round-trip, which is what would silently add a
-        # trailing newline a file never had, or collapse a CRLF terminator.
         body = outcome.raw_text
     else:
         body = "\n".join(lines)
@@ -458,18 +377,6 @@ def answer(cmd: str, cwd: str = ".", tool_name: str = "Bash") -> Optional[str]:
 
 
 def _render(body: str, note: str, empty_body_text: str) -> str:
-    """Wrap the source's own output in a short, honest provenance note.
-
-    The output comes FIRST and verbatim: the agent asked a question and this is the
-    answer to it. Provenance goes underneath, where it informs the next invocation
-    without displacing the result.
-
-    Never branches on source type (C3): `note` and `empty_body_text` are already
-    fully composed by the `Source` that produced `outcome` in `answer()` above --
-    grep's "(no matches)" is search vocabulary that must not apply to a read's
-    genuinely empty output (`cat empty.txt` prints nothing, not a literal string),
-    so a read source hands this an empty `empty_body_text` instead.
-    """
     if not body:
         body = empty_body_text
     return body + "\n\n" + note

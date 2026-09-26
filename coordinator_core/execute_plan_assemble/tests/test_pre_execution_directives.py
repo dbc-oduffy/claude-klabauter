@@ -29,7 +29,6 @@ def test_autonomous_omits_d1_and_d2():
         PLAN_PATH, autonomous=True
     )
     assert [d["id"] for d in directives] == ["d3", "d4"]
-    # Same judgment points regardless of autonomous — the gates still gate.
     assert [jp["id"] for jp in judgment_points] == [
         "j-remaining-context",
         "j-executability-gate",
@@ -66,7 +65,6 @@ def test_d3_and_d4_depend_on_the_three_gates():
     assert d4["depends_on"]
     assert set(d4["depends_on"]) <= judgment_point_ids
 
-    # d4 additionally depends on the wave-map point; d3 does not.
     assert "j-wave-map" in d4["depends_on"]
     assert "j-wave-map" not in d3["depends_on"]
 

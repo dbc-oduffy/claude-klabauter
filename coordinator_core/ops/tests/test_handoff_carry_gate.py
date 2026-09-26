@@ -1,15 +1,3 @@
-"""Characterization + regression tests for coordinator_core.ops.handoff_carry_gate.
-
-The load-bearing cases are the two refusals the gate still owns —
-`test_terminal_disposition_without_detail_is_refused_not_a_free_bypass` and
-`test_missing_carry_id_fails_loud` — plus
-`test_indefinite_carry_is_allowed`, which pins the PM ruling that carry depth
-is NOT a defect: no count, no limit, no refusal on depth.
-
-Spec backlink: DoE-claude coordinator/schemas/handoff.schema.json
-    `carried_items`; coordinator/skills/handoff/SKILL.md § Cascading
-    unresolved items.
-"""
 from __future__ import annotations
 
 from coordinator_core.ops.handoff_carry_gate import evaluate_gate, main
@@ -25,11 +13,6 @@ def _item(carry_id="cf-windows-validation-3f2a1c", disposition="carried", **over
     return d
 
 
-# ---------------------------------------------------------------------------
-# Carries are indefinite
-# ---------------------------------------------------------------------------
-
-
 def test_carried_item_is_allowed():
     result = evaluate_gate([_item()])
     assert result.ok
@@ -37,8 +20,6 @@ def test_carried_item_is_allowed():
 
 
 def test_indefinite_carry_is_allowed():
-    """Depth is not a defect. A legacy carry_count in the frontmatter is inert —
-    the gate neither reads it nor refuses on it, at any value."""
     for legacy_count in (1, 3, 8, 40):
         result = evaluate_gate([_item(carry_count=legacy_count)])
         assert result.ok, f"carry_count={legacy_count} must not be refused"
@@ -75,14 +56,7 @@ def test_blocked_disposition_with_detail_is_ok():
     assert result.ok
 
 
-# ---------------------------------------------------------------------------
-# Fail-loud on undeclared state — never fail open
-# ---------------------------------------------------------------------------
-
-
 def test_terminal_disposition_without_detail_is_refused_not_a_free_bypass():
-    """A disposition of closed/spun_off/blocked with NO detail is not a rubber
-    stamp — it must name the reason, else it is refused."""
     for disposition in ("closed", "spun_off", "blocked"):
         result = evaluate_gate([_item(disposition=disposition)])
         assert not result.ok, f"disposition={disposition} with no detail should be refused"
@@ -103,11 +77,6 @@ def test_unrecognized_disposition_fails_loud():
 def test_missing_disposition_fails_loud():
     result = evaluate_gate([{"carry_id": "cf-x-abc123", "description": "x"}])
     assert not result.ok
-
-
-# ---------------------------------------------------------------------------
-# CLI (main()) — read from disk, exit-code contract
-# ---------------------------------------------------------------------------
 
 
 def _write_handoff(tmp_path, carried_items_yaml_block: str):
@@ -162,8 +131,6 @@ def test_cli_exit_2_on_missing_path():
 
 
 def test_cli_exit_2_on_stale_override_reason_trailing_arg(tmp_path):
-    """A stale caller still passing --override-reason must fail loud, not be
-    silently swallowed and slide through to the ordinary refusal path."""
     p = _write_handoff(
         tmp_path,
         "carried_items:\n"

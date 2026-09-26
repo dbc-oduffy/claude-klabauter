@@ -1,23 +1,3 @@
-"""coordinator/bin/tests/test_publish_row_failure_aggregates_gates.py —
-regression test for the 2026-08-14 aggregate-instead-of-abort fix in
-`publish.py::main`: a failing row used to `return 1` BEFORE any end-of-run
-gate (`dispatch_end_of_run_identity_check`, `..._install_doc_payload_check`,
-`..._unscanned_published_check`, `..._function_gate`,
-`..._entrypoint_gate`) ever ran, so a round with both a row failure and an
-independent gate defect only ever surfaced the row failure — discovering the
-gate defect cost a second round, after the row failure was fixed and the
-round re-run clean. This module pins the fixed behaviour: the gates now run
-regardless of `failed_row_names`, and their findings are reported in the
-SAME round as the row failure, while the row failure keeps exit-code
-priority (1), matching the pre-fix contract for a row-failure-only round.
-
-Reuses `test_publish_row_isolation.py`'s fixture shape (same fake-row/fake-
-process_target wiring) rather than re-deriving it, so this test exercises
-`main()`'s real per-row loop and real end-of-run gate dispatch, not a
-hand-rolled stand-in for either.
-
-Run: python -m pytest coordinator/bin/tests/test_publish_row_failure_aggregates_gates.py -q
-"""
 
 from __future__ import annotations
 
@@ -40,13 +20,6 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 def _init_git_repo(root: Path) -> None:
     # IDEMPOTENT ON PURPOSE. This helper is called from inside the
     # monkeypatched `load_targets` fake, so it runs once per RESOLUTION, not
-    # once per test. `publish.py` resolves targets twice now -- `main()` with
-    # the `--target` filter, and `_declared_repo_roots_carrying_
-    # coordinator_core` unfiltered -- so a second call re-seeded an already
-    # committed repo and `git commit` failed "nothing to commit, working tree
-    # clean". Guarding here rather than counting call sites: a fixture that
-    # cannot be invoked twice encodes a production call count no test should
-    # be asserting by accident.
     if (root / ".git").is_dir():
         return
     def _git(*args: str) -> None:
@@ -66,10 +39,6 @@ def _init_git_repo(root: Path) -> None:
     keeper.write_text("", encoding="utf-8")
     _git("add", ".gitkeep")
     _git("commit", "-m", "chore: init")
-    # A self-origin the dest is level with: `publish.main` refuses a dest whose
-    # branch tracks nothing (§ `percolate.dest_refresh.refresh_dest_from_origin`).
-    # Same shape, and its rationale, as `coordinator/tests/
-    # test_publish_mirror_bare_name_expansion.py :: _init_git_repo`.
     _git("remote", "add", "origin", str(root))
     _git("fetch", "--no-tags", "origin")
     _git("branch", "--set-upstream-to=origin/main", "main")
@@ -93,10 +62,6 @@ _FAILING_ROW = "row-b"
 
 
 def _wire_common_fakes(monkeypatch, tmp_path, *, identity_ok: bool, entrypoint_ok: bool):
-    """Same shape as `test_publish_row_isolation.py::_wire_common_fakes`,
-    with `dispatch_end_of_run_identity_check`/`..._entrypoint_gate`
-    monkeypatched to a caller-supplied verdict (rather than always True) so
-    this module can assert on THEIR outcome reaching the final report."""
 
     def fake_row(name: str) -> str:
         src = tmp_path / f"src-{name}"
@@ -175,9 +140,6 @@ def _fake_process_target_all_ok(target, setup_dir, totals, **kwargs):
 
 
 def test_row_failure_still_runs_end_of_run_gates(monkeypatch, tmp_path, capsys):
-    """The core fix: a failing row must NOT short-circuit past the
-    end-of-run gates — they still run this same round, over whatever
-    successfully synced."""
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     identity_calls, entrypoint_calls = _wire_common_fakes(
         monkeypatch, tmp_path, identity_ok=True, entrypoint_ok=True
@@ -188,14 +150,10 @@ def test_row_failure_still_runs_end_of_run_gates(monkeypatch, tmp_path, capsys):
 
     assert identity_calls, "identity gate never ran despite a row failure"
     assert entrypoint_calls, "entrypoint gate never ran despite a row failure"
-    # A row failure still refuses at exit 1, unchanged from before this fix.
     assert rc == 1
 
 
 def test_row_failure_plus_gate_failure_both_reported_same_round(monkeypatch, tmp_path, capsys):
-    """A round with BOTH a failing row AND an independent gate defect must
-    report both in the SAME round — this is the exact waste the fix closes
-    (six rounds to discover six sequential single-defect classes)."""
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, identity_ok=False, entrypoint_ok=True)
     monkeypatch.setattr(publish, "process_target", _fake_process_target_one_fails)
@@ -205,13 +163,10 @@ def test_row_failure_plus_gate_failure_both_reported_same_round(monkeypatch, tmp
 
     assert "Rows FAILED" in combined and _FAILING_ROW in combined
     assert "end-of-run identity check FAILED" in combined
-    # Row failure keeps exit-code priority (1), not the gate's own code (2).
     assert rc == 1
 
 
 def test_three_failing_rows_report_all_three_not_one(monkeypatch, tmp_path, capsys):
-    """Row-level aggregation (pre-existing, pinned here alongside the new
-    gate aggregation): every failing row is named, not just the first."""
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, identity_ok=True, entrypoint_ok=True)
 
@@ -230,8 +185,6 @@ def test_three_failing_rows_report_all_three_not_one(monkeypatch, tmp_path, caps
 
 
 def test_single_failing_row_exit_code_and_message_unchanged(monkeypatch, tmp_path, capsys):
-    """A lone failing row, every gate clean, still refuses exactly as
-    before this fix: exit 1, "Rows FAILED" naming it."""
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, identity_ok=True, entrypoint_ok=True)
     monkeypatch.setattr(publish, "process_target", _fake_process_target_one_fails)
@@ -245,9 +198,6 @@ def test_single_failing_row_exit_code_and_message_unchanged(monkeypatch, tmp_pat
 
 
 def test_no_row_failure_gate_failure_still_exits_2(monkeypatch, tmp_path, capsys):
-    """Sanity counterpart, unchanged from before this fix: every row
-    succeeds, but a gate fails — exit 2 (not 1), since bytes landed but
-    verification did not complete."""
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, identity_ok=False, entrypoint_ok=True)
     monkeypatch.setattr(publish, "process_target", _fake_process_target_all_ok)
@@ -261,7 +211,6 @@ def test_no_row_failure_gate_failure_still_exits_2(monkeypatch, tmp_path, capsys
 
 
 def test_all_clean_still_exits_0(monkeypatch, tmp_path):
-    """Happy path is unaffected by the reordering."""
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, identity_ok=True, entrypoint_ok=True)
     monkeypatch.setattr(publish, "process_target", _fake_process_target_all_ok)

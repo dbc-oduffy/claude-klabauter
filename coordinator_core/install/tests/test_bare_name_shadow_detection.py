@@ -39,7 +39,6 @@ _SHADOW = door_install.BARE_FORWARDER_NAME + door_install._SHADOWING_SIBLING_SUF
 
 
 def _bin(tmp_path: Path, *names: str) -> Path:
-    """A bin dir holding exactly `names`, each a stub file."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     for name in names:
@@ -86,17 +85,6 @@ def test_no_door_means_no_warning(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_posix_door_and_fallback_forwarder_share_one_name() -> None:
-    """The platform fact the test above has to patch around, asserted rather
-    than assumed.
-
-    On Windows the door (`coordinator-invoke.exe`) and the bare fallback
-    forwarder (`coordinator-invoke`) are two distinct filenames, which is what
-    makes "no door installed" a state the detector can recognise. On POSIX the
-    cutover collapsed them onto one extensionless name. If a later change
-    reintroduces a POSIX suffix -- or drops the Windows one -- this fails
-    loudly instead of letting the sibling test's patch quietly stop matching
-    the platform it claims to simulate.
-    """
     if sys.platform == "win32":
         assert door_install.DOOR_INSTALLED_NAME != door_install.BARE_FORWARDER_NAME
         assert door_install.DOOR_INSTALLED_NAME == door_install.BARE_FORWARDER_NAME + ".exe"
@@ -114,9 +102,6 @@ def test_door_without_a_shadow_is_quiet(tmp_path: Path) -> None:
 
 
 def test_one_warning_per_directory_not_per_entrypoint(tmp_path: Path) -> None:
-    """Both entrypoints resolve into the same settings-home `bin/`; the shadow
-    is a property of that directory, so a two-entrypoint report must not say it
-    twice."""
     bin_dir = _bin(tmp_path, _DOOR, _SHADOW, "coordinator-cockpit-emit-schema.cmd")
 
     warnings = _detect_bare_name_shadows([
@@ -128,9 +113,6 @@ def test_one_warning_per_directory_not_per_entrypoint(tmp_path: Path) -> None:
 
 
 def test_shadow_does_not_fail_the_probe(tmp_path: Path) -> None:
-    """A shadowed door resolves and executes -- `all_ok` is about whether the
-    chain works, and it does. Folding the warning in would turn a performance
-    defect into an install failure and send operators repairing a working PATH."""
     resolved = _bin(tmp_path, _DOOR, _SHADOW) / _DOOR
     report = PathResolutionReport(
         platform="Windows",

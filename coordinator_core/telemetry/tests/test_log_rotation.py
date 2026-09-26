@@ -1,15 +1,3 @@
-"""
-coordinator_core.telemetry.tests.test_log_rotation -- coverage for
-coordinator_core.telemetry.log_rotation's cascade-rotation primitive.
-
-Purpose: exercises the threshold gate, generation cascade ordering,
-oldest-generation deletion at K, content-preservation across rotation, the
-unwritable-target fail-open path, and the cheap no-op path -- see that
-module's own negative-spec for the guarantees under test.
-
-Spec backlink: state/audits/2026-08-15-fleet-degradation-forensics.md
-               docs/wiki/machine-load-norm.md
-"""
 
 from __future__ import annotations
 

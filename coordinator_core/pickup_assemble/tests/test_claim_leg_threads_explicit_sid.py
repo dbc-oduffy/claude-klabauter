@@ -47,9 +47,6 @@ def _seed_claim_dir(repo: Path, class_: str, basename: str, holder_sid: str) -> 
 
 
 def test_compute_claim_grant_recognises_scoped_id_as_self(tmp_path):
-    """`compute_claim_grant` resolves `held_by_self: True` for the SCOPED
-    id, proving `my_sid=_explicitly_scoped_session_id()` is actually wired
-    through to `claim_held_by_me` (not merely present in source text)."""
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     _seed_claim_dir(repo, "handoff", "h1.md", "sid-scoped")
@@ -64,9 +61,6 @@ def test_compute_claim_grant_recognises_scoped_id_as_self(tmp_path):
 
 
 def test_claim_already_self_held_recognises_scoped_id(tmp_path):
-    """`_claim_already_self_held` (both the `pickup_brief` original and the
-    `pickup_assemble`-ported copy) resolves True for the SCOPED id via the
-    same `my_sid=_explicitly_scoped_session_id()` threading."""
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     _seed_claim_dir(repo, "handoff", "h1.md", "sid-scoped")
@@ -86,11 +80,6 @@ def test_no_scope_active_resolves_empty_scoped_id():
 
 
 def test_no_scope_active_does_not_self_grant_a_foreign_claim(tmp_path):
-    """Negative, end-to-end: with no scope active, a claim recorded under
-    SOME OTHER session id is not recognised as self-held merely because
-    `_explicitly_scoped_session_id()` fell back to something ambient — it
-    resolves `""`, and `claim_held_by_me` falls through to its own
-    (unchanged) resolution path rather than granting on an empty id."""
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     _seed_claim_dir(repo, "handoff", "h1.md", "sid-someone-else")

@@ -1,11 +1,3 @@
-"""Chunk C4 (docs/plans/2026-08-18-session-fact-facade-and-failure-posture.md):
-`worktree_is_dirty` converted onto DR-319's degraded-with-evidence posture
-(docs/decisions/DR-319-session-fact-facade-shape-and-failure-posture.md) —
-a failed `git status` probe must never read as a clean tree.
-
-Reference failure-posture shape (read-only): `coordinator_core/baton_assemble/
-__init__.py :: _compute_dirty_tree_attribution`.
-"""
 from __future__ import annotations
 
 import subprocess
@@ -21,7 +13,7 @@ def _run_git(returncode: int, stdout: str, stderr: str = ""):
     return _fake
 
 
-_STUB_WORKTREE = "stub-worktree"  # opaque token, never touches disk -- run_git is faked
+_STUB_WORKTREE = "stub-worktree"
 
 
 def test_clean_tree_is_computed_not_dirty():
@@ -35,15 +27,10 @@ def test_dirty_tree_is_computed_dirty():
 
 
 def test_failed_probe_is_degraded_not_clean():
-    """The defect this chunk fixes: `bool("".strip())` on a failed call's
-    empty stdout is `False` — indistinguishable from a genuinely clean tree.
-    A failed `git status` must produce a structurally different shape."""
     result = worktree_is_dirty(_run_git(128, "", "fatal: not a git repository"), _STUB_WORKTREE)
     assert result["degraded"] is True
     assert "value" not in result
     assert "fatal: not a git repository" in result["evidence"]
-    # The regression this test exists to catch: a degraded read must never
-    # collapse to the same value a clean computed read would produce.
     assert result != {"degraded": False, "value": False}
 
 
@@ -62,27 +49,13 @@ _WORKTREE_PORCELAIN = (
 
 
 def _fake_run_git_degraded_dirty_probe(argv: list[str], cwd: Path):
-    """Routes every git call `brief()` makes for a repo with exactly one
-    stale, author-owned, main-reachable worktree whose dirty-tree probe
-    fails (`git status --porcelain` exits non-zero). Every other call
-    returns a fixed, uninteresting answer so the only variable under test
-    is the degraded probe reaching the call site."""
     if argv[:2] == ["rev-parse", "--abbrev-ref"]:
         stdout = "work\n"
     elif argv[:2] == ["rev-parse", "--verify"]:
         stdout = "main\n" if argv[-1] == "main" else ""
     elif argv[0] == "branch":
-        # `branches_merged_into` reads this arm. Omitting `stale-branch`
-        # left the worktree unreachable, so the loop `continue`d before any
-        # removal directive was built and this test could never observe the
-        # judgment-point gating it exists to pin.
         stdout = "  work\n  main\n  stale-branch\n"
     elif argv[0] == "for-each-ref":
-        # The brief's single ref enumeration (`consolidate_assemble.
-        # ref_rows`): the same branches the `branch` arm lists, in the
-        # `<refname>\t<short>\t<authoremail>` shape it parses. Falling
-        # through to the empty default here would silently hand `brief()`
-        # a repo with no branches at all.
         stdout = "".join(
             f"refs/heads/{n}\t{n}\t{_MY_EMAIL}\n" for n in ("work", "main", "stale-branch")
         )
@@ -91,7 +64,7 @@ def _fake_run_git_degraded_dirty_probe(argv: list[str], cwd: Path):
     elif argv[0] == "log":
         stdout = f"{_MY_EMAIL}\n"
     elif argv[0] == "merge-base":
-        stdout = ""  # returncode 0 below -> reachable
+        stdout = ""
     elif argv[:2] == ["--no-optional-locks", "status"]:
         return subprocess.CompletedProcess(
             argv, 128, stdout="", stderr="fatal: not a git repository"
@@ -102,12 +75,6 @@ def _fake_run_git_degraded_dirty_probe(argv: list[str], cwd: Path):
 
 
 def test_degraded_dirty_probe_call_site_routes_through_judgment_point():
-    """Finding 1 of the slice-B review, made an executable regression: a
-    degraded dirty-tree probe reaching `brief()`'s call site must not take
-    the unconditional-removal path a genuinely-clean tree would unlock. It
-    must route through the same judgment-point-gated path a dirty tree
-    does, and the served `worktrees_report` entry must carry
-    `dirty_probe_degraded` so a caller can tell the two cases apart."""
     decision_object = brief(
         repo_root=Path("stub-repo-root"),
         my_email=_MY_EMAIL,
@@ -126,9 +93,6 @@ def test_degraded_dirty_probe_call_site_routes_through_judgment_point():
     ]
     assert len(remove_directives) == 1
     remove_directive = remove_directives[0]
-    # The regression this test exists to catch: a degraded probe must never
-    # produce a `depends_on: None` (unconditional-removal) directive — that
-    # is the fail-open collapse the original defect authorized.
     assert remove_directive["depends_on"] is not None
 
     jp_id = remove_directive["depends_on"]

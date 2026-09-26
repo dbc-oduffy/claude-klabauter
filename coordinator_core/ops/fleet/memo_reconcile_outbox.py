@@ -101,16 +101,10 @@ _LOG = logging.getLogger(__name__)
 
 _MODE = "reconcile_outbox"
 
-#: The one status whose home is the outbox itself. Everything else has
-#: reached its receiver (or been resolved before it could) and is history.
 _LIVE_STATUS = "draft"
 
 _KNOWN_PARAM_KEYS = frozenset({"dry_run"})
 
-#: Data-dependent within one fixed directory pair: whichever already-delivered
-#: entries the calling repo's own outbox is holding, moved into its `sent/`.
-#: Sourced from BOTH the new and retired outbox roots (2026-09-03
-#: relocation), always moved to the new `sent/` -- see `_reconcile`.
 MUTATES = [
     f"{MEMO_OUTBOX_RELDIR}/*.md",
     f"{LEGACY_MEMO_OUTBOX_RELDIR}/*.md",
@@ -119,7 +113,6 @@ MUTATES = [
 
 
 def _validate_params(params: dict):
-    """Validate memo.reconcile_outbox params; return dry_run or a setup-error dict."""
     dry_run = params.get("dry_run")
     if not isinstance(dry_run, bool):
         return build_setup_error_result(
@@ -139,24 +132,6 @@ def _validate_params(params: dict):
 
 
 def _classify(path: Path, archived: bool = False) -> tuple[str, Optional[str], Optional[str]]:
-    """Return (disposition, status, note) for one outbox `*.md`.
-
-    Dispositions: "move" (delivered, belongs in sent/), "keep" (a live draft),
-    "report" (no frontmatter — an orphaned body fragment, operator's call),
-    "keep" also covers an unreadable file: this op refuses to move a file
-    whose status it could not read, because the failure mode of guessing
-    wrong is archiving a live draft nobody will send.
-
-    `archived` — a `sent/<name>` for this entry already exists — decides the
-    DRAFT case and nothing else. A draft is normally the one thing that
-    belongs in the outbox, but a draft with an archive is a delivery whose
-    send could not remove its own original (memo_send's unlink degrades to a
-    warning), so it is a stale duplicate rather than work. It is reported,
-    not moved: the archived copy is authoritative and moving onto it would
-    clobber the stamped one with the unstamped one. A non-draft entry is
-    unaffected — the existing clobber-skip in `_reconcile` already says the
-    same thing at the move site.
-    """
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -194,34 +169,6 @@ def _relpath(path: Path, worktree_root: Path) -> str:
 
 
 def _uncommitted_receipts(worktree_root: Path, sent_dir: Path) -> list:
-    """Report every `sent/*.md` that HEAD does not know — a delivery whose
-    sender-side receipt never committed.
-
-    One `read_tree_spine` call answers for the whole directory: it walks only
-    the sent dir's own spine and reads each directory's tree object once, in
-    process, so the cost is O(path depth) and zero git spawns however many
-    archived memos this repo holds (44 here, all in HEAD).
-
-    A `None` spine — no resolvable HEAD, or a tree object that would not read
-    — returns nothing at all. This check distinguishes "delivered but never
-    committed" from "committed", and a repo that cannot answer the second
-    question has not answered the first one in the negative.
-
-    SO DOES AN ARCHIVE HEAD KNOWS NOTHING OF, and that arm is what keeps this
-    check honest off this box. `.coordinator-local/` is gitignored fleet-wide
-    (.gitignore's 2026-09-02 relocation stanza); claude-klabauter's 44 archived memos
-    are in HEAD only because they were tracked before the ignore landed and
-    `memo.send` names them explicitly ever since. A repo that never tracked
-    the bucket has an entirely absent archive, and reporting a receiptless
-    delivery for every memo it ever sent would be this instrument inventing
-    the loudest possible finding out of a repo that is perfectly healthy.
-    Absence is informative only where presence is the norm, so the norm is
-    measured rather than assumed: no archived memo in HEAD means this repo
-    does not track its archive, and nothing here is a finding. The cost is
-    under-reporting a repo whose FIRST send lost its receipt — the correct
-    direction to be wrong in, for an instrument whose whole value is that a
-    row it prints is real.
-    """
     try:
         names = sorted(p.name for p in sent_dir.glob("*.md") if p.is_file())
     except OSError:
@@ -276,31 +223,11 @@ def _candidate(path: Path, disposition: str, status: Optional[str], note: Option
 
 
 def _reconcile(worktree_root: Path, dry_run: bool) -> tuple[list, list, list]:
-    """Return (candidates, acted, skipped) for the calling repo's outbox.
-
-    Sources candidates from BOTH the new `.coordinator-local/memo-outbox/`
-    root and the retired `state/memo-outbox/` root (2026-09-03 relocation) —
-    a topic present at both surfaces the new-root copy only, via the shared
-    `memo_draft.merged_outbox_drafts` helper (was a duplicated ~15-line merge
-    block; see Review comment below — Kira, overengineering-reviewer). Every
-    moved entry, wherever it was found, lands in the NEW `sent/` dir; nothing
-    is ever written back to the retired root.
-
-    In dry-run nothing is touched and `acted`/`skipped` stay empty — the
-    caller reads `candidates`' own `disposition` field to see what an act run
-    would do.
-
-    The sweep ends with `_uncommitted_receipts`, which looks the other way
-    down the same channel: not an entry that is still in the outbox after
-    delivery, but a delivery with no committed receipt anywhere in this repo.
-    """
     sent_dir = Path(_machinery_paths.memo_outbox_sent_dir(str(worktree_root)))
     candidates: list = []
     acted: list = []
     skipped: list = []
 
-    # Was a verbatim copy of
-    # memo_list_outbox's dual-root merge; now the shared implementation.
     for path in merged_outbox_drafts(worktree_root):
         disposition, status, note = _classify(path, archived=(sent_dir / path.name).exists())
         candidate = _candidate(path, disposition, status, note)
@@ -309,10 +236,6 @@ def _reconcile(worktree_root: Path, dry_run: bool) -> tuple[list, list, list]:
         if dry_run:
             continue
         if disposition == "report":
-            # Act mode's envelope has no `candidates` key, so an orphan
-            # fragment would vanish from the result entirely if it were not
-            # surfaced here. `skipped` is where it belongs: this op cleanly
-            # declined to act, and the disposition is an operator's call.
             skipped.append(candidate)
             continue
         if disposition != "move":
@@ -336,18 +259,10 @@ def _reconcile(worktree_root: Path, dry_run: bool) -> tuple[list, list, list]:
         except OSError as exc:
             skipped.append(dict(candidate, note=f"move failed: {exc}"))
             continue
-        # `source_path` is carried alongside the overwritten `id`/`path` (which
-        # both become the NEW sent/ location, per this op's documented envelope)
-        # so the caller can claim the vacated source as well -- see the
-        # `_scope_touch_paths` block in the handler.
         acted.append(
             dict(candidate, id=str(target), path=str(target), source_path=str(path))
         )
 
-    # Reported last so an operator reads the queue they were asking about
-    # before the archive anomaly underneath it. These are never `acted`: this
-    # op moves outbox entries, and a sent/ copy is already where it belongs —
-    # what is missing is a COMMIT, which this op does not make (Negative-spec).
     for report in _uncommitted_receipts(worktree_root, sent_dir):
         candidates.append(report)
         if not dry_run:
@@ -386,7 +301,6 @@ def _memo_reconcile_outbox(params: dict, repo_root: Optional[Path] = None) -> di
     if repo_root is None:
         return build_setup_error_result(
             _MODE, dry_run,
-            # Error named the retired write root; corrected to canonical.
             "memo.reconcile_outbox: no repo_root supplied — this op reconciles "
             "the CALLING repo's own .coordinator-local/memo-outbox/ and requires a resolved "
             "worktree (common_dir-keyed op).",
@@ -400,15 +314,6 @@ def _memo_reconcile_outbox(params: dict, repo_root: Optional[Path] = None) -> di
     result = build_act_result(_MODE, acted, skipped, [])
 
     # Claim the REAL write set (ipc.py's `_SCOPE_TOUCH_PATHS_KEY` contract:
-    # paths actually written this call, never the `MUTATES` surface -- the two
-    # legitimately diverge, and a `report`/`keep`/clobber-skip entry moves
-    # nothing). Both ends of every `os.replace` are declared: the vacated
-    # source as well as the new `sent/` target, because a move is a deletion
-    # at the source and Check 5's sink must be able to attribute that deletion
-    # to this session too. Without this, every file this op lands in `sent/`
-    # reaches `compute_scope` as an owner-less orphan -- one of the four
-    # undeclared-op-output orphans in 2026-08-27's scope-warnings.log, the arm
-    # gating the scope-strict flip (Check 5, `bash_guards/dispatch_checks.py`).
     _written: list = []
     for entry in acted:
         target = entry.get("path")

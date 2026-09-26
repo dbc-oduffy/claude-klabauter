@@ -1,8 +1,3 @@
-"""
-Tests for coordinator_core.ops.assert_plan_sizing_citation.
-
-Spec backlink: pln-plan-sizing-citation-gate-scaf-45eaed § C3 / AC4 / AC6
-"""
 from __future__ import annotations
 
 import os
@@ -11,8 +6,6 @@ from coordinator_core.ops.assert_plan_sizing_citation import main
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -35,8 +28,6 @@ def test_no_docs_plans_dir_returns_zero(tmp_path, capsys):
 
 
 def test_current_corpus_passes(capsys):
-    """The real docs/plans/ corpus of this checkout has zero dangling
-    frontmatter sizing_object citations (plan's own stated baseline)."""
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
     rc = main(["--root", repo_root])
     assert rc == 0
@@ -99,8 +90,6 @@ def test_absent_frontmatter_key_skipped(tmp_path, capsys):
 
 
 def test_post_cutoff_plan_missing_key_flagged(tmp_path, capsys):
-    """AC5: a post-cutoff plan with no sizing_object key at all is a MISSING
-    finding, exit 1, plan named in output."""
     root = str(tmp_path)
     _write(
         root,
@@ -115,7 +104,6 @@ def test_post_cutoff_plan_missing_key_flagged(tmp_path, capsys):
 
 
 def test_post_cutoff_plan_explicit_null_satisfies(tmp_path, capsys):
-    """AC6: explicit `sizing_object: null` is a satisfied declaration."""
     root = str(tmp_path)
     _write(
         root,
@@ -132,7 +120,6 @@ def test_post_cutoff_plan_explicit_null_satisfies(tmp_path, capsys):
 
 
 def test_pre_cutoff_plan_missing_key_not_flagged(tmp_path, capsys):
-    """AC7: the 152-plan negative -- created < _CUTOFF, no key, exit 0."""
     root = str(tmp_path)
     _write(
         root,
@@ -146,11 +133,6 @@ def test_pre_cutoff_plan_missing_key_not_flagged(tmp_path, capsys):
 
 
 def test_prior_art_check_sidecar_with_quartet_not_flagged(tmp_path, capsys):
-    """AC8, load-bearing: a `.prior-art-check.md` sidecar carrying the plan
-    schema's required quartet (title/created/author/status) and no
-    sizing_object key must NOT be flagged -- 68 real sidecars carry that
-    quartet, which is why the quartet alone was rejected as a discriminator
-    for plan-hood; the basename+kind conjunction is what excludes it."""
     root = str(tmp_path)
     _write(
         root,
@@ -186,7 +168,6 @@ def test_kind_prior_art_check_plan_shaped_basename_not_flagged(tmp_path, capsys)
 
 
 def test_index_and_readme_not_flagged(tmp_path, capsys):
-    """AC8: INDEX.md / README.md are excluded by the basename shape check."""
     root = str(tmp_path)
     _write(root, "docs/plans/INDEX.md", "---\ntitle: \"Index\"\ncreated: 2026-08-06\n---\n\n# Index\n")
     _write(root, "docs/plans/README.md", "---\ntitle: \"Readme\"\ncreated: 2026-08-06\n---\n\n# Readme\n")
@@ -197,12 +178,6 @@ def test_index_and_readme_not_flagged(tmp_path, capsys):
 
 
 def test_ac9_body_prose_dangling_with_frontmatter_null_passes(tmp_path, capsys):
-    """AC9's regression test, and the reason the whole op is frontmatter-only:
-    a post-cutoff plan whose BODY prose cites a nonexistent
-    state/sizings/... path, while its frontmatter carries an explicit null,
-    must pass. If this op ever regexed the body, it would fire on this
-    plan's body text and make it unwriteable -- an explicit frontmatter null
-    satisfies the check regardless of what the prose says."""
     root = str(tmp_path)
     _write(
         root,
@@ -221,8 +196,6 @@ def test_ac9_body_prose_dangling_with_frontmatter_null_passes(tmp_path, capsys):
 
 
 def test_dangling_and_missing_peers_both_reported_separately(tmp_path, capsys):
-    """One plan with a dangling citation, a peer with a missing one: exit 1,
-    both reported, each in its own block."""
     root = str(tmp_path)
     _write(
         root,
@@ -248,19 +221,6 @@ def test_dangling_and_missing_peers_both_reported_separately(tmp_path, capsys):
 
 
 def test_ac6_body_prose_citation_never_scanned(capsys):
-    """AC6, the load-bearing negative: docs/plans/2026-08-06-plan-sizing-
-    citation-gate.md cites a nonexistent state/sizings/ path in BODY prose (as
-    evidence the citation was never written for a superseded ask), while its
-    frontmatter carries no resolving sizing_object. This op must pass on the
-    real corpus containing that plan — a text-scanning implementation would
-    fire on it and make it unwriteable.
-
-    The fixture is this gate's OWN plan, chosen because a fixture that names
-    another plan is a fixture that goes red when that plan is archived: the
-    original named windows-hot-path-less-work-per-interpreter.md, which moved
-    to archive/specs/ and took this test with it. The gate's own plan cannot
-    leave docs/plans/ while the gate it specifies is still live.
-    """
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
     target = os.path.join(
         repo_root,

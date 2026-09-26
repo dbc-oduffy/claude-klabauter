@@ -1,9 +1,3 @@
-"""
-Tests for coordinator_core.ops.read_frontmatter_field.
-
-Port of: read-frontmatter-field.test.sh (DoE 3a561713, 2026-07-22) — mirrors
-each bash-oracle fixture (T1-T10) 1:1 plus the CLI-entry (main()) exit-code contract.
-"""
 
 from __future__ import annotations
 

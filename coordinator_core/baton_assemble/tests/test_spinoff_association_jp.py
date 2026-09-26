@@ -22,8 +22,6 @@ import pytest
 import coordinator_core.baton_assemble as ba
 from coordinator_core.test_baton_assemble import _FAKE_OPERATOR_CONFIG, _write_artifact
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -32,11 +30,6 @@ pytestmark = [
 
 @pytest.fixture(autouse=True)
 def _stub_operator_config(monkeypatch):
-    """Restated per-module (autouse fixtures do not cross module boundaries)
-    -- `brief()` calls `resolve_operator_config()` unconditionally (B0 seam
-    assertion), which resolves real per-machine settings_home/claude_klabauter_root
-    values absent this stub. Mirrors
-    `test_j_continuation_vs_fork_excise.py`'s own fixture of the same name."""
     monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
 
 
@@ -72,9 +65,6 @@ class TestJSpinoffPlanSizingDispositions:
         assert values == {"associate", "none"}
 
     def test_none_disposition_resolves_nothing_and_carries_guidance(self, tmp_path):
-        """'none' is cheap to give and recorded as a TRUE absence -- it
-        resolves no directive (nothing gates on the answer) and still
-        carries guidance distinguishing it from an unanswered question."""
         decision = ba.brief(
             "spinoff", "a-fresh-mint-slug-c7", repo_root=tmp_path
         ).decision_object
@@ -99,9 +89,6 @@ class TestJSpinoffPlanSizingDispositions:
         assert associate_disposition.get("guidance")
 
     def test_carries_no_recommendation(self, tmp_path):
-        """Built via `build_untrusted_gate_judgment_point`, matching the
-        other three spinoff/handoff-shared judgment points -- structurally
-        impossible to attach a verdict here."""
         decision = ba.brief(
             "spinoff", "a-fresh-mint-slug-c7", repo_root=tmp_path
         ).decision_object
@@ -160,7 +147,6 @@ class TestJSpinoffPlanSizingAnswerReachesTheMint:
         assert "--sizing-object=state/sizings/2026-09-04-some-ask.yaml" in args
 
     def test_none_disposition_stamps_nothing(self, tmp_path):
-        """The cheap true-absence answer must not mint a stamp directive."""
         decision = ba.brief(
             "spinoff",
             "a-fresh-mint-slug-c7",
@@ -170,8 +156,6 @@ class TestJSpinoffPlanSizingAnswerReachesTheMint:
         assert self._d1c_args(decision) is None
 
     def test_associate_naming_nothing_fails_loud(self, tmp_path):
-        """`associate` with neither key is the `none` answer wearing the wrong
-        label -- refused rather than recorded as an association nobody made."""
         with pytest.raises(ValueError, match="at least one of governing_plan"):
             ba.brief(
                 "spinoff",
@@ -186,9 +170,6 @@ class TestJSpinoffPlanSizingAnswerReachesTheMint:
             )
 
     def test_associate_on_a_handoff_kind_fails_loud(self, tmp_path):
-        """A continuation carries governing_plan/sizing forward from its
-        predecessor; an association answered here would contradict that
-        silently, so it is refused rather than ignored."""
         artifact = _write_artifact(
             tmp_path / "state" / "handoffs" / "h1.md",
             ["deliverable_id: DEL-C7-HANDOFF", "initiative: init-c7"],

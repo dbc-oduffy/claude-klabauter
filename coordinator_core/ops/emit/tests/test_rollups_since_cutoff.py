@@ -61,10 +61,6 @@ def test_since_cutoff_raises_on_malformed_observed_at(tmp_path):
 
 
 def test_query_completions_raises_loudly_on_malformed_observed_at_not_degrades(tmp_path):
-    """Locks in Finding 1's fix: the cutoff must be computed before the try/except so a
-    malformed ``observed_at`` propagates a ``ValueError`` instead of being swallowed by
-    the query-failure ``except (ValueError, SystemExit): return []`` — which would
-    silently zero completions rather than surface the bad input."""
     ctx = _make_ctx("not-a-timestamp", tmp_path)
 
     with pytest.raises(ValueError):

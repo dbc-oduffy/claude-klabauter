@@ -40,9 +40,6 @@ from coordinator_core.tests._commit_surface_roster import (
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
-#: Independent literals, per roster file -- comment+docstring line ceiling. NOT an
-#: import of the live count: recorded at C0R's HEAD baseline (2026-09-10). Any raise
-#: requires editing this literal AND a recorded DR citation in the same diff.
 COMMENT_DOCSTRING_CEILINGS = {
     "coordinator_core/ops/ceremony/git_native.py": 3433,
     "coordinator_core/ops/ceremony/commit_gates.py": 520,
@@ -53,8 +50,6 @@ COMMENT_DOCSTRING_CEILINGS = {
     "coordinator_core/git/git_index.py": 237,
 }
 
-#: Independent literals, per roster file -- marker-carrying line ceiling. Same rule:
-#: recorded at C0R's HEAD baseline, ratchets down only.
 MARKER_CEILINGS = {
     "coordinator_core/ops/ceremony/git_native.py": 110,
     "coordinator_core/ops/ceremony/commit_gates.py": 0,
@@ -67,7 +62,6 @@ MARKER_CEILINGS = {
 
 
 def test_every_roster_file_has_both_ceilings():
-    """No-ceiling-no-pass half of AC2: a roster file with no ceiling must fail."""
     for path in COMMIT_SURFACE_FILES:
         assert path in COMMENT_DOCSTRING_CEILINGS, (
             f"{path} is in COMMIT_SURFACE_FILES but has no comment+docstring ceiling "
@@ -148,13 +142,6 @@ def test_no_module_under_the_two_directories_is_unclassified():
 
 
 def test_known_modules_still_exist_on_disk():
-    """The inverse drift: a classified module that vanished is a stale entry, not a defect here.
-
-    Not asserted as a failure -- C0R's own module names this as expected churn (the
-    peer under external_gate[0] has already deleted a scope: file mid-plan). This
-    test exists only to make the roster's currency checkable, not to block on it.
-    """
     known = set(COMMIT_SURFACE_FILES) | set(EXCLUDED_MODULES)
     missing = {path for path in known if not (REPO_ROOT / path).exists()}
-    # Informational only: report, do not fail. A vanished module is C0R's to reconcile.
     assert isinstance(missing, set)

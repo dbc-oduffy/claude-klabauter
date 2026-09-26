@@ -40,21 +40,13 @@ the ambient-context trio `ambient_before`/`ambient_after`/`ambient_delta`
 (Optional[dict]). `from_json` accepts a v1 payload (none of these keys
 present) by defaulting every one of them to None -- see from_json()."""
 
-# Named constants for floor_scope's
 # documented "run"|"per_op" enum, mirroring gate.py's VERDICT_* constant pattern,
-# so callers (harness.py) reference a name instead of a bare string literal.
 FLOOR_SCOPE_RUN = "run"
 FLOOR_SCOPE_PER_OP = "per_op"
 
 
 @dataclass(frozen=True)
 class Tolerance:
-    """Gate tolerance band descriptor.
-
-    kind: "relative" (band = target_ms * (1 + value)) or "absolute"
-    (band = target_ms + value). Interpreted by gate.py — this dataclass only
-    carries the value, it does not compute the band.
-    """
 
     kind: str
     value: float
@@ -69,10 +61,6 @@ class Tolerance:
 
 @dataclass(frozen=True)
 class ConformanceRecord:
-    """One op's SLA-conformance measurement for one benchmark run.
-
-    Carries every AC2-pinned field. Round-trippable via to_json()/from_json().
-    """
 
     op: str
     """Op name, e.g. 'ping' or 'coverage.gate' — matches OP_CLASSIFICATION keys."""
@@ -194,27 +182,12 @@ class ConformanceRecord:
     SCHEMA_VERSION."""
 
     def to_json(self) -> str:
-        """Serialize this record to a JSON string. Round-trip pair: from_json()."""
         data = asdict(self)
-        # asdict() already recurses
-        # into Tolerance (a nested dataclass) and produces an equivalent dict;
-        # this explicit re-assignment is belt-and-braces future-proofing in
-        # case Tolerance ever grows a non-trivially-serializable field, kept
-        # intentionally rather than dropped.
         data["tolerance"] = self.tolerance.to_dict()
         return json.dumps(data, sort_keys=True)
 
     @staticmethod
     def from_json(payload: str) -> "ConformanceRecord":
-        """Deserialize a JSON string produced by to_json() back into a
-        ConformanceRecord. Round-trip pair: to_json().
-
-        Accepts a v1 payload (no `machine`/`ambient_before`/`ambient_after`/
-        `ambient_delta` keys) without raising: every one of those fields
-        defaults to None on the dataclass, so simply omitting an absent key
-        from the ConformanceRecord(**data) call below reconstructs a v1
-        record with those fields set to None -- the real migration path a
-        future schema bump reuses."""
         data = json.loads(payload)
         data = dict(data)
         data["tolerance"] = Tolerance.from_dict(data["tolerance"])
@@ -222,20 +195,10 @@ class ConformanceRecord:
 
 
 def compose_machine_id() -> str:
-    """Compose this box's machine identity: platform.system() and
-    platform.node(), lowercased and joined, stable across runs on one box
-    and distinct across boxes. Used to populate ConformanceRecord.machine
-    at measurement time."""
     return f"{platform.system()}-{platform.node()}".lower()
 
 
 def compute_ambient_delta(before: Optional[dict], after: Optional[dict]) -> Optional[dict]:
-    """Per-field (after - before) delta over the numeric fields
-    ambient_sampler.take_sample() produces (live_sessions, claude_procs,
-    cpu_pct, ram_free_mb, ram_total_mb). Never raises: returns None if
-    either snapshot itself is None, and degrades an individual field to
-    null in the result if either side of that field is null -- same
-    degrade-to-null discipline take_sample() itself follows."""
     if before is None or after is None:
         return None
     delta: dict[str, Optional[float]] = {}

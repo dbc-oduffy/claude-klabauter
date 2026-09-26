@@ -1,21 +1,3 @@
-"""Behavioral tests for
-coordinator_core.write_guards.block_subagent_guard_grant_write -- the
-Write-tool-channel leg that denies a dispatched subagent's direct
-Write/Edit/MultiEdit/NotebookEdit against EITHER EM-guard-grant artifact
-(chunk C4, docs/plans/2026-08-13-em-exercisable-in-band-grant-route.md).
-
-Two artifacts, both covered:
-  - the durable grant record,
-    ``.git/coordinator-sessions/<sid>/em-guard-grant.json``
-  - the DR-260 unlock sentinel,
-    ``<platform-temp-dir>/coordinator-guard-unlock-<sid>.<guard>``
-
-Any materialized sentinel fixture uses a per-test unique sid
-(``uuid4``-suffixed) and is cleaned up in a ``finally:`` block swallowing
-``OSError`` -- this machine runs many concurrent sessions sharing the real
-platform temp dir, and a leaked sentinel would silently grant an unrelated
-later call.
-"""
 
 from __future__ import annotations
 
@@ -79,11 +61,6 @@ def _grant_path(repo_root, sid="sess-123"):
 
 def _unique_sid(prefix="sess"):
     return f"{prefix}-{uuid.uuid4().hex[:12]}"
-
-
-# ---------------------------------------------------------------------------
-# Grant-record leg (AC-4a).
-# ---------------------------------------------------------------------------
 
 
 class TestGrantRecordLeg:
@@ -153,12 +130,6 @@ class TestGrantRecordLeg:
             ),
             cwd=str(repo_root),
         )
-
-
-# ---------------------------------------------------------------------------
-# Sentinel leg (AC-4b) -- the more important of the two per the dispatch
-# brief: the sentinel is what actually clears the guard.
-# ---------------------------------------------------------------------------
 
 
 class TestSentinelLeg:
@@ -236,8 +207,6 @@ class TestSentinelLeg:
         _allow(unrelated, cwd=str(tmp_path))
 
     def test_sentinel_shaped_name_outside_temp_dir_allowed(self, tmp_path):
-        """Path-anchored, not filename-alone: a sentinel-prefixed basename
-        OUTSIDE the resolved platform temp dir is allowed."""
         outside = str(tmp_path / "coordinator-guard-unlock-sess-1.some-guard")
         _allow(outside, cwd=str(tmp_path))
 
@@ -245,12 +214,6 @@ class TestSentinelLeg:
         sid = _unique_sid()
         path = self._real_sentinel_path(sid)
         _allow(str(path), tool_name="Read", cwd=str(tmp_path))
-
-
-# ---------------------------------------------------------------------------
-# Registration reachability -- confirms the leg is auto-discovered through
-# the dispatcher entrypoint, not just directly importable.
-# ---------------------------------------------------------------------------
 
 
 class TestReachableThroughEngine:

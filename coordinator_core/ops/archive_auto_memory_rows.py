@@ -118,14 +118,8 @@ from coordinator_core.ops.check_auto_memory_drained import (
 )
 from coordinator_core.session.worktree_safety import resolve_self_session_id
 
-GENERATES = []  # appends rows onto an archive destination as it moves them — a relocation of existing content, not an artifact derived from sources
+GENERATES = []
 
-# Name-collision narrowing tradeoff: a ceremony can run twice on the same
-# calendar day, so the archive filename is not unique on the date alone.
-# 12 hex characters of a UUID4-shaped session id leaves an astronomically
-# small collision probability for the "two drains, same day, same closing
-# session" case this constant exists to narrow, without making every
-# filename unreadably long.
 _ARCHIVE_SID_PREFIX_LEN = 12
 
 _ARCHIVE_DIRNAME = os.path.join("state", "auto-memory-archive")
@@ -161,9 +155,6 @@ def _render_drain_event(
     rows: "List[Tuple[str, Path]]",
     now: "datetime | None" = None,
 ) -> "str | None":
-    """The full section for one drain event (one op invocation), or
-    ``None`` if there is nothing to render (every candidate body vanished
-    before it could be read)."""
     ts = (now or datetime.now(timezone.utc)).isoformat()
 
     seen: "set[str]" = set()
@@ -270,14 +261,6 @@ def main(argv: "List[str]") -> int:
         f"archive-auto-memory-rows: archive drain residue for session "
         f"{self_sid[:_ARCHIVE_SID_PREFIX_LEN]}"
     )
-    # Never `prefer_deliberate_stage`: this op commits a path it authored
-    # itself in the same pass, so there is no third party's deliberate
-    # partial stage to preserve. Zero git spawns (`commit_paths` contract),
-    # no push leg (`commit_paths`/`commit_v2` carry none at all), and no
-    # `wsc-commit` lock is taken here -- DR-413 binds this op to never being
-    # invoked from inside a commit critical section, which this call site
-    # cannot itself enforce (a caller-side sequencing constraint, not a
-    # runtime check).
     try:
         commit_paths(
             repo=root,
@@ -286,10 +269,6 @@ def main(argv: "List[str]") -> int:
             allow_empty=False,
         )
     except NothingToCommit:
-        # The artifact is byte-identical to HEAD's -- already durable from a
-        # prior run of this same drain event. Not a failure (AC2/AC11
-        # framing: option (a) buys a shorter window between write and
-        # durability, not an enforced ordering this op could fail on).
         return 0
     except CommitRefused as exc:
         print(

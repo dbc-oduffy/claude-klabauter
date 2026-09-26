@@ -27,10 +27,6 @@ from coordinator_core.benchmarks.hook_entry_cost import (
 )
 from coordinator_core.benchmarks.process_time import IS_DARWIN, IS_WINDOWS
 
-# Spawns real external processes (measure_stage_costs) or runs the real
-# dispatcher in-process against real guard modules (the other two) -- runs
-# at cadence gates, not per commit. Spawn ratchet:
-# coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
@@ -40,11 +36,6 @@ def _require_supported_platform() -> None:
             "process-time accounting has no primitive for this platform -- "
             "see coordinator_core.benchmarks.process_time module docstring"
         )
-
-
-# ---------------------------------------------------------------------------
-# measure_stage_costs
-# ---------------------------------------------------------------------------
 
 
 def test_measure_stage_costs_covers_every_stage_label():
@@ -65,10 +56,6 @@ def test_measure_stage_costs_reports_process_time_and_wall_side_by_side():
 
 
 def test_measure_stage_costs_bare_interpreter_cheaper_than_full_chain():
-    """The floor ordering `bash_dispatch_probe.measure_derived_floor` already
-    establishes (bare < import_closure <= chain_spawns_nothing, process
-    time) must hold here too -- this is the same three-leg floor, measured
-    individually-spawned instead of batched."""
     _require_supported_platform()
     costs = {c.label: c for c in measure_stage_costs(n=5)}
     assert (
@@ -86,20 +73,12 @@ def test_measure_stage_costs_raises_off_unsupported_platform(monkeypatch):
         hec.measure_stage_costs(n=1)
 
 
-# ---------------------------------------------------------------------------
-# classify_guard_registration
-# ---------------------------------------------------------------------------
-
-
 def test_classify_guard_registration_returns_every_registered_entry():
     from coordinator_core.bash_guards.roster import guard_roster
 
     classified = classify_guard_registration()
     classified_names = {c.name for c in classified}
     roster_names = {e.id for e in guard_roster()}
-    # Every roster entry must appear in the classification -- the
-    # classifier reads a strict superset (dispatch.py's own GuardEntry(
-    # call sites), never a subset, of what guard_roster() reports.
     assert roster_names.issubset(classified_names)
 
 
@@ -122,25 +101,9 @@ def test_classify_guard_registration_deterministic():
 
 
 def test_classify_guard_registration_known_false_positive_pair():
-    """`destructive-git-revert`/`destructive-git-revert-advisory` are the
-    two known false positives of this textual heuristic (see
-    `GuardCallVariance`'s own docstring) -- both closures are bare
-    `_git_revert_full()` calls with no literal `cmd`/`payload`/`session_id`
-    on their registration line, even though the helper they call closes
-    over both lexically. This test pins that they are still flagged
-    `candidate_session_invariant=True` by this module (a textual, not
-    semantic, classifier) -- if `dispatch.py` is ever refactored to spell
-    `cmd`/`session_id` directly on either registration line, this becomes
-    a legitimate reduction in false positives and should be updated, not
-    silently left red."""
     by_name = {c.name: c for c in classify_guard_registration()}
     for name in ("destructive-git-revert", "destructive-git-revert-advisory"):
         assert by_name[name].candidate_session_invariant is True
-
-
-# ---------------------------------------------------------------------------
-# enumerate_fs_probes_for_corpus
-# ---------------------------------------------------------------------------
 
 
 def test_enumerate_fs_probes_for_corpus_returns_positive_counts():

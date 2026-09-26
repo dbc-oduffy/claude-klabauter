@@ -94,8 +94,6 @@ def run_and_record() -> ShimDecisionRecord:
         shim_name=shim.name,
         shim_stats=stats[shim.name],
     )
-    # Review (2026-08-16): atomic mkstemp + os.replace, not a bare open(..., "w")
-    # -- a kill mid-write must never leave this committed-artifact JSON truncated.
     fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(RECORD_PATH), suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:

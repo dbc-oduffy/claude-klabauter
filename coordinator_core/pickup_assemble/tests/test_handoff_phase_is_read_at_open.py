@@ -31,7 +31,6 @@ import coordinator_core.pickup_assemble as pa
 def test_execution_phase_earns_a_prefix_naming_execute_plan():
     prefix = pa.execution_phase_prefix({"handoff_phase": "execution"})
     assert "/execute-plan" in prefix
-    # the obligation the phase carries, not merely the routing
     assert "execution-authorization stamp" in prefix
 
 
@@ -44,14 +43,9 @@ def test_continuation_says_nothing():
 
 
 def test_an_unrecognized_value_says_nothing():
-    # Positive match only. A future third phase value must not be narrated as
-    # execution just because it is not "continuation".
     assert pa.execution_phase_prefix({"handoff_phase": "something-else"}) == ""
     assert pa.execution_phase_prefix({"handoff_phase": None}) == ""
 
 
 def test_the_two_execution_axes_are_not_the_same_field():
-    # `sizing_disposition` resolves its own "execution" from `governing_plan`.
-    # This function must not consult that field at all: a resolvable citation
-    # is not an authorization.
     assert pa.execution_phase_prefix({"governing_plan": "docs/plans/x.md"}) == ""

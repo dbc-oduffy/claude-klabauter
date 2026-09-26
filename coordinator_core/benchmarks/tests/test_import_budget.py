@@ -44,15 +44,6 @@ def test_manifest_carries_entry_for_every_minimum_entrypoint():
 
 @pytest.mark.parametrize("entrypoint", _ENTRYPOINTS)
 def test_every_entrypoint_records_the_interpreter_its_baseline_was_measured_under(entrypoint):
-    """A module-count baseline is only meaningful against a named interpreter.
-
-    2026-08-17: `coordinator_core.ipc` breached its ceiling with no code change,
-    because Python 3.14 routed `bz2`/`lzma` onto the new `compression` package that
-    `shutil` <- `tempfile` reaches. The manifest recorded `measured_on` (the OS) but
-    not the interpreter, so nothing on disk could distinguish that from real
-    regrowth, and the breach message asserted regrowth outright. This test stops a
-    future re-baseline from dropping the field back off.
-    """
     recorded = resolve_baseline_python(entrypoint)
     assert recorded, (
         f"import-budget entry for {entrypoint!r} records no 'measured_under_python'. "
@@ -63,8 +54,6 @@ def test_every_entrypoint_records_the_interpreter_its_baseline_was_measured_unde
 
 
 def test_drift_note_distinguishes_matched_from_mismatched_interpreter():
-    """The clause must name interpreter drift as a candidate cause when the versions
-    differ, and rule it out when they match — never assert regrowth blindly."""
     manifest = {
         "schema_version": 1,
         "entrypoints": {
@@ -88,8 +77,6 @@ def test_drift_note_distinguishes_matched_from_mismatched_interpreter():
 
 
 def test_probe_reports_own_module_share():
-    """The probe's third field is what stops the next investigator re-deriving the
-    own-vs-stdlib split with a throwaway script."""
     cost = measure_import_subprocess("coordinator_core.ipc")
     assert cost.own_module_count is not None
     assert 0 < cost.own_module_count <= cost.module_count
@@ -103,10 +90,6 @@ def test_resolve_ceiling_raises_for_unknown_entrypoint():
 
 @pytest.mark.parametrize("entrypoint", _ENTRYPOINTS)
 def test_module_count_stays_under_ceiling(entrypoint):
-    """AC9/AC11: the primary assertion is module count, not wall-clock -- see import_budget.py's
-    module docstring for why. `measure_import_subprocess` runs in a fresh interpreter so the
-    `sys.modules` delta is trustworthy (not undercounted by this test process's own prior
-    imports). Reports the elapsed wall-clock as informational only; never asserted."""
     cost: ImportCost = measure_import_subprocess(entrypoint)
     ceiling = resolve_ceiling(entrypoint)
     own = "unknown" if cost.own_module_count is None else str(cost.own_module_count)
@@ -136,8 +119,6 @@ def test_resolve_ceiling_raises_for_entry_missing_ceiling_field():
 
 
 def test_manifest_ceiling_exceeds_recorded_baseline_by_stated_headroom():
-    """The ceiling isn't a magic number -- it must equal baseline + headroom, both recorded in
-    the manifest, so the headroom choice is auditable rather than hand-tuned per entry."""
     manifest = load_manifest()
     for entrypoint, entry in manifest["entrypoints"].items():
         expected_ceiling = entry["baseline_module_count"] + entry["headroom"]

@@ -35,14 +35,10 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(_BIN_DIR))
 
 _MANIFEST_RELNAME = "coordinator-registry.manifest.json"
 
-#: Read from the tree under test, never synthesized: the module validates the
-#: manifest's own shape after loading it, so a stub `{}` would fail this test for
-#: a reason that has nothing to do with the rung being exercised.
 _REAL_MANIFEST = os.path.join(_BIN_DIR, "..", "schemas", _MANIFEST_RELNAME)
 
 
 class TestFlatManifestViaRegistryRung(unittest.TestCase):
-    """Flat-mirror-shaped tree named by `repos.doe_claude`, no `coordinator/`."""
 
     def setUp(self) -> None:
         if not os.path.isfile(_REAL_MANIFEST):
@@ -60,8 +56,6 @@ class TestFlatManifestViaRegistryRung(unittest.TestCase):
 
         self.settings_home = os.path.join(self._tmp, "settings-home")
         os.makedirs(os.path.join(self.settings_home, "machine-local"))
-        # TOML literal string (single-quoted): a Windows path's backslashes are
-        # escape sequences in a basic string and would fail to parse.
         with open(
             os.path.join(self.settings_home, "machine-local", "registry.local.toml"), "w"
         ) as fh:
@@ -83,8 +77,6 @@ class TestFlatManifestViaRegistryRung(unittest.TestCase):
             "print(json.dumps({'manifest': reg._MANIFEST_PATH}))\n"
         )
         # Scrubbed env: DOE_ROOT / REPO_DOE_CLAUDE / CLAUDE_PLUGIN_ROOT absent, so
-        # the registry rung is the ONLY thing that can resolve the manifest. On
-        # the pre-fix module this subprocess dies with FileNotFoundError.
         env = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": self.home,

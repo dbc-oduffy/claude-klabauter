@@ -43,8 +43,6 @@ from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns real external `git` processes; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
@@ -87,15 +85,7 @@ def _seed_tracked(repo: Path, rel: str, body: str = "v1\n") -> Path:
     return f
 
 
-# ---------------------------------------------------------------------------
-# ops/session/safe_commit_offer.py :: _commit_group
-# ---------------------------------------------------------------------------
-
-
 def test_commit_group_releases_this_sessions_own_claim(repo):
-    """The route that needed this most plainly: the group it commits IS the
-    session's own claimed dirty set, so every auto-commit used to leave a
-    claim standing over paths it had just written to history."""
     sid = "safe-commit-offer-release-own"
     rel = "state/handoff-tracker.md"
     f = _seed_tracked(repo, rel)
@@ -116,10 +106,6 @@ def test_commit_group_releases_this_sessions_own_claim(repo):
 
 
 def test_commit_group_leaves_a_peers_claim_alone(repo):
-    """Release is scoped to the sid handed in, never a guess at authorship.
-    `release_committed_claims` is structurally incapable of releasing a
-    peer's claim; this pins that the route does not defeat that by handing
-    it somebody else's id."""
     own_sid = "safe-commit-offer-release-self"
     peer_sid = "safe-commit-offer-release-peer"
     rel = "state/handoff-tracker.md"
@@ -142,9 +128,6 @@ def test_commit_group_leaves_a_peers_claim_alone(repo):
 
 
 def test_commit_group_with_no_session_id_lands_and_retains(repo):
-    """`session_id` is optional on this route. With none, the commit still
-    lands and nothing is released -- skipped explicitly, never guessed from
-    the environment."""
     peer_sid = "safe-commit-offer-release-peer-2"
     rel = "state/handoff-tracker.md"
     f = _seed_tracked(repo, rel)
@@ -163,14 +146,7 @@ def test_commit_group_with_no_session_id_lands_and_retains(repo):
     assert _still_claimed(repo, peer_sid, rel)
 
 
-# ---------------------------------------------------------------------------
-# ops/memo_transition.py :: _commit_terminal_write
-# ---------------------------------------------------------------------------
-
-
 def test_memo_terminal_write_releases_under_a_trusted_session_id(repo):
-    """Releases when the caller supplied a session id -- the `claim` and
-    `resolve` verbs, the only two whose params carry one."""
     sid = "memo-transition-release-own"
     rel = "state/cross-repo/inbox/a-memo.md"
     _seed_tracked(repo, rel, "---\nstatus: open\n---\n")

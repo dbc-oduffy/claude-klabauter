@@ -55,9 +55,6 @@ def _load_proof_module():
 proof = _load_proof_module()
 
 
-# ---------------------------------------------------------------------------
-# _parse_provenance_lines -- the verdict's cheapest verification hook.
-# ---------------------------------------------------------------------------
 class TestParseProvenanceLines:
     def test_single_line_parsed(self):
         stdout = "=== claude-klabauter-bin (mirror) ===\n  Provenance: /repo shipped from abc123\n"
@@ -81,16 +78,7 @@ class TestParseProvenanceLines:
         assert proof._parse_provenance_lines("") == {}
 
 
-# ---------------------------------------------------------------------------
-# _make_pinned_rev_parse -- both passes must resolve HEAD from the pin, not
-# a freshly re-invoked live git call.
-# ---------------------------------------------------------------------------
 class _FakePath:
-    """Minimal stand-in so `_make_pinned_rev_parse`'s wrapper can be driven
-    without a real git repo -- only `str(path)` is ever used by the fake
-    `real_rev_parse` below, matching how `publish.py`'s real
-    `_git_rev_parse` treats its `path` argument (passed straight to
-    `git -C <path> ...`)."""
 
     def __init__(self, value: str):
         self._value = value
@@ -100,10 +88,6 @@ class _FakePath:
 
 
 def _fake_real_rev_parse(live_head_by_toplevel, toplevel_by_path):
-    """Builds a fake `real_rev_parse(path, *args)` -- `--show-toplevel`
-    resolves `path` to its configured toplevel, `HEAD` resolves that
-    toplevel to its currently-configured live head. Mirrors
-    `publish._git_rev_parse`'s real two call shapes exactly."""
 
     def _rev_parse(path, *args):
         key = str(path)
@@ -168,8 +152,6 @@ class TestMakePinnedRevParse:
             toplevel_by_path={"/root": "/root"},
         )
         notes: list = []
-        # pinned_shas deliberately does not cover "/root" -- simulates the
-        # pre-run pin walk missing a root a pass later resolves.
         wrapped = proof._make_pinned_rev_parse(real, {}, notes, pass_number=1)
         with pytest.raises(proof.PinNotHonoredError):
             wrapped(_FakePath("/root"), "HEAD")
@@ -182,10 +164,6 @@ class TestMakePinnedRevParse:
             wrapped(_FakePath("/not-a-repo"), "HEAD")
 
 
-# ---------------------------------------------------------------------------
-# _resolve_pinned_commit_shas -- the pre-run walk that builds the pin map
-# both passes' `_make_pinned_rev_parse` wrappers consult.
-# ---------------------------------------------------------------------------
 class _FakeTarget:
     def __init__(self, name, roots):
         self.name = name
@@ -193,8 +171,6 @@ class _FakeTarget:
 
 
 class _FakePublishModule:
-    """Stands in for the real `publish` module -- only the three attributes
-    `_resolve_pinned_commit_shas` actually reads."""
 
     def __init__(self, row_to_roots, toplevel_by_root, head_by_toplevel):
         self._row_to_roots = row_to_roots
@@ -223,11 +199,6 @@ class TestResolvePinnedCommitShas:
         fake = _FakePublishModule(
             row_to_roots={"row1": [_FakePath("/repo/src")]},
             toplevel_by_root={"/repo/src": "/repo"},
-            # `_resolve_pinned_commit_shas` re-wraps the resolved toplevel
-            # string in `Path(...)` before the second `_git_rev_parse` call
-            # (matching `_git_rev_parse(path: Path, ...)`'s declared type),
-            # so the HEAD lookup key is `str(Path(toplevel))` -- which
-            # normalizes separators on Windows -- not the raw literal.
             head_by_toplevel={str(Path("/repo")): "sha-abc"},
         )
         pins = proof._resolve_pinned_commit_shas(fake, ["row1"])
@@ -240,8 +211,6 @@ class TestResolvePinnedCommitShas:
                 "row2": [_FakePath("/repo/b")],
             },
             toplevel_by_root={"/repo/a": "/repo", "/repo/b": "/repo"},
-            # See test_single_row_single_root_pins_by_toplevel for why this
-            # key must be `str(Path(...))`, not the raw literal.
             head_by_toplevel={str(Path("/repo")): "sha-abc"},
         )
         pins = proof._resolve_pinned_commit_shas(fake, ["row1", "row2"])
@@ -255,8 +224,6 @@ class TestResolvePinnedCommitShas:
                 "row2": [_FakePath("/repo-b/src")],
             },
             toplevel_by_root={"/repo-a/src": "/repo-a", "/repo-b/src": "/repo-b"},
-            # See test_single_row_single_root_pins_by_toplevel for why these
-            # keys must be `str(Path(...))`, not the raw literal.
             head_by_toplevel={
                 str(Path("/repo-a")): "sha-a",
                 str(Path("/repo-b")): "sha-b",
@@ -278,7 +245,7 @@ class TestResolvePinnedCommitShas:
         fake = _FakePublishModule(
             row_to_roots={"row1": [_FakePath("/repo/src")]},
             toplevel_by_root={"/repo/src": "/repo"},
-            head_by_toplevel={},  # unborn HEAD
+            head_by_toplevel={},
         )
         with pytest.raises(proof.PinNotHonoredError):
             proof._resolve_pinned_commit_shas(fake, ["row1"])

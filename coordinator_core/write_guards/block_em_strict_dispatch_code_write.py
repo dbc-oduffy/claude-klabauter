@@ -43,17 +43,11 @@ from coordinator_core.write_guards._repo_root import resolve_repo_root
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
-#: hard-deny band; next free slot after block_duplicate_decision_record_id (137).
 PRIORITY = 138
 
-#: Control-whitespace/C0-control sanitization before interpolating an
-#: attacker-influenced value into a deny reason -- same pattern as every
-#: sibling write guard in this package.
 _CONTROL_WHITESPACE_RE = re.compile(r"[\t\r\n\f\v]")
 _C0_CONTROL_RE = re.compile(r"[\x00-\x1f]")
 
-#: `estimate.tshirt` values at or above which this guard denies inline EM
-#: authorship -- everything except `XS`.
 _DENY_TSHIRTS = frozenset({"S", "M", "L", "XL", "XXL"})
 
 
@@ -107,17 +101,12 @@ def _dispatch_deny(tshirt_display: str) -> Dict[str, Any]:
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the strict-dispatch EM-code-write guard against a PreToolUse
-    payload. Returns ``None`` (allow) or the nested hard-deny envelope.
-    Reached only with the flag set -- see the module docstring.
-    """
     try:
         if (payload.get("tool_name") or "") not in MATCHERS:
             return None
 
         session_id = payload.get("session_id") or ""
 
-        # Subagent detection -- fail open (allow) on any ambiguity.
         if payload.get("agent_id"):
             return None
 

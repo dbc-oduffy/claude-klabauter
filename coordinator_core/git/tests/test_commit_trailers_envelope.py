@@ -24,7 +24,6 @@ def test_crlf_is_inside_the_envelope():
 
 
 def test_comment_lines_are_outside_the_envelope():
-    """A `#` line is where every residual divergence lives."""
     assert not can_format_trailers_in_process(b"# a comment\n")
     assert not can_format_trailers_in_process(b"subject\n\n# c\nFoo: bar\n")
     assert not can_format_trailers_in_process(b"subject\n\n  # indented\n")

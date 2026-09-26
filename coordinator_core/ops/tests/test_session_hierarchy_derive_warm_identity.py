@@ -39,17 +39,11 @@ from unittest import mock
 from coordinator_core.ops import session_hierarchy_derive as sut
 from coordinator_core.session.core import session_identity_override
 
-#: Deliberately UUID-shaped: `session_identity_override` validates its
-#: argument and silently no-ops on anything that is not, so a non-UUID
-#: sentinel here would make every assertion below vacuous.
 _CALLER_SID = "11111111-2222-3333-4444-555555555555"
 _SERVER_ENV_SID = "99999999-8888-7777-6666-555555555555"
 
 
 def _run_and_capture_created_by_session(worktree_root: Path) -> str:
-    """Run `_run`, capturing the `created_by_session` positional arg
-    `derive()` was called with — the value that lands on every record's
-    `system.created_by_session` field."""
     (worktree_root / "state").mkdir(parents=True, exist_ok=True)
     with mock.patch.object(
         sut, "query_records", return_value=[]
@@ -65,8 +59,6 @@ def _run_and_capture_created_by_session(worktree_root: Path) -> str:
 
 class TestWarmCallerIdentity:
     def test_override_beats_process_env(self, tmp_path, monkeypatch):
-        """The bound caller identity wins over the serving process's env —
-        the defect itself, inverted."""
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.setenv("CLAUDE_SESSION_ID", _SERVER_ENV_SID)
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SERVER_ENV_SID)
@@ -78,9 +70,6 @@ class TestWarmCallerIdentity:
         assert created_by_session != _SERVER_ENV_SID
 
     def test_no_override_falls_through_to_env(self, tmp_path, monkeypatch):
-        """The cold path is unchanged: with nothing bound, the env ladder
-        still resolves identity. This is the whole non-warm fleet, so a fix
-        that only honoured the override would be a regression, not a fix."""
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.setenv("CLAUDE_SESSION_ID", _SERVER_ENV_SID)
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SERVER_ENV_SID)

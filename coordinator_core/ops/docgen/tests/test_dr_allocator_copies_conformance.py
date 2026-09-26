@@ -1,20 +1,3 @@
-"""coordinator_core.ops.docgen.tests.test_dr_allocator_copies_conformance —
-byte-identity compensating control for the deliberate two-copy vendoring of
-``dr_allocator.py``.
-
-Purpose: ``coordinator/bin/lib/dr_allocator.py`` (the live import target of
-the in-repo ``coordinator-doc-new`` CLI) and
-``coordinator_core/ops/docgen/dr_allocator.py`` (the DR-225 vendored copy
-consumed by ``coordinator_core``) are two on-disk copies of the same
-algorithm, kept deliberately separate rather than imported from one
-location (DR-083, DR-225). Nothing else guards against the two copies
-drifting apart silently — this test is that guard.
-
-Spec backlink: pln-strang-12-document-generation--75a7eb § C6 (AC5)
-Negative-spec: this test does not exercise either copy's behavior (see
-``test_dr_allocator.py`` for behavioral coverage) — it asserts byte-for-byte
-textual identity only.
-"""
 
 from __future__ import annotations
 

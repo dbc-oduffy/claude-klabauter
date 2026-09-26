@@ -1,19 +1,3 @@
-"""Behavioral tests for
-coordinator_core.write_guards.block_sizing_object_schema_violation — the
-hard-deny guard closing DoE memo state/cross-repo/inbox/2026-09-25-doe-
-claude-em-engine-friction-sizing-scaffold-memo-owner-safe-commit-emit-cap.md
-item 2 (a schema-invalid ``pm_resolution`` on a ``state/sizings/*.yaml``
-write only WARNed at write time; the hard refusal surfaced later from
-``coordinator-doc-new --type plan --sizing-object``).
-
-No sibling DoE-claude checkout required — this guard validates against
-Claude-klabauter's own vendored schema only.
-
-Covers: a string ``pm_resolution`` refused, an object ``pm_resolution``
-missing ``decided_on`` refused, a fully valid sizing-object passes, and a
-non-sizing document under an unrelated path is left untouched (module
-contract too).
-"""
 
 from __future__ import annotations
 

@@ -43,11 +43,6 @@ async def _echo_handler(params, repo_root=None):
 
 
 async def _envelope_capture_handler(params, repo_root=None):
-    # Records nothing about the envelope itself (dispatch_message only ever
-    # passes params/repo_root to handlers) -- instead this handler's job is
-    # just to exist so dispatch_from_hook's _origin_worktree stamping can be
-    # asserted by monkeypatching dispatch_message directly (see the test that
-    # needs envelope-shape visibility below).
     return {"ok": True}
 
 
@@ -56,9 +51,6 @@ async def _raising_handler(params, repo_root=None):
 
 
 async def _no_result_handler(params, repo_root=None):
-    # dispatch_message always sets "result" on success in real life; this
-    # handler exists only so a monkeypatched dispatch_message can simulate a
-    # response dict missing "result" entirely for test (e).
     return {}
 
 
@@ -117,9 +109,6 @@ def test_origin_worktree_omitted_when_absent_or_empty(
 
 
 def test_dispatch_from_hook_declares_its_own_caller(_register_test_ops, monkeypatch):
-    """C16: `dispatch_from_hook` is one of `dispatch_message`'s own call
-    sites and must declare `caller=` explicitly rather than relying on the
-    stack-walk fallback."""
     captured = {}
 
     async def _fake_dispatch_message(msg, *, caller=None, corr_id=None):
@@ -151,7 +140,6 @@ def test_handler_exception_surfaces_as_hook_dispatch_error(_register_test_ops):
 
 def test_absent_result_key_returns_empty_dict(_register_test_ops, monkeypatch):
     async def _fake_dispatch_message(msg, *, caller=None, corr_id=None):
-        # Simulate a (hypothetical) success response missing "result" entirely.
         return {"jsonrpc": "2.0", "id": 1}
 
     monkeypatch.setattr(ipc, "dispatch_message", _fake_dispatch_message)
@@ -160,17 +148,7 @@ def test_absent_result_key_returns_empty_dict(_register_test_ops, monkeypatch):
     assert result == {}
 
 
-# --- dispatch_ops_from_hook: the multi-op sibling -----------------------------
-#
-# Spec backlink: cross-repo/inbox/2026-08-19-doe-claude-em-widen-the-seam-dispatch-ops-from-hook.md
-#
-# Coverage:
-#   (f) results are positionally aligned with the input ops.
 #   (g) a failing op yields a RETURNED HookDispatchError and does NOT suppress
-#       the ops after it -- the per-concern isolation this entry point exists for.
-#   (h) ops run sequentially, in the order given, under ONE asyncio.run.
-#   (i) origin_worktree stamping follows dispatch_from_hook's omit-empty rule.
-#   (j) an empty op list returns [] without opening an event loop.
 
 
 def test_ops_results_are_positionally_aligned(_register_test_ops):
@@ -245,8 +223,6 @@ def test_ops_origin_worktree_follows_omit_empty_rule(
 
 
 def test_dispatch_ops_from_hook_declares_its_own_caller(_register_test_ops, monkeypatch):
-    """C16 sibling: `dispatch_ops_from_hook` declares its own caller string,
-    distinct from `dispatch_from_hook`'s, for each op in the batch."""
     captured: list = []
 
     async def _fake_dispatch_message(msg, *, caller=None, corr_id=None):

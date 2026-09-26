@@ -48,11 +48,9 @@ _ANSWERABLE_BASH = [
     "grep -rln TODO src tests docs",
 ]
 
-# Measured NOT fully answerable despite the same precedence-winning shape --
-# the general defect this predicate exists to close.
 _UNANSWERABLE_BASH = [
-    "curl -s foo | grep bar",  # piped INTO -- input doesn't exist until curl runs
-    "grep -rn foo . ; echo done",  # trailing `;`-joined segment, not pipe-connected
+    "curl -s foo | grep bar",
+    "grep -rn foo . ; echo done",
 ]
 
 
@@ -128,8 +126,6 @@ def test_powershell_command_stays_in_scope_and_denies():
 
 
 def test_declines_uses_the_actual_tool_name_for_plan_for(monkeypatch):
-    """The predicate must pass `tool_name` through to `plan_for` rather than
-    hardcoding "Bash" -- pinned by asserting the call the predicate makes."""
     seen = {}
 
     def _fake_plan_for(cmd, tool_name="Bash"):

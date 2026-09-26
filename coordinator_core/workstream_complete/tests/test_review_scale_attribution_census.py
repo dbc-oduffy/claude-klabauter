@@ -1,12 +1,3 @@
-"""`gates.review_scale` withholds a permissive verdict over an incompletely
-attributed range (claude-klabauter#23).
-
-The review-scale measurement sees only `Session-Id`-trailered commits. The
-measured specimen had 1 of 68 commits attributed and resolved `resolved: true,
-partition_mandatory: false` over a 22.5k-LOC range, in the same envelope whose
-`review-brightline-gate` directive refused that verdict for the same reason.
-These tests pin the two surfaces to one answer.
-"""
 
 from __future__ import annotations
 
@@ -17,7 +8,6 @@ import pytest
 
 import coordinator_core.workstream_complete as wsc
 
-#: Real git is the state under test: which commit objects carry a trailer.
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NO_WINDOW = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}

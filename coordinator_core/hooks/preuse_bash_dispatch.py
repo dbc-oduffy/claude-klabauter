@@ -82,17 +82,6 @@ from coordinator_core.ipc import register_op
 
 
 def _unevaluated(detail: str) -> dict:
-    """A guard that did not run, made visibly distinct from one that ran and passed.
-
-    `no_advisory()` and this envelope differ only in `additionalContext` — both
-    ALLOW the call — but that field is the whole point: `no_advisory()` says
-    nothing, which is what "ran clean" ALSO looks like, so a silenced guard read
-    as a passing one. This names the failure instead, to both the model
-    (`additionalContext`) and the operator (stderr), mirroring
-    `coordinator_core.warm.hook_http.unreachable_response`'s wording for the
-    transport-down case — this is that same fact ("did not run"), one layer
-    in, for an in-process chain failure rather than an unreachable engine.
-    """
     message = (
         f"A coordinator guard for PreToolUse could not be evaluated "
         f"(hooks.preuse_bash_dispatch: {detail}). It did not pass -- it did not run."
@@ -141,15 +130,10 @@ def _handler(params: dict, repo_root=None) -> dict:
             resolution_class=_engine_resolution_class(),
         )
     except Exception as exc:
-        # Fail-open ALLOW, but visibly -- see `_unevaluated`. This is the site
-        # ipc.py's "Missing required routing key ... requires _origin_worktree"
-        # (a Bash call whose cwd resolves outside every registered worktree)
-        # actually surfaces from; it used to be swallowed into `no_advisory()`
-        # here, indistinguishable from a guard that ran clean.
         return _unevaluated(f"{type(exc).__name__}: {exc}")
 
     if out is None:
         return no_advisory()
     if not isinstance(out, dict):
-        return no_advisory()  # a List (collect_advisories) is never reachable here
+        return no_advisory()
     return out

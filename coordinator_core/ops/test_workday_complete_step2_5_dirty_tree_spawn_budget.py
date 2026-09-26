@@ -68,11 +68,8 @@ def test_classify_main_pass_spawns_exactly_two_git_calls_for_several_dirty_paths
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=repo, check=True, **no_console_passthrough_kwargs())
 
-    # a.txt: real content change (has diff content).
     (repo / "a.txt").write_text("v2\n", encoding="utf-8")
-    # b.txt: touched but content-identical (EOL-phantom candidate).
     (repo / "b.txt").write_text("v1\n", encoding="utf-8")
-    # c.txt: new untracked file.
     (repo / "c.txt").write_text("new\n", encoding="utf-8")
 
     status = subprocess.run(

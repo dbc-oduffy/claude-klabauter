@@ -50,20 +50,11 @@ from coordinator_core.session_baton import store
 
 _LOG = logging.getLogger(__name__)
 
-#: Guards against a caller pasting an entire transcript into the journal. The
-#: baton is read on every `UserPromptSubmit` by DoE's announce hook, so its size
-#: is on a hot path; a note that needs more than this is a document, not a note.
 MAX_NOTE_CHARS = 2000
 
 
 def append_note(note: str, session_id: Optional[str] = None,
                 cwd: Optional[str] = None) -> dict:
-    """Append ``note`` to the live baton's ``carry_forward`` list.
-
-    Returns ``{ok, count, baton_path, session_id, reason}``. Never raises:
-    this is an advisory affordance on the context-pressure path, and a record
-    write that blocks its caller is worse than a note that did not land.
-    """
     empty = {"ok": False, "count": 0, "baton_path": None,
              "session_id": session_id, "reason": None}
 
@@ -100,9 +91,6 @@ def append_note(note: str, session_id: Optional[str] = None,
 
 def read_notes(session_id: Optional[str] = None,
                cwd: Optional[str] = None) -> dict:
-    """The other half of the affordance: a session resuming after compaction
-    has to be able to READ what its pre-compaction self left, or the write leg
-    was pointless."""
     sid = session_id or resolve_current_session_id(cwd)
     if not sid:
         return {"ok": False, "notes": [], "baton_path": None, "session_id": None}

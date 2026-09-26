@@ -32,8 +32,6 @@ def _envelope(monkeypatch, outcome: PushOutcome) -> dict:
 
 
 def test_a_failed_push_carries_its_reason(monkeypatch):
-    """The regression: exit 1 must not arrive with the LFS verdict as its
-    only content."""
     env = _envelope(
         monkeypatch,
         PushOutcome(
@@ -48,8 +46,6 @@ def test_a_failed_push_carries_its_reason(monkeypatch):
 
 
 def test_an_indeterminate_push_is_not_reported_as_a_confirmed_failure(monkeypatch):
-    """`unconfirmed` decides whether re-pushing is safe — it must reach the
-    caller, and must not be merged into `failed`."""
     env = _envelope(
         monkeypatch,
         PushOutcome(exit_code=1, unconfirmed=["git push: timed out, outcome unobserved"]),
@@ -60,8 +56,6 @@ def test_an_indeterminate_push_is_not_reported_as_a_confirmed_failure(monkeypatc
 
 
 def test_a_policy_decline_carries_the_branch_gate_message(monkeypatch):
-    """`message` is `branch_gate()`'s verbatim text; the two surfaces must
-    not drift, so it cannot be dropped and reworded downstream."""
     env = _envelope(
         monkeypatch,
         PushOutcome(
@@ -75,8 +69,6 @@ def test_a_policy_decline_carries_the_branch_gate_message(monkeypatch):
 
 
 def test_a_landed_push_carries_its_range(monkeypatch):
-    """`pushed_range`/`pushed_count` are read together — AC7's evidence that
-    a push landed and what it landed."""
     env = _envelope(
         monkeypatch,
         PushOutcome(exit_code=0, acted=["push"], pushed_range="aaa..bbb", pushed_count=3),

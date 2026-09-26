@@ -1,26 +1,3 @@
-"""test_cc_invoke_delegate_to_gate_by_root.py — C0 pin: `_delegate_to_gate`
-disambiguates by ROOT, not by module name.
-
-Chunk: docs/plans/2026-08-20-an-engine-root-is-not-named-for-the-repo.md § C0
-
-THE DEFECT this pins against: `_delegate_to_gate` did
-`sys.path.insert(0, candidate)` then
-`from coordinator_core.<name> import <entry>`. That was safe only because two
-trees spelled `<name>` differently. Once both spell it the same, the SECOND
-call in one process would get the FIRST call's cached `sys.modules` entry
-regardless of which candidate it was asked about — a silent wrong-root
-answer, not a raise.
-
-This test builds TWO synthetic candidate roots in one interpreter, each
-defining its own `coordinator_core/claude_klabauter_root.py` with a
-`coordinator_claude_klabauter_root_with_class` returning a distinguishable answer, and
-calls `_delegate_to_gate` on each in turn (SAME process, so any module-name
-caching defect is directly observable — no subprocess needed here, unlike the
-self-location-rung tests, because the property under test IS in-process
-`sys.modules` reuse).
-
-Run: pytest coordinator/bin/tests/test_cc_invoke_delegate_to_gate_by_root.py -q
-"""
 from __future__ import annotations
 
 import os
@@ -73,10 +50,6 @@ def _build_candidate_root(root: Path, *, answer: str) -> Path:
 
 @pytest.fixture(autouse=True)
 def _clean_sys_state():
-    """Isolate this module's mutations of sys.path / sys.modules from other
-    test files sharing the same interpreter (pytest runs tests in one
-    process). Snapshots and restores both around every test in this file.
-    """
     path_before = list(sys.path)
     modules_before = set(sys.modules)
     yield
@@ -143,9 +116,6 @@ def test_same_tree_short_circuit_returns_canonical_module_not_a_synthetic_copy(m
     monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", canonical_root)
     _mod._resolve_claude_klabauter_root()
 
-    # No synthetic "_cc_engine_root_<digest>" module should exist for the
-    # same-tree candidate — the short-circuit must never take the
-    # foreign-candidate file-path-load branch.
     synthetic = [name for name in sys.modules if name.startswith("_cc_engine_root_")]
     assert not synthetic, (
         f"same-tree candidate took the foreign-candidate load path, creating "

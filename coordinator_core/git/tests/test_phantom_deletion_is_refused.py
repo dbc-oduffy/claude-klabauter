@@ -1,17 +1,3 @@
-"""A declared deletion for a file the worktree still has is refused.
-
-The stale-shared-index phantom: an index entry says a freshly-committed path
-is deleted while the file sits on disk, so a commit built from that entry
-removes the path from HEAD and leaves it untracked in the tree. DoE-claude
-guards the class with a native pre-commit hook
-(`guard-phantom-staged-deletion-precommit.py`), and this route fires no
-native hook -- 82% of commits measured on a shared branch come through
-`commit_paths` -- so the refusal has to hold here to cover anything.
-
-Origin: cross-repo/inbox/2026-08-30-doe-claude-em-register-phantom-guard-in-
-gate-registry.md, whose sender named the in-process refusal as the better
-half of his own ask.
-"""
 
 import subprocess
 

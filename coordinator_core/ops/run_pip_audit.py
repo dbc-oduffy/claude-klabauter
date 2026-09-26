@@ -88,15 +88,8 @@ from typing import Any, Dict, List, Optional
 from coordinator_core.external_tool_budget import bound_for
 from coordinator_core.ipc import register_op
 
-#: Max characters of a failing pip-audit invocation's stderr replayed into
-#: the raised error message.
 _STDERR_TAIL = 2000
 
-# pip-audit is a live network call (vulnerability
-# advisory endpoint); an unresponsive network wedges this op's worker thread
-# forever without a cap. The cap is no longer this module's to choose: DR-349
-# grants a network leg no standing carve-out, so it lives inside the
-# external-tool ceiling like any other third-party spawn.
 _PIP_AUDIT_SITE = "coordinator_core/ops/run_pip_audit.py :: _run_pip_audit"
 _TIMEOUT_SECONDS = bound_for(_PIP_AUDIT_SITE)
 
@@ -162,11 +155,6 @@ def _run_pip_audit(params: dict, repo_root: Optional[Path] = None) -> dict:
         ) from exc
 
     stdout = (proc.stdout or "").strip()
-    # Empty stdout + non-zero exit (e.g. "No module
-    # named pip_audit") previously fell into the falsy-stdout branch below
-    # and silently substituted a clean-scan payload, identical to a genuine
-    # zero-vuln result. Treat that shape as an invocation failure, same as
-    # unparseable stdout.
     if not stdout and proc.returncode != 0:
         raise RuntimeError(
             "ci.run_pip_audit: pip-audit produced no stdout and exited "

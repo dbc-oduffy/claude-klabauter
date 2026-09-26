@@ -50,11 +50,6 @@ from coordinator_core.workstream_complete.directives_review import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Builders are read-only at build time — never write, regardless of repeats.
-# ---------------------------------------------------------------------------
-
-
 def test_brightline_gate_directive_build_alone_never_writes_a_memo(tmp_path: Path) -> None:
     for _ in range(3):
         directive = build_review_brightline_gate_directive("sid-1", repo_root=tmp_path)
@@ -114,11 +109,6 @@ def test_brightline_gate_directive_resolved_range_change_misses_even_with_same_s
     assert moved["args"] != first["args"]
 
 
-# ---------------------------------------------------------------------------
-# gate_memo_hit / record_gate_memo — the low-level primitives directly.
-# ---------------------------------------------------------------------------
-
-
 def test_gate_memo_hit_is_false_before_any_record(tmp_path: Path) -> None:
     assert gate_memo_hit(tmp_path, "d-some-gate", "input-a") is False
 
@@ -138,22 +128,10 @@ def test_gate_memo_hit_distinguishes_gate_ids(tmp_path: Path) -> None:
     assert gate_memo_hit(tmp_path, "d-run-review-brightline-gate", "same-input") is False
 
 
-# ---------------------------------------------------------------------------
-# record_gate_verdict_if_passed — the execution-time, verdict-aware writer.
-# ---------------------------------------------------------------------------
-
-
 def _brightline_directive(args: list[str]) -> dict[str, Any]:
     return {"id": "d-run-review-brightline-gate", "cli": "review-brightline-gate", "args": args}
 
 
-#: Review-integrator (Finding 1, 2026-08-11): `record_gate_verdict_if_passed`
-#: now requires BOTH range halves to be concrete 40-hex-digit object ids
-#: (never a bare/abbreviated ref) before it memoizes a brightline range —
-#: see that function's own docstring. These fixtures use full-length fake
-#: shas so the concreteness check they exercise is the same shape the
-#: gate's real argv carries; a short placeholder like `"aaa1111"` would
-#: fail the check regardless of which test property is under test.
 _FLOOR_SHA = "a1" * 20
 _TIP_SHA = "b2" * 20
 
@@ -165,38 +143,18 @@ def test_record_gate_verdict_records_brightline_on_resolved_range_pass(tmp_path:
 
 
 def test_record_gate_verdict_never_records_brightline_symbolic_default_shape(tmp_path: Path) -> None:
-    """The ordinary no-floor-resolved 2-arg shape falls back to the gate's
-    OWN symbolic default range (merge-base(origin/main, HEAD)..HEAD), which
-    re-resolves at the NEXT call's time — a new commit between two apply
-    passes changes the real input without changing this key. Never
-    memoized (settles the key-staleness question this stub raised)."""
     directive = _brightline_directive(["--session-id", "sid-1"])
     record_gate_verdict_if_passed(tmp_path, directive, 0, "VERDICT=single-reviewer-ok")
     assert gate_memo_hit(tmp_path, directive["id"], *directive["args"]) is False
 
 
 def test_record_gate_verdict_never_records_brightline_when_tip_is_still_symbolic(tmp_path: Path) -> None:
-    """Review-integrator (Finding 1, 2026-08-11): the ONLY production caller
-    supplying the floor kwargs (`_resolve_review_brightline_floor_kwargs`)
-    passes the literal string `"HEAD"` as `chain_tip_sha`, by design — so
-    the real mid-chain argv is 3 elements (`floor..HEAD`) but its tip half
-    is still a moving symbolic ref, not a frozen object id. This is the
-    exact shape that must MISS: `len(args) == 3` alone is not a sound
-    concreteness proxy, and recording here would reopen the identical
-    stale-key hazard the 2-arg-shape exclusion above exists to prevent."""
     directive = _brightline_directive(["--session-id", "sid-1", f"{_FLOOR_SHA}..HEAD"])
     record_gate_verdict_if_passed(tmp_path, directive, 0, "VERDICT=single-reviewer-ok")
     assert gate_memo_hit(tmp_path, directive["id"], *directive["args"]) is False
 
 
 def test_record_gate_verdict_never_records_brightline_when_floor_is_still_symbolic(tmp_path: Path) -> None:
-    """The mirror of the tip case above. `_is_concrete_sha` gates both halves
-    of the range through one boolean, so this direction cannot currently
-    regress independently — but nothing pins that, and a later edit
-    optimizing the check to test only the tip (the half the known production
-    caller gets wrong) would pass every other test in this file. No
-    production caller produces a symbolic floor today; this test exists to
-    keep the symmetry honest rather than to describe a live shape."""
     directive = _brightline_directive(["--session-id", "sid-1", f"HEAD..{_TIP_SHA}"])
     record_gate_verdict_if_passed(tmp_path, directive, 0, "VERDICT=single-reviewer-ok")
     assert gate_memo_hit(tmp_path, directive["id"], *directive["args"]) is False
@@ -215,11 +173,6 @@ def test_record_gate_verdict_is_a_noop_for_unrelated_directive_ids(tmp_path: Pat
     assert not memo_dir.exists() or list(memo_dir.iterdir()) == []
 
 
-# ---------------------------------------------------------------------------
-# apply.py::_execute_directives — end-to-end skip/re-fire/no-poison behavior.
-# ---------------------------------------------------------------------------
-
-
 def _fake_module(main_fn: Callable[..., Any]) -> ModuleType:
     mod = ModuleType("fake_cli")
     mod.main = main_fn
@@ -229,8 +182,6 @@ def _fake_module(main_fn: Callable[..., Any]) -> ModuleType:
 def test_execute_directives_unchanged_inputs_after_pass_skip_the_gate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Review-integrator (Finding 1, 2026-08-11): the floor and tip must both
-    # be concrete 40-hex-digit shas for `record_gate_verdict_if_passed` to
     # memoize this pass at all — see `_FLOOR_SHA`/`_TIP_SHA`'s docstring.
     args = ["--session-id", "sid-1", f"{_FLOOR_SHA}..{_TIP_SHA}"]
     dispatch_count = {"n": 0}
@@ -257,7 +208,6 @@ def test_execute_directives_unchanged_inputs_after_pass_skip_the_gate(
     assert report["landed"] == [directive["id"]]
     assert dispatch_count["n"] == 1
 
-    # Second pass: builder now sees the execution-time memo -> already_satisfied.
     directive_2 = build_review_brightline_gate_directive(
         "sid-1",
         trail_records=[{"sha_range_head": _FLOOR_SHA}],
@@ -269,17 +219,12 @@ def test_execute_directives_unchanged_inputs_after_pass_skip_the_gate(
     assert directive_2["already_satisfied"] is True
     exit_code_2, report_2 = ws_apply._execute_directives([directive_2], [], {}, repo_root=tmp_path)
     assert report_2["landed"] == [directive_2["id"]]
-    assert dispatch_count["n"] == 1  # not dispatched again
+    assert dispatch_count["n"] == 1
 
 
 def test_execute_directives_symbolic_tip_re_dispatches_every_pass(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Review-integrator (Finding 1, 2026-08-11): the real production shape
-    (`_resolve_review_brightline_floor_kwargs` passing the literal `"HEAD"`
-    as `chain_tip_sha`) must NEVER memoize, end to end — even after a
-    confirmed exit-0 pass, the next `_execute_directives` call re-dispatches
-    because the tip half of the range is still symbolic."""
     dispatch_count = {"n": 0}
 
     def gate_main(argv: list[str]) -> int:
@@ -311,15 +256,9 @@ def test_execute_directives_symbolic_tip_re_dispatches_every_pass(
         session_start_sha="sss0000",
         repo_root=tmp_path,
     )
-    assert directive_2["already_satisfied"] is False  # never memoized -- symbolic tip
+    assert directive_2["already_satisfied"] is False
     ws_apply._execute_directives([directive_2], [], {}, repo_root=tmp_path)
-    assert dispatch_count["n"] == 2  # re-fired, not skipped
+    assert dispatch_count["n"] == 2
 
 
-# ---------------------------------------------------------------------------
 # C4 (AC7)'s `_SINGLE_REVIEW`/`build_write_trail_directives` gate-memo tests
-# REMOVED (C12, DR-358): `build_write_trail_directives` and the rest of the
-# `d-write-trail` family were dropped from `__init__.py` -- no review trail
-# is owed at close, and the CLI verb it fronted (`wsc-coverage-gate-runner
-# write-trail`) was removed by PM ruling 2026-08-23. No replacement.
-# ---------------------------------------------------------------------------

@@ -30,7 +30,6 @@ _BIN_DIR = Path(__file__).parent.parent
 
 
 def _load_module():
-    """Load refresh-plugin-live-install.py by file path (hyphenated name bypass)."""
     spec = importlib.util.spec_from_file_location(
         "refresh_plugin_live_install",
         _BIN_DIR / "refresh-plugin-live-install.py",
@@ -105,9 +104,6 @@ def test_git_leg_refuses_when_live_path_is_nested_inside_unrelated_repo(tmp_path
     _git(["checkout", "-b", "machine-a"], enclosing_repo)
 
     # A real origin with a divergent main, so an UNGUARDED leg's
-    # fetch+checkout would actually succeed and move HEAD -- proves the
-    # assertions below exercise the guard, not an incidental "no remote"
-    # failure.
     origin = tmp_path / "origin.git"
     _git(["init", "--bare", str(origin)], tmp_path)
     _git(["remote", "add", "origin", str(origin)], enclosing_repo)
@@ -147,10 +143,6 @@ def test_git_leg_refuses_when_live_path_is_nested_inside_unrelated_repo(tmp_path
 
 
 def test_git_leg_worktree_root_guard_allows_live_path_that_is_its_own_root(tmp_path, monkeypatch):
-    """Negative-spec companion: a live_path that IS a git work-tree root of
-    its own must clear this specific guard (may still fail later for other
-    reasons, e.g. no origin remote -- this only proves the new refusal does
-    not fire)."""
     real_exists = Path.exists
 
     def _fake_exists(self):
@@ -181,8 +173,6 @@ def test_git_leg_worktree_root_guard_allows_live_path_that_is_its_own_root(tmp_p
         tmp_path / "refresh-log",
     )
 
-    # Fails later (no origin remote configured), NOT on the work-tree-root
-    # guard -- proves the guard is scoped to nesting, not to git generally.
     assert rc == 1
     result = _mod._git_worktree_root(live_path)
     assert result == live_path.resolve(strict=True)

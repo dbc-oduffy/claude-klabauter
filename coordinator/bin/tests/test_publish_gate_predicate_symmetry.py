@@ -75,9 +75,6 @@ def _load_publish_module():
 
 publish = _load_publish_module()
 
-# Only `iter_surface_files` is exercised by `_compute_effective_source_count`;
-# the real one is used deliberately (a stub would defeat a test whose whole
-# subject is which walk predicate runs).
 _CLAUDE_KLABAUTER = SimpleNamespace(iter_surface_files=pct_surface.iter_surface_files)
 
 _GUARD_PARAMS = {"tolerance": 0, "include_extensions": ["*.md"]}
@@ -97,8 +94,6 @@ def _wiki_tree(root: Path, *, md_count: int = 3, with_ignore_dotfile: bool = Tru
     for i in range(md_count):
         (root / f"page-{i}.md").write_text(f"# page {i}\n", encoding="utf-8")
     if with_ignore_dotfile:
-        # The allowlist builder copies this into the restricted staging tree
-        # unconditionally -- it is genuinely present on the source side.
         (root / ".percolate-ignore").write_text("scratch/\n", encoding="utf-8")
     return root
 
@@ -113,14 +108,10 @@ class TestFileCountDeltaPredicateSymmetry:
             tree, dict(_GUARD_PARAMS), effective_source_count=expected
         )
 
-        # Same tree on both sides: a non-zero delta can only mean the two sides
-        # applied different predicates.
         assert expected == 3, expected
         assert result.ok, result.message
 
     def test_dotfile_only_ever_counted_by_the_unnarrowed_walk(self, tmp_path):
-        """Pins the mechanism, so a later change that silently drops the
-        narrowing fails here rather than only in a full publish run."""
         tree = _wiki_tree(tmp_path / "tree", md_count=3, with_ignore_dotfile=True)
 
         unnarrowed = sum(1 for _ in pct_surface.iter_surface_files(tree, include_extensions=["*.md"]))
@@ -136,9 +127,6 @@ class TestFileCountDeltaPredicateSymmetry:
         assert publish._compute_effective_source_count(_CLAUDE_KLABAUTER, tree, _section()) == narrowed
 
     def test_guard_entry_params_win_over_section_file_surface(self, tmp_path):
-        """The guard's observed side reads scoping off the guard ENTRY, so the
-        expected side must too — a section-level `file_surface` that disagrees
-        must not influence the count."""
         tree = _wiki_tree(tmp_path / "tree", md_count=3, with_ignore_dotfile=False)
         (tree / "notes.txt").write_text("not markdown\n", encoding="utf-8")
 
@@ -169,10 +157,6 @@ class TestFileCountDeltaPredicateSymmetry:
         assert publish._file_count_delta_guard_params(section) is None
 
     def test_guard_entry_with_no_params_yields_zero_not_a_crash(self, tmp_path):
-        """An entry declaring no `params` narrows against an empty include set,
-        which admits nothing — the same structurally-zero shape the guard's own
-        observed side produces, so the two still agree (and the guard's
-        `allow_empty` rule is what makes that loud, not this function)."""
         tree = _wiki_tree(tmp_path / "tree")
         section = {"guards": [{"kind": "file-count-delta"}]}
 
@@ -186,8 +170,6 @@ class TestUnscannedExceptionsRatification:
 
         assert path in exceptions, sorted(exceptions)
         reason = exceptions[path]
-        # A key that is not the destination-repo-root-relative POSIX path the
-        # check compares against is silently inert, which is the worst outcome.
         assert not path.startswith("coordinator/")
         assert "2026-08-05-doe-claude-em-three-publish-gates" in reason
 
@@ -216,7 +198,6 @@ class TestInstallDocSet:
 
         assert "CHANGELOG.md" not in selected
         # CONTRIBUTING.md stays: this gate has caught a genuine stale install
-        # pointer in it, so it is not a doc class to drop.
         assert selected == set(shipped) - {"CHANGELOG.md"}
 
     def test_changelog_class_variants_are_excluded_case_insensitively(self, tmp_path):
@@ -236,8 +217,6 @@ class TestInstallDocSet:
         assert selected == {"changelog-policy.md"}
 
     def test_changelog_stale_pointers_no_longer_reach_the_checker(self, tmp_path):
-        """The 69-finding shape: a changelog entry naming a since-retired script
-        is a correct historical statement, and must not be a finding."""
         module = self._module()
         (tmp_path / "CHANGELOG.md").write_text(
             "- **Cruft sweep.** `bin/cruft-sweep.sh` (mechanical) shipped in v3.\n",
@@ -266,13 +245,7 @@ class TestAlwaysSweptEntrypointFloor:
         bin_dir = root / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
         (bin_dir / "helper.py").write_text("VALUE = 1\n", encoding="utf-8")
-        # Reaches `bin/helper.py` through a first-party import -- some
-        # changed-set (one that names helper.py) could put this at risk, so
-        # it must NOT be in the always-swept floor.
         (bin_dir / "entry_linked.py").write_text("from bin import helper\n\nUSE = helper.VALUE\n", encoding="utf-8")
-        # No first-party imports at all -- no changed-set that omits this
-        # file's own path could ever put it at risk, so it MUST be in the
-        # always-swept floor.
         (bin_dir / "entry_isolated.py").write_text("VALUE = 2\n", encoding="utf-8")
         return root
 
@@ -285,9 +258,6 @@ class TestAlwaysSweptEntrypointFloor:
         assert floor == ("bin/entry_isolated.py",), floor
 
     def test_driver_wrapper_delegates_to_the_engine_seam_only(self, tmp_path):
-        """The wrapper needs nothing but the resolved callable -- no
-        `percolate_engine_module` attribute, and no reach into any
-        underscore-prefixed engine name."""
         tree = self._linked_tree(tmp_path)
         entrypoints = ("bin/entry_linked.py", "bin/entry_isolated.py")
         calls: list = []
@@ -343,10 +313,6 @@ class TestEndOfRunEntrypointGateDispatchLogic:
         )
 
     def test_changed_only_unions_selected_with_always_swept_floor(self, tmp_path):
-        """`derive_changed_entrypoints` selects one entrypoint, the always-
-        swept floor names a different one -- `run_entrypoint_gate` must
-        receive their sorted union as `subset`, and both derivers must see
-        the repo-relative changed path plus the full entrypoint population."""
         repo_root = tmp_path
         (repo_root / "changed.py").write_text("", encoding="utf-8")
 
@@ -423,10 +389,6 @@ class TestEndOfRunEntrypointGateDispatchLogic:
         assert run_calls == [None]
 
     def test_changed_only_with_no_changed_set_falls_back_to_full_sweep(self, tmp_path):
-        """`changed_files_by_repo_root=None` with `changed_only=True` --
-        nothing to derive a subset from, so `subset=None` reaches `run_
-        entrypoint_gate` unchanged, same as a pre-`changed_only` full sweep.
-        Neither deriver may be called."""
         repo_root = tmp_path
 
         run_calls: list = []

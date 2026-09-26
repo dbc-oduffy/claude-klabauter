@@ -137,18 +137,8 @@ from coordinator_core.coverage import (
     _record_range_has_stored_head,
 )
 
-#: Generator-provenance declaration (coordinator_core/ops/generator_provenance.py).
-#: record_gate_memo() below writes state/ceremony/wsc-gate-verdict-memo/<hash>.json
-#: (hashed-key filename, one per distinct (gate_id, resolved-inputs) pair) -- a
-#: data-dependent set of tracked artifacts, not a fixed one, so this is a
 #: corpus-mutator declaration rather than GENERATES.
 MUTATES = ["state/ceremony/wsc-gate-verdict-memo/*.json"]
-
-# ---------------------------------------------------------------------------
-# Shared directive-dict helper (same shape as __init__.py's private
-# `_directive` — duplicated rather than imported to keep this module
-# `__init__`-independent per D-4's pure-submodule convention).
-# ---------------------------------------------------------------------------
 
 
 def _directive(
@@ -161,38 +151,14 @@ def _directive(
     return {"id": id_, "cli": cli, "args": args, "depends_on": depends_on, "already_satisfied": already_satisfied}
 
 
-#: Unlike its six siblings, no builder in this module reads a `decisions`
-#: mapping directly — each takes its inputs as explicit typed parameters
-#: (`session_id`, `range_`, `slices`, `plan_file`, ...), resolved by the
-#: caller (`__init__.py`'s `build_directives`) from ITS OWN `decisions`
-#: keys (`review_partition`, `classify_dispatch_plan_file`).
-#: Declared empty here — rather than omitted — so every `directives_*.py`
 #: sibling carries the same `FREE_VALUE_KEYS` contract point per AC3
-#: (docs/plans/2026-07-29-workstream-complete-the-envelope-names-t.md),
-#: and a future caller-side `decisions` param added to this module has one
-#: obvious place to register its keys.
 FREE_VALUE_KEYS: tuple[str, ...] = ()
 
 
-# ---------------------------------------------------------------------------
-# d-review-scale-decide — the diff-shape row-selection table
-# (SKILL.md:413-426), a pure computed decision, no CLI.
-# ---------------------------------------------------------------------------
-
-
 class ReviewScaleDecision(NamedTuple):
-    row: Optional[int]  # None iff resolved is False — never row 0/7/None-as-a-row-choice.
-    scale: str  # "none" | "code-reviewer" | "partitioned" | "unresolved"
-    #: `None` iff `resolved is False` — the same "not measured" state `row`
-    #: already carries, on the field a caller is most likely to read alone.
+    row: Optional[int]
+    scale: str
     #: `False` here means MEASURED and not mandatory; a reader that saw only
-    #: `False` could not tell a genuinely small diff from an unmeasured
-    #: 976-LOC/26-commit one, and the arm is silent (rc=0), so the gate the
-    #: skill body calls mandatory failed open. Reported by
-    #: example-retrieval-repo-ue-addon-em, 2026-08-31. `None` is falsy, so every
-    #: truthiness test downstream is unchanged; only a reader that
-    #: distinguishes it — or a JSON consumer, which now sees `null` beside
-    #: `scale: "unresolved"` — sees any difference.
     partition_mandatory: Optional[bool]
     commit_message_names_change: bool
     reason: str
@@ -204,15 +170,8 @@ _BRIGHTLINE_COMMITS = 5
 _BRIGHTLINE_SURFACES = 4
 _SMALL_FIX_LOC_CEILING = 50
 
-#: Chain-wide arm ceiling (C7, restoring what K-007's row-6 removal lost).
 #: Mirrors row 4's `_BRIGHTLINE_COMMITS` on the same unit -- an
 #: `OracleReport` figure's `weight` accumulates at `_DEFAULT_BASELINE_
-#: WEIGHT` (1.0, `commit_ledger/classify.py`) per non-noise commit absent
-#: repo-specific elevation, so this ceiling reads as "the chain-wide
-#: equivalent of row 4's 5-commit brightline" rather than an unrelated
-#: figure. Scoped to this module only -- not exported, not reused by the
-#: oracle itself (`oracle.py`'s own docstring: NO threshold comparison
-#: there, that stays here).
 _CHAIN_WEIGHT_CEILING = float(_BRIGHTLINE_COMMITS)
 
 def _unresolved(reason: str) -> ReviewScaleDecision:
@@ -342,47 +301,12 @@ def _decide_review_scale_core(
     is_chain_terminal = canonicalize(chain_disposition) == PREDECESSOR_CONSUMED
 
     # `baton_count >= 2` MULTIPLIES the row-4 metrics (never forces the
-    # partitioned row outright) — see the docstring's `baton_count` bullet.
-    # `None`/`1` leaves `effective_*` identical to the raw measurement, so
-    # every existing caller (which omits `baton_count`) sees byte-identical
-    # row-4 behaviour. Hoisted above the `is_chain_terminal` branch (fix,
-    # 2026-08-10): row 4 must be evaluable on a chain terminal too — see
-    # this function's own docstring precedence paragraph.
-    # shell-doc-ok: the backticked comparison above is a Python boolean
-    # expression, not a shell version constraint.
     baton_multiplier = baton_count if (baton_count is not None and baton_count >= 2) else 1
-    # 2026-08-11 (AC4): row 4 reads `code_loc` — the noise-excluded,
-    # reviewable LOC rows 1-3 already discriminate on — not `gross_loc`'s
-    # raw diff-stat sum. `gross_loc` stays an accepted parameter (unused by
-    # this predicate now) for callers not yet threading `code_loc` through.
-    #
     # HOW BOTH ARE MEASURED, cited here because the definition crosses a repo
-    # boundary and the divergence was accruing with no citation at either end.
-    # doe-claude-em asked us to adopt or counter their C5 ruling (cross-repo/
-    # archive/2026-08-29-doe-claude-em-review-scale-ships-no-brightline-
     # inputs.md, ask (b)): sum PER-OWNED-COMMIT diffs (`<sha>~1..<sha>` each),
-    # never a range over oldest..newest. ADOPTED, 2026-08-31 — and this engine
-    # already computed it that way independently, for the same reason. See
-    # `__init__.py :: _measure_session_review_scale_inputs`, whose own
-    # Negative-spec is "never widen either leg back to a branch-scoped range":
-    # on a shared branch a range spans every peer commit interleaved between
-    # base and HEAD. Their measured cost of getting it wrong by hand was 33,246
-    # gross LOC reported where the per-owned-commit sum is 16,037.
-    #
-    # So the two planes agree, and the citation is the deliverable — a reader
-    # who finds a number that disagrees with these should suspect a RANGE
-    # measurement before suspecting either engine.
     effective_code_loc = code_loc if code_loc is None else code_loc * baton_multiplier
-    # 2026-08-20 (same memo as the `code_loc_resolved_zero` note below): the
     # commit-count arm is a proxy for ACCUMULATED RISK, and a commit with a
-    # zero-line diff carries none. `baton-assemble apply` scaffold commits
-    # are the reported instance — nine of one session's sixteen, every one
-    # at `diff_loc: 0`, pushing a doc-only close past the five-line threshold.
-    # Subtracted from the brightline's commit arm ONLY: `commit_count`
-    # itself stays the honest count of this session's commits everywhere it
     # is REPORTED (row-4 reason string, review trail, commit slices), so
-    # this narrows what the threshold reads without making a counter lie
-    # about what it counted. `None` no-ops for every caller not supplying it.
     brightline_commit_count = commit_count
     if commit_count is not None and zero_diff_commit_count:
         brightline_commit_count = max(0, commit_count - zero_diff_commit_count)
@@ -391,20 +315,7 @@ def _decide_review_scale_core(
     )
     effective_surface_count = surface_count if surface_count is None else surface_count * baton_multiplier
 
-    # 2026-08-20 (cross-repo/inbox/2026-08-20-example-retrieval-repo-em-review-gate-doc-
     # only-em-discretion.md, PM-endorsed): a RESOLVED `code_loc == 0` means
-    # the reviewable-LOC oracle measured this session and found nothing to
-    # review. The commit-count and surface-count arms are PROXIES for
-    # accumulated code risk; letting a proxy mandate a partition over the
-    # direct measurement's own zero is the reported defect — it converted a
-    # doc-only close into one legal exit, a PM waiver, for work the EM can
-    # obviously judge. The brightline stays fully armed for every session
-    # with any code in it: this suppresses the proxies ONLY when the direct
-    # measure is a resolved, honest zero (`None` is unresolvable and is
-    # deliberately NOT treated as zero — that would fail toward less
-    # review). Falls through to row 1 ("no code touched"), an EM-discretion
-    # row, which is what `review-brightline-gate`'s own `VERDICT=single-
-    # reviewer-ok` on the same range already said.
     code_loc_resolved_zero = code_loc is not None and code_loc == 0
     brightline_known_true = (not code_loc_resolved_zero) and (
         (effective_code_loc is not None and effective_code_loc >= _BRIGHTLINE_LOC)
@@ -418,18 +329,8 @@ def _decide_review_scale_core(
             f", baton_count={baton_count} multiplier applied" if baton_multiplier != 1 else ""
         )
         scope_note = f", commit_count_scope={commit_count_scope}" if commit_count_scope is not None else ""
-        # THE REASON STRING NAMES WHICH ARM TRIPPED, AND SAYS SO WHEN AN INPUT
         # WAS NEVER MEASURED. `brightline_known_true` is an OR of three
-        # independently sufficient arms, so row 4 is legitimately reachable
-        # with one input still `None` -- a resolved proxy that trips is
-        # dispositive, and no later measurement can un-trip it. That verdict is
-        # sound. What was NOT sound was printing the unmeasured input as though
-        # it were a measurement: `code_loc=None` inside "big-diff brightline
-        # hit" reads as a measurement that came back empty -- see this
         # function's own "HOW BOTH ARE MEASURED" comment above for the
-        # 33,246-vs-16,037 incident that cost (not restated here). Naming the
-        # tripped arm tells the reader the verdict does not depend on what is
-        # missing.
         tripped = [
             name
             for name, value, floor in (
@@ -453,12 +354,6 @@ def _decide_review_scale_core(
             )
             if value is not None
         )
-        # `code_loc` is not a peer of `commits`/`surfaces` here: it alone
-        # carries veto power via `code_loc_resolved_zero`. When it is the
-        # unmeasured member, a later `code_loc == 0` measurement CAN still
-        # flip this verdict away from mandatory partition, even though
-        # `commits`/`surfaces` already tripped — so it must not be told
-        # "cannot change this verdict" alongside them.
         unmeasured_fixed = [name for name in unmeasured if name != "code_loc"]
         unmeasured_parts = []
         if unmeasured_fixed:
@@ -491,11 +386,6 @@ def _decide_review_scale_core(
 
     if is_chain_terminal:
         # Row 6 (the chain-scoped PARTITION-MANDATORY verdict) is REMOVED with
-        # the chain-terminal brightline gate that produced it — state/kill-
-        # ledger.md K-007, 2026-08-19, PM ruling. A chain terminal now decides
-        # on the session-scoped brightline alone: row 4 when it trips, row 5
-        # otherwise. The accumulated-over-many-small-sessions case row 6 used
-        # to catch has no detector until the PM specifies the replacement.
         if brightline_known_true:
             return _row4_decision()
         if not brightline_resolved:
@@ -508,15 +398,7 @@ def _decide_review_scale_core(
     if brightline_known_true:
         return _row4_decision()
 
-    # 2026-08-11 (reverted C7): row 4's unresolved inputs must block the
-    # decision ahead of row 3, not the other way around. Row 3 is a
-    # strictly smaller review obligation than row 4 -- resolving to row 3
-    # while row 4's metrics (`code_loc`/`commit_count`/`surface_count`) are
-    # genuinely unmeasured risks silently under-scoping a session whose
     # real diff would have tripped row 4's PARTITION-MANDATORY. The
-    # module's own failure direction is toward asking, never toward a
-    # smaller review, so an unresolved row-4 input keeps the whole
-    # decision unresolved rather than falling through to row 3.
     if not brightline_resolved:
         return _row4_inputs_unresolved()
 
@@ -554,12 +436,6 @@ def _decide_review_scale_core(
             reason="single-file fix under 50 LOC, no shared schema touched, no executor",
         )
 
-    # Floor (docstring's `baton_count` bullet): a resolved `baton_count >= 2`
-    # may never resolve to a no-review row (1/2) — a multi-baton mise close
-    # always gets at least a reviewer. `None` no-ops, leaving `no_review_
-    # decision` unchanged for every existing caller.
-    # shell-doc-ok: the backticked comparison above is a Python boolean
-    # expression, not a shell version constraint.
     if baton_count is not None and baton_count >= 2:
         return ReviewScaleDecision(
             row=3, scale="code-reviewer", partition_mandatory=False, commit_message_names_change=False,
@@ -642,16 +518,6 @@ def decide_review_scale(
     zero_diff_commit_count: Optional[int] = None,
     oracle_report: Optional[OracleReport] = None,
 ) -> ReviewScaleDecision:
-    """Wraps `_decide_review_scale_core` (the row-selection table, docstring
-    there) with the chain-wide oracle arm (`_apply_chain_wide_arm`, C7).
-
-    `oracle_report` is the only new input: an `Optional[commit_ledger.
-    oracle.OracleReport]`, `None` by every existing caller until they wire
-    C7's oracle in. `None` leaves this function byte-identical to the
-    pre-C7 `_decide_review_scale_core` on every input combination -- the
-    arm is purely additive and cannot change row selection, precedence, or
-    `partition_mandatory` for a caller that has not adopted it yet.
-    """
     decision = _decide_review_scale_core(
         gross_loc=gross_loc,
         code_loc=code_loc,
@@ -667,66 +533,15 @@ def decide_review_scale(
     return _apply_chain_wide_arm(decision, oracle_report)
 
 
-# ---------------------------------------------------------------------------
-# Gate verdict memo — C4 (docs/plans/2026-08-10-commit-event-5s-cap-and-the-
-# silent-tail.md, AC6). Multi-pass `apply` (the skill's own `next_move`:
-# "resolve a subset and re-run to pick up the rest") re-invokes both gate
 # builders with UNCHANGED inputs every pass, and until this memo existed
-# neither builder had any way to tell `apply` the verdict was already
-# walked — `already_satisfied` defaulted False and stayed False forever.
-#
 # Keyed on THE INPUTS EACH GATE WAS COMPUTED FROM, never on session id or
-# wall-clock: `build_chain_coverage_gate_directive`'s only input is
-# `consumed_handoff` (the sole value threaded into its
-# `coverage-gate --from-handoff <consumed_handoff>` argv);
-# `build_review_brightline_gate_directive`'s input is the FINAL resolved
-# argv (`session_id` plus the optional trailing `<git-range>` this module's
-# own `resolve_mid_chain_review_scope` derives from `trail_records`/
-# `chain_tip_sha`/`is_ancestor`/`session_start_sha`) — the range string is
-# what the underlying gate actually walks, so a caller supplying a
 # DIFFERENT floor (new trail record landed, chain tip moved) mints a new
-# key and misses, even with the same `session_id`. A key match means "this
-# exact argv was already resolved for this gate before" — nothing narrower,
-# nothing session-scoped, matching the stub's explicit instruction that a
-# stale-input memo must MISS rather than serve a wrong verdict.
-#
-# Storage shape only borrows from `chain_partition_verdict_store.py` (that
-# module was removed 2026-08-19, state/kill-ledger.md K-007; the SHAPE it
-# established is what this still mirrors)
-# (per-record JSON file under `state/ceremony/`, atomic mkstemp+replace,
-# hashed filename) — that module's KEYING (session id) is explicitly the
-# wrong key for this correctness-bearing skip (its own module docstring:
-# "does NOT short-circuit gate execution"), so it is precedent for the
-# shape, not reused directly. This memo stores a presence marker only — it
-# never fabricates or reads back a verdict VALUE, it only tells `apply`
-# "this exact input set was already resolved once," which is what flips
-# `already_satisfied` so `_execute_directives` skips the re-walk.
-#
 # BUILD-TIME IS READ-ONLY; RECORDING IS EXECUTION-TIME ONLY (fix, C4 retry
-# #3, docs/plans/2026-08-10-commit-event-5s-cap-and-the-silent-tail.md AC6).
-# The first two attempts at this AC had the builders below call
-# `record_gate_memo` unconditionally, INSIDE the builder, at directive-BUILD
-# time — independent of whether the gate CLI ever actually dispatched, and
-# independent of the verdict it returned. `build_directives` is called from
-# `brief()`, which serves BOTH `apply()`'s mutating pass AND every read-only
-# preview caller — so build-time recording poisoned the memo on a plain
-# `brief()` preview before the gate ran even once, and cached a WARN/FAIL
-# result as done. Both builders below now perform ONLY a read-only
-# `gate_memo_hit` check (never a write) when `repo_root` is supplied; the
-# WRITE happens exactly once, from `apply.py::_execute_directives`, via
-# `record_gate_verdict_if_passed` below, called ONLY after the gate CLI
-# actually dispatched this pass, gated on its captured exit code (and, for
-# the coverage gate, its verdict line — a `VERDICT=WARN` exit is 0 but is
-# NOT a confirmed pass and must not be memoized).
-# ---------------------------------------------------------------------------
 
 GATE_VERDICT_MEMO_RELDIR = "state/ceremony/wsc-gate-verdict-memo"
 
 
 def _gate_memo_key(gate_id: str, *input_parts: str) -> str:
-    """Deterministic filename-safe key over `gate_id` plus every input
-    part, in order — order-sensitive by design (a range string and a
-    session id are not interchangeable inputs)."""
     raw = "\x1f".join((gate_id, *input_parts))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
@@ -736,10 +551,6 @@ def _gate_memo_path(repo_root: Path, gate_id: str, *input_parts: str) -> Path:
 
 
 def gate_memo_hit(repo_root: Path, gate_id: str, *input_parts: str) -> bool:
-    """True iff a memo record exists for this EXACT `(gate_id, input_parts)`
-    key — i.e. this gate was already resolved once for these exact inputs.
-    Never raises; an unstattable path degrades to a miss (fail-closed: a
-    miss costs a redundant walk, a false hit would skip a needed one)."""
     try:
         return _gate_memo_path(repo_root, gate_id, *input_parts).is_file()
     except OSError:
@@ -747,10 +558,6 @@ def gate_memo_hit(repo_root: Path, gate_id: str, *input_parts: str) -> bool:
 
 
 def record_gate_memo(repo_root: Path, gate_id: str, *input_parts: str) -> None:
-    """Persist the "this exact input set was resolved" marker. Raises on
-    I/O failure (mkdir/mkstemp/replace) — mirrors `chain_partition_verdict_
-    store.write_verdict_record`'s fail-loud contract; a caller that wants
-    memoisation to be best-effort catches this itself."""
     path = _gate_memo_path(repo_root, gate_id, *input_parts)
     path.parent.mkdir(parents=True, exist_ok=True)
     record = {"gate_id": gate_id, "input_parts": list(input_parts)}
@@ -768,44 +575,21 @@ def record_gate_memo(repo_root: Path, gate_id: str, *input_parts: str) -> None:
         raise
 
 
-#: The one live gate directive id `record_gate_verdict_if_passed` knows how
-#: to record a memo for: `d-run-review-brightline-gate`, this module's own
-#: `build_review_brightline_gate_directive` id. `d-coverage-gate` (the
-#: chain-end coverage-verdict directive built by `__init__.py`'s
-#: `_build_legacy_coverage_and_trail_directives`) was removed here (K-001,
-#: state/kill-ledger.md) along with the directive itself.
 _LIVE_GATE_MEMO_DIRECTIVE_IDS = frozenset({"d-run-review-brightline-gate"})
 
-#: C4 (docs/plans/2026-08-15-the-ceremony-tail-stops-lying-about-why-it-
-#: failed.md): `__init__.py::build_write_trail_directives` emits ONE
-#: `d-write-trail` directive for the single-dict `review` shape, or N
 #: `d-write-trail-<index>` directives (index = position in the ORIGINAL
-#: list, not a count of qualifying entries) for the list shape — see that
 #: function's own docstring. `_LIVE_GATE_MEMO_DIRECTIVE_IDS` is a frozenset
-#: of exact strings and therefore CANNOT match the indexed shape by simple
-#: membership, so eligibility for a write-trail directive is a prefix test
 #: (`_is_write_trail_directive_id`) checked ALONGSIDE, never inside, the
-#: frozenset — see `record_gate_verdict_if_passed`'s combined check.
 _WRITE_TRAIL_DIRECTIVE_ID_PREFIX = "d-write-trail"
 
 
 def _is_write_trail_directive_id(gate_id: Optional[str]) -> bool:
-    """True for the single-dict id (`d-write-trail`) and every indexed id
-    (`d-write-trail-0`, `d-write-trail-1`, ...) `build_write_trail_
-    directives` can emit. `gate_id` may be `None` or `""` (a directive
-    missing or blanking its `id` key) — never raises, degrades to False
-    like every other predicate in this module."""
     if not gate_id:
         return False
     return gate_id == _WRITE_TRAIL_DIRECTIVE_ID_PREFIX or gate_id.startswith(
         _WRITE_TRAIL_DIRECTIVE_ID_PREFIX + "-"
     )
 
-#: Full-length git object id — 40 hex digits (sha1; this fleet has not
-#: migrated to sha256 object ids). Deliberately strict (fullmatch, not
-#: search): a bare ref name (`"HEAD"`, `"main"`, `"origin/main"`), an
-#: abbreviated sha, or a range annotation (`"<sha>^"`) all fail this check
-#: and correctly disqualify the range from being memoized — see
 #: `record_gate_verdict_if_passed`'s KEY-STALENESS restriction paragraph.
 _CONCRETE_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
@@ -904,16 +688,6 @@ def record_gate_verdict_if_passed(repo_root: Path, directive: Mapping[str, Any],
     if (gate_id not in _LIVE_GATE_MEMO_DIRECTIVE_IDS and not write_trail) or exit_code != 0:
         return
     if write_trail:
-        # C4: the write-trail memo key is (session_id, sha_range) — the
-        # SAME identity C3 gave the on-disk trail record itself
-        # (`ops/review_trail_write.py`) — never the directive's own id,
-        # which differs per index for the list shape while the underlying
-        # record identity does not. `_gate_memo_key_parts` is set only by
-        # `__init__.py::build_write_trail_directives` (never by a bare
-        # `_directive(...)` call elsewhere) — an absent/malformed value
-        # means the caller didn't opt this directive in (no `session_id`/
-        # `repo_root` supplied at build time), so there is nothing to
-        # record.
         key_parts = directive.get("_gate_memo_key_parts")
         if not isinstance(key_parts, (list, tuple)) or len(key_parts) != 2:
             return
@@ -930,23 +704,10 @@ def record_gate_verdict_if_passed(repo_root: Path, directive: Mapping[str, Any],
     record_gate_memo(repo_root, gate_id, *args)
 
 
-# ---------------------------------------------------------------------------
-# d-run-review-brightline-gate  (d-run-chain-plan-brightline-gate: removed, K-007)
-# (SKILL.md:428-442) — mechanical CLI + verdict parse.
-# ---------------------------------------------------------------------------
-
 _REVIEW_BRIGHTLINE_CLI = "review-brightline-gate"
 _COVERAGE_GATE_RUNNER_CLI = "wsc-coverage-gate-runner"
 
 #: The review-trail writer, addressed DIRECTLY rather than through
-#: `wsc-coverage-gate-runner write-trail`. That subcommand was REMOVED by PM
-#: ruling 2026-08-23 (kill `review_trail.write`'s wrapper) and its argparse now
-#: offers only `claim-plan`, so every emitted `d-write-trail-*` directive was
-#: rejected at argv before the CLI ran -- which gates `d-run-wsc-tail`, i.e. the
-#: ceremony's own commit step, on a partitioned close. This CLI is the same
-#: native-op trampoline the removed subcommand shelled out to (see
-#: `build_write_review_trail_directive`'s docstring), so addressing it directly
-#: is the shortest path back to the behaviour the ruling intended to keep.
 _REVIEW_TRAIL_WRITER_CLI = "coordinator-write-review-trail"
 
 
@@ -1032,12 +793,6 @@ def build_review_brightline_gate_directive(
     return directive
 
 
-# ---------------------------------------------------------------------------
-# d-freeze-and-dispatch-review-partition (SKILL.md:446-459) — freeze +
-# integrator mechanics. The reviewer/integrator Agent dispatch itself is
-# never modeled here (Negative-spec above).
-# ---------------------------------------------------------------------------
-
 _FREEZE_REVIEW_DIFF_CLI = "freeze-review-diff"
 _FAN_OUT_INTEGRATOR_CLI = "fan-out-integrator"
 
@@ -1048,19 +803,6 @@ class ReviewSlice(NamedTuple):
 
 
 def build_review_partition_freeze_directives(range_: str, slices: Iterable[ReviewSlice]) -> list[dict[str, Any]]:
-    """One `freeze-review-diff` directive per slice (SKILL.md item 0),
-    materializing the frozen per-slice diff BEFORE any reviewer dispatch.
-    `range_` MUST be the same session-scoped range the brightline gate
-    resolved (`--session-id`-scoped mid-chain, or the chain-end/mid-chain
-    diff scope resolved by `resolve_mid_chain_review_scope` below) —
-    never a naive `origin/main...HEAD`, per the SKILL's own explicit
-    warning against re-pulling concurrent EMs' already-reviewed commits.
-    Caller owns range resolution; this function only wires it in. A slice
-    whose `paths` contain an entry with no change in `range_` fails its
-    directive by design (K-101's returns-when) — `freeze-review-diff.py`
-    refuses the whole freeze (exit 4) rather than writing a partial diff.
-    A slice whose `paths` contain an entry with no change in `range_` fails
-    its directive by design — this is K-101's returns-when."""
     return [
         _directive(
             f"d-freeze-and-dispatch-review-partition-{s.slice_id}",
@@ -1072,31 +814,10 @@ def build_review_partition_freeze_directives(range_: str, slices: Iterable[Revie
 
 
 def build_review_partition_integrator_directive(spec_tsv_path: str) -> dict[str, Any]:
-    """The post-reviewer `fan-out-integrator` call (SKILL.md item 3):
-    consumes a TSV of `<slice-id>\\t<reviewer-sidecar-path>\\t<scope-files>`
-    rows (one row per slice, sidecar path per the reviewer's own `DONE:
-    <path>` return) and emits N parallel `review-integrator` dispatch
-    blocks. Composing that TSV from the reviewers' returned sidecar paths
-    is the caller's job — this function only names the CLI call once the
-    spec file exists on disk."""
     return _directive("d-freeze-and-dispatch-review-partition-integrator", _FAN_OUT_INTEGRATOR_CLI, ["--spec", spec_tsv_path])
 
 
 def review_partition_resolves_ids(review_partition: dict[str, Any]) -> list[str]:
-    """The per-slice `d-freeze-and-dispatch-review-partition-<slice-id>`
-    ids (plus `-integrator` when an integrator spec is supplied) that the
-    two builders above emit for the same `decisions["review_partition"]`
-    — the exact list every review-partition judgment point's dispatching
-    dispositions must name in `resolves`.
-
-    `apply`'s gate matches EXACTLY, never by prefix, so the unsuffixed
-    `d-freeze-and-dispatch-review-partition` base names nothing: the freeze
-    directives never fire and the review partition is silently skipped.
-
-    Mirrors the caller's own build condition (range AND slices both
-    present) so an empty/partial partition yields `[]` — an honest "this
-    disposition dispatches nothing", not a phantom id.
-    """
     if not (review_partition.get("range") and review_partition.get("slices")):
         return []
     slices = [
@@ -1109,35 +830,7 @@ def review_partition_resolves_ids(review_partition: dict[str, Any]) -> list[str]
     return ids
 
 
-# ---------------------------------------------------------------------------
-# d-run-chain-coverage-gate (SKILL.md:476-486) — mechanical CLI + verdict
-# branch. C10 (docs/plans/2026-08-05-coverage-gate-planning-artifact-class.md):
-# the underlying `coordinator_core.coverage.run_coverage_gate` this CLI wraps
 # no longer resolves a binary VERDICT=UNCOVERED — below the code-partition
-# coverage-ratio threshold it resolves VERDICT=WARN, carrying a
-# coordinator:review-code remediation OFFER rather than a halt token. This
-# builder's own shape (a mechanical CLI directive, no VERDICT parsing) is
-# unchanged by C10; it moves in lockstep only in the sense that its
-# generated directive now runs a ratio/warn-aware gate underneath, never a
-# binary-block one. Remediation-on-WARN (dispatch coordinator:review-code,
-# then re-run this same directive) remains an EM Agent-dispatch decision,
-# never modeled here. C10 DOES also update
-# `coordinator/bin/wsc-coverage-gate-runner.py`'s own `cmd_coverage_gate`
-# string-parse of the gate's stdout to match `VERDICT=WARN`; no gap remains
-# there as of this commit.
-# ---------------------------------------------------------------------------
-
-
-# `build_chain_coverage_gate_directive` (the `d-run-chain-coverage-gate`
-# dead-code twin of `__init__.py`'s LIVE `d-coverage-gate` directive) was
-# removed here (K-001, state/kill-ledger.md) — it was already verified
-# unreachable (no call site in `build_directives`) before this cut; see the
-# kill ledger for the LIVE directive's own removal in `__init__.py`.
-
-# ---------------------------------------------------------------------------
-# d-resolve-mid-chain-review-scope (SKILL.md:494-498) — pure resolution
-# algorithm, no CLI (Design note above).
-# ---------------------------------------------------------------------------
 
 
 def resolve_mid_chain_review_scope(
@@ -1165,12 +858,6 @@ def resolve_mid_chain_review_scope(
     return resolved
 
 
-# ---------------------------------------------------------------------------
-# d-run-doc-fragile-gate-and-dispatch (SKILL.md:500-525) — table-match
-# predicate, pure compute. The docs-checker Agent dispatch itself is never
-# modeled here (Negative-spec above).
-# ---------------------------------------------------------------------------
-
 _DOC_FRAGILE_FILETYPES: Mapping[str, tuple[str, ...]] = {
     "unreal": (".cpp", ".h", ".hpp", ".uproject", ".uplugin", ".Build.cs", ".Target.cs"),
     "unity": (".cs", ".asmdef", "Packages/manifest.json"),
@@ -1191,14 +878,6 @@ def _file_matches_fragile_pattern(path: str, pattern: str) -> bool:
 
 
 def compute_doc_fragile_gate(project_subtypes: Iterable[str], touched_files: Iterable[str]) -> DocFragileGate:
-    """Both-must-hold gate (SKILL.md:504-515): (1) `coordinator.local.md`
-    declares a doc-fragile `project_subtypes` entry present in the table
-    above, AND (2) the diff scope actually touches >=1 of that subtype's
-    fragile filetypes. Absent declaration or zero filetype matches ⇒
-    `applies=False` (silent skip, no false positives) — matches the
-    SKILL's own two negative-spec lines. First matching declared subtype
-    wins when a project declares more than one (order of
-    `project_subtypes` as given by the caller)."""
     touched = list(touched_files)
     for subtype in project_subtypes:
         filetypes = _DOC_FRAGILE_FILETYPES.get(subtype)
@@ -1209,12 +888,6 @@ def compute_doc_fragile_gate(project_subtypes: Iterable[str], touched_files: Ite
             return DocFragileGate(applies=True, matched_subtype=subtype, matched_files=matched)
     return DocFragileGate(applies=False, matched_subtype=None, matched_files=())
 
-
-# ---------------------------------------------------------------------------
-# d-detect-quota-exhausted-dispatch (SKILL.md:536-549) — the fixed
-# regex/length-corroboration table, mechanized per D-3's explicit
-# `scan_dispatch_output(text) -> bool` instruction.
-# ---------------------------------------------------------------------------
 
 _QUOTA_ENVELOPE_MARKER = "QUOTA-EXHAUSTED-DISPATCH:"
 _QUOTA_TIME_SIGNATURE_RE = re.compile(r"resets [0-9][0-9]?:[0-9][0-9]", re.IGNORECASE)
@@ -1247,13 +920,6 @@ def scan_dispatch_output(text: str) -> bool:
         return any(pattern.search(text) for pattern in _QUOTA_WEAK_PATTERNS)
     return False
 
-
-# ---------------------------------------------------------------------------
-# d-write-review-trail (SKILL.md:552-560) — mechanical CLI, including the
-# concrete-SHA input-construction rule (line 554) and the trivial/waived
-# negative-spec (lines 559-560, left to the caller: don't call this
-# builder at all on row 1/2 sessions).
-# ---------------------------------------------------------------------------
 
 _HEX_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
 
@@ -1322,45 +988,11 @@ def build_write_review_trail_directive(
     return _directive("d-write-review-trail", _REVIEW_TRAIL_WRITER_CLI, args)
 
 
-# ---------------------------------------------------------------------------
-# d-verify-trail-range-termination (SKILL.md:556) — pure disbelief
-# predicate, no CLI (Design note above).
-# ---------------------------------------------------------------------------
-
-#: A range-endpoint token whose BASE (before any ^/~N ops) is the literal
-#: symbolic ref "HEAD" — case-sensitive, matching git's own ref spelling.
 #: Mirrors `coordinator_core.coverage._STORED_HEAD_ENDPOINT_RE`: a stored
-#: "HEAD" (with or without ^/~N suffixes) re-resolves against whatever
-#: commit is HEAD at READ time, not write time, so it is never a fixed
-#: anchor a disbelief predicate can trust.
 _HEAD_TIP_RE = re.compile(r"^HEAD(?:[~^][0-9]*)*$")
 
 
 def resolve_trail_range_tip(record: Mapping[str, Any]) -> tuple[Optional[str], Optional[str]]:
-    """Resolve the trustworthy commit-SHA tip of a single trail record's
-    range, or `(None, reason)` naming why this record cannot corroborate a
-    `COVERED` verdict.
-
-    `sha_range_tip`/`tip` (a future, not-yet-observed record shape) are
-    honored first if present — this is the forward-compat leg the original
-    predicate already named. Every record actually on disk today
-    (`state/review-trail/*.json`) carries neither key, only `sha_range`
-    (format `"<sha>..<tip>"`, also seen as `"<sha>^..<tip>"`); that field is
-    THE working path this function must parse, not a fallback. A `sha_range`
-    whose tip is the literal symbolic ref `HEAD` (with or without `^`/`~N`
-    suffixes) is rejected — it re-resolves against whatever commit is HEAD
-    at gate-run time, not the commit that existed when the record was
-    written, and is exactly the shape that produced the verified 2026-07-25
-    `work/machine-a/2026-07-21` incident (8 stale `<sha>..HEAD` records
-    reading as `VERDICT=COVERED` 12 commits past the newest concrete-range
-    record). A `dag:`-prefixed or otherwise unparseable `sha_range` is
-    likewise rejected rather than silently skipped with no explanation —
-    `classify_untrusted_trail_ranges` below surfaces the reason to a caller
-    building a fail-loud diagnostic.
-
-    Returns `(tip, None)` on a trustworthy, concrete tip; `(None, reason)`
-    otherwise.
-    """
     explicit_tip = record.get("sha_range_tip") or record.get("tip")
     if explicit_tip:
         explicit_tip = str(explicit_tip)
@@ -1389,12 +1021,6 @@ def resolve_trail_range_tip(record: Mapping[str, Any]) -> tuple[Optional[str], O
 def classify_untrusted_trail_ranges(
     trail_records: Iterable[Mapping[str, Any]],
 ) -> list[tuple[Mapping[str, Any], str]]:
-    """Returns `(record, reason)` for every record `verify_trail_range_
-    termination` cannot trust — the same rejection set that function skips
-    via `continue`, surfaced here so a caller (the coverage-gate CLI wiring)
-    can build a fail-loud "N record(s) rejected: <reason>" diagnostic
-    instead of silently downgrading trust with no explanation. Pure — reads
-    only the records handed to it, no git subprocess of its own."""
     rejected: list[tuple[Mapping[str, Any], str]] = []
     for record in trail_records:
         tip, reason = resolve_trail_range_tip(record)
@@ -1408,22 +1034,6 @@ def verify_trail_range_termination(
     chain_tip_sha: str,
     is_ancestor: Callable[[str, str], bool],
 ) -> bool:
-    """SKILL.md's disbelief predicate (line 556): a `COVERED` verdict is
-    trustworthy only when at least one trail record's range-tip is at or
-    after the chain's newest commit — record *presence* is not coverage
-    (the verified 2026-07-25 `work/machine-a/2026-07-21` incident: 8 stale
-    `<sha>..HEAD` records, `VERDICT=COVERED`, while the newest
-    concrete-range record stopped 12 commits short). Returns `True` iff
-    at least one record's tip is `chain_tip_sha` itself or an ancestor
-    relationship confirms it is at/after the chain tip.
-
-    Every record is resolved through `resolve_trail_range_tip` — an
-    unterminated `..HEAD` range, a `dag:`-prefixed range, or any other
-    unparseable `sha_range` all resolve to `(None, reason)` and are treated
-    identically to "no tip": this predicate never trusts them, it never
-    trusts an untrustworthy record merely because git failed to disprove
-    it.
-    """
     for record in trail_records:
         tip, _reason = resolve_trail_range_tip(record)
         if tip is None:
@@ -1433,38 +1043,15 @@ def verify_trail_range_termination(
     return False
 
 
-#: Verdict strings that do NOT discharge a mandatory review scale — a
-#: `pending` record is a promise, not a completed review; a `waived`
-#: record is a PM-authorized skip, not evidence a reviewer actually ran.
-#: Case-insensitive on read (mirrors `coordinator-write-review-trail.py`'s
-#: own `--verdict` values, which this module does not itself validate the
-#: full set of — see docstring below for why).
 _NON_DISCHARGING_VERDICTS = frozenset({"pending", "waived"})
 
 
 #: Scope-kind values that never discharge ANYTHING in this chain-terminal
-#: path, unconditionally — mirrors `coverage.build_reviewed_set`'s Phase 1
-#: classification (review-integrator finding W1, 2026-08-06): "integration"
-#: is skipped entirely, not reopened by this module.
-#:
-#: 2026-08-07 correction (audit `state/audits/2026-08-07-wsc-chain-gate-
 #: counts-doc-only-commits.md`, Q4's "second gap"): "plan" is DELIBERATELY
-#: NOT in this set any more. It used to be — a `scope_kind: "plan"` record
-#: was rejected outright, exactly like "integration" — but that made the
-#: chain-terminal discharge path structurally incapable of crediting a plan
 #: review for a PLANNING-classified commit, even a session's own honest,
 #: self-owned plan review of its own PLANNING commit (chain_code_shas keeps
 #: PLANNING commits IN the obligation set per AC9 — see
-#: `_record_membership_shas`'s own "membership-vs-coverage split" docstring
-#: note). `_record_membership_shas` now credits a "plan" record, but
 #: ONLY against `chain_planning_sha_set` (the PLANNING-classified subset of
-#: `chain_code_shas`, supplied by the caller) — never against a plain CODE
-#: commit, mirroring `coverage._credit_from_kind_partition`'s own kind-aware
-#: crediting for the session-oracle path. A caller that omits
-#: `chain_planning_sha_set` (`None`, the default) sees byte-identical
-#: behavior to before this correction: a "plan" record still credits
-#: nothing. A record with no `scope_kind` key at all is the legacy/absent
-#: shape and is treated as an ordinary diff record (unchanged).
 _NON_CODE_SCOPE_KINDS = frozenset({"integration"})
 
 
@@ -1514,36 +1101,12 @@ class ChainAttributionWindow(NamedTuple):
     grep_attributed_for_session: Callable[[Optional[str]], Any]
 
 
-
-#: A trail record's `sha_range` spelled as the single commit `<sha>`: either
-#: `<sha>^..<sha>` or `<sha>~1..<sha>` (the `~1` spelling exists because
-#: cmd.exe eats a literal `^` in argv on Windows). Hex on BOTH sides and
-#: identical, abbreviated (>=7) or full -- the live corpus writes both. A
-#: symbolic or mismatched endpoint falls through to the resolver rather than
-#: being reasoned about here.
 _SINGLE_COMMIT_RANGE_RE = re.compile(
     r"^(?P<base>[0-9a-fA-F]{7,40})(?:\^|~1)\.\.(?P=base)$"
 )
 
 
 def _single_commit_range_base(sha_range: str) -> Optional[str]:
-    """Return the lowercased sha a single-commit `sha_range` denotes, or `None`
-    when the range is any other shape.
-
-    Used only to decide whether a range's resolved sha set is knowable without
-    calling the resolver (see `_record_membership_shas`). Deliberately narrow:
-    it recognises exactly the two spellings the write path emits, both sides
-    full-hex and identical. Anything else -- an abbreviated endpoint, a
-    multi-commit range, a symbolic ref -- returns `None` and is resolved the
-    ordinary way.
-
-    Negative-spec:
-      - Does NOT decide membership. It answers "what would `git rev-list` return
-        for this range", nothing more; the caller still applies every membership
-        and narrowing rule to the result.
-      - Does NOT widen what counts as a single-commit range to make more records
-        skippable. The skip is only sound because the answer is forced.
-    """
     match = _SINGLE_COMMIT_RANGE_RE.match(sha_range)
     if match is None:
         return None
@@ -1551,14 +1114,6 @@ def _single_commit_range_base(sha_range: str) -> Optional[str]:
 
 
 def _prefix_hits_chain_set(base: str, chain_dag_sha_set: set[str]) -> bool:
-    """Whether any chain-DAG sha could be what `base` resolves to.
-
-    `base` may be abbreviated, so this is a prefix test, not equality --
-    `git rev-list <base>^..<base>` can only ever yield a sha carrying `base`
-    as a prefix, which makes "no chain sha starts with `base`" equivalent to
-    "the intersection this record needs is empty". Full-length `base` degrades
-    to plain equality, since a 40-hex prefix match IS equality.
-    """
     if len(base) == 40:
         return base in chain_dag_sha_set
     return any(sha.startswith(base) for sha in chain_dag_sha_set)
@@ -1689,20 +1244,6 @@ def _record_membership_shas(
     if _record_range_has_stored_head(sha_range):
         return None
     if _single_commit_range_base(sha_range) is not None:
-        # A `<sha>^..<sha>` / `<sha>~1..<sha>` record can only ever resolve to
-        # {<sha>}, so the `raw & chain_dag_sha_set` test three lines below is
-        # already decided before the resolver runs: outside the chain DAG set,
-        # this record contributes nothing no matter what git would say. Skipping
-        # the call is therefore behavior-preserving, not a heuristic -- the only
-        # records it declines to resolve are ones whose membership would have
-        # been discarded on the next line.
-        #
-        # This is a spawn-amplification fix, not a micro-optimization. The live
-        # resolver is a `git rev-list` subprocess and this loop runs once per
-        # trail record: measured 2026-08-18 on a chain-terminal close, 5392
-        # spawns and 224s wall against a chain DAG set holding 9 commits. The
-        # per-range memo above the resolver never helps here because every
-        # single-commit range is a distinct cache key.
         _base = _single_commit_range_base(sha_range)
         if _base is not None and not _prefix_hits_chain_set(_base, chain_dag_sha_set):
             return None
@@ -1715,27 +1256,12 @@ def _record_membership_shas(
     if not (raw & chain_dag_sha_set):
         return None
     if narrow_foreign_shas is not None:
-        # B1 (2026-08-06, brightline-discharge
-        # round4). An unrecognized `scope` value (not one of
         # `_FOREIGN_STRIPPED_SCOPES`) used to fall through the narrowing
-        # entirely and receive full-width credit — a fail-OPEN gap under
-        # intersection membership, where narrowing IS the trust boundary.
         # The write path (`review_trail_write._VALID_SCOPES`) enforces the
-        # closed three-value set, but `_load_trail_records` unions the
-        # on-disk archive, which is not so guaranteed (e.g. an archived
-        # record whose `scope` is a comma-joined file list). Fail-closed on
         # an unrecognized `scope`, mirroring `_NON_CODE_SCOPE_KINDS`'s own
-        # posture, rather than silently skipping the narrowing.
         if record.get("scope") not in _FOREIGN_STRIPPED_SCOPES:
             return None
         session_id = record.get("session_id")
-        # C6a window fast path (docs/plans/2026-08-15-composition-
-        # invocation-budgets.md): fires only when the window provably
-        # covers every sha this record could contribute — see
-        # `ChainAttributionWindow`'s docstring for the precondition this
-        # subset check discharges. Any other shape (no window supplied, or
-        # an escaping range) falls straight through to the original
-        # per-record `narrow_foreign_shas` spawn, unchanged.
         if chain_window is not None and raw <= chain_window.commit_map.keys():
             try:
                 grep_attributed = frozenset(
@@ -1764,72 +1290,22 @@ def _record_membership_shas(
     return raw & chain_code_sha_set
 
 
-# ---------------------------------------------------------------------------
-# d-classify-dispatch-shape (SKILL.md:568-587, Step 2.9b) — mechanical
-# CLI call + pass-through, never blocks.
-# ---------------------------------------------------------------------------
-
 _CLASSIFY_DISPATCH_SHAPE_CLI = "classify-dispatch-shape"
 
 
 def build_classify_dispatch_shape_directive(plan_file: Optional[str]) -> Optional[dict[str, Any]]:
-    """Step 2.9b: fires only when a governing plan with a `## Tasks`
-    spine (or fan-out TSV) is known — `plan_file` absent/falsy means "no
-    plan governs this session," the SKILL's own skip-silently condition,
-    and this builder returns `None` rather than a directive naming an
-    empty path. Any offer text on stderr is pass-through surfaced in the
-    Step 4 summary by the caller — this builder does not read or
-    interpret the CLI's output, only names the call."""
     if not plan_file:
         return None
     return _directive("d-classify-dispatch-shape", _CLASSIFY_DISPATCH_SHAPE_CLI, ["--plan-file", plan_file])
 
 
-# ---------------------------------------------------------------------------
-# d-close-coverage-advisory — docs/plans/2026-08-27-the-close-tells-the-
-# author-what-is-uncovered.md, C1. A warn-only advisory that tells the
-# closing author which of their own commits carry no review-trail stamp.
-# Structurally incapable of gating (D3): no `depends_on` edge in either
 # direction, never added to `_LIVE_GATE_MEMO_DIRECTIVE_IDS`, and always
-# `already_satisfied=True` -- it is computed and (on a real gap) printed
-# entirely at BUILD time, in-process, and never dispatches any CLI at all.
-#
-# D1 -- in-process, never a shell-out: this reaches `gate_dimension_review.
-# _review_dimension_check` directly (the same dimension function
-# `merge-gate-and-pr.py::cmd_coverage_gate` reaches), never re-implementing
-# the reviewed-set walk and never shelling out to `merge-gate-and-pr.py`.
-#
 # D2 -- failure is silence, not a message: `UNAVAILABLE`, an exception, or
-# an unresolvable range/changed-file set all take the same path -- print
-# nothing, emit the directive unchanged. An advisory that reports its own
-# unavailability turns a dependency outage into fleet-wide noise at every
-# close.
-#
-# AC6 (zero added spawn, pinned in test_gate_path_spawn_budget.py): this
-# builder NEVER resolves `changed_files`/`diff_base` itself and never
-# spawns anything on its own -- both are resolved by the CALLER
-# (`__init__.py::build_directives`) from facts ALREADY paid for elsewhere
-# in the close (the caller-supplied `decisions["stage_paths"]`, and the
-# review-brightline-gate directive's own already-resolved range floor/tip,
-# per that builder's docstring). When the caller cannot supply a real range
-# without a NEW spawn (the ordinary single-close path, no prior review-
-# trail record), it passes `diff_base=None` here, which resolves to
 # `_review_dimension_check`'s own `UNAVAILABLE` leg before any subprocess
-# runs -- silence, per D2, never a manufactured spawn to obtain a message.
-# Anti-scope: do not widen `_review_dimension_check`'s signature to
-# accommodate the close -- the range is resolved at the call site instead.
-# ---------------------------------------------------------------------------
 
 _CLOSE_COVERAGE_ADVISORY_ID = "d-close-coverage-advisory"
 
-#: This directive is ALWAYS `already_satisfied=True` (see module-level
-#: docstring above) and therefore never resolves its own `cli` through
-#: `apply.py::_resolve_cli`/`_load_cli_module` -- `_execute_directives`
-#: skips already-satisfied directives before either check runs. A
 #: genuinely new `CONSUMES_MANIFEST` member would need a real
-#: `coordinator/bin/` script, which is outside this chunk's file scope;
-#: reusing an existing, already-real manifest member here costs nothing
-#: because this id never actually dispatches it.
 _CLOSE_COVERAGE_ADVISORY_INERT_CLI = _REVIEW_BRIGHTLINE_CLI
 
 _CLOSE_COVERAGE_ADVISORY_PREFIX = "review coverage: "
@@ -1866,14 +1342,6 @@ def _emit_close_coverage_advisory(
     if not changed_files or not diff_base or repo_root is None:
         return
     try:
-        # Inside the guard, not above it. An ImportError here -- a circular
-        # import introduced elsewhere, a rename of either module, a
-        # half-applied refactor -- would otherwise propagate out of
-        # `build_directives` and abort the whole close ceremony before
-        # `_execute_directives` runs. That is strictly worse than the K-001
-        # gating this advisory exists to avoid: a refusal at least reports a
-        # verdict, a crash kills the close. The docstring's "never raises" is
-        # only true with the imports under the guard.
         from coordinator_core.ops.gate_dimension_review import _review_dimension_check
         from coordinator_core.ops.gate_validate_invocable import Verdict
 
@@ -1886,10 +1354,7 @@ def _emit_close_coverage_advisory(
     if message is None:
         return
     # DIAGNOSTIC, therefore stderr: this op's stdout contract is its JSON, and
-    # an advisory line on it is a `json.loads` failure for every caller.
     # UNCHANGED by the stream move: the message is still deliberately not
-    # folded into `report` (reviewer finding 4, refused -- nothing should be
-    # able to gate on a coverage signal). A human still reads it either way.
     print(message, file=sys.stderr)
 
 

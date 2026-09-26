@@ -863,44 +863,17 @@ from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 
-# W3 FIX 1 (2026-07-15, security parity break): the shared _helpers.resolve_effective_types() re-exports
-# subagent_sandbox.engine._canonical_agent_id, whose named-teammate leg returns the RAW
-# `a<name>-<16hex>` agent_id instead of the bash-canonical `<name>@session-<short>` form.
 # For NAMED-TEAMMATE dispatches that keys the wrong back-pointer dir, subagent_type
-# resolves empty, and this guard FAILS OPEN where legacy bash DENIES. This module imports
 # the ALREADY-CORRECT canonical resolver (write_guards.block_subagent_plan_body_write._resolve_subagent_identity)
-# instead, per the same workaround that guard already uses -- see its own docstring.
 CLASS = "hard-deny"
-#: (2026-08-07, C6 of
-#: docs/plans/2026-08-07-guards-reach-a-verdict-on-powershell-or-stay-silent.md)
-#: "PowerShell" joins this guard's own declared coverage now that it carries
-#: a PowerShell Tier A allowlist (see Divergence 13 below) -- this is the
 #: guard's own MATCHERS declaration, not an edit to dispatch.py's chain loop
-#: or to the shared tool-name constant (both out of this chunk's Anti-scope).
-#: (2026-08-07, C2) A direct reference to the shared universe -- never a
-#: copy or re-wrap -- since this guard covers the full tool-name universe.
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 40
 
-#: (a) Shell-chaining metacharacter set — 9 distinct substring checks,
-#: byte-for-byte per the reference hook and recipe §(b) item 2
-#: (bare ``&`` and bare ``<`` are included per an already-landed finding F4,
-#: not just the classic ``;&|`` trio).
 _METACHARACTERS = (";", "&&", "||", "|", "`", "$(", ">", "<", "&")
 
 #: Deny-reason text for a banned, UNQUOTED metacharacter (2026-07-25,
-#: Divergence 6 -- reworded from the pre-fix unconditional-substring-scan
-#: text to reflect that quoted occurrences no longer deny).
-#:
-#: (Divergence 8, 2026-07-28) Reworded again to describe the two carve-outs
-#: added by this divergence: a bare unquoted ``|`` is no longer an
 #: unconditional deny by itself -- it is allowed to split a pipeline PROVIDED
-#: every resulting segment is independently Tier-A-allowlisted (see
-#: ``_evaluate_pipeline_segments``); a bare unquoted ``>``/``>>`` is allowed
-#: ONLY when it is a plain redirect to ``/dev/null`` (see
-#: ``_match_devnull_redirect``). Redirecting to any other path, and every
-#: other metacharacter in the 9-member set, are unchanged -- still an
-#: unconditional deny.
 _METACHARACTER_REASON = (
     "shell-chaining metacharacter detected outside any quoted argument "
     "(; && || ` $( < & or newline, or a non-allowlisted pipe/redirect -- "
@@ -919,13 +892,7 @@ _METACHARACTER_REASON = (
     "target still denies"
 )
 
-#: Deny-reason template for a pipeline segment that isn't independently
-#: Tier-A-allowlisted (Divergence 8, 2026-07-28). Deliberately still
-#: contains the phrase "shell-chaining metacharacter" -- the unquoted `|`
-#: that formed this pipeline IS the metacharacter that triggered this check;
-#: this reason explains the pipeline-specific rule rather than falling back
 #: to the generic ``_METACHARACTER_REASON`` text, which does not name the
-#: offending segment.
 def _pipeline_segment_deny_reason(segment: str) -> str:
     return (
         f"pipeline segment {segment!r} is not on the read-only Tier A "
@@ -937,58 +904,22 @@ def _pipeline_segment_deny_reason(segment: str) -> str:
         "head/tail/wc/find/file/stat/grep); this segment is not"
     )
 
-#: Deny-reason text for a command with an unbalanced/unterminated quote --
-#: fails closed rather than guessing at the intended shell parse
-#: (2026-07-25, Divergence 6).
 _UNTERMINATED_QUOTE_REASON = (
     "command has an unbalanced/unterminated quote (unmatched ' or \") -- "
     "denied fail-closed rather than guessed at"
 )
 
-#: Deny-reason text for a command ending in a lone, unquoted, unescaped
-#: trailing backslash -- an incomplete/ambiguous shell fragment (review
-#: Finding 5, 2026-07-25), fails closed the same way an unterminated quote
-#: does.
 _TRAILING_BACKSLASH_REASON = (
     "command ends in a lone unquoted backslash with nothing following -- "
     "an incomplete/ambiguous shell fragment, denied fail-closed rather than "
     "guessed at"
 )
 
-#: Escape targets recognised inside a double-quoted argument -- POSIX shell
-#: double-quote escaping only treats a backslash as an escape when it is
-#: immediately followed by one of these characters; a backslash before
-#: anything else inside double quotes is itself literal (2026-07-25,
-#: Divergence 6).
-#:
-#: Negative spec (review Finding 3, 2026-07-25): the ``"\n"`` entry here is
-#: unreachable dead code in practice -- ``_scan_for_unquoted_metacharacter``
-#: unconditionally denies on ANY newline in ``cmd`` (the ``if "\n" in cmd:
-#: return "\n"`` check at the top of that function, BEFORE the character
-#: loop that consults this constant ever runs), so the character loop never
-#: sees a literal newline to evaluate against this set. Kept rather than
-#: removed: it is harmless, documents the real POSIX double-quote escape
-#: rule for a reader reasoning about the grammar in isolation, and removing
-#: it invites a future reader to re-add it as a "fix" for behavior that was
-#: never actually missing. Do not assume newline-escape handling lives in
-#: the double-quote branch -- it doesn't; the unconditional top-level check
-#: is the only newline handling that ever executes.
 _DOUBLE_QUOTE_ESCAPABLE = ('"', "\\", "$", "`", "\n")
 
-#: The one allowlisted scaffolder command.
 _ALLOWED_BINARY_SUFFIX = "coordinator-doc-new"
 
-#: Tier A (2026-07-25): read-only git subcommands. Deny-by-omission — any
-#: subcommand NOT in this set (commit, push, add, checkout, stash, reset,
-#: config, apply, am, cherry-pick, merge, rebase, tag, remote, fetch, pull,
-#: worktree, notes, update-ref, gc, filter-branch, submodule, bisect,
 #: switch, sparse-checkout, ...) denies. This is a subcommand ALLOWLIST,
-#: never a bare ``git *`` prefix match.
-#:
-#: ``check-ignore``, ``check-attr``, ``ls-tree`` and ``cat-file`` are
-#: strictly read-only (they evaluate paths against ignore/attribute rules or
-#: read committed objects) and let a reviewer execute gitignore/attribute or
-#: tree/blob semantics instead of reasoning about them.
 _GIT_READONLY_SUBCOMMANDS = frozenset(
     {
         "show",
@@ -1006,97 +937,25 @@ _GIT_READONLY_SUBCOMMANDS = frozenset(
     }
 )
 
-#: Tier A (2026-07-25): read-only filesystem enumeration/inspection/search
-#: binaries. ``grep`` was added same-day, after the initial Tier A landing,
-#: per the DoE-claude correction memo (see module docstring Divergence 4):
-#: content search was the only read-only gap left once ``find``/``cat``/
-#: ``git show`` were already in place -- the confined findings-agent has no
-#: native Grep/Glob tool in its harness surface, so ``grep`` is its only
-#: path to search file contents rather than just enumerate/read them.
 _READONLY_FS_BINARIES = ("ls", "cat", "head", "tail", "wc", "find", "file", "stat", "grep")
 
-#: ``find`` flags that are write/execute vectors — denied even though
-#: ``find`` itself is in the read-only tier.
 _FIND_WRITE_FLAGS = frozenset(
     {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf", "-fls"}
 )
 
-#: Negative spec (2026-07-25, grep addition): ``grep`` has NO analogous
-#: write/execute flag denylist, and this is deliberate, not an oversight.
-#: Neither GNU nor BSD grep has a flag that writes, deletes, or executes
-#: anything -- unlike ``find -exec``/``-delete``, there is no
-#: ``grep --do-a-write-thing`` shape to deny. The one way a shell command
-#: containing ``grep`` could still cause a write is via output redirection
-#: (``grep foo bar > out.txt``) or a pipe into a writing command
-#: (``grep foo | tee out.txt``), and BOTH are still unconditionally denied
-#: by the shell-chaining-metacharacter gate (``_scan_for_unquoted_metacharacter``),
-#: checked BEFORE either allowlist tier is evaluated (see ``check()``
 #: ordering) -- an UNQUOTED ``>``/``|`` still denies exactly as before
-#: (2026-07-25 quote-awareness, Divergence 6, only stops denying a
-#: metacharacter that is DATA inside a quoted argument; a real redirect or
-#: pipe operator has to be unquoted to function as one in any real shell,
-#: so this argument is unaffected by that fix) -- so a flag-level denylist
-#: for grep would be redundant dead code, not missing coverage. Do not add
-#: one.
 
-#: Tier A (2026-08-02): read-only ``machine-local`` subcommands. Modeled
 #: directly on ``_GIT_READONLY_SUBCOMMANDS`` -- a subcommand ALLOWLIST, never
-#: a bare ``machine-local *`` prefix match, so it reads as a sibling of the
-#: git tier rather than a bolt-on. Deny-by-omission: any subcommand NOT in
-#: this set (``set``, ``array-append``, ``array-set``,
-#: ``migrate-publish-mirrors``, and any future write subcommand) denies.
-#: See the module docstring's negative-spec entry for why this is a READ
-#: allowlist and not a write denylist.
 _MACHINE_LOCAL_BINARY = "machine-local"
 _MACHINE_LOCAL_READONLY_SUBCOMMANDS = frozenset({"get", "has", "keys", "path", "dir"})
 
-#: Tier A (2026-08-07, C6 -- PowerShell dialect): read-only cmdlets a
-#: confined findings-agent legitimately needs to see its own diff/dispatched
-#: files under a PowerShell-routed shell, modeled directly on
 #: ``_READONLY_FS_BINARIES``'s bash-side rationale (enumeration/inspection/
-#: content-search, nothing that creates, deletes, or executes). Deliberately
-#: NARROW -- exactly the three cmdlets measured in the verdict record's
-#: eight-probe table (``docs/research/spike-verdicts/2026-08-07-powershell-
-#: guard-detection-and-tokenizer-mechanism.md``), plus their standard
-#: built-in aliases, and nothing wider:
-#:   - ``Get-ChildItem``/``gci`` -- directory enumeration, the ``ls``/``find``
-#:     sibling. Read-only: it lists, it does not write.
-#:   - ``Select-String``/``sls`` -- content search, the ``grep`` sibling.
-#:   - ``Get-Content``/``gc`` -- file-content read, the ``cat`` sibling.
 #: Matched case-INSENSITIVELY (unlike the bash-side binary names) because
-#: PowerShell cmdlet/alias resolution is itself case-insensitive -- a
-#: case-sensitive match here would silently under-admit a spelling PowerShell
-#: itself treats as identical, which is a usability gap in the exact same
-#: "incoherent to a reader" sense Divergence 10/11's PM ruling already named,
-#: not a security concern (nothing in this set is write-capable regardless of
 #: case). Deliberately EXCLUDES the common ``ls``/``dir``/``cat``/``type``
-#: aliases some readers might expect: those are PowerShell aliases for the
-#: SAME cmdlets already covered by ``Get-ChildItem``/``Get-Content`` above
-#: (``ls``/``dir`` -> ``Get-ChildItem``; ``cat``/``type`` -> ``Get-Content``),
-#: but neither was in the measured eight-probe table, and admitting an
-#: unmeasured alias name is exactly the "over-broad allowlist" failure mode
-#: this chunk's own dispatch brief warns against -- widen only against a
-#: future measured need, not speculatively.
 _READONLY_POWERSHELL_CMDLETS = frozenset(
     {"get-childitem", "gci", "select-string", "sls", "get-content", "gc"}
 )
 
-#: Tier A (2026-08-07, C6 -- PowerShell dialect) pipeline-filter cmdlets:
-#: valid ONLY as a non-first segment of a pipeline whose first segment is
-#: already Tier-A-allowlisted (mirrors the bash-side pipeline carve-out,
-#: Divergence 8) -- never as a standalone command, since a bare
-#: ``Where-Object`` has no data source of its own and admitting it as a
-#: first-segment entry would buy nothing. ``Where-Object`` is the one
-#: measured in the verdict record's eighth probe
-#: (a ``Get-ChildItem`` piped into a ``Where-Object`` length filter, which
-#: that probe recorded as a deny verdict and this entry now intends to
-#: allow) -- filtering an already-read-only object stream is
-#: itself read-only (it drops or keeps objects already produced upstream; it
-#: creates, deletes, and executes nothing). Its built-in alias ``?`` is
-#: included for the same reason ``gci``/``sls``/``gc`` are; ``where`` (the
-#: other built-in alias) is included alongside it, both unmeasured but
-#: structurally identical low-risk aliases of the one measured cmdlet, not a
-#: new capability class.
 _POWERSHELL_PIPELINE_FILTER_CMDLETS = frozenset({"where-object", "?", "where"})
 
 
@@ -1127,16 +986,6 @@ def _segment_is_powershell_tier_a_allowlisted(segment: str, *, is_first_segment:
 
 
 def _evaluate_powershell_pipeline_segments(cmd: str, split_indices: list) -> Optional[str]:
-    """(C6, PowerShell dialect) Sibling of ``_evaluate_pipeline_segments``:
-    split ``cmd`` at each unquoted ``|`` in ``split_indices`` and verify
-    every resulting segment independently satisfies
-    ``_segment_is_powershell_tier_a_allowlisted`` (first segment: read-only
-    data source; later segments: read-only data source OR filter cmdlet).
-    Returns the first non-allowlisted segment's stripped text (deny), or
-    ``None`` if every segment is allowlisted. Splitting mechanics mirror
-    ``_evaluate_pipeline_segments`` exactly -- the scanner already proved
-    every index in ``split_indices`` is a top-level, unquoted, single ``|``.
-    """
     bounds = [-1] + split_indices + [len(cmd)]
     for idx, (start, end) in enumerate(zip(bounds, bounds[1:])):
         segment = cmd[start + 1 : end].strip()
@@ -1144,107 +993,27 @@ def _evaluate_powershell_pipeline_segments(cmd: str, split_indices: list) -> Opt
             return segment
     return None
 
-#: git global options ALLOWED before the subcommand (2026-07-25, option-surface
 #: hardening) that take a SEPARATE value argument (space-form, e.g.
-#: ``-C /path``) as well as an inline ``--opt=value``/attached form. Used both
-#: to validate the option itself and to skip past its value when locating the
-#: subcommand token for shapes like ``git -C <path> <subcommand>`` /
-#: ``git --git-dir=... <subcommand>``. Deliberately excludes ``-c`` (arbitrary
-#: config injection -- ``-c core.pager=evil``, ``-c diff.x.command=evil`` are
-#: write/exec vectors) which the pre-hardening version wrongly allowed.
 _GIT_VALUE_TAKING_OPTIONS = frozenset({"-C", "--git-dir", "--work-tree"})
 
-#: git global options ALLOWED before the subcommand that take NO value
-#: argument.
-#:
-#: Divergence N (2026-08-11, cross-guard conflict audit): added
-#: ``--no-optional-locks``. This module's confinement check runs in the
 #: ``CONFINEMENT_DENY`` band, strictly BEFORE ``git-no-optional-locks``
 #: (``guard_no_optional_locks.py``, ``ADVISORY_REWRITE`` band) ever executes
-#: -- ``dispatch.py``'s band ordering and single-pass "first non-None wins"
-#: loop mean a confined agent's OWN pre-rewrite command is what this module
-#: sees, so the auto-rewrite's inserted flag was never actually reachable by
-#: this allowlist and the two guards were never in conflict via that path.
-#: The real gap: a confined agent typing ``--no-optional-locks`` itself --
-#: which `docs/wiki/machine-load-norm.md` and the fleet-wide index-lock
-#: campaign explicitly brief every agent to do on read-only git invocations
-#: -- hit this allowlist directly and was denied for a flag its own briefing
-#: told it to use. The flag is strictly read-only-safe: per
-#: ``guard_no_optional_locks.py``'s own module docstring, it only suppresses
-#: write-back of refreshed index stat data (never the refresh itself, and
-#: never any content the command would not otherwise read), granting a
-#: confined agent no capability beyond what bare ``git`` already has.
 _GIT_NO_VALUE_OPTIONS = frozenset({"--no-pager", "--literal-pathspecs", "--no-optional-locks"})
 
-#: git subcommand-level options that are write/exec vectors even though the
-#: subcommand itself is on the read-only allowlist. ``--output``/``-o``
-#: write to an arbitrary caller-chosen file -- confirmed empirically against
-#: real git (``git show --output=<path>`` and ``git log --output=<path>``
-#: both created the target file). ``--ext-diff`` enables an external diff
-#: driver, i.e. arbitrary command execution via ``diff.<driver>.command``
-#: config, achievable without going through the denied ``-c`` global option.
-#: Both are matched via the shared ``_helpers.prefix_denies`` (2026-07-25 gap
-#: fix, extracted to ``_helpers`` same day per the P0 fix so
-#: ``block_subagent_destructive_action`` reuses the identical implementation
-#: -- see ``_helpers`` module docstring item 3) -- a
-#: hyphen-boundary prefix match that denies the bare flag, the ``=``-form,
-#: AND the attached-no-``=`` form (``--output/tmp/x``) uniformly, while
-#: exempting ``--output-indicator-{new,old,context}=X`` (real,
-#: non-write git formatting flags whose next char after the ``--output``
-#: substring is ``-``). No analogous ``--ext-diff*``-prefixed legitimate git
-#: flag exists, so ``--ext-diff`` is widened to the same prefix rule rather
-#: than kept as an exact-match set.
 
-#: The one allowlisted --type value, checked as a word-boundary match
-#: (recipe §(b) item 2(c) — NOT a substring
-#: match; ``--type review-findingsXYZ`` must NOT match).
 _REQUIRED_TYPE_ARG_END = "--type review-findings"
 _REQUIRED_TYPE_ARG_MID = "--type review-findings "
 
-#: Max length of the sanitized command echoed back in the deny reason
-#: (reference hook line 291).
 _CMD_SAFE_MAX_LEN = 200
 
-#: Hardcoded short-form write flag treated specially by
-#: ``_find_git_subcommand_write_flag`` (matches ``-o``/``-o<path>`` attached
-#: form, which ``prefix_denies`` alone does not model since it is a
-#: single-dash short option, not a hyphen-boundary long-option prefix).
 _GIT_SHORT_FORM_OUTPUT_FLAG = "-o"
 
 
-#: (Amendment 2, 2026-08-03) The sole confined type with an entry in
 #: ``_DEFAULT_RULESET_TYPE_OVERRIDES`` -- see the module docstring's
-#: Amendment 2 entry for why it gets a pytest allowance.
 _REVIEWER_TYPE = "coordinator:code-reviewer"
 
-#: (Amendment 1, 2026-08-01, reversed 2026-08-02, its ``coordinator:executor``
-#: entry deleted 2026-09-23 by this plan's C1) Per-``effective_type``
-#: overrides layered onto the shared base ``_default_ruleset()`` returns.
-#: This is the "policy row" for a confined type that has no external
-#: ``bash_policy:`` YAML entry -- expressing the divergence as DATA here
-#: (rather than an ``if effective_type == ...`` branch inside a matching
-#: function) is what keeps the git/readonly-fs/scaffolder matching paths
-#: themselves untouched.
-#:
-#: (Amendment 2, 2026-08-03) ``coordinator:code-reviewer`` is the only member
-#: -- ``interpreter_allowed_modules: ("pytest",)`` only. See the module
-#: docstring's Amendment 2 entry for the PM-ruling discriminator (destructive-
-#: vs-non-destructive, not read-only-vs-executing) that motivates this, and
-#: why it does not weaken containment: ``coordinator:code-reviewer`` already
-#: holds an unconfined ``Edit`` tool (confirmed against its own agent
-#: definition, ``coordinator/agents/code-reviewer.md``,
-#: ``tools: ["Bash", "Read", "Edit", "ToolSearch"]``), so it can already
-#: author or modify a ``conftest.py`` regardless of whether ``pytest`` is on
-#: this allowlist -- denying it here bought no containment, only cost
 #: verification fidelity (see the KNOWN RESIDUAL note on
-#: ``_evaluate_python3_interpreter`` below, updated the same day).
-#:
 #: STRUCTURAL PIN (this plan's C1): every key in this dict must be a type
-#: ``_is_confined_type`` actually confines -- see
-#: ``test_ruleset_override_keys_are_confined_types`` in
-#: ``test_executor_bash_confinement.py``. This is what would have caught
-#: Divergence 9 going stale instead of shipping a dead, vacuously-tested
-#: override.
 _DEFAULT_RULESET_TYPE_OVERRIDES: Dict[str, Dict[str, Any]] = {
     _REVIEWER_TYPE: {
         "interpreter_allowed_modules": ("pytest",),
@@ -1340,9 +1109,6 @@ def _validate_ruleset(raw: Any) -> Optional[Dict[str, Any]]:
     interpreter_modules = raw.get("interpreter_allowed_modules", [])
     interpreter_allow_scripts = raw.get("interpreter_allow_scripts", False)
     # (2026-08-02) machine-local Tier A keys are OPTIONAL, same treatment as
-    # the interpreter keys immediately above -- a policy entry authored
-    # before this change has neither, and must keep validating exactly as it
-    # did before. Absent, each defaults to the conservative hardcoded
     # constants (a READ-ONLY allowlist), never widened by omission.
     machine_local_binary = raw.get("machine_local_binary", _MACHINE_LOCAL_BINARY)
     machine_local_readonly = raw.get(
@@ -1437,71 +1203,12 @@ def _resolve_ruleset(effective_type: str, policy: Any) -> Dict[str, Any]:
     whatever the validated entry (or ``_default_ruleset``) already produced,
     never a more-permissive ruleset by virtue of being unrecognized.
     """
-    # Divergence 14 (2026-08-10, confinement-editable-by-its-own-subject
-    # close, this change): a validated `bash_policy:` YAML entry for
-    # `effective_type` USED to be returned here (optionally topped up by
     # `_DEFAULT_RULESET_TYPE_OVERRIDES`), which is what made the enforced
-    # ALLOW/DENY surface for a confined type editable by anyone who could
-    # write that YAML file. `coordinator:code-reviewer` and
-    # `coordinator:executor` both hold an unconfined `Edit` tool (see
-    # Amendment 2 above) that reaches
-    # `coordinator/subagent-sandbox-policy.yaml` -- so the confined subject
-    # of this guard could rewrite its own `bash_policy:` row, and because
-    # `load_policy()` re-reads the file fresh on every `check()` call (by
-    # design, for `report_sidecar`'s legitimate hot-reload need -- see that
-    # function's own docstring), the very next Bash call honoured the
-    # rewrite. Confirmed live in a throwaway fixture (never the fleet
-    # policy): denied `python3 /tmp/evil.py` before, allowed after flipping
-    # `interpreter_allow_scripts` to `true` in the YAML mid-session, no
-    # process restart. Reported by coordinatorstaff-eng
-    # (`state/bug-backlog/2026-08-10-a-reviewer-s-confinement-policy-is-
-    # edita-459e2790ebb7.yaml`).
-    #
-    # A per-process cache keyed on `policy_path` (the obvious "resolve once
     # at a trust boundary" fix) was considered and REJECTED: this guard's
-    # own host module documents itself as stateless/spawn-per-call (DR-215,
-    # see `subagent_sandbox.engine`'s module docstring) -- each PreToolUse
-    # invocation is a fresh interpreter process, so a process-lifetime cache
-    # would be re-populated, and thus re-defeated, on literally the next
-    # Bash call. It buys nothing here; it only would in a resident-daemon
-    # architecture this codebase deliberately does not have.
-    #
-    # Moving the YAML to a location a confined agent's tools cannot write
-    # was also considered and rejected as OUT OF SCOPE for this module: the
-    # policy file lives in DoE-claude's tree
-    # (`coordinator/subagent-sandbox-policy.yaml`), not this repo, and this
-    # guard does not own that repo's write-surface or its Edit-tool sandbox
-    # definition.
-    #
-    # Fix landed: the enforced RULESET is now hard-pinned in code --
     # `_default_ruleset()`/`_DEFAULT_RULESET_TYPE_OVERRIDES` ONLY, never a
-    # YAML-supplied `bash_policy:` entry for `effective_type`, for ANY
-    # confined type. `_validate_ruleset` is kept (not deleted) as dead code
-    # documenting the shape a future policy-driven ruleset would need to
-    # satisfy IF a non-editable delivery path for it is built later -- see
-    # its own docstring negative-spec note. `entry`/`raw` above are computed
-    # for `_is_confined_type` only now (see that function): a `bash_policy:`
-    # key can still WIDEN which types are confined (safe -- it only adds
-    # confinement, never removes or loosens the ruleset a confined type is
-    # held to), but it can no longer narrow or widen what a confined type is
-    # ALLOWED to run. This is deliberately narrower than AC10's original
-    # promise ("a second confined type lands as a pure-data YAML addition,
-    # no code change") -- a genuinely new confined type now needs its own
     # `_DEFAULT_RULESET_TYPE_OVERRIDES` code entry to get anything other
-    # than the shared conservative default. That regression is the
-    # necessary cost of closing this hole under the option-3 shape (hard-pin
-    # confined-type entries in code) -- see the module docstring's
-    # Divergence 14 section for the full writeup.
-    #
-    # THREAT CLOSED: a confined agent's own Edit-tool rewrite of
-    # `bash_policy:`'s per-type RULESET content no longer has any effect on
-    # what that guard enforces for it.
-    # THREAT LEFT OPEN: `_is_confined_type` below still consults the YAML to
     # decide SET MEMBERSHIP -- this is intentionally unclosed because it is
-    # a widen-only lever (adding a type to `bash_policy:` can only ADD
-    # confinement, it cannot remove a type from the hardcoded
     # `_CONFINED_FINDINGS_AGENTS` set or loosen its ruleset), so a confined
-    # subject rewriting it cannot use it to escape its own confinement.
     return _default_ruleset(effective_type)
 
 
@@ -1674,42 +1381,15 @@ def _resolve_effective_type(agent_type: str, subagent_type: str, policy: Any) ->
 
 
 def _strip_crlf(cmd: str) -> str:
-    """Strip CRLF artifacts — Windows/Git-Bash jq emits CR+LF in text mode
-    (reference hook line 217)."""
     return cmd.replace("\r", "")
 
 
-#: Target of the one redirect this guard allows (Divergence 8, 2026-07-28).
 _DEVNULL_TARGET = "/dev/null"
 
-#: Complementary standard-stream file descriptors for the fd-duplication
-#: carve-out (Divergence 10, 2026-08-01) -- ``"2"`` maps to ``"1"`` (stderr
-#: duplicated onto stdout, the exact idiom this carve-out exists for) and
-#: ``"1"`` maps to ``"2"`` (the stdout-onto-stderr mirror image, admitted for
-#: free by the same symmetric check -- see ``_match_fd_dup_redirect``).
 _FD_DUP_COMPLEMENT = {"1": "2", "2": "1"}
 
 
 def _match_devnull_redirect(cmd: str, i: int) -> Optional[int]:
-    """(Divergence 8, 2026-07-28) Given ``cmd[i] == ">"``, return the number
-    of characters (starting at ``i``) consumed by a plain redirect to
-    ``/dev/null``, or ``None`` if what follows is not exactly that.
-
-    Matches ``>``/``>>`` (append), optional single space before the target
-    (``> /dev/null`` and ``>/dev/null`` both match), then the literal
-    ``/dev/null``, then a boundary: end-of-string, a space, or a top-level
-    ``|`` (so ``grep foo bar 2>/dev/null | wc -l`` still allows the redirect
-    AND still finds the pipe split immediately after). Anything else after
-    the target -- e.g. ``/dev/nullx``, or a redirect to any OTHER path such
-    as ``/tmp/d`` -- is NOT a match, so ``git diff > /tmp/d`` (a real write
-    vector) is unaffected by this carve-out and still denies via the
-    unmatched-``>`` fallthrough in the caller.
-
-    A leading file-descriptor digit (``2>``, ``1>``) needs no special
-    handling here -- the digit is an ordinary character already consumed by
-    the caller's main scan loop before it ever reaches this function; this
-    function only ever sees the ``>`` itself and what follows it.
-    """
     n = len(cmd)
     j = i
     if j >= n or cmd[j] != ">":
@@ -1909,19 +1589,8 @@ def _scan_for_unquoted_metacharacter(cmd: str) -> tuple:
                 return "$(", [], -1
             i += 1
             continue
-        # Unquoted.
         if ch == "\\":
             if i + 1 >= n:
-                # Trailing unquoted backslash with nothing following
-                # (review Finding 5, 2026-07-25): not valid, self-contained
-                # shell input -- it awaits a continuation. Fail closed,
-                # consistent with the unterminated-quote handling and this
-                # function's own stated philosophy of denying a parse
-                # anomaly rather than guessing at the intended command.
-                # ``i`` is already the offset of this trailing backslash --
-                # it is by definition the last character (2026-07-29,
-                # duty-of-care promotion: this is what lets the caller build
-                # a copy-pasteable "drop the dangling backslash" fix).
                 return "<trailing-backslash>", [], i
             i += 2
             continue
@@ -1942,26 +1611,16 @@ def _scan_for_unquoted_metacharacter(cmd: str) -> tuple:
         if cmd[i : i + 2] == "$(":
             return "$(", [], -1
         if ch == ">":
-            # (Divergence 8, 2026-07-28) Skip a plain redirect to
-            # /dev/null; anything else is still a deny exactly as before.
             consumed = _match_devnull_redirect(cmd, i)
             if consumed is not None:
                 i += consumed
                 continue
-            # (Divergence 10, 2026-08-01) Skip the exact stderr-to-stdout
-            # fd-duplication idiom (``2>&1``) or its stdout-to-stderr mirror
-            # (``1>&2``) -- both write-incapable and exec-incapable, sibling
-            # carve-out to the /dev/null redirect immediately above.
             consumed = _match_fd_dup_redirect(cmd, i)
             if consumed is not None:
                 i += consumed
                 continue
             return ">", [], -1
         if ch == "|":
-            # (Divergence 8, 2026-07-28) A bare single pipe is no longer an
-            # unconditional deny -- record the split point and keep
-            # scanning; the caller verifies every resulting segment is
-            # independently allowlisted.
             splits.append(i)
             i += 1
             continue
@@ -1969,20 +1628,11 @@ def _scan_for_unquoted_metacharacter(cmd: str) -> tuple:
             return ch, [], -1
         i += 1
     if quote is not None:
-        # quote_open_index is the offset of the quote character that never
-        # found its match (2026-07-29, duty-of-care promotion) -- the
-        # caller uses it to name exactly which quote is unbalanced and to
-        # build a minimal syntactically-valid completion (close it at the
-        # end of the command).
         return "<unterminated-quote>", [], quote_open_index
     return None, splits, -1
 
 
 def _quote_context_window(cmd: str, index: int, radius: int = 20) -> str:
-    """Short excerpt of ``cmd`` centered on ``index``, for pointing a caller
-    at WHICH quote/backslash is the offending one in a long command rather
-    than making them re-scan the whole (possibly 200-char-truncated)
-    ``Command:`` line by eye."""
     start = max(0, index - radius)
     end = min(len(cmd), index + radius + 1)
     prefix = "..." if start > 0 else ""
@@ -2015,17 +1665,7 @@ def _metacharacter_deny_reason(
     """
     if found == "<unterminated-quote>" and 0 <= fixup_index < len(cmd_for_check):
         quote_char = cmd_for_check[fixup_index]
-        # Truncate-THEN-append (2026-07-30, H-medium M13/M19 review fix):
         # `_sanitize_cmd_for_reason` truncates at `_CMD_SAFE_MAX_LEN` chars.
-        # Appending `quote_char` before sanitizing meant that for any
-        # `cmd_for_check` AT OR OVER the cap, the 200-char slice discarded
-        # the very character this branch exists to add -- the message then
-        # asserted "close it at the end: <corrected>" while `<corrected>`
-        # was just the truncated, still-unterminated original with an
-        # ellipsis, silently presenting the unfixed command as fixed.
-        # Sanitizing (and truncating) FIRST, then appending the closing
-        # quote to the already-bounded result, guarantees the offered fix
-        # actually ends with the quote character regardless of length.
         corrected = _sanitize_cmd_for_reason(cmd_for_check) + quote_char
         context = _quote_context_window(cmd_for_check, fixup_index)
         return (
@@ -2053,31 +1693,11 @@ def _metacharacter_deny_reason(
 
 
 def _tokenize_segment(cmd: str) -> list:
-    """Quote-aware tokenization for a single command/pipeline-segment
-    string, via the canonical shlex-based ``_command_tokenizer.
-    tokenize_full_command`` -- the SAME machinery ``block_subagent_commit.py``
-    uses, not a private copy. Returns ``[]`` on an unparseable ``cmd``
-    (unterminated quote / trailing backslash), which every caller below
-    treats as "no token matched anything" -- fail-closed, matching this
-    guard's own stated deny-by-default posture, and consistent with the
-    metacharacter gate (``_scan_for_unquoted_metacharacter``) already
-    denying an unbalanced quote before Tier A/B evaluation ever runs; this
-    is a defensive second check, not the primary one.
-    """
     tokens = _tokenize_full_command(cmd)
     return tokens if tokens is not None else []
 
 
-#: (2026-09-06) An environment assignment whose NAME can redirect which
-#: binary or which code the shell actually runs. Peeling such a prefix would
-#: make the allowlist's identity anchor a lie: `PATH=/tmp/evil python3 -m
-#: pytest` resolves to the effective token `python3` while the shell executes
 #: `/tmp/evil/python3`, and `PYTHONPATH=`/`PYTHONSTARTUP=`/`BASH_ENV=` reach
-#: arbitrary code through a binary the allowlist genuinely sanctions. Matched
-#: as exact names or as a `<prefix>_`/`<prefix>` family so a new loader
-#: variable in an existing family (LD_*, DYLD_*, PYTHON*) is covered without
-#: an edit here. A command carrying one of these is NOT peeled -- it keeps
-#: the assignment as its effective token and denies exactly as before.
 _EXEC_INFLUENCING_ENV_NAME_RE = re.compile(
     r"^(?:PATH|SHELL|IFS|ENV|BASH_ENV|LD_[A-Z0-9_]*|DYLD_[A-Z0-9_]*|PYTHON[A-Z0-9_]*)$"
 )
@@ -2144,8 +1764,6 @@ def peel_env_assignment_prefix(tokens: list) -> list:
                     return list(tokens)
                 rest = rest[1:]
             if rest and rest[0].startswith("-"):
-                # `env` with a flag this peel does not model -- not a pure
-                # passthrough; leave the whole command unpeeled.
                 return list(tokens)
             if not rest:
                 return list(tokens)
@@ -2178,15 +1796,6 @@ def _unpeeled_exec_influencing_env_name(cmd: str) -> Optional[str]:
 
 
 def _first_effective_token(tokens: list) -> str:
-    """Return the token identifying the invoked binary at the head of
-    ``tokens`` -- the first token, or the SECOND token when the first is
-    exactly ``python3`` (the ``python3 <path>`` invocation form). Returns
-    ``""`` for an empty list.
-
-    (2026-09-06) A leading environment-assignment / bare-``env`` prefix is
-    peeled first by ``peel_env_assignment_prefix`` -- see that function for
-    which prefixes are peeled and which are deliberately not.
-    """
     tokens = peel_env_assignment_prefix(tokens)
     if not tokens:
         return ""
@@ -2196,95 +1805,16 @@ def _first_effective_token(tokens: list) -> str:
 
 
 def _extract_first_token(cmd: str) -> str:
-    """Shared first-token extraction: the ONE place ``first_token`` is
-    derived from a command/segment string -- both
-    ``_first_token_is_allowlisted_binary``, ``_is_readonly_fs_command``,
-    ``_segment_is_tier_a_allowlisted``, and ``check()``'s own Tier A entry
-    call this instead of hand-duplicating tokenization.
-
-    2026-07-29 (THIS change, P0 security fix): rebuilt on the shlex-based
-    ``_tokenize_segment``/``_first_effective_token`` -- the previous
-    implementation (own-module ``_strip_prefix_and_split`` + a
-    single-quote-pair-only unquote) split ``cmd`` on the FIRST RAW SPACE
-    regardless of quoting. That bug's most visible symptom was a spaced
-    dispatch-time path (e.g. a Windows profile with a space in the
-    username) mis-splitting into a path fragment that matched no allowlisted
-    binary -- a false DENY (fails safe). But the SAME naive splitter also
-    fed ``_git_command_tokens``' whitespace-only ``rest.split()``, which is
-    the actual P0: a QUOTED write-flag argument
-    (``git show "--output=/tmp/evil" HEAD``, ``git show
-    '--output=/tmp/evil' HEAD``) was tokenized with its surrounding quote
-    characters still attached (``'"--output=/tmp/evil"'``), so
-    ``_helpers.prefix_denies``'s ``startswith("--output")`` check never
-    matched -- confirmed empirically through the real ``check()``
-    entrypoint: both forms returned ALLOW where the identical unquoted
-    command correctly DENIED, even though a real shell strips the quotes
-    and git genuinely writes to the arbitrary target path either way. This
-    is a total defeat of the exact P0 this guard's Tier A option-hardening
-    (Divergence 5 above) was written to close, reopened by a different,
-    quote-blind tokenizer feeding the same option scan. Rebuilding
-    tokenization on shlex closes it: a quoted ``--output=...`` now
-    de-quotes to the bare flag before ``prefix_denies`` ever sees it, same
-    as a real shell's argv.
-    """
     return _first_effective_token(_tokenize_segment(cmd))
 
 
-#: Windows-first-class argv0-head normalization (2026-07-29, THIS change,
-#: ported from ``block_subagent_commit.py``'s ``_normalize_windows_git_argv0``
-#: / ``_normalize_windows_argv0_head_path_with_spaces`` / (their shared)
 #: ``_WINDOWS_ARGV0_HEAD_PATH_RE`` -- see that module's docstring for the
-#: full rationale). Needed as a companion to the shlex rebuild above: POSIX
-#: ``shlex`` treats a bare backslash as an escape character and silently
-#: drops it, which would otherwise mangle an ordinary Windows path
-#: (``C:\Users\John Doe\...\coordinator-doc-new``, a real shape on this
-#: project's primary platform -- a spaced Windows username is the DEFAULT
-#: profile shape, not an exotic one) into unrecognisable garbage before
-#: ``_tokenize_segment`` ever sees it -- reopening, one layer up, the exact
-#: false-DENY failure mode the module docstring above names as this
-#: guard's OWN prior symptom of the retired naive tokenizer.
-#:
-#: Unlike the ``block_subagent_commit.py``/``coordinator-safe-commit``
-#: pair (a fixed two-name set), this guard's Tier A/B identity set is
-#: policy-driven (Divergence 7) -- so the identity names these passes
 #: recognize are resolved from the ALREADY-RESOLVED ``ruleset`` for this
-#: call (``git`` plus the ruleset's scaffolder binary and read-only fs
-#: binaries), not hardcoded, so a well-formed custom ``bash_policy`` entry's
-#: own binary names are covered too.
 _ARGV0_HEAD_BOUNDARY_PRE = r"(?:\A|[;&|\n])\s*(?:['\"`(])?"
 _RAW_HEAD_TOKEN_RE = re.compile(r"(" + _ARGV0_HEAD_BOUNDARY_PRE + r")([^\s;&|]+)")
 
 
 def _windows_argv0_identity_names(ruleset: Dict[str, Any]) -> frozenset:
-    """The executable basenames the Windows argv0-head normalization passes
-    below treat as ARGV0-position identities worth un-mangling: ``git``
-    plus this call's resolved Tier B scaffolder binary (bare and
-    ``.py``-suffixed), Tier A read-only fs binaries, and the Tier A
-    ``machine-local`` binary (see the module-level comment above these
-    functions for why this is resolved per-``ruleset`` rather than a
-    hardcoded pair like the sibling guards use).
-
-    # ``machine_local_binary``
-    # was omitted here, so a Windows absolute-path invocation of
-    # machine-local with an embedded-space username fell through the P0
-    # normalization pass and denied where it should allow.
-
-    # false-deny) -- ``scaffolder_binary``'s real on-disk name carries a
-    # ``.py`` suffix (see ``_matches_scaffolder_dispatch``'s own Divergence
-    # 19 docstring above for why: ``coordinator-doc-new`` is a naked Python
-    # script, while its Windows-launcher twin keeps the bare
-    # ``coordinator-doc-new.cmd`` name, no ``.py`` in it). The
-    # embedded-space Windows-path rewrite passes below only recognized the
-    # bare name plus ``.exe``/``.cmd``, so a ``Program Files``-style
-    # absolute path ending in ``coordinator-doc-new.py`` still shlex-split
-    # on its embedded space and false-denied. Adding the ``.py``-suffixed
-    # literal HERE, not to ``normalize_executable_basename`` -- same
-    # reasoning as Divergence 19: stripping ``.py`` in the shared basename
-    # normalizer would let a confined-agent-authored ``git.py`` resolve to
-    # real ``git`` for every other caller (Tier A's git-subcommand walk
-    # trusts the matched identity, not the file's contents). This is an
-    # additive literal scoped to the scaffolder name only.
-    """
     names = {"git", ruleset["scaffolder_binary"], ruleset["machine_local_binary"]}
     names.add(ruleset["scaffolder_binary"] + ".py")
     names.update(ruleset["readonly_fs_binaries"])
@@ -2303,18 +1833,6 @@ def _build_windows_argv0_head_path_re(names: frozenset) -> "re.Pattern[str]":
 
 
 def _normalize_windows_argv0_head_path_with_spaces(cmd: str, ruleset: Dict[str, Any]) -> str:
-    """Rewrite a Windows absolute (drive-letter- or root-rooted) argv0-head
-    path -- possibly containing embedded-space components
-    (``C:\\Users\\John Doe\\...\\coordinator-doc-new``) -- whose basename
-    identifies one of ``_windows_argv0_identity_names(ruleset)``, into its
-    forward-slash equivalent, additionally single-quoting it when unquoted
-    AND whitespace-containing, so the whole path lands as ONE shlex token
-    at argv0 position instead of splitting on the embedded space. Runs
-    BEFORE ``_normalize_windows_git_argv0`` -- once a matched path is
-    quoted here, it no longer contains a bare backslash outside the
-    quotes, so that pass's simpler ``if "\\\\" in token`` gate finds
-    nothing left to do for it.
-    """
     pattern = _build_windows_argv0_head_path_re(_windows_argv0_identity_names(ruleset))
 
     def _rewrite(m: "re.Match[str]") -> str:
@@ -2352,58 +1870,10 @@ def _normalize_windows_git_argv0(cmd: str, ruleset: Dict[str, Any]) -> str:
     return _RAW_HEAD_TOKEN_RE.sub(_rewrite, cmd)
 
 
-# ``_token_matches_binary`` (2026-07-29, guard-brick incident response,
-# part 2): no longer an own-module copy. It is now
-# ``_command_tokenizer.token_matches_binary``, imported above -- the F1 fix
-# (boundary-anchored: token equals ``binary`` exactly, or the character
-# immediately preceding a trailing ``binary`` suffix is a path separator,
-# closing the free-text-suffix bypass where e.g. ``evil-git`` or ``notls``
-# would mechanically match a bare ``endswith()`` check) is preserved
-# unchanged; what's NEW is that the canonical matcher also strips a
-# trailing ``.exe`` OR ``.cmd`` (case-insensitively) before comparing,
-# which this module's own prior copy never did -- so ``git.exe``/``GIT.EXE``
-# at argv0 position previously did NOT match ``git`` here, silently
-# admitting a Tier-A git invocation through the SAME first-token check
-# this module uses for BOTH the read-only-git allowlist gate
-# (``_segment_is_tier_a_allowlisted``, ``_evaluate_git_tier_a``) and the
-# read-only-filesystem-binary gate (``_is_readonly_fs_command``) as well as
-# the Tier B ``coordinator-doc-new`` scaffolder gate
-# (``_first_token_is_allowlisted_binary``) -- confirmed empirically
-# (2026-07-29): this module's own prior copy returned ``False`` for
-# ``git.exe`` against binary ``git`` while correctly returning ``True`` for
-# bare ``git``, ``/usr/bin/git``, and ``bin/git``. The ``.cmd`` half is a
 # DIFFERENT-direction fix for THIS module specifically: ``coordinator-doc-
-# new.cmd`` is this project's own generated Windows launcher twin
-# (confirmed on disk, ``coordinator/bin/coordinator-doc-new.cmd`` -- no
-# ``.py`` in the launcher's own name, unlike the scaffolder script itself)
-# for the Tier B scaffolder, and before this fix it was wrongly DENIED by
-# ``_first_token_is_allowlisted_binary`` -- a Windows-usability defect
-# (blocking a legitimately-allowed tool's ordinary invocation), not a
-# security bypass, since this gate's default is deny. See
-# ``_command_tokenizer.token_matches_binary``'s own docstring for the full
-# bypass/gap set this consolidation closes, including the negative-control
-# preservation (``evil-coordinator-safe-commit``/``evil-coordinator-doc-
-# new.cmd`` still do not match).
 
 
 def _git_command_tokens(cmd: str) -> list:
-    """(Tier A option-surface hardening, 2026-07-25) Tokenize everything
-    AFTER the ``git`` binary token itself (and after a leading ``python3``
-    prefix token, if present). Shared by both the global-option walk
-    (``_locate_git_subcommand_and_bad_global``) and the subcommand-option
-    write-flag scan (``_find_git_subcommand_write_flag``) so neither
-    hand-duplicates tokenization.
-
-    2026-07-29 (THIS change, P0 security fix): rebuilt on the shlex-based
-    ``_tokenize_segment`` -- the previous implementation split ``rest``
-    with a quote-BLIND ``rest.split()``, so a QUOTED write-flag argument
-    (``git show "--output=/tmp/evil" HEAD``) tokenized with its quote
-    characters still attached, which ``_find_git_subcommand_write_flag``'s
-    ``prefix_denies`` check never matched -- confirmed empirically as a
-    live ALLOW-where-should-DENY bypass through ``check()``. See
-    ``_extract_first_token``'s docstring for the full incident writeup;
-    both functions share the same root cause and the same fix.
-    """
     tokens = peel_env_assignment_prefix(_tokenize_segment(cmd))
     if not tokens:
         return []
@@ -2489,19 +1959,6 @@ def _find_git_subcommand_write_flag(tokens: list, ruleset: Dict[str, Any]) -> Op
 
 
 def _segment_is_tier_a_allowlisted(segment: str, ruleset: Dict[str, Any]) -> bool:
-    """(Divergence 8, 2026-07-28) True iff ``segment`` -- one command of a
-    pipeline, already stripped of leading/trailing whitespace -- is on its
-    own an allowed Tier A command (a clean read-only ``git`` invocation, or
-    a read-only filesystem binary, or a read-only ``machine-local``
-    invocation -- Divergence 11 -- Review: coordinator:code-reviewer, Finding
-    1, this leg was landed for the bare-command Tier A path but never wired
-    into pipeline-segment eligibility, an over-tightness gap the module
-    docstring's own allow-condition (7)/(5) cross-reference already claimed
-    was covered). Deliberately does NOT check Tier B
-    (the ``coordinator-doc-new`` scaffolder) -- the scaffolder command is
-    never a sensible pipeline member, and admitting it here would widen the
-    one-shot-scaffold contract Tier B exists to enforce.
-    """
     first_token = _extract_first_token(segment)
     if _token_matches_binary(first_token, "git"):
         allowed, _reason = _evaluate_git_tier_a(segment, ruleset)
@@ -2515,16 +1972,6 @@ def _segment_is_tier_a_allowlisted(segment: str, ruleset: Dict[str, Any]) -> boo
 def _evaluate_pipeline_segments(
     cmd: str, split_indices: list, ruleset: Dict[str, Any]
 ) -> Optional[str]:
-    """(Divergence 8, 2026-07-28) Given ``cmd`` and the top-level unquoted
-    pipe positions ``_scan_for_unquoted_metacharacter`` found, split ``cmd``
-    into pipeline segments and verify EVERY segment is independently
-    Tier-A-allowlisted (``_segment_is_tier_a_allowlisted``). Returns the
-    first non-allowlisted segment's stripped text (deny), or ``None`` if
-    every segment passes (allow the whole pipeline). Splitting only ever
-    happens at the exact indices the scanner already proved are top-level,
-    unquoted, single ``|`` characters -- this function does no quote
-    handling of its own, it only slices at pre-validated boundaries.
-    """
     bounds = [-1] + split_indices + [len(cmd)]
     for start, end in zip(bounds, bounds[1:]):
         segment = cmd[start + 1 : end].strip()
@@ -2586,35 +2033,6 @@ def _evaluate_git_tier_a(cmd: str, ruleset: Dict[str, Any]) -> tuple:
 
 
 def _evaluate_machine_local_tier_a(cmd: str, ruleset: Dict[str, Any]) -> tuple:
-    """(2026-08-02) Given a command whose first token is already known to
-    match ``ruleset["machine_local_binary"]`` (boundary-anchored, checked by
-    the caller via ``_token_matches_binary``), validate the subcommand
-    against ``ruleset["machine_local_readonly_subcommands"]`` --
-    deny-by-omission, modeled directly on ``_evaluate_git_tier_a``'s
-    subcommand-allowlist step (the two are siblings in the evaluation
-    order, see ``check()``).
-
-    ``machine-local``'s write subcommands (``set``, ``array-append``,
-    ``array-set``, ``migrate-publish-mirrors``) are NOT enumerated here --
-    like the git subcommand allowlist, this is a positive allowlist of read
-    subcommands, never a denylist of write ones, so an as-yet-unnamed
-    future write subcommand denies by omission too.
-
-    Unlike git, ``machine-local`` has no analogous write/exec-capable
-    GLOBAL or subcommand OPTION surface to scrutinize (no ``-c`` config
-    injection, no ``--exec-path``, no ``--output``-shaped flag) -- see the
-    module docstring's negative-spec entry -- so this is a single-level
-    subcommand check, not the two-level walk ``_evaluate_git_tier_a`` needs.
-
-    Returns ``(True, None)`` for a clean read-only invocation, or
-    ``(False, None)`` for anything else (a bare ``machine-local`` with no
-    subcommand, or a subcommand not on the read-only allowlist) --
-    deny-by-omission, no option-level reason to report, so the caller falls
-    through to the existing generic Tier B deny message naming
-    ``machine-local`` as an unrecognised first token (exactly the same
-    fallthrough shape ``_evaluate_git_tier_a`` uses when the git subcommand
-    itself isn't on the read-only allowlist).
-    """
     tokens = _tokenize_segment(cmd)
     start = 2 if tokens and tokens[0] == "python3" else 1
     if len(tokens) <= start:
@@ -2626,19 +2044,6 @@ def _evaluate_machine_local_tier_a(cmd: str, ruleset: Dict[str, Any]) -> tuple:
 
 
 def _has_find_write_flag(cmd: str, ruleset: Dict[str, Any]) -> bool:
-    """(Tier A, 2026-07-25; policy-driven since Divergence 7, 2026-07-27)
-    True iff ``cmd`` contains a ``find`` flag in
-    ``ruleset["find_denied_options"]`` -- a write/execute vector
-    (``-delete``, ``-exec``, ``-execdir``, ``-ok``, ``-okdir``, ``-fprint``,
-    ``-fprintf``, ``-fls`` in the AC11 hardcoded-fallback shape) that denies
-    even though ``find`` itself is in the read-only filesystem tier.
-
-    2026-07-29 (THIS change): rebuilt on the shlex-based
-    ``_tokenize_segment`` -- the previous ``cmd.split()`` was quote-blind,
-    so a quoted ``"-exec"`` tokenized with its quote characters still
-    attached and never matched the bare-string membership test, same root
-    cause and same fix as ``_extract_first_token``/``_git_command_tokens``.
-    """
     denied = ruleset["find_denied_options"]
     return any(token in denied for token in _tokenize_segment(cmd))
 
@@ -2738,11 +2143,6 @@ def _has_required_type_arg(cmd: str, ruleset: Dict[str, Any]) -> bool:
     return cmd.endswith(required) or (required + " ") in cmd
 
 
-#: (Amendment 1, 2026-08-01) python3 inline-code flags -- unconditionally
-#: denied, per AC2a. Deliberately a bare module constant, NOT a
-#: ``ruleset[...]`` lookup: no policy content can widen this set (see module
-#: docstring Divergence 9 -- an unconditional ``-c``/``-e`` passthrough is
-#: the exact incident bypass shape this whole guard exists to close).
 _PY_INLINE_CODE_FLAGS = frozenset({"-c", "-e"})
 
 
@@ -2801,28 +2201,6 @@ def _evaluate_python3_interpreter(tokens: list, ruleset: Dict[str, Any]) -> Opti
     if basename != "python3":
         # (C1b, 2026-08-11) A PATH-PREFIXED python-family basename (e.g.
         # `.venv/Scripts/python.exe`, `/repo/.venv/bin/python`) is a LOCATION
-        # the caller chose deliberately -- on Windows there is often no
-        # `python3.exe` sibling to retype to (see the plan's "Amended
-        # 2026-08-11 (C1 execution)" section), so the "retype as python3"
-        # remedy below would be a trap-offer for this spelling. Admit it into
-        # this SAME decision the exact `python3` spelling already enters --
-        # every check below (inline-code deny, -m module allowlist) still
-        # applies unconditionally. A BARE python-family token (no path
-        # separator) is a NAME the caller got wrong, not a location -- it
-        # stays out of this tier and keeps the existing "retype as python3"
-        # remedy path (`_python_family_alias_token` /
-        # `_python_family_misspelling_deny_reason`) byte-identical.
-        # Decided off the RAW token, not the normalized basename, since
-        # normalization is exactly what discards the path-vs-bare distinction.
-        # (P3 fix, 2026-08-11) A bare trailing separator with no real
-        # directory component (e.g. `python/`) is NOT a chosen location --
-        # strip trailing separators first so this predicate means what it
-        # says ("the caller named a directory before the basename"), not
-        # merely "a separator character appears anywhere in the token".
-        # `_normalize_executable_basename` already collapses `python/` and
-        # `python` to the identical basename, so this tightening changes no
-        # downstream ALLOW/DENY outcome -- it only stops a degenerate
-        # spelling from being misclassified as path-prefixed.
         raw_leading_stripped = raw_leading.rstrip("/\\")
         has_path_separator = "/" in raw_leading_stripped or "\\" in raw_leading_stripped
         if not (has_path_separator and _PYTHON_FAMILY_ALIAS_RE.match(basename)):
@@ -2844,37 +2222,10 @@ def _evaluate_python3_interpreter(tokens: list, ruleset: Dict[str, Any]) -> Opti
     return None
 
 
-#: Divergence 18 (2026-08-11, THIS change -- python-family misspelling
-#: remedy): a confined agent typing bare `python -m pytest ...` (no `3`)
-#: fell through to the generic Tier B deny message ("first command token is
-#: not coordinator-doc-new"), which both misnames the tier (this command IS
-#: in scope, merely misspelled) and closes with "report the blocker to the
-#: dispatching EM rather than retrying it" -- wrong advice when retrying
-#: with the one-character fix would allow. Measured live: three dispatched
-#: executors gave up and handed pytest back unrun rather than retry with
-#: `python3`. This tier fires ONLY as a fallthrough after Tier B's
-#: scaffolder check AND the exact-`python3` interpreter tier have both
-#: already declined to classify the command -- see `check()`'s call site.
-#: It never widens what executes: the command is still denied; only the
-#: reason text changes, and only when the substituted `python3 <same rest>`
-#: invocation would ITSELF be allowed by `_evaluate_python3_interpreter` for
-#: this `ruleset` -- a spelling whose corrected form would ALSO deny (e.g.
-#: `python -c "..."`) falls through to the untouched generic message, never
-#: advertising a retry that denies too (the exact trap-offer failure mode
-#: Divergence 1 above already warns this module against).
 _PYTHON_FAMILY_ALIAS_RE = re.compile(r"^(python2(\.\d+)?|python3\.\d+|python|py)$")
 
 
 def _python_family_alias_token(token: str) -> Optional[str]:
-    """Return the case/suffix-normalized basename of ``token`` when it is a
-    python-family interpreter spelling OTHER than the exact accepted
-    ``python3`` -- e.g. ``python``, ``py``, ``python2``, ``python3.11``, or
-    any of those with a path prefix and/or a ``.exe``/``.cmd`` suffix
-    (Windows), via the same ``_normalize_executable_basename`` every other
-    identity check in this module routes through. Returns ``None`` for
-    ``python3`` itself (already handled by the exact-tier above) and for
-    anything that isn't a recognized python spelling at all.
-    """
     basename = _normalize_executable_basename(token)
     if basename == "python3":
         return None
@@ -2884,15 +2235,10 @@ def _python_family_alias_token(token: str) -> Optional[str]:
 
 
 def _remedy_command_with_python3(cmd: str, leading_token: str) -> str:
-    """Rewrite ``cmd``'s leading python-family token to ``python3``,
-    preserving the rest of the command verbatim -- used only to render a
-    human-readable remedy suggestion in the deny message, never to actually
-    execute anything.
-    """
     stripped = cmd.lstrip()
     lead_ws = cmd[: len(cmd) - len(stripped)]
     if stripped[: len(leading_token)] != leading_token:
-        return cmd  # defensive -- unexpected shape, leave cmd untouched
+        return cmd
     rest = stripped[len(leading_token):]
     return f"{lead_ws}python3{rest}"
 
@@ -2919,41 +2265,10 @@ def _sanitize_cmd_for_reason(cmd: str) -> str:
     return safe or "(empty/unparseable)"
 
 
-#: (Message-size discipline, 2026-09-11, docs/plans/2026-09-11-trim-the-
-#: remaining-over-cap-guard-messages.md, C4) "confined findings-agent" is
-#: meta-commentary about the guard's own confinement mechanism, not
-#: something the denied reader needs to self-correct -- the Command/Reason
-#: lines below already say what was denied and why. Trimmed to the bare
-#: verdict. This is the one trim this cell's fixed structure (Command,
-#: Reason, and the Denied: diagnostic lines the coherence suite pins) has
-#: room for -- see that plan's C4 row and C9 for the residual.
 _DEFAULT_HEADER_LINE = "BLOCKED: Bash outside allowlist."
 
-#: Leg-3 headers. `_is_confined_type`'s third leg
-#: (``is_confined_by_roster_absence``) confines by ABSENCE, so it fires for
-#: agents that are not findings agents at all -- and the default header
 #: above then tells them they are one, and offers them the REVIEWER's
-#: `coordinator-doc-new --type review-findings` allowlist as their remedy.
-#:
-#: That is not a cosmetic inaccuracy; it is a wrong diagnosis that routes the
-#: reader away from the cause. Measured 2026-08-31: a `coordinator:executor`
-#: confined solely because the roster could not be read received the default
-#: header, and TWO sessions across nineteen days went looking for the
 #: executor in `_helpers._CONFINED_FINDINGS_AGENTS` -- the one set that
-#: cannot contain it, because leg 3 never names a type anywhere. The report
-#: (`2026-08-20-example-retrieval-repo-em-executor-confined-under-the-reviewer-
-#: allowlist.md`) was accurate the whole time and read as unreproducible.
-#:
-#: These REPLACE the header rather than adding a line, so the prose byte
-#: count (`_message_size`) is unaffected -- the fix is that the one sentence
-#: already being spent says something true.
-#:
-#: Deliberately NOT a verdict change. Both leg-3 confinements are argued
-#: fail-closed behaviour (an unreadable roster degrades to "cannot confirm
-#: this type is legitimate", never to "assume it is fine"), and whether an
-#: unclassifiable input should pass or refuse is a separate, open,
-#: direction-class ruling. A refusal can be honest about its cause under
-#: either answer.
 _ROSTER_UNREADABLE_HEADER_LINE = (
     "BLOCKED: agent roster unreadable, so every type is confined until it resolves."
 )
@@ -2961,24 +2276,8 @@ _TYPE_UNENUMERATED_HEADER_LINE = (
     "BLOCKED: this dispatch identity is on no roster, so Bash is confined."
 )
 
-#: (2026-09-06) The same defect the block above fixed, one layer in: naming
 #: the CAUSE ("on no roster") without naming the IDENTITY still leaves the
-#: reader unable to act, because the roster is checkable and the string is
-#: not. Measured today, on a Workflow-dispatched planner: three sessions
-#: across two repos reasoned for hours about which leg was non-empty, and
-#: could not tell an absent `agent_type` from a present-but-unrostered one
-#: -- the deny they were reading was compatible with both, and the correct
-#: answer (non-empty, since an empty type escapes all three legs) was
-#: deducible only by reading this module's source. A probe matrix finally
-#: established it by elimination. The identity is the one fact the guard
-#: holds and the reader does not.
-#:
 #: Same discipline as the block above: this REPLACES the header line rather
-#: than adding one, so `_message_size`'s prose byte count is unaffected.
-#: The value is caller-controlled free text, so it is passed through
-#: `_sanitize_cmd_for_reason` (control-char strip + length cap) exactly like
-#: the command string, and truncated harder -- an identity is a short token,
-#: and a long one is itself the finding.
 _UNENUMERATED_IDENTITY_MAX_LEN = 60
 
 
@@ -3000,73 +2299,21 @@ def _unenumerated_header_line(effective_type: str) -> str:
         shown = shown[:_UNENUMERATED_IDENTITY_MAX_LEN] + "..."
     return f"BLOCKED: dispatch identity {shown!r} is on no roster, so Bash is confined."
 
-#: (Message-size discipline, 2026-08-03) Trimmed to prose-cap width. Moved
-#: onto ONE indented line so it lands inside the "Use instead:" cue window
-#: (see ``_deny_reason``) and is exempted from the prose byte count --
-#: content unchanged in substance (still names the binary and the required
-#: arg), only the surrounding sentence is gone.
 _DEFAULT_SCAFFOLDER_STANZA = (
     "  coordinator-doc-new --type review-findings [--plan <path>] [--chunk <id>] ...",
 )
 
-#: (Message-size discipline, 2026-08-03) The explanatory sentence is gone;
-#: the two indented forms are self-explanatory ready-to-run alternatives and
-#: sit in the same exempted cue window as the scaffolder/Tier-A lines above.
 _DEFAULT_ACCEPTED_FORMS_STANZA = (
     "  <claude-klabauter-live-root>/coordinator/bin/coordinator-doc-new.py --type review-findings ...",
     "  python3 <claude-klabauter-live-root>/coordinator/bin/coordinator-doc-new.py --type review-findings ...",
 )
 
-#: (Message-size discipline, 2026-08-03) No closing stanza for the default
-#: (findings-agent) type -- the indented alternatives above already are the
-#: route forward; nothing left to restate.
 _DEFAULT_CLOSING_STANZA: tuple = ()
 
 
-#: (Message-size discipline, 2026-08-03) The Tier A enumerations (git
-#: subcommands, read-only fs binaries) and the metacharacter-set
 #: enumeration, moved onto INDENTED lines shared by every confined type
-#: (they described guard mechanics identically for both types even before
-#: this change -- see the pre-existing module docstring note on the
-#: "Did you mean.../Denied: any other command..." stanzas). Indenting them
-#: lands them inside the "Use instead:" cue window ``_deny_reason`` opens,
-#: which exempts them from the measured prose-byte cap (see
 #: ``_message_size._exempt_span_bytes`` / ``_INDENTED_CMD_RE``) -- this is
-#: what makes a duty-of-care-complete message (names the read-only escape
-#: hatch AND the denied-metacharacter set) fit under the 220-byte prose cap.
-#: Content is unchanged from the pre-existing text in substance; only the
-#: connecting sentences around each enumeration are gone, and each
-#: enumeration test in
-#: ``test_block_reviewer_bash_outside_allowlist_message_coherence.py``
-#: still locates its anchor by regex, not by full-string match, so this
-#: reformat does not touch that suite's assertions.
 #: The first line is a single BACKTICK-wrapped, genuinely runnable example
-#: (``git show``, no placeholder). This is a deliberate liveness-gate
-#: anchor, not decoration: ``extract_alternatives`` classifies every
-#: backtick span in a cue window FIRST, and only falls through to its raw
-#: indented-line scan when that first pass finds nothing at all. The two
-#: slash-separated enumeration lines below (needed verbatim, byte-for-byte,
-#: by ``test_offer_block_git_subcommands_match_the_enforced_set`` /
-#: ``test_offer_block_fs_binaries_match_the_enforced_set``) are NOT
-#: themselves single runnable commands -- ``ls / cat / head / ...`` parses,
-#: under that raw fallback, as one `ls` invocation with every other name as
-#: a literal path argument, which genuinely fails ("No such file or
-#: directory") and would register as a false DEAD alternative. Anchoring a
-#: real, classifiable command in this same window is what keeps the
-#: fallback from ever reaching those enumeration lines at all -- it is not
-#: itself required as an "offer" (the two lines below already are), so it
-#: is intentionally terse.
-#:
-#: The last two lines are prefixed ``Denied:`` (not offered commands) --
-#: belt-and-suspenders should the anchor above ever be removed -- so the
-#: raw indented-line fallback's own skip-list (``candidate.startswith(
-#: ("Subagent:", "Command:", "Denied:", "Reason:"))``) would still exclude
-#: them: ``unquoted shell-chaining metacharacter (...)`` has no argv[0]
-#: that resolves on PATH and would otherwise register as a false DEAD
-#: alternative. Every line here still lands inside the indented span the
-#: prose-byte exemption matches (``_message_size`` does not consult label
-#: prefixes or backticks -- see ``_exempt_span_bytes``), so none of this
-#: costs cap budget.
 _TIER_A_ENUM_BLOCK = (
     "  `git show`",
     "  git show / diff / log / status / blame / ls-files / rev-parse / describe / check-ignore / check-attr / ls-tree / cat-file",
@@ -3163,8 +2410,6 @@ def _deny_reason(
     """
     cmd_safe = _sanitize_cmd_for_reason(cmd)
     header_line = _DEFAULT_HEADER_LINE
-    # A leg-3 confinement is not a findings-agent confinement, and saying so
-    # is what stopped two sessions finding the cause -- see
     # `_ROSTER_UNREADABLE_HEADER_LINE`'s own comment.
     if confinement_cause == "roster-unreadable":
         header_line = _ROSTER_UNREADABLE_HEADER_LINE
@@ -3191,151 +2436,38 @@ def _deny_reason(
 
 
 def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Evaluate the reviewer-bash-allowlist guard against a PreToolUse payload.
-
-    ``policy_path`` (Divergence 7, 2026-07-27) is the explicit path to DoE's
-    ``subagent-sandbox-policy.yaml``, injected by the dispatch caller (C5a)
-    -- ``None`` (the default, and what every pre-2026-07-27 caller and this
-    module's own 99-test oracle suite still pass) makes ``load_policy``
-    fall through to its own weaker env-var/best-effort resolution legs,
-    which resolve to an empty ``Policy`` in a bare test/dev environment --
-    exercising exactly the AC11 hardcoded-fallback path. Never consumed
-    against the weak in-process fallback chain in production (C5a wires the
-    explicit path); see the module docstring's Divergence 7 section.
-
-    Returns ``None`` (allow) or the nested hard-deny envelope.
-    """
-    # 1. Tool-name guard — defense-in-depth (reference hook 62-67).
-    # (2026-08-07, C6) Widened from a bare "!= Bash" literal to accept
-    # PowerShell too, now that this guard carries a PowerShell Tier A
-    # allowlist (Divergence 13 below). Any OTHER tool_name -- including an
     # absent one -- is still not this guard's business at all (MATCHERS
-    # already filters in production; this remains a defense-in-depth
-    # pre-filter, not the dialect-gap SILENT case) and returns plain None,
-    # exactly as the pre-C6 gate did for every non-Bash tool_name.
     tool_name = payload.get("tool_name") or ""
     dialect = dialect_from_tool_name(tool_name)
     if dialect is None:
         return None
 
-    # 2. No agent_id -> top-level EM Bash call -> allow BEFORE any
-    #    identity-resolution cost (reference hook 69-73).
     raw_agent_id = payload.get("agent_id")
     if not raw_agent_id:
         return None
 
-    # 3. Identity resolution via the shared resolver (reference hook 75-117).
     cwd = payload.get("cwd")
     git_root = resolve_git_root(cwd)
     session_id = payload.get("session_id") or ""
     agent_id = _resolve_subagent_identity(raw_agent_id, session_id)
     agent_type = payload.get("agent_type") or ""
-    # Divergence 19 (2026-08-23, root cause for the P1 filed as "intermittent"
-    # at state/bug-backlog/2026-08-21-bash-guard-applies-code-reviewer-allowlist-
-    # to-other-agents-intermittently.yaml): `git_root` was derived SOLELY from
-    # the agent's `payload["cwd"]`, which is wherever that agent happened to be
-    # working at the moment of the call -- routinely its own scratchpad, which is
-    # outside the repo. `resolve_git_root()` then returns None, the back-pointer
-    # leg below never runs, and `subagent_type` stays "". For a NAMED dispatch
-    # `agent_type` is the caller-chosen teammate NAME rather than a type, so
-    # `_resolve_effective_type` has no known identity to prefer, degrades to that
-    # name, and `_is_confined_type`'s leg 3 confines it for absence from the
-    # roster -- handing an arbitrary agent `coordinator:code-reviewer`'s
-    # allowlist.
-    #
-    # That is what made this look intermittent for three sessions: the verdict
-    # tracks the cwd of each individual Bash call, so the SAME agent running the
-    # SAME command is allowed from the repo and denied from its scratchpad. Not a
-    # race -- measured, the back-pointer was on disk 79s before the denial.
-    #
-    # The back-pointer store does not move when an agent changes directory: it
-    # lives in the repo the EM session runs in, which is the HOOK process's own
-    # cwd. So fall back to that (`resolve_git_root(None)`, the documented
-    # resolve-against-process-cwd contract) when the payload cwd cannot resolve.
-    #
-    # This does NOT relax confinement, which is why it is preferred over the two
-    # alternatives (fail open on unresolvable git_root, or stop selecting the
-    # code-reviewer ruleset). `_read_backpointer_subagent_type` is already
-    # cross-checked against THIS payload's `session_id` via
-    # `expected_em_session_id`, so widening WHERE the store is looked for cannot
-    # manufacture a false identity -- a wrong root simply finds no matching row
-    # and returns "", landing on exactly today's fail-closed behaviour. It can
-    # only recover a TRUE identity that a transient cwd was hiding. Divergence
-    # 18's deliberate fail-closed-on-unresolved posture is untouched: it still
-    # governs every case where the chain genuinely does not resolve.
     if not git_root:
         git_root = resolve_git_root(None)
 
     subagent_type = ""
     if agent_id and git_root:
-        # deferred finding) -- the back-pointer chain never checked that the
-        # em_session_id it read from em-session-id.txt matched THIS payload's
-        # own session_id, so a stale/cross-session/fabricated back-pointer
-        # could resolve a caller-chosen agent_type to any real, non-confined
-        # subagent_type and clear confinement via Divergence 18's new formula.
-        # Passing expected_em_session_id here cross-checks the resolved
-        # em_sid against the live calling session and fails the lookup
-        # (returns "") on any mismatch.
         subagent_type = _read_backpointer_subagent_type(
             git_root, agent_id, expected_em_session_id=session_id
         )
 
     # Empty canonical AGENT_ID -> no subagent or unrecognised shape -> allow
-    # (fail-open, reference hook line 117).
     if not agent_id:
         return None
 
-    # Divergence 7 (2026-07-27): load the declared bash_policy table once.
-    # engine.load_policy() is itself fail-open (absent/unreadable/malformed
-    # file -> an empty Policy, never a raised exception) -- every downstream
-    # consumer below (_is_confined_type / _resolve_ruleset) degrades that
-    # emptiness to the PRIOR hardcoded enforcement (AC11), never to ALLOW.
     policy = load_policy(policy_path)
 
-    # 6. Confined-set membership (reference hook 163-192), policy-driven with
-    #    a hardcoded-set fallback (AC10/AC11).
-    #
-    # Divergence 18 (2026-08-14, close the named-dispatch confinement-
-    # manufacturing residual): a bare OR here made EVERY named (Agent-teams
-    # teammate) dispatch confined, regardless of the dispatched agent's real
-    # type. Root cause: for a NAMED dispatch, `agent_type` is the caller-
-    # chosen teammate NAME, never a real `coordinator:*` type -- an unknown
-    # name is confined by leg 3 of `_is_confined_type`
-    # (`is_confined_by_roster_absence`), so the OR manufactured confinement
-    # for a dispatch whose back-pointer-resolved `subagent_type` is a type
-    # the policy does NOT confine (e.g. `coordinator:git-commit-agent`,
-    # `coordinator:enricher`). `_resolve_effective_type` then had no known
-    # identity to prefer (the confining leg, `agent_type`, is the only KNOWN
-    # one via leg-3's catch-all), so `effective_type` became the garbage
-    # name and `_resolve_ruleset` fell through to `_default_ruleset()` -- the
-    # narrow findings-agent allowlist -- denying commands (e.g.
-    # `scoped-git-commit`) the real, non-confined type is entitled to run.
     # This is a DIFFERENT question from Divergence 16/17's fix immediately
-    # below: those changed WHICH already-confined identity's ruleset
-    # applies; this changes WHETHER confinement fires at all for a named
-    # dispatch. Fix: a KNOWN back-pointer-derived `subagent_type` governs the
-    # confinement verdict outright -- a caller-chosen name must never
     # MANUFACTURE confinement for a type the policy does not confine, on the
-    # same "back-pointer identity outranks caller-chosen free text"
-    # principle Divergence 17 already established for ruleset selection.
-    # Only when `subagent_type` is not known (unnamed dispatch: empty; or a
-    # named dispatch whose back-pointer chain itself failed to resolve) does
-    # the original OR apply -- fail-closed leg-3 confinement for a type
-    # unknown on BOTH legs is unchanged.
-    #
-    # Staff-eng review (2026-08-14, finding 0/major): the first cut of this
-    # fix let a KNOWN, non-confined `subagent_type` CLEAR confinement a
-    # KNOWN, genuinely-confined `agent_type` (e.g. `coordinator:code-
-    # reviewer`) would otherwise impose -- a stale or attacker-written
-    # `dispatched-agents.txt` row could no-op this guard entirely for a
-    # findings agent. Corrected: when `subagent_type` is known, it confines
-    # the dispatch on its own leg OR when `agent_type` is ALSO known and
-    # confined -- a known `subagent_type` can free a caller-chosen NAME
-    # (unknown `agent_type`) from manufactured confinement, but it can never
-    # launder a known-and-confined `agent_type` into freedom. A name cannot
-    # manufacture confinement for a type the policy does not confine, and a
-    # back-pointer value cannot clear confinement a known-confined
-    # `agent_type` imposed.
     if _is_type_known(subagent_type, policy):
         is_confined = _is_confined_type(subagent_type, policy) or (
             _is_confined_type(agent_type, policy) and _is_type_known(agent_type, policy)
@@ -3347,26 +2479,10 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
     if not is_confined:
         return None
 
-    # Resolve the most informative type label for the deny message
-    # (reference hook 194-196). (Divergence 16, 2026-08-11) A NAMED-teammate
-    # dispatch's agent_type is a raw name string, not a real type -- see
-    # _resolve_effective_type's own docstring for why a plain
-    # "whichever leg is confined at all" selection picks that garbage string
-    # over the correctly back-pointer-resolved subagent_type.
     effective_type = _resolve_effective_type(agent_type, subagent_type, policy)
 
-    # Resolve this effective_type's allowed Bash surface -- a validated
-    # bash_policy entry if one exists, else _default_ruleset() (AC11).
     ruleset = _resolve_ruleset(effective_type, policy)
 
-    # (2026-08-07, C6) Dialect-gap SILENT leg -- see Divergence 13's negative
-    # spec below. Unreachable today given the top-gate above accepts ONLY
-    # "Bash"/"PowerShell" (both of which this guard now has an allowlist
-    # for), but kept explicit rather than assumed: a THIRD dialect entering
-    # `Dialect` in the future, with no allowlist added here yet, must record
-    # SILENT and decline to rule -- never fall open to allow, and never
-    # silently reuse the Bash or PowerShell allowlist for a dialect neither
-    # was written for.
     if dialect not in (Dialect.BASH, Dialect.POWERSHELL):
         record_silent(
             "block_reviewer_bash_outside_allowlist",
@@ -3374,8 +2490,6 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
         )
         return None
 
-    # 7. Confined findings-agent confirmed — extract and validate the command
-    #    (reference hook 198-282).
     tool_input = payload.get("tool_input") or {}
     cmd = (tool_input.get("command") if isinstance(tool_input, dict) else None) or ""
     cmd = _strip_crlf(cmd)
@@ -3394,15 +2508,7 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
             "to diagnose or fix."
         )
 
-    # Windows argv0-head normalization (2026-07-29, THIS change): rewrite an
-    # unquoted Windows backslash argv0-head path -- with or without an
-    # embedded-space component (e.g. a spaced Windows username) -- whose
-    # basename identifies git, the Tier B scaffolder, or a Tier A read-only
-    # fs binary, into a shlex-safe forward-slash (and, for the
-    # embedded-space case, single-quoted) form. Every check below runs
     # against this normalized ``cmd_for_check``; the ORIGINAL, unrewritten
-    # ``cmd`` is still what the human-facing deny message echoes (see
-    # ``_deny_reason`` call below).
     cmd_for_check = cmd
     if not deny:
         cmd_for_check = _normalize_windows_argv0_head_path_with_spaces(cmd_for_check, ruleset)
@@ -3420,10 +2526,6 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
             )
 
     if not deny and pipeline_splits:
-        # (Divergence 8, 2026-07-28) A clean top-level pipeline -- every
-        # segment must be independently Tier-A-allowlisted. This is checked
-        # BEFORE the single-command Tier A/B logic below, which does not
-        # know how to evaluate a multi-segment command.
         if dialect is Dialect.POWERSHELL:
             bad_segment = _evaluate_powershell_pipeline_segments(cmd_for_check, pipeline_splits)
         else:
@@ -3435,10 +2537,6 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
             return None
 
     if not deny and not pipeline_splits:
-        # Tier A (2026-07-25): read-only inspection/discovery escape hatch.
-        # Checked AFTER the metacharacter gate (which applies to both
-        # tiers) but BEFORE the Tier B coordinator-doc-new checks below --
-        # a Tier A command never needs --type review-findings.
         first_token = _extract_first_token(cmd_for_check)
         if _token_matches_binary(first_token, "git"):
             git_allowed, git_deny_reason = _evaluate_git_tier_a(cmd_for_check, ruleset)
@@ -3446,25 +2544,9 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
                 return None
             if git_deny_reason:
                 # Option-surface hardening (2026-07-25): a SPECIFIC
-                # global-option or subcommand-write-flag rejection --
-                # skip the generic Tier B fallthrough below and deny with
-                # this reason directly.
                 deny = True
                 deny_reason = git_deny_reason
-            # else: subcommand not on the read-only allowlist (or no
-            # subcommand at all) -- deny-by-omission, falls through to the
-            # generic Tier B checks below (which will name "git" as an
-            # unrecognised first token).
         elif _token_matches_binary(first_token, ruleset["machine_local_binary"]):
-            # Tier A (2026-08-02): read-only machine-local subcommand
-            # escape hatch -- sibling of the git branch immediately above,
-            # same place in the evaluation order. A bare `machine-local`
-            # with no subcommand, or a write subcommand (set,
-            # array-append, array-set, migrate-publish-mirrors), returns
-            # (False, None) here and falls through to the generic Tier B
-            # deny message below (which will name "machine-local" as an
-            # unrecognised first token) -- exactly the git branch's own
-            # deny-by-omission fallthrough shape.
             ml_allowed, ml_deny_reason = _evaluate_machine_local_tier_a(
                 cmd_for_check, ruleset
             )
@@ -3476,18 +2558,9 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
         elif _is_readonly_fs_command(cmd_for_check, ruleset):
             return None
         elif dialect is Dialect.POWERSHELL and _is_readonly_powershell_command(cmd_for_check):
-            # Tier A (2026-08-07, C6): read-only PowerShell cmdlet escape
-            # hatch -- sibling of the bash readonly-fs-binary branch
-            # immediately above, gated on dialect since these cmdlet names
-            # (Get-ChildItem, Select-String, Get-Content) are meaningless as
-            # Bash-dialect binary names and must not be admitted there.
             return None
 
     if not deny and not _first_token_is_allowlisted_binary(cmd_for_check, ruleset):
-        # (Amendment 1, 2026-08-01) Not the scaffolder -- try the narrow
-        # python3-interpreter discrimination tier before falling to the
-        # original generic deny. See _evaluate_python3_interpreter's
-        # docstring: it returns None (not applicable/not granted) for every
         # case that must preserve the ORIGINAL deny message text (AC3).
         tokens_for_interpreter = peel_env_assignment_prefix(_tokenize_segment(cmd_for_check))
         interpreter_result = _evaluate_python3_interpreter(tokens_for_interpreter, ruleset)
@@ -3500,28 +2573,12 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
         else:
             deny = True
             # `first_token` is the EFFECTIVE token this guard actually
-            # matched against the allowlist -- `_extract_first_token` (via
-            # `_first_effective_token`) deliberately returns tokens[1], not
-            # tokens[0], for an exact `python3 <script>` invocation (see
-            # that function's own docstring). `raw_first_token` is the
             # UNMODIFIED tokens[0] already tokenized above for the alias
-            # check below. When the two differ, a message that calls
-            # `first_token` "first command token" mis-describes argv[0] --
-            # filed as state/bug-backlog/2026-08-21-bash-guard-applies-
-            # code-reviewer-allowlist-to-other-agents-intermittently.yaml
-            # (defect 2). Naming both keeps the message honest without
             # touching the effective-token MATCHING logic, which stays
-            # exactly as before (AC3/AC5 pin this string byte-identical for
-            # every case where the two tokens already coincide, e.g.
-            # `curl`/`rm` -- unaffected by this branch).
             first_token = _extract_first_token(cmd_for_check)
             raw_first_token = tokens_for_interpreter[0] if tokens_for_interpreter else ""
             unsafe_env_name = _unpeeled_exec_influencing_env_name(cmd_for_check)
             if unsafe_env_name is not None:
-                # (2026-09-06) The assignment prefix WAS the reason -- say so
-                # rather than reporting the assignment as an unrecognised
-                # binary name, which reads as a tokenizer failure and costs a
-                # round trip to diagnose.
                 deny_reason = (
                     f"{unsafe_env_name}= redirects which binary or code runs, so it is not "
                     f"peeled to find the command; run without it"
@@ -3533,11 +2590,7 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
                 )
             else:
                 deny_reason = f"not coordinator-doc-new (got: {first_token or 'empty'})"
-            # (Divergence 18, 2026-08-11) The exact-`python3` tier above
-            # declined (tokens[0] != "python3") -- check whether tokens[0]
             # is a python-family MISSPELLING whose `python3`-corrected form
-            # would itself be allowed by this ruleset. Only ever narrows the
-            # MESSAGE; the command above is already denied either way.
             if tokens_for_interpreter:
                 alias_basename = _python_family_alias_token(tokens_for_interpreter[0])
                 if alias_basename is not None:

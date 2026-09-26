@@ -1,18 +1,3 @@
-"""test_settings_home_first_read_rungs.py — regression coverage for the two
-unconditional `~/.claude/bin` mirror read rungs the audit named as violating
-DR-210 Amendment ("resolves nothing through ~/.claude/bin"):
-  - coordinator/bin/lib/coordinator_registry.py's split-repo manifest
-    fallback (subprocess call onto `machine_local_bin_candidates()`)
-  - coordinator/bin/resolve-repo-path.py's `_machine_local_path_candidates()`
-
-Both sites now delegate ordering to
-`coordinator/bin/lib/machine_local_impl_resolve.py` (already covered for its
-own internals by test_machine_local_impl_resolve.py); these tests instead
-pin that each CALL SITE actually surfaces settings-home-first behavior, not
-just the shared helper in isolation.
-
-Spec backlink: state/audits/2026-07-25-claude-bin-mirror-read-rungs.md § 2/3.
-"""
 from __future__ import annotations
 
 import os
@@ -31,9 +16,6 @@ _LIB_DIR = os.path.join(_BIN_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-# ---------------------------------------------------------------------------
-# resolve-repo-path.py — _machine_local_path_candidates() ordering.
-# ---------------------------------------------------------------------------
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(_BIN_DIR))
 if _REPO_ROOT not in sys.path:
@@ -49,11 +31,6 @@ _rrp_spec.loader.exec_module(_rrp)  # type: ignore[union-attr]
 
 @pytest.fixture(scope="module", autouse=True)
 def _restore_sys_path():
-    # module-level sys.path
-    # mutation above (needed before the exec_module import-time load) would
-    # otherwise persist for the rest of the pytest session and could shadow
-    # same-named modules in files collected afterward. Undo it once every
-    # test in this module has run.
     yield
     if _LIB_DIR in sys.path:
         sys.path.remove(_LIB_DIR)
@@ -66,10 +43,7 @@ def test_resolve_repo_path_candidates_settings_home_before_mirror(monkeypatch, t
     claude_home = tmp_path / "claude-home"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
-    # machine_local_impl_resolve
     # .claude_home() consults CLAUDE_CONFIG_DIR before CLAUDE_HOME; leaving it
-    # unpinned would let an ambient dev-box/CI value silently override the
-    # fixture and resolve against a real path instead of tmp_path.
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
 
     candidates = _rrp._machine_local_path_candidates()
@@ -84,8 +58,6 @@ def test_resolve_repo_path_candidates_settings_home_before_mirror(monkeypatch, t
 
 
 def test_resolve_repo_path_mirror_still_reachable_when_settings_home_absent(monkeypatch, tmp_path):
-    """The mirror candidate must still be offered (never removed) even though
-    it now ranks last — DR-210 Amendment retires primacy, not existence."""
     settings_home = tmp_path / "settings-home"
     claude_home = tmp_path / "claude-home"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
@@ -99,10 +71,6 @@ def test_resolve_repo_path_mirror_still_reachable_when_settings_home_absent(monk
 
 
 def test_resolve_repo_path_fails_open_with_breadcrumb_when_no_candidate_exists(monkeypatch, tmp_path, capsys):
-    """Neither settings-home nor mirror has a machine-local binary on disk:
-    _resolve_registry_value degrades to empty stdout (fail-open, not
-    fail-loud) with a stderr breadcrumb — the pre-existing contract this
-    ordering fix must not change."""
     settings_home = tmp_path / "settings-home"
     claude_home = tmp_path / "claude-home"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
@@ -116,13 +84,7 @@ def test_resolve_repo_path_fails_open_with_breadcrumb_when_no_candidate_exists(m
     assert "machine-local CLI not found" in captured.err
 
 
-# ---------------------------------------------------------------------------
-# coordinator_registry.py — split-repo manifest fallback: settings-home
-# candidate must be tried before the mirror candidate. Exercised via a real
-# subprocess import (import-time behavior) with fake machine-local
-# executables planted at each candidate location so which one "wins" is
 # externally observable from the resulting _MANIFEST_PATH.
-# ---------------------------------------------------------------------------
 
 _FAKE_ML_SCRIPT = """#!/usr/bin/env python3
 import sys
@@ -139,11 +101,6 @@ def _plant_fake_machine_local(base_dir: str, doe_root: str) -> None:
         fh.write(_FAKE_ML_SCRIPT.format(doe_root=doe_root))
     os.chmod(script_path, 0o755)
     if os.name == "nt":
-        # coordinator_registry.py's split-repo fallback subprocess.run's the
-        # candidate path directly as argv[0] (`[_ml_cand, "get", key]`) — on
-        # Windows that requires a real executable, so also plant a .cmd twin
-        # that shells back into this same interpreter running the sibling
-        # .py file (CreateProcess does not consult PATHEXT for a bare path).
         py_twin = script_path + ".py"
         with open(py_twin, "w", encoding="utf-8") as fh:
             fh.write(_FAKE_ML_SCRIPT.format(doe_root=doe_root))
@@ -153,8 +110,6 @@ def _plant_fake_machine_local(base_dir: str, doe_root: str) -> None:
 
 
 def _build_doe_fixture(root: str, tag: str) -> str:
-    """A fake DoE root carrying a real manifest at
-    <root>/coordinator/schemas/coordinator-registry.manifest.json."""
     doe_root = os.path.join(root, f"doe-{tag}")
     manifest_dir = os.path.join(doe_root, "coordinator", "schemas")
     os.makedirs(manifest_dir)
@@ -210,8 +165,6 @@ def test_coordinator_registry_split_repo_fallback_settings_home_wins_over_mirror
         env = _base_env(empty_home)
         env["COORDINATOR_SETTINGS_HOME"] = settings_home
         env["CLAUDE_HOME"] = claude_home
-        # No .pop() here: env is
-        # a from-scratch dict built by _base_env(), which never populates
         # DOE_ROOT/REPO_DOE_CLAUDE in the first place (unlike os.environ.copy()).
 
         result = _run_registry_import_subprocess(env)
@@ -227,7 +180,7 @@ def test_coordinator_registry_split_repo_fallback_mirror_reachable_when_settings
     with tempfile.TemporaryDirectory() as tmp:
         empty_home = os.path.join(tmp, "empty-home")
         os.makedirs(empty_home)
-        settings_home = os.path.join(tmp, "settings-home")  # never planted with a binary
+        settings_home = os.path.join(tmp, "settings-home")
         claude_home = os.path.join(tmp, "claude-home")
 
         mirror_doe = _build_doe_fixture(tmp, "mirror-only")
@@ -236,8 +189,6 @@ def test_coordinator_registry_split_repo_fallback_mirror_reachable_when_settings
         env = _base_env(empty_home)
         env["COORDINATOR_SETTINGS_HOME"] = settings_home
         env["CLAUDE_HOME"] = claude_home
-        # No .pop() here; see
-        # the sibling test above for rationale.
 
         result = _run_registry_import_subprocess(env)
         assert result.returncode == 0, f"stderr:\n{result.stderr}"

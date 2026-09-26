@@ -42,11 +42,6 @@ from coordinator_core.session import liveness as _liveness
 
 pytestmark = [pytest.mark.cadence]
 
-#: `liveness.abandonment_basis`'s own vocabulary (`no-sid`/`live`/
-#: `archive-record`/`live-dir-signals`/`unknown`) plus the two call-site
-#: values `adjudicate_claimed_batons` mints before ever reaching
-#: `abandonment_basis` (`no-sid` for an unresolvable holder, `live` for one
-#: `session_live` already confirmed) — the one vocabulary this sweep reports.
 _RAW_BASIS_VALUES = (
     "no-sid",
     "live",
@@ -57,7 +52,6 @@ _RAW_BASIS_VALUES = (
 
 
 def _repo_root() -> Path:
-    # This test file lives at <root>/coordinator_core/session/tests/.
     return Path(__file__).resolve().parents[3]
 
 

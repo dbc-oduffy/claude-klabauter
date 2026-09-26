@@ -34,7 +34,6 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def test_push_outstanding_resolves_to_dispatch_timeout_not_ceremony_budget():
-    """`_timeout_for("push.outstanding")` is 30.0s, never the 2.0s ceremony clamp."""
     resolved = ipc._timeout_for("push.outstanding")
     assert resolved == ipc.DISPATCH_TIMEOUT_SECS
     assert resolved != ipc.CEREMONY_BUDGET_SECS
@@ -76,7 +75,7 @@ def test_push_outstanding_timeout_is_stable_regardless_of_ceremony_import_order(
         "assert not ipc.is_ceremony_method('push.outstanding')\n"
         "print('OK')\n"
     )
-    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # popup-intentional-last-resort
+    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     result = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,

@@ -1,27 +1,3 @@
-"""test_tier_u_grant_cli.py — unit test for coordinator/bin/tier-u-grant-cli.
-Asserts the CLI's exit-code contract in isolation from any live claude-klabauter
-checkout: the imported `grant` module functions are stubbed via a
-monkeypatch of the CLI's own `_import_module` seam, so this suite never
-requires the engine root to resolve or `coordinator_core` to be importable —
-same idiom as coordinator/bin/tests/test_session_claim_cli.py.
-
-Matrix asserted:
-    bool True  -> exit 0  (grant, check)
-    bool False -> exit 1  (grant, check)
-    transport failure (unresolvable engine root / ImportError) -> exit 3
-    usage error (missing/unknown subcommand, wrong arity) -> exit 2
-    a `grant` ValueError (bad enum / cross-field) -> exit 2
-    `read` always exits 0, printing JSON when a record exists and nothing
-    when it does not
-
-Loaded by file path (`importlib.machinery.SourceFileLoader`) since
-`tier-u-grant-cli.py` doesn't sit on `sys.path` as an importable module.
-
-Converted from a hand-rolled unittest runner to top-level pytest functions
-with a pytest fixture carrying the seam monkeypatch/restore.
-
-Spec backlink: coordinator_core/session/grant.py
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -49,8 +25,6 @@ _cli = _load_cli_module()
 
 
 class _StubGrant:
-    """Stand-in for coordinator_core.session.grant — each attribute is a
-    callable the test configures per-case; no live claude-klabauter import required."""
 
     def __init__(self, *, write_tier_u_grant=None, read_tier_u_grant=None,
                  check_tier_u_grant=None, revoke_tier_u_grant=None):
@@ -62,16 +36,6 @@ class _StubGrant:
 
 @pytest.fixture()
 def stub_import_module():
-    """Binds a `_StubGrant` to both seams the CLI reaches through.
-
-    `read`/`check` still call `_import_module` directly. `grant`/`revoke`
-    delegate to `coordinator_core.session.grant_directive` — the one owner
-    of that argv grammar, shared with the ceremony assemblers that dispatch
-    the same directives in-process — so the stub is bound onto THAT module's
-    two grant functions as well. Both seams are restored on teardown.
-
-    The CLI's argv forwarding is still what these tests assert; only the
-    module the forwarded call lands in moved."""
     from coordinator_core.session import grant_directive
 
     orig_import = _cli._import_module
@@ -89,10 +53,6 @@ def stub_import_module():
     grant_directive.write_tier_u_grant = orig_write
     grant_directive.revoke_tier_u_grant = orig_revoke
 
-
-# ---------------------------------------------------------------------------
-# grant subcommand
-# ---------------------------------------------------------------------------
 
 def test_grant_true_exits_0(stub_import_module):
     stub_import_module(_StubGrant(write_tier_u_grant=lambda *a, **k: True))
@@ -146,10 +106,6 @@ def test_grant_dangling_ceremony_flag_exits_2(stub_import_module):
     assert rc == 2
 
 
-# ---------------------------------------------------------------------------
-# check subcommand
-# ---------------------------------------------------------------------------
-
 def test_check_true_exits_0(stub_import_module):
     stub_import_module(_StubGrant(check_tier_u_grant=lambda *a, **k: (True, {"note": "x"})))
     rc = _cli.main(["check"])
@@ -167,10 +123,6 @@ def test_check_extra_args_exits_2(stub_import_module):
     rc = _cli.main(["check", "unexpected"])
     assert rc == 2
 
-
-# ---------------------------------------------------------------------------
-# revoke subcommand
-# ---------------------------------------------------------------------------
 
 def test_revoke_true_exits_0(stub_import_module):
     stub_import_module(_StubGrant(revoke_tier_u_grant=lambda *a, **k: True))
@@ -191,9 +143,6 @@ def test_revoke_extra_args_exits_2(stub_import_module):
 
 
 def test_bare_revoke_passes_no_ceremony_guard(stub_import_module):
-    """The unguarded PM/session-owner path must keep reaching
-    `revoke_tier_u_grant` with `only_ceremony=None` — a bare `revoke` that
-    silently acquired a guard would stop handing back PM grants."""
     seen = {}
     stub_import_module(
         _StubGrant(revoke_tier_u_grant=lambda *a, **k: seen.update(k) or True)
@@ -223,8 +172,6 @@ def test_revoke_only_ceremony_forwards_the_name(stub_import_module):
     ],
 )
 def test_malformed_only_ceremony_exits_2_without_revoking(argv, stub_import_module):
-    """A malformed guard argv must NOT fall through to an unguarded revoke —
-    that would turn a typo into the destructive form."""
     called = []
     stub_import_module(
         _StubGrant(revoke_tier_u_grant=lambda *a, **k: called.append(k) or True)
@@ -237,10 +184,6 @@ def test_revoke_listed_in_usage_string(stub_import_module):
     stub_import_module(_StubGrant())
     assert "revoke" in _cli._SUBCOMMANDS
 
-
-# ---------------------------------------------------------------------------
-# read subcommand
-# ---------------------------------------------------------------------------
 
 def test_read_prints_json_when_present_and_exits_0(stub_import_module):
     record = {"granted_by": "pm", "note": "yes"}
@@ -267,10 +210,6 @@ def test_read_extra_args_exits_2(stub_import_module):
     assert rc == 2
 
 
-# ---------------------------------------------------------------------------
-# transport failure
-# ---------------------------------------------------------------------------
-
 def test_runtime_error_from_claude_klabauter_root_resolution_exits_3(stub_import_module):
     def _raise_runtime_error():
         raise RuntimeError("engine root unresolvable in test")
@@ -291,10 +230,6 @@ def test_import_error_exits_3(stub_import_module):
     assert rc == 3
 
 
-# ---------------------------------------------------------------------------
-# usage errors
-# ---------------------------------------------------------------------------
-
 def test_no_argv_exits_2(stub_import_module):
     stub_import_module(_StubGrant())
     rc = _cli.main([])
@@ -306,10 +241,6 @@ def test_unknown_subcommand_exits_2(stub_import_module):
     rc = _cli.main(["not-a-real-subcommand"])
     assert rc == 2
 
-
-# ---------------------------------------------------------------------------
-# --help / -h / help
-# ---------------------------------------------------------------------------
 
 def test_help_flag_exits_0(stub_import_module):
     def _fail_if_called():

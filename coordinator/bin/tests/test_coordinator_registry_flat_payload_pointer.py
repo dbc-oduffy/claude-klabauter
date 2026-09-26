@@ -1,25 +1,3 @@
-"""test_coordinator_registry_flat_payload_pointer.py — falsifying fixture for
-the published-payload helper-dir lookup in
-coordinator_registry.py::_mp_doe_root_pointer_rung().
-
-Spec backlink: docs/plans/published-engine-resolves-without-a-codename.md
-chunk C1F.
-
-The private tree ships the shared `.doe-root` pointer helper at
-`coordinator/lib/read_doe_root_pointer.py`; the published OSS mirror
-flattens it to `lib/read_doe_root_pointer.py` at repo root, with NO
-`coordinator/lib` directory at all. Pre-fix, `_mp_doe_root_pointer_rung()`
-only probed the private-tree path, so on a payload-shaped install the
-`sys.path.insert` pointed at a directory that does not exist, the
-`from read_doe_root_pointer import ...` raised ModuleNotFoundError, the
-broad `except Exception: return ""` swallowed it, and the pointer rung
-silently yielded nothing.
-
-This test builds a temp tree laid out exactly like the payload (flat
-`lib/`, no `coordinator/lib`) and asserts the rung still resolves the
-pointer file. Run standalone against a git stash of the pre-fix
-coordinator_registry.py to confirm it fails there; passes post-fix.
-"""
 from __future__ import annotations
 
 import os
@@ -36,16 +14,7 @@ if _LIB_DIR not in sys.path:
 
 import coordinator_registry as reg  # noqa: E402
 
-#: The payload's flat `lib/` ships `read_doe_root_pointer.py` AND its sibling
-#: `settings_home.py` — verified against both publish mirrors (claude-klabauter,
-#: coordinator-claude). Both must be staged into the fixture: the helper resolves
-#: settings-home by importing `settings_home` from its OWN directory
-#: (`Path(__file__).resolve().parent`), so a fixture holding only the helper makes
-#: `_resolve_settings_home()` return "" and silently demotes the read to the
 #: LEGACY `${CLAUDE_HOME:-$HOME}/.claude/.doe-root` rung — which on a configured
-#: dev box resolves the real DoE root and fails this assertion, and on an
-#: unconfigured box resolves "" and fails it differently. Negative spec: staging
-#: the helper alone does not reproduce the payload layout.
 _REAL_LIB_DIR = os.path.join(os.path.dirname(_BIN_DIR), "lib")
 _REAL_HELPER_SRCS = (
     os.path.join(_REAL_LIB_DIR, "read_doe_root_pointer.py"),
@@ -54,14 +23,11 @@ _REAL_HELPER_SRCS = (
 
 
 class TestFlatPayloadPointerRung(unittest.TestCase):
-    """Falsifying fixture: payload-shaped tree, no coordinator/lib."""
 
     def setUp(self) -> None:
         self._tmp = tempfile.mkdtemp(prefix="c1f-payload-fixture-")
         self.addCleanup(shutil.rmtree, self._tmp, ignore_errors=True)
 
-        # Payload-shaped helper dir: <tmp>/lib/read_doe_root_pointer.py.
-        # Deliberately NO <tmp>/coordinator/lib anywhere.
         flat_lib_dir = os.path.join(self._tmp, "lib")
         os.makedirs(flat_lib_dir)
         for _helper in _REAL_HELPER_SRCS:
@@ -69,8 +35,6 @@ class TestFlatPayloadPointerRung(unittest.TestCase):
                 _helper, os.path.join(flat_lib_dir, os.path.basename(_helper))
             )
 
-        # Synthetic plugin root holding the published manifest layout, so a
-        # full-ladder assertion has something concrete to resolve against.
         plugin_root = os.path.join(self._tmp, "plugin-root")
         os.makedirs(os.path.join(plugin_root, "schemas"))
         with open(
@@ -80,8 +44,6 @@ class TestFlatPayloadPointerRung(unittest.TestCase):
         ) as fh:
             fh.write("{}")
 
-        # Planted .doe-root pointer file (durable settings-home sentinel
-        # shape) pointing at the synthetic plugin root.
         settings_home = os.path.join(self._tmp, "settings-home")
         os.makedirs(os.path.join(settings_home, "machine-local"))
         with open(
@@ -99,9 +61,6 @@ class TestFlatPayloadPointerRung(unittest.TestCase):
         )
         # CLAUDE_HOME is pinned into the fixture alongside settings-home so the
         # helper's LEGACY rung (`${CLAUDE_HOME:-$HOME}/.claude/.doe-root`) can
-        # only ever resolve inside this tmpdir. Without it the assertion below
-        # is a read of whatever the developer's own box has configured, and the
-        # test passes or fails on machine state rather than on the code it pins.
         claude_home = os.path.join(self._tmp, "claude-home")
         os.makedirs(os.path.join(claude_home, ".claude"))
 
@@ -125,8 +84,6 @@ class TestFlatPayloadPointerRung(unittest.TestCase):
                 os.environ[k] = v
 
     def test_pointer_rung_resolves_via_flat_payload_helper_dir(self) -> None:
-        """Payload-shaped tree: private-tree probe path does not exist;
-        the fallback flat `<root>/lib` probe must be used instead."""
         nonexistent_private_dir = os.path.join(self._tmp, "coordinator", "lib")
         self.assertFalse(os.path.isdir(nonexistent_private_dir))
 

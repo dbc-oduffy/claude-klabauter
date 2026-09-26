@@ -45,12 +45,7 @@ from __future__ import annotations
 import re
 from enum import Enum
 
-#: argparse's own rejection banner shape (`ArgumentParser.error` ->
-#: `self.print_usage(sys.stderr)` then `"%(prog)s: error: %(message)s"`,
-#: both to stderr, both present together on every `parse_args` failure).
 #: Anchored per-line (`re.MULTILINE`) since a directive's own stdout/stderr
-#: interleaving upstream of the usage banner is not itself disqualifying —
-#: only the banner's own two lines must both be present.
 _USAGE_LINE_RE = re.compile(r"^usage:", re.MULTILINE)
 _ERROR_MARKER = ": error: "
 

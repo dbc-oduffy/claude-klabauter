@@ -1,8 +1,3 @@
-"""
-test_daily_day.py — pytest coverage for coordinator_core.daily_day.
-
-Port of: coordinator-daily-day.sh (DoE c6d97219, 2026-07-22)
-"""
 
 from __future__ import annotations
 

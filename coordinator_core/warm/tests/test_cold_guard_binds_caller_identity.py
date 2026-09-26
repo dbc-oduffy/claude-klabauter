@@ -26,10 +26,6 @@ from __future__ import annotations
 from coordinator_core.session import core as session_core
 from coordinator_core.warm import hook_http
 
-#: UUID-shaped on purpose. `session_identity_override` validates the value and treats
-#: anything else as "no identity to carry" (its own fail-safe direction), so a readable
-#: fake like "s-cold-guard" would make these tests pass for the wrong reason -- the bind
-#: would no-op and the assertion would be reading the ambient fallback either way.
 _CALLER_SID = "e641c238-68e3-480a-9e44-3ed73e8c5c94"
 _HOST_SID = "747f89ba-b778-4690-8278-a02c053cb3c8"
 
@@ -46,14 +42,6 @@ def _event(cmd: str = "echo hello", *, session_id: str | None = _CALLER_SID) -> 
 
 
 def _identity_seen_by_chain(monkeypatch, event: dict) -> list:
-    """Run `evaluate_cold` with the guard chain replaced by a probe that records what
-    `resolve_session_id()` answers at the moment a guard would have asked.
-
-    Patching `evaluate_payload_json` is deliberate here and is NOT the thing
-    `test_cold_guard_entry.py`'s negative-spec forbids: that file pins a real VERDICT and
-    so must run the real chain. This file pins the SCOPE the chain runs inside, which is
-    observable only from within it.
-    """
     seen: list = []
 
     def _probe(_raw, **_kwargs):
@@ -70,8 +58,6 @@ def _identity_seen_by_chain(monkeypatch, event: dict) -> list:
 class TestColdRungBindsTheCaller:
     def test_the_chain_sees_the_events_session_not_the_hosts(self, monkeypatch):
         # The host process's own environ names a DIFFERENT session -- the shape a
-        # resident forwarder or server always has, and the one the ambient read
-        # silently returned.
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _HOST_SID)
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
@@ -81,9 +67,6 @@ class TestColdRungBindsTheCaller:
     def test_an_event_with_no_session_id_degrades_to_ambient_rather_than_fabricating(
         self, monkeypatch
     ):
-        # The bind is fail-safe, never fail-invented: with nothing to carry, behaviour is
-        # exactly what it was before this bind existed. Asserting this is what stops a
-        # later "tidy" from substituting a placeholder id for the absent case.
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _HOST_SID)
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
@@ -93,9 +76,6 @@ class TestColdRungBindsTheCaller:
         ) == [_HOST_SID]
 
     def test_the_bind_does_not_leak_past_the_call(self, monkeypatch):
-        # Token/reset-scoped, per `session_identity_override`'s contract. A resident
-        # process serves the next caller immediately after this one, so a leaked bind is
-        # the same defect again with a different victim.
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _HOST_SID)
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)

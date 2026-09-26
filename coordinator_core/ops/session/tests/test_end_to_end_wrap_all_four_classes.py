@@ -77,8 +77,6 @@ from coordinator_core.win_portability import (
     no_console_passthrough_kwargs,
 )
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -89,12 +87,6 @@ C2_ELIGIBLE_TYPE = "coordinator:code-reviewer"
 
 
 def _make_repo(tmp_path: Path) -> Path:
-    """Mirrors test_in_process_writer_claim_path._make_repo /
-    test_chain_partition_verdict_store_claim_path._make_repo — check=True on
-    every fixture-setup git call so a silent setup failure cannot masquerade
-    as a passing test. `commit.gpgsign=false` is required here (unlike the
-    read-only oracle tests) because this file's wrap ceremony performs a
-    REAL `git commit`."""
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True,
@@ -131,8 +123,6 @@ def _write_policy(tmp_path: Path, *eligible_types: str) -> Path:
     return path
 
 
-
-
 def test_wrap_leaves_none_of_the_surviving_writer_fixtures_dirty_and_refuses_peer_artifact(
     tmp_path, monkeypatch, capsys, exercise_suspended_op
 ) -> None:
@@ -145,16 +135,6 @@ def test_wrap_leaves_none_of_the_surviving_writer_fixtures_dirty_and_refuses_pee
     core.init(session_id, cwd=str(repo))
     core.init(peer_id, cwd=str(repo))
 
-    # -----------------------------------------------------------------
-    # Class 1 — subagent_sandbox/provision_report.py's real `_provision`,
-    # once for the closing session (mine), once for a live peer (negative
-    # half). Same real writer, two different dispatching sessions. Was
-    # the now-deleted per-package provisioner's own sidecar-provisioning function until
-    # docs/plans/2026-08-31-the-provisioner-nothing-calls.md C1 deleted that
-    # module as an unreachable duplicate of this same writer -- Class 1 and
-    # Class 2 below now exercise the SAME module via two different
-    # entrypoints (direct in-process call vs. CLI `main`), not two writers.
-    # -----------------------------------------------------------------
     c1_policy = _write_policy(tmp_path, C1_ELIGIBLE_TYPE)
 
     c1_mine_rel = _provision(
@@ -174,11 +154,6 @@ def test_wrap_leaves_none_of_the_surviving_writer_fixtures_dirty_and_refuses_pee
     assert (repo / peer_rel).is_file()
     assert peer_rel != c1_mine_rel
 
-    # -----------------------------------------------------------------
-    # Class 2 — subagent_sandbox/provision_report.py's real CLI `main`,
-    # the actual spawn-time entrypoint (stdin JSON payload -> stdout
-    # envelope), for the closing session only.
-    # -----------------------------------------------------------------
     c2_policy = _write_policy(tmp_path, C2_ELIGIBLE_TYPE)
     c2_payload = {
         "agent_id": "abc123def4567890",
@@ -192,42 +167,11 @@ def test_wrap_leaves_none_of_the_surviving_writer_fixtures_dirty_and_refuses_pee
     c2_rel = json.loads(captured.out.splitlines()[0])["report_sidecar"]
     assert (repo / c2_rel).is_file()
 
-    # Class 3 — workstream_complete/chain_partition_verdict_store.py's
-    # write_verdict_record — is REMOVED (state/kill-ledger.md K-007,
-    # 2026-08-19): the module and the gate that drove it are gone, so the
-    # class has no writer left to exercise.
-    # -----------------------------------------------------------------
-    # Class 4 — ops/artifact_emit.py's "artifact.emit" op — is REMOVED
-    # (state/kill-ledger.md, PM ruling 2026-08-23: CUT IN FULL, and
-    # `op_budget_suspension.py` records it "closed forever"). The module,
-    # the op and its registration are all gone, so the class has no writer
-    # left to exercise -- exactly the disposition Class 3 got above.
-    #
-    # This leg was left in place when the op was cut and failed on its own
-    # import guard ("artifact.emit not registered"), which is the failure
-    # mode a string-keyed guard over a killed op always takes: it cannot
-    # pass and it names nothing a reader can fix. Removed rather than
-    # skipped, so the file does not carry a permanently-red assertion about
-    # a mechanism that no longer exists.
-    #
-    # One real writer module remains (provision_report), exercised through
-    # its two live entrypoints (Class 1's direct call, Class 2's CLI). The
-    # peer-exclusion negative half below still proves what it always proved.
-    # -----------------------------------------------------------------
 
-    # -----------------------------------------------------------------
-    # Pre-wrap sanity: every one of the three newly-written files (Class 1 +
-    # Class 2 + the peer's) is genuinely dirty in the working tree.
-    # -----------------------------------------------------------------
     before = _dirty_status(repo)
     for rel in (c1_mine_rel, c2_rel, peer_rel):
         assert rel in before, f"fixture failure: {rel!r} is not dirty before the wrap"
 
-    # -----------------------------------------------------------------
-    # Ownership readout sanity, BEFORE the wrap: all three classes are
-    # this session's own claimed work; the peer's own artifact is
-    # attributed to the peer, never to "mine".
-    # -----------------------------------------------------------------
     offer = safe_commit_offer.compute_offer(session_id, cwd=str(repo))
     for rel in (c1_mine_rel, c2_rel):
         assert rel in offer["safe_paths"], (
@@ -238,21 +182,6 @@ def test_wrap_leaves_none_of_the_surviving_writer_fixtures_dirty_and_refuses_pee
     ownership = offer["ownership"]
     assert ownership["degraded"] is False
 
-    # Attribution is asserted through `full_ownership_map`, not through
-    # `offer["ownership"]["peer"]`. `compute_offer` builds that bucket from
-    # `CommitSet.contested` alone -- paths THIS session claims that a peer
-    # claims too -- so a path only the PEER claims is absent from it by
-    # construction, and this assertion read `peer: []` forever.
-    #
-    # The fix is NOT to fold `CommitSet.peers` into `compute_offer`: that
-    # collection is sized by the claim ledger (~405 entries on this repo) and
-    # its own docstring says to keep it OUT of anything crossing the op wire
-    # (~72KB as JSON), in-process consumers only. `full_ownership_map` IS that
-    # in-process consumer and already walks `peers` alongside `contested`.
-    #
-    # The guarantee that actually protects the peer -- their artifact never
-    # reaching this session's pathspec -- is asserted directly above, and
-    # holds independently of which readout names the owner.
     _mine, peer_map = safe_commit_offer.full_ownership_map(session_id, cwd=str(repo))
     peer_entry = peer_map.get(peer_rel)
     assert peer_entry is not None, (
@@ -261,9 +190,6 @@ def test_wrap_leaves_none_of_the_surviving_writer_fixtures_dirty_and_refuses_pee
     )
     assert peer_entry["owner"] == peer_id
 
-    # -----------------------------------------------------------------
-    # THE PROOF: run the real wrap ceremony for the closing session.
-    # -----------------------------------------------------------------
     report = safe_commit_offer.commit_session_offer(session_id, cwd=str(repo))
     assert report["failed_groups"] == [], report["failed_groups"]
 
@@ -274,10 +200,7 @@ def test_wrap_leaves_none_of_the_surviving_writer_fixtures_dirty_and_refuses_pee
             f"not survive to a committable state: git status:\n{after}"
         )
 
-    # -----------------------------------------------------------------
     # THE NEGATIVE HALF: the live peer's artifact is untouched — still
-    # dirty (never swept), never committed by this session's wrap.
-    # -----------------------------------------------------------------
     assert peer_rel in after, (
         "a live peer's artifact was swept by this session's wrap — exactly "
         f"the cross-session-sweep incident this plan exists to prevent:\n{after}"

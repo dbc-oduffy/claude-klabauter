@@ -1,18 +1,3 @@
-"""test_coordinator_delegation_cli.py — unit test for
-coordinator/bin/coordinator-delegation.py. Asserts the CLI's exit-code
-contract and its own local validation (the 12h lease ceiling, the printed
-ceiling sentence) in isolation from any live claude-klabauter checkout: the imported
-`fleet_delegation` module is stubbed via a monkeypatch of the CLI's own
-`_import_module` seam, and `--pid` resolution is stubbed via
-`_resolve_designated` — same idiom as
-coordinator/bin/tests/test_tier_u_grant_cli.py.
-
-Loaded by file path (`importlib.machinery.SourceFileLoader`) since
-`coordinator-delegation.py` doesn't sit on `sys.path` as an importable
-module (hyphenated filename).
-
-Spec backlink: docs/plans/2026-08-28-the-ask-the-pm-step-gets-an-artifact-to-check.md § chunk C7
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -50,7 +35,6 @@ _NEVER_DELEGABLE = frozenset(
 
 
 class _StubFleetDelegation:
-    """Stand-in for coordinator_core.session.fleet_delegation."""
 
     def __init__(
         self,
@@ -88,10 +72,6 @@ def _run(argv):
         rc = _cli.main(argv)
     return rc, buf.getvalue()
 
-
-# ---------------------------------------------------------------------------
-# grant subcommand
-# ---------------------------------------------------------------------------
 
 def test_grant_true_exits_0(stub_import_module):
     stub_import_module(_StubFleetDelegation(write_fleet_delegation=lambda **k: (True, None)))
@@ -179,15 +159,6 @@ def test_grant_no_args_exits_2(stub_import_module):
 
 
 def test_grant_against_real_writer_reader_lands_live_grant(monkeypatch, tmp_path):
-    """Exercises the REAL fleet_delegation writer/reader (not the stub) --
-    review finding: `grant`'s own stub-based tests never prove a grant
-    issued via the real CLI path actually lands a live,
-    check_fleet_delegation-passing record on disk (the `revoke` path got
-    this adversarial real-writer coverage; `grant` -- the path that
-    actually creates the capability this CLI exists to gate -- did not).
-    Drives `_cmd_grant` against the real writer with a real psutil-resolved
-    `--pid` (this process), then asserts `check_fleet_delegation` reports
-    the grant as live and routes to the designated pid."""
     from coordinator_core.session import fleet_delegation as fd
     from coordinator_core.session.grant_authorship import AuthorshipVerdict, Verdict
 
@@ -200,12 +171,7 @@ def test_grant_against_real_writer_reader_lands_live_grant(monkeypatch, tmp_path
 
     import os
 
-    # A REAL class, taken from the writer's own ratified allow-list rather
-    # than invented here. `write_fleet_delegation` gained a positive
     # `DELEGABLE` check (`fleet_delegation.DELEGABLE`), so the invented
-    # `"review-schedule"` this used to pass is now rejected at write time and
-    # the test measured the rejection, not the grant. Reading the list back
-    # off the module keeps this test tracking the list instead of restating
     # it -- the same convention every other consumer of `DELEGABLE` follows.
     delegable_class = sorted(fd.DELEGABLE)[0]
 
@@ -235,10 +201,6 @@ def test_grant_against_real_writer_reader_lands_live_grant(monkeypatch, tmp_path
     assert record is not None
     assert record["designated"]["pid"] == os.getpid()
 
-
-# ---------------------------------------------------------------------------
-# show subcommand
-# ---------------------------------------------------------------------------
 
 def test_show_no_grant(stub_import_module):
     stub_import_module(_StubFleetDelegation(read_fleet_delegation=lambda: None))
@@ -288,17 +250,6 @@ def test_show_extra_args_exits_2(stub_import_module):
 
 
 def test_show_multi_class_record_probes_first_class_but_matches_any_class(monkeypatch, tmp_path):
-    """`_cmd_show` probes `check_fleet_delegation` with only `classes[0]` --
-    review finding: unverified whether a live grant could ever be
-    misreported as absent because the FIRST listed class alone were
-    rejected while a LATER class in the same record was actually live.
-    Exercises the REAL `fleet_delegation.write_fleet_delegation` /
-    `check_fleet_delegation` (not the stub) with a genuine multi-class
-    record: `check_fleet_delegation`'s liveness/expiry/authorship checks
-    are record-level, so a live record must grant EVERY class in
-    `classes`, not just the first -- this proves the CLI's classes[0]
-    probe choice does not matter for the outcome `show` reports, rather
-    than merely asserting it against a same-verdict-for-every-class stub."""
     import os
 
     from datetime import datetime, timedelta, timezone
@@ -318,9 +269,6 @@ def test_show_multi_class_record_probes_first_class_but_matches_any_class(monkey
     this_proc = psutil.Process(os.getpid())
     now = datetime.now(timezone.utc)
     # Two REAL classes off the writer's own `DELEGABLE` allow-list (invented
-    # names are rejected at write time now), ordered so the probed
-    # `classes[0]` is NOT the one checked second -- which is the whole point
-    # of this test.
     first_class, second_class = sorted(fd.DELEGABLE)[:2]
     assert first_class != second_class, (
         "this test needs two distinct delegable classes to prove the "
@@ -352,10 +300,6 @@ def test_show_multi_class_record_probes_first_class_but_matches_any_class(monkey
     assert "no live grant" not in out
     assert "multi-class" in out
 
-
-# ---------------------------------------------------------------------------
-# revoke subcommand
-# ---------------------------------------------------------------------------
 
 def test_revoke_unlinks_existing_grant_file_exits_0(stub_import_module, tmp_path):
     grant_file = tmp_path / "fleet-delegation.json"
@@ -391,14 +335,6 @@ def test_revoke_extra_args_exits_2(stub_import_module):
 
 
 def test_revoke_against_real_writer_reader_clears_live_grant(monkeypatch, tmp_path):
-    """Exercises the REAL fleet_delegation writer/reader (not the stub) —
-    writes a live, unexpired, HUMAN-authored grant on disk via
-    write_fleet_delegation, revokes it through the CLI's real `_grant_file()`
-    seam, then asserts check_fleet_delegation returns the ABSENT value
-    post-revoke. This is what `stub_import_module`-only coverage cannot
-    catch: the stub's fake writer has no `granted_at` tolerance check, so a
-    back-dated revoke record that the REAL writer rejects would still read
-    as a passing test against the stub alone."""
     from datetime import datetime, timedelta, timezone
 
     from coordinator_core.session import fleet_delegation as fd
@@ -412,9 +348,7 @@ def test_revoke_against_real_writer_reader_clears_live_grant(monkeypatch, tmp_pa
     )
 
     now = datetime.now(timezone.utc)
-    # A real class off the writer's own allow-list — an invented one is
     # rejected at write time by `fleet_delegation.DELEGABLE`, which would
-    # leave this test revoking a grant that was never written.
     delegable_class = sorted(fd.DELEGABLE)[0]
     ok, reason = fd.write_fleet_delegation(
         designated_pid=1234,
@@ -440,10 +374,6 @@ def test_revoke_against_real_writer_reader_clears_live_grant(monkeypatch, tmp_pa
     assert granted is False
     assert record is None
 
-
-# ---------------------------------------------------------------------------
-# usage / transport
-# ---------------------------------------------------------------------------
 
 def test_no_subcommand_exits_2(stub_import_module):
     stub_import_module(_StubFleetDelegation())

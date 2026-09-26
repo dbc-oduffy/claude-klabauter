@@ -47,7 +47,6 @@ def _clean_axis_env(monkeypatch):
 
 @pytest.fixture
 def cc_invoke():
-    """Import cc_invoke the way its CLIs do -- by putting its lib dir on sys.path."""
     if str(_CC_INVOKE_LIB) not in sys.path:
         sys.path.insert(0, str(_CC_INVOKE_LIB))
     import cc_invoke as mod
@@ -89,23 +88,15 @@ def _force_the_registry_read_through_the_stubbed_path(monkeypatch):
     mod._IN_PROCESS_REGISTRY_MEMO.clear()
 
 
-# --- the two axes are two variables ----------------------------------------
-
 def test_the_two_axes_use_distinct_variable_names():
-    """If these ever collapse to one name the whole chunk is undone."""
     assert engine_root._ENGINE_SOURCE_ROOT_VAR != engine_root._ENGINE_ROOT_NEW_VAR
     assert engine_root._ENGINE_SOURCE_ROOT_VAR == _LOCATOR
 
 
 def test_locator_name_carries_no_repo_token():
-    """Same property that made the module and dispatch-variable renames correct:
-    with no repo token the publish transform is a no-op and both trees ship one
-    spelling."""
     assert "claude-klabauter" not in engine_root._ENGINE_SOURCE_ROOT_VAR.lower()
     assert "klabauter" not in engine_root._ENGINE_SOURCE_ROOT_VAR.lower()
 
-
-# --- locator read accessor --------------------------------------------------
 
 def test_locator_prefers_its_own_variable(monkeypatch, capsys):
     monkeypatch.setenv(_LOCATOR, "/src/checkout")
@@ -115,9 +106,6 @@ def test_locator_prefers_its_own_variable(monkeypatch, capsys):
 
 
 def test_locator_falls_back_to_the_shared_variable_and_says_so(monkeypatch, capsys):
-    """The fallback exists so an unrouted caller keeps working -- and emits,
-    because C18's exit condition is evidence that the misread stopped, not an
-    assertion that it did."""
     monkeypatch.setenv(_DISPATCH, "/engines/published")
     assert engine_root.coordinator_engine_source_root_env("site-a") == "/engines/published"
     err = capsys.readouterr().err
@@ -138,8 +126,6 @@ def test_locator_returns_none_when_nothing_is_set():
     assert engine_root.coordinator_engine_source_root_env("t") is None
 
 
-# --- the additive invariant -------------------------------------------------
-
 def test_locator_exports_only_its_own_key():
     """THE NEGATIVE SPEC. The write helper must never emit a dispatch key."""
     exports = engine_root.coordinator_engine_source_root_exports("/src/checkout")
@@ -148,8 +134,6 @@ def test_locator_exports_only_its_own_key():
 
 
 def test_locator_export_is_empty_when_unresolvable():
-    """A box with no registered checkout keeps spawning children exactly as it
-    does today, rather than exporting an empty or invented value."""
     assert engine_root.coordinator_engine_source_root_exports(None) == {}
     assert engine_root.coordinator_engine_source_root_exports("") == {}
 
@@ -176,8 +160,6 @@ def test_subprocess_env_adds_the_locator_without_touching_dispatch(cc_invoke, mo
 
 
 def test_subprocess_env_unchanged_when_the_locator_is_unresolvable(cc_invoke, monkeypatch):
-    """See test_subprocess_env_adds_the_locator_without_touching_dispatch's C14
-    note: the dispatch value now lives under the new name only."""
     monkeypatch.setattr(cc_invoke, "_machine_local_get", lambda key: None)
     env = cc_invoke._build_subprocess_env("/engines/published")
     assert _LOCATOR not in env
@@ -186,12 +168,6 @@ def test_subprocess_env_unchanged_when_the_locator_is_unresolvable(cc_invoke, mo
 
 
 def test_locator_lookup_failure_never_breaks_the_spawn(cc_invoke, monkeypatch):
-    """Best-effort by design: this runs on the commit hot path for every session
-    on the box, so a registry read failure must degrade to "no locator export",
-    never to a raise.
-
-    See test_subprocess_env_adds_the_locator_without_touching_dispatch's C14
-    note: the dispatch value now lives under the new name only."""
     def _boom(key):
         raise RuntimeError("registry unreadable")
 
@@ -203,10 +179,6 @@ def test_locator_lookup_failure_never_breaks_the_spawn(cc_invoke, monkeypatch):
 
 
 def test_the_locator_resolves_off_the_registry_not_the_dispatch_ladder(cc_invoke, monkeypatch):
-    """The axes must not be wired to the same source. `_resolve_claude_klabauter_root`
-    deliberately prefers the published engine; the registry key IS the locator
-    answer. If a future edit repoints this at the ladder the two axes silently
-    reconverge and the split is undone while every other test still passes."""
     seen = {}
 
     def _spy(key):

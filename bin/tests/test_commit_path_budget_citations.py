@@ -1,23 +1,3 @@
-"""
-bin.tests.test_commit_path_budget_citations — Discriminator coverage for
-bin/commit-path-budget-citations.py.
-
-Covers the enumerator's four inclusion/exclusion discriminators (not its output count — the
-live corpus moves and a pinned total would be stale within a day):
-
-  1. a file matching a bar figure but NOT mentioning "commit" is excluded
-  2. a file matching both, but whose bar figure appears on a line (or table block) with no
-     budget vocabulary nearby, is excluded
-  3. a terminal `status:` excludes; a non-terminal one includes
-  4. an ABSENT `status:` field is included (absent is not terminal, and is a distinct case
-     from the non-terminal case above)
-
-Uses a tmp_path fixture with synthetic files only — never the live corpus, per the chunk brief:
-a test that reads state/ and docs/ re-fails whenever an unrelated session writes an artifact.
-
-Spec backlink: state/dispatch-briefs/2026-08-25-what-a-commit-path-budget-measures/C3.md
-Negative-spec: does not assert an output count or a specific live-corpus path.
-"""
 
 from __future__ import annotations
 

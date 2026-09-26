@@ -40,13 +40,6 @@ from coordinator_core.contract.cockpit_schema.provenance import (
 
 
 def test_source_kind_lists_match_the_model():
-    """The emitter's partition must cover the model's enum exactly.
-
-    Every member must appear in exactly one of the two lists: a member in
-    NEITHER breaks the site-matcher (the 4.7.0 regression); a member in BOTH
-    would emit contradictory conditionals requiring `ref` to be simultaneously
-    null and non-null.
-    """
     model_kinds = set(typing.get_args(SourceKind))
     vcs = set(emit_schema._VCS_BACKED_ENUM)
     non_vcs = set(emit_schema._NON_GIT_ENUM)
@@ -68,7 +61,6 @@ def test_source_kind_lists_match_the_model():
 
 
 def test_provenance_entity_actually_carries_conditionals():
-    """The outcome, not the shape of the lists that produce it."""
     schema = emit_schema.build_entity_schema(ProvenanceEnvelope)
     assert emit_schema._count_injected_conditionals(schema) > 0
     assert emit_schema._count_provenance_sites(schema) > 0
@@ -82,11 +74,6 @@ def test_perforce_kinds_are_partitioned_as_vcs_backed():
 
 
 def test_runtime_tripwire_reports_red_on_a_matcherless_site():
-    """Liveness: an instrument that cannot fail is not a guard.
-
-    Feeds the assertion a provenance-SHAPED schema carrying no conditionals —
-    exactly the 4.7.0 emission — and requires it to raise.
-    """
     unguarded = {
         "properties": {
             "source_kind": {"enum": ["something_unrecognised"]},
@@ -99,6 +86,5 @@ def test_runtime_tripwire_reports_red_on_a_matcherless_site():
 
 
 def test_runtime_tripwire_stays_quiet_on_a_healthy_emission():
-    """And does not fire on the real thing — a guard that always fires is noise."""
     healthy = emit_schema.build_entity_schema(ProvenanceEnvelope)
     emit_schema._assert_provenance_conditionals_injected("provenance-envelope", healthy)

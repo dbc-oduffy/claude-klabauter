@@ -111,25 +111,11 @@ __all__ = [
 REGISTRY_KEY_IDLE_MINUTES = "engine.warm.idle_minutes"
 DEFAULT_IDLE_MINUTES = 15
 
-# Staff-eng finding 5 names a 60-120s range; the midpoint is the default and
-# is not registry-configurable -- it is a fixed short-circuit on an existing
-# signal (served count), not a product-facing setting like the idle minutes
-# above.
 ZERO_SERVED_DEADLINE_SECS = 90.0
 
-# The seam C26 (authored after this chunk) binds to: a zero-arg callable
-# returning the server's served-invocation count so far. `should_demote`
-# and `demote_if_idle` accept this rather than a raw int so the caller
-# supplies a live read, never a snapshot taken before this call.
 ServedCountFn = Callable[[], int]
 
-# The seam the server binds its superseded-generation check to (module
-# docstring): a zero-arg callable returning True iff this server's own
-# generation token no longer matches the current engine fingerprint.
 # A CALLABLE rather than a bool for the same reason `ServedCountFn` is --
-# the predicate must read live state at check time, never a snapshot taken
-# at server boot, since the whole point is to observe a change that
-# happens mid-life.
 TokenStaleFn = Callable[[], bool]
 
 _clock_lock = threading.Lock()

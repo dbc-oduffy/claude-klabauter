@@ -20,9 +20,6 @@ from coordinator_core.warm import engine_root as warm_engine_root_module
 
 
 def _write_engine_stamp(root: Path) -> None:
-    """Mirrors `skew.write_engine_stamp`'s one-line, bytes-only contract —
-    see `test_engine_root_two_tier.py`'s identical fixture helper for why
-    this is duplicated rather than imported (self-contained fixture)."""
     stamp = Path(root) / "coordinator_core" / "_engine_stamp"
     stamp.parent.mkdir(parents=True, exist_ok=True)
     stamp.write_text("sha:test-fixture-stamp\n", encoding="utf-8")
@@ -30,9 +27,6 @@ def _write_engine_stamp(root: Path) -> None:
 
 @pytest.fixture(autouse=True)
 def _reset_shim_memo():
-    """`published_engine_mirror_path()` loads C3's shim, memoized module-scope
-    — reset around every test so no test's resolution pins the answer for a
-    later one (mirrors `test_engine_root_two_tier.py`'s own reset fixture)."""
     engine_root_module._reset_shim_cache()
     yield
     engine_root_module._reset_shim_cache()
@@ -47,8 +41,6 @@ def _write_registry(ml_dir: Path, published_dir: "Path | None") -> None:
 
 
 def test_published_case_composes_published_engine_mirror_path(tmp_path, monkeypatch):
-    """AC — published branch: kind="published", root equals
-    `published_engine_mirror_path()`'s own answer, never re-derived."""
     settings_home = tmp_path / "settings-home"
     ml_dir = settings_home / "machine-local"
     ml_dir.mkdir(parents=True)
@@ -77,13 +69,6 @@ def test_published_case_composes_published_engine_mirror_path(tmp_path, monkeypa
 
 
 def test_klabauter_front_case_composes_current_engine_clone(tmp_path, monkeypatch):
-    """AC — self-rooted branch (klabauter-front case): no published root
-    registered, but the caller's OWN root is a stamped engine root — kind=
-    "self-rooted", root equals `current_engine_clone()`'s own answer. Uses a
-    monkeypatched `current_engine_clone()` rather than stamping the real live
-    checkout (which is deliberately unstamped — the claude-klabauter-dev case below),
-    since this module composes onto whatever that function returns rather
-    than re-deriving the anchor itself."""
     settings_home = tmp_path / "settings-home"
     ml_dir = settings_home / "machine-local"
     ml_dir.mkdir(parents=True)
@@ -111,9 +96,6 @@ def test_klabauter_front_case_composes_current_engine_clone(tmp_path, monkeypatc
 
 
 def test_claude_klabauter_dev_case_self_unstamped_falls_to_none(tmp_path, monkeypatch):
-    """AC — the claude-klabauter-dev case: no published root registered, and the
-    caller's own root is NOT stamped (this repo's live dev tree today) —
-    typed "no published engine" result, not a raise."""
     settings_home = tmp_path / "settings-home"
     ml_dir = settings_home / "machine-local"
     ml_dir.mkdir(parents=True)
@@ -144,8 +126,6 @@ def test_claude_klabauter_dev_case_self_unstamped_falls_to_none(tmp_path, monkey
 
 
 def test_no_published_engine_registry_key_absent_or_unstamped(tmp_path, monkeypatch):
-    """AC — the "no published engine on this box" outcome: registry key
-    absent AND self unstamped -> typed no-engine result, never a raise."""
     settings_home = tmp_path / "settings-home"
     ml_dir = settings_home / "machine-local"
     ml_dir.mkdir(parents=True)

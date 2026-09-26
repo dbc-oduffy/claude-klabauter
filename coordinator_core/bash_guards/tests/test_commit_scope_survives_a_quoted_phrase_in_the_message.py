@@ -47,10 +47,6 @@ from coordinator_core.bash_guards.dispatch_checks import (
     check_git_commit_safe_commit_advise,
 )
 
-#: The message body carries BOTH ingredients the bug needs, and it needs both:
-#: a `;` (a segment separator once quoting is lost) and a double-quoted phrase
-#: (what loses the quoting). Either alone tokenizes fine, which is why the bug
-#: went unnoticed until a commit message happened to contain the pair.
 _MESSAGE_WITH_QUOTED_PHRASE = (
     "the attribution data exists; the access path does not\n"
     "\n"
@@ -67,28 +63,15 @@ _MESSAGE_PLAIN = (
 
 
 def _commit_command(message: str, *, pathspec: str | None) -> str:
-    """A `git commit` whose `-m` operand is a heredoc inside a command
-    substitution -- the shape every long-form commit message in this repo
-    uses, because `-F` has no pathspec escape."""
     tail = f" -- {pathspec}" if pathspec else ""
     return f"git commit -q -m \"$(cat <<'MSG'\n{message}MSG\n)\"{tail}"
 
 
 def _fires(cmd: str) -> bool:
-    """True iff the scope check returns a verdict (deny or advisory) rather
-    than allowing the command through."""
     return check_git_commit_safe_commit_advise(cmd) is not None
 
 
 def _scope_verdicts(cmd: str) -> list[bool]:
-    """Per-segment answers to 'does this segment carry an explicit pathspec',
-    over the same heredoc-stripped text the check now segments.
-
-    Returned as a LIST rather than an any()/all() so a failure message shows
-    the segmentation itself -- `[False, False]` is the original bug's
-    signature (the command was cut in two), and is a different defect from a
-    single `[False]` (one segment, genuinely unscoped).
-    """
     tokens = tokenize_full_command(_bt_strip_heredocs(cmd))
     assert tokens is not None, "command failed to tokenize at all"
     return [
@@ -98,21 +81,12 @@ def _scope_verdicts(cmd: str) -> list[bool]:
 
 
 def test_plain_message_with_pathspec_does_not_fire():
-    """Control. The shape that always got through, establishing that the
-    quoted phrase is the only variable in the test below."""
     cmd = _commit_command(_MESSAGE_PLAIN, pathspec="state/x.yaml")
     assert not _fires(cmd)
     assert _scope_verdicts(cmd) == [True]
 
 
 def test_quoted_phrase_in_the_message_does_not_destroy_the_pathspec():
-    """The bug. Identical command but for a quoted phrase in the message body;
-    the pathspec is byte-identical and correct.
-
-    Before the fix this DENIED, and its remediation named the very form the
-    author had used -- which is worse than a nag: it teaches that the scoped
-    form does not work, at a moment the fleet is being asked to trust it more.
-    """
     cmd = _commit_command(_MESSAGE_WITH_QUOTED_PHRASE, pathspec="state/x.yaml")
     assert not _fires(cmd), (
         "the ratified both-halves scoped form was refused because the MESSAGE "
@@ -123,10 +97,6 @@ def test_quoted_phrase_in_the_message_does_not_destroy_the_pathspec():
 
 
 def test_a_bare_commit_still_fires_however_its_message_is_quoted():
-    """The half that must never regress. A fix that suppressed the false
-    positive by loosening the detector would let THIS through, which is the
-    bare-commit hole 88832e9d4 closed. No pathspec anywhere, in either message
-    shape."""
     for message in (_MESSAGE_PLAIN, _MESSAGE_WITH_QUOTED_PHRASE):
         cmd = _commit_command(message, pathspec=None)
         assert _fires(cmd), (
@@ -138,16 +108,10 @@ def test_a_bare_commit_still_fires_however_its_message_is_quoted():
 
 
 def test_heredoc_body_is_not_mistaken_for_a_pathspec():
-    """Negative-spec on the fix itself. Stripping bodies must not let text
-    INSIDE a heredoc supply the scope: a message that merely mentions a path,
-    on a commit carrying no real pathspec, must still fire."""
     message = "subject; here\n\nthis body names state/x.yaml -- state/y.yaml\n"
     assert _fires(_commit_command(message, pathspec=None))
 
 
-# The three shapes below are built rather than written inline: each carries a
-# single quote, a double quote and a newline at once, and inline escaping of
-# all three is how the fixture stops being readable. _Q is "'".
 _Q = chr(39)
 
 _MENTIONS_HEREDOC_AND_IS_SCOPED = (
@@ -213,9 +177,6 @@ class TestTheStripIsQuoteUnawareAndThatIsSafeHere:
         ],
     )
     def test_a_pathspec_shaped_phrase_never_supplies_scope(self, cmd):
-        """The false-ALLOW direction. A path mentioned in prose is not a
-        pathspec, however the strip rearranges the text around it.
-        """
         assert _fires(cmd), (
             "a bare commit must still fire -- message text is never scope"
         )

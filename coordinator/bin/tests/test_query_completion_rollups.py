@@ -1,26 +1,3 @@
-"""test_query_completion_rollups.py -- C2's own test surface for `coordinator/bin/
-query-completion-rollups.py`.
-
-Spec backlink: plan `2026-08-15-two-more-porter-trampolines-query-goals.md` § C2.
-
-Pins, per C2's body: the two-record [day, week] shape in `rollups.collect`'s own
-order; exit 1 with a diagnostic on repo-root-resolution failure and on a
-`collect()` failure; and the four `--help` honesty disclosures (the observed_at-
-relative 30-day since window, week-but-not-day chain dedup, the lexicographic-max
-commit-sha sample, and reviews_conducted/verdicts counting valid review-trail
-records). `--help`/`-h` and an unrecognized argument both go through `argparse`,
-which raises `SystemExit` (0 and 2 respectively) rather than returning -- matching
-`query-routine-signals.py`'s convention.
-
-`collect()` itself is stubbed throughout -- it spawns the native records seam and
-reads review-trail files off disk, which this suite must never invoke live (see
-`test_query_routine_signals.py`'s own stubbing pattern, mirrored here).
-
-AC8 (red-before-green): before this chunk, `coordinator/bin/query-completion-
-rollups.py` did not exist, so every test in this file failed on
-`ModuleNotFoundError`/import error against the pre-change tree. They pass now
-that the file exists and behaves as pinned.
-"""
 from __future__ import annotations
 
 import io
@@ -147,10 +124,6 @@ class TestMain(unittest.TestCase):
         self.assertIn("boom", stderr.getvalue())
 
     def test_claude_klabauter_root_resolution_failure_returns_1_without_calling_collect(self):
-        # resolve_claude_klabauter_root_or_exit() itself never raises -- it catches
-        # RuntimeError internally and returns 1 (see test_op_trampoline.py's
-        # own coverage of that path). This CLI only needs to propagate the
-        # int short-circuit without calling collect().
         with mock.patch.object(
             query_completion_rollups, "resolve_repo_root_or_exit", return_value="/repo/match"
         ), mock.patch.object(

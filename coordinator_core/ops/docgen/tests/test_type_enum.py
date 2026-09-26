@@ -33,13 +33,6 @@ import pytest
 from coordinator_core.ops.docgen import type_enum as te
 from coordinator_core.ops.emit.doe_drift import DoeResolveError, resolve_doe_clone
 
-# ---------------------------------------------------------------------------
-# Live-DoE-clone skip guard for the manifest half of AC4 conformance
-# (mirrors coordinator_core/ops/emit/tests/test_doe_drift.py). The manifest
-# (coordinator/schemas/coordinator-registry.manifest.json) has NOT migrated
-# in-repo, unlike coordinator_registry.py below — this remains a genuine
-# optional cross-repo dependency.
-# ---------------------------------------------------------------------------
 
 try:
     _DOE_CLONE = resolve_doe_clone()
@@ -48,12 +41,6 @@ except DoeResolveError:
     _DOE_CLONE = None
     _DOE_AVAILABLE = False
 
-# ---------------------------------------------------------------------------
-# Oracle resolution for coordinator_registry.py (repo-root-relative — no
-# cross-repo clone lookup). This module lives in THIS repo as of DoE commit
-# b644d5a9; a missing oracle at the expected path is a broken checkout, not
-# an unavailable optional dependency, so resolution failure fails loud.
-# ---------------------------------------------------------------------------
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _REGISTRY_PATH = _REPO_ROOT / "coordinator" / "bin" / "lib" / "coordinator_registry.py"
@@ -80,10 +67,6 @@ def _load_cli_coordinator_registry():
     spec.loader.exec_module(module)  # type: ignore[union-attr]
     return module
 
-
-# ---------------------------------------------------------------------------
-# Synthetic-manifest fixtures — no live DoE clone required
-# ---------------------------------------------------------------------------
 
 _SYNTHETIC_MANIFEST = {
     "schemaVersion": 1,
@@ -145,11 +128,7 @@ class TestSyntheticManifestReconstruction:
     def test_is_offerable_unknown_type_is_false(self, synthetic_clone: Path) -> None:
         assert te.is_offerable("nonexistent-type", synthetic_clone) is False
 
-    # subagent-sidecar is now a manifest docTypes entry (schemas/coordinator-
     # registry.manifest.json), not a SUPPLEMENTAL_TYPES shim — the shim was
-    # retired once the manifest carried the type. Only run-report remains a
-    # local supplement (its own manifest entry landed earlier and the CLI
-    # shim was left in place as harmless-idempotent; see the module comment).
     def test_supplemental_types_no_longer_carries_subagent_sidecar(self) -> None:
         assert "subagent-sidecar" not in te.SUPPLEMENTAL_TYPES
         assert te.SUPPLEMENTAL_TYPES == frozenset({"run-report"})
@@ -189,38 +168,12 @@ class TestManifestReadFailures:
             te.load_manifest(tmp_path)
 
 
-# ---------------------------------------------------------------------------
 # AC4 — live conformance against the CLI's actual post-union _KNOWN_TYPES
-# ---------------------------------------------------------------------------
 
 @pytest.mark.real_home
 @pytest.mark.skipif(not _DOE_AVAILABLE, reason="DoE clone not available on this machine (manifest.json has not migrated in-repo)")
 class TestAC4LiveConformance:
-    # `real_home` (2026-09-06): this class is a parity oracle against the LIVE
-    # tree -- it resolves the real DoE clone through the machine-local
-    # registry, which is the case `conftest._quarantine_real_home`'s docstring
-    # names as the marker's reason for existing. It read green only because
     # that fixture had a gap: it never cleared `COORDINATOR_SETTINGS_HOME`,
-    # which `settings_home()` consults ahead of every home var, so the
-    # quarantine silently did not apply to registry lookups. Closing that gap
-    # made the dependency explicit, and this class must now ask for the real
-    # home by name. Read-only, which is what the marker is scoped to: the
-    # machine-mutation kill switch stays on regardless (see the fixture).
-    #
-    # Its `skipif` is unaffected and stays -- clone ABSENCE is a different
-    # question from home resolution, and evaluates at collection time.
-    # 2026-07-28: the class-level `pytestmark = pytest.mark.pending_fix` demotion
-    # that used to sit here is RETIRED — all 7 cases pass live against a present
-    # DoE clone. The `skipif` above is NOT a demotion and stays: it is the
-    # clone-absence guard it always was.
-    #
-    # The prior comment here is deleted, not reworded. It asserted "the marker was
-    # never actually added here" while that very marker sat on the next line —
-    # both git history and the DoE memo prompting its removal
-    # (cross-repo/archive/2026-07-25-doe-claude-em-orient-assemble-phantom-verbs.md
-    # § P2, "Both use the module-level pytestmark form") confirm it was present.
-    # Leaving a false claim adjacent to the code it describes is worse than
-    # leaving no comment at all.
 
     def test_known_types_is_set_equal_to_cli_resolved_known_types(self) -> None:
         """known_types() must be set-EQUAL, not merely a subset, to the CLI's own set.
@@ -268,5 +221,4 @@ class TestAC4LiveConformance:
             assert te.is_offerable(entry["type"], _DOE_CLONE) == bool(entry.get("offerable", False))
 
     def test_known_types_defaults_to_live_resolve_doe_clone(self) -> None:
-        """Calling known_types() with no argument resolves the live clone itself."""
         assert te.known_types() == te.known_types(_DOE_CLONE)

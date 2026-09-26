@@ -67,13 +67,6 @@ def _envelope(cmd, **kwargs):
     return result["hookSpecificOutput"]
 
 
-# ---------------------------------------------------------------------------
-# (a) Substitutable residue -- now silent. `grep-via-bash-rewrite` already
-# claims this set earlier in the chain; this guard's own deny/advise for it
-# was provably unreachable and has been removed (H11(a)).
-# ---------------------------------------------------------------------------
-
-
 class TestSubstitutableResidueIsSilent:
     def test_windows_no_longer_denies(self):
         assert _result("grep -rn TODO src/", host_is_windows=True) is None
@@ -98,12 +91,6 @@ class TestSubstitutableResidueIsSilent:
         `check_grep_via_bash_rewrite`'s own reach."""
         cmd = "grep -rn TODO src/"
         assert dispatch_checks.check_grep_via_bash_rewrite(cmd) is not None
-
-
-# ---------------------------------------------------------------------------
-# (b) Composed pipelines with a real two-segment `|` partial rewrite --
-# still advisory, on every platform, never a deny.
-# ---------------------------------------------------------------------------
 
 
 class TestPartialRewriteStillAdvises:
@@ -189,14 +176,7 @@ class TestPartialRewriteStillAdvises:
         assert "blanket-disarm marker" not in ctx
         assert "COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD" not in ctx
         # RETARGETED 2026-08-30 (DR-290 form 1 -> form 2): the message
-        # carries the settings-root DISPLAY pointer, not the repo-root-
-        # relative resolution form.
         assert OVERRIDE_KEYS_DOC_DISPLAY in ctx
-
-
-# ---------------------------------------------------------------------------
-# (c) No partial rewrite AND no genuine GNU-only construct -- silent.
-# ---------------------------------------------------------------------------
 
 
 class TestPartialRewriteMessageSizeFloorC3:
@@ -215,8 +195,6 @@ class TestPartialRewriteMessageSizeFloorC3:
         measurement = measure_envelope({"hookSpecificOutput": out}, band="advisory-rewrite")
         assert measurement.is_speaker
         assert measurement.over_cap
-        # Measured 380 at C3 authoring; headroomed ceiling, not a precision
-        # pin -- see the module docstring's floor note for the derivation.
         assert measurement.prose_bytes <= 450, (
             "prose bytes grew past the C3-measured floor headroom (%d) -- "
             "investigate before assuming this is still the same floor"
@@ -238,12 +216,9 @@ class TestNoActionableAlternativeIsSilent:
         assert _result("grep -rn TODO src/ | sort | wc -l", host_is_windows=True) is None
 
     def test_unrecognized_short_flag_is_silent(self):
-        # -A (context lines) is not GNU-only -- it exists on BSD grep too.
         assert _result("grep -A3 TODO src/x.py", host_is_windows=True) is None
 
     def test_untranslatable_regex_dialect_is_silent(self):
-        # BRE alternation is untranslatable to BX-16's rewrite, but is not
-        # itself a GNU-only construct on this guard's narrow check.
         assert _result(r'grep -n "a\|b" file', host_is_windows=True) is None
 
     def test_downstream_expansion_declines_the_partial_rewrite_and_stays_silent(self):
@@ -267,16 +242,9 @@ class TestNoActionableAlternativeIsSilent:
         assert _result(cmd, host_is_windows=True) is None
 
 
-# ---------------------------------------------------------------------------
-# (d) A genuine GNU-only construct (no partial rewrite available) --
-# still advisory, naming the real GNU/BSD divergence.
-# ---------------------------------------------------------------------------
-
-
 class TestGnuOnlyConstructStillAdvises:
     def test_dash_capital_p_on_single_segment_advises(self):
         # -P is not in `_GREP_SUBSTITUTABLE_SHORT_FLAGS`, so this is
-        # untranslatable-reason, and -P is genuinely GNU-only.
         out = _envelope("grep -Pn TODO src/", host_is_windows=True)
         assert out["permissionDecision"] == "allow"
         assert "GNU-only" in out["additionalContext"]
@@ -286,47 +254,30 @@ class TestGnuOnlyConstructStillAdvises:
         assert "GNU-only" in out["additionalContext"]
 
     def test_long_option_on_the_denylist_advises(self):
-        # `--group-separator` is on the C2 denylist (absent on BSD grep) --
         # unlike the deleted allowlist shape, this asserts a DENYLISTED
-        # long option fires, not merely "not on a two-entry allowlist".
         out = _envelope("grep --group-separator=== TODO src/", host_is_windows=True)
         assert "GNU-only" in out["additionalContext"]
 
     def test_include_and_exclude_do_not_count_as_gnu_only(self):
-        # Portable long options -- exist on BSD grep too (H11(c) evidence:
-        # 8.36% of this guard's prior firing set, explicitly excluded).
         assert _result("grep -rn TODO --include=*.py src/", host_is_windows=True) is None
 
     def test_exclude_dir_does_not_count_as_gnu_only(self):
-        # AC7: `--exclude-dir` is BSD-supported -- the allowlist shape this
-        # denylist replaced misclassified it as GNU-only purely for not
-        # being `--include`/`--exclude`. Must not fire.
         assert (
             _result("grep -rn TODO --exclude-dir=.git src/", host_is_windows=True)
             is None
         )
 
     def test_version_does_not_count_as_gnu_only(self):
-        # AC7: `--version` is BSD-supported. Must not fire.
         assert _result("grep --version", host_is_windows=True) is None
 
     def test_color_does_not_count_as_gnu_only(self):
-        # `--color` exists on BSD grep too -- was a false positive under
-        # the deleted allowlist shape (fired purely for not being
-        # `--include`/`--exclude`), corrected by the C2 denylist.
         assert _result("grep --color TODO src/", host_is_windows=True) is None
 
     def test_dash_o_and_dash_r_do_not_count_as_gnu_only(self):
-        # `-o`/`-r` exist on BSD grep too -- semantic divergence, not a
-        # portability hazard this guard should flag. `-o` alone is outside
         # `_GREP_SUBSTITUTABLE_SHORT_FLAGS`, so this is untranslatable-
-        # reason (not chained), same gate as the rest of this class.
         assert _result("grep -ro TODO src/", host_is_windows=True) is None
 
     def test_dash_capital_z_advises(self):
-        # `-Z` is a semantic collision (BSD: force zgrep behavior; GNU:
-        # NUL-terminator), not just absence -- distinct denylist entry from
-        # `-z`.
         out = _envelope("grep -rnZ TODO src/", host_is_windows=True)
         assert "GNU-only" in out["additionalContext"]
 
@@ -357,26 +308,14 @@ class TestGnuOnlyConstructStillAdvises:
         assert "blanket-disarm marker" not in ctx
         assert "COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD" not in ctx
         # RETARGETED 2026-08-30 (DR-290 form 1 -> form 2): the message
-        # carries the settings-root DISPLAY pointer, not the repo-root-
-        # relative resolution form.
         assert OVERRIDE_KEYS_DOC_DISPLAY in ctx
 
 
-# ---------------------------------------------------------------------------
 # (e) Precedence: GREP_VIA_BASH outranks every other shape, so this guard's
-# classification (and, when it fires, its message) names grep, not banner
-# or plumbing.
-# ---------------------------------------------------------------------------
 
 
 class TestPrecedence:
     def test_composite_banner_plus_grep_plus_head_is_silent_but_correctly_classified(self):
-        # The plan's own canonical composite example: a banner-marked echo,
-        # a piped grep, and a piped head all in one command. Composed
-        # (piped both in and out), no partial rewrite (3+ segments), no
-        # GNU-only construct -- silent under the new gate. Confirmed via
-        # the classifier directly, since a silent `check()` result carries
-        # no message to assert the shape name against.
         from coordinator_core.bash_guards._shape_classifier import (
             Shape as _Shape,
             classify_command as _classify_command,
@@ -396,13 +335,7 @@ class TestPrecedence:
         assert "grep -P error" in ctx
 
 
-# ---------------------------------------------------------------------------
-# (d.1) Denylist membership rationale -- C2, 2026-08-01. Mechanical check
 # that every DENYLISTED short flag and long option carries its own
-# one-line rationale comment, not merely a bare literal in the frozenset.
-# A future addition to either denylist with no accompanying rationale
-# fails this gate rather than silently landing undocumented.
-# ---------------------------------------------------------------------------
 
 
 class TestGnuOnlyDenylistRationaleDocumented:
@@ -448,11 +381,6 @@ class TestGnuOnlyDenylistRationaleDocumented:
         assert "macOS 26.5" in block
 
 
-# ---------------------------------------------------------------------------
-# (f) Escape hatch
-# ---------------------------------------------------------------------------
-
-
 class TestOverrideEnvVar:
     def test_override_suppresses_partial_rewrite_advisory(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD", "1")
@@ -467,11 +395,6 @@ class TestOverrideEnvVar:
         result = _result("grep -Pn TODO src/", host_is_windows=True)
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
-
-
-# ---------------------------------------------------------------------------
-# (g) Non-matches
-# ---------------------------------------------------------------------------
 
 
 class TestNonMatches:
@@ -489,8 +412,6 @@ class TestNonMatches:
         assert guard.check({"tool_name": "Bash"}) is None
 
     def test_unparseable_command_allows(self):
-        # Unterminated quote -- tokenize_full_command returns None, so this
-        # guard has nothing to classify and must not deny on that alone.
         assert _result("grep 'unterminated") is None
 
 

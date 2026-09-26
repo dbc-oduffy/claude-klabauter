@@ -73,14 +73,6 @@ def test_swap_failure_report_makes_no_unearned_write_claims(monkeypatch, tmp_pat
     dst_dir.mkdir()
 
     # `dst_dir` needs a `.git` ANCESTOR (not a `.git` of its own) to be a
-    # realistic publish destination: `_ensure_dest_ready` refuses a dest that
-    # sits inside no repo at all, because `ResolvedTarget` carries only the
-    # resolved `dest_dir` and cannot tell that case apart from a repo-root row
-    # whose `.git` an earlier swap stranded (§ `_dest_prefix_for`, which
-    # documents the same conflation). Without this the row is skipped before
-    # the swap and this test passes vacuously — never reaching the failure it
-    # exists to inject. `dst_dir` itself stays repo-less, which is what keeps
-    # this test silent on `.git` safety.
     (tmp_path / ".git").mkdir()
 
     original_dest_bytes = b"self.claude-klabauter = _RealEngineClaudeKlabauter()\n"
@@ -102,9 +94,6 @@ def test_swap_failure_report_makes_no_unearned_write_claims(monkeypatch, tmp_pat
     monkeypatch.setattr(publish, "dispatch_percolate_pre_rsync", lambda *a, **k: None)
     monkeypatch.setattr(publish, "dispatch_standalone_guards", lambda *a, **k: None)
 
-    # Sync leg is a no-op — the staging seed (copied from `dst_dir`) is left
-    # as-is; the fixed content below is written directly to simulate what
-    # the real content-transform sweep would have produced.
     monkeypatch.setattr(
         publish, "sync_manifest", lambda src, dst, totals, dry_run, out: True
     )
@@ -149,10 +138,6 @@ def test_swap_failure_report_makes_no_unearned_write_claims(monkeypatch, tmp_pat
             out=out,
         )
 
-    # The real destination must be byte-for-byte unchanged — the swap never
-    # landed, so the run never actually wrote this file. This is a content
-    # check only: the fixture destination has no `.git`, so it says nothing
-    # about `.git` safety (see test_publish_swap_preserves_dest_git.py).
     assert dest_file.read_bytes() == original_dest_bytes
 
     report = out.getvalue()

@@ -1,15 +1,3 @@
-"""DoE#99: the commit-phase brief called an unreported path "the peer case"
-on absence alone -- no report named it, so STOP. An executor's actual
-touched-files list lives in the on-disk report FILE the brief already tells
-the agent to READ, not in the terse `<STATUS>: <report path>` return line;
-a wave where every executor answered with a bare `DONE: <report path>` line
-left the brief nothing to reconcile against but that line, and it refused
-four dirty, legitimately-DONE paths as a peer with no peer on the box.
-
-Pin: reconciliation is against each report FILE's own touched-files list,
-and "the peer case" fires only on a LIVE holder (`session-claim-cli
-who-claims-path`), never on a report simply not naming a path.
-"""
 
 from coordinator_core.ops.dispatch_emit.emit import _commit_agent_call
 

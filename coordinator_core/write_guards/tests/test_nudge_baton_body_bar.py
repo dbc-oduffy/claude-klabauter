@@ -58,9 +58,7 @@ _AUTHORED_BODY = (
     "Next step: land C9 and hand off.\n"
 )
 
-# A narrative-bullet-only body (every
 # line syntactically matches _BULLET_RE, but each bullet is a full sentence
-# with real reasoning) must NOT be classified as a bare row-list.
 _NARRATIVE_BULLETS_BODY = (
     "- Decided to defer the migration because the schema change would break "
     "the existing readers until the new format lands.\n"
@@ -169,10 +167,6 @@ class TestAuthoredBodyPassesThrough:
 
 class TestPathGateAnchoring:
     def test_substring_coincidence_does_not_match(self):
-        """fnmatch's `*` crosses path
-        separators, so the unanchored glob previously matched any path
-        containing the literal substring `state/handoffs/` — including an
-        unrelated directory like `vendor/upstate/handoffs/`."""
         result = guard.check(
             _payload(
                 "Write",
@@ -199,9 +193,6 @@ class TestEditReconstruction:
                 },
             )
         )
-        # file_path here is an absolute tmp path, not under state/handoffs/ —
-        # the path gate must reject it (defends against false positives on
-        # any file that merely happens to reconstruct bare-row-list content).
         assert result is None
 
     def test_edit_under_state_handoffs_reconstructs_and_advises(self, tmp_path: Path, monkeypatch):

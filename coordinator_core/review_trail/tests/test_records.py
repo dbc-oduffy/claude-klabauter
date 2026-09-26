@@ -1,12 +1,3 @@
-"""Tests for coordinator_core.review_trail.records.
-
-Moved code arrives with its own pin (C2b, state/dispatch-briefs/2026-08-29-
-the-gravestoned-review-trail-surface-is-deleted/C2b.md) — pins ``list_paths``'
-state-root resolution and date-prefix filter, the same behavior
-``coordinator_core.ops.test_list_review_trail_records`` already pins against
-the doomed module's own ``main()`` CLI, over the module this content actually
-lives in now.
-"""
 
 from __future__ import annotations
 
@@ -22,9 +13,7 @@ def _touch(path: Path) -> None:
     path.write_text("{}", encoding="utf-8")
 
 
-# ---------------------------------------------------------------------------
 # _resolve_state_root — COORDINATOR_ROOT override branching
-# ---------------------------------------------------------------------------
 
 
 def test_coordinator_root_state_suffix_used_verbatim(monkeypatch, tmp_path):
@@ -44,17 +33,10 @@ def test_no_override_at_all_returns_none(monkeypatch):
 
 
 def test_explicit_override_param_takes_precedence_over_env(monkeypatch, tmp_path):
-    # Warm-server callers must pass state_root_override rather than staging
     # COORDINATOR_ROOT into os.environ (module docstring's precedence-1
-    # rationale) — an explicit override wins even when the env var disagrees.
     monkeypatch.setenv("COORDINATOR_ROOT", str(tmp_path / "env-root"))
     explicit = str(tmp_path / "state")
     assert records._resolve_state_root(explicit) == explicit
-
-
-# ---------------------------------------------------------------------------
-# _collect — absent-dir-safe, recursive, symlink-following
-# ---------------------------------------------------------------------------
 
 
 def test_collect_absent_dir_returns_empty(tmp_path):
@@ -70,12 +52,6 @@ def test_collect_finds_nested_json(tmp_path):
         ("2026-05-19-foo.json", str(tmp_path / "week-2026-05-25" / "2026-05-19-foo.json")),
         ("2026-05-20-bar.json", str(tmp_path / "2026-05-20-bar.json")),
     ]
-
-
-# ---------------------------------------------------------------------------
-# list_paths — programmatic API, oracle-parity with the retiring CLI's
-# non---print0 success path
-# ---------------------------------------------------------------------------
 
 
 def test_list_paths_sorted_union_of_live_and_archive_by_basename(tmp_path):

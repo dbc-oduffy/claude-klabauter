@@ -1,20 +1,3 @@
-"""test_red_set_report.py -- unit coverage for coordinator/bin/red-set-report.py.
-
-Spec backlink: pln-make-the-bash-guards-suite-a-g-2f81d6 § C1
-
-Deliberately lives OUTSIDE coordinator_core/bash_guards/tests/ -- that is the
-tree red-set-report.py measures; a self-referential test cell there would
-pollute its own count (see the script's module docstring and the C1 brief).
-
-Exercises the script against a small, self-contained synthetic pytest suite
-(built in a tmp_path fixture) with three cells:
-  - a PASSING cell (uninteresting to the census besides the total)
-  - a FAILING cell carrying the `designed_red` marker (must land in
-    `marked_failed`, NOT `unmarked_failed`)
-  - a FAILING cell with NO marker at all (must land in `unmarked_failed`)
-This directly asserts the two outcomes the brief calls out: "a known-marked
-cell [reported] as marked and a known-unmarked failure as unmarked."
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -41,7 +24,6 @@ red_set_report = _load_module()
 
 @pytest.fixture
 def synthetic_suite(tmp_path: Path) -> Path:
-    """A minimal pytest tree: one pass, one designed_red-marked fail, one bare fail."""
     (tmp_path / "pyproject.toml").write_text(
         "[tool.pytest.ini_options]\n"
         "markers = [\n"
@@ -100,8 +82,6 @@ def test_unfiltered_totals_include_all_three_cells(synthetic_suite: Path):
 
 
 def test_capped_worker_count_never_returns_none_for_bare_auto_style_request():
-    # A caller asking for a very large worker count is clamped, never passed
-    # through uncapped -- this is the "never bare -n auto" hard constraint.
     import os
 
     capped = red_set_report.capped_worker_count(10_000)
@@ -116,13 +96,6 @@ def test_capped_worker_count_default_is_serial():
 
 
 def test_marked_split_is_derived_from_collection_not_execution_outcome():
-    """C1b: the split must come from `derive_marked_split`, which is fed
-    from --collect-only node-id sets, not from diffing two runs' failures.
-    Proven directly against constructed collection/failure sets: a cell that
-    FAILS but is NOT marker-excluded (i.e. it is present in collected_fast)
-    must land in unmarked_failed even under a simulated transient -- a
-    second hypothetical execution of it passing must not change the
-    derivation, because execution outcome never enters the split at all."""
     collected_all = {
         "test_mod.py::test_marked",
         "test_mod.py::test_unmarked",
@@ -135,9 +108,6 @@ def test_marked_split_is_derived_from_collection_not_execution_outcome():
     marked = red_set_report.derive_marked_split(collected_all, collected_fast)
     assert marked == {"test_mod.py::test_marked"}
 
-    # Simulate a transient: it failed in this particular execution pass, and
-    # it is NOT marker-excluded (it's in collected_fast) -- so it belongs in
-    # unmarked_failed regardless of whether a re-run of it would pass.
     failed_all = {"test_mod.py::test_marked", "test_mod.py::test_transient"}
     unmarked_failed = sorted(failed_all & collected_fast)
     marked_failed = sorted(failed_all & marked)
@@ -146,10 +116,6 @@ def test_marked_split_is_derived_from_collection_not_execution_outcome():
 
 
 def test_collected_fast_not_subset_of_collected_all_fails_loudly():
-    """C1b's residual-honesty guard: if a peer's commit lands between the
-    two --collect-only invocations such that collected_fast is not a subset
-    of collected_all, derive_marked_split must raise, naming the offending
-    node-id(s), rather than silently proceeding on a corrupt set."""
     collected_all = {"test_mod.py::test_a"}
     collected_fast = {"test_mod.py::test_a", "test_mod.py::test_b_new_from_peer"}
     with pytest.raises(RuntimeError, match="test_b_new_from_peer"):

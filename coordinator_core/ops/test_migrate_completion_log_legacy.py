@@ -1,13 +1,3 @@
-"""
-Tests for coordinator_core.ops.migrate_completion_log_legacy.
-
-Mirrors the bash oracle's own smoke-test suite — same three AC scenarios plus
-additional edge cases, ported to pytest against the Python module's main()
-directly (subprocess only for the `git` calls the module itself performs —
-matching the oracle's own reliance on a real git repo).
-
-Port of: test-migrate-completion-log-legacy.sh (DoE 290997c7, 2026-07-22)
-"""
 
 from __future__ import annotations
 
@@ -19,8 +9,6 @@ import pytest
 from coordinator_core.ops.migrate_completion_log_legacy import main
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -129,15 +117,9 @@ def test_nonexistent_root_path_exits_1(tmp_path, capsys):
 
 
 def test_partial_reentrant_run_skips_already_moved_files(tmp_path, capsys):
-    """Simulates a Ctrl-C-interrupted partial run: one file already at the
-    legacy/ destination (but source not removed, unlike a real git mv — this
-    exercises the destination-exists skip guard directly)."""
     repo = _make_fixture_repo(tmp_path, n=2)
     legacy = repo / "archive" / "completed" / "legacy"
     legacy.mkdir()
-    # Pre-seed the destination for file 1 to simulate a prior partial move,
-    # without removing the source (mirrors "git mv already ran, commit
-    # didn't" more loosely — the module's skip guard only checks dst existence).
     (legacy / "2026-01.md").write_text("# already moved\n", encoding="utf-8")
 
     rc = main(["--root", str(repo)])
@@ -149,8 +131,6 @@ def test_partial_reentrant_run_skips_already_moved_files(tmp_path, capsys):
 
 
 def test_empty_root_flag_value_is_usage_error(tmp_path, capsys):
-    """`--root ""` must not silently fall through to
-    env/git-auto-discovery; it's an explicit usage error."""
     rc = main(["--root", ""])
 
     assert rc == 1
@@ -177,18 +157,10 @@ def test_env_var_root_used_when_no_explicit_flag(tmp_path, capsys, monkeypatch):
     assert "Moved:  1" in out
 
 
-# ---------------------------------------------------------------------------
-# Per-item git spawn amplification (coordinator_core/tests/
 # test_no_unbatched_per_item_git_spawn.py _KNOWN_SITES:
-# migrate_completion_log_legacy.py::main -> _git_mv)
-# ---------------------------------------------------------------------------
 
 
 def test_process_count_does_not_grow_with_the_set(tmp_path, capsys, monkeypatch):
-    """Model: test_schema_drift_watch.py::TestSchemaAdvisoryBatch::
-    test_process_count_does_not_grow_with_the_set. All monoliths in a run
-    share the same destination directory, so the `git mv` call count must
-    stay flat as the monolith count grows, not scale with it."""
     import coordinator_core.ops.migrate_completion_log_legacy as mcl
 
     spawns: list[list[str]] = []

@@ -39,10 +39,6 @@ from coordinator_core.search.tests._posix_shell import requires_posix_shell, run
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-#: The literal split point of a read source's provenance footer (C3). Matches
-#: `ReadSource.execute`'s `note="[read in-process: no subprocess spawned]"`
-#: byte-for-byte -- if that literal ever drifts, this split point must move
-#: with it rather than being re-derived here.
 _READ_FOOTER_MARKER = "\n\n[read in-process"
 
 
@@ -68,8 +64,6 @@ def tree(tmp_path):
 
 
 def _answered_raw(cmd: str, cwd) -> str | None:
-    """Return `answer()`'s body with only the provenance footer stripped --
-    no `splitlines()`, no newline translation (AC6)."""
     text = answer(cmd, cwd=str(cwd))
     if text is None:
         return None
@@ -85,9 +79,6 @@ def _assert_matches_real(cmd: str, cwd) -> None:
         "in-process answer disagrees with real command\n"
         "  command : %s\n  ours    : %r\n  real    : %r" % (cmd, ours, theirs)
     )
-
-
-# --------------------------------------------------------------- single-source
 
 
 @requires_posix_shell
@@ -117,8 +108,6 @@ def test_cat_astral_utf8_character(tree):
 
 @requires_posix_shell
 def test_head_n_zero(tree):
-    """`head -n 0` is a valid, answerable case (count=0) -- NOT a decline --
-    and must print nothing, matching real `head -n 0`'s empty stdout."""
     _assert_matches_real("head -n 0 many.txt", tree)
 
 
@@ -128,33 +117,13 @@ def test_tail_one_on_single_line_file(tree):
 
 
 def test_sed_range_past_eof_declines(tree):
-    """A START beyond EOF is a NAMED refusal (`sources_read.ReadSpec.produce`'s
-    `start > n` bound check), not an approximation of what real `sed -n` would
-    print (real `sed -n` prints nothing and exits 0) -- a refusal is correct by
-    definition (the real command then runs unchanged), so this asserts the
-    decline itself rather than comparing against real `sed`. A one-line file
-    with a start line of 5 is unambiguously past its only line (line 1)."""
     assert answer("sed -n '5,10p' oneline.txt", cwd=str(tree)) is None
 
 
-# ------------------------------------------------------------------- composed
-
-
-
 def _absorbs_wc(cmd: str) -> bool:
-    """True when `cmd` pipes into a `wc` stage, whose BSD-vs-GNU padding divergence
-    `engine._stage_wc` declares deliberate. Matched on the PIPED segment only, so a
-    file or pattern that merely contains the letters "wc" never trips it."""
     return any(seg.strip().split()[:1] == ["wc"] for seg in cmd.split("|")[1:])
 
 def _assert_stage_output_matches_real(cmd: str, cwd) -> None:
-    """Composed shapes (AC3's evidence that no stage code changed) compare as
-    LINE LISTS, not raw bytes: the stage pipeline joins with `"\\n"` and never
-    reproduces a trailing newline (`answer.py`'s `"\\n".join(lines)`), which is
-    a pre-existing, out-of-scope-for-this-test-file rendering property of the
-    stage path shared with `test_answer_differential.py` -- not one of the
-    bare-read fidelity divergences (no trailing newline, CRLF, empty output)
-    this file's single-source cases exist to catch raw-byte-exact (AC6)."""
     ours = _answered_raw(cmd, cwd)
     if ours is None:
         pytest.skip("declined -- the real command runs unchanged, which is correct")
@@ -162,16 +131,6 @@ def _assert_stage_output_matches_real(cmd: str, cwd) -> None:
     ours_lines, theirs_lines = ours.splitlines(), theirs.splitlines()
     if _absorbs_wc(cmd):
         # `engine._stage_wc` carries a KNOWN, DELIBERATE DIVERGENCE block: BSD `wc`
-        # (macOS) right-pads its count to width 8, GNU `wc` does not, and probing the
-        # host's own `wc` to reproduce the padding would cost the process spawn this
-        # whole package exists to avoid -- so the count ships unpadded on every
-        # platform, VALUE always correct. Asserting byte-equality against the real
-        # host here made this cell contradict a decision already weighed and taken
-        # upstream: on BSD it went red over exactly the whitespace `_stage_wc`
-        # declares it is giving up, which is a defective assertion, not a finding.
-        # Only the declared divergence is normalized -- leading/trailing space on a
-        # `wc` count line -- and only for commands that actually absorb a `wc` stage,
-        # so every other composed shape stays as strict as it was.
         ours_lines = [ln.strip() for ln in ours_lines]
         theirs_lines = [ln.strip() for ln in theirs_lines]
     assert ours_lines == theirs_lines, (
@@ -188,13 +147,6 @@ def test_composed_cat_pipe_wc_l(tree):
 @requires_posix_shell
 def test_composed_sed_range_pipe_head(tree):
     _assert_stage_output_matches_real("sed -n '5,20p' many.txt | head -3", tree)
-
-
-# ------------------------------------------------------------------------ ls
-#
-# `ls` is not wired through `answer()` (C3 deliberately left it unrecognized --
-# see module docstring), so its fidelity is asserted directly against
-# `sources_listdir.parse_ls_segment`/`run`.
 
 
 @pytest.fixture()
@@ -217,10 +169,6 @@ def _ls_ours(tokens, cwd) -> list[str] | None:
 
 @requires_posix_shell
 def test_ls_dotfile_and_locale_collation(lsdir, monkeypatch):
-    """A directory with a dotfile (omitted by default) and a file whose name
-    sorts differently under a non-C locale (case-insensitive collation puts
-    'apple' before 'Banana'; a byte sort puts 'Banana' first) -- the case this
-    module exists to get right rather than refuse (C2)."""
     monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
     ours = _ls_ours(["ls", "lsdir"], lsdir)
     if ours is None:
@@ -238,10 +186,6 @@ def test_ls_dotfile_and_locale_collation(lsdir, monkeypatch):
 
 @requires_posix_shell
 def test_composed_ls_pipe_wc_l(lsdir):
-    """`ls DIR | wc -l` (AC3): our own entry count against real `ls | wc -l`'s
-    VALUE -- BSD's width-8 padding is a named, deliberate divergence (matches
-    `test_answer_differential.test_wc_count_agrees_but_padding_deliberately_diverges`),
-    not something this seam reproduces by probing the host's own `wc`."""
     ours = _ls_ours(["ls", "lsdir"], lsdir)
     assert ours is not None
     _rc, theirs = run_real("ls lsdir | wc -l", lsdir)

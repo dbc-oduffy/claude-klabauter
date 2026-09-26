@@ -102,28 +102,16 @@ from coordinator_core.win_portability import no_console_creationflags
 
 _NO_CONSOLE = no_console_creationflags()
 
-#: The exact placeholder HTML comment coordinator-doc-new's handoff
-#: scaffolder emits under "## What Was Accomplished"
-#: (coordinator/bin/coordinator-doc-new.py :: _scaffold_handoff). A template
-#: change upstream that renames/removes this comment degrades to a silent
-#: no-op below rather than risk corrupting the freshly-scaffolded file.
 _ACCOMPLISHED_PLACEHOLDER = (
     "<!-- Replace with what was built, fixed, or shipped this session. -->"
 )
 
-#: The exact placeholder HTML comment coordinator-doc-new's handoff
-#: scaffolder emits under "## What I Learned"
-#: (coordinator/bin/coordinator-doc-new.py :: _scaffold_handoff). A template
-#: change upstream that renames/removes this comment degrades to a silent
-#: no-op below rather than risk corrupting the freshly-scaffolded file.
 _LEARNED_PLACEHOLDER = (
     "<!-- What did you learn that you'd resent re-deriving? -->"
 )
 
 
 def _err(msg: str) -> dict:
-    """Return an exit_code=1 setup-error reply (mirrors session_baton_mint's
-    own ``_err`` shape)."""
     return {
         "exit_code": 1,
         "error": msg,
@@ -141,22 +129,6 @@ def _scaffold_via_doc_new(
     summary: Optional[str] = None,
     gated_predicate: Optional[str] = None,
 ) -> str:
-    """Invoke ``coordinator-doc-new --type handoff`` — same subprocess
-    pattern as ``coordinator_core.baton_assemble.apply.
-    _dispatch_coordinator_doc_new``. Returns the scaffolded file's path
-    exactly as printed to stdout (coordinator-doc-new's own output
-    contract).
-
-    ``category``/``summary`` and ``gated_predicate`` are C3's flags
-    (``--category``/``--summary``/``--gated-predicate``) — this function is a
-    pure pass-through, never resolving or gating any of them itself; see
-    ``_handler``'s own docstring for the gating decision that produces
-    ``gated_predicate``.
-
-    Deliberately NOT ``--gated-open``: that flag names a ``blocked_by`` id,
-    and DR-173's gate has none to name. Routing this reason text there would
-    mint a ``blocked_by`` entry that never resolves, parking the baton
-    permanently even after its fields are filled."""
     from coordinator_core.resolution.facade import resolve_operator_config
 
     claude_klabauter_bin = resolve_operator_config()["claude_klabauter_bin"]
@@ -169,12 +141,6 @@ def _scaffold_via_doc_new(
     if summary:
         args += ["--summary", summary]
     if gated_predicate:
-        # NOT --gated-open. That flag names a blocked_by id, and DR-173's gate
-        # has no id to name: passing this prose reason there would mint a
-        # blocked_by entry nothing can ever resolve, parking the baton forever
-        # even once category/summary are filled. --gated-predicate emits the
-        # ratified trio (awaiting_gate + pickup_ready: false + blocking_notes)
-        # with no fabricated graph edge.
         args += ["--gated-predicate", gated_predicate]
     proc = subprocess.run(
         [sys.executable, cli, *args],
@@ -194,11 +160,6 @@ def _scaffold_via_doc_new(
 def _write_first_prompt_into_body(
     handoff_path: Path, first_prompt: Optional[str]
 ) -> None:
-    """Post-scaffold body edit — the same placeholder-comment seam an EM
-    would use via Edit, applied here as a plain read-replace-write. Never
-    touches frontmatter. A no-op when ``first_prompt`` is falsy or the
-    placeholder comment is absent (upstream template drift) — degrade
-    silently rather than risk corrupting the freshly-scaffolded file."""
     if not first_prompt:
         return
     try:
@@ -214,18 +175,10 @@ def _write_first_prompt_into_body(
     try:
         handoff_path.write_text(text, encoding="utf-8", newline="\n")
     except OSError:
-        pass  # degrade silently rather than risk corrupting the freshly-scaffolded file -- see this function's docstring
+        pass
 
 
 def _write_intent_into_body(handoff_path: Path, intent: Optional[str]) -> None:
-    """Post-scaffold body edit for the "## What I Learned" section — same
-    seam as ``_write_first_prompt_into_body``. Never touches frontmatter. A
-    no-op when ``intent`` is falsy OR whitespace-only (AC4: no intent leaves
-    the placeholder in place, unfilled, as the nudge itself — and a
-    whitespace-only value would otherwise strip to empty, replacing the
-    prompt with silence, which defeats the same AC it appears to satisfy) or
-    the placeholder comment is absent (upstream template drift) — degrade
-    silently rather than risk corrupting the freshly-scaffolded file."""
     if not intent or not intent.strip():
         return
     try:
@@ -238,7 +191,7 @@ def _write_intent_into_body(handoff_path: Path, intent: Optional[str]) -> None:
     try:
         handoff_path.write_text(text, encoding="utf-8", newline="\n")
     except OSError:
-        pass  # degrade silently rather than risk corrupting the freshly-scaffolded file -- see this function's docstring
+        pass
 
 
 @register_op("session_baton.promote")
@@ -313,15 +266,6 @@ def _handler(params: dict, repo_root: Optional[str] = None) -> dict:
             "already_promoted": True,
         }
 
-    # A CLOSED journal is not promotable. `closed_at`/`closed_into`
-    # (session_baton.store) mean a pickup already adopted an artifact, so the
-    # session's work belongs to THAT baton and this record is its ancestor —
-    # scaffolding a second corpus artifact out of it would advertise the same
-    # work twice and hand `closed_into`'s target a sibling it never named.
-    # Refuses rather than no-ops: unlike the `promoted_to` branch above, which
-    # returns the artifact the caller asked for, there is no path here that
-    # satisfies the request, and every earning-event caller is fail-open, so a
-    # loud refusal costs a caller nothing and tells a reader why.
     closed_into = record.get("closed_into")
     if record.get("closed_at") or closed_into:
         return _err(
@@ -332,20 +276,6 @@ def _handler(params: dict, repo_root: Optional[str] = None) -> dict:
     resolved_title = title or record.get("title") or f"Session {session_id}"
     resolved_cwd = cwd if cwd is not None else "."
 
-    # Gating decision (DR-173), made once from what the caller supplied. No
-    # fallback to the baton record for category/summary the way title falls
-    # back above -- an absent field here means no context existed at the
-    # call site, which is exactly what the gate exists to record. Both
-    # present -> born ordinary (no --gated-open). Either absent -> the
-    # residual case, gated with notes naming WHICH field is unfilled so a
-    # reader can tell what clears the gate.
-    #
-    # This decision is a predicate over category/summary, not a carrier of
-    # blocking_notes text: the branch taken here is what parks the baton
-    # (awaiting_gate + pickup_ready: false). gate_reason below is written
-    # AFTER the decision, as the human-readable reason for it -- deleting
-    # or blanking that text would not unpark the baton, because the empty
-    # fields are what park it, not the note describing why.
     if category and summary:
         gate_reason = None
     elif not category and not summary:
@@ -381,9 +311,6 @@ def _handler(params: dict, repo_root: Optional[str] = None) -> dict:
 
     merged = store.merge_baton(session_id, cwd, promoted_to=handoff_path_str)
     if merged is None:
-        # Baton merge failed (e.g. unresolvable session hub) -- the handoff
-        # artifact itself is still real and already on disk; report success
-        # with the caveat rather than pretending the scaffold never happened.
         return {
             "exit_code": 0,
             "error": None,

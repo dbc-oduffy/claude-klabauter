@@ -56,11 +56,6 @@ def _run_cli(mod, args: list[str]):
     return rc, out.getvalue()
 
 
-# ---------------------------------------------------------------------------
-# python3
-# ---------------------------------------------------------------------------
-
-
 def test_python3_pass_delegates_to_prereq_probe(mod, monkeypatch):
     from coordinator_core.install import prereq_probe
 
@@ -91,11 +86,6 @@ def test_python3_fail_on_appx_stub_delegates_status(mod, monkeypatch):
     row = json.loads(out)
     assert row["status"] == "fail"
     assert "stub" in row["detail"]
-
-
-# ---------------------------------------------------------------------------
-# git-lfs-enable
-# ---------------------------------------------------------------------------
 
 
 def test_git_lfs_enable_check_only_never_mutates(mod, monkeypatch):
@@ -157,14 +147,6 @@ def test_git_lfs_enable_mutates_when_binary_functional(mod, monkeypatch):
 
 
 def test_git_lfs_install_is_bounded_like_its_neighbour(mod, monkeypatch):
-    """Both git-lfs spawns carry the same finite timeout.
-
-    `git lfs install` used to run bare on the line after a timeout-guarded
-    `git lfs version` — adjacent spawns, asymmetric guarding. A hung git on a
-    cold install path blocked the installer with nothing to report, and this
-    command's stdout is a JSON line a caller parses, so the mutation's own
-    output belonged in a capture rather than mixed into it.
-    """
     from coordinator_core.install import prereq_probe
 
     monkeypatch.setattr(

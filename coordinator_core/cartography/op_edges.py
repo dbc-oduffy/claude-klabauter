@@ -81,8 +81,6 @@ from typing import Any, Dict, List, Set
 
 from coordinator_core.cartography._guard import path_guard
 
-#: Registry-dispatch edge classes this module deliberately does not model —
-#: named in the module docstring "Known-unmodelled edge classes" section.
 UNMODELLED_EDGE_CLASSES: List[str] = [
     "detached_popen_spawn",
     "guard_sink_policy_edge",
@@ -91,8 +89,6 @@ UNMODELLED_EDGE_CLASSES: List[str] = [
 
 
 def _call_target_name(node: ast.Call) -> str | None:
-    """Return the bare callee name for a Call node (`f(...)` or `mod.f(...)`),
-    or None for any other callee shape (e.g. a subscript or a call result)."""
     func = node.func
     if isinstance(func, ast.Name):
         return func.id
@@ -102,16 +98,12 @@ def _call_target_name(node: ast.Call) -> str | None:
 
 
 def _literal_str(node: ast.AST | None) -> str | None:
-    """Return the literal string value of a Constant node, else None."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     return None
 
 
 def _module_level_string_constants(tree: ast.Module) -> Dict[str, str]:
-    """Names bound at module scope directly to a string ``ast.Constant``
-    (``OP_X = "x.y"``, plain ``Assign`` or annotated ``AnnAssign`` alike).
-    ONE hop only — a name bound to another name is not resolved."""
     consts: Dict[str, str] = {}
     for node in tree.body:
         if (
@@ -130,10 +122,6 @@ def _module_level_string_constants(tree: ast.Module) -> Dict[str, str]:
 
 
 def _module_level_literal_collections(tree: ast.Module) -> Dict[str, List[str]]:
-    """Names bound at module scope directly to a List/Tuple/Set literal
-    whose every element is a string ``ast.Constant`` — the source a `for`
-    target can be resolved against. A collection with any non-string-literal
-    member is skipped entirely (no partial resolution)."""
     collections: Dict[str, List[str]] = {}
     for node in tree.body:
         target: ast.expr | None = None
@@ -164,12 +152,6 @@ def _resolve_expr_candidates(
     module_str_consts: Dict[str, str],
     active_loop_vars: Dict[str, List[str]],
 ) -> List[str]:
-    """Resolve a call-argument expression to zero, one, or many op-name
-    strings: a literal string yields itself; a `Name` resolves ONE hop
-    against an enclosing `for` target bound to a module-scope literal
-    collection first, else a module-scope string constant; anything else
-    (call-bound name, f-string, concatenation, imported name, function
-    parameter, function-local assignment) yields nothing."""
     literal = _literal_str(node)
     if literal is not None:
         return [literal]
@@ -182,9 +164,6 @@ def _resolve_expr_candidates(
 
 
 class _CallSiteWalker(ast.NodeVisitor):
-    """Walks a module tracking `for` loops whose iterable is a module-scope
-    constant collection, so a call inside the loop body naming the loop
-    target resolves to one entry per member (ONE hop, module scope)."""
 
     def __init__(self, module_str_consts: Dict[str, str], module_collections: Dict[str, List[str]]) -> None:
         self._module_str_consts = module_str_consts
@@ -233,10 +212,6 @@ class _CallSiteWalker(ast.NodeVisitor):
 
 
 def _collect_call_site_names(tree: ast.Module) -> "_CallSiteWalker":
-    """Run `_CallSiteWalker` over `tree` and return it, populated with
-    every resolved `register_op`/`get_op_handler`/`dispatch_message`
-    op-name site (literal-only plus the ONE-hop module-scope Name/`for`
-    resolutions above)."""
     module_str_consts = _module_level_string_constants(tree)
     module_collections = _module_level_literal_collections(tree)
     walker = _CallSiteWalker(module_str_consts, module_collections)
@@ -245,20 +220,6 @@ def _collect_call_site_names(tree: ast.Module) -> "_CallSiteWalker":
 
 
 def op_edges_for_file(target_root: str | Path, file_path: str | Path) -> Dict[str, Any]:
-    """Return the registry-dispatch sites found in a single Python file.
-
-    Args:
-        target_root: containment root (see ``cartography._guard.path_guard``).
-        file_path: absolute or ``target_root``-relative path to a ``*.py`` file.
-
-    Returns:
-        {"path": <str>, "registrations": [...], "lookups": [...], "dispatches": [...]}
-        or, on a parse failure: {"path": <str>, "registrations": [], "lookups": [],
-        "dispatches": [], "error": <str>}
-
-    Never raises for a malformed target file. Raises ``PathEscapeError``
-    (propagated) if ``file_path`` escapes ``target_root``.
-    """
     root = Path(target_root).resolve()
     resolved = path_guard(target_root, file_path)
     rel_path = resolved.relative_to(root).as_posix()

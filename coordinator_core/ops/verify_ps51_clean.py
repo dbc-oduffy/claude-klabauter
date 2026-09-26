@@ -62,12 +62,9 @@ from coordinator_core.win_portability import no_console_creationflags
 import sys
 from typing import List, Optional, Tuple
 
-_PROG = "verify-ps51-clean.sh"  # literal program-name prefix, matches bash oracle's basename
+_PROG = "verify-ps51-clean.sh"
 
-# subprocess.run over the powershell.exe engine per file — bounded so one
 # pathological .ps1 (or a wedged engine) cannot hang the whole scan (PORTER-BRIEF
-# rule 2: every subprocess.run over external/looping input needs timeout + a
-# stdin guard).
 _PS_PARSE_TIMEOUT_SECS = 30
 
 _REQUIRES_RE = re.compile(r"^[ \t]*#[Rr][Ee][Qq][Uu][Ii][Rr][Ee][Ss][ \t]")
@@ -81,25 +78,16 @@ _BOM = "﻿"
 
 
 def _strip_bom(line: str) -> str:
-    """Strip a leading UTF-8 BOM so #requires/scan regexes match BOM-encoded .ps1
-    files (Windows mandates BOM on non-ASCII .ps1 for PS 5.1)."""
     if line.startswith(_BOM):
         return line[len(_BOM):]
     return line
 
 
 def find_ps51_exe() -> Optional[str]:
-    """Locate Windows PowerShell 5.1 via a PATH-only lookup (no console window)."""
     return shutil.which("powershell.exe")
 
 
 def collect_ps1_files(args: List[str]) -> Tuple[List[str], List[str]]:
-    """Collect .ps1 files from CLI args: files accepted directly (if .ps1),
-    directories recursed (excluding node_modules/ and .git/ paths).
-
-    Returns (files, warnings) — warnings are non-fatal "path not found" notices
-    for the caller to print to stderr, mirroring the bash oracle's WARN-and-continue.
-    """
     files: List[str] = []
     warnings: List[str] = []
     for arg in args:
@@ -118,11 +106,6 @@ def collect_ps1_files(args: List[str]) -> Tuple[List[str], List[str]]:
 
 
 def detect_ps7_floor(text: str) -> Tuple[bool, Optional[str]]:
-    """Scan every line for a `#requires -Version N` directive with major N >= 7.
-
-    Returns (is_ps7_floored, requires_version_str). Only the PowerShell #requires
-    directive counts, not arbitrary comments containing the word "requires".
-    """
     for raw_line in text.splitlines():
         line = _strip_bom(raw_line)
         if not _REQUIRES_RE.match(line):
@@ -143,10 +126,6 @@ def detect_ps7_floor(text: str) -> Tuple[bool, Optional[str]]:
 
 
 def static_scan_warnings(text: str) -> List[str]:
-    """Advisory bash-simple scan for pwsh-7-only syntax patterns.
-
-    Only meaningful for parse-clean files — see module negative-spec.
-    """
     warn_tokens: List[str] = []
     for lineno, raw_line in enumerate(text.splitlines(), start=1):
         line = _strip_bom(raw_line)
@@ -164,10 +143,7 @@ def static_scan_warnings(text: str) -> List[str]:
 
 
 def _build_ps_command(win_path: str) -> str:
-    # Escape single quotes for a PS single-quoted string ('' = literal ').
     escaped = win_path.replace("'", "''")
-    # PS 5.1 on Windows accepts forward slashes fine; the bash oracle converted
-    # to backslashes for parity with a Windows-native path form — preserved here.
     win_path_bs = escaped.replace("/", "\\")
     return (
         "$errs = $null; $null = "
@@ -180,12 +156,6 @@ def _build_ps_command(win_path: str) -> str:
 
 
 def parse_with_ps51(ps51_exe: str, ps1_path: str) -> Tuple[int, str]:
-    """Invoke the PS 5.1 AST parser on ps1_path (NO execution of the target script).
-
-    Returns (parse_error_count, first_error_msg). A powershell.exe invocation
-    failure (non-zero rc, or a timeout) is treated as a single parse failure,
-    matching the bash oracle's `parse_rc -ne 0` fallback.
-    """
     win_path = os.path.abspath(ps1_path)
     ps_command = _build_ps_command(win_path)
     encoded = base64.b64encode(ps_command.encode("utf-16-le")).decode("ascii")
@@ -325,7 +295,7 @@ def main(argv: List[str]) -> int:
         elif verdict == "WARN":
             count_warn += 1
             count_ok += 1
-        else:  # "OK"
+        else:
             count_ok += 1
 
     print("")

@@ -77,53 +77,27 @@ Environment: MACHINE_LOCAL_REGISTRY_DIR, HOME
 """
 
 
-# ---------------------------------------------------------------------------
-# Cross-platform path normalization — ported verbatim from the bash oracle's
-# `_norm_path`. Windows drive `X:/`, `git rev-parse --show-toplevel`'s `C:/` form, and
-# `$HOME`-derived MSYS `/c/` form must all converge for a match. Windows
-# filesystems are case-insensitive -> the whole Windows-shaped path folds to
-# lowercase; a genuine POSIX path (/Users/..., /home/...) stays case-preserved
-# (code-reviewer F1-F4 fixes from the bash oracle are preserved here).
-# ---------------------------------------------------------------------------
-
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
 _MSYS_DRIVE_RE = re.compile(r"^/[A-Za-z]/")
 
 
 def _norm_path(p: str, *, ostype: str = "") -> str:
-    """Normalize a path for cross-platform comparison.
-
-    `ostype` mirrors bash's ${OSTYPE:-} — the MSYS-drive-mount fold (branch 2)
-    is gated on it exactly as the bash oracle gates on $OSTYPE, so callers on
-    non-Windows hosts (empty/unset ostype) never fold a genuine POSIX
-    single-letter top-level dir (e.g. /a/foo on Linux).
-    """
     if _WINDOWS_DRIVE_RE.match(p):
-        # Windows drive form. Separator normalized AFTER stripping "X:" —
-        # never fold a backslash into a regex bracket expression (bash 3.2 ERE
-        # undefined behavior; code-reviewer F1 — preserved as a design note,
         # not applicable to Python's re, but the STRIP-THEN-NORMALIZE order is
-        # preserved for oracle fidelity).
         drive = p[0].lower()
         rest = p[2:]
-        rest = rest.replace("\\", "/")  # backslashes -> forward
+        rest = rest.replace("\\", "/")
         if not rest.startswith("/"):
-            rest = "/" + rest  # drive-relative X:foo -> /x/foo (F2)
-        p = f"/{drive}{rest}".lower()  # Windows FS is case-insensitive -> fold whole path
+            rest = "/" + rest
+        p = f"/{drive}{rest}".lower()
     elif _MSYS_DRIVE_RE.match(p) and ostype.startswith(("msys", "cygwin", "win")):
-        # MSYS drive-mount form (/x/Foo) under a Windows shell only (F3).
         p = p.lower()
-    # Strip trailing separators LAST: a trailing backslash (X:\foo\) becomes a
-    # trailing slash post-normalization and must not defeat the == compare (F4).
     while p.endswith("/") and p != "/":
         p = p[:-1]
     return p
 
 
-# ---------------------------------------------------------------------------
-# Registry dir resolution — mirrors the bash oracle's
 # MACHINE_LOCAL_REGISTRY_DIR -> _coordinator_settings_home() precedence.
-# ---------------------------------------------------------------------------
 
 
 def _resolve_registry_dir() -> Path:
@@ -139,26 +113,17 @@ def _resolve_home() -> str:
     return os.environ.get("HOME") or str(Path.home())
 
 
-# ---------------------------------------------------------------------------
-# Core scan — used by both main() (CLI) and (future) an IPC op wrapper.
-# ---------------------------------------------------------------------------
-
-
 def _run(scope_repo: Optional[str]) -> Tuple[List[str], List[str], int]:
-    """Returns (stdout_lines, stderr_lines, exit_code)."""
     stdout_lines: List[str] = []
     stderr_lines: List[str] = []
 
     registry_dir = _resolve_registry_dir()
-    # Per-key precedence (local wins per key, tracked fills gaps) — NOT
-    # first-file-wins; see drift.read_merged_mirrors.
     registry_files = [
         p
         for p in (registry_dir / "registry.local.toml", registry_dir / "registry.toml")
         if p.is_file()
     ]
 
-    # No registry -> nothing to emit (not an error; matches check-plugin-drift.py).
     if not registry_files:
         return stdout_lines, stderr_lines, 0
 
@@ -171,22 +136,12 @@ def _run(scope_repo: Optional[str]) -> Tuple[List[str], List[str], int]:
     if not mirrors:
         return stdout_lines, stderr_lines, 0
 
-    # Resolve scoping decision once.
-    #   all  — emit every copy_install row (no --scope-repo, or scope == meta-repo).
-    #   own  — emit only rows whose source_path == scope_norm.
     scope_mode = "all"
     scope_norm = ""
     ostype = os.environ.get("OSTYPE", "")
     if scope_repo:
         scope_norm = _norm_path(scope_repo, ostype=ostype)
-        # Deliberately NOT `Path(_resolve_home()) / ".claude"` — on Windows,
-        # pathlib treats a leading "/" as an absolute root and re-anchors it
-        # with a native backslash, silently destroying an MSYS-style HOME
-        # (e.g. "/c/Users/operator") before `_norm_path` ever sees it, so the
         # MSYS-drive-mount fold (_MSYS_DRIVE_RE) never fires and the meta-repo
-        # comparison spuriously fails. Plain string concatenation preserves
-        # HOME's original separator/drive form verbatim, exactly as the bash
-        # oracle's `"${HOME}/.claude"` did.
         meta_norm = _norm_path(_resolve_home().rstrip("/\\") + "/.claude", ostype=ostype)
         if scope_norm != meta_norm:
             scope_mode = "own"
@@ -202,11 +157,6 @@ def _run(scope_repo: Optional[str]) -> Tuple[List[str], List[str], int]:
             continue
 
         source_path = entry.get("source_path", "")
-        # Per-repo scoping BEFORE the misconfig counter: a plugin a consumer
-        # repo does not source is not "this repo's gate" — it must not count
-        # toward copy_install_seen, else a clean consumer no-op would falsely
-        # trip the rc=3 "gate is blind" signal. The meta-repo (scope_mode=all)
-        # checks every copy_install plugin.
         if scope_mode == "own" and _norm_path(source_path, ostype=ostype) != scope_norm:
             continue
 
@@ -215,12 +165,6 @@ def _run(scope_repo: Optional[str]) -> Tuple[List[str], List[str], int]:
         if not reverse_drift_cmd:
             continue
 
-        # Advisory: the value is shell-evaluated once by `bash -c` in Step 4g,
-        # and the documented convention is to single-quote it in
-        # registry.local.toml. A literal double-quote almost always signals a
-        # misconfiguration. Warn but do not block — exotic single-quoted
-        # values are legitimate. Deliberately do NOT flag `$` ($(...) is a
-        # valid idiom).
         if '"' in reverse_drift_cmd:
             stderr_lines.append(
                 f"{_PROG}: WARNING: {plugin_name}.reverse_drift_cmd contains a double-quote "
@@ -231,7 +175,6 @@ def _run(scope_repo: Optional[str]) -> Tuple[List[str], List[str], int]:
         stdout_lines.append(f"{plugin_name}|{source_path}|{reverse_drift_cmd}")
         runnable_emitted = True
 
-    # copy_install plugins exist but none carry a reverse_drift_cmd -> gate is blind.
     if copy_install_seen and not runnable_emitted:
         stderr_lines.append(
             f"{_PROG}: copy_install plugins are registered but none have a reverse_drift_cmd "
@@ -241,7 +184,6 @@ def _run(scope_repo: Optional[str]) -> Tuple[List[str], List[str], int]:
         )
         return stdout_lines, stderr_lines, 3
 
-    # Either runnable rows were emitted, or there are no copy_install plugins (N/A).
     return stdout_lines, stderr_lines, 0
 
 

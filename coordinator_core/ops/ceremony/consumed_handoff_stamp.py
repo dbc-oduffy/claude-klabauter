@@ -217,56 +217,20 @@ from coordinator_core.ops.ceremony.resolver import find_all_consumed_handoffs
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.session import scope as session_scope
 
-# The stamp/ship writes do NOT route through the async op-registry handlers
-# (2026-07-28, Row 6/Row 7 CAS fix): `build_stamp_mutate`/`build_ship_mutate`
-# are PUBLIC mutate-closure builders `handoff_stamp.py`/`handoff_transition.py`
-# factored out precisely so this module can compose them inside a SINGLE
-# `locked_rmw` call each (`_stamp_locked`, `_ship_with_cas` below) — routing
-# that composition through the handlers would mean a SECOND, separate
-# `locked_rmw` acquisition per write, which is exactly the non-atomic gap Row 6
-# exists to close.
-#
-# The registry-warming side-effect imports that used to sit here went with the
-# R4(a) live-children guard on 2026-08-28 (see module docstring R4): that guard
-# was this module's ONLY `get_op_handler` caller, so nothing here resolves an op
-# by name any more and there is no registry to warm.
 from coordinator_core.ops.handoff_stamp import build_stamp_mutate
 from coordinator_core.ops.handoff_transition import _PathNotContained, _resolve_path, build_ship_mutate
 
 _LOG = logging.getLogger(__name__)
 
-#: R3 plausibility-guard skew slack — a filename timestamp within this window
-#: of wall-clock now() is NOT treated as implausibly future-dated (clock skew
-#: / same-second race tolerance). Deliberately small — this guard exists to
-#: catch gross future-dating (a mis-generated or hand-typed filename), not to
-#: police sub-minute clock drift.
 _FUTURE_DATE_SKEW = timedelta(minutes=5)
 
-#: R3 plausibility-guard timezone-ambiguity allowance — filename date/time
-#: prefixes are producer-dependent and the guard cannot know, from the
-#: filename alone, which producer wrote a given one: DoE-claude's
-#: `/handoff` and `/spinoff` skills (`coordinator/skills/handoff/SKILL.md`,
-#: ~line 146) stamp LOCAL wall-clock time (`$(date +%Y-%m-%d)_$(date
-#: +%H%M%S)`), while this repo's own `handoff_author_fork.py`
-#: `_fork_handoff_filename` (~line 315) stamps UTC. Real UTC offsets span
-#: -12h..+14h, so a legitimately local-time filename from a machine up to
-#: UTC+14 can read as up to 14h "future" relative to a naive-UTC now() even
-#: though it is not future-dated at all — this allowance absorbs that full
 #: span on top of `_FUTURE_DATE_SKEW`'s clock-skew slack. Confirmed
-#: real-world case (BST, UTC+1, still tripped the un-widened 5-minute bound):
-#: `cross-repo/inbox/2026-07-23-claude-central-em-wsc-tail-stamp-ship-silent-skip.md`.
 _FILENAME_TZ_AMBIGUITY = timedelta(hours=14)
 
-#: Matches the two live handoff filename shapes seen on disk:
 #:   YYYY-MM-DD_HHMMSS_<rest>.md   (full datetime prefix)
 #:   YYYY-MM-DD-<rest>.md          (date-only prefix, implicit midnight)
 _FULL_TS_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})_")
 _DATE_ONLY_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})-")
-
-
-# ---------------------------------------------------------------------------
-# R3 — future-dated filename plausibility guard (AC8)
-# ---------------------------------------------------------------------------
 
 
 def _parse_filename_timestamp(relpath: str) -> Optional[datetime]:
@@ -328,8 +292,6 @@ def reject_future_dated(
     naive parse in ``_parse_filename_timestamp``) — injectable for tests.
     """
     if now is None:
-        # Naive UTC now(), matching the naive parse in _parse_filename_timestamp
-        # (filenames carry no timezone marker to be aware of).
         now = datetime.now(timezone.utc).replace(tzinfo=None)
     bound = now + tz_ambiguity + skew
 
@@ -338,18 +300,13 @@ def reject_future_dated(
     for relpath in relpaths:
         ts = _parse_filename_timestamp(relpath)
         if ts is None:
-            accepted.append(relpath)  # graceful-skip: unparseable, not rejected
+            accepted.append(relpath)
             continue
         if ts > bound:
             rejected.append(relpath)
         else:
             accepted.append(relpath)
     return accepted, rejected
-
-
-# ---------------------------------------------------------------------------
-# R1 (AC6) — liveness re-check / re-derive the consumed-handoff set
-# ---------------------------------------------------------------------------
 
 
 def redrive_consumed_set(
@@ -387,11 +344,6 @@ def redrive_consumed_set(
     never because of a definitional drift between two different scanners.
     """
     return find_all_consumed_handoffs(worktree_root, session_id)
-
-
-# ---------------------------------------------------------------------------
-# Already-terminal no-op detection
-# ---------------------------------------------------------------------------
 
 
 def _already_terminal_no_op(relpath: str, fm: dict[str, Any]) -> bool:
@@ -459,36 +411,8 @@ def _already_terminal_no_op(relpath: str, fm: dict[str, Any]) -> bool:
     return True
 
 
-# ---------------------------------------------------------------------------
-# Row 7 (in-lock live-children re-check) + Row 6 (stamp/ship pair CAS) —
-# 2026-07-28 ceremony-lock-hold-resurrection spinoff, rows 6/7 of
-# docs/research/2026-07-28-is-the-jettisoned-ceremony-lock-outer-ho.md § (b).
-# Neither window is closeable by re-acquiring `ceremony_lock` (that hold was
-# PM-ratified permanently dead on 2026-07-28; see module docstring CAVEAT
-# above) -- the interleaving peer in both rows is a handoff AUTHOR, which
-# never takes that lock. Both fixes instead narrow the gap at the write
-# itself, using `locked_rmw`'s existing re-read-then-abort mechanism
-# (`MutateAbort`) rather than any new locking primitive.
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class _StampAttempt:
-    """Outcome of one in-lock stamp attempt (Row 7 CAS).
-
-    Two mutually exclusive shapes:
-    `ok` (the write landed or was an idempotent no-op), or all three False
-    with `error` set. A retain means the write never happened (`MutateAbort`,
-    no disk change). `error` names why the write attempt failed for a
-    reason unrelated to the live-children recheck (lock timeout, malformed
-    frontmatter, I/O).
-
-    ``result_text`` is `locked_rmw`'s own return value: the file's fresh
-    on-disk text the instant this call returns successfully, whether a real
-    write happened or the idempotent no-op path was taken. This is Row 6's
-    expected-state anchor for the immediately-following ship attempt --
-    None whenever ``ok`` is False.
-    """
 
     ok: bool = False
     applied: bool = False
@@ -499,27 +423,6 @@ class _StampAttempt:
 async def _stamp_locked(
     relpath: str, handoff_abs_path: str, committed_sha: str, *, repo_root: Path
 ) -> _StampAttempt:
-    """Apply the `shipped_in` stamp under the target file's own `locked_rmw`
-    lock.
-
-    Was `_stamp_with_live_children_recheck` until 2026-08-28. Row 7's whole
-    job was to re-run the live-children guard a second time inside the lock,
-    closing the window between the pre-lock check and the write in which a
-    peer could author a successor. **That window is not narrowed here any
-    more, it is gone**: the guard was deleted on a PM ruling (a baton is
-    either used up or it is not; having a child says nothing about whether it
-    should be archived), so a successor appearing mid-flight no longer
-    changes the answer and there is nothing left to race against. Deleting
-    the recheck is therefore not a relaxation of Row 7 — it is the removal of
-    a CAS protecting a predicate that no longer exists.
-
-    Mirrors `handoff_stamp._handler`'s own containment guard (resolved path
-    must be under ``state/handoffs/``) -- this function calls
-    `build_stamp_mutate` directly rather than routing through `_handler`
-    (see the module-level import-side-effect comment for why), so it must
-    replicate that check itself rather than silently losing it. That guard is
-    NOT part of what Row 7 deleted and must stay.
-    """
     worktree_root = main_worktree_root(repo_root)
     resolved = contained_path(
         Path(handoff_abs_path), [worktree_root / "state" / "handoffs"]
@@ -542,9 +445,6 @@ async def _stamp_locked(
     except LockTimeout as exc:
         return _StampAttempt(error=f"stamp lock timeout: {exc}")
     except MutateAbort as exc:
-        # With the recheck gone, the ONLY remaining MutateAbort source is the
-        # stamp mutate's own abort path (e.g. no parseable frontmatter), so
-        # there is no longer a retain reply to disambiguate against.
         return _StampAttempt(
             error=str(exc.args[0]) if exc.args else "stamp mutate aborted"
         )
@@ -559,31 +459,6 @@ async def _stamp_locked(
 async def _ship_with_cas(
     relpath: str, expected_text: str, worktree_root: Path, repo_root: Path
 ) -> dict:
-    """Row 6: make the stamp-then-ship pair safe against an interleaved peer
-    write, without merging the two into one lock acquisition (schema Rule
-    A3a-2 requires `shipped_in` to land BEFORE `deployment_state: shipped`
-    -- see module docstring Negative-spec "Stamp-before-ship ordering"; a
-    combined write would still need to apply the two field-writes in that
-    order, so splitting them buys nothing and this function does not
-    attempt it).
-
-    ``expected_text`` is the exact text `_stamp_locked`
-    observed on disk the instant its own write completed (`locked_rmw`'s
-    return value). This ship attempt re-reads the file fresh under ITS OWN
-    lock (same as `handoff_transition._ship` always did) and compares that
-    fresh read against ``expected_text`` BEFORE applying the
-    deployment_state flip: any mismatch means a peer wrote this handoff in
-    the gap between the stamp's lock release and this lock's acquisition,
-    and the write aborts via `MutateAbort` rather than silently proceeding
-    on top of content this ceremony never saw. The peer's write is
-    therefore never lost -- it stays on disk untouched, and the abort is
-    reported through `StampOutcome.errors` by the caller, the same
-    reporting path an ordinary ship failure already used before this fix.
-
-    Returns the same envelope shape as `handoff_transition._ship`
-    (exit_code/applied/message/error) so the caller needs no special-casing
-    for the CAS-abort path versus a genuine ship failure.
-    """
     import asyncio
 
     try:
@@ -628,66 +503,25 @@ async def _ship_with_cas(
     }
 
 
-# ---------------------------------------------------------------------------
-# Post-commit stamp + ship + follow-up commit — R1/R2/R3/R4 full pass
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class StampOutcome:
-    """Outcome of `post_commit_stamp_and_ship()` — the post-commit half of
-    C5's R1-R4 pass. See module docstring for field semantics."""
 
     stamped: list[str] = field(default_factory=list)
     skipped_future_dated: list[str] = field(default_factory=list)
-    #: Already in a terminal `deployment_state` — either shipped-and-archived,
-    #: or any other terminal state regardless of location (see
-    #: `_already_terminal_no_op`) — a genuine no-op, never
-    #: promoted to `failed` the way
-    #: `skipped_future_dated` is on a stamp-nothing
-    #: chain-terminal close (those name an actionable remediation; this one
-    #: names nothing left to do).
     skipped_already_terminal: list[str] = field(default_factory=list)
     errors: list[dict[str, str]] = field(default_factory=list)
-    empty_consumed_set: bool = False  # R2 loud-report flag (AC7)
+    empty_consumed_set: bool = False
     follow_up_committed_sha: Optional[str] = None
-    #: Every follow-up commit this leg landed, in the order it landed them.
     #: SUPERSEDED 2026-08 (DR-406 retired `deliverable_id` as a commit-scoping
-    #: key; C10 of `2026-08-19-commit-scoping-keys-on-the-baton.md` retired
-    #: the per-deliverable partition on this path accordingly): this is no
-    #: longer one commit per distinct `deliverable_id`. There is now ONE
-    #: follow-up commit for the whole stamped set, however many
-    #: `deliverable_id`s it spans -- a pathspec spanning several omits the
-    #: `Deliverable-Id:` trailer instead of being split or refused.
-    #: `group_stamped_by_deliverable_id` is retained but has no production
-    #: call site on this path. `follow_up_committed_sha` is the LAST of
-    #: these (the branch tip); under the current single-commit behaviour the
-    #: two agree and this list holds exactly one entry. Non-empty even when
-    #: `follow_up_error` is set, when an earlier group's commit landed
-    #: before a later one failed (a residual multi-commit shape from before
-    #: the retirement).
     follow_up_committed_shas: list[str] = field(default_factory=list)
-    #: True/False under `push_mode="sync"` (today's contract); None under
-    #: "deferred"/"none" (DEC-1) -- no push was attempted here, not a
-    #: not-yet-determined failure.
     follow_up_pushed: Optional[bool] = None
-    #: Canonical `push_status` vocabulary from `commit_pipeline.py`
     #: (`PUSH_STATUS_PUSHED`/`_FAILED`/`_DECLINED`/`_NOT_ATTEMPTED`) --
-    #: C6e's distinct declined-signal channel. A branch-policy decline
     #: (`PUSH_STATUS_DECLINED`) is deliberately NEVER routed through
-    #: `follow_up_error` -- it is not a failure, it is exactly-correct
-    #: policy behaviour (see `_commit_and_push_follow_up`'s docstring).
     follow_up_push_status: str = PUSH_STATUS_NOT_ATTEMPTED
     follow_up_error: Optional[str] = None
 
 
 def _compose_follow_up_message(stamped: list[str], committed_sha: str) -> str:
-    """Compose the follow-up commit's message body.
-
-    Not subject to AC4's golden-format parity requirement (that requirement
-    is scoped to C2's MAIN ceremony commit-message composer) — this is a
-    small single-purpose stamp-record commit.
-    """
     lines = [
         f"ceremony: stamp shipped_in={committed_sha} on consumed handoff(s)",
         "",
@@ -700,49 +534,6 @@ def _compose_follow_up_message(stamped: list[str], committed_sha: str) -> str:
 def group_stamped_by_deliverable_id(
     worktree_root: Path, stamped_paths: list[str]
 ) -> list[tuple[str, list[str]]]:
-    """Partition the stamped set into one group per `deliverable_id`.
-
-    RETIRED from production use (C10, docs/plans/2026-08-19-commit-scoping-
-    keys-on-the-baton.md): `post_commit_stamp_and_ship` no longer calls this
-    — it lands the whole stamped set in ONE follow-up commit regardless of
-    how many distinct `deliverable_id` values it spans. Kept only for the
-    test seams that still exercise it directly
-    (`test_consumed_handoff_stamp_multi_deliverable.py`,
-    `test_consumed_handoff_stamp_multi_deliverable_commit.py`) — not a
-    production call site.
-
-    Why this existed (`archive/bug-backlog/2026-08/2026-08-14-wsc-tail-
-    cannot-stamp-a-two-baton-pickup.yaml`, status: closed): `/coordinator:
-    pickup a AND b` is a documented, supported shape — "N independent
-    dispositions, not one" — and it mints one baton per artifact, each with
-    its OWN `deliverable_id`. The close then consumed all of them and asked
-    for ONE follow-up commit naming every stamped handoff, whose trailer
-    resolution (`commit_trailers._resolve_deliverable_id_from_paths`,
-    tier 0) refused to guess which of two differing `deliverable_id` values
-    applies and raised `DivergentDeliverableIdError`. That refusal was once
-    asserted here as "right and stays" — it is not: C2/C4 supersede it (tier
-    0 no longer raises on a divergent multi-deliverable pathspec), and DR-406
-    (the PM's 2026-08-19 scaling ruling) is why. This partition itself was
-    retired from production use in C10 as a direct consequence — grouping to
-    dodge a refusal that no longer fires is no longer needed. Recorded here
-    rather than deleted (per this plan's DR-406 discipline, see C6's AC13
-    treatment): a deleted rule leaves no trace of why it stopped applying,
-    and that silence is exactly how the 2026-08-10 ruling became a trap this
-    plan had to be rescued from.
-
-    Reads each artifact's `deliverable_id` through the SAME leaf-read the
-    trailer resolver's tier 0 uses (`commit_trailers.
-    _read_deliverable_id_from_frontmatter`), imported rather than
-    re-implemented — a second copy could disagree with the resolver about
-    what a given artifact's id is, and a disagreement here reproduces the
-    exact divergent-pathspec raise this grouping exists to prevent.
-
-    Artifacts carrying no `deliverable_id` at all collect into the `""`
-    group: tier 0 abstains on them exactly as before, and their commit falls
-    through to the untouched session-keyed tiers. Groups are returned sorted
-    by id (`""` first) purely for determinism — the order carries no
-    meaning, and no group's commit depends on another's.
-    """
     groups: dict[str, list[str]] = {}
     for relpath in stamped_paths:
         deliverable_id = _read_deliverable_id_from_frontmatter(worktree_root / relpath)
@@ -786,29 +577,18 @@ async def post_commit_stamp_and_ship(
     `None` (no attempt, not a failure) — leaving the branch tip to the
     caller's own single detached push spawned after the whole tail completes.
     """
-    # asyncio deferred to first use here (not module scope, and re-deferred
-    # locally in `_stamp_locked` / `_ship_with_cas`
-    # below for the same reason) — a module-scope `import asyncio` dragged
-    # asyncio.base_events (~8ms) into every eager-loaded op import path that
-    # never calls post_commit_stamp_and_ship. Spec:
-    # docs/plans/2026-07-24-canonical-resolution-engine.md task W0-1.
     import asyncio
 
     if not chain_terminal:
         return StampOutcome()
 
-    # R1/AC6 — liveness re-check: re-derive fresh, do NOT reuse the initial
-    # (pre-lock) resolve's consumed set.
     redrived = redrive_consumed_set(worktree_root, session_id)
     redrived_paths = [p for p, _fm in redrived]
     fm_by_path: dict[str, dict[str, Any]] = dict(redrived)
 
     if not redrived_paths:
-        # R2 (AC7): chain-terminal close, empty re-derived set at stamp
-        # time — loud report, never a failure.
         return StampOutcome(empty_consumed_set=True)
 
-    # R3 (AC8) — future-dated plausibility guard.
     accepted_paths, rejected_paths = reject_future_dated(redrived_paths)
 
     outcome_stamped: list[str] = []
@@ -818,27 +598,12 @@ async def post_commit_stamp_and_ship(
     for relpath in accepted_paths:
         handoff_abs = str(worktree_root / relpath)
 
-        # Already-terminal no-op guard: a predecessor reached a terminal
-        # `deployment_state` — stamped `shipped_in`/`shipped` directly via
-        # `archive-stamp-cli ship-handoff`, or flipped `closed`/`abandoned`/
-        # `continued` via `handoff-reconcile-close-terminal`. The shipped
-        # case only no-ops once archived (`handoff.stamp` refuses any
-        # archive/handoffs/ path by design); the non-shipped-terminal case
-        # no-ops regardless of location, since `shipped_in` must never be
-        # written for undelivered work (see `_already_terminal_no_op`'s
-        # docstring) — recognize the no-op here, before calling the verb,
-        # rather than routing around its containment guard or reporting its
-        # refusal as a failure.
         if _already_terminal_no_op(relpath, fm_by_path.get(relpath, {})):
             outcome_already_terminal.append(relpath)
             continue
 
         # R4(b)+(c), stamp-BEFORE-ship (see module docstring "DEVIATION" /
         # Negative-spec "Stamp-before-ship ordering is LOAD-BEARING"):
-        # shipped_in must already be on disk before deployment_state flips to
-        # shipped, or schema_validate.py's _cf_shipped_in_required (Rule
-        # A3a-2) hard-fails the ship transition for any handoff created on or
-        # after 2026-05-29.
         stamp_attempt = await _stamp_locked(
             relpath, handoff_abs, committed_sha, repo_root=repo_root
         )
@@ -850,10 +615,6 @@ async def post_commit_stamp_and_ship(
 
         stamp_applied = stamp_attempt.applied
 
-        # Row 6: ship is a CAS against the exact text the stamp write just
-        # produced -- a peer write landing in the gap between the stamp's
-        # lock release and this lock's acquisition aborts the ship rather
-        # than silently losing that write (see `_ship_with_cas`'s docstring).
         ship_reply = await _ship_with_cas(
             relpath, stamp_attempt.result_text, worktree_root, repo_root
         )
@@ -862,14 +623,9 @@ async def post_commit_stamp_and_ship(
             outcome_errors.append(
                 {"path": relpath, "error": ship_reply.get("error", "ship failed")}
             )
-            # Fall through: if the stamp mutated the file, it MUST still be
-            # staged into the follow-up commit (AC17 — never left dirty),
-            # even though the ship half of this candidate failed.
 
         if stamp_applied or ship_reply.get("applied"):
             outcome_stamped.append(relpath)
-        # Neither mutation applied (both were pre-existing idempotent
-        # no-ops) — nothing changed on disk for this path, nothing to stage.
 
     if not outcome_stamped:
         return StampOutcome(
@@ -878,17 +634,6 @@ async def post_commit_stamp_and_ship(
             errors=outcome_errors,
         )
 
-    # ONE follow-up commit for the whole stamped set, regardless of how many
-    # distinct `deliverable_id` values it spans (C10, docs/plans/2026-08-19-
-    # commit-scoping-keys-on-the-baton.md). `group_stamped_by_deliverable_id`
-    # partitioned this set to dodge `DivergentDeliverableIdError` from tier 0
-    # of the trailer resolver -- that refusal existed because tier 0 could
-    # not tell which of two differing `deliverable_id` values belonged on one
-    # commit. C2/C4 supersede it: tier 0 no longer refuses on a divergent
-    # multi-deliverable pathspec (the now-omit-safe tier 0/commit_anchors
-    # stack), so the workaround this loop existed for no longer applies. The
-    # single-deliverable close -- every close before and after this change --
-    # still lands byte-for-byte the same single commit it always did.
     (
         follow_up_sha,
         pushed,
@@ -904,21 +649,6 @@ async def post_commit_stamp_and_ship(
     )
     follow_up_shas: list[str] = [follow_up_sha] if follow_up_sha else []
 
-    # Sweep occasion (fleet.archive_completed_handoffs' K-047 gap, `state/
-    # audits/2026-08-27-the-archival-occasion-map-re-verified.md`): this
-    # follow-up commit lands via `git_native.commit_scoped` directly, never
-    # through `run_commit_pipeline`, so `commit_pipeline.
-    # _run_in_plane_archive_sweep` -- the sweep every ordinary ceremony
-    # commit rides -- is NEVER reached by this path. Fired here, AFTER
-    # `follow_up_sha` confirms the commit actually landed (never before --
-    # `session.sweep_consumed_handoffs`'s own rails refuse a candidate whose
-    # `shipped_in` does not resolve against on-disk git history, so firing
-    # pre-commit would archive nothing and waste the pass). Gated on
-    # `follow_up_sha` alone, not on push outcome: the sweep only needs the
-    # commit to exist locally (`plan_sweep`'s `shipped_in` resolvability rail
-    # reads local git history, not the remote), and a push failure/decline
-    # must not suppress the one occasion this workstream's terminal close
-    # gets to archive what it just stamped.
 
     return StampOutcome(
         stamped=outcome_stamped,
@@ -931,8 +661,6 @@ async def post_commit_stamp_and_ship(
         follow_up_push_status=follow_up_push_status,
         follow_up_error=follow_up_error,
     )
-
-
 
 
 def _commit_and_push_follow_up(
@@ -1023,21 +751,7 @@ def _commit_and_push_follow_up(
         msg_path = fh.name
 
     try:
-        # Routed through the computed selector (not a raw `add_paths` +
-        # `commit_with_message_file` pair) -- see `git_native.commit_scoped`'s
-        # docstring. `stamped_paths` is guaranteed non-empty here (the
-        # caller returns early on an empty `outcome_stamped`); `commit_scoped`
-        # stages internally on the AGREE branch and never re-derives staged
         # content from the worktree on the DIVERGED branch, closing the same
-        # 506748a0 hazard the main ceremony commit is already routed around.
-        # opro-01 C-01 (review finding, s1): this flow is the same
-        # commit-then-own-sync-push shape `run_commit_pipeline` has, so it had
-        # the same two-publisher race -- the post-commit hook detaches and
-        # pushes while this call's own `push_with_retry` below races it. Tied
-        # to `push_mode` for the same reason as the pipeline: on
-        # `deferred`/`none` this call does NOT push (the guard below returns
-        # early), so the hook's push is the only one and suppressing it would
-        # strand the commit.
         commit_result = git_native.commit_scoped(
             stamped_paths,
             msg_path,
@@ -1057,32 +771,7 @@ def _commit_and_push_follow_up(
     rev_result = git_native.rev_parse_head(worktree_root)
     follow_up_sha = rev_result.stdout.strip() if rev_result.ok else None
 
-    # Post-commit claim release (C3d, docs/plans/2026-08-11-claim-release-
-    # and-the-gate-that-cannot-clear.md): eligible -- same worktree,
-    # `stamped_paths` is already repo-relative (from `redrive_consumed_set`
-    # -> `find_all_consumed_handoffs`, wire-id relpaths -- see
-    # `_already_terminal_no_op`'s docstring for the same "always
-    # forward-slash" convention), and `session_id` is `post_commit_stamp_
-    # and_ship`'s own required caller-supplied param: the SAME id
-    # `redrive_consumed_set(worktree_root, session_id)` above just used to
-    # derive this closing session's OWN consumed-handoff set -- i.e. this
-    # is genuinely the committing session's own sid, not a guess
-    # (`git_native.commit_scoped`'s own comment names exactly this
-    # ambiguity as the reason it does not wire release in itself). Run
-    # synchronously here -- this function already executes off the event
-    # loop via the caller's `asyncio.to_thread(_commit_and_push_follow_up,
-    # ...)`, so a second `to_thread` hop would only add a needless
-    # thread-pool round trip. Failure direction mirrors every other C3
-    # site: a release failure must never fail a commit that already
-    # landed -- the commit above is the durable outcome; a retained stale
-    # claim is the safe residue.
-    # `session_id` is Optional on this signature, and an unattributable
-    # release is not a release: releasing under an unknown sid would be a
-    # guess at authorship, which is the one thing this whole seam refuses to
-    # do. Skipping is the same fail-safe RETAIN direction every other C3 site
     # takes -- and skipping EXPLICITLY, rather than letting a None fall into
-    # the `except` below, keeps a genuine failure distinguishable from a
-    # caller that simply had no sid to give.
     try:
         if session_id:
             session_scope.release_committed_claims(
@@ -1096,17 +785,9 @@ def _commit_and_push_follow_up(
         )
 
     # Use the canonical PUSH_MODE_SYNC
-    # constant (commit_pipeline.py's own enum) instead of a bare string
-    # literal so this stays in sync if the canonical value ever changes.
     if push_mode != PUSH_MODE_SYNC:
         return follow_up_sha, None, PUSH_STATUS_NOT_ATTEMPTED, None
 
-    # C6e: routed through `push_with_retry` (the same branch-policy gate,
-    # skip markers, operator line, and reject-detect/rebase/retry ladder the
-    # main ceremony commit's push and the sibling `post_commit_tail`
-    # follow-up push both go through) rather than a second inline
-    # resolve/gate call site.
-    # elapsed-aware, not the flat slice — see _ceremony_push_budget.
     push_outcome = push_with_retry(
         worktree_root,
         budget_secs=_ceremony_push_budget(perf_counter() - _pre_push_elapsed),
@@ -1114,33 +795,11 @@ def _commit_and_push_follow_up(
     push_status = derive_push_status(push_outcome)
 
     if push_status == PUSH_STATUS_PUSHED:
-        # `push_with_retry` can
-        # fetch+`git rebase --onto` this follow-up commit on a rejected
         # push before re-pushing, which REWRITES its SHA. The pre-push
-        # `follow_up_sha` captured above is therefore stale in exactly the
-        # retry case this ladder exists to handle. Re-resolve HEAD now,
-        # after the push actually landed, so the SHA persisted as
-        # `shipped_in:` (durable audit data) names the commit that is
-        # really on the remote. Only the landed path pays this second
-        # `rev-parse` — decline/no-remote/not-attempted/failure paths below
-        # never rewrite anything, so they keep the pre-push value untouched.
-        # If the re-read itself fails, fall back to the pre-push SHA rather
-        # than downgrading a known-good value to None — it is correct
-        # unless a rebase-retry actually fired, and a stale-but-real SHA is
-        # a better audit trail than a hole. state/bug-backlog/2026-08-11-
-        # run-commit-pipeline-reports-a-concurrent-0a91ea7dc77b.yaml (P1):
-        # that bare re-read fired on every landed push, not just a
-        # rebase-retry, and could silently adopt a peer's push landing in
-        # this window. `resolve_post_push_sha` re-reads HEAD exactly as
-        # before but only adopts it once its tree matches `follow_up_sha`'s
-        # (see that helper's own docstring); a mismatch keeps `follow_up_sha`.
         landed_sha = resolve_post_push_sha(worktree_root, follow_up_sha)
         return landed_sha, True, push_status, None
     if push_status == PUSH_STATUS_FAILED:
         reason = push_outcome.message or "; ".join(push_outcome.failed) or "unknown push failure"
         return follow_up_sha, False, push_status, f"git push failed: {reason}"
     # PUSH_STATUS_DECLINED / PUSH_STATUS_NO_REMOTE -- no push landed, but
-    # this is NOT an error and NOT `pushed=False` (see docstring above): a
-    # policy decline or a missing remote is `push_with_retry`'s own honest
-    # "did not push, on purpose/by environment" outcome.
     return follow_up_sha, None, push_status, None

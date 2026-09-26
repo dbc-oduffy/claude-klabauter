@@ -78,19 +78,10 @@ EXIT_OK = 0
 EXIT_PRODUCER_FAILURE = 1
 EXIT_INVALID_INVOCATION = 2
 
-#: Generator-provenance declaration: emit_claims() writes to `<out_stem>.
-#: claims.json` / `<out_stem>.claims.meta.json`, where out_stem is a
-#: producer-supplied path — never a fixed repo location. No tracked artifact
-#: is emitted by this module itself.
 GENERATES: list = []
 
 
 def _parse_rfc3339_tz_aware(ran_at: str) -> datetime | None:
-    """Parses `ran_at` as an RFC3339 timezone-aware datetime, or returns None
-    for anything that fails to parse, parses as a date-only value, or parses
-    naive. A naive parse (no offset in the source string) is the trap this
-    function exists to close — `datetime.fromisoformat` accepts a naive
-    string without complaint."""
     if not ran_at or not ran_at.strip():
         return None
     text = ran_at.strip()
@@ -106,9 +97,6 @@ def _parse_rfc3339_tz_aware(ran_at: str) -> datetime | None:
 
 
 def _validate_pipeline(pipeline: str) -> str | None:
-    """Returns the stripped pipeline string when non-empty, else None.
-    Never derives a value from any other input — the caller must reject
-    None outright, never substitute the producer slug."""
     if pipeline is None:
         return None
     stripped = pipeline.strip()
@@ -118,28 +106,6 @@ def _validate_pipeline(pipeline: str) -> str | None:
 def _write_atomic_pair(
     claims_bytes: bytes, meta_bytes: bytes, claims_path: Path, meta_path: Path
 ) -> None:
-    """Writes both files to temp siblings, validates nothing further (the
-    caller already validated content), then `os.replace()`s both only after
-    both temps are complete. Before either destination is touched, any
-    pre-existing file at that destination is moved aside to its own backup
-    temp sibling (never copied — `os.replace` on the same filesystem is a
-    rename, so the backup step cannot itself corrupt the original bytes).
-
-    On any exception — including one raised by the second `os.replace`,
-    after the first has already landed — every backed-up original is moved
-    back to its destination (restoring pre-existing content byte-for-byte),
-    any newly-created destination that has no backup (a fresh stem) is
-    unlinked, and every write-temp file is removed. Restoring a caller's
-    pre-existing data is NOT best-effort: a failure to move a backup back is
-    a louder, different exception than the one that triggered the unwind —
-    swallowing it would silently leave a mangled stem, the exact defect this
-    function exists to close. Cleanup of this module's own now-unneeded
-    backup/temp files, by contrast, stays best-effort.
-
-    Success path: both destinations replaced, both backups (if any) are
-    unlinked, and both write-temps are consumed by `os.replace`. Raises the
-    triggering exception after cleanup; the caller maps that to exit code 1.
-    """
     claims_dir = claims_path.parent
     meta_dir = meta_path.parent
     tmp_claims: str | None = None
@@ -158,10 +124,6 @@ def _write_atomic_pair(
             f.write(meta_bytes)
 
         if claims_path.exists():
-            # mkstemp here is used purely for atomic, collision-free name
-            # reservation — the empty file it creates is discarded by the
-            # os.replace below, which overwrites it with the real backup
-            # content via rename.
             fd_bk, backup_claims = tempfile.mkstemp(prefix=".claims-emit.bak.", suffix=".tmp", dir=str(claims_dir))
             os.close(fd_bk)
             os.replace(claims_path, backup_claims)
@@ -179,35 +141,23 @@ def _write_atomic_pair(
         meta_replaced = True
         tmp_meta = None
 
-        # Backup
-        # discard moved out of a shared `finally` and gated on the outcome:
-        # this branch only runs once BOTH destinations have replaced
-        # successfully, so the backups are genuinely superseded and safe to
-        # drop. Our own temp file, so best-effort unlink is fine here.
         for backup in (backup_claims, backup_meta):
             if backup is not None:
                 try:
                     os.unlink(backup)
                 except OSError:
-                    pass  # our own superseded backup; already gone is fine
+                    pass
         backup_claims = None
         backup_meta = None
     except Exception:
         if backup_claims is not None:
-            # Original pre-existed and was moved aside — restore it
-            # unconditionally, whether or not this run's replace of
-            # claims_path itself succeeded before the failure occurred.
-            # If THIS os.replace itself raises, backup_claims is deliberately
-            # left non-None and untouched: it is the only surviving copy of
-            # the caller's original data, so it must never be deleted (see
-            # docstring — restore failure surfaces loudly, not silently).
             os.replace(backup_claims, claims_path)
             backup_claims = None
         elif claims_replaced:
             try:
                 os.unlink(claims_path)
             except OSError:
-                pass  # rollback cleanup of our own replaced claims file; already gone is fine
+                pass
         if backup_meta is not None:
             os.replace(backup_meta, meta_path)
             backup_meta = None
@@ -215,13 +165,13 @@ def _write_atomic_pair(
             try:
                 os.unlink(meta_path)
             except OSError:
-                pass  # rollback cleanup of our own replaced meta file; already gone is fine
+                pass
         for tmp in (tmp_claims, tmp_meta):
             if tmp is not None:
                 try:
                     os.unlink(tmp)
                 except OSError:
-                    pass  # our own temp file; already gone is fine
+                    pass
         raise
 
 
@@ -234,13 +184,6 @@ def emit_claims(
     out_stem: str | os.PathLike[str],
     schema_path: str | os.PathLike[str] | None = None,
 ) -> int:
-    """Validates invocation flags and per-record claim shape, then writes
-    `<out_stem>.claims.json` (bare top-level array) and
-    `<out_stem>.claims.meta.json` (object carrying at minimum `ran_at` and
-    `pipeline`) as an atomic pair. Returns an exit code per this module's
-    documented taxonomy — see module docstring — rather than raising, for
-    every failure this module anticipates.
-    """
     if not producer or not producer.strip():
         print("claims-emit: --producer is required and must be non-empty", file=sys.stderr)
         return EXIT_INVALID_INVOCATION
@@ -280,10 +223,6 @@ def emit_claims(
         try:
             errors = validate_frontmatter(record, resolved_schema_path)
         except (FileNotFoundError, json.JSONDecodeError) as exc:
-            # A
-            # missing/malformed schema file is an environment/deployment
-            # defect, not a per-record content failure; misreporting it as
-            # "record [i] failed validation" hides the real fault.
             print(f"claims-emit: schema at {resolved_schema_path} is unusable ({type(exc).__name__}): {exc}", file=sys.stderr)
             return EXIT_PRODUCER_FAILURE
         except SchemaVersionError as exc:

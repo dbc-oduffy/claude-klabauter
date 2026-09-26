@@ -1,22 +1,3 @@
-"""
-coordinator_core.orient_assemble.tests.test_narration_and_constructor_discipline
-— C3 AC(e): narration[] is NOT a 1:1 reproduction of the old surface step
-sequence, and every judgment_point is built via the shipped
-`contract/decision_object/judgment.py` constructors, not a hand-assembled
-dict. The assembler is held to `computed-skills-conversion-checklist.md`
-on the COMPUTE side, not only the three caller surfaces (DR-090).
-
-Directive shape note: `directives[]` entries are plain dicts by design —
-every reader module's own docstring documents this as an intentional
-mirror of `coordinator_core.pickup_assemble`'s directive shape ("no
-separate shipped directive constructor exists"), so this file does not
-assert directives were built via a constructor that does not exist. It
-instead asserts every directive conforms to the DoE schema-of-record's
-required directive key set (id, cli, args, depends_on, already_satisfied)
-— the structural contract that DOES apply.
-
-Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420, chunk C3
-"""
 
 from __future__ import annotations
 
@@ -40,19 +21,10 @@ _JUDGMENT_POINT_CONSTRUCTOR_KEYS = set(
     ).keys()
 )
 
-#: `reportable` is emitted only when the builder classified the point (see
-#: `judgment.partition_reportable`), so it is optional on this shape rather
-#: than part of the constructor's unconditional key set. Pinned as a named
-#: exception, not by loosening the equality above -- an unexpected key is
-#: still a failure.
 _OPTIONAL_JUDGMENT_POINT_KEYS = {"reportable"}
 
 
 def _all_reader_results(monkeypatch):
-    """Collect real (non-mocked-away) directive/judgment_point content by
-    driving each family with just enough of a deterministic fixture to
-    produce at least one entry of each shape, reusing the same fixtures
-    exercised in test_round_trip_parity.py."""
     monkeypatch.setattr(rco, "_read_em_environment", lambda: ReaderResult())
     monkeypatch.setattr(rco, "_read_memo_surface", lambda mode, **kw: ReaderResult())
     monkeypatch.setattr(rco, "_read_rag_staleness", lambda: ReaderResult())
@@ -131,10 +103,6 @@ def test_worktree_sweep_dirty_judgment_points_are_built_via_the_shipped_construc
 
 
 def test_narration_is_not_a_verbatim_reproduction_of_any_reader_directive_detail(monkeypatch):
-    """The assembler's own narration prose must not degenerate into pasting
-    the raw step-body text it computed over. Checked at the brief()-skeleton
-    layer (the level narration is actually emitted from today) plus a
-    negative check against a synthesized old-style step string."""
     old_style_step_text = (
         "Step 1: Check EM environment. Step 2: Run addon health scan. "
         "Step 3: Surface cross-repo memos."

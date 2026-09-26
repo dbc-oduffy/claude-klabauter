@@ -87,10 +87,6 @@ def _two_row_body(gated_row_extra: str = "") -> str:
 
 
 def test_frontmatter_row_gate_withholds_the_row_from_every_wave(tmp_path):
-    """Shape 1 (issue repro): a frontmatter `external_gate` entry carrying
-    `row: T1b` must keep T1b out of the emitted script entirely, and it
-    must be named in the "ROWS THIS SCRIPT DOES NOT RUN" header instead of
-    silently vanishing."""
     extra_frontmatter = (
         "external_gate:\n"
         "  - id: claude-klabauter-inbox-delivery\n"
@@ -112,9 +108,6 @@ def test_frontmatter_row_gate_withholds_the_row_from_every_wave(tmp_path):
 
 
 def test_row_level_plain_string_gate_list_withholds_the_row_from_every_wave(tmp_path):
-    """Shape 2 (issue repro): a row-level `external_gate` sequence of plain
-    strings (not mappings) must gate that row the same as a well-formed
-    mapping with `cleared: false`."""
     gated_row_extra = (
         "  external_gate:\n"
         "    - host-retrieval-runtime\n"
@@ -130,11 +123,6 @@ def test_row_level_plain_string_gate_list_withholds_the_row_from_every_wave(tmp_
 
 
 def _phase_and_agent_ids(script: str) -> str:
-    """Return the emitted `meta.phases` bracket contents plus every wave
-    body -- i.e. everything BUT the "ROWS THIS SCRIPT DOES NOT RUN" header
-    -- so a row id's appearance there, and only there, is unambiguous
-    evidence it was actually scheduled into a wave rather than merely
-    mentioned in passing."""
     if "ROWS THIS SCRIPT DOES NOT RUN" in script:
         return script.split("ROWS THIS SCRIPT DOES NOT RUN", 1)[0]
     return script

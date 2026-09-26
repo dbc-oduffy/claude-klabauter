@@ -42,16 +42,6 @@ DR344_BAR_MS = 500
 
 
 def self_process_ms() -> Optional[int]:
-    """This process's own process time (user + system, milliseconds), via
-    `os.times()` -- portable across POSIX and Windows. `os.times()` reports
-    cumulative time since process start, which is exactly the door's own
-    work for these one-shot CLI invocations, so no snapshot/delta is needed
-    here (contrast `suite_process_ms`, which DOES need one because the
-    aggregate keeps accruing across the spawned child's whole lifetime).
-
-    Returns None (never raises) if `os.times()` itself is unavailable on
-    this platform/build -- the caller renders that as "unavailable".
-    """
     try:
         t = os.times()
         return round((t.user + t.system) * 1000)
@@ -60,19 +50,6 @@ def self_process_ms() -> Optional[int]:
 
 
 def snapshot_children_times() -> Optional[tuple[float, float]]:
-    """POSIX-only snapshot of `os.times()`'s `children_user`/`children_system`
-    fields, taken BEFORE the suite subprocess is spawned. Feed the return
-    value into `suite_process_ms` as `before`, after taking a second
-    snapshot (`after`) once the spawned process has been waited on.
-
-    `children_user`/`children_system` cover every waited-for descendant,
-    xdist workers included, which is why this is the suite's own aggregate
-    and not merely the direct child's time.
-
-    Returns None on Windows (no `os.times()` children fields there -- use
-    the Job Object accounting path instead, via the `job_handle` argument
-    to `suite_process_ms`) or on any read failure.
-    """
     if os.name == "nt":
         return None
     try:
@@ -83,15 +60,6 @@ def snapshot_children_times() -> Optional[tuple[float, float]]:
 
 
 def _windows_job_process_ms(job_handle) -> Optional[int]:
-    """Read `TotalUserTime + TotalKernelTime` (100ns units) off a Windows
-    Job Object via `QueryInformationJobObject(JobObjectBasicAccountingInformation)`,
-    converted to milliseconds. Must be called BEFORE the caller's own
-    `_close_windows_job_object` releases the handle -- once closed, the
-    accounting is gone.
-
-    Returns None on any non-Windows platform, a `None` handle, or any
-    failure reading the accounting block (never raises).
-    """
     if os.name != "nt" or job_handle is None:
         return None
     try:
@@ -134,17 +102,6 @@ def suite_process_ms(
     after: Optional[tuple[float, float]] = None,
     job_handle=None,
 ) -> Optional[int]:
-    """The spawned suite's aggregate process time, milliseconds.
-
-    POSIX: `after - before` on the `(children_user, children_system)` pairs
-    from `snapshot_children_times`, taken before the spawn and after the
-    wait. Windows: reads the Job Object the door already assigns the child
-    to (`_assign_windows_job_object`) via `_windows_job_process_ms`, which
-    the caller must do BEFORE its own `_close_windows_job_object`.
-
-    Returns None (never raises) whenever the needed inputs are absent or
-    unreadable -- the caller renders that as "unavailable".
-    """
     if os.name == "nt":
         return _windows_job_process_ms(job_handle)
     if before is None or after is None:
@@ -157,9 +114,6 @@ def suite_process_ms(
 
 
 def format_budget_line(self_ms: Optional[int], suite_ms: Optional[int]) -> str:
-    """The one stderr line both doors print per invocation. `<n|unavailable>`
-    on either figure independently -- one being readable never depends on
-    the other."""
     self_str = str(self_ms) if self_ms is not None else "unavailable"
     suite_str = str(suite_ms) if suite_ms is not None else "unavailable"
     return (
@@ -169,10 +123,6 @@ def format_budget_line(self_ms: Optional[int], suite_ms: Optional[int]) -> str:
 
 
 def format_breach_line(self_ms: Optional[int]) -> Optional[str]:
-    """Returns the DR-344 breach line when `self_ms` exceeds the 500ms
-    brightline, else None. An unreadable `self_ms` (None) never breaches --
-    there is nothing to compare, so no line is emitted for it.
-    """
     if self_ms is None or self_ms <= DR344_BAR_MS:
         return None
     return (
@@ -183,8 +133,6 @@ def format_breach_line(self_ms: Optional[int]) -> Optional[str]:
 
 
 def emit_budget_lines(self_ms: Optional[int], suite_ms: Optional[int]) -> None:
-    """Print the budget line, then the breach line if any, to stderr. The
-    single call site both doors wire into their own suite-spawn helper."""
     print(format_budget_line(self_ms, suite_ms), file=sys.stderr)
     breach = format_breach_line(self_ms)
     if breach is not None:

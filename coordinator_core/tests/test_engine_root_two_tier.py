@@ -1,24 +1,3 @@
-"""
-coordinator_core/tests/test_engine_root_two_tier.py
-
-Chunk C4a (wrapper half): verifies
-`coordinator_core.engine_root.coordinator_engine_root_with_class()` — which
-loads C3's shim (`coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py`) BY
-PATH and wraps its `resolve_claude_klabauter_root_with_class()` rather than
-reimplementing the published-engine-vs-live-working-tree gate — agrees with
-the shim itself, and that install's derived forwarder name set resolves
-under both resolution classes.
-
-Spec backlink: pln-two-tier-engine-root-resolutio-024269 § C4 (wrapper half)
-
-Negative-spec: does NOT re-derive or hardcode the forwarder count (351 on
-this tree at authoring time) — `_derive_agent_helper_target_map` is called
-live so the test tracks `coordinator/bin/`'s actual contents, never a
-frozen number. Does NOT assert the claude-klabauter-vs-published gap is empty or of
-any specific size — the gap is real (C4b's future exec-time gate target,
-not this chunk's), and this test asserts its SHAPE (some names resolve only
-under live-tree) rather than papering over it.
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -52,10 +31,6 @@ def _load_shim_for_test():
 
 @pytest.fixture(autouse=True)
 def _reset_wrapper_memos():
-    """The wrapper's shim-load memo and gate-answer memo are
-    interpreter-lifetime state (mirrors `coordinator_doe_root`'s own
-    `_reset_doe_root_cache` seam) — reset around every test in this module
-    so no test's resolution pins the answer for a later one."""
     claude_klabauter_root._reset_shim_cache()
     claude_klabauter_root._reset_gate_memo()
     yield
@@ -106,11 +81,6 @@ def test_shim_present_and_loadable():
 
 @pytest.mark.real_home
 def test_cross_entrypoint_agreement():
-    """(a) The shim's own `resolve_claude_klabauter_root_with_class()` and
-    `coordinator_engine_root_with_class()` agree — same resolution class,
-    same effective root — over the machine's live registry state. This is
-    what makes the C3<->C4 agreement a CHECKED invariant, not a documented
-    drift seam."""
     shim = _load_shim_for_test()
     expected_root, expected_class = shim.resolve_claude_klabauter_root_with_class()
     actual_root, actual_class = claude_klabauter_root.coordinator_engine_root_with_class()
@@ -119,17 +89,6 @@ def test_cross_entrypoint_agreement():
     assert _normalize_root(actual_root) == _normalize_root(expected_root)
 
 
-# The `real_home` cross-entrypoint
-# agreement test above depends on the box's own live registry contents and
-# cannot guarantee it exercises the wrapper's cheap short-circuit (the
-# `repos.claude_klabauter`-absent branch in `coordinator_engine_root_with_class`
-# that reaches into the shim's `_ml_dir`/`_registry_value`/
-# `_resolve_claude_klabauter_root` helpers directly rather than calling
-# `resolve_claude_klabauter_root_with_class()`). This fixture pins that branch
-# deterministically: `repos.claude_klabauter` is never written to the
-# synthetic registry at all, so the wrapper MUST take the short-circuit
-# while the shim's own `resolve_claude_klabauter_root_with_class()` runs its full
-# ladder — and both are asserted to still agree.
 @pytest.fixture
 def _short_circuit_fixture(tmp_path, monkeypatch):
     settings_home = tmp_path / "settings-home"
@@ -155,12 +114,6 @@ def _short_circuit_fixture(tmp_path, monkeypatch):
 
 
 def test_cross_entrypoint_agreement_short_circuit_branch(_short_circuit_fixture):
-    """`repos.claude_klabauter` is absent from the registry — the wrapper's
-    cheap short-circuit (step 2, see `coordinator_engine_root_with_class`'s
-    own docstring) fires, calling `shim._ml_dir()`/`shim._resolve_claude_klabauter_root()`
-    directly instead of `shim.resolve_claude_klabauter_root_with_class()`. Both must
-    still agree with the shim's own full-ladder answer — this is the
-    mechanical backstop the module docstrings (both files) point to."""
     shim = _load_shim_for_test()
     expected_root, expected_class = shim.resolve_claude_klabauter_root_with_class()
     actual_root, actual_class = claude_klabauter_root.coordinator_engine_root_with_class()
@@ -188,14 +141,6 @@ def _agent_bin_dir_for_published(shim) -> Optional[Path]:
 
 
 def _exec_able(bin_dir: Path, on_disk_name: str) -> bool:
-    """Mirrors `exec_cli`'s own resolved-target usability check
-    (`os.path.isfile` + `os.access(..., os.R_OK)`) rather than the
-    lower-level POSIX-exec-bit/PATHEXT probe `_is_executable` uses for the
-    `coordinator/bin` sentinel — every forwarder target here is a Python
-    CLI run in-process via `runpy`/interpreter-targeted `execv` (see
-    `exec_cli`'s own docstring), so "exec-able" for this test's purposes
-    means "present and readable at the resolved path", exactly what
-    `exec_cli` itself checks before running a target."""
     target_path = bin_dir / on_disk_name
     return target_path.is_file() and os.access(target_path, os.R_OK)
 
@@ -219,7 +164,6 @@ def test_exhaustive_forwarder_target_map_two_tier_shape():
     live_map = _derive_agent_helper_target_map(live_bin_dir)
     assert live_map, "expected a non-empty forwarder target map on this tree"
 
-    # Exhaustive over EVERY derived name — no sampling.
     missing_under_live = [
         name for name, on_disk in live_map.items() if not _exec_able(live_bin_dir, on_disk)
     ]
@@ -241,9 +185,6 @@ def test_exhaustive_forwarder_target_map_two_tier_shape():
     live_only = sorted(set(live_map) - set(published_map))
     published_only = sorted(set(published_map) - set(live_map))
 
-    # SHAPE assertion, per the brief: this gap is real and is what C4b will
-    # gate against at exec time. Do not weaken this into "gap is empty" and
-    # do not edit the shim to close it — both are out of scope for C4a.
     assert live_only, (
         "expected a non-empty claude-klabauter-only forwarder set under the published class "
         "(the two derived sets are documented as NOT nested on this tree) — if this "
@@ -265,17 +206,6 @@ def test_exhaustive_forwarder_target_map_two_tier_shape():
         assert name not in published_map, (
             f"{name!r} was asserted live-tree-only but is present in the published map"
         )
-
-
-# --- C5: engine/edit skew advisory ------------------------------------------
-#
-# Spec backlink: pln-two-tier-engine-root-resolutio-024269 § C5
-#
-# Fully synthetic registry fixture below (own settings-home under tmp_path,
-# never the machine's real registry) — deliberately does NOT carry the
-# `real_home` marker the exhaustive tests above need, since this section
-# controls both the dual- and single-tier registration states directly
-# rather than depending on the box's own live registry contents.
 
 
 @pytest.fixture
@@ -322,9 +252,6 @@ def _skew_fixture(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT_SKEW_QUIET", raising=False)
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
-    # The advisory is opt-in (PM-ruled 2026-08-10). Every test below that
-    # asserts on emitted text opts in here; the default-silent contract gets
-    # its own tests, which delete this var again.
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT_SKEW_VERBOSE", "1")
 
     return SimpleNamespace(
@@ -403,8 +330,6 @@ def test_shim_skew_advisory_kill_switch_falsey_value_does_not_suppress(
     _skew_fixture, monkeypatch, capsys
 ):
     # CLAUDE_KLABAUTER_ROOT_SKEW_QUIET=0/"false" must NOT be
-    # treated as a truthy kill-switch (a bare `.get(...)` truthy check would
-    # suppress on any non-empty string, including these).
     _skew_fixture.write_registry(claude_klabauter=True)
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT_SKEW_QUIET", "0")
     shim = _load_shim_for_test()
@@ -414,13 +339,6 @@ def test_shim_skew_advisory_kill_switch_falsey_value_does_not_suppress(
     assert cls == shim.RESOLUTION_RESOLVED_ENGINE
     captured = capsys.readouterr()
     assert "note:" in captured.err
-
-
-# --- opt-in contract (PM-ruled 2026-08-10) ---------------------------------
-#
-# The advisory rode on every forwarder's stderr, so it surfaced on the
-# `claude` startup banner — PM-facing chrome about an engine-side
-# configuration. Silence is now the default; VERBOSE is the only way in.
 
 
 def test_shim_skew_advisory_silent_by_default(_skew_fixture, monkeypatch, capsys):
@@ -450,8 +368,6 @@ def test_shim_skew_advisory_falsey_verbose_stays_silent(
 
 
 def test_shim_skew_advisory_quiet_beats_verbose(_skew_fixture, monkeypatch, capsys):
-    """An install that already exports the old kill-switch keeps its silence
-    even if something downstream sets VERBOSE."""
     _skew_fixture.write_registry(claude_klabauter=True)
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT_SKEW_VERBOSE", "1")
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT_SKEW_QUIET", "1")
@@ -529,37 +445,8 @@ def test_wrapper_skew_advisory_kill_switch(_skew_fixture, monkeypatch, capsys):
     assert captured.err == ""
 
 
-# --- C4b: per-target existence gate on the published-engine rung -----------
-#
-# Spec backlink: pln-two-tier-engine-root-resolutio-024269
-# (chunk C4, the `exec_cli` half) + tasks/two-tier-engine-root-exec/briefs/C4b.md
-#
-# `exec_cli` only ever exercises Windows' `_run_target_in_process` leg in
-# this suite (`os.name == "nt"` on this box) — its `sys.exit(code)` is
-# caught here via `pytest.raises(SystemExit)` rather than actually
-# replacing the interpreter, which is what the POSIX `os.execv` leg would
-# do if exercised directly (out of scope: that leg is untouched by this
-# chunk, see the shim's own negative-spec docstring).
-
-
-# --- C2 (2026-08-12 dual-boot plan): rung-1.5 pointer must not pre-empt the
-# DR-132 gate. Four tests THROUGH THE WRAPPER
-# (`coordinator_core.engine_root.coordinator_engine_root_with_class`) — the
-# `_short_circuit_fixture`/`_skew_fixture` cases above exercise the wrapper
-# too, but none of them pin a session root that the gate confirms is NOT a
-# working repo while `.claude-klabauter-live-root` is ALSO present, which is exactly the
-# defect's reproduction shape (see plan § Problem).
-#
-# Spec backlink: pln-arm-the-klabauter-dual-boot-th-f7169a
-
-
 @pytest.fixture
 def _dual_boot_fixture(tmp_path, monkeypatch):
-    """A synthetic registry with `.claude-klabauter-live-root` present (rung 1.5 pointer)
-    AND `repos.claude_klabauter` registered — the dual-boot shape. Session
-    root is confirmed NOT a working repo, so the gate (once reached) picks
-    the published engine. `write_registry` controls whether the session
-    root is registered as a working repo, the axis AC1 vs AC2 keys off."""
     settings_home = tmp_path / "settings-home"
     ml_dir = settings_home / "machine-local"
     ml_dir.mkdir(parents=True)
@@ -576,26 +463,14 @@ def _dual_boot_fixture(tmp_path, monkeypatch):
     session_dir.mkdir()
 
     def _write_registry(*, session_is_engine_source_tree: bool) -> None:
-        # C4 (2026-08-18 PM ruling) RETIRED `engine.working_repos.*` set
-        # membership as this gate's discriminant, replacing it with the
-        # structural question `_is_claude_klabauter_source_tree` asks: does THIS
-        # session's root equal the ONE resolved claude-klabauter root? So the axis
-        # below is expressed on `repos.claude_klabauter` -- the key the live-
-        # tree ladder actually resolves -- not on the working-repos locator,
-        # which survives for other callers but is no longer read here.
         lines = [
             "[repos]",
             f'claude_klabauter = "{published_dir.as_posix()}"',
         ]
         if session_is_engine_source_tree:
-            # The session IS the engine's own checkout: session root and
-            # resolved claude-klabauter root are the same tree, so the gate returns
-            # True and the divert must not fire.
             lines.append(f'claude_klabauter = "{session_dir.as_posix()}"')
         else:
             # A CONFIRMED not-the-source-tree session (literally False, not
-            # the undeterminable None): the claude-klabauter root resolves to a real
-            # tree that is NOT this session's.
             lines.append(f'claude_klabauter = "{live_dir.as_posix()}"')
         lines.append("")
         lines.append("[engine]")
@@ -634,10 +509,6 @@ def test_dual_boot_published_wins_over_pointer_when_not_working_repo(_dual_boot_
 
     root, cls = claude_klabauter_root.coordinator_engine_root_with_class()
 
-    # `write_registry` seeds `claude_klabauter` via `as_posix()` (forward
-    # slashes), and the resolver returns that registry value verbatim — so
-    # a WindowsPath string comparison here is spurious on Windows; compare
-    # as paths instead.
     assert Path(root) == fx.published_dir
     assert cls == "resolved-engine"
 
@@ -660,8 +531,6 @@ def test_dual_boot_live_tree_wins_when_session_is_the_engine_source_tree(_dual_b
 
     root, cls = claude_klabauter_root.coordinator_engine_root_with_class()
 
-    # Same as-posix-vs-WindowsPath trap AC1 documents above: the resolver
-    # returns the registry value verbatim, so compare as paths.
     assert Path(root) == fx.session_dir
     assert cls == "live-working-tree"
 
@@ -707,9 +576,6 @@ def test_dual_boot_claude_klabauter_root_env_no_longer_wins(_dual_boot_fixture, 
 
 
 def test_dual_boot_absent_klabauter_byte_identical_pointer_fast_path(tmp_path, monkeypatch):
-    """AC4: with `repos.claude_klabauter` ABSENT, behaviour is byte-identical
-    to today — the rung-1.5 pointer fast path still fires and resolves the
-    live tree, zero subprocess. Must stay GREEN both before and after C1."""
     settings_home = tmp_path / "settings-home"
     ml_dir = settings_home / "machine-local"
     ml_dir.mkdir(parents=True)
@@ -746,11 +612,6 @@ def test_dual_boot_absent_klabauter_pointer_honors_machine_local_registry_dir_ov
     settings_home = tmp_path / "settings-home"
     settings_home_ml_dir = settings_home / "machine-local"
     settings_home_ml_dir.mkdir(parents=True)
-    # Deliberately no `.claude-klabauter-live-root` written here — if the fix under test
-    # regresses to `machine_local_dir()` (settings-home-derived, override-
-    # blind), this rung would find nothing and fall through to Rung 2,
-    # which has no registry entry either and would raise instead of
-    # resolving `override_live_dir` below.
 
     override_ml_dir = tmp_path / "override-machine-local"
     override_ml_dir.mkdir()
@@ -835,14 +696,7 @@ def _exec_fallback_fixture(tmp_path, monkeypatch):
 
 
 class _ExecSentinel(Exception):
-    """Raised by the monkeypatched exec primitives below instead of letting
-    `exec_cli` actually replace the pytest process — see
-    `test_exec_cli_falls_back_to_live_tree_for_published_only_gap`'s
-    docstring-equivalent comment for why (chosen approach 3 of the dispatch
-    brief's preference order: options 1/2 were not available — C4b's
-    per-target fallback decision is not separable from the exec call inside
-    `exec_cli` itself, and a subprocess boundary would need a real script
-    entrypoint this module doesn't have)."""
+    pass
 
 
 def test_exec_cli_falls_back_to_live_tree_for_published_only_gap(
@@ -895,13 +749,6 @@ def test_exec_cli_falls_back_to_live_tree_for_published_only_gap(
 def test_exec_cli_target_absent_from_resolved_root_exits_127_naming_only_that_root(
     _exec_fallback_fixture, capsys
 ):
-    """C13 retired exec_cli's C4b live-tree fallback: a missing target now
-    fails loud on the SINGLE root `resolve_claude_klabauter_root_with_class()`
-    actually resolved — there is no second root to silently reach into, and
-    none to name in the error either. Renamed and re-scoped 2026-08-19 (this
-    plan's own C5/C13 fallout) from `..._exits_127_naming_both`, which
-    encoded the pre-C13 two-root world C13 deliberately retired; see
-    `_resolve_claude_klabauter.py::exec_cli`'s docstring, "C4b (RETIRED by C13)"."""
     fx = _exec_fallback_fixture
     shim = _load_shim_for_test()
 
@@ -923,9 +770,6 @@ def test_exec_cli_target_absent_from_resolved_root_exits_127_naming_only_that_ro
 
 
 def test_exec_cli_live_working_tree_class_unchanged_no_fallback(tmp_path, monkeypatch, capsys):
-    """A `live-working-tree` resolution takes no fallback path: a target
-    absent from the (sole) resolved root exits 127 exactly as before this
-    chunk, naming only that one root — byte-identical behaviour."""
     settings_home = tmp_path / "settings-home"
     ml_dir = settings_home / "machine-local"
     ml_dir.mkdir(parents=True)
@@ -952,16 +796,8 @@ def test_exec_cli_live_working_tree_class_unchanged_no_fallback(tmp_path, monkey
     assert "coordinator helper" in captured.err
 
 
-# --- C2 (this plan, pln-the-ceremony-tail-stops-lying-b58fb3): Rung 2's
-# `TimeoutExpired` arm stops reporting the same disposition as an exec
-# failure (AC4) and stops advising `machine-local set` for a read that
-# never got far enough to see the key (AC1's claude_klabauter_root half).
-
-
 @pytest.fixture
 def _rung2_fixture(tmp_path, monkeypatch):
-    """No env override, no `.claude-klabauter-live-root` pointer, `machine-local` present
-    on PATH — forces resolution all the way to Rung 2's subprocess call."""
     settings_home = tmp_path / "settings-home"
     ml_dir = settings_home / "machine-local"
     ml_dir.mkdir(parents=True)
@@ -990,8 +826,6 @@ def test_rung2_timeout_reports_distinguishably_from_exec_failure(_rung2_fixture,
 
 
 def test_rung2_timeout_names_reader_timeout_not_machine_local_set(_rung2_fixture, monkeypatch):
-    """AC1 (claude_klabauter_root half): the timeout arm's operator-facing text names
-    a reader timeout and does not advise `machine-local set`."""
 
     def _raise_timeout(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd=["machine-local"], timeout=claude_klabauter_root._RUNG2_TIMEOUT_SECS)
@@ -1006,8 +840,6 @@ def test_rung2_timeout_names_reader_timeout_not_machine_local_set(_rung2_fixture
 
 
 def test_rung2_timeout_message_carries_shared_token(_rung2_fixture, monkeypatch):
-    """AC3b: the timeout text carries the literal shared discriminator
-    token, and the constant's value itself is pinned so drift fails loudly."""
     assert claude_klabauter_root._REGISTRY_READ_TIMEOUT_TOKEN == "machine-local registry read timed out"
 
     def _raise_timeout(*args, **kwargs):

@@ -1,14 +1,3 @@
-"""Tests for coordinator_core.ops.emit.priority_resolve — the nearest-explicit-
-ancestor resolver.
-
-Fixture nodes are plain frontmatter'd .md files on disk (dag.walk_forward reads
-real files) written directly under a tmp dir; ledger entries are injected via
-``resolve_priority(..., ledger_entries=...)`` rather than round-tripped through
-``load_priority_ledger``'s disk read — the resolution algorithm is this
-module's subject under test, not the ledger loader's I/O.
-
-Spec backlink: DoE-claude DoE-claude:pln-priority-ledger-durable-pm-pri-817d40 § C5, § C10.
-"""
 
 from __future__ import annotations
 
@@ -22,8 +11,6 @@ from coordinator_core.ops.emit.priority_resolve import (
     resolve_priority,
 )
 
-# _write_node/_ledger extracted to conftest.py
-# (shared across the five priority-ledger test modules that used a byte-for-byte copy).
 from coordinator_core.ops.emit.tests.conftest import _ledger, _write_node  # noqa: F401
 
 
@@ -34,10 +21,7 @@ def node_dir(tmp_path: Path) -> Path:
     return d
 
 
-# ---------------------------------------------------------------------------
 # THE ACCEPTANCE ORACLE — A(explicit high) -> B(explicit low) -> C(no explicit)
-# C resolves to low, NEVER high.
-# ---------------------------------------------------------------------------
 
 
 def test_worked_example_resolves_to_nearest_explicit_ancestor_low(node_dir: Path):
@@ -55,8 +39,6 @@ def test_worked_example_resolves_to_nearest_explicit_ancestor_low(node_dir: Path
 
 
 def test_worked_example_does_not_resolve_to_top_of_chain_high(node_dir: Path):
-    """The 'top of chain' reading is RETIRED — any implementation that yields
-    'high' for C is wrong, however plausible its reading of older prose."""
     _write_node(node_dir, "A.md", handoff_id="A_id", predecessor=None)
     _write_node(node_dir, "B.md", handoff_id="B_id", predecessor="A.md")
     c_path = _write_node(node_dir, "C.md", handoff_id="C_id", predecessor="B.md")
@@ -68,11 +50,6 @@ def test_worked_example_does_not_resolve_to_top_of_chain_high(node_dir: Path):
     assert result["effective_priority"] != "high"
 
 
-# ---------------------------------------------------------------------------
-# Explicit entry on N itself short-circuits the walk entirely.
-# ---------------------------------------------------------------------------
-
-
 def test_explicit_entry_on_node_itself_wins(node_dir: Path):
     _write_node(node_dir, "A.md", handoff_id="A_id", predecessor=None)
     b_path = _write_node(node_dir, "B.md", handoff_id="B_id", predecessor="A.md")
@@ -82,12 +59,6 @@ def test_explicit_entry_on_node_itself_wins(node_dir: Path):
     result = resolve_priority(str(b_path), "B_id", ledger_entries=ledger)
 
     assert result == {"effective_priority": "urgent", "origin": "explicit", "source_id": "B_id"}
-
-
-# ---------------------------------------------------------------------------
-# predecessor: none halts the walk — the spinoff wall falls out of the
-# spine's shape, no special-case branch.
-# ---------------------------------------------------------------------------
 
 
 def test_predecessor_none_halts_walk_no_suggested(node_dir: Path):
@@ -108,11 +79,6 @@ def test_predecessor_none_halts_walk_falls_through_to_suggested(node_dir: Path):
     assert result == {"effective_priority": "medium", "origin": "suggested", "source_id": None}
 
 
-# ---------------------------------------------------------------------------
-# suggested_priority on N loses to any nearest explicit ancestor found.
-# ---------------------------------------------------------------------------
-
-
 def test_suggested_priority_loses_to_explicit_ancestor(node_dir: Path):
     _write_node(node_dir, "A.md", handoff_id="A_id", predecessor=None)
     _write_node(node_dir, "B.md", handoff_id="B_id", predecessor="A.md")
@@ -128,13 +94,6 @@ def test_suggested_priority_loses_to_explicit_ancestor(node_dir: Path):
     assert result["origin"] == "inherited"
 
 
-# ---------------------------------------------------------------------------
-# The `none` sentinel on an ancestor terminates the walk (that ancestor IS
-# the nearest explicit entry) and is distinguishable from no entry existing
-# anywhere (origin: "none").
-# ---------------------------------------------------------------------------
-
-
 def test_none_sentinel_ancestor_terminates_walk_and_is_distinguishable(node_dir: Path):
     _write_node(node_dir, "F.md", handoff_id="F_id", predecessor=None)
     e_path = _write_node(node_dir, "E.md", handoff_id="E_id", predecessor="F.md")
@@ -147,19 +106,10 @@ def test_none_sentinel_ancestor_terminates_walk_and_is_distinguishable(node_dir:
     assert result["origin"] == "inherited"
     assert result["source_id"] == "F_id"
 
-    # Contrast: an E with no ancestor entry at all gets origin "none", not
-    # "inherited" — same effective_priority (None) but a different, and
-    # distinguishable, provenance.
     g_path = _write_node(node_dir, "G.md", handoff_id="G_id", predecessor=None)
     no_entry_result = resolve_priority(str(g_path), "G_id", ledger_entries=_ledger())
     assert no_entry_result["origin"] == "none"
     assert no_entry_result["source_id"] is None
-
-
-# ---------------------------------------------------------------------------
-# Fan-in with differing parent values: no value, origin "ambiguous". Never
-# silently pick one parent.
-# ---------------------------------------------------------------------------
 
 
 def test_fan_in_differing_priorities_yields_ambiguous(node_dir: Path):
@@ -199,9 +149,7 @@ def test_fan_in_agreeing_priorities_resolves_inherited(node_dir: Path):
     assert result["origin"] == "inherited"
 
 
-# ---------------------------------------------------------------------------
 # forked_from / origin_handoff / etc. are NON-EDGES — must not be traversed.
-# ---------------------------------------------------------------------------
 
 
 def test_forked_from_is_not_traversed(node_dir: Path):
@@ -214,17 +162,7 @@ def test_forked_from_is_not_traversed(node_dir: Path):
 
     result = resolve_priority(str(forked_path), "L_id", ledger_entries=ledger)
 
-    # L's own predecessor is none (spinoff-shaped); forked_from must not be
-    # walked, so K's urgent priority is never seen.
     assert result == {"effective_priority": None, "origin": "none", "source_id": None}
-
-
-# ---------------------------------------------------------------------------
-# Default node_id_fn fallback (no authored handoff_id, no explicit node_id_fn
-# passed) must key on the SAME owner-qualified repo slug resolve_repo_name
-# produces -- not a re-derived bare basename -- or an ancestor lookup against
-# a ledger entry authored against the canonical slug silently misses.
-# ---------------------------------------------------------------------------
 
 
 def test_default_node_id_fallback_uses_canonical_repo_slug(node_dir: Path, monkeypatch):
@@ -243,11 +181,6 @@ def test_default_node_id_fallback_uses_canonical_repo_slug(node_dir: Path, monke
     assert result["effective_priority"] == "urgent"
     assert result["origin"] == "inherited"
     assert result["source_id"] == "dbc-oduffy/claude-klabauter:A.md"
-
-
-# ---------------------------------------------------------------------------
-# load_priority_ledger — live + archive union, target_id keyed by filename.
-# ---------------------------------------------------------------------------
 
 
 def test_load_priority_ledger_unions_live_and_archive(tmp_path: Path):

@@ -75,7 +75,6 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess:
-    """Run a git command in cwd; raise on non-zero exit."""
     return subprocess.run(
         ["git"] + args,
         cwd=str(cwd),
@@ -122,7 +121,6 @@ def _write_boot_sweep_note(repo: Path) -> None:
 
 
 def _base_repo(tmp_path: Path) -> Path:
-    """A minimal repo with one base commit — the flat-mode range base."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)
@@ -334,11 +332,6 @@ def test_planning_and_bookkeeping_mix_stays_planning(tmp_path: Path) -> None:
 
 
 def test_planning_plus_code_commit_classifies_code(tmp_path: Path) -> None:
-    """S. Mixed-commit invariant carried to the third class: a commit touching
-    both a planning-artifact path AND a genuine code path classifies CODE,
-    fail-closed — condition (b) of the composed rule (every touched path must
-    be planning-artifact or bookkeeping) is violated by the app.py path.
-    """
     repo = _base_repo(tmp_path)
     plans_dir = repo / "docs" / "plans"
     plans_dir.mkdir(parents=True)
@@ -360,9 +353,6 @@ def test_planning_plus_code_commit_classifies_code(tmp_path: Path) -> None:
 def test_planning_set_disjoint_from_exhaust_set_across_mixed_batch(
     tmp_path: Path,
 ) -> None:
-    """T. planning_set and exhaust_set are disjoint across a batch mixing both
-    classes in one call, not just pairwise in isolated single-sha calls.
-    """
     repo = _base_repo(tmp_path)
     base_sha = _git(["rev-parse", "HEAD"], repo).stdout.strip()
 
@@ -388,5 +378,4 @@ def test_planning_set_disjoint_from_exhaust_set_across_mixed_batch(
         f"note={note!r}"
     )
     assert base_sha not in exhaust_set and base_sha not in planning_set
-
 

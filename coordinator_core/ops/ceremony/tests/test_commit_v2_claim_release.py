@@ -1,21 +1,3 @@
-"""
-coordinator_core.ops.ceremony.tests.test_commit_v2_claim_release
-
-Purpose: per-route claim-release coverage for C1 (state/dispatch-briefs/
-2026-08-30-the-default-committer-releases-its-claims/C1.md) -- the
-`ceremony.commit_v2` handler's post-commit `release_committed_claims` step.
-Mirrors `test_detached_render_commit_claim_release.py`'s shape: drives the
-handler directly against a real git repo and reads the claim back through
-`coordinator_core.session.claim_index.lookup()`, the same surface the commit
-gate reads, rather than string-matching `touched.txt`.
-
-Spec backlink: state/dispatch-briefs/2026-08-30-the-default-committer-
-releases-its-claims/C1.md
-
-Negative-spec: does not exercise the guard-class-relay step, the EOL-repair
-step, or the pre-commit gates -- those are covered by their own sibling test
-modules in this directory. Scoped to the release-call property alone.
-"""
 
 from __future__ import annotations
 
@@ -30,8 +12,6 @@ from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns real external `git` processes; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
@@ -54,8 +34,6 @@ def _claim_cleared(repo: Path, sid: str, rel_path: str) -> bool:
 
 
 def _call(repo: Path, params: dict) -> dict:
-    # Scope common_dir: the handler receives repo_root = the .git directory,
-    # mirroring commit_exec_bit's/guard_class_relay's own test precedent.
     return commit_v2._handler(params, repo_root=repo / ".git")
 
 
@@ -73,8 +51,6 @@ def repo(tmp_path):
 
 
 def test_commit_releases_this_sessions_own_claim(repo, monkeypatch):
-    """(a) a commit through the handler releases the T claim on each
-    declared path in this session's own touched.txt."""
     sid = "commit-v2-claim-release-test"
     _own_sid(monkeypatch, sid)
 
@@ -96,9 +72,6 @@ def test_commit_releases_this_sessions_own_claim(repo, monkeypatch):
 
 
 def test_peer_claimed_path_untouched(repo, monkeypatch):
-    """(b) a path claimed by a PEER session is untouched -- release is
-    structurally scoped to this session's own sid, never a guess at
-    authorship over a peer's claim."""
     sid = "commit-v2-claim-release-self"
     peer_sid = "commit-v2-claim-release-peer"
 
@@ -152,9 +125,6 @@ def test_unresolvable_sid_commit_lands_claim_retained(repo, monkeypatch):
 
 
 def test_raising_release_does_not_turn_landed_commit_into_failure(repo, monkeypatch):
-    """(d) a raising release_committed_claims (monkeypatched) does not turn
-    a landed commit into a reported failure -- committed: True and the sha
-    still come back."""
     sid = "commit-v2-claim-release-raise"
     _own_sid(monkeypatch, sid)
 

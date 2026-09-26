@@ -88,5 +88,5 @@ def atomic_write_bytes(
         try:
             os.remove(tmp_name)
         except OSError:
-            pass  # best-effort cleanup on an already-failing path; original exception re-raises below
+            pass
         raise

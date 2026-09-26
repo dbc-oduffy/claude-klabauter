@@ -78,9 +78,6 @@ from typing import Any, NoReturn, Optional
 from coordinator_core.frontmatter.schema_validate import describe, validate
 from coordinator_core.ipc import register_op
 
-# ---------------------------------------------------------------------------
-# Error prefix — byte-identical to schema-cli.js:59 ("schema-cli: error: ").
-# ---------------------------------------------------------------------------
 
 _ERROR_PREFIX = "schema-cli: error: "
 
@@ -99,14 +96,6 @@ def _fail_loud(msg: str) -> NoReturn:
 
 
 def _flatten_errors(errors: list[dict]) -> list[str]:
-    """Flatten schema_validate ErrorDicts to schema-cli.js's "field: error" strings.
-
-    Port of schema-cli.js's inline error-mapper (lines 220-224):
-        const fieldPart = e.field ? `${e.field}: ` : '';
-        return `${fieldPart}${e.error || ''}`;
-    A falsy (missing/empty) ``field`` omits the "field: " prefix entirely; a
-    falsy ``error`` renders as an empty string after the prefix.
-    """
     flattened: list[str] = []
     for e in errors:
         field = e.get("field") if isinstance(e, dict) else None
@@ -117,51 +106,21 @@ def _flatten_errors(errors: list[dict]) -> list[str]:
 
 
 def _print_json(payload: dict) -> None:
-    """Write two-space pretty-printed JSON + trailing newline to stdout.
-
-    Port of schema-cli.js's ``JSON.stringify(result, null, 2) + '\\n'``
-    (schema-cli.js:195, :226) — Python's ``json.dumps(..., indent=2)`` matches
-    Node's ``JSON.stringify(..., null, 2)`` byte-for-byte for these payload
-    shapes (no non-ASCII keys/values requiring escape-divergence handling).
-    """
     sys.stdout.write(json.dumps(payload, indent=2) + "\n")
 
 
-# ---------------------------------------------------------------------------
-# --describe / --validate command implementations — shared by main() and the
-# registered ops below (single implementation, two front doors).
-# ---------------------------------------------------------------------------
-
 def _cmd_describe(schema_name: str) -> dict:
-    """Run --describe for *schema_name*. Raises ValueError on unknown schema."""
     return describe(schema_name)
 
 
 def _cmd_validate(schema_name: str, record: dict) -> dict:
-    """Run --validate for *schema_name* against *record*.
-
-    Returns {"ok": bool, "errors": [str, ...]} — errors is ALWAYS a (possibly
-    empty) list, matching schema-cli.js's envelope (schema-cli.js:218-224:
-    ``errors = ok ? [] : (...).map(...)``). Raises ValueError on unknown schema.
-    """
     result = validate(schema_name, record)
     ok = result.get("ok") is True
     errors = [] if ok else _flatten_errors(result.get("errors") or [])
     return {"ok": ok, "errors": errors}
 
 
-# ---------------------------------------------------------------------------
-# argv contract — main()
-# ---------------------------------------------------------------------------
-
 def main(argv: Optional[list[str]] = None) -> int:
-    """Entry point for the parity CLI. Returns the process exit code.
-
-    Port of schema-cli.js's top-level argument-parsing + mode dispatch
-    (lines 157-229). Argument parsing is hand-rolled (not argparse) to keep
-    the exact positional-arg / missing-arg error messages byte-identical to
-    the JS oracle — argparse's own usage/error formatting would diverge.
-    """
     args = sys.argv[1:] if argv is None else argv
 
     mode = args[0] if len(args) >= 1 else None
@@ -187,7 +146,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         _print_json(result)
         return 0
 
-    # mode == "--validate"
     stdin_text = sys.stdin.read()
     try:
         record = json.loads(stdin_text)
@@ -204,26 +162,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     return 0 if result["ok"] else 1
 
 
-# ---------------------------------------------------------------------------
-# Dual registration — "schema.describe" / "schema.validate" ops.
-#
-# Same implementation as the argv contract above (_cmd_describe/_cmd_validate
 # -> schema_validate.describe()/validate()), a DIFFERENT front door: the
 # JSON-RPC envelope (register_op dispatch, coordinator_core/ipc.py:828) rather
-# than this module's own argv/stdout/exit-code contract. Both ops are
 # COMPUTE_ONLY (read-only: schema_validate.describe()/validate() only read the
-# vendored coordinator_core/frontmatter/schemas/ tree; neither writes any
-# file, issues any git command, or mutates coordinator substrate).
-#
-# Registration classification: coordinator_core/authz/classification.py
 # OP_CLASSIFICATION requires a "schema.describe": OpClass.COMPUTE_ONLY and
 # "schema.validate": OpClass.COMPUTE_ONLY entry (DR-208 "new ops default to
 # MUTATING until a reviewer affirms COMPUTE_ONLY") plus a
-# coordinator_core/ops/__init__.py eager-import-list entry (or
 # coordinator_core/ipc.py::_OP_KEY_SCOPE) to wire the eager (non-lazy)
-# dispatch path fully — both are OUT OF SCOPE for this module by chunk-file-
-# scope restriction; see the chunk report for the flagged follow-up.
-# ---------------------------------------------------------------------------
 
 @register_op("schema.describe")
 async def _op_schema_describe(params: dict, repo_root: Optional[Path] = None) -> dict:

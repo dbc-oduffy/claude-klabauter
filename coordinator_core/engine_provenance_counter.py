@@ -93,14 +93,8 @@ from coordinator_core.subagent_sandbox import resolve_git_root_cheap
 
 _COUNTS_FILENAME = "engine-provenance-counts.jsonl"
 
-#: This module's own repo root (`coordinator_core/` -> repo). Used only by the
-#: under-pytest destination guard in `record_engine_provenance` — see its
-#: docstring for why the guard keys on destination rather than on pytest alone.
 _OWN_REPO_ROOT = Path(__file__).resolve().parents[1]
 
-#: Corpus-mutator declaration (generator-provenance sweep): this recorder
-#: appends to one fleet-wide file under state/ — see module docstring for why
-#: it is not session-scoped like its two sibling counters.
 MUTATES = ["state/engine-provenance-counts.jsonl"]
 
 

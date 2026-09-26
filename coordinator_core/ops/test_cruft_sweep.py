@@ -1,24 +1,3 @@
-"""
-Tests for coordinator_core.ops.cruft_sweep — failure-path coverage for the
-2026-07-22 break-class fixes.
-
-Covers:
-  - build_uuid_blocklist: an unreadable handoff .md file is warned about and
-    marks the scan incomplete (complete=False), while UUIDs from other
-    readable files are still collected.
-  - _run_handler (the harness class): apply=True against an incomplete
-    blocklist scan raises BlocklistIncompleteError rather than proceeding
-    with a silently-narrowed protected set (fail-closed).
-  - _delete_path / _delete_file: return True only when the target is
-    confirmed gone; False on a failing subprocess/unlink.
-  - sweep_orphans (representative sweep_* call site): a failed delete is
-    NOT counted as pruned and emits a WARNING; a successful delete IS
-    counted, matching prior behavior.
-  - sweep_scratch: its own directory-discovery os.walk warns on an
-    unwalkable subtree rather than silently dropping it from the scan
-    (Finding 1, 2026-07-22 code-reviewer slice1 review), with a
-    genuinely-clean companion proving the signal discriminates.
-"""
 
 from __future__ import annotations
 
@@ -33,9 +12,7 @@ import pytest
 from coordinator_core.ops import cruft_sweep
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# _init_git_repo below spawns real `git` via an aliased subprocess import
 # (`import subprocess as _subprocess`) -- SPAWN-RATCHET Rule 2 declaration,
-# not a baseline entry: see coordinator_core/tests/test_no_new_spawning_tests.py.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -45,11 +22,6 @@ pytestmark = [
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
-
-
-# ---------------------------------------------------------------------------
-# build_uuid_blocklist
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(os.name == "nt", reason="chmod-based unreadable-file fixture is POSIX-only")
@@ -81,11 +53,6 @@ def test_build_uuid_blocklist_unreadable_file_marks_incomplete(tmp_path, capsys)
     reason="chmod 0o000 permission denial is not reliable on Windows or as root",
 )
 def test_build_uuid_blocklist_unreadable_handoffs_dir_marks_incomplete(tmp_path, capsys):
-    """An unreadable handoffs_dir itself (not just a file inside it) must not
-    silently look like "zero handoffs, complete scan" — Path.glob() swallows
-    PermissionError on an unreadable directory and yields an empty iterator,
-    so the pre-fix code returned (set(), True) having scanned nothing.
-    """
     handoffs_dir = tmp_path / "handoffs"
     handoffs_dir.mkdir()
     _write(
@@ -117,11 +84,6 @@ def test_build_uuid_blocklist_all_readable_is_complete(tmp_path):
     assert "33333333-3333-3333-3333-333333333333" in blocklist
 
 
-# ---------------------------------------------------------------------------
-# _run_handler — fail-closed abort on incomplete blocklist + apply=True
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.skipif(os.name == "nt", reason="chmod-based unreadable-file fixture is POSIX-only")
 def test_run_handler_aborts_apply_on_incomplete_blocklist(tmp_path):
     handoffs_dir = tmp_path / "handoffs"
@@ -147,9 +109,6 @@ def test_run_handler_aborts_apply_on_incomplete_blocklist(tmp_path):
 
 @pytest.mark.skipif(os.name == "nt", reason="chmod-based unreadable-file fixture is POSIX-only")
 def test_run_handler_dry_run_does_not_abort_on_incomplete_blocklist(tmp_path):
-    """Read-only invocations aren't destructive, so an incomplete blocklist
-    scan is a warning (already emitted by build_uuid_blocklist), not an
-    abort — only apply=True triggers the fail-closed guard."""
     handoffs_dir = tmp_path / "handoffs"
     handoffs_dir.mkdir()
     blocked = handoffs_dir / "blocked.md"
@@ -171,11 +130,6 @@ def test_run_handler_dry_run_does_not_abort_on_incomplete_blocklist(tmp_path):
     assert result["totals"]["harness"] == {"bytes": 0, "items": 0}
 
 
-# ---------------------------------------------------------------------------
-# _delete_path / _delete_file — return-value contract
-# ---------------------------------------------------------------------------
-
-
 def test_delete_path_returns_true_and_removes_dir(tmp_path):
     target = tmp_path / "victim"
     target.mkdir()
@@ -195,7 +149,7 @@ def test_delete_path_returns_false_on_failing_subprocess(tmp_path, monkeypatch):
         cruft_sweep.subprocess, "run", lambda *a, **k: _FakeCompleted()
     )
     assert cruft_sweep._delete_path(target) is False
-    assert target.exists()  # untouched — the fake subprocess.run never really ran rm
+    assert target.exists()
 
 
 def test_delete_file_returns_false_on_oserror(tmp_path, monkeypatch):
@@ -207,11 +161,6 @@ def test_delete_file_returns_false_on_oserror(tmp_path, monkeypatch):
 
     monkeypatch.setattr(Path, "unlink", _raise)
     assert cruft_sweep._delete_file(target) is False
-
-
-# ---------------------------------------------------------------------------
-# sweep_orphans — representative call site: failed delete not counted
-# ---------------------------------------------------------------------------
 
 
 def _make_orphan_fixture(parent_root: Path) -> Path:
@@ -233,7 +182,7 @@ def test_sweep_orphans_failed_delete_not_counted_as_pruned(tmp_path, monkeypatch
     )
     assert total_items == 0
     assert total_bytes == 0
-    assert child.exists()  # still there — matches "not actually removed"
+    assert child.exists()
     assert "WARNING: delete failed, not counted as pruned" in capsys.readouterr().err
 
 
@@ -250,17 +199,8 @@ def test_sweep_orphans_successful_delete_counted_as_pruned(tmp_path):
     assert not child.exists()
 
 
-# ---------------------------------------------------------------------------
-# sweep_scratch — its own directory-discovery os.walk must not silently
-# swallow an unreadable subtree (Finding 1, 2026-07-22 slice1 review)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.skipif(os.name == "nt", reason="chmod-based unreadable-subtree fixture is POSIX-only")
 def test_sweep_scratch_warns_on_unwalkable_subtree(tmp_path, capsys):
-    """A subtree os.walk cannot descend into must be named in a stderr WARNING
-    rather than silently dropping out of the scan -- the same defect class
-    this session's other fixes eliminated elsewhere in this file."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
 
@@ -283,8 +223,6 @@ def test_sweep_scratch_warns_on_unwalkable_subtree(tmp_path, capsys):
 
 
 def test_sweep_scratch_no_warning_on_genuinely_clean_tree(tmp_path, capsys):
-    """Distinguishes the walk-error signal above from an actually-walkable
-    tree -- the warning must not fire when nothing was unreadable."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     (repo_root / "some-dir").mkdir()
@@ -297,13 +235,6 @@ def test_sweep_scratch_no_warning_on_genuinely_clean_tree(tmp_path, capsys):
 
 
 def test_sweep_scratch_apply_batches_multiple_auto_prune_dirs(tmp_path):
-    """Regression for the batched `_delete_paths_batch` rewrite (W6/C6,
-    2026-08-19 amplification burn-down): TWO sibling auto-prune-named
-    directories must both be reported pruned and both actually removed from
-    disk in a single apply run -- a single-item fixture would pass
-    identically whether the deletion were batched or per-item, which is
-    exactly the gap that shipped a wrong batched `_own_frozen_diff_shas`
-    elsewhere in this codebase (see amp-cfinal-exemption-ledger.md)."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     _init_git_repo(repo_root)
@@ -322,14 +253,6 @@ def test_sweep_scratch_apply_batches_multiple_auto_prune_dirs(tmp_path):
     assert total_items == 2
     assert not first.exists()
     assert not second.exists()
-
-
-# ---------------------------------------------------------------------------
-# sweep_empty_toplevel_dirs — net-new Phase E (no bash-oracle counterpart).
-# Regression coverage for the 2026-07-22..2026-07-28 incident: three
-# top-level empty-dir cruft items (a fake-$HOME skeleton and two bare
-# prose-word dirs) sat undetected at a repo root for a week.
-# ---------------------------------------------------------------------------
 
 
 def _init_git_repo(repo_root: Path) -> None:
@@ -351,17 +274,12 @@ def _age_path(path: Path, age_secs: int) -> None:
 
 
 def _age_subtree(root: Path, age_secs: int) -> None:
-    """Set mtime on every directory in `root`'s subtree (and root itself) to
-    `age_secs` in the past — sweep_empty_toplevel_dirs gates on the subtree
-    MAX mtime, so every level must be aged for an "old" fixture."""
     for dirpath, dirnames, _files in os.walk(root):
         _age_path(Path(dirpath), age_secs)
     _age_path(root, age_secs)
 
 
 def test_sweep_empty_dirs_nested_empty_skeleton_is_pruned(tmp_path):
-    """Regression test for the actual incident: a fake-$HOME skeleton with
-    ten levels of nested empty directories and zero files anywhere."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     _init_git_repo(repo_root)
@@ -393,8 +311,6 @@ def test_sweep_empty_dirs_nested_empty_skeleton_is_pruned(tmp_path):
 
 
 def test_sweep_empty_dirs_bare_empty_dir_with_dots_is_pruned(tmp_path):
-    """The bare-empty case — an arbitrary prose-word dir name, including one
-    with literal dots in it (`not...`), must not choke anything."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     _init_git_repo(repo_root)
@@ -459,7 +375,6 @@ def test_sweep_empty_dirs_recent_mtime_not_swept(tmp_path):
 
     target = repo_root / "just-made"
     target.mkdir()
-    # No aging applied — mtime is "now", well under the 24h floor.
 
     total_bytes, total_items = cruft_sweep.sweep_empty_toplevel_dirs(
         repo_root, apply=True, json_mode=False, quiet=True,
@@ -517,7 +432,7 @@ def test_sweep_empty_dirs_dry_run_deletes_nothing_but_reports(tmp_path):
     )
 
     assert total_items == 1
-    assert target.exists()  # dry-run — nothing actually deleted
+    assert target.exists()
 
 
 def test_sweep_empty_dirs_outside_git_work_tree_skips_no_deletions(tmp_path, capsys):
@@ -538,16 +453,7 @@ def test_sweep_empty_dirs_outside_git_work_tree_skips_no_deletions(tmp_path, cap
     assert "not inside a git work tree" in capsys.readouterr().err
 
 
-# ---------------------------------------------------------------------------
-# Drift-audit D3 — _dir_size_bytes wall-clock budget (ported from the
-# coordinator/bin/cruft-sweep trampoline's own hang-bug fix; see
-# docs/research/2026-07-28-cruft-sweep-duplicate-port-drift-audit.md).
-# ---------------------------------------------------------------------------
-
-
 def test_dir_size_bytes_respects_budget(tmp_path, monkeypatch):
-    """A budget of 0 must bail before the walk visits anything past the
-    top-level stat — proves the deadline check is live, not decorative."""
     d = tmp_path / "big"
     d.mkdir()
     for i in range(50):
@@ -563,8 +469,6 @@ def test_dir_size_bytes_respects_budget(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cruft_sweep.os, "walk", _spy_walk)
 
-    # budget_secs=0 means the deadline (monotonic() + 0) is already in the
-    # past by the time the loop checks it — the walk must break immediately.
     cruft_sweep._dir_size_bytes(d, budget_secs=0.0)
     assert len(visited) <= 1, (
         "budget=0 should bail on the first os.walk() iteration, not walk "
@@ -573,26 +477,16 @@ def test_dir_size_bytes_respects_budget(tmp_path, monkeypatch):
 
 
 def test_dir_size_bytes_still_sums_normally_under_a_generous_budget(tmp_path):
-    """Sanity check that the new budget kwarg doesn't change output for a
-    small tree finishing well within its deadline."""
     d = tmp_path / "small"
     d.mkdir()
     (d / "a.txt").write_text("hello")
 
     size = cruft_sweep._dir_size_bytes(d, budget_secs=5.0)
-    assert size >= 0  # KB-rounded; a handful of bytes rounds down to 0, that's fine
-    assert size == cruft_sweep._dir_size_bytes(d)  # default budget, same result
+    assert size >= 0
+    assert size == cruft_sweep._dir_size_bytes(d)
 
 
 def test_dir_size_bytes_no_st_blocks_platform_falls_back_to_st_size(tmp_path, monkeypatch):
-    """Windows st_blocks-absence fix (2026-08-11): simulate a platform whose
-    os.stat_result has no st_blocks attribute (Windows) and assert the
-    fallback total is the raw byte-accurate sum against a hand-summed
-    st_size total (no KB-floor rounding, unlike the st_blocks path — see
-    _dir_size_bytes's "KB-floor half" docstring note), rather than silently
-    landing on 0. Simulated via monkeypatching os.stat_result rather than
-    relying on the host platform, so this is meaningful on both Linux and
-    Windows CI."""
     d = tmp_path / "winlike"
     d.mkdir()
     expected_size = 0
@@ -608,14 +502,6 @@ def test_dir_size_bytes_no_st_blocks_platform_falls_back_to_st_size(tmp_path, mo
     assert size > 0
 
 
-# ---------------------------------------------------------------------------
-# Drift-audit D4 — sweep_scratch's already-pruned-parent skip must recognize
-# BOTH path separators, not just "/" (os.walk yields native/backslash paths
-# on Windows; a forward-slash-only check silently never matches there,
-# double-counting an already-deleted child as a fresh prune).
-# ---------------------------------------------------------------------------
-
-
 def test_is_pruned_child_recognizes_both_separators():
     pruned = ["C:\\repo\\nonexistent"]
     assert cruft_sweep._is_pruned_child("C:\\repo\\nonexistent", pruned) is True
@@ -624,27 +510,14 @@ def test_is_pruned_child_recognizes_both_separators():
     assert cruft_sweep._is_pruned_child("/repo/other", ["/repo/nonexistent"]) is False
 
 
-# ---------------------------------------------------------------------------
-# Drift-audit D10 — Phase E / Phase B scratch duplicate-emission wrinkle.
-# An empty, untracked, aged top-level dir whose name is ALSO in Phase B's
-# auto-prune-name vocabulary (_is_auto_prune_name) must not be reported as
-# an independent "auto-prune" finding by Phase E — a JSON/dry-run consumer
-# summing "auto-prune" records per class would otherwise double-count one
-# physical directory under both "scratch" and "empty-dirs".
-# ---------------------------------------------------------------------------
-
-
 def test_scratch_and_empty_dirs_both_match_same_path_reproduction(tmp_path):
-    """Reproduces the overlap: build a fixture where sweep_scratch AND
-    sweep_empty_toplevel_dirs both independently classify the same top-level
-    'nonexistent/' dir as auto-prune-eligible in dry-run/json mode."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     _init_git_repo(repo_root)
 
     target = repo_root / "nonexistent"
     target.mkdir()
-    _age_path(target, 10 * 86400)  # 10 days: past both Phase B's 7d default and Phase E's 24h floor
+    _age_path(target, 10 * 86400)
 
     scratch_records = []
     cruft_sweep.sweep_scratch(
@@ -661,8 +534,6 @@ def test_scratch_and_empty_dirs_both_match_same_path_reproduction(tmp_path):
     assert len(scratch_auto_prune) == 1
     assert scratch_auto_prune[0]["path"] == str(target)
 
-    # Phase E must NOT independently emit an "auto-prune" for the same path —
-    # it must relabel it as a duplicate of the scratch-class finding instead.
     empty_dirs_auto_prune = [r for r in empty_dirs_records if r["disposition"] == "auto-prune"]
     assert empty_dirs_auto_prune == [], (
         "Phase E emitted an independent auto-prune record for a path Phase B "
@@ -674,10 +545,6 @@ def test_scratch_and_empty_dirs_both_match_same_path_reproduction(tmp_path):
 
 
 def test_empty_dirs_non_scratch_name_is_not_relabeled(tmp_path):
-    """Control case: a name NOT in Phase B's auto-prune vocabulary (an
-    arbitrary prose word) must still get Phase E's normal "auto-prune"
-    disposition — the relabel is scoped to the actual overlap, not blanket
-    suppression of Phase E's own findings."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     _init_git_repo(repo_root)
@@ -699,10 +566,6 @@ def test_empty_dirs_non_scratch_name_is_not_relabeled(tmp_path):
 
 
 def test_apply_mode_has_no_double_delete_for_overlapping_name(tmp_path):
-    """--apply mode is unaffected by the relabel: dispatch order (scratch
-    before empty-dirs) already means Phase E finds nothing once Phase B has
-    deleted the directory — confirming the brief's claim that apply mode
-    never double-counted in the first place."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     _init_git_repo(repo_root)
@@ -723,20 +586,11 @@ def test_apply_mode_has_no_double_delete_for_overlapping_name(tmp_path):
     assert empty_items == 0
 
 
-# ---------------------------------------------------------------------------
-# scratchpad class — sweep_harness_scratchpads adapter over
-# scratchpad_sweep.sweep_scratchpads. See dispatch brief's critical
-# correctness constraint: apply must map to reclaim, never inverted.
-# ---------------------------------------------------------------------------
-
 _SP_SID_DEAD_OLD = "33333333-3333-3333-3333-333333333333"
 _SP_SID_SELF = "44444444-4444-4444-4444-444444444444"
 
 
 def _build_scratchpad_fixture(tmp_path, project_slug="X--claude-klabauter"):
-    """One dead-and-old scratchpad session (reclaimable) plus the invoking
-    session's own (never touched). Mirrors test_scratchpad_sweep.py's own
-    fixture shape at the unit boundary that module already established."""
     claude_root = tmp_path / "claude" / project_slug
     claude_root.mkdir(parents=True)
 
@@ -848,10 +702,6 @@ def test_sweep_harness_scratchpads_dry_run_deletes_nothing(tmp_path, _patch_scra
     assert total_bytes == 100
 
 
-# Every other apply-path test monkeypatches
-# sweep_scratchpads entirely, so "apply actually deletes" was verified only at
-# the kwarg boundary. This exercises the real (non-monkeypatched)
-# sweep_scratchpads end-to-end against a fixture, asserting an actual deletion.
 def test_sweep_harness_scratchpads_apply_deletes_real_dead_scratchpad(tmp_path, _patch_scratchpad_liveness):
     _build_scratchpad_fixture(tmp_path)
     old_scratch = tmp_path / "claude" / "X--claude-klabauter" / _SP_SID_DEAD_OLD / "scratchpad"
@@ -871,9 +721,6 @@ def test_sweep_harness_scratchpads_apply_deletes_real_dead_scratchpad(tmp_path, 
 
 
 def test_sweep_harness_scratchpads_apply_maps_to_reclaim(tmp_path, monkeypatch, _patch_scratchpad_liveness):
-    """Asserts the delegation itself -- apply=True must call
-    sweep_scratchpads(reclaim=True) -- without deleting a real tree outside
-    a fixture (the underlying sweep_scratchpads call is monkeypatched out)."""
     captured = {}
 
     def _fake_sweep_scratchpads(**kwargs):
@@ -917,14 +764,6 @@ def test_sweep_harness_scratchpads_dry_run_maps_apply_false_to_reclaim_false(tmp
     assert captured.get("reclaim") is False
 
 
-# ---------------------------------------------------------------------------
-# toolchain-caches class — Phase G, sweep_toolchain_caches. Every subprocess
-# call is mocked (AC9): no test here may invoke a real prune or touch a real
-# cache directory. Follows this file's existing pattern of monkeypatching
-# the underlying worker (subprocess.run / shutil.which) out entirely.
-# ---------------------------------------------------------------------------
-
-
 class _FakeCompletedProcess:
     def __init__(self, returncode=0):
         self.returncode = returncode
@@ -933,12 +772,6 @@ class _FakeCompletedProcess:
 
 
 def test_sweep_toolchain_caches_invokes_resolved_full_path_not_bare_name(tmp_path, monkeypatch):
-    """AC3 regression pin — the single most important test in this class.
-    A `.CMD`-shaped fixture (simulating npm/pnpm's Windows shim resolution)
-    must be invoked via the FULL PATH `shutil.which` returns, never the bare
-    executable name. Invoking by bare name would raise FileNotFoundError on
-    a real Windows box, silently reported upstream as "tool absent" — the
-    false-negative hazard this class exists to avoid."""
     cmd_shaped_path = str(tmp_path / "npm.CMD")
 
     def _fake_which(name):
@@ -963,7 +796,7 @@ def test_sweep_toolchain_caches_invokes_resolved_full_path_not_bare_name(tmp_pat
     assert total_items == 1
     assert total_bytes == 0
     assert captured_argv["argv"][0] == cmd_shaped_path
-    assert captured_argv["argv"][0] != "npm"  # never the bare name
+    assert captured_argv["argv"][0] != "npm"
     assert Path(captured_argv["argv"][0]).name == "npm.CMD"
 
 
@@ -983,15 +816,13 @@ def test_sweep_toolchain_caches_absent_tool_is_unavailable_not_a_phase_failure(m
     )
 
     assert total_items == 0
-    assert run_calls == []  # no subprocess ever invoked -- every tool absent
+    assert run_calls == []
     assert len(records) == len(cruft_sweep._TOOLCHAIN_CACHE_TOOLS)
     assert all(r["disposition"] == "unavailable" for r in records)
     assert all("UNAVAILABLE" in r["evidence"] for r in records)
 
 
 def test_sweep_toolchain_caches_one_tool_erroring_does_not_abort_others(monkeypatch):
-    """AC4: one tool's subprocess call raising must not abort the remaining
-    rows -- the failure is recorded against that row only."""
     def _fake_which(name):
         return f"/resolved/{name}"
 
@@ -1008,7 +839,6 @@ def test_sweep_toolchain_caches_one_tool_erroring_does_not_abort_others(monkeypa
         apply=True, json_mode=True, quiet=True, emit_fn=records.append,
     )
 
-    # uv fails, the other four (pip, npm, pnpm, huggingface) still succeed.
     assert total_items == len(cruft_sweep._TOOLCHAIN_CACHE_TOOLS) - 1
     uv_records = [r for r in records if r["name"] == "uv"]
     assert len(uv_records) == 1
@@ -1018,9 +848,6 @@ def test_sweep_toolchain_caches_one_tool_erroring_does_not_abort_others(monkeypa
 
 
 def test_sweep_toolchain_caches_dry_run_issues_no_mutating_call(monkeypatch):
-    """AC5: apply=False (the default) must run no mutating prune -- none of
-    the five tools expose a native dry-run flag, so subprocess.run must
-    never be called at all in dry-run mode."""
     monkeypatch.setattr(cruft_sweep.shutil, "which", lambda name: f"/resolved/{name}")
     run_calls = []
     monkeypatch.setattr(
@@ -1071,7 +898,7 @@ def test_sweep_toolchain_caches_dry_run_argv_invoked_but_never_mutates(tmp_path,
 
     assert len(calls) == 1
     assert calls[0] == ["/resolved/uv", "cache", "prune", "--dry-run"]
-    assert calls[0] != ["/resolved/uv", "cache", "prune"]  # never the mutating argv
+    assert calls[0] != ["/resolved/uv", "cache", "prune"]
     assert total_items == 0
     assert total_bytes == 0
     assert len(records) == 1
@@ -1131,20 +958,17 @@ def test_run_all_phases_all_class_includes_toolchain_caches_in_grand_total(monke
 
 
 def test_toolchain_cache_tools_table_is_data_shape(tmp_path):
-    """AC2: the table is data, not branching -- every row carries the same
-    shape (name, executable, prune_argv, dry_run_argv), and huggingface
-    targets `hf`, never the deprecated `huggingface-cli` (AC6)."""
     names = [row["name"] for row in cruft_sweep._TOOLCHAIN_CACHE_TOOLS]
     assert "huggingface" in names
-    assert "playwright" not in names  # AC7: excluded, not silently grouped in
+    assert "playwright" not in names
     for row in cruft_sweep._TOOLCHAIN_CACHE_TOOLS:
         assert set(row.keys()) == {"name", "executable", "prune_argv", "dry_run_argv", "wholesale"}
     pip_row = next(r for r in cruft_sweep._TOOLCHAIN_CACHE_TOOLS if r["name"] == "pip")
-    assert pip_row["wholesale"] is True  # only forced whole-cache-clear primitive
+    assert pip_row["wholesale"] is True
     non_pip_rows = [r for r in cruft_sweep._TOOLCHAIN_CACHE_TOOLS if r["name"] != "pip"]
     assert all(r["wholesale"] is False for r in non_pip_rows)
     npm_row = next(r for r in cruft_sweep._TOOLCHAIN_CACHE_TOOLS if r["name"] == "npm")
-    assert npm_row["prune_argv"] == ("cache", "verify")  # not the destructive "clean --force"
+    assert npm_row["prune_argv"] == ("cache", "verify")
     hf_row = next(r for r in cruft_sweep._TOOLCHAIN_CACHE_TOOLS if r["name"] == "huggingface")
     assert hf_row["executable"] == "hf"
     assert hf_row["executable"] != "huggingface-cli"

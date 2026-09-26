@@ -1,16 +1,3 @@
-"""Tests for the DR-276 declare-write seam.
-
-Covers the collection primitive (`session.declared_writes`) and the in-process
-runner (`cli_entry.run_op_main`), which together give the in-process CLI route
-the session scope-touch recording the subprocess route already had.
-
-The dispatch-path merge in `ipc.dispatch_message` is covered at the bottom of
-this file: `declare_write` and the result key are two spellings of one contract,
-and the merge is what makes an op's declaration behave identically on the
-subprocess route and the in-process one.
-
-Spec backlink: docs/decisions/DR-276-operator-clis-record-session-writes-at-a.md
-"""
 
 from __future__ import annotations
 
@@ -27,15 +14,9 @@ from coordinator_core.session.declared_writes import (
 )
 
 
-# --------------------------------------------------------------------------
-# The collection primitive
-# --------------------------------------------------------------------------
-
-
 def test_declare_write_outside_a_collection_is_a_noop():
-    """The pre-DR-276 behaviour is preserved for every unadopted caller."""
     assert active_declarations() is None
-    declare_write("state/whatever.md")  # must not raise
+    declare_write("state/whatever.md")
     assert active_declarations() is None
 
 
@@ -55,7 +36,6 @@ def test_collection_is_closed_on_exit_even_when_the_body_raises():
 
 
 def test_nested_collections_do_not_leak_upward():
-    """A handler invoking another handler must not inherit its declarations."""
     with collecting() as outer:
         declare_write("outer.md")
         with collecting() as inner:
@@ -67,7 +47,6 @@ def test_nested_collections_do_not_leak_upward():
 
 @pytest.mark.parametrize("bad", [None, 0, b"bytes", [], object()])
 def test_non_path_declarations_are_dropped_not_raised(bad):
-    """Fail-open: a malformed declaration never fails an op that succeeded."""
     with collecting() as declared:
         declare_write(bad)
     assert declared == []
@@ -88,8 +67,6 @@ def test_pathlike_declarations_are_accepted():
 
 
 def test_declarations_survive_asyncio_to_thread():
-    """The dispatch path offloads sync handlers via `asyncio.to_thread`, which
-    COPIES the context — appends to the bound list must still be visible."""
     import asyncio
 
     async def run():
@@ -98,11 +75,6 @@ def test_declarations_survive_asyncio_to_thread():
         return declared
 
     assert asyncio.run(run()) == ["from-thread.md"]
-
-
-# --------------------------------------------------------------------------
-# The in-process runner
-# --------------------------------------------------------------------------
 
 
 def _install_fake_op(monkeypatch, name, main):
@@ -150,8 +122,6 @@ def test_run_op_main_records_declared_writes(monkeypatch):
 
 
 def test_run_op_main_records_even_when_the_op_exits_nonzero(monkeypatch):
-    """A handler that wrote a file and then failed still wrote that file;
-    leaving it unclaimed is the orphan this seam exists to prevent."""
     recorded = {}
 
     def main(argv):
@@ -186,9 +156,6 @@ def test_run_op_main_raises_on_a_module_without_main(monkeypatch):
 
 
 def test_run_op_main_routes_to_the_named_entrypoint_not_main(monkeypatch):
-    """The override must not fall back to a `main` that also exists on the
-    same module — that fallback is exactly the silent regression this
-    parameter exists to prevent (see `install-meta-repo-precommit-hook.py`)."""
     called = {"main": False, "main_install_all": False}
 
     def main(argv):
@@ -238,8 +205,6 @@ def test_run_op_main_raises_on_a_module_without_the_named_entrypoint(monkeypatch
 
 
 def test_run_op_main_does_not_swallow_an_unimportable_module():
-    """An unresolvable op module is a transport failure the trampoline reports,
-    never something silently converted into a success."""
     with pytest.raises(ImportError):
         cli_entry.run_op_main("coordinator_core.ops.definitely_not_a_real_op", [])
 
@@ -277,7 +242,6 @@ def test_recording_declared_writes_is_a_noop_when_nothing_was_declared(monkeypat
 
 
 def test_record_is_fail_open(monkeypatch):
-    """Recording failure must never fail an op that already succeeded."""
 
     def exploding_recorder(*_a, **_kw):
         raise OSError("session dir unwritable")
@@ -285,11 +249,10 @@ def test_record_is_fail_open(monkeypatch):
     monkeypatch.setattr(
         "coordinator_core.ipc._record_self_reported_touches", exploding_recorder
     )
-    cli_entry._record(["state/x.md"], "/repo")  # must not raise
+    cli_entry._record(["state/x.md"], "/repo")
 
 
 def test_record_skips_the_import_entirely_when_nothing_was_declared(monkeypatch):
-    """The common case (no adoption) must not pay for importing ipc."""
     called = {"n": 0}
     monkeypatch.setattr(
         "coordinator_core.ipc._record_self_reported_touches",
@@ -299,14 +262,7 @@ def test_record_skips_the_import_entirely_when_nothing_was_declared(monkeypatch)
     assert called["n"] == 0
 
 
-# --------------------------------------------------------------------------
-# The dispatch-path merge
-# --------------------------------------------------------------------------
-
-
 def test_ipc_merges_declare_write_into_the_self_report_key():
-    """`declare_write` and the result key are two spellings of one contract, so
-    an op may use either or both and the recorder sees a single deduped list."""
     import asyncio
 
     from coordinator_core import ipc

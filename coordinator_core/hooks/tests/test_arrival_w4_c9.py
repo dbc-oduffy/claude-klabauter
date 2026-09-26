@@ -1,22 +1,3 @@
-"""coordinator_core/hooks/tests/test_arrival_w4_c9.py — the W4-C9 arrival
-gate for the Workflow/worktree guard family.
-
-Subject: the eight `hooks.<name>` ops this row's own body writes —
-`block_workflow_foreign_emission`, `block_workflow_unmodeled_agent`,
-`allow_emitted_workflow_fire`, `nudge_workflow_authoring_trampoline`,
-`nudge_multiwave_workflow`, `block_dispatch_suite_invocation`,
-`strip_worktree_isolation`, `block_worktree_tool` — ported from
-DoE-claude's `coordinator/hooks/scripts/*.py` siblings per
-docs/plans/2026-09-18-doe-holds-no-scripts.md, chunk W4-C9.
-
-Not exhaustive re-coverage of every DoE test assertion (several source
-modules run to 500-1000 lines of string/comment-aware JS scanning) — this
-file exercises each op's `register_op` registration, its core allow/deny/
-advisory decision branches, and the path-resolution adaptations this port
-made (settings-home launcher naming, zero-spawn git-root resolution,
-plugin-content-root doctrine-asset probing), against real inputs, not
-stubs.
-"""
 
 from __future__ import annotations
 
@@ -37,11 +18,6 @@ from coordinator_core.hooks import nudge_workflow_authoring_trampoline as nwat
 from coordinator_core.hooks import strip_worktree_isolation as swi
 
 
-# ---------------------------------------------------------------------------
-# Registration
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "op_name",
     [
@@ -57,11 +33,6 @@ from coordinator_core.hooks import strip_worktree_isolation as swi
 )
 def test_op_is_registered(op_name):
     assert op_name in ipc._REGISTRY
-
-
-# ---------------------------------------------------------------------------
-# block_workflow_foreign_emission
-# ---------------------------------------------------------------------------
 
 
 def test_bwfe_no_advisory_on_non_workflow(tmp_path):
@@ -90,7 +61,6 @@ def test_bwfe_sha_mismatch_denies_and_names_settings_home_launcher(tmp_path):
     reason = hso["permissionDecisionReason"]
     assert "changed after emission" in reason
     assert "--restamp" in reason
-    # Never the old plugin-root python3 invocation shape.
     assert "python3" not in reason
 
 
@@ -149,8 +119,6 @@ def test_bwfe_no_receipt_no_advisory(tmp_path):
 
 
 def test_bwfe_sha_mismatch_denies_through_the_wrapped_envelope(tmp_path):
-    """Pins the same wrapped-envelope
-    fix as `test_bwt_denies_enter_worktree_through_the_wrapped_envelope`."""
     script = tmp_path / "plan.workflow.mjs"
     script.write_text("console.log('a');\n", encoding="utf-8")
     receipt = script.with_name(script.name + ".emitted.json")
@@ -172,13 +140,7 @@ def test_bwfe_sha_mismatch_denies_through_the_wrapped_envelope(tmp_path):
     assert hso["permissionDecision"] == "deny"
 
 
-# ---------------------------------------------------------------------------
-# allow_emitted_workflow_fire
-# ---------------------------------------------------------------------------
-
-
 def test_aewf_never_denies(tmp_path):
-    """Pinned per source module docstring's own NEVER DENIES contract."""
     for payload in (
         {},
         {"tool_name": "Workflow", "tool_input": {}},
@@ -220,11 +182,6 @@ def test_aewf_silent_for_inline_script():
     assert result == {}
 
 
-# ---------------------------------------------------------------------------
-# strip_worktree_isolation
-# ---------------------------------------------------------------------------
-
-
 def test_swi_strips_worktree_isolation():
     result = swi._handler(
         {
@@ -252,11 +209,6 @@ def test_swi_no_advisory_on_non_workflow():
     assert result == {}
 
 
-# ---------------------------------------------------------------------------
-# block_worktree_tool
-# ---------------------------------------------------------------------------
-
-
 def test_bwt_denies_enter_worktree():
     result = bwt._handler({"tool_name": "EnterWorktree"})
     hso = result["hookSpecificOutput"]
@@ -275,18 +227,9 @@ def test_bwt_no_advisory_on_other_tool():
 
 
 def test_bwt_denies_enter_worktree_through_the_wrapped_envelope():
-    """Both engine doors send `params`
-    as `{"payload": <event>}`, not the flat event this module used to read
-    directly (`params.get("tool_name")`). Through the wrapped door the guard
-    was a structural no-op; this pins the fix."""
     result = bwt._handler({"payload": {"tool_name": "EnterWorktree"}})
     hso = result["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
-
-
-# ---------------------------------------------------------------------------
-# nudge_workflow_authoring_trampoline
-# ---------------------------------------------------------------------------
 
 
 def test_nwat_no_advisory_without_real_session(tmp_path):
@@ -320,11 +263,6 @@ def test_nwat_no_advisory_for_other_skill():
         }
     )
     assert result == {}
-
-
-# ---------------------------------------------------------------------------
-# nudge_multiwave_workflow
-# ---------------------------------------------------------------------------
 
 
 def test_nmw_no_advisory_on_subagent_dispatch():
@@ -362,18 +300,11 @@ def test_nmw_env_override_suppresses():
     assert result == {}
 
 
-# ---------------------------------------------------------------------------
-# block_dispatch_suite_invocation
-# ---------------------------------------------------------------------------
-
-
 def test_bdsi_no_advisory_on_non_dispatch_tool():
     result = bdsi._handler({"tool_name": "Bash"})
     assert result == {}
 
 
-#: A dispatch prompt the suite classifier DOES deny -- the override tests
-#: below must use it too, or they pass whether the override works or not.
 _BDSI_FIRING_PROMPT = "Run the full test suite: python3 -m pytest"
 
 
@@ -413,18 +344,11 @@ def test_bdsi_env_override_suppresses():
 
 
 def test_bdsi_denies_imperative_suite_command_through_the_wrapped_envelope():
-    """Pins the same wrapped-envelope
-    fix as `test_bwt_denies_enter_worktree_through_the_wrapped_envelope`."""
     result = bdsi._handler(
         {"payload": {"tool_name": "Agent", "tool_input": {"prompt": _BDSI_FIRING_PROMPT}}}
     )
     hso = result["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
-
-
-# ---------------------------------------------------------------------------
-# block_workflow_unmodeled_agent
-# ---------------------------------------------------------------------------
 
 
 def test_bwua_no_advisory_without_transcript():
@@ -507,10 +431,6 @@ def test_bwua_env_override_suppresses(tmp_path):
 
 
 def test_bwua_count_agent_modeled_matches_ground_truth():
-    """Direct unit exercise of the ported string/comment-aware scanner
-    against the two-real-call-site ground truth the source module's own
-    2026-07-23 fix documents (a false-positive-triggering apostrophe-in-
-    comment case)."""
     script = (
         "// this script's twin, don't crash\n"
         "agent('first', {model: 'sonnet'});\n"

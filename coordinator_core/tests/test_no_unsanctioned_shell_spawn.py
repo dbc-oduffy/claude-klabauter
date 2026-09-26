@@ -122,9 +122,6 @@ def test_indirection_via_local_helper_is_counted():
         "    _run(['bash', script])\n"
     )
     sites = sites_in_source(source, "x.py")
-    # The direct `subprocess.run(a)` inside `_run` is its own site (argv0
-    # unresolvable there); the indirected call-site through the helper at
-    # `f`'s call to `_run(['bash', script])` is a second, distinct site.
     assert len(sites) == 2
     indirected = [s for s in sites if s.enclosing == "f"]
     assert len(indirected) == 1
@@ -144,9 +141,6 @@ def test_argv0_from_module_constant_list_concat_and_fstring():
         "    subprocess.run([f'bash', script])\n"
     )
     sites = sites_in_source(source, "x.py")
-    # All three sites must be counted (present in the corpus, never silently
-    # dropped); the module-constant and f-string forms resolve cleanly to
-    # "bash", the concat form resolves to its statically-provable prefix.
     assert len(sites) == 3
     by_enclosing = {s.enclosing: s for s in sites}
     assert by_enclosing["f"].argv0 == "bash"
@@ -157,7 +151,6 @@ def test_argv0_from_module_constant_list_concat_and_fstring():
 
 
 def test_shell_bound_to_variable_and_starred_kwargs_are_counted():
-    # `**opts` forwarding is opaque -- whether `shell=True` ends up set is
     # statically unknowable, so C1b's SHELL_UNKNOWN bucket (the honest
     # "can't tell") applies to `g`, not SHELL_TRUE. Only the local-variable
     # `shell=use_shell` binding in `f` resolves concretely to SHELL_TRUE.
@@ -316,21 +309,6 @@ def _unsanctioned_sites() -> list[str]:
     return sorted(bad)
 
 
-# Sites the gate must NOT fail on despite being unsanctioned production
-# shell-shaped spawns -- structural identity, never a path substring or
-# regex, so a *different* spawn appearing in the same function does not
-# inherit the exemption.
-#
-# Empty since the C11 conversion (2026-08-14): its one entry was
-# substrate.py `_powershell`, fronting the Windows machine-mutation call
-# sites, held open because converting it was believed unverifiable off
-# Windows. It was converted to native winreg/ctypes/os/shutil and verified
-# on Windows 11, so the exemption retired on its own terms rather than
-# being deleted to quiet the gate.
-#
-# Left defined and empty on purpose: the staleness assertion below then
-# keeps checking a live name instead of an absent one, and the next entry
-# that genuinely needs holding open has somewhere to land.
 KNOWN_OPEN = frozenset()
 
 

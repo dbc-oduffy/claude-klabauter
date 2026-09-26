@@ -103,7 +103,6 @@ _SEARCH_SUBDIRS = (
 )
 _SCAN_EXTENSIONS = (".md", ".sh", ".js", ".py")
 
-# Matches the literal root-monolith path: archive/completed/YYYY-MM.md
 _PATTERN = re.compile(r"archive/completed/[0-9]{4}-[0-9]{2}\.md")
 
 _TRIPWIRE_COMMENT = re.compile(r"<!--\s*TRIPWIRE:|#\s*TRIPWIRE:")
@@ -186,12 +185,6 @@ def scan(coordinator_root: str) -> Tuple[List[str], List[str], int]:
             for lineno, text in enumerate(lines, start=1):
                 if not _PATTERN.search(text):
                     continue
-                # Exceptions 1 and 2 (`/tests/`, `/docs/wiki/`) match
-                # path-segment substrings built on the forward-slash
-                # convention of the bash oracle's grep output. os.path.join
-                # on Windows renders `path` with backslashes, which silently
-                # defeats both segment checks — normalize to forward slashes
-                # before evaluating _is_excepted's path-based exemptions.
                 posix_path = path.replace(os.sep, "/")
                 if _is_excepted(posix_path, text):
                     continue
@@ -204,10 +197,6 @@ def scan(coordinator_root: str) -> Tuple[List[str], List[str], int]:
 
 
 def _default_root() -> str:
-    # Mirrors the bash script's own-two-levels-up default: this module has no
-    # analogous "own path" to derive from (it's a claude-klabauter-side import, not the
-    # DoE trampoline file), so callers MUST pass --root explicitly. Kept as a
-    # named function for parity documentation, not a real fallback.
     raise RuntimeError("check-no-monolith-completion-append: --root is required")
 
 

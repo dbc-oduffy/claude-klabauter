@@ -80,90 +80,38 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-THIS_DIR = Path(__file__).resolve().parent          # coordinator/bin/tests
-REPO_ROOT = THIS_DIR.parent.parent.parent            # <repo root>
+THIS_DIR = Path(__file__).resolve().parent
+REPO_ROOT = THIS_DIR.parent.parent.parent
 
-# --- Slow-tier registry: surviving shell/bats suites -----------------------
 # Enumerated, not globbed — see module docstring § REGISTRY DISCIPLINE.
-# Each entry is (path-relative-to-repo-root, runner) where runner is
-# "bash" or "bats", pinned per-suite (not inferred from extension — several
-# .bats-named files are plain-bash harnesses per their own header comment).
 SHELL_SUITES = [
-    # deep-research-record-roundtrip.test.sh — RETIRED 2026-08-13 (C8b Group A
-    # port): superseded by coordinator/tests/test_deep_research_record_roundtrip.py,
-    # a pre-existing verbatim pytest port already collected by testpaths
-    # (coordinator/tests). No registration needed here — pytest runs it on
-    # every fast/full-tier invocation already.
     ("coordinator/bin/tests/run-lineage-dag-suites.py", "python3"),
-    # run-plan-tasks-spine-suites.sh — RETIRED 2026-08-13 (C8b Group A port):
-    # superseded by coordinator/tests/test_run_plan_tasks_spine_suites.py,
-    # already collected by testpaths. Its 4th leg (C1 enum-parity) was deleted
-    # upstream and is tracked in state/bug-backlog/ — not carried here.
-    # test-aggregate-chain-loe.sh — RETIRED 2026-08-13 (C8b Group A port):
-    # superseded by coordinator/tests/test_aggregate_chain_loe.py, a
-    # pre-existing verbatim pytest port already collected by testpaths
-    # (coordinator/tests). No registration needed here.
-    # test-audit-roadmap-dependency-order.sh — PORTED to pytest, see
-    # coordinator/tests/test_audit_roadmap_dependency_order.py (fast tier).
-    # test-audit-roadmap-verdict-regex.sh — PORTED to pytest, see
-    # coordinator/tests/test_audit_roadmap_verdict_regex.py (fast tier).
     ("coordinator/bin/tests/test-bin-sh-polyglot-direct-invocation.sh", "bash"),
     ("coordinator/bin/tests/test-cc-root-source-guard-fix.sh", "bash"),
-    # test-check-plugin-drift-copy-install.sh — PORTED to pytest, see
-    # coordinator/tests/test_check_plugin_drift_copy_install.py (fast tier).
-    # test-check-registry-codename-leak-keepset.sh — PORTED to pytest, see
-    # coordinator/tests/test_check_registry_codename_leak_keepset.py (fast tier).
-    # test-coordinator-session-loe.sh — PORTED to pytest, see
-    # coordinator/tests/test_coordinator_session_loe.py (fast tier).
     ("coordinator/bin/tests/test-d1-same-commit.sh", "bash"),
-    # Re-admitted 2026-07-22 (EM-side): corpus defect fixed (created: added to
-    # the one archived handoff); suite re-run green 124 pass / 0 fail.
     # test-seed-skill-overrides.sh — EXCLUDED, see module docstring.
     # test-self-claim-refresh-queries.sh — EXCLUDED, see module docstring.
     # test-step-number-stability.sh — EXCLUDED, see module docstring.
     # test-terminator-suite-green.sh — EXCLUDED (cascades from
-    # test-step-number-stability.sh), see module docstring.
     # test-verify-no-console-flash.sh — SUPERSEDED, see module docstring.
-    # invoking-shell-bash4-probe.test.py — RETIRED from this runner 2026-08-17,
-    # converted to `coordinator/scripts/lib/test_invoking_shell_bash4_probe.py`
-    # and collected by pytest via the `coordinator/scripts` testpaths admit. It
-    # was the last dotted `.test.py` straggler of the 2026-07-25/07-28 migration,
-    # and being outside the test tree was ALSO what made it trip
-    # `test_no_unsanctioned_shell_spawn` — one rename cleared both. The probe it
-    # drives (invoking-shell-bash4-probe.sh) stays shell, untouched: DR-079/
-    # 2026-07-22 claude-klabauter memo, genuine keep, no Python substitute.
     # coordinator/tests/cs-session-shape.bats — EXCLUDED, see module docstring.
     # test-snippet-registry.bats — SUPERSEDED, see module docstring.
     # verify-no-console-flash-file-allow.bats — SUPERSEDED, see module docstring.
 ]
 
-# This comment previously named suites
-# (test-bootstrap-repo.sh, test-coordinator-auto-push.sh,
-# test-coordinator-safe-commit.sh, test-new-project-scaffold.sh,
 # test-migrate-cross-repo-layout.sh) that are NOT members of SHELL_SUITES
-# above -- their pytest ports live in run-fast-tests.py's
 # NATIVE_PYTEST_MODULES instead, so the comment was misdirecting a reader
-# auditing concurrent-safety risk. Corrected audit (2026-07-22,
 # review-integration pass) of all 13 current SHELL_SUITES entries: 11 use
-# an isolated mktemp/mktemp -d fixture root (or are read-only against
 # REPO_ROOT, e.g. test-d1-same-commit.sh's `git log`/`git show` calls) and
 # carry no shared-REPO_ROOT-mutation risk under MAX_WORKERS=4.
-#
 # The one entry that used to do real REPO_ROOT-relative filesystem setup —
-# deep-research-record-roundtrip.test.sh, which wrote fixed-name fixture
 # files directly under REPO_ROOT/docs/research (STEM_WEB/STEM_C) and was NOT
-# self-collision-safe across concurrent run-full-tests.py invocations — was
-# retired 2026-08-13 (C8b Group A port) in favour of the pre-existing pytest
-# port coordinator/tests/test_deep_research_record_roundtrip.py, which uses a
-# module-scoped pytest fixture over the same fixture paths and is subject to
 # the same cross-invocation caveat; it is no longer a SHELL_SUITES member so
-# the note is historical, not a live gap in this registry.
 MAX_WORKERS = 4
 PER_SUITE_TIMEOUT_SEC = 120
 
 
 def run_suite(rel_path: str, runner: str) -> tuple[str, str, float]:
-    """Run one suite under a hard per-suite timeout; return (path, verdict, seconds)."""
     full_path = REPO_ROOT / rel_path
     if not full_path.is_file():
         return (rel_path, "MISSING-ON-DISK", 0.0)
@@ -194,9 +142,6 @@ def main() -> int:
 
     for runner_name in ("bash", "bats", "python3"):
         needed = any(r == runner_name for _, r in SHELL_SUITES)
-        # python3 is always available -- we invoke it via sys.executable
-        # (see run_suite), never a bareword "python3" lookup, so PATH
-        # presence of that literal name is not required.
         if runner_name == "python3":
             continue
         if needed and __import__("shutil").which(runner_name) is None:

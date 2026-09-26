@@ -31,8 +31,6 @@ from coordinator_core.test_baton_assemble import (  # noqa: E402
     _write_artifact,
 )
 
-# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
-# cadence suite is the separate threshold ruling, not this declaration.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -41,9 +39,6 @@ pytestmark = [
 
 @pytest.fixture(autouse=True)
 def _stub_operator_config(monkeypatch):
-    """Restated per-module (autouse fixtures do not cross module boundaries)
-    -- `brief()` calls `resolve_operator_config()` unconditionally. Mirrors
-    `test_repo_identity_gate.py`'s own fixture of the same name."""
     monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
 
 
@@ -109,11 +104,6 @@ class TestStampedApplyOutranksUnstampedApply:
         assert lineage["predecessor_ordering_degraded"] is False
 
     def test_unstamped_apply_still_outranks_brief(self, tmp_path, monkeypatch):
-        """Back-compat guarantee: an `apply`-stage claim with NO `stamped`
-        marker at all (every claim dir written before f592df0bb329, and
-        every claim whose stamp attempt is refused) must still rank ahead of
-        a `brief`-stage claim -- the widened key must not invert the
-        existing `apply` > `brief` ordering DR-292 already pinned."""
         _init_repo(tmp_path)
         briefed = _write_artifact(
             tmp_path / "state" / "handoffs" / "2026-07-20-briefed3.md",
@@ -149,9 +139,6 @@ class TestStampedApplyOutranksUnstampedApply:
     def test_three_way_tier_orders_stamped_then_unstamped_then_brief(
         self, tmp_path, monkeypatch
     ):
-        """All three tiers present together resolve in stamped > unstamped
-        > brief order regardless of `claimed_at`, pinning the full ordering
-        this change introduces in one pass."""
         _init_repo(tmp_path)
         briefed = _write_artifact(
             tmp_path / "state" / "handoffs" / "2026-07-20-tier-brief.md",

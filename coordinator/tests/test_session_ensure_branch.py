@@ -1,11 +1,3 @@
-"""tests/test_session_ensure_branch.py — pytest coverage for
-lib/session_ensure_branch.py.
-
-This is new coverage, not a port of a prior test suite.
-
-Port: docs/plans/2026-07-19-debash-coordinator-windows.md (chunk E3-f)
-Spec backlink: state/handoffs/2026-07-04_220004_roadmap-strang-04.md § Phase 1
-"""
 from __future__ import annotations
 
 import os
@@ -187,20 +179,6 @@ def test_ok_verdict_cuts_as_before(sandbox_repo, monkeypatch):
     assert "work/testmachine/2026-07-21" in _branches(sandbox_repo)
 
 
-# ---------------------------------------------------------------------------
-# The boot path's merged-away-day-branch repair (2026-09-02).
-#
-# The state these three pin is not exotic: `/merging-to-main` merges today's
-# day branch into `main` and leaves the tree on `main`, which puts the local
-# day-branch ref BEHIND HEAD. Every boot afterwards found the branch existing,
-# found HEAD not at its tip, refused, printed the banner, and left the tree on
-# `main`. On 2026-09-02 that ran for forty minutes and fifteen commits landed
-# on `main`, because the assert reported the state at SessionStart and nothing
-# ever repaired it. A detector that fires once and changes nothing is what
-# these tests exist to keep out.
-# ---------------------------------------------------------------------------
-
-
 def _commit(work, name: str) -> None:
     (work / name).write_text(name, encoding="utf-8")
     _run(["git", "add", name], str(work))
@@ -212,16 +190,9 @@ def _sha(work, rev: str) -> str:
 
 
 def test_boot_advances_a_day_branch_that_main_has_moved_past(sandbox_repo):
-    """THE REPAIR. Today's branch exists and lags HEAD -- every commit it
-    carries is already reachable from HEAD, the ordinary post-merge state.
-    The boot path advances the ref and checks it out instead of refusing, and
-    HEAD's commit does not move.
-    """
     work = sandbox_repo
     _run(["git", "checkout", "-q", "-b", "work/testmachine/2026-07-21"], str(work))
     _commit(work, "on-day-branch.txt")
-    # The merge-to-main: `main` fast-forwards past the day branch and the tree
-    # returns to it, exactly as /merging-to-main leaves things.
     _run(["git", "checkout", "-q", "main"], str(work))
     _run(["git", "merge", "-q", "--ff-only", "work/testmachine/2026-07-21"], str(work))
     _commit(work, "on-main-after-merge.txt")
@@ -240,11 +211,6 @@ def test_boot_advances_a_day_branch_that_main_has_moved_past(sandbox_repo):
 
 
 def test_boot_still_refuses_a_day_branch_carrying_commits_head_lacks(sandbox_repo):
-    """THE LIMIT. Genuine divergence -- the day branch has a commit `main`
-    does not -- is NOT repaired. Checking it out would move HEAD under every
-    live peer, and advancing the ref would discard that commit. Unchanged
-    refusal, both.
-    """
     work = sandbox_repo
     _run(["git", "checkout", "-q", "-b", "work/testmachine/2026-07-21"], str(work))
     _commit(work, "unmerged.txt")
@@ -261,7 +227,6 @@ def test_boot_still_refuses_a_day_branch_carrying_commits_head_lacks(sandbox_rep
     assert res.result == "REFUSED-LIVE-PEERS"
     assert _current_branch(work) == "main"
     assert _sha(work, "HEAD") == head_before
-    # The unmerged commit is still there. Nothing was discarded.
     assert _sha(work, "work/testmachine/2026-07-21") == day_sha
 
 

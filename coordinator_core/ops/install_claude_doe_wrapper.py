@@ -111,7 +111,6 @@ def main(argv: List[str]) -> int:
         print(f"claude_doe_wrapper: failed ({exc})")
         return 1
 
-    # DR-276: declared AFTER the copy+chmod lands, never before — the contract
     # is a report of what was ACTUALLY written, not of an intended surface.
     declare_write(wrapper_dst)
 

@@ -130,28 +130,15 @@ from coordinator_core.write_guards._subagent_identity import (
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
-#: hard-deny band; next free slot after block_subagent_guard_grant_write (47),
-#: before block_consumed_handoff_edit (50) -- no other guard claims 48 or 49.
 PRIORITY = 48
 
-#: Generator-provenance declaration (coordinator_core/ops/generator_provenance.py).
-#: This module performs no filesystem writes of its own — no state-file
-#: writes, no log appends. It only reads a back-pointer chain under
-#: <git_root>/.git/coordinator-sessions/.
 GENERATES = []
 
-#: Escape-hatch env var named (indirectly, via operator_override_note) as
-#: this guard's override key.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_CONFINED_AGENT_WRITE"
 
-#: tool_input keys that can carry the target path, in probe order.
-#: NotebookEdit uses notebook_path; the rest use file_path. Mirrors
 #: block_home_dir_memo_delivery.py's own ``_PATH_KEYS``.
 _PATH_KEYS = ("file_path", "notebook_path")
 
-#: Control-whitespace/C0-control sanitization before interpolating an
-#: attacker-influenced file_path into a deny reason. Same pattern as every
-#: sibling write guard in this package.
 _CONTROL_WHITESPACE_RE = re.compile(r"[\t\r\n\f\v]")
 _C0_CONTROL_RE = re.compile(r"[\x00-\x1f]")
 
@@ -177,11 +164,6 @@ def _extract_file_path(payload: Dict[str, Any]) -> str:
 
 
 def _deny_reason(file_path: str, payload: Optional[Dict[str, Any]] = None) -> str:
-    """One fact, one alternative — `docs/wiki/guard-messaging.md` § Register.
-    Names no override key; `operator_override_note` renders nothing for a
-    dispatched-subagent audience, which is the only audience that reaches
-    this function (see module docstring).
-    """
     file_path_safe = _sanitize_file_path_for_reason(file_path)
     _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
     return (
@@ -192,29 +174,13 @@ def _deny_reason(file_path: str, payload: Optional[Dict[str, Any]] = None) -> st
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the confined-agent write guard against a PreToolUse payload.
-
-    Returns ``None`` (allow) or the nested hard-deny envelope. Fails open on
-    any missing/unresolvable identity leg (see module docstring allow-
-    conditions (3)-(4) and the plan's Anti-scope #3) — this is per-kind
-    policy, not the uniform-deny identity family.
-
-    Order of checks, cheapest first (plan chunk C1 body, and the plan's own
-    Anti-scope note that this package sits on the PreToolUse write hot path
-    with 50-70 concurrent LLMs on this box): override env var; tool_name;
-    empty raw agent_id; resolve identity; resolve subagent type;
-    membership; containment.
-    """
-    # Honor escape hatch first.
     if os.environ.get(_OVERRIDE_ENV_VAR, "0") == "1":
         return None
 
     # Tool-name guard — defense-in-depth (MATCHERS already filters this at
-    # the engine level, but every sibling guard re-checks defensively).
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
 
-    # Empty raw agent_id -> no subagent at all (EM main-loop write) -> allow.
     raw_agent_id = payload.get("agent_id") or ""
     if not raw_agent_id:
         return None
@@ -238,27 +204,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not file_path:
         return None
 
-    # BOTH roots are legitimate sandboxes during the relocation, and the
-    # agent does not choose which one it was handed. Provisioning resolves
-    # the machinery root; a session whose hooks were read at boot, before the
-    # engine republished, is still provisioned under the legacy root. Honour
-    # whichever the payload names -- measured 2026-09-02, a code-reviewer was
-    # told its sidecar was at `.coordinator-local/subagent-share/<sid>/` and
-    # then refused permission to write there, which left its findings with no
-    # artifact at all and a receipt gate reading a blank body.
-    #
-    # This widens containment by exactly the address the same bucket moved
-    # to. It admits no new BUCKET: a path outside both share dirs is refused
-    # as before.
     sandbox_roots = [
         Path(casefold_path(share_dir(git_root, session_id))),
         Path(casefold_path(legacy_share_dir(git_root, session_id))),
     ]
     # A tool-supplied file_path is contractually absolute (every MATCHERS
-    # tool requires it), but a relative string is joined against git_root
-    # rather than left to resolve() against this PROCESS's cwd (which need
-    # not be the payload's cwd at all) — fail-open on a stray relative path
-    # would be the wrong direction for a containment check.
     candidate_raw = file_path if Path(file_path).is_absolute() else str(Path(git_root, file_path))
     candidate = Path(casefold_path(candidate_raw))
     if contained_path(candidate, sandbox_roots) is not None:

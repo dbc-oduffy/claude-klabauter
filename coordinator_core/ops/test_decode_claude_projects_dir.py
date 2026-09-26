@@ -1,13 +1,3 @@
-"""Tests for coordinator_core.ops.decode_claude_projects_dir.
-
-Golden-oracle parity fixtures were captured 2026-07-16 by running the bash
-original against a real ~/.claude/projects/ tree and two negative corpora
-(missing dir, dir with zero decodable entries). See module docstring
-Negative-spec for the documented divergences (line order; zero-candidates
-stderr text).
-
-Port of: decode-claude-projects-dir.sh (DoE b5a4192c, 2026-07-20)
-"""
 
 from __future__ import annotations
 
@@ -45,7 +35,6 @@ def test_decode_one_skips_no_drive_prefix():
 
 
 def test_decode_one_skips_short_shortname():
-    # rest="-foo" after a single-letter split -> shortname length < 2
     assert _decode_one("X--a") is None
 
 
@@ -58,10 +47,6 @@ def test_run_projects_dir_not_found(tmp_path):
 
 
 def test_run_zero_candidates_reproduces_oracle_crash_contract(tmp_path):
-    # Empty dir (no subdirs at all) -> golden oracle crashes with "unbound
-    # variable" under set -u before reaching its intended WARNING/exit-2
-    # branch. This port reproduces exit 1 / no WARNING text, not the
-    # bash-specific crash message (see module Negative-spec).
     empty = tmp_path / "empty"
     empty.mkdir()
     stdout_lines, stderr_lines, exit_code = _run(str(empty))
@@ -84,7 +69,7 @@ def test_run_positive_corpus_dedupe_and_content(tmp_path):
         "X--example-sim-repo",
         "C--Users-example-operator--claude",
         "X---repo-name--tasks--sub",
-        "X---repo-name",  # first-encoding-wins: this one should be dropped by suffix-collapse rule only if seen first differs
+        "X---repo-name",
         "tmp",
         "some-smoketest",
     ):
@@ -97,7 +82,6 @@ def test_run_positive_corpus_dedupe_and_content(tmp_path):
     assert "example-sim-repo\tx:/example-sim-repo\tX--example-sim-repo" in joined
     assert "claude-central\tc:/Users/example-operator/.claude\tC--Users-example-operator--claude" in joined
     assert any(line.startswith("repo-name\t") for line in stdout_lines)
-    # dedupe: only one repo-name line survives (first-encoding-wins)
     assert sum(1 for line in stdout_lines if line.startswith("repo-name\t")) == 1
     assert any("candidate(s) emitted" in line for line in stderr_lines)
 

@@ -62,11 +62,6 @@ def _fake_git_common_dir(worktree: Path, monkeypatch) -> None:
 
 
 def _seed_stub(worktree: Path, deliverable_id: str | None = None) -> Path:
-    """Seed a schema-valid `kind: roadmap-baton` origin stub (`_is_baton_kind`
-    admits it; `roadmap_id`/`stub_id` are only schema-legal on this kind,
-    unlike `spinoff`) -- full-record shape only matters for the tests that
-    reach `_ship` (schema-validated); the guard-decline tests above never
-    reach validation and would pass with a minimal record too."""
     stub = worktree / "state" / "handoffs" / "origin-stub.md"
     stub.parent.mkdir(parents=True, exist_ok=True)
     fm = (
@@ -96,9 +91,6 @@ def _complete_proof(deliverable_id: str = "dlv-d1") -> dict:
         "deliverable_id": deliverable_id,
         "missing_chunk_ids": [],
         "status": "implemented",
-        # Finding 0 (staff-eng review 2026-08-13): a proof is only complete
-        # when the plan's spine actually had at least one commit-required
-        # row for the join to have run against.
         "commit_required_chunk_count": 1,
     }
 
@@ -202,14 +194,6 @@ def test_try_close_complete_matching_proof_closes_without_consulting_guard(
 def test_try_close_proof_deliverable_id_whitespace_padding_still_matches(
     tmp_path, monkeypatch
 ):
-    """A proof's `deliverable_id` carrying leading/trailing whitespace still
-    matches a clean stub `deliverable_id` -- pins the strip normalization at
-    the "Review: staff-eng Finding 3" comment block (`_try_close`), which
-    compares an already-stripped `_read_deliverable_id` return against a
-    proof value that must be stripped too. Every other proof-matching test in
-    this file uses already-clean `deliverable_id` values, so a future
-    refactor that dropped that strip would pass the rest of the suite
-    silently."""
     worktree = tmp_path
     stub_path = _seed_stub(worktree, deliverable_id="dlv-d1")
     _fake_git_common_dir(worktree, monkeypatch)
@@ -329,16 +313,7 @@ def test_try_close_absent_proof_preserves_today_behaviour(tmp_path, monkeypatch)
     assert closed["close_basis"] == m.CLOSE_BASIS_GUARD
 
 
-# ---------------------------------------------------------------------------
-# Degenerate proof
-# ---------------------------------------------------------------------------
-
-
 def test_is_complete_delivery_proof_rejects_zero_commit_required_count():
-    """A proof with `commit_required_chunk_count: 0` must NOT be complete —
-    this is the exact shape `close_out_and_stamp` now builds for a plan whose
-    spine has zero commit-required rows, the degenerate `_determine_shipped`
-    branch (`if not chunk_ids:`) Finding 0 identified."""
     proof = {**_complete_proof(), "commit_required_chunk_count": 0}
     assert m._is_complete_delivery_proof(proof) is False
 
@@ -384,22 +359,12 @@ def test_try_close_zero_commit_required_proof_falls_back_to_guard(tmp_path, monk
     assert skipped["reason"] == "guard-declined-live-children"
 
 
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-
-
 def test_is_complete_delivery_proof_missing_key_vs_empty_list_for_missing_chunk_ids():
-    """`missing_chunk_ids` absent is NOT the same claim as an explicitly
-    empty list — an absent key must be treated as incomplete."""
     proof = {k: v for k, v in _complete_proof().items() if k != "missing_chunk_ids"}
     assert m._is_complete_delivery_proof(proof) is False
 
 
 def test_try_close_stub_without_deliverable_id_falls_back_to_guard(tmp_path, monkeypatch):
-    """A stub carrying NO `deliverable_id` at all, presented with an
-    otherwise-complete proof, must fall back to the live-children guard —
-    never close on the proof. This is the airtightness of the
-    `stub_deliverable_id is not None` arm."""
     worktree = tmp_path
     stub_path = _seed_stub(worktree, deliverable_id=None)
     _fake_git_common_dir(worktree, monkeypatch)
@@ -433,8 +398,6 @@ def test_try_close_stub_without_deliverable_id_falls_back_to_guard(tmp_path, mon
 
 
 def test_handler_coerces_non_dict_delivery_proof_safely(tmp_path, monkeypatch):
-    """A non-dict `delivery_proof` at the handler boundary (string/list/int)
-    must be coerced to None, not raise."""
     worktree = tmp_path
     (worktree / ".git").mkdir(parents=True, exist_ok=True)
     handoffs_dir = worktree / "state" / "handoffs"
@@ -447,14 +410,10 @@ def test_handler_coerces_non_dict_delivery_proof_safely(tmp_path, monkeypatch):
                 worktree,
             )
         )
-        assert result["exit_code"] == 1  # unresolvable handoff_path — reached without raising
+        assert result["exit_code"] == 1
 
 
 def test_handler_multi_stub_fan_out_reruns_proof_check_per_stub(tmp_path, monkeypatch):
-    """Multi-stub fan-out: one call resolving several (roadmap_id, stub_id)
-    pairs via a plan's `closes_stubs` list must re-check the delivery proof
-    PER STUB — only the stub whose own `deliverable_id` matches the proof
-    closes on the proof; the other falls back to the (safe-reading) guard."""
     worktree = tmp_path
     _fake_git_common_dir(worktree, monkeypatch)
 
@@ -539,15 +498,7 @@ def test_handler_multi_stub_fan_out_reruns_proof_check_per_stub(tmp_path, monkey
     closed_by_basis = {c["stub_id"]: c["close_basis"] for c in result["closed"]}
     assert closed_by_basis.get("sA") == m.CLOSE_BASIS_DELIVERY_PROOF
     assert closed_by_basis.get("sB") == m.CLOSE_BASIS_GUARD
-    # Guard must have been consulted for stub B (proof mismatch) but not
-    # need to have been for stub A (proof applies) — asserted via the closed
-    # basis above; guard_calls confirms it was reached at all for B.
     assert any("stub-b.md" in (c or "") for c in guard_calls)
-
-
-# ---------------------------------------------------------------------------
-# predecessor_handoff path-keyed leg (C2)
-# ---------------------------------------------------------------------------
 
 
 def _seed_non_roadmap_spinoff_stub(
@@ -579,9 +530,6 @@ def _seed_non_roadmap_spinoff_stub(
 
 
 def _seed_session_handoff(worktree: Path, name: str = "not-a-baton.md") -> Path:
-    """Seed a `kind: session-handoff` record — NOT baton-kind
-    (`_is_baton_kind` refuses it), the fixture for "predecessor_handoff names
-    a file that is not baton-kind" (never closed)."""
     stub = worktree / "state" / "handoffs" / name
     stub.parent.mkdir(parents=True, exist_ok=True)
     stub.write_text(
@@ -624,9 +572,6 @@ def _seed_plan(
 
 
 def test_predecessor_handoff_closes_non_roadmap_spinoff_stub(tmp_path, monkeypatch):
-    """(1) A plan's `predecessor_handoff` naming a `ready_to_fire` non-roadmap
-    `kind: spinoff` stub with NO roadmap_id/stub_id closes it, with
-    `stubs_resolved == 1`."""
     worktree = tmp_path
     _fake_git_common_dir(worktree, monkeypatch)
     _seed_non_roadmap_spinoff_stub(worktree)
@@ -656,9 +601,6 @@ def test_predecessor_handoff_closes_non_roadmap_spinoff_stub(tmp_path, monkeypat
 
 
 def test_predecessor_handoff_shipped_stub_excluded_not_no_candidates(tmp_path, monkeypatch):
-    """(2) A `predecessor_handoff`-named stub already `deployment_state:
-    shipped` is NOT closed, is reported as state-excluded, and the call is
-    NOT `no_candidates`."""
     worktree = tmp_path
     (worktree / ".git").mkdir(parents=True, exist_ok=True)
     _seed_non_roadmap_spinoff_stub(worktree, deployment_state="shipped")
@@ -682,12 +624,9 @@ def test_predecessor_handoff_shipped_stub_excluded_not_no_candidates(tmp_path, m
 
 
 def test_predecessor_handoff_dedupes_against_pair_leg(tmp_path, monkeypatch):
-    """(3) A stub reachable by BOTH a (roadmap_id, stub_id) pair (the plan's
-    own direct frontmatter) AND `predecessor_handoff` (naming the SAME stub)
-    closes exactly once."""
     worktree = tmp_path
     _fake_git_common_dir(worktree, monkeypatch)
-    stub = _seed_stub(worktree)  # kind: roadmap-baton, roadmap_id: r1, stub_id: s1
+    stub = _seed_stub(worktree)
     assert stub.name == "origin-stub.md"
     _seed_plan(
         worktree,
@@ -715,18 +654,13 @@ def test_predecessor_handoff_dedupes_against_pair_leg(tmp_path, monkeypatch):
     assert result["stubs_resolved"] == 1
     assert len(result["closed"]) == 1
     assert result["closed"][0]["stub_path"] == "state/handoffs/origin-stub.md"
-    # Closed exactly once — the live-children guard (called once per actual
-    # close attempt) must have been consulted exactly once, not twice.
     assert len(close_calls) == 1
 
 
 def test_predecessor_handoff_absent_is_byte_identical_to_today(tmp_path, monkeypatch):
-    """(4) `predecessor_handoff` absent -> byte-identical behaviour to today,
-    including `no_candidates: true` on a plan with no linkage at all
-    (regression guard on the quiet path)."""
     worktree = tmp_path
     (worktree / ".git").mkdir(parents=True, exist_ok=True)
-    _seed_plan(worktree)  # no predecessor_handoff, no roadmap_id/stub_id
+    _seed_plan(worktree)
 
     result = _run(
         m._handler({"plan_path": "docs/plans/plan.md"}, worktree)
@@ -740,8 +674,6 @@ def test_predecessor_handoff_absent_is_byte_identical_to_today(tmp_path, monkeyp
 
 
 def test_predecessor_handoff_nonexistent_path_does_not_crash(tmp_path, monkeypatch):
-    """(5) `predecessor_handoff` naming a non-existent path does not crash;
-    behaves as no linkage from that leg."""
     worktree = tmp_path
     (worktree / ".git").mkdir(parents=True, exist_ok=True)
     _seed_plan(
@@ -759,8 +691,6 @@ def test_predecessor_handoff_nonexistent_path_does_not_crash(tmp_path, monkeypat
 
 
 def test_predecessor_handoff_non_baton_kind_refused(tmp_path, monkeypatch):
-    """(6) `predecessor_handoff` naming a file that is NOT baton-kind (e.g. a
-    `session-handoff`) is refused, not closed."""
     worktree = tmp_path
     (worktree / ".git").mkdir(parents=True, exist_ok=True)
     _seed_session_handoff(worktree)

@@ -79,18 +79,6 @@ import re
 from functools import lru_cache
 from typing import Pattern
 
-#: The declared work-record kinds -- the closed set of first segments under
-#: `state/`. The SSOT (module docstring): declared here, never derived from
-#: the allowlist at import time.
-#:
-#: A SET, not a kind->segment mapping. A record kind IS its directory
-#: segment; the two are one fact, and a mapping would be a second spelling
-#: of it -- 43 identity rows inviting exactly the divergence this module
-#: exists to make impossible. What the set buys is membership, which is the
-#: whole read-side contract: an undeclared kind raises rather than resolving
-#: to a plausible path nobody declared. If a kind and its segment ever must
-#: genuinely differ, that is a real fact and earns a real mapping THEN --
-#: never a mapping kept empty-handed against the day it might.
 HOMES = frozenset({
     "audits",
     "backlogs",
@@ -147,36 +135,16 @@ HOMES = frozenset({
 
 
 def _declared(kind: str) -> str:
-    """`kind` back, once it is a declared one. Raises `KeyError` otherwise.
-
-    `KeyError` and not a bespoke exception because every caller here used
-    to index a dict, and a reader tracing a failure should land on the same
-    "you asked for a kind nobody declared" answer the mapping gave.
-    """
     if kind not in HOMES:
         raise KeyError(kind)
     return kind
 
 
 def home_dir(repo_root: str, kind: str) -> str:
-    """`<repo_root>/state/<kind>` -- the directory a record of this declared
-    kind lives in.
-
-    `repo_root` is always a parameter, never resolved from `$HOME` or a
-    single-machine literal. Raises `KeyError` for an undeclared kind --
-    the caller asked this module a question it does not have an answer
-    for, and a guess would be exactly the silent-empty-answer failure this
-    module exists to prevent on the read side; the write side earns the
-    same discipline by not inventing a segment either.
-    """
     return os.path.join(repo_root, "state", _declared(kind))
 
 
 def record_path(repo_root: str, kind: str, basename: str) -> str:
-    """`<home_dir(repo_root, kind)>/<basename>` -- one record file of this
-    kind. Never creates the directory (module docstring) -- a caller that
-    writes makes its own.
-    """
     return os.path.join(home_dir(repo_root, kind), basename)
 
 

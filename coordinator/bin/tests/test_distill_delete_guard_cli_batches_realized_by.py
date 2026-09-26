@@ -1,23 +1,3 @@
-"""test_distill_delete_guard_cli_batches_realized_by — pytest tests for
-coordinator/bin/distill-delete-guard.py's consumption of C29's batched
-`_git_objects_exist` primitive (coordinator_core.distill.delete_guard) via the
-C31 `existence_map` optional-parameter seam on `resolve_realized_by` /
-`check_realized_by` / `evaluate_candidate_detailed` / `evaluate_candidate`.
-
-Spec backlink: pln-kill-the-n-1-git-spawn-class-a-88897a § C31
-
-Coverage:
-  shape pre-scan (CLI):
-    test_sha_shaped_realized_by_values_collects_full_and_short_sha_only
-    test_sha_shaped_realized_by_values_skips_inline_and_path_shaped
-  batching behavior (CLI, in-process argv, monkeypatched `_git_objects_exist` only):
-    test_main_calls_git_objects_exist_once_not_per_candidate
-    test_main_no_sha_shaped_candidates_still_calls_batch_with_empty_list
-  existence_map contract on the library seam itself (delete_guard.py):
-    test_resolve_realized_by_absent_map_unchanged_behavior
-    test_resolve_realized_by_map_hit_used_without_scalar_spawn
-    test_resolve_realized_by_map_miss_falls_through_to_scalar_not_treated_as_absent
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -61,11 +41,6 @@ def _make_candidate(tmp_path: Path, name: str, realized_by: str) -> Path:
     return path
 
 
-# ---------------------------------------------------------------------------
-# shape pre-scan
-# ---------------------------------------------------------------------------
-
-
 def test_sha_shaped_realized_by_values_collects_full_and_short_sha_only(tmp_path: Path) -> None:
     full = "a" * 40
     short = "b812d89"
@@ -80,11 +55,6 @@ def test_sha_shaped_realized_by_values_skips_inline_and_path_shaped(tmp_path: Pa
     p2 = _make_candidate(tmp_path, "c2.md", "some/repo/relative/path.md")
     shas = _mod._sha_shaped_realized_by_values([p1, p2])
     assert shas == set()
-
-
-# ---------------------------------------------------------------------------
-# batching behavior (CLI)
-# ---------------------------------------------------------------------------
 
 
 def test_main_calls_git_objects_exist_once_not_per_candidate(tmp_path: Path, monkeypatch) -> None:
@@ -113,9 +83,6 @@ def test_main_calls_git_objects_exist_once_not_per_candidate(tmp_path: Path, mon
     assert rc == 0
     assert len(batch_calls) == 1
     assert set(batch_calls[0]) == {full, short}
-    # The batched primitive supplied both existence answers via the
-    # existence_map parameter — the scalar per-candidate spawn must never
-    # fire for a fully-covered SHA set.
     assert scalar_calls == []
 
 
@@ -135,11 +102,6 @@ def test_main_no_sha_shaped_candidates_still_calls_batch_with_empty_list(tmp_pat
 
     assert rc == 0
     assert batch_calls == [[]]
-
-
-# ---------------------------------------------------------------------------
-# existence_map contract on the library seam itself
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_realized_by_absent_map_unchanged_behavior(tmp_path: Path, monkeypatch) -> None:
@@ -162,7 +124,7 @@ def test_resolve_realized_by_map_hit_used_without_scalar_spawn(tmp_path: Path, m
 
     def fake_scalar(s, repo_root):
         calls.append(s)
-        return False  # would be wrong if used — proves the map was preferred
+        return False
 
     monkeypatch.setattr(_delete_guard, "_git_object_exists", fake_scalar)
     result = _delete_guard.resolve_realized_by(sha, tmp_path, existence_map={sha: True})
@@ -183,7 +145,6 @@ def test_resolve_realized_by_map_miss_falls_through_to_scalar_not_treated_as_abs
 
     monkeypatch.setattr(_delete_guard, "_git_object_exists", fake_scalar)
     # A map that only covers a DIFFERENT sha — sha_missing_from_map is absent
-    # from it and must fall through to the scalar (never treated as False).
     result = _delete_guard.resolve_realized_by(
         sha_missing_from_map, tmp_path, existence_map={sha_in_map: True}
     )

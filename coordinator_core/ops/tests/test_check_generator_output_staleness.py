@@ -59,16 +59,6 @@ def _commit_all(repo: Path, message: str) -> None:
 
 
 def _commit_all_at(repo: Path, message: str, iso_date: str) -> None:
-    """Commit with an explicit, controlled author/committer date.
-
-    Real-clock commits made back-to-back inside one test can land on the
-    same wall-clock second (git's committer-date resolution) — at that
-    resolution `git log --since=<that second>` treats the boundary as
-    inclusive, which makes a same-second commit indistinguishable from one
-    genuinely after the stamp. Tests that need "committed strictly before
-    vs. after a given stamp" pin explicit, well-separated dates instead of
-    depending on real-clock ordering.
-    """
     _run_git(repo, "add", "-A")
     env = os.environ.copy()
     env["GIT_AUTHOR_DATE"] = iso_date
@@ -209,9 +199,6 @@ def test_ac2_commit_touching_only_generator_shim_is_fresh(tmp_path):
     _write_artifact(repo, "out/artifact.json", "emitted_at", "2020-01-01T00:00:00+00:00")
     _commit_all_at(repo, "initial", "2020-01-01T00:00:00+00:00")
 
-    # A distinct, later stamp so this test isolates "sources untouched since
-    # the stamp" from the unrelated fact that the repo's very first commit
-    # necessarily touches everything at once.
     stamp = "2020-01-01T00:10:00+00:00"
     _write_artifact(repo, "out/artifact.json", "emitted_at", stamp)
     _commit_all_at(repo, "record stamp", stamp)
@@ -233,8 +220,6 @@ def test_compute_repo_staleness_keys_undeclared_by_generator_name(tmp_path):
         "Path('out.json').write_text('{}')\n",
         encoding="utf-8",
     )
-    # The write target must be tracked for write-behaviour discovery to count this
-    # module a generator: an uncommitted output is not an artifact any reader consults.
     (repo / "out.json").write_text("{}", encoding="utf-8")
     _commit_all(repo, "initial")
 
@@ -286,9 +271,6 @@ def test_main_returns_nonzero_on_stale(tmp_path, monkeypatch):
 def test_main_returns_zero_when_nothing_stale(monkeypatch):
     monkeypatch.setattr(cgos, "compute_repo_staleness", lambda repo_root=None: {})
     assert cgos.main([]) == 0
-
-
-# --- C6: the vendored leg ---------------------------------------------
 
 
 def _init_peer_repo(tmp_path: Path) -> Path:
@@ -377,11 +359,6 @@ def test_vendored_parent_offset_freshly_regenerated_reads_fresh(tmp_path, monkey
 
 
 def test_vendored_parent_offset_fixture_is_non_vacuous(tmp_path, monkeypatch):
-    """Companion proof for the fixture above: a deliberately-widened lower
-    bound (`parent_sha^..HEAD` instead of `parent_sha..HEAD`) DOES flip the
-    verdict to STALE on this exact fixture, confirming the fixture can
-    actually catch a parent-offset regression rather than passing
-    identically under correct and buggy boundary handling."""
     repo = _init_peer_repo(tmp_path)
     _commit_all(repo, "scaffold: no sources, no artifact yet")
 
@@ -399,7 +376,6 @@ def test_vendored_parent_offset_fixture_is_non_vacuous(tmp_path, monkeypatch):
     _write_vendored_artifact(repo, "coordinator/hooks/hooks.json", parent_sha, dirty=False)
     _commit_all(repo, "regenerate hooks.json only, stamp names the parent commit")
 
-    # Correct boundary: parent_sha..HEAD -- excludes parent_sha itself.
     correct = subprocess.run(
         ["git", "log", "--format=%H", f"{parent_sha}..HEAD", "--", "coordinator/hooks/scripts"],
         cwd=str(repo),
@@ -410,8 +386,6 @@ def test_vendored_parent_offset_fixture_is_non_vacuous(tmp_path, monkeypatch):
     ).stdout.strip()
     assert correct == "", "correct boundary must find no source-touching commit (expected FRESH)"
 
-    # Buggy off-by-one: parent_sha^..HEAD -- widens the window by one commit,
-    # pulling the sources-commit back in.
     buggy = subprocess.run(
         ["git", "log", "--format=%H", f"{parent_sha}^..HEAD", "--", "coordinator/hooks/scripts"],
         cwd=str(repo),
@@ -452,7 +426,6 @@ def test_vendored_dirty_tree_reads_indeterminate_not_fresh(tmp_path, monkeypatch
 
 
 def test_vendored_incident_replay_emitter_commit_unregenerated_is_stale(tmp_path, monkeypatch):
-    """Emitter commit lands, artifact unregenerated -> STALE."""
     repo = _init_peer_repo(tmp_path)
     _write_source(repo, "coordinator/hooks/scripts/emit_effective_delivery.py", "v1\n")
     _commit_all(repo, "initial")
@@ -481,8 +454,6 @@ def test_vendored_incident_replay_emitter_commit_unregenerated_is_stale(tmp_path
 
 
 def test_vendored_fix_and_regenerate_in_one_commit_is_fresh(tmp_path, monkeypatch):
-    """One commit touching BOTH the emitter's `sources` and the declared
-    artifact -> FRESH, not STALE (trap c)."""
     repo = _init_peer_repo(tmp_path)
     _write_source(repo, "coordinator/hooks/scripts/emit_effective_delivery.py", "v1\n")
     _commit_all(repo, "initial")

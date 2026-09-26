@@ -1,20 +1,3 @@
-"""Regression test for `_needs_copy`'s honest-change-reporting fix (task
-brief "Deliverable 3 — honest change reporting").
-
-`_needs_copy` used to treat "src mtime > dst mtime" alone as sufficient
-proof a copy was needed. Source rows are materialized from a committed ref
-via `git archive` + extraction (`publish.py::_extract_git_archive`), so
-every source file's mtime is the extraction timestamp — always "now",
-always newer than any prior destination file regardless of whether the
-underlying bytes changed. That made a full mirror publish log a wall of
-`UPDATE:` lines with zero tracked git diff at the destination. This test
-pins the fix: byte-identical content with a much newer source mtime must
-report "no copy needed".
-
-Loaded via the `percolate` package (§ sibling `test_publish_sync_renamed_
-dir_exemption.py`'s own note on why a bare `spec_from_file_location` can't
-resolve `publish_sync.py`'s relative `.ignore` import).
-"""
 
 from __future__ import annotations
 

@@ -84,14 +84,7 @@ from coordinator_core.machine_resolver import _flatten, _load_toml
 
 
 class UntrustedRootError(RuntimeError):
-    """Raised by ``fail-loud`` mode when the root is untrusted.
-
-    Mirrors the bash sourced-lib's ``exit 1`` tail for
-    ``--mode=fail-loud`` — the caller's process must not proceed with an
-    untrusted root. Callers that want the bash script's literal
-    process-exit behavior (rather than an exception) can call
-    ``coordinator_trusted_root_guard_or_exit`` instead.
-    """
+    pass
 
 
 def _settings_home_dir_from_env(env: dict) -> str:
@@ -147,31 +140,6 @@ def _home_from_env(env: dict) -> str:
 
 
 def _registry_key(settings_home_dir: str, key: str) -> Optional[str]:
-    """Direct-tomllib read of one dotted registry key under
-    ``<settings_home_dir>/machine-local/`` — the DR-071 canonical anchor
-    mechanism, reset-safe because it never shells out to the ``machine-local``
-    CLI (whose reader/exec bits live under the canonical ``<settings-home>/bin/``,
-    with a resettable ``~/.claude/bin/`` mirror during the settings-home
-    migration window).
-
-    Takes the settings-home directory as a plain string (already resolved
-    from the guard's injected ``env`` dict by the anchor resolvers) rather than
-    calling ``coordinator_core.machine_resolver.registry_get`` directly —
-    that helper reads ``os.environ`` internally via
-    ``_settings_home.machine_local_dir()``, which would ignore this guard's
-    env-injection contract and break its test isolation. Reuses
-    ``machine_resolver``'s pure TOML-parsing helpers (``_load_toml``,
-    ``_flatten``) instead of hand-rolling a second parser.
-
-    List-valued keys are joined with ``"\n"``. That shape is deliberate and
-    PINNED as a corruption-reject downstream — see
-    ``coordinator_core.resolution.facade``'s corruption-set docstring; a
-    multi-line anchor must stay detectable rather than be silently reflattened
-    here.
-
-    Was three byte-identical copies of
-    this body differing only in the key string.
-    """
     reg_dir = Path(settings_home_dir) / "machine-local"
     for fname in ("registry.local.toml", "registry.toml"):
         flat = _flatten(_load_toml(reg_dir / fname))
@@ -185,30 +153,15 @@ def _registry_key(settings_home_dir: str, key: str) -> Optional[str]:
     return None
 
 
-#: Registry keys this guard resolves anchors from. ``repos.doe_claude`` is the
-#: DR-071 canonical coordinator-root anchor; ``repos.claude_klabauter`` is the
-#: same anchor ``coordinator_core.engine_root.coordinator_engine_root()``
-#: resolves for in-process callers.
 DOE_CLAUDE_KEY = "repos.doe_claude"
 CLAUDE_KLABAUTER_KEY = "repos.claude_klabauter"
 
 
-#: The registry key naming the coordinator plugin tree a machine SERVES, as
-#: distinct from `repos.doe_claude`, which names the DoE-claude authoring
-#: checkout. On a workstation both spellings resolve to one tree and the
-#: distinction is invisible; where they diverge, only this key can say which
 #: directory a session's `CLAUDE_PLUGIN_ROOT` legitimately came from.
 PLUGIN_MIRROR_LIVE_PATH_KEY = "plugin.mirrors.coordinator-claude.live_path"
 
 
 def _plugin_mirror_root(env: dict) -> str:
-    """Resolve the served-plugin-mirror anchor: registry key only, trailing
-    slash normalized like the other anchors.
-
-    Registry-only on purpose — there is no pointer file for this key and none
-    should be invented. An absent key degrades to ``""``, i.e. "this anchor
-    contributes nothing"; it never raises and never widens trust on its own.
-    """
     settings_home_dir = _settings_home_dir_from_env(env)
     content = ""
     if settings_home_dir:
@@ -305,11 +258,6 @@ def _doe_root(env: dict) -> str:
                 content = f.read()
         except OSError:
             content = ""
-    # byte-exact parity with the bash oracle's
-    # `_cc_doe="$(cat ... || true)"` (command substitution strips only
-    # trailing newlines, never leading whitespace) + `${_cc_doe%/}` (strips
-    # exactly one trailing slash, not all of them). rstrip("/") + .strip()
-    # were both undocumented broadenings past the faithful-repro contract.
     content = content.rstrip("\n")
     if content.endswith("/"):
         content = content[:-1]
@@ -333,27 +281,10 @@ def _norm(p: str) -> str:
     """
     if os.name != "nt":
         return p
-    # .lower(), NOT .casefold(): casefold is Unicode-aggressive folding ('ß'->'ss',
-    # Kelvin sign->'k', ligatures), a BROADER equivalence than Windows' own
-    # case-insensitive path comparison. Two byte-distinct components that Windows
-    # treats as different directories could casefold-collide and match the trusted
-    # prefix — widening trust, the exact direction this guard exists to prevent.
-    # It is also a larger drift from the bash oracle's ASCII `case` match than the
-    # byte-exact-parity goal stated for _doe_root tolerates.
     return p.replace("\\", "/").lower()
 
 
 def _doe_root_rungs(env: dict) -> list[tuple[str, str]]:
-    """Diagnostics-only: return each ``_doe_root`` resolution rung's raw
-    outcome, in resolution order, as (label, value) pairs. ``"<skipped ...>"``
-    marks a rung that never ran because its own precondition (settings-home /
-    home resolved) was empty; ``"<absent>"`` marks a rung that ran but found
-    no file. Never consulted by ``is_trusted`` or ``_doe_root`` themselves —
-    exists purely so a rejection message can show which rung produced (or
-    failed to produce) the value, instead of forcing a reader to reconstruct
-    it by hand as happened during the 2026-07-28 Windows install dogfood
-    (DoE-claude state/2026-07-28-machine-a-install-dogfood-friction-log.md F6).
-    """
     home = _home_from_env(env)
     settings_home_dir = _settings_home_dir_from_env(env)
     rungs: list[tuple[str, str]] = []
@@ -387,9 +318,6 @@ def _doe_root_rungs(env: dict) -> list[tuple[str, str]]:
 
 
 def _claude_klabauter_root_rungs(env: dict) -> list[tuple[str, str]]:
-    """Diagnostics-only sibling of ``_doe_root_rungs`` for ``_claude_klabauter_root``
-    (registry rung + durable-file rung only — see ``_claude_klabauter_root`` docstring
-    for why it has no legacy-file rung)."""
     settings_home_dir = _settings_home_dir_from_env(env)
     rungs: list[tuple[str, str]] = []
 
@@ -412,17 +340,6 @@ def _claude_klabauter_root_rungs(env: dict) -> list[tuple[str, str]]:
 
 
 def _diagnose_untrusted(root: str, env: dict) -> str:
-    """Build a human-readable diagnostic block for a rejection message:
-    the resolved anchors this root was compared against, and which rung (if
-    any) produced each one.
-
-    Diagnostics-only — recomputes the same anchors ``is_trusted`` already
-    computed, purely for display; it has no bearing on the trust decision
-    and calling it can never change what gets trusted. Exists so an empty
-    anchor is VISIBLE (the actual finding, per F6 in the friction log cited
-    above) instead of requiring a maintainer to read this module's source
-    and hand-run ``is_trusted`` under two shells to discover it.
-    """
     home = _home_from_env(env)
     settings_home_dir = _settings_home_dir_from_env(env)
     trusted_prefix = _norm(os.path.join(home, ".claude") + os.sep)
@@ -450,11 +367,6 @@ def _diagnose_untrusted(root: str, env: dict) -> str:
     )
     for label, val in _claude_klabauter_root_rungs(env):
         lines.append(f"      - {label}: {val!r}")
-    # NOT included in the empty-anchor NOTE below: this key is absent on every
-    # machine where the served tree and the authoring tree are the same
-    # directory, which is most of them. Flagging its absence as "very likely the
-    # actual defect" would send a maintainer hunting a key their box correctly
-    # does not have.
     lines.append(f"  plugin mirror anchor:    {_plugin_mirror_root(env)!r}")
     lines.append(
         f"      - registry {PLUGIN_MIRROR_LIVE_PATH_KEY}: "
@@ -526,48 +438,22 @@ def _norm_anchor(raw: str) -> str:
 
 
 def is_trusted(root: str, *, env: dict | None = None) -> bool:
-    """Pure trust-core predicate — the bash sourced-lib's inline check
-    (§ "shared trust-core" comment block), widened at the registry anchors
-    only (see ``_at_or_under`` and this module's header).
-
-    No side effects (no stderr, no exit) — the mode-specific tail lives
-    in ``coordinator_trusted_root_guard`` / ``..._or_exit``.
-    """
     env = os.environ if env is None else env
     claude_home = _home_from_env(env)
     trusted_prefix = _norm(os.path.join(claude_home, ".claude") + os.sep)
     root_cmp = _norm(root)
 
     trusted = False
-    # `claude_home and` is load-bearing, not defensive noise: with home fully
     # unresolved, `trusted_prefix` degrades to the RELATIVE ".claude/" and a
     # bare "CLAUDE_PLUGIN_ROOT=.claude/x" would be trusted. This repo already
-    # treats that relative-join class as a defect elsewhere
-    # (test_settings_home_never_relative_when_home_fully_absent), and "anchor 1
-    # stays descendants-only" is only as strong as this guard.
     if claude_home and root_cmp.startswith(trusted_prefix):
         trusted = True
 
-    # Each anchor: resolve, normalize (see `_norm_anchor` for the Windows
-    # trailing-slash quirk), trust the root if it is at or under it. An anchor
-    # that resolved to "" is skipped, never treated as a match-everything
-    # prefix.
     for anchor in (_doe_root(env), _claude_klabauter_root(env), _plugin_mirror_root(env)):
         anchor_cmp = _norm_anchor(anchor)
         if anchor_cmp and _at_or_under(root_cmp, anchor_cmp):
             trusted = True
 
-    # Checked against the normalized form so Windows "\.." is caught too.
-    # This reset is the ONLY thing that
-    # neutralizes a "/.."-poisoned registry anchor VALUE (e.g. a
-    # plugin.mirrors.coordinator-claude.live_path of "/legit/../evil"). No
-    # anchor resolver scrubs "/.." out of the value it returns; any root_cmp
-    # that would match such a poisoned anchor via `_at_or_under` necessarily
-    # contains "/.." itself (inherited from the anchor string), so it always
-    # falls through to this same global reset. Do not "simplify" this away as
-    # dead code or move it inside the anchor loop -- it is load-bearing for
-    # every registry anchor, not a leftover guard for anchor 1 alone. See
-    # test_a_slash_dotdot_poisoned_anchor_value_is_neutralized_by_the_global_reset.
     if "/.." in root_cmp:
         trusted = False
 
@@ -580,28 +466,6 @@ def is_trusted(root: str, *, env: dict | None = None) -> bool:
 def coordinator_trusted_root_guard(
     *, mode: str, root: str, site: str = "coordinator root", env: dict | None = None
 ) -> bool:
-    """Trust-check ``root`` against the shared trust-core, then apply the
-    named mode's tail behavior.
-
-    Returns:
-        True  — root is trusted. Caller proceeds unchanged in both modes.
-        False — root is untrusted AND mode == "fail-open" (a WARNING was
-                printed to stderr iff the anomaly is security-relevant:
-                root non-empty and existing but untrusted; silent on
-                routine absence). The caller is responsible for blanking
-                its own root variable on a False return (mirrors the bash
-                sourced-lib's no-nameref constraint — this Python port
-                keeps the same call-site shape for symmetry, even though
-                Python could mutate by reference here).
-
-    Raises:
-        ValueError — mode is missing or not one of fail-loud/fail-open.
-        UntrustedRootError — root is untrusted AND mode == "fail-loud"
-                (an ERROR was printed to stderr first). Mirrors the bash
-                sourced-lib's ``exit 1`` — callers that need the literal
-                process-exit semantics should use
-                ``coordinator_trusted_root_guard_or_exit`` instead.
-    """
     env = os.environ if env is None else env
 
     if mode not in ("fail-loud", "fail-open"):
@@ -631,7 +495,6 @@ def coordinator_trusted_root_guard(
         )
         raise UntrustedRootError(f"{site} '{root}' outside trusted prefix")
 
-    # fail-open
     if root and os.path.isdir(root):
         print(
             f"[coordinator] WARNING: '{root}' outside trusted prefix — "
@@ -644,13 +507,6 @@ def coordinator_trusted_root_guard(
 def coordinator_trusted_root_guard_or_exit(
     *, mode: str, root: str, site: str = "coordinator root", env: dict | None = None
 ) -> bool:
-    """Same contract as ``coordinator_trusted_root_guard``, except
-    ``fail-loud`` calls ``sys.exit(1)`` (matching the bash sourced-lib's
-    literal ``exit 1`` behavior) instead of raising
-    ``UntrustedRootError``. Use this variant when porting a bash call
-    site whose surrounding script relies on process-exit semantics
-    rather than exception propagation.
-    """
     try:
         return coordinator_trusted_root_guard(mode=mode, root=root, site=site, env=env)
     except UntrustedRootError:

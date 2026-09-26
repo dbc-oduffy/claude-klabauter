@@ -55,9 +55,6 @@ from typing import Any
 
 from coordinator_core.ceremony_common.phantom_resolves_sweep import PhantomSweepResult
 
-# Generator-provenance declaration (generator_provenance.py).
-# sweep_review_assemble writes fixture .md files only under pytest's
-# tmp_path -- test-scoped scratch, never a tracked repo artifact.
 GENERATES = []
 
 
@@ -74,16 +71,6 @@ def _collect(directives: list[dict[str, Any]], judgment_points: list[dict[str, A
         resolves_ids=frozenset(resolves_ids),
         judgment_point_ids=frozenset(judgment_point_ids),
     )
-
-
-# ---------------------------------------------------------------------------
-# workday_complete -- `_build_directives`/`_build_judgment_points` are pure
-# functions over `(decisions, open_day_goals, dirty_tree_verdict)`; no disk
-# or monkeypatching needed. Swept across both conditional axes: open-day-
-# goals present/absent (gates `d_goal_close_day`/`jp_day_goal_closeout`) and
-# dirty-tree ambiguous True/False (gates `d_step3_consolidate`'s
-# `depends_on` and `jp_step2_5_dirty_tree_ambiguous`'s emission).
-# ---------------------------------------------------------------------------
 
 
 def sweep_workday_complete() -> PhantomSweepResult:
@@ -113,31 +100,12 @@ def sweep_workday_complete() -> PhantomSweepResult:
     )
 
 
-# ---------------------------------------------------------------------------
-# workweek_complete -- both builders are zero-arg and unconditional; no
-# axis to vary. Included for completeness/regression-proofing even though
-# static inspection (2026-07-27) shows every `build_disposition` call site
-# here passes no `resolves` at all (every judgment point is advisory-only)
-# -- a future edit that adds a `resolves` value is what this guards against.
-# ---------------------------------------------------------------------------
-
-
 def sweep_workweek_complete() -> PhantomSweepResult:
     from coordinator_core.workweek_complete import brief as ww_brief
 
     directives = ww_brief._build_directives()
     judgment_points = ww_brief._build_judgment_points()
     return _collect(directives, judgment_points)
-
-
-# ---------------------------------------------------------------------------
-# workstream_complete -- reuses the existing, already-verified sweep this
-# guard was generalized FROM, rather than re-deriving it. That sweep needs
-# `monkeypatch`/`tmp_path` (session-shape gate mocking + a real on-disk
-# governing plan + handoff) -- this wrapper owns that fixture plumbing so
-# the shared registry can call it with the uniform zero-arg signature every
-# other provider uses.
-# ---------------------------------------------------------------------------
 
 
 def sweep_workstream_complete(monkeypatch: Any, tmp_path: Path) -> PhantomSweepResult:
@@ -151,20 +119,6 @@ def sweep_workstream_complete(monkeypatch: Any, tmp_path: Path) -> PhantomSweepR
         resolves_ids=frozenset(resolves_ids),
         judgment_point_ids=frozenset(judgment_point_ids),
     )
-
-
-# ---------------------------------------------------------------------------
-# baton_assemble -- `_build_directives(kind, lineage, title=)`/`_build_
-# judgment_points(kind, dirty_tree_attribution)` are pure over a caller-built
-# `lineage` dict / attribution dict; `resolve_lineage`'s and `_compute_
-# dirty_tree_attribution`'s own disk/git reads are bypassed entirely. Swept
-# across both `kind`s, (for kind="handoff") both `predecessor` present/
-# absent (gates `d6`/`handoff.supersede_predecessor`), AND (2026-07-31,
-# case-c conditional-emission fix) all three `dirty_tree_attribution`
-# shapes `_build_judgment_points` branches on -- `mine` non-empty, `mine`
-# empty (jp NOT emitted), and `degraded=True` (unconditional fallback) --
-# since that axis now also gates `j-dirty-tree-case-c`'s own emission.
-# ---------------------------------------------------------------------------
 
 
 def sweep_baton_assemble() -> PhantomSweepResult:
@@ -198,13 +152,6 @@ def sweep_baton_assemble() -> PhantomSweepResult:
     )
 
 
-# ---------------------------------------------------------------------------
-# merge_assemble -- `build_directives(repo_root, tag_prefix=, proposed_
-# tag=)`/`build_judgment_points()` need no real repo (`repo_root` is only
-# `str()`'d into a directive's `args`) -- unconditional, no axis to vary.
-# ---------------------------------------------------------------------------
-
-
 def sweep_merge_assemble() -> PhantomSweepResult:
     from coordinator_core import merge_assemble as ma
 
@@ -213,30 +160,13 @@ def sweep_merge_assemble() -> PhantomSweepResult:
     return _collect(directives, judgment_points)
 
 
-# ---------------------------------------------------------------------------
-# consolidate_assemble -- `brief()` takes an injectable `run_git`; swept
-# with a fake covering every resolves-bearing branch: a `mine-stale`
-# branch WITH unique commits (`j-absorb-<name>` -> `d-absorb-<name>`), a
-# second worktree with unique (unreachable) work that is dirty
-# (`j-worktree-dirty-<path>` -> `d-worktree-remove-<path>`), and `current`
-# behind `main` (`j-behind-main`, resolves nothing itself but exercises the
-# same sweep pass as the others for judgment_point_ids completeness).
-# ---------------------------------------------------------------------------
-
-
 def sweep_consolidate_assemble(tmp_path: Path) -> PhantomSweepResult:
     from coordinator_core import consolidate_assemble as ca
 
     wt_path = str(tmp_path / "wt")
 
     def run_git(args: list[str], cwd: Path) -> SimpleNamespace:
-        # Pre-subcommand global flags (`--no-optional-locks`, adopted on the
-        # read-only sites) sit BEFORE the subcommand, so every matcher below
-        # would silently stop matching and fall through to the catch-all
         # AssertionError. Dispatch on the SUBCOMMAND, never on raw argv[0].
-        # Only valueless global flags are stripped here — a value-taking one
-        # (`-C <path>`) would need its argument dropped too, and this fake
-        # passes cwd separately rather than via `-C`.
         while args and args[0].startswith("-"):
             args = args[1:]
         if args[:2] == ["config", "user.email"]:
@@ -249,9 +179,6 @@ def sweep_consolidate_assemble(tmp_path: Path) -> PhantomSweepResult:
         if args[0] == "branch":
             return SimpleNamespace(returncode=0, stdout="* current\n  main\n  stale\n", stderr="")
         if args[0] == "for-each-ref":
-            # The brief's single ref enumeration (`consolidate_assemble.
-            # ref_rows`): the same three branches the `branch` arm lists,
-            # in the `<refname>\t<short>\t<authoremail>` shape it parses.
             rows = "".join(
                 f"refs/heads/{n}\t{n}\tme@x\n" for n in ("current", "main", "stale")
             )
@@ -269,10 +196,8 @@ def sweep_consolidate_assemble(tmp_path: Path) -> PhantomSweepResult:
             )
             return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
         if args[0] == "merge-base":
-            # unreachable (dirty-unique-work path) for every ancestry probe
             return SimpleNamespace(returncode=1, stdout="", stderr="")
         if args[0] == "status":
-            # dirty for the second worktree, clean for the primary
             dirty = str(cwd) == wt_path
             return SimpleNamespace(returncode=0, stdout="M x\n" if dirty else "", stderr="")
         raise AssertionError(f"consolidate_assemble sweep: unexpected git call: {args}")
@@ -281,39 +206,11 @@ def sweep_consolidate_assemble(tmp_path: Path) -> PhantomSweepResult:
     return _collect(decision_object["directives"], decision_object["judgment_points"])
 
 
-# ---------------------------------------------------------------------------
-# backlog_grind_assemble -- `brief(cadence)` reads real (but read-only)
-# disk/queue state via its five reader families; no fixture seeding here
-# -- swept against the actual live repo across all five cadences. This is
-# a live-state smoke sweep (catches what today's real backlog/queue
-# contents reach), NOT a synthetic full-branch-coverage sweep of every
-# reader's every conditional -- an honest scope limit, not a silent gap:
-# each reader degrades to an empty `ReaderResult` on an empty queue, which
-# is itself a legitimate real state, never a mock.
-# ---------------------------------------------------------------------------
-
-
 def sweep_backlog_grind_assemble(monkeypatch: Any) -> PhantomSweepResult:
-    # `backlog_grind_assemble` transitively imports `orient_assemble` (for
-    # `ReaderResult`), whose own `readers_branch_reconcile.py` dynamically
-    # loads `coordinator/bin/workday-start-day-branch-resolve.py`, which
-    # imports `cc_invoke.py`. Until the `import-path-costs-nothing` sprint
-    # (C8), that import armed lazy op registration process-globally as a
-    # side effect, and this function used to snapshot/restore both the
     # `COORDINATOR_CORE_LAZY_OPS` env var and the `sys._coordinator_core_lazy_
-    # ops` in-process attribute around it so a sibling test/session running
-    # after this sweep never inherited a dirty process. `cc_invoke.py` no
-    # longer arms anything at import time (lazy registration is
-    # unconditional now — see coordinator_core/ops/__init__.py), so there is
-    # nothing left for this import path to leak and nothing to restore.
     from coordinator_core import backlog_grind_assemble as bga
     from coordinator_core.backlog_grind_assemble import CADENCES, brief as bga_brief
 
-    # `brief()` calls `resolve_operator_config()` (AC5) -- stubbed exactly
-    # like `test_backlog_grind_assemble.py`'s own autouse fixture, so this
-    # sweep never depends on the invoking machine's real settings-home
-    # layout (and plays correctly with the test-quarantine harness that
-    # rejects a stale/nonexistent settings_home path).
     monkeypatch.setattr(
         bga,
         "resolve_operator_config",
@@ -342,31 +239,7 @@ def sweep_backlog_grind_assemble(monkeypatch: Any) -> PhantomSweepResult:
     )
 
 
-# ---------------------------------------------------------------------------
-# review_assemble -- `residue.brief(artifact_arg, *, repo_root=, explicit_
-# surface=)` selects its surface via a precedence ladder (explicit ->
-# artifact-shape inference -> diff-nonempty inference -> genuine
-# ambiguity); the ONLY judgment point it ever emits
-# (`review-assemble-residue-surface-ambiguous`) is reachable exclusively on
-# the last rung. Swept across all three reachable call shapes so no single
-# surface variant goes unswept: `explicit_surface="plan"`, `explicit_
-# surface="diff"`, and the ambiguous shape (`artifact_arg=None`, `explicit_
-# surface=None`, against a `repo_root` with no git history so the diff-
-# nonempty inference rung also comes up empty and falls through to the
-# judgment point). `resolve_content_root()` has no injection seam of its
-# own (residue.py:393 calls it unconditionally) -- monkeypatched directly
-# on the `residue` module namespace, exactly as `test_residue.py`'s own
-# `_patch_content_root` helper does, pointed at a minimal on-disk fixture
 # residue dir carrying one segment per `SEGMENT_SURFACES` value (`plan`,
-# `diff`, `shared`) so every variant resolves a non-empty segment set
-# (`brief()` fail-louds on an empty selection -- AC-14(a) in residue.py's
-# own docstring). Deliberately introspects whatever `brief()` actually
-# returns rather than asserting today's shape: this package emits
-# `directives=[]` unconditionally today (residue.py never builds a
-# directive), so `directive_ids`/`resolves_ids` are empty now -- but this
-# provider makes no assumption that stays true, it just unions and hands
-# back whatever is really there call-to-call.
-# ---------------------------------------------------------------------------
 
 
 def sweep_review_assemble(monkeypatch: Any, tmp_path: Path) -> PhantomSweepResult:
@@ -418,37 +291,10 @@ def sweep_review_assemble(monkeypatch: Any, tmp_path: Path) -> PhantomSweepResul
     )
 
 
-# ---------------------------------------------------------------------------
-# pickup_assemble -- the heaviest provider in this file, and the last
-# `brief(`-defining package this generalization pass left in
 # `test_phantom_resolves_id_sweep.py`'s `_DEFERRED_ALLOWLIST` (2026-07-27
-# follow-up dispatch that closes that deferral). `brief()`'s judgment-point
-# construction is deeply inline within its own classification dispatch
-# (handoff/spinoff/memo) and its own `kind` sub-dispatch (ask/consult/
-# proposal/fyi) -- no single call constructs every resolves-bearing shape,
-# and every git read funnels through a module-private `_run_git` reading a
-# REAL on-disk `.git` (no injectable `run_git` seam, unlike
-# `consolidate_assemble` above). Reuses `pickup_assemble`'s own co-located
-# test fixtures (`_init_repo`/`_seed_handoff`/`_seed_memo`) rather than
-# inventing a new one or monkeypatching `_run_git` -- a real git repo under
-# `tmp_path`, exercised through the real read-model, is strictly more
-# faithful and no heavier to write.
-#
 # PER-DECISION-OBJECT CHECKING, not union-only (2026-07-27 dispatch
-# decision 4): every other provider in this file unions across variants
-# and returns one triple -- too weak here, because the handoff/spinoff
-# live-claim stand-down bail (`__init__.py` ~5121-5176) builds ITS OWN
-# decision object with `directives=[]`, and a union-shaped check would
-# never notice a `resolves` id in THAT object being satisfied only by a
 # DIFFERENT variant's directives (the main handoff path, same package).
-# That exact shape was live here until this same dispatch fixed it (see
-# the `resolves: []` amendment at that call site, and this provider's own
-# `handoff-live-claim-bail` variant below, which asserts the fix holds).
-# So this sweep checks EACH variant's own `(directive_ids, resolves_ids)`
-# pair against ITSELF via `resolves_id_is_satisfiable` before folding it
 # into the unioned return that `_PROVIDERS`'s uniform contract still
-# expects.
-# ---------------------------------------------------------------------------
 
 
 def pickup_assemble_variants(monkeypatch: Any, tmp_path: Path) -> list[tuple[str, Any]]:
@@ -468,7 +314,6 @@ def pickup_assemble_variants(monkeypatch: Any, tmp_path: Path) -> list[tuple[str
 
     variants: list[tuple[str, Any]] = []
 
-    # -- handoff/spinoff branch (classification in ("handoff", "spinoff")) --
 
     _seed_handoff(repo, "h-normal.md")
     variants.append(("handoff-normal", pb.brief("state/handoffs/h-normal.md", repo_root=repo)))
@@ -487,16 +332,6 @@ def pickup_assemble_variants(monkeypatch: Any, tmp_path: Path) -> list[tuple[str
     variants.append(("handoff-liveness-fired", pb.brief("state/handoffs/h-liveness.md", repo_root=repo)))
     monkeypatch.undo()
 
-    # The live-claim stand-down bail (dispatch brief's flagged finding,
-    # `__init__.py` ~5121-5176) -- mirrors
-    # `test_pickup_assemble.TestBriefLiveClaimRevalidateJudgmentPoint.
-    # test_live_claim_stand_down_still_builds_revalidate_judgment_point`'s
-    # own fixture exactly: a live foreign peer holds the claim AND
-    # `compute_claim_grant` denies it (the self-claim/handover carve-out,
-    # PM ruling 2026-07-24, only skips this bail when the grant is
-    # `"granted"`), AND the liveness signal fires, so `live_claim_jp` is
-    # actually built (a non-firing signal returns `None` -- nothing to
-    # check here at all).
     _seed_handoff(repo, "h-live-claim.md")
     monkeypatch.setattr(pb, "gates_claim", lambda *a, **k: {"fetch_state": "ok", "holder": "live-peer-sid"})
     monkeypatch.setattr(
@@ -516,30 +351,15 @@ def pickup_assemble_variants(monkeypatch: Any, tmp_path: Path) -> list[tuple[str
     variants.append(("handoff-live-claim-bail", pb.brief("state/handoffs/h-live-claim.md", repo_root=repo)))
     monkeypatch.undo()
 
-    # -- memo branch (classification == "memo"), one variant per
     # `_KIND_DISPOSITIONS` key -- `bug` added 2026-09-22: the disposition
-    # table gained a `bug` entry (pickup_assemble/__init__.py) without this
-    # sweep following, so the `confirmed-owned` disposition's dynamically
-    # composed judgment points/directives went unswept for phantom resolves
-    # ids. `friction` added 2026-09-22 (same day, closes
-    # state/improvement-queue/2026-09-05-memo-kind-has-no-friction-value-and-
     # bug-degrades-silently.yaml): `_KIND_DISPOSITIONS` gained a `friction`
-    # entry alongside `bug`'s -- swept here from the start rather than
-    # repeating the same gap a second time. `notice` carries no
     # `_KIND_DISPOSITIONS` entry (mirrors `fyi`'s non-premise-bearing
-    # exclusion) and stays unswept by the same one-per-key rule this loop
-    # follows.
 
     for kind in ("ask", "consult", "proposal", "fyi", "bug", "friction"):
         name = f"m-{kind}.md"
         _seed_memo(repo, name, kind=kind)
         variants.append((f"memo-kind-{kind}", pb.brief(f"cross-repo/inbox/{name}", repo_root=repo)))
 
-    # memo branch's liveness gate (`__init__.py` ~5407) -- the one class-(c)
-    # dynamically-composed `resolves` in the whole package (recon §4/§5):
-    # `resolves=[d["id"] for d in directives]`, always exactly that same
-    # decision object's own directive ids, so it should never phantom --
-    # swept anyway, so a future regression that de-syncs the two is caught.
     _seed_memo(repo, "m-liveness.md", kind="ask")
     monkeypatch.setattr(pb, "compute_liveness_signal", lambda *a, **k: True)
     variants.append(("memo-liveness-fired", pb.brief("cross-repo/inbox/m-liveness.md", repo_root=repo)))
@@ -577,21 +397,7 @@ def sweep_pickup_assemble(monkeypatch: Any, tmp_path: Path) -> PhantomSweepResul
     )
 
 
-# ---------------------------------------------------------------------------
-# roadmap_planning_assemble / sprint_planning_assemble -- both landed after
-# the 2026-07-27 generalization pass and went unregistered, which is why
-# `test_this_repos_live_discovery_matches_the_eleven_known_brief_packages`
-# and `test_every_discovered_package_is_registered_or_allowlisted` were both
-# red on 2026-08-25 (found by the ceremony-sweep-05 audit, which enumerates
-# `brief(`-defining packages for its own reasons and got 15 against the
-# pinned 13).
-#
 # Registered as REAL sweeps rather than `_VERIFIED_RESOLVES_FREE`: both do
-# emit `resolves` (sprint's PM-authorization dispositions resolve
-# `d-dispatch-cluster-scout`), so the resolves-free bucket would have been a
-# false claim. Both take their inputs as plain keyword arguments and touch no
-# disk in `brief()`, so neither provider needs a fixture.
-# ---------------------------------------------------------------------------
 
 
 def sweep_roadmap_planning_assemble() -> PhantomSweepResult:
@@ -604,22 +410,11 @@ def sweep_roadmap_planning_assemble() -> PhantomSweepResult:
 def sweep_sprint_planning_assemble() -> PhantomSweepResult:
     from coordinator_core import sprint_planning_assemble as spa
 
-    # `run_id` and `sprint_id` are both required (the module's entry contract);
-    # the values are opaque to directive/judgment-point construction, which is
-    # what this sweep reads.
     decision_object = spa.brief(run_id="phantom-sweep", sprint_id="1")
     return _collect(decision_object["directives"], decision_object["judgment_points"])
 
 
-# ---------------------------------------------------------------------------
-# learn_lessons_pipeline -- `brief(repo_root, roots=)` is read-only (a
 # COMPLETE-sentinel disk scan via `ops.learn_lessons_cutoff.derive_cutoff`,
-# empty-safe when no completed central run is reachable) and needs no
-# fixture beyond a plain `Path`; `roots=[]` skips the peer-repo registry
-# read entirely, matching this bucket's "real but read-only, empty-safe"
-# siblings (`backlog_grind_assemble`, `orient_assemble`) rather than the
-# fully-pure `workday_complete`/`merge_assemble` bucket.
-# ---------------------------------------------------------------------------
 
 
 def sweep_learn_lessons_pipeline() -> PhantomSweepResult:

@@ -39,8 +39,6 @@ import coordinator_core.ipc as ipc
 import pytest
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -82,15 +80,13 @@ _SIBLING_OP_LAZY_RESOLUTION_SCRIPT = textwrap.dedent(
 
 def _run_subprocess_script(script: str) -> subprocess.CompletedProcess:
     # PYTHONPATH must point at the claude-klabauter repo root so the subprocess can
-    # import coordinator_core regardless of the parent process's cwd --
-    # mirrors ops/tests/test_registry_map_sync.py's _run_subprocess_script.
     import os
 
     project_root = str(Path(__file__).resolve().parents[3])
     env = os.environ.copy()
     existing_pp = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = f"{project_root}{os.pathsep}{existing_pp}" if existing_pp else project_root
-    return subprocess.run(  # popup-intentional-last-resort
+    return subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
         text=True,

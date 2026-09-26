@@ -76,14 +76,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-#: Audit-line verdict token. Read by an operator asking "what did the commit
-#: gate let through, and on what grounds" -- which is the whole reason the
-#: downgrade is recorded rather than merely warned about.
 STAND_DOWN_MARKER_NO_VERDICT = "STAND-DOWN-COMMIT-SCOPE-NO-VERDICT"
 
-#: Filename for the tracked mirror `log_environment_stand_down` writes when
-#: the repo has a remote to carry it off an ephemeral box. Distinct from the
-#: write-bump sinks so this stream stays its own.
 _STAND_DOWN_SINK_BASENAME = "commit-scope-stand-downs.log"
 
 _EVIDENCE_NO_VERDICT = (
@@ -93,14 +87,6 @@ _EVIDENCE_NO_VERDICT = (
 
 
 def _scope_report():
-    """The vocabulary module, imported lazily at call time.
-
-    Lazy for the reason `block_subagent_commit._import_assert_paths_in_
-    session_scope` is lazy: this sits under a PreToolUse guard and must not
-    drag the `coordinator_core.ops` import closure into the hot path. Returns
-    `None` on any import failure, and the predicates below then answer the
-    fail-closed way -- an unimportable vocabulary keeps the caller's deny.
-    """
     try:
         from coordinator_core.ops.session import scope_report
 
@@ -110,9 +96,6 @@ def _scope_report():
 
 
 def _denial_is_wholly_indeterminate(deny_reason: str) -> bool:
-    """`scope_report`'s own no-verdict predicate, reached through the lazy
-    import so an unimportable vocabulary answers False rather than raising on
-    a guard's seam."""
     scope_report = _scope_report()
     if scope_report is None:
         return False
@@ -123,15 +106,6 @@ def _denial_is_wholly_indeterminate(deny_reason: str) -> bool:
 
 
 def _names_a_holder(deny_reason: str) -> bool:
-    """`scope_report.deny_reason_names_a_holder`, fail-CLOSED: an unimportable
-    or unhappy vocabulary answers True (a holder may be named), which forbids
-    the stand-down below.
-
-    Consulted even though `denial_is_wholly_indeterminate` already excludes
-    every determinate classification, because the two predicates answer to
-    different constants and this guard's posture is not to rely on one of them
-    remaining a superset of the other.
-    """
     scope_report = _scope_report()
     if scope_report is None:
         return True
@@ -146,18 +120,6 @@ def ownership_denial_stands_down(
     git_root: Optional[str],
     session_id: str,
 ) -> bool:
-    """Decide whether an ownership-leg denial should be stood down, and record
-    it when the answer is yes.
-
-    Returns True only for a denial that named no holder and carried no verdict
-    about any path. Returns False for every determinate classification --
-    including `orphan`/`unclaimed`, see this module's docstring for why that
-    one is left denying -- and whenever the vocabulary cannot be consulted.
-
-    The audit write is best-effort and never moves the answer: a stand-down
-    that could not be recorded still proceeds and says so on stderr, which is
-    `log_environment_stand_down`'s own contract.
-    """
     if not isinstance(deny_reason, str) or not deny_reason:
         return False
     if _names_a_holder(deny_reason):
@@ -169,13 +131,6 @@ def ownership_denial_stands_down(
 
 
 def _record(git_root: Optional[str], session_id: str, deny_reason: str) -> None:
-    """Append the stand-down line, and print the operator notice.
-
-    The notice goes to stderr and NOTHING is returned, for the reason
-    `_write_bump_stand_down.stand_down_notice` states at length: a non-`None`
-    value on a guard's seam claims the dispatcher's slot and silently skips
-    every guard registered after it.
-    """
     try:
         from coordinator_core.bash_guards._write_bump_stand_down import (
             log_environment_stand_down,

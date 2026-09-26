@@ -1,18 +1,3 @@
-"""A failed existence probe is not a deletion declaration.
-
-`_split_paths_for_commit_v2` used to treat ANY path absent from the worktree as
-a deletion. That inference was the committer-P0: a negative existence probe --
-from a wrong cwd, or from `os.path.exists` swallowing an OSError such as a
-Windows sharing violation on a file one of the ~50 concurrent peers holds open
--- became a positive `params.deleted_paths` entry, and the commit route
-faithfully deleted a file nobody deleted. Root-caused 2026-08-31,
-`state/audits/2026-08-31-committer-p0-root-cause-cwd-probe-becomes-deletion.md`.
-
-It now consults HEAD for the missing set only, in one batched spawn, and
-refuses what is in neither place.
-
-Run: python -m pytest coordinator/bin/tests/test_a_missing_path_is_a_deletion_only_if_head_has_it.py -q
-"""
 
 from __future__ import annotations
 
@@ -25,9 +10,6 @@ import pytest
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
-# Spawns a real external process (git, in a throwaway repo); runs at cadence
-# gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -53,7 +35,6 @@ def _git(root: Path, *args: str) -> None:
 
 
 def _repo(tmp_path: Path) -> Path:
-    """A throwaway repo with one commit carrying pkg/kept.py and pkg/gone.py."""
     root = tmp_path / "r"
     (root / "pkg").mkdir(parents=True)
     _git(root.parent, "init", "-q", str(root))
@@ -97,8 +78,6 @@ def test_a_path_in_neither_the_worktree_nor_head_is_refused(tmp_path, capsys):
 
 
 def test_head_is_not_consulted_when_nothing_is_missing(tmp_path, monkeypatch):
-    """Zero spawns on the ordinary path: every declared path is on disk, so the
-    one batched `git ls-tree` is never reached."""
     root = _repo(tmp_path)
 
     def _never(*_args, **_kwargs):
@@ -115,8 +94,6 @@ def test_head_is_not_consulted_when_nothing_is_missing(tmp_path, monkeypatch):
 
 
 def test_an_unanswerable_head_probe_fails_closed(tmp_path, monkeypatch, capsys):
-    """A non-zero `ls-tree` refuses. Returning an empty set instead would dress
-    a guess as a fact -- every missing path would read as "not tracked"."""
     root = _repo(tmp_path)
 
     class _Failed:
@@ -154,18 +131,6 @@ def test_a_mixed_pathspec_refuses_and_names_only_the_bogus_path(tmp_path, capsys
 
 
 def test_an_absent_directory_is_refused_not_called_a_deleted_file(tmp_path, capsys):
-    """A directory absent from the worktree is `unknown`, never a deletion.
-
-    Without `-r`, `git ls-tree --name-only HEAD -- pkg` returns the single
-    tree entry `pkg`, which exact-matches the caller's operand -- so the
-    directory would be classified as tracked-at-HEAD and forwarded into
-    `deleted_paths`, a field `ceremony.commit_v2` expects to carry file paths
-    only. `-r` expands the listing to the tree's file entries (`pkg/kept.py`,
-    ...), none of which match the bare directory name, so it falls to the
-    refusal instead.
-
-    code-reviewer Finding 2 on the committer-P0 slice.
-    """
     root = _repo(tmp_path)
     import shutil
 
@@ -180,12 +145,6 @@ def test_an_absent_directory_is_refused_not_called_a_deleted_file(tmp_path, caps
 
 
 def test_percolate_round_never_classifies_a_head_absent_path_as_a_deletion(tmp_path):
-    """P027-T5 census: `percolate-round.py :: _partition_pathspec_for_commit`
-    only ever appends an entry to its `deletions` return leg when that entry
-    resolves inside `head_tracked` (its caller's `_dest_head_tree` read) --
-    so its derivation cannot itself hand `commit_paths` a HEAD-absent
-    `deleted_paths` member. A path absent from both the worktree and
-    `head_tracked` lands in `declined`, never `deletions`."""
     import importlib.util as _ilu
 
     round_spec = _ilu.spec_from_file_location(
@@ -212,10 +171,6 @@ def test_percolate_round_never_classifies_a_head_absent_path_as_a_deletion(tmp_p
 
 
 def test_cli_and_engine_refuse_the_same_phantom_path(tmp_path):
-    """The layer-position AC: `coordinator-safe-commit ::
-    _split_paths_for_commit_v2` and the engine (`commit_paths`) refuse the
-    same fixture path -- the CLI's own refusal is not removed, weakened or
-    duplicated by the engine's."""
     from coordinator_core.git.commit import PhantomDeletionDeclared, commit_paths
 
     root = _repo(tmp_path)
@@ -230,7 +185,6 @@ def test_cli_and_engine_refuse_the_same_phantom_path(tmp_path):
 
 
 def test_ls_tree_still_reports_the_files_a_real_deletion_names(tmp_path):
-    """`-r` must not cost the ordinary case: a deleted FILE still resolves."""
     root = _repo(tmp_path)
     (root / "pkg" / "gone.py").unlink()
 

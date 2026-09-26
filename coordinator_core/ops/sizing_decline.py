@@ -86,20 +86,15 @@ from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
 
-# Vendored sizing-object schema path — own local copy per this package's
 # established per-module convention (see e.g. deliverable_cascade._SIZING_SCHEMA_PATH).
 _SIZING_SCHEMA_PATH: Path = (
     Path(__file__).parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
 )
 
-#: Only a `routed` sizing can transition to `declined` — see module docstring.
 _DECLINABLE_FROM = frozenset({"routed"})
 
 
 def _validate_sizing_fm(fm_text: str) -> list:
-    """Parse fm_text as whole-document YAML and validate against the sizing-object
-    schema. Mirrors deliverable_cascade._validate_sizing_fm's contract exactly.
-    """
     try:
         fm_dict = yaml.safe_load(fm_text) or {}
     except Exception as exc:  # noqa: BLE001
@@ -178,10 +173,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     dr = Path(decision_record_raw)
     if not dr.is_absolute():
         dr = worktree / dr
-    # The decision_record gate must run through
-    # contained_path against docs/decisions/, same as sizing_path against
-    # state/sizings/ above; an is_file()-only check let any readable file anywhere
-    # satisfy the gate.
     dr = contained_path(dr, [worktree / "docs" / "decisions"])
     if dr is None:
         return _err(
@@ -199,13 +190,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     _state = {"applied": False, "prior_status": None}
 
     def mutate(old_text: str) -> str:
-        # Whole-document YAML, no `---` frontmatter fence — same shape as
-        # deliverable_cascade._advance_one_sizing's own mutate closure.
         current_status = read_fm_field_unquoted(old_text, "status")
         _state["prior_status"] = current_status
 
         if current_status == "declined":
-            # Already terminal — idempotency floor, byte-identical no-op.
             return old_text
 
         if current_status not in _DECLINABLE_FROM:

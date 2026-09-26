@@ -35,7 +35,6 @@ def _git(repo, *args, check=True):
 
 @pytest.fixture()
 def conflicted(tmp_path):
-    """A repo stopped mid-merge with one conflicted path."""
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "base")

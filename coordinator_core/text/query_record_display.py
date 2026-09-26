@@ -48,20 +48,16 @@ from typing import Callable, Optional
 _DisplayFn = Callable[[str, dict], str]
 
 
-# ---------------------------------------------------------------------------
 # Per-type renderers — each transcribed verbatim from its TYPE_DISPLAY entry.
-# ---------------------------------------------------------------------------
 
 
 def _display_handoff(link_path: str, fm: dict) -> str:
-    """bin/query-records.js:308."""
     title = fm.get("title") or os.path.basename(link_path)
     state = fm.get("deployment_state") or fm.get("status") or "unknown"
     return f"- [{title}]({link_path}) — {state}"
 
 
 def _display_handoff_archived(link_path: str, fm: dict) -> str:
-    """bin/query-records.js:309."""
     title = fm.get("title") or os.path.basename(link_path)
     status = fm.get("status") or "unknown"
     shipped_in = fm.get("shipped_in")
@@ -70,14 +66,12 @@ def _display_handoff_archived(link_path: str, fm: dict) -> str:
 
 
 def _display_plan(link_path: str, fm: dict) -> str:
-    """bin/query-records.js:311."""
     title = fm.get("title") or os.path.basename(link_path)
     status = fm.get("status") or "unknown"
     return f"- [{title}]({link_path}) — {status}"
 
 
 def _display_cross_repo_memo(link_path: str, fm: dict) -> str:
-    """bin/query-records.js:316."""
     title = fm.get("title") or os.path.basename(link_path)
     status = fm.get("status") or "unknown"
     from_repo = fm.get("from") or "?"
@@ -85,7 +79,6 @@ def _display_cross_repo_memo(link_path: str, fm: dict) -> str:
 
 
 def _display_debt(link_path: str, fm: dict) -> str:
-    """bin/query-records.js:317."""
     title = fm.get("title") or os.path.basename(link_path)
     severity = fm.get("severity") or "P?"
     status = fm.get("status") or "unknown"
@@ -94,7 +87,6 @@ def _display_debt(link_path: str, fm: dict) -> str:
 
 
 def _display_bug(link_path: str, fm: dict) -> str:
-    """bin/query-records.js:320."""
     title = fm.get("title") or os.path.basename(link_path)
     severity = fm.get("severity") or "P?"
     status = fm.get("status") or "unknown"
@@ -103,7 +95,6 @@ def _display_bug(link_path: str, fm: dict) -> str:
 
 
 def _display_improvement(link_path: str, fm: dict) -> str:
-    """bin/query-records.js:321."""
     title = fm.get("title") or os.path.basename(link_path)
     status = fm.get("status") or "unknown"
     action = fm.get("proposed_action") or "?"
@@ -111,7 +102,6 @@ def _display_improvement(link_path: str, fm: dict) -> str:
 
 
 def _display_decision_guide(link_path: str, fm: dict) -> str:
-    """bin/query-records.js:333."""
     title = fm.get("title") or os.path.basename(link_path)
     status = fm.get("status") or "unknown"
     decision_count = fm.get("decision_count")
@@ -120,15 +110,12 @@ def _display_decision_guide(link_path: str, fm: dict) -> str:
 
 
 def _display_decision(link_path: str, fm: dict) -> str:
-    """bin/query-records.js:310."""
     title = fm.get("title") or os.path.basename(link_path)
     status = fm.get("status") or "unknown"
     return f"- [{title}]({link_path}) — {status}"
 
 
 def _display_review(link_path: str, fm: dict) -> str:
-    """bin/query-records.js:312. ``??``, not ``||`` — ``findings_count: 0`` must
-    render as 0, not '?'."""
     title = fm.get("title") or os.path.basename(link_path)
     reviewer = fm.get("reviewer") or "?"
     findings_count = fm.get("findings_count")
@@ -137,15 +124,12 @@ def _display_review(link_path: str, fm: dict) -> str:
 
 
 def _display_lesson(link_path: str, fm: dict) -> str:
-    """bin/query-records.js:313."""
     title = fm.get("title") or link_path
     tier = fm.get("tier") or "untagged"
     return f"- **{title}** [{tier}]"
 
 
 def _display_handoff_ledger(link_path: str, fm: dict) -> str:
-    """bin/query-records.js:315. ``??`` sites (agent/opus dispatch counts) must
-    render a 0 value as 0, not '?'."""
     tshirt = fm.get("tshirt") or "?"
     agent_dispatches = fm.get("agent_dispatches")
     agents = "?" if agent_dispatches is None else agent_dispatches
@@ -160,7 +144,6 @@ def _display_handoff_ledger(link_path: str, fm: dict) -> str:
 
 
 def _display_research_claim(link_path: str, fm: dict) -> str:
-    """bin/query-records.js:337."""
     claim_text = fm.get("claim_text") or link_path
     confidence = fm.get("confidence") or "?"
     claim_type = fm.get("type") or "?"
@@ -168,8 +151,6 @@ def _display_research_claim(link_path: str, fm: dict) -> str:
 
 
 def _display_research_synthesis(link_path: str, fm: dict) -> str:
-    """bin/query-records.js:336. ``??``, not ``||`` — a ``coverage_score: 0``
-    must render as 0, not '?'."""
     title = fm.get("title") or link_path
     pipeline = fm.get("pipeline") or "?"
     coverage_score = fm.get("coverage_score")
@@ -178,9 +159,6 @@ def _display_research_synthesis(link_path: str, fm: dict) -> str:
 
 
 def _display_coverage_audit(link_path: str, fm: dict) -> str:
-    """bin/query-records.js:338. Links on the basename, not ``title`` — the
-    oracle has no title field for this type. ``??`` on both counts — a
-    ``present_count: 0``/``absent_count: 0`` must render as 0, not '?'."""
     present_count = fm.get("present_count")
     present = "?" if present_count is None else present_count
     absent_count = fm.get("absent_count")
@@ -189,10 +167,6 @@ def _display_coverage_audit(link_path: str, fm: dict) -> str:
 
 
 def _display_gap_report(link_path: str, fm: dict) -> str:
-    """bin/query-records.js:339. Links on the basename, same as coverage-audit.
-    ``deepening_recommended`` has NO ``||``/``??`` fallback in the oracle — a
-    missing value interpolates the literal string "undefined" (same faithful
-    oracle quirk as `_display_completion`, via `_js_undefined_str`)."""
     gap_count = fm.get("gap_count")
     gaps = "?" if gap_count is None else gap_count
     coverage_score = fm.get("coverage_score")
@@ -205,12 +179,6 @@ def _display_gap_report(link_path: str, fm: dict) -> str:
 
 
 def _js_undefined_str(value: object) -> str:
-    """JS template-literal interpolation of a missing property prints the
-    literal string "undefined" (`` `${fm.title}` `` with no `` || `` fallback).
-    `None` -> ``"undefined"``; a Python bool is lowered to JS's ``true``/
-    ``false`` (``str(True)`` is ``"True"`` in Python but a JS template literal
-    interpolates a boolean as lowercase) — needed by `_display_gap_report`'s
-    `deepening_recommended` field, which is commonly boolean-valued YAML."""
     if value is None:
         return "undefined"
     if value is True:
@@ -221,10 +189,6 @@ def _js_undefined_str(value: object) -> str:
 
 
 def _display_completion(link_path: str, fm: dict) -> str:
-    """bin/query-records.js:314 — faithful oracle quirk, NOT a bug to fix
-    silently: `fm.title`/`fm.nature` have no `` || `` fallback in the oracle,
-    so a completion record missing either field renders the literal string
-    "undefined" (mirrored via `_js_undefined_str`), not an empty title."""
     title = _js_undefined_str(fm.get("title"))
     nature = _js_undefined_str(fm.get("nature"))
     chain = fm.get("chain") or "none"
@@ -273,21 +237,7 @@ TYPE_DISPLAY: dict[str, _DisplayFn] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# formatRecords — markdown-list / json / paths, with depth-correct link
-# rewriting relative to the embedding (callout) file's directory.
-# ---------------------------------------------------------------------------
-
-
 def _relativize_link(rel_path: str, root: Path, from_dir: Path) -> str:
-    """Rewrite a repo-root-relative record path into one relative to `from_dir`.
-
-    Port of bin/query-records.js:1627-1633. Fragment-suffixed synthetic paths
-    (`#claim-N` from research-claim, `#ledger-N` from handoff-ledger) are
-    exactly what this defensive handling was written for: the `#fragment` is
-    split off before path resolution and reattached after, since relpath has
-    no concept of a URL fragment and would otherwise corrupt it.
-    """
     hash_idx = rel_path.find("#")
     path_part = rel_path if hash_idx == -1 else rel_path[:hash_idx]
     fragment = "" if hash_idx == -1 else rel_path[hash_idx:]
@@ -303,17 +253,6 @@ def format_records(
     root: Optional[Path] = None,
     from_dir: Optional[Path] = None,
 ) -> str:
-    """Render queried records per `query_opts["format"]` — mirrors formatRecords
-    (bin/query-records.js:1601-1638).
-
-    `root`/`from_dir` provided together enable the markdown-list link-rewrite
-    (a query callout's expansion must link relative to the callout FILE's own
-    directory, not the repo root — the same expansion embedded at different
-    tree depths needs different `../` prefixes). Absent, `record["path"]`
-    (repo-root-relative) is used verbatim — matches the oracle's own
-    stdout/CLI-invocation shape, which has no "containing file" to be
-    depth-correct against.
-    """
     fmt = query_opts.get("format") or "markdown-list"
 
     if fmt == "json":

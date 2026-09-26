@@ -267,22 +267,6 @@ class FallbackChannel:
 
 @dataclass(frozen=True)
 class Candidate:
-    """One live registry record resolved to its `SendMessage` address.
-
-    `address` is `None` for an `ambiguous`-arm match that itself lacks a
-    usable `name`/`messaging_socket_path` (that arm's own unresolvable
-    slot) -- never the raw session id. A caller printing `.address`
-    unconditionally must see an unmistakable non-address marker, not a bare
-    UUID that could be mistaken for a real `SendMessage` address (Anti-scope,
-    `state/handoffs/2026-08-13-session-owner-reachability-registry.md`).
-
-    For that same unresolvable slot, `name` and `ref` are `""` (empty
-    string), not `None` -- deliberately distinct from `address`'s `None`
-    contract. Nothing derives a `SendMessage` name/ref for an id lacking a
-    usable record, so there is no "real value withheld" case to signal with
-    `None`; `""` states plainly that no name/ref was computed, while
-    `address` reserves `None` specifically to prevent a raw UUID being
-    mistaken for a resolved address."""
 
     session_id: str
     name: str
@@ -377,21 +361,6 @@ def messaging_available(snapshot: dict) -> bool:
 
 
 def _normalize_path(path: str) -> str:
-    """Resolve symlinks, absolutize, and normalize-case a path for
-    working-tree containment comparison.
-
-    Deliberately mirrors `coordinator_core.session.peer_roster._normalize_
-    path` (same rationale: `realpath` resolves symlinks on both sides
-    before comparison, `normpath` cleans any residual `..`/`.` segments,
-    `normcase` is the one cross-platform-correct way to compare two
-    `cwd`-shaped strings without assuming either side's platform -- Windows
-    is first-class here, per CLAUDE.md) rather than importing that
-    module's private helper: the two modules are edited by different
-    sessions in this shared tree this session, and a cross-module import of
-    an underscore-prefixed name would couple this change to a file outside
-    its own scope for four lines of logic neither side is likely to drift
-    on independently.
-    """
     return os.path.normcase(os.path.normpath(os.path.realpath(path)))
 
 
@@ -452,11 +421,6 @@ def _not_reachable_reason(sid: str, snapshot: dict) -> str:
 
 
 def _full_hash12(messaging_socket_path: str) -> str:
-    """The 12-hex-char truncated sha256 of `"session:" + messagingSocketPath`.
-
-    The widening loop's own comparanda -- each candidate's `ref` is a prefix
-    of this value, never a value in its own right.
-    """
     digest = hashlib.sha256(("session:" + messaging_socket_path).encode("utf-8"))
     return digest.hexdigest()[:_REF_MAX_LEN]
 
@@ -486,9 +450,6 @@ def _widen_ref(full12: str, other_full12s: list[str]) -> str:
 
 
 def _resolve_one(sid: str, snapshot: dict) -> Candidate | None:
-    """Build one session id's `Candidate`, or `None` if it lacks a usable
-    `name`/`messaging_socket_path` (degrades to `not_reachable`/a `None`
-    slot in `candidates` -- never a guessed address)."""
     record = snapshot.get(sid)
     if record is None or not record.name or not record.messaging_socket_path:
         return None
@@ -538,20 +499,6 @@ def resolve_candidates(snapshot: dict) -> list[Candidate]:
 
 
 def _matching_session_ids(owner_id: str, snapshot: dict) -> list[str]:
-    """Every live session id exactly equal to `owner_id`.
-
-    Exact match only: the four recording conventions this module accepts
-    (`claimed_by`, `authoring_session`, `created_by_session`,
-    `agent_sessions` entries, `subagent-share/<id>/` directory names) all
-    record full UUIDs today (state/handoffs/
-    2026-08-13-session-owner-reachability-registry.md § 1's governing
-    criterion is "accepts owner ids in every recording convention already
-    in the tree", not every possible substring of one). A short-prefix
-    tolerance was removed here deliberately: it was never in the spec, and
-    `snapshot` is `sessionId`-keyed, so an exact-match lookup can only ever
-    yield zero or one candidate -- see `resolve_address`'s docstring for
-    why `ambiguous` is retained anyway.
-    """
     if owner_id in snapshot:
         return [owner_id]
     return []
@@ -625,30 +572,6 @@ def _canonical_self_sid() -> str | None:
 
 
 def resolve_advisory_address(session_id: str | None) -> str:
-    """Best-effort bare `SendMessage` address for `session_id`, or `""` on
-    any resolution outcome that isn't a usable address.
-
-    The shared resolution core `baton_assemble._resolve_claimed_by_address_
-    suffix` and `pickup_assemble.compute_competing_claim`/
-    `compute_successor_handoffs` each format into their own caller-specific
-    shape (a parenthetical suffix vs. a bare `send_message_address` field) --
-    this function owns only the `ResolveResult.outcome` -> bare-string
-    mapping, once, so neither caller re-derives it.
-
-    Spec backlink: `state/handoffs/2026-08-13-session-owner-reachability-
-    registry.md` § 3; `cross-repo/inbox/2026-08-13-doe-claude-em-peer-
-    roster-doctrine-reply.md` § Counter 2.
-
-    Negative-spec: never raises on a well-formed `session_id` -- `""` on
-    `not_reachable`/`ambiguous` is a normal outcome, not a failure path.
-    Does NOT catch an exception from `resolve_address` itself (e.g. a
-    `harness_registry.snapshot()` read failure): that stays the CALLER's
-    responsibility, mirroring `_resolve_claimed_by_address_suffix`'s own
-    proven shape of a caller-local `try/except Exception: return ""` around
-    a caller-local `from coordinator_core.session import reachability` --
-    this function does not itself decide whether its own import should be
-    advisory; only a caller importing it that way is.
-    """
     if not session_id:
         return ""
     result = resolve_address(session_id)
@@ -660,52 +583,11 @@ def resolve_advisory_address(session_id: str | None) -> str:
 
 
 def resolve_addresses_bulk(session_ids: list[str]) -> dict[str, str]:
-    """Resolve many session ids to their `resolve_advisory_address` values
-    off ONE `harness_registry.snapshot()` read, not one per id.
-
-    Built for `pickup_assemble.compute_competing_claim`/
-    `compute_successor_handoffs`, whose `candidates` list routinely carries
-    ~18 entries on the live corpus -- calling `resolve_address` once per
-    candidate would re-snapshot the live registry 18 times for one brief
-    (`harness_registry.snapshot()`'s own contract is a fresh directory scan
-    per call, Anti-scope above). This function snapshots once and reuses
-    `resolve_candidates` (already whole-snapshot-scoped, per its own
-    docstring) for the non-self roster, plus one `self_record()` read for
-    the two-signal self-classification `resolve_address` itself performs
-    per id.
-
-    Spec backlink: `state/handoffs/2026-08-13-session-owner-reachability-
-    registry.md` § 3; `cross-repo/inbox/2026-08-13-doe-claude-em-peer-
-    roster-doctrine-reply.md` § Counter 2 (performance).
-
-    Negative-spec: a `session_id` present in `session_ids` but absent from
-    the live snapshot maps to `""` in the returned dict, never a raised
-    `KeyError` for a caller indexing by that id. A FALSY `session_id`
-    (`""`/`None`) is instead SKIPPED by the loop (`if not sid: continue`)
-    and never appears as a key in the returned dict at all -- distinct from
-    the absent-but-truthy case above, and unlike `resolve_advisory_address`
-    (which accepts a falsy id and returns `""` inline). A caller indexing
-    the returned dict directly with a falsy key, rather than going through
-    `.get(sid, "")`, gets a `KeyError`, not `""` (Review: code-reviewer --
-    P3, docstring/loop mismatch).
-    """
     snapshot = harness_registry.snapshot()
     return _resolve_addresses_bulk_from_snapshot(session_ids, snapshot)
 
 
 def _resolve_addresses_bulk_from_snapshot(session_ids: list[str], snapshot: dict) -> dict[str, str]:
-    """The snapshot-scoped core of `resolve_addresses_bulk`, factored out so
-    `resolve_addresses_bulk_with_availability` can pair it with one
-    `messaging_available(snapshot)` read off the SAME snapshot -- two
-    separate `harness_registry.snapshot()` calls one after another risk a
-    torn view (the registry is a live directory scan, not a stable
-    read), which would let a caller's address dict and its "is messaging
-    on at all" verdict disagree about the instant they describe.
-
-    Self-classification defers to `_canonical_self_sid()` first, same
-    precedence and same rationale as `resolve_address` -- see that
-    function's docstring. Only when it returns `None` does this fall back
-    to the legacy `self_record()` + `_socket_env_self_match` pair."""
     self_sid = _canonical_self_sid()
     legacy_self_signals = self_sid is None
     if legacy_self_signals:
@@ -769,12 +651,6 @@ def resolve_addresses_bulk_with_availability(
 
 
 def _not_reachable_result(sid: str, snapshot: dict, this_repo_root: str) -> ResolveResult:
-    """Build the `not_reachable` `ResolveResult` for `sid`, pairing `reason`
-    with `fallback_channel` in the one place both of `resolve_address`'s
-    `not_reachable` returns need it -- `sid` need not itself be a key in
-    `snapshot` (the "no match at all" caller passes the raw `owner_id`
-    straight through, same as `_not_reachable_reason` already accepts).
-    """
     reason = _not_reachable_reason(sid, snapshot)
     fallback_channel = (
         _fallback_channel_for(sid, snapshot, this_repo_root)

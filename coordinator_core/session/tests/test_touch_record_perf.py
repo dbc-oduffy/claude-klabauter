@@ -62,59 +62,27 @@ from coordinator_core.session import touch_record
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-#: Documented Windows job-object scheduler tick (benchmarks/process_time.py
-#: module docstring, trap 2) -- the floor `batched_process_time_ms` actually
-#: reads through on this platform, which is coarser than
-#: `time.get_clock_info('process_time').resolution` on this box (see this
-#: module's own docstring, TRAP 1). The larger of the two is used as the
-#: guard floor so the check never trusts a clock that lies optimistic.
 _DOCUMENTED_WINDOWS_TICK_MS = 15.625
 
-#: Per C8's own brief: "size the iteration count so the total measured
-#: interval is at least two orders of magnitude above" the tick.
 _MIN_ORDERS_OF_MAGNITUDE_ABOVE_TICK = 100
 
-#: Number of `append_event` calls performed INSIDE one spawned driver, so
-#: the interpreter-startup floor (paid once per invocation) is amortised
-#: across enough real work that dividing it out does not itself become a
-#: quantisation artifact (TRAP 1). Measured on this box: ~0.16ms/call at
-#: this shape, so 20000 calls totals ~3.2s of process time per point --
-#: comfortably (>100x) above the 15.625ms tick, and the reason this file is
-#: `cadence`-tiered rather than fast-suite.
 _APPENDS_PER_DRIVER = 20_000
 
-#: `k` for the append-flatness legs. A single spawn per point already
 #: amortises tick noise internally via `_APPENDS_PER_DRIVER`'s own loop;
-#: `k=1` avoids the alternative (re-running the SAME driver argv `k` times
-#: against a sink that keeps growing between reps, biasing later reps of
-#: the SAME point upward for a reason that has nothing to do with the
-#: point being measured).
 _K_APPEND_FLATNESS = 1
 
 #: The one bar. `SUSPENSION_BAR_MS` (2000ms) is which-to-switch-off-first,
-#: never a target, and a figure in this file is never compared against it.
 _BRIGHTLINE_MS = 500.0
 
-#: `k` for the full-read leg, where re-running the identical read-only
-#: driver against the same fixture carries no growth-between-reps hazard.
 _K_FULL_READ = 5
 
 
 def _tick_ms() -> float:
-    """The guard floor for TRAP 1: the larger of this box's own
-    `time.get_clock_info('process_time').resolution` (read once, for
-    context -- never used to time an operation, per this module's own
-    Measurement discipline section) and the documented Windows job-object
-    scheduler tick `batched_process_time_ms` actually measures through."""
     reported_resolution_ms = time.get_clock_info("process_time").resolution * 1000.0
     return max(reported_resolution_ms, _DOCUMENTED_WINDOWS_TICK_MS)
 
 
 def _assert_well_above_tick(total_process_time_ms: float, label: str) -> None:
-    """TRAP 1's guard: refuse to trust a per-op figure divided out of a
-    total that is not itself well above the scheduler tick. Asserts, does
-    not silently clamp -- a figure that fails this check is not a flat
-    curve, it is unmeasured, and the test must say so rather than pass."""
     tick = _tick_ms()
     floor = tick * _MIN_ORDERS_OF_MAGNITUDE_ABOVE_TICK
     assert total_process_time_ms >= floor, (
@@ -126,15 +94,6 @@ def _assert_well_above_tick(total_process_time_ms: float, label: str) -> None:
 
 
 def _build_prior_events(sink: Path, count: int) -> None:
-    """Write `count` prior events directly to `sink` as raw encoded bytes --
-    NOT via `append_event`, so building the fixture (unmeasured setup, never
-    inside a timed driver) pays a single `write_bytes` rather than `count`
-    separate opens. This deliberately bypasses `_maybe_rotate`: the point of
-    this fixture is prior RECORD LENGTH on one sink, matching how AC17's
-    live rotation check will see it on the very next real `append_event`
-    call (below the cap at count=0/1000, at or past it at count=10000 --
-    exercising the rotate-on-first-append path for that point, exactly as
-    a real oversized sink would)."""
     sink.parent.mkdir(parents=True, exist_ok=True)
     ts = 1_700_000_000.0
     lines = []
@@ -229,11 +188,6 @@ def test_append_cost_is_flat_across_prior_event_counts(tmp_path):
 
     baseline = per_append[0]
     # FLATNESS, not a threshold: every later point must stay within a
-    # generous multiple of the empty-sink baseline -- a real O(D^2)-shaped
-    # regression would blow past this by orders of magnitude at 10k prior
-    # events (module docstring's own retired-defect comparison), while
-    # ordinary run-to-run jitter on a shared, loaded box stays well inside
-    # it.
     _GROWTH_TOLERANCE_MULTIPLE = 3.0
     for point in points[1:]:
         multiple = point["per_append_ms"] / baseline if baseline > 0 else float("inf")
@@ -278,15 +232,6 @@ def _write_full_read_floor_driver(driver_path: Path) -> None:
 
 
 #: THE DEEPEST CLAIMANT A SESSION CAN PLAUSIBLY WRITE, derived from the
-#: live corpus measured 2026-08-27 (see docs/research/spike-verdicts/
-#: 2026-08-27-corpus-c-is-wrong-on-both-axes-and-the-fingerprint-prize-
-#: collapses-at-real-width.md): highest sustained per-session append rate
-#: observed anywhere on the box, 132 events/hour, held for a full 24 hours.
-#:
-#: Per-claimant depth does NOT accumulate the way claimant COUNT does -- a
-#: session's record stops growing when the session ends -- so the bound
-#: here is session lifetime x append rate, never a calendar projection.
-#: Measured reality for comparison: median 5 events, max 169.
 _PEAK_APPEND_RATE_PER_HOUR = 132
 _MAX_PLAUSIBLE_SESSION_HOURS = 24
 _DEEPEST_PLAUSIBLE_CLAIMANT = _PEAK_APPEND_RATE_PER_HOUR * _MAX_PLAUSIBLE_SESSION_HOURS

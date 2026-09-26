@@ -73,9 +73,6 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    # popup-intentional-last-resort — test-only real-git spawn, mirrors the
-    # governed real_git.py fixture's own unguarded pattern; no console window
-    # risk on the CI/dev platforms this suite runs on.
     return subprocess.run(
         ["git", *args],
         cwd=str(cwd),
@@ -90,12 +87,6 @@ def _run(coro):
 
 
 def test_multi_move_batch_with_sidecar_lands_one_clean_commit(tmp_path: Path):
-    """A realistic caller batch — a primary plan file plus its sidecar
-    review file, one Move each, one subject — lands both into ONE archival
-    commit, with the working tree/index clean afterward. Mirrors the
-    call-site shape the dropped file's `test_row6_archive_plans_sidecar_
-    move_is_the_live_portion` exercised, minus the retired drift assertion.
-    """
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q", "-b", "main"], root)
@@ -134,7 +125,6 @@ def test_multi_move_batch_with_sidecar_lands_one_clean_commit(tmp_path: Path):
     assert primary_dst.exists()
     assert sidecar_dst.exists()
 
-    # Both moves landed in the SAME commit (one subject, one HEAD advance).
     log = _git(["log", "--format=%s"], root).stdout.strip().splitlines()
     assert log[0] == "fleet: archive 1 terminal plan(s) [fleet.archive_completed_plans]"
 

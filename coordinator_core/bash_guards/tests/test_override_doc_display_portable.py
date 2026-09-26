@@ -116,10 +116,6 @@ class TestOverrideKeysDocDisplayIsPortable:
 
 
 class TestOperatorOverrideNoteIsPortable:
-    """`operator_override_note` is the actual per-firing string every guard
-    message emits -- the constant/resolver tests above are necessary but not
-    sufficient, since a future edit could reintroduce an absolute path at
-    the call site without touching the resolver itself."""
 
     def test_note_contains_no_absolute_path_token(self) -> None:
         note = h.operator_override_note(

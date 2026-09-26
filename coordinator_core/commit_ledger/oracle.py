@@ -63,33 +63,16 @@ from typing import Any, Callable, List, NamedTuple, Optional
 
 from coordinator_core.commit_ledger.store import ledger_path, read_chain
 
-#: The one `classify_surface` bucket (see `classify.py` module docstring)
-#: treated as docs-only for this module's two-figure split. Not exported --
-#: this module's own split, not a rename of anything `classify.py` or
-#: `review_brightline_gate.py` declares.
 _DOCS_KIND = "doctrine"
 
 
 class OracleFigure(NamedTuple):
-    """One of the oracle's two reported figures.
-
-    ``weight`` is ``None`` iff the report as a whole is unresolved
-    (``OracleReport.resolved is False``) -- never a resolved zero
-    masquerading as "nothing to report" (AC15). ``basis`` is always a
-    non-empty, human-readable sentence stating what went into ``weight``,
-    never a bare number.
-    """
 
     weight: Optional[float]
     basis: str
 
 
 class OracleReport(NamedTuple):
-    """The oracle's full answer for one handoff's chain. NO exit-code
-    member, NO refusal arm (AC6) -- ``resolved`` distinguishes "pending,
-    no ledger yet" from a normal (possibly zero-weight) answer, and that
-    is the only branch a caller can take on this type.
-    """
 
     code_only: OracleFigure
     with_docs: OracleFigure
@@ -102,13 +85,6 @@ def _pending(reason: str) -> OracleReport:
 
 
 def _coerce_entry_weight(weight_basis: Any) -> float:
-    """Best-effort numeric coercion for one ledger entry's ``weight_basis``.
-
-    Never raises: an absent, non-numeric, or otherwise malformed value
-    contributes 0.0 rather than aborting the fold -- a ledger entry this
-    module cannot interpret should undercount, not crash the oracle a
-    caller is about to render.
-    """
     if isinstance(weight_basis, bool):
         return 0.0
     if isinstance(weight_basis, (int, float)):
@@ -123,20 +99,6 @@ def evaluate(
     cwd: Optional[str] = None,
     read_chain_fn: Callable[..., List[Any]] = read_chain,
 ) -> OracleReport:
-    """Fold ``handoff_id``'s chain-wide ledger entries into the two
-    reported figures.
-
-    Pure and stateless per this module's own docstring: one
-    ``read_chain_fn`` call (defaulting to ``commit_ledger.store.
-    read_chain``, overridable by tests), no persistence, no cross-call
-    state, no subprocess.
-
-    Returns ``OracleReport(resolved=False, ...)`` when no ledger file
-    exists yet for ``handoff_id`` -- "pending", not a refusal, and no
-    dispositions are offered on that outcome (dispatch brief). Returns a
-    normal, resolved report (possibly zero-weight) in every other case,
-    including an empty-but-present ledger (AC15).
-    """
     if not handoff_id:
         return _pending("no handoff_id supplied — nothing to report")
 
@@ -190,12 +152,5 @@ def evaluate(
 
 
 def _ledger_exists(handoff_id: str, cwd: Optional[str]) -> bool:
-    """True iff ``handoff_id``'s OWN ledger file is present on disk.
-
-    Deliberately checks only the leaf ledger file, not the full ancestor
-    chain: "pending" here means "this baton has not committed anything the
-    store has seen yet", which is answered by its own file's presence, not
-    by whether some ancestor happens to have one.
-    """
     path = ledger_path(handoff_id, cwd)
     return path is not None and path.is_file()

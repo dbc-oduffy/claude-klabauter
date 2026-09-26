@@ -138,82 +138,36 @@ __all__ = [
     "main",
 ]
 
-# Distinct filename in the SAME per-clone, per-user `svc_dir()` the pipe
-# server's `warm.json` lives in -- see module docstring's negative-spec for
-# why this is a second file, never a second shape inside the first.
 DISCOVERY_FILENAME = "warm-http.json"
 
 HEALTH_PATH = "/health"
 
-# Re-exported from `hook_http`, which owns routing (`op_for_path`): the endpoint and the
-# op a bare POST resolves to are one decision, and two spellings of it would let the
-# transport 404 a path the router accepts. `write_discovery` publishes THIS name, so
-# every existing reader keeps the name it already reads.
 HOOK_PATH = hook_http.HOOK_PATH
 
-# The op name `/hook` dispatches through `_serve_line`, registered by
-# `coordinator_core/ops/warm_guard_evaluate.py` (landed 2026-08-25, state/handoffs/
-# 2026-08-23-the-warm-guard-op-gets-registered.md). A `/hook` POST therefore resolves to
-# a real guard verdict computed by the same `bash_guards.dispatch.evaluate_payload_json`
-# chain every cold hook invocation runs.
-#
 # The METHOD_NOT_FOUND path this constant used to describe is not dead, only no longer
-# the everyday case: a repoint of this name without a matching `@register_op` key, or an
-# engine clone predating the op, still lands there, and `hook_http.interpret_result`
-# still turns it into a loud "guard did not run" response -- never a fabricated allow,
-# never a fabricated deny. Repointing this constant means repointing the registration in
-# the same change.
 GUARD_OP_NAME = hook_http.DEFAULT_OP_NAME
 
-# A liveness probe, not a work budget -- mirrors `warm.client.
 # READ_DEADLINE_SECS`'s "is the server wedged" framing, sized the same
-# (2.0s) since both ask the identical question of a sibling transport.
 HEALTH_CHECK_TIMEOUT_SECS = 2.0
 
 # Reuses `breadcrumb.SPAWN_DEBOUNCE_SECS` rather than defining a second
-# debounce window that could drift from the pipe transport's.
 SPAWN_DEBOUNCE_SECS = breadcrumb.SPAWN_DEBOUNCE_SECS
 
-# C9 (AC18/AC19): how often the skew watchdog re-checks its own boot token
-# against a live `skew.compute_client_token` read. Same value and framing as
 # `warm.server._IDLE_WATCHDOG_POLL_SECS` -- both ask "has this generation
-# been superseded" on their own thread, independent of request traffic; this
-# transport takes the identical number rather than inventing a second one.
-# NOT an idle-demotion poll (module docstring negative-spec still holds: no
-# idle watchdog here) -- this thread checks exactly one thing, staleness,
-# and never reads served-count or seconds-idle.
 _SKEW_WATCHDOG_POLL_SECS = 5.0
 
-# `spawn_detached` respawns by the resolved interpreter path against this
 # file itself (mirrors `warm.client.SERVER_ENTRY_SCRIPT` / `warm.server`'s
-# own `if __name__ == "__main__":` entry).
 ENTRY_SCRIPT = "coordinator_core/warm/supervisor.py"
 
 
 def _default_engine_clone() -> Path:
-    """This module's own resolved clone root -- collapsed onto the single
-    shared definition, `engine_root.current_engine_clone()` (plan
-    2026-08-19-an-engine-root-is-a-stamped-build § C3)."""
     return current_engine_clone()
 
 
 def discovery_path(engine_root: Optional[Path] = None) -> Path:
-    """`<svc dir>/warm-http.json` for `engine_root` -- `breadcrumb.svc_dir`
-    reused as a pure per-clone/per-user directory resolver, never mutated."""
     return breadcrumb.svc_dir(engine_root) / DISCOVERY_FILENAME
 
 
-# The atomic-replace primitive now lives in `locked_write.replace_with_retry`,
-# lifted there once this site had paid for it: the Windows sharing-violation
-# window is a SHAPE of bug -- any atomic publish whose readers take no lock has
-# it -- and `locked_rmw` had the identical unguarded `os.replace`, on the hook
-# path, via `hooks/track_touched_files.py`. Reusing it rather than keeping a
-# second copy here is the whole point; the two sites differ only in what they do
-# when the budget expires, which is the boolean the helper returns.
-# The reader's budget is far smaller than the writer's: it sits on the hook
-# path, so a contended read must resolve in single-digit milliseconds or give up
-# and let the caller fall open. The window it covers is one rename, not one
-# write.
 _replace_with_retry = locked_write.replace_with_retry
 
 
@@ -226,14 +180,6 @@ def write_discovery(
     started_at: Optional[str] = None,
     engine_root: Optional[Path] = None,
 ) -> None:
-    """Write the discovery record under `locked_write.held_lock`, replacing
-    any prior content -- mirrors `breadcrumb.write_breadcrumb`'s own
-    "snapshot of the current boot, not an append log" contract exactly,
-    for the same reason: the only reader that matters wants the LATEST
-    listener, never a history. Never raises past a lock timeout or an
-    `OSError` writing the file -- a caller asking this module to RECORD a
-    boot needs to know if that recording failed.
-    """
     if started_at is None:
         started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -250,28 +196,9 @@ def write_discovery(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     # ATOMIC REPLACE, NOT TRUNCATE-THEN-WRITE. The lock below serialises
-    # WRITERS; it does nothing for the reader, because `read_discovery` takes
-    # no lock at all and must not -- it sits on the hook path, where a lock
-    # acquisition is exactly the cost this transport exists to remove.
-    #
-    # `path.write_text` truncates first, so a lock-free reader landing inside
-    # that window sees an empty or partial file, fails to parse, and gets
-    # `None` -- which every consumer correctly reads as "no listener". The
-    # listener is up the whole time.
-    #
     # MEASURED, not theorised (doe-claude-5a's sink, 2026-08-25, n=445): two
-    # isolated `no_listener` samples at 19:57:00.560Z and 19:58:00.562Z with
-    # `probe_latency_ms` of **0.037 and 0.031 ms** against 116-167ms for
     # healthy neighbours -- thirty-odd MICROSECONDS, three orders of magnitude
-    # short of one round trip, so nothing was dialled and no timeout was hit.
-    # Both coincide with an `engine_token` rotation (`9331f66301a0bfe8` ->
-    # `c529e3ea2af27a5f`), i.e. a publish rewriting this record, while OS
-    # process-table evidence shows the listener pid ran continuously across
-    # both. The record went away, never the process.
-    #
     # mkstemp in the TARGET'S OWN DIRECTORY so `os.replace` is a same-volume
-    # rename and therefore atomic on both Windows and POSIX; a temp file
-    # elsewhere degrades to a copy and reopens the window it closes.
     with locked_write.held_lock(path, holder_label="warm.supervisor"):
         payload = json.dumps(record, ensure_ascii=False)
         fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=".discovery-", suffix=".tmp")
@@ -282,29 +209,8 @@ def write_discovery(
                 os.fsync(fh.fileno())
             if not _replace_with_retry(tmp_path, str(path)):
                 # Contended past the budget. The in-place fallback is a TRUNCATING write --
-                # the very shape the atomic replace above exists to avoid -- so it is taken
-                # ONLY when there is no record to damage.
-                #
                 # CORRECTED 2026-08-25, on evidence. The original wrote in place
-                # unconditionally, reasoning that record availability outranks single-write
-                # atomicity. That holds when the destination is ABSENT and INVERTS when it is
-                # PRESENT, because the two failure modes are not equally loud:
-                #   - a STALE record names a listener whose `engine_sha` no longer matches, so
                 #     `_serve_line` answers ENGINE_SKEW: LOUD, and it evicts, so the next fire
-                #     boots a current listener.
-                #   - a TORN record reads as `None`, which every consumer correctly reads as
-                #     "no listener": SILENT, and on the hook path that is a guard that did not
-                #     run and said nothing.
-                # Trading a loud stale read for a silent absent one is the wrong way round.
-                # The observed events are `engine_token` rotations -- rewrites of a record
-                # that ALREADY EXISTS -- which is exactly where the old fallback did harm.
-                # Two post-`dcf4f83a1` events 36 minutes apart (2026-08-25T21:22:00.639Z and
-                # T21:58:30.667Z, both k=1, surfaced by doe-claude-ec and -5a off the
-                # committed sink) are a RATE, not stragglers.
-                #
-                # Skipping this rotation is safe: the record on disk stays readable and the
-                # next rotation retries. `exists()` races a concurrent writer benignly --
-                # losing that race skips one publish rather than tearing a record.
                 if not path.exists():
                     path.write_text(payload, encoding="utf-8", newline="\n")
                 try:
@@ -320,36 +226,9 @@ def write_discovery(
 
 
 def read_discovery(engine_root: Optional[Path] = None) -> Optional[dict]:
-    """Read and parse the discovery record, or return None if absent,
-    unreadable, or not a well-formed JSON object -- never raises, mirrors
-    `breadcrumb.read_breadcrumb`'s HINT contract: every consumer must treat
-    `None` as "no information," not an error.
-
-    RETRIES ONLY ON FAILURE, so the happy path pays NOTHING -- this function is
-    on the hook path and the whole point of the transport is what it does not
-    spend. A first read that parses returns immediately, exactly as before.
-
-    Why a retry exists at all: `write_discovery` now swaps the record in with
-    `os.replace`, which closes the torn-read window but hands the reader a
-    different, much narrower one -- on Windows an open racing a rename loses
-    with a sharing violation (`PermissionError`), and a `None` from that is
-    indistinguishable to every caller from "there is no listener". The record
-    is rewritten on each engine-token rotation (five in one 213-minute
-    observation window), and the incident this whole path was hardened for was
-    exactly a reader seeing no record while the listener process ran
-    continuously.
-
-    A missing file is NOT retried: `FileNotFoundError` means no listener has
-    ever published here, which is a real answer available immediately, and
-    spinning on it would put the retry cost on the genuinely-cold path where it
-    buys nothing. Only a contended read and a torn parse are retried.
-    """
     return read_discovery_with_cause(engine_root)[0]
 
 
-#: Re-exported from `breadcrumb`, which owns the one reader both HTTP
-#: transports share. Named here because this is the module DoE's forwarder
-#: imports; a second definition would be a second closed set to drift.
 CAUSE_RECORD_PRESENT = breadcrumb.CAUSE_RECORD_PRESENT
 CAUSE_RECORD_ABSENT = breadcrumb.CAUSE_RECORD_ABSENT
 CAUSE_RECORD_UNREADABLE = breadcrumb.CAUSE_RECORD_UNREADABLE
@@ -440,10 +319,6 @@ def diagnose_no_backend(
             "record": record,
         }
     except Exception as exc:  # noqa: BLE001 -- see docstring; never a second failure
-        # Root resolution itself failed, which is its own answer and a real one:
-        # a caller that cannot resolve an engine root was never going to find a
-        # record, and reporting that beats reporting "absent" from a path that
-        # was never computed.
         return {
             "cause": "engine_root_unresolvable",
             "discovery_path": None,
@@ -492,12 +367,7 @@ def unlink_discovery(
     path = discovery_path(engine_root)
     if owner_pid is not None:
         # Held across READ-THEN-UNLINK, closing the TOCTOU `4a6aeac9ed` left:
-        # an unlocked read followed by an unconditional unlink lets a
-        # successor's `write_discovery` land in the gap between them, and
         # this call then deletes the SUCCESSOR's fresh record rather than
-        # the caller's own stale one. `write_discovery` already takes this
-        # same lock for every write, so holding it here serialises against
-        # every writer rather than only the read.
         try:
             with locked_write.held_lock(path, holder_label="warm.supervisor"):
                 record = read_discovery(engine_root)
@@ -510,10 +380,6 @@ def unlink_discovery(
                 except OSError:
                     pass
         except locked_write.LockTimeout:
-            # Contention past `held_lock`'s own
-            # timeout must not escape this never-raises contract; a caller
-            # (`ctx_shutdown`) relying on that contract to reach its own
-            # handle release must not see this branch raise.
             pass
         return
     try:
@@ -523,13 +389,6 @@ def unlink_discovery(
 
 
 def discovery_is_live(record: dict) -> bool:
-    """True iff `record`'s `pid` is still the SAME process that wrote it
-    (`stable_pid_alive`, pid PLUS stored birth instant -- a recycled pid
-    reads dead, exactly as `breadcrumb.should_spawn`'s own comparison
-    does). Any malformed field, or a `stable_pid_alive` failure (e.g.
-    `MissingPsutilError`), degrades to "cannot vouch for this record" ->
-    False, never raises -- same HINT contract as every other read here.
-    """
     pid = record.get("pid")
     if not isinstance(pid, int):
         return False
@@ -572,8 +431,6 @@ def should_spawn(engine_root: Optional[Path] = None, *, now: Optional[float] = N
 
 
 def listener_url(record: dict) -> Optional[str]:
-    """The base URL a live `record` describes, or None if `port` is
-    missing/malformed."""
     port = record.get("port")
     if not isinstance(port, int):
         return None
@@ -639,13 +496,6 @@ def supervisor_pipe_name(
     *,
     user_sid: Optional[str] = None,
 ) -> str:
-    """The per-machine election's pipe name -- `warm.election.pipe_name`
-    reused verbatim, under an `"http."`-prefixed engine_token so this
-    election can NEVER collide with `warm.server.main`'s own pipe-transport
-    election on the identical clone (same SID, same clone hash, different
-    token namespace -- `election.pipe_name`'s own docstring names the token
-    as the one component this module is free to choose).
-    """
     root = engine_root if engine_root is not None else _default_engine_clone()
     token = skew.compute_client_token(root)
     return election.pipe_name(f"http.{token}", engine_clone=root, user_sid=user_sid)
@@ -862,9 +712,6 @@ def spawn_detached(repo_root: str, script_path: str, args: Optional[Any] = None)
 
 
 def _self_stable_pid_start_epoch() -> Optional[int]:
-    """This process's own birth instant, in the SAME derivation `warm.
-    server._self_stable_pid_start_epoch` uses -- kept as a local copy per
-    this package's convention rather than importing that private name."""
     from coordinator_core.session.core import _win_create_time_epoch
 
     try:
@@ -874,15 +721,6 @@ def _self_stable_pid_start_epoch() -> Optional[int]:
 
 
 def _release_election_handle(handle: Optional[Any]) -> None:
-    """Best-effort release of the won election lock -- called from
-    `_ServerContext.ctx_shutdown` and from `main()`'s credential-refusal
-    `return 3` path. See `main()`'s comment at the election call for why the
-    handle is held rather than released immediately after winning.
-
-    Releases whichever primitive `_elect_supervisor_slot` won on this
-    platform: a pipe HANDLE on Windows, an `flock`'d fd on POSIX. Dispatching
-    on the platform rather than on the handle's type keeps this the exact
-    inverse of the arm that produced it -- both are opaque ints."""
     if handle is None:
         return
     if sys.platform != "win32":
@@ -952,31 +790,16 @@ class _ServerContext:
     ) -> None:
         self.httpd = httpd
         self.engine_root = engine_root
-        # The won election handle, held for this process's lifetime -- see
-        # `main()`'s own comment at the `elect()` call for why closing it
-        # early defeats the lock. Closed exactly once, in `ctx_shutdown`.
         self._election_handle = election_handle
         self.in_flight = InFlightCounter()
         # THIS TRANSPORT HAD NO TELEMETRY AT ALL until 2026-08-26, so every
-        # death on it -- including a listener outliving the clone it was
-        # spawned from, observed twice in the succession investigation's own
-        # sandbox teardown -- was invisible in every file on disk, and every
-        # exit-reason census over `telemetry.jsonl` was silently a census of
-        # the pipe transport alone. `transport=` tags these rows so the two
-        # populations stay separable rather than merging into one denominator
-        # (see `telemetry.ServerTelemetry.__init__`).
-        # Computed BEFORE the telemetry object so every row this life flushes
-        # carries the generation that served it; see `_compute_engine_token`.
         self.engine_token = self._compute_engine_token()
         self.telemetry = telemetry.ServerTelemetry(
             transport="http", engine_token=self.engine_token
         )
         self.version_state = version_state
         self.server_sha = version_state.server_sha
-        # `dispatch` overrides `_serve_line`'s own default (`_run_dispatch`) -- production
-        # never sets it; a test does, standing in for the real registered op
         # `GUARD_OP_NAME` names (`warm_guard.evaluate`, `ops/warm_guard_evaluate.py`) so
-        # it can drive a chosen verdict without running the full guard chain.
         self.dispatch = dispatch
         self._skew_watchdog_stop = threading.Event()
 
@@ -1004,10 +827,6 @@ class _ServerContext:
         self.telemetry.record_exit(reason, detail)
 
     def drain(self) -> None:
-        """The `drain` `_serve_line` requires for a detected skew eviction. A no-op here:
-        unlike the pipe transport's bounded worker pool, this listener has no queue of
-        pending connections to drain -- `close_listener` (below) already stops accepting
-        new ones, which is the whole of what this transport owes on skew."""
         return None
 
     def close_listener(self) -> None:
@@ -1018,28 +837,11 @@ class _ServerContext:
 
     def ctx_shutdown(self) -> None:
         self._skew_watchdog_stop.set()
-        # `telemetry.flush` and
         # `unlink_discovery` are each best-effort/never-raises BY CONTRACT,
-        # but the handle release must not sit downstream of either one's
-        # ABILITY to raise: this failure mode is unrecoverable (a leaked
-        # election handle wedges the pipe name for process lifetime), so
-        # defence-in-depth here is correct even after fixing the root cause
-        # at `unlink_discovery`'s own `LockTimeout` swallow.
         try:
-            # Before the discovery unlink, matching `warm.server`'s own
-            # step-3 ordering: `flush` never raises, so it cannot cost the
-            # unlink, and a row written first is a row that survives a
-            # crash between the two.
             self.telemetry.flush(engine_root=self.engine_root)
-            # Ownership-checked: an orphaned or superseded listener exiting
-            # must not delete the LIVE listener's record. See
-            # `unlink_discovery`.
             unlink_discovery(self.engine_root, owner_pid=os.getpid())
         finally:
-            # Release the election lock LAST, after the discovery record
-            # this process owned is gone -- a competitor that wins the
-            # election the instant it is released must never find a stale
-            # record naming a pid that is already exiting.
             _release_election_handle(self._election_handle)
             self._election_handle = None
 
@@ -1051,21 +853,6 @@ class _ServerContext:
         )
 
     def _token_is_stale(self) -> bool:
-        """C9 (AC18/AC19): has a publish rotated the engine stamp underneath
-        this listener since it booted? Compares this context's own
-        `engine_token` (self-stamped once at construction, see
-        `_compute_engine_token`) against a LIVE `skew.compute_client_token`
-        read -- mirrors `warm.server._ServerContext._token_is_stale`'s exact
-        comparison, at this transport's own boot-token field.
-
-        Never raises: this runs on the skew-watchdog thread every poll, and
-        a transient stat failure (a stamp file mid-rewrite, an unresolvable
-        `engine_root`) must not kill the watchdog. Any failure to establish
-        the live token, or a `None` boot token (an unstamped root at
-        construction -- `_compute_engine_token`'s own fail-open), reads as
-        NOT stale: the safe default is "wait for the next poll," never a
-        false eviction of a healthy listener.
-        """
         if self.engine_token is None:
             return False
         try:
@@ -1094,28 +881,15 @@ class _ServerContext:
             self.stop()
 
     def _skew_watchdog_loop(self) -> None:
-        """Runs on its OWN thread, independent of the accept loop -- so a
-        stale listener is retired even while it takes NO `/hook` traffic at
-        all (the exact gap C9 closes; see this class's docstring).
-        `Event.wait` both sleeps and gives `ctx_shutdown` a way to end this
-        thread promptly once some OTHER trigger has already won the
-        shutdown guard, mirroring `warm.server._ServerContext.
-        _idle_watchdog_loop`'s identical use of its own stop event."""
         while not self._skew_watchdog_stop.wait(_SKEW_WATCHDOG_POLL_SECS):
             self._skew_watchdog_tick()
 
 
 def _make_handler(ctx: "_ServerContext"):
-    """Build a `BaseHTTPRequestHandler` subclass bound to `ctx` via
-    closure -- `http.server`'s own idiom for per-server handler state,
-    avoiding a module-level global `ctx`."""
     from http.server import BaseHTTPRequestHandler
 
     class _Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
-            # Silence stdlib's default stderr access log -- this process
-            # has no operator watching its console (module docstring's
-            # "resident listener process").
             pass
 
         def parse_request(self) -> bool:
@@ -1157,8 +931,6 @@ def _make_handler(ctx: "_ServerContext"):
             if not super().parse_request():
                 return False
             if not self._host_is_pinned():
-                # Refuse without dispatching, and close: a rebound or
-                # foreign-Host caller gets no route, no op, no body read.
                 self.close_connection = True
                 try:
                     self.send_error(421, "Misdirected Request")
@@ -1166,12 +938,6 @@ def _make_handler(ctx: "_ServerContext"):
                     pass
                 return False
             if not self._cookie_is_valid():
-                # 401-shaped and fail-closed, per the spike verdict's
-                # § Refusal semantics row 1. REFUSE THE CALLER, NEVER EVICT:
-                # the listener must be fully serving for the next caller
-                # after it refuses this one. A refusal that drained would
-                # be the outage this credential exists to prevent, spelt
-                # differently.
                 self.close_connection = True
                 try:
                     self.send_error(401, "Unauthorized")
@@ -1216,12 +982,7 @@ def _make_handler(ctx: "_ServerContext"):
                 live = skew.compute_client_token(ctx.engine_root)
             except Exception:  # noqa: BLE001 -- see the docstring's fail-open note
                 return False
-            # Plain `==`, not `compare_digest`, deliberately: this is a
             # GENERATION STAMP, not a bearer secret. Nothing is granted by
-            # matching it -- the cookie gate upstream is the auth boundary
-            # and does use `compare_digest`. A timing signal here leaks only
-            # which engine build is running, which the caller computed
-            # itself to get here.
             if caller_token == live:
                 return False
             body = json.dumps(
@@ -1245,20 +1006,9 @@ def _make_handler(ctx: "_ServerContext"):
             return True
 
         def _token_is_stale_server_side(self) -> bool:
-            """Axis 2: is THIS server's own boot stamp behind the live one?
-
-            Delegates to the context's own check so the watchdog and this
-            request path can never disagree about which axis fired.
-            """
             try:
                 return bool(ctx._token_is_stale())
             except Exception:  # noqa: BLE001 -- see below
-                # Swallowing here is BENIGN, and the reason is worth stating
-                # rather than leaving as an unexplained catch: reporting
-                # "not stale" only means we decline to skip the axis-1
-                # check, and axis 2 is still evaluated independently by
-                # `_serve_line`'s own `is_skewed`. Nothing is lost, and a
-                # stamp-read failure must not fail a request.
                 return False
 
         def _cookie_is_valid(self) -> bool:
@@ -1301,13 +1051,7 @@ def _make_handler(ctx: "_ServerContext"):
                 return False
             sent = headers.get_all(cookie.COOKIE_HEADER) or []
             if len(sent) != 1:
-                # Zero is an uncredentialed caller. More than one is a
-                # smuggling shape -- refuse rather than pick a value a
-                # downstream reader might disagree with, exactly as the
-                # Host pin does with a repeated header.
                 return False
-            # `compare_digest`, never `==`: a credential compared with a
-            # short-circuiting equality leaks its prefix through timing.
             return hmac.compare_digest(sent[0].strip(), expected)
 
         def _host_is_pinned(self) -> bool:
@@ -1335,18 +1079,9 @@ def _make_handler(ctx: "_ServerContext"):
                 return True
             sent = headers.get_all("Host") or []
             if len(sent) > 1:
-                # REFUSED, never "read the first one". A repeated `Host` is
-                # request-smuggling shape: whichever value this handler
-                # compares, a downstream reader could take the other, and
-                # the pin would then be validating a header nobody acted
-                # on. No real client sends two.
                 return False
             host = (sent[0] if sent else "").strip().lower()
             if not host:
-                # HTTP/1.1 requires Host; HTTP/1.0 does not. An absent Host
-                # cannot be a browser (every browser sends one), so this
-                # refuses nothing real and stays permissive for a raw
-                # HTTP/1.0 client.
                 return self.request_version == "HTTP/1.0"
             return host in _pinned_hosts(int(self.server.server_address[1]))
 
@@ -1378,11 +1113,6 @@ def _make_handler(ctx: "_ServerContext"):
                 return
 
             ctx.in_flight.enter()
-            # `_serve_line` releases the in-flight slot itself, on the skew-eviction
-            # path, before this handler ever gets a response back -- so this closure
-            # (not a second `ctx.in_flight.exit()` call) is what both `_serve_line` and
-            # this method's own `finally` share, exactly as the pipe transport's
-            # `_exit_once` does (`warm.server._handle_connection`).
             released = False
 
             def _release_once() -> None:
@@ -1403,38 +1133,16 @@ def _make_handler(ctx: "_ServerContext"):
 
                 event_name = event.get("hook_event_name")
 
-                # Reaching the guard op by ANY path -- bare `/hook` or the explicit
-                # `/hook/warm_guard.evaluate` alias -- still requires the posted event
-                # be one the guard chain can actually evaluate. Naming the op explicitly
-                # does not supply the `tool_name`/`tool_input` the chain reads; a
-                # SessionStart posted to either spelling would otherwise get a confident
-                # verdict on a question nobody asked. Both spellings resolve to the same
-                # `op_name`, so both get the same eligibility check.
-                # Explicit /hook/<op> alias bypassed
                 # the bare-/hook safety check because it resolves to the same DEFAULT_OP_NAME
-                # but failed the path-based exclusion; gate on op_name alone instead.
                 if op_name == hook_http.DEFAULT_OP_NAME:
                     if hook_http.route_for_event(event_name) is None:
                         self._respond_json(hook_http.unserved_response(event_name))
                         return
 
-                # posted JSON -> hook_http.payload_from_event (inside build_request)
-                #             -> request frame (http_listener._frame_from_request)
-                #             -> warm.server._serve_line
-                #             -> http_listener._collect_response
-                #             -> hook_http.interpret_result
                 # THE CALLER'S ENVIRONMENT ARRIVES IN HEADERS, NOT IN THE BODY, and this
-                # is where it is put back onto the event so `payload_from_event` finds it
-                # where its contract says to look. The harness posts no `env` key under any
-                # spelling -- measured, not assumed -- so without this the override boundary
-                # is dead on this transport and reports "caller set no overrides" forever.
                 header_env, disarm_reason = hook_http.env_from_headers(self.headers)
                 if disarm_reason is not None:
                     # A DECLARED-BUT-VETOED CHANNEL IS AN UNRUN GUARD, NOT A CLEAN ONE. The
-                    # veto empties overrides silently and the guard would read that as "no
-                    # override requested" -- the permissive direction. Refusing to answer is
-                    # this plan's anti-scope as code, the same call `unreachable_response`
-                    # already makes for a dead engine.
                     self._respond_json(
                         hook_http.unreachable_response(
                             event_name or "PreToolUse", disarm_reason
@@ -1446,45 +1154,14 @@ def _make_handler(ctx: "_ServerContext"):
 
                 request_frame = hook_http.build_request(event, op_name)
                 # THE CALLER'S TOKEN IS CHECKED HERE AND NEVER FORWARDED.
-                # Both halves matter and the second is what closes a race.
-                #
-                # Checked here: an op CLI needs its own token honoured, or a
-                # stale caller is served silently by a stale generation
                 # instead of `ENGINE_SKEW`. `_refuse_stale_caller` is that
-                # check, and it supplies the axis distinction
-                # `ServerVersionState.is_skewed` cannot make.
-                #
-                # Never forwarded: the frame carries THIS SERVER's own boot
-                # token onward, so `_serve_line`'s own skew check compares
-                # server against server. That comparison can then only ever
-                # fire on axis 2 -- this server's source having gone stale
-                # since boot -- where `skew.evict_on_skew` closing the
-                # listener and draining is the CORRECT remedy and stays
-                # untouched.
-                #
-                # Forwarding the caller's token instead would reopen the
-                # exact outage this exists to prevent, narrowed to a race:
-                # `_serve_line` re-reads the live stamp, so a publish landing
-                # between our read and its read makes a legitimately-current
-                # caller read as skewed, and it evicts the box for everyone
-                # (measured 16.8s under a 17s drain,
-                # `docs/research/2026-08-26-18h35-warm-succession-workdir/
-                # experiment-results-lockout.md`, 1df224ef7). Row 2 of
-                # § Refusal semantics says "never" with no window caveat.
-                #
                 # A TOKENLESS request is unchanged: nothing to check, and the
-                # same server stamp goes on, so the hook-fire path is
-                # untouched.
                 caller_token = self.headers.get(ENGINE_TOKEN_HEADER)
                 if caller_token is not None and self._refuse_stale_caller(caller_token):
                     _release_once()
                     return
                 request_frame = _frame_from_request(request_frame, ctx.engine_token)
 
-                # `record_invocation` / `record_exit` were falling through to
-                # `_serve_line`'s own no-op lambda defaults, which is how a
-                # skew eviction on this transport left no row while the
-                # identical eviction on the pipe transport left one.
                 serve_kwargs = {
                     "version_state": ctx.version_state,
                     "server_sha": ctx.server_sha,
@@ -1501,12 +1178,6 @@ def _make_handler(ctx: "_ServerContext"):
                 if _is_engine_skew(raw_response):
                     # PROVABLY NOT RUN, AND RUNNABLE COLD. `_serve_line` answers
                     # ENGINE_SKEW without dispatching, so the guard can still be
-                    # evaluated -- which `interpret_result` would turn into a
-                    # 200 "guard did not run" pass, skipping every Bash guard for
-                    # the length of every publish. A 409, the same status
-                    # `_refuse_stale_caller` uses, sends the forwarder down its
-                    # non-2xx ladder to `evaluate_cold` instead. The loud pass is
-                    # for an engine that is genuinely unreachable, not this.
                     self.send_response(409)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(raw_response)))
@@ -1597,59 +1268,24 @@ def main() -> int:
         )
         return 0
 
-    # The election handle is a pure LOCK here (module docstring's
-    # per-machine-election bullet) -- never used as a transport, unlike
-    # `warm.server`'s own election handle. HELD, NOT CLOSED, for the rest of
     # this process's life: `FILE_FLAG_FIRST_PIPE_INSTANCE` exclusion is a
     # property of a LIVE PIPE INSTANCE, not of the electing process, so
-    # closing this handle immediately after winning released the pipe name
-    # right back to the next `CreateNamedPipe` -- collapsing the exclusion
-    # window from process-lifetime to the microseconds between `elect` and
-    # the close. Measured: up to 9 concurrent listeners, 92 of 131 lifetimes
-    # serving 0 requests. The handle is closed only in `_ServerContext.
-    # ctx_shutdown` (alongside `unlink_discovery`) or on the credential-
-    # refusal `return 3` path below, so the lock is held for exactly this
-    # process's lifetime, matching the comment this replaces' original intent.
-    # The POSIX arm holds its `flock`'d fd for the same span for the same
-    # reason: an `flock` released early frees the name to the next caller
-    # exactly as a closed pipe handle does.
 
     from http.server import ThreadingHTTPServer
 
-    # `ctx` needs `httpd` to bind its `close_listener`, and the handler
-    # class needs `ctx` -- so the server is constructed with a throwaway
-    # handler class first, then `RequestHandlerClass` is swapped for the
-    # real one before `serve_forever` ever dispatches a connection (the
-    # attribute is only read PER REQUEST, in `BaseServer.finish_request`,
-    # never at `__init__` time).
     class _NotYetBound:
         pass
 
     try:
         _assert_credential_ready(root)
     except (cookie.DirectoryNotPrivateError, cookie.CookieUnreadableError) as exc:
-        # FAIL CLOSED, and loudly. Returning non-zero without a discovery
-        # record is what makes this a refusal to serve rather than a
-        # silently-unprotected listener: no record means no client finds a
-        # port, and the pipe transport keeps working untouched.
         print(
             f"[warm-http-supervisor] refusing to serve: {exc}",
             file=__import__("sys").stderr,
         )
-        # The won election handle is released here too -- this process is
-        # exiting without ever serving, so holding the lock past this return
-        # would strand the election against a process that is already gone.
         _release_election_handle(handle)
         return 3
 
-    # Between the credential check
-    # passing and `ctx` being successfully constructed, `handle` is owned
-    # by nothing: `ThreadingHTTPServer` can raise on bind failure,
-    # `skew.ServerVersionState` can raise, and `_ServerContext.__init__`
-    # can raise inside `_compute_engine_token` or the telemetry
-    # constructor. `except BaseException`, not `Exception` -- a
-    # `KeyboardInterrupt`/`SystemExit` mid-construction leaks the handle
-    # exactly as permanently as any other exception here.
     try:
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), _NotYetBound)
         version_state = skew.ServerVersionState(root)
@@ -1675,16 +1311,6 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 -- a HINT writer failing must not stop the server
         print(f"[warm-http-supervisor] failed to write discovery record: {exc!r}", file=__import__("sys").stderr)
 
-    # C9 (AC18/AC19): the skew-only watchdog, on its own thread, independent
-    # of the accept loop -- see `_ServerContext`'s own docstring for why this
-    # is not the idle watchdog `warm.server` runs. Started after the
-    # discovery write so a poll landing before the first write sees this
-    # context's own `engine_token`, never a torn boot sequence.
-    # `try:` moved up to cover the
-    # thread start too: `ctx` already owns the election handle by this
-    # point, and `threading.Thread(...).start()` can raise `RuntimeError`
-    # under resource exhaustion, which must not leak the handle any more
-    # than a `serve_forever()` failure would.
     try:
         threading.Thread(target=ctx._skew_watchdog_loop, daemon=True, name="warm-http-skew-watchdog").start()
         httpd.serve_forever()

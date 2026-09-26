@@ -52,13 +52,6 @@ from . import PredicateContext, undetermined
 
 
 def sizing_object_flag(context: PredicateContext) -> dict[str, Any]:
-    """Row `:189` -> `gates.exit.sizing_object_flag.passed` (bool).
-
-    Emits `{"passed": bool}` when `context.plan_path` is populated and
-    resolvable against `context.repo_root`; emits the `undetermined`
-    sentinel otherwise. See the module docstring for what `.passed` does
-    and does not mean.
-    """
     if context.plan_path is None:
         return undetermined(
             "no --plan supplied; gates.exit.sizing_object_flag.passed "
@@ -86,12 +79,6 @@ def sizing_object_flag(context: PredicateContext) -> dict[str, Any]:
 
 
 def build_exit_gates(context: PredicateContext) -> dict[str, Any]:
-    """Compose this module's rows into the `gates.exit.*` sub-tree.
-
-    Today this is the single `:189` row; the dict shape leaves room for a
-    sibling row to join this namespace without changing the composition
-    seam a Layer 2 consumer reads.
-    """
     return {"sizing_object_flag": sizing_object_flag(context)}
 
 

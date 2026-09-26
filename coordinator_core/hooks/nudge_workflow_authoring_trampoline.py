@@ -64,7 +64,6 @@ _WIKI_ANCHOR = (
     "a-hand-authored-workflow-costs-4x-the-plan-execution.md"
 )
 
-# Mirrors nudge_multiwave_workflow's own session_id format guard.
 _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{4,}$")
 
 _SENTINEL_NAME = "workflow-authoring-trampoline-nudged"
@@ -116,11 +115,6 @@ def _is_inline_script_launch(tool_input: object) -> bool:
 
 @register_op("hooks.nudge_workflow_authoring_trampoline")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PreToolUse(Skill, Workflow) op: nudge toward the emitted-and-fired
-    path at either of the two hand-authoring entry points, once per session.
-    """
-    # Normalize the two params shapes
-    # both engine doors and the cold chain send (see block_worktree_tool).
     params = payload_of(params)
     tool_name = params.get("tool_name")
     tool_input = params.get("tool_input")
@@ -170,6 +164,6 @@ def _handler(params: dict, repo_root=None) -> dict:
         ensure_session_dir(session_dir, session_id)
         nudged_sentinel.touch()
     except Exception:
-        pass  # best-effort marker; must never block the advisory below
+        pass
 
     return allow_advisory("PreToolUse", message)

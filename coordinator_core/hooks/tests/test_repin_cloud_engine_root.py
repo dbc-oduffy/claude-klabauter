@@ -1,11 +1,3 @@
-"""coordinator_core/hooks/tests/test_repin_cloud_engine_root.py — tests for
-`coordinator_core.hooks.repin_cloud_engine_root`, the SessionStart op that
-re-points `/root/engine-current` onto a fresher stamped per-session
-checkout. Spec backlink: claude-klabauter#67 (comments 5785027514, 5785078234).
-
-Every test injects `link_path`/`frozen_root`/`search_parent`/`env` — none
-touch `/root` or `/home/user`.
-"""
 
 from __future__ import annotations
 
@@ -133,7 +125,6 @@ def test_does_not_repoint_to_unstamped_checkout(tmp_path):
     _write_stamp(frozen)
     checkout = parent / "claude-klabauter"
     checkout.mkdir(parents=True)
-    # No _engine_stamp written under checkout.
 
     verdict = mod.repin_cloud_engine_root(
         link_path=link,
@@ -155,7 +146,6 @@ def test_atomic_replace_leaves_valid_link(tmp_path):
     checkout = parent / "claude-klabauter"
     _write_stamp(checkout, mtime=now)
 
-    # Pre-existing link pointed elsewhere.
     old_target = tmp_path / "old-target"
     old_target.mkdir()
     link.symlink_to(old_target)
@@ -169,14 +159,13 @@ def test_atomic_replace_leaves_valid_link(tmp_path):
     assert verdict["repinned"] is True
     assert link.is_symlink()
     assert os.path.realpath(link) == os.path.realpath(checkout)
-    # No stray temp files left beside the link.
     leftovers = [p for p in tmp_path.iterdir() if p.name.startswith("engine-current.") and p.name.endswith(".tmp")]
     assert leftovers == []
 
 
 def test_no_frozen_stamp_leaves_link_untouched(tmp_path):
     link = tmp_path / "engine-current"
-    frozen = tmp_path / "klabauter"  # no stamp written
+    frozen = tmp_path / "klabauter"
     parent = tmp_path / "home_user"
     parent.mkdir()
     checkout = parent / "claude-klabauter"

@@ -1,7 +1,3 @@
-"""Tests for coordinator/bin/coordinator-validate-local-config.py.
-
-Spec backlink: pln-shell-spawn-regrowth-gate-cens-097e21 § C12
-"""
 
 from __future__ import annotations
 
@@ -18,10 +14,6 @@ _CLI_PATH = Path(__file__).resolve().parents[1] / "coordinator-validate-local-co
 
 
 def _load_cli():
-    """Load the extensionless CLI script as a module. Mirrors
-    coordinator/bin/test_spawn_census.py's `_load_module` — SourceFileLoader
-    is required here (not spec_from_file_location) because the target file
-    has no `.py` suffix for Python's import machinery to key off of."""
     loader = SourceFileLoader("coordinator_validate_local_config_under_test", str(_CLI_PATH))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)

@@ -61,8 +61,6 @@ from coordinator_data_root import FLAT_CONTENT_ROOT_MARKER as _bin_marker  # noq
 
 
 def _load_claude_doe():
-    """Import the hyphenated launcher by path -- it is not an importable module
-    name, and `main()` is never called here."""
     path = _BIN_DIR / "claude-doe.py"
     spec = importlib.util.spec_from_file_location("_claude_doe_under_test", path)
     assert spec is not None and spec.loader is not None
@@ -117,9 +115,6 @@ def _bare(tmp_path: Path) -> Path:
 
 
 def _unmarked_nested(tmp_path: Path) -> Path:
-    # A `coordinator/` subdir with no plugin marker at all -- the case that
-    # distinguishes this stricter resolution from `content_root_for`'s
-    # isdir-alone acceptance.
     root = tmp_path / "unmarked-nested"
     (root / "coordinator").mkdir(parents=True)
     return root
@@ -165,30 +160,15 @@ def test_launcher_and_engine_twin_agree(claude_doe, tmp_path, layout, expected_s
 
 
 def test_the_empty_root_is_not_a_plugin_root_in_either_spelling(claude_doe) -> None:
-    """A root that did not resolve must not silently become the cwd-relative
-    string `"coordinator"`, which is what a bare join on an empty value
-    produces."""
     assert claude_doe._resolve_plugin_root("") is None
     assert engine_resolve_plugin_root(Path("")) is None
 
 
 def test_both_twins_declare_the_same_marker_tuple() -> None:
-    """Moved here from the
-    two-way `coordinator_core` parity file, which this file absorbed.
-
-    Independent of which twin the launcher is pinned against above: this is the
-    only assertion in the tree that the two `content_root_for` spellings
-    (`coordinator_core.data_root` and `coordinator/bin/lib/
-    coordinator_data_root`) name the SAME flat marker. Both this file's
-    plugin-root pin and their looser content-root question rest on that one
-    constant, so it is pinned here rather than in either owner."""
     assert _engine_marker == _bin_marker == (".claude-plugin", "plugin.json")
 
 
 def test_the_flat_arm_is_gated_on_the_same_marker_in_both(claude_doe, tmp_path) -> None:
-    """A directory is the flat mirror only because its plugin manifest says so.
-    A shared marker that drifted in one spelling would trust a directory the
-    other rejects -- the failure mode the named marker exists to prevent."""
     root = tmp_path / "manifest-missing"
     (root / ".claude-plugin").mkdir(parents=True)
 

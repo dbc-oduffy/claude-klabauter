@@ -85,18 +85,11 @@ def _exchange(root: Path, settings_home: str | None, reply: bytes = _OK_REPLY):
     return (json.loads(request) if request else {}), proc
 
 
-#: C2 folded the legacy top-level `_settings_home` field into the envelope-level
-#: `_env` object, keyed by the environment-variable name that produced it (see
-#: `test_door_stamps_declared_env_set.py`'s negative-spec block). The subject
-#: this file pins -- the door stamps the settings home its caller named --
-#: is unchanged; only the field it looks in moves.
 _ENV_FIELD = "_env"
 _SETTINGS_HOME_ENV_KEY = "COORDINATOR_SETTINGS_HOME"
 
 
 def test_door_stamps_the_home_its_caller_named(tmp_path: Path) -> None:
-    """The defect's door-side half. Without this field the server has no way to
-    know the caller named a home at all, and answers against its own."""
     root = _make_stub_engine_root(tmp_path)
     named_home = str(tmp_path / "an-overridden-settings-home")
 
@@ -106,11 +99,6 @@ def test_door_stamps_the_home_its_caller_named(tmp_path: Path) -> None:
 
 
 def test_the_stamp_is_envelope_level_not_an_op_param(tmp_path: Path) -> None:
-    """Sibling of `_engine_token`, never inside `params` -- the opposite of
-    `entrypoint`'s placement, and deliberately so. A field that lands in `params`
-    reaches the op as an argument; this one is transport metadata the server pops
-    before it dispatches. `entrypoint` shipped in the wrong half of this same
-    envelope once already (door.c's own note, 2026-08-27)."""
     root = _make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(root, str(tmp_path / "home"))
@@ -119,16 +107,6 @@ def test_the_stamp_is_envelope_level_not_an_op_param(tmp_path: Path) -> None:
 
 
 def test_no_override_stamps_nothing(tmp_path: Path) -> None:
-    """Every ordinary invocation on every box. The settings-home key must be
-    ABSENT from `_env`, not present-and-empty: absence is what the server
-    reads as "this caller has no opinion", and an empty claim would refuse
-    traffic that works today.
-
-    Checked by key rather than by `_env`'s presence: `_env` now carries every
-    resolved declared name, not settings-home alone, and this test's runner
-    has its own real session-id env vars that legitimately resolve into
-    `_env` (pinned by `test_door_stamps_session_id.py`) -- this file's
-    subject is settings-home specifically, not the whole object."""
     root = _make_stub_engine_root(tmp_path)
 
     request, proc = _exchange(root, None)
@@ -140,10 +118,6 @@ def test_no_override_stamps_nothing(tmp_path: Path) -> None:
 
 
 def test_a_refused_mismatch_runs_the_call_cold(tmp_path: Path) -> None:
-    """-32008 is proof the server never dispatched, so the door may re-run the
-    request cold -- and cold is where the caller's own settings home resolves.
-    A door that treated this as post-delivery doubt would emit -32004 and fail
-    the invocation outright, which is the worse of the two available answers."""
     root = _make_stub_engine_root(tmp_path)
     refusal = (
         '{"jsonrpc":"2.0","id":1,"error":'

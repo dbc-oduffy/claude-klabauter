@@ -67,31 +67,11 @@ from coordinator_core.win_portability import no_console_creationflags
 
 log = logging.getLogger(__name__)
 
-#: Standard 8-4-4-4-12 hex UUID shape. Local to this module by deliberate
-#: choice (see module docstring's "Explicitly OUT of scope" block) — NOT a
 #: reach into archive_stamp.py's `_SESSION_ID_UUID_RE`, which is looser and
-#: serves a different accessor's own contract. A trailer value that fails
-#: this shape check is not itself proof of corruption (a caller could inject
-#: a non-UUID own_session_id in a test fixture), but a well-formed Session-Id
-#: trailer produced by this repo's own tooling is always a UUID — a mismatch
-#: is a data-integrity signal worth a log line even when the classifier's
-#: existing over-refuse-not-over-credit posture is otherwise left unchanged
-#: (bug-backlog 2026-08-07-corrupted-session-id-trailer-reads-as-a-session-
-#: that-never-existed.yaml, proposed_action (1)).
 _SESSION_ID_UUID_SHAPE_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 
-#: Line-anchored, whole-message fallback for a `Session-Id:` line that git's
-#: OWN trailer-block detection does not see -- a blank line, or a `---`
-#: divider (e.g. a merge conflict marker, or a hand-composed message with a
-#: horizontal rule before the trailer block) earlier in the message breaks
-#: git's last-paragraph trailer-block rule, so `%(trailers:key=...)` reads
-#: empty even though the line is plainly present and legible. Same shape as
-#: `detect_foreign_commits`'s own local `trailer_re` (this module's other,
-#: independently-scanning classifier), reused here as a module-level
-#: constant since `trailer_foreign_shas` and `bulk_trailer_session_map` both
-#: need it.
 _SESSION_ID_LINE_RE = re.compile(r"^Session-Id:\s*(\S+)\s*$", re.MULTILINE)
 
 
@@ -114,11 +94,6 @@ def _warn_if_not_uuid_shaped(sha: str, trailer: str) -> None:
             sha, trailer,
         )
 
-#: Signature of a "never raises, returns (returncode, stdout, stderr)" git
-#: runner — the contract coverage.py's own `_run` helper makes, and the one
-#: `trailer_foreign_shas` requires from its caller (dependency-injected
-#: rather than owned here, so coverage.py's existing test-time monkeypatch of
-#: its own `_run` keeps working unchanged after extraction).
 GitRunner = Callable[[List[str], Optional[str]], Tuple[int, str, str]]
 
 
@@ -151,8 +126,6 @@ def default_git_runner(args: List[str], cwd: Optional[str]) -> Tuple[int, str, s
             timeout=30,
             # stdin=DEVNULL paired with CREATE_NO_WINDOW, matching this
             # module's other subprocess call sites (`_git_run`) — CREATE_NO_WINDOW
-            # alone hangs on Windows when stdin is inherited/invalid; this is a
-            # LIVE git-invocation path, so it must not be left half-fixed.
             stdin=subprocess.DEVNULL,
             **no_console_creationflags(),
         )
@@ -346,12 +319,6 @@ def bulk_trailer_session_map(
 
 
 def _git_run(args: List[str], cwd: Path) -> subprocess.CompletedProcess:
-    """Run a git subcommand, suppressing exceptions; return the CompletedProcess.
-
-    Ported verbatim from wsc_resolve.py's own `_git_run` — scoped to this
-    module's two-signal classifier so it carries no dependency on
-    wsc_resolve.py's broader helper surface.
-    """
     try:
         return subprocess.run(
             ["git"] + args,
@@ -363,12 +330,6 @@ def _git_run(args: List[str], cwd: Path) -> subprocess.CompletedProcess:
             **no_console_creationflags(),
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
-        # Dropped during the "ported
-        # verbatim" extraction from wsc_resolve.py's own `_git_run`, which
-        # logs this exact spawn failure. This is precisely the class of
-        # failure detect_foreign_commits/range_is_contiguous_suffix fail-empty
-        # on ("could not determine"); losing the log line made that outcome
-        # silent where it used to be observable.
         log.warning("session_attribution: git %s failed: %s", args[0] if args else "?", exc)
         proc = subprocess.CompletedProcess(args=["git"] + args, returncode=2)
         proc.stdout = ""
@@ -383,20 +344,6 @@ def _range_log(
     *,
     reverse: bool = False,
 ) -> subprocess.CompletedProcess:
-    """Run `git log --format=<log_format> <candidate_range>`, root-commit-safe.
-
-    candidate_range is produced by wsc_resolve's `_started_at_candidate_range`
-    in the form "<first_sha>^..HEAD". When first_sha is the repo's root
-    commit (no parent), "<first_sha>^" is an invalid revision and git fails
-    the whole range with a non-zero exit — every consumer of candidate_range
-    would otherwise silently degrade to graceful-empty on any session whose
-    very first tracked commit predates started_at. On that specific failure
-    this retries with the plain two-dot form "<first_sha>..HEAD" plus
-    first_sha's own entry re-prepended (oldest-first when reverse=True) or
-    re-appended (newest-first when reverse=False), since a two-dot range
-    excludes its left endpoint — first_sha itself must be re-included when it
-    has no parent to exclude it via.
-    """
     args = ["log", f"--format={log_format}"]
     if reverse:
         args.append("--reverse")
@@ -410,7 +357,6 @@ def _range_log(
 
     root_check = _git_run(["rev-parse", "--verify", "-q", f"{first_sha}^"], cwd=worktree_root)
     if root_check.returncode == 0:
-        # Not a root-commit issue — some other git failure; propagate as-is.
         return result
 
     tail_args = ["log", f"--format={log_format}"]
@@ -481,28 +427,13 @@ def detect_foreign_commits(
                 foreign_shas.append(sha)
             continue
 
-        # Trailerless — defer to a single batched touched-path lookup below,
-        # rather than one `git show` spawn per commit.
         trailerless_shas.append(sha)
 
     if trailerless_shas:
         touched_by_sha = _batch_touched_paths(worktree_root, trailerless_shas)
         for sha in trailerless_shas:
             touched = touched_by_sha.get(sha)
-            # fix-on-principle): an empty
-            # touched-set (a merge commit's `--name-only` diff is empty, or a
-            # genuinely empty commit) must be treated as "cannot place in scope"
-            # (foreign), matching the conservative posture already taken for an
-            # unreadable/unresolvable commit — NOT as "safe by default".
-            # `_range_log`'s backing `git log` deliberately still walks merges
-            # here (no `--no-merges`) so they reach this classifier at all; a
-            # trailerless merge with nothing to check against scope must not be
-            # silently waved through just because there was nothing to examine.
             if touched is None:
-                # Cannot determine touched paths (batch call failed, or this
-                # sha never resolved in the batch output) — conservatively
-                # treat as foreign rather than silently attributing an
-                # unreadable commit.
                 foreign_shas.append(sha)
                 continue
             if not touched or not any(p in known_scope_paths for p in touched):
@@ -512,23 +443,8 @@ def detect_foreign_commits(
 
 
 def _batch_touched_paths(worktree_root: Path, shas: List[str]) -> Dict[str, List[str]]:
-    """One `git log --no-walk` spawn resolving touched paths for every sha in
-    `shas`, replacing a `git show --name-only` call per sha.
-
-    `--no-walk` preserves the given commit ORDER verbatim (it does not sort by
-    date/topology), so each `\x02`-delimited output segment corresponds
-    positionally to `shas[i]` — required for correct per-commit attribution.
-    Returns {} for every sha (via a missing key) on a whole-batch git failure,
-    mirroring the per-item `returncode != 0` fail-closed path this replaces.
-    """
     if not shas:
         return {}
-    # Leading delimiter (not trailing): a trailing "%H\x02" splits the NEXT
-    # commit's hash into the CURRENT commit's segment (the blank separator
-    # line + --name-only paths land between one commit's \x02 and the next
-    # commit's hash), misattributing every touched-path list by one commit.
-    # A leading "\x02%H" makes each split segment self-contained: sha first,
-    # then its own paths, with nothing bleeding across the boundary.
     result = _git_run(
         ["log", "--no-walk", "--name-only", "--format=\x02%H", *shas],
         cwd=worktree_root,
@@ -554,25 +470,6 @@ def range_is_contiguous_suffix(
     candidate_range: str,
     foreign_shas: List[str],
 ) -> bool:
-    """Return True iff no foreign commit is interleaved within candidate_range.
-
-    Contiguous means: every foreign SHA in candidate_range, if any, occupies a
-    position such that the TRUE session commit set forms an unbroken suffix —
-    i.e. no foreign commit sits BETWEEN two session commits or between the
-    last session commit and HEAD. Concretely: candidate_range is contiguous
-    iff foreign_shas is empty, OR every foreign SHA sits at (or before) the
-    OLDEST end of candidate_range with no session commit older than it in
-    candidate_range's history-order.
-
-    Implemented via the same --reverse commit ordering `_range_log` uses:
-    walk the range oldest-first; the leading run of foreign shas (possibly
-    empty) is tolerated, but any foreign sha found AFTER that leading run has
-    ended marks interleaving and returns False.
-
-    Returns True (vacuously contiguous) when candidate_range is empty or
-    foreign_shas is empty. Returns False on any git failure — an unverifiable
-    range is NOT treated as contiguous (ambiguity is unsafe by default).
-    """
     if not candidate_range or not foreign_shas:
         return True
 
@@ -583,9 +480,6 @@ def range_is_contiguous_suffix(
     ordered_shas = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     foreign_set = set(foreign_shas)
 
-    # The leading run (oldest-first) of foreign commits is tolerated — it sits
-    # BEFORE the session's true set, not interleaved within it. Any foreign
-    # sha found after that leading run has ended marks interleaving.
     leading_run_ended = False
     for sha in ordered_shas:
         is_foreign = sha in foreign_set

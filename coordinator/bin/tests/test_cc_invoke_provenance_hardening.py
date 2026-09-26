@@ -45,11 +45,6 @@ pytestmark = pytest.mark.cadence
 
 @pytest.fixture
 def clean_sys_path():
-    """Restores `sys.path` to its pre-test contents afterward — the wrapper
-    under test inserts a resolved root onto `sys.path`
-    (`_front_insert_on_path`) before the divergence check runs, and several
-    cases here feed it sentinel/fake roots that must not leak into sibling
-    tests."""
     before = list(sys.path)
     try:
         yield
@@ -62,11 +57,6 @@ def _fake_provenance(verdict, imported_file="/some/other/tree/coordinator_core/_
         return _mod.EngineProvenance(verdict, imported_file, engine_root if engine_root is not None else root)
 
     return _fake
-
-
-# ---------------------------------------------------------------------------
-# The raise itself: require_dispatch_engine_on_path fails loud on divergent.
-# ---------------------------------------------------------------------------
 
 
 def test_require_dispatch_engine_on_path_raises_on_divergent(monkeypatch, tmp_path, clean_sys_path):
@@ -88,9 +78,6 @@ def test_require_dispatch_engine_on_path_raises_on_divergent(monkeypatch, tmp_pa
 
 
 def test_require_dispatch_engine_on_path_raise_names_both_paths(monkeypatch, tmp_path, clean_sys_path):
-    """The raised message must carry both the divergent imported_file and the
-    resolved root — an operator debugging this needs both trees named, not
-    just one."""
     root = tmp_path / "dispatch-root-divergent-2"
     root.mkdir()
     imported = str(tmp_path / "other-tree" / "coordinator_core" / "__init__.py")
@@ -107,11 +94,6 @@ def test_require_dispatch_engine_on_path_raise_names_both_paths(monkeypatch, tmp
     message = str(excinfo.value)
     assert imported in message
     assert str(root) in message
-
-
-# ---------------------------------------------------------------------------
-# Every other verdict is unaffected — the raise is divergent-only.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("verdict", ["match", "unimported", "unresolved"])
@@ -146,12 +128,6 @@ def test_require_dispatch_engine_on_path_still_returns_root_on_match(monkeypatch
     assert returned == str(root)
 
 
-# ---------------------------------------------------------------------------
-# Hard constraint: ensure_engine_on_path is NOT hardened — its degrade-to-
-# None contract for the engine-less scaffold case must survive unchanged.
-# ---------------------------------------------------------------------------
-
-
 def test_ensure_engine_on_path_does_not_raise_on_divergent(monkeypatch, tmp_path, clean_sys_path):
     root = tmp_path / "locator-root-divergent"
     root.mkdir()
@@ -165,12 +141,6 @@ def test_ensure_engine_on_path_does_not_raise_on_divergent(monkeypatch, tmp_path
     returned = _mod.ensure_engine_on_path("irrelevant.py")
 
     assert returned == str(root)
-
-
-# ---------------------------------------------------------------------------
-# The locator-axis wrappers are not hardened by this chunk either — its
-# evidence (C8) only covers the dispatch-axis carriers.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(

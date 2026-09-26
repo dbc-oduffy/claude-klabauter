@@ -1,38 +1,3 @@
-"""
-coordinator_core.ops.ceremony.tests.test_pipeline_context
-
-Tests for the ceremony resolved-state data model (PipelineContext + BranchResolution).
-
-Coverage:
-  (a) branch_resolution_construction   — BranchResolution accepts valid node_type; rejects invalid
-  (b) branch_resolution_round_trip     — to_dict / from_dict is lossless
-  (c) pipeline_context_construction    — PipelineContext constructs with defaults
-  (d) pipeline_context_add_branch      — add_branch / get_branch accessors work
-  (e) pipeline_context_add_node        — add_node / get_node accessors work; node uses receipt_schema shape
-  (f) pipeline_context_round_trip      — to_dict / from_dict is lossless (nodes + branches + disposition)
-  (g) pipeline_context_round_trip_empty — empty context round-trips clean
-  (h) pipeline_context_round_trip_full  — full context (all node types, multiple branches) round-trips clean
-  (i) validate_ok                      — valid context returns no errors
-  (j) validate_empty_ceremony          — empty ceremony string caught
-  (k) validate_invalid_node_type       — node with invalid type caught
-  (l) nodes_from_receipt_schema        — nodes built with receipt_schema helpers are accepted
-  (m) disposition_values               — single-session / chain-terminal / empty string all accepted
-  (n) branch_legible_true_false        — legible flag round-trips correctly
-  (o) branch_evidence_deep_copy        — mutating source dict does NOT affect stored branch evidence
-  (p) nodes_deep_copy                  — mutating source node does NOT affect stored ledger entry
-  (q) applicable_node_ids_round_trip   — declared-membership list survives to_dict/from_dict;
-                                         from_dict tolerates absence of the key (old data → [])
-  (r) consumed_handoff_predecessor_round_trip — consumed_handoff/predecessor survive
-                                         to_dict/from_dict; default to "" when unset
-  (s) sid                              — sid survives to_dict/from_dict; defaults to ""
-                                         when unset; closes resolved_state.sid = null defect
-
-Spec backlink:
-  coordinator_core/ops/ceremony/pipeline_context.py
-  docs/plans/2026-07-06-ceremony-as-pipeline-2-invert-workstream.md § C2.1
-  docs/plans/2026-07-08-wsc-commit-op-defects.md § Bug-1(i)
-  docs/plans/2026-07-10-wsc-resolve-foreign-repo-bleed-and-sid-null.md
-"""
 
 from __future__ import annotations
 
@@ -53,14 +18,9 @@ from coordinator_core.ops.ceremony.receipt_schema import (
     make_x_node,
 )
 
-# ---------------------------------------------------------------------------
-# (a) BranchResolution construction — valid node_type accepted; invalid rejected
-# ---------------------------------------------------------------------------
-
 
 @pytest.mark.parametrize("node_type", ["D", "J", "F", "B", "X"])
 def test_branch_resolution_valid_node_type(node_type: str) -> None:
-    """BranchResolution accepts all five valid node_type values."""
     br = BranchResolution(
         branch_id="test-branch",
         legible=True,
@@ -70,25 +30,17 @@ def test_branch_resolution_valid_node_type(node_type: str) -> None:
 
 
 def test_branch_resolution_invalid_node_type_raises() -> None:
-    """BranchResolution.__post_init__ raises ValueError for an unknown node_type."""
     with pytest.raises(ValueError, match="node_type"):
         BranchResolution(branch_id="test", legible=True, node_type="Z")
 
 
 def test_branch_resolution_defaults() -> None:
-    """BranchResolution defaults: signal_read=None, evidence={}."""
     br = BranchResolution(branch_id="b", legible=False, node_type="X")
     assert br.signal_read is None
     assert br.evidence == {}
 
 
-# ---------------------------------------------------------------------------
-# (b) BranchResolution round-trip — to_dict / from_dict is lossless
-# ---------------------------------------------------------------------------
-
-
 def test_branch_resolution_round_trip_minimal() -> None:
-    """A minimal BranchResolution round-trips without information loss."""
     original = BranchResolution(
         branch_id=BRANCH_ID_WSC_DISPOSITION,
         legible=True,
@@ -103,7 +55,6 @@ def test_branch_resolution_round_trip_minimal() -> None:
 
 
 def test_branch_resolution_round_trip_full() -> None:
-    """A fully-populated BranchResolution round-trips without information loss."""
     original = BranchResolution(
         branch_id=BRANCH_ID_GOVERNING_PLAN,
         legible=True,
@@ -125,7 +76,6 @@ def test_branch_resolution_round_trip_full() -> None:
 
 
 def test_branch_resolution_round_trip_x_node() -> None:
-    """An X-node BranchResolution (illegible state) round-trips correctly."""
     original = BranchResolution(
         branch_id=BRANCH_ID_CHAIN_SLUG,
         legible=False,
@@ -140,13 +90,7 @@ def test_branch_resolution_round_trip_x_node() -> None:
     assert restored.evidence["missing_signal"] == "SESSION_START_TIME"
 
 
-# ---------------------------------------------------------------------------
-# (c) PipelineContext construction — defaults
-# ---------------------------------------------------------------------------
-
-
 def test_pipeline_context_construction_defaults() -> None:
-    """PipelineContext initialises with empty lists and empty disposition."""
     ctx = PipelineContext(ceremony="wsc", scope_mode="architecture")
     assert ctx.ceremony == "wsc"
     assert ctx.scope_mode == "architecture"
@@ -156,7 +100,6 @@ def test_pipeline_context_construction_defaults() -> None:
 
 
 def test_pipeline_context_construction_explicit() -> None:
-    """PipelineContext accepts all fields explicitly."""
     ctx = PipelineContext(
         ceremony="wsc",
         scope_mode="standard",
@@ -167,13 +110,7 @@ def test_pipeline_context_construction_explicit() -> None:
     assert ctx.disposition == "chain-terminal"
 
 
-# ---------------------------------------------------------------------------
-# (d) add_branch / get_branch accessors
-# ---------------------------------------------------------------------------
-
-
 def test_add_branch_and_get_branch() -> None:
-    """add_branch appends; get_branch retrieves by branch_id."""
     ctx = PipelineContext(ceremony="wsc", scope_mode="architecture")
     br = BranchResolution(
         branch_id=BRANCH_ID_WSC_DISPOSITION,
@@ -187,13 +124,11 @@ def test_add_branch_and_get_branch() -> None:
 
 
 def test_get_branch_absent_returns_none() -> None:
-    """get_branch returns None for an unknown branch_id."""
     ctx = PipelineContext(ceremony="wsc", scope_mode="architecture")
     assert ctx.get_branch("nonexistent") is None
 
 
 def test_add_multiple_branches_preserved() -> None:
-    """Multiple branches can be added and retrieved independently."""
     ctx = PipelineContext(ceremony="wsc", scope_mode="architecture")
     br1 = BranchResolution(branch_id="A", legible=True, node_type="D")
     br2 = BranchResolution(branch_id="B", legible=False, node_type="X")
@@ -204,13 +139,7 @@ def test_add_multiple_branches_preserved() -> None:
     assert ctx.get_branch("B") is br2
 
 
-# ---------------------------------------------------------------------------
-# (e) add_node / get_node accessors; receipt_schema shapes accepted
-# ---------------------------------------------------------------------------
-
-
 def test_add_node_and_get_node() -> None:
-    """add_node appends; get_node retrieves by node id."""
     ctx = PipelineContext(ceremony="wsc", scope_mode="architecture")
     node = make_d_node("step-0", resolving_op="wsc_session_init",
                        evidence={"disposition": "single-session"})
@@ -222,13 +151,11 @@ def test_add_node_and_get_node() -> None:
 
 
 def test_get_node_absent_returns_none() -> None:
-    """get_node returns None when the node_id is not in the ledger."""
     ctx = PipelineContext(ceremony="wsc", scope_mode="architecture")
     assert ctx.get_node("nonexistent") is None
 
 
 def test_add_all_node_types() -> None:
-    """All five node types can be added to the ledger."""
     ctx = PipelineContext(ceremony="wsc", scope_mode="architecture")
     ctx.add_node(make_d_node("d1"))
     ctx.add_node(make_j_node("j1", question="Is this generalizable?"))
@@ -240,13 +167,7 @@ def test_add_all_node_types() -> None:
     assert types == {"D", "J", "F", "B", "X"}
 
 
-# ---------------------------------------------------------------------------
-# (f) PipelineContext round-trip — to_dict / from_dict
-# ---------------------------------------------------------------------------
-
-
 def test_pipeline_context_round_trip_disposition() -> None:
-    """disposition round-trips correctly."""
     for disp in ("single-session", "chain-terminal", ""):
         ctx = PipelineContext(ceremony="wsc", scope_mode="architecture",
                               disposition=disp)
@@ -257,7 +178,6 @@ def test_pipeline_context_round_trip_disposition() -> None:
 
 
 def test_pipeline_context_round_trip_preserves_nodes() -> None:
-    """Node ledger survives round-trip without data loss."""
     ctx = PipelineContext(ceremony="wsc", scope_mode="architecture",
                           disposition="single-session")
     ctx.add_node(make_d_node("step-0", resolving_op="wsc_session_init",
@@ -283,7 +203,6 @@ def test_pipeline_context_round_trip_preserves_nodes() -> None:
 
 
 def test_pipeline_context_round_trip_preserves_branches() -> None:
-    """resolved_branches survive round-trip without data loss."""
     ctx = PipelineContext(ceremony="wsc", scope_mode="architecture")
     ctx.add_branch(BranchResolution(
         branch_id=BRANCH_ID_WSC_DISPOSITION,
@@ -312,13 +231,7 @@ def test_pipeline_context_round_trip_preserves_branches() -> None:
     assert chain_br.legible is False
 
 
-# ---------------------------------------------------------------------------
-# (g) empty context round-trips clean
-# ---------------------------------------------------------------------------
-
-
 def test_pipeline_context_round_trip_empty() -> None:
-    """An empty PipelineContext (no nodes, no branches) round-trips cleanly."""
     ctx = PipelineContext(ceremony="wsc", scope_mode="architecture")
     restored = PipelineContext.from_dict(ctx.to_dict())
     assert restored.ceremony == "wsc"
@@ -328,19 +241,12 @@ def test_pipeline_context_round_trip_empty() -> None:
     assert restored.nodes == []
 
 
-# ---------------------------------------------------------------------------
-# (h) full context (all node types, multiple branches) round-trips clean
-# ---------------------------------------------------------------------------
-
-
 def test_pipeline_context_round_trip_full() -> None:
-    """A context containing all five node types and multiple branches round-trips clean."""
     ctx = PipelineContext(
         ceremony="wsc",
         scope_mode="architecture",
         disposition="chain-terminal",
     )
-    # Nodes
     ctx.add_node(make_d_node("step-0", resolving_op="wsc_session_init",
                               evidence={"disposition": "chain-terminal"},
                               tail_step=False))
@@ -353,7 +259,6 @@ def test_pipeline_context_round_trip_full() -> None:
     ctx.add_node(make_d_node("step-3.5a", resolving_op="cs_archive",
                               evidence={"acted": ["s-123"], "skipped": [], "failed": []},
                               tail_step=True))
-    # Branches
     ctx.add_branch(BranchResolution(
         branch_id=BRANCH_ID_WSC_DISPOSITION,
         legible=True,
@@ -380,13 +285,7 @@ def test_pipeline_context_round_trip_full() -> None:
     assert restored.get_branch(BRANCH_ID_GOVERNING_PLAN).signal_read is True
 
 
-# ---------------------------------------------------------------------------
-# (i) validate — valid context returns no errors
-# ---------------------------------------------------------------------------
-
-
 def test_validate_valid_context() -> None:
-    """A correctly constructed PipelineContext validates with no errors."""
     ctx = PipelineContext(
         ceremony="wsc",
         scope_mode="architecture",
@@ -404,13 +303,7 @@ def test_validate_valid_context() -> None:
     assert errors == [], f"Expected no validation errors; got: {errors}"
 
 
-# ---------------------------------------------------------------------------
-# (j) validate — empty ceremony string caught
-# ---------------------------------------------------------------------------
-
-
 def test_validate_empty_ceremony() -> None:
-    """validate returns an error when ceremony is an empty string."""
     ctx = PipelineContext(ceremony="", scope_mode="architecture")
     errors = ctx.validate()
     assert any("ceremony" in e for e in errors), (
@@ -418,13 +311,7 @@ def test_validate_empty_ceremony() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# (k) validate — node with invalid type caught
-# ---------------------------------------------------------------------------
-
-
 def test_validate_invalid_node_type() -> None:
-    """validate returns an error when a node has an unrecognised type."""
     ctx = PipelineContext(ceremony="wsc", scope_mode="architecture")
     ctx.nodes.append({"id": "bad", "type": "Z"})
     errors = ctx.validate()
@@ -433,13 +320,7 @@ def test_validate_invalid_node_type() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# (l) nodes_from_receipt_schema — receipt_schema helpers produce accepted nodes
-# ---------------------------------------------------------------------------
-
-
 def test_nodes_built_with_receipt_schema_helpers_validate() -> None:
-    """Nodes created via receipt_schema make_* helpers validate inside a context."""
     ctx = PipelineContext(ceremony="wsc", scope_mode="architecture",
                           disposition="single-session", sid="sess-002")
     ctx.add_node(make_d_node("d1", resolving_op="op_a", evidence={"k": "v"}))
@@ -453,17 +334,8 @@ def test_nodes_built_with_receipt_schema_helpers_validate() -> None:
     assert errors == [], f"Expected no validation errors; got: {errors}"
 
 
-# ---------------------------------------------------------------------------
-# (m) disposition_values — expected values accepted; empty string is valid
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize("disp", ["single-session", "chain-terminal", ""])
 def test_disposition_values_accepted(disp: str) -> None:
-    """PipelineContext accepts 'single-session', 'chain-terminal', and empty string."""
-    # the Game Dev Reviewer is required once disposition is non-empty
-    # (see validate()'s sid non-emptiness check); the "" disposition case
-    # intentionally omits sid to also cover the pre-resolution fixture shape.
     sid = "sess-003" if disp else ""
     ctx = PipelineContext(ceremony="wsc", scope_mode="architecture", disposition=disp, sid=sid)
     assert ctx.disposition == disp
@@ -471,14 +343,8 @@ def test_disposition_values_accepted(disp: str) -> None:
     assert errors == [], f"disposition={disp!r} unexpectedly failed validation: {errors}"
 
 
-# ---------------------------------------------------------------------------
-# (n) legible flag round-trips correctly
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize("legible", [True, False])
 def test_branch_legible_round_trips(legible: bool) -> None:
-    """BranchResolution.legible survives to_dict/from_dict unchanged."""
     br = BranchResolution(
         branch_id="test", legible=legible, node_type="D" if legible else "X"
     )
@@ -486,24 +352,17 @@ def test_branch_legible_round_trips(legible: bool) -> None:
     assert restored.legible is legible
 
 
-# ---------------------------------------------------------------------------
-# (o) branch evidence deep copy — mutating source does NOT affect stored evidence
-# ---------------------------------------------------------------------------
-
-
 def test_branch_evidence_deep_copy_on_to_dict() -> None:
-    """to_dict deep-copies evidence; mutating the original dict does NOT affect the copy."""
     evidence = {"method": "grep", "value": "single-session"}
     br = BranchResolution(branch_id="b", legible=True, node_type="D", evidence=evidence)
     data = br.to_dict()
-    evidence["value"] = "MUTATED"  # mutate original
+    evidence["value"] = "MUTATED"
     assert data["evidence"]["value"] == "single-session", (
         "to_dict() must deep-copy evidence so mutation of the source does not propagate"
     )
 
 
 def test_branch_evidence_deep_copy_on_from_dict() -> None:
-    """from_dict deep-copies evidence; mutating the input dict does NOT affect the result."""
     data = {
         "branch_id": "b",
         "legible": True,
@@ -518,13 +377,7 @@ def test_branch_evidence_deep_copy_on_from_dict() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# (p) nodes deep copy — mutating source does NOT affect stored ledger entry
-# ---------------------------------------------------------------------------
-
-
 def test_context_nodes_deep_copy_on_to_dict() -> None:
-    """to_dict deep-copies nodes; mutating the context after to_dict does not affect the copy."""
     ctx = PipelineContext(ceremony="wsc", scope_mode="architecture")
     node = make_d_node("d1", evidence={"result": "ok"})
     ctx.add_node(node)
@@ -536,7 +389,6 @@ def test_context_nodes_deep_copy_on_to_dict() -> None:
 
 
 def test_context_nodes_deep_copy_on_from_dict() -> None:
-    """from_dict deep-copies nodes; mutating the input data does not affect the context."""
     ctx_original = PipelineContext(ceremony="wsc", scope_mode="architecture")
     ctx_original.add_node(make_d_node("d1", evidence={"result": "ok"}))
     data = ctx_original.to_dict()
@@ -547,19 +399,12 @@ def test_context_nodes_deep_copy_on_from_dict() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# (q) applicable_node_ids — declared-membership field round-trip (op-spec §3)
-# ---------------------------------------------------------------------------
-
-
 def test_applicable_node_ids_defaults_empty() -> None:
-    """A freshly constructed PipelineContext has an empty applicable_node_ids list."""
     ctx = PipelineContext(ceremony="wsc", scope_mode="architecture")
     assert ctx.applicable_node_ids == []
 
 
 def test_applicable_node_ids_round_trip() -> None:
-    """applicable_node_ids survives to_dict() -> from_dict() without data loss."""
     ctx = PipelineContext(ceremony="wsc", scope_mode="architecture",
                           disposition="single-session")
     ctx.add_node(make_d_node("step-0", resolving_op="wsc_session_init"))
@@ -570,35 +415,24 @@ def test_applicable_node_ids_round_trip() -> None:
 
 
 def test_applicable_node_ids_from_dict_tolerates_absent_key() -> None:
-    """from_dict() defaults applicable_node_ids to [] when the key is absent
-    (pre-existing serialized state written before this field existed).
-    """
     data = {
         "ceremony": "wsc",
         "scope_mode": "architecture",
         "disposition": "single-session",
         "resolved_branches": [],
         "nodes": [],
-        # "applicable_node_ids" deliberately omitted
     }
     restored = PipelineContext.from_dict(data)
     assert restored.applicable_node_ids == []
 
 
-# ---------------------------------------------------------------------------
-# (r) consumed_handoff / predecessor — chain-terminal linkage fields
-# ---------------------------------------------------------------------------
-
-
 def test_consumed_handoff_predecessor_default_empty() -> None:
-    """A freshly constructed PipelineContext has empty consumed_handoff/predecessor."""
     ctx = PipelineContext(ceremony="wsc", scope_mode="architecture")
     assert ctx.consumed_handoff == ""
     assert ctx.predecessor == ""
 
 
 def test_consumed_handoff_predecessor_round_trip() -> None:
-    """consumed_handoff/predecessor survive to_dict() -> from_dict() without loss."""
     ctx = PipelineContext(
         ceremony="wsc",
         scope_mode="architecture",
@@ -617,16 +451,12 @@ def test_consumed_handoff_predecessor_round_trip() -> None:
 
 
 def test_consumed_handoff_predecessor_from_dict_tolerates_both_keys_absent() -> None:
-    """from_dict() defaults consumed_handoff/predecessor to "" when both keys are
-    absent (pre-existing serialized state written before these fields existed).
-    """
     data = {
         "ceremony": "wsc",
         "scope_mode": "architecture",
         "disposition": "single-session",
         "resolved_branches": [],
         "nodes": [],
-        # "consumed_handoff" / "predecessor" deliberately omitted
     }
     restored = PipelineContext.from_dict(data)
     assert restored.consumed_handoff == ""
@@ -634,9 +464,6 @@ def test_consumed_handoff_predecessor_from_dict_tolerates_both_keys_absent() -> 
 
 
 def test_consumed_handoff_predecessor_from_dict_tolerates_consumed_handoff_absent() -> None:
-    """from_dict() defaults consumed_handoff to "" when only that key is absent
-    (predecessor present) — the two fields are read via independent data.get() calls.
-    """
     data = {
         "ceremony": "wsc",
         "scope_mode": "architecture",
@@ -644,7 +471,6 @@ def test_consumed_handoff_predecessor_from_dict_tolerates_consumed_handoff_absen
         "resolved_branches": [],
         "nodes": [],
         "predecessor": "sess-predecessor-001",
-        # "consumed_handoff" deliberately omitted
     }
     restored = PipelineContext.from_dict(data)
     assert restored.consumed_handoff == ""
@@ -652,9 +478,6 @@ def test_consumed_handoff_predecessor_from_dict_tolerates_consumed_handoff_absen
 
 
 def test_consumed_handoff_predecessor_from_dict_tolerates_predecessor_absent() -> None:
-    """from_dict() defaults predecessor to "" when only that key is absent
-    (consumed_handoff present) — the two fields are read via independent data.get() calls.
-    """
     data = {
         "ceremony": "wsc",
         "scope_mode": "architecture",
@@ -662,7 +485,6 @@ def test_consumed_handoff_predecessor_from_dict_tolerates_predecessor_absent() -
         "resolved_branches": [],
         "nodes": [],
         "consumed_handoff": "state/handoffs/consumed.md",
-        # "predecessor" deliberately omitted
     }
     restored = PipelineContext.from_dict(data)
     assert restored.consumed_handoff == "state/handoffs/consumed.md"
@@ -695,10 +517,6 @@ def test_from_dict_explicit_empty_plural_list_drops_stale_scalar() -> None:
 
 
 def test_validate_rejects_scalar_plural_divergence_via_f4() -> None:
-    """A hand-constructed
-    PipelineContext where the scalar and list[0] diverge must fail validate()
-    via the Staff Engineer F4 consistency check (not silently pass).
-    """
     ctx = PipelineContext(
         ceremony="wsc",
         scope_mode="architecture",
@@ -737,20 +555,12 @@ def test_validate_memo_predecessor_disposition_with_empty_consumed_handoffs_pass
     assert errors == [], f"Expected no validation errors; got: {errors}"
 
 
-# ---------------------------------------------------------------------------
-# (s) sid — resolved_state.sid = null defect fix (docs/plans/2026-07-10-
-#     wsc-resolve-foreign-repo-bleed-and-sid-null.md § Defect B)
-# ---------------------------------------------------------------------------
-
-
 def test_sid_defaults_empty() -> None:
-    """A freshly constructed PipelineContext has an empty sid."""
     ctx = PipelineContext(ceremony="wsc", scope_mode="architecture")
     assert ctx.sid == ""
 
 
 def test_sid_carried_in_to_dict() -> None:
-    """to_dict() carries sid — closes the resolved_state.sid = null defect."""
     ctx = PipelineContext(ceremony="wsc", scope_mode="architecture")
     ctx.sid = "sess-example-001"
     data = ctx.to_dict()
@@ -758,7 +568,6 @@ def test_sid_carried_in_to_dict() -> None:
 
 
 def test_sid_round_trip() -> None:
-    """sid survives to_dict() -> from_dict() without loss."""
     ctx = PipelineContext(ceremony="wsc", scope_mode="architecture")
     ctx.sid = "sess-round-trip-001"
 
@@ -770,16 +579,12 @@ def test_sid_round_trip() -> None:
 
 
 def test_sid_from_dict_tolerates_absent_key() -> None:
-    """from_dict() defaults sid to "" when the key is absent (pre-existing
-    serialized state written before this field existed).
-    """
     data = {
         "ceremony": "wsc",
         "scope_mode": "architecture",
         "disposition": "single-session",
         "resolved_branches": [],
         "nodes": [],
-        # "sid" deliberately omitted
     }
     restored = PipelineContext.from_dict(data)
     assert restored.sid == ""

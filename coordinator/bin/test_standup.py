@@ -1,16 +1,3 @@
-"""test_standup.py — self-contained test suite for standup.py.
-
-standup.py landed with no test file. This suite covers
-the not-inside-a-git-repo hard error, the baseline/no-baseline output shape, section
-presence/ordering, and — the F1 regression this campaign exists to prevent — a static
-guarantee that no `bash` (or any shell) subprocess spawn is reachable from the module.
-
-Converted from a hand-rolled PASS/FAIL runner (standup.test.py) to pytest-collectable
-top-level test functions.
-
-Spec backlink: archive/specs/2026-05-05-script-first-deterministic-ops.md §T1
-Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md
-"""
 from __future__ import annotations
 
 import os
@@ -53,7 +40,6 @@ def _run_helper(cwd):
 
 
 def test_no_bash_literal_in_source():
-    """F1 regression net: no literal bash subprocess argv anywhere in standup.py."""
     with open(HELPER, "r", encoding="utf-8") as fh:
         source = fh.read()
     assert '"bash"' not in source and "'bash'" not in source

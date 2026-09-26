@@ -207,19 +207,10 @@ def test_default_resolution_cmd_forwarder_process_time() -> None:
         [str(_CMD_FORWARDER), "list"], k=K_INVOCATIONS, cwd=str(_REPO_ROOT)
     )
     assert result["procs_per_call"] <= 7.0, result
-    # 500.0 is the CLAUDE.md brightline
-    # itself, a coarser bar this test's own docstring is not about; pinning
-    # the ratchet to it would let a >2x regression off this test's own
-    # baseline (234.4ms) pass silently. Ratchet at ~1.5x the recorded
-    # baseline instead so a real regression trips this test specifically.
     assert result["process_time_ms"] <= 351.6, result
 
 
 def test_default_resolution_python_direct_process_time() -> None:
-    """`python -> cross-repo-memo.py` direct, this repo's own default
-    resolution. Same ratchet posture as the forwarder test above -- this
-    clone is unstamped, so warm reach returns fast and every call still
-    spawns exactly one interpreter, matching the pre-fix baseline."""
     _require_windows_or_darwin()
     if not _PY_CLI.is_file():
         pytest.skip(f"{_PY_CLI} not found")
@@ -228,28 +219,14 @@ def test_default_resolution_python_direct_process_time() -> None:
         [sys.executable, str(_PY_CLI), "list"], k=K_INVOCATIONS, cwd=str(_REPO_ROOT)
     )
     assert result["procs_per_call"] <= 6.0, result
-    # Same brightline-vs-baseline gap as
-    # the forwarder test above; 500.0 would pass a 208ms -> 400ms regression
-    # undetected. Ratchet at ~1.5x this test's own baseline (208.3ms).
     assert result["process_time_ms"] <= 312.5, result
 
 
 def test_bare_interpreter_floor_process_time() -> None:
-    """The floor every other figure in this file is read against -- an
-    interpreter that does nothing. Untouched by C1-C3 (no `cc_invoke`
-    import at all); pinned here so a reader of this file's other numbers
-    has the floor in the same run, not a stale cross-reference."""
     _require_windows_or_darwin()
 
     result = batched_process_time_ms([sys.executable, "-c", "pass"], k=K_INVOCATIONS)
     assert result["procs_per_call"] == 1.0, result
-    # Headroom rationale for the ~4x gap
-    # over the measured floor (26.0ms pinned baseline, 36.5ms this session's
-    # re-measurement, both module docstring). Kept wide deliberately: unlike
-    # the stamped-root test's shared-fleet-server noise, this floor's
-    # variance source is interpreter-start time itself moving with peer
-    # load -- this box runs 50-70 concurrent sessions -- not a fixed cost,
-    # so tightening toward either measured figure would flake under load.
     assert result["process_time_ms"] <= 100.0, result
 
 
@@ -388,8 +365,3 @@ def test_warm_wedged_additive_cost_accept_against_brightline() -> None:
         f"expected the additive wait to land near READ_DEADLINE_SECS "
         f"({client_mod.READ_DEADLINE_SECS}s), measured {elapsed}s"
     )
-    # ACCEPT: process time / procs_per_call (the brightline's own axes) are
-    # unaffected by this wait -- it is in-process, no subprocess spawned by
-    # this call, and the eventual spawn-fallback cost is already measured
-    # and accepted under budget by test_stamped_engine_root_python_direct_
-    # reaches_near_zero_spawns and the default-resolution tests above.

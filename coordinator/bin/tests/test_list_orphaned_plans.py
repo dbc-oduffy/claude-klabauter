@@ -1,15 +1,3 @@
-"""test_list_orphaned_plans.py — direct unit coverage for
-`coordinator/bin/list-orphaned-plans.py`'s own logic (argv parsing, usage
-errors, output formatting), stubbing `list_orphaned` so this suite never
-performs a real disk scan.
-
-Loaded by file path (`importlib.util.spec_from_file_location`) — this file
-has a `.py` extension (unlike the hyphenated extensionless polyglot
-entrypoints tested elsewhere in this directory), so it is directly
-loadable without `importlib.machinery.SourceFileLoader`.
-
-Spec backlink: pln-plan-orphan-ownership-resolver-3e68bb, chunk C4
-"""
 from __future__ import annotations
 
 import importlib.util

@@ -1,13 +1,3 @@
-"""Tests for `backlog_grind_assemble.apply`'s
-`coordinator-resolve-validation-cmd` dispatch entry (P071-C7).
-
-Spec: docs/plans/2026-09-11-grant-and-validation-gates-fire-from-the.md (C7).
-Pins: the closed-dispatch registration, the in-process (no-subprocess) call
-into `cs_resolve_full_test_cmd`, and the four-way exit-code contract the
-plan body spells out verbatim — rc 0 full, rc 3 fast-tier fallback (not a
-silent downgrade), rc 2 skipped (not failed), rc 127 raised as a hard
-failure.
-"""
 from __future__ import annotations
 
 import pytest

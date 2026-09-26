@@ -109,9 +109,6 @@ _WRITE_VERB_RE = re.compile(
 
 _MARKER_NAME = "exploration-tier-dispatch-offered"
 
-#: Wiki section carrying the relocated cost/guarantee explanation this
-#: message used to state in full -- see
-#: state/relocations/guard-message-cap/offer-exploration-tier-dispatch.py.md.
 _WIKI_ANCHOR = (
     "coordinator/docs/wiki/guard-message-concision.md"
     "#unnamed-explore-dispatch-cost-and-guarantee"
@@ -128,8 +125,6 @@ def _compose_offer_message():
 
 
 def _is_doctrine_carrying(subagent_type: Any) -> bool:
-    """True iff `subagent_type` names a real, non-exempt dispatch target.
-    Pure predicate -- no I/O, directly unit-testable."""
     if not isinstance(subagent_type, str):
         return False
     normalized = subagent_type.strip().lower()
@@ -139,9 +134,6 @@ def _is_doctrine_carrying(subagent_type: Any) -> bool:
 
 
 def _is_read_only_shaped(prompt: Any) -> bool:
-    """True iff `prompt` carries a read-only signal and no write-shaped
-    instruction anywhere. Pure predicate -- no I/O, directly unit-testable.
-    """
     if not isinstance(prompt, str) or not prompt.strip():
         return False
     if _WRITE_VERB_RE.search(prompt):
@@ -150,8 +142,6 @@ def _is_read_only_shaped(prompt: Any) -> bool:
 
 
 def _git_root(start: str) -> str:
-    """No-subprocess walk-up from `start` (falls back to os.getcwd()).
-    Fails open to "" on any error."""
     try:
         base = start if isinstance(start, str) and start else os.getcwd()
         if not base:
@@ -169,11 +159,6 @@ def _git_root(start: str) -> str:
 
 
 def _claim_offer_marker(cwd: str, session_id: str) -> bool:
-    """Atomically claim the once-per-session marker via exclusive create.
-    Returns True iff THIS call should emit the offer -- either it won the
-    exclusive create, or the marker path could not be resolved at all
-    (fails open toward offering). Returns False iff the marker already
-    exists."""
     try:
         git_root = _git_root(cwd)
         if not git_root:
@@ -231,9 +216,6 @@ def _handle(params: dict) -> dict:
 
 @register_op("hooks.offer_exploration_tier_dispatch")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PreToolUse(Agent) op: offer an unnamed Explore dispatch (never
-    block/deny) for a read-only-shaped dispatch to a doctrine-carrying
-    agent, once per session."""
     params = payload_of(params)
     try:
         return _handle(params)

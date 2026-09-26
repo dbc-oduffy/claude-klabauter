@@ -71,9 +71,6 @@ def _git_out(*args: str, cwd: Path) -> str:
 
 
 def _init_git_repo(root: Path, *, branch: str = "main") -> None:
-    """Real `git init` fixture — every git call below goes via `cwd=`, never
-    a `cd` into the clone, matching the module-under-test's own
-    outside-the-clone discipline."""
     root.mkdir(parents=True, exist_ok=True)
     _git("init", "-b", branch, cwd=root)
     _git("config", "user.email", "publish-channel-divergence-test@claude-klabauter.test", cwd=root)
@@ -98,9 +95,6 @@ def _commit_empty(root: Path, message: str, *, iso_date: str | None = None) -> s
 
 
 def _set_origin_main_ref(root: Path, sha: str) -> None:
-    """Points `refs/remotes/origin/main` at `sha` directly, without a real
-    remote — `git rev-list`/`git merge-base` only need the ref to exist, not
-    a configured `origin` remote, and this keeps the fixture fast."""
     _git("update-ref", "refs/remotes/origin/main", sha, cwd=root)
 
 
@@ -117,7 +111,7 @@ def _load_publish_module():
 
 publish = _load_publish_module()
 
-_ROW_KEY = "some-other-mirror"  # deliberately not klabauter — see module docstring
+_ROW_KEY = "some-other-mirror"
 
 
 def _write_registry(registry_dir: Path, *, dest: Path, track_ref: str | None) -> None:
@@ -131,22 +125,10 @@ def _write_registry(registry_dir: Path, *, dest: Path, track_ref: str | None) ->
     (registry_dir / "registry.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-# ---------------------------------------------------------------------------
-# Threshold constants — pinned so a future reader adjusts the number here,
-# not by re-deriving the policy from the docstring prose.
-# ---------------------------------------------------------------------------
-
-
 def test_thresholds_match_plan_delegated_values():
     assert publish._CANDIDATE_DIVERGENCE_ADVISORY_COMMITS == 300
     assert publish._CANDIDATE_DIVERGENCE_ADVISORY_DAYS == 14
     assert publish._CANDIDATE_DIVERGENCE_ESCALATED_COMMITS == 750
-
-
-# ---------------------------------------------------------------------------
-# 1. No candidate branch yet — today's live state (E:/dev/claude-klabauter
-#    is still on `main`, C4 unexecuted). Graceful, quiet skip.
-# ---------------------------------------------------------------------------
 
 
 def test_no_candidate_branch_yet_is_a_quiet_skip(tmp_path, monkeypatch, capsys):
@@ -165,29 +147,19 @@ def test_no_candidate_branch_yet_is_a_quiet_skip(tmp_path, monkeypatch, capsys):
     assert captured.err == ""
 
 
-# ---------------------------------------------------------------------------
-# 2. track_ref is the default `origin/main` — no candidate channel exists.
-# ---------------------------------------------------------------------------
-
-
 def test_default_track_ref_has_no_candidate_channel_to_diverge(tmp_path, monkeypatch, capsys):
     dest = tmp_path / "dest"
     _init_git_repo(dest, branch="main")
     head = _git_out("rev-parse", "HEAD", cwd=dest)
     _set_origin_main_ref(dest, head)
     registry_dir = tmp_path / "registry"
-    _write_registry(registry_dir, dest=dest, track_ref=None)  # defaults to origin/main
+    _write_registry(registry_dir, dest=dest, track_ref=None)
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(registry_dir))
 
     publish.report_candidate_divergence(dest, out=sys.stdout)
     captured = capsys.readouterr()
 
     assert captured.out == ""
-
-
-# ---------------------------------------------------------------------------
-# 3. Unregistered dest — out of scope, quiet skip.
-# ---------------------------------------------------------------------------
 
 
 def test_unregistered_dest_is_a_quiet_skip(tmp_path, monkeypatch, capsys):
@@ -206,11 +178,6 @@ def test_unregistered_dest_is_a_quiet_skip(tmp_path, monkeypatch, capsys):
     assert captured.out == ""
 
 
-# ---------------------------------------------------------------------------
-# 4. Below both thresholds — silent, deliberately (no per-round nagging).
-# ---------------------------------------------------------------------------
-
-
 def test_below_threshold_divergence_is_silent(tmp_path, monkeypatch, capsys):
     dest = tmp_path / "dest"
     _init_git_repo(dest, branch="main")
@@ -227,12 +194,6 @@ def test_below_threshold_divergence_is_silent(tmp_path, monkeypatch, capsys):
     captured = capsys.readouterr()
 
     assert captured.out == ""
-
-
-# ---------------------------------------------------------------------------
-# 5. Advisory wording at the commits threshold — reports the three numbers:
-#    actual distance, recommendation, post-promotion delta (0).
-# ---------------------------------------------------------------------------
 
 
 def test_advisory_crossed_by_commits_reports_three_numbers(tmp_path, monkeypatch, capsys):
@@ -255,15 +216,10 @@ def test_advisory_crossed_by_commits_reports_three_numbers(tmp_path, monkeypatch
 
     assert "advisory" in captured.out
     assert "candidate" in captured.out
-    assert "4 commit" in captured.out  # actual distance
-    assert "Recommend promoting" in captured.out  # the recommendation
-    assert "to 0" in captured.out  # post-promotion delta
+    assert "4 commit" in captured.out
+    assert "Recommend promoting" in captured.out
+    assert "to 0" in captured.out
     assert "ESCALATED" not in captured.out
-
-
-# ---------------------------------------------------------------------------
-# 6. Escalated wording once past the higher threshold.
-# ---------------------------------------------------------------------------
 
 
 def test_escalated_wording_past_higher_threshold(tmp_path, monkeypatch, capsys):
@@ -288,17 +244,10 @@ def test_escalated_wording_past_higher_threshold(tmp_path, monkeypatch, capsys):
     assert "6 commit" in captured.out
 
 
-# ---------------------------------------------------------------------------
-# 7. Days-since-last-promotion alone crosses the threshold, even with a
-#    trivially small commit count — sourced from the merge-base date, no
-#    promotion record exists, and that fallback is named plainly.
-# ---------------------------------------------------------------------------
-
-
 def test_days_since_threshold_via_merge_base_date_fallback(tmp_path, monkeypatch, capsys):
     dest = tmp_path / "dest"
     _init_git_repo(dest, branch="main")
-    old_date = "2026-07-01T00:00:00+00:00"  # well over 14 days before "today"
+    old_date = "2026-07-01T00:00:00+00:00"
     _git(
         "commit", "--allow-empty", "-m", "old base", cwd=dest,
         env=_env_with_dates(old_date),
@@ -306,12 +255,11 @@ def test_days_since_threshold_via_merge_base_date_fallback(tmp_path, monkeypatch
     main_sha = _git_out("rev-parse", "HEAD", cwd=dest)
     _set_origin_main_ref(dest, main_sha)
     _git("checkout", "-b", "candidate", cwd=dest)
-    _commit_empty(dest, "single small commit")  # commit count stays trivial
+    _commit_empty(dest, "single small commit")
 
     registry_dir = tmp_path / "registry"
     _write_registry(registry_dir, dest=dest, track_ref="candidate")
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(registry_dir))
-    # Real thresholds — the days axis alone must trip this, unaided by commits.
     assert publish._CANDIDATE_DIVERGENCE_ADVISORY_COMMITS == 300
 
     publish.report_candidate_divergence(dest, out=sys.stdout)
@@ -322,24 +270,17 @@ def test_days_since_threshold_via_merge_base_date_fallback(tmp_path, monkeypatch
     assert "1 commit" in captured.out
 
 
-# ---------------------------------------------------------------------------
-# 7b. Days-only trigger with 0 commits ahead — a stationary candidate has
-#     nothing to promote, so the days axis alone must NOT fire (Review:
-#     E-divergence-report finding 1 — a "drops the delta from 0 to 0" nag).
-# ---------------------------------------------------------------------------
-
-
 def test_days_threshold_alone_is_silent_when_zero_commits_ahead(tmp_path, monkeypatch, capsys):
     dest = tmp_path / "dest"
     _init_git_repo(dest, branch="main")
-    old_date = "2026-07-01T00:00:00+00:00"  # well over 14 days before "today"
+    old_date = "2026-07-01T00:00:00+00:00"
     _git(
         "commit", "--allow-empty", "-m", "old base", cwd=dest,
         env=_env_with_dates(old_date),
     )
     main_sha = _git_out("rev-parse", "HEAD", cwd=dest)
     _set_origin_main_ref(dest, main_sha)
-    _git("checkout", "-b", "candidate", cwd=dest)  # candidate == origin/main, 0 ahead
+    _git("checkout", "-b", "candidate", cwd=dest)
 
     registry_dir = tmp_path / "registry"
     _write_registry(registry_dir, dest=dest, track_ref="candidate")
@@ -360,12 +301,6 @@ def _env_with_dates(iso_date: str) -> dict:
     return env
 
 
-# ---------------------------------------------------------------------------
-# 8. Never raises — a publish must never fail on this report's account, not
-#    even when the underlying git call blows up unexpectedly.
-# ---------------------------------------------------------------------------
-
-
 def test_never_raises_even_when_git_call_explodes(tmp_path, monkeypatch, capsys):
     dest = tmp_path / "dest"
     _init_git_repo(dest, branch="main")
@@ -383,14 +318,9 @@ def test_never_raises_even_when_git_call_explodes(tmp_path, monkeypatch, capsys)
 
     monkeypatch.setattr(publish, "_git_rev_list_count", _boom)
 
-    publish.report_candidate_divergence(dest, out=sys.stdout)  # must not raise
+    publish.report_candidate_divergence(dest, out=sys.stdout)
     captured = capsys.readouterr()
     assert captured.out == ""
-
-
-# ---------------------------------------------------------------------------
-# 9. Git error / not-a-git-repo dest — degrades to a quiet skip.
-# ---------------------------------------------------------------------------
 
 
 def test_non_git_dest_is_a_quiet_skip(tmp_path, monkeypatch, capsys):

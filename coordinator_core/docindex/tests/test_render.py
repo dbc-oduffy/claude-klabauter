@@ -1,10 +1,3 @@
-"""
-Tests for coordinator_core.docindex.render (C2a).
-
-Spec backlink:
-  claude-klabauter: docs/plans/2026-08-14-registry-indexes-are-emitted-from-their-directory.md,
-                  plan-spine id C2a
-"""
 from __future__ import annotations
 
 import hashlib
@@ -80,7 +73,6 @@ def test_sorted_by_identity_field():
     out = render(_doc(), spec, entries)
     region, _ = _extract_region_and_digest(out)
     rows = [line for line in region.splitlines() if line.startswith("| ") and "---" not in line]
-    # first row is the header
     assert rows[1:] == ["| alpha |", "| mid |", "| zeta |"]
 
 

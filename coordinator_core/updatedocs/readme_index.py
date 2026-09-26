@@ -31,10 +31,6 @@ _SECTION_HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 _FRONTMATTER_TITLE_RE = re.compile(r"^title:\s*(.+?)\s*$", re.MULTILINE)
 _FIRST_HEADING_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 
-# Section name (as it appears verbatim after `## ` in docs/README.md) -> the
-# corpus subdirectory of `docs/`, relative, non-recursive `*.md` glob. An empty
-# string means the top-level `docs/*.md` files themselves (Reference
-# Documentation) rather than a subdirectory.
 SECTION_CORPORA: dict[str, str] = {
     "Wikis and Guides": "wiki",
     "Plans": "plans",
@@ -68,13 +64,6 @@ class ReadmeIndexDrift:
 
 
 def _extract_title(path: Path) -> str:
-    """Three-tier title fallback: frontmatter `title:` -> first `# ` heading ->
-    filename stem. Reads at most the bounded head of the file (via the shared
-    `_common.read_head`, imported rather than a third hand-rolled frontmatter
-    splitter). Never raises and never returns an empty title — a file with
-    neither frontmatter `title:` nor a `# ` heading falls through to its
-    filename stem.
-    """
     text = read_head(path)
     if not text:
         return path.stem
@@ -99,9 +88,6 @@ def _extract_title(path: Path) -> str:
 
 
 def _section_bodies(readme_text: str) -> dict[str, str]:
-    """Split docs/README.md's body into per-`## `-section text, keyed by the
-    heading name exactly as written (before any trailing whitespace).
-    """
     headings = list(_SECTION_HEADING_RE.finditer(readme_text))
     bodies: dict[str, str] = {}
     for index, match in enumerate(headings):
@@ -113,13 +99,6 @@ def _section_bodies(readme_text: str) -> dict[str, str]:
 
 
 def _resolve_link_target(docs_dir: Path, raw_target: str) -> Path | None:
-    """Resolve a markdown link target relative to `docs_dir`.
-
-    Returns None for anything that is not a plain, in-tree `docs/`-relative
-    path: external URLs, bare anchors, and anything that resolves outside
-    `docs_dir` (e.g. `../README.md`, the repo-root README linked from
-    "Start here", which is a different file entirely).
-    """
     target = raw_target.split("#", 1)[0].strip()
     if not target:
         return None

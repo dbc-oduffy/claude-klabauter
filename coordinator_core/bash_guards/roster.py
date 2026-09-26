@@ -1,43 +1,3 @@
-"""coordinator_core.bash_guards.roster -- public, payload-free enumeration
-of every guard `dispatch.py::_build_guard_chain` registers.
-
-Purpose: DoE-claude's `x-effective-delivery` hook-delivery-manifest emitter
-(`docs/reference/hook-delivery-manifest.md`) cannot see the guards
-`preuse-bash-dispatch.py` fans out to -- they exist only as claude-klabauter Python
-modules, reachable solely through `dispatch.py`'s private, payload-
-parameterised `_build_guard_chain`. This module is the public seam that
-closes that gap: a stable, payload-free read of the live registration, safe
-to call from outside this package (including across the plane boundary,
-per that contract's "Natural emitter source" section -- claude-klabauter is DoE's
-hard prereq, so this dependency direction is the allowed one).
-
-Spec backlink: pln-guard-roster-export-minus-the-a4dec3, chunk C1.
-Contract: docs/reference/hook-delivery-manifest.md (`tool_names` /
-`script` / "Script tail key" sections -- this module is the claude-klabauter-side
-root of truth those sections describe).
-
-Structural-read discipline (shared with `tests/test_guard_band_membership.
-py::_chain`, the proven-safe precedent this module's `guard_roster()`
-copies the call shape from): `_build_guard_chain` is called with an inert
-dummy command/payload so the registration list can be built at all, but
-every `GuardEntry.fn` closure is inspected ONLY for its `__code__`/
-`__globals__`/`__closure__` -- never called. Calling one would run a real
-guard against a fabricated payload, which is exactly what this module
-exists to avoid needing.
-
-Negative spec: this module never normalises, sorts, or widens a guard's
-declared `matchers` -- it reports the registration's own tuple verbatim,
-including every guard still at the `("Bash",)` default. A roster that
-"fixed" a narrow guard on the way past would falsify the one field this
-module exists to make truthful.
-
-`guard_roster()`'s dummy payload deliberately hand-copies the literal
-shape `test_guard_band_membership.py`'s own dummy chain uses rather than
-importing it from that test module: a source module importing from a test
-module inverts the dependency direction, which is worse than the small
-duplication. The payload's only contract is "be inert" -- it does not need
-to track the test file.
-"""
 
 from __future__ import annotations
 
@@ -52,17 +12,6 @@ from coordinator_core.ops.session.guard_settings_integrity import _tail_key as _
 
 @dataclass(frozen=True)
 class GuardRosterEntry:
-    """One roster entry -- plain data, no closures, no live `GuardEntry`
-    references. Field order and names match the plan's AC2/AC6 exactly.
-
-      id           -- `GuardEntry.name`, verbatim.
-      matchers     -- `GuardEntry.matchers`, verbatim (never widened).
-      band         -- `GuardEntry.band`'s own string value (`GuardBand.value`,
-                       e.g. `"confinement-deny"`), not the enum member --
-                       kept JSON-serialisable without a caller-side coercion.
-      fail_closed  -- `GuardEntry.fail_closed`, verbatim.
-      script       -- see `_script_tail_for`.
-    """
 
     id: str
     matchers: Tuple[str, ...]
@@ -144,12 +93,8 @@ def _resolve_referenced_module(
             try:
                 candidates.append(cell.cell_contents)
             except ValueError:
-                # An unset cell (should not happen for a fully-built
-                # closure at registration time) -- skip rather than guess.
                 continue
 
-    # First pass: a directly-referenced module or function whose OWN module
-    # is not dispatch.py itself is the answer -- the shape-1 case above.
     for obj in candidates:
         if isinstance(obj, types.ModuleType):
             if obj.__name__ != _SELF_MODULE:
@@ -158,10 +103,6 @@ def _resolve_referenced_module(
             if obj.__module__ and obj.__module__ != _SELF_MODULE:
                 return obj.__module__
 
-    # Second pass: a referenced function that IS itself defined in
-    # dispatch.py (shape-2 above) -- recurse into ITS own references
-    # instead of reporting dispatch.py for a guard whose real logic lives
-    # elsewhere.
     for obj in candidates:
         if isinstance(obj, types.FunctionType) and obj.__module__ == _SELF_MODULE:
             deeper = _resolve_referenced_module(obj, _seen)
@@ -172,16 +113,6 @@ def _resolve_referenced_module(
 
 
 def _script_tail_for(entry: "_dispatch.GuardEntry") -> str:
-    """The module tail `bash_guards/<module>.py`, in `_tail_key`'s normal
-    form (lowercased last two path segments) -- reusing that function
-    rather than re-implementing the lowercasing/two-segment rule, per the
-    plan's "ONE definition of that normal form in the tree" requirement.
-
-    Isolated to this one function on purpose: DoE has been asked which
-    value this field should hold for a fanned-out guard (module tail vs
-    carrier tail vs a historical script name), and their answer must be a
-    one-function change here, not a rewrite of `guard_roster()`.
-    """
     module_dotted = _resolve_referenced_module(entry.fn) or _SELF_MODULE
     token = module_dotted.replace(".", "/") + ".py"
     tail = _tail_key(token)
@@ -189,17 +120,6 @@ def _script_tail_for(entry: "_dispatch.GuardEntry") -> str:
 
 
 def guard_roster() -> Tuple[GuardRosterEntry, ...]:
-    """Return every guard `dispatch.py`'s `_build_guard_chain` registers,
-    as plain data -- no payload argument, no side effects at import beyond
-    what importing `bash_guards` already costs (this module imports
-    `dispatch` eagerly, same as any other `bash_guards` consumer already
-    does).
-
-    Reads the live registration exactly as `tests/test_guard_band_
-    membership.py::_dummy_chain` does -- `_build_guard_chain(...)` with an
-    inert dummy command/payload -- and NEVER invokes a returned entry's
-    `fn` closure (see module docstring).
-    """
     chain = _dispatch._build_guard_chain(
         cmd="echo coordinator-guard-roster-probe",
         session_id="guard-roster-probe",

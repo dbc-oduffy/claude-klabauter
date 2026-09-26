@@ -27,12 +27,6 @@ from coordinator_core.bash_guards import dispatch_checks as guard
 from coordinator_core.bash_guards._verdict import collecting
 
 
-#: One row per Bucket A entry that has a tokenizer path (see module
-#: docstring) -- today that is exactly ``check_no_verify``. Kept as a table
-#: (not a single hardcoded call) so a future check migrated onto this same
-#: seam extends this file by adding a row, not by copy-pasting a new class.
-#: Every assertion below routes through it, so a row added here is exercised
-#: rather than merely declared.
 _BUCKET_A_TOKENIZER_CHECKS = {
     "no-verify": guard.check_no_verify,
 }
@@ -47,8 +41,6 @@ def _denied(
 
 
 class TestBashVerdictParityOnWellFormedInput:
-    """AC2 baseline: ordinary well-formed bypass/non-bypass commands still
-    verdict identically post-migration."""
 
     def test_no_verify_flag_still_denied(self) -> None:
         assert _denied("git commit -m wip --no-verify")
@@ -74,25 +66,15 @@ class TestBashVerdictParityOnUnparseableInput:
     routing is in front of the tokenizer."""
 
     def test_unterminated_quote_with_bypass_flag_still_denies(self) -> None:
-        # Unterminated double quote defeats `tokenize_full_command`
-        # (`resolve_segments_for_dialect` returns None for the BASH leg),
         # so this must fall through to the raw-text `_BYPASS_RE` scan and
-        # still deny -- fail CLOSED, unchanged from pre-migration behavior.
         cmd = 'git commit -m "unterminated --no-verify'
         assert _denied(cmd)
 
     def test_unbalanced_here_string_with_bypass_flag_still_denies(self) -> None:
-        # An unbalanced/opened-only bash here-string-shaped redirect
-        # (`<<'EOF` with no closing terminator reachable) is unparseable
-        # for the same reason -- same fail-closed expectation.
         cmd = "git commit -m wip --no-verify <<'EOF"
         assert _denied(cmd)
 
     def test_unterminated_quote_without_bypass_flag_still_allows(self) -> None:
-        # The inverse: unparseable text carrying no bypass vocabulary at
-        # all must still allow -- the raw-text fallback is over-inclusive
-        # only for the bypass words themselves, never a blanket deny on
-        # every unparseable git command.
         cmd = 'git commit -m "unterminated message with no bypass words'
         assert not _denied(cmd)
 
@@ -108,10 +90,6 @@ class TestPowerShellUnparseableStaysSilentNotBashFailClosed:
         return {"tool_name": "PowerShell", "tool_input": {"command": cmd}}
 
     def test_powershell_grammar_gap_with_bypass_words_does_not_deny(self) -> None:
-        # `cmd &> out.txt` is this module's own named `has_error=True`
-        # grammar gap (see `_dialect.py` module docstring) -- carries the
-        # literal bypass word regardless, to prove the non-deny is really
-        # about the fail-direction branch, not merely an absent trigger.
         cmd = "git commit -m wip --no-verify &> out.txt"
         with collecting() as declarations:
             result = guard.check_no_verify(cmd, hook_payload=self._powershell_payload(cmd))
@@ -127,24 +105,13 @@ class TestPowerShellUnparseableStaysSilentNotBashFailClosed:
     def test_powershell_well_formed_bypass_still_reaches_a_verdict_or_silence(
         self,
     ) -> None:
-        # Well-formed PowerShell carrying the same bypass vocabulary is not
         # this chunk's job to newly detect (MATCHERS is unchanged -- see
-        # module docstring), but it must not raise, and must not produce a
-        # bash-shaped fail-closed deny via the wrong branch.
         cmd = "git commit -m wip --no-verify"
         result = guard.check_no_verify(cmd, hook_payload=self._powershell_payload(cmd))
-        # `resolve_segments_for_dialect` parses this cleanly under
-        # PowerShell too (no grammar gap here), so this asserts only that
-        # calling with a PowerShell payload does not crash and does not
-        # silently regress to the bash-only path's behavior by accident.
         assert result is None or isinstance(result, dict)
 
 
 class TestNoDialectDefaultsToBash:
-    """Every pre-existing caller of `check_no_verify(cmd)` (this package's
-    own `test_check_no_verify.py` included) passes no `hook_payload` at
-    all -- confirming that shape still resolves to the BASH leg, not a
-    bare-None dialect that would silently stop denying everything."""
 
     def test_no_hook_payload_still_denies_bypass(self) -> None:
         assert _denied("git commit -m wip --no-verify", hook_payload=None)
@@ -186,9 +153,6 @@ class TestPsGitBypassSegmentsDialectGate:
         assert segs == ["git clean -fdx"]
 
     def test_declared_bash_returns_empty_not_none(self) -> None:
-        """`None` is reserved for "PowerShell that failed to parse", which
-        callers treat as AC4's fail-open silence. Conflating the two works
-        today only because every call site writes `or []`."""
         segs = guard._ps_git_bypass_segments(
             "g`it clean -fdx", "destructive-git-clean", {"tool_name": "Bash"}
         )

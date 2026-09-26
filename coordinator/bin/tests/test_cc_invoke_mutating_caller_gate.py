@@ -101,8 +101,6 @@ def find_mutating_call_sites(source: str, muts: set[str]) -> list[tuple[str, str
 
 
 def has_refusal_evidence(source: str) -> bool:
-    """True if `source` shows some form of in-envelope refusal handling
-    (see module docstring (a)-(d)) beyond a bare transport call."""
     if any(tok in source for tok in _EVIDENCE_TOKENS):
         return True
     normalised = re.sub(r"\s+", " ", source)
@@ -158,8 +156,6 @@ class TestMutatingCallerGate(unittest.TestCase):
 
 
 class TestGateDetectorCatchesANaiveCaller(unittest.TestCase):
-    """Detector self-test: proves gate_violations() actually flags the
-    'caller ten' shape, independent of which real files exist today."""
 
     _FAKE_OP = "fake.mutating_op_for_gate_test"
 

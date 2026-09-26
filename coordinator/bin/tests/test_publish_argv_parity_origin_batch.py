@@ -53,11 +53,6 @@ class _FakeCompleted:
         self.stderr = b""
 
 
-# ---------------------------------------------------------------------------
-# _porcelain_touched_paths -- NUL-delimited `-z` parsing
-# ---------------------------------------------------------------------------
-
-
 def test_porcelain_touched_paths_parses_ordinary_and_rename_records():
     unicode_path = "café/módule.py"
     stream = (
@@ -79,11 +74,6 @@ def test_porcelain_touched_paths_empty_stream():
     assert publish._porcelain_touched_paths(b"") == set()
 
 
-# ---------------------------------------------------------------------------
-# _argv_parity_pairing_origin_batch
-# ---------------------------------------------------------------------------
-
-
 def test_batch_resolves_all_three_origins_from_one_spawn(tmp_path, monkeypatch):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
@@ -92,7 +82,6 @@ def test_batch_resolves_all_three_origins_from_one_spawn(tmp_path, monkeypatch):
     touched.write_text("x", encoding="utf-8")
     published = repo_root / "mod" / "published_clean.py"
     published.write_text("y", encoding="utf-8")
-    # "mod/missing.py" deliberately does not exist on disk.
 
     stdout = b" M mod/touched.py\0"
 
@@ -117,11 +106,6 @@ def test_batch_resolves_all_three_origins_from_one_spawn(tmp_path, monkeypatch):
 
 
 def test_special_character_path_is_attributed_via_z_not_missed(tmp_path, monkeypatch):
-    """Review finding #4: default text porcelain output would C-quote a
-    path like this under `core.quotePath=true`, and an exact-string match
-    against the plain rel_module would silently miss it (falling to
-    unknown-origin). `-z` never quotes, so the batch must attribute it
-    correctly."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     rel = "mod/nön-ascii ⚡ file.py"
@@ -137,28 +121,18 @@ def test_special_character_path_is_attributed_via_z_not_missed(tmp_path, monkeyp
 
 
 def test_batch_spawn_failure_falls_back_to_per_item_isolation(tmp_path, monkeypatch):
-    """Regression pin for review finding amp-s1 #3: a failed batch spawn
-    must not blind every rel_module to unknown-origin when a per-item call
-    would still resolve some of them. Before the fix, a non-zero batch
-    returncode mapped the WHOLE set to unknown-origin unconditionally --
-    this test fails against that shape because it asserts one entry
-    resolves as published-by-this-round."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     resolvable = repo_root / "mod" / "resolvable.py"
     resolvable.parent.mkdir(parents=True)
     resolvable.write_text("x", encoding="utf-8")
-    # "mod/unresolvable.py" does not exist and every per-item spawn for it
-    # is also made to fail below, so it stays unknown-origin honestly.
 
     call_n = {"i": 0}
 
     def _fake_run(argv, **kwargs):
         call_n["i"] += 1
         if call_n["i"] == 1:
-            # The batched call (contains both rel_modules as trailing argv).
             return _FakeCompleted(1, b"")
-        # Per-item fallback calls: one rel_module per spawn.
         rel_module = argv[-1]
         if rel_module == "mod/resolvable.py":
             return _FakeCompleted(0, "")
@@ -181,11 +155,6 @@ def test_batch_empty_input_short_circuits_without_spawning(monkeypatch):
 
     monkeypatch.setattr(publish.subprocess, "run", _fail)
     assert publish._argv_parity_pairing_origin_batch(Path("."), []) == {}
-
-
-# ---------------------------------------------------------------------------
-# _git_head -- corrupt HEAD fails closed (review finding #6)
-# ---------------------------------------------------------------------------
 
 
 def _init_bare_git_dir(root: Path) -> Path:

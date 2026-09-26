@@ -39,14 +39,6 @@ from coordinator_core.testing.golden import assert_matches_golden, is_capturing,
 
 _GOLDEN_NAMESPACE = "verify_schema_registry_sync"
 
-# Corpus-size pin: a golden captured over a directory-derived corpus (the
-# DoE-claude sibling's live schemas/ dir) silently covers less and less of
-# that corpus as the directory shrinks, without the golden ever failing --
-# the drift-entry content alone is not a high enough bar. Bumping this
-# constant is a deliberate acknowledgment that the corpus changed; a
-# recapture over a shrunken corpus must fail loud rather than silently
-# narrow the suite. See cross-repo/archive/2026-07-22-claude-central-em-
-# corrections-accepted-and-verify-schema-registry-golden-corpus-narrow.md.
 _EXPECTED_CORPUS_SIZE = 48
 
 
@@ -76,7 +68,6 @@ def test_extract_applies_to_missing_returns_none(tmp_path):
 
 
 def test_run_missing_schemas_dir(tmp_path):
-    # No schemas/ subdir created under plugin_root.
     (tmp_path / "bin").mkdir()
     (tmp_path / "bin" / "query-records.js").write_text("", encoding="utf-8")
     exit_code, stdout_lines, stderr_lines = vsrs.run(tmp_path)
@@ -88,8 +79,6 @@ def test_run_deliberate_divergence_exempted(tmp_path, monkeypatch):
     _write_schema(tmp_path / "schemas", "cross-repo-memo.yaml", "state/memos/[0-9]*.md")
     (tmp_path / "bin").mkdir()
     (tmp_path / "bin" / "query-records.js").write_text("", encoding="utf-8")
-    # Even an always-fail type check must not surface — the file is skipped
-    # before _type_recognised is ever called.
     monkeypatch.setattr(vsrs, "_type_recognised", lambda *a, **kw: False)
     exit_code, stdout_lines, stderr_lines = vsrs.run(tmp_path)
     assert exit_code == 0
@@ -109,10 +98,6 @@ def test_run_all_recognised(tmp_path, monkeypatch):
 
 def test_run_missing_type_reported(tmp_path, monkeypatch):
     # widget-thing has no entry in _SCHEMA_NAME_TO_QUERY_TYPE, so its derived
-    # query type is the bare stem "widget-thing" (unlike bug-backlog/
-    # debt-backlog/improvement-queue, which ARE mapped and now correctly
-    # resolve to bug/debt/improvement -- see the false-positive-fix note in
-    # the module docstring).
     _write_schema(tmp_path / "schemas", "widget-thing.yaml", "state/widget-thing/*.yaml")
     (tmp_path / "bin").mkdir()
     (tmp_path / "bin" / "query-records.js").write_text("", encoding="utf-8")
@@ -124,15 +109,6 @@ def test_run_missing_type_reported(tmp_path, monkeypatch):
 
 
 def test_run_derived_type_not_in_registry_map_reported(tmp_path, monkeypatch):
-    """AC6: proves the port genuinely checks the natively-derived registry
-    map rather than a stub that always reports recognised. Simulates a
-    registry-side exclusion -- a schema declares applies_to but its derived
-    query type has no entry in build_type_to_glob()'s output -- by
-    monkeypatching build_type_to_glob (the derivation INPUT) to a map
-    missing the schema's type, while leaving _type_recognised (the CHECK
-    itself) untouched. A port that always returns recognised, or that never
-    actually consults the derived map, would pass this test wrongly; this
-    proves it doesn't."""
     _write_schema(tmp_path / "schemas", "widget.yaml", "state/widget/*.yaml")
     monkeypatch.setattr(vsrs, "build_type_to_glob", lambda schemas_dir: {"unrelated": "x/*.yaml"})
     exit_code, stdout_lines, stderr_lines = vsrs.run(tmp_path)
@@ -153,12 +129,6 @@ def test_main_returns_exit_code(tmp_path, monkeypatch, capsys):
 
 
 def test_resolve_plugin_root_delegates_to_data_root(tmp_path, monkeypatch):
-    """_resolve_plugin_root() (the no-argv/standalone-invocation path) must
-    resolve via coordinator_core.data_root.data_root("schemas") and return its
-    PARENT -- the coordinator root run() expects as plugin_root. Regression
-    guard for the split-repo fix: this used to fall back to Path.cwd(), which
-    silently pointed at the wrong (or a merely-coincidental) directory once
-    schemas/ moved to a DoE-resident split-repo layout."""
     schemas_dir = tmp_path / "coordinator" / "schemas"
     schemas_dir.mkdir(parents=True)
     monkeypatch.setattr(vsrs, "data_root", lambda name: schemas_dir)
@@ -166,10 +136,6 @@ def test_resolve_plugin_root_delegates_to_data_root(tmp_path, monkeypatch):
 
 
 def test_main_no_argv_reports_and_exits_1_on_resolution_failure(monkeypatch, capsys):
-    """main() with no argv (standalone invocation) must catch a RuntimeError
-    from _resolve_plugin_root() and report+exit 1 rather than letting the
-    exception propagate uncaught or silently misreporting a schemas-dir-not-
-    found FAIL from run() against the wrong path."""
 
     def _raise():
         raise RuntimeError("cannot resolve data dir 'schemas' (test)")
@@ -183,8 +149,6 @@ def test_main_no_argv_reports_and_exits_1_on_resolution_failure(monkeypatch, cap
 
 
 def test_main_no_argv_success_path(tmp_path, monkeypatch, capsys):
-    """main() with no argv, resolution succeeds -- run() is invoked against
-    the resolved plugin_root exactly as the argv-provided path already is."""
     _write_schema(tmp_path / "schemas", "handoff.yaml", "state/handoffs/*.yaml")
     (tmp_path / "bin").mkdir()
     (tmp_path / "bin" / "query-records.js").write_text("", encoding="utf-8")
@@ -216,10 +180,6 @@ def _find_doe_root() -> Optional[Path]:
 
 
 def _normalize_drift_output(stderr_lines: List[str], doe_root: Path) -> List[str]:
-    """Strip the doe_root absolute path (if it appears in any line) before
-    freezing/comparing -- a run-to-run/machine-to-machine unique value must never
-    be baked into a committed golden verbatim (see module docstring hazard note
-    in the parent conversion plan)."""
     root_str = str(doe_root)
     return [line.replace(root_str, "<DOE_ROOT>") for line in stderr_lines]
 
@@ -293,23 +253,7 @@ def test_golden_oracle_parity_against_live_doe_repo():
     joined = "\n".join(expected["stdout_lines"])
     assert "OK" in joined
     # Corpus-size pin (see _EXPECTED_CORPUS_SIZE docstring): guards against a
-    # recapture over a silently-narrowed schemas/ dir producing a
-    # byte-identical drift-entry golden while covering far fewer schemas.
     assert expected["schemas_checked"] == _EXPECTED_CORPUS_SIZE
-
-
-# ---------------------------------------------------------------------------
-# Corpus-provenance stand-down
-# ---------------------------------------------------------------------------
-#
-# Measured defect: on a cloud container, `data_root("schemas")` resolves to the
-# published coordinator-claude mirror, and this gate reported
-# `OK - all 2 schema applies_to types are recognised`, exit 0, having never
-# looked at 61 of the 63 types an authoring checkout carries. The gate derives
-# its recognised-type set from the same corpus it checks, so a truncated corpus
-# agrees with itself and passes. Fixtures below are REAL directories with REAL
-# schema files and the REAL markers, because the walk from a schemas dir up to
-# its markers is the thing under test.
 
 
 def _published_mirror_root(tmp_path: Path) -> Path:
@@ -324,10 +268,6 @@ def _published_mirror_root(tmp_path: Path) -> Path:
 def test_published_mirror_root_cannot_verify_and_is_not_a_pass(tmp_path):
     root = _published_mirror_root(tmp_path)
     exit_code, stdout_lines, stderr_lines = vsrs.run(root)
-    # The false-green, asserted first and without reference to the new
-    # constant: a published-subset root must not produce an OK line and must
-    # not exit 0. Unfixed, this root printed
-    # "OK - all 1 schema applies_to types are recognised" and exited 0.
     assert "OK" not in "\n".join(stdout_lines)
     assert exit_code != 0
     assert stdout_lines == []
@@ -344,8 +284,6 @@ def test_published_mirror_stand_down_names_the_evidence_and_the_remedy(tmp_path)
 
 
 def test_authoring_root_still_runs_the_comparison(tmp_path, monkeypatch):
-    """The stand-down is scoped to a published root. An authoring checkout is
-    the case this gate exists for and must be unaffected."""
     root = tmp_path / "DoE-claude"
     _write_schema(root / "schemas", "handoff.yaml", "state/handoffs/*.yaml")
     (root / _DEV_REPO_SENTINEL).write_text("", encoding="utf-8")

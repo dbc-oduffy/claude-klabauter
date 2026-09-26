@@ -49,34 +49,21 @@ from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
 
-# ---------------------------------------------------------------------------
 # (a) static parity -- OP_MODULE_MAP.keys() == live-registry.keys()
-# ---------------------------------------------------------------------------
 
 
 def test_op_module_map_matches_live_registry():
-    # Lazy is unconditional since 2026-08-22, so the live registry is EMPTY until
     # something forces registration -- without this call every OP_MODULE_MAP entry
-    # reads as "stale", which is what this assert reported before the fix. This is
-    # the sanctioned full-registration caller pattern (see ops/__init__.py's
-    # _eager_import_all docstring), the same one C4's census enumerators and C17's
-    # warm-server preload use.
     import coordinator_core.hooks as _hooks_pkg
     import coordinator_core.ops as _ops_pkg
 
     # BOTH packages, not just ops. OP_MODULE_MAP carries hooks.* keys, but
-    # coordinator_core.hooks is a parallel registration surface with its OWN
-    # _eager_import_all (see hooks/__init__.py) -- forcing only the ops side leaves
-    # every hooks.* key reading as "stale in map", which is exactly what this assert
-    # reported. Two packages, one registry.
     _ops_pkg._eager_import_all()
     _hooks_pkg._eager_import_all()
 
@@ -101,12 +88,6 @@ def test_op_module_map_matches_live_registry():
         f"module no longer registers it under this key."
     )
 
-
-# ---------------------------------------------------------------------------
-# (b) C4 never-worse invariant -- subprocess isolation required (see module
-#     docstring: this in-process test session already has every op module
-#     imported by the time any test body here runs).
-# ---------------------------------------------------------------------------
 
 _MAPPED_OP_SUBPROCESS_SCRIPT = textwrap.dedent(
     """
@@ -195,16 +176,13 @@ _UNMAPPED_OP_SUBPROCESS_SCRIPT = textwrap.dedent(
 
 def _run_subprocess_script(script: str) -> subprocess.CompletedProcess:
     # PYTHONPATH must point at the claude-klabauter repo root so the subprocess can
-    # import coordinator_core regardless of the parent process's cwd (this
-    # test file may be collected as part of a larger pytest run rooted
-    # elsewhere) -- mirrors coordinator_core/tests/test_invoke_main.py's
     # _make_env() PYTHONPATH-injection pattern.
     import os
     project_root = str(Path(__file__).resolve().parents[3])
     env = os.environ.copy()
     existing_pp = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = f"{project_root}{os.pathsep}{existing_pp}" if existing_pp else project_root
-    return subprocess.run(  # popup-intentional-last-resort
+    return subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
         text=True,
@@ -215,14 +193,8 @@ def _run_subprocess_script(script: str) -> subprocess.CompletedProcess:
     )
 
 
-# ---------------------------------------------------------------------------
-# resolves() predicate -- the C3 resolver used by the codemodded assertions
-# across the wider test suite (docs/plans/2026-08-22-the-import-path-costs-
 # nothing.md § C3). This module's own `assert not ipc._REGISTRY` lines above
-# stay real registry reads (empty-registry is the very fact being proved,
 # which resolves() would trivially satisfy via OP_MODULE_MAP) -- these tests
-# cover the predicate itself, not a codemod of this file's own assertions.
-# ---------------------------------------------------------------------------
 
 
 def test_resolves_true_for_op_module_map_key():
@@ -231,7 +203,6 @@ def test_resolves_true_for_op_module_map_key():
 
 def test_resolves_true_for_live_registry_key_absent_from_map():
     # Any key present in the live _REGISTRY (this test file already imports
-    # coordinator_core.ops, populating it eagerly) must resolve, independent
     # of OP_MODULE_MAP membership.
     live_only_keys = set(ipc._REGISTRY.keys()) - set(OP_MODULE_MAP.keys())
     if not live_only_keys:

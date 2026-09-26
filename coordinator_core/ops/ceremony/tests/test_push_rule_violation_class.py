@@ -1,31 +1,3 @@
-"""
-coordinator_core.ops.ceremony.tests.test_push_rule_violation_class
-
-Tests for C2's split of the `gh-push-protection` `classify_error()` bucket
-into a rule-violation (GH013) sub-class -- eligible for the post-and-re-push
-recovery `_recover_rule_violation_reject()` adds -- and a secret-scanning
-sub-class, which must NEVER re-push (docs/plans/2026-08-27-the-merge-gate-
-gets-a-remote-authority-layer.md § C2, dispatched as C3 here).
-
-Covers, per the C3 dispatch brief:
-  - a GH013 rule-violation rejection is classified non-retryable, does not
-    enter the fetch/rebase ladder, and IS eligible for the post-and-re-push
-    recovery (`_recover_rule_violation_reject`).
-  - a secret-scanning push-protection refusal is classified separately from
-    GH013 and is NEVER re-pushed, even though both currently share the
-    `gh-push-protection` `classify_error()` bucket.
-  - a push subprocess timeout still yields `unconfirmed`, never `failed`
-    (pre-existing invariant, re-guarded here because C2 edits the same
-    `push_with_retry` neighbourhood that invariant lives in).
-
-Does NOT re-test the coverage engine or `post_coverage_status` itself --
-`_recover_rule_violation_reject` is mocked at its own seam in the
-integration-level tests below; its own unit tests live in
-`test_post_coverage_status.py` (C1's suite).
-
-Spec backlink: docs/plans/2026-08-27-the-merge-gate-gets-a-remote-authority-
-layer.md § C2/C3.
-"""
 
 from __future__ import annotations
 
@@ -76,11 +48,6 @@ _GH013_SECRET_SCANNING_STDERR = (
 )
 
 
-# ---------------------------------------------------------------------------
-# Unit level: _is_rule_violation_reject / _is_secret_scanning_reject
-# ---------------------------------------------------------------------------
-
-
 def test_gh013_rule_violation_without_secret_phrase_is_rule_violation_not_secret_scanning():
     assert push_mod._is_rule_violation_reject(_GH013_RULE_VIOLATION_STDERR) is True
     assert push_mod._is_secret_scanning_reject(_GH013_RULE_VIOLATION_STDERR) is False
@@ -97,16 +64,7 @@ def test_non_gh_push_protection_reason_is_neither_subclass():
     assert push_mod._is_secret_scanning_reject(non_fast_forward) is False
 
 
-# ---------------------------------------------------------------------------
-# Integration level: push_with_retry's routing of each sub-class.
-# ---------------------------------------------------------------------------
-
-
 def test_rule_violation_reject_skips_rebase_ladder_and_recovers_then_repushes(tmp_path, monkeypatch):
-    """A GH013 rule-violation refusal must never enter the fetch/rebase
-    ladder -- rebasing cannot fix a red coverage-gate status. Instead
-    `_recover_rule_violation_reject` is consulted; on success (`None`
-    returned) the SAME objects are re-pushed, not rebased."""
     repo = _init_repo(tmp_path)
 
     push_calls = []
@@ -179,11 +137,6 @@ def test_rule_violation_recovery_failure_is_failed_never_unconfirmed(tmp_path, m
 def test_secret_scanning_reject_is_never_repushed_even_though_it_shares_gh_push_protection(
     tmp_path, monkeypatch,
 ):
-    """A secret-scanning refusal is classified `gh-push-protection` by
-    `auto_push.classify_error()`, the SAME class GH013 rule-violation
-    shares -- but it must never reach `_recover_rule_violation_reject` or
-    the fetch/rebase ladder. The secret is still in the commit; re-pushing
-    the same objects can never fix that."""
     repo = _init_repo(tmp_path)
 
     push_calls = []
@@ -217,11 +170,6 @@ def test_secret_scanning_reject_is_never_repushed_even_though_it_shares_gh_push_
 def test_push_subprocess_timeout_still_yields_unconfirmed_not_failed_in_c2_neighbourhood(
     tmp_path, monkeypatch,
 ):
-    """Guard for the pre-existing FIX-I invariant (2026-08-19) in the exact
-    branch of `push_with_retry` C2 edited: a push subprocess TIMEOUT is an
-    unobserved outcome and must still resolve to `unconfirmed`, never
-    `failed` -- C2's new rule-violation branch must not have started
-    swallowing this by matching a timeout's synthesized stderr."""
     repo = _init_repo(tmp_path)
 
     timeout_stderr = "git push: timed out after 120s (Command '['git', 'push']' timed out after 120 seconds)"

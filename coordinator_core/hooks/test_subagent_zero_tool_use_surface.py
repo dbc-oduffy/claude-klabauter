@@ -1,20 +1,3 @@
-"""
-coordinator_core.hooks.test_subagent_zero_tool_use_surface — round-trip tests for
-the Stage-2 pure-read surfacing op (hooks.subagent_zero_tool_use_surface).
-
-Covers: missing store → empty-result shape (store_present: false); a populated store
-with N zero-tool-use records → all N returned in append order; a store containing a
-foreign `kind` value alongside zero-tool-use records → the foreign-kind record is
-filtered out (not counted in skipped_lines, since it parsed correctly); malformed
-lines are skipped and counted in skipped_lines; the exact pinned return shape
-({"records", "record_count", "skipped_lines", "store_present"}); registration-quad
-presence for the op key.
-
-All handlers are async; asyncio.run() is used directly in sync test functions — no
-pytest-asyncio dependency, matching coordinator_core/tests/test_hooks_bookkeeping.py.
-
-Spec backlink: cross-repo/inbox/2026-07-25-doe-claude-em-zero-tool-use-detection-engine-op-contract.md
-"""
 
 from __future__ import annotations
 

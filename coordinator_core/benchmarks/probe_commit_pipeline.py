@@ -1,25 +1,7 @@
-"""Measure `coordinator_core.git.commit.commit_paths` end-to-end: process
-time and job-object spawn count, against this repo's REAL checkin surface
-(C3, docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-pipeline-
-can-go.md -- repointed off the killed `commit_pipeline.run_commit_pipeline`).
-
-Each measured window commits N times into the same repo, so history grows by N
-across the window. That biases toward OVER-reporting, never under: a later call
-sees a longer history and a larger index than an earlier one, so the amortised
-figure is an upper bound on the per-call cost at the starting size.
-
-Job object attached to this process, so every `git` child AND the `conhost.exe`
-Windows allocates alongside one (DR-373) is counted -- the undercount a
-`subprocess.Popen` patch produces is exactly what this exists to avoid.
-"""
 import os, shutil, sys, tempfile, time
 from functools import partial
 from pathlib import Path
 
-#: This file's own location, never a literal: `coordinator_core/benchmarks/<this>`,
-#: so the repo root is three parents up. A drive-anchored literal here was wrong on
-#: every other host AND blocked the commit of any `coordinator_core/` change,
-#: because the hardcoded-path gate runs at pre-commit over the whole package.
 SRC = Path(__file__).resolve().parents[2]
 
 sys.path.insert(0, str(SRC))
@@ -36,10 +18,6 @@ WARMUP = 6
 
 
 def _q(root: Path, *a):
-    """Fixture build and post-window verification only -- `commit_paths`
-    (imported above) is the measured subject, timed by `LiveTreeAccountant`
-    around its own calls. See `coordinator_core.benchmarks`'s module
-    docstring, "Measured-window discipline"."""
     return run_git(list(a), cwd=str(root))
 
 
@@ -59,15 +37,6 @@ def build_repo(root: Path):
 
 
 def main(n=40, reps=3):
-    """One job window per N calls, NOT one snapshot pair per call.
-
-    A per-call `snapshot()` pair can only ever return a multiple of the
-    15.625ms job-accounting tick, so it reports a tick count rather than a
-    cost, and a median over tick-quantised samples then picks the low mode.
-    That artifact published 15.62ms and 31.25ms -- exactly 1x and 2x the tick
-    -- in this repo's own audit before it was caught. Bracketing N calls in
-    ONE window divides the quantisation error by N.
-    """
     declare_benchmark_origin()
     for label, tracked in (("edit of a tracked file", True),
                            ("new file, new directory", False)):
@@ -85,7 +54,6 @@ def _one_window(label, tracked, n, rep):
     build_repo(repo)
     names = [f"src/m{i:03d}.py" for i in range(n + WARMUP)]
     if tracked:
-        # Seed every path as TRACKED first, so the measured calls are edits.
         for nm in names:
             f = repo / nm
             f.parent.mkdir(parents=True, exist_ok=True)
@@ -109,10 +77,6 @@ def _one_window(label, tracked, n, rep):
             return False
         return True
 
-    # WARMUP calls are excluded because the FIRST call through this path pays
-    # one-off import and page-in cost that no subsequent commit pays. It is a
-    # cold-start exclusion, not a discard of slow samples: every call after it
-    # is kept, including the slowest.
     for i in range(WARMUP):
         one(i)
 
@@ -131,8 +95,6 @@ def _one_window(label, tracked, n, rep):
             f"{label}: repo not clean after the window -- status={st.stdout[:200]!r} "
             f"fsck rc={fs.returncode}"
         )
-    # Reached only after the cleanliness check above passes; a surviving tree
-    # is a leak worth seeing, not a teardown to swallow.
     rmtree_or_raise(tmp, label=f"pipeprobe-{label}")
     return ms, procs, landed
 

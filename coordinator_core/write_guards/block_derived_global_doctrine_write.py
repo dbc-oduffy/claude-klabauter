@@ -117,19 +117,12 @@ PRIORITY = 10
 
 _INTERCEPTED_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
-#: Rare-use escape hatch — read the module docstring before invoking.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_DERIVED_GLOBAL_DOCTRINE_WRITE"
 
 #: NEGATIVE-SPEC: there is deliberately no literal fallback root here. A
-#: message that fabricates a path for an unregistered root hands the reader
-#: somewhere that does not exist — and a codename literal in that position
-#: publishes as a redaction placeholder naming nothing at all. When the
-#: registry lookup fails, `_deny_reason` names the registry key the operator
-#: sets instead of inventing a location.
 
 
 def _extract_file_path(payload: Dict[str, Any]) -> str:
-    """``file_path``, falling back to ``notebook_path`` for NotebookEdit."""
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         return ""
@@ -137,8 +130,6 @@ def _extract_file_path(payload: Dict[str, Any]) -> str:
 
 
 def _normalize(p: str) -> str:
-    """Backslash -> forward-slash, Unicode casefold — matches this module's
-    own string-first matching discipline (see module docstring)."""
     return p.replace("\\", "/").casefold()
 
 
@@ -175,8 +166,6 @@ def _home_candidates() -> List[str]:
 
 
 def _expand_tilde(file_path: str, home: str) -> str:
-    """Port of the ``block_dev_side_mirror_wiki`` tilde-expansion shape —
-    replaces a LEADING literal ``~`` only (not ``~user``)."""
     if file_path in ("~", "~/", "~\\"):
         return home
     if file_path.startswith("~/") or file_path.startswith("~\\"):
@@ -221,12 +210,6 @@ def _is_derived_live_copy(file_path: str) -> bool:
 
 
 def _authoring_path() -> Optional[str]:
-    """The authoring surface's path, resolved from the registry at
-    message-render time — never a literal (module docstring "Deny text").
-
-    Returns None when the root is unregistered on this machine, so the
-    caller can name the registry key rather than render a fabricated path.
-    """
     root = registry_get("repos.doe_claude")
     if not root:
         return None
@@ -254,9 +237,6 @@ def _deny_reason(file_path: str, payload: Optional[Dict[str, Any]] = None) -> st
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the derived-global-doctrine-copy routing guard against a
-    PreToolUse payload. Returns ``None`` (allow) or the nested hard-deny
-    envelope."""
     if os.environ.get(_OVERRIDE_ENV_VAR, "0") == "1":
         return None
 

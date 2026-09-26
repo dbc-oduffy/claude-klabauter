@@ -44,9 +44,6 @@ def _git(args, cwd) -> None:
 
 
 def _init_mismatched_upstream_repo(tmp_path: Path) -> Path:
-    """A local `work/vm/<date>` branch tracking a differently-named
-    `origin/claude/<session>` -- the cloud-harness shape the defect names.
-    """
     origin = tmp_path / "origin.git"
     _git(["init", "-q", "--bare", str(origin)], tmp_path)
 
@@ -61,7 +58,6 @@ def _init_mismatched_upstream_repo(tmp_path: Path) -> Path:
     _git(["commit", "-q", "-m", "seed"], repo)
     _git(["remote", "add", "origin", str(origin)], repo)
     # Publish once under the DIFFERENT remote name and set it as upstream --
-    # exactly what a cloud harness's own bootstrap does.
     _git(
         ["push", "-q", "-u", "origin", f"{_LOCAL_BRANCH}:refs/heads/{_REMOTE_BRANCH}"],
         repo,
@@ -85,7 +81,6 @@ def _remote_head_sha(repo: Path, remote_branch: str) -> str:
 def test_push_lands_on_the_differently_named_upstream_branch(tmp_path, monkeypatch):
     repo = _init_mismatched_upstream_repo(tmp_path)
 
-    # A new local commit to push -- the first push already landed above.
     (repo / "README.md").write_text("second", encoding="utf-8")
     _git(["add", "--", "README.md"], repo)
     _git(["commit", "-q", "-m", "second"], repo)
@@ -97,10 +92,6 @@ def test_push_lands_on_the_differently_named_upstream_branch(tmp_path, monkeypat
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     ).stdout.strip()
 
-    # The bare, refspec-less form must never be reached on a configured
-    # upstream -- it is exactly the call that reproduces the defect under
-    # push.default=simple. Failing loud here proves the fix routes around it
-    # rather than merely happening to succeed.
     def _bare_push_must_not_be_called(*a, **kw):
         raise AssertionError(
             "git_native.push() (bare, refspec-less) must not be called when "
@@ -119,10 +110,6 @@ def test_push_lands_on_the_differently_named_upstream_branch(tmp_path, monkeypat
 
 
 def test_push_refspec_targets_remote_and_upstream_branch_ref(tmp_path, monkeypatch):
-    """Narrower unit check: `push_with_retry` calls `git_native.push_refspec`
-    with the resolved remote name, `HEAD`, and the upstream's own
-    `refs/heads/<remote-branch>` -- never a reconstructed or guessed name.
-    """
     repo = _init_mismatched_upstream_repo(tmp_path)
 
     calls: list = []

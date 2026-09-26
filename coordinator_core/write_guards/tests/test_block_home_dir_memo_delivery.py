@@ -113,20 +113,6 @@ class TestDenyAndAllow:
         assert result is None
 
     def test_extended_length_prefix_asymmetry_still_denies(self, monkeypatch, _fake_home):
-        r"""2026-08-03 residual close (PM-authorized) --
-        `state/audits/2026-08-03-extended-length-prefix-call-site-audit.md`:
-        this guard pre-processes candidate/roots with `casefold_path`
-        (already prefix-stripping) and hands the STRINGS to
-        `contained_path`, which does its OWN internal `.resolve()` --
-        downstream of that string-level fix. Simulates the exact
-        length-triggered asymmetry a real Windows host produces: the
-        candidate's internal resolve grows the `\\?\` prefix, the guarded
-        root's does not. Pre-fix, `relative_to()` compared the prefixed
-        candidate `Path` against the bare root `Path`, raised `ValueError`
-        for every root, and this guard silently ALLOWED a hand-written
-        write straight into `~/.claude/cross-repo/inbox/` -- the exact
-        write this guard exists to deny. Red assertion pre-fix:
-        `assert result is not None` -> AssertionError (result was None)."""
         target_path = _fake_home / ".claude" / "cross-repo" / "inbox" / "x.md"
         target = str(target_path)
 
@@ -146,21 +132,12 @@ class TestDenyAndAllow:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_state_nested_cross_repo_write_denied(self, _fake_home):
-        """C6: the current `state/cross-repo` root -- where memos actually
-        live -- was matched by neither guard pre-fix; this is the DENY
-        instrument the brief requires, not just an allow-path check."""
         target = str(_fake_home / ".claude" / "state" / "cross-repo" / "inbox" / "x.md")
         result = guard.check(_payload(target))
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_case_varied_target_denied(self, _fake_home):
-        # macOS/APFS is case-insensitive-but-case-preserving: a Write to
-        # Cross-Repo/Inbox lands inside the same real guarded cross-repo/
-        # directory on disk. os.path.normcase is a no-op on POSIX, so this
-        # guard must casefold explicitly (mirrors
-        # block_oss_mirror_memo_delivery's own case test).
-        # (Review: code-reviewer -- case bypass in this guard, 2026-07-31.)
         target = str(_fake_home / ".Claude" / "Cross-Repo" / "Inbox" / "x.md")
         result = guard.check(_payload(target))
         assert result is not None

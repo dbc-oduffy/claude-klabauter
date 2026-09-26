@@ -1,9 +1,3 @@
-"""coordinator_core.hooks.tests.test_enforce_agent_model_pin -- coverage for
-the PreToolUse(Agent) model/effort pin-enforcement guard, and the seam it
-composes into on `block_unenumerated_agent_type.check()`.
-
-Spec backlink: cross-repo/inbox/2026-08-11-example-retrieval-repo-em-agent-model-pin-silently-overridable.md
-"""
 
 from __future__ import annotations
 
@@ -42,11 +36,6 @@ def _patch_pins(monkeypatch: pytest.MonkeyPatch, pins, reason=None) -> None:
         return (pins, reason)
 
     monkeypatch.setattr(mod, "resolve_model_pins", _fake_resolve_model_pins)
-
-
-# ---------------------------------------------------------------------------
-# check() -- deny / advisory / silent-pass, pins injected via monkeypatch
-# ---------------------------------------------------------------------------
 
 
 def test_pinned_sonnet_plus_model_opus_denies_naming_both(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -160,12 +149,6 @@ def test_absent_subagent_type_out_of_scope(monkeypatch: pytest.MonkeyPatch) -> N
     assert mod.check(payload) is None
 
 
-# ---------------------------------------------------------------------------
-# Composition -- block_unenumerated_agent_type.check() delegates after its
-# own enumeration verdict, never before.
-# ---------------------------------------------------------------------------
-
-
 def test_unenumerated_type_denies_with_enumeration_reason_not_pin_reason(monkeypatch: pytest.MonkeyPatch) -> None:
     def _fake_resolve_roster(*, doe_root=None, home=None):
         del doe_root, home
@@ -206,11 +189,6 @@ def test_enumerated_type_with_violating_model_denies_via_composed_pin_reason(mon
     assert "sonnet" in reason and "opus" in reason
 
 
-# ---------------------------------------------------------------------------
-# resolve_model_pins() -- real frontmatter walk, own tmp_path fixture.
-# ---------------------------------------------------------------------------
-
-
 def test_resolve_model_pins_reads_model_and_effort_from_frontmatter(tmp_path: Path) -> None:
     doe_root = tmp_path / "doe-claude"
     _write_agent_md(doe_root, "executor", model="sonnet", effort="low")
@@ -232,20 +210,6 @@ def test_resolve_model_pins_fails_closed_on_missing_agents_dir(tmp_path: Path) -
     assert pins is None
     assert reason is not None
     assert "MISSING ENTIRELY" in reason
-
-
-# ---------------------------------------------------------------------------
-# Regression -- resolve_roster()'s own shape/contents are unaffected by the
-# `_load_agents_roster` -> `_scan_agents_frontmatter` refactor (§2 hard
-# constraint: resolve_roster's signature and return type must not change).
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# resolve_model_pins() -- plugin leg (c), synthetic fixture trees only --
-# see spec "Use synthetic fixture trees for the plugin layouts -- do not
-# assert against this machine's live ~/.claude/plugins contents".
-# ---------------------------------------------------------------------------
 
 
 def _write_plugin_agent_md(home: Path, rel_path: str, name: str, *, model: str = "", effort: str = "") -> None:
@@ -285,7 +249,6 @@ def test_plugin_keyed_pin_via_full_resolve_model_pins(tmp_path: Path) -> None:
         assert envelope is not None
         assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-        # INERT CONTROL -- required: same pin, matching value, must pass silently.
         assert pin_mod.check(_agent_payload("game-dev:staff-game-dev", model="sonnet")) is None
     finally:
         pin_mod.resolve_model_pins = monkeypatch_target

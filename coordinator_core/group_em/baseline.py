@@ -78,32 +78,18 @@ from coordinator_core.group_em.watch_heartbeat import ABSENT_NEVER_ARMED, ABSENT
 from coordinator_core.group_em.watch_heartbeat import iso_instant as _iso
 from coordinator_core.session.machinery_paths import share_dir as _share_dir
 
-#: Corpus-mutator declaration (generator-provenance sweep): `_write_atomic`
-#: rewrites `state/subagent-share/<caller_session_id>/group-em-baseline-
-#: <repo_key>.json`, one file per (repo-key, session) pair -- a
 #: data-dependent set no fixed GENERATES artifact could name. `repo_root`
-#: itself is caller-supplied (see `diff_and_persist`), same house pattern as
-#: the sibling counters beside this file (`guard_advisory_counter.py`,
-#: `engine_provenance_counter.py`); the extension-scoped glob matches this
-#: repo's own tracked `state/subagent-share/` tree the same way theirs does.
 MUTATES = [".coordinator-local/subagent-share/**/*.json"]
 
 PeerRecord = Mapping[str, Any]
 PeerSet = Mapping[str, PeerRecord]
 
-#: Why `_load_previous` returned no usable baseline. Aliases of
 #: `watch_heartbeat.ABSENT_NEVER_ARMED` / `ABSENT_UNREADABLE` -- imported,
-#: not re-declared (overengineering-reviewer finding 4): "no file yet" and
-#: "a file exists but is torn/corrupt" are different events to whoever reads
-#: `first_tick_reason` even though both degrade to the same `first_tick:
-#: True` treatment for the diff itself. Local names read better at this
-#: module's call sites, so they stay as aliases rather than a rename.
 FIRST_TICK_NEVER_ARMED = ABSENT_NEVER_ARMED
 FIRST_TICK_UNREADABLE = ABSENT_UNREADABLE
 
 
 def _repo_root() -> Path:
-    # coordinator_core/group_em/baseline.py -> parents[2] is the repo root.
     return Path(__file__).resolve().parents[2]
 
 

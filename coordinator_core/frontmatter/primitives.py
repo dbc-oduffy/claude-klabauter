@@ -1,63 +1,3 @@
-"""
-coordinator_core.frontmatter.primitives
-
-Unified Python port of the YAML frontmatter text-manipulation primitives from
-the DoE-claude coordinator JS tools:
-  - handoff-transition.js       (4-arg anchored insertFmField, block-scalar guard)
-  - stamp-shipped-in.js         (numeric/scientific quoting additions)
-  - normalize-handoff-frontmatter.js (2-arg append-only insertFmField, null→'null')
-
-Text-based throughout (no pyyaml for write) — preserves byte-identical output with the
-JS originals so round-trip diffs are zero outside the mutated fields.
-
-Spec backlinks:
-  coordinator/bin/handoff-transition.js
-  coordinator/bin/stamp-shipped-in.js
-  coordinator/bin/normalize-handoff-frontmatter.js
-
-Public surface (imported by C2/C3/C4/C5 executors):
-  split_frontmatter(text)                              → FrontmatterSplit | None
-  read_fm_field(fm, key)                               → str | None
-  unquote_yaml_scalar(raw)                             → str | None
-  read_fm_field_unquoted(fm, key)                      → str | None
-  serialize_yaml_scalar(v, *, numeric_quoting=False)   → str
-  replace_fm_field(fm, key, v)                         → str
-  insert_fm_field(fm, key, v, after_key=None)          → str
-  insert_fm_field_raw(fm, key, raw_value, after_key=None) → str
-  remove_fm_field(fm, key)                             → str
-  read_fm_nested_field(fm, key)                        → str | None
-  write_fm_nested_field(fm, key, block_text)           → str
-  remove_fm_nested_field(fm, key)                      → str
-  rebuild(split, fm_text)                              → str
-  frontmatter_body_text(file_text)                     → str
-  git_blob_sha1(text)                                  → str | None
-  canonical_body_sha(file_text)                        → str | None
-
-read_fm_nested_field/write_fm_nested_field/remove_fm_nested_field (AC11, eng-director
-F1, break-class) extend the toolkit to a YAML sequence-of-mappings value — the
-`gate_evidence:`/`carried_items:` shape, an indented `- kind: ...\n  repo: ...` block
-under its key line. Spec backlink:
-`docs/plans/2026-07-26-structured-sibling-evidence-gates.md` § C0. The single-line
-helpers above (`replace_fm_field`/`remove_fm_field`) carry a matching guard (the Staff Engineer
-F4): a key that reads back empty via `read_fm_field` with a more-indented next line is
-this same nested-block shape, and calling the single-line helper on it would silently
-orphan the indented continuation lines — the guard makes that a mechanical `ValueError`
-instead of a rule a caller has to remember.
-
-frontmatter_body_text/git_blob_sha1/canonical_body_sha are the shared
-plan-body-hash recipe extracted from two independent hand-maintained copies
-(`coordinator_core.pickup_assemble._frontmatter_body_text`/
-`_git_hash_object_stdin` and `coordinator_core.review_assemble.exec_auth_stamp.
-_canonical_body_sha`) — both computed the same canonical `git hash-object
---stdin`-over-plan-body recipe independently; a one-sided drift between them
-would silently break execution-authorization-staleness detection (Review:
-code-reviewer — Finding 3, `state/subagent-share/e180604f-9221-4f7e-8fe2-0f9b4bb279a6/
-2026-07-25-codereview-slicephase1-engine-layer-coordinator-core.md`).
-`git_blob_sha1` is the literal git blob-hash algorithm
-(`sha1("blob " + len(content) + "\\0" + content)`), computed in-process —
-verified byte-identical to a real `git hash-object --stdin` subprocess call
-across multiple samples; no subprocess spawn needed.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -65,16 +5,7 @@ import re
 from typing import NamedTuple, Optional
 
 
-# ---------------------------------------------------------------------------
-# Data container
-# ---------------------------------------------------------------------------
-
 class FrontmatterSplit(NamedTuple):
-    """Parsed frontmatter components.
-
-    Negative-spec: body_with_leading_newline retains the newline that follows
-    the closing ``---`` so that rebuild() produces byte-identical output.
-    """
 
     preamble: str
     """Leading blank lines and HTML comment blocks before the opening ``---``.
@@ -87,50 +18,23 @@ class FrontmatterSplit(NamedTuple):
     """Everything after the closing ``---``, including its trailing newline."""
 
 
-# ---------------------------------------------------------------------------
-# Internal compiled patterns
-# ---------------------------------------------------------------------------
-
-# Preamble: one or more of:
-#   - blank line (only spaces/tabs before the newline)
-#   - complete HTML comment block on its own line(s)
-# JS original: /^(?:[ \t]*\r?\n|[ \t]*<!--[\s\S]*?-->[ \t]*\r?\n?)+/
 _PREAMBLE_RE = re.compile(
     r'^(?:[ \t]*\r?\n|[ \t]*<!--[\s\S]*?-->[ \t]*\r?\n?)+'
 )
 
-# Closing --- (horizontal whitespace only after, NOT \s which eats blank body lines)
 _CLOSE_RE = re.compile(r'^---[ \t]*$', re.MULTILINE)
 
-# YAML structural characters that require quoting
 _STRUCTURAL_RE = re.compile(r'[#:{}\[\],&*!|>"\'%@`]')
 
-# All-digit integer — SHA-as-int / plain integer defense (stamp-shipped-in F0)
 _ALL_NUMERIC_RE = re.compile(r'^[0-9]+$')
 
-# YAML 1.1 scientific-notation float (e.g. '1958e194') — YAML 1.1 auto-coerce defense
 _SCIENTIFIC_RE = re.compile(r'^[0-9]+[eE][0-9]+$')
 
 
-# ---------------------------------------------------------------------------
-# split_frontmatter
-# ---------------------------------------------------------------------------
-
 def split_frontmatter(text: str) -> FrontmatterSplit | None:
-    """Parse YAML frontmatter from file content.
-
-    Normalises CRLF to LF on entry (DR-148 cross-platform portability). Tolerates
-    a leading preamble (blank lines and/or HTML comment blocks) before the opening
-    ``---``; the preamble is captured verbatim and reassembled on rebuild.
-
-    Returns ``None`` when no valid frontmatter block is found (missing ``---``
-    delimiters, no closing ``---``, or unparseable preamble).
-    """
-    # CRLF normalize — JS: text.replace(/\r\n/g, '\n')
     text = text.replace('\r\n', '\n')
 
     preamble = ''
-    # JS uses /^---\s*\n/ so `---yaml` is rejected; tighten to regex
     if not re.match(r'^---[ \t]*\n', text):
         m = _PREAMBLE_RE.match(text)
         if not m:
@@ -141,7 +45,6 @@ def split_frontmatter(text: str) -> FrontmatterSplit | None:
         preamble = m.group(0)
         text = after
 
-    # text now begins with ---
     after_first = text[3:]
     first_newline = after_first.find('\n')
     if first_newline == -1:
@@ -162,10 +65,6 @@ def split_frontmatter(text: str) -> FrontmatterSplit | None:
         body_with_leading_newline=body_with_leading_newline,
     )
 
-
-# ---------------------------------------------------------------------------
-# read_fm_field
-# ---------------------------------------------------------------------------
 
 def read_fm_field(fm: str, key: str) -> str | None:
     """Return the trimmed value of ``key:`` in frontmatter text, or ``None``.
@@ -217,37 +116,7 @@ def read_fm_field(fm: str, key: str) -> str | None:
     return m.group(1).strip() if m else None
 
 
-# ---------------------------------------------------------------------------
-# unquote_yaml_scalar / read_fm_field_unquoted
-# ---------------------------------------------------------------------------
-
 def unquote_yaml_scalar(raw: str | None) -> str | None:
-    """Invert ``serialize_yaml_scalar``'s quoting for a single-line scalar.
-
-    ``read_fm_field`` is a raw text extractor and deliberately returns the
-    on-disk bytes after ``key:``, quotes included. ``serialize_yaml_scalar``
-    quotes on structural characters and — under ``numeric_quoting=True`` — on
-    all-digit and YAML-1.1 scientific-notation values (the SHA-as-number
-    defence). The pair is therefore write/read asymmetric: a value written as
-    ``shipped_in: '44379324'`` reads back as ``"'44379324'"``. This function
-    closes that asymmetry for callers that COMPARE or PARSE the value.
-
-    Handles:
-    - a matched pair of surrounding single-quotes, unescaping YAML's doubled
-      ``''`` inner-quote form (the exact inverse of ``serialize_yaml_scalar``);
-    - a matched pair of surrounding double-quotes (plain strip) — not emitted by
-      ``serialize_yaml_scalar``, but present in hand-authored frontmatter and in
-      artifacts written by the DoE node oracle's ``schema.js`` ``unquoteScalar``,
-      whose behaviour this mirrors.
-
-    Negative-spec: NOT a general YAML unquoter. It does not process
-    double-quoted backslash escapes (``\\n``, ``\\"`` — see
-    ``ops/fleet/memo_compose._unquote`` for that distinct outbox scheme), and it
-    does not handle block scalars or multi-line values. A value that merely
-    happens to begin and end with a quote character is only altered when the
-    quotes form a matched pair, so ``.strip("'")``-style corruption of a
-    legitimately-quoted value containing quotes cannot occur.
-    """
     if raw is None:
         return None
     if len(raw) >= 2 and raw.startswith("'") and raw.endswith("'"):
@@ -258,31 +127,6 @@ def unquote_yaml_scalar(raw: str | None) -> str | None:
 
 
 def _split_trailing_comment(raw: str) -> tuple[str, str]:
-    """Split a raw scalar value returned by ``read_fm_field`` into
-    ``(value, comment_suffix)`` such that ``value + comment_suffix == raw``
-    byte-for-byte, honouring quoting so a ``#`` *inside* a quoted scalar is
-    never mistaken for a comment start.
-
-    The single parser behind two consumers: ``_strip_trailing_comment``
-    (read side, wants just ``value``) and ``replace_fm_field_raw`` (write
-    side, break-class fix 2026-08-01, wants ``comment_suffix`` too so a
-    rewritten line can re-emit the original comment instead of silently
-    deleting it — see that function's docstring for the corruption this
-    closes). ``comment_suffix`` includes any whitespace padding between the
-    trimmed value and the ``#`` itself, so simple concatenation round-trips
-    a comment-bearing line exactly, and is ``''`` when ``raw`` carries no
-    trailing comment (round-trip is then just ``value == raw``).
-
-    YAML's own rule: a ``#`` starts a comment only when preceded by
-    whitespace (or at the very start of the scalar) AND it is not inside a
-    quoted scalar — a ``#`` glued to a preceding non-space character is data
-    (``abc#def``), not a comment. For a quoted raw value (``read_fm_field``
-    returns the quotes verbatim), only the tail AFTER the closing quote is
-    ever comment-eligible — a ``#`` inside the quotes (e.g. ``'has # a
-    hash'``) is part of the string and must survive unstripped; this mirrors
-    ``unquote_yaml_scalar``'s own matched-pair discipline rather than a naive
-    ``.split('#')``.
-    """
     if raw.startswith("'"):
         i, n = 1, len(raw)
         while i < n:
@@ -303,12 +147,6 @@ def _split_trailing_comment(raw: str) -> tuple[str, str]:
         quoted_end = 0
 
     tail = raw[quoted_end:]
-    # A glued `#` (data, not comment-
-    # eligible) used to make this function give up entirely via a bare
-    # `return raw, ''`, so a LATER, genuinely space-preceded `#` starting a
-    # real comment was never found (`abc#def  # real comment` dropped the
-    # comment on rewrite). Keep scanning from `hash_pos + 1` instead of
-    # stopping at the first ineligible `#`.
     search_from = 0
     while True:
         hash_pos = tail.find('#', search_from)
@@ -323,77 +161,17 @@ def _split_trailing_comment(raw: str) -> tuple[str, str]:
 
 
 def _strip_trailing_comment(raw: str) -> str:
-    """Strips a trailing YAML ``# comment`` from a raw scalar value returned by
-    ``read_fm_field``, honouring quoting so a ``#`` *inside* a quoted scalar is
-    never mistaken for a comment start. Thin delegate over
-    ``_split_trailing_comment`` — see that function for the quote-aware
-    parsing rule; this keeps ONE parser behind both the read-only caller here
-    and the comment-preserving write path in ``replace_fm_field_raw``.
-
-    Break-class bug this closes (2026-07-27, `baton_assemble` FK-corruption
-    report): ``read_fm_field``/``read_fm_field_unquoted`` returned the entire
-    rest of the line verbatim, so ``initiative: null  # FK to
-    state/initiatives/<id>.yaml; null when no named initiative`` read back as
-    the **string** ``"null  # FK to ...; null when no named initiative"``
-    instead of the YAML scalar ``null`` — silently turning "no initiative"
-    into "an initiative literally named after its own doc-comment". Any
-    frontmatter value in the corpus carrying a trailing ``#`` comment on its
-    own ``key: value  # comment`` line hit the identical corruption via this
-    one shared reader (`coordinator_core.baton_assemble.resolve_lineage`'s
-    ``deliverable_id``/``initiative``/``predecessor`` reads, and every other
-    C2-C5 executor caller of ``read_fm_field_unquoted``) — this is a shared-
-    primitive fix, not a baton_assemble-local one.
-
-    YAML's own rule: a ``#`` starts a comment only when preceded by
-    whitespace (or at the very start of the scalar) AND it is not inside a
-    quoted scalar — a ``#`` glued to a preceding non-space character is data
-    (``abc#def``), not a comment. For a quoted raw value (``read_fm_field``
-    returns the quotes verbatim), only the tail AFTER the closing quote is
-    ever comment-eligible — a ``#`` inside the quotes (e.g. ``'has # a
-    hash'``) is part of the string and must survive unstripped; this mirrors
-    ``unquote_yaml_scalar``'s own matched-pair discipline rather than a naive
-    ``.split('#')``.
-    """
     return _split_trailing_comment(raw)[0]
 
 
 def read_fm_field_unquoted(fm: str, key: str) -> str | None:
-    """Read ``key:`` from frontmatter text, strip a trailing ``# comment``
-    (see ``_strip_trailing_comment``), then strip one layer of YAML quoting.
-
-    The comparison-safe sibling of ``read_fm_field``: use this wherever the
-    value is compared against an unquoted in-memory value (an idempotency or
-    already-at-target gate), parsed, or set-membership-tested. Use the raw
-    ``read_fm_field`` when the value is only presence-tested, echoed, logged, or
-    rewritten verbatim.
-
-    Returns ``None`` when the key is absent — identical key-resolution semantics
-    to ``read_fm_field``, including the ``(?=[ \\t]|\\r?$)`` boundary lookahead that
-    stops ``status`` matching ``status_message:``.
-    """
     raw = read_fm_field(fm, key)
     if raw is None:
         return None
     return unquote_yaml_scalar(_strip_trailing_comment(raw))
 
 
-# ---------------------------------------------------------------------------
-# serialize_yaml_scalar
-# ---------------------------------------------------------------------------
-
 def serialize_yaml_scalar(v: object, *, numeric_quoting: bool = False) -> str:
-    """Serialise a scalar value for inline YAML frontmatter text.
-
-    Quoting rules:
-    - ``None`` → bare ``null`` literal (D9 present-as-null, from normalize-handoff).
-    - Values containing YAML structural characters (``#:{}``, brackets, etc.) are
-      single-quoted; internal single quotes are escaped by doubling (``'`` → ``''``).
-    - Leading ``-``, ``?``, or space always triggers quoting.
-    - ``numeric_quoting=True``: additionally quotes all-digit values (SHA-as-int
-      defence) and YAML-1.1 scientific-notation floats (stamp-shipped-in the Staff Engineer F0).
-
-    Negative-spec: does not handle multi-line values.
-    """
     if v is None:
         return 'null'
 
@@ -415,29 +193,11 @@ def serialize_yaml_scalar(v: object, *, numeric_quoting: bool = False) -> str:
     return "'" + s.replace("'", "''") + "'"
 
 
-# ---------------------------------------------------------------------------
-# Nested-block key line lookup — shared by the block-scalar-adjacent guard and
-# by read_fm_nested_field/write_fm_nested_field/remove_fm_nested_field below.
-# ---------------------------------------------------------------------------
-
 def _fm_key_line_pattern(key: str) -> re.Pattern[str]:
-    """The single boundary-lookahead ``^key:(?=[ \\t]|\\r?$).*$`` pattern every
-    frontmatter primitive anchors on — factored out so the nested-block helpers
-    and the guards share exactly one key-resolution rule with
-    ``read_fm_field``/``replace_fm_field``/``remove_fm_field``."""
     return re.compile(r'^' + re.escape(key) + r':(?=[ \t]|\r?$).*$', re.MULTILINE)
 
 
 def _locate_nested_block(fm: str, key: str) -> Optional[tuple[int, int, int]]:
-    """Locate ``key:``'s line and its trailing indented continuation block.
-
-    Returns ``(key_line_start, block_start, block_end)`` character offsets, or
-    ``None`` when the key is absent. ``block_start == block_end`` when the key
-    has no continuation lines (an ordinary single-line field). A continuation
-    line is any line that is blank or begins with a space/tab — the block ends
-    at the first column-0 line (a new top-level key) or end of text, mirroring
-    how YAML block-sequence indentation scopes a mapping value.
-    """
     m = _fm_key_line_pattern(key).search(fm)
     if m is None:
         return None
@@ -459,22 +219,6 @@ def _locate_nested_block(fm: str, key: str) -> Optional[tuple[int, int, int]]:
 
 
 def _is_nested_block_key(fm: str, key: str) -> bool:
-    """True when ``key:``'s own line carries no inline value AND its very next
-    physical line is a block-nested continuation — either the ``gate_evidence:``
-    -style indented sequence-of-mappings shape, or a legal YAML block sequence
-    written at the SAME indentation as its parent key (``tags:\\n- a\\n- b``) —
-    that the single-line helpers below must refuse rather than silently orphan
-    (the Staff Engineer F4; Review: code-reviewer — Finding 4, unindented-sequence gap).
-
-    Deliberately does NOT use ``read_fm_field`` to test emptiness. That was
-    originally because ``read_fm_field``'s ``\\s*`` crossed the newline after
-    ``key:`` and captured the first continuation line's own text as its
-    "value" (e.g. ``"- kind: test-node-id"``) instead of ``""`` — a quirk
-    fixed at the root on 2026-07-28. The independence is kept anyway: this
-    check needs the key's OWN line text, which it reads from the match
-    directly, and reading it here rather than through a value-extracting
-    sibling keeps the two concerns from drifting back together.
-    """
     m = _fm_key_line_pattern(key).search(fm)
     if m is None:
         return False
@@ -492,17 +236,10 @@ def _is_nested_block_key(fm: str, key: str) -> bool:
         return False
     if first_line[0] in (' ', '\t'):
         return True
-    # An unindented block sequence item (`- ...`) at column 0 is also a
-    # nested block value, not a sibling top-level key — no legal frontmatter
-    # key starts with `-`, so this cannot collide with a following sibling.
     return first_line[0] == '-'
 
 
 def _raise_nested_block_guard(fn_name: str, key: str) -> None:
-    """Shared raise for the nested-block guard in ``replace_fm_field``/
-    ``remove_fm_field`` — same defensive posture as the block-scalar guard
-    (the Staff Engineer F4): a mechanical refusal, not a comment a future caller has to
-    read."""
     raise ValueError(
         f'{fn_name}: field "{key}" holds a nested YAML block '
         f'(sequence-of-mappings, e.g. gate_evidence:) — mutating only the key '
@@ -512,13 +249,6 @@ def _raise_nested_block_guard(fn_name: str, key: str) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Block-scalar read/append — the companion to replace_fm_field's refusal
-# ---------------------------------------------------------------------------
-
-#: A block-scalar header: the ``|`` / ``>`` style byte, then the optional
-#: explicit-indentation digit and chomping indicator in EITHER order (YAML
-#: 1.2 §8.1.1 permits ``|2-`` and ``|-2`` alike), then an optional trailing
 #: comment. Anchored whole so a value that merely CONTAINS a pipe cannot match.
 _BLOCK_SCALAR_HEADER_RE = re.compile(
     r'^(?P<style>[|>])'
@@ -597,23 +327,12 @@ def read_fm_block_scalar(fm: str, key: str) -> Optional[BlockScalar]:
     explicit = hm.group('indent') or hm.group('indent_b')
     chomp = hm.group('chomp_a') or hm.group('chomp_b')
 
-    # `_fm_key_line_pattern`'s trailing `.*$` already consumed any `\r` as
     # part of the key line (`.` matches `\r`; MULTILINE `$` matches before
-    # `\n`), so `rest` can only ever begin with the bare `\n`. Do not
-    # "restore" a `\r\n` branch here — it would be unreachable and would
-    # imply a case that cannot occur.
     rest = fm[m.end():]
     if rest.startswith('\n'):
         rest = rest[1:]
     body_start = len(fm) - len(rest)
 
-    # The indentation PREFIX, not a width — and the collector matches on it
-    # rather than slicing by its length. De-indenting with `ln[len(pad):]`
-    # against a line that does NOT carry that exact prefix eats real content
-    # silently: an under-indented continuation (`    one` then `  two`) read
-    # back as `'o'`, and a `|2` header over a tab-indented body read `\tone`
-    # back as `'ne'`. A line whose indentation does not match is where the
-    # block ENDS, which is also what a conforming YAML reader does with it.
     pad: Optional[str] = ' ' * int(explicit) if explicit is not None else None
     kept: list[str] = []
     for line in rest.splitlines(keepends=True):
@@ -631,11 +350,6 @@ def read_fm_block_scalar(fm: str, key: str) -> Optional[BlockScalar]:
     if pad is None:
         pad = '  '
 
-    # Under a `+` (keep) chomping indicator trailing blank lines ARE part of
-    # the scalar's value, so the block ends after them and they belong in
-    # `lines`. Under `-`/none they are document filler between this field and
-    # the next, and both the body and the append point stop before them.
-    # One rule, applied to both `lines` and `end_offset` together.
     if chomp != '+':
         while kept and not kept[-1].strip():
             kept.pop()
@@ -643,12 +357,6 @@ def read_fm_block_scalar(fm: str, key: str) -> Optional[BlockScalar]:
     consumed = sum(len(line) for line in kept)
     raw = [line.rstrip('\r\n') for line in kept]
 
-    # The terminator of the BLOCK's own lines. Scanning the whole document
-    # prefix instead would let one earlier CRLF field dictate the ending
-    # appended into an otherwise LF-consistent block. Policy on a block with
-    # mixed internal endings: ANY CRLF line wins. Deliberately asymmetric —
-    # appending LF into a CRLF-majority block reads as a new defect, while
-    # appending CRLF into a mixed block only matches what is already there.
     newline = '\r\n' if any(ln.endswith('\r\n') for ln in kept) else '\n'
 
     return BlockScalar(
@@ -662,28 +370,6 @@ def read_fm_block_scalar(fm: str, key: str) -> Optional[BlockScalar]:
 
 
 def append_fm_block_scalar_line(fm: str, key: str, line: str) -> str:
-    """Append *line* as a new line inside ``key:``'s existing block scalar.
-
-    The operation ``replace_fm_field`` refuses. That refusal is correct and
-    stays: rewriting a multi-line value as one line corrupts the document.
-    Appending is a different operation with a well-defined answer, so it
-    gets its own function rather than a flag that softens the guard.
-
-    Under a FOLDED (``>``) block, a bare appended line would be folded into
-    the preceding line by any conforming YAML reader — space-joined, not
-    line-separated. So a blank line is emitted first, which is how a folded
-    scalar spells a real line break. A literal (``|``) block needs no such
-    separator.
-
-    Idempotent in the sense its callers need: appending a line the block
-    already ends with returns *fm* unchanged.
-
-    Raises ``ValueError`` when the field is absent or is not a block scalar
-    — use ``replace_fm_field`` for a single-line value, and
-    ``insert_fm_field`` for an absent one. Raises ``ValueError`` when *line*
-    is itself multi-line; splice the caller's lines one at a time so each
-    one's indentation is this function's decision, not the caller's.
-    """
     if '\n' in line or '\r' in line:
         raise ValueError(
             f'append_fm_block_scalar_line: field "{key}" — *line* must be a '
@@ -703,13 +389,6 @@ def append_fm_block_scalar_line(fm: str, key: str, line: str) -> str:
     newline = block.newline
     pad = block.pad
 
-    # `end_offset` normally sits one PAST the last body line's terminator, so
-    # the appended text carries its own trailing break rather than a leading
-    # one — a leading break would land a blank line inside the block and push
-    # the following field's own newline out of the document. The exception is
-    # a final body line with no terminator at all (only reachable when the
-    # block ends the string), where appending without a leading break would
-    # glue the new line onto the end of the previous one.
     addition = '' if fm[:block.end_offset].endswith(('\n', '\r')) else newline
     if block.style == '>' and block.lines and block.lines[-1].strip():
         addition += newline
@@ -717,10 +396,6 @@ def append_fm_block_scalar_line(fm: str, key: str, line: str) -> str:
 
     return fm[:block.end_offset] + addition + fm[block.end_offset:]
 
-
-# ---------------------------------------------------------------------------
-# replace_fm_field
-# ---------------------------------------------------------------------------
 
 def replace_fm_field(fm: str, key: str, v: object, *, numeric_quoting: bool = False) -> str:
     """Replace the value of an existing ``key:`` line in frontmatter text.
@@ -764,12 +439,6 @@ def replace_fm_field(fm: str, key: str, v: object, *, numeric_quoting: bool = Fa
     current = read_fm_field(fm, key)
     if current is not None and (current.startswith('>') or current.startswith('|')):
         truncated = current[:40] + '...' if len(current) > 40 else current
-        # The refusal stands; its ADVICE was the defect. "Fix the frontmatter
-        # manually" was true only while no tool could touch this shape at all
-        # — it now names a hand-edit as the remedy for a field whose whole
-        # point is machine attribution, which is the unattributable-stamp
-        # anti-pattern the callers exist to prevent. Names the append verb
-        # instead: one fact, one terse alternative (guard-messaging register).
         raise ValueError(
             f'replace_fm_field: field "{key}" uses a block-scalar YAML value '
             f'("{truncated}") — a single-line replace would truncate it. '
@@ -855,34 +524,17 @@ def replace_fm_field_raw(fm: str, key: str, raw_value: str) -> str:
         old_value, comment_suffix = _split_trailing_comment(stripped)
 
         if comment_suffix == '':
-            # No trailing comment on the old line at all — byte-identical to
-            # this function's pre-fix behaviour: replay whatever horizontal
-            # whitespace already followed the colon verbatim (a
-            # present-but-empty `key:` with no comment synthesizes the
-            # canonical single space, same as before).
             sep = leading_ws if leading_ws else ' '
             new_rest = sep + raw_value
         elif old_value == '':
-            # Comment-only line (`key:  # nothing yet`, no real value) — the
-            # old separator space was doing double duty as pre-comment
-            # padding; synthesize the canonical single-space separator for
-            # the new value and re-home that padding in front of the
-            # preserved comment.
             new_rest = ' ' + raw_value + leading_ws + comment_suffix
         else:
             new_rest = leading_ws + raw_value + comment_suffix
 
-        # `cr` re-emits the line's own trailing `\r`, so rewriting one line
-        # of a CRLF document cannot leave it with mixed line endings.
         return prefix + new_rest + cr
 
-    # A lambda/function avoids backslash interpretation in the replacement string
     return pattern.sub(_sub, fm)
 
-
-# ---------------------------------------------------------------------------
-# insert_fm_field
-# ---------------------------------------------------------------------------
 
 def insert_fm_field(
     fm: str,
@@ -892,36 +544,10 @@ def insert_fm_field(
     *,
     numeric_quoting: bool = False,
 ) -> str:
-    """Insert ``key: value`` into frontmatter text.
-
-    Two variants unified via the optional ``after_key`` parameter:
-
-    **Anchored** (``after_key`` given): insert the new line immediately after the
-    line matching ``after_key:``.  If ``after_key`` is not found in the text,
-    falls back to append-at-end.  Matches the 4-arg ``insertFmField`` in
-    handoff-transition.js and stamp-shipped-in.js.
-
-    **Append-only** (``after_key=None``): trim trailing whitespace and append
-    ``key: value\\n``.  Matches the 2-arg ``insertFmField`` in
-    normalize-handoff-frontmatter.js.
-
-    ``numeric_quoting`` is forwarded to ``serialize_yaml_scalar`` — set True when
-    writing commit SHAs that may be all-digit (stamp-shipped-in the Staff Engineer F0).
-
-    Negative-spec (2026-07-28, CRLF): the inserted line adopts the line ending
-    of the document it lands in — the anchor line's own terminator on the
-    anchored path, the last existing line's on the append path — so inserting
-    into a CRLF-authored document cannot leave it with MIXED line endings. The
-    anchored half became newly reachable on CRLF with that release's
-    ``(?=[ \\t]|\\r?$)`` widening: before it, a present-but-empty
-    ``after_key:\\r\\n`` did not match at all and silently fell through to
-    append-at-end.
-    """
     serialized = serialize_yaml_scalar(v, numeric_quoting=numeric_quoting)
     new_line = f'{key}: {serialized}'
 
     if after_key is not None:
-        # Anchored variant — boundary lookahead consistent with read_fm_field
         after_pattern = re.compile(
             r'^' + re.escape(after_key) + r':(?=[ \t]|\r?$).*$',
             re.MULTILINE,
@@ -929,20 +555,11 @@ def insert_fm_field(
         m = after_pattern.search(fm)
         if m:
             insert_at = m.end()
-            # `.*$` stops before the `\n` but AFTER any `\r`, so the anchor line
-            # keeps its own terminator; the NEW line borrows the trailing `\n`
-            # already in the text and therefore needs the matching `\r` re-emitted.
             cr = '\r' if m.group(0).endswith('\r') else ''
             return fm[:insert_at] + '\n' + new_line + cr + fm[insert_at:]
-        # after_key absent — fall through to append (same as JS behaviour)
 
-    # Append-only (or anchored fallback).
     # The line ending is detected on the ORIGINAL `fm`, never on the rstrip()ed
-    # text: rstrip() eats the trailing `\r\n`, so a document whose only CRLF was
-    # its terminator (`'title: T\r\n'`, and every single-line CRLF frontmatter)
-    # was misdetected as LF — and because `trimmed + eol` re-supplies the
     # stripped ending, the existing last line was silently DOWNGRADED to LF too,
-    # contradicting this function's own mixed-endings contract above.
     eol = '\r\n' if '\r\n' in fm else '\n'
     trimmed = fm.rstrip()
     return trimmed + eol + new_line + eol
@@ -979,45 +596,13 @@ def insert_fm_field_raw(fm: str, key: str, raw_value: str, after_key: str | None
             insert_at = m.end()
             cr = '\r' if m.group(0).endswith('\r') else ''
             return fm[:insert_at] + '\n' + f'{key}: {raw_value}' + cr + fm[insert_at:]
-        # after_key absent — fall through to append (same as insert_fm_field)
 
     eol = '\r\n' if '\r\n' in fm else '\n'
     trimmed = fm.rstrip()
     return trimmed + eol + f'{key}: {raw_value}' + eol
 
 
-# ---------------------------------------------------------------------------
-# remove_fm_field
-# ---------------------------------------------------------------------------
-
 def remove_fm_field(fm: str, key: str) -> str:
-    """Remove the ``key: …`` line from frontmatter text, including its trailing newline.
-
-    Port of ``removeFmField`` from DoE-claude ``bin/memo-transition.js:126-132``.
-
-    The boundary lookahead ``(?=[ \\t]|\\r?$)`` prevents ``picked_up_by`` from
-    matching ``picked_up_by_x:`` (same discipline as ``read_fm_field``). The
-    ``\\n?`` makes removal safe when the key is the last line of the frontmatter
-    block (no trailing newline present). Uses ``re.escape(key)`` for sibling
-    consistency with ``read_fm_field``, ``replace_fm_field``, and
-    ``insert_fm_field``. Returns the frontmatter text unchanged when the key is
-    absent (no-op).
-
-    Block-scalar guard (mirrors ``replace_fm_field``): raises ``ValueError`` when
-    the current value starts with ``>`` or ``|`` — the pattern ``.*$\\n?`` removes
-    only the key line, silently orphaning indented continuation lines.
-
-    Nested-block guard (the Staff Engineer F4, AC11): raises the same ``ValueError`` when the
-    current value reads back empty and its next line is indented — the
-    ``gate_evidence:``-shaped sequence-of-mappings case the block-scalar guard
-    above does not cover (it reads back as ``""``, not a ``>``/``|`` prefix). Use
-    ``remove_fm_nested_field`` for that shape instead.
-
-    Spec backlink: coordinator/bin/memo-transition.js:126-132 (removeFmField).
-    """
-    # block-scalar guard mirrors replace_fm_field.
-    # Removing only the key line of a block-scalar orphans indented continuation
-    # lines, silently corrupting the frontmatter.
     current = read_fm_field(fm, key)
     if current is not None and (current.startswith('>') or current.startswith('|')):
         truncated = current[:40] + '...' if len(current) > 40 else current
@@ -1034,10 +619,6 @@ def remove_fm_field(fm: str, key: str) -> str:
     )
     return pattern.sub('', fm)
 
-
-# ---------------------------------------------------------------------------
-# _append_blocking_note / _retire_gate_dependency
-# ---------------------------------------------------------------------------
 
 def _append_blocking_note(fm: str, note: str, anchor_key: str) -> str:
     """Append ``note`` onto ``blocking_notes``, never overwriting existing prose.
@@ -1130,41 +711,10 @@ def _append_blocking_note(fm: str, note: str, anchor_key: str) -> str:
         return insert_fm_field(fm, "blocking_notes", note, anchor_key)
     if existing_notes:
         return replace_fm_field(fm, "blocking_notes", f"{existing_notes} | {note}")
-    # Present but empty in any of its three shapes — fill the existing line
-    # rather than inserting a duplicate key alongside it.
     return replace_fm_field(fm, "blocking_notes", note)
 
 
 def _retire_gate_dependency(fm: str) -> str:
-    """Retire ``gate_dependency`` into ``blocking_notes``, then strip it.
-
-    The single primitive behind every gate_dependency-full-strip call site
-    (C8, AC11): the schema's ready_to_fire→gate_dependency-forbidden if/then
-    rule makes destruction the only legal way to reach ready_to_fire, but
-    destruction with no history retention silently loses the prose. This
-    function makes the destination legal AND non-destructive: it APPENDS the
-    current ``gate_dependency`` value onto ``blocking_notes`` (never
-    overwrites an existing note — a node may already carry advisory prose
-    unrelated to this gate) and only then removes ``gate_dependency`` via
-    ``remove_fm_field``.
-
-    ``blocking_notes`` is a plain advisory `string` schema property, never
-    read by the resolver — landing here is legal at every deployment_state,
-    including ready_to_fire.
-
-    No-op (returns ``fm`` unchanged, but still routes through
-    ``remove_fm_field`` for its no-op-when-absent behaviour) when
-    ``gate_dependency`` is absent — safe to call unconditionally at a
-    destroy-site that previously called ``remove_fm_field(fm,
-    "gate_dependency")`` directly.
-
-    Uses ``read_fm_field_unquoted`` to extract the retired value (so a
-    quoted on-disk scalar doesn't carry its quotes into the appended prose)
-    and delegates the write to ``_append_blocking_note`` (so the combined
-    string is re-quoted correctly by ``serialize_yaml_scalar`` on write,
-    regardless of either half's original quoting, and so the append rule
-    itself lives in exactly ONE place — see that function).
-    """
     current_gate_dep = read_fm_field_unquoted(fm, "gate_dependency")
     if current_gate_dep is None:
         return remove_fm_field(fm, "gate_dependency")
@@ -1173,28 +723,7 @@ def _retire_gate_dependency(fm: str) -> str:
     return remove_fm_field(fm, "gate_dependency")
 
 
-# ---------------------------------------------------------------------------
-# read_fm_nested_field / write_fm_nested_field / remove_fm_nested_field
-#
-# The nested-block counterpart of read_fm_field/replace_fm_field/
-# remove_fm_field, for a key whose value is an indented YAML
-# sequence-of-mappings (gate_evidence:'s shape — a "- kind: ...\n  repo: ..."
-# block under the key line) rather than a single-line scalar. AC11 /
-# eng-director F1 (break-class): the only prior nested field, carried_items,
-# is read-only (full-YAML-load, never mutated by these primitives), so there
-# was no existing writer to extend.
-# ---------------------------------------------------------------------------
-
 def read_fm_nested_field(fm: str, key: str) -> str | None:
-    """Return ``key:``'s full indented continuation block, or ``None`` if
-    ``key:`` is absent entirely.
-
-    Returns ``''`` (not ``None``) when the key is present with no continuation
-    lines — an ordinary empty/single-line field — matching ``read_fm_field``'s
-    absent-vs-empty distinction. The returned text is the raw on-disk block
-    (entries only, key line excluded), suitable for round-tripping through
-    ``write_fm_nested_field``.
-    """
     loc = _locate_nested_block(fm, key)
     if loc is None:
         return None
@@ -1203,18 +732,6 @@ def read_fm_nested_field(fm: str, key: str) -> str | None:
 
 
 def write_fm_nested_field(fm: str, key: str, block_text: str) -> str:
-    """Insert or replace ``key:``'s nested block value with ``block_text``.
-
-    ``block_text`` is the raw indented block (e.g.
-    ``'  - kind: test-node-id\\n    ref: abc\\n'``), key line excluded — a
-    trailing newline is added if missing. When ``key:`` already exists, its
-    key line and entire prior continuation block are replaced; when absent,
-    ``key:\\n`` plus the block is appended, matching ``insert_fm_field``'s
-    append-only convention.
-
-    Negative-spec: does not validate ``block_text``'s YAML shape — callers
-    supply already-serialized entries (this module has no YAML dumper).
-    """
     if block_text and not block_text.endswith('\n'):
         block_text += '\n'
     loc = _locate_nested_block(fm, key)
@@ -1227,13 +744,6 @@ def write_fm_nested_field(fm: str, key: str, block_text: str) -> str:
 
 
 def remove_fm_nested_field(fm: str, key: str) -> str:
-    """Remove ``key:``'s line and its entire indented continuation block.
-
-    The nested-block counterpart of ``remove_fm_field`` — unlike that
-    function, this is safe to call on a ``gate_evidence:``-shaped value; it
-    removes the key line AND every continuation line beneath it, so nothing
-    is orphaned. No-op (returns ``fm`` unchanged) when the key is absent.
-    """
     loc = _locate_nested_block(fm, key)
     if loc is None:
         return fm
@@ -1241,16 +751,7 @@ def remove_fm_nested_field(fm: str, key: str) -> str:
     return fm[:key_start] + fm[block_end:]
 
 
-# ---------------------------------------------------------------------------
-# rebuild
-# ---------------------------------------------------------------------------
-
 def rebuild(split: FrontmatterSplit, fm_text: str) -> str:
-    """Reassemble a document from a ``FrontmatterSplit`` and updated frontmatter.
-
-    Ensures exactly one newline before the closing ``---``. Preserves preamble
-    and body verbatim — producing byte-identical output outside the mutated lines.
-    """
     fm_normalized = fm_text if fm_text.endswith('\n') else fm_text + '\n'
     return (
         (split.preamble or '')
@@ -1261,23 +762,10 @@ def rebuild(split: FrontmatterSplit, fm_text: str) -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# canonical plan-body hash — shared by pickup_assemble and review_assemble
-# ---------------------------------------------------------------------------
-
 _BODY_DELIMITER_RE = re.compile(r'^---[ \t]*$')
 
 
 def frontmatter_body_text(file_text: str) -> str:
-    """Everything below the SECOND ``---`` frontmatter delimiter line — pure-
-    Python port of the canonical recipe's awk half (``awk '/^---[[:space:]]*$/
-    {fm++; next} fm>=2{print}'``). Every line that is ``---`` alone (optional
-    trailing horizontal whitespace) increments the counter and is itself
-    never emitted; printed lines are re-terminated with ``\\n`` regardless of
-    the source line's own terminator, mirroring awk's ``print`` (content +
-    ``ORS``), so a file lacking a trailing newline still hashes identically
-    to the awk pipeline's output.
-    """
     fm_count = 0
     out_lines: list[str] = []
     for line in file_text.splitlines():
@@ -1290,15 +778,6 @@ def frontmatter_body_text(file_text: str) -> str:
 
 
 def git_blob_sha1(text: str) -> Optional[str]:
-    """The literal git blob-hash algorithm — ``sha1("blob " + len(content) +
-    "\\0" + content)`` — computed in-process rather than shelled out to a
-    real ``git hash-object --stdin``. Not a heuristic approximation; this is
-    the object-header format git's own hash-object documents. UTF-8
-    encoding, no platform newline translation, matching a real
-    ``git hash-object --stdin``'s binary-stdin guarantee on Windows. Returns
-    ``None`` only on an encoding failure — degrades the caller's gate to
-    absent, never a fabricated hash.
-    """
     try:
         data = text.encode('utf-8')
     except UnicodeEncodeError:
@@ -1308,14 +787,4 @@ def git_blob_sha1(text: str) -> Optional[str]:
 
 
 def canonical_body_sha(file_text: str) -> Optional[str]:
-    """The shared plan-body-hash recipe: ``git_blob_sha1(frontmatter_body_text
-    (file_text))``. Byte-identical to a real ``git hash-object --stdin`` over
-    the plan body (everything below the second ``---`` delimiter);
-    frontmatter fields never enter the hash — only a material change to the
-    plan BODY invalidates a previously-computed stamp. Both
-    `coordinator_core.pickup_brief.compute_execution_stamp_match` (the
-    read-side checker) and `coordinator_core.review_assemble.exec_auth_stamp.
-    stamp_execution_authorization` (the write-side stamper) route through
-    this one recipe.
-    """
     return git_blob_sha1(frontmatter_body_text(file_text))

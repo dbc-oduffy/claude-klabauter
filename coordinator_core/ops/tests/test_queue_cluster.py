@@ -39,17 +39,10 @@ from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
-
-
-# ---------------------------------------------------------------------------
-# Repo fixture -- a bare tmp_path, no git required (records_query spawns none)
-# ---------------------------------------------------------------------------
 
 
 def _seed_debt(root, name: str, *, title: str, tags=None) -> None:
@@ -128,22 +121,10 @@ def _init_repo(root) -> None:
     subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True, capture_output=True, **no_console_creationflags())
 
 
-# ---------------------------------------------------------------------------
 # Signal enum pin -- same mechanical teeth as C2's STOP_WORDS pin
-# ---------------------------------------------------------------------------
 
 
 def test_signal_enum_pinned() -> None:
-    """The signal enum's names AND order are frozen.
-
-    DoE's `/debt-triage` Step 6b suppresses the "directory" signal by literal
-    string comparison against this exact value. A rename or re-case here does
-    not error on their side -- it silently stops matching, and the next
-    triage run hands their ceremony one un-suppressed, oversized cluster as a
-    themed-baton candidate instead of the disposal their policy intended. If
-    the signal set genuinely needs to change, coordinate it with
-    claude-central-em via a cross-repo memo first -- do not rename and ship.
-    """
     assert ALL_SIGNALS == ("tag", "directory", "keyword"), (
         "queue.cluster's signal enum changed -- this is a cross-repo contract "
         "break for claude-central-em's /debt-triage Step 6b, which string-"
@@ -153,11 +134,6 @@ def test_signal_enum_pinned() -> None:
     assert SIGNAL_TAG == "tag"
     assert SIGNAL_DIRECTORY == "directory"
     assert SIGNAL_KEYWORD == "keyword"
-
-
-# ---------------------------------------------------------------------------
-# Family coverage -- all three families, default signal set
-# ---------------------------------------------------------------------------
 
 
 class TestAllThreeFamilies:
@@ -185,11 +161,6 @@ class TestAllThreeFamilies:
         tag_clusters = [c for c in result if c["signal"] == "tag"]
         assert len(tag_clusters) == 1
         assert tag_clusters[0]["value"] == "sprocket"
-
-
-# ---------------------------------------------------------------------------
-# Envelope shape -- id/path/title present, empty result is [] never None
-# ---------------------------------------------------------------------------
 
 
 class TestEnvelopeShape:
@@ -225,19 +196,13 @@ class TestCommonDirRepoRootShape:
         for i in range(3):
             _seed_debt(tmp_path, f"entry-{i}.yaml", title=f"Debt entry {i}", tags=["widget"])
         common_dir = tmp_path / ".git"
-        assert common_dir.is_dir()  # sanity: standard (non-worktree) layout
+        assert common_dir.is_dir()
 
         result = _handler({"family": "debt-backlog"}, repo_root=common_dir)
         tag_clusters = [c for c in result if c["signal"] == "tag"]
         assert len(tag_clusters) == 1
         assert tag_clusters[0]["value"] == "widget"
         assert len(tag_clusters[0]["items"]) == 3
-
-
-# ---------------------------------------------------------------------------
-# Signal-set parameter -- default == today's three-signal behavior;
-# a caller-supplied subset suppresses the excluded signals entirely.
-# ---------------------------------------------------------------------------
 
 
 class TestSignalSetParameter:
@@ -273,10 +238,7 @@ class TestSignalSetParameter:
         assert raised, "an unrecognized signal name must raise InvalidSignalError"
 
 
-# ---------------------------------------------------------------------------
 # Caller-supplied floor -- default MIN_CLUSTER_SIZE == 3; a lower floor
-# surfaces smaller clusters when explicitly requested.
-# ---------------------------------------------------------------------------
 
 
 class TestFloorParameter:

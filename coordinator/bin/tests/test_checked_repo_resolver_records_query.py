@@ -116,9 +116,6 @@ class TestResolveRepoRootBranching(unittest.TestCase):
         self.assertEqual(root, "/repo/unresolved")
 
     def test_unresolved_with_no_root_falls_back_to_cwd(self):
-        """No git root at all -- the checked resolver returns `None` --
-        must degrade to `os.getcwd()`, exactly mirroring the predecessor's
-        git-failure branch (never raise, never refuse)."""
         v = _verdict("UNRESOLVED", None, sid=None)
         with mock.patch.object(
             records_query,
@@ -163,14 +160,6 @@ class TestResolveRepoRootBranching(unittest.TestCase):
 
 
 class TestResolveFromRepoBranching(unittest.TestCase):
-    """`cli_shared.resolve_from_repo`'s own bind-and-branch shape. Mocks
-    `cli_shared.resolve_checked_repo_root` (the name bound into
-    `cli_shared`'s own namespace by its `from repo_identity import
-    resolve_checked_repo_root` line) plus the machine-local registry reads
-    it fans out to, so these assert only the branch this call site
-    authored -- not C1's resolver internals (that's
-    `test_checked_repo_resolver.py`'s job) and not `em_id_for_root`'s own
-    resolution ladder (unrelated to this slice)."""
 
     def test_match_returns_silently(self):
         with mock.patch.object(cli_shared, "machine_local_repos_keys", return_value=[]), \
@@ -239,11 +228,6 @@ class TestResolveFromRepoBranching(unittest.TestCase):
 
 
 class TestGitRootBranching(unittest.TestCase):
-    """`git_hook_install._git_root`'s own bind-and-branch shape. Mocks
-    `repo_identity.resolve_checked_repo_root` (`_git_root` does `from
-    repo_identity import resolve_checked_repo_root` fresh inside the
-    function body, so the name to patch is on the source module, not
-    bound into `git_hook_install`'s namespace at import time)."""
 
     def test_match_returns_root_silently(self):
         with mock.patch.object(

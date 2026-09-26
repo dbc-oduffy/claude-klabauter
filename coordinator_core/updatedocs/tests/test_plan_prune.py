@@ -1,8 +1,3 @@
-"""
-Tests for coordinator_core.updatedocs.plan_prune.
-
-Spec backlink: pln-bucket-2-extraction-four-deter-e121fa (chunk C3)
-"""
 
 from __future__ import annotations
 
@@ -35,9 +30,6 @@ def _write_plan(root: Path, name: str, fm_lines: list[str], age_days: float) -> 
 
 
 def test_no_status_key_lands_in_indeterminate_never_prunable(tmp_path):
-    """The exact failure this row exists to prevent: collapsing a plan with
-    no `status:` key into either prunable or retained instead of a distinct
-    indeterminate bucket."""
     _write_plan(
         tmp_path,
         "2026-01-01-no-status-plan.md",
@@ -181,11 +173,6 @@ def test_absent_plans_dir_raises_rather_than_returning_a_clean_empty_result(tmp_
 
 
 def test_plan_vanishing_between_glob_and_stat_is_indeterminate_not_dropped(tmp_path, monkeypatch):
-    """The three buckets must account for every file the glob returned.
-
-    A plan that vanishes mid-walk used to be dropped from all three, so the
-    totals silently failed to reconcile with no evidence trail for the gap.
-    """
     plans = tmp_path / "docs" / "plans"
     plans.mkdir(parents=True)
     (plans / "vanisher.md").write_text("---\nstatus: implemented\n---\n", encoding="utf-8")

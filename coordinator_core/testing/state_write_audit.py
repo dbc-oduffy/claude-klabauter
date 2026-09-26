@@ -91,21 +91,13 @@ from typing import Any, Optional, Sequence
 
 __all__ = ["classify_event", "pytest_addoption", "pytest_configure", "pytest_unconfigure"]
 
-#: Mode characters that mean "this open call can write". `r`/`rb`/`rt` alone
-#: never appear here; `+` covers `r+`/`w+`/`a+`/`x+`, all of which can write.
 _WRITE_MODE_CHARS = frozenset({"w", "a", "x", "+"})
 
 #: `os.open`'s write-implying flag bits. `O_RDONLY` is 0 and is deliberately
-#: absent — a flags value with none of these bits set is a read.
 _WRITE_O_FLAG_BITS = (
     os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
 )
 
-#: Basenames that are never the attributed writer even though they live under
-#: `coordinator_core` and hold the raw primitives themselves: this plugin
-#: (would otherwise attribute its own record-append `os.write` frame — moot
-#: since `os.write` is unaudited, but named for the reader), the claiming
-#: seam, and the two primitives it delegates to. See D1/D3 in the plan.
 _NEVER_ATTRIBUTED_BASENAMES = frozenset(
     {
         "state_write_audit.py",
@@ -122,7 +114,6 @@ _out_fd: Optional[int] = None
 
 
 def _has_state_component(path: str) -> bool:
-    """Whether `path` has a literal `state` path component (D3's filter)."""
     normalized = str(path).replace("\\", "/")
     return "state" in normalized.split("/")
 
@@ -136,10 +127,8 @@ def _is_test_like_frame(normalized: str) -> bool:
 
 
 def _is_attributable_coordinator_core_frame(filename: str) -> bool:
-    """Whether `filename` is a `coordinator_core` non-test frame D3 will attribute to."""
     normalized = str(filename).replace("\\", "/")
     if "coordinator_core/" not in (normalized + "/"):
-        # Accept both "coordinator_core/..." and ".../coordinator_core/...".
         if not normalized.startswith("coordinator_core/") and "/coordinator_core/" not in normalized:
             return False
     basename = normalized.rsplit("/", 1)[-1]
@@ -153,21 +142,6 @@ def _is_attributable_coordinator_core_frame(filename: str) -> bool:
 def classify_event(
     event: str, args: Sequence[Any], frames: Sequence[str]
 ) -> Optional[dict]:
-    """Classify one audited `open`/`os.rename` event as a state write, or not.
-
-    `args` is the raw audit-hook argument tuple for `event`
-    (`(path, mode, flags)` for `open`; `(src, dst)` for `os.rename`, which also
-    covers `os.replace`/`Path.rename`/`Path.replace`). `frames` is a sequence
-    of calling-frame filenames, innermost first, as the hook callback collects
-    them via `sys._getframe` — never collected here, so this function is
-    exercised over synthetic tuples with no interpreter frame walking.
-
-    Returns `None` for a read, a non-`state` path, or a write with no
-    attributable `coordinator_core` non-test frame anywhere on the stack.
-    Otherwise returns a JSON-serialisable record naming the event, the target
-    path, and the innermost/outermost attributable frames (which may be the
-    same frame, when only one qualifies).
-    """
     if event == "open":
         if len(args) < 1:
             return None
@@ -217,12 +191,6 @@ def classify_event(
 
 
 def _collect_frame_filenames() -> Sequence[str]:
-    """Walk the caller's stack, innermost first, collecting `co_filename`s.
-
-    Starts at the audit-hook callback's own caller (skipping this function and
-    `_audit_hook` itself) so the collected frames begin at whatever Python code
-    made the audited call.
-    """
     frames = []
     frame = sys._getframe(2) if hasattr(sys, "_getframe") else None
     while frame is not None:
@@ -232,13 +200,6 @@ def _collect_frame_filenames() -> Sequence[str]:
 
 
 def _audit_hook(event: str, args: tuple) -> None:
-    """`sys.addaudithook` callback. Hot for EVERY audited event in the process.
-
-    Filters on event name first (an identity/frozenset-membership compare,
-    same discipline as `telemetry/spawn_counter.py`) before doing any frame
-    walk or classification, and never raises past its own `try` — a broken
-    audit instrument must not break the run it is instrumenting.
-    """
     if event != "open" and event != "os.rename":
         return
     try:
@@ -267,7 +228,6 @@ def pytest_addoption(parser) -> None:
 
 
 def pytest_configure(config) -> None:
-    """Install the one-shot audit hook. Only runs when pytest loads THIS module as a plugin."""
     global _hook_installed, _out_fd
     if _hook_installed:
         return
@@ -275,9 +235,6 @@ def pytest_configure(config) -> None:
     os.makedirs(out_dir, exist_ok=True)
     worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
     out_path = os.path.join(out_dir, f"{worker_id}.jsonl")
-    # Opened BEFORE the hook is installed: a record write inside the hook
-    # uses this already-open fd via os.write, never a second open() call,
-    # which would otherwise recurse through the hook it is running in.
     _out_fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0), 0o644)
     try:
         sys.addaudithook(_audit_hook)
@@ -290,7 +247,6 @@ def pytest_configure(config) -> None:
 
 
 def pytest_unconfigure(config) -> None:
-    """Flush and close the output fd. Never removes the audit hook (cannot be removed)."""
     global _out_fd
     if _out_fd is not None:
         try:
@@ -301,5 +257,4 @@ def pytest_unconfigure(config) -> None:
 
 
 def audit_hook_installed() -> bool:
-    """Whether `pytest_configure` installed the hook in this process."""
     return _hook_installed

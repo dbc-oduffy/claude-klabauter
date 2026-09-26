@@ -1,13 +1,3 @@
-"""
-coordinator_core.benchmarks.tests.test_fact_layer_hot_path — coverage for the
-fact-layer hot-path renderer (`fl-core-04` C2).
-
-Exercises over FIXTURE JSONL written to a tmp_path sink, never the live
-op-latency/ambient-load corpus — the module docstring's own contract ("the
-test does not depend on what the box happened to be doing", task body).
-
-Spec backlink: docs/plans/2026-08-27-the-fact-layer-is-measured-on-the-one-hot-path.md § C2
-"""
 
 from __future__ import annotations
 
@@ -24,11 +14,6 @@ def _write_jsonl(path: Path, rows: list) -> None:
     with open(path, "w", encoding="utf-8") as fh:
         for row in rows:
             fh.write(json.dumps(row) + "\n")
-
-
-# ---------------------------------------------------------------------------
-# Structural leg — pure, no I/O.
-# ---------------------------------------------------------------------------
 
 
 def test_structural_counts_cover_every_fact():
@@ -57,29 +42,17 @@ def test_session_magnitude_attributed_is_one_always_spawn_zero_reads():
 
 def test_session_diff_brightline_has_conditional_spawns_above_the_floor():
     c = flhp.structural_counts_for("session_diff_brightline")
-    # Three always-spawns (shared cached commits, novel_loc_split, started_at
-    # range) plus at least one conditional spawn (trailer-unreliable path).
     assert c.git_spawns_min == 3
     assert c.git_spawns_max > c.git_spawns_min
 
 
 def test_per_item_sites_are_named_not_folded_into_a_bound():
     c = flhp.structural_counts_for("session_governing_plan")
-    assert c.per_item_notes  # at least one per-item note present
+    assert c.per_item_notes
     assert any("plan-claim" in note for note in c.per_item_notes)
 
 
-# ---------------------------------------------------------------------------
-# Timing leg — over fixture "fact_span" rows.
-# ---------------------------------------------------------------------------
-
-
 def test_read_fact_span_rows_bounded_and_filtered(tmp_path, monkeypatch):
-    """The fixture shape here is ONE ROW PER FACT, carrying a `fact` name —
-    what `session_facts._timed_fact` actually emits. The buffered
-    `{"facts": {...}}` map was the plan's preferred shape and was never built
-    (C1's `record_fact_span` docstring says why: the flush hook would have to
-    live in `quick_wrap_assemble/__init__.py`, outside C1's `writes:` scope)."""
     sink = tmp_path / "op-latency.jsonl"
     rows = [
         {
@@ -90,7 +63,7 @@ def test_read_fact_span_rows_bounded_and_filtered(tmp_path, monkeypatch):
             "elapsed_ms": 2.0,
             "outcome": "computed",
         },
-        {"kind": "complete", "op": "handoff.reconcile_open"},  # not a fact_span row
+        {"kind": "complete", "op": "handoff.reconcile_open"},
         {
             "kind": "fact_span",
             "t_start": 101.0,
@@ -99,7 +72,6 @@ def test_read_fact_span_rows_bounded_and_filtered(tmp_path, monkeypatch):
             "elapsed_ms": 9.0,
             "outcome": "computed",
         },
-        # Synthetic microbenchmark row under the same `session_facts.` prefix —
         # excluded by name, never by prefix. See PRODUCTION_FACT_ROW_NAMES.
         {
             "kind": "fact_span",
@@ -159,8 +131,6 @@ def test_compute_timing_distributions_splits_computed_and_degraded():
     assert pickup.computed_count == 2
 
     aggregate = timing["aggregate"]
-    # Row 1: 5.0 + 2.0 = 7.0 (both computed). Row 2: only pickup_kind (3.0) is
-    # computed — magnitude's degraded sample is excluded from the aggregate sum.
     assert aggregate.computed_ms == [7.0, 3.0]
 
 
@@ -168,7 +138,7 @@ def test_compute_timing_distributions_skips_malformed_rows():
     rows = [
         {"kind": "fact_span", "t_start": 1.0, "sid": "s1", "facts": "not-a-dict"},
         "not-a-dict-row",
-        {"kind": "fact_span", "t_start": 2.0, "sid": "s2"},  # missing "facts"
+        {"kind": "fact_span", "t_start": 2.0, "sid": "s2"},
     ]
     timing = flhp.compute_timing_distributions(rows)
     assert timing["aggregate"].computed_count == 0
@@ -196,11 +166,6 @@ def test_fact_timing_stats_empty_percentile_is_none():
     d = stats.as_dict()
     assert d["p50_ms"] is None
     assert d["max_ms"] is None
-
-
-# ---------------------------------------------------------------------------
-# Ambient context join — context only, never an axis.
-# ---------------------------------------------------------------------------
 
 
 def test_nearest_ambient_sample_picks_the_closest():
@@ -256,11 +221,6 @@ def test_read_ambient_samples_absent_sink_is_empty(tmp_path, monkeypatch):
     assert flhp.read_ambient_samples(tmp_path) == []
 
 
-# ---------------------------------------------------------------------------
-# Top-level render.
-# ---------------------------------------------------------------------------
-
-
 def test_render_assembles_structural_and_timing(tmp_path, monkeypatch):
     op_latency_sink = tmp_path / "op-latency.jsonl"
     _write_jsonl(
@@ -307,9 +267,6 @@ def test_render_include_ambient_false_skips_the_join(tmp_path, monkeypatch):
 
 
 def test_per_fact_rows_are_grouped_by_sid_into_a_ceremony_aggregate():
-    """The shape C1 actually emits. The aggregate must be the SUM across one
-    ceremony's facts, not one row per fact — an aggregate built per-row would
-    report the facade at the cost of its cheapest single fact."""
     rows = [
         {
             "kind": "fact_span",
@@ -361,10 +318,6 @@ def test_a_degraded_per_fact_row_lands_in_the_degraded_population():
 
 
 def test_per_fact_rows_are_grouped_by_invocation_id_when_present():
-    """`invocation_id` (state/bug-backlog/2026-08-27-fact-span-rows-cannot-
-    yield-a-per-ceremo-d9be470c2039.yaml, option (a)) must win over `sid`:
-    two ceremony invocations from the SAME session must not collapse into
-    one aggregate row when each carries its own `invocation_id`."""
     rows = [
         {
             "kind": "fact_span",

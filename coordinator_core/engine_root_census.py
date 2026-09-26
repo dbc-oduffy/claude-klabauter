@@ -120,18 +120,12 @@ from typing import Dict, List, Optional
 
 from coordinator_core._settings_home import settings_home
 
-#: Seconds per day, named so the window arithmetic below reads as intended.
 _SECONDS_PER_DAY = 86400.0
 
-#: Default window in days when a caller does not name one. Not a ruling on
-#: C14's N -- C14's exit names its own, and every report echoes the value it
-#: actually used.
 DEFAULT_WINDOW_DAYS = 7
 
 
 def series_path(sink_root: Optional[Path] = None) -> Path:
-    """Resolve the series file. `sink_root` overrides the settings home
-    (tests, and a caller deliberately scoping to another root)."""
     root = Path(sink_root) if sink_root is not None else settings_home()
     return root / "telemetry" / "engine-root-fallback-census.jsonl"
 
@@ -167,9 +161,6 @@ def record_fallback_read(
         with open(path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(line)
     except Exception:
-        # Negative-spec: an observability write must never break the commit
-        # hot path it observes. Every failure mode degrades to "not
-        # recorded" rather than propagating.
         pass
 
 
@@ -179,29 +170,6 @@ def census(
     sink_root: Optional[Path] = None,
     now: Optional[float] = None,
 ) -> dict:
-    """Read-only report of fallback-read observations, off disk evidence.
-
-    Returns a dict carrying, at minimum:
-
-      series_present     -- does the jsonl series file exist and readable.
-      series_first_ts    -- oldest recorded read, None if there has never
-                            been one.
-      series_last_ts     -- newest observation, None if never
-      total_reads        -- rows in the series
-      reads_in_window    -- rows with ts inside the last `window_days`
-      sites              -- per-site {count, first_ts, last_ts}
-      days_since_last    -- quiet stretch, None if never observed
-      window_days        -- echoed back, so the N asked cannot be lost
-
-    This report carries no verdict field. A non-zero `reads_in_window` is
-    an actionable stale-pin regression signal (see the module docstring);
-    a zero reading is not evidence of anything beyond "no stale pin was
-    observed in this window on this box" and must never be treated as a
-    close condition for anything.
-
-    Never raises: a missing, unreadable, or corrupt series degrades to
-    "never observed" rather than propagating.
-    """
     report: dict = {
         "series_present": False,
         "series_first_ts": None,
@@ -219,9 +187,6 @@ def census(
     window_start = at - (window_days * _SECONDS_PER_DAY)
     sites: Dict[str, dict] = {}
 
-    # `series_path` reaches `_settings_home.settings_home()`, which can
-    # raise on a box with no resolvable settings home; that must not
-    # propagate.
     try:
         path = series_path(sink_root)
         has_series = path.is_file()
@@ -248,17 +213,6 @@ def census(
                     site = entry.get("site")
                     ts = entry.get("ts")
                     if not isinstance(site, str) or not isinstance(ts, (int, float)):
-                        # A row we cannot place in time is counted, never
-                        # merely skipped: an undatable row lands in
-                        # `undatable_rows`, not `total_reads`/
-                        # `reads_in_window` -- it is preserved, not folded
-                        # into the main counters. A reader asking "has any
-                        # site read the fallback" must check
-                        # `unparsable_rows` and `undatable_rows` alongside
-                        # `reads_in_window`, because a torn line (a
-                        # concurrent append, an encoding error, a disk-full
-                        # truncation) can carry a live stale-pin signal that
-                        # neither main counter reflects.
                         report["undatable_rows"] += 1
                         continue
                     report["total_reads"] += 1
@@ -281,7 +235,7 @@ def census(
                     rec["first_ts"] = min(rec["first_ts"], ts)
                     rec["last_ts"] = max(rec["last_ts"], ts)
         except OSError:
-            pass  # census log unreadable; report reflects what was read so far
+            pass
 
     report["sites"] = sites
     if report["series_last_ts"] is not None:
@@ -293,9 +247,6 @@ def census(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """CLI entrypoint -- `python -m coordinator_core.engine_root_census
-    [--window-days N]`. Exit 0 always; this surface reports observations,
-    never a verdict."""
     import argparse
 
     parser = argparse.ArgumentParser(

@@ -122,9 +122,6 @@ SCHEMA_VERSION = 2
 
 
 def _read_fm(path: Path) -> dict:
-    """Best-effort frontmatter read. An unreadable/malformed file is quarantined
-    (empty dict) rather than raising — a backstop sweep must survive one bad
-    file on disk, not abort the whole scan over it."""
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -141,10 +138,6 @@ def _read_fm(path: Path) -> dict:
 
 
 def _terminal_plan_deliverable_ids(worktree_root: Path) -> dict[str, list[str]]:
-    """{deliverable_id: [plan relpath, ...]} for every docs/plans/*.md carrying
-    `status: implemented` — the exact condition `plan_status_transition._run_cascade`
-    fires the real cascade on (see that module's `_stamp_implemented` non-no-op
-    branch)."""
     out: dict[str, list[str]] = {}
     plans_dir = worktree_root / "docs" / "plans"
     if not plans_dir.is_dir():
@@ -281,8 +274,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     handoff_ids = _terminal_handoff_deliverable_ids(worktree_root)
 
     # Exact-equality plan-vs-handoff join (C6b/AC11). The SEPARATE
-    # slug-prefix-family check below stays on raw ids by design -- it exists
-    # precisely to catch a fork a declared-equivalence join would hide.
     all_ids: dict[str, list[str]] = {}
     for did, sources in plan_ids.items():
         all_ids.setdefault(did, []).extend(sources)
@@ -295,13 +286,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     divergences: list[dict[str, Any]] = []
     scan_incomplete = False
 
-    # Leg (b) of `_predicate_refusal` answers from an index built over the
-    # collect scan's own frontmatter rather than re-walking the whole
-    # live+archived corpus per candidate — the collapse
-    # `deliverable_cascade._handler` already makes (see that module's C1
-    # note). A sweep pays that per-candidate cost across EVERY deliverable_id,
-    # so the uncollapsed shape is strictly worse here than at the single-target
-    # cascade it was measured on.
     for did in sorted(all_ids):
         corpus_metas: dict[str, dict] = {}
         candidates, incomplete, _unreadable = _collect_live_candidates_for_kind(

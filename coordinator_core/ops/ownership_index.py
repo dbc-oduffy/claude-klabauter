@@ -47,17 +47,6 @@ _HANDOFF_CLAIM_CLASS = "handoff-claims"
 
 
 def _basename_index(worktree_root: Path) -> "Tuple[Dict[str, Tuple[Path, dict]], List[str]]":
-    """basename -> (path, frontmatter) built from the ONE shared walk over the
-    live+archived handoff corpus (`handoff_corpus._collect_all_handoffs_for_
-    gate_index` — spans `state/handoffs/` + `archive/handoffs/` +
-    `archive/completed/`). No second traversal happens here: every entry that
-    function returns already carries `_path`, so this is a pure re-keying pass,
-    not a walk. `scan_errors` is exactly what that call returned — non-empty
-    whenever an archive subtree could not be fully scanned, meaning a claimed
-    basename living under it may be missing from the returned index,
-    indistinguishable from "no such basename was ever claimed" without this
-    signal.
-    """
     all_handoffs, scan_errors = _collect_all_handoffs_for_gate_index(worktree_root)
 
     index: Dict[str, Tuple[Path, dict]] = {}
@@ -67,11 +56,6 @@ def _basename_index(worktree_root: Path) -> "Tuple[Dict[str, Tuple[Path, dict]],
             continue
         path = Path(raw_path)
         if path.name in index:
-            # Basenames are asserted
-            # unique elsewhere by convention (timestamp+slug), so this is
-            # unlikely to fire, but a collision across live/archive roots
-            # (e.g. a handoff duplicated during a concurrent ceremony race)
-            # would otherwise silently last-write-win with no signal at all.
             prior_path, _prior_meta = index[path.name]
             _LOG.warning(
                 "ownership_index: basename %r seen more than once during "
@@ -128,13 +112,6 @@ def build_ownership_index(
             continue
         _path, meta = entry
         mirror = meta.get("claimed_by") or meta.get("consumed_by")
-        # The frontmatter mirror is
-        # consulted here for a disagreement check only — the claim-store
-        # membership decision above (`claimed`/`basename_index.get`) is
-        # already final and unaffected by this check either way. A mismatch
-        # is exactly the staleness class this module's docstring exists to
-        # defend against, so it is surfaced (not silently accepted) rather
-        # than validated in the sense of gating the ownership decision.
         if mirror is not None and mirror != sid:
             mirror_disagreements.append(f"{basename} (mirror={mirror!r}, claim-store={sid!r})")
         owned.append(entry)

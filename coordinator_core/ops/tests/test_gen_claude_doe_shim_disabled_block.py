@@ -39,7 +39,6 @@ _SOURCE_LINES = {
 
 @pytest.mark.parametrize("family", sorted(_SOURCE_LINES))
 def test_commented_out_block_is_detected(family):
-    """The exact shape the operator produced: generated lines, each commented."""
     expected = _SOURCE_LINES[family]
     rc = "\n".join(f"# {line}" for line in expected.split("\n") if line.strip())
 
@@ -50,7 +49,6 @@ def test_commented_out_block_is_detected(family):
 
 @pytest.mark.parametrize("family", sorted(_SOURCE_LINES))
 def test_live_block_is_not_reported_as_disabled(family):
-    """An enabled block must never be flagged — it is uncommented."""
     expected = _SOURCE_LINES[family]
     rc = f"# --- coordinator claude-doe shim [generated] ---\n{expected}\n"
 
@@ -59,19 +57,12 @@ def test_live_block_is_not_reported_as_disabled(family):
 
 @pytest.mark.parametrize("family", sorted(_SOURCE_LINES))
 def test_clean_rc_is_not_reported_as_disabled(family):
-    """A never-installed rc has nothing to report — it is not a misconfiguration."""
     rc = "# my profile\nSet-Alias ll Get-ChildItem\n"
 
     assert _commented_out_source_lines(rc, _SOURCE_LINES[family]) == []
 
 
 def test_prose_mentioning_the_shim_is_not_a_false_positive():
-    """Detection is exact-match on our own generated lines, never keyword prose.
-
-    The operator's profile legitimately carries hand-written notes naming the
-    shim — including remediation notes this generator's own diagnostics
-    suggest. Flagging those would train the operator to ignore the warning.
-    """
     rc = (
         "# The shim invokes claude-doe.ps1 in-process so claude.exe is a direct child.\n"
         "# If corruption returns, run claude.exe --plugin-dir X:\\DoE-claude\\coordinator\n"
@@ -82,7 +73,6 @@ def test_prose_mentioning_the_shim_is_not_a_false_positive():
 
 
 def test_extra_comment_markers_and_indentation_still_detected():
-    """`# #` and leading whitespace are both real shapes an operator produces."""
     expected = EXPECTED_SOURCE_LINE_POWERSHELL
     first = [l for l in expected.split("\n") if l.strip()][0]
     rc = f"   ## {first}\n"
@@ -91,11 +81,6 @@ def test_extra_comment_markers_and_indentation_still_detected():
 
 
 def test_report_names_the_blast_radius_and_a_manual_action():
-    """Message register: state the consequence and give the operator the edit.
-
-    No slash command — this fires with no coordinator session available, so an
-    agentic remedy would name one that cannot run.
-    """
     report = _disabled_block_report("C:\\rc.ps1", ["# $__claude_doe_shim_base = ..."])
     text = "\n".join(report)
 

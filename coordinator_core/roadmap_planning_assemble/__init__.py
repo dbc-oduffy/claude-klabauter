@@ -134,12 +134,6 @@ from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
     build_scaffold_directive,
 )
 
-# --- Class A's eight: assembler-internal glue, never a consumed op. -------
-# Never appears in a `directives[].cli` value; never imported; never
-# invoked. Named here only as the closed vocabulary
-# `_class_a_glue_directives()` iterates to build computed `directives[]`
-# entries whose `cli` field is deliberately absent (glue, not an
-# invocation).
 CLASS_A_GLUE = (
     "apply-roadmap-seed-precondition-exemption",
     "route-to-phase1",
@@ -153,11 +147,6 @@ CLASS_A_GLUE = (
 
 ENTRY_POINTS = ("A", "B", "C", "D")
 
-# Spine/both-seam census rows this assembler reaches, mapped to the
-# corrected 13-op consumes manifest's candidate_op binding (census
-# "Consumes-manifest correction" section, 2026-08-21). Sprint-only rows
-# (residue-gate-text-subsystem-named, residue-frontmatter-fields-fill) are
-# sprint_planning_assemble's (C11), never this module's.
 _SPINE_CANDIDATE_OPS: dict[str, str] = {
     "p1.5.1-dispatch-scouts": "dispatch-cluster-scout",
     "p2.1.5-number-stubs": "roadmap-number-stubs",
@@ -170,39 +159,17 @@ _SPINE_CANDIDATE_OPS: dict[str, str] = {
 }
 
 
-# C3: the shared constructor's (C1) per-type required-flag computation for
-# this host's two emitted rows (coordinator_core/ops/doctype_hosts.py --
-# both keyed (type, ceremony="roadmap-planning"), module=this package).
-# `--sizing-object`/`--no-sizing-object` is deliberately NOT modeled as a
-# `MutexFlagPair` here: it is a `store_true`-shaped bare flag on the
-# `--no-sizing-object` leg, and the shared constructor's uniform
-# `--flag=value` emission would render it as the malformed
-# `--no-sizing-object=True` (argparse rejects an explicit argument on a
-# store_true action). It is appended verbatim, same as
-# `baton_assemble._build_directives`'s own `f"--sizing-object={x}" if x else
-# "--no-sizing-object"` ternary (§ Which shape is canonical: two donor
-# shapes, this module is the first host, not a hand-rolled third).
 _ROADMAP_BATON_FLAG_SPEC: tuple[Flag, ...] = (
     Flag("--roadmap-id", "roadmap_id", required=True),
     Flag("--stub-id", "stub_id", required=True),
 )
 
-# `--goals` is comma-joined, not repeated: `coordinator-doc-new`'s `--goals`
-# is a single `GOAL_ID[,GOAL_ID...]` string argument (`action="append"` is
-# NOT set for it, unlike `--blocks`/`--deliverable-ids`), so the shared
-# constructor's per-item repeat shape (for a list/tuple resolved value)
-# would emit `--goals=g1 --goals=g2` and the second occurrence would
-# silently win. The join happens at the call site, once, in `resolved`.
 _ROADMAP_SEED_FLAG_SPEC: tuple[Flag, ...] = (
     Flag("--goals", "goals", required=True),
 )
 
 
 def _slug(text: str) -> str:
-    """Lowercase-dash slug, mirroring `coordinator-doc-new._slug_from_title`'s
-    observable shape closely enough for a computed (never free-text)
-    `--out` default -- collapses any run of non-alphanumeric characters to a
-    single dash and strips leading/trailing dashes."""
     out = []
     prev_dash = False
     for ch in text.lower():
@@ -281,9 +248,7 @@ def _roadmap_baton_and_seed_directives(
 
 
 class RoadmapPlanningAssembleError(ValueError):
-    """Raised for a malformed input to brief() — a usage error, never a
-    business-logic divergence (mirrors sizing_assemble.SizingAssembleError:
-    divergence is expressed via the decision object, never an exception)."""
+    pass
 
 
 def _directive(id_: str, cli: Optional[str], args: list[str], depends_on, already_satisfied: bool) -> dict[str, Any]:
@@ -306,15 +271,6 @@ def _judgment_point(
     recommendation: Optional[dict[str, str]] = None,
     reason: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Tier 2 (`recommendation` an object) or tier 3 (`recommendation: null`,
-    `reason` required) constructor. Never used for a recommendation-
-    forbidden PM gate — see `_pm_gate_judgment_point`.
-
-    Thin call-shape wrapper over the shared
-    `coordinator_core.contract.decision_object.judgment.build_judgment_point`
-    (Review: code-reviewer — C1, reuse over a hand-rolled parallel shape).
-    Keeps this module's own positional/keyword call-site shape (id_ first,
-    `reason` optional) so every existing call site below is unchanged."""
     return _build_judgment_point(
         recommendation,
         id=id_,
@@ -334,15 +290,6 @@ def _pm_gate_judgment_point(
     dispositions: list[dict[str, Any]],
     round_trip: str,
 ) -> dict[str, Any]:
-    """Recommendation-forbidden security-class constructor (computed-skills.md
-    § The three-tier model). Hardcodes `recommendation: null,
-    reason: "recommendation-forbidden"` — structurally unreachable for a
-    caller to fill, unlike the ordinary tier-3 `_judgment_point` path.
-
-    Thin call-shape wrapper over the shared
-    `coordinator_core.contract.decision_object.judgment.
-    build_untrusted_gate_judgment_point`, whose signature has deliberately
-    no `recommendation` parameter at all (Review: code-reviewer — C1)."""
     return _build_untrusted_gate_judgment_point(
         id=id_,
         question=question,
@@ -360,9 +307,6 @@ def _resolve_entry_point(
     problem_set_path: Optional[str],
     sizing_object_path: Optional[str],
 ) -> tuple[Optional[str], list[str]]:
-    """Returns (entry_point letter or None, list of every entry point that
-    was supplied). More than one supplied is the entryD-4 overlap-
-    resolution judgment call, never auto-resolved here."""
     supplied = []
     if input_corpus_path is not None:
         supplied.append("A")
@@ -383,12 +327,6 @@ def _class_a_glue_directives(
     sizing_object_path: Optional[str],
     entry_point: Optional[str],
 ) -> list[dict[str, Any]]:
-    """Class A's eight, expressed as computed decision-object fields/
-    directives[] GLUE — `cli: None` on every entry, since none of these
-    names is an invocable capability (census "Consumes-manifest correction":
-    "assembler-internal glue, not a consumed op"). Each entry's `args`
-    carries the computed VALUE (e.g. the derived run_id), not a CLI
-    invocation payload."""
     directives: list[dict[str, Any]] = []
 
     if entry_point == "B" and stub_id is not None:
@@ -766,7 +704,7 @@ def brief(
 
     resolved_run_id = run_id
     if resolved_run_id is None and entry_point == "B" and stub_id is not None:
-        resolved_run_id = stub_id  # entryB-3-set-runid: run-id := stub_id verbatim
+        resolved_run_id = stub_id
 
     if resolved_run_id is None and entry_point is not None:
         raise RoadmapPlanningAssembleError(
@@ -916,9 +854,6 @@ def main(argv: list[str]) -> int:
         print(f"{prog}: {exc}", file=sys.stderr)
         return EXIT_USAGE
     except Exception as exc:  # noqa: BLE001 - structural backstop, mirrors sizing_assemble
-        # Transport failure: compute never ran, so nothing goes on stdout —
-        # the exit code is the only evidence (completion-evidence contract,
-        # DR-442). Matches `backlog_grind_assemble.main`'s shape.
         print(f"{prog}: unexpected failure: {exc}", file=sys.stderr)
         return EXIT_TRANSPORT_FAIL
 

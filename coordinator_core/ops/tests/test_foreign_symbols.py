@@ -49,13 +49,7 @@ from coordinator_core.ops.foreign_symbols import (
 )
 from coordinator_core.ops.foreign_symbols import _envelope_for_file
 
-# ---------------------------------------------------------------------------
-# Cockpit's real per-extension file census (chunk C2 body, verbatim): three
-# legitimate zeros (.cts, .jsx, .cjs) that must read as corpus facts, and a
-# live .mjs (106 files) that must not be excused by a healthy .ts total.
-# Derived here as a fixture constant, never hardcoded as a language list —
 # classify_foreign_symbol_coverage is exercised per EXTENSION.
-# ---------------------------------------------------------------------------
 _COCKPIT_CENSUS = {
     ".ts": 1292,
     ".tsx": 405,
@@ -81,18 +75,6 @@ _COCKPIT_LANGUAGES = {
 
 
 def _result(files=None, diagnostics=None, languages=None):
-    """Hand-build a `build_foreign_symbols` return value at its pinned
-    dict shape: `{"files": [...], "diagnostics": [...], "languages": {...},
-    "completeness": {...}}`.
-
-    classify_foreign_symbol_coverage's contract is `(result: dict, census)
-    -> list[dict]` — pinned independent of C1's internal mapping from
-    symbol_extract's raw ExtractionResult onto this dict. Building the dict
-    directly tests against the pinned contract, not a guess at C1's
-    internals. `languages` defaults to cockpit's real per-extension
-    resolution (chunk brief) so these fakes classify without requiring the
-    real `symbol_extract` dependency.
-    """
     return {
         "files": files or [],
         "diagnostics": diagnostics or [],
@@ -101,12 +83,7 @@ def _result(files=None, diagnostics=None, languages=None):
     }
 
 
-# ---------------------------------------------------------------------------
 # Arm 1 — DEPENDENCY ABSENT. Never skipped: this must be loud on every
-# machine, installed or not — it is the arm that catches the degrade path
-# being wired to look like success. Exercised through build_foreign_symbols
-# itself via the pinned monkeypatch seam, `_import_symbol_extract`.
-# ---------------------------------------------------------------------------
 
 
 def test_dependency_absent_is_its_own_loud_state(monkeypatch):
@@ -147,25 +124,8 @@ def test_dependency_absent_never_folded_into_corpus_fact(monkeypatch):
     assert states == {"dependency_absent"}
 
 
-# ---------------------------------------------------------------------------
-# Arms 2-4 operate on classify_foreign_symbol_coverage's pinned dict-in,
-# list-out contract directly, injecting fake diagnostics/envelope entries at
-# that seam per the chunk brief's injection strategy — no second venv, no
-# corrupted fixture, no dependency on C1's internal ExtractionResult
-# mapping.
-#
-# classify_foreign_symbol_coverage resolves each extension's language from
-# `result["languages"]` (populated by build_foreign_symbols at build time,
-# and by `_result()`'s cockpit-derived default here) — it never needs its
-# own `symbol_extract` import on this path, so these arms run unskipped on
-# every machine, installed or not.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize("extension", [".cts", ".jsx", ".cjs"])
 def test_zero_census_extension_is_corpus_fact_not_missing_grammar(extension):
-    # No files carry this extension in cockpit's real corpus, and no
-    # diagnostic names it — a legitimate corpus fact, not a failure.
     result = _result(files=[], diagnostics=[])
     findings = classify_foreign_symbol_coverage(result, census=_COCKPIT_CENSUS)
 
@@ -175,9 +135,6 @@ def test_zero_census_extension_is_corpus_fact_not_missing_grammar(extension):
 
 
 def test_live_extension_with_symbols_produces_no_zero_state_finding():
-    # .ts carries 1292 census files; a symbol-bearing entry with no
-    # diagnostic naming it must not be classified corpus_fact or
-    # missing_grammar.
     result = _result(
         files=[{"path": "src/app.ts", "functions": [{"name": "main", "lineno": 1}]}],
         diagnostics=[],
@@ -193,8 +150,6 @@ def test_live_extension_with_symbols_produces_no_zero_state_finding():
 
 
 def test_missing_grammar_uses_real_diagnostic_text_shape():
-    # Their real diagnostic text, measured live (chunk brief, verbatim);
-    # language-level diagnostics carry file=None.
     diagnostic = {
         "level": "error",
         "message": (
@@ -215,13 +170,7 @@ def test_missing_grammar_uses_real_diagnostic_text_shape():
     assert ts_findings[0]["detail"]
 
 
-# ---------------------------------------------------------------------------
 # Arm — PARTIAL COVERAGE. symbols > 0 for an extension whose language is
-# nonetheless named by an error-level, language-level (file=None)
-# diagnostic — the shape symbol_extract produces when a grammar loads for
-# some files but not others: a healthy-looking non-zero symbol count with a
-# skipped-file count silently dropped underneath it.
-# ---------------------------------------------------------------------------
 
 
 def test_symbols_present_with_language_diagnostic_is_partial_coverage_not_silent():
@@ -246,15 +195,11 @@ def test_symbols_present_with_language_diagnostic_is_partial_coverage_not_silent
     assert ts_findings[0]["state"] == "partial_coverage"
     assert ts_findings[0]["state"] != "corpus_fact"
 
-    # The skipped-file count from the diagnostic message must survive into
-    # the finding's own detail — not just a bare symbol count.
     assert "1474" in ts_findings[0]["detail"]
     assert "skipped" in ts_findings[0]["detail"]
 
 
 def test_healthy_extension_with_no_diagnostic_yields_no_partial_coverage_finding():
-    # Guard against over-firing: symbols > 0 and no diagnostic naming the
-    # language at all must not classify as partial_coverage.
     result = _result(
         files=[{"path": "src/app.ts", "functions": [{"name": "main", "lineno": 1}]}],
         diagnostics=[],
@@ -265,11 +210,6 @@ def test_healthy_extension_with_no_diagnostic_yields_no_partial_coverage_finding
 
 
 def test_aggregate_symbol_count_does_not_mask_per_extension_gap():
-    # The non-negotiable, made concrete: a healthy .ts symbol count must
-    # not excuse .mjs (106 census files) from reporting missing_grammar. A
-    # test asserting only an aggregate `symbols == 0` across both
-    # extensions would pass here even though .mjs is silently broken —
-    # this test would fail under such an implementation.
     javascript_grammar_missing = {
         "level": "error",
         "message": (
@@ -295,10 +235,6 @@ def test_aggregate_symbol_count_does_not_mask_per_extension_gap():
 
 
 def test_healthy_language_total_does_not_excuse_a_silently_dropped_file():
-    # A per-file parse failure must attribute onto that file's own envelope
-    # entry as an "error" field, even while the extension's aggregate
-    # symbol count elsewhere is healthy — the exact assertion an
-    # aggregate-zero check cannot make.
     diagnostic = {
         "level": "error",
         "message": "parse error in src/broken.ts: unexpected token",
@@ -329,22 +265,12 @@ def test_healthy_language_total_does_not_excuse_a_silently_dropped_file():
     healthy_entry = next(f for f in result["files"] if f["path"] == "src/app.ts")
     assert "error" not in healthy_entry
 
-    # The healthy .ts entry existing alongside the failure must not turn
-    # the parse failure into a corpus_fact or suppress it entirely.
     ts_zero_state = [
         f
         for f in findings
         if f["extension"] == ".ts" and f["state"] in ("corpus_fact", "missing_grammar")
     ]
     assert ts_zero_state == []
-
-
-# ---------------------------------------------------------------------------
-# Chunk C5 — the envelope silently dropped `constant`/`type_alias` kinds
-# (2,980 real symbols over cockpit's tree). These arms exercise
-# `_envelope_for_file` directly at the injection seam it already offers —
-# a `Symbol`-shaped fake, never a second venv or a corrupted fixture.
-# ---------------------------------------------------------------------------
 
 
 class _FakeSymbol:
@@ -366,14 +292,6 @@ class _FakeSymbol:
 
 
 def test_function_signature_prefers_detail_over_decl_text_body():
-    """A `signature` key must not carry the implementation.
-
-    `decl_text` is the node's whole source slice (capped at 4096 chars by
-    `symbol_extract`), so for a function it is the body. `Symbol.detail` is the
-    extractor's parse-tree signature projection. Negative spec: emitting
-    `decl_text` here is what made a 25-file reply 193KB and misdescribed every
-    function to the consumer (doe-claude-em memo 2026-08-19).
-    """
     entry, _ = _envelope_for_file(
         "src/app.ts",
         [
@@ -393,7 +311,6 @@ def test_function_signature_prefers_detail_over_decl_text_body():
 
 
 def test_function_signature_falls_back_to_decl_text_when_no_detail():
-    """A language with no signature projection keeps the field it emits today."""
     entry, _ = _envelope_for_file(
         "src/app.rb",
         [_FakeSymbol("main", "function", decl_text="def main", range_start_line=2)],
@@ -405,7 +322,6 @@ def test_function_signature_falls_back_to_decl_text_when_no_detail():
 
 
 def test_method_signature_prefers_detail_over_decl_text_body():
-    """The class-nesting path builds its entries through the same projection."""
     entry, _ = _envelope_for_file(
         "src/app.ts",
         [
@@ -427,7 +343,6 @@ def test_method_signature_prefers_detail_over_decl_text_body():
 
 
 def test_other_symbols_signature_prefers_detail_over_decl_text():
-    """The residual bucket names its field `signature` too, so it projects too."""
     entry, unmapped = _envelope_for_file(
         "src/app.ts",
         [
@@ -488,7 +403,6 @@ def test_unmapped_kind_is_counted_not_swallowed():
     )
 
     assert unmapped == {"enum_member": 1}
-    # Never fabricated into any known bucket.
     assert entry["constants"] == []
     assert entry["classes"] == []
     assert entry["functions"] == []
@@ -562,14 +476,6 @@ def test_build_foreign_symbols_omits_unmapped_kinds_when_nothing_dropped(monkeyp
 
 
 def test_constants_only_extension_is_not_reported_as_zero_symbols():
-    """Regression (EM, C5 follow-up): an extension whose symbols are ALL
-    constants must not classify as a corpus fact claiming zero extraction.
-
-    `_count_symbols` fed the per-extension discriminator while counting only
-    functions and classes, so the 2,268 constants measured in one real
-    consumer tree counted as nothing. The detector built to catch a silently
-    thin result was itself producing one.
-    """
     from coordinator_core.ops.foreign_symbols import classify_foreign_symbol_coverage
 
     result = {
@@ -598,7 +504,6 @@ def test_constants_only_extension_is_not_reported_as_zero_symbols():
 
 
 def test_type_aliases_only_extension_is_not_reported_as_zero_symbols():
-    """Same regression for the `type_aliases` bucket (712 in the real tree)."""
     from coordinator_core.ops.foreign_symbols import classify_foreign_symbol_coverage
 
     result = {
@@ -621,12 +526,6 @@ def test_type_aliases_only_extension_is_not_reported_as_zero_symbols():
     assert not [f for f in findings if f["state"] == "corpus_fact"]
 
 
-# ---------------------------------------------------------------------------
-# Review dc659900 P1 (no healthy arm) — every extension in the census gets
-# an explicit finding, including the ordinary healthy case, never silence.
-# ---------------------------------------------------------------------------
-
-
 def test_healthy_extension_yields_explicit_covered_finding_not_silence():
     result = _result(
         files=[{"path": "src/app.ts", "functions": [{"name": "main", "lineno": 1}]}],
@@ -637,17 +536,6 @@ def test_healthy_extension_yields_explicit_covered_finding_not_silence():
     ts_findings = [f for f in findings if f["extension"] == ".ts"]
     assert len(ts_findings) == 1
     assert ts_findings[0]["state"] == "covered"
-
-
-# ---------------------------------------------------------------------------
-# Review dc659900 P1 (markdown/unknown dropped) — the markdown regression
-# guard. This is the most important test in this batch: a file whose
-# symbols are ALL of an unmapped kind (e.g. markdown heading/code_fence,
-# both real SymbolKind.UNKNOWN entries at the pinned ref) must land those
-# symbols in `other_symbols`, be counted by `_count_symbols`, and must NOT
-# classify as `corpus_fact` ("0 symbols extracted") — the exact defect that
-# hid a fully-successful markdown extraction as an empty corpus.
-# ---------------------------------------------------------------------------
 
 
 def test_unknown_kind_symbols_land_in_other_symbols_and_are_counted():
@@ -717,13 +605,6 @@ def test_other_symbols_signature_key_absent_when_decl_text_falsy():
     assert "signature" not in entry["other_symbols"][0]
 
 
-# ---------------------------------------------------------------------------
-# Review dc659900 P2 — an error-level, file-less diagnostic that names no
-# language present in the census must not silently vanish, letting the
-# affected extension fall through to `corpus_fact`/`covered` with no signal.
-# ---------------------------------------------------------------------------
-
-
 def test_unattributable_error_diagnostic_produces_loud_finding_not_corpus_fact():
     diagnostic = {
         "level": "error",
@@ -738,18 +619,10 @@ def test_unattributable_error_diagnostic_produces_loud_finding_not_corpus_fact()
     assert len(unattributed) == 1
     assert "rust" in unattributed[0]["detail"]
 
-    # No extension's per-extension arm must silently absorb this diagnostic
-    # as a clean-bill-of-health corpus_fact.
     corpus_facts_matching = [
         f for f in findings if f["state"] == "corpus_fact" and diagnostic["message"] in f["detail"]
     ]
     assert corpus_facts_matching == []
-
-
-# ---------------------------------------------------------------------------
-# Review 60d298e7 (peer sidecar) P2 — all eight JS/TS extensions get their
-# own independently asserted per-extension arm (AC4), not just .ts/.mjs.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("extension", [".ts", ".tsx", ".js", ".mjs", ".mts", ".cts", ".jsx", ".cjs"])
@@ -762,20 +635,7 @@ def test_every_js_ts_extension_gets_its_own_asserted_finding(extension):
     assert this_ext[0]["state"] == "corpus_fact"
 
 
-# ---------------------------------------------------------------------------
-# Forward-compatible migration for `ExtractionDiagnostic.language`/`code`
-# (memo reply 7e6559f1; debt record
-# state/debt-backlog/2026-08-11-foreign-symbols-substring-language-match-aw.yaml).
-# Neither field exists on the installed wheel at the pinned
-# example-retrieval-repo-symbol-extract ref, but `_diagnostic_names_language` must
-# already honour field-preferred/prose-fallback precedence so the fields go
-# live with no further code edit once the pin moves.
-# ---------------------------------------------------------------------------
-
-
 def test_language_field_present_and_matching_wins_over_prose_naming_other_language():
-    # The message's prose names "javascript" — a different language than the
-    # populated field — proving the field decided the match, not the prose.
     diagnostic = {
         "level": "error",
         "message": "grammar unavailable for javascript: file(s) skipped",
@@ -792,8 +652,6 @@ def test_language_field_present_and_matching_wins_over_prose_naming_other_langua
 
 
 def test_language_field_present_and_not_matching_overrides_prose_substring_match():
-    # The prose WOULD substring-match "typescript", but the populated field
-    # says "javascript" — the field must win, so .ts must NOT be attributed.
     diagnostic = {
         "level": "error",
         "message": "grammar unavailable for typescript: file(s) skipped",
@@ -814,11 +672,6 @@ def test_language_field_present_and_not_matching_overrides_prose_substring_match
 
 
 def test_language_field_absent_attributes_to_nothing_and_is_unattributed():
-    # A `language`-absent diagnostic no longer falls back to substring
-    # matching (the transitional fallback was deleted once the pin move
-    # occurred) — it attributes to NOTHING and surfaces as
-    # `unattributed_diagnostic`, never silently classified as this
-    # extension's `missing_grammar`.
     diagnostic = {
         "level": "error",
         "message": "grammar unavailable for typescript: file(s) skipped",
@@ -853,19 +706,7 @@ def test_language_field_names_language_absent_from_census_is_unattributed():
     assert len(unattributed) == 1
     assert unattributed[0]["detail"] == diagnostic["message"]
 
-    # No JS/TS extension may absorb this diagnostic as missing_grammar,
-    # since the field names "rust", which is absent from the census.
     assert not any(f["state"] == "missing_grammar" for f in findings)
-
-
-# ---------------------------------------------------------------------------
-# Name-invariant drop discriminator — example-retrieval-repo-em memo
-# cross-repo/inbox/2026-08-11-example-retrieval-repo-em-symbol-name-invariant-now-drops-rows.md:
-# `ExtractionResult.__post_init__` drops a `Symbol` whose `name` carries a
-# line terminator or exceeds 1024 chars, appending an `error`-level
-# diagnostic with a non-None `file`. Must classify as `name_invariant_drop`,
-# never `parse_failure` — the file itself parsed fine.
-# ---------------------------------------------------------------------------
 
 
 def test_code_field_symbol_name_invariant_is_a_drop_not_a_parse_failure():
@@ -891,8 +732,6 @@ def test_code_field_symbol_name_invariant_is_a_drop_not_a_parse_failure():
 
 def test_code_field_other_value_with_prefix_matching_prose_stays_parse_failure():
     # Precedence test: `code` is populated but names a DIFFERENT diagnostic
-    # class, even though the prose WOULD prefix-match the drop message —
-    # the field must win and this must stay a parse_failure.
     diagnostic = {
         "level": "error",
         "message": "symbol name invariant violated — coincidental prefix match",
@@ -912,9 +751,6 @@ def test_code_field_other_value_with_prefix_matching_prose_stays_parse_failure()
 
 
 def test_code_none_with_documented_prefix_is_not_a_drop_stays_parse_failure():
-    # The prose prefix fallback was deleted once the pin move occurred — a
-    # `code is None` diagnostic is no longer treated as a drop even when its
-    # message carries the documented prose prefix verbatim.
     diagnostic = {
         "level": "error",
         "message": "symbol name invariant violated — name exceeds 1024 chars",
@@ -1010,14 +846,6 @@ def test_build_foreign_symbols_routes_name_invariant_drop_to_its_own_key(monkeyp
     clean_entry = entries_by_path["clean.md"]
     assert "error" not in clean_entry
     assert "name_invariant_drops" not in clean_entry
-
-
-# ---------------------------------------------------------------------------
-# Floor test — proves the field-only contract holds against the REAL
-# installed wheel, not only against fixtures/fakes. Skips cleanly when the
-# optional `symbols` extra is not installed (same convention as
-# test_cartography_symbols.py's test_real_typescript_extraction_end_to_end).
-# ---------------------------------------------------------------------------
 
 
 def test_extraction_diagnostic_carries_code_and_language_on_real_wheel():

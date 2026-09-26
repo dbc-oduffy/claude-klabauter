@@ -25,11 +25,6 @@ def _served(n: int) -> idle.ServedCountFn:
     return lambda: n
 
 
-# ---------------------------------------------------------------------------
-# seconds_idle / mark_invocation
-# ---------------------------------------------------------------------------
-
-
 def test_seconds_idle_counts_from_last_mark_invocation():
     fake_now = [0.0]
     clock = lambda: fake_now[0]
@@ -45,11 +40,6 @@ def test_seconds_idle_counts_from_process_start_when_never_invoked(monkeypatch):
     fake_now = [130.0]
 
     assert idle.seconds_idle(clock=lambda: fake_now[0]) == pytest.approx(30.0)
-
-
-# ---------------------------------------------------------------------------
-# resolve_idle_deadline_secs -- extends C23's engine.warm.* namespace
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_idle_deadline_defaults_to_15_minutes(monkeypatch):
@@ -77,11 +67,6 @@ def test_resolve_idle_deadline_falls_back_on_unparseable_value(monkeypatch):
 def test_resolve_idle_deadline_falls_back_on_non_positive_value(monkeypatch):
     monkeypatch.setattr(idle, "registry_get", lambda key: "0")
     assert idle.resolve_idle_deadline_secs() == pytest.approx(15 * 60.0)
-
-
-# ---------------------------------------------------------------------------
-# should_demote -- full deadline and zero-served short-circuit
-# ---------------------------------------------------------------------------
 
 
 def test_should_demote_false_before_deadline():
@@ -154,11 +139,6 @@ def test_zero_served_deadline_does_not_fire_before_its_own_deadline():
         )
         is False
     )
-
-
-# ---------------------------------------------------------------------------
-# demote_if_idle -- calls C17's begin_shutdown verbatim, never reimplements
-# ---------------------------------------------------------------------------
 
 
 def test_demote_if_idle_calls_begin_shutdown_when_due():
@@ -239,9 +219,7 @@ def test_demote_if_idle_shares_single_shot_guard_with_a_concurrent_skew_drain():
     assert idle_order == []
 
 
-# ---------------------------------------------------------------------------
 # THE INVARIANT: idle never gates/delays/vetoes skew, skew never reads idle
-# ---------------------------------------------------------------------------
 
 
 def test_evict_on_skew_signature_carries_no_idle_input():
@@ -265,18 +243,6 @@ def test_idle_module_calls_begin_shutdown_not_a_second_sequence():
     assert "begin_shutdown(" in body
     assert "os._exit" not in body
     assert "exit_fn(" not in body
-
-
-# ---------------------------------------------------------------------------
-# Superseded-generation predicate (`TokenStaleFn`)
-#
-# The population BOTH pre-existing arms miss: a server whose served count is
-# NONZERO (so the zero-served deadline never fires) and whose generation
-# token is stale (so `skew.evict_on_skew` can never be reached, because no
-# client computes its pipe name any more). Before this predicate it waited
-# out the full 15-minute idle deadline, holding a preloaded op registry and
-# a dispatch process pool the whole time.
-# ---------------------------------------------------------------------------
 
 
 def test_superseded_generation_demotes_though_served_count_is_nonzero():
@@ -344,7 +310,6 @@ def test_demote_if_idle_retires_superseded_generation_through_begin_shutdown():
     in_flight = [2]
 
     def _in_flight_count():
-        # Drains down, proving the sequence waits rather than dropping work.
         if in_flight[0] > 0:
             in_flight[0] -= 1
         return in_flight[0]
@@ -387,9 +352,6 @@ def test_idle_module_still_does_not_import_skew():
     the caller, so `idle` never learns how to compute a token and the two
     modules stay disjoint."""
     assert not hasattr(idle, "skew")
-    # Prose in docstrings legitimately NAMES the peer module; only an
-    # actual import statement would couple them, so scan the AST, not the
-    # source text.
     import ast
 
     tree = ast.parse(inspect.getsource(idle))
@@ -402,9 +364,6 @@ def test_idle_module_still_does_not_import_skew():
             imported.update(f"{node.module}.{a.name}" for a in node.names)
     assert not any("skew" in name for name in imported), sorted(imported)
 
-    # A dynamic `importlib.import_module("...skew")` or `__import__("...skew")`
-    # is an ast.Call, not an ast.Import/ImportFrom node, and would silently
-    # bypass the walk above -- check for it separately.
     dynamic_imports = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):

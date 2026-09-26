@@ -75,14 +75,7 @@ __all__ = [
     "compute_chunk_table",
 ]
 
-#: Languages counted as "source" for this reduction — deliberately narrower
 #: than tree.py's full _EXTENSION_LANG map: prose/config/data languages
-#: (markdown, yaml, json, toml, ini, html, css, text) and "unknown" carry no
-#: architectural-survey signal and are excluded. The resulting reduction
-#: ratio is a property of the repo, not a tuning target: this tree reduces
-#: ~12490 -> ~1254, the memo's reduces ~3831 -> ~201. A caller needing a
-#: different source definition should say so rather than have this set
-#: widened toward a particular repo's number.
 SOURCE_LANGS = frozenset(
     {
         "python",
@@ -101,18 +94,10 @@ SOURCE_LANGS = frozenset(
     }
 )
 
-#: Top-level-or-nested directory basenames that mark a path as a test
 #: artifact regardless of language — distinct from SKIP_DIR_NAMES (vendor/
-#: build/VCS noise) because test directories are legitimate tracked source
-#: in many repos; excluding them is a chunk-table-specific reduction choice,
-#: not a general walk-pruning rule (see this module's own docstring negative-
-#: spec, and _skip_dirs.py's negative-spec, for why the two sets stay apart).
 TEST_DIR_NAMES = frozenset({"tests", "test", "__tests__", "spec"})
 
-#: Filename patterns that mark a single file as a test artifact even when it
 #: is not under a TEST_DIR_NAMES directory (e.g. a same-directory
-#: ``test_foo.py`` colocated with its module, or a ``*.test.ts`` sibling
-#: file — both real-world conventions this repo and DoE's own tree use).
 _TEST_FILENAME_RE = re.compile(
     r"^(test_.*\.py|.*_test\.py|conftest\.py|.*\.(test|spec)\.(ts|tsx|js|jsx))$"
 )
@@ -151,22 +136,6 @@ def is_build_or_test_artifact(relpath: str) -> bool:
 
 
 def bucket_by_boundaries(relpath: str, systems: dict[str, list[str]]) -> str | None:
-    """Return the system name whose path-prefix list contains a prefix of
-    `relpath`, or None when no boundary matches ("unbucketed").
-
-    `systems` is the caller-supplied ``{system_name: [path_prefix, ...]}``
-    map (the load-bearing param DoE's memo asks for) — NOT
-    ``cartography.file_index.system_for_path``'s first-path-component rule,
-    which this function deliberately does not reuse (that rule is documented
-    as intentionally coarse and is the exact shape the memo's defect
-    describes: 384 sub-chunks bucketed by top-level directory name instead of
-    caller-named systems).
-
-    Longest-matching-prefix wins when a path matches more than one system's
-    prefix list (deterministic tie-break: prefix length, then system name),
-    so a caller may supply overlapping/nested boundaries (e.g. "ops" and
-    "ops/fleet") without an undefined outcome.
-    """
     normalized = relpath.replace("\\", "/")
     best_system: str | None = None
     best_len = -1
@@ -184,20 +153,12 @@ def bucket_by_boundaries(relpath: str, systems: dict[str, list[str]]) -> str | N
 
 
 def chunk_list(items: list[str], chunk_size: int) -> list[list[str]]:
-    """Slice `items` (already deterministically ordered by the caller) into
-    fixed-size chunks. Mirrors distill_scope.compute_scope's batching idiom
-    verbatim (``items[i:i+chunk_size]`` over a `max(1, chunk_size)` step, so
-    a caller-supplied 0/negative chunk_size never divides-by-zero or infinite-
-    loops)."""
     step = max(1, chunk_size)
     return [items[i : i + step] for i in range(0, len(items), step)]
 
 
 @dataclass(frozen=True)
 class ChunkTableResult:
-    """Result of compute_chunk_table: the fully-assembled chunk-table body
-    (sans schema_version/run_id envelope, added by the op-tier writer) plus
-    summary counts."""
 
     buckets: dict[str, dict[str, Any]]
     unbucketed: list[str]
@@ -209,14 +170,6 @@ def compute_chunk_table(
     systems: dict[str, list[str]] | None,
     chunk_size: int = 25,
 ) -> ChunkTableResult:
-    """Compute the full chunk-table reduction over `target_root`.
-
-    Pipeline: list_tracked_files -> is_source_file -> not
-    is_build_or_test_artifact -> bucket_by_boundaries(systems) ->
-    chunk_list(chunk_size), each stage deterministically ordered (sorted
-    tracked-file list in, sorted-by-construction out — no set() reordering
-    at any stage after the initial sort).
-    """
     systems = systems or {}
     tracked = list_tracked_files(target_root)
 

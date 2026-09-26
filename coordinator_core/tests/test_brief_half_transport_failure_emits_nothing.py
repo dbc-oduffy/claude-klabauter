@@ -25,10 +25,6 @@ from typing import Any
 
 import pytest
 
-# (import path, attribute to monkeypatch to raise, argv, name of the
-# exception class to raise — "RuntimeError" for the generic structural
-# backstop, or a module-local class name (resolved via getattr on the
-# imported module) for a module that only catches a specific type)
 CASES: list[tuple[str, str, list[str], str]] = [
     ("coordinator_core.backlog_grind_assemble", "brief", ["brief", "bug-blitz"], "RuntimeError"),
     ("coordinator_core.consolidate_assemble", "brief", ["brief"], "RuntimeError"),
@@ -92,23 +88,14 @@ def test_transport_failure_path_emits_nothing_on_stdout(
 
 
 def test_merge_assemble_has_no_brief_cli_verb() -> None:
-    """`merge_assemble`'s `brief()` transport branch is reachable only
-    through `apply` (its CLI has no `brief` subcommand) — out of this
-    rule's population, per the row's step 4. Documented here rather than
-    aligned."""
     merge_assemble = importlib.import_module("coordinator_core.merge_assemble")
 
     exit_code = merge_assemble.main(["brief"])
 
-    # No "brief" subcommand: falls through to the unknown-subcommand usage
-    # branch, never reaches `brief()`'s transport-failure return path.
     assert exit_code == merge_assemble.EXIT_USAGE
 
 
 def test_pickup_assemble_no_longer_computes_brief() -> None:
-    """`pickup_assemble/__init__.py` moved `brief` to `pickup_brief.py`;
-    its own `main()` has no compute path left to monkeypatch for this
-    rule. Documented here rather than aligned."""
     pickup_assemble = importlib.import_module("coordinator_core.pickup_assemble")
 
     exit_code = pickup_assemble.main(["brief", "some/artifact/path.md"])

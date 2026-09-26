@@ -33,19 +33,6 @@ from coordinator_core.telemetry import op_latency
 
 @pytest.fixture(autouse=True)
 def _restore_benchmark_origin_env():
-    """Every `run_probe()` call in this file reaches `declare_benchmark_origin()`,
-    an intentionally process-wide `os.environ.setdefault` write (see that
-    function's own negative-spec): safe by contract only for "a benchmark
-    driver's own entry", a process that stamps itself and every child it
-    spawns, then exits. These tests call `run_probe()` in-process inside the
-    shared pytest session, outside that contract, so this fixture restores
-    the var itself via a synchronous try/finally around the yield (completes
-    before conftest.py's autouse `_fail_on_environ_leak` "after" snapshot)
-    rather than `monkeypatch.setenv`/`delenv`, which only undoes when
-    monkeypatch's own finalizer runs. Mirrors
-    coordinator_core/benchmarks/tests/test_integration.py's identical fix for
-    the same underlying shape.
-    """
     sentinel = object()
     before = os.environ.get(op_latency.ORIGIN_ENV, sentinel)
     try:
@@ -55,9 +42,6 @@ def _restore_benchmark_origin_env():
             os.environ.pop(op_latency.ORIGIN_ENV, None)
         else:
             os.environ[op_latency.ORIGIN_ENV] = before
-
-
-# --- validate_levels ---------------------------------------------------
 
 
 def test_validate_levels_accepts_ascending_within_cap():
@@ -93,16 +77,11 @@ def test_validate_levels_allows_above_cap_with_override():
     validate_levels([1, 16], cap=8, override_cap=True)
 
 
-# --- compute_parallelism_cap --------------------------------------------
-
-
 def test_compute_parallelism_cap_core_bound():
-    # 4 cores -> 2 by cores; ample RAM -> RAM doesn't bind.
     assert compute_parallelism_cap(physical_cores=4, usable_ram_gb=100.0) == 2
 
 
 def test_compute_parallelism_cap_ram_bound():
-    # 32 cores -> 16 by cores; 1GB usable / 150MB per worker ~= 6.83 -> 6.
     assert compute_parallelism_cap(physical_cores=32, usable_ram_gb=1.0) == 6
 
 
@@ -117,13 +96,7 @@ def test_compute_parallelism_cap_rejects_bad_input():
         compute_parallelism_cap(physical_cores=4, usable_ram_gb=0.0)
 
 
-# --- refuse_if_not_compute_only ------------------------------------------
-
 #: A live MUTATING op, used as the specimen for the refusal tests below. Held in
-#: one place and pinned by the premise test that follows, so that retiring it
-#: fails loudly here rather than silently turning these tests into duplicates of
-#: the unknown-op case. Was `artifact.emit` until the PM cut that op 2026-08-22,
-#: then the readerless backlog-depth recorder until it too was retired.
 _MUTATING_SPECIMEN = "goal.append"
 
 
@@ -189,9 +162,6 @@ def test_run_probe_refuses_before_any_spawn(monkeypatch):
     assert spawn_calls == []
 
 
-# --- evaluate_escape_hatch -----------------------------------------------
-
-
 def test_escape_hatch_fails_closed_on_unreadable_state():
     state = MachineState(readable=False, error="boom")
     ok, reason = evaluate_escape_hatch(state, min_free_ram_gb=4.0, max_cpu_percent=85.0, max_process_count=900)
@@ -224,9 +194,6 @@ def test_escape_hatch_trips_on_high_process_count():
     ok, reason = evaluate_escape_hatch(state, min_free_ram_gb=4.0, max_cpu_percent=85.0, max_process_count=900)
     assert ok is False
     assert "process count" in reason
-
-
-# --- run_probe: escape-hatch abort path (mocked timer, injected reader) --
 
 
 @mock.patch("coordinator_core.benchmarks.concurrency_probe.time_invocation")
@@ -271,8 +238,8 @@ def test_run_probe_collects_samples_and_stamps_conditions(mock_time_invocation):
     assert result["aborted"] is False
     assert [lr["level"] for lr in result["level_results"]] == [1, 2]
     level1, level2 = result["level_results"]
-    assert level1["n"] == 2  # n_per_level=2 waves * level=1
-    assert level2["n"] == 4  # n_per_level=2 waves * level=2
+    assert level1["n"] == 2
+    assert level2["n"] == 4
     assert level1["min"] == level1["max"] == 7.5
     assert level1["raw_samples_ms"] == [7.5, 7.5]
     assert level1["machine_state_at_waves"], "conditions must be stamped per level"
@@ -302,20 +269,12 @@ def test_run_probe_invalid_samples_counted_not_raised(mock_time_invocation):
     level1 = result["level_results"][0]
     assert level1["n"] == 0
     assert level1["invalid_count"] == 2
-    # A zero-sample level must name its cause. Reporting n=0 with aborted=False
-    # and no reason reads as a clean run that measured nothing -- which is how a
-    # tree whose every `invoke` child exits rc=1 (no engine build stamp, cold
-    # fallback disabled) produced an empty result with no diagnosis on
-    # 2026-08-26.
     assert level1["no_valid_samples"] is True
     assert "boom" in level1["first_invalid_reason"]
 
 
 @mock.patch("coordinator_core.benchmarks.concurrency_probe.time_invocation")
 def test_run_probe_valid_level_carries_no_no_valid_samples_flag(mock_time_invocation):
-    """The loud-zero keys are scoped to the failed-measurement branch: a level
-    that took real samples must not grow a `no_valid_samples` key a consumer
-    could read as False-meaning-checked on the summary path."""
     mock_time_invocation.return_value = 7.5
     reader = mock.Mock(
         return_value=MachineState(readable=True, free_ram_gb=10.0, cpu_percent=10.0, process_count=50)
@@ -335,20 +294,11 @@ def test_run_probe_valid_level_carries_no_no_valid_samples_flag(mock_time_invoca
     level1 = result["level_results"][0]
     assert level1["n"] == 2
     assert "no_valid_samples" not in level1
-    # A clean level carries no reason key at all -- absent, not None.
     assert "first_invalid_reason" not in level1
 
 
 @mock.patch("coordinator_core.benchmarks.concurrency_probe.time_invocation")
 def test_run_probe_mixed_level_still_surfaces_the_invalid_reason(mock_time_invocation):
-    """A level with SOME valid samples still reports why the others died.
-
-    `first_invalid_reason` is captured whenever any sample invalidates, but it
-    used to reach the summary only on the all-invalid branch -- so a level that
-    lost two children out of ten published a p50 with a bare `invalid_count`
-    and no cause. That is the same silent-zero shape one level up: the data was
-    on the dataclass and never surfaced.
-    """
     from coordinator_core.benchmarks.timer import BenchmarkSampleInvalid
 
     calls = {"n": 0}
@@ -379,5 +329,4 @@ def test_run_probe_mixed_level_still_surfaces_the_invalid_reason(mock_time_invoc
     assert level1["n"] == 2, level1
     assert level1["invalid_count"] == 1
     assert "boom" in level1["first_invalid_reason"]
-    # Still a real measurement, so it is NOT the failed-measurement branch.
     assert "no_valid_samples" not in level1

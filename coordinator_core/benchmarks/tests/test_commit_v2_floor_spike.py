@@ -177,10 +177,6 @@ def warm_root() -> Iterator[tuple]:
             time.sleep(_POLL_SECS)
         if not (crumb and crumb.get("pid")):
             pytest.skip(f"isolated warm server did not boot within {_BOOT_WAIT_SECS}s")
-        # Captured HERE and yielded, never re-read in the test body: the
-        # breadcrumb is the server's own liveness record and re-reading it later
-        # returned None on this box, which is a fact about the breadcrumb's
-        # lifetime, not about the server -- the process is still up and serving.
         yield root, int(crumb["pid"])
     finally:
         crumb = breadcrumb.read_breadcrumb(engine_root=root)
@@ -221,8 +217,6 @@ def _bracketed_window(
     env: dict,
     n: int,
 ) -> dict:
-    """N dispatches inside ONE job window. The whole point: divide the tick
-    error by n rather than paying it per sample."""
     before = accountant.snapshot()
     rcs = []
     for _ in range(n):
@@ -248,39 +242,13 @@ def test_c1_where_the_dead_commit_ops_400ms_went(warm_root) -> None:
     rows = []
     with LiveTreeAccountant(server_pid) as acct:
         # Warmth is a PRECONDITION, asserted not requested: a cold dispatch is
-        # indistinguishable from a warm one by inspecting request env alone, and
-        # every figure here would carry a "warm" label it had not earned.
-        #
         # ATTACH-BEFORE-WARMTH (corrected ordering). `_pool_dispatch` builds its
-        # ProcessPoolExecutor lazily on the FIRST dispatch (`_ensure_dispatch_pool`
-        # in `coordinator_core/warm/server.py`), and the POOL WORKER -- not the
-        # server process -- executes every op this test measures
-        # (`_declare_execution_route`'s docstring). `LiveTreeAccountant` counts by
-        # job-object membership, which is fixed at process creation: a process
-        # spawned BEFORE attachment is never a job member no matter how long the
-        # accountant later runs. This warmth probe is the FIRST dispatch through
-        # this isolated server, so it is what spawns the pool -- the accountant
-        # must already be attached when it fires, or the pool workers are born
-        # outside the job and every arm below measures pipe/framing CPU wearing
-        # the label "envelope". This is not hypothetical: measured on two
-        # isolated servers, same op, same N=40, 3 windows each, ordering was the
-        # only variable -- attach-before-probe read 5.08/4.30/7.42 ms/call,
-        # attach-after-probe (the prior ordering of this test) read
-        # 2.73/3.52/1.56 ms/call. The prior ordering understated the envelope by
-        # roughly 2x.
         procs_before_probe = acct.snapshot()["procs"]
         probe = _dispatch(door, "ping", "{}", warm_root, env)
         assert probe.returncode == 0, (
             f"warmth precondition FAILED: ping through the door rc={probe.returncode} "
             f"stdout={probe.stdout[:300]!r} stderr={probe.stderr[:300]!r}"
         )
-        # Do not trust the ordering above by inspection alone -- assert the pool
-        # workers actually landed inside the job. `procs` is `TotalProcesses`,
-        # cumulative since attachment (module docstring); the warmth probe is
-        # the pool's first dispatch, so a first-dispatch pool build must grow
-        # this count past the root alone. A regression back to attach-after
-        # would spawn the pool before this accountant existed and this
-        # assertion would catch it by finding no growth.
         procs_after_probe = acct.snapshot()["procs"]
         assert procs_after_probe > procs_before_probe, (
             "pool workers were not observed inside the job after the warmth "
@@ -324,16 +292,7 @@ def test_c1_where_the_dead_commit_ops_400ms_went(warm_root) -> None:
         f"process ONLY -- excludes every git child and every conhost "
         f"[SINK AXIS] .... {DEAD_OP_P50_MS} ms  (n=241)"
     )
-    # NOT a subtraction of the two figures above: the sink figure
-    # (`ipc.py`'s recorded 421.9ms) is `time.process_time()` of ONE process,
-    # excluding every spawned child, while the envelope figure above is
-    # job-object CPU across the WHOLE server tree -- different axes, and
-    # `dead_op - envelope - commit_leg` mixes them as if they were the same
-    # unit. Each is reported on its own axis instead. The mismatch runs
     # CONSERVATIVE for the plan's own verdict: the sink figure already
-    # excludes all child CPU, so its ~421.9ms is pure Python time inside one
-    # pool worker with none of the envelope's cost even eligible to be
-    # counted in it -- which makes the case for deleting the pipeline
     # STRONGER, not weaker, than a naive subtraction would suggest.
     print(
         "NOTE: the two figures above are different axes (job-object tree CPU "
@@ -351,12 +310,7 @@ def test_c1_where_the_dead_commit_ops_400ms_went(warm_root) -> None:
     )
     print("=" * 78)
 
-    # `ping` is the arm the verdict rests on and it must be clean. The other
-    # arms are context: a live op can legitimately return non-zero for its own
-    # reasons (missing params, nothing to do), and that says nothing about the
     # ENVELOPE, which is paid before the handler ever runs. Their rc rate is
-    # printed above rather than asserted, so a degraded arm is visible instead
-    # of either failing the run or silently flattering it.
     ping_rows = [r for r in rows if r["op"] == "ping"]
     for r in ping_rows:
         for w in r["windows"]:

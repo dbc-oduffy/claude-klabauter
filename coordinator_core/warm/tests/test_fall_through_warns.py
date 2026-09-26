@@ -56,16 +56,11 @@ _DOOR_DIR = Path(__file__).resolve().parents[1] / "door"
 _DOOR_EXE = _DOOR_DIR / "door.exe"
 _NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-#: Printed by the stub `coordinator-invoke.py` the door falls through to.
 _FALLBACK_MARKER = "FALL-THROUGH-WARN-TEST-FALLBACK-RAN"
 _FALLBACK_EXIT = 17
 
 
 def _make_stub_engine_root(tmp_path: Path) -> Path:
-    """Same shape as `test_door_read_deadline.py::_make_stub_engine_root`:
-    a throwaway, uniquely-stamped engine root so the derived pipe name/hash
-    cannot collide with a real server, plus a fake `coordinator-invoke.py`
-    that announces itself instead of running a real op."""
     root = tmp_path / "stub-engine"
     (root / "coordinator_core").mkdir(parents=True)
     (root / "coordinator_core" / "_engine_stamp").write_text(
@@ -114,9 +109,6 @@ def _run_door(engine_root: Path, door_exe: Path) -> subprocess.CompletedProcess:
 
 
 def test_ordinary_fall_through_warns_on_stderr(tmp_path: Path) -> None:
-    """Nothing is listening on the derived pipe, so the door degrades to
-    cold ordinarily -- and that ordinary degrade must now be loud on
-    stderr, never silent, and never on stdout."""
     root = _make_stub_engine_root(tmp_path)
 
     proc = _run_door(root, _default_named_door(tmp_path))
@@ -138,9 +130,6 @@ def test_ordinary_fall_through_warns_on_stderr(tmp_path: Path) -> None:
 
 
 def test_warn_does_not_leak_onto_stdout(tmp_path: Path) -> None:
-    """A stricter framing of the same property: the door's own warn text
-    must never appear on stdout, which a caller may parse as data relayed
-    from the dispatched CLI."""
     root = _make_stub_engine_root(tmp_path)
 
     proc = _run_door(root, _default_named_door(tmp_path))

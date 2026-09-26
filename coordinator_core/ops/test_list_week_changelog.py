@@ -1,15 +1,3 @@
-"""Tests for coordinator_core.ops.list_week_changelog.
-
-Golden oracle snapshotted 2026-07-16
-(Port of: list-week-changelog.sh, DoE b5a4192c, 2026-07-20):
-
-    real state/week-changelog/ (this repo, on-disk, no commit-shaped lines)
-        -> per-file "lines=N  commit-lines=0" line, THEN a bare "0" line
-           (the doubled-zero grep-bug artifact), then "---", then the
-           HEADER's Week-starting/Last-workweek-start marker lines. Exit 0.
-    cwd outside any git repo
-        -> single stderr "not a git repo" line, exit 0, no further output.
-"""
 
 from __future__ import annotations
 
@@ -18,11 +6,6 @@ import contextlib
 from pathlib import Path
 
 from coordinator_core.ops import list_week_changelog as lwc
-
-
-# ---------------------------------------------------------------------------
-# _grep_commit_count_bugcompat — parity-critical doubled-zero bug reproduction
-# ---------------------------------------------------------------------------
 
 
 def test_bugcompat_zero_matches_doubles(tmp_path):
@@ -43,15 +26,11 @@ def test_wc_l_counts_newlines(tmp_path):
     assert lwc._wc_l(f) == "3"
 
 
-# ---------------------------------------------------------------------------
 # main() — full CLI behavior via LWC_TEST_STATE_ROOT seam
-# ---------------------------------------------------------------------------
 
 
 def _run_main(monkeypatch, tmp_path, argv):
     monkeypatch.setenv("LWC_TEST_STATE_ROOT", str(tmp_path / "state"))
-    # pytest's tmp_path is never itself inside a git repo — stub the git-repo
-    # guard so these tests exercise the state-root/listing logic, not git.
     monkeypatch.setattr(lwc, "_git_root", lambda cwd=None: str(tmp_path))
     out = io.StringIO()
     err = io.StringIO()
@@ -137,7 +116,6 @@ def test_header_without_markers(monkeypatch, tmp_path):
 def test_not_a_git_repo(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     rc, out, err = lwc.main([str(tmp_path)]), None, None
-    # Re-run via direct call (no state-root seam needed since git guard fires first).
     out_buf = io.StringIO()
     err_buf = io.StringIO()
     with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):

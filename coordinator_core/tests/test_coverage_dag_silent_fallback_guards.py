@@ -45,11 +45,6 @@ def clear_frontmatter_cache():
 
 
 def test_handoff_session_live_surfaces_note_on_read_failure(tmp_path: Path) -> None:
-    """_handoff_session_live must return (True, note) — still conservative-live, but
-    with a Guard-2-shaped note — when the underlying frontmatter read/parse raises,
-    rather than the old (True, None) that was indistinguishable from a legitimately-
-    unconsumed handoff.
-    """
     missing_path = str(tmp_path / "does-not-exist.md")
 
     is_live, note = cov._handoff_session_live(missing_path, frozenset())
@@ -63,11 +58,6 @@ def test_handoff_session_live_surfaces_note_on_read_failure(tmp_path: Path) -> N
 def test_get_handoff_consumed_by_contract_unchanged_on_read_failure(
     tmp_path: Path, capsys
 ) -> None:
-    """_get_handoff_consumed_by keeps its original Optional[str] contract (external
-    callers compare with `is None` / `== sid`) — a read failure still returns bare
-    None, not a tuple, but now emits a stderr diagnostic instead of vanishing
-    silently.
-    """
     missing_path = str(tmp_path / "does-not-exist.md")
 
     val = cov._get_handoff_consumed_by(missing_path)
@@ -79,7 +69,6 @@ def test_get_handoff_consumed_by_contract_unchanged_on_read_failure(
 
 
 def test_parse_handoff_consumed_by_reads_claimed_by(tmp_path: Path) -> None:
-    """New-vocabulary frontmatter: ``claimed_by:`` alone is read."""
     handoff = tmp_path / "claimed.md"
     handoff.write_text("---\nclaimed_by: session-new\n---\nBody.\n")
 
@@ -87,10 +76,6 @@ def test_parse_handoff_consumed_by_reads_claimed_by(tmp_path: Path) -> None:
 
 
 def test_parse_handoff_consumed_by_reads_consumed_by(tmp_path: Path) -> None:
-    """Old-vocabulary frontmatter: ``consumed_by:`` alone is still tolerated —
-    DR-084 transitional ingest tolerance for not-yet-migrated consumer-repo
-    corpora (example-retrieval-repo, example-cockpit-repo), see the function's docstring.
-    """
     handoff = tmp_path / "consumed.md"
     handoff.write_text("---\nconsumed_by: session-old\n---\nBody.\n")
 
@@ -100,12 +85,6 @@ def test_parse_handoff_consumed_by_reads_consumed_by(tmp_path: Path) -> None:
 def test_parse_handoff_consumed_by_prefers_claimed_by_when_both_present(
     tmp_path: Path,
 ) -> None:
-    """When a record carries both field names, ``claimed_by`` must win
-    regardless of which line comes first in the file — this pins the
-    dedicated claimed_by-then-consumed_by search order over relying on
-    regex-alternation position, which would instead match whichever name
-    appears earliest in the text.
-    """
     consumed_first = tmp_path / "consumed-first.md"
     consumed_first.write_text(
         "---\nconsumed_by: session-old\nclaimed_by: session-new\n---\nBody.\n"
@@ -120,7 +99,6 @@ def test_parse_handoff_consumed_by_prefers_claimed_by_when_both_present(
 
 
 def test_get_handoff_consumed_by_reads_both_vocabularies(tmp_path: Path) -> None:
-    """Public accessor mirrors the dual-vocabulary read for both field names."""
     claimed = tmp_path / "claimed.md"
     claimed.write_text("---\nclaimed_by: session-new\n---\nBody.\n")
     consumed = tmp_path / "consumed.md"

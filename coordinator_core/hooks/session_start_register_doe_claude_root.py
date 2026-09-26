@@ -61,11 +61,8 @@ _REPOS_REGISTRY_KEY = "repos.doe_claude"
 _SENTINEL_NAME = ".coordinator-dev-repo"
 _EXPECTED_SLUG = "doe-claude"
 
-#: Pointer files every no-launcher fence reads to find the doctrine clone.
 _DOE_ROOT_POINTER_BASENAME = ".doe-root"
 
-#: Ceiling on directories stat'd by the scan. A bounded probe of named
-#: positions, never a filesystem walk.
 _MAX_SCAN_CANDIDATES = 64
 
 
@@ -77,10 +74,6 @@ def _immediate_subdirs(base: Path) -> "list[Path]":
 
 
 def _is_genuine_doe_claude_repo(root: Path) -> bool:
-    """Wrong-repo guard. Never raises; any read failure is "not confirmed" —
-    the fail-closed direction for a guard preventing a false-positive
-    registration. Exact `slug:` equality, never a substring match (would
-    also match a prefix-sharing slug such as `doe-claude-fork`)."""
     sentinel = root / _SENTINEL_NAME
     try:
         if not sentinel.is_file():
@@ -120,7 +113,7 @@ def _scan_for_doe_clone(payload_cwd: "Optional[str]") -> "Optional[Path]":
                 if _is_genuine_doe_claude_repo(candidate):
                     return candidate
             except Exception:
-                continue  # per-candidate probe; one unreadable candidate must not abort the scan
+                continue
     return None
 
 
@@ -129,27 +122,21 @@ def _doe_root_pointer_paths() -> "list[Path]":
     try:
         paths.append(settings_home() / _DOE_ROOT_POINTER_BASENAME)
     except Exception:
-        pass  # settings-home leg unresolvable; the other pointer path leg still covers it
+        pass
     try:
         paths.append(home_dir() / ".claude" / _DOE_ROOT_POINTER_BASENAME)
     except Exception:
-        pass  # home-dir leg unresolvable; the other pointer path leg still covers it
+        pass
     return paths
 
 
 def _write_doe_root_pointer(root_str: str) -> None:
-    """Write-when-absent-or-different (unlike `repos.doe_claude`, which is
-    write-when-absent-only — see `_maybe_seed_repos_doe_claude`). Fail open
-    per leg: one unwritable location never stops the other.
-
-    Atomic (tmp + replace): sibling sessions read these pointers at the same
-    SessionStart, and a truncate-then-write exposes a blank file to them."""
     for pointer in _doe_root_pointer_paths():
         try:
             if pointer.is_file() and pointer.read_text(encoding="utf-8").strip() == root_str:
                 continue
         except Exception:
-            pass  # existing-content check is best-effort; fall through and (re)write the pointer
+            pass
         tmp = pointer.with_name(f"{pointer.name}.{os.getpid()}.tmp")
         try:
             pointer.parent.mkdir(parents=True, exist_ok=True)
@@ -159,13 +146,11 @@ def _write_doe_root_pointer(root_str: str) -> None:
             try:
                 tmp.unlink()
             except OSError:
-                pass  # best-effort tmp-file cleanup; a leftover tmp file does not affect correctness
+                pass
             continue
 
 
 def _maybe_seed_repos_doe_claude(root_str: str) -> None:
-    """Write-when-absent-only seed for `repos.doe_claude` — an operator may
-    legitimately point this key at a different clone; never overwritten."""
     try:
         current = registry_get(_REPOS_REGISTRY_KEY)
     except Exception:
@@ -186,14 +171,14 @@ def _handler(params: dict, repo_root=None) -> dict:
     except Exception:
         root = None
     if root is None:
-        return no_advisory()  # not confirmed anywhere -- never register
+        return no_advisory()
 
     root_str = str(root)
 
     try:
         _write_doe_root_pointer(root_str)
     except Exception:
-        pass  # pointer write is best-effort; the registry write below still reports the root
+        pass
 
     try:
         current = registry_get(_REGISTRY_KEY)
@@ -204,11 +189,11 @@ def _handler(params: dict, repo_root=None) -> dict:
         try:
             registry_set(_REGISTRY_KEY, root_str)
         except Exception:
-            pass  # registry write is best-effort; the pointer files above still record the root
+            pass
 
     try:
         _maybe_seed_repos_doe_claude(root_str)
     except Exception:
-        pass  # seed-if-absent is best-effort; an operator-set registry value is never at risk here
+        pass
 
     return no_advisory()

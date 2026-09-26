@@ -180,12 +180,7 @@ from coordinator_core.session.grant_directive import (
     run_grant_directive,
 )
 
-# ---------------------------------------------------------------------------
-# Exit-code contract — composed from apply_base, shared by every apply/
-# dispatch half. NOT inherited from `brief`'s 0/2/3 (this module's own
 # `EXIT_OK`/`EXIT_USAGE`/`EXIT_TRANSPORT_FAIL`) — the two halves define
-# their own contracts per `computed-skills.md` § Exit-code contract.
-# ---------------------------------------------------------------------------
 APPLY_EXIT_OK = apply_base.APPLY_EXIT_OK
 APPLY_EXIT_HALTED_AT_JUDGMENT = apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT
 APPLY_EXIT_CLAIM_DENIED = apply_base.APPLY_EXIT_CLAIM_DENIED
@@ -217,14 +212,6 @@ class BranchMismatch(RuntimeError):
     `APPLY_EXIT_PARTIAL_MUTATION` when reached via the full `apply()`
     pipeline; a direct `_CLI_DISPATCH[...]` call (as the C1 contract test
     makes) raises it straight to the caller."""
-
-
-# ---------------------------------------------------------------------------
-# `_run_git` — the in-process git read-model every handler below calls by
-# its BARE module-level name (never bound to a local alias at import time)
-# so that `monkeypatch.setattr(bga_apply, "_run_git", fake_git)` — the C1
-# contract test's own patch point — is observed by every handler.
-# ---------------------------------------------------------------------------
 
 
 def _run_git(args: list[str], cwd: Path) -> "subprocess.CompletedProcess[str]":
@@ -279,28 +266,6 @@ def _stage_paths(repo_root: Path, paths: list[str]) -> None:
 def _commit_one(
     repo_root: Path, paths: list[str], message: str, *, stage: bool = True
 ) -> Optional[str]:
-    """Stage (unless `stage=False`) + commit exactly `paths`, pathspec-
-    scoped on both `add` and `commit` (never `git add -A`/a bare `git
-    commit`) — `apply` runs against a shared concurrent-EM working tree
-    that may already carry a sibling session's own files staged, and a
-    whole-tree add/commit would sweep those into this run's commit. The
-    `add` (when `stage=True`) and `commit` calls are each wrapped in
-    `coordinator_core.git_lock_retry.run_with_lock_retry`, so
-    `.git/index.lock` contention from a sibling session's concurrent
-    commit retries with bounded backoff instead of crashing this run on
-    first contention; any other git failure still raises on the first
-    attempt. Returns the new commit's SHA, or `None` when there was
-    nothing staged for `paths` (a clean no-op, not a failure).
-
-    `stage=False` (AC-7): `_dispatch_commit_per_item` pre-stages every
-    verified item's paths in ONE combined `_stage_paths` call ahead of
-    this loop, so each item's own `_commit_one` call here skips its
-    redundant per-item `add` — the commit still fires per item
-    (D-3(b)/(c)'s own per-item cadence is untouched; only the STAGING
-    acquisition count changes, never the commit cardinality). Default
-    `True` preserves this function's original single-call behaviour for
-    every other caller (`_dispatch_commit_per_wave`, and this module's own
-    pre-C5 test corpus that calls `_commit_one` directly)."""
     if not paths:
         return None
     pathspec = ["--", *paths]
@@ -319,25 +284,9 @@ def _commit_one(
         )
     sha_proc = _run_git(["rev-parse", "HEAD"], repo_root)
     landed_sha = sha_proc.stdout.strip() if sha_proc.returncode == 0 else None
-    # C11 (state/lessons/2026-08-18-a-ruling-applied-at-one-door-leaves-the-
-    # siblings-unswept-7c3e1f9a4d22.yaml): this is one of the raw `git
-    # commit` producers C5 left unwired -- last step, after the commit has
-    # already landed, per `apply_base.record_ledger_entry`'s own contract.
     apply_base.record_ledger_entry(repo_root, paths, landed_sha)
     return landed_sha
 
-
-# ---------------------------------------------------------------------------
-# commit-per-item / commit-per-wave — D-3's two commit verbs. Both read a
-# SINGLE JSON string at `args[0]`:
-#   {"items": [{"paths": [str, ...], "message": str, "verified"?: bool,
-#               "backlog_note"?: str}, ...],
-#    "branch": str, "expected_branch": str, "message"?: str}
-# `_prepare_directives_for_dispatch` is the ONE place that builds this
-# shape from a real `directives.build_stage_and_commit` directive; the C1
-# contract test's `_commit_directive_args` builds it directly to pin the
-# handler's own contract in isolation (module docstring).
-# ---------------------------------------------------------------------------
 
 _COMMIT_PER_ITEM_CLI = "commit-per-item"
 _COMMIT_PER_WAVE_CLI = "commit-per-wave"
@@ -358,19 +307,6 @@ def _parse_commit_payload(args: list[str]) -> dict[str, Any]:
 
 
 def _dispatch_checkout_and_backlog_note(args: list[str], repo_root: Path) -> dict[str, Any]:
-    """`checkout-and-backlog-note` — D-3(c)'s per-item non-PASS failure
-    path (`git checkout -- <paths>`), the standalone closed-dispatch
-    entry `directives.py`'s `on_non_pass` sub-directive names by `cli`.
-    `args` == `["checkout", "--", <path>, ...]` — the exact shape
-    `directives.build_stage_and_commit` already writes into
-    `directive["on_non_pass"]["args"]`, so this handler needs no
-    JSON-repacking (contrast the commit verbs above). The backlog-note
-    TEXT itself is not carried in `args` (it is a sibling
-    `on_non_pass["backlog_note"]` key `apply_base`'s handler signature
-    cannot forward) — `_dispatch_commit_per_item` calls
-    `_append_backlog_note` separately, with the note text it already has
-    in hand from the parsed JSON payload, when it invokes this checkout
-    primitive internally for a non-PASS item."""
     if len(args) < 2 or args[0] != "checkout" or args[1] != "--":
         raise UnrecognizedDirective(
             f"checkout-and-backlog-note: expected ['checkout', '--', <paths...>], got {args!r}"
@@ -387,11 +323,6 @@ def _dispatch_checkout_and_backlog_note(args: list[str], repo_root: Path) -> dic
     return {"cli": "checkout-and-backlog-note", "checked_out": list(paths)}
 
 
-#: Scratch log a non-PASS item's backlog note is appended to. Deliberately
-#: NOT staged/committed as part of the pathspec-scoped commit this module
-#: makes — this is a local, append-only record for the operator, not a
-#: structured queue entry (this module has no spec for authoring one; see
-#: the module docstring's substrate note and this chunk's exit interview).
 _NON_PASS_NOTE_LOG = Path("state/scratch/backlog-grind/non-pass-notes.log")
 
 
@@ -409,32 +340,6 @@ def _non_pass_checkout(repo_root: Path, paths: list[str], note: str) -> dict[str
 
 
 def _unstage_or_chain(repo_root: Path, paths: list[str], original_exc: BaseException) -> None:
-    """Reverses `paths` via `_unstage_paths` before `original_exc`
-    propagates. If `_unstage_paths` itself fails with an `Exception` — its
-    own `git reset` goes through `run_with_lock_retry` (`_unstage_paths`'s
-    own docstring), so exhaustion under exactly the contention this module
-    targets is plausible, not hypothetical — that SECOND failure must never
-    silently replace `original_exc` in flight (that would mask a
-    `BranchMismatch`/the original `_commit_one`/`_stage_paths` failure from
-    any caller doing `except BranchMismatch`). Chains the cleanup failure as
-    `__cause__` instead of raising it: `raise original_exc from cleanup_exc`
-    re-raises the SAME original exception object (unmasked), with the
-    cleanup failure attached for diagnosis rather than substituted in its
-    place.
-
-    Scope (Review: code-reviewer — P3, deferred, docstring-only follow-up):
-    this guarantee is bounded to the `Exception` hierarchy, deliberately —
-    the `except Exception` below (mirrored at both this function's call
-    sites, `_dispatch_commit_per_item`'s pre-loop guard and its per-item
-    loop) does NOT catch `BaseException` subclasses outside `Exception`
-    (`KeyboardInterrupt`, `SystemExit`). A `KeyboardInterrupt` raised by
-    `_unstage_paths` here propagates on its own rather than being chained —
-    deliberately not widened to `except BaseException`, which would instead
-    swallow that interrupt and deliver `original_exc` in its place,
-    fighting the operator's own Ctrl-C rather than honoring it. Widening is
-    declined; this docstring previously implied unconditional "never
-    silently replace" coverage, which overstated what the code actually
-    guarantees."""
     try:
         _unstage_paths(repo_root, paths)
     except Exception as cleanup_exc:
@@ -549,14 +454,6 @@ def _dispatch_commit_per_item(args: list[str], repo_root: Path) -> dict[str, Any
 
 
 def _dispatch_commit_per_wave(args: list[str], repo_root: Path) -> dict[str, Any]:
-    """D-3's `per-wave` granularity: ONE `git add`/`git commit` pair for
-    every item's paths combined, re-verifying `expected_branch` exactly
-    ONCE before that single commit (D-3(b), per-wave cadence — never
-    once per item, which would silently degrade to per-item cost while
-    claiming per-wave cardinality). Never emits D-3(c)'s non-PASS
-    sub-path — that distinction is `per-item`-only by construction; a
-    per-wave payload's items are assumed pre-filtered to already-verified
-    work by whichever caller assembled the wave."""
     payload = _parse_commit_payload(args)
     expected_branch = payload.get("expected_branch", "")
     items = payload["items"]
@@ -573,17 +470,7 @@ def _dispatch_commit_per_wave(args: list[str], repo_root: Path) -> dict[str, Any
     return {"cli": _COMMIT_PER_WAVE_CLI, "paths": all_paths, "message": message, "commit_sha": sha}
 
 
-# ---------------------------------------------------------------------------
-# tier-u-grant-cli — the ONE cli in this table whose handler reaches
 # outside `coordinator_core.backlog_grind_assemble` (into the EXISTING,
-# already-live `coordinator_core.session.grant_directive.run_grant_directive`
-# — the same argv path `merge_assemble`'s `_dispatch_tier_u_grant` dispatches
-# through (C3): one parser for `grant`/`revoke`/`check`, never a second one
-# re-built here). Consumed by direct in-process import — same "call the
-# existing primitive, never shell out to a bin trampoline for something
-# with a real Python entrypoint" convention `pickup_assemble.apply`'s
-# `_dispatch_archive_stamp_cli` already sets.
-# ---------------------------------------------------------------------------
 
 _TIER_U_GRANT_CLI = bga_directives._TIER_U_GRANT_CLI
 
@@ -625,20 +512,6 @@ def _dispatch_tier_u_grant_cli(args: list[str], repo_root: Path) -> dict[str, An
     return result
 
 
-# ---------------------------------------------------------------------------
-# spinoff-handoff-template / executor-dispatch-prompt-template (AC26) —
-# both surfaces' fixed narrated templates, already fully rendered into
-# `directive["fields"]` by the compute-side readers via
-# `directives.build_spinoff_handoff_template_emission` (`readers_blitz.py`
-# only) / `build_executor_dispatch_prompt_template_emission` (both
-# `readers_blitz.py` and `readers_mise.py`) at compute time. This
-# handler performs NO further assembly (there is nothing left for it to
-# compute — rendering lives entirely on the compute side, never here) — it
-# simply hands the pre-rendered fields back through the mutating half's own
-# report, so the caller (an EM/orchestrator reading `apply()`'s report)
-# never hand-assembles the template itself (AC26's actual ask).
-# ---------------------------------------------------------------------------
-
 _SPINOFF_HANDOFF_TEMPLATE_CLI = "spinoff-handoff-template"
 _EXECUTOR_DISPATCH_PROMPT_TEMPLATE_CLI = "executor-dispatch-prompt-template"
 
@@ -665,16 +538,6 @@ def _dispatch_executor_dispatch_prompt_template(args: list[str], repo_root: Path
 
 
 def _dispatch_haiku_verifier(args: list[str], repo_root: Path) -> dict[str, Any]:
-    """`dispatch-haiku-verifier` names an action this closed dispatch
-    table structurally cannot perform: spawning a Haiku agent is an
-    orchestrator-level Task/Agent-tool action, never a git/file/
-    subprocess primitive `apply.py` can shell out to or import. This
-    handler does NOT fabricate an execution that never ran — it surfaces
-    the verifier spec (`model`/`evidence_source`/`enum_set`/
-    `output_path`, repacked into `args[0]` by
-    `_prepare_directives_for_dispatch`) in its own report, for the
-    calling orchestrator to act on. Never raises: an unactionable-by-
-    apply directive is not a run failure."""
     return {
         "cli": HAIKU_VERIFIER_CLI,
         "requires_external_dispatch": True,
@@ -691,28 +554,6 @@ _UNIFY_BATONS_CLI = "unify-batons"
 
 
 def _dispatch_unify_batons(args: list[str], repo_root: Path) -> dict[str, Any]:
-    """`unify-batons` — the run's ONE unification verb (AC10's mutation
-    half). Delegates to `pickup_assemble.unify_run_batons`, which is
-    C5's routed path; this handler implements NO unification of its own
-    and must never grow one (the plan's anti-scope: unification has
-    exactly one implementation, and a second dispatch verb that
-    re-implements it is the failure being avoided).
-
-    `args[0]` JSON (packed by `_prepare_directives_for_dispatch`):
-    `{"legs": [<repo-relative path>, ...], "role_axis_fallback_count":
-    <int>, "inventory_record": <path>}`. `legs` is the READER's resolved
-    inheritable set, forwarded for the report only — the routed path
-    resolves the batons it stamps off the durable claim ledger, never off
-    this list (see `unify_run_batons`' own docstring for why that
-    authority does not move).
-
-    Imported at call time, not module scope: `pickup_assemble` is a heavy
-    module this assembler's other verbs never need, and every one of its
-    handlers is paid for on a boot-path apply run.
-
-    Never swallows: a raise out of `unify_run_batons` means a mint or a
-    parent stamp failed with the tree half-moved, which the run must see.
-    """
     from coordinator_core.pickup_assemble import unify_run_batons
 
     spec = _parse_json_object_arg(args)
@@ -725,15 +566,8 @@ def _dispatch_unify_batons(args: list[str], repo_root: Path) -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# coordinator-resolve-validation-cmd (P071-C7) — resolves bug-blitz's
 # `commands/bug-blitz.md:60` FULL test-command citation IN-PROCESS, never
-# via subprocess: `coordinator_core.resolve_validation_cmd` is already the
 # NATIVE-FIRST path `bash_guards/check_test_suite_invocation.py` resolves
-# through before falling back to the bin trampoline by path, and spawning
-# an interpreter here to read a frontmatter key would not meet the
-# brightline's per-use process justification.
-# ---------------------------------------------------------------------------
 
 _RESOLVE_VALIDATION_CMD_CLI = bga_directives._RESOLVE_VALIDATION_CMD_CLI
 
@@ -784,33 +618,9 @@ def _dispatch_resolve_validation_cmd(args: list[str], repo_root: Path) -> dict[s
     )
 
 
-#: C6 discriminator decision (docs/plans/2026-08-19-directives-name-an-op-not-
-#: a-cli.md § C6 / § The discriminator for the mixed end state) — measured
-#: live against `coordinator_core.authz.registration_quad._live_registry()`
-#: this chunk: NONE of this table's nine verbs (`commit-per-item`,
-#: `commit-per-wave`, `checkout-and-backlog-note`, `tier-u-grant-cli`,
-#: `spinoff-handoff-template`, `executor-dispatch-prompt-template`,
-#: `dispatch-haiku-verifier`, `unify-batons`,
-#: `coordinator-resolve-validation-cmd`) resolve to a registered op, so
-#: ALL NINE stay `cli`-named — none migrate to `op`. No new op is minted
-#: to force a migration (out of scope by name). Every one is either raw
-#: `git` plumbing, an in-process call into an existing non-op Python
-#: primitive (`write_tier_u_grant`, `unify_run_batons`,
-#: `cs_resolve_full_test_cmd`), or a pass-through report builder
-#: (`dispatch-haiku-verifier` never executes anything itself) — never
-#: `bash`/`sh`, so `docs/reference/shell-out-carve-outs.md` (scoped to
-#: interpreter/shell spawns) does not apply, and none is a
 #: `CONSUMES_MANIFEST`-driven script module in the completion-family sense,
 #: so no `CONSUMES_MANIFEST` entry applies either. Consequently
 #: `ASSEMBLER_DISPATCHABLE` (coordinator_core/authz/dispatchable.py) gains
-#: NO `"backlog_grind_assemble"` entry from this chunk (C1's "ship it EMPTY
-#: except for entries actually migrated" — zero migrated here).
-#:
-#: THE closed dispatch table (AC3). Every key is a literal string written
-#: here by hand — this dict is never mutated at runtime and never
-#: consulted via anything but a plain `dict.get`/`in` on a
-#: `directives[].cli` value (`apply_base.resolve_cli`). No
-#: `coordinator-safe-commit` entry, by design (D-3).
 _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     _COMMIT_PER_ITEM_CLI: _dispatch_commit_per_item,
     _COMMIT_PER_WAVE_CLI: _dispatch_commit_per_wave,
@@ -822,15 +632,6 @@ _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     _UNIFY_BATONS_CLI: _dispatch_unify_batons,
     _RESOLVE_VALIDATION_CMD_CLI: _dispatch_resolve_validation_cmd,
 }
-
-
-# ---------------------------------------------------------------------------
-# Directive/args-shape reconciliation — see the module docstring's own
-# section on this. The ONLY function in this file that reads a directive's
-# fields OTHER than `id`/`cli`/`args`/`depends_on`/`already_satisfied`
-# (the keys `apply_base` itself understands) — everything downstream of
-# this function operates on the repacked, self-contained shape.
-# ---------------------------------------------------------------------------
 
 
 def _prepare_directives_for_dispatch(directives: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -886,11 +687,6 @@ def _prepare_directives_for_dispatch(directives: list[dict[str, Any]]) -> list[d
     return prepared
 
 
-# ---------------------------------------------------------------------------
-# `apply()` / `drop()` orchestration.
-# ---------------------------------------------------------------------------
-
-
 def apply(
     cadence: str,
     *,
@@ -900,47 +696,6 @@ def apply(
     extra_directives: Optional[list[dict[str, Any]]] = None,
     run_id: Optional[str] = None,
 ) -> tuple[int, dict[str, Any]]:
-    """`apply <cadence> [--session-id <id>] [--decisions <json>]
-    [--run-id <run-id>]` — recomputes `brief(cadence)` in-process and
-    executes its `directives[]` (plus any `extra_directives`) through the
-    closed dispatch table. Returns `(exit_code, report)`.
-
-    `run_id` (review: code-reviewer — F1) is passed straight through to
-    the recomputed `brief()` call below, mirroring `main()`'s own
-    `--run-id` passthrough (`__init__.py`) — this module's recompute of
-    `brief(cadence)` is otherwise the ONE caller of `brief()` in this
-    package that could never honestly supply it, since a mise Phase-6
-    directive's `depends_on` wire resolves against THIS run's own
-    judgment points (this function's own docstring below), and those
-    judgment points are exactly what silently regressed to "unresolved"
-    on every `apply mise-en-place` call once mise-inventory records
-    existed and `apply()` had no `run_id` of its own to give `brief()`.
-
-    `extra_directives` exists because `brief()`'s own readers do NOT
-    manufacture live commit directives at boot time (`readers_mise.py`'s
-    own negative-spec: "a static `collect(cadence)` call site ... cannot
-    honestly construct [a commit directive] without inventing values" —
-    the touched-file paths are only known live, mid-wave). A caller that
-    HAS just computed a wave's real paths (e.g. the rebuilt
-    `bug-blitz.md`/`mise-en-place.md` bodies, via
-    `readers_blitz.build_commit_per_item`/`build_commit_per_wave`) passes
-    the resulting directive(s) here rather than this module inventing a
-    second, parallel way to inject them.
-
-    Recomputes the brief on every call (never trusts a caller-supplied
-    decision object) — `judgment_points` always comes from THIS run's own
-    `brief(cadence)`, so a `depends_on` wire a live commit directive
-    carries (e.g. bug-blitz's standing `j-bug-blitz-commit-readiness`
-    gate, always present in `brief("bug-blitz")`'s own judgment_points
-    regardless of backlog state) resolves against a judgment point that
-    is genuinely in scope for this run, never a stale one.
-
-    Halts at the first unresolved judgment point (`apply_base`'s own
-    per-directive gate) and never overrides a denial — this module adds
-    no claim-grant concept of its own (`resolve_claim_grant=None`):
-    backlog-grind-assemble has no claimed-artifact lifecycle (see
-    `drop()`'s own docstring).
-    """
     root = repo_root or Path.cwd()
     composition_budget = make_fleet_budget("backlog_grind_assemble")
 
@@ -1043,8 +798,6 @@ def _build_wave_path_directives(
     for raw in wave_paths:
         _assert_in_repo_root(Path(raw), repo_root)
 
-    # This was a cross-module reach into a
-    # module-private (underscore-prefixed) constant with no __all__/export;
     # readers_blitz.py now exports COMMIT_READINESS_JP_ID publicly.
     depends_on = readers_bug_blitz.COMMIT_READINESS_JP_ID if cadence == "bug-blitz" else None
     branch = _current_branch(repo_root)
@@ -1079,32 +832,6 @@ def _build_wave_path_directives(
 def _wire_single_disposition_resolves(
     judgment_points: list[dict[str, Any]], directives: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Fills a SINGLE-disposition judgment point's empty `resolves` list with
-    the ids of the directives that `depends_on` it, so a boot-time gate can
-    still be satisfied by live directives whose ids did not exist when it was
-    built.
-
-    `apply_base.disposition_resolves_directive` fires a directive only when the
-    chosen disposition's own `resolves` names that directive's id. A reader
-    that runs at boot cannot honestly supply those ids for a directive built
-    later from live input — `readers_blitz._read_backlog_readiness` emits
-    `j-bug-blitz-commit-readiness` with `resolves=[]` for exactly that reason,
-    while `_build_wave_path_directives` wires every `--wave-path` commit
-    directive's `depends_on` to it. The two are individually correct and
-    jointly unsatisfiable: no `--decisions` payload could open that gate, so
-    the documented per-item commit path could not commit at all.
-
-    Restricted to judgment points carrying exactly ONE disposition. `resolves`
-    is what encodes terminal-vs-non-terminal ACROSS dispositions, so on a
-    multi-disposition gate an empty list is a real authored distinction (a
-    "defer" choice that resolves nothing) and is left untouched. With one
-    disposition there is no alternative to distinguish, so an empty `resolves`
-    can only mean unknown-at-build-time, never "this choice deliberately fires
-    nothing". Dispositions that already name ids are never widened.
-
-    Copies before mutating — `decision` belongs to the recomputed brief, and a
-    caller re-reading it must not observe ids this run happened to generate.
-    """
     if not judgment_points:
         return judgment_points
 
@@ -1155,12 +882,6 @@ def main_apply(argv: list[str]) -> int:
             session_id = tail[i + 1]
             i += 2
         elif tok == "--run-id":
-            # apply.py's recomputed brief()
-            # never threaded --run-id, so mise Phase-6 deterministically
-            # resolved to the "missing --run-id" judgment point on every
-            # `apply mise-en-place` call once records existed. Mirrors
-            # main()'s own --run-id handling (a missing value or a repeat
-            # of the flag is a usage error, never silently ignored).
             if i + 1 >= len(tail) or run_id is not None:
                 return _usage("backlog-grind-assemble")
             run_id = tail[i + 1]
@@ -1228,18 +949,6 @@ def main_apply(argv: list[str]) -> int:
 
     if not wave_paths and cadence == "bug-blitz":
         # THE GATE IS NOT UNOPENABLE; NOTHING ASKED IT TO OPEN. bug-blitz's
-        # standing commit-readiness judgment point ships with a single
-        # disposition whose `resolves` is empty, and
-        # `_wire_single_disposition_resolves` fills it from the directives that
-        # `depends_on` it — which only exist when `--wave-path` was supplied.
-        # Without one, the run halts reporting the JP id and nothing else, and
-        # that report is indistinguishable from the pre-`adb36b820d` defect
-        # where no `--decisions` value could ever clear the gate. A 2026-08-31
-        # live run was read that way and filed as a regression against a tree
-        # and a mirror that both carry the fix
-        # (cross-repo/inbox/2026-08-31-doe-claude-em-blitz-apply-verb-emits-no-
-        # commit-directive.md). Naming the omission at the surface the operator
-        # used is the whole fix; the wiring needs nothing.
         print(
             "backlog-grind-assemble apply: no --wave-path given, so no commit "
             "directive is built and bug-blitz's commit-readiness gate has "
@@ -1274,20 +983,7 @@ def main_apply(argv: list[str]) -> int:
     return exit_code
 
 
-# ---------------------------------------------------------------------------
-# `drop` — the AC4 inverse subcommand. Composed with `pickup_assemble`/
-# `baton_assemble`'s own `drop()` in mind, but backlog-grind-assemble is
-# NOT a claimed-artifact lifecycle the way those two are: `cadence` names
-# WHICH mirror surface is asking, it is never itself claimed, parked, or
-# handed off (there is no `claim_artifact`/`release_artifact` call
-# anywhere in this package — `directives.py` never builds a
-# `session-claim-cli` directive). `drop()` is therefore a deliberately
 # honest, documented no-op — it returns `APPLY_EXIT_OK` and says so,
-# rather than either fabricating a claim-release this assembler has no
-# claim state to release, or omitting the subcommand and failing AC4's
-# "exists and is callable" bar (the C1 contract test's own scope for this
-# AC).
-# ---------------------------------------------------------------------------
 
 
 def drop(

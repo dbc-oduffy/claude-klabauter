@@ -101,20 +101,11 @@ from coordinator_core.bash_guards._command_tokenizer import (
     exceeds_tokenizable_ceiling,
 )
 
-#: Both spellings of the entrypoint: `-m coordinator_core.invoke` (the
-#: module form every caller uses) and a path form, should one appear.
 _INVOKE_RE = re.compile(r"coordinator_core[./]invoke(?:\b|$)")
 
-#: M17 (2026-07-30): named once so the three deny/allow messages below route
-#: through `operator_override_note` (the SSOT builder) instead of each
 #: hand-writing "To bypass: export COORDINATOR_ALLOW_INVOKE_ARGV_PARAMS=1." --
-#: that clause named an action unreachable from inside a live session.
 _OVERRIDE_ENV_VAR = "COORDINATOR_ALLOW_INVOKE_ARGV_PARAMS"
 
-#: Payload size past which an argv token is a portability hazard on its own,
-#: apostrophe or not -- Windows/msys ARG_MAX is ~32KB and the failure there
-#: is a truncation, not an error. Well under that, because the payload is
-#: only part of the command line.
 _ARGV_PAYLOAD_HAZARD_BYTES = 8000
 
 _HEREDOC_DELIM = "CCJSON"
@@ -161,34 +152,15 @@ def _extract_inline_payload(cmd: str) -> Optional[Tuple[int, int, str, str]]:
     return (open_idx, brace_idx + 1, quote, payload)
 
 
-#: The four outcomes of `_span_is_single_shell_token`, named rather than
-#: encoded as `Optional[bool]` (M-16, 2026-08-05). The old tri-state put the
-#: two "no verdict from the cross-check" outcomes on `None`, which the sole
-#: caller distinguished from `True` only by NOT mentioning it -- an implicit
-#: fall-through into `_allow_rewrite`. Four named states force every caller
-#: branch to be written down, and separate the two causes that must resolve
 #: in OPPOSITE directions (see `CONTRACT` in each constant's comment).
-#:
-#: Cross-check confirms the span IS exactly one shell token -> safe to rewrite.
 _CROSS_CHECK_CONFIRMED = "confirmed"
-#: Cross-check RAN and disagreed: `cmd` tokenizes cleanly, but no single token
-#: equals `payload`. The span swallowed shell text between two real tokens, or
 #: an even number of apostrophes vanished during tokenization. CONTRACT: DENY.
 _CROSS_CHECK_CONTRADICTED = "contradicted"
-#: `cmd` is not shell-tokenizable at all (`shlex.split` raises -- an odd number
-#: of quote characters). This is the guard's OWN PRIMARY TARGET SHAPE, not an
-#: anomaly: the apostrophe-in-a-message payload that motivated the guard lands
 #: here every time. CONTRACT: proceed to the rewrite on the JSON parse alone --
-#: a known, accepted residual gap, argued in the module docstring. Denying here
-#: would deny the exact commands the guard exists to repair.
 _CROSS_CHECK_UNAVAILABLE = "unavailable"
-#: `cmd` is past the shared tokenizer ceiling, so `shlex` was never run (it is
-#: quadratic in the longest token; see `_command_tokenizer.
 #: _MAX_TOKENIZABLE_COMMAND_CHARS`). CONTRACT: DENY -- unlike
 #: `_CROSS_CHECK_UNAVAILABLE`, the command is not a shape this guard can claim
-#: to understand, and a 64 KB+ inline params payload is already past
 #: `_ARGV_PAYLOAD_HAZARD_BYTES` by 8x. Refusing the parse must not buy an
-#: ALLOW from the guard the padding defeats.
 _CROSS_CHECK_TOO_LARGE = "too-large"
 
 
@@ -225,10 +197,6 @@ def _span_is_single_shell_token(cmd: str, payload: str) -> str:
 
 
 def _payload_hazard(quote: str, payload: str) -> Optional[str]:
-    """Name the reason this payload cannot survive argv transport, or
-    ``None`` if it can. A payload that IS shell-safe is left alone -- the
-    argv form stays a perfectly good transport for small machine-generated
-    params, and rewriting those would be noise."""
     if len(payload) > _ARGV_PAYLOAD_HAZARD_BYTES:
         return (
             "the payload is %d bytes, near the ~32KB argv ceiling on "
@@ -265,15 +233,6 @@ def check_offer_invoke_params_stdin(
     if hazard is None:
         return None
 
-    # This loop is provably unreachable today, not merely well-defended:
-    # `_extract_inline_payload` requires `json.loads(payload)` to succeed
-    # (strict mode) before any rewrite happens, and strict `json.loads`
-    # rejects a raw (unescaped) newline inside a JSON string -- so `payload`
-    # can never contain an actual `\n` byte, the heredoc body is always
-    # exactly one line, and the delimiter can never appear at line-start in
-    # the transported bytes. The loop costs nothing and is kept anyway
-    # because it covers a hypothetical future transport (pretty-printed
-    # params, say) that no longer holds that property.
     delim = _HEREDOC_DELIM
     n = 0
     while re.search(r"(?m)^%s$" % re.escape(delim), payload):
@@ -288,22 +247,9 @@ def check_offer_invoke_params_stdin(
     _offer_note = operator_override_note(_OVERRIDE_ENV_VAR, payload=hook_payload, git_root=git_root)
     _offer_note_trailer = ("\n\n" + _offer_note) if _offer_note else ""
 
-    # Cross-check the extracted span against the command's own shell
-    # tokenization, where that is possible. Every one of the four outcomes is
-    # branched on BY NAME below -- an outcome that resolves by falling out of
-    # this block is a bug (it is the bug this shape replaced: `None` used to
-    # reach `_allow_rewrite` by not being mentioned).
     cross_check = _span_is_single_shell_token(original_cmd, payload)
 
     # CONTRADICTED: a cross-check RAN and disagreed -- the command tokenizes
-    # cleanly, but no single token equals the payload as written. Two shapes
-    # produce that, and both are denied rather than rewritten or ignored. The
-    # merge counterexample -- two distinct quoted tokens whose span brackets
-    # into one still-parseable document -- is not safe to rewrite, because the
-    # span is not the payload. And an EVEN number of apostrophes is not safe
-    # to ignore: `'{"m":"isn't"}'` tokenizes to the single token
-    # `{"m":"isnt"}`, valid JSON with both apostrophes silently gone, which is
-    # the quiet corruption this guard exists to stop.
     if cross_check == _CROSS_CHECK_CONTRADICTED:
         return _deny(
             (
@@ -316,12 +262,7 @@ def check_offer_invoke_params_stdin(
         )
 
     # TOO_LARGE: the command is past the shared tokenizer ceiling, so no
-    # cross-check could be run without re-opening the quadratic hang. Denying
-    # is the fail-closed direction and the only self-consistent one: a payload
     # that large is already many times `_ARGV_PAYLOAD_HAZARD_BYTES`, so
-    # padding a command past the ceiling must not buy a silent rewrite (or,
-    # since a rewrite short-circuits the guard chain, skip the bands behind
-    # it). Cannot fire below the ceiling by construction.
     if cross_check == _CROSS_CHECK_TOO_LARGE:
         return _deny(
             (
@@ -334,16 +275,7 @@ def check_offer_invoke_params_stdin(
         )
 
     # UNAVAILABLE: `cmd` is not shell-tokenizable at all (an odd number of
-    # quote characters -- the guard's PRIMARY TARGET SHAPE), so there is
-    # nothing to cross-check and the JSON parse remains the only evidence.
     # Deliberately falls through to the rewrite, exactly as CONFIRMED does:
-    # this is the live 2026-07-29 apostrophe shape, and denying it would deny
-    # ordinary work the guard exists to repair. Stated here rather than
-    # implied by omission.
-    #
-    # Anything else is unreachable today and DENIES rather than falling
-    # through: a future fifth outcome must not inherit the rewrite by being
-    # unmentioned, which is precisely how the old `None` became a fail-open.
     if cross_check not in (_CROSS_CHECK_CONFIRMED, _CROSS_CHECK_UNAVAILABLE):
         return _deny(
             (
@@ -354,10 +286,6 @@ def check_offer_invoke_params_stdin(
         )
 
     if "\n" in original_cmd:
-        # A heredoc body must follow the line carrying its `<<` operator, so
-        # the operator can only be spliced into a single-line command. Not
-        # worth parsing multi-line command structure to place it: name the
-        # shape and let the caller place it.
         return _deny(
             (
                 "Denied: %s. Not rewritten -- command spans multiple "

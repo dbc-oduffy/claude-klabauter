@@ -57,8 +57,6 @@ def gate():
     return _load_module()
 
 
-# Every one of these is a real line shape from the published engine tree: a value some
-# consumer compares against verbatim.
 WIRE_LITERALS = (
     '    "patrik-review",',
     '    ".patrik-review.md",',
@@ -72,13 +70,9 @@ WIRE_LITERALS = (
 )
 
 STILL_A_FINDING = (
-    # Capitalised display name -- prose, and the thing this gate exists for.
     f"# Review: {_DISPLAY} F12 (auto-push tightening).",
-    # Capitalised, and quoted: quoting alone confers nothing.
     f'    "{_DISPLAY}-review",',
-    # Lowercase, but PROSE inside a string -- space on the shoulder.
     '    msg = "decision, Review: the Director of Engineering cutover review F1)"',
-    # Lowercase, unquoted: not a literal at all.
     "# see 2026-07-15-the Data Science Reviewer-coverage-graph-walk.md",
 )
 
@@ -94,12 +88,6 @@ def test_display_name_and_prose_mention_remain_findings(line, gate):
 
 
 def test_permit_does_not_leak_across_a_string_boundary(gate):
-    """The shoulder charset stops the permitted span at the literal's own quotes.
-
-    A held wire literal earlier on a line must not shelter a genuine leak later on it --
-    `permitted_spans` is span-based, and a shoulder class admitting spaces would let one
-    quoted value swallow the rest of the line.
-    """
     line = f'    KINDS = ["patrik-review"]  # authored by {_DISPLAY}'
     findings = gate.findings_in(line, "coordinator_core/x.py")
     assert [matched for _, matched in findings] == [_DISPLAY]

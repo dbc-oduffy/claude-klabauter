@@ -92,19 +92,10 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
 
-#: The four fields this op reaches, in reply order.
 _SIZING_OBJECT_FIELDS = ("intent", "estimate", "scout_evidence", "appetite")
 
 
 def _read_sizing_object_fields(sizing_path: str) -> dict:
-    """Whole-document YAML parse of `sizing_path`, projected to the
-    intent/estimate/scout_evidence/appetite quartet.
-
-    Raises ValueError if the file cannot be read or does not parse to a
-    YAML mapping. A field absent from the mapping is returned as None —
-    absence is legitimate for `appetite`/`scout_evidence`/`estimate` per the
-    sizing-object schema's own field descriptions.
-    """
     path = Path(sizing_path)
     try:
         text = path.read_text(encoding="utf-8")

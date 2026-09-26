@@ -1,10 +1,3 @@
-"""Hoisting repeated prompt text changes the script's size, never a prompt.
-
-A resumed run serves every unchanged ``agent()`` call from cache, keyed on the
-resolved prompt. If sharing altered a single resolved byte, turning it on would
-re-pay every landed phase; if it were absent, a large plan could not be fired
-at all (the Workflow tool caps a script at 512KB).
-"""
 
 from __future__ import annotations
 
@@ -46,8 +39,6 @@ def _compose(waves, *, shared: bool) -> str:
     )
     if shared:
         return emit.compose_script(waves, **kwargs)
-    # The unshared form is a measurement baseline no emit produces, so the
-    # emit-time script cap does not apply to it.
     original, original_cap = emit.SharedBlocks, emit._WORKFLOW_SCRIPT_BYTE_CAP
     emit.SharedBlocks = lambda: None  # type: ignore[assignment]
     emit._WORKFLOW_SCRIPT_BYTE_CAP = float("inf")  # type: ignore[assignment]
@@ -68,9 +59,4 @@ def test_a_fifty_wave_plan_fits_the_workflow_script_cap():
     shared = _compose(waves, shared=True)
     assert len(shared.encode("utf-8")) < _WORKFLOW_SCRIPT_CAP
     assert len(shared) < len(inline) / 2
-    # Sharing actually fired (`_prompt_literal`'s prefix-match didn't
-    # silently degrade to the unshared fallback for every row) -- a
-    # size-based check, not just the ratio above, so a future
-    # `_row_prompt` header refactor that breaks the prefix match trips a
-    # test even if it happens not to move the overall byte ratio much.
     assert emit._SHARED_VAR + " = [" in shared

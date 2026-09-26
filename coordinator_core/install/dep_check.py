@@ -77,10 +77,6 @@ from coordinator_core.install.write_surface import (
 from coordinator_core.ops.setup_chain_walker import command_succeeds_native
 from coordinator_core.win_portability import no_console_creationflags
 
-# Generator-provenance declaration (generator_provenance.py). Writes only
-# chain-walk-<session>.json visited-set state and lockfiles under
-# _default_co_dir() = $HOME/.claude/coordinator-claude -- outside the claude-klabauter
-# tracked tree, session-runtime dependency-chain state only.
 GENERATES = []
 
 _VISITED_SET_WRITE_CLAUSE_INDEX = 0
@@ -93,7 +89,7 @@ otherwise `visited_set_crash_cleanup`'s)."""
 
 _PROBE_TIMEOUT_SECS = 10.0
 
-CRASH_RC = 3  # reserved — see module docstring.
+CRASH_RC = 3
 
 _VISITED_SET_DIR_TEMPLATE = "<settings_home>/coordinator-claude"
 """Mirrors `_default_co_dir()`'s `$HOME/.claude/coordinator-claude` shape,
@@ -105,10 +101,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
     writer_id="dep-check",
     source_module="coordinator_core.install.dep_check",
     clauses=(
-        # visited_set_init / visited_set_append: creates and rewrites a
-        # per-session chain-walk visited-set scratch file. SHAPED — the
-        # filename is derived from a caller-supplied session_id, not
-        # enumerable in source.
         ShapedClause(
             discovered_by="visited_set_init",
             entry_template=WriteSurfaceEntry(
@@ -117,9 +109,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 reason="visited_set_init/visited_set_append: writes the cycle-detection visited-set state file for one dep-chain-walk session",
             ),
         ),
-        # visited_set_crash_cleanup / visited_set_init's own stale-file
-        # reaping: unlinks aged-out visited-set files from a prior crashed
-        # or completed session. A delete, not a write.
         ShapedClause(
             discovered_by="visited_set_crash_cleanup",
             entry_template=WriteSurfaceEntry(
@@ -136,8 +125,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
 _MANIFEST_REL_PATH = "docs/install/AGENT.md"
 
 # READ_ONLY_FLAG_ALLOWLIST — mirrors _co_phase_zero_should_run's canonical
-# allowlist (dep_check.sh lines 59-66). Kept as a plain tuple, not a comment
-# block, since Python callers grep this module's source directly.
 _READ_ONLY_FLAGS = (
     "HELP_FLAG",
     "VERSION_FLAG",
@@ -149,29 +136,16 @@ _READ_ONLY_FLAGS = (
 
 
 def _as_bool(value) -> bool:
-    """Mirrors bash's `[[ "$_flag" == true ]]` string-compare semantics —
-    accepts a real bool or a case-sensitive-to-bash "true" string; anything
-    else (including "True"/"1"/absent) is false, matching the oracle's
-    string-literal comparison exactly (bash never treated "1" as truthy
-    here either)."""
     if isinstance(value, bool):
         return value
     return value == "true"
 
-
-# ---------------------------------------------------------------------------
-# _co_phase_zero_should_run
-# ---------------------------------------------------------------------------
 
 def phase_zero_should_run(flags: Dict[str, object]) -> bool:
     """Returns True iff Phase 0 should run (no read-only flag set). Mirrors
     _co_phase_zero_should_run's READ_ONLY_FLAG_ALLOWLIST check."""
     return not any(_as_bool(flags.get(key, False)) for key in _READ_ONLY_FLAGS)
 
-
-# ---------------------------------------------------------------------------
-# _co_run_mode_prompt
-# ---------------------------------------------------------------------------
 
 def run_mode_prompt(
     flags: Dict[str, object],
@@ -180,10 +154,6 @@ def run_mode_prompt(
     read_reply: Optional[Callable[[], str]] = None,
     stdin_is_tty: Optional[bool] = None,
 ) -> int:
-    """Implements step (a) of the dual-mode UX PM directive. Returns 0
-    (proceed) or 92 (agent-mode detected — caller must exit 92, mirroring
-    the bash original's inline `exit 92`). Mirrors _co_run_mode_prompt.
-    """
     stream = stderr if stderr is not None else sys.stderr
     run_mode = flags.get("COORDINATOR_RUN_MODE", "")
     i_am_agent = _as_bool(flags.get("I_AM_AGENT", False))
@@ -226,10 +196,6 @@ def _safe_input() -> str:
         return ""
 
 
-# ---------------------------------------------------------------------------
-# _co_dep_probe / _co_dep_probe_all
-# ---------------------------------------------------------------------------
-
 def _resolve_sibling_root(repo_root: Optional[str]) -> str:
     root = repo_root or os.environ.get("REPO_ROOT")
     if not root:
@@ -238,9 +204,6 @@ def _resolve_sibling_root(repo_root: Optional[str]) -> str:
 
 
 def _nested_layout_fallback(sibling_root: str, sibling_dir: str) -> Optional[str]:
-    """Mirrors the bash "-claude"-suffix-strip nested-layout fallback (F1
-    fix comment in the bash oracle) — returns the fallback path if it
-    exists on disk, else None."""
     if not sibling_dir.endswith("-claude"):
         return None
     bare_name = sibling_dir[: -len("-claude")]
@@ -251,12 +214,6 @@ def _nested_layout_fallback(sibling_root: str, sibling_dir: str) -> Optional[str
 
 
 def _probe_python_import(python: str, expr: str) -> bool:
-    """Deliberate isolation boundary, not a candidate for an in-process
-    import — a failed or heavy dependency import must not land in this
-    process's own ``sys.modules``/import-state; the probe's whole value is
-    that a broken candidate module cannot corrupt the parent interpreter.
-    See ``state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md``
-    for the recorded verdict."""
     if not expr:
         return False
     try:
@@ -274,14 +231,6 @@ def _probe_python_import(python: str, expr: str) -> bool:
 
 
 def _probe_shell_command(cmd: str) -> bool:
-    """Evaluates a manifest `command_succeeds` probe's `cmd` string WITHOUT
-    spawning `bash`/`sh` — delegates to the shell-subset evaluator
-    `coordinator_core.ops.setup_chain_walker.command_succeeds_native`
-    (C11 de-bash cutover; same manifest probe kind, same narrowed-grammar
-    call: a `||`-separated fallback chain of shlex-tokenized argv commands,
-    no shell metacharacter interpretation). Formerly `bash -c "$_cmd"`;
-    reimplemented native (2026-07-21 pure-Python-shop cutover) rather than
-    hand-duplicating a second shell-subset evaluator here."""
     if not cmd:
         return False
     return command_succeeds_native(cmd, int(_PROBE_TIMEOUT_SECS))
@@ -294,12 +243,6 @@ def dep_probe(
     *,
     stderr=None,
 ) -> str:
-    """Returns 'present' | 'missing' | 'present-but-broken'. Mirrors
-    _co_dep_probe, including its fail-safe posture: any internal error
-    (unreadable manifest, no python, unresolvable repo_root) is reported to
-    stderr AND degrades the probe result to the conservative 'missing' —
-    never raises, matching the bash original's `echo "missing"; return 0`
-    pattern on every internal-failure branch."""
     stream = stderr if stderr is not None else sys.stderr
     try:
         lines = manifest_reader.manifest_read_ndjson(manifest_path=manifest_path, repo_root=repo_root)
@@ -376,10 +319,6 @@ def dep_probe_all(
     *,
     stderr=None,
 ) -> List[dict]:
-    """Probes every direct_dep and returns one record per dep: {id,
-    severity, status, sibling_path, hint}. Mirrors _co_dep_probe_all
-    (including its re-parse-per-dep redundancy — faithful to the bash
-    oracle's own shape, not a new inefficiency this port introduces)."""
     stream = stderr if stderr is not None else sys.stderr
     try:
         lines = manifest_reader.manifest_read_ndjson(manifest_path=manifest_path, repo_root=repo_root)
@@ -433,24 +372,14 @@ def dep_probe_all(
     return records
 
 
-# ---------------------------------------------------------------------------
-# Visited-set state machine
-# ---------------------------------------------------------------------------
-
 def _default_co_dir() -> Path:
     home = os.environ.get("HOME") or str(Path.home())
     return Path(home) / ".claude" / "coordinator-claude"
 
 
 def visited_set_crash_cleanup(co_dir: Optional[Path] = None, *, now: Optional[float] = None) -> None:
-    """Phase 0 entry crash-recovery reaper — 5-minute TTL. Mirrors
-    _co_visited_set_crash_cleanup."""
     directory = Path(co_dir) if co_dir is not None else _default_co_dir()
     if not directory.is_dir():
-        # No visited-set dir means this reaper never examined anything --
-        # "we never got there" (never installed, or nothing has run yet),
-        # distinct from "we looked and there was nothing stale". No
-        # journal row for either clause.
         return
     now_ts = now if now is not None else time.time()
     stale_threshold = 300
@@ -461,23 +390,14 @@ def visited_set_crash_cleanup(co_dir: Optional[Path] = None, *, now: Optional[fl
         try:
             mtime = candidate.stat().st_mtime
         except OSError:
-            # Vanished between the is_file() check and stat() (another
-            # session's own reaper/cleanup won the race) -- nothing left
-            # to age out.
             continue
         if (now_ts - mtime) > stale_threshold:
             try:
                 candidate.unlink()
                 deleted.append(candidate)
             except OSError:
-                # Already removed by a concurrent reaper, or a permission
-                # blip -- this is best-effort TTL GC, not correctness-load
-                # bearing (a missed reap just leaves one stale scratch file).
                 pass
 
-    # The dir existed and was examined, so this is a real resolution even
-    # when `deleted` is empty ("we looked, nothing was stale") -- not an
-    # absent row.
     resolution_journal.record_resolution(
         "dep-check",
         _VISITED_SET_DELETE_CLAUSE_INDEX,
@@ -486,8 +406,6 @@ def visited_set_crash_cleanup(co_dir: Optional[Path] = None, *, now: Optional[fl
 
 
 def visited_set_init(session_id: str, co_dir: Optional[Path] = None, *, now: Optional[float] = None) -> Path:
-    """Creates the visited-set file; stale-cleans files >1h old. Mirrors
-    _co_visited_set_init. Returns the created file's path."""
     directory = Path(co_dir) if co_dir is not None else _default_co_dir()
     directory.mkdir(parents=True, exist_ok=True)
 
@@ -499,22 +417,15 @@ def visited_set_init(session_id: str, co_dir: Optional[Path] = None, *, now: Opt
         try:
             mtime = stale_file.stat().st_mtime
         except OSError:
-            # Same race as visited_set_crash_cleanup: gone before stat()
-            # could run, so there's nothing to age out.
             continue
         if (now_ts - mtime) > 3600:
             try:
                 stale_file.unlink()
                 deleted.append(stale_file)
             except OSError:
-                # Best-effort TTL GC -- a concurrent reaper already won,
-                # or a permission blip; not correctness-bearing.
                 pass
 
-    # This function's own stale-sweep shares clause 1 (delete) with
     # visited_set_crash_cleanup -- see WRITE_SURFACE's discovered_by note.
-    # The directory was always examined (mkdir above ensures it exists),
-    # so an empty `deleted` is still a real "looked, nothing stale" fact.
     resolution_journal.record_resolution(
         "dep-check",
         _VISITED_SET_DELETE_CLAUSE_INDEX,
@@ -535,9 +446,6 @@ def visited_set_init(session_id: str, co_dir: Optional[Path] = None, *, now: Opt
 
 
 def visited_set_check(session_id: str, dep_id: str, co_dir: Optional[Path] = None) -> bool:
-    """Returns True if dep_id is already in the visited set. Mirrors
-    _co_visited_set_check's 0=visited/1=not-visited bash contract — this
-    Python function returns bool; the CLI maps True->exit 0, False->exit 1."""
     directory = Path(co_dir) if co_dir is not None else _default_co_dir()
     visited_file = directory / f"chain-walk-{session_id}.json"
     if not visited_file.is_file():
@@ -551,13 +459,6 @@ def visited_set_check(session_id: str, dep_id: str, co_dir: Optional[Path] = Non
 
 
 def visited_set_append(session_id: str, dep_id: str, co_dir: Optional[Path] = None) -> None:
-    """Atomic read-modify-write append (temp file + os.replace — mirrors
-    the bash original's tempfile.NamedTemporaryFile + os.replace pattern,
-    itself already atomic; nothing to harden further since the visited-set
-    file is plain JSON state, never executable — A5 permission-preservation
-    does not apply here). Raises FileNotFoundError if the visited-set file
-    does not exist, mirroring the bash original's ERROR-to-stderr + exit 1
-    on missing file (the CLI wrapper maps this to exit 1)."""
     directory = Path(co_dir) if co_dir is not None else _default_co_dir()
     visited_file = directory / f"chain-walk-{session_id}.json"
     if not visited_file.is_file():
@@ -580,16 +481,9 @@ def visited_set_append(session_id: str, dep_id: str, co_dir: Optional[Path] = No
         try:
             os.unlink(tmp_path)
         except OSError:
-            # Best-effort tmp-file cleanup during error unwind -- the
-            # original exception is re-raised below regardless, so a
-            # failure to remove the orphaned tempfile must not mask it.
             pass
         raise
 
-
-# ---------------------------------------------------------------------------
-# _co_consent_gate
-# ---------------------------------------------------------------------------
 
 _FALLBACK_BANNER = (
     "================================================================\n"
@@ -626,12 +520,6 @@ def consent_gate(
     stdin_is_tty: Optional[bool] = None,
     stderr_is_tty: Optional[bool] = None,
 ) -> int:
-    """Emits the verbatim consent banner with missing-dep substitution, then
-    enforces the §3.3 confirmation protocol. Mirrors _co_consent_gate.
-
-    Returns: 0 (proceed) / 90 / 91 / 93 — the canonical business codes. Exit
-    code 92 (agent-mode) is NOT reachable from this function — that is
-    run_mode_prompt's contract, called separately by the caller."""
     stream = stderr if stderr is not None else sys.stderr
     skip_dep_check = _as_bool(flags.get("SKIP_DEP_CHECK", False))
     accept_risk = _as_bool(flags.get("ACCEPT_MISSING_DEPS_RISK", False))
@@ -707,10 +595,6 @@ def consent_gate(
     return 0
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
 def _flags_from_environ() -> Dict[str, object]:
     return dict(os.environ)
 
@@ -734,9 +618,6 @@ def _dispatch(argv: List[str]) -> int:
             print("Usage: dep-probe <dep-id> [manifest-path]", file=sys.stderr)
             return 2
         dep_id = rest[0]
-        # bash's "${2:-}" idiom produces an empty-string
-        # positional arg (not an omitted one) for the "no manifest path" case; treat
-        # empty the same as omitted so the layout-aware default resolution still fires.
         manifest_path = rest[1] if len(rest) > 1 and rest[1] else None
         print(dep_probe(dep_id, manifest_path=manifest_path))
         return 0

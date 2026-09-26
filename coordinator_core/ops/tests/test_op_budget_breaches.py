@@ -1,12 +1,3 @@
-"""coordinator_core.ops.tests.test_op_budget_breaches — the
-"op_census.breaches" op's contract.
-
-Purpose: the surface exists to make an over-budget op findable so it can be
-deleted. These guard the ways it could stop doing that while still returning
-a well-formed dict — a caller widening the bar, the operator line teaching
-the habit the surface exists to end, the op going unreachable through the
-lazy-dispatch seam, or the read bound going unbounded.
-"""
 
 from __future__ import annotations
 
@@ -74,8 +65,6 @@ def test_reachable_through_the_lazy_dispatch_seam():
 
 
 def test_scoped_like_its_census_sibling():
-    """`repo_root` decides which git common dir the sink is read from; a
-    "none" scope would report another worktree's breaches as this one's."""
     from coordinator_core.op_scopes import OP_KEY_SCOPE
 
     assert OP_KEY_SCOPE["op_census.breaches"] == "show_top"
@@ -100,9 +89,6 @@ def test_classified_compute_only():
 
 
 def test_a_caller_cannot_widen_the_bar():
-    """The habit being banned is handing a slow op more grace. A bar the
-    caller supplies would let any op be reported compliant against a number
-    it already fits."""
     for banned in ("bar_ms", "budget_ms", "threshold_ms"):
         with pytest.raises(CallerFacingValidationError):
             op_budget_breaches._read_params({banned: 30_000.0})
@@ -118,8 +104,6 @@ def test_top_n_is_validated():
 
 
 def test_headline_never_names_a_timeout_as_the_remedy():
-    """There is no shape of this message in which "raise the timeout" is
-    correct — that text is the habit the surface exists to remove."""
     summary = breach_report(entries=[_complete("op.a", 30_000.0)], now=BASE_T)
     text = summary["headline"].lower()
 
@@ -129,9 +113,6 @@ def test_headline_never_names_a_timeout_as_the_remedy():
 
 
 def test_headline_states_the_fact_once_and_then_the_alternative():
-    """Register (`docs/wiki/guard-messaging.md` § Register): one
-    content-bearing fact, stated once, plus a terse imperative alternative.
-    No apology, no reassurance, no argument for its own standing."""
     summary = breach_report(entries=[_complete("op.a", 30_000.0)], now=BASE_T)
     text = summary["headline"]
 
@@ -163,9 +144,7 @@ def test_headline_names_its_unit_and_claims_no_cpu_attribution():
     text = breach_report(entries=[_complete("op.a", 30_000.0)], now=BASE_T)["headline"]
 
     assert "wall-clock" in text.lower(), text
-    # The retired framing claimed CPU this unit never measured.
     assert "stolen" not in text.lower(), text
-    # The conviction is still demanded, and still gated on the right axis.
     assert "process time" in text.lower(), text
     assert "delete" in text.lower(), text
 
@@ -188,13 +167,6 @@ def test_report_asserts_its_own_process_time_against_both_bars():
 
 
 def test_self_assessment_discloses_the_observed_clock_tick(monkeypatch):
-    """`handler_total_ms` is a single-shot `time.process_time()` reading
-    (module docstring's negative-spec: batching would mean re-running this
-    handler's own read-and-summarise body K times, multiplying the real cost
-    it reports). `clock_resolution_ms` is what makes that single-shot number
-    legible: the tick this process has actually observed, read through
-    `op_latency.process_clock_resolution_ms` (never probed -- see that
-    function's own docstring) rather than asserted or guessed."""
     monkeypatch.setattr(op_budget_breaches, "process_clock_resolution_ms", lambda: 15.625)
 
     summary = breach_report(entries=[_complete("op.a", 12.0)], now=BASE_T)
@@ -203,10 +175,6 @@ def test_self_assessment_discloses_the_observed_clock_tick(monkeypatch):
 
 
 def test_self_assessment_clock_tick_is_none_when_unobserved(monkeypatch):
-    """No `process_time` row has been recorded in this process yet -- a real
-    absence (`process_clock_resolution_ms` docstring: "stays None forever if
-    discovery could not complete"), reported as `None` rather than a guessed
-    default that would misrepresent an unknown tick as a known one."""
     monkeypatch.setattr(op_budget_breaches, "process_clock_resolution_ms", lambda: None)
 
     summary = breach_report(entries=[_complete("op.a", 12.0)], now=BASE_T)
@@ -223,8 +191,6 @@ def test_source_block_reports_the_read_bound_honestly():
 
 
 def test_reads_only_the_current_generation(tmp_path, monkeypatch):
-    """Rotated generations here run to tens of megabytes. Walking them would
-    put this op's own cost over the bar it reports against."""
     seen = {}
 
     def _fake_sink_generations(repo_root):
@@ -242,9 +208,6 @@ def test_reads_only_the_current_generation(tmp_path, monkeypatch):
 
 
 def test_the_tail_bound_keeps_the_newest_rows_and_says_so(tmp_path, monkeypatch):
-    """A breach view needs recency. The bound must drop the OLDEST rows, and
-    must declare that it did — a bounded read reported as a whole-population
-    one is how a surface like this quietly starts lying."""
     import json
 
     sink = tmp_path / "op-latency.jsonl"
@@ -321,8 +284,6 @@ def test_truncated_read_refuses_a_trend_direction(tmp_path, monkeypatch):
 
 
 def test_untruncated_read_still_reports_a_real_direction(tmp_path, monkeypatch):
-    """The refusal is scoped to the truncated case — a whole-generation read
-    keeps its direction, or the fix would have deleted the field outright."""
     sink = tmp_path / "op-latency.jsonl"
     rows = [_complete("op.steady", 1_000.0, t_start=BASE_T + i) for i in range(200)]
     with open(sink, "w", encoding="utf-8") as fh:
@@ -338,13 +299,6 @@ def test_untruncated_read_still_reports_a_real_direction(tmp_path, monkeypatch):
     assert report["source"]["head_truncated"] is False
     for row in report["ops"]:
         assert row["trend"] != op_budget_breaches.TREND_WINDOW_LIMITED
-
-
-# ---------------------------------------------------------------------------
-# Dead-dial detection — a caller still dialling an op the registry no longer
-# (or never did) serve. Two directions, both required: the detector must fire
-# on the real incident shape and stay silent on this repo's real noise shape.
-# ---------------------------------------------------------------------------
 
 
 def _warm_start_incident_rows():
@@ -368,10 +322,6 @@ def _warm_start_incident_rows():
 
 
 def _current_generation_noise_rows():
-    """Fixture rows shaped like this repo's current `op-latency.jsonl` naive
-    matches: every one a human CLI typo (count <= 2, non-test caller) or a
-    test fixture dialling a synthetic name (test-prefixed caller). None must
-    survive the detector."""
     return [
         _method_not_found("ops.list", caller="coordinator_core.invoke.__main__", t_start=BASE_T),
         _method_not_found("ops.list", caller="coordinator_core.invoke.__main__", t_start=BASE_T + 1),
@@ -386,8 +336,6 @@ def _current_generation_noise_rows():
         _method_not_found(
             # Caller does NOT start with TEST_CALLER_PREFIX, so this row is
             # excluded by the count threshold (1 < DEAD_DIAL_MIN_ATTEMPTS),
-            # not by caller-class filtering — the synthetic-looking op name
-            # is not what protects it here.
             "test.this_op_does_not_exist_anywhere",
             caller="coordinator_core.ipc.dispatch_from_hook",
             t_start=BASE_T,
@@ -411,10 +359,6 @@ def test_fires_on_the_warm_start_incident_shape():
 
 
 def test_stays_silent_on_todays_real_noise_shape():
-    """Every one of this repo's current-generation naive -32601 matches —
-    four human CLI typos plus two test-fixture dials plus one test-caller
-    dial — is excluded, by count for the typos and by caller class for the
-    test dials."""
     findings = dead_dial_findings(_current_generation_noise_rows())
 
     assert findings == []
@@ -454,8 +398,6 @@ def test_a_successful_completion_clears_the_op_even_with_many_failures():
 
 
 def test_breach_report_joins_ledger_fate_for_a_dead_dial(monkeypatch):
-    """The `session.warm_start` case: the finding names the fate the ledger
-    records for the still-dialled op."""
 
     class _FateEntry:
         def __init__(self, key, title, op_keys, fate_values):
@@ -476,8 +418,6 @@ def test_breach_report_joins_ledger_fate_for_a_dead_dial(monkeypatch):
 
 
 def test_ledger_absent_is_a_distinguishable_result_not_an_empty_finding_list(monkeypatch):
-    """A published mirror without claude-klabauter's `state/` corpus must not read as
-    "no findings" — that would turn it into a silent all-clear."""
 
     def _raise():
         raise LedgerAbsent("no ledger here")
@@ -515,10 +455,6 @@ def test_breach_report_reports_no_dead_dials_on_a_clean_population(tmp_path, mon
 
 
 def test_empty_findings_with_an_absent_ledger_is_not_asserted_ok(monkeypatch):
-    """`ledger_status: "ok"` must reflect the ledger actually being present,
-    even when `dead_dial_findings` never touches it because there are zero
-    qualifying rows — a published mirror with no dead-dial findings must not
-    claim `ok` for a ledger it never looked at."""
     monkeypatch.setattr(op_budget_breaches, "KILL_LEDGER", op_budget_breaches.KILL_LEDGER.parent / "no-such-kill-ledger.md")
 
     summary = breach_report(entries=[_complete("op.a", 12.0)], now=BASE_T)
@@ -528,9 +464,6 @@ def test_empty_findings_with_an_absent_ledger_is_not_asserted_ok(monkeypatch):
 
 
 def test_split_caller_tie_reports_the_full_caller_breakdown():
-    """A 6/6 split-caller leak (the `ops.list` shape) must not lose the
-    non-selected caller — `callers` carries the full breakdown even though
-    `caller` picks one for the top-level field."""
     rows = [
         _method_not_found("ops.list", caller="coordinator_core.ops._pool_dispatch_worker", t_start=BASE_T + i)
         for i in range(6)
@@ -553,13 +486,6 @@ def test_split_caller_tie_reports_the_full_caller_breakdown():
 
 
 def test_headline_does_not_tell_a_network_arm_to_delete_itself():
-    """An arm the op named `*.network` spends its time on a remote, so
-    "delete it or rebuild it under the bar" is advice it cannot take —
-    and this line renders at every session boot.
-    `state/audits/2026-08-31-push-outstanding-lands-under-the-bar-in-
-    process-time.md` measured the local half of the worked example at
-    UNDER 1ms, ~630x UNDER the bar, while this surface called it the worst
-    offender on the box."""
     summary = breach_report(
         entries=[_complete("push.outstanding.network", 30_000.0)], now=BASE_T
     )
@@ -568,28 +494,19 @@ def test_headline_does_not_tell_a_network_arm_to_delete_itself():
     assert "push.outstanding.network" in text
     assert "delete" not in text.lower()
     assert "round trip" in text.lower()
-    # The breach itself is still reported, not suppressed: the numbers were
-    # never the wrong part, only the imperative.
     assert summary["totals"]["breaching_ops"] == 1
 
 
 def test_network_remedy_does_not_become_a_denylist_of_op_names():
-    """The suffix travels with the emitting op, so an arbitrary op opting in
-    needs no edit here — and an op that did NOT opt in still gets the
-    delete-or-rebuild imperative, whatever it is called."""
     assert "round trip" in op_budget_breaches._remedy_for("anything.at.all.network")
     for op in ("push.outstanding", "network.thing"):
         remedy = op_budget_breaches._remedy_for(op)
         assert "delete" in remedy.lower(), remedy
         assert "rebuild" in remedy.lower(), remedy
-        # The kill bar is gated on the axis that can carry a conviction, never
-        # softened: this line asks for process time BEFORE the delete, and must
-        # not drift into offering a wider budget instead of the delete.
         assert "process time" in remedy.lower(), remedy
 
 
 def test_network_headline_still_obeys_the_standing_register_rules():
-    """The new branch is not exempt from what governs the other one."""
     summary = breach_report(
         entries=[_complete("push.outstanding.network", 30_000.0)], now=BASE_T
     )
@@ -603,11 +520,6 @@ def test_network_headline_still_obeys_the_standing_register_rules():
 
 
 def _worst_case_summary(op):
-    """A summary shaped like `headline_for` expects, with every numeric
-    field pushed to a realistic-worst magnitude at once — a box bad enough
-    to log 4-digit breach/attempt counts and hundreds of seconds stolen, the
-    scale the commit under review's own worked example (227/354 breaches,
-    431.4s stolen) is already within an order of magnitude of."""
     return {
         "totals": {"breaching_ops": 9999, "stolen_ms": 999_999.9, "attempts": 0, "vanished": 0, "in_flight": 0},
         "bar_ms": 500.0,
@@ -617,19 +529,13 @@ def _worst_case_summary(op):
                 "stolen_ms": 999_999.9,
                 "breaches": 9999,
                 "attempts": 9999,
-                "trend": op_budget_breaches.TREND_WINDOW_LIMITED,  # longest trend value
+                "trend": op_budget_breaches.TREND_WINDOW_LIMITED,
             }
         ],
     }
 
 
 def test_headline_stays_under_cap_for_the_longest_registered_op_name():
-    """Structural, not test-observed (review finding 3,
-    `coordinatorcode-reviewer.a6a0df83ba2cb4da6.md`): the longest op name
-    actually in this repo's registry, `research.verify_scout_inventory_completeness`
-    (44 chars — the shape of `session.resolve_chain_terminal_disposition`),
-    combined with worst-case digit counts on every other field, must not
-    push the banner past the 220-byte register cap."""
     op = "research.verify_scout_inventory_completeness"
     text = headline_for(_worst_case_summary(op))
 
@@ -637,9 +543,6 @@ def test_headline_stays_under_cap_for_the_longest_registered_op_name():
 
 
 def test_headline_stays_under_cap_for_an_op_name_longer_than_any_registered():
-    """A deliberately longer-than-realistic op name must still degrade the
-    display, never the cap — `_fit_op_name` elides it rather than letting
-    the banner grow past 220 bytes."""
     op = "workstream." + ("x" * 120) + ".unrealistically_long_arm_name"
     text = headline_for(_worst_case_summary(op))
 

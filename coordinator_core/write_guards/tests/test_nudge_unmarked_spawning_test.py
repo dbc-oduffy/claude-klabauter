@@ -132,10 +132,6 @@ def test_malformed_payload_returns_none():
 
 
 def test_guard_fires_through_engine_evaluate_payload_json():
-    """AC5/AC6: proves this guard is not merely registered but actually
-    reachable and firing through the production PreToolUse entry point --
-    a registered guard can still be inert if its params are not threaded
-    (staff-eng F5 caveat)."""
     names, import_failed = write_guards_engine.discover_guard_names()
     assert not import_failed, f"write_guards import failure(s): {import_failed}"
     assert "nudge_unmarked_spawning_test" in names
@@ -147,12 +143,6 @@ def test_guard_fires_through_engine_evaluate_payload_json():
         )
     )
     skipped: list[str] = []
-    # `aggregate=True`, not the first-wins default: this asserts THIS guard is
-    # reachable, and the default shape returns only the highest-priority
-    # advisory. The fixture below spawns `['git', 'status']`, which legitimately
-    # also trips nudge_windows_subprocess_popup (priority 110 vs this guard's
-    # 191) — under first-wins that masks this guard and the assertion becomes a
-    # statement about guard priorities rather than about reachability.
     results = write_guards_engine.evaluate_payload_json(
         payload_text, skipped_out=skipped, aggregate=True
     )
@@ -164,13 +154,6 @@ def test_guard_fires_through_engine_evaluate_payload_json():
         f"this guard did not fire through the production seam; advisories seen: {texts}"
     )
 
-    # Control: a marked file, same seam, must not fire THIS guard.
-    #
-    # Deliberately not `is None`. The fixture spawns `['git', 'status']`, which
-    # legitimately trips nudge_windows_subprocess_popup — a different guard,
-    # correctly firing, and not this test's subject. Asserting global silence
-    # would make this control a hostage to every other guard's behaviour on an
-    # unrelated property of the fixture.
     control_payload_text = json.dumps(
         _payload(
             "Write",

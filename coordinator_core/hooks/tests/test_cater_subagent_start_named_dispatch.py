@@ -1,20 +1,3 @@
-"""
-coordinator_core.hooks.tests.test_cater_subagent_start_named_dispatch --
-pytest harness for the named-dispatch `contract_blocks` row-selection fix
-(bug-backlog `2026-08-21-named-dispatch-catering-resolves-contrac-
-0755d38ec8ea.yaml`).
-
-Split into its own file, not appended to `test_cater_subagent_start.py`, per
-that bug's own remediation brief -- a peer agent edits the sibling file
-concurrently in this session.
-
-Synthetic fixtures only, entirely under `tmp_path`; no dependency on a
-sibling DoE-claude checkout and nothing written outside `tmp_path`.
-
-Spec backlink: state/bug-backlog/2026-08-21-named-dispatch-catering-
-resolves-contrac-0755d38ec8ea.yaml
-Module under test: coordinator_core/hooks/cater_subagent_start.py
-"""
 
 from __future__ import annotations
 
@@ -43,22 +26,8 @@ EM_SESSION_ID = "em-session-cater-1"
 
 
 def _canonical_key(raw_agent_id: str, payload_session_id: str) -> str:
-    """The `.agents/` directory name a named dispatch actually resolves to.
-
-    `_canonical_agent_id` derives `<name>@session-<short8>` from the PAYLOAD's
-    own `session_id`, not from the EM session the ledger row points back to --
-    so this cannot be a module constant; each test's payload session id gives
-    a different key. Derived through the engine rather than spelled out, so a
-    fixture can never drift from the resolver the way the raw-form keys these
-    tests used to carry did.
-    """
     return engine._canonical_agent_id(raw_agent_id, payload_session_id)
 
-
-# ---------------------------------------------------------------------------
-# Fixtures -- self-contained, no import from the sibling test module (a peer
-# agent is editing it concurrently this session).
-# ---------------------------------------------------------------------------
 
 @pytest.fixture
 def git_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -66,11 +35,7 @@ def git_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     (tmp_path / "coordinator" / "snippets").mkdir(parents=True)
-    # `resolve_plugin_root()` (provision_report.py) resolves the
-    # coordinator-claude plugin's CONTENT root independently of this
     # fixture's own git root -- point its `CLAUDE_PLUGIN_ROOT` rung at
-    # THIS fixture's `coordinator/` dir so `_assemble_contract_blocks`
-    # resolves the synthetic snippets built below.
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(tmp_path / "coordinator"))
     registry = tmp_path / "coordinator" / "snippets" / "registry.toml"
     registry.write_text(
@@ -106,9 +71,6 @@ def _policy_env(monkeypatch: pytest.MonkeyPatch, policy_path: Path) -> None:
 
 @pytest.fixture(autouse=True)
 def _no_role_append(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Isolates these tests from whatever `agent-role-dispatched.md` happens
-    to be installed on the machine running them -- matches the sibling
-    file's own default posture (role framing fails open to "")."""
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-claude-config"))
 
 
@@ -122,9 +84,6 @@ def _payload(agent_type: str, session_id: str, cwd: str, contract_blocks=None, a
 
 
 def _write_backpointer(git_root: Path, agent_id: str, em_sid: str, resolved_subagent_type: str) -> None:
-    """Build the two-hop back-pointer chain `resolve_effective_types` reads
-    for a NAMED dispatch: agent_id -> em_session-id.txt -> em_sid's own
-    `dispatched-agents.txt` row (`_read_backpointer_subagent_type`)."""
     agents_dir = git_root / ".git" / "coordinator-sessions" / ".agents" / agent_id
     agents_dir.mkdir(parents=True, exist_ok=True)
     (agents_dir / "em-session-id.txt").write_text(em_sid + "\n", encoding="utf-8")
@@ -135,10 +94,6 @@ def _write_backpointer(git_root: Path, agent_id: str, em_sid: str, resolved_suba
     with open(dispatch_file, "a", encoding="utf-8", newline="\n") as handle:
         handle.write(f"{agent_id}\tclaude-sonnet-5\t{resolved_subagent_type}\t1700000000\n")
 
-
-# ---------------------------------------------------------------------------
-# 1. Compatibility guarantee -- list shape unchanged.
-# ---------------------------------------------------------------------------
 
 def test_list_shape_still_composes_blocks_inline_unchanged(
     git_repo: Path, capsys: pytest.CaptureFixture
@@ -152,11 +107,6 @@ def test_list_shape_still_composes_blocks_inline_unchanged(
     stderr = capsys.readouterr().err
     assert NAMED_DISPATCH_ROW_RESOLVED_MARKER not in stderr
 
-
-# ---------------------------------------------------------------------------
-# 2. Mapping shape, unnamed dispatch -- resolves off `agent_type` directly,
-#    no back-pointer read needed.
-# ---------------------------------------------------------------------------
 
 def test_mapping_shape_unnamed_dispatch_selects_row_on_agent_type(
     git_repo: Path, capsys: pytest.CaptureFixture
@@ -174,12 +124,6 @@ def test_mapping_shape_unnamed_dispatch_selects_row_on_agent_type(
     assert NAMED_DISPATCH_ROW_RESOLVED_MARKER not in stderr
 
 
-# ---------------------------------------------------------------------------
-# 3. Mapping shape, NAMED dispatch -- THE DEFECT. `agent_type` is a
-#    teammate name absent from the map; only the back-pointer-resolved
-#    `subagent_type` is a key. This test fails against the pre-fix module.
-# ---------------------------------------------------------------------------
-
 def test_mapping_shape_named_dispatch_resolves_via_backpointer(
     git_repo: Path, capsys: pytest.CaptureFixture
 ) -> None:
@@ -190,7 +134,7 @@ def test_mapping_shape_named_dispatch_resolves_via_backpointer(
         ELIGIBLE_TYPE,
     )
     payload = _payload(
-        "patrik",  # teammate NAME, not a policy key
+        "patrik",
         "session-map-named-1",
         str(git_repo),
         contract_blocks={ELIGIBLE_TYPE: [SNIPPET_A]},
@@ -204,11 +148,6 @@ def test_mapping_shape_named_dispatch_resolves_via_backpointer(
     assert stderr.count(NAMED_DISPATCH_ROW_RESOLVED_MARKER) == 1
     assert NAMED_DISPATCH_ROW_RESOLVED_MARKER not in result
 
-
-# ---------------------------------------------------------------------------
-# 4. Mapping shape, legitimately-absent row -- neither key present. No
-#    diagnostic; catering still proceeds with sidecar offer + role framing.
-# ---------------------------------------------------------------------------
 
 def test_mapping_shape_legitimately_absent_row_no_diagnostic(
     git_repo: Path, capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -236,10 +175,6 @@ def test_mapping_shape_legitimately_absent_row_no_diagnostic(
     assert NAMED_DISPATCH_ROW_RESOLVED_MARKER not in stderr
 
 
-# ---------------------------------------------------------------------------
-# 5. Mapping shape, row present but empty -- the genuinely-anomalous case.
-# ---------------------------------------------------------------------------
-
 def test_mapping_shape_present_but_empty_row_emits_diagnostic(
     git_repo: Path, capsys: pytest.CaptureFixture
 ) -> None:
@@ -257,10 +192,6 @@ def test_mapping_shape_present_but_empty_row_emits_diagnostic(
     assert "present but empty" in stderr
     assert NAMED_DISPATCH_ROW_RESOLVED_MARKER not in stderr
 
-
-# ---------------------------------------------------------------------------
-# 6. Counter fires exactly once for the named case, not at all for unnamed.
-# ---------------------------------------------------------------------------
 
 def test_counter_fires_only_for_named_dispatch(
     git_repo: Path, capsys: pytest.CaptureFixture
@@ -291,10 +222,6 @@ def test_counter_fires_only_for_named_dispatch(
     assert capsys.readouterr().err.count(NAMED_DISPATCH_ROW_RESOLVED_MARKER) == 1
 
 
-# ---------------------------------------------------------------------------
-# 7. Counter is stderr-only -- absent from the returned additionalContext.
-# ---------------------------------------------------------------------------
-
 def test_counter_output_is_stderr_only(git_repo: Path, capsys: pytest.CaptureFixture) -> None:
     _write_backpointer(
         git_repo,
@@ -315,10 +242,6 @@ def test_counter_output_is_stderr_only(git_repo: Path, capsys: pytest.CaptureFix
     assert NAMED_DISPATCH_ROW_RESOLVED_MARKER in captured.err
     assert NAMED_DISPATCH_ROW_RESOLVED_MARKER not in result
 
-
-# ---------------------------------------------------------------------------
-# 8. Malformed contract_blocks values fail open, never raise.
-# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("malformed", [None, "not-a-list-or-map", 42, 3.14, True])
 def test_malformed_contract_blocks_fail_open(git_repo: Path, malformed) -> None:

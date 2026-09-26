@@ -61,19 +61,6 @@ from typing import Any, Mapping, NamedTuple
 
 
 class GateReading(NamedTuple):
-    """One gate's payload, normalised to a shared vocabulary.
-
-    status: one of `clean` | `open` | `indeterminate` | `not-applicable`.
-    residue_items: structured items this reading contributes toward C2's
-        `residue[]` — each is a plain dict carrying only what the engine
-        owns (producing gate, an owned reference, the gate's own summary
-        text). Never a next-step verb (AC4).
-    reason: agent-facing text, populated on `indeterminate` naming what
-        was not recognised; `None` otherwise. Message register:
-        `docs/wiki/guard-messaging.md` § Register — one fact, stated
-        once, plus a terse alternative where one exists; no
-        self-legitimacy, no reassurance, no apology.
-    """
 
     status: str
     residue_items: tuple[Mapping[str, Any], ...]
@@ -81,9 +68,6 @@ class GateReading(NamedTuple):
 
 
 def _unrecognised_value(gate: str, key: str, value: Any) -> GateReading:
-    """Total-mapping fallback arm (negative-spec item 2): an unrecognised
-    VALUE of a recognised payload key. Never `clean`.
-    """
     return GateReading(
         status="indeterminate",
         residue_items=(),
@@ -92,10 +76,6 @@ def _unrecognised_value(gate: str, key: str, value: Any) -> GateReading:
 
 
 def _unrecognised_shape(gate: str, missing_key: str) -> GateReading:
-    """Total-mapping fallback arm (negative-spec item 2): an unrecognised
-    payload SHAPE — the key this reader depends on is absent. Never
-    `clean`.
-    """
     return GateReading(
         status="indeterminate",
         residue_items=(),
@@ -104,30 +84,12 @@ def _unrecognised_shape(gate: str, missing_key: str) -> GateReading:
 
 
 def _row_reference(row: Any) -> str:
-    """Reads a spine row's own `id`, tolerating both shapes the payload can
-    arrive in: the `SpineRowItem` NamedTuple that a shallow `._asdict()`
-    leaves nested, and the plain mapping a JSON round-trip produces. An
-    unreadable row degrades to the empty string rather than raising —
-    a residue reference is evidence, and this module must never be the
-    reason `brief()` fails to emit.
-    """
     if isinstance(row, Mapping):
         return str(row.get("id", ""))
     return str(getattr(row, "id", ""))
 
 
-# --- open_spine_row_worklist -------------------------------------------
-#
-# `OpenSpineRowGate.verdict` (directives_spine_worklist.py) is
-# already a total three-way read: `applicable` / `not-applicable` /
 # `indeterminate`. This reader TRANSLATES that existing verdict; it does
-# not re-derive a status the gate already computed.
-#
-# Mapping (deliberate, not a rename): the gate's `applicable` means "spine
-# resolved, at least one row open" — that is unfinished, owned work, so it
-# maps to this module's `open`, not to a bare passthrough of the word
-# `applicable`. `not-applicable` and `indeterminate` pass through as-is;
-# both vocabularies already use those exact words for the same meaning.
 
 _OPEN_SPINE_ROW_WORKLIST_MAPPING: dict[str, str] = {
     "applicable": "open",
@@ -137,19 +99,6 @@ _OPEN_SPINE_ROW_WORKLIST_MAPPING: dict[str, str] = {
 
 
 def open_spine_row_worklist(payload: Mapping[str, Any]) -> GateReading:
-    """Reader for `gates.open_spine_row_worklist`.
-
-    TOTAL mapping (`OpenSpineRowGate.verdict` -> `GateReading.status`):
-        "applicable"     -> "open"            (spine resolved, rows open)
-        "not-applicable" -> "not-applicable"  (spine resolved, nothing open, or no spine)
-        "indeterminate"  -> "indeterminate"   (no governing plan resolved / unreadable / malformed)
-        anything else    -> "indeterminate", reason names the unrecognised value.
-    Missing "verdict" key -> "indeterminate", reason names the missing key.
-
-    Residue: each still-open row (`payload["rows"]`, an id-bearing item)
-    becomes one residue item carrying this gate's name, the row's own id,
-    and the gate's `summary_line` — no next-step verb.
-    """
     if "verdict" not in payload:
         return _unrecognised_shape("open_spine_row_worklist", "verdict")
 
@@ -174,16 +123,6 @@ def open_spine_row_worklist(payload: Mapping[str, Any]) -> GateReading:
     return GateReading(status=status, residue_items=residue, reason=None)
 
 
-# --- landed_reconciliation ----------------------------------------------
-#
-# `LandedReconciliationGate.verdict` (__init__.py) shares the
-# exact same three-way idiom as `OpenSpineRowGate.verdict` by design (its
-# own docstring states it mirrors that gate). Re-read live at execution
-# time per the plan's cross-plan-coordination note — `2026-08-14-landed-
-# fires-at-spine-resolution-and-clo.md` is actively reshaping this gate's
-# payload, and this reader is written against the payload as it exists on
-# disk right now, not pinned to any citation.
-
 _LANDED_RECONCILIATION_MAPPING: dict[str, str] = {
     "applicable": "open",
     "not-applicable": "not-applicable",
@@ -192,24 +131,6 @@ _LANDED_RECONCILIATION_MAPPING: dict[str, str] = {
 
 
 def landed_reconciliation(payload: Mapping[str, Any]) -> GateReading:
-    """Reader for `gates.landed_reconciliation`.
-
-    TOTAL mapping (`LandedReconciliationGate.verdict` -> `GateReading.status`):
-        "applicable"     -> "open"            (landed, at least one AC unticked)
-        "not-applicable" -> "not-applicable"  (not landed, landed with every AC ticked, or
-                                                landed with no AC grammar at all)
-        "indeterminate"  -> "indeterminate"   (no governing plan resolved / plan unreadable /
-                                                AC rows with unreadable status tokens)
-        anything else    -> "indeterminate", reason names the unrecognised value.
-    Missing "verdict" key -> "indeterminate", reason names the missing key.
-
-    Residue: on `open`, one residue item naming this gate, the gate's own
-    `open_count`/`total_count` as the owned reference, and its
-    `summary_line` — no next-step verb. The reference string interpolates
-    both keys with no fallback: `LandedReconciliationGate` (__init__.py)
-    declares `open_count`/`total_count` as required NamedTuple fields with
-    no defaults, so a shallow `._asdict()` always carries both.
-    """
     if "verdict" not in payload:
         return _unrecognised_shape("landed_reconciliation", "verdict")
 
@@ -231,36 +152,13 @@ def landed_reconciliation(payload: Mapping[str, Any]) -> GateReading:
     return GateReading(status=status, residue_items=residue, reason=None)
 
 
-# --- C1b appends here -----------------------------------------------------
-#
-# Three more readers land here, append-only, on top of this line:
-# `completeness_checklist`, `consumed_handoff_completeness`, `review_scale`.
-# C1a's two readers above are never edited by this chunk.
-#
-# Spec backlink: pln-one-completion-verdict-for-wor-ea96e2, chunk C1b.
-
-
 def _completeness_item_field(item: Any, field: str) -> str:
-    """Reads one field off a `CompletenessItem`, tolerating both shapes the
-    payload can arrive in: the NamedTuple a same-process caller passes, and
-    the plain mapping a JSON round-trip produces. Mirrors `_row_reference`'s
-    own tolerance for `SpineRowItem` above; an unreadable item degrades to
-    the empty string rather than raising."""
     if isinstance(item, Mapping):
         return str(item.get(field, ""))
     return str(getattr(item, field, ""))
 
 
-# --- completeness_checklist ----------------------------------------------
-#
-# Post-C0, `CompletenessChecklistGate.verdict` (directives_session_hygiene.py,
-#) is already the same total four-way read the gate itself
-# computes: `not-applicable` / `indeterminate` / `clean` / `open`. This
 # reader TRANSLATES that existing verdict; it does not re-derive a status
-# the gate already computed, and it never falls back to the three-way
-# vocabulary this plan's own body cites — that citation is stale (see this
-# module's own header note and C0's live docstring, both read at execution
-# time).
 
 _COMPLETENESS_CHECKLIST_MAPPING: dict[str, str] = {
     "not-applicable": "not-applicable",
@@ -271,25 +169,6 @@ _COMPLETENESS_CHECKLIST_MAPPING: dict[str, str] = {
 
 
 def completeness_checklist(payload: Mapping[str, Any]) -> GateReading:
-    """Reader for `gates.completeness_checklist`.
-
-    TOTAL mapping (`CompletenessChecklistGate.verdict` -> `GateReading.status`):
-        "not-applicable" -> "not-applicable"  (not chain-terminal, or the
-                                                consumed handoff carries no
-                                                `completeness_checklist:` field)
-        "indeterminate"  -> "indeterminate"   (chain-terminal, but no consumed
-                                                handoff text arrived — unreadable,
-                                                missing, or archived away)
-        "clean"          -> "clean"           (items parsed, all verified)
-        "open"           -> "open"            (items parsed, at least one unverified)
-        anything else    -> "indeterminate", reason names the unrecognised value.
-    Missing "verdict" key -> "indeterminate", reason names the missing key.
-
-    Residue: each unverified item (`payload["items"]` where `verified` is
-    False) becomes one residue item carrying this gate's name, the item's
-    own `item_class: assertion` as the owned reference, and the gate's
-    `summary_line` — no next-step verb.
-    """
     if "verdict" not in payload:
         return _unrecognised_shape("completeness_checklist", "verdict")
 
@@ -316,54 +195,11 @@ def completeness_checklist(payload: Mapping[str, Any]) -> GateReading:
     return GateReading(status=status, residue_items=residue, reason=None)
 
 
-# --- consumed_handoff_completeness ----------------------------------------
-#
-# `ConsumedHandoffCompletenessGate` (__init__.py) carries no
-# top-level verdict key by design — its payload is
-# `{applies, blocks, elements[]}`, and every judgment lives per-element in
-# `elements[i]["leg_a"]["verdict"]` / `elements[i]["leg_b"]["verdict"]`
-# (`_evaluate_consumed_handoff_completeness_element`, __init__.py,
-# — both docstrings read in full before writing this reader).
-# This reader states its OWN two-stage TOTAL mapping: element legs reduce
-# to one element status, then element statuses reduce to one gate status.
-# Neither stage consults `payload["applies"]` or `payload["blocks"]` — both
-# are re-derived independently from the leg verdicts, so a payload that
-# somehow disagreed with its own `blocks` field (unrecognised legs, e.g.)
-# would still be read correctly by this reader rather than trusting the
-# gate's own summary bit.
-#
-# Stage 1 — per-element leg reduction (leg_a in {open, clean,
-# not-applicable, indeterminate}, leg_b in {live-child, no-children,
-# indeterminate}), by priority:
-#   1. leg_a == "open" OR leg_b == "live-child"  -> "open"       (blocking work)
-#   2. leg_a == "indeterminate" OR leg_b == "indeterminate"       -> "indeterminate"
-#   3. leg_a == "clean"                                            -> "clean"
-#   4. leg_a == "not-applicable"                                   -> "not-applicable"
-#   An unrecognised leg_a or leg_b verdict value, or a leg missing its own
-#   "verdict" key, short-circuits straight to "indeterminate" for that
-#   element, naming what was not recognised — evaluated before priority 1,
-#   so an unrecognised leg never accidentally reads as blocking-clear.
-#
-# Stage 2 — element statuses reduce to one gate status, by priority:
-#   any element "open"          -> "open"
-#   elif any element "indeterminate" -> "indeterminate"
-#   elif any element "clean"    -> "clean"
-#   else ("not-applicable" only, or no elements at all) -> "not-applicable"
-#   An empty `elements` tuple reduces to "not-applicable" because there is
-#   nothing to check — read off the shape of `elements` itself, never off
-#   `payload["applies"]`.
-
 _LEG_A_VERDICTS = frozenset({"open", "clean", "not-applicable", "indeterminate"})
 _LEG_B_VERDICTS = frozenset({"live-child", "no-children", "indeterminate"})
 
 
 def _consumed_handoff_element_status(element: Mapping[str, Any]) -> tuple[str, str | None]:
-    """Stage 1 of `consumed_handoff_completeness`'s TOTAL mapping — reduces
-    one element's `leg_a`/`leg_b` verdicts to `(status, reason)`. `reason`
-    is populated only when this element degrades to `indeterminate` because
-    of an unrecognised shape/value, mirroring `_unrecognised_shape`/
-    `_unrecognised_value`'s own text without constructing a full
-    `GateReading` per element."""
     handoff = element.get("handoff", "") if isinstance(element, Mapping) else ""
     leg_a = element.get("leg_a") if isinstance(element, Mapping) else None
     leg_b = element.get("leg_b") if isinstance(element, Mapping) else None
@@ -394,20 +230,6 @@ def _consumed_handoff_element_status(element: Mapping[str, Any]) -> tuple[str, s
 
 
 def consumed_handoff_completeness(payload: Mapping[str, Any]) -> GateReading:
-    """Reader for `gates.consumed_handoff_completeness`.
-
-    TOTAL mapping: see the module-source comment immediately above this
-    function for the full two-stage reduction (per-element leg reduction,
-    then element-status reduction to one gate status). Neither stage reads
-    `payload["applies"]` or `payload["blocks"]` (negative-spec item 1) —
-    both are re-derived from the leg verdicts independently.
-    Missing "elements" key -> "indeterminate", reason names the missing key.
-
-    Residue: each element whose Stage 1 status is "open" becomes one
-    residue item carrying this gate's name, the element's own `handoff`
-    path as the owned reference, and whichever leg fired's own `detail`
-    text as the summary — no next-step verb.
-    """
     if "elements" not in payload:
         return _unrecognised_shape("consumed_handoff_completeness", "elements")
 
@@ -444,18 +266,6 @@ def consumed_handoff_completeness(payload: Mapping[str, Any]) -> GateReading:
     reason = "; ".join(reasons) if reasons else None
     return GateReading(status=gate_status, residue_items=tuple(residue), reason=reason)
 
-
-# --- review_scale -----------------------------------------------------
-#
-# `review_scale_payload` (`__init__.py`; built from
-# `directives_review.ReviewScaleDecision._asdict()`) answers a different
-# question from the other four gates: F5, "how much review does this close
-# owe", never "is there outstanding completeness work". It has no
-# clean/open axis at all — this reader still emits a `GateReading` so
-# `review_scale` appears in `readings[]` for narration, but C2 MUST exclude
-# it from `verdict`, `indeterminate_gates[]`, and the reading census
-# (`clean_count`/`not_applicable_count`) — stated here so that exclusion is
-# not rediscovered at the C2 call site.
 
 def review_scale(payload: Mapping[str, Any]) -> GateReading:
     """Reader for `gates.review_scale` — NARRATION ONLY.
@@ -494,19 +304,7 @@ def review_scale(payload: Mapping[str, Any]) -> GateReading:
     return _unrecognised_value("review_scale", "resolved", resolved)
 
 
-# --- C2: composition -------------------------------------------------------
-#
-# Spec backlink: pln-one-completion-verdict-for-wor-ea96e2, chunk C2.
-#
-# The census/verdict axis is computed over exactly FOUR of the five
-# readings — `completeness_checklist`, `open_spine_row_worklist`,
-# `consumed_handoff_completeness`, `landed_reconciliation`. `review_scale`
-# answers a different question (F5: how much review a close owes, never
-# "is there outstanding completeness work" — see that reader's own
 # CALLER CONTRACT paragraph above) and is carried in `readings[]` for
-# narration and may still contribute `residue[]`, but never touches
-# `verdict`, `indeterminate_gates[]`, `clean_count`, or
-# `not_applicable_count`.
 
 _CENSUS_GATE_NAMES: tuple[str, ...] = (
     "completeness_checklist",

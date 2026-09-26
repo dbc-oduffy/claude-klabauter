@@ -1,26 +1,3 @@
-"""2026-08-05 duplicate-baton-deliverable-id-warn plan, C2: tests for the
-`deliverable_collision` key `resolve_lineage` (`coordinator_core.baton_assemble`)
-attaches to its returned `lineage` dict.
-
-Reproduces the live incident named in the plan's Problem section:
-`state/handoffs/2026-08-05-session-shape-attribution-structural-gate.md`
-(authored 14:24:24, claimed 14:25:54) and
-`state/handoffs/2026-08-05_133710_session-shape-attribution-structural-gate.md`
-(authored 13 minutes later, same `deliverable_id`, same `plan:` pointer) both
-existed live and nothing caught it -- `resolve_lineage`'s own path-collision
-check guarantees a fresh output path, which is exactly what let two batons
-for one deliverable coexist under different filenames.
-
-Written from the plan's Acceptance Criteria (`docs/plans/2026-08-05-
-duplicate-baton-deliverable-id-warn.md`), not from `_scan_deliverable_
-collision`'s implementation -- deliberately, per this chunk's own dispatch
-brief: the sibling defect this workstream descends from shipped green the
-first time precisely because a fixture was written to match its reader.
-
-Spec backlink: `pln-warn-when-a-handoff-is-authore-b66a4e`,
-chunk C1 (`coordinator_core/baton_assemble/__init__.py`'s `resolve_lineage`
-and its `_scan_deliverable_collision` helper).
-"""
 
 from __future__ import annotations
 
@@ -40,8 +17,6 @@ from coordinator_core.test_baton_assemble import (
 )
 import coordinator_core.baton_assemble.apply as ba_apply
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -50,32 +25,11 @@ pytestmark = [
 
 @pytest.fixture(autouse=True)
 def _stub_operator_config(monkeypatch):
-    """Restated per-module (autouse fixtures do not cross module boundaries)
-    -- only load-bearing for the `ba.brief()`-driven AC4 test below;
-    `resolve_lineage()` itself never calls `resolve_operator_config()`.
-    Values have one home in `coordinator_core.test_baton_assemble`, imported
-    above rather than re-derived."""
     monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
     monkeypatch.setattr(ba_apply, "_resolve_claude_klabauter_bin", lambda: _REPO_CLAUDE_KLABAUTER_BIN)
 
 
 def _write_deliverable_carrier(root: Path, deliverable_id: str) -> Path:
-    """A `docs/plans/*.md`-shaped input whose ONLY role in a fixture is to
-    carry a `deliverable_id` into `resolve_lineage`'s cascade (the
-    `discovery == "artifact"` tier, per `_tracking_read_frontmatter_field`
-    -- the SAME tier a real handoff's `predecessor:` pointer would resolve
-    through, since that tier is keyed off the artifact_path parameter, not
-    off a handoff-shaped schema check) -- never itself a collision
-    candidate, and never itself a `state/handoffs/*.md` file at all, so it
-    is outside `_scan_deliverable_collision`'s own `state/handoffs/`-only
-    glob (Anti-scope: never `archive/`, and by construction never
-    `docs/plans/` either). A plan document carries no `handoff_id` of its
-    own, so `resolve_lineage`'s own-handoff-id discriminator never fires
-    and `lineage["predecessor"]` stays unset -- this fixture exercises
-    ONLY the deliverable_collision scan under test, not the unrelated
-    predecessor-succession/replay-resumption machinery a real handoff
-    predecessor would also engage. Mirrors `TestAC7LiveReproductionFixture`'s
-    own plan-pointer reconstruction of the live incident."""
     return _write_artifact(
         root / "docs" / "plans" / "2026-08-05-carrier-plan.md",
         [f'deliverable_id: "{deliverable_id}"'],
@@ -91,9 +45,6 @@ def _write_handoff(
     claimed_by: str = "some-session-id",
     handoff_id: str | None = None,
 ) -> Path:
-    """Writes a `state/handoffs/*.md`-shaped candidate carrying the fields
-    `_scan_deliverable_collision`'s contract (AC1/AC2) names: `deliverable_id`,
-    `status`, `deployment_state`, `claimed_by`."""
     lines = [
         f"deliverable_id: {deliverable_id}",
         f"status: {status}",
@@ -147,9 +98,6 @@ class TestTerminalSetBoundaryAC2:
 
 
 class TestCollisionRecordShapeAC1AC3:
-    """AC1: the record names path, status, deployment_state, claimed_by. No
-    hit -> `None`. AC3: exactly one stderr advisory line, naming the
-    colliding baton's path and claim holder."""
 
     def test_no_collision_is_a_bare_none(self, tmp_path):
         predecessor = _write_deliverable_carrier(tmp_path, "DEL-LONE")
@@ -175,12 +123,6 @@ class TestCollisionRecordShapeAC1AC3:
         assert collision["claimed_by"] == "the-claim-holder"
 
     def test_a_hit_emits_exactly_one_stderr_advisory_line(self, tmp_path, capsys):
-        """AC3's "one stderr advisory line" is scoped to THIS scan's own
-        advisory -- the deliverable-id-carry cascade (`resolve_deliverable_
-        and_initiative`) has its own, unrelated stderr line on the "using
-        existing id" tracked-read path, present with or without a
-        collision, which this assertion deliberately does not count
-        against AC3's contract."""
         predecessor = _write_deliverable_carrier(tmp_path, "DEL-STDERR")
         _write_handoff(
             tmp_path,
@@ -190,7 +132,7 @@ class TestCollisionRecordShapeAC1AC3:
             status="claimed",
             claimed_by="the-claim-holder",
         )
-        capsys.readouterr()  # drain anything emitted before this point
+        capsys.readouterr()
         ba.resolve_lineage("handoff", str(predecessor), tmp_path)
         captured = capsys.readouterr()
         collision_lines = [
@@ -214,10 +156,6 @@ class TestCollisionRecordShapeAC1AC3:
 
 
 class TestResolvedAddressWiringAC6:
-    """2026-08-13 session-owner-reachability-registry § 3: the collision
-    warning also prints the resolved `SendMessage` address alongside the
-    `claimed_by` UUID it already prints, and degrades to the current
-    UUID-only shape when resolution fails."""
 
     def test_a_reachable_claimed_by_prints_the_resolved_address(self, tmp_path, capsys, monkeypatch):
         import coordinator_core.session.reachability as reach
@@ -244,10 +182,6 @@ class TestResolvedAddressWiringAC6:
         assert "the-claim-holder" in captured.err
 
     def test_a_not_reachable_claimed_by_renders_no_address(self, tmp_path, capsys, monkeypatch):
-        """Regression coverage for the
-        `not_reachable` branch of `_resolve_claimed_by_address_suffix`
-        falling through to `return ""` rather than the `reachable`
-        rendering."""
         import coordinator_core.session.reachability as reach
 
         predecessor = _write_deliverable_carrier(tmp_path, "DEL-ADDR-NOTREACH")
@@ -273,9 +207,6 @@ class TestResolvedAddressWiringAC6:
         assert "send-message-address" not in captured.err
 
     def test_an_ambiguous_claimed_by_renders_no_address(self, tmp_path, capsys, monkeypatch):
-        """Regression coverage for the
-        `ambiguous` branch, with two candidates present so a regression
-        that started rendering a candidate's address would be caught."""
         import coordinator_core.session.reachability as reach
 
         predecessor = _write_deliverable_carrier(tmp_path, "DEL-ADDR-AMBIG")
@@ -318,9 +249,6 @@ class TestResolvedAddressWiringAC6:
         assert "claude-klabauter-11 [bbbbbb]" not in captured.err
 
     def test_own_session_claimed_by_renders_the_own_session_marker(self, tmp_path, capsys, monkeypatch):
-        """Regression coverage for the
-        `own_session` rendering path -- the branch previously flagged for a
-        bare-vs-`!r`-quoted inconsistency."""
         import coordinator_core.session.reachability as reach
 
         predecessor = _write_deliverable_carrier(tmp_path, "DEL-ADDR-OWN")
@@ -412,16 +340,9 @@ class TestSelfExclusionAC5:
 
 
 class TestDegradePathAC6:
-    """An unreadable or frontmatter-less handoff is skipped, not fatal -- the
-    scan degrades to 'no collision found for THAT file' and a genuine
-    collision elsewhere in the directory is still found."""
 
     def test_unreadable_and_frontmatter_less_candidates_do_not_raise(self, tmp_path):
         predecessor = _write_deliverable_carrier(tmp_path, "DEL-DEGRADE")
-        # Frontmatter-less candidate -- no `---` delimiters at all.
-        # Unreadable candidate -- written first so it also creates
-        # `state/handoffs/` (the deliverable carrier fixture no longer
-        # lives under that directory -- see `_write_deliverable_carrier`).
         unreadable = _write_handoff(
             tmp_path,
             "state/handoffs/unreadable.md",
@@ -436,7 +357,6 @@ class TestDegradePathAC6:
             )
         os.chmod(unreadable, 0o000)
         try:
-            # The genuine, readable collision this scan must still find.
             _write_handoff(
                 tmp_path,
                 "state/handoffs/genuine-collision.md",
@@ -465,13 +385,6 @@ class TestDegradePathAC6:
 
 
 class TestAC4WriteAlwaysProceedsByteIdentical:
-    """AC4, the load-bearing test: a collision changes no directive, no exit
-    code, no scaffolded output -- `resolve_lineage`'s return contract is
-    additive-only. Compares the FULL `resolve_lineage` return dict, and
-    separately the FULL `brief()` decision object (directives, judgment
-    points, exit code), with and without a colliding baton on disk -- the
-    only permitted difference in either is the `deliverable_collision` key
-    itself."""
 
     def _build_predecessor(self, root: Path) -> Path:
         return _write_deliverable_carrier(root, "DEL-BYTEID")
@@ -481,12 +394,6 @@ class TestAC4WriteAlwaysProceedsByteIdentical:
         predecessor = self._build_predecessor(clean_root)
         clean_lineage = ba.resolve_lineage("handoff", str(predecessor), clean_root)
 
-        # Same root, same call -- ONLY a colliding baton added, so any
-        # delta beyond `deliverable_collision` can only be attributable to
-        # that addition. (Two separate tmp roots would embed each root's
-        # own absolute path into `artifact_path`/`output_path`, which
-        # differ across roots for a reason unrelated to the collision under
-        # test -- deliberately avoided here.)
         _write_handoff(
             clean_root,
             "state/handoffs/other-live.md",
@@ -516,9 +423,6 @@ class TestAC4WriteAlwaysProceedsByteIdentical:
 
         clean_result = ba.brief("handoff", str(predecessor), repo_root=clean_root)
 
-        # Same root, same predecessor -- ONLY a colliding baton added (see
-        # the sibling `resolve_lineage`-level test above for why two
-        # separate tmp roots are deliberately avoided here).
         _write_handoff(
             clean_root,
             "state/handoffs/other-live.md",
@@ -557,11 +461,6 @@ def _write_chain_handoff(
     predecessor: str | None = None,
     claimed_by: str = "some-session-id",
 ) -> Path:
-    """A `state/handoffs/*.md` node carrying its OWN `handoff_id` (so
-    `resolve_lineage`'s own-handoff-id discriminator treats it as a real
-    predecessor, not a plan-tier lineage source -- see that function's
-    docstring) and an optional `predecessor:` edge, for building multi-hop
-    ancestor chains `_walk_deliverable_ancestor_set` must traverse."""
     lines = [
         f"deliverable_id: {deliverable_id}",
         "status: claimed",
@@ -575,22 +474,6 @@ def _write_chain_handoff(
 
 
 class TestAncestorChainExclusion:
-    """2026-08-05 PM ruling widening the roadmap-baton-kind-skip fix: the
-    `deliverable_id` holder is whichever baton in the lineage chain is LIVE
-    and MOST RECENT (the chain's tip), not merely the immediate
-    `lineage_source`. Every earlier, still-non-terminal artifact on the SAME
-    chain is the designed carry -- `_walk_deliverable_ancestor_set` must
-    walk the full transitive `predecessor:` chain, not just one hop, while
-    still flagging a genuine sibling (same parent, different branch) as a
-    real collision.
-
-    Reproduces the two live 2026-08-05 chains named in this chunk's dispatch
-    brief (`dlv-pickup-skill-code-driven-branch-result-acd867`,
-    `dlv-claude-klabauter-oss-release-engine-mirr-a0952e`) in miniature --
-    neither chain has a `kind: roadmap-baton` anywhere in it, so
-    `TestRoadmapBatonExclusion`'s kind-based skip alone does not close
-    either, and a one-hop-only ancestor exclusion still misses the
-    grandparent."""
 
     def test_grandparent_exclusion_three_deep_chain(self, tmp_path):
         _write_chain_handoff(
@@ -739,17 +622,6 @@ class TestRoadmapBatonExclusion:
 
 
 class TestAC7LiveReproductionFixture:
-    """Reconstructs the two real 2026-08-05 handoffs from their ACTUAL
-    frontmatter shape (both carry `deliverable_id:
-    dlv-session-shape-attribution-key-the-gate-o-da2621`): the first,
-    `state/handoffs/2026-08-05-session-shape-attribution-structural-gate.md`,
-    live on disk exactly as it stands post-claim (`status: claimed`,
-    `deployment_state: in_flight`, `claimed_by:
-    20eb021a-a542-44bb-93d4-98742474f0b5`) -- and the second, authored off
-    the SAME `plan:` pointer that carries the SAME `deliverable_id`, the
-    shape that let the live incident happen twice over. Built from the
-    frontmatter shape in the plan's Problem section, not copied off the
-    live files on disk."""
 
     _DELIVERABLE_ID = "dlv-session-shape-attribution-key-the-gate-o-da2621"
     _FIRST_REL = "state/handoffs/2026-08-05-session-shape-attribution-structural-gate.md"
@@ -777,9 +649,6 @@ class TestAC7LiveReproductionFixture:
                 'authoring_session: "e1891438-c603-461c-ab8b-fbd5c92dcab9"',
             ],
         )
-        # The second session's own authoring input: a plan carrying the SAME
-        # deliverable_id and the SAME plan pointer the live incident's two
-        # handoffs both named.
         plan = _write_artifact(
             tmp_path / "docs" / "plans" / "2026-08-05-session-shape-attribution-structural-gate.md",
             [f'deliverable_id: "{self._DELIVERABLE_ID}"'],

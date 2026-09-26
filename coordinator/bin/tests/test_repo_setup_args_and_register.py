@@ -30,13 +30,7 @@ from unittest import mock
 
 import pytest
 
-# Declared, not excused: `TestResolveTargetRoot`'s two cases spawn a real
-# `git init` because the property under test is `resolve-target-root`'s
-# real worktree-validation logic (it must resolve/accept a genuine git
-# worktree) -- a plain non-git temp dir would not exercise that check. The
 # spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
-# explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
@@ -69,7 +63,6 @@ class TestExtractRootArg(unittest.TestCase):
         )
 
     def test_last_occurrence_wins_greedy(self):
-        # Mirrors sed -En's greedy .* — matches the LAST --root/--target.
         self.assertEqual(
             _cli.extract_root_arg("--root /first --root /second"),
             "/second",
@@ -96,9 +89,6 @@ class TestDeriveRepoKey(unittest.TestCase):
         self.assertEqual(_cli.derive_repo_key("_leading_and_trailing_"), "leading_and_trailing")
 
     def test_matches_cross_repo_memo_receiver_key_shape(self):
-        # cross-repo-memo's _receiver_repo_key resolves "--to foo-em" via
-        # shortname.replace("-", "_") -> repos.<underscored>; derive_repo_key
-        # must produce the same underscored form for a plain hyphenated name.
         self.assertEqual(_cli.derive_repo_key("foo-bar"), "foo_bar")
 
 
@@ -137,10 +127,6 @@ class TestResolveTargetRoot(unittest.TestCase):
 
     def test_fails_loud_on_non_worktree_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
-            # No `git init` — plain dir, not inside any work tree once HOME/CI
-            # ancestry is excluded. Guard against the rare case a temp dir
-            # happens to sit inside a parent git repo by asserting the git
-            # probe itself, not a filesystem assumption.
             is_worktree = _cli._is_git_worktree(tmp)
             if is_worktree:
                 self.skipTest("temp dir unexpectedly resolves inside a git work tree")
@@ -167,7 +153,6 @@ class TestResolveExecSummaryGenerator(unittest.TestCase):
 
     def test_falls_back_to_claude_klabauter_sibling_copy(self):
         with tempfile.TemporaryDirectory() as coord_tmp, tempfile.TemporaryDirectory() as claude_klabauter_tmp:
-            # coordinator-root copy deliberately absent.
             claude_klabauter_gen_dir = Path(claude_klabauter_tmp) / "coordinator" / "bin"
             claude_klabauter_gen_dir.mkdir(parents=True)
             claude_klabauter_gen = claude_klabauter_gen_dir / "generate-exec-summary.py"
@@ -198,11 +183,6 @@ class TestResolveExecSummaryGenerator(unittest.TestCase):
                 ]
             )
             with mock.patch.dict(os.environ, {"CLAUDE_HOME": home_tmp}, clear=False):
-                # Isolate from this machine's REAL claude-klabauter-live-root registration
-                # (both env-var and pointer-file rungs) so the fallback
-                # ladder genuinely bottoms out — otherwise this test would
-                # spuriously pass/fail depending on the running machine's
-                # own machine-local registry state.
                 os.environ.pop("REPO_CLAUDE_KLABAUTER", None)
                 os.environ.pop("CLAUDE_KLABAUTER_ROOT", None)
                 rc = args.func(args)
@@ -308,7 +288,6 @@ class TestWhoamiStatus(unittest.TestCase):
             buf = []
             with mock.patch("builtins.print", side_effect=lambda *a, **k: buf.append(" ".join(str(x) for x in a))):
                 rc = args.func(args)
-        # Never halts the caller — matches the original's never-block contract.
         self.assertEqual(rc, 0)
         self.assertEqual(buf[0], "whoami_status: failed")
         self.assertIn("boom", buf[1])

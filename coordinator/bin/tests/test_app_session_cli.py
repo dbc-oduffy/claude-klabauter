@@ -1,17 +1,3 @@
-"""test_app_session_cli.py — coverage for coordinator/bin/app-session.py.
-
-Purpose: `app-session.py` is a bareword CLI trampoline over the three
-`app_session.*` ops (see that file's own module docstring). This test
-exercises the trampoline layer only — verb routing, argv validation, and
-exit-code mapping — via a mocked `cc_invoke.route`, mirroring the loader
-pattern `test_lesson_add.py` already uses for a hyphenated `coordinator/bin`
-entrypoint with no importable module name.
-
-Spec backlink: cross-repo/inbox/2026-08-15-*-app-session-ops-need-a-cli-entrypoint.md
-Spec backlink: coordinator/bin/app-session.py
-
-Run: python3 -m pytest coordinator/bin/tests/test_app_session_cli.py
-"""
 from __future__ import annotations
 
 import importlib.machinery

@@ -81,12 +81,7 @@ from coordinator_core.ipc import register_op
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Tier regex sets — ported from the Step 2c fence's grep -nIE patterns.
-# Python `re` supplies real \b (the fence's documented BSD-grep gap).
-# ---------------------------------------------------------------------------
 
-#: Tier HIGH — credential / secret shapes. Any hit blocks publish.
 _HIGH_RE = re.compile(
     r"sk-[A-Za-z0-9]{20,}"
     r"|ghp_[A-Za-z0-9]{20,}"
@@ -97,8 +92,6 @@ _HIGH_RE = re.compile(
     r"|-----BEGIN [A-Z ]+PRIVATE KEY-----"
 )
 
-#: Tier MEDIUM — internal paths, peer-repo paths, email addresses.
-#: Generic shapes only — no operator-specific literals (see module docstring).
 _MEDIUM_RE = re.compile(
     r"~/\.claude/(?:tasks|projects|memory|plans)/"
     r"|/x/[a-z-]+"
@@ -106,14 +99,12 @@ _MEDIUM_RE = re.compile(
     r"|@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
 )
 
-#: Tier LOW — informational: bare 40-hex commit SHAs, "First Officer Doctrine".
 _LOW_RE = re.compile(r"\b[0-9a-f]{40}\b|First Officer Doctrine")
 
 _TIERS = (("high", _HIGH_RE), ("medium", _MEDIUM_RE), ("low", _LOW_RE))
 
 
 def _iter_scan_files(root: Path):
-    """Yield regular files under *root*, lexically sorted, .git trees excluded."""
     for path in sorted(root.rglob("*")):
         if ".git" in path.parts:
             continue
@@ -158,8 +149,6 @@ def _scan_content_leakage_tiers(
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
-            # Binary file — skip with a per-file note (settlement B7; the
-            # native analog of the fence's `grep -I`), never crash mid-sweep.
             skipped.append(rel)
             continue
 

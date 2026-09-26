@@ -25,8 +25,6 @@ from coordinator_core.group_em import watch_spool
 
 
 def _records(repo_root):
-    """Every well-formed record on disk. The module deliberately exposes no
-    reader of its own -- the test that wants to SEE the file parses it here."""
     path = watch_spool.spool_path(str(repo_root))
     if not os.path.exists(path):
         return []
@@ -109,7 +107,6 @@ def test_prune_is_a_no_op_and_byte_identical_when_the_oldest_record_is_inside_th
     the file is left byte-for-byte untouched."""
     now = time.time()
     # Outside RETAIN_SECONDS but inside PRUNE_TRIGGER_SECONDS -- would be
-    # dropped BY a rewrite, but no rewrite is triggered, so it survives.
     line = _record(now - watch_spool.RETAIN_SECONDS - 60, "stale-but-not-triggering")
     _write_lines(tmp_path, [line])
     before = _raw_contents(tmp_path)
@@ -136,7 +133,7 @@ def test_the_count_cap_triggers_a_prune_even_when_every_record_is_fresh(tmp_path
 
 def test_an_unparseable_oldest_record_triggers_a_rewrite_that_drops_it(tmp_path):
     now = time.time()
-    torn = '{"session_id": "s2", "state": "PAUSED:i'  # interleaved/truncated write
+    torn = '{"session_id": "s2", "state": "PAUSED:i'
     fresh = _record(now - 1, "fresh")
     _write_lines(tmp_path, [torn, fresh])
 

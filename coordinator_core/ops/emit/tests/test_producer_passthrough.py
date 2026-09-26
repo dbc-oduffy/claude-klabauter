@@ -1,12 +1,3 @@
-"""Tests for the ``handoffs`` emit section's producer-axis pass-through (C6a).
-
-Model + emit pass-through only — no resolver populates ``producer`` yet (a
-separate chunk supplies it), so this exercises ``collect()``'s straight
-frontmatter-to-wire-key passthrough via ``_jq_or(fm.get("producer"), None)``,
-matching the same idiom as ``suggested_priority``/``picked_up_by``/etc.
-
-Spec backlink: docs/plans/2026-08-12-producer-axis-on-the-baton-contract.md § C6a.
-"""
 
 from __future__ import annotations
 
@@ -69,8 +60,6 @@ def _collect(
 @patch("coordinator_core.ops.emit.sections.handoffs.load_priority_ledger")
 @patch("coordinator_core.ops.emit.sections.handoffs._query_records")
 def test_producer_absent_from_frontmatter_emits_null(mock_qr, mock_ll, tmp_path: Path) -> None:
-    """This chunk is model + pass-through only — no resolver has populated
-    the field on disk, so every emitted record carries `producer: None`."""
     handoff_dir = tmp_path / "state" / "handoffs"
     handoff_dir.mkdir(parents=True)
     _write_node(handoff_dir, "solo.md", handoff_id="hnd-solo-000000", predecessor=None)
@@ -89,8 +78,6 @@ def test_producer_absent_from_frontmatter_emits_null(mock_qr, mock_ll, tmp_path:
 @patch("coordinator_core.ops.emit.sections.handoffs.load_priority_ledger")
 @patch("coordinator_core.ops.emit.sections.handoffs._query_records")
 def test_producer_present_in_frontmatter_passes_through_verbatim(mock_qr, mock_ll, tmp_path: Path) -> None:
-    """Straight passthrough, `_jq_or(fm.get("producer"), None)` idiom — the
-    emit section does not interpret or reshape the value."""
     handoff_dir = tmp_path / "state" / "handoffs"
     handoff_dir.mkdir(parents=True)
     _write_node(handoff_dir, "a.md", handoff_id="hnd-a-aaaaaa", predecessor=None)

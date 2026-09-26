@@ -54,16 +54,12 @@ class TestQuotedMetacharacters:
         assert result.tokens is not None
         assert result.primary is not None
         assert result.primary.shape is Shape.GREP_VIA_BASH
-        # The quoted `;` must not have fractured this into extra segments
-        # for the banner detector to (wrongly) see.
         assert not result.has_shape(Shape.MULTI_PROBE_BANNER)
 
     def test_pipe_inside_quoted_grep_alternation_is_not_a_pipe_segment(self) -> None:
         result = classify_command('grep -E "(A|B)" file.txt')
         assert result.primary is not None
         assert result.primary.shape is Shape.GREP_VIA_BASH
-        # A real pipe segment (e.g. `| head`) would also fire head/tail
-        # plumbing; the quoted `|` here must not be mistaken for one.
         assert not result.has_shape(Shape.HEAD_TAIL_PLUMBING)
 
     def test_quoted_for_loop_keywords_as_data_do_not_classify_as_for_loop(
@@ -79,7 +75,6 @@ class TestQuotedMetacharacters:
         assert result.primary is not None
         assert result.primary.shape is Shape.GREP_VIA_BASH
         assert result.tokens is not None
-        # One segment only: the quoted `&` did not split the command.
         assert result.tokens.count("&") == 0
 
 
@@ -102,9 +97,6 @@ class TestNoDriveLetterLogic:
 
 class TestPrecedence:
     def test_canonical_triple_overlap_resolves_grep_first(self) -> None:
-        # The plan's own canonical example
-        # (state/plan-sidecars/2026-07-28-bash-tax-negative-space.md:69):
-        # a banner echo, feeding a pipeline that greps and heads.
         cmd = 'echo "=== git status ==="; git status | grep -i modified | head'
         result = classify_command(cmd)
 
@@ -132,10 +124,6 @@ class TestPrecedence:
 
     def test_xargs_invoked_grep_is_find_exec_xargs_not_grep_via_bash(self) -> None:
         # `grep` here is xargs's ARGUMENT, not a top-level invoked segment
-        # (tokens[0] of that segment is `xargs`) -- this is the find-
-        # exec/xargs shape (3.5% of the corpus), a distinct habit from a
-        # directly-invoked `grep` segment, and the classifier must not
-        # conflate the two.
         result = classify_command("find . -type f | xargs grep -l TODO")
         assert result.matched_shapes == (Shape.FIND_EXEC_XARGS,)
 
@@ -181,7 +169,6 @@ class TestEachShapeInIsolation:
         assert result.matched_shapes == (Shape.GREP_VIA_BASH,)
 
     def test_multi_probe_banner_needs_at_least_three_segments(self) -> None:
-        # Banner label plus exactly one probe -- NOT the multi-probe shape
         # (see _MIN_BANNER_SEGMENTS docstring).
         result = classify_command('echo "=== status ==="; git status')
         assert not result.has_shape(Shape.MULTI_PROBE_BANNER)
@@ -194,7 +181,6 @@ class TestEachShapeInIsolation:
         assert result.primary.shape is Shape.MULTI_PROBE_BANNER
 
     def test_head_tail_plumbing_requires_a_pipe(self) -> None:
-        # A bare, un-piped head is an ordinary bounded read, not plumbing.
         result = classify_command("head -n 20 file.txt")
         assert not result.has_shape(Shape.HEAD_TAIL_PLUMBING)
 
@@ -204,13 +190,6 @@ class TestEachShapeInIsolation:
 
 
 class TestMultiProbeBannerIsSemanticNotJustFormatting:
-    """``state/audits/2026-08-14-boot-payload-baseline.md`` § "The
-    false-positive matcher": the pre-fix predicate was pure ``echo`` +
-    ``===`` + 3-segments SHAPE detection, with no check that the other
-    segments actually re-derive a harness-known session fact. These pin
-    the true positive still firing and the audit's confirmed false
-    positive no longer firing.
-    """
 
     def test_true_positive_labelled_git_reprobe_still_fires(self) -> None:
         result = classify_command(
@@ -222,26 +201,18 @@ class TestMultiProbeBannerIsSemanticNotJustFormatting:
     def test_confirmed_false_positive_labelled_measurement_does_not_fire(
         self,
     ) -> None:
-        # From the baseline audit verbatim: a legitimate labelled
-        # multi-file measurement, not a session-fact re-derivation.
         result = classify_command(
             'echo "=== EM snippets ==="; wc -c a.md b.md; ls x'
         )
         assert not result.has_shape(Shape.MULTI_PROBE_BANNER)
 
     def test_mixed_probe_and_non_probe_segments_does_not_fire(self) -> None:
-        # Not PURELY the re-derive-known-facts shape -- stays silent
-        # rather than misnaming a mixed command.
         result = classify_command('echo "=== x ==="; git status; wc -l a')
         assert not result.has_shape(Shape.MULTI_PROBE_BANNER)
 
     def test_canonical_pipeline_probe_with_plumbing_still_fires_as_residue(
         self,
     ) -> None:
-        # The plan's own canonical overlap example: a SINGLE probe
-        # (`git status`) piped through grep/head plumbing -- the pipe
-        # continuations must not be treated as additional non-probe
-        # segments that disqualify the banner match.
         cmd = 'echo "=== git status ==="; git status | grep -i modified | head'
         result = classify_command(cmd)
         assert result.has_shape(Shape.MULTI_PROBE_BANNER)
@@ -254,8 +225,6 @@ class TestMultiProbeBannerIsSemanticNotJustFormatting:
         assert result.primary.shape is Shape.MULTI_PROBE_BANNER
 
     def test_sudo_prefixed_probe_still_fires(self) -> None:
-        # A `sudo`-wrapped
-        # probe is still a genuine session-fact re-derivation.
         result = classify_command(
             'echo "=== facts ==="; sudo git status; pwd; whoami'
         )
@@ -281,8 +250,6 @@ class TestMultiProbeBannerIsSemanticNotJustFormatting:
         assert result.matched_shapes == (Shape.FOR_LOOP,)
 
     def test_for_loop_requires_do_and_done_not_just_leading_for(self) -> None:
-        # "for" as a bare unquoted first token with no do/done is not a
-        # complete loop signature.
         result = classify_command("for f in *.py")
         assert not result.has_shape(Shape.FOR_LOOP)
 
@@ -302,14 +269,6 @@ class TestMultiProbeBannerIsSemanticNotJustFormatting:
 
 
 class TestHeredocBodyIsNotShapeMaterial:
-    """A heredoc body is stdin DATA, never shell command text. Once the
-    shared tokenizer started treating a bare newline as a segment boundary
-    (2026-07-30, closing the multi-line-command bypass), a heredoc body
-    written via `cat <<EOF ... EOF` would fragment at every line break
-    unless heredoc bodies are stripped before classification -- and prose
-    merely describing one of these six shapes would then classify as one.
-    `classify_command` strips heredoc bodies first (mirroring
-    `block_worktree_creation.check()`), so none of these are matched."""
 
     def test_heredoc_prose_mentioning_find_exec_is_not_a_match(self) -> None:
         cmd = (
@@ -339,8 +298,6 @@ class TestHeredocBodyIsNotShapeMaterial:
         assert not result.has_shape(Shape.GREP_VIA_BASH)
 
     def test_real_invocation_after_heredoc_still_matches(self) -> None:
-        """The heredoc-stripping fix must not swallow a genuine invocation
-        that follows the heredoc on its own line."""
         cmd = (
             "cat <<'EOF' > notes.md\n"
             "some prose\n"
@@ -352,16 +309,12 @@ class TestHeredocBodyIsNotShapeMaterial:
 
 
 class TestWhileReadLoop:
-    """The sixth shape (AC-1/AC-2/AC-3/AC-7). Positives cover the four live
-    spellings; negatives cover each Anti-scope bullet."""
 
     def test_pipe_fed(self) -> None:
         result = classify_command('cat f | while read x; do echo "$x"; done')
         assert result.matched_shapes == (Shape.WHILE_READ_LOOP,)
 
     def test_safe_idiom_with_ifs_assignment_between_while_and_read(self) -> None:
-        # The canonical safe spelling puts an assignment between `while`
-        # and `read` -- the adjacency trap named in the plan's Anti-scope.
         result = classify_command('while IFS= read -r x; do echo "$x"; done')
         assert result.matched_shapes == (Shape.WHILE_READ_LOOP,)
 
@@ -406,7 +359,6 @@ class TestPowerShellShapeSet:
     the bash-default path).
     """
 
-    # -- AC6: the four blind-spawn shapes classify --------------------
 
     def test_foreach_object_block_calling_a_process_matches(self) -> None:
         result = classify_command(
@@ -444,12 +396,6 @@ class TestPowerShellShapeSet:
         assert result.matched_shapes == (Shape.MULTI_PROBE_BANNER,)
 
     def test_echo_alias_of_write_output_is_banner_vocabulary(self) -> None:
-        # PowerShell ships `echo` as a live ALIAS of `Write-Output`, so an
-        # echo-led probe sequence spawns per probe exactly as its
-        # `Write-Host` spelling does. Omitting the alias left a shape the
-        # PowerShell leg could not see -- i.e. the escape hatch this whole
-        # dialect leg exists to close, reachable by spelling the banner
-        # `echo` instead of `Write-Host`.
         result = classify_command(
             'echo "=== facts ==="; pwd; whoami; git status',
             dialect=Dialect.POWERSHELL,
@@ -457,16 +403,12 @@ class TestPowerShellShapeSet:
         assert result.matched_shapes == (Shape.MULTI_PROBE_BANNER,)
 
     def test_printf_is_not_powershell_banner_vocabulary(self) -> None:
-        # The negative half of the alias reasoning: PowerShell ships no
-        # `printf` alias, so admitting it would match a name that cannot
-        # run. Only `echo` crosses over from bash's banner vocabulary.
         result = classify_command(
             'printf "=== facts ==="; pwd; whoami; git status',
             dialect=Dialect.POWERSHELL,
         )
         assert result.matched_shapes == ()
 
-    # -- AC7: in-process cmdlets are NOT members (D3) -- hard gate -----
 
     def test_select_string_does_not_match(self) -> None:
         result = classify_command(
@@ -487,7 +429,6 @@ class TestPowerShellShapeSet:
         assert result.matched_shapes == ()
 
     def test_bare_write_host_no_probe_sequence_does_not_match(self) -> None:
-        # A lone banner call is not banner-shaped -- the shape requires N
         # probe segments (`_MIN_BANNER_SEGMENTS`).
         result = classify_command("Write-Host 'hello'", dialect=Dialect.POWERSHELL)
         assert result.matched_shapes == ()
@@ -505,17 +446,12 @@ class TestPowerShellShapeSet:
         assert result.matched_shapes == ()
 
     def test_foreach_object_block_pure_property_access_does_not_match(self) -> None:
-        # The block-content check (D2/D3): pure member/property access
-        # spawns nothing and must not match, even though the outer segment
-        # shape (ForEach-Object piped a block) looks identical to the
-        # true-positive case.
         result = classify_command(
             "Get-ChildItem *.py | ForEach-Object { $_.Name }",
             dialect=Dialect.POWERSHELL,
         )
         assert result.matched_shapes == ()
 
-    # -- Finding 2 fix: in-process ForEach-Object block content must not
     # -- false-positive as PIPELINE_FOREACH_OBJECT (D3) -----------------
 
     def test_foreach_object_block_write_host_only_does_not_match(self) -> None:
@@ -547,8 +483,6 @@ class TestPowerShellShapeSet:
         assert result.matched_shapes == ()
 
     def test_foreach_object_block_native_call_still_matches(self) -> None:
-        # Regression: the AC6 true positive must not be swept up by the
-        # in-process exclusion.
         result = classify_command(
             "Get-ChildItem *.py | ForEach-Object { python3 script.py $_.FullName }",
             dialect=Dialect.POWERSHELL,
@@ -563,9 +497,6 @@ class TestPowerShellShapeSet:
         assert result.matched_shapes == (Shape.PIPELINE_FOREACH_OBJECT,)
 
     def test_percent_block_hyphenated_native_executable_still_matches(self) -> None:
-        # docker-compose is not an approved-verb cmdlet, despite the
-        # hyphen -- anchored on the approved-verb list, not "contains a
-        # hyphen".
         result = classify_command(
             "Get-ChildItem | % { docker-compose up $_ }",
             dialect=Dialect.POWERSHELL,
@@ -573,8 +504,6 @@ class TestPowerShellShapeSet:
         assert result.matched_shapes == (Shape.PIPELINE_FOREACH_OBJECT,)
 
     def test_percent_block_start_process_still_matches(self) -> None:
-        # Start-/Invoke- are the deliberate carve-out: they genuinely
-        # spawn, so they stay native calls despite the Verb-Noun shape.
         result = classify_command(
             "Get-ChildItem | % { Start-Process python3 $_ }",
             dialect=Dialect.POWERSHELL,
@@ -584,7 +513,6 @@ class TestPowerShellShapeSet:
     def test_foreach_object_block_pure_property_access_still_does_not_match(
         self,
     ) -> None:
-        # Existing negative, must not regress under the new discriminator.
         result = classify_command(
             "Get-ChildItem *.py | ForEach-Object { $_.Name }",
             dialect=Dialect.POWERSHELL,
@@ -596,15 +524,12 @@ class TestPowerShellShapeSet:
     def test_while_read_loop_has_no_powershell_detector(self) -> None:
         # PowerShell has no `while read` idiom -- WHILE_READ_LOOP is not a
         # member of the POWERSHELL table entry at all (see the table's own
-        # comment). A pwsh-flavoured attempt at the bash spelling must not
-        # accidentally match either.
         result = classify_command(
             "while ($true) { $x = Read-Host; git log -1 $x }",
             dialect=Dialect.POWERSHELL,
         )
         assert not result.has_shape(Shape.WHILE_READ_LOOP)
 
-    # -- AC12: the three reused binary-identity detectors, regression- ---
     # -- tested explicitly under dialect=POWERSHELL ----------------------
 
     def test_grep_via_bash_detector_reused_unchanged_under_powershell_dialect(
@@ -629,7 +554,6 @@ class TestPowerShellShapeSet:
         )
         assert result.matched_shapes == (Shape.HEAD_TAIL_PLUMBING,)
 
-    # -- precedence: the new member seats correctly ----------------------
 
     def test_pipeline_foreach_object_seats_immediately_after_for_loop(self) -> None:
         assert SHAPE_PRECEDENCE.index(Shape.PIPELINE_FOREACH_OBJECT) == (
@@ -640,9 +564,6 @@ class TestPowerShellShapeSet:
         )
 
     def test_grep_outranks_pipeline_foreach_object_on_powershell_leg(self) -> None:
-        # A single command that is both grep-via-Bash and pipeline-foreach-
-        # object shaped resolves to the precedence winner, with the other
-        # surfacing in residue -- same overlap discipline as the bash leg.
         result = classify_command(
             "grep -rn TODO src/; Get-ChildItem *.py | ForEach-Object "
             "{ python3 script.py $_.FullName }",
@@ -668,16 +589,8 @@ class TestUnparseableCommand:
 
 
 class TestDialectParameter:
-    """AC1/AC2/AC3/AC5 -- the keyword-only `dialect` parameter (D1) and the
-    dialect-indexed detector table (D4) landed in C1. Every case in every
-    OTHER test class above already covers AC2 (byte-for-byte bash behaviour
-    with no `dialect=` argument at all, i.e. the pre-existing bash suite
-    passing unmodified); this class adds the cases specific to the new
-    parameter's own contract.
-    """
 
     def test_default_dialect_is_bash(self) -> None:
-        # AC1: no `dialect=` argument at all defaults to `Dialect.BASH`.
         default_result = classify_command("grep -rn TODO src/")
         explicit_result = classify_command(
             "grep -rn TODO src/", dialect=Dialect.BASH
@@ -686,9 +599,6 @@ class TestDialectParameter:
         assert default_result.matched_shapes == (Shape.GREP_VIA_BASH,)
 
     def test_bash_default_byte_for_byte_on_canonical_overlap_case(self) -> None:
-        # AC2: the default-`dialect` path and an explicit `dialect=BASH`
-        # path must be indistinguishable, even on the plan's own canonical
-        # triple-overlap command.
         cmd = 'echo "=== git status ==="; git status | grep -i modified | head'
         default_result = classify_command(cmd)
         explicit_result = classify_command(cmd, dialect=Dialect.BASH)
@@ -696,11 +606,8 @@ class TestDialectParameter:
         assert default_result.matches == explicit_result.matches
 
     def test_explicit_none_dialect_is_silent_not_bash_fallback(self) -> None:
-        # AC3: an explicit `dialect=None` returns an empty classification
-        # with `tokens=None` -- never the bash-default result the same
-        # command text would produce.
         bash_result = classify_command("grep -rn TODO src/")
-        assert bash_result.primary is not None  # sanity: this text IS a match on bash
+        assert bash_result.primary is not None
 
         none_result = classify_command("grep -rn TODO src/", dialect=None)
         assert none_result.tokens is None
@@ -708,8 +615,6 @@ class TestDialectParameter:
         assert none_result.primary is None
 
     def test_explicit_none_dialect_records_silent(self) -> None:
-        # AC3: the SILENT declaration is real and test-observable via the
-        # existing `_verdict.collecting()` mechanism.
         with collecting() as silences:
             result = classify_command("grep -rn TODO src/", dialect=None)
         assert result.tokens is None
@@ -717,8 +622,6 @@ class TestDialectParameter:
         assert "None" in silences[0].reason
 
     def test_powershell_dialect_never_calls_posix_tokenizer(self, monkeypatch) -> None:
-        # AC5: PowerShell text must never reach `tokenize_full_command`
-        # (the `shlex(posix=True)` tokenizer) -- spy on it directly.
         def _fail_if_called(*args, **kwargs):
             raise AssertionError(
                 "tokenize_full_command must not be called under "
@@ -734,5 +637,4 @@ class TestDialectParameter:
         )
         # C2 fills the POWERSHELL table entry -- this now classifies for
         # real (PIPELINE_FOREACH_OBJECT), which is itself further proof the
-        # posix tokenizer was never invoked to produce it.
         assert result.matched_shapes == (Shape.PIPELINE_FOREACH_OBJECT,)

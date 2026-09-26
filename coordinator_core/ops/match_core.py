@@ -42,51 +42,8 @@ import logging
 from collections import Counter
 from typing import List, Optional, TypedDict
 
-# ---------------------------------------------------------------------------
-# Auto-resolve thresholds
-#
-# Module-level so the bar for "confident enough to write without asking" is
-# greppable and tunable in one place, rather than re-derived per call site.
-#
-# Calibrated empirically against this repo's real docs/plans/*.md corpus
-# (191 well-formed plan items after quarantine) via a throwaway script that
-# scored three query classes with rank_candidates and printed score/gap
-# distributions (script deleted after use; not part of the shipped module):
-#
-#   (a) EXACT plan titles (15 queries, the must-auto-resolve case):
-#       top score:  min=1.0000 max=1.0000 mean=1.0000  (exact match → ratio 1.0)
-#       top gap:    min=0.2957 max=0.7161 mean=0.5769
-#   (b) plausible partial/paraphrased titles (15 queries, a real fork's
-#       match_text would plausibly carry):
-#       top score:  min=0.6581 max=0.8045 mean=0.7236
-#       top gap:    min=0.0129 max=0.5245 mean=0.2721
-#       (the one low-gap outlier, 0.0129, is the generic query "Prior-Art
-#       Check" — genuinely ambiguous against dozens of *.prior-art-check.md
-#       plans; correctly landing on the too-close side, not a calibration
-#       miss)
-#   (c) timestamp-slug queries (3 queries, the must-NOT-resolve case — the
-#       defect this calibration exists to prevent: stamp mode's old
-#       match_text fallback was exactly this shape):
-#       top score:  min=0.2000 max=0.2386 mean=0.2129
-#       top gap:    min=0.0000 max=0.0198 mean=0.0080
-#
 # AUTO_RESOLVE_MIN_SCORE=0.5 sits with ~0.16 worst-case headroom below every
-# (b) top score (min(b) - 0.5 = 0.6581 - 0.5 = 0.1581) and ~0.26 worst-case
-# headroom above every (c) top score (0.5 - max(c) = 0.5 - 0.2386 = 0.2614) —
-# an asymmetric margin, not a symmetric one: the floor sits noticeably closer
-# to the (b) paraphrase class than to the (c) slug class, which is the
-# direction that matters since a real fork's query belongs to (b). The score
-# gate alone still separates prose queries from slug queries.
-# The prior "~0.26 on both sides" framing
-# was arithmetically wrong on the (b) side and read as a symmetric safe zone
-# when the margin is asymmetric; retune only against a re-run of the
-# measurement above, not against this restated headroom alone.
 # AUTO_RESOLVE_MIN_GAP
-# =0.15 sits ~7x above every (c) gap (headroom against a near-tied slug
-# false-positive) while still passing every (a) exact-title gap; it correctly
-# rejects a handful of genuinely-ambiguous (b) queries (e.g. two
-# similarly-named plans) into "too-close" rather than guessing.
-# ---------------------------------------------------------------------------
 AUTO_RESOLVE_MIN_SCORE = 0.5
 AUTO_RESOLVE_MIN_GAP = 0.15
 
@@ -136,7 +93,6 @@ class QuarantineLog:
         self._scanned = 0
 
     def scanned(self) -> None:
-        """Count a candidate file this scan looked at, kept or skipped."""
         self._scanned += 1
 
     def skip(self, fname: str, reason: str, detail: Optional[str] = None) -> None:
@@ -163,10 +119,6 @@ class QuarantineLog:
 
 
 class ResolutionReason:
-    """Machine-readable reasons for a failed auto-resolution — module-level
-    string constants (not an enum) so callers can embed them directly in a
-    ``degraded``/``needs_disambiguation`` reason string without an import of
-    an enum type into wire-facing code."""
 
     NO_CANDIDATES = "no-candidates"
     BELOW_THRESHOLD = "below-threshold"
@@ -174,8 +126,6 @@ class ResolutionReason:
 
 
 class Resolution(TypedDict):
-    """Return shape of ``resolve_candidate`` — the ranked list plus the
-    auto-resolution decision over it."""
 
     ranked: List[dict]
     resolved_id: Optional[str]
@@ -209,7 +159,7 @@ def rank_candidates(text: str, items: list) -> List[dict]:
     query_tokens = set(query_lower.split())
 
     for item in items:
-        haystack = item["text"]  # caller guarantees already lowercased
+        haystack = item["text"]
         ratio_score = difflib.SequenceMatcher(None, query_lower, haystack).ratio()
         haystack_tokens = set(haystack.split())
         overlap = len(query_tokens & haystack_tokens) / max(len(query_tokens), 1)

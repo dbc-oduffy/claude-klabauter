@@ -43,19 +43,10 @@ pytestmark = pytest.mark.skipif(
 )
 
 #: The shim reports this minor, and `LOCK_PYTHON_MINOR` is pinned to it, so
-#: the minor check is satisfied in every arm and only the release level varies.
 _SHIM_MINOR = "3.14"
 
 
 def _shim_interpreter(tmp_path: Path, release_level: str, serial: int) -> Path:
-    """An executable that runs `-c <code>` under a doctored `sys.version_info`.
-
-    `_fleet_env_healthy` probes the TARGET interpreter in a subprocess, which
-    is the whole point of it (a different environment's site-packages is not
-    importable from this process). So the release level cannot be
-    monkeypatched into the probe — it has to be what the probed executable
-    genuinely reports about itself, which is what this shim supplies.
-    """
     shim = tmp_path / f"python-{release_level}"
     shim.write_text(
         "#!" + sys.executable + "\n"
@@ -79,16 +70,12 @@ def _pin_minor_and_drop_import_probes(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_a_release_candidate_interpreter_is_unhealthy(tmp_path: Path) -> None:
-    """The defect: minor matches, so every prior gate passes, and the
-    environment was accepted."""
     shim = _shim_interpreter(tmp_path, "candidate", 2)
 
     assert fleet_env._fleet_env_healthy(shim) is False
 
 
 def test_a_released_interpreter_of_the_same_minor_is_healthy(tmp_path: Path) -> None:
-    """Control: proves the new gate keys on the release level and is not
-    simply always-False for the contracted minor."""
     shim = _shim_interpreter(tmp_path, "final", 0)
 
     assert fleet_env._fleet_env_healthy(shim) is True
@@ -98,20 +85,12 @@ def test_a_released_interpreter_of_the_same_minor_is_healthy(tmp_path: Path) -> 
 def test_every_pre_release_level_is_rejected_not_just_candidate(
     tmp_path: Path, release_level: str
 ) -> None:
-    """`final` is the only acceptable value. Enumerating the rejects keeps a
-    future `releaselevel` from being waved through by an allow-list that
-    only ever named `candidate`."""
     shim = _shim_interpreter(tmp_path, release_level, 1)
 
     assert fleet_env._fleet_env_healthy(shim) is False
 
 
 def test_the_failure_names_the_provisioner_as_the_thing_to_fix(tmp_path: Path) -> None:
-    """The evidence a caller keeps. `ensure_fleet_env` rmtree's the build
-    tree the moment the probe returns False, so this diagnostic is the only
-    record of why — and the actionable fault is the stale provisioner
-    catalog, not the contracted minor. A message that named only the
-    interpreter would invite retreating the pin instead."""
     shim = _shim_interpreter(tmp_path, "candidate", 2)
     diagnostic: dict = {}
 

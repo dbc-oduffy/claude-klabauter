@@ -307,11 +307,6 @@ OUTCOMES = ("ok", "error", "timeout")
 
 
 class Window(str, enum.Enum):
-    """Which generation(s) a scan reads — see module docstring § Windowing.
-
-    A plain `str` subclass so a stamped `window` value serializes as its own
-    name via `.value` without a caller needing to know this is an enum.
-    """
 
     CURRENT_GENERATION = "current_generation"
     FULL_HISTORY = "full_history"
@@ -329,30 +324,21 @@ class Liveness(str, enum.Enum):
 
 
 class Shape(str, enum.Enum):
-    """Exactly three, see module docstring § Shape."""
 
     CEILING_DOMINATED = "CEILING-DOMINATED"
     TAIL_DRIVEN = "TAIL-DRIVEN"
     BROAD = "BROAD"
 
 
-#: Non-`ok` share of an op's total box-seconds above which it is
 #: CEILING-DOMINATED, checked before any tail statistic (module docstring).
 CEILING_DOMINATED_NON_OK_SHARE_BAR: float = 0.40
 
-#: Share of an op's summed `ok` box-seconds the top 1% of its `ok` samples
 #: must exceed for TAIL-DRIVEN (module docstring).
 TAIL_DRIVEN_TOP1PCT_SHARE_BAR: float = 0.20
 
 #: `mean_ok_ms / p50_ok_ms` at or above which TAIL-DRIVEN fires even if the
-#: top-1%-share test does not — the docstring's stated "equivalently mean/p50
-#: >~ 2" reading of the same signal.
 TAIL_DRIVEN_MEAN_OVER_P50_BAR: float = 2.0
 
-#: The plan's ratified candidate wall-clock window for the audit's candidate
-#: list (docs/plans/2026-08-23-the-roster-stops-being-hand-curated.md § "The
-#: window is not a parameter, it is the population" — 7 days is NOT one of
-#: the six PM ratification items, it is the module's own engineering choice).
 SEVEN_DAYS_SECS: float = 7 * 24 * 60 * 60.0
 
 
@@ -375,10 +361,6 @@ def live_registry_op_names() -> frozenset:
 
 
 def _poisoned_modules() -> Dict[str, str]:
-    """`{module dotted-path: str(exception)}` across both `ops` and `hooks`
-    poisoned-module tables, read AFTER `live_registry_op_names()` has run
-    (both packages' `_eager_import_all()` populate their own table as a
-    side effect of that call)."""
     import coordinator_core.hooks as _hooks_pkg
     import coordinator_core.ops as _ops_pkg
 
@@ -430,9 +412,6 @@ def classify_liveness(
 
 @dataclasses.dataclass
 class _Accumulator:
-    """Mutable per-op scratch state, one instance per op seen while
-    streaming. Converted to a frozen `OpOccupancy` only once, at publish
-    time — see `_finalize`."""
 
     op: str
     started_count: int = 0
@@ -446,14 +425,9 @@ class _Accumulator:
     ok_elapsed: List[float] = dataclasses.field(default_factory=list)
     max_observed_ms: Optional[float] = None
     max_completed_ms: Optional[float] = None
-    #: Full-history side channel (§ Windowing) — updated from EVERY complete
-    #: row physically read for this scan's generation set, regardless of any
-    #: `since` cutoff. Mirrors the windowed fields exactly when no cutoff is
     #: applied (`Window.CURRENT_GENERATION` / `Window.FULL_HISTORY`).
     max_observed_ms_full_history: Optional[float] = None
     max_completed_ms_full_history: Optional[float] = None
-    #: § Routed vs routeless — counted, never filtered on. Both cover ALL
-    #: `kind: complete` rows within the window, any outcome.
     routed_count: int = 0
     routeless_count: int = 0
     routed_max_observed_ms: Optional[float] = None
@@ -461,8 +435,6 @@ class _Accumulator:
 
 
 def _shape_for(acc: _Accumulator, sorted_ok: List[float]) -> Optional[Shape]:
-    """`sorted_ok` is `sorted(acc.ok_elapsed)`, computed once by the caller
-    and shared with the `p50_ok` finalize step — see `scan_occupancy`."""
     ok_ms = acc.sum_ms["ok"]
     error_ms = acc.sum_ms["error"]
     timeout_ms = acc.sum_ms["timeout"]
@@ -474,12 +446,9 @@ def _shape_for(acc: _Accumulator, sorted_ok: List[float]) -> Optional[Shape]:
     if non_ok_share > CEILING_DOMINATED_NON_OK_SHARE_BAR:
         return Shape.CEILING_DOMINATED
 
-    # A zero-`ok`-rows op never reaches here: `total_ms <= 0.0` (no rows of
-    # any outcome) or `non_ok_share == 1.0` (only error/timeout rows) always
-    # exceeds the 0.40 bar above — see module docstring § Shape.
 
     n = len(sorted_ok)
-    top1_count = max(1, -(-n // 100))  # ceil(n / 100)
+    top1_count = max(1, -(-n // 100))
     top1_sum = sum(sorted_ok[n - top1_count :])
     top1_share = top1_sum / ok_ms if ok_ms > 0.0 else 0.0
 
@@ -534,16 +503,9 @@ class OpOccupancy:
     max_observed_ms: Optional[float]
     max_completed_ms: Optional[float]
 
-    #: Full-history twin of the two fields above — see module docstring
-    #: § Windowing. Mirrors `max_observed_ms` / `max_completed_ms` exactly
-    #: when the scan applied no `since` cutoff.
     max_observed_ms_full_history: Optional[float]
     max_completed_ms_full_history: Optional[float]
 
-    #: § Routed vs routeless (correction, 2026-08-23) — visible, never
-    #: silently dropped. `routed_max_observed_ms` / `routeless_max_observed_ms`
-    #: both cover ALL outcomes within the window, same scope as
-    #: `max_observed_ms` (which is their union and is unaffected by route).
     routed_count: int
     routeless_count: int
     routed_max_observed_ms: Optional[float]
@@ -568,16 +530,10 @@ class OccupancyStamp:
     read_time_secs: float
     liveness_poisoned_modules: Dict[str, str]
 
-    #: The resolved wall-clock cutoff (§ Windowing, AC4b) — `None` unless
     #: `window is Window.WALL_CLOCK_CUTOFF`, in which case both are always
-    #: populated together. A figure whose window is not stated is not
-    #: reportable: these two fields ARE that statement for a cutoff scan.
     since_epoch: Optional[float] = None
     since_iso: Optional[str] = None
 
-    #: Corpus-level view of § Routed vs routeless, over every in-window
-    #: `kind: complete` row across every op — the visible surface for a
-    #: filter that used to drop 75.1% of this corpus unseen.
     routed_complete_rows: int = 0
     routeless_complete_rows: int = 0
     routeless_share: float = 0.0
@@ -585,10 +541,6 @@ class OccupancyStamp:
 
 @dataclasses.dataclass(frozen=True)
 class OccupancyResult:
-    """The whole of one scan's output: the stamp (§ provenance) plus the
-    per-op occupancy table. `ops` is a dict keyed by op name for O(1)
-    caller lookups; iteration order matches first-seen order in the
-    underlying scan."""
 
     stamp: OccupancyStamp
     ops: Dict[str, OpOccupancy]
@@ -599,9 +551,6 @@ def _generations_for_window(repo_root: Path, window: Window) -> List[Path]:
     if window is Window.CURRENT_GENERATION:
         return generations[:1]
     # FULL_HISTORY and WALL_CLOCK_CUTOFF both read every generation -- a
-    # wall-clock cutoff cannot be resolved without reading every row of
-    # every generation to find the ones inside it (module docstring
-    # § Windowing).
     return generations
 
 
@@ -691,8 +640,6 @@ def scan_occupancy(
                         unparseable_rows += 1
                         continue
 
-                    # § Routed vs routeless (correction, 2026-08-23): `route`
-                    # is recorded per-op below, never used to exclude a row.
                     is_routed = entry.get("route") in EXECUTION_ROUTES
 
                     op_name = entry.get("op")
@@ -707,10 +654,6 @@ def scan_occupancy(
                         isinstance(t_start, (int, float)) and t_start >= since
                     )
 
-                    # Full-history side channel (§ Windowing): every complete
-                    # row physically read updates this, regardless of
-                    # `in_window`, BEFORE the windowed-population filter
-                    # below excludes it from everything else.
                     if kind == "complete":
                         outcome_fh = entry.get("outcome")
                         elapsed_fh = entry.get("elapsed_ms")

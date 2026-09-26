@@ -1,14 +1,3 @@
-"""
-coordinator_core.review_trail.tests.test_backfill
-
-Purpose: pins `coordinator_core.review_trail.backfill` — the one-shot,
-idempotent, resumable pass folding already-on-disk `state/review-trail/
-*.json` records into the reviewed_set store, and the shared
-`resolve_and_fold` path it shares with write-time resolution
-(`test_write_time_resolution.py`).
-
-Spec backlink: docs/plans/2026-08-27-the-reviewed-set-is-a-file-not-a-computation.md § C1b
-"""
 
 from __future__ import annotations
 
@@ -218,8 +207,6 @@ class TestRunBackfill:
         assert len(first.unresolved) == 1
         assert tip not in rs.read_reviewed_set(str(repo))
 
-        # Second call over the SAME unresolvable record must retry, not skip
-        # (its id was never marked folded).
         second = backfill.run_backfill(str(repo))
         assert len(second.unresolved) == 1
 

@@ -121,21 +121,11 @@ from coordinator_core.contract.apply_base import assert_dispatchable
 if TYPE_CHECKING:
     from coordinator_core.composition_budget import CompositionBudget
 
-# ---------------------------------------------------------------------------
 # Exit-code contract (apply-side, 0-4) — SEPARATE from `brief.WorkdayExitCode`
-# (0-3). computed-skills.md § Exit-code contract for a mutating half requires
-# each half to pin its own enumeration; this one is never reused by brief().
-# Built from the shared `ceremony_common.apply_halt` ladder (C2h) so this
-# module's numbering can never independently drift from
-# `workweek_complete.apply`'s own.
-# ---------------------------------------------------------------------------
 WorkdayApplyExitCode = build_ceremony_halt_exit_codes("WorkdayApplyExitCode")
 
 
-#: THE closed dispatch table (security-load-bearing — see module docstring).
 #: Every key is a literal member of `brief.CONSUMES_MANIFEST`, written here
-#: by hand; every value is this module's own fixed, `Path(__file__)`-relative
-#: script location under `coordinator/bin/`. Never mutated at runtime.
 _CLI_SCRIPT_ROOT = resolve_cli_script_root()
 
 _CLI_DISPATCH: dict[str, Path] = {
@@ -273,15 +263,6 @@ def _invoke_cli_main(
 def _dispatch_directive(
     directive: dict[str, Any], *, stdin_text: Optional[str] = None
 ) -> dict[str, Any]:
-    """Loads and invokes the one CLI a single `directives[]` entry names,
-    returning a small result record. Raises `UnrecognizedDirective` before
-    any dispatch on an unrecognized `cli` (never a partial/silent skip).
-    `stdin_text` (see `_invoke_cli_main`) is `apply._execute_directives`'s
-    resolved stdin for this directive — `None` unless the directive declared
-    `stdin_from` AND its producer already landed this pass. The producing
-    CLI's own captured stdout and stderr are each re-emitted onto apply's
-    own stdout/stderr here (see `_invoke_cli_main`'s docstring) so nothing
-    that used to print to the ceremony run's console goes silent."""
     module = _load_cli_module(directive["cli"])
     exit_code, stdout_text, stderr_text, exit_class = _invoke_cli_main(
         module, directive.get("args", []), stdin_text=stdin_text
@@ -299,11 +280,6 @@ def _dispatch_directive(
         "stderr": stderr_text,
         "exit_class": exit_class.value,
     }
-
-
-# ---------------------------------------------------------------------------
-# Halt contract — per-directive, disposition-value-aware (module docstring).
-# ---------------------------------------------------------------------------
 
 
 def _judgment_points_by_id(judgment_points: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -387,29 +363,9 @@ def _execute_directives(
             "budget_breach": pre_mutation_breach,
         }
 
-    # Whole-run admission pre-pass (F1, cold review 2026-08-19): an
-    # un-admitted `cli` must fail the WHOLE run before any directive
-    # dispatches, mirroring `apply_base.execute_directives`'s own
-    # whole-list pre-validation — never degrade to a per-directive
-    # skip-and-continue on an admission/manifest-membership refusal. This
-    # is admission-only (`_resolve_cli` raising `UnrecognizedDirective`);
-    # the per-directive halt contract below (gates, non-zero exits,
-    # `best_effort`) is untouched. Scope, stated because the first cut of
-    # this pre-pass widened it silently: every directive that CAN dispatch in
-    # this run is checked, including a gate-blocked one; an `already_satisfied`
-    # directive is skipped, because it cannot.
     try:
         for directive in directives:
-            # An `already_satisfied` directive ran in an earlier pass and hits
-            # `continue` below without ever dispatching, so its verb name is
-            # never resolved by the main loop either. Admission-checking it here
-            # would refuse the WHOLE run over a name that cannot dispatch --
-            # a false refusal on a replayed directive whose verb has since left
             # `ASSEMBLER_DISPATCHABLE` (slice-B review finding 1, 2026-08-20).
-            # A gate-blocked directive is deliberately NOT skipped: it is still
-            # a live member of this run's list and dispatches the moment its
-            # gate resolves, so an un-admitted verb there is a structurally
-            # invalid list, which is exactly what this pre-pass exists to catch.
             if directive.get("already_satisfied"):
                 continue
             _resolve_cli(directive["cli"])
@@ -464,11 +420,6 @@ def _execute_directives(
         try:
             result = _dispatch_directive(directive, stdin_text=stdin_text)
         except Exception as exc:  # noqa: BLE001 - closed-table dispatch failure
-            # type(exc).__name__ prefix, not bare str(exc): an
-            # io.UnsupportedOperation("fileno") formats as the single word
-            # "fileno" under str() alone, with no type and no traceback --
-            # exactly what hid the subprocess-under-capture-buffer defect
-            # run_forwarding (coordinator_core.win_portability) fixes.
             failed.append({
                 "id": directive["id"],
                 "error": f"{type(exc).__name__}: {exc}",

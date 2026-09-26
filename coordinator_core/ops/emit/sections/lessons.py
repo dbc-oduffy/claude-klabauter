@@ -41,19 +41,11 @@ from pathlib import Path
 
 from coordinator_core.ops.emit.context import EmitContext, _GIT_BACKED_SOURCE_KINDS
 
-# Path of the frozen lesson-summary producer, relative to the coordinator (meta-repo) root.
 # Mirrors bash "$COORDINATOR_ROOT/bin/lib/emit-lesson-summaries.py".
 _PRODUCER_REL = ("bin", "lib", "emit-lesson-summaries.py")
 
 
 def _relativize_if_absolute(path_value: object, root: object) -> object:
-    """Reduce an absolute *path_value* to *root*-relative POSIX; pass through otherwise.
-
-    Mirrors ``review_trail.py::_relativize_path``'s
-    approach (resolve + relative_to, ``ValueError``-fallback to the original value when
-    the path is outside *root* or not a real filesystem path) so both belt-and-suspenders
-    consumers of the frozen producer's output normalize identically.
-    """
     if not isinstance(path_value, str) or not path_value:
         return path_value
     try:
@@ -63,19 +55,6 @@ def _relativize_if_absolute(path_value: object, root: object) -> object:
 
 
 def _run_producer(producer, *args: str, cwd: Optional[str] = None) -> list[dict]:
-    """Invoke the lesson-summary producer and parse its JSON array; [] on any failure.
-
-    Uses sys.executable to invoke the producer in the same virtualenv as the caller —
-    hardcoding 'python3' bypasses the venv and causes ImportError on venv-installed deps.
-    cwd pins the process working directory so the producer resolves its state root from the
-    correct repo root (same defensive contract as backlogs.py).
-
-    Deliberate isolation boundary — do not convert this call site to an
-    in-process import on its own. The producer, `bin/lib/emit-lesson-summaries.py`,
-    is a FROZEN script; converting requires first porting it under
-    `coordinator_core` — that is a port, not a call-site edit. See
-    state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md.
-    """
     try:
         from coordinator_core.win_portability import no_console_creationflags
 
@@ -107,8 +86,6 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
     and returns an empty record list. malformed is always [] — lessons degrade-but-count.
     """
     producer = ctx.coordinator_root.joinpath(*_PRODUCER_REL)
-    # When subprocess_root is set (frozen-fixture test isolation), redirect the lesson
-    # producer to read from the fixture root instead of the live repo root.
     record_root = ctx.subprocess_root if ctx.subprocess_root is not None else ctx.repo_root
 
     records = _run_producer(
@@ -121,11 +98,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
         cwd=str(ctx.repo_root),
     )
 
-    # The frozen producer predates ctx.provenance() and hardcodes source_kind="local_fs"
-    # while unconditionally populating ref={branch, sha} from the emitting repo's git state.
     # The D9/cockpit-contract invariant (context.py:_GIT_BACKED_SOURCE_KINDS) requires ref to
-    # be null for non-git-backed source kinds (local_fs, coordinator_artifact) — enforce it
-    # here since the producer itself cannot be edited (foreign/shared surface).
     for record in records:
         provenance = record.get("provenance") if isinstance(record, dict) else None
         if isinstance(provenance, dict) and "source_kind" in provenance:

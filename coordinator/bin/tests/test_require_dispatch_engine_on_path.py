@@ -1,17 +1,3 @@
-"""`require_dispatch_engine_on_path` is a TRUE NO-OP for the inline preamble.
-
-C16 collapses ~200 verbatim copies of a three-line bootstrap onto one seam. The
-collapse is only safe if the seam is behaviourally indistinguishable from the
-body it replaces — a collapse that also "improves" resolution is two changes
-wearing one commit.
-
-The near-miss that motivates this module: the obvious seam to adopt was
-`require_engine_on_path`, which is the same shape on the LOCATOR axis. On a box
-with both env vars unset the two ladders return different roots, so adopting it
-would have repointed every converted CLI from the published engine to the working
-tree. Three of 164 files changed exit code and that was the only visible symptom.
-So the axis is pinned here by test, not by docstring.
-"""
 
 from __future__ import annotations
 
@@ -34,7 +20,6 @@ def cc():
 
 
 def _inline_preamble(resolve) -> str:
-    """The exact body the ~200 CLIs carry, as the oracle to compare against."""
     claude_klabauter_root = resolve()
     if claude_klabauter_root not in sys.path:
         sys.path.insert(0, claude_klabauter_root)
@@ -42,7 +27,6 @@ def _inline_preamble(resolve) -> str:
 
 
 def test_returns_the_dispatch_ladders_answer(cc, monkeypatch, tmp_path):
-    """The seam resolves through `_resolve_claude_klabauter_root`, not the locator ladder."""
     sentinel = str(tmp_path / "published-engine")
     monkeypatch.setattr(cc, "_resolve_claude_klabauter_root", lambda: sentinel)
     monkeypatch.setattr(sys, "path", list(sys.path))
@@ -51,7 +35,6 @@ def test_returns_the_dispatch_ladders_answer(cc, monkeypatch, tmp_path):
 
 
 def test_matches_the_inline_body_it_replaces(cc, monkeypatch, tmp_path):
-    """Same return value AND same sys.path mutation as the inline preamble."""
     sentinel = str(tmp_path / "published-engine")
     monkeypatch.setattr(cc, "_resolve_claude_klabauter_root", lambda: sentinel)
 
@@ -68,7 +51,6 @@ def test_matches_the_inline_body_it_replaces(cc, monkeypatch, tmp_path):
 
 
 def test_inserts_at_the_front(cc, monkeypatch, tmp_path):
-    """Front-insert, so an explicit override outranks an ambient editable install."""
     sentinel = str(tmp_path / "published-engine")
     monkeypatch.setattr(cc, "_resolve_claude_klabauter_root", lambda: sentinel)
     monkeypatch.setattr(sys, "path", ["/some/ambient/site-packages"])
@@ -78,7 +60,6 @@ def test_inserts_at_the_front(cc, monkeypatch, tmp_path):
 
 
 def test_is_idempotent(cc, monkeypatch, tmp_path):
-    """A second call must not stack a duplicate entry — the inline body's `not in` check."""
     sentinel = str(tmp_path / "published-engine")
     monkeypatch.setattr(cc, "_resolve_claude_klabauter_root", lambda: sentinel)
     monkeypatch.setattr(sys, "path", list(sys.path))
@@ -89,7 +70,6 @@ def test_is_idempotent(cc, monkeypatch, tmp_path):
 
 
 def test_propagates_runtime_error_like_the_inline_body(cc, monkeypatch):
-    """Catches nothing: callers' own `except RuntimeError` remediation must still fire."""
     def _boom():
         raise RuntimeError("every rung missed")
 
@@ -99,12 +79,6 @@ def test_propagates_runtime_error_like_the_inline_body(cc, monkeypatch):
 
 
 def test_takes_no_script_file_argument(cc):
-    """The signature is the guard against silently drifting onto the locator axis.
-
-    Every other `*_on_path` wrapper takes `script_file` and answers "where is the
-    source checkout". This one answers "which engine executes", which is a property
-    of the box. A signature that cannot accept a script path cannot be handed one.
-    """
     import inspect
 
     params = inspect.signature(cc.require_dispatch_engine_on_path).parameters
@@ -149,10 +123,6 @@ def test_require_dispatch_module_success_returns_the_imported_module(cc, monkeyp
 
 
 def test_require_dispatch_module_reports_stale_mirror_cause_and_remedy(cc, monkeypatch, tmp_path):
-    """The published-engine-is-behind case: the missing module exists under
-    the resolved SOURCE checkout's own `coordinator_core/` but not under the
-    (fake) dispatch root -- the exact shape of the filed incident.
-    """
     source_root = tmp_path / "source"
     dispatch_root = tmp_path / "dispatch"
     (source_root / "coordinator_core" / "session").mkdir(parents=True)
@@ -182,9 +152,6 @@ def test_require_dispatch_module_reports_stale_mirror_cause_and_remedy(cc, monke
 
 
 def test_require_dispatch_module_reports_not_in_source_either(cc, monkeypatch, tmp_path):
-    """The non-mirror-gap case: the missing name is absent from source too --
-    a typo, not a publish lag. Must not tell the reader to publish.
-    """
     source_root = tmp_path / "source"
     dispatch_root = tmp_path / "dispatch"
     (source_root / "coordinator_core").mkdir(parents=True)
@@ -210,10 +177,6 @@ def test_require_dispatch_module_reports_not_in_source_either(cc, monkeypatch, t
 
 
 def test_require_dispatch_module_reuses_the_dispatch_seam_unchanged(cc, monkeypatch, tmp_path):
-    """`require_dispatch_module` must not re-implement root resolution --
-    it calls `require_dispatch_engine_on_path` itself, so that seam's own
-    behaviour (divergence hardening, split announcement) is untouched.
-    """
     sentinel = str(tmp_path / "published-engine")
     calls = []
     real = cc.require_dispatch_engine_on_path
@@ -232,7 +195,6 @@ def test_require_dispatch_module_reuses_the_dispatch_seam_unchanged(cc, monkeypa
 
 
 def test_the_two_axes_are_not_the_same_function(cc):
-    """A refactor aliasing one to the other would silently undo the split."""
     assert cc.require_dispatch_engine_on_path is not cc.require_engine_on_path
     dispatch_src = cc.require_dispatch_engine_on_path.__code__.co_names
     assert "_resolve_claude_klabauter_root" in dispatch_src, (

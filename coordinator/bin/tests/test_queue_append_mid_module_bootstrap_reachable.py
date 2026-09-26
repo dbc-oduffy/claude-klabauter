@@ -41,17 +41,13 @@ import pytest
 pytestmark = [pytest.mark.cadence]
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_BIN_DIR = os.path.dirname(_THIS_DIR)  # coordinator/bin
+_BIN_DIR = os.path.dirname(_THIS_DIR)
 _QUEUE_APPEND_CLI = os.path.join(_BIN_DIR, "coordinator-queue-append.py")
 
 _MODULE_NAME = "test_coordinator_queue_append_mid_module_module"
 
 
 def _load_fresh_module():
-    """Load coordinator-queue-append fresh, without running `main()` -- the
-    exact entry shape a mid-module caller (or in-process dispatch reaching a
-    helper directly) presents.
-    """
     sys.modules.pop(_MODULE_NAME, None)
     loader = SourceFileLoader(_MODULE_NAME, _QUEUE_APPEND_CLI)
     spec = importlib.util.spec_from_file_location(
@@ -74,8 +70,6 @@ def _assert_no_name_error(label: str, fn) -> None:
     except SystemExit:
         pass
     except Exception:
-        # Any other failure (missing git repo, registry unresolved, etc.) is an
-        # unrelated environment precondition, not the defect this test targets.
         pass
 
 

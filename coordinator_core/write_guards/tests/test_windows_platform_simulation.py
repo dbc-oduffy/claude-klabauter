@@ -87,19 +87,7 @@ from coordinator_core.hooks import nudge_em_code_dispatch as nudge_hook
 
 @pytest.fixture()
 def _windows_os_path(monkeypatch):
-    """Swap the process-wide `os.path` submodule for the stdlib's `ntpath`.
-
-    `ntpath` is pure lexical string manipulation when run off-Windows (no
-    win32 syscalls) — see module docstring. Auto-restored by monkeypatch at
-    teardown. Any guard invoked while this fixture is active sees the SAME
-    `os.path.realpath`/`abspath`/`basename`/`splitext` behaviour a real
-    Windows interpreter would produce for backslash-separated, drive-
-    lettered input.
-    """
     monkeypatch.setattr(os, "path", ntpath)
-
-
-# ─── guard_settings_json_write ──────────────────────────────────────────────
 
 
 def _write_payload(content: str) -> dict:
@@ -137,8 +125,6 @@ def test_settings_guard_denies_windows_drive_letter_backslash_form(monkeypatch):
     )
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    # The reason embeds `repr(token)`, so a literal backslash prints doubled;
-    # assert on the content rather than the exact escaping.
     assert "Users" in reason and "me" in reason and "DoE-claude" in reason
 
 
@@ -209,8 +195,6 @@ def test_settings_guard_denies_differently_cased_settings_path(monkeypatch):
 
 
 def test_settings_guard_unrelated_differently_cased_path_still_allowed(monkeypatch):
-    """Casefolding the comparison must not widen the guard to unrelated
-    files that merely share a casefolded prefix by accident."""
     monkeypatch.setattr(guard_settings_json_write, "_is_windows", lambda: False)
     monkeypatch.setattr(
         guard_settings_json_write,
@@ -245,15 +229,7 @@ def test_settings_guard_https_url_passing_side_also_holds_on_windows(monkeypatch
     assert result is None
 
 
-# ─── block_worktree_sentinel_write / _sentinel_write_guard ──────────────────
-
-
 def test_sentinel_write_guard_matches_windows_shaped_case_varied_path(_windows_os_path):
-    """Case-fold + backslash-separated basename extraction under real ntpath
-    semantics — `os.path.basename` on a plain PosixPath backend would treat
-    the whole backslash-separated string as one filename component and never
-    match; under the ntpath swap it correctly extracts the trailing
-    component."""
     target = "C:\\Users\\me\\project\\.COORDINATOR-OVERRIDE-WORKTREE-GUARD"
     assert _sentinel_write_guard.is_sentinel_write(
         target, ".coordinator-override-worktree-guard"
@@ -279,11 +255,7 @@ def test_block_worktree_sentinel_write_denies_windows_shaped_target(_windows_os_
     assert result is not None
     out = result["hookSpecificOutput"]
     assert out["permissionDecision"] == "deny"
-    # Deny message discipline: the sentinel basename is never printed.
     assert ".coordinator-override-worktree-guard" not in out["permissionDecisionReason"]
-
-
-# ─── guard_doctrine_surface_edits ───────────────────────────────────────────
 
 
 def test_norm_is_stable_under_windows_path_semantics(_windows_os_path):
@@ -294,9 +266,6 @@ def test_norm_is_stable_under_windows_path_semantics(_windows_os_path):
 
 
 def test_doctrine_guard_denies_windows_shaped_home_claude_md(_windows_os_path, monkeypatch):
-    """Fallback branch (no resolvable git root): only `$HOME/.claude/CLAUDE.md`
-    is protected, and the sentinel is treated as absent -> deny (this
-    guard's deliberate fail-closed posture)."""
     windows_home_claude_md = guard_doctrine_surface_edits._norm(
         "C:\\Users\\me\\.claude\\CLAUDE.md"
     )
@@ -318,17 +287,6 @@ def test_doctrine_guard_denies_windows_shaped_home_claude_md(_windows_os_path, m
     out = result["hookSpecificOutput"]
     assert out["permissionDecision"] == "deny"
     # Deny message discipline (2026-08-13, C4a, INVERTED -- plan
-    # docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md;
-    # docs/wiki/guard-messaging.md § Register B6): the prior 2026-07-30
-    # reversal asserted the sentinel filename WAS printed, reasoning that
-    # naming it was safe once creation was denied on both surfaces -- B6
-    # supersedes that reasoning: showing a confined reader the key while
-    # forbidding its use is itself the disclosure that makes a well-meaning
-    # subagent's rationalisation through the gate available, independent of
-    # whether creation is also blocked. No unresolved-audience payload is
-    # passed here (`check()`'s payload carries no `session_id`), so this
-    # fires the unresolved-audience leg, which degrades to terse -- never
-    # the mechanism, per B6's unresolved-audience degradation rule.
     assert ".coordinator-doctrine-edit-approved" not in out["permissionDecisionReason"]
 
 
@@ -352,9 +310,6 @@ def test_doctrine_guard_allows_unrelated_windows_shaped_path(_windows_os_path, m
     assert guard_doctrine_surface_edits.check(payload) is None
 
 
-# ─── nudge_em_code_dispatch (hooks-layer _derive_executor_info) ─────────────
-
-
 def test_derive_executor_info_windows_shaped_coordinator_path(_windows_os_path):
     executor_type, ambiguous = nudge_hook._derive_executor_info(
         "C:\\Users\\me\\DoE-claude\\coordinator\\hooks\\scripts\\foo.py"
@@ -370,13 +325,7 @@ def test_derive_executor_info_windows_shaped_extension_match(_windows_os_path):
     assert basename == "script.py"
 
 
-# ─── validate_frontmatter_schema_deny — pure string-level normalization ────
-
-
 def test_to_repo_relative_normalizes_mixed_separators():
-    """`_to_repo_relative` never touches the filesystem — pure `.replace`
-    calls on both operands — so this is a direct (no-swap-needed) proof the
-    backslash-normalization logic is correct regardless of host."""
     abs_path = "C:\\DoE-claude\\state\\handoffs\\foo.md"
     repo_root = "C:\\DoE-claude"
     rel = vfs_deny._to_repo_relative(abs_path, repo_root)
@@ -387,9 +336,6 @@ def test_to_repo_relative_mismatched_root_returns_none():
     abs_path = "C:\\DoE-claude\\state\\handoffs\\foo.md"
     repo_root = "C:\\some-other-repo"
     assert vfs_deny._to_repo_relative(abs_path, repo_root) is None
-
-
-# ─── The hard-gated boundary, pinned as an executable fact ─────────────────
 
 
 @pytest.mark.skipif(

@@ -1,18 +1,3 @@
-"""
-coordinator_core.hooks.test_subagent_arrival_check — round-trip tests for the
-pull/poll subagent-arrival op (hooks.subagent_arrival_check).
-
-Covers: arrived (stop_reason short-circuit and debounce-cleared), running (shape
-mismatch, and the flap case — shape matches but record younger than the debounce),
-unknown (absent transcript, malformed/unparseable final line, truncated/empty
-file, missing inputs), path derivation, and registration-quad presence for the op
-key. All fixtures are hand-built JSONL — no live ~/.claude transcript data is read.
-
-All handlers are async; asyncio.run() is used directly in sync test functions — no
-pytest-asyncio dependency, matching coordinator_core/hooks/test_subagent_zero_tool_use_resolve.py.
-
-Spec backlink: cross-repo/inbox/2026-07-25-doe-claude-em-zero-tool-use-detection-engine-op-contract.md
-"""
 
 from __future__ import annotations
 
@@ -23,8 +8,6 @@ import os
 import time
 from pathlib import Path
 
-# Fixed mtimes for the ambiguity tests below — real dispatch files land seconds
-# apart, so newest-wins needs an unambiguous ordering to assert on.
 _PAST = time.time() - 3600
 _FUTURE = time.time() + 3600
 
@@ -65,7 +48,6 @@ def _write_transcript(path: Path, lines: list[str]) -> Path:
 
 
 def _write_meta(transcript_path: Path, *, name: str, team_name: str) -> Path:
-    """Write the `.meta.json` sidecar the harness drops next to each subagent transcript."""
     sidecar = transcript_path.with_suffix(".meta.json")
     sidecar.write_text(json.dumps({
         "agentType": name, "description": name, "name": name,
@@ -83,16 +65,6 @@ def _subagent_path(parent_transcript_path: Path, agent_id: str) -> Path:
 
 class TestPathDerivation:
     def test_derives_path_from_parent_transcript_and_agent_id(self) -> None:
-        """The expectation is built with `os.path.join`, not spelled out with
-        forward slashes.
-
-        `_derive_subagent_transcript_path` joins with `os.path.join`, which is
-        correct -- this is the one place the path SHAPE lives and callers open
-        what it returns, so on Windows it must return a Windows path. A literal
-        POSIX expectation asserted the platform, not the derivation, and failed
-        on every Windows run of a repo whose CLAUDE.md calls Windows
-        first-class.
-        """
         import os
 
         from coordinator_core.hooks.subagent_arrival_check import _derive_subagent_transcript_path
@@ -130,15 +102,6 @@ class TestArrived:
         assert "debounce" in result["reason"]
 
     def test_debounce_seconds_param_is_ignored(self, tmp_path: Path) -> None:
-        """A caller can no longer defeat the debounce by passing an override.
-
-        FINDING (accepted): `debounce_seconds` used to be a per-call parameter,
-        which let a caller pass e.g. 0 and lose the streaming-race protection —
-        every mid-turn flap would then read as a false "arrived". The param is
-        gone; a `debounce_seconds` key in params is simply not read, so a
-        record well inside the real 120s debounce still resolves "running"
-        regardless of what the caller passes.
-        """
         from coordinator_core.hooks.subagent_arrival_check import _handler
         parent = tmp_path / "abc123.jsonl"
         sub = _subagent_path(parent, "a1")
@@ -259,15 +222,6 @@ class TestUnknown:
 
 class TestTailCap:
     def test_final_record_exceeding_tail_cap_resolves_unknown_with_own_reason(self, tmp_path: Path) -> None:
-        """FINDING (accepted): a final record larger than the ~256KB tail cap used
-        to be reported as "last transcript line is not valid JSON" — true about
-        the fragment the tail read produced, false about the transcript (the
-        record itself may well be valid JSON; it's just too big to have been
-        read whole). The cap-reached case now gets its own reason string,
-        distinct from a genuine parse failure, while still resolving "unknown"
-        (never "arrived") either way. Fixture built programmatically at test
-        time — no 256KB file is committed to the repo.
-        """
         from coordinator_core.hooks.subagent_arrival_check import _handler, _TAIL_CAP_BYTES
         parent = tmp_path / "abc123.jsonl"
         sub = _subagent_path(parent, "a1")
@@ -313,7 +267,6 @@ class TestBoundaryShapes:
         })
         assert len(record.encode("utf-8")) > _TAIL_CHUNK_BYTES
 
-        # Trailing blank line carries whitespace, not just a bare newline.
         sub.write_text(record + "\n" + "   \n")
 
         result = _run(_handler({"transcript_path": str(parent), "agent_id": "a1"}))
@@ -341,7 +294,7 @@ class TestBoundaryShapes:
         sub = _subagent_path(parent, "a1")
         sub.parent.mkdir(parents=True, exist_ok=True)
 
-        marker = "λ"  # 2-byte UTF-8 character (0xCE 0xBB)
+        marker = "λ"
         base = json.dumps({
             "type": "assistant",
             "message": {"role": "assistant", "content": [{"type": "text", "text": "@MARK@"}], "stop_reason": "end_turn"},
@@ -358,7 +311,7 @@ class TestBoundaryShapes:
         record_bytes = record.encode("utf-8")
 
         marker_first_byte_index = len((prefix + pad_before).encode("utf-8"))
-        file_size = len(record_bytes) + 1  # + trailing "\n"
+        file_size = len(record_bytes) + 1
         assert marker_first_byte_index == file_size - _TAIL_CHUNK_BYTES - 1, (
             "test fixture arithmetic is off — marker no longer straddles the chunk boundary"
         )
@@ -382,14 +335,6 @@ class TestReturnShapePinned:
 
 
 class TestNamedTeammateIdNamespace:
-    """The EM-side canonical id `<name>@session-<short8>` must reach the real file.
-
-    Before this resolution existed, every named teammate derived
-    `subagents/agent-<name>@session-<short8>.jsonl` — a filename that cannot exist —
-    so the op answered "unknown" for all of them and the caller nudged agents that
-    had already returned. Bare-hex dispatches were unaffected, which is why the gap
-    survived a suite with no named-teammate case in it.
-    """
 
     def test_canonical_id_resolves_to_the_real_subagent_transcript(self, tmp_path: Path) -> None:
         from coordinator_core.hooks.subagent_arrival_check import _handler
@@ -404,7 +349,6 @@ class TestNamedTeammateIdNamespace:
         }))
         assert result["state"] == "arrived"
         assert result["subagent_transcript_path"] == str(real)
-        # The id is echoed as the caller supplied it, not rewritten to the file's form.
         assert result["agent_id"] == "wiki-skills-1b@session-b3052ce5"
 
     def test_canonical_id_running_agent_still_reads_running(self, tmp_path: Path) -> None:
@@ -417,7 +361,6 @@ class TestNamedTeammateIdNamespace:
         assert result["state"] == "running"
 
     def test_sidecar_confirmed_match_beats_a_filename_only_match(self, tmp_path: Path) -> None:
-        """Two files match the filename shape; only one's sidecar names this team."""
         from coordinator_core.hooks.subagent_arrival_check import _handler
         parent = tmp_path / "b3052ce5.jsonl"
         wrong = _subagent_path(parent, "adupe-ffffffffffffffff")
@@ -426,7 +369,6 @@ class TestNamedTeammateIdNamespace:
         right = _subagent_path(parent, "adupe-00000000000000aa")
         _write_transcript(right, [_assistant_record(stop_reason="end_turn", timestamp=_now_iso(0))])
         _write_meta(right, name="dupe", team_name="session-b3052ce5")
-        # Make the WRONG one newest, so a bare newest-mtime rule would pick it.
         os.utime(wrong, (_FUTURE, _FUTURE))
 
         result = _run(_handler({"transcript_path": str(parent), "agent_id": "dupe@session-b3052ce5"}))
@@ -434,7 +376,6 @@ class TestNamedTeammateIdNamespace:
         assert result["state"] == "arrived"
 
     def test_redispatched_name_without_sidecars_picks_the_newest(self, tmp_path: Path) -> None:
-        """Same name twice in one session: the canonical id cannot tell them apart."""
         from coordinator_core.hooks.subagent_arrival_check import _handler
         parent = tmp_path / "b3052ce5.jsonl"
         older = _subagent_path(parent, "atwice-1111111111111111")
@@ -449,7 +390,6 @@ class TestNamedTeammateIdNamespace:
         assert result["state"] == "running"
 
     def test_bare_hex_id_still_uses_the_direct_derivation(self, tmp_path: Path) -> None:
-        """Regression guard: the unnamed fast path must not route through the probe."""
         from coordinator_core.hooks.subagent_arrival_check import _handler
         parent = tmp_path / "abc123.jsonl"
         sub = _subagent_path(parent, "a50f96a8930246124")
@@ -469,17 +409,9 @@ class TestNamedTeammateIdNamespace:
     def test_traversal_shaped_name_never_resolves_outside_the_subagents_directory(
         self, tmp_path: Path
     ) -> None:
-        """A `/`-bearing name fails the canonical regex, so the probe never runs.
-
-        Even if it had run, the probe filters `os.listdir` output rather than
-        building a path from the name — this pins the outer of those two guards.
-        """
         from coordinator_core.hooks.subagent_arrival_check import _handler
         parent = tmp_path / "b3052ce5.jsonl"
         (tmp_path / "b3052ce5" / "subagents").mkdir(parents=True)
-        # An arrival-shaped record OUTSIDE the subagents dir. If a traversal landed
-        # here the op would answer "arrived" — so "unknown" is the load-bearing
-        # assertion, not merely a null result.
         outside = tmp_path / "b3052ce5" / "agent-escaped.jsonl"
         outside.write_text(_assistant_record(stop_reason="end_turn") + "\n")
 

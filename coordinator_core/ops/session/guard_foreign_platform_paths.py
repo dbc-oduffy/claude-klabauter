@@ -105,50 +105,14 @@ from typing import Any, List, Optional
 
 from coordinator_core.ops.session._path_shape_regexes import WIN_DRIVE_RE as _WIN_DRIVE_RE
 
-# --- Shape regexes -----------------------------------------------------------
-# Windows drive-letter form -- shared with guard_concrete_path_citations.py,
-# see _path_shape_regexes.py for why this is a single source rather than a
-# second copy of the lookbehind.
-# cygdrive/MSYS form: /cygdrive/x/...
 _CYGDRIVE_RE = re.compile(r"/cygdrive/[A-Za-z]/")
-# POSIX absolute path: a leading '/' followed directly by a path-segment
-# character (never another '/', which excludes "//host/share" UNC forms and
-# "scheme://" URLs), preceded by a non-path-char boundary so this does not
-# fire mid-string on an embedded fragment. The boundary also excludes a
-# preceding ':' so a native Windows drive path's own "C:/Users/..." tail is
-# never misread as a POSIX root -- that slash is drive-relative, not absolute.
 _POSIX_ROOT_RE = re.compile(r'(?<![A-Za-z0-9_./\\:-])/[A-Za-z0-9_][^\s"\']*')
 
-# --- Env-var reference shape regexes -----------------------------------------
-# PowerShell env-var read: "$env:NAME" (case-insensitive "env" -- PowerShell
-# itself is case-insensitive on this prefix). Requires a valid identifier
-# after the ':' so this never fires on bare "$env" prose or an unrelated
-# "http://x/env:thing" fragment (no such fragment is even shaped like this --
-# the ':' must directly follow the literal "env").
 _ENV_VAR_WIN_RE = re.compile(r"\$env:[A-Za-z_][A-Za-z0-9_]*", re.IGNORECASE)
-# POSIX env-var read: bare "$NAME" or braced "${NAME}". A leading digit
-# never matches (identifier grammar), which is what keeps "$5.00"/"$100" --
-# $ used arithmetically or as a currency literal -- out of this shape
-# entirely. Matched via `_iter_dollar_identifiers` below rather than a
-# single compiled regex with a trailing `(?!:)` lookahead -- that simpler
-# form has a real backtracking trap: on "$env:NAME" the maximal match "env"
-# fails the lookahead (next char IS ':'), so the engine backtracks to
-# shorter candidates ("en", then next char 'v' -- lookahead now PASSES) and
-# reports a false bare-var match anyway. Scanning the identifier's full
-# greedy extent first, then checking the boundary character in plain Python
-# (no backtracking involved), avoids that trap.
 _DOLLAR_IDENTIFIER_RE = re.compile(r"\$(\{)?([A-Za-z_][A-Za-z0-9_]*)")
 
-# PowerShell's OWN automatic-variable vocabulary -- a bare "$LastExitCode",
-# "$_", "$true" etc. inside a PowerShell command is NATIVE syntax on a
-# Windows host, not a foreign POSIX env-var read. This is shell-syntax
 # awareness (same category as `_POSIX_ROOT_RE` excluding "//host/share" UNC
-# and "scheme://" forms), never a hardcoded PROJECT variable name -- this
-# set is PowerShell's own reserved vocabulary, stable across any script that
-# uses it, and matches exactly the automatic variable `wrap_hook_command_
 # guarded()`'s own Windows branch emits ("exit $LASTEXITCODE"). Case-
-# insensitive, matching PowerShell's own case-insensitivity on variable
-# names. Source: `about_Automatic_Variables` (PowerShell reference).
 _POWERSHELL_AUTOMATIC_VARS = frozenset(
     v.lower()
     for v in (
@@ -193,65 +157,15 @@ _POWERSHELL_AUTOMATIC_VARS = frozenset(
 
 _DOEROOT_NAME = ".doe-root"
 
-# --- Prose-scan shapes (CLAUDE.md / CLAUDE.local.md) -------------------------
-#
-# The two path-shape regexes above answer "is this a path shaped for the
-# other platform" -- sufficient for settings.json, where every string in the
-# tree is either machine-executable or a title/description that never
-# mentions a path at all. Free-form doctrine prose is different: it
 # LEGITIMATELY discusses paths, including the exact shape this guard exists
-# to catch, as illustration of why paths must not be hardcoded (see this
 # guard's own originating incident writeup). A bare `_WIN_DRIVE_RE`/
 # `_POSIX_ROOT_RE` scan over prose fires on its own remedy text -- e.g.
-# `~/.claude/CLAUDE.local.md`'s sibling-repo-map section reads "(`X:\` on
-# Windows-native, `/x/` under WSL/Git-Bash, `~/X/` on macOS)". That bare-root
-# mention has no trailing segment and correctly stays quiet under the
 # structural rule below; a NEIGHBORING sentence in the same file naming a
-# per-machine directory DOES carry a trailing segment and correctly fires --
-# it is a genuine location claim, not illustration, and needs the
-# `foreign-path-ok` marker rather than a heuristic exemption.
-#
 # The discriminator used here is STRUCTURAL, not a naming-convention guess: a
-# matched root is escalated to a finding whenever it is followed by AT LEAST
-# ONE path segment, hyphenated or not -- naming a segment is what makes the
-# text an assertion about WHERE something lives. A bare root mention with no
-# trailing segment is platform illustration, not a location claim, and stays
-# quiet.
-#
-# An earlier revision of this heuristic escalated only when the trailing
-# segment contained a hyphen or underscore, on the theory that this fleet's
-# repo names are always hyphenated/snake_case. That theory was false on the
-# corpus it was built to protect: two real fleet repos with single-word,
-# hyphen-free names were among the leaked lines this guard exists to catch,
-# and the segment-shape heuristic missed them -- roughly a third of its own
-# class -- while its own docstring called that gap unlikely. A structural
-# "any segment fires" rule has no such blind spot; it can only over-fire on
-# a genuine illustrative mention, which the explicit escape hatch below
-# exists to handle deliberately rather than the guard silently guessing
-# forever.
-#
-# The explicit escape hatch is a per-line allow-marker
-# (`<!-- foreign-path-ok: <reason> -->`): an author who KNOWS a line is
-# illustrative, not asserting a location, can mark it once, deliberately,
-# reviewably.
-# The TOKEN is the marker, not the comment wrapper around it. Markdown carries
-# `<!-- foreign-path-ok: ... -->`, but the same judgement has to be expressible
-# in a .py docstring, a .toml sample, a Windows .cmd `rem`, or a PowerShell `#`
-# line -- and a marker syntax that only one file type can spell is a marker that
-# silently fails everywhere else. Matching the bare token keeps one vocabulary
-# across every surface an author might have to mark.
-# Both spellings are honored, in both directions. The sibling
-# `guard_concrete_path_citations` introduced `abs-path-ok:` for the same
-# judgement -- "a human looked at this line and decided the literal path is
-# the point." Recognizing only the older token here would make every marker
-# written for the newer guard invisible to this one, which is the same
-# silent-void failure in mirror image. One decision, one annotation, both
-# guards.
 _ALLOW_MARKER_RE = re.compile(r"(?:foreign-path-ok|abs-path-ok)\s*:", re.IGNORECASE)
 
 _PROSE_STOP_CHARS = "`'\"),;"
 # Reuses the shared `WIN_DRIVE_RE` pattern text (not a second copy of the
-# URL-safe lookbehind) with a trailing capture group for the segment.
 _SEGMENT_AFTER_WIN_DRIVE_RE = re.compile(
     _WIN_DRIVE_RE.pattern + r"([^\s" + re.escape(_PROSE_STOP_CHARS) + r"]*)"
 )
@@ -264,11 +178,6 @@ _SEGMENT_AFTER_POSIX_ROOT_RE = re.compile(
 
 
 def _segment_is_assertion_shaped(segment: str) -> bool:
-    """True iff `segment` (the path text following a drive-letter/POSIX
-    root) names at least one path component -- the structural discriminator
-    between a bare root/mount-point mention (no trailing segment, stays
-    quiet) and an asserted repo/project location (fires). See the
-    module-level comment above this regex block for the full rationale."""
     core = segment.rstrip("\\/")
     return bool(core)
 
@@ -282,7 +191,7 @@ class ProseFinding:
 
     line: int
     value: str
-    shape: str  # "windows-drive-path-on-posix-host" | "posix-path-on-windows-host"
+    shape: str
 
 
 def detect_foreign_platform_paths_in_prose(
@@ -332,11 +241,6 @@ def detect_foreign_platform_paths_in_prose(
 
 
 def format_prose_banner(findings: List[ProseFinding], file_label: str) -> str:
-    """Render a box-drawn, byte-loud banner for prose-scan findings -- same
-    posture as `format_banner`, but naming a FILE + LINE (prose has no JSON
-    pointer) and the doctrine-specific remedy (resolve via `machine-local
-    get repos.<key>`, per `~/.claude/CLAUDE.local.md`'s own sibling-repo-map
-    convention, rather than settings.json's "re-run the installer" remedy)."""
     if not findings:
         return ""
     top = "\u2554" + ("\u2550" * 66) + "\u2557"
@@ -383,13 +287,6 @@ def _is_posix_shaped(value: str) -> bool:
 
 
 def _is_command_pointer(pointer: str) -> bool:
-    """True iff the JSON pointer's final segment is `command` -- the only
-    place in settings.json's schema where a string is actually parsed and
-    executed by a shell/PowerShell (a `hooks[].hooks[].command` entry).
-    Restricting the env-var-shape check to this segment is what keeps a
-    `$env:FOO`-shaped mention inside a description/comment/prose field from
-    false-positiving -- that text is never executed, so a foreign shell
-    syntax sitting in it is not a functional break."""
     return pointer.rsplit("/", 1)[-1] == "command"
 
 
@@ -413,26 +310,21 @@ def _is_posix_env_var_shaped(value: str) -> bool:
             return True
         end = match.end()
         if end < len(value) and value[end] == ":":
-            continue  # this is "$env:NAME"-shaped, not a bare POSIX reference
+            continue
         return True
     return False
 
 
 @dataclass(frozen=True)
 class Finding:
-    """One foreign-platform-shaped string value found in the config."""
 
-    pointer: str  # JSON-pointer-ish path, e.g. "/hooks/PreToolUse/0/hooks/0/command"
+    pointer: str
     value: str
-    shape: str  # "windows-drive-path-on-posix-host" | "posix-path-on-windows-host"
-    suggested: Optional[str]  # best-effort corrected form, or None if underivable
+    shape: str
+    suggested: Optional[str]
 
 
 def _read_doe_root(config_dir: Path) -> Optional[str]:
-    """Best-effort read of `{config_dir}/.doe-root` -- the local coordinator
-    clone root, used to derive a corrected suggestion. Strips only a
-    trailing CR/LF (embedded spaces preserved -- Windows "OneDrive - Name"
-    paths), mirroring `guard_settings_integrity.is_inline_install`."""
     doeroot_file = config_dir / _DOEROOT_NAME
     if not doeroot_file.is_file():
         return None
@@ -446,17 +338,12 @@ def _read_doe_root(config_dir: Path) -> Optional[str]:
 
 
 def _suggest_corrected(value: str, local_coordinator_root: Optional[str]) -> Optional[str]:
-    """Best-effort corrected form: locate the `coordinator/...` tail of the
-    foreign path and re-root it under this machine's own coordinator clone.
-    Returns None (no opinion) when the tail can't be located or no local
-    root is known -- never guesses a full path from nothing."""
     if not local_coordinator_root:
         return None
     normalized = value.replace("\\", "/")
     marker = "/coordinator/"
     idx = normalized.find(marker)
     if idx == -1:
-        # Also handle a bare leading "coordinator/..." (no path before it).
         if normalized.startswith("coordinator/"):
             tail = normalized[len("coordinator/"):]
         else:
@@ -472,22 +359,6 @@ def detect_foreign_platform_paths(
     host_is_windows: Optional[bool] = None,
     local_coordinator_root: Optional[str] = None,
 ) -> List[Finding]:
-    """Walk a parsed JSON structure (typically `settings.json`'s content) and
-    return every string value shaped like a path from the OTHER platform.
-
-    Parameters
-    ----------
-    data:
-        Parsed JSON (dict/list/scalar tree) -- caller's responsibility to
-        `json.load` first (this function never touches disk itself, so it is
-        directly unit-testable with literal dicts).
-    host_is_windows:
-        Defaults to `os.name == "nt"` when None -- override in tests.
-    local_coordinator_root:
-        Best-effort local coordinator clone root for the `suggested` field.
-        Callers typically resolve this via `_read_doe_root` against their own
-        config dir before calling in.
-    """
     if host_is_windows is None:
         host_is_windows = os.name == "nt"
 
@@ -541,12 +412,6 @@ def detect_foreign_platform_paths(
 
     walk(data, "")
     return findings
-
-
-# ---------------------------------------------------------------------------
-# Banner text -- loud by construction (this incident's defining property was
-# ~40 dead hooks producing NO signal at all; a whisper here is worthless).
-# ---------------------------------------------------------------------------
 
 
 _PATH_SHAPES = {"windows-drive-path-on-posix-host", "posix-path-on-windows-host"}
@@ -669,10 +534,6 @@ def evaluate_foreign_platform_paths(
     config_dir: Optional[Path] = None,
     host_is_windows: Optional[bool] = None,
 ) -> str:
-    """Read + parse `settings_path`, return the banner text (empty string ==
-    silent/healthy/absent/unparsable). Never raises -- mirrors the fail-open
-    posture of the sibling settings-integrity guard.
-    """
     if not settings_path.is_file():
         return ""
     try:

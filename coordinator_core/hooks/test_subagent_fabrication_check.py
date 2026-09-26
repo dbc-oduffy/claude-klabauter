@@ -1,23 +1,3 @@
-"""
-coordinator_core.hooks.test_subagent_fabrication_check — round-trip tests for the
-fabricated-agent-report detector (hooks.subagent_fabrication_check).
-
-Covers: the true positive (zero mutating calls, zero Bash calls, target clean vs
-HEAD -> fabrication_suspected); each of the three false-positive guards in
-isolation (Bash-only editing, real Edit/Write calls, a genuinely changed target);
-fail-open on an absent/unreadable transcript, a missing input, and a git-status
-probe failure; the `verify_target_clean` directly-callable EM-side helper; and
-registration-quad presence for the op key.
-
-Fixtures use a REAL git repo under tmp_path (git init + one commit) so the
-`git status --porcelain` probe this op depends on exercises the genuine code
-path, not a mock.
-
-All handlers are async; asyncio.run() is used directly in sync test functions —
-no pytest-asyncio dependency, matching the sibling hooks/test_subagent_*.py files.
-
-Spec backlink: state/sizings/2026-08-11-catch-a-fabricated-agent-report-mechanic.yaml
-"""
 
 from __future__ import annotations
 
@@ -30,13 +10,7 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
-# Every fixture builds a REAL git repo (per module docstring) so `git status
-# --porcelain` -- the production probe `_handler`/`verify_target_clean`
-# depend on -- exercises the genuine code path, including the
-# `test_git_status_probe_failure_is_no_signal` case whose entire point is a
 # real git-command failure. The spawn ratchet's `_BASELINE` is shrink-only
-# pre-existing residue and is explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -55,7 +29,6 @@ def _git(repo_root: Path, *args: str) -> None:
 
 
 def _init_repo(tmp_path: Path) -> Path:
-    """Create a real git repo with one committed target file; return its root."""
     repo_root = tmp_path
     _git(repo_root, "init", "-q")
     _git(repo_root, "config", "user.email", "test@example.com")
@@ -77,7 +50,6 @@ def _assistant_line(tool_names: list[str]) -> str:
 
 
 def _write_subagent_transcript(parent_transcript: Path, agent_id: str, tool_names: list[str]) -> Path:
-    """Mirror hooks.subagent_arrival_check's direct-derivation path layout."""
     stem = parent_transcript.stem
     subagents_dir = parent_transcript.parent / stem / "subagents"
     subagents_dir.mkdir(parents=True, exist_ok=True)
@@ -94,10 +66,6 @@ def _params(parent_transcript: Path, agent_id: str, target: str) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# True positive — the central predicate
-# ---------------------------------------------------------------------------
-
 class TestFabricationSuspected:
     def test_zero_mutating_zero_bash_clean_target_fires(self, tmp_path: Path) -> None:
         from coordinator_core.hooks.subagent_fabrication_check import _handler
@@ -106,7 +74,6 @@ class TestFabricationSuspected:
         parent = repo_root / "transcript.jsonl"
         parent.write_text("{}\n")
         agent_id = "deadbeefcafef00d"
-        # Report claims work but transcript shows a text-only turn, no tool calls at all.
         _write_subagent_transcript(parent, agent_id, [])
 
         result = _run(_handler(
@@ -119,15 +86,6 @@ class TestFabricationSuspected:
         assert result["target_changed"] is False
 
     def test_control_fires_when_guard_conjunction_broken(self, tmp_path: Path) -> None:
-        """Break/restore evidence for the central predicate.
-
-        BREAK: hand the handler a transcript with one Edit call against the
-        SAME clean target — the conjunction (0 mutating AND 0 bash AND
-        target-unchanged) is now false on the mutating-count leg alone, so a
-        correctly-working guard must NOT fire. Assert that failure explicitly
-        (this is the "control that fails when the guard is broken" the brief
-        requires), then restore the zero-call transcript and assert green.
-        """
         from coordinator_core.hooks.subagent_fabrication_check import _handler
 
         repo_root = _init_repo(tmp_path)
@@ -135,24 +93,17 @@ class TestFabricationSuspected:
         parent.write_text("{}\n")
         agent_id = "0123456789abcdef"
 
-        # --- BREAK: one Edit call recorded -> conjunction false -> must NOT fire ---
         _write_subagent_transcript(parent, agent_id, ["Edit"])
         broken = _run(_handler(
             _params(parent, agent_id, "target.py"),
             repo_root=str(repo_root / ".git"),
         ))
-        # Demonstrate the control actually distinguishes the broken case: it must
-        # NOT read "fabrication_suspected" here, or the guard has no discriminating
-        # power at all. This assertion is the pasted "failing output" — the
-        # comparison below fails loudly if the guard were mis-wired to fire on any
-        # nonzero mutating count still slipping past the conjunction.
         assert broken["verdict"] == "no_signal", (
             "GUARD BROKEN: fired fabrication_suspected despite a real Edit call "
             f"— result was {broken!r}"
         )
         assert broken["mutating_tool_call_count"] == 1
 
-        # --- RESTORE: zero-call transcript against the same clean target -> fires ---
         restored_transcript = parent.parent / parent.stem / "subagents" / f"agent-{agent_id}.jsonl"
         restored_transcript.write_text(_assistant_line([]) + "\n")
         restored = _run(_handler(
@@ -162,13 +113,8 @@ class TestFabricationSuspected:
         assert restored["verdict"] == "fabrication_suspected"
 
 
-# ---------------------------------------------------------------------------
-# False-positive guards — each in isolation
-# ---------------------------------------------------------------------------
-
 class TestFalsePositiveGuards:
     def test_bash_only_editing_is_silent(self, tmp_path: Path) -> None:
-        """Agent edited via a Bash heredoc (0 Edit/Write calls, 1 Bash call) — no signal."""
         from coordinator_core.hooks.subagent_fabrication_check import _handler
 
         repo_root = _init_repo(tmp_path)
@@ -186,7 +132,6 @@ class TestFalsePositiveGuards:
         assert result["mutating_tool_call_count"] == 0
 
     def test_real_edit_calls_are_silent(self, tmp_path: Path) -> None:
-        """Agent made real Edit/Write calls — no signal, regardless of target state."""
         from coordinator_core.hooks.subagent_fabrication_check import _handler
 
         repo_root = _init_repo(tmp_path)
@@ -218,16 +163,12 @@ class TestFalsePositiveGuards:
         second.write_text("original\n")
         _git(repo_root, "add", "second.py")
         _git(repo_root, "commit", "-q", "-m", "add second.py")
-        second.write_text("edited\n")  # dirty, uncommitted -- second path only
+        second.write_text("edited\n")
 
         result = _targets_changed(str(repo_root), ["target.py", "second.py"])
         assert result is True
 
     def test_multiple_target_paths_all_clean_is_unchanged(self, tmp_path: Path) -> None:
-        """Companion to the above: two clean, committed paths batched into
-        ONE `git status` call must report unchanged -- a regression that
-        misreads a multi-pathspec call as always-dirty (e.g. from stray
-        pathspec-parsing output) would false-fire here."""
         from coordinator_core.hooks.subagent_fabrication_check import _targets_changed
 
         repo_root = _init_repo(tmp_path)
@@ -240,13 +181,10 @@ class TestFalsePositiveGuards:
         assert result is False
 
     def test_genuinely_changed_target_is_silent(self, tmp_path: Path) -> None:
-        """Zero recorded tool calls (e.g. a transcript gap) but the target is actually
-        dirty on disk — no signal; real change accounted for even without matching
-        tool-call evidence."""
         from coordinator_core.hooks.subagent_fabrication_check import _handler
 
         repo_root = _init_repo(tmp_path)
-        (repo_root / "target.py").write_text("changed on disk\n")  # dirty, uncommitted
+        (repo_root / "target.py").write_text("changed on disk\n")
         parent = repo_root / "transcript.jsonl"
         parent.write_text("{}\n")
         agent_id = "dirtytargetagent"
@@ -260,10 +198,6 @@ class TestFalsePositiveGuards:
         assert result["target_changed"] is True
 
 
-# ---------------------------------------------------------------------------
-# Fail-open — malformed / missing / unresolvable inputs
-# ---------------------------------------------------------------------------
-
 class TestFailOpen:
     def test_absent_transcript_is_no_signal(self, tmp_path: Path) -> None:
         from coordinator_core.hooks.subagent_fabrication_check import _handler
@@ -271,7 +205,6 @@ class TestFailOpen:
         repo_root = _init_repo(tmp_path)
         parent = repo_root / "transcript.jsonl"
         parent.write_text("{}\n")
-        # No subagent transcript ever written for this agent_id.
         result = _run(_handler(
             _params(parent, "nevercalledagent", "target.py"),
             repo_root=str(repo_root / ".git"),
@@ -313,8 +246,6 @@ class TestFailOpen:
         assert result["verdict"] == "no_signal"
 
     def test_git_status_probe_failure_is_no_signal(self, tmp_path: Path) -> None:
-        """A target_paths pointing at a repo_root with no real git repo behind it —
-        the git status subprocess fails; must resolve no_signal, never fire."""
         from coordinator_core.hooks.subagent_fabrication_check import _handler
 
         not_a_repo = tmp_path / "not-a-repo"
@@ -331,10 +262,6 @@ class TestFailOpen:
         assert result["verdict"] == "no_signal"
 
 
-# ---------------------------------------------------------------------------
-# verify_target_clean — directly-callable EM-side helper
-# ---------------------------------------------------------------------------
-
 class TestVerifyTargetClean:
     def test_clean_target_reports_clean(self, tmp_path: Path) -> None:
         from coordinator_core.hooks.subagent_fabrication_check import verify_target_clean
@@ -349,10 +276,6 @@ class TestVerifyTargetClean:
         verdict = verify_target_clean(str(repo_root / ".git"), ["target.py"])
         assert verdict.startswith("DIRTY")
 
-
-# ---------------------------------------------------------------------------
-# Registration quad
-# ---------------------------------------------------------------------------
 
 class TestRegistrationQuad:
     def test_op_present_in_all_four_surfaces(self) -> None:

@@ -43,8 +43,6 @@ def test_short_and_porcelain_are_not_noop_members() -> None:
 
 
 def test_dry_run_as_message_value_does_not_read_as_noop() -> None:
-    """A message operand naming the flag must never carve the commit out --
-    only the argv shape does."""
     assert (
         _bt_commit_is_noop_invocation(["commit", "-m", "--dry-run", "--", "x.py"])
         is False
@@ -64,8 +62,6 @@ def test_compound_add_then_commit_version_does_not_deny() -> None:
 
 
 def test_compound_add_then_bare_commit_still_denies() -> None:
-    """Negative spec: widening the carve-out must not reopen the bare-commit
-    hole -- a genuinely bare compound commit still gets a verdict."""
     cmd = "git add one.py && git commit -m wip"
     result = check_git_commit_safe_commit_advise(cmd)
     assert result is not None, "bare compound commit must still fire a verdict"

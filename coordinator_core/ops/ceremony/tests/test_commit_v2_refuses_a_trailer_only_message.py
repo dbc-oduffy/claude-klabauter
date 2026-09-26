@@ -51,9 +51,6 @@ def test_a_trailer_only_message_is_refused(tmp_path: Path):
 
 
 def test_a_multi_line_trailer_only_message_is_still_refused(tmp_path: Path):
-    """The trailer-only shape does not require a single line -- a message
-    whose first non-blank line is a trailer is refused even when further
-    trailer lines follow it, since there is still no subject anywhere."""
     out = _call(
         "Session-Id: 6ab7b0d8-1234-4a12-9abc-1234567890ab\n"
         "Deliverable-Id: some-deliverable\n",
@@ -64,11 +61,6 @@ def test_a_multi_line_trailer_only_message_is_still_refused(tmp_path: Path):
 
 
 def test_a_normal_message_is_not_refused_by_this_check(tmp_path: Path, monkeypatch):
-    """A real subject line must reach past this refusal -- proven by patching
-    the next seam (`commit_paths`) to raise a marker exception rather than
-    landing a real commit, mirroring `test_commit_v2_session_id_override.py`'s
-    stop-after-capture pattern. Reaching `commit_paths` at all is the proof:
-    this refusal would have returned a structured `_error` instead."""
 
     def _stop(*args, **kwargs):
         raise AssertionError("stop-after-refusal-check")
@@ -82,9 +74,6 @@ def test_a_normal_message_is_not_refused_by_this_check(tmp_path: Path, monkeypat
 def test_a_normal_message_with_a_trailing_trailer_block_is_not_refused(
     tmp_path: Path, monkeypatch
 ):
-    """A properly-shaped message (subject, then a trailer block at the end)
-    must not be caught by this refusal -- only the FIRST non-blank line
-    decides, never a trailer block appearing later in the message."""
 
     def _stop(*args, **kwargs):
         raise AssertionError("stop-after-refusal-check")

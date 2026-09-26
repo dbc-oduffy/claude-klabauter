@@ -200,10 +200,6 @@ def _leg_error(exc: BaseException) -> str:
 
 
 def _leg(result: dict[str, Any], key: str, outcome: tuple[Any, Optional[str]]) -> None:
-    """Write one leg's `(value, error)` outcome into `result` as `result[key]` plus,
-    only when `error` is not `None`, `result[f"{key}_error"]`. The one write shape
-    all four legs share (overengineering review finding 9) -- collapsed here instead
-    of repeated at each call site in `_group_em_enter`."""
     value, error = outcome
     result[key] = value
     if error is not None:
@@ -220,20 +216,6 @@ def _run_nomination(repo_root: str, caller_session_id: str) -> tuple[Optional[di
 def _run_roster_and_excluded(
     repo_root: str, caller_session_id: str, agents: Optional[list] = None
 ) -> tuple[Optional[list], Optional[list], Optional[str]]:
-    """One shared `build_roster` call feeding BOTH `roster` (admitted) and
-    `roster_excluded` (its strict complement) -- never a second, independent
-    classification pass (module docstring; AC 7a's one-classification-pass
-    budget). Admission is read off `read_pass.is_admitted`, the single
-    predicate definition -- never re-spelled here (AC 7c).
-
-    `agents is None` means the shared enumeration leg already failed (the
-    caller's own `fetch_live_agents(..., raise_on_failure=True,
-    raise_on_empty_snapshot=True)` raised and was caught). This must return
-    the failure here rather than pass `None` through to `build_roster`:
-    `read_pass.build_roster` treats `agents=None` as "not yet fetched" and
-    re-fetches internally with its own default, non-raising flags -- which
-    would quietly re-run into the same outage and answer `[]`, exactly the
-    empty-fleet-for-an-outage collapse this leg exists to refuse."""
     if agents is None:
         return None, None, "enumeration-leg-failed"
     try:
@@ -438,14 +420,7 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     result: dict[str, Any] = {}
 
-    # ONE clock, struck before any leg runs, so `nomination`/`roster`/`digest`/
-    # `baseline`/`teammates`/`watch_liveness` all report against the SAME instant
-    # rather than three re-reads of the wall clock scattered across the legs.
-    # Legs that accept a caller-supplied clock (`watch_heartbeat.read_liveness`)
-    # are passed this exact value; no second clock is struck anywhere below.
     now_epoch = time.time()
-    # Was a literal copy of the
-    # fromtimestamp/strftime expression; now the shared seam.
     result["as_of"] = group_em_watch_heartbeat.iso_instant(now_epoch)
 
     nomination_outcome = (
@@ -457,26 +432,11 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     nomination_value = nomination_outcome[0]
 
     # ORDER IS LOAD-BEARING: Group-EM, then roster, then digest. A REFUSED Group-EM --
-    # `claimed` false, whether the incumbent is live or dead -- stops here, before the
-    # roster leg even runs, not just before the digest. `send_pass.build_send_digest`
-    # arms each emitted peer's cooldown as it emits; a session with no standing to hold
-    # the Group-EM must not burn that throttle state on peers it had no right to offer.
-    # Roster and digest are reported ABSENT with a reason, distinguishable from "ran and
-    # found nothing" -- never an empty list, never a partially-built digest.
     group_em_refused = isinstance(nomination_value, dict) and nomination_value.get("claimed") is False
 
     if group_em_refused:
-        # ABSENT, not null: `roster`/`digest`/`baseline` are OMITTED from `result`
-        # entirely on this path -- never written as `None`, never given an `_error`
-        # sibling. An empty roster is a fact ("looked, found nobody"); an absent one
-        # means "had no standing to look" -- collapsing the two loses that distinction
-        # for the consumer. See module docstring § PAYLOAD SHAPE ON REFUSAL.
         return result
 
-    # ONE enumeration, two consumers. The roster leg classifies it down to
-    # nudge candidates; the baseline leg diffs it whole. Fetching twice would
-    # bill the box twice for the same read and let the two legs disagree about
-    # who exists within a single tick.
     try:
         agents: Optional[list] = group_em_read_pass.fetch_live_agents(
             Path(target_root), raise_on_failure=True, raise_on_empty_snapshot=True
@@ -484,10 +444,6 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     except Exception:  # noqa: BLE001
         agents = None
 
-    # ONE shared `build_roster` call feeds both `roster` (admitted) and
-    # `roster_excluded` (its strict complement) -- never two independent
-    # classification passes. See `_run_roster_and_excluded` and module
-    # docstring's `roster_excluded` paragraph.
     roster, roster_excluded, roster_error = _run_roster_and_excluded(
         target_root, caller_session_id, agents
     )
@@ -503,14 +459,8 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     _leg(result, "teammates", _run_teammates(target_root, caller_session_id))
 
-    # Beside `teammates`, never inside it: "was a watcher dispatched" and "is a
-    # watch ticking" are different claims on different evidence, and the whole
-    # failure this leg exists for is the case where the first is true and the
-    # second is false.
     _leg(result, "watch_liveness", _run_watch_liveness(target_root, now_epoch))
 
-    # Baseline does NOT consume the roster, so a roster-leg failure does not
-    # cascade here -- it consumes the enumeration directly.
     _leg(
         result,
         "baseline",

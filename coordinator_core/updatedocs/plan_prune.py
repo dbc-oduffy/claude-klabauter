@@ -44,21 +44,10 @@ from pathlib import Path
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.updatedocs._common import UpdatedocsTargetMissing, read_head
 
-# Resolved from coordinator_core/frontmatter/schemas/plan.schema.json's
-# `status` enum: {draft, reviewed, approved, executing, landed, implemented,
-# deferred, abandoned, superseded}. That schema's own description is explicit
-# that "landed" sits between "executing" and "implemented" and is NOT
-# terminal (a landed plan still has outstanding row-level work). The
-# remaining four values are the ones a plan cannot move on from.
 TERMINAL_PLAN_STATUSES = frozenset({"implemented", "deferred", "abandoned", "superseded"})
 
 DEFAULT_AGE_FLOOR_DAYS = 14
 
-# Closed set of frontmatter fields searched for a live reference to a plan,
-# across state/handoffs/*.md and tasks/**/*.md. Do not grow this set into a
-# general corpus-wide text search -- see module negative spec above.
-#   - governing_plan  -- stores the referencing doc's `docs/plans/<file>.md` path
-#   - origin_plan_id  -- stores the plan's own `plan_id:` frontmatter value
 REFERENCE_FIELDS = ("governing_plan", "origin_plan_id")
 
 
@@ -104,10 +93,6 @@ def compute_plan_prune_candidates(
     repo_root: str | Path,
     age_days: float = DEFAULT_AGE_FLOOR_DAYS,
 ) -> PlanPruneResult:
-    """Compute the three-state plan-prune classification over docs/plans/*.md.
-
-    Pure and read-only: no writes, no deletion, no `GateResult` construction.
-    """
     root = Path(repo_root)
     plans_dir = root / "docs" / "plans"
 
@@ -127,10 +112,6 @@ def compute_plan_prune_candidates(
             mtime = plan_path.stat().st_mtime
         except OSError:
             # Present at glob time, gone or unreadable by the stat. INDETERMINATE,
-            # never a silent `continue`: the three lists must account for every
-            # file the glob returned, or a caller reconciling totals finds a gap
-            # with nothing explaining it. "We looked and it was not there to tell"
-            # belongs with "we looked and could not tell", not with neither.
             indeterminate.append(rel)
             continue
         age = (now - mtime) / 86400.0

@@ -33,8 +33,6 @@ from coordinator_core.subagent_sandbox.provision_report import (
 
 
 def test_a_named_dispatch_stamps_the_type_not_the_label():
-    """The reported case, end to end: `coordinator:staff-eng` dispatched with
-    the name `the Staff Engineer-gate`."""
     agent_type, subagent_type = "patrik-gate", "coordinator:staff-eng"
 
     assert _is_close_receipt_reviewer(agent_type, subagent_type), (
@@ -47,8 +45,6 @@ def test_a_named_dispatch_stamps_the_type_not_the_label():
 
 
 def test_the_stamped_type_is_creditable_by_the_reader():
-    """The whole point: the stamped value must pass the check
-    `receipt_credit._counting_receipt_stamps` applies."""
     stamped = _receipt_agent_type("patrik-gate", "coordinator:staff-eng", DELEGATE_REVIEWERS)
 
     bare = stamped.rpartition(":")[2] if ":" in stamped else stamped
@@ -64,10 +60,8 @@ def test_the_stamped_type_is_creditable_by_the_reader():
 @pytest.mark.parametrize(
     "agent_type, subagent_type, expected",
     [
-        # Unnamed dispatch: agent_type already carries the type. Unchanged.
         ("coordinator:code-reviewer", "", "coordinator:code-reviewer"),
         ("coordinator:code-reviewer", "coordinator:staff-eng", "coordinator:code-reviewer"),
-        # Named dispatch: only subagent_type carries it.
         ("archive-guard", "coordinator:code-reviewer", "coordinator:code-reviewer"),
         ("", "coordinator:staff-eng", "coordinator:staff-eng"),
     ],
@@ -77,15 +71,11 @@ def test_prefers_agent_type_when_both_resolve(agent_type, subagent_type, expecte
 
 
 def test_never_invents_a_type_when_neither_label_resolves():
-    """Bytes reproduced exactly for anything the gates would not have admitted:
-    no label resolving means `agent_type` is returned untouched."""
     assert _receipt_agent_type("odd-name", "also-odd", DELEGATE_REVIEWERS) == "odd-name"
     assert _receipt_agent_type("", "", DELEGATE_REVIEWERS) == ""
 
 
 def test_the_integrator_receipt_has_the_same_resolution():
-    """Same asymmetry, same seam — fixed together so the integrator branch does
-    not become the surviving instance of the bug."""
     assert (
         _receipt_agent_type(
             "some-label", "coordinator:review-integrator", {_INTEGRATOR_AGENT_TYPE}
@@ -113,9 +103,6 @@ def test_close_floor_reviewer_resolves_and_stamps_a_receipt():
 
 
 def test_a_non_reviewer_teammate_name_stamps_nothing():
-    """A plain named teammate that is neither a delegate reviewer, the
-    close-floor reviewer, nor the integrator must not be treated as
-    receipt-eligible at all."""
     agent_type, subagent_type = "archive-guard", ""
 
     assert not _is_close_receipt_reviewer(agent_type, subagent_type)

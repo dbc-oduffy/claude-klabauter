@@ -1,30 +1,3 @@
-"""coordinator/bin/tests/test_publish_skipped_row_not_counted_succeeded.py —
-regression test for the second row-honesty defect in `main()`'s per-row loop
-(2026-08-08 break-class fix, sibling of `test_publish_swap_failure_report_
-honesty.py`'s swap-honesty fix and `test_publish_row_isolation.py`'s
-SystemExit-isolation fix).
-
-Mechanism: `process_target` returns `None` on BOTH its success path and every
-gate-declined-this-row path (`_build_allowlisted_source` raising
-`AllowlistError`, dest-not-ready, engine unavailable, etc.) — none of those
-raise, they print their own "skipping" line and `return` early. Before this
-fix, `main()`'s row loop treated "`process_target` did not raise" as
-"succeeded" unconditionally, so a gate-declined row was appended to
-`succeeded_row_names` and counted in "Rows succeeded" even though
-`totals.processed` never advanced for it and no bytes were published — the
-run then exited 0. This is the exact shape from a real run
-(`claude-klabauter-coordinator-bin`, allowlist entry
-'query-records-facets.test.sh' not found): "Rows succeeded: 7/7" while "Done.
-6 target(s) processed." disagreed by one, and the process exited 0.
-
-This test drives `main()`'s REAL per-row loop (not a hand-rolled stand-in) —
-same harness shape as `test_publish_row_isolation.py` — with
-`process_target` faked to model a gate decline on one row: it returns
-normally (no raise) WITHOUT incrementing `totals.processed`, exactly as the
-real allowlist-build-failure path does.
-
-Run: python -m pytest coordinator/bin/tests/test_publish_skipped_row_not_counted_succeeded.py -q
-"""
 
 from __future__ import annotations
 
@@ -47,13 +20,6 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 def _init_git_repo(root: Path) -> None:
     # IDEMPOTENT ON PURPOSE. This helper is called from inside the
     # monkeypatched `load_targets` fake, so it runs once per RESOLUTION, not
-    # once per test. `publish.py` resolves targets twice now -- `main()` with
-    # the `--target` filter, and `_declared_repo_roots_carrying_
-    # coordinator_core` unfiltered -- so a second call re-seeded an already
-    # committed repo and `git commit` failed "nothing to commit, working tree
-    # clean". Guarding here rather than counting call sites: a fixture that
-    # cannot be invoked twice encodes a production call count no test should
-    # be asserting by accident.
     if (root / ".git").is_dir():
         return
     def _git(*args: str) -> None:
@@ -73,10 +39,6 @@ def _init_git_repo(root: Path) -> None:
     keeper.write_text("", encoding="utf-8")
     _git("add", ".gitkeep")
     _git("commit", "-m", "chore: init")
-    # A self-origin the dest is level with: `publish.main` refuses a dest whose
-    # branch tracks nothing (§ `percolate.dest_refresh.refresh_dest_from_origin`).
-    # Same shape, and its rationale, as `coordinator/tests/
-    # test_publish_mirror_bare_name_expansion.py :: _init_git_repo`.
     _git("remote", "add", "origin", str(root))
     _git("fetch", "--no-tags", "origin")
     _git("branch", "--set-upstream-to=origin/main", "main")
@@ -96,10 +58,6 @@ def _load_publish_module():
 publish = _load_publish_module()
 
 _ROW_NAMES = ["row-a", "row-b", "row-c"]
-# row-b models the allowlist-build-failure path: `process_target` prints its
-# own "skipping" line and returns WITHOUT incrementing `totals.processed` —
-# no raise, matching `build_allowlisted_source`'s `AllowlistError` handling
-# in `run_pre_sync_gates`/`process_target`.
 _SKIPPED_ROW = "row-b"
 
 
@@ -126,24 +84,9 @@ def _wire_common_fakes(monkeypatch, tmp_path, *, rows_reached: list):
             raise KeyError(name)
 
         def run_parse_sweep(self, repo_root):
-            # `dispatch_end_of_run_function_gate` calls this unconditionally
-            # for every reached repo root (§ C4C brief) — pre-existing gap
-            # in the sibling fixture this file's harness is modeled on
-            # (`test_publish_row_isolation.py`'s `_FakeClaudeKlabauter` predates that
-            # gate leg and lacks it too, verified failing the same way
-            # against HEAD before this file's own fix). A parse-clean,
-            # zero-file sweep result is a no-op for this test's purposes.
             return type("ParseResult", (), {"ok": True, "failures": [], "scanned": 0})()
 
         def enumerate_gate_entrypoints(self, repo_root):
-            # `dispatch_end_of_run_entrypoint_gate` calls this unconditionally
-            # too (§ chunk C3, sibling gap to `run_parse_sweep` above). This
-            # fixture's dest dirs ship no entrypoints at all, so the honest
-            # answer is an empty tuple — matches what the real
-            # `enumerate_gate_entrypoints` would return for a repo containing
-            # only `.gitkeep`, and short-circuits the gate loop (`if not
-            # entrypoints: continue`) without needing to fake
-            # `run_entrypoint_gate`/`derive_worker_cap`/`mktcache_gate_env`.
             return ()
 
     monkeypatch.setattr(publish, "_import_claude_klabauter_percolate", lambda: _FakeClaudeKlabauter())
@@ -175,10 +118,6 @@ def _wire_common_fakes(monkeypatch, tmp_path, *, rows_reached: list):
 
 
 def test_gate_declined_row_is_not_counted_succeeded(monkeypatch, tmp_path, capsys):
-    """The regression this closes: a row `process_target` declined via a
-    gate (no raise, `totals.processed` unchanged) must land in "Rows FAILED",
-    never "Rows succeeded" — and the succeeded count must never disagree with
-    `totals.processed`."""
     rows_reached: list = []
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, rows_reached=rows_reached)
@@ -188,11 +127,6 @@ def test_gate_declined_row_is_not_counted_succeeded(monkeypatch, tmp_path, capsy
     combined = captured.out + captured.err
 
     assert rows_reached == _ROW_NAMES
-    # "FAILED.", not "Done." -- `3ce12f31b2` (2026-08-30, "stop the headline
-    # lying about a fail-closed row") deliberately stopped the headline
-    # reading Done when a row failed. This assertion predated that by ten days
-    # and pinned the lie; it was masked until 2026-09-01 by an unrelated
-    # TypeError erroring the test out before it could fail.
     assert "FAILED. 2 target(s) processed" in combined
     assert "Done. 2 target(s) processed." not in combined
     assert "Rows succeeded: 2/3" in combined
@@ -201,10 +135,6 @@ def test_gate_declined_row_is_not_counted_succeeded(monkeypatch, tmp_path, capsy
 
 
 def test_gate_declined_row_exits_non_zero(monkeypatch, tmp_path):
-    """A run with any skipped row must never exit 0 — the same "never fewer
-    rows processed than requested, silently" invariant `test_publish_row_
-    isolation.py` asserts for a raising row, extended to the non-raising
-    gate-decline path."""
     rows_reached: list = []
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, rows_reached=rows_reached)
@@ -236,8 +166,6 @@ def test_gate_declined_row_exits_non_zero_under_dry_run_too(monkeypatch, tmp_pat
 
 
 def test_all_rows_actually_publish_still_succeed_and_exit_zero(monkeypatch, tmp_path):
-    """Sanity counterpart — the happy path (every row actually advances
-    `totals.processed`) is unaffected by this fix."""
     rows_reached: list = []
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, rows_reached=rows_reached)

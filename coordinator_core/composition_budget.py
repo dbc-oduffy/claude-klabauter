@@ -164,58 +164,19 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-#: Disposition values `CompositionBudget.disposition` accepts. Not an enum -- a plain
-#: two-member closed string set is enough here and keeps this leaf import-free of `enum`
-#: quirks across the pre-existing callers' Python versions; `__post_init__` validates
-#: membership so a typo fails at construction, not at the first `check()` call.
 SKIP_AND_SURFACE = "skip-and-surface"
 FAIL_LOUD = "fail-loud"
 _VALID_DISPOSITIONS = frozenset({SKIP_AND_SURFACE, FAIL_LOUD})
 
-#: Convenience env var name a caller's `identity_resolver` MAY read (§ module docstring,
 #: "RESERVED FOR THE PM" -- this module does not read it itself; `identity_from_env()`
-#: below is an opt-in helper, never invoked implicitly).
 DEFAULT_COMPOSITION_ID_ENV = "COORDINATOR_COMPOSITION_ID"
 
-#: Fleet ceiling constants (chunk C1, armed at chunk C5,
-#: docs/plans/2026-08-18-arm-the-composition-budget.md).
-#: `coordinator_core.telemetry.composition_record.make_fleet_budget()` is the sole reader
-#: of these two names, so this single pair arms all eight compositions across both
-#: lineages at one posture -- the property C1 built the factory for. Constants only --
 #: no import here reaches `telemetry/`, preserving this module's DEPENDENCY-FREE LEAF
-#: property (see module docstring).
-#:
 #: DERIVED, NEVER CHOSEN (COORDINATOR-RESOLUTIONS.md R-04). Both values come from
-#: `docs/research/2026-08-18-composition-budget-armed-values.md`, which measured 360
-#: substantive compositions over 2026-08-18T20:53 -> 2026-08-19T12:25 and derived from
-#: ALL outcomes, not the success-only subset (the slow tail is disproportionately
-#: partial/failed, and that tail is what a ceiling bounds):
-#:     aggregate_elapsed_budget = 319.53s worst-observed x 3.7 = 1182.3 -> 1200.0
-#:     max_invocations          =     29  worst-observed x 3.7 =   107.3 ->    110
-#: The 3.7x headroom matched `ipc.py`'s `ceremony.scoped_git_commit = 150.0` precedent,
-#: itself sized at ~3.7x its own worst sample. That row is REVOKED (2026-08-21,
 #: `ipc.CEREMONY_BUDGET_SECS`, DR-348): the precedent this multiplier was copied from no
-#: longer exists, and the revocation's own finding was that a cap sized to a load-norm
 #: multiplier accommodates a defect instead of naming it. NOT RE-DERIVED HERE -- these
-#: two constants keep their derivation from the 360-compositions measurement above, which
-#: does not itself depend on the 150.0 precedent; only the citation for *why 3.7x* is now
-#: unsupported. Flagged for PM ruling, not silently re-tuned: do NOT re-tune either value
-#: from memory or intuition -- amend the record first, then the constant; a constant that
-#: has drifted from its derivation reads as measured while being guessed.
-#:
 #: RUNAWAY GUARDS, NOT PERFORMANCE BUDGETS -- the distinction
-#: `docs/wiki/machine-load-norm.md` draws for `ipc.py :: _timeout_for`. p95 elapsed is
-#: 22.12s against a 1200s ceiling; these are deliberately not sized to fire on the
-#: healthy steady state, because a first arming that does gets reverted and takes the
-#: instrument with it.
-#:
 #: NEGATIVE-SPEC, both dials: `max_invocations` must be >= 1 and
-#: `aggregate_elapsed_budget` must be > 0. `_within_budget` compares the count dial with
-#: `>=` against a counter still at 0 at the pre-mutation boundary, so a ceiling of 0
-#: breaches at entry -- the one boundary that CAN change an outcome. Symmetrically
-#: `elapsed_secs() > 0.0` is false at construction, so an elapsed ceiling of exactly 0.0
-#: passes pre-mutation and then breaches everywhere after. Same failure mode, both dials.
-#: The assertion below is the guard; C7 pins the construction site it depends on.
 FLEET_AGGREGATE_ELAPSED_BUDGET: "float | None" = 1200.0
 FLEET_MAX_INVOCATIONS: "int | None" = 110
 
@@ -234,15 +195,6 @@ if FLEET_MAX_INVOCATIONS is not None and FLEET_MAX_INVOCATIONS < 1:
 
 
 class BudgetBreach(Exception):
-    """Raised by `CompositionBudget.check()` when `disposition="fail-loud"` and a breach fires.
-
-    Register-conforming message (§ chunk C9 brief AC9 pairing): one fact, stated once --
-    the composition id, which ceiling breached (`unit`: "elapsed" or "invocations", or a
-    caller-supplied fan-out unit name via `record_invocation(unit=...)`), and the measured
-    count/elapsed at breach time. No self-legitimacy, no apology, no override key (§
-    docs/wiki/guard-messaging.md § Register, cited here because this exception's `str()`
-    is the message a ladder caller (chunk C10) surfaces verbatim).
-    """
 
     def __init__(
         self,
@@ -375,7 +327,6 @@ class CompositionBudget:
         return cls(composition_id=composition_id, **kwargs)
 
     def elapsed_secs(self) -> float:
-        """Seconds since this instance was constructed, per its own `clock`."""
         return self.clock() - self._start
 
     @property
@@ -384,20 +335,9 @@ class CompositionBudget:
 
     @property
     def breached_units(self) -> tuple:
-        """Every unit name `check()`/`advisory_check()` has ever reported a breach for,
-        in the order first observed. Never cleared -- a breach, once true, stays true for
-        this instance's remaining life (matching `run_entrypoint_gate`'s own
-        `budget_exceeded` list, which is append-only across its call)."""
         return tuple(self._breached_units)
 
     def record_invocation(self, unit: str = "invocation", *, count: int = 1) -> int:
-        """Record `count` (default 1) invocation(s) against this composition's counter.
-
-        Pure in-memory increment (§ module docstring, "NO SPAWN TO CHECK THE BUDGET") --
-        never itself checks the budget; call `check()`/`advisory_check()` separately.
-        Calls `on_count(unit, running_total)` after incrementing, if `on_count` is set.
-        Returns the running total.
-        """
         self._invocation_count += count
         if self.on_count is not None:
             self.on_count(unit, self._invocation_count)
@@ -417,12 +357,6 @@ class CompositionBudget:
         return True
 
     def _breach_unit(self) -> str:
-        """Which ceiling breached, for `BudgetBreach.unit`/`breached_units` bookkeeping.
-
-        Elapsed is checked first in `_within_budget()`, so it is reported first here too
-        when both ceilings happen to be breached simultaneously -- an arbitrary but stable
-        tie-break, not a claim that elapsed is "more breached" than invocations.
-        """
         if (
             self.aggregate_elapsed_budget is not None
             and self.elapsed_secs() > self.aggregate_elapsed_budget

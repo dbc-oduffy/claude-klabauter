@@ -37,9 +37,6 @@ _DIFF_BASE = "origin/main"
 
 
 def _render_receipt_doc(*, session_id: str, agent_type: str, stamped_at: str) -> str:
-    """A real, non-blank sidecar doc, spliced through the actual writer --
-    never hand-written. Mirrors the ``---\\n...\\n---\\n\\n<body>`` shape
-    every `_build_*_doc_text` builder produces."""
     doc_text = (
         "---\n"
         f"agent_type: '{agent_type}'\n"
@@ -75,11 +72,6 @@ def _check(monkeypatch, repo_root: Path, *, sha: str, committed_at: str, session
         "_run_git",
         lambda args, cwd: (0, _fake_git_log_output(sha=sha, committed_at=committed_at, session_id=session_id), ""),
     )
-    # This test binds the receipt WRITER to the receipt-credit READ leg only
-    # (AC5); the reviewed-set store (source 1) is a separate, already-tested
-    # credit source (`review_trail/tests/test_reviewed_set.py`) and its
-    # `read_reviewed_set` resolves `git_common_dir`, which `tmp_path` is not.
-    # Forcing it empty isolates the leg this contract test exists to prove.
     monkeypatch.setattr(gate_dimension_review, "read_reviewed_set", lambda repo_root_str: frozenset())
     return gate_dimension_review._review_dimension_check(
         [_CODE_PATH], _DIFF_BASE, repo_root
@@ -105,9 +97,6 @@ def test_credits_a_commit_the_real_writer_stamped_before_it(tmp_path, monkeypatc
 
 
 def test_removing_the_sidecar_fails_the_same_fixture(tmp_path, monkeypatch) -> None:
-    """Control for (1): with no sidecar written at all, the identical commit
-    fixture must FAIL -- proves the PASS above came from the receipt, not
-    from the population-filter or fixture shape alone."""
     result = _check(
         monkeypatch, tmp_path, sha=_SHA, committed_at="2026-09-20T11:00:00+00:00", session_id=_SESSION
     )
@@ -116,8 +105,6 @@ def test_removing_the_sidecar_fails_the_same_fixture(tmp_path, monkeypatch) -> N
 
 
 def test_does_not_credit_a_commit_authored_after_the_receipt(tmp_path, monkeypatch) -> None:
-    """(2): the same commit, dated AFTER `stamped_at`, gives FAIL -- a
-    reviewer cannot have read a commit that did not exist yet."""
     doc_text = _render_receipt_doc(
         session_id=_SESSION, agent_type="code-reviewer", stamped_at="2026-09-20T12:00:00+00:00"
     )
@@ -131,9 +118,6 @@ def test_does_not_credit_a_commit_authored_after_the_receipt(tmp_path, monkeypat
 
 
 def test_a_blank_body_sidecar_from_the_real_writer_does_not_credit(tmp_path, monkeypatch) -> None:
-    """(3): a blank-body sidecar, still spliced by the real writer, gives
-    FAIL -- a receipt is stamped at dispatch, before the reviewer writes
-    anything, so a blank body means the review aborted."""
     doc_text = (
         "---\n"
         "agent_type: 'code-reviewer'\n"
@@ -169,9 +153,6 @@ def test_a_review_integrator_receipt_does_not_credit(tmp_path, monkeypatch) -> N
 
 
 def test_never_spawns_a_subprocess(tmp_path, monkeypatch) -> None:
-    """AC6/spawn-free: `_run_git` is monkeypatched above every scenario, and
-    this pins that nothing in the receipt-credit path underneath it reaches
-    for a real subprocess."""
     import subprocess
 
     def explode(*args, **kwargs):

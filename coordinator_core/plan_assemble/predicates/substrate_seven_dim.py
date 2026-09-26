@@ -99,13 +99,6 @@ def _plan_sidecar_path(context: PredicateContext, lens: str) -> Path | None:
 
 
 def problem_set(context: PredicateContext) -> dict[str, Any]:
-    """`:72` — `gates.substrate.problem_set.present`/`.path`.
-
-    `.present` is True when the plan's frontmatter carries a non-empty
-    `problem_set:` key. `.path` is populated only when that value names a
-    file present under `docs/problems/`; a value like `"inline"` (this
-    plan's own frontmatter shape) is a valid, present, path-less problem
-    set."""
     if context.plan_frontmatter is None:
         return {"present": undetermined("no plan supplied (--plan not given)"), "path": None}
 
@@ -123,12 +116,6 @@ def problem_set(context: PredicateContext) -> dict[str, Any]:
 
 
 def scope_mode(context: PredicateContext) -> dict[str, Any]:
-    """`:73` — `gates.substrate.scope_mode` (enum), TRUSTED leg only.
-
-    Surfaces the plan's own `scope_mode:` frontmatter value verbatim. The
-    doubt-check triad's inferred-PM-intent arm is `U`-classified
-    (untrusted-gate) and out of scope for this module — see the module
-    docstring's negative-spec."""
     if context.plan_frontmatter is None:
         return {"value": undetermined("no plan supplied (--plan not given)")}
     value = context.plan_frontmatter.get("scope_mode")
@@ -153,17 +140,6 @@ def seven_dim_no_duplicate(context: PredicateContext) -> dict[str, Any]:
 
 
 def seven_dim_no_fabrication(context: PredicateContext) -> dict[str, Any]:
-    """`:90(2)` — `gates.substrate.seven_dim.no_fabrication`. Re-emits
-    `ops.doc_content_verify.verify_doc` over the plan body: any
-    `Finding(reason="absent")` citation means fabrication; `"moved"` and
-    `resolves-cross-repo` are not fabrication (matches that module's own
-    negative-spec). Passes `doc_relative_checker` (not just `repo_exists`) so
-    a plan citing a path relative to its own directory — rather than
-    repo-root-relative — resolves correctly instead of reading as a false
-    `absent`/fabrication; this is NOT `verify_doc` called verbatim/bare —
-    review: code-reviewer — Finding (P2). `sibling_checkers`/`read_target_text`
-    remain unsupplied: cross-repo citations and markdown-link anchors are
-    intentionally out of scope for this fabrication check over a plan body."""
     if context.plan_path is None or context.plan_body is None:
         return undetermined("no plan supplied (--plan not given), or plan carried no body")
 
@@ -206,9 +182,6 @@ def seven_dim_official_docs_read(context: PredicateContext) -> dict[str, Any]:
 
 
 def seven_dim_reference_impl_seen(context: PredicateContext) -> dict[str, Any]:
-    """`:90(5)` — `gates.substrate.seven_dim.reference_impl_seen`. A
-    citation-presence check over the plan body: a `file:line`-shaped token
-    anywhere in the body counts as a cited reference implementation."""
     if context.plan_body is None:
         return undetermined("no plan supplied (--plan not given), or plan carried no body")
     return _CITATION_TOKEN_RE.search(context.plan_body) is not None
@@ -274,11 +247,6 @@ def premise_gate(context: PredicateContext) -> dict[str, Any]:
 
 
 def trampoline_verdict(context: PredicateContext) -> dict[str, Any]:
-    """`:96` — `gates.substrate.trampoline.verdict_cited`/`.verdict_path`.
-    Reads the sizing object's `premise.spike_verdict` pointer, checks the
-    named record's presence under `docs/research/spike-verdicts/`, and
-    surfaces the record's own schema-backed `verdict` enum
-    (`viable`/`not-viable`) — never re-derived, only read."""
     if context.sizing_frontmatter is None:
         return {
             "verdict_cited": undetermined(
@@ -313,9 +281,6 @@ def trampoline_verdict(context: PredicateContext) -> dict[str, Any]:
 
 
 def trampoline_dec4_signal(context: PredicateContext) -> Any:
-    """`:100` — `gates.substrate.trampoline.dec4_signal`. Off
-    `context.caller_flags["trampoline"]` (DEC-4's `trampoline: true`
-    signal) — never inferred from plan prose."""
     if "trampoline" not in context.caller_flags:
         return undetermined("caller_flags carries no 'trampoline' key (DEC-4 signal not supplied)")
     return bool(context.caller_flags["trampoline"])
@@ -332,10 +297,6 @@ def _safe_relative(path: Path, repo_root: Path) -> str:
 
 
 def compute(context: PredicateContext) -> dict[str, Any]:
-    """Assemble every row this module owns into the `gates.substrate.*`
-    shape C13 composes into the envelope. Pure fan-out over this module's
-    own row functions — no additional disk reads beyond what each row
-    function performs itself."""
     return {
         "problem_set": problem_set(context),
         "scope_mode": scope_mode(context),

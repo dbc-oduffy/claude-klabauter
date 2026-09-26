@@ -1,7 +1,3 @@
-"""test_sentinel_blocks — pytest port of coordinator/bin/lib/sentinel-blocks.test.js.
-
-Spec backlink: archive/specs/2026-05-01-portable-ideas-from-obsidian-research.md §W2
-"""
 from __future__ import annotations
 
 from coordinator_core.text.sentinel_blocks import (
@@ -14,11 +10,6 @@ BEGIN = "<!-- BEGIN alpha -->"
 END = "<!-- END alpha -->"
 BEGIN2 = "<!-- BEGIN beta -->"
 END2 = "<!-- END beta -->"
-
-
-# ---------------------------------------------------------------------------
-# extract_block
-# ---------------------------------------------------------------------------
 
 
 def test_extract_block_returns_none_when_begin_marker_absent():
@@ -49,11 +40,6 @@ def test_extract_block_empty_block():
     assert result["block"] == ""
 
 
-# ---------------------------------------------------------------------------
-# replace_block
-# ---------------------------------------------------------------------------
-
-
 def test_replace_block_returns_none_when_markers_missing():
     assert replace_block("no markers", BEGIN, END, "new content") is None
 
@@ -81,43 +67,27 @@ def test_replace_block_preserves_before_and_after_content_unchanged():
 def test_replace_block_adds_trailing_newline_to_new_block_content_if_missing():
     content = f"{BEGIN}\nold\n{END}\n"
     updated = replace_block(content, BEGIN, END, "no-newline")
-    # end marker should be on its own line
     lines = updated.split("\n")
     end_idx = next(i for i, l in enumerate(lines) if END in l)
     assert end_idx > 0
-    # The line before end marker should be the new content
     assert lines[end_idx - 1] == "no-newline"
-
-
-# ---------------------------------------------------------------------------
-# Round-trip
-# ---------------------------------------------------------------------------
 
 
 def test_round_trip_insert_extract_replace_extract_again_content_equal():
     base = "preamble\n"
-    # Insert block
     with_block = insert_or_replace_block(base, BEGIN, END, "v1 content\n")
     assert BEGIN in with_block
     assert END in with_block
 
-    # Extract
     ex1 = extract_block(with_block, BEGIN, END)
     assert ex1["block"] == "v1 content\n"
 
-    # Replace
     replaced = replace_block(with_block, BEGIN, END, "v2 content\n")
     assert "v2 content" in replaced
     assert "v1 content" not in replaced
 
-    # Extract again
     ex2 = extract_block(replaced, BEGIN, END)
     assert ex2["block"] == "v2 content\n"
-
-
-# ---------------------------------------------------------------------------
-# insert_or_replace_block
-# ---------------------------------------------------------------------------
 
 
 def test_insert_or_replace_block_inserts_at_end_when_markers_missing():
@@ -145,11 +115,6 @@ def test_insert_or_replace_block_replaces_when_markers_already_exist():
     assert "after" in result
 
 
-# ---------------------------------------------------------------------------
-# Multiple independent blocks in one file
-# ---------------------------------------------------------------------------
-
-
 def test_multiple_blocks_alpha_and_beta_independently_addressable():
     content = (
         "header\n"
@@ -174,11 +139,6 @@ def test_multiple_blocks_replacing_alpha_does_not_touch_beta():
     assert beta["block"] == "beta\n"
     assert "\nalpha\n" not in updated
     assert "new alpha" in updated
-
-
-# ---------------------------------------------------------------------------
-# Idempotency
-# ---------------------------------------------------------------------------
 
 
 def test_replace_block_is_idempotent_when_new_content_equals_existing_content():

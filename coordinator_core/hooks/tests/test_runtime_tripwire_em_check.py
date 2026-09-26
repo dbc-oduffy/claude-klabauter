@@ -74,9 +74,6 @@ def test_op_suppresses_for_a_subagent_session(tmp_path) -> None:
 
 
 def test_op_returns_no_advisory_on_first_call_establishing_baselines(tmp_path) -> None:
-    """First call this session records both cursors' baselines and never
-    alarms — mirrors the source script's own first-check-records-baseline
-    contract for both legs."""
     from coordinator_core.hooks.runtime_tripwire_em_check import _handler
 
     repo = tmp_path / "repo"
@@ -117,20 +114,18 @@ def test_op_surfaces_push_failure_growth_on_a_work_branch(tmp_path) -> None:
     _init_repo(repo)
     (repo / "state").mkdir()
 
-    # HEAD on a work/* branch, no upstream configured (push_failure_verdict
-    # degrades to "indeterminate" -- still a firing verdict).
     (repo / ".git" / "HEAD").write_text("ref: refs/heads/work/2026-08-31\n", encoding="utf-8")
 
     payload = _base_payload(str(repo))
     first = _handler({"payload": payload})
-    assert first == {}  # baseline call: log absent -- nothing to establish yet
+    assert first == {}
 
     (repo / ".git" / "push-failures.log").write_text(
         "[2026-08-31T00:00:00Z] PUSH FAILED on work/2026-08-31\n", encoding="utf-8"
     )
 
     second = _handler({"payload": payload})
-    assert second == {}  # this call's own first sight of the log establishes ITS baseline
+    assert second == {}
 
     with open(repo / ".git" / "push-failures.log", "a", encoding="utf-8") as fh:
         fh.write("[2026-08-31T00:05:00Z] PUSH FAILED on work/2026-08-31\n")

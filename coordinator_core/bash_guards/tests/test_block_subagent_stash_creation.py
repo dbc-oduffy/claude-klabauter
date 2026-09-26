@@ -1,19 +1,3 @@
-"""Tests for coordinator_core.bash_guards.block_subagent_stash_creation.
-
-Covers the CREATE-side half of the stash-stack gap: `git stash push` and the
-bare `git stash` / flag-only implicit-push form (`git stash -u`), denied for
-a subagent (raw `agent_id` present) and allowed for the main-loop EM (no
-`agent_id` at all). Also covers the deliberate out-of-scope carve-out for
-every other second-level `git stash` subcommand (`list`, `show`, `pop`,
-`apply`, `drop`, `clear`, `branch`, `create`, `store`, `save`), the same
-shell-shape/heredoc/flag-value-false-positive coverage its sibling
-`block_stash_destruction` pins, and that the deny message leads with the two
-non-shared-tree alternatives before explaining the refusal.
-
-Pure Python -- no shell spawns, no git repo required.
-
-Spec backlink: coordinator_core/bash_guards/block_subagent_stash_creation.py
-"""
 
 from __future__ import annotations
 
@@ -64,7 +48,6 @@ class TestSubagentDeniesPush:
         _reason(guard.check(_payload("git stash push", agent_id="a1")))
 
     def test_scoped_push_denies(self):
-        """Scoped is still global in effect -- see module docstring."""
         _reason(
             guard.check(
                 _payload("git stash push -- coordinator/agents/", agent_id="a1")
@@ -79,8 +62,6 @@ class TestSubagentDeniesPush:
 
 
 class TestEmAllowed:
-    """No `agent_id` in the payload -> main-loop EM -> allowed, exactly the
-    same discriminator `block_subagent_commit.py` uses."""
 
     def test_em_bare_stash_allows(self):
         assert guard.check(_payload("git stash")) is None
@@ -96,8 +77,6 @@ class TestEmAllowed:
 
 
 class TestSubagentOutOfScopeSubcommandsAllow:
-    """Everything that is not push/bare is OUT OF SCOPE for this guard (see
-    module docstring "SCOPE") -- denied elsewhere, or never denied at all."""
 
     def test_pop_allows(self):
         assert guard.check(_payload("git stash pop", agent_id="a1")) is None
@@ -130,10 +109,6 @@ class TestSubagentOutOfScopeSubcommandsAllow:
 
 class TestFlagValueFalsePositives:
     def test_push_with_drop_as_message_denies_as_push_not_drop(self):
-        """The command IS a push (denied here), but the deny_kind must be
-        `push`, not misread the flag VALUE `drop` as a second-level
-        subcommand -- proves `remaining[0]` positional matching, not a
-        flag-skipping scan."""
         reason = _reason(
             guard.check(_payload("git stash push -m drop -- src/x.py", agent_id="a1"))
         )
@@ -194,7 +169,6 @@ class TestRedirectionDisplacement:
         _reason(guard.check(_payload("git stash 2>&1", agent_id="a1")))
 
     def test_bare_with_stderr_redirect_and_pipe_denies(self):
-        # The EXACT shape from the incident transcript (repo path elided).
         _reason(
             guard.check(_payload("cd repo && git stash 2>&1 | head -5; echo done", agent_id="a1"))
         )
@@ -206,22 +180,15 @@ class TestRedirectionDisplacement:
         _reason(guard.check(_payload("git stash 2>/dev/null", agent_id="a1")))
 
     def test_bare_with_separated_redirect_target_denies(self):
-        # Whitespace between the operator and its target still yields two
-        # `shlex` tokens (`[">", "/dev/null"]`) -- both must be consumed.
         _reason(guard.check(_payload("git stash > /dev/null", agent_id="a1")))
 
     def test_push_with_redirect_still_denies(self):
-        # A real token (`push`) already occupies the first-argument position
-        # before the redirect -- denied even pre-fix; kept as a boundary
-        # case so a future change can't silently narrow the strip.
         _reason(guard.check(_payload("git stash push 2>&1", agent_id="a1")))
 
     def test_dash_u_with_redirect_still_denies(self):
         _reason(guard.check(_payload("git stash -u 2>&1", agent_id="a1")))
 
     def test_powershell_bare_with_redirect_denies(self):
-        # `_evaluate_powershell_segments` mirrors the Bash leg's
-        # `remaining[0]` read exactly -- same displacement, same fix.
         payload = {
             "tool_name": "PowerShell",
             "tool_input": {"command": "git stash 2>&1"},
@@ -232,10 +199,6 @@ class TestRedirectionDisplacement:
         _reason(guard.check(payload))
 
     def test_bare_with_input_redirect_denies(self):
-        # 2026-08-23 fix (Finding 1): `<`-family input redirection is a
-        # distinct character class from the `>`-family the original regex
-        # matched. `git stash </dev/null` tokenized `remaining` to
-        # `["</dev/null"]`, undetected, and fell through to allow.
         _reason(guard.check(_payload("git stash </dev/null", agent_id="a1")))
 
     def test_bare_with_heredoc_marker_denies(self):
@@ -248,17 +211,7 @@ class TestRedirectionDisplacement:
         _reason(guard.check(_payload("git stash < /dev/null", agent_id="a1")))
 
     def test_input_redirect_does_not_change_a_scoped_push_verdict(self):
-        # Boundary case for the `<`-family strip: stripping a leading
-        # redirection run must not alter how a scoped push classifies.
-        #
-        # Corrected 2026-08-23, replacing an assertion that this allows.
         # It does not, and it never did: THIS guard refuses stash CREATION
-        # by a subagent whether or not a pathspec scopes it, so there is no
-        # allow to preserve here. The `-- <path>` exemption belongs to the
-        # sibling destructive-action guard, and the original assertion had
-        # borrowed it across. The real property is invariance -- redirection
-        # is not a classification input -- so pin the verdict AGAINST the
-        # un-redirected form rather than against a hardcoded expectation.
         scoped = "git stash push -- state/subagent-share/my-file.md"
         plain = guard.check(_payload(scoped, agent_id="a1"))
         redirected = guard.check(_payload(f"{scoped} </dev/null", agent_id="a1"))
@@ -269,20 +222,11 @@ class TestRedirectionDisplacement:
             redirected["hookSpecificOutput"]["permissionDecision"]
             == plain["hookSpecificOutput"]["permissionDecision"]
         )
-        # The reason echoes the offending command back, so the two strings
-        # differ by exactly that echo and nothing else. Normalise it out
-        # rather than comparing verbatim -- what is being pinned is that the
-        # redirection changed no part of the guidance, not that the guard
-        # forgot which command it saw.
         assert redirected["hookSpecificOutput"]["permissionDecisionReason"].replace(
             f"{scoped} </dev/null", ""
         ) == plain["hookSpecificOutput"]["permissionDecisionReason"].replace(scoped, "")
 
     def test_powershell_bare_with_all_streams_redirect_denies(self):
-        # 2026-08-23 fix (Finding 2): PowerShell's all-streams redirect
-        # (`*>`, `*>>`) starts with `*`, which the Bash-output-operator-
-        # shaped regex never matched -- displaced `remaining[0]` on the
-        # PowerShell leg the identical way `2>&1` used to.
         payload = {
             "tool_name": "PowerShell",
             "tool_input": {"command": "git stash *>$null"},
@@ -342,9 +286,6 @@ class TestIdentityGate:
         assert guard.check(_payload("git stash push")) is None
 
     def test_sibling_guard_still_fires_for_the_em_on_drop(self):
-        """Confirms this module's own scope carve-out against its sibling:
-        an EM-typed `git stash drop` is out of THIS guard's scope (allowed
-        here) but still denied by `block_stash_destruction`."""
         from coordinator_core.bash_guards import block_stash_destruction as sibling
 
         em_payload = _payload("git stash drop")

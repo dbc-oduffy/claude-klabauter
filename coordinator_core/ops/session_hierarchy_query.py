@@ -96,20 +96,6 @@ SPEC
 
 
 def _engine_worktree_root() -> Optional[Path]:
-    """Resolve claude-klabauter's OWN worktree root via ``Path(__file__)`` + ``git rev-parse``.
-
-    Verbatim-shared posture with ``session_hierarchy_derive._engine_worktree_root``
-    (duplicated rather than imported — this module intentionally carries zero
-    dependency on the derive module, matching the "plain CLI helper" shape
-    other direct-import trampolines use). Returns ``None`` (never raises) when
-    git is unavailable or this file's directory is not inside a git repo.
-
-    See the identical note on
-    ``session_hierarchy_derive._engine_worktree_root``: dropping
-    ``--path-format=absolute`` here is verified NOT a regression, pinned by
-    ``test_show_toplevel_spawn_fallback_matches_path_format_absolute`` in
-    ``coordinator_core/git/test_repo_root.py``.
-    """
     engine_dir = Path(__file__).resolve().parent
     out = show_toplevel(str(engine_dir))
     if not out:
@@ -129,18 +115,12 @@ def _resolve_shard_dir() -> Optional[Path]:
 
 
 def _find_shards(shard_dir: Path) -> List[Path]:
-    """Glob ``session-hierarchy.*.json`` in shard_dir, sorted for deterministic union order."""
     if not shard_dir.is_dir():
         return []
     return sorted(shard_dir.glob("session-hierarchy.*.json"))
 
 
 def _load_shard_records(shard_files: List[Path]) -> List[dict]:
-    """Concatenate every shard's JSON-array records, in shard_files order.
-
-    Mirrors jq's multi-file ``.[]`` streaming: each shard is a JSON array;
-    records are yielded in file order, then array order within each file.
-    """
     records: List[dict] = []
     for shard_file in shard_files:
         with open(shard_file, "r", encoding="utf-8") as fh:
@@ -154,11 +134,6 @@ def _load_shard_records(shard_files: List[Path]) -> List[dict]:
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: parse args, load shards, answer the query.
-
-    Return codes mirror the bash oracle: 0 success (incl. empty --workstream
-    result), 1 not-found / shard-resolution error, 2 argument error.
-    """
     first = argv[0] if len(argv) >= 1 else ""
 
     if first in ("--help", "-h", ""):
@@ -209,7 +184,6 @@ def main(argv: List[str]) -> int:
                     print(sid)
         return 0
 
-    # mode == "session"
     result: Optional[dict] = None
     for rec in records:
         if rec.get("session_id") == arg_value:

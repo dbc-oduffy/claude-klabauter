@@ -52,12 +52,6 @@ _PROG = "handoff-carry-gate"
 
 
 class CarryGateError(Exception):
-    """Raised on any refusal or fail-loud ambiguity.
-
-    `violations` holds one human-readable line per offending item; the
-    exception's `str()` joins them, so a bare `print(exc)` at a CLI call site
-    already gives a complete, actionable report.
-    """
 
     def __init__(self, violations: List[str]):
         self.violations = violations
@@ -66,19 +60,12 @@ class CarryGateError(Exception):
 
 @dataclass
 class GateResult:
-    """Non-raising result form for callers that want a value, not an exception."""
 
     ok: bool
     violations: List[str] = field(default_factory=list)
 
 
 def evaluate_gate(items: List[Mapping[str, Any]]) -> GateResult:
-    """Evaluate a `carried_items` list for declared, unambiguous state.
-
-    Fail-loud rule (never fail open): an item whose identity or disposition
-    cannot be determined is ALWAYS a violation — "cannot tell" is refused, not
-    assumed fine. Carry depth is not evaluated at all.
-    """
     violations: List[str] = []
 
     for idx, raw_item in enumerate(items):
@@ -122,20 +109,7 @@ def _item_label(raw_item: Any, idx: int) -> str:
     return f"carried_items[{idx}]"
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-
 def read_carried_items(handoff_path: str) -> List[Dict[str, Any]]:
-    """Read and parse the `carried_items` frontmatter array off `handoff_path`.
-
-    Public (no leading underscore) because `coordinator_core.baton_assemble.apply`'s
-    `_dispatch_handoff_carry_gate` calls this directly rather than re-implementing
-    the same read/parse/validate sequence -- see Review:
-    coordinatorcode-reviewer-625ab891 finding 1 for why the duplicate existed and
-    why this is the fix.
-    """
     import yaml
 
     from coordinator_core.frontmatter.primitives import split_frontmatter
@@ -152,14 +126,11 @@ def read_carried_items(handoff_path: str) -> List[Dict[str, Any]]:
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: `handoff-carry-gate check <handoff-path>`."""
     if argv[:1] and argv[0] in ("--help", "-h"):
         print(f"{_PROG}: usage: {_PROG} check <handoff-path>")
         return 0
 
     if not argv or argv[0] != "check" or len(argv) != 2:
-        # Reject trailing argv
-        # (e.g. a stale --override-reason) rather than silently swallowing it.
         print(f"{_PROG}: usage: {_PROG} check <handoff-path>", file=sys.stderr)
         return 2
 

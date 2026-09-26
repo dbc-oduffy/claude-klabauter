@@ -68,8 +68,6 @@ from coordinator_core.hooks._envelope import context_only, no_advisory
 from coordinator_core.ipc import register_op
 
 #: Mirrors `http_hook_forwarder.FIXED_PORT` by value, not by import -- this
-#: module must not import the forwarder module itself (it only launches it as
-#: a detached child process).
 _FIXED_PORT = 47623
 
 _ADDR_IN_USE_ERRNOS = frozenset(
@@ -96,10 +94,6 @@ def _forwarder_module_path() -> "Optional[Path]":
 
 
 def _probe_bind_wins(port: int = _FIXED_PORT) -> "Optional[bool]":
-    """Attempt an exclusive probe bind on `port`, immediately releasing it on
-    success. Returns True (this call won -- caller should spawn), False
-    (lost to an existing listener -- caller should do nothing), or None (an
-    unexpected error -- caller should disclose a failure). Never raises."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         exclusive_flag = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
@@ -107,7 +101,7 @@ def _probe_bind_wins(port: int = _FIXED_PORT) -> "Optional[bool]":
             try:
                 sock.setsockopt(socket.SOL_SOCKET, exclusive_flag, 1)
             except OSError:
-                pass  # Windows-only exclusive-bind flag; absence just loses the stronger race guarantee
+                pass
         try:
             sock.bind(("127.0.0.1", port))
         except OSError as exc:
@@ -121,7 +115,7 @@ def _probe_bind_wins(port: int = _FIXED_PORT) -> "Optional[bool]":
         try:
             sock.close()
         except Exception:
-            pass  # teardown of a probe socket that is already going out of scope
+            pass
 
 
 def _dial_count_path() -> Path:
@@ -148,25 +142,10 @@ def _running_forwarder_record() -> "Optional[dict]":
     return record if isinstance(record, dict) else None
 
 
-#: A command line has to carry the module's own filename as a whole path
-#: component to count as a forwarder worth SIGTERMing -- a bare substring
-#: match would also hit a test file, an editor, or a grep.
 _FORWARDER_ARGV_RE = re.compile(r"""(?:^|[\s"'/\\])http_hook_forwarder\.py(?:["'\s]|$)""")
 
 
 def _pid_is_a_forwarder(pid: int) -> "Optional[bool]":
-    """Confirm `pid` against the OS process table before it is ever killed --
-    spawn-free (overengineering-reviewer, 2026-09-18: the prior `ps`/
-    `powershell.exe Get-CimInstance` spawn ran on every SessionStart where the
-    resident forwarder's fingerprint had gone stale; a PowerShell spawn alone
-    costs more than this engine's 200ms single-process bar). POSIX confirms
-    liveness via `os.kill(pid, 0)` (signal 0: existence-only, never delivered)
-    and cross-checks the command line via `/proc/<pid>/cmdline` where present
-    (Linux; a no-op elsewhere). Windows confirms via `ctypes`
-    `OpenProcess`/`QueryFullProcessImageNameW` against `kernel32`, no shell.
-
-    Returns True/False when identity could be confirmed, None when it could
-    not be (caller treats None as do-not-kill)."""
     if os.name == "nt":
         return _pid_is_a_forwarder_windows(pid)
     return _pid_is_a_forwarder_posix(pid)
@@ -178,8 +157,6 @@ def _pid_is_a_forwarder_posix(pid: int) -> "Optional[bool]":
     except ProcessLookupError:
         return False
     except PermissionError:
-        # Alive, owned by another user -- exists, but we cannot read its
-        # cmdline to confirm identity.
         return None
     except Exception:
         return None
@@ -188,8 +165,6 @@ def _pid_is_a_forwarder_posix(pid: int) -> "Optional[bool]":
     try:
         raw = cmdline_path.read_bytes()
     except Exception:
-        # No /proc (e.g. macOS) -- liveness confirmed, identity not; treat as
-        # do-not-kill rather than assume.
         return None
     argv_text = raw.replace(b"\x00", b" ").decode("utf-8", errors="replace")
     return bool(_FORWARDER_ARGV_RE.search(argv_text))
@@ -272,7 +247,6 @@ def _spawn_forwarder_detached(forwarder_path: Path) -> bool:
     try:
         # popup-safe-env-suppressed -- CREATE_NO_WINDOW is already ORed into
         # creationflags above (Windows leg); DETACHED_PROCESS additionally
-        # detaches from this session's own console entirely.
         subprocess.Popen([sys.executable, str(forwarder_path)], **kwargs)
         return True
     except Exception:
@@ -280,9 +254,6 @@ def _spawn_forwarder_detached(forwarder_path: Path) -> bool:
 
 
 def _ensure_current_forwarder(forwarder_path: Path) -> "Optional[str]":
-    """Handle the already-bound case: retire and replace the winner IFF it
-    runs superseded code. Returns a disclosure reason string, or None when
-    nothing needed disclosing."""
     on_disk = _module_fingerprint_on_disk(forwarder_path)
     if on_disk is None:
         return None

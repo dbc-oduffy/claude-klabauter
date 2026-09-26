@@ -1,43 +1,3 @@
-"""
-coordinator_core.cartography.tests.test_op_edges
-
-Unit tests for coordinator_core.cartography.op_edges (pure functions) and the
-thin cartography.op_edges op wrapper (coordinator_core/ops/
-cartography_op_edges.py).
-
-Coverage:
-  (a) register_op decorator-form and direct-call-form sites both recorded
-  (b) get_op_handler literal-arg site recorded, non-literal arg ignored
-  (c) dispatch_message inline-dict-literal site recorded; a variable arg
-      (the dominant real-repo shape) contributes nothing
-  (d) de-duplication: N register_op sites for the SAME op name across
-      multiple files collapse to ONE entry in op_names, while
-      registration_site_count still counts every site (866-sites/211-names
-      shape this module is built against)
-  (e) producer -> consumer edge join by literal op-name string equality,
-      across files and within one file
-  (f) an op name with no registration site anywhere in `files` produces no
-      edge
-  (g) a SyntaxError file is captured into the "error" field, not raised
-  (h) path containment: an escaping file_path raises PathEscapeError
-  (i) op handler — missing target_root/files raises ValueError; happy path
-      delegates to build_op_edges
-  (j) import-guard + registry — "cartography.op_edges" registered after
-      import
-  (k) module-scope Name -> string Constant resolves ONE hop for
-      register_op/get_op_handler/dispatch_message alike
-  (l) a `for` target iterating a module-scope constant tuple/list/set of
-      string literals yields one edge per member
-  (m) negative-spec fixtures — call-bound name, f-string, concatenation,
-      imported name, function parameter, function-local assignment — each
-      yield zero edges
-  (n) oracle — six live dispatch seams resolved by name, not by count,
-      straight off this repo's own tree (post_commit_tail.py, tail_ops.py,
-      guard_roster_ops.py)
-
-Spec backlink: cross-repo memo, 2026-08-06 architecture survey; AC13,
-docs/plans/2026-08-22-the-composition-gate-counts-processes-across-the-op-graph.md.
-"""
 
 from __future__ import annotations
 
@@ -45,9 +5,6 @@ from pathlib import Path
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Import guard — MUST precede any test so @register_op fires first.
-# ---------------------------------------------------------------------------
 import coordinator_core.ops.cartography_op_edges  # noqa: F401 — fires @register_op
 
 from coordinator_core.ipc import _REGISTRY
@@ -229,11 +186,6 @@ def test_op_handler_happy_path_delegates(tmp_path):
     assert result["static_only"] is True
 
 
-# ---------------------------------------------------------------------------
-# Module-scope Name resolution (ONE hop) + for-target-over-collection
-# ---------------------------------------------------------------------------
-
-
 def test_module_scope_name_resolved_for_register_op_get_op_handler_dispatch(tmp_path):
     _write(
         tmp_path,
@@ -274,11 +226,6 @@ def test_for_target_over_module_collection_yields_one_edge_per_member(tmp_path):
     )
     entry = op_edges_for_file(tmp_path, "roster.py")
     assert sorted(entry["lookups"]) == ["demo.roster_a", "demo.roster_b", "demo.roster_c"]
-
-
-# ---------------------------------------------------------------------------
-# Negative-spec fixtures — one per defeating shape, each zero edges
-# ---------------------------------------------------------------------------
 
 
 def test_negative_call_bound_name_yields_no_edge(tmp_path):
@@ -365,37 +312,14 @@ def test_negative_function_local_assignment_yields_no_edge(tmp_path):
     assert entry["lookups"] == []
 
 
-# ---------------------------------------------------------------------------
-# Oracle — six live dispatch seams, asserted by op name, never by count
-# ---------------------------------------------------------------------------
-
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_oracle_post_commit_tail_resolves_named_ops():
     entry = op_edges_for_file(_REPO_ROOT, "coordinator_core/ops/ceremony/post_commit_tail.py")
     assert "handoff.transition" in entry["lookups"]
-    # "deliverable.cascade_terminal" does NOT belong here: the op is killed
-    # (K-104) and post_commit_tail.py's own `run()` docstring documents the
-    # 2026-08-27 repoint -- `cascade_handler`, when the caller supplies none,
-    # is bound directly to `deliverable_cascade._handler`, bypassing
-    # `get_op_handler` entirely so the dead op's `OpSuspendedError` can never
-    # reach this tail. "handoff.close_origin_stub" does NOT belong here
-    # either: `close_origin_stub_handler` is a caller-injected parameter (see
-    # the module docstring's "Origin-stub-close handler injection" section)
-    # -- this file never resolves it itself, `wsc_tail.py` does. Neither name
-    # is a `get_op_handler` call site this file's own AST contains.
     assert "deliverable.cascade_terminal" not in entry["lookups"]
     assert "handoff.close_origin_stub" not in entry["lookups"]
-
-
-# test_oracle_tail_ops_resolves_review_trail_write removed 2026-08-25: tail_ops.py's
-# in-process review_trail.write wiring was removed 2026-08-23 (PM ruling, kill
-# review_trail.write) and stays removed even though the op itself was later readmitted
-# from suspension the same day -- see tail_ops.py's module docstring "Negative-spec"
-# entry and its "review_trail_write ... is likewise not pre-imported here" residue
-# comment. Re-wiring is a separate decision from the op's readmission; no production
-# call site resolves "review_trail.write" via get_op_handler/dispatch_message today.
 
 
 def test_oracle_guard_roster_ops_resolves_ported_advisory_hook_names():

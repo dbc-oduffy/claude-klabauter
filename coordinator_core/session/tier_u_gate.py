@@ -242,23 +242,6 @@ from coordinator_core.session.grant import check_tier_u_grant
 
 
 def _fast_tier_unscoped_declaration_covers(cmd: str, repo_root: Optional[str]) -> bool:
-    """Does this repo's ``fast_tier_unscoped_reason`` declaration (R6) cover
-    ``cmd``?
-
-    True only when (a) ``coordinator.local.md`` frontmatter carries a
-    non-empty (post-strip) ``fast_tier_unscoped_reason:`` value, AND (b)
-    ``cmd`` is EXACTLY the repo's resolved ``fast_test_cmd`` string. An
-    absent key, an empty string, or a whitespace-only value is not a
-    declaration. This is the sole reach of the declaration -- see module
-    docstring negative-spec.
-
-    The declaration itself is read by
-    ``coordinator_core.session.fast_tier_declaration``, which owns the key
-    and the "non-empty after strip" rule for both authority-layer consumers
-    (this gate and the ``PreToolUse`` guard's own authority leg). What is
-    owned HERE, and only here, is the R6 EXIT -- the (b) leg below and the
-    decision that a covered command proceeds without a grant.
-    """
     root = repo_root if repo_root is not None else os.getcwd()
     reason = fast_tier_unscoped_declaration(root)
     if not reason:
@@ -268,16 +251,6 @@ def _fast_tier_unscoped_declaration_covers(cmd: str, repo_root: Optional[str]) -
 
 
 def _fast_tier_shape_declaration(repo_root: Optional[str]) -> Optional[str]:
-    """Read this repo's ``fast_tier_shape`` declaration for the
-    unclassifiable-command case.
-
-    Returns ``"scoped"`` or ``"unscoped"`` iff ``coordinator.local.md``
-    frontmatter carries exactly that (post-strip) value for
-    ``fast_tier_shape:``. An absent key, an empty string, a whitespace-only
-    value, or any other value returns ``None`` -- treated as "no
-    declaration" by the caller, which refuses. See module docstring for the
-    fail-closed contract this backs.
-    """
     root = repo_root if repo_root is not None else os.getcwd()
     value = cs_read_local_md_key(root, "fast_tier_shape").strip()
     if value in ("scoped", "unscoped"):
@@ -326,9 +299,6 @@ def _unclassifiable_refusal_message(cmd: str, repo_root: Optional[str]) -> str:
 
 @dataclasses.dataclass(frozen=True)
 class TierUGateResult:
-    """Outcome of ``enforce_tier_u_gate`` -- ``proceed`` is the caller's
-    only branch; ``refusal_message`` is populated iff ``proceed`` is
-    False, ready to print to stderr verbatim."""
 
     proceed: bool
     refusal_message: Optional[str] = None
@@ -421,7 +391,6 @@ def enforce_tier_u_gate(
         return TierUGateResult(proceed=True)
 
     if not tier_u_matches and not tier_f_matches:
-        # Unclassifiable: zero matches at all.
         shape = _fast_tier_shape_declaration(repo_root)
         if shape == "scoped":
             return TierUGateResult(proceed=True)
@@ -433,15 +402,9 @@ def enforce_tier_u_gate(
                 proceed=False,
                 refusal_message=_unclassifiable_refusal_message(cmd, repo_root),
             )
-        # shape == "unscoped": fall through to the shared Tier-U-shape
-        # declaration/grant check below -- reused, not duplicated.
 
     if tier_f_matches and not tier_u_matches:
-        # Tier-F leg -- branched explicitly (never shares the Tier-U leg's
         # fall-through) so the R6 declaration exit is UNREACHABLE here. Per
-        # PM ruling 2026-08-04, the grant ask is the only Tier-F escape
-        # hatch; a stale fast_tier_unscoped_reason declaration must not
-        # discharge a Tier-F command for free.
         granted, _record = check_tier_u_grant(cwd=repo_root, session_id=session_id)
         if granted:
             return TierUGateResult(proceed=True)

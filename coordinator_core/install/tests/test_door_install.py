@@ -65,9 +65,6 @@ def test_is_door_installed_true_after_install(tmp_path):
 
 def test_is_door_installed_does_not_raise_when_check_only_would():
     bin_dst_missing = "/nonexistent-path-for-door-install-test/bin"
-    # `install_door(check_only=True)` would raise DoorInstallError here --
-    # `is_door_installed` is the non-raising sibling, so it must return a
-    # plain bool instead.
     result = door_install.is_door_installed(bin_dst_missing)
     assert result is False
 
@@ -96,14 +93,6 @@ def test_install_writes_sidecar_alongside_installed_name(tmp_path):
 
 
 def test_install_removes_shadowing_ps1_sibling(tmp_path):
-    """2026-08-22 collision fix: `install_bin_forwarders` (substrate.py Step
-    3b) derives a `coordinator-invoke.ps1` forwarder from the SAME
-    `coordinator/bin/coordinator-invoke.py` the door replaces -- both land
-    in the same settings-home `bin/` in a single `scripts/setup.py` run.
-    PowerShell ranks a same-directory `.ps1` above a same-directory `.exe`,
-    so a successful door install must clear that sibling rather than leave
-    it standing (see door_install.py's module docstring, Windows
-    paragraph)."""
     if not door_install._PREBUILT_DOOR_EXE.exists():
         pytest.skip("no committed prebuilt door for this platform in this checkout")
 
@@ -115,11 +104,6 @@ def test_install_removes_shadowing_ps1_sibling(tmp_path):
     shadow.write_text("# stand-in for the generic .ps1 forwarder body\n", encoding="utf-8")
 
     # Ownership moved 2026-08-22: `install_door()` is the WINDOWS-only
-    # path, so claiming the bare name from inside it was dead code on
-    # POSIX. `scripts/setup.py :: install_warm_door` now calls
-    # `claim_bare_name` once, after either branch lands a real door.
-    # This test covers the helper; the real-path coverage lives in
-    # scripts/test_setup.py :: test_install_warm_door_posix_branch_claims_the_bare_name.
     door_install.install_door(bin_dst, engine_root)
     assert shadow.exists(), (
         "install_door must NOT claim the bare name itself -- it is unreachable "
@@ -132,11 +116,6 @@ def test_install_removes_shadowing_ps1_sibling(tmp_path):
 
 
 def test_install_leaves_cmd_sibling_untouched(tmp_path):
-    """`.cmd` is deliberately NOT removed -- PATHEXT ranks `.EXE` above
-    `.CMD`, so a same-directory `coordinator-invoke.cmd` is unreachable by
-    bare-name resolution once the door's binary sits beside it (see
-    door_install.py's module docstring). Removing it would be a needless
-    mutation of a file that is already harmless."""
     if not door_install._PREBUILT_DOOR_EXE.exists():
         pytest.skip("no committed prebuilt door for this platform in this checkout")
 
@@ -153,8 +132,6 @@ def test_install_leaves_cmd_sibling_untouched(tmp_path):
 
 
 def test_check_only_never_removes_shadowing_ps1_sibling(tmp_path):
-    """`check_only` must never mutate `bin_dst` -- including the
-    shadow-removal side effect, which only fires on a real write."""
     engine_root = tmp_path / "engine"
     _stamp_engine_root(engine_root)
     bin_dst = tmp_path / "bin"
@@ -169,14 +146,7 @@ def test_check_only_never_removes_shadowing_ps1_sibling(tmp_path):
     assert shadow.exists()
 
 
-# ---------------------------------------------------------------------------
-# verify_installed_provenance -- five statuses
-# ---------------------------------------------------------------------------
-
-
 def test_verify_installed_provenance_python_forwarder_is_no_door(tmp_path):
-    """A failed door build leaves the Python forwarder under the door's name;
-    it has no sidecar by design and must not read as a missing one."""
     (tmp_path / door_install.DOOR_INSTALLED_NAME).write_text("#!/usr/bin/env python3\n", encoding="utf-8")
     verdict = door_install.verify_installed_provenance(tmp_path)
     assert verdict.status == "no-door"
@@ -256,11 +226,6 @@ def test_verify_installed_provenance_ok(tmp_path):
     assert verdict.status == "ok", verdict
 
 
-# ---------------------------------------------------------------------------
-# committed_prebuilt_source_drift
-# ---------------------------------------------------------------------------
-
-
 def _write_prebuilt_record(tmp_path, monkeypatch, record):
     path = tmp_path / "door.exe.provenance.json"
     path.write_text(json.dumps(record), encoding="utf-8")
@@ -299,18 +264,9 @@ def test_prebuilt_drift_is_unanswerable_without_a_source_record(tmp_path, monkey
         door_install.committed_prebuilt_source_drift()
 
 
-# ---------------------------------------------------------------------------
-# install_door -- prebuilt/sidecar disagreement and stale-sidecar removal
-# ---------------------------------------------------------------------------
-
-
 def test_install_door_raises_when_prebuilt_exe_and_sidecar_disagree(tmp_path, monkeypatch):
     # PREBUILT-BRANCH TEST, SO PLATFORM IS THE SKIP KEY, NOT FILE PRESENCE.
-    # `install_door` routes on platform first and POSIX never reads the prebuilt
     # pair at all -- it compiles. Skipping on `_PREBUILT_DOOR_EXE.exists()`
-    # instead ran this Windows assertion down the POSIX build branch on any box
-    # carrying the ignored local `door` artifact, where it can only ever report
-    # DID NOT RAISE.
     if sys.platform != "win32":
         pytest.skip("install_door only reads the prebuilt exe/sidecar pair on Windows")
     if not door_install._PREBUILT_DOOR_EXE.exists():
@@ -323,10 +279,6 @@ def test_install_door_raises_when_prebuilt_exe_and_sidecar_disagree(tmp_path, mo
     bad_provenance = tmp_path / "bad-provenance.json"
     bad_provenance.write_text(json.dumps({"image_sha256": "0" * 64}), encoding="utf-8")
     monkeypatch.setattr(door_install, "_PREBUILT_PROVENANCE", bad_provenance)
-    # Ambient source drift (an unrelated, possibly mid-edit box state) would
-    # route this through the self-heal compile-fresh branch instead of the
-    # copy-prebuilt branch this test targets -- pinned absent so only the
-    # exe/sidecar disagreement under test is exercised.
     monkeypatch.setattr(door_install, "committed_prebuilt_source_drift", lambda: [])
 
     with pytest.raises(door_install.DoorInstallError):
@@ -353,11 +305,6 @@ def test_install_door_removes_stale_destination_sidecar_when_no_prebuilt_sidecar
     monkeypatch.setattr(door_install, "_PREBUILT_PROVENANCE", missing_provenance)
 
     door_install.install_door(bin_dst, engine_root)
-
-
-# ---------------------------------------------------------------------------
-# `_replace_possibly_running_image` short-circuit + `_sweep_displaced_images`
-# ---------------------------------------------------------------------------
 
 
 def test_replace_possibly_running_image_identical_content_writes_nothing(tmp_path):

@@ -1,10 +1,3 @@
-"""`commit.commit_paths` lands a correct commit with ZERO git spawns and
-leaves `git status` telling the truth.
-
-Every assertion uses real `git` as the oracle. The spawn count is measured by
-patching `subprocess` for the duration of the call under test -- the oracle
-calls sit outside that window deliberately.
-"""
 
 import subprocess
 import pytest
@@ -33,7 +26,6 @@ def _repo(tmp_path):
 
 
 class _SpawnCounter:
-    """Counts processes started inside the `with` block."""
 
     def __init__(self):
         self.argvs = []
@@ -68,8 +60,6 @@ def _commit(repo, paths, msg, **kw):
 
 
 def test_new_file_zero_spawns_and_clean_status(tmp_path):
-    """fd shape A: a brand-new untracked file. Stale-index symptom would be
-    `D  new.txt` + `?? new.txt` -- the same path staged-deleted AND untracked."""
     repo = _repo(tmp_path)
     (repo / "new.txt").write_text("new\n", encoding="utf-8", newline="\n")
 
@@ -82,8 +72,6 @@ def test_new_file_zero_spawns_and_clean_status(tmp_path):
 
 
 def test_edited_tracked_file_zero_spawns_and_clean_status(tmp_path):
-    """fd shape B: a tracked file edited but never staged. Stale-index
-    symptom would be `MM seed.txt` -- a staged modification that never was."""
     repo = _repo(tmp_path)
     (repo / "seed.txt").write_text("edited\n", encoding="utf-8", newline="\n")
 
@@ -95,9 +83,6 @@ def test_edited_tracked_file_zero_spawns_and_clean_status(tmp_path):
 
 
 def test_new_file_in_new_directory_zero_spawns(tmp_path):
-    """fd shape C: a new file under a directory HEAD's tree does not carry.
-    The spine cannot re-point a level that does not exist, so this is the
-    shape that used to fall to the deleted ladder."""
     repo = _repo(tmp_path)
     (repo / "sub").mkdir()
     (repo / "sub" / "deep.txt").write_text("deep\n", encoding="utf-8", newline="\n")
@@ -139,10 +124,6 @@ def test_deletion_zero_spawns_and_clean_status(tmp_path):
 
 
 def test_absolute_pathspec_commits_repo_relative_not_a_drive_tree(tmp_path):
-    """An absolute pathspec must route through `_index_key` exactly like the
-    repo-relative spelling: same tree, no `X:`-style top-level entry, and the
-    spliced index keyed by the repo-relative name -- not the absolute string
-    used verbatim, which is the defect this test pins."""
     repo = _repo(tmp_path)
     (repo / "new.txt").write_text("new\n", encoding="utf-8", newline="\n")
 
@@ -162,8 +143,6 @@ def test_absolute_pathspec_commits_repo_relative_not_a_drive_tree(tmp_path):
 
 
 def test_absolute_deleted_paths_also_routed_through_index_key(tmp_path):
-    """`deleted_paths` was equally unrouted -- an absolute deletion pathspec
-    must resolve to the same repo-relative index key as the relative form."""
     repo = _repo(tmp_path)
     (repo / "seed.txt").unlink()
 
@@ -177,8 +156,6 @@ def test_absolute_deleted_paths_also_routed_through_index_key(tmp_path):
 
 
 def test_pathspec_outside_repo_raises_commit_refused(tmp_path):
-    """A path that does not resolve under the repo root must refuse, not
-    silently commit against whatever name results."""
     repo = _repo(tmp_path)
     outside = tmp_path / "elsewhere.txt"
     outside.write_text("nope\n", encoding="utf-8", newline="\n")
@@ -195,7 +172,7 @@ def test_lost_cas_race_refuses_and_writes_no_ref(tmp_path):
 
     import coordinator_core.git.commit as mod
     real_head = mod.head_sha
-    mod.head_sha = lambda r: "0" * 40  # a HEAD that was never there
+    mod.head_sha = lambda r: "0" * 40
     try:
         with pytest.raises(gcommit.CommitRefused, match="compare-and-swap"):
             gcommit.commit_paths(repo, ["new.txt"], "should refuse")
@@ -220,7 +197,6 @@ def test_directory_pathspec_is_refused(tmp_path):
 
 
 def _attrs_repo(tmp_path):
-    """This repo's checkin surface: autocrlf on, and the real attribute pins."""
     repo = _repo(tmp_path)
     _git(repo, "config", "core.autocrlf", "true")
     (repo / ".gitattributes").write_text(
@@ -233,9 +209,6 @@ def _attrs_repo(tmp_path):
 
 
 def test_refused_paths_batch_into_one_fallback_call(tmp_path):
-    """A path this module cannot convert must not explode the commit: it is
-    collected and handed to the injected fallback in ONE batch. That is the
-    difference between the pipeline going red and the pipeline routing."""
     repo = _attrs_repo(tmp_path)
     (repo / "plain.txt").write_text("lf only\n", encoding="utf-8", newline="\n")
     (repo / "a.cmd").write_bytes(b"echo one\r\necho two\r\n")
@@ -256,15 +229,12 @@ def test_refused_paths_batch_into_one_fallback_call(tmp_path):
     )
 
     assert spawns == [], f"the module itself must still spawn nothing: {spawns}"
-    # ONE call carrying BOTH refused paths -- not one call per path.
     assert len(calls) == 1, calls
     assert sorted(calls[0]) == ["a.cmd", "b.cmd"], calls
     assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == "mixed"
 
 
 def test_no_fallback_supplied_refuses_and_names_the_paths(tmp_path):
-    """Without a fallback the refusal stays loud and names what it refused --
-    it must never quietly commit the raw bytes."""
     repo = _attrs_repo(tmp_path)
     (repo / "c.cmd").write_bytes(b"echo\r\n")
     with pytest.raises(gcommit.FilterUnsupported, match="c.cmd"):
@@ -272,8 +242,6 @@ def test_no_fallback_supplied_refuses_and_names_the_paths(tmp_path):
 
 
 def test_all_lf_commit_never_calls_the_fallback(tmp_path):
-    """The common case must cost nothing: nothing refused, fallback untouched,
-    zero spawns."""
     repo = _attrs_repo(tmp_path)
     (repo / "one.txt").write_text("a\n", encoding="utf-8", newline="\n")
     (repo / "two.txt").write_text("b\n", encoding="utf-8", newline="\n")

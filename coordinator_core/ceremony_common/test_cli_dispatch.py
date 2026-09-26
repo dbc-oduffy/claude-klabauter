@@ -1,9 +1,3 @@
-"""Tests for `coordinator_core.ceremony_common.cli_dispatch` — the lifted
-in-process CLI load/invoke primitive (C1 of
-docs/plans/2026-08-26-merges-directives-stop-starting-interpreters.md).
-
-Additive-only chunk: these tests exercise the primitive in isolation, not
-through any of the trio's own `apply.py` (untouched in this chunk)."""
 
 from __future__ import annotations
 
@@ -31,10 +25,6 @@ def _write_script(tmp_path: Path, name: str, body: str) -> Path:
 
 
 def test_resolve_cli_script_root_anchors_on_the_engine_clone(tmp_path: Path):
-    """Engine-anchored, and no `repo_root` parameter to conflate with it —
-    see the module docstring's ENGINE-root paragraph and
-    `merge_assemble/tests/test_producer_root_is_engine_not_target_repo.py`
-    for the consumer-repo failure the old repo-root join produced."""
     import coordinator_core.ceremony_common.cli_dispatch as cli_dispatch
 
     engine_root = Path(cli_dispatch.__file__).resolve().parents[2]
@@ -80,9 +70,6 @@ def test_load_cli_module_caches_on_resolved_script_path(tmp_path: Path):
 def test_load_cli_module_does_not_collide_across_script_paths_sharing_a_module_name(
     tmp_path: Path,
 ):
-    # The cache is keyed by
-    # resolved script path, not caller-chosen module_name; two different
-    # on-disk scripts loaded under the same module_name must not alias.
     first_script = _write_script(tmp_path, "first.py", "def main(argv):\n    return 1\n")
     second_script = _write_script(tmp_path, "second.py", "def main(argv):\n    return 2\n")
     shared_name = "test_cli_dispatch_shared_module_name"
@@ -96,12 +83,6 @@ def test_load_cli_module_does_not_collide_across_script_paths_sharing_a_module_n
 def test_load_cli_module_binds_script_own_lib_over_a_preceding_namespace_package(
     tmp_path: Path,
 ):
-    """A bare `import lib` at a loaded script's top level must resolve
-    against the script's OWN sibling `lib/` package, never against a
-    same-named PEP-420 namespace package (no `__init__.py`) that happens to
-    sit earlier on the process's ambient `sys.path` -- the failure mode
-    `_exec_with_own_dir_on_path` closes (module docstring, "What this
-    module does NOT isolate")."""
     decoy_root = tmp_path / "decoy_root"
     (decoy_root / "lib").mkdir(parents=True)
 
@@ -249,9 +230,6 @@ def test_invoke_cli_main_propagates_non_system_exit_exception():
 
 
 def _module_with_main(body: str):
-    """Builds an in-memory module (no file needed) carrying `body` as its
-    top-level source, for tests exercising `invoke_cli_main` in isolation
-    from `load_cli_module`."""
     import types
 
     module = types.ModuleType("test_cli_dispatch_inline")
@@ -260,17 +238,8 @@ def _module_with_main(body: str):
     return module
 
 
-# ---------------------------------------------------------------------------
-# resolve_plugin_cli_script_root() -- AC1, AC2, AC2b (P036-T1).
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(autouse=True)
 def _plugin_cli_clean_env(monkeypatch, tmp_path):
-    """Isolates every test in this module from the operator's real DoE
-    resolution state and resets both `coordinator_doe_root` memo pairs before
-    and after -- same discipline as
-    `coordinator_core/ops/test_coordinator_doe_root.py`'s own `_clean_env`."""
     _doe_root_mod._reset_doe_root_cache()
     monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
@@ -287,10 +256,6 @@ def test_ac1_resolve_plugin_cli_script_root_takes_zero_parameters():
 
 
 def test_ac1_resolve_cli_script_root_unchanged(tmp_path: Path):
-    """`resolve_cli_script_root`'s signature and body are untouched by this
-    plan (AC1) -- the existing test above already pins its return value;
-    this pins the zero-parameter signature stays a TypeError on a positional
-    arg, unchanged."""
     with pytest.raises(TypeError):
         resolve_cli_script_root(tmp_path)  # type: ignore[call-arg]
 
@@ -317,8 +282,6 @@ def test_ac2_ii_every_rung_unresolvable_returns_none_and_raises_nothing(tmp_path
 
 
 def test_ac2_iii_stale_clone_root_with_no_coordinator_bin_returns_none(tmp_path, monkeypatch):
-    """The stale/moved-clone case: the ladder resolves a real, existing root
-    that has no `coordinator/bin` subdirectory under it."""
     stale_root = tmp_path / "stale-doe-root"
     stale_root.mkdir()
     monkeypatch.setenv("REPO_DOE_CLAUDE", str(stale_root))
@@ -327,9 +290,6 @@ def test_ac2_iii_stale_clone_root_with_no_coordinator_bin_returns_none(tmp_path,
 
 
 def test_ac2_iv_rung_cut_spawns_zero_processes(tmp_path, monkeypatch):
-    """With every in-process rung unresolvable, the resolver never descends
-    to rung 3's `resolve_coordinator_clone.resolve_clone_root()` and its
-    `subprocess.run` -- patching both raising is the cheapest proof."""
     empty_bin = tmp_path / "empty-bin"
     empty_bin.mkdir()
     fake_home = tmp_path / "empty-home"
@@ -357,10 +317,6 @@ def test_ac2_iv_reset_clears_both_memo_pairs(tmp_path, monkeypatch):
 
 
 def test_ac2_v_flat_layout_root_is_not_an_admissible_source(tmp_path, monkeypatch):
-    """A rung-2.75 flat OSS/marketplace root (`schemas/` and `bin/` directly
-    under it, no `coordinator/` subdirectory) resolves at
-    `coordinator_doe_root_in_process()` but is not admissible here -- the
-    join is deliberately not layout-aware."""
     empty_bin = tmp_path / "empty-bin"
     empty_bin.mkdir()
     fake_home = tmp_path / "flat-fake-home"

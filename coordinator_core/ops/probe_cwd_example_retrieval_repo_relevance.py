@@ -171,11 +171,6 @@ def _claude_json_has_example_retrieval_repo(claude_json_path: str) -> bool:
 
 
 def _parse_registry_toml(content: str) -> str:
-    """Extract repos.project_rag from TOML content. Mirrors the bash oracle's
-    embedded Python: tries tomllib first, falls back to a manual line-scan
-    parse (Python < 3.11 path — kept for parity even though this process is
-    always >= 3.11 in practice, since the bash oracle's fallback path is part
-    of the ported contract, not incidental)."""
     try:
         import tomllib
 
@@ -241,16 +236,6 @@ def _resolve_py_interpreter() -> Optional[str]:
 
 
 def _whoami_project_kind() -> str:
-    """Run the coordinator_whoami.example_retrieval_repo probe via a resolved-Python
-    subprocess. Returns the project_kind string, or '' on any failure
-    (missing interpreter, missing package, bad JSON).
-
-    Deliberate isolation boundary — do not convert to an in-process import.
-    Mechanism: import-state isolation — runs a probe script under a
-    resolved python whose `coordinator_whoami` package (or absence of it)
-    must not land in this process's own `sys.modules`. See
-    state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md.
-    """
     py = _resolve_py_interpreter()
     if not py:
         return ""

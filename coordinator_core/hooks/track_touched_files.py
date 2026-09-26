@@ -82,10 +82,6 @@ if TYPE_CHECKING:
 from coordinator_core._hook_envelope import payload_of
 from coordinator_core.ipc import register_op
 
-# Generator-provenance declaration (generator_provenance.py). Per this
-# module's own "Write confinement (hard)" clause above: writes ONLY under
-# .git/coordinator-sessions/ (touch-record.jsonl session/agent logs) -- never
-# state/, archive/, or any tracked repo path.
 GENERATES = []
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks._payload import field
@@ -93,51 +89,16 @@ from coordinator_core.lifecycle import git_common_dir, main_worktree_root
 from coordinator_core.session import touch_record
 from coordinator_core.session.scope import normalize_touch_path
 
-# C7 (docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-repointing-
-# its-writers.md): the SAME filename session/scope.py's `touch()` (C4) and
-# `self_claim` (C6) already write, so every writer of a session- or
-# agent-keyed claim lands in ONE dialect, ONE file, per sink --
-# `touch_record.project_live_claims` is the one seam that reads all three.
 # Mirrors `session/scope.py`'s own (module-private) `_TOUCH_RECORD_FILENAME`
-# literal; not re-imported because that name is private to that module and
-# this hook owns its own copy of the literal it must match.
 _TOUCH_RECORD_FILENAME = "touch-record.jsonl"
 
-# ---------------------------------------------------------------------------
-# D6 — per-target-file asyncio.Lock registry.
-#
-# The engine is a per-repo singleton shared by concurrent sessions. Two sessions
-# returning simultaneously can invoke this op concurrently — both dispatch
-# asyncio.to_thread() tasks that touch the same touch-record.jsonl sink. Process-
 # isolation (which serialises the source bash hook's concurrent O_APPEND writes) is
-# absent in-engine. An asyncio.Lock per target file serialises concurrent
-# in-engine invocations targeting the same sink (C7: no longer a read-check-then-
-# append cycle — touch_record.append_event's single atomic append needs no
-# application-level lock of its own; this lock predates that flip and is kept
-# unchanged — see the block comment above `_append_touch_record`).
-#
-# Lazily created on first access; accessed ONLY from the event loop (async handler),
-# so no cross-thread contention on the dict itself.
-# ---------------------------------------------------------------------------
 _FILE_LOCKS: dict[str, asyncio.Lock] = {}
 
 # Bound _FILE_LOCKS growth. The engine may run for a full
-# workday; sessions archive but locks were never evicted, accumulating O(sessions×agents)
-# entries indefinitely. Two-tier eviction: (1) on new-path creation, sweep entries whose
-# parent directory no longer exists (session archived → dir gone — cheap isdir check);
-# (2) hard cap via oldest-entry eviction if the stale sweep wasn't sufficient.
-#
 # HELD-AWARE (docs/plans/2026-08-15-warm-engine-retires-the-per-invocation-cold-start.md
-# § C9). The prior eviction policy (FIFO pop, no `.locked()` check) could evict a lock
-# a peer dispatch currently holds (`async with lock:` in progress in `_handler`). After
-# eviction, `_get_lock` creates a FRESH `asyncio.Lock()` for the same path on the next
 # call, so the held peer and the new caller serialise on TWO DIFFERENT lock objects for
-# the SAME path — i.e. they do not serialise at all, defeating D6's entire purpose. This
-# is a policy redesign, not a trigger tweak: both the stale sweep and the hard-cap
-# eviction below now consult `lock.locked()` and NEVER remove an entry whose lock is
-# currently held, regardless of table size. If every entry is held when the cap is
 # reached, growing past `_MAX_FILE_LOCKS` is the correct behaviour — not evicting a held
-# lock.
 _MAX_FILE_LOCKS = 256
 
 
@@ -158,15 +119,9 @@ def _get_lock(path: str) -> "asyncio.Lock":
     Accessed only from the event loop — no threading synchronisation needed on _FILE_LOCKS
     itself (all callers are async coroutines running in the event loop thread).
     """
-    # asyncio deferred to first use here (not module scope). Spec:
-    # docs/plans/2026-07-24-canonical-resolution-engine.md task W0-1.
     import asyncio
 
     if path not in _FILE_LOCKS:
-        # Evict UNHELD entries for paths whose containing dir is gone (session
-        # archived). A held lock is never a stale-sweep candidate even if its
-        # session dir happens to be gone — that combination cannot happen for a
-        # live caller, but the check is unconditional defense-in-depth.
         if len(_FILE_LOCKS) >= _MAX_FILE_LOCKS:
             stale = [
                 p for p, lock in _FILE_LOCKS.items()
@@ -174,9 +129,6 @@ def _get_lock(path: str) -> "asyncio.Lock":
             ]
             for p in stale:
                 del _FILE_LOCKS[p]
-        # Hard cap: evict oldest insertion-order UNHELD entries one at a time until
-        # under cap, or until no unheld entry remains (every entry held → stop and
-        # let the table grow past the cap rather than evict a held lock).
         while len(_FILE_LOCKS) >= _MAX_FILE_LOCKS:
             evict_path = next(
                 (p for p, lock in _FILE_LOCKS.items() if not lock.locked()), None
@@ -188,53 +140,23 @@ def _get_lock(path: str) -> "asyncio.Lock":
     return _FILE_LOCKS[path]
 
 
-# ---------------------------------------------------------------------------
-# Agent-id resolution — Port of: coordinator-session.sh::resolve_subagent_identity
-# (DoE e34f2484, 2026-07-22)
-#
-# Three resolution paths (including the C10 named-teammate
-# extension; docs/plans/2026-06-30-loe-dispatch-undercount-teammate-shape.md § C10):
-#   (a) Bare hex  ^[a-f0-9]{12,}$  — unnamed agent; return unchanged.
-#   (b) Named teammate  ^a(.+)-[a-f0-9]{16}$  — extract name, build canonical id
-#       via cs_build_canonical_agent_id equivalent: "<name>@session-<short>".
-#   (c) Unrecognised shape — return "" (fail-closed; agent-keyed write skipped).
-# ---------------------------------------------------------------------------
-#: Already-canonical teammate shape, matching _subagent_identity's
 #: _TEAMMATE_CANONICAL_RE. A subagent-context PostToolUse fire can carry the
-#: agent_id in this form too (not just the raw a<name>-16hex shape below) —
-#: see the (d) branch's docstring note.
 _TEAMMATE_CANONICAL_RE = re.compile(r"^[A-Za-z0-9_.-]+@session-[a-z0-9-]+$")
 
 
 def _resolve_subagent_identity(agent_id: str, session_id: str) -> str:
-    """Translate a raw subagent-side agent_id to the canonical EM-side id.
-
-    Returns "" on unrecognised shape (fail-closed) — the caller skips the
-    agent-keyed write when the result is empty.
-    """
-    # (a) Bare hex — unnamed agent fast path; session_id ignored.
     if re.match(r"^[a-f0-9]{12,}$", agent_id):
         return agent_id
 
-    # (b) Named teammate: a<name>-<16hex>
     m = re.match(r"^a(.+)-[a-f0-9]{16}$", agent_id)
     if m:
         name = m.group(1)
-        # (.+) guarantees non-empty name when the match succeeds — `if name` is
-        # unreachable, kept for explicitness. Review: code-reviewer F5.
         if name and len(session_id) >= 8:
             short = session_id[:8]
             return f"{name}@session-{short}"
         return ""
 
-    # (d) Already-canonical <name>@session-<short> — rebuild against the LIVE
-    # session_id rather than trusting the embedded short verbatim. The harness
-    # stamps that short once at team creation and never refreshes it across
-    # /clear, resume, compact, or fork, so a verbatim id here would key a
     # DIFFERENT .agents/<id>/ directory than the one branch (b) above (and
-    # track_dispatched_agents, once normalized) uses for the same teammate.
-    # See coordinator_core.write_guards._subagent_identity.
-    # normalize_teammate_agent_id for the full mechanism.
     if _TEAMMATE_CANONICAL_RE.match(agent_id):
         from coordinator_core.write_guards._subagent_identity import (
             normalize_teammate_agent_id,
@@ -242,27 +164,12 @@ def _resolve_subagent_identity(agent_id: str, session_id: str) -> str:
 
         return normalize_teammate_agent_id(agent_id, session_id)
 
-    # (c) Unrecognised shape — fail-closed.
     return ""
 
 
-# ---------------------------------------------------------------------------
-# C7 (the writer flip, part two): both appends below now route through
-# ``touch_record.append_event`` -> ``atomic_append.append_line`` -- the same
-# single-write-syscall primitive session/scope.py::touch (C4) and self_claim
-# (C6) already use. No read-modify-write, no `locked_rmw`: that primitive's
-# own negative-spec (touch_record.py module docstring) forbids `locked_rmw`
-# on this append path -- the serialisation it bought was never cross-session,
-# only within one session's own file, and atomic_append already gives O(1)
 # cross-process safety without it (POSIX real O_APPEND kernel atomicity;
 # Windows FILE_APPEND_DATA via CreateFileW -- see atomic_append.py's own
-# negative-spec for the live-reproduced data-loss bug that backs this). The
 # per-file asyncio.Lock (D6, ``_get_lock``/``_FILE_LOCKS`` above) is KEPT
-# unchanged around each call: it still serialises concurrent in-engine
-# invocations targeting the same sink, and removing it is out of this
-# chunk's scope (external coverage in
-# coordinator_core/tests/test_hooks_bookkeeping.py drives it directly).
-# ---------------------------------------------------------------------------
 
 
 def _append_touch_record(
@@ -272,28 +179,6 @@ def _append_touch_record(
     path: str,
     content_hash: "str | None" = None,
 ) -> None:
-    """Encode and append one ``T`` event to ``sink`` (blocking) via
-    ``touch_record.append_event``.
-
-    ``content_hash`` (C12, plan ``2026-08-27-a-pathspec-is-not-a-scope``) is
-    the whole-file sha256 this hook computed against the just-written file,
-    threaded straight through to ``append_event`` — see the call site in
-    ``_handler`` for where it is computed and why a ``None`` (unreadable
-    file) is passed through unchanged rather than retried or guessed at.
-
-    Caller MUST hold the per-file asyncio.Lock (D6) before dispatching this
-    via ``asyncio.to_thread()`` — the lock still serialises concurrent
-    in-engine invocations targeting the same sink (see the block comment
-    above).
-
-    Silent-failure contract, as everywhere else in this module:
-    ``touch_record.LineTooLong`` (an absurdly long path) and
-    ``touch_record.OutOfWorktreePath`` (AC3 — ``encode_line``'s own
-    spawn-free containment check, reachable here now that
-    ``normalize_touch_path`` is no longer the only thing holding the
-    invariant) are both swallowed; a bookkeeping hook must never block or
-    error-propagate to the tool call.
-    """
     try:
         touch_record.append_event(
             sink,
@@ -303,17 +188,11 @@ def _append_touch_record(
             path=path,
             content_hash=content_hash,
             # KIND_WRITE unconditionally: this hook is PostToolUse on
-            # Edit/Write/MultiEdit/NotebookEdit and fires on nothing else (see
-            # the module docstring's input contract), so every event it records
-            # is a mutation by construction. No branch is needed and none should
-            # be added -- a `kind` that varied here would mean the hook had
-            # started firing on a tool it does not own.
             kind=touch_record.KIND_WRITE,
         )
     except (touch_record.LineTooLong, touch_record.OutOfWorktreePath):
         pass
     except Exception:
-        # Silent-failure: never raise from a bookkeeping hook.
         pass
 
 
@@ -409,14 +288,11 @@ def _ensure_session_record_sync(
           no ``meta.json`` as a ``no_meta_json`` miss.
     """
     try:
-        # Imported directly from session.core (never through the ops package)
-        # for the same import-graph reason the back-pointer resolver below is —
-        # see tests/test_track_touched_files_no_ops_import.py.
         from coordinator_core.session.core import ensure_session as _ensure_session
 
         _ensure_session(session_id, sessions_base=sessions_base, root=worktree_root)
     except Exception:
-        pass  # silent-failure contract; stable_pid_watch counts the miss
+        pass
 
 
 @register_op("hooks.track_touched_files")
@@ -467,8 +343,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
     All disk I/O is dispatched via asyncio.to_thread(). Per-file asyncio.Lock (D6)
     serialises concurrent append invocations on shared files in the singleton engine.
     """
-    # asyncio deferred to first use here (not module scope). Spec:
-    # docs/plans/2026-07-24-canonical-resolution-engine.md task W0-1.
     params = payload_of(params)
     import asyncio
 
@@ -477,19 +351,14 @@ async def _handler(params: dict, repo_root=None) -> dict:
     file_path = field(params, "file_path")
     raw_agent_id = field(params, "agent_id")
 
-    # --- Defense-in-depth: fast-exit on non-edit tools (mirrors sh:59-62) ---
     if tool_name not in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
         return no_advisory()
 
-    # --- Required fields: session_id and file_path must both be present ---
     if not session_id or not file_path:
         return no_advisory()
 
     _effective_root = repo_root
     git_root = str(_effective_root) if _effective_root else ""
-    # C1d: route through git_common_dir so linked worktrees resolve to the main .git
-    # directory (a real dir) rather than the worktree's .git FILE. Fallback to the
-    # legacy path when git is unavailable (e.g. non-git test fixtures).
     _common_dir: Path | None = None
     try:
         _common_dir = git_common_dir(_effective_root) if _effective_root else None
@@ -497,24 +366,10 @@ async def _handler(params: dict, repo_root=None) -> dict:
         if _sessions_base is None:
             return no_advisory()
     except RuntimeError:
-        # git_root already IS git_common_dir; do not re-append ".git" here.
         _sessions_base = Path(git_root) / "coordinator-sessions"
     session_dir = str(_sessions_base / session_id)
     touch_record_sink = os.path.join(session_dir, _TOUCH_RECORD_FILENAME)
 
-    # --- Session dir + liveness record for the append below ---
-    # This hook holds no mkdir of its own any more: the dir and the record are
-    # produced together by ``core.ensure_session``. It must stay AHEAD of the
-    # append below, which creates its own sink's parent unconditionally
-    # (``touch_record.append_event`` serves agent-keyed sinks too and is not
-    # session-aware) -- reversing the order would put a record-less session dir
-    # back on the disk on exactly the path this fix closes.
-    #
-    # _worktree_root is resolved HERE rather than at its former site below
-    # (immediately before normalize_touch_path) because the record half needs
-    # it too -- core.init resolves the session hub from a worktree root, and a
-    # second resolution would be the same answer computed twice. Its
-    # normalize_touch_path contract is unchanged; see the note at that call.
     _worktree_root = str(main_worktree_root(_common_dir)) if _common_dir else git_root
     await asyncio.to_thread(
         _ensure_session_record_sync,
@@ -524,47 +379,18 @@ async def _handler(params: dict, repo_root=None) -> dict:
         _worktree_root,
     )
 
-    # --- Normalize file_path to repo-relative (mirrors sh:130-147) ---
-    # normalize_touch_path's ``cwd`` MUST be the worktree root, NOT git_common_dir
-    # (git_root here is the common dir — <repo>/.git for this hook's common_dir-
-    # scoped resolution — and passing it directly makes every internal git
-    # subprocess call cwd into a .git directory, which always fails). Derive the
-    # worktree root via the canonical main_worktree_root(common_dir) helper.
-    # NOTE: when the `except RuntimeError` branch above fired, `_common_dir` is
-    # still None here, so this falls back to `git_root` for BOTH `_sessions_base`
-    # and `_worktree_root` — the single-root collapse this plan otherwise fixes.
-    # Documented, intentionally-inert: this op is `common_dir`-scoped (op_scopes.py),
-    # so production always hands `_handler` an already-resolved common dir, and
-    # `git_common_dir` on an already-common-dir cwd is idempotent — this branch
-    # only fires for non-git test fixtures, where `git_root` already IS the
-    # worktree root. Untested; see TestHandlerRuntimeErrorFallbackNonGitFixture.
     file_path_norm = await asyncio.to_thread(
         normalize_touch_path, file_path, _worktree_root, root=_worktree_root
     )
     if not file_path_norm:
         return no_advisory()
 
-    # --- C12 (plan 2026-08-27-a-pathspec-is-not-a-scope): fingerprint the
-    # file this tool call just wrote, so a later commit-time comparator (C11)
-    # has a recorded hash to check disk-now against. The hook already stats
-    # the file it is recording (normalize_touch_path's own resolution above);
-    # this adds one read, not a walk -- ~0.148ms/file, in-process, zero
-    # spawns (touch_record.compute_content_hash's own docstring). Computed
     # against the ABSOLUTE path (worktree root + repo-relative norm form):
-    # compute_content_hash takes whatever path it is given literally and
-    # never resolves against a cwd of its own. A ``None`` result (file
-    # deleted between the tool's write and this read, a permission race) is
-    # passed straight through to ``append_event`` unchanged -- omitted from
-    # the encoded line, never guessed at (see ``compute_content_hash``'s own
-    # degrade contract).
     _content_hash = await asyncio.to_thread(
         touch_record.compute_content_hash,
         os.path.join(_worktree_root, file_path_norm),
     )
 
-    # --- Session-keyed append (D6: asyncio.Lock; C7: touch_record.append_event,
-    # no locked_rmw -- see the block comment above _ensure_session_record_sync
-    # for why the cross-process serialisation moved to atomic_append itself) ---
     session_lock = _get_lock(touch_record_sink)
     async with session_lock:
         await asyncio.to_thread(
@@ -576,89 +402,30 @@ async def _handler(params: dict, repo_root=None) -> dict:
             _content_hash,
         )
 
-    # --- Agent-keyed append (only for subagent fires — mirrors sh:200-223) ---
-    # Issue A + C10: resolve raw agent_id to the canonical EM-side id, then write
-    # .agents/<canonical-id>/touch-record.jsonl — what coordinator-safe-commit
-    # unions into commit scope via cs_compute_scope (through
-    # touch_record.project_live_claims, C7). Empty resolver result → skip
-    # (zero-overhead path for top-level EM writes that carry no agent_id).
     if raw_agent_id:
         canonical_agent_id = _resolve_subagent_identity(raw_agent_id, session_id)
         if canonical_agent_id:
             agent_dir = str(_sessions_base / ".agents" / canonical_agent_id)
             agent_touch_record_sink = os.path.join(agent_dir, _TOUCH_RECORD_FILENAME)
 
-            # Ensure agent dir exists (mirrors sh:220)
             await asyncio.to_thread(
                 lambda: os.makedirs(agent_dir, exist_ok=True)
             )
 
-            # Imported function-local: the module-level import sweep in
-            # coordinator_core.hooks reaches both modules, and a top-level edge
-            # here would order-depend on that sweep.
             from coordinator_core.hooks.track_dispatched_agents import (
                 _write_backpointer_sync,
             )
 
-            # Piece 2 — Workflow-internal agent-spawn attribution (2026-08-03,
-            # docs/plans/2026-08-03-scope-guard-peer-claim-release.md § C7).
-            #
-            # A Workflow-internal `agent()` spawn never fires the Agent-tool-matched
-            # track_dispatched_agents hook, so the fallback below (which attributes
-            # ownership to `session_id`, the firing session) is the only writer that
             # ever runs for it — and `session_id` there is the SUBAGENT's own distinct
-            # id, not the dispatching EM's (see the branch (b) rationale below), so a
-            # Workflow-internal spawn's agent dir still ends up ownerless in practice.
-            #
             # CLAUDE_CODE_SESSION_ID is inherited by this hook's own process from its
-            # Workflow-internal parent — probe-confirmed (Workflow run
             # `wf_b7ef5d89-7ca`, single `env` read) to equal the DISPATCHING EM's
-            # session id, byte-identical, for the Workflow-internal spawn shape (not
-            # merely the Agent-tool shape it was previously documented for). Advisory
-            # attribution ONLY — every other consumer deliberately distrusts
             # CLAUDE_CODE_SESSION_ID as a subagent-vs-EM discriminator (see
-            # `nudge_unrouted_sizing._is_subagent_session` and
-            # `runtime-tripwire-em-check.py`'s docstring); attribution-when-absent is
-            # the one thing it is good for here.
-            #
-            # Fails closed on all four fronts — this arm can WIDEN `my_scope`:
-            #   - env unset/empty -> skip (nothing to attribute).
-            #   - env == session_id -> that IS the firing session (this hook's own
-            #     session_id param), not a distinct dispatching parent; writing it
-            #     would misattribute the firing session's own work to itself.
-            #   - existing non-empty back-pointer -> never overwritten; the writer
-            #     below is the idempotent (non-empty-file-wins) shared helper, so a
-            #     real dispatch-time record always wins over this advisory write.
-            #   - OSError -> swallowed inside `_write_backpointer_sync` itself; this
-            #     call never raises, matching this hook's fail-open contract.
-            #   - warm-served dispatch -> the canonical resolver, never a raw env
             #     read. This handler is a REGISTERED op (`hooks.track_touched_files`),
-            #     so it can execute inside a resident warm server whose own
-            #     environment names whoever SPAWNED that server rather than the
-            #     session on whose behalf it is serving. A raw env read there yields
             #     a STRANGER's id, which fails the `!= session_id` test above and so
-            #     gets WRITTEN as this agent dir's owner back-pointer -- the one
-            #     outcome this arm's fail-closed conditions exist to prevent.
-            #     `resolve_current_session_id` reads the per-request identity binding
-            #     first and lands on exactly the value this site wants: the id the
-            #     hook's own (cold) process resolved before the call crossed the wire.
-            #     Deliberate widening: the resolver's ladder also consults
             #     `COORDINATOR_SESSION_ID`/`CLAUDE_SESSION_ID` ahead of
             #     `CLAUDE_CODE_SESSION_ID`. Accepted rather than special-cased -- this
-            #     write is advisory and idempotent (a real dispatch-time record always
-            #     wins), and an identity ladder that disagrees with the canonical one
-            #     is the defect class this whole seam is being swept for.
-            # Function-local: this hooks module is eagerly imported by the
-            # hooks package sweep. Imported directly from session.core rather
-            # than through ops.session_context (2026-08-22, § C2) so this
-            # hook's cost no longer depends on whether the invoking process
-            # armed lazy ops — ops.session_context is a thin delegate to the
-            # same core.resolve_session_id (KS-6, 2026-08-07), nothing lost.
             from coordinator_core.session.core import resolve_session_id
 
-            # resolve_session_id returns "" (not None) when no tier resolves —
-            # the `or ""` below is now a no-op for that path, kept because the
-            # call site's shape (truthy-check + fallback) is unchanged.
             _em_session_id = resolve_session_id() or ""
             _piece2_fired = bool(_em_session_id and _em_session_id != session_id)
             if _piece2_fired:
@@ -668,31 +435,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
                     _em_session_id,
                 )
 
-            # Ownership back-pointer parity with track_dispatched_agents
-            # (2026-08-03 break-class fix). This hook and that one create the
-            # SAME .agents/<id>/ directory from opposite sides, but only that
-            # one wrote em-session-id.txt — so an agent dir born here, from a
-            # subagent's first Write, carried touches with no recorded owner.
-            # `cs_compute_scope` withholds every path such a dir claims from
-            # ALL sessions for 30 minutes (coordinator_core/session/scope.py,
-            # the em-session-id.txt-missing branch), so an EM could be blocked
-            # from committing its own work by its own subagent. Live repro:
-            # session f2a9e7b3, `.agents/a29c17237ceda22b1` — 343 of 1353 agent
-            # dirs on this repo had touches and no owner, and NONE of them
-            # appeared in any dispatched-agents.txt.
-            #
-            # `session_id` is provably the right owner, not a guess: branch (b)
-            # of `_resolve_subagent_identity` builds the canonical dir name as
-            # f"{name}@session-{session_id[:8]}", which is exactly what the
-            # existing back-pointers in those dirs contain. The unnamed-agent
-            # fast path (branch (a)) has the same value in hand and only
-            # discards it. Reuses track_dispatched_agents' writer rather than
-            # forking a second copy — it is idempotent (non-empty file wins,
-            # so a real dispatch record is never overwritten) and atomic
-            # (temp+rename). Runs AFTER the Piece 2 write above so a genuine
-            # Workflow-internal attribution wins first; this remains the
-            # fallback for the shapes Piece 2's env guard intentionally skips
-            # (env unset — older harness contexts, non-Workflow test fixtures).
             if not _piece2_fired:
                 await asyncio.to_thread(
                     _write_backpointer_sync,
@@ -700,8 +442,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
                     session_id,
                 )
 
-            # D6: asyncio.Lock (C7: touch_record.append_event, no locked_rmw)
-            # — separate lock from the session lock
             agent_lock = _get_lock(agent_touch_record_sink)
             async with agent_lock:
                 await asyncio.to_thread(
@@ -713,10 +453,5 @@ async def _handler(params: dict, repo_root=None) -> dict:
                     _content_hash,
                 )
 
-    # Note: meta.json last_activity is NOT updated here (costs ~36ms on Windows;
-    # matches sh:225-226). Activity is updated by cs_touch at commit time.
     # The record's CREATION is a different question and IS this hook's job --
-    # see _ensure_session_record_sync above. Creation once per session, on
-    # absence; refresh never. Do not read this note as an argument against the
-    # former: it prices a per-call read-modify-write, not a one-time create.
     return no_advisory()

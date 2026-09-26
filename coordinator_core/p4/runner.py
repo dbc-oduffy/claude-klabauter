@@ -34,12 +34,8 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 # DR-054 console-flash guard: 0 (no-op) on POSIX where CREATE_NO_WINDOW
-# doesn't exist. Matches this engine's existing convention (dag.py,
-# machine_resolver.py, person_resolver.py, ...).
 _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-#: Runner-level timeout, seconds. The cockpit spike showed a blackholed
-#: P4PORT hangs past 20s even with `-v net.maxwait=3`.
 DEFAULT_TIMEOUT_S = 20.0
 
 _TICKET_EXPIRED_MARKERS = (
@@ -60,8 +56,6 @@ _CONNECT_REFUSED_MARKERS = (
 
 @dataclass(frozen=True)
 class P4Error:
-    """One of D2's three typed outcomes. ``kind`` is always one of
-    ``lock_held`` | ``ticket_expired`` | ``refused``."""
 
     kind: str
     holder: Optional[str] = None
@@ -84,15 +78,6 @@ def _extract_holder(body: str) -> Optional[str]:
 
 
 def classify_error(stdout_text: str, stderr_text: str) -> Optional[P4Error]:
-    """Classify p4 output into D2's three typed outcomes, or ``None`` for
-    success. Never consults the process exit code (D2 — the spike showed an
-    exclusive-lock refusal exiting 0).
-
-    Two arms, in this order:
-      1. ``-s`` script-mode ``error:``-prefixed lines — the normal case.
-      2. A plain-text arm for connect errors, which print plain text even
-         under machine-readable output modes (D2).
-    """
     combined = "\n".join(t for t in (stdout_text or "", stderr_text or "") if t)
 
     for line in combined.splitlines():
@@ -115,9 +100,6 @@ def classify_error(stdout_text: str, stderr_text: str) -> Optional[P4Error]:
 
 
 def _kill_process_tree(pid: int) -> None:
-    """Best-effort process-tree kill on runner timeout. ``psutil`` is
-    already a dependency of this engine's other subprocess-timeout paths
-    (diagnostics/contained_run.py, benchmarks/ambient_sampler.py)."""
     try:
         import psutil
     except ImportError:

@@ -105,12 +105,6 @@ def _tally_extensions(root: Path) -> Counter:
 
 
 def detect_primary_languages(target_root: str | Path, top_n: int = _DEFAULT_TOP_N) -> dict:
-    """Fingerprint `target_root`'s dominant file extensions.
-
-    Pure function over an already-resolved, contained root — no param
-    validation, no registry side effect (that lives in the registered
-    handler below). Exposed at module scope for direct unit testing.
-    """
     root = Path(target_root)
     tally = _tally_extensions(root)
     ranked = sorted(tally.items(), key=lambda item: (-item[1], item[0]))

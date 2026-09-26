@@ -1,17 +1,3 @@
-"""test_directives_commit_tail_push_status — wire-path suite for
-`directives_commit_tail.compute_push_landed_gate`'s `push_status` arm
-selection.
-
-Spec backlink: docs/plans/2026-08-08-the-push-leg-that-never-asked-which-
-branch.md, chunk C6c / AC13. Pins the `"declined"` arm added to close AC5's
-exact defect (a network probe plus a wrong "unpushed" verdict on a
-deliberate decline) reproduced a second time in this module: prior to this
-chunk, `compute_push_landed_gate` short-circuited only on
-`push_status == "deferred"`, so `"declined"` fell through to the
-`git log origin/<branch>..HEAD` probe.
-
-Run: python3 -m pytest coordinator_core/workstream_complete/test_directives_commit_tail_push_status.py -q -p no:randomly
-"""
 
 from __future__ import annotations
 
@@ -95,13 +81,7 @@ def test_normal_status_still_probes(monkeypatch):
     assert len(calls) == 1
     assert "log" in calls[0]
     assert gate.pushed is True
-# ---------------------------------------------------------------------------
-# "cadence-pending" — AC9c, docs/plans/2026-08-25-push-re-homes-onto-the-
-# cadence-surfaces.md. Same defect shape as the "declined" arm above, one
 # regime later: under DR-329 a close commit is made at PUSH_MODE_NEVER and
-# its publish belongs to the next cadence checkpoint, so a git-log probe
-# would find it unpushed and report a failure for the NORMAL outcome.
-# ---------------------------------------------------------------------------
 
 
 def test_cadence_pending_issues_no_git_log_probe(monkeypatch):
@@ -121,10 +101,6 @@ def test_cadence_pending_issues_no_git_log_probe(monkeypatch):
 
 
 def test_cadence_pending_collapses_into_neither_deferred_nor_declined(monkeypatch):
-    """The three non-failing arms carry three different promises and a
-    caller must be able to tell them apart: `deferred` says a push child
-    may be mid-flight (re-check shortly), `declined` says nothing will ever
-    publish this commit, `cadence_pending` says a named checkpoint will."""
 
     def _boom(*args, **kwargs):
         raise AssertionError("no arm under test may probe origin")
@@ -142,7 +118,6 @@ def test_cadence_pending_collapses_into_neither_deferred_nor_declined(monkeypatc
     assert declined.cadence_pending is False
     assert deferred.cadence_pending is False
 
-    # The "check again shortly" guidance belongs to `deferred` alone.
     assert "in flight" in deferred.summary_line.lower()
     assert "nothing in flight" in cadence.summary_line.lower()
 

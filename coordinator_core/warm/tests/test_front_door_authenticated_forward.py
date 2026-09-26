@@ -42,8 +42,6 @@ from coordinator_core.warm import (
 
 _BRIGHTLINE_MS = 500.0
 
-#: The same 10% margin `test_front_door.py` holds its own hop to. A test that
-#: passed at 499ms would be reporting the bar, not the mechanism.
 _BRIGHTLINE_MARGIN_FACTOR = 0.1
 
 _VERDICT = {"hookSpecificOutput": {"hookEventName": "PreToolUse"}, "continue": True}
@@ -357,16 +355,10 @@ def test_every_server_thread_in_this_module_records_and_asserts() -> None:
 
     source = inspect.getsource(_Recorder)
     assert "self.errors.append(exc)" in source
-    # Every construction site must sit in `_listener` or the `door` fixture,
-    # the two places whose servers reach `_Recorder`. Asserted over each TEST
-    # function's own source rather than by counting the module, because a
-    # module-wide count would include this assertion's own string literal and
-    # would then pass or fail for a reason unrelated to any server.
     for fn_name, fn in sorted(globals().items()):
         if not fn_name.startswith("test_") or not callable(fn):
             continue
         if fn_name == "test_every_server_thread_in_this_module_records_and_asserts":
-            # This function carries the literal it is searching for.
             continue
         assert "ThreadingHTTPServer(" not in inspect.getsource(fn), (
             f"{fn_name} stands a server up directly, so its thread is not "

@@ -50,9 +50,6 @@ _EVENT_NAME = "PostCompact"
 
 
 def _find_git_common_dir(start: Path) -> Optional[Path]:
-    """Walk up from `start` to the nearest `.git`, then resolve its common
-    dir via the shared support helper. Returns None on any failure — never
-    raises."""
     try:
         probe = start.resolve()
     except Exception:
@@ -85,9 +82,6 @@ def _append_record(git_common_dir: Path, record: dict) -> None:
 
 
 def run(payload: Optional[dict]) -> None:
-    """Core logic — takes an already-parsed payload (dict) or None on parse
-    failure. No named-field access anywhere below — the whole point of this
-    handler. Never raises."""
     observed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     if payload is None:
@@ -108,23 +102,16 @@ def run(payload: Optional[dict]) -> None:
 
     git_common_dir = _find_git_common_dir(cwd_hint)
     if git_common_dir is None:
-        return  # fail-open — no resolvable git tree, nothing to write into
+        return
 
     _append_record(git_common_dir, record)
 
 
 @register_op("hooks.observe_post_compact")
 def _handler(params: dict, repo_root=None) -> dict:
-    """IPC/dispatch_message adapter over `run()`. `params` IS the raw
-    PostCompact payload dict — dumped back out whole, no per-field access
-    (see module docstring).
-
-    Always returns `no_advisory()` — this event's output is not surfaced to
-    the model.
-    """
     params = payload_of(params)
     try:
         run(params)
     except Exception:
-        pass  # observation is best-effort; this event never surfaces output
+        pass
     return no_advisory()

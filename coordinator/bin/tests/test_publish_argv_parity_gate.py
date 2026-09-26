@@ -75,8 +75,6 @@ def _make_repo(tmp_path: Path, name: str = "repo") -> Path:
 
 
 def _write_clean_tree(root: Path) -> None:
-    """Emitter emits exactly what the parser declares as required -- a
-    fully resolvable, clean pairing."""
     _write(root, "coordinator/bin/known-cli.py", _KNOWN_CLI_SOURCE)
     _write(
         root,
@@ -90,9 +88,6 @@ def build_directive(sid, subject):
 
 
 def _write_unaccepted_tree(root: Path) -> None:
-    """Emitter emits a flag the target parser does not declare -- the
-    2026-08-15 incident's own shape (wsc-tail.py rejecting a flag
-    directives_commit_tail.py had already started emitting)."""
     _write(root, "coordinator/bin/known-cli.py", _KNOWN_CLI_SOURCE)
     _write(
         root,
@@ -106,9 +101,6 @@ def build_directive(sid, subject):
 
 
 def _write_undeclared_required_tree(root: Path) -> None:
-    """Emitter never emits `--subject`, a `required=True` flag the parser
-    declares -- the direction C3's reorder can introduce for non-additive
-    parser changes (the Staff Engineer C1/F4, C4/F4)."""
     _write(root, "coordinator/bin/known-cli.py", _KNOWN_CLI_SOURCE)
     _write(
         root,
@@ -121,9 +113,6 @@ def build_directive(sid):
     )
 
 
-# ---------------------------------------------------------------------------
-# dispatch_end_of_run_argv_parity_gate -- direct unit tests.
-# ---------------------------------------------------------------------------
 class TestEndOfRunArgvParityGateLeg:
     def test_clean_tree_passes(self, tmp_path):
         repo_root = _make_repo(tmp_path)
@@ -167,11 +156,6 @@ class TestEndOfRunArgvParityGateLeg:
         assert "advisory" not in captured.err
 
     def test_unresolved_pairing_is_neither_pass_nor_fail_content_but_does_not_fail(self, tmp_path):
-        """An unresolvable pairing (unknown `cli`) must not itself flip the
-        gate to failure -- `unresolved` is never treated as `clean`, but a
-        gate over a tree with only unresolved pairings and no real
-        unaccepted/undeclared_required finding has nothing provable to fail
-        on."""
         repo_root = _make_repo(tmp_path)
         _write(
             repo_root,
@@ -197,17 +181,6 @@ def build_directive():
         assert ok is False
 
     def test_origin_lookup_batched_once_across_all_failing_roots(self, tmp_path, monkeypatch):
-        """docs/plans/2026-08-19-burn-down-the-amplification-hitlist.md C5-2:
-        the origin-lookup spawn helper must be called EXACTLY ONCE per gate
-        invocation, passed EVERY failing root's pairings together -- not
-        once per `repo_root` from inside the loop over `repo_roots` (the
-        per-item-call-inside-a-qualifying-loop shape
-        `test_no_unbatched_per_item_git_spawn.py`'s amplification collector
-        flags). TWO roots, BOTH broken, is required to distinguish this
-        from a single-root call, which looks identical either way -- a
-        single-root regression test would pass unchanged against the
-        pre-fix shape that called the batch helper once per root from
-        inside the loop."""
         root_a = _make_repo(tmp_path, "broken-a")
         _write_unaccepted_tree(root_a)
         root_b = _make_repo(tmp_path, "broken-b")
@@ -230,8 +203,6 @@ def build_directive():
         assert set(calls[0]) == {root_a, root_b}
 
     def test_missing_source_baseline_fails_hard(self, tmp_path, monkeypatch, capsys):
-        """A gate that cannot find its baseline must FAIL, not degrade to
-        permissive -- even over an otherwise-clean destination tree."""
         repo_root = _make_repo(tmp_path)
         _write_clean_tree(repo_root)
         monkeypatch.setattr(
@@ -244,10 +215,6 @@ def build_directive():
         assert "could not load its source-repo baseline" in captured.err
 
     def test_baseline_relative_skew_matching_baseline_passes(self, tmp_path, monkeypatch):
-        """A pairing whose exact module/directive_id/cli/token is already in
-        the committed baseline is a KNOWN pre-existing defect, not a new
-        one -- the gate must not fail on it, mirroring C2's subset
-        semantics."""
         repo_root = _make_repo(tmp_path)
         _write_unaccepted_tree(repo_root)
         baseline_path = tmp_path / "baseline.json"
@@ -274,11 +241,6 @@ def build_directive():
         assert ok is True
 
     def test_partial_baseline_match_still_fails_on_the_new_token(self, tmp_path, monkeypatch, capsys):
-        """A pairing that already has ONE baselined token must still fail
-        when it picks up a SECOND, NEW token -- the baseline relaxation is
-        per-TOKEN, not per-pairing. Guards against a regression that widens
-        the subset check to "pairing already has a baseline entry" instead
-        of "this exact token is in the baseline"."""
         repo_root = _make_repo(tmp_path)
         _write(repo_root, "coordinator/bin/known-cli.py", _KNOWN_CLI_SOURCE)
         _write(
@@ -321,11 +283,6 @@ def build_directive(sid, subject):
         assert "--not-declared-flag" not in captured.err
 
     def test_origin_tag_reports_destination_only_for_non_git_tree(self, tmp_path, capsys):
-        """A synthetic fixture tree is never a git work tree, so
-        `_argv_parity_pairing_origin` cannot resolve it and reports
-        `unknown-origin` -- proves the tag is present in the failure output
-        without depending on a real git repo (this test must never touch
-        the real klabauter mirror or any other git tree)."""
         repo_root = _make_repo(tmp_path)
         _write_unaccepted_tree(repo_root)
 
@@ -335,15 +292,7 @@ def build_directive(sid, subject):
         assert "origin" in captured.err or "unknown-origin" in captured.err
 
 
-# ---------------------------------------------------------------------------
-# publish.main() wiring -- proves the leg is actually called, its verdict
-# reaches gates_ok, and --dry-run never fires it.
-# ---------------------------------------------------------------------------
 class _StubClaudeKlabauter:
-    """Trivial fake `ClaudeKlabauterPercolate` -- these tests exist to prove the
-    argv-parity wiring, not engine-phase behaviour, so every OTHER engine
-    call is a no-op/clean-pass stand-in, matching the shape
-    `test_install_doc_payload_gate_wiring.py::_StubClaudeKlabauter` uses."""
 
     def resolve_target(self, store, name):
         return {
@@ -374,16 +323,6 @@ def _fake_process_target_succeeds(target, setup_dir, totals, **kwargs):
 
 
 def _stub_dest_refresh(monkeypatch) -> None:
-    """Neutralise the destination-refresh precondition (PM ruling 2026-09-02).
-
-    `publish.main` brings every destination level with its origin before the
-    first row materializes anything, and fail-closes on a dest whose checked-out
-    branch has no upstream tracking ref (§ `percolate.dest_refresh.
-    refresh_dest_from_origin`). This fixture's dest repo is a bare tmp tree, not
-    a clone, so that refusal fires and returns 1 before the argv-parity leg runs.
-
-    Patched on the engine module rather than on `publish`, because `main`
-    imports the callable from `percolate.dest_refresh` at call time."""
     publish._bootstrap_engine()
     from percolate import dest_refresh as _dest_refresh
 
@@ -397,14 +336,6 @@ def _stub_dest_refresh(monkeypatch) -> None:
 
 
 def _stub_assembled_mirror_leg(monkeypatch) -> None:
-    """Hold the assembled-mirror end-of-run leg inert.
-
-    `dispatch_end_of_run_assembled_mirror_gate` runs a real `pytest
-    --collect-only` against the destination tree and refuses any root whose
-    collection finds no tests and carries no entry in THIS repo's
-    `setup/publish-allowlist-declarations.yaml`. A synthetic fixture tree is
-    neither, so the leg would fail every `main()` run here on live-repo state
-    unrelated to the argv-parity leg under test."""
     monkeypatch.setattr(
         publish, "dispatch_end_of_run_assembled_mirror_gate", lambda *a, **k: True
     )
@@ -450,10 +381,6 @@ class TestArgvParityGateMainWiring:
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
 
         rc = publish.main([])
-        # Exit 2, not 1: this row's bytes DID land (`process_target`
-        # advanced `totals.processed`) -- only the POST-publish argv-parity
-        # gate failed, matching every other end-of-run leg's exit-code
-        # contract (§ `main()`'s own docstring).
         assert rc == 2
         captured = capsys.readouterr()
         assert "argv-parity gate FAILED" in captured.err
@@ -471,10 +398,6 @@ class TestArgvParityGateMainWiring:
         assert rc == 0
 
     def test_target_filtered_run_still_fails_hard(self, tmp_path, monkeypatch, capsys):
-        """AC4 non-degradation, exercised end-to-end through `main()`: a
-        `--target`-scoped run with a skewed destination must still exit 2,
-        never fall back to an advisory warning the way the identity/
-        install-doc legs do."""
         setup_dir = tmp_path / "percolate-root" / "setup"
         setup_dir.mkdir(parents=True)
         repo_root = tmp_path / "dest-repo"
@@ -492,7 +415,7 @@ class TestArgvParityGateMainWiring:
         setup_dir = tmp_path / "percolate-root" / "setup"
         setup_dir.mkdir(parents=True)
         repo_root = tmp_path / "dest-repo"
-        _write_unaccepted_tree(repo_root)  # would fail loudly if the leg fired
+        _write_unaccepted_tree(repo_root)
 
         _wire_main_preconditions(monkeypatch, setup_dir=setup_dir, rows=_single_row("t", repo_root))
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))

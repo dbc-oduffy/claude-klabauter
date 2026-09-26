@@ -37,8 +37,6 @@ from pathlib import Path
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -46,22 +44,10 @@ pytestmark = [
 
 
 def _claude_klabauter_root() -> Path:
-    # this file: coordinator_core/ops/fleet/tests/test_*.py
     return Path(__file__).resolve().parents[4]
 
 
 def _invoke_setup_error_op(tmp_path: Path) -> subprocess.CompletedProcess:
-    """Spawn the real invoke CLI on a fleet op that takes a setup-error branch.
-
-    `memo.check_addressee` is a pure read op that refuses `dry_run: False` --
-    a setup error, so it returns the frozen exit_code:1 envelope with the
-    reason on stderr only, which is exactly the contract under test.
-
-    `--allow-unstamped-dispatch` is load-bearing, not incidental: this repo is
-    an unstamped clone (the engine publishes through klabauter), so without it
-    dispatch refuses with a build-stamp error and never reaches the op. The
-    flag's own message names deliberate manual testing as its purpose.
-    """
     claude_home = tmp_path / "settings-home"
     machine_local = claude_home / "machine-local"
     machine_local.mkdir(parents=True)
@@ -70,7 +56,7 @@ def _invoke_setup_error_op(tmp_path: Path) -> subprocess.CompletedProcess:
     caller = tmp_path / "caller"
     caller.mkdir()
     subprocess.run(
-        ["git", "init", str(caller)],  # popup-safe-env-suppressed
+        ["git", "init", str(caller)],
         capture_output=True,
         check=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -82,14 +68,14 @@ def _invoke_setup_error_op(tmp_path: Path) -> subprocess.CompletedProcess:
         "PYTHONPATH": str(_claude_klabauter_root()),
         "COORDINATOR_SETTINGS_HOME": str(claude_home),
         "CLAUDE_HOME": str(claude_home),
-        "SYSTEMROOT": "C:\\Windows",  # Windows: required for socket/crypto init
+        "SYSTEMROOT": "C:\\Windows",
     }
     return subprocess.run(
         [
             sys.executable, "-m", "coordinator_core.invoke", "memo.check_addressee",
             "--bare", json.dumps(params), "--repo", str(caller),
             "--allow-unstamped-dispatch",
-        ],  # popup-safe-env-suppressed
+        ],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -101,19 +87,10 @@ def _invoke_setup_error_op(tmp_path: Path) -> subprocess.CompletedProcess:
 
 @pytest.fixture(scope="module")
 def _setup_error_spawn(tmp_path_factory) -> subprocess.CompletedProcess:
-    """One spawn shared by both assertions — the subprocess costs ~1s, the two
-    halves of the contract are properties of the same invocation."""
     return _invoke_setup_error_op(tmp_path_factory.mktemp("setup-err"))
 
 
 def test_setup_error_reason_reaches_the_spawned_process_stderr(_setup_error_spawn) -> None:
-    """The reason must be on the op process's stderr, not only in the log stream.
-
-    `_LOG.error` alone reaches stderr only via logging's lastResort handler, which
-    any consumer calling logging.basicConfig() silently diverts — hence the explicit
-    write in _setup_error. Without this line the refusal is undiagnosable: the caller
-    sees only `refused (exit_code=1, failed=0)`.
-    """
     proc = _setup_error_spawn
     assert "fleet op setup error:" in proc.stderr, (
         "setup-error reason absent from the spawned op process's stderr — the only "
@@ -128,14 +105,6 @@ def test_setup_error_reason_reaches_the_spawned_process_stderr(_setup_error_spaw
 def test_setup_error_exits_the_process_zero_despite_envelope_exit_code_one(
     _setup_error_spawn,
 ) -> None:
-    """Process rc is 0 on a setup error — this is WHY stderr must be read on rc==0.
-
-    A consumer that inspects stderr only on the nonzero-exit path (the natural
-    fail-closed shape) will silently drop every setup-error reason. Pinning the
-    rc==0/exit_code==1 pairing here makes that asymmetry a tested contract rather
-    than an incidental property, so a future change to _exit_code_for_response
-    cannot quietly move the channel out from under consumers.
-    """
     proc = _setup_error_spawn
     assert proc.returncode == 0, (
         f"expected process rc 0 for a setup error (JSON-RPC success carrying an "

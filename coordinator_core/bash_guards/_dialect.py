@@ -183,10 +183,6 @@ from . import _command_tokenizer
 from ._verdict import record_silent
 from coordinator_core._settings_home import settings_home
 
-# Generator-provenance declaration (generator_provenance.py).
-# _log_dialect_parser_unavailable appends to
-# settings_home()/state/dialect-parser-unavailable.log -- settings-home
-# rooted, never a tracked claude-klabauter repo artifact.
 GENERATES = []
 
 __all__ = [
@@ -201,34 +197,13 @@ __all__ = [
 
 
 class Dialect(Enum):
-    """The two dialects this module recognizes. Deliberately NOT open-ended
-    -- an unrecognized `tool_name` maps to `None` (see
-    `dialect_from_tool_name`), not to a third enum member, so "unrecognized"
-    stays a distinct, un-forgeable state from "recognized as X"."""
 
     BASH = "bash"
     POWERSHELL = "powershell"
 
 
-#: The one recognized carry path (AC2): `payload["tool_name"]` -> `Dialect`.
-#: `"PowerShell"` IS live as of 2026-08-07: the conversion plan named below
-#: landed its C1/C2/C3, so a `PowerShell` `tool_name` now clears the master
 #: gate and reaches every guard whose own `MATCHERS` declares it. This entry
-#: is no longer forward-declared -- it carries real traffic. Absent from this
-#: table == unrecognized == `None`, never a bash default (Anti-scope: "do not
-#: let an absent dialect default to bash silently").
-#:
 #: SUPERSEDED 2026-08-07 -- this comment previously read that `"PowerShell"`
-#: was "NOT yet emitted by any tool-name site in this repo", naming
-#: `docs/plans/2026-08-07-command-guards-fire-under-both-tool-names.md` as
-#: what would change that. It did. The stale sentence is recorded here rather
-#: than silently dropped because it was scoped to *guard payloads inside this
-#: repo* and was read once, the same day, as a claim about *harness
-#: transcripts* -- which it never was, and which measurement refutes outright
-#: (1,753 of 9,665 shell-tool invocations across 1,476 local transcripts
-#: arrive as `PowerShell`). If you are reaching for this comment as evidence
-#: that some surface never sees PowerShell, it does not say that and never
-#: did.
 _TOOL_NAME_TO_DIALECT = {
     "Bash": Dialect.BASH,
     "PowerShell": Dialect.POWERSHELL,
@@ -236,34 +211,11 @@ _TOOL_NAME_TO_DIALECT = {
 
 
 def dialect_from_tool_name(tool_name: Optional[str]) -> Optional[Dialect]:
-    """Return the `Dialect` carried by `tool_name`, or `None` if absent or
-    unrecognized. This is the ONLY place this module reads a dialect from --
-    never from the command string itself (see module docstring, Anti-scope).
-    """
     if not tool_name:
         return None
     return _TOOL_NAME_TO_DIALECT.get(tool_name)
 
 
-# ---------------------------------------------------------------------------
-# PowerShell tokenizer (tree-sitter-pwsh / wharflab -- see module docstring
-# "Package head-to-head" for why).
-# ---------------------------------------------------------------------------
-
-#: Node types whose FULL TEXT is taken as a single token without descending
-#: into their own named children, even though they have some. These are
-#: composite-argument shapes where descending would split what a guard must
-#: see as ONE argument token into pieces -- most concretely, an
-#: environment-variable-expansion path argument
-#: (`$env:TEMP\scratch-target`) parses as `expandable_bareword` wrapping a
-#: `variable` child (`$env:TEMP`) and a `generic_token` child
-#: (`\scratch-target`); descending would silently drop the env-var prefix
-#: from the argument token C4's `$env:` target-recognition case (see the
-#: plan's C4 body) needs to match against. Confirmed by direct parse on this
-#: box (2026-08-07): `Remove-Item -Recurse -Force $env:TEMP\scratch-target`
-#: tokenizes to `['Remove-Item', '-Recurse', '-Force',
-#: '$env:TEMP\\scratch-target']` with this set, one whole token for the
-#: target -- not two.
 _ATOMIC_ARGUMENT_NODE_TYPES = frozenset({
     "expandable_bareword",
     "expandable_string_literal",
@@ -273,55 +225,18 @@ _ATOMIC_ARGUMENT_NODE_TYPES = frozenset({
 _parser_cache = None
 
 
-# ---------------------------------------------------------------------------
 # DURABLE ImportError OBSERVABILITY (OBSERVABILITY ONLY -- it never changes
-# an allow/deny verdict). Mirrors `block_subagent_destructive_action.py`'s
 # `_FAIL_OPEN_LOG_RELPATH` / `_log_fail_open` precedent: settings-home-
-# rooted (machine-scoped, like that log -- this is about the INSTALL, not
-# any one target repo), best-effort append, NEVER raises. A separate file
-# from that guard's own log (not folded in) for the same reason that log
-# gives for staying separate from ITS sibling: different grammar/verbs, a
-# different failure class (grammar-package absence vs. identity-resolution
-# fail-open).
-#
-# Deliberately NOT gated behind `_parser_cache` for de-duplication: unlike
-# the SUCCESS path (`_parser()` sets `_parser_cache` once and reuses it),
-# an ImportError is raised BEFORE `_parser_cache` is ever assigned, so this
-# branch re-raises and re-enters on every single PowerShell-dialect call for
-# the life of the process, not once (verified by reading `_parser()` below --
-# do not assume otherwise). Left unbounded per-call would make a broken
-# install's log grow once per PowerShell command.
-#
 # GATED BY GUARD IDENTITY, NOT BY PROCESS (Y3 fix,
-# state/debt-backlog/2026-09-01-the-dialect-degrade-row-names-one-guard-
-# a2f800037e9e.yaml, defect one). The prior single `bool` gate capped the
-# durable row to whichever guard happened to hit the ImportError branch
-# FIRST in a process -- a second, different guard degrading in the same
-# process was silently dropped, so the record under-reported without
-# saying so (one-guard-degraded and first-of-several-degraded rendered
 # identically). `_LOGGED_PARSER_UNAVAILABLE_GUARDS` tracks which GUARD
-# NAMES have already been recorded this process: a dispatch that runs many
 # guards over one PowerShell command still writes one row per DISTINCT
-# guard (bounded by the guard roster's own size, ~54, not by call volume),
-# while the SAME guard calling in on every subsequent command -- the
-# actual hot-path repetition -- still costs nothing beyond the first call,
-# identical to the old gate's cost on that axis. The FIRST occurrence per
-# guard is still never lost.
-# ---------------------------------------------------------------------------
 _DIALECT_PARSER_UNAVAILABLE_LOG_RELPATH = ("state", "dialect-parser-unavailable.log")
 _LOGGED_PARSER_UNAVAILABLE_GUARDS: set = set()
 
-#: The exact prefix `_log_dialect_parser_unavailable` puts on every
-#: `record_degrade` cause it writes -- shared with `dialect_degrade_rows`
-#: below so a reader can pick THIS guard's rows out of the shared
-#: `degrade.jsonl` sink without re-deriving the string it filters on.
 _DEGRADE_CAUSE_PREFIX = "PowerShell dialect guard disarmed for "
 
 
 def _dialect_parser_unavailable_log_path() -> Path:
-    """Settings-home-rooted path for the durable ImportError record -- see
-    module-level comment above for why this mirrors, but does not share,
-    `block_subagent_destructive_action._fail_open_log_path`."""
     return settings_home() / Path(*_DIALECT_PARSER_UNAVAILABLE_LOG_RELPATH)
 
 
@@ -417,55 +332,16 @@ def dialect_degrade_rows(engine_root=None) -> list:
 
 
 def dialect_parser_unavailable_log_path() -> Path:
-    """Public accessor for the durable ImportError record's path -- for
-    consumers OUTSIDE this module (install-time ARMED check, doctor probe)
-    that need to point an operator at the existing record rather than
-    reaching for the private `_dialect_parser_unavailable_log_path`."""
     return _dialect_parser_unavailable_log_path()
 
 
-#: Windows-only: suppress the console-window flash a subprocess spawn would
-#: otherwise cause when this module is invoked from a non-interactive
-#: install/doctor path. `getattr(..., 0)` makes this a no-op on POSIX,
 #: matching `scripts/setup.py`'s own `_NO_CONSOLE` precedent (not imported
-#: from there -- that module is the installer's own entry point, not a
-#: dependency this package should carry).
 _NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
 def probe_armed(
     interpreter: str, claude_klabauter_root: Union[str, Path], *, timeout: float = 10.0
 ) -> Tuple[bool, str]:
-    """Verify the PowerShell dialect guard is ARMED under `interpreter` --
-    i.e. that `tree_sitter`/`tree_sitter_pwsh` actually import AND parse
-    THERE, not merely under whichever interpreter is running the caller.
-    That gap -- a package importable in one interpreter and absent from the
-    one that actually runs the guard -- is the exact defect this function
-    exists to catch (plan Anti-scope: "never verify a dependency by
-    importing it" under the wrong interpreter).
-
-    Runs `_powershell_tokens` -- the SAME code path a real PowerShell Bash
-    call takes -- in a CHILD PROCESS under `interpreter`, so a disarmed
-    result durably logs through `_log_dialect_parser_unavailable` exactly as
-    it would in production. This function opens no second, parallel signal
-    path for the same fact -- it exercises the existing one, under the
-    interpreter that matters, and reports what happened.
-
-    Returns `(armed, detail)`. Never raises: an install-time/doctor check
-    must degrade to a reported `(False, ...)`, never crash the install.
-
-    `detail`, when disarmed, names WHICH of `_powershell_tokens`'s three
-    SILENT-routing cases fired -- missing package (ImportError), a parser
-    error (`has_error=True`), or an unexpected exception -- via a leading
-    `cause: missing-package` / `cause: not-a-missing-package` tag, rather
-    than leaving a caller to assume the cause (reviewer finding: a caller
-    that always names the missing-grammar-package remediation regardless of
-    which case fired sends an operator to fix the wrong thing once a real
-    parser regression is what's live). The child probe reaches into
-    `_powershell_tokens`'s own `record_silent` declaration -- via
-    `_verdict.collecting()` -- for the exact reason string, rather than this
-    function guessing one from the return code alone.
-    """
     probe_src = (
         "import sys\n"
         f"sys.path.insert(0, {str(claude_klabauter_root)!r})\n"
@@ -498,14 +374,6 @@ def probe_armed(
 
 
 def _parser():
-    """Lazily construct and cache the `tree-sitter-pwsh` parser. `tree_sitter`
-    and `tree_sitter_pwsh` are imported HERE, not at module load time --
-    C8's mandate (and this module's own "Cold-import cost" docstring
-    section) is that a Bash-dialect dispatch pays zero import cost for a
-    package the ~99% of Bash calls never touch. Raises `ImportError` if the
-    package is absent -- callers (`_parse_powershell`) catch it and record
-    SILENT rather than letting it propagate into a guard's hot path.
-    """
     global _parser_cache
     if _parser_cache is None:
         from tree_sitter import Language, Parser
@@ -517,11 +385,6 @@ def _parser():
 
 
 def _parse_powershell(cmd_text: str):
-    """Parse `cmd_text` as PowerShell. Returns the tree, or `None` if the
-    package cannot be imported (ImportError) or the source is empty. Does
-    NOT itself check `has_error` -- callers do, since "parsed with errors"
-    and "could not parse at all" are recorded with different reasons.
-    """
     parser = _parser()
     return parser.parse(cmd_text.encode("utf-8", errors="surrogateescape"))
 
@@ -577,25 +440,6 @@ def _flatten_powershell_tokens(node, src: bytes) -> List[str]:
 
 
 def _powershell_tokens(cmd_text: str, *, guard_name: str) -> Optional[List[str]]:
-    """Tokenize `cmd_text` as PowerShell, or return `None` (recording
-    SILENT for `guard_name`) when it cannot be reached at all.
-
-    Three SILENT-routing cases, per the plan's own mandate that
-    `root_node.has_error` is a guard-relevant signal in its own right:
-
-    1. `tree_sitter`/`tree_sitter_pwsh` is not importable (matches C8's
-       required ImportError -> SILENT fallback, exercised ahead of C8
-       landing the dependency declaration).
-    2. `root_node.has_error` is `True` -- the plan's own two named grammar
-       gaps land here: backtick-escaped parens in argument mode (closed by
-       the wharflab package per the head-to-head above, listed here for
-       completeness since a FUTURE grammar release could reopen it) and
-       `cmd &> out.txt` (confirmed still `has_error=True` under wharflab,
-       see module docstring).
-    3. Any other parse-time exception -- never allowed to propagate into a
-       guard's hot path (mirrors `record_silent`'s own "never raises"
-       contract one layer up).
-    """
     try:
         tree = _parse_powershell(cmd_text)
     except ImportError as exc:
@@ -646,29 +490,14 @@ def tokenize_command(
     return None
 
 
-#: `Start-Process`'s two recognized aliases (`saps` -- the built-in cmdlet
-#: alias -- and `start`, a cmd.exe-compatibility alias PowerShell also
-#: registers). Matched case-insensitively (see `expand_start_process_
-#: invocations`'s own lower-casing) since PowerShell cmdlet/alias names are
 #: case-insensitive by language design, same convention `_RUNNER_PREFILTER_RE`
-#: already documents for `Invoke-Pester`.
 _START_PROCESS_NAMES = frozenset({"start-process", "saps", "start"})
 
-#: `-ArgumentList`'s recognized spellings: the full name and PowerShell's
-#: unambiguous prefix-abbreviation `-Args` (accepted by the real cmdlet;
-#: `-ArgumentList` is the only positional-2 parameter beginning `Ar...`, so
-#: `-Args` resolves unambiguously there). Matched case-insensitively.
 _ARGUMENT_LIST_FLAGS = frozenset({"-argumentlist", "-args"})
 
-#: `-FilePath`'s recognized spelling (the parameter `Start-Process` itself
-#: names its target executable with). Matched case-insensitively.
 _FILE_PATH_FLAGS = frozenset({"-filepath"})
 
-#: Separator/statement-boundary tokens this walk must stop consuming
-#: argument-list elements at -- the SAME punctuation
 #: `_command_tokenizer._SEPARATOR_TOKEN_RE` already treats as always-separate
-#: (this module's own "Output shape" section names `;`/`&` as the two forms a
-#: PowerShell statement boundary is emitted as).
 _STATEMENT_BOUNDARY_TOKENS = frozenset({";", "&", "|"})
 
 
@@ -753,13 +582,6 @@ def _strip_ps_quotes(token: str) -> str:
             inner = inner.replace("''", "'")
         return inner
 
-    # No real closing quote found at the token's own end -- unbalanced or
-    # truncated (case (a)), or a genuine close found mid-token with extra
-    # trailing characters after it (not the ends-wrapped shape this
-    # function strips). Either way, strip the leading quote alone: this
-    # is the fail-open-safe direction -- a bare leading quote is exactly
-    # what defeats `os.path.isabs()`, and stripping it can only EXPOSE
-    # the token's true content, never hide it further.
     return token[1:]
 
 
@@ -863,11 +685,7 @@ def expand_start_process_invocations(tokens: List[str]) -> List[str]:
                     if elem == ",":
                         j += 1
                         continue
-                    # A bare `-Flag`-shaped element with no quoting at all is
                     # a DIFFERENT Start-Process parameter beginning after an
-                    # unquoted/unterminated argument-list value this walk
-                    # cannot resolve as a literal -- stop consuming rather
-                    # than swallowing an unrelated flag as an argv element.
                     if elem.startswith("-") and elem[:1] not in ("'", '"'):
                         break
                     unquoted = _strip_ps_quotes(elem)
@@ -876,28 +694,12 @@ def expand_start_process_invocations(tokens: List[str]) -> List[str]:
                     j += 1
                 continue
             if low.startswith("-"):
-                # An unrecognized Start-Process parameter (`-WindowStyle`,
-                # `-NoNewWindow`, `-Wait`, `-Credential`, ...) -- skip the
-                # flag itself. Not walked for its own value/arity (this
-                # function only needs to locate `-FilePath`/`-ArgumentList`
-                # and the bare positional target, not fully parse every
-                # `Start-Process` parameter), so a value-taking unrecognized
-                # flag's value token falls through to the bare-positional
-                # branch below on the next loop iteration and is silently
-                # absorbed as a would-be filepath ONLY if `filepath` is
-                # still unset -- acceptable here since an unrecognized
-                # flag's value is never itself the runner argv this
-                # function exists to surface.
                 j += 1
                 continue
             if filepath is None:
                 filepath = _strip_ps_quotes(t)
                 j += 1
                 continue
-            # A second bare positional with `filepath` already resolved is
-            # outside this cmdlet's own positional grammar (Start-Process
-            # has exactly one positional parameter, FilePath) -- leave it
-            # and stop scanning this call.
             break
 
         if filepath:
@@ -906,9 +708,6 @@ def expand_start_process_invocations(tokens: List[str]) -> List[str]:
             i = j
             continue
 
-        # No resolvable literal FilePath found (e.g. `-ArgumentList` given
-        # but the target came from a variable) -- leave this call's tokens
-        # untouched rather than emit a partial/incorrect rewrite.
         out.append(tok)
         i += 1
     return out
@@ -949,16 +748,6 @@ def resolve_segments_for_dialect(
     return _command_tokenizer.segments_from_tokens_with_pipe_flag(tokens)
 
 
-#: Here-string openers -- `@'` (literal, no expansion) and `@"` (expandable)
-#: -- matched non-greedily up to their own closer (`'@` / `"@`) across the
-#: WHOLE remaining text, `re.DOTALL` so a multi-line body (a here-string's
-#: entire reason for existing) is one match, not cut off at the first
-#: newline. This module does not itself require PowerShell's own
-#: line-anchored closer rule (`'@`/`"@` must start a line) -- a caller
-#: reaching `strip_powershell_prose_noise` already has text that FAILED to
-#: tokenize (AC3's own "tokens-is-None route"), so the goal here is
-#: stripping a plausible here-string body for a free-text scan, not
-#: re-validating PowerShell's own grammar.
 _HERE_STRING_RE = re.compile(r"@'.*?'@|@\".*?\"@", re.DOTALL)
 
 

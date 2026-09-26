@@ -94,17 +94,10 @@ def test_live_platform_conditioned_chain_matches_corpus_rows():
 
 
 def test_write_guards_discovery_import_did_not_fail():
-    """`write_guards.engine.discover_guard_names()` must not report any
-    import failure among the discovered guard modules -- was
-    `guard_message_corpus.py`'s fifth module-level bare assert (~2149)."""
     assert not _WG_IMPORT_FAILED, "write_guards import failure(s): %s" % _WG_IMPORT_FAILED
 
 
-#: state/bash-guards/known-red.json group "nudge-private-git-fact-resolver-
-#: missing-corpus-row" -- `nudge_private_git_fact_resolver` (landed
-#: 9ca373fee, D3) and `nudge_outbox_draft_frontmatter_shape` previously had
 #: no `WRITE_GUARD_ROWS` corpus entry in guard_message_corpus.py; both now
-#: have fire+control rows (see that module) and this test passes for real.
 def test_write_guard_names_match_corpus_rows():
     """Every guard `write_guards.engine.discover_guard_names()` reports
     must have exactly the corpus rows `WRITE_GUARD_ROWS` claims -- was

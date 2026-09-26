@@ -56,32 +56,16 @@ from typing import Any, Callable, Dict, Tuple
 
 __all__ = ["compute_stamp", "read_revalidated", "read_disk_revalidated"]
 
-# ---------------------------------------------------------------------------
-# Bounded module-level cache: (str(path), stamp) → Any
 # Bounded at _MAX_CACHE entries; oldest half evicted on overflow.
 # Same max size as dag._MAX_FRONTMATTER_CACHE — independent caches, same footprint.
-# ---------------------------------------------------------------------------
 
 _REVALIDATED_CACHE: Dict[Tuple[str, str], Any] = {}
 
 # NEGATIVE SPEC: kept in lockstep with dag._MAX_FRONTMATTER_CACHE — a corpus-wide
-# consumer that rescans more paths than the cap evicts each entry before the next
-# pass revisits it, a ~100% miss rate. See that constant for the measured cliff.
 _MAX_CACHE: int = 4096
 
 
 def compute_stamp(path: "str | Path") -> str:
-    """Return the sha256 hex-digest of the file body at path.
-
-    Purpose: content-hash stamp for cache-coherency — distinguishes two writes
-    to the same path that land within one filesystem timestamp granularity (the
-    R5 same-second mtime hazard). sha256 of the body is working-tree-correct
-    (no dependency on git commits). Always reads the full file; the caller decides
-    whether the cost is worth avoiding a stale cache hit.
-
-    Raises:
-        OSError: if the file cannot be read.
-    """
     body = Path(path).read_bytes()
     return hashlib.sha256(body).hexdigest()
 

@@ -27,13 +27,10 @@ from pathlib import Path
 
 import pytest
 
-# Project root = three levels up from this file:
-#   coordinator_core/tests/conftest.py → coordinator_core/tests/ → coordinator_core/ → <root>
 _PROJECT_ROOT = str(Path(__file__).parent.parent.parent.resolve())
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-# Import after sys.path is set so coordinator_core is resolvable.
 from coordinator_core.tests._fixtures import isolated_svc_root_impl  # noqa: E402
 
 
@@ -58,6 +55,4 @@ def _isolated_svc_root(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None,
     Body extracted to _fixtures.isolated_svc_root_impl;
     return annotation corrected from pytest.fixture to Generator[None, None, None].
     """
-    # Implementation lives in _fixtures to avoid duplication
-    # with coordinator_core/invoke/tests/conftest.py.
     yield from isolated_svc_root_impl(monkeypatch)

@@ -1,15 +1,3 @@
-"""Tests for coordinator_core.bash_guards.check_raw_pid_liveness.
-
-Covers all three detection forms (``ps -p``, ``kill -0``,
-``os.kill(pid, 0)``), the "pid-shaped argument nearby" narrowing condition,
-segment-scoping (a match in one pipeline stage must not borrow context from
-an unrelated neighboring stage), the override escape hatch, and that the
-guard is NOT identity-gated (fires with or without ``agent_id`` present).
-
-Pure Python -- no shell spawns, no git repo required.
-
-Spec backlink: coordinator_core/bash_guards/check_raw_pid_liveness.py
-"""
 
 from __future__ import annotations
 
@@ -68,9 +56,6 @@ class TestPsPForm:
         _reason(out)
 
     def test_ps_p_no_argument_allows(self):
-        # A bare flag with nothing after it cannot itself be a liveness
-        # probe of anything -- not this guard's concern (would error at the
-        # shell before ever reaching the question this guard polices).
         assert guard.check(_payload("ps -p")) is None
 
     def test_ps_without_p_flag_allows(self):
@@ -112,10 +97,6 @@ class TestOsKillForm:
 
 class TestSegmentScoping:
     def test_unrelated_neighboring_segment_does_not_leak_context(self):
-        # "pid" only appears in a segment that is NOT the ps -p segment;
-        # the ps -p segment itself has no pid-shaped argument (a literal
-        # word with no digits/var/pid-substring) -- accepted false-negative
-        # per the module's documented no-cross-segment-correlation posture.
         assert guard.check(_payload("ps -p nothing_here_at_all_xyz; echo pid")) is None
 
     def test_matched_segment_carries_its_own_pid_hint(self):
@@ -131,11 +112,6 @@ class TestOverride:
 
 class TestHeredocBodyStripped:
     def test_heredoc_body_containing_ps_p_pid_allows(self):
-        # A heredoc BODY is stdin DATA, not shell command text -- a probe
-        # script/findings write-up whose PROSE happens to contain "ps -p
-        # 1234" as data must not be mistaken for a live liveness probe.
-        # 2026-07-29 incident fix, applied here per every sibling guard in
-        # this package.
         cmd = "cat <<'EOF' > probe.py\n" "ps -p 1234\n" "EOF\n"
         assert guard.check(_payload(cmd)) is None
 
@@ -147,10 +123,6 @@ class TestHeredocBodyStripped:
 
 class TestNotIdentityGated:
     def test_advises_without_agent_id(self):
-        # No agent_id -> top-level EM call in every OTHER guard in this
-        # package's convention; THIS guard fires regardless (see module
-        # docstring negative-spec: raw-pid liveness is wrong for every
-        # caller, not just subagents).
         out = guard.check(_payload("ps -p $pid"))
         _reason(out)
 
@@ -160,9 +132,6 @@ class TestNotIdentityGated:
 
 
 class TestPowerShellDialectRecordsSilent:
-    """Row 19, `docs/reference/guard-dialect-coverage.md` -- no PowerShell
-    liveness idiom is recognized at all, so a PowerShell command must never
-    read as a confirmed clean; it records SILENT instead."""
 
     def test_powershell_command_returns_none_but_records_silent(self):
         payload = _payload("Get-Process -Id $pid")
@@ -173,10 +142,6 @@ class TestPowerShellDialectRecordsSilent:
         assert _verdict.was_silent("check_raw_pid_liveness", silences)
 
     def test_powershell_dialect_does_not_scan_command_text(self):
-        # Even a command text that WOULD match the POSIX forms verbatim
-        # must not be scanned once the dialect is PowerShell -- the
-        # splitter/detection forms are POSIX-only and re-using them would
-        # be exactly the guess the plan forbids.
         payload = _payload("ps -p $pid")
         payload["tool_name"] = "PowerShell"
         with _verdict.collecting() as silences:

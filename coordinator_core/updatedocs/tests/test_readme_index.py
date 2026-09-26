@@ -1,8 +1,3 @@
-"""
-Tests for coordinator_core.updatedocs.readme_index.
-
-Spec backlink: pln-bucket-2-extraction-four-deter-e121fa (chunk C1)
-"""
 
 from __future__ import annotations
 
@@ -125,8 +120,6 @@ def test_reference_documentation_uses_top_level_docs_only(tmp_path):
     )
     drift = compute_readme_index_drift(tmp_path)
     ref = next(s for s in drift.sections if s.section == "Reference Documentation")
-    # README.md itself is a top-level docs/*.md file too, and is not linked
-    # from its own Reference Documentation section, so it is `missing`.
     assert "not-top-level.md" not in ref.missing
     assert "exec-summary.md" not in ref.missing
     assert "README.md" in ref.missing
@@ -155,12 +148,6 @@ def test_title_extraction_falls_through_to_stem_when_neither_present(tmp_path):
 
 
 def test_title_extraction_reads_a_bounded_head_not_the_whole_file(tmp_path):
-    """`_extract_title` now shares `_common.read_head`'s bound (8192 bytes,
-    grown once to 65536 if a frontmatter close delimiter hasn't appeared) --
-    finding 5's `_common.py` lift replaced the module's own 800-byte reader.
-    A heading placed well past the growth ceiling must still fall through to
-    the filename-stem fallback, proving the read stays bounded rather than
-    reading the whole file."""
     path = tmp_path / "huge.md"
     _write(path, "x" * 70_000 + "\n# Late Heading\n")
     assert _extract_title(path) == "huge"

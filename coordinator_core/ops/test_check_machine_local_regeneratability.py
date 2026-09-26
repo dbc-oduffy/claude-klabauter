@@ -1,12 +1,3 @@
-"""Tests for coordinator_core.ops.check_machine_local_regeneratability.
-
-Golden oracle snapshotted 2026-07-17 against the DoE-side bats-equivalent fixture
-corpus (cases a-d) plus additional edge cases for the in-process TOML parsing
-this port introduces (no subprocess helper).
-
-Port of: check-machine-local-regeneratability.sh (DoE b5a4192c, 2026-07-20)
-Oracle: check-machine-local-regeneratability.test.sh (DoE a2fe06f8, 2026-07-22)
-"""
 
 from __future__ import annotations
 
@@ -36,9 +27,6 @@ def _run(claude_dir, capsys, argv=None, monkeypatch=None, ml_dir=None):
     return rc, captured.out, captured.err
 
 
-# ---------------------------------------------------------------------------
-# (a) Clean state — all session-accumulated entries have tracked baseline
-# ---------------------------------------------------------------------------
 def test_clean_state_silent_exit_zero(tmp_path, capsys, monkeypatch):
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text(
@@ -86,9 +74,6 @@ schema = 1
     assert "install-surface-completeness defect" not in err
 
 
-# ---------------------------------------------------------------------------
-# (b) Gitignored session-accumulated entry with no tracked baseline → finding
-# ---------------------------------------------------------------------------
 def test_gap_gitignored_only_flags_finding(tmp_path, capsys, monkeypatch):
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text(
@@ -134,13 +119,9 @@ schema = 1
     assert "install-surface-completeness defect" in err
     assert "repos.project_rag" in err
     assert "Offer:" in err
-    # repos.example-sim-repo IS declared in the tracked registry.toml — must not be flagged
     assert "'repos.example-sim-repo'" not in err
 
 
-# ---------------------------------------------------------------------------
-# (c) Full coverage of coordinator-owned keys → no unclassified warning
-# ---------------------------------------------------------------------------
 def test_full_coverage_no_unclassified_warning(tmp_path, capsys, monkeypatch):
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text(
@@ -171,9 +152,6 @@ schema = 1
     assert "absent from [regeneratability]" not in err
 
 
-# ---------------------------------------------------------------------------
-# (d) Coordinator-owned key absent from [regeneratability] table → warning
-# ---------------------------------------------------------------------------
 def test_missing_key_flags_unclassified_warning(tmp_path, capsys, monkeypatch):
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text(
@@ -218,9 +196,6 @@ schema = 1
     assert "plugin.mirrors" in err
 
 
-# ---------------------------------------------------------------------------
-# plugin.mirrors namespace-prefix match (Check 1) — per-plugin sub-keys satisfy it
-# ---------------------------------------------------------------------------
 def test_plugin_mirrors_namespace_prefix_satisfies_check1(tmp_path, capsys, monkeypatch):
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text(
@@ -250,9 +225,6 @@ schema = 1
     assert "'plugin.mirrors'" not in err
 
 
-# ---------------------------------------------------------------------------
-# repos.* ladder-resolve skip — machine-local get rc=0 suppresses the finding
-# ---------------------------------------------------------------------------
 def test_repos_key_ladder_resolved_suppresses_finding(tmp_path, capsys, monkeypatch):
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text(
@@ -282,10 +254,6 @@ schema = 1
 
 
 def test_repos_key_ladder_snapshot_missing_key_falls_through(tmp_path, capsys, monkeypatch):
-    """A dump that succeeds but does not contain the key must fall through to
-    the normal tracked/local check, exercising the batched `!= None but absent`
-    branch distinct from the `snapshot is None` (binary-missing) fallback.
-    """
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text(
         """
@@ -309,10 +277,6 @@ schema = 1
     assert "repos.example-sim-repo" in err
 
 
-# ---------------------------------------------------------------------------
-# repos.* ladder-probe subprocess failure (missing binary) degrades to fail-safe:
-# the key still gets evaluated by the normal tracked/local check, never crashes.
-# ---------------------------------------------------------------------------
 def test_repos_key_missing_ladder_binary_falls_through_safely(tmp_path, capsys, monkeypatch):
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text(
@@ -326,7 +290,6 @@ schema = 1
     (ml_dir / "registry.local.toml").write_text(
         'schema = 1\n"repos.example-sim-repo" = "/home/user/example-sim-repo"\n'
     )
-    # No claude_dir/bin/machine-local present at all — _ladder_resolves must not raise.
 
     rc, out, err = _run(claude_dir, capsys, monkeypatch=monkeypatch, ml_dir=ml_dir)
 
@@ -335,9 +298,7 @@ schema = 1
     assert "repos.example-sim-repo" in err
 
 
-# ---------------------------------------------------------------------------
 # Missing HOME/CLAUDE_HOME/USERPROFILE — offer-shaped, exit 0, one stderr line
-# ---------------------------------------------------------------------------
 def test_unresolvable_home_exits_zero(capsys, monkeypatch):
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.delenv("HOME", raising=False)
@@ -352,20 +313,13 @@ def test_unresolvable_home_exits_zero(capsys, monkeypatch):
     assert "CLAUDE_DIR is empty" in captured.err
 
 
-# ---------------------------------------------------------------------------
-# Missing machine-local/ directory entirely — no crash, exit 0
-# ---------------------------------------------------------------------------
 def test_missing_machine_local_dir_no_crash(tmp_path, capsys, monkeypatch):
     claude_dir = tmp_path / ".claude"
     ml_dir = tmp_path / ".claude" / "machine-local"
-    # machine-local/ deliberately not created.
     rc, out, err = _run(claude_dir, capsys, monkeypatch=monkeypatch, ml_dir=ml_dir)
     assert rc == 0
 
 
-# ---------------------------------------------------------------------------
-# Malformed TOML in a tracked file — parse error surfaces on stderr, exit 0
-# ---------------------------------------------------------------------------
 def test_malformed_toml_emits_parse_error_and_exits_zero(tmp_path, capsys, monkeypatch):
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text("this is not [valid toml\n")
@@ -376,9 +330,6 @@ def test_malformed_toml_emits_parse_error_and_exits_zero(tmp_path, capsys, monke
     assert "Failed to parse" in err
 
 
-# ---------------------------------------------------------------------------
-# --help prints usage and exits 0
-# ---------------------------------------------------------------------------
 def test_registry_resolves_via_settings_home_ladder(tmp_path, capsys, monkeypatch):
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
     settings_home = tmp_path / "settings-home"
@@ -407,8 +358,6 @@ schema = 1
     )
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
 
-    # claude_dir has no machine-local under it at all — proves the registry is
-    # NOT being read from the legacy <claude_dir>/machine-local location.
     claude_dir = tmp_path / ".claude"
     claude_dir.mkdir(parents=True)
 
@@ -425,10 +374,7 @@ def test_help_flag_prints_usage(capsys):
     assert "usage:" in captured.out
 
 
-# ---------------------------------------------------------------------------
-# AC8 (docs/plans/2026-08-07-two-tier-engine-root-adopt-dr132.md, chunk C6b):
 # repos.claude_klabauter joins COORDINATOR_OWNED_KEYS + the family-prefix arm.
-# ---------------------------------------------------------------------------
 def test_claude_klabauter_classified_no_warning(tmp_path, capsys, monkeypatch):
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text(
@@ -510,9 +456,6 @@ def test_family_prefix_arm_resolves_dotted_key_against_bare_family_entry():
 
 
 def test_family_prefix_arm_rejects_leading_substring_without_dotted_boundary():
-    # "engine.working_repositories" shares the leading substring "engine.working_repos"
-    # but is not "engine.working_repos" plus a dotted segment — must NOT match. Guards
-    # against a sloppy str.startswith() implementation of the family-prefix arm.
     assert not _key_matches_regen_entry("engine.working_repositories", "engine.working_repos")
     assert not _key_matches_regen_entry("engine.working_repos", "engine.working_repositories")
 

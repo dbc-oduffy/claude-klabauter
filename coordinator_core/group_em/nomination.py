@@ -72,13 +72,8 @@ from coordinator_core.session.liveness import session_live
 
 SCHEMA_VERSION = 1
 
-#: Generator-provenance declaration (generator_provenance.py). `_write_json_
-#: atomic` writes under `settings_home() / "state" / "group-em"` --
 #: `settings_home()` resolves to `${CLAUDE_HOME:-$HOME}/.coordinator-claude-
 #: settings` (or `COORDINATOR_SETTINGS_HOME` when set), never a path inside
-#: this repo's own tracked tree. Same disposition as `async_hook_status.py`'s
-#: `claude_config_dir()`-rooted marker: an operator-home cache, not a repo
-#: artifact.
 GENERATES = []
 
 
@@ -108,22 +103,15 @@ def repo_key(repo_root: str) -> str:
     return f"{stem}-{digest}"
 
 
-# Back-compat alias for any internal caller still spelling the private name.
 _repo_key = repo_key
 
 
 def _record_path(repo_root: str, directory: Optional[Path] = None) -> Path:
-    """Deterministic record path -- no directory scan needed to find it."""
     base = directory if directory is not None else settings_home() / "state" / "group-em"
     return base / f"{repo_key(repo_root)}.json"
 
 
 def _write_json_atomic(target: Path, record: dict) -> None:
-    """Write-temp then `os.replace` -- a concurrent reader sees the old record or the new one,
-    never a partial one. A raised exception propagates; this is the nomination record of record,
-    never best-effort telemetry, so a caller that believes a write succeeded when it did not
-    would be reading exactly the "silent lie" this module exists to prevent.
-    """
     target.parent.mkdir(parents=True, exist_ok=True)
     handle, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
     tmp_path = Path(tmp)
@@ -145,11 +133,6 @@ def _paths_match(a: str, b: str) -> bool:
 
 
 def read_record(repo_root: str, directory: Optional[Path] = None) -> Optional[dict]:
-    """The nomination record for `repo_root`, or None if absent, unreadable, or key-collided.
-
-    A `repo_root` mismatch inside the record (a hash-stem collision, or a stale record surviving
-    a repo move) is treated as "no nomination" rather than trusted.
-    """
     path = _record_path(repo_root, directory)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -164,46 +147,12 @@ def read_record(repo_root: str, directory: Optional[Path] = None) -> Optional[di
 
 @dataclass(frozen=True)
 class LivenessResult:
-    """A liveness verdict plus the distinguishing reason -- never a bare bool.
-
-    `live_reason` is one of `"live"`, `"no_registry_record"`, `"pid_not_running"` -- the same
-    three-way distinction the reference's `who()` surfaces, so a receiver debugging a
-    not-live-looking incumbent can tell a renamed/reaped registry entry apart from a genuinely
-    dead process.
-    """
 
     live: bool
     live_reason: str
 
 
 def is_live(record: dict) -> LivenessResult:
-    """Liveness is a join against the harness registry, NEVER a stored pid.
-
-    The verdict itself comes from `coordinator_core.session.liveness.session_live`, which
-    performs the registry-first, `stable_pid_alive`-confirmed check on `session_id` alone --
-    the record's own `session_id` field is the only thing read here, never a `pid`.
-
-    Registry consultation, SINGLY (Review: overengineering-reviewer, Finding 8): the naive
-    shape here would call `harness_registry.lookup(session_id)` a SECOND time, purely to label
-    the not-live case -- but `lookup` is `snapshot().get(sid)` (`harness_registry.snapshot`'s
-    own docstring: "Parse every `sessions/*.json` once... The ONE directory scan this module
-    performs"), i.e. a second full glob-and-parse of the registry directory on top of the one
-    `session_live` already performed via its own Source-0 read. Neither of `liveness`'s two
-    existing verdict-carrying public surfaces fits as a drop-in replacement without a real
-    behaviour change: `live_session_verdicts` is a whole-corpus scan keyed to an on-disk
-    sessions directory (not this record's bare `session_id`) and reports a different basis
-    vocabulary ("layer1"/"layer2"/"unknown"), not the `no_registry_record`/`pid_not_running`
-    distinction `claim`'s five-case table branches on; `session_verdict` re-reads the registry
-    itself (its own `harness_registry.lookup` call), so swapping in a second module-level
-    function would still be two reads, not one. Instead, this reuses the exact TTL-cached
-    accessor (`session.liveness._cached_registry_lookup`, 2s TTL) that `session_live` itself
-    just called for this same `session_id` moments earlier -- so on the normal path this
-    resolves from the already-warm cache rather than re-scanning the registry directory, while
-    returning the identical `RegistryRecord | None` shape `harness_registry.lookup` would have.
-    This never substitutes for `session_live`'s own verdict (Layer 1/Layer 2 beyond the
-    registry are untouched) -- it is consulted ONLY to attach the not-live reason for the
-    report, exactly as before.
-    """
     session_id = str(record.get("session_id") or "")
     if not session_id:
         return LivenessResult(False, "no_registry_record")
@@ -222,12 +171,6 @@ def _build_record(
     peer_name: Optional[str],
     nominated_by: Optional[str],
 ) -> dict:
-    """The on-disk record shape -- deliberately NEVER carries a `pid`.
-
-    See the module docstring's negative spec: a pid captured by this writer would be dead the
-    moment this call returns, and reading liveness off it would call every nomination stale
-    within seconds -- the most dangerous failure direction for a mutual-exclusion check.
-    """
     return {
         "version": SCHEMA_VERSION,
         "repo_root": repo_root,
@@ -342,10 +285,6 @@ def claim(
 
     if liveness.live_reason == "pid_not_running":
         # AUTO-REPLACE: positive evidence of death (a registry row exists for the
-        # incumbent's session_id and its pid is not running). Claim it -- but loudly:
-        # the replaced holder is named in its own field, never folded into
-        # `superseded_incumbent`, so a caller cannot mistake this for the silent
-        # clean-pass-under-a-dead-Group-EM failure this whole guard exists to prevent.
         replaced_holder = {
             "session_id": incumbent_sid,
             "peer_name": existing.get("peer_name"),
@@ -355,10 +294,6 @@ def claim(
             "live_reason": liveness.live_reason,
         }
         record = _build_record(repo_root, session_id, peer_name, nominated_by)
-        # TRACE half only (mirrors `watch_heartbeat.py`'s `stamp`, see module docstring):
-        # persist the replaced incumbent's identity ON DISK, additive keys only, so a cold
-        # read of the record afterwards is never indistinguishable from a first-ever claim.
-        # This is NOT the DECLINE half -- `claim` still auto-replaces here, unconditionally.
         record["replaced_holder_session_id"] = replaced_holder["session_id"]
         record["replaced_holder_name"] = replaced_holder["peer_name"]
         record["replaced_nominated_at"] = replaced_holder["nominated_at"]

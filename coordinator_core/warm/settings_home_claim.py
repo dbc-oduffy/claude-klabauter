@@ -67,14 +67,9 @@ __all__ = [
     "mismatch_message",
 ]
 
-#: The environment override whose silent loss across the warm pipe this refusal covers.
-#: Named here rather than read from `_settings_home` because this module needs the VAR,
-#: not the resolved path: a claim is stamped only when a caller set this explicitly.
 SETTINGS_HOME_ENV = "COORDINATOR_SETTINGS_HOME"
 
 #: The JSON-RPC envelope field carrying the caller's resolved settings home,
-#: underscore-prefixed like `_session_id` and `_engine_token` to mark it
-#: transport metadata rather than an op param.
 SETTINGS_HOME_FIELD = "_settings_home"
 
 
@@ -126,31 +121,12 @@ def request_claim(msg: Any) -> Optional[str]:
 
 
 def _normalized(path: str) -> str:
-    """Case- and separator-normalized absolute form, trailing separators dropped.
-
-    `normcase` is what makes this correct on Windows, where the same directory is
-    routinely spelled with either slash and either case by the two sides of this
-    comparison (a door built by `wide_to_utf8` from `GetCurrentDirectoryW` and a Python
-    `Path.home()` join do not agree on either), and where a spelling difference is
-    emphatically not a different home.
-    """
     normalized = os.path.normcase(os.path.abspath(path))
     stripped = normalized.rstrip("/\\")
     return stripped or normalized
 
 
 def claims_agree(claim: Optional[str], resolved: str) -> bool:
-    """True when *claim* names the same directory the serving process resolved.
-
-    No claim agrees with anything -- see the module docstring on why absence may never
-    refuse.
-
-    Two comparisons, in cost order. The lexical one settles every ordinary case without
-    touching the disk. Only when it fails does this reach for `os.path.realpath` on both
-    sides, which is the one thing that distinguishes "a symlinked or 8.3-shortened
-    spelling of the same home" from "a different home" -- a stat pair spent exclusively on
-    a request that is otherwise about to be refused, never on the serving path.
-    """
     if claim is None:
         return True
     if _normalized(claim) == _normalized(resolved):
@@ -158,9 +134,6 @@ def claims_agree(claim: Optional[str], resolved: str) -> bool:
     try:
         return _normalized(os.path.realpath(claim)) == _normalized(os.path.realpath(resolved))
     except OSError:
-        # An unresolvable path is not evidence of agreement. Default posture on ambiguity
-        # is deny -- the same posture the guard directories this defect endangers state
-        # for themselves.
         return False
 
 

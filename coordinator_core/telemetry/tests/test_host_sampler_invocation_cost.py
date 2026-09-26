@@ -52,11 +52,6 @@ def _require_supported_platform() -> None:
 
 
 def test_direct_script_invocation_avoids_package_init(tmp_path: Path) -> None:
-    """The deployed invocation path (``python <path>\\host_sampler.py``)
-    must never execute ``coordinator_core/__init__.py`` -- that is the
-    entire point of the fix. Verified by running the script in a fresh
-    subprocess and asking it to report whether ``coordinator_core`` ever
-    landed in ``sys.modules``."""
     (tmp_path / ".git").mkdir()
     probe = tmp_path / "probe.py"
     probe.write_text(
@@ -123,10 +118,6 @@ def test_end_to_end_invocation_cost_ratchet(tmp_path: Path) -> None:
         "ratchet."
     )
 
-    # Spawn-count leg: the module's contract is "no subprocess spawn
-    # anywhere" -- compare against the bare floor of a same-test batch, so
-    # this stays correct even under a venv redirector that is itself two
-    # processes.
     floor_result = batched_process_time_ms(
         [sys.executable, "-c", "pass"], k=10, cwd=str(tmp_path)
     )

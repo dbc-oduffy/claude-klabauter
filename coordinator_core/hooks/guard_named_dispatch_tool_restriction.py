@@ -64,10 +64,6 @@ from coordinator_core.ipc import register_op
 
 @register_op("hooks.guard_named_dispatch_tool_restriction")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PreToolUse(Agent) op: offer to strip `name` off a named Explore/Plan
-    dispatch, denying only on this guard's own fail-closed leg."""
-    # Normalize the two params shapes
-    # both engine doors and the cold chain send (see block_worktree_tool).
     params = payload_of(params)
     if not params:
         return no_advisory()
@@ -81,7 +77,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     try:
         result = compute_named_dispatch_result(tool_input)
     except Exception:
-        return no_advisory()  # unexpected failure before any decision -> allow
+        return no_advisory()
 
     if result is None:
         return no_advisory()

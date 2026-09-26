@@ -1,16 +1,3 @@
-"""Regression test for the bug-backlog record
-2026-09-11-two-prose-flags-outside-the-file-sibling--4d564a81a0b0.yaml:
-`backlog-grind-assemble apply --message` had no `-file` sibling and silently
-truncated a multi-line commit body to its first line on a `.cmd`-forwarded
-Windows argv (the same class the 14-entry -file-sibling table exists to
-close). This test pins that `--message-file` now round-trips a multi-line
-body byte-exact through `_build_wave_path_directives`'s own `message` field,
-and that `--message`/`--message-file` remain mutually exclusive.
-
-Negative-spec: does NOT exercise the live `git commit` path (no repo
-fixture) -- it pins argv resolution only, the layer this record's defect
-actually lived in.
-"""
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,26 +1,3 @@
-"""
-coordinator_core.baton_assemble.tests.test_apply_op_dispatch -- C5 coverage
-proving the plan's discriminator on baton_assemble's seven-entry table, the
-mixed-outcome case pickup_assemble's (C4) all-cli/none-migrate table did not
-exercise.
-
-Purpose: `baton_assemble` has three dotted (op-shaped) verb names --
-`handoff.stamp_phase`, `handoff.author_fork`, `handoff.supersede_predecessor`
--- and, per the plan's own discriminator ("a verb is op-named iff it resolves
-to a registered op"), only the first two actually migrate:
-`handoff.supersede_predecessor` is NOT a registered op despite its op-shaped
-name, and stays `cli`-named. This is "exactly the trap this chunk exists to
-catch" (plan § C5 body), confirmed live here rather than only asserted in a
-comment.
-
-Two positive proofs (a migrated verb reaches its handler through BOTH the
-`op` seam, allowlisted, and the unchanged `cli` seam) plus the same negative
-proof pattern C4 established for a verb that does not migrate.
-
-Spec backlink: docs/plans/2026-08-19-directives-name-an-op-not-a-cli.md § C5
-
-No process spawn, no git -- fast tier.
-"""
 
 from __future__ import annotations
 
@@ -54,16 +31,10 @@ def test_baton_cli_verbs_are_the_expected_closed_set() -> None:
 
 
 def test_op_migrated_verbs_constant_matches_the_authz_allowlist() -> None:
-    # The one place C5's discriminator decision and the authz allowlist
-    # could silently diverge -- pinned against each other rather than each
-    # only against a comment.
     assert ba_apply._OP_MIGRATED_VERBS == ASSEMBLER_DISPATCHABLE["baton_assemble"]
 
 
 class TestDiscriminatorFindingCheckedLive:
-    """The C5 measured finding, checked live rather than only asserted in a
-    comment: exactly two of baton's three dotted names resolve to a
-    registered op; the third does not, despite its op-shaped name."""
 
     def test_migrated_verbs_are_registered(self) -> None:
         registry = _live_registry()
@@ -80,8 +51,6 @@ class TestDiscriminatorFindingCheckedLive:
 
 
 class TestMigrateOpNamedDirectives:
-    """`_migrate_op_named_directives` -- the one seam this chunk uses to
-    rewrite a directive's key without touching `_build_directives`."""
 
     def test_migrated_verb_gets_rewritten_to_op_key(self) -> None:
         directives = [{"id": "d3", "cli": "handoff.author_fork", "args": ["x"]}]
@@ -139,10 +108,6 @@ class TestResolveOpForMigratedVerbs:
 
 
 class TestResolveOpReachesNothingForNonMigratedVerbs:
-    """AC8's shape (mirrors C4's negative proof): attempting to dispatch any
-    of baton's five non-migrated verbs -- including the op-shaped-but-
-    unregistered `handoff.supersede_predecessor` -- via the `op` seam is
-    refused."""
 
     @pytest.mark.parametrize("verb", _NON_MIGRATED_VERBS)
     def test_resolve_op_refuses_each_non_migrated_verb(self, verb: str) -> None:
@@ -177,14 +142,6 @@ class TestExecuteDirectivesThreadsAssemblerName:
     def test_execute_directives_threads_assembler_name_into_apply_base(
         self, monkeypatch, tmp_path
     ) -> None:
-        """Replaces the prior version (cold review 2026-08-19, Test-quality
-        table): the test above calls `apply_base.execute_directives`
-        directly and passes `assembler_name="baton_assemble"` itself, so it
-        stays green even if that kwarg were deleted from
-        `baton_assemble.apply._execute_directives` -- the exact property
-        this class's docstring claims. This calls the module's OWN
-        `_execute_directives` wrapper and monkeypatches `apply_base.
-        execute_directives` to capture what it actually threads through."""
         captured: dict[str, Any] = {}
 
         def _fake_execute_directives(directives, judgment_points, repo_root, dispatch_table, **kwargs):
@@ -197,12 +154,6 @@ class TestExecuteDirectivesThreadsAssemblerName:
 
 
 class TestCliKeyedMigratedVerbIsRefused:
-    """F2 (cold review 2026-08-19): a migrated verb arriving `cli`-keyed
-    (rather than `op`-keyed, `_migrate_op_named_directives`'s own output
-    shape) must be refused before dispatch -- the `cli` key is otherwise
-    ungated (`apply_base.resolve_cli` never calls `assert_dispatchable`),
-    so a directive that bypassed the migration rewrite would reach the
-    same handler with the admission control silently absent."""
 
     def test_cli_keyed_handoff_stamp_phase_reaches_nothing(self, tmp_path) -> None:
         directives = [{"id": "d1", "cli": "handoff.stamp_phase", "args": ["x"]}]

@@ -87,76 +87,26 @@ from pathlib import Path
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
-# The subprocess below spawns a fresh interpreter that imports coordinator_core.
-# That child inherits cwd but NOT pytest's rootdir sys.path insertion, so it can
-# only resolve the package when cwd is (or is under) the repo root -- from any
-# other cwd it dies with ModuleNotFoundError before it can write anything to
-# stdout/stderr. Pinning cwd to the repo root derived from this file's own path
-# makes the subprocess resolvable regardless of the invoking shell's cwd.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Number of independent subprocess samples to take, asserting on the minimum (see
-# module docstring's "Estimator note"). This check is now a coarse catastrophic-
-# blowup net, not the precise guard (see "Primary guard" in the module docstring)
-# -- the 350ms bound has ~1.7x headroom over the worst sustained-contention
-# sample observed (207ms), which a SINGLE sample would clear just as reliably as
-# a minimum-of-many. The min-of-N mechanism was bought to noise-filter a tight,
-# precise bound that no longer exists; kept at 2 (not 1) purely as cheap
-# redundancy against a one-off subprocess-spawn anomaly, not because the
-# catastrophic bound needs noise-filtering. Each sample spawns a fresh
-# interpreter at ~80-100ms+, so keeping this low matters under the parallel fast
-# tier this deflake was meant to stop burdening.
 _SAMPLE_COUNT = 2
 
-# Heavy modules named in the module docstring's deferral history, asserted ABSENT
-# from `sys.modules` after importing `coordinator_core.pickup_assemble`. `pydantic`
-# is confirmed absent as of this test's authorship (verified via a fresh-subprocess
-# `sys.modules` diff, see `_imported_module_names`). `asyncio` is named in the same
-# docstring passage but is NOT included here: it is currently PRESENT (see the
 # docstring's "long tail of additional _EAGER_OP_MODULES leaves ... still import
-# asyncio at module scope" note) -- asserting its absence today would land a
-# red test. Add it back here only once that residual is actually closed.
 _HEAVY_MODULES_EXPECTED_ABSENT = ("pydantic",)
 
-# Third-party (non-stdlib, non-`coordinator_core`) top-level packages this import is
-# allowed to pull in. `yaml` is the only real entry; `_cython_3_1_4` and
-# `cython_runtime` are artifacts of PyYAML's C extension (`yaml._yaml`) and appear
-# only where libyaml is installed, so both are tolerated rather than required.
-# This is the guard that actually answers "did a new heavy subtree get dragged in
-# transitively" -- by NAME, deterministically, with no count to keep re-pinning.
 _THIRD_PARTY_ALLOWED = frozenset({"yaml", "_cython_3_1_4", "cython_runtime"})
 
 # Ceiling on the EXTERNAL (non-`coordinator_core`) module count -- 133 measured on
-# this machine/Python version, ~28% headroom. Deliberately NOT a ceiling on the
-# whole imported set: 443 of the 576 modules imported here are `coordinator_core`'s
-# own, and that number grows every time an op module is added to
 # `ops/__init__.py::_EAGER_OP_MODULES` -- a whole-set ceiling therefore rots by
-# construction (it went red in a week of ordinary op growth, 522 -> 576, with the
-# external set unchanged and no heavy subtree anywhere near it). The external count
-# is what a genuine new subtree moves, and it is stable against in-repo growth.
-# Headroom here absorbs platform-specific stdlib substitutions (POSIX's
-# `_posixsubprocess` vs Windows's `_winapi`/`_wmi`, psutil's per-OS leaf modules).
-#
-# Negative-spec: do NOT re-add a whole-set count ceiling "for completeness" -- the
-# in-repo module count is not a property this test has any opinion about, and pinning
-# it only buys a recurring red test with no signal in it.
 _EXTERNAL_MODULE_COUNT_CEILING = 170
 
 
 def _imported_module_names() -> list[str]:
-    """Return the `sys.modules` keys newly added by importing the target module.
-
-    Runs in a fresh subprocess (no pollution from the test runner's own prior
-    imports) and diffs `sys.modules` before/after the import, returning the
-    newly-added names as JSON on stdout.
-    """
     probe = (
         "import sys, json\n"
         "before = set(sys.modules)\n"
@@ -176,21 +126,6 @@ def _imported_module_names() -> list[str]:
 
 
 def _sample_import_cost_ms() -> float:
-    """Run one fresh-interpreter sample and return the import's CPU-time cost in ms.
-
-    CPU time (`time.process_time`), NOT wall-clock. Wall-clock was measured
-    unusable for this bound at any threshold: on a machine running a parallel
-    test tier, wall-clock samples for this import spanned 382-786ms against an
-    idle cost of ~94ms, while `process_time` for the same import on the same
-    loaded machine held at 184-202ms against ~98ms idle. Descheduling inflates
-    elapsed time without inflating consumed CPU, so `process_time` is the only
-    one of the two that still measures the import rather than the machine.
-    Widening the wall-clock bound instead does not work — 786ms already exceeds
-    any threshold that would still catch a real regression.
-
-    Uses a subprocess so the interpreter is fresh and `sys.modules` carries no
-    pollution from the test runner's own prior imports.
-    """
     probe = (
         "import time\n"
         "t0 = time.process_time()\n"
@@ -274,15 +209,6 @@ def test_pickup_assemble_import_floor() -> None:
     min_ms = min(samples_ms)
 
     # Widened CATASTROPHIC-blowup bound, not a precise floor (see docstring above --
-    # `test_pickup_assemble_import_modules` carries the precision now). Measured in
-    # CPU time, not wall-clock, per `_sample_import_cost_ms`: ~98ms idle, 184-202ms
-    # on a machine saturated by a parallel test tier. 350ms clears that loaded
-    # worst case with ~1.7x margin while still catching a real regression back
-    # toward the pre-fix ~125-160ms idle baseline.
-    #
-    # Do NOT restore a wall-clock measurement here on the theory that a wide enough
-    # bound is safe -- wall-clock for this import was measured at 382-786ms on that
-    # same loaded machine, so no bound both survives load and catches a regression.
     floor_ms = 350.0
     assert min_ms <= floor_ms, (
         f"coordinator_core.pickup_assemble import cost regressed: minimum of "

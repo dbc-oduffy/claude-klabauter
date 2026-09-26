@@ -53,14 +53,10 @@ pytestmark = [
         shutil.which("curl") is None, reason="curl is the transport under measurement"
     ),
     # SPAWNS REAL PROCESSES, ON A BOX RUNNING DOZENS OF PEERS. Marked so it
-    # runs at a cadence gate rather than per-commit: ~14 spawns to take one
-    # number is a fair price occasionally and an antisocial one every commit.
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
-#: Samples per measurement. k>=6 per AC7; the median is reported so one
-#: descheduled sample on a box running dozens of peers cannot decide a verdict.
 SAMPLES = 6
 
 
@@ -143,9 +139,6 @@ def test_curl_reaches_the_credentialed_listener_using_only_the_config(
 def test_an_uncredentialed_curl_is_refused_by_the_same_listener(
     credentialed_listener,
 ):
-    """The control that makes the test above mean something: WITHOUT the
-    config, the same request against a non-exempt path is refused. Otherwise
-    a listener that ignored the cookie entirely would pass identically."""
     port, _root = credentialed_listener
     proc = subprocess.run(
         [
@@ -186,29 +179,18 @@ def test_the_delivery_costs_one_spawn_and_stays_under_the_brightline(
     """
     port, root = credentialed_listener
     url = f"http://127.0.0.1:{port}{supervisor.HEALTH_PATH}"
-    null = os.devnull  # NUL on Windows, /dev/null elsewhere -- never hard-coded
+    null = os.devnull
 
     curl_argv = [
         "curl", "--silent", "--config", str(cookie.curl_config_path(root)),
         "--output", null, url,
     ]
-    # `sys.executable`, never a bare "python": on many POSIX installs only
-    # `python3` is on PATH, so the bare name would raise FileNotFoundError
-    # rather than skip. It is also the more honest floor -- the interpreter
-    # this repo actually pays for, not whatever PATH resolves to.
     interp_argv = [sys.executable, "-c", "pass"]
 
-    # One warm-up each, discarded: the first spawn pays page-cache and loader
-    # costs that no steady-state caller pays, and including it would flatter
-    # neither side honestly.
     _spawn_elapsed_ms(curl_argv)
     _spawn_elapsed_ms(interp_argv)
 
     # INTERLEAVED, not one batch then the other: a load spike that lands
-    # during a contiguous run of one side would be read as that side being
-    # slower. Alternating puts both under the same conditions sample by
-    # sample, which keeps the printed comparison honest even though only
-    # the curl leg is asserted against.
     curl_samples, interp_samples = [], []
     for _ in range(SAMPLES):
         curl_samples.append(_spawn_elapsed_ms(curl_argv))
@@ -246,16 +228,6 @@ def test_the_delivery_costs_one_spawn_and_stays_under_the_brightline(
 def test_a_curl_leg_slower_than_the_interpreter_leg_does_not_fail_the_case(
     credentialed_listener, capsys, monkeypatch
 ):
-    """Regression test for state/bug-backlog/2026-08-31-ac7-delivery-ratio-does-
-    not-cancel-load-as-its-author-intended.yaml.
-
-    Replays the row's own run-2 evidence (curl 169.88ms vs bare interpreter
-    83.81ms, both well under the 500ms brightline) with `_spawn_elapsed_ms`
-    stubbed so no process is actually spawned. Under load, only the curl leg
-    pays server-side queueing, so curl losing the ratio to the interpreter is
-    expected, not a regression -- the case must still pass on the generous
-    ceiling alone.
-    """
     def fake_elapsed(argv, **_kwargs):
         return 169.88 if argv[0] == "curl" else 83.81
 

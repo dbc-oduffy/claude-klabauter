@@ -139,7 +139,7 @@ Sibling: coordinator/bin/coordinator-postsync-marker-resync-check
 
 from __future__ import annotations
 
-GENERATES = []  # writes only a per-machine sentinel and kill-switch marker under settings-home, outside claude-klabauter's own tracked tree
+GENERATES = []
 
 import json
 import os
@@ -159,19 +159,10 @@ from coordinator_core.ops.session.guard_settings_integrity import (
     read_installed_plugin_records,
 )
 
-# Match on the `coordinator@` NAME PREFIX, not the full
-# `coordinator@coordinator-claude` key -- a fork or renamed marketplace
-# (e.g. `coordinator@my-fork`) must still be recognized as a live
-# marketplace/OSS install of this same plugin.
 _COORDINATOR_PLUGIN_PREFIX = "coordinator@"
 
-# Marker re-arm window: the marker this probe writes (see `_render...` below,
-# schema shared with `guard_settings_integrity._read_kill_switch_marker`)
 # expires quickly on purpose -- this marker records a DETECTED BREAKAGE, not
-# an operator's deliberate long-lived opt-out, so it should escalate back to
 # the loud MALFORMED-adjacent "EXPIRED" banner soon if nobody has looked at
-# it, rather than sitting silent behind the one-line not-expired router for
-# months the way an operator-armed marker legitimately can.
 _REARM_EXPIRY_DAYS = 7
 
 _SENTINEL_NAME = ".coordinator-content-root-last-seen"
@@ -185,7 +176,6 @@ def _resolve_config_dir(config_dir: Optional[Path]) -> Path:
 
 
 def _atomic_write_text(path: Path, content: str) -> bool:
-    """Best-effort atomic write; never raises. Returns True on success."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
@@ -269,13 +259,6 @@ def _is_marketplace_install_live(config_dir: Path) -> bool:
     for key in matching_keys:
         if enabled.get(key) is not True:
             continue
-        # installed_plugins.json stores
-        # a LIST of records per key (user-scope + project-scope installs can
-        # both exist under the same key), and a stale/destroyed first record
-        # must not shadow a live, healthy later one. Iterate every record
-        # under this key and return True on the first that passes the stat
-        # check -- "ANY of" semantics, matching the non-empty-record-list
-        # filter `matching_keys` already applies.
         for record in plugins[key]:
             if not isinstance(record, dict):
                 continue
@@ -314,33 +297,12 @@ def run_self_probe(config_dir: Optional[Path] = None) -> str:
     """
     try:
         resolved_config_dir = _resolve_config_dir(config_dir)
-        # os.environ is sound here (not a stale daemon's boot-time env):
-        # DR-215/C5 removed the UDS daemon transport, and coordinator_core.ipc's
-        # own module docstring confirms the engine is now in-process/command-
-        # type — `dispatch_message` is called directly by each caller, no
-        # socket, no persistent service loop. So every hook/op invocation
-        # (including this SessionStart probe) runs in a fresh process whose
-        # os.environ the harness populates from THIS session's settings.json
-        # `env` block, not a resurfaced value from an earlier boot.
         content_root = os.environ.get(COORDINATOR_CONTENT_ROOT_ENV_KEY, "")
         is_empty = not content_root or not os.path.isdir(content_root)
 
-        # Classify BEFORE writing the sentinel, not after. `resolved_ok=false`
         # is the EXPECTED steady state on a `--plugin-dir` or marketplace-live
-        # machine (see the two carve-outs below), so a sentinel carrying only
-        # that line reads as a fault on a perfectly healthy box — it has
-        # already cost one investigation that got as far as auditing a
-        # stood-down kill-switch marker before the carve-outs explained it.
         # The sentinel is a human-facing breadcrumb; recording the RESOLUTION
         # without the CLASSIFICATION is what made it misleading.
-        #
-        # Both discriminators are the same cheap probes the carve-outs run
-        # (`is_inline_install`: a `.doe-root` read plus one live `isdir`;
-        # `_is_marketplace_install_live`: the harness's own installed-plugins
-        # registry plus a stat) — computed once here and REUSED below, never
-        # called twice, so this preserves the module's no-subprocess
-        # "cheap by construction" contract. Neither runs at all when the
-        # content root resolved, which is the majority path.
         inline_install = is_inline_install(resolved_config_dir) if is_empty else False
         marketplace_live = (
             _is_marketplace_install_live(resolved_config_dir)
@@ -362,74 +324,26 @@ def run_self_probe(config_dir: Optional[Path] = None) -> str:
             f"resolved_ok={'false' if is_empty else 'true'}\n"
             f"verdict={verdict}\n"
         )
-        _atomic_write_text(sentinel, sentinel_body)  # best-effort; failure is silent
+        _atomic_write_text(sentinel, sentinel_body)
 
         if not is_empty:
             return ""
 
-        # Discriminator: an inline (`--plugin-dir`) dev install serves hook
         # delivery live from its clone (`${CLAUDE_PLUGIN_ROOT}`/CLAUDE_PLUGIN_ROOT
-        # resolution) and never touches `gen_settings_hooks`/
         # COORDINATOR_CONTENT_ROOT at all — an empty/unresolvable content root
         # on such a machine is the EXPECTED healthy shape (see
-        # `gen_settings_hooks.generate()`'s own "skipped (plugin delivery
-        # already live)" early-return), not a broken one. Reuses
-        # `guard_settings_integrity.is_inline_install` verbatim — the SAME
-        # carve-out that module's own clobber lens and reconciliation lens
-        # already apply twice for `--plugin-dir` machines, not a third
-        # independently-derived check.
-        #
-        # NARROW carve-out, not a general disarm: `is_inline_install` is a
-        # LIVE existence probe — it re-verifies `<doe-root>/coordinator`
-        # exists on disk RIGHT NOW, not merely that a `.doe-root` file was
-        # once written. A machine whose actual coordinator clone has since
-        # been destroyed (the true-positive shape this probe exists to
-        # catch — see this dispatch's report for the confirmed 2026-07-31
-        # incident) still fails this check and falls through to the arm
-        # path below; a stale `.doe-root` pointer to a now-missing directory
-        # does NOT get read as "healthy".
-        #
-        # Deliberately NOT `gen_settings_hooks.positive_marker_path()`
         # (`.coordinator-hooks-enabled`): that marker's PRESENCE means the
         # OPPOSITE of what's needed here — it records that a machine has
-        # opted INTO settings.json-baked hook generation, i.e. that it DOES
         # depend on COORDINATOR_CONTENT_ROOT resolving. Treating its
-        # presence as "safe to suppress" would misclassify exactly the
-        # true-positive shape (a previously-generating machine whose content
-        # root just broke).
-        #
-        # Deliberately NOT `guard_settings_integrity._plugin_side_reachable`/
-        # `detect_hook_delivery_duplication`: both call
-        # `resolve_content_root()`, whose dev/passthrough registry rungs can
-        # shell out to `machine-local get` on a cache miss — the exact
-        # subprocess-per-SessionStart cost this module's own docstring rules
-        # out (see "Cheap by construction" above).
-        #
-        # This check covers the inline `--plugin-dir` shape ONLY. A pure
-        # OSS/marketplace install carries no `.doe-root` at all and is
-        # covered by `_is_marketplace_install_live` immediately below —
-        # the two branches are disjoint by construction, and the OSS one
-        # is the majority shape, so neither may be dropped as redundant.
-        if inline_install:  # computed once above; same probe, same semantics
+        if inline_install:
             return ""
 
-        # Marketplace/OSS carve-out (added 2026-07-31): the ONLY thing
-        # `is_inline_install` above covers is a DoE `--plugin-dir` dev
-        # install (`.doe-root` present) -- the majority of coordinator
-        # users install via the marketplace/OSS path and have no
-        # `.doe-root` at all, so without this second OR-branch this probe
-        # still false-positives and arms the kill switch for them. See
-        # `_is_marketplace_install_live`'s own docstring for the exact
-        # discriminator (harness's own installed-plugins registry,
-        # validated by a stat -- never trusted bare).
-        if marketplace_live:  # computed once above; same probe, same semantics
+        if marketplace_live:
             return ""
 
         settings_out = resolve_settings_out_path(str(resolved_config_dir / "settings.json"))
         marker = kill_switch_marker_path(settings_out)
         if marker.is_file():
-            # Already armed (by this probe on a prior boot, an operator, or
-            # the post-sync gate) — nothing new to report.
             return ""
 
         try:
@@ -437,11 +351,8 @@ def run_self_probe(config_dir: Optional[Path] = None) -> str:
             since = date.today()
             expires = since + timedelta(days=_REARM_EXPIRY_DAYS)
             marker.write_text(
-                # Schema-valid for `guard_settings_integrity._read_kill_switch_marker`
                 # (requires a parseable `Expires: YYYY-MM-DD` line) — a marker
-                # this probe writes must never land that sibling parser's
                 # MALFORMED branch (see this dispatch's report; a `#`-comment-
-                # only marker previously did exactly that on every boot).
                 f"Since: {since.isoformat()}\n"
                 f"Expires: {expires.isoformat()}\n"
                 "Reason: guard_hook_generation_self_probe.py detected an "

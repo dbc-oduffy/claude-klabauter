@@ -1,38 +1,3 @@
-"""
-coordinator_core.ops.session.tests.test_guard_settings_integrity
-
-Tests for the session.guard_settings_integrity reconciliation lens — the
-declared-true-but-unreachable-plugin detector added alongside the pre-existing
-clobber lens (2026-07-28, example-game-repo/example-game-repo-control/game-dev incident: all
-three read `enabledPlugins: true` for days while loading nothing; a separate
-MCP `.mcp.json` connection kept working and camouflaged the gap).
-
-Import guard: coordinator_core.ops.session.guard_settings_integrity MUST be
-imported at module load time to fire the @register_op(...) side-effect
-(pcore-11 registry-completeness pattern) — done implicitly here via the
-direct `evaluate_settings_integrity` import, which is also the function under
-test (mirrors the DoE stub's own direct-import call shape, not the async IPC
-handler).
-
-Coverage (reconciliation lens only — the pre-existing clobber-lens tests
-live in the DoE-side pytest port, coordinator/tests/test_guard_settings_
-integrity.py, which exercises this op indirectly through the hook script):
-  - declared-true and installed (non-empty record) -> silent
-  - declared-true and absent from installed_plugins.json -> banner naming
-    the key, with the exact remediation lines
-  - declared-false and absent -> silent (opt-outs are never flagged)
-  - installed_plugins.json missing -> silent (fail-open: cannot verify)
-  - installed_plugins.json malformed (invalid JSON / non-dict / no
-    "plugins" key) -> silent (fail-open)
-  - inline dev-source (--plugin-dir) install (.doe-root present, resolves)
-    -> silent even with an unreachable declared-true key (whole-lens
-    carve-out; no per-key way to isolate "this key IS the inline install")
-  - multiple unreachable keys -> banner names every one of them
-
-Negative-spec: does NOT re-test the clobber lens (restore-from-snapshot,
-restore-from-git-HEAD, inline-install clobber carve-out) — those are
-unchanged by this addition and already covered by the DoE-side hook tests.
-"""
 
 from __future__ import annotations
 
@@ -52,8 +17,6 @@ from coordinator_core.ops.detect_guardless_sessions import (
     ProcessObservation,
 )
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -62,20 +25,6 @@ pytestmark = [
 
 @pytest.fixture(autouse=True)
 def _hook_layer_always_reachable(monkeypatch):
-    """This module exercises the reconciliation lens (declared-true-vs-
-    installed) added atop the pre-existing clobber lens — a concern
-    orthogonal to hook-layer reachability (`_is_healthy`'s 2026-07-28
-    conjunct; dedicated coverage lives in
-    test_guard_settings_integrity_hook_layer.py). None of this module's
-    fixtures set up a resolvable coordinator content root or a settings-side
-    `hooks` block, and the autouse HOME-quarantine fixture elsewhere in this
-    tree (`coordinator_core/conftest.py::_quarantine_real_home`) means the
-    live resolver can't find one either — so without this override every
-    fixture here would fail the NEW hook-layer conjunct and never reach the
-    reconciliation lens this module actually tests. Force reachable so
-    `_is_healthy` behaves exactly as it did pre-hook-layer for this module's
-    purposes, matching "tests follow production" (the production predicate
-    is unchanged; this narrows what THIS module is exercising)."""
     monkeypatch.setattr(_gsi, "_hook_layer_reachable", lambda settings_data: True)
 
 
@@ -111,17 +60,11 @@ def test_declared_true_and_absent_bannered(tmp_path):
 
     text = evaluate_settings_integrity(config_dir)
     assert "example-game-repo@example-game-workbench-repo" in text
-    # No declared directory for this marketplace in settings, so the banner
-    # names the marketplace in the placeholder rather than emitting a bare
-    # `<dir>` the operator cannot act on.
     assert "claude plugin marketplace add <example-game-workbench-repo checkout dir>" in text
     assert "claude plugin install example-game-repo@example-game-workbench-repo" in text
 
 
 def test_banner_resolves_declared_marketplace_dir_once(tmp_path):
-    """Two unreachable plugins from ONE marketplace with a declared path ->
-    the real path appears, and `marketplace add` is emitted once, not per
-    plugin. Repeated boilerplate is what trains operators to skim banners."""
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     settings = {
@@ -146,8 +89,6 @@ def test_banner_resolves_declared_marketplace_dir_once(tmp_path):
 
 
 def test_malformed_extra_known_marketplaces_still_banners(tmp_path):
-    """A junk `extraKnownMarketplaces` shape must not break the banner — path
-    resolution is best-effort decoration on top of a fail-open guard."""
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     settings = {
@@ -176,7 +117,6 @@ def test_missing_installed_plugins_json_is_silent(tmp_path):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     _write_settings(config_dir, {"foo@bar": True})
-    # No plugins/installed_plugins.json written at all.
 
     text = evaluate_settings_integrity(config_dir)
     assert text == ""
@@ -215,7 +155,6 @@ def test_inline_dev_source_install_is_silent_even_with_unreachable_key(tmp_path)
     (doe_clone / "coordinator").mkdir(parents=True)
     (config_dir / ".doe-root").write_text(str(doe_clone), encoding="utf-8")
     _write_settings(config_dir, {"coordinator-claude@local": True})
-    # No installed_plugins.json at all -- would otherwise be unreachable.
 
     text = evaluate_settings_integrity(config_dir)
     assert text == ""
@@ -240,17 +179,6 @@ def test_multiple_unreachable_keys_all_named(tmp_path):
     assert "example-game-repo-control@example-game-workbench-repo" in text
     assert "game-dev@example-game-workbench-repo" in text
     assert "context7@claude-plugins-official" not in text
-
-
-# ---------------------------------------------------------------------------
-# evaluate_plugin_gating_drift -- 2026-08-14 config-value drift detector
-# (state/subagent-share/ed69af78-ccc1-4efc-8b58-4cc93cb3b461/
-# coordinatorstaff-eng-3c57c48d.md). Uses the real
-# `plugin_gating_contract.json` shipped beside the module (all-`False`
-# today) rather than monkeypatching it -- these tests pin behavior against
-# the live contract, matching the fixture-not-real-settings.json discipline
-# for the OTHER file this module reads.
-# ---------------------------------------------------------------------------
 
 
 def test_plugin_gating_drift_fires_on_drifted_fixture(tmp_path):
@@ -291,7 +219,6 @@ def test_plugin_gating_drift_silent_on_shipped_default(tmp_path):
 def test_plugin_gating_drift_silent_on_missing_settings_file(tmp_path):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
-    # No settings.json written at all.
 
     assert evaluate_plugin_gating_drift(config_dir) == ""
 
@@ -333,15 +260,6 @@ def test_plugin_gating_drift_silent_on_unreadable_contract(tmp_path, monkeypatch
     assert evaluate_plugin_gating_drift(config_dir) == ""
 
 
-# ---------------------------------------------------------------------------
-# evaluate_guardless_sessions -- 2026-08-14 unguarded-peer-session detector
-# (state/bug-backlog/2026-08-14-a-live-session-is-running-plugin-dir-les-
-# 2ee0e6522f92.yaml). Injects the underlying
-# `coordinator_core.ops.detect_guardless_sessions.detect` verdict directly --
-# never enumerates real processes in a test (brief requirement).
-# ---------------------------------------------------------------------------
-
-
 def test_guardless_sessions_fires_and_names_pid(monkeypatch):
     monkeypatch.setattr(
         "coordinator_core.ops.detect_guardless_sessions.detect",
@@ -375,7 +293,7 @@ def test_guardless_sessions_silent_when_all_guarded(monkeypatch):
             observed=[
                 ProcessObservation(
                     pid=43052,
-                    command_line='claude.exe --plugin-dir X:/DoE-claude/coordinator',  # abs-path-ok: fixture-only placeholder command line, not a real host path
+                    command_line='claude.exe --plugin-dir X:/DoE-claude/coordinator',
                     guarded=True,
                 )
             ],
@@ -410,14 +328,6 @@ def test_guardless_sessions_silent_on_empty_observations(monkeypatch):
 def test_evaluate_settings_integrity_composes_guardless_session_banner(
     tmp_path, monkeypatch
 ):
-    """`evaluate_settings_integrity` -- the function the registered SessionStart
-    op (`session.guard_settings_integrity` -> `_handler`) actually calls -- must
-    surface a guardless peer session, not merely `evaluate_guardless_sessions`
-    in isolation (see that function's own test coverage above). A guardless
-    session cannot self-report (see module section docstring), so an already-
-    guarded peer's OWN SessionStart hook is the only path this signal has to
-    reach an EM at all; a wired-but-uncalled lens is indistinguishable from no
-    lens."""
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     _write_settings(config_dir, {"foo@bar": True})
@@ -449,9 +359,6 @@ def test_evaluate_settings_integrity_composes_guardless_session_banner(
 def test_evaluate_settings_integrity_own_config_banner_survives_guardless_composition(
     tmp_path, monkeypatch
 ):
-    """Composition must not let either lens clobber the other: an own-config
-    banner (declared-true-but-unreachable plugin) and a guardless-peer banner
-    firing together both reach the returned text."""
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     _write_settings(config_dir, {"example-game-repo@example-game-workbench-repo": True})
@@ -477,8 +384,6 @@ def test_evaluate_settings_integrity_own_config_banner_survives_guardless_compos
 
 
 def test_is_inline_install_true_on_flat_published_mirror(tmp_path):
-    """A container registers the flat mirror: its repo root IS the content root,
-    gated by `.claude-plugin/plugin.json`, with no `coordinator/` segment."""
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     mirror = tmp_path / "coordinator-claude"
@@ -501,8 +406,6 @@ def test_is_inline_install_false_on_bare_directory(tmp_path):
 
 @pytest.mark.parametrize("migrated_body", ["", "/nonexistent/DoE-claude\n"])
 def test_non_live_migrated_rung_does_not_shadow_live_legacy(tmp_path, monkeypatch, migrated_body):
-    """A migrated pointer caught blank mid-rewrite (or stale) armed the
-    kill-switch on a live inline install by shadowing the live legacy rung."""
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     settings_home = tmp_path / "settings_home"

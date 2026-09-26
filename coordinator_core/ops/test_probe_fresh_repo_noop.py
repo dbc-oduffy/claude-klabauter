@@ -20,11 +20,6 @@ from coordinator_core.ops.probe_fresh_repo_noop import (
 )
 
 
-# ---------------------------------------------------------------------------
-# probe_fresh_repo — three-axis check
-# ---------------------------------------------------------------------------
-
-
 def test_fresh_repo_all_three_axes_met(tmp_path: Path) -> None:
     """A brand-new scaffold (no DIRECTORY.md, no archive/, no tasks/) is fresh."""
     is_fresh, reasons = probe_fresh_repo(tmp_path)
@@ -103,11 +98,6 @@ def test_all_three_axes_unmet(tmp_path: Path) -> None:
     assert len(reasons) == 3
 
 
-# ---------------------------------------------------------------------------
-# _probe_fresh_repo_noop — registered handler
-# ---------------------------------------------------------------------------
-
-
 def test_handler_fresh_repo_returns_contract_shape(tmp_path: Path) -> None:
     repo = tmp_path / "fresh-repo"
     repo.mkdir()
@@ -147,9 +137,6 @@ def test_handler_none_repo_root_raises() -> None:
 
 
 def test_handler_double_invocation_is_idempotent(tmp_path: Path) -> None:
-    """AC7 — a second invocation with identical inputs against an unchanged tree
-    is a safe no-op that returns the identical result (no mutation occurs at all,
-    so this also proves the check performs no side effects)."""
     repo = tmp_path / "repo"
     common_dir = repo / ".git"
     common_dir.mkdir(parents=True)

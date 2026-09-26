@@ -77,55 +77,14 @@ import sys
 from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 
-# Accepted `kind` values for a genuine roadmap stub, at the session-state
-# parent tier (AC1). `handoff.schema.json` x-schema-version 4.0.0 RETIRED
-# `spinoff-roadmap` (along with `spinoff-goal` and `spinoff-roadmap-creator`)
-# from `properties.kind.enum`, replacing it with `roadmap-baton` — the live
-# corpus and `coordinator/bin/coordinator-doc-new.py`'s scaffolder both emit
-# `kind: roadmap-baton` now. `spinoff-roadmap` stays accepted here because
-# `handoff-archived.schema.json` was deliberately WIDENED in the same 4.0.0
-# change to admit both vocabularies (the archived corpus permanently retains
-# the historical name), so an archived roadmap stub a session still holds a
-# claim on legitimately carries the retired spelling. Both values denote the
-# same "is this a roadmap stub" fact — accepting both preserves the AC1/AC4b
-# false-merge guard in full while matching the schema's actual accepted
-# vocabulary. Do NOT add `spinoff-goal`/`goal-seed`/`spinoff-roadmap-creator`/
-# `roadmap-seed` here — those are a different artifact class, not a roadmap
-# stub, and must keep failing the AC4b false-merge check.
-#
-# Sourced from `baton_class.kind_values_for_canonical("roadmap-baton")`
-# rather than a hand-paired literal — that accessor returns exactly
-# `["roadmap-baton", "spinoff-roadmap"]` (the only pre-rename alias whose
-# target is `roadmap-baton`), so this is the same membership, derived from
-# the single owning table instead of re-declaring the retired/successor
-# pair here. See `coordinator_core/frontmatter/baton_class.py`'s "Vocabulary
-# bridge" section and
-# `coordinator_core/tests/test_baton_class_is_the_only_membership_set.py`.
-#
-# This coupling is intended, made
 # explicit here rather than removed: a future `_PRE_RENAME_ALIASES` entry
-# targeting `roadmap-baton` widens this set automatically with no code change
-# at this call site, so `baton_class.py`'s own review discipline is now the
-# only gate on this membership.
 _ROADMAP_STUB_KINDS = frozenset(kind_values_for_canonical("roadmap-baton"))
 
-# The `doc_type` literal `coordinator-doc-new.py` scaffolds a sizing object
-# under (`state/sizings/<date>-<slug>.yaml`, `schema: sizing-object`). Named
-# here rather than inlined at the one gate that checks it, matching this
-# module's convention of a named membership constant over a bare literal.
 _SIZING_OBJECT_DOC_TYPE = "sizing-object"
 
 
 class DroppedDeliverableJoinError(RuntimeError):
-    """Raised when an active plan names no `deliverable_id` (absent field, unreadable
-    file, or literal `null` — all indistinguishable at this layer) and the predecessor
-    handoff's `deliverable_id` fallback also yields nothing.
-
-    This is distinct from the benign "no active plan / no predecessor at all" case
-    (nothing to carry from), which stays a silent mint-from-slug. This case has an
-    active plan in hand that dropped the join — it must fail loud, not degrade
-    silently into a fresh mint that severs the deliverable-spine thread.
-    """
+    pass
 
 
 class DivergentDeliverableIdError(RuntimeError):
@@ -498,10 +457,6 @@ def resolve_deliverable_and_initiative(
         read_frontmatter_field(predecessor, "deliverable_id") if predecessor_active else ""
     )
 
-    # Every rung of the cascade, in plan -> predecessor -> fan-in order. Each
-    # additional-predecessor rung degrades to "" when its path is not a readable
-    # file (R5) -- the SAME degrade the plan/predecessor rungs already apply above,
-    # not a new one invented for this arity.
     rungs: list[tuple[str | None, str]] = [
         (plan_file, plan_dlvr_id),
         (predecessor, predecessor_dlvr_id),
@@ -518,14 +473,6 @@ def resolve_deliverable_and_initiative(
     distinct_ids = {raw_id for _, raw_id in present_rungs}
 
     if len(distinct_ids) > 1:
-        # Windows-portability fix (discovered live re-running this stub's own
-        # test on a Windows host): `path` is already a plain path STRING, not
-        # a value that benefits from `!r`'s quoting -- reprising it double-
-        # escapes a Windows backslash-separated path (`repr()` renders each
-        # `\` as `\\`), which breaks a caller's plain `path in message`
-        # substring check on Windows only (POSIX paths have no backslash to
-        # escape, so this was invisible there). `raw_id` keeps `!r` -- ids
-        # never contain path separators.
         diverging = "; ".join(
             f"{path} names deliverable_id {raw_id!r}" for path, raw_id in present_rungs
         )
@@ -541,12 +488,6 @@ def resolve_deliverable_and_initiative(
     dlvr_id = plan_dlvr_id or predecessor_dlvr_id
 
     if not dlvr_id and plan_active:
-        # Windows-portability: paths are interpolated PLAIN, never `!r` --
-        # `repr()` doubles each backslash in a Windows path, which breaks a
-        # caller's plain `path in message` substring check on Windows only
-        # (POSIX paths have no separator to escape, so it is invisible there).
-        # Same fix, same reason as the DivergentDeliverableIdError message
-        # above; ids keep `!r` since they contain no separators.
         raise DroppedDeliverableJoinError(
             f"active plan '{plan_file}' names no deliverable_id (absent field, "
             "unreadable file, or literal `null` — all indistinguishable at this layer), "

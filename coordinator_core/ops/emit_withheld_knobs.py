@@ -64,43 +64,25 @@ from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
 from coordinator_core.session.declared_writes import declare_write
 
 #: Bumped only when an EXISTING field changes meaning or leaves. Adding a field, or adding
-#: an entry, is additive and does not bump — DoE's consumer reads by key.
 SCHEMA_VERSION = 1
 
 #: Output-dir override, mirroring `ARTIFACT_CONTRACT_OUT_DIR`'s role for the sibling op.
-#: Exists so the pin test can emit into a tmp_path without a DoE checkout present.
 OUT_DIR_ENV = "WITHHELD_KNOBS_OUT_DIR"
 
-# Generator-provenance: emits coordinator/withheld-knobs.json under the
 # DoE-claude tree (or OUT_DIR_ENV's override), explicitly NOT claude-klabauter -- see
 # module docstring CROSS-REPO WRITE. Same declaration as the sibling op that
-# runs the same way, `emit_artifact_shape_contract`.
 GENERATES = []
 
 _BASENAME = "withheld-knobs.json"
 
 
 def ensure_percolate_on_path() -> None:
-    """Add `coordinator/lib` to `sys.path` so `percolate.*` is importable.
-
-    That directory is not on the path by default, and `coordinator/lib/percolate/` imports
-    `coordinator_core`, so `coordinator_core` must not import it at module scope either
-    way. Both halves of this shape — the deferred import and the path rung — are lifted
-    from `coordinator_core/percolate/round.py :: _is_percolate_package_row`, which does
-    exactly this for the same reason.
-
-    Public, and separate from the knob lookup below, because the rung is a precondition
-    rather than a side effect of asking for a name: a caller that wants `wire_contract`
-    for its own reasons should not have to request a knob to get the path fixed, and a
-    test that did so would pass or fail on execution order.
-    """
     coordinator_lib = Path(__file__).resolve().parents[2] / "coordinator" / "lib"
     if str(coordinator_lib) not in sys.path:
         sys.path.insert(0, str(coordinator_lib))
 
 
 def _percolate_queue_env() -> str:
-    """The queue-override knob's name, read from the constant `wire_contract` owns."""
     ensure_percolate_on_path()
     from percolate.wire_contract import (  # noqa: PLC0415 - see ensure_percolate_on_path
         COORDINATOR_ALLOW_PERCOLATE_QUEUE_ENV,
@@ -130,11 +112,6 @@ def _registry() -> List[Dict[str, object]]:
             "lock, reached via percolate-round.py, percolate-push.py, percolate-mirror.py "
             "or publish.py"
         ),
-        # Substrings whose presence in a doctrine surface means that surface is talking
-        # about THIS path. Without these a consumer can only ban a knob globally, which
-        # would be wrong: both knobs below are live and legitimately prescribable
-        # elsewhere. This is the field that makes the set checkable rather than merely
-        # readable.
         "context_markers": [
             "percolate",
             "percolate-round",
@@ -200,11 +177,6 @@ def _registry() -> List[Dict[str, object]]:
 
 
 def build(entries: List[Dict[str, object]]) -> Dict[str, object]:
-    """The emitted document. Pure — no I/O, so the pin test can compare it directly.
-
-    Takes `entries` rather than calling `_registry()` itself so a caller that needs to
-    inspect the set (main, to refuse an empty one) does not build it twice.
-    """
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_by": "coordinator_core.ops.emit_withheld_knobs (claude-klabauter)",
@@ -225,12 +197,6 @@ def build(entries: List[Dict[str, object]]) -> Dict[str, object]:
 
 
 def _out_dir() -> Optional[str]:
-    """Resolve the output directory, override first, then the DoE sibling root.
-
-    Returns None when neither resolves — the caller reports that as a config failure
-    rather than inventing a path, because the only paths worth inventing here are inside
-    somebody else's repo.
-    """
     override = os.environ.get(OUT_DIR_ENV)
     if override:
         return os.path.abspath(override)
@@ -240,9 +206,6 @@ def _out_dir() -> Optional[str]:
     content_root = content_root_for(doe_root)
     if content_root is not None:
         return str(content_root)
-    # The out dir is a write TARGET, not a read: a resolved root whose content
-    # dir does not exist yet still gets the private-layout path, created on
-    # write, exactly as before. Only an unresolvable root refuses.
     return os.path.join(doe_root, "coordinator")
 
 
@@ -262,13 +225,6 @@ _USAGE = (
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry. Exit 0 emitted, 1 refused, 2 config/transport failure.
-
-    Takes no arguments and says so: an unrecognised argv is a config failure, never a
-    no-op that proceeds to write into a peer's tree anyway. Same reasoning as
-    `emit_artifact_shape_contract.main` — for an op whose side effect lands in somebody
-    else's checkout, an operator reaching for an interface must not get a write instead.
-    """
     unknown = [a for a in argv if a not in ("-h", "--help")]
     if unknown:
         print(f"emit-withheld-knobs: unexpected argument(s): {' '.join(unknown)}", file=sys.stderr)
@@ -302,7 +258,6 @@ def main(argv: List[str]) -> int:
     out_file = os.path.join(out_dir, _BASENAME)
     with open(out_file, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(json.dumps(document, indent=2, ensure_ascii=False) + "\n")
-    # Declared AFTER the write lands (DR-276): a report of what was actually written.
     declare_write(out_file)
 
     print(f"emitted {len(entries)} withheld-knob entries → {out_file}")

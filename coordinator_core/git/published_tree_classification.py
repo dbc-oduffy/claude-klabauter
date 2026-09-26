@@ -21,25 +21,19 @@ from __future__ import annotations
 from pathlib import PurePosixPath
 from typing import Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
-#: `(row_name, source_subdir)` -- duplicates the generator's `_ROWS`.
 _ROWS: Tuple[Tuple[str, str], ...] = (
     ("claude-klabauter", "coordinator_core"),
     ("claude-klabauter-coordinator-bin", "coordinator/bin"),
 )
 
-#: Field index of the allowlist CSV in a `publish-targets.portable` row --
 #: duplicates the generator's `_ALLOWLIST_FIELD`.
 _ALLOWLIST_FIELD = 6
 
-#: Repo-relative paths this module's callers resolve `read_landing` against.
 PORTABLE_PATH = "setup/publish-targets.portable"
 DECLARATIONS_PATH = "setup/publish-allowlist-declarations.yaml"
 
 
 def touched_published_names(paths: Sequence[str]) -> Dict[str, FrozenSet[str]]:
-    """The top-level name directly under each `_ROWS` subdir that `paths`
-    (index keys, forward-slash) touches, keyed by row name. Empty when
-    nothing in `paths` falls under either subdir, so the caller does no I/O."""
     result: Dict[str, set] = {}
     for row_name, source_subdir in _ROWS:
         prefix_parts = PurePosixPath(source_subdir).parts
@@ -58,8 +52,6 @@ def touched_published_names(paths: Sequence[str]) -> Dict[str, FrozenSet[str]]:
 
 
 def field7_inclusions(portable_text: str, row_name: str) -> FrozenSet[str]:
-    """The landing field-7 CSV entries for `row_name`, minus empty and
-    `!`-prefixed (exclusion) entries. Empty if the row is absent."""
     for line in portable_text.splitlines():
         if not line.startswith(f"{row_name}|"):
             continue
@@ -72,9 +64,6 @@ def field7_inclusions(portable_text: str, row_name: str) -> FrozenSet[str]:
 
 
 def deny_names(declarations_text: str, row_name: str) -> FrozenSet[str]:
-    """The row's `deny` list from the declarations yaml. Entries are a bare
-    str or a `{name: ...}` mapping, matching the generator's
-    `_row_declarations`."""
     import yaml
 
     data = yaml.safe_load(declarations_text)
@@ -96,13 +85,6 @@ def unclassified(
     touched: Dict[str, FrozenSet[str]],
     read_landing: Callable[[str], Optional[str]],
 ) -> List[Tuple[str, str]]:
-    """`(row_name, name)` pairs `touched` names that the landing field 7
-    does not include and the landing `deny` does not withhold.
-
-    A missing landing file (portable or, when needed, declarations) means
-    the check cannot answer -- returns no refusal for that row's names, so a
-    partial checkout is never refused and the publish gate stays the
-    backstop."""
     refused: List[Tuple[str, str]] = []
     portable_text = read_landing(PORTABLE_PATH)
     if portable_text is None:

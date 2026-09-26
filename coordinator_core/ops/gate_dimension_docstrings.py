@@ -111,16 +111,11 @@ _RUFF_TIMEOUT_SECS = bound_for(_RUFF_SITE)
 _INTERROGATE_TIMEOUT_SECS = bound_for(_INTERROGATE_SITE)
 _CREATIONFLAGS = no_console_creationflags()
 
-# Relative to repo_root (or cwd, when repo_root is None) -- never an absolute
-# path baked into this module, so the check works from any clone.
 _PORTED_OPS_FRAGMENT = ".github/ported-ops-paths.txt"
 _FLOOR_FILE = ".github/docstring-coverage-floor.json"
 
 
 def _resolve(repo_root: Optional[Path], relative: str) -> Path:
-    """Join `relative` onto `repo_root` when given, else treat it as
-    cwd-relative -- the same `Optional[Path]` contract `gate_dimension_
-    types._run_mypy`'s own docstring explains for `repo_root`."""
     base = repo_root if repo_root is not None else Path(".")
     return Path(base) / relative
 
@@ -138,11 +133,6 @@ def _load_ported_ops_paths(repo_root: Optional[Path]) -> List[str]:
 
 
 def _existing_paths(repo_root: Optional[Path], paths: List[str]) -> List[str]:
-    """Filter the fragment's path list to entries that exist on disk --
-    fragment staleness (a listed path since renamed/removed) is a C6/C9
-    concern this dimension only tolerates, never re-derives or reports as
-    its own failure. See module docstring's "A fragment entry that does not
-    exist on disk" paragraph."""
     return [p for p in paths if _resolve(repo_root, p).is_file()]
 
 
@@ -164,9 +154,6 @@ def _load_fail_under(repo_root: Optional[Path]) -> Optional[float]:
 def _run_ruff(
     ruff_path: str, py_files: List[str], repo_root: Optional[str]
 ) -> "tuple[int, str, str]":
-    """Run `ruff check --select D1 <py_files>` in `repo_root`; never raises --
-    mirrors `gate_dimension_types._run_mypy`'s own spawn-failure/timeout
-    degrade shape."""
     try:
         result = subprocess.run(
             [ruff_path, "check", "--select", "D1", "--output-format=concise", *py_files],
@@ -192,8 +179,6 @@ def _run_ruff(
 def _run_interrogate(
     interrogate_path: str, py_files: List[str], fail_under: float, repo_root: Optional[str]
 ) -> "tuple[int, str, str]":
-    """Run `interrogate --fail-under <fail_under> <py_files>` in `repo_root`;
-    never raises -- mirrors `_run_ruff` above."""
     try:
         result = subprocess.run(
             [interrogate_path, "--fail-under", str(fail_under), *py_files],
@@ -219,11 +204,7 @@ def _run_interrogate(
 def _check_docstrings(
     changed_files: List[str], diff_base: Optional[str], repo_root: Optional[Path]
 ) -> DimensionResult:
-    """The registered `docstrings` `DimensionCheck` (C3). See module
-    docstring for tool resolution, scope, and the ratchet floor.
-    `changed_files`/`diff_base` are accepted (fixed `DimensionCheck` shape)
-    but unused -- see module docstring "SCOPE"."""
-    del changed_files, diff_base  # unused by design; see module docstring "SCOPE"
+    del changed_files, diff_base
 
     ruff_tool = resolve_tool("ruff")
     interrogate_tool = resolve_tool("interrogate")
@@ -278,10 +259,7 @@ def _check_docstrings(
         interrogate_tool.path, existing_paths, fail_under, repo_root_str
     )
 
-    # Tool-broke case for either tool (neither 0 nor 1) -- reported as
     # UNAVAILABLE, never FAIL, mirroring gate_dimension_types._check_types'
-    # rc==2 handling: a broken tool run must never masquerade as "found a
-    # docstring gap".
     if ruff_rc not in (0, 1):
         last_err = ruff_err or ruff_out or f"ruff exited {ruff_rc} with no output"
         return DimensionResult(

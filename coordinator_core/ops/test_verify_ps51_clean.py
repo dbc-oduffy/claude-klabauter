@@ -67,19 +67,11 @@ def _run_main(argv, monkeypatch=None):
     return rc, out.getvalue(), err.getvalue()
 
 
-# ---------------------------------------------------------------------------
-# Usage guard
-# ---------------------------------------------------------------------------
-
 def test_no_args_usage_error():
     rc, out, err = _run_main([])
     assert rc == 2
     assert "Usage:" in err
 
-
-# ---------------------------------------------------------------------------
-# SKIP path — no powershell.exe resolvable
-# ---------------------------------------------------------------------------
 
 def test_skip_when_engine_absent(tmp_path, monkeypatch):
     monkeypatch.setattr(vps, "find_ps51_exe", lambda: None)
@@ -88,10 +80,6 @@ def test_skip_when_engine_absent(tmp_path, monkeypatch):
     assert rc == 0
     assert out.startswith("SKIP:")
 
-
-# ---------------------------------------------------------------------------
-# find_ps51_exe / collect_ps1_files (pure logic, no engine needed)
-# ---------------------------------------------------------------------------
 
 def test_collect_ps1_files_single_file(tmp_path):
     ps1 = _write(tmp_path, "a.ps1", CLEAN_PS1)
@@ -124,10 +112,6 @@ def test_collect_ps1_files_directory_recurses_and_filters(tmp_path):
     assert warnings == []
 
 
-# ---------------------------------------------------------------------------
-# #requires -Version N floor detection
-# ---------------------------------------------------------------------------
-
 def test_detect_ps7_floor_version_with_minor():
     is_floored, version = vps.detect_ps7_floor(PS7_FLOORED_PS1)
     assert is_floored is True
@@ -148,7 +132,6 @@ def test_detect_ps7_floor_major_below_7_not_floored():
 
 def test_detect_ps7_floor_bom_does_not_mask_requires():
     # Regression test: PORTER-BRIEF-ADDENDUM rule 6 — the fixture's edge (a
-    # leading BOM immediately before #requires) is exercised, not glossed over.
     is_floored, version = vps.detect_ps7_floor(BOM_FLOORED_PS1)
     assert is_floored is True
     assert version == "7.0"
@@ -159,10 +142,6 @@ def test_detect_ps7_floor_no_requires_line():
     assert is_floored is False
     assert version is None
 
-
-# ---------------------------------------------------------------------------
-# Static pwsh7-only syntax scan
-# ---------------------------------------------------------------------------
 
 def test_static_scan_flags_double_pipe_in_string():
     warnings = vps.static_scan_warnings(WARN_PS1)
@@ -184,10 +163,6 @@ def test_static_scan_null_coalescing_assign_not_double_counted():
 def test_static_scan_clean_script_no_warnings():
     assert vps.static_scan_warnings(CLEAN_PS1) == []
 
-
-# ---------------------------------------------------------------------------
-# End-to-end classification via main(), with parse_with_ps51 monkeypatched
-# ---------------------------------------------------------------------------
 
 def test_main_clean_file_ok(tmp_path, monkeypatch):
     monkeypatch.setattr(vps, "find_ps51_exe", lambda: "/fake/powershell.exe")
@@ -229,7 +204,6 @@ def test_main_parse_clean_with_advisory_warn_still_ok(tmp_path, monkeypatch):
     rc, out, err = _run_main([ps1])
     assert rc == 0
     assert "WARN " in out
-    # WARN files do NOT also print a separate "OK <path>" line (mutually exclusive).
     assert f"OK {ps1}" not in out
     assert "1/1 parse-clean (incl. 1 with advisory warnings), 0 failed" in out
 
@@ -276,10 +250,6 @@ def test_main_version_6_floor_below_7_is_fail_not_expected(tmp_path, monkeypatch
     assert "FAIL " in out
     assert "EXPECTED-PS7" not in out
 
-
-# ---------------------------------------------------------------------------
-# parse_with_ps51 — engine-invocation edge cases (timeout / OSError / nonzero rc)
-# ---------------------------------------------------------------------------
 
 def test_parse_with_ps51_nonzero_exit_is_one_parse_error(monkeypatch, tmp_path):
     class _FakeResult:

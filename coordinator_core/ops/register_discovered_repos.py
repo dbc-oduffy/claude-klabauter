@@ -81,7 +81,7 @@ from coordinator_core.ops.discover_working_repos import main as _discover_workin
 from coordinator_core.path_identity import same_dir
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
-_PROG = "register-discovered-repos.sh"  # literal program-name prefix — see negative-spec
+_PROG = "register-discovered-repos.sh"
 
 WRITE_SURFACE = WriteSurfaceDeclaration(
     writer_id="register-discovered-repos",
@@ -116,11 +116,6 @@ misroute a call site that forgot to update it."""
 
 
 def _journal_registered(keys: Sequence[str]) -> None:
-    """Record what this clause actually resolved to on THIS run: the
-    `repos.<key>` machine-local entries that were genuinely written (or,
-    for a definitively-empty resolution, none at all — see module-level
-    negative spec in `main`'s call sites). Never called for a path where
-    registration was not actually attempted/determined this run."""
     entries = tuple(
         WriteSurfaceEntry(kind="machine-local-key", key=f"repos.{key}") for key in keys
     )
@@ -150,11 +145,6 @@ value, and unsetting it is `machine-local unset`'s job, not this bridge's.
 
 
 def _derive_key(basename: str) -> str:
-    """Lowercase, collapse non-alnum runs to '_', strip leading/trailing '_'.
-
-    Mirrors the bash oracle's `_derive_key` (tr-based, bash-3.2-safe) and
-    cross-repo-memo's `_receiver_repo_key` resolver.
-    """
     lowered = basename.lower()
     collapsed = re.sub(r"[^a-z0-9]+", "_", lowered)
     return collapsed.strip("_")
@@ -193,11 +183,6 @@ def _prefer_platform_install_paths(
     if not installed:
         return pending
     # Keyed off the installPath's BASENAME, not the plugin name: `repos.*`
-    # keys are derived from repo basenames, and a plugin's declared name is
-    # routinely not its clone's directory name (the `coordinator` plugin
-    # lives in a `coordinator-claude` clone -- exactly the pair that broke
-    # on the reporting box). Matching on the name would have missed the only
-    # case this exists for.
     by_key = {}
     for path in installed.values():
         k = _derive_key(os.path.basename(path.replace("\\", "/").rstrip("/")))
@@ -229,8 +214,6 @@ def _resolve_machine_local(self_dir: Path) -> Optional[str]:
     `_machine_local_launch_argv`); a PATH hit via `shutil.which` is already
     exec-bit-verified by the OS's own PATH search.
     """
-    # Was PATH -> legacy ~/.claude/bin, skipping the settings-home rung that
-    # is the actual install location today. The shared ladder carries all three.
     return resolve_machine_local_cli()
 
 
@@ -274,24 +257,12 @@ def _registry_snapshot(ml_argv: List[str]) -> Optional[Dict[str, str]]:
 
 
 def _machine_local_launch_argv(ml_bin: str) -> List[str]:
-    """Interpreter-prefix `ml_bin` for a bare-exec launch: `machine-local` is an
-    extensionless coordinator/bin sibling, so `resolve_launchable()` is POSIX-bare
-    by design and is not the fix there -- prefix `sys.executable` directly on
-    POSIX. On Windows keep `resolve_launchable()`'s `.cmd`-twin preference and
-    shebang sniffing, which are load-bearing on this repo's P0 primary platform.
-    """
     if launchable._is_windows():
         return launchable.resolve_launchable(ml_bin)
     return [sys.executable, ml_bin]
 
 
 def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
-    """Port of register-discovered-repos.sh's top-level flow.
-
-    self_dir: base directory the caller resolves itself. Defaults to the caller's
-    cwd only as a defensive fallback — the caller is expected to always pass its
-    own directory explicitly.
-    """
     non_interactive = False
     check_only = False
     for arg in argv:
@@ -327,20 +298,9 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
 
     candidates = [line for line in buf.getvalue().splitlines() if line.strip()]
     if not candidates:
-        # Discovery ran and definitively found nothing — a real, knowable
-        # "resolved to nothing" answer, journaled as an empty resolution
-        # (not skipped), per the design note's negative spec.
         _journal_registered([])
         return 0
 
-    # Batched already-registered check (T3 h4-ops-b deferred item): ONE
-    # `dump --prefix repos --format json` call up front instead of one `has`
-    # spawn per candidate below. `snapshot is None` means the dump was
-    # indeterminate (spawn/parse failure or non-zero exit) — the per-key
-    # `has` fallback preserves the pre-batch fail-closed guarantee for
-    # exactly the candidates reached while indeterminate, rather than
-    # guessing "absent" and risking the only-if-absent clobber the module
-    # docstring forbids.
     snapshot = _registry_snapshot(ml_argv)
 
     to_register: List[Tuple[str, str]] = []
@@ -348,10 +308,6 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
     for repo_path in candidates:
         key = _derive_key(os.path.basename(repo_path.rstrip("/")))
         if not key:
-            # Repo basenames that collapse to "" (all
-            # non-alnum, e.g. "---") were silently dropped with no diagnostic;
-            # mirrors the bash oracle's behavior (not a regression) but the
-            # silence erodes trust in "why didn't repo X register" (Finding 2).
             print(
                 f"{_PROG}: skipping {repo_path!r} — basename yields an empty key",
                 file=sys.stderr,
@@ -379,10 +335,6 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
         claimed = claimed_by.get(key)
         if claimed is not None:
             if same_dir(claimed, repo_path):
-                # Two spellings of one directory (klabauter#2). Discovery
-                # dedups these now, so reaching here means a caller fed us
-                # its own un-deduped list; keep the first spelling rather
-                # than letting the later one overwrite it.
                 continue
             print(
                 f"{_PROG}: WARNING: {key!r} names two different directories "
@@ -398,16 +350,10 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
     to_register = _prefer_platform_install_paths(to_register)
 
     if not to_register:
-        # Every discovered repo is already registered — a definitive
-        # "nothing left to register" resolution, journaled empty, same as
-        # the zero-candidates case above.
         _journal_registered([])
         return 0
 
     if check_only:
-        # Preview mode: no registration is actually performed, so nothing
-        # is journaled — this run's ShapedClause resolution stays unknown,
-        # not falsely "empty" (would-register is not registered).
         print(f"{_PROG}: would register {len(to_register)} repo(s):")
         for key, path in to_register:
             print(f"  repos.{key} = {path}")
@@ -429,9 +375,6 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
                 f"{_PROG}: registration skipped by operator. Register later: "
                 "machine-local set repos.<name> <path>"
             )
-            # The operator's decision is itself a definitive, knowable
-            # outcome for this run: nothing got registered — journal empty
-            # rather than leaving this writer unreported.
             _journal_registered([])
             return 0
 
@@ -449,9 +392,6 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
         else:
             registered.append(key)
 
-    # Journal exactly the repos.<key> entries that were actually written
-    # this run — a failed `ml_bin set` is never journaled, per the design
-    # note's "never journal entries for a registration that did not happen".
     _journal_registered(registered)
     return 0
 

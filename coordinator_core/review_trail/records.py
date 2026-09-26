@@ -57,11 +57,6 @@ from typing import List, Optional, Tuple
 _STATE_ROOT_OVERRIDE_ENV = "COORDINATOR_ROOT"
 
 
-# ---------------------------------------------------------------------------
-# State-root resolution (self-contained Rule-5 port — see module docstring)
-# ---------------------------------------------------------------------------
-
-
 def _resolve_state_root(explicit_override: Optional[str] = None) -> Optional[str]:
     """Resolve the coordinator state root.
 
@@ -87,36 +82,13 @@ def _resolve_state_root(explicit_override: Optional[str] = None) -> Optional[str
     if not override:
         return None
 
-    # Detect "already ends in a `state` path segment" by basename, not
-    # by a literal ``.endswith("/state")`` string suffix check —
-    # os.path.basename() (ntpath on Windows) splits on either
     # separator, so this matches a COORDINATOR_ROOT that was supplied
-    # in the platform's own native form (e.g. "...\\state" on Windows).
-    # The old suffix-only check silently missed that on Windows and
-    # doubled the "/state" append (C5 root-cause: os.sep-in-wire-id
-    # class — an os.sep-bearing value was compared against a
-    # forward-slash-only literal).
     if os.path.basename(override.rstrip("/\\")) == "state":
         return override
     return override.rstrip("/") + "/state"
 
 
-# ---------------------------------------------------------------------------
-# Record collection
-# ---------------------------------------------------------------------------
-
-
 def _collect(dir_path: str) -> List[Tuple[str, str]]:
-    """Collect (basename, fullpath) pairs for every ``*.json`` under dir_path.
-
-    Absent-dir-safe: returns [] when dir_path does not exist (mirrors the
-    oracle's ``[[ -d "${dir}" ]] || return 0`` guard) — a fresh-install case,
-    not an error.
-
-    Follows symlinks (mirrors ``find -L``). Raises OSError on a genuine scan
-    failure (permission error, etc.) — caller maps this to exit 1, mirroring
-    the oracle's explicit ``|| return $?`` propagation from ``find``/``awk``.
-    """
     if not os.path.isdir(dir_path):
         return []
     out: List[Tuple[str, str]] = []
@@ -129,7 +101,7 @@ def _collect(dir_path: str) -> List[Tuple[str, str]]:
 
 
 class ReviewTrailListError(RuntimeError):
-    """Raised by ``list_paths`` on any oracle-parity failure (mirrors the CLI's exit 1)."""
+    pass
 
 
 def list_paths(state_root_override: Optional[str] = None) -> List[str]:
@@ -156,9 +128,6 @@ def list_paths(state_root_override: Optional[str] = None) -> List[str]:
     state_root = _resolve_state_root(state_root_override)
     if not state_root:
         raise ReviewTrailListError(
-            # _PROG named a shell script this
-            # workstream deleted (list-review-trail-records.sh); the sole caller
-            # catches ReviewTrailListError and never reads the message.
             "cwd is not a git repo and COORDINATOR_ROOT is not set — "
             "cannot resolve state/review-trail/"
         )

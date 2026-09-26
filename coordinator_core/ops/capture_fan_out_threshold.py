@@ -61,15 +61,6 @@ def _compute_value() -> int:
 
 
 def _ml_argv() -> List[str]:
-    """Concrete argv for the machine-local CLI.
-
-    A bare "machine-local" is unrunnable on Windows: the delivered wrapper is
-    extension-less (CreateProcess -> WinError 193) and the `.cmd` beside it is
-    invisible to CreateProcess, which does not consult PATHEXT (-> WinError 2).
-    The canonical resolver prefers [sys.executable, _machine_local.py], avoiding
-    shebang exec entirely. Falls back to the bare name so POSIX behavior — and
-    the documented degrade-to-empty path below — is unchanged.
-    """
     from coordinator_core.install._shared import resolve_machine_local_cli
 
     return resolve_machine_local_cli(os.environ.get("CLAUDE_PLUGIN_ROOT", "")) or [
@@ -78,24 +69,10 @@ def _ml_argv() -> List[str]:
 
 
 def _key_already_captured() -> bool:
-    """Whether `_KEY` is already set in the registry.
-
-    Zero-spawn: `merged_flat_registry` reads the same registry.local.toml
-    over registry.toml chain `machine-local keys` would enumerate, in-process
-    -- no `machine-local` CLI subprocess (see
-    `coordinator_core.machine_resolver.merged_flat_registry`). Best-effort,
-    matching the prior degrade-to-"key absent" contract: a missing/unreadable
-    registry file degrades to `{}`, never raises.
-    """
     return _KEY in _merged_flat_registry()
 
 
 def capture(check_only: bool = False) -> Tuple[str, int]:
-    """Perform (or preview) the idempotent threshold capture.
-
-    Returns (stdout_text, rc):
-      rc 0 on all normal paths (pre-existing / would-write / written).
-    """
     if _key_already_captured():
         return ("fan_out_threshold: pre-existing\n", 0)
 
@@ -119,7 +96,6 @@ def capture(check_only: bool = False) -> Tuple[str, int]:
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry — `[--check-only]`, matching the bash script's usage."""
     check_only = False
     if argv:
         if argv[0] == "--check-only":

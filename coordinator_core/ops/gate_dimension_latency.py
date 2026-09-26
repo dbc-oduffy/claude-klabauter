@@ -78,13 +78,6 @@ from coordinator_core.ops.gate_validate_invocable import (
     register_dimension,
 )
 
-# ---------------------------------------------------------------------------
-# Self-exclusion — never measure the validator or this dimension's own files.
-# Paths are repo-root-relative with forward slashes, matching the shape
-# `.github/ported-ops-paths.txt` / `op-inventory.json` and typical git
-# changed-file output use; `_normalize_path` below also accepts backslash
-# (Windows) separators from a caller.
-# ---------------------------------------------------------------------------
 _SELF_EXCLUDED_PATHS: frozenset[str] = frozenset(
     {
         "coordinator_core/ops/gate_validate_invocable.py",
@@ -98,13 +91,7 @@ _OP_INVENTORY_PATH = Path(__file__).parent.parent.parent / ".github" / "op-inven
 
 
 class LatencyDimensionReentrancyError(RuntimeError):
-    """Raised loudly on a detected re-entrant call into the latency check.
-
-    Never caught within this module — `_run_dimension()` (the caller, in
-    `gate_validate_invocable.py`) converts it into a visible `Verdict.ERROR`,
-    which is the point: a silent recursion guard would make the gate pass
-    vacuously (see module docstring, "Loud re-entrancy sentinel").
-    """
+    pass
 
 
 _REENTRANCY_GUARD: contextvars.ContextVar[bool] = contextvars.ContextVar(
@@ -169,18 +156,6 @@ def _load_op_inventory() -> list[dict]:
 def _map_paths_to_ops(
     changed_files: list[str], inventory: Optional[list[dict]] = None
 ) -> dict[str, str]:
-    """Return {op_key: module_path} for every changed file that maps to a
-    registered op's module in the inventory, after self-exclusion.
-
-    A file with no matching inventory entry (not an op module — e.g. a doc,
-    a test helper, a non-op library module) is silently not included; it is
-    not this dimension's concern (mirrors the other dimensions' path-scoped
-    convention of only asserting over the ported-ops path set).
-
-    `inventory` may be passed in by a caller that already loaded it once per
-    gate run (see `_check_latency`) to avoid re-reading
-    `.github/op-inventory.json` from disk once per mapped op; defaults to a
-    fresh load for callers (e.g. tests) that invoke this directly."""
     normalized_changed = {_normalize_path(f) for f in changed_files}
     normalized_changed -= _SELF_EXCLUDED_PATHS
 
@@ -222,11 +197,6 @@ def _op_class_for(op_key: str, inventory: Optional[list[dict]] = None) -> Option
 
 
 def _latest_record_for(op_key: str):
-    """Return the most recently appended `ConformanceRecord` for `op_key`
-    across the whole baseline store, or None if it has never been
-    benchmarked. `baseline_store.query` yields in append order and does not
-    collapse history itself (its own documented contract) — this is the
-    "select the last matching line yourself" step its docstring calls for."""
     latest = None
     for record in baseline_store.query(op=op_key):
         latest = record

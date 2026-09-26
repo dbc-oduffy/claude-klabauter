@@ -38,12 +38,6 @@ _CALLER = "8b40d62c-55ef-4702-83ce-0cd8dc6513e3"
 
 @pytest.fixture
 def ambient_is_the_server_owner(monkeypatch):
-    """Put a foreign id in every environment tier the resolver reads.
-
-    Mirrors the measured shape rather than inventing one: inside the resident
-    server these vars held the id of the session that spawned it, which is how
-    a caller's own correct records came back signed by a stranger.
-    """
     for var in session_core.SESSION_ENV_PRECEDENCE:
         monkeypatch.setenv(var, _SERVER_OWNER)
     return _SERVER_OWNER
@@ -54,7 +48,6 @@ def _session_ids_in(message: str):
 
 
 def test_cold_call_still_stamps_the_ambient_identity(tmp_path, ambient_is_the_server_owner):
-    """Cold is the case where the environment IS the caller — do not break it."""
     out = commit_trailers.apply_missing_trailers("a cold commit\n", tmp_path)
     assert _session_ids_in(out) == [ambient_is_the_server_owner]
 
@@ -62,13 +55,6 @@ def test_cold_call_still_stamps_the_ambient_identity(tmp_path, ambient_is_the_se
 def test_warm_call_with_no_carried_identity_omits_rather_than_guessing(
     tmp_path, ambient_is_the_server_owner
 ):
-    """The whole defect, in one assertion.
-
-    An old door sends no `_session_id`, so the identity ContextVar is unbound
-    and the carry is empty — byte-identical to the cold case above, and the
-    reason the warm flag has to be its own axis. The ambient id is RIGHT THERE
-    and readable; the point is that it must not be read.
-    """
     with session_core.warm_served_request():
         out = commit_trailers.apply_missing_trailers("a warm-served commit\n", tmp_path)
     assert _session_ids_in(out) == [], (
@@ -81,7 +67,6 @@ def test_warm_call_with_no_carried_identity_omits_rather_than_guessing(
 def test_warm_call_stamps_the_carried_identity_not_the_ambient_one(
     tmp_path, ambient_is_the_server_owner
 ):
-    """A door that DOES send the field: the caller's id wins over the server's."""
     with session_core.warm_served_request():
         with session_core.session_identity_override(_CALLER):
             out = commit_trailers.apply_missing_trailers("a warm commit\n", tmp_path)
@@ -92,12 +77,6 @@ def test_warm_call_stamps_the_carried_identity_not_the_ambient_one(
 def test_the_warm_flag_unwinds_so_a_later_cold_call_is_unaffected(
     tmp_path, ambient_is_the_server_owner
 ):
-    """Token/reset scoping, asserted rather than assumed.
-
-    A leaked flag would silence every subsequent commit in a long-lived
-    process — the same class of silent, self-consistent failure as the defect,
-    with the sign flipped.
-    """
     with session_core.warm_served_request():
         pass
     assert session_core.in_warm_served_request() is False

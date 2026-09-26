@@ -79,23 +79,11 @@ import pytest
 from coordinator_core.orient_assemble import CADENCES, brief
 from coordinator_core.orient_assemble import readers_health_reaper as rhr
 
-#: Measured 2026-08-31 after the `_ml_get` memoization: 0.266s and 0.453s
-#: process time across repeat runs of `_read_hook_currency()` alone, down
-#: from 1.906s and 36 spawns. DR-344's bar is 500ms and the op now fits it.
-#: The assertion sits at 1.0s rather than 500ms purely to survive box-load
-#: variance at 90%-of-budget -- see the module docstring. Anti-flake, not
-#: permission.
 _HOOK_CURRENCY_PROCESS_TIME_CEILING_S = 1.0
 
 
 @pytest.fixture
 def forbid_any_disk_write(monkeypatch):
-    """Patch `builtins.open` itself, not `Path.write_text`/`write_bytes` --
-    `git_hook_install._atomic_write` (the actual mutation this plan closes)
-    uses a bare `open(tmp, "w", ...)`, four call-frames below `brief()`,
-    which the existing `Path`-level fixture in `test_read_only_guarantee.py`
-    never reached. Any write/append-mode open anywhere beneath the call
-    fails the test loudly."""
     real_open = builtins.open
 
     def _guarded_open(file, mode="r", *args, **kwargs):
@@ -127,9 +115,6 @@ def forbid_any_subprocess_spawn(monkeypatch):
 
 
 def test_brief_performs_no_disk_write_at_any_cadence(forbid_any_disk_write):
-    """AC(1): the read-only claim `orient_assemble.brief()`'s own docstring
-    now makes is a fact this test enforces, not prose the next reader added
-    has to remember to keep true."""
     for cadence in CADENCES:
         buf = io.StringIO()
         with redirect_stderr(buf):
@@ -139,10 +124,6 @@ def test_brief_performs_no_disk_write_at_any_cadence(forbid_any_disk_write):
 def test_brief_performs_no_disk_write_or_subprocess_spawn_at_any_cadence(
     forbid_any_disk_write, forbid_any_subprocess_spawn
 ):
-    """C3 AC: both guards applied together across `brief()` at every
-    cadence, covering the four C1/C2 readers this row adds tests for
-    (`_read_plugin_drift`, `_read_git_maintenance_due`, `_read_goal_coverage`,
-    `_read_trail_scope`) alongside the pre-existing family."""
     for cadence in CADENCES:
         buf = io.StringIO()
         with redirect_stderr(buf):
@@ -174,19 +155,12 @@ def test_read_trail_scope_performs_no_disk_write_or_subprocess_spawn(
 
 
 def test_read_hook_currency_performs_no_disk_write(forbid_any_disk_write):
-    """Narrower repro of the actual defect this plan closes: calling the
-    reader directly (not through the full `brief()` seam) must not write --
-    the mutation lived here, in `_read_hook_currency` -> `cmd_hook_currency`
-    (bare form) -> `ensure_hooks_fleet`, before C1/C2 threaded `check_only`
-    through it."""
     buf = io.StringIO()
     with redirect_stderr(buf):
         rhr._read_hook_currency()
 
 
 def test_read_hook_currency_is_under_its_measured_process_time_ceiling():
-    """AC(2): process time, never wall clock -- see module docstring for the
-    measured baseline and why it is not the DR-344 500ms bar."""
     t0 = time.process_time()
     buf = io.StringIO()
     with redirect_stderr(buf):

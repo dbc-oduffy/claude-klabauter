@@ -83,44 +83,18 @@ from coordinator_core.bash_guards.tests.guard_message_corpus import (
     fire_row,
 )
 
-#: Bands whose guards can emit advisory/deny text an agent reads --
 #: CONFINEMENT_DENY is deliberately excluded -- see module docstring.
 _ADVISORY_BANDS = (GuardBand.ADVISORY_REWRITE, GuardBand.PLATFORM_CONDITIONED_DENY)
 
-#: Baseline subagent identity laid over a corpus row's own `setup` (via
-#: `dict.setdefault`, below) -- a row already wiring its own identity
-#: (e.g. `block-reviewer-bash-outside-allowlist`'s reviewer legs) keeps
-#: that identity untouched; every other row picks this one up. Any
-#: non-empty `agent_id` is enough to make
-#: `session.identity.resolves_em_audience` return `False` -- the exact
-#: leg `operator_override_note` gates its own emission on.
 _SUBAGENT_IDENTITY: Dict[str, str] = {
     "agent_id": "deadbeef0123",
     "agent_type": "coordinator:executor",
 }
 
 #: What counts as "names an unlock" in RENDERED prose -- the categories
-#: the dispatch brief names explicitly: an override key, a sentinel/
-#: marker dotfile path, a touch/export/rm recipe, a CLI invocation naming
-#: an override/bypass, a doc pointer, or a bare "an unlock exists"
-#: statement. Not an allowlist of guards -- a fixed vocabulary of what a
-#: leak LOOKS like, checked against every guard's rendered text
-#: uniformly.
-#:
-#: Deliberately NOT a bare "any backticked span" scan for "CLI
 #: invocation": live-measured against every ADVISORY_REWRITE/
 #: PLATFORM_CONDITIONED_DENY guard's actual rendered text (this file's
-#: own first draft), that pattern false-positived on every guard's
 #: legitimate REWRITE SUGGESTION -- `git stash push ...`, `git checkout
-#: -b work/...`, a Python rewrite snippet -- which is the guard's whole
-#: PURPOSE, not a leak. "CLI invocation" here is scoped to the one shape
-#: an override/bypass CLI invocation actually takes: naming a bypass/
-#: override/disarm subcommand explicitly.
-#:
-#: `.coordinator-local/subagent-share/` is exempt from the dotfile pattern:
-#: it is the sanctioned subagent write surface a deny routes TO, not a grant
-#: that lifts the deny. Hiding it would leave a blocked subagent with no
-#: named place to write.
 _LEAK_PATTERNS: Dict[str, Pattern[str]] = {
     "override-key(s) phrase": re.compile(r"override key", re.IGNORECASE),
     "guard-override-keys.md doc pointer": re.compile(r"guard-override-keys\.md"),
@@ -182,9 +156,6 @@ def _firing_advisory_rows() -> List[CorpusRow]:
 
 
 def _live_advisory_guard_names() -> List[str]:
-    """Advisory-band guard names read straight off the LIVE
-    `dispatch._build_guard_chain` output -- never a hand-kept list (AC-5's
-    standard, applied here per the dispatch brief's item 4)."""
     chain = _dispatch._build_guard_chain(
         cmd="echo hi",
         session_id="test-override-route-inventory-live-chain",
@@ -196,17 +167,6 @@ def _live_advisory_guard_names() -> List[str]:
     return sorted({entry.name for entry in chain if entry.band in _ADVISORY_BANDS})
 
 
-#: Guards live-registered in an advisory band that structurally never
-#: return a non-`None` envelope -- side-effect-only guards
-#: (`guard_message_corpus.py`'s own `reap-stale-git-lock` comment: "always
-#: returns None") with no message to render at all, so they cannot leak
-#: text they never produce. This is NOT an allowlist exempting a guard
-#: from the leak-vocabulary check above -- every row that DOES fire is
-#: still checked (`test_no_advisory_guard_leaks_an_unlock_to_a_subagent_
-#: render`); this only narrows the enumeration proof's "every live guard
-#: needs a firing row" requirement for the guard(s) that provably have
-#: none to give, and `test_never_speaks_guards_are_verified_silent`
-#: (below) checks the claim live rather than trusting the name alone.
 _NEVER_SPEAKS_GUARDS = frozenset({"reap-stale-git-lock"})
 
 
@@ -255,12 +215,6 @@ def test_never_speaks_guards_are_verified_silent():
 
 @pytest.mark.parametrize("row", _firing_advisory_rows(), ids=lambda r: r.row_id)
 def test_no_advisory_guard_leaks_an_unlock_to_a_subagent_render(row: CorpusRow):
-    """The real invariant (PM ruling, 2026-08-13): a dispatched agent is
-    never handed a key to its own guard's unlock. Fires `row` through the
-    live registry with a subagent-shaped payload and asserts the rendered
-    prose (`additionalContext`/`permissionDecisionReason`) names no
-    override/unlock mechanism -- see module docstring for the leak
-    vocabulary and why this supersedes the call-site check it replaces."""
     capture = fire_row(_as_subagent_row(row))
     text = extract_prose_text(capture.envelope)
     leaks = _find_leaks(text)

@@ -42,7 +42,6 @@ from coordinator_core.ops.ceremony import git_native
 
 
 def test_sole_publisher_env_is_always_none():
-    """Gravestoned: neither argument value builds an env dict any more."""
     assert git_native._sole_publisher_env(False) is None
     assert git_native._sole_publisher_env(True) is None
 
@@ -54,11 +53,6 @@ def test_sole_publisher_env_never_touches_os_environ():
 
 
 def test_deferred_publisher_span_is_gone():
-    """The widening span this axis grew for a caller (`wsc_tail`) that does
-    not exist in this tree is deleted outright, not left as a no-op --
-    unlike `_sole_publisher_env`, nothing outside this package calls it by
-    keyword, so there is no compatibility surface to preserve.
-    """
     assert not hasattr(git_native, "deferred_publisher_span")
     assert not hasattr(git_native, "_deferred_publisher_active")
 

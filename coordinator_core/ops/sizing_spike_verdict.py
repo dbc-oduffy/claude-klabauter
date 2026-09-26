@@ -76,32 +76,20 @@ from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
 
-# Vendored sizing-object schema path — own local copy per this package's
 # established per-module convention (see sizing_ship._SIZING_SCHEMA_PATH,
 # sizing_decline._SIZING_SCHEMA_PATH).
 _SIZING_SCHEMA_PATH: Path = (
     Path(__file__).parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
 )
 
-#: Legal `verdict` values on a spike-result record — mirrors
-#: frontmatter/schemas/spike-result.schema.json's CLOSED `verdict` enum
-#: exactly (no third "inconclusive" value: "an inconclusive spike is not a
-#: verdict record yet").
 _LEGAL_SPIKE_VERDICTS = frozenset({"viable", "not-viable"})
 
-# Matches an indented `spike_verdict:` line inside a `premise:` nested
-# block's raw block text (2-space indent, same shape as `provenance:`/
-# `evidence:` siblings). Trailing `# comment` and any inline value are
-# captured so the whole line can be replaced in place.
 _SPIKE_VERDICT_LINE_RE = re.compile(
     r"^([ \t]*)spike_verdict:[ \t]*(.*)$", re.MULTILINE
 )
 
 
 def _validate_sizing_fm(fm_text: str) -> list:
-    """Parse fm_text as whole-document YAML and validate against the
-    sizing-object schema. Mirrors sizing_ship._validate_sizing_fm's contract
-    exactly."""
     try:
         fm_dict = yaml.safe_load(fm_text) or {}
     except Exception as exc:  # noqa: BLE001
@@ -110,8 +98,6 @@ def _validate_sizing_fm(fm_text: str) -> list:
 
 
 def _read_premise_spike_verdict(premise_block: str) -> str | None:
-    """Read the current `spike_verdict:` value out of a `premise:` block's
-    raw indented block text, or None if absent."""
     m = _SPIKE_VERDICT_LINE_RE.search(premise_block)
     if m is None:
         return None
@@ -119,8 +105,6 @@ def _read_premise_spike_verdict(premise_block: str) -> str | None:
 
 
 def _write_premise_spike_verdict(premise_block: str, value: str) -> str:
-    """Set (replace or append) `spike_verdict:` inside a `premise:` block's
-    raw indented block text, preserving every other line untouched."""
     serialized = serialize_yaml_scalar(value)
     new_line = f"  spike_verdict: {serialized}"
     if _SPIKE_VERDICT_LINE_RE.search(premise_block):
@@ -237,10 +221,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "object's premise"
         )
 
-    # Record the repo-relative form, matching trampoline_verdict's own
-    # `context.repo_root / spike_verdict` resolution and the on-disk
-    # convention every existing `premise.spike_verdict`/top-level
-    # `spike_verdict:` field already uses.
     recorded_value = spike_verdict_path_raw
     if Path(spike_verdict_path_raw).is_absolute():
         try:
@@ -263,8 +243,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         _state["prior_value"] = current_value
 
         if current_value == recorded_value:
-            # Already recording this exact pointer — idempotency floor,
-            # byte-identical no-op.
             return old_text
 
         if current_value:

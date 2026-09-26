@@ -1,16 +1,3 @@
-"""Tests for coordinator_core.snippet_sync.verify_registry_consistency.
-
-The four-script (`verify-<X>-sync.sh`) leg this module once ported from the
-retired `coordinator/bin` bash oracle (721 LoC, deleted at DoE's `93887f6f`
-de-bash cutover) was retired 2026-07-22 — see the module docstring and the
-actioned inbound memo
-`cross-repo/inbox/2026-07-22-claude-central-em-snippet-registry-consistency-fix-locus.md`.
-Remaining coverage below exercises only the surviving consistency checks:
-registry-exists, TOML-parse, schema_version gate, and per-snippet
-`[snippet.<name>]` enrollment.
-
-Spec backlink: DoE docs/plans/2026-06-15-snippet-sync-consumer-registry.md § Dispatch Ledger C4, C8
-"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -91,10 +78,6 @@ def test_missing_registry_toml_exits_2(tmp_path):
 
 
 def test_missing_schema_version_exits_2_not_3(tmp_path):
-    """Negative-spec: faithful reproduction of the oracle's own bug — a
-    generic 'ERROR ...' parser-output early-exit fires before the dedicated
-    schema-version-value check, so a MISSING schema_version exits 2, not the
-    documented 3 (see module docstring negative-spec)."""
     plugin_root = _write_plugin_root(tmp_path, omit_schema_version=True)
     with pytest.raises(vrc.ConsistencyError) as exc_info:
         vrc.run(plugin_root)
@@ -110,12 +93,6 @@ def test_unsupported_schema_version_value_exits_3(tmp_path):
 
 @pytest.mark.parametrize("schema_version", [1, 2, 3, 4])
 def test_every_version_the_sibling_reader_supports_is_readable_here(tmp_path, schema_version):
-    """THE regression. The local gate was `str(schema_version) not in ("1","2")`
-    while `registry.py` already read 1-4, so DoE's v4 registry (2026-08-03)
-    made this verifier exit 3 on every run for six weeks. v3 and v4 fail against
-    that old gate; all four must pass now, and the supported set is read off the
-    sibling reader so the two cannot diverge again silently.
-    """
     assert schema_version in registry._SUPPORTED_SCHEMA_VERSIONS
     plugin_root = _write_plugin_root(tmp_path, schema_version=schema_version)
     outcome = vrc.run(plugin_root)
@@ -134,7 +111,6 @@ def test_delivery_absent_at_v3_is_rejected(tmp_path):
 
 
 def test_delivery_absent_below_v3_is_permitted(tmp_path):
-    """On v1/v2 the field does not exist and its absence means "paste"."""
     plugin_root = _write_plugin_root(tmp_path, schema_version=2, omit_delivery=True)
     assert vrc.run(plugin_root).exit_code == 0
 
@@ -220,8 +196,6 @@ def test_v4_fields_forbidden_on_a_scan_row(tmp_path):
 
 
 def test_eligible_glob_gap_is_reported(tmp_path):
-    """The v4 completeness check: a glob member in neither `consumers` nor
-    `excluded_consumer` is the defect the field pair exists to catch."""
     plugin_root = _write_plugin_root(
         tmp_path,
         schema_version=4,
@@ -273,13 +247,11 @@ def test_list_checks_advertises_the_sibling_readers_version_set():
 
 
 def test_main_list_mode_returns_0(capsys):
-    plugin_root_placeholder = "/nonexistent"  # --list never touches disk
+    plugin_root_placeholder = "/nonexistent"
     rc = vrc.main([plugin_root_placeholder, "--list"])
     assert rc == 0
     out = capsys.readouterr().out
 
-    # `--list` is `list_checks()` verbatim, one line each — the check TEXT is
-    # pinned by the two list_checks tests above, not restated here.
     assert out.splitlines() == vrc.list_checks()
     assert any(line.startswith("check:eligible_glob_complete") for line in out.splitlines())
 

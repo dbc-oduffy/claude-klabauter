@@ -114,9 +114,9 @@ def _read_int_lines(path: Path) -> "list[int]":
             try:
                 out.append(int(line))
             except ValueError:
-                continue  # malformed timestamp line; skip it
+                continue
     except Exception:
-        pass  # unreadable/absent dispatch log is the cold-start case
+        pass
     return out
 
 
@@ -131,10 +131,6 @@ def _compose_workflow_offer(in_window_count: int, env: object = None) -> str:
 
 @register_op("hooks.nudge_multiwave_workflow")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PreToolUse(Agent|Workflow) op: offer a Workflow after a burst of
-    hand-dispatched write-capable executors."""
-    # Normalize the two params shapes
-    # both engine doors and the cold chain send (see block_worktree_tool).
     params = payload_of(params)
     tool_name = params.get("tool_name")
     if not isinstance(tool_name, str) or not tool_name:
@@ -166,7 +162,7 @@ def _handler(params: dict, repo_root=None) -> dict:
             if ensure_session_dir(session_dir, session_id):
                 (session_dir / "workflow-launched").touch()
         except Exception:
-            pass  # best-effort marker; must never block the advisory below
+            pass
         return no_advisory()
 
     if tool_name != "Agent":
@@ -174,15 +170,12 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     env = params.get("env")
 
-    # Condition 1: explicit override.
     if _env_value(env, "COORDINATOR_OVERRIDE_MULTIWAVE_WORKFLOW") == "1":
         return no_advisory()
 
-    # Condition 2: subagent-originated dispatch -> never nudge.
     if params.get("agent_id"):
         return no_advisory()
 
-    # Condition 3: write-capable subagent_type only.
     tool_input = params.get("tool_input")
     if not isinstance(tool_input, Mapping):
         return no_advisory()
@@ -194,16 +187,13 @@ def _handler(params: dict, repo_root=None) -> dict:
     if not _is_write_capable(subagent_type_lc):
         return no_advisory()
 
-    # Condition 4: no Workflow launched this session.
     if (session_dir / "workflow-launched").is_file():
         return no_advisory()
 
-    # Condition 5: fire at most once per session.
     nudged_sentinel = session_dir / "multiwave-workflow-nudged"
     if nudged_sentinel.is_file():
         return no_advisory()
 
-    # Condition 6: burst threshold.
     try:
         threshold = int(_env_value(env, "COORDINATOR_MULTIWAVE_NUDGE_THRESHOLD") or "4")
     except ValueError:
@@ -219,14 +209,14 @@ def _handler(params: dict, repo_root=None) -> dict:
     try:
         ensure_session_dir(session_dir, session_id)
     except Exception:
-        pass  # best-effort dir creation; a later write below simply no-ops if absent
+        pass
 
     now = int(time.time())
     try:
         with dispatch_log.open("a", encoding="utf-8") as fh:
             fh.write(f"{now}\n")
     except Exception:
-        pass  # best-effort dispatch-log append; must never block the nudge below
+        pass
 
     cutoff = now - window_secs
     lines = _read_int_lines(dispatch_log)
@@ -239,7 +229,7 @@ def _handler(params: dict, repo_root=None) -> dict:
         try:
             tmp_path.unlink()
         except Exception:
-            pass  # best-effort tmp-file cleanup after a failed replace
+            pass
 
     in_window_count = len(pruned)
 
@@ -249,7 +239,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     try:
         nudged_sentinel.touch()
     except Exception:
-        pass  # best-effort marker; must never block the advisory below
+        pass
 
     message = _compose_workflow_offer(in_window_count, env)
     return allow_advisory("PreToolUse", message)

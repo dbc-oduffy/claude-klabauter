@@ -1,19 +1,3 @@
-"""test_machine_local_impl_resolve.py — regression net for the settings-home-first
-resolution ladder in `coordinator/bin/lib/machine_local_impl_resolve.py`.
-
-The diff that introduced this module had zero
-test coverage for its own precedence fix (settings-home tried before the
-retired `~/.claude/bin` compat mirror). Every resolver below is exercised
-across all five states relevant to the ladder: env-override (where
-applicable), BOTH candidates present (the case that actually pins
-precedence — a naive test that creates only one candidate passes trivially
-regardless of ordering), settings-home-only, mirror-only, and neither
-present.
-
-Spec backlink: coordinator/bin/lib/machine_local_impl_resolve.py module
-docstring (DR-210 Amendment 2026-07-24, "resolves nothing through
-~/.claude/bin").
-"""
 from __future__ import annotations
 
 import os
@@ -27,10 +11,6 @@ if _LIB_DIR not in sys.path:
 
 import machine_local_impl_resolve as mlir  # noqa: E402
 
-
-# ---------------------------------------------------------------------------
-# claude_home()
-# ---------------------------------------------------------------------------
 
 def test_claude_home_env_override_wins(monkeypatch, tmp_path):
     """Convention A: CLAUDE_HOME is a $HOME substitute, not the .claude dir
@@ -65,10 +45,6 @@ def test_claude_home_claude_config_dir_absent_falls_back_to_claude_home(monkeypa
     assert mlir.claude_home() == os.path.join(str(tmp_path), ".claude")
 
 
-# ---------------------------------------------------------------------------
-# settings_home()
-# ---------------------------------------------------------------------------
-
 def test_settings_home_env_override_wins(monkeypatch, tmp_path):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     monkeypatch.setenv("CLAUDE_HOME", "/should/be/ignored")
@@ -91,10 +67,6 @@ def test_settings_home_default_falls_back_to_home_not_claude_home(monkeypatch):
     assert mlir.settings_home() == expected
     assert ".claude" not in os.path.relpath(mlir.settings_home(), os.path.expanduser("~"))
 
-
-# ---------------------------------------------------------------------------
-# machine_local_impl_path() — the precedence-critical resolver.
-# ---------------------------------------------------------------------------
 
 def _wire_homes(monkeypatch, tmp_path):
     """Point settings_home()/claude_home() at two distinct, isolated tmp dirs
@@ -140,10 +112,6 @@ def test_machine_local_impl_path_env_override_none_skips_check(monkeypatch, tmp_
 
 
 def test_machine_local_impl_path_both_present_settings_home_wins(monkeypatch, tmp_path):
-    """The precedence-pinning case: BOTH candidates exist on disk —
-    settings-home must win. This is the exact case the reviewer flagged as
-    untested (a test that creates only one candidate passes trivially
-    regardless of resolution order)."""
     settings_home, claude_home = _wire_homes(monkeypatch, tmp_path)
     _touch(settings_home / "bin" / "_machine_local.py")
     _touch(claude_home / "bin" / "_machine_local.py")
@@ -163,9 +131,6 @@ def test_machine_local_impl_path_mirror_only(monkeypatch, tmp_path):
 
 
 def test_machine_local_impl_path_neither_present_falls_back_to_mirror_path(monkeypatch, tmp_path):
-    """Neither candidate exists on disk: returns the (nonexistent) mirror
-    path unconditionally — callers are expected to isfile/exists-check the
-    result before use."""
     settings_home, claude_home = _wire_homes(monkeypatch, tmp_path)
     assert mlir.machine_local_impl_path() == str(claude_home / "bin" / "_machine_local.py")
 
@@ -178,10 +143,6 @@ def test_machine_local_impl_path_custom_env_var_name(monkeypatch, tmp_path):
     assert mlir.machine_local_impl_path(env_override="CUSTOM_IMPL_ENV") == "/custom/override.py"
 
 
-# ---------------------------------------------------------------------------
-# machine_local_bin_candidates()
-# ---------------------------------------------------------------------------
-
 def test_machine_local_bin_candidates_posix_order(monkeypatch, tmp_path):
     settings_home, claude_home = _wire_homes(monkeypatch, tmp_path)
     monkeypatch.setattr(mlir.os, "name", "posix")
@@ -192,10 +153,6 @@ def test_machine_local_bin_candidates_posix_order(monkeypatch, tmp_path):
 
 
 def test_machine_local_bin_candidates_windows_cmd_first_per_base(monkeypatch, tmp_path):
-    """Windows: `.cmd`-first for EACH base, settings-home base still tried
-    before the mirror base overall. Regression pin for F2 — the shared
-    module previously offered only the extensionless form on Windows,
-    diverging from resolve-repo-path.py's own (correct) handling."""
     settings_home, claude_home = _wire_homes(monkeypatch, tmp_path)
     monkeypatch.setattr(mlir.os, "name", "nt")
     assert mlir.machine_local_bin_candidates() == [
@@ -205,10 +162,6 @@ def test_machine_local_bin_candidates_windows_cmd_first_per_base(monkeypatch, tm
         str(claude_home / "bin" / "machine-local"),
     ]
 
-
-# ---------------------------------------------------------------------------
-# windows_cmd_first_candidates() — the shared Windows-probing helper itself.
-# ---------------------------------------------------------------------------
 
 def test_windows_cmd_first_candidates_posix_passthrough(monkeypatch):
     monkeypatch.setattr(mlir.os, "name", "posix")
@@ -225,16 +178,7 @@ def test_windows_cmd_first_candidates_nt_expands_each_base(monkeypatch):
     ]
 
 
-# ---------------------------------------------------------------------------
-# Cross-plane agreement pin (P174-C2) — the defect this plan closes: the
-# bin-side helper, the checker, the canonical engine seam and the two
-# marketplace/flat-layout engine rungs must all name the same directory.
-# ---------------------------------------------------------------------------
-
 def _import_checker_and_seam():
-    """Import check_install_singularity._claude_base_dir and
-    _settings_home.claude_config_dir/coordinator_doe_root's engine rungs —
-    done lazily inside each test so sys.path setup stays local to this pin."""
     import importlib
 
     _COORDINATOR_CORE_ROOT = os.path.dirname(
@@ -267,10 +211,6 @@ def test_agreement_pin_claude_home_only(monkeypatch, tmp_path):
     assert _norm(checker._claude_base_dir()) == _norm(expected)
     assert _norm(str(settings_home.claude_config_dir())) == _norm(expected)
 
-    # Per-rung: each engine rung derives its own probe path under the same
-    # agreed-upon claude dir (Review finding 4) — both _cf_flat_layout_probe
-    # and _cf_marketplace_cache_rung build their candidate under exactly the
-    # directory _cf_claude_config_dir_or_none() resolves.
     claude_dir = doe_root_mod._cf_claude_config_dir_or_none()
     assert _norm(claude_dir) == _norm(expected)
     assert _norm(os.path.join(claude_dir, "plugins", "coordinator-claude")) == _norm(
@@ -294,7 +234,6 @@ def test_agreement_pin_claude_config_dir_set(monkeypatch, tmp_path):
     assert _norm(mlir.claude_home()) == _norm(str(config_dir))
     assert _norm(str(settings_home.claude_config_dir())) == _norm(str(config_dir))
     assert _norm(doe_root_mod._cf_claude_config_dir_or_none()) == _norm(str(config_dir))
-    # Checker divergence pinned as known/out-of-scope (Anti-scope).
     assert _norm(checker._claude_base_dir()) == _norm(
         os.path.join(str(home_substitute), ".claude")
     )

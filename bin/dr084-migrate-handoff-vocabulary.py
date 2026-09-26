@@ -64,9 +64,6 @@ HANDOFF_ID_RE = re.compile(r'^handoff_id:\s*"?([^"\s]+)"?\s*$')
 ADDL_PRED_START_RE = re.compile(r"^additional_predecessors:\s*$")
 LIST_ITEM_RE = re.compile(r"^\s*-\s*(.*)$")
 
-# Matches the key of a status/deployment_state line regardless of whether the
-# value parses as a bare token -- used only to detect the unparseable case
-# above, never to drive migration.
 WARNABLE_KEY_RE = re.compile(r"^(status|deployment_state):\s*(.*)$")
 
 
@@ -105,14 +102,6 @@ def collect_files(repo_root):
 
 
 def frontmatter_bounds(lines):
-    """Locate the (opener, closer) line indices of a record's YAML frontmatter.
-
-    Skips leading blank lines and complete leading HTML comment blocks
-    (`<!-- ... -->`, possibly multiple, possibly multi-line) before requiring
-    the next non-skippable line to be exactly `---`. Returns None if no opener
-    is found (including when a leading `<!--` is never closed), if the first
-    non-skippable line isn't `---`, or if no closer line follows the opener.
-    """
     i = 0
     n = len(lines)
     while i < n:
@@ -225,28 +214,6 @@ def _is_archived_handoff_path(path, repo_root):
 
 
 def find_live_duplicate_ids(records_by_path, repo_root):
-    """Detect a `handoff_id` that exists both under `state/handoffs/` and
-    `archive/handoffs/` at the same time -- a record that has already been
-    archived but has a stray, un-deleted live-path twin (residue from an
-    unrelated archival-flow bug upstream of this migration, not created by
-    this tool). Returns {live_path: archived_twin_path} for every such live
-    residue found, so the caller can skip migrating it instead of silently
-    touching both copies and disguising the collision as "migrated, normal".
-
-    Negative-spec: earlier behavior migrated every file `collect_files`
-    returned with no duplicate-id awareness at all. When a live residue and
-    its archived twin shared a `handoff_id` (residue is not this tool's own
-    doing -- see module docstring), both got vocabulary-edited independently
-    in the same run, which left the live residue looking like a normal,
-    currently-migrated, in-date record instead of the orphaned pre-migration
-    artifact it actually was. That silent legitimization is what let the
-    crash-orphan reaper (`reap-orphaned-in-flight-handoffs.py`) later read
-    one such residue as a real live baton and flip it back to
-    open/ready_to_fire, resurrecting already-closed work. Confirmed via
-    the DR-084 C8 corpus run (commit 339b269a) -- see
-    docs/decisions/DR-084 addenda and archive/handoffs 2026-07-22 records
-    hnd-execution-mega-gate-100600 and hnd-re-fork-the-abandoned-b1-remai.
-    """
     by_id = {}
     for path, record in records_by_path.items():
         handoff_id = record.get("handoff_id")
@@ -301,7 +268,7 @@ def _atomic_write(path, lines):
         try:
             os.remove(tmp_path)
         except OSError:
-            pass  # tmp file already gone or unremovable; original write error re-raises below
+            pass
         raise
 
 

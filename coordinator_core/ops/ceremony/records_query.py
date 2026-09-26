@@ -74,11 +74,6 @@ from coordinator_core.ops.records_query import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Query entrypoint
-# ---------------------------------------------------------------------------
-
-
 def query_records(
     record_type: str,
     worktree_root: Path,
@@ -126,9 +121,9 @@ def query_records(
 
     clauses: list[dict] = []
     if where:
-        clauses = _parse_where(where)  # may sys.exit(1) on unsupported operator
+        clauses = _parse_where(where)
 
-    since_cutoff = _parse_since(since)  # may sys.exit(1) on invalid value
+    since_cutoff = _parse_since(since)
 
     try:
         if record_type in _SYNTHETIC_TYPES:
@@ -148,9 +143,6 @@ def query_records(
                 if rec is not None:
                     results.append(rec)
     except _RecordsCollectError as exc:
-        # This helper carries no incomplete/error signal in its bare-list return
-        # shape (unlike the records.query op) — fail-open with a stderr note, same
-        # posture as this module's pre-existing OSError handling.
         print(
             f"skip: query_records: _collect_files({record_type!r}) failed: {exc}",
             file=sys.stderr,
@@ -173,42 +165,8 @@ def query_records(
     return results
 
 
-# ---------------------------------------------------------------------------
-# DR-115 legacy-prose-queue invisibility signal
-# ---------------------------------------------------------------------------
-
-
 def legacy_prose_signal(record_type: str, worktree_root: Path) -> Optional[dict]:
-    """Return ``{"count", "path"}`` when ``record_type`` has unindexed legacy
-    prose-queue entries on disk under ``worktree_root``, else ``None``.
-
-    Thin re-export of ``coordinator_core.ops.records_query._legacy_prose_signal``
-    (DR-115 — DoE ``docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-
-    staleness.md``) — the single shared implementation, not a second reader. See
-    that function's own docstring for the exact ``None``-vs-populated rules
-    (no known legacy path for this type, path absent, zero pipe-row entry
-    lines, or a genuine non-empty legacy queue independent of the per-entry
-    YAML directory's own count).
-
-    Deliberately NOT folded into ``query_records()``'s own return shape:
-    ``query_records()`` returns a bare ``list[dict]`` consumed by ``len()``/
-    list-comprehension callers throughout this seam's importers
-    (``coordinator_core/roadmap/audit.py``, ``coordinator_core/goals/
-    reassess_krs.py``, ``coordinator_core/reconcile/gate_eval.py``,
-    ``coordinator_core/ops/emit/sections/backlogs.py``) — wrapping that return
-    value in a dict to carry a flat signal key would be a breaking contract
-    change for every existing caller, for a signal only two of the many
-    queryable types (``improvement``, ``bug``) ever carry. Call this function
-    separately, alongside ``query_records()``, for the same
-    ``(record_type, worktree_root)`` pair when a caller needs to report queue
-    depth.
-    """
     return _legacy_prose_signal(worktree_root, record_type)
-
-
-# ---------------------------------------------------------------------------
-# --unattached union lens
-# ---------------------------------------------------------------------------
 
 
 def query_unattached_all(
@@ -246,9 +204,9 @@ def query_unattached_all(
     """
     clauses: list[dict] = []
     if where:
-        clauses = _parse_where(where)  # may sys.exit(1) on unsupported operator
+        clauses = _parse_where(where)
 
-    since_cutoff = _parse_since(since)  # may sys.exit(1) on invalid value
+    since_cutoff = _parse_since(since)
     older_than_cutoff = _parse_older_than(older_than) if older_than else None
 
     return _query_unattached_all(

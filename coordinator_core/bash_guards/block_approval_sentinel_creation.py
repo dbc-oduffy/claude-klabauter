@@ -187,33 +187,15 @@ from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_nam
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 CLASS = "hard-deny"
-#: Widened 2026-08-07 (C4e) from `["Bash"]` -- this guard now also declares
-#: a verdict (or SILENT) for PowerShell, per the plan's per-guard-dialect-
-#: declaration ruling (Doubt-check (2)). See `check()`'s own dialect gate.
-#: A direct reference to the shared universe (C2 declaration-form
-#: conversion) -- never a copy or re-wrap -- since this guard covers the
-#: full command tool-name universe.
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
-#: The exact basename this guard protects. Never relaxed to a substring/
 #: prefix match -- an unrelated file that merely CONTAINS this string in a
-#: longer name (e.g. `.coordinator-doctrine-edit-approved.bak`) is a
 #: DIFFERENT file and is not the approval sentinel the sibling DoE hook
-#: reads; matching it too would be scope creep past what this guard is
-#: chartered to protect.
 _TARGET_BASENAME = ".coordinator-doctrine-edit-approved"
 
-#: A `VAR=value` assignment token (bare, or the `VAR=value` half of an
-#: `export VAR=value` pair -- `export` itself never matches this and is
-#: simply skipped over, since the assignment token that follows it is
-#: tokenized separately and matches on its own).
 _ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
 
-#: A `$VAR` or `${VAR}` dereference, anywhere inside a token (e.g. bare
-#: `$S`, quoted `"$S"` -- shlex already strips the quotes so both read
-#: identically by the time this guard sees them -- or embedded in a larger
-#: token such as `of=$S`).
 _VAR_REF_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
 
 
@@ -330,36 +312,11 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
     spelling they match.
     """
 
-    #: Commands that can never create/modify the sentinel through their own
-    #: normal operation (absent a redirect, which is checked separately and
-    #: first -- see class docstring). Removal is always sanctioned; the rest
-    #: are pure reads, plus `echo`, which writes only to stdout and so cannot
-    #: reach the sentinel without the redirect the check above catches first.
-    #: This set is also the `xargs <verb>` allowlist.
     _SAFE_ARGV0 = frozenset(
         {"rm", "cat", "ls", "stat", "test", "head", "tail", "wc", "file", "grep", "echo"}
     )
 
-    #: `git` subcommands that only read repo state. Anything else under
-    #: `git` (`checkout`, `restore`, `stash`, or an unrecognized subcommand)
-    #: is NOT presumed safe and falls through to the mention-based deny.
-    #:
-    #: `check-ignore` and `check-attr` are pure path QUERIES -- they resolve a
-    #: pathname against `.gitignore` / `.gitattributes` and report, touching
-    #: no file and no index. Both were missing until 2026-07-31, when a
-    #: `git check-ignore .coordinator-doctrine-edit-approved` -- the exact
-    #: command that verifies the sentinel is ignored, i.e. that the
-    #: checkout-materialises-a-fresh-sentinel hole is closed -- was denied as
-    #: a write. That is the guard refusing the very check that confirms its
-    #: own boundary holds. `check-attr` is admitted alongside it as the
-    #: identical query shape rather than waiting for its own false positive.
-    #:
-    #: Deliberately NOT widened past demonstrated need: this set is an
-    #: enumerate-the-harmless allowlist by construction (see the class
     #: docstring's "THE INVERSION ITSELF"), so it grows one justified entry at
-    #: a time. `blame`, `cat-file`, and `ls-tree` are equally read-only and
-    #: equally absent -- add them when something actually needs them, with
-    #: the same note.
     _SAFE_GIT_SUBCOMMANDS = frozenset(
         {
             "status", "diff", "log", "show", "ls-files", "rev-parse", "describe",
@@ -379,9 +336,6 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
 
     def __init__(self, target_basename: str) -> None:
         super().__init__(target_basename)
-        #: Variable names, tainted for the CURRENT `evaluate()` call only --
-        #: recomputed at the top of `evaluate()` from that call's own
-        #: command string, never carried over between calls. See class
         #: docstring "VARIABLE TAINT".
         self._tainted_vars: "set[str]" = set()
 
@@ -506,19 +460,10 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
         return self._segment_mentions_target(seg_tokens)
 
 
-#: Detection engine for this guard specifically -- see `_ApprovalSentinelDetector`
-#: docstring above for why this is a dedicated subclass rather than a shared-
-#: engine edit. `block_worktree_sentinel_creation.py` and
-#: `block_disarm_marker_sentinel_creation.py` remain on the base
-#: `SentinelCreationDetector` (allowlist posture), unchanged by this fix.
 _detector = _ApprovalSentinelDetector(_TARGET_BASENAME)
 
 
 def _evaluate(cmd: str, dialect: Optional[Dialect] = None):
-    """`dialect=None`/`Dialect.BASH` preserves the exact pre-C4e call shape
-    (`_detector.evaluate(cmd)`, AC4) -- only a genuinely recognized
-    non-bash dialect routes through the new dialect-aware entry point (see
-    `_sentinel_creation_guard.SentinelCreationDetector.evaluate_for_dialect`)."""
     if dialect is None or dialect is Dialect.BASH:
         return _detector.evaluate(cmd)
     return _detector.evaluate_for_dialect(
@@ -527,36 +472,13 @@ def _evaluate(cmd: str, dialect: Optional[Dialect] = None):
 
 
 def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
-    # Deliberately does NOT echo `cmd` back into the message and does NOT
-    # name the target basename in either branch below -- both would print
-    # the exact bypass an eager agent could copy-paste, which reads as
-    # sanctioning it rather than blocking it. `cmd` stays accepted for
-    # call-site symmetry with the sibling guard, but is intentionally
-    # unused here.
-    #
-    # `reason_class` (2026-07-28 diagnosability fix -- see
-    # `_sentinel_creation_guard.py` module docstring "REASON CLASS") splits
-    # the ONE fixed message this function used to return into two truthful
     # ones: a REASON_DIRECT deny means a rule positively matched the
-    # sentinel, so the "this command would create/modify the sentinel"
     # assertion is actually correct. A REASON_INDIRECTION deny means the
-    # opposite -- the payload sits behind an interpreter/env/xargs/heredoc
     # wrapper this guard cannot examine, so it denies BY CONSTRUCTION, not
-    # because anything was found. The prior single-message version asserted
     # the DIRECT text on an INDIRECTION deny too, which is how a caller
-    # whose script never mentioned the sentinel got told it would create
-    # one -- a false assertion that cost a live cross-repo debugging
-    # round-trip (see dispatch brief, 2026-07-28).
     del cmd
     if reason_class == REASON_INDIRECTION:
-        # `reason_kind` is safe to surface here (it names a shell SHAPE --
-        # e.g. "bash <file> (interpreter-invoked script -- indirection
-        # wrapper, script content unexamined)" -- never a bypass to
         # copy-paste), but a RECURSIVE indirection verdict can still bottom
-        # out one level down in the direct branch's target-naming string
-        # (e.g. `bash -c "touch <sentinel>"` unwraps through exactly that).
-        # Redact the basename out regardless of which sub-path produced it,
-        # rather than trusting the branch alone to guarantee echo-safety.
         safe_shape = reason_kind.replace(_TARGET_BASENAME, "<the sentinel>")
         return (
             "BLOCKED (approval-sentinel guard): this command was denied "
@@ -598,11 +520,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     identity-gated -- fires for every caller including the main-loop EM
     (see module docstring "NOT IDENTITY-GATED").
     """
-    # Deliberately no try/except here -- fail-CLOSED-on-exception is the
-    # dispatcher's job for hard-deny guards (dispatch.py's guard_chain
-    # fail_closed=True entries route an uncaught exception through its
-    # crash-deny wrapper); catching and swallowing an unexpected error into
-    # a silent allow here would defeat that contract.
     tool_name = payload.get("tool_name") or ""
     if tool_name not in MATCHERS:
         return None
@@ -615,15 +532,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     cmd = cmd.replace("\r", "")
 
     # NOTE: deliberately no raw-text `_MENTION_RE` pre-filter gate here
-    # (unlike the sibling guards' cheap-probe posture) -- a partially-quoted
-    # spelling such as `'.coordinator-doctrine-edit'"-approved"` does NOT
-    # contain the sentinel basename as a contiguous raw substring (the quote
     # characters sit between the two halves); only the TOKENIZED form (after
-    # shlex merges the adjacent quoted segments) reconstructs it. Gating on
-    # the raw substring here would silently defeat exactly the "partially-
-    # quoted spellings" coverage this guard is chartered to close. The
-    # tokenized pass below is cheap enough that skipping this pre-filter is
-    # not a meaningful cost.
     deny, reason_kind, reason_class = _evaluate(cmd, dialect)
     if not deny:
         return None

@@ -69,11 +69,6 @@ class TestCorpusReader:
         assert list(cov.iter_corpus_commands(str(p))) == ["pwd"]
 
     def test_iter_corpus_commands_falls_back_past_a_null_c_value(self, tmp_path):
-        """`row.get("c", row.get("command"))` only falls back on an ABSENT
-        key -- a row shaped `{"c": null, "command": "ls -la"}` (key present,
-        value None) would return None directly and silently drop the line.
-        The reader must fall through null values at every key, not just
-        absent ones."""
         p = tmp_path / "corpus.jsonl"
         p.write_text('{"c": null, "command": "ls -la"}\n')
         assert list(cov.iter_corpus_commands(str(p))) == ["ls -la"]
@@ -87,9 +82,9 @@ class TestCorpusReader:
 class TestMeasureRunawayFind:
     def test_target_class_and_fired_counts(self):
         commands = [
-            "find / -name x",       # root-anchored: target + fired
-            "find coordinator -name x",  # bounded: target, not fired
-            "git status",           # not a find command at all: not target
+            "find / -name x",
+            "find coordinator -name x",
+            "git status",
         ]
         result = cov.measure_runaway_find(commands)
         assert result.guard == "check_runaway_find"
@@ -99,37 +94,13 @@ class TestMeasureRunawayFind:
         assert result.baseline_pct == cov.BASELINE_PCT["check_runaway_find"]
 
     def test_bare_home_anchor_is_now_caught(self):
-        """`find ~ -name x` is target-class (invokes find) and IS now caught
-        by check_runaway_find -- `_find_is_root_anchor` in dispatch_checks.py
-        was widened (Windows-viability BX-16-adjacent follow-up) to recognize
-        a bare `~`/`~/` token and a literal `$HOME` token, alongside the
-        pre-existing `/`, drive-letter, `/mnt/<X>`, `/cygdrive/<X>` forms.
-        Verified against the real 62,487-command corpus (2026-07-28
-        baseline) before this widening landed: 5 additional real corpus
-        commands caught, zero regressions, zero new false positives (`find
-        ~/subdir ...` remains correctly un-denied, since only the bare-home
-        token matches, not a deeper anchor under it). Formerly pinned
-        CURRENT (uncaught) behavior as a documented gap; now inverted to
-        assert the case is caught, per the fix landing."""
         assert guard.check_runaway_find("find ~ -name x") is not None
 
     def test_home_anchor_variants_are_caught(self):
-        """Sibling form of the bare home anchor: trailing slash (`~/`,
-        stripped to `~` by the same trailing-slash loop used for `/`). A
-        deeper anchor under it (`~/subdir`) is deliberately NOT a root
-        anchor and must remain un-denied, matching the existing `/mnt/<X>`
-        vs `/mnt/<X>/subdir` asymmetry."""
         assert guard.check_runaway_find("find ~/ -name x") is not None
         assert guard.check_runaway_find("find ~/subdir -name x") is None
 
     def test_home_env_var_token_deliberately_not_caught(self):
-        """`find $HOME -name x` is NOT caught, by design, not by gap --
-        `check_runaway_find`'s own caller-side loop bails on ANY token
-        containing `$` before `_find_is_root_anchor` is even reached (never
-        guesses at an unexpanded shell variable's value, since `$HOME` can
-        be legitimately overridden to something that is not the real home
-        directory). This differs from the `~`/`~/` case, which is a literal
-        token this guard can resolve without any expansion."""
         assert guard.check_runaway_find("find $HOME -name x") is None
 
     def test_zero_target_class_reports_zero_pct_not_a_crash(self):
@@ -142,9 +113,9 @@ class TestMeasureRunawayFind:
 class TestMeasureOfferGitC:
     def test_target_class_and_fired_counts(self):
         commands = [
-            "cd /repo && git log -1",     # cd-prefixed + fired (rewrite/deny)
-            "cd /repo && ls -la",         # cd-prefixed but no git: target, not fired
-            "git status",                 # not cd-prefixed: not target
+            "cd /repo && git log -1",
+            "cd /repo && ls -la",
+            "git status",
         ]
         result = cov.measure_offer_git_c(commands)
         assert result.guard == "check_offer_git_c"
@@ -192,9 +163,6 @@ class TestMainCliFailsLoudWithoutACorpus:
         assert rc == 0
 
     def test_main_fails_loud_not_a_traceback_on_nonexistent_explicit_corpus(self, tmp_path, capsys):
-        """An explicit `--corpus /typo.jsonl` that doesn't exist must hit the
-        same friendly fail-loud stderr message as no-corpus-supplied, not an
-        unhandled FileNotFoundError traceback out of iter_corpus_commands."""
         missing = tmp_path / "does-not-exist.jsonl"
         rc = cov.main(["--corpus", str(missing)])
         assert rc == 2

@@ -25,11 +25,6 @@ from pathlib import Path
 from coordinator_core import citation_graph as cg
 
 
-# ---------------------------------------------------------------------------
-# Extraction
-# ---------------------------------------------------------------------------
-
-
 def test_extracts_bare_basename_and_pathed():
     text = "See `some-page.md` and also `docs/wiki/other-page.md` for detail."
     citations = cg.extract_citations(text, Path("citing.md"))
@@ -95,9 +90,6 @@ def test_skips_directory_convention_placeholder():
 
 
 def test_skips_ellipsis_and_bang_placeholder_variants():
-    """Widened placeholder heuristic: a literal ASCII `...`, a unicode `…`,
-    or a leading `!` (gitignore-negation convention) mark prose describing a
-    class of paths, not a specific file being cited."""
     text = "\n".join(
         [
             "See `docs/plans/...md` for the pattern.",
@@ -127,8 +119,6 @@ def test_markdown_link_label_not_double_counted():
 
 
 def test_skips_shell_command_text_carrying_md_token():
-    """A backticked shell command, one of whose arguments happens to end
-    `.md`, is a command being run, not a file being cited."""
     text = (
         "3. The commit subject names the closed backlog entry; "
         "`git log -- state/bug-backlog.md` becomes the audit trail."
@@ -138,9 +128,6 @@ def test_skips_shell_command_text_carrying_md_token():
 
 
 def test_skips_shell_command_text_with_two_md_arguments():
-    """Same class as above -- a `grep` invocation naming two `.md` files as
-    search targets is one command, not two citations, and not one
-    concatenated bogus citation either."""
     text = (
         '- `grep -n "split" coordinator/skills/sizing/SKILL.md '
         "coordinator/skills/plan/SKILL.md` -- no"
@@ -150,9 +137,6 @@ def test_skips_shell_command_text_with_two_md_arguments():
 
 
 def test_splits_two_filenames_concatenated_in_one_backtick_span():
-    """A single backtick span naming two files in prose must resolve as two
-    independent citations, not one bogus target formed by concatenating
-    both."""
     text = (
         "    E2. DELETE the pointer line "
         "`→ daily-branch-discipline.md, scoped-safety-commits.md` under"
@@ -197,13 +181,9 @@ def test_wikilink_normalizes_uppercase_greppable_token_slug():
 
 
 def test_separatorless_double_bracket_token_is_not_a_wikilink():
-    """TOML array-of-tables syntax inside a backticked code span, not a page
-    reference. Every page slug in this corpus is multi-word and separated,
-    so requiring a `-` or `_` excludes the class."""
     text = "a flat key after the last `[table]`/`[[array]]` header is table-scoped"
     assert cg.extract_citations(text, Path("citing.md")) == []
 
-    # The separated form on the same surface still extracts.
     kept = cg.extract_citations("see [[some-page]] for that", Path("citing.md"))
     assert [c.raw_target for c in kept] == ["some-page.md"]
 
@@ -219,11 +199,6 @@ def test_wikilink_skipped_in_fenced_code_block():
     )
     citations = cg.extract_citations(text, Path("citing.md"))
     assert citations == []
-
-
-# ---------------------------------------------------------------------------
-# Resolution -- bare basename
-# ---------------------------------------------------------------------------
 
 
 def _citation(kind, raw_target, citing_file=Path("citing.md")):
@@ -260,17 +235,7 @@ def test_resolve_bare_basename_rot():
     assert verdict.matches == ()
 
 
-# ---------------------------------------------------------------------------
-# Resolution -- pathed (repo-root-relative, the inherited-bug regression)
-# ---------------------------------------------------------------------------
-
-
 def test_resolve_pathed_is_repo_root_relative_not_dirname_joined(tmp_path):
-    """The prototype's inherited bug: joining a pathed reference against the
-    CITING file's own directory produces a well-formed but wrong path for
-    any citing file not at the repo root. A citing file three directories
-    deep, citing a path that IS correct relative to the repo root, must
-    still resolve live -- proving the resolver does not dirname-join."""
     (tmp_path / "docs" / "wiki").mkdir(parents=True)
     target = tmp_path / "docs" / "wiki" / "target-page.md"
     target.write_text("content", encoding="utf-8")
@@ -284,10 +249,6 @@ def test_resolve_pathed_is_repo_root_relative_not_dirname_joined(tmp_path):
     assert verdict.status == "live"
     assert verdict.matches == (target,)
 
-    # A dirname-join (the inherited bug) would look for
-    # <deep_citing_file's dir>/docs/wiki/target-page.md, which does not
-    # exist -- confirm that path is indeed absent, so this test would have
-    # caught the regression it targets.
     wrong_path = deep_citing_file.parent / "docs" / "wiki" / "target-page.md"
     assert not wrong_path.exists()
 
@@ -299,9 +260,6 @@ def test_resolve_pathed_rot_when_absent(tmp_path):
 
 
 def test_resolve_pathed_tries_plugin_root_before_repo_root(tmp_path):
-    """The fix: a pathed citation authored plugin-root-relative must
-    resolve, even though the same relative path does not exist under the
-    repo root."""
     plugin_root = tmp_path / "coordinator"
     (plugin_root / "docs" / "wiki").mkdir(parents=True)
     target = plugin_root / "docs" / "wiki" / "only-under-plugin-root.md"
@@ -345,9 +303,6 @@ def test_resolve_pathed_home_relative_is_not_rot():
 
 
 def test_resolve_pathed_portable_across_posix_and_windows_style_fixtures(tmp_path):
-    """Pure `Path`-join resolution must behave identically regardless of
-    which OS authored the fixture paths -- no `os.path` string joins, no
-    separator literals, no cwd dependence."""
     plugin_root = tmp_path / "coordinator"
     (plugin_root / "docs" / "wiki").mkdir(parents=True)
     target = plugin_root / "docs" / "wiki" / "portable-page.md"
@@ -361,12 +316,6 @@ def test_resolve_pathed_portable_across_posix_and_windows_style_fixtures(tmp_pat
 
     assert posix_verdict.status == "live"
     assert posix_verdict.matches == (target,)
-    # Windows accepts either separator natively; POSIX treats a backslash as
-    # a literal filename character, so the windows-style token is expected
-    # to miss on POSIX -- assert each platform's own well-defined behaviour
-    # rather than asserting the two outputs are identical, which would be a
-    # false requirement (`Path` does not normalize separators cross-platform
-    # by design).
     import os
 
     if os.sep == "\\":
@@ -374,11 +323,6 @@ def test_resolve_pathed_portable_across_posix_and_windows_style_fixtures(tmp_pat
         assert windows_verdict.matches == (target,)
     else:
         assert windows_verdict.status == "rot"
-
-
-# ---------------------------------------------------------------------------
-# Resolution -- markdown link (relative to the citing file's own directory)
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_markdown_link_relative_to_citing_file(tmp_path):
@@ -403,11 +347,6 @@ def test_resolve_markdown_link_dead(tmp_path):
     assert verdict.status == "dead_link"
 
 
-# ---------------------------------------------------------------------------
-# resolve_citation dispatch
-# ---------------------------------------------------------------------------
-
-
 def test_resolve_citation_dispatches_by_kind():
     wiki_index = {"page.md": (Path("/wiki/page.md"),)}
     verdict = cg.resolve_citation(
@@ -421,11 +360,6 @@ def test_resolve_citation_rejects_unknown_kind():
 
     with pytest.raises(ValueError):
         cg.resolve_citation(_citation("mystery", "x.md"), {}, {})
-
-
-# ---------------------------------------------------------------------------
-# Index builders
-# ---------------------------------------------------------------------------
 
 
 def test_load_wiki_index_maps_basename_to_paths(tmp_path):
@@ -442,11 +376,6 @@ def test_load_wiki_index_maps_basename_to_paths(tmp_path):
 
 
 def test_load_wiki_index_records_fold_collision_for_wikilink_lookup(tmp_path):
-    """`_normalize_wikilink_slug` folds `_` -> `-` unconditionally, so
-    `a_b.md` and `a-b.md` are indistinguishable after a `[[a_b]]` wikilink's
-    normalization. `load_wiki_index` must record the collision under the
-    namespaced fold key without disturbing the two exact basename keys a
-    literal backtick citation still resolves through."""
     wiki_root = tmp_path / "wiki"
     wiki_root.mkdir()
     (wiki_root / "a_b.md").write_text("x", encoding="utf-8")
@@ -461,11 +390,6 @@ def test_load_wiki_index_records_fold_collision_for_wikilink_lookup(tmp_path):
 
 
 def test_resolve_bare_basename_wikilink_fold_collision_is_ambiguous():
-    """The same collision, seen from `resolve_bare_basename`'s side: a
-    wikilink-origin citation (`is_wikilink=True`) whose (already-folded)
-    `raw_target` is a recorded collision key must resolve `ambiguous`, even
-    though an exact-key lookup for that same string would find exactly one
-    match."""
     wiki_index = {
         "a-b.md": (Path("/wiki/a-b.md"),),
         "a_b.md": (Path("/wiki/a_b.md"),),
@@ -483,9 +407,6 @@ def test_resolve_bare_basename_wikilink_fold_collision_is_ambiguous():
 
 
 def test_resolve_bare_basename_exact_backtick_citation_unaffected_by_fold_collision():
-    """The same fold-collision entry must NOT make an ordinary (non-wikilink)
-    backtick citation to the exact basename ambiguous -- `` `a-b.md` `` in
-    prose is never folded and names exactly one file."""
     wiki_index = {
         "a-b.md": (Path("/wiki/a-b.md"),),
         "a_b.md": (Path("/wiki/a_b.md"),),
@@ -512,11 +433,6 @@ def test_load_repo_index_excludes_git_dir(tmp_path):
     assert "real.md" in index
 
 
-# ---------------------------------------------------------------------------
-# scan_corpus -- end-to-end over a synthetic corpus
-# ---------------------------------------------------------------------------
-
-
 def test_scan_corpus_end_to_end(tmp_path):
     wiki_root = tmp_path / "coordinator" / "docs" / "wiki"
     wiki_root.mkdir(parents=True)
@@ -529,23 +445,14 @@ def test_scan_corpus_end_to_end(tmp_path):
     report = cg.scan_corpus(wiki_root=wiki_root, repo_root=tmp_path)
     assert report.wiki_file_count == 2
     counts = report.counts()
-    assert counts.get("live", 0) == 2  # bare basename + markdown link
-    assert counts.get("rot", 0) == 1  # missing-page.md
+    assert counts.get("live", 0) == 2
+    assert counts.get("rot", 0) == 1
 
 
 def test_scan_corpus_states_wiki_file_count_and_sha_over_real_corpus():
-    """Smoke test against claude-klabauter's own real `docs/wiki/` corpus -- pins that
-    a live run states both the file count and a git SHA alongside its
-    measured figures."""
     report = cg.scan_corpus()
     assert report.wiki_file_count > 0
-    # git_sha may be None on a non-git checkout, but this repo is one.
     assert report.git_sha is None or len(report.git_sha) == 40
-
-
-# ---------------------------------------------------------------------------
-# Seeded, reproducible sampler
-# ---------------------------------------------------------------------------
 
 
 def _make_verdicts(n):
@@ -584,11 +491,6 @@ def test_sample_verdicts_order_independent_of_input_order():
     sample_a = cg.sample_verdicts(verdicts, seed=7, sample_size=5)
     sample_b = cg.sample_verdicts(reversed_verdicts, seed=7, sample_size=5)
     assert [v.citation.raw_target for v in sample_a] == [v.citation.raw_target for v in sample_b]
-
-
-# ---------------------------------------------------------------------------
-# git_head_sha
-# ---------------------------------------------------------------------------
 
 
 def test_git_head_sha_returns_none_for_non_git_dir(tmp_path):

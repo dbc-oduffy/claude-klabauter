@@ -21,9 +21,6 @@ from coordinator_core.testing.doe_root import doe_root_and_present
 
 
 def _find_fixture():
-    # DoE sibling repo, resolved via the shared registry-first ladder
-    # (coordinator_core.testing.doe_root.doe_root_and_present) rather than a
-    # __file__-anchored checkout-depth guess.
     doe_root, present = doe_root_and_present()
     if not present:
         return None
@@ -50,9 +47,6 @@ def test_conformance_fixture_byte_parity():
         assert actual == expected, f"mismatch for case {inp!r}"
 
 
-# Hand-transcribed subset of the same fixture (kept inline so this test suite
-# does not hard-depend on the DoE sibling repo being checked out alongside
-# claude-klabauter -- CI/sandboxed runs of just this repo still get real coverage).
 _INLINE_CASES = [
     (
         ("python", "pass", "hard", "Python 3.11.5", ""),
@@ -83,8 +77,6 @@ def test_emit_line_inline_cases(args, expected):
 
 
 def test_json_escape_order_backslash_before_quote():
-    # Backslash MUST be escaped first -- a value containing a literal
-    # backslash-quote sequence must not double-escape.
     assert json_escape('\\"') == '\\\\\\"'
 
 
@@ -93,7 +85,6 @@ def test_json_escape_control_chars():
 
 
 def test_json_escape_non_ascii_passes_through_raw():
-    # Deliberate boundary: non-ASCII is NOT escaped (unlike json.dumps).
     assert json_escape("café") == "café"
 
 

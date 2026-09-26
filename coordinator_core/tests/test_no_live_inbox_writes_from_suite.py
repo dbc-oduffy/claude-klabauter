@@ -21,8 +21,6 @@ from coordinator_core import conftest as cc_conftest
 
 
 def test_a_write_into_a_stubbed_live_inbox_root_fails_loudly(tmp_path, monkeypatch):
-    """Red verdict: a deliberate write through the `_live_inbox_roots()` seam
-    trips the guard."""
     root = tmp_path / "peer-inbox"
     root.mkdir()
     monkeypatch.setattr(cc_conftest, "_live_inbox_roots", lambda: (str(root),))
@@ -37,10 +35,6 @@ def test_a_write_into_a_stubbed_live_inbox_root_fails_loudly(tmp_path, monkeypat
 
 
 def test_a_clean_test_does_not_trip_the_guard(tmp_path, monkeypatch):
-    """Green verdict: a test that writes nothing into the stubbed root passes
-    through untouched. A liveness instrument armed without its clean leg
-    proven is not proven — an always-red guard would look identical to this
-    plan's fix from the outside."""
     root = tmp_path / "peer-inbox"
     root.mkdir()
     monkeypatch.setattr(cc_conftest, "_live_inbox_roots", lambda: (str(root),))
@@ -51,9 +45,6 @@ def test_a_clean_test_does_not_trip_the_guard(tmp_path, monkeypatch):
 
 
 def test_an_absent_root_is_not_an_error(tmp_path, monkeypatch):
-    """A stubbed (or real) root that does not exist on disk is a no-op, not a
-    failure — mirrors `_no_live_state_corpus_writes`'s tolerance for an
-    absent live dir."""
     monkeypatch.setattr(
         cc_conftest, "_live_inbox_roots", lambda: (str(tmp_path / "nope"),)
     )
@@ -64,11 +55,6 @@ def test_an_absent_root_is_not_an_error(tmp_path, monkeypatch):
 
 
 def test_import_time_root_set_includes_this_repos_own_inbox():
-    """The resolution leg itself, not just the diff logic: the import-time
-    root set must contain THIS repo's own `state/cross-repo/inbox/` (or the
-    legacy `cross-repo/inbox/`) — the leg a stubbed-root test can never
-    exercise, and the one that actually leaked (example-retrieval-repo's inbox, reached
-    through registry resolution, not a repo-local write)."""
     roots = cc_conftest._LIVE_INBOX_ROOTS
     assert any(root.endswith(("cross-repo/inbox", "cross-repo\\inbox")) for root in roots), (
         f"import-time root set {roots!r} does not include this repo's own inbox"
@@ -76,9 +62,6 @@ def test_import_time_root_set_includes_this_repos_own_inbox():
 
 
 def test_import_time_root_set_includes_a_peer_when_a_registry_exists():
-    """SKIPPED (not passed) when no machine-local registry is configured on
-    this box — a registry-less box must not be able to silently satisfy this
-    check by having nothing to resolve."""
     from coordinator_core.ops.fleet import _memo_resolver
 
     try:
@@ -88,8 +71,6 @@ def test_import_time_root_set_includes_a_peer_when_a_registry_exists():
     if not registered:
         pytest.skip("no machine-local registry configured on this box")
     roots = cc_conftest._LIVE_INBOX_ROOTS
-    # This repo's own inbox is always roots[0]; at least one more root beyond
-    # it means a peer receiver root resolved.
     assert len(roots) > 1, (
         f"registry has {len(registered)} repo(s) but import-time root set "
         f"{roots!r} resolved no peer receiver root"

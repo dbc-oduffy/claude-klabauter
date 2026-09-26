@@ -1,12 +1,3 @@
-"""`dispatch_checks.check_stale_write` -- C2's DENY leg (docs/plans/2026-
-09-02-a-write-that-discards-what-you-never-saw.md).
-
-Replays the plan's own falsifier: a session reads a tracked file through
-Bash, a peer (or this session's own dispatched worker) changes it, and the
-session then rewrites it wholesale -- must DENY. A surgical write over the
-same divergence -- the false-positive class the incident's own ranged reads
-would otherwise generate -- must ALLOW regardless.
-"""
 
 from __future__ import annotations
 
@@ -39,8 +30,6 @@ def _record_baseline(root: str, sid: str, rel: str, abs_path: str) -> None:
 
 class TestStaleWriteDeny:
     def test_whole_file_rewrite_over_divergence_denies(self, repo):
-        """Falsifier arm 1: session reads F, a peer's commit changes F,
-        session rewrites F wholesale with `cat > F` -- must DENY."""
         abs_path = _write_file(repo, "F.txt", "original\n")
         _record_baseline(repo, "sess-A", "F.txt", abs_path)
         _write_file(repo, "F.txt", "peer changed this\n")
@@ -56,7 +45,6 @@ class TestStaleWriteDeny:
         assert "git log --oneline -3 -- F.txt" in reason
 
     def test_bare_redirect_over_divergence_denies(self, repo):
-        """`> P` (no `cat`) is the same whole-file shape as `cat > P`."""
         abs_path = _write_file(repo, "F.txt", "original\n")
         _record_baseline(repo, "sess-A", "F.txt", abs_path)
         _write_file(repo, "F.txt", "peer changed this\n")
@@ -77,8 +65,6 @@ class TestStaleWriteDeny:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_no_divergence_allows(self, repo):
-        """Falsifier arm 2: no peer commit -- recorded hash matches disk,
-        must ALLOW."""
         abs_path = _write_file(repo, "F.txt", "original\n")
         _record_baseline(repo, "sess-A", "F.txt", abs_path)
 
@@ -131,8 +117,6 @@ class TestStaleWriteDeny:
         assert result is None
 
     def test_no_recorded_baseline_allows(self, repo):
-        """An unprovable state (no recorded hash for THIS session) must
-        never be promoted to a deny."""
         _write_file(repo, "F.txt", "original\n")
 
         result = dispatch_checks.check_stale_write(
@@ -154,9 +138,6 @@ class TestStaleWriteDeny:
         assert "this file changed since your session last read it" in reason
 
     def test_dispatched_worker_claim_names_the_specific_case(self, repo, monkeypatch):
-        """When a dispatched sub-agent of THIS session holds the newest
-        live claim on the path, the message names that specific fact
-        rather than the generic staleness line."""
         monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
 
         abs_path = _write_file(repo, "F.txt", "original\n")

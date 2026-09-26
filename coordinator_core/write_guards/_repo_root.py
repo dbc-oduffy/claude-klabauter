@@ -50,9 +50,4 @@ from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 
 
 def resolve_repo_root(cwd: Optional[str] = None) -> Optional[str]:
-    """The enclosing repo's worktree root for `cwd` (defaults to the
-    process's current cwd), or `None` if unresolvable. Thin, memoized
-    delegate to `coordinator_core.git.repo_root.show_toplevel` -- see module
-    docstring.
-    """
     return _show_toplevel(cwd=cwd)

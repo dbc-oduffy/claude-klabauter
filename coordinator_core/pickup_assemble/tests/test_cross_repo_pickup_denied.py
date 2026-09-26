@@ -53,9 +53,6 @@ def _patch_brief(monkeypatch, decision_object: dict[str, Any], exit_code: int = 
         return BriefResult(decision_object, exit_code)
 
     monkeypatch.setattr(pa_apply, "brief", _fake_brief)
-    # No session-scoped decision file to read for these fixtures — degrade
-    # to an empty dispositions map (this module's own documented "absent
-    # file is never fatal" contract), never touch the real one on disk.
     monkeypatch.setattr(
         pa_apply, "_read_session_dispositions", lambda root, sid, artifact_path: {}
     )
@@ -112,10 +109,6 @@ class TestInRepoInboxMemoNotDenied:
         this_repo = tmp_path / "this-repo"
         _make_repo(this_repo)
         # A clean run's scoped-commit tail (`APPLY_EXIT_OK` commits) shells a
-        # real `git add`/`git commit` against `repo_root` — irrelevant to
-        # what THIS test asserts (that the cross-repo check does not fire
-        # for an in-repo artifact), so it is stubbed out rather than paying
-        # for a real git init just to exercise unrelated commit plumbing.
         monkeypatch.setattr(pa_apply, "_scoped_commit", lambda *a, **k: None)
         inbox_memo = this_repo / "cross-repo" / "inbox" / "2026-08-19-memo.md"
         inbox_memo.parent.mkdir(parents=True, exist_ok=True)
@@ -142,11 +135,6 @@ class TestInRepoInboxMemoNotDenied:
         assert exit_code != pa_apply.APPLY_EXIT_CLAIM_DENIED
 
 
-# Full handoff frontmatter, deliberately not the stub the classes above use:
-# `drop` resolves the artifact ITSELF rather than reading `brief`'s decision
-# object, so an incomplete record classifies `ambiguous` and returns a
-# transport failure before containment is ever consulted — a green test
-# proving nothing.
 _FOREIGN_HANDOFF_FM = """---
 title: "Foo"
 created: 2026-08-19
@@ -171,18 +159,6 @@ def _seed_foreign_handoff(foreign_repo: Path) -> Path:
 
 
 class TestDropGetsTheSameNamedDenial:
-    """`drop` is `apply`'s inverse and D-G binds it identically. Before this,
-    only the forward verb carried the denial. Reproduced against the pre-fix
-    `drop` (containment bound stubbed out): a foreign-repo drop raised an
-    uncaught `apply_base.OutOfRepoPath` out of `cs_unclaim_handoff` — a
-    stack trace where `apply` gives a reason — AND did so having already
-    reported `released: True`, i.e. the claim was gone. Hence the gate sits
-    ahead of `_session_identity` and both primitives: a drop that will be
-    denied must release nothing.
-
-    The reason string is its own (`cross_repo_drop_denied`), so a report
-    never conflates which verb refused.
-    """
 
     def test_foreign_repo_drop_denied_by_name(self, tmp_path):
         this_repo = tmp_path / "this-repo"
@@ -198,8 +174,6 @@ class TestDropGetsTheSameNamedDenial:
         assert exit_code == pa_apply.APPLY_EXIT_CLAIM_DENIED
         assert report["reason"] == "cross_repo_drop_denied"
         assert str(foreign_handoff) in report["error"]
-        # Nothing released or stamped on the way to the denial — the pre-fix
-        # path reported `released: True` before blowing up.
         assert report["unclaimed"] is None
         assert "released" not in report
 
@@ -225,9 +199,6 @@ class TestDropGetsTheSameNamedDenial:
     def test_inbox_memo_in_this_repo_is_not_denied_on_drop(self, tmp_path, monkeypatch):
         this_repo = tmp_path / "this-repo"
         _make_repo(this_repo)
-        # Same stub, same reason, as the sibling class's in-repo case: a
-        # non-denied drop shells a real `git add`/`git commit` against
-        # `repo_root`, which is unrelated to what this test asserts.
         monkeypatch.setattr(pa_apply, "_scoped_commit", lambda *a, **k: None)
         inbox_memo = this_repo / "cross-repo" / "inbox" / "2026-08-19-memo.md"
         inbox_memo.parent.mkdir(parents=True, exist_ok=True)

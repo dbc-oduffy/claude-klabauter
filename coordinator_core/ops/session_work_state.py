@@ -62,7 +62,5 @@ def _session_work_state(params: dict, repo_root: Optional[Path] = None) -> dict:
         the full row-shape and four-bucket readiness contract.
     """
     if repo_root is None:
-        # Mirrors handoff.columns / records.query: an absent repo_root is a
-        # well-formed empty answer, never a raise.
         return {"held": [], "unclaimed": [], "review_due": []}
     return build_work_state(main_worktree_root(repo_root))

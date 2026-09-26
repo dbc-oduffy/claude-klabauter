@@ -1,20 +1,3 @@
-"""test_write_identity_file — pytest tests for coordinator/bin/write-identity-file.py.
-
-Spec backlink: scratchpad/scout-D-claude-klabauter-sizing.md § Item 5 (install.md
-operator-identity heredoc writes, install.md:669, 818). This trampoline is
-thin plumbing over the already-built, already-registered
-coordinator_core.ops.write_identity_file op -- these tests stub the
-cc_invoke transport (via sys.modules injection) rather than exercising a
-real claude-klabauter checkout, since the op's own contract is covered by
-coordinator_core/ops/test_write_identity_file.py.
-
-Coverage:
-    test_no_fields_exits_one_before_any_transport_call
-    test_op_success_exits_zero_and_prints_message
-    test_op_error_exits_one_and_prints_error
-    test_claude_klabauter_root_unresolvable_exits_two
-    test_both_fields_forwarded_in_one_call
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -39,16 +22,6 @@ _mod = _load_module()
 
 
 def _install_fake_cc_invoke(monkeypatch, *, resolve_root=lambda: "/fake/claude-klabauter/root", invoke=None):
-    """Inject a fake `cc_invoke` module into sys.modules so the CLI's deferred
-    `from cc_invoke import cc_invoke, require_dispatch_engine_on_path` (inside
-    main()) picks up stubs instead of the real transport.
-
-    `require_dispatch_engine_on_path`, not the private `_resolve_claude_klabauter_root`:
-    the CLI moved to the public entry point for the reason its own call-site
-    comment records (resolving the root without binding it on `sys.path` fails
-    one frame deeper inside `cc_invoke`), and this stub names whatever the CLI
-    actually imports -- a stub that names a function the module under test no
-    longer calls tests nothing."""
     fake = types.ModuleType("cc_invoke")
     fake.require_dispatch_engine_on_path = resolve_root  # type: ignore[attr-defined]
     fake.cc_invoke = invoke or (lambda op, params, root: {"exit_code": 0, "message": "ok"})  # type: ignore[attr-defined]

@@ -157,16 +157,6 @@ _USAGE = (
 def _run(
     cmd: List[str], cwd: Optional[str] = None, stdin_text: Optional[str] = None
 ) -> Tuple[int, str, str]:
-    """Run cmd; return (returncode, stdout.strip(), stderr). Never raises —
-    a spawn failure or timeout degrades to a non-zero rc + diagnostic stderr,
-    same shape as a normal git failure (A2: timeout + stdin=DEVNULL always set).
-
-    `stdin_text` feeds git's `--stdin` rev input, which is how
-    `_batch_single_commit_segments` passes a thousand SHAs without going near
-    the ~32KB Windows command-line ceiling. Omitted (the default), stdin stays
-    `DEVNULL` exactly as before: a git subcommand that decides to read stdin
-    must never inherit this process's and block a ceremony forever.
-    """
     try:
         result = subprocess.run(
             cmd,
@@ -187,10 +177,7 @@ def _run(
         return 1, "", str(exc)
 
 
-# ---------------------------------------------------------------------------
 # Trail-file collection (positional args + TRAIL_FILES env, deduplicated,
-# .json-suffix-only — mirrors the bash oracle).
-# ---------------------------------------------------------------------------
 
 
 def _collect_trail_files(trail_files_env: str, trail_args: Sequence[str]) -> List[str]:
@@ -206,8 +193,6 @@ def _collect_trail_files(trail_files_env: str, trail_args: Sequence[str]) -> Lis
 
 
 def _load_intersect_shas(intersect_file: str) -> Set[str]:
-    """Load the --intersect SHA set. Fail-safe: unreadable file disables the
-    filter (returns empty set + WARN), mirrors the bash oracle."""
     shas: Set[str] = set()
     if not intersect_file:
         return shas
@@ -227,10 +212,7 @@ def _load_intersect_shas(intersect_file: str) -> Set[str]:
     return shas
 
 
-# ---------------------------------------------------------------------------
 # Record loading — date-prefix filter (WEEK_START/TODAY) + on_record_error
-# policy. Mirrors the bash oracle.
-# ---------------------------------------------------------------------------
 
 
 def _load_records(
@@ -259,11 +241,7 @@ def _load_records(
     return all_records
 
 
-# ---------------------------------------------------------------------------
 # Shared classification: scope_kind + SAFE_RANGE + verdict filter.
-# Mirrors the identical block duplicated in the bash oracle between its
-# --reviewed-set and --segments-json code paths.
-# ---------------------------------------------------------------------------
 
 
 def _classify_shape(
@@ -317,18 +295,8 @@ def _classify_shape(
 
     if scope_kind is not None:
         if scope_kind == "integration":
-            return None  # legitimately non-diff; skip silently — not reopened by this chunk
+            return None
         if not sha_range:
-            # Only an actual diff-typed record's empty sha_range is a real
-            # signal worth a WARN. The `scope_kind == "diff"` guard means
-            # EVERY other kind skips silently here on empty sha_range — not
-            # just recognized ones like "plan", but unrecognized kinds too
-            # (e.g. "inline-dispatch"): this `return None` precedes the
-            # unrecognized-kind accumulation branch below, so an unrecognized
-            # kind with no sha_range is never counted there either, in
-            # addition to producing no WARN. This mirrors the write-time
-            # record classification (`review_trail.backfill`), which skips
-            # the same shape silently, regardless of kind.
             if scope_kind == "diff" and warn:
                 print(
                     f"WARN: diff-typed trail record has empty sha_range: {artifact}",
@@ -336,15 +304,6 @@ def _classify_shape(
                 )
             return None
         if scope_kind not in ("diff", "plan") and warn:
-            # Per-record degrade, not global fatal (2026-08-10 coverage-gate
-            # wedge: an unrecognized scope_kind anywhere in the trail corpus
-            # must never take the whole gate down before it reaches a
-            # VERDICT — see cross-repo/inbox/2026-08-10-example-retrieval-repo-ue-addon-
-            # em-coverage-gate-crashes-on-chunk-and-inline-dispatch-kinds.md).
-            # The record still flows through and resolves like any other, but
-            # the write-time crediting rule never reads an unrecognized
-            # kind's bucket, so it earns zero credit — fail-closed, unchanged
-            # safety direction.
             if unrecognized_sink is not None:
                 unrecognized_sink[scope_kind] = unrecognized_sink.get(scope_kind, 0) + 1
             else:
@@ -353,14 +312,8 @@ def _classify_shape(
                     f"credits nothing: {artifact}",
                     file=sys.stderr,
                 )
-        # scope_kind == "diff" credits unconditionally (fall through);
-        # scope_kind == "plan" (or future value) is resolved here; filtering
-        # to planning-artifact commits already happened at write-time
-        # (review_trail.backfill), before this module's build_reviewed_set
-        # ever reads the resident store.
         kind = scope_kind
     else:
-        # Legacy record — no scope_kind. Use ".." inference. Always "diff".
         if not sha_range or ".." not in sha_range:
             if warn:
                 print(
@@ -386,11 +339,6 @@ def _classify(
     rec: dict,
     unrecognized_sink: Optional[Dict[str, int]] = None,
 ) -> Optional[Tuple[str, str, str]]:
-    """Return (sha_range, artifact, kind) if the record passes all filters,
-    else None (a WARN/INFO has already been emitted to stderr for the skip).
-
-    `unrecognized_sink` is forwarded to `_classify_shape` unchanged — see its
-    docstring."""
     shaped = _classify_shape(rec, warn=True, unrecognized_sink=unrecognized_sink)
     if shaped is None:
         return None
@@ -406,70 +354,26 @@ def _classify(
     return sha_range, artifact, kind
 
 
-# ---------------------------------------------------------------------------
-# --reviewed-set mode — a pure membership read of the resident reviewed-set
-# store (docs/plans/2026-08-27-the-reviewed-set-is-a-file-not-a-computation.md
-# § C4). No record loading, no classification, no git calls: every credit
-# rule already ran at write time (`review_trail.backfill.resolve_and_fold`)
-# and its result is already folded into the store this reads. This mirrors
-# `coordinator_core.ops.gate_dimension_review`'s identical C3 migration onto
-# the same store — see this module's own docstring "Migration note".
-# ---------------------------------------------------------------------------
-
-
 def build_reviewed_set(
     intersect_shas: Set[str],
     cwd: Optional[str] = None,
 ) -> Set[str]:
-    """Return the resident reviewed-set store's full membership, optionally
-    narrowed to `intersect_shas` (verdict-preserving: the gate/CLI caller
-    only ever tests membership of its OWN commit list, so extra SHAs never
-    change the answer). Zero git spawns — `read_reviewed_set` is a resident,
-    `os.stat`-revalidated file read; see the module's "Migration note"."""
     reviewed = read_reviewed_set(cwd or os.getcwd())
     if intersect_shas:
         return {sha for sha in reviewed if sha in intersect_shas}
     return set(reviewed)
 
 
-# ---------------------------------------------------------------------------
-# --segments-json mode — per-record git rev-list + git log --name-only.
 # Mirrors the bash oracle. NOT batched across distinct ranges (SAFE_RANGE
-# admits symbolic/live-HEAD endpoints; git computes reachable(positives) \
-# reachable(negatives) as ONE set expression per range — combining ranges
-# would silently drop coverage on a linear chain, with no test failure).
-#
 # The two legs ARE now ONE spawn per DISTINCT sha_range instead of two
-# (C17, docs/plans/2026-08-15-composition-invocation-budgets.md): `git
-# rev-list <range>` and `git log --name-only --format= <range>` walk the
 # IDENTICAL commit set for the same range (no pathspec, no --first-parent
-# on either side), so `git log --format=%H --name-only <range>` answers
-# both in a single spawn — one `%H` line per commit (the rev-list leg) plus
-# that commit's changed-file lines (the name-only leg), same as today: a
-# merge commit still emits its `%H` line and no file lines under both the
-# old two-call form and this combined one, since --name-only shows no diff
-# for a merge either way. `_parse_combined_log_output` splits the two
-# interleaved sets back apart. This is a leg MERGE, not a range collapse —
-# each distinct sha_range is still resolved by its own independent spawn;
-# the forbidden operation (batching >1 range into one git invocation) is
 # untouched. Memoised per DISTINCT sha_range exactly as the two-leg form
-# was: two records citing the same range emit their own segment dict, the
-# memoised (shas, files) pair is just not re-resolved by a fresh spawn.
-# ---------------------------------------------------------------------------
 
 
 _FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _parse_combined_log_output(text: str) -> Tuple[Set[str], Set[str]]:
-    """Split `git log --format=%H --name-only <range>` output into the SHA
-    set (`%H` lines) and the changed-file set (every other non-blank line).
-
-    Line-shape disambiguation: a `%H` line is always exactly 40 lowercase hex
-    characters; a repo path that happens to look like one is not a realistic
-    collision this corpus has ever produced (same assumption the rest of this
-    module and coverage.py already make about SHA-shaped lines in git output).
-    """
     shas: Set[str] = set()
     files: Set[str] = set()
     for raw_line in text.splitlines():
@@ -483,10 +387,6 @@ def _parse_combined_log_output(text: str) -> Tuple[Set[str], Set[str]]:
     return shas, files
 
 
-#: A range naming exactly one commit: `<sha>~1..<sha>` or `<sha>^..<sha>`,
-#: the same abbreviation on both sides. This is the shape the review-trail
-#: writer emits for a single-commit review, and measured 2026-08-28 it is
-#: 1028 of 1043 distinct ranges in a week's corpus (98.6%).
 _SINGLE_COMMIT_RANGE_RE = re.compile(r"^([0-9a-fA-F]{7,40})(?:~1|\^)\.\.\1$")
 
 
@@ -594,29 +494,13 @@ def build_segments(
 ) -> List[Dict[str, object]]:
     segments: List[Dict[str, object]] = []
 
-    # Per-range memo for the combined `git log --format=%H --name-only` spawn
-    # (keyed on sha_range alone — build_segments has no kind-partition, unlike
     # build_reviewed_set). Each DISTINCT range is still resolved independently
     # (no multi-range batching: SAFE_RANGE admits symbolic/live-HEAD endpoints,
-    # and git computes reachable(positives) \ reachable(negatives) as ONE set
-    # expression per range — combining ranges would silently drop coverage on
-    # a linear chain with no test failure). This memo only eliminates
-    # RE-resolving a range already seen in this same build_segments call.
-    #
     # Per-segment file ATTRIBUTION (the reason the name-only leg exists) is
-    # preserved because the memoised (shas, files) pair is still emitted into
-    # every record's own segment dict below, not deduplicated away.
     segment_memo: Dict[str, Tuple[Set[str], Set[str]]] = {}
     segment_skip: Set[str] = set()
     unrecognized_kind_counts: Dict[str, int] = {}
 
-    # Pre-resolve the single-commit ranges in ONE spawn (plus one existence
-    # probe) and seed the memo with them; the loop below is unchanged and
-    # simply finds them already present. Measured on a 1252-record week
-    # 2026-08-28: 1043 distinct ranges, of which 1028 are this shape, taking
-    # the op from 2087 processes / 32.6s to a two-spawn prefix plus 15
-    # per-range calls. A range this cannot resolve is absent from the memo
-    # and takes the original path, so the fallback needs no separate branch.
     _prescan_kinds: Dict[str, int] = {}
     _prescan = [
         classified[0]
@@ -674,20 +558,8 @@ def build_segments(
     ]
 
 
-# ---------------------------------------------------------------------------
-# Pending-record closure — DERIVED state, never a stored field.
-#
-# A pending (verdict=pending) trail record is the "review round opened" marker
-# a freeze emits. It is CLOSED when some non-pending record's resolved SHA set
 # is a SUPERSET of the pending record's resolved SHA set: the round it opened
-# has since been verdicted, by a record that covers at least everything the
-# freeze froze. No `loop_state` field exists or should exist (plan Anti-scope:
-# a parallel field would give two sources of truth for the same fact).
-#
 # ADDITIVE-ONLY: this is a second, diagnostic read of records the crediting
-# path already parsed. Nothing here feeds reviewed_set / segments, and a
-# pending record still credits ZERO coverage whether closed or not (AC4).
-# ---------------------------------------------------------------------------
 
 
 def classify_pending_records(
@@ -745,9 +617,6 @@ def classify_pending_records(
         shaped = _classify_shape(rec, warn=False)
         if shaped is None:
             continue
-        # Closure is kind-oblivious (unchanged by C6): drop `kind` here — a
-        # "plan" record's set-containment closure semantics are identical to
-        # a "diff" record's, and this pass credits nothing regardless (AC4).
         sha_range, artifact, _kind = shaped
         if _verdict_counts(rec):
             non_pending.append((sha_range, artifact))
@@ -767,18 +636,9 @@ def classify_pending_records(
             memo[sha_range] = resolved
             return resolved
     else:
-        # Batch pre-scan for the default resolver (no caller-injected
-        # resolve_range — i.e. no single graph_range window exists to walk
         # in one shot): resolve every DISTINCT range across pending AND
-        # non_pending in ONE bounded-parallel sweep, instead of the
-        # closers/pending loops below triggering one `git rev-list` spawn
-        # per distinct range each as they walk their own inputs in series.
-        # Same command, same per-distinct-range memoization, same result —
         # only the SCHEDULING changes (concurrent instead of serial), so
-        # this cannot change which record ends up in which bucket. Worker
         # cap reuses coverage.py's own `_REVLIST_MAX_WORKERS`, the identical
-        # bound already accepted in this codebase for the identical
-        # primitive (build_reviewed_set's Strategy B fan-out).
         _distinct_ranges = sorted(
             {sha_range for sha_range, _artifact in pending}
             | {sha_range for sha_range, _artifact in non_pending}
@@ -831,16 +691,6 @@ def classify_pending_records(
     return out
 
 
-# ---------------------------------------------------------------------------
-# Direct-import convenience wrapper — for a Python caller that wants the
-# --segments-json result as data (no subprocess, no JSON round-trip). Used by
-# coordinator_core.ops.workweek_trail_scope, which used to shell out to this
-# module's own CLI trampoline (coordinator/lib/review-coverage-core.sh,
-# DoE-claude) via `bash <script> --segments-json --on-unresolvable-ref skip`;
-# now a same-process call now that both live in coordinator_core.
-# ---------------------------------------------------------------------------
-
-
 def collect_segments(
     trail_files: Sequence[str],
     week_start: str = "",
@@ -849,28 +699,14 @@ def collect_segments(
     on_unresolvable_ref: str = "skip",
     cwd: Optional[str] = None,
 ) -> List[Dict[str, object]]:
-    """Load + classify trail records, then build --segments-json's payload.
-
-    Raises _FatalError on a fail-mode record-parse or git-ref-resolution
-    failure (mirrors the CLI's exit-1 contract) — callers that want the CLI's
-    "exit 1, no output" behavior on error should catch this; `main()` does.
-    """
     all_records = _load_records(trail_files, week_start, today, on_record_error)
     return build_segments(all_records, on_unresolvable_ref, cwd=cwd)
 
 
-# ---------------------------------------------------------------------------
-# CLI entry point
-# ---------------------------------------------------------------------------
-
-
 def main(argv: Optional[Sequence[str]] = None, cwd: Optional[str] = None) -> int:
-    # A4/Windows-hazard note: stdout text-mode emits \r\n on Windows; bash
-    # $()+mapfile capture (a still-bash caller shelling out to this trampoline)
     # would preserve \r and corrupt SHA-set keys → false UNCOVERED verdict.
-    # Force LF output here (mirrors review-coverage-core.sh:191).
     try:
-        sys.stdout.reconfigure(newline="\n")  # Python >= 3.7
+        sys.stdout.reconfigure(newline="\n")
     except AttributeError:
         print(f"skip: main: sys.stdout.reconfigure(newline=\"\\n\")  # Python >= 3.7 failed: {sys.exc_info()[1]}", file=sys.stderr)
         pass
@@ -888,7 +724,7 @@ def main(argv: Optional[Sequence[str]] = None, cwd: Optional[str] = None) -> int
         return EXIT_ERROR
 
     on_record_error = "fail"
-    on_unresolvable_ref = ""  # empty = inherit from on_record_error
+    on_unresolvable_ref = ""
     intersect_file = ""
     trail_path_args: List[str] = []
 
@@ -931,17 +767,11 @@ def main(argv: Optional[Sequence[str]] = None, cwd: Optional[str] = None) -> int
 
     try:
         if mode == "--reviewed-set":
-            # No record loading here (see module docstring "Migration
-            # note"): trail_files_env / trail_path_args / on_record_error /
-            # on_unresolvable_ref are accepted for CLI back-compat but inert
-            # in this mode — the store is never trail-file-scoped.
             reviewed = build_reviewed_set(intersect_shas, cwd=cwd)
             for sha in sorted(reviewed):
                 print(sha)
             return EXIT_OK
 
-        # mode == "--segments-json" — unchanged: still needs per-record
-        # classification and file attribution (see module docstring).
         trail_files = _collect_trail_files(trail_files_env, trail_path_args)
         all_records = _load_records(trail_files, week_start, today, on_record_error)
         segments = build_segments(all_records, on_unresolvable_ref, cwd=cwd)

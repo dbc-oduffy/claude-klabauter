@@ -130,84 +130,41 @@ from coordinator_core.telemetry.op_latency import (
 
 ORIGINS = (PRODUCTION, TEST, BENCHMARK, UNKNOWN)
 
-#: Row kinds in the sink. `process_time` rows carry `process_ms` (CPU) and, since
-#: the-meter-02, `spawns`. `complete` rows carry `elapsed_ms` (WALL CLOCK) and are
-#: read here ONLY to count invocations — never to produce a duration, per this
-#: baton's anti-scope ("Do not measure wall clock").
 KIND_PROCESS_TIME = "process_time"
 KIND_COMPLETE = "complete"
 
-#: `measurement_scope` values, quoted from `ipc`'s own discriminator rather than
-#: re-derived. A `process_time` row is meaningless without one: `per_op_handler`
-#: is handler-only CPU, `per_op_process` is a one-shot process's CPU from AFTER
-#: the interpreter has booted and this module has been imported — its writers
-#: (`ipc.dispatch_from_hook`, source_path "one_shot_cli"; `ipc.dispatch_ops_from_hook`,
-#: source_path "hook_batch"; and `warm/server.py`'s pool worker, source_path
-#: "pool_worker") all take `process_start = time.process_time()` post-import, so
-#: no scope in this sink carries interpreter startup or import cost
-#: (docs/research/spike-verdicts/2026-08-27-seam-process-time-excludes-interpreter-startup.md).
-#: `process_wide` may carry a concurrent sibling's CPU. Averaging across them
-#: produces a number in no unit at all.
 SCOPE_PER_OP_HANDLER = "per_op_handler"
 SCOPE_PER_OP_PROCESS = "per_op_process"
 SCOPE_PROCESS_WIDE = "process_wide"
 SCOPES = (SCOPE_PER_OP_HANDLER, SCOPE_PER_OP_PROCESS, SCOPE_PROCESS_WIDE)
 
-#: Default. The narrowest honest per-op figure, and the only scope with coverage
-#: equal to `started` coverage (recorded at the dispatch chokepoint, so an op
-#: cannot be invoked without one). Rows older than 2026-08-27 predate it and are
-#: NOT silently substituted from another scope — an op with no handler samples
-#: reports `process_time_samples: 0`, which is a readable absence, where a
-#: cross-scope blend would be an unreadable presence.
 DEFAULT_SCOPE = SCOPE_PER_OP_HANDLER
 
 
 class PopulationIncomplete(RuntimeError):
-    """A population that could not be read completely.
-
-    Raised, never flagged. The predecessor's defect was disclosing an incomplete
-    read in a field (`source.head_truncated`) that four sessions read past while
-    quoting the short number as if it were whole. A count that cannot be complete
-    fails loud — that is AC4, and it is the reason this is an exception type and
-    not a boolean on the result.
-    """
+    pass
 
 
 @dataclass(frozen=True)
 class GenerationRead:
-    """One sink generation, and exactly what was read out of it."""
 
     path: str
     bytes_read: int
     rows: int
-    #: Lines that did not parse as JSON. A single trailing one is tolerated (the
-    #: live tail can be mid-append when a reader arrives); anything else is a
-    #: corrupt population and raises.
     unparseable: int
 
 
 @dataclass(frozen=True)
 class Population:
-    """What a result was computed over — the answer's own provenance.
-
-    Every field here exists so a reader cannot mistake a partial scan for a
-    complete one (AC3). `complete` is always True on a returned result: an
-    incomplete read raises rather than returning, so the field is a statement of
-    the invariant, not a condition to branch on.
-    """
 
     generations: Sequence[GenerationRead]
     window: str
     filters: Dict[str, object]
     rows: int
     complete: bool = True
-    #: `process_time` rows read but excluded by the `measurement_scope` filter.
-    #: Stated so a reader can tell "this op has no samples" (a coverage gap)
-    #: from "this op's samples were all at another scope" (a filter choice).
     scope_excluded: int = 0
 
     def describe(self) -> str:
-        """One-line human statement of the population. Used in rendered output."""
         gens = ", ".join(
             f"{g.path} ({g.rows} rows, {g.bytes_read} bytes)" for g in self.generations
         )
@@ -221,32 +178,19 @@ class Population:
 
 @dataclass
 class OpMeasurement:
-    """Per-op cost, split by origin so contamination is visible, never blended."""
 
     op: str
-    #: Invocation counts keyed by origin — the field AC2 turns on.
     counts_by_origin: Dict[str, int] = field(default_factory=dict)
     process_ms: List[float] = field(default_factory=list)
     spawns: List[int] = field(default_factory=list)
 
     @property
     def production_count(self) -> int:
-        """Invocations known to be production. Excludes `unknown` deliberately."""
         return self.counts_by_origin.get(PRODUCTION, 0)
 
     def summary(self) -> Dict[str, object]:
-        """Reduce to the two axes the brightline is stated in, plus provenance.
-
-        Percentiles are omitted below n=2 rather than computed — a p95 over one
-        sample is a number that reads like a distribution and is not one, which
-        is the same class of error as the 30016.6ms ceiling rows that D4 filed.
-        """
         out: Dict[str, object] = {
             "op": self.op,
-            # All four ORIGINS buckets stated by name, defaulting to 0 for a
-            # bucket with no rows — the same readable-absence shape as
-            # `process_time_samples: 0` below, rather than omitting a key a
-            # reader could mistake for "not measured" instead of "zero".
             "counts_by_origin": {o: self.counts_by_origin.get(o, 0) for o in ORIGINS},
             "production_count": self.production_count,
             "process_time_samples": len(self.process_ms),
@@ -266,16 +210,6 @@ class OpMeasurement:
 
 
 def generation_paths(repo_root: Path, *, window: str) -> List[Path]:
-    """Sink generations to read, newest first, for the named window.
-
-    ``window="current"`` reads only the live generation — the default, 62ms.
-    ``window="all"`` reads every rotated generation too — 875ms, the honest
-    all-time answer. The window is named on the result; there is no third,
-    hidden option.
-    """
-    # Validated BEFORE any filesystem work: an unrecognised window is a caller
-    # error, and resolving a git common dir first means it surfaces as "not a git
-    # repository" instead — the wrong defect, named at the wrong layer.
     if window not in ("current", "all"):
         raise ValueError(f"unknown window {window!r} — expected 'current' or 'all'")
 
@@ -284,9 +218,6 @@ def generation_paths(repo_root: Path, *, window: str) -> List[Path]:
     sink = _sink_path(git_common_dir(repo_root))
     if window == "current":
         return [sink]
-    # Window is validated at function top, so
-    # this is always "all" here; the trailing raise was unreachable dead code
-    # duplicating the earlier message.
     rotated = sorted(
         sink.parent.glob(f"{sink.stem}.*.jsonl"),
         key=lambda p: p.name,
@@ -295,19 +226,6 @@ def generation_paths(repo_root: Path, *, window: str) -> List[Path]:
 
 
 def _read_generation(path: Path) -> tuple[List[dict], GenerationRead]:
-    """Parse one generation whole. No tail bound, no row cap — see AC4.
-
-    Tolerates exactly ONE unparseable trailing line: the sink is append-only and
-    concurrently written, so a reader can legitimately arrive mid-append. Any
-    other parse failure means the population is corrupt, and this raises rather
-    than returning a quietly short one.
-
-    "Trailing" means the last non-blank line read, not strictly the file's last
-    byte: a blank line after a bad line is skipped before `last_line_bad` is
-    touched, so `bad-line\\n\\n` still tolerates the bad line as trailing. This is
-    a deliberate reading (blank lines are noise, not content), pinned by
-    `test_bad_line_then_trailing_blank_line_is_still_tolerated`.
-    """
     rows: List[dict] = []
     unparseable = 0
     last_line_bad = False
@@ -318,10 +236,6 @@ def _read_generation(path: Path) -> tuple[List[dict], GenerationRead]:
     except OSError as exc:
         raise PopulationIncomplete(f"{path}: unreadable ({exc})") from exc
 
-    # Streamed, never `read_bytes()`. The all-time window is 113MB across four
-    # generations, and slurping it costs that much resident memory on a box
-    # carrying 50-70 peers (CLAUDE.md § Load norm: "the load is us"). Iterating
-    # the handle reads the same rows without ever holding the corpus.
     try:
         with path.open("rb") as fh:
             for line in fh:
@@ -354,33 +268,6 @@ def measure(
     origins: Optional[Iterable[str]] = None,
     scope: Optional[str] = DEFAULT_SCOPE,
 ) -> tuple[Dict[str, OpMeasurement], Population]:
-    """Per-op process time and spawn count over a stated population.
-
-    Returns ``(measurements_by_op, population)``. The population is not optional
-    and not a side channel: a caller that has the numbers necessarily has what
-    they were computed over.
-
-    Args:
-        repo_root: worktree whose sink to read.
-        window: ``"current"`` (default, ~62ms) or ``"all"`` (~875ms, all-time).
-        ops: restrict to these op names. ``None`` reads every op.
-        origins: restrict to these origins. ``None`` reads every origin and
-            reports the split — which is what AC2 wants, since the interesting
-            fact about `ping` is the SHAPE of its origin split, not a filtered
-            subtotal.
-        scope: which `measurement_scope` the process-time samples come from.
-            Defaults to `per_op_handler`. ``None`` means "every scope" and is a
-            deliberate, stated opt-out for a caller that wants raw coverage —
-            it BLENDS UNITS and the resulting mean is not a per-op cost. Origin
-            counts are unaffected: they come off `complete` rows, which carry no
-            scope.
-
-    Raises:
-        PopulationIncomplete: any generation could not be read whole.
-        ValueError: `scope` is not one of `SCOPES` — a typo silently matching
-            no row would report every op as unmeasured, which reads identically
-            to a real coverage gap.
-    """
     if scope is not None and scope not in SCOPES:
         raise ValueError(f"unknown measurement scope {scope!r}; expected one of {SCOPES}")
     op_filter = set(ops) if ops is not None else None
@@ -411,18 +298,10 @@ def measure(
             m = by_op.get(op)
             if m is None:
                 m = by_op[op] = OpMeasurement(op=op)
-            # Count invocations off `complete` rows only. A `process_time` row is
-            # a second record of the SAME invocation, so counting both double-counts
-            # every op that records process time — the exact double-count
-            # `double_routed_corr_ids` exists to make visible for routes.
             if kind == KIND_COMPLETE:
                 m.counts_by_origin[origin] = m.counts_by_origin.get(origin, 0) + 1
             else:
                 if scope is not None and row.get("measurement_scope") != scope:
-                    # Counted, never merely skipped: a scope filter that drops
-                    # rows in silence is the same shape as the `route`-present
-                    # filter that discarded 75.1% of a corpus and reported a
-                    # clean number over the remainder (AC3).
                     scope_excluded += 1
                     continue
                 pms = row.get("process_ms")
@@ -438,15 +317,7 @@ def measure(
         filters={
             "ops": sorted(op_filter) if op_filter else None,
             "origins": sorted(origin_filter) if origin_filter else None,
-            # `started`/`composition` rows are
-            # real narrowing dropped before total_rows is counted, and were the
-            # unstated gap between GenerationRead.rows and Population.rows (the
-            # same class of ambiguity AC3 exists to close; near-miss of D1/D-class
-            # unfiltered-vs-filtered defects).
             "kind": [KIND_PROCESS_TIME, KIND_COMPLETE],
-            # Stated, never implied: two callers asking the same question at
-            # different scopes get different numbers, and the answer has to say
-            # which one it is. `null` is the blended opt-out, named as such.
             "measurement_scope": scope,
         },
         rows=total_rows,
@@ -461,20 +332,11 @@ def render(
     *,
     top: Optional[int] = None,
 ) -> Dict[str, object]:
-    """Assemble the returned document: rows, population, and the spawn caveat.
-
-    ``top`` bounds the RENDER, never the read — and when it drops rows it says
-    how many. A silent top-N is how a partial answer starts reading as a
-    complete one.
-    """
     ordered = sorted(
         measurements.values(),
         key=lambda m: (sum(m.counts_by_origin.values()), max(m.process_ms, default=0.0)),
         reverse=True,
     )
-    # `top` must be `is not None`-tested, not
-    # truthiness-tested: `--top 0` is a valid, plausible "show none" request, and
-    # truthiness treats it as "unset", silently returning every row.
     shown = ordered[:top] if top is not None else ordered
     doc: Dict[str, object] = {
         "population": population.describe(),
@@ -577,8 +439,6 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         return 1
 
     doc = render(measurements, population, top=args.top)
-    # The meter reports its own cost in the same axis it reports everyone else's.
-    # An instrument that cannot say what it costs has no standing to convict.
     doc["meter_process_ms"] = round((time.process_time() - started) * 1000.0, 1)
     print(json.dumps(doc, indent=2))
     return 0

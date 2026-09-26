@@ -39,10 +39,6 @@ def _assert_all_scalar(parser, dests: tuple[str, ...], cli: str) -> None:
 
 
 def test_percolate_gate_scan_secrets_takes_one_target():
-    """`percolate-mirror::_run_gate_legs` spawns `scan-secrets` once per row because `--target`
-    selects that row's own ruleset and `--files` is that row's own list. A live 2026-08-18
-    incident is on record: feeding one target's scan the whole run's file list raised HIGH-tier
-    findings against other rows' sources under the wrong ruleset."""
     parser = load_bin_module("percolate-gate.py")._build_parser()
     _assert_all_scalar(
         subparser_of(parser, "scan-secrets"), ("target", "files"), "percolate-gate scan-secrets"
@@ -66,12 +62,6 @@ def test_lesson_promote_takes_one_record():
 
 
 def test_queue_append_takes_one_record():
-    """`coordinator-harvest-deferrals::_harvest -> _run_queue_append`.
-
-    `--deliverables`, `--specs` and `--dependency-annotations` ARE append actions, and that is
-    correct: one queue entry can carry several. What makes this one record per spawn is that
-    the entry's own identity fields are scalar -- there is no way to describe a second entry in
-    the same invocation."""
     parser = load_bin_module("coordinator-queue-append.py")._build_parser()
     _assert_all_scalar(
         parser, ("schema", "title", "body", "status"), "coordinator-queue-append"
@@ -87,12 +77,6 @@ def test_queue_append_takes_one_record():
     ],
 )
 def test_oracle_targets_remain_importable(script: str, entry: str):
-    """The oracles above are worth nothing if their target stops being importable -- a parser
-    that cannot be loaded would turn every claim above into a skipped test, and a silently
-    skipped oracle is the prose exemption again with extra steps.
-
-    Pinned as its own assertion so an import break reads as an import break rather than as the
-    CLI having changed shape."""
     module = load_bin_module(script)
     assert callable(getattr(module, entry, None)), (
         f"{script} no longer exposes a callable {entry}() -- the oracles pinned to it cannot "

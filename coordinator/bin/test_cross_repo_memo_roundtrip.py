@@ -43,9 +43,6 @@ import textwrap
 
 import pytest
 
-# Real-git spawn is load-bearing: send dispatches through cc_invoke.route_mutation
-# onto the real claude-klabauter memo.send op, which writes+commits into a real (isolated)
-# receiver repo and a real (isolated) sender repo — no mock stands in for that.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 TESTS_SKIPPED = 0
@@ -65,11 +62,6 @@ def _python() -> str:
 
 
 def _sibling_doe_claude_probe() -> str:
-    """Env-independent fallback: locate the sibling DoE-claude checkout by walking
-    up from this file to the engine repo root, then probing its parent for the
-    conventional sibling-clone name `DoE-claude`. Mirrors the identically-named
-    helper in test_cross_repo_memo_draft.py.
-    """
     here = os.path.dirname(os.path.abspath(__file__))
     claude_klabauter_root = here
     for _ in range(8):
@@ -112,7 +104,6 @@ def _with_doe_root(env: dict) -> dict:
 
 
 def skip_test(name: str, reason: str) -> None:
-    """Loud skip — never silent. Mirrors test_cross_repo_memo_draft.py's helper."""
     global TESTS_SKIPPED
     TESTS_SKIPPED += 1
     msg = f"  SKIP: {name} — {reason}"
@@ -121,14 +112,6 @@ def skip_test(name: str, reason: str) -> None:
 
 
 def _resolve_test_claude_klabauter_root() -> str | None:
-    """Same cc_invoke._resolve_claude_klabauter_root() four-rung ladder the sibling draft
-    fixture uses — real-op tests SKIP loud (never degrade silently) when the
-    engine root is unresolvable on this machine, OR when it resolves to an
-    engine mirror that has not yet registered `memo.send` (e.g. a sibling
-    publish-twin checkout, per project CLAUDE.md, that predates this plan's
-    C2 rebuild of the op — a topology gap outside this file's scope, not a
-    reason to fail the send-forwarder tests below).
-    """
     lib_dir = os.path.join(_bin_dir(), "lib")
     if lib_dir not in sys.path:
         sys.path.insert(0, lib_dir)
@@ -150,9 +133,6 @@ def _resolve_test_claude_klabauter_root() -> str | None:
 
 
 def _write_registry_toml(settings_home: str, entries: dict) -> None:
-    """Isolated machine-local registry.toml — the exact surface memo.send's
-    receiver resolution reads directly via stdlib tomllib.
-    """
     reg_dir = os.path.join(settings_home, "machine-local")
     os.makedirs(reg_dir, exist_ok=True)
     with open(os.path.join(reg_dir, "registry.toml"), "w", encoding="utf-8") as f:
@@ -188,9 +168,6 @@ def _make_mock_machine_local(tmpdir: str, return_value: str | None) -> str:
 
 
 def _make_git_repo(parent_dir: str, name: str) -> str:
-    """Minimal git repo with an initial commit — commit_authored_new_file (the
-    receiver-side committer memo.send uses) requires an existing HEAD.
-    """
     repo_dir = os.path.join(parent_dir, name)
     os.makedirs(repo_dir)
     subprocess.run(["git", "init", repo_dir], capture_output=True, check=False)
@@ -227,7 +204,6 @@ def _run_dispatcher_in_repo(
 
 
 def _fixture_envs(tmpdir: str, sender_repo: str, receiver_repo: str) -> tuple[dict, str]:
-    """Build the (env, claude_home) pair shared by every real-op test below."""
     claude_home = os.path.join(tmpdir, "claude_home")
     os.makedirs(claude_home, exist_ok=True)
     mock_impl = _make_mock_machine_local(tmpdir, None)
@@ -245,11 +221,6 @@ def _fixture_envs(tmpdir: str, sender_repo: str, receiver_repo: str) -> tuple[di
     }
     return env, claude_home
 
-
-# ---------------------------------------------------------------------------
-# Test 1 — send delivers a staged draft: receiver file lands+commits, sender
-# draft moves to sent/, sent-ledger gains a row, stdout names the receiver path.
-# ---------------------------------------------------------------------------
 
 def test_send_delivers_staged_draft() -> None:
     name = "test_send_delivers_staged_draft"
@@ -273,10 +244,6 @@ def test_send_delivers_staged_draft() -> None:
                 "--title", "Roundtrip send test memo",
                 "--summary", "A test summary for the send roundtrip",
                 # --kind is REQUIRED in practice even though `draft` treats it as
-                # optional: memo.send refuses a draft without it ("draft is missing
-                # required field 'kind'"). Omitting it made this test assert a
-                # workflow the op cannot complete. The draft/send asymmetry is filed
-                # separately -- a draft you cannot send is a trap, not a default.
                 "--kind", "fyi",
             ],
             env=env,
@@ -307,8 +274,6 @@ def test_send_delivers_staged_draft() -> None:
         if not delivered:
             raise AssertionError(f"{name}: no delivered memo found under {inbox_dir}: {os.listdir(inbox_dir)}")
 
-        # Receiver-side commit landed (AC3 in the C2 op — asserted here as the
-        # CLI-facing contract this forwarder depends on).
         log = subprocess.run(
             ["git", "-C", receiver_repo, "log", "--oneline", "-1", "--", f"cross-repo/inbox/{delivered[0]}"],
             capture_output=True, text=True, check=False,
@@ -316,7 +281,6 @@ def test_send_delivers_staged_draft() -> None:
         if not log.stdout.strip():
             raise AssertionError(f"{name}: delivered memo is not committed in the receiver repo")
 
-        # Sender-side receipt: outbox draft moved to sent/, original gone.
         if os.path.exists(outbox_path):
             raise AssertionError(f"{name}: outbox draft should be gone after send (moved to sent/): {outbox_path}")
         sent_path = os.path.join(sender_repo, "state", "memo-outbox", "sent", "roundtrip-topic.md")
@@ -331,7 +295,6 @@ def test_send_delivers_staged_draft() -> None:
         if not any(r.get("topic") == "roundtrip-topic" for r in rows):
             raise AssertionError(f"{name}: sent-ledger.jsonl has no row for roundtrip-topic: {rows}")
 
-        # Sender-side commit landed too (sent/ + deleted outbox + ledger row).
         sender_log = subprocess.run(
             ["git", "-C", sender_repo, "log", "--oneline", "-1"],
             capture_output=True, text=True, check=False,
@@ -339,11 +302,6 @@ def test_send_delivers_staged_draft() -> None:
         if "roundtrip-topic" not in sender_log.stdout and "memo.send" not in sender_log.stdout:
             raise AssertionError(f"{name}: sender-side receipt commit not found: {sender_log.stdout!r}")
 
-
-# ---------------------------------------------------------------------------
-# Test 2 — send with no staged draft hard-errors; no direct-write fallback
-# (DR-210). Neither repo is touched.
-# ---------------------------------------------------------------------------
 
 def test_send_missing_draft_hard_errors() -> None:
     name = "test_send_missing_draft_hard_errors"
@@ -371,10 +329,6 @@ def test_send_missing_draft_hard_errors() -> None:
             raise AssertionError(f"{name}: receiver inbox should be untouched on a missing-draft refusal: {os.listdir(inbox_dir)}")
 
 
-# ---------------------------------------------------------------------------
-# Test 3 — invalid topic slug is rejected before any engine call (exit 2).
-# ---------------------------------------------------------------------------
-
 def test_send_invalid_topic_slug_exits_2() -> None:
     name = "test_send_invalid_topic_slug_exits_2"
 
@@ -392,11 +346,6 @@ def test_send_invalid_topic_slug_exits_2() -> None:
         if result.returncode != 2:
             raise AssertionError(f"{name}: invalid topic slug should exit 2, got {result.returncode}. stderr={result.stderr!r}")
 
-
-# ---------------------------------------------------------------------------
-# Test 4 — no legacy one-shot flag form for send (DR-210): --to/--title/etc.
-# are not recognised anywhere on this CLI's argument surface.
-# ---------------------------------------------------------------------------
 
 def test_send_has_no_legacy_oneshot_flags() -> None:
     name = "test_send_has_no_legacy_oneshot_flags"
@@ -425,24 +374,6 @@ def test_send_has_no_legacy_oneshot_flags() -> None:
     if leaked_send:
         raise AssertionError(f"{name}: 'send' subparser should take only TOPIC, found flags: {leaked_send}")
 
-
-# ---------------------------------------------------------------------------
-# Test 5 — partial delivery (receiver committed, sender-side receipt commit
-# failed) exits 1, not 0. Review: coordinator:code-reviewer (P2) — the
-# `sender_committed is False` branch in `_cmd_send` had zero coverage.
-#
-# Honestly reconstructing this state end-to-end would mean making the
-# sender-side receipt commit fail (e.g. a corrupted .git) AFTER the receiver
-# commit already landed, inside the real `memo.send` op — not reachable
-# through this CLI's own surface. The seam actually available is
-# `cc_invoke.route_mutation`'s return envelope, which `_cmd_send` reads via
-# plain dict lookups (`acted[0]["sender_committed"]`, `["id"]`,
-# `["sender_commit_stderr"]`) and never mutates — monkeypatching what that
-# call returns is exercising `_cmd_send`'s own contract with its one
-# dependency, not faking arithmetic the CLI is supposed to compute itself.
-# This is an in-process unit test (module loaded via SourceFileLoader, same
-# pattern as Test 4 above), not a subprocess dispatch like Tests 1-3.
-# ---------------------------------------------------------------------------
 
 def test_send_partial_delivery_exits_1() -> None:
     name = "test_send_partial_delivery_exits_1"
@@ -480,13 +411,6 @@ def test_send_partial_delivery_exits_1() -> None:
         raise AssertionError(f"{name}: sender_committed=False should exit 1, got {rc}")
 
 
-# ---------------------------------------------------------------------------
-# Test 6 — C3 (docs/plans/2026-08-31-prose-flags-travel-as-files-through-
-# the.md): a newline-bearing --title is refused (exit 2), never silently
-# glued into a short-of-intent title. Fires before any engine call or repo
-# check, so no fixture/engine dependency is needed.
-# ---------------------------------------------------------------------------
-
 def test_draft_title_with_newline_refused() -> None:
     name = "test_draft_title_with_newline_refused"
 
@@ -520,11 +444,6 @@ def test_draft_title_with_newline_refused() -> None:
         if os.path.exists(outbox_path):
             raise AssertionError(f"{name}: no draft should be written on a refused --title: {outbox_path}")
 
-
-# ---------------------------------------------------------------------------
-# Test 7 — C3: --summary and --summary-file are mutually exclusive; supplying
-# both is refused (exit 2) before any engine call.
-# ---------------------------------------------------------------------------
 
 def test_draft_summary_and_summary_file_mutually_exclusive() -> None:
     name = "test_draft_summary_and_summary_file_mutually_exclusive"
@@ -561,13 +480,6 @@ def test_draft_summary_and_summary_file_mutually_exclusive() -> None:
         if "mutually exclusive" not in result.stderr:
             raise AssertionError(f"{name}: refusal should name mutual exclusion: {result.stderr!r}")
 
-
-# ---------------------------------------------------------------------------
-# Test 8 — C3: --summary-file resolves losslessly from a file, threading the
-# file's content as the summary the same way an inline --summary would.
-# Requires the real engine (memo.draft) to observe the written frontmatter,
-# so it SKIPs loud like the other real-op tests above when unresolvable.
-# ---------------------------------------------------------------------------
 
 def test_draft_summary_file_resolves_into_draft() -> None:
     name = "test_draft_summary_file_resolves_into_draft"
@@ -610,9 +522,6 @@ def test_draft_summary_file_resolves_into_draft() -> None:
             raise AssertionError(f"{name}: outbox file missing after draft: {outbox_path}")
         with open(outbox_path, encoding="utf-8") as f:
             content = f.read()
-        # The frontmatter writer YAML-escapes an embedded '"' (backslash-escaped
-        # double-quote) -- the content is carried losslessly, just not byte-
-        # identical to the raw file text. Assert on the YAML-escaped form.
         yaml_escaped_summary = summary_text.replace('"', '\\"')
         if yaml_escaped_summary not in content:
             raise AssertionError(
@@ -621,21 +530,7 @@ def test_draft_summary_file_resolves_into_draft() -> None:
             )
 
 
-# ---------------------------------------------------------------------------
-# Test 9 — AC4 (docs/plans/2026-09-07-a-claim-is-written-twice-and-nothing-
-# compares-them.md, P026-C1): the `sender_unattributed` post-send notice's
 # cause is MEASURED from `attributable_session_id_with_source` (source /
-# warm / pid), not one hardcoded sentence claiming "engine env and caller
-# both unresolved" regardless of which case actually held.
-#
-# Same in-process unit pattern as Test 5 (`route_mutation`'s return envelope
-# is the one seam `_cmd_send` reads for this branch — faking it exercises
-# the CLI's own contract, not arithmetic it should compute itself). The
-# `attributable_session_id_with_source` import inside `_cmd_send` is a
-# late/inline import, so patching the source attribute on
-# `coordinator_core.session.core` before calling `_cmd_send` is what the
-# call actually resolves against.
-# ---------------------------------------------------------------------------
 
 def test_send_sender_unattributed_notice_names_measured_cause() -> None:
     name = "test_send_sender_unattributed_notice_names_measured_cause"
@@ -655,12 +550,6 @@ def test_send_sender_unattributed_notice_names_measured_cause() -> None:
     mod._current_repo_root = lambda: "/fake/sender/repo"
     mod._warn_if_unregistered_sender = lambda: None
 
-    # `_cmd_send`'s `import cc_invoke` is a LOCAL import inside the function
-    # body — it never becomes an attribute of the loaded `mod` object, so
-    # `mod.cc_invoke` does not exist until `_cmd_send` itself runs and binds
-    # the name locally. The real target is `sys.modules['cc_invoke']` (bin/lib's
-    # module, cached process-wide once `lib` has bootstrapped it onto
-    # sys.path) — patched there, restored after.
     if _bin_dir() not in _sys.path:
         _sys.path.insert(0, _bin_dir())
     import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
@@ -712,10 +601,6 @@ def test_send_sender_unattributed_notice_names_measured_cause() -> None:
 
 
 def _capture_cmd_send_stderr(mod, args) -> "tuple[int, str]":
-    """Runs `mod._cmd_send(args)` with stderr captured, without pulling in
-    pytest's `capsys` fixture — this file's other tests use plain assertions
-    (`skip_test`, manual `raise AssertionError`), not pytest fixtures, so this
-    matches that convention rather than mixing the two styles."""
     import contextlib
     import io
 

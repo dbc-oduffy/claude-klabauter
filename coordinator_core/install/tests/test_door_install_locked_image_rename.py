@@ -42,16 +42,8 @@ def test_replace_possibly_running_image_renames_locked_dest_and_lands_new_conten
 
     assert dest.read_bytes() == b"new-image"
 
-    # Two copy2 attempts is what proves the rename branch ran rather than a
-    # plain overwrite silently succeeding -- the first raises the lock, the
-    # second lands in the path the rename freed.
     assert calls["n"] == 2
 
-    # NO residue is the correct outcome HERE, and asserting one was the bug in
-    # this test's first draft. The displaced file is only undeletable while a
-    # real process still executes the old image; a simulated lock holds no
-    # handle, so the helper's best-effort unlink succeeds and cleans up. A
-    # surviving `.stale-` sibling is the live-box outcome, not the test one.
     assert list(tmp_path.glob("dest.bin.stale-*")) == []
 
 

@@ -81,16 +81,11 @@ _SESSION_DIR_PATTERNS = ("tasks", "archive", "state/handoffs")
 
 
 def _count_ignored_session_dirs(repo_root: str) -> int:
-    """Count how many of the three session-infra dirs are gitignored (bare or
-    trailing-slash form, anchored full-line match -- mirrors the bash oracle's
-    three `grep -qE '^(<dir>/?|/<dir>/?)$'` checks)."""
     gitignore = os.path.join(repo_root, ".gitignore")
     try:
         with open(gitignore, "r", encoding="utf-8", errors="replace") as fh:
             lines = [line.rstrip("\n").rstrip("\r") for line in fh]
     except OSError as exc:
-        # Replaced a stringified fragment
-        # of the try-block's own source with a plain human sentence.
         print(f"skip: could not read {gitignore}: {exc}", file=sys.stderr)
         return 0
 
@@ -108,22 +103,13 @@ def _is_distribution_repo(repo_root: str) -> bool:
 
 
 def _is_onboarded(repo_root: str) -> bool:
-    # `state/workstreams/` alone is
-    # empirically unsound: it is created lazily by queue_append.py on first
-    # workstream event and no install/scaffold path provisions it, so 11 of
-    # 12 currently-onboarded sibling repos in the fleet have no
     # state/workstreams/ dir and would flip to UNONBOARDED. `archive/` is
-    # present on all of them (verified against the fleet) and is already the
-    # pre-existing arm of completion_archive_predicate below, so matching it
-    # here makes the two predicates genuinely identical instead of merely
-    # claimed-equivalent -- also closes the P2 drift gap.
     return os.path.isdir(os.path.join(repo_root, "archive")) or os.path.isdir(
         os.path.join(repo_root, "state", "workstreams")
     )
 
 
 def detect_onboarding_offer(repo_root: str, plugin_root: str) -> str:
-    """Read-only classification. Never raises -- returns an offer line, or "" if silent."""
     if not repo_root:
         return ""
     if not os.path.isdir(os.path.join(repo_root, ".git")):
@@ -146,7 +132,6 @@ def detect_onboarding_offer(repo_root: str, plugin_root: str) -> str:
         )
 
     if not plugin_root:
-        # No probe available -- conservative: stay silent (can't assess).
         return ""
 
     probe_script = os.path.join(plugin_root, "bin", "probe-onboarding-currency.py")
@@ -165,27 +150,9 @@ def detect_onboarding_offer(repo_root: str, plugin_root: str) -> str:
                 "[onboarding] This repo was onboarded but has no currency stamp — "
                 f"run /repo-setup to bring it current. (Dismiss: {dismiss_cmd})"
             )
-        # inconclusive* or any unrecognized status -> silent (safe default; do not
-        # nag on infrastructure uncertainty per eager-agent-calibration.md).
         return ""
 
-    # Probe script not found or not executable -- fall back to a direct
-    # coordinator_currency_probe call, mirroring the bash oracle's fallback
-    # branch (which sourced lib/coordinator_currency.py directly). First honour
-    # source_is_live: if plugin_root is nested under repo_root/plugins/, the
-    # repo being checked IS the coordinator source -- no stamp is expected.
-    #
-    # NOTE (mirrors bash oracle's C2 comment): this source_is_live check is a
     # DISTINCT concept from a "meta-repo" check -- it asks "is the coordinator
-    # plugin co-located with the repo being checked?" (plugin path inside
-    # repo/plugins/), not "is the repo's git root the claude-home dir?".
-    #
-    # coordinator_currency.py lives in claude-klabauter's own coordinator/lib/ (it
-    # migrated out of the DoE plugin_root tree during the executable-surface
-    # relocation), not under plugin_root -- resolve it off the claude-klabauter root
-    # via the canonical resolver, never plugin_root, so this branch stays
-    # reachable instead of silently always missing the file and returning ""
-    # regardless of actual drift.
     try:
         claude_klabauter_root = coordinator_engine_root()
     except RuntimeError as exc:
@@ -197,7 +164,7 @@ def detect_onboarding_offer(repo_root: str, plugin_root: str) -> str:
         repo_norm = _strip_one_trailing_slash(repo_root).replace(os.sep, "/")
         plugin_norm = _strip_one_trailing_slash(plugin_root).replace(os.sep, "/")
         if plugin_norm.startswith(repo_norm + "/plugins"):
-            return ""  # source_is_live -> silent
+            return ""
 
         probe_result = coordinator_currency_probe(repo_root, plugin_root)
         if probe_result == "current":
@@ -210,14 +177,10 @@ def detect_onboarding_offer(repo_root: str, plugin_root: str) -> str:
             )
         return ""
 
-    # No probe available -- conservative: stay silent (can't assess).
     return ""
 
 
 def _resolve_repo_root(explicit: str) -> str:
-    """Resolve repo_root: explicit override wins; else `git rev-parse --show-toplevel`
-    against cwd. Bounded subprocess (timeout + stdin guard) -- never blocks the
-    per-repo-stable probe on a hung git process."""
     if explicit:
         return explicit
     return show_toplevel() or ""

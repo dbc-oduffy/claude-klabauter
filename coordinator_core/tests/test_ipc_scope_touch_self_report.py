@@ -51,11 +51,6 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.ipc as ipc
-# The two ops these tests drive, imported by name. A bare `import
-# coordinator_core.ops` registered every op until the package went lazy-only
-# (2026-08-22); since then it registers none, and both real-handler tests
-# below failed on their own import guard -- leaving the declared-write
-# channel with no end-to-end coverage at all.
 import coordinator_core.ops.queue_append  # noqa: F401 -- registers queue.append
 import coordinator_core.ops.queue_promote  # noqa: F401 -- registers queue.promote
 from coordinator_core.ipc import dispatch_message, _REGISTRY, _SCOPE_TOUCH_PATHS_KEY
@@ -63,16 +58,7 @@ from coordinator_core.session import core, scope, liveness, touch_record
 from coordinator_core.ops.session.safe_commit_offer import compute_offer
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Declared, not excused: this file's `_scope_touch_paths` self-report contract is
-# threaded through `safe_commit_offer.compute_offer`, which reads real git status/diff
-# state to decide what an op touched -- no mock reproduces that resolution. Each test
-# spawns its own repo via `_make_repo`.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _run(coro):
@@ -94,18 +80,6 @@ def _sdir(repo, sid):
 
 
 def _touched_events(repo, sid):
-    """Decode `touch-record.jsonl`'s LIVE file only (no rotated-family
-    expansion — every fixture in this module is small enough to never
-    rotate), in on-disk order. Thin call-through to `touch_record.decode_line`
-    / `iter_complete_lines`, mirroring `session/tests/test_scope.py::
-    _decode_events` — no independent parsing invented here.
-
-    `scope.touch()` writes the new `touch-record.jsonl` dialect (C4, the
-    writer flip); this test module's own read side previously parsed the
-    retired `touched.txt` bash dialect directly, which no live writer in
-    this repo still produces — see
-    docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-repointing-its-writers.md.
-    """
     p = _sdir(repo, sid) / "touch-record.jsonl"
     if not p.is_file():
         return []
@@ -153,11 +127,6 @@ def _handler_declaring_nothing(params, ctx=None, repo_root=None):
     return {"ok": True}
 
 
-# ---------------------------------------------------------------------------
-# 1. An op declaring a written path records a touch for exactly that path.
-# ---------------------------------------------------------------------------
-
-
 def test_declared_path_records_touch_for_exactly_that_path(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
     (repo / "written.yaml").write_text("z")
@@ -174,16 +143,11 @@ def test_declared_path_records_touch_for_exactly_that_path(tmp_path, monkeypatch
     assert (events[0].verb, events[0].path) == (touch_record.VERB_TOUCH, "written.yaml")
 
 
-# ---------------------------------------------------------------------------
-# 2. PRIMARY — declared path is in compute_offer's safe_paths (no longer orphan).
-# ---------------------------------------------------------------------------
-
-
 def test_declared_path_lands_in_compute_offer_safe_paths(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
     lesson_path = repo / "state" / "lessons" / "2026-08-04-example.yaml"
     lesson_path.parent.mkdir(parents=True)
-    lesson_path.write_text("z")  # dirty, untracked
+    lesson_path.write_text("z")
     monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-2")
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
@@ -195,11 +159,6 @@ def test_declared_path_lands_in_compute_offer_safe_paths(tmp_path, monkeypatch):
     offer = compute_offer("sid-2", cwd=str(repo))
     assert "state/lessons/2026-08-04-example.yaml" in offer["safe_paths"]
     assert "state/lessons/2026-08-04-example.yaml" not in offer["orphans"]
-
-
-# ---------------------------------------------------------------------------
-# 3. The reserved key never appears in the emitted wire envelope.
-# ---------------------------------------------------------------------------
 
 
 def test_reserved_key_never_reaches_wire_envelope(tmp_path, monkeypatch):
@@ -215,15 +174,10 @@ def test_reserved_key_never_reaches_wire_envelope(tmp_path, monkeypatch):
     assert d["result"] == {"ok": True}
 
 
-# ---------------------------------------------------------------------------
-# 4. A live peer's claimed path is NOT stolen by a declaration (security-critical).
-# ---------------------------------------------------------------------------
-
-
 def test_live_peer_claim_is_not_stolen_by_a_declaration(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
     shared = repo / "shared.py"
-    shared.write_text("z")  # dirty, untracked
+    shared.write_text("z")
     core.init("peer", cwd=str(repo))
     scope.touch("peer", "shared.py", cwd=str(repo))
 
@@ -238,22 +192,14 @@ def test_live_peer_claim_is_not_stolen_by_a_declaration(tmp_path, monkeypatch):
         d = _dispatch("test.declare", {}, origin_worktree=repo)
     assert "error" not in d
 
-    # Our own declaration only ever wrote into OUR OWN touch-record.jsonl.
     my_events = _touched_events(repo, "sid-4")
     assert len(my_events) == 1
     assert my_events[0].path == "shared.py"
 
-    # The peer's own claim is untouched, and still wins ownership: our own
-    # compute_offer excludes the path as peer-owned rather than adopting it.
     offer = compute_offer("sid-4", cwd=str(repo))
     assert "shared.py" not in offer["safe_paths"]
     excluded_paths = {e["path"] for e in offer["excluded"]}
     assert "shared.py" in excluded_paths
-
-
-# ---------------------------------------------------------------------------
-# 5. A declared path outside the repo / not on disk is skipped, not recorded.
-# ---------------------------------------------------------------------------
 
 
 def test_path_outside_repo_and_absent_from_disk_are_skipped(tmp_path, monkeypatch):
@@ -263,7 +209,7 @@ def test_path_outside_repo_and_absent_from_disk_are_skipped(tmp_path, monkeypatc
     outside_file = outside_root / "not-in-repo.txt"
     outside_file.write_text("z")
 
-    absent_file = repo / "never-written.yaml"  # never created on disk
+    absent_file = repo / "never-written.yaml"
 
     monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-5")
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
@@ -275,11 +221,6 @@ def test_path_outside_repo_and_absent_from_disk_are_skipped(tmp_path, monkeypatc
         d = _dispatch("test.declare", {}, origin_worktree=repo)
     assert "error" not in d
     assert _touched_events(repo, "sid-5") == []
-
-
-# ---------------------------------------------------------------------------
-# 6. Recording failure does not fail the op (fail-open).
-# ---------------------------------------------------------------------------
 
 
 def test_recording_failure_is_fail_open(tmp_path, monkeypatch):
@@ -299,20 +240,12 @@ def test_recording_failure_is_fail_open(tmp_path, monkeypatch):
     assert d["result"] == {"ok": True}
 
 
-# ---------------------------------------------------------------------------
-# 7. No resolvable session -> no claim, op still succeeds.
-# ---------------------------------------------------------------------------
-
-
 def test_no_resolvable_session_no_claim_op_still_succeeds(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
     (repo / "written.yaml").write_text("z")
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
-    # 2 live sessions -> ambiguous -> resolve_session_id returns "" if the
-    # sentinel tier is reached. With no env vars AND no sentinel file at all,
-    # resolve_session_id already returns "" via the tier-4 "no sid" path.
 
     with _RegistryScope({"test.declare": _handler_declaring([str(repo / "written.yaml")])}):
         d = _dispatch("test.declare", {}, origin_worktree=repo)
@@ -322,25 +255,6 @@ def test_no_resolvable_session_no_claim_op_still_succeeds(tmp_path, monkeypatch)
     assert not (Path(repo) / ".git" / "coordinator-sessions").is_dir() or not any(
         (Path(repo) / ".git" / "coordinator-sessions").glob("*/touch-record.jsonl")
     )
-
-
-# ---------------------------------------------------------------------------
-# 8. A repeat identical declaration still resolves to exactly one owned path.
-#
-# Pre-dialect-migration, `scope.touch()` ran an event-aware dedup-scan-then-
-# append (skip if the last event for this path was already T), so a repeat
-# identical declaration never touched `touched.txt`'s mtime at all. C4/AC17
-# (docs/plans/2026-08-14-cli-authored-writes-get-claimed.md, landed ahead of
-# this chunk) deliberately REMOVES that dedup read: `touch_record.append_
-# event`'s single atomic append now always appends, and the reader's own
-# last-verb-wins projection (`touch_record.project_live_claims` /
-# `_read_stream_claims`) makes the identical CLAIMED decision at read time
-# instead — a redundant T on an already-T path is harmless (idempotent under
-# last-verb-wins), not silently absorbed at write time any more. This test
-# now pins the READ-time invariant the redesign actually promises (exactly
-# one owned path survives the fold) rather than the retired write-time
-# mtime-stability invariant, which is no longer this system's contract.
-# ---------------------------------------------------------------------------
 
 
 def test_repeat_identical_declaration_still_resolves_to_one_owned_path(tmp_path, monkeypatch):
@@ -359,11 +273,6 @@ def test_repeat_identical_declaration_still_resolves_to_one_owned_path(tmp_path,
     assert "written.yaml" not in offer["orphans"]
 
 
-# ---------------------------------------------------------------------------
-# 9. A handler that declares nothing behaves exactly as today — no claim, no change.
-# ---------------------------------------------------------------------------
-
-
 def test_handler_declaring_nothing_behaves_exactly_as_before(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
     monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-9")
@@ -376,14 +285,6 @@ def test_handler_declaring_nothing_behaves_exactly_as_before(tmp_path, monkeypat
     assert not (
         Path(repo) / ".git" / "coordinator-sessions" / "sid-9" / "touch-record.jsonl"
     ).is_file()
-
-
-# ---------------------------------------------------------------------------
-# 10. F1 — a cross-repo declaration cannot steal a target repo's own live
-#     session's claim, and cannot perturb the target repo's own identity
-#     resolution. This is the staff-eng reviewer's own reproduced attack
-#     (coordinatorstaff-eng-48c065fd.md, finding 0) — closed.
-# ---------------------------------------------------------------------------
 
 
 def _live_dirs_liveness(cwd=None):
@@ -415,63 +316,44 @@ def test_cross_repo_declaration_does_not_steal_target_repos_native_claim(
     repo_b = _make_repo(repo_b_dir)
 
     shared = repo_b / "shared.yaml"
-    shared.write_text("z")  # dirty, untracked in B
+    shared.write_text("z")
 
-    # B has its own live native session with a real claim on disk.
-    #
-    # This block used to establish B's identity via the `.current-session-id`
-    # sentinel (then tier 4 of `core.resolve_session_id`). That tier was REMOVED
-    # by KS-4 (2026-08-07) — unsound under concurrency, and its sole writer was
-    # deleted — so `resolve_session_id` is env-tier only now and the sentinel
-    # resolves nothing. The surviving env tier carries B's identity here
-    # instead; what this test is actually about (A's declaration cannot steal
-    # B's claim, materialize a phantom session dir in B, or perturb B's own
-    # resolution) is unchanged by which tier answers.
     core.init("sid-bnative", cwd=str(repo_b))
     scope.touch("sid-bnative", "shared.yaml", cwd=str(repo_b))
 
     monkeypatch.setattr(liveness, "live_session_ids", _live_dirs_liveness)
 
-    # Confirm B resolves its own id BEFORE the attack (sanity).
     monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-bnative")
     assert core.resolve_session_id(cwd=str(repo_b)) == "sid-bnative"
 
-    # A dispatches a declaration naming B's file, under a distinct sid.
     monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-caller")
     caplog.set_level(logging.INFO, logger="coordinator_core.ipc")
     with _RegistryScope({"test.declare": _handler_declaring([str(shared)])}):
         d = _dispatch("test.declare", {}, origin_worktree=repo_a)
     assert "error" not in d
 
-    # B's own claim is untouched.
     my_events = _touched_events(repo_b, "sid-bnative")
     assert len(my_events) == 1
     assert my_events[0].path == "shared.yaml"
 
-    # No phantom session dir for the caller's sid was ever materialized in B.
     assert not (repo_b / ".git" / "coordinator-sessions" / "sid-caller").exists()
 
-    # B's own compute_offer still sees the file as its own, not excluded.
     offer = compute_offer("sid-bnative", cwd=str(repo_b))
     assert "shared.yaml" in offer["safe_paths"]
     excluded_paths = {e["path"] for e in offer["excluded"]}
     assert "shared.yaml" not in excluded_paths
 
-    # B's own identity resolution is unperturbed AFTER the attack.
     monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-bnative")
     assert core.resolve_session_id(cwd=str(repo_b)) == "sid-bnative"
 
-    # The skip was observable, not silent.
     assert any(
         "outside the caller's own repo" in rec.message for rec in caplog.records
     )
 
 
-# ---------------------------------------------------------------------------
 # 11. F2 — a declared DIRECTORY is rejected, never recorded.
-# ---------------------------------------------------------------------------
 
 
 def test_declared_directory_is_rejected_not_recorded(tmp_path, monkeypatch, caplog):
@@ -496,11 +378,6 @@ def test_declared_directory_is_rejected_not_recorded(tmp_path, monkeypatch, capl
     assert any(
         "directories are rejected" in rec.message for rec in caplog.records
     )
-
-
-# ---------------------------------------------------------------------------
-# 12. F4 — a declaration list beyond the cap is truncated, not silently.
-# ---------------------------------------------------------------------------
 
 
 def test_declaration_list_over_cap_is_truncated_and_logged(tmp_path, monkeypatch, caplog):
@@ -529,12 +406,6 @@ def test_declaration_list_over_cap_is_truncated_and_logged(tmp_path, monkeypatch
     )
 
 
-# ---------------------------------------------------------------------------
-# 13. F3 — drives the REAL queue.append handler end-to-end (not a synthetic
-#     handler): the written path lands in compute_offer's safe_paths.
-# ---------------------------------------------------------------------------
-
-
 def test_real_queue_append_write_lands_in_compute_offer_safe_paths(tmp_path, monkeypatch):
     assert "queue.append" in _REGISTRY, "import guard: queue.append not registered"
     repo = _make_repo(tmp_path)
@@ -561,27 +432,14 @@ def test_real_queue_append_write_lands_in_compute_offer_safe_paths(tmp_path, mon
     assert _SCOPE_TOUCH_PATHS_KEY not in d["result"]
     out_path = d["result"]["out_path"]
 
-    # `offer["safe_paths"]` carries git-style repo-relative paths (forward
-    # slashes on every platform); `os.path.relpath` renders native separators,
-    # so the raw result only matched on POSIX.
     rel = Path(os.path.relpath(out_path, str(repo))).as_posix()
     offer = compute_offer("sid-13", cwd=str(repo))
     assert rel in offer["safe_paths"], (rel, offer)
     assert rel not in offer["orphans"]
 
-    # A declared write is a WRITE. Recorded kind-less, it rendered as
-    # "unknown-kind" in `who-claims-path` and kept the unknown population --
-    # which is supposed to mean "predates the axis" -- refilling from live code.
     sink = touch_record.sink_path(core.session_dir("sid-13", str(repo)))
     recorded = touch_record.project_live_claims(sink, cwd=str(repo)).claims
     assert recorded[rel].kind == touch_record.KIND_WRITE, recorded.get(rel)
-
-
-# ---------------------------------------------------------------------------
-# 14. F3 — drives the REAL queue.promote handler; asserts the NEW correct
-#     cross-repo behaviour (F1): the write lands on disk, but is NOT
-#     recorded as a claim, and the skip is surfaced (logged), not silent.
-# ---------------------------------------------------------------------------
 
 
 def test_real_queue_promote_cross_repo_write_is_skipped_and_surfaced(
@@ -610,13 +468,10 @@ def test_real_queue_promote_cross_repo_write_is_skipped_and_surfaced(
     assert _SCOPE_TOUCH_PATHS_KEY not in d["result"]
     out_path = Path(d["result"]["out_path"])
 
-    # The write itself landed (queue.promote's own job, unaffected by F1).
     assert out_path.is_file()
 
-    # NOT recorded as a claim — outbox is outside the caller's own repo.
     assert _touched_events(repo, "sid-14") == []
 
-    # The skip is observable.
     assert any(
         "outside the caller's own repo" in rec.message for rec in caplog.records
     )

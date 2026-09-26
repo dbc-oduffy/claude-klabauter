@@ -192,17 +192,6 @@ CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
-#: Relocated deny-reason explanation on DoE's own wiki -- kept as a citation
-#: even though this repo has no local copy of that page, so a reader with
-#: the DoE-claude plugin installed can still resolve it. This module itself
-#: carries no wiki-anchor resolution machinery (see ``check()``'s own
-#: ``resolve_wiki_citation`` parameter docstring): the CALLER
-#: (``dispatch.py``'s ``resolve_doctrine_surface_wiki_citation``) resolves
-#: this literal into an absolute path off that call's own ``plugin_root``,
-#: on the deny path only, falling back to this bare repo-relative literal
-#: unchanged whenever resolution is unavailable or declined -- never a wrong
-#: absolute-path guess (state/audits/2026-08-29-unverified-parity-findings-
-#: measured.md FINDING B).
 _WIKI_ANCHOR = (
     "coordinator/docs/wiki/guard-message-concision.md"
     "#doctrine-surface-bash-write-guard-carve-outs-and-remedies"
@@ -223,18 +212,12 @@ def _governed_identifiers_lower(surfaces: List[str]) -> Tuple[str, ...]:
 
 
 def _governed_identifier_patterns(identifiers_lower: Tuple[str, ...]) -> Tuple["re.Pattern[str]", ...]:
-    """Path-segment-boundary-anchored compiled patterns mirroring
-    ``identifiers_lower`` -- used only by ``_names_governed_identifier``,
-    which has no live caller in this module (see that function's own
-    docstring); ported for parity with the original's structure."""
     return tuple(
         re.compile(r"(?<![A-Za-z0-9])" + re.escape(identifier) + r"(?![A-Za-z0-9])")
         for identifier in identifiers_lower
     )
 
 
-#: Redirect targets that are never a write to a governed surface: fd
-#: duplication (``2>&1``, ``>&2``) and ``/dev/null``.
 _SAFE_REDIRECT_RE = re.compile(r"\d?>&\d|>>?\s*/dev/null")
 _BARE_REDIRECT_RE = re.compile(r">>?")
 
@@ -260,18 +243,6 @@ _WGET_OUTPUT_RE = re.compile(r"\bwget\b.{0,200}?(-O\b|--output-document\b)", re.
 _SED_WRITE_SCRIPT_RE = re.compile(r"\bsed\b.{0,200}?\bw\s+\S", re.DOTALL)
 
 #: PowerShell's own write verbs. `MATCHERS` has declared `"PowerShell"` since
-#: this guard was written, but every marker above it is a POSIX shape, so a
-#: `Set-Content CLAUDE.md x` reached no write marker at all and the guard
-#: bare-cleaned on the dialect it claimed to cover -- exactly the
-#: declaration-without-capability gap
-#: `test_no_false_clean_on_unparsed_dialect.py` exists to name. Measured
-#: 2026-08-30: `Set-Content`/`Add-Content`/`Out-File` all missed, while the
-#: bash-idiom `echo x > <gov>` denied.
-#:
-#: Cmdlet names are matched case-insensitively (PowerShell itself is), and
-#: each is anchored at a token boundary so `Set-ContentType` is not one.
-#: `Set-Item`/`New-Item`/`Remove-Item`/`Move-Item`/`Copy-Item` are the
-#: item-level writes; `Tee-Object` mirrors `tee`; the `>`/`>>` operators are
 #: already covered by `_BARE_REDIRECT_RE`, which is dialect-neutral.
 _PS_WRITE_CMDLET_RE = re.compile(
     r"(?<![\w-])(?:"
@@ -316,12 +287,6 @@ def _redirect_target_token(segment: str) -> Optional[str]:
 def _has_write_marker(text: str) -> bool:
     if _has_redirect_marker(text):
         return True
-    # Marker patterns are scanned on the literal-join fold as well as the raw
-    # text: `'t''ee' <governed>` is `tee` to the shell, but `\btee\b` matched
-    # neither, so a split write verb carried no marker and the segment read as
-    # a plain mention (measured 2026-08-29). Widening only -- a marker found
-    # only after folding still has to co-occur with a governed mention in the
-    # same segment before anything denies.
     folded = _fold_literal_joins(text)
     for pattern in (
         _TEE_RE,
@@ -362,41 +327,13 @@ def _has_indirection_marker(text: str) -> bool:
 
 
 #: A ZERO-WIDTH literal join: two quote characters with nothing between them
-#: but an optional ``+``, each optionally backslash-escaped. Covers shell
-#: adjacency (``'CLAU''DE.md'``), Python implicit concatenation (the same
-#: bytes), Python explicit concatenation (``'CLAU' + 'DE.md'``), either quote
-#: style, mixed between them, and the escaped form a payload nested inside a
-#: double-quoted shell word must use (``'CLAU'+\"DE.md\"``).
 #: WHITESPACE-SEPARATED words are deliberately NOT joined: ``'a' 'b'`` is one
-#: string in Python but two arguments in shell, and folding it would invent
-#: governed mentions in ordinary commands. That is why a gap requires a ``+``.
-#:
 #: THIRD ALTERNATIVE -- a WORD-INTERNAL quote, i.e. one with a non-space
-#: character on BOTH sides. Pair-folding alone leaves an ODD quote standing,
-#: and one surviving quote separates the name just as well as two did.
-#: Measured live 2026-08-31, a real Bash call that was ALLOWED and created
-#: the file: ``echo probe > "$S/CLAUDE""".md``. Three adjacent quotes; the
-#: pair rule consumed two and left ``claude".md``, which matches no governed
-#: identifier. Real bash concatenates the lot and wrote ``CLAUDE.md``.
-#:
-#: This is shell semantics, not a heuristic: inside ONE word, quotes are
-#: pure delimiters and every one of them is removed -- ``a"b"c`` is the
-#: single word ``abc``. The whitespace guard above is what keeps ``'a' 'b'``
-#: two arguments, and it is preserved exactly: a quote with space on either
-#: side is not word-internal and is left alone, so a quoted target
-#: containing spaces (``> "my file.md"``) still parses as before.
-#:
-#: Direction of error, per this function's own contract: folding is applied
 #: IN ADDITION to the raw text, so a wider fold can only admit MORE commands
-#: to the sink legs, never fewer. An over-fold costs a sink-leg evaluation
-#: that then declines; an under-fold is the bypass above.
 _LITERAL_JOIN_RE = re.compile(
     r"\\?['\"]\\?['\"]|\\?['\"]\s*\+\s*\\?['\"]|(?<=\S)\\?['\"](?=\S)"
 )
 
-#: One pass collapses every non-overlapping join; a second catches joins the
-#: first pass created by removing the quotes between them (``'a''b''c'``).
-#: Three is slack, not a measurement -- the loop exits on the first no-op pass.
 _LITERAL_JOIN_FOLD_PASSES = 3
 
 
@@ -493,11 +430,6 @@ _HEREDOC_START_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
 
 def _strip_heredoc_bodies(text: str) -> str:
-    """``text`` with the BODY of every heredoc removed, keeping the command
-    line that introduces it. Falls back to locating an undelimited
-    (single-line) terminator as a whitespace-bounded token when no line
-    matches it exactly, so an agent-emitted command collapsed to one line
-    does not have its heredoc body misread as live shell."""
     lines = text.split("\n")
     out: "list[str]" = []
     idx = 0
@@ -577,10 +509,6 @@ def _strip_data_heredoc_bodies(text: str) -> str:
     return "\n".join(out)
 
 
-#: A heredoc whose delimiter is QUOTED (``<<'PY'``, ``<<"PY"``). The quoting is
-#: the whole point: the shell performs NO expansion inside such a body -- no
-#: parameter expansion, no command substitution -- so a ``$(`` or a backtick
-#: there is inert text by the shell's own contract, not a substitution the
 #: guard is declining to analyse. `_HEREDOC_START_RE`'s own group 1 is
 #: OPTIONAL and matches the unquoted form too; this pattern requires it.
 _HEREDOC_QUOTED_START_RE = re.compile(r"<<-?\s*(['\"])([A-Za-z_][A-Za-z0-9_]*)\1")
@@ -622,14 +550,6 @@ def _quoted_heredoc_bodies(text: str) -> "list[str]":
 
 
 def _lies_in_a_quoted_heredoc_body(segment: str, bodies: "Sequence[str]") -> bool:
-    """Is this whole segment nothing but text from inside a quoted heredoc?
-
-    Containment, not overlap: a segment straddling the heredoc's introducing
-    line and its body is not contained in any body, so the introducing line's
-    own markers keep their full force. An empty/whitespace segment is never
-    treated as inert -- it carries no mention either way, and answering True
-    for it would be a claim about nothing.
-    """
     stripped = segment.strip()
     if not stripped:
         return False
@@ -640,19 +560,8 @@ _STDIN_PROGRAM_RE = re.compile(
     r"(?:^|[;&|]|\s)(?:python3?|perl|ruby|node)\s+-(?=\s|$)"
     r"|(?:^|[;&|]|\s)(?:bash|sh)\s+-s(?=\s|$)"
     r"|(?:^|[;&|]|\s)(?:bash|sh)\s*(?=<<)"
-    # A python3/perl/ruby/node token with NO `-` flag at all, immediately
-    # followed by a heredoc, is stdin-as-program too -- exactly the same
-    # shell contract already carved out for bash/sh above one line up.
-    # Measured miss 2026-09-23: `python3 <<'PY' ... PY` denied nothing
-    # because this regex required the `-` flag that real `python3` does
     # NOT require to read a heredoc as its script. See P143-T10.
-    #
     # Anchored on END-OF-STRING (`\s*$`), not a `(?=<<)` lookahead: every
-    # caller here matches this against `line[:match.start()] + " "` --
-    # the text BEFORE the heredoc token, with the `<<` itself already cut
-    # off -- so a lookahead for `<<` can never fire (the bash/sh third
-    # alternative one line up shares this same call shape and is exactly
-    # as unreachable via that path; left as-is, out of this item's scope).
     r"|(?:^|[;&|]|\s)(?:python3?|perl|ruby|node)\s*$"
 )
 
@@ -691,10 +600,6 @@ _PAYLOAD_ASSIGN_RE = re.compile(
 
 
 def _has_stdin_program_var_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
-    """True iff a stdin-as-program heredoc body binds a governed doctrine
-    surface to a name and then writes THROUGH that name -- closes the seam
-    between point 3 (same-line identifier+marker) and point 4 (assign-then-
-    dereference, but scanned on heredoc-stripped text)."""
     for body in _stdin_program_heredoc_bodies(cmd):
         for match in _PAYLOAD_ASSIGN_RE.finditer(body):
             name = match.group(1)
@@ -739,11 +644,6 @@ def _copy_command_substitution(text: str, start: int) -> "tuple[str, int]":
 
 
 def _strip_quoted_spans(text: str) -> str:
-    """``text`` with the contents of single- and double-quoted spans
-    removed (quote characters kept), EXCEPT a command-substitution span
-    (``$(...)`` or a backtick pair) inside the quote, which is copied
-    through verbatim -- bash evaluates substitution inside a quoted
-    argument regardless of the surrounding quotes."""
     out: "list[str]" = []
     quote: Optional[str] = None
     prev = ""
@@ -799,14 +699,7 @@ _ASSIGN_RE = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*=")
 
 
 def _git_subcommand(segment: str) -> Optional[str]:
-    # Folded before tokenizing: `'g''it' checkout HEAD~5 -- <governed>` is a
-    # git content mutation to the shell, but the raw first token was never the
-    # literal `git`, so point 8 never classified it and the segment fell
-    # through to the read-shape carve-out (measured 2026-08-29). This reads
     # the segment for verb IDENTITY only, never to reconstruct arguments --
-    # which is also why the quote characters come off each token: folding
-    # `'g''it'` leaves `'git'`, still not the literal `git` the walk below
-    # compares against.
     tokens = [
         token.replace("'", "").replace('"', "")
         for token in _fold_literal_joins(segment).split()
@@ -882,9 +775,6 @@ def _is_git_read_shape(segment: str) -> bool:
     return not _has_code_execution_marker(without_heredocs)
 
 
-#: The known-safe grant-CLI module -- see module docstring point 9. Unlike
-#: DoE's original comment (which flagged this as an unauditable cross-repo
-#: dependency), this module IS engine-plane code this repo hosts directly.
 _CLAUDE_MD_GRANT_MODULE = "coordinator_core.session.claude_md_grant"
 
 _PYTHON_BASENAMES = frozenset({"python", "python3"})
@@ -919,8 +809,6 @@ def _is_claude_md_grant_read_shape(segment: str) -> bool:
 
 
 def _split_top_level_segments(cmd: str) -> "list[str]":
-    """Split ``cmd`` at top-level ``;``, ``&&``, ``||``, ``|``, and
-    newline -- outside quotes and ``(...)``/``$(...)`` grouping."""
     segments: "list[str]" = []
     current: "list[str]" = []
     quote: Optional[str] = None
@@ -980,27 +868,16 @@ _ASSIGN_NAME_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)=")
 _VAR_DEREF_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
 
 
-#: Bound on `_expand_local_assignments`'s fixed-point loop. An alias chain
-#: longer than the number of assignments cannot exist, so this only stops a
-#: pathological command from spinning; it never truncates a real one.
 _EXPANSION_MAX_ROUNDS = 8
 
 
 def _local_assignment_values(segments: "list[str]") -> "dict[str, str]":
-    """Literal values assigned to names in this command's own segments.
-
-    Only LITERAL right-hand sides are collected -- a value containing a
-    command substitution, a backtick, or a glob is left out entirely, because
-    its runtime value is not knowable from the text and guessing at it is how
-    a guard starts denying commands for reasons it cannot state.
-    """
     values: "dict[str, str]" = {}
     for segment in segments:
         match = _ASSIGN_NAME_RE.match(segment)
         if not match:
             continue
         raw = segment[match.end():].strip()
-        # One token only: `N=foo bar` assigns `foo` and runs `bar`.
         raw = raw.split()[0] if raw.split() else ""
         if not raw:
             continue
@@ -1069,11 +946,6 @@ def _expand_local_assignments(cmd: str) -> str:
 def _governed_bound_variables(
     segments: "list[str]", identifiers_lower: Tuple[str, ...]
 ) -> "set[str]":
-    """Variable names bound to a governed path, following aliases.
-
-    ``p=<governed>`` binds ``p`` directly; ``q=$p`` then binds ``q`` too. The
-    fixed-point loop is bounded (an alias chain longer than the segment count
-    cannot exist) so a pathological command cannot spin here."""
     bound: "set[str]" = set()
     for _ in range(len(segments) + 1):
         changed = False
@@ -1132,15 +1004,15 @@ def _assignment_indirection_reaches_a_write(
         if not _has_write_marker(segment):
             continue
         if not _has_redirect_marker(segment):
-            return True  # unanalysable marker family -- fail closed
+            return True
         without_redirect = _BARE_REDIRECT_RE.sub(
             " ", _SAFE_REDIRECT_RE.sub(" ", segment)
         )
         if _has_write_marker(without_redirect):
-            return True  # a second, unanalysable marker rides along
+            return True
         target = _redirect_target_token(segment)
         if not target:
-            return True  # cannot resolve the destination -- fail closed
+            return True
         if _mentions_governed_identifier(target, identifiers_lower):
             return True
         if any(deref in bound for deref in _VAR_DEREF_RE.findall(target)):
@@ -1173,13 +1045,6 @@ _TRAILING_WRITE_CALL_RE = re.compile(r"\A\s*\.\s*write(?:_text|_bytes)?\s*\(")
 
 
 def _open_call_spans(segment: str) -> "list[tuple[int, int, str]]":
-    """Every ``open(`` call in ``segment`` as ``(start, end, args)``, where
-    ``end`` is one past the call's matching close paren and ``args`` is the
-    raw argument text. Depth-counted rather than regex-matched: an argument
-    list can itself contain parens (``open(str(p), 'w')``), and a regex that
-    stops at the first ``)`` would truncate the mode and read a write as a
-    read. A call whose paren never closes is skipped, so a truncated payload
-    contributes no analysable span and the caller falls back to closed."""
     spans: "list[tuple[int, int, str]]" = []
     for match in _OPEN_CALL_RE.finditer(segment):
         depth = 0
@@ -1235,12 +1100,12 @@ def _interpreter_write_sinks_are_ungoverned(
     analysable = False
     for start, end, args in _open_call_spans(segment):
         if not _WRITE_MODE_RE.search(args[args.find(",") + 1:]) or "," not in args:
-            continue  # read-mode open -- not a sink, leave it standing
+            continue
         literal = _LITERAL_FIRST_ARG_RE.match(args)
         if literal is None:
-            return False  # write target is not a literal -- unresolvable
+            return False
         if _mentions_governed_identifier(literal.group("path"), identifiers_lower):
-            return False  # the write names a governed surface
+            return False
         analysable = True
         stop = end
         chained = _TRAILING_WRITE_CALL_RE.match(segment[end:])
@@ -1254,7 +1119,6 @@ def _interpreter_write_sinks_are_ungoverned(
 
 
 def _is_interpreter_read_shape(segment: str, identifiers_lower: Tuple[str, ...]) -> bool:
-    """See module docstring point 11 for the full rationale."""
     token = _segment_command_token(segment)
     if token is None:
         return False
@@ -1296,20 +1160,12 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
     if not identifiers_lower:
         return False
     if not _mentions_governed_identifier(cmd, identifiers_lower):
-        # The governed name may be split across an assignment boundary
-        # (`N=CLAUDE; echo x > "$D/$N.md"`), where a substring test finds
-        # nothing and every leg below is skipped. Resolve the command to
-        # what it will actually run and re-ask ONCE. If the resolved form
-        # still does not mention a governed identifier, nothing changes --
-        # this cannot widen the guard for a command that was never about a
-        # governed surface. See `_expand_local_assignments`.
         expanded = _expand_local_assignments(cmd)
         if expanded == cmd or not _mentions_governed_identifier(
             expanded, identifiers_lower
         ):
             return False
         # Judge the RESOLVED command from here: every leg below asks what
-        # this command writes, and the resolved form is what writes it.
         cmd = expanded
 
     segments = _split_top_level_segments(cmd)
@@ -1328,11 +1184,6 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
     if _has_xargs_pipe_indirection(segments, identifiers_lower):
         return True
 
-    # DATA heredoc bodies (redirected into a file, never executed) are
-    # stripped before the per-segment sink classification below -- see
-    # `_strip_data_heredoc_bodies`'s own docstring for the over-fire this
-    # closes. A PROGRAM heredoc's body (`python3 <<PY ... PY`) stays live,
-    # unaffected, so a direct literal write inside it still denies below.
     data_stripped_segments = _split_top_level_segments(
         _strip_data_heredoc_bodies(cmd)
     )
@@ -1404,27 +1255,6 @@ def _resolved_write_sink_targets(cmd: str) -> List[str]:
 
 
 def _looks_quoted_content_shaped(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
-    """Whether the governed name appears ONLY as quoted content -- prose,
-    a grep pattern, a commit message -- rather than as something this
-    command actually writes. Selects the "not a write target" remedy.
-
-    TWO exoneration sources, and the second is not optional. A bare
-    ``>``/``>>`` redirect is only ONE of the shapes that put a governed name
-    in a real write position; ``cp``/``mv``/``tee``/``install``/``sed -i``
-    take their destination as an ordinary positional argument, and an
-    interpreter payload takes it as a call argument. Those destinations are
-    routinely QUOTED, so ``_strip_quoted_spans`` below erases them and the
-    all-quoted test comes back True -- telling the operator "the governed
-    name is quoted content, not a write target. Edit the real destination"
-    about the destination they just named. Measured live, 2026-08-31: five
-    consecutive denials on this guard, four distinct shapes; the two
-    redirect shapes got the right remedy and the three sink shapes
-    (``Path(...).write_text``, ``cp DEST``) got this one, wrongly.
-
-    The deny itself was correct in all five -- this function has never
-    gated whether to deny, only which of three prose shapes ``_compose_deny_
-    message`` renders. That is why the fix belongs here and not in the
-    detection path."""
     mentioning_segments = [
         segment
         for segment in _split_top_level_segments(cmd)
@@ -1492,31 +1322,6 @@ def check(
     governed_surfaces: Optional[List[str]],
     resolve_wiki_citation: Optional[Callable[[str], str]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Evaluate the doctrine-surface Bash/PowerShell write gate against a
-    PreToolUse payload. Returns ``None`` (allow) or the nested hard-deny
-    envelope. Never identity-gated -- fires for every caller.
-
-    ``governed_surfaces`` is resolved by the CALLER (``dispatch.py``'s own
-    ``resolve_governed_authoring_surfaces``/``resolve_plugin_root_loud``),
-    never imported here -- this module has no dependency on ``dispatch.py``
-    or any plugin-root resolution machinery, avoiding a circular import.
-    ``None`` or an empty list fails OPEN: this guard has nothing to key its
-    detection on, mirroring the resolver's own fail-open contract on a
-    manifest miss.
-
-    ``resolve_wiki_citation``, same caller-resolves shape as
-    ``governed_surfaces``: an optional ``str -> str`` callable
-    ``dispatch.py`` supplies (``resolve_doctrine_surface_wiki_citation``,
-    bound to that call's own resolved ``plugin_root``), threaded down to
-    ``_compose_deny_message`` and invoked ONLY there -- i.e. only once this
-    function has already decided to deny, never on the allow path. ``None``
-    (no resolver, or the caller's own resolution missed) leaves the deny
-    message's trailing citation as the bare literal, unchanged from before
-    this parameter existed.
-
-    Deliberately no try/except here -- fail-CLOSED-on-exception is the
-    dispatcher's own job for hard-deny guards.
-    """
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
 

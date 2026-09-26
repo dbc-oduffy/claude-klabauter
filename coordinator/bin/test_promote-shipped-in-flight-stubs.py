@@ -1,26 +1,3 @@
-"""test_promote-shipped-in-flight-stubs.py — pytest suite for
-promote-shipped-in-flight-stubs.py's exit-code propagation.
-
-The trampoline's docstring changed from a
-hardcoded "Exit codes: 0 always" contract to "propagated verbatim ... see
-that module's own docstring for the AC14 split" (a real behavior change at
-this layer; DoE's `/workday-start` reads this process's exit code), but the
-propagation itself was not independently asserted anywhere in that diff. The
-ops-module layer (coordinator_core/ops/test_promote_shipped_in_flight_stubs.py)
-is well tested; this file closes the trampoline-layer gap.
-
-Hermeticity: fakes `cc_invoke.require_dispatch_engine_on_path` (seeded into
-`sys.modules["cc_invoke"]` before import, mirroring
-test_close_origin_stub_on_ship.py's pattern) so no real engine-root
-resolution runs, and fakes
-`coordinator_core.ops.promote_shipped_in_flight_stubs` directly so `main()`'s
-return value is fully controlled — the assertion is ONLY "does the
-trampoline's sys.exit() carry the ops-module's return value through
-unchanged", not the ops-module's own AC14 business logic (already covered
-elsewhere).
-
-Spec backlink: pln-terminal-state-propagation-giv-c85539
-"""
 from __future__ import annotations
 
 import contextlib
@@ -39,30 +16,11 @@ _ABSENT = object()
 
 
 def _install_fakes(op_main_fn):
-    """Seed sys.modules with a fake `cc_invoke` (so `require_dispatch_engine_on_path`
-    never does real engine-root resolution) and a fake
-    `coordinator_core.ops.promote_shipped_in_flight_stubs` (so `main()`'s
-    return value is fully controlled). Returns the prior sys.modules entries
-    for both names — hand them to `_restore_fakes` in a `finally`.
-    """
     fake_cc_invoke = types.ModuleType("cc_invoke")
     fake_cc_invoke.require_dispatch_engine_on_path = lambda: "/nonexistent/fake-claude-klabauter-live-root"
     prior_cc_invoke = sys.modules.get("cc_invoke", _ABSENT)
     sys.modules["cc_invoke"] = fake_cc_invoke
 
-    # The subject's `_import_main` also does `from coordinator_core.cli_entry
-    # import recording_declared_writes` (DR-276 conversion). That is real,
-    # always-present production code — not the seam under test here (only
-    # the ops module's return value is) — so it is imported for real and
-    # spliced onto the fake `coordinator_core` package rather than left
-    # absent. A plain `types.ModuleType("coordinator_core")` has no
-    # `__path__`, so Python's import machinery cannot resolve
-    # `coordinator_core.cli_entry` as a submodule through it and raises
-    # ModuleNotFoundError — caught by the subject's own `except ImportError`
-    # and silently collapsed to exit 0, before `repo_root`/exit-code are
-    # ever threaded through to the ops module. Registering the real
-    # `coordinator_core.cli_entry` module directly in `sys.modules` sides
-    # around the missing-`__path__` problem without needing to fake it.
     import coordinator_core.cli_entry as _real_cli_entry
 
     fake_pkg = types.ModuleType("coordinator_core")
@@ -112,13 +70,6 @@ def _load_subject_fresh():
 
 
 def _run_main(op_main_fn):
-    """Load a fresh subject with the given fake op main(), call its main(),
-    and capture the returned exit code plus stdout/stderr.
-
-    main() returns its code rather than raising SystemExit -- that is what
-    warm-serve requires of every bin entrypoint. SystemExit is still caught
-    because argparse raises it on a usage error.
-    """
     prior = _install_fakes(op_main_fn)
     out, err = io.StringIO(), io.StringIO()
     try:
@@ -139,9 +90,6 @@ def _require_subject():
 
 
 def test_nonzero_exit_propagates_unchanged():
-    """The one case Finding 5 names explicitly: a non-zero ops-module return
-    (AC14's stamp_abort_count > 0 loud path) must flow through this
-    trampoline's sys.exit() unchanged, not collapse to 0."""
     code, out, err = _run_main(lambda argv, repo_root=None: 1)
     assert code == 1
 

@@ -23,9 +23,6 @@ VALID_UUID = "0b4efa23-3132-4861-9b79-4bbfa64c0e17"
 
 
 def _spy_apply_missing_trailers(monkeypatch):
-    """Capture the kwargs commit_v2 hands `apply_missing_trailers`, and stop
-    there -- mirrors `test_commit_v2_prefer_deliberate_stage.py`'s
-    `_spy(commit_paths)` pattern, one seam earlier."""
     seen: dict = {}
 
     def fake_apply_missing_trailers(*args, **kwargs):
@@ -53,10 +50,6 @@ def test_valid_session_id_reaches_apply_missing_trailers(monkeypatch, tmp_path):
 
 
 def test_absent_session_id_is_unchanged(monkeypatch, tmp_path):
-    """Negative spec -- absent `session_id`, `session_id_override` is `None`,
-    which is `apply_missing_trailers`' own documented "fall back to the env
-    ladder" value; behaviour is byte-identical to before this parameter
-    existed."""
     seen = _spy_apply_missing_trailers(monkeypatch)
     with pytest.raises(AssertionError, match="stop-after-capture"):
         _call(tmp_path / ".git", {"paths": ["a.md"], "message": "m"})
@@ -67,9 +60,9 @@ def test_absent_session_id_is_unchanged(monkeypatch, tmp_path):
     "bad_session_id",
     [
         "not-a-uuid",
-        "0b4efa23-3132-4861-9b79-4bbfa64c0e1",  # one hex short
-        "0b4efa23313248619b794bbfa64c0e17",  # missing hyphens
-        "0b4efa23-3132-4861-9b79-4bbfa64c0e1g",  # non-hex char
+        "0b4efa23-3132-4861-9b79-4bbfa64c0e1",
+        "0b4efa23313248619b794bbfa64c0e17",
+        "0b4efa23-3132-4861-9b79-4bbfa64c0e1g",
         123,
         "",
     ],
@@ -77,9 +70,6 @@ def test_absent_session_id_is_unchanged(monkeypatch, tmp_path):
 def test_malformed_session_id_is_refused_nothing_committed(
     monkeypatch, tmp_path, bad_session_id
 ):
-    """A malformed `session_id` refuses the whole call, naming the key --
-    same shape as every other structured `_error()` refusal in this op --
-    and never reaches `apply_missing_trailers` or `commit_paths`."""
 
     def _must_not_be_called(*args, **kwargs):
         raise AssertionError("must not be called on a malformed session_id")
@@ -99,8 +89,6 @@ def test_malformed_session_id_is_refused_nothing_committed(
 
 
 def test_case_insensitive_uuid_is_accepted(monkeypatch, tmp_path):
-    """The validation is case-insensitive, matching `_UUID_RE`'s own
-    `[0-9a-fA-F]` classes."""
     seen = _spy_apply_missing_trailers(monkeypatch)
     upper = VALID_UUID.upper()
     with pytest.raises(AssertionError, match="stop-after-capture"):

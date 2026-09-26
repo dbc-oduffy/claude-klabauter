@@ -91,29 +91,12 @@ VALID_OUTCOMES = frozenset(
 )
 VALID_RUNNERS = frozenset({"pytest", "node-test", "bats", "unknown"})
 
-# Q1 counter-proposal (frozen): runner is a property of the OUTPUT, derived
-# from an ordered set of parsers, never of the invocation string. First
-# matcher wins; `unknown` (failing=None) when none match.
 _PYTEST_FAILED_RE = re.compile(r"^(?:FAILED|ERROR)\s+(\S+)", re.MULTILINE)
 _NODE_TAP_NOT_OK_RE = re.compile(r"^not ok \d+ - (.+?)\s*$", re.MULTILINE)
 _BATS_NOT_OK_RE = re.compile(r"^not ok \d+ (?!-)(.+?)\s*$", re.MULTILINE)
 
 
 def parse_failing_nodeids(output: str) -> tuple[str, Optional[list[str]]]:
-    """Derive ``(runner, failing)`` from already-captured stdout+stderr text.
-
-    Ordered parsers, first match wins (Q1 counter-proposal — ``runner``
-    records which parser matched, not what command was run):
-      1. pytest ``FAILED <nodeid>`` / ``ERROR <nodeid>`` summary lines.
-      2. ``node --test`` TAP ``not ok N - <name>`` lines.
-      3. bats TAP ``not ok N <name>`` lines (no dash — bats and node --test
-         share the TAP shape; the dash is the only reliable discriminator
-         observed between the two, and is a best-effort heuristic, not a
-         contract term the freeze pinned).
-
-    Returns ``("unknown", None)`` when no parser matches — the tri-state
-    ``failing: null`` case, never treated as an empty/clean run.
-    """
     pytest_matches = sorted(set(_PYTEST_FAILED_RE.findall(output)))
     if pytest_matches:
         return "pytest", pytest_matches
@@ -197,15 +180,6 @@ def write_test_red_record(
     ran_at: Optional[str] = None,
     timeout: float = LOCK_TIMEOUT_SECS,
 ) -> dict:
-    """Read-modify-write one tier's entry into ``state/test-red/<machine>.yaml``.
-
-    Atomic (locked_rmw: flock + mkstemp/os.replace) and race-safe under
-    concurrent sessions on the same machine (Q2). Raises ``MutateAbort`` —
-    propagated by ``locked_rmw`` without writing — if an existing on-disk
-    entry for this tier carries a ``ran_at`` at or after the incoming one
-    (monotonic guard: a slow run finishing second must not clobber a fast
-    run that finished first).
-    """
     machine = machine or compute_machine()
     ran_at = ran_at or _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     target = _test_red_path(repo_root, machine)
@@ -253,14 +227,6 @@ def set_acknowledgement(
     expires_days: int = 14,
     timeout: float = LOCK_TIMEOUT_SECS,
 ) -> dict:
-    """``test-red ack --owner <path>`` (Q3). Writes ONLY the ``acknowledged``
-    block for ``tier`` — never the emitter-owned scalars.
-
-    ``baseline`` snapshots the record's CURRENT ``failing[]`` at
-    acknowledgement time (must be authoritative — a ``null`` failing set
-    cannot be acknowledged, per Q3's own design note). ``expires_at``
-    defaults to ``acknowledged_at`` + ``expires_days`` (14).
-    """
     machine = machine or compute_machine()
     acknowledged_at = acknowledged_at or _dt.datetime.now(_dt.timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
@@ -309,7 +275,6 @@ def clear_acknowledgement(
     machine: Optional[str] = None,
     timeout: float = LOCK_TIMEOUT_SECS,
 ) -> dict:
-    """``test-red ack --clear`` (Q3). Removes ONLY the ``acknowledged`` block."""
     machine = machine or compute_machine()
     target = _test_red_path(repo_root, machine)
 

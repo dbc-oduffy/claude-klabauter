@@ -101,12 +101,8 @@ def test_fnm_step_declines_brew_leg_without_prompting_when_non_interactive(
 
 
 def test_fnm_step_honours_harness_switch_even_with_consent_opt_in(monkeypatch):
-    # The harness switch
     # (COORDINATOR_DISABLE_MACHINE_MUTATION) and the human-consent gate
     # (COORDINATOR_INSTALL_FNM) are two independently-maintained checks in
-    # `_fnm_step`; this pins that the harness switch is still honoured even
-    # when consent has been granted, so a reorder of `_fnm_step`'s body
-    # can't silently drop it.
     monkeypatch.setenv("COORDINATOR_INSTALL_FNM", "1")
     monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
     monkeypatch.setattr(substrate.shutil, "which", lambda name: (

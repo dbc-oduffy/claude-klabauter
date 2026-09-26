@@ -58,7 +58,6 @@ _GENERAL_ADVICE = (
     "stays right for literal text."
 )
 
-# Grep patterns arrive as regex source: an optional literal `\b` wraps a word.
 _WB = r"(?:\\b)?"
 _IDENT = r"([A-Za-z_][A-Za-z0-9_]*)"
 _DEFINITION_RE = re.compile(
@@ -70,8 +69,6 @@ _BARE_IDENT_RE = re.compile(r"^" + _WB + _IDENT + _WB + r"$")
 
 
 def _looks_like_code_symbol(name: str) -> bool:
-    """A bare word is only a symbol lookup when it is shaped like one:
-    snake_case or camelCase, not an English word or a TODO marker."""
     if len(name) < 4:
         return False
     return "_" in name.strip("_") or re.search(r"[a-z][A-Z]", name) is not None
@@ -98,10 +95,9 @@ def _match_bare_identifier(pattern: str) -> Optional[str]:
 class SearchShape:
     shape_id: str
     match: Callable[[str], Optional[str]]
-    advice: str  # formatted with {symbol}
+    advice: str
 
 
-# First match wins; order runs most-specific first.
 SHAPES: Tuple[SearchShape, ...] = (
     SearchShape(
         "definition",
@@ -146,8 +142,6 @@ def _indexed_repo_root(search_root: str) -> Optional[str]:
 
 
 def _claim_once(session_dir: Path, session_id: str, name: str) -> bool:
-    """True the first time `name` is claimed in `session_dir`. A sentinel
-    that cannot be written claims nothing — silence beats a per-call fire."""
     sentinel = session_dir / name
     try:
         if sentinel.exists():
@@ -162,8 +156,6 @@ def _claim_once(session_dir: Path, session_id: str, name: str) -> bool:
 
 @register_op("hooks.preuse_search_dispatch")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PreToolUse(Grep, Glob) op: name example-retrieval-repo's structural tools once
-    per agent, and the exact tool for a recognised pattern shape."""
     if os.environ.get(_KILL_SWITCH) == "1":
         return no_advisory()
     params = payload_of(params)

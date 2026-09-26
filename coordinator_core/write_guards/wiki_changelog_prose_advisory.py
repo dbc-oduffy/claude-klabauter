@@ -108,11 +108,8 @@ from coordinator_core.write_guards._repo_root import resolve_repo_root
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
-PRIORITY = 222  # advisory band; next slot after nudge_session_display_name_as_identifier (221)
+PRIORITY = 222
 
-#: Path-convention exemption (see module docstring) -- a filename containing
-#: this substring (case-insensitive) is a changelog by design and is never
-#: flagged.
 _EXEMPT_FILENAME_SUBSTRING = "changelog"
 
 _DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
@@ -127,8 +124,6 @@ _DETECTORS = (
 
 
 def _delta_text(tool_name: str, tool_input: Dict[str, Any]) -> str:
-    """The changed-span text for this write, per C2's reachability finding
-    -- never the reconstructed whole file (see module docstring)."""
     if tool_name == "Write":
         content = tool_input.get("content")
         return content if isinstance(content, str) else ""
@@ -165,17 +160,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         repo_root = resolve_repo_root(payload.get("cwd"))
         if not repo_root:
-            # Fail-open: cannot establish the scope root, so cannot confirm
-            # this write is inside THIS repo's docs/wiki/ (see module
-            # docstring, scope-root discrimination).
             return None
 
-        # BOTH sides through `casefold_path`, never one: a hand-rolled
         # separator swap left this comparison case-SENSITIVE, so on the
-        # case-insensitive filesystems where Windows and macOS are
-        # first-class, a write to `Docs/Wiki/...` resolved outside the scope
-        # root and skipped the advisory entirely. The helper also strips a
-        # Windows extended-length prefix, which the swap did not.
         scope_root = casefold_path(repo_root).rstrip("/") + "/docs/wiki/"
         file_path_norm = casefold_path(file_path)
         if not file_path_norm.startswith(scope_root):
@@ -204,6 +191,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         return None
     except Exception:
-        # Fail-open on any unexpected error -- advisory convention (see
-        # module negative-spec).
         return None

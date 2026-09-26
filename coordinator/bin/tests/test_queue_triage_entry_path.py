@@ -109,7 +109,6 @@ class TestBuildScaffoldParamsEntryLeg:
 
 
 class TestOpDerivesTitleFromEntryPathAlone:
-    """Locks the op-side fallback the CLI's entry-only params rely on."""
 
     def test_extract_items_derives_nonempty_title_from_bare_filename_entry(self, op_mod):
         params = {"entry": {"path": "state/misc/plainfile.md"}}
@@ -126,8 +125,6 @@ class TestOpDerivesTitleFromEntryPathAlone:
         assert items[0]["title"] == "test-entry"
 
     def test_final_title_resolution_is_nonempty_with_no_title_param(self, op_mod):
-        """Mirrors the handler's own `title = (params.get("title") or default_title
-        or "").strip()` step -- the exact line D6 claims goes empty."""
         params = {"entry": {"path": "state/misc/plainfile.md"}}
         _items, default_title, err = op_mod._extract_items(params)
         assert err is None

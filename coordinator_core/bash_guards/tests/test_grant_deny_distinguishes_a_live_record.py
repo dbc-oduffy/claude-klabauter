@@ -47,8 +47,6 @@ def _render(**kwargs) -> str:
 
 
 class TestNoRecordBranchIsUnchanged:
-    """The ordinary no-grant deny is the correct text for a reader who
-    genuinely has no grant, and this change must not have touched it."""
 
     def test_absent_record_still_asks_the_pm(self) -> None:
         rendered = _render(ungranted_record=None)
@@ -61,8 +59,6 @@ class TestNoRecordBranchIsUnchanged:
 
 class TestRecordPresentBranch:
     def test_it_does_not_tell_the_reader_to_type_a_pm_utterance(self) -> None:
-        """The defect that made the incident unrecoverable without
-        fabricating an authorization."""
         rendered = _render(ungranted_record=_RECORD)
         assert "tier-u-grant-cli grant pm" not in rendered
         assert "Ask the PM for a Tier-U authorization grant" not in rendered
@@ -78,17 +74,11 @@ class TestRecordPresentBranch:
         assert "asking for another will not change that" in rendered
 
     def test_it_names_the_failing_gate_rather_than_the_possibilities(self) -> None:
-        """Superseded a weaker assertion: the first version of this branch
-        listed both readings of the sid pair and left the reader to work out
-        which they had. Enumerating possibilities is what the reader could
-        already do; naming the gate is the thing they could not."""
         rendered = _render(ungranted_record=_RECORD, ungranted_cwd=None)
         assert "why:" in rendered
         assert "writer/reader disagreement" in rendered
 
     def test_a_record_missing_its_fields_still_renders(self) -> None:
-        """A malformed record reaches this branch too — `check_tier_u_grant`
-        returns whatever parsed as an object. It must not raise."""
         rendered = _render(ungranted_record={})
         assert "<absent>" in rendered
         assert "grant session_id:" in rendered
@@ -102,22 +92,12 @@ class TestRecordPresentBranch:
 
 class TestDiagnosticSidHelper:
     def test_it_never_raises(self) -> None:
-        """It annotates a deny; it may not be able to break one."""
         assert ctsi._resolved_sid_for_diagnosis() is None or isinstance(
             ctsi._resolved_sid_for_diagnosis(), str
         )
 
 
 class TestFailingGateIsNamed:
-    """The deny names WHICH of `check_tier_u_grant`'s gates rejected the
-    record, not merely the two readings of the sid pair.
-
-    Without this the reader still has to bisect: "sids match or they don't"
-    leaves them running the predicate by hand, which is what cost
-    example-retrieval-repo-ue-addon-em ~20 minutes. `_ungranted_record_failing_gate`
-    mirrors that function's gate ORDER so the named gate is the one it
-    actually returned on.
-    """
 
     def test_unrecognised_granter_is_named(self) -> None:
         why = ctsi._ungranted_record_failing_gate(
@@ -140,8 +120,6 @@ class TestFailingGateIsNamed:
         assert "also names a ceremony" in why
 
     def test_sid_mismatch_is_named_as_an_engine_defect(self) -> None:
-        """The 2026-09-02 shape, if that is what it turns out to be: the
-        reader is told it is not theirs to fix and what to report."""
         why = ctsi._ungranted_record_failing_gate(
             {"granted_by": "ceremony", "ceremony": "m", "session_id": "someone-else"},
             "mine",
@@ -151,10 +129,6 @@ class TestFailingGateIsNamed:
         assert "engine defect" in why
 
     def test_gate_order_matches_the_predicate_it_mirrors(self) -> None:
-        """A record failing SEVERAL gates reports the FIRST one, matching
-        `check_tier_u_grant`'s own short-circuit order -- otherwise the named
-        gate is a true statement about the record but not the reason it was
-        refused."""
         why = ctsi._ungranted_record_failing_gate(
             {"granted_by": "nonsense", "session_id": "someone-else"}, "mine", None
         )

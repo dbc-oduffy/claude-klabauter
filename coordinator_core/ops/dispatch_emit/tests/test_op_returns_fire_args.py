@@ -1,16 +1,3 @@
-"""
-Tests for ``dispatch.emit``'s ``fire_args`` reply field (P139-C3,
-docs/plans/2026-09-22-emitted-repo-anchor-binds-at-fire-time.md).
-
-Purpose: falsify the three cases the chunk body names -- present with a
-posix absolute value for a plan inside a ``.git`` tree, absent for a plan
-with no ``.git`` ancestor, and absent on the queue route. Independent of
-C1's ``fire.py`` binding (module docstring § Reply fields): this only
-covers the reply's own ``fire_args`` convenience key.
-
-Spec backlink: docs/plans/2026-09-22-emitted-repo-anchor-binds-at-fire-time.md
-§ C3.
-"""
 
 from __future__ import annotations
 

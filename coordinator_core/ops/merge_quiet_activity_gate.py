@@ -73,11 +73,6 @@ _GIT_TIMEOUT_SECONDS = 15
 
 
 def _head_commit_epoch_seconds(repo_root: Path) -> Optional[float]:
-    """Return HEAD's committer timestamp as Unix epoch seconds, or None on
-    any failure (not a git repo, no commits yet, `git` missing, timeout) —
-    every failure mode collapses to "nothing to gate on" per the module
-    negative-spec, never a raise.
-    """
     try:
         proc = subprocess.run(
             ["git", "log", "-1", "--format=%ct", "HEAD"],
@@ -105,11 +100,6 @@ def _head_commit_epoch_seconds(repo_root: Path) -> Optional[float]:
 
 
 def _resolve_quiet_threshold_seconds(raw: object) -> int:
-    """Coerce `params["quiet_threshold_seconds"]` to int, falling back to
-    the 5-minute default (the oracle's own literal) on anything missing or
-    non-coercible — mirrors the standalone invocation path, which can
-    plausibly hand this through as a string.
-    """
     if raw is None:
         return _DEFAULT_QUIET_THRESHOLD_SECONDS
     try:
@@ -119,12 +109,6 @@ def _resolve_quiet_threshold_seconds(raw: object) -> int:
 
 
 def evaluate(repo_root: Path, quiet_threshold_seconds: int = _DEFAULT_QUIET_THRESHOLD_SECONDS) -> dict:
-    """Pure-ish quiet-activity check over an already-resolved `repo_root`.
-
-    Returns the `{ok, seconds_since_last_commit, message}` response shape
-    directly, so both the registered handler and a standalone caller share
-    one code path.
-    """
     commit_epoch = _head_commit_epoch_seconds(repo_root)
     if commit_epoch is None:
         return {
@@ -134,10 +118,6 @@ def evaluate(repo_root: Path, quiet_threshold_seconds: int = _DEFAULT_QUIET_THRE
         }
 
     elapsed = time.time() - commit_epoch
-    # A commit timestamp in the future (clock skew, rebased history) never
-    # blocks the gate — clamp to 0.0 rather than reporting a negative
-    # "seconds since" that would misleadingly read as already-quiet-enough
-    # by a wide margin, or not, depending on sign.
     elapsed = max(elapsed, 0.0)
 
     if elapsed >= quiet_threshold_seconds:

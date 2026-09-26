@@ -64,12 +64,7 @@ class CrossPlatformParityTests(unittest.TestCase):
         )
 
     def test_shebang_is_python3(self):
-        # C4 (2026-08-13) stripped the literal `#!/usr/bin/env python3`
-        # shebang from all 312 coordinator/bin/*.py entrypoints, per the
         # 2026-07-28 POSIX-EXEC-ASSUMPTION-GUARD PM ruling that retired
-        # gen-launcher-shim.py --ensure-unix — exec_cli() no longer relies
-        # on a shebang or exec bit at all. Line 1 is now the retired-mode
-        # marker comment C4 left in its place.
         with open(_CLI, encoding="utf-8") as fh:
             first_line = fh.readline().rstrip("\n")
         self.assertTrue(

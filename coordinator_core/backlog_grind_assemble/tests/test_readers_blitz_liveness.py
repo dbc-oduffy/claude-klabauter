@@ -1,16 +1,3 @@
-"""Pre-dispatch liveness predicate for `readers_blitz.py` (bug-backlog row
-2026-07-27-move-bug-blitz-s-liveness-check-left-of-62059b3973f8):
-`is_item_live` / `bare_cited_surface`, plus their wiring into
-`queue_select.select_rows`'s dispatch-time manifest build — the row's
-actual ask — which is what a bug-blitz run's emitted script (`emit-dispatch-
-workflow.py --queue state/bug-backlog --profile bug`) is composed from.
-
-Negative-spec: does NOT exercise `collect()`'s repo-root resolution end to
-end (that is `git`-backed and covered elsewhere in
-`coordinator_core/test_backlog_grind_assemble.py`) -- this pins the
-predicate and its evidence-string wiring directly, against a `tmp_path`
-fixture, never a real checkout.
-"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -67,16 +54,6 @@ def test_read_backlog_readiness_evidence_reports_open_item_count(
     result = readers_blitz._read_backlog_readiness()
     evidence = result.judgment_points[0]["evidence"]
     assert evidence.startswith("state/bug-backlog/ open-item count=1 |")
-
-
-# ---------------------------------------------------------------------------
-# Dispatch-time wiring: the row's actual ask. `queue_select.select_rows`
-# (the manifest builder a bug-blitz emitted script is actually composed
-# from, via `queue_emit.emit_queue_script` <- `emit-dispatch-workflow.py
-# --queue state/bug-backlog --profile bug`) must decline a stale-surface
-# row BEFORE it reaches the manifest -- not merely annotate it after the
-# fact, which is all `_read_backlog_readiness` above can do.
-# ---------------------------------------------------------------------------
 
 
 def _write_bug_row(path, **fields) -> None:

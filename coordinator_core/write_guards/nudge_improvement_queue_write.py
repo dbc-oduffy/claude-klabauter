@@ -114,19 +114,14 @@ from coordinator_core.bash_guards._helpers import (
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
-PRIORITY = 120  # unchanged (class flip only, no re-slot -- no lower-numbered advisory co-matches)
+PRIORITY = 120
 
-#: Operator-only escape hatch, kept for a human launching the harness.
-#: No longer the advertised route — see module docstring.
 _ESCAPE_HATCH_ENV_VAR = "COORDINATOR_QUEUE_PUNT"
 
-#: File-path match gate.
 _QUEUE_PATH_GLOBS = ("*state/improvement-queue/*.yaml", "*improvement-queue.md")
 
-#: Legacy prose entry-line pattern.
 _ENTRY_LINE_RE = re.compile(r"^- \d{4}-\d{2}-\d{2} \|", re.MULTILINE)
 
-#: Active-authoring-skill transcript-tail suppression.
 _AUTHORING_SKILL_RE = re.compile(
     r"(^|[^a-z])/(learn-lessons|workweek-complete|workday-complete|workstream-complete"
     r"|distill|update-docs|bug-blitz|mise-en-place)([^a-z]|$)"
@@ -139,33 +134,14 @@ _TRANSCRIPT_TAIL_LINES = 500
 
 _QUEUE_LABEL = "improvement queue"
 
-#: The content-based escape: a `justification:` line anywhere in the NEW
-#: content being written (a YAML top-level field for the *.yaml form, or a
-#: plain "justification: ..." line for the legacy prose bullet form — this
-#: guard does not require either form's schema to formally declare the key,
-#: it only reads the payload text directly). Case-insensitive; tolerates an
-#: optional leading bullet marker for the prose form. When more than one
-#: match is present (e.g. a MultiEdit touching several lines), the LAST
-#: match wins — the most recently written value is what will actually land.
-#: Captures the indent of the `justification:` key itself so a YAML
-#: block-scalar value (`|`, `|-`, `|+`, `>`, `>-`, `>+`) can be told apart
-#: from an inline scalar and its continuation lines gathered separately —
-#: see `_extract_justification`.
 _JUSTIFICATION_LINE_RE = re.compile(
     r"^(?P<indent>[ \t]*)(?:[-*]\s*)?justification:\s*(?P<value>.*?)\s*$",
     re.IGNORECASE,
 )
 
-#: A bare YAML block-scalar header with no inline content, e.g. `|`, `|-`,
 #: `>+`. When `_JUSTIFICATION_LINE_RE`'s captured value is one of these, the
-#: real justification text lives on the following more-indented lines, not
-#: in the header itself.
 _BLOCK_SCALAR_HEADER_RE = re.compile(r"^[|>][+-]?\d*$")
 
-#: Full five-question self-check + hard-forbidden-writes rule, relocated out
-#: of the inline deny text (2026-07-30 cut) so the deny message itself stays
-#: short. The content there is otherwise unchanged from what used to render
-#: inline.
 _FIVE_QUESTIONS_DOC = (
     "docs/reference/queue-admission-five-questions.md (claude-klabauter engine repo — "
     "this path is engine-relative and will not resolve in a consumer repo's "
@@ -190,12 +166,6 @@ _REASON_TEMPLATE = """No reason given for this {queue_label} entry ({file_path_n
 Always-forbidden cases: {five_q_doc}
 {legacy_prose_note}{hint}{override_block}"""
 
-#: Appended when the matched path is the legacy `.md` prose form (DR-115 §
-#: PM direction (B)) -- the escape instruction above stays YAML-only; this
-#: line names the shape and the exit instead of coaching a hand-written
-#: pipe-row bullet into an artifact we are trying to leave. Not yet landed
-#: as of this module's authoring -- see nudge_prose_queue_append.py for the
-#: forthcoming transformer path, verified absent from disk there.
 _LEGACY_PROSE_NOTE = """This file is an unmigrated prose queue -- new entries belong in
 state/{queue_dir}/*.yaml. To convert: coordinator_core/ops/fleet/migrate_prose_queue.py (planned, not yet landed).
 """
@@ -210,7 +180,6 @@ def _extract_str(tool_input: Dict[str, Any], *keys: str) -> str:
 
 
 def _tail_lines(path: str, n: int) -> str:
-    """Best-effort last-N-lines read; any failure yields "" (fail-open)."""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             return "".join(deque(fh, maxlen=n))
@@ -225,16 +194,6 @@ def _strip_wrapping_quotes(value: str) -> str:
 
 
 def _extract_justification(text: str) -> str:
-    """Return the last ``justification:`` value found in ``text``, or ``""``
-    if none is present. Reads the RAW WRITE PAYLOAD text — no disk I/O.
-
-    A YAML block-scalar value (``justification: |-`` etc.) has no inline
-    text after the header — the real content lives on the following
-    more-indented lines. Treating the bare header as the value would judge
-    a real, non-trivial justification "trivial" on nothing but its own
-    punctuation. When the captured value is a block-scalar header, the
-    following lines (each stripped, deeper-indented than the key) are
-    gathered and joined instead."""
     lines = (text or "").splitlines()
     last_value = ""
     for i, line in enumerate(lines):
@@ -302,7 +261,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if tool_name not in ("Write", "Edit", "MultiEdit"):
             return None
 
-        # --- operator-only escape hatch (still honored, no longer advertised) ---
         punt_reason = os.environ.get(_ESCAPE_HATCH_ENV_VAR, "") or ""
         punt_trivial = False
         if punt_reason:
@@ -318,9 +276,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not file_path:
             return None
 
-        # MultiEdit doesn't expose a single new_string for entry-line
-        # counting; treat like Write (any MultiEdit to a queue file gets the
-        # nudge, subject to the justification-content check below).
         effective_tool_name = "Write" if tool_name == "MultiEdit" else tool_name
 
         file_path_norm = file_path.replace("\\", "/")
@@ -328,7 +283,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not any(fnmatch.fnmatchcase(file_path_norm, g) for g in _QUEUE_PATH_GLOBS):
             return None
 
-        # --- Edit-only entry-count / field-edit gate ---
         if effective_tool_name == "Edit":
             if fnmatch.fnmatchcase(file_path_norm, "*improvement-queue.md"):
                 new_string = _extract_str(tool_input, "new_string", "content")
@@ -340,16 +294,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             elif fnmatch.fnmatchcase(file_path_norm, "*state/improvement-queue/*.yaml"):
                 return None
 
-        # --- active-authoring-skill transcript-tail suppression ---
         transcript_path = payload.get("transcript_path") or ""
         if transcript_path and os.path.isfile(transcript_path):
             recent_tail = _tail_lines(transcript_path, _TRANSCRIPT_TAIL_LINES)
             if recent_tail and _AUTHORING_SKILL_RE.search(recent_tail):
                 return None
 
-        # --- content-based escape: a non-trivial justification travels
-        #     with the entry itself, permanently, instead of dying at the
-        #     process boundary the way the env var did ---
         new_content = _gather_new_content(tool_name, tool_input)
         justification = _extract_justification(new_content)
         justification_trivial = bool(justification) and _is_trivial_reason(justification)
@@ -367,10 +317,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             legacy_prose_note = _LEGACY_PROSE_NOTE.format(queue_dir="improvement-queue")
 
         # COORDINATOR_QUEUE_PUNT is
-        # reason-shaped, not flag-shaped; its own _is_trivial_reason
-        # denylists the literal "1", so the default VAR=1 render would be
-        # refused by the very guard printing it. reason_placeholder
-        # renders the correct VAR="<reason>" syntax instead.
         _note = operator_override_note(
             _ESCAPE_HATCH_ENV_VAR,
             payload=payload,
@@ -392,6 +338,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         }
     except Exception:
-        # Fail-OPEN on any unexpected error -- this guard denies ONLY on a
-        # positive match, never on an error.
         return None

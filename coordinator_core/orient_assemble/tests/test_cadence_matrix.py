@@ -1,19 +1,3 @@
-"""
-coordinator_core.orient_assemble.tests.test_cadence_matrix — C3 AC(a):
-each cadence (session/day/week) must emit the correct directive/
-judgment_point set. Cadence tunes severity/depth knobs over ONE shared
-compute (Approach § "Cadence is a parameter, not three code paths") —
-these tests isolate the cadence-sensitive branch point in each reader
-family with monkeypatched siblings, so a fixture drift in one reader
-can't mask a cadence regression in another.
-
-Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420, chunk C3
-
-Negative-spec: does NOT invoke any reader's real I/O (git, disk, network,
-subprocess) — every underlying read is monkeypatched to a deterministic
-stub. Read-only-guarantee (AC-c) is asserted separately in
-test_read_only_guarantee.py; this file's job is cadence branching only.
-"""
 
 from __future__ import annotations
 
@@ -160,7 +144,6 @@ def test_marker_freshness_week_cadence_reads_header_not_the_day_marker(tmp_path,
     week_dir = tmp_path / "week-changelog"
     week_dir.mkdir()
     (week_dir / "HEADER.md").write_text("stub", encoding="utf-8")
-    # A stale day marker must NOT leak into the week-cadence read.
     (tmp_path / ".workday-start-marker").write_text("1999-01-01", encoding="utf-8")
 
     result = rhr._read_marker_freshness("week")
@@ -188,9 +171,6 @@ def test_handoff_triage_collect_is_cadence_insensitive(monkeypatch):
 
 
 def test_brief_forwards_repo_root_to_all_four_reader_collect_calls(monkeypatch):
-    """C2 AC: `brief(cadence, *, repo_root=...)` forwards `repo_root` as a
-    keyword to every reader family's `collect(cadence, repo_root=...)` —
-    pure plumbing, no reader consumes it yet (C3-C7 do, one at a time)."""
     received: dict[str, tuple[str, str | None]] = {}
 
     def make_stub(name):

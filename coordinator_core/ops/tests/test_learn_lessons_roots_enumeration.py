@@ -31,9 +31,6 @@ from coordinator_core.testing.fake_machine_local import write_fake_machine_local
 
 
 def _write_fixture_machine_local(bin_dir: Path, repos: dict) -> Path:
-    """A fake `machine-local` that answers ONLY `dump --prefix repos --format
-    json` -- the real batched call `_registry_roots` makes -- with the given
-    `{short_key: path}` map, rendered as `repos.<short_key>`."""
     python_body = f"""
 import json
 import sys
@@ -81,8 +78,6 @@ class TestSettingsHomeRegistryEnumeration:
         peer_a.mkdir()
         peer_b.mkdir()
 
-        # machine-local lives ONLY at <settings-home>/bin -- no legacy
-        # <claude_home>/bin/machine-local exists at all.
         _write_fixture_machine_local(
             settings_home / "bin",
             repos={"peer_a": str(peer_a), "peer_b": str(peer_b)},
@@ -96,11 +91,6 @@ class TestSettingsHomeRegistryEnumeration:
         assert str(claude_home) in roots
         assert str(peer_a) in roots, f"expected {peer_a} in {roots!r}"
         assert str(peer_b) in roots, f"expected {peer_b} in {roots!r}"
-        # This is the exact assertion that would have FAILED against the
-        # pre-fix single-rung (legacy-only) probe: no
-        # <claude_home>/.claude/bin/machine-local exists in this fixture, so
-        # the old code's `ml_ok` would be False and `_registry_roots()` would
-        # never run -- `roots` would be exactly `[str(claude_home)]`.
         assert roots != [str(claude_home)]
 
     def test_legacy_only_install_still_works(self, tmp_path: Path, monkeypatch):
@@ -130,10 +120,6 @@ class TestSettingsHomeRegistryEnumeration:
     def test_settings_home_rung_preferred_over_legacy_when_both_present(
         self, tmp_path: Path, monkeypatch
     ):
-        """When both a settings-home and a legacy `machine-local` exist,
-        the settings-home one wins (mirrors `bare_forwarder.forward`'s
-        ordering) -- assert via a peer only the settings-home fixture
-        registers."""
         claude_home_parent = tmp_path / "home"
         claude_home = claude_home_parent / ".claude"
         claude_home.mkdir(parents=True)
@@ -164,9 +150,6 @@ class TestSettingsHomeRegistryEnumeration:
     def test_no_machine_local_anywhere_degrades_to_claude_home_only(
         self, tmp_path: Path, monkeypatch
     ):
-        """Negative-spec preserved: absent both rungs, `resolve_roots()`
-        still exits gracefully with exactly `[claude_home]` -- OSS
-        fresh-install parity."""
         claude_home_parent = tmp_path / "home"
         claude_home = claude_home_parent / ".claude"
         claude_home.mkdir(parents=True)

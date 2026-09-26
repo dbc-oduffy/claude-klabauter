@@ -101,28 +101,12 @@ def _seeded_registry(tmp_path, monkeypatch):
 def test_merged_flat_registry_eliminates_machine_local_cli_spawns(
     tmp_path, monkeypatch
 ) -> None:
-    """Many `repos.*`/`publish.mirrors.*.path` keys must still cost exactly
-    the manifest's `spawn_count_budget.machine_local_cli_elimination_calls`
-    `subprocess.run` invocations — zero, regardless of key count (was O(N)
-    `machine-local` CLI spawns before this fix). This isolates ONLY the
-    registry-read sub-path `_merged_flat_registry` replaced; it deliberately
-    does not observe `_tier_a5`'s own sanctioned `_sort_unique` tail spawn —
-    see `test_tier_a5_and_publish_mirror_keys_real_spawn_count` below for
-    that whole-op figure."""
     budget_entry = _manifest_spawn_budget()
     assert budget_entry["machine_local_cli_elimination_calls"] == 0
 
     _seeded_registry(tmp_path, monkeypatch)
 
-    # `_tier_a5`'s tail (`_sort_unique`) shells out to `sort -u` for
     # byte-parity with the bash oracle — a SANCTIONED carve-out
-    # (`coordinator_core/tests/test_no_bash_dependency.py` names
-    # `discover_working_repos.py::_sort_unique` explicitly) counted
-    # separately by `test_tier_a5_and_publish_mirror_keys_real_spawn_count`
-    # below, via `spawn_count_budget.per_call`. Stub it out here so this
-    # test isolates only the registry-read path this fix targets
-    # (`_merged_flat_registry`'s elimination of the `machine-local` CLI
-    # spawns), not that separate, separately-counted spawn.
     monkeypatch.setattr(m, "_sort_unique", lambda lines: sorted(set(lines)))
 
     call_count = {"n": 0}
@@ -145,15 +129,6 @@ def test_merged_flat_registry_eliminates_machine_local_cli_spawns(
 def test_tier_a5_and_publish_mirror_keys_real_spawn_count(
     tmp_path, monkeypatch
 ) -> None:
-    """The REAL, unstubbed `subprocess.run` count for calling `_tier_a5()`
-    then `_publish_mirror_keys()` — nothing patched out. `_sort_unique`'s
-    sanctioned `sort -u` carve-out spawn is counted here, not hidden: it
-    fires exactly once (`_tier_a5`'s own tail call, line-count-independent —
-    `_sort_unique` makes one `subprocess.run` call per non-empty input, not
-    one per line); `_publish_mirror_keys` never calls `_sort_unique` and
-    contributes zero. This is `spawn_count_budget.per_call` — the manifest
-    key the original (pre-fix) test claimed to observe but did not, because
-    it stubbed out the one function that spawns before measuring."""
     budget_entry = _manifest_spawn_budget()
     assert budget_entry["per_call"] == 1
 

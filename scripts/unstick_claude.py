@@ -48,9 +48,6 @@ def _rc_files(home: Path) -> list[Path]:
 
 
 def _strip_block(text: str) -> str | None:
-    """`text` without the generated block, or None when it carries none. An
-    unterminated block keeps everything after BEGIN, since a missing END means
-    the lines below were not written by the generator."""
     lines = text.split("\n")
     out: list[str] = []
     changed = False

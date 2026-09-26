@@ -1,16 +1,3 @@
-"""Tests for coordinator_core.session.claim_neighbours.
-
-Plan: docs/plans/2026-08-16-trace-a-claim-back-to-its-session.md, chunk C1.
-
-Every fixture is synthetic, built under ``tmp_path`` — no real git repo is
-required for the ``claim_index``-lookup side (mirrors
-``test_claim_index.py``'s own ``sessions_dir=str(tmp_path)`` convention).
-Liveness is monkeypatched directly at ``claim_neighbours.liveness.session_live``
-rather than built from real ``meta.json``/process state — this module's own
-liveness contract (Layer 1/2/registry precedence) is ``liveness.py``'s test
-surface, not this one's; here we only need to pin that a peer's
-LIVE/DEAD/raising verdict is respected.
-"""
 
 import os
 
@@ -35,9 +22,6 @@ def _write_artifact(path, frontmatter: dict, body: str = "\n# body\n"):
 
 
 def _session_touched(base, sid, lines):
-    """Write the fixture's claims in the record dialect the readers actually
-    read. ``_touch_line`` still renders the legacy shape because that is what
-    these tests read most legibly; it is decoded back into events here."""
     sink = os.path.join(str(base), sid, scope._TOUCH_RECORD_FILENAME)
     os.makedirs(os.path.dirname(sink), exist_ok=True)
     for line in lines:
@@ -53,10 +37,6 @@ def _session_touched(base, sid, lines):
 
 
 def _epoch(ts):
-    # Every call site passes the `datetime` (or
-    # `None`) `parse_touch_event` already returned, never a string; the
-    # former str()->fromisoformat round-trip existed to handle an input
-    # shape this helper is never actually called with.
     return ts.timestamp() if ts is not None else None
 
 
@@ -68,11 +48,6 @@ def _write_plan_claim(base, sid, slug):
     claim_dir = os.path.join(str(base), "plan-claims", slug)
     os.makedirs(claim_dir, exist_ok=True)
     _write(os.path.join(claim_dir, "session_id"), sid + "\n")
-
-
-# ---------------------------------------------------------------------------
-# AC1 — plan claim with scope: resolves and names a live sister session
-# ---------------------------------------------------------------------------
 
 
 def test_plan_with_scope_resolves_live_neighbour(tmp_path, monkeypatch):
@@ -104,12 +79,7 @@ def test_plan_with_scope_resolves_live_neighbour(tmp_path, monkeypatch):
     assert neighbour.overlapping_paths == ["coordinator_core/session/claims.py"]
 
 
-# ---------------------------------------------------------------------------
-# A deliverable_id alone (no governing_plan stamp, no scope:) is no longer a
-# bridge — that scan was retired (PM ruling R1: absence is information, not
-# a search). This premise dissolved with the design; the artifact resolves
 # UNRESOLVABLE rather than falling through to a docs/plans/ walk.
-# ---------------------------------------------------------------------------
 
 
 def test_handoff_with_only_deliverable_id_is_unresolvable(tmp_path, monkeypatch):
@@ -147,12 +117,6 @@ def test_handoff_with_only_deliverable_id_is_unresolvable(tmp_path, monkeypatch)
     assert result.status == claim_neighbours.UNRESOLVABLE
     assert result.neighbours == []
     assert result.reason is not None
-
-
-# ---------------------------------------------------------------------------
-# C4 — the governing_plan stamp (C5/R5) is preferred over the deliverable_id
-# scan: a single targeted read of the stamped plan, no docs/plans/ walk.
-# ---------------------------------------------------------------------------
 
 
 def test_handoff_resolves_via_governing_plan_stamp_no_deliverable_id(tmp_path, monkeypatch):
@@ -301,10 +265,7 @@ def test_governing_plan_stamp_unreadable_is_unresolvable_not_scanned(tmp_path):
     assert result.reason is not None
 
 
-# ---------------------------------------------------------------------------
 # AC2 (explicit) — UNRESOLVABLE is structurally distinct from "resolved,
-# zero neighbours" — never inferred from an empty list
-# ---------------------------------------------------------------------------
 
 
 def test_unresolvable_is_not_the_same_as_resolved_empty(tmp_path):
@@ -325,14 +286,7 @@ def test_unresolvable_is_not_the_same_as_resolved_empty(tmp_path):
     assert unresolvable.status == claim_neighbours.UNRESOLVABLE
     assert resolved_empty.status == claim_neighbours.RESOLVED
     assert unresolvable.status != resolved_empty.status
-    # Both happen to carry an empty neighbours list — the discriminator MUST
-    # be `.status`, never list emptiness.
     assert unresolvable.neighbours == [] and resolved_empty.neighbours == []
-
-
-# ---------------------------------------------------------------------------
-# AC4 — caller's own session excluded
-# ---------------------------------------------------------------------------
 
 
 def test_callers_own_session_excluded(tmp_path, monkeypatch):
@@ -353,11 +307,6 @@ def test_callers_own_session_excluded(tmp_path, monkeypatch):
     assert result.reason is None
 
 
-# ---------------------------------------------------------------------------
-# AC5 — dead claimant excluded
-# ---------------------------------------------------------------------------
-
-
 def test_dead_claimant_excluded(tmp_path, monkeypatch):
     sessions = tmp_path / "sessions"
     repo = tmp_path / "repo"
@@ -373,11 +322,6 @@ def test_dead_claimant_excluded(tmp_path, monkeypatch):
 
     assert result.status == claim_neighbours.RESOLVED
     assert result.neighbours == []
-
-
-# ---------------------------------------------------------------------------
-# AC4 — a raising claim_index degrades rather than propagates
-# ---------------------------------------------------------------------------
 
 
 def test_raising_claim_index_degrades_not_raises(tmp_path, monkeypatch):
@@ -421,11 +365,6 @@ def test_raising_liveness_check_skips_that_candidate(tmp_path, monkeypatch):
     assert result.neighbours == []
 
 
-# ---------------------------------------------------------------------------
-# Peer artifact resolution — neighbour carries the peer's own claimed plan
-# ---------------------------------------------------------------------------
-
-
 def test_neighbour_carries_peers_claimed_plan(tmp_path, monkeypatch):
     sessions = tmp_path / "sessions"
     repo = tmp_path / "repo"
@@ -461,14 +400,6 @@ def test_neighbour_with_no_artifact_claim_reports_none(tmp_path, monkeypatch):
     )
 
     assert result.neighbours[0].artifact_path is None
-
-
-# ---------------------------------------------------------------------------
-# find_neighbours_for_paths — the public bare-path-set seam. C4's CLI
-# reaches this same join through here (no more `_sid_to_artifact_map`
-# reach-through); these tests pin the seam's OWN contract directly, not
-# just observed through either of its two callers.
-# ---------------------------------------------------------------------------
 
 
 def test_paths_seam_returns_live_peer_for_claimed_path(tmp_path, monkeypatch):

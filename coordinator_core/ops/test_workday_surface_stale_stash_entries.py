@@ -1,15 +1,3 @@
-"""
-Tests for coordinator_core.ops.workday_surface_stale_stash_entries — AC5 of
-the unscoped-stash-peer-sweep-data-loss spinoff.
-
-Covers: no stashes (silent), fresh stashes only (silent), stale stashes
-present (reported with age/ref/subject), the threshold-day boundary, and a
-malformed/unparseable `git stash list` line (must not crash — degrades
-quietly, matching the sibling malformed-line rule used by
-workday_surface_auto_push_failure_stats). All filesystem/git work is
-tmp_path-hermetic; stashes are real, created via `git stash push` against a
-throwaway repo (never against the shared working tree).
-"""
 
 from __future__ import annotations
 
@@ -22,8 +10,6 @@ import pytest
 from coordinator_core.ops import workday_surface_stale_stash_entries as mod
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,

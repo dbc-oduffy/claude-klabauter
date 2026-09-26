@@ -55,8 +55,6 @@ def test_draft_that_appeared_is_reported_as_landed(tmp_path):
 
     assert code == mod.DRAFT_INDETERMINATE_LANDED
     assert "DID land" in note
-    # The operator must be steered away from the one action that looks natural
-    # after an error and is wrong here.
     assert "Do NOT re-run" in note
 
 
@@ -74,9 +72,6 @@ def test_absent_draft_is_reported_as_safe_to_rerun(tmp_path):
 
 
 def test_pre_existing_draft_is_not_claimed_as_landed(tmp_path):
-    """The case a single post-hoc stat gets WRONG. A file that was already
-    there is not evidence this call wrote anything, and reporting it as LANDED
-    would tell the operator their memo is staged when it may not be."""
     mod = _load_cli_module()
     target = tmp_path / "state" / "memo-outbox" / "some-topic.md"
     target.parent.mkdir(parents=True)
@@ -92,11 +87,6 @@ def test_pre_existing_draft_is_not_claimed_as_landed(tmp_path):
 
 
 def test_the_two_outcomes_do_not_collide_with_the_rejection_exit_codes():
-    """1/2/3 are the receiver-rejection classes (`publish_target_rejected`,
-    `unknown_receiver` + collision, `registry_error`/`ambiguous_receiver`).
-    An indeterminate is not a rejection; collapsing them onto shared codes
-    would re-create the ambiguity at the exit-status layer after removing it
-    from the message."""
     mod = _load_cli_module()
     codes = {mod.DRAFT_INDETERMINATE_LANDED, mod.DRAFT_INDETERMINATE_NO_WRITE}
     assert len(codes) == 2
@@ -104,8 +94,6 @@ def test_the_two_outcomes_do_not_collide_with_the_rejection_exit_codes():
 
 
 def test_every_outcome_returns_a_note_that_names_the_path(tmp_path):
-    """The operator's next move is always 'go look at that file', so no branch
-    may report a verdict without saying which path it stat'd."""
     mod = _load_cli_module()
     target = tmp_path / "state" / "memo-outbox" / "some-topic.md"
 

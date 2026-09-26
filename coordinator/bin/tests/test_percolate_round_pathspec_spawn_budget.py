@@ -1,30 +1,3 @@
-"""test_percolate_round_pathspec_spawn_budget -- pins AC4 of the superseded
-plan docs/plans/2026-08-26-a-refused-round-strands-its-payload-forever.md,
-carried to dlv-open-the-percolate-removal-side-without-65ff4e: the dest-HEAD
-baseline `_pathspec_from_manifest` reads costs a FIXED number of processes per
-round, never one per path.
-
-AC4 was measured once by a standalone probe and never pinned, so nothing
-stopped a later edit from reintroducing the per-path `git` spawn the P1 row
-(state/bug-backlog/2026-08-25-compute-scope-costs-219-391ms-on-the-comm-
-7b3e91d4c2a6.yaml) calls extinct. A measurement that is not a test decays into
-a claim; this file is the test.
-
-The invariant asserted is amplification, not a magic constant: the same
-derivation over 10 declared paths and over 400 must spend the SAME number of
-processes. A hardcoded total would break on any legitimately added probe and
-teach the next reader to bump the number rather than ask why it moved.
-
-Negative-spec: this file does not assert wall-clock or CPU time (§ CLAUDE.md --
-process time and spawn count, never wall clock, and a per-test timing budget is
-a flake generator on a box running 50 peers), does not exercise the removal
-side's scoping (§ test_percolate_round_removal_side_scoping.py), and does not
-test `_filter_commit_pathspec`'s three filters (§
-test_percolate_round_commit_pathspec.py). No test here runs a real percolate
-round or touches a live publish mirror.
-
-Run: python -m pytest coordinator/bin/tests/test_percolate_round_pathspec_spawn_budget.py -q
-"""
 
 from __future__ import annotations
 
@@ -84,24 +57,6 @@ def _seed_repo(repo_root: Path, declared_count: int) -> list:
 
 
 def _count_spawns(manifest, repo_root: Path) -> list:
-    """Every `_run` argv the derivation spends, in order.
-
-    Wraps rather than stubs: the real `git` still answers, so the count is
-    what a round actually spends and not what a fake makes convenient.
-
-    Restores `_run` in a `finally` rather than leaning on `monkeypatch`,
-    because the comparison test measures TWICE in one test body: a patch
-    still installed on the second measurement makes the second counter
-    delegate to the first, and every later spawn lands in BOTH lists. That
-    reads as "spawn count moved with path count" -- this file's own failure
-    message, pointing at a bug in this file.
-
-    A future test added to this file must not mix
-    `monkeypatch.setattr(_mod, "_run", ...)` with this helper: monkeypatch
-    undoes its patch at test teardown, while this helper restores inline,
-    so interleaving the two patterns would leave `_run` patched (or
-    restored) at a point neither pattern expects.
-    """
     argvs = []
     real_run = _mod._run
 
@@ -128,13 +83,6 @@ def _manifest(declared):
 
 
 def test_head_baseline_is_two_processes_not_one_per_path(tmp_path):
-    """AC4's literal claim: the HEAD baseline is exactly two spawns.
-
-    Covers only the HEAD-baseline leg (ls-tree + diff HEAD), not the whole
-    `_pathspec_from_manifest` derivation -- once `seen` is non-empty a third
-    spawn (the batched check-ignore) follows, bringing the total to three.
-    The sibling amplification test below covers that total.
-    """
     repo_root = tmp_path / "dest"
     declared = _seed_repo(repo_root, 40)
     argvs = _count_spawns(_manifest(declared), repo_root)
@@ -149,14 +97,6 @@ def test_head_baseline_is_two_processes_not_one_per_path(tmp_path):
 
 
 def test_spawn_count_does_not_grow_with_the_declared_payload(tmp_path):
-    """The amplification invariant, which is the one that decays silently.
-
-    Ten paths and four hundred must cost the same processes. If this fails
-    with the counts differing by roughly the path-count ratio, a per-path
-    spawn is back; if they differ by one or two, a batched probe was added
-    that chunks its argv -- read the argv lists in the failure before
-    adjusting anything.
-    """
     small_root = tmp_path / "small"
     large_root = tmp_path / "large"
     small = _count_spawns(_manifest(_seed_repo(small_root, 10)), small_root)

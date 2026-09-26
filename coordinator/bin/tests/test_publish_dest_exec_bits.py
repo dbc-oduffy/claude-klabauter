@@ -1,13 +1,3 @@
-"""`publish.py :: _normalize_dest_exec_bits` — the dest-side exec-bit repair.
-
-Guards the defect that shipped non-executable entrypoints to every POSIX clone
-of the publish mirror: under `core.fileMode=false` (every Windows checkout)
-git records `100644` for anything newly `git add`-ed regardless of the mode
-`_extract_git_archive` took the trouble to preserve, and nothing downstream
-ever put it back. Predicate parity with the mirror's own release gate
-(`.github/scripts/check-exec-bit.py`) is the point of the function, so it is
-the point of these tests.
-"""
 
 from __future__ import annotations
 
@@ -20,8 +10,6 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -57,8 +45,6 @@ def _init_repo(path: Path) -> None:
         check=True,
         **no_console_creationflags(),
     )
-    # The condition under test only exists when git is mode-blind, which is
-    # exactly how every Windows checkout in this fleet is configured.
     _git(path, "config", "core.fileMode", "false")
 
 
@@ -103,9 +89,6 @@ def test_non_shebanged_file_is_left_alone(tmp_path, publish):
 
 
 def test_scope_bounds_the_repair(tmp_path, publish):
-    """Out-of-scope offenders stay untouched: the caller's commit pathspec
-    covers only `scope_dirs`, so re-moding beyond it would stage a change no
-    pathspec commits and leave the mirror permanently dirty."""
     repo = tmp_path / "mirror"
     _init_repo(repo)
     _write_tracked(repo, "bin/entry", "#!/usr/bin/env python3\n")
@@ -118,8 +101,6 @@ def test_scope_bounds_the_repair(tmp_path, publish):
 
 
 def test_already_correct_mode_is_a_no_op(tmp_path, publish):
-    """Convergence: the steady state reports nothing, so a repeat run adds no
-    paths to the commit pathspec and produces no empty mode-only commit."""
     repo = tmp_path / "mirror"
     _init_repo(repo)
     _write_tracked(repo, "bin/entry", "#!/usr/bin/env python3\n")
@@ -131,18 +112,12 @@ def test_already_correct_mode_is_a_no_op(tmp_path, publish):
 def test_a_hand_staged_then_removed_entry_refuses_the_whole_commit(
     tmp_path, publish, capsys
 ):
-    """P027-T5 census/publish AC: on a real-git mirror, a path is `git
-    add`-ed by hand, never committed, then removed from disk (`AD`), beside
-    one modified tracked file. `_commit_published_dests` returns `False`,
-    the mirror's HEAD is unmoved, and stderr names the `AD` path.
-    `publish.py` is unedited by this row (this test only exercises it)."""
     repo = tmp_path / "mirror"
     _init_repo(repo)
     _write_tracked(repo, "bin/kept.py", "kept\n")
     _git(repo, "commit", "-qm", "seed")
     head_before = _git(repo, "rev-parse", "HEAD").strip()
 
-    # One modified tracked file, beside the hand-staged-then-removed entry.
     (repo / "bin" / "kept.py").write_text("kept v2\n", encoding="utf-8")
 
     ghost = repo / "bin" / "ghost.py"
@@ -164,9 +139,6 @@ def test_a_hand_staged_then_removed_entry_refuses_the_whole_commit(
 
 
 def test_binary_blob_does_not_derail_the_batch(tmp_path, publish):
-    """A blob that is not UTF-8 decodable sits in the same `cat-file --batch`
-    feed as the offenders; a parse that mis-slices on it would silently drop
-    every entry after it."""
     repo = tmp_path / "mirror"
     _init_repo(repo)
     binary = repo / "bin" / "blob.bin"

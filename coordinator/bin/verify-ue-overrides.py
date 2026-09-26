@@ -43,14 +43,6 @@ import sys
 
 
 def _import_main():
-    """Resolve the engine root, put it on sys.path, and import the ported entrypoint.
-
-    Reuses cc_invoke's battle-tested engine-root resolution ladder (env var ->
-    settings-home pointer file -> coordinator-claude-klabauter-root.sh) rather than
-    re-deriving it -- this is a plain in-process import, not an RPC invoke, so
-    cc_invoke's subprocess-spawn transport (cc_invoke()/route()) is
-    deliberately NOT used here.
-    """
     import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
     from cc_invoke import require_dispatch_engine_on_path
 
@@ -75,12 +67,6 @@ def main(argv: "list[str] | None" = None) -> int:
         return 1
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    # DR-276: op_main takes a positional `script_dir` argument that
-    # run_op_main's plain argv-forwarding contract has no room for, so this
-    # CLI owns its own main() and wraps the call in recording_declared_writes()
-    # directly rather than routing through run_op_main — any paths op_main
-    # declares via declare_write() still become a session scope-touch claim
-    # instead of landing unclaimed as an orphan at the scoped_git_commit sink.
     from coordinator_core.cli_entry import recording_declared_writes
 
     with recording_declared_writes():

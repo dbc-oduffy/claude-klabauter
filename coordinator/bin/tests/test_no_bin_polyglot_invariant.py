@@ -80,77 +80,31 @@ from ._polyglot_git_scan import (
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
-# Header window (lines) within which the trampoline literal is considered a
-# live header rather than an incidental/documentation mention. Matches the
-# window `check-bin-sh-polyglot.py`'s `_has_trampoline()` uses (see its
-# comment: "Trampoline past line 20 is invisible to sh at exec time") and
-# the window `docs/wiki/coordinator-tripwires.md` cites for the same
-# invariant ("no trampoline in its first 20 lines").
 TRAMPOLINE_WINDOW = 20
 
-# The verbatim polyglot trampoline literal every live bearer carries.
 TRAMPOLINE = (
     '\'\'\'\'exec "$(command -v python3 || command -v python || command -v py)" '
     '"$0" "$@" #\'\'\''
 )
 
-# ---------------------------------------------------------------------------
 # EXCLUDED_TRAMPOLINE_DOC_FILES — documented exclusion list, same idiom as
 # verify-cc-root-source-guard-sync.py's EXCLUDED_SUFFIXES. Each entry
 # legitimately CONTAINS the trampoline literal within the header window as
-# prose/docstring describing the invariant, not as a live re-exec line.
-# Path relative to repo root. Does NOT exclude these files from the
-# `#!/bin/sh`-shebang assertion — that assertion reads line 1 in isolation,
-# which neither file trips (both already carry a non-`/bin/sh` shebang).
-# ---------------------------------------------------------------------------
 EXCLUDED_TRAMPOLINE_DOC_FILES = {
-    # module docstring (lines 6-8) quotes the trampoline verbatim to describe
-    # the invariant this checker enforces — the SAME invariant this suite
-    # now also enforces. Not a live header: this script's own shebang is
-    # `#!/usr/bin/env python3` (ported from the pre-DR-076 `.sh` polyglot
-    # shim; the `.sh` path this exclusion previously named no longer exists
-    # on disk — re-anchored on the current `.py` filename), and the quoted
-    # text sits inside the triple-quoted module docstring, never executed
-    # as a re-exec line.
     "coordinator/bin/check-bin-sh-polyglot.py",
-    # module docstring (line 7) quotes the trampoline verbatim for the same
-    # documentation reason. Not a live header: shebang is
-    # `#!/usr/bin/env python3` and the quote sits inside the triple-quoted
-    # module docstring, never executed as a re-exec line.
     "coordinator/bin/check-sh-suffix-polyglot.py",
 }
 
-# ---------------------------------------------------------------------------
 # _SH_SHEBANG_EXEMPT — documented exclusion list for the `#!/bin/sh`-shebang
-# assertion ONLY (test_no_bin_sh_shebang). Distinct from
 # EXCLUDED_TRAMPOLINE_DOC_FILES above: that list exempts files from the
-# polyglot-trampoline-literal assertion (a file merely quoting the literal in
 # a comment/docstring); this list exempts files that DELIBERATELY keep a
 # live `#!/bin/sh` shebang because the invariant they implement REQUIRES
-# POSIX sh — a genuinely different reason, so it gets its own set rather
-# than folding into the trampoline list. Each entry must name the specific
-# reason the file cannot be ported to Python. Path relative to repo root.
-# ---------------------------------------------------------------------------
 _SH_SHEBANG_EXEMPT = {
-    # Detects whether the CURRENT invoking shell is bash >= 4 — it runs
-    # BEFORE/to-decide the interpreter, so it cannot itself require a
-    # Python (or bash>=4) runtime without begging the question it exists to
-    # answer. Deliberately kept as POSIX sh by the de-polyglot migration
-    # (commit 28a7b868: "invoking-shell-bash4-probe.sh correctly kept as
-    # POSIX sh"). Permanent exemption, not a migration backlog item.
-    # (DR-076 governs the de-polyglot migration this exemption departs from.)
-    # NOTE: the file's `#!/bin/sh` shebang line itself was later stripped
-    # (2026-08-14, wfc-S2-launchers) — every call site invokes it with an
-    # explicit `sh`/`bash` interpreter (DoE-claude coordinator/commands/
-    # install.md:66), so the shebang was decorative. This exemption is about
-    # the sh-vs-Python invariant, not the now-absent shebang line.
     "coordinator/scripts/lib/invoking-shell-bash4-probe.sh",
 }
 
@@ -164,9 +118,6 @@ def _fail(label: str, detail: str = "") -> None:
 
 
 def test_no_bin_sh_shebang() -> None:
-    """Assertion (a): no tracked file under coordinator/ has `#!/bin/sh` as
-    its line-1 shebang — the retired polyglot shebang, banned outright per
-    the PM ruling regardless of whether a trampoline follows it."""
     files = tracked_files_under_coordinator()
     if not files:
         _fail(
@@ -196,10 +147,6 @@ def test_no_bin_sh_shebang() -> None:
 
 
 def test_no_polyglot_trampoline_header() -> None:
-    """Assertion (b): no tracked file under coordinator/ (outside the
-    documented exclusion list) carries the polyglot trampoline literal
-    within its header window — a live re-exec line, not an incidental
-    mention."""
     files = tracked_files_under_coordinator()
     if not files:
         _fail(
@@ -237,12 +184,6 @@ def test_no_polyglot_trampoline_header() -> None:
 
 
 def test_python3_extensionless_entrypoints_have_cmd_launcher() -> None:
-    """Task 2: every extensionless coordinator/bin/ entrypoint that has
-    already flipped to the #!/usr/bin/env python3 shebang MUST have a
-    co-located `.cmd` launcher. A depolyglotted script that loses its .cmd
-    half is broken on Windows, which this repo treats as the primary
-    platform (CLAUDE.md § Runtime conventions) — this is the assertion
-    that would have caught that trap during the migration."""
     candidates = tracked_bin_direct_children()
     if not candidates:
         _fail(
@@ -262,10 +203,6 @@ def test_python3_extensionless_entrypoints_have_cmd_launcher() -> None:
     offenders = [f for f in python3_entrypoints if f"{f}.cmd" not in cmd_paths]
 
     if not python3_entrypoints:
-        # Not a failure: a not-yet-migrated tree legitimately has zero
-        # candidates for this assertion — there is nothing to pair yet.
-        # Printed (not silent) so a reviewer scanning output sees this
-        # branch was reached rather than skipped by a scoping bug.
         _pass(
             "python3-extensionless-cmd-pairing: zero extensionless "
             "coordinator/bin/ entrypoints carry the #!/usr/bin/env python3 "
@@ -287,5 +224,4 @@ def test_python3_extensionless_entrypoints_have_cmd_launcher() -> None:
             f"all {len(python3_entrypoints)} python3-shebang extensionless "
             "coordinator/bin/ entrypoint(s) have a co-located .cmd launcher"
         )
-
 

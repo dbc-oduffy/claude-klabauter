@@ -66,8 +66,6 @@ def _write_handoff(tmp: Path, deliverable_id: str | None) -> str:
 
 
 class EngineTierTest(unittest.TestCase):
-    """`resolve_session_chain_deliverable_id` — carry on a hit, omit on
-    every absence, never raise."""
 
     def setUp(self):
         self._tmp = Path(__file__).resolve().parent / "_chain_discovery_tmp"
@@ -109,8 +107,6 @@ class EngineTierTest(unittest.TestCase):
 
 
 class CliWiringTest(unittest.TestCase):
-    """`_mint_deliverable_id_from_title` — a discovered chain id outranks a
-    title mint, and the exemptions suppress discovery."""
 
     def setUp(self):
         _cli._NEW_CHAIN_REQUESTED = False
@@ -165,12 +161,6 @@ class CliWiringTest(unittest.TestCase):
         held.assert_not_called()
 
     def test_spinoff_roadmap_baton_and_plan_are_exempt(self):
-        """A spinoff mints its own id (PM, 2026-08-05); a roadmap baton's
-        identity is its stub_id; and `plan` already asks this question one
-        tier earlier, kind-gated, where AC4b's false-merge ruling says a held
-        non-roadmap baton is NOT carry evidence. Without the `plan` exemption
-        this tier re-reads the file that tier just rejected and carries it
-        anyway — see `_resolve_session_chain_deliverable_id`'s docstring."""
         with mock.patch.object(_cli, "_resolve_session_held_handoff_path") as held:
             for doc_type in ("spinoff", "roadmap-baton", "plan"):
                 self.assertIsNone(

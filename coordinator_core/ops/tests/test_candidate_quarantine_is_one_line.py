@@ -1,26 +1,3 @@
-"""Regression test for the 2026-08-25 stderr-flood fix: candidate quarantine
-reports ONCE per scan, not once per skipped file.
-
-`docs/plans/` holds ~100 plan sidecars (`*.review.md`, `*.prior-art-check.md`,
-`*.plan-coverage-check.md`, `*.node-map.md`) that are not plans and never will
-be. `plan_match._collect_plans` skipped each with its own `_LOG.warning`, so
-every enumeration printed ~96 lines of stderr; `goals_match._collect_goals`
-had the same shape over `state/goals/`, and `handoff_match._collect_handoffs`
-over the whole live `state/handoffs/` corpus. All three are collapsed together.
-
-`baton-assemble apply` calls both on its d3 stamp path, and the noise buried
-its own JSON verdict: the recorded incident (bug backlog
-`2026-08-25-spinoff-brief-then-apply-mints-two-batons-and-adopts-the-stub-as-
-origin.yaml`) began with an operator piping `apply` through
-`Select-Object -First 120`, seeing 120 lines of `plan.match_candidates:
-skipping ...` and no verdict, and re-running a command that had already landed.
-
-The signal is proportioned, not dropped: one WARNING carries the counts by
-reason, every per-file line stays at DEBUG.
-
-Spec backlink: `state/bug-backlog/2026-08-25-spinoff-brief-then-apply-mints-two-
-batons-and-adopts-the-stub-as-origin.yaml`.
-"""
 
 from __future__ import annotations
 
@@ -69,7 +46,6 @@ def capture(monkeypatch):
 
 
 def _sidecars(plans_dir: Path, count: int) -> None:
-    """`count` files shaped like the real sidecars: frontmatter, no `title`."""
     plans_dir.mkdir(parents=True, exist_ok=True)
     for i in range(count):
         (plans_dir / f"2026-08-25-plan-{i}.review.md").write_text(
@@ -97,8 +73,6 @@ class TestPlanQuarantineIsOneWarning:
         assert "missing required field: title (40)" in warnings[0]
 
     def test_per_file_detail_survives_at_debug(self, tmp_path, capture):
-        """Proportioned, not dropped -- whoever is diagnosing ONE file still
-        gets its name."""
         capture.attach("coordinator_core.ops.plan_match")
         plans = tmp_path / "docs" / "plans"
         _sidecars(plans, 3)
@@ -110,10 +84,6 @@ class TestPlanQuarantineIsOneWarning:
         assert any("2026-08-25-plan-0.review.md" in line for line in debug)
 
     def test_the_exception_text_reaches_the_debug_line(self, tmp_path, capture):
-        """The `detail`-bearing `skip()` shape, asserted rather than assumed:
-        the parse-error call site is the only one that passes `detail`, and
-        losing it would silently strip the one fact that makes a malformed file
-        diagnosable. Review: coordinator:code-reviewer (ab5f5c7c) Finding 6."""
         capture.attach("coordinator_core.ops.plan_match")
         plans = tmp_path / "docs" / "plans"
         plans.mkdir(parents=True)
@@ -127,13 +97,10 @@ class TestPlanQuarantineIsOneWarning:
         assert len(debug) == 1
         assert "parse error" in debug[0]
         assert "2026-08-25-broken-yaml.md" in debug[0]
-        # The varying half -- the exception's own text -- is what `detail`
-        # carries and what the bucketed WARNING deliberately does not.
         assert debug[0].rstrip().split("parse error: ", 1)[1].strip() != ""
         assert "parse error (1)" in capture.at(logging.WARNING)[0]
 
     def test_a_clean_corpus_says_nothing(self, tmp_path, capture):
-        """No 'skipped 0' line -- an empty result is not news."""
         capture.attach("coordinator_core.ops.plan_match")
         plans = tmp_path / "docs" / "plans"
         plans.mkdir(parents=True)
@@ -146,8 +113,6 @@ class TestPlanQuarantineIsOneWarning:
         assert capture.at(logging.WARNING) == []
 
     def test_reasons_are_bucketed_not_interpolated(self, tmp_path, capture):
-        """Bucketing on a per-file value would re-create the spam inside the
-        summary line."""
         capture.attach("coordinator_core.ops.plan_match")
         plans = tmp_path / "docs" / "plans"
         _sidecars(plans, 2)

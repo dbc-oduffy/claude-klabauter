@@ -43,7 +43,7 @@ Negative-spec:
 
 from __future__ import annotations
 
-GENERATES = []  # writes an idempotent TOML section into machine-local registry.local.toml, outside claude-klabauter's repo tree
+GENERATES = []
 
 import os
 import sys
@@ -52,15 +52,11 @@ from typing import List, Optional
 
 from coordinator_core._settings_home import machine_local_dir
 
-_PROG = "register-coordinator-mirror.sh"  # literal program-name prefix, matches the DoE filename
+_PROG = "register-coordinator-mirror.sh"
 _SECTION_HEADER = "[plugin.mirrors.coordinator-claude]"
 
 
 def _toml_escape(s: str) -> str:
-    """Escape per TOML spec for basic strings (double-quoted).
-
-    Order matters: backslash must be first to avoid double-escaping.
-    """
     s = s.replace("\\", "\\\\")
     s = s.replace('"', '\\"')
     s = s.replace("\n", "\\n")
@@ -81,17 +77,10 @@ def _section_body(live_path: str) -> str:
 
 
 def resolve_registry_path() -> Path:
-    """The registry.local.toml path — mirrors `claude-home machine-local`'s output
-    (verified byte-identical against the live CLI during the port's parity check)."""
     return machine_local_dir() / "registry.local.toml"
 
 
 def register(reg_path: Path, live_path: str, check_only: bool) -> int:
-    """Idempotently write the `[plugin.mirrors.coordinator-claude]` TOML section.
-
-    check_only=True: report readiness without mutating (prints one of two lines,
-    exactly mirroring the bash oracle's `--check-only` branch).
-    """
     existing = reg_path.read_text(encoding="utf-8") if reg_path.exists() else ""
 
     if check_only:
@@ -110,9 +99,6 @@ def register(reg_path: Path, live_path: str, check_only: bool) -> int:
         existing = "schema = 1\n"
 
     new_text = existing.rstrip("\n") + "\n" + _section_body(live_path)
-    # Use string concatenation rather than .with_suffix() — multi-dot suffixes raise
-    # ValueError on Python <3.12 (CPython relaxed this in 3.12); matches the bash
-    # oracle's own inline-python comment verbatim.
     tmp = reg_path.parent / (reg_path.name + f".tmp.{os.getpid()}")
     tmp.write_text(new_text, encoding="utf-8", newline="\n")
     if reg_path.exists():
@@ -130,7 +116,6 @@ def register(reg_path: Path, live_path: str, check_only: bool) -> int:
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: arg parse (`--check-only`, `--live-path <value>`), resolve, write."""
     check_only = False
     live_path: Optional[str] = None
     i = 0
@@ -146,8 +131,6 @@ def main(argv: List[str]) -> int:
             live_path = argv[i]
         elif arg.startswith("--live-path="):
             live_path = arg.split("=", 1)[1]
-        # else: silently ignored — matches the bash oracle's own looseness (it only
-        # ever inspected argv[1] for the literal "--check-only" string).
         i += 1
 
     if live_path is None:

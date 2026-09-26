@@ -1,16 +1,3 @@
-"""Tests for `route_unreachable_signal` — the reader half of the
-sanctioned-route ledger.
-
-The properties worth pinning are not "does it format a string". They are the
-ones that decide whether this section is still trustworthy on the day it
-matters: it stays silent when nothing is wrong, it cannot be blinded by one bad
-row in append-space shared by ~50 sessions, it forgets, and it never tells an
-operator to re-run a mutation that may have landed.
-
-The writer/reader spelling pin is the most load-bearing test here — the two
-halves live in different planes and share no importable constant, so nothing
-else would catch a reader quietly watching a path nobody writes.
-"""
 
 from __future__ import annotations
 
@@ -34,9 +21,6 @@ from coordinator_core.orientation.route_unreachable_signal import (
 
 @pytest.fixture(autouse=True)
 def _base_in_tmp(tmp_path, monkeypatch):
-    """The ledger is per-BOX, not per-repo, so isolation moves the runtime base
-    rather than passing a root. Autouse: a test that forgets would append to the
-    operator's real ledger."""
     monkeypatch.setenv(RUNTIME_BASE_ENV, str(tmp_path))
     return tmp_path
 
@@ -64,34 +48,21 @@ def _row(**kw):
 
 
 def test_the_writer_and_reader_agree_on_the_path():
-    """`cc_invoke` writes this file and this module reads it, across a plane
-    boundary with no shared constant — the transport deliberately carries no
-    `coordinator_core` import. If either spelling moves, the reader watches a
-    file nobody writes and renders silence that looks exactly like health."""
     lib_dir = Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "lib"
     if str(lib_dir) not in sys.path:
         sys.path.insert(0, str(lib_dir))
     import cc_invoke
 
     # FULL RESOLVED PATH, not the relpath. The first version of this test
-    # compared the relative tuple and passed while the two halves wrote and
-    # read different files: the path was repo-relative, the publish transform
-    # rewrote the registry key anchoring it, and source and mirror resolved the
-    # same tuple to different places. Equal spellings were never the property
-    # worth pinning -- one file is.
     assert cc_invoke._route_unreachable_ledger_path() == ledger_path()
     assert cc_invoke._ROUTE_UNREACHABLE_LEDGER == LEDGER_RELPATH
 
 
 def test_silent_when_the_ledger_is_absent(tmp_path):
-    """The expected state on almost every session, forever. A box whose engine
-    answers renders nothing here."""
     assert emit_route_unreachable(now=_NOW) == ""
 
 
 def test_silent_when_every_event_is_outside_the_window(tmp_path):
-    """It forgets. A line that kept rendering a bad afternoon weeks later would
-    train operators to scroll past the section, which loses it entirely."""
     old = _NOW - datetime.timedelta(hours=WINDOW_HOURS + 1)
     _write(tmp_path, [_row(ts=old.isoformat(timespec="seconds"))])
     assert emit_route_unreachable(now=_NOW) == ""
@@ -132,9 +103,6 @@ def test_it_never_tells_the_operator_to_re_run(tmp_path):
 
 
 def test_one_torn_row_does_not_blind_the_reader(tmp_path):
-    """Append-space shared by ~50 concurrent sessions, written on an
-    already-failing path. A malformed row is skipped, never fatal — otherwise
-    a single tear hides every real event around it."""
     ledger = Path(ledger_path())
     ledger.parent.mkdir(parents=True, exist_ok=True)
     ledger.write_text(
@@ -152,9 +120,6 @@ def test_one_torn_row_does_not_blind_the_reader(tmp_path):
 
 
 def test_a_naive_timestamp_is_read_as_utc(tmp_path):
-    """The writer stamps tz-aware UTC, but a hand-added or older row may not.
-    Treating a naive stamp as UTC keeps it in the window rather than silently
-    discarding it — the alternative loses real events with no signal."""
     naive = _NOW.replace(tzinfo=None).isoformat(timespec="seconds")
     _write(tmp_path, [_row(ts=naive)])
     assert len(read_recent_events(now=_NOW)) == 1
@@ -211,8 +176,6 @@ def test_a_ledger_grown_past_the_tail_bound_still_renders_the_recent_window(tmp_
 
 
 def test_the_tail_seek_never_yields_a_torn_row(tmp_path):
-    """A seek into the middle of the file lands mid-record. That fragment is
-    dropped rather than parsed, so it can never surface as an event."""
     import datetime as _dt
 
     now = _dt.datetime(2026, 9, 20, 12, 0, tzinfo=_dt.timezone.utc)

@@ -1,17 +1,3 @@
-"""Regression for the C3 `publish_lag_message` repo-name suppression (probe row 21).
-
-Spec backlink: docs/plans/2026-08-30-the-engine-stops-naming-its-own-repo.md § C3.
-
-`publish_lag_message` surfaces broadly (engine floor, cross-repo) regardless
-of the reader's own repo, but its remedy (`coordinator-publish.py`, naming claude-klabauter)
-belongs to the engine/publish owner, not a reader working in some third repo
-who cannot run it -- same shape as `cc_invoke._announce_engine_cli_split`.
-`_reader_owns_engine_repo` gates only the repo-naming portion; the lag fact
-itself always renders regardless.
-
-All git interaction is monkeypatched; no `git` process is spawned, so this
-stays on the fast tier (matches `test_publish_lag.py`'s own convention).
-"""
 
 from __future__ import annotations
 
@@ -42,7 +28,6 @@ def test_repo_name_absent_for_a_third_repo_reader(monkeypatch):
     message = skew.publish_lag_message(_make_lag())
     assert message is not None
     assert "claude-klabauter" not in message
-    # The lag fact itself is preserved even though the remedy's repo name is not.
     assert "3 commit(s)" in message
     assert "Publish:" in message
 

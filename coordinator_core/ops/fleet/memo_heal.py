@@ -89,43 +89,18 @@ from coordinator_core.ops.fleet._memo_anchor import (
 
 _MODE = "heal_inbox"
 
-# Params this handler declares; anything else fails loud (mirrors memo.send's
-# own discipline) — this op reads the anchor namespace and the calling
-# repo's own tree, so there is nothing else a caller could meaningfully name.
 _KNOWN_PARAM_KEYS = frozenset({"dry_run"})
 
-#: Review: apm A4 (EM-adjudicated) — measured 2026-09-11, one `update-ref
-#: --stdin` spawn does 150 creates in 206ms and 300 in 422ms (~1.35ms/ref);
 #: 100 creates is ~140ms. At most this many UNANCHORED inbox memos are
-#: adopted per run; the rest are picked up on later runs (a backlog of 289
-#: converges in 3 runs). Re-keys and retires are NOT capped — they are rare
-#: and bounded by losses/dispositions, not by inbox size.
-#: Review: overengineering-reviewer — this cap and its branch exist for the
-#: pre-A2 backlog only, which converges in 3 runs per repo; once the fleet's
-#: repos have converged, mark this constant and the cap branch below for
-#: deletion rather than leaving them resident on a number no live run
-#: still tests.
 ADOPT_CAP_PER_RUN = 100
 
-#: Both corpus roots -- shared with every other present-set reader in this
 #: feature via `_memo_anchor.CORPUS_ROOT_RELDIRS` (Review:
-#: overengineering-reviewer F1). Kept as a local alias so existing
-#: in-module references need no further churn.
 _CORPUS_ROOT_RELDIRS = CORPUS_ROOT_RELDIRS
 
-# Generator-provenance: this op writes only into the CALLING repo's own
-# inbox/ (a restore's O_EXCL create) and its own refs/coordinator/inbox/*
-# anchor namespace — never a peer's tree (contrast memo.send, which crosses
-# into a receiver repo it does not own).
 MUTATES = [
     "state/cross-repo/inbox/*.md",
     "cross-repo/inbox/*.md",
 ]
-
-
-# ---------------------------------------------------------------------------
-# Param validation
-# ---------------------------------------------------------------------------
 
 
 def _validate_params(params: dict):
@@ -145,33 +120,16 @@ def _validate_params(params: dict):
     return dry_run
 
 
-# ---------------------------------------------------------------------------
-# Present-set: the working tree's own filename -> (status, path) map,
-# unioned across BOTH corpus roots, inbox always shadowing archive.
-# ---------------------------------------------------------------------------
-
-
 class _PresentEntry:
     __slots__ = ("status", "path", "relpath")
 
     def __init__(self, status: str, path: Path, relpath: str):
-        self.status = status  # "inbox" | "archive"
+        self.status = status
         self.path = path
-        self.relpath = relpath  # repo-relative, posix separators
+        self.relpath = relpath
 
 
 def _present_map(worktree_root: Path) -> Dict[str, _PresentEntry]:
-    """filename -> `_PresentEntry`, recursive union of `inbox/` and
-    `archive/` under both corpus roots, keyed by filename, read from the
-    WORKING TREE — the tree is the truth a reader sees, and a hard reset
-    empties it along with the branch. `inbox/` entries always shadow an
-    `archive/` hit for the same filename, matching step 3's "In inbox/:
-    leave it alone" priority over "In archive/ and not in inbox/: RETIRE".
-
-    The traversal itself is `_memo_anchor.present_filenames` (shared with
-    `memo_send`'s own present-set reader, Review: overengineering-reviewer
-    F1); this wraps it into the repo-relative-path shape this module's
-    callers need."""
     found: Dict[str, _PresentEntry] = {}
     for fname, (status, p) in present_filenames(worktree_root).items():
         found[fname] = _PresentEntry(
@@ -190,29 +148,11 @@ def _commit_object_present(common_dir: Path, sha: str) -> bool:
 
 
 def _blob_sha1(data: bytes) -> str:
-    """Git's own blob object-id, computed in process without writing
-    anything — `hashlib.sha1("blob " + len + NUL + data)`, byte-identical to
-    what `git hash-object` (no filters) would report. ADOPT's whole point is
-    verifying tracked-and-matching WITHOUT a write, so this must never call
-    `write_object`."""
     header = b"blob " + str(len(data)).encode("ascii") + b"\x00"
     return hashlib.sha1(header + data).hexdigest()
 
 
-# ---------------------------------------------------------------------------
-# Restore-side plumbing (mirrors memo_send.py's own O_EXCL / rollback shape,
-# duplicated in-module rather than imported: memo_send's helpers are private
-# to that file and this op's failure register — "restored", not "sent" —
-# is genuinely different text, not a copy that should share a symbol).
-# ---------------------------------------------------------------------------
-
-
 def _rollback_unwritten_file(target_file: Path) -> str:
-    """Undo this call's own O_EXCL write when the commit that was supposed
-    to follow it did not durably land. Safe here for the identical reason
-    `memo_send._rollback_unwritten_file` states: the O_EXCL open that
-    created `target_file` proves it did not exist before this call, and a
-    declined commit proves nothing references it since."""
     try:
         target_file.unlink()
     except OSError as unlink_exc:
@@ -240,10 +180,6 @@ def _restore_commit_message(filename: str) -> str:
 
 
 def _inbox_write_target(worktree_root: Path, filename: str) -> Tuple[Path, str]:
-    """The restore WRITE target — always this repo's canonical inbox root
-    per `memo_corpus.memo_corpus_root` (C10a-migrated when it exists,
-    legacy otherwise; never mints a fresh legacy inbox). Returns (absolute
-    path, repo-relative posix path)."""
     from coordinator_core import memo_corpus
 
     inbox_dir = Path(memo_corpus.memo_corpus_root(str(worktree_root))) / "inbox"
@@ -263,16 +199,6 @@ class _RestoreOutcome:
 
 
 def _restore_one(worktree_root: Path, filename: str, blob_sha: str, common_dir: Path) -> _RestoreOutcome:
-    """Resolve `blob_sha`'s bytes and land them at `inbox/<filename>` via
-    O_EXCL + `git_native.commit_authored_new_file` — one commit per memo,
-    since this is the loss path and should be rare.
-
-    `record_ledger=True`: unlike `memo_send.commit_authored_new_file`'s call
-    (which commits into a PEER's repo and must never touch that repo's
-    commit ledger), this commit lands in THIS repo's own tree — the "caller
-    committing into its own repo should pass True" case
-    `commit_authored_new_file`'s own docstring names.
-    """
     data = resolve_anchor(common_dir, blob_sha)
     if data is None:
         return _RestoreOutcome(False, False, None, f"anchor blob {blob_sha!r} is unresolvable — cannot restore {filename!r}")
@@ -288,10 +214,6 @@ def _restore_one(worktree_root: Path, filename: str, blob_sha: str, common_dir: 
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(content)
     except FileExistsError:
-        # A peer already restored this memo.
-        # Neither a rollback (we created nothing) nor a failure (the memo
-        # IS back) — the anchor's own re-key is picked up by a LATER heal's
-        # "present + anchored + commit gone" rule, not lost.
         return _RestoreOutcome(True, True, None, None)
     except OSError as exc:
         return _RestoreOutcome(False, False, None, f"write-failed restoring {filename!r}: {exc}")
@@ -316,18 +238,8 @@ def _restore_one(worktree_root: Path, filename: str, blob_sha: str, common_dir: 
     return _RestoreOutcome(True, False, commit_result.stdout.strip(), None)
 
 
-# ---------------------------------------------------------------------------
-# Transaction-line building
-# ---------------------------------------------------------------------------
-
-
 def _anchor_ref(filename: str, commit_sha: str) -> str:
     return ANCHOR_REF_PREFIX + filename + "/" + commit_sha
-
-
-# ---------------------------------------------------------------------------
-# Handler
-# ---------------------------------------------------------------------------
 
 
 @register_op("memo.heal_inbox")
@@ -368,7 +280,7 @@ def _memo_heal_inbox(params: dict, repo_root=None) -> dict:
     head_sha = _git_state_head_sha(worktree_root)
 
     retire_items: List[dict] = []
-    rekey_items: List[dict] = []  # {"filename","old_commit_sha","new_commit_sha","blob_sha"}
+    rekey_items: List[dict] = []
     restore_items: List[dict] = []
     leave_items: List[dict] = []
     failed_items: List[dict] = []
@@ -400,15 +312,11 @@ def _memo_heal_inbox(params: dict, repo_root=None) -> dict:
                 leave_items.append({"filename": fname, "reason": "present-and-anchored"})
             continue
 
-        # Absent from the present-set entirely.
         if not _commit_object_present(common_dir, csha):
             restore_items.append({"filename": fname, "old_commit_sha": csha, "blob_sha": bsha})
         else:
             absent_commit_present.append({"filename": fname, "commit_sha": csha, "blob_sha": bsha})
 
-    # Two-stage batched reachability probe — only when non-empty, never
-    # handed a missing object (both already true of `absent_commit_present`
-    # by construction above).
     if absent_commit_present:
         stage1_shas = [it["commit_sha"] for it in absent_commit_present]
         stage1 = git_native.rev_list_not(common_dir, stage1_shas, ["--not", "HEAD"])
@@ -425,8 +333,6 @@ def _memo_heal_inbox(params: dict, repo_root=None) -> dict:
                 if it["commit_sha"] in printed1:
                     stage2_candidates.append(it)
                 else:
-                    # Not printed -> reachable from HEAD -> the receiver
-                    # removed it on a branch it kept.
                     retire_items.append({
                         "filename": it["filename"], "commit_sha": it["commit_sha"],
                         "blob_sha": it["blob_sha"], "reason": "reachable-from-head",
@@ -456,13 +362,8 @@ def _memo_heal_inbox(params: dict, repo_root=None) -> dict:
                                 "reason": "reachable-from-another-branch",
                             })
 
-    # ADOPT — unanchored, present-in-inbox filenames, tracked at HEAD with
-    # matching bytes, capped per run, zero object writes.
     adopt_items: List[dict] = []
     adopt_skipped = 0
-    # Loop-invariant: `core.autocrlf` is a repo-level config read (three
-    # files per call), so resolving it per candidate would pay it once per
-    # memo on a 100-adopt run for an answer that cannot change mid-run.
     autocrlf_true = _repo_autocrlf_true(worktree_root) if head_sha else False
     if head_sha:
         unanchored = sorted(
@@ -483,39 +384,12 @@ def _memo_heal_inbox(params: dict, repo_root=None) -> dict:
             except OSError:
                 adopt_skipped += 1
                 continue
-            # Under `core.autocrlf=true` (this fleet's Windows default) git checks a
-            # memo out as CRLF while HEAD's blob stays LF, so the raw bytes never
-            # hash to the blob and every memo git itself wrote -- clone, checkout,
-            # reset -- would read as dirty and never be adopted. Adopt points at
-            # HEAD's existing blob and writes no bytes, so the only question here
-            # is whether the CONTENT differs from what is committed; a line-ending
-            # difference is not a content difference.
-            #
-            # The CRLF-collapsed candidate is only
-            # tried when it is actually reachable via git's own checkin-side
-            # normalization (`_repo_autocrlf_true` + no `.gitattributes` pin on
-            # this path, `git.content_hash`'s canonical helpers, the single
-            # implementation `git_native.py` itself defers to). Skipping this
-            # gate would accept content that is NOT what HEAD committed for a
-            # path where CRLF bytes are literal content rather than a
-            # line-ending artifact (e.g. `-text`/`binary` pinned, or
-            # autocrlf off).
             candidates = {_blob_sha1(data)}
             if autocrlf_true and _text_attribute_pinned(worktree_root, pres.relpath) is None:
                 candidates.add(_blob_sha1(_autocrlf_checkin_normalize(data)))
             if head_blob_sha not in candidates:
                 adopt_skipped += 1
                 continue
-            # A raw on-disk inbox filename is
-            # untrusted input to the ref namespace: `write_anchor` (the
-            # `memo.send` path) refuses the same shape via these same two
-            # validators before ever building a ref string, so ADOPT must
-            # refuse here too rather than let one ref-illegal filename reach
-            # `_anchor_ref`/`update_refs_stdin` and poison the whole batch
-            # (git's `update-ref --stdin` transaction is all-or-nothing, so
-            # one bad line fails every legitimate retire/rekey/adopt in the
-            # same run, and the file stays unanchored to re-poison the next
-            # run too).
             if not _valid_ref_component(fname) or not _valid_commit_sha(head_sha):
                 failed_items.append({
                     "id": fname,
@@ -525,10 +399,6 @@ def _memo_heal_inbox(params: dict, repo_root=None) -> dict:
             adopt_items.append({
                 "filename": fname, "commit_sha": head_sha, "blob_sha": head_blob_sha,
             })
-    # else: no HEAD commit -> no delivery could have landed and no inbox
-    # memo could be tracked, so there is no repository state reachable here
-    # to count as skipped (Review: overengineering-reviewer). adopt_skipped
-    # stays 0.
 
     if dry_run:
         candidates = (
@@ -539,7 +409,6 @@ def _memo_heal_inbox(params: dict, repo_root=None) -> dict:
         )
         return build_dry_run_result(_MODE, candidates)
 
-    # ── act path ────────────────────────────────────────────────────────
     restored_filenames: List[str] = []
     for item in restore_items:
         outcome = _restore_one(worktree_root, item["filename"], item["blob_sha"], common_dir)
@@ -580,9 +449,6 @@ def _memo_heal_inbox(params: dict, repo_root=None) -> dict:
             for it in adopt_items:
                 acted.append({"id": it["filename"], "action": "adopted"})
         else:
-            # Reported, not retried — the NEXT invocation converges (module
-            # negative-spec), which is what made the prior retry-once +
-            # re-derive layer redundant (Review: overengineering-reviewer).
             for it in retire_items:
                 failed_items.append({"id": it["filename"], "reason": f"retire transaction refused: {result.stderr}"})
             for it in rekey_items:
@@ -590,12 +456,6 @@ def _memo_heal_inbox(params: dict, repo_root=None) -> dict:
             for it in adopt_items:
                 failed_items.append({"id": it["filename"], "reason": f"adopt transaction refused: {result.stderr}"})
 
-    # A restore's file-write-and-commit is reported independent of whether
-    # its follow-up anchor re-key transaction landed — per this module's
-    # own restore docstring, a refused transaction after a landed restore
-    # is a SAFE state (the memo is present; a later heal's present+anchor-
-    # gone rule carries the re-key forward), never a reason to withhold the
-    # "restored" credit for a write and commit that genuinely succeeded.
     for fname in restored_filenames:
         acted.append({"id": fname, "action": "restored"})
     acted.extend(restored_by_peer_items)

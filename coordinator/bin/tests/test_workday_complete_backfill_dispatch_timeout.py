@@ -43,7 +43,7 @@ import sys
 from importlib.machinery import SourceFileLoader
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_BIN_DIR = os.path.dirname(_THIS_DIR)  # coordinator/bin
+_BIN_DIR = os.path.dirname(_THIS_DIR)
 
 _WORKDAY_CLOSE_CLI = os.path.join(_BIN_DIR, "workday-complete-close.py")
 
@@ -80,9 +80,6 @@ def _fake_stdin_rows(n: int) -> str:
 
 
 def test_backfill_dispatch_rows_every_dispatch_carries_a_timeout(monkeypatch) -> None:
-    """Every row dispatch must pass timeout= through to subprocess.run --
-    the previously-unbounded call site (state/audits/2026-08-15-fleet-
-    composed-op-spawn-census.md row 14) is the defect this guards."""
     module = _load_module()
 
     calls = {"n": 0}
@@ -106,11 +103,6 @@ def test_backfill_dispatch_rows_every_dispatch_carries_a_timeout(monkeypatch) ->
 
 
 def test_backfill_dispatch_rows_duplicate_date_dispatches_once(monkeypatch) -> None:
-    """A gap-rows blob carrying the same date twice must dispatch step9 for
-    that date exactly ONCE -- the stdin blob is produced upstream and never
-    uniqued, so an un-gated loop double-appends/double-pushes that day's
-    changelog. `processed_dates` gates the loop, not just an informational
-    message."""
     module = _load_module()
 
     calls: list[str] = []
@@ -137,9 +129,6 @@ def test_backfill_dispatch_rows_duplicate_date_dispatches_once(monkeypatch) -> N
 
 
 def test_one_row_timeout_does_not_abort_the_rest_of_the_backfill(monkeypatch) -> None:
-    """A subprocess.TimeoutExpired on one row must be tracked as that row's
-    failure only -- subsequent rows still dispatch, and the loop returns a
-    non-zero overall rc rather than raising."""
     module = _load_module()
 
     calls = {"n": 0}

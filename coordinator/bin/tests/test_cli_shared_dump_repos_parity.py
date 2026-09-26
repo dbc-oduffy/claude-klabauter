@@ -57,12 +57,6 @@ if str(_LIB_DIR) not in sys.path:
 
 import cli_shared  # noqa: E402
 
-# Fixture registry the fake kernel resolves against -- the single source of
-# truth both code paths (dump batch, per-key get) are checked against.
-# `repos.absent_repo` is deliberately NOT present here at all (simulating an
-# unregistered repo key) -- neither the dump path nor a `get` call ever
-# succeeds for it, and it is NOT `repos.doe_claude` (the one key with its
-# own setdefault backstop elsewhere in cli_shared.py).
 _FIXTURE_REGISTRY = {
     "repos.claude_klabauter": "/machine/claude-klabauter",
     "repos.doe_claude": "/machine/doe-claude",
@@ -114,11 +108,6 @@ def _load_doc_new_module():
 _doc_new = _load_doc_new_module()
 
 
-# ---------------------------------------------------------------------------
-# cli_shared.py: machine_local_dump_repos vs machine_local_get
-# ---------------------------------------------------------------------------
-
-
 def test_cli_shared_dump_matches_per_key_get_for_present_keys(monkeypatch):
     monkeypatch.setattr(cli_shared, "_load_machine_local_kernel", lambda: _FakeKernel(_FIXTURE_REGISTRY))
 
@@ -131,10 +120,6 @@ def test_cli_shared_dump_matches_per_key_get_for_present_keys(monkeypatch):
 
 
 def test_cli_shared_dump_and_get_agree_on_absent_non_doe_claude_key(monkeypatch):
-    """Default-on-absent parity for a key OTHER than repos.doe_claude (the
-    only key with its own setdefault backstop) -- both paths must treat an
-    unregistered key identically: absent from the dump dict, None from
-    per-key get."""
     monkeypatch.setattr(cli_shared, "_load_machine_local_kernel", lambda: _FakeKernel(_FIXTURE_REGISTRY))
 
     dumped = cli_shared.machine_local_dump_repos()
@@ -145,10 +130,6 @@ def test_cli_shared_dump_and_get_agree_on_absent_non_doe_claude_key(monkeypatch)
 
 
 def test_cli_shared_dump_type_coercion_matches_get_degrade_to_none(monkeypatch):
-    """A resolved-but-falsy (None) value must be filtered out by
-    `machine_local_dump_repos` exactly as `machine_local_get` degrades the
-    same resolved value to None -- neither path should ever hand a caller a
-    non-string or empty `repos.*` value."""
     registry_with_null = dict(_FIXTURE_REGISTRY, **{"repos.broken_entry": None})
     monkeypatch.setattr(cli_shared, "_load_machine_local_kernel", lambda: _FakeKernel(registry_with_null))
 
@@ -177,12 +158,6 @@ def test_cli_shared_dump_fails_closed_on_operational_failure_for_any_key(monkeyp
     assert cli_shared.machine_local_dump_repos() == {}
 
 
-# ---------------------------------------------------------------------------
-# coordinator-doc-new.py: _machine_local_dump_repos vs _machine_local_get
-# (private twins of the above, same contract, separate module).
-# ---------------------------------------------------------------------------
-
-
 def test_doc_new_dump_matches_per_key_get_for_present_keys(monkeypatch):
     monkeypatch.setattr(_doc_new, "_load_machine_local_kernel", lambda: _FakeKernel(_FIXTURE_REGISTRY))
 
@@ -205,10 +180,6 @@ def test_doc_new_dump_and_get_agree_on_absent_non_doe_claude_key(monkeypatch):
 
 
 def test_doc_new_dump_fails_closed_on_operational_failure_for_any_key(monkeypatch):
-    """Mutation-verify (Finding 1, this review) for the coordinator-doc-new.py
-    twin: pins the same fail-closed fix as
-    `test_cli_shared_dump_fails_closed_on_operational_failure_for_any_key`
-    above, re-pinned P055-C3 for the in-process kernel shape."""
     monkeypatch.setattr(
         _doc_new,
         "_load_machine_local_kernel",

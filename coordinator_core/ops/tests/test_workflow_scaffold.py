@@ -73,11 +73,6 @@ def _validate_via_dispatch(tmp_path, name, text):
     return _run(ipc.dispatch_message(msg))
 
 
-# ---------------------------------------------------------------------------
-# (a) one case per pattern
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize("pattern", sorted(HOUSE_PATTERNS.keys()))
 def test_each_pattern_emits_conformant_shape(pattern):
     result = _scaffold(
@@ -93,29 +88,19 @@ def test_each_pattern_emits_conformant_shape(pattern):
     assert "description: 'a demo workflow'" in script
     assert "phases: ['Collect', 'Report']" in script
 
-    # phase()-call surface
     assert "phase('Collect');" in script
     assert "phase('Report');" in script
 
-    # agent-options phase: surface, both matching meta.phases
     assert "phase: 'Collect'" in script
     assert "phase: 'Report'" in script
 
-    # every agent() call carries an active model: 'sonnet'
     assert "model: 'sonnet'" in script
 
-    # the chosen house pattern's template text is embedded (as a comment)
     assert HOUSE_PATTERNS[pattern] in script
 
 
 @pytest.mark.parametrize("pattern", sorted(HOUSE_PATTERNS.keys()))
 def test_phase_and_agent_calls_are_top_level_not_wrapped(pattern):
-    """The harness Workflow contract executes the script BODY's top-level
-    statements only and never calls a `run` export — see
-    coordinator_core/ops/dispatch_emit/emit.py module docstring § Top-level
-    body, never a defined-but-uninvoked wrapper. A `phase()`/`agent()` call
-    emitted inside `async function run(ctx) { ... }` is dead code: the
-    scaffolded script would spawn zero agents while reporting success."""
     result = _scaffold(
         name="demo",
         description="a demo workflow",
@@ -132,11 +117,6 @@ def test_phase_and_agent_calls_are_top_level_not_wrapped(pattern):
     assert any(line.startswith("await agent(") for line in lines)
 
 
-# ---------------------------------------------------------------------------
-# (b) pattern omitted -> pipeline-default (DoE consult note 3)
-# ---------------------------------------------------------------------------
-
-
 def test_pattern_omitted_defaults_to_pipeline_default():
     result = _scaffold(name="demo", description="a demo workflow")
     assert HOUSE_PATTERNS["pipeline-default"] in result["script"]
@@ -147,11 +127,6 @@ def test_phases_omitted_still_phase_conformant():
     script = result["script"]
     assert "phase('Run');" in script
     assert "phases: ['Run']" in script
-
-
-# ---------------------------------------------------------------------------
-# (c) unknown pattern / (d) missing required params
-# ---------------------------------------------------------------------------
 
 
 def test_unknown_pattern_raises_value_error():
@@ -169,10 +144,7 @@ def test_missing_description_raises_value_error():
         _run(_workflow_scaffold({"name": "demo"}))
 
 
-# ---------------------------------------------------------------------------
 # (e) ROUND-TRIP drift guard (AC7) — via dispatch_message, the real C2<->C3
-# runtime coupling, not just an import of the handler.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("pattern", sorted(HOUSE_PATTERNS.keys()))
@@ -194,19 +166,8 @@ def test_round_trip_scaffold_output_validates_clean(tmp_path, pattern):
     assert result["error_count"] == 0
 
 
-# ---------------------------------------------------------------------------
-# (f) AC7a — hand-authored fixture corpus (large, realistic, populated
-# agent() prompt bodies) + hand-mutated malformed variants.
-#
-# NOTE (deviation, documented per the plan's AC7a instruction): no real
-# shipped fleet Workflow .mjs corpus exists in-repo at C3-authoring time —
 # this fixture is SYNTHESIZED to be representative of the shipped shape
-# (multi-phase, parallel fan-out, populated multi-sentence agent() prompts),
-# not copied from a real script. It intentionally reuses the C2 large-fixture
 # scaffolding shape (test_workflow_validate.py's LARGE_REALISTIC_SCRIPT) but
-# is authored independently here so C3's own test module does not import
-# C2's test module as a fixture source.
-# ---------------------------------------------------------------------------
 
 LARGE_REALISTIC_FIXTURE = '''\
 export const meta = {
@@ -279,18 +240,12 @@ def test_large_realistic_fixture_is_ok_zero_error(tmp_path):
     assert result["ok"] is True
     assert result["error_count"] == 0
     codes = {f["code"] for f in result["findings"]}
-    # the prompt body literally contains "Date.now()" and "Math.random()" as
-    # TEXT (inside a template literal) — F1 false-positive guard: neither
-    # forbidden-global code must fire.
     assert "forbidden-global-date-now" not in codes
     assert "forbidden-global-math-random" not in codes
     assert "agent-model-default" not in codes
 
 
 def test_fixture_prompt_body_contains_forbidden_global_literal_text():
-    # Sanity check on the fixture itself: prove the false-positive guard
-    # above is actually exercising the F1 masking path, not a fixture that
-    # happens not to mention these tokens at all.
     assert "Date.now()" in LARGE_REALISTIC_FIXTURE
     assert "Math.random()" in LARGE_REALISTIC_FIXTURE
 
@@ -327,7 +282,7 @@ def test_large_fixture_mutated_phase_title_absent_from_meta_is_warn(tmp_path):
         "phase('wrap-up');\n\n  const brief",
     )
     result = _validate_text(tmp_path, "mutated-phase-mismatch.mjs", mutated)
-    assert result["ok"] is True  # WARN only, never fails
+    assert result["ok"] is True
     codes = {f["code"] for f in result["findings"]}
     assert "phase-call-title-mismatch" in codes
     finding = next(f for f in result["findings"] if f["code"] == "phase-call-title-mismatch")

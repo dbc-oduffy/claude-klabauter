@@ -158,7 +158,7 @@ Negative-spec:
   - Does NOT have a cadence of its own. It runs when a ceremony calls it.
 """
 
-GENERATES = []  # mutates only git's own object store via git's own maintenance -- no tracked repo artifact
+GENERATES = []
 
 import sys
 import time
@@ -178,41 +178,18 @@ _PRUNE_EXPIRE = "2.weeks.ago"
 _ORPHAN_PACK_AGE_SEC = 600
 _ORPHAN_PACK_STABILITY_SEC = 2.0
 
-# Tier -> the `git maintenance run` argument vector for that tier. Hourly and
-# weekly are task lists, each derived and measured: hourly to keep `prefetch`
-# out, weekly to drop the tasks `--schedule=weekly` shared with daily under
-# `maintenance.strategy=incremental` (which install sets), which is what put
-# it at 515.6ms/9 procs -- 328ms of that was daily's work, done twice.
-#
-# DAILY IS NO LONGER `--schedule=daily`. It was not the tier that breached
-# the 500ms bar, but it was the tier the R9 spike found silently defeating
-# weekly's prune leg: `--schedule=daily` includes `loose-objects`, which
-# packs loose objects -- unreachable ones included -- and once an
-# unreachable object is packed, weekly's plain `git prune` (LOOSE objects
-# only) reaps nothing (state/bug-backlog/2026-08-30-the-daily-tier-packs-
-# unreachable-objects-309a82437447.yaml). The R9 spike
-# (docs/research/spike-verdicts/2026-09-22-maintenance-reaper-after-daily-
-# pack.md) found candidate (a) -- daily drops `loose-objects`, weekly stays
-# prune-only -- viable: the planted unreachable blob was reaped 5/5 both
-# daily-then-weekly and weekly-alone, at a derived ~190ms for daily (392.6ms
-# measured total minus the 203.1ms `loose-objects` was measured to cost).
 _TIER_ARGV = {
     "hourly": ("maintenance", "run", "--task=commit-graph"),
     "daily": ("maintenance", "run", "--task=commit-graph", "--task=incremental-repack"),
     "weekly": ("maintenance", "run", "--task=pack-refs"),
 }
 
-# Was a second literal declaration of
 # `_TIER_ARGV`'s key set, policed only by a sync test. `_TIER_ARGV` is the
-# actual source of truth; this is derived, not restated.
 TIERS = tuple(_TIER_ARGV)
 
 
 @dataclass
 class MaintenanceResult:
-    """One tier invocation's outcome. `deferred` is an exit-0 outcome that did
-    no work — a caller reading only the exit code cannot tell it from a
-    successful run, which is why it is reported."""
 
     tier: Optional[str]
     ran: bool = False
@@ -229,9 +206,6 @@ class MaintenanceResult:
 
 @dataclass(frozen=True)
 class OrphanPackSweep:
-    """What one sweep did. `reaped` and `failed` are pack-body paths; `skipped`
-    counts candidates that failed a gate, so a caller can distinguish "nothing
-    was there" from "everything present was still in flight"."""
 
     reaped: List[Path]
     failed: List[Path]
@@ -357,7 +331,6 @@ def sweep_orphan_packs(
         return OrphanPackSweep(reaped=[], failed=[], skipped=0)
 
     now = int(time.time())
-    # Gate 2 BEFORE the window, so a set of fresh candidates costs no wait.
     aged = [p for p in candidates if now - _mtime_epoch(p) >= age_floor]
     skipped = len(candidates) - len(aged)
     if not aged:
@@ -365,11 +338,6 @@ def sweep_orphan_packs(
 
     first = {p: (_mtime_epoch(p), _file_size(p)) for p in aged}
 
-    # THE ONE WINDOW. Not inside the loop below, and not inside a per-file
-    # helper -- see this docstring.
-    # `no_sleep` had no caller and no env
-    # knob (unlike reap_stale_locks's sibling), so `elif not no_sleep` was a
-    # permanently-true guard; `on_wait` is the test seam every sweep test uses.
     if on_wait is not None:
         on_wait()
     else:
@@ -382,7 +350,6 @@ def sweep_orphan_packs(
             skipped += 1
             continue
         if (_mtime_epoch(p), _file_size(p)) != first[p]:
-            # Gate 3 failed: something is still writing this body.
             skipped += 1
             continue
         try:
@@ -398,25 +365,10 @@ def sweep_orphan_packs(
 
 
 def defer_reason(repo: Path, git_dir: Path) -> Optional[str]:
-    """Why this worktree must not be maintained right now, or None.
-
-    Checked in cost order: three `Path.exists()` calls and one `index.lock`
-    check cost nothing, so the single spawn (`ls-files --unmerged`) runs only
-    when the free checks all pass.
-
-    NO `os.name` BRANCH. Every check here is a plain path test or plain git,
-    identical on all three hosts. The failure that motivates the predicate is a
-    Windows file-sharing artifact, but a held index and an in-progress rebase
-    are equally real on POSIX, and the predicate is exercised against both
-    shapes in test.
-    """
     if (git_dir / "index.lock").exists():
         return "index.lock is held -- a peer is mid-commit"
-    # A clean, in-progress
     # `cherry-pick --no-commit`/`revert --no-commit` leaves CHERRY_PICK_HEAD/
     # REVERT_HEAD present with a clean index and no unmerged entries, which
-    # was invisible to every check here even though it is the same class of
-    # mid-operation state the other markers exist to catch.
     for marker, what in (
         ("REBASE_HEAD", "rebase"),
         ("MERGE_HEAD", "merge"),
@@ -429,9 +381,6 @@ def defer_reason(repo: Path, git_dir: Path) -> Optional[str]:
     unmerged = run_git(["ls-files", "--unmerged"], cwd=str(repo))
     if unmerged.timed_out or unmerged.returncode == 127:
         # This function gates a DESTRUCTIVE tier (gc/prune/repack), so an
-        # unanswered git is an obstruction, not a clearance. Reading a timeout
-        # as "no unmerged entries" would let maintenance run against an index
-        # whose state nobody established.
         return "could not read index state (git did not answer)"
     if unmerged.returncode == 0 and unmerged.stdout.strip():
         return "index has unmerged entries"
@@ -439,7 +388,6 @@ def defer_reason(repo: Path, git_dir: Path) -> Optional[str]:
 
 
 def run_tier(repo: Path, tier: Optional[str]) -> MaintenanceResult:
-    """Run one maintenance tier against `repo`."""
     if tier not in _TIER_ARGV:
         result = MaintenanceResult(tier=tier)
         result.errors.append(f"unknown tier {tier!r} -- expected one of {', '.join(TIERS)}")
@@ -463,28 +411,7 @@ def run_tier(repo: Path, tier: Optional[str]) -> MaintenanceResult:
         return result
 
     # PRUNE RUNS BEFORE THE MAINTENANCE RUN, NOT AFTER. It is no longer
-    # load-bearing against daily -- daily's `loose-objects` task is gone
     # (R9 / P153-C25: docs/research/spike-verdicts/2026-09-22-maintenance-
-    # reaper-after-daily-pack.md), so nothing upstream of weekly packs an
-    # unreachable object out from under `git prune` (LOOSE objects only) any
-    # more. It is kept prune-first anyway, harmlessly, because `git gc` is
-    # still the alternative it is never worth reaching for -- kill-bar item
-    # here (10,068ms/9 procs against prune's 40.6ms/1 proc) -- and because
-    # weekly's own `--task=pack-refs` packs nothing, so this order costs
-    # nothing to keep.
-    #
-    # THE TRAP THIS ORDER USED TO GUARD AGAINST, for the record: on a day
-    # both tiers fired, `loose-objects` packed unreachable loose objects
-    # (including ones young enough that a run last week did not yet catch
-    # them) before a prune sequenced after it could see them loose, so that
-    # prune reaped nothing and exited 0 -- unreachable history accumulating
-    # forever behind a green tier
-    # (state/bug-backlog/2026-08-30-the-daily-tier-packs-unreachable-objects-
-    # 309a82437447.yaml). The R9 spike also confirmed repacking the pack
-    # afterwards (`--cruft-expiration` on weekly) cannot recover this once an
-    # object is packed -- packing itself resets the age signal a later reap
-    # would need -- so the fix is daily never packing it, not a different
-    # reap strategy downstream.
     if tier == "weekly":
         prune = run_git(["prune", f"--expire={_PRUNE_EXPIRE}"], cwd=str(repo))
         if prune.returncode != 0:
@@ -499,21 +426,12 @@ def run_tier(repo: Path, tier: Optional[str]) -> MaintenanceResult:
         result.errors.append(f"{' '.join(_TIER_ARGV[tier])} failed rc={proc.returncode}: {proc.stderr.strip()}")
         return result
     result.ran = True
-    # Stamping unconditionally
-    # here made a clean run and a run with a failed prune leg indistinguishable
-    # on the liveness store, defeating _stamp's own stated purpose. Gate on
-    # `errors` accumulated so far (the prune leg, at this point) so the stamp
-    # means what its docstring claims.
     if not result.errors:
         _stamp(repo)
 
     if tier != "weekly":
         return result
 
-    # The orphan-pack sweep runs LAST: the maintenance run above is itself a
-    # producer of legitimate in-flight `.pack` bodies, and sweeping after it
-    # has finished means the age and stability gates are never asked to
-    # arbitrate against our own repack.
     swept = sweep_orphan_packs(common / "objects" / "pack")
     result.orphan_packs_reaped = len(swept.reaped)
     result.orphan_packs_skipped = swept.skipped
@@ -547,8 +465,6 @@ def _stamp(repo: Path) -> None:
 
 
 def _report(result: MaintenanceResult) -> None:
-    """One fact, once, plus a terse alternative -- docs/wiki/guard-messaging.md
-    § Register."""
     if result.errors:
         for err in result.errors:
             print(f"{_PREFIX}: {err}", file=sys.stderr)
@@ -558,8 +474,6 @@ def _report(result: MaintenanceResult) -> None:
         return
     line = f"{_PREFIX}: {result.tier} ran"
     if result.tier == "weekly":
-        # `skipped` was maintained at four
-        # bookkeeping sites and shown nowhere; this is its production reader.
         line += (
             f"; pruned={result.pruned}; orphan packs reaped={result.orphan_packs_reaped}"
             f"; skipped={result.orphan_packs_skipped}"
@@ -568,11 +482,6 @@ def _report(result: MaintenanceResult) -> None:
 
 
 def main(argv: Sequence[str]) -> int:
-    """`coordinator-git-maintenance <TIER>` — the bin trampoline's entry point.
-
-    No argv parsing beyond the tier: an option surface here would be a second
-    way to say what the tier already says.
-    """
     args = list(argv)
     if len(args) != 1 or args[0] not in _TIER_ARGV:
         print(f"{_PREFIX}: usage: coordinator-git-maintenance <{'|'.join(TIERS)}>", file=sys.stderr)

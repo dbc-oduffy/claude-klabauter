@@ -39,7 +39,6 @@ from coordinator_core.win_portability import is_executable, no_console_creationf
 
 
 def _norm(path: str) -> str:
-    """Physical-path normalize for comparison (resolves symlinks, mirrors `cd && pwd -P`)."""
     try:
         return os.path.realpath(path)
     except OSError:
@@ -47,7 +46,6 @@ def _norm(path: str) -> str:
 
 
 def _resolve_machine_local(claude_home: str) -> Optional[str]:
-    """PATH first, then the in-plugin bin as fallback — mirrors the bash oracle."""
     from shutil import which
 
     ml = which("machine-local")
@@ -62,26 +60,12 @@ def _resolve_machine_local(claude_home: str) -> Optional[str]:
 
 
 def _repos_snapshot(ml: str) -> Dict[str, str]:
-    """One `dump --prefix repos --format json` call resolving every
-    `repos.*` key at once — batch counterpart to the per-key `keys` + `get`
-    pair the caller used to spawn once per registered repo (amplification
-    hitlist, 2026-08-19; same primitive already proven in
-    `coordinator_core.ops.register_discovered_repos._registry_snapshot`
-    and `coordinator/bin/lib/cli_shared.py::machine_local_dump_repos`).
-
-    Fail-open: any spawn/parse failure or non-zero returncode returns {}
-    (empty registry), matching the pre-batch behavior of `_machine_local_keys`
-    returning [] on the same failure classes -- the caller's loop then falls
-    through to the advisory hint either way.
-    """
     try:
         proc = subprocess.run(
             [ml, "dump", "--prefix", "repos", "--format", "json"],
             capture_output=True,
             text=True,
             timeout=10,
-            # Windows portability convention applied
-            # inconsistently across this wave's siblings; align this call site.
             **no_console_creationflags(),
         )
     except (OSError, subprocess.SubprocessError):
@@ -99,20 +83,17 @@ def _repos_snapshot(ml: str) -> Dict[str, str]:
 
 
 def _slugify(name: str) -> str:
-    """Mirrors: tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '_' | sed 's/^_*//; s/_*$//'."""
     lowered = name.lower()
     slug = re.sub(r"[^a-z0-9]", "_", lowered)
     return slug.strip("_")
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: advisory-only, always returns 0."""
     claude_home = os.path.join(os.environ.get("CLAUDE_HOME", os.path.expanduser("~")), ".claude")
 
     cwd = _norm(os.getcwd())
     home_norm = _norm(claude_home)
 
-    # The meta-repo itself is always a learn-lessons root -- nothing to advise.
     if cwd == home_norm:
         return 0
 

@@ -1,22 +1,3 @@
-"""
-test_readonly_restore.py -- D4a's own coverage: the read-only-bit restore
-folded into `coordinator_core.p4.shelve.shelve_outstanding`'s step-0 fstat.
-
-Spec backlink: docs/plans/2026-09-12-perforce-second-class-commit-and-shelve.md
-plan-spine row C9 (D4a).
-
-Exercises: a mode-only-drift fixture (content matching depot, nothing open,
-read-only bit cleared) is restored and its count rides `ShelveOutcome.restored`;
-the no-orphan/no-drift path spends exactly 4 p4 spawns (fstat, reconcile,
-revert, shelve) -- never `p4 clean`, `reconcile -w`, or `sync -f`.
-
-This file used
-to carry its own `TestEmptyPathSetStillZeroSpawns`, a verbatim duplicate of
-`test_shelve.py::test_empty_path_set_is_a_success_with_zero_p4_spawns`
-(same fixture shape, same `fail_run` spy, same assertion). Deleted here;
-that original already fails if the D4a/D4b step-0 hoist breaks the
-zero-spawn guarantee this file's docstring used to also claim.
-"""
 
 from __future__ import annotations
 
@@ -67,7 +48,7 @@ class TestModeOnlyDriftIsRestored:
         repo_root.mkdir()
         drifted = repo_root / "a.uasset"
         drifted.write_text("unchanged\n", encoding="utf-8")
-        drifted.chmod(0o644)  # writable -- the drift this row restores
+        drifted.chmod(0o644)
 
         def fake_run_git(args, **kw):
             if "cat-file" in args:
@@ -99,8 +80,6 @@ class TestModeOnlyDriftIsRestored:
         assert outcome.ok
         assert outcome.restored == 1
         assert not (os.stat(drifted).st_mode & stat.S_IWRITE)
-        # exactly 4 p4 spawns on the no-orphan happy path: fstat, reconcile,
-        # revert, shelve -- never p4 clean/reconcile -w/sync -f.
         assert len(spawned) == 4
         verbs = [seg for call in spawned for seg in call if seg in ("fstat", "reconcile", "revert", "shelve")]
         assert verbs == ["fstat", "reconcile", "revert", "shelve"]
@@ -146,5 +125,4 @@ class TestOpenPathIsNeverRestored:
 
         assert outcome.ok
         assert outcome.restored == 0
-        # already-writable (open for edit) target left untouched.
         assert os.stat(opened).st_mode & stat.S_IWRITE

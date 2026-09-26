@@ -58,23 +58,12 @@ from typing import NamedTuple, Optional
 
 
 def _is_cloud_session() -> bool:
-    """The harness's own cloud-environment declaration — read once, per boot.
-
-    Gates the learn-and-record arm so a workstation session (where a
-    non-`main` branch is ordinary EM traffic, not a harness designation)
-    never mistakes an in-progress workstream branch for a day-branch
-    designation.
-    """
     return (os.environ.get("CLAUDE_CODE_REMOTE") or "").strip().lower() == "true"
 
 
-#: Every arm of the dispatch table below, named. Nothing falls off the end.
 CUT = "FRESH-CUT"
 ADOPTED = "ADOPTED-EXISTING"
-#: Today's branch existed but lagged HEAD -- the ordinary state after
-#: `/merging-to-main` returns the tree to `main` -- and its ref was advanced
 #: to HEAD and checked out. See `session_ensure_branch.ADVANCED_TO_HEAD` for
-#: why that is content-neutral and what it deliberately does NOT cover.
 ADVANCED = "ADVANCED-TO-HEAD"
 INHERITED = "INHERITED"
 COMPLIANT = "COMPLIANT"
@@ -104,21 +93,6 @@ _session_ensure_branch = None
 
 
 def _load_session_ensure_branch():
-    """Load the ENGINE's own `coordinator/lib/session_ensure_branch.py` once
-    per process, by file path.
-
-    Anchored to this module's tree, never to the session's `repo_root`: the
-    asserted repo is whichever one the session runs in and carries no
-    `coordinator/lib` of its own, while the published engine mirror ships
-    this file beside `coordinator_core`. Never a `sys.path` insert — this
-    warm interpreter is shared by every concurrent session, so a
-    process-global import-path mutation races across repos. `coordinator/`
-    has no `__init__.py` and collides by name with the DoE plugin root, so a
-    package import is unavailable; `importlib.util` loads the file without
-    touching `sys.path`. It IS registered in `sys.modules` under a private
-    name, because the file's `@dataclass` definitions resolve their own
-    module through `sys.modules` at class-creation time.
-    """
     global _session_ensure_branch
     if _session_ensure_branch is None:
         import importlib.util
@@ -175,10 +149,6 @@ def assert_day_branch(
 
     configured = read_configured_day_branch(repo_root)
     if configured is None and _is_cloud_session() and branch and branch != "main":
-        # Learned lazily, inside the session (PM ruling 2026-09-22): the
-        # harness checkout's ordering relative to any pre-boot step is
-        # unmeasured, so SessionStart -- which by construction runs AFTER the
-        # harness checkout -- is the source of this record, not pre-boot.
         if record_day_branch_designation(repo_root, branch):
             configured = branch
     if configured and branch == configured:
@@ -235,49 +205,11 @@ def _case_a(repo_root, machine, today, *, env, stderr) -> DayBranchAssertResult:
     )
 
 
-# ---------------------------------------------------------------------------
-# C10 — case (B): the entire non-`main` arm.
-# ---------------------------------------------------------------------------
-
-#: `auto_push.branch_gate`'s own doctrine splits non-`work/*` branches into two
-#: populations. Warning identically for both is nag-shaped and habituates away
-#: from the genuinely loud cases, so the message is differentiated: these are
-#: deliberate, legitimate, long-lived shapes for which auto-push is off BY
 #: DOCTRINE, and they get one informational line, not the escalating banner.
 _RECOGNIZED_LONG_LIVED = ("migration/", "release/", "feature/")
 
-#: Gravestone -- the pending-push record leg (`coordinator-auto-push-pending.json`)
-#: was removed here on 2026-08-30. It asserted "the last push attempt failed and
-#: commits are sitting unpushed right now" from the presence of a file whose only
-#: production writer (`auto_push._hold_window`, via `_write_pending_record`) C8 of
-#: `docs/plans/2026-08-30-who-pushes-and-when.md` gravestoned. Post-C8 the record
-#: can never be written again, so the leg could only ever fire on a pre-C8
-#: orphan -- a permanent false RED on a maximally-trusted surface, which is what
-#: it did: it told a peer session crash insurance was off box-wide while the
-#: cadence was carrying every push. The other three legs below/above are NOT
-#: stale: `push_outstanding` still consults `auto_push.branch_gate()` and still
-#: declines `main`, a non-`work/*` branch, and an unresolvable HEAD.
-
 
 def case_b_verdict(repo_root: str, branch: str) -> DayBranchAssertResult:
-    """Non-``main``: compliant -> silent; otherwise the warn.
-
-    "Violates the auto-push rules" is defined concretely against
-    ``coordinator_core/hooks/auto_push.py``:
-
-      - ``branch_gate`` (``work/*`` only): a branch that does NOT start with
-        ``work/`` gets no auto-push at all, so no crash insurance.
-    Compliant = ``is_work_branch`` (``work/*``, verbatim or behind exactly one
-    leading ``origin/``). A detached HEAD is always non-compliant and always
-    warns. A branch that is a work branch only because of a leading
-    ``origin/`` still warns, once and non-escalating (informational line, not
-    the banner) — it is compliant enough not to skip auto-push, but the name
-    itself is malformed and should be renamed.
-
-    Negative-spec — do not reintroduce a pending-push-record leg here. See the
-    gravestone above ``case_b_verdict``: the record has no writer post-C8, so
-    reading it can only produce a false RED.
-    """
     from coordinator_core.daily_branch import has_remote_prefix, is_work_branch
 
     if not branch:
@@ -332,24 +264,7 @@ def case_b_verdict(repo_root: str, branch: str) -> DayBranchAssertResult:
     return DayBranchAssertResult(COMPLIANT, branch, "")
 
 
-# ---------------------------------------------------------------------------
-# C5 — the banner mechanism. ONE renderer, shared by every loud surface.
-# ---------------------------------------------------------------------------
-
-
 def banner(*, headline: str, detail: str, since: Optional[float]) -> str:
-    """Render the loud, escalating, non-suppressible banner.
-
-    Escalating means elapsed time is IN the text: a state persisting for hours
-    must not read like one a minute old. ``since`` is a unix timestamp the
-    state has held since, or None when it is not known.
-
-    Every surface that needs this banner calls THIS function —
-    ``/workweek-start``'s branch leg included. A second renderer printing
-    similar-but-different text is the failure mode this signature exists to
-    prevent: it is a mid-session slash command that may never re-enter the
-    SessionStart hook, so its output must route through here, not a copy.
-    """
     elapsed = ""
     if since is not None:
         secs = max(0.0, time.time() - since)
@@ -366,15 +281,6 @@ def _humanize(secs: float) -> str:
 
 
 def _current_branch(repo_root: str) -> str:
-    """Current branch, or ``""`` for a genuinely detached HEAD.
-
-    Trap: never spawn ``git branch --show-current`` and read a non-zero exit
-    as detached. A cloud clone owned by another UID fails git's ownership
-    check while HEAD is on a real branch; that misread both reported
-    "detached HEAD" and starved the cloud learn-arm of a branch to record.
-    ``resolve_branch`` reads HEAD/refs off disk (zero spawns) and only falls
-    back to a spawn when the walk is inconclusive.
-    """
     from coordinator_core.hooks.auto_push import resolve_branch
 
     return resolve_branch(repo_root) or ""

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import pytest
 
-# ---- Import guard: fires @register_op side-effect for both ops. ----
 import coordinator_core.ops.parse_cli_args  # noqa: F401
 
 from coordinator_core.ipc import _REGISTRY
@@ -23,15 +22,9 @@ from coordinator_core.ops.parse_cli_args import (
 )
 
 
-# ---- registration ----
-
-
 def test_both_ops_registered():
     assert "cli.parse_flag" in _REGISTRY
     assert "cli.parse_date_flags" in _REGISTRY
-
-
-# ---- parse_flag (pure function) ----
 
 
 def test_parse_flag_matches_root():
@@ -89,9 +82,6 @@ def test_parse_flag_is_idempotent_across_two_invocations():
     assert first == second
 
 
-# ---- parse_date_flags (pure function) ----
-
-
 def test_parse_date_flags_for_date_only():
     result = parse_date_flags("--for-date 2026-07-22")
     assert result == {"for_date": "2026-07-22", "only": False}
@@ -119,9 +109,6 @@ def test_parse_date_flags_is_idempotent_across_two_invocations():
     assert first == second
 
 
-# ---- cli.parse_flag handler ----
-
-
 def test_handler_parse_flag_basic():
     result = _handler_parse_flag(
         {"arguments": "--root /tmp/foo", "flag_names": ["--root", "--target"]}
@@ -139,9 +126,6 @@ def test_handler_parse_flag_double_invocation_is_byte_identical():
     first = _handler_parse_flag(dict(params))
     second = _handler_parse_flag(dict(params))
     assert first == second
-
-
-# ---- cli.parse_date_flags handler ----
 
 
 def test_handler_parse_date_flags_basic():

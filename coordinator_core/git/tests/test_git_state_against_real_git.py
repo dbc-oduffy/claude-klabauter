@@ -1,23 +1,3 @@
-"""Tests for `coordinator_core.git.git_state` that assert against REAL git.
-
-Split out of the sibling `test_git_state.py` on 2026-08-23, and the split is the
-point: every test here spawns `git` through a module-level helper
-(`_git`/`_init_repo`/`_ls_tree_one_dir`), where a per-function `pytest.mark` is
-inert because pytest applies marks only to what it collects. The spawn-ratchet's
-only accepted remediation for that shape is a module-level `pytestmark`, which
-tiers the WHOLE file onto cadence -- and in the combined file that meant exiling
-22 spawn-free tests (0.6s) to move 9 spawning ones (8.8s). Separating the two
-populations pays the ratchet honestly and costs the fast tier nothing.
-
-The alternative -- faking git -- was rejected here and the reason is the same one
-`test_git_state.py`'s own docstring gives for synthesising index bytes: these
-tests exist to cross-check this repo's hand-rolled git-plumbing readers against
-real `git ls-files` / `rev-parse` / `ls-tree` output. A faked oracle re-asserts
-the module under test against itself.
-
-Negative spec: nothing here may be de-tiered by faking its git. A test that stops
-needing a real repo belongs in `test_git_state.py`, not here with its mark removed.
-"""
 
 from __future__ import annotations
 
@@ -38,10 +18,6 @@ from coordinator_core.git.git_state import (  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
-
-
-# ---------------------------------------------------------------------------
-# Equality against `git ls-files -s` over this repo's own live index
 
 
 def test_read_index_matches_git_ls_files_over_live_repo():
@@ -76,13 +52,7 @@ def test_read_index_matches_git_ls_files_over_live_repo():
     assert len(snap) == len(git_map)
 
 
-# ---------------------------------------------------------------------------
-# head_blobs -- the one retained spawn
-
-
 def test_head_blobs_reads_this_repos_own_head_tree():
-    # `git_state.py` itself is uncommitted while this chunk lands, so this
-    # probes a file already present in HEAD -- `run.py`, its sibling module.
     repo_root = str(Path(__file__).resolve().parents[3])
     result = head_blobs(repo_root, ["coordinator_core/git/run.py"])
 
@@ -126,17 +96,6 @@ def test_head_blobs_admits_gitlink_160000(tmp_path):
     assert sha == head_sha
 
 
-# ---------------------------------------------------------------------------
-# head_tree_sha / read_tree_spine -- real repos, real git.
-#
-# `head_sha` above is exercised against synthesised `.git/HEAD` bytes; these
-# two readers are exercised against a real `git init` repo because the
-# assertion IS "matches real git's own commit/tree object encoding and
-# `git ls-tree` output", per this chunk's test-surface brief -- a
-# synthesised commit/tree object would just be re-asserting this module's
-# own encoding against itself.
-
-
 def _git(args, *, cwd):
     kwargs = dict(cwd=str(cwd), check=True, capture_output=True, text=True, **no_console_creationflags())
     return subprocess.run(["git", *args], **kwargs)
@@ -150,9 +109,6 @@ def _init_repo(repo: Path) -> None:
 
 
 def _ls_tree_one_dir(repo: Path, dirpath: str) -> dict:
-    """`{name: (mode, sha)}` for one directory's immediate children, via
-    `git ls-tree HEAD -- <dirpath>` (non-recursive) -- the independent
-    oracle `read_tree_spine`'s output is asserted against."""
     target = dirpath + "/" if dirpath else "./"
     out = _git(["ls-tree", "HEAD", target], cwd=repo).stdout
     entries = {}

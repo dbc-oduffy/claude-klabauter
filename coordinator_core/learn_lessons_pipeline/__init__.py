@@ -84,38 +84,21 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Optional
 
-#: The full set of on-disk CLIs this module's `directives[]` may name
-#: (bareword, no `.py` suffix — the same shape `workstream_complete`'s own
 #: `CONSUMES_MANIFEST` uses). `stamp-run-complete` is deliberately NOT a
-#: member: it is an in-package `op:` handler
-#: (`coordinator_core.learn_lessons_pipeline.run_stamp.stamp_run_complete`),
-#: not a `coordinator/bin` script, so admitting it here would put a
-#: non-script into a manifest whose whole point is "every `cli` is a real,
-#: manifest-listed bin script" (see C4's body for the two closed dispatch
-#: tables this distinction feeds).
 CONSUMES_MANIFEST: tuple[str, ...] = (
     "extract-lessons",
     "lessons-outbox-drain",
     "age-sweep-lessons",
 )
 
-#: The single `op:` verb this package's `directives[]` may name — see
 #: `CONSUMES_MANIFEST`'s docstring for why the run-stamp step is not a
 #: `CONSUMES_MANIFEST` member.
 STAMP_RUN_COMPLETE_OP = "stamp-run-complete"
 
-#: Routing-records file naming convention shared with
-#: `coordinator/bin/learn-lessons-age-sweep.py check-strip-orphans`'s own
-#: `records.yaml` positional — the routing step (outside this pipeline)
-#: writes here; this module only names the path.
 ROUTING_RECORDS_FILENAME = "records.yaml"
 
 
 def _shortname_for(repo_root: Path) -> str:
-    """The `--shortname` token `extract-lessons extract` takes — the
-    enclosing repo's directory name, the same value a hand-typed invocation
-    would pass (`extract-lessons.py`'s own default: "inferred from state/
-    lessons parent dir")."""
     return repo_root.name
 
 
@@ -126,14 +109,6 @@ def build_directives(
     cutoff: Optional[str],
     run_date: str,
 ) -> list[dict[str, Any]]:
-    """The ORDERED directive list over the four atomic learn-lessons CLIs
-    plus the terminal in-package run-stamp op. `cutoff` is `None` when no
-    completed central run is reachable (§ C1's `derive_cutoff`) — in that
-    case `d-age-sweep` is simply absent from the returned list; callers
-    read `gates["age_sweep"]` (built by `brief()`, not here) for the
-    reason. Every directive after the first names its predecessor's id in
-    `depends_on`, so `d-stamp-run-complete` always depends on whichever
-    directive actually ran last."""
     shortname = _shortname_for(repo_root)
     lessons_path = repo_root / "state" / "lessons"
     extraction = lessons_path / f"{shortname}-extracted-full.yaml"

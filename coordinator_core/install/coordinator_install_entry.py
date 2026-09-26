@@ -74,7 +74,6 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-#: Forwarded verbatim rather than remapped — see module docstring.
 EXIT_INTERPRETER_UNSUPPORTED = 96
 
 _USAGE = """\
@@ -99,11 +98,7 @@ underlying installer's own code, forwarded verbatim.
 
 
 class InstallEntryError(RuntimeError):
-    """Resolution failed before anything was dispatched — fail loud.
-
-    Never raised for a non-zero exit from the dispatched installer: that code is
-    the installer's answer and is forwarded, not reinterpreted here.
-    """
+    pass
 
 
 def _declared_installer(claude_klabauter_root: Path) -> "tuple[Path, dict]":
@@ -140,9 +135,6 @@ def _declared_installer(claude_klabauter_root: Path) -> "tuple[Path, dict]":
             f"standalone_setup_script.{key} in that manifest."
         )
 
-    # Manifest paths are repo-root-relative, and the manifest sits in either the
-    # nested working-tree layout or the flat publish-mirror layout; resolve
-    # against the root the manifest was actually found under, not a guess.
     manifest_repo_root = manifest_path.parent.parent.parent
     script = (manifest_repo_root / declared).resolve()
     if not script.is_file():
@@ -182,7 +174,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     except InstallEntryError as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    except Exception as exc:  # resolution failure, not an install failure
+    except Exception as exc:
         print(f"coordinator-install: could not resolve the install entry: {exc}", file=sys.stderr)
         return 1
 
@@ -204,15 +196,6 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             cmd.append(flag)
     cmd.extend(passthrough)
 
-    # `no_console_passthrough_kwargs`, NOT `no_console_creationflags`: this is a
-    # passthrough delegation to the declared installer and everything it prints is
-    # meant for the operator watching the install. The creationflags-only helper
-    # would suppress the conhost popup and then bind the child's handles to that
-    # fresh window-less console, losing the whole install log on Windows — see that
-    # function's own "THE CATCH" note. Gates:
-    # `coordinator_core/tests/test_no_bare_hot_path_spawn.py` (the popup) and
-    # `test_no_output_swallowing_no_console_spawn.py` (the lost output) — both must
-    # hold, and only the passthrough helper satisfies both here.
     from coordinator_core.win_portability import no_console_passthrough_kwargs
 
     return subprocess.call(cmd, **no_console_passthrough_kwargs())

@@ -53,16 +53,9 @@ def _refused(verdict) -> bool:
     return verdict.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
 
 
-#: An offered alternative line: two-space indented, and a test-runner
-#: invocation rather than a grant/override/diagnostic line.
 _RUNNER_ALTERNATIVE_RE = re.compile(
     r"^ {2}((?:\S*python\S*\s+-m\s+)?(?:py\.test|pytest)\b.*)$", re.MULTILINE)
 
-#: The interpreter spellings whose ``-m`` form the engine's own install
-#: surface guarantees. A console script (bare ``pytest``) is NOT on this
-#: list: the installer leaves the test extra unprovisioned by default, and
-#: where a console script does exist it is pinned to whichever interpreter
-#: created it and breaks when that interpreter moves.
 _GUARANTEED_INTERPRETERS = ("python3", "python", "py")
 
 
@@ -86,8 +79,6 @@ def _alternatives(message: str) -> List[str]:
 
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
-    """A repo root shaped like this one -- the placeholder paths in the
-    offered alternatives are classified against these ``testpaths``."""
     (tmp_path / "pyproject.toml").write_text(
         "[tool.pytest.ini_options]\n"
         'testpaths = ["coordinator_core", "coordinator/tests"]\n',
@@ -127,9 +118,6 @@ def test_offered_alternative_is_allowed_by_this_guard(label, message, agent_id, 
                          ids=lambda v: v if isinstance(v, str) and "\n" not in v else "")
 def test_offered_alternative_captures_output_without_flipping_the_verdict(
         label, message, agent_id, repo):
-    """The same alternative with output captured -- the shape that produced
-    the live defect. A redirection is shell plumbing and must not change
-    which tier the runner's argv classifies as."""
     for alternative in _alternatives(message):
         piped = "%s 2>&1 | tail -20" % alternative
         assert not _refused(guard.check(_payload(piped, repo, agent_id))), (

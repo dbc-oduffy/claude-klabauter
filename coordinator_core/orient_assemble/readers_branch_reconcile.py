@@ -73,10 +73,6 @@ from typing import Any
 from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
 from coordinator_core.orient_assemble.reader_result import ReaderResult
 
-#: The source CLI's absolute path — resolved relative to this file, never a
-#: literal device path (portability discipline, AC-16). This file lives at
-#: coordinator_core/orient_assemble/, so parents[2] is the claude-klabauter repo root
-#: (parents[0]=orient_assemble, parents[1]=coordinator_core, parents[2]=repo
 #: root — mirrors `readers_handoff_triage._SOURCE_PATH`'s same parents[2]).
 _SOURCE_PATH = (
     Path(__file__).resolve().parents[2]
@@ -88,9 +84,6 @@ _SOURCE_PATH = (
 _GIT_TIMEOUT = 10
 
 def _load_source_module():
-    """Load the hyphenated-filename source CLI as an importable module (same
-    pattern as `readers_handoff_triage._load_source_module`) — a normal
-    `import` statement cannot address a `-`-containing filename."""
     ensure_bin_lib_bound(str(_SOURCE_PATH.parent))
     spec = importlib.util.spec_from_file_location(
         "workday_start_day_branch_resolve", _SOURCE_PATH
@@ -103,26 +96,10 @@ def _load_source_module():
 
 
 _day_branch_resolve = _load_source_module()
-#: The pure comparison function — no side effects, unit-test seam in the
-#: source module. Ported as-is, never reimplemented.
 _span_assert_compute = _day_branch_resolve._span_assert
 
 
 def _current_branch(repo_root: str | None = None) -> str:
-    """`git branch --show-current` — empty string on detached HEAD or
-    failure. In-process read, not a shell-out to the fused CLI; mirrors the
-    source module's own `_current_branch` (not reused directly since that
-    helper is private to the loaded module and this call is trivial enough
-    to keep local rather than reach back into the loaded module's private
-    surface a second time).
-
-    `repo_root`, when given, is passed as `cwd=` (DR-382: scan scope is an
-    explicit parameter, never re-derived from process cwd inside a reader).
-    `None` preserves the prior ambient-cwd behaviour byte-for-byte — this
-    reader is not itself the argv entry point, but `collect()`'s own
-    `repo_root` keyword was `None` by default before this fix and every
-    existing caller (direct `collect()` invocation with no `repo_root`)
-    must keep resolving exactly as it did."""
     try:
         result = subprocess.run(
             ["git", "branch", "--show-current"],
@@ -171,41 +148,10 @@ def _read_span_assert(repo_root: str | None = None) -> ReaderResult:
 
 
 def _read_auto_reconcile(repo_root: str | None = None) -> ReaderResult:
-    """RETIRED no-op stub -- `handoff.reconcile_open` is no longer a
-    registered op (K-026, superseded by K-057) and this reader must never
-    dispatch it. Always returns an empty `ReaderResult()` without touching
-    `coordinator_core.ops.check_auto_reconcile` at all. Kept under its
-    original name/signature (including the now-unused `repo_root`
-    parameter) purely so `collect()` and every existing test's
-    `monkeypatch.setattr(rbr, "_read_auto_reconcile", ...)` seam keep
-    working unchanged.
-
-    Bug-backlog: state/bug-backlog/2026-09-11-orient-assemble-still-probes-
-    the-retired-4775aa35bd49.yaml
-    """
     return ReaderResult()
 
 
 def collect(cadence: str, *, repo_root: str | None = None) -> ReaderResult:
-    """Compute this reader family's directives/judgment_points.
-
-    `cadence` is accepted for signature parity with sibling reader families
-    (`readers_clean_ops.collect`) but unused here — neither probe's
-    severity varies by cadence.
-
-    `repo_root` is keyword-only and threaded through to `_read_span_assert`
-    (C12 of the orient-assemble repo-scope plan, DR-382) via its own
-    `repo_root`-accepting `_current_branch` internal. `_read_auto_reconcile`
-    also accepts `repo_root` for signature parity but is a permanent no-op
-    (see its own docstring) and ignores it. `None` — the default, and every
-    existing caller's prior behaviour — preserves the prior ambient-cwd
-    resolution byte-for-byte at the `_read_span_assert` leaf. Still unwired
-    into `__init__.py`'s cadence dispatch (`brief()`) — that remains shared
-    write-surface across C2a-C2d and this module's own negative-spec already
-    excludes wiring `collect()`'s results into `brief()` from this chunk;
-    this only closes the gap between `collect()`'s own `repo_root` parameter
-    and the leaves it calls.
-    """
     directives: list[dict[str, Any]] = []
     judgment_points: list[dict[str, Any]] = []
     for result in (

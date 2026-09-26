@@ -1,15 +1,3 @@
-"""
-test_workspace.py — pytest coverage for coordinator_core.p4.workspace.
-
-Spec backlink: docs/plans/2026-09-12-perforce-second-class-commit-and-shelve.md § D1, § D9.
-
-Cases named by the plan spine row C1:
-  - an absent marker key -> is_p4_repo() False, with no spawn (no runner
-    import anywhere in this module — asserted by absence, not mocked).
-  - a marker present with no machine-local row -> identity() raises the
-    typed P4WorkspaceUnregistered.
-  - session_change() reads meta.json's four S3 fields, absent -> None.
-"""
 
 from __future__ import annotations
 
@@ -34,7 +22,6 @@ class TestIsP4Repo:
         assert workspace.is_p4_repo(str(tmp_path)) is True
 
     def test_marker_absent_returns_false_no_spawn(self, tmp_path):
-        # No coordinator.local.md at all.
         assert workspace.is_p4_repo(str(tmp_path)) is False
 
     def test_marker_key_absent_from_file_returns_false(self, tmp_path):
@@ -46,9 +33,6 @@ class TestIsP4Repo:
         assert workspace.is_p4_repo(str(tmp_path)) is False
 
     def test_module_never_imports_runner_at_top_level(self):
-        # D1: workspace.py never imports runner.py — a git-only process
-        # loading coordinator_core.p4.workspace must never pull in the p4
-        # spawn helper.
         assert "runner" not in vars(workspace)
 
 
@@ -58,7 +42,7 @@ class TestIdentity:
             "p4.studio/repo.port": "ssl:p4.example.com:1666",
             "p4.studio/repo.user": "agent",
             "p4.studio/repo.client": "agent-ws",
-            "p4.studio/repo.client_root": "X:/p4-workspace",  # abs-path-ok: fixture string, never resolved as a real path
+            "p4.studio/repo.client_root": "X:/p4-workspace",
         }
         monkeypatch.setattr(workspace, "registry_get", lambda key: values.get(key))
         ident = workspace.identity("studio/repo")
@@ -77,21 +61,16 @@ class TestIdentity:
         values = {
             "p4.studio/repo.port": "ssl:p4.example.com:1666",
             "p4.studio/repo.user": "agent",
-            # client, root missing
         }
         monkeypatch.setattr(workspace, "registry_get", lambda key: values.get(key))
         with pytest.raises(workspace.P4WorkspaceUnregistered):
             workspace.identity("studio/repo")
 
     def test_missing_client_root_does_not_raise(self, monkeypatch):
-        """F5 (overengineering-reviewer, integrator-applied) -- `client_root`
-        has no in-repo reader and is carried for a cross-repo consumer
-        only; its absence must never block a local p4-gated op."""
         values = {
             "p4.studio/repo.port": "ssl:p4.example.com:1666",
             "p4.studio/repo.user": "agent",
             "p4.studio/repo.client": "agent-ws",
-            # client_root deliberately absent
         }
         monkeypatch.setattr(workspace, "registry_get", lambda key: values.get(key))
         ident = workspace.identity("studio/repo")
@@ -131,9 +110,6 @@ class TestSessionChange:
         assert result["p4_base_sha"] is None
 
     def test_p4_change_written_as_string_still_coerces_to_int(self, tmp_path):
-        # session/core.py::update_meta_fields string-coerces every field it
-        # writes (D8's open cross-repo question) — the reader must tolerate
-        # a decimal-string p4_change either way.
         (tmp_path / "meta.json").write_text(
             json.dumps({"p4_change": "41"}), encoding="utf-8"
         )

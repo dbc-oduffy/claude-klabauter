@@ -1,25 +1,3 @@
-"""
-coordinator/lib/resolve-claude-klabauter/tests/test_exec_cli_no_live_tree_fallback.py
-
-Chunk C13 (docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md):
-"Close the forwarder-set gap and retire exec_cli's live-tree fallback."
-
-Pins the retirement of `exec_cli`'s C4b per-target fallback: once the
-resolved class is `resolved-engine` and *target* is absent under that
-root's `coordinator/bin/`, `exec_cli` must now fail loud (127, naming only
-the ONE resolved root actually tried) rather than silently probing the
-live working tree via `resolve_claude_klabauter_bin_dir()` and exec'ing from there.
-
-Negative-spec:
-  - Does NOT touch `resolve_claude_klabauter_bin_dir()` itself (DR-326's locator
-    axis) — see `test_dispatch_prefers_stamped_engine.py`'s own coverage of
-    that function; this file exercises `exec_cli` only.
-  - Does NOT assert anything about `resolve_claude_klabauter_root_with_class()`'s own
-    ladder (C3/C5) — that is covered by
-    `test_dispatch_prefers_stamped_engine.py`. This file's fixtures set up a
-    registry shape that ladder already resolves to `resolved-engine` and
-    then focuses purely on `exec_cli`'s post-resolution per-target gate.
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -100,10 +78,6 @@ def _resolved_engine_fixture(tmp_path, _registry, monkeypatch, live_bin_present=
 def test_missing_target_under_resolved_engine_fails_loud_no_live_probe(
     tmp_path, _registry, monkeypatch
 ):
-    """Target absent under the resolved published-engine root, but PRESENT
-    under the live tree — the exact shape C4b's fallback used to rescue.
-    C13: must now exit 127 naming only the published root, never reaching
-    for the live tree at all."""
     fixture = _resolved_engine_fixture(tmp_path, _registry, monkeypatch)
     (fixture.live_root / "coordinator" / "bin" / "only-on-live.py").write_text(
         "", encoding="utf-8"
@@ -119,9 +93,6 @@ def test_missing_target_under_resolved_engine_fails_loud_no_live_probe(
 def test_missing_target_error_names_resolved_root_only(
     tmp_path, _registry, monkeypatch, capsys
 ):
-    """The fail-loud message names the ONE resolved root actually tried and
-    does not reference a second, live-tree root — C4b's retired message
-    named both roots; C13's message names one."""
     fixture = _resolved_engine_fixture(tmp_path, _registry, monkeypatch)
 
     shim = _load_shim()
@@ -137,13 +108,6 @@ def test_missing_target_error_names_resolved_root_only(
 def test_missing_target_does_not_touch_broken_live_tree(
     tmp_path, _registry, monkeypatch, capsys
 ):
-    """Positive control proving the live-tree probe is genuinely gone, not
-    merely un-asserted: the live tree's `coordinator/bin/` has no sentinel
-    at all (would raise `ClaudeKlabauterResolutionError` if C4b's
-    `resolve_claude_klabauter_bin_dir()` fallback call still ran). C13's retired
-    fallback caught that error and folded 'unresolvable live working tree'
-    into the message; the current code must exit 127 cleanly instead,
-    proving that rung is never reached."""
     fixture = _resolved_engine_fixture(
         tmp_path, _registry, monkeypatch, live_bin_present=False
     )

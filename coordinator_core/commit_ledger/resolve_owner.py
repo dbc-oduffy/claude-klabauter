@@ -72,23 +72,10 @@ from typing import Optional, Tuple
 from coordinator_core.session import claim_index
 from coordinator_core.session import core as session_core
 
-#: The env var ``_resolve_held_handoff_for_session`` itself treats as the
-#: highest-precedence, explicit-override tier of the session-identity
-#: chain -- see ``coordinator_core.session.core.resolve_session_id``. This
-#: module scopes it, temporarily, to drive that reused resolver against a
-#: TARGET session id rather than the calling process's own identity.
 _SESSION_OVERRIDE_ENV = "COORDINATOR_SESSION_ID"
 
 
 def _resolve_target_session_id(committer_id: str, root: Path, sessions_dir: Optional[str]) -> str:
-    """AGENT HOP: translate ``committer_id`` to its owning EM session id when
-    it names a dispatched agent; otherwise ``committer_id`` is already a
-    plain session id and is returned unchanged.
-
-    Raises ``ValueError`` when ``committer_id`` names an agent directory
-    whose ``em-session-id.txt`` back-pointer is missing or unreadable -- a
-    genuinely unresolvable owner, per this module's raise contract.
-    """
     base = sessions_dir if sessions_dir is not None else session_core.sessions_dir(str(root))
     if not base:
         return committer_id
@@ -108,10 +95,6 @@ def _resolve_target_session_id(committer_id: str, root: Path, sessions_dir: Opti
 
 
 def _handoff_id_from_path(path: str) -> str:
-    """``state/handoffs/<basename>.md`` -> ``<basename>`` -- the same
-    handoff_id-is-basename-minus-``.md`` convention
-    ``commit_ledger.store``'s ``read_chain``/``_legacy_resolve_predecessor_id``
-    already assume (``root / "state" / "handoffs" / f"{handoff_id}.md"``)."""
     basename = path.rsplit("/", 1)[-1]
     if basename.endswith(".md"):
         basename = basename[: -len(".md")]
@@ -141,11 +124,6 @@ def resolve_owner_handoff_id(
 
     target_sid = _resolve_target_session_id(committer_id, root, sessions_dir)
 
-    # Local import: avoids a module-level import cycle (baton_assemble is a
-    # large package with its own broad import surface) and mirrors this
-    # repo's existing convention of importing baton_assemble internals at
-    # call time (see baton_assemble/__init__.py's own local imports inside
-    # _resolve_held_handoff_for_session).
     from coordinator_core.baton_assemble import _resolve_held_handoff_for_session
 
     prior = os.environ.get(_SESSION_OVERRIDE_ENV)

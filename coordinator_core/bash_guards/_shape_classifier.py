@@ -143,22 +143,13 @@ __all__ = [
 
 
 class Shape(str, Enum):
-    """The six ranked bash-spawn shapes this module classifies against.
-
-    Values are stable identifiers (used in test assertions and, by
-    downstream guards, in deny/advise message templates) -- do not rename
-    a value without a corresponding update in every C3/C4/C5/C9 consumer.
-    """
 
     GREP_VIA_BASH = "grep_via_bash"
     MULTI_PROBE_BANNER = "multi_probe_banner"
     HEAD_TAIL_PLUMBING = "head_tail_plumbing"
     FOR_LOOP = "for_loop"
     #: PowerShell-only -- see `_DETECTOR_TABLE`'s POWERSHELL entry (D2, C2
-    #: of pln-the-shape-classifier-reaches-a-e743e5). No bash analogue: a
-    #: bash `for`/`while` loop is source text the classifier can see ahead
     #: of the spawn, but a `ForEach-Object`/`%` PIPELINE STAGE spawns once
-    #: per input object with no bash equivalent shape. Seated here, between
     #: `FOR_LOOP` and `WHILE_READ_LOOP`, on the same "structural twin of the
     #: for-loop shape" argument `WHILE_READ_LOOP` itself was seated on --
     #: unmeasured, not measured at zero (see `SHAPE_PRECEDENCE` below).
@@ -167,11 +158,7 @@ class Shape(str, Enum):
     FIND_EXEC_XARGS = "find_exec_xargs"
 
 
-#: Fixed precedence order, highest first. See the module docstring's
 #: "PINNED CONTRACT" section for why this exists and why it must not
-#: become a per-call sort -- ``classify_command`` derives match ORDER
-#: directly from iterating this tuple, so the precedence rule cannot drift
-#: out of sync with the actual detection order.
 SHAPE_PRECEDENCE: Tuple[Shape, ...] = (
     Shape.GREP_VIA_BASH,
     Shape.MULTI_PROBE_BANNER,
@@ -182,26 +169,11 @@ SHAPE_PRECEDENCE: Tuple[Shape, ...] = (
     Shape.FIND_EXEC_XARGS,
 )
 
-#: grep-family binaries recognized for the grep-via-Bash shape. ``rg``
-#: (ripgrep) is included because it is the same habit (ad-hoc content
-#: search spawned as a Bash child) with a different binary name, not a
-#: distinct shape -- the fork-tax measurement counts the HABIT, not the
-#: literal argv[0] spelling.
 _GREP_FAMILY_BINARIES: Tuple[str, ...] = ("grep", "egrep", "fgrep", "rg")
 
-#: head/tail plumbing binaries -- see ``_detect_head_tail_plumbing``.
 _HEAD_TAIL_BINARIES: Tuple[str, ...] = ("head", "tail")
 
-#: Session-fact probe binaries this fleet's harness already knows the
 #: answer to -- the family the MULTI_PROBE_BANNER shape's own name and
-#: docstring claim to detect (``echo``/``printf`` carry the banner label
-#: itself and are handled separately in ``_is_probe_segment``; the
-#: remaining harness-known-fact probes are ``git``, ``pwd``, ``whoami``,
-#: ``date``, and ``uname`` -- the same family
-#: ``dispatch_checks._bt_probe_segment_kind`` recognizes as translatable
-#: session-fact probes for the sibling rewrite guard. Not imported from
-#: there: that module imports THIS one, and duplicating a five-name tuple
-#: is cheaper than restructuring the import graph for it.
 _SESSION_FACT_PROBE_BINARIES: Tuple[str, ...] = (
     "git",
     "pwd",
@@ -210,22 +182,11 @@ _SESSION_FACT_PROBE_BINARIES: Tuple[str, ...] = (
     "uname",
 )
 
-#: Minimum total segment count (post ``;``/``&``/``|`` split) for a
-#: banner-marked echo to count as a MULTI-probe banner rather than a
-#: single-purpose banner-plus-one-command. A bare
-#: ``echo "=== status ==="; git status`` (2 segments) is a labeled single
-#: probe, not the "N unrelated probes in one call" shape the plan
-#: describes (C4 body) -- the third segment is what turns it into the
-#: fan-out this shape targets.
 _MIN_BANNER_SEGMENTS = 3
 
 
 @dataclass(frozen=True)
 class ShapeMatch:
-    """One shape's match against a command: which shape, and the evidence
-    (the matched segment's tokens, rejoined with spaces) a deny/advise
-    message can quote directly.
-    """
 
     shape: Shape
     evidence: str
@@ -243,23 +204,17 @@ class ShapeClassification:
 
     @property
     def primary(self) -> Optional[ShapeMatch]:
-        """The highest-precedence match, or ``None`` if nothing matched."""
         return self.matches[0] if self.matches else None
 
     @property
     def residue(self) -> Tuple[ShapeMatch, ...]:
-        """Every OTHER shape this command also matches, in precedence
-        order -- never dropped, so a caller can render "also matches X, Y".
-        """
         return self.matches[1:]
 
     @property
     def matched_shapes(self) -> Tuple[Shape, ...]:
-        """Just the ``Shape`` identities of ``matches``, same order."""
         return tuple(m.shape for m in self.matches)
 
     def has_shape(self, shape: Shape) -> bool:
-        """Whether ``shape`` is among ``matches``, at any precedence."""
         return shape in self.matched_shapes
 
 
@@ -302,27 +257,10 @@ def _detect_grep_via_bash(
     return None
 
 
-#: Matches a leading `VAR=value` environment-assignment token, the same
-#: shape `env FOO=bar ...` uses for each assignment before its target
-#: binary -- see `_peel_probe_prefix`.
 _ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
 def _peel_probe_prefix(tokens: List[str]) -> List[str]:
-    """Peel a leading `sudo` token, or a leading `env` token plus its run of
-    `VAR=value` assignment tokens, off `tokens` before `_is_probe_segment`
-    tests the head binary (Review: coordinator:code-reviewer, Finding 2) --
-    `sudo git status` / `env FOO=bar git status` as a top-level segment is
-    still a genuine session-fact re-derivation, not a different shape,
-    despite the wrapper prefix disqualifying a bare head-binary check.
-
-    Deliberately narrow -- exactly one `sudo` token, or `env` plus ONLY
-    `VAR=value`-shaped tokens, stops at anything else (a flag, a
-    non-assignment operand). This is NOT a general command-prefix parser:
-    it does not peel `command`/`time`/`exec`/`nice`/`nohup` or chain
-    multiple wrappers (`sudo env FOO=bar ...`) -- those are out of scope
-    for this narrowly-named gap.
-    """
     if not tokens:
         return tokens
     head = tokens[0]
@@ -426,12 +364,6 @@ def _detect_multi_probe_banner(
 def _detect_head_tail_plumbing(
     segments: List[Tuple[List[str], bool]]
 ) -> Optional[ShapeMatch]:
-    """Match if a ``head``/``tail`` segment is fed by a pipe
-    (``pipe_before`` True) -- ``cmd | head`` is the plumbing shape (using
-    a subprocess to truncate output that a paged read could have avoided);
-    a bare, un-piped ``head file.txt`` is an ordinary bounded read and is
-    deliberately NOT matched here.
-    """
     for tokens, pipe_before in segments:
         if not tokens:
             continue
@@ -443,18 +375,6 @@ def _detect_head_tail_plumbing(
 
 
 def _detect_for_loop(tokens: List[str]) -> Optional[ShapeMatch]:
-    """Match if the command's OWN first token (not a token nested inside a
-    quoted argument elsewhere -- ``tokenize_full_command`` already
-    resolved quoting, so a quoted ``"for x in y; do z; done"`` string
-    yields a single opaque token, never a literal ``for`` at position 0
-    unless the command itself starts with an unquoted ``for``) is the
-    shell keyword ``for``, and the token stream also contains both ``do``
-    and ``done`` -- the minimal signature of a POSIX ``for ... do ...
-    done`` loop. Plain equality against a shell keyword, not
-    ``token_matches_binary`` -- ``for``/``do``/``done`` are shell
-    grammar, not executables, so the Windows-launcher-suffix/path-
-    separator normalization that function exists for does not apply.
-    """
     if not tokens:
         return None
     if tokens[0] != "for":
@@ -468,36 +388,6 @@ def _detect_for_loop(tokens: List[str]) -> Optional[ShapeMatch]:
 def _detect_while_read_loop(
     segments: List[Tuple[List[str], bool]], tokens: List[str]
 ) -> Optional[ShapeMatch]:
-    """Match if some segment's OWN first token is the shell keyword
-    ``while`` and ``read`` appears anywhere else in that same segment's
-    tokens, AND both ``do`` and ``done`` appear in the FULL token stream --
-    the minimal signature of a ``while read`` fan-out loop
-    (``... | while read f; do ...; done``, ``while IFS= read -r f; do
-    ...; done < f``).
-
-    Segment-scoped for the ``while``/``read`` pair because the pipe-fed
-    spelling (``cat f | while read x; do ...; done``) puts ``while`` at a
-    segment head, not the command's own first token the way ``for`` always
-    is for `_detect_for_loop` -- segments split on ``;``/``&``/``|``, so
-    matching against every segment (not just ``tokens[0]``) is required to
-    see the piped spelling at all. ``do``/``done`` are checked against the
-    FULL stream instead, because the segment split on ``;`` ends the
-    ``while`` segment before ``do`` ever appears in it (mirrors
-    `_detect_for_loop`'s own full-stream `do`/`done` check).
-
-    ``read`` is required (not just ``while``) so a poll loop
-    (``while true; do ...; done``) -- a different shape with a different
-    remedy -- does not classify; and ``read`` is looked for anywhere in
-    ``tokens[1:]`` of the segment (not at a fixed position) so the
-    canonical safe spelling ``while IFS= read -r f``, which puts an
-    assignment between ``while`` and ``read``, still matches.
-
-    Plain equality against the shell keywords/builtin (``while``, ``read``,
-    ``do``, ``done``), never `token_matches_binary` -- mirrors
-    `_detect_for_loop`'s own reasoning: these are shell grammar and a
-    builtin, not executables, so the Windows-launcher-suffix/path-separator
-    normalization `token_matches_binary` exists for does not apply.
-    """
     if "do" not in tokens or "done" not in tokens:
         return None
     for seg_tokens, _pipe_before in segments:
@@ -514,10 +404,6 @@ def _detect_while_read_loop(
 def _detect_find_exec_xargs(
     segments: List[Tuple[List[str], bool]]
 ) -> Optional[ShapeMatch]:
-    """Match if any segment is a ``find`` invocation carrying a literal
-    ``-exec`` argument, or any segment invokes ``xargs`` (bare or
-    pipe-fed, e.g. ``find . -name '*.log' | xargs rm``).
-    """
     for tokens, _pipe_before in segments:
         if not tokens:
             continue
@@ -530,40 +416,11 @@ def _detect_find_exec_xargs(
     return None
 
 
-# ---------------------------------------------------------------------------
-# PowerShell-only detectors (D2, D5). Every predicate below is authored
-# against PRINTED `_powershell_tokens` output, never assumed isomorphic to
-# the bash detectors above -- see each function's own docstring for the
-# measured tokens it was written against. D5's binding fact: a NUMERIC flag
 # splits (`git log -1` -> `['git', 'log', '-', '1']`) while an IDENTIFIER
-# flag survives intact (`-Recurse`, `-l`) -- no predicate below matches a
-# numeric flag token.
-# ---------------------------------------------------------------------------
 
-#: PowerShell banner-cmdlet vocabulary -- the pwsh analogue of bash's
-#: ``echo``/``printf`` (handled inline in `_is_probe_segment`'s bash
-#: version). Matched via `token_matches_binary` (case-insensitive, cmdlet
-#: names carry no path separator so this reduces to a case-fold).
-#:
-#: ``echo`` is here because PowerShell ships it as a live ALIAS of
-#: ``Write-Output``, exactly as it ships ``%`` for ``ForEach-Object``
 #: (`_PWSH_FOREACH_OBJECT_ALIASES` below applies the same reasoning). D2
-#: phrases this vocabulary as "``Write-Host``/``Write-Output``, not
-#: ``echo``/``printf``" -- that contrast is drawn against BASH's builtins,
-#: and reading it as a prohibition on the pwsh alias re-opens the very
-#: escape hatch this dialect leg exists to close: ``echo '=== x ==='; git
-#: status; git log -1; pwd`` runs under the PowerShell tool and spawns per
-#: probe exactly as its ``Write-Host`` spelling does. ``printf`` is
-#: correctly absent -- PowerShell ships no such alias, so admitting it
-#: would match a name that cannot run.
 _PWSH_BANNER_BINARIES: Tuple[str, ...] = ("write-host", "write-output", "echo")
 
-#: `ForEach-Object` cmdlet identity plus its two live aliases -- the pwsh
-#: pipeline-stage spelling of per-item iteration. Deliberately does NOT
-#: include the bare statement keyword `foreach` when followed by `(` --
-#: that is `_detect_for_loop_pwsh`'s grammar (a different statement, per
-#: D2's row-14-superseding note), disambiguated below by requiring
-#: `pipe_before` rather than by inspecting the token after the alias.
 _PWSH_FOREACH_OBJECT_ALIASES: Tuple[str, ...] = ("foreach-object", "foreach", "%")
 
 
@@ -655,8 +512,6 @@ def _detect_for_loop_pwsh(tokens: List[str]) -> Optional[ShapeMatch]:
         return None
     head = tokens[0].lower()
 
-    # `foreach ($x in $y) { ... }` -- the statement grammar, distinguished
-    # from the pipeline alias by the parenthesised `in` clause.
     if head == "foreach":
         if len(tokens) < 2 or tokens[1] != "(":
             return None
@@ -665,37 +520,17 @@ def _detect_for_loop_pwsh(tokens: List[str]) -> Optional[ShapeMatch]:
         preview = tokens[: min(len(tokens), 12)]
         return ShapeMatch(Shape.FOR_LOOP, evidence=" ".join(preview))
 
-    # The other three PowerShell loop grammars, added 2026-09-01. Each runs
     # its brace block once per iteration, which is the fan-out `FOR_LOOP`
     # names -- so they classify as `FOR_LOOP` rather than taking a new
     # `SHAPE_PRECEDENCE` seat. Precedent for the naming is one branch up:
     # `foreach` is not a `for` either, and has classified `FOR_LOOP` since
-    # this detector existed. The consumer leg is advisory-only on every
-    # platform (`guard_plumbing_and_loops`' negative-spec), so widening what
-    # classifies here widens what gets ADVISED, never what gets denied.
-    #
-    # Measured before the change: `for ($i=0; $i -lt 10; $i++) { git log -1 }`,
-    # `while ($true) { git log -1 }` and `do { git log -1 } while ($i -lt 3)`
-    # all returned NO SHAPES, while `foreach` and the `%` pipeline alias
-    # classified. Raised by doe-claude-aa, who found the C-style `for` from
-    # their own tree and could not tell intent from omission -- correctly,
-    # because no intent was recorded. This module's own docstring sets that
-    # standard: an absence with no stated reason reads as an oversight.
-    #
     # `WHILE_READ_LOOP` stays absent from the POWERSHELL table entry and this
-    # does not disturb it. That absence is about the bash `while read` IDIOM,
-    # which pwsh has no analogue for. PowerShell having no `while read` idiom
-    # never meant it has no `while` LOOP -- it has one, and it fans out. The
-    # two are separate facts and only the first was ever documented.
     if head in ("for", "while"):
         if len(tokens) < 2 or tokens[1] != "(":
             return None
         preview = tokens[: min(len(tokens), 12)]
         return ShapeMatch(Shape.FOR_LOOP, evidence=" ".join(preview))
 
-    # `do { ... } while (...)` / `do { ... } until (...)` -- the trailing
-    # condition form. The block precedes the keyword here, so the head test
-    # is `do` and the loop keyword is looked for after the closing brace.
     if head == "do":
         if not any(tok.lower() in ("while", "until") for tok in tokens):
             return None
@@ -705,22 +540,7 @@ def _detect_for_loop_pwsh(tokens: List[str]) -> Optional[ShapeMatch]:
     return None
 
 
-#: Approved-verb prefix set for the in-process-cmdlet exclusion
-#: (`_is_pwsh_inprocess_head`, Finding 2 fix). PowerShell cmdlets run
-#: in-process by construction -- a `Verb-Noun` head matching one of these
-#: approved verbs is excluded from `_block_has_native_call`'s call-head
-#: test, not because D3 permits hand-listing cmdlets as a SHAPE signal
-#: (it doesn't -- this list never determines a MATCH, only rules out a
-#: false one) but because using cmdlet identity to EXCLUDE a false
-#: positive serves D3's goal (no confident-wrong verdict) rather than
-#: violating it.
-#:
-#: Deliberately excludes `Start` and `Invoke` -- the carve-out is this
 #: omission itself, reasoned at `_PWSH_CMDLET_VERB_PATTERN` below; there
-#: is no separate constant naming it. Anchored on this
-#: specific verb list, not a bare "contains a hyphen" check, so a
-#: hyphenated native executable (`docker-compose`, `git-lfs`) still fails
-#: the match and is correctly treated as a native call.
 _PWSH_APPROVED_VERBS: Tuple[str, ...] = (
     "Get", "Set", "New", "Remove", "Write", "Select", "Where", "ForEach",
     "Out", "Format", "Measure", "Sort", "Group", "Compare", "Test", "Add",
@@ -729,20 +549,12 @@ _PWSH_APPROVED_VERBS: Tuple[str, ...] = (
     "Pop", "Enter", "Exit",
 )
 
-#: `Start-Process`, `Invoke-Expression`, `Invoke-Command`, `Invoke-Item`
-#: genuinely spawn a process, so `Start`/`Invoke` are deliberately absent
 #: from `_PWSH_APPROVED_VERBS` above: those two verbs are semantically
-#: the process-starting ones, and a `Start-`/`Invoke-` head must keep
-#: matching as a native call rather than being excluded by this rule.
 _PWSH_CMDLET_VERB_PATTERN = re.compile(
     r"^(?:" + "|".join(_PWSH_APPROVED_VERBS) + r")-\w+$",
     re.IGNORECASE,
 )
 
-#: Known in-process cmdlet ALIASES -- these fork nothing on the
-#: PowerShell leg (unlike a same-named bash builtin/binary), so a block
-#: sub-segment headed by one of these is excluded from
-#: `_block_has_native_call`'s call-head test on the same D3-serving
 #: grounds as `_PWSH_CMDLET_VERB_PATTERN`.
 _PWSH_INPROCESS_ALIASES: Tuple[str, ...] = (
     "echo", "write", "select", "sls", "where", "?", "%",
@@ -868,41 +680,17 @@ def _detect_pipeline_foreach_object(
     return None
 
 
-#: One dialect table entry's detector shape: given the FULL token stream
-#: and the segmented (``;``/``&``/``|``-split) view of it, return a match or
-#: ``None``. A uniform two-argument signature so the table can hold every
-#: detector interchangeably even though the underlying detectors disagree
-#: among themselves about which view they need (some read `segments` only,
-#: `_detect_for_loop` reads `tokens` only, `_detect_while_read_loop` reads
-#: both) -- the adapters below close that gap with a thin lambda apiece
-#: rather than changing any detector's own signature, which would be a
-#: behaviour-risking edit to logic D4 requires stay byte-for-byte frozen.
 Detector = Callable[[List[str], List[Tuple[List[str], bool]]], Optional[ShapeMatch]]
 
-#: Dialect-indexed detector table (D4): a dialect's shape set is DATA, not a
-#: branch inside `classify_command`'s walk. BASH's entry reproduces
 #: `SHAPE_PRECEDENCE`'s walk exactly minus `PIPELINE_FOREACH_OBJECT` (bash
-#: has no such shape) -- same six shapes, same order, same detector
-#: functions, adapted only to the uniform `Detector` signature above.
-#:
 #: POWERSHELL's entry (D2, C2 of pln-the-shape-classifier-reaches-a-e743e5):
 #: six of the seven `SHAPE_PRECEDENCE` shapes, in `SHAPE_PRECEDENCE` order.
 #: `GREP_VIA_BASH`/`HEAD_TAIL_PLUMBING`/`FIND_EXEC_XARGS` reuse their bash
 #: detector functions UNCHANGED -- measurement (D5, the plan's own
-#: pre-flight sizing) confirmed all three already key on argv[0] identity
-#: at a segment head, which pwsh tokens satisfy just as well as posix ones;
-#: forking them would be behaviour-identical code with no purpose.
 #: `MULTI_PROBE_BANNER`/`FOR_LOOP` use forked pwsh-vocabulary predicates
-#: (`_detect_multi_probe_banner_pwsh`, `_detect_for_loop_pwsh`) --
-#: `Write-Host`/`Write-Output` is not `echo`/`printf`, and `foreach (...) {}`
-#: is not `for...do...done` (D2's row-14-superseding note).
 #: `PIPELINE_FOREACH_OBJECT` is the new member (D2), seated here immediately
 #: after `FOR_LOOP` per `SHAPE_PRECEDENCE`.
-#:
 #: `WHILE_READ_LOOP` is DELIBERATELY ABSENT from this tuple (AC8) --
-#: PowerShell has no `while read` idiom to detect. This is the stated
-#: reason an absence with no comment would otherwise read as an oversight
-#: to the next author, not silence to be rediscovered.
 _DETECTOR_TABLE: Dict[Dialect, Tuple[Tuple[Shape, Detector], ...]] = {
     Dialect.BASH: (
         (
@@ -959,13 +747,6 @@ _DETECTOR_TABLE: Dict[Dialect, Tuple[Tuple[Shape, Detector], ...]] = {
     ),
 }
 
-#: `guard_name` this module's own tokenization step records SILENT under
-#: (via `_dialect.tokenize_command` / `record_silent`) -- `classify_command`
-#: has no `guard_name` parameter of its own (AC1's signature is fixed), so a
-#: stable module-level identifier stands in for "which guard called this"
-#: on the out-of-band SILENT channel. Inert in production either way: that
-#: channel is a no-op unless a caller opens `_verdict.collecting()`, which
-#: `dispatch.py` never does (see `_verdict.py`'s own docstring).
 _GUARD_NAME = "shape_classifier.classify_command"
 
 

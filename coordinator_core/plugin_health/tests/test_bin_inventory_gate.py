@@ -1,13 +1,3 @@
-"""
-coordinator_core.plugin_health.tests.test_bin_inventory_gate
-
-Coverage for the un-recorded-disappearance gate (see bin_inventory_gate.py's
-own module docstring for the "moved is answerable, gone with no ledger
-entry is not" gap this closes).
-
-Spec backlink: cross-repo/archive/2026-07-26-example-cockpit-repo-em-guard-title-
-false-positive-and-validator-rehoming.md Finding 2
-"""
 
 from __future__ import annotations
 
@@ -166,25 +156,12 @@ def test_gate_fails_loud_on_malformed_inventory_json(tmp_path: Path) -> None:
 
 
 def test_gate_fails_loud_when_agent_bin_empty_scan(tmp_path: Path) -> None:
-    """An explicit `agent_bin` override that resolves but scans empty is the
-    empty-live-scan failure mode -- covered directly by
-    `test_gate_fails_loud_on_empty_live_scan` below. This test instead
-    exercises the sibling precondition: `_resolve_claude_klabauter_agent_bin()`
-    itself returning None (an unresolvable claude-klabauter root or an absent
-    `coordinator/bin/`) via the real, no-override resolution path, which
-    `check_bin_inventory_gate()` must refuse to treat as a clean skip."""
     inventory_path = tmp_path / "inventory.json"
     _write_inventory(inventory_path, ["still-here"])
     ledger_path = tmp_path / "ledger.json"
     _write_ledger(ledger_path, [])
 
-    # coordinator_claude_klabauter_root() resolves this checkout's own real root in
-    # this test process (there is no way to force it to fail without
-    # mutating process-wide env/registry state a parallel test run may also
     # depend on), so this asserts the CONTRACT via the explicit-override
-    # path instead: a directory that exists but is not a real
-    # coordinator/bin/ (empty) must still refuse to report green, exactly
-    # like an unresolvable one would.
     missing_dir = tmp_path / "does-not-exist"
     result = big.check_bin_inventory_gate(
         agent_bin=missing_dir, inventory_path=inventory_path, ledger_path=ledger_path
@@ -208,11 +185,6 @@ def test_gate_fails_loud_on_empty_live_scan(tmp_path: Path) -> None:
 
 
 def test_extra_oracle_dirs_widen_live_scan(tmp_path: Path) -> None:
-    """2026-07-27 widening (see bin_inventory_gate.py's own spec backlink):
-    an inventory entry whose real oracle lives in `<repo-root>/bin/` or
-    `coordinator/lib/`, not `coordinator/bin/`, must be treated as live --
-    the same shared `plugin_health.oracle_surface` surface `fleet_
-    reachability.py` already scans."""
     agent_bin = _make_agent_bin(tmp_path, ["still-here"])
     repo_root_bin = tmp_path / "bin"
     coordinator_lib = tmp_path / "coordinator" / "lib"
@@ -237,13 +209,6 @@ def test_extra_oracle_dirs_widen_live_scan(tmp_path: Path) -> None:
 
 
 def test_extra_oracle_dirs_not_auto_populated_when_agent_bin_overridden(tmp_path: Path) -> None:
-    """Negative-spec companion to the test above, mirroring fleet_
-    reachability's own isolation contract: an explicit `agent_bin` override
-    with NO `extra_oracle_dirs` override must NOT silently widen to this
-    machine's real `<repo-root>/bin/`/`coordinator/lib/` contents -- every
-    pre-existing fixture in this file relies on that isolation. An
-    inventory entry present only in a sibling dir the caller did not pass
-    stays a genuine disappearance."""
     agent_bin = _make_agent_bin(tmp_path, ["still-here"])
     inventory_path = tmp_path / "inventory.json"
     _write_inventory(inventory_path, ["still-here", "claude-klabauter-doctor-probe"])
@@ -258,10 +223,6 @@ def test_extra_oracle_dirs_not_auto_populated_when_agent_bin_overridden(tmp_path
 
 
 def test_generated_windows_siblings_not_inventoried_as_independent_oracles(tmp_path: Path) -> None:
-    """A `.cmd`/`.ps1` twin must never surface as its own live name across
-    ANY of the three scanned directories -- pins the widened live scan
-    against the same regression class `oracle_surface`'s own unit tests
-    cover, at the gate's own diff boundary."""
     agent_bin = _make_agent_bin(tmp_path, ["still-here"])
     (agent_bin / "still-here.cmd").write_text("@echo off\n", encoding="utf-8")
     repo_root_bin = tmp_path / "bin"
@@ -338,19 +299,7 @@ def test_external_old_repo_entry_does_not_dispose_future_disappearance(tmp_path:
 
 
 @pytest.mark.real_home  # live-tree oracle: resolves the real CLAUDE_KLABAUTER_ROOT via the machine-local
-# registry, which the suite-root `_quarantine_real_home` autouse fixture would otherwise
-# route into an empty per-test HOME -- see that fixture's own docstring for the opt-out
-# contract. Deliberately NOT a skip-on-unresolvable test the way
-# `test_relocation_ledger.py::test_real_tracked_ledger_passes_integrity` is: THIS gate's
-# whole contract is "never pass vacuously" (module docstring), so silently skipping the
-# one test that exercises the real tracked inventory against the real tree would be
-# exactly the vacuous-pass this module exists to refuse elsewhere.
 def test_real_tracked_inventory_passes_gate() -> None:
-    """The tracked `docs/install/bin-inventory.json` must resolve clean
-    against the real, live claude-klabauter tree -- no tmp_path fixture. This is the
-    delete-time gate itself: a future disappearance with no ledger entry
-    fails THIS test, in the normal pytest path (no git hook -- see module
-    docstring)."""
     result = big.check_bin_inventory_gate()
     assert result.ok, result.lines + result.disappeared
 
@@ -358,16 +307,6 @@ def test_real_tracked_inventory_passes_gate() -> None:
 def test_gate_matches_a_ledger_entry_for_an_inventory_name_that_kept_its_extension(
     tmp_path: Path,
 ) -> None:
-    """The stem comparison must normalise BOTH sides.
-
-    Extensions were stripped from the ledger `old_path` only, on the belief that
-    inventory names always arrive `.py`-stripped. Two real entries
-    (`detect-hardware.py`, `spawn-hidden.sh`) carry theirs verbatim, so no ledger
-    entry could ever dispose of them: the gate demanded a record it would then
-    refuse to see, and the only way to pass was to write an `old_path` that
-    misnamed the file. Every other test here uses an extension-less inventory
-    name, which is why the asymmetry survived.
-    """
     agent_bin = _make_agent_bin(tmp_path, ["still-here"])
     inventory_path = tmp_path / "inventory.json"
     _write_inventory(inventory_path, ["still-here", "gone-tool.py"])
@@ -385,17 +324,6 @@ def test_gate_matches_a_ledger_entry_for_an_inventory_name_that_kept_its_extensi
 def test_gate_does_not_report_disappeared_for_a_live_file_whose_inventory_name_kept_its_extension(
     tmp_path: Path,
 ) -> None:
-    """Root-cause regression for the `detect-hardware.py`/`spawn-hidden.sh`
-    fabricated-ledger-entry incident: `live_oracle_names()` returns `.py`-
-    stripped stems, but an inventory entry may carry its extension verbatim
-    (a legacy artifact of a `.sh`-era name). The exact-string `name in
-    live_names` membership check in the `disappeared` loop must not be the
-    ONLY thing standing between a genuinely-live file and a false
-    "disappeared" report -- normalizing only the disposed-stems comparison
-    (as the ledger-side fix did) still misses this case with NO ledger
-    entry at all, which is exactly what motivated fabricating one. This
-    test carries no ledger entries: the gate must report the file live via
-    the membership check itself, not via a disposal record."""
     agent_bin = _make_agent_bin(tmp_path, ["still-here"])
     inventory_path = tmp_path / "inventory.json"
     _write_inventory(inventory_path, ["still-here.py"])
@@ -411,8 +339,6 @@ def test_gate_does_not_report_disappeared_for_a_live_file_whose_inventory_name_k
 
 
 def test_gate_matches_a_non_py_extension_on_the_inventory_side(tmp_path: Path) -> None:
-    """`.sh` is in the known-extension set for the same reason `.py` is --
-    `spawn-hidden.sh` is a real inventory entry carrying one."""
     agent_bin = _make_agent_bin(tmp_path, ["still-here"])
     inventory_path = tmp_path / "inventory.json"
     _write_inventory(inventory_path, ["still-here", "gone-tool.sh"])

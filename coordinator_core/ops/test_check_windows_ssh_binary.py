@@ -1,14 +1,3 @@
-"""Characterization tests for coordinator_core.ops.check_windows_ssh_binary.
-
-Mocks OS/git/filesystem probing throughout — none of these tests depend on
-the host actually being Windows or having a real ssh binary/git remote
-configured.
-
-Port of: check-windows-ssh-binary.sh (DoE 290997c7, 2026-07-22)
-
-Spec backlink: DR-079 tool 8 assignment; source memo
-cross-repo/inbox/2026-07-21-claude-central-em-dr079-doe-dispositions-and-install-health-defect.md
-"""
 from __future__ import annotations
 
 import subprocess
@@ -24,8 +13,6 @@ from coordinator_core.ops.check_windows_ssh_binary import (
     main,
 )
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -33,7 +20,6 @@ pytestmark = [
 
 
 def _fake_run_git(mapping):
-    """Build a _run_git stand-in keyed on the args tuple."""
 
     def _run(args):
         return mapping.get(tuple(args))
@@ -41,15 +27,8 @@ def _fake_run_git(mapping):
     return _run
 
 
-# ---------------------------------------------------------------------------
-# main() OS gate
-# ---------------------------------------------------------------------------
-
-
 def test_main_noop_off_windows(monkeypatch):
     monkeypatch.setattr(mod, "_is_windows", lambda: False)
-    # If the OS gate didn't short-circuit, this would blow up — no git
-    # remote/ssh mocking is installed.
     assert main([]) == 0
 
 
@@ -70,12 +49,6 @@ def test_main_never_exits_nonzero_even_on_ambiguous_warn(monkeypatch, capsys):
 
 
 def test_main_survives_unexpected_exception_from_resolve(monkeypatch, capsys):
-    # Pins the "unexpected internal
-    # exception still returns 0" contract that Finding 1's guard now
-    # enforces; UnicodeDecodeError is the concrete real-world trigger
-    # (non-UTF-8 Windows codepage decoding subprocess output) but any
-    # exception must be absorbed here, so a generic RuntimeError suffices
-    # to characterize the guard.
     monkeypatch.setattr(mod, "_is_windows", lambda: True)
     monkeypatch.setattr(mod, "_has_ssh_remote", lambda: True)
 
@@ -100,11 +73,6 @@ def test_main_idempotent(monkeypatch):
     assert main([]) == 0
 
 
-# ---------------------------------------------------------------------------
-# _has_ssh_remote
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "url,expected",
     [
@@ -124,11 +92,6 @@ def test_has_ssh_remote_git_failure_treated_as_no_remote(monkeypatch):
     assert _has_ssh_remote() is False
 
 
-# ---------------------------------------------------------------------------
-# _first_token
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "value,expected",
     [
@@ -140,11 +103,6 @@ def test_has_ssh_remote_git_failure_treated_as_no_remote(monkeypatch):
 )
 def test_first_token(value, expected):
     assert _first_token(value) == expected
-
-
-# ---------------------------------------------------------------------------
-# _resolve_ssh_binary — precedence order
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_prefers_git_ssh_command_env(monkeypatch):
@@ -197,11 +155,6 @@ def test_resolve_nothing_available(monkeypatch):
     assert source == "PATH"
 
 
-# ---------------------------------------------------------------------------
-# _classify_and_warn — PASS (Win32-OpenSSH)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "resolved",
     [
@@ -219,15 +172,9 @@ def test_classify_pass_win32_openssh_silent(resolved, capsys):
 
 
 def test_classify_pass_single_char_drive_pattern(capsys):
-    # /?/windows/system32/openssh/ssh.exe pattern — single-char segment.
     _classify_and_warn("/c/windows/system32/openssh/ssh.exe", "PATH")
     captured = capsys.readouterr()
     assert captured.err == ""
-
-
-# ---------------------------------------------------------------------------
-# _classify_and_warn — unresolvable
-# ---------------------------------------------------------------------------
 
 
 def test_classify_unresolvable_warns(capsys):
@@ -237,11 +184,6 @@ def test_classify_unresolvable_warns(capsys):
     assert "core.sshCommand" in captured.err
 
 
-# ---------------------------------------------------------------------------
-# _classify_and_warn — recognized MSYS shapes
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "resolved",
     [
@@ -249,9 +191,6 @@ def test_classify_unresolvable_warns(capsys):
         "C:/Program Files/Git/usr/bin/ssh",
         r"C:\Users\me\AppData\Local\GitHubDesktop\app\resources\app\git\usr\bin\ssh.exe",
         "C:/Program Files (x86)/Microsoft Visual Studio/2019/Team Explorer/Git/usr/bin/ssh.exe",
-        # The no-space "teamexplorer"
-        # pattern is distinct from "team explorer" (above) and had no
-        # dedicated realistic-path test.
         r"C:\Program Files (x86)\Microsoft Visual Studio\2019\TeamExplorer\Git\usr\bin\ssh.exe",
         "C:/tools/cwrsync/bin/ssh.exe",
         r"C:\Users\me\AppData\Local\GitHubDesktop\app\resources\app\git\mingit\usr\bin\ssh.exe",
@@ -265,21 +204,11 @@ def test_classify_msys_shapes_warn(resolved, capsys):
     assert "GIT_SSH_COMMAND" in captured.err
 
 
-# ---------------------------------------------------------------------------
-# _classify_and_warn — resolved path missing on disk
-# ---------------------------------------------------------------------------
-
-
 def test_classify_missing_on_disk_warns(monkeypatch, capsys):
     monkeypatch.setattr(mod.os.path, "exists", lambda path: False)
     _classify_and_warn("C:/some/custom/ssh.exe", "core.sshCommand")
     captured = capsys.readouterr()
     assert "does not exist on disk" in captured.err
-
-
-# ---------------------------------------------------------------------------
-# _classify_and_warn — ambiguous (exists, unrecognized shape)
-# ---------------------------------------------------------------------------
 
 
 def test_classify_ambiguous_existing_binary_warns(monkeypatch, capsys):
@@ -290,11 +219,6 @@ def test_classify_ambiguous_existing_binary_warns(monkeypatch, capsys):
     assert "ambiguous" in captured.err
 
 
-# ---------------------------------------------------------------------------
-# Idempotency of classification itself
-# ---------------------------------------------------------------------------
-
-
 def test_classify_idempotent_same_output_each_call(capsys):
     _classify_and_warn("C:/Program Files/Git/usr/bin/ssh.exe", "PATH")
     first = capsys.readouterr().err
@@ -302,11 +226,6 @@ def test_classify_idempotent_same_output_each_call(capsys):
     second = capsys.readouterr().err
     assert first == second
     assert "MSYS ssh.exe" in first
-
-
-# ---------------------------------------------------------------------------
-# _run_git — subprocess plumbing
-# ---------------------------------------------------------------------------
 
 
 def test_run_git_returns_none_on_missing_binary(monkeypatch):

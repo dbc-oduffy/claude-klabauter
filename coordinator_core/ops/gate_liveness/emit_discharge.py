@@ -51,16 +51,9 @@ from coordinator_core.frontmatter.schema_validate import (
 )
 from coordinator_core.ops.fleet._memo_compose import _compose_memo, _render_extra_field
 
-#: The SAME two-member enum as the vendored plan-tasks.schema.json 1.10.0's
-#: `external_gate[].closure_key.kind` (and cross-repo-memo.schema.json
-#: 1.7.0's `discharges.closure_key.kind`, coordinator_core.contract.
 #: emit_memo_schema._DISCHARGES_PROPERTY). Not re-derived from either
-#: schema module at import time (no schema-module dependency belongs in a
-#: plain composer) — kept as a literal tuple here, deliberately identical,
-#: with this comment as the drift tripwire for a human reader.
 CLOSURE_KEY_KINDS = ("deliverable", "memo-thread")
 
-#: `format: date` per cross-repo-memo.schema.json's `discharges.landed_at`.
 _DATE_RE_SOURCE = r"^\d{4}-\d{2}-\d{2}$"
 
 import re as _re
@@ -90,15 +83,6 @@ def validate_closure_key(closure_key: Any) -> Optional[str]:
 
 
 def validate_discharge_evidence(evidence: Any) -> Optional[str]:
-    """Return an error string, or None if `evidence` is well-formed.
-
-    Reuses `realized_by`'s validated shape by constructing a synthetic
-    frontmatter dict that trips `_memo_cf_actioned_decision_requires_
-    realized_by`'s well-formedness branch (status=actioned,
-    decision=accepted, realized_by=evidence) and reading its verdict —
-    the existing validator does the work; this function does not
-    re-implement the sentinel/path/SHA regex.
-    """
     if not isinstance(evidence, str):
         return f"evidence must be a string, got {type(evidence).__name__}"
     synthetic_fm = {"status": "actioned", "decision": "accepted", "realized_by": evidence}
@@ -118,13 +102,6 @@ def validate_landed_at(landed_at: Any) -> Optional[str]:
 
 
 def validate_discharges_block(closure_key: Any, evidence: Any, landed_at: Any) -> list[str]:
-    """Validate the whole `{closure_key, evidence, landed_at}` triple.
-
-    Returns a list of error strings; empty list = valid. Presence-triggered
-    completeness (per the schema's own description): this function is only
-    ever called when a caller has decided to emit a discharge — there is no
-    "omit the whole block" branch here, that decision belongs to the caller.
-    """
     errors: list[str] = []
     for message in (
         validate_closure_key(closure_key),
@@ -137,10 +114,6 @@ def validate_discharges_block(closure_key: Any, evidence: Any, landed_at: Any) -
 
 
 def render_discharges_block(closure_key: dict, evidence: str, landed_at: str) -> str:
-    """Render the `discharges:` frontmatter fragment via the existing
-    `_render_extra_field` nested-mapping renderer (memo_send.py) — never a
-    hand-rolled YAML string, so `scoped_to`-shaped nested mappings and this
-    one share exactly one rendering path."""
     return _render_extra_field(
         "discharges",
         {
@@ -170,26 +143,6 @@ def emit_discharge(
     space: Optional[str] = None,
     sent_by: Optional[str] = None,
 ) -> str:
-    """Compose a schema-valid cross-repo memo document carrying a
-    `discharges:` block.
-
-    Validates `{closure_key, evidence, landed_at}` first (raises
-    `ValueError` naming every failing sub-field, never a partial write) and
-    otherwise delegates every other frontmatter concern to
-    `memo_send._compose_memo` — this function does not re-implement
-    required-field self-validation, summary derivation, or YAML quoting.
-
-    The `discharges` fragment is inserted into the composed frontmatter
-    immediately before the closing `---` delimiter (after any of
-    `_compose_memo`'s own optional trailing fields — `supersedes`, `space`,
-    `campaign_id`, `in_reply_to`, `sent_by`, `scoped_to`), via a single
-    textual split on `_compose_memo`'s documented one-and-only `"\\n---\\n"`
-    frontmatter-closing marker.
-
-    Does not write a file and does not send — see module docstring's Scope
-    note. The returned string is a composed memo document ready for a
-    caller to persist through the existing `memo.send` delivery path.
-    """
     errors = validate_discharges_block(closure_key, evidence, landed_at)
     if errors:
         raise ValueError(

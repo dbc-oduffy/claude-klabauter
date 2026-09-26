@@ -54,27 +54,19 @@ from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
 
-# Vendored sizing-object schema path — own local copy per this package's
 # established per-module convention (see sizing_decline._SIZING_SCHEMA_PATH).
 _SIZING_SCHEMA_PATH: Path = (
     Path(__file__).parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
 )
 
-#: Where a resolving artifact may live. Wider than `sizing.decline`'s single
-#: `docs/decisions/` because `surfaced_to_pm`'s own description names three
-#: resolving artifacts: a decision record, a PM ruling, a downstream plan.
 _RESOLVER_ROOTS = ("docs/decisions", "docs/plans", "state")
 
-#: `decided_on` is the object's own required key, never a resolution key.
 _RESERVED_KEYS = frozenset({"decided_on"})
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _validate_sizing_fm(fm_text: str) -> list:
-    """Parse fm_text as whole-document YAML and validate against the sizing-object
-    schema. Mirrors sizing_decline._validate_sizing_fm's contract exactly.
-    """
     try:
         fm_dict = yaml.safe_load(fm_text) or {}
     except Exception as exc:  # noqa: BLE001
@@ -83,27 +75,12 @@ def _validate_sizing_fm(fm_text: str) -> list:
 
 
 def derive_key(item: str) -> str:
-    """A stable `pm_resolution` key for a surfaced item's text.
-
-    `pm_resolution`'s keys are free-form by schema ("keyed by what it resolved"),
-    which leaves nothing joining a resolution back to the item it answers. Deriving
-    the key from the item's own text is that join, and deriving it here rather than
-    asking the caller keeps it the same key on a re-run.
-    """
     words = re.findall(r"[a-z0-9]+", item.lower())
     key = "_".join(words[:6])[:48].strip("_")
     return key or "surfaced_item"
 
 
 def _render_pm_resolution(mapping: dict) -> str:
-    """Serialize a `pm_resolution` mapping as an indented YAML block.
-
-    The whole block is re-rendered rather than line-patched: its values are
-    PM-authored prose whose quoting a line edit cannot get right. Everything
-    outside `pm_resolution:` is untouched by `write_fm_nested_field`; a hand-written
-    comment INSIDE the block does not survive, which is the accepted cost of not
-    mis-quoting a resolution.
-    """
     dumped = yaml.safe_dump(
         mapping,
         default_flow_style=False,
@@ -119,8 +96,6 @@ def _err(msg: str) -> dict:
 
 
 def _match_item(surfaced: list, needle: str) -> tuple[Optional[dict], Optional[str]]:
-    """Resolve `needle` against `surfaced_to_pm[].item` — exact first, then a
-    unique case-insensitive substring. Returns (entry, error)."""
     items = [e for e in surfaced if isinstance(e, dict)]
     exact = [e for e in items if str(e.get("item") or "") == needle]
     if len(exact) == 1:
@@ -215,13 +190,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if p is None:
         return _err(f"sizing_path escapes state/sizings/: {sizing_path_raw!r}")
     if not p.is_file():
-        # Deliberately distinct wording
-        # from the locked_rmw FileNotFoundError branch below: this refusal
-        # means the path never resolved to a file at all (pre-check, before
-        # any lock is taken), while the other means the file existed a moment
-        # ago and lost the race to a peer's delete between this check and the
-        # lock. A caller grepping either string can now tell which happened
-        # instead of getting two overlapping "not found" shapes.
         return _err(f"sizing-object never existed at {sizing_path_raw} — pre-check found no file")
 
     resolver = Path(resolved_by_raw)
@@ -299,10 +267,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     try:
         locked_rmw(p, mutate, repo_root=repo_root)
     except FileNotFoundError:
-        # Distinct from the pre-check
-        # refusal above: this means the file was present when the pre-check
-        # ran but disappeared before `locked_rmw` could acquire the lock —
-        # deleted between check and lock, not "never existed".
         return _err(f"sizing-object disappeared before the lock could be acquired: {p}")
     except LockTimeout as exc:
         return _err(f"timed out waiting for file lock on {p}: {exc}")

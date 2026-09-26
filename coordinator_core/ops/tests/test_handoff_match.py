@@ -37,29 +37,16 @@ from typing import Optional
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Import guard — fires ALL @register_op(...) side-effects, including
-# "handoff.match_candidates".  MUST precede all test functions.
-# ---------------------------------------------------------------------------
 import coordinator_core.ops  # noqa: F401 — populates _REGISTRY
 
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.handoff_match import _handler
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
-# ---------------------------------------------------------------------------
-# Registry completeness assertion (universal positive floor)
-#
-# Lesson: universal-registry-completeness-tests-ov — import coordinator_core.ops
-# FIRST, then assert non-empty registry BEFORE any per-op assertion.  An empty
-# registry would make all per-op assertions vacuously pass (false-positive).
-# ---------------------------------------------------------------------------
 
 assert len(_REGISTRY) > 0, (
     "registry is empty after 'import coordinator_core.ops' — "
@@ -73,14 +60,7 @@ assert _OP_NAME in _REGISTRY, (
 )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-
 def _make_git_repo(root: Path) -> Path:
-    """Create a minimal git repo at ``root`` and return its common_dir (.git path)."""
     root.mkdir(parents=True, exist_ok=True)
     _NO_WIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     subprocess.run(
@@ -115,11 +95,6 @@ def _seed_handoff(
     status: str = "open",
     no_frontmatter: bool = False,
 ) -> Path:
-    """Write a ``state/handoffs/<filename>.md`` fixture file with YAML frontmatter.
-
-    Omitting ``title`` produces a file that should be quarantined.
-    Setting ``no_frontmatter=True`` produces a file with no frontmatter block.
-    """
     handoffs_dir.mkdir(parents=True, exist_ok=True)
     if no_frontmatter:
         content = "# Handoff body with no frontmatter\n"
@@ -137,16 +112,9 @@ def _seed_handoff(
     return path
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 class TestRegistryCompleteness:
-    """Positive-floor registry checks (must pass before any per-op test)."""
 
     def test_registry_is_non_empty(self):
-        """Registry populated after coordinator_core.ops import (positive floor)."""
         assert len(_REGISTRY) > 0
 
     def test_op_name_registered(self):
@@ -155,16 +123,13 @@ class TestRegistryCompleteness:
 
 
 class TestHandoffMatchCandidates:
-    """Payload and ranking tests for handoff.match_candidates."""
 
     def test_empty_store_directory_absent(self, tmp_path):
-        """No state/handoffs/ directory → empty candidates list."""
         common_dir = _make_git_repo(tmp_path / "repo")
         result = _handler({"text": "roadmap"}, repo_root=common_dir)
         assert result == {"candidates": []}
 
     def test_empty_store_directory_present_but_empty(self, tmp_path):
-        """state/handoffs/ exists but has no .md files → empty candidates list."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         (repo_root / "state" / "handoffs").mkdir(parents=True)
@@ -172,12 +137,10 @@ class TestHandoffMatchCandidates:
         assert result == {"candidates": []}
 
     def test_repo_root_none_returns_empty(self):
-        """repo_root=None → empty candidates without raising."""
         result = _handler({"text": "roadmap"}, repo_root=None)
         assert result == {"candidates": []}
 
     def test_missing_text_param_returns_empty(self, tmp_path):
-        """params missing 'text' key → empty candidates list."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         _seed_handoff(
@@ -189,7 +152,6 @@ class TestHandoffMatchCandidates:
         assert result == {"candidates": []}
 
     def test_empty_text_param_returns_empty(self, tmp_path):
-        """params text='' → empty candidates list."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         _seed_handoff(
@@ -201,7 +163,6 @@ class TestHandoffMatchCandidates:
         assert result == {"candidates": []}
 
     def test_well_formed_handoff_fields(self, tmp_path):
-        """Well-formed handoff → candidate carries {handoff_id, title, score}."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         _seed_handoff(
@@ -218,7 +179,6 @@ class TestHandoffMatchCandidates:
         assert 0.0 <= entry["score"] <= 1.0
 
     def test_id_wire_key_is_handoff_id_not_id(self, tmp_path):
-        """Candidates carry 'handoff_id' wire key, never the generic 'id' key."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         _seed_handoff(
@@ -233,7 +193,6 @@ class TestHandoffMatchCandidates:
         assert "id" not in entry
 
     def test_handoff_id_is_filename_stem(self, tmp_path):
-        """handoff_id in output is the filename stem (timestamp+slug)."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         stem = "2026-07-05_120000_fork-authoring-tooling"
@@ -247,7 +206,6 @@ class TestHandoffMatchCandidates:
         assert result["candidates"][0]["handoff_id"] == stem
 
     def test_best_match_ranked_first(self, tmp_path):
-        """Text closely matching one handoff's title ranks it first."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         handoffs_dir = repo_root / "state" / "handoffs"
@@ -265,17 +223,14 @@ class TestHandoffMatchCandidates:
         result = _handler({"text": "fork authoring provenance"}, repo_root=common_dir)
 
         assert len(result["candidates"]) == 2
-        # The fork authoring handoff must rank first.
         assert result["candidates"][0]["handoff_id"] == "2026-07-05_120000_fork-authoring"
         assert result["candidates"][0]["score"] >= result["candidates"][1]["score"]
 
     def test_malformed_yaml_quarantined_sibling_still_returned(self, tmp_path):
-        """Malformed YAML frontmatter is skipped; well-formed siblings are returned."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         handoffs_dir = repo_root / "state" / "handoffs"
         handoffs_dir.mkdir(parents=True)
-        # Write a file with invalid YAML frontmatter.
         bad_path = handoffs_dir / "2026-07-01_000000_bad.md"
         bad_path.write_text("---\ntitle: [unclosed bracket\n---\n", encoding="utf-8")
         _seed_handoff(
@@ -291,14 +246,13 @@ class TestHandoffMatchCandidates:
         assert len(ids) == 1
 
     def test_missing_title_quarantined_sibling_still_returned(self, tmp_path):
-        """Handoff with missing title field is quarantined; valid sibling is returned."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         handoffs_dir = repo_root / "state" / "handoffs"
         _seed_handoff(
             handoffs_dir,
             "2026-07-01_000000_no-title.md",
-            title=None,  # no title — should be quarantined
+            title=None,
         )
         _seed_handoff(
             handoffs_dir,
@@ -313,7 +267,6 @@ class TestHandoffMatchCandidates:
         assert len(ids) == 1
 
     def test_no_frontmatter_quarantined_sibling_still_returned(self, tmp_path):
-        """Handoff without frontmatter block is quarantined; valid sibling returned."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         handoffs_dir = repo_root / "state" / "handoffs"

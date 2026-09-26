@@ -1,13 +1,3 @@
-"""Regression tests for coordinator.bin.lib.git_hook_install's D3 fix
-(2026-07-28, break-class): the unresolvable-interpreter case in the
-generated hook shims used to be a silent `[ -n "$_PY" ] || exit 0` — zero
-stderr output, asymmetric with the missing-SCRIPT branch two lines below it,
-which already prints a loud "commits are NOT being auto-pushed" WARNING.
-These tests pin that both cases now announce themselves identically.
-
-See git_hook_install.py's own module docstring (Behavior section) for the
-full contract this guards.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -26,11 +16,6 @@ from git_hook_install import _append_block, _ml_get, _shim_body  # noqa: E402
 
 
 def _make_tool_bindir(tmp_path: Path, tools: dict) -> str:
-    """Directory containing ONLY symlinks to `tools` (name -> real absolute
-    path) — see coordinator_core/ops/test_install_publish_repo_precommit_hook.py's
-    identically-named helper for why reusing a real tool's parent directory
-    is unsafe (it can smuggle in other binaries that happen to live next to
-    the one you wanted reachable)."""
     bindir = tmp_path / "tool-bindir"
     bindir.mkdir(exist_ok=True)
     for name, real_path in tools.items():
@@ -70,7 +55,6 @@ def _sh_path(name: str) -> str:
 
 
 def _no_python_path(tmp_path: Path) -> str:
-    """A PATH with sh reachable but no python3/python/py binary resolvable."""
     return _make_tool_bindir(tmp_path, {"sh": _sh()})
 
 
@@ -90,15 +74,10 @@ def _with_unresolvable_interpreter(body: str) -> str:
     return re.sub(r'^(_PY=")[^"]*(")$', r"\1" + _UNRESOLVABLE_BAKED_PY + r"\2", body, flags=re.M)
 
 
-# ---------------------------------------------------------------------------
-# _shim_body — fresh-install / self-heal shim
-# ---------------------------------------------------------------------------
-
 def test_shim_body_missing_interpreter_message_present_in_source():
     body = _shim_body("/fake/coord/bin", "coordinator-auto-push", 'exec "$_PY" "$SCRIPT" "$@"')
     assert "no python3/python/py interpreter found on PATH" in body
     assert "commits are NOT being auto-pushed / annotated by this hook" in body
-    # Still exits 0 — a push helper must never block a commit (D3: loud, not fail-closed).
     assert 'exit 0; }' in body
 
 
@@ -111,43 +90,21 @@ def test_shim_body_missing_interpreter_blocks_loudly_at_runtime(tmp_path):
     env["PATH"] = _no_python_path(tmp_path)
     result = subprocess.run([_sh(), str(hook)], capture_output=True, text=True, env=env)
 
-    assert result.returncode == 0  # never fail-closed
+    assert result.returncode == 0
     assert "WARNING" in result.stderr
     assert "no python3/python/py interpreter found on PATH" in result.stderr
 
 
 def test_shim_body_missing_interpreter_and_missing_script_read_the_same_shape():
-    """The interpreter-missing and script-missing WARNING branches must use
-    the same wording contract ("[coordinator] WARNING: hook installed but
-    ... commits are NOT being auto-pushed / annotated by this hook") so an
-    operator scanning stderr recognizes both as the same class of problem."""
     body = _shim_body("/fake/coord/bin", "coordinator-auto-push", 'exec "$_PY" "$SCRIPT" "$@"')
     assert body.count("[coordinator] WARNING: hook installed but") == 2
     assert body.count("commits are NOT being auto-pushed / annotated by this hook") == 2
 
 
-# ---------------------------------------------------------------------------
 # _HOOK_GEN_STAMP <-> emitted body shape coupling (AC3, plan
-# 2026-08-14-hook-currency-stops-resting-on-a-comment.md). A checksum over
-# `_shim_body`'s output for a fixed input pins TODAY's shape — the whole
-# point of this test is that it goes RED the moment `_shim_body` grows a new
 # rung (or drops one, or reorders a line) without `_HOOK_GEN_STAMP` in
-# git_hook_install.py being bumped alongside it. The failure message says
-# what to do, not merely that a checksum moved: bump the stamp, then update
 # _EXPECTED_BODY_SHAPE_CHECKSUM here to match.
-#
 # THE BAKED INTERPRETER PATH IS NORMALIZED OUT BEFORE HASHING (2026-08-25, gen
-# 5). `_shim_body` now interpolates `py_probe_sh.baked_python_lines`, which
-# embeds THIS machine's `sys.executable`. That literal is machine state, not
-# body SHAPE: hashing it would make this test pass only on the box that last
-# updated the constant and fail on every other one — including the fleet floor
-# (a MacBook), where the path is not even the same shape. `_normalize_baked_py`
-# replaces the assigned value with a fixed placeholder so the checksum still
-# goes red for a new/dropped/reordered rung — the thing this test exists to
-# catch — and stays green across machines. It deliberately does NOT elide the
-# whole line: the `_PY="..."` assignment and its `[ -x ]` self-heal sibling are
-# rungs, and losing either must still be caught.
-# ---------------------------------------------------------------------------
 
 _EXPECTED_BODY_SHAPE_CHECKSUM = "c9e2d335b405ad795a7cb2623addf3c2d868037a66f3cc14318f17677d84e5b4"
 
@@ -155,12 +112,6 @@ _BAKED_PY_PLACEHOLDER = "<BAKED-INTERPRETER>"
 
 
 def _normalize_baked_py(body: str) -> str:
-    """Replace the machine-specific baked interpreter path with a placeholder.
-
-    Keeps the assignment line itself in the hashed text — only its VALUE is
-    normalized — so a dropped or reordered interpreter rung still moves the
-    checksum.
-    """
     return re.sub(
         r'^(_PY=")[^"]*(")$',
         r"\1" + _BAKED_PY_PLACEHOLDER + r"\2",
@@ -170,14 +121,6 @@ def _normalize_baked_py(body: str) -> str:
 
 
 def test_hook_gen_stamp_bump_is_required_for_shape_changes(monkeypatch):
-    # `_shim_body` bakes in `_resolve_claude_klabauter_bin_sh`/`_resolve_klabauter_bin_sh`
-    # candidates read live off THIS machine's `machine-local` registry / published
-    # engine mirror -- environment state, not body SHAPE. Left ambient, this pin
-    # goes red on any box whose registry resolves `repos.claude_klabauter` or the
-    # published mirror (this container's `/root/klabauter` does), the same class
-    # of platform-naive fixture `install/forwarder_door_census.py::resolve_bare_name`
-    # was fixed for. Pinned absent here, deterministically, so the checksum tests
-    # SHAPE (rung count/order) and nothing about the box running the suite.
     monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda bin_dir, script_name: None)
     monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda script_name: None)
     body = _shim_body("/fake/coord/bin", "coordinator-auto-push", 'exec "$_PY" "$SCRIPT" "$@"')
@@ -188,9 +131,6 @@ def test_hook_gen_stamp_bump_is_required_for_shape_changes(monkeypatch):
         "Fix: bump _HOOK_GEN_STAMP there, then update _EXPECTED_BODY_SHAPE_CHECKSUM in "
         "this test (coordinator/bin/lib/test_git_hook_install.py) to the new checksum."
     )
-    # The stamp line itself must actually be present in what was hashed —
-    # otherwise this checksum could go stale silently alongside a _shim_body
-    # that stopped emitting the stamp at all.
     assert ghi._hook_gen_stamp_line() in body
 
 
@@ -220,9 +160,6 @@ def test_interpreter_rung_costs_no_unconditional_subshell():
     ):
         body = _shim_body("/fake/coord/bin", script_name, invoke)
 
-        # The walk MUST still be present — it is the recovery rung for a stale
-        # bake, and these hooks fail OPEN, so losing it is a silent-off mode
-        # rather than a loud failure. See baked_python_lines' docstring.
         assert "_py_resolve() {" in body, (
             f"{script_name}: the $PATH-walk fallback was removed — a stale "
             "baked path would now silently disable this fail-open hook"
@@ -243,18 +180,12 @@ def test_interpreter_rung_costs_no_unconditional_subshell():
             f"subshell; found {unconditional}"
         )
 
-        # The walk's own subshell is allowed, but ONLY behind the `[ -x ]`
-        # guard — i.e. paid when the bake is dead, never on the happy path.
         walk_uses = [line for line in body.split("\n") if "$(_py_resolve)" in line]
         assert len(walk_uses) == 1, f"{script_name}: expected one guarded walk use, got {walk_uses}"
         assert walk_uses[0].lstrip().startswith("[ -x "), (
             f"{script_name}: the walk is invoked unconditionally: {walk_uses[0]!r}"
         )
 
-
-# ---------------------------------------------------------------------------
-# _append_block — marker-absent append (existing custom hook chain preserved)
-# ---------------------------------------------------------------------------
 
 def test_append_block_missing_interpreter_message_present_in_source():
     block = _append_block(
@@ -282,12 +213,10 @@ def test_append_block_missing_interpreter_blocks_loudly_at_runtime(tmp_path):
 
     env = dict(os.environ)
     env["PATH"] = _no_python_path(tmp_path)
-    # Hermetic, not incidental: without this the block resolves THIS box's real
-    # settings-home forwarder and the exhaustion path under test never runs.
     env["COORDINATOR_SETTINGS_HOME"] = (tmp_path / "no-such-settings-home").as_posix()
     result = subprocess.run([_sh(), str(hook)], capture_output=True, text=True, env=env)
 
-    assert result.returncode == 0  # append blocks never disturb the parent hook's exit status
+    assert result.returncode == 0
     assert "WARNING" in result.stderr
     assert "no python3/python/py interpreter found on PATH" in result.stderr
 
@@ -302,17 +231,8 @@ def test_append_block_missing_interpreter_and_missing_script_both_warn():
     assert block.count("[coordinator] WARNING: hook installed but") == 2
 
 
-# ---------------------------------------------------------------------------
-# _ml_get — Windows-exec regression (extensionless `machine-local` shebang
-# script is not directly invocable by CreateProcess; see this module's own
-# fix and coordinator_core.launchable's module docstring for the underlying
-# WinError 193 defect).
-# ---------------------------------------------------------------------------
-
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -321,11 +241,6 @@ pytestmark = [
 
 @pytest.mark.skipif(os.name != "nt", reason="WinError 193 exec defect is Windows-only")
 def test_ml_get_resolves_via_cmd_twin_on_windows(tmp_path):
-    """`ml_bin` is the bareword `machine-local` (no extension) — `CreateProcess`
-    cannot exec it directly. `_ml_get` must resolve through its `.cmd` twin
-    (mirroring `_resolve_machine_local_bin`'s real-world layout) rather than
-    silently swallowing the WinError 193 and returning None as if the key
-    were simply unset."""
     ml_bin = tmp_path / "machine-local"
     ml_bin.write_text("#!/usr/bin/env python3\nraise SystemExit(1)\n", encoding="utf-8")
     ml_cmd = tmp_path / "machine-local.cmd"
@@ -341,10 +256,7 @@ def test_ml_get_resolves_via_cmd_twin_on_windows(tmp_path):
 
 
 def test_ml_get_exec_failure_warns_to_stderr_and_returns_none(tmp_path, capsys):
-    """An exec failure (resolver could not even be launched) must be
-    distinguishable from a genuinely-unset key: it warns to stderr rather
-    than the two cases looking identical (both `None`, zero output)."""
-    unlaunchable = tmp_path  # a directory is never launchable as argv[0]
+    unlaunchable = tmp_path
 
     result = _ml_get(str(unlaunchable), "some.key")
 
@@ -354,15 +266,6 @@ def test_ml_get_exec_failure_warns_to_stderr_and_returns_none(tmp_path, capsys):
 
 
 def test_container_registry_keys_are_not_heal_targets(monkeypatch, tmp_path):
-    """A `repos.*` container key must never reach `_classify_target`.
-
-    `repos.fleet_root` names the directory the fleet's repos live UNDER, so it
-    has no `.git` of its own and classifies as `missing` — a broken-registry
-    warning, printed on a DAILY ceremony, for an entry that is correct and that
-    no operator action could ever satisfy. Negative spec: this warning trains
-    operators to scroll past fleet-heal output, which is the failure mode
-    `_classify_target`'s three-way split exists to prevent.
-    """
     fleet_root = tmp_path / "fleet"
     (fleet_root / "claude-klabauter").mkdir(parents=True)
     monkeypatch.setattr(
@@ -382,18 +285,8 @@ def test_container_registry_keys_are_not_heal_targets(monkeypatch, tmp_path):
         "not because it happens to classify cleanly"
     )
 
-# ---------------------------------------------------------------------------
-# DoE-claude#85 row 9: a `git worktree add` checkout's `.git` is a FILE, not a
-# directory — `_classify_target` used to read that as `missing` and silently
-# drop the repo from the fleet, and `_ensure_hook` used to build an
-# impossible `<root>/.git/hooks/<name>` path under it.
-# ---------------------------------------------------------------------------
-
 
 def _make_worktree(tmp_path: Path, name: str = "wt") -> Path:
-    """A real `git worktree add` checkout under `tmp_path`, returned as its
-    own root path. Skips if `git` is unresolvable — this exercises git's own
-    on-disk shape, not a hand-rolled approximation of it."""
     import pytest
 
     git = shutil.which("git")
@@ -420,24 +313,18 @@ def _make_worktree(tmp_path: Path, name: str = "wt") -> Path:
 
 
 def test_resolve_git_hooks_dir_follows_worktree_gitfile_indirection(tmp_path):
-    """`.git` as a file (a `git worktree add` checkout) resolves to the
-    COMMON dir's `hooks/`, not a nonexistent `<root>/.git/hooks/`."""
     wt_root = _make_worktree(tmp_path)
 
     resolved = ghi._resolve_git_hooks_dir(str(wt_root))
 
     assert resolved is not None
     assert os.path.isdir(resolved), f"resolved git dir does not exist: {resolved}"
-    # The common dir is the MAIN repo's `.git`, shared across worktrees —
-    # never a per-worktree `.git/worktrees/<name>` directory.
     assert os.path.normcase(os.path.normpath(resolved)) == os.path.normcase(
         os.path.normpath(str(tmp_path / "main" / ".git"))
     )
 
 
 def test_classify_target_admits_a_worktree_checkout(tmp_path):
-    """A worktree `.git` file must not classify as `missing` — that silently
-    drops the repo from the fleet enumeration (DoE-claude#85 row 9)."""
     wt_root = _make_worktree(tmp_path)
     (wt_root / "CLAUDE.md").write_text("x", encoding="utf-8")
 
@@ -445,8 +332,6 @@ def test_classify_target_admits_a_worktree_checkout(tmp_path):
 
 
 def test_ensure_hook_installs_into_worktree_common_dir(tmp_path, monkeypatch):
-    """`_ensure_hook` writes the hook under the COMMON dir's `hooks/`, not a
-    literal `<root>/.git/hooks/` that never exists for a worktree checkout."""
     wt_root = _make_worktree(tmp_path)
     coord_bin = tmp_path / "bin"
     coord_bin.mkdir()
@@ -466,12 +351,6 @@ def test_ensure_hook_installs_into_worktree_common_dir(tmp_path, monkeypatch):
 
 
 def test_ensure_hooks_fleet_one_bad_repo_does_not_abort_the_rest(tmp_path, monkeypatch, capsys):
-    """A repo whose hook install raises must not prevent LATER repos (sorted
-    after it) from being healed — the fleet loop used to have no
-    per-iteration guard, so one exception propagated out of
-    `ensure_hooks_fleet` and silently skipped every repo after it,
-    including — on some registries — coordinator-claude/klabauter
-    themselves (DoE-claude#85 row 9)."""
     good_root = tmp_path / "zzz-good"
     good_root.mkdir()
     (good_root / ".git").mkdir()
@@ -512,11 +391,6 @@ def test_ensure_hooks_fleet_one_bad_repo_does_not_abort_the_rest(tmp_path, monke
 def test_ensure_hooks_fleet_default_never_fails_even_when_owned_hook_missing(
     tmp_path, monkeypatch
 ):
-    """`strict` defaults False: a repo this run OWNS (worktree-classified)
-    that ends the attempt without an installed hook must still return 0 --
-    byte-identical to every existing caller (/workday-start Step -0.45's
-    "must never block a session start" contract), and the sole way this
-    changes is opting in with `strict=True` (see the next test)."""
     owned_root = tmp_path / "owned"
     owned_root.mkdir()
     (owned_root / ".git").mkdir()
@@ -528,9 +402,6 @@ def test_ensure_hooks_fleet_default_never_fails_even_when_owned_hook_missing(
     monkeypatch.setattr(ghi, "_classify_target", lambda root: "worktree")
 
     def _fake_ensure_no_write(bin_dir, root=None, outcome=None, check_only=False):
-        # Claims success but never actually writes the hook file -- the
-        # exact "plausible-looking state" this module's own docstring warns
-        # a bare rc cannot distinguish from a real install.
         if outcome is not None:
             outcome.append("installed-absent")
         return 0
@@ -544,10 +415,6 @@ def test_ensure_hooks_fleet_default_never_fails_even_when_owned_hook_missing(
 
 
 def test_ensure_hooks_fleet_strict_fails_when_owned_hook_missing(tmp_path, monkeypatch, capsys):
-    """`strict=True`: the same scenario as above must now return 1, and name
-    the repo/hook in the stderr report -- this is ask #1's fix: the tool must
-    never (when a real signal is requested) claim success while a hook it
-    owns is absent."""
     owned_root = tmp_path / "owned"
     owned_root.mkdir()
     (owned_root / ".git").mkdir()
@@ -576,8 +443,6 @@ def test_ensure_hooks_fleet_strict_fails_when_owned_hook_missing(tmp_path, monke
 def test_ensure_hooks_fleet_strict_stays_clean_when_hook_actually_lands(
     tmp_path, monkeypatch
 ):
-    """Control for the two tests above: `strict=True` must NOT false-positive
-    on a repo whose hook genuinely landed on disk."""
     owned_root = tmp_path / "owned"
     owned_root.mkdir()
     (owned_root / ".git" / "hooks").mkdir(parents=True)
@@ -604,14 +469,9 @@ def test_ensure_hooks_fleet_strict_stays_clean_when_hook_actually_lands(
 
 
 def test_ensure_hooks_fleet_strict_ignores_mirror_absence(tmp_path, monkeypatch):
-    """A `mirror`-classified repo (e.g. klabauter on a workstation, deliberately
-    excluded from hook install -- see `_is_coordinator_worktree`'s docstring)
-    must never count against `strict`: its hookless state is BY DESIGN, not a
-    defect this function owns."""
     mirror_root = tmp_path / "mirror"
     mirror_root.mkdir()
     (mirror_root / ".git").mkdir()
-    # No CLAUDE.md / cross-repo marker -- classifies as "mirror".
 
     monkeypatch.setattr(
         ghi, "_registry_repo_roots", lambda bin_dir: [("repos.mirror", str(mirror_root))]
@@ -622,9 +482,7 @@ def test_ensure_hooks_fleet_strict_ignores_mirror_absence(tmp_path, monkeypatch)
     assert rc == 0
 
 
-# ---------------------------------------------------------------------------
 # The no-session gate is GENERATED from the ladder, never hand-copied.
-# ---------------------------------------------------------------------------
 
 def test_session_gate_is_generated_from_the_ladder():
     """The emitted no-session gate must name exactly SESSION_ENV_PRECEDENCE.
@@ -661,12 +519,6 @@ def test_session_gate_is_generated_from_the_ladder():
 
 
 def test_session_gate_resolves_before_any_interpreter_resolution():
-    """Ordering invariant, owned by claude-klabauter-59 and stated
-    mechanism-independently: as the emitted body executes, the sentinel guards
-    resolve before ANY interpreter resolution is attempted -- including a $PATH
-    walk, command substitution, or subshell. A gate that sits below the probe
-    has already paid the cost it exists to avoid.
-    """
     from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
 
     body = _shim_body(
@@ -705,26 +557,6 @@ def test_post_commit_never_carries_the_no_session_gate():
     assert "CLAUDE_SESSION_ID" not in body
 
 
-# ---------------------------------------------------------------------------
-# _append_block — MSYS `.exe`-sibling discipline (2026-08-29). The fix that
-# taught `_shim_body` to guard every rung with `_have_py` reached exactly one
-# rung of `_append_block` and left the helper undefined there, so the emitted
-# block called a function that does not exist: the `.doe-root` rung answered
-# "no" unconditionally and every commit through a foreign hook printed a shell
-# error. These tests pin BOTH halves — the helper is emitted wherever it is
-# called, and no resolution rung is left on the bare `[ -f ]` that the MSYS
-# `.exe` fallback makes a lie.
-# ---------------------------------------------------------------------------
-#
-# 2026-08-30-auto-push-main-and-two-launcher-referenc-2d703797edb5.yaml) --
-# the exemplar script name below was "coordinator-auto-push", a script
-# `_append_block` no longer generates a shim for (`ensure_post_commit_hook`
-# is a pure no-op, C7; `_append_block`'s one production caller today is
-# `ensure_prepare_commit_msg_hook`). Renamed to the real current caller so
-# this generic-shim test never reads as pinning a retired forwarder target
-# -- `_append_block` itself is a plain string-template function with no
-# behavior tied to either script name.
-
 _APPEND_BLOCK_ARGS = (
     "/fake/coord/bin",
     "coordinator-prepare-commit-msg",
@@ -740,21 +572,16 @@ def test_append_block_defines_every_helper_it_calls():
         "_append_block calls _have_py without emitting its definition. The block is "
         "appended into a foreign hook, so nothing above it is ours to borrow from."
     )
-    # The definition must precede every call, or the first rungs run against an
-    # undefined function.
     assert block.index('_have_py() {') < block.index('_have_py "')
 
 
 def test_append_block_resolution_rungs_never_use_bare_dash_f():
-    """`[ -f "$_T" ]` is TRUE under MSYS sh when only `$_T.exe` exists."""
     block = _append_block(*_APPEND_BLOCK_ARGS)
     assert '[ -f "$_T" ]' not in block
     assert '[ ! -f "$_T" ]' not in block
 
 
 def test_append_block_runs_an_installed_exe_forwarder_directly(tmp_path):
-    """A `.exe` forwarder is the intended post-install artifact: run it, and
-    never enter the interpreter chain that would hand it to python."""
     settings_home = tmp_path / "settings-home"
     (settings_home / "bin").mkdir(parents=True)
     forwarder = settings_home / "bin" / "coordinator-prepare-commit-msg.exe"
@@ -784,15 +611,6 @@ def test_append_block_runs_an_installed_exe_forwarder_directly(tmp_path):
 
 
 def test_append_block_emits_no_shell_errors_when_nothing_resolves(tmp_path, monkeypatch):
-    """Exhaustion must be the two loud WARNINGs and nothing else — a
-    `command not found` here means the block called a helper it never emitted."""
-    # `_append_block` bakes `_resolve_claude_klabauter_bin_sh`/`_resolve_klabauter_bin_sh`
-    # candidates read live off THIS machine's `machine-local` registry / published
-    # engine mirror. On a box with a real engine-repo or mirror checkout
-    # registered, that candidate is a real,
-    # readable script -- `_have_py` finds it and `$_T` resolves for real, which
-    # is exactly what this test exists to prove CANNOT happen. Pinned absent so
-    # "nothing resolves" is actually nothing, on every box.
     monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda bin_dir, script_name: None)
     monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda script_name: None)
     hook = tmp_path / "post-commit"
@@ -809,33 +627,12 @@ def test_append_block_emits_no_shell_errors_when_nothing_resolves(tmp_path, monk
     result = subprocess.run([_sh(), str(hook)], capture_output=True, text=True, env=env)
 
     assert result.returncode == 0
-    assert "not found" in result.stderr  # the coordinator WARNING, checked below
+    assert "not found" in result.stderr
     for line in result.stderr.splitlines():
         assert "[coordinator] WARNING" in line, f"unexpected shell error: {line!r}"
 
 
-# ---------------------------------------------------------------------------
-# MSYS drive-letter normalisation — BOTH emitters (2026-08-31).
-#
-# `_shim_body` has carried the `case "$SCRIPT" in /?/*)` expansion since the
-# memo that reported the defect; `_append_block` did not, so a hook installed
-# by the append leg resolved `_T` under MSYS `sh` (which reads /c/Users/...
-# happily) and handed that string to a NATIVE python.exe, which has no /c
-# mount and reads the leading slash as repo-relative. The rung passes its own
-# existence test and execs a path rooted at the repo drive — a silent wrong
-# answer, which is why both emitters' docstrings say they must change
-# together. These pin that they do.
-# ---------------------------------------------------------------------------
-
-
 def test_both_hook_emitters_normalise_msys_drive_letters():
-    """Neither emitter may hand a POSIX-absolute path to a native python.
-
-    A TEXT-level guard on purpose, in addition to the executable one below:
-    it names both emitters, so deleting the expansion from either one fails
-    here with a message saying which, rather than only failing whichever
-    end-to-end case happens to cover it.
-    """
     shim = _shim_body("/fake/coord/bin", "coordinator-prepare-commit-msg", "hdr")
     append = _append_block(*_APPEND_BLOCK_ARGS)
 
@@ -853,13 +650,6 @@ def test_both_hook_emitters_normalise_msys_drive_letters():
 
 
 def test_append_block_msys_normalisation_actually_transforms_the_path():
-    """The expansion is executed, not merely present.
-
-    `${_td%%/*}` / `${_td#*/}` is easy to write subtly wrong (a `%` for a `#`
-    silently yields the wrong half), and a substring assertion cannot tell a
-    correct expansion from a broken one. This runs the real fragment under
-    the real `sh` and checks the transform.
-    """
     sh = _sh()
     if not sh:
         import pytest
@@ -875,23 +665,13 @@ def test_append_block_msys_normalisation_actually_transforms_the_path():
 
     assert result.returncode == 0, result.stderr
     # A LOWERCASE drive letter, and that is correct. The expansion is pure
-    # parameter substitution -- it relocates the drive letter, it does not
-    # upcase it, and Windows drive letters are case-insensitive so either case
-    # resolves identically for the native python.exe this exists to feed.
-    # Asserted explicitly because BOTH emitters' comments spell the converted
     # form with an UPPERCASE drive letter (corrected 2026-08-31): a reader who
-    # trusts that wording writes exactly this test and watches it fail on a fix
-    # that is working.
     assert result.stdout == "c:/Users/someone/bin/tool", (
         f"expansion produced {result.stdout!r}, not the relocated drive form"
     )
 
 
 def test_append_block_msys_normalisation_leaves_a_windows_path_alone():
-    """A path that is already `<drive>:/...` must pass through untouched -- the
-    `case` arm matches a SINGLE-character first segment (`/?/`), so `/c/x`
-    converts and `<drive>:/x` does not re-enter. Pins that the guard is not
-    merely absent-on-Windows but inert there."""
     sh = _sh()
     if not sh:
         import pytest
@@ -909,18 +689,7 @@ def test_append_block_msys_normalisation_leaves_a_windows_path_alone():
     assert result.stdout == "C:/Users/someone/bin/tool"
 
 
-# ---------------------------------------------------------------------------
-# POSIX native door image at the BARE settings-home name (2026-09-02, gen 12).
-# `forwarder_self_heal._cut_over_to_native_door` replaces the extensionless
-# settings-home entry with a compiled image on every platform. On Windows the
-# `.exe` probe catches it; on POSIX there is no extension and no `-ef` pair, so
-# the pre-gen-12 chain fed a Mach-O binary to `exec "$_PY"` and every commit in
-# every repo on the box died with a Non-UTF-8 SyntaxError.
-# ---------------------------------------------------------------------------
-
-
 def test_shim_body_execs_a_posix_native_forwarder_instead_of_the_interpreter():
-    """The bare-name door image must be exec'd, never handed to `$_PY`."""
     body = _shim_body(
         "/fake/coord/bin",
         "coordinator-prepare-commit-msg",
@@ -928,8 +697,6 @@ def test_shim_body_execs_a_posix_native_forwarder_instead_of_the_interpreter():
     )
     assert "_native() {" in body, "no native-image probe at all — gen 12 regressed"
     assert body.index("_native() {") < body.index('_native "$_fwd"')
-    # The probe must sit ahead of the interpreter chain, or the settings-home
-    # rung resolves first and the exec never happens.
     assert body.index('_native "$_fwd" && exec') < body.index('SCRIPT=')
 
 
@@ -943,8 +710,6 @@ def test_append_block_defines_the_native_probe_it_calls():
 
 
 def test_native_probe_costs_no_subprocess():
-    """This runs on every commit — DR-344 forbids a spawn here. `read` and
-    `case` are builtins; a `file`/`head`/`od` shell-out would not be."""
     body = _shim_body(
         "/fake/coord/bin",
         "coordinator-prepare-commit-msg",
@@ -957,8 +722,6 @@ def test_native_probe_costs_no_subprocess():
 
 
 def test_native_probe_leaves_a_genuine_python_script_to_the_interpreter(tmp_path):
-    """A coordinator-written CLI opens `#!` and must NOT be mistaken for a door
-    image — misclassifying it would exec a Python file as a program."""
     sh = _sh()
     if not sh:
         import pytest
@@ -1011,9 +774,6 @@ def test_native_probe_misclassifies_an_executable_shebangless_non_native_file(tm
     )
     probe = re.search(r"_native\(\) \{.*?\}\n", body, re.S).group(0)
 
-    # Executable, no `#!`, and no Mach-O/ELF/FAT magic either -- neither a
-    # real script nor a real native image, exercising the exact gap between
-    # the probe's actual test (missing `#!`) and its intended one (IS native).
     script = tmp_path / "not-a-real-native-image"
     script.write_text("just some text with no shebang line\n", encoding="utf-8")
     script.chmod(0o755)
@@ -1029,32 +789,16 @@ def test_native_probe_misclassifies_an_executable_shebangless_non_native_file(tm
     )
 
 
-# ---------------------------------------------------------------------------
-# THE PAIR TEST (2026-09-02). Everything about the native-door cutover was
 # verified by asking the PRODUCER's own question -- did I write the image, is
-# it manifested, does it resolve, does my report call it healthy -- and the one
 # test that asked a CONSUMER's question
-# (`test_append_block_runs_an_installed_exe_forwarder_directly`) fabricated the
-# WINDOWS artifact shape on a POSIX box, so it went green on macOS against a
-# file named `.exe` containing `#!/bin/sh`, a shape macOS cannot produce. No
-# test on any platform ever ran a consumer against the artifact its own
-# platform actually makes, and 13 repos lost `git commit` for it.
-#
 # The fixture below is therefore derived from the PRODUCER
 # (`door_install.NATIVE_IMAGE_MAGIC`) and branched on the CURRENT platform,
-# never hand-typed from a failure report -- a hand-typed fixture is exactly how
-# the defect survived. Its teeth are
-# `test_pair_fixture_goes_red_without_the_native_probe`: strip
 # `_NATIVE_PROBE_DEF` and this must FAIL. Without that control the pair test
-# passes on a body that never learned the POSIX half, which is the state this
-# suite sat in for four days.
-# ---------------------------------------------------------------------------
 
 _INCIDENT_STRINGS = ("Non-UTF-8", "SyntaxError", "can't open file")
 
 
 def _door_native_magic():
-    """The producer's own magic-byte tuple, imported rather than restated."""
     repo_root = Path(__file__).resolve().parents[3]
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
@@ -1076,13 +820,9 @@ def _install_native_image_as_this_platform_does(tmp_path, script_name):
     bin_dir.mkdir(parents=True)
     name = script_name + (".exe" if os.name == "nt" else "")
     image = bin_dir / name
-    # A real executable is needed for the hook to actually RUN it, and a
-    # hand-rolled magic header is not one. `/usr/bin/true` is a genuine Mach-O
-    # image on macOS; assert it matches the producer's magic so this fixture
-    # fails loudly rather than silently testing the wrong shape.
     donor = Path("/usr/bin/true")
     if os.name != "nt" and donor.exists():
-        shutil.copy(donor, image)  # copy2 would carry SIP st_flags
+        shutil.copy(donor, image)
         assert image.open("rb").read(8).startswith(magic), (
             "the donor binary does not match door_install.NATIVE_IMAGE_MAGIC — "
             "the fixture is no longer derived from the producer"
@@ -1094,11 +834,6 @@ def _install_native_image_as_this_platform_does(tmp_path, script_name):
 
 
 def _run_both_emitted_hooks(tmp_path, settings_home):
-    """Run BOTH emitters' bodies against the fixture, interpreter sabotaged.
-
-    The interpreter chain is made unresolvable so that reaching it is loud: a
-    clean run therefore proves the image was invoked directly.
-    """
     bodies = {
         "shim": _shim_body(
             "/fake/coord/bin",
@@ -1121,7 +856,6 @@ def _run_both_emitted_hooks(tmp_path, settings_home):
 
 
 def test_a_cut_over_bin_survives_both_hook_emitters(tmp_path):
-    """Both emitted hook bodies must run a cut-over image, never interpret it."""
     if not _sh():
         import pytest
 
@@ -1157,14 +891,6 @@ def test_pair_fixture_goes_red_without_the_native_probe(tmp_path, monkeypatch):
         pytest.skip("POSIX-only: the control reproduces the POSIX-half defect")
 
     monkeypatch.setattr(ghi, "_NATIVE_PROBE_DEF", "")
-    # Same environment leak as `test_append_block_emits_no_shell_errors_when_
-    # nothing_resolves`: with the native probe stripped, `_native "$_fwd"`
-    # errors "not found" and the chain falls through past the (now-unguarded)
-    # native image to `SCRIPT`/`_T` resolution. On a box with a real engine-repo
-    # or mirror checkout registered, the engine-repo-bin candidate is a real,
-    # readable python script -- the fallback silently resolves to IT instead
-    # of failing loudly, masking the very incident this control exists to
-    # reproduce. Pinned absent so the control reproduces on every box.
     monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda bin_dir, script_name: None)
     monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda script_name: None)
     settings_home, _ = _install_native_image_as_this_platform_does(
@@ -1185,15 +911,6 @@ def test_pair_fixture_goes_red_without_the_native_probe(tmp_path, monkeypatch):
 
 
 def _real_clone(tmp_path: Path) -> Path:
-    """A genuine `git clone` of a throwaway bare repo -- NEVER `git init`.
-
-    state/bug-backlog/2026-08-25-hook-emitters-exit-0-having-installed-no-*
-    .yaml: pre-existing coverage for `_ensure_hook`'s "skipped-no-root"
-    branch used a `git init` scratch repo, which the backlog entry names as
-    the reason the defect went uncaught -- a scratch repo and a real clone
-    are not guaranteed to round-trip through the checked resolver's git
-    identity machinery the same way. This helper produces the latter.
-    """
     bare = tmp_path / "origin.git"
     subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
     clone = tmp_path / "clone"

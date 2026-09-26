@@ -26,11 +26,6 @@ from coordinator_core import person_resolver, tracker_entities
 
 @pytest.fixture(autouse=True)
 def _reset_cache(monkeypatch):
-    """Clean the process-lifetime git-config cache across tests, and stub
-    ``_resolve_repo_root`` to a fixed sentinel so these Tier-T tests never
-    spawn a real `git rev-parse` — repo-root-keying behaviour itself is
-    covered by the dedicated collision-regression test below, which
-    overrides this stub per-case."""
     person_resolver.reset_person_resolver_git_config_cache()
     monkeypatch.setattr(person_resolver, "_resolve_repo_root", lambda: "/fixture/repo")
     yield
@@ -102,13 +97,10 @@ def test_sources_disagree_hosts_yml_wins(tmp_path, monkeypatch):
     result = person_resolver.resolve_operating_person(home=tmp_path)
 
     assert result["github"] == "hosts-yml-winner"
-    # github_id resolves from the noreply parse only, regardless of the
-    # github-handle disagreement.
     assert result["github_id"] == "999"
 
 
 def test_hosts_yml_absent_noreply_fallback(tmp_path, monkeypatch):
-    # no hosts.yml written at all
     _patch_git_config(
         monkeypatch,
         {
@@ -175,16 +167,7 @@ def test_mixed_case_hosts_yml_resolves_casefolded(tmp_path, monkeypatch):
     assert result["github"] == "dbc-example-operator"
 
 
-# The mixed-case hosts.yml
-# case (test_mixed_case_hosts_yml_resolves_casefolded above) does not
-# exercise the noreply-fallback branch's casefold call, and that fixture's
-# sentinel handle is already lowercase, so it cannot distinguish "casefolds"
-# from "passes through unchanged". This drives a mixed-case handle through
-# the noreply-parse leg specifically (no hosts.yml written) so a regression
-# that stops casefolding `github` on the fallback path is caught.
 def test_mixed_case_noreply_fallback_resolves_casefolded(tmp_path, monkeypatch):
-    # no hosts.yml written at all — forces resolution through the
-    # noreply-email fallback branch.
     _patch_git_config(
         monkeypatch,
         {
@@ -199,15 +182,7 @@ def test_mixed_case_noreply_fallback_resolves_casefolded(tmp_path, monkeypatch):
     assert result["github_id"] == "999"
 
 
-# person_resolver's casefold
-# set is a second, hardcoded decision independent of
-# tracker_entities.normalize_alias's namespace split; nothing enforced the
-# two stayed in agreement, and F1 (github_id.casefold(), since removed) is a
-# demonstrated instance of them silently diverging. This test asserts
 # agreement per-key, driven off ALIAS_BUNDLE_KEYS so a future namespace
-# addition is covered automatically. Intentionally NOT a shared-helper
-# extraction — a loudly-failing coupling test is the scoped fix; unifying
-# the implementations is out of remit here.
 def test_casefold_policy_matches_tracker_entities_normalize_alias(tmp_path, monkeypatch):
     mixed = "Mixed-CaseValue"
     _write_hosts_yml(tmp_path, mixed)
@@ -228,8 +203,6 @@ def test_casefold_policy_matches_tracker_entities_normalize_alias(tmp_path, monk
         "email": f"1+{mixed}@users.noreply.github.com",
     }
 
-    # contributor_slug is a derived hash, not a tracker_entities.normalize_alias
-    # namespace — it has no raw/normalized form to compare against here.
     for key in person_resolver.ALIAS_BUNDLE_KEYS:
         if key == "contributor_slug":
             continue
@@ -249,11 +222,6 @@ def test_git_config_cache_is_keyed_on_repo_root_not_collided(tmp_path, monkeypat
     calls (simulating a warm process's cwd changing between requests) with
     two distinct display names; each root must resolve and cache its OWN
     value."""
-    # Three roots, repeated: resolve_operating_person calls _resolve_repo_root
-    # three times per invocation (user.email, user.name, and the C1 operator
-    # fallback — this fixture's user.email/hosts.yml never resolve `github`,
-    # so the fallback always fires), so each simulated "request" needs its
-    # root to repeat before advancing.
     roots = iter(
         ["/repo/one", "/repo/one", "/repo/one", "/repo/two", "/repo/two", "/repo/two"]
     )
@@ -301,19 +269,9 @@ def test_git_config_cache_reused_across_calls(tmp_path, monkeypatch):
     person_resolver.resolve_operating_person(home=tmp_path)
     person_resolver.resolve_operating_person(home=tmp_path)
 
-    # user.name resolves successfully and is cached (1 read total across
-    # both calls); user.email resolves empty every time, which is NOT
-    # memoized by design (a failed resolution must not poison the cache),
-    # so it re-reads on each call: 1 + 2 = 3. hosts.yml and user.email both
-    # miss here, so the C1 operator fallback also fires and reads
-    # `coordinator.operator` on every call for the same not-memoized reason:
-    # +2 more. Total: 3 + 2 = 5.
     assert calls["count"] == 5
 
 
-# C1: contributor_slug pinned vectors, verified against example-cockpit-repo's own
-# TypeScript (`src/lib/identity/contributor-id.ts`, their commit
-# `e3d5726bd021b5ffe97b4148ad93ceba9ec95b8d`) via `npx tsx`, 2026-08-19.
 # <!-- VERBATIM: these are measured values, not illustrative ones. -->
 @pytest.mark.parametrize(
     "database_id,expected_slug",
@@ -352,9 +310,6 @@ def test_contributor_slug_derived_in_bundle(tmp_path, monkeypatch):
 
 
 def test_contributor_slug_rename_invariant(tmp_path, monkeypatch):
-    """AC2: the same databaseId with a different `github` handle in the
-    bundle yields the same slug — the derivation depends only on the
-    numeric id, never on the handle."""
     _patch_git_config(
         monkeypatch,
         {
@@ -379,8 +334,6 @@ def test_contributor_slug_rename_invariant(tmp_path, monkeypatch):
     assert first["contributor_slug"] == second["contributor_slug"] == "67c9mio1h"
 
 
-# C1: operator fallback — a cloud session with no hosts.yml and no noreply
-# `user.email` still resolves `github` from `coordinator.operator`.
 def test_operator_noreply_resolves_github_and_github_id(tmp_path, monkeypatch):
     _patch_git_config(
         monkeypatch,
@@ -438,8 +391,6 @@ def test_hosts_yml_wins_over_operator(tmp_path, monkeypatch):
     result = person_resolver.resolve_operating_person(home=tmp_path)
 
     assert result["github"] == "hosts-yml-winner"
-    # the operator leg is a fallback only — it must not smuggle its
-    # github_id in even though hosts.yml won the `github` handle.
     assert "github_id" not in result
 
 

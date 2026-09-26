@@ -1,14 +1,3 @@
-"""
-Tests for coordinator_core.ops.workday_surface_auto_push_failure_stats —
-settlement B8 (workday.surface_auto_push_failure_stats).
-
-Covers the NAMED acceptance criterion (malformed-line rule: counts toward
-total, excluded from recent_24h, never raises), the absent-log-is-zeros
-healthy state, the 24h wall-clock window boundary, the CC-4 double-invocation
-proof, and the repo_root premise failure. All filesystem work is
-tmp_path-hermetic; log lines are authored in the auto_push.py writer's exact
-bracketed-UTC-stamp shape.
-"""
 
 from __future__ import annotations
 
@@ -43,8 +32,6 @@ def test_absent_log_returns_zeros_not_error(repo):
 
 
 def test_gitfile_worktree_layout_returns_zeros(tmp_path):
-    """Linked-worktree shape: `.git` is a FILE — unreachable log path folds to
-    the healthy zeros state, never a NotADirectoryError escape."""
     root = tmp_path / "worktree"
     root.mkdir()
     (root / ".git").write_text("gitdir: /elsewhere\n", encoding="utf-8")
@@ -66,10 +53,6 @@ def test_window_and_totals(repo):
 
 
 def test_malformed_line_counts_toward_total_excluded_from_recent_never_raises(repo):
-    """Settlement B8's explicit malformed-line rule — the named acceptance
-    criterion: no-timestamp garbage AND regex-shaped-but-calendar-invalid
-    stamps both count in total, contribute nothing to recent_24h, and never
-    raise."""
     now = datetime.now(timezone.utc)
     garbage = "hook wrote something without a stamp"
     invalid_calendar = "[2026-13-99T99:99:99Z] PUSH FAILED on work/x"
@@ -95,8 +78,6 @@ def test_empty_log_file(repo):
 
 
 def test_double_invocation_identical_results_no_state(repo):
-    """CC-4: pure read — two back-to-back calls return identical results and
-    leave the log bytes untouched."""
     now = datetime.now(timezone.utc)
     _write_log(repo, [_stamped_line(now - timedelta(hours=2)), "malformed"])
     log = repo / ".git" / "push-failures.log"

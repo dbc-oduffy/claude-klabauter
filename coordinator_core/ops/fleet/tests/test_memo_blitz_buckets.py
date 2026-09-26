@@ -93,10 +93,6 @@ def _trigger(candidates: list[dict]) -> dict:
 TODAY = datetime.date(2026, 7, 28)
 
 
-# ---------------------------------------------------------------------------
-# Param validation
-# ---------------------------------------------------------------------------
-
 class TestValidateParams:
     def test_missing_dry_run_is_setup_error(self):
         result = _validate_params({})
@@ -117,8 +113,6 @@ class TestValidateParams:
         assert inbox_dir is None
 
     def test_bool_threshold_rejected(self):
-        # bool is an int subclass — `open_threshold: true` must not silently
-        # mean 1.
         result = _validate_params({"dry_run": True, "open_threshold": True})
         assert isinstance(result, dict)
         assert result["exit_code"] == 1
@@ -128,10 +122,6 @@ class TestValidateParams:
         assert isinstance(result, dict)
         assert result["exit_code"] == 1
 
-
-# ---------------------------------------------------------------------------
-# Bucketing
-# ---------------------------------------------------------------------------
 
 class TestBucketing:
     def _dominant_inbox(self, tmp_path: Path) -> Path:
@@ -163,8 +153,6 @@ class TestBucketing:
         _write_memo(inbox, "2026-07-26-claude-klabauter-em-note.md", kind="fyi")
         candidates = _build_candidates(inbox, 10, 7, TODAY)
         buckets = {c["id"]: c["bucket"] for c in _by_kind(candidates, "bucket")}
-        # Same (dominant) sender, but kind fyi — must land in the fyi sweep, or
-        # the re-judgement that surfaced a break-class defect never happens.
         assert buckets["2026-07-26-claude-klabauter-em-note.md"] == "fyi"
         assert buckets["2026-07-20-claude-klabauter-em-ask-0.md"] == "dominant"
 
@@ -203,9 +191,6 @@ class TestBucketing:
         assert summary["unreadable"] == ["README.md"]
 
     def test_non_utf8_file_counted_unreadable_not_fatal(self, tmp_path):
-        # A binary/non-UTF-8 file must land in
-        # unreadable[] rather than raising UnicodeDecodeError out of the
-        # whole sweep.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(inbox, "2026-07-20-a-em-ok.md", sender="a-em")
@@ -215,10 +200,6 @@ class TestBucketing:
         assert summary["unreadable"] == ["binary.md"]
 
     def test_all_terminal_status_inbox_distinct_from_empty(self, tmp_path):
-        # An all-terminal-status
-        # inbox and a genuinely empty inbox degrade through the same
-        # open_count == 0 path; assert both explicitly so a future change
-        # that special-cases one doesn't silently break the other.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(inbox, "2026-07-20-a-em-done.md", sender="a-em", status="actioned")
@@ -230,9 +211,6 @@ class TestBucketing:
         assert _trigger(candidates)["fires"] is False
 
     def test_non_open_memos_reported_not_silently_dropped(self, tmp_path):
-        # Item 52, fix 1: a non-open memo (terminal, or an unrecognized
-        # status:) is COUNTED in non_open[], never dropped via a bare
-        # `continue` with no trace on the envelope.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(inbox, "2026-07-20-a-em-open.md", sender="a-em")
@@ -247,9 +225,6 @@ class TestBucketing:
         }
 
     def test_missing_status_reported_in_non_open(self, tmp_path):
-        # A memo with no status: field at all is also counted, with
-        # status: None rather than being indistinguishable from "readable
-        # and open".
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         path = inbox / "2026-07-20-a-em-nostatus.md"
@@ -278,10 +253,6 @@ class TestBucketing:
         assert summary["non_open"] == []
 
 
-# ---------------------------------------------------------------------------
-# space:
-# ---------------------------------------------------------------------------
-
 class TestSpace:
     def test_declared_space_preferred_and_flagged(self, tmp_path):
         inbox = tmp_path / "inbox"
@@ -293,8 +264,6 @@ class TestSpace:
         assert declared["space"] == "gate-migration"
         assert declared["space_declared"] is True
         inferred = buckets["2026-07-21-a-em-two.md"]
-        # Fallback is the topic slug with the date prefix stripped — a weaker
-        # key, and explicitly marked as this op's guess.
         assert inferred["space"] == "a-em-two"
         assert inferred["space_declared"] is False
 
@@ -307,14 +276,8 @@ class TestSpace:
         assert _summary(_build_candidates(inbox, 10, 7, TODAY))["spaces_declared"] == 2
 
 
-# ---------------------------------------------------------------------------
-# Supersession candidates
-# ---------------------------------------------------------------------------
-
 class TestSupersessionCandidates:
     def test_self_declared_superseding_it_form_detected(self, tmp_path):
-        # AC2 form 1 — a memo citing the older memo's basename directly and
-        # announcing the supersession with the verb "superseding".
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(
@@ -334,9 +297,6 @@ class TestSupersessionCandidates:
         assert "CANDIDATE" in cands[0]["note"]
 
     def test_self_declared_authoritative_disagree_form_detected(self, tmp_path):
-        # AC2 form 2 — syntactically unalike from form 1: no "supersed*" verb
-        # at all, a precedence claim instead, paired via the generic
-        # "previous memo" reference rather than a basename citation.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(
@@ -357,10 +317,6 @@ class TestSupersessionCandidates:
         assert cands[0]["older"] == "2026-07-20-a-em-old.md"
 
     def test_authoritative_disagree_unrelated_clause_is_not_a_candidate(self, tmp_path):
-        # A same-line "authoritative ... disagree"
-        # pair that shares no "where" clause link is an unrelated coincidence,
-        # not a precedence claim, and must not fire even when the memo also
-        # cites a legitimate sibling basename elsewhere in the body.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(
@@ -379,8 +335,6 @@ class TestSupersessionCandidates:
         assert cands == []
 
     def test_bare_superseding_with_no_memo_reference_is_not_a_candidate(self, tmp_path):
-        # AC5 — the phrase alone, with no reference to another memo, must not
-        # emit a candidate.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(
@@ -395,10 +349,6 @@ class TestSupersessionCandidates:
         assert cands == []
 
     def test_declared_beats_prose_when_the_sender_filled_the_field(self, tmp_path):
-        # AC3 — when all three bases could apply to the same pair, the pair is
-        # emitted exactly once. The winning basis is `declared`, not
-        # `self-declared`: `supersedes:` is the sender's own structured answer
-        # to the question the prose pass infers, so prose does not overrule it.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(
@@ -417,11 +367,7 @@ class TestSupersessionCandidates:
         assert cands[0]["older"] == "2026-07-20-a-em-old.md"
 
     def test_prose_never_retargets_a_memo_that_declared_supersedes(self, tmp_path):
-        # Regression, DoE-claude 2026-08-30: a memo declaring `supersedes: A`
-        # whose prose also trips the phrase pattern used to be paired against
         # a DIFFERENT memo B by the self-declared pass, which ran first and
-        # claimed the pair at the top-ranked basis. The declared target is the
-        # only one that may be emitted for such a memo.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(
@@ -444,17 +390,9 @@ class TestSupersessionCandidates:
         ]
 
     def test_declared_supersedes_resolves_through_a_path_form_reference(self, tmp_path):
-        # Regression, DoE-claude 2026-08-30: `supersedes:` is authored with
-        # every root the corpus admits. A reference carrying any directory
-        # prefix used to miss the basename-keyed index entirely, dropping the
-        # declaration — and with it the basis that outranks a prose guess.
         for i, reference in enumerate((
             "cross-repo/inbox/2026-07-20-a-em-old.md",
             "state/memo-outbox/sent/2026-07-20-a-em-old.md",
-            # abs-path-ok: fixture data, not a citation — a foreign-host
-            # absolute root is one of the four shapes `supersedes:` is
-            # authored in across the live corpus, and is the case the
-            # basename normalization exists to survive.
             "/Users/x/repo/cross-repo/inbox/2026-07-20-a-em-old.md",
             "2026-07-20-a-em-old.md",
         )):
@@ -477,10 +415,6 @@ class TestSupersessionCandidates:
             ], reference
 
     def test_in_reply_to_resolves_its_own_thread_not_the_nearest_date(self, tmp_path):
-        # Regression, DoE-claude 2026-08-30: `in_reply_to` was matched as a
-        # bare token in prose and then resolved by date proximity, so a memo
-        # naming thread A was paired with whatever same-sender memo happened
-        # to be nearest in time. The frontmatter value is the answer.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(
@@ -503,9 +437,6 @@ class TestSupersessionCandidates:
         ]
 
     def test_unresolvable_in_reply_to_emits_nothing_rather_than_a_substitute(self, tmp_path):
-        # The declared thread is archived or was never received here. Its
-        # absence is an answer — there is no open pair to offer — and must
-        # NOT fall through to the nearest-dated same-sender memo.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(
@@ -521,8 +452,6 @@ class TestSupersessionCandidates:
         assert [c for c in cands if c["basis"] == "self-declared"] == []
 
     def test_in_reply_to_across_senders_is_not_a_supersession(self, tmp_path):
-        # A reply names the memo it answers, routinely across senders. That is
-        # a correspondence edge — nobody supersedes someone else's memo.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(
@@ -538,9 +467,6 @@ class TestSupersessionCandidates:
         assert cands == []
 
     def test_ambiguous_basename_citation_is_skipped(self, tmp_path):
-        # Precision-over-recall: a memo whose body cites TWO different
-        # same-sender older memos by basename gives no unambiguous single
-        # older memo to pair with, and is skipped rather than guessed.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(
@@ -562,9 +488,6 @@ class TestSupersessionCandidates:
         assert cands == []
 
     def test_generic_reference_resolves_to_nearest_earlier_same_sender(self, tmp_path):
-        # No basename citation at all, so the generic "previous memo" phrase
-        # resolves to the single nearest earlier same-sender memo — this is
-        # deterministic nearest-date resolution, not a guess among ties.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(
@@ -585,12 +508,6 @@ class TestSupersessionCandidates:
         assert cands[0]["older"] == "2026-07-19-a-em-two.md"
 
     def test_bare_slug_citation_yields_no_candidate(self, tmp_path):
-        # Replay of the 2026-08-20 escalate run's worked example. The memo
-        # names its target by bare topic-slug, which carries no file extension
-        # and so never reaches `loci`; the generic phrase "that memo" then
-        # used to resolve by date adjacency to an unrelated same-sender memo.
-        # A slug reference IS a citation: precision-over-recall means no
-        # candidate at all rather than a nearest-dated stand-in.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(
@@ -624,8 +541,6 @@ class TestSupersessionCandidates:
         assert cands[0]["advisory"] is False
 
     def test_same_sender_same_locus_carries_advisory_true(self, tmp_path):
-        # AC4 — the locus basis is explicitly marked advisory, distinguishing
-        # it from the two declaration bases.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(
@@ -654,7 +569,6 @@ class TestSupersessionCandidates:
         assert cands[0]["basis"] == "declared"
         assert cands[0]["newer"] == "2026-07-25-a-em-new.md"
         assert cands[0]["older"] == "2026-07-20-a-em-old.md"
-        # Never reported as settled — the op emits candidates, full stop.
         assert "CANDIDATE" in cands[0]["note"]
 
     def test_declared_list_form_emits_one_candidate_per_reference(self, tmp_path):
@@ -714,7 +628,6 @@ class TestSupersessionCandidates:
         assert cands == []
 
     def test_same_day_pair_not_a_candidate(self, tmp_path):
-        # Neither is "later"; a same-day pair carries no supersession direction.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(inbox, "2026-07-20-a-em-x.md", sender="a-em", body="see foo.py\n")
@@ -739,10 +652,6 @@ class TestSupersessionCandidates:
 
 
     def test_declared_direction_wins_over_disagreeing_inferred_dates(self, tmp_path):
-        # A same-sender pair whose supersedes:
-        # claim disagrees with created-date ordering must emit exactly one
-        # candidate, with the declared basis and the declared direction, not
-        # two candidates with inverted newer/older claims.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(
@@ -761,9 +670,6 @@ class TestSupersessionCandidates:
         assert cands[0]["older"] == "2026-07-25-a-em-actually-older.md"
 
     def test_unknown_date_memo_not_paired_in_inferred_pass(self, tmp_path):
-        # A same-sender memo with no resolvable
-        # date must not be synthesized as "the older" side of a candidate
-        # against a dated memo via the datetime.date.min sentinel.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         dated = inbox / "2026-07-25-a-em-dated.md"
@@ -784,9 +690,6 @@ class TestSupersessionCandidates:
         assert cands == []
 
     def test_url_locus_collision_not_a_candidate(self, tmp_path):
-        # Two memos citing different URLs that
-        # happen to share a trailing path segment must not collapse to a
-        # shared "locus" via basename normalization.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(
@@ -801,9 +704,6 @@ class TestSupersessionCandidates:
         assert cands == []
 
     def test_bare_filename_locus_still_matches_without_url(self, tmp_path):
-        # Guards against an over-broad URL-stripping fix that also eats bare
-        # filename citations — recall on `memo_send.py`-style citations must
-        # survive the F6 fix.
         cands = _by_kind(
             _build_candidates(self._same_sender_locus_inbox(tmp_path), 10, 7, TODAY),
             "supersession_candidate",
@@ -826,8 +726,6 @@ class TestSupersessionCandidates:
         return inbox
 
     def test_small_inbox_floor_still_governs(self, tmp_path):
-        # small-inbox behaviour must be identical
-        # to before the corpus-scaled fix: the absolute floor (3) governs.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         for i in range(4):
@@ -839,9 +737,6 @@ class TestSupersessionCandidates:
         assert cands == []
 
     def test_large_inbox_locus_cited_4_times_still_pairs(self, tmp_path):
-        # 4 citations out of 100+ open memos is a
-        # strong discriminating signal the bare floor (3) would wrongly
-        # suppress; the share-scaled cutoff must still pass it through.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         for i in range(100):
@@ -867,8 +762,6 @@ class TestSupersessionCandidates:
         assert len(shared) >= 1
 
     def test_ubiquitous_locus_is_not_a_candidate_signal(self, tmp_path):
-        # `SKILL.md`-class names are cited by everything and carry no thread
-        # signal — pairing on them manufactures candidates an EM would reject.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         for i in range(5):
@@ -880,8 +773,6 @@ class TestSupersessionCandidates:
         assert cands == []
 
     def test_narrowly_cited_locus_still_pairs(self, tmp_path):
-        # Same corpus shape, but the shared locus is cited by only the pair —
-        # the frequency cut must not swallow the signal it exists to sharpen.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         for i in range(4):
@@ -901,14 +792,7 @@ class TestSupersessionCandidates:
         assert [c["shared_loci"] for c in cands] == [["memo_blitz_buckets.py"]]
 
     def test_pairs_per_locus_bound_caps_fanout_at_boundary_cutoff(self, tmp_path):
-        # state/audits/2026-08-12-supersession-candidate-pair-blowup.md — a
-        # locus sitting exactly at `_discriminating_locus_cutoff` still
         # contributes up to C(cutoff, 2) pairs; `_MAX_PAIRS_PER_LOCUS` (3)
-        # must cap that fanout regardless. Corpus sized to 61 open memos so
-        # the SHARE-scaled cutoff (ceil(0.05 * 61) == 4) governs, and the
-        # shared locus is cited by exactly 4 same-sender memos — the
-        # boundary case (a locus AT the cutoff, not comfortably under it).
-        # Uncapped this would emit C(4, 2) == 6 pairs; capped it must emit
         # at most `_MAX_PAIRS_PER_LOCUS` == 3.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
@@ -927,10 +811,6 @@ class TestSupersessionCandidates:
         assert len(shared) == 3
 
     def test_declaration_bases_still_emit_when_inferred_basis_is_capped(self, tmp_path):
-        # Regression for the pairs-per-locus fix: `self-declared` and
-        # `declared` must be completely unaffected by the inferred-basis
-        # pair cap, even in a corpus where the locus-pair cap is actively
-        # suppressing `same-sender-same-locus` candidates.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         for i in range(57):
@@ -963,10 +843,6 @@ class TestSupersessionCandidates:
         assert len(inferred) == 3
 
 
-# ---------------------------------------------------------------------------
-# Trigger
-# ---------------------------------------------------------------------------
-
 class TestTrigger:
     def test_neither_leg_trips_on_a_small_fresh_inbox(self, tmp_path):
         inbox = tmp_path / "inbox"
@@ -990,8 +866,6 @@ class TestTrigger:
         assert trig["fires"] is True
 
     def test_age_leg_alone_fires(self, tmp_path):
-        # The load-bearing leg: one memo, 16 days old — example-retrieval-repo's actual
-        # failure shape, which no count threshold would ever have caught.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(inbox, "2026-07-12-a-em-x.md", sender="a-em", created="2026-07-12")
@@ -1017,14 +891,9 @@ class TestTrigger:
             encoding="utf-8",
         )
         trig = _trigger(_build_candidates(inbox, 10, 7, TODAY))
-        # Without the filename fallback this memo would be ageless and drag the
-        # oldest-open figure toward "nothing is old here."
         assert trig["oldest_open_age_days"] == 16
 
     def test_malformed_created_falls_back_to_filename_date(self, tmp_path):
-        # Only "missing created" was
-        # tested before; a present-but-unparseable value must exercise the
-        # same _created_date ValueError-catch fallback to the filename prefix.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         path = inbox / "2026-07-12-a-em-x.md"
@@ -1049,10 +918,6 @@ class TestTrigger:
         assert _summary(candidates)["open_count"] == 0
 
 
-# ---------------------------------------------------------------------------
-# Handler
-# ---------------------------------------------------------------------------
-
 class TestHandler:
     def test_handler_returns_dry_run_envelope(self, tmp_path):
         inbox = tmp_path / "inbox"
@@ -1067,19 +932,12 @@ class TestHandler:
         assert {"bucket", "bucket_summary", "trigger"} <= kinds
 
     def test_handler_without_repo_root_or_inbox_dir_fails_loud(self):
-        # The frozen fleet envelope carries no reason field — the exit_code:1
-        # setup-error shape IS the signal (the reason is logged daemon-side).
         result = _memo_blitz_buckets({"dry_run": True})
         assert result["exit_code"] == 1
         assert result["mode"] == _MODE
         assert result["candidates"] == []
 
     def test_no_basis_ever_auto_applies(self, tmp_path):
-        # AC6 — regression guard: every supersession basis (self-declared,
-        # declared, same-sender-same-locus) remains an OFFER. This op has no
-        # act mode at all (dry_run:false is rejected outright, see
-        # TestValidateParams), and no candidate carries an "applied"/"acted"
-        # field of any kind — a future edit must not quietly add one.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(

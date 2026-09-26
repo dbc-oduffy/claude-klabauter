@@ -52,22 +52,12 @@ from coordinator_core.ops.review_brightline_gate import (
 )
 from coordinator_core.resolve_validation_cmd import cs_read_local_md_mapping
 
-#: Per-repo config key (coordinator.local.md, nested mapping) --
-#: classify_surface bucket name -> baseline weight for that bucket.
 _BASELINE_WEIGHT_KEY = "commit_ledger_baseline_weight"
 
-#: Per-repo config key (coordinator.local.md, flat list) -- glob patterns
-#: for paths whose review weight is elevated above their bucket baseline.
 _ELEVATED_SURFACES_KEY = "commit_ledger_elevated_surfaces"
 
-#: Fallback baseline weight for a bucket with no configured value, or for a
-#: repo with no `commit_ledger_baseline_weight` mapping at all. Never 0.0
-#: (AC5) -- an unlisted/unconfigured path still carries review weight.
 _DEFAULT_BASELINE_WEIGHT = 1.0
 
-#: Multiplier applied to the baseline weight when a path matches one of the
-#: repo's `commit_ledger_elevated_surfaces` globs. Scoped to THIS module's
-#: weighting mandate -- not exported, not a rename of brightline's
 #: anti-scoped `_PLANNING_LOC_WEIGHT`.
 _ELEVATED_SURFACE_WEIGHT = 2.0
 

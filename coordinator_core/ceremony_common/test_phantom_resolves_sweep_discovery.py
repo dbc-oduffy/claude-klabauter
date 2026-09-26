@@ -1,21 +1,3 @@
-"""coordinator_core.ceremony_common.test_phantom_resolves_sweep_discovery —
-proves the auto-discovery primitives `phantom_resolves_sweep.discover_
-brief_defining_packages`/`discover_consumes_manifest_modules` actually pick
-up a NEW package, not just the three/eleven that happen to exist in this
-repo today.
-
-Why this file exists: `test_argv_prog_slot_contract.py`'s manifest union
-and `test_phantom_resolves_id_sweep.py`'s package registry are both now
-auto-discovery-driven rather than hand-imported — the generalization this
-guard-pair dispatch asked for. Proving that generalization actually bites
-on a package added AFTER today means constructing a synthetic
-`coordinator_core/`-shaped tree under `tmp_path` (never the real repo
-tree — this repo's own discovered set is exercised live by the two
-consumer test files) and confirming discovery finds the planted package.
-
-Spec backlink: cross-repo/inbox/2026-07-27-… "Generalize seam guards
-fleet-wide" dispatch (DoE-claude, 2026-07-27), red-proof requirement.
-"""
 
 from __future__ import annotations
 
@@ -85,15 +67,6 @@ def test_discover_consumes_manifest_modules_does_not_false_fire_on_a_reference_i
 
 
 def test_this_repos_live_discovery_matches_the_eleven_known_brief_packages() -> None:
-    """Regression pin against THIS repo's real tree (not a synthetic one):
-    the 2026-07-27 generalization pass's own inventory found 11 `brief(`-
-    defining packages. If this count changes, `test_phantom_resolves_id_
-    sweep.py`'s three-bucket registration test (providers/verified-empty/
-    deferred-allowlist) will independently fail by name for whichever
-    package is new and unregistered -- this pin exists so a silent count
-    DROP (a package's `brief(` disappearing without the corresponding
-    sweep/allowlist entry being removed too) is equally visible, which the
-    other test alone would not catch."""
     found = discover_brief_defining_packages()
     assert set(found) == {
         "backlog_grind_assemble",
@@ -107,17 +80,8 @@ def test_this_repos_live_discovery_matches_the_eleven_known_brief_packages() -> 
         "workday_complete",
         "workstream_complete",
         "workweek_complete",
-        # Landed after the 2026-07-27 generalization pass, so the "eleven"
-        # in this test's name is now thirteen. Both are verified
-        # resolves-free in test_phantom_resolves_id_sweep.py.
         "plan_assemble",
         "quick_wrap_assemble",
-        # Landed after those two and likewise unregistered, so this pin and
-        # `test_every_discovered_package_is_registered_or_allowlisted` were
-        # both red until 2026-08-25 -- surfaced by the ceremony-sweep-05
-        # audit, which enumerates `brief(`-defining packages for its own
-        # reasons and counted 15 against the 13 pinned here. Both now carry a
-        # real sweep provider, not an allowlist entry.
         "roadmap_planning_assemble",
         "sprint_planning_assemble",
     }

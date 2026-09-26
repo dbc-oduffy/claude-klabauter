@@ -60,8 +60,6 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    # popup-intentional-last-resort — test-only real-git spawn, mirrors the
-    # governed real_git.py fixture's own unguarded pattern.
     return subprocess.run(
         ["git", *args],
         cwd=str(cwd),
@@ -73,13 +71,6 @@ def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
 
 
 def _run(result):
-    """`archive_terminal_handoffs._handler` is SYNC and returns a dict.
-
-    This shim used to be `asyncio.run(coro)`, which had every test in this
-    file erroring with "a coroutine was expected, got {...}" — independently
-    of, and predating, the 2026-08-28 guard deletion. Kept as a shim rather
-    than inlined so the call sites below stay readable.
-    """
     if hasattr(result, "__await__"):
         return asyncio.run(result)
     return result
@@ -96,8 +87,6 @@ def _init_repo(worktree: Path) -> None:
 
 
 def _seed_continued_predecessor(worktree: Path, name: str) -> Path:
-    """A Branch-B-terminal `continued` record — the exact stranded shape C3's
-    fix now stops accumulating and C4 drains."""
     handoffs_dir = worktree / "state" / "handoffs"
     handoffs_dir.mkdir(parents=True, exist_ok=True)
     path = handoffs_dir / name

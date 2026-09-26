@@ -1,27 +1,3 @@
-"""test_plan_tasks_resolve.py — CLI-layer proving tests for
-`coordinator/bin/plan-tasks-resolve`, the verb-shaped trampoline over
-`plan.tasks.mutate`'s `resolve` verb (C5,
-docs/plans/2026-08-05-make-the-five-exit-plan-tasks-resolver-r.md).
-
-Scope: this suite exercises ONLY the trampoline's own CLI-layer behavior —
-argument parsing, params-dict construction per exit flag, `--disposition-
-detail` requirement enforcement, and the `--moved-to` add-task/resolve
-orchestration (including its "record the id add-task actually wrote, never
-the caller's proposed id" defensive-forward behavior). It does NOT exercise
-`plan.tasks.mutate`'s own domain logic (pm_approved gating, D5 ordering,
-disposition_ref shape validation, ...) — that is
-`coordinator_core/ops/tests/test_plan_tasks_mutate.py`'s job. Every test here
-monkeypatches `cc_invoke.route_mutation` (and, for --moved-to,
-`_read_source_row`) rather than invoking the real op, so no engine-root
-resolution or coordinator_core.invoke subprocess spawn ever happens in this
-suite.
-
-Loader pattern mirrors coordinator/bin/tests/test_archive_stamp_cli_
-subcommand_help.py: `importlib.machinery.SourceFileLoader` against the bare
-extensionless entrypoint (no `.py` file to import by dotted name).
-
-Run with: python3 -m pytest coordinator/bin/tests/test_plan_tasks_resolve.py
-"""
 from __future__ import annotations
 
 import asyncio
@@ -65,9 +41,7 @@ class TestHelp(unittest.TestCase):
         out = buf.getvalue()
         for flag in ("--coded", "--spun-off", "--moved-to", "--backlogged", "--wont-do"):
             self.assertIn(flag, out)
-        # The two PM-gated exits must be marked as needing a PM word.
         self.assertIn("PM WORD REQUIRED", out)
-        # coded/spun_off/moved-to must NOT be marked as PM-gated.
         self.assertEqual(out.count("PM WORD REQUIRED"), 2)
 
 
@@ -103,10 +77,6 @@ class TestExitDispatch(unittest.TestCase):
         self.assertEqual(params["disposition_detail"], "shipped the thing")
 
     def test_coded_without_detail_is_refused_locally(self):
-        """`coded` needs a detail too — the shared disposition-shape check
-        refuses ANY non-open row with an empty detail, so a CLI that let
-        --coded through only bought the EM a server round-trip to find out.
-        Regression for the --help text that claimed detail was optional here."""
         calls, fake = self._capture_route_mutation()
         with unittest.mock.patch.object(_cli.cc_invoke, "route_mutation", fake):
             with unittest.mock.patch.object(_cli, "_resolve_repo_root", lambda: "/repo"):
@@ -487,8 +457,6 @@ class TestMovedTo(unittest.TestCase):
         self.assertEqual(add_op, "plan.tasks.mutate")
         self.assertEqual(add_params["verb"], "add-task")
         self.assertEqual(add_params["plan_path"], "docs/plans/bar.md")
-        # The moved task must not carry the reserved disposition fields onto
-        # the target plan — it starts OPEN there.
         for reserved in ("disposition", "disposition_ref", "disposition_detail"):
             self.assertNotIn(reserved, add_params["task"])
         self.assertEqual(add_params["task"]["id"], "C1")
@@ -498,10 +466,7 @@ class TestMovedTo(unittest.TestCase):
         self.assertEqual(resolve_params["plan_path"], "docs/plans/foo.md")
         self.assertEqual(resolve_params["id"], "C1")
         self.assertEqual(resolve_params["disposition"], "spun_off")
-        # disposition_ref is the TARGET PLAN's own path — a single
-        # repo-relative path, matching every other spun_off ref's shape.
         self.assertEqual(resolve_params["disposition_ref"], "docs/plans/bar.md")
-        # Written id matched the proposed id — detail passes through verbatim.
         self.assertEqual(resolve_params["disposition_detail"], "folded into bar")
 
     def test_moved_to_records_the_written_id_not_the_proposed_one(self):
@@ -534,16 +499,10 @@ class TestMovedTo(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         _, resolve_params, _ = calls[1]
-        # The minted id ("C1-2"), NOT the proposed id ("C1"), must be
-        # reflected in the recorded outcome.
         self.assertIn("C1-2", resolve_params["disposition_detail"])
         self.assertIn("folded into bar", resolve_params["disposition_detail"])
 
     def test_moved_to_resolve_failure_after_add_task_reports_partial_mutation(self):
-        """Finding 1 regression: if add-task succeeds but the subsequent
-        resolve on the source row raises RouteMutationError, the operator
-        must be told the target plan already received the new row — not
-        just handed the bare resolve refusal."""
         calls = []
 
         def fake_route_mutation(op, params, repo_root, legacy_fn):
@@ -575,7 +534,6 @@ class TestMovedTo(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertEqual(len(calls), 2, "both add-task and resolve must have been attempted")
         stderr = buf.getvalue()
-        # The operator must be told the target plan already received the row.
         self.assertIn("docs/plans/bar.md", stderr)
         self.assertIn("already applied", stderr)
         self.assertIn("'C1'", stderr)
@@ -595,11 +553,6 @@ class TestMovedTo(unittest.TestCase):
 
 
 class TestParseWrittenIdMatchesRealAddTaskMessage(unittest.TestCase):
-    """Finding 3 regression: `_parse_written_id` decodes the literal message
-    format `_add_task` (coordinator_core/ops/plan_tasks_mutate.py) actually
-    emits, invoked for real rather than via a hand-crafted fake string — so a
-    future edit to `_add_task`'s message wording breaks THIS test instead of
-    silently degrading `_parse_written_id`'s fallback to "no divergence"."""
 
     @staticmethod
     def _make_git_repo(tmp_path: Path) -> Path:
@@ -674,9 +627,6 @@ status: draft
 
         self.assertEqual(result["exit_code"], 0, result)
         message = result["message"]
-        # Real message format, not a hand-crafted fake — this is the whole
-        # point of the regression: it breaks here if `_add_task` ever changes
-        # its wording, rather than silently degrading `_parse_written_id`.
         written_id = _cli._parse_written_id(message, "some-other-proposed-id")
         self.assertEqual(
             written_id, "C2",

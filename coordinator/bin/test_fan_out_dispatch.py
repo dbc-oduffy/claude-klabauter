@@ -1,31 +1,3 @@
-"""test_fan_out_dispatch.py — pytest suite for fan-out-dispatch.py.
-
-Converted from a hand-rolled `.test.py` runner (print-based PASS/FAIL, its own
-main()/sys.exit) into collectable top-level test_* functions; assertion intent
-preserved 1:1. Each original lettered Test block becomes its own test_* function
-(all use independent fixture subdirectories off a shared module-scoped `root`
-tempdir), except Test H's three sub-cases (threshold resolution order), which stay
-together in one test function since they share a single repo_h and are meaningfully
-sequential checks of the same resolution ladder.
-
-Port of: fan-out-dispatch.test.sh (65e5d199, 2026-07-19) — de-bash-coordinator
-campaign, Wave 3. Validates the fan-out helper's overlap detection, malformed-row
-rejection, clean-spec emission, no-commit-verb guarantee, large-wave NOTE boundary,
-threshold-resolution order, non-git-repo hard-error, @file brief form, and the
-pinned-interface (4th-column) observer. All tests use temp directories for fixtures;
-cleanup is guaranteed by pytest's tmp_path_factory.
-
-Spec backlink: docs/plans/2026-05-27-fan-out-default-doctrine.md §Chunk 1
-Spec backlink (organic-ramp): docs/plans/2026-05-30-organic-ramp-concurrency-doctrine.md §C4
-Spec backlink (invariant observers): docs/plans/2026-06-22-invariant-verification-observers.md §C2
-Spec backlink (plan-doc OOS): docs/plans/2026-06-15-execute-plan-plan-doc-oos-injection.md §C4
-
-Note on parity with the retired bash harness: the bash test carried 3 latent failures that
-were harness bugs, not behaviour bugs — two large-wave assertions died to SIGPIPE (`set -o
-pipefail` + `grep -q` short-circuit on large output) and the C9 count asserted 3 where the
-real per-block figure is 2 headers × N blocks. This port asserts the CORRECT figures and is
-green end-to-end.
-"""
 from __future__ import annotations
 
 import os
@@ -41,7 +13,6 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 HELPER = os.path.join(SCRIPT_DIR, "fan-out-dispatch.py")
 PYTHON = sys.executable
-
 
 
 def make_git_repo(path: str) -> None:
@@ -106,40 +77,40 @@ def test_malformed_row_detection(root):
     make_git_repo(repo_b)
 
     spec_b1 = os.path.join(root, "spec_b1.tsv")
-    write(spec_b1, "chunk-1\tFix something\n")  # only 2 fields
+    write(spec_b1, "chunk-1\tFix something\n")
     code, so, se = run_helper(repo_b, spec_file=spec_b1)
     assert code != 0, "wrong-field-count must exit non-zero"
     assert "row 1" in se
     assert "EXECUTOR DISPATCH BLOCK" not in so
 
     spec_b2 = os.path.join(root, "spec_b2.tsv")
-    write(spec_b2, "\tFix something\tfile.py\n")  # empty chunk-id (leading tab collapses -> 2 fields)
+    write(spec_b2, "\tFix something\tfile.py\n")
     code, so, se = run_helper(repo_b, spec_file=spec_b2)
     assert code != 0, "empty-chunk-id must exit non-zero"
     assert "row 1" in se
     assert "EXECUTOR DISPATCH BLOCK" not in so
 
     spec_b3 = os.path.join(root, "spec_b3.tsv")
-    write(spec_b3, "chunk-1\tFix something\t\n")  # empty files
+    write(spec_b3, "chunk-1\tFix something\t\n")
     code, so, se = run_helper(repo_b, spec_file=spec_b3)
     assert code != 0, "empty-files-field must exit non-zero"
     assert "chunk-1" in se
     assert "EXECUTOR DISPATCH BLOCK" not in so
 
     spec_b4 = os.path.join(root, "spec_b4.tsv")
-    write(spec_b4, "chunk-1\tBrief\tfile.py\textra-field\n")  # 4th column: malformed pin, still valid
+    write(spec_b4, "chunk-1\tBrief\tfile.py\textra-field\n")
     code, so, se = run_helper(repo_b, spec_file=spec_b4)
     assert code == 0, "4-field row (optional pin column) must exit zero"
     assert "EXECUTOR DISPATCH BLOCK" in so
 
     spec_b5 = os.path.join(root, "spec_b5.tsv")
-    write(spec_b5, "chunk\nid\tBrief here\tfile.py\n")  # embedded newline splits into non-3-field lines
+    write(spec_b5, "chunk\nid\tBrief here\tfile.py\n")
     code, so, se = run_helper(repo_b, spec_file=spec_b5)
     assert code != 0, "embedded-newline must exit non-zero"
     assert "EXECUTOR DISPATCH BLOCK" not in so
 
     spec_b6 = os.path.join(root, "spec_b6.tsv")
-    write(spec_b6, "chunk-x\tBrief\ta,b\n")  # comma-in-path documented limitation
+    write(spec_b6, "chunk-x\tBrief\ta,b\n")
     code, so, se = run_helper(repo_b, spec_file=spec_b6)
     assert code == 0, "comma-in-path is a known limitation, must exit zero"
     assert "- a" in so
@@ -148,8 +119,6 @@ def test_malformed_row_detection(root):
 
 @pytest.fixture(scope="module")
 def clean_spec_output(root):
-    """Test C's clean 3-chunk spec run, shared by test_clean_spec and test_no_commit_verb
-    (originally Test D asserted against Test C's captured stdout/stderr in the same run)."""
     repo_c = os.path.join(root, "repo_c")
     make_git_repo(repo_c)
     spec_c = os.path.join(root, "spec_c.tsv")
@@ -183,12 +152,9 @@ def test_clean_three_chunk_spec(clean_spec_output):
     assert so_c.count("Destructive-action prohibition") == 3, "destructive-action prohibition in all blocks"
     assert "Disk-first verification preamble" in so_c
     assert "TEXT ONLY" in so_c
-    # C9 (corrected from the retired bash harness's stale count of 3): each block carries TWO
-    # "Out-of-scope" headers (peer-work + plan-document), so 3 blocks -> 3 of each.
     assert so_c.count("Out-of-scope — peer work") == 3, "peer-work OOS header in all blocks"
     assert so_c.count("Out-of-scope — plan document") == 3, "plan-doc OOS header in all blocks"
     # C10 (M4b): expected_branch: is the SC-DR-008 commit-authorization token — the fan-out
-    # contract is now brief -> executor edits -> EM-serial-commit, so it must NOT appear.
     assert "expected_branch:" not in so_c, "expected_branch absent from all blocks (M4b de-branch)"
     assert so_c.count("### In-scope") == 3, "in-scope section header in all blocks"
 
@@ -267,7 +233,6 @@ def test_threshold_resolution_order(root):
         env.update(overrides)
         return env
 
-    # H1: no env, empty registry -> fallback 16 (floor is 16, not 8)
     reg_h1 = os.path.join(root, "reg_h1")
     os.makedirs(reg_h1, exist_ok=True)
     _, out16, _ = run_helper(repo_h, spec_file=specs[16], extra_env=clean_env({"MACHINE_LOCAL_REGISTRY_DIR": reg_h1}))
@@ -277,7 +242,6 @@ def test_threshold_resolution_order(root):
     assert NOTE not in out15, "fallback 16 -> no NOTE at 15 chunks"
     assert NOTE not in out8, "fallback floor is 16 NOT 8 -> no NOTE at 8 chunks"
 
-    # H2: machine-local registry value (5) wins over fallback
     reg_h2 = os.path.join(root, "reg_h2")
     os.makedirs(reg_h2, exist_ok=True)
     ml_exe = shutil.which("machine-local")
@@ -295,7 +259,6 @@ def test_threshold_resolution_order(root):
     assert NOTE in out5, "machine-local=5 -> NOTE at 5 chunks"
     assert NOTE not in out4, "machine-local=5 -> no NOTE at 4 chunks"
 
-    # H3: short env var wins over registry value
     _, out3, _ = run_helper(repo_h, spec_file=specs[3], extra_env={
         "MACHINE_LOCAL_FAN_OUT_LARGE_WAVE_THRESHOLD": "",
         "LARGE_WAVE_THRESHOLD": "3",
@@ -392,15 +355,7 @@ def test_stdin_spec_path(root):
     assert "EXECUTOR DISPATCH BLOCK: solo" in so
 
 
-# ---------------------------------------------------------------------------
-# candidate_restatements (5th field: change_kind) — push-not-pull hook onto
-# coordinator_core.learn_lessons_assemble.generate_candidates. Spec backlink:
-# DoE-claude coordinator/agents/executor.md § Candidate-Restatement Disposition.
-# ---------------------------------------------------------------------------
-
 # CLAUDE_KLABAUTER_ROOT for these tests is this very checkout — coordinator_core lives
-# at its top level, a sibling of coordinator/bin/ (where this test file and
-# fan-out-dispatch.py both live).
 _REAL_CLAUDE_KLABAUTER_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 
 
@@ -454,10 +409,6 @@ def test_three_and_four_field_rows_get_no_candidate_restatements_field(root):
 
 
 def test_empty_pin_field_before_change_kind_fails_loud(root):
-    # An empty 4th field with a populated 5th field
-    # must fail loud (exit 1, no output) rather than silently misparsing change_kind into
-    # pin_raw and dropping it — the pre-fix behaviour emitted a spurious "malformed 4th-
-    # column pin" NOTE instead of a clean, correctly-diagnosed error.
     repo_r = os.path.join(root, "repo_r")
     make_git_repo(repo_r)
     write(os.path.join(repo_r, "target-wiki.md"), "# Doctrine\nSome text.\n")

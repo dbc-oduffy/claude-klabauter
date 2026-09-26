@@ -36,7 +36,6 @@ def test_gen_settings_hooks_remediation_does_not_name_doe_claude(tmp_path: Path)
 
 def test_gen_settings_hooks_usage_text_keeps_functional_env_key():
     usage = gen_settings_hooks._usage_text()
-    # Functional identifiers (env var name + registry key) stay untouched.
     assert "REPO_DOE_CLAUDE" in usage
     assert "repos.doe_claude" in usage
 
@@ -48,14 +47,6 @@ def test_probe_git_lfs_remediation_does_not_name_example_retrieval_repo_ue_addon
 
 def test_probe_ue_functional_env_key_untouched(monkeypatch, tmp_path: Path):
     # EXAMPLE_GAME_REPO_UE_ROOT is a functional env-var identifier, not narrative
-    # prose naming a repo — it must survive the sweep unchanged.
-    #
-    # Negative spec: do NOT call probe_ue() bare. Its pass branch reports the
-    # engine path and names no env var, so a bare call asserts a string that
-    # only appears on hosts WITHOUT Unreal installed — green on CI, red on
-    # every developer box that has it. Pin the probe to a deterministic
-    # not-found state so the assertion is about the message text, which is
-    # what this module covers, and not about the host's UE install.
     monkeypatch.setenv("EXAMPLE_GAME_REPO_UE_ROOT", str(tmp_path / "no-such-ue-root"))
     line = prereq_probe.probe_ue()
     assert "EXAMPLE_GAME_REPO_UE_ROOT" in line

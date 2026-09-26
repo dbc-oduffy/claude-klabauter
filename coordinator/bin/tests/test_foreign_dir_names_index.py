@@ -55,7 +55,7 @@ def _row(name: str, dest_dir: Path, mode: str = "mirror") -> "publish.ResolvedTa
     return publish.ResolvedTarget(
         name=name,
         mode=mode,
-        source_dir=dest_dir,  # source is irrelevant to this index; reuse dest
+        source_dir=dest_dir,
         dest_dir=dest_dir,
     )
 
@@ -104,10 +104,6 @@ def test_row_whose_dest_equals_the_mirrors_yields_nothing(tmp_path):
     mirror_root.mkdir()
 
     mirror_row = _row("mirror-row", mirror_root)
-    # A distinct row object that happens to land at the SAME dest_dir as
-    # `mirror_row` -- shares the root rather than claiming a subdirectory of
-    # it, so it must contribute nothing, and it must be considered (not
-    # discarded outright) precisely because it is a genuinely different row.
     same_root_row = _row("same-root-row", mirror_root)
 
     names = publish.foreign_dir_names_for_row(mirror_row, [mirror_row, same_root_row])
@@ -120,25 +116,11 @@ def test_the_row_itself_is_never_in_its_own_set(tmp_path):
 
     mirror_row = _row("mirror-row", mirror_root)
 
-    # Only `mirror_row` itself in the row set -- if self-exclusion were done
-    # by path equality rather than row identity, this would still pass
-    # (dest == dest contributes nothing either way); the identity-scoped test
-    # below is what actually distinguishes the two implementations.
     names = publish.foreign_dir_names_for_row(mirror_row, [mirror_row])
     assert names == frozenset()
 
 
 def test_self_exclusion_is_by_row_identity_not_path_equality(tmp_path):
-    """A distinct row sharing `mirror_row`'s exact dest_dir must still be
-    considered on its own terms, never discarded merely because its path
-    matches `target`'s. Excluding by `other.dest_dir == target.dest_dir`
-    would ALSO drop this row -- indistinguishable from correct exclusion in
-    THIS scenario (both read as "contributes nothing") since a same-root
-    row never claims a subdirectory; the assertion instead pins that the
-    real row-identity comparison (`is`) is what implements it, by
-    confirming a second, cloned `ResolvedTarget` at the same dest_dir as
-    `mirror_row` is still visited (not skipped as "self") and still
-    correctly contributes nothing of its own."""
     mirror_root = tmp_path / "mirror"
     mirror_root.mkdir()
 
@@ -170,8 +152,6 @@ def test_target_filtered_run_still_sees_the_siblings_claim(tmp_path):
     sibling_row = _row("sibling-row", sibling_dir)
     unrelated_row = _row("unrelated-row", tmp_path / "elsewhere")
 
-    # Simulates the caller passing the FULL unfiltered row set even though a
-    # real run was invoked with `--target mirror-row`.
     all_rows = [mirror_row, sibling_row, unrelated_row]
 
     names = publish.foreign_dir_names_for_row(mirror_row, all_rows)
@@ -179,8 +159,6 @@ def test_target_filtered_run_still_sees_the_siblings_claim(tmp_path):
 
 
 def test_string_prefix_that_is_not_a_path_child_yields_nothing(tmp_path):
-    """`/a/bc` must never read as under `/a/b` -- path-SEGMENT arithmetic,
-    never a string prefix test."""
     mirror_root = tmp_path / "a" / "b"
     sibling_root = tmp_path / "a" / "bc"
     mirror_root.mkdir(parents=True)
@@ -229,11 +207,6 @@ def _is_relative_to(path: Path, other: Path) -> bool:
     return True
 
 
-# ---------------------------------------------------------------------------
-# _module_accepts_foreign_dir_names — version-skew probe
-# ---------------------------------------------------------------------------
-
-
 def test_module_with_foreign_dir_names_param_is_detected():
     def sync_mirror(src, dst, ignore, dry_run, *, foreign_dir_names=None, **kwargs):
         return (0, 0)
@@ -245,9 +218,6 @@ def test_module_with_foreign_dir_names_param_is_detected():
 
 
 def test_module_without_foreign_dir_names_param_is_not_detected():
-    """A stub whose `sync_mirror` lacks the parameter -- the lagging-copy
-    arm -- must read as False, never raise, so the caller omits the kwarg
-    and behaviour degrades to exactly today's."""
 
     def sync_mirror(src, dst, ignore, dry_run, **kwargs):
         return (0, 0)
@@ -263,22 +233,9 @@ def test_module_missing_sync_mirror_entirely_is_not_detected():
     assert publish._module_accepts_foreign_dir_names(stub_module) is False
 
 
-## Review: overengineering-reviewer (Kira) — the end-to-end skew arm
-## previously duplicated here is pinned in
-## test_publish_mirror_dispatch_kwargs_pinned.py::
-## test_call_site_omits_foreign_dir_names_when_module_lacks_it; the
-## call-site contract belongs in that pin file, not here. The unit-level
-## probe tests above (which are not duplicated) stay.
-
-
 def test_sibling_reached_via_a_differently_spelled_same_location_still_yields_its_segment(
     tmp_path,
 ):
-    # `foreign_dir_names_for_row`
-    # must `.resolve()` both sides before `relative_to`, since two `dest_dir`s can
-    # denote the same on-disk location while being spelled differently (a
-    # symlinked component here; a surviving `.`/`..` segment or a Windows
-    # short-name/long-name pair are the same class of mismatch this pins).
     real_root = tmp_path / "real-mirror"
     sibling_dir = real_root / "plugin-a"
     real_root.mkdir()
@@ -292,8 +249,6 @@ def test_sibling_reached_via_a_differently_spelled_same_location_still_yields_it
 
         pytest.skip(f"symlink creation not permitted on this host: {exc}")
 
-    # The mirror row is spelled via the symlink alias; the sibling row is
-    # spelled via the real path -- lexically unrelated strings, same location.
     mirror_row = _row("mirror-row", alias_root)
     sibling_row = _row("sibling-row", sibling_dir)
 

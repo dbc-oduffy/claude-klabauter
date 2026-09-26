@@ -73,8 +73,6 @@ from coordinator_core.conservatism.verify import assert_safe_direction_holds
 
 @contextlib.contextmanager
 def _no_psutil():
-    """Make `import psutil` fail for the duration of the block -- the exact
-    precondition both psutil-backed specimens cannot determine."""
     real_import = builtins.__import__
 
     def _blocked(name, *args, **kwargs):
@@ -95,9 +93,6 @@ def test_default_usable_ram_gb_raises_as_declared():
         cp.default_usable_ram_gb,
         invoke=cp.default_usable_ram_gb,
         undeterminable=_no_psutil,
-        # Without this, the RAISE branch accepts ANY exception raised inside
-        # `_no_psutil()` as proof the site refused -- including one from a
-        # broken fixture, which would read as compliance.
         expect_raises=ImportError,
     )
 
@@ -107,10 +102,6 @@ def test_default_physical_cores_falls_back_as_declared():
         cp.default_physical_cores,
         invoke=cp.default_physical_cores,
         undeterminable=_no_psutil,
-        # control=False, with the reason the helper demands: on a box without SMT
-        # psutil's physical count EQUALS os.cpu_count(), so the intact path is
-        # indistinguishable from the anchor and the control run would fail for a
-        # property of the hardware rather than a property of the code.
         control=False,
     )
 
@@ -188,11 +179,6 @@ def test_reap_stale_git_lock_falls_back_as_declared(tmp_path, monkeypatch):
 
 
 def test_no_optional_locks_falls_back_as_declared():
-    """Precondition: the raw-text scanner's token spans agree with the
-    shared tokenizer's own output, so the insertion offset is trustworthy.
-    Undeterminable: the shared tokenizer itself returns `None` (simulated
-    directly -- an unparseable command in real use), leaving no offset to
-    insert at."""
     original = gnol._bt_tokenize_full_command
 
     def _invoke():
@@ -214,11 +200,6 @@ def test_no_optional_locks_falls_back_as_declared():
 
 
 def test_offer_git_c_falls_back_as_declared():
-    """Precondition: the `cd`/`git` segments' quoting is confirmed balanced
-    (even quote counts). Undeterminable: an odd double-quote count in either
-    segment -- a real, naturally-occurring ambiguous shape, not a monkeypatch
-    -- which this guard's own odd-count guard already declines to evaluate
-    (see module docstring's quoted-semicolon discussion)."""
     state = {"cmd": "cd /tmp && git status"}
 
     def _invoke():
@@ -240,11 +221,6 @@ def test_offer_git_c_falls_back_as_declared():
 
 
 def test_block_worktree_sentinel_creation_raises_as_declared():
-    """Precondition: the shared `SentinelCreationDetector` can evaluate
-    `cmd` without error. Undeterminable: the detector itself raises (its
-    internal state is broken) -- this guard has deliberately no try/except
-    (module docstring), so the failure propagates rather than being
-    swallowed into a silent allow."""
     payload = {"tool_name": "Bash", "tool_input": {"command": "ls -la"}}
 
     def _invoke():
@@ -272,11 +248,6 @@ def test_block_worktree_sentinel_creation_raises_as_declared():
 
 
 def test_block_noncanonical_branch_creation_falls_back_as_declared(monkeypatch):
-    """Precondition: the target branch-name literal is fully readable from
-    the tokenized command. Undeterminable: a PARTIAL command substitution
-    (`"work/machine-b/$(date +%F)"`) leaves a neutralization artifact
-    (`_looks_unsafe`) this guard cannot evaluate confidently, so it stays
-    silent rather than risk flagging a genuinely canonical branch."""
     monkeypatch.setattr(bncbc, "resolve_git_root", lambda cwd: "/repo")
     monkeypatch.setattr(bncbc, "_is_hazard_repo", lambda root: True)
 
@@ -306,10 +277,6 @@ def test_block_noncanonical_branch_creation_falls_back_as_declared(monkeypatch):
 
 
 def test_block_worktree_sentinel_write_raises_as_declared():
-    """Precondition: the write-target path resolves cleanly. Undeterminable:
-    path resolution itself raises -- this guard has no try/except (module
-    docstring: "Fail-CLOSED on its own resolution failures"), so the
-    failure propagates rather than being swallowed into a silent allow."""
     payload = {"tool_name": "Write", "tool_input": {"file_path": "foo.txt"}}
 
     def _invoke():
@@ -336,13 +303,7 @@ def test_block_worktree_sentinel_write_raises_as_declared():
     )
 
 
-# The per-site tests above assert each site's
-# CURRENT `declaration.direction`, whatever it is; they do not pin what that
-# direction should be. A decorator edit flipping e.g. `default_usable_ram_gb`
 # from RAISE to FALL_BACK would leave its per-site test green under a now-
-# lying name. `test_both_directions_are_expressible` below is the only place
-# that independently derives "both directions are still represented" from
-# the live declarations, decoupled from any one site's test.
 _ASSERTED_SITES = {
     "coordinator_core.benchmarks.concurrency_probe.default_usable_ram_gb",
     "coordinator_core.benchmarks.concurrency_probe.default_physical_cores",
@@ -356,15 +317,6 @@ _ASSERTED_SITES = {
     "coordinator_core.write_guards.nudge_peer_notice_unread.check",
 }
 
-#: Sites whose assertion lives with the site rather than here, named so the
-#: meta-test still refuses an unasserted declaration. A site belongs here only
-#: when its `undeterminable` context needs fixtures this file has no business
-#: owning -- keep the assertion beside the code, not the roster.
-#:
-#: Values are `(module, attrname)` pairs, not strings: resolved below at
-#: import time, so a renamed-away sibling assertion fails the collection of
-#: THIS file rather than satisfying the meta-test while asserting nothing
-#: (`state/lessons/2026-09-01-killed-op-names-live-on-in-string-keyed-guards.md`).
 _ASSERTED_IN_SIBLING_TESTS = {
     "coordinator_core.install.derive_worker_cap.cap_command_for_this_box": (
         "coordinator_core.install.test_derive_worker_cap",
@@ -376,27 +328,16 @@ for _site, (_sibling_module, _sibling_attr) in _ASSERTED_IN_SIBLING_TESTS.items(
     getattr(importlib.import_module(_sibling_module), _sibling_attr)
 del _site, _sibling_module, _sibling_attr
 
-#: Modules scanned for declarations. A declaring module absent from this tuple
-#: is invisible to the meta-test below -- which is the failure this roster
-#: exists to prevent, so add the module in the same commit as the declaration.
 _DECLARING_MODULES = (cp, dwc, grsg, gnol, gogc, bwsc, bncbc, bwsw, npnu)
 
 
 def test_nudge_peer_notice_unread_falls_back_as_declared():
-    """Precondition: the notice channel is readable for this session.
-    Undeterminable: reading it raises -- an advisory guard that only ever ADDS
-    context must degrade to "surface nothing" (`None`), never propagate into
-    the peer's Write/Edit. Found undecorated by the close-out criterion-only
-    read after a case-sensitive scan of the audit's free-prose verdict column
-    missed its `**Premise-false ...**` cell."""
     state = {"raise": False}
 
     def _list_unread_notices(repo_root, session_id):
         if state["raise"]:
             raise OSError("notice channel unreadable")
         # The intact path must return something DISTINGUISHABLE from the
-        # anchor, or the fall-back leg proves nothing -- verify.py rejects a
-        # control run that already sits on the declared anchor.
         return [
             {
                 "from_session_id": "peer-1",
@@ -436,8 +377,6 @@ def test_nudge_peer_notice_unread_falls_back_as_declared():
 
 
 def test_every_declaring_site_has_an_assertion():
-    """A declaration nobody asserts is the convention this module replaced,
-    with extra steps. New declaring site -> new test above, then this set."""
     declared = {
         name for module in _DECLARING_MODULES for name, _ in iter_declarations(module)
     }
@@ -465,9 +404,6 @@ def test_both_directions_are_expressible():
 
 
 def test_an_imported_declaration_is_not_attributed_to_the_importer():
-    """`derive_worker_cap` imports two declaring helpers from the probe. They
-    are the probe's sites, asserted once, above -- attributing them here would
-    demand a second assertion for the same function in every consumer."""
     names = {name for name, _ in iter_declarations(dwc)}
     assert names == {"coordinator_core.install.derive_worker_cap.cap_command_for_this_box"}
 
@@ -487,8 +423,6 @@ def test_malformed_declarations_are_refused_at_import(kwargs, message):
 
 
 def test_verify_catches_a_site_that_lies_about_its_direction():
-    """The instrument must fail as well as pass -- a declaration that does not
-    hold has to produce a red, or none of the tests above mean anything."""
 
     @declares_safe_direction(SafeDirection.RAISE, because="claims to refuse, does not")
     def liar():

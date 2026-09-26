@@ -38,9 +38,6 @@ import coordinator_core.workday_complete.cockpit_contract_freshness as ccf
 from coordinator_core.win_portability import no_console_creationflags
 
 # Real-git spawn is load-bearing: only the NETWORK-facing seams (ls-remote et
-# al.) are monkeypatched per the module docstring above — the ancestry-walk
-# and annotated-tag-peeling tests build and read ACTUAL local git repos/tags
-# (_is_ancestor, _peel_to_commit real behaviour) that no mock stands in for.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _FAKE_ROOT = Path("/fake/doe-root")
@@ -59,10 +56,6 @@ def _git_head_sha(cwd):
 
 
 def _init_real_repo(tmp_path):
-    """A throwaway real git repo (tmp_path-based) — used by the Finding-3
-    real-git tests below to exercise the actual subprocess/git-syntax layer
-    of the four low-level helpers, which every other test in this file
-    monkeypatches as whole-function stubs (see module docstring)."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _run_git(["init", "-q"], cwd=repo)
@@ -132,13 +125,6 @@ def test_unreadable_doe_clone_is_unknown_and_never_a_diverged_claim(monkeypatch,
 def test_git_dir_poison_does_not_produce_a_verdict_about_the_wrong_repo(
     monkeypatch, tmp_path
 ):
-    """End-to-end poisoned-environment regression.
-
-    A real repo standing in for the DoE clone, plus a real repo standing in for
-    ours, plus GIT_DIR pointing at ours: the probe must still read DoE's own
-    object database. Before the fix, `_candidate_sha` and `_is_ancestor`
-    answered from the poisoned target and the emitted entry named DoE.
-    """
     doe = _init_real_repo(tmp_path)
     (doe / "coordinator" / "cockpit-contract" / "schema").mkdir(parents=True)
     schema = doe / ccf._SCHEMA_FILE_RELPATH
@@ -201,9 +187,6 @@ def test_unresolvable_root_is_unknown_and_makes_zero_network_calls(monkeypatch):
 def test_ls_remote_timeout_is_unknown_not_raised(monkeypatch):
     monkeypatch.setattr(ccf, "_resolve_doe_root_local", lambda: _FAKE_ROOT)
 
-    # _ls_remote_release_tag itself catches TimeoutExpired internally; exercise
-    # that real behavior by monkeypatching subprocess.run underneath it instead
-    # of the function itself, so the timeout-handling code path is covered.
     def _fake_run(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd=args[0] if args else "git", timeout=kwargs.get("timeout"))
 
@@ -216,9 +199,6 @@ def test_ls_remote_timeout_is_unknown_not_raised(monkeypatch):
 
 
 def test_annotated_tag_sha_is_peeled_before_ancestry_test(monkeypatch):
-    """ls-remote returns a tag-OBJECT sha for an annotated tag; the probe must
-    peel it to a commit sha before running merge-base --is-ancestor, else
-    merge-base would receive the tag-object sha (exit 128 in real git)."""
     monkeypatch.setattr(ccf, "_resolve_doe_root_local", lambda: _FAKE_ROOT)
     monkeypatch.setattr(ccf, "_ls_remote_release_tag", lambda root: "TAGOBJSHA")
     monkeypatch.setattr(ccf, "_peel_to_commit", lambda root, sha: "PEELEDCOMMITSHA")
@@ -235,8 +215,6 @@ def test_annotated_tag_sha_is_peeled_before_ancestry_test(monkeypatch):
 
     entry = ccf.compute_cockpit_contract_freshness()
 
-    # candidate == peeled commit sha -> FRESH, and the ancestry test is never
-    # reached on the equality fast path, so no tag-object sha ever reaches it.
     assert entry["verdict"] == "FRESH"
     assert entry["published"]["peel"] == "PEELEDCOMMITSHA"
     assert ancestry_calls == []
@@ -416,10 +394,6 @@ def test_env_root_ladder_both_unset_consults_registry(monkeypatch, tmp_path):
 
 
 def test_brief_carries_the_gate_and_never_raises(monkeypatch):
-    """workday_complete.brief() itself must return normally with the gate
-    entry present under the common zero-DoE-clone path (the never-raise
-    contract for internal probe failures is proven directly against
-    compute_cockpit_contract_freshness() above)."""
     monkeypatch.setattr(workday_brief, "resolve_operator_config", lambda **_: {})
     monkeypatch.setattr(ccf, "_resolve_doe_root_local", lambda: None)
 
@@ -429,17 +403,6 @@ def test_brief_carries_the_gate_and_never_raises(monkeypatch):
     gate = envelope["gates"]["cockpit_contract_freshness"]
     assert gate["verdict"] == "UNKNOWN"
 
-
-# ---------------------------------------------------------------------------
-# real-git coverage of the four low-level
-# helpers. Every test above monkeypatches `_peel_to_commit`, `_candidate_sha`,
-# `_contract_version_at`, and `_is_ancestor` as whole-function stubs, so the
-# actual subprocess/git-command syntax and output parsing of those helpers
-# is never exercised. These tests run each helper against a real throwaway
-# git repo (tmp_path `git init` + real commits + a real annotated tag) —
-# additive coverage of the layer the monkeypatched tests above skip. No
-# network: no remote/origin is involved.
-# ---------------------------------------------------------------------------
 
 def test_peel_to_commit_real_git_lightweight_tag_is_a_no_op(tmp_path):
     repo = _init_real_repo(tmp_path)
@@ -463,21 +426,18 @@ def test_peel_to_commit_real_git_annotated_tag_peels_to_underlying_commit(tmp_pa
         ["git", "rev-parse", "annotated"], cwd=repo, check=True, capture_output=True, text=True,
         **no_console_creationflags(),
     ).stdout.strip()
-    assert tag_obj_sha != commit_sha  # sanity: annotated tags are their own object
+    assert tag_obj_sha != commit_sha
 
     assert ccf._peel_to_commit(repo, tag_obj_sha) == commit_sha
 
 
 def test_peel_to_commit_real_git_object_not_in_local_db_falls_back_to_raw_sha(tmp_path):
-    """A sha that git rev-parse cannot resolve locally (simulating an
-    unfetched tag object per Finding 2) falls back to the raw sha, mirroring
-    doe_drift.probe_freshness_ref's documented graceful fallback."""
     repo = _init_real_repo(tmp_path)
     (repo / "f.txt").write_text("a")
     _run_git(["add", "."], cwd=repo)
     _run_git(["commit", "-q", "-m", "c1"], cwd=repo)
 
-    unresolvable_sha = "deadbeef" * 5  # 40 hex chars, not an object in this repo
+    unresolvable_sha = "deadbeef" * 5
 
     assert ccf._peel_to_commit(repo, unresolvable_sha) == unresolvable_sha
 

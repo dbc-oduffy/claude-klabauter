@@ -1,10 +1,3 @@
-"""memo.send holds a reply once when another session of this repo already
-answered the same memo — C2 (docs/plans/2026-09-11-memo-send-path-fail-loud.md).
-
-Op-level: seeds the sent-ledger with `_write_ledger_rows`
-(`.test_memo_send`) and calls `_memo_send` directly, same harness as
-`test_memo_send.py`.
-"""
 
 from __future__ import annotations
 

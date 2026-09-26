@@ -45,10 +45,6 @@ def _rec(sha_range: str, artifact: str) -> Tuple[str, dict]:
 
 
 def _sha_for(sha_range: str) -> str:
-    """Deterministic 40-char lowercase-hex sha, distinct per range, so the
-    combined-log fakes below emit something `_parse_combined_log_output`
-    actually recognises as a SHA line (not a placeholder that parses as a
-    filename)."""
     return hashlib.sha1(sha_range.encode()).hexdigest()
 
 
@@ -76,10 +72,8 @@ def test_build_segments_dedupes_repeated_range_revlist_calls(monkeypatch):
     log_calls = [c for c in calls if c[:2] == ["git", "log"]]
 
     # The combined `git log --format=%H --name-only` call: one per DISTINCT
-    # range (2 distinct ranges), not one per record (4).
     assert len(log_calls) == 2, log_calls
 
-    # All 4 records still produce a segment (memoised shas/files reused correctly).
     assert len(segments) == 4
     for seg in segments:
         assert seg["shas"] == [_sha_for(seg["sha_range"])]
@@ -110,12 +104,6 @@ def test_build_segments_skip_on_unresolvable_ref_is_memoised(monkeypatch):
 
 
 def test_build_segments_dedupes_repeated_range_namelog_calls(monkeypatch):
-    """Pins the combined `git log --format=%H --name-only` spawn's memo
-    (segment_memo): a repeated sha_range must resolve that call only ONCE,
-    with per-record segment dicts and per-segment file attribution still
-    preserved (kept as its own test, separate from the sibling dedup test
-    above, so a future segment_memo regression that only shows up under a
-    different record/range shape can't hide behind the other test passing)."""
     calls: List[List[str]] = []
 
     def fake_run(cmd, cwd=None):
@@ -145,9 +133,6 @@ def test_build_segments_dedupes_repeated_range_namelog_calls(monkeypatch):
 
 
 def test_build_segments_skip_on_unresolvable_namelog_is_memoised(monkeypatch):
-    """git rev-list resolves fine, but git log --name-only fails for the
-    range — with on_unresolvable_ref="skip" a repeated range must only
-    spawn `git log` ONCE, skipping both records, not re-spawn per record."""
     calls: List[List[str]] = []
 
     def fake_run(cmd, cwd=None):

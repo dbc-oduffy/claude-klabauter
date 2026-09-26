@@ -176,22 +176,10 @@ from coordinator_core.ipc import register_op
 
 logger = logging.getLogger(__name__)
 
-# session_id format guard — mirrors the guard in the bash source
 _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{4,}$")
 
-# In-memory calibration set: session_ids for which the harness has proven it exposes
-# run_in_background (the param was present, with any value, at least once in this process).
-# Resident long-lived engine — persists across calls; no file I/O needed.
 _BG_CAPABLE_SESSIONS: set[str] = set()
 
-# Audience-gated (2026-08-13, docs/plans/2026-08-13-guard-messages-stop-handing-
-# agents-the-keys.md, AC-2/AC-3): neither template names the escape-hatch
-# mechanism (no `touch`, no sentinel path, no session id, no hand-rolled doc
-# pointer) any more. Any operator-facing pointer is appended at render time via
-# `bash_guards._helpers.operator_override_note`, which degrades to "" for any
-# audience that is not a positively-resolved EM — see the handler's call sites
-# below, matching `validate_frontmatter_schema_advisory.build_violation_payload_
-# advisory`'s reference pattern (commit d385e2ed3).
 _DENY_MSG_TEMPLATE = (
     "FOREGROUND AGENT DISPATCH BLOCKED — retry with `run_in_background: true`. "
     "Doctrine: coordinator/snippets/em-operating-doctrine.md § How to Dispatch."
@@ -206,30 +194,15 @@ _REROUTE_NOTICE = (
 
 
 def _foreground_ok_path(git_root: str, session_id: str) -> Path:
-    """Return the .foreground-ok escape-hatch sentinel path for a resolved session."""
-    # W3 substituted ctx.repo_root (worktree path) with repo_root
-    # (git_common_dir path), making the extra ".git" join double-nest the dir:
-    # <repo>/.git/.git/coordinator-sessions/<sid> — a path that never exists.
-    # Fix: git_root IS already the .git common dir, so drop the redundant ".git" join.
     session_dir = Path(git_root) / "coordinator-sessions" / session_id
     return session_dir / ".foreground-ok"
 
 
 def _bg_capable_path(git_root: str, session_id: str) -> Path:
-    """Return the durable harness-bg-capable calibration marker for a resolved session."""
     return Path(git_root) / "coordinator-sessions" / session_id / ".harness-bg-capable"
 
 
 def _mark_bg_capable(git_root: str, session_id: str) -> None:
-    """Record that this session's harness demonstrably exposes run_in_background (D7b).
-
-    Called when the param arrives PRESENT (either value) — presence is the proof. The
-    marker is what a later absent-key dispatch reads to tell "this build has no such
-    param" (pass) apart from "this EM dropped it" (act).
-
-    Best-effort and silent on failure: a missing marker degrades to the brick-proof PASS
-    that predates calibration entirely, which is the safe direction for the absent case.
-    """
     if not git_root or not session_id:
         return
     marker = _bg_capable_path(git_root, session_id)
@@ -243,13 +216,6 @@ def _mark_bg_capable(git_root: str, session_id: str) -> None:
 
 
 def _is_bg_capable(git_root: str, session_id: str) -> bool:
-    """Return True iff this session was previously seen sending run_in_background (D7b).
-
-    Reads the durable marker, then falls back to the in-process set — the set still wins
-    within a single interpreter (tests, and any future in-process batching), while the
-    marker is what actually carries calibration between the fresh processes production
-    uses. An unresolvable session or unreadable marker answers False: uncalibrated, PASS.
-    """
     if not session_id:
         return False
     if session_id in _BG_CAPABLE_SESSIONS:
@@ -264,13 +230,7 @@ def _is_bg_capable(git_root: str, session_id: str) -> bool:
 
 
 def _resolve_git_root() -> str:
-    """Dead stub — kept for test-mock compatibility (tests patch this attribute).
-
-    Production handler uses the repo_root param directly; this function is never called
-    from the handler. The subprocess spawn it previously contained is removed (A-F1).
-    Returns "" unconditionally.
-    """
-    return ""  # Subprocess removed; stub kept for test compat
+    return ""
 
 
 @register_op("hooks.nudge_foreground_agent_dispatch")
@@ -303,62 +263,37 @@ def _handler(params: dict, repo_root=None) -> dict:
         common bg_true pass path (repo_root direct param, no git subprocess).
     """
     params = payload_of(params)
-    # Only fires on Agent tool dispatches
     tool_name = field(params, "tool_name")
     if tool_name != "Agent":
         return no_advisory()
 
-    run_in_background = field(params, "run_in_background")  # "" = absent
+    run_in_background = field(params, "run_in_background")
     session_id = field(params, "session_id")
 
-    # Validate session_id format; treat malformed as absent (mirrors bash guard)
     if session_id and not _SESSION_ID_RE.match(session_id):
         session_id = ""
 
-    # Determine key presence: run_in_background == "" means key was absent
-    has_bg = run_in_background != ""  # True = key was present (either value)
+    has_bg = run_in_background != ""
     bg_true = run_in_background == "true"
 
-    # Calibrate in-memory: key present (either value) proves this build exposes the param.
-    # Record session_id so a future absent-key dispatch on the same session is denied.
-    # Calibration before escape-hatch check and bg_true
-    # early-exit; the escape hatch is only relevant when about to deny.
     if has_bg and session_id:
         _BG_CAPABLE_SESSIONS.add(session_id)
 
-    # git_root is needed by BOTH calibration legs now, not just the reroute path, so it is
-    # resolved here rather than after the early-exits. Still no subprocess: repo_root is a
-    # direct param (A-F1).
     try:
         git_root = str(repo_root) if repo_root else ""
     except Exception:
         git_root = ""
 
-    # Persist calibration durably on ANY presence (either value), mirroring the in-memory
-    # set write above: the in-memory set is dead in the spawn-per-call model and cannot
-    # carry it to the next dispatch (D7b), and only presence proves the build exposes the
-    # param — restricting this to bg_true left present-and-false dispatches uncalibrated,
-    # silently defeating a later same-session absent-key call (review Finding 1, 2026-07-31).
-    # Move off the bg_true-only leg onto has_bg.
     if has_bg and session_id:
         _mark_bg_capable(git_root, session_id)
 
-    # present-and-true → silent pass.
     if bg_true:
         return no_advisory()
 
-    # absent → discriminate by calibration state.
-    # Calibrated (this session was previously seen sending the param) → the omission is a
-    # deliberate foreground choice on a build that supports the param → act on it.
-    # Uncalibrated (never seen, or no resolvable session_id) → brick-proof PASS: on a build
-    # that does not expose run_in_background at all, every dispatch omits it, and acting on
-    # that would gate every Agent call on this machine.
     if not has_bg:
         if not _is_bg_capable(git_root, session_id):
             return no_advisory()
-        # Fall through: calibrated absent = deliberate foreground
 
-    # D6 escape hatch — an explicit opt-in to foreground for this session; pass untouched.
     if session_id and git_root:
         foreground_ok = _foreground_ok_path(git_root, session_id)
         try:
@@ -370,30 +305,15 @@ def _handler(params: dict, repo_root=None) -> dict:
                 foreground_ok, exc_info=True,
             )
 
-    # Audience-gated operator pointer (2026-08-13, guard-messages-stop-handing-agents-
-    # the-keys.md, AC-2/AC-3): threaded through the shared composer so it degrades to
-    # "" for anything short of a positively-resolved EM audience — see
-    # `bash_guards._helpers.operator_override_note`'s own docstring, and
-    # `write_guards.validate_frontmatter_schema_advisory.build_violation_payload_
-    # advisory` (commit d385e2ed3) for the reference threading pattern this mirrors.
     from coordinator_core.bash_guards._helpers import operator_override_note
 
     override_note = operator_override_note(
         "COORDINATOR_AGENT_FOREGROUND_OK", payload=params, git_root=git_root
     )
 
-    # present-and-false, or calibrated absent → rewrite the call into a backgrounded one.
-    # tool_input is read raw: field() stringifies, and this value is a dict.
-    # non-emptiness alone doesn't prove tool_input is a
-    # complete, safe rewrite target. `prompt` is the load-bearing key the harness Agent tool
-    # schema requires; a tool_input missing it would rewrite into a promptless dispatch —
-    # silently, which is worse than the deny it replaces. subagent_type is NOT required here:
-    # it is genuinely optional in the Agent tool schema, so requiring it would deny valid
-    # dispatches.
     tool_input = params.get("tool_input")
     if isinstance(tool_input, dict) and tool_input and tool_input.get("prompt"):
         # updatedInput REPLACES the argument object — carry every original key forward and
-        # override only run_in_background (D8).
         updated = dict(tool_input)
         updated["run_in_background"] = True
         context = _REROUTE_NOTICE
@@ -401,8 +321,6 @@ def _handler(params: dict, repo_root=None) -> dict:
             context = context + " " + override_note
         return rewrite_input("PreToolUse", updated, context)
 
-    # No forwardable tool_input → no correct rewrite exists; fall back to the historical
-    # bounce-back rather than letting a foreground dispatch through unremarked (D8).
     # UNDOCUMENTED-DENY: see module docstring and _envelope.deny() docstring.
     deny_message = _DENY_MSG_TEMPLATE
     if override_note:

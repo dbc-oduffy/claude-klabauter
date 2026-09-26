@@ -49,16 +49,7 @@ ENGINE_OWNER = "1189eead-f3eb-4c54-a790-236258043b0d"
 
 
 def _load_real_disposition_module():
-    """The REAL `coordinator/bin/wsc-session-disposition.py`, loaded by file path —
-    the same idiom `test_workstream_complete.py` uses, and for the same reason: the
-    hyphenated filename bars a plain import, and the ceremony's own
-    `_load_session_disposition_module` resolves operator config (`claude_klabauter_root`) that a
-    bare test process has no business needing. This is the same source file the
-    ceremony loads; only the locating step differs."""
     bin_dir = Path(__file__).resolve().parents[3] / "coordinator" / "bin"
-    # `resolve_disposition` bootstraps `lib`/`cc_invoke`, which live beside the
-    # script rather than in any installed package — the ceremony's own loader gets
-    # them via operator config, which a bare test process has no business needing.
     for entry in (bin_dir, bin_dir / "lib"):
         if str(entry) not in sys.path:
             sys.path.insert(0, str(entry))
@@ -88,7 +79,6 @@ def _clear_session_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_cold_resolution_reads_the_callers_own_environment(
     disposition_module, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Cold is untouched: there `os.environ` IS the caller's own process."""
     _clear_session_env(monkeypatch)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", CALLER)
     assert disposition_module.resolve_session_id(Path(".")) == CALLER
@@ -110,8 +100,6 @@ def test_cold_resolution_accepts_coordinator_session_id(
 def test_warm_resolution_prefers_the_carried_identity_over_the_environment(
     disposition_module, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The incident's exact shape, inverted: the environment names the engine's owner
-    and the request carries the caller. The caller must win."""
     _clear_session_env(monkeypatch)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", ENGINE_OWNER)
     with warm_served_request(True), session_identity_override(CALLER):
@@ -121,10 +109,6 @@ def test_warm_resolution_prefers_the_carried_identity_over_the_environment(
 def test_warm_resolution_refuses_the_ambient_environment_when_nothing_was_carried(
     disposition_module, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The incident itself. The door sent no `_session_id`, so the request carries
-    nothing and `os.environ` holds whoever spawned the server. The resolver must
-    answer "" — NOT the engine owner's id, which no downstream reader could tell from
-    a genuine one."""
     _clear_session_env(monkeypatch)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", ENGINE_OWNER)
     with warm_served_request(True):
@@ -154,25 +138,10 @@ def test_ceremony_refuses_to_build_on_an_unresolved_session(
 
 
 def test_refusal_is_not_a_transport_failure() -> None:
-    """`TransportFailure`'s operator text tells the reader to check their git worktree.
-    That is the one thing that is not wrong here, so the classes must not be
-    interchangeable — and the CLI arm for this one sits AHEAD of the transport arm."""
     from coordinator_core.workstream_complete import TransportFailure
 
     assert not issubclass(SessionIdentityUnresolved, TransportFailure)
     assert not issubclass(TransportFailure, SessionIdentityUnresolved)
-
-
-# ---------------------------------------------------------------------------
-# The instrument: which input named the session, and under which pid
-# ---------------------------------------------------------------------------
-#
-# `state/bug-backlog/2026-08-30-close-ceremony-clis-resolve-a-live-peer-
-# b558b27c74e7.yaml` asks for this in its `proposed_action` — "make the resolution
-# path report which input it read ... and under which pid, so a mis-resolution is
-# visible at the point it happens instead of three gates downstream". The tests
-# above pin that the WRONG input can no longer be read; these pin that the input
-# actually read is reported, on the success path as well as the failure path.
 
 
 def test_source_is_reported_for_a_cold_env_resolution(
@@ -203,10 +172,6 @@ def test_source_names_the_precedence_winner_not_merely_a_holder(
 def test_carried_identity_is_reported_as_carried_even_when_env_agrees(
     disposition_module, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A carried id that coincidentally matches an env var is still CARRIED. Under
-    warm the environment is not a lower-precedence source, it is a source about a
-    different process — reporting it would be true about this process and false
-    about the resolution."""
     _clear_session_env(monkeypatch)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", CALLER)
     with warm_served_request(True), session_identity_override(CALLER):
@@ -217,9 +182,6 @@ def test_carried_identity_is_reported_as_carried_even_when_env_agrees(
 def test_the_incident_is_legible_in_the_record(
     disposition_module, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The shape the filing EM had to infer from unfamiliar deliverable ids: a warm
-    request that carried nothing, resolving under the SERVER's pid. `unresolved`
-    plus `warm=True` is the whole diagnosis, at the point it happens."""
     _clear_session_env(monkeypatch)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", ENGINE_OWNER)
     with warm_served_request(True):
@@ -232,8 +194,6 @@ def test_the_incident_is_legible_in_the_record(
 def test_the_refusal_names_the_input_it_read(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The refusal is the one message an operator sees when this goes wrong; it
-    carries the record rather than making them go and ask for it."""
     _clear_session_env(monkeypatch)
     monkeypatch.setattr(wsc, "_load_session_disposition_module", _load_real_disposition_module)
     with warm_served_request(True):
@@ -268,9 +228,6 @@ def test_provenance_rides_the_gate_on_the_SUCCESS_path(
 def test_the_gate_stays_json_serialisable_with_provenance_on_it(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """`SessionShapeGate` is emitted into the decision envelope via `_asdict()`.
-    A provenance field that cannot be serialised would surface as a broken brief,
-    not as a missing one."""
     _clear_session_env(monkeypatch)
     monkeypatch.setenv("CLAUDE_SESSION_ID", CALLER)
     monkeypatch.setattr(wsc, "_load_session_disposition_module", _load_real_disposition_module)
@@ -278,26 +235,12 @@ def test_the_gate_stays_json_serialisable_with_provenance_on_it(
     assert json.loads(json.dumps(gate._asdict()))["sid_source"]["source"] == "CLAUDE_SESSION_ID"
 
 
-# ---------------------------------------------------------------------------
-# Split-copy degrade — this bin script and the engine it calls are two copies
-# ---------------------------------------------------------------------------
-#
-# Found the hard way: the FIRST real `/workstream-complete` after the instrument
-# landed died with `module 'coordinator_core.session.core' has no attribute
-# 'attributable_session_id_with_source'`, inside `brief`'s structural backstop.
-# Both doors resolve the ENGINE from the published klabauter mirror while running
-# the CLI from the repo tree, so an accessor that lands here does not exist there
-# until a publish round — and an unguarded call takes the whole close ceremony
-# down for every session on the box, not just the one that changed it.
-#
 # The provenance is a nicety; the RESOLUTION is not. These pin that a copy skew
-# in either direction costs the provenance and never the close.
 
 
 def test_an_engine_without_provenance_still_resolves_the_session(
     disposition_module, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The engine copy predates `attributable_session_id_with_source`."""
     _clear_session_env(monkeypatch)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", CALLER)
 
@@ -318,9 +261,6 @@ def test_an_engine_without_provenance_still_resolves_the_session(
 def test_an_engine_without_even_the_warm_accessor_still_resolves(
     disposition_module, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """One rung older still: no `attributable_session_id` either. Blending is
-    that copy's pre-existing behaviour, and refusing would break every close
-    against it — the degrade may not be stricter than the copy it degrades to."""
     _clear_session_env(monkeypatch)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", CALLER)
 
@@ -401,8 +341,6 @@ def _pre_provenance_bin_module():
 def test_an_older_bin_script_costs_provenance_not_the_close(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Skew the other way: this engine, a bin script that predates the
-    provenance function. `sid_source` is absent; the gate still computes."""
     _clear_session_env(monkeypatch)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", CALLER)
     monkeypatch.setattr(
@@ -416,7 +354,6 @@ def test_an_older_bin_script_costs_provenance_not_the_close(
 def test_the_refusal_survives_an_older_bin_script(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The hard stop must not depend on the provenance it likes to quote."""
     _clear_session_env(monkeypatch)
     monkeypatch.setattr(
         wsc, "_load_session_disposition_module", lambda: _pre_provenance_bin_module()

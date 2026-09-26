@@ -46,8 +46,6 @@ _SESSION_ID = "11111111-2222-3333-4444-555555555555"
 
 
 def _built_decision_object() -> dict:
-    """A full envelope produced by the real constructors and passed through
-    `emit`, then JSON round-tripped exactly as the persisted file is."""
     dispositions = [
         build_disposition("adopt", [_DIRECTIVE_ID], guidance="Adopt the proposal."),
         build_disposition("decline", [_DIRECTIVE_ID], guidance="Decline it."),
@@ -124,9 +122,6 @@ class TestPickupReaderReadsTheWritersOutput:
 
 
 class TestMalformedPersistedShapeDegradesRatherThanRaising:
-    """The persisted file is a data state, not a producer's in-process list:
-    `apply_base.judgment_points_by_id` may raise on a malformed entry, these
-    may not."""
 
     @pytest.mark.parametrize(
         "judgment_points", [None, {}, "judgment_points", [None, "x", {}, {"id": ""}]]

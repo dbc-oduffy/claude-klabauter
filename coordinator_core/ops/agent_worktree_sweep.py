@@ -123,10 +123,8 @@ from coordinator_core.win_portability import no_console_creationflags
 
 _CREATIONFLAGS = no_console_creationflags()
 
-# subprocess timeouts (rule: every subprocess.run over looping/external input
-# needs a bound — a single hung `git` child must not wedge the whole sweep).
 _GIT_TIMEOUT_SECS = 30
-_CHERRY_PICK_TIMEOUT_SECS = 60  # may run commit hooks; generous but bounded
+_CHERRY_PICK_TIMEOUT_SECS = 60
 _PORCELAIN_TIMEOUT_SECS = 30
 
 
@@ -153,11 +151,6 @@ def _run(
     cwd: Optional[Path] = None,
     timeout: int = _GIT_TIMEOUT_SECS,
 ) -> subprocess.CompletedProcess:
-    """Run a git subprocess with a bounded timeout and no stdin inheritance.
-
-    stdin=DEVNULL prevents a hung child (e.g. a cherry-pick that triggers an
-    interactive commit-hook prompt) from blocking on the sweep's own stdin.
-    """
     return subprocess.run(
         args,
         cwd=str(cwd) if cwd is not None else None,
@@ -231,26 +224,11 @@ class Worktree:
     path: str
     branch: str
     locked: bool = False
-    #: Raw text after "locked" in `git worktree list --porcelain` (empty
-    #: string when locked with no reason, or not locked at all). Captured
     #: and surfaced as-is — see module docstring's KNOWN STRUCTURAL GAP note
-    #: for why this is never parsed for meaning.
     lock_reason: str = ""
 
 
 def _parse_worktree_porcelain(text: str) -> List[Worktree]:
-    """Parse `git worktree list --porcelain` stanza output.
-
-    Stanzas look like:
-        worktree /path
-        HEAD <sha>
-        branch refs/heads/<name>
-        locked
-    separated by a blank line. Mirrors the bash oracle's line-by-line state
-    machine exactly (current_path/current_branch/current_locked accumulation,
-    flushed on the next "worktree " line or blank line, plus a final flush
-    for a trailing stanza with no terminating blank line).
-    """
     worktrees: List[Worktree] = []
     current_path = ""
     current_branch = ""
@@ -327,9 +305,6 @@ def _status_porcelain_lines(wt_path: str) -> List[str]:
 
 
 def _porcelain_path(line: str) -> str:
-    """Strip the 2-char status code + separator, matching the bash oracle's
-    `sub(/^...[ ]?/, "", path)` (3-char prefix incl. one trailing space,
-    optional) plus surrounding-quote stripping for paths git double-quotes."""
     path = line
     if len(path) >= 3 and path[2] == " ":
         path = path[3:]
@@ -431,17 +406,6 @@ def _remove_worktree(repo_root: Path, wt_path: str) -> bool:
 
 
 def _delete_branch_best_effort(repo_root: Path, branch: str) -> Optional[str]:
-    """Best-effort `git branch -D <branch>` after a worktree has been removed.
-
-    Returns ``None`` on success, or when ``branch`` is empty (nothing to
-    delete — not a failure, matches the "may already be gone" negative-spec).
-    Returns a short error string on failure so the caller can fold it into
-    the emitted line instead of swallowing it silently — a worktree removed
-    but its branch left behind is a real, visible-in-`git branch` residue
-    that a caller reading only stdout previously had no way to see. Still
-    best-effort: this never raises, and callers never abort the reap on a
-    branch-delete failure.
-    """
     if not branch:
         return None
     try:
@@ -641,17 +605,7 @@ def _sweep_one(
         )
 
     if state == "commits-clean":
-        # active_branch is guaranteed non-empty here: reap is forced False by
-        # main() under detached HEAD (where active_branch is empty), so this
-        # branch only ever executes when active_branch is non-empty. Invariant
-        # depends on that guard ordering in main() — do not reorder it.
-        #
-        # ONE ranged cherry-pick (`active_branch..tip_sha`) replaces the old
-        # per-commit loop — see `_cherry_pick_range`'s docstring for the
         # REFUTED `_KNOWN_SITES` disposition this batches. `commits` is still
-        # fetched (one spawn) purely to report `picked=X/Y` and to locate the
-        # conflicting sha's position on failure; it is never looped for a
-        # per-item spawn.
         commits = _commit_list_reverse(wt.path, active_branch)
         pick_failed = ""
         picked = len(commits)
@@ -673,7 +627,6 @@ def _sweep_one(
         detail = f"cherry-picked={picked} onto={active_branch} but worktree remove rejected"
         return _emit(fmt, wt.path, wt.branch, state, "salvaged-remove-failed", detail, wt.lock_reason), 3
 
-    # state == "dirty"
     detail = (
         f"ahead={classification.commits_ahead} dirty={classification.dirty_count} "
         "— uncommitted changes; PM must triage"
@@ -682,8 +635,6 @@ def _sweep_one(
 
 
 def _parse_args(argv: List[str]) -> Tuple[bool, str, Optional[int]]:
-    """Parse CLI args. Returns (reap, fmt, early_exit_code) — early_exit_code
-    is set (and reap/fmt are meaningless) for --help or a usage error."""
     reap = False
     fmt = "json"
     i = 0
@@ -740,13 +691,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     compare_ref = active_branch or _head_sha(repo_root)
 
-    # Whole-pass peer-liveness gate (S1b): a live PEER coordinator session
-    # (this session's own id subtracted) might have an in-flight background
-    # Agent dispatch, so a refused/unknown verdict blocks reaping EVERY
     # worktree this pass — see module docstring's KNOWN STRUCTURAL GAP note
-    # for why this is whole-pass rather than per-worktree. Only computed when
-    # reap is still requested post detached-HEAD clamp above; a plain scan
-    # never touches anything, so it never needs a gate.
     reap_block_detail: Optional[str] = None
     if reap:
         verdict = history_rewrite_verdict(cwd=str(repo_root))

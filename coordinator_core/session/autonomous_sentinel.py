@@ -42,11 +42,4 @@ _SENTINEL_PREFIX = "autonomous-run-"
 
 
 def sentinel_path(session_id: str) -> Path:
-    """Return the autonomous-run sentinel path for ``session_id``.
-
-    Resolves the platform temp directory via ``tempfile.gettempdir()``
-    (honours TMPDIR/TEMP/TMP per-platform) rather than a hardcoded POSIX
-    ``/tmp`` — the single point of truth for both the sentinel writer and
-    every reader.
-    """
     return Path(tempfile.gettempdir()) / f"{_SENTINEL_PREFIX}{session_id}"

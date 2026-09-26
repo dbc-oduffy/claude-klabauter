@@ -32,16 +32,6 @@ from coordinator_core.lifecycle_constants import (
 __all__ = ["TERMINAL_STATUS", "TERMINAL_DEPLOYMENT", "CONSUMED_MARKER_RE"]
 
 # Matches `<!-- consumed: YYYY-MM-DD [optional notes] -->` in a document body.
-# Capture group 2 is lazy, terminator-anchored (`(.*?)\s*-->`) so `>`
-# characters in notes (e.g. "shipped via PR > main") are captured correctly
-# rather than being swallowed by a greedy `[^>]*` stop -- ported verbatim
-# from the JS original's own the Staff Engineer F4 fix.
-#
-# Engine-level divergence (benign): when the optional non-capturing notes
-# group doesn't participate at all (no notes present), Python's `re`
-# returns `''` for group(2) where JS's regex engine returns `undefined`.
-# Both are falsy; callers gate on truthiness, not identity, so this does
-# not change behavior.
 CONSUMED_MARKER_RE = re.compile(
     r"<!--\s*consumed:\s*(\d{4}-\d{2}-\d{2})(?:\s+(.*?))?\s*-->", re.IGNORECASE
 )

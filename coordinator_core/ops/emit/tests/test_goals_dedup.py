@@ -1,16 +1,3 @@
-"""Regression tests — goals.py dedup key must be goal-identity-keyed, not period-keyed.
-
-Pins the fix for the 2026-07-21 break-class bug: the dedup key used to be (repo,
-coordinator_root_path, period, period_value) with no identity component, so every goal
-sharing a period silently collapsed to the single latest-declared_at row — verified to
-drop 58% of declared goals (55 raw rows -> 10 keys) against the real state tree. The fix
-keys on ``goal_id`` (falling back to (repo, coordinator_root_path, period, period_value,
-text) for legacy rows with no goal_id) so parallel goals within one period all survive,
-while re-declaring the SAME goal (same goal_id, or same legacy-identity tuple) still
-collapses to the latest ``declared_at`` record (supersession).
-
-Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P06
-"""
 
 from __future__ import annotations
 
@@ -63,9 +50,6 @@ def _base_goal_record(**overrides) -> dict:
 
 
 def test_distinct_goal_ids_sharing_period_all_survive(tmp_path: Path) -> None:
-    """N distinct goals sharing (repo, root, period, period_value) but differing in
-    text/goal_id must ALL be emitted — this is the exact shape of the bug: a ceremony
-    declaring 15 daily goals in one batch previously collapsed to 1."""
     ctx = _make_ctx(tmp_path)
     records_in = [
         _base_goal_record(goal_id=f"goal-{i:02d}", text=f"Distinct goal #{i}", declared_at=f"2026-06-24T09:0{i}:00Z")
@@ -81,8 +65,6 @@ def test_distinct_goal_ids_sharing_period_all_survive(tmp_path: Path) -> None:
 
 
 def test_same_goal_id_different_declared_at_collapses_to_latest(tmp_path: Path) -> None:
-    """Two rows sharing the SAME goal_id but different declared_at must still collapse
-    to the later one — supersession semantics are preserved by the fix."""
     ctx = _make_ctx(tmp_path)
     records_in = [
         _base_goal_record(goal_id="goal-super", text="Superseded text", declared_at="2026-06-24T09:00:00Z"),
@@ -97,8 +79,6 @@ def test_same_goal_id_different_declared_at_collapses_to_latest(tmp_path: Path) 
 
 
 def test_legacy_row_without_goal_id_is_not_dropped(tmp_path: Path) -> None:
-    """A legacy row with no goal_id must still be emitted (fallback identity key), not
-    silently dropped for want of the field."""
     ctx = _make_ctx(tmp_path)
     legacy_record = _base_goal_record(text="Legacy goal, no id")
     del legacy_record["goal_id"]
@@ -107,16 +87,11 @@ def test_legacy_row_without_goal_id_is_not_dropped(tmp_path: Path) -> None:
     records, malformed = goals_section.collect(ctx)
     assert malformed == []
     assert len(records) == 1, f"expected the legacy row to survive, got {len(records)}"
-    # collect() now emits the reader's resolved
-    # deterministic-hash fallback id (row.goal_id) instead of "" for legacy rows, so the
-    # emit consumer and the close-out consumer agree on identity for the same wire row.
     assert records[0]["goal_id"] != ""
     assert records[0]["text"] == "Legacy goal, no id"
 
 
 def test_legacy_rows_with_distinct_identity_all_survive(tmp_path: Path) -> None:
-    """Multiple legacy (no-goal_id) rows sharing (repo, root, period, period_value) but
-    differing in text must all survive via the fallback key — not collapse to one."""
     ctx = _make_ctx(tmp_path)
     rec_a = _base_goal_record(text="Legacy goal A")
     del rec_a["goal_id"]
@@ -132,8 +107,6 @@ def test_legacy_rows_with_distinct_identity_all_survive(tmp_path: Path) -> None:
 
 
 def test_legacy_rows_same_identity_different_declared_at_collapse(tmp_path: Path) -> None:
-    """Two legacy (no-goal_id) rows with the SAME identity tuple but different
-    declared_at must still collapse to the later one via the fallback key."""
     ctx = _make_ctx(tmp_path)
     rec_early = _base_goal_record(text="Re-declared legacy goal", declared_at="2026-06-24T09:00:00Z")
     del rec_early["goal_id"]
@@ -147,28 +120,10 @@ def test_legacy_rows_same_identity_different_declared_at_collapse(tmp_path: Path
     assert records[0]["declared_at"] == "2026-06-24T11:00:00Z"
 
 
-# ---------------------------------------------------------------------------
 # KNOWN CROSS-CUTOVER GAP (2026-07-22, goal.append explicit-goal_id feature).
-#
 # goal_append.py's append_goal() now accepts an EXPLICIT goal_id (validated to
 # the same 12-hex shape _goal_id() emits — see goal_append.py's _GOAL_ID_RE).
-# This section's dedup key groups on the row's OWN goal_id when present, and
-# ONLY falls back to recomputing _goal_id() when goal_id is absent-in-row
-# (see collect()'s `if not goal_id:` branch above). Consequence, NAMED here
-# rather than silently absorbed: a LEGACY row for a logical goal (written
-# before this feature existed, no goal_id in the row -> falls back to the
-# content-hash) and a LATER row for the SAME logical goal that arrives with a
 # DIFFERENT explicit goal_id (any valid 12-hex string not equal to that
-# content-hash) do NOT unify — they are two distinct dedup keys, so both
-# survive as separate records instead of the later one superseding the
-# earlier one. This is exactly the identity-fragmentation hazard the whole
-# goal.append memo exists to prevent, now showing up one layer over: at the
-# READ (dedup) side instead of the write side, for any goal with emitted
-# history that a caller later re-declares under an explicit id. Fixing the
-# dedup key is a direction-class call (which identity should win, and how to
-# reconcile two colliding shards) outside this task's scope — this test only
-# makes the current, un-fixed behaviour visible and citable.
-# ---------------------------------------------------------------------------
 
 def test_legacy_content_hash_row_does_not_unify_with_later_explicit_goal_id_row(
     tmp_path: Path,
@@ -183,10 +138,10 @@ def test_legacy_content_hash_row_does_not_unify_with_later_explicit_goal_id_row(
         text="Same logical goal, legacy shape",
         declared_at="2026-06-24T09:00:00Z",
     )
-    del legacy["goal_id"]  # legacy row: writer predates goal_id stamping
+    del legacy["goal_id"]
 
     explicit = _base_goal_record(
-        goal_id="abc123def456",  # explicit id, unrelated to the content-hash below
+        goal_id="abc123def456",
         text="Same logical goal, legacy shape",
         declared_at="2026-06-24T11:00:00Z",
     )
@@ -194,8 +149,6 @@ def test_legacy_content_hash_row_does_not_unify_with_later_explicit_goal_id_row(
 
     records, malformed = goals_section.collect(ctx)
     assert malformed == []
-    # Desired end-state would be 1 (supersession); current reality is 2 — this
-    # assertion pins CURRENT (gap) behaviour, not the goal.
     assert len(records) == 2, (
         "if this now returns 1, the dedup-key gap named above has been fixed — "
         "update this test's assertion and comment to match, don't just relax it"
@@ -203,9 +156,6 @@ def test_legacy_content_hash_row_does_not_unify_with_later_explicit_goal_id_row(
 
 
 def test_non_dict_json_line_is_quarantined_not_raised(tmp_path: Path) -> None:
-    """A syntactically valid JSON line that isn't an
-    object (bare int, bare list) must be skipped, not crash collect() via AttributeError
-    on the non-dict value (Finding 2's regression test)."""
     ctx = _make_ctx(tmp_path)
     good_record = _base_goal_record(goal_id="goal-good", text="Well-formed goal")
     log_path = ctx.central_state_root / "goals-log.test-host.jsonl"
@@ -252,25 +202,11 @@ def test_cross_machine_dedup_winner_names_its_own_shard_in_provenance(tmp_path: 
     assert winner["provenance"]["path"] == "state/goals-log.machine-b.jsonl"
 
 
-# ---------------------------------------------------------------------------
-# Unreadable central_state_root — silent-success guard.
-#
-# ``Path.glob()`` silently swallows ``PermissionError`` while walking (an unreadable
-# dir yields an empty iterator, no exception), which would otherwise make a
-# permission-denied central_state_root indistinguishable from "no goal logs here" and
-# collapse into the same zero-goals ``([], [])`` shape as a genuinely goal-less repo.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.skipif(
     sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
     reason="chmod 0o000 permission denial is not reliable on Windows or as root",
 )
 def test_unreadable_central_state_root_raises_not_zero_goals(tmp_path: Path) -> None:
-    """An unscannable central_state_root must raise GoalsStateRootUnreadable, never
-    silently degrade to the zero-goals ``([], [])`` shape — this section has no
-    envelope-visible malformed channel, so silently returning ``[]`` records would be
-    indistinguishable from "this repo genuinely has zero declared goals"."""
     ctx = _make_ctx(tmp_path)
     _write_goal_log(ctx, "test-host", [_base_goal_record()])
 

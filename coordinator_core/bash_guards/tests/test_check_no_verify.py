@@ -48,8 +48,6 @@ def _denied(cmd: str) -> bool:
 
 
 class TestProseMentionAllowed:
-    """The false-positive-on-passing-side direction: a commit whose MESSAGE
-    merely discusses the bypass flags must be allowed."""
 
     def test_plain_message_mentioning_no_verify_allowed(self):
         assert not _denied('git commit -m "message about --no-verify flags"')
@@ -63,9 +61,6 @@ class TestProseMentionAllowed:
         )
 
     def test_heredoc_command_substitution_message_body_allowed(self):
-        """The exact live reproduction: a `-m "$(cat <<'EOF' ... EOF)"`
-        commit-message body that documents the three bypass flags in prose,
-        never passing any of them to git's own argv."""
         msg = (
             "$(cat <<'EOF'\n"
             "This fix is about --no-verify and --no-gpg-sign and\n"
@@ -85,9 +80,6 @@ class TestProseMentionAllowed:
         assert not _denied("git status")
 
     def test_semicolon_inside_quoted_message_allowed(self):
-        """An ordinary commit message
-        containing a literal `;` must not itself be denied when there is no
-        real bypass flag anywhere in the command."""
         assert not _denied('git commit -m "fix: bug; cleanup"')
 
     def test_ampersand_inside_quoted_message_allowed(self):
@@ -95,14 +87,6 @@ class TestProseMentionAllowed:
 
 
 class TestQuotedSeparatorCannotHideRealBypassFlag:
-    """Finding 1 (P0): `_split_segments`'s raw `re.split(r"[;&|]+", cmd)` is
-    quote-unaware -- a `;`/`&`/`|` inside a quoted git commit-message operand
-    used to split one indivisible `git ... --no-verify` invocation into two
-    innocent-looking fragments (one carrying `git`, the other carrying the
-    bypass flag), so the guard silently returned `None` (ALLOWED) on a real
-    bypass. Fixed by segmenting via the shared quote-aware tokenizer
-    (`_command_tokenizer.tokenize_full_command` +
-    `segments_from_tokens_simple`) instead of the naive regex split."""
 
     def test_semicolon_in_message_does_not_hide_no_verify(self):
         assert _denied('git commit -m "release; ship it" --no-verify')
@@ -123,8 +107,6 @@ class TestQuotedSeparatorCannotHideRealBypassFlag:
 
 
 class TestGenuineBypassStillDenied:
-    """The confinement direction: a REAL use of the bypass flags must still
-    deny, in every wrapper shape BX-13 closed."""
 
     def test_bare_no_verify_denied(self):
         assert _denied("git commit --no-verify -m x")
@@ -227,9 +209,6 @@ class TestBypassRegexFallbackReachedAndDenies:
         return result
 
     def test_unparseable_command_with_late_marker_still_denied(self):
-        # Unterminated quote makes `_bt_tokenize_full_command` return None.
-        # The marker sits well past the start of the payload, mirroring the
-        # commit message's "late-positioned marker" claim.
         verb = "co" + "mmit"
         padding = "x" * 500
         cmd = 'git ' + verb + ' -m "' + padding + ' --no-verify'
@@ -237,12 +216,7 @@ class TestBypassRegexFallbackReachedAndDenies:
 
     def test_over_ceiling_command_with_late_marker_still_denied(self):
         # Past _MAX_TOKENIZABLE_COMMAND_CHARS (65536), _bt_tokenize_full_
-        # command also returns None -- same fallback, different trigger.
-        # The `;` boundaries keep the payload segment-splittable so the
         # bounded `_BYPASS_HEAD_RE` anchor can still find the git head; a
-        # ceiling-busting payload with NO segment boundary before the git
-        # head would defeat the anchor and is a separate, narrower gap
-        # (leftmost-head-only reach), not this finding's contract.
         verb = "co" + "mmit"
         cmd = ("a;" * 32774) + "git " + verb + " --no-verify"
         assert len(cmd) > 65536
@@ -282,16 +256,10 @@ class TestInspectsWithoutExecingNeverBypasses:
         assert not _denied("which git -c commit.gpgsign=false commit -m x")
 
     def test_nested_execs_its_argv_then_which_still_allowed(self):
-        """`sudo`/`nice` DO exec their own argv, so the walk peels past
-        them as before -- but the head it then lands on is `which`, still
-        never-executing, so the segment is still allowed."""
         assert not _denied("sudo which git commit --no-verify -m x")
         assert not _denied("nice which git commit --no-verify -m x")
 
     def test_which_itself_still_a_confirmed_git_bypass_check_result(self):
-        """Regression guard on the OTHER direction: a real bypass one
-        command earlier in a chain must still deny even though a LATER
-        segment in the same chain is a harmless `which git ...` mention."""
         assert _denied(
             "git commit --no-verify -m x && which git commit --no-verify -m y"
         )
@@ -334,27 +302,15 @@ class TestHeredocShellPayloadRescanMustSurviveAnyFutureMigration:
         assert _denied("sh <<'EOF'\ngit commit -m x --no-gpg-sign\nEOF")
 
     def test_tab_stripping_heredoc_form_still_denied(self):
-        """`<<-WORD` (leading-tab-stripping form) must not evade the
-        rescan -- `_heredoc_shell_payloads` shares the same intro/
-        terminator classification `_strip_heredoc_bodies` uses."""
         assert _denied("bash <<-'EOF'\n\tgit commit --no-verify -m x\n\tEOF")
 
     def test_unquoted_delimiter_heredoc_still_denied(self):
         assert _denied("bash <<EOF\ngit commit --no-verify -m x\nEOF")
 
     def test_nested_shell_c_inside_heredoc_body_still_denied(self):
-        """The body itself can carry ANOTHER wrapper shape (`sh -c`) around
-        the real bypass -- both unwrap layers must compose, not just fire
-        independently on the top level."""
         assert _denied(
             "bash <<'EOF'\nsh -c \"git commit --no-verify -m x\"\nEOF"
         )
 
     def test_prose_heredoc_into_non_shell_consumer_still_allowed(self):
-        """The differential-equivalence check on the OTHER direction: a
-        heredoc fed to a NON-executing consumer (`cat`, here) is genuine
-        prose/data and must stay allowed -- this class exists to protect
-        the shell-executing case, not to make every heredoc containing the
-        bypass words deny unconditionally (that would just trade BX-14's
-        bypass for `TestProseMentionAllowed`'s false positive)."""
         assert not _denied("cat <<'EOF'\ngit commit --no-verify -m x\nEOF")

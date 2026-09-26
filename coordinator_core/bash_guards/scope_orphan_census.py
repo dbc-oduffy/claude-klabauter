@@ -130,7 +130,6 @@ _OP_OUTPUT_PREFIX_RE = re.compile(
 
 @dataclass(frozen=True)
 class OrphanEvent:
-    """One `owner:orphan` line from a `scope-warnings.log`."""
 
     timestamp: str
     day: str
@@ -142,25 +141,6 @@ class OrphanEvent:
 
 @dataclass
 class CensusResult:
-    """Counts and residue for one census run.
-
-    `by_cause` / `by_path` / `by_session` are plain counters. `members` maps
-    each cause to the list of `(session_id, path, timestamp)` triples that
-    produced it -- always populated for `genuinely-unowned` (the bucket the
-    C6 gate must be able to name every member of); populated for the other
-    causes too, since a re-runnable census is only useful if its counts are
-    checkable against the events that produced them.
-
-    `coverage` -- see the module docstring's "Coverage" section. Always
-    populated (never omitted), so a reader of `to_dict()` cannot mistake a
-    high-coverage run for a low-coverage one by their shape alone:
-    `sessions_with_dir` (directories actually present under
-    `.git/coordinator-sessions/`), `committing_sessions` (distinct
-    `Session-Id` trailers reaching HEAD in the same window, or `None` if the
-    `git log` read failed -- fails toward "unknown", never toward a false
-    zero), and `coverage_ratio` (`sessions_with_dir / committing_sessions`,
-    or `None` when the denominator is `None` or `0`).
-    """
 
     day: Optional[str]
     total_events: int = 0
@@ -270,16 +250,8 @@ def iter_orphan_events(
 
 
 def _git_tracked_at_head(git_root: str, path: str) -> bool:
-    """True if `path` is tracked at HEAD (used to detect deletions)."""
     result = run_git(["ls-files", "--error-unmatch", "--", path], cwd=git_root)
     if result.returncode == 127 or result.timed_out:
-        # Unreadable git state must not manufacture a deletion verdict --
-        # fail toward "cannot confirm deletion" so classify_cause() falls
-        # through to a later, non-destructive bucket. `timed_out` belongs in
-        # the same arm as 127: `run_git` reports a timeout as returncode -1,
-        # which would otherwise fall to the comparison below and read as a
-        # confident "not tracked" -- the exact verdict this guard refuses to
-        # manufacture, arrived at because git did not answer.
         return True
     return result.returncode == 0
 
@@ -288,14 +260,6 @@ _op_output_prefix_cache: Optional[List[str]] = None
 
 
 def _derive_op_output_prefixes(git_root: str) -> List[str]:
-    """Scan `coordinator_core/ops/*.py` for repo-relative path-prefix string
-    literals (``"state/..."`` / ``"archive/..."``), returning the set of
-    directory prefixes (first two path segments) found.
-
-    Derived at call time from live op source -- never a hand-maintained list.
-    A new op writing to a new `state/<subdir>` output directory is picked up
-    the next time this module runs, with no edit to this file required.
-    """
     global _op_output_prefix_cache
     if _op_output_prefix_cache is not None:
         return _op_output_prefix_cache
@@ -416,11 +380,6 @@ def _has_any_touch_claim(git_root: str, path: str) -> bool:
 
 
 def _is_declared_output_literal(git_root: str, path: str) -> bool:
-    """True if `path` itself (not merely its directory prefix) appears as a
-    quoted string literal in `coordinator_core/ops/*.py` source -- a
-    stronger corroboration than prefix membership for an op that writes a
-    fixed (non-dynamic) filename.
-    """
     ops_dir = os.path.join(git_root, "coordinator_core", "ops")
     if not os.path.isdir(ops_dir):
         return False
@@ -441,22 +400,10 @@ def _is_declared_output_literal(git_root: str, path: str) -> bool:
 
 
 def _op_output_is_corroborated(git_root: str, path: str) -> bool:
-    """C7b: prefix membership alone no longer suffices for
-    `undeclared-op-output` -- require the exact path to show up as either
-    its own literal in op source, or a raw touch-record TOUCH claim from
-    any session. See this module's docstring for why prefix-only matching
-    misfiled 13 of 15 first-run members.
-    """
     return _is_declared_output_literal(git_root, path) or _has_any_touch_claim(git_root, path)
 
 
 def classify_cause(git_root: str, event: OrphanEvent) -> str:
-    """Classify one `OrphanEvent` into exactly one of `_CAUSES`.
-
-    Checked in fixed order -- see the module docstring's taxonomy. Every
-    check is derived from live git/filesystem/source/touch-record state,
-    never a hand-maintained list of specific paths.
-    """
     path = event.path
 
     if path.startswith(_ARCHIVE_PREFIX) or ("/" + _ARCHIVE_PREFIX) in path:
@@ -479,10 +426,6 @@ def classify_cause(git_root: str, event: OrphanEvent) -> str:
 
 
 def _count_session_dirs(git_root: str) -> int:
-    """Count directories actually present under `.git/coordinator-sessions/`
-    -- the denominator side of coverage. Zero, not a crash, when the hub
-    itself does not exist (matches `_iter_scope_warning_logs`'s own posture).
-    """
     sessions_root = os.path.join(git_root, ".git", "coordinator-sessions")
     if not os.path.isdir(sessions_root):
         return 0

@@ -69,8 +69,6 @@ from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -107,7 +105,6 @@ def _run(args: list[str], env: dict | None = None, cwd: str | None = None) -> su
 class FastSubcommandTest(unittest.TestCase):
     def test_t1_skip_with_notice(self) -> None:
         env = {"COORDINATOR_FAST_TEST_CMD": ""}
-        # Ensure no coordinator.local.md at /tmp interferes.
         proc = _run(["fast", "--repo-root", "/tmp"], env=env)
         self.assertIn("Validation: skipped", proc.stdout)
         self.assertEqual(proc.returncode, 0)
@@ -134,10 +131,6 @@ class FastSubcommandTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0)
 
     def test_t17_budget_line_emitted_on_stderr(self) -> None:
-        """B1 (docs/plans/2026-09-07-fix-the-validate-gate-recursive-tier-
-        invocation.md, AC11): the resolved-command run emits the gate_budget
-        line on stderr, carrying both figures, and does not perturb stdout
-        or the exit code -- same stub command, same repo, as T4."""
         env = {"COORDINATOR_FAST_TEST_CMD": "true"}
         proc = _run(["fast", "--repo-root", "/tmp"], env=env)
         self.assertIn("Validation: 0", proc.stdout)
@@ -147,38 +140,12 @@ class FastSubcommandTest(unittest.TestCase):
         self.assertIn("(process time, not wall clock)", proc.stderr)
 
     def test_t5_resolved_command_fails(self) -> None:
-        # `exit 3` is two tokens, so (unlike the single-token `true` in T4)
-        # it clears `_configured_test_cmds`' well-formedness filter and gets
-        # classified Tier F (`full_test_cmd` fallback -- no separate
-        # `full_test_cmd` configured, so the resolver's own rc=3 fallback
-        # makes the fast string the full string too). Per PM ruling
-        # 2026-08-04 (cross-repo/archive/2026-07-25-doe-claude-em-validate-
-        # tier-u-shape-ruling.md's amendment), Tier F is no longer exempt
-        # from the grant requirement -- the Tier-U gate now refuses this
-        # BEFORE the child ever runs, still on exit 3 (the gate's own
-        # refusal code), but for a different reason than the child's actual
-        # exit code, which this call site never reaches.
         env = {"COORDINATOR_FAST_TEST_CMD": "exit 3"}
         proc = _run(["fast", "--repo-root", "/tmp"], env=env)
         self.assertIn("Validation: tier-u-refused", proc.stdout)
         self.assertEqual(proc.returncode, 3)
 
     def test_t8_diff_scoped_branch_executes_without_raising(self) -> None:
-        """Regression: `run_fast` binds a LOCAL `diag = diag_buf.getvalue()`
-        (the resolver's captured stderr, a str) further down the function.
-        An unaliased `from coordinator_core.diff_scoped_tests import diag`
-        would be shadowed function-wide, so BOTH diff-scoped diagnostic call
-        sites (non-empty `diff_paths`) would raise
-        `TypeError: 'str' object is not callable` -- on exactly the path
-        the feature exists for. The 14 tests in
-        coordinator_core/test_diff_scoped_tests.py exercise
-        `diff_scoped_tests` directly and never drove this wired path, so a
-        green suite there missed a broken integration entirely. This test
-        drives `run_fast` in-process (monkeypatching `compute_diff_scoped_paths`
-        to return a non-empty, fully-mapped set, matching the module's own T7
-        in-process pattern) so the `if diff_paths:` branch and its diagnostic
-        call actually execute here.
-        """
         import importlib.util
 
         from coordinator_core.session.tier_u_gate import TierUGateResult
@@ -188,10 +155,6 @@ class FastSubcommandTest(unittest.TestCase):
         assert spec.loader is not None
         spec.loader.exec_module(mod)
 
-        # This repo's real fast_test_cmd carries this exact marker
-        # expression -- reused here (rather than an arbitrary string) so
-        # the assertion below is meaningful for the "-m survives on the
-        # wired path" requirement, not just "some string survives".
         marker_expr = "-m 'not cadence and not pending_fix and not designed_red'"
         resolved_cmd = f"true {marker_expr}"
 
@@ -200,11 +163,6 @@ class FastSubcommandTest(unittest.TestCase):
                 self.stdout = stdout
                 self.returncode = returncode
 
-        # Bypass resolution (no coordinator.local.md / env needed) and the
-        # Tier-U gate (its own classification ladder is a separate concern
-        # from this file's wiring bug -- see coordinator_core/test_diff_
-        # scoped_tests.py and the sidecar note on Tier F/U classification
-        # for that coverage) so this test isolates the diff-scoping wiring.
         mod._resolver.resolve_fast_test_cmd = lambda repo_root: _FakeResolveResult(
             resolved_cmd + "\n", 0
         )
@@ -225,18 +183,11 @@ class FastSubcommandTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(validation_result, "0")
         self.assertEqual(len(captured_cmds), 1)
-        # The command actually handed to the runner -- not just the
-        # `append_test_paths` return value in isolation -- still carries
-        # both the appended path and the untouched marker expression.
         self.assertIn("pkg/test_changed.py", captured_cmds[0])
         self.assertIn(marker_expr, captured_cmds[0])
         self.assertTrue(captured_cmds[0].startswith(resolved_cmd))
 
     def test_t9_source_only_diff_scopes_via_mapped_tests(self) -> None:
-        """C3 (docs/plans/2026-07-30-diff-scoped-ceremony-gates-elegant.md):
-        a diff that changed only a SOURCE file (never a test file directly)
-        must still narrow, via `compute_diff_scoped_paths`'s union with
-        `coordinator_core.source_test_map`."""
         import importlib.util
 
         from coordinator_core.session.tier_u_gate import TierUGateResult
@@ -257,8 +208,6 @@ class FastSubcommandTest(unittest.TestCase):
         mod._resolver.resolve_fast_test_cmd = lambda repo_root: _FakeResolveResult(
             resolved_cmd + "\n", 0
         )
-        # A source-only diff: no directly-changed test file, but a mapped
-        # covering test comes back fully_mapped=True.
         mod.compute_diff_scoped_paths = lambda repo_root: (
             ["pkg/test_mapped_from_source.py"],
             True,
@@ -305,8 +254,6 @@ class FastSubcommandTest(unittest.TestCase):
         mod._resolver.resolve_fast_test_cmd = lambda repo_root: _FakeResolveResult(
             resolved_cmd + "\n", 0
         )
-        # One mappable candidate exists, but fully_mapped is False -- the
-        # caller MUST discard the candidate and run the unscoped command.
         mod.compute_diff_scoped_paths = lambda repo_root: (
             ["pkg/test_partial.py"],
             False,
@@ -337,12 +284,6 @@ class PackageabilitySubcommandTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0)
 
     def test_t7_loud_skip_when_absent(self) -> None:
-        # Simulate a partial/stale checkout (validate-install-contract.py
-        # missing from an otherwise-valid bin/ dir) by monkeypatching the
-        # resolved script path in-process -- exercised directly against the
-        # imported module rather than a scratch-copied subprocess, so the
-        # module's own coordinator/lib import resolution (relative to its
-        # real on-disk location) stays intact.
         import importlib.util
 
         spec = importlib.util.spec_from_file_location("_vfp_under_test", _CLI)
@@ -365,9 +306,6 @@ class PackageabilitySubcommandTest(unittest.TestCase):
 class MetacharGuardAndDirectExecTest(unittest.TestCase):
     def test_t8_plain_quoted_command_allowed(self) -> None:
         mod = _load_cli_module()
-        # Must not raise -- ordinary shell-quoting (a quoted sub-argument) is
-        # not a shell metacharacter and is exactly the shape shlex.split is
-        # meant to parse without a shell.
         mod._fail_on_ambiguous_shell_syntax("pytest -m 'not slow and not integration'")
 
     def test_t8_shell_syntax_refused(self) -> None:
@@ -400,9 +338,6 @@ class MetacharGuardAndDirectExecTest(unittest.TestCase):
 
 
 class SuiteMutexTakeSideTest(unittest.TestCase):
-    """DR-088 layer-6 take side: `run_fast`'s resolved-command execution must
-    run inside the held suite mutex, and a held-elsewhere mutex must WARN and
-    proceed (fail-open), never abort."""
 
     def _fake_resolve(self, mod, resolved_cmd: str) -> None:
         class _FakeResolveResult:
@@ -422,9 +357,6 @@ class SuiteMutexTakeSideTest(unittest.TestCase):
         )
 
     def _isolated_settings_home(self, tmp_dir: str) -> None:
-        # This machine is shared with live peer sessions -- point the mutex's
-        # lock directory at a per-test scratch dir rather than touching the
-        # real machine-wide lock a concurrent suite run elsewhere may hold.
         os.environ["COORDINATOR_SETTINGS_HOME"] = tmp_dir
         self.addCleanup(os.environ.pop, "COORDINATOR_SETTINGS_HOME", None)
 
@@ -452,7 +384,6 @@ class SuiteMutexTakeSideTest(unittest.TestCase):
             self.assertEqual((validation_result, exit_code), ("0", 0))
             self.assertEqual(len(observed_holder), 1)
             self.assertIsNotNone(observed_holder[0], "mutex was not held during the suite call")
-            # Released again after the call.
             self.assertIsNone(suite_mutex.holder())
 
     def test_t11_held_elsewhere_warns_and_proceeds(self) -> None:
@@ -485,9 +416,6 @@ class SuiteMutexTakeSideTest(unittest.TestCase):
 
 
 class ProcessGroupTeardownTest(unittest.TestCase):
-    """T12-T16: the abort-time process-group teardown wiring around
-    `_run_resolved_command` (see module docstring's Process-group
-    teardown section)."""
 
     def test_t12_start_new_session_always_set(self) -> None:
         mod = _load_cli_module()
@@ -531,15 +459,12 @@ class ProcessGroupTeardownTest(unittest.TestCase):
         mod = _load_cli_module()
         fake_proc = type("FakeProc", (), {"pid": 999999})()
         with mock.patch.object(mod.os, "killpg", side_effect=OSError("no such process group")):
-            # Must not raise -- AC3: a reap that raises must never change
-            # the run's exit code.
             mod._teardown_process_group(fake_proc)
 
     def test_t15_windows_job_object_noop_off_windows(self) -> None:
         mod = _load_cli_module()
         fake_proc = type("FakeProc", (), {"pid": os.getpid()})()
         self.assertIsNone(mod._assign_windows_job_object(fake_proc))
-        # Must not raise on a None handle or on a non-Windows host.
         mod._close_windows_job_object(None)
         mod._close_windows_job_object("not-a-real-handle")
 

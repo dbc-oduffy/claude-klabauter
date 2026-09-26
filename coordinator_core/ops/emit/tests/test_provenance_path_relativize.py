@@ -1,15 +1,3 @@
-"""Unit tests — provenance-path relativization helpers (DR-060 follow-up).
-
-Direct, non-golden coverage for two helpers previously exercised only transitively via
-``test_emit_parity``'s section-parity comparison, which never constructed a file outside
-the resolved root nor a fixture path missing the anchor: ``review_trail.py::_relativize_path``'s
-``ValueError`` fallback branch, and ``normalizers.py::_relativize_abs_fixture_path``'s three
-canonicalization forms (absolute, anchor-relative, bare-relative) plus its non-string
-passthrough.
-
-Spec backlink: state/review-trail/findings/2026-07-21-codereview-sliceclaude-klabauter-cockpit-emitter-
-provenance-relativize-coordinator-core-ops-emit-sections-revie.md — Finding 3.
-"""
 
 from __future__ import annotations
 
@@ -36,7 +24,6 @@ def _make_ctx(tmp_path: Path, subprocess_root: Path | None = None) -> EmitContex
 
 
 class TestRelativizePathFallback:
-    """``_relativize_path`` (review_trail.py) — outside-root fallback branch."""
 
     def test_filepath_outside_root_returns_original_absolute_path(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
@@ -63,7 +50,6 @@ class TestRelativizePathFallback:
 
 
 class TestRelativizeAbsFixturePath:
-    """``_relativize_abs_fixture_path`` (normalizers.py) — three canonicalization forms."""
 
     def test_absolute_path_canonicalizes_to_state_relative(self) -> None:
         value = "/Users/x/claude-klabauter/coordinator_core/ops/emit/tests/fixtures/root/state/review-trail/y.json"

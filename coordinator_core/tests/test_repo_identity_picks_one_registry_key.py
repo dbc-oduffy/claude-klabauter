@@ -1,25 +1,3 @@
-"""A repo registered under several registry keys still has ONE identity.
-
-A repo carries its canonical `repos.*` key plus any receive-only alias a
-sibling may address it by — `repos.claude_klabauter` alongside
-`repos.example_orchestration_hub_repo`, `repos.example-sim-repo` alongside
-`repos.example_sim_repo_md`, four such pairs live on the machine-b box alone. Both
-reverse mappings (path -> EM id) used to take the first key that path-matched,
-so the answer was whatever order the caller happened to enumerate the registry
-in: `coordinator/bin/cross-repo-memo.py` sorts keys alphabetically and sent
-every memo from this repo as `example-orchestration-hub-repo-em`, while
-`resolve_self_em_id` enumerates in file order and answered `claude-klabauter-em`
-for the same repo in the same process. Six memos went out to sibling inboxes
-under the wrong sender before this was caught by hand.
-
-The failure is fleet-wide and silent in both directions: a receiver's
-addressee gate, the DR-026 sender-namespaced filename, and
-`compute_reply_closure`'s sender match all key on that string.
-
-Negative-spec: an alias must stay a valid address a sibling can send TO. This
-fixes which key wins the REVERSE mapping only — it does not dedupe the
-registry and does not narrow what resolves as a receiver.
-"""
 
 from __future__ import annotations
 
@@ -44,12 +22,6 @@ _ALIAS_KEY = "repos.example_orchestration_hub_repo"
 
 
 def _registry(tmp_path: Path, declared: tuple[str, ...], live: dict[str, Path]) -> Path:
-    """Write a two-file machine-local registry and return its settings home.
-
-    `declared` names the keys the seeded `registry.toml` roster carries (value
-    empty, exactly as the shipped template declares them); `live` is what this
-    machine has actually pointed at a path, in `registry.local.toml`.
-    """
     claude_home = tmp_path / "claude-home"
     machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
     machine_local.mkdir(parents=True, exist_ok=True)
@@ -65,7 +37,6 @@ def _registry(tmp_path: Path, declared: tuple[str, ...], live: dict[str, Path]) 
 
 @pytest.fixture
 def collided_registry(tmp_path, monkeypatch):
-    """One repo path, two registry keys, only one of them on the roster."""
     repo = tmp_path / "claude-klabauter"
     repo.mkdir()
     claude_home = _registry(
@@ -84,12 +55,6 @@ def collided_registry(tmp_path, monkeypatch):
 def test_declared_roster_key_wins_whatever_the_enumeration_order(
     collided_registry, alias_first
 ):
-    """The roster key wins from either enumeration order — that is the whole fix.
-
-    Both orders are live today: the CLI passes alphabetically sorted keys (the
-    alias first), `read_registry_repos` passes file order (the canonical key
-    first, by accident of having been registered earlier).
-    """
     repo = collided_registry
     keys = [_ALIAS_KEY, _CANONICAL_KEY] if alias_first else [_CANONICAL_KEY, _ALIAS_KEY]
     paths = {key: str(repo) for key in keys}
@@ -97,8 +62,6 @@ def test_declared_roster_key_wins_whatever_the_enumeration_order(
 
 
 def test_self_identity_resolves_to_the_canonical_em_id(collided_registry):
-    """`resolve_self_em_id` — the in-process half, used for the addressee gate's
-    self line and `compute_reply_closure`'s sender match."""
     from coordinator_core.ops.fleet import _memo_resolver
 
     importlib.reload(_memo_resolver)
@@ -108,13 +71,9 @@ def test_self_identity_resolves_to_the_canonical_em_id(collided_registry):
 def test_cli_sender_identity_resolves_to_the_canonical_em_id(
     collided_registry, monkeypatch
 ):
-    """`em_id_for_root` — the CLI half that writes a memo's `from:` line."""
     if not _DOE_ROOT:
         pytest.skip("no DoE-claude checkout — coordinator_registry cannot import")
     # The fixture redirects CLAUDE_HOME, which is one rung of the ladder this
-    # module reads its manifest through at IMPORT time. Name the real root on
-    # the documented override rung so the redirect costs a registry, not an
-    # install-integrity failure.
     monkeypatch.setenv("REPO_DOE_CLAUDE", _DOE_ROOT)
     lib_dir = str(Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "lib")
     if lib_dir not in sys.path:
@@ -130,13 +89,6 @@ def test_cli_sender_identity_resolves_to_the_canonical_em_id(
 def test_undeclared_collision_is_stable_rather_than_arbitrary(
     tmp_path, monkeypatch, reverse
 ):
-    """Neither key on the roster: still one answer, the same one every time.
-
-    A machine can register a repo under two keys the shipped roster never
-    declares. There is no principled winner there, so the tie-break is
-    lexicographic and logged — stable is the property under test, not which
-    of the two it picks.
-    """
     repo = tmp_path / "some-repo"
     repo.mkdir()
     keys = ("repos.zulu_name", "repos.alpha_name")
@@ -152,11 +104,6 @@ def test_undeclared_collision_is_stable_rather_than_arbitrary(
 
 
 def test_alias_still_resolves_as_a_receiver(collided_registry):
-    """The negative spec: a sibling addressing the alias still lands the memo.
-
-    The fix touches the reverse mapping only. Were it to dedupe the registry
-    instead, every alias in the fleet's memo history would stop resolving.
-    """
     from coordinator_core.ops.fleet import _memo_resolver
 
     importlib.reload(_memo_resolver)

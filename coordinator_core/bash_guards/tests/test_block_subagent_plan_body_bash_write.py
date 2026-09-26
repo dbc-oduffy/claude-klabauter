@@ -68,11 +68,6 @@ def test_em_caller_no_agent_id_allowed_and_silent(monkeypatch, capsys):
 
 
 def test_unresolvable_kind_still_allows(monkeypatch, capsys):
-    """raw agent_id present, but the backpointer chain lookup misses
-    (unreadable/missing) -- allows (matches the write-side sibling and the
-    2026-06-09 PM ruling both guards encode), and the measurement-only
-    signal still fires, reporting its true ALLOWED disposition.
-    """
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="")
     payload = _payload(_WRITE_CMD)
     assert guard.check(payload) is None
@@ -82,9 +77,6 @@ def test_unresolvable_kind_still_allows(monkeypatch, capsys):
 
 
 def test_unparseable_agent_id_still_allows(monkeypatch):
-    """raw agent_id present but fails to canonicalize (unrecognised shape) --
-    still allows, same as any other kind-resolution-failure shape.
-    """
     _stub(monkeypatch, resolved_agent_id="", subagent_type="")
     payload = _payload(_WRITE_CMD)
     assert guard.check(payload) is None
@@ -156,11 +148,6 @@ def test_powershell_redirect_idiom_still_fires_dialect_neutral(monkeypatch):
 
 
 def test_powershell_cmdlet_write_records_silent_not_clean(monkeypatch):
-    """A PowerShell cmdlet write this guard has no verb table for
-    (`Set-Content`) must not read as a confirmed clean verdict -- it records
-    SILENT on the out-of-band channel while still returning `None` (the
-    fail-open default), per AC1/AC3.
-    """
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="coordinator:executor")
     payload = _ps_payload("Set-Content docs/plans/2026-07-30-x.md -Value 'x'")
     with _verdict.collecting() as silences:
@@ -188,10 +175,6 @@ def test_unenumerated_type_falls_through_to_advisory(monkeypatch):
 
 
 def test_enumerated_non_executor_type_still_allows_silently(monkeypatch):
-    """Case 2, positive direction -- a kind that resolves cleanly to
-    something ON the roster keeps today's silent allow, unaffected by the
-    narrowing.
-    """
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="coordinator:enricher")
     monkeypatch.setattr(
         guard, "resolve_roster", lambda: (frozenset({"coordinator:enricher"}), None)
@@ -201,10 +184,6 @@ def test_enumerated_non_executor_type_still_allows_silently(monkeypatch):
 
 
 def test_roster_load_error_falls_back_to_allow(monkeypatch):
-    """A roster-load failure is a peer-repo hiccup, not this guard's problem
-    to newly deny on (C1's PreToolUse(Agent) deny is the primary fix) --
-    falls back to today's allow rather than denying.
-    """
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="hookprobe-named")
     monkeypatch.setattr(guard, "resolve_roster", lambda: (None, "roster unresolved"))
     payload = _payload(_WRITE_CMD)
@@ -212,9 +191,6 @@ def test_roster_load_error_falls_back_to_allow(monkeypatch):
 
 
 def test_powershell_non_executor_kind_no_silent_no_deep_scan(monkeypatch):
-    """Identity axis still gates first: a non-executor kind never reaches
-    the PowerShell target-detection leg at all, so no SILENT is recorded.
-    """
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="coordinator:enricher")
     payload = _ps_payload("Set-Content docs/plans/2026-07-30-x.md -Value 'x'")
     with _verdict.collecting() as silences:

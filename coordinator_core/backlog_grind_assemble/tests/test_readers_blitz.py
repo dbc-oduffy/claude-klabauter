@@ -1,12 +1,3 @@
-"""P071-C4: bug-blitz emits its own Tier-U grant and its confirm-green
-`check` recheck (`commands/bug-blitz.md:54-55`) via `readers_blitz.collect`.
-
-Pins the two properties the plan's test surface names for this row: the
-grant flow appears only for `cadence == "bug-blitz"` and is absent for
-every other cadence; the confirm-green `check` directive carries no
-second judgment point, has a `depends_on` edge to the grant's own write
-directive, and carries no `already_satisfied`.
-"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -69,8 +60,6 @@ def test_confirm_green_check_carries_no_second_judgment_point(
     tmp_path: Path, monkeypatch
 ) -> None:
     result = _collect_bug_blitz(tmp_path, monkeypatch)
-    # Exactly one judgment point (the grant's) is emitted by the whole
-    # grant flow -- the check directive does not introduce a second one.
     grant_jp_ids = [
         jp["id"] for jp in result.judgment_points if jp["id"] == "j-bug-blitz-tier-u-grant"
     ]

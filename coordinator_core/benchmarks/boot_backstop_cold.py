@@ -155,11 +155,6 @@ reading to a shape it wasn't measured under."""
 
 
 class ColdProcessTimeSample(NamedTuple):
-    """Min/p50/max (plus mean) process-time summary over `n` independent cold
-    invocations of one command. `samples`/`wall_ms_samples` are per-invocation
-    context; `wall_ms_samples` is recorded only because the plan's own
-    § Anti-scope names wall clock as informative-never-verdict, not because
-    this module gates on it."""
 
     best_ms: float
     worst_ms: float
@@ -178,22 +173,6 @@ def measure_cold_process_time_n(
     env: Optional[dict] = None,
     cwd: Optional[str] = None,
 ) -> ColdProcessTimeSample:
-    """Runs `cmd` as `n` independent COLD invocations (a fresh interpreter each
-    time, no warm engine) and reports best/worst/mean process time.
-
-    Each invocation is measured with `batched_process_time_ms(cmd, k=1, ...)` --
-    k=1 rather than a larger batch because "cold" here means every single one
-    of the n samples pays its own interpreter-startup and import cost; batching
-    k>1 invocations together would amortise that cost across the batch instead
-    of reporting each cold sample honestly. `n` independent single-invocation
-    batches is how this module gets a real best/worst spread instead of one
-    averaged number (AC3c: "The cold measurement reports min, p50 and max over
-    n>=12, not a best-of").
-
-    Raises whatever `batched_process_time_ms` raises (`NotImplementedError` on
-    an unsupported platform, `OSError`/`ctypes.WinError`/`RuntimeError` on any
-    measurement-mechanism failure) -- no additional degradation.
-    """
     if n < 1:
         raise ValueError(f"measure_cold_process_time_n: n must be >= 1, got {n!r}")
 
@@ -247,8 +226,6 @@ _IMPORT_SET_PROBE_TIMEOUT_S = 30
 
 
 class ImportSetReading(NamedTuple):
-    """One fresh-subprocess `sys.modules` delta reading for importing
-    `module`."""
 
     module: str
     module_count: int
@@ -353,11 +330,6 @@ def reconcile_import_set_readings(
 
 
 def _main() -> None:
-    """Manual reproduction entry point -- `python -m
-    coordinator_core.benchmarks.boot_backstop_cold [module]`. Prints the
-    bare-interpreter reference-floor reproduction and, if a module path is
-    given, its reconciled import-set readings. Not a test; a human-facing
-    sanity check the plan body asks be run "before trusting the harness"."""
     declare_benchmark_origin()
     bare = measure_cold_process_time_n([sys.executable, "-c", "pass"], n=12)
     print(

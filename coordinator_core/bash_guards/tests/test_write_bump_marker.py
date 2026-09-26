@@ -1,12 +1,3 @@
-"""Tests for coordinator_core.bash_guards._write_bump_marker -- the
-write-confinement speed bump's session-scoped clear-once marker.
-
-Spec backlink: DoE-claude:pln-write-confinement-guards-cross-996567, chunk C3.
-Covers AC6 (marker honoured for the whole session), AC7 (subagent inherits
-its EM's marker), AC15 (the advertised clear line works verbatim), plus the
-`.git`-as-a-FILE worktree/submodule cases and the unwritable-gitdir
-fail-open case named explicitly in the chunk's own test-surface note.
-"""
 
 from __future__ import annotations
 
@@ -27,23 +18,13 @@ from coordinator_core.win_portability import (
     no_console_passthrough_kwargs,
 )
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
 
-
 def _posix(p) -> str:
-    """POSIX-slash string form of a path for embedding in a bash
-    command-line string -- the tokenizer under test parses commands as
-    real bash/POSIX-sh syntax (backslash is an escape character), so a
-    native Windows ``str(Path)`` (backslash-separated) embedded directly
-    into a ``cmd`` string is not a realistic Bash-tool payload and
-    silently corrupts the path once tokenized. Accepts a ``Path`` or a
-    plain ``str``."""
     return p.as_posix() if hasattr(p, "as_posix") else str(p).replace("\\", "/")
 
 
@@ -67,11 +48,6 @@ def _init_repo(tmp_path: Path, name: str = "repo") -> Path:
     _git(str(root), "add", "README.md")
     _git(str(root), "commit", "-q", "-m", "init")
     return root
-
-
-# ---------------------------------------------------------------------------
-# resolve_gitdir -- plain repo, worktree, submodule, no-repo, fail-open
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_gitdir_plain_repo(tmp_path):
@@ -117,8 +93,6 @@ def test_resolve_gitdir_missing_git_binary_fails_open(tmp_path, monkeypatch):
 
 
 def test_resolve_gitdir_outside_any_repo_still_returns_none(tmp_path, monkeypatch):
-    """The fail-open half the test above used to carry, kept explicit: no
-    `.git` ancestor still means `None`, spawn or no spawn."""
     scratch = tmp_path / "nowhere"
     scratch.mkdir()
     marker._GITDIR_MEMO.clear()
@@ -135,15 +109,11 @@ def test_resolve_gitdir_worktree_resolves_to_file_backed_dotgit(tmp_path):
     wt = tmp_path / "wt"
     _git(str(root), "worktree", "add", "-q", str(wt), "-b", "wt-branch")
 
-    # The worktree's own `.git` is a FILE (a `gitdir:` pointer), not a
-    # directory -- the exact hazard this module's gitdir resolution exists
-    # to avoid composing a literal join against.
     assert (wt / ".git").is_file()
 
     gitdir = marker.resolve_gitdir(str(wt))
     assert gitdir is not None
     assert gitdir.is_dir()
-    # The worktree's private gitdir lives under the main repo's .git/worktrees/.
     assert "worktrees" in gitdir.parts
 
 
@@ -172,13 +142,8 @@ def test_resolve_gitdir_submodule_resolves_to_file_backed_dotgit(tmp_path):
     assert "modules" in gitdir.parts
 
 
-# ---------------------------------------------------------------------------
-# path_has_git_ancestor -- pure filesystem walk, no subprocess. Exists to
-# disambiguate `resolve_gitdir(path) is None` between "genuinely no repo"
-# and "the git rev-parse spawn failed" -- see its own docstring and
 # `write_guards.bump_out_of_repo_tool_write`'s "UNRESOLVED IS NOT THE SAME
 # FACT AS REPO-LESS" for the defect this closes.
-# ---------------------------------------------------------------------------
 
 
 def test_path_has_git_ancestor_true_for_plain_repo_root(tmp_path):
@@ -194,10 +159,6 @@ def test_path_has_git_ancestor_true_for_nested_subdirectory(tmp_path):
 
 
 def test_path_has_git_ancestor_true_for_not_yet_created_nested_path(tmp_path):
-    # A write TARGET is very often a path that does not exist yet -- this
-    # function must not require the leaf itself to exist, matching
-    # `nearest_existing_ancestor`'s own reasoning in
-    # `_write_bump_sink_shapes.py`.
     root = _init_repo(tmp_path)
     not_yet_created = str(root / "newdir" / "file.txt")
     assert marker.path_has_git_ancestor(not_yet_created) is True
@@ -210,9 +171,6 @@ def test_path_has_git_ancestor_false_for_genuinely_repo_less_path(tmp_path):
 
 
 def test_path_has_git_ancestor_true_for_worktree_file_backed_dotgit(tmp_path):
-    # A linked worktree's `.git` is a plain FILE (a `gitdir:` pointer), not
-    # a directory -- this function must recognize either shape, matching
-    # `resolve_gitdir`'s own worktree/submodule handling.
     root = _init_repo(tmp_path)
     wt = tmp_path / "wt"
     _git(str(root), "worktree", "add", "-q", str(wt), "-b", "wt-branch")
@@ -238,11 +196,6 @@ def test_path_has_git_ancestor_never_spawns_a_subprocess(tmp_path, monkeypatch):
     assert marker.path_has_git_ancestor(str(scratch)) is False
 
 
-# ---------------------------------------------------------------------------
-# marker_present -- prefix matching, absence re-bumps, unwritable gitdir
-# ---------------------------------------------------------------------------
-
-
 def test_marker_present_false_when_absent(tmp_path):
     gitdir = tmp_path / ".git"
     gitdir.mkdir()
@@ -259,8 +212,6 @@ def test_marker_present_true_for_exact_basename(tmp_path):
 def test_marker_present_true_for_prefix_match_not_just_exact(tmp_path):
     gitdir = tmp_path / ".git"
     gitdir.mkdir()
-    # Deliberately not an exact-name match -- an entry whose basename
-    # STARTS WITH the session's marker basename still counts. See module
     # docstring "BASENAME MATCHING ON READ IS BY PREFIX".
     (gitdir / (marker.marker_basename("sess-123") + "-stray-suffix")).touch()
     assert marker.marker_present(gitdir, "sess-123") is True
@@ -295,16 +246,9 @@ def test_marker_present_allows_rather_than_dead_ends_on_unreadable_gitdir(tmp_pa
     original_mode = gitdir.stat().st_mode
     try:
         os.chmod(gitdir, 0o000)
-        # Must not raise -- an unlistable gitdir is treated as "no marker
-        # found" (re-bumps), never a dead end.
         assert marker.marker_present(gitdir, "sess-123") is False
     finally:
         os.chmod(gitdir, original_mode)
-
-
-# ---------------------------------------------------------------------------
-# marker_path / clear_line -- AC15, the advertised clear line works verbatim
-# ---------------------------------------------------------------------------
 
 
 def test_clear_line_matches_marker_path_and_prefix(tmp_path):
@@ -320,15 +264,6 @@ def test_clear_line_matches_marker_path_and_prefix(tmp_path):
 
 
 def test_clear_line_uses_posix_separators_so_a_shell_cannot_eat_them(tmp_path):
-    """The operator pastes this line into bash. A native `WindowsPath` renders
-    backslashes, bash reads each one as an escape, and the touch lands a single
-    mangled filename in the CURRENT directory while the gitdir stays empty --
-    the guard then denies again with the identical message, which reads as the
-    approval not working rather than as a path bug. Observed live 2026-08-07.
-
-    Asserted on the string, not via a shell, so the pin holds on POSIX hosts
-    too, where the bug is invisible by construction.
-    """
     gitdir = tmp_path / ".git"
     gitdir.mkdir()
 
@@ -337,9 +272,6 @@ def test_clear_line_uses_posix_separators_so_a_shell_cannot_eat_them(tmp_path):
 
 
 def test_clear_line_command_works_verbatim_on_a_fresh_machine(tmp_path):
-    """AC15: the emitted clear line, run exactly as printed, produces a
-    marker that `marker_present()` then reads back as cleared -- with no
-    prior provisioning of any kind."""
     root = _init_repo(tmp_path)
     gitdir = marker.resolve_gitdir(str(root))
     assert gitdir is not None
@@ -352,11 +284,6 @@ def test_clear_line_command_works_verbatim_on_a_fresh_machine(tmp_path):
     subprocess.run(["touch", command], check=True, **no_console_passthrough_kwargs())
 
     assert marker.marker_present(gitdir, session_id) is True
-
-
-# ---------------------------------------------------------------------------
-# resolve_em_session_id / effective_session_id -- AC7, subagent inheritance
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_em_session_id_reads_backpointer(tmp_path):
@@ -401,7 +328,6 @@ def test_effective_session_id_prefers_em_session_when_subagent(tmp_path):
 
 def test_effective_session_id_falls_back_to_payload_session_id(tmp_path):
     root = _init_repo(tmp_path)
-    # No back-pointer at all -- EM caller, or unresolved subagent.
     resolved = marker.effective_session_id("own-session-id", str(root), "")
     assert resolved == "own-session-id"
 
@@ -412,8 +338,6 @@ def test_effective_session_id_falls_back_to_payload_session_id(tmp_path):
 
 
 def test_subagent_inherits_em_marker_without_a_second_one(tmp_path):
-    """AC7: a dispatched subagent's bump_is_cleared() check sees the SAME
-    marker its EM created, with no marker of its own."""
     root = _init_repo(tmp_path)
     gitdir = marker.resolve_gitdir(str(root))
     assert gitdir is not None
@@ -431,11 +355,6 @@ def test_subagent_inherits_em_marker_without_a_second_one(tmp_path):
         git_root=str(root),
         agent_id="agent-abc123def456",
     ) is True
-
-
-# ---------------------------------------------------------------------------
-# bump_is_cleared -- top-level composition, AC6 (whole-session honouring)
-# ---------------------------------------------------------------------------
 
 
 def test_bump_is_cleared_true_after_marker_created(tmp_path):
@@ -461,11 +380,6 @@ def test_bump_is_cleared_false_when_session_id_empty(tmp_path):
     assert marker.bump_is_cleared(str(root), "") is False
 
 
-# ---------------------------------------------------------------------------
-# sweep_stale_markers -- AC21, session-end hygiene, never load-bearing
-# ---------------------------------------------------------------------------
-
-
 def test_sweep_stale_markers_removes_only_named_session(tmp_path):
     gitdir = tmp_path / ".git"
     gitdir.mkdir()
@@ -476,16 +390,11 @@ def test_sweep_stale_markers_removes_only_named_session(tmp_path):
 
     assert removed == 1
     assert marker.marker_present(gitdir, "ended-session") is False
-    # A live session's own marker must never be swept as a side effect of
     # sweeping a DIFFERENT session's marker in the same gitdir.
     assert marker.marker_present(gitdir, "still-live-session") is True
 
 
 def test_sweep_stale_markers_does_not_remove_prefix_matched_stray_suffix(tmp_path):
-    """The DELETE path is exact-match, unlike `marker_present()`'s read-path
-    prefix match (see module docstring, "EXACT MATCH, NOT PREFIX"). A stray
-    file whose basename merely STARTS WITH an ended session's marker
-    basename -- but is not an exact match -- must survive the sweep."""
     gitdir = tmp_path / ".git"
     gitdir.mkdir()
     stray = gitdir / (marker.marker_basename("ended-session") + "-stray-suffix")
@@ -513,10 +422,6 @@ def test_sweep_stale_markers_does_not_unlink_live_marker_when_ended_id_is_its_pr
 
 
 def test_sweep_stale_markers_removes_exact_match_even_when_a_longer_id_would_collide(tmp_path):
-    """Mirror of the above: the ended id's OWN exact marker is still removed
-    when both `abc` and `abcdef` markers are present in the same gitdir --
-    the fix narrows the match, it does not also break the legitimate
-    exact-match removal."""
     gitdir = tmp_path / ".git"
     gitdir.mkdir()
     abc_marker = gitdir / marker.marker_basename("abc")
@@ -527,12 +432,8 @@ def test_sweep_stale_markers_removes_exact_match_even_when_a_longer_id_would_col
     removed = marker.sweep_stale_markers(gitdir, ["abc"])
 
     assert removed == 1
-    # The exact-match `abc` marker file is gone -- swept as the ended
-    # session's own record. (`marker_present(gitdir, "abc")` would still
-    # read `True` here because its READ path is a deliberate prefix match
     # against the surviving `abcdef` file -- see module docstring "BASENAME
     # MATCHING ON READ IS BY PREFIX" -- so this asserts on the file directly
-    # rather than through that read-path helper.)
     assert not abc_marker.exists()
     assert abcdef_marker.exists()
     assert marker.marker_present(gitdir, "abcdef") is True
@@ -551,10 +452,6 @@ def test_sweep_stale_markers_does_not_touch_unrelated_files(tmp_path):
 
 
 def test_sweep_stale_markers_never_sweeps_a_live_session_absent_from_the_list(tmp_path):
-    """The core AC21 guarantee: a marker read past its owning session's
-    liveness must not stand a LIVE session's own bump down -- but the sweep
-    side of that guarantee is the mirror case, that a live session's marker
-    is never touched unless its own id is explicitly named as ended."""
     gitdir = tmp_path / ".git"
     gitdir.mkdir()
     live_session = "live-session-xyz"
@@ -594,9 +491,7 @@ def test_sweep_stale_markers_ignores_non_string_and_empty_ids(tmp_path):
     assert marker.marker_present(gitdir, "sess-1") is False
 
 
-# ---------------------------------------------------------------------------
 # marker_gitdir_is_writable -- STAFF-ENG F0 / AC5, write-axis fail-open.
-# ---------------------------------------------------------------------------
 
 
 def test_marker_gitdir_is_writable_true_for_ordinary_dir(tmp_path):
@@ -624,20 +519,10 @@ def test_marker_gitdir_is_writable_false_when_read_only(tmp_path):
     gitdir.mkdir()
     original_mode = gitdir.stat().st_mode
     try:
-        os.chmod(gitdir, 0o555)  # read + execute, no write
+        os.chmod(gitdir, 0o555)
         assert marker.marker_gitdir_is_writable(gitdir) is False
     finally:
         os.chmod(gitdir, original_mode)
-
-
-# ---------------------------------------------------------------------------
-# AC4/AC5/AC6 end-to-end, through the real guard -- non-vacuous per the
-# module's own AC9 requirement: `bump_applies()` is asserted True, and the
-# guard is confirmed to have actually FIRED, before any downstream property
-# (a clear, a per-target distinction, or an absence property) is asserted
-# against the result. See ratified lesson
-# state/lessons/2026-07-28-a-test-that-asserts-the-absence-of-a-fai-55498037e129.yaml.
-# ---------------------------------------------------------------------------
 
 
 def _end_to_end_setup(tmp_path, monkeypatch, session_id: str):
@@ -655,7 +540,6 @@ def test_ac4_clearing_target_a_leaves_target_b_firing(tmp_path, monkeypatch):
     foreign_a = _init_repo(tmp_path, "foreign-a")
     foreign_b = _init_repo(tmp_path, "foreign-b")
 
-    # AC9 -- non-negotiable precondition before asserting any guard verdict.
     assert applicability.bump_applies(session_id, cwd=str(root)) is True
 
     a_gitdir = marker.resolve_gitdir(str(foreign_a))
@@ -694,7 +578,7 @@ def test_ac5_unwritable_target_gitdir_allows_matching_unresolvable_precedent(tmp
     assert foreign_gitdir is not None
     original_mode = foreign_gitdir.stat().st_mode
     try:
-        os.chmod(foreign_gitdir, 0o555)  # read + execute, no write
+        os.chmod(foreign_gitdir, 0o555)
         cmd = f"git -C {_posix(foreign)} commit --allow-empty -m x"
         result = fg_guard.check_bump_foreign_repo_write(cmd, session_id, str(root), {})
         assert result is None, (
@@ -754,11 +638,7 @@ def test_ac6_marker_carries_no_expiry_identity_gating_or_hard_deny(tmp_path, mon
     assert result is not None, "guard must actually fire for the absence assertions below to mean anything"
 
     hook_output = result["hookSpecificOutput"]
-    # This is an advisory bump (`permissionDecision: "deny"`, a passable
     # speed bump), never a hard CONFINEMENT_DENY -- the registration-side
-    # `band`/`fail_closed` attributes this asserts are pinned by
-    # test_bump_foreign_repo_write.py's own AC19 test; this test asserts the
-    # MARKER's own absence properties, on a genuinely fired result.
     assert hook_output["permissionDecision"] == "deny"
     reason = hook_output["permissionDecisionReason"].lower()
     assert "expir" not in reason
@@ -766,15 +646,6 @@ def test_ac6_marker_carries_no_expiry_identity_gating_or_hard_deny(tmp_path, mon
     assert "fail_closed" not in reason
     assert "confinement_deny" not in reason
 
-    # The marker itself is a bare, forgeable `touch` of an ordinary file --
-    # no unforgeability machinery, no creation guard. Proved directly
-    # against the marker module rather than parsed out of the deny message
-    # (2026-08-13, C4d -- no renderer prints a `touch ` line on any channel
-    # any more; see `test_ac5_clear_line_executed_verbatim_clears_the_
-    # target`'s own note): compose the same marker path `clear_line()`
-    # would have named, and confirm its basename still carries no more than
-    # the ordinary marker prefix -- no expiry/identity suffix, nothing an
-    # ordinary `touch` couldn't forge.
     foreign_gitdir = marker.resolve_gitdir(str(foreign))
     assert foreign_gitdir is not None
     marker_path = marker.marker_path(foreign_gitdir, session_id)
@@ -789,12 +660,6 @@ def test_ac6_outside_repo_bump_still_clearable_by_single_anchor_gitdir_touch(tmp
     every outside-any-repo write for the rest of the session."""
     from coordinator_core.bash_guards import bump_outside_repo_write as outside_guard
 
-    # Repoint the shared temp-root classifier so `tmp_path`'s own real
-    # system-temp ancestry (every `tmp_path` lives under the REAL system
-    # temp dir) does not get exempted by AC9's temp-scratch carve-out --
-    # same isolation `test_bump_outside_repo_write.py`'s own
-    # `_clean_bump_env` fixture applies, needed here because this file is
-    # not that fixture's scope.
     fake_system_temp = tmp_path / "not-the-real-system-temp"
     fake_system_temp.mkdir()
     monkeypatch.setattr(applicability.tempfile, "gettempdir", lambda: str(fake_system_temp))

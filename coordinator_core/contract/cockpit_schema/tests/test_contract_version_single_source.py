@@ -39,9 +39,6 @@ from coordinator_core.contract.cockpit_schema.emit_schema import (
 def test_contract_version_is_a_single_object():
     # `pkg.CONTRACT_VERSION` (attribute access, not a top-of-file `from
     # pkg import CONTRACT_VERSION`) is what exercises the PEP 562
-    # `__getattr__` lazy re-export path — proving __init__.py resolves to
-    # emit_schema.py's SAME binding on demand rather than redeclaring an
-    # equal-but-independent literal that could silently drift later.
     assert pkg.CONTRACT_VERSION is emit_schema_version
 
 
@@ -52,8 +49,6 @@ def test_contract_version_matches_semver_shape():
 
 
 def test_unknown_attribute_still_raises_attribute_error():
-    # __getattr__ must not become a silent catch-all for typos/renames —
-    # confirms the negative branch of the PEP 562 hook still fails loud.
     import pytest
 
     with pytest.raises(AttributeError):

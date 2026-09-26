@@ -64,26 +64,11 @@ import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
-# coordinator_core.source_test_map imports ``_read_testpaths`` FROM this
-# module -- importing it back at module scope here would be a circular
-# import (whichever module loads first would find the other only
-# partially initialized). Imported lazily inside ``compute_diff_scoped_paths``
-# instead, which also keeps every OTHER caller of this module's original
-# (test-files-only) functions from paying source_test_map's import cost.
 
-#: Matches this repo's test-file convention (``test_*.py``), applied to the
-#: basename only -- never the full path, so a directory named e.g.
-#: ``test_fixtures/`` does not itself get treated as a test file.
 _TEST_FILE_RE = re.compile(r"^test_.*\.py$")
 
 
 def _run_git(args: Sequence[str], repo_root: str) -> list[str]:
-    """Run a git subcommand and return its stdout, split into non-empty
-    lines. Returns ``[]`` on any failure (git absent, not a repo, etc.) --
-    the empty-set fallback is the caller's fail-safe path (§ module
-    docstring): "no changed test files found" degrades to "run the full
-    configured tier," never to "run nothing."
-    """
     try:
         proc = subprocess.run(
             ["git", *args],
@@ -100,13 +85,6 @@ def _run_git(args: Sequence[str], repo_root: str) -> list[str]:
 
 
 def _read_testpaths(repo_root: str) -> list[str]:
-    """Configured pytest ``testpaths`` roots for ``repo_root`` (flat
-    ``[tool.pytest.ini_options] testpaths`` in ``pyproject.toml``). Returns
-    ``[]`` when unreadable -- degrades the testpaths-membership filter to
-    "reject everything," which is the fail-safe direction (a changed test
-    file that fails this filter simply isn't appended, and the caller
-    still runs its full configured tier).
-    """
     pyproject = Path(repo_root) / "pyproject.toml"
     if not pyproject.is_file():
         return []
@@ -128,9 +106,6 @@ def _read_testpaths(repo_root: str) -> list[str]:
 
 
 def _under_testpaths(posix_path: str, testpaths: Sequence[str]) -> bool:
-    """Is ``posix_path`` the configured testpaths root itself, or a
-    descendant of one? Empty ``testpaths`` (unreadable/unconfigured)
-    rejects everything -- see ``_read_testpaths``'s fail-safe note."""
     for root in testpaths:
         if posix_path == root or posix_path.startswith(root + "/"):
             return True
@@ -226,24 +201,6 @@ def find_changed_source_files(repo_root: Optional[str] = None) -> list:
 
 
 def compute_diff_scoped_paths(repo_root: Optional[str] = None):
-    """The union of (changed test files) and (tests mapped from changed
-    SOURCE files) -- the combined signal `append_test_paths` should be
-    given, or the caller's cue to fall back to its full configured tier.
-
-    Returns ``(paths, fully_mapped)``:
-      - ``paths`` -- the sorted union of `find_changed_test_files` and
-        whatever `coordinator_core.source_test_map.map_changed_sources`
-        derives from the changed SOURCE files. Directly-changed test files
-        are ALWAYS included regardless of ``fully_mapped`` -- they need no
-        derivation, the diff named them explicitly.
-      - ``fully_mapped`` -- ``True`` when either no source files changed, or
-        every changed source file mapped to at least one covering test
-        (AC9's conjunctive fail-safe, inherited unchanged from
-        `map_changed_sources`). ``False`` means: do not trust ``paths`` for
-        narrowing -- the caller MUST run its full configured tier instead
-        (this function does not do that itself; see the module's own
-        negative-spec).
-    """
     changed_tests = find_changed_test_files(repo_root)
     changed_sources = find_changed_source_files(repo_root)
 
@@ -256,24 +213,6 @@ def compute_diff_scoped_paths(repo_root: Optional[str] = None):
 
 
 def append_test_paths(cmd: str, paths: Sequence[str]) -> str:
-    """Append ``paths`` onto the resolved command string ``cmd``, one
-    shell-quoted token per path.
-
-    APPENDS ONLY -- never rebuilds, reorders, or drops any part of
-    ``cmd``. This is the load-bearing property: ``cmd`` carries this
-    repo's ``-m 'not cadence and not pending_fix and not designed_red'``
-    marker selector, and dropping or rebuilding it would fire
-    ``designed_red`` tests, which are red by design. ``cmd`` is ultimately
-    handed to ``bash -c`` by every caller of this module, so
-    ``shlex.quote`` (POSIX quoting) is the correct quoting discipline
-    regardless of the host OS -- the subprocess that interprets the
-    resulting string is always bash, on Windows and POSIX alike (see
-    caller sites' own ``bash_bin = os.environ.get("BASH") or "bash"``).
-
-    Returns ``cmd`` unchanged when ``paths`` is empty -- the identity
-    case a caller relies on for "no changed test files -> behaviour
-    unchanged."
-    """
     if not paths:
         return cmd
     import shlex
@@ -282,21 +221,8 @@ def append_test_paths(cmd: str, paths: Sequence[str]) -> str:
     return f"{cmd} {quoted}"
 
 
-#: pytest's own exit-code contract (not this module's invention): 5 means
-#: "no tests were collected." A diff-scoped command that names a changed
-#: test file the marker filter then deselects entirely (e.g. the changed
-#: file carries only ``designed_red``-marked tests) collects zero tests
-#: and exits 5. That is NOT a test failure (nothing ran) and NOT a clean
-#: pass (nothing ran) -- callers MUST treat it as "the diff-scoped run
-#: proved nothing" and fall back to running the full configured tier
-#: rather than reporting either a false-green pass or a false-red
-#: failure. This constant exists so every caller checks the SAME rc value
-#: rather than re-deriving pytest's exit-code table by hand.
 PYTEST_NO_TESTS_COLLECTED = 5
 
 
 def diag(msg: str) -> None:
-    """Print a diff-scoped-tests diagnostic line to stderr. Shared so both
-    call sites emit the same ``[diff-scoped-tests]``-prefixed prose rather
-    than each inventing their own wording."""
     print(f"[diff-scoped-tests] {msg}", file=sys.stderr)

@@ -1,17 +1,3 @@
-"""bin/tests/test_coordinator_resolve_validation_cmd.py — pytest suite for
-resolve_fast_test_cmd and resolve_full_test_cmd.
-
-Purpose: verifies the five AC cases for resolve_fast_test_cmd — env-var precedence,
-local-md fallback, skip-with-notice, no-conventional-fallback (the Staff Engineer F1), and
-exit-code passthrough semantics (the Staff Engineer F5). Also verifies the four
-resolve_full_test_cmd cases: env-var, full_test_cmd: key, fast-tier fallback
-(exit 3), and both-tiers-unconfigured (exit 2), plus the interpreter-normalization
-helper (Tests 10-13).
-
-Spec backlink: archive/specs/2026-05-28-workday-complete-fast-test-resolution.md § 5
-Port backlink: docs/plans/2026-07-19-debash-coordinator-windows.md (E3-e)
-Bin-residency port backlink: coordinator/bin/coordinator-resolve-validation-cmd.py
-"""
 
 from __future__ import annotations
 
@@ -29,18 +15,8 @@ _TARGET = os.path.join(
 
 
 def _load_module():
-    # The target's on-disk filename is hyphenated (a bin/-resident CLI, not
-    # an importable package member) — a hyphen is not a valid Python
-    # identifier character, so a bareword `import` can never resolve it
-    # regardless of sys.path. Load by explicit file path instead, matching
-    # coordinator/bin/tests/test_workday_start_day_branch_resolve.py's
-    # convention for a bin/-resident target.
     spec = importlib.util.spec_from_file_location("coordinator_resolve_validation_cmd", _TARGET)
     mod = importlib.util.module_from_spec(spec)
-    # Registered before exec_module: the target uses @dataclass at module
-    # scope, which resolves annotation types via sys.modules.get(cls.__module__)
-    # during exec — on Python versions where that lookup fires mid-exec (seen
-    # on 3.14), an unregistered module raises here instead of importing clean.
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     return mod
@@ -48,13 +24,6 @@ def _load_module():
 
 rvc = _load_module()
 
-# Mirrors resolve_fast_test_cmd's own interpreter-resolution algorithm
-# (_resolve_python_interp) rather than re-deriving a POSIX-only guess: on
-# Windows the resolver deliberately prefers `sys.executable` over probing
-# `python3` on PATH (Store App Execution Alias hazard — see the resolver's
-# own docstring), and the chosen interpreter is shlex.quote-wrapped before
-# substitution because a Windows path routinely contains backslashes/spaces
-# that a bare token would not survive a caller's later `shlex.split`.
 _EXP_INTERP = shlex.quote(rvc._resolve_python_interp(None))
 
 
@@ -72,10 +41,6 @@ def _write_local_md_with_both_cmds(dir_: str, fast_val: str, full_val: str) -> N
     with open(os.path.join(dir_, "coordinator.local.md"), "w", encoding="utf-8") as fh:
         fh.write(f'---\nproject_type: test\nfast_test_cmd: "{fast_val}"\nfull_test_cmd: "{full_val}"\n---\n')
 
-
-# ---------------------------------------------------------------------------
-# Test 1 / 1b: env var wins over local.md (fast tier)
-# ---------------------------------------------------------------------------
 
 def test_env_var_wins(tmp_path, monkeypatch, capsys):
     _write_local_md_with_cmd(str(tmp_path), "python other.py")
@@ -99,10 +64,6 @@ def test_env_var_bare_python_normalized(tmp_path, monkeypatch, capsys):
     assert result.stdout.strip() == f"{_EXP_INTERP} foo.py"
 
 
-# ---------------------------------------------------------------------------
-# Test 2: local.md wins when env unset
-# ---------------------------------------------------------------------------
-
 def test_local_md_wins_when_no_env(tmp_path, monkeypatch, capsys):
     _write_local_md_with_cmd(str(tmp_path), "python foo.py")
     monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
@@ -114,12 +75,6 @@ def test_local_md_wins_when_no_env(tmp_path, monkeypatch, capsys):
     assert result.stdout.strip() == f"{_EXP_INTERP} foo.py"
     assert "step=local-md" in stderr
 
-
-# ---------------------------------------------------------------------------
-# Test 2b: interior quotes survive resolution (regression — the retired bash
-# oracle's `tr -d` pipeline stripped EVERY quote, disintegrating a quoted
-# marker expression into separate argv tokens at shell-split time).
-# ---------------------------------------------------------------------------
 
 def test_local_md_preserves_interior_quotes(tmp_path, monkeypatch, capsys):
     _write_local_md_with_cmd(str(tmp_path), "python -m pytest -m 'not slow and not integration'")
@@ -153,13 +108,6 @@ def test_key_matched_at_line_start_only(tmp_path):
     assert rvc.read_local_md_key(str(tmp_path), "full_test_cmd") == "make check"
 
 
-# ---------------------------------------------------------------------------
-# Test 2c: YAML double-quoted scalars resolve their escaped interior quotes.
-# Removing only the wrapping pair left `\"` backslashes in the value, which
-# `bash -c` then re-split exactly as the retired `tr -d` transform did — the
-# example-retrieval-repo shape from the 2026-07-22 memo.
-# ---------------------------------------------------------------------------
-
 def test_double_quoted_scalar_escapes_are_resolved(tmp_path, monkeypatch):
     with open(tmp_path / "coordinator.local.md", "w", encoding="utf-8") as fh:
         fh.write('---\nfast_test_cmd: "python -m pytest -m \\"a and not b\\" --timeout=60"\n---\n')
@@ -184,12 +132,6 @@ def test_windows_path_backslashes_survive(tmp_path):
 
     assert rvc.read_local_md_key(str(tmp_path), "full_test_cmd") == "C:\\tools\\py -m pytest"
 
-
-# ---------------------------------------------------------------------------
-# Test 2d: an escaped quote this resolver cannot interpret fails loud (126)
-# rather than reaching `bash -c` corrupted. The gate reporting "build failure"
-# for what is really a config defect is the day-of-unnoticed-red failure mode.
-# ---------------------------------------------------------------------------
 
 def test_uninterpretable_escaped_quote_fails_loud(tmp_path, monkeypatch, capsys):
     with open(tmp_path / "coordinator.local.md", "w", encoding="utf-8") as fh:
@@ -224,17 +166,8 @@ def test_full_tier_propagates_malformed_fast_value(tmp_path, monkeypatch):
     assert result.returncode == 126
 
 
-# ---------------------------------------------------------------------------
-# Test 2e: a bare `python` token resolves to the repo-local .venv when one
-# exists — the ambient system interpreter has none of a venv-primary repo's
-# runtime deps, so its collection errors read as test failures.
-# ---------------------------------------------------------------------------
-
 def test_bare_python_prefers_repo_venv(tmp_path, monkeypatch, capsys):
-    # _venv_interp's two candidates are platform-shaped: on Windows,
-    # os.stat mode-bit-style POSIX "bin/python" is never is_executable()
     # (no PATHEXT-recognized extension, no PATHEXT sibling) — the real
-    # Windows venv layout is "Scripts/python.exe".
     if os.name == "nt":
         venv_bin = tmp_path / ".venv" / "Scripts"
         venv_bin.mkdir(parents=True)
@@ -268,20 +201,7 @@ def test_bare_python_falls_back_to_ambient_without_venv(tmp_path, monkeypatch):
 
 
 def test_explicit_python3_is_rewritten_by_venv(tmp_path, monkeypatch):
-    # Platform-shaped fixture, matching test_bare_python_prefers_repo_venv's
-    # convention — a POSIX-only "bin/python" fixture is never is_executable()
     # on Windows (no PATHEXT-recognized extension), so this test would pass
-    # vacuously there without ever exercising the rewrite assertion.
-    #
-    # A bare `python3` token IS rewritten when a repo-local `.venv` exists —
-    # `_normalize_python_token`'s own docstring (unlike the core
-    # `normalize_python_token` sibling, which leaves `python3` untouched):
-    # venv-first resolution can resolve to a different interpreter than a
-    # bare `python3` on PATH would, so leaving `python3` unnormalized would
-    # skip the venv-first preference this function exists to provide. A
-    # stale "not rewritten" assertion here would pass on a POSIX box with no
-    # `.venv`-recognizing fixture quirk to expose it, which is why the
-    # fixture is platform-shaped rather than skipped.
     if os.name == "nt":
         venv_bin = tmp_path / ".venv" / "Scripts"
         venv_bin.mkdir(parents=True)
@@ -302,10 +222,6 @@ def test_explicit_python3_is_rewritten_by_venv(tmp_path, monkeypatch):
     assert result.stdout.strip() == f"{shlex.quote(str(interp))} -m pytest"
 
 
-# ---------------------------------------------------------------------------
-# Test 3: skip-with-notice
-# ---------------------------------------------------------------------------
-
 def test_skip_with_notice(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
 
@@ -317,10 +233,6 @@ def test_skip_with_notice(tmp_path, monkeypatch, capsys):
     assert "COORDINATOR_FAST_TEST_CMD" in stderr
     assert "coordinator.local.md" in stderr
 
-
-# ---------------------------------------------------------------------------
-# Test 4: no conventional fallback (the Staff Engineer F1)
-# ---------------------------------------------------------------------------
 
 def test_no_conventional_fallback(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
@@ -336,10 +248,6 @@ def test_no_conventional_fallback(tmp_path, monkeypatch, capsys):
     assert "run-all-checks" not in (result.stdout + out.err)
 
 
-# ---------------------------------------------------------------------------
-# Test 5: configured cmd exit-code passthrough (the Staff Engineer F5)
-# ---------------------------------------------------------------------------
-
 def test_configured_cmd_exit_code_passthrough(tmp_path, monkeypatch, capsys):
     _write_local_md_with_cmd(str(tmp_path), "exit 42")
     monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
@@ -351,10 +259,6 @@ def test_configured_cmd_exit_code_passthrough(tmp_path, monkeypatch, capsys):
     assert result.stdout.strip() == "exit 42"
     assert "step=local-md" in stderr
 
-
-# ---------------------------------------------------------------------------
-# Tests 6-9: resolve_full_test_cmd
-# ---------------------------------------------------------------------------
 
 def test_full_env_var_wins(tmp_path, monkeypatch, capsys):
     _write_local_md_with_both_cmds(str(tmp_path), "fast.py", "full.py")
@@ -391,8 +295,6 @@ def test_full_falls_back_to_fast(tmp_path, monkeypatch, capsys):
     assert result.returncode == 3
     assert result.stdout.strip() == "fast-only.py"
     assert "fast-fallback" in stderr
-    # Inner fast-resolver diagnostic must be suppressed (matches bash oracle's
-    # `2>/dev/null` on the fallback call) — only the fast-fallback caveat surfaces.
     assert "cs_resolve_fast_test_cmd" not in stderr.replace("cs_resolve_full_test_cmd", "")
 
 
@@ -406,11 +308,6 @@ def test_full_unconfigured_both_tiers(tmp_path, monkeypatch):
     assert result.returncode == 2
     assert result.stdout == ""
 
-
-# ---------------------------------------------------------------------------
-# Issue #86: resolve_full_test_cmd's ceiling-compatibility augmentation
-# (worker bound, -rfE).
-# ---------------------------------------------------------------------------
 
 def test_full_adds_bounded_worker_count_when_xdist_available(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("COORDINATOR_FULL_TEST_CMD", "python3 -m pytest --timeout=300")
@@ -452,7 +349,6 @@ def test_full_never_bounds_an_explicit_worker_count(tmp_path, monkeypatch):
 
 
 def test_full_never_drops_a_configured_timeout(tmp_path, monkeypatch):
-    # The plugin probe runs on the resolver's interpreter, not the suite's.
     monkeypatch.setenv("COORDINATOR_FULL_TEST_CMD", "python3 -m pytest --timeout=300")
     monkeypatch.setattr(core_rvc, "_pytest_plugin_available", lambda name: name != "pytest_timeout")
 
@@ -478,24 +374,13 @@ def test_full_non_pytest_command_untouched_by_augmentation(tmp_path, monkeypatch
     assert result.stdout.strip() == "pnpm run tier:full"
 
 
-# ---------------------------------------------------------------------------
-# Tests 10-13: _normalize_python_token
-# ---------------------------------------------------------------------------
-
 def test_normalize_bare_python():
     out = rvc._normalize_python_token("python .github/scripts/run-all-checks.py")
     assert out == f"{_EXP_INTERP} .github/scripts/run-all-checks.py"
 
 
 def test_bare_python3_also_normalized():
-    # Unlike the core `normalize_python_token` sibling (which deliberately
-    # leaves `python3` untouched), this bin-shape function ALSO normalizes a
-    # bare `python3` token so venv-first resolution applies to it too — see
-    # `_normalize_python_token`'s own docstring. On POSIX this is easy to
-    # miss: the ambient PATH fallback resolves to the literal string
-    # "python3", so a stale "untouched" assertion passes there by
     # coincidence rather than by actually exercising this behaviour. `_EXP_INTERP`
-    # forces the real resolved value (an absolute path on this Windows box).
     out = rvc._normalize_python_token("python3 -m pytest x")
     assert out == f"{_EXP_INTERP} -m pytest x"
 
@@ -507,19 +392,7 @@ def test_non_python_untouched():
 
 def test_missing_interpreter_fails_loud(monkeypatch):
     monkeypatch.setattr(rvc.shutil, "which", lambda _name: None)
-    # On Windows, `_resolve_python_interp` prefers `sys.executable` over
-    # probing PATH at all (Store App Execution Alias hazard) — patching only
-    # `shutil.which` leaves that branch resolving successfully. Starve both
-    # so the "no interpreter at all" path is genuinely reached cross-platform.
     monkeypatch.setattr(rvc.sys, "executable", "")
-    # The Windows leg resolves via the shared ladder BEFORE either of the
-    # above (`_shared_console_python()` / `python_interp.resolve_console_python`),
-    # entirely independent of `shutil.which`/`sys.executable` — leaving it
-    # unpatched means a real console interpreter is still found on any
-    # Windows box with Python installed, and the "missing interpreter" path
-    # never actually fires. Starve it too so this test exercises the true
-    # no-interpreter-anywhere case rather than passing only on a POSIX box
-    # with no console-python ladder to sidestep.
     monkeypatch.setattr(core_rvc, "_shared_console_python", lambda: None)
     try:
         rvc._normalize_python_token("python x.py")
@@ -528,36 +401,14 @@ def test_missing_interpreter_fails_loud(monkeypatch):
         pass
 
 
-# ---------------------------------------------------------------------------
-# Tests 14-18: _resolve_python_interp — independent pin on its documented
-# contract (docstring: venv-first, then Windows consults the shared ladder
-# `_shared_console_python()` (`python_interp.resolve_console_python`) rather
-# than trusting raw `sys.executable`, POSIX prefers python3 on PATH, else
 # python, else None). _EXP_INTERP above is a tautology w.r.t. this function
-# — these tests pin the literal expected OUTPUT for each leg via monkeypatch,
-# not by recomputation, so a regression in the resolver itself is caught
-# rather than mirrored. Both platform legs are pinned regardless of host OS
-# (monkeypatch os.name), per the resolver's own documented cross-platform
-# contract.
-#
-# Negative spec pinned by both Windows tests below: raw `sys.executable` is
-# NEVER returned. Under an installed forwarder, `sys.executable` names the
-# forwarder exe (see `_resolve_python_interp`'s own docstring) — each test
-# sets `sys.executable` to an opaque forwarder-shaped path and asserts the
-# function's return value is never that path, only what
-# `_shared_console_python` (mocked) or the PATH fallback produced.
-# ---------------------------------------------------------------------------
 
 def test_resolve_python_interp_windows_prefers_shared_ladder(monkeypatch):
     monkeypatch.setattr(rvc.os, "name", "nt")
-    # abs-path-ok: opaque fixture literal for sys.executable, not a real filesystem reference
     monkeypatch.setattr(rvc.sys, "executable", "C:\\Forwarder\\coordinator.exe")
     monkeypatch.setattr(
         core_rvc, "_shared_console_python", lambda: "C:\\Console\\python.exe"
     )
-    # Even if python3 is also on PATH, Windows must consult the shared
-    # ladder first and use its result — not probe PATH at all, and never
-    # fall back to raw sys.executable.
     monkeypatch.setattr(rvc.shutil, "which", lambda name: f"C:\\fake\\{name}.exe")
 
     result = rvc._resolve_python_interp(None)
@@ -568,7 +419,6 @@ def test_resolve_python_interp_windows_prefers_shared_ladder(monkeypatch):
 
 def test_resolve_python_interp_windows_falls_back_when_ladder_returns_none(monkeypatch):
     monkeypatch.setattr(rvc.os, "name", "nt")
-    # abs-path-ok: opaque fixture literal for sys.executable, not a real filesystem reference
     monkeypatch.setattr(rvc.sys, "executable", "C:\\Forwarder\\coordinator.exe")
     monkeypatch.setattr(core_rvc, "_shared_console_python", lambda: None)
     monkeypatch.setattr(
@@ -612,19 +462,6 @@ def test_resolve_python_interp_returns_none_when_nothing_resolves(monkeypatch):
 
 
 def test_ac11_bin_path_is_byte_identical_re_export(tmp_path, monkeypatch):
-    """AC11 (C1, docs/plans/2026-07-30-diff-scoped-ceremony-gates-elegant.md):
-    the bin path's resolved output is byte-identical to
-    coordinator_core.resolve_validation_cmd's bin-shape API, because the bin
-    module now re-exports (not re-implements) it -- see
-    coordinator/bin/coordinator-resolve-validation-cmd.py's module docstring
-    ("Consolidation") and coordinator_core/resolve_validation_cmd.py's
-    "Bin-shape API" section header. This pins non-gate behaviour only (a
-    resolved command string/returncode/stderr on an ordinary repo_root); it
-    does not pin coordinator_core's OWN historical cs_*/ResolvedCommand names,
-    which have zero production callers outside
-    coordinator_core/test_resolve_validation_cmd.py and are free to diverge
-    per that module's own docstring.
-    """
     monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
     monkeypatch.delenv("COORDINATOR_FULL_TEST_CMD", raising=False)
     (tmp_path / "coordinator.local.md").write_text(
@@ -647,12 +484,9 @@ def test_ac11_bin_path_is_byte_identical_re_export(tmp_path, monkeypatch):
         core_full.stderr,
     )
 
-    # The bin module re-exports the SAME function objects rather than
-    # independently re-implementing them (PEP 562 bootstrap in
-    # coordinator-resolve-validation-cmd.py's _bootstrap_engine).
     assert rvc.resolve_fast_test_cmd is core_rvc.resolve_fast_test_cmd
     assert rvc.resolve_full_test_cmd is core_rvc.resolve_full_test_cmd
-    assert rvc.main is not core_rvc.main  # bin main() delegates, distinct def
+    assert rvc.main is not core_rvc.main
     assert rvc.main(["--fast", str(tmp_path)]) == core_rvc.main(
         ["--fast", str(tmp_path)]
     )

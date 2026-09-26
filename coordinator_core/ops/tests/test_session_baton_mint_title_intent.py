@@ -1,9 +1,3 @@
-"""
-coordinator_core.ops.tests.test_session_baton_mint_title_intent — the
-sentinel-semantics ACs for `title`/`intent` on the "session_baton.mint" op.
-
-Spec backlink: docs/plans/2026-08-20-a-baton-you-can-jot-in.md § C1.
-"""
 
 from __future__ import annotations
 
@@ -38,11 +32,6 @@ def _ensure_session_dir(repo: Path, sid: str) -> Path:
 
 def _mint(**params):
     return mint_mod._handler(dict(params))
-
-
-# ---------------------------------------------------------------------------
-# AC1 — accepted, and non-string rejected with a named error
-# ---------------------------------------------------------------------------
 
 
 def test_title_and_intent_accepted_and_persisted(tmp_path):
@@ -80,12 +69,6 @@ def test_non_string_intent_rejected(tmp_path):
     assert "intent" in result["error"]
 
 
-# ---------------------------------------------------------------------------
-# AC2 — an omitted param is never threaded into merge_baton; it must not
-# null an existing stored value (the naive-implementation trap).
-# ---------------------------------------------------------------------------
-
-
 def test_omitted_title_leaves_existing_title_untouched(tmp_path):
     repo = _make_repo(tmp_path)
     _ensure_session_dir(repo, "sid-ti-2")
@@ -114,11 +97,6 @@ def test_omitted_intent_leaves_existing_intent_untouched(tmp_path):
     assert on_disk["intent"] == "stay put"
 
 
-# ---------------------------------------------------------------------------
-# AC3 — unlike first_prompt, title/intent are overwritable on every call.
-# ---------------------------------------------------------------------------
-
-
 def test_intent_is_overwritable_on_second_call(tmp_path):
     repo = _make_repo(tmp_path)
     _ensure_session_dir(repo, "sid-ti-4")
@@ -143,12 +121,6 @@ def test_title_is_overwritable_on_second_call(tmp_path):
     assert on_disk["title"] == "Final title"
 
 
-# ---------------------------------------------------------------------------
-# AC4 — first_prompt's capture-once guarantee is unaffected by title/intent
-# arriving alongside it.
-# ---------------------------------------------------------------------------
-
-
 def test_first_prompt_capture_once_survives_title_intent_call(tmp_path):
     repo = _make_repo(tmp_path)
     _ensure_session_dir(repo, "sid-ti-6")
@@ -170,12 +142,6 @@ def test_first_prompt_capture_once_survives_title_intent_call(tmp_path):
     assert on_disk["first_prompt"] == "original prompt"
     assert on_disk["title"] == "new title"
     assert on_disk["intent"] == "new intent"
-
-
-# ---------------------------------------------------------------------------
-# AC5 — created keeps its existing meaning: True only when this call minted
-# the record. A title-only call against an existing baton returns False.
-# ---------------------------------------------------------------------------
 
 
 def test_title_only_call_on_existing_baton_reports_created_false(tmp_path):

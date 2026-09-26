@@ -39,11 +39,6 @@ from coordinator_core.ops import goal_kr_status, priority_set
 
 
 def _record_timeouts(monkeypatch, module) -> list[float]:
-    """Swap *module*'s locked_rmw for a recorder of the timeout it was handed.
-
-    The mutate callback is never invoked, so no file is read or written and no
-    lock backend is required.
-    """
     seen: list[float] = []
 
     def _fake_locked_rmw(_path, _mutate, *, repo_root, timeout, missing_ok):
@@ -51,11 +46,6 @@ def _record_timeouts(monkeypatch, module) -> list[float]:
 
     monkeypatch.setattr(module, "locked_rmw", _fake_locked_rmw)
     return seen
-
-
-# ---------------------------------------------------------------------------
-# goal.set_kr_status
-# ---------------------------------------------------------------------------
 
 
 def test_goal_kr_status_clamps_huge_timeout(monkeypatch, tmp_path):
@@ -93,15 +83,8 @@ def test_goal_kr_status_honours_a_tighter_timeout(monkeypatch, tmp_path):
     assert seen == [0.25]
 
 
-# ---------------------------------------------------------------------------
-# priority.set
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture
 def _central_root(tmp_path, monkeypatch) -> Path:
-    """Point priority.set's ledger root at tmp_path so the mkdir it does before
-    locked_rmw lands somewhere disposable."""
     root = tmp_path / "central"
     monkeypatch.setattr(priority_set, "coordinator_state_root", lambda central=False: root)
     return root

@@ -91,23 +91,8 @@ import yaml
 _LOG = logging.getLogger(__name__)
 _LOG.addHandler(logging.NullHandler())
 
-#: Disposition-field vocabulary — formerly defined in fleet.archive_actioned_memos
-#: and imported from there (PM kill ruling 2026-08-23 deleted that module); this is
-#: now its sole owner.
 _DISPOSITION_FIELDS = ("decision", "decision_note", "realized_by", "actioned_note", "superseded_by")
 
-
-# ---------------------------------------------------------------------------
-# The 34-entry backfill table — literal transcription of
-# state/audits/2026-07-26-dispositionless-memo-flip-sink-mapping.md (commit
-# 1d9559c0), NOT a runtime parse of that file (see module negative-spec).
-#
-# Field choice per the mapping's own notes: a sink_kind containing "commit"
-# carries realized_by:<sha> (the landing commit is the claim-of-record); every
-# other sink_kind (reply-memo, baton, spinoff, terminal-ack, and combinations
-# without a commit) carries actioned_note naming the artifact or, for
-# terminal-ack rows, the fact that nothing was owed.
-# ---------------------------------------------------------------------------
 
 BACKFILL_TABLE: dict[str, dict[str, str]] = {
     "2026-07-26-example-store-repo-em-workday-complete-backfill-directives-misinvoked.md": {
@@ -337,20 +322,8 @@ def backfill_dispositionless_memos(worktree_root: Path) -> dict:
     return {"applied": applied, "skipped": skipped, "failed": failed}
 
 
-# ---------------------------------------------------------------------------
-# Op handler
-# ---------------------------------------------------------------------------
-
-
 @register_op("fleet.backfill_dispositionless_memos")
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """fleet.backfill_dispositionless_memos — backfill the 34 traced dispositions.
-
-    Takes no params — the 34-entry table is the complete, closed input (see
-    module negative-spec). ``repo_root`` arrives as the git common dir (same
-    handler-arg convention as the other fleet.* ops); the worktree is derived
-    via main_worktree_root, never from params.
-    """
     if repo_root is None:
         _LOG.error("fleet.backfill_dispositionless_memos: repo_root handler arg is None")
         return {"exit_code": 1, "applied": [], "skipped": [], "failed": [], "error": "repo_root is None"}

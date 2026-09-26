@@ -41,9 +41,6 @@ def _reason(out):
 
 @pytest.fixture(autouse=True)
 def _hazard_repo_by_default(monkeypatch):
-    """Every test in this file runs "inside" a hazard repo by default --
-    the one test exercising AC13 (out-of-scope repo allows unconditionally)
-    overrides this locally."""
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd=None: "/repo")
     monkeypatch.setattr(guard, "_is_hazard_repo", lambda git_root: True)
 
@@ -65,7 +62,6 @@ class TestNonBashOrEmpty:
 
 
 class TestSubstrateTable:
-    """The plan's full pass/deny substrate table."""
 
     def test_canonical_daily_branch_passes(self):
         assert guard.check(_payload("git checkout -b work/machine-b/2026-07-13")) is None
@@ -86,8 +82,6 @@ class TestSubstrateTable:
         _reason(guard.check(_payload("git checkout -b docs/scoped-to-memo-pins")))
 
     def test_mixed_case_daily_branch_denies(self):
-        # Allowed SHAPE (is_allowed_branch would say yes) but NOT canonical
-        # (mixed case) -- the Windows case-insensitive-ref hazard.
         _reason(guard.check(_payload("git checkout -b work/MACHINE-B/2026-07-13")))
 
 
@@ -121,16 +115,11 @@ class TestGitBranchRenameVsCreate:
         ],
     )
     def test_long_form_non_create_flags_allow(self, command):
-        # pre-fix, the
         # short-flags-only `_BRANCH_NON_CREATE_FLAGS` set missed every
-        # long-form spelling, so e.g. `git branch --delete
         # stray-fix-branch` was misclassified as a CREATION of
-        # `stray-fix-branch` and denied a legitimate delete.
         assert guard.check(_payload(command)) is None
 
     def test_branch_creation_with_force_flag_still_denies(self):
-        # -f/--force is create-compatible -- must not fail this classification
-        # open just because a flag is present.
         _reason(guard.check(_payload("git branch --force bad-name")))
 
 
@@ -153,9 +142,7 @@ class TestSwitchAndUppercaseFlags:
         _reason(guard.check(_payload("git checkout -B bad")))
 
     def test_switch_long_form_create_denies(self):
-        # pre-fix,
         # `_SWITCH_CREATE_FLAGS` was `{-c, -C}` only, so `git switch
-        # --create bad-name` bypassed the guard entirely.
         _reason(guard.check(_payload("git switch --create bad-name")))
 
     def test_switch_long_form_force_create_denies(self):
@@ -178,11 +165,7 @@ class TestSanctionedLonglivedPrefixes:
 
 class TestDenyMessageRemediation:
     def test_remediation_offers_checkout_dash_b(self):
-        # pre-fix, the
-        # message offered bare `git checkout <name>`, which errors with
-        # "did not match any file(s) known to git" in the common case:
         # this deny fires while the user is CREATING a branch, so today's
-        # canonical branch usually doesn't exist as a ref yet either.
         reason = _reason(guard.check(_payload("git checkout -b bad-name")))
         assert "git checkout -b work/" in reason
 
@@ -209,16 +192,9 @@ class TestPowerShellIdiomDialectNeutral:
     """
 
     def test_semicolon_chained_powershell_style_denies(self):
-        # PowerShell's own statement separator is `;`, not `&&` -- a
-        # PowerShell-typed compound command chains this way idiomatically.
         _reason(guard.check(_payload("Get-Location; git checkout -b bad-name")))
 
     def test_dollar_env_prefix_powershell_style_fails_open_same_as_bash(self):
-        # PowerShell's env-var READ syntax ($env:NAME) starting the target
-        # name argument is unreadable to this guard exactly like bash's
-        # unexpanded $VAR -- both fail open via `_looks_unsafe` (name
-        # starts with "$"), never manufacturing a deny from a token this
-        # guard cannot evaluate.
         assert guard.check(_payload('git checkout -b "$env:BRANCH_NAME"')) is None
 
     def test_canonical_daily_branch_still_passes_under_semicolon_chain(self):
@@ -253,27 +229,17 @@ class TestFailOpenOnUnreadableName:
         assert guard.check(_payload('git checkout -b "unterminated')) is None
 
     def test_partial_substitution_quoted_form_passes(self):
-        # Would DENY
-        # pre-fix: `_extract_command_substitutions` neutralizes the
-        # `$(...)` span to a space before `_looks_unsafe` runs, leaving
-        # `"work/machine-b/ "`, which then fails `is_canonical_branch`
-        # (trailing space breaks the shape regex) and gets denied even
-        # though the expanded name is today's own canonical branch.
         assert guard.check(
             _payload('git checkout -b "work/machine-b/$(date +%F)"')
         ) is None
 
     def test_partial_substitution_unquoted_form_passes(self):
-        # Same hazard, different token shape: shlex word-splits at the
-        # neutralizing space, truncating the name to a trailing `/`.
         assert guard.check(
             _payload("git checkout -b work/machine-b/$(date +%F)")
         ) is None
 
 
 class TestDesignatedDayBranch:
-    """`coordinator.dayBranch` (PM ruling 2026-09-22) -- a designated day
-    branch is accepted verbatim, any shape, at creation time."""
 
     def test_designated_branch_name_passes_whatever_its_shape(self, monkeypatch):
         import coordinator_core.daily_branch as daily_branch

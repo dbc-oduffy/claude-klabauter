@@ -1,30 +1,3 @@
-"""test_reap_orphaned_in_flight_handoffs.py — CLI-shell tests for the
-rebuilt `reap-orphaned-in-flight-handoffs.py` (C3 of
-docs/plans/2026-08-26-two-callers-want-two-numbers-not-a-1301-line-cli.md).
-
-Re-pointing note (C3): the fused implementation this file used to test —
-`_batch_commit_timestamps`, `_best_shipped_sha`, `_shipped_orphan_candidate`,
-`_has_live_children_exit_code(s)`, and every `main()` predicate-level
-disposition case (governed-plan pre-check, P1-P4 ship-detection, live-holder/
-live-children skip, pay-for-use index construction) — is DELETED from this
-CLI and rebuilt, from the requirement, as `coordinator_core.ops
-.reap_in_flight_claims`. That module's own test suite
-(`coordinator_core/ops/tests/test_reap_in_flight_claims.py`) re-derives every
-one of those predicates directly against `survey()`/`apply_dispositions()` —
-duplicating them here against a thin CLI shell that no longer contains the
-logic would test nothing this file's own imports can see. Every test below
-that exercised one of those predicates is DROPPED as duplicated by that
-suite; nothing here re-implements or re-tests survey()'s internals.
-
-What remains, and is unique to this file: the CLI shell itself — argument
-parsing (--dry-run / --repo-root / --help / unknown flag), the checked
-repo-root resolution and its failure mode, the default-applies /
---dry-run-skips-mutation branch, and the exit-code contract when
-`apply_dispositions` reports a failure. These predicates never lived in
-`coordinator_core.ops.reap_in_flight_claims` and have no oracle there.
-
-Runs bash-free: `python -m pytest coordinator/bin/tests/test_reap_orphaned_in_flight_handoffs.py -q`
-"""
 from __future__ import annotations
 
 import contextlib
@@ -36,7 +9,6 @@ SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _load_module():
-    """Import reap-orphaned-in-flight-handoffs.py as a fresh module object each call."""
     path = os.path.join(SCRIPT_DIR, "reap-orphaned-in-flight-handoffs.py")
     spec = importlib.util.spec_from_file_location(
         "reap_orphaned_in_flight_handoffs_under_test", path
@@ -89,9 +61,6 @@ def _patch_resolver(mod, monkeypatch, *, root="/fake/repo", verdict="EXPLICIT"):
     )
 
 
-# ===========================================================================
-# Argument parsing
-# ===========================================================================
 def test_help_flag_prints_help_and_exits_zero(capsys):
     mod = _load_module()
     rc = mod.main(["--help"])
@@ -133,9 +102,6 @@ def test_repo_root_flag_bypasses_the_resolver(monkeypatch):
     assert seen["explicit_root"] == "/explicit/root"
 
 
-# ===========================================================================
-# Repo-root resolution failure
-# ===========================================================================
 def test_unresolvable_repo_root_exits_one(monkeypatch, capsys):
     mod = _load_module()
     monkeypatch.setattr(
@@ -158,9 +124,6 @@ def test_mismatch_verdict_warns_but_proceeds(monkeypatch, capsys):
     assert "test stand-in" in capsys.readouterr().err
 
 
-# ===========================================================================
-# --dry-run: survey only, never mutates
-# ===========================================================================
 def test_dry_run_calls_survey_and_never_apply_dispositions(monkeypatch, capsys):
     mod = _load_module()
     _patch_resolver(mod, monkeypatch)
@@ -189,9 +152,6 @@ def test_dry_run_calls_survey_and_never_apply_dispositions(monkeypatch, capsys):
     assert "state/handoffs/a.md" in out
 
 
-# ===========================================================================
-# Default (no args): applies every disposition survey() returned
-# ===========================================================================
 def test_default_applies_dispositions_from_survey(monkeypatch, capsys):
     mod = _load_module()
     _patch_resolver(mod, monkeypatch)
@@ -213,10 +173,6 @@ def test_default_applies_dispositions_from_survey(monkeypatch, capsys):
 
 
 def test_retained_reclaim_shipped_row_is_not_declared_as_a_write(monkeypatch, capsys):
-    """A reclaim-shipped disposition the live-children guard retained comes back
-    in `apply_dispositions`'s second (`retained`) list, not its first
-    (`applied`) one -- nothing landed at that path, so it must never reach
-    `declare_write`."""
     mod = _load_module()
     _patch_resolver(mod, monkeypatch)
 
@@ -275,11 +231,6 @@ def test_no_candidates_applies_empty_list_and_exits_zero(monkeypatch, capsys):
     assert "would_release=0 would_reclaim=0" in capsys.readouterr().out
 
 
-# ===========================================================================
-# Memo survey (2026-09-11, plan C6): --dry-run prints memo_would_release=
-# and mutates nothing; a failed memo release gives rc 1; the existing
-# handoff assertions above are unchanged.
-# ===========================================================================
 def test_dry_run_prints_memo_would_release_and_never_applies(monkeypatch, capsys):
     mod = _load_module()
     _patch_resolver(mod, monkeypatch)

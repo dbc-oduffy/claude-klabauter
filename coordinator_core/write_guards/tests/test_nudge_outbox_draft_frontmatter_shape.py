@@ -129,8 +129,6 @@ class TestSilent:
         sent_dir = tmp_path / "state" / "memo-outbox" / "sent"
         sent_dir.mkdir(parents=True)
         target = sent_dir / "some-topic.md"
-        # Archived copy carries status: sent — would fail validation if the
-        # path gate didn't exclude it first.
         content = _VALID_DRAFT.replace("status: draft", "status: sent")
         result = guard.check(
             _payload("Write", {"file_path": str(target), "content": content})

@@ -1,13 +1,3 @@
-"""
-Tests for coordinator_core.commit_ledger.classify -- the weighting layer
-C4 adds on top of review_brightline_gate's shared classify_surface /
-_is_noise_path primitives.
-
-Uses a self-contained coordinator.local.md fixture per test (tmp_path) --
-does NOT depend on, or assert against, this repo's own committed
-coordinator.local.md, so these tests stay green independent of what
-config values land there.
-"""
 
 from pathlib import Path
 
@@ -35,8 +25,6 @@ def test_baseline_weight_from_mapping(tmp_path):
 
 
 def test_unlisted_bucket_lands_on_default_never_zero(tmp_path):
-    # AC5: a bucket with no configured weight, and a repo with no mapping
-    # at all, both fall back to a non-zero default -- never a blind spot.
     _write_local_md(tmp_path, "commit_ledger_baseline_weight:\n  python: 1.0\n")
     assert classify_surface("README.md") == "doctrine"
     weight = weight_for_path(str(tmp_path), "README.md")
@@ -68,8 +56,6 @@ def test_elevated_surface_scales_baseline(tmp_path):
 
 def test_noise_path_is_zero_weight(tmp_path):
     _write_local_md(tmp_path, "commit_ledger_baseline_weight:\n  python: 1.0\n")
-    # __pycache__ artifacts are noise per review_brightline_gate's shared
-    # _is_noise_path predicate.
     assert weight_for_path(str(tmp_path), "coordinator_core/__pycache__/foo.pyc") == 0.0
 
 

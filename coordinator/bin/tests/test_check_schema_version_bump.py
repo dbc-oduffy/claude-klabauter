@@ -27,8 +27,6 @@ from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -37,18 +35,6 @@ pytestmark = [
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _BUMP_TRIPWIRE = os.path.join(_SCRIPT_DIR, "..", "check-schema-version-bump.py")
 
-# check-schema-version-bump.py's tripwire logic is content-agnostic (it only
-# diffs whether canonical-structure.yaml/coordinator-schema-version changed
-# between two git commits, never their contents) -- these tests only need
-# SOME realistic seed bytes, not the real production files. Both files are
-# DoE-owned and NOT vendored into claude-klabauter (D5 decision:
-# coordinator_core/install/scaffold_structure.py module docstring, "Does NOT
-# vendor a copy of canonical-structure.yaml"), so a hardcoded
-# `../../canonical-structure.yaml` path here previously resolved to a file
-# that never exists in this repo's tree -- a stale monorepo-era assumption,
-# not an env-dependent gap (no sibling-repo resolution would fix it; the
-# file is deliberately absent from every claude-klabauter checkout, not merely this
-# machine's). Synthetic content sidesteps the dependency entirely.
 _SYNTHETIC_CANONICAL_STRUCTURE = "# synthetic canonical-structure.yaml fixture\nkey: value\n"
 _SYNTHETIC_SCHEMA_VERSION = "1\n"
 
@@ -155,7 +141,6 @@ class CheckSchemaVersionBumpTest(unittest.TestCase):
     def test_t4_nested_layout_staged_violation(self):
         # T4/T5: NESTED-LAYOUT + --staged — regression guard for the manual
         # ${ABS#$GIT_ROOT/} path-strip bug (Windows/Git-Bash path-format
-        # divergence between --show-toplevel and pwd).
         repo = os.path.join(self.tmp.name, "tripwire_repo4")
         nested = os.path.join(repo, "plugins", "coordinator-claude", "coordinator")
         os.makedirs(nested, exist_ok=True)

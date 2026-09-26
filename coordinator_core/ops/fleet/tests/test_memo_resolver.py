@@ -1,20 +1,3 @@
-"""
-Tests for coordinator_core.ops.fleet._memo_resolver — the shared registry resolver.
-
-C3 test surface (docs/plans/2026-07-21-memo-tool-rebuild-full-ownership.md § C3, AC3):
-  - read_registry_repos returns {} on "nothing configured", but RAISES RegistryReadError
-    on a genuinely unreadable/corrupt registry file (fail-loud, not silent {}).
-  - No folder-scan fallback exists anywhere in this module (asserted structurally: a
-    forced registry-read failure must propagate as RegistryReadError, never degrade to
-    a directory scan or any write).
-  - resolve_receiver_inbox raises AmbiguousReceiverError when a central receiver id
-    fans in to more than one distinct registered repos.* key.
-  - resolve_receiver_inbox still returns (None, None, all_repos) on a legitimate
-    zero-match (not registered) — preserves memo_send.py's existing call-site contract.
-
-Spec backlink: docs/decisions/DR-210-claude-klabauter-native-tooling-ownership-strangler.md
-    § Amendment 2026-07-21.
-"""
 
 from __future__ import annotations
 
@@ -82,7 +65,6 @@ def _drop_settings_home_override(monkeypatch):
 
 
 def _make_claude_home(tmp_path: Path, receiver_repos: dict[str, Path]) -> Path:
-    """Minimal machine-local registry fixture (mirrors test_memo_send.py's factory)."""
     claude_home = tmp_path / "claude-home"
     machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
     machine_local.mkdir(parents=True)
@@ -122,7 +104,6 @@ def _install_doe_manifest(claude_home: Path, doe_root: Path, manifest: dict) -> 
 
 class TestReadRegistryReposFailLoud:
     def test_returns_empty_on_nothing_configured(self, tmp_path, monkeypatch):
-        """No registry.toml/registry.local.toml at all → {} (legitimate, not an error)."""
         missing_home = tmp_path / "nonexistent-claude-home"
         missing_home.mkdir()
         monkeypatch.setenv("CLAUDE_HOME", str(missing_home))
@@ -130,10 +111,8 @@ class TestReadRegistryReposFailLoud:
         assert read_registry_repos() == {}
 
     def test_raises_on_corrupt_registry_file(self, tmp_path, monkeypatch):
-        """A PRESENT but unparseable registry.toml raises RegistryReadError — no silent {}."""
         machine_local = tmp_path / "claude-home" / ".coordinator-claude-settings" / "machine-local"
         machine_local.mkdir(parents=True)
-        # Invalid TOML: unterminated string.
         (machine_local / "registry.toml").write_text(
             'schema = 1\n"repos.broken" = "unterminated\n', encoding="utf-8"
         )
@@ -143,12 +122,6 @@ class TestReadRegistryReposFailLoud:
             read_registry_repos()
 
     def test_corrupt_registry_does_not_fall_back_to_folder_scan(self, tmp_path, monkeypatch):
-        """A corrupt registry raises loud — it must NOT be swallowed into a scan-derived {}.
-
-        Structural guard for footgun #3 (AC3): the only acceptable outcome of a
-        registry-read failure is a raised exception, never a filesystem scan and
-        never a silently-empty result indistinguishable from "not configured".
-        """
         machine_local = tmp_path / "claude-home" / ".coordinator-claude-settings" / "machine-local"
         machine_local.mkdir(parents=True)
         (machine_local / "registry.toml").write_text("not [ valid toml =", encoding="utf-8")
@@ -173,12 +146,6 @@ class TestRegistryHomeHonorsMachineLocalImpl:
     """
 
     def _make_mocked_settings_home(self, tmp_path: Path, registry_toml_body: str) -> Path:
-        """Synthetic settings-home mirroring the real install layout:
-        <settings-home>/bin/_machine_local.py sits alongside
-        <settings-home>/machine-local/ — the same sibling relationship
-        _machine_local_impl()'s own default and machine_local_dir()'s own
-        default both resolve against. Returns the impl script path.
-        """
         settings_home_root = tmp_path / "mocked-settings-home"
         impl_script = settings_home_root / "bin" / "_machine_local.py"
         impl_script.parent.mkdir(parents=True)
@@ -191,8 +158,6 @@ class TestRegistryHomeHonorsMachineLocalImpl:
 
     def test_read_registry_repos_honors_machine_local_impl_override(self, tmp_path, monkeypatch):
         # Point CLAUDE_HOME at an unrelated, EMPTY home — if MACHINE_LOCAL_IMPL were
-        # ignored, read_registry_repos would silently fall through to this empty
-        # home and return {}, masking the override entirely.
         unrelated_home = tmp_path / "unrelated-claude-home"
         unrelated_home.mkdir()
         monkeypatch.setenv("CLAUDE_HOME", str(unrelated_home))
@@ -206,9 +171,6 @@ class TestRegistryHomeHonorsMachineLocalImpl:
         assert read_registry_repos() == {"repos.project_rag": "/abs/path/to/example-retrieval-repo"}
 
     def test_read_publish_mirrors_honors_machine_local_impl_override(self, tmp_path, monkeypatch):
-        """Same override, exercised through read_publish_mirrors() — the seam
-        memo_list._enumerate_publish_mirrors() consumes.
-        """
         unrelated_home = tmp_path / "unrelated-claude-home"
         unrelated_home.mkdir()
         monkeypatch.setenv("CLAUDE_HOME", str(unrelated_home))
@@ -308,16 +270,8 @@ class TestMachineLocalImplSecondVectorDeterministic:
                 encoding="utf-8",
             )
 
-            # Before this test even sets the var: the shared autouse fixture
-            # already ran and delenv'd it for every test in this module,
-            # regardless of what the executing box's ambient shell exports —
-            # the deterministic closure of the second vector.
             assert "MACHINE_LOCAL_IMPL" not in os.environ
 
-            # The mechanism itself still resolves a bin/-shaped override that
-            # sits under a genuinely non-tmp, durable-shaped directory — this
-            # is the deterministic construction proving the derivation is real
-            # and not an artifact of tmp_path sandboxing.
             monkeypatch.setenv("MACHINE_LOCAL_IMPL", str(impl_script))
             assert registry_home() == decoy_machine_local
             assert read_registry_repos() == {
@@ -326,19 +280,11 @@ class TestMachineLocalImplSecondVectorDeterministic:
         finally:
             shutil.rmtree(durable_dir, ignore_errors=True)
 
-        # monkeypatch reverts the setenv above at teardown; the shared
-        # autouse fixture's delenv is what keeps every OTHER test in this
         # module — most of which never mention MACHINE_LOCAL_IMPL — from
-        # ever seeing this or any ambient override at all.
 
 
 class TestResolveReceiverInboxZeroMatch:
     def test_unregistered_receiver_returns_none_tuple(self, tmp_path, monkeypatch):
-        """Zero-match stays a (None, None, all_repos) return — not an exception.
-
-        Preserves memo_send.py's existing call-site contract (it builds its own
-        fail-loud setup-error envelope from the None).
-        """
         claude_home = _make_claude_home(tmp_path, {})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
@@ -360,7 +306,6 @@ class TestResolveReceiverInboxZeroMatch:
         assert all_repos["repos.project_rag"] == str(receiver_repo)
 
     def test_registry_read_failure_propagates(self, tmp_path, monkeypatch):
-        """A corrupt registry raises RegistryReadError THROUGH resolve_receiver_inbox too."""
         machine_local = tmp_path / "claude-home" / ".coordinator-claude-settings" / "machine-local"
         machine_local.mkdir(parents=True)
         (machine_local / "registry.toml").write_text("not [ valid toml =", encoding="utf-8")
@@ -390,8 +335,6 @@ class TestAmbiguousCentralReceiver:
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
-        # repos.doe_claude is registered, so the DR-071 ladder's registry rung
-        # resolves the DoE root — the manifest must live there.
         _install_doe_manifest(
             claude_home,
             tmp_path / "doe-claude-repo",
@@ -409,7 +352,6 @@ class TestAmbiguousCentralReceiver:
         assert "repos.doe_claude" in exc_info.value.candidate_keys
 
     def test_single_central_id_registered_resolves_cleanly(self, tmp_path, monkeypatch):
-        """Only one central id has a registered repo → resolves without ambiguity."""
         claude_home = _make_claude_home(
             tmp_path, {"doe_claude": tmp_path / "doe-claude-repo"}
         )
@@ -440,10 +382,8 @@ class TestConventionAndAliasMapping:
 
 
 class TestSuggestNearestReceiver:
-    """C4 — 'did you mean?' suggestion surface (footgun #2). Suggests, never resolves."""
 
     def test_claude_klabauter_em_suggests_claude_klabauter_em(self):
-        """The plan's own worked example: 'claude-klabauter-em' -> suggests 'claude-klabauter-em'."""
         all_repos = {
             "repos.claude_klabauter": "/abs/path/to/claude-klabauter",
             "repos.project_rag": "/abs/path/to/example-retrieval-repo",
@@ -454,11 +394,9 @@ class TestSuggestNearestReceiver:
         assert suggestion == "claude-klabauter-em"
 
     def test_no_candidates_returns_none(self):
-        """Empty registry -> nothing to suggest, returns None (not an exception)."""
         assert suggest_nearest_receiver("anything-em", {}) is None
 
     def test_wildly_unrelated_id_returns_none(self):
-        """A receiver id with no close match returns None rather than a bad guess."""
         all_repos = {"repos.project_rag": "/abs/path/to/example-retrieval-repo"}
 
         suggestion = suggest_nearest_receiver("xyz-completely-unrelated-zzz", all_repos)
@@ -466,12 +404,6 @@ class TestSuggestNearestReceiver:
         assert suggestion is None
 
     def test_exact_match_still_only_suggests_does_not_resolve(self):
-        """Even an exact-match id returns a plain suggestion string, not a resolved tuple.
-
-        suggest_nearest_receiver is a suggestion surface only — callers must not
-        treat its return value as a resolution; it never returns a Path or opens
-        any file.
-        """
         all_repos = {"repos.project_rag": "/abs/path/to/example-retrieval-repo"}
 
         suggestion = suggest_nearest_receiver("example-retrieval-repo-em", all_repos)
@@ -480,7 +412,6 @@ class TestSuggestNearestReceiver:
         assert isinstance(suggestion, str)
 
     def test_suggests_via_alias_shortname_when_alias_registered(self, tmp_path, monkeypatch):
-        """An aliased receiver whose registry key IS registered is a valid suggestion candidate."""
         claude_home = tmp_path / "claude-home"
         claude_home.mkdir()
         _install_doe_manifest(
@@ -504,9 +435,6 @@ class TestSuggestNearestReceiver:
 
 
 class TestCanonicalReceiverId:
-    """canonical_receiver_id() — the addressee-gate normalization the `to:`
-    frontmatter field is stamped from (memo_send.py), not the raw caller string.
-    """
 
     def _make_manifest(
         self,
@@ -518,9 +446,6 @@ class TestCanonicalReceiverId:
         redirect_aliases=None,
         aliases=None,
     ):
-        """`doe_root` defaults to a path nothing else claims; a caller whose
-        registry fixture registers `repos.doe_claude` must pass that path, since
-        the DR-071 ladder's registry rung outranks the pointer file."""
         manifest = {
             "identity": {
                 "repoAliases": aliases or [],
@@ -565,8 +490,6 @@ class TestCanonicalReceiverId:
         assert canonical_receiver_id("example-retrieval-repo-em") == "example-retrieval-repo-em"
 
     def test_manifest_absent_is_passthrough_noop(self, tmp_path, monkeypatch):
-        """No .doe-root sentinel at all → both central_ids/redirect_aliases are
-        empty sets, so ANY input passes through stripped/lowercased, never a crash."""
         missing_home = tmp_path / "no-doe-root-home"
         missing_home.mkdir()
         monkeypatch.setenv("CLAUDE_HOME", str(missing_home))
@@ -575,8 +498,6 @@ class TestCanonicalReceiverId:
         assert canonical_receiver_id("  Example-Retrieval-Repo-EM  ") == "example-retrieval-repo-em"
 
     def test_ambiguous_central_ids_raises(self, tmp_path, monkeypatch):
-        """Two central ids registered to two different repos → fail loud, same
-        as resolve_receiver_inbox's own ambiguity contract."""
         claude_home = _make_claude_home(
             tmp_path,
             {"central": tmp_path / "central-repo", "doe_claude": tmp_path / "doe-claude-repo"},
@@ -603,9 +524,6 @@ class TestCanonicalReceiverId:
             canonical_receiver_id("doe-claude-em")
 
     def test_central_alias_with_no_registered_repo_passes_through(self, tmp_path, monkeypatch):
-        """Central alias declared in the manifest, but nothing registered anywhere
-        → nothing to canonicalize TO, passthrough (resolve_receiver_inbox is the
-        authority that turns this into a fail-loud setup error at send-time)."""
         claude_home = _make_claude_home(tmp_path, {"unrelated": tmp_path / "unrelated-repo"})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         self._make_manifest(tmp_path, claude_home, central_ids=["doe-claude-em"])
@@ -614,13 +532,6 @@ class TestCanonicalReceiverId:
 
 
 class TestResolveSelfEmId:
-    """resolve_self_em_id() — THE ONE self-identity resolver (2026-07-26
-    subprocess-elision spinoff, `_memo_resolver.py:815-856`). Both
-    `compute_addressee_gate`'s `self:` line and `compute_reply_closure`'s
-    sender-id derivation route through this; prior to this, only indirect
-    coverage existed via `test_pickup_assemble.py`'s non-aliased fixtures
-    (2026-07-26 review finding 3).
-    """
 
     def _make_manifest(self, tmp_path, claude_home, *, aliases=None):
         _install_doe_manifest(
@@ -644,10 +555,6 @@ class TestResolveSelfEmId:
         assert resolve_self_em_id(self_repo) == "claude-klabauter-em"
 
     def test_matches_aliased_registered_repo(self, tmp_path, monkeypatch):
-        """2026-07-26 review finding 1: an aliased repo must resolve to the
-        SAME id the DoE CLI's `repo_key_to_em_id` produces
-        (`example_game_workbench_repo` -> `example-game-repo` -> `example-game-repo-em`), not the
-        naive underscore->dash convention (`example-game-workbench-repo-em`)."""
         self_repo = tmp_path / "example-game-workbench-repo"
         self_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"example_game_workbench_repo": self_repo})
@@ -678,8 +585,6 @@ class TestResolveSelfEmId:
     def test_registry_read_failure_falls_back_to_basename_never_raises(
         self, tmp_path, monkeypatch
     ):
-        """Self-identity derivation is best-effort/display-only and must never
-        raise, even on a genuinely corrupt registry file."""
         self_repo = tmp_path / "some-repo"
         self_repo.mkdir()
         machine_local = tmp_path / "claude-home" / ".coordinator-claude-settings" / "machine-local"
@@ -691,10 +596,6 @@ class TestResolveSelfEmId:
 
 
 class TestSameRepoPath:
-    """same_repo_path() — THE ONE path-equality helper for receiver/self
-    resolution (`_memo_resolver.py:796-812`). Lift-and-shift of the
-    pre-existing `_same_path`; direct coverage was previously only
-    incidental (2026-07-26 review finding 3)."""
 
     def test_existing_paths_match_via_samefile(self, tmp_path):
         a = tmp_path / "repo"
@@ -709,17 +610,12 @@ class TestSameRepoPath:
         assert same_repo_path(a, b) is False
 
     def test_nonexistent_path_falls_back_to_normcase_realpath(self, tmp_path):
-        """Neither path exists (registry entry pointing at a not-yet-cloned
-        sibling) → os.path.samefile raises OSError, falls back to
-        normcase+realpath string comparison rather than raising."""
         a = tmp_path / "not-yet-cloned"
         assert same_repo_path(a, Path(str(a))) is True
         assert same_repo_path(a, tmp_path / "different-not-cloned") is False
 
 
 def _install_flat_mirror_manifest(claude_home: Path, doe_root: Path, manifest: dict) -> None:
-    """`_install_doe_manifest`'s flat-mirror twin: the published mirror carries
-    schemas/ at its own root, gated by `.claude-plugin/plugin.json`."""
     (doe_root / ".claude-plugin").mkdir(parents=True, exist_ok=True)
     (doe_root / ".claude-plugin" / "plugin.json").write_text("{}\n", encoding="utf-8")
     schemas_dir = doe_root / "schemas"
@@ -771,8 +667,6 @@ def _add_mirrors(claude_home: Path, mirrors: dict[str, dict[str, str]]) -> None:
 
 
 class TestPublishMirrorReroute:
-    """A publish mirror or a redirect alias is not a receiver: a memo addressed
-    to one is delivered to its owner, never into the mirror's own inbox."""
 
     def test_mirror_registered_in_repos_routes_to_its_owner(self, tmp_path, monkeypatch):
         mirror = tmp_path / "claude-klabauter"
@@ -832,8 +726,6 @@ class TestPublishMirrorReroute:
 
 
 class TestReceiverCheckoutDefect:
-    """DoE #92 defect 1: structural publish-mirror / no-checkout detection —
-    a receiver path that would silently land a delivery where no EM reads."""
 
     def test_none_path_is_no_checkout(self):
         assert receiver_checkout_defect(None) == "no-checkout"

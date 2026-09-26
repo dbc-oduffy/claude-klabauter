@@ -91,12 +91,10 @@ from coordinator_core.hooks.support.forwarder_resolve import forwarder_argv, res
 from coordinator_core.hooks.support.skill_invocation import read_invocation
 from coordinator_core.ipc import register_op
 
-# --- Constants -------------------------------------------------------------
 
 _PICKUP_COMMAND_NAMES = frozenset({"pickup"})
 
 # Kept literally identical to `mise_autofire.py :: _MISE_COMMAND_NAMES`; a
-# verb in one and not the other starts the run half-wired, silently.
 _BATON_GRAB_COMMAND_NAMES = frozenset({"mise-en-place", "warp-speed-execute"})
 
 _BATON_PATH_FAMILIES = (
@@ -128,15 +126,11 @@ _AND_SPLIT_RE = re.compile(r"\s+AND\s+", flags=re.IGNORECASE)
 
 
 def _is_baton_path(token: str) -> bool:
-    """True iff `token` names an artifact family that carries a claim
-    lifecycle."""
     normalized = PureWindowsPath(token).as_posix()
     return any(family in normalized for family in _BATON_PATH_FAMILIES)
 
 
 def extract_baton_paths(command_args: str) -> str:
-    """Extract the baton paths from a MIXED argument string, re-joined with
-    ` AND ` for `pickup-assemble brief`."""
     tokens: List[str] = []
     for chunk in _AND_SPLIT_RE.split(command_args):
         tokens.extend(chunk.split())
@@ -153,8 +147,6 @@ _PROBE_LOG_PATH_ENV = "PICKUP_AUTOFIRE_PROBE_LOG_PATH"
 
 
 def resolve_settings_home() -> Path:
-    """Resolve the coordinator-claude settings-home root — unchanged
-    precedence from the DoE source and its `mise_autofire.py` sibling."""
     override = os.environ.get("COORDINATOR_SETTINGS_HOME")
     if override:
         return Path(override)
@@ -163,9 +155,6 @@ def resolve_settings_home() -> Path:
 
 
 def resolve_pickup_assemble_bin(settings_home: Path) -> Optional[Path]:
-    """Resolve the installed `pickup-assemble` forwarder under
-    `settings_home`. Returns None -- the caller treats that as a transport
-    failure and fails open (AC9c)."""
     return resolve_forwarder(settings_home / "bin", "pickup-assemble")
 
 
@@ -174,8 +163,7 @@ def pickup_assemble_argv(script_path: Path, tail: list) -> list:
 
 
 class _TransportFailure(Exception):
-    """Raised internally when a `pickup-assemble` invocation could not be
-    completed at all (binary unresolvable, spawn failure, or timeout)."""
+    pass
 
 
 def _run_pickup_assemble(
@@ -205,9 +193,6 @@ def _run_pickup_assemble(
 
 
 def decode_decision_payload(stdout: str) -> List[dict]:
-    """Parse a `pickup-assemble brief`/`apply` stdout blob into a list of
-    decision-object dicts (DEC-2), normalizing the N==1/N>1 cross-repo
-    output shapes (see module docstring's cross-repo consumer contract)."""
     try:
         obj = json.loads(stdout)
     except (json.JSONDecodeError, TypeError):
@@ -219,11 +204,7 @@ def decode_decision_payload(stdout: str) -> List[dict]:
     return []
 
 
-# --- Decision-object predicates (AC9b) ---------------------------------------
-
-
 def coast_verdict(decision: dict) -> Optional[str]:
-    """The `gates.coast.verdict` string, or None when absent/malformed."""
     gates = decision.get("gates")
     if not isinstance(gates, dict):
         return None
@@ -240,15 +221,10 @@ def judgment_points_are_empty(decision: dict) -> bool:
 
 
 def should_apply(decision: dict) -> bool:
-    """Apply ONLY on `coast == clear` AND `judgment_points == []`."""
     return coast_verdict(decision) == "clear" and judgment_points_are_empty(decision)
 
 
-# --- additionalContext rendering (AC9d) --------------------------------------
-
-
 def _unclaimed_summary(decisions: list, multi: bool, subagent_guard: bool = False) -> Optional[str]:
-    """One line per briefed baton this run did NOT claim, naming why."""
     lines = []
     for index, decision in enumerate(decisions):
         would_apply = should_apply(decision)
@@ -286,10 +262,6 @@ def _unclaimed_summary(decisions: list, multi: bool, subagent_guard: bool = Fals
 
 
 def _resolve_repo_root() -> Optional[Path]:
-    """Zero-spawn mirror of the engine repo's `apply.py::resolve_repo_root`.
-    Reimplemented as a pure-Python upward walk for a `.git` entry rather
-    than shelling out to `git rev-parse` -- unchanged from the DoE source.
-    Returns None when undeterminable."""
     try:
         cwd = Path.cwd()
     except OSError:
@@ -304,22 +276,15 @@ def _resolve_repo_root() -> Optional[Path]:
 
 
 def _sanitize_for_filename(value: str) -> str:
-    """Byte-for-byte mirror of the engine repo's
-    `coordinator_core/pickup_assemble/apply.py::_sanitize_for_filename`."""
     return value.replace("/", "__").replace("\\", "__")
 
 
 def _session_decision_file_path(repo_root: Path, session_id: str, artifact_path: str) -> Path:
-    """Byte-for-byte mirror of the engine repo's
-    `apply.py::_session_decision_file_path`/`_session_decision_file_dir`."""
     name = f"{_sanitize_for_filename(session_id)}__{_sanitize_for_filename(artifact_path)}.json"
     return repo_root / ".git" / "coordinator-sessions" / "decisions" / name
 
 
 def _write_decision_files(decisions: List[dict], session_id: str) -> List[Path]:
-    """Best-effort: write EACH decoded decision to its own engine-computed
-    path, keyed off that baton's OWN resolved `artifact.path`. Never
-    raises."""
     repo_root = _resolve_repo_root()
     if repo_root is None:
         return []
@@ -341,8 +306,6 @@ def _write_decision_files(decisions: List[dict], session_id: str) -> List[Path]:
 
 
 def _your_call_text(decision: dict) -> Optional[str]:
-    """Render the guidance-bearing `judgment_points[].dispositions[]`
-    entries as a "Your call" prose block."""
     jps = decision.get("judgment_points")
     if not isinstance(jps, list):
         return None
@@ -371,9 +334,6 @@ def _your_call_text(decision: dict) -> Optional[str]:
 
 
 def _evidence_judgment_points(decision: dict) -> Optional[list]:
-    """The `judgment_points` slice retained in the droppable evidence tail:
-    each judgment_point's `dispositions[]` has its guidance-bearing entries
-    stripped (promoted to `_your_call_text`)."""
     jps = decision.get("judgment_points")
     if not isinstance(jps, list):
         return jps
@@ -400,8 +360,6 @@ def _evidence_judgment_points(decision: dict) -> Optional[list]:
 
 
 def _evidence_is_informative(decision: dict) -> bool:
-    """True iff the Evidence tail would carry a fact beyond what
-    `verdict_text` already states."""
     jps = decision.get("judgment_points")
     if isinstance(jps, list) and jps:
         return True
@@ -419,8 +377,6 @@ def _evidence_is_informative(decision: dict) -> bool:
 def _decision_segments(
     decision: dict, index: int, multi: bool
 ) -> Tuple[Optional[str], str, Optional[str], Optional[str], Optional[str]]:
-    """Compute `(narration_text, verdict_text, next_move_text,
-    your_call_text, evidence_text)` for ONE decoded decision object."""
     narration = decision.get("narration")
     narration_text = narration if isinstance(narration, str) and narration else None
 
@@ -466,10 +422,6 @@ def render_additional_context(
     prose: Optional[str] = None,
     subagent_guard: bool = False,
 ) -> str:
-    """Render the `additionalContext` string per the AC9(d)/AC14/AC15/DEC-4
-    priority list, generalized to N decoded batons -- see the DoE source's
-    own extensive docstring for the full degrade-priority ladder (unchanged
-    logic, reproduced verbatim below)."""
     if not decisions:
         return ""
 
@@ -554,9 +506,6 @@ def render_additional_context(
     return rendered[:_CONTEXT_BUDGET_CHARS]
 
 
-# --- Skill-tool-firing measurement instrumentation ---------------------------
-
-
 def _probe_log_path() -> Path:
     """Resolve the probe-log path, honoring `_PROBE_LOG_PATH_ENV`."""
     override = os.environ.get(_PROBE_LOG_PATH_ENV)
@@ -566,8 +515,6 @@ def _probe_log_path() -> Path:
 
 
 def _log_probe_event(payload: dict) -> None:
-    """Best-effort, near-zero-marginal-cost instrumentation: append one JSON
-    line per hook firing. Never raises."""
     try:
         command_name = payload.get("command_name")
         if command_name is None:
@@ -590,12 +537,10 @@ def _log_probe_event(payload: dict) -> None:
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, sort_keys=True) + "\n")
     except OSError:
-        pass  # best-effort probe log; never raises
+        pass
 
 
 def _log_producer_capture_failure(session_id: str, typed_command: Optional[str], reason: str) -> None:
-    """Best-effort append to the SAME probe log `_log_probe_event` already
-    writes. Never raises."""
     try:
         record = {
             "ts": time.time(),
@@ -608,16 +553,12 @@ def _log_producer_capture_failure(session_id: str, typed_command: Optional[str],
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, sort_keys=True) + "\n")
     except Exception:
-        pass  # best-effort probe log; never raises
+        pass
 
 
 def _capture_producer(payload: dict, command_name: str, session_id: str, cwd: Optional[str]) -> None:
-    """Capture the typed command for THIS turn into `session-shape.json`'s
-    namespaced `producer` record, via the engine's `producer_set`
-    entrypoint. Imported directly in-process (no cross-plane root
-    resolution — see module docstring, shape change (b)). Never raises."""
     if payload.get("expansion_type") != "slash_command":
-        return  # not a confirmed slash-command turn -- leave prior value (D3)
+        return
 
     typed_command = command_name if command_name else "unresolved"
 
@@ -643,11 +584,7 @@ def _capture_producer(payload: dict, command_name: str, session_id: str, cwd: Op
         _log_producer_capture_failure(session_id, typed_command, "lock_failed")
 
 
-# --- Mutating half (AC9a) ----------------------------------------------------
-
-
 def _fire_apply(script_path: Path, artifact_path: str, session_id: str) -> None:
-    """Best-effort apply — never raises, never surfaces its own exit code."""
     if not session_id:
         return
     try:
@@ -658,16 +595,10 @@ def _fire_apply(script_path: Path, artifact_path: str, session_id: str) -> None:
             _APPLY_TIMEOUT_SECONDS,
         )
     except _TransportFailure:
-        pass  # best-effort apply; never raises, never surfaces its own exit code
-
-
-# --- Entry point --------------------------------------------------------------
+        pass
 
 
 def compute_context(payload: dict) -> Optional[str]:
-    """Compute the bare `additionalContext` prose for ONE hook firing.
-    Reads either entry-path shape via `read_invocation`. Returns `None`
-    whenever there is nothing to inject. Never raises."""
     if not isinstance(payload, dict):
         payload = {}
 
@@ -675,7 +606,7 @@ def compute_context(payload: dict) -> Optional[str]:
 
     inv = read_invocation(payload)
     if inv is None:
-        return None  # unrecognized payload shape -- silent pass
+        return None
 
     try:
         _capture_producer(payload, inv.command_name, inv.session_id, inv.cwd or None)
@@ -689,33 +620,33 @@ def compute_context(payload: dict) -> Optional[str]:
     is_pickup = inv.command_name in _PICKUP_COMMAND_NAMES
     is_baton_grab = inv.command_name in _BATON_GRAB_COMMAND_NAMES
     if not (is_pickup or is_baton_grab):
-        return None  # not a baton-taking verb -- silent pass
+        return None
 
     command_args = inv.command_args
     if not command_args:
-        return None  # nothing to compute a brief against
+        return None
 
     path_string, prose = split_prose_tail(command_args)
     if is_baton_grab:
         path_string = extract_baton_paths(path_string)
     if not path_string:
-        return None  # prose-only invocation -- nothing to compute a brief against
+        return None
 
     settings_home = resolve_settings_home()
     script_path = resolve_pickup_assemble_bin(settings_home)
     if script_path is None:
-        return None  # transport failure (AC9c) -- CLI unresolvable, fail open
+        return None
 
     try:
         result = _run_pickup_assemble(
             script_path, ["brief", path_string], inv.session_id, _BRIEF_TIMEOUT_SECONDS
         )
     except _TransportFailure:
-        return None  # AC9c
+        return None
 
     decisions = decode_decision_payload(result.stdout)
     if not decisions:
-        return None  # AC9c -- unparseable/empty output is a transport failure too
+        return None
 
     subagent = inv.agent_id is not None
 
@@ -740,15 +671,10 @@ def compute_context(payload: dict) -> Optional[str]:
 
 @register_op("hooks.pickup_autofire")
 def _handler(params: dict, repo_root=None) -> dict:
-    """UserPromptExpansion / PreToolUse(Skill) op: compute and inject the
-    `/pickup`/baton-grab brief; fire the mutating `apply` half on a clear
-    coast. `params` IS the raw payload dict."""
     params = payload_of(params)
     try:
         additional_context = compute_context(params)
     except Exception:
-        # Total-function guard (AC9c) -- must never raise into the caller;
-        # every internal step already fails open on its own.
         additional_context = None
 
     if additional_context is None:

@@ -27,8 +27,6 @@ from pathlib import Path
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -37,8 +35,6 @@ pytestmark = [
 _CLAUDE_KLABAUTER_ROOT = Path(__file__).resolve().parents[3]
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-#: Imports `sentinel` FIRST, the way the sentinel CLI trampoline does, and only
-#: then the op registry — the order that used to lose.
 _PROBE = """
 import sys
 from coordinator_core.plugin_health.sentinel import main

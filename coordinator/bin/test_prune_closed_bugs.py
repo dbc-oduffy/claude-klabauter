@@ -43,12 +43,6 @@ def _pass(label: str) -> None:
 
 
 def _fail(label: str, detail: str = "") -> None:
-    """Fail the enclosing test.
-
-    Negative-spec: this MUST raise. It previously only printed and bumped a
-    module-global counter that nothing ever asserted on, which made every
-    check in this file decorative. Do not "restore" the counting-only shape.
-    """
     global FAIL
     print(f"  FAIL: {label}")
     if detail:
@@ -58,7 +52,6 @@ def _fail(label: str, detail: str = "") -> None:
 
 
 def _load_module():
-    """Import prune-closed-bugs.py as a fresh module object each call."""
     path = os.path.join(SCRIPT_DIR, "prune-closed-bugs.py")
     spec = importlib.util.spec_from_file_location("prune_closed_bugs_under_test", path)
     mod = importlib.util.module_from_spec(spec)
@@ -68,7 +61,6 @@ def _load_module():
 
 
 def _run_main_capturing(mod, argv=None, fake_route_mutation=None, fake_route=None):
-    """Run mod.main(argv or []) with stdout/stderr captured; optionally fake both seams."""
     orig_route_mutation = mod.route_mutation
     orig_route = mod.cc_invoke.route
     if fake_route_mutation is not None:
@@ -85,12 +77,7 @@ def _run_main_capturing(mod, argv=None, fake_route_mutation=None, fake_route=Non
     return rc, out.getvalue(), err.getvalue()
 
 
-# ===========================================================================
 # Regression: DETERMINATE-PARTIAL ACT response (exit_code=2, populated acted[])
-# must report the TRUE archived count via a WARN, not "not archived (transport
-# error)" for the whole batch. Pins the route()-not-route_mutation() fix on the
-# ACT call.
-# ===========================================================================
 def test_act_partial_success_reports_true_count():
     mod = _load_module()
 
@@ -140,11 +127,6 @@ def test_act_partial_success_reports_true_count():
         _fail("partial ACT success: WARN emitted on stderr", f"stderr: {err!r}")
 
 
-# ===========================================================================
-# Two-call dry->act shape: Call 1 dry_run:true selects candidates; Call 2
-# dry_run:false performs the act. Full success (exit_code=0) prints the
-# full count, no WARN.
-# ===========================================================================
 def test_two_call_dry_then_act_shape():
     mod = _load_module()
     calls = []
@@ -192,9 +174,6 @@ def test_two_call_dry_then_act_shape():
         _pass("two-call shape: no WARN on full success")
 
 
-# ===========================================================================
-# --dry-run mode skips the ACT call entirely.
-# ===========================================================================
 def test_dry_run_mode_skips_act_call():
     mod = _load_module()
 
@@ -228,9 +207,6 @@ def test_dry_run_mode_skips_act_call():
         _fail("dry-run mode: preview message printed", f"stdout: {out!r}")
 
 
-# ===========================================================================
-# Empty candidates from dry-run -> Call 2 skipped, "nothing to prune", exit 0.
-# ===========================================================================
 def test_empty_candidates_skips_act_call():
     mod = _load_module()
 
@@ -263,9 +239,6 @@ def test_empty_candidates_skips_act_call():
         _fail("empty candidates: 'nothing to prune' message printed", f"stdout: {out!r}")
 
 
-# ===========================================================================
-# Dry-run call itself fails (transport error) -> WARN + skip, exit 0.
-# ===========================================================================
 def test_dry_run_call_transport_failure():
     mod = _load_module()
 
@@ -288,5 +261,4 @@ def test_dry_run_call_transport_failure():
         _pass("dry-run transport failure: WARN on stderr")
     else:
         _fail("dry-run transport failure: WARN on stderr", f"stderr: {err!r}")
-
 

@@ -54,17 +54,6 @@ __all__ = ["tracked_files"]
 
 
 def tracked_files(repo_root: Union[str, Path], pathspec: str = ".") -> Tuple[str, ...]:
-    """Repo-relative, forward-slash paths tracked by git under ``repo_root``
-    matching ``pathspec`` (e.g. ``"*.py"``, a directory like
-    ``"coordinator/bin"``, or the default ``"."`` for the whole tree).
-
-    One `git ls-files -z` spawn per distinct (repo_root, pathspec) pair for
-    the lifetime of the process -- see module docstring. Returns an empty
-    tuple (never raises) when git is not on PATH, the spawn itself fails or
-    times out, or ``repo_root`` is not a git repository at all -- every one
-    of those is a degrade case a caller must treat as "nothing enumerable",
-    not a crash.
-    """
     resolved_root = str(Path(repo_root).resolve())
     return _tracked_files_cached(resolved_root, pathspec)
 
@@ -73,10 +62,6 @@ def tracked_files(repo_root: Union[str, Path], pathspec: str = ".") -> Tuple[str
 def _tracked_files_cached(repo_root: str, pathspec: str) -> Tuple[str, ...]:
     result = run_git(["-C", repo_root, "ls-files", "-z", "--", pathspec])
     if not result.ok:
-        # `run_git` folds an absent git and a timeout onto returncode 127/-1
-        # rather than raising, so the three degrade cases this module has
-        # always treated alike (no git, spawn failed, not a repo) still reach
-        # the same empty tuple through one branch instead of three.
         if not result.timed_out and result.returncode != 127:
             print(
                 f"git.ls_files: git -C {repo_root} ls-files -- {pathspec!r} exited "

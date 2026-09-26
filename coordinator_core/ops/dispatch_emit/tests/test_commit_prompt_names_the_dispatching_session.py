@@ -1,18 +1,3 @@
-"""A commit-phase prompt names the SESSION that emitted the script.
-
-Spec backlink: coordinator-claude#52b. A dispatched
-``coordinator:git-commit-agent`` runs in its own process, where the
-``session.core.resolve_session_id`` env ladder resolves nothing -- so a
-commit it lands carries no ``Session-Id`` trailer unless the emitted prompt
-names the id for it. ``ceremony.commit_v2``'s DoE-side agent contract reads
-the line ``Dispatching Session-Id: <uuid>`` out of its own brief, byte for
-byte.
-
-Negative spec: the line belongs to the commit-phase prompt ONLY -- never an
-executor wave's prompt, never the preflight prompt -- and is omitted
-entirely (not emitted empty) when the id does not resolve or is not
-UUID-shaped.
-"""
 
 from coordinator_core.ops.dispatch_emit.emit import (
     _commit_agent_call,
@@ -64,9 +49,6 @@ def _wave_row(chunk_id: str, writes: list[str]) -> WaveRow:
 
 
 def test_executor_wave_prompt_never_carries_the_session_line():
-    """The line is commit-phase-only -- `_wave_agent_calls` takes no
-    `session_id` parameter at all, so a caller cannot even splice it into an
-    executor wave's prompt."""
     wave = [_wave_row("C1", ["a.py"])]
     call = _wave_agent_calls(wave, "Wave 1: C1", "docs/plans/example.md", None, None)
     assert "Dispatching Session-Id" not in call

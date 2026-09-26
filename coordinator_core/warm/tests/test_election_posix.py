@@ -39,11 +39,6 @@ posix_only = pytest.mark.skipif(
     reason="needs a POSIX kernel: AF_UNIX bind/listen/connect, mode 0700, fcntl.flock",
 )
 
-#: A deliberately SHORT notional runtime base for the derivation tests.
-#: `socket_path` touches no filesystem, so this never has to exist -- and it
-#: must be short, because pytest's own `tmp_path` is ~90 characters deep on
-#: Windows and would trip the sun_path budget the derivation is being checked
-#: for, turning every path assertion into a failure about the fixture.
 SHORT_BASE = "/run/u"
 
 
@@ -67,15 +62,7 @@ def short_runtime_base():
     return Path(os.environ[breadcrumb.RUNTIME_BASE_ENV])
 
 
-# ---------------------------------------------------------------------------
-# Tier 1 -- runs on every platform, Windows included.
-# ---------------------------------------------------------------------------
-
-
 def test_socket_path_is_the_breadcrumbs_own_svc_dir(tmp_path: Path, monkeypatch) -> None:
-    """The socket must land in the SAME per-clone runtime directory the
-    breadcrumb already resolves -- not a second derivation that could drift
-    from it, and not a second place an operator has to know about."""
     from coordinator_core.warm import breadcrumb
 
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, SHORT_BASE)
@@ -86,8 +73,6 @@ def test_socket_path_is_the_breadcrumbs_own_svc_dir(tmp_path: Path, monkeypatch)
 
 
 def test_socket_path_changes_with_token_and_clone(tmp_path: Path, monkeypatch) -> None:
-    """The two components that keep generations and clones from colliding --
-    the same pair `pipe_name` carries."""
     from coordinator_core.warm import breadcrumb
 
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, SHORT_BASE)
@@ -118,7 +103,6 @@ def test_runtime_base_has_no_xdg_branch(monkeypatch) -> None:
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
     monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/501")
 
-    # The pin is behavioural, not textual: XDG is SET and must still lose.
     assert breadcrumb.runtime_base() == Path.home() / ".cache"
 
 
@@ -139,11 +123,7 @@ def test_runtime_base_candidate_order_is_the_locked_one(monkeypatch) -> None:
 
 
 def test_guarded_ancestors_are_exactly_the_ones_we_create() -> None:
-    """WHICH directories get the ownership check is the part a refactor
-    breaks quietly -- the checks themselves need a POSIX kernel, this
-    selection does not. `coordinator/warm` and `coordinator`, nearest
-    first; never the operator's own base."""
-    base = Path("/home/u/.cache")  # abs-path-ok: synthetic fixture for a pure path computation, never touched on disk
+    base = Path("/home/u/.cache")
     leaf = base / "coordinator" / "warm" / "abc123"
 
     assert election._interposed_ancestors(leaf / "tok.sock", base) == [
@@ -154,9 +134,7 @@ def test_guarded_ancestors_are_exactly_the_ones_we_create() -> None:
 
 
 def test_guarded_ancestors_never_include_the_operators_own_base() -> None:
-    """`~/.cache` at 0755 is the user's own directory. Refusing to start
-    over it would be wrong, so it is never inspected."""
-    base = Path("/home/u/.cache")  # abs-path-ok: synthetic fixture for a pure path computation, never touched on disk
+    base = Path("/home/u/.cache")
     leaf = base / "coordinator" / "warm" / "abc123" / "tok.sock"
 
     guarded = election._interposed_ancestors(leaf, base)
@@ -166,18 +144,11 @@ def test_guarded_ancestors_never_include_the_operators_own_base() -> None:
 
 
 def test_guarded_ancestors_of_a_path_outside_the_base_is_empty() -> None:
-    """A leaf that is not under `base` at all must yield nothing, rather
-    than walking to the filesystem root asserting ownership of directories
-    that are not ours."""
-    # abs-path-ok: synthetic fixtures for a pure path computation, never touched on disk
     assert election._interposed_ancestors(Path("/elsewhere/x.sock"), Path("/home/u/.cache")) == []
     assert election._interposed_ancestors(Path("/a/b/c.sock"), None) == []
 
 
 def test_socket_path_refuses_a_path_over_the_sun_path_budget(tmp_path: Path, monkeypatch) -> None:
-    """`bind()` reports an over-long path as an unexplained OSError. Catching
-    it here is the difference between an operator reading "over the 100-byte
-    sun_path budget" and reading nothing at all."""
     from coordinator_core.warm import breadcrumb
 
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path / ("d" * 200)))
@@ -196,8 +167,6 @@ def test_reclaim_unlinks_only_a_refused_endpoint(tmp_path: Path) -> None:
 
 
 def test_reclaim_leaves_a_live_endpoint_alone(tmp_path: Path) -> None:
-    """The failure this forbids is not cosmetic: unlinking a LIVE peer's
-    socket leaves a healthy server bound to an unreachable inode."""
     live = tmp_path / "live.sock"
     live.write_bytes(b"")
 
@@ -211,8 +180,6 @@ def test_reclaim_reports_nothing_removed_for_an_absent_path(tmp_path: Path) -> N
 
 
 def test_reclaim_never_swallows_an_unclassified_probe_failure(tmp_path: Path) -> None:
-    """An EACCES/EPERM probe raises rather than resolving to a verdict --
-    "I could not tell" must never become "it was dead, I removed it"."""
     guarded = tmp_path / "guarded.sock"
     guarded.write_bytes(b"")
 
@@ -225,35 +192,26 @@ def test_reclaim_never_swallows_an_unclassified_probe_failure(tmp_path: Path) ->
 
 
 def test_reclaim_treats_a_concurrently_removed_corpse_as_reclaimed(tmp_path: Path) -> None:
-    """Two servers can probe the same corpse at once. The one whose unlink
-    loses the race must still retry its bind, not conclude it lost -- the
-    path is gone either way, which is what it wanted."""
     already_gone = tmp_path / "raced.sock"
     assert election.reclaim_stale_socket(already_gone, probe=lambda p: election.PROBE_STALE) is True
 
 
 def test_socket_identity_and_ownership_checked_unlink(tmp_path: Path) -> None:
-    """A departing generation must remove its OWN socket file. Same hazard
-    and same shape as `breadcrumb.unlink_breadcrumb`'s `owner_pid` check."""
     path = tmp_path / "endpoint.sock"
     path.write_bytes(b"")
     mine = election.socket_identity(path)
     assert mine is not None
 
-    # A successor replaced the file: same path, different inode.
     path.unlink()
     path.write_bytes(b"successor")
     assert election.unlink_if_owned(path, mine) is False
     assert path.exists()
 
-    # Now it really is ours.
     assert election.unlink_if_owned(path, election.socket_identity(path)) is True
     assert not path.exists()
 
 
 def test_unlink_if_owned_with_no_identity_removes_nothing(tmp_path: Path) -> None:
-    """A server that never bound anything (the Windows path, where both
-    fields are None) must not delete a file it never owned."""
     path = tmp_path / "someone-elses.sock"
     path.write_bytes(b"")
     assert election.unlink_if_owned(path, None) is False
@@ -261,18 +219,12 @@ def test_unlink_if_owned_with_no_identity_removes_nothing(tmp_path: Path) -> Non
 
 
 def test_election_lost_endpoint_alias_matches_the_pinned_attribute() -> None:
-    """`pipe_name` is pinned by existing call sites and by
-    `test_election.py`; `endpoint` is the platform-neutral name new code
-    should read. They must never be two different values."""
     lost = election.ElectionLost("/tmp/x.sock")
     assert lost.endpoint == lost.pipe_name == "/tmp/x.sock"
     assert isinstance(lost, election.ElectionError)
 
 
 def test_posix_only_entry_points_refuse_to_run_on_windows() -> None:
-    """The mirror of `test_election.py`'s Windows-gating test: there must be
-    no platform on which both elections are callable, or a caller could pick
-    the wrong transport and get a confusing failure instead of a clear one."""
     real_is_windows = election._is_windows
     election._is_windows = lambda: True
     try:
@@ -282,11 +234,6 @@ def test_posix_only_entry_points_refuse_to_run_on_windows() -> None:
             election.elect_unix_socket(Path("/does/not/matter.sock"))
     finally:
         election._is_windows = real_is_windows
-
-
-# ---------------------------------------------------------------------------
-# Tier 2 -- real POSIX syscalls. Skipped, with a reason, off a POSIX kernel.
-# ---------------------------------------------------------------------------
 
 
 @posix_only
@@ -308,8 +255,6 @@ def test_ensure_private_dir_lands_0700_under_a_permissive_umask(tmp_path: Path) 
 
 @posix_only
 def test_ensure_private_dir_refuses_a_symlink(tmp_path: Path) -> None:
-    """A symlink standing where the runtime directory belongs would pass a
-    `stat`-based check while pointing the endpoint somewhere else."""
     real = tmp_path / "real"
     real.mkdir(mode=0o700)
     link = tmp_path / "link"
@@ -334,11 +279,9 @@ def test_a_writable_parent_is_refused_not_merely_noted(tmp_path: Path, monkeypat
     warm_dir.mkdir(parents=True, mode=0o700)
 
     leaf = warm_dir / "abc123"
-    election.ensure_private_dir(leaf, base=tmp_path)  # clean: passes
+    election.ensure_private_dir(leaf, base=tmp_path)
 
     os.chmod(warm_dir, 0o777)
-    # `_verify_owned_ancestor` chmods once before giving up, so defeat the
-    # repair to prove the REFUSAL rather than the self-heal.
     monkeypatch.setattr(election.os, "chmod", lambda *a, **k: None)
     with pytest.raises(election.InsecureRuntimeDirError):
         election.ensure_private_dir(leaf, base=tmp_path)
@@ -346,9 +289,6 @@ def test_a_writable_parent_is_refused_not_merely_noted(tmp_path: Path, monkeypat
 
 @posix_only
 def test_a_writable_parent_is_repaired_when_it_can_be(tmp_path: Path) -> None:
-    """The check is not brittle: a directory WE own that merely carries
-    stale permissive bits is chmodded and accepted. Refusing there would
-    make every box created by an earlier version unstartable."""
     import os
     import stat
 
@@ -366,8 +306,6 @@ def test_a_writable_parent_is_repaired_when_it_can_be(tmp_path: Path) -> None:
 def test_elect_verifies_the_ancestors_it_was_given_a_base_for(
     tmp_path: Path, short_runtime_base: Path, monkeypatch
 ) -> None:
-    """Wiring pin: `elect_unix_socket` must pass `base=` through, or the
-    ancestor check exists and never runs on the real boot path."""
     from coordinator_core.warm import breadcrumb
 
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(short_runtime_base))
@@ -417,7 +355,7 @@ def test_elect_reclaims_a_hard_killed_servers_socket(short_runtime_base: Path) -
     """
     path = short_runtime_base / "svc" / "tok.sock"
     dead = election.elect_unix_socket(path)
-    dead.close()  # the file survives -- this IS the stale-socket condition
+    dead.close()
     assert path.exists()
     assert election.probe_endpoint(path) == election.PROBE_STALE
 
@@ -430,9 +368,6 @@ def test_elect_reclaims_a_hard_killed_servers_socket(short_runtime_base: Path) -
 
 @posix_only
 def test_a_held_election_lock_reads_as_a_loss(tmp_path: Path) -> None:
-    """Two servers electing at once must not both reach the reclaim step --
-    that is how one deletes the other's freshly-bound socket. The loser
-    learns immediately rather than waiting."""
     path = tmp_path / "svc" / "tok.sock"
     election.ensure_private_dir(path.parent)
 

@@ -174,73 +174,38 @@ CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 PRIORITY = 30
 
-#: Generator-provenance declaration (coordinator_core/ops/generator_provenance.py).
-#: This module's only write is _write_block_log()'s best-effort deny-audit
-#: append to <git_root>/.git/coordinator-sessions/<session_id>/archive-write-block.log
-#: -- inside .git/, never a tracked repo artifact.
 GENERATES = []
 
-#: Reference hook — tool-name guard.
 _INTERCEPTED_TOOLS = {"Write", "Edit", "NotebookEdit", "MultiEdit"}
 
-#: subagent_type value that is the sole new (2026-08-03) allow-condition.
 _REVIEW_INTEGRATOR_TYPE = "coordinator:review-integrator"
 
-#: Reference hook — fast-exit "anywhere under archive/" match.
 _ARCHIVE_RE = re.compile(r"(^|/)archive/")
 
-#: Reference hook — daily-summaries dated-file carve-out.
-#: The optional ``.observer`` segment (2026-08-07 widening) admits the
-#: strategic-observer sidecar that /workday-complete Step 7 dispatches a
 #: SUBAGENT to write. Without it the ceremony and this guard were jointly
-#: unsatisfiable: the observer's only specified output path is under
-#: ``archive/``, so the guard hard-denied every well-behaved observer, and the
-#: strategic-observer trail sat empty from 2026-07-23 onward across at least
-#: two repos -- silently, because /workweek-complete Step 9's arch-pass
-#: skip-condition reads an empty trail as "no architectural risk".
-#: Deliberately narrow: a single literal segment on an already-carved-out
-#: dated path, not a general subagent exemption. The guard's wrap-up
-#: self-log backstop purpose is unchanged -- a ceremony-specified sidecar is
-#: not the over-eager-self-log class it exists to stop.
 _DAILY_SUMMARY_RE = re.compile(
     r"(^|/)archive/daily-summaries/[0-9]{4}-[0-9]{2}-[0-9]{2}"
     r"(-[a-z0-9][a-z0-9-]*)?(\.observer)?\.md$"
 )
 
-#: Reference hook — per-entry completion fallback carve-out.
 _COMPLETED_RE = re.compile(
     r"(^|/)archive/completed/[0-9]{4}-[0-9]{2}/[0-9]{4}-[0-9]{2}-[0-9]{2}-.+\.md$"
 )
 
-#: week-changelogs carve-out (2026-08-06 widening; see module docstring):
-#: a dated directory containing either a dated daily block (case-mixed
 #: machine/variant suffix permitted, unlike ``_DAILY_SUMMARY_RE``, per the
-#: on-disk ``2026-07-03-Machine-b-backfill.md`` shape) or a week rollup.
-#: Deliberately does NOT match ``HEADER.priorities.<hash>.md`` -- that
-#: artifact arrives by ``mv``, which this guard's tool-name gate never sees.
 _WEEK_CHANGELOG_RE = re.compile(
     r"(^|/)archive/week-changelogs/[0-9]{4}-[0-9]{2}-[0-9]{2}/"
     r"([0-9]{4}-[0-9]{2}-[0-9]{2}(-[A-Za-z0-9][A-Za-z0-9-]*)?"
     r"|WEEK-SUMMARY(\.partial)?)\.md$"
 )
 
-#: Control-whitespace/C0-control sanitization before interpolating an
-#: attacker-influenced file_path into a deny reason.
 _CONTROL_WHITESPACE_RE = re.compile(r"[\t\r\n\f\v]")
 _C0_CONTROL_RE = re.compile(r"[\x00-\x1f]")
 
-#: Escape-hatch env var named in the deny message.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_SUBAGENT_ARCHIVE"
 
 
 def _normalize_path(file_path: str) -> str:
-    """Backslash -> slash, collapse repeated slashes.
-
-    Deliberately simpler than ``subagent_sandbox.engine``'s normalizer: this
-    guard never converts an absolute path to repo-relative via
-    ``git ls-files`` and does not special-case a leading UNC ``//`` — the
-    reference ``.sh`` collapses ALL repeated slashes down to one, full stop.
-    """
     normalized = file_path.replace("\\", "/")
     while "//" in normalized:
         normalized = normalized.replace("//", "/")
@@ -248,7 +213,6 @@ def _normalize_path(file_path: str) -> str:
 
 
 def _extract_file_path(payload: Dict[str, Any]) -> str:
-    """file_path, falling back to notebook_path for NotebookEdit."""
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         return ""
@@ -262,19 +226,6 @@ def _sanitize_file_path_for_reason(file_path: str) -> str:
 
 
 def _resolve_git_root(cwd: Optional[str]) -> Optional[str]:
-    """``git rev-parse --show-toplevel``; best-effort.
-
-    AC4 (docs/plans/2026-08-07-no-window-subprocess-primitive.md, chunk C3b):
-    delegates to the shared, process-lifetime-memoized
-    ``write_guards._repo_root.resolve_repo_root`` instead of hand-rolling its
-    own spawn — same fail-open-to-``None`` contract as the prior inline
-    ``subprocess.run``, so no verdict changes (a ``None`` here still both
-    skips the deny-log and falls through the review-integrator
-    allow-condition, exactly as before). The prior inline spawn also logged
-    a forensic diagnostic on ``OSError`` ("skipping deny-log"); the shared
-    resolver swallows all failures silently (never raises), so that
-    diagnostic is restored here explicitly rather than lost.
-    """
     result = resolve_repo_root(cwd)
     if result is None:
         print(
@@ -288,23 +239,9 @@ def _resolve_git_root(cwd: Optional[str]) -> Optional[str]:
 def _write_block_log(
     git_root: Optional[str], session_id: str, agent_id: str, file_path: str
 ) -> None:
-    """Best-effort per-session deny log.
-
-    Wrapped so any failure (missing git root, unwritable dir, ...) can NEVER
-    flip the ALLOW/DENY decision — mirrors bash's trailing ``|| true``.
-    """
     if not session_id or not git_root:
         return
     try:
-        # A DENY audit line is not a session and must never mint one: this
-        # used to `mkdir(parents=True, exist_ok=True)` `<hub>/<session_id>`,
-        # and `liveness.live_session_ids` enumerates every non-denylisted
-        # child of that hub as a SESSION -- so an audit write manufactured a
-        # phantom, record-less session that claim attribution and scope
-        # computation both read. `session/core.py::ensure_session` is the
-        # ONE constructor. The line is not dropped (it has security content,
-        # unlike `guard_doctrine_surface_edits`'s advisory log): an unknown
-        # session's line lands in the denylisted `no-session` bucket.
         resolved = session_audit_log_dir(git_root, session_id)
         if resolved is None:
             return
@@ -313,9 +250,6 @@ def _write_block_log(
         with open(log_dir / "archive-write-block.log", "a", encoding="utf-8", newline="\n") as fh:
             fh.write(f"{ts} | DENY | agent_id={agent_id} | path={file_path}\n")
     except OSError as exc:
-        # Best-effort audit log only -- never flips the ALLOW/DENY decision
-        # (the deny itself already happened by the time this runs). Surfaced
-        # because a silently-lost DENY audit entry is worth knowing about.
         print(
             f"block-subagent-archive-write: failed to write deny audit log "
             f"under {git_root}: {exc}",
@@ -323,30 +257,13 @@ def _write_block_log(
         )
 
 
-#: A denied write shaped like a plausible wrap-up self-log: directly under
-#: ``archive/`` itself, or under ``archive/daily-summaries/`` but missing
 #: ``_DAILY_SUMMARY_RE`` (e.g. wrong date shape). Anything else denied
-#: under ``archive/`` is a different subtree entirely and MUST NOT be told
-#: to file itself as a daily summary -- see ``_deny_reason``.
 _DAILY_SUMMARY_SHAPED_RE = re.compile(
     r"(^|/)archive/(daily-summaries/)?[^/]*$"
 )
 
 
 def refuses_path(value: str) -> bool:
-    """Public predicate: would this guard refuse a write to ``value``?
-
-    Evaluates only the path-shape leg (archive/ membership minus the three
-    file-shaped carve-outs) -- the same classifier ``check()`` below uses for
-    its own path gate, and the one ``prep_gate.py``'s
-    ``_archive_writes_refused_in_wave`` calls instead of reaching into this
-    module's underscore-prefixed regexes/normalizer directly (code-reviewer
-    finding, coordinator-code-reviewer.ab762fd13d9fc6b25.md #1). Does NOT
-    evaluate the ``agent_id``/``review-integrator`` allow-conditions --
-    those require a PreToolUse payload and back-pointer lookup this
-    predicate has no access to; callers evaluating a *would-be* subagent
-    write (no live payload) only ever want the path-shape leg anyway.
-    """
     normalized = _normalize_path(value)
     return bool(_ARCHIVE_RE.search(normalized)) and not any(
         carve_out.search(normalized)
@@ -412,62 +329,37 @@ def _deny_reason(
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the archive-write guard against a PreToolUse payload.
-
-    Returns ``None`` (allow) or the nested hard-deny envelope. Fails open
-    (returns ``None``) on any missing/unparseable field, matching the
-    reference hook's ``-e``-omitted, fail-open-on-error contract.
-    """
-    # Honor escape hatch first.
     if os.environ.get(_OVERRIDE_ENV_VAR, "0") == "1":
         return None
 
-    # Tool-name guard — defense-in-depth.
     tool_name = payload.get("tool_name") or ""
     if tool_name not in _INTERCEPTED_TOOLS:
         return None
 
-    # agent_id: RAW presence only, since 2026-08-03 (see module docstring
-    # widening note) -- the exact complement of
-    # block_em_hand_edit_pending_review_integration's own EM/subagent split.
-    # No agent_id at all -> top-level EM write -> allow.
     raw_agent_id = payload.get("agent_id") or ""
     if not raw_agent_id:
         return None
 
-    # Resolved/canonical identity, used for the deny-reason/audit-log line
-    # and the review-integrator allow-condition below -- never for the
-    # fire/no-fire decision itself, which is presence-only (see above).
     session_id = payload.get("session_id") or ""
     agent_id = _resolve_subagent_identity(raw_agent_id, session_id)
 
-    # file_path (or notebook_path fallback).
     file_path = _extract_file_path(payload)
     if not file_path:
         return None
 
     normalized = _normalize_path(file_path)
 
-    # Path-shape leg (archive/ membership minus the three file-shaped
-    # carve-outs) -- shared classifier, see refuses_path().
     if not refuses_path(file_path):
         return None
 
     git_root = _resolve_git_root(payload.get("cwd"))
 
-    # review-integrator allow-condition (2026-08-03 widening -- see module
-    # docstring). Asymmetric fail-open discipline, deliberately: a failed or
-    # missing back-pointer lookup returns "" here, which does NOT match
     # _REVIEW_INTEGRATOR_TYPE and therefore falls through to the deny path
-    # below -- it must NOT allow, or this would reopen the naming-dependent
-    # hole this same widening closed.
     if agent_id and git_root:
         subagent_type = _read_backpointer_subagent_type(git_root, agent_id)
         if subagent_type == _REVIEW_INTEGRATOR_TYPE:
             return None
 
-    # Subagent writing under archive/ outside the daily-summaries carve-out
-    # and not a sanctioned review-integrator write -> block.
     session_id = payload.get("session_id") or ""
     _write_block_log(git_root, session_id, agent_id or raw_agent_id, file_path)
 

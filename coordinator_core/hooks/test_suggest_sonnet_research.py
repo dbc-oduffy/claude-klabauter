@@ -1,9 +1,3 @@
-"""
-coordinator_core.hooks.test_suggest_sonnet_research -- tests for the
-resolve_subagent_identity-routed suppression path in suggest_sonnet_research.py.
-
-Spec backlink: coordinator_core/hooks/suggest_sonnet_research.py (module under test).
-"""
 
 from __future__ import annotations
 
@@ -25,7 +19,6 @@ def _run(params):
 
 
 def test_named_teammate_with_valid_session_id_suppressed():
-    # Regression case: must fail before the fix and pass after.
     result = _run(
         {"agent_id": "arscout-deadbeef123456ab", "session_id": "abcdefgh-full-session"}
     )
@@ -57,9 +50,6 @@ def test_empty_agent_id_not_suppressed_advisory_fires():
 
 
 def test_named_teammate_with_short_session_id_not_suppressed():
-    # resolve_subagent_identity's documented fail-closed boundary: named-teammate
-    # grammar requires len(session_id) >= 8; shorter than that resolves to "",
-    # which is a deliberate resolver contract, not an oversight here.
     result = _run(
         {"agent_id": "arscout-deadbeef123456ab", "session_id": "short12"}
     )

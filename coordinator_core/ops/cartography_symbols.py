@@ -159,29 +159,18 @@ __all__ = [
     "write_symbols_artifact",
 ]
 
-#: Schema version for this op's emitted JSON artifact — always the first key
 #: written on disk (mirrors cartography_chunk_table.SCHEMA_VERSION's
-#: convention, DR-228 § D6(v)). A standalone constant because this artifact
-#: is a genuinely different shape (per-file symbol tables, not a
-#: bucket/chunk reduction) with its own independent version lineage.
 SCHEMA_VERSION: int = 1
 
-#: Every schema_version this module can consume without failing loud — see
 #: cartography_chunk_table._KNOWN_SCHEMA_VERSIONS for why this is a set, not
-#: a single ceiling comparison, even though only one version exists today.
 _KNOWN_SCHEMA_VERSIONS: frozenset[int] = frozenset({SCHEMA_VERSION})
 
 
 class SymbolsSchemaError(ValueError):
-    """Raised when a cartography.symbols JSON artifact carries an unknown
-    FORWARD schema_version (newer than this module knows) — fail-loud
-    consumption, per DR-228 § D6(v)."""
+    pass
 
 
 def check_schema_version(payload: Dict[str, Any]) -> None:
-    """Fail loud on an unknown forward schema_version; silent on a known
-    version — DR-228 § D6(v)'s consumption contract, mirroring
-    cartography_chunk_table.check_schema_version."""
     version = payload.get("schema_version")
     if not isinstance(version, int) or version not in _KNOWN_SCHEMA_VERSIONS:
         raise SymbolsSchemaError(
@@ -191,9 +180,6 @@ def check_schema_version(payload: Dict[str, Any]) -> None:
 
 
 def _count_entries(files: List[Dict[str, Any]]) -> Dict[str, int]:
-    """Small per-artifact census over the per-file envelope entries —
-    top-level counts, not a per-file breakdown (mirrors
-    cartography_chunk_table's `counts` field)."""
     counts = {"files": len(files), "classes": 0, "functions": 0, "constants": 0, "other_symbols": 0}
     for entry in files:
         counts["classes"] += len(entry.get("classes") or [])
@@ -210,20 +196,6 @@ def build_symbols_artifact(
     reply: Dict[str, Any],
     completeness: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """Shape the already-computed per-file `reply` into the schema_version-
-    pinned artifact dict (schema_version first, per D6(v)).
-
-    `reply` is the same `{"files": [...], "coverage_note"?: ...}` dict the
-    non-emit path returns unmodified — this function does not recompute
-    anything, only wraps it. `completeness` is the foreign-extraction
-    completeness/coverage surface from `build_foreign_symbols` (carries
-    `unmapped_kinds` when any non-Python symbol kind fell outside the
-    class/function/constant/type_alias buckets), `None` when no non-Python
-    file was requested. AC5: the completeness/coverage surface — per-file
-    `other_symbols` (already embedded in each `reply["files"]` entry),
-    `completeness["unmapped_kinds"]`, and the `symbol_extract`-absent
-    `coverage_note` — all survive onto the written artifact.
-    """
     artifact: Dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "run_id": run_id,
@@ -239,14 +211,6 @@ def build_symbols_artifact(
 
 
 def write_symbols_artifact(target_root: Path, run_id: str, artifact: Dict[str, Any]) -> Path:
-    """Write the symbols artifact to
-    <target_root>/state/scratch/cartography-symbols/<run_id>/symbols.json,
-    atomically (mkstemp + os.replace, DR-228 § D6(ii) create-or-full-rewrite
-    only), mirroring cartography_chunk_table.write_chunk_table.
-
-    Write-confined (D6(i)): only this run-id's own subdirectory under
-    state/scratch/cartography-symbols/ is touched.
-    """
     run_dir = target_root / "state" / "scratch" / "cartography-symbols" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     target = run_dir / "symbols.json"
@@ -265,43 +229,13 @@ def write_symbols_artifact(target_root: Path, run_id: str, artifact: Dict[str, A
             try:
                 os.unlink(tmp_path)
             except OSError:
-                # tmp file already gone (or the replace above already consumed it)
                 pass
     return target
 
-# Coverage states that are infrastructure faults ONLY when symbol_extract IS
-# installed and something is genuinely broken (chunk C4a). A finding in this
-# set must fail the whole op loudly rather than returning a quietly-thin or
-# quietly-empty symbol table for the extensions it names. `parse_failure` is
-# deliberately excluded — it is already attributed onto its file's own
-# envelope entry as an "error" field by foreign_symbols, matching
-# cartography/symbols.py's existing per-file resilience, and must not fail
-# the whole batch.
-#
 # `name_invariant_drop` is deliberately EXCLUDED from this set for the same
-# reason as `parse_failure`: it is corpus hygiene, not an infrastructure
-# fault. A drop diagnostic records that upstream's
-# `ExtractionResult.__post_init__` choke point rejected ONE symbol's NAME
-# (a line terminator or an over-length name) — the file itself parsed
-# cleanly, and the drop is already routed onto that file's own envelope
-# entry via `name_invariant_drops` (never `error`, by
-# `foreign_symbols.build_foreign_symbols`) rather than being surfaced here.
-# Including it in this set would fail the whole batch over a single
-# malformed heading/identifier, exactly the kind of quietly-thin-vs-loudly-
-# wrong tradeoff this set exists to draw a line under.
-#
 # `dependency_absent` is deliberately EXCLUDED from this set (chunk C4a — PM
-# ruling 2026-08-08: "fails gracefully if the user doesn't have access to
-# example-retrieval-repo"). `symbol_extract` ships from a private repo; a user without
-# access must be able to install and use claude-klabauter without hitting an
-# exception. This state is handled separately below: it degrades to a
-# distinct, unmistakably-"not attempted" in-band marker per requested file,
-# plus a top-level coverage note — never raised, never folded into an
-# empty-but-successful extraction.
 _LOUD_COVERAGE_STATES = frozenset({"missing_grammar", "partial_coverage"})
 
-# The remedy surfaced in both the per-file "unavailable" marker's `detail`
-# and the top-level coverage note when `symbol_extract` cannot be imported.
 _SYMBOL_EXTRACT_REMEDY = (
     "install the optional extra to enable non-Python symbol extraction: "
     'python -m pip install -e ".[symbols]" from the claude-klabauter repo root '
@@ -309,33 +243,9 @@ _SYMBOL_EXTRACT_REMEDY = (
     "a git-ref pin, and the underlying distribution is example-retrieval-repo-symbol-extract, "
     "import name symbol_extract)"
 )
-# Naming the distribution as the pip target would be actively misleading:
-# coordinator_core is not published, so `pip install example-retrieval-repo-symbol-extract`
-# reaches PyPI, finds nothing, and fails with "no matching distribution" —
-# the exact confusing failure the spike verdict flagged. The extra is the only
-# working entrypoint; the distribution name is context, not a command.
 
 
 class CoverageFaultError(ValueError):
-    """Raised when `classify_foreign_symbol_coverage` reports a loud
-    coverage fault (`missing_grammar`/`partial_coverage`) for the requested
-    non-Python files.
-
-    The
-    loud raise must stay loud (never softened to a return), but must not
-    discard already-computed, unrelated-to-the-fault results. This subclass
-    of `ValueError` carries those results so a catching caller can still use
-    them; existing `except ValueError` callers are unaffected.
-
-    Attributes:
-        partial_reply (dict): the `{"files": [...]}` envelope entries that
-            were already computed before the fault was detected — i.e. every
-            requested `.py` file's symbol table plus every requested
-            unsupported-extension file's in-band marker, in request order.
-            Entries for the still-unresolved `other_files` batch (the one
-            that triggered the fault) are absent. Never includes a
-            `coverage_note` key.
-    """
 
     def __init__(self, message: str, partial_reply: Dict[str, Any]):
         super().__init__(message)
@@ -376,9 +286,6 @@ def _cartography_symbols(params: dict, repo_root: Optional[Path] = None) -> dict
         uncaught, if any entry in `files` resolves outside `target_root`.
         This is a containment violation, not a per-file data condition.
     """
-    # bare params[...] raised an uncaught, un-annotated KeyError on a missing
-    # param, inconsistent with the descriptive-ValueError contract tree/
-    # file_index already use in this same op family.
     target_root = params.get("target_root")
     if not target_root:
         raise ValueError("cartography.symbols requires param: target_root")
@@ -386,26 +293,6 @@ def _cartography_symbols(params: dict, repo_root: Optional[Path] = None) -> dict
     if not files:
         raise ValueError("cartography.symbols requires param: files")
     emit = bool(params.get("emit", False))
-    # run_id is required ONLY when emit is truthy, and this is a deliberate
-    # divergence from cartography.chunk_table's unconditional run_id.
-    #
-    # Negative spec: do NOT "restore" the unconditional form for symmetry with
-    # chunk_table. That op introduced run_id with no pre-existing callers to
-    # break; this one has them, in two sibling repos, whose working invocation
-    # passes exactly {target_root, files}. Requiring run_id on the
-    # compute-only path breaks that call for every existing consumer and
-    # contradicts this plan's own AC1 (the default path is unchanged) at the
-    # param layer rather than the reply layer.
-    #
-    # Both run_id rejections raise `CallerFacingValidationError`, not a bare
-    # `ValueError`: `ipc.py::_handler_exception_error` preserves an exception's
-    # own message only when it carries the `caller_facing_validation` marker,
-    # and reduces every unclassified `ValueError` to
-    # `-32603 Internal error: ValueError`. A cross-repo caller who omits
-    # `run_id` on an emitting call would otherwise get a generic envelope with
-    # no indication of which param is wrong -- the precise failure that class
-    # was introduced to close. It subclasses `ValueError`, so direct-call sites
-    # and `pytest.raises(ValueError, ...)` are unaffected.
     run_id = params.get("run_id")
     if emit:
         if not isinstance(run_id, str) or not run_id:
@@ -417,20 +304,8 @@ def _cartography_symbols(params: dict, repo_root: Optional[Path] = None) -> dict
             raise CallerFacingValidationError(
                 f"cartography.symbols: run_id is not a safe path segment: {run_id!r}"
             )
-    # substrate-b-wave) — guard target_root at the handler boundary, mirroring
-    # cartography.tree/file_index, so a malformed root is rejected up front
-    # (descriptive PathEscapeError) rather than surfacing incidentally, deep
-    # inside the first file's per-file path_guard call.
     guarded_root = path_guard(target_root, ".")
 
-    # Three-way partition, resolved BEFORE any adapter call: `.py` -> the AST
-    # path; an extension the foreign-extraction seam claims -> the adapter;
-    # everything else -> recorded in-band as unsupported without ever
-    # calling `build_foreign_symbols` (chunk C3-fix). Calling the adapter
-    # (and therefore `classify_foreign_symbol_coverage`) only when a request
-    # actually asks for an extraction-eligible file keeps a request with no
-    # such files from ever raising a coverage fault, even when the
-    # `symbol_extract` dependency is absent.
     claimed = claimed_extensions() - {".py"}
 
     rel_by_request: Dict[str, str] = {}
@@ -477,13 +352,6 @@ def _cartography_symbols(params: dict, repo_root: Optional[Path] = None) -> dict
         findings = classify_foreign_symbol_coverage(foreign_result, census)
 
         if "unavailable" in foreign_result:
-            # Graceful degradation (chunk C4a): the extractor is simply not
-            # installed — an expected, benign configuration, not a fault.
-            # Every requested extraction-eligible file gets an in-band entry
-            # that is unmistakably "not attempted", never an
-            # empty-but-successful shape (no "classes"/"functions"/
-            # "constants" keys at all — an empty list would read as a
-            # successful-but-empty extraction).
             coverage_note = (
                 "non-Python symbol coverage was not attempted: "
                 f"{foreign_result['unavailable']}; {_SYMBOL_EXTRACT_REMEDY}"
@@ -503,9 +371,6 @@ def _cartography_symbols(params: dict, repo_root: Optional[Path] = None) -> dict
                     f"language={finding['language']!r}): {finding['detail']}"
                     for finding in loud
                 )
-                # keep raising loud (never soften to a return), but carry the
-                # already-computed .py/unsupported results so a catching
-                # caller doesn't lose unrelated, independently-computed work.
                 partial_reply: Dict[str, Any] = {
                     "files": [
                         entries_by_rel[rel_by_request[f]]
@@ -518,19 +383,11 @@ def _cartography_symbols(params: dict, repo_root: Optional[Path] = None) -> dict
                     partial_reply,
                 )
 
-            # AC5: captured here (not merely threaded through per-file
-            # entries) so an emitting call's artifact carries the top-level
-            # completeness/coverage surface (unmapped_kinds census) the
-            # inline reply's per-file `other_symbols` entries only imply.
             completeness = foreign_result.get("completeness")
             languages = foreign_result.get("languages", {})
             for entry in foreign_result["files"]:
                 ext = Path(entry["path"]).suffix
                 if languages.get(ext) is None:
-                    # merge rather than overwrite so a pre-existing per-file
-                    # "error" diagnostic on this entry survives the
-                    # unsupported re-marking instead of being silently
-                    # discarded.
                     entries_by_rel[entry["path"]] = {
                         "path": entry["path"],
                         "unsupported": True,
@@ -545,13 +402,8 @@ def _cartography_symbols(params: dict, repo_root: Optional[Path] = None) -> dict
         reply["coverage_note"] = coverage_note
 
     if not emit:
-        # AC1, AC7: no file opened, no disk write — reply stays exactly the
-        # shape above, byte-identical to every pre-emit-param run.
         return reply
 
-    # `run_id` is validated as a non-empty safe_id in the `if emit:` branch
-    # above; rebind it as a `str` so the emit-only call sites below carry the
-    # narrowed type rather than the `str | None` the params dict yields.
     emit_run_id: str = str(run_id)
     artifact = build_symbols_artifact(
         guarded_root,

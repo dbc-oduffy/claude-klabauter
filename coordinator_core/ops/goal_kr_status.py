@@ -93,8 +93,6 @@ from typing import List, NamedTuple, Optional
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import locked_rmw
 
-# Value written into a written/rewritten key_results[<id>].status_source line —
-# identifies THIS op as the writer (see module docstring "Write provenance").
 STATUS_SOURCE = "goal.set_kr_status"
 
 MAX_LOCK_TIMEOUT_SECS: float = 2.0
@@ -109,33 +107,17 @@ def _utc_now_stamp() -> str:
     """UTC ISO-8601 timestamp, seconds precision, 'Z' suffix (status_set_at shape)."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-# ---------------------------------------------------------------------------
-# Line-shape regexes — same shapes as coordinator_core.goals.reassess_krs, kept
-# independent (not imported) so this module's parsing cannot silently drift if
-# reassess_krs's regexes are ever tightened/loosened for its own purposes.
-# ---------------------------------------------------------------------------
 
-# New-KR-list-item line: "  - " (any leading whitespace, dash, required whitespace).
 _KR_ITEM_RE = re.compile(r"^[ \t]*-[ \t]+")
-# Indented "field: value" line inside an active KR entry.
 _KR_FIELD_RE = re.compile(r"^([ \t]+)([a-z_]+):[ \t]*(.*)$")
-# Inline "id: value" on the dash line itself, after stripping through the
-# first "- " occurrence (mirrors reassess_krs's `${line#*- }` shortest-prefix strip).
 _INLINE_ID_RE = re.compile(r"^id:[ \t]*(.*)$")
 
 
 def _line_is_top_level_key(line: str) -> bool:
-    """True for a line starting a new top-level YAML key (no leading whitespace)."""
     return bool(re.match(r"^[a-zA-Z_]", line)) and not re.match(r"^[ \t]", line)
 
 
 def _find_key_results_start(lines: List[str]) -> Optional[int]:
-    """Return the index of the FIRST line after ``key_results:`` header, or None.
-
-    Port of reassess_krs.extract_key_results's opening condition: any line
-    starting with "key_results:" (awk-style prefix match, not exact-line) opens
-    the block; the header line itself is not part of the block.
-    """
     for i, line in enumerate(lines):
         if line == "key_results:" or line.startswith("key_results:"):
             return i + 1
@@ -143,14 +125,6 @@ def _find_key_results_start(lines: List[str]) -> Optional[int]:
 
 
 class _KREntry(NamedTuple):
-    """One indexed ``key_results[]`` list item.
-
-    ``status_idx`` is None when the entry has no ``status:`` field — callers
-    must fail loud on that case (see module negative-spec: this op never adds
-    a *new* ``status:`` field to an entry that lacks one). ``status_source_idx``
-    / ``status_set_at_idx`` are None when the corresponding provenance sibling
-    is absent — that is NOT a fail-loud case; the write path creates it.
-    """
 
     kr_id: str
     status_idx: Optional[int]
@@ -159,9 +133,6 @@ class _KREntry(NamedTuple):
 
 
 def _index_kr_entries(lines: List[str], start: int) -> List[_KREntry]:
-    """Walk the key_results[] block starting at *start*, returning one
-    ``_KREntry`` per "- " list item.
-    """
     entries: List[_KREntry] = []
     in_entry = False
     cur_id = ""
@@ -215,21 +186,6 @@ def _index_kr_entries(lines: List[str], start: int) -> List[_KREntry]:
 
 
 def _apply_kr_status(old_text: str, kr_id: str, new_status: str) -> str:
-    """Pure mutate step: rewrite ``key_results[<kr_id>].status`` in *old_text*,
-    stamping write provenance (``status_source``/``status_set_at``) alongside it.
-
-    Raises ValueError (never a silent no-op) when:
-      - the document has no ``key_results:`` block at all,
-      - no entry in that block matches ``kr_id``,
-      - the matched entry has no existing ``status:`` line to rewrite.
-
-    Preserves every other byte of the document — only the matched status
-    line's value is replaced (indentation kept exactly as found), and the
-    matched entry's ``status_source``/``status_set_at`` sibling lines are
-    created (immediately after the ``status:`` line, same indentation) or
-    updated in place if already present. Idempotent: a second call rewrites
-    the existing provenance lines rather than appending duplicates.
-    """
     had_trailing_newline = old_text.endswith("\n")
     lines = old_text.splitlines()
 
@@ -253,13 +209,10 @@ def _apply_kr_status(old_text: str, kr_id: str, new_status: str) -> str:
         )
 
     m = _KR_FIELD_RE.match(lines[match.status_idx])
-    assert m is not None  # status_idx was only ever set from a line that matched
+    assert m is not None
     indent = m.group(1)
     now = _utc_now_stamp()
 
-    # Update in-place first (original indices are still valid — no insertion
-    # has happened yet), then insert any missing sibling(s) immediately after
-    # the status: line, source before set_at, preserving stable field order.
     lines[match.status_idx] = f"{indent}status: {new_status}"
     if match.status_source_idx is not None:
         lines[match.status_source_idx] = f"{indent}status_source: {STATUS_SOURCE}"
@@ -278,11 +231,6 @@ def _apply_kr_status(old_text: str, kr_id: str, new_status: str) -> str:
     if had_trailing_newline:
         new_text += "\n"
     return new_text
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 
 def set_kr_status(
@@ -342,9 +290,7 @@ def set_kr_status(
     return {"goal_file": str(goal_file), "kr_id": kr_id, "status": status}
 
 
-# ---------------------------------------------------------------------------
 # JSON-RPC handler
-# ---------------------------------------------------------------------------
 
 
 @register_op("goal.set_kr_status")

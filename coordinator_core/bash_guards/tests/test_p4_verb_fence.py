@@ -29,10 +29,7 @@ import pytest
 from coordinator_core.bash_guards import p4_verb_fence
 from coordinator_core.p4 import runner as p4_runner
 
-#: Captured before any test monkeypatches `p4_verb_fence._is_p4_gated` --
 #: the two "real filesystem walk" cases below need the UNPATCHED function,
-#: since the autouse `_p4_gated` fixture below patches that same name for
-#: every other test in this module.
 _REAL_IS_P4_GATED = p4_verb_fence._is_p4_gated
 
 
@@ -47,16 +44,11 @@ def _payload(cmd: str, tool_name: str = "Bash", cwd: str = "/repo") -> dict:
 
 @pytest.fixture(autouse=True)
 def _p4_gated(monkeypatch):
-    """Every test in this module runs as if `cwd` resolved to a p4-marker
-    repo, unless a test overrides `_is_p4_gated` itself (the git-only-repo
-    class below)."""
     monkeypatch.setattr(p4_verb_fence, "_is_p4_gated", lambda cwd: True)
 
 
 @pytest.fixture(autouse=True)
 def _no_spawns(monkeypatch):
-    """Zero-spawn assertion: a runner spy that raises if the one p4 spawn
-    helper is EVER invoked while a command runs through `check()`."""
 
     def _spy(*args, **kwargs):
         raise AssertionError("p4_verb_fence.check() spawned a process via p4.runner.run")
@@ -82,8 +74,6 @@ class TestSubmitDenied:
         assert "agents do not submit" in env["permissionDecisionReason"]
 
     def test_flag_interposed_submit_denied(self):
-        # Example-Game-Repo's spike broke a phrase matcher on exactly this shape --
-        # the verb is never adjacent to the binary.
         env = _deny("p4.exe -p ssl:p4.example.com:1666 -u agent -c agent-ws submit -c 41")
         assert "agents do not submit" in env["permissionDecisionReason"]
 
@@ -239,8 +229,6 @@ class TestGitOnlyRepoPaysNothing:
         _allow("git clean -fdx")
 
     def test_marker_gate_is_a_real_filesystem_walk(self, tmp_path):
-        # Exercises `_find_repo_root_no_spawn` + `is_p4_repo` for real,
-        # rather than through the autouse monkeypatch (see
         # `_REAL_IS_P4_GATED` above).
         result = _REAL_IS_P4_GATED(str(tmp_path))
         assert result is False
@@ -255,8 +243,6 @@ class TestGitOnlyRepoPaysNothing:
 
 
 class TestReopenAdoption:
-    """D4b's own gain -- `reopen -c <CL> <paths>` allowed, form only (no CL
-    number validated against the session's own, same as edit/add/delete/move)."""
 
     def test_reopen_with_cl_and_path_allowed(self):
         _allow("p4 reopen -c 101 -- Content/Foo.uasset")
@@ -273,12 +259,6 @@ class TestReopenAdoption:
 
 
 class TestNestedShellInterpreterDenied:
-    """`bash -c`/`sh -c`/
-    `pwsh -Command`/`powershell -Command` were not classified at all and
-    fell through to allow. Denied now, conservatively, only when the inner
-    string plausibly names a surface this fence governs; a non-p4 nested
-    command stays allowed so this cannot become a blanket nested-shell
-    deny."""
 
     def test_bash_c_p4_submit_denied(self):
         _deny('bash -c "p4 submit -d x"')
@@ -309,9 +289,6 @@ class TestNestedShellInterpreterDenied:
 
 
 class TestChangeScoped:
-    """`p4 change` was allowed
-    unconditionally; scoped to `-o`/`-i` (the session-changelist forms),
-    same pattern as `reopen`/`shelve`."""
 
     def test_change_dash_o_allowed(self):
         _allow("p4 change -o")

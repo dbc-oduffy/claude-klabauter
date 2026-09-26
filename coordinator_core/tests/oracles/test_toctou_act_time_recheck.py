@@ -31,8 +31,6 @@ from unittest import mock
 from coordinator_core.ops import distill_apply_disposal as _dad
 from coordinator_core.ops.fleet import _findings_reap as _reap
 
-#: Filenames processed in this fixed order by every test below -- the middle one is the survivor
-#: whose tracked-status flips between classification and its own act-time recheck.
 _SAFE_BEFORE = "safe-before.md"
 _FLIPPED = "flipped.md"
 _SAFE_AFTER = "safe-after.md"
@@ -40,14 +38,6 @@ _ORDER = (_SAFE_BEFORE, _FLIPPED, _SAFE_AFTER)
 
 
 def _make_probes(worktree_root: Path) -> Tuple[List[Tuple[str, str]], object, object]:
-    """Build a (call_log, fake_is_tracked, fake_is_tracked_batch) triple.
-
-    `fake_is_tracked_batch` reports every survivor "untracked" (the classification pass never
-    sees the flip -- it only becomes visible at act time). `fake_is_tracked` reports "tracked"
-    for `_FLIPPED` and "untracked" for everything else, and appends every probe to `call_log`
-    under the SAME key `Path.unlink` is patched to append under below, so the two interleave in
-    call order regardless of which function patches which name.
-    """
     call_log: List[Tuple[str, str]] = []
 
     async def fake_is_tracked_batch(_worktree_root: Path, paths: List[Path]) -> Dict[Path, str]:
@@ -137,8 +127,6 @@ def test_apply_disposal_manifest_recheck_fires_adjacent_to_its_own_unlink(tmp_pa
     )
 
     async def fake_delete_tracked_and_append_log(*_args, **_kwargs):
-        # No tracked_rows in this fixture -- the tracked-commit path is out of scope for the
-        # recheck property under test, so it is stubbed rather than stood up with a real repo.
         return [], [], [], []
 
     manifest = {"run_id": "run-toctou-oracle"}
@@ -174,10 +162,6 @@ def test_apply_disposal_manifest_recheck_fires_adjacent_to_its_own_unlink(tmp_pa
 
 
 class _AsyncNoop:
-    """Callable stand-in for `verify_drain_ordering` -- an async no-op, since
-    `mock.patch.object(..., return_value=None)` on an `async def` target yields a coroutine
-    function whose CALL returns `None` directly rather than an awaitable, which the `await` in
-    `apply_disposal_manifest` rejects."""
 
     def __call__(self, *args, **kwargs):
         async def _coro():

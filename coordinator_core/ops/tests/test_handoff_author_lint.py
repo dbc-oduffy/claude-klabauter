@@ -1,19 +1,3 @@
-"""test_handoff_author_lint.py — `handoff.author_lint`, the author-time catch
-for hand-typed values whose real gate fires much later, on someone else.
-
-Covers the four finding codes and, as importantly, the four NON-findings — a
-lint that fires on a freshly scaffolded, correctly empty body would be a new
-gate rather than an earlier one, and the author would learn to ignore it.
-
-Discharges AC-4 and AC-5 of
-`state/handoffs/2026-08-21-handoffs-and-spinoffs-minimal-for-hand-rolling.md`.
-
-FAST TIER: pure text in, findings out. Every case builds a file in a tmpdir;
-no git spawn, no engine socket, no live corpus.
-
-Run:
-    python3 -m pytest coordinator_core/ops/tests/test_handoff_author_lint.py -v
-"""
 from __future__ import annotations
 
 import tempfile
@@ -55,9 +39,6 @@ def _lint(text: str, *, name: str = "2026-08-21-x.md") -> dict:
 
 
 def _worktree(root: Path) -> Path:
-    """`main_worktree_root` refuses to guess: it accepts a git common dir or a
-    directory carrying a `.git` entry. A bare tmpdir is neither, so every case
-    here plants an empty `.git` marker — no `git init`, no spawn."""
     (root / ".git").mkdir(exist_ok=True)
     return root
 
@@ -73,14 +54,9 @@ class CleanBodyTest(unittest.TestCase):
         self.assertTrue(result["clean"])
 
     def test_a_freshly_scaffolded_empty_ledger_is_not_a_finding(self):
-        """A handoff is born with an empty ledger block — the row is appended
-        at `/handoff` or `/workstream-complete`. Firing here would train the
-        author to ignore the lint."""
         self.assertNotIn("LEDGER_ROW_UNPARSEABLE", _codes(_lint(_doc())))
 
     def test_absent_acceptance_criteria_section_is_not_a_finding(self):
-        """Not every handoff kind owns an AC section; requiring one would be a
-        NEW gate, which this op's negative-spec forbids."""
         text = "---\ntitle: t\nsummary: s\n---\n\n## What this covers\n\nprose\n"
         self.assertEqual(_codes(_lint(text)), [])
 
@@ -98,9 +74,6 @@ class AcceptanceCriteriaTest(unittest.TestCase):
         self.assertEqual(result["exit_code"], 1)
 
     def test_the_hint_names_the_fix(self):
-        """`docs/wiki/guard-messaging.md` § Register — a finding that does not
-        name the alternative leaves the author exactly where the silent gate
-        did."""
         result = _lint(_doc(ac="- prose bullet"))
         hint = next(
             f["hint"] for f in result["findings"] if f["code"] == "AC_NO_CHECKBOXES"
@@ -113,8 +86,6 @@ class AcceptanceCriteriaTest(unittest.TestCase):
 
 class SessionLedgerTest(unittest.TestCase):
     def test_a_duration_row_is_reported(self):
-        """The 2026-08-19 production instance verbatim: `0.3d` against a `\\d+`
-        COUNT field. `aggregate` drops it silently and the chain sums to zero."""
         rows = "2026-08-19 | abc123 | S | 0.3d / 0o | Wrote a duration\n"
         result = _lint(_doc(ledger_rows=rows))
         self.assertIn("LEDGER_ROW_UNPARSEABLE", _codes(result))
@@ -178,9 +149,6 @@ class RefusalTest(unittest.TestCase):
 
 
 class LedgerGrammarOwnershipTest(unittest.TestCase):
-    """`unparseable_ledger_rows` lives beside the parser that defines what gets
-    summed, so emitter, parser, and this lint cannot drift into three
-    grammars."""
 
     def test_comments_blanks_and_table_rows_are_not_rejections(self):
         text = (
@@ -197,10 +165,6 @@ class LedgerGrammarOwnershipTest(unittest.TestCase):
 
 
 class LintTextSeamTest(unittest.TestCase):
-    """`lint_text` is the in-process entry point a PreToolUse guard calls on
-    a body it constructed itself, with no path resolution and no I/O — see
-    module docstring's Entry points section. These cases drive it directly,
-    one per finding code plus a clean body and a no-frontmatter body."""
 
     def test_clean_body_is_clean(self):
         self.assertEqual(lint_text(_doc()), [])
@@ -226,9 +190,6 @@ class LintTextSeamTest(unittest.TestCase):
         self.assertIn("LEDGER_ROW_UNPARSEABLE", codes)
 
     def test_body_with_no_frontmatter_still_runs_body_grammars(self):
-        """No `---` frontmatter block at all — the body grammars (checkbox,
-        ledger) still run against the whole text; only the summary grammar
-        has nothing to read."""
         text = (
             "## Acceptance criteria\n\n"
             "- prose bullet\n\n"

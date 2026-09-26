@@ -57,21 +57,6 @@ import sys
 
 
 def registry_get(key: str) -> Optional[str]:
-    """Deferred delegate to `coordinator_core.machine_resolver.registry_get`.
-
-    The delegated function is a TOML reader — an env-override probe, then
-    `registry.local.toml`, then `registry.toml`. Its own module additionally
-    houses `compute_machine` (`socket.gethostname`) and `compute_contributor`
-    (a git shell-out), so it pulls `socket` and `subprocess` at module scope.
-    Neither is on this module's path, and importing them here made the check
-    that decides WHETHER to pay the warm import cost pay one itself — the
-    defect class `ipc.py`'s own `is_warm_enabled()` comment names.
-
-    Negative-spec: this stays a module-level NAME, not a bare function-scope
-    import at the call site. `warm/tests/test_warm_settings.py` monkeypatches
-    `settings.registry_get` as a module attribute throughout; a call-site
-    import removes that seam and the stubs silently stop applying.
-    """
     from coordinator_core.machine_resolver import registry_get as _registry_get
 
     return _registry_get(key)
@@ -88,16 +73,10 @@ _FALSY = frozenset({"0", "false", "no", "off"})
 _cache_lock = threading.Lock()
 _cached_result: Optional[bool] = None
 
-#: Once-per-process announcement flag -- mirrors `warm.client.
-#: _log_live_tree_cold_once`'s shape exactly (a module-scope bool, set once,
-#: never reset outside a test) for the identical reason that function
-#: states: this is the permanent condition of a whole process population,
-#: not a per-call fact, so a per-call diagnostic would be pure noise.
 _warm_disabled_announced = False
 
 
 def _reset_warm_disabled_announcement_for_test() -> None:
-    """Test-only seam: clear the once-per-process announcement flag."""
     global _warm_disabled_announced
     _warm_disabled_announced = False
 

@@ -60,11 +60,6 @@ def _ls_files_mode(repo, path):
     return out.split()[0]
 
 
-# ---------------------------------------------------------------------------
-# EXEC BIT -- stage_paths_in_process must read the index's existing mode for
-# a tracked path, never re-derive it from a stat.
-
-
 def test_stage_paths_in_process_preserves_existing_exec_mode(tmp_path):
     repo = _repo(tmp_path)
     (repo / "run.sh").write_bytes(b"#!/bin/sh\necho one\n")
@@ -73,7 +68,6 @@ def test_stage_paths_in_process_preserves_existing_exec_mode(tmp_path):
     _git(repo, "commit", "-q", "-m", "seed exec")
     assert _ls_files_mode(repo, "run.sh") == "100755"
 
-    # Edit the worktree content and re-stage -- the mode must survive.
     (repo / "run.sh").write_bytes(b"#!/bin/sh\necho two\n")
     staged = gcommit.stage_paths_in_process(repo, ["run.sh"])
 
@@ -85,9 +79,6 @@ def test_stage_paths_in_process_preserves_existing_exec_mode(tmp_path):
 
 
 def test_stage_paths_in_process_new_file_still_defaults_to_100644(tmp_path):
-    """A genuinely new (untracked) path has no index entry to read, so the
-    stat-based `_mode_for` default still applies -- the fix narrows to
-    TRACKED paths, it does not remove the fallback for new ones."""
     repo = _repo(tmp_path)
     (repo / "new.txt").write_text("new\n", encoding="utf-8", newline="\n")
 
@@ -98,9 +89,6 @@ def test_stage_paths_in_process_new_file_still_defaults_to_100644(tmp_path):
 
 
 def test_stage_paths_in_process_preserves_exec_mode_via_fallback_leg(tmp_path):
-    """The same invariant on the `blob_fallback` resolution leg (a CR-bearing
-    attribute-pinned path routed through the fallback) -- mode still comes
-    from the index, not `_mode_for`."""
     repo = _repo(tmp_path)
     (repo / ".gitattributes").write_text(
         "*.cmd text eol=crlf\n", encoding="utf-8", newline="\n"
@@ -130,9 +118,7 @@ def test_stage_paths_in_process_preserves_exec_mode_via_fallback_leg(tmp_path):
     assert _ls_files_mode(repo, "run.cmd") == "100755"
 
 
-# ---------------------------------------------------------------------------
 # EOL FALLBACK -- only CR bytes under a text/eol attribute pin reach the
-# fallback; `-text` and CR-free text/eol content cost zero.
 
 
 def _attrs_repo(tmp_path):
@@ -179,8 +165,6 @@ def test_cr_bearing_eol_crlf_pin_routes_through_fallback(tmp_path):
 
 
 def test_text_eol_lf_cr_free_content_never_calls_fallback(tmp_path):
-    """`*.sh text eol=lf` with LF-only content: nothing to normalize, so it
-    must cost zero -- the fallback must never be called for it."""
     repo = _attrs_repo(tmp_path)
     (repo / "run.sh").write_text("echo one\necho two\n", encoding="utf-8", newline="\n")
 
@@ -195,8 +179,6 @@ def test_text_eol_lf_cr_free_content_never_calls_fallback(tmp_path):
 
 
 def test_binary_pin_never_calls_fallback_even_with_cr_bytes(tmp_path):
-    """`-text` never converts, so CR bytes are irrelevant to it -- always
-    zero cost, raw bytes committed verbatim."""
     repo = _attrs_repo(tmp_path)
     (repo / "_goldens").mkdir()
     (repo / "_goldens" / "fixture.bin").write_bytes(b"line one\r\nline two\r\n")
@@ -215,27 +197,8 @@ def test_binary_pin_never_calls_fallback_even_with_cr_bytes(tmp_path):
     assert committed == expected
 
 
-# ---------------------------------------------------------------------------
 # UNSET-ATTRIBUTE `core.autocrlf` SURFACE -- `767079e6e` deleted ~10 lines of
-# code that had been unconditionally shadowed by an earlier, unconditional
-# `return write_object(...)` in `_worktree_blob`'s pre-image. Both call sites
-# of `_autocrlf_checkin_normalize` sat beneath that dead return, so neither
-# had ever executed in production: every CR-bearing, unattributed path was
-# refused to the spawning fallback regardless of `core.autocrlf`. Removing
-# the shadow made the `_repo_autocrlf_true` branch live, and
-# `core.autocrlf=true` -- the majority Windows shape on this box -- is
-# exactly the path whose behaviour flipped from REFUSE to
 # NORMALIZE-IN-PROCESS. Nothing before this group asserted that flip, or
-# proved the normalizer's output against real git for the shapes most likely
-# to defeat a hand-rolled CRLF->LF pass: a lone CR that is not part of a line
-# ending, a CR sitting at EOF with nothing after it, and a CRLF pair living
-# inside otherwise-binary (NUL-bearing) content.
-#
-# The oracle is `git hash-object -w --path <p> -- <p>` itself -- the exact
-# invocation `git add` uses to decide a blob's checkin-converted sha. An
-# expected-sha constant would only re-encode this module's own assumption
-# about what git does; asking real git is the only differential check that
-# can catch this module disagreeing with it.
 
 
 def _autocrlf_repo(tmp_path, value):
@@ -262,11 +225,6 @@ def _oracle_blob(repo, rel):
     ],
 )
 def test_unattributed_cr_content_autocrlf_true_matches_oracle(tmp_path, name, content):
-    """No `.gitattributes` pin applies to `<name>.dat` -- disposition is
-    UNSET, so `core.autocrlf` alone decides, and with it `true` this is the
-    branch `767079e6e` made reachable for the first time. Every shape here
-    must land the SAME blob sha `git hash-object -w --path=<p>` would
-    produce, not merely "no exception"."""
     repo = _autocrlf_repo(tmp_path, "true")
     rel = f"{name}.dat"
     (repo / rel).write_bytes(content)
@@ -283,11 +241,6 @@ def test_unattributed_cr_content_autocrlf_true_matches_oracle(tmp_path, name, co
 
 @pytest.mark.parametrize("value", ["input", "false"])
 def test_unattributed_cr_content_autocrlf_non_true_refuses_without_fallback(tmp_path, value):
-    """`_repo_autocrlf_true` answers False for both `input` and `false` (and
-    for unset -- see below), so this module refuses rather than guesses,
-    even though `input`'s checkin conversion is byte-identical to `true`'s
-    (see the module-level TODO note below) -- this test locks the CURRENT
-    refusal, not the theoretically-reachable optimization."""
     repo = _autocrlf_repo(tmp_path, value)
     rel = "crlf.dat"
     (repo / rel).write_bytes(b"line one\r\nline two\r\n")
@@ -319,38 +272,11 @@ def test_unattributed_cr_content_autocrlf_unset_refuses_without_fallback(tmp_pat
         gcommit.commit_paths(repo, [rel], "no fallback")
 
 
-# TODO (do not implement here): `core.autocrlf=input`'s CHECKIN conversion
-# is byte-identical to `true`'s -- the peer's corpus measured both producing
-# the same blob sha (`814f4a422927...`) over the same content set. The two
 # settings differ only on CHECKOUT (whether the working tree gets CRLF back),
-# which `_worktree_blob` never performs. That means the `input` refusal above
-# pays a `blob_fallback` spawn for a conversion this module could already
-# compute for free by routing `input` through the same
-# `_autocrlf_checkin_normalize` branch as `true`. Left unimplemented here:
-# this dispatch is scoped to test coverage only, and `commit.py` is
-# explicitly out of scope for this change.
 
 
-# ---------------------------------------------------------------------------
 # POST-REF SPLICE FAILURE -- the commit LANDED and must not be retried.
-#
-# `commit_paths` splices the index AFTER the ref swap by design (invariant 3:
-# "an index that matches a commit which never landed is the same lie in the
-# other direction"). A peer holding `.git/index.lock` for the width of that
-# splice therefore lands with real work in history -- routine at the
-# ~50-session load norm, not exotic.
-#
-# It escaped as a bare `IndexWriteLockBusy`, whose own docstring promises the
 # OPPOSITE of what is true at that line: "raised BEFORE any bytes reach
-# `.git/index` and before the ref moves, so retrying is correct there". Every
-# `commit_paths` caller in the tree catches `(CommitRefused, FilterUnsupported)`
-# and nothing else, so it surfaced as an internal error for a landed commit --
-# and the honest response to an internal error is a retry, which commits the
-# same work twice.
-#
-# `IndexStaleAfterCommit` was written for this outcome and had no raise site.
-# Source: cross-repo/inbox/2026-09-01-example-retrieval-repo-em-ceremony-engine-defects-
-# second-repo-confirmation.md (the memo.send face of it).
 
 
 def test_lock_held_during_splice_raises_stale_not_lock_busy(tmp_path):
@@ -363,8 +289,6 @@ def test_lock_held_during_splice_raises_stale_not_lock_busy(tmp_path):
     (repo / "seed.txt").write_text("changed\n", encoding="utf-8", newline="\n")
     head_before = _git(repo, "rev-parse", "HEAD").stdout.strip()
 
-    # Stand in for a peer mid-write. The lock is taken before the call, so it
-    # is held across the post-ref splice.
     (repo / ".git" / "index.lock").write_text("", encoding="utf-8")
 
     with pytest.raises(IndexStaleAfterCommit) as caught:
@@ -386,8 +310,6 @@ def test_lock_held_during_splice_raises_stale_not_lock_busy(tmp_path):
 
 
 def test_stale_after_commit_message_forbids_the_retry(tmp_path):
-    """The message is the whole remedy here: a caller that retries commits the
-    same work twice, which is the one thing this outcome must prevent."""
     from coordinator_core.git.index_write import IndexStaleAfterCommit
 
     repo = _repo(tmp_path)
@@ -403,13 +325,10 @@ def test_stale_after_commit_message_forbids_the_retry(tmp_path):
 
 
 def test_ordinary_commit_still_splices_and_raises_nothing(tmp_path):
-    """The unchanged path: no lock, so the splice lands and the index is
-    current. Asserted so the wrap above cannot quietly swallow the success."""
     repo = _repo(tmp_path)
     (repo / "seed.txt").write_text("changed\n", encoding="utf-8", newline="\n")
 
     outcome = gcommit.commit_paths(repo, ["seed.txt"], "second\n")
 
     assert outcome.sha == _git(repo, "rev-parse", "HEAD").stdout.strip()
-    # A current index reports nothing staged and nothing dirty for this path.
     assert _git(repo, "status", "--porcelain", "--", "seed.txt").stdout.strip() == ""

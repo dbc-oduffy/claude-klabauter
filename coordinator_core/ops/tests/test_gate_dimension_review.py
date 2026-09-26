@@ -47,10 +47,6 @@ def test_review_unavailable_without_repo_root() -> None:
     assert "repo_root" in result.detail
 
 
-# 40-hex or the parser treats it as a touched path, not a commit header. An
-# abbreviated stub sha makes every test below pass vacuously via the
-# "no commits touch changed_files" branch -- which is what happened when the
-# pathspec moved out of argv and these stubs were not updated with it.
 _SHA_A = "a" * 40
 _SHA_B = "b" * 40
 
@@ -190,11 +186,6 @@ def test_review_cost_is_invariant_in_changed_files_above_argv_cap(monkeypatch) -
 
     def _fake_run_git(args, cwd):
         calls.append(args)
-        # `git log --name-only -z` shape: NUL-separated records, each a sha
-        # newline-joined to the first of its touched paths. Two commits, one
-        # touching a path the caller asked about and one touching a path it
-        # did not -- so an implementation that credits every commit in the
-        # range regardless of paths fails this test.
         return _log_z(
             (_SHA_A, "some/long/enough/path/to/file_00007.py"),
             (_SHA_B, "some/other/untouched/file.py"),
@@ -252,8 +243,6 @@ def test_review_ignores_commits_touching_no_caller_named_path(monkeypatch) -> No
         ["the/only/path/i/asked/about.py"], "abc..HEAD", "/repo"
     )
 
-    # No commit touches the caller's path, so nothing needs a review stamp --
-    # PASS despite the reviewed-set being empty.
     assert result.verdict is Verdict.PASS
     assert "no commits" in result.detail
 
@@ -304,11 +293,6 @@ def test_reap_findings_scope_excludes_json_trail_records() -> None:
     assert review_trail_dir("repo") == os.path.join(
         "repo", ".coordinator-local", "review-trail"
     )
-    # scan_findings must join "findings" onto review_trail_dir()'s result --
-    # never point directly at the review-trail root (the *.json record
-    # corpus) or any other path. Pinned against the function's own source
-    # rather than a standalone constant, so a future rewrite that drops the
-    # "findings" join fails this test instead of silently widening scope.
     source = inspect.getsource(findings_reap.scan_findings)
     assert 'review_trail_dir(str(worktree_root))) / "findings"' in source, (
         "scan_findings must scope its walk to the findings/ subdir under "
@@ -372,13 +356,6 @@ def _git(args: "List[str]", cwd: Path) -> subprocess.CompletedProcess:
         encoding="utf-8",
         check=True,
         # ONE creationflags source, not two. `_CREATIONFLAGS` IS
-        # `no_console_creationflags()` (gate_dimension_review.py:122), so
-        # spreading both passed the same keyword twice. On POSIX both spread
-        # to `{}` and the duplicate is invisible; on Windows they carry
-        # `creationflags` and every test using this helper died with
-        # `TypeError: subprocess.run() got multiple values for keyword
-        # argument 'creationflags'` -- a Windows-only red in a repo where
-        # Windows is first-class.
         **gate_dimension_review._CREATIONFLAGS,
     )
 
@@ -429,12 +406,6 @@ def test_review_against_real_git_covers_merge_and_hex_named_path(tmp_path) -> No
     hex_commit_sha = _git(["rev-parse", "HEAD"], repo).stdout.strip()
 
     changed_files = ["normal_file.py", "feature.py", hex_name, "other.py"]
-    # normal_sha itself is the range's lower bound and excluded by `git log
-    # <base>..HEAD`'s own exclusivity. `feature_sha` reaches the log both
-    # directly (plain `git log` traverses all ancestors, not just
-    # first-parent) and via merge_sha's own first-parent diff crediting
-    # feature.py -- either way it, merge_sha, and hex_commit_sha are the
-    # three in-range commits touching changed_files.
     all_covered = {feature_sha, merge_sha, hex_commit_sha}
 
     orig_read_reviewed_set = gate_dimension_review.read_reviewed_set
@@ -481,22 +452,7 @@ def test_seam_run_dimension_uses_registered_review_check(monkeypatch) -> None:
     assert result.verdict is Verdict.PASS
 
 
-# ---------------------------------------------------------------------------
-# Second credit source: the reviewer sidecar receipt.
-#
-# These tests exist because the FIRST source went stale silently. The
-# reviewed-set store is fed only by `state/review-trail/*.json` folded at
-# write time, and that corpus froze when `review_trail.write` lost its last
-# production call site (DR-372, DR-374). Measured in this clone 2026-08-28:
-# the store's newest covered commit sat 486 commits behind HEAD and none of
-# the last 400 commits were members, so this dimension returned FAIL for
-# every recent chain whether or not review had happened.
-#
 # The failure being repaired is a STUCK NEGATIVE, which is why both
-# directions are pinned below. A suite asserting only that unreviewed work
-# still FAILs would pass identically against a credit source that reads
-# nothing at all -- i.e. against the bug.
-# ---------------------------------------------------------------------------
 
 _SESSION = "11112222-3333-4444-5555-666677778888"
 _FSEP = gate_dimension_review._HEADER_FIELD_SEP
@@ -639,15 +595,6 @@ def test_trailerless_header_still_parses_as_a_commit(monkeypatch) -> None:
     assert "1/1" in result.detail
 
 
-# ---------------------------------------------------------------------------
-# Population scoping (C3, docs/plans/2026-09-11-the-merge-gate-proves-
-# receipt-coverage.md, DR-421): a commit joins the population only if at
-# least one of its wanted-and-touched paths is NOT bookkeeping under
-# `coverage._is_bookkeeping_path`. A bookkeeping-only commit is tallied and
-# reported, never silently dropped or silently required.
-# ---------------------------------------------------------------------------
-
-
 def test_review_bookkeeping_only_commit_gives_pass_with_partition_reported(
     monkeypatch,
 ) -> None:
@@ -709,12 +656,6 @@ def test_bookkeeping_path_prefixes_pinned_from_merge_gate_side() -> None:
     assert _BOOKKEEPING_PATH_PREFIXES == ("state/", "archive/", "tasks/", "cross-repo/")
 
 
-# ---------------------------------------------------------------------------
-# AC7 (docs/plans/2026-09-11-the-merge-gate-proves-receipt-coverage.md § C4):
-# the FAIL detail groups uncovered SHAs under their authoring Session-Id.
-# ---------------------------------------------------------------------------
-
-
 def test_fail_detail_groups_uncovered_shas_by_session(monkeypatch) -> None:
     monkeypatch.setattr(
         gate_dimension_review,
@@ -739,7 +680,7 @@ def test_fail_detail_by_session_bounded_to_5_sessions_3_commits(monkeypatch) -> 
     sessions = [f"session-{i}" for i in range(7)]
     for si, session in enumerate(sessions):
         for ci in range(4):
-            sha = f"{si:x}{ci:x}" * 20  # 40-hex
+            sha = f"{si:x}{ci:x}" * 20
             records.append((sha, "2026-08-28T11:00:00+00:00", session, "a.py"))
     monkeypatch.setattr(
         gate_dimension_review, "_run_git", lambda args, cwd: _log_z_full(*records)

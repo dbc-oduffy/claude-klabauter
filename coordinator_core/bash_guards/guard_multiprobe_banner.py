@@ -250,82 +250,31 @@ def _classify_for_dialect(cmd: str, dialect: Optional[Dialect]) -> ShapeClassifi
     """
     return classify_command(cmd, dialect=dialect)
 
-#: Review: code-reviewer -- Finding 5 (nit): vestigial in `bash_guards` --
-#: see `guard_grep_via_bash.py`'s identical comment above `CLASS`/
 #: `MATCHERS`/`PRIORITY` for the full explanation. `dispatch.py` hardcodes
 #: ordering explicitly; this `PRIORITY` governs nothing (it is not unique
-#: either -- `block_worktree_creation` reuses `41`).
 CLASS = "hard-deny"
-#: WIDENED (C6, pln-the-shape-classifier-reaches-a-e743e5 § D6, PM ruling
-#: 2026-08-18). The prior hold here named two conditions: DR-280's rewrite
-#: landing, and `state/bash-guards/known-red.json`'s two
-#: `TestSubagentOutlet` `pending_fix` cells clearing. DR-280 landed
-#: (`b1e2bc932` / `62f66c01a`); the red cells have NOT cleared -- the PM
-#: ruled to widen ahead of that second precondition anyway, accepting the
-#: five-cell debt (across this file and `guard_plumbing_and_loops.py`)
-#: explicitly (AC17) rather than leave the guard unreachable on a
-#: PowerShell payload indefinitely. `guard_plumbing_and_loops.py` is
-#: widened in the same change for the identical reason. Reference by
 #: DIRECT IDENTITY, never a copy or re-wrap -- `test_tool_name_membership.py`
-#: asserts `is`.
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
-#: Escape hatch, read inline at `check()` call time only (F2 discipline --
-#: never hoisted to module scope). Distinct from the sibling rewrite
 #: guard's own `COORDINATOR_ALLOW_MULTIPROBE_BANNER` -- see module
-#: docstring negative-spec.
 _OVERRIDE_ENV = "COORDINATOR_OVERRIDE_MULTIPROBE_BANNER"
 
 _SHAPE_NAME = "multi-probe-banner"
 
 #: Session-scratchpad script filename this guard recommends a SUBAGENT
-#: caller write its batched probe to -- see `_sandbox_script_hint`.
 _SCRATCH_SCRIPT_NAME = "multiprobe.py"
 
 #: POWERSHELL-LEG GENERIC ADVISORY (C6 callee-graph audit,
-#: pln-the-shape-classifier-reaches-a-e743e5 § AC16). `check_multiprobe_
-#: banner_rewrite` (`dispatch_checks.py`, out of this chunk's write scope)
-#: classifies its OWN input with `_shape_classifier.classify_command(cmd)`
-#: -- no `dialect=` argument, so it takes the `Dialect.BASH` default (D1)
-#: and tokenizes via `shlex(posix=True)` regardless of what dialect this
 #: guard was actually invoked under. Before C6 widened `MATCHERS`, `check()`
-#: below only ever ran on a Bash payload, so that internal bash-default was
 #: always correct for the caller's own dialect. Widening `MATCHERS` to
 #: `COMMAND_TOOL_NAMES` makes `check()` reachable on a PowerShell payload
 #: too, and this guard's own `primary.shape is Shape.MULTI_PROBE_BANNER`
-#: gate above is now dialect-aware (`_classify_for_dialect`) -- so a
-#: PowerShell command CAN reach the seam call below with PowerShell syntax
-#: (a here-string, a backtick escape) as `cmd`, which is exactly the
-#: Anti-scope violation ("never feed PowerShell text into the posix
-#: tokenizer") this plan forbids. Probed live (here-string and backtick
-#: cases): `_command_tokenizer.tokenize_full_command` already catches a
-#: `shlex` `ValueError` internally and degrades to `tokens=None` rather
-#: than raising, and no probed case produced a false-positive BASH-shape
-#: match either (`Write-Host` is not `_bt_probe_segment_kind`'s echo/printf
-#: vocabulary) -- so today's blast radius is narrow. It is not zero by
-#: construction, though, and the seam has no PowerShell leg to consult in
-#: the first place (unlike `check_head_tail_plumbing_rewrite`, which DOES
-#: take a `dialect=` parameter): there is nothing this call could confirm
-#: for a PowerShell command even if the tokenizer behaved. `check()` below
-#: therefore gates this call to `Dialect.BASH` explicitly and renders this
 #: fixed, every-platform advisory for the `Dialect.POWERSHELL` leg instead
-#: -- the same "no seam to consult, generic advisory" shape
 #: `guard_plumbing_and_loops.py` already uses for `PIPELINE_FOREACH_OBJECT`
 #: and the bare-glob `FOR_LOOP` fallback, applied here for the identical
-#: reason (AC9: the alternative must be PowerShell-valid; a `python3 -c`
-#: invocation is a subprocess call, not shell syntax, so it runs the same
-#: from a PowerShell prompt).
-#: TRIMMED (C8b): was "a single in-process python3 call batching every
-#: probe, zero per-probe forks" (78 bytes) -- same fact, fewer words.
 _POWERSHELL_BANNER_GENERIC_SUMMARY = "one in-process python3 call, zero per-probe forks"
 def _powershell_banner_generic_example() -> str:
-    """Built at call time via `_mb_python3_invocation()` -- see the sibling
-    grep-via-bash path (`guard_grep_via_bash.py`), which resolves the real
-    interpreter rather than a literal `python3 -c` an operator on a stock
-    Windows box (where `python3` is frequently absent from PATH) cannot
-    run. Resolution is fail-open to `"python3"`, so this degrades to the
-    prior literal wherever it cannot do better."""
     return (
         "%s -c 'import subprocess\\n"
         "print(subprocess.run([\"git\", \"status\", \"--porcelain=v2\", \"--branch\"], "
@@ -335,22 +284,6 @@ def _powershell_banner_generic_example() -> str:
 
 
 def _seam_confirmed_rewrite(result: Optional[Dict[str, Any]]) -> bool:
-    """``True`` only when `check_multiprobe_banner_rewrite`'s return is a
-    genuine ``_allow_rewrite`` (an ``updatedInput.command`` -- a concrete,
-    executable single-process replacement for THIS exact command), never a
-    bare ``_advisory``.
-
-    Identical contract to `guard_plumbing_and_loops._seam_confirmed_
-    rewrite` (see that function's docstring for the full "why" -- the
-    non-``None``-but-not-a-rewrite case is common here too: ANY unrecognized
-    probe segment in the chain makes `check_multiprobe_banner_rewrite`
-    return a bare advisory, per its own docstring). Duplicated rather than
-    imported: this is a five-line dict-shape check, not command parsing --
-    importing it would couple two sibling guard modules over a "private"
-    helper for no reduction in real duplication risk (the shape it checks,
-    the harness hook-envelope contract, is itself the shared, stable
-    surface both modules already depend on via `_hook_envelope`).
-    """
     if not isinstance(result, dict):
         return False
     hso = result.get("hookSpecificOutput", {})
@@ -361,16 +294,6 @@ def _seam_confirmed_rewrite(result: Optional[Dict[str, Any]]) -> bool:
 
 
 def _sandbox_script_hint(git_root: Optional[str], session_id: str) -> str:
-    """`<machinery_root>/subagent-share/<session_id>/multiprobe.py` under
-    `git_root` -- the same session-scratchpad location `bump_foreign_repo_
-    write._sandbox_root_hint` / `bump_outside_repo_write._sandbox_root`
-    already treat as an always-allowed subagent write target, resolved
-    through `machinery_paths.share_dir` (the sole owner of this path shape,
-    per `docs/plans/2026-09-02-state-keeps-the-work-not-the-machinery.md`
-    chunk C3) rather than composed here. Returns ``""`` when either input
-    is empty -- callers degrade to a path-free instruction rather than
-    fabricating one.
-    """
     if not git_root or not session_id:
         return ""
     return str(Path(machinery_paths.share_dir(git_root, session_id)) / _SCRATCH_SCRIPT_NAME)
@@ -401,12 +324,6 @@ def _subagent_script_outlet(
     """
     script_body = ""
     argv: list = []
-    # Every direct `shlex` site in this package inherits the tokenizable ceiling
-    # (`test_command_tokenizer_length_ceiling.py`'s AST gate): `shlex.shlex.read_token`
-    # is quadratic in the longest single token, and this input is a rewrite whose whole
-    # shape is ONE very long `-c` argument. Degrading to the no-body outlet past the
-    # ceiling costs a less specific message; skipping the check re-opens a multi-second
-    # hang on the PreToolUse hot path.
     if not _exceeds_tokenizable_ceiling(rewrite_command):
         try:
             argv = shlex.split(rewrite_command)
@@ -416,11 +333,6 @@ def _subagent_script_outlet(
         script_body = argv[-1]
 
     path_display = script_hint or "<your session scratchpad>/%s" % _SCRATCH_SCRIPT_NAME
-    # 2026-08-06 (C19a, guard-class census, byte-cap pass): trimmed from a
-    # sentence that re-explained WHY `python3 -c` is blocked (the sibling
-    # `block_subagent_destructive_action` guard already says that itself
-    # when hit) -- the offer a subagent can act on is the path + invocation
-    # below; the justification is not the actionable content.
     summary = "a script at `%s`, run as `python3 %s`. %s" % (
         path_display,
         path_display,
@@ -449,21 +361,6 @@ def _outlet_from_seam_result(
     payload: Optional[Dict[str, Any]],
     git_root: Optional[str] = None,
 ) -> Tuple[str, str]:
-    """Render `(outlet_summary, outlet_example)` from `check_multiprobe_
-    banner_rewrite`'s return, for a caller that has ALREADY confirmed (via
-    `_seam_confirmed_rewrite`) that this is a genuine rewrite. Mirrors
-    `guard_plumbing_and_loops._outlet_from_seam_result` for the main-loop
-    leg -- see that function's docstring for why the bypass note is
-    appended explicitly here rather than trusted to already be present in
-    the seam result's own text (the ``updatedInput.command`` branch is a
-    bare rewritten command string with no bypass mention at all).
-
-    ``is_subagent``/``script_hint`` (subagent-aware outlet, this dispatch):
-    a subagent caller gets `_subagent_script_outlet`'s scratch-script form
-    instead of the main-loop's bare ``python3 -c`` rewrite -- see that
-    function's docstring for why. Both callers still get the bypass note
-    through this same function.
-    """
     hso = result.get("hookSpecificOutput", {}) if isinstance(result, dict) else {}
     updated = hso.get("updatedInput")
     bypass_note = operator_override_note(_OVERRIDE_ENV, payload=payload, git_root=git_root)
@@ -471,54 +368,15 @@ def _outlet_from_seam_result(
         rewrite = updated["command"]
         if is_subagent:
             return _subagent_script_outlet(rewrite, script_hint, bypass_note)
-        # TRIMMED (C8b, pln-trim-the-remaining-over-cap-guard-b969d9 §
-        # C8b): was "this rewrite. %s" -- the two-word lede carries no
-        # information a bare "rewrite" doesn't; the module's own docstring
         # ("SUBAGENT-AWARE OUTLET" section) names the shared
-        # `_platform_verdict`/seam-script bytes as the real overage this
-        # guard cannot trim from within its own footprint (out-of-footprint:
-        # `_platform_verdict.py`, `dispatch_checks.py`).
         return ("rewrite. %s" % bypass_note, rewrite)
     context = hso.get("additionalContext") or ""
-    # TRIMMED (C8b): was "the alternative below. %s" -- "below" is
-    # redundant with the example that immediately follows it in the
-    # rendered template.
     return ("alternative. %s" % bypass_note, context)
 
 
 def check(
     payload: Dict[str, Any], host_is_windows: Optional[bool] = None
 ) -> Optional[Dict[str, Any]]:
-    """Evaluate the multi-probe-banner advisory against a PreToolUse
-    payload. Returns `None` (allow) or an `allow_advisory` envelope --
-    never a deny (DR-280, 2026-08-07: the platform-conditioned deny branch
-    was retired as structurally unreachable -- it gated on
-    `_seam_confirmed_rewrite`, the same seam the earlier-registered
-    `"multiprobe-banner-rewrite"` chain entry already consumes and returns
-    on, so this guard's own deny leg could never be reached through the
-    real dispatcher; see DR-280's Negative-spec for why the guard itself
-    and its advisory leg stay). `host_is_windows` is still accepted (the
-    chain-wide threading contract `dispatch.evaluate_payload_json` uses for
-    every registered shape-guard) but no longer changes this guard's own
-    verdict -- see the platform-verdict call at the end of this function.
-    An unrecognized payload shape or unparseable command degrades to `None`
-    via the explicit checks below -- this function does NOT catch-all internally (Review:
-    code-reviewer -- Finding 3: this guard is registered in `dispatch.py`'s
-    `guard_chain` with `fail_closed=True`, whose whole contract is that an
-    internal bug propagates to `dispatch._crash_deny` rather than being
-    swallowed as a silent allow; a blanket `except Exception: return None`
-    here would defeat that registration exactly as it would for
-    `guard_grep_via_bash`, which carries no such wrapper).
-
-    ``host_is_windows``: accepted for the chain-wide threading contract
-    every registered shape-guard honors (`_platform_verdict.py` module
-    docstring; `dispatch.evaluate_payload_json` calls every entry with this
-    same keyword regardless of whether the guard's own verdict still varies
-    by platform) -- kept in this signature so `dispatch.py`'s registration
-    lambda does not need a guard-specific special case, but this guard's
-    own verdict no longer branches on it (DR-280: see this function's own
-    docstring above).
-    """
     if os.environ.get(_OVERRIDE_ENV, "0") == "1":
         return None
 
@@ -553,10 +411,6 @@ def check(
         session_id = ""
 
     # AC16 callee-graph audit (see `_POWERSHELL_BANNER_GENERIC_SUMMARY`'s own
-    # comment above): `check_multiprobe_banner_rewrite` classifies internally
-    # with a BASH default and has no PowerShell leg to consult -- gate the
-    # seam call to Bash explicitly rather than let a PowerShell `cmd` reach
-    # its posix tokenizer. This branch is reachable ONLY after C6 widened
     # `MATCHERS`; before that, `check()` never ran on a PowerShell payload.
     if dialect is Dialect.POWERSHELL:
         bypass_note = operator_override_note(_OVERRIDE_ENV, payload=payload)
@@ -568,25 +422,12 @@ def check(
             host_is_windows=False,
         )
 
-    # 2026-07-29 duty-of-care promotion: consult the sibling rewrite chain
-    # entry's OWN confirmation for this exact command before deciding
-    # whether to point the deny/advisory at a concrete outlet. 2026-08-06
     # (B2 friction fix, see module docstring "SUBAGENT-AWARE OUTLET"): the
-    # unconfirmed case used to fall back to a fixed generic advisory that
-    # named a template unrelated to the segment actually present -- a nag
-    # this guard cannot discharge (no outlet describes THIS command) -- so
-    # it now allows silently instead of firing an advisory with no
-    # actionable, command-accurate content. BASH-only from this point on
     # (see the `dialect is Dialect.POWERSHELL` gate immediately above).
     seam_result = check_multiprobe_banner_rewrite(cmd, session_id)
     if not _seam_confirmed_rewrite(seam_result):
         return None
 
-    # No `agent_id`/`agent_type` at all -> top-level EM Bash call -> skip
-    # identity resolution entirely (mirrors `block_subagent_destructive_
-    # action.check`'s identical short-circuit) -- the common case pays no
-    # `resolve_git_root` subprocess cost, and never resolves as a subagent
-    # by construction.
     is_subagent = False
     script_hint = ""
     git_root: Optional[str] = None
@@ -599,20 +440,7 @@ def check(
     summary, example = _outlet_from_seam_result(
         seam_result, is_subagent=is_subagent, script_hint=script_hint, payload=payload, git_root=git_root
     )
-    # 2026-08-06 (C19a, guard-class census): `primary.evidence` is only the
-    # matched banner-marker SEGMENT (e.g. the bare `echo "=== facts ==="`),
-    # not the caller's actual command -- rendering it in the "Command:"
-    # field misdescribes what was denied whenever the banner-marker segment
-    # is not the whole command (i.e. every real firing, since a lone banner
     # echo with nothing else is below `_MIN_BANNER_SEGMENTS` and never
-    # reaches here). `platform_verdict_for_shape` already truncates its
-    # `matched_cmd` argument to 200 chars, so passing the full `cmd` here
-    # costs nothing extra for a pathological input.
-    # DR-280: the deny leg is retired -- always render the advisory
-    # envelope (never deny), regardless of the real or overridden host.
-    # `platform_verdict_for_shape` is still the shared template so this
-    # guard's message reads as one family with its still-live siblings;
-    # only the platform BRANCH is forced here, not the rendering.
     return platform_verdict_for_shape(
         _SHAPE_NAME,
         cmd,

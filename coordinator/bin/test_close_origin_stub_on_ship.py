@@ -1,41 +1,3 @@
-"""test_close_origin_stub_on_ship.py — pytest suite for close-origin-stub-on-ship.py.
-
-Converted from a hand-rolled `.test.py` runner (print-based PASS/FAIL, its own
-main()/sys.exit) into collectable top-level test_* functions; assertion intent
-preserved 1:1.
-
-Native-Python successor to the retired close-origin-stub-on-ship.test.sh
-(DoE 394c8b64, 2026-07-19; 2026-07-19 Windows de-bash campaign, Wave 1b —
-B-facade repoint). The retired bash suite stubbed the `cc_invoke` shell function to
-exercise the veneer's fail-loud ladder hermetically, with no live claude-klabauter checkout. This
-port achieves the same hermeticity by pre-populating `sys.modules["cc_invoke"]`
-with a fake module BEFORE importing the subject: `close-origin-stub-on-ship.py`
-does `from cc_invoke import route_mutation, RouteMutationError` after its own
-`sys.path.insert(0, lib_dir)`, but Python's import machinery checks
-`sys.modules` first — a pre-seeded entry short-circuits the file search
-entirely, so no live engine-root / coordinator_core.invoke subprocess is ever
-spawned. Each test loads a FRESH copy of the subject module (importlib, a
-new module object per test) so the fake `route_mutation` can vary per test
-without cross-test leakage.
-
-Test coverage (T1/T2 dropped — no jq dependency or bash-lib source step in
-the Python entry; params are constructed as a native dict, and route_mutation
-resolution is a Python import, not a subshell `command -v` probe):
-  T3  route_mutation raises RuntimeError (transport failure) — exit 1,
-      message names the transport failure
-  T4  route_mutation raises RouteMutationError (op-level refusal) — exit 1,
-      message names the op refusal
-  T5  route_mutation returns success — exit 0, summary printed (closed
-      count, stub path/id, pairs_resolved, message)
-  T6  usage error (no args) — exit 2, message on stderr, route_mutation
-      never invoked regardless of the fake's behavior
-  T7  --sha plumbing — accepted on the op-success path, exit 0
-  T8  params shape — route_mutation receives plan_path/handoff_path/sha as
-      None when the corresponding flag is absent, populated when present
-
-Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md (Wave 1b)
-Spec backlink: cross-repo/inbox/2026-07-08-example-cockpit-repo-em-spinoff-roadmap-lifecycle-never-closed.md
-"""
 from __future__ import annotations
 
 import contextlib
@@ -52,7 +14,6 @@ SUBJECT_PATH = os.path.join(SCRIPT_DIR, "close-origin-stub-on-ship.py")
 
 
 class _FakeRouteMutationError(RuntimeError):
-    """Stand-in for cc_invoke.RouteMutationError — carries .result like the real one."""
 
     def __init__(self, message: str, result: dict) -> None:
         super().__init__(message)
@@ -63,21 +24,6 @@ _ABSENT = object()
 
 
 def _install_fake_cc_invoke(route_mutation_fn):
-    """Seed sys.modules["cc_invoke"] with a fake module exposing route_mutation
-    and RouteMutationError. Must run BEFORE the subject module is imported —
-    the subject's `from cc_invoke import ...` resolves against sys.modules
-    first, so this fully short-circuits any real file/engine-root lookup.
-
-    Returns the prior sys.modules entry (or `_ABSENT`) — hand it to
-    `_restore_cc_invoke` in a `finally`.
-
-    Negative spec: `sys.modules["cc_invoke"]` is process-global, and 30+
-    `coordinator/bin/` scripts import `cc_invoke` by bare name. A fake left
-    installed past the test that seeded it makes every later such import in the
-    same worker resolve against a module carrying only these two attributes;
-    the missing name surfaces as an ImportError at the victim's fixture setup,
-    which pytest reports as an ERROR in an unrelated file. Never install
-    without a paired restore."""
     fake = types.ModuleType("cc_invoke")
     fake.route_mutation = route_mutation_fn
     fake.RouteMutationError = _FakeRouteMutationError
@@ -87,7 +33,6 @@ def _install_fake_cc_invoke(route_mutation_fn):
 
 
 def _restore_cc_invoke(prior) -> None:
-    """Undo `_install_fake_cc_invoke`, restoring absence as absence."""
     if prior is _ABSENT:
         sys.modules.pop("cc_invoke", None)
     else:
@@ -95,8 +40,6 @@ def _restore_cc_invoke(prior) -> None:
 
 
 def _load_subject_fresh():
-    """Import a brand-new copy of the subject module (bypassing any cached
-    entry) so per-test route_mutation fakes never leak across tests."""
     sys.modules.pop("close-origin-stub-on-ship", None)
     spec = importlib.util.spec_from_file_location("close-origin-stub-on-ship", SUBJECT_PATH)
     module = importlib.util.module_from_spec(spec)
@@ -105,8 +48,6 @@ def _load_subject_fresh():
 
 
 def _run_main(route_mutation_fn, argv):
-    """Load a fresh subject with the given fake route_mutation, call main(argv),
-    and capture (exit_code, stdout, stderr)."""
     prior_cc_invoke = _install_fake_cc_invoke(route_mutation_fn)
     out, err = io.StringIO(), io.StringIO()
     try:

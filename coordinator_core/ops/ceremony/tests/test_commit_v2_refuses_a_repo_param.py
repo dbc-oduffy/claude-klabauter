@@ -56,9 +56,6 @@ def test_the_refusal_says_where_the_repo_actually_comes_from():
 
 
 def test_no_repo_param_still_reaches_validation():
-    """The refusal is scoped to the key, not to every call. Without `repo` the
-    handler proceeds to its ordinary param checks -- asserted through a
-    deliberately empty pathspec, which those checks reject on their own terms."""
     out = commit_v2._handler({"paths": [], "deleted_paths": [], "message": "m"})
     assert "params.repo" not in str(out), (
         "the repo refusal fires on a call that never named a repo"

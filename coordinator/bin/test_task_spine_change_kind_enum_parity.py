@@ -53,7 +53,6 @@ _SSOT_CITATION = "docs/wiki/lessons-outbox-schema.md § Change-kind enum"
 
 
 def _repo_bin_dir() -> str:
-    """Absolute path to the coordinator/bin directory this test lives in."""
     return os.path.dirname(os.path.abspath(__file__))
 
 
@@ -82,11 +81,6 @@ def _improvement_queue_schema_path() -> str:
 
 
 def _parse_frozenset_literal(content: str, name: str, path: str) -> set[str]:
-    """Extract a `<name> = frozenset({...})` string-literal set from source text.
-
-    Matches both the single-line and the multi-line-braced shapes used across
-    this repo's hand-maintained change_kind slices.
-    """
     m = re.search(rf'{re.escape(name)}\s*=\s*frozenset\(\s*\{{(.*?)\}}\s*\)', content, re.DOTALL)
     if not m:
         raise AssertionError(
@@ -132,16 +126,6 @@ def _change_kind_enum(schema_path: str) -> set[str]:
 
 
 def test_spine_change_kind_enum_matches_universal_union() -> None:
-    """plan-tasks.schema.json's `change_kind` enum must set-equal the union of
-    the improvement-queue-eligible slice and the lessons-outbox-routed slice.
-
-    Those two slices are declared side by side in coordinator-harvest-deferrals.py
-    precisely because together they ARE the universal enum the spine schema
-    pins — a member present in the schema but absent from both slices routes
-    nowhere on harvest (the exact failure class DoE 1239761c1 hit with a
-    coined `script-port` token); a member present in a slice but absent from
-    the schema lets an author write a spine row the schema would reject.
-    """
     schema_path = _plan_tasks_schema_path()
     spine_kinds = _change_kind_enum(schema_path)
     queue_eligible, lesson_promote = _queue_eligible_and_lesson_promote_kinds()
@@ -192,14 +176,6 @@ def test_harvest_eligible_slice_is_subset_of_improvement_queue_enum() -> None:
 
 
 def test_change_kind_schemas_cite_ssot() -> None:
-    """Both vendored schemas' `change_kind` descriptions must still name the
-    SSOT (`docs/wiki/lessons-outbox-schema.md § Change-kind enum`) rather than
-    silently re-hosting the enum as if this repo were its authority.
-
-    A missing citation is how a future edit could drift the enum values here
-    without anyone knowing there was an upstream table to reconcile against
-    first.
-    """
     for schema_path in (_plan_tasks_schema_path(), _improvement_queue_schema_path()):
         description = _change_kind_property(schema_path).get("description", "")
         assert _SSOT_CITATION in description, (

@@ -79,10 +79,6 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-#: Same bridge-to-C8 skip pattern as `test_guard_multiprobe_banner.py`'s own
-#: `requires_powershell_grammar` -- the grammar package is not yet declared
-#: in `pyproject.toml` (C8), so a peer/clean-install run without it must not
-#: go red for a dependency no manifest asked them to have.
 _GRAMMAR_PRESENT = all(
     importlib.util.find_spec(name) is not None
     for name in ("tree_sitter", "tree_sitter_pwsh")
@@ -105,44 +101,25 @@ def _payload(command):
     }
 
 
-# `find . -type f | head -n 5` -- a two-stage `find | head` pipeline
-# `check_head_tail_plumbing_rewrite` translates outright (find census +
-# head slice, both recognized forms).
 _HEAD_TAIL_CMD = "find . -type f | head -n 5"
 
 # A genuine for-loop (FOR_LOOP is the shape-classifier's primary match)
-# immediately followed by a literal top-level `find ... -exec rm {} \;`
-# segment -- the narrow case `check_find_exec_rewrite`'s own segment scan
-# recognizes and translates (rm is a translatable verb), confirmed against
-# the real seam function rather than assumed: `_shape_classifier` matches
 # FOR_LOOP on the leading `for ... do ... done` and `check_find_exec_rewrite`
-# separately finds the trailing `find -exec` as its own top-level segment
-# (segment scanning is command-wide, not scoped to the loop body).
 _FOR_LOOP_FIND_EXEC_CMD = (
     'for i in 1 2 3; do echo $i; done; find . -name "*.tmp" -exec rm {} \\;'
 )
 
 # A bare glob for-loop -- FOR_LOOP-shaped per `_shape_classifier`, but no
-# `find -exec` anywhere, so `check_find_exec_rewrite` returns `None`.
 _FOR_LOOP_BARE_GLOB_CMD = 'for f in *.txt; do rm "$f"; done'
 
 # `docker ps | head -n 20` -- genuinely HEAD_TAIL_PLUMBING-shaped (a
-# two-segment `generator | head` pipeline), but `docker` is not one of
-# `check_head_tail_plumbing_rewrite`'s recognized upstream generators
 # (find/ls/grep), so that seam returns a BARE ADVISORY (no `updatedInput`)
-# saying the rewrite is "not offered automatically" -- NOT a confirmed
-# outlet. This is a common, entirely benign command that must never deny.
 _HEAD_TAIL_UNRECOGNIZED_UPSTREAM_CMD = "docker ps | head -n 20"
 
 # A three-segment pipeline into `tail` -- HEAD_TAIL_PLUMBING-shaped, but
-# `check_head_tail_plumbing_rewrite`'s own two-segment-only shape means this
-# gets a bare advisory ("longer chain than this rewrite... covers"), not a
-# rewrite.
 _HEAD_TAIL_LONG_CHAIN_CMD = "cat file.txt | tail -n +2 | sort | uniq -c"
 
 # FOR_LOOP wrapping a literal `find -exec chmod ...` -- `chmod` is outside
-# `check_find_exec_rewrite`'s translatable-verb set (rm/cat/wc -l), so that
-# seam returns a bare advisory, not a rewrite.
 _FOR_LOOP_FIND_EXEC_UNTRANSLATABLE_VERB_CMD = (
     'for i in 1 2 3; do echo $i; done; find . -name "*.log" -exec chmod 644 {} \\;'
 )
@@ -178,24 +155,7 @@ class TestNonBashOrEmpty:
 class TestHeadTailPlumbing:
     def test_advises_even_with_windows_forced(self):
         # RETARGETED (DR-280, 2026-08-07): was `test_denies_on_windows`,
-        # asserting a deny envelope under `host_is_windows=True`. This
-        # guard's own deny branch is retired as structurally unreachable --
-        # it gated on `_seam_confirmed_rewrite` against the SAME seam an
         # earlier-registered `ADVISORY_REWRITE` chain entry
-        # (`head-tail-plumbing-rewrite`) already consumes and returns on
-        # first, so through the real dispatcher the gate could never open.
-        # Now asserts the guard advises (never denies) even with Windows
-        # forced.
-        #
-        # `_pl_python3_invocation()` (aka `_bt_python3_invocation`)
-        # deliberately resolves a REAL, runnable interpreter path rather
-        # than emitting the literal string "python3" -- per its own
-        # docstring, a bare `python3` is frequently absent on stock
-        # Windows. Asserting the resolved invocation itself (matched
-        # structurally, not a second hardcoded literal) keeps this pinned
-        # to what the guard actually promises without going stale on the
-        # next box -- see C2's identical fix (commit 39eedda26) for the
-        # BX-16 rewrite fixtures.
         out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
         assert "head-tail-plumbing" in ctx
@@ -209,19 +169,9 @@ class TestHeadTailPlumbing:
 
     def test_advisory_message_names_its_escape_hatch(self):
         # RETARGETED (DR-280, 2026-08-07): was
-        # `test_deny_message_names_its_escape_hatch`, reading `_deny_reason`
-        # under `host_is_windows=True`. This guard never denies any more --
-        # read the advisory context instead, still under a forced Windows
-        # host to confirm the escape hatch survives that leg too.
-        #
         # RETARGETED AGAIN (2026-08-17, PM ruling on the override-key
-        # message-register doctrine): a guard message names the guard that
-        # fired and nothing else about its override -- no key, no assignment
-        # form (docs/reference/guard-override-keys.md, opening sentence).
         # `operator_override_note` no longer interpolates `_OVERRIDE_ENV`
-        # into the rendered text at all; the escape hatch is "named" via a
         # doc pointer, not the literal `COORDINATOR_*` key. Asserting the
-        # bare key string was stale against that doctrine.
         out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
         assert OVERRIDE_KEYS_DOC in ctx
@@ -236,17 +186,6 @@ class TestSeamConfirmedOutletMessageShape:
 
     def test_summary_is_self_contained_not_a_dangling_placeholder(self):
         # RETARGETED (DR-280, 2026-08-07): this guard's deny branch is
-        # retired as structurally unreachable, so there is no deny template
-        # left to read -- was asserting "Use instead: ..." (the DENY
-        # template's own sentence) via `_deny_reason` under
-        # `host_is_windows=True`. Now reads the advisory template instead
-        # (which this guard renders on every host, forced or real), whose
-        # own "consider %s here too" sentence carries the identical
-        # regression risk the old "below." placeholder produced ("consider
-        # below. here too", both misdescribing the outlet and dragging the
-        # override note out of that sentence) -- see `_outlet_from_seam_
-        # result`'s docstring for why `summary` must read sensibly standing
-        # alone in EITHER template.
         out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
         assert "consider the seam-confirmed single-process rewrite here too" in ctx
@@ -254,18 +193,8 @@ class TestSeamConfirmedOutletMessageShape:
 
     def test_override_note_lands_in_example_cue_window_not_consider_sentence(self):
         # RETARGETED (DR-280, 2026-08-07): was `test_override_note_lands_
-        # in_example_cue_window_not_use_instead_sentence`, reading
-        # `_deny_reason` -- the deny template's "Use instead:" sentence no
-        # longer renders (this guard never denies). Same regression check,
-        # against the advisory template's "consider ... here too" sentence
-        # instead.
-        #
         # RETARGETED AGAIN (2026-08-17, override-key message-register
-        # ruling): `operator_override_note` no longer interpolates the bare
         # `COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS` key -- it renders a doc
-        # pointer only. The regression this test guards against (the note
-        # drifting back into the "consider" sentence instead of trailing the
-        # Example) still applies to the doc pointer.
         out = guard.check(_payload(_HEAD_TAIL_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
         consider_line = next(
@@ -312,9 +241,6 @@ class TestForLoopWrappingFindExec:
 
 class TestForLoopBareGlobStaysAdvisoryOnly:
     def test_advises_even_when_windows_is_forced(self):
-        # No `find -exec` anywhere in this command -- `check_find_exec_rewrite`
-        # returns None, so this guard must NEVER deny it, even under a forced
-        # Windows host.
         out = guard.check(_payload(_FOR_LOOP_BARE_GLOB_CMD), host_is_windows=True)
         hso = out["hookSpecificOutput"]
         assert hso["permissionDecision"] == "allow"
@@ -343,23 +269,11 @@ class TestForLoopBareGlobStaysAdvisoryOnly:
         ctx = _advisory_context(out)
         assert "glob.glob" in ctx
         assert "do the per-item work in-process" in ctx
-        # The example itself is a bare `...` body -- it must not claim this
-        # specific command's OWN body (`rm "$f"`) was translated into the
-        # python3 example; only a generic enumeration skeleton is offered.
         example_line = next(line for line in ctx.splitlines() if "glob.glob" in line)
         assert 'rm "$f"' not in example_line
         assert "..." in example_line or "'..." in ctx
 
     def test_example_names_the_resolved_interpreter_not_a_bare_literal(self):
-        # Regression for state/bug-backlog/2026-08-18-generic-spawn-
-        # advisories-hardcode-python-c789cb245c5c.yaml: this generic
-        # advisory used to embed a literal `python3 -c` example, unlike
-        # `guard_grep_via_bash.py`'s sibling path which resolves the real
-        # interpreter via `_bt_python3_invocation`. A bare `python3` is
-        # frequently absent from PATH on a stock Windows box. Asserted
-        # structurally (the resolved invocation itself), not a second
-        # hardcoded literal -- matches `TestHeadTailPlumbing`'s existing
-        # pattern for the same fix on this guard's other shape.
         out = guard.check(_payload(_FOR_LOOP_BARE_GLOB_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
         assert guard._pl_python3_invocation() in ctx
@@ -383,25 +297,17 @@ class TestWhileReadLoop:
         assert "permissionDecisionReason" not in hso
 
     def test_message_names_the_while_read_shape(self):
-        # AC-5: the message must not misdescribe what tripped it.
         out = guard.check(_payload(_WHILE_READ_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
         assert "while-read-loop" in ctx
 
     def test_advisory_names_its_escape_hatch(self):
         # RETARGETED (2026-08-17, override-key message-register ruling):
-        # see `TestHeadTailPlumbing.test_advisory_message_names_its_escape_
-        # hatch` above for the same fix on this guard's other shape -- the
-        # escape hatch is named via a doc pointer, never the bare key.
         out = guard.check(_payload(_WHILE_READ_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
         assert OVERRIDE_KEYS_DOC in ctx
 
     def test_example_names_the_resolved_interpreter_not_a_bare_literal(self):
-        # Regression for state/bug-backlog/2026-08-18-generic-spawn-
-        # advisories-hardcode-python-c789cb245c5c.yaml -- see
-        # `TestForLoopBareGlobStaysAdvisoryOnly`'s identical regression test
-        # for the full "why" on this guard's for-loop shape.
         out = guard.check(_payload(_WHILE_READ_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
         assert guard._pl_python3_invocation() in ctx
@@ -447,14 +353,11 @@ class TestBareSeamAdvisoryNeverDenies:
 
 class TestPrecedence:
     def test_grep_via_bash_precedence_stays_silent(self):
-        # Simultaneously grep-via-Bash and head/tail-plumbing:
         # GREP_VIA_BASH outranks HEAD_TAIL_PLUMBING in SHAPE_PRECEDENCE, so
-        # this guard must not fire (AC-7).
         cmd = "grep -rn TODO src/ | head -n 5"
         assert guard.check(_payload(cmd), host_is_windows=True) is None
 
     def test_multi_probe_banner_precedence_stays_silent_for_for_loop(self):
-        # A banner-echoed command followed by several probes, immediately
         # followed by a for-loop -- MULTI_PROBE_BANNER outranks FOR_LOOP.
         cmd = (
             'echo "=== probes ==="; pwd; whoami; '
@@ -513,7 +416,7 @@ class TestVerbatimHeadTailAlternativeIsRealAndEquivalent:
     """
 
     def _run(self, cmd):
-        return subprocess.run(  # popup-intentional-last-resort: shell=True spawns a
+        return subprocess.run(
             # cmd.exe intermediary that CREATE_NO_WINDOW does not suppress; the
             # STARTUPINFO route is a separate, wider fix (review: code-reviewer).
             cmd, shell=True, capture_output=True, text=True, check=True
@@ -528,17 +431,8 @@ class TestVerbatimHeadTailAlternativeIsRealAndEquivalent:
         )
         return self._run(alt_cmd)
 
-    #: state/bash-guards/known-red.json group "guard-windows-branch-verdicts".
-    #: `_verbatim_head_tail_alternative` builds a shell=True POSIX pipeline
-    #: that fails on cmd.exe -- see
-    #: state/audits/2026-08-07-guard-windows-branch-verdicts.md. Owner:
-    #: docs/plans/2026-08-07-command-guards-fire-under-both-tool-names.md
-    #: (its C4 body).
     @pytest.mark.pending_fix
     def test_unrecognized_generator_head(self, tmp_path):
-        # `cat` is not one of `check_head_tail_plumbing_rewrite`'s recognized
-        # upstream generators (find/ls/grep) -- the whole point of this
-        # chunk is that the verbatim alternative does not need it to be.
         f = tmp_path / "lines.txt"
         f.write_text("a\nb\nc\nd\ne\n")
         cmd = "cat %s | head -n 3" % f
@@ -553,28 +447,18 @@ class TestVerbatimHeadTailAlternativeIsRealAndEquivalent:
 
     @pytest.mark.pending_fix
     def test_quoting_hazard_apostrophe_in_filename(self, tmp_path):
-        # A literal apostrophe in the filename -- the exact shape of
-        # quoting hazard the seam's own `find`/`ls` census parsers had a
-        # dedicated regression for (see `_bt_parse_ls_segment`'s docstring).
-        # The upstream token here re-quotes via `shlex.quote`, not
-        # string-splicing, so this must survive intact.
         f = tmp_path / "it's a file.txt"
         f.write_text("alpha\nbeta\ngamma\ndelta\n")
         cmd = 'cat "%s" | tail -n 2' % f
         assert self._run(cmd) == self._alternative_stdout(cmd)
 
     def test_no_alternative_for_long_chain(self):
-        # A three-segment pipeline stays out of scope for this function too
-        # (same conservative two-segment-only shape as the seam's own
-        # check) -- must return None, not guess.
         assert (
             guard._verbatim_head_tail_alternative(_HEAD_TAIL_LONG_CHAIN_CMD)
             is None
         )
 
     def test_no_alternative_for_unparseable_count(self):
-        # `head -c 100` (byte-count mode) is not one of
-        # `_bt_head_tail_count`'s recognized line-count forms.
         assert (
             guard._verbatim_head_tail_alternative("cat file.txt | head -c 100")
             is None
@@ -615,11 +499,6 @@ class TestPowerShellDialect:
 
     def test_head_tail_plumbing_advises_on_powershell_even_with_windows_forced(self):
         # RETARGETED (DR-280, 2026-08-07): was `test_head_tail_plumbing_
-        # rewrites_on_powershell`, asserting `permissionDecision == "deny"`
-        # -- this guard's deny branch (including its PowerShell leg, which
-        # shares `_verdict_head_tail`'s own `platform_verdict_for_shape`
-        # call site) is retired as structurally unreachable. Now asserts an
-        # advisory allow instead, even with Windows forced.
         out = guard.check(
             _ps_payload("ls . | Select-Object -First 5"),
             host_is_windows=True,
@@ -630,21 +509,8 @@ class TestPowerShellDialect:
         assert "permissionDecisionReason" not in hso
 
     def test_non_head_tail_powershell_command_fires_no_advisory(self):
-        # A no-shape-matched PowerShell command must not fire an advisory --
-        # that is this test's load-bearing assertion, and it is unchanged.
-        #
-        # It does, however, record SILENT rather than returning a bare
         # clean. C6 widened this guard's `MATCHERS` to include PowerShell,
-        # which subjects it to the standing repo-wide contract in
-        # `tests/test_no_false_clean_on_unparsed_dialect.py`: a guard
         # DECLARING PowerShell must back that declaration with measured
-        # behaviour, and a bare `None` is indistinguishable from "this
-        # guard was never invoked" -- precisely the confusion C6 exists to
-        # end. That contract is owned by another workstream and is not this
-        # plan's to weaken, so the recorded-silence side won.
-        #
-        # `record_silent` is inert outside `collecting()`, so nothing about
-        # what an agent actually sees changed here.
         from coordinator_core.bash_guards._verdict import collecting, was_silent
 
         with collecting() as silences:
@@ -671,7 +537,6 @@ class TestPowerShellForLoopAndPipelineForeachObject:
 
     @requires_powershell_grammar
     def test_powershell_for_loop_advises_not_silent(self):
-        # Row-14 superseding note (D2): `foreach ($x in $y) { git log -1 $x }`
         # now classifies as a real FOR_LOOP match and gets the same generic
         # advisory the bash leg's bare-glob FOR_LOOP fallback renders.
         out = guard.check(
@@ -683,9 +548,6 @@ class TestPowerShellForLoopAndPipelineForeachObject:
         assert hso["permissionDecision"] == "allow"
         ctx = hso["additionalContext"]
         assert "for-loop" in ctx
-        # AC9: the alternative is a subprocess invocation (`python3 -c`),
-        # never a bash-only construct -- no `xargs`, no `$(...)`, no
-        # `for ... do ... done`.
         assert "python3" in ctx
         assert "xargs" not in ctx
         assert "do ... done" not in ctx and " do \n" not in ctx
@@ -699,14 +561,8 @@ class TestPowerShellForLoopAndPipelineForeachObject:
         assert out is not None
         ctx = out["hookSpecificOutput"]["additionalContext"]
         assert "pipeline-foreach-object" in ctx
-        # AC9: PowerShell-valid alternative -- a `python3 -c` invocation,
-        # never `xargs -P` or any other bash-only remediation.
         assert "python3" in ctx
         assert "xargs" not in ctx
-        # Regression for state/bug-backlog/2026-08-18-generic-spawn-
-        # advisories-hardcode-python-c789cb245c5c.yaml -- resolved
-        # interpreter, not a bare literal an operator without `python3` on
-        # PATH cannot run.
         assert guard._pl_python3_invocation() in ctx
 
     @requires_powershell_grammar
@@ -720,9 +576,6 @@ class TestPowerShellForLoopAndPipelineForeachObject:
         assert "pipeline-foreach-object" in ctx
 
     def test_no_private_shape_precedence_walk_remains(self):
-        # AC11: `_verdict_powershell` must classify via
-        # `_shape_classifier.classify_command` -- the module-level
-        # `classify_command` name it calls is that same function, not a
         # locally re-derived SHAPE_PRECEDENCE walk.
         import inspect
 
@@ -746,8 +599,6 @@ class TestBtPython3InvocationLeavesTheAdvisoryHotPath:
 
     @pytest.fixture(autouse=True)
     def _isolated_cache(self, tmp_path, monkeypatch):
-        # Never touch this repo's real `state/cache/` from a test process --
-        # point the cache path helper at a private tmp file instead.
         from coordinator_core.bash_guards import dispatch_checks as dc
 
         cache_file = tmp_path / "bt-python3-invocation-cache.json"
@@ -813,9 +664,6 @@ class TestBtPython3InvocationLeavesTheAdvisoryHotPath:
             assert key_before != key_after
 
     def test_half_b_write_is_atomic_replace_not_truncate(self):
-        # `_bt_python3_invocation` must never open its real cache path in
-        # "w" mode directly -- only its pid-suffixed temp file, replaced
-        # into place via `os.replace`.
         import inspect
 
         source = inspect.getsource(self.dc._bt_python3_invocation)

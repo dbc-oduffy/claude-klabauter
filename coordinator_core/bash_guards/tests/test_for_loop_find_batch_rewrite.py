@@ -33,11 +33,6 @@ def _tok(cmd: str):
     return _bt_classify_command(cmd).tokens
 
 
-# --------------------------------------------------------------------------
-# The canonical shape parses.
-# --------------------------------------------------------------------------
-
-
 def test_the_canonical_shape_parses() -> None:
     parsed = _bt_parse_for_loop_find(_tok('for f in $(find . -name "*.txt"); do rm "$f"; done'))
     assert parsed is not None
@@ -62,11 +57,6 @@ def test_a_multi_token_verb_parses() -> None:
 def test_the_braced_deref_parses() -> None:
     parsed = _bt_parse_for_loop_find(_tok('for f in $(find . -name "*.txt"); do rm "${f}"; done'))
     assert parsed is not None
-
-
-# --------------------------------------------------------------------------
-# The batched offer.
-# --------------------------------------------------------------------------
 
 
 def test_the_batched_form_is_offered_for_a_measured_verb() -> None:
@@ -94,11 +84,6 @@ def test_git_without_add_gets_no_batch_form() -> None:
     parsed = _bt_parse_for_loop_find(_tok('for f in $(find . -name "*.txt"); do git rm "$f"; done'))
     assert parsed is not None
     assert _bt_for_loop_find_batch_rewrite(parsed) is None
-
-
-# --------------------------------------------------------------------------
-# Refusals -- the negative spec.
-# --------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -134,11 +119,6 @@ def test_a_shape_this_parser_does_not_model_is_refused(cmd: str) -> None:
     assert _bt_parse_for_loop_find(_tok(cmd)) is None
 
 
-# --------------------------------------------------------------------------
-# End to end through the guard.
-# --------------------------------------------------------------------------
-
-
 def test_the_guard_now_rewrites_the_loop() -> None:
     result = check_find_exec_rewrite('for f in $(find . -name "*.txt"); do rm "$f"; done')
     assert result is not None
@@ -155,8 +135,6 @@ def test_an_unmeasured_verb_gets_an_advisory_not_a_rewrite() -> None:
 
 
 def test_a_chained_loop_is_advised_never_wholesale_replaced() -> None:
-    """The BX-12 lesson: a rewrite replaces the WHOLE command, so a loop
-    that is not the whole command may only be advised about."""
     cmd = 'for f in $(find . -name "*.txt"); do rm "$f"; done; echo finished'
     result = check_find_exec_rewrite(cmd)
     assert result is not None
@@ -164,7 +142,6 @@ def test_a_chained_loop_is_advised_never_wholesale_replaced() -> None:
 
 
 def test_an_ordinary_find_exec_is_unaffected() -> None:
-    """The counterpart: C5 must not have disturbed the `-exec` path."""
     result = check_find_exec_rewrite("find . -name '*.txt' -exec rm {} \\;")
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "allow"

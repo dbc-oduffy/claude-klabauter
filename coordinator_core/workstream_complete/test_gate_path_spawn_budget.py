@@ -56,10 +56,6 @@ import coordinator_core.workstream_complete as wsc
 import coordinator_core.ops.gate_dimension_review as gate_dimension_review
 from coordinator_core.win_portability import no_console_creationflags
 
-# Declared, not excused: this file spawns real `git` processes because the
-# property under test IS process count -- no fixture stands in for it. Same
-# precedent as `test_directives_commit_tail_peer_committed_paths.py`'s own
-# `pytestmark` comment.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -71,11 +67,6 @@ def _git(*args: str, cwd) -> subprocess.CompletedProcess:
 
 
 def _init_repo(path: Path) -> str:
-    """git-inits a fixture repo, returns the checked-out branch name --
-    never assumed, since `init.defaultBranch` varies across git installs.
-    Same idiom as `test_directives_commit_tail_peer_committed_paths.py`'s
-    own `_init_repo`, reproduced here rather than imported (a test-only
-    fixture helper, not a production shape worth a shared module)."""
     path.mkdir(parents=True, exist_ok=True)
     _git("init", "-q", cwd=path)
     _git("config", "user.email", "test@example.com", cwd=path)
@@ -102,11 +93,6 @@ def repo(tmp_path):
 
 
 def _wrap_popen_for_git_spawn_count(monkeypatch: pytest.MonkeyPatch) -> "list[list[str]]":
-    """Wraps the ONE choke point both `subprocess.run` and a bare
-    `Popen(...)` call funnel through (see this module's own docstring for
-    why only `Popen.__init__`, never `subprocess.run` too, is patched).
-    Returns the live list this function keeps appending to — read it AFTER
-    the call under test, not before."""
     calls: "list[list[str]]" = []
     real_init = subprocess.Popen.__init__
 
@@ -180,11 +166,6 @@ def test_brief_git_spawn_budget_is_at_most_four(repo, monkeypatch):
     _commit_with_trailer("own-file-1.txt", "own1\n", sid)
     _commit_with_trailer("own-file-2.txt", "own2\n", sid)
 
-    # C6 (docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-to-four.md
-    # § C6): a real session's worktree is never clean -- a dirty path here is
-    # what makes the `ls-files` spawn a real session always pays actually
-    # fire on this fixture's asserted path, rather than the assertion passing
-    # only because the condition that spawn exists for is absent.
     (repo / "dirty.txt").write_text("dirty\n", encoding="utf-8")
 
     _patch_gate_with_sid(monkeypatch, sid)
@@ -270,13 +251,6 @@ def test_brief_call_one_builds_no_review_scope_and_so_cannot_truncate_one(repo, 
     )
 
 
-# ---------------------------------------------------------------------------
-# AC6 (docs/plans/2026-08-27-the-close-tells-the-author-what-is-uncovered.md,
-# C1): the close coverage advisory adds ZERO git spawns to `brief()`, pinned
-# HERE rather than retrofitted in a later chunk (K-001's binding clause).
-# ---------------------------------------------------------------------------
-
-
 def test_close_coverage_advisory_reaches_the_dimension_on_the_ordinary_close(repo, monkeypatch):
     """AC1 over AC6, the conflict resolved 2026-08-28 mid-execution.
 
@@ -317,9 +291,6 @@ def test_close_coverage_advisory_reaches_the_dimension_on_the_ordinary_close(rep
 
 
 def test_close_coverage_advisory_stays_silent_without_head_at_start(repo, monkeypatch):
-    """The fallback's own negative leg: no `head_at_start` on disk means no
-    resolvable range, and the advisory degrades to silence with no dimension
-    call at all -- never a fabricated range."""
     sid = "22222222-2222-2222-2222-222222222222"
     (repo / ".git" / "coordinator-sessions" / sid).mkdir(parents=True)
     _patch_gate_with_sid(monkeypatch, sid)
@@ -334,11 +305,6 @@ def test_close_coverage_advisory_stays_silent_without_head_at_start(repo, monkey
 
 
 def test_close_coverage_advisory_directive_is_always_already_satisfied_and_ungated(repo, monkeypatch):
-    """D3: the advisory can never gate. Proven at the directive-shape level
-    (independent of `apply.py`'s dispatch, which `test_apply.py` already
-    covers for the `d-coverage-gate` precedent this mirrors) -- it always
-    carries `already_satisfied=True` and no `depends_on` edge, regardless of
-    whether a real coverage gap was found."""
     sid = "22222222-2222-2222-2222-222222222222"
     claim_dir = repo / ".git" / "coordinator-sessions" / sid
     claim_dir.mkdir(parents=True)
@@ -386,9 +352,6 @@ def test_call_one_unresolved_scale_names_stage_paths_as_its_unlock(repo, monkeyp
 
 
 def test_resolved_scale_carries_no_remediation(repo, monkeypatch):
-    """The remediation is a defect report, not a standing field: once the
-    measurement has run there is nothing to remediate, and a field that
-    persists past its own condition trains readers to ignore it."""
     sid = "55555555-5555-5555-5555-555555555555"
     (repo / ".git" / "coordinator-sessions" / sid).mkdir(parents=True)
     _patch_gate_with_sid(monkeypatch, sid)

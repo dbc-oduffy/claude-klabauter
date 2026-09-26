@@ -49,13 +49,6 @@ _TRUNCATE_MARKER = "…[truncated]"
 
 
 def _load_meta(run_dir: str, agent_id: str, cache: dict) -> dict:
-    """Read `agent-<agent_id>.meta.json` from the run directory.
-
-    Never raises: an absent file, a permission error, or malformed JSON all
-    return `{}` — callers fall back to a placeholder label rather than
-    losing the event entirely. A non-dict JSON value is likewise treated as
-    absent.
-    """
     cached = cache.get((run_dir, agent_id))
     if cached is not None:
         return cached
@@ -69,12 +62,6 @@ def _load_meta(run_dir: str, agent_id: str, cache: dict) -> dict:
     if not isinstance(data, dict) or not data:
         return {}
 
-    # Cache HITS only, never misses. An agent's meta file is written once at
-    # spawn and never mutated, so a successful read is good for the life of the
-    # run. A miss is not: a `started` event can be rendered before the meta
-    # file lands, and caching that empty result would label the agent
-    # "unknown-agent" for every later event it appears in.
-    # (Review: overengineering-reviewer #6 -- per-event re-read in a poll loop.)
     cache[(run_dir, agent_id)] = data
     return data
 
@@ -92,12 +79,6 @@ def _truncate(text: str) -> str:
 
 
 def _is_terminal_stamp(event: dict, event_type) -> bool:
-    """True for a `stamp.py`-written terminal line — the one journal event
-    shape this module renders without an `agentId` (see `stamp_terminal`'s
-    line shape). Gated on `source` as well as `type`, not `type` alone:
-    `"failed"` is also an ordinary per-agent event type, and the two must
-    never be confused with each other.
-    """
     return (
         isinstance(event_type, str)
         and event_type in TERMINAL_EVENT_TYPES
@@ -106,11 +87,6 @@ def _is_terminal_stamp(event: dict, event_type) -> bool:
 
 
 def _render_event(event: dict, run_dir: str, cache: dict) -> str | None:
-    """Render one parsed journal event to a single short line, or `None`
-    if the event does not carry a recognised `type`/`agentId` pair (an
-    unrecognised event is silence, never a guess — matching terminal.py's
-    fail-safe posture over an undocumented, harness-owned file shape).
-    """
     event_type = event.get("type")
 
     if _is_terminal_stamp(event, event_type):
@@ -140,24 +116,11 @@ def _render_event(event: dict, run_dir: str, cache: dict) -> str | None:
 
 
 class JournalRenderer:
-    """Incrementally renders `journal.jsonl` events into short lines, via a
-    `TailReader` it owns.
-
-    Holds no notion of "the run has ended" — that is `TerminalWatcher`'s
-    job; this class only turns journal bytes
-    into lines, deduplicated by a seen-set so a caller can `poll()` on its
-    own cadence without ever re-printing an event it already rendered.
-    """
 
     def __init__(self, journal_path: str):
         self._run_dir = os.path.dirname(journal_path)
         self._reader = TailReader(journal_path)
         self._seen: set[tuple[str, str]] = set()
-        # Per-instance, not module-level. An agent meta file is immutable once
-        # written, so caching hits is safe for the life of a run -- but scoping
-        # that to the renderer keeps the lifetime tied to the run rather than to
-        # the host process, so importing this module as a library cannot
-        # accumulate every run's metadata. (Review: code-reviewer slice 1, P2.)
         self._meta_cache: dict[tuple[str, str], dict] = {}
 
     def poll(self) -> list[str]:

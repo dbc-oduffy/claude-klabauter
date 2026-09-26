@@ -1,11 +1,3 @@
-"""Characterization tests for coordinator_core.ops.cmd_autorun_guard.
-
-Every test monkeypatches `_read_autorun` / `_write_autorun` / `_delete_autorun`
-(the module's own registry-access seam) — never touches a real HKCU hive, on
-any platform. `_is_windows` is monkeypatched True/False independently of the
-host this suite actually runs on, so the whole logic (OS gate aside) is
-exercised regardless of platform.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -16,9 +8,6 @@ from coordinator_core.ops import cmd_autorun_guard as mod
 
 
 def _fake_registry(monkeypatch, initial=None):
-    """Install an in-memory fake for the three registry-access functions,
-    returning a mutable single-item dict {"value": <current>} the test can
-    inspect afterward."""
     state = {"value": initial}
 
     def _read():
@@ -38,15 +27,7 @@ def _fake_registry(monkeypatch, initial=None):
 
 
 def _allow_mutation(monkeypatch):
-    """Stub the deferred belt-and-braces gate to always allow — isolates
-    these tests from `coordinator_core.install.substrate`'s own env-var
-    reading."""
     monkeypatch.setattr(mod, "_refuse_if_disabled", lambda what: None)
-
-
-# ---------------------------------------------------------------------------
-# _classify / detect_cmd_autorun_coverage
-# ---------------------------------------------------------------------------
 
 
 def test_detect_not_windows(monkeypatch):
@@ -81,12 +62,6 @@ def test_detect_foreign_present(monkeypatch):
 
 
 def test_detect_foreign_present_when_macro_text_is_an_unanchored_substring(monkeypatch):
-    # A foreign AutoRun value embedding
-    # the macro text without the `_JOIN` delimiter (e.g. inside a `rem`
-    # comment, or concatenated by some other tool without " & ") must
-    # classify as foreign, not covered — a raw substring test would
-    # misclassify this and let strip/write act on content coordinator never
-    # wrote.
     foreign = f"rem {mod._DESIRED_MACRO} (disabled by IT policy)"
     _fake_registry(monkeypatch, initial=foreign)
     result = mod.detect_cmd_autorun_coverage()
@@ -101,11 +76,6 @@ def test_strip_is_a_clean_noop_when_macro_text_is_an_unanchored_substring(monkey
     result = mod.strip_cmd_autorun_guard()
     assert result["modified"] is False
     assert state["value"] == foreign
-
-
-# ---------------------------------------------------------------------------
-# write_cmd_autorun_guard
-# ---------------------------------------------------------------------------
 
 
 def test_write_not_windows_noop(monkeypatch):
@@ -156,11 +126,6 @@ def test_write_refused_by_disable_gate_never_mutates(monkeypatch):
     assert state["value"] is None
 
 
-# ---------------------------------------------------------------------------
-# strip_cmd_autorun_guard
-# ---------------------------------------------------------------------------
-
-
 def test_strip_not_windows_noop(monkeypatch):
     monkeypatch.setattr(mod, "_is_windows", lambda: False)
     result = mod.strip_cmd_autorun_guard()
@@ -193,7 +158,6 @@ def test_strip_preserves_foreign_content_appended_after(monkeypatch):
 
 
 def test_strip_preserves_foreign_content_appended_before_our_macro(monkeypatch):
-    # our macro was written first, then the operator appended their own
     original = f"{mod._DESIRED_MACRO}{mod._JOIN}doskey ls=dir /w"
     state = _fake_registry(monkeypatch, initial=original)
     _allow_mutation(monkeypatch)
@@ -220,11 +184,6 @@ def test_strip_refused_by_disable_gate_never_mutates(monkeypatch):
     assert state["value"] == mod._DESIRED_MACRO
 
 
-# ---------------------------------------------------------------------------
-# round-trip: write then strip restores exactly
-# ---------------------------------------------------------------------------
-
-
 def test_round_trip_write_then_strip_restores_original(monkeypatch):
     original = "doskey ls=dir /w"
     state = _fake_registry(monkeypatch, initial=original)
@@ -242,11 +201,6 @@ def test_round_trip_write_then_strip_restores_unset(monkeypatch):
     assert state["value"] is not None
     mod.strip_cmd_autorun_guard()
     assert state["value"] is None
-
-
-# ---------------------------------------------------------------------------
-# register_op handlers
-# ---------------------------------------------------------------------------
 
 
 def test_detect_handler(monkeypatch):
@@ -269,11 +223,6 @@ def test_strip_handler_check_only(monkeypatch):
     result = asyncio.run(mod._strip_handler({"check_only": True}, repo_root=None))
     assert result["modified"] is False
     assert state["value"] == mod._DESIRED_MACRO
-
-
-# ---------------------------------------------------------------------------
-# main() CLI
-# ---------------------------------------------------------------------------
 
 
 def test_main_detect_default_verb(monkeypatch, capsys):

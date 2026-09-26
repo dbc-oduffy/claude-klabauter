@@ -1,12 +1,3 @@
-"""Tests for coordinator_core.ops.dispatch_shape_classify.
-
-Golden oracle snapshotted 2026-07-17 against the bash script and its own
-co-located test suite — this file re-derives the same fixture cases directly
-against `main()`.
-
-Port of: classify-dispatch-shape.sh (DoE b5a4192c, 2026-07-20)
-Oracle: classify-dispatch-shape.test.sh (DoE a2fe06f8, 2026-07-22)
-"""
 
 from __future__ import annotations
 
@@ -19,8 +10,6 @@ import pytest
 from coordinator_core.ops.dispatch_shape_classify import main
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -321,8 +310,6 @@ def test_g1_multiple_fenced_blocks_malformed_spine_silent(capsys, tmp_path):
 
 
 def test_no_git_repo_silent(capsys, tmp_path):
-    # No git init at all, and cwd relocated outside any repo — git rev-parse fails
-    # both rungs (dirname(plan_file) AND process cwd), classifier exits silently.
     plan = tmp_path / "docs" / "plans" / "test-plan.md"
     spine = _spine_row("C1", "false") + _spine_row("C2", "false") + _spine_row("C3", "false")
     _write_plan(plan, spine)

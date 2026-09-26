@@ -84,21 +84,13 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops._pytest_child_env import pytest_child_env
 from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
 
-# Template location inside the DoE / coordinator-claude tree (repo-relative;
-# joined off the resolver's root per DEC-1 resolve-root-once-then-join).
 _TEMPLATE_REL = Path("coordinator") / "tests" / "templates" / "test_no_bare_console_subprocess.py"
 
-# Destination inside the consuming repo (fence step 1: `cp ... tests/<name>`).
 _DEST_REL = Path("tests") / "test_no_bare_console_subprocess.py"
 
 
 class TripwireCopyError(RuntimeError):
-    """Structured failure for repo_setup.copy_console_subprocess_tripwire (CC-7).
-
-    Raised — never silently absorbed — when a premise fails: target repo root
-    missing, DoE root unresolvable, template file missing, or destination
-    present but not a regular file. The message names every offending path.
-    """
+    pass
 
 
 def _resolve_template_path() -> Path:
@@ -120,21 +112,6 @@ def _resolve_template_path() -> Path:
 
 
 def _run_pytest(dest: Path, cwd: Path) -> bool:
-    """Run the tripwire test via a direct pytest subprocess (settlement A6).
-
-    `[sys.executable, "-m", "pytest", <dest>]` — list-argv, no bash preamble,
-    no shell interpreter (CC-1). Returns True iff pytest exits 0.
-
-    `env=pytest_child_env()`: this runs inside a dispatch process, and lazy op
-    registration reaching a pytest child makes any suite that asserts the op
-    registry at import time fail collection — reported here as a tripwire
-    verification failure in a repo whose tripwire is fine.
-
-    Deliberate isolation boundary — do not convert to an in-process pytest
-    invocation. Mechanism: pytest process isolation — a nested in-process
-    pytest run corrupts the parent's collection/import state. See
-    state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md.
-    """
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", str(dest)],
         cwd=str(cwd),
@@ -143,7 +120,7 @@ def _run_pytest(dest: Path, cwd: Path) -> bool:
         errors="replace",
         env=pytest_child_env(),
         **no_console_creationflags(),
-    )  # popup-safe-env-suppressed
+    )
     return proc.returncode == 0
 
 
@@ -151,15 +128,6 @@ def copy_console_subprocess_tripwire(
     target_repo_root: str,
     template_path: Optional[Path] = None,
 ) -> dict:
-    """Content-idempotent tripwire install + pytest verify (settlement A6).
-
-    target_repo_root: the consuming repo's checked-out worktree root.
-    template_path:    injectable template source for tests; None → resolve via
-                      the mandated coordinator_doe_root() resolver.
-
-    Returns {copied, skipped_existing, test_passed} per the manifest contract.
-    Raises TripwireCopyError on any failed premise (CC-7 fail-loud).
-    """
     target = Path(target_repo_root)
     if not target.is_dir():
         raise TripwireCopyError(
@@ -180,19 +148,14 @@ def copy_console_subprocess_tripwire(
 
     if dest.exists():
         if not dest.is_file():
-            # CC-7: an unclassified half-state (dest is a directory/symlink-to-dir)
-            # fails loud naming both paths — never guessed around.
             raise TripwireCopyError(
                 "repo_setup.copy_console_subprocess_tripwire: destination "
                 f"{str(dest)!r} exists but is not a regular file (template: "
                 f"{str(template)!r}) — refusing to proceed"
             )
         if dest.read_bytes() == template.read_bytes():
-            # Byte-identical → skip, copied: false (the idempotent no-op branch).
             pass
         else:
-            # Differing bytes → presumed hand-customized allowlist edits:
-            # skip-and-report, NEVER clobber (settlement A6, the oracle's hazard).
             skipped_existing = True
     else:
         dest.parent.mkdir(parents=True, exist_ok=True)

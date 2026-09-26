@@ -1,60 +1,3 @@
-"""
-coordinator_core.ops.ceremony.tests.test_commit_entry_import_cost — pins that
-importing the commit entry point does NOT drag `asyncio` (nor the fleet
-archive-sweep module that needs it), nor `socket`, into the interpreter.
-
-Repointed from the retired `commit_pipeline.py` onto `coordinator_core.git.
-commit`, the entry point that now carries the commit hot path. `12b6a009aa`
-(2026-08-29) retired `commit_pipeline.py` and reported its AST census of
-remaining touches at zero, but this file named the module in a STRING -- the
-`_PROBE` source handed to a fresh interpreter -- never in an import
-statement, so an import-node census could not see it and the file stayed red
-at HEAD with `ModuleNotFoundError`. The property is unchanged and still
-wanted; only its subject moved.
-
-WHY THIS IS A GUARD AND NOT A COMMENT. The commit path is a process before it is
-anything else: every ceremony commit pays interpreter start plus this module's
-import graph before a single git call happens. `asyncio` is the single largest
-avoidable node in that graph — measured 2026-08-26 on the reference box, k=61
-process-time samples of a cold `python -c "import <mod>"`:
-
-    bare interpreter                          ~21ms
-    + asyncio (and its ssl/socket subtree)    ~52ms
-    commit entry, asyncio eager               ~88ms
-    commit entry, asyncio deferred            ~61ms
-
-Against the direct counterfactual -- the same import with `socket`, `asyncio`
-and the fleet module forced in first -- `-X importtime` summed over every module
-gives 59.1ms deferred against 83.0ms eager, k=15, spread under 5ms. That is the
-low-noise form of the same result and the number to re-derive when changing
-this: process time on a shared box moves with peer load, import self-time does
-not.
-
-asyncio is on a path that never awaits anything unless the cadence-gated in-plane
-archive sweep actually ran. That sweep was REMOVED from the commit path entirely
-on 2026-08-27 (PM ruling, abd587695), along with `_run_in_plane_archive_sweep`,
-its cadence gate and `_archive_sweep_cap()`, so nothing on this path is entitled
-to those imports at all any more. The assertion below therefore catches a NEW hot-
-path dependency rather than a deferral that regressed; it got stricter, not stale.
-reason — binding the cap as a module-level constant is what forced the eager
-import in the first place, and would silently re-force it.
-
-The regression this guards is invisible by inspection: adding
-`from coordinator_core.ops.fleet import archive_terminal_handoffs` back at
-module scope, or any new top-level `import asyncio`, costs ~26ms per commit
-across ~50 concurrent sessions and breaks nothing a functional test can see.
-
-Negative-spec:
-    Do NOT turn this into a timing assertion. The numbers above are the
-    motivation, not the property — a wall-clock or process-time budget here
-    would measure peer load on a shared box (CLAUDE.md § Load norm) and flake.
-    The property is import-graph membership, which is deterministic.
-    Do NOT arm lazy ops in the probe. Arming eagerly imports the ops package
-    and would make the assertion pass for the wrong reason.
-    Do NOT relax this to "asyncio only" — the fleet module is a coroutine
-    module, so re-importing it eagerly re-imports asyncio transitively and the
-    asyncio half of the assertion would catch it only by accident.
-"""
 
 from __future__ import annotations
 
@@ -65,22 +8,9 @@ import textwrap
 
 import pytest
 
-# Spawns a real subprocess (fresh interpreter) — the property under test is
-# `sys.modules` absence, and this test process has `asyncio` loaded already via
-# pytest and its own plugins, so an in-process assertion is unmeasurable.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-#: Modules that must stay OUT of the interpreter after a bare
-#: `import coordinator_core.git.commit`. Prefix-matched, so a
-#: submodule (`asyncio.events`) counts as a hit for its parent.
-#:
-#: `socket` (with `selectors`/`select`, ~4.3ms) arrives by a SECOND route:
-#: `machine_resolver._hostname_short`, reached through `doe_root_pointer` ->
 #: `commit_trailers`. `compute_machine` resolves `$COORDINATOR_MACHINE` and the
-#: settings file first, so most invocations never ask for a hostname at all --
-#: the import there is deferred for the same reason asyncio's is here, and is
-#: pinned here because this is the path that pays for it.
 _FORBIDDEN_PREFIXES = (
     "asyncio",
     "coordinator_core.ops.fleet.archive_terminal_handoffs",
@@ -106,8 +36,6 @@ _PROBE = textwrap.dedent(
 
 
 def _loaded_modules() -> list[str]:
-    """Return `sys.modules` of a fresh interpreter that imported nothing but
-    the commit pipeline."""
     proc = subprocess.run(
         [sys.executable, "-c", _PROBE],
         capture_output=True,
@@ -123,8 +51,6 @@ def _loaded_modules() -> list[str]:
 
 
 def test_commit_entry_import_does_not_pull_asyncio() -> None:
-    """A cold `import coordinator_core.git.commit` leaves `asyncio` and the fleet
-    archive-sweep module unimported."""
     loaded = _loaded_modules()
     offenders = [
         name

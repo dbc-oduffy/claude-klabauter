@@ -1,19 +1,3 @@
-"""The four cockpit columns (``status``, ``deployment_state``, ``predecessor``,
-``shipped_in``), callable without an ``EmitContext`` or an emit envelope.
-
-Extracted out of ``sections/handoffs.py`` (C1, plan
-``docs/plans/2026-08-11-pull-surface-for-cockpit-the-four-columns-and-the-archive.md``) so a
-query-side caller (the C3 ``handoff.columns`` op) can compute the same four values ``handoffs.py``
-emits, without constructing an envelope. This is a PURE MOVE — the moved logic is unchanged, only
-the ``EmitContext`` argument some of it took is narrowed to the one thing it actually needed (a
-repo-root path).
-
-Only two of the four columns are genuinely computed here: ``deployment_state`` (old-vocabulary
-coercion via ``_coerce_legacy_abandoned``) and ``shipped_in`` ({sha, date} git enrichment via
-``_resolve_shipped_in_dates``). ``status`` is a raw frontmatter passthrough and ``predecessor``'s
-only "computation" is its ``"none"`` default when the field is absent — see the plan's Problem
-section for the correction this module's docstring exists to not overstate again.
-"""
 
 from __future__ import annotations
 
@@ -21,20 +5,11 @@ import subprocess
 from pathlib import Path
 from typing import Any, Optional
 
-# DR-084 P4 transitional ingest tolerance (see sections/handoffs.py's module docstring for the
-# full history and named exit condition) — the union of old-and-new legal `deployment_state`
-# values. A value outside this union is neither, and is per-record quarantined by the caller.
-# `record` is the ratified spelling for a non-workstream parent record (`kind:
-# spinoff-parent-record`) — an artifact naming its split pieces, which by
-# construction never reaches `ready_to_fire`, `in_flight`, or `shipped`. It is a
-# legitimate terminal on this axis, not a malformed value; quarantining it left
-# every reader scanning the `malformed` bucket re-deciding the same record was fine.
 _DEPLOYMENT_RECOGNIZED = {
     "in_flight", "shipped", "awaiting_gate", "ready_to_fire", "abandoned",
     "continued", "closed", "record",
 }
 
-# `predecessor`'s only computation: the default projected when frontmatter omits the field.
 PREDECESSOR_DEFAULT = "none"
 
 
@@ -68,17 +43,8 @@ def _coerce_legacy_abandoned(fm: dict) -> tuple[str, Optional[str], Optional[str
 
 
 def _resolve_shipped_in_dates(repo_root: Path, raw_shas: list[str]) -> dict[str, str]:
-    """Resolve distinct raw ``shipped_in`` SHAs to commit dates via ONE git log.
-
-    ``git log --no-walk=unsorted --ignore-missing --format='%H %ad' --date=format:%Y-%m-%d``
-    over the SHA batch; unresolvable SHAs are silently dropped (--ignore-missing → exit 0).
-    Each output ``%H`` is prefix-matched back to the first unmatched raw SHA (shipped_in.sha
-    must be the raw frontmatter value, not the 40-char expansion). Offline / git failure →
-    empty map (all shipped_in resolve to null; caller never aborts).
-    """
     if not raw_shas:
         return {}
-    # jq `unique` sorts ascending — replicate so the prefix-match tiebreak order matches bash.
     ordered = sorted(set(raw_shas))
     try:
         from coordinator_core.win_portability import no_console_creationflags
@@ -116,29 +82,12 @@ def _resolve_shipped_in_dates(repo_root: Path, raw_shas: list[str]) -> dict[str,
 
 
 def _jq_or(value: Any, default: Any) -> Any:
-    """Mirror jq ``//`` — return ``default`` when ``value`` is null or false, else ``value``.
-
-    Local copy of ``sections/handoffs.py``'s helper of the same name — kept private and
-    duplicated (not imported) so this module has no dependency edge onto ``handoffs.py``, per the
-    plan's anti-scope ("the arrow points from both callers into it, never between them").
-    """
     if value is None or value is False:
         return default
     return value
 
 
 def _compute_non_git_columns(fm: dict) -> tuple[Any, Any, Any, Optional[str]]:
-    """Compute the three non-git columns plus the raw (unresolved) ``shipped_in`` SHA.
-
-    Shared innards of both ``compute_handoff_columns`` (single-record) and
-    ``compute_handoff_columns_batch`` (many-record, one ``git log``) — factored out so the
-    ``status``/``deployment_state``/``predecessor`` derivation and the ``shipped_in`` raw-value
-    extraction live in exactly one place, and only the git-resolution step (single-SHA vs.
-    batched) differs between the two callers.
-
-    Returns ``(status, deployment_state, predecessor, shipped_sha_raw)`` — ``shipped_sha_raw`` is
-    ``None`` when the record has no ``shipped_in`` value.
-    """
     status = fm.get("status")
 
     deployment_state = fm.get("deployment_state")
@@ -187,21 +136,6 @@ def compute_handoff_columns(fm: dict, repo_root: Path) -> dict:
 
 
 def compute_handoff_columns_batch(frontmatters: list[dict], repo_root: Path) -> list[dict]:
-    """Batch-shaped sibling of ``compute_handoff_columns`` — ONE ``git log`` for N records.
-
-    Added for the C3 ``handoff.columns`` query op (2026-08-11 pull-surface-four-columns plan),
-    whose corpus is 133 live plus 284 archived handoffs in this repo alone — calling
-    ``compute_handoff_columns`` in a loop would spawn one ``git log`` subprocess per record
-    (400+ spawns), a serious regression on a machine running 50-70 concurrent LLM sessions as
-    normal load (see this repo's CLAUDE.md § Load norm) and precisely the read-path cost DR-287
-    halted the emit cadence over.
-
-    Collects every record's raw ``shipped_in`` SHA first, resolves the whole batch via ONE
-    ``_resolve_shipped_in_dates(repo_root, all_shas)`` call, then joins the resolved dates back
-    per record. Returns one ``{"status", "deployment_state", "predecessor", "shipped_in"}`` dict
-    per input frontmatter, same order as ``frontmatters``, same per-record shape as
-    ``compute_handoff_columns``'s return value.
-    """
     parsed = [_compute_non_git_columns(fm) for fm in frontmatters]
 
     all_shas = sorted({s for (_, _, _, s) in parsed if s is not None})

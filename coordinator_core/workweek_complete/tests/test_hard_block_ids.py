@@ -27,8 +27,6 @@ class TestHardBlockIds:
         assert "d_step4c_ubt_pending_merge_gate" not in _hard_block_ids(directives)
 
     def test_dead_ubt_id_is_not_constructed_at_all(self) -> None:
-        """The id names a directive this module never builds — confirms it
-        is genuinely dead, not merely demoted."""
         directives = _build_directives()
         assert "d_step4c_ubt_pending_merge_gate" not in {d["id"] for d in directives}
 

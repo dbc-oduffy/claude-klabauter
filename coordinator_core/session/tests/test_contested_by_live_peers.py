@@ -57,9 +57,6 @@ def repo(tmp_path):
 
 class TestContestedByLivePeers:
     def test_names_every_live_peer_holding_the_path(self, repo, monkeypatch):
-        """The incident shape: TWO peers on one file. A refusal naming one of
-        them sends the caller to coordinate with half the people it needs to,
-        which is why this is not a single merged projection."""
         monkeypatch.setattr(scope.liveness, "session_live", lambda sid, cwd=None: True)
         monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
         for sid in ("mine", "peer-a", "peer-b"):
@@ -82,8 +79,6 @@ class TestContestedByLivePeers:
         assert scope.contested_by_live_peers(["pkg/mod.py"], "mine", repo) == {}
 
     def test_released_peer_claim_is_not_a_contest(self, repo, monkeypatch):
-        """A RELEASE is the peer saying it is done. Treating it as ownership
-        would wedge every path any session ever touched."""
         monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
         for sid in ("mine", "peer-a"):
             core.init(sid, cwd=repo)
@@ -103,8 +98,6 @@ class TestContestedByLivePeers:
         assert scope.contested_by_live_peers(["pkg/mod.py"], "mine", repo) == {}
 
     def test_answers_only_about_the_named_paths(self, repo, monkeypatch):
-        """Negative-spec: this is not a second `compute_scope`. A contested path
-        the caller did not name must not appear."""
         monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
         for sid in ("mine", "peer-a"):
             core.init(sid, cwd=repo)
@@ -117,20 +110,11 @@ class TestContestedByLivePeers:
 
 
 class TestFailsOpen:
-    """Every case here still permits the commit (fail-open is unchanged).
-    What this class pins is the RETURN VALUE: a genuine empty result
-    (nothing requested, or nothing found) is ``{}``; a state where contest
-    could not be established at all is ``None`` -- the two must never be
-    the same value, or a caller cannot tell a swallowed read failure from a
-    clean pathspec.
-    """
 
     def test_empty_session_id_cannot_establish_contest(self, repo):
         assert scope.contested_by_live_peers(["pkg/mod.py"], "", repo) is None
 
     def test_empty_path_set_yields_no_contest(self, repo):
-        """Nothing was asked -- this is a genuine empty result, not a read
-        failure, so it stays ``{}``."""
         assert scope.contested_by_live_peers([], "mine", repo) == {}
 
     def test_absent_session_hub_cannot_establish_contest(self, tmp_path):
@@ -140,8 +124,6 @@ class TestFailsOpen:
         )
 
     def test_raising_projection_cannot_establish_contest(self, repo, monkeypatch):
-        """A bookkeeping outage must not become a fleet-wide commit refusal,
-        but it must also not look identical to a clean pathspec."""
         monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
         for sid in ("mine", "peer-a"):
             core.init(sid, cwd=repo)
@@ -155,8 +137,6 @@ class TestFailsOpen:
         assert scope.contested_by_live_peers(["pkg/mod.py"], "mine", repo) is None
 
     def test_no_peer_sinks_is_a_genuine_empty_result(self, repo, monkeypatch):
-        """No peer sessions at all -- read succeeded, there is simply
-        nothing to contest. Distinct from the failure cases above."""
         monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
         core.init("mine", cwd=repo)
 

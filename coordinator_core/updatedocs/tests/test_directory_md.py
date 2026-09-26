@@ -1,8 +1,3 @@
-"""
-Tests for coordinator_core.updatedocs.directory_md.
-
-Spec backlink: pln-bucket-2-extraction-four-deter-e121fa (chunk C2)
-"""
 
 from __future__ import annotations
 
@@ -35,10 +30,6 @@ def test_absent_file_raises_typed_unavailable(tmp_path):
 def test_real_trailing_parenthetical_line_is_parsed(tmp_path):
     doc = _write(tmp_path, "DIRECTORY.md", REAL_REFRESHED_LINE + "\n")
     drift = compute_directory_md_drift(doc)
-    # Deliberately NOT pinned to a literal date. This file's refresh date
-    # moving is the drift this package exists to prompt someone to fix, so a
-    # pinned date makes the test go red for the right real-world reason and the
-    # wrong test reason -- it would read as a regression.
     assert drift.refreshed_on is not None
     assert drift.age_days is not None and drift.age_days > 14
     assert drift.age_days == (date.today() - date(2026, 8, 6)).days

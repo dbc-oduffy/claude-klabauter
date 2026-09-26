@@ -41,13 +41,10 @@ from coordinator_core._settings_home import settings_home
 from coordinator_core.hooks._envelope import context_only, no_advisory
 from coordinator_core.ipc import register_op
 
-#: The durable log's filename, under this settings-home's `state/` subtree.
 _LOG_FILENAME = "job-mode-announce.log"
 
 
 def _append_durable_line(line: str) -> None:
-    """Best-effort append — raises on any failure; the caller catches it so a
-    durable-write failure never costs the returned envelope its own line."""
     log_path = settings_home() / "state" / _LOG_FILENAME
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "a", encoding="utf-8", newline="\n") as fh:
@@ -91,6 +88,6 @@ def _handler(params: dict, repo_root=None) -> dict:
             f"{timestamp} session={session_id} job_mode={mode} ({provenance})"
         )
     except Exception:
-        pass  # durable-log append is best-effort; the banner still reports the mode either way
+        pass
 
     return context_only("SessionStart", banner)

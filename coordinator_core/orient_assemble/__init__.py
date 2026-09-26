@@ -70,10 +70,6 @@ from coordinator_core.orient_assemble import (
     readers_health_reaper,
 )
 
-#: The four reader families this seam wires into `brief()`. Each exposes
-#: `collect(cadence) -> ReaderResult` (directives + judgment_points); cadence
-#: self-gating (e.g. readers_health_reaper's day-only reaper probe) lives
-#: inside each reader's own `collect()`, not here.
 _READER_MODULES = (
     readers_clean_ops,
     readers_handoff_triage,
@@ -81,59 +77,16 @@ _READER_MODULES = (
     readers_health_reaper,
 )
 
-#: The three cadences `orient-assemble brief --cadence` accepts. Cadence
-#: tunes severity/depth knobs over ONE shared compute — it is never a
-#: branch into three separate code paths (Approach § "Cadence is a
-#: parameter, not three code paths").
 CADENCES: tuple[str, ...] = ("session", "day", "week")
 
-#: Exit-code contract, locally scoped to this CLI (mirrors
-#: `coordinator_core.pickup_assemble`'s own locally-scoped enumeration —
-#: NOT inherited from any house convention; see envelope.py's
-#: `extend_exit_codes` docstring).
 OrientExitCode = extend_exit_codes("OrientExitCode", USAGE=2, TRANSPORT_FAIL=3)
 
-#: DoE schema-of-record (`decision-object.schema.json`) constraint: when a
-#: judgment point's `recommendation` is `null`, `reason` MUST be one of
-#: these two enum values — free text is only schema-legal when `recommendation`
-#: is non-null. Every reader family here builds its no-verdict judgment
-#: points via `build_judgment_point(None, ..., reason=<free text>)`, which is
-#: schema-valid at the constructor level (the constructor doesn't enforce
-#: this conditional) but fails `jsonschema.validate` once assembled into a
-#: real envelope. Normalized here at the merge seam, not inside any reader.
 _SCHEMA_LEGAL_NULL_RECOMMENDATION_REASONS = frozenset(
     {"insufficient-evidence", "recommendation-forbidden"}
 )
 
 
 def _assert_null_recommendation_reason_legal(judgment_point: dict[str, Any]) -> dict[str, Any]:
-    """Fail loud if a judgment point's `reason` is schema-illegal when
-    `recommendation` is null.
-
-    Note on `evidence` (Review: code-reviewer — Finding 5): several reader
-    families' no-verdict judgment points append a free-text human rationale
-    onto `evidence` via `f"{evidence} | reason: <prose>"` string
-    concatenation (see `readers_clean_ops._read_memo_surface`/
-    `_read_worktree_sweep`, `readers_branch_reconcile._read_auto_reconcile`,
-    `readers_health_reaper._read_exec_bit_check`/`_read_marker_freshness`).
-    This is a deliberate stopgap: the schema's `reason` field on a
-    null-recommendation judgment point is constrained to the two enum
-    values this function checks (`insufficient-evidence`/
-    `recommendation-forbidden`), leaving no structured field for the human
-    explanation of *why* recommendation is forbidden. `evidence` is where
-    that rationale lives instead. Do NOT "clean up" the `| reason: ...`
-    suffix out of `evidence` thinking it should be the bare evidence
-    string alone — that rationale has no other home until the schema gains
-    a dedicated field.
-
-    Each reader family is responsible for classifying its OWN no-verdict
-    judgment points at source (`"insufficient-evidence"` when the engine
-    genuinely lacks data to form a verdict, `"recommendation-forbidden"`
-    when it could form one but must not — a PM/human call). This seam does
-    not coerce or guess on a reader's behalf; a reader that emits free text
-    here is a schema violation in that reader, not something to paper over
-    at merge time. Returns the judgment point unchanged when legal.
-    """
     if judgment_point.get("recommendation") is not None:
         return judgment_point
     reason = judgment_point.get("reason", "")
@@ -189,17 +142,6 @@ def brief(cadence: str, *, repo_root: str | None = None) -> dict[str, Any]:
             f"must be one of {CADENCES}"
         )
 
-    # The guard is HERE, not inside each reader, and must not move back. A
-    # reader raising should cost its own contribution to the brief, never the
-    # whole orientation -- but expressing that per-reader means every reader
-    # carrying a bare `except Exception`, which is exactly what they grew.
-    # Those clauses then swallow the reader's OWN defects too: a bootstrap
-    # error in the health-reaper family read as a clean box for months,
-    # because the broad clause that was there to keep orientation alive could
-    # not tell a vanishing file apart from a broken import. One guard at the
-    # seam that owns the loop lets each reader's own clause name only what it
-    # actually expects, and names the degraded reader on stderr instead of
-    # dropping it silently.
     directives: list[dict[str, Any]] = []
     judgment_points: list[dict[str, Any]] = []
     for reader in _READER_MODULES:
@@ -219,18 +161,6 @@ def brief(cadence: str, *, repo_root: str | None = None) -> dict[str, Any]:
         _assert_null_recommendation_reason_legal(jp) for jp in judgment_points
     ]
 
-    # Partition at this seam only, over the FULL concatenated directive set
-    # (see module docstring's "Reported-point demotion" note): a point is
-    # `reported` when it gates no live directive and is not depended on by
-    # one. Asked points stay in `judgment_points[]`; reported points are
-    # demoted into narration prose so the drift is still visible without
-    # asking the EM to answer for something that gates nothing.
-    # Scoped to recommendation-carrying points: a Tier-3 point
-    # (`recommendation=None`, reason `recommendation-forbidden` or
-    # `insufficient-evidence`) is a question the engine deliberately must not
-    # answer, so it keeps asking however few directives it gates --
-    # `j-session-day-review-due` is the live instance, and demoting it would
-    # silence a due review rather than de-noise a settled one.
     recommendation_carrying = [
         jp for jp in judgment_points if jp.get("recommendation") is not None
     ]
@@ -273,32 +203,6 @@ def brief(cadence: str, *, repo_root: str | None = None) -> dict[str, Any]:
 
 
 def _resolve_target_root(target_root_arg: str | None) -> str:
-    """Resolve the repo root this `orient-assemble` invocation reports on.
-
-    Defaults to git-toplevel-from-cwd (`find_repo_root()`, no explicit cwd —
-    the caller's own process cwd is what "my repo" means here; this CLI is
-    invoked directly, unlike `coordinator_core.invoke`'s argv-forwarded-cwd
-    trampoline shape, so there is no separate caller cwd to thread through).
-    An explicit `--target-root <path>` overrides this and is resolved
-    relative to the current process cwd without a git-toplevel check —
-    a caller naming a path already knows it is a target repo root. It IS
-    checked for existence: an unresolvable explicit root raises here rather
-    than reaching the readers, because every reader that scans a directory
-    under it treats a missing directory as "nothing to report" and returns
-    an empty ReaderResult. Without this check `--target-root /nonexistent`
-    renders as a clean corpus across every reader at once — AC9's silent
-    zero, arriving through the one argument whose whole purpose is to say
-    which repo to look at.
-
-    AC9 / negative-spec: raises `RuntimeError` when no `--target-root` was
-    given and cwd is not inside a git working tree — never falls back to a
-    default or returns quietly. Silence here is the exact bug this chunk
-    exists to close: DoE-claude's `/workday-start` Step 1.475 read claude-klabauter's
-    own work-state as if it were DoE's for twelve days because an
-    unresolvable root was never distinguished from "the answer is empty".
-    Mirrors `coordinator_core.invoke.__main__._resolve_repo_root`'s AC-5
-    fail-loud discipline (see that function's own docstring).
-    """
     if target_root_arg is not None:
         resolved = Path(target_root_arg).resolve()
         if not resolved.is_dir():
@@ -307,15 +211,11 @@ def _resolve_target_root(target_root_arg: str | None) -> str:
                 f"(resolved to {resolved})"
             )
         return str(resolved)
-    from coordinator_core.lifecycle import find_repo_root  # deferred: no side effects at import time
+    from coordinator_core.lifecycle import find_repo_root
     return str(find_repo_root())
 
 
 def _usage() -> int:
-    """Print a usage error and return the shipped envelope's `_emit`-backed
-    usage exit — a decision object is emitted on every exit, including a
-    usage error, never a bare exit code (contract § round-trip
-    classification)."""
     envelope = build_envelope(
         narration="orient-assemble: usage error.",
         next_move=(
@@ -331,14 +231,6 @@ def _usage() -> int:
 
 
 def main(argv: list[str]) -> int:
-    """`orient-assemble brief --cadence {session|day|week} [--target-root <path>]`
-    CLI entrypoint.
-
-    `--target-root` (AC9, C8): explicit repo root this invocation reports
-    on, defaulting to git-toplevel-from-cwd via `_resolve_target_root`. An
-    unresolvable root (no flag, cwd not inside a git working tree) fails
-    loud here rather than falling through to `brief()` with `repo_root=None`
-    — see `_resolve_target_root`'s docstring for why silence is the bug."""
     if argv[:1] and argv[0] in ("--help", "-h"):
         print(
             "usage: orient-assemble brief --cadence {session|day|week} "

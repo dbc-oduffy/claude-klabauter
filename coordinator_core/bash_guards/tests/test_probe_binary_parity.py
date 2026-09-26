@@ -19,9 +19,6 @@ from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.bash_guards._shape_classifier import _SESSION_FACT_PROBE_BINARIES
 
 #: One minimal recognized invocation per `_SESSION_FACT_PROBE_BINARIES`
-#: member, chosen to satisfy `_bt_probe_segment_kind`'s own recognized-form
-#: requirements (`git` needs a recognized subcommand form; the rest are
-#: bare, no-argument invocations).
 _MINIMAL_INVOCATION = {
     "git": ["git", "status"],
     "pwd": ["pwd"],
@@ -32,11 +29,6 @@ _MINIMAL_INVOCATION = {
 
 
 def test_every_session_fact_probe_binary_recognized_by_dispatch_checks():
-    """Every binary `_shape_classifier` treats as a session-fact probe must
-    also be recognized by `dispatch_checks._bt_probe_segment_kind` -- if
-    this fails, a probe binary was added to one module's list and not the
-    other's.
-    """
     assert set(_SESSION_FACT_PROBE_BINARIES) == set(_MINIMAL_INVOCATION), (
         "this test's _MINIMAL_INVOCATION table has drifted from "
         "_shape_classifier._SESSION_FACT_PROBE_BINARIES -- update both"
@@ -52,9 +44,6 @@ def test_every_session_fact_probe_binary_recognized_by_dispatch_checks():
 
 
 def test_unrecognized_binary_stays_unrecognized_by_both():
-    """Sanity check on the parity assertion's own discriminating power: an
-    ordinary non-probe binary is recognized by neither side.
-    """
     from coordinator_core.bash_guards._shape_classifier import token_matches_binary
 
     assert not any(token_matches_binary("ls", b) for b in _SESSION_FACT_PROBE_BINARIES)

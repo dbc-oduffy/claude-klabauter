@@ -18,11 +18,6 @@ from pathlib import Path
 
 import pytest
 
-# `coordinator/` and `coordinator/lib/` carry no `__init__.py`, so there is no
-# dotted import available from the repo root; `coordinator/lib/percolate/` DOES
-# have one. Putting `coordinator/lib` on `sys.path` and importing
-# `percolate.import_closure` as an ordinary package member is the route the
-# sibling tests in this directory already use.
 _COORDINATOR_LIB = Path(__file__).resolve().parents[2]
 if str(_COORDINATOR_LIB) not in sys.path:
     sys.path.insert(0, str(_COORDINATOR_LIB))
@@ -104,17 +99,12 @@ def test_type_checking_guarded_import_is_never_reported(tmp_path):
 
 def test_file_under_coordinator_core_is_never_reported(tmp_path):
     root = _base_tree(tmp_path)
-    # Self-referential shape (coordinator_core importing its own absent
-    # sibling) is the per-row gate's job, never this one's.
     _write(root, "coordinator_core/self_ref.py", "import coordinator_core.absent_pkg\n")
     _, violations = find_union_closure_violations(root)
     assert violations == []
 
 
 def test_from_present_top_level_package_import_absent_submodule_is_a_violation(tmp_path):
-    """The alias form a full-dotted-needle substring prefilter would miss:
-    `coordinator_core.present_pkg.absent_submod` never appears contiguous in
-    this source text, only split across `from ... import ...`."""
     root = _base_tree(tmp_path)
     _write(root, "bin/mod_d.py", "from coordinator_core.present_pkg import absent_submod\n")
     _, violations = find_union_closure_violations(root)
@@ -129,8 +119,6 @@ def test_from_present_package_import_present_submodule_is_not_a_violation(tmp_pa
 
 
 def test_from_coordinator_core_import_absent_top_level_package_is_a_violation(tmp_path):
-    """The other alias form the same review note names: the bare shape,
-    where the full dotted needle again never appears contiguous."""
     root = _base_tree(tmp_path)
     _write(root, "bin/mod_e.py", "from coordinator_core import absent_pkg2\n")
     _, violations = find_union_closure_violations(root)
@@ -154,8 +142,6 @@ def test_examined_counts_non_coordinator_core_files_only(tmp_path):
     _write(root, "bin/mod_g.py", "x = 1\n")
     _write(root, "lib/mod_h.py", "y = 2\n")
     examined, _ = find_union_closure_violations(root)
-    # bin/mod_g.py + lib/mod_h.py; the coordinator_core/* fixtures are
-    # excluded from the count entirely.
     assert examined == 2
 
 

@@ -1,41 +1,3 @@
-"""coordinator_core/hooks/tests/test_arrival_w4_c7.py -- the W4-C7 arrival
-gate for the write-path guards landed under `coordinator_core/hooks/`.
-
-Subject: the fourteen modules this row's `writes` list names (thirteen
-`.py` modules plus this file itself) -- `preuse_write_dispatch`,
-`guard_python_syntax_on_write`, `guard_posix_invocation_doctrine_write`,
-`posix_invocation_detect`, `guard_test_tree_git_fixture_spawn`,
-`guard_handoff_summary_cap_on_write`, `guard_repo_setup_claude_home_refusal`,
-`guard_phantom_staged_deletion_precommit`, `phantom_staged_deletion`,
-`guard_review_integrator_sidecar_intake`, `nudge_plan_test_surface_tier`,
-`emit_effective_delivery`, `fanin_registries` -- ported from DoE-claude
-`coordinator/hooks/scripts/` per docs/plans/2026-09-18-doe-holds-no-scripts.md
-§ W4-C7.
-
-Shape coverage: every `hooks.<name>` op module registers under exactly the
-name this row's own body prescribes; the three pure-support modules
-(`posix_invocation_detect`, `phantom_staged_deletion`, `fanin_registries`)
-and the one native git pre-commit hook
-(`guard_phantom_staged_deletion_precommit`) register no op at all -- see
-each module's own arrival-note docstring for why.
-
-Behaviour coverage: one fast (wrong-tool-name / no-target) fail-open path
-per handler, plus at least one substantive positive path per module where
-that is cheap to construct without a git checkout -- pure predicate logic
-(`posix_invocation_detect`, `phantom_staged_deletion`) gets full positive/
-negative coverage; the two guards whose real behaviour depends on `git`
-subprocess reads (`guard_test_tree_git_fixture_spawn`,
-`guard_review_integrator_sidecar_intake`) are exercised only on their
-fast fail-open leg here -- their own predicate helpers, not this file, own
-deeper coverage.
-
-`emit_effective_delivery` gets its own section: `tail_key()`/`_check_string()`
-unit coverage (pure), plus one end-to-end `build_block()` smoke test against
-this box's own resolved DoE-claude checkout, skipped when that checkout
-is not resolvable (CI/cloud boxes without a DoE sibling clone) rather than
-failing -- this module's own cross-repo read is the one thing in this row
-that cannot be faked without a real `hooks.json`.
-"""
 
 from __future__ import annotations
 
@@ -57,11 +19,6 @@ from coordinator_core.hooks import (
     preuse_write_dispatch,
 )
 
-
-# ---------------------------------------------------------------------------
-# register_op shape: op modules register under hooks.<name>; support
-# modules and the native git hook register nothing.
-# ---------------------------------------------------------------------------
 
 _OP_MODULES = {
     "preuse_write_dispatch": preuse_write_dispatch,
@@ -100,11 +57,6 @@ def test_precommit_wrapper_has_main_not_handler():
     assert not hasattr(guard_phantom_staged_deletion_precommit, "_handler")
 
 
-# ---------------------------------------------------------------------------
-# preuse_write_dispatch
-# ---------------------------------------------------------------------------
-
-
 def test_preuse_write_dispatch_delegates_to_evaluate(monkeypatch):
     sentinel = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny"}}
 
@@ -124,11 +76,6 @@ def test_preuse_write_dispatch_fails_open_on_engine_exception(monkeypatch):
     monkeypatch.setattr(preuse_write_dispatch, "evaluate", _raise)
     result = preuse_write_dispatch._handler({"tool_name": "Write", "tool_input": {}})
     assert result == {}
-
-
-# ---------------------------------------------------------------------------
-# guard_python_syntax_on_write
-# ---------------------------------------------------------------------------
 
 
 def test_python_syntax_guard_scope_predicate():
@@ -168,11 +115,6 @@ def test_python_syntax_guard_allows_valid_write(tmp_path):
     assert result == {}
 
 
-# ---------------------------------------------------------------------------
-# posix_invocation_detect -- pure predicate, full coverage
-# ---------------------------------------------------------------------------
-
-
 def test_posix_invocation_detect_positive_hit():
     text = (
         "source \"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}"
@@ -206,11 +148,6 @@ def test_posix_invocation_detect_nested_expansion_reported_once():
     assert len(hits) == 1
 
 
-# ---------------------------------------------------------------------------
-# guard_posix_invocation_doctrine_write
-# ---------------------------------------------------------------------------
-
-
 def test_posix_doctrine_write_guard_allows_wrong_tool():
     result = guard_posix_invocation_doctrine_write._handler({"tool_name": "Read", "tool_input": {}})
     assert result == {}
@@ -223,13 +160,6 @@ def test_posix_doctrine_write_guard_advises_on_hit(tmp_path):
     params = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": content}}
     result = guard_posix_invocation_doctrine_write._handler(params)
     assert result.get("hookSpecificOutput", {}).get("permissionDecision") == "allow"
-
-
-# ---------------------------------------------------------------------------
-# guard_test_tree_git_fixture_spawn / guard_review_integrator_sidecar_intake
-# -- fast fail-open leg only; deep behaviour is git-backed and out of this
-# file's remit (see module docstring).
-# ---------------------------------------------------------------------------
 
 
 def test_test_tree_git_fixture_guard_allows_wrong_tool():
@@ -251,8 +181,6 @@ def _integrator_dispatch(prompt, cwd):
 
 
 def test_review_integrator_sidecar_guard_resolves_absolute_citation_outside_cwd(tmp_path):
-    """A multi-repo container's cwd is the parent of every checkout, so an
-    absolute citation must be probed as written, never re-rooted at cwd."""
     sidecar = tmp_path / "repo" / ".coordinator-local" / "subagent-share" / "sid" / "f.md"
     sidecar.parent.mkdir(parents=True)
     sidecar.write_text("findings\n", encoding="utf-8")
@@ -265,29 +193,19 @@ def test_review_integrator_sidecar_guard_resolves_absolute_citation_outside_cwd(
 
 
 def test_review_integrator_sidecar_guard_resolves_windows_drive_backslash_citation(tmp_path):
-    """A Windows-drive-letter, backslash-separated citation resolves against
-    a real POSIX file via the separator-swapped spelling -- the exact axis
-    the module docstring names (C:\\...\\) and the prior test suite left
-    unpinned."""
     sidecar = tmp_path / "repo" / ".coordinator-local" / "subagent-share" / "sid" / "f.md"
     sidecar.parent.mkdir(parents=True)
     sidecar.write_text("findings\n", encoding="utf-8")
-    backslash_citation = "C:\\" + str(sidecar.relative_to(sidecar.anchor)).replace("/", "\\")  # abs-path-ok: synthetic Windows-drive citation, not a real filesystem path
+    backslash_citation = "C:\\" + str(sidecar.relative_to(sidecar.anchor)).replace("/", "\\")
     result = guard_review_integrator_sidecar_intake._handler(
         _integrator_dispatch(f"Apply the findings in {backslash_citation}.", tmp_path)
     )
-    # On a POSIX host a drive-letter absolute citation cannot resolve to a
-    # real file (no drive letters exist), so this pins the deny path and
-    # confirms the prefix+tail extraction/backslash-swap machinery runs
-    # without raising -- the regression this coverage gap was flagged for.
     assert result != {}
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "C:" in reason
 
 
 def test_review_integrator_sidecar_guard_resolves_relative_backslash_citation(tmp_path):
-    """A relative, backslash-separated citation (no drive letter) resolves
-    against a real on-disk file via the same separator-swap spelling."""
     sidecar_dir = tmp_path / ".coordinator-local" / "subagent-share" / "sid"
     sidecar_dir.mkdir(parents=True)
     sidecar = sidecar_dir / "f.md"
@@ -307,11 +225,6 @@ def test_review_integrator_sidecar_guard_denies_absolute_citation_not_on_disk(tm
     assert result != {}
 
 
-# ---------------------------------------------------------------------------
-# guard_handoff_summary_cap_on_write
-# ---------------------------------------------------------------------------
-
-
 def test_handoff_summary_cap_guard_allows_short_summary(tmp_path):
     target = tmp_path / "state" / "handoffs" / "2026-09-18-x.md"
     target.parent.mkdir(parents=True)
@@ -326,21 +239,12 @@ def test_handoff_summary_cap_guard_allows_wrong_tool():
     assert result == {}
 
 
-# ---------------------------------------------------------------------------
-# guard_repo_setup_claude_home_refusal
-# ---------------------------------------------------------------------------
-
-
 def test_repo_setup_claude_home_refusal_allows_wrong_tool():
     result = guard_repo_setup_claude_home_refusal._handler({"tool_name": "Read", "tool_input": {}})
     assert result == {}
 
 
 def test_repo_setup_claude_home_refusal_denies_through_the_wrapped_envelope(tmp_path, monkeypatch):
-    """Both engine doors send `params`
-    as `{"payload": <event>}`, not the flat event this module used to read
-    directly. Through the wrapped door the guard was a structural no-op;
-    this pins the fix."""
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     result = guard_repo_setup_claude_home_refusal._handler(
         {
@@ -357,19 +261,9 @@ def test_repo_setup_claude_home_refusal_denies_through_the_wrapped_envelope(tmp_
     assert hso["permissionDecision"] == "deny"
 
 
-# ---------------------------------------------------------------------------
-# nudge_plan_test_surface_tier
-# ---------------------------------------------------------------------------
-
-
 def test_plan_test_surface_tier_allows_wrong_tool():
     result = nudge_plan_test_surface_tier._handler({"tool_name": "Read", "tool_input": {}})
     assert result == {}
-
-
-# ---------------------------------------------------------------------------
-# phantom_staged_deletion -- pure predicate, full coverage
-# ---------------------------------------------------------------------------
 
 
 def test_phantom_staged_deletion_parses_name_status_z():
@@ -433,22 +327,9 @@ def test_phantom_staged_deletion_render_report_names_override_env():
     assert "x.md" in report
 
 
-# ---------------------------------------------------------------------------
-# guard_phantom_staged_deletion_precommit -- main() over injected env, no
-# real git spawn (fast override leg only; the git-backed leg is this
-# guard's own runtime behaviour, exercised in the field, not here -- see
-# this file's own module docstring on the git-backed pair above).
-# ---------------------------------------------------------------------------
-
-
 def test_phantom_precommit_main_short_circuits_on_override(monkeypatch):
     monkeypatch.setenv(guard_phantom_staged_deletion_precommit.OVERRIDE_ENV, "1")
     assert guard_phantom_staged_deletion_precommit.main() == 0
-
-
-# ---------------------------------------------------------------------------
-# fanin_registries
-# ---------------------------------------------------------------------------
 
 
 def test_fanin_dispatchers_down_selected_to_three_landed_carriers():
@@ -471,22 +352,13 @@ def test_fanin_carried_guards_raises_on_unenrolled_name():
 
 def test_fanin_carried_guards_raises_on_undeclared_carrier():
     # preuse_write_dispatch is enrolled but declares no CARRIED_GUARDS
-    # today -- AttributeError, never a fabricated empty list.
     with pytest.raises(AttributeError, match="CARRIED_GUARDS"):
         fanin_registries.carried_guards("preuse_write_dispatch")
 
 
 def test_fanin_all_carried_guards_skips_undeclared_carriers():
     # None of the three landed carriers declare CARRIED_GUARDS today, so
-    # the union is empty -- not an error, per all_carried_guards()'s own
-    # docstring contract.
     assert fanin_registries.all_carried_guards() == {}
-
-
-# ---------------------------------------------------------------------------
-# emit_effective_delivery -- pure-unit coverage plus one gated end-to-end
-# smoke test against this box's resolved DoE-claude checkout.
-# ---------------------------------------------------------------------------
 
 
 def test_emit_effective_delivery_tail_key_two_segments():
@@ -530,18 +402,6 @@ def test_emit_effective_delivery_provenance_keys_shape():
     )
 
 
-#: A minimal but structurally complete `hooks.json` -- one registration per
-#: carrier this generator's four dedicated builders need, one retired-tail
-#: exclusion, and nothing else. Deliberately NOT read off this box's real
-#: DoE-claude checkout: `coordinator_core/conftest.py`'s suite-wide home
-#: quarantine seeds only a NAMED allowlist of DoE-side files into its stub
-#: root (the registry manifest, the cross-repo-memo schema) -- `hooks.json`
-#: is not one of them, by that fixture's own "narrow, deliberate, one file
-#: at a time" design, and widening that allowlist is outside this row's own
-#: footprint. Building a synthetic `hooks.json` here keeps this suite
-#: self-contained and honest under quarantine rather than silently skipped
-#: on every machine (which a `.doe-root`-gated skip would have been, since
-#: quarantine strips that resolution on every test by construction).
 def _synthetic_hooks_json() -> dict:
     return {
         "hooks": {
@@ -609,11 +469,6 @@ def _synthetic_hooks_json() -> dict:
 
 
 def _seed_synthetic_doe_content_root(tmp_path) -> "tuple":
-    """Writes a synthetic `hooks.json` (and its required
-    `scripts/postuse-advisory-dispatch.py` sibling, read only for the
-    regex cross-check) under `tmp_path`, and returns
-    `(hooks_json_path, manifest_path)` in the exact shape
-    `_resolve_manifest_paths()` returns."""
     import json as _json
 
     content_root = tmp_path / "coordinator"
@@ -635,9 +490,6 @@ def _build_block_against_synthetic_root(tmp_path, monkeypatch):
         "_resolve_manifest_paths",
         lambda: (hooks_json_path, manifest_path),
     )
-    # `_emission_provenance` reads git in the DoE repo -- this synthetic
-    # content root is a bare tmp_path with no `.git`, so it is stubbed to
-    # isolate this test to the `hooks.json`-parsing/carrier-building logic.
     monkeypatch.setattr(
         emit_effective_delivery,
         "_emission_provenance",
@@ -661,9 +513,6 @@ def test_emit_effective_delivery_build_block_against_synthetic_hooks_json(tmp_pa
     }
     assert [d["script"] for d in block["direct"]] == ["scripts/some-direct-guard.py"]
     assert isinstance(block["retired"], list) and block["retired"]
-    # bash_dispatch carrier's guards come from this repo's own real
-    # guard_roster() -- same-repo read, no monkeypatch needed (see module
-    # docstring's "WHAT CHANGED -- the cross-plane reads").
     bash_carrier = block["carriers"]["scripts/preuse-bash-dispatch.py"]
     assert bash_carrier["guards"], "expected at least one real bash guard in the roster"
     for key in emit_effective_delivery.PROVENANCE_KEYS:

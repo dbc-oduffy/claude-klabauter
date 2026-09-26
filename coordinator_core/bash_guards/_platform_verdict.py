@@ -180,24 +180,7 @@ from coordinator_core.machine_resolver import load_flat_registry_file, registry_
 
 _EVENT_NAME = "PreToolUse"
 
-#: Operator-declarable escape hatch (PM ruling, 2026-08-05) for a host that
-#: misdetects under runtime sniffing -- e.g. Python running under Git-for-
-#: Windows' bundled MSYS2/Git-Bash environment, which can report
-#: ``os.name == "posix"`` despite the underlying host being Windows. Lives
-#: in the machine-local registry under
 #: ``${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}`` --
-#: always untracked, always local to the one machine it describes, so a
-#: declared value can never travel to (and misclassify) a machine it does
-#: not describe.
-#:
-#: Accepted values (case-insensitive): "true"/"1"/"yes" -> Windows;
-#: "false"/"0"/"no" -> not-Windows. Any other value, or an ABSENT key,
-#: falls through to runtime sniffing below -- absence never means
-#: "not Windows".
-#:
-#: Operator command to declare it (fixes a misdetecting box with no code
-#: change and no round trip through the EM):
-#:   machine-local set coordinator.host_is_windows true
 _REGISTRY_KEY = "coordinator.host_is_windows"
 _TRUE_VALUES = {"true", "1", "yes"}
 _FALSE_VALUES = {"false", "0", "no"}
@@ -231,23 +214,6 @@ def _read_declared_registry_value() -> Optional[str]:
 
 
 def _declared_host_is_windows() -> Optional[bool]:
-    """Read the declared registry value, fresh, every call -- no caching,
-    so there is no stale-cache-across-interpreter-change hazard to guard
-    against (the concern PM raised for a cached variant). ``_read_declared_
-    registry_value`` is a direct TOML file read -- no subprocess, ever, on
-    this path, and (per its own docstring) no env-var leg either.
-
-    Broad ``except Exception`` on purpose: this resolver must never be the
-    reason the platform-verdict decision raises. The direct TOML read
-    already degrades most failure modes (missing/malformed registry file)
-    to ``None`` internally, but its own dependency chain
-    (``_settings_home.machine_local_dir`` -> ``Path.home()``) resolves a
-    concrete ``pathlib`` class off the CURRENT ``os.name`` -- a real hazard
-    only in a test process that monkeypatches ``os.name`` without also
-    being the OS pathlib is instantiating for (``WindowsPath`` refuses to
-    instantiate on an actual POSIX interpreter), never on a genuine host.
-    Falling through to sniffing on any such failure keeps that an
-    unaffected test artifact rather than a crashed guard chain."""
     try:
         raw = _read_declared_registry_value()
     except Exception:
@@ -263,16 +229,6 @@ def _declared_host_is_windows() -> Optional[bool]:
 
 
 def _sniff_host_is_windows() -> bool:
-    """Minimal runtime fallback -- consulted only when neither the
-    ``host_is_windows`` override nor the declared registry key resolves the
-    question. ``os.name == "nt"`` is the primary signal (native Windows
-    Python); ``sys.platform`` is widened to also catch a Cygwin/MSYS2-built
-    Python interpreter (``cygwin``/``msys``), which reports
-    ``os.name == "posix"`` despite running on a Windows host. Deliberately
-    NOT a full env-var detection matrix (``MSYSTEM``/``SystemRoot``/WSL
-    markers) -- PM ruling 2026-08-05: that configuration is fringe enough
-    that the declared-registry-value escape hatch above is the real answer,
-    not a bigger sniffing matrix."""
     if os.name == "nt":
         return True
     return sys.platform in ("win32", "cygwin", "msys")
@@ -314,15 +270,6 @@ def platform_verdict(
     advisory_context: str,
     host_is_windows: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    """Return the platform-conditioned envelope for an already-detected
-    shape: DENY (with ``deny_reason``) on Windows, ADVISE (with
-    ``advisory_context``) everywhere else.
-
-    Both message strings are the caller's responsibility — this function
-    makes no claim about their content, only about which one ships and
-    under which envelope shape. See ``platform_verdict_for_shape`` for a
-    template that keeps deny/advisory text consistent across guards.
-    """
     if _resolve_host_is_windows(host_is_windows):
         return deny(_EVENT_NAME, deny_reason)
     return allow_advisory(_EVENT_NAME, advisory_context)

@@ -46,9 +46,6 @@ from .build import write_sidecar
 _HERE = Path(__file__).resolve().parent
 _SOURCES = (_HERE / "door_posix.c", _HERE / "door_core.c")
 _HEADER = _HERE / "door_core.h"
-#: Generated X-macro table of forwarded env-var names, `#include`d by
-#: `door_posix.c` (and `door.c`) -- a real compile input, so it belongs in
-#: `sources` exactly like `_HEADER`, same reasoning as `build.py ::
 #: _ENV_SET_HEADER`.
 _ENV_SET_HEADER = _HERE / "door_env_set.h"
 
@@ -57,18 +54,10 @@ _PROVENANCE_SUFFIX = ".provenance.json"
 
 
 def _shell_safe_define(value: str) -> str:
-    """Escapes `value` for use inside the C string literal a `-D` flag
-    carries. Backslashes and double quotes are the only two characters a
-    POSIX path or an interpreter path can plausibly hold that C string
-    syntax itself requires escaping -- the same two `build.py ::
-    _c_string_body` handles, and for the same reason."""
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _find_compiler(requested: str | None) -> str:
-    """Returns a compiler path. Prefers an explicit `--compiler`, then
-    `clang` (what Xcode Command Line Tools install on every Mac), then
-    `cc`."""
     if requested:
         found = shutil.which(requested)
         if not found:
@@ -85,8 +74,6 @@ def _find_compiler(requested: str | None) -> str:
 
 
 def _compiler_version(compiler_path: str) -> str:
-    """First line of `<compiler> --version`, human-identifiable, not parsed
-    further. Best-effort: provenance metadata, never a build precondition."""
     try:
         proc = subprocess.run(
             [compiler_path, "--version"], capture_output=True, text=True, timeout=10,
@@ -132,10 +119,6 @@ def write_provenance(
         "engine_root": str(Path(engine_root).resolve()),
         "platform": sys.platform,
         # Describes THIS ARTIFACT, not the source. It stays False on a fresh
-        # build by design: a successful compile is not a successful
-        # invocation, and this builder does not invoke what it produces. The
-        # SOURCE is no longer unverified -- see the module docstring -- so the
-        # note no longer claims it has never run anywhere.
         "verified": False,
         "verified_note": (
             "compiled here, not invoked here. This builder does not exercise "
@@ -186,19 +169,8 @@ def build(
     resolved_root = str(Path(engine_root).resolve())
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    # `-std=c11` selects STRICT ISO C on glibc, which hides every POSIX
-    # declaration behind the feature-test macros: `readlink`, `sigemptyset`,
     # `sigaddset`, `CLOCK_MONOTONIC` and `O_CLOEXEC` are all undeclared on
-    # Linux even though `<unistd.h>`, `<signal.h>`, `<time.h>` and `<fcntl.h>`
-    # are included -- and under C99-and-later rules that is an error, not a
-    # warning, so the door did not compile there at all. Darwin's libc exposes
-    # them regardless of dialect, which is why macOS never saw it.
-    #
-    # Restricted to non-Darwin deliberately: on macOS, defining
     # `_POSIX_C_SOURCE` switches the headers INTO strict-POSIX mode and hides
-    # the Darwin extensions this file uses under `__APPLE__`
-    # (`<mach-o/dyld.h>`'s `_NSGetExecutablePath`). Leaving it undefined there
-    # keeps the macOS compile byte-identical.
     posix_source_flags = [] if sys.platform == "darwin" else ["-D_POSIX_C_SOURCE=200809L"]
     cmd = [
         compiler_path,
@@ -222,9 +194,6 @@ def build(
     sys.stderr.write(proc.stdout)
     sys.stderr.write(proc.stderr)
 
-    # Same writer, same bytes, same contract as the Windows build -- the
-    # sidecar's format is what makes the C-side clone hash byte-identical to
-    # `breadcrumb.svc_dir`'s, and it must not have two implementations.
     write_sidecar(output, engine_root)
     image_sha256 = hashlib.sha256(output.read_bytes()).hexdigest()
     write_provenance(output, compiler_path, engine_root, image_sha256=image_sha256)

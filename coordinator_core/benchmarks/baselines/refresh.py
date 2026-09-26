@@ -67,9 +67,6 @@ from coordinator_core.benchmarks import op_fixtures
 from coordinator_core.benchmarks.record import ConformanceRecord, compose_machine_id
 
 #: Not a registered JSON-RPC op today (see module docstring) -- excluded
-#: from the default refresh op set until the registry gap is fixed
-#: elsewhere. Named here, not silently dropped, so a future run stops
-#: excluding it the moment it becomes real.
 _UNREGISTERED_OPS = frozenset({"coverage.gate"})
 
 
@@ -83,11 +80,6 @@ def _default_refresh_ops() -> List[str]:
 
 
 def _stamp(record: ConformanceRecord) -> ConformanceRecord:
-    """Return a copy of `record` carrying `baseline_id` -- `harness.run()`
-    (C9) already stamps `machine`/`ambient_before`/`ambient_after`/
-    `ambient_delta`; this is the one field that stays a caller concern
-    (see module docstring). Mirrors `__main__.py::_stamp_baseline_id`'s
-    `<code_sha>:<op>:<run_id>` scheme."""
     baseline_id = f"{record.code_sha}:{record.op}:{record.run_id}"
     return dataclasses.replace(record, baseline_id=baseline_id)
 
@@ -96,14 +88,6 @@ def refresh(
     ops: Optional[List[str]] = None,
     n: int = 40,
 ) -> List[ConformanceRecord]:
-    """Run the benchmark sweep (which stamps machine + ambient context onto
-    every record itself, see `harness.run()`), stamp `baseline_id`, append
-    each to this box's run-history partition, and overwrite the curated
-    tracked partition with the latest record per op.
-
-    Returns the list of stamped records written (append order == sweep
-    order, one entry per op in `ops`).
-    """
     target_ops = ops if ops is not None else _default_refresh_ops()
     machine = compose_machine_id()
 
@@ -120,7 +104,6 @@ def refresh(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """CLI entrypoint: `python -m coordinator_core.benchmarks.baselines.refresh`."""
     declare_benchmark_origin()
     stamped = refresh()
     print(f"refreshed {len(stamped)} op(s) for machine={compose_machine_id()!r}")

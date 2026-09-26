@@ -1,10 +1,3 @@
-"""
-coordinator_core.ops.session.tests.test_legacy_touch_corpus_drain_check —
-coverage for the C9 drain-measurement gate (AC8).
-
-Spec backlink: docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-
-repointing-its-writers.md § AC8, chunk C9.
-"""
 
 from __future__ import annotations
 

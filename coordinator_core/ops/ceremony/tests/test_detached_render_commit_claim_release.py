@@ -1,25 +1,3 @@
-"""
-coordinator_core.ops.ceremony.tests.test_detached_render_commit_claim_release
-
-Purpose: per-route claim-release coverage for C3 (docs/plans/2026-08-11-
-claim-release-and-the-gate-that-cannot-clear.md), chunk C3c — the
-`commit_own_artifact` route in
-`coordinator_core/ops/ceremony/detached_render_commit.py`. C3a added a
-synchronous post-commit `release_committed_claims` call there (this
-function is entirely synchronous — no event loop, no `asyncio.to_thread`
-offload). This suite drives it directly against a real git repo and reads
-the claim back through `coordinator_core.session.claim_index.lookup()` —
-the same surface the commit gate (`scoped_git_commit._check_claim_
-conflicts`) reads — rather than string-matching `touched.txt`.
-
-Spec backlink: docs/plans/2026-08-11-claim-release-and-the-gate-that-cannot-
-clear.md § C3c (AC1).
-
-Negative-spec: does not exercise the lock-contention retry/backoff path
-(`git_lock_retry`) or the `record_child_failure` failure-log wiring — this
-suite is scoped to the release-call property alone. New file — does not
-edit any existing test in this directory (peer chunk C3b/C8 own those).
-"""
 
 from __future__ import annotations
 
@@ -34,14 +12,7 @@ from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 from coordinator_core.win_portability import no_console_creationflags
 
-# `commit_own_artifact` lands a real commit and this suite reads the claim
-# back through `claim_index.lookup()` against a real repo -- the same
-# surface the commit gate reads -- so no mock stands in for the real
-# commit->release property under test. Per-test `repo` fixture because each
-# test commits into it.
 # The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
-# explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -74,8 +45,6 @@ def repo(tmp_path):
 
 
 def test_commit_own_artifact_releases_claim_on_landed_commit(repo, monkeypatch):
-    """AC1 (detached_render_commit route): a claim on the one artifact path
-    clears once `commit_own_artifact`'s explicit-pathspec commit lands."""
     sid = "detached-render-commit-claim-test"
     _own_sid(monkeypatch, sid)
 
@@ -97,11 +66,6 @@ def test_commit_own_artifact_releases_claim_on_landed_commit(repo, monkeypatch):
 
 
 def test_commit_own_artifact_noop_when_clean_does_not_release(repo, monkeypatch):
-    """A no-op call (path already clean, nothing to commit) is documented as
-    a SUCCESS return (True) but must not falsely release a still-live claim
-    that has nothing to do with this call landing — `commit_own_artifact`
-    returns True before reaching the release block in that branch, so the
-    claim stays exactly as it was."""
     sid = "detached-render-commit-noop-test"
     _own_sid(monkeypatch, sid)
 

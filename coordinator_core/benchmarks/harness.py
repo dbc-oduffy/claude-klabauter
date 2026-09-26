@@ -85,13 +85,6 @@ DEFAULT_FLOOR_N = 10
 
 
 def _capture_code_sha() -> str:
-    """Run `git rev-parse HEAD` ONCE and return the full 40-char SHA.
-
-    Purpose: run-level identity capture (see module docstring) -- callers must
-    NOT re-shell this per op. Fails loud (raises) if git is unavailable or the
-    working tree has no HEAD; a benchmark run with an unresolvable code_sha is
-    not a usable measurement.
-    """
     completed = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         capture_output=True,
@@ -109,13 +102,6 @@ def _capture_code_sha() -> str:
 
 
 def _percentile(sorted_samples: List[float], pct: float) -> float:
-    """Nearest-rank percentile over an already-sorted sample list.
-
-    Purpose: small, dependency-free percentile helper -- statistics.quantiles
-    requires n>=2 and uses interpolation methods that diverge across Python
-    versions; nearest-rank keeps p50/p95/p99 simple and deterministic for the
-    small N this harness runs.
-    """
     if not sorted_samples:
         raise ValueError("_percentile: empty sample list")
     if len(sorted_samples) == 1:
@@ -134,11 +120,6 @@ def _collect_samples(
     n: int,
     warmup: int,
 ) -> List[float]:
-    """Draw `warmup` discarded runs + `n` timed samples for one op via the
-    shared timer. Propagates BenchmarkSampleInvalid (AC9) unmodified -- an
-    erroring sample (warm-up or timed) fails the op loud, it is never skipped
-    or substituted.
-    """
     for _ in range(warmup):
         time_invocation(op, params_json, repo)
 
@@ -174,11 +155,6 @@ def run(
     error propagates unmodified -- the whole run stops rather than silently
     dropping an op.
     """
-    # Fail loud on a plausible fat-finger
-    # (`--n 0`) before any subprocess spawn -- and before declare_benchmark_origin()'s
-    # os.environ mutation below, which is process-lifetime and un-rollback-able on this
-    # path (setdefault, no caller-owned undo) -- naming the bad param, instead of an
-    # opaque IndexError deep in the sample-collection loop below.
     if n < 1:
         raise ValueError(f"harness.run: n must be >= 1, got {n!r}")
     if warmup < 0:
@@ -192,10 +168,6 @@ def run(
     timestamp = datetime.now(timezone.utc).isoformat()
     machine = compose_machine_id()
 
-    # C2's in-process ambient contract (never raises; every field degrades to
-    # null independently on failure): one sample at run start, one at run
-    # end, both OUTSIDE the timed measurement window below -- a failed
-    # psutil.cpu_percent(interval=0.3) read must never perturb a timing.
     ambient_before = ambient_sampler.take_sample()
 
     floor_stats = floor_mod.measure_floor(floor_n)
@@ -209,12 +181,6 @@ def run(
         op_fixtures.COMPUTE_ONLY_FIXTURES[op]["scope"] == "worktree" for op in target_ops
     )
 
-    # materialize_fixture_repo() moved inside
-    # the try/finally: a mid-materialization failure (e.g. the bare-origin clone step
-    # raising after `dest` was already created and seeded) previously propagated before
-    # worktree_root was assigned and before the finally block existed, leaking the
-    # partially materialized fixture directory. worktree_root is now assigned before
-    # the call so the finally's cleanup always has a value to check.
     worktree_root: Optional[Path] = None
     records: List[ConformanceRecord] = []
     try:
@@ -292,8 +258,6 @@ def run(
 
             shutil.rmtree(worktree_root, ignore_errors=True)
 
-    # Taken OUTSIDE the timed window, once for the whole run (matching
-    # ambient_before) -- never per op.
     ambient_after = ambient_sampler.take_sample()
     ambient_delta = compute_ambient_delta(ambient_before, ambient_after)
 

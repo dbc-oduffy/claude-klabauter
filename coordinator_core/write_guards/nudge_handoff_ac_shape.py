@@ -128,32 +128,16 @@ from coordinator_core.write_guards._repo_root import resolve_repo_root
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
-# Advisory band; next free slot after nudge_outbox_draft_frontmatter_shape
-# (210) — see docs/wiki/write-guard-priority-bands.md for the band
-# convention. No lower-numbered advisory guard matches the
-# `state/handoffs/*.md` surface with an overlapping fire condition (this
-# guard's own scoped read confirms none of the existing advisories key off
-# that path shape for the AC-heading/checkbox signal), so no same-surface
-# collision applies.
 PRIORITY = 220
 
-#: '..' as a full path component.
 _TRAVERSAL_RE = re.compile(r"(^|/)\.\.(/|$)")
 
-#: state/handoffs/<name>.md — flat directory, one path segment. Spinoffs
-#: live in this same directory (kind: spinoff in frontmatter); no second
-#: path shape exists on this tree (see module docstring's Scope section).
 _HANDOFF_RE = re.compile(r"(^|/)state/handoffs/[^/]+\.md$", re.IGNORECASE)
 
-#: Matches nudge_baton_body_bar's own cap — this guard's PreToolUse read of
-#: the pre-image is otherwise uncapped (Review: coordinatorstaff-eng-0839d50e
-#: Finding 2); a handoff this large is out of scope for a checkbox-shape
-#: advisory regardless, so exceeding it degrades to silent, not an error.
 _MAX_WHOLE_FILE_BYTES = 256 * 1024
 
 
 def _collapse_slashes(value: str) -> str:
-    """Backslash -> slash, collapse slash runs."""
     normalized = value.replace("\\", "/")
     while "//" in normalized:
         normalized = normalized.replace("//", "/")
@@ -161,8 +145,6 @@ def _collapse_slashes(value: str) -> str:
 
 
 def _extract_candidates(payload: Dict[str, Any]) -> List[str]:
-    """Top-level ``file_path`` (Write/Edit), or every ``edits[].file_path``
-    (MultiEdit) when there is no top-level ``file_path``."""
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         return []
@@ -313,30 +295,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if body is None:
             return None
 
-        # Deferred import: paid only after a candidate has already matched
-        # the path-shape regex (and, when a git root resolved, passed
-        # containment) — mirrors `nudge_outbox_draft_frontmatter_shape.py`'s
-        # deferred-import discipline. `directives_session_hygiene` pulls in
-        # `coordinator_core.frontmatter.schema_validate` transitively (yaml,
-        # subprocess, git_scope, ...), and `engine.py`'s `_discover_guards()`
-        # imports every guard module fresh on every PreToolUse call with no
-        # memoization — an eager top-level import here would tax every
-        # unrelated Write/Edit/MultiEdit in the repo, not just candidates
-        # actually in scope.
         from coordinator_core.frontmatter.schema_validate import parse_frontmatter
         from coordinator_core.workstream_complete.directives_session_hygiene import (
             parse_consumed_handoff_acceptance_criteria,
         )
 
-        # Leg A
-        # (`workstream_complete/__init__.py`'s consumed-handoff evaluator)
-        # branches on `kind` BEFORE it ever calls
-        # `parse_consumed_handoff_acceptance_criteria`: for
-        # `kind: session-handoff` it joins on `deliverable_id` and reads the
-        # resolved plan's `status:` instead, never counting checkboxes. This
-        # guard must mirror that same branch order — offering the checkbox
-        # form for a kind leg A never reads it from would make the advisory
-        # itself false.
         frontmatter = parse_frontmatter(body).get("frontmatter")
         kind = frontmatter.get("kind") if isinstance(frontmatter, dict) else None
         if kind == "session-handoff":
@@ -348,13 +311,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if parsed.get("total", 0) != 0:
             return None
 
-        # Fire only when
-        # this edit actually changed the AC section, not on every unrelated
-        # write to a handoff whose AC section was already prose-shaped.
-        # Compare the pre-image's own AC state (same parser) to the
-        # post-image's: if the pre-image already resolved to the same
-        # zero-checkbox state, this edit did not touch the section, so stay
-        # silent rather than re-nagging on every future edit to that file.
         if pre_image is not None:
             pre_parsed = parse_consumed_handoff_acceptance_criteria(pre_image)
             if pre_parsed is not None and pre_parsed.get("total", 0) == 0:

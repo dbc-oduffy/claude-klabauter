@@ -1,27 +1,3 @@
-"""test_archive_session_scope.py — unit tests for coordinator/bin/archive-session-scope.py.
-
-Coverage — the archive-session subcommand, which is the whole CLI:
-    - missing --sid -> exit 1, no call
-    - archive() raising -> non-fatal, exit 0 (docstring contract)
-    - archive() returning False -> non-fatal, exit 0
-    - archive() returning True -> exit 0, called with the right sid
-
-The `_build_tail_args` suite that used to sit above these was removed
-2026-08-30 alongside the `tail-args` subcommand itself: its only consumer,
-`coordinator/bin/wsc-tail.py`, was retired by K-046 on 2026-08-23. Those tests
-were green throughout — they were asserting the argv contract of a parser that
-had not existed for a week, which is the shape a test takes when it outlives
-its subject rather than the shape of coverage.
-
-Module import: archive-session-scope.py is a hyphenated filename, loaded by file path
-(same idiom as test_check_install_divergence.py / test-archive-stamp-cli-
-ship-handoff.py in this same tests/ dir).
-
-Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 (WSC-3 chunk).
-
-Run:
-    python -m pytest coordinator/bin/tests/test_archive_session_scope.py -q
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -46,13 +22,6 @@ def _load_archive_session_scope_module():
 
 
 _archive_session_scope = _load_archive_session_scope_module()
-
-
-# ---------------------------------------------------------------------------
-# _build_tail_args
-# ---------------------------------------------------------------------------
-
-
 
 
 def test_archive_session_missing_sid_exits_1():

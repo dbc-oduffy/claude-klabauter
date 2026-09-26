@@ -37,19 +37,11 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as dc
 
-#: Slash-rooted so it is absolute under both ntpath and posixpath, and so
-#: the shared bash tokenizer has no backslash to eat on its way into the
-#: `-C` rows below (`state/bug-backlog/2026-09-01-the-shared-bash-tokenizer-
-#: eats-backslashes-in-ps-payloads.yaml` -- a separate defect this file must
-#: not accidentally depend on).
 PAYLOAD_CWD = "/some-other-repo"
 
 
 @pytest.fixture
 def probe_cwds(monkeypatch) -> List[Optional[str]]:
-    """Record the cwd handed to every `_run_git` call, and answer each probe
-    with a clean-index result so no branch short-circuits before the sites
-    under test are reached."""
     seen: List[Optional[str]] = []
 
     def _fake_run_git(
@@ -97,8 +89,6 @@ def test_the_sequencer_probe_reads_the_payload_repo(probe_cwds):
 
 
 def test_an_explicit_dash_c_still_wins_over_the_payload_cwd(probe_cwds):
-    """A command that names a repo means that repo. The payload cwd is the
-    fallback for the commands that name none, never an override."""
     named = "/named-repo"
     _run("git -C %s commit -m x" % named)
     assert probe_cwds
@@ -106,19 +96,12 @@ def test_an_explicit_dash_c_still_wins_over_the_payload_cwd(probe_cwds):
 
 
 def test_a_relative_dash_c_is_anchored_to_the_payload_cwd(probe_cwds):
-    """Real git resolves `-C sub` against the COMMAND's cwd. Handing the raw
-    relative value to a subprocess resolves it against the guard's instead,
-    which names a third directory belonging to neither."""
     _run("git -C sub commit -m x")
     assert probe_cwds
     assert set(probe_cwds) == {os.path.join(PAYLOAD_CWD, "sub")}
 
 
 def test_no_payload_cwd_degrades_to_todays_behaviour(probe_cwds):
-    """A payload that carries no cwd is no worse than before the fix: the
-    probe falls back to `cwd=None` and the predicates' own fail-open posture
-    covers the miss. Pinned so a future edit cannot turn the absence into an
-    exception on the hot path."""
     _run("git commit -m x", payload={})
     assert probe_cwds
     assert set(probe_cwds) == {None}

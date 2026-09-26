@@ -111,9 +111,6 @@ import sys
 
 _spawns = 0
 
-#: CPython raises exactly one of these per child process this interpreter
-#: creates from Python. See the negative-spec above for what is excluded and
-#: why — the omissions are load-bearing, not an oversight to be widened.
 _COUNTED_EVENTS = frozenset({"subprocess.Popen", "os.system"})
 
 _hook_installed = False
@@ -141,49 +138,20 @@ def bump(n: int = 1) -> None:
 
 
 def spawn_count() -> int:
-    """Total spawn attempts by this process since interpreter start.
-
-    Monotonic. Meaningful only as a delta between two readings — the absolute
-    value carries no information a caller can use, since it includes every spawn
-    by every op this process served before the one being measured.
-    """
     return _spawns
 
 
 def audit_hook_installed() -> bool:
-    """Whether the audit hook is counting, i.e. whether `bump()` is redundant.
-
-    False means this interpreter refused `sys.addaudithook` (an already-resident
-    hook may veto additions) and the counter has fallen back to the pre-existing
-    hand-bumped git seam — which is a GIT-spawn count, not a spawn count. A
-    reader that cares about the difference must consult this, not the delta.
-    """
     return _hook_installed
 
 
 def _count_spawn_event(event: str, _args: tuple) -> None:
-    """`sys.addaudithook` callback. Hot for EVERY audited event in the process.
-
-    Deliberately branch-then-return with no `try`: a frozenset membership test
-    on a str cannot raise, and an in-place int add on a global cannot raise, so
-    there is nothing here for a `try` to catch — while the `try` itself would be
-    paid on every `open` in the process. `_args` is unread; the counter needs the
-    fact of the spawn, never the argv.
-    """
     global _spawns
     if event in _COUNTED_EVENTS:
         _spawns += 1
 
 
 def _install() -> None:
-    """Install the counting hook once. Idempotent, and never raises.
-
-    Import-time, not first-read: a spawn that happens before the first reader
-    calls `spawn_count()` is exactly the spawn a lazy install would miss, and
-    the op-latency reader takes its baseline AFTER the process is already warm.
-    Audit hooks cannot be removed once added (CPython, deliberate) — which is
-    why this is guarded rather than merely called.
-    """
     global _hook_installed
     if _hook_installed:
         return

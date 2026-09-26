@@ -33,10 +33,7 @@ import pytest
 from coordinator_core import dag
 
 
-# ---------------------------------------------------------------------------
 # Fixture: clear dag._FRONTMATTER_CACHE between tests (mirrors test_cache_coherency.py
-# convention — module-level cache state must not leak between test cases).
-# ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
 def clear_frontmatter_cache():
@@ -46,16 +43,8 @@ def clear_frontmatter_cache():
     dag._FRONTMATTER_CACHE.clear()
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def _write_handoff(path: Path, *, slug: str, status: str = "active",
                    predecessor: str = "none", **extra_fields: str) -> None:
-    """Write a minimal handoff file at path.
-
-    Extra keyword arguments are written as additional frontmatter fields.
-    """
     extra_lines = "".join(f"{k}: {v}\n" for k, v in extra_fields.items())
     path.write_text(
         f"---\n"
@@ -68,9 +57,7 @@ def _write_handoff(path: Path, *, slug: str, status: str = "active",
     )
 
 
-# ---------------------------------------------------------------------------
 # (a) EDGE_KIND_META — origin_handoff presence and shape
-# ---------------------------------------------------------------------------
 
 class TestEdgeKindMetaOriginHandoff:
     def test_origin_handoff_in_meta(self):
@@ -86,7 +73,6 @@ class TestEdgeKindMetaOriginHandoff:
         )
 
     def test_existing_lineage_kinds_unchanged(self):
-        """Lineage edge kinds (predecessor, additional_predecessors, forked_from) untouched."""
         assert dag.EDGE_KIND_META['predecessor'] == {'field': 'predecessor', 'multi': False}
         assert dag.EDGE_KIND_META['additional_predecessors'] == {
             'field': 'additional_predecessors', 'multi': True
@@ -94,29 +80,8 @@ class TestEdgeKindMetaOriginHandoff:
         assert dag.EDGE_KIND_META['forked_from'] == {'field': 'forked_from', 'multi': False}
 
 
-# ---------------------------------------------------------------------------
-# (b) walk_forward default — origin_handoff NOT traversed
-# ---------------------------------------------------------------------------
-
 class TestWalkForwardDefaultExcludesOriginHandoff:
     def test_walk_forward_default_does_not_traverse_origin_handoff(self, tmp_path: Path):
-        """walk_forward with default edge_kinds={'predecessor'} must NOT traverse
-        origin_handoff edges — out-of-default-set invariant.
-
-        Setup:
-          - spinoff.md  →  origin_handoff: source.md
-          - Both files in the same handoff_dir.
-
-        Default walk starting from spinoff.md should visit ONLY spinoff.md.
-        source.md must NOT appear in nodes.
-
-        This test (b) IS the structural lock on the effective
-        internal default (walk_forward body line ~571: ``if edge_kinds is None: edge_kinds =
-        {'predecessor'}``). The signature-inspection test was removed as vacuous — it asserted
-        only that the param default is None/empty (always true under the None-sentinel pattern),
-        not that the effective set excludes origin_handoff. This behavioral test is the sole
-        lock: if line ~571 were changed to include origin_handoff, this test would fail.
-        """
         source = tmp_path / "2026-01-01-source-handoff.md"
         spinoff = tmp_path / "2026-07-07-spinoff-handoff.md"
 
@@ -130,7 +95,6 @@ class TestWalkForwardDefaultExcludesOriginHandoff:
 
         result = dag.walk_forward(
             str(spinoff),
-            # default edge_kinds omitted — resolves to {'predecessor'} inside walk_forward
             handoff_dir=str(tmp_path),
         )
 
@@ -147,21 +111,8 @@ class TestWalkForwardDefaultExcludesOriginHandoff:
         )
 
 
-# ---------------------------------------------------------------------------
-# (c) referenced_by default — origin_handoff NOT traversed
-# ---------------------------------------------------------------------------
-
 class TestReferencedByDefaultExcludesOriginHandoff:
     def test_referenced_by_default_does_not_traverse_origin_handoff(self, tmp_path: Path):
-        """referenced_by with default edge_kinds must NOT find an origin_handoff reference.
-
-        Setup:
-          - source.md  (the candidate target)
-          - spinoff.md  →  origin_handoff: source.md
-
-        Default referenced_by(target=source, live_set=[spinoff]) should return
-        referenced=False, because origin_handoff is not in the default edge set.
-        """
         source = tmp_path / "2026-01-01-source-handoff.md"
         spinoff = tmp_path / "2026-07-07-spinoff-handoff.md"
 
@@ -176,7 +127,6 @@ class TestReferencedByDefaultExcludesOriginHandoff:
         result = dag.referenced_by(
             target=str(source),
             live_set=[str(spinoff)],
-            # default edge_kinds omitted → {'predecessor', 'additional_predecessors', 'forked_from'}
             handoff_dir=str(tmp_path),
         )
 
@@ -190,14 +140,6 @@ class TestReferencedByDefaultExcludesOriginHandoff:
         )
 
     def test_referenced_by_default_finds_predecessor_reference(self, tmp_path: Path):
-        """Positive companion: referenced_by with default edge_kinds DOES find a
-        predecessor: reference — confirming the default set is live and the negative
-        assertion above is meaningful, not vacuously true.
-
-        Without this companion, test (c) could pass because
-        referenced_by is broken and finds nothing at all, not because it correctly excludes
-        origin_handoff. This test proves the live_set is actually being scanned.
-        """
         source = tmp_path / "2026-01-01-source-handoff.md"
         spinoff = tmp_path / "2026-07-07-spinoff-handoff.md"
 
@@ -206,13 +148,12 @@ class TestReferencedByDefaultExcludesOriginHandoff:
             spinoff,
             slug="spinoff-handoff",
             status="active",
-            predecessor=source.name,  # predecessor: field — IS in the default set
+            predecessor=source.name,
         )
 
         result = dag.referenced_by(
             target=str(source),
             live_set=[str(spinoff)],
-            # default edge_kinds → {'predecessor', 'additional_predecessors', 'forked_from'}
             handoff_dir=str(tmp_path),
         )
 
@@ -226,15 +167,8 @@ class TestReferencedByDefaultExcludesOriginHandoff:
         )
 
 
-# ---------------------------------------------------------------------------
-# (d) walk_forward explicit — origin_handoff IS traversed on opt-in
-# ---------------------------------------------------------------------------
-
 class TestWalkForwardExplicitOriginHandoff:
     def test_walk_forward_explicit_traverses_origin_handoff(self, tmp_path: Path):
-        """walk_forward with edge_kinds={'origin_handoff'} reaches origin via the
-        provenance edge — confirms the edge is registered and walkable on opt-in.
-        """
         source = tmp_path / "2026-01-01-source-handoff.md"
         spinoff = tmp_path / "2026-07-07-spinoff-handoff.md"
 
@@ -265,13 +199,8 @@ class TestWalkForwardExplicitOriginHandoff:
         )
 
 
-# ---------------------------------------------------------------------------
-# (e) referenced_by explicit — origin_handoff IS found on opt-in
-# ---------------------------------------------------------------------------
-
 class TestReferencedByExplicitOriginHandoff:
     def test_referenced_by_explicit_traverses_origin_handoff(self, tmp_path: Path):
-        """referenced_by with edge_kinds={'origin_handoff'} finds the provenance reference."""
         source = tmp_path / "2026-01-01-source-handoff.md"
         spinoff = tmp_path / "2026-07-07-spinoff-handoff.md"
 
@@ -300,22 +229,9 @@ class TestReferencedByExplicitOriginHandoff:
         )
 
 
-# ---------------------------------------------------------------------------
-# Direct unit test for handoff_edges kernel — origin_handoff field
-# ---------------------------------------------------------------------------
-
 class TestHandoffEdgesOriginHandoff:
-    """Direct lock on handoff_edges for the origin_handoff edge kind.
-
-    walk_forward / referenced_by cover handoff_edges only
-    transitively; a bug in the multi=False branch for origin_handoff would surface as a
-    walk failure with an indirect stack. This direct lock isolates the kernel function.
-    """
 
     def test_handoff_edges_returns_origin_handoff_when_requested(self):
-        """handoff_edges({'origin_handoff': 'source.md', 'predecessor': 'none'},
-        {'origin_handoff'}) returns ['source.md'] — SSOT kernel direct lock.
-        """
         meta = {"origin_handoff": "source.md", "predecessor": "none"}
         result = dag.handoff_edges(meta, {"origin_handoff"})
         assert result == ["source.md"], (
@@ -324,9 +240,6 @@ class TestHandoffEdgesOriginHandoff:
         )
 
     def test_handoff_edges_excludes_predecessor_sentinel_when_not_requested(self):
-        """handoff_edges({'origin_handoff': 'source.md', 'predecessor': 'none'},
-        {'predecessor'}) returns [] — 'none' sentinel is excluded.
-        """
         meta = {"origin_handoff": "source.md", "predecessor": "none"}
         result = dag.handoff_edges(meta, {"predecessor"})
         assert result == [], (

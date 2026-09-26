@@ -1,26 +1,3 @@
-"""Tests for coordinator_core.ops.docgen.render (C4).
-
-Covers:
-  - every one of the 22 staged template types renders without error given a
-    fully-populated resolved-value mapping, with structural fence/no-fence
-    shape matching each template's frontmatter style (fenced / whole_document
-    / frontmatter: null)
-  - each of the 4 conditional idioms exercised on BOTH branches (present and
-    absent), including the ``absent_literal``, ``absent_comment``, and
-    ``fallback_line`` refinements
-  - ``literal``/``raw`` ``{field}`` placeholder substitution, including the
-    escaped-double-brace case (no substitution, literal brace survives)
-  - quoting matches the oracle's ``_yaml_quote`` escaping rules byte-for-byte
-  - defect paths: unknown doc_type, missing required ``value`` field, missing
-    placeholder value — all raise ``RenderError``, never a silent KeyError/None
-
-This module does NOT assert byte-identity against the live DoE oracle (C6's
-surface) and does NOT assert the no-write/no-subprocess structural property
-formally (C7's surface, a standing test) — it stays inside C4's own contract:
-the render function is correct against the template format for every idiom.
-
-Spec backlink: pln-strang-12-document-generation--75a7eb § C4 (AC6)
-"""
 
 from __future__ import annotations
 
@@ -29,10 +6,6 @@ import pytest
 from coordinator_core.ops.docgen import template_format as tf
 from coordinator_core.ops.docgen.render import RenderError, render_document, render_template
 
-# A fully-populated resolved-value mapping covering every "field" referenced
-# by any of the 22 templates' frontmatter specs, plus every {placeholder} used
-# in literal/raw lines. Individual tests override/delete keys to exercise the
-# absent branch of each conditional idiom.
 FULL_VALUES: dict = {
     "title": "Example Title",
     "created": "2026-07-21",
@@ -99,7 +72,7 @@ def test_fence_shape_matches_frontmatter_style(doc_type):
         assert fence_count == 0, doc_type
     elif frontmatter["style"] == "fenced":
         assert fence_count == 2, doc_type
-    else:  # whole_document
+    else:
         assert fence_count == 0, doc_type
 
 
@@ -116,12 +89,6 @@ def test_present_as_null_present_branch_quotes_value():
 
 
 def test_present_as_null_custom_absent_literal():
-    # No extracted type declares a custom absent_literal any more — goal-seed's
-    # gate_dependency (the one live example) migrated to value_or_literal_fallback
-    # at archive/specs/2026-08/2026-08-03-gate-dependency-template-emission-spec.md
-    # § C1. Exercise the custom-absent_literal refinement via a synthetic
-    # in-memory template instead, same pattern as
-    # test_frontmatter_none_type_has_no_fences_or_field_lines above.
     template = {
         "format_version": tf.FORMAT_VERSION,
         "doc_type": "custom-absent-literal-test",
@@ -237,11 +204,6 @@ def test_yaml_quote_escaping_matches_oracle():
 
 
 def test_frontmatter_none_type_has_no_fences_or_field_lines():
-    # No extracted type currently declares "frontmatter": null (review-findings
-    # was the last one, until the 2026-07-24 schema unification made it
-    # frontmatter-bearing — see volatility.py's module docstring) — exercise
-    # the idiom via a synthetic in-memory template instead, same pattern as
-    # test_render_template_accepts_in_memory_template_dict below.
     template = {
         "format_version": tf.FORMAT_VERSION,
         "doc_type": "body-only-test",
@@ -301,8 +263,6 @@ def test_render_document_does_not_mutate_input_mapping():
 
 
 def test_duplicate_doc_type_raises_render_error(tmp_path):
-    # _template_index used to silently last-wins on a
-    # duplicate doc_type across two template files; now fails loud.
     import json
 
     template = {
@@ -317,14 +277,6 @@ def test_duplicate_doc_type_raises_render_error(tmp_path):
         render_document("dup-test", {}, templates_directory=tmp_path)
 
 
-# ---------------------------------------------------------------------------
-# pickup_ready vs awaiting_gate coherence (cross-repo memo
-# 2026-08-06-example-market-data-repo-em-pickup-ready-true-under-unmet-gate.md).
-# goal-seed/roadmap-seed are born awaiting_gate with no ready_to_fire arm, so
-# they must never scaffold `pickup_ready: true`; the three coherent arms
-# (session-handoff, recovery, spinoff) pair it with ready_to_fire and keep it.
-# ---------------------------------------------------------------------------
-
 @pytest.mark.parametrize("doc_type", ["goal-seed", "roadmap-seed"])
 def test_awaiting_gate_seed_types_omit_pickup_ready_true(doc_type):
     output = render_document(doc_type, FULL_VALUES)
@@ -337,25 +289,8 @@ def test_ready_to_fire_arms_still_scaffold_pickup_ready_true(doc_type):
     assert "pickup_ready: true" in output
 
 
-# ---------------------------------------------------------------------------
-# C4 (docs/plans/2026-08-19-gate-notes-are-advisory-blocked-by-derives-
-# readiness.md): the templates are the SECOND authoring surface and must not
-# drift from C3's scaffold behaviour -- a template that keeps asserting a
-# readiness it cannot know reintroduces the defect through the other door.
-#
 # DISPOSITION: the three seed templates needed NO edit, and that is a finding
-# rather than an omission. They already default to `awaiting_gate`, already
-# omit `pickup_ready` entirely (deliberate -- § Cross-plan coordination
-# measured 13 live records where a genuinely-free baton advertises nothing,
-# and the plan's ruling is to leave that alone: derived readiness is about not
-# LYING, not about filling every field), and their `blocking_notes:
 # PLACEHOLDER` line is now a gate NOTE rather than a gate.
-#
-# What was missing is the assertion. C3's body says the placeholder "must not
-# make the stub un-pickup-ready ... C1 ignores the field entirely, so this
-# falls out for free -- but assert it, because it is the regression a later
-# well-meaning edit will introduce." These are that assertion.
-# ---------------------------------------------------------------------------
 
 _SEED_TYPES = ["goal-seed", "roadmap-seed", "roadmap-baton"]
 
@@ -371,9 +306,7 @@ def test_seed_placeholder_blocking_notes_derives_no_gate(doc_type):
     from coordinator_core.reconcile.gate_eval import derive_readiness
 
     # The PLACEHOLDER line is the ABSENT branch of the deprecated
-    # `gate_dependency` conditional, so it only renders with that value gone.
     # Rendering with FULL_VALUES takes the present branch and this test would
-    # assert nothing -- it must not be allowed to pass vacuously.
     values = {k: v for k, v in FULL_VALUES.items() if k not in ("gate_dependency", "blocking_notes")}
     output = render_document(doc_type, values)
 
@@ -398,7 +331,5 @@ def test_seed_placeholder_blocking_notes_derives_no_gate(doc_type):
 
 @pytest.mark.parametrize("doc_type", _SEED_TYPES)
 def test_seed_templates_never_scaffold_a_hardcoded_ready_to_fire(doc_type):
-    """The other direction: a seed must not assert readiness either. Only
-    `blocked_by` may decide it, and these templates name no blocker."""
     output = render_document(doc_type, FULL_VALUES)
     assert "deployment_state: ready_to_fire" not in output

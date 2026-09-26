@@ -1,7 +1,3 @@
-"""Characterization + parity tests for coordinator_core.ops.agent_worktree_sweep.
-
-Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
-"""
 from __future__ import annotations
 
 import json
@@ -20,8 +16,6 @@ from coordinator_core.ops.agent_worktree_sweep import (
 from coordinator_core.session import liveness as cs_liveness
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -43,13 +37,6 @@ def _git(*args: str, cwd: Path, check: bool = True) -> subprocess.CompletedProce
 
 @pytest.fixture(autouse=True)
 def _isolate_global_git_config(tmp_path, monkeypatch):
-    """Isolate from the ambient dev machine's global git config — e.g. a
-    ~/.config/git/ignore rule for .claude/settings.local.json installed by
-    coordinator setup — so tests exercise this module's own dirty-benign
-    allowlist logic against `git status --porcelain`, not the host machine's
-    unrelated global ignore rules. Set via monkeypatch.setenv (not a one-off
-    subprocess env=) so it also covers the module-under-test's OWN internal
-    git subprocess calls, which inherit os.environ with no override."""
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
@@ -60,19 +47,11 @@ def _init_repo(root: Path) -> None:
     _git("config", "user.email", "test@example.com", cwd=root)
     _git("config", "user.name", "Test", cwd=root)
     (root / "README.md").write_text("hello\n")
-    # Pre-track the two benign-allowlist paths so a later in-worktree edit
-    # shows as a per-file "M " porcelain line, matching real-world usage
-    # (Claude Code's settings.local.json/.last-cleanup already exist at
-    # worktree-creation time) — a freshly-created untracked .claude/ dir
-    # collapses to a single directory-level "?? .claude/" porcelain line
-    # that the allowlist (file-path-keyed) never matches, by design (this
-    # mirrors the bash oracle's own awk-based path extraction exactly).
     (root / ".claude").mkdir(exist_ok=True)
     (root / ".claude" / "settings.local.json").write_text("{}\n")
     (root / ".last-cleanup").write_text("2026-01-01\n")
     _git("add", "README.md", ".claude/settings.local.json", ".last-cleanup", cwd=root)
     _git("commit", "-q", "-m", "initial", cwd=root)
-    # ensure a stable branch name across environments (init.defaultBranch varies)
     _git("branch", "-M", "main", cwd=root)
 
 
@@ -95,21 +74,6 @@ def _states(lines: list) -> dict:
         result[obj["path"]] = obj
     return result
 
-
-# NOTE: keys below are built with `wt.as_posix()`, not `str(wt)`. This is
-# deliberate, not a stylistic choice: `git worktree list --porcelain` always
-# reports worktree paths forward-slash-normalized, even on Windows (verified
-# empirically — a worktree added via a backslash-form path argument still
-# comes back out of `git worktree list --porcelain` as `C:/Users/...`). The
-# module under test just echoes that value straight through into the emitted
-# JSON `path` field, which is already the correct wire form. `str(wt)` on a
-# WindowsPath renders backslashes, so it never matched — the defect was in
-# the test's own key construction, not in the product.
-
-
-# ---------------------------------------------------------------------------
-# Argument parsing / CLI-usage errors
-# ---------------------------------------------------------------------------
 
 def test_not_a_git_repo_exits_2(tmp_path, capsys, monkeypatch):
     monkeypatch.chdir(tmp_path)
@@ -136,10 +100,6 @@ def test_help_exits_0(tmp_path, capsys, monkeypatch):
     assert "Usage: agent-worktree-sweep.sh" in captured.out
 
 
-# ---------------------------------------------------------------------------
-# No worktrees / non-agent worktrees
-# ---------------------------------------------------------------------------
-
 def test_no_agent_worktrees_empty_output(tmp_path, capsys, monkeypatch):
     _init_repo(tmp_path)
     monkeypatch.chdir(tmp_path)
@@ -157,10 +117,6 @@ def test_non_agent_worktree_ignored(tmp_path, capsys, monkeypatch):
     assert rc == 0
     assert _lines(capsys) == []
 
-
-# ---------------------------------------------------------------------------
-# Classification (scan-only)
-# ---------------------------------------------------------------------------
 
 def test_empty_clean_worktree_classified(tmp_path, capsys, monkeypatch):
     _init_repo(tmp_path)
@@ -219,10 +175,6 @@ def test_dirty_benign_mixed_with_nonbenign_falls_to_dirty(tmp_path, capsys, monk
     states = _states(_lines(capsys))
     assert states[wt.as_posix()]["state"] == "dirty"
 
-
-# ---------------------------------------------------------------------------
-# --reap
-# ---------------------------------------------------------------------------
 
 def test_reap_removes_empty_clean(tmp_path, capsys, monkeypatch):
     _init_repo(tmp_path)
@@ -301,7 +253,6 @@ def test_reap_cherry_pick_spawn_count_does_not_grow_with_commit_count(tmp_path, 
     assert f"cherry-picked={n_commits}" in row["detail"]
     assert not wt.exists()
 
-    # ONE `git cherry-pick` spawn for the whole range, regardless of N.
     assert len(cherry_pick_calls) == 1
     argv = cherry_pick_calls[0]
     assert argv[-1].startswith("main..")
@@ -321,9 +272,6 @@ def test_reap_leaves_dirty_worktree(tmp_path, capsys, monkeypatch):
 
 
 def test_advisory_scan_does_not_prune(tmp_path, capsys, monkeypatch):
-    """C16 regression: a surface call must not mutate. The advisory path
-    (no --reap, e.g. /workstream-start's `--format text` call) must never
-    invoke `git worktree prune`."""
     import coordinator_core.ops.agent_worktree_sweep as mod
 
     _init_repo(tmp_path)
@@ -336,7 +284,6 @@ def test_advisory_scan_does_not_prune(tmp_path, capsys, monkeypatch):
 
 
 def test_reap_scan_still_prunes(tmp_path, capsys, monkeypatch):
-    """--reap (e.g. /workday-start's cadence) must still run the prune."""
     import coordinator_core.ops.agent_worktree_sweep as mod
 
     _init_repo(tmp_path)
@@ -360,23 +307,18 @@ def test_reap_forced_off_on_detached_head(tmp_path, capsys, monkeypatch):
     _git("commit", "-q", "-m", "wip", cwd=wt)
 
     head_sha = _git("rev-parse", "HEAD", cwd=tmp_path).stdout.strip()
-    _git("checkout", "-q", head_sha, cwd=tmp_path)  # detach HEAD on calling repo
+    _git("checkout", "-q", head_sha, cwd=tmp_path)
 
     monkeypatch.chdir(tmp_path)
     rc = main(["--reap"])
     captured = capsys.readouterr()
     assert "detached HEAD; refuse to reap" in captured.err
     states = _states([line for line in captured.out.splitlines() if line])
-    # Reap was clamped off — this is a scan-only pass despite --reap being passed.
     assert states[wt.as_posix()]["action"] == "scan-only"
     assert states[wt.as_posix()]["state"] == "commits-clean"
     assert wt.exists()
     assert rc == 0
 
-
-# ---------------------------------------------------------------------------
-# Unit-level helpers
-# ---------------------------------------------------------------------------
 
 def test_json_escape_backslash_before_quote():
     assert _json_escape('a\\"b') == 'a\\\\\\"b'
@@ -413,24 +355,9 @@ def test_classify_worktree_missing_compare_ref_treats_as_zero_ahead(tmp_path):
     assert result.commits_ahead == 0
 
 
-# ---------------------------------------------------------------------------
-# S1b — whole-pass peer-liveness gate on --reap
-# ---------------------------------------------------------------------------
-#
-# There is no per-worktree owner-session mapping (see module docstring's
 # KNOWN STRUCTURAL GAP note), so the gate answers a coarser question: is any
-# OTHER coordinator session live in this repo right now? live_session_ids()
-# is mocked directly rather than constructing real .git/coordinator-sessions/
-# fixtures — the liveness predicate itself is exhaustively tested in
-# coordinator_core/session/tests/; this suite only needs to prove the sweep
-# consults it and reacts correctly to each outcome.
 
 def _track_run_argv(monkeypatch):
-    """Wrap the module's own `_run` to record every argv it issues, while
-    still delegating to the real subprocess call. Patching the module
-    attribute (not a local alias) means every internal caller (including
-    `_remove_worktree`) sees the wrapper, since Python resolves a bare
-    global name at call time."""
     import coordinator_core.ops.agent_worktree_sweep as aws
 
     real_run = aws._run
@@ -461,8 +388,6 @@ def test_reap_skipped_when_live_peer_session_present(tmp_path, capsys, monkeypat
     assert row["action"] == "reap-skipped"
     assert "peer-sid" in row["detail"]
     assert wt.exists()
-    # The actual assertion the brief calls for: `git worktree remove` never
-    # appears in the recorded argv — not merely that nothing changed on disk.
     assert not any(
         len(a) >= 5 and a[0] == "git" and a[3] == "worktree" and a[4] == "remove"
         for a in recorded
@@ -473,8 +398,6 @@ def test_reap_skipped_when_live_peer_session_present(tmp_path, capsys, monkeypat
 
 
 def test_reap_proceeds_when_no_live_peer_session(tmp_path, capsys, monkeypatch):
-    """Regression guard on the working path: self live, no OTHER live
-    session -> reap proceeds exactly as before the gate landed."""
     _init_repo(tmp_path)
     wt = _add_agent_worktree(tmp_path, "self-only-live")
     monkeypatch.chdir(tmp_path)
@@ -489,9 +412,6 @@ def test_reap_proceeds_when_no_live_peer_session(tmp_path, capsys, monkeypatch):
 
 
 def test_reap_skipped_when_owner_unresolvable(tmp_path, capsys, monkeypatch):
-    """Fail-closed: a live OTHER session exists but this session's own
-    identity cannot be resolved (no env override, no sentinel file) ->
-    refuse the whole pass rather than guess."""
     _init_repo(tmp_path)
     wt = _add_agent_worktree(tmp_path, "unresolvable-self")
     monkeypatch.chdir(tmp_path)
@@ -510,8 +430,6 @@ def test_reap_skipped_when_owner_unresolvable(tmp_path, capsys, monkeypatch):
 
 
 def test_reap_skipped_when_liveness_probe_raises(tmp_path, capsys, monkeypatch):
-    """Fail-closed, not a crash: a raising liveness probe must not fall
-    through to the destructive branch."""
     _init_repo(tmp_path)
     wt = _add_agent_worktree(tmp_path, "probe-raises")
     monkeypatch.chdir(tmp_path)
@@ -532,20 +450,14 @@ def test_reap_skipped_when_liveness_probe_raises(tmp_path, capsys, monkeypatch):
 
 
 def test_reap_skip_distinguishable_from_scan_only_and_nothing_eligible(tmp_path, capsys, monkeypatch):
-    """`reap-skipped` (blocked by a live peer), `scan-only` (--reap not
-    passed at all), and a normal completed reap action must never collapse
-    into the same action string — that conflation is the exact failure mode
-    this workstream exists to close."""
     _init_repo(tmp_path)
     wt = _add_agent_worktree(tmp_path, "distinguish")
     monkeypatch.chdir(tmp_path)
 
-    # (1) --reap not requested at all.
     rc = main([])
     assert rc == 0
     scan_only_action = _states(_lines(capsys))[wt.as_posix()]["action"]
 
-    # (2) --reap requested, blocked by a live peer.
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "self-sid")
     monkeypatch.setattr(
         cs_liveness, "live_session_ids", lambda cwd=None: frozenset({"self-sid", "peer-sid"})
@@ -583,10 +495,6 @@ def test_reap_skipped_emits_visible_line_in_json_and_text(tmp_path, capsys, monk
     assert wt.exists()
 
 
-# ---------------------------------------------------------------------------
-# S1b — branch-delete failure surfaced, not swallowed
-# ---------------------------------------------------------------------------
-
 def test_delete_branch_best_effort_returns_none_on_success(tmp_path):
     _init_repo(tmp_path)
     _git("branch", "throwaway", cwd=tmp_path)
@@ -606,9 +514,6 @@ def test_delete_branch_best_effort_returns_error_string_on_failure(tmp_path):
 
 
 def test_reap_surfaces_branch_delete_failure_in_emitted_detail(tmp_path, capsys, monkeypatch):
-    """The failure used to be swallowed entirely (bare `except: pass`) — a
-    worktree could be removed while its branch silently survived, with no
-    way to see that from the tool's own output."""
     _init_repo(tmp_path)
     wt = _add_agent_worktree(tmp_path, "branch-delete-fails")
     monkeypatch.chdir(tmp_path)
@@ -629,14 +534,10 @@ def test_reap_surfaces_branch_delete_failure_in_emitted_detail(tmp_path, capsys,
     states = _states(_lines(capsys))
     row = states[wt.as_posix()]
     assert row["action"] == "removed"
-    assert not wt.exists()  # the worktree itself was still removed
+    assert not wt.exists()
     assert "branch delete failed" in row["detail"]
     assert "branch is checked out" in row["detail"]
 
-
-# ---------------------------------------------------------------------------
-# S1b — lock_reason captured and surfaced, never parsed for meaning
-# ---------------------------------------------------------------------------
 
 def test_parse_worktree_porcelain_captures_lock_reason():
     text = (

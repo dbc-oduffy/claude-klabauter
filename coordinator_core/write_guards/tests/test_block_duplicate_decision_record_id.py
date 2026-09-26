@@ -1,13 +1,3 @@
-"""Behavioral tests for
-coordinator_core.write_guards.block_duplicate_decision_record_id -- the
-hard-deny backstop for a hand-authored `docs/decisions/*.md` record
-claiming an `id:` a sibling already holds. See the guard module's own
-docstring for the incident this discharges.
-
-Uses real files under `tmp_path` (the guard reads sibling `.md` files off
-disk to detect a collision) rather than a payload-only fixture, unlike
-`block_priority_ledger_edit`'s pure-regex shape.
-"""
 
 from __future__ import annotations
 

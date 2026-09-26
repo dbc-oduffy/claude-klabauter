@@ -1,66 +1,3 @@
-"""
-coordinator_core.ops.resolve_swept_baton — op "baton.resolve_swept_in_archive": find
-a swept (already-archived) baton by basename across the three known archive dirs.
-
-Purpose: fallback resolver for the `/pickup` flow when a caller-named baton path
-does not exist in `state/handoffs/` — the baton may already have been swept into
-one of the archive trees. Given a bare basename, recurse each of the three known
-archive dirs, return the first hit's path, a best-effort frontmatter dict, and the
-commit that archived it.
-
-Contract (op-classification manifest row `resolve-swept-baton-in-archive`,
-op-key `baton.resolve_swept_in_archive`):
-    params: {basename: str}
-        -> {found: bool, archive_path: Optional[str], frontmatter: dict,
-            archiving_commit: Optional[str]}
-
-Search dirs (fixed order, first match wins), all relative to the resolved
-worktree root:
-    1. cross-repo/archive/         (flat)
-    2. archive/handoffs/           (possibly month-nested YYYY-MM/)
-    3. archive/completed/         (possibly nested)
-
-Each dir is walked with `Path.rglob(basename)` rather than `Path.glob(basename)`
-so flat, month-nested, and mixed layouts are all tolerated identically — the
-oracle's own risk note names this recursion requirement as load-bearing logic,
-not incidental. Within a dir, ties (more than one file with the same basename)
-resolve to the lexicographically-first match path, deterministic across runs.
-
-DR-084 caution (binding, plan § Cross-plan coordination): this op stays a
-filename/location match. It does NOT interpret, validate, or couple to any
-specific frontmatter field or vocabulary (`status`, `deployment_state`, etc.) —
-the returned `frontmatter` dict is a raw parse of whatever key/value pairs the
-archived file's frontmatter block happens to contain, passed through verbatim.
-DR-084's lifecycle vocabulary overhaul is free to rename/retire fields under
-this op without requiring a change here.
-
-Idempotency (AC7; manifest rates idempotency-hazard "none"): pure read — no
-writes, no git mutation. `git log` is invoked read-only to identify the
-archiving commit. Re-invocation with identical inputs against an unchanged
-tree returns an identical result.
-
-Scope: `common_dir` (manifest-justified) — searches archive dirs under the
-caller's repo, the same class as `handoff.match_candidates` /
-`session.boot_sweep`; omitting this would silently search claude-klabauter's own archive
-dirs instead of the caller's.
-
-Negative-spec:
-    - NEVER shell out via a shell interpreter — the one subprocess call
-      (`git log`) is direct list-argv `subprocess.run` of the named `git`
-      binary, no `sh -c` / shell=True.
-    - NEVER raise on a missing archive dir, a YAML parse error, or a failed
-      `git log` — all three degrade gracefully (dir skipped / frontmatter `{}`
-      / archiving_commit `None`), never an exception surfaced to the caller.
-    - NEVER return more than one `archive_path` — first match, deterministic
-      order, not a list of candidates.
-    - Does NOT write, move, or delete anything — pure resolver, distinct from
-      `archive_and_commit`'s write shape (see manifest note).
-
-Spec backlink: pln-coordinator-ops-buildout-from--903224
-    § Wave 2 (unclustered), § Cross-plan coordination (DR-084 caution)
-Spec backlink: state/audits/2026-07-22-command-payload-inventory/op-classification.tsv
-    row `resolve-swept-baton-in-archive`
-"""
 
 from __future__ import annotations
 
@@ -78,17 +15,9 @@ from coordinator_core.ops.fleet._common import ARCHIVE_ROOT_SUBDIRS, main_worktr
 
 _LOG = logging.getLogger(__name__)
 
-# The one subprocess call in this module
-# was the odd one out relative to every sibling git-wrapper in this wave
-# (missing timeout/creationflags/stdin hardening).
 _GIT_TIMEOUT_SECONDS = 15
 
-# Fixed search order — first match wins. All three are relative to the
-# resolved worktree root (see module docstring). LIFTED (2026-07-28) to
 # coordinator_core.ops.fleet._common.ARCHIVE_ROOT_SUBDIRS — this module was
-# the one-and-only definition before handoff_archive_transition.py needed the
-# same set for its mode="supersede" containment widening; aliased under the
-# original private name so nothing else in this module has to change.
 _ARCHIVE_SUBDIRS = ARCHIVE_ROOT_SUBDIRS
 
 
@@ -141,11 +70,6 @@ def _find_first_match(worktree_root: Path, basename: str) -> Optional[Path]:
 
 
 def _read_frontmatter(fpath: Path) -> dict:
-    """Best-effort raw YAML frontmatter parse — no field interpretation (DR-084).
-
-    Returns `{}` on any parse failure, missing frontmatter fence, or non-dict
-    YAML result. Never raises.
-    """
     try:
         raw = fpath.read_text(encoding="utf-8").replace("\r\n", "\n")
     except OSError as exc:
@@ -175,12 +99,6 @@ def _read_frontmatter(fpath: Path) -> dict:
 
 
 def _archiving_commit(worktree_root: Path, fpath: Path) -> Optional[str]:
-    """Return `git log -1 --format=%H -- <path>` for *fpath*, or None on any failure.
-
-    Read-only single-file history query — direct list-argv `git`, never a
-    shell. Relative pathspec is computed from `worktree_root` so the query
-    works regardless of the caller's own cwd.
-    """
     try:
         rel = fpath.relative_to(worktree_root)
     except ValueError:

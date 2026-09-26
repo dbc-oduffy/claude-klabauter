@@ -1,22 +1,3 @@
-"""
-test_verify_arch_audit_atlas_refresh.py — pytest unit tests for
-coordinator_core.ops.verify_arch_audit_atlas_refresh.
-
-Port source: coordinator/tests/test_atlas_refresh_gate.py (DoE-claude,
-bash-oracle subprocess tests over `bash <helper> ...`) — reauthored here as
-direct in-process calls against the ported Python module's `main(argv)`,
-same fixtures/assertions, plus platform-edge cases the DoE oracle test never
-exercised (Windows-shaped TMPDIR-absent env; git-timeout degrade path).
-
-Spec backlink: docs/plans/2026-06-04-architecture-audit-atlas-refresh-gate.md § C1
-Spec backlink: docs/plans/2026-06-08-atlas-attested-clock-split.md
-Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
-
-Isolation: every test builds a fresh fixture git repo under tmp_path and
-calls `main(argv)` with `os.chdir` scoped to that repo (captured stdout via
-capsys). Negative-spec: tests do NOT touch the real ~/.claude
-docs/architecture/systems/ tree or the operator's working tree.
-"""
 
 import os
 import subprocess
@@ -28,17 +9,12 @@ from coordinator_core.ops import verify_arch_audit_atlas_refresh as mod
 from coordinator_core.ops.verify_arch_audit_atlas_refresh import main
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
 
-# ---------------------------------------------------------------------------
-# Fixture helpers
-# ---------------------------------------------------------------------------
 def _run(cmd, cwd):
     return subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, check=True, **no_console_creationflags())
 
@@ -89,7 +65,6 @@ def _commit_baseline(repo: Path, message: str = "baseline"):
 
 
 def _invoke(repo: Path, monkeypatch, audit_date: str, system: str, commit_msg_file: str = None) -> int:
-    """Chdir into repo and call main() directly, matching the CLI contract."""
     monkeypatch.chdir(repo)
     argv = [audit_date, system]
     if commit_msg_file is not None:
@@ -97,9 +72,6 @@ def _invoke(repo: Path, monkeypatch, audit_date: str, system: str, commit_msg_fi
     return main(argv)
 
 
-# ---------------------------------------------------------------------------
-# AC5 — Branch A pass with both clocks.
-# ---------------------------------------------------------------------------
 def test_branch_a_requires_both_clocks_and_body_diff(tmp_path, monkeypatch, capsys):
     repo = _init_repo(tmp_path)
     _commit_baseline(repo)
@@ -120,9 +92,6 @@ def test_branch_a_requires_both_clocks_and_body_diff(tmp_path, monkeypatch, caps
     assert "PASS branch=A" in out
 
 
-# ---------------------------------------------------------------------------
-# AC6 — Branch A teaching-shape FAIL when last_attested not bumped.
-# ---------------------------------------------------------------------------
 def test_branch_a_fails_without_last_attested_bump(tmp_path, monkeypatch, capsys):
     repo = _init_repo(tmp_path)
     _commit_baseline(repo)
@@ -148,9 +117,6 @@ def test_branch_a_fails_without_last_attested_bump(tmp_path, monkeypatch, capsys
     assert "bump both clocks" in out
 
 
-# ---------------------------------------------------------------------------
-# AC3 — Branch B passes when last_attested bumped only.
-# ---------------------------------------------------------------------------
 def test_branch_b_passes_on_last_attested_bump_only(tmp_path, monkeypatch, capsys):
     repo = _init_repo(tmp_path)
     _commit_baseline(repo)
@@ -175,9 +141,6 @@ def test_branch_b_passes_on_last_attested_bump_only(tmp_path, monkeypatch, capsy
     assert "PASS branch=B" in out
 
 
-# ---------------------------------------------------------------------------
-# AC4 — same-day re-attestation.
-# ---------------------------------------------------------------------------
 def test_branch_b_same_day_reattestation_passes(tmp_path, monkeypatch, capsys):
     repo = _init_repo(tmp_path)
     _commit_baseline(repo)
@@ -274,7 +237,6 @@ def test_skip_when_atlas_absent(tmp_path, monkeypatch, capsys):
 
 
 def test_skip_when_not_inside_git_work_tree(tmp_path, monkeypatch, capsys):
-    """Negative case not covered by the DoE oracle test: bare (non-git) cwd."""
     non_repo = tmp_path / "not-a-repo"
     non_repo.mkdir()
     monkeypatch.chdir(non_repo)
@@ -292,11 +254,6 @@ def test_usage_on_missing_args(monkeypatch, capsys):
     assert "usage: verify-arch-audit-atlas-refresh.sh" in err
 
 
-# ---------------------------------------------------------------------------
-# Platform-edge case (addendum rule 2/4): git subprocess timeout must not
-# hang the caller — degrade gracefully rather than block. Exercises the
-# fixed-timeout path via a monkeypatched git timeout, not a real 30s wait.
-# ---------------------------------------------------------------------------
 def test_git_timeout_degrades_gracefully(tmp_path, monkeypatch, capsys):
     repo = _init_repo(tmp_path)
     _commit_baseline(repo)
@@ -314,8 +271,7 @@ def test_git_timeout_degrades_gracefully(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(mod.subprocess, "run", _raise_timeout)
     monkeypatch.chdir(repo)
 
-    # Should not raise / hang — degrades to empty diff content, still exits 0.
     rc = main(["2026-06-04", "demo-system"])
     out = capsys.readouterr().out
     assert rc == 0
-    assert out  # some verdict line was emitted, not a hang/crash
+    assert out

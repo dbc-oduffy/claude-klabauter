@@ -1,22 +1,3 @@
-"""AC-7 (docs/plans/2026-08-13-commit-seams-inherit-lock-reap-and-retry.md
-chunk C5): `backlog_grind_assemble.apply::_dispatch_commit_per_item`'s
-`add`-acquisition count no longer scales with the number of items it
-commits — a loop over N verified items costs 1 `add` acquisition, not N,
-while still landing N separate commits (D-3(b)/(c)'s per-item cadence is
-untouched — see that handler's own docstring). Counted directly through
-the injected `_run_git` seam, per AC-7's own "demonstrated by counting
-acquisitions in a test, not by inspection" requirement — never by reading
-the source and asserting it looks right.
-
-Deliberately a NEW file (not an addition to `coordinator_core/
-test_backlog_grind_assemble.py`, which sits outside this chunk's file
-scope) — this chunk (C5) owns exactly `backlog_grind_assemble/apply.py`,
-`contract/apply_base.py`, and `test_git_lock_retry.py` plus any new test
-file added for AC-7.
-
-Spec backlink: pln-commit-seams-inherit-lock-reap-612e55,
-chunk C5.
-"""
 from __future__ import annotations
 
 import json
@@ -27,9 +8,6 @@ from coordinator_core.backlog_grind_assemble import apply as bga_apply
 
 
 class _CountingFakeGit:
-    """Same generic-success shape as `test_backlog_grind_assemble.py`'s own
-    `_FakeGit` (kept separate here per this chunk's own file scope), plus
-    an `add_calls`/`commit_calls` counter this pin reads directly."""
 
     def __init__(self) -> None:
         self.log: list[tuple[str, ...]] = []
@@ -41,7 +19,7 @@ class _CountingFakeGit:
         if args[0] == "add":
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         if args[:2] == ["diff", "--cached"]:
-            return SimpleNamespace(returncode=1, stdout="", stderr="")  # "changed"
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
         if args[0] == "commit":
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         if args[0] == "checkout":
@@ -76,9 +54,6 @@ class TestCommitPerItemAcquisitionCountNoLongerScalesWithN:
 
         handler(_n_item_payload(3), tmp_path)
 
-        # BEFORE this chunk: 2 acquisitions x N items == 6. AFTER: 1
-        # combined `add` acquisition + N `commit` acquisitions == 4 for
-        # N=3 -- the `add` count is O(1), never O(N).
         assert fake_git.add_calls == 1
         assert fake_git.commit_calls == 3
 

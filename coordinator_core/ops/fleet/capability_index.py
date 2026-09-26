@@ -106,31 +106,18 @@ from coordinator_core.ops.fleet._memo_resolver import (
 
 _LOG = logging.getLogger(__name__)
 
-# Vendored DoE schemas live in coordinator_core/frontmatter/schemas/ — the one
-# directory coordinator_core.frontmatter.schema_drift_watch globs, so a DoE-side
-# change to either frozen contract surfaces on the daily drift watch by
-# construction rather than needing this op to be remembered.
 _SCHEMAS_DIR = Path(__file__).resolve().parents[2] / "frontmatter" / "schemas"
 _MANIFEST_SCHEMA_PATH = _SCHEMAS_DIR / "capability-manifest.schema.json"
 _INDEX_SCHEMA_PATH = _SCHEMAS_DIR / "fleet-capability-index.schema.json"
 
-# Index-level staleness budget default — distinct from any single manifest's own
-# refresh_cadence (see module docstring point 4). Overridable per-call via the
-# op's optional `ttl` param (the "invocation seam" override the spec asks for).
 _DEFAULT_TTL = "P1D"
 
 _MANIFEST_REL_PATH = ("state", "capabilities", "manifest.json")
 _INDEX_REL_PATH = ("state", "capabilities", "fleet-index.json")
 
 # Minimal ISO-8601 duration parser — supports the P#Y#M#W#D[T#H#M#S] subset the
-# two schemas' own descriptions cite as the expected form (e.g. "P7D", "P1D").
-# Y/M are approximated at 365/30 days respectively — adequate for a staleness
-# comparison at day-scale cadences; this op never needs calendar-exact duration
 # arithmetic. Returns None (never raises) for anything else, INCLUDING a "human
-# cadence label" a manifest's refresh_cadence is explicitly permitted to carry
 # (capability-manifest.schema.json's own description: "an ISO-8601 duration...
-# or a human cadence label") — see _is_stale for how an unparseable cadence is
-# treated (fail-closed, not "assume fresh").
 _ISO8601_DURATION_RE = re.compile(
     r"^P(?!$)(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)W)?(?:(\d+)D)?"
     r"(?:T(?=\d)(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$"
@@ -196,20 +183,6 @@ def _is_stale(
 
 
 def _seam_self_verified_reachable(consume_seam: object) -> bool:
-    """The ENTIRE "self-verified reachable" check this op performs — deliberately
-    NOT a network/subprocess probe (explicitly out of scope per the memo's
-    Contract terms: "Do NOT attempt network or subprocess reachability
-    probes"). "Self-verified reachable" here reduces to the only thing a pure
-    read of the manifest can establish: consume_seam is present as a non-empty
-    string. capability-manifest.schema.json already requires `consume_seam` to
-    be a non-empty string (minLength 1) for every schema-valid entry, so for any
-    entry that reached this function post-validation this check is structurally
-    a no-op (always True) — it exists so the "not self-verified reachable"
-    downgrade trigger from the memo's Contract terms has a concrete, documented
-    implementation rather than being silently dropped, and so a FUTURE entry
-    shape (e.g. a schema widening that makes consume_seam nullable) does not
-    silently start asserting reachability for a seam this op never checked.
-    """
     return isinstance(consume_seam, str) and bool(consume_seam.strip())
 
 
@@ -323,19 +296,12 @@ def _enumerate_repo_paths(worktree_root: Path) -> Dict[str, Path]:
     never surfaced on the wire.
     """
     repos: Dict[str, Path] = {}
-    for key, path_str in sorted(read_registry_repos().items()):  # RegistryReadError propagates
+    for key, path_str in sorted(read_registry_repos().items()):
         if not path_str:
             continue
         candidate = Path(path_str)
         if not candidate.is_dir():
             continue
-        # Two registry keys legitimately alias one checkout (observed live:
-        # repos.doe_claude and repos.example_doctrine_repo both resolve to the
-        # DoE-claude clone). Reading that repo once per key would emit its
-        # capabilities twice into entries[] — a duplicate a consumer computing
-        # host_repo asymmetry (F1c) has no way to tell from two genuine offers.
-        # Dedup on resolved path; the lowest-sorting key wins the label, so the
-        # enumeration is deterministic across runs rather than dict-order-dependent.
         if any(same_repo_path(candidate, seen) for seen in repos.values()):
             continue
         repos[key] = candidate
@@ -352,21 +318,6 @@ def build_fleet_index(
     ttl: str = _DEFAULT_TTL,
     build_time: Optional[datetime.datetime] = None,
 ) -> Tuple[dict, List[str]]:
-    """Build the aggregated fleet-capability index for `worktree_root`.
-
-    Returns (index_dict, skipped_reasons) — index_dict conforms to
-    fleet-capability-index.schema.json (validated by the caller before persist,
-    see `_fleet_aggregate_capability_index`); skipped_reasons is a list of
-    human-readable strings, one per repo whose manifest was present but invalid
-    (see `_read_manifest`) — NEVER populated for a repo with simply no manifest
-    file (a normal, silent skip).
-
-    OSS-safe degrade: when `read_registry_repos()` returns `{}` (registry
-    absent — its own documented "nothing configured" case, not an error) AND
-    `worktree_root` itself has no manifest, this still returns a schema-valid
-    index with `entries: []` — no exception, no special-cased branch; the
-    aggregation loop below naturally produces zero entries.
-    """
     build_time = build_time or datetime.datetime.now(datetime.timezone.utc)
     skipped: List[str] = []
     entries: List[dict] = []
@@ -378,7 +329,7 @@ def build_fleet_index(
             skipped.append(err)
             continue
         if manifest is None:
-            continue  # no manifest present — normal skip, not recorded
+            continue
         for cap in manifest.get("capabilities", []):
             entries.append(_project_entry(cap, manifest, build_time))
 

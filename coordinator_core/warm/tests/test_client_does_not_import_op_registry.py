@@ -55,9 +55,6 @@ _COUNT_AFTER_CLIENT_IMPORT = (
 
 
 def _ops_modules_after(code: str) -> int:
-    """Count in a FRESH interpreter, never this one: pytest has already
-    imported much of the tree, so an in-process `sys.modules` check would
-    read the suite's own imports and pass unconditionally."""
     result = subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,
@@ -81,10 +78,6 @@ def test_importing_the_warm_client_registers_no_ops():
 
 
 def test_the_spawn_seam_is_still_a_patchable_module_attribute():
-    """The trap the fix had to avoid: inlining the import at the call site
-    would bypass `test_client_fallback.py`'s five
-    `monkeypatch.setattr(client, "spawn_detached", ...)` sites and let the
-    suite spawn real detached processes."""
     from coordinator_core.warm import client
 
     assert callable(getattr(client, "spawn_detached", None)), (

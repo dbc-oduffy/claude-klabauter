@@ -32,9 +32,6 @@ __all__ = ["render_disposal_manifest"]
 
 
 def _escape_cell(value: Any) -> str:
-    """Escape one markdown-table cell value: pipes would otherwise split the
-    cell, and a literal newline (a multi-line guard-evidence string, e.g. a
-    multi-line commitment-closure detail) would otherwise break the row."""
     text = str(value)
     text = text.replace("|", "\\|")
     text = text.replace("\r\n", "\n").replace("\n", "<br>")

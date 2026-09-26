@@ -40,15 +40,10 @@ import pytest
 
 from coordinator_core import locked_write
 
-#: The independent second copy of the ceiling. Deliberately a literal, not an
-#: import of the constant under test -- importing it would make this file agree
-#: with any value whatsoever and assert nothing. Lowering it is fine (ratchets
-#: lower); raising it requires a PM ruling.
 PINNED_CEILING_SECS = 180.0
 
 
 def test_wait_constant_is_at_or_below_the_pinned_ceiling():
-    """The ratchet itself: the constant may be lowered, never raised."""
     assert locked_write.CONTENDED_LOCK_WAIT_SECS <= PINNED_CEILING_SECS, (
         f"contended lock wait raised to {locked_write.CONTENDED_LOCK_WAIT_SECS}s, "
         f"above the pinned {PINNED_CEILING_SECS}s ceiling. This wait ratchets DOWN "
@@ -65,40 +60,29 @@ def test_default_resolution_is_the_ceiling(monkeypatch):
 
 @pytest.mark.parametrize("raw", ["181", "900", "3600", "1e9", "180.0001", "inf", "nan"])
 def test_env_knob_cannot_widen_the_wait(monkeypatch, raw):
-    """The clamp sits AFTER env resolution -- the escape hatch is the point of it."""
     monkeypatch.setenv(locked_write.CONTENDED_LOCK_WAIT_ENV, raw)
     assert locked_write.contended_lock_wait_secs() <= PINNED_CEILING_SECS
 
 
 def test_env_knob_may_still_narrow_the_wait(monkeypatch):
-    """Narrowing is the permitted direction; a fast-fail run must stay possible."""
     monkeypatch.setenv(locked_write.CONTENDED_LOCK_WAIT_ENV, "5")
     assert locked_write.contended_lock_wait_secs() == pytest.approx(5.0)
 
 
 def test_a_caller_supplied_default_cannot_widen_the_wait(monkeypatch):
-    """The `default` parameter is the second route in, and it is clamped too.
-
-    Closing only the env var would leave the same widening available one import
-    away -- a caller passing `default=3600.0` would sleep for an hour with no env
-    var set and nothing to notice it.
-    """
     monkeypatch.delenv(locked_write.CONTENDED_LOCK_WAIT_ENV, raising=False)
     assert locked_write.contended_lock_wait_secs(default=3600.0) <= PINNED_CEILING_SECS
 
 
 def test_a_widening_default_and_a_widening_env_knob_together_are_still_clamped(monkeypatch):
-    """Defence in depth: both routes open at once still resolve within the ceiling."""
     monkeypatch.setenv(locked_write.CONTENDED_LOCK_WAIT_ENV, "7200")
     assert locked_write.contended_lock_wait_secs(default=3600.0) <= PINNED_CEILING_SECS
 
 
 def test_a_narrowing_default_still_bounds_a_widening_env_knob(monkeypatch):
-    """A caller that asked for a SHORTER wait does not get the ceiling instead."""
     monkeypatch.setenv(locked_write.CONTENDED_LOCK_WAIT_ENV, "900")
     assert locked_write.contended_lock_wait_secs(default=20.0) == pytest.approx(20.0)
 
 
 def test_the_rmw_timeout_is_untouched_by_this_ratchet():
-    """Scoped to the publish wait; the single-file RMW timeout is a separate rule."""
     assert locked_write.LOCK_TIMEOUT_SECS < PINNED_CEILING_SECS

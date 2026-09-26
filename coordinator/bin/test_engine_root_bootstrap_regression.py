@@ -90,14 +90,8 @@ import tempfile
 import pytest
 from coordinator_core.win_portability import no_console_creationflags
 
-# Every test here invokes each fixed CLI as a REAL subprocess with
 # PYTHONPATH unset -- an in-process import cannot reproduce the
-# "sys.path[0] is bin/, not the checkout root" defect this file guards
-# against (see module docstring). age-sweep-lessons's probe additionally
-# spawns real `git init`/`git add` on a throwaway temp dir to exercise its
 # --apply write path. The spawn ratchet's `_BASELINE` is shrink-only
-# pre-existing residue and is explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _BIN_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -111,24 +105,6 @@ from bootstrap_discovery import (  # noqa: E402
     scan_resolver_call_sites,
 )
 
-# Each entry: (relative CLI path, argv passed after the CLI path).
-# --help reaches the fixed import for most of these: the affected import sits
-# at module scope (or is reached before argparse would ever refuse), so a
-# ModuleNotFoundError fires before --help's own output would. `plan-tasks-
-# resolve` gets argv that walks past `parse_args()` into the function
-# actually carrying the fixed import — a read-only refusal path, no plan/repo
-# mutation.
-#
-# `assert-no-terminal-plans-in-live.py` is deliberately NOT in this list: its
-# fixed import lives in `_coordinator_state_root()`, reached from `main()`
-# only when `_query_terminal_paths()` (a live records.query call) returns a
-# non-empty list -- `--help` never refuses here (this file hand-rolls argv
-# parsing with no argparse, so `--help` is a silent no-op token) and the case
-# would pass vacuously whenever the live checkout happens to have zero
-# terminal-status plans. See
-# test_assert_no_terminal_plans_in_live_coordinator_state_root_imports_coordinator_core
-# below for its dedicated, deterministically-reaching probe (review finding,
-# 2026-08-12).
 _FIXED_CLIS = [
     (
         "plan-tasks-resolve",
@@ -142,20 +118,16 @@ _FIXED_CLIS = [
             "--disposition-detail",
             "regression probe",
         ],
-    ),  # reaches _resolve_repo_root's and _read_source_row's deferred
-    # coordinator_core imports, then refuses cleanly (exit 2) when the
-    # nonexistent plan path can't be read -- no plan/repo mutation attempted.
+    ),
     ("merge-gate-and-pr.py", ["--help"]),
     ("merge-recovery-and-tag-cut.py", ["--help"]),
     ("merge-release-notes-derive.py", ["--help"]),
     ("probe-memory-headroom.py", ["--help"]),
-    ("with-suite-mutex", []),  # refuses on usage before --help is consulted
+    ("with-suite-mutex", []),
     ("parallel-review-orthogonality-guard.py", ["--help"]),
     ("percolate-full-payload-proof.py", ["--help"]),
     ("queue-triage.py", ["--help"]),
     ("record-platform-outcome.py", ["--help"]),
-    # 2026-08-12 discovered-set fixes (module-scope or reached-before-argparse
-    # imports -- --help is real evidence for each):
     ("advance-tracker-status.py", ["--help"]),
     ("append-goal-event.py", ["--help"]),
     ("archive-paper-trail.py", ["--help"]),
@@ -414,22 +386,12 @@ def test_ensure_engine_on_path_mirror_shaped_checkout() -> None:
     """
     real_cc_invoke = os.path.join(_LIB_DIR, "cc_invoke.py")
     real_mlir = os.path.join(_LIB_DIR, "machine_local_impl_resolve.py")
-    # cc_invoke.py imports this at module TOP (not lazily, unlike the sibling
-    # above) since the resolver-ladder split, so a mirror without it dies on a
-    # ModuleNotFoundError before any rung runs -- the mirror payload's own
-    # dependency gap, never the thing this probe is asking about.
     real_engine_bootstrap = os.path.join(_LIB_DIR, "engine_bootstrap.py")
-    real_claude_klabauter_root = os.path.dirname(os.path.dirname(_BIN_DIR))  # .../coordinator/bin -> .../<repo>
+    real_claude_klabauter_root = os.path.dirname(os.path.dirname(_BIN_DIR))
 
     with tempfile.TemporaryDirectory() as mirror_root, tempfile.TemporaryDirectory() as empty_settings_home:
         mirror_lib = os.path.join(mirror_root, "coordinator", "bin", "lib")
         os.makedirs(mirror_lib, exist_ok=True)
-        # cc_invoke.py's own `_resolve_claude_klabauter_root` registry rung lazily
-        # imports this co-located sibling module (see cc_invoke.py's
-        # `_machine_local_impl_resolver`) -- a real mirror payload ships it
-        # alongside cc_invoke.py, so the mirror shape being tested here must
-        # too, or this probe would trip a real seam's own dependency gap
-        # rather than testing the thing AC3 asks about.
         for src in (real_cc_invoke, real_mlir, real_engine_bootstrap):
             with open(src, encoding="utf-8") as fh:
                 source = fh.read()
@@ -520,7 +482,7 @@ def test_ensure_hooks_fleet_and_gate_validate_invocable_mirror_shaped_checkout()
     """
     real_lib_dir = _LIB_DIR
     real_bin_dir = _BIN_DIR
-    real_claude_klabauter_root = os.path.dirname(os.path.dirname(real_bin_dir))  # .../coordinator/bin -> .../<repo>
+    real_claude_klabauter_root = os.path.dirname(os.path.dirname(real_bin_dir))
 
     with tempfile.TemporaryDirectory() as mirror_root:
         mirror_bin = os.path.join(mirror_root, "bin")
@@ -543,10 +505,6 @@ def test_ensure_hooks_fleet_and_gate_validate_invocable_mirror_shaped_checkout()
         env.pop("PYTHONPATH", None)
         env["COORDINATOR_ENGINE_ROOT"] = real_claude_klabauter_root
 
-        # coordinator-ensure-hooks-fleet: probe the module-level bootstrap
-        # directly (does NOT call main()/ensure_hooks_fleet(), which would
-        # mutate every registered repo's git hooks — out of scope for this
-        # import-boundary regression proof).
         fleet_script = os.path.join(mirror_bin, "coordinator-ensure-hooks-fleet")
         fleet_probe = (
             "import importlib.util, sys\n"
@@ -578,10 +536,6 @@ def test_ensure_hooks_fleet_and_gate_validate_invocable_mirror_shaped_checkout()
             f"coordinator-ensure-hooks-fleet's bootstrap did not complete cleanly:\n{fleet_combined}"
         )
 
-        # gate-validate-invocable: run the real CLI end to end (read-only —
-        # gate.validate_invocable is advisory-only per its own module
-        # docstring, never mutates the repo) against a nonexistent path, so
-        # the deferred coordinator_core import is genuinely reached.
         gate_script = os.path.join(mirror_bin, "gate-validate-invocable")
         gate_proc = subprocess.run(
             [sys.executable, gate_script, "nonexistent-regression-probe.py"],
@@ -602,15 +556,6 @@ def test_ensure_hooks_fleet_and_gate_validate_invocable_mirror_shaped_checkout()
             f"gate-validate-invocable did not reach the op and print a verdict:\n{gate_combined}"
         )
 
-        # gate-validate-invocable --help: this is the exact invocation the
-        # published mirror's hermetic entrypoint gate makes to check "does
-        # this start cleanly" -- the bug the PM reported (cross-repo/inbox/
-        # 2026-08-17-doe-claude-em-mirror-entrypoints-missing-coordinator-
-        # core.md follow-up) was that this path fell through to the op and
-        # printed the dimensions JSON instead of usage text, so the
-        # sub-legs above (which never pass --help) stayed green over a
-        # broken behavior. Must be exit 0, usage text on stdout, and NO
-        # dimensions JSON (no '"overall"' key).
         gate_help_proc = subprocess.run(
             [sys.executable, gate_script, "--help"],
             capture_output=True,
@@ -633,8 +578,6 @@ def test_ensure_hooks_fleet_and_gate_validate_invocable_mirror_shaped_checkout()
             f"gate-validate-invocable --help did not print usage text:\n{gate_help_proc.stdout}"
         )
 
-        # Same-tree sanity leg: both entrypoints must still start cleanly in
-        # OUR OWN layout (<root>/coordinator/bin), unchanged by this fix.
         env_own_tree = dict(os.environ)
         env_own_tree.pop("PYTHONPATH", None)
         own_fleet_script = os.path.join(real_bin_dir, "coordinator-ensure-hooks-fleet")
@@ -704,17 +647,6 @@ def test_ensure_hooks_fleet_and_gate_validate_invocable_mirror_shaped_checkout()
 
 
 def _assert_bare_entrypoint_classifier_available() -> None:
-    """Shared guard for every test in this file that trusts a bare-entrypoint
-    scan (`discover_bootstrap_candidates` or `scan_resolver_call_sites`):
-    both silently narrow to `.py`-only files when `_bare_entrypoint_names()`
-    returns `None` (`coordinator_core` not importable), dropping ~11
-    extensionless snapshot files from the scan with no failure signal of its
-    own. In this test's process `coordinator_core` is importable by
-    construction (this module imports `win_portability` at module scope), so
-    a `None` here means the classifier broke, not that the engine is
-    missing -- pin that loud, in every caller, rather than trusting a scan
-    that may have quietly narrowed.
-    """
     assert _bare_entrypoint_names() is not None, (
         "the bare-entrypoint classifier is unavailable, so discovery silently "
         "narrowed to .py-only files and this gate no longer covers the ~73 "
@@ -723,20 +655,6 @@ def _assert_bare_entrypoint_classifier_available() -> None:
 
 
 def test_no_undiscovered_bootstrap_gaps() -> None:
-    """AC5/AC6: the discovered set of `coordinator/bin/` files that import
-    `coordinator_core` with no recognizable engine-root bootstrap must be
-    EMPTY. A newly added CLI missing the bootstrap enters this set and fails
-    this assertion -- see module docstring for the 10 files this gate found
-    on its first run against this tree, before they were fixed alongside it.
-    """
-    # The extensionless half of the scan is admitted by the settled
-    # `test_bin_launcher_parity` classifier, and `_bare_entrypoint_names`
-    # returns None (falling back to `.py`-only) when `coordinator_core` is not
-    # importable. That fallback is correct for the module's own callers but
-    # would silently re-open the exact gap this gate closed, so pin it loud
-    # HERE: in this test's process coordinator_core is importable by
-    # construction (this module imports win_portability at module scope), so a
-    # None means the classifier broke, not that the engine is missing.
     _assert_bare_entrypoint_classifier_available()
     candidates = discover_bootstrap_candidates(_BIN_DIR)
     if candidates:
@@ -755,32 +673,7 @@ def test_no_undiscovered_bootstrap_gaps() -> None:
         )
 
 
-# AC4: checked-in snapshot of which resolver FAMILY each file under
-# coordinator/bin/ uses, captured from the 2026-08-12 working tree (see plan
-# `2026-08-12-hand-rolled-engine-root-bootstraps-become-seam-calls.md`, C3).
-#
-# Keyed on rel_path -> set of families, deliberately NOT on (lineno, call_name):
-# the C4/C5/C6 migration rewrites `resolve_engine_root(...)` call sites into
-# `require_engine_on_path(...)` one-liners, which changes both the call name and
-# every line number below it in the file. A snapshot keyed on those would go red
-# on every migration commit for no semantic reason, and would force each of the
-# concurrent per-batch migration executors to edit this one shared file. The
-# FAMILY is the invariant AC4 actually pins: a site may change call name, but an
-# env-first file must stay env-first.
-#
-# `lib/cc_invoke.py` is the sole multi-family entry -- it defines both variants.
-# ROWS REMOVED 2026-08-25 -- each named a file that no longer calls a resolver,
-# which this map's own drift message says to drop in the same commit as the
-# removal. Three of them (`scoped-git-commit`, `sweep-actioned-memos.py`,
-# `sweep-shipped-handoffs.py`) no longer EXIST on disk at all; the other three
-# (`coordinator-prepare-commit-msg`, `schema-drift-gate.py`,
-# `workday-complete-assemble.py`) became thin forwarders whose bootstrap now
-# happens inside `lib/entry_point_shim.py` on their behalf, so the resolver
-# call is no longer in the file this map keys on.
 _RESOLVER_FAMILY_BY_FILE = {
-    # ROWS ADDED 2026-08-25 -- eleven files called a resolver with no row here.
-    # The map is a two-way snapshot (drift + vanished + undiscovered), so a
-    # missing row is as much a stale-snapshot failure as an orphaned one.
     "advance-tracker-status.py": frozenset({"env_first"}),
     "age-sweep-lessons.py": frozenset({"env_first"}),
     "app-session.py": frozenset({"env_first"}),
@@ -855,12 +748,7 @@ _RESOLVER_FAMILY_BY_FILE = {
     "tests/test_checked_repo_resolver_c4.py": frozenset({"env_first"}),
     "validate-fast-and-packageability.py": frozenset({"self_location"}),
     "whats-next.py": frozenset({"env_first"}),
-    # FAMILY CHANGED 2026-09-22, deliberately, per this map's own contract: both
-    # wrappers import `coordinator_core.testing.*` -- the test helper belonging to
-    # the checkout they live in -- so self-location is the only ladder that can
-    # answer correctly. Env-first sent a run from the claude-klabauter checkout to whatever
     # COORDINATOR_ENGINE_ROOT named, which on a cloud box is a published mirror
-    # pinned at clone time, and the import died on a helper not yet published there.
     "with-suite-mutex": frozenset({"self_location"}),
     "with-tier-t-slot": frozenset({"self_location"}),
     "workday-complete-args-and-validate.py": frozenset({"env_first"}),
@@ -923,23 +811,11 @@ def test_resolver_family_map_no_family_drift() -> None:
 
 
 def _assert_shim_never_self_locates() -> None:
-    """The teeth behind `entry_point_shim.py`'s depth exemption above.
-
-    The shim is allowed to call a self-location-first resolver from
-    `coordinator/bin/lib/` ONLY because it hands over a top-level
-    `BIN_DIR / "<entrypoint>.py"` path -- the depth `parents[2]` is correct
-    for. Passing its own `__file__` would probe one directory too deep and
-    silently fall through to the registry ladder, which is exactly the trap
-    the exemption must not become a hole for.
-    """
     shim = os.path.join(str(_BIN_DIR), "lib", "entry_point_shim.py")
     if not os.path.isfile(shim):
         return
     with open(shim, encoding="utf-8") as fh:
         source = fh.read()
-    # AST, not a regex over the text: the shim's own docstring QUOTES the
-    # `require_colocated_engine_on_path(__file__)` form it deliberately does
-    # NOT use, and a text scan reads that prose as a call site.
     governed = {"require_colocated_engine_on_path", "resolve_colocated_claude_klabauter_root"}
     for node in ast.walk(ast.parse(source)):
         if not isinstance(node, ast.Call):

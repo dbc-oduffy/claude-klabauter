@@ -1,37 +1,3 @@
-"""
-coordinator_core.ops.ceremony.pipeline_context — Ceremony resolved-state data model.
-
-Purpose: Defines the intermediate resolved-state object that branch_resolution.py's
-_resolve_branches (C2.2, the surviving engine of the retired ceremony.wsc_resolve op)
-populates and receipt_emit (C2.4) consumes.  This module is a PURE DATA MODEL —
-it owns structure, serialization, and validation only.  No disk I/O here.
-
-Node shapes (D/J/F/B/X) and op_tail helpers are imported from receipt_schema
-(single source of truth).  pipeline_context only adds the higher-level resolved-
-state wrappers that the pre-resolution phase needs.
-
-Key concepts:
-
-  BranchResolution — one entry per branch signal in the branch inventory.  Captures
-    the branch identifier, whether the signal was legible on disk, the raw evidence
-    dict (signal value + read provenance), and the node type the resolver produced
-    (D/J/F/B/X).  This is the "per-branch evidence" the phase-1 receipt exposes so
-    the EM sees a conclusion to check, not a tree to simulate.
-
-  PipelineContext — the top-level resolved-state object for a single ceremony run.
-    Holds the disposition (single-session vs chain-terminal), the ordered list of
-    BranchResolution items, the growing node ledger (list of dicts in receipt_schema
-    node shapes), ceremony name, and scope_mode.
-
-Round-trip contract: both types implement to_dict() / from_dict() with no information
-loss.  This supports receipt-emit (to_dict feeds make_receipt) and resumption (a
-persisted phase-1 receipt can be rehydrated back into a PipelineContext for the
-commit phase).
-
-Spec backlink:
-  docs/plans/2026-07-06-ceremony-as-pipeline-2-invert-workstream.md § Design
-  coordinator_core/ops/ceremony/receipt_schema.py — node shapes (single source of truth)
-"""
 
 from __future__ import annotations
 
@@ -50,12 +16,7 @@ from coordinator_core.ops.ceremony.receipt_schema import (  # noqa: F401 — sha
 )
 from coordinator_core.ops.ceremony.wsc_disposition import PREDECESSOR_CONSUMED, VALID, canonicalize
 
-# ---------------------------------------------------------------------------
-# BranchResolution
-# ---------------------------------------------------------------------------
 
-# Canonical branch IDs from the branch inventory (node-map § Branch Inventory).
-# Listed for reference; not an exhaustive enum — the resolver may emit any string.
 BRANCH_ID_WSC_DISPOSITION = "WSC_DISPOSITION"
 BRANCH_ID_GOVERNING_PLAN = "governing_plan_exists"
 BRANCH_ID_CHAIN_SLUG = "chain_slug_4way"
@@ -115,7 +76,6 @@ class BranchResolution:
             )
 
     def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-serializable dict; no information is lost."""
         return {
             "branch_id": self.branch_id,
             "legible": self.legible,
@@ -126,7 +86,6 @@ class BranchResolution:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "BranchResolution":
-        """Reconstruct a BranchResolution from a to_dict() output."""
         return cls(
             branch_id=data["branch_id"],
             legible=data["legible"],
@@ -134,11 +93,6 @@ class BranchResolution:
             signal_read=data.get("signal_read"),
             evidence=copy.deepcopy(data.get("evidence", {})),
         )
-
-
-# ---------------------------------------------------------------------------
-# PipelineContext
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -235,49 +189,28 @@ class PipelineContext:
     scoping_method: str = ""
     foreign_commit_count: int = 0
 
-    # ------------------------------------------------------------------
-    # Convenience mutators
-    # ------------------------------------------------------------------
 
     def add_branch(self, resolution: BranchResolution) -> None:
-        """Append a BranchResolution to the resolved_branches list."""
         self.resolved_branches.append(resolution)
 
     def add_node(self, node: dict[str, Any]) -> None:
-        """Append a node dict (receipt_schema shape) to the node ledger."""
         self.nodes.append(node)
 
     def get_branch(self, branch_id: str) -> BranchResolution | None:
-        """Return the BranchResolution for a given branch_id, or None if absent."""
         for br in self.resolved_branches:
             if br.branch_id == branch_id:
                 return br
         return None
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:
-        """Return the node dict for a given node id, or None if absent."""
         for n in self.nodes:
             if n.get("id") == node_id:
                 return n
         return None
 
-    # ------------------------------------------------------------------
-    # Round-trip serialization
-    # ------------------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-serializable dict representation.
-
-        Suitable for embedding in a receipt (the nodes list matches
-        receipt_schema make_receipt's nodes parameter exactly).
-        """
         # Emit a CONSISTENT plural
-        # list even for a scalar-only-constructed context, so from_dict() can
-        # switch to presence-based (not truthiness-based) plural-key detection
-        # without breaking scalar-only round-trips. The `or` fallback only
-        # fires when the plural list is empty AND the scalar is non-empty;
-        # a real chain-terminal context with a populated plural list is
-        # unaffected.
         consumed_handoffs_out = list(self.consumed_handoffs) or (
             [self.consumed_handoff] if self.consumed_handoff else []
         )
@@ -349,16 +282,8 @@ class PipelineContext:
             foreign_commit_count=data.get("foreign_commit_count", 0),
         )
 
-    # ------------------------------------------------------------------
-    # Validation
-    # ------------------------------------------------------------------
 
     def validate(self) -> list[str]:
-        """Return a list of structural error strings (empty = valid).
-
-        Validates ceremony name, scope_mode, disposition, node type integrity,
-        and branch node_type membership.  Does NOT perform disk I/O.
-        """
         errors: list[str] = []
 
         if not self.ceremony:
@@ -374,9 +299,6 @@ class PipelineContext:
                 f"disposition must be a string; got {type(self.disposition).__name__}"
             )
 
-        # consumed_handoff/predecessor previously had no
-        # type check nor the disposition-consistency invariant this class's own
-        # docstring documents ("populated ONLY when disposition == chain-terminal").
         if not isinstance(self.consumed_handoff, str):
             errors.append(
                 f"consumed_handoff must be a string; got {type(self.consumed_handoff).__name__}"
@@ -407,10 +329,6 @@ class PipelineContext:
                 f"{type(self.foreign_commit_count).__name__}"
             )
 
-        # Pluralization (2026-07-12): consumed_handoffs/predecessors are the
-        # source of truth for the chain-terminal-emptiness invariant; the
-        # scalars are derived (checked separately below via the Staff Engineer F4
-        # consistency requirement).
         for i, ch in enumerate(self.consumed_handoffs):
             if not isinstance(ch, str):
                 errors.append(
@@ -421,11 +339,6 @@ class PipelineContext:
                 errors.append(
                     f"predecessors[{i}] must be a string; got {type(pred).__name__}"
                 )
-        # canonicalize() rejects unrecognised values (see wsc_disposition
-        # module docstring); this validator must not crash on an out-of-VALID
-        # or empty disposition (both are legitimate here — e.g. the
-        # pre-resolution "" fixture shape), so only canonicalize a
-        # recognised token and compare the rest as-is (unchanged behaviour).
         disposition_for_check = (
             canonicalize(self.disposition) if self.disposition in VALID else self.disposition
         )
@@ -436,15 +349,6 @@ class PipelineContext:
                 f"consumed_handoffs={self.consumed_handoffs!r}, predecessors={self.predecessors!r}"
             )
 
-        # the Staff Engineer F4 (2026-07-12): ENFORCE the derived-scalar contract, not
-        # merely assign it in from_dict — a hand-edited or round-tripped
-        # receipt where the scalar and list[0] diverge must fail validation,
-        # or an inconsistent context threads silently into phase-2.
-        # This check is gated on
-        # isinstance(self.consumed_handoff, str)/isinstance(self.predecessor, str)
-        # below, so it is SKIPPED (not unconditional) when the scalar already
-        # failed its own type check above; that case surfaces exactly one error
-        # ("must be a string"), not also an F4 divergence error.
         expected_consumed_handoff = self.consumed_handoffs[0] if self.consumed_handoffs else ""
         if isinstance(self.consumed_handoff, str) and self.consumed_handoff != expected_consumed_handoff:
             errors.append(
@@ -459,11 +363,6 @@ class PipelineContext:
                 f"got predecessor={self.predecessor!r}, predecessors={self.predecessors!r}"
             )
 
-        # validate() checked sid's type but not its
-        # non-emptiness, leaving a corrupted/hand-edited receipt with sid=""
-        # able to reach phase-2 (wsc_commit) silently. Gated on `disposition`
-        # (not `ceremony`) so pre-resolution/test-fixture contexts that
-        # legitimately never set sid still validate cleanly.
         if self.disposition and not self.sid:
             errors.append(
                 "sid must be non-empty when disposition is set "

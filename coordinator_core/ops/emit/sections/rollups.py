@@ -61,11 +61,9 @@ from coordinator_core.ops.emit.sections._shared import (
 )
 from coordinator_core.ops.emit.sections.review_trail import _list_review_trail_paths
 
-# Commit-SHA shape filter (bash:1026/1041/1149 ``test("^[0-9a-f]{7,40}$")``).
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 
-# --------------------------------------------------------------------------- record sources
 def _query_completions(ctx: EmitContext) -> list[dict]:
     """Native records seam, ``type="completion"``, ``since=_since_cutoff(ctx)`` → completion records.
 
@@ -90,9 +88,6 @@ def _query_completions(ctx: EmitContext) -> list[dict]:
     actually executes.
     """
     root = ctx.subprocess_root if ctx.subprocess_root is not None else ctx.repo_root
-    # Cutoff computed BEFORE the try so a malformed
-    # ctx.observed_at raises loudly instead of being swallowed by the query-failure except
-    # below, which would silently zero completions.
     cutoff = _since_cutoff(ctx)
     try:
         return query_records("completion", root, since=cutoff)
@@ -110,11 +105,6 @@ def _since_cutoff(ctx: EmitContext) -> str:
 
 
 def _observed_date(ctx: EmitContext) -> datetime.date:
-    """Calendar date of ``ctx.observed_at`` — the one parse of that field in this module.
-
-    ``_since_cutoff``, ``_local_day``, ``_iso_week`` and ``collect``'s week filter all need
-    the emission's own instant as a date; this is where that string is decoded, once.
-    """
     return (
         datetime.datetime.strptime(ctx.observed_at, "%Y-%m-%dT%H:%M:%SZ")
         .replace(tzinfo=datetime.timezone.utc)
@@ -136,24 +126,15 @@ def _local_day(ctx: EmitContext) -> str:
 
 
 def _iso_week(ctx: EmitContext) -> str:
-    """ISO week ``YYYY-Www`` of ``ctx.observed_at`` (bash:1065 python3 one-liner; perl fallback collapsed)."""
     y, w, _ = _observed_date(ctx).isocalendar()
     return f"{y}-W{w:02d}"
 
 
 def _iso_week_start(year: int, week: int) -> datetime.date:
-    """Monday of ISO ``(year, week)`` — the same tuple ``collect``'s WEEK filter compares.
-
-    ``date.fromisocalendar`` is the ISO-calendar inverse of ``date.isocalendar()``; it is what
-    lets the emitted bounds agree with the filter that actually selected the records instead of
-    being independently recomputed from a formatted label (see the ISO-year-boundary note in
-    ``collect``).
-    """
     return datetime.date.fromisocalendar(year, week, 1)
 
 
 def _iso_week_end(year: int, week: int) -> datetime.date:
-    """Sunday of ISO ``(year, week)`` — inclusive end of the same window ``_iso_week_start`` opens."""
     return datetime.date.fromisocalendar(year, week, 7)
 
 
@@ -187,7 +168,6 @@ def _created_date(fm: dict) -> Optional[datetime.date]:
         return None
 
 
-# --------------------------------------------------------------------------- fact helpers
 def _fm(entry: dict) -> dict:
     return normalize_frontmatter(entry)
 
@@ -198,11 +178,6 @@ def _loe(fm: dict) -> dict:
 
 
 def _dedup_by_chain(completions: list[dict]) -> list[dict]:
-    """First-wins dedup on chain grain; null chains are distinct atoms (bash:998-1013).
-
-    Each entry gets ``chain_key = chain if non-null else "__null_<index>"``; the first entry
-    per key is kept. Returns the deduped frontmatter dicts (order-insensitive downstream).
-    """
     seen: set[str] = set()
     kept: list[dict] = []
     for idx, entry in enumerate(completions):
@@ -217,7 +192,6 @@ def _dedup_by_chain(completions: list[dict]) -> list[dict]:
 
 
 def _tshirt_counts(fms: list[dict]) -> dict:
-    """group_by non-null ``loe.tshirt`` → {size: count} (bash:1018-1023 / 1141-1146)."""
     counts: dict = {}
     for fm in fms:
         tshirt = _loe(fm).get("tshirt")
@@ -228,13 +202,12 @@ def _tshirt_counts(fms: list[dict]) -> dict:
 
 
 def _opus_sum(fms: list[dict]) -> int:
-    """Sum ``loe.opus_dispatches`` (//0, numbers-only) (bash:1024 / 1147)."""
     total = 0
     for fm in fms:
         val = _loe(fm).get("opus_dispatches")
-        if val is None or val is False:  # jq ``// 0``
+        if val is None or val is False:
             val = 0
-        if isinstance(val, bool):  # jq ``numbers`` drops booleans
+        if isinstance(val, bool):
             continue
         if isinstance(val, (int, float)):
             total += val
@@ -242,7 +215,6 @@ def _opus_sum(fms: list[dict]) -> int:
 
 
 def _commit_count(fms: list[dict]) -> int:
-    """Count SHA-shaped ``commits`` entries (bash:1025-1029 / 1148-1150)."""
     n = 0
     for fm in fms:
         commits = fm.get("commits")
@@ -255,7 +227,6 @@ def _commit_count(fms: list[dict]) -> int:
 
 
 def _max_commit_sha(completions: list[dict]) -> str:
-    """Lexicographically-greatest valid SHA across ALL entries; "0000000" default (bash:1040-1043)."""
     shas: list[str] = []
     for entry in completions:
         commits = _fm(entry).get("commits")
@@ -269,7 +240,6 @@ def _max_commit_sha(completions: list[dict]) -> str:
 
 
 def _today_chains(today_fms: list[dict]) -> int:
-    """Distinct chains among today's completions; null chains distinct by index (bash:1131-1140)."""
     keys: set[str] = set()
     for idx, fm in enumerate(today_fms):
         chain = fm.get("chain")
@@ -277,7 +247,6 @@ def _today_chains(today_fms: list[dict]) -> int:
     return len(keys)
 
 
-# --------------------------------------------------------------------------- review trail (week)
 def _review_trail_facts(
     ctx: EmitContext, window_start: str, window_end: str
 ) -> tuple[int, dict]:
@@ -331,7 +300,7 @@ def _review_trail_facts(
 
         validated, _reason = _validate_review_trail_file(filepath)
         if validated is None:
-            continue  # quarantined — excluded from valid set
+            continue
 
         count += 1
         verdict = validated["verdict"]
@@ -340,15 +309,12 @@ def _review_trail_facts(
     return count, verdicts
 
 
-# --------------------------------------------------------------------------- collect
 def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
-    """Build [DayRollup, WeekRollup] (records); no malformed bucket (bash SECTION 5)."""
     completions = _query_completions(ctx)
     today = _local_day(ctx)
     iso_week = _iso_week(ctx)
     max_commit_sha = _max_commit_sha(completions)
 
-    # --- WEEK: narrowed to the ISO week named by `period`, then chain-deduped ---
     observed_year, observed_week, _ = _observed_date(ctx).isocalendar()
     week_completions = [
         c
@@ -356,16 +322,12 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
         if (created := _created_date(_fm(c))) is not None
         and created.isocalendar()[:2] == (observed_year, observed_week)
     ]
-    # ISO year is not the calendar year at the boundary — 2026-12-28..31 are ISO 2027-W01 —
-    # so the (year, week) pair is compared as a tuple and never as a formatted label.
 
     deduped = _dedup_by_chain(week_completions)
     deduped_fms = [e["fm"] for e in deduped]
     chains_completed = sum(
         1 for e in deduped if not e["chain_key"].startswith("__null_")
     )
-    # jq counts distinct NON-null chain slugs; deduped already holds one per key, so the count
-    # of non-__null_ keys IS the distinct-named-chain count. null chains add one each.
     null_chains = sum(1 for e in deduped if e["chain_key"].startswith("__null_"))
     total_chains = chains_completed + null_chains
 
@@ -405,7 +367,6 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
         },
     }
 
-    # --- DAY: raw today-filtered facts, NOT deduped (bash:1127-1193) ---
     today_completions = [c for c in completions if _fm(c).get("created") == today]
     today_fms = [_fm(c) for c in today_completions]
     today_source_count = len(today_completions)

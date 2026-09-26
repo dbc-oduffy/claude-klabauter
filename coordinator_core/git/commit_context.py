@@ -135,14 +135,6 @@ __all__ = [
 
 
 class PathContext(NamedTuple):
-    """One path's slice of a `CommitContext` -- five of the six facts (the
-    sixth, HEAD sha, is pass-level and lives on `CommitContext.head`).
-
-    `index` / `index_stat` / `head` are `None` when the path is absent from
-    that side (untracked, or not present at HEAD); `on_disk` and
-    `worktree_stat` are independent of both -- an untracked path can still
-    exist on disk, and a staged path can be deleted from the worktree.
-    """
 
     index: Optional[Tuple[int, str]]
     """`(mode, sha)` from the index, or `None` if `path` is not staged."""
@@ -163,14 +155,6 @@ class PathContext(NamedTuple):
 
 
 class CommitContext(NamedTuple):
-    """The whole pass context for one `build_commit_context` call: the
-    pass-level HEAD sha plus one `PathContext` per requested path.
-
-    `paths` holds an entry for EVERY path in the `paths` argument
-    `build_commit_context` was called with, and NEVER an entry for any
-    other path -- see the module docstring's "NOTHING materialises an
-    entry outside `paths`" section.
-    """
 
     head: Optional[str]
     paths: Dict[str, PathContext]
@@ -179,14 +163,6 @@ class CommitContext(NamedTuple):
 def build_commit_context(
     root: Union[str, Path], paths: Sequence[str]
 ) -> CommitContext:
-    """Resolve one `CommitContext` for `paths` (repo-relative), scoped to
-    exactly those paths -- see the module docstring for the mechanism, the
-    six facts, and what this deliberately never does.
-
-    `paths` is consumed once into a `list` at the top, so a caller passing a
-    generator or another single-use iterable does not silently starve the
-    second and third reads below.
-    """
     root_path = Path(root)
     wanted = list(paths)
 

@@ -1,15 +1,3 @@
-"""
-Self-test for coordinator/bin/lint-frontmatter.py's CLI logic
-(coordinator_core.frontmatter.schema_validate.main).
-
-Asserts exit code + JSON shape for each of the three flag shapes DoE's live
-callers consume: whole-tree --json (update-docs.md Phase 11d), whole-tree
---strict-refs --json (workweek-complete.md Step 2.5), and --file (handoff/
-SKILL.md's write-time gate). Builds a synthetic --root fixture tree per test
-so results are independent of this repo's own live state/handoffs/ corpus.
-
-Spec backlink: pln-python-ize-claude-klabauter-bin-oracles--218413 § A1
-"""
 from __future__ import annotations
 
 import json
@@ -19,8 +7,6 @@ import pytest
 
 from coordinator_core.frontmatter.schema_validate import main
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -245,15 +231,6 @@ def test_non_strict_refs_demotes_dangling_ref_to_warning(tmp_path, capsys):
     assert payload["refWarnings"][0]["warning"]["field"] == "predecessor"
 
 
-# Coverage for forked_from and
-# additional_predecessors[] dangling refs, the two edge kinds the port's
-# check_lineage_reachability checks beyond bare predecessor — a claude-klabauter-local
-# PATH-field addition beyond the deleted oracle's original ID-companion-only
-# field scope (see the CLI-trampoline section docstring in schema_validate.py
-# for the full reconciliation: this addition is KEPT as real coverage, not
-# reverted, and the oracle's own ID-companion coverage — predecessor_id /
-# origin_handoff_id existence + never-silently-disagree — is separately
-# restored below).
 def test_strict_refs_promotes_dangling_forked_from_to_violation(tmp_path, capsys):
     repo = _make_repo(tmp_path)
     (repo / "state" / "handoffs" / "dangling-forked-from.md").write_text(
@@ -283,14 +260,6 @@ def test_strict_refs_promotes_dangling_additional_predecessor_to_violation(tmp_p
     fields = {e["field"] for e in payload["violations"][0]["errors"]}
     assert "additional_predecessors[0]" in fields
 
-
-# Restored oracle coverage (2026-07-24 reconciliation) — predecessor_id /
-# origin_handoff_id existence + never-silently-disagree, ported from the
-# deleted oracle's checkReferentialIntegrity (git show
-# c79e66cd~1:coordinator/bin/lib/schema.js). See schema_validate.py's
-# CLI-trampoline section docstring for the full reconciliation rationale and
-# the corpus evidence (predecessor_id/origin_handoff_id are populated and
-# load-bearing in the live state/handoffs/ + archive/handoffs/ corpus).
 
 def test_strict_refs_promotes_dangling_predecessor_id_to_violation(tmp_path, capsys):
     repo = _make_repo(tmp_path)
@@ -360,7 +329,7 @@ Body text.
 """
     (repo / "state" / "handoffs" / "disagreeing.md").write_text(disagreeing, encoding="utf-8")
 
-    rc = main(["--root", str(repo), "--json"])  # no --strict-refs
+    rc = main(["--root", str(repo), "--json"])
 
     assert rc == 1
     payload = json.loads(capsys.readouterr().out)
@@ -373,8 +342,6 @@ Body text.
 
 
 def test_predecessor_id_agreement_resolves_cleanly(tmp_path, capsys):
-    """predecessor/predecessor_id both set and naming the SAME artifact is
-    valid — no error, no warning."""
     repo = _make_repo(tmp_path)
     (repo / "state" / "handoffs" / "target.md").write_text(_TARGET_WITH_HANDOFF_ID, encoding="utf-8")
     agreeing = """---
@@ -399,11 +366,6 @@ Body text.
 
 
 def test_file_mode_predecessor_id_disagreement_is_always_error_even_non_strict(tmp_path, capsys):
-    """--file mode mirror of test_predecessor_id_disagreement_is_always_error_
-    even_non_strict: --file mode calls _check_handoff_refs with strict=False
-    unconditionally, but the never-silently-disagree invariant is asserted to
-    be independent of strict-ness (Review: code-reviewer R1 P3 — this path was
-    previously asserted only in a comment, not pinned by a test)."""
     repo = _make_repo(tmp_path)
     (repo / "state" / "handoffs" / "target.md").write_text(_TARGET_WITH_HANDOFF_ID, encoding="utf-8")
     (repo / "state" / "handoffs" / "different-target.md").write_text(

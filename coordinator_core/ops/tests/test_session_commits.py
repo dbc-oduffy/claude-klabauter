@@ -1,15 +1,3 @@
-"""
-coordinator_core.ops.tests.test_session_commits
-
-Tests for the `session.commits` op (session_commits.py) — see that module's
-docstring for the anchoring-form decision (`^Session-Id: <sid>`, no trailing
-`$`) this test suite locks in.
-
-All git operations run against a throwaway repo created fresh under
-`tmp_path` — never the working repo, and never this repo's own live history
-(peer sessions commit to it concurrently, which would make an assertion
-against live history flaky by construction).
-"""
 
 from __future__ import annotations
 
@@ -111,9 +99,6 @@ def test_oldest_first_ordering(tmp_path):
 
 
 def test_multi_session_id_commit_matches_once_not_duplicated(tmp_path):
-    """A fold can tag one commit with more than one session's Session-Id
-    trailer — this must appear exactly once in this session's result, not
-    once per trailer line."""
     repo = _init_repo(tmp_path)
     sha = _commit(
         repo,
@@ -131,9 +116,6 @@ def test_multi_session_id_commit_matches_once_not_duplicated(tmp_path):
 
 
 def test_plumbing_commit_with_no_trailer_is_absent_not_error(tmp_path):
-    """A plumbing commit (git commit-tree, bypassing porcelain commit) carries
-    no Session-Id trailer at all — it must be silently absent from the
-    result, never raise and never appear."""
     repo = _init_repo(tmp_path)
     _write(repo, "a.txt", "1\n")
     _git(["add", "--", "a.txt"], repo)
@@ -143,7 +125,6 @@ def test_plumbing_commit_with_no_trailer_is_absent_not_error(tmp_path):
     ).strip()
     _git(["update-ref", "refs/heads/master", plumbing_sha], repo)
     _git(["checkout", "-q", "master"], repo)
-    # A normal, attributed commit on top, so the branch has a session-tagged commit too.
     tagged_sha = _commit(repo, "b.txt", "2\n", "tagged", "Session-Id: sid-plumb")
 
     result = session_commits.resolve_session_commits(repo, "sid-plumb")
@@ -154,11 +135,6 @@ def test_plumbing_commit_with_no_trailer_is_absent_not_error(tmp_path):
 
 
 def test_end_anchored_trailing_dollar_form_would_undercount(tmp_path):
-    """Locks in the anchoring-form decision: a Session-Id trailer NOT on the
-    message's final line (followed by Co-Authored-By) still matches this
-    op's `^Session-Id: <sid>` (no trailing $) form — the anchored-both-ends
-    form documented elsewhere as a KNOWN under-count must not creep back in
-    here."""
     repo = _init_repo(tmp_path)
     sha = _commit(
         repo,
@@ -187,8 +163,6 @@ def test_commit_range_narrows_the_walk(tmp_path):
 
 
 def test_sha_only_path_returns_sha_only_dicts(tmp_path):
-    """C1 AC1: the sha-only path returns `{"sha": str}` rows, no diff
-    payload keys, and the selector is unchanged (`--grep=^Session-Id:`)."""
     repo = _init_repo(tmp_path)
     _commit(repo, "a.txt", "1\n", "seed", "Session-Id: sid-other")
     sha = _commit(
@@ -203,8 +177,6 @@ def test_sha_only_path_returns_sha_only_dicts(tmp_path):
 
 
 def test_sha_only_path_issues_no_raw_or_numstat_flags(tmp_path, monkeypatch):
-    """C1 AC1: the sha-only `git log` invocation composes neither `--raw`
-    nor `--numstat`."""
     repo = _init_repo(tmp_path)
     _commit(repo, "a.txt", "1\n", "seed", "Session-Id: sid-target")
 
@@ -228,9 +200,6 @@ def test_sha_only_path_issues_no_raw_or_numstat_flags(tmp_path, monkeypatch):
 
 
 def test_default_return_is_byte_identical_with_sha_only_param_present(tmp_path):
-    """C1 AC2: adding `sha_only` is additive — the default (no `sha_only`
-    flag) return is unchanged, proven against the full-data shape this
-    suite already locks in."""
     repo = _init_repo(tmp_path)
     _commit(repo, "a.txt", "1\n", "seed", "Session-Id: sid-other")
     sha = _commit(
@@ -255,9 +224,6 @@ def test_default_return_is_byte_identical_with_sha_only_param_present(tmp_path):
 
 
 def test_body_line_quoting_a_trailer_is_a_documented_accepted_over_match(tmp_path):
-    """Matches this module's documented over-match acceptance: a body line
-    that happens to quote another session's trailer verbatim also matches
-    (the safe direction, per this op's docstring)."""
     repo = _init_repo(tmp_path)
     sha = _commit(
         repo,
@@ -285,7 +251,6 @@ def test_anchored_and_unanchored_trailer_greps_agree(tmp_path):
     """
     repo = _init_repo(tmp_path)
     sid = "863331b0-d278-5ae9-8d0f-9c0ab350de8c"
-    # The live shape: Session-Id is NOT the message's final line.
     sha = _commit(
         repo,
         "a.txt",

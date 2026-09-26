@@ -125,53 +125,24 @@ from coordinator_core.ipc import DISPATCH_TIMEOUT_SECS
 from coordinator_core.win_portability import no_console_creationflags
 
 
-# Generator-provenance declaration (generator_provenance.py). This module
 # writes only a PID lockfile at tempfile.gettempdir()/_LOCK_BASENAME --
-# process-runtime lock in the OS temp dir, never a tracked artifact. The
-# actual FK attach work is delegated via subprocess to the sibling
-# coordinator-initiative CLI, not written by this module.
 GENERATES = []
 
 _CREATIONFLAGS = no_console_creationflags()
 
-_PROG = "backfill-initiative-fk"  # literal program-name prefix, matches the bash oracle's messages
+_PROG = "backfill-initiative-fk"
 _LOCK_BASENAME = "backfill-initiative-fk.lock"
-# Bounded wait for THE single `coordinator-initiative attach --pairs-file` subprocess
-# call this module makes. Derived from the engine's own end-to-end guard rather than
-# typed here, per DR-349: a site does not carry a timeout, it derives its bound from
-# the budget, and a bound wider than the budget the caller is held to is unreachable
-# anyway.
-#
 # NEGATIVE SPEC (DR-349 § "Dials that raise themselves", 2026-08-21): this bound is
-# FLAT and must stay flat. It was previously multiplied by `len(pairs)` at the call
-# site, which granted a 200-pair batch a 3.3-hour blocking wait on a box carrying
-# 50-70 concurrent sessions. The multiplier was cargo cult: `_attach_batch` writes
-# every pair to one temp TSV and makes ONE spawn for the whole batch (the
-# amplification-gate fix that retired this module's `_process_pairs::run` exemption),
-# so there is no N anywhere in the cost model for a per-item factor to scale against.
-# Do not reintroduce a per-item factor here; a batch that cannot finish inside this
-# bound is a defect in the attach CLI, not a request for more time.
 _ATTACH_TIMEOUT_SECS = DISPATCH_TIMEOUT_SECS
 
 
 def _lock_path() -> str:
-    """Lockfile location. `tempfile.gettempdir()`, NOT `os.environ.get("TMPDIR", "/tmp")`
-    — TMPDIR is unset on Windows and `/tmp` does not exist there (porter addendum §4)."""
     return os.path.join(tempfile.gettempdir(), _LOCK_BASENAME)
 
 
 def _pid_is_live(pid: int) -> bool:
-    """Python equivalent of the oracle's `kill -0 <pid> 2>/dev/null`.
-
-    See module docstring "Known limitation — PID-reuse hazard" for the faithfully
-    reproduced EPERM-treated-as-dead bug.
-    """
     try:
         os.kill(pid, 0)
-    # PermissionError is split out (rather than folded into the OSError branch below,
-    # even though it IS one) as a findable anchor for the "Known limitation" docstring
-    # section above — same behavior as the other branches, but a future editor who
-    # wants EPERM to mean something other than "dead" has one place to change.
     except PermissionError:
         print(f"skip: _pid_is_live: os.kill(pid, 0) failed: {sys.exc_info()[1]}", file=sys.stderr)
         return False
@@ -182,12 +153,6 @@ def _pid_is_live(pid: int) -> bool:
 
 
 def _acquire_lock(lock_path: str, stream: IO[str] = sys.stderr) -> Tuple[bool, int]:
-    """Acquire the single-runner lock.
-
-    Returns `(acquired, exit_code)`. `exit_code` is only meaningful when
-    `acquired` is False (mirrors the oracle's `_acquire_lock`, which either
-    returns having written the lockfile or calls `exit 1` directly).
-    """
     my_pid = os.getpid()
 
     try:
@@ -200,7 +165,6 @@ def _acquire_lock(lock_path: str, stream: IO[str] = sys.stderr) -> Tuple[bool, i
             fh.write(f"{my_pid}\n")
         return True, 0
 
-    # Lockfile already exists — read and check whether the holder is still live.
     try:
         with open(lock_path, "r", encoding="utf-8") as fh:
             held_pid_raw = fh.read().strip()
@@ -222,7 +186,6 @@ def _acquire_lock(lock_path: str, stream: IO[str] = sys.stderr) -> Tuple[bool, i
         print("  Wait for it to finish, or remove the lockfile if it crashed.", file=stream)
         return False, 1
 
-    # Stale lockfile from a crashed prior run — overwrite (non-atomic, matches oracle).
     print(
         f"{_PROG}: removing stale lockfile (PID {held_pid_raw or 'unknown'} no longer running).",
         file=stream,
@@ -233,9 +196,6 @@ def _acquire_lock(lock_path: str, stream: IO[str] = sys.stderr) -> Tuple[bool, i
 
 
 def _release_lock(lock_path: str) -> None:
-    """Release the lock ONLY if this process owns it (matches oracle review-fix F1 —
-    without this ownership check, a second invocation that exits via `_acquire_lock`
-    would unconditionally delete the legitimate first holder's lockfile)."""
     my_pid = str(os.getpid())
     try:
         with open(lock_path, "r", encoding="utf-8") as fh:
@@ -252,20 +212,10 @@ def _release_lock(lock_path: str) -> None:
 
 
 def _strip_spaces(value: str) -> str:
-    """Mirrors the oracle's `${var#"${var%%[! ]*}"}` / `${var%"${var##*[! ]}"}` pattern:
-    strips only literal ASCII space (0x20) runs from both ends — NOT tabs or other
-    whitespace."""
     return value.strip(" ")
 
 
 def _already_attached(artifact_path: str, initiative_id: str) -> bool:
-    """Faithful port of the oracle's idempotency grep:
-    `grep -qE "^initiative: ${initiative_id}[[:space:]]*$" "$artifact_path"`.
-
-    Deliberately does NOT `re.escape(initiative_id)` — see module docstring
-    negative-spec. Deliberately returns False (not raise) on any read error,
-    matching the oracle's `2>/dev/null` grep-failure-is-false-match behavior.
-    """
     pattern = re.compile(r"^initiative: " + initiative_id + r"\s*$")
     try:
         with open(artifact_path, "r", encoding="utf-8", errors="replace") as fh:
@@ -339,7 +289,6 @@ def _attach_batch(
         try:
             os.remove(pairs_file)
         except OSError:
-            # temp file already gone (or never created) is the desired end state
             pass
 
     result_lines = [ln for ln in stdout_text.splitlines() if ln.strip()]
@@ -356,8 +305,6 @@ def _attach_batch(
         pairs, parsed_records, fillvalue=None
     ):
         if line_no is None:
-            # More JSON lines than pairs we submitted -- ignore defensively rather
-            # than crash on a malformed/foreign batch response.
             break
         if record is None:
             print(
@@ -428,9 +375,6 @@ def _process_pairs(
 
         artifact_path = _strip_spaces(artifact_path)
         initiative_id = _strip_spaces(rest)
-        # F9 fix (faithfully ported from the oracle's reviewer-annotated trim): a
-        # 3+ column TSV row assigns the entire remainder (incl. further tabs) to
-        # initiative_id — cut at the first remaining tab.
         initiative_id = initiative_id.split("\t", 1)[0]
 
         if not artifact_path:
@@ -465,17 +409,6 @@ def _process_pairs(
 
 
 def main(argv: List[str], script_dir: Optional[str] = None) -> int:
-    """CLI entry point. See module docstring for the exit-code contract.
-
-    DR-276 note: the `coordinator_core.cli_entry.run_op_main` route this
-    module's trampoline uses only forwards `argv` — it has no channel for a
-    caller-supplied `script_dir=` kwarg. The trampoline instead passes it as
-    an explicit `--script-dir VALUE` argv flag, parsed out here before the
-    remaining argv is treated as the positional TSV path; this fallback
-    applies when `script_dir` is not passed explicitly and no `--script-dir`
-    flag is present (e.g. a direct `import ...; main(argv)` caller, or the
-    `python -m` form), falling back further to this module's own directory.
-    """
     argv = list(argv)
     if script_dir is None:
         for i, arg in enumerate(argv):

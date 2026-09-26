@@ -82,26 +82,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-#: `resolve_git_root_cheap`, NOT `resolve_git_root`. Both recorders below run
-#: on the PreToolUse path, and the authoritative resolver spawns `git rev-parse
-#: --show-toplevel` -- a subprocess charged to DR-344's budget purely to decide
 #: where a TELEMETRY line goes. These are miss-mode callers by their own
-#: contract: both already degrade to a silent no-op when the root does not
-#: resolve, so the cheap walk's one documented weakness (a symlinked ancestor
-#: yielding a non-realpath'd root) costs at worst a fire-count file written
-#: under a differently-spelled root, never a wrong guard verdict. See
-#: `resolve_git_root_cheap`'s own docstring for why a verdict-affecting caller
-#: must never make this substitution.
 from coordinator_core.subagent_sandbox import resolve_git_root_cheap
 from coordinator_core.session.machinery_paths import share_dir as _share_dir
 
 _COUNTS_FILENAME = "advisory-fire-counts.jsonl"
 _DENY_COUNTS_FILENAME = "deny-fire-counts.jsonl"
 
-#: Corpus-mutator declaration (generator-provenance sweep): both recorders
-#: append to a per-session file under the machinery root's per-session
-#: sandbox bucket (`machinery_paths.share_dir`) -- the target file set is
-#: data-dependent on session_id.
 MUTATES = [".coordinator-local/subagent-share/**/*.jsonl"]
 
 

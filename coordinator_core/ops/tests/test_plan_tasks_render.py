@@ -32,18 +32,7 @@ from coordinator_core.ops.plan_tasks_render import (
 )
 
 
-# ---------------------------------------------------------------------------
-# load_rows
-# ---------------------------------------------------------------------------
-
-
 def _plan_source(fence_body: str) -> str:
-    # Deliberately NOT built via textwrap.dedent — the fence body is
-    # interpolated at column 0 (locate_fenced_block's regexes require
-    # unindented `## Tasks` and ```` ```yaml plan-tasks ```` lines), while a
-    # single dedent() call over the whole f-string would see mixed
-    # indentation between the template lines and the interpolated body and
-    # no-op, leaving the template lines indented and unmatchable.
     return (
         '---\ntitle: "Test plan"\n---\n\n'
         "# Test plan\n\n"
@@ -102,15 +91,10 @@ def test_load_rows_malformed_when_entry_is_not_a_dict():
     assert result.rows == []
 
 
-# ---------------------------------------------------------------------------
-# spine_projection
-# ---------------------------------------------------------------------------
-
-
 def test_spine_projection_open_rows_in_full():
     rows = [
         {"id": "C1", "title": "One", "disposition": "open"},
-        {"id": "C2", "title": "Two"},  # missing disposition -> defaults open
+        {"id": "C2", "title": "Two"},
     ]
     projection = spine_projection(rows)
     assert projection["open"] == rows
@@ -162,11 +146,6 @@ def test_spine_projection_backlogged_without_deferred_never_flagged():
     ]
     assert spine_projection(rows)["unratified_deferrals"] == []
     assert spine_projection(rows, governed=True)["unratified_deferrals"] == []
-
-
-# ---------------------------------------------------------------------------
-# render_closed_items
-# ---------------------------------------------------------------------------
 
 
 def test_render_closed_items_empty_when_nothing_closed():
@@ -241,13 +220,6 @@ def test_render_closed_items_ends_with_trailing_newline():
     assert not rendered.endswith("\n\n")
 
 
-# ---------------------------------------------------------------------------
-# dispositions_for_delivered — klabauter#44: the resolve payload that closes
-# delivered rows, which nothing previously computed, so a delivered row kept
-# its `open` default and re-emitted as live forever
-# ---------------------------------------------------------------------------
-
-
 def test_dispositions_for_delivered_closes_only_the_delivered_open_rows():
     rows = [{"id": "C1"}, {"id": "C2"}, {"id": "C3"}]
 
@@ -258,9 +230,6 @@ def test_dispositions_for_delivered_closes_only_the_delivered_open_rows():
 
 
 def test_dispositions_for_delivered_skips_an_already_closed_row():
-    """Idempotency is derived here so a caller can pass the result straight to
-    `resolve` without re-deriving it: a row already resolved to some other
-    disposition is left out."""
     rows = [{"id": "C1", "disposition": "spun_off"}, {"id": "C2"}]
 
     assert dispositions_for_delivered(rows, {"C1", "C2"}) == [
@@ -269,8 +238,6 @@ def test_dispositions_for_delivered_skips_an_already_closed_row():
 
 
 def test_dispositions_for_delivered_treats_a_blank_disposition_as_open():
-    """D1-tolerant, matching `_disposition`: the schema default is `open`, and a
-    blank or non-string value is that default rather than a closed row."""
     rows = [{"id": "C1", "disposition": ""}, {"id": "C2", "disposition": None}]
 
     assert dispositions_for_delivered(rows, ["C1", "C2"]) == [
@@ -280,8 +247,6 @@ def test_dispositions_for_delivered_treats_a_blank_disposition_as_open():
 
 
 def test_dispositions_for_delivered_ignores_an_id_naming_no_row():
-    """It derives payload for rows that exist; it does not validate the
-    caller's delivery evidence."""
     rows = [{"id": "C1"}]
 
     assert dispositions_for_delivered(rows, {"C1", "C-nonexistent"}) == [

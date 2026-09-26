@@ -1,30 +1,3 @@
-"""An emitted commit prompt must name the plan's own `deliverable_id`.
-
-Spec backlink:
-    state/bug-backlog/2026-08-19-emitted-workflow-commit-phases-carry-nei-bf29cbfec487.yaml
-    -- measured, not hypothesised: `302ca5430` (wave 1) and `dde488e12`
-    (wave 2) both landed carrying the trailer
-    `dlv-git-amplification-hitlist-burn-down-391b0f`, a stale id belonging to
-    an unrelated workstream, while executing
-    `docs/plans/2026-08-19-windows-commit-hook-starts-python-once.md` whose
-    own id is `dlv-the-windows-commit-hook-starts-python-on-99b845`.
-
-    `close-out-and-stamp` verifies a commit against a plan chunk via pure
-    sha-ancestry evidence (a `disposition: coded` row's own
-    `disposition_ref`), never a subject or trailer parse -- the chunk-id
-    rule and the Deliverable-Id rule are two independent prompt legs, not
-    a join `close-out-and-stamp` itself performs. The chunk-id leg is
-    already emitted (see `test_commit_prompt_registers_chunk_ids.py`);
-    this file covers the other one. A commit prompt that names no id
-    leaves the committer to resolve one
-    from ambient session state, and shared history cannot be rewritten once
-    pushed -- the only recovery is a hand-written per-row `disposition_ref`.
-
-Negative-spec: the emitter must never name a `deliverable_id` it did not read
-off the plan's own frontmatter -- no ambient fallback, and never the
-scaffolded `dlv-placeholder-replace-with-...` sentinel, which joins to
-nothing.
-"""
 
 from pathlib import Path
 
@@ -72,11 +45,6 @@ def _write_plan(tmp_path: Path, deliverable_line: str) -> Path:
 
 
 def test_commit_prompt_names_no_flag_and_states_the_trailer_is_hand_written():
-    """`ceremony.commit_v2`'s params carry no `deliverable_id` field
-    (verified against `coordinator_core/ops/ceremony/commit_v2.py`'s own
-    handler), so nothing attaches the trailer automatically. The prompt
-    must say so, never instruct a flag that does not exist and never name
-    `prepare-commit-msg`."""
     call = _commit_agent_call(
         ["a.py"], "Commit wave 1", 0, ["C1"], deliverable_id="dlv-a-plan-99b845"
     )
@@ -87,14 +55,6 @@ def test_commit_prompt_names_no_flag_and_states_the_trailer_is_hand_written():
 
 
 def test_commit_prompt_instructs_the_agent_to_hand_write_the_trailer():
-    """`ceremony.commit_v2` has no `deliverable_id` param, so its internal
-    `apply_missing_trailers` call cannot be handed this wave's id and falls
-    back to ambient session state -- the same failure mode
-    state/bug-backlog/2026-09-19-a-wave-commit-strands-what-the-chunk-row-
-    38555becc9a2.yaml recorded (observed trailers carrying another live
-    session's deliverable id). With no override parameter to forward it
-    through, the only remaining attach point is the commit message text
-    itself, which `apply_missing_trailers` leaves untouched once present."""
     call = _commit_agent_call(
         ["a.py"], "Commit wave 1", 0, ["C1"], deliverable_id="dlv-a-plan-99b845"
     )
@@ -103,9 +63,6 @@ def test_commit_prompt_instructs_the_agent_to_hand_write_the_trailer():
 
 
 def test_commit_prompt_names_the_literal_id_and_tells_the_agent_to_replace_a_stale_one():
-    """AC5: the prompt states the literal id, never a `--deliverable-id`
-    flag, and tells the agent to replace a pre-existing, differing
-    `Deliverable-Id:` line with this wave's own rather than leave two."""
     call = _commit_agent_call(
         ["a.py"], "Commit wave 1", 0, ["C1"], deliverable_id="dlv-a-plan-99b845"
     )
@@ -118,9 +75,6 @@ def test_commit_prompt_names_the_literal_id_and_tells_the_agent_to_replace_a_sta
 def test_emit_script_names_the_executing_plans_id_not_a_foreign_pathspec_plans(
     tmp_path,
 ):
-    """AC6: a wave whose pathspec includes a foreign `docs/plans/*.md`
-    declaring a different `deliverable_id` must still emit the executing
-    plan's own id, and never the foreign one, in the commit prompt."""
     other_plan = tmp_path / "other.md"
     other_plan.write_text(
         "---\ntitle: other\ndeliverable_id: dlv-other-plan-deadbeef\n---\n\n# other\n",
@@ -135,10 +89,6 @@ def test_emit_script_names_the_executing_plans_id_not_a_foreign_pathspec_plans(
 
 
 def test_commit_prompt_treats_a_mismatched_trailer_as_a_report_not_a_refusal():
-    """The trailer resolver can land an id the agent did not expect (session-
-    state resolution, multi-claim ambiguity, etc.) -- `close_out_and_stamp`
-    does not join on the trailer at all, so this is never unrecoverable, and
-    the prompt must not tell the agent to amend/reset/re-commit over it."""
     call = _commit_agent_call(
         ["a.py"], "Commit wave 1", 0, ["C1"], deliverable_id="dlv-a-plan-99b845"
     )
@@ -148,16 +98,12 @@ def test_commit_prompt_treats_a_mismatched_trailer_as_a_report_not_a_refusal():
 
 
 def test_absent_deliverable_id_emits_no_dangling_rule():
-    """Back-compat, and the same shape the chunk-id leg takes: a plan
-    declaring no id must not emit the trailer rule at all."""
     call = _commit_agent_call(["a.py"], "Commit wave 1", 0, ["C1"])
     assert "apply_missing_trailers" not in call
     assert "--deliverable-id" not in call
 
 
 def test_deliverable_id_rule_is_additive_to_the_chunk_id_leg():
-    """The two legs are separate rules -- naming the id rule must not
-    displace the subject rule that registers the chunk ids."""
     call = _commit_agent_call(
         ["a.py"], "Commit wave 2", 1, ["C2", "C3"], deliverable_id="dlv-a-plan-99b845"
     )
@@ -166,9 +112,6 @@ def test_deliverable_id_rule_is_additive_to_the_chunk_id_leg():
 
 
 def test_emit_script_names_no_deliverable_id_flag_for_a_declared_plan(tmp_path):
-    """The trailer is attached by the commit route itself
-    (`apply_missing_trailers`), never emitted as a CLI flag, whether or
-    not the plan declares an id."""
     plan_path = _write_plan(tmp_path, "deliverable_id: dlv-a-plan-that-declares-99b845")
     script = emit_script(plan_path, repo_root=tmp_path)
     assert "--deliverable-id" not in script
@@ -183,9 +126,6 @@ def test_emit_script_names_no_id_for_a_plan_that_declares_none(tmp_path):
 
 
 def test_the_scaffolded_placeholder_is_never_forwarded(tmp_path):
-    """`plan.schema.json` excludes the sentinel by negative lookahead; an
-    emitted run must too -- naming it would surface a report over an id that
-    joins to nothing, strictly worse than naming none."""
     plan_path = _write_plan(
         tmp_path, "deliverable_id: dlv-placeholder-replace-with-real-id"
     )
@@ -195,9 +135,6 @@ def test_the_scaffolded_placeholder_is_never_forwarded(tmp_path):
 
 
 def test_plan_deliverable_id_is_fail_soft_on_every_malformed_shape():
-    """An emitted workflow losing one flag is recoverable; an emit that dies
-    on a plan's frontmatter is not -- the same posture
-    `_prime_exit_criterion_statement` takes."""
     assert _plan_deliverable_id("no frontmatter at all") is None
     assert _plan_deliverable_id("---\n: : not: yaml:\n---\n") is None
     assert _plan_deliverable_id("---\njust a scalar\n---\n") is None

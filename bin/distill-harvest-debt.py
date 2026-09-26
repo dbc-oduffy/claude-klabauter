@@ -18,8 +18,8 @@ sys.stderr.write(
 _target = Path(__file__).resolve().parent.parent / "coordinator" / "bin" / "distill-harvest-debt.py"
 _spec = importlib.util.spec_from_file_location("_distill_harvest_debt_relocated", _target)
 _mod = importlib.util.module_from_spec(_spec)
-sys.modules[_spec.name] = _mod  # register before exec
-sys.path[0] = str(_target.parent)  # reproduces running the target directly: its own dir is sys.path[0]
+sys.modules[_spec.name] = _mod
+sys.path[0] = str(_target.parent)
 _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
 
 if __name__ == "__main__":

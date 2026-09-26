@@ -32,7 +32,6 @@ _FAKE_REPO_ROOT = Path("/fake/meta/repo")
 
 
 def _make_ctx() -> EmitContext:
-    """Minimal EmitContext — mirrors test_roadmaps_scalars.py's ``_make_ctx``."""
     return EmitContext(
         repo_root=_FAKE_REPO_ROOT,
         coordinator_root=_FAKE_REPO_ROOT,
@@ -47,12 +46,6 @@ def _make_ctx() -> EmitContext:
 
 
 def _record(initiative_key_present: bool, initiative_value: str | None) -> dict:
-    """Build a minimal raw record shaped like query-records.js output.
-
-    ``initiative_key_present=False`` omits the key entirely (frontmatter never wrote it);
-    ``initiative_key_present=True`` with ``initiative_value=None`` models the explicit
-    ``initiative: null`` YAML shape — both must project to ``None`` on the emitted record.
-    """
     fm: dict = {
         "title": "Test Roadmap",
         "created": "2026-07-01T00:00:00Z",
@@ -64,7 +57,6 @@ def _record(initiative_key_present: bool, initiative_value: str | None) -> dict:
 
 
 class TestRoadmapInitiativeField:
-    """collect() projects ``initiative`` from frontmatter verbatim (D9 present-as-null)."""
 
     def test_non_null_initiative_projected_verbatim(self) -> None:
         """A roadmap OVERVIEW carrying ``initiative: <id>`` emits that value unchanged."""
@@ -114,7 +106,6 @@ class TestRoadmapInitiativeField:
         assert records[0]["initiative"] is None
 
     def test_mixed_records_initiative_routing(self) -> None:
-        """A non-null and a null-initiative record in the same batch project independently."""
         ctx = _make_ctx()
         raw_records = [
             _record(initiative_key_present=True, initiative_value="python-core"),

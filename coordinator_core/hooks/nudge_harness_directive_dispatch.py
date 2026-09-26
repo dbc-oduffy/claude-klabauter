@@ -87,36 +87,13 @@ from pathlib import Path
 from coordinator_core._hook_envelope import context_only
 from coordinator_core.lifecycle import git_common_dir
 
-# ---------------------------------------------------------------------------
-# Tells — deliberately narrow. A false negative costs one un-nudged turn; a
-# false positive costs the PM a blocked end-of-turn, so the bar is precision.
-# ---------------------------------------------------------------------------
 
-# Tell A — the EM citing the harness directive in its own prose. "AgentTool" is
-# not the name of any tool the EM can actually call (the tool is `Agent`), so
-# its appearance in an EM message is near-diagnostic of this failure. The
-# second alternative catches a paraphrase that drops the token.
-#
-# Negative-spec: a third alternative (bare "not to use workflows or
-# deep-research", with no "unless...requested" co-occurrence) was deliberately
-# dropped (Review: code-reviewer — F4) — it fired on a benign, correct
-# statement about tool choice with no framing of declining to dispatch. The
-# two alternatives kept here are far more diagnostic on their own.
 _TELL_CITES_DIRECTIVE = re.compile(
     r"\bAgent\s?Tool\b"
     r"|unless (?:the )?(?:user|you) (?:requested|asks? for|request(?:ed)?) it",
     re.IGNORECASE,
 )
 
-# Tell B — the EM asking the PM for permission to dispatch. Dispatch sequencing
-# is EM remit (First Officer Doctrine § Engineering Remit), so this question is
-# itself the error, independent of how the EM arrived at it.
-#
-# The leading `\b` is load-bearing, not decoration: without it the `ok(?:ay)?`
-# alternative matches the "ok" INSIDE "ho-ok", so any sentence pairing the word
-# "hook" with a dispatch term within 60 characters trips — a shape this repo's
-# own subject matter produces constantly ("the hook fires on every subagent
-# dispatch"). Observed live across four sessions before the boundary landed.
 _TELL_ASKS_PERMISSION = re.compile(
     r"\b(?:want me|shall i|should i|would you like me|do you want me|ok(?:ay)? (?:for me )?)"
     r"[^.?!\n]{0,60}?"
@@ -125,69 +102,20 @@ _TELL_ASKS_PERMISSION = re.compile(
 )
 
 # Tell C — the EM ASCRIBING a dispatch restriction to the PM as the PM's own
-# standing instruction. Distinct from Tell A (citing the harness line in the
-# EM's own voice) and Tell B (asking the PM's permission): this is the EM
-# misattributing an unattributed harness line's authorship, e.g. "holding
-# that dispatch on your standing don't-call-the-Agent-tool instruction" or
-# reporting it as "your standing instruction". Missed by both prior tells on
-# 2026-08-02 (spec backlink below).
-#
-# Three components, all required within the SAME sentence to hold precision:
-#   1. a possessive-attribution phrase ("your ... instruction/rule/...", or
-#      "as you('ve) instructed") naming the PM as the source of a rule;
-#   2. a dispatch-shaped noun/verb in that same sentence (dispatch, delegate,
-#      fan-out, spawn, subagent, Agent-tool);
-#   3. a restriction cue (don't, not, held/holding, declined, avoided, ...) —
 #      this is what discriminates a RESTRICTION ("your rule against
-#      dispatching") from a legitimate report of something the PM actually
-#      asked for ("as you instructed, I dispatched two reviewers" has no
-#      restriction cue and must not trip).
-# Requiring all three in one sentence is deliberately narrower than a
-# whole-message co-occurrence check: "your standing instruction to keep PRs
-# under 300 lines" (a real, unrelated PM instruction) must not trip merely
-# because some other sentence in the same turn happens to mention dispatch.
 #: Quantity nouns that make a nearby rule-noun a MEASUREMENT rather than an
-#: authored rule. Native vocabulary here — CLAUDE.md itself says "invocation
-#: budget" and "spawn-count budget" — so both word orders have to be excluded:
-#: "instruction budget" (quantity follows) and "spawn-count budget policy"
-#: (quantity precedes). Both were live false positives found in review.
 _QUANTITY_WORDS = r"budget|count|limit|cap|quota|allowance|spend|overhead"
 
 _POSSESSIVE_PM_ATTRIBUTION = re.compile(
     r"\byour\s+(?:standing\s+)?[^.?!\n]{0,60}?\b(?:instruction|rule|directive|order|policy)\b"
     r"|\bas you(?:'ve| have)?\s+instructed\b"
     r"|\byou(?:'ve| have)\s+instructed\b"
-    # Bare "yours to X" possessive, e.g. "that's yours to resolve" — no noun
-    # co-occurs, so this alternative stands alone as the attribution cue.
     r"|\byours\s+to\s+\w+"
-    # Agentless-passive framing: "this session was started with a standing
-    # instruction..." names no author at all, punting the authorship
-    # question up rather than inventing a PM — recurrence 5's exact shape.
     r"|\b(?:this\s+)?(?:session|conversation)\s+was\s+started\s+with\s+a\s+standing\s+\w+"
-    # Scope-possessive framing: "this session's standing instruction",
-    # "the session's instruction", "this turn's directive". Recurrence 6's
-    # exact shape (2026-08-17): the EM attributed the harness line to the
-    # SESSION rather than to "you", which is the same misattribution — an
-    # unattributed line given an authority it does not have — while evading a
-    # pattern anchored on `your`. Naming the session as author is not more
-    # accurate than naming the PM; the line's author is the harness, and the
-    # tell is treating it as a local standing rule at all.
-    # The rule-noun must be the HEAD of its noun phrase, not a modifier on a
-    # quantity: "this session's instruction BUDGET is limited, so I didn't
-    # dispatch" is about token spend, not authorship, and tripped the first
-    # version of this alternative — caught in review, and the vocabulary is
-    # native here (CLAUDE.md itself says "invocation budget", "spawn-count
-    # budget"). The lookahead is what keeps the widening from importing a
-    # false-positive class the `your ...` alternative never had.
     r"|\b(?:this|the)\s+(?:session|conversation|turn)'s\s+(?:standing\s+)?"
-    # Tempered span: a quantity word anywhere between the possessive and the
     # rule-noun disqualifies the match, which is what catches the MODIFIER word
-    # order ("spawn-count budget policy") that a trailing lookahead alone
-    # cannot. Both orders are native vocabulary here.
     r"(?:(?!" + _QUANTITY_WORDS + r")[^.?!\n]){0,40}?"
     r"\b(?:instruction|rule|directive|order|policy)\b"
-    # ...and the HEAD case ("instruction budget"), where the quantity word
-    # follows instead.
     r"(?!\s+(?:" + _QUANTITY_WORDS + r"))",
     re.IGNORECASE,
 )
@@ -206,12 +134,6 @@ _TELL_C_RESTRICTION_CUE = re.compile(
 
 
 def _tell_misattributes_to_pm(text: str) -> bool:
-    """Return True iff `text` ascribes a dispatch restriction to the PM as the
-    PM's own standing instruction, within any single sentence.
-
-    Sentence-scoped (split on `.`/`?`/`!`/newline) rather than whole-message,
-    per the false-positive note above the pattern definitions.
-    """
     for sentence in re.split(r"[.?!\n]+", text):
         if not sentence.strip():
             continue
@@ -222,39 +144,11 @@ def _tell_misattributes_to_pm(text: str) -> bool:
     return False
 
 
-# Tell D — the EM asking the PM for permission to commit or stage work it
 # already owns. Modelled directly on Tell B (_TELL_ASKS_PERMISSION above): same
-# permission-phrase alternation, same "verb within N chars" shape, swapped to
-# commit/stage terms. Added after a live 2026-08-02 session where the EM
-# completed a full dispatch wave and then asked the PM "stage and commit?" —
-# the identical permission reflex Tell B catches, aimed at the commit step
-# instead of the dispatch step, and no tell fired. The EM's own doctrine
 # (Commit Gate: only the EXECUTOR never commits) makes the commit step
-# unconditionally the EM's own to take, so asking permission for it is the
-# same error as Tell B, independent of how the EM arrived at it.
-#
-# Two closely-adjacent asks LOOK similar but must NOT trip, and are handled by
-# dedicated negatives rather than folded into the permission pattern itself:
-#   - merging to main is a genuine PM gate requiring a literal keyword
-#     ("merge"), which this pattern's commit/stage vocabulary never matches on
-#     its own;
-#   - pushing to a shared remote / opening a PR is ask-before-external-action,
-#     also a correct ask, and likewise never matches on "push"/"PR"/"remote"
-#     alone.
 # `_COMMIT_GATE_OR_OUTWARD_CUE` is a defensive backstop: a sentence naming
-# BOTH a commit/stage verb AND one of merge/push/PR/remote/upstream is treated
-# as the (correct) gated-or-outward ask and suppressed, even though the
-# vocabulary mismatch alone already excludes most such cases.
-#
 # A third negative, `_COMMIT_SCOPING_CUE`, catches the scoping question —
-# "which files should I include", "should I leave X out", "out of scope" —
 # which asks about the CONTENTS of a commit the EM is already going to make,
-# not for permission to make it.
-#
-# The leading `\b` carries the same load as Tell B's — see that pattern's note.
-# Unanchored, "ho-ok" supplies the permission phrase and the commit vocabulary
-# is one clause away, so ordinary engine prose about commit hooks ("hook path
-# and `commit-tree` path both") reads as a permission ask.
 _TELL_ASKS_COMMIT_PERMISSION = re.compile(
     r"\b(?:want me|shall i|should i|would you like me|do you want me|ok(?:ay)? (?:for me )?)"
     r"[^.?!\n]{0,60}?"
@@ -299,19 +193,6 @@ def _tell_asks_commit_permission(text: str) -> bool:
     return False
 
 
-# Suppression — the EM explaining this very mechanism (e.g. authoring or
-# reviewing this hook, or answering a PM question about the harness line)
-# should not trip Tell A. Without this, any session that discusses the doctrine
-# nudges itself.
-#
-# Negative-spec: bare `DR-082`/`DR-108` (and the broad `harness[- ]directive`
-# phrase) were deliberately dropped from this suppressor (Review: code-reviewer
-# — F2) — DR-108 is the exact ratified "Dispatch Is Encouraged" citation, so a
-# message citing it while ALSO asking permission ("Per DR-108 dispatch is
-# encouraged, but... should I dispatch anyway?") is the single highest-value
-# case this op exists to catch, and the broad suppressor was silently
-# swallowing it. Only tokens a normal dispatch-reasoning sentence would never
-# contain survive here.
 _META_DISCUSSION = re.compile(
     r"tengu_heron_brook|nudge-harness-directive|harness-directive-conflicts",
     re.IGNORECASE,
@@ -326,13 +207,6 @@ _NUDGE_MESSAGE = """\
 
 
 def _session_key(payload: dict) -> tuple[str, bool]:
-    """Return (filesystem-safe session discriminator, whether a true session_id was present).
-
-    The second element lets callers warn when the sentinel is only
-    invocation-scoped (Review: code-reviewer — F7): a PID-keyed fallback means
-    each fresh hook process gets its own sentinel, silently degrading
-    fire-once to fire-every-time.
-    """
     sid = payload.get("session_id")
     if isinstance(sid, str) and sid.strip():
         safe = re.sub(r"[^A-Za-z0-9_-]", "", sid.strip())
@@ -342,15 +216,6 @@ def _session_key(payload: dict) -> tuple[str, bool]:
 
 
 def _repo_root(payload: dict) -> str | None:
-    """Return the repo root directory (the one holding a `.git` entry), or None.
-
-    Walks upward from ``payload["cwd"]`` (or the process cwd) looking for a
-    `.git` entry. Existence, not directory-ness — worktrees/submodules use a
-    `.git` FILE (a `gitdir:` pointer), matching the house convention in
-    nudge_em_code_dispatch.py's `_is_outside_git_work_tree`
-    (Review: code-reviewer — F5). Returns None when no repo root is resolvable,
-    e.g. a cwd outside any git working tree.
-    """
     cwd = payload.get("cwd") or os.getcwd()
     if not isinstance(cwd, str):
         return None
@@ -365,13 +230,6 @@ def _repo_root(payload: dict) -> str | None:
 
 
 def _sentinel_path(payload: dict) -> str | None:
-    """Return the once-per-session sentinel path, or None when no repo root is resolvable.
-
-    Sentinel lives alongside the other per-session hook state under
-    ``.git/coordinator-sessions/<session>/``. When there is no ``.git`` to hang it
-    on, the op degrades to no-sentinel: it may then fire more than once, which is
-    strictly better than not firing at all.
-    """
     probe = _repo_root(payload)
     if probe is None:
         return None
@@ -387,15 +245,6 @@ def _sentinel_path(payload: dict) -> str | None:
 
 
 def _resolve_git_dir(dot_git: str) -> str | None:
-    """Return the real git directory for a `.git` path, or None if unusable.
-
-    A plain checkout's `.git` is the git directory itself. A worktree's or
-    submodule's `.git` is a FILE holding a ``gitdir: <path>`` pointer, and
-    nothing can be created *under* a file — resolving the root without also
-    resolving the pointer leaves the sentinel write failing, which silently
-    degrades fire-once to fire-every-time. Found by the F5 worktree test after
-    the root-resolution half of F5 landed.
-    """
     if os.path.isdir(dot_git):
         return dot_git
     try:
@@ -414,14 +263,6 @@ def _resolve_git_dir(dot_git: str) -> str | None:
 
 
 def _claim_fire(sentinel: str | None) -> bool:
-    """Atomically claim the once-per-session fire slot; return True iff this call won it.
-
-    Collapses the former check-then-write into one exclusive-creation step
-    (Review: code-reviewer — F6): a plain exists-check followed by a separate
-    write is a TOCTOU window where two racing Stop hooks for the same session
-    can both observe "not yet fired" and both fire. ``open(..., "x")`` makes
-    the claim atomic at the filesystem level.
-    """
     if not sentinel:
         return True
     try:
@@ -432,29 +273,16 @@ def _claim_fire(sentinel: str | None) -> bool:
     except FileExistsError:
         return False
     except OSError:
-        # A sentinel we cannot write means at worst a repeat nudge next turn.
-        # Never let it turn into a raised exception on the Stop path.
         return True
 
 
 def last_assistant_text(transcript_path: str) -> str:
-    """Return the text of the final assistant message in the transcript, or "".
-
-    Reads only the tail of the file: the last assistant turn is at the end, and a
-    long session's transcript is megabytes. Returns "" on any I/O or parse
-    failure — fail-silent is the correct posture for an advisory op.
-    """
     try:
         size = os.path.getsize(transcript_path)
         with open(transcript_path, "rb") as fh:
-            # Seek on raw bytes, not a text-mode
-            # stream — text-mode seek() is only documented as safe for
-            # offsets from tell() or 0, not an arbitrary computed byte offset.
-            # Binary seek + discard-the-partial-line + decode-the-tail is
-            # unambiguously well-defined regardless of UTF-8 boundary landing.
             if size > 512_000:
                 fh.seek(size - 512_000)
-                fh.readline()  # discard the partial line the seek landed inside
+                fh.readline()
             raw = fh.read()
         text = raw.decode("utf-8", errors="replace")
         lines = text.splitlines(keepends=True)
@@ -468,11 +296,9 @@ def last_assistant_text(transcript_path: str) -> str:
         try:
             entry = json.loads(line)
         except ValueError:
-            continue  # malformed transcript line; skip it
+            continue
         if not isinstance(entry, dict) or entry.get("type") != "assistant":
             continue
-        # A truthy non-dict `message` (older schema,
-        # compaction-summary entry, hand-edited jsonl) must not raise on `.get`.
         msg = entry.get("message")
         content = msg.get("content") if isinstance(msg, dict) else None
         if isinstance(content, str):
@@ -486,31 +312,11 @@ def last_assistant_text(transcript_path: str) -> str:
             joined = "\n".join(p for p in parts if p)
             if joined.strip():
                 return joined
-            # An assistant entry carrying only tool_use blocks is not the final
-            # spoken turn; keep walking back to the last one that spoke.
             continue
     return ""
 
 
 def _session_has_dispatched(payload: dict) -> bool:
-    """Return True iff this session has direct on-disk evidence of an Agent dispatch.
-
-    Evidence is track_dispatched_agents.py's own write target: a non-empty
-    ``<git-common-dir>/coordinator-sessions/<session>/dispatched-agents.txt``.
-    A non-empty file falsifies this op's premise (that the EM has not dispatched).
-
-    Resolved via ``git_common_dir`` — deliberately NOT this module's
-    worktree-local ``_resolve_git_dir`` walk. The writer keys its path off the
-    git COMMON directory so a worktree session's bookkeeping lands under the
-    MAIN worktree's `.git`, not the (linked) worktree-local one; in a worktree
-    session those two directories differ, and reading the worktree-local one
-    would silently look in a directory the writer never wrote to.
-
-    Fail-open by design: any ambiguity — no resolvable repo root,
-    ``git_common_dir`` raising, an unreadable/unstat-able file — returns
-    False, i.e. the nudge still fires. Suppressing a genuine nudge on an
-    unreadable file is the worse failure.
-    """
     repo_root = _repo_root(payload)
     if repo_root is None:
         return False
@@ -545,15 +351,6 @@ def _final_message_text(payload: dict) -> str:
     if not spoken:
         spoken = last_assistant_text(transcript_path)
 
-    # A permission ask made through the AskUserQuestion TOOL never reaches the
-    # spoken text at all, so every prose-scanning tell was blind to the single
-    # highest-signal form of the mistake: a formal permission prompt with the
-    # harness line quoted in an option body. Observed 2026-08-17 (recurrence 6) —
-    # the EM put "dispatch or not?" to the PM as a structured question, and
-    # `last_assistant_text` walks PAST tool_use-only entries by design ("not the
-    # final spoken turn"), so Tell B could not fire. Append the question text to
-    # the scanned corpus rather than changing what "spoken" means: the two are
-    # different channels and only the tells need to see both.
     asked = ask_user_question_text(transcript_path)
     if not asked:
         return spoken
@@ -561,23 +358,6 @@ def _final_message_text(payload: dict) -> str:
 
 
 def ask_user_question_text(transcript_path: str) -> str:
-    """Return the question + option text of the final turn's AskUserQuestion
-    calls, or "".
-
-    WHY THIS EXISTS: the tells scan prose, and a permission ask routed through
-    the AskUserQuestion tool is not prose — it is a `tool_use` block, which
-    `last_assistant_text` deliberately walks past. That made the most explicit
-    possible form of the failure (a formal "may I dispatch?" prompt) the one form
-    nothing could see. Recurrence 6, 2026-08-17.
-
-    Harvests `question`, `header`, and each option's `label`/`description` — the
-    misattribution lands in the option bodies as often as in the question itself,
-    since that is where the reasoning for each branch is written.
-
-    Same tail-read and fail-silent posture as `last_assistant_text`: advisory ops
-    never raise. Scans back only to the previous user turn, so a question from an
-    earlier exchange cannot re-trip a later one.
-    """
     try:
         size = os.path.getsize(transcript_path)
         with open(transcript_path, "rb") as fh:
@@ -597,10 +377,9 @@ def ask_user_question_text(transcript_path: str) -> str:
         try:
             entry = json.loads(line)
         except ValueError:
-            continue  # malformed transcript line; skip it
+            continue
         if not isinstance(entry, dict):
             continue
-        # Stop at the turn boundary: only this turn's questions are in scope.
         if entry.get("type") == "user":
             break
         if entry.get("type") != "assistant":
@@ -635,7 +414,6 @@ def ask_user_question_text(transcript_path: str) -> str:
 
 
 def message_trips_tell(text: str) -> bool:
-    """Return True iff `text` shows one of the four observed failure tells."""
     if not text:
         return False
     if _META_DISCUSSION.search(text):
@@ -649,56 +427,33 @@ def message_trips_tell(text: str) -> bool:
 
 
 def op(payload: dict) -> dict | None:
-    """Stop advisory: nudge an EM that declined to dispatch on a misread harness line.
-
-    Returns ``{"message": <str>}`` when the nudge should fire, ``None`` otherwise.
-    The caller owns transport (the DoE shim writes the message to stderr and
-    exits 2, the documented Stop-hook block channel) — this op decides only
-    *whether* to speak, per the DR-047 transport-seam split.
-
-    Never raises on well-formed input.
-    """
     if not isinstance(payload, dict):
-        # An un-reviewable caller passing a
-        # non-dict must not turn "never raises" into an AttributeError storm.
         return None
     if payload.get("stop_hook_active"):
-        return None  # this Stop came from a hook block — re-firing would loop
+        return None
     if payload.get("agent_id"):
-        return None  # a dispatched subagent holds no dispatch authority
+        return None
 
     if os.environ.get("COORDINATOR_HARNESS_DIRECTIVE_NUDGE_OFF") == "1":
         return None
 
     sentinel = _sentinel_path(payload)
     if sentinel and os.path.exists(sentinel):
-        return None  # fast-path skip; the real (atomic) gate is _claim_fire below
+        return None
 
     if not message_trips_tell(_final_message_text(payload)):
         return None
 
     if not _claim_fire(sentinel):
-        return None  # lost the race to another concurrent Stop for this session
+        return None
 
     _, has_true_sid = _session_key(payload)
     message = _NUDGE_MESSAGE
     if not has_true_sid:
-        # No session_id means the sentinel is
-        # PID-scoped, so fire-once silently degrades to fire-every-time.
-        # Surface that, matching the nudge_em_code_dispatch.py precedent.
         message += (
             "\n[nudge] (sentinel is invocation-scoped: no session_id was"
             " present, so this nudge may repeat.)\n"
         )
-    # Routed through the shared chokepoint (coordinator_core._hook_envelope) so
-    # this emitter's bytes are captured by capture_session() alongside every
-    # other prose-carrying builder call, per AC12. This module's transport is
-    # NOT the harness's hookSpecificOutput JSON protocol (see the DoE-resident
-    # stdin/stderr shim note in the module banner above) — only ``message`` is
-    # ever read by the caller — so the envelope is built for measurement and
-    # then unwrapped back to the same ``{"message": <str>}`` shape this op has
-    # always returned. Byte-for-byte: context_only() wraps ``message`` without
-    # altering it, so the unwrapped string is identical to the pre-routing one.
     envelope = context_only("Stop", message)
     return {"message": envelope["hookSpecificOutput"]["additionalContext"]}
 

@@ -83,16 +83,8 @@ def _tracked_files_bytes_cached(repo_root: str, pathspec: str) -> Tuple[bytes, .
 
 
 def _tracked_files_bytes_uncached(repo_root: str, pathspec: str) -> Tuple[bytes, ...]:
-    # `binary=True` is the whole reason this module can share the seam at all:
-    # `GitResult.stdout` decodes with `errors="replace"`, which substitutes
-    # U+FFFD on exactly the non-UTF-8 path bytes this module exists to
-    # preserve. `stdout_bytes` is what git wrote.
     result = run_git(["-C", repo_root, "ls-files", "-z", "--", pathspec], binary=True)
     if not result.ok:
-        # An absent git and a timeout come back as returncode 127/-1 rather
-        # than an exception, so the degrade cases this module has always
-        # treated alike still reach the same empty tuple. Only a real
-        # non-zero exit is worth a line on stderr.
         if not result.timed_out and result.returncode != 127:
             print(
                 f"git.ls_files_bytes: git -C {repo_root} ls-files -- {pathspec!r} exited "

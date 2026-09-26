@@ -39,7 +39,6 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 _SWEEP_BOOT_PATH = os.path.join(SCRIPT_DIR, "sweep-boot.py")
 
-#: The op this file exists to prove is no longer dialled.
 KILLED_OP = "session.boot_sweep"
 
 
@@ -49,7 +48,6 @@ def _source() -> str:
 
 
 def _load_sweep_boot():
-    """Import sweep-boot.py as a fresh module object (hyphenated -> importlib)."""
     spec = importlib.util.spec_from_file_location("sweep_boot_under_test", _SWEEP_BOOT_PATH)
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -64,14 +62,7 @@ def _run_main_capturing(mod, argv):
     return rc, out.getvalue(), err.getvalue()
 
 
-# ---------------------------------------------------------------------------
-# The two contracts the SessionStart hook depends on.
-# ---------------------------------------------------------------------------
-
-
 def test_stdout_is_one_integer():
-    """Byte-parity with the retired bash oracle: exactly one integer, nothing
-    else. The hook parses this."""
     mod = _load_sweep_boot()
     _rc, out, _err = _run_main_capturing(mod, [])
     assert out.strip() == "0", f"expected a bare integer, got {out!r}"
@@ -79,31 +70,18 @@ def test_stdout_is_one_integer():
 
 
 def test_exit_is_always_zero():
-    """Best-effort ceremony: this never blocks session boot, and a gravestone
-    has even less standing to than the dispatch did."""
     mod = _load_sweep_boot()
     rc, _out, _err = _run_main_capturing(mod, [])
     assert rc == 0
 
 
 def test_no_warning_on_stderr():
-    """The old refusal path WARNed on every boot about an op that cannot come
-    back. Silence is the fix: a dead op refusing is not news."""
     mod = _load_sweep_boot()
     _rc, _out, err = _run_main_capturing(mod, [])
     assert err.strip() == "", f"gravestone must be silent, got {err!r}"
 
 
-# ---------------------------------------------------------------------------
-# The absence this file exists to protect.
-# ---------------------------------------------------------------------------
-
-
 def test_the_killed_op_is_never_dispatched():
-    """The whole point. A future edit that repoints this trampoline at any op
-    -- the killed one or a replacement -- must fail here and go write a plan
-    instead: the kill bar says a new boot sweep is a fresh spike, never a
-    repoint of this file."""
     src = _source()
     dispatching = [
         ln for ln in src.splitlines()
@@ -113,8 +91,6 @@ def test_the_killed_op_is_never_dispatched():
 
 
 def test_killed_op_name_survives_only_as_prose():
-    """The name may appear in the gravestone's explanation -- it must not
-    appear as a live `_OP`-style dispatch target."""
     src = _source()
     live = [
         ln for ln in src.splitlines()
@@ -128,8 +104,6 @@ def test_killed_op_name_survives_only_as_prose():
 
 
 def test_writes_no_housekeeping_failure_record():
-    """Recording a failure every boot, for a dead op, is what made the real
-    housekeeping signal unreadable."""
     src = _source()
     calls = [
         ln for ln in src.splitlines()
@@ -141,22 +115,12 @@ def test_writes_no_housekeeping_failure_record():
 
 
 def test_names_its_successors():
-    """The kill bar requires naming the requirement, not assuming it. If the
-    successor list ever stops being written down here, the next reader cannot
-    tell a discharged requirement from a dropped one."""
     src = _source()
     for successor in ("handoff.archive_transition", "fleet.archive_completed_handoffs"):
         assert successor in src, f"gravestone must name {successor}"
 
 
-# ---------------------------------------------------------------------------
-# Invariants carried forward unchanged from the prior suite.
-# ---------------------------------------------------------------------------
-
-
 def test_no_stage_commit_in_source():
-    """Never stages, never commits — the bash oracle's invariant, and now
-    trivially true."""
     src = _source()
     for forbidden in ("git add", "git commit", '"add"', '"commit"'):
         offenders = [
@@ -167,8 +131,6 @@ def test_no_stage_commit_in_source():
 
 
 def test_help_still_exits_cleanly():
-    """argv handling is shared plumbing (`sweep_argv.parse_repo_root_argv`) and
-    is not part of what the gravestone retired."""
     mod = _load_sweep_boot()
     rc, _out, _err = _run_main_capturing(mod, ["-h"])
     assert rc == 0

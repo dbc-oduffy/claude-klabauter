@@ -50,23 +50,12 @@ def _load_publish_module():
 def _init_git_repo(root: Path) -> None:
     # IDEMPOTENT ON PURPOSE. This helper is called from inside the
     # monkeypatched `load_targets` fake, so it runs once per RESOLUTION, not
-    # once per test. `publish.py` resolves targets twice now -- `main()` with
-    # the `--target` filter, and `_declared_repo_roots_carrying_
-    # coordinator_core` unfiltered -- so a second call re-seeded an already
-    # committed repo and `git commit` failed "nothing to commit, working tree
-    # clean". Guarding here rather than counting call sites: a fixture that
-    # cannot be invoked twice encodes a production call count no test should
-    # be asserting by accident.
     if (root / ".git").is_dir():
         return
     (root / ".git").mkdir(parents=True, exist_ok=True)
 
 
 def _wire_common_fakes(publish_mod, monkeypatch, tmp_path, row_dests: "dict[str, Path]"):
-    """Same shape as `test_percolate_round.py::_wire_lock_test_fakes` --
-    stubs every precondition `main()` runs before its OWN lock loop, so
-    this test drives the REAL lock-acquisition and BUSY-message code (the
-    code under test for C3) rather than a hand-rolled stand-in for it."""
 
     def fake_row(name: str, dest: Path) -> str:
         src = tmp_path / f"src-{name}"
@@ -152,10 +141,6 @@ def test_publish_denies_fast_under_default_zero_wait(tmp_path, monkeypatch):
 
 @pytest.mark.spawns_process
 def test_publish_emits_the_same_text_round_does(tmp_path, monkeypatch):
-    """`publish.py`'s inline BUSY branch and `percolate-round.py`'s
-    `_lock_busy_message` must produce byte-identical text for the same
-    `(dest, exc)` pair -- both now delegate to
-    `percolate.wire_contract.lock_busy_message` (staff-eng finding 0)."""
     import importlib.util as _ilu
 
     from percolate.wire_contract import lock_busy_message
@@ -172,9 +157,6 @@ def test_publish_emits_the_same_text_round_does(tmp_path, monkeypatch):
 
 @pytest.mark.spawns_process
 def test_publish_first_contended_row_refuses_not_flattened_to_generic_fail(tmp_path, monkeypatch):
-    """A multi-row publish refuses on the FIRST contended root (canonical
-    realpath-sorted order) and names THAT root -- never a generic FAIL that
-    swallows which destination is actually held."""
     import coordinator_core.locked_write as locked_write
 
     publish_mod = _load_publish_module()

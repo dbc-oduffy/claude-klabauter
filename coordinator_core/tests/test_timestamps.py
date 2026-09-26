@@ -1,9 +1,3 @@
-"""Coverage for the one age-rendering helper every reader-facing surface uses.
-
-The module's whole reason to exist is that a wrong age is worse than no age:
-it is precise enough to sound measured, which is the least-checked kind of
-wrong number. These cases pin the refusals as hard as the arithmetic.
-"""
 
 from __future__ import annotations
 
@@ -36,10 +30,6 @@ class TestAgeSeconds:
         assert timestamps.age_seconds(stamp) is None
 
     def test_the_watch_stamp_format_ages_as_calendar_timegm_did(self):
-        """The prior `watch_heartbeat._tick_age_seconds` parsed exactly this
-        shape with `calendar.timegm(time.strptime(...))`. Both readings of one
-        stamp must land on the same instant, or collapsing the two helpers
-        would have moved a liveness rendering."""
         stamp = "2026-09-02T17:12:05Z"
         now = time.time()
         legacy = now - calendar.timegm(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))
@@ -61,12 +51,6 @@ class TestAgePhrase:
     def test_durations_render_without_a_unit_key(self, seconds, expected):
         assert timestamps.age_phrase(seconds) == expected
 
-    # A negative-age instant (the stamp
-    # names a moment that hasn't happened yet) clamps to 0 and is
-    # indistinguishable from "just now". Pinning this as current, deliberate
-    # behavior rather than leaving it unrecorded: a wrong sign is a real
-    # future defect, but it is not this one, and the clamp must show up in a
-    # diff rather than change silently.
     def test_a_future_instant_clamps_to_zero_rather_than_going_negative(self):
         assert timestamps.age_phrase(-3600.0) == "0 seconds"
 
@@ -82,7 +66,6 @@ class TestWithAge:
         assert timestamps.with_age("unknown time") == "unknown time (age unreadable)"
 
     def test_nothing_is_converted_to_local_time(self):
-        """Two renderings of one instant is the ambiguity, not the cure."""
         stamp = "2026-09-02T19:00:02.830245+00:00"
         assert stamp in timestamps.with_age(stamp)
 
@@ -92,8 +75,6 @@ class TestDateFields:
     not an instant -- `age_seconds` refuses them along with every other
     zone-less stamp, so they get their own declared entry point."""
 
-    #: A fixed reading clock, so the expected day counts are arithmetic and
-    #: not a function of when the suite runs.
     NOW = datetime(2026, 9, 2, tzinfo=timezone.utc).timestamp()
 
     def test_a_date_ages_in_whole_days(self):
@@ -107,11 +88,6 @@ class TestDateFields:
     def test_the_same_day_says_today_rather_than_zero_days_ago(self):
         assert timestamps.with_age_date("2026-09-02", self.NOW) == "2026-09-02 (today)"
 
-    # A future-dated field (days < 0)
-    # clamps to the same "(today)" rendering as a same-day one; nothing
-    # previously recorded that this is current behavior rather than an
-    # oversight. Pinning it here so the clamp is visible in a diff -- not
-    # asserting it is the right behavior, only that it is the intended one.
     def test_a_future_date_renders_today_rather_than_negative_days(self):
         assert timestamps.with_age_date("2026-09-03", self.NOW) == "2026-09-03 (today)"
 

@@ -100,10 +100,6 @@ assert len(PREDICATE_MODULES) == FAN_IN_N, (
 
 
 def _spawn_n_processes(modules: "tuple[str, ...]") -> None:
-    """Spawns one bare `python -c "import <module>"` child PER predicate
-    module, sequentially, within one timed draw -- reuses the same generic
-    subprocess-timeout/creationflags constants `interleave._time_subprocess`
-    uses, rather than re-authoring them."""
     for module in modules:
         completed = subprocess.run(
             [sys.executable, "-c", f"import {module}"],
@@ -121,11 +117,6 @@ def _spawn_n_processes(modules: "tuple[str, ...]") -> None:
 
 
 def _spawn_one_process_importing_all(modules: "tuple[str, ...]") -> None:
-    """Spawns exactly ONE child process that imports every predicate
-    module in `modules`, sequentially, all within that one fresh
-    interpreter. See module docstring for why this is a spawned child
-    (cold import) rather than an in-process `importlib.import_module`
-    call against the already-warm benchmark interpreter."""
     import_stmt = "; ".join(f"import {module}" for module in modules)
     completed = subprocess.run(
         [sys.executable, "-c", import_stmt],
@@ -165,8 +156,6 @@ def run_and_record() -> ShimDecisionRecord:
         shim_name=fan_in.name,
         shim_stats=stats[fan_in.name],
     )
-    # Review (2026-08-16): atomic mkstemp + os.replace, not a bare open(..., "w")
-    # -- a kill mid-write must never leave this committed-artifact JSON truncated.
     fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(RECORD_PATH), suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:

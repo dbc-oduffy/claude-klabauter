@@ -35,8 +35,6 @@ from pathlib import Path
 
 import pytest
 
-# Spawns real git subprocesses; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -89,10 +87,6 @@ def test_scoped_sha_equals_pin_when_pin_itself_touches_engine_paths(tmp_path):
     out = io.StringIO()
     scoped = publish._scoped_engine_stamp_sha(repo / "coordinator_core", head, out=out)
     assert scoped == head
-    # Logging is unconditional (2026-08-21 fix): even when the scoped value
-    # equals the pin, the source tag must say so explicitly — a silent line
-    # here would be indistinguishable from the fallback-on-git-failure case,
-    # which is exactly the ambiguity this test guards against.
     assert "source=scoped-match-pin" in out.getvalue()
     assert head in out.getvalue()
 
@@ -114,7 +108,7 @@ def test_scoped_sha_ignores_trailing_non_engine_commits(tmp_path):
     (repo / "docs" / "notes.md").write_text("unrelated again", encoding="utf-8")
     later_pin = _commit_all(repo, "docs-only commit 2")
 
-    assert later_pin != engine_head  # sanity: the pin genuinely advanced
+    assert later_pin != engine_head
 
     scoped = publish._scoped_engine_stamp_sha(repo / "coordinator_core", later_pin, out=io.StringIO())
     assert scoped == engine_head, (
@@ -125,9 +119,6 @@ def test_scoped_sha_ignores_trailing_non_engine_commits(tmp_path):
 
 
 def test_scoped_sha_rotates_on_a_genuine_engine_change(tmp_path):
-    """The soundness half: once a NEW commit touches `coordinator_core/`,
-    the scoped sha must move to it — scoping must never suppress a real
-    rotation."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     (repo / "coordinator_core").mkdir()
@@ -145,8 +136,6 @@ def test_scoped_sha_rotates_on_a_genuine_engine_change(tmp_path):
     scoped = publish._scoped_engine_stamp_sha(repo / "coordinator_core", second_pin, out=out)
     assert scoped == second_pin
     assert scoped != first_engine_head
-    # scoped == pin here too (the pin IS the latest engine commit), so the
-    # log must still say so explicitly rather than reading like a fallback.
     assert "source=scoped-match-pin" in out.getvalue()
 
 
@@ -169,12 +158,6 @@ def test_scoped_sha_covers_the_coordinator_bin_prefix_too(tmp_path):
 
 
 def test_scoped_sha_falls_back_to_the_pin_outside_a_work_tree(tmp_path):
-    """Never a silent no-stamp: a root that is not a git work tree at all
-    (e.g. a materialization/ordering bug upstream) must fall back to the
-    unscoped pin rather than raise or write nothing. The log must tag this
-    outcome as a fallback, distinctly from a legitimate scoped match —
-    see `test_fallback_and_match_are_distinguishable_in_the_log` below for
-    why that distinction is the point, not decoration."""
     not_a_repo = tmp_path / "not-a-repo"
     not_a_repo.mkdir()
     out = io.StringIO()
@@ -225,7 +208,7 @@ def test_fallback_and_match_are_distinguishable_in_the_log(tmp_path):
     fallback_out = io.StringIO()
     fell_back = publish._scoped_engine_stamp_sha(not_a_repo, head, out=fallback_out)
 
-    assert matched == fell_back == head  # same written stamp value in both cases
+    assert matched == fell_back == head
     assert match_out.getvalue() != fallback_out.getvalue(), (
         "a legitimate scoped match and a fallback wrote the identical stamp "
         "AND the identical log line -- the two are indistinguishable after "

@@ -1,13 +1,3 @@
-"""The executor fence admits the row's own `surface:`, not just its `writes:`.
-
-The fence and the commit pathspec answer different questions. A row whose
-target is gitignored drops it from `writes:` -- correct, because a gitignored
-path is never a committable write -- and that drop used to fence the executor
-out of the one file the row's body told it to write. Three rows in one session
-stopped there and reported BLOCKED, each correctly: a K-016 append to a
-gitignored kill ledger, and two memo rows whose drafts land under a gitignored
-outbox.
-"""
 
 from __future__ import annotations
 

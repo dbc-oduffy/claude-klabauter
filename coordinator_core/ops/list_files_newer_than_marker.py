@@ -59,18 +59,6 @@ _MARKER_NAME = ".percolate-ignore"
 
 
 def list_files_newer_than_marker(source_dir: str, limit: int = _DEFAULT_LIMIT) -> dict:
-    """Return files under `source_dir` newer than its `.percolate-ignore` marker.
-
-    Walks `source_dir` recursively (files only; the marker itself is
-    excluded from its own drift listing). When the marker is missing,
-    returns `{"files": [], "marker_missing": True}` without raising — this
-    mirrors the oracle fence's silent no-drift-panel behavior for an absent
-    marker rather than treating it as an error.
-
-    Paths in `files` are POSIX-style (forward-slash), relative to
-    `source_dir`, sorted ascending for deterministic output, and capped at
-    `limit`.
-    """
     root = Path(source_dir)
     marker = root / _MARKER_NAME
 

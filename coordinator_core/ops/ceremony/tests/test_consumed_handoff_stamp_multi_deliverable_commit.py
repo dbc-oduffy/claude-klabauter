@@ -1,22 +1,3 @@
-"""
-coordinator_core.ops.ceremony.tests.test_consumed_handoff_stamp_multi_deliverable_commit
-
-Purpose: the git-backed half of the multi-baton follow-up-commit contract --
-`test_consumed_handoff_stamp_multi_deliverable.py` covers the grouping itself
-(pure frontmatter reads, fast tier); this file drives the real commit leg
-through real git, because the property under test IS the trailer resolution
-`git_native.commit_scoped` performs at commit time. A mocked git resolves no
-trailers and would assert nothing.
-
-Bug closed: `state/bug-backlog/2026-08-14-wsc-tail-cannot-stamp-a-two-baton-
-pickup.yaml` -- see the grouping file's module docstring for the full defect.
-
-Split from that file, rather than merged into it, so its three grouping tests
-stay in the fast tier: `pytestmark` is module-scoped and marking this file's
-git-spawning helpers (which the spawn ratchet reads at module level -- Rule 2,
-`coordinator_core/tests/test_no_new_spawning_tests.py`) would drag the pure
-tests into `cadence` with them.
-"""
 
 from __future__ import annotations
 
@@ -32,15 +13,9 @@ from coordinator_core.ops.ceremony.consumed_handoff_stamp import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# Real git, per the docstring above. Same tiering rationale as the sibling
-# `test_consumed_handoff_stamp_claim_release.py`; the spawn ratchet's
 # `_BASELINE` is shrink-only and explicitly not the route for a new file
-# (coordinator_core/tests/test_no_new_spawning_tests.py Rule 2).
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
-#: Trailer resolution abstains entirely on a non-UUID session id (see
-#: `commit_trailers.compute_missing_trailer_args`'s fail-safe), so tier 0 --
-#: the tier this contract turns on -- is only reachable with a UUID-shaped id.
 _SID = "11111111-2222-3333-4444-555555555555"
 
 
@@ -128,9 +103,6 @@ def test_ungrouped_two_baton_pathspec_commits_untrailered(repo, sid_env):
 
 
 def test_each_group_commits_cleanly_with_its_own_trailer(repo, sid_env):
-    """The fix's payload: committing group-by-group lands one commit per
-    deliverable, each carrying that deliverable's own `Deliverable-Id:`
-    trailer -- the close a two-baton pickup could not previously complete."""
     a = _write(repo, "state/handoffs/a.md", "dlv-alpha-000001")
     b = _write(repo, "state/handoffs/b.md", "dlv-beta-000002")
 

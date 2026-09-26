@@ -108,13 +108,7 @@ from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.session import harness_registry
 from coordinator_core.session.reachability import messaging_available
 
-#: Cap on stored ``message`` length. A notice is advisory text surfaced
-#: inline in a PreToolUse ``additionalContext`` block (see
-#: ``write_guards.nudge_peer_notice_unread``) -- an unbounded message could
 #: blow up that advisory regardless of ``_MAX_NOTICES`` bounding the notice
-#: COUNT. Anything past the cap is truncated at send time, not at read time,
-#: so every reader (the op and the guard) sees the same already-bounded text
-#: rather than re-deciding the cut point independently.
 _MAX_MESSAGE_LEN = 2000
 
 
@@ -156,11 +150,6 @@ def _peer_notice_send(params: Dict[str, Any], repo_root: Optional[Path] = None) 
     if not target_session_id:
         raise ValueError("peer_notice.send requires a non-empty target_session_id")
     if not safe_id(target_session_id):
-        # Validated HERE, at param-parsing, not as a post-join containment
-        # check on the resulting path -- target_session_id is interpolated
-        # directly into a directory name below (`_notices_dir`), so a value
-        # like "../../foo" must be rejected before it is ever joined, not
-        # audited after (Review: code-reviewer, P1 path-traversal finding).
         raise ValueError(
             f"peer_notice.send: target_session_id {target_session_id!r} is not a "
             "safe id (alphanumerics, '.', '_', '-' only; no path separators)"
@@ -184,10 +173,6 @@ def _peer_notice_send(params: Dict[str, Any], repo_root: Optional[Path] = None) 
     if not from_session_id:
         from_session_id = resolve_current_session_id(worktree_root)
 
-    # Advisory-only read of the gate state -- never gates the write itself
-    # (see module docstring Negative-spec). Failure here must not block the
-    # send: a snapshot read error degrades to an unknown gate state, not a
-    # write refusal.
     try:
         snapshot = harness_registry.snapshot()
         gate_up = messaging_available(snapshot)
@@ -209,24 +194,11 @@ def _peer_notice_send(params: Dict[str, Any], repo_root: Optional[Path] = None) 
     target_dir = _notices_dir(worktree_root, target_session_id)
     target_dir.mkdir(parents=True, exist_ok=True)
     notice_path = target_dir / f"{notice_id}.json"
-    # Write-tmp-then-os.replace, same directory: os.replace is atomic on both
-    # POSIX and Windows within one filesystem, so a concurrent reader
-    # (peer_notice_check.list_unread_notices / the delivery guard) never
-    # observes a partially-written file -- this module already reasons about
-    # avoiding partial-write parsing via one-file-per-notice (module
-    # docstring); a bare write_text left that reasoning half-applied (Review:
-    # code-reviewer, P3 un-atomic-write finding).
     tmp_path = target_dir / f".{notice_id}.json.tmp"
     try:
         tmp_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
         tmp_path.replace(notice_path)
     except Exception:
-        # A partial write_text (e.g. disk full) or a failed replace must not
-        # leave the `.tmp` file behind -- it is already excluded from every
-        # `*.json` glob so it can't be misread, but an unreaped leak in a
-        # directory any session can write to is a real defect on its own
-        # (Review: code-reviewer, P3 orphaned-tmp-file finding). Best-effort:
-        # the original exception is what the caller needs to see.
         try:
             tmp_path.unlink(missing_ok=True)
         except OSError:

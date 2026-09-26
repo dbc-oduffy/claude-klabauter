@@ -77,7 +77,6 @@ class PlanSummary(BaseModel):
     """Plan lifecycle state from frontmatter."""
     provenance: ProvenanceEnvelope
 
-    # Nullable fields (D9 present-as-null) — present-as-null (no default).
     scope_mode: str | None
     """"atomic" | "fan-out" | etc. — null if not declared in frontmatter."""
     reviewer: str | None
@@ -89,8 +88,6 @@ class PlanSummary(BaseModel):
     source: str | None
     """Free-text source tag (roadmap slug, spinoff id, etc.); null if absent."""
 
-    # ── Deliverable spine identity fields (D9 present-as-null) ───────────────
-    # Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § C1.
 
     deliverable_id: str | None
     """

@@ -87,19 +87,10 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.roadmap.prep_gate import gate_plan, read_stamp
 from coordinator_core.ops._param_alias import aliased_param, spellings
 
-# Generator-provenance: this op writes nothing.
 GENERATES: list = []
 
 
 def _resolve_plan(raw: str, worktree_root: Path) -> Path:
-    """The plan path, resolved against the main worktree and contained by it.
-
-    Containment mirrors ``queue_close``/``plan_status_transition``'s call site
-    verbatim (``contained_path(candidate, [allowed_root])``) with the worktree
-    root as the sole allowed root. A read op needs it for the same reason a write
-    op does: a fat-fingered absolute path otherwise has this op read, and report
-    on, a file outside every tree the caller owns.
-    """
     candidate = Path(raw)
     if not candidate.is_absolute():
         candidate = worktree_root / candidate

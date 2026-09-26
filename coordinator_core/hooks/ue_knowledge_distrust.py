@@ -54,7 +54,6 @@ from typing import NamedTuple, Optional
 _OVERRIDE_KEY = "example-game-repo-control@example-game-workbench-repo"
 _MAX_DEPTH = 3
 
-# The full set of plugin keys claude-ue-bootstrap.sh wrote/merged to true.
 # Mirrors that script's EXPECTED_KEYS array verbatim (C5 port target).
 _BOOTSTRAP_KEYS = (
     "example-game-repo-control@example-game-workbench-repo",
@@ -67,23 +66,12 @@ _BOOTSTRAP_KEYS = (
 
 
 class DistrustResult(NamedTuple):
-    """Return shape for run()."""
 
     banner: str  # UE PROJECT DETECTED heredoc text, or "" if no .uproject found
-    stderr_lines: list[str]  # operator-facing warning/status lines (stderr)
+    stderr_lines: list[str]
 
 
 def _find_uproject(start_dir: str, max_depth: int = _MAX_DEPTH) -> Optional[str]:
-    """Bounded, cwd-relative search for the first *.uproject file.
-
-    Mirrors "find . -maxdepth 3 -name *.uproject -print -quit": depth 0 is
-    the starting dir itself (files directly inside it are depth 1), matches
-    are allowed up to and including depth max_depth, and the FIRST match
-    short-circuits the walk (mirrors -print -quit -- does not keep walking
-    the whole tree looking for a second match). Directories are visited in
-    sorted order for deterministic output; unreadable directories are
-    silently skipped (mirrors the bash oracle's 2>/dev/null).
-    """
     start = Path(start_dir)
 
     def _walk(dir_path: Path, depth: int) -> Optional[str]:
@@ -97,8 +85,6 @@ def _find_uproject(start_dir: str, max_depth: int = _MAX_DEPTH) -> Optional[str]
             try:
                 is_dir = entry.is_dir(follow_symlinks=False)
             except OSError:
-                # Unreadable/vanished entry (permission, race) -- skip it,
-                # mirrors the bash oracle's 2>/dev/null (see docstring).
                 continue
             if not is_dir and entry.name.endswith(".uproject"):
                 return str(Path(dir_path) / entry.name)
@@ -116,18 +102,6 @@ def _find_uproject(start_dir: str, max_depth: int = _MAX_DEPTH) -> Optional[str]
 
 
 def _read_override_value(settings_path: Path) -> tuple[bool, Optional[bool]]:
-    """Read the UE-override key out of settings.json.
-
-    Returns (exists, value):
-      exists -- True iff settings_path is a regular file.
-      value  -- True/False if the key resolves to a JSON boolean; None if the
-                file is missing, unreadable, not valid JSON, not a JSON
-                object, or the key/its parent object is absent. A malformed
-                or absent key is deliberately treated the same as "not true"
-                (mirrors "jq -e '... == true'" returning non-zero on any of
-                those conditions, which the bash oracle's elif treats
-                identically).
-    """
     if not settings_path.is_file():
         return False, None
     try:
@@ -171,7 +145,7 @@ def _run_bootstrap(plugin_root: str, cwd: str) -> tuple[bool, str]:
     session hook's perspective (only this function's own success/failure
     gates whether `message` is treated as a real status line).
     """
-    del plugin_root  # unused post-port; kept for call-site compatibility
+    del plugin_root
     project_dir = Path(cwd)
     claude_dir = project_dir / ".claude"
     settings_path = claude_dir / "settings.json"
@@ -190,11 +164,6 @@ def _run_bootstrap(plugin_root: str, cwd: str) -> tuple[bool, str]:
         except OSError as exc:
             return False, f"ERROR: could not write {settings_path}: {exc}"
         finally:
-            # os.replace() moves tmp_path onto
-            # settings_path on success (nothing left at tmp_path to unlink);
-            # unlink(missing_ok=True) is a no-op then. On any exception after
-            # write_text() succeeded (e.g. os.replace() failing), this clears
-            # the orphaned .tmp.<pid> file instead of leaking it forever.
             tmp_path.unlink(missing_ok=True)
         return True, f"wrote UE override to {settings_path} (native python)"
 
@@ -225,9 +194,6 @@ def _run_bootstrap(plugin_root: str, cwd: str) -> tuple[bool, str]:
     except OSError as exc:
         return False, f"ERROR: could not write {settings_path}: {exc}"
     finally:
-        # See fresh-write path above; clears an
-        # orphaned .tmp.<pid> file left by a write_text()-succeeds/
-        # os.replace()-fails split.
         tmp_path.unlink(missing_ok=True)
     return True, f"merged UE override into {settings_path} (native python)"
 
@@ -241,18 +207,13 @@ def run(cwd: str, plugin_root: str) -> DistrustResult:
         from "${BASH_SOURCE[0]}/../.."; the DoE stub passes it explicitly --
         it owns bin/claude-ue-bootstrap.py, not claude-klabauter).
     """
-    # 2026-07-24-codereview-sliceowns-zero-claude-klabauter
-    # sidecar (docstring above still said "claude-ue-bootstrap.sh"; the
-    # DoE-side source script was renamed extensionless-to-.py by the
-    # bash-kill campaign -- repointed to match, same as the user-facing
-    # message below).
     stderr_lines: list[str] = []
 
     uproject = _find_uproject(cwd)
     if uproject is None:
         return DistrustResult(banner="", stderr_lines=stderr_lines)
 
-    project_name = Path(uproject).stem  # basename ... .uproject
+    project_name = Path(uproject).stem
 
     settings_path = Path(cwd) / ".claude" / "settings.json"
     exists, value = _read_override_value(settings_path)
@@ -266,12 +227,6 @@ def run(cwd: str, plugin_root: str) -> DistrustResult:
         )
     elif (not exists) or value is not True:
         _ok, bootstrap_output = _run_bootstrap(plugin_root, cwd)
-        # The bash oracle ran `claude-ue-bootstrap.sh "$(pwd)" >&2`, whose own
-        # stdout+stderr landed on the parent's stderr ahead of the "override
-        # written" message below (C5 replaced that subprocess spawn with the
-        # native `_run_bootstrap` above, but preserves this same ordering and
-        # surfacing -- dropping it here would silently swallow the write/merge
-        # status line, e.g. "wrote UE override to ... (native python)").
         if bootstrap_output:
             for line in bootstrap_output.splitlines():
                 stderr_lines.append(line)
@@ -279,8 +234,6 @@ def run(cwd: str, plugin_root: str) -> DistrustResult:
             "UE override written — close and re-open Claude Code to load UE "
             "plugins (current session uses lean defaults)"
         )
-    # else: override already true -- no action, no message (mirrors the bash
-    # elif chain falling through with no branch firing).
 
     banner = (
         "UE PROJECT DETECTED (%s): UE training data is untrustworthy -- "

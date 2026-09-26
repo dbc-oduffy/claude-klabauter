@@ -24,16 +24,7 @@ from pathlib import Path
 
 import pytest
 
-# Declared, not excused: `test_detect_stack_cli_exits_2_on_non_directory`
-# spawns a real `python3` subprocess to exercise the probe CLI's real
-# exit-code contract at the process boundary, and the `verify-diff` tests
-# spawn real `git` (via `_init_repo`) because the property under test is
-# real git-diff comparison against actual tracked/committed files -- no
-# mock stands in for either. `_init_repo` is invoked per-test, not hoisted
-# to module scope, since each verify-diff scenario needs its own distinct
 # commit/diff state. The spawn ratchet's `_BASELINE` is shrink-only
-# pre-existing residue and is explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _BIN_DIR = Path(__file__).parent.parent
@@ -50,11 +41,6 @@ def _load_module():
 
 
 _mod = _load_module()
-
-
-# ---------------------------------------------------------------------------
-# detect-stack
-# ---------------------------------------------------------------------------
 
 
 def test_detect_stack_finds_languages_test_dirs_and_config(tmp_path: Path) -> None:
@@ -106,11 +92,6 @@ def test_detect_stack_cli_exits_2_on_non_directory(tmp_path: Path) -> None:
     assert proc.returncode == 2
 
 
-# ---------------------------------------------------------------------------
-# verify-diff
-# ---------------------------------------------------------------------------
-
-
 def _init_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -152,11 +133,8 @@ def test_verify_diff_no_missing_when_all_expected_changed(tmp_path: Path) -> Non
 
 
 def test_verify_diff_alert_branch_reports_missing_files(tmp_path: Path) -> None:
-    """Mirrors the SKILL.md ALERT branch: a fix-now file with no actual diff."""
     repo = _init_repo(tmp_path)
     (repo / "a.py").write_text("print(1)\nmodified\n")
-    # b.py claimed fix-now but left byte-identical (no diff) — the
-    # false-positive / no-op cohort the ALERT branch exists to surface.
 
     fix_now = tmp_path / "phase2-fix-now.json"
     fix_now.write_text(

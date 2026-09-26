@@ -89,10 +89,6 @@ class TestDeriveCutoff:
 
 
 class TestParityWithBinAgeSweep:
-    """Both derivations (this module and the standalone bin script) must
-    return the same verdict over one shared fixture tree — the bin script is
-    NOT edited (its own docstring declares "no coordinator_core import"), so
-    this test loads it by file path and cross-checks in-process."""
 
     @pytest.mark.parametrize(
         "build_tree",

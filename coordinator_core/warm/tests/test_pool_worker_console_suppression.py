@@ -55,8 +55,6 @@ from coordinator_core.warm import server
 
 
 def test_suppression_points_multiprocessing_at_pythonw(monkeypatch) -> None:
-    """The whole popup fix in one assertion: the interpreter multiprocessing
-    spawns is the console-less one."""
     if os.name != "nt":
         pytest.skip("Windows-only console suppression")
     from pathlib import Path
@@ -73,8 +71,6 @@ def test_suppression_points_multiprocessing_at_pythonw(monkeypatch) -> None:
 
 
 def test_suppression_is_a_no_op_off_windows(monkeypatch) -> None:
-    """No console to suppress and no `pythonw` to point at — touching
-    `set_executable` there would be a portability defect, not a fix."""
     recorded: list[str] = []
     monkeypatch.setattr(server.os, "name", "posix")
     monkeypatch.setattr(server.multiprocessing, "set_executable", recorded.append)
@@ -83,25 +79,12 @@ def test_suppression_is_a_no_op_off_windows(monkeypatch) -> None:
 
 
 def test_stderr_print_is_a_silent_no_op_when_stdio_is_none(monkeypatch) -> None:
-    """The load-bearing invariant: a suppressed worker's `print(file=sys.stderr)`
-    must not raise.
-
-    Uses monkeypatch so the streams are restored even if the assertion fails —
-    a leaked `sys.stdout = None` would take the rest of the suite with it.
-    """
     monkeypatch.setattr(sys, "stdout", None)
     monkeypatch.setattr(sys, "stderr", None)
     print("this must not raise", file=sys.stderr, flush=True)
 
 
 def test_stderr_write_DOES_raise_when_stdio_is_none(monkeypatch) -> None:
-    """The counter-invariant, pinned so nobody re-derives the safe half alone.
-
-    `print(file=sys.stderr)` tolerates a `None` stream (test above); reaching
-    for the stream OBJECT does not. This is the shape that broke
-    `records.query --type plan` for example-cockpit-repo-em, and pinning it here is
-    what makes `_bind_null_std_streams` a fix rather than a belt-and-braces.
-    """
     monkeypatch.setattr(sys, "stdout", None)
     monkeypatch.setattr(sys, "stderr", None)
     with pytest.raises(AttributeError):
@@ -109,29 +92,16 @@ def test_stderr_write_DOES_raise_when_stdio_is_none(monkeypatch) -> None:
 
 
 def test_worker_init_binds_writable_streams_when_stdio_is_none(monkeypatch) -> None:
-    """A pool worker never starts with a `None` stream.
-
-    Drives `_bind_null_std_streams` directly rather than `_worker_process_init`,
-    which additionally starts a parent watchdog thread and imports the whole op
-    registry — neither is this test's subject.
-    """
     monkeypatch.setattr(sys, "stdout", None)
     monkeypatch.setattr(sys, "stderr", None)
     server._bind_null_std_streams()
 
     assert sys.stdout is not None and sys.stderr is not None
-    # The exact failing call from the cockpit report, on the restored streams.
     sys.stderr.write("records.query: anomalous plan filename excluded: INDEX.md\n")
     sys.stderr.flush()
 
 
 def test_binding_leaves_an_already_bound_stream_alone(monkeypatch) -> None:
-    """Negative-spec: a worker WITH real stdio keeps it.
-
-    Redirecting a live operator-visible stream to devnull would trade an
-    AttributeError for silently swallowed diagnostics — a worse bug, and an
-    easy one to introduce by dropping the `is None` guard.
-    """
     import io
 
     real_out, real_err = io.StringIO(), io.StringIO()
@@ -144,10 +114,6 @@ def test_binding_leaves_an_already_bound_stream_alone(monkeypatch) -> None:
 
 
 def test_worker_init_calls_the_binder_before_anything_else(monkeypatch) -> None:
-    """Ordering is the whole point: `_preload_op_registry` imports 55 op modules,
-    any of which may write a diagnostic at import time. Binding after the
-    preload would leave exactly the window this fix exists to close.
-    """
     calls: list[str] = []
     monkeypatch.setattr(server, "_bind_null_std_streams", lambda: calls.append("bind"))
     monkeypatch.setattr(server, "_preload_op_registry", lambda: calls.append("preload"))

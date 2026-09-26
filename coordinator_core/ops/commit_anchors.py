@@ -100,12 +100,7 @@ from coordinator_core.ops.fleet._common import main_worktree_root
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Nature prefix taxonomy
-# Spec backlink: pln-claude-klabauter-commit-anchor-stamper-q-29b891 § D1
-# ---------------------------------------------------------------------------
 
-#: Closed enum of valid Nature values (slice-1, additive-only per cockpit co-design).
 _NATURE_ENUM = frozenset({
     "bugfix",
     "infra",
@@ -116,8 +111,6 @@ _NATURE_ENUM = frozenset({
     "session-op",
 })
 
-#: Maps commit subject prefix (lowercase) to a Nature enum value.
-#: Covers the standard coordinator subject-prefix taxonomy (D1 table).
 _PREFIX_TO_NATURE: Dict[str, str] = {
     "fix":          "bugfix",
     "execute":      "roadmap",
@@ -130,36 +123,18 @@ _PREFIX_TO_NATURE: Dict[str, str] = {
     "chore":        "chore",
 }
 
-#: Conventional-commit subject prefix pattern: "prefix:" or "prefix(scope):".
 _PREFIX_RE = re.compile(r"^([a-zA-Z][a-zA-Z0-9_-]*)(?:\([^)]*\))?:")
 
-#: Handoff statuses that mark a handoff as no longer live (not a continuity candidate).
 #: SSOT alias of HANDOFF_ANCHOR_EXCLUDED_STATUSES — that export carries defensive
-#: non-schema tokens (e.g. "archived") and is a standalone SSOT export by design
-#: (EM axis-check decision, DR-084 C3).
 from coordinator_core.lifecycle_constants import HANDOFF_ANCHOR_EXCLUDED_STATUSES
 
 _TERMINAL_STATUSES = HANDOFF_ANCHOR_EXCLUDED_STATUSES
 
 
-# ---------------------------------------------------------------------------
-# Nature derivation helpers
-# ---------------------------------------------------------------------------
-
-
 def _derive_nature_from_subject(subject: str) -> Optional[str]:
-    """Map a commit subject line to a Nature enum value.
-
-    Purpose: extracts the conventional-commit prefix from the subject and maps it to
-    the coordinator Nature taxonomy. Returns the mapped value for known prefixes,
-    "chore" for subjects with an unrecognised prefix (the subject has prefix shape but
-    the prefix is unmapped), and None for subjects with no recognisable prefix pattern
-    (empty, no colon) — callers treat None as unresolvable and omit the key.
-    """
     subject = subject.strip()
     m = _PREFIX_RE.match(subject)
     if not m:
-        # No "prefix:" pattern: Nature is not derivable from this subject.
         return None
     prefix = m.group(1).lower()
     return _PREFIX_TO_NATURE.get(prefix, "chore")
@@ -188,9 +163,7 @@ def _read_commit_subject(common_dir: Path) -> str:
     return ""
 
 
-# ---------------------------------------------------------------------------
 # Staged-index frontmatter reader (COMPUTE_ONLY-safe — read-only subprocess)
-# ---------------------------------------------------------------------------
 
 
 def _read_meta_from_staged(worktree_root: Path, plan_rel_path: str) -> dict:
@@ -222,23 +195,7 @@ def _read_meta_from_staged(worktree_root: Path, plan_rel_path: str) -> dict:
     return _parse_frontmatter(result.stdout)
 
 
-# ---------------------------------------------------------------------------
-# Staged-diff Plan resolver (staged-diff branch — DD#1 exempt)
-# ---------------------------------------------------------------------------
-
-
 def _normalize_scope_paths(scope_paths: Optional[Sequence[str]]) -> Optional[frozenset]:
-    """Canonicalize a caller-supplied commit pathspec to the forward-slash,
-    repo-relative shape `git diff --cached --name-only` emits, or ``None``
-    when the caller supplied no scope at all.
-
-    ``None`` (no scope) and an EMPTY scope are deliberately distinct: no
-    scope means "read the whole index" (the pre-scoping behaviour every
-    other caller still relies on), while an empty scope would mean "this
-    commit touches nothing" and is normalized to ``None`` rather than
-    silently suppressing every anchor — a caller that passes `[]` has not
-    told us anything about scope.
-    """
     if not scope_paths:
         return None
     normalized = {
@@ -252,26 +209,6 @@ def _normalize_scope_paths(scope_paths: Optional[Sequence[str]]) -> Optional[fro
 def _staged_files(
     worktree_root: Path, scope_paths: Optional[Sequence[str]] = None
 ) -> Optional[list]:
-    """The staged path set, narrowed to this commit's own pathspec.
-
-    Shared by the `Plan:` resolver and the `Resolves:` completion-entry
-    gate so the two cannot drift on what "the staged set" means.
-
-    Why the narrowing is load-bearing, not a refinement: on a SHARED
-    worktree (this box's norm — see CLAUDE.md § Load norm) the index holds
-    every concurrent session's staged work, so a bare `git diff --cached
-    --name-only` answers "what is staged in the repo", never "what is in
-    THIS commit". A ship commit scoped to four of its own files was stamped
-    `Plan:`/`Plan-Id:`/`Deliverable-Id:` off a PEER's staged plan because
-    that peer's plan happened to be the only `docs/plans/*.md` in the
-    shared index — the ambiguity guard below cannot fire on a set of one,
-    however foreign that one is. Measured 2026-08-18 on ship commit
-    582c7b510, which carried `dlv-fl-core-03` while committing
-    `dlv-chain-terminal-review-trail-discharge-d7b568`'s own artifacts.
-
-    Returns ``None`` (never `[]`) on any git failure, matching the
-    omit-rather-than-guess posture both callers already apply.
-    """
     try:
         result = subprocess.run(
             ["git", "diff", "--cached", "--name-only"],
@@ -320,23 +257,17 @@ def _resolve_plan_from_diff(
     if staged_files is None:
         return None
 
-    # Match docs/plans/<filename>.md — single path component only (no nested subdirs).
     plan_files = [f for f in staged_files if re.match(r"^docs/plans/[^/]+\.md$", f)]
 
     if len(plan_files) != 1:
-        # Zero → no plan in this commit. Multiple → ambiguous. Both: omit.
         return None
 
     plan_rel_path = plan_files[0]
-    # Read frontmatter from the STAGED index — guarantees Plan-Id/Deliverable match the
-    # version actually committed, not a working-tree edit made after staging.
-    # Use staged blob, not working-tree path.
     fm = _read_meta_from_staged(worktree_root, plan_rel_path)
 
     plan_id: Optional[str] = fm.get("plan_id")
     deliverable_id: Optional[str] = fm.get("deliverable_id")
 
-    # Only emit Plan-Id for valid pln-... ids; Deliverable for valid dlv-... ids.
     if not (isinstance(plan_id, str) and plan_id.startswith("pln-")):
         plan_id = None
     if not (isinstance(deliverable_id, str) and deliverable_id.startswith("dlv-")):
@@ -467,10 +398,6 @@ def _resolve_plan_from_governing_slug(
     }
 
 
-#: Matches a staged completion-entry path written by
-#: `coordinator_core.ops.coordinator_complete_entry._write_entry`
-#: (`archive/completed/<yyyy-mm>/<slug>.md`) — the workstream-complete /
-#: ship-handoff ceremony's own completion-event marker.
 _COMPLETION_ENTRY_RE = re.compile(r"^archive/completed/[^/]+/[^/]+\.md$")
 
 
@@ -554,42 +481,7 @@ def _has_staged_completion_entry(
     return False
 
 
-# ---------------------------------------------------------------------------
-# Anchor resolver (live-state branch — IS the DD#1 cross-check)
-# ---------------------------------------------------------------------------
-
-
 def _resolve_anchor(worktree_root: Path, session_id: str) -> Optional[str]:
-    """Find the nearest live handoff basename for this session.
-
-    Purpose: scans state/handoffs/*.md on-disk — the disk read IS the DD#1 live-state
-    cross-check (not an in-memory fabrication-check index). No separate re-read gate
-    required.
-
-    Returns 'handoff/<stem>' when exactly one live, non-terminal handoff names
-    session_id in its picked_up_by or claimed_by (consumed_by fallback, DR-084
-    transitional — restored 2026-07-23) field.
-    Returns None when:
-    - Zero matching handoffs (session not yet associated with a handoff).
-    - Multiple matching handoffs (ambiguous — precision over recall → omit).
-    - state/handoffs/ does not exist or is unreadable.
-
-    Anchor: is a human-legible breadcrumb only — NOT a durable join key
-    (claude-klabauter-commit-anchor-stamper.md § D1 co-design resolution: Anchor demoted from
-    durable join to display breadcrumb; durable graph uses Plan-Id/Deliverable/Session-Id).
-
-    Claim-holder matching is ledger-first via `claim_state.resolve_claim_state` (C1,
-    coordinator_core/claim_state.py) — NOT a raw read of the frontmatter mirror's
-    `claimed_by`/`consumed_by` fields. On a desynced baton (mirror reverted by a
-    branch switch while the branch-independent claim ledger still holds the claim —
-    the incident `claim_state.py`'s module docstring names) the raw-mirror read used
-    to come back empty and the Anchor: trailer was permanently lost — there is no
-    later pass that reconstructs it once the commit is made. `resolve_claim_state`
-    surfaces the ledger holder in that case; a dead ledger holder degrades to
-    `source == "mirror"`/`"none"`, never falsely reported as `"ledger"`.
-    `picked_up_by` has no ledger counterpart and is still read from the mirror
-    directly — only the claimed_by/consumed_by hop is migrated.
-    """
     if not session_id:
         return None
 
@@ -598,8 +490,6 @@ def _resolve_anchor(worktree_root: Path, session_id: str) -> Optional[str]:
         return None
 
     try:
-        # sorted() removed; return is a single-element match
-        # or discarded, so ordering is irrelevant and the sort was behaviorally inert.
         candidates = list(handoff_dir.glob("*.md"))
     except OSError:
         print(f"skip: _resolve_anchor: candidates = list(handoff_dir.glob(\"*.md\")) failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -613,13 +503,10 @@ def _resolve_anchor(worktree_root: Path, session_id: str) -> Optional[str]:
 
         status = fm.get("status") or ""
         if status in _TERMINAL_STATUSES:
-            continue  # Terminal handoff — not a live continuity anchor.
+            continue
 
         picked_up_by = fm.get("picked_up_by")
 
-        # Use equality (not substring) so session IDs do not
-        # false-match on prefix/suffix variants. List form (YAML sequence) uses exact
-        # membership — the `in` operator on a list is element equality, not substring.
         session_in_picked = (
             (isinstance(picked_up_by, str) and picked_up_by.strip() == session_id)
             or (isinstance(picked_up_by, list) and session_id in picked_up_by)
@@ -629,18 +516,12 @@ def _resolve_anchor(worktree_root: Path, session_id: str) -> Optional[str]:
         session_in_claim = claim_state.holder == session_id
 
         if session_in_picked or session_in_claim:
-            matches.append(path.stem)  # filename without .md extension
+            matches.append(path.stem)
 
     if len(matches) == 1:
         return f"handoff/{matches[0]}"
 
-    # Zero or multiple → omit (precision over recall).
     return None
-
-
-# ---------------------------------------------------------------------------
-# Op handler
-# ---------------------------------------------------------------------------
 
 
 @register_op("commit.anchors")
@@ -695,10 +576,6 @@ def _handler(
     Keying scope: common_dir — repo_root is the .git directory (git_common_dir result).
     """
     session_id: str = params.get("session_id") or ""
-    # This commit's own pathspec, when the caller knows it. Absent, the
-    # staged-diff readers below fall back to the whole index — correct for a
-    # sole-occupant tree, WRONG on a shared one, where the index carries
-    # every concurrent session's staged work. See `_staged_files`.
     raw_paths = params.get("paths")
     scope_paths: Optional[Sequence[str]] = (
         [str(p) for p in raw_paths] if isinstance(raw_paths, (list, tuple)) else None
@@ -708,21 +585,12 @@ def _handler(
 
     trailers: List[str] = []
 
-    # ------------------------------------------------------------------
-    # 1. Nature: — param override takes priority; fall back to subject derivation.
-    # Cardinality 1 when derivable; omit only when truly unresolvable.
-    # ------------------------------------------------------------------
     nature_value: Optional[str] = None
 
     if nature_override is not None and isinstance(nature_override, str):
-        # EM-supplied override: validate against the closed enum.
         if nature_override in _NATURE_ENUM:
             nature_value = nature_override
         else:
-            # Invalid override token — treat as "chore" (caller supplied a nature,
-            # just an unknown one; still better than falling back to subject derivation).
-            # Log the coercion so it's observable in daemon
-            # logs; silent mislabeling would produce a wrong Nature: in permanent git history.
             logger.warning(
                 "commit.anchors: unrecognized nature_override %r; falling back to 'chore'",
                 nature_override,
@@ -735,15 +603,10 @@ def _handler(
         subject = _read_commit_subject(repo_root)
         if subject:
             nature_value = _derive_nature_from_subject(subject)
-        # If subject is empty or unresolvable → nature_value stays None → key omitted.
 
     if nature_value is not None:
         trailers.append(f"Nature: {nature_value}")
 
-    # ------------------------------------------------------------------
-    # 2. Plan: / Plan-Id: / Deliverable-Id: — staged-diff branch (DD#1 exempt).
-    # Reads docs/plans/*.md from the staged index; self-verifying.
-    # ------------------------------------------------------------------
     if repo_root is not None:
         worktree_root = main_worktree_root(repo_root)
 
@@ -755,12 +618,6 @@ def _handler(
         )
         if governing_info is not None:
             if governing_info.get("plan_id") is None and governing_info.get("deliverable_id") is None:
-                # The governing plan file resolved but carries no valid pln-/dlv-
-                # id (a plan stub mid-enrichment, or a torn read). The staged-diff
-                # result must NOT be allowed to supply Plan/Plan-Id/Deliverable-Id
-                # here -- that is precisely the foreign-peer-plan class this
-                # fix exists to stop. See `_resolve_plan_from_governing_slug`'s
-                # own docstring for the incident this guards against.
                 logger.warning(
                     "commit.anchors: governing_plan_slug %r resolved to %s but "
                     "carries no valid plan_id/deliverable_id -- staged-diff "
@@ -777,12 +634,7 @@ def _handler(
                     )
                 )
             ):
-                # Never silently prefer the staged-diff guess -- see
-                # `_resolve_plan_from_governing_slug`'s own docstring for the
-                # incident this disagreement guards against. Widened beyond a
                 # deliverable_id mismatch: a staged-diff match on a DIFFERENT
-                # plan path whose deliverable_id is null or coincidentally
-                # equal still disagrees and must still be logged.
                 logger.warning(
                     "commit.anchors: staged-diff plan scan resolved %s "
                     "(deliverable_id=%s), which DISAGREES with the supplied "
@@ -795,13 +647,6 @@ def _handler(
         if plan_info is not None:
             trailers.append(f"Plan: {plan_info['path']}")
 
-            # Confident-wrong-edge guard (staff-eng review finding 1): the
-            # staged set may carry more than one deliverable across the
-            # OTHER staged artifacts (handoffs, etc.), not just staged
-            # docs/plans/*.md files -- see `_staged_deliverable_ids_diverge`.
-            # Plan-Id/Deliverable-Id/Resolves all ride the SAME resolved
-            # deliverable_id and are omitted together on divergence; Plan:
-            # (the path, not a join key) is unaffected.
             staged_ids_diverge = _staged_deliverable_ids_diverge(worktree_root, scope_paths)
             if staged_ids_diverge:
                 logger.warning(
@@ -816,24 +661,11 @@ def _handler(
             if plan_info["deliverable_id"] and not staged_ids_diverge:
                 trailers.append(f"Deliverable-Id: {plan_info['deliverable_id']}")
 
-                # --------------------------------------------------------
-                # 2b. Resolves: — completion-grain join key (missing producer,
-                # DoE-claude:docs/plans/2026-08-01-baton-spine-information-integrity.md
-                # § A1). Reuses the SAME deliverable_id already resolved for
-                # Deliverable-Id: above (same staged plan frontmatter) — this
-                # is NOT a second independent resolution path. Gated on an
-                # additional completion-event signal so an ordinary mid-flight
-                # commit (Deliverable-Id: only) never emits Resolves:.
-                # --------------------------------------------------------
                 if _has_staged_completion_entry(
                     worktree_root, plan_info["deliverable_id"], scope_paths
                 ):
                     trailers.append(f"Resolves: {plan_info['deliverable_id']}")
 
-        # ------------------------------------------------------------------
-        # 3. Anchor: — nearest live handoff (on-disk scan, DD#1-compliant breadcrumb).
-        # Omit on ambiguity (zero or multiple matches).
-        # ------------------------------------------------------------------
         if session_id:
             anchor = _resolve_anchor(worktree_root, session_id)
             if anchor is not None:

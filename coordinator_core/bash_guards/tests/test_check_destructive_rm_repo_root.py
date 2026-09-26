@@ -48,8 +48,6 @@ from coordinator_core.bash_guards.dispatch_checks import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -90,12 +88,6 @@ def _reason(cmd: str) -> str:
 
 @pytest.fixture()
 def repo_outside_any_repo(tmp_path):
-    """A repo whose PARENT is not itself a repository.
-
-    This is the shape the guard used to skip, and the shape of every real
-    checkout — do not "simplify" this fixture by nesting the repo inside
-    another one, which is precisely the case that always worked.
-    """
     parent = tmp_path / "home"
     parent.mkdir()
     return _make_repo(str(parent / "checkout"))
@@ -111,7 +103,6 @@ class TestRepoRootIsDenied:
         assert ".git store" in reason
 
     def test_subdirectory_of_same_repo_still_denied(self, repo_outside_any_repo):
-        """The pre-existing dirty-work path must not regress."""
         sub = os.path.join(repo_outside_any_repo, "sub")
         os.makedirs(sub)
         with open(os.path.join(sub, "untracked.txt"), "w", encoding="utf-8") as fh:
@@ -119,7 +110,6 @@ class TestRepoRootIsDenied:
         assert _denied(f"rm -rf {sub}")
 
     def test_plain_non_repo_directory_is_not_denied(self, tmp_path):
-        """The widening must not turn every rm -rf into a deny."""
         plain = tmp_path / "scratch"
         plain.mkdir()
         (plain / "junk.txt").write_text("junk\n")
@@ -128,12 +118,6 @@ class TestRepoRootIsDenied:
 
 class TestCleanRepoRootStillDenied:
     def test_pristine_worktree_does_not_soften_the_deny(self, repo_outside_any_repo):
-        """No porcelain rows exist here — the old branch would have allowed.
-
-        A clean worktree says nothing about the store: unpushed commits,
-        stashes, reflog, and every gitignored file are invisible to
-        `git status --porcelain` and are destroyed all the same.
-        """
         out = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=repo_outside_any_repo,
@@ -151,7 +135,6 @@ def _fs_is_case_insensitive(tmp_dir: str) -> bool:
 
 
 class TestCaseVariantAliasing:
-    """The 2026-07-31 incident shape, reproduced end to end."""
 
     def test_case_variant_spelling_of_a_repo_root_is_denied(self, tmp_path):
         if not _fs_is_case_insensitive(str(tmp_path)):
@@ -159,7 +142,7 @@ class TestCaseVariantAliasing:
         parent = tmp_path / "home"
         parent.mkdir()
         _make_repo(str(parent / ".claude"))
-        variant = parent / ".Claude"  # same inode, different spelling
+        variant = parent / ".Claude"
         assert _denied(f"rm -rf {variant}")
 
     def test_deny_warns_about_case_insensitive_filesystems(self, tmp_path):
@@ -193,12 +176,6 @@ def _redirect_home(monkeypatch, home: str) -> None:
 
 
 class TestTildeAndHomeVarTargets:
-    """The literal 2026-07-31 incident command, pinned through the public
-    entrypoint. Pre-fix, `os.path.exists("~/.claude")` is False (tilde is
-    never expanded before the existence gate), so the token was skipped
-    before ANY guard leg ran -- the widened root-resolution/identity fix
-    landed in the same diff did not by itself close this hole.
-    """
 
     def test_tilde_spelled_root_is_denied(self, monkeypatch, tmp_path):
         home = tmp_path / "home"
@@ -222,29 +199,18 @@ class TestTildeAndHomeVarTargets:
         assert _denied("rm -rf ${HOME}/checkout")
 
     def test_unresolvable_var_target_still_skipped(self, monkeypatch, tmp_path):
-        """Finding 8 (glob/unknown-var carve-out) must not regress: a
-        target the hook genuinely cannot resolve stays skipped, not denied
-        and not (silently) allowed by crashing."""
         home = tmp_path / "home"
         home.mkdir()
         _make_repo(str(home / "checkout"))
         _redirect_home(monkeypatch, str(home))
-        # $FOO is not $HOME -- must remain unresolved and therefore skipped,
-        # i.e. not denied (the check has nothing to probe).
         assert not _denied("rm -rf $FOO/checkout")
 
     def test_glob_target_still_skipped(self, tmp_path):
-        """Finding 8: unchanged pre-existing carve-out, pinned directly."""
         repo = _make_repo(str(tmp_path / "checkout"))
         assert not _denied(f"rm -rf {os.path.dirname(repo)}/*")
 
 
 class TestBareRepoRoot:
-    """Finding 1: `git rev-parse --show-toplevel` fails inside a bare repo
-    (no working tree), so neither the root-deny branch nor the dirty-work
-    fallback (which has no dirty-state check for a bare repo at all) used
-    to fire -- a bare repo target sailed through completely undenied.
-    """
 
     def _make_bare_repo(self, path: str) -> str:
         os.makedirs(path, exist_ok=True)
@@ -262,11 +228,6 @@ class TestBareRepoRoot:
 
 
 class TestLinkedWorktreeRoot:
-    """Finding 2: a LINKED `git worktree add` checkout's actual `.git` store
-    lives in the MAIN repo (`.git/worktrees/<name>`) -- deleting the
-    worktree directory loses only its own local uncommitted work, not the
-    repo's full history. The deny message must reflect that, not the
-    full-history-loss wording used for an ordinary repo root."""
 
     def _make_worktree(self, repo: str, worktree_path: str, branch: str) -> str:
         _git("worktree", "add", worktree_path, "-b", branch, cwd=repo)
@@ -295,16 +256,6 @@ class TestRmOverride:
 
 
 class TestGitLockTarget:
-    """A `*.lock` file under the git store is ALLOWED, reversing the deny
-    added by 5b1f3a19f9b2. It holds no committed data -- git writes a new
-    index to `index.lock` and renames it onto `index`; unlink the lock
-    mid-flight and the rename fails and the git command errors out loudly,
-    leaving the on-disk index untouched and still consistent. See the lock
-    leg's own rationale block in `dispatch_checks.py` and `cross-repo/inbox/
-    2026-08-12-example-retrieval-repo-em-git-index-lock-reaper.md` for the incident
-    this class pins. Non-lock store targets remain denied -- that is the
-    regression that matters most.
-    """
 
     def test_lock_file_allowed(self, repo_outside_any_repo):
         lock = os.path.join(repo_outside_any_repo, ".git", "index.lock")
@@ -321,9 +272,6 @@ class TestGitLockTarget:
         assert not _denied(f"rm -f {lock}")
 
     def test_non_lock_store_target_keeps_original_irreversibility_message(self, repo_outside_any_repo):
-        """The regression that matters most: a real store target (not a
-        lock) must still get the full irreversibility wording, unweakened
-        by the lock leg sitting ahead of it."""
         head = os.path.join(repo_outside_any_repo, ".git", "HEAD")
         reason = _reason(f"rm -f {head}")
         assert "irreversibly" in reason
@@ -339,10 +287,6 @@ class TestGitLockTarget:
         assert _denied(f"rm -rf {git_dir}")
 
     def test_lock_suffixed_directory_still_denied(self, repo_outside_any_repo):
-        """The lock
-        leg's allow is scoped to a lock FILE; a `.lock`-suffixed directory
-        under the git store carries no rename-onto-index safety argument and
-        must fall through to the general git-store deny."""
         lock_dir = os.path.join(repo_outside_any_repo, ".git", "objects", "incoming-1234.lock")
         os.makedirs(lock_dir, exist_ok=True)
         assert _denied(f"rm -rf {lock_dir}")
@@ -356,16 +300,6 @@ class TestGitLockTarget:
 
 
 class TestWriteBumpMarkerTarget:
-    """Bug row: state/bug-backlog/2026-09-02-git-store-rm-guard-blocks-
-    removing-the-w-d2194cff6d30.yaml -- the write-confinement bump's own
-    clear marker (`allow-xrepo-write-<session-id>`, `_write_bump_marker.py`)
-    is a zero-byte sentinel directly under the gitdir, not objects/refs/
-    logs. Denying its removal left a session that cleared the bump for one
-    deliberate operation with no way to re-arm it for the rest of its own
-    life. Same shape as the `.lock` allow above: scoped to a FILE whose
-    basename matches, so the general git-store deny still applies to
-    everything else.
-    """
 
     def test_marker_file_allowed(self, repo_outside_any_repo):
         marker = os.path.join(
@@ -376,8 +310,6 @@ class TestWriteBumpMarkerTarget:
         assert not _denied(f"rm -f {marker}")
 
     def test_similarly_named_directory_still_denied(self, repo_outside_any_repo):
-        """The allow is scoped to a FILE -- a directory merely sharing the
-        prefix carries no sentinel-removal argument and must still deny."""
         marker_dir = os.path.join(
             repo_outside_any_repo, ".git", "allow-xrepo-write-2fc859e3-abcd"
         )
@@ -387,9 +319,6 @@ class TestWriteBumpMarkerTarget:
     def test_non_marker_store_target_keeps_original_irreversibility_message(
         self, repo_outside_any_repo
     ):
-        """Regression that matters most: an unrelated store target must
-        still get the full irreversibility wording, unweakened by this leg
-        sitting ahead of it."""
         head = os.path.join(repo_outside_any_repo, ".git", "HEAD")
         reason = _reason(f"rm -f {head}")
         assert "irreversibly" in reason
@@ -414,7 +343,6 @@ class TestIsSameDir:
         assert _is_same_dir(str(link), str(real))
 
     def test_missing_path_returns_false_rather_than_raising(self, tmp_path):
-        """Callers ARM a deny from this — an unprovable identity must not assert one."""
         assert not _is_same_dir(str(tmp_path / "absent"), str(tmp_path))
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX device-node path")

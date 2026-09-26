@@ -17,8 +17,6 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(repo, *args):
-    """Test-local fixture helper -- production code inlines `run_git` directly
-    (no module-private alias to import here)."""
     return run_git(list(args), cwd=str(repo))
 
 
@@ -78,9 +76,6 @@ def test_does_not_clobber_a_differing_value(tmp_path):
 def test_every_setting_produces_a_report_line_always(tmp_path):
     repo = _init_repo(tmp_path)
 
-    # core.untrackedCache plus the three maintenance keys -- a caller that
-    # prints nothing on a no-op cannot tell "already correct" from "never ran",
-    # so every key reports on every call.
     expected = 1 + len(gpc._MAINTENANCE_KEYS)
 
     fresh_report = gpc.apply(repo)
@@ -100,14 +95,10 @@ def test_three_maintenance_keys_land_in_the_repo(tmp_path):
 
     assert _config_get(repo, "maintenance.strategy") == "incremental"
     assert _config_get(repo, "maintenance.auto") == "false"
-    # NOT in the originating ask -- required because git's schedules cascade,
-    # so prefetch runs at daily and weekly too and puts both over the 500ms bar.
     assert _config_get(repo, "maintenance.prefetch.enabled") == "false"
 
 
 def test_maintenance_register_is_never_invoked(tmp_path, monkeypatch):
-    """`git maintenance register` writes this repo's path into the operator's
-    GLOBAL config. The design never runs the scheduler that reads it."""
     repo = _init_repo(tmp_path)
     invoked = []
     real_run_git = gpc.run_git
@@ -119,16 +110,10 @@ def test_maintenance_register_is_never_invoked(tmp_path, monkeypatch):
     monkeypatch.setattr(gpc, "run_git", recording_run_git)
     gpc.apply(repo)
 
-    # Dropped the substring
-    # assertion (fragile: would false-fail on any unrelated arg containing
-    # "register"). `args[:1] == ("maintenance",)` alone pins the real
-    # invariant: no `git maintenance ...` invocation of any kind.
     assert not any(args[:1] == ("maintenance",) for args in invoked), invoked
 
 
 def test_a_differing_maintenance_value_is_reported_not_overwritten(tmp_path):
-    """The module's standing negative spec: a peer machine may differ
-    deliberately, and this writer never wins that argument."""
     repo = _init_repo(tmp_path)
     _git(repo, "config", "maintenance.strategy", "none")
 
@@ -156,12 +141,6 @@ def test_index_is_actually_extended_not_just_config_key(tmp_path):
 
     assert _config_get(repo, "core.untrackedCache") == "true"
 
-    # `update-index --test-untracked-cache`
-    # is git's filesystem-support probe; it returns 0 regardless of whether the
-    # index was ever extended, so it would still pass with the `update-index
-    # --untracked-cache` call in apply() deleted entirely. The genuine proof
-    # that the cache is LIVE in the index (not merely configured) is the
-    # `UNTR` extension header appearing in `.git/index`'s raw bytes.
     with open(repo / ".git" / "index", "rb") as handle:
         index_bytes = handle.read()
     assert b"UNTR" in index_bytes, "index has no untracked-cache (UNTR) extension"

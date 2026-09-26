@@ -1,13 +1,3 @@
-"""Tests for `coordinator_core.git.eol_declared` -- the write-scoped EOL drift
-detector that replaces the deleted `ops/eol/` family (kill-ledger K-064).
-
-Every test here builds a REAL git repo with a real `.gitattributes` and real
-drifted bytes. None of them mock `git ls-files --eol`, deliberately: the whole
-premise under test is what git actually reports for a file whose declaration
-and disk bytes disagree, and a mock of that call would be a mock of the only
-fact in question. The repos are tiny (two files) and each test pays one or two
-git spawns.
-"""
 from __future__ import annotations
 
 import subprocess
@@ -23,9 +13,6 @@ from coordinator_core.git.eol_declared import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-#: Same pairing `test_ls_files_bytes.py` carries for the same reason: these
-#: build real repos and spawn real git, so they are admitted by the spawn
-#: ratchet and deselected from the per-commit tier.
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
@@ -50,7 +37,6 @@ def _git_out(repo, *args):
 
 @pytest.fixture
 def repo(tmp_path):
-    """A repo pinning `*.cmd` to CRLF, with one correct launcher committed."""
     root = tmp_path / "r"
     root.mkdir()
     _git(root, "init", "-q", ".")
@@ -65,25 +51,11 @@ def repo(tmp_path):
 
 
 def _drift_to_lf(repo, name="run.cmd"):
-    """Rewrite a CRLF-declared file to LF-only -- the invisible defect."""
     target = repo / name
     target.write_bytes(target.read_bytes().replace(b"\r\n", b"\n"))
 
 
-# --------------------------------------------------------------------------
-# The filter-first budget property: no executable in the commit, no work.
-# --------------------------------------------------------------------------
-
-
 def test_executable_paths_selects_only_the_declared_classes():
-    """Also covers the data-file exclusion case: K-019's labour census found
-    ALL 43 historical violations on data files under scratch dirs
-    (`state/review-slices/`, `state/subagent-share/`) and zero on
-    executables. Selecting them would re-adopt exactly the noise the census
-    measured; the baton's anti-scope names it by hand.
-    <!-- Review: overengineering-reviewer (Kira) -- folded in
-    test_data_files_are_never_selected, subsumed by this assertion. -->
-    """
     picked = executable_paths(
         [
             "a.cmd",
@@ -107,8 +79,6 @@ def test_executable_paths_is_case_insensitive_and_deduplicates():
 
 
 def test_no_executable_in_the_commit_spawns_nothing(repo, monkeypatch):
-    """The budget case. Most commits carry no launcher, and those must not pay
-    a process for this check."""
     import coordinator_core.git.eol_declared as mod
 
     def explode(*_a, **_k):  # pragma: no cover - must never run
@@ -119,8 +89,6 @@ def test_no_executable_in_the_commit_spawns_nothing(repo, monkeypatch):
 
 
 def test_one_spawn_for_many_executables(repo, monkeypatch):
-    """Batched, never one-per-path -- the amplification class
-    `test_no_unbatched_per_item_git_spawn` exists to catch."""
     import coordinator_core.git.eol_declared as mod
 
     calls = []
@@ -136,23 +104,13 @@ def test_one_spawn_for_many_executables(repo, monkeypatch):
     assert calls[0].count("--") == 1
 
 
-# --------------------------------------------------------------------------
-# Detection.
-# --------------------------------------------------------------------------
-
-
 def test_the_drift_git_cannot_show_you_is_detected(repo):
-    """The load-bearing case: a CRLF-declared launcher sitting LF on disk."""
     _drift_to_lf(repo)
     drifts = find_declared_eol_drift(repo, ["run.cmd"])
     assert drifts == [Drift(path="run.cmd", declared="crlf", on_disk="lf")]
 
 
 def test_git_diff_stays_empty_for_the_drift_this_module_reports(repo):
-    """The premise, pinned rather than asserted in prose: git's own content
-    view shows NOTHING for a file this detector flags. If this test ever goes
-    red because `git diff` grew an opinion, this module's justification is what
-    changed, and that is worth a failure."""
     _drift_to_lf(repo)
     assert _git_out(repo, "diff", "--stat").strip() == ""
     assert find_declared_eol_drift(repo, ["run.cmd"])
@@ -163,7 +121,6 @@ def test_a_correct_launcher_is_not_a_finding(repo):
 
 
 def test_an_undeclared_path_is_not_a_finding(tmp_path):
-    """No `eol=` means nothing for the bytes to contradict."""
     root = tmp_path / "u"
     root.mkdir()
     _git(root, "init", "-q", ".")
@@ -176,8 +133,6 @@ def test_an_undeclared_path_is_not_a_finding(tmp_path):
 
 
 def test_lf_declaration_is_honoured_in_its_own_direction(repo):
-    """`eol=lf` is a declaration too -- a CRLF `.sh` is the same defect
-    mirrored, and a detector that only knows CRLF is half a detector."""
     (repo / "tool.sh").write_bytes(b"#!/bin/sh\necho hi\n")
     _git(repo, "add", "tool.sh")
     _git(repo, "commit", "-qm", "add sh")
@@ -188,17 +143,10 @@ def test_lf_declaration_is_honoured_in_its_own_direction(repo):
 
 
 def test_untracked_path_folds_to_no_finding(repo):
-    """A detector on a commit path must never raise on a path git does not
-    know; the commit is the caller's job, not this module's to fail."""
     assert find_declared_eol_drift(repo, ["never-added.cmd"]) == []
 
 
 def test_reads_stdout_bytes_not_stdout(repo, monkeypatch):
-    """Regression pin, 2026-08-30. The first cut read `result.stdout` under
-    `binary=True`, where that view is empty by construction -- so the detector
-    reported CLEAN for every commit and nothing failed. A silent-pass detector
-    is worse than none, and this is the one line that decides it.
-    """
     import coordinator_core.git.eol_declared as mod
 
     real = mod.run_git
@@ -224,11 +172,6 @@ def test_a_failed_git_call_folds_to_no_finding(repo, monkeypatch):
     assert find_declared_eol_drift(repo, ["run.cmd"]) == []
 
 
-# --------------------------------------------------------------------------
-# Repair.
-# --------------------------------------------------------------------------
-
-
 def test_repair_restores_the_declared_bytes(repo):
     original = (repo / "run.cmd").read_bytes()
     _drift_to_lf(repo)
@@ -239,12 +182,6 @@ def test_repair_restores_the_declared_bytes(repo):
 
 
 def test_repair_does_not_change_what_a_commit_would_carry(repo):
-    """The property that makes repairing safe on a commit path: check-in
-    normalization maps drifted and repaired bytes to the SAME blob, so a
-    commit taken across the repair carries identical content. K-062 observed
-    this by hand ("the corrected working copy hashes identically to the
-    index"); it is the whole reason this is a repair and not a refusal.
-    """
     before = _git_out(repo, "hash-object", "run.cmd")
     _drift_to_lf(repo)
     drifted = _git_out(repo, "hash-object", "run.cmd")
@@ -254,9 +191,6 @@ def test_repair_does_not_change_what_a_commit_would_carry(repo):
 
 
 def test_repair_does_not_double_the_carriage_return_on_mixed_input(repo):
-    """The classic in-place-rewrite bug: expanding to CRLF without collapsing
-    first turns an already-correct line into `\\r\\r\\n`. Mixed endings are the
-    input that exposes it."""
     (repo / "run.cmd").write_bytes(b"@echo off\r\necho a\necho b\r\n")
     drifts = find_declared_eol_drift(repo, ["run.cmd"])
     assert drifts, "mixed endings must register as drift"
@@ -278,22 +212,10 @@ def test_repair_of_an_unwritable_file_is_skipped_not_raised(repo, monkeypatch):
 
 
 def test_suffix_tuple_is_the_executable_classes_only():
-    """A widening of this tuple is a scope decision, not a tidy-up -- the
-    census that scoped it is cited in the module. Pinned so it cannot drift
-    silently."""
     assert EXECUTABLE_SUFFIXES == (".cmd", ".ps1", ".sh", ".bat")
 
 
-# --------------------------------------------------------------------------
-# Review findings 2, 3, 4, 6, 2026-08-30.
-# --------------------------------------------------------------------------
-
-
 def test_binary_autodetected_file_is_not_treated_as_drift(tmp_path):
-    """A `w/-text` file (git's own binary-content heuristic under
-    `text=auto`) is not repairable drift: check-in normalization does not
-    touch such a file, so this module rewriting its bytes would corrupt
-    content git itself leaves alone (review finding 2)."""
     root = tmp_path / "b"
     root.mkdir()
     _git(root, "init", "-q", ".")
@@ -311,10 +233,6 @@ def test_binary_autodetected_file_is_not_treated_as_drift(tmp_path):
 
 
 def test_a_tracked_symlink_is_never_repaired(repo):
-    """A tracked symlink matching an `eol=` pattern must never be read/written
-    through -- `Path.read_bytes`/`write_bytes` follow it transparently, which
-    is an arbitrary-file-write risk if such a path were ever classified as
-    drifted (review finding 3)."""
     link = repo / "launch.cmd"
     target = repo / "outside.txt"
     target.write_bytes(b"do not touch")
@@ -332,9 +250,6 @@ def test_a_tracked_symlink_is_never_repaired(repo):
 
 
 def test_record_regex_matches_a_blank_i_or_w_field():
-    """`git ls-files --eol` can legitimately report a blank `i/`/`w/` token;
-    the record regex must still match rather than silently dropping the
-    line to 'no finding' (review finding 4)."""
     from coordinator_core.git.eol_declared import _RECORD
 
     record = "i/ w/lf attr/text eol=lf\tsome/path.sh"

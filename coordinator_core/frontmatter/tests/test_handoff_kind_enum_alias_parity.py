@@ -74,8 +74,6 @@ def _schema_validate_accepts(raw_kind: str) -> bool:
 
 
 def _lint_obj_path_accepts(raw_kind: str) -> bool:
-    """The lint READ paths' verdict: validate_frontmatter_obj() plus the shared
-    alias adapter both `--file` and the whole-tree walk now apply."""
     frontmatter = {'kind': raw_kind}
     result = _tolerate_handoff_kind_aliases_in_result(
         validate_frontmatter_obj(frontmatter, _HANDOFF_KIND_SCHEMA),
@@ -122,13 +120,6 @@ class TestHandoffKindEnumAliasParity:
 
 
 class TestLintReadPathParity:
-    """`lint-frontmatter --file` (and the whole-tree walk) reach the alias rule
-    through `validate_frontmatter_obj`, not `validate_frontmatter` — a second
-    transcription of the vocabulary is exactly how `spinoff-roadmap` came to be
-    accepted by every reader EXCEPT `--file`, rolling back baton_assemble. This
-    class is the regression fence: the lint read path's verdict must equal the
-    main read path's verdict for every value, tolerated and garbage alike.
-    """
 
     @pytest.mark.parametrize('raw_kind', _ALL_KIND_VALUES)
     def test_lint_read_path_matches_main_read_path(self, raw_kind):
@@ -154,7 +145,6 @@ class TestLintReadPathParity:
             assert not _lint_obj_path_accepts(raw_kind)
 
     def test_lint_adapter_leaves_non_kind_errors_untouched(self):
-        """Tolerating the alias must not swallow the rest of a record's errors."""
         frontmatter = {'kind': 'spinoff-roadmap', 'title': 123}
         schema = {
             'x-schema-name': 'handoff',
@@ -200,8 +190,6 @@ def _write_handoff(repo_root, raw_kind: str):
 
 
 class TestLintFileEndToEnd:
-    """End-to-end over the real CLI entrypoint and the real vendored schema —
-    the shape example-cockpit-repo's baton_assemble actually hits."""
 
     def test_file_mode_accepts_legacy_spinoff_roadmap(self, tmp_path, capsys):
         path = _write_handoff(tmp_path, 'spinoff-roadmap')
@@ -224,9 +212,6 @@ class TestLintFileEndToEnd:
 
 
 class TestSpinoffRoadmapRegression:
-    """Direct regression for the reported break: a `spinoff-roadmap` legacy
-    handoff must validate clean against the REAL vendored handoff schema
-    (not just the synthetic schema dict the parity test above uses)."""
 
     def test_spinoff_roadmap_validates_clean_against_real_schema(self):
         schema_path = _SCHEMAS_DIR / 'handoff.schema.json'

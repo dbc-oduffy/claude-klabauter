@@ -56,9 +56,6 @@ def wrapper():
 
 
 def _write_cmd_shim(bin_dir: Path, name: str, js_rel: str) -> Path:
-    """Write an npm `cmd-shim`-format `.cmd` at `bin_dir/<name>.cmd`, whose
-    invocation line targets `js_rel` (relative to `bin_dir`), matching the
-    real template cmd-shim emits (npm's own `lib/cmd-shim.js`)."""
     shim = bin_dir / f"{name}.cmd"
     shim.write_text(
         textwrap.dedent(
@@ -85,7 +82,6 @@ def _write_cmd_shim(bin_dir: Path, name: str, js_rel: str) -> Path:
 def test_win32_npm_shim_resolves_target_and_preserves_args(tmp_path, wrapper, monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(wrapper, "is_executable", lambda p: os.path.isfile(p))
-    # abs-path-ok: fake sentinel path asserting which() output passes through untouched, not a real host path
     monkeypatch.setattr(wrapper.shutil, "which", lambda name: r"C:\fake\node.exe" if name == "node" else None)
 
     bin_dir = tmp_path / "node_modules" / ".bin"
@@ -95,12 +91,11 @@ def test_win32_npm_shim_resolves_target_and_preserves_args(tmp_path, wrapper, mo
     js_target.write_text("console.log(process.argv.slice(2).join(' '))\n", encoding="utf-8")
     _write_cmd_shim(bin_dir, "tsc", r"..\typescript\bin\tsc")
 
-    # Extensionless argv[0] -- the exact shape the memo's first failing row used.
     argv0 = str(bin_dir / "tsc")
     result = wrapper._win32_resolve_command([argv0, "--version"])
 
     assert result is not None
-    assert result[0] == r"C:\fake\node.exe"  # abs-path-ok: same fake sentinel, asserted round-trip
+    assert result[0] == r"C:\fake\node.exe"
     assert result[1] == os.path.normpath(str(js_target))
     assert result[2:] == ["--version"]
 

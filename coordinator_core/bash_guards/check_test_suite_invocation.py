@@ -423,51 +423,14 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
 )
 
 CLASS = "hard-deny"
-#: Widened (DR-088 ladder layers 3/5/6 PowerShell-bypass fix) from the
-#: former ``["Bash"]`` literal to the package's shared command-tool-name
-#: universe: this guard's three legs (identity, grant, mutex) were keyed on
-#: the literal string ``"Bash"`` at three independent sites, so a suite
-#: command issued through the harness's ``PowerShell`` tool sailed through
-#: unclassified on a PowerShell-primary fleet. A direct reference to
 #: ``COMMAND_TOOL_NAMES`` (C2 declaration-form conversion) -- never a copy
-#: or re-wrap -- rather than a second hardcoded ``["Bash", "PowerShell"]``
-#: (or ``list(...)``/``tuple(...)``) copy that could drift from it, or that
-#: would break identity (``is``) with the shared constant.
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 45
 
-#: Escape-hatch env var. Read INLINE inside ``check()`` (never hoisted to
-#: module scope), matching ``dispatch_checks._override()``'s F2 discipline.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_TEST_SUITE_INVOCATION"
 
-#: Cheap prefilter -- if none of these tokens appear anywhere in the command
-#: AND the dynamic per-repo leg (``_dynamic_prefilter_hit``, below) also
-#: misses, no runner this classifier knows about can be present, so the whole
-#: guard (including the config-file reads and the resolver load) is skipped.
-#:
 #: Formerly a KNOWN LIMITATION here (removed 2026-08-10): a repo whose
-#: configured test command invokes NONE of these static runner names (a
-#: bespoke ``bin/run-the-suite``) matched nothing, so every leg of this guard
-#: -- identity, grant, mutex -- was skipped for that whole repo, for EM and
-#: dispatched subagent alike, until someone hand-added the missing token
-#: (``run_tier_tests`` was one such hand-patch, now removed -- see
-#: ``_dynamic_prefilter_hit``). That limitation is CLOSED, not merely
-#: narrowed: ``check()`` now falls through to the dynamic leg -- which reads
-#: the repo's OWN configured ``fast_test_cmd``/``full_test_cmd`` head tokens
 #: (from ``coordinator.local.md`` and the ``COORDINATOR_{FAST,FULL}_TEST_CMD``
-#: env vars, the same two sources ``resolve_validation_cmd`` resolves from) --
-#: whenever this static regex misses, so a repo's bespoke runner is gated
-#: automatically the day it is configured, with no per-repo token hand-patch
-#: required. The verdict on a widened-through command still comes from
-#: ``_matches_configured_cmd`` against that repo's own resolved tier strings,
-#: never from a new hardcoded runner branch -- the dynamic leg only decides
-#: whether to keep evaluating, exactly as this static regex already did.
-#:
-#: ``invoke-pester`` is matched case-insensitively (via the inline ``(?i:...)``
-#: group, scoped to that one alternative only) because PowerShell cmdlet
-#: names are case-insensitive by language design and are conventionally
-#: written mixed-case (``Invoke-Pester``) unlike every other runner in this
-#: set, which are lowercase-only shell command names by Unix convention.
 _RUNNER_PREFILTER_RE = re.compile(
     r"\b(pytest|py\.test|unittest|nose2|npm|pnpm|yarn|bun|npx|jest|vitest|"
     r"mocha|jasmine|ava|cargo|nextest|go|make|tox|nox|node|"
@@ -475,52 +438,22 @@ _RUNNER_PREFILTER_RE = re.compile(
 )
 
 
-#: Bounded walk-up depth for the CHEAP (stat-only, no subprocess) repo-root
-#: probe ``_cheap_repo_root`` uses for the dynamic prefilter leg. A real
-#: checkout is at most a handful of levels below its git root; this bound
-#: exists only to keep a pathological ``cwd`` (a deeply nested non-repo
-#: directory) from walking to the filesystem root one ``os.path.exists`` call
-#: at a time.
 _CHEAP_ROOT_WALK_MAX_DEPTH = 64
 
-#: Command-prefix words that wrap the real runner without changing what it is.
-#: Widened (2026-07-29, cross-guard fix -- code-reviewer Finding 3): `setsid`,
-#: `strace`, `doas`, `busybox` were unrecognized, same gap the sibling
-#: destructive-action/worktree/sentinel/commit guards fixed for their own
-#: copies of this enumerated allowlist. Defined here (rather than near its
 #: other use sites further below) because ``_DYNAMIC_PREFILTER_TOKEN_STOPWORDS``
-#: composes it and must itself be defined before ``_tokens_from_cmd_value``'s
-#: first use, below -- a prior forward reference here let a partial/reloaded
-#: import of this module reach that use site before the name existed
 #: (``NameError: _DYNAMIC_PREFILTER_TOKEN_STOPWORDS``); moving definition
-#: order fixes the class of bug outright rather than relying on a
-#: same-process, no-partial-import assumption holding forever.
 _WRAPPER_WORDS = frozenset({
     "sudo", "command", "time", "exec", "nice", "nohup", "env", "ionice",
     "stdbuf", "npx", "bunx", "pnpx", "setsid", "strace", "doas", "busybox",
 })
 
-#: BX-13 (2026-07-29, confirmed live via the real dispatcher): a
-#: `sh -c '<payload>'` (or `bash -c`/`zsh -c`/etc.) invocation was never
-#: unwrapped -- the quoted `-c` argument tokenizes as ONE shlex word, so
-#: `_base(tokens[i])` resolved to the shell interpreter itself, never the
-#: real test-runner token inside it, and a subagent's `sh -c "pytest"`
-#: sailed through unclassified while the wrapped command still ran the
-#: whole suite for real. Same wrapper class this module's sibling guards
 #: (`block_subagent_commit.py`'s `_C_FLAG_SHELL_INTERPRETERS`,
 #: `dispatch_checks.py`'s `_SHELL_C_WRAPPER_INTERPRETERS`) already unwrap.
 _SHELL_C_INTERPRETERS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 
-#: Interpreter/wrapper basenames that must never surface as a dynamic
-#: prefilter token on their own -- ``python3 bin/run-fast-tests.py``'s
-#: distinguishing token is ``run-fast-tests.py``, not ``python3``: crediting
-#: the bare interpreter name would widen the dynamic leg open for almost
-#: every Python invocation in a repo that happens to configure a Python-run
 #: test script, which defeats the point of a PREFILTER (it is still SAFE --
-#: over-widening only means "do more classification work", never a wrong
 #: deny -- but it is not cheap). Reuses ``_WRAPPER_WORDS``/
 #: ``_SHELL_C_INTERPRETERS`` (already-enumerated shell/wrapper names) plus
-#: the python spellings, which neither set carries.
 _DYNAMIC_PREFILTER_TOKEN_STOPWORDS = (
     _WRAPPER_WORDS | _SHELL_C_INTERPRETERS | frozenset({"python", "python3", "python2", "py"})
 )
@@ -568,15 +501,6 @@ def _cheap_repo_root(cwd: Optional[str]) -> Optional[str]:
     return None
 
 
-#: Matches a ``fast_test_cmd``/``full_test_cmd`` flat frontmatter line inside
-#: ``coordinator.local.md`` -- the SAME two keys ``resolve_validation_cmd.
-#: cs_resolve_fast_test_cmd``/``cs_resolve_full_test_cmd`` read (their own
-#: docstring's "Step 2 -- coordinator.local.md flat top-level ... key"),
-#: matched here with a cheap regex instead of the real resolver's frontmatter
-#: parse -- this leg only needs candidate TOKENS to widen a prefilter, not a
-#: correctly-quoted, escape-aware command string, so a lightweight read is
-#: the right trade (see ``_local_md_head_tokens``'s docstring for the full
-#: cost argument against caching this in a second file).
 _LOCAL_MD_CMD_LINE_RE = re.compile(
     r'^(?:fast_test_cmd|full_test_cmd)\s*:\s*(.+?)\s*$', re.MULTILINE
 )
@@ -706,34 +630,18 @@ def _dynamic_prefilter_hit(cmd: str, cwd: Optional[str]) -> bool:
     lowered = cmd.lower()
     return any(tok in lowered for tok in tokens)
 
-#: BX-14 fix (2026-07-29, confirmed live via the real dispatcher): `nice`,
-#: `ionice`, and `stdbuf` all took their OWN argument(s) (`-n 10`, `-c2`,
-#: `-oL`) which were never consumed here -- only `timeout`'s duration
-#: operand had special handling (see `_strip_command_prefix` below). A
-#: subagent ran `ionice -c2 pytest` / `stdbuf -oL pytest` and the runner was
-#: never recognized at all, so Tier T enforcement silently never applied.
 #: Same flag-set `dispatch_checks.py`'s `_BYPASS_WRAPPER_ARG_FLAGS` uses for
-#: the identical gap in `check_no_verify` (no-cross-module-coupling
-#: convention -- own copy here).
 _WRAPPER_ARG_FLAGS = {
     "nice": frozenset({"-n", "--adjustment"}),
     "ionice": frozenset({"-c", "--class", "-n", "--classdata", "-p", "--pid"}),
     "stdbuf": frozenset({"-i", "--input", "-o", "--output", "-e", "--error"}),
 }
 
-#: `nice`'s bare numeric niceness form (`nice -19 pytest`, no `-n`) -- see
-#: `block_subagent_destructive_action.py`'s sibling copy (Finding 4) for the
-#: full rationale.
 _NICE_BARE_NUMERIC_RE = re.compile(r"^-\d+$")
 
-#: Wrappers whose runner follows a literal ``run`` subcommand
-#: (``poetry run pytest``, ``uv run pytest``, ``hatch run pytest``).
 _RUN_SUBCOMMAND_WRAPPERS = frozenset({"poetry", "uv", "pdm", "hatch", "rye", "pipenv"})
 
 #: pytest flags that consume a SEPARATE following token as their value. Needed
-#: so a flag's value is never mistaken for a positional scope argument -- the
-#: exact evasion the ``-m 'not cadence and not pending_fix'`` shape of this
-#: repo's own configured command would otherwise open.
 _PYTEST_VALUE_FLAGS = frozenset({
     "-k", "-m", "-p", "-o", "-c", "-n", "-W", "-r",
     "--rootdir", "--junitxml", "--junit-xml", "--deselect", "--ignore",
@@ -743,26 +651,18 @@ _PYTEST_VALUE_FLAGS = frozenset({
     "--confcutdir", "--assert", "--doctest-glob", "--pdbcls", "--color",
 })
 
-#: pytest flags that are themselves a narrowing selection (Tier T).
 _PYTEST_SCOPING_FLAGS = frozenset({
     "--lf", "--last-failed", "--ff", "--failed-first", "--sw", "--stepwise",
     "--stepwise-skip",
 })
 
-#: JS-runner flags that narrow by test NAME rather than by path (Tier T).
 _JS_SCOPING_FLAGS = frozenset({
     "-t", "--testNamePattern", "--testPathPattern", "--testPathPatterns",
     "-g", "--grep", "--spec", "--fgrep", "-f", "--shard",
 })
 
-#: ``make`` targets that are whole-suite by construction -- there is no
-#: scoped form of ``make test``, so no allow-branch exists for them.
 _MAKE_SUITE_TARGETS = frozenset({"test", "tests", "check", "test-all", "testall"})
 
-
-# ---------------------------------------------------------------------------
-# Command shredding
-# ---------------------------------------------------------------------------
 
 def _segments(cmd: str) -> List[str]:
     """Split a (possibly compound) command into independently-classifiable
@@ -779,22 +679,6 @@ def _segments(cmd: str) -> List[str]:
 
 
 def _tokens(segment: str) -> List[str]:
-    """Tokenize one segment as argv. Falls back to whitespace splitting when
-    the segment is not parseable as a shell word-list (unterminated quote),
-    so a malformed segment still gets classified rather than silently
-    skipped.
-
-    Past `exceeds_tokenizable_ceiling` the same whitespace fallback runs. That
-    ceiling is a DoS bound inherited from `_command_tokenizer`, not a local
-    tuning knob.
-
-    It does NOT bound the returned TOKENS. `str.split()` is whitespace-only,
-    so a run with no internal whitespace survives as one token of up to the
-    full segment length -- which is why `_strip_command_prefix` carries its
-    OWN ceiling check before re-splitting a `sh -c` payload rather than
-    inheriting one from here. The earlier claim that it could inherit one was
-    false and is what left that site's quadratic `shlex` cost open.
-    """
     if _exceeds_tokenizable_ceiling(segment):
         return segment.split()
     try:
@@ -881,13 +765,8 @@ def _segment_argvs(cmd: str, dialect: Optional[_Dialect] = None) -> List[List[st
     return out
 
 
-#: A shell redirection token as the shared tokenizer hands it back:
-#: ``>``/``>>``/``<``/``<<`` with an optional leading fd number or ``&``
-#: (bash's combine-redirect), an optional ``&`` before the target (fd
 #: duplication, ``2>&1``), and an optionally ATTACHED target (``2>/dev/null``,
-#: ``>>out.log``). Anchored at the token head so a positional or flag operand
 #: that merely CONTAINS the character (``-k "a>b"``, a filename with an angle
-#: bracket) is never mistaken for one.
 _REDIRECTION_RE = re.compile(r"^(?:\d+|&)?(?:>>?|<<?)&?(?P<target>.*)$")
 
 
@@ -928,9 +807,6 @@ def _strip_redirections(argv: Sequence[str]) -> List[str]:
 
 
 def _base(token: str) -> str:
-    """Command basename, path- and ``.exe``-stripped, so ``/usr/bin/pytest``,
-    ``.venv/bin/pytest`` and ``pytest.exe`` all classify identically
-    (Windows-first-class: both separators are handled)."""
     name = token.replace("\\", "/").rsplit("/", 1)[-1]
     if name.lower().endswith(".exe"):
         name = name[: -len(".exe")]
@@ -942,14 +818,6 @@ _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 #: BX-13's `sh -c` unwrap set (`_SHELL_C_INTERPRETERS`) is defined near
 #: `_WRAPPER_WORDS` above, not here -- see that constant's own comment.
 
-#: Bundled-or-standalone `-c` short flag, e.g. `-c`, `-ic`, `-ci` (2026-07-29
-#: cross-guard fix -- confirmed live against THIS module too, via the same
-#: real-dispatcher attack matrix that found it in `block_subagent_commit.py`
-#: and `block_worktree_creation.py`, code-reviewer Finding 2): a shell's CLI
-#: parser accepts bundled short flags, so `sh -ic 'pytest'` behaves as
-#: `sh -i -c 'pytest'` -- the exact-offset `tokens[i + 1] == "-c"` check
-#: below missed this entirely, letting a subagent's `sh -ic "pytest"` run
-#: the whole suite unclassified by Tier T/U enforcement.
 _BUNDLED_C_FLAG_RE = re.compile(r"^-[a-zA-Z]*c[a-zA-Z]*$")
 
 
@@ -965,21 +833,10 @@ def _strip_command_prefix(tokens: Sequence[str]) -> List[str]:
     while i < n:
         tok = tokens[i]
         # BRACE-GROUPING FIX (2026-07-29, cross-guard fix -- confirmed live
-        # against THIS module via the same real-dispatcher attack matrix
-        # that found the identical gap in the sibling destructive-action/
-        # commit/sentinel/worktree guards, code-reviewer Finding 1): `{
-        # pytest; }` was never peeled here, so the resolved runner token was
-        # `{` itself and Tier T/U enforcement never applied. Bash requires a
-        # space after `{` (a reserved word, not an operator), so
-        # `shlex.split` always yields it as its own token.
         if tok == "{":
             i += 1
             continue
         # PAREN-GROUPING FIX (2026-07-29, EM-run confinement-corpus pass,
-        # confirmed live): `( pytest; )` has the exact same shape as the
-        # brace fix directly above -- `(` falls out as its own token from
-        # the shared tokenizer for the same reason `{` does, and was never
-        # peeled here either.
         if tok == "(":
             i += 1
             continue
@@ -1001,10 +858,10 @@ def _strip_command_prefix(tokens: Sequence[str]) -> List[str]:
                     if t in taking:
                         i += 1
                         if i < n:
-                            i += 1  # separate-token value, e.g. `-c 2`
+                            i += 1
                         continue
                     if len(t) > 2 and t[0] == "-" and t[1] != "-" and ("-" + t[1]) in taking:
-                        i += 1  # attached-value short flag, e.g. -c2 / -oL
+                        i += 1
                         continue
                     if t.startswith("--") and "=" in t:
                         i += 1
@@ -1015,13 +872,6 @@ def _strip_command_prefix(tokens: Sequence[str]) -> List[str]:
                     break
             continue
         if base in _WITH_SUITE_MUTEX_BASENAMES:
-            # ``with-suite-mutex -- <real command>`` -- strip the wrapper
-            # itself AND its ``--`` separator so the classifier below sees
-            # the SAME argv it would see unwrapped (the WRAPPER leg above
-            # already knows how to tell wrapped from bare; this is what lets
-            # a wrapped command still classify as suite-shaped at all,
-            # rather than reading "with-suite-mutex" as an unrecognized
-            # runner and falling through as an allow).
             i += 1
             if i < n and tokens[i] == "--":
                 i += 1
@@ -1040,27 +890,6 @@ def _strip_command_prefix(tokens: Sequence[str]) -> List[str]:
                 if idx + 1 < n:
                     payload = tokens[idx + 1]
                     if _exceeds_tokenizable_ceiling(payload):
-                        # `_tokens`'s over-ceiling fallback is `segment.split()`
-                        # -- whitespace-only, so it bounds the SEGMENT, never
-                        # the token: a run with no internal whitespace survives
-                        # whole and lands here at full length. `shlex.split` on
-                        # it is the quadratic `read_token` cost the ceiling
-                        # exists to bound (measured at HEAD, through `check()`:
-                        # 200 KB -> 0.8 s, 800 KB -> 15.4 s), reachable from raw
-                        # Bash `tool_input`.
-                        #
-                        # Fail direction, measured rather than assumed: this
-                        # site's sibling `ValueError` branch (`break`) is
-                        # fail-OPEN for detection -- it leaves the interpreter
-                        # in command position, so nothing classifies. Routing
-                        # the ceiling here would have flipped a live DENY to an
-                        # allow: `bash -c '<200 KB>/pytest'` is one over-ceiling
-                        # token whose basename IS `pytest`, and denies today.
-                        # An over-ceiling token has no internal whitespace by
-                        # construction (see above), so quote-stripping and
-                        # whitespace-splitting is linear, is a no-op on shape,
-                        # and keeps every runner basename `shlex.split` would
-                        # have exposed here visible to the classifier.
                         inner = payload.strip("'\"").split()
                     else:
                         try:
@@ -1072,13 +901,7 @@ def _strip_command_prefix(tokens: Sequence[str]) -> List[str]:
     return list(tokens[i:])
 
 
-# ---------------------------------------------------------------------------
-# testpaths resolution -- the "scoped-looking but actually the whole suite" leg
-# ---------------------------------------------------------------------------
-
 def _norm_path(raw: str) -> str:
-    """Normalize a path argument for testpaths comparison: forward slashes,
-    no ``./`` prefix, no trailing separator."""
     p = raw.replace("\\", "/").strip()
     while p.startswith("./"):
         p = p[2:]
@@ -1087,14 +910,6 @@ def _norm_path(raw: str) -> str:
 
 
 def _read_testpaths(repo_root: Optional[str]) -> List[str]:
-    """Configured pytest ``testpaths`` roots for ``repo_root``.
-
-    A path argument equal to -- or an ancestor of -- one of these is NOT a
-    real scope: ``pytest coordinator_core/`` is this repo's entire suite. Reads
-    ``pyproject.toml`` (``[tool.pytest.ini_options]``) and ``pytest.ini``
-    (``[pytest]``); returns ``[]`` when neither is readable, which degrades
-    only the ancestor test, never the rest of the classifier.
-    """
     if not repo_root:
         return []
     found: List[str] = []
@@ -1154,10 +969,6 @@ def _is_real_scope(arg: str, testpaths: Sequence[str], cwd: Optional[str]) -> bo
         return True
     if "/" in norm or norm.endswith(".py"):
         return True
-    # A bare name with no separator is a scope only if it actually names
-    # something on disk (a `tests` directory in a repo without a testpaths
-    # pin); otherwise it is far more likely a mis-parsed flag operand, and
-    # crediting it as a scope is exactly how this guard gets evaded.
     if cwd:
         try:
             return os.path.exists(os.path.join(cwd, norm))
@@ -1166,22 +977,7 @@ def _is_real_scope(arg: str, testpaths: Sequence[str], cwd: Optional[str]) -> bo
     return False
 
 
-# ---------------------------------------------------------------------------
-# Per-runner classifiers -- each returns a human-readable runner label when
-# the invocation is SUITE-shaped, else None.
-# ---------------------------------------------------------------------------
-
 def _walk_pytest_args(args: Sequence[str]) -> Tuple[bool, List[str]]:
-    """Split a pytest argv's arguments into (scoping-flag-seen, positionals).
-
-    Single-sourced so the two consumers that need pytest's flag-operand
-    grammar -- ``_classify_pytest`` (is this suite-shaped?) and
-    ``_pytest_directory_args`` (DR-088 R9's subagent precision leg) -- walk it
-    identically. A second hand-rolled walk would drift on the next flag-table
-    edit and silently mis-read an operand as a positional, which on the R9 leg
-    means denying a command over a ``--rootdir`` value the caller never
-    intended as a scope.
-    """
     scoped = False
     positionals: List[str] = []
     i = 0
@@ -1207,7 +1003,6 @@ def _walk_pytest_args(args: Sequence[str]) -> Tuple[bool, List[str]]:
             if name in _PYTEST_VALUE_FLAGS:
                 i += 2
                 continue
-            # Attached short-option value (`-kfoo`, `-mfoo`, `-n4`).
             if not arg.startswith("--") and len(arg) > 2 and ("-" + arg[1]) in _PYTEST_VALUE_FLAGS:
                 if arg[1] == "k":
                     scoped = True
@@ -1267,13 +1062,10 @@ def _classify_pytest(args: Sequence[str], testpaths: Sequence[str],
     return None if scoped else label
 
 
-#: pytest flags that print and exit before collection -- no suite at any breadth.
 _PYTEST_INFO_ONLY_FLAGS = frozenset({"--version", "-V", "--help", "-h", "--markers"})
 
 
 def _classify_unittest(args: Sequence[str]) -> Optional[str]:
-    """``python -m unittest`` with no target, or with ``discover``, walks the
-    whole tree. A dotted target (``pkg.mod.TestCase.test_x``) is Tier T."""
     positional = [a for a in args if not a.startswith("-")]
     if not positional or positional[0] == "discover":
         return "python -m unittest"
@@ -1282,10 +1074,6 @@ def _classify_unittest(args: Sequence[str]) -> Optional[str]:
 
 def _classify_python_module(tokens: Sequence[str], testpaths: Sequence[str],
                             cwd: Optional[str]) -> Optional[str]:
-    """Classify ``python[3] [pyflags] -m <module> [args]``. The FIRST ``-m``
-    is the interpreter's module flag (python stops parsing its own options
-    there); any later ``-m`` belongs to the module and is handled by that
-    module's own classifier."""
     try:
         idx = list(tokens).index("-m")
     except ValueError:
@@ -1308,7 +1096,6 @@ def _classify_js_runner(args: Sequence[str], testpaths: Sequence[str],
         if name in _JS_SCOPING_FLAGS:
             return None
     positional = [a for a in args if not a.startswith("-") and a != "--"]
-    # `vitest run` / `jest --ci` style subcommands are not scopes.
     positional = [a for a in positional if a not in ("run", "watch", "related")]
     for arg in positional:
         if _is_real_scope(arg, testpaths, cwd):
@@ -1317,17 +1104,6 @@ def _classify_js_runner(args: Sequence[str], testpaths: Sequence[str],
 
 
 def _package_manager_test_shape(args: Sequence[str]) -> bool:
-    """Is ``args`` one of the recognized package-script test-invocation
-    shapes (``test``, ``t``, ``run test``, ``run-script test``) -- as
-    opposed to some other package-manager subcommand (``install``, ``run
-    build``, ``exec vitest``) this classifier has no opinion on at all?
-
-    Single-sourced so ``_classify_package_manager`` (is this invocation
-    unscoped -- always True once this shape matches, see that function's own
-    docstring) and ``_runner_recognized`` (did a classifier actually reach a
-    verdict, as opposed to bailing out on an unrecognized shape) can never
-    drift apart -- same discipline as ``_cargo_test_shape``/``_go_test_shape``/
-    ``_make_first_target``."""
     if not args:
         return False
     head = args[0]
@@ -1389,32 +1165,17 @@ def _classify_package_manager(base: str, args: Sequence[str],
         if base == "bun":
             return _classify_js_runner(args[1:], testpaths, cwd, label)
         return label
-    return label  # ("run"|"run-script") "test" -- the only remaining recognized shape
+    return label
 
 
-#: Package-manager bases whose ``test``/``run test`` script shapes
-#: ``_classify_package_manager`` now returns unconditionally (2026-07-30
-#: package-script arg-forwarding fix, see that function's docstring).
 _PM_BASES = ("npm", "pnpm", "yarn", "bun")
 
 
 def _is_package_script_label(detected: str) -> bool:
-    """Is ``detected`` one of ``_classify_package_manager``'s labels for a
-    package-script shape (``"npm test"``, ``"pnpm test"``, ...)? Used to
-    decide whether a deny/remediation text should append the extra
-    package-script-specific offer paragraph (call the runner directly --
-    that IS scope-bearing, unlike the package-script form it was denied
-    for)."""
     parts = detected.split()
     return len(parts) == 2 and parts[0] in _PM_BASES and parts[1] == "test"
 
 
-#: The package-script-specific offer paragraph, appended to a deny or
-#: remediation text only when ``_is_package_script_label`` holds. One
-#: definition, two consumers (``_deny_reason_subagent`` and
-#: ``_remediation_text``) -- the two copies must never drift, since the whole
-#: point is that a caller denied in either path is told the same
-#: scope-bearing alternative.
 _PACKAGE_SCRIPT_OFFER = (
     "\n\nA package-script invocation is unscoped here no matter what "
     "follows `--`: the package manager is not obliged to forward "
@@ -1427,19 +1188,6 @@ _PACKAGE_SCRIPT_OFFER = (
 
 
 def _cargo_test_shape(args: Sequence[str]) -> Optional[Sequence[str]]:
-    """Is ``args`` a recognized ``cargo test``/``cargo nextest run`` shape at
-    all -- as opposed to some other cargo subcommand (``build``, ``watch``,
-    ``run``) this classifier has no opinion on?
-
-    Returns the argv remainder past the recognized head (``test`` or
-    ``nextest run``) when it is, else ``None``. Single-sourced so
-    ``_classify_cargo`` (is this invocation SCOPED) and ``_runner_recognized``
-    (did a classifier actually reach a scoped/unscoped verdict, as opposed to
-    bailing out on an unrecognized shape) can never drift apart -- see
-    ``_runner_recognized``'s own docstring for why the two questions must be
-    asked separately. ``cargo watch -x test`` is the shape this closes: its
-    ``args[0]`` is ``watch``, not ``test``/``nextest``, so this returns
-    ``None`` and the caller must not treat that as "confirmed scoped."""
     if not args:
         return None
     if args[0] == "test":
@@ -1450,9 +1198,6 @@ def _cargo_test_shape(args: Sequence[str]) -> Optional[Sequence[str]]:
 
 
 def _classify_cargo(args: Sequence[str]) -> Optional[str]:
-    """``cargo test`` / ``cargo nextest run``. A filter positional (or an
-    explicit ``--test``/``-p`` target) before the ``--`` harness separator is
-    Tier T; everything else is the crate's whole test surface."""
     rest = _cargo_test_shape(args)
     if rest is None:
         return None
@@ -1470,26 +1215,17 @@ def _classify_cargo(args: Sequence[str]) -> Optional[str]:
                 continue
             i += 1
             continue
-        return None  # a bare filter positional narrows the run
+        return None
     return "cargo test"
 
 
 def _go_test_shape(args: Sequence[str]) -> Optional[Sequence[str]]:
-    """Is ``args`` a recognized ``go test`` shape -- as opposed to some other
-    ``go`` subcommand (``vet``, ``build``, ``run``) this classifier has no
-    opinion on? Returns the argv remainder past ``test`` when it is, else
-    ``None``. Single-sourced with ``_classify_go`` and ``_runner_recognized``
-    for the same reason ``_cargo_test_shape`` is -- see that function's
-    docstring."""
     if not args or args[0] != "test":
         return None
     return args[1:]
 
 
 def _classify_go(args: Sequence[str]) -> Optional[str]:
-    """``go test``. A recursive package pattern (``./...``, ``all``) is the
-    whole module; a named package is Tier T, and so is bare ``go test`` (which
-    runs only the current directory's package). ``-run <regex>`` narrows."""
     rest = _go_test_shape(args)
     if rest is None:
         return None
@@ -1513,12 +1249,6 @@ def _classify_go(args: Sequence[str]) -> Optional[str]:
 
 
 def _make_first_target(args: Sequence[str]) -> Optional[str]:
-    """The first non-flag, non-assignment positional in a make invocation --
-    make's target, by construction -- or ``None`` if there isn't one. Single-
-    sourced so ``_classify_make`` and ``_runner_recognized`` never re-derive
-    (and drift on) the flag/assignment-skipping walk; see the module-level
-    rationale in ``_classify_make``'s own docstring for why only the FIRST
-    positional counts."""
     for arg in args:
         if arg.startswith("-"):
             continue
@@ -1548,7 +1278,6 @@ def _classify_make(args: Sequence[str]) -> Optional[str]:
     return None
 
 
-#: ``tox``/``nox`` environment-runner bases -- see ``_classify_tox_nox``.
 _TOX_NOX_BASES = frozenset({"tox", "nox"})
 
 
@@ -1593,11 +1322,7 @@ def _classify_tox_nox(base: str, args: Sequence[str]) -> str:
     return base
 
 
-#: ``Invoke-Pester`` parameters that narrow the run below the whole
-#: configured test surface -- a name/tag filter (Tier T by the same logic
 #: ``_JS_SCOPING_FLAGS`` uses: it narrows by NAME, not by path) or an
-#: explicit ``-Path``/``-Script`` target. Matched case-insensitively
-#: (PowerShell parameter binding is case-insensitive), same as the runner
 #: name itself in ``_RUNNER_PREFILTER_RE``.
 _PESTER_SCOPING_FLAGS = frozenset({
     "-testname", "-fullnamefilter", "-tag", "-tagfilter",
@@ -1606,16 +1331,6 @@ _PESTER_PATH_FLAGS = frozenset({"-path", "-script"})
 
 
 def _pester_path_values(args: Sequence[str]) -> List[str]:
-    """Values bound to ``-Path``/``-Script`` across ``args``, comma-split.
-
-    Both the colon-bound form (``-Path:foo,bar``) and the separate-token
-    form (``-Path foo,bar``) are PowerShell-legal parameter binding for a
-    ``[string[]]``-typed parameter, and Pester's own ``-Path`` is exactly
-    that type -- both a comma-separated list AND repeated ``-Path``
-    occurrences accumulate, mirroring how PowerShell itself binds a
-    string-array parameter from the command line. Every occurrence is
-    collected, not just the first, so ``-Path a -Path b`` and
-    ``-Path a,b`` classify identically."""
     values: List[str] = []
     i = 0
     n = len(args)
@@ -1636,32 +1351,11 @@ def _pester_path_values(args: Sequence[str]) -> List[str]:
     return values
 
 
-#: Source extensions Node's test runner can be pointed at as a single file.
-#: `.py` is `_is_real_scope`'s own terminal test and is Python-specific, so a
-#: JS/TS filename with no directory separator (`node --test x.test.js`, run
-#: from the directory holding it) failed every one of that predicate's arms
-#: and classified as a whole-suite run. That is a FALSE DENIAL of the most
-#: precisely-scoped invocation this runner has, which is the opposite of what
-#: widening the prefilter was for.
 _NODE_TEST_FILE_SUFFIXES = (".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".jsx", ".tsx")
 
 
 def _is_node_scope(arg: str, testpaths: Sequence[str],
                    cwd: Optional[str]) -> bool:
-    """``_is_real_scope`` plus JS/TS single-file recognition.
-
-    Every discriminator that matters is `_is_real_scope`'s and is deferred
-    to first -- `.`/`..` rejection, testpaths-root and testpaths-ancestor
-    rejection (a positional that selects the whole suite while wearing a
-    scope's clothing), node-id form, and the on-disk existence fallback for
-    a bare name. This adds ONE arm: a filename ending in a Node-loadable
-    source suffix is a file, therefore a scope, by the same reasoning that
-    makes `.py` one on the pytest side.
-
-    It cannot re-admit anything `_is_real_scope` rejected as too broad: the
-    testpaths checks run FIRST and return False before this arm is reached,
-    so a testpaths root that happened to end in `.js` still classifies as
-    the whole suite."""
     if _is_real_scope(arg, testpaths, cwd):
         return True
     token = arg.replace("\\", "/")
@@ -1785,8 +1479,6 @@ def _classify_pester(args: Sequence[str], cwd: Optional[str]) -> Optional[str]:
 
 def _classify_tokens(tokens: Sequence[str], testpaths: Sequence[str],
                      cwd: Optional[str]) -> Optional[str]:
-    """Classify one already-prefix-stripped argv. Returns a runner label when
-    the invocation is suite-shaped, else ``None``."""
     if not tokens:
         return None
     base = _base(tokens[0])
@@ -1815,22 +1507,6 @@ def _classify_tokens(tokens: Sequence[str], testpaths: Sequence[str],
     return None
 
 
-# ---------------------------------------------------------------------------
-# Configured fast_test_cmd / full_test_cmd segment-set containment
-# ---------------------------------------------------------------------------
-
-#: Whitespace-run collapse applied ONLY to argv tokens being compared for
-#: configured-command containment matching (never to the raw argv used by
-#: the shape classifiers above, which must see a flag's exact operand).
-#: ``shlex`` preserves internal whitespace verbatim inside a quoted token
-#: (``'not  cadence'`` survives as a two-space token, distinct from ``'not
-#: cadence'``), so a configured ``fast_test_cmd`` reproduced with incidental
-#: extra inner whitespace around a ``-m``/``-k`` expression would otherwise
-#: fail tuple equality even though shlex already normalized away the
-#: quoting-STYLE difference (single vs double quotes shlex-split
-#: identically). This closes that residual gap: two runs of whitespace
-#: collapse to one, and leading/trailing whitespace inside a token is
-#: stripped, before the token enters a comparison tuple.
 _WS_RUN_RE = re.compile(r"\s+")
 
 
@@ -1847,25 +1523,6 @@ def _norm_arg(tok: str) -> str:
 
 
 def _normalized_segments(cmd: str) -> List[Tuple[str, ...]]:
-    """Segment-argv form of a configured command, for containment matching.
-
-    Each ``;``/``&``/``|``-separated segment of ``cmd`` is reduced to
-    prefix-stripped argv with the leading interpreter/runner basename-
-    reduced (``/repo/.venv/bin/python -m pytest …`` and ``python3 -m pytest
-    …`` normalize identically) and each argument whitespace-collapsed
-    (``_norm_arg``), mirroring the per-segment normalization ``check()``
-    applies to the invocation it is matching against.
-
-    A configured ``fast_test_cmd``/``full_test_cmd`` may itself be a chained
-    invocation (``pnpm run typecheck && pnpm run test``), which can never
-    equal any SINGLE invocation segment under whole-string equality -- that
-    was the bug (cross-repo/inbox/2026-07-25-example-cockpit-repo-em-tier-f-
-    escape-hatch-unreachable-for-chained-fast-test-cmd.md). Splitting the
-    configured string the same way an invocation is split lets the caller
-    test containment (every configured segment present somewhere in the
-    invocation) instead of impossible whole-string equality. For a
-    single-segment configured command this degrades to a one-element list
-    -- verbatim-equality semantics, unchanged."""
     out: List[Tuple[str, ...]] = []
     for argv in _segment_argvs(cmd):
         tokens = _strip_command_prefix(argv)
@@ -1875,24 +1532,11 @@ def _normalized_segments(cmd: str) -> List[Tuple[str, ...]]:
     return out
 
 
-#: Interpreter basenames that name the SAME interpreter for containment
-#: purposes. ``_base`` alone is not enough here: the resolver normalizes a
-#: bare ``python`` token to the interpreter it actually found on PATH
 #: (``resolve_python_interp``), so a repo that DECLARES ``python -m pytest
-#: …`` resolves to ``python3 -m pytest …`` -- while the operator types the
-#: declared form. Comparing those basenames as distinct strings makes the
-#: configured-command leg miss the repo's own declared suite command, which
-#: is the one command it exists to catch.
 _PYTHON_HEAD_RE = re.compile(r"^python(?:\d+(?:\.\d+)*)?$", re.IGNORECASE)
 
 
 def _norm_head(token: str) -> str:
-    """Interpreter/runner head token, reduced for containment matching:
-    ``_base`` (path- and ``.exe``-stripped) plus python-family collapsing.
-
-    Used on BOTH sides of every containment comparison -- normalizing one
-    side only would reintroduce the mismatch this removes.
-    """
     name = _base(token)
     if _PYTHON_HEAD_RE.match(name):
         return "python"
@@ -2036,15 +1680,6 @@ class ConfiguredCmd(NamedTuple):
 
 
 def _configured_test_cmds_native(repo_root: str) -> List[ConfiguredCmd]:
-    """``_configured_test_cmds``' native leg -- the same two tiers resolved
-    through ``coordinator_core.resolve_validation_cmd``, which travels with
-    this guard and is therefore reachable from EVERY repo, not only the one
-    that hosts ``coordinator/bin/``.
-
-    Imported lazily so a guard on the PreToolUse hot path pays the resolver's
-    import cost only on a command that already looked suite-shaped, and so an
-    import failure degrades to the by-path leg instead of raising.
-    """
     try:
         from coordinator_core import resolve_validation_cmd as _rvc
     except Exception:
@@ -2143,14 +1778,6 @@ def _configured_test_cmds(repo_root: Optional[str]) -> List[ConfiguredCmd]:
         if spec is None or spec.loader is None:
             return native
         module = importlib.util.module_from_spec(spec)
-        # Load-bearing: the resolver module uses ``@dataclass`` at module
-        # scope, and dataclasses resolves annotation types via
-        # ``sys.modules.get(cls.__module__)`` *during* ``exec_module`` --
-        # before ``module_from_spec``'s caller would normally register it.
-        # Skipping this registration makes ``exec_module`` raise on every
-        # Python whose dataclasses implementation looks the module up (seen
-        # on 3.14), which this function's blanket ``except Exception``
-        # then silently swallows into an empty result.
         sys.modules[spec.name] = module
         try:
             spec.loader.exec_module(module)
@@ -2185,22 +1812,6 @@ def _configured_test_cmds(repo_root: Optional[str]) -> List[ConfiguredCmd]:
 def _matches_configured_cmd(segments_argv: Sequence[Sequence[str]],
                             configured: Sequence[ConfiguredCmd],
                             *, exact: bool = False) -> Optional[str]:
-    """Does the invocation's segment set CONTAIN every segment of a
-    configured test tier (modulo interpreter path and wrapper prefix)?
-
-    A configured command is itself matched only when ALL of its own
-    segments (``_normalized_segments``) appear somewhere in the
-    invocation's segment set -- not whole-string equality against a single
-    invocation segment, which is unreachable by construction for any
-    configured command that is itself chained (``pnpm run typecheck &&
-    pnpm run test``). For a single-segment configured command this reduces
-    to exactly today's verbatim-equality behaviour, unchanged.
-
-    Takes the already-resolved ``configured`` list rather than calling
-    ``_configured_test_cmds`` itself -- ``check()`` resolves it once and
-    threads it into both this function and ``_matched_tiers`` so the
-    resolver (an ``importlib`` module load plus config-file reads) never
-    runs twice for the same call."""
     if not configured:
         return None
     normalized = [
@@ -2208,13 +1819,6 @@ def _matches_configured_cmd(segments_argv: Sequence[Sequence[str]],
         for argv in segments_argv if argv
     ]
     for pair in configured:
-        # A belt-and-braces leg must never be the thing that crashes the
-        # chain -- a malformed element (e.g. ``configured`` bound to a bare
-        # string, whose chars each unpack as a 1-item non-pair) is skipped,
-        # degrading this leg to "no configured-cmd match" rather than raising.
-        # Shape pinned to ``ConfiguredCmd`` (tier, cmd, returncode) -- kept in
-        # lockstep with the ``well_formed`` filter in
-        # ``_classify_command_core`` per that NamedTuple's own docstring.
         if not isinstance(pair, (tuple, list)) or len(pair) != 3:
             continue
         tier, cmd, _returncode = pair
@@ -2224,17 +1828,11 @@ def _matches_configured_cmd(segments_argv: Sequence[Sequence[str]],
     return None
 
 
-# ---------------------------------------------------------------------------
-# Deny envelopes
-# ---------------------------------------------------------------------------
-
 _CTRL_WS_RE = re.compile(r"[\t\r\n\f\v]")
 _C0_RE = re.compile(r"[\x00-\x1f]")
 
 
 def _sanitize(cmd: str) -> str:
-    """Flatten control characters before interpolating a caller-supplied
-    command into a deny reason."""
     return _C0_RE.sub("", _CTRL_WS_RE.sub(" ", cmd))[:400]
 
 
@@ -2297,11 +1895,6 @@ def _deny_reason_subagent(
     ) % (detected, cmd_safe, package_script_note)
 
 
-#: Basenames (post ``_base()`` normalization) that identify the
-#: ``with-suite-mutex`` acquiring wrapper -- bare, ``.cmd``, and ``.ps1``
-#: shim spellings. ``_base()`` only strips ``.exe``, never ``.cmd``/``.ps1``
-#: (those are Windows *script* extensions, not executable-file ones), so
-#: both shim spellings are enumerated here rather than assumed handled.
 _WITH_SUITE_MUTEX_BASENAMES = frozenset({
     "with-suite-mutex", "with-suite-mutex.cmd", "with-suite-mutex.ps1",
 })
@@ -2365,10 +1958,6 @@ def _command_wrapped_in_suite_mutex(
     if any(suite_flags):
         return all(w for w, s in zip(wrapped_flags, suite_flags) if s)
 
-    # No single segment classifies alone -- only the whole segment SET
-    # matches a chained configured command (see ``_matches_configured_cmd``'s
-    # containment docstring). Require every segment wrapped rather than
-    # guessing which ones "count".
     if stripped_segments and _matches_configured_cmd(stripped_segments, configured) is not None:
         return all(wrapped_flags)
 
@@ -2442,36 +2031,6 @@ def _tier_t_slot_verdict(
     dialect: Optional[_Dialect],
     segments_argv: Sequence[Sequence[str]],
 ) -> Optional[Dict[str, Any]]:
-    """Route a dispatched caller's unwrapped scoped run through the semaphore.
-
-    Returns an ALLOW -- never a deny. That is the whole point of this leg and
-    the reason it can exist without moving DR-088's Tier-T contract: the
-    command still runs, the caller still needs no authorization, and R9 is
-    untouched. What changes is only that the run now takes a slot, and waits
-    when all K are taken.
-
-    The first implementation of this leg DENIED, and was wrong. It turned 29
-    existing assertions red at once, and those assertions were right: they
-    pin "a subagent's scoped run is allowed", which is the carve-out itself.
-    A resource control that expresses itself as a refusal is indistinguishable
-    from an authority control no matter what its docstring claims. A guard
-    cannot say "wait" -- but it can hand back a command that waits, and the
-    wrapper does the waiting where the command's lifetime is actually known.
-
-    Two shapes, following the single-segment rule BX-12 established for
-    ``_allow_rewrite`` in the sibling guard module after a full-command
-    substitution silently dropped the unmatched half of a chain:
-
-      - A LONE runner segment is rewritten whole
-        (``updatedInput.command``), because here the matched segment IS the
-        entire command and the substitution is total.
-      - A CHAINED command degrades to an advisory naming the wrapped form.
-        Rewriting it would mean reconstructing a shell chain this function
-        never parsed for quoting, redirection or precedence -- exactly the
-        "clever, unverified substitution" the sibling docstring warns against.
-        The run proceeds unslotted; an unbounded chained run is a smaller
-        harm than a corrupted one.
-    """
     if not any(_runner_recognized(list(argv)) for argv in segments_argv):
         return None
 
@@ -2504,7 +2063,6 @@ def _tier_t_slot_verdict(
 
 
 def _allow_rewrite_tier_t(new_cmd: str, ctx: str) -> Dict[str, Any]:
-    """ALLOW carrying a replacement command. Mirrors ``dispatch_checks._allow_rewrite``."""
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -2516,7 +2074,6 @@ def _allow_rewrite_tier_t(new_cmd: str, ctx: str) -> Dict[str, Any]:
 
 
 def _advisory_tier_t(msg: str) -> Dict[str, Any]:
-    """ALLOW carrying only a note. Mirrors ``dispatch_checks._advisory``."""
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -2527,13 +2084,6 @@ def _advisory_tier_t(msg: str) -> Dict[str, Any]:
 
 
 def _tier_t_occupancy() -> Tuple[int, int]:
-    """Return ``(taken, cap)`` for the Tier-T semaphore. Never raises.
-
-    Imported lazily and swallowed defensively: this guard must render a deny
-    even on a box where the semaphore's state directory is unreadable, and a
-    resource control whose read path can explode would take down the guard
-    that consults it.
-    """
     try:
         from coordinator_core.testing import tier_t_slots
 
@@ -2566,35 +2116,10 @@ def _deny_reason_mutex(detected: str, cmd_safe: str, holder: Dict[str, Any]) -> 
     )
 
 
-#: Where the ceremony-by-ceremony grant enumeration, the "/bug-blitz,
-#: /bug-sweep, ..." no-implicit-grant list, the session-scope/liveness
-#: paragraph, and the authority-vs-resource-control aside live now that
-#: `_deny_reason_grant` no longer inlines them on every Tier-U deny (2026-07-30
-#: PM ruling: the deny ran 256 words, ~170 of it doctrine paid on every
-#: firing). No wiki page exists for this guard yet, so this constant's own
-#: VALUE (not this comment) is what the deny text renders to a reader --
-#: register trim (C8, docs/plans/2026-08-13-guard-messages-stop-handing-
-#: agents-the-keys.md): the prior value named this module's own source-file
-#: path as the pointer target, which reads as instructing an agent to open
-#: and read implementation code as its documentation -- the self-narration
-#: shape the example-retrieval-repo memo flagged. The doctrine still genuinely lives in
-#: this module's own docstring (GRANT leg, above; no wiki home exists to
-#: relocate it to), so the pointer keeps saying that, just without a
-#: source-path literal doing the pointing.
 _GRANT_DETAIL_POINTER = "this guard's own GRANT-leg doctrine (no wiki page yet)"
 
 
 def _resolved_sid_for_diagnosis() -> Optional[str]:
-    """The session id THIS guard process resolves, for the ungranted-record
-    deny below and nothing else.
-
-    Never feeds the authorization decision -- that stays entirely inside
-    `grant.check_tier_u_grant`, which resolves its own sid. This exists so a
-    false-negative grant check can report the two sids side by side instead
-    of leaving the reader to reconstruct them, which is what made the
-    2026-09-02 report (example-retrieval-repo-ue-addon-em) unresolvable from the deny
-    text alone. Fails to `None`, never raises: a diagnostic may not be able
-    to break a deny it is only annotating."""
     try:
         from coordinator_core.session import core as _session_core
 
@@ -2606,20 +2131,6 @@ def _resolved_sid_for_diagnosis() -> Optional[str]:
 def _ungranted_record_failing_gate(
     record: Dict[str, Any], resolved_sid: Optional[str], cwd: Optional[str]
 ) -> str:
-    """WHICH of `check_tier_u_grant`'s gates rejected this record.
-
-    Mirrors that function's gate ORDER exactly (granted_by -> ceremony
-    cross-field -> stored-sid match -> liveness) so the answer is the one it
-    actually returned on, not merely a true statement about the record. Kept
-    as a mirror rather than a refactor of the predicate itself: this is a
-    diagnostic for a deny that has already been decided, and giving the
-    authorization path a second caller whose failure mode is cosmetic is a
-    worse trade than restating four cheap comparisons. If that function's
-    gates change, this drifts to "a gate this guard cannot name", which is
-    honest rather than wrong -- the final `return` below.
-
-    Never raises and never re-decides: the deny stands regardless of what
-    this returns."""
     try:
         from coordinator_core.session import grant as _grant
 
@@ -2776,26 +2287,6 @@ def _deny_reason_grant(
     """
     _override_note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload, git_root=git_root)
     if ungranted_record is not None:
-        # A grant EXISTS and still read ungranted. Both branches below tell
-        # the reader to go get a grant; here that instruction is false, and
-        # the one route it offers -- retyping a PM utterance into
-        # `tier-u-grant-cli grant pm` -- asks the reader to author an
-        # authorization the PM did not give. Example-retrieval-repo-ue-addon-em hit
-        # exactly that on 2026-09-02, declined to type it, and was right to.
-        #
-        # `check_tier_u_grant` returns the record on a DENIAL precisely so
-        # this case can be told apart from "no grant at all" (its own
-        # docstring says so); the call site captured it into `_record` and
-        # threw it away, so the two rendered identically and the reader had
-        # no way to tell which they were looking at.
-        #
-        # Names the stored fields and stops -- it does not diagnose a cause.
-        # The reader can see their own session and repo; this guard cannot,
-        # and a guess here would have been wrong on the reported incident.
-        # Deliberately outside the word budget the two branches below share:
-        # that ceiling governs text shown to a reader who must go get a
-        # grant, and this text is reached only by a reader those two would
-        # actively mislead.
         _stored_sid = ungranted_record.get("session_id")
         _granted_by = ungranted_record.get("granted_by")
         _diag_sid = _resolved_sid_for_diagnosis()
@@ -2858,29 +2349,12 @@ def _deny_reason_grant(
     )
 
 
-#: Runner heads whose positional arguments this module reads with pytest's
-#: own flag-operand grammar. R9's precision leg is scoped to the pytest
-#: family deliberately: "file-and-node-id precision" is a pytest concept
-#: (``path::test_name``), and every other runner in ``_classify_tokens``
-#: takes positionals with different semantics (``cargo test <filter>``,
-#: ``go test <package>``, ``npm test -- <pattern>``) where "this token is a
-#: directory on disk" is not the same claim. Widening this set requires
-#: teaching this leg those grammars first -- see the R9 note in the module
-#: docstring.
 _PYTEST_HEADS = ("pytest", "py.test")
 
-#: Glob metacharacters this leg treats as "the shell will expand this before
-#: pytest ever sees it." Deliberately the ``fnmatch``/``glob`` special set
-#: (``*``, ``?``, ``[``) and nothing wider -- brace expansion (``{a,b}``) is
-#: a shell (not glob) feature with no ``glob``-module equivalent, and is out
-#: of scope for this fix (see the 2026-08-03 correction note below).
 _GLOB_MAGIC_CHARS = frozenset("*?[")
 
 
 def _has_glob_magic(path: str) -> bool:
-    """Cheap pre-check so the ``glob.iglob`` walk below is only ever paid for
-    a positional that could plausibly BE a glob -- every literal path (the
-    overwhelming common case) short-circuits on a single ``any()`` scan."""
     return any(c in _GLOB_MAGIC_CHARS for c in path)
 
 
@@ -2956,9 +2430,6 @@ def _pytest_directory_args(segments_argv: Sequence[Sequence[str]],
     checks stay strictly additive rather than replacing one another.
     """
     if not cwd:
-        # Without a cwd a directory cannot be distinguished from a filter
-        # string, and guessing would deny on shape alone. Fail-OPEN here: the
-        # identity leg below still denies every suite-shaped subagent command.
         return []
     found: List[str] = []
     for argv in segments_argv:
@@ -2997,13 +2468,6 @@ def _pytest_directory_args(segments_argv: Sequence[Sequence[str]],
 
 
 def _pytest_module_args(argv: Sequence[str]) -> Optional[Sequence[str]]:
-    """Arguments past ``-m pytest`` in a ``python[3] … -m pytest …`` argv, or
-    ``None`` when this argv is not a python-module pytest invocation.
-
-    Mirrors ``_classify_python_module``'s FIRST-``-m`` rule: python stops
-    parsing its own options at the first ``-m``, so a later ``-m`` belongs to
-    pytest (a marker expression) and must not be mistaken for the module flag.
-    """
     base = _base(argv[0])
     if not (base in ("python", "python2", "python3", "py")
             or re.match(r"^python3?\.\d+$", base)):
@@ -3019,27 +2483,11 @@ def _pytest_module_args(argv: Sequence[str]) -> Optional[Sequence[str]]:
     return argv[idx + 2:]
 
 
-#: pytest's collection-only flag and its short alias (``pytest --help``:
 #: ``--collect-only, --co``). Unlike ``_PYTEST_SCOPING_FLAGS`` (a SELECTION
-#: signal that a wide positional can still launder into a full-body run, per
-#: the 2026-08-14 correction above), collect-only runs no test body at ANY
-#: breadth -- there is no full-body-execution shape for it to disguise -- so
-#: its presence is read directly off the raw argv rather than threaded
-#: through ``_walk_pytest_args``'s positional-breadth override.
 _PYTEST_COLLECT_ONLY_FLAGS = frozenset({"--collect-only", "--co"})
 
 
 def _is_pytest_collect_only_segment(argv: Sequence[str]) -> bool:
-    """Is ``argv`` (one already prefix-stripped command segment) a bare
-    ``pytest``/``py.test``/``python[3] -m pytest`` invocation carrying
-    ``--collect-only``/``--co``?
-
-    Collection is bounded work: pytest walks and reports the collection
-    tree, then exits, without running a single test body. The Tier-U grant
-    and ``with-suite-mutex`` machinery in ``check()``'s grant leg exists to
-    bound the cost of an unbounded RUN, which this shape by construction is
-    not -- see that call site's own comment for where this is consulted.
-    """
     if not argv:
         return False
     if _base(argv[0]) in _PYTEST_HEADS:
@@ -3121,14 +2569,6 @@ def _deny_reason_subagent_directory(
     payload: Optional[Dict[str, Any]] = None,
     git_root: Optional[str] = None,
 ) -> str:
-    """R9 deny text. Leads with the caller's own touched test files -- the
-    posture this guard already takes everywhere else (offer the better
-    command, don't merely refuse the worse one).
-
-    Fixed (2026-07-30, same dud-offer memo as ``_deny_reason_grant``): the
-    trailing override line used to hand-write ``"...\\n  %s=1"`` with no
-    pre-launch-only qualifier; now routed through ``operator_override_note``.
-    """
     if touched_tests:
         shown = list(touched_tests)[:5]
         more = len(touched_tests) - len(shown)
@@ -3173,13 +2613,6 @@ def _deny_reason_subagent_directory(
 
 
 def _mutex_holder() -> Optional[Dict[str, Any]]:
-    """Current holder of the machine-wide suite-run mutex, or ``None``.
-
-    Imported lazily and fail-OPEN by design: the mutex module is a separate
-    workstream, and an absent/broken mutex must degrade this leg to "nobody is
-    running the suite" rather than blocking every test command on the machine.
-    The identity leg above stays fail-CLOSED and is unaffected.
-    """
     try:
         from coordinator_core.testing import suite_mutex
 
@@ -3191,26 +2624,6 @@ def _mutex_holder() -> Optional[Dict[str, Any]]:
 
 def _matched_tiers(cmd: str, cwd: Optional[str], testpaths: Sequence[str],
                    configured: Sequence[ConfiguredCmd]) -> frozenset:
-    """Which tiers (a subset of ``{"U", "F"}``) does ANY segment of ``cmd``
-    classify as?
-
-    Routes through ``_classify_command_core`` -- the SAME tiering the public
-    ``classify_command``/``classify_text`` API uses -- rather than forking a
-    second tiering rule for ``check()``'s own use (see module docstring
-    negative spec: there is exactly one classifier).
-
-    PM-ruled 2026-08-04: the grant leg's Tier-F exemption (a prior version of
-    this function reported Tier U only, since ``check()`` used to gate Tier U
-    alone) is removed -- Tier F now requires the same authorization grant.
-    This returns the full matched-tier SET, rather than a single bool, so
-    ``check()`` can decide -- per tier -- which authority exit applies (the R6
-    declaration exit stays reachable on the Tier-U leg only; see ``check()``'s
-    own comment at its call site for why that must be an explicit branch, not
-    a fall-through).
-
-    Takes the already-resolved ``configured`` list -- see
-    ``_matches_configured_cmd``'s docstring for why this isn't resolved
-    here."""
     return frozenset(
         match.tier
         for match in _classify_command_core(cmd, cwd, testpaths, configured)
@@ -3320,58 +2733,18 @@ def _matches_declared_fast_test_cmd(segments_argv: Sequence[Sequence[str]],
     Tier-U full-suite segment -- no longer does.
     """
     fast_only = [c for c in configured if c.tier == "fast_test_cmd"]
-    # ``exact=True``, deliberately NOT the containment default the
-    # classification legs use. Those legs answer "is this invocation at
-    # least the configured breadth" -- a superset still runs the whole
     # suite, so it is classified as that tier. This is an AUTHORITY exit,
-    # and it discharges the Tier-U gate for exactly the declared string:
-    # ``<fast_test_cmd> --extra-unscoped-thing`` is a command the repo never
-    # declared, so the declaration cannot speak for it and it stays denied.
     return _matches_configured_cmd(segments_argv, fast_only, exact=True) is not None
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the test-suite-invocation guard against a PreToolUse payload.
-
-    Returns ``None`` (allow) or a hard-deny envelope. Allows unless the
-    command is suite-shaped AND any of: (a) the payload carries a top-level
-    ``agent_id`` (a subagent caller); (b) the command is Tier U OR Tier F and
-    the top-level EM's session holds no live Tier-U authorization grant
-    (PM-ruled 2026-08-04: Tier F is no longer exempt from this leg); (c) a
-    granted Tier-U/F command is not routed through ``with-suite-mutex``; or
-    (d) the machine-wide suite mutex is held by another run. Checked in that
-    order -- identity, then grant, then wrapper, then mutex.
-    """
     # Read the override off the PER-CALL payload, not this process's environ.
-    # Ambient was correct only while every guard evaluation was a fresh child of
-    # the caller's own shell. It is not: `warm/hook_http.py :: evaluate_cold`
-    # runs this chain inside DoE's resident forwarder, and the warm rung runs it
-    # inside the resident server -- both environs belong to whoever spawned them.
-    # Ambient there fails in both directions at once: a caller's legitimate
-    # pre-launch override is invisible, and whatever the resident process started
-    # under disarms this guard for every session on the box. `_override`'s own
-    # docstring (C14c, `32d5224ed`) is the canonical statement of that hazard; it
-    # falls back to `os.environ` when the payload carries no `env`, so every
-    # direct/test call site is unchanged. Imported lazily: the dispatcher has
-    # already loaded that module in-process by the time any guard runs, so this
-    # costs a dict lookup, and a module-scope import would pull it in for the
-    # standalone-import callers that do not need it.
     from coordinator_core.bash_guards.dispatch_checks import _override
 
     if _override(_OVERRIDE_ENV_VAR, payload=payload):
         return None
 
     # Widened alongside ``MATCHERS`` (see that constant's comment): a
-    # PowerShell-tool payload is classified exactly as a Bash-tool one is --
-    # both dialects carry their command text in the same ``tool_input.
-    # command`` key (confirmed against the sibling multi-tool guards
-    # ``block_approval_sentinel_creation.check`` and
-    # ``block_reviewer_bash_outside_allowlist.check``), so no separate
-    # extraction path is needed here.
     if payload.get("tool_name") not in MATCHERS:
         return None
 
@@ -3386,17 +2759,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     cwd = cwd if isinstance(cwd, str) and cwd else None
 
     if not _RUNNER_PREFILTER_RE.search(cmd):
-        # Dynamic leg (2026-08-10): a repo whose configured test command
-        # invokes a runner this static regex has never heard of (a bespoke
-        # `bin/run-the-suite`) is caught here instead of falling through
-        # unclassified for every leg of this guard -- see
-        # `_dynamic_prefilter_hit`'s own docstring and the module docstring's
         # `_RUNNER_PREFILTER_RE` comment for the incident and cost argument.
         if not _dynamic_prefilter_hit(cmd, cwd):
             return None
 
-    # Top-level key access ONLY -- a nested tool_response.agent_id must never
-    # reach this decision (see module docstring, negative spec).
     raw_agent_id = payload.get("agent_id")
     is_subagent = isinstance(raw_agent_id, str) and bool(raw_agent_id.strip())
 
@@ -3404,13 +2770,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     testpaths = _read_testpaths(repo_root)
 
     detected: Optional[str] = None
-    # ``configured`` is resolved AT MOST ONCE per call and threaded into both
-    # legs that need it (below) -- ``_configured_test_cmds`` now does real
-    # work (an importlib module load plus config-file reads), so leaving each
-    # leg to resolve it independently would pay that cost twice on any
-    # command that reaches both. Stays ``None`` (never resolved at all) on
-    # the hot-path allow, matching the prefilter-miss/no-match short-circuits
-    # above.
     configured: Optional[List[ConfiguredCmd]] = None
     segments_argv: List[List[str]] = []
     dialect = _dialect_from_tool_name(payload.get("tool_name"))
@@ -3426,16 +2785,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         configured = _configured_test_cmds(repo_root)
         detected = _matches_configured_cmd(segments_argv, configured)
 
-    # R9 (DR-088 amendment, 2026-07-28) -- sited above the ``detected is
-    # None`` return below, because a Tier-T command is by definition not
-    # suite-shaped and so never reaches the identity leg at all; that
-    # ordering is correct for what the identity leg does and simply does not
-    # reach this case. It runs only when the command is NOT suite-shaped, so
     # this leg is strictly ADDITIVE: it can only deny commands that were
-    # previously allowed, never restate a deny another leg already owns with
-    # a better diagnosis (a suite-shaped subagent command is an identity
-    # problem, not a precision one, and should say so). See
-    # ``_pytest_directory_args``.
     if is_subagent and detected is None:
         dir_args = _pytest_directory_args(segments_argv, cwd)
         if dir_args:
@@ -3452,33 +2802,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             ))
 
         # TIER-T CONCURRENCY leg (layer 6's missing half, fail-OPEN on infra)
-        # -- a dispatched caller's SCOPED test run is denied unless it routes
-        # through `with-tier-t-slot`, which takes one slot of the machine-wide
-        # K-slot semaphore and WAITS when all K are taken.
-        #
-        # Sited here, inside the `is_subagent and detected is None` branch and
-        # after the precision leg, because those two conditions are exactly
-        # this leg's subject: a caller with no suite authority running a
-        # command no suite classifier can see. It is strictly additive in the
-        # same sense leg 0 is -- it can only reach commands every other leg
-        # allows -- and it never restates a deny another leg owns with a worse
-        # diagnosis (a suite-shaped subagent command is an identity problem and
-        # the identity leg below says so).
-        #
         # WHY THIS IS NOT A NARROWING OF THE TIER-T CARVE-OUT, which would be
-        # out of this repo's authority to make: the negative spec above still
-        # holds unchanged -- file- and node-id-scoped invocations remain
-        # permitted for everyone, always, and DoE's R9 ruling that a node id
-        # stays legal for a subagent regardless of its touched set is untouched.
-        # Nothing here asks whether the caller MAY run this. It asks only how
-        # many may run AT ONCE, which is a resource question the ladder had no
-        # answer to at any N: leg 0 gives Tier T an authority bound, the mutex
-        # leg covers only suite-shaped commands, and the gap between them is
-        # where 2026-09-20's incident went through -- hundreds of individually
-        # legal scoped runs from one fan-out, every one of them correctly
-        # allowed, together taking the box to a 15-minute load average of 17.83.
-        # The EM is deliberately unaffected: one session cannot fan out, and its
-        # scoped runs are serial by construction.
         if _command_wrapped_in_tier_t_slot(cmd, dialect) is False:
             verdict = _tier_t_slot_verdict(cmd, dialect, segments_argv)
             if verdict is not None:
@@ -3494,111 +2818,35 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     if configured is None:
         configured = _configured_test_cmds(repo_root)
-    # `_matched_tiers` -> `_classify_command_core` re-tokenizes `cmd` itself
-    # via its own `_segments_with_spans`/`_tokens` walk, independently of the
-    # dialect-resolved `segments_argv` this function already computed (that
-    # core is ALSO the public, payload/tool_name-free `classify_command`/
-    # `classify_text` API -- see that function's own negative spec -- so it
-    # cannot be widened to accept a `dialect` parameter without changing a
-    # cross-repo-consumed public contract, out of this fix's scope). For a
-    # PowerShell-dialect invocation this would silently re-introduce the
-    # SAME `Start-Process -ArgumentList` blindness the identity leg above
-    # was just fixed for, on the EM/grant leg. Feeding it the ALREADY
-    # dialect-resolved `segments_argv` (computed above via `_segment_argvs`,
-    # which already ran the Start-Process expansion for this dialect)
-    # instead of the raw `cmd` string closes that gap without touching the
-    # public API's signature: the reconstructed text carries the launched
-    # command's own argv in command position, exactly as the identity leg
-    # above already sees it.
     cmd_for_tiering = (
         " ; ".join(" ".join(seg) for seg in segments_argv)
         if dialect is _Dialect.POWERSHELL and segments_argv
         else cmd
     )
     matched_tiers = _matched_tiers(cmd_for_tiering, cwd, testpaths, configured)
-    # Collect-only carve-out (2026-09-21): a collection pass never runs a
-    # test body, so it never needs the Tier-U grant + `with-suite-mutex`
-    # machinery below -- that machinery exists to bound an unbounded RUN's
-    # cost, not a bounded collection walk. Checked here, after `detected`/
-    # `matched_tiers` are already resolved (so the tiering + identity legs
-    # above are untouched -- a subagent's collect-only invocation is still
-    # denied by the identity leg, unaffected by this leg alone), and before
-    # the grant ask below, which is the only leg this shape exempts.
-    # Refusing an actual unbounded run is unchanged.
     collect_only = any(_is_pytest_collect_only_segment(argv) for argv in segments_argv)
     if matched_tiers & {"U", "F"} and not collect_only:
-        # R6 (DR-088 amendment, 2026-07-25): a repo may DECLARE its fast
-        # tier legitimately unscoped (``coordinator_core.session.
-        # fast_tier_declaration`` owns that declaration and its key). This
         # discharges the AUTHORITY check for exactly the literal (token-
-        # normalized) resolved ``fast_test_cmd`` -- never ``full_test_cmd``,
-        # never any other Tier-U command -- and only reaches here at all
-        # because the identity leg above already denied every subagent
-        # outright, so this exit is EM-only by construction, matching R6's
-        # "does not widen the subagent rung" requirement without a separate
-        # identity check. This is ``check()``'s authority leg, not the
-        # classifier: nothing under ``_classify_command_core`` reaches the
-        # declaration at all -- see this module's own docstring negative spec
-        # and ``tier_u_gate.py``'s for why.
-        #
-        # PM-ruled 2026-08-04: this leg now also fires on a Tier-F match (the
-        # grant ask is Tier F's only escape hatch; no declaration-based exit
-        # is to be added for it). The R6 exit above must stay reachable on
-        # the Tier-U leg ONLY -- gated explicitly on ``"U" in matched_tiers``
-        # below rather than left to fall through by omission, or a repo
-        # carrying a stale R6 declaration (the unscoped-fast-tier exemption
-        # above) would get its Tier-F command discharged by that declaration
-        # for free, which is exactly the Tier-F escape hatch the PM forbade.
         declared_unscoped_fast_tier = (
             "U" in matched_tiers
             and _fast_tier_unscoped_declaration(repo_root)
             and _matches_declared_fast_test_cmd(segments_argv, configured)
         )
         granted = declared_unscoped_fast_tier
-        # `grant_record` is what `check_tier_u_grant` returns EVEN ON A
-        # DENIAL, by its own documented contract, so a deny can tell "no
-        # grant" apart from "a grant that did not authorize this". It was
-        # captured into `_record` and discarded here until 2026-09-02, which
-        # is why a live grant rendered as an absent one -- see
-        # `_deny_reason_grant`'s `ungranted_record` branch. Stays None on the
-        # R6-declaration path, which never consults a grant at all.
         grant_record: Optional[Dict[str, Any]] = None
         if not granted:
             granted, grant_record = _tier_u_grant(cwd)
         if not granted:
-            # A tie repo (fast_test_cmd == full_test_cmd, either declared
-            # explicitly or arrived at via the resolver's rc=3 fallback --
-            # see ``ConfiguredCmd``'s docstring) has no reachable Tier-F
-            # route: the same string satisfies both tiers and the tie-break
-            # always prefers full_test_cmd. Naming the Tier-F escape hatch in
-            # that case would send the caller straight back into this deny.
             by_tier = {entry.tier: entry.cmd for entry in configured}
             is_tie = (
                 "fast_test_cmd" in by_tier
                 and "full_test_cmd" in by_tier
                 and by_tier["fast_test_cmd"] == by_tier["full_test_cmd"]
             )
-            # Branch left explicit on which tier fired (Tier-F-only match,
-            # no Tier-U match in the same invocation, vs. a Tier-U match)
-            # even though both calls render identically today: C3 (2026-08-
-            # 04 PM ruling) decided the two ledes converge on "ask for a
-            # grant" once the dead fast-suite offer is gone from both, so
-            # there is no separate Tier-F-only deny text to write here --
-            # see ``_deny_reason_grant``'s own docstring for the full
-            # reasoning. The branch stays as a seam, not collapsed to one
-            # `return`, so a future divergence (should one become
-            # warranted) has somewhere to land without re-deriving
-            # `matched_tiers` at the call site.
             if "U" in matched_tiers:
                 return _deny(_deny_reason_grant(detected, cmd_safe, is_tie=is_tie, payload=payload, git_root=repo_root, ungranted_record=grant_record, ungranted_cwd=cwd))
             return _deny(_deny_reason_grant(detected, cmd_safe, is_tie=is_tie, payload=payload, git_root=repo_root, ungranted_record=grant_record, ungranted_cwd=cwd))
 
-        # WRAPPER leg (new, sited strictly after identity and grant, and
-        # strictly before the mutex leg below): a granted Tier-U/F command
-        # that does not route through ``with-suite-mutex`` would hold no
-        # mutex at all, reopening the exact concurrent-run hazard the grant
-        # leg above authorizes but cannot itself prevent -- see
-        # ``_command_wrapped_in_suite_mutex``'s docstring.
         if not _command_wrapped_in_suite_mutex(cmd, dialect, testpaths, cwd, configured):
             return _deny(_deny_reason_wrapper_required(detected, cmd_safe))
 
@@ -3609,69 +2857,16 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Public classification API (DR-088 layer 2 seam) -- see negative spec and
-# spec backlinks in the module docstring above.
-# ---------------------------------------------------------------------------
-
 @dataclasses.dataclass(frozen=True)
 class SuiteMatch:
-    """One suite-shaped command match found by ``classify_command`` or
-    ``classify_text``.
 
-    ``position`` is advisory metadata for the CALLER's own allow/deny
-    policy -- see the module docstring's negative spec. This dataclass never
-    decides anything; it only describes what was found and where.
-    """
-
-    #: ``"F"`` (the invocation's SHAPE is scoped -- a test file, directory,
-    #: or node-id argument -- AND it verbatim-matches the repo's configured
-    #: ``fast_test_cmd`` OR ``full_test_cmd``) or ``"U"`` (any other
     #: suite-shaped match, INCLUDING an unscoped runner invocation that
-    #: happens to verbatim-match one of those cfg keys -- the cfg key never
-    #: launders an unscoped shape into Tier F, for EITHER key -- and the
-    #: undeterminable case. Tier is a property of the invocation's shape,
-    #: not of the config key it was read from (R1,
-    #: cross-repo/inbox/2026-07-25-doe-claude-em-validate-tier-u-shape-
-    #: ruling.md). Tier F is the narrow opt-in, Tier U the default.
     tier: str
-    #: Human-readable runner label, e.g. ``"pytest"``, ``"go test ./..."``,
-    #: ``"the repo's configured fast_test_cmd"``.
     detected: str
-    #: The exact matched command substring, control-character-sanitized.
     matched_text: str
-    #: ``(start, end)`` character offsets of ``matched_text`` into the input
-    #: string passed to ``classify_command``/``classify_text``.
     span: Tuple[int, int]
-    #: Where the match sits in the input: ``"fenced_code"``, ``"inline_code"``,
-    #: ``"negated"``, ``"reported"``, ``"descriptive"``, ``"imperative"``, or
-    #: ``"unknown"``. ``"negated"`` is an instruction NOT to run something
     #: ("do not run pytest"). ``"reported"`` is a DIFFERENT linguistic shape:
-    #: prose reporting someone's (in)ability to run something, or a
-    #: past-tense reporting frame ("they stated they could not run pytest",
-    #: "she said they failed to run pytest") -- not an instruction either
-    #: way, just a narrative claim about a run that did or didn't happen.
-    #: ``"descriptive"`` is a THIRD shape, distinct from both: a bare-line
-    #: mention that contains an execution-intent cue word (``run``,
-    #: ``running``, ``verify``, ...) but where that cue is NOT the head of
-    #: its clause -- a subject noun phrase or an auxiliary/modal/copula
-    #: governs it instead ("Neither consumer may run the test tier", "other
-    #: sessions are running pytest against this shared worktree"). A real
-    #: English imperative has the cue AS the clause head (no subject, no
-    #: auxiliary precedes it: "run pytest", "Please run pytest", "re-run
-    #: pytest") -- see ``_cue_is_clause_head``. Always ``"imperative"`` for
-    #: ``classify_command`` (a real command line, not prose, has no
-    #: code-fence, negation, reported-speech, or clause-structure context to
-    #: report). A non-``"imperative"`` position is automatically
-    #: non-denying at the sole downstream consumer (DoE-claude's
-    #: ``coordinator/hooks/scripts/block-dispatch-suite-invocation.py``,
-    #: which denies a dispatch iff ANY match has ``position ==
-    #: "imperative"``) -- so adding ``"reported"``/``"descriptive"`` as
-    #: additional non-imperative values is safe by construction: each can
-    #: only ever suppress a false "imperative", never invent one.
     position: str
-    #: Actionable remediation text -- what to run/do instead, not a bare
-    #: boolean the caller has to write its own copy for.
     remediation: str
 
     def as_dict(self) -> Dict[str, Any]:
@@ -3686,11 +2881,6 @@ class SuiteMatch:
 
 
 def _remediation_text(tier: str, detected: str) -> str:
-    """Actionable remediation for a public-API match. Distinct copy from
-    ``_deny_reason_subagent``/``_deny_reason_mutex`` -- those are hard-deny
-    envelopes keyed to ``check()``'s two legs; this is generic advice for a
-    caller (e.g. DoE's dispatch-brief guard) that has no payload/identity/
-    mutex context of its own."""
     if tier == "F":
         return (
             "This reproduces the repo's configured fast_test_cmd verbatim. "
@@ -3717,33 +2907,12 @@ def _remediation_text(tier: str, detected: str) -> str:
     )
 
 
-#: Label surfaced to the operator's remediation text when a scoped-shape
-#: segment matches a configured cfg key -- distinct per key so the message
-#: names which config field the repo declared, even though both keys share
-#: one shape decision (``_tier_for_cfg_match``).
 _CFG_TIER_DETECTED_LABEL: Dict[str, str] = {
     "fast_test_cmd": "the repo's configured fast_test_cmd",
     "full_test_cmd": "the repo's configured full_test_cmd",
 }
 
 
-#: Command heads that cannot invoke a test runner at all, however they are
-#: argued -- the closed allow-list behind ``_argv_is_inert``.
-#:
-#: An ALLOW-list, not a deny-list of wrapper tells, and that direction is the
-#: whole point. A tell-based rule ("this segment mentions a runner token, or
-#: the substring ``test``") reads ``bash scripts/run-tests.sh`` correctly and
-#: then hands a free pass to ``bash run-suite.sh`` -- the identical opaque
-#: wrapper under a name the tell does not happen to spell. Every such rule is
-#: one rename away from the fail-OPEN hole the callers below exist to close.
-#: Inverting it makes the failure mode a false "could be a suite run" (the
-#: caller falls back to exactly the behaviour it already had) instead of a
-#: false "definitely not one".
-#:
-#: Membership test: could this head, under ANY argv, spawn a test run?
-#: Anything that executes a script, a binary, or a subshell -- ``bash``,
-#: ``sh``, ``python``, ``make``, ``xargs``, ``find`` -- fails it and is
-#: deliberately absent. Extend only with heads that pass it.
 _INERT_COMMAND_HEADS = frozenset({
     ":", "true", "false", "exit", "return", "echo", "printf", "pwd", "cd",
     "sleep", "test", "[",
@@ -3865,17 +3034,7 @@ def _tier_for_cfg_match(cfg_tier: str, generic: Optional[str],
     if cfg_tier == "full_test_cmd":
         if generic is None and _runner_recognized(argv):
             return "F", _CFG_TIER_DETECTED_LABEL["full_test_cmd"]
-        # ...with one exception that is not a laundering at all: an argv
         # PROVABLY incapable of spawning a test run (``_argv_is_inert``:
-        # ``true``, ``exit 3``). ``_runner_recognized`` is ``False`` for those
-        # for the same reason it is ``False`` for an opaque wrapper, but the
-        # ambiguity the Tier-U default protects against does not exist here --
-        # there is no unknown breadth behind ``exit 3``. Measured 2026-08-02:
-        # a repo whose fast tier resolved to ``exit 3`` (with no separate
-        # ``full_test_cmd``, so the resolver's rc=3 fallback made the fast
-        # string the full string too) had that command classified "the repo's
-        # configured full_test_cmd", Tier U -- so ``enforce_tier_u_gate``
-        # demanded a Tier-U grant before it would run a one-token no-op.
         if generic is None and _argv_is_inert(argv):
             return "F", _CFG_TIER_DETECTED_LABEL["full_test_cmd"]
         return "U", generic or _CFG_TIER_DETECTED_LABEL["full_test_cmd"]
@@ -3885,23 +3044,6 @@ def _tier_for_cfg_match(cfg_tier: str, generic: Optional[str],
 
 
 def _segments_with_spans(cmd: str) -> List[Tuple[str, int, int]]:
-    """Split a command string into independently-classifiable segments on
-    ``;``/``&``/``|`` runs, preserving each segment's original offsets into
-    ``cmd``. Sibling of ``_segments`` (used by ``check()``) but offset-
-    preserving, since the public API must report a ``span`` -- ``check()``
-    has no such requirement and is left untouched.
-
-    Quote-aware: splits only on ``;``/``&``/``|`` runs seen outside single
-    or double quotes (honouring unquoted and double-quoted backslash
-    escapes), so a quoted argument containing a separator -- a commit
-    message naming ``pytest`` -- is never cut into a live-looking segment.
-    Trap: the shared tokenizer (``tokenize_full_command``) cannot be used
-    here because it shlex-processes tokens and loses their offsets into
-    ``cmd``. An unterminated quote swallows the rest of the string into the
-    current segment (fewer segments, never a fabricated split). Only
-    non-empty segments are returned, matching the ``[^;&|]+`` shape callers
-    rely on for quote-free commands.
-    """
     segments: List[Tuple[str, int, int]] = []
     n = len(cmd)
     seg_start = 0
@@ -3955,25 +3097,6 @@ def _classify_command_core(
     testpaths: Sequence[str],
     configured: Sequence[ConfiguredCmd],
 ) -> List[SuiteMatch]:
-    """Shared classification core for ``classify_command`` and
-    ``classify_text`` -- runs every segment of ONE command string through the
-    same private classifier ``check()`` uses (``_classify_tokens``,
-    ``_is_real_scope``, the configured-command containment leg), without
-    short-circuiting on the first match. Always reports ``position``
-    ``"imperative"``; callers that know the surrounding text (``classify_text``)
-    override it afterward.
-
-    Configured-tier matching needs the FULL invocation's segment set, not
-    any one segment in isolation -- a chained configured command (``pnpm run
-    typecheck && pnpm run test``) is matched by segment-set containment
-    (every one of ITS segments present somewhere in the invocation), and
-    once a configured tier is satisfied that way, EVERY invocation segment
-    that is one of that tier's own segments is classified into that tier
-    (both halves of the chained example above become Tier F, not just the
-    half that happens to look Tier-U-shaped on its own). So this builds the
-    invocation's segment-argv set FIRST, decides which configured tiers are
-    satisfied against that whole set, and only then classifies each segment
-    against the now-known satisfied tiers."""
     out: List[SuiteMatch] = []
     if not command:
         return out
@@ -3997,43 +3120,13 @@ def _classify_command_core(
         seg_infos.append((stripped, seg_start, seg_end, argv, target))
         invocation_segments.append(target)
 
-    # Shape-guard BEFORE the sort: a belt-and-braces leg must never be the
-    # thing that crashes the chain, and a malformed element would raise
-    # inside the sort key (``pair[0]``) before the loop body ever runs its
-    # own unpack.
-    # Shape pinned to ``ConfiguredCmd`` (tier, cmd, returncode) -- kept in
-    # lockstep with the shape-guard in ``_matches_configured_cmd`` per that
-    # NamedTuple's own docstring; a mismatch here silently drops every
-    # configured-cmd match rather than raising.
     well_formed = [
         pair for pair in configured
         if isinstance(pair, (tuple, list)) and len(pair) == 3
     ]
 
-    # Check ``full_test_cmd`` BEFORE ``fast_test_cmd`` so a tie (both tiers
     # resolved to the identical string) prefers the STRICTER tier. This is
-    # the NORMAL shape for any repo with no distinct ``full_test_cmd``
-    # configured: ``resolve_full_test_cmd`` falls back to the fast tier's
-    # own resolved string (exit code 3) when nothing is configured, so
-    # ``configured`` routinely carries two entries with the same command
-    # string. Deciding by insertion order there would force the
-    # whole-suite invocation to Tier F (ungated) -- exactly the coverage
-    # this leg exists to provide.
-    #
     # This same tie-break also fires when the repo EXPLICITLY declares
-    # ``full_test_cmd`` identical to ``fast_test_cmd`` (resolver rc=0 for
-    # both, not the rc=3 fallback above) -- and resolves to Tier U for that
-    # case too, deliberately, not by accident of a discarded returncode.
-    # DR-088 (docs/decisions/DR-088-test-breadth-ladder-tiered-invocation-
-    # authority.md:38-40) defines Tier U disjunctively: the repo's
-    # ``full_test_cmd`` OR any unscoped runner invocation. An explicit tie
-    # is still an unscoped runner invocation -- declaring the same string
-    # under both keys does not make it a *scoped* one -- so classifying it
-    # as Tier F would ungate DR-088's second disjunct. ``ConfiguredCmd``
-    # carries the resolver's ``returncode`` precisely so a caller (see
-    # ``check()``'s grant-deny leg) CAN tell the two tie origins apart when
-    # composing remediation text, even though both origins resolve to the
-    # identical Tier-U verdict here.
     satisfied: Dict[str, List[Tuple[str, ...]]] = {}
     for tier_name, cmd_str, _returncode in sorted(
         well_formed, key=lambda pair: pair[0] != "full_test_cmd"
@@ -4043,29 +3136,11 @@ def _classify_command_core(
             satisfied.setdefault(tier_name, cfg_segments)
 
     # A repo may scope its fast tier by APPENDING a scope to its full tier
-    # (``python dev.py test`` full, ``python dev.py test tests`` fast). The
     # configured-cmd match is token CONTAINMENT (``_segment_contains`` ->
-    # ``issubset``), so such a fast invocation also "contains" the full
-    # command, and the full-first tie-break above would then classify the
-    # fast tier's own command as Tier U -- leaving the repo with no reachable
-    # Tier F at all, so every ``/validate`` and workday-complete Step-1 gate
-    # refuses rather than runs. That is a silent dead gate: it reports having
-    # declined, never having failed.
-    #
-    # Prefer the fast tier ONLY when its configured tokens are a STRICT
-    # superset of the full tier's -- fast genuinely narrows full by at least
-    # one extra scope token. That is a distinct shape from the equal-string
-    # tie the block above reasons about (whether an identical *scoped* string
-    # under both keys is Tier U is a settled policy call, asserted by
-    # ``test_classify_command_identical_scoped_string_under_both_keys_
-    # still_classifies_tier_u``); this narrowing check leaves that verdict,
-    # and the rc=3 fallback tie, entirely untouched.
     tier_order = ("full_test_cmd", "fast_test_cmd")
     _fast_cfg = satisfied.get("fast_test_cmd")
     _full_cfg = satisfied.get("full_test_cmd")
     if _fast_cfg and _full_cfg:
-        # Compare on the same basis ``_segment_contains`` matches on: tokens
-        # after the leading interpreter/binary token.
         _fast_tokens = {tok for seg in _fast_cfg for tok in seg[1:]}
         _full_tokens = {tok for seg in _full_cfg for tok in seg[1:]}
         if _full_tokens < _fast_tokens:
@@ -4084,30 +3159,11 @@ def _classify_command_core(
         generic = _classify_tokens(argv, testpaths, cwd)
 
         if cfg_tier is not None:
-            # R1 (cross-repo/inbox/2026-07-25-doe-claude-em-validate-tier-u-
-            # shape-ruling.md): tier is a property of the invocation's
-            # SHAPE, not of the config key it was read from -- and this
-            # holds for BOTH cfg keys, not just ``fast_test_cmd``. A segment
-            # that verbatim-matches the repo's configured ``fast_test_cmd``
-            # OR ``full_test_cmd`` is Tier F only when its own shape is
-            # scoped (``generic is None`` -- ``_classify_tokens`` found no
-            # unscoped runner invocation to report). When the shape IS an
-            # unscoped runner invocation (``generic is not None``), the
-            # cfg-key match must NOT launder it into Tier F -- classify on
-            # shape as Tier U, same as any other unscoped invocation. A
-            # repo whose ``fast_test_cmd`` is itself unscoped therefore has
-            # no reachable Tier F (R2) -- that is a misconfiguration to
-            # correct, not a tier to grant around. The two cfg keys differ
-            # only in which label reaches the operator's remediation text
-            # when the shape turns out scoped -- ``_tier_for_cfg_match``
-            # is the single place that decision is made, on purpose, so a
-            # future fix to this rule cannot land in one leg and miss its
-            # twin the way this one originally did.
             tier, detected = _tier_for_cfg_match(cfg_tier, generic, argv)
         elif generic is not None:
             tier, detected = "U", generic
         else:
-            continue  # Tier T (or no runner at all) -- not a match
+            continue
 
         out.append(SuiteMatch(
             tier=tier,
@@ -4121,12 +3177,6 @@ def _classify_command_core(
 
 
 def classify_command(command: str, *, cwd: Optional[str] = None) -> List[SuiteMatch]:
-    """Classify EVERY segment of one shell command string, zero-to-many
-    matches. Unlike ``check()`` this never short-circuits on the first
-    classified segment and never reads a payload dict.
-
-    Spec backlink: cross-repo/inbox/2026-07-23-claude-central-em-dr088-grant-spec-and-layer2-seam.md § Ask 1
-    """
     if not isinstance(command, str) or not command:
         return []
     repo_root = resolve_git_root(cwd) or cwd
@@ -4135,9 +3185,6 @@ def classify_command(command: str, *, cwd: Optional[str] = None) -> List[SuiteMa
     return _classify_command_core(command, cwd, testpaths, configured)
 
 
-#: ``classify_runner_footprint``'s three verdicts. Exported as constants so a
-#: caller branches on a name rather than a bare string literal it can typo
-#: into a silent fail-open.
 RUNNER_FOOTPRINT_NONE = "none"
 RUNNER_FOOTPRINT_SCOPED = "scoped"
 RUNNER_FOOTPRINT_UNPROVEN = "unproven"
@@ -4211,11 +3258,6 @@ def classify_runner_footprint(command: str, *, cwd: Optional[str] = None) -> str
     return verdict
 
 
-#: Negation/quotation markers that flip a code-fence/inline-code/bare match
-#: to ``position="negated"`` -- a brief instructing an agent NOT to do
-#: something, or quoting a command in order to delete/replace it, is not an
-#: imperative instruction to run that command. See module docstring negative
-#: spec: this label is advisory, the caller decides what to do with it.
 _NEGATION_RE = re.compile(
     r"(?:\bdo not run\b|\bdon't run\b|\bnever run\b|\bmust not\b|\bshould not\b|"
     r"\binstead of\b|\brather than\b|\bdeny[-\s]?list\b|\bremove\b|\bdelete\b|"
@@ -4223,24 +3265,11 @@ _NEGATION_RE = re.compile(
     re.IGNORECASE,
 )
 
-#: Modal-capability negation ("could not run", "was unable to run", "failed
-#: to run") and past-tense reporting frames ("they stated", "reported that")
 #: that mark a match as REPORTED SPEECH -- prose narrating someone's (in)
-#: ability to run something, or quoting/summarizing a claim about a run,
 #: never an instruction to run anything. Distinct from ``_NEGATION_RE``: a
-#: negation is an instruction NOT to do something ("do not run pytest"); a
 #: report is a narrative claim about a DIFFERENT actor's past action or
-#: inability ("they stated they could not run pytest"). 2026-07-28 repro:
-#: "They stated plainly they could not run pytest to confirm." classified
-#: ``position="imperative"`` (denying) despite being pure reported speech
 #: with no instruction anywhere in it -- ``_NEGATION_RE`` only recognizes
-#: ``do not run``/``don't run``/``never run``, not modal-capability
-#: negation shapes like ``could not run``.
-#:
 #: Checked in ``classify_text``'s ``_emit`` ONLY when ``_NEGATION_RE`` did
-#: NOT already match (existing-negation-wins precedence) -- a "never run"
-#: match already correctly reports "negated" today and must keep doing so,
-#: not flip to the new "reported" value.
 _REPORTED_SPEECH_RE = re.compile(
     r"(?:\b(?:could\s+not|couldn't|can\s+not|cannot|can't|"
     r"was\s+(?:not\s+)?(?:un)?able\s+to|were\s+(?:not\s+)?(?:un)?able\s+to|"
@@ -4251,78 +3280,16 @@ _REPORTED_SPEECH_RE = re.compile(
     re.IGNORECASE,
 )
 
-#: Shared negation look-back distance (characters) applied uniformly across
-#: every ``classify_text`` pass (fenced, inline-code, bare-line) so none of
-#: the three gives a negation marker on a preceding line less reach than the
-#: others -- a bare-line match with a shorter (or zero) look-back than its
-#: fenced/inline siblings is exactly the false-"imperative" gap this constant
-#: closes. 300 chars is a few lines of prose: enough to reach a negation
-#: marker on the immediately preceding sentence/line without reaching back
-#: across an unrelated earlier command several paragraphs up in a long brief.
 _NEGATION_LOOKBACK = 300
 
 #: Execution-intent verbs/phrases that license treating a BARE (non-fenced,
-#: non-inline-code) mention of a runner token as an actual command rather
-#: than a narrative/nominal mention of the runner's name. Closed set, same
 #: spirit as ``_NEGATION_RE``'s marker list (closed-set-ness only -- the
 #: matching MECHANISM differs, see the clause-scoping note below) -- this
-#: does NOT enumerate every possible non-command sentence shape (that is
-#: unbounded, and enumerating it is the denylist-of-English-words trap this
-#: fix deliberately avoids); it enumerates a broad, closed vocabulary of
-#: verbs/phrases that actually issue a command in English ("run pytest",
-#: "verify with pytest", "please pytest the tree", "kick off pytest").
-# The original 10-verb
-# closed set missed ordinary command-issuing English ("please", "just do",
-# "kick off", "start ... and monitor"). Broadened substantially. A closed
 # set gating a detection gate is a recall risk (unlike ``_NEGATION_RE``'s
-# closed set, which only demotes an already-caught match's label) -- this
-# does not make the set exhaustive, it narrows the gap. No blanket
-# "default to command when neither cue nor prose-negative matches" fallback
-# was added: that would also flip the Defect-A clause ("A start ceremony
-# that invokes pytest is a several-minute stall...", a genuinely
-# descriptive/prose sentence) to a false positive, regressing the peer's
-# fix at cross-repo/inbox/2026-07-25-doe-claude-em-dispatch-suite-
-# classifier-two-live-defects.md. The middle path taken: broaden the cue
-# vocabulary (this set) and add explicit prose-negative patterns (see
 # ``_PROSE_NEGATIVE_RE`` below), leaving the existing lead-strip fallback
-# (nothing-but-cosmetic-markers precedes the runner) as the only unmatched
-# default -- narrower than the reviewer's suggested fix, but the reviewer's
-# suggested fix conflicts with a hard must-preserve regression.
-#
 # "start"/"starting" are deliberately EXCLUDED from this clause-wide set
 # (unlike every other cue here) and instead checked by ``_START_CUE_TAIL_RE``
-# below: the Defect-A repro's own clause literally contains the word
-# "start" as a plain noun-phrase head ("A start ceremony that invokes
-# pytest ..."), so a clause-wide "start" cue reopens that exact regression.
-# "start" is real signal only when it is the word immediately governing the
-# runner (adjacent, at the clause tail) -- "start pytest" -- not merely
-# co-occurring anywhere in the clause.
-#
-# ``do`` carries a negative lookahead (``do(?!\s+not\b)``) rather than a
-# plain bare-word match: "do" alone is not just an imperative cue ("please
-# do pytest"), it is also the ordinary English negator lead-in "do not
-# ...", and a bare-word "do" cue fired on "do not weaken the guard to make
-# tests pass" (2026-07-26 repro) -- a prose instruction NOT to run
-# anything, whose "not" governs a different verb ("weaken") than the one
 # ``_NEGATION_RE``'s ``\bdo not run\b`` marker checks for, so that marker
-# never fires either. The lookahead vetoes "do" specifically when directly
-# followed by "not" (the negator shape), leaving every other "do ..." use
-# (including "do not run", where "run" is its own independent cue) as real
-# signal.
-#: ``verify``/``verifying`` carry a negative lookbehind for a ``re-`` prefix
-#: (2026-07-26 repro: "Do NOT re-verify claims your prior pass already
-#: confirmed clean (... the pytest result ...). Those are settled."). ``\b``
-#: matches at the boundary between a hyphen and a following letter exactly
-#: as it does at whitespace, so the bare word ``verify`` inside the compound
-#: ``re-verify`` satisfied this cue with no lookbehind guard -- "re-verify
-#: claims" means "double-check something already confirmed", not "invoke
-#: pytest", and the runner token it licensed here sat deep inside an
-#: unrelated parenthetical list, nowhere near being the object of that verb.
-#: The lookbehind is scoped to ``verify``/``verifying`` only, not the whole
-#: cue set: unlike "re-verify", "re-run pytest" (and "re-execute", "re-
-#: invoke", ...) genuinely does mean "invoke the runner again" and must stay
-#: real signal -- broadening the exclusion to every cue word would silently
-#: reopen recall on that legitimate shape.
 _IMPERATIVE_CUE_RE = re.compile(
     r"\b(?:run|running|execute|executing|invoke|invoking|launch|launching|"
     r"(?<!re-)verify|(?<!re-)verifying|call|calling|please|just|"
@@ -4332,82 +3299,27 @@ _IMPERATIVE_CUE_RE = re.compile(
     re.IGNORECASE,
 )
 
-#: "start"/"starting" as a cue is licensed ONLY when it is the word
-#: immediately preceding the runner token (the tail of the clause) -- see
 #: the exclusion note on ``_IMPERATIVE_CUE_RE`` above.
 _START_CUE_TAIL_RE = re.compile(r"\bstart(?:ing)?\s*$", re.IGNORECASE)
 
 #: Prose-shape NEGATIVE patterns -- a runner token appearing as the OBJECT
-#: of an ordinary preposition or copula, never as the head of a command.
-#: Checked ahead of the lead-strip fallback so a broadened cue set (above)
-#: can never override a clause that structurally reads as prose even when
-#: it happens to contain a cue-adjacent word elsewhere.
-# Explicit prose-shape
-# negative patterns per the suggested fix, covering the repro corpus's
-# copula/preposition shapes ("is in pytest testpaths", "as a pytest
-# oracle", "backed by a re-runnable pytest node id").
 _PROSE_NEGATIVE_RE = re.compile(
     r"(?:\bis\s+in\b|\bas\s+an?\b|\bbacked\s+by\b|\bre-runnable\b|"
     r"\babout\b|\bmentions?\b)",
     re.IGNORECASE,
 )
 
-#: Cosmetic lead-in stripped off a bare line's pre-runner prefix before
-#: testing whether nothing of substance precedes the runner token: plain
-#: whitespace, shell prompt markers (``$``), and bullet/numbered-list
-#: markers (``-``, ``*``, ``1.``, ``2)``).
-# ``#`` and ``>`` were
-# previously in this permissive class, treating markdown heading/blockquote
-# markers as equivalent to a shell prompt lead-in; a bare (non-fenced) line
-# `` # pytest configuration notes`` or ``> pytest already covers this``
-# then over-stripped to empty and mis-classified as command-shaped. Both
-# dropped -- they are markdown structural characters in bare-line prose,
-# not command-line lead-ins.
 _BARE_LINE_LEAD_RE = re.compile(r"^[\s\-*\$\d\.\)]+")
 
-#: A single lettered ordered-list marker (``a.``, ``B)``) at the very start
 #: of the prefix, stripped ahead of ``_BARE_LINE_LEAD_RE`` -- that regex's
-#: permissive character class cannot safely include bare letters (doing so
-#: would strip the leading letters off ordinary prose words too, e.g.
-#: "Run "), so a lettered marker gets its own narrowly-anchored pattern
-#: instead: exactly one letter immediately followed by ``.``/``)``.
-# Numeric list markers
 # (``1.``, ``2)``) were already covered by ``_BARE_LINE_LEAD_RE``; lettered
-# markers (``a.``, ``b)``) were not, so a lettered-list command line like
-# ``b. pytest`` evaded detection while the numeric equivalent was caught.
 _LIST_MARKER_LEAD_RE = re.compile(r"^[A-Za-z][.\)]\s*")
 
-#: Clause boundary for scoping the imperative-cue search (see
-#: ``_bare_line_is_command_shaped``) to the CURRENT clause rather than the
-#: whole prefix -- a sentence/clause break a cue must not reach across.
 #: Restricted to SENTENCE-ending punctuation only (``.``/``;``).
-# ``:``/``,`` were
-# previously clause boundaries too, so a colon-headed label instruction
-# ("Run: pytest", "Verify: pytest" -- an extremely common dispatch-brief/
-# README idiom) discarded the cue word into the segment BEFORE the split,
-# evading detection even though the cue is a literal member of
 # ``_IMPERATIVE_CUE_RE``. A colon/comma used as a label separator is not a
-# sentence boundary; only ``.``/``;`` genuinely end a clause for this
-# purpose. Verified this does not regress the Defect-A repro below (its
-# clause break is a ``.``, unaffected by dropping ``:``/``,``).
 # A LINE BREAK was added as a clause boundary, then REVERTED the same day
-# (2026-07-28) -- do not re-add it here. This regex is SHARED with the
 # reported-speech check (``_REPORTED_SPEECH_RE.search(clause)`` in
 # ``classify_text``), which is deliberately designed to reach BACKWARDS
-# across a line break -- a modal-negation cue on the preceding line
-# ("They said they could not\nrun pytest to confirm.") is otherwise
-# invisible to it, and treating a soft-wrapped sentence as two separate
-# clauses turned that exact repro into a false "imperative" (the class this
-# whole module exists to eliminate), because the negation marker sat on the
-# far side of a boundary only ``_cue_is_clause_head`` actually needed. A
-# boundary that suits one consumer of this shared regex is not automatically
-# safe for the others -- same lesson as the ``:``/``,`` note above, this
-# time on line breaks rather than punctuation. The governance check that
-# DOES need line-scoping (``_cue_is_clause_head``'s "nothing of substance
-# precedes the cue" test -- see ``test_position_imperative_bare_line_
-# negation_too_far_above``, 400 chars of unrelated padding on a prior line)
-# now does its own newline truncation locally, on the pre-cue text only,
-# instead of this module-wide regex doing it for every caller.
 _CLAUSE_BOUNDARY_RE = re.compile(r"[.;]")
 
 
@@ -4471,41 +3383,14 @@ def _bare_line_is_command_shaped(prefix: str) -> bool:
 
 
 #: A HYPHENATED ``re-`` repetition prefix directly touching an imperative
-#: cue -- "re-run pytest", "re-execute the suite" -- is part of the cue's
-#: OWN head word, not an auxiliary/modal governing it. Stripped from the
-#: TAIL of the pre-cue text in ``_cue_is_clause_head`` before the
-#: auxiliary/modal/copula check runs, so it is never mistaken for one. The
 #: hyphen is REQUIRED (unlike a looser bare-``re`` match): a bare ``re``
-#: with no hyphen is not a repetition prefix at all, it is the tail two
-#: letters of an ordinary word -- "sessions ARE running" -- and a
-#: hyphen-optional version of this pattern strips that "re" right out of
-#: "are", silently deleting the very copula the check exists to detect
-#: (2026-07-28 regression caught while validating this fix). Mirrors
 #: ``_IMPERATIVE_CUE_RE``'s own ``(?<!re-)`` carve-out for ``verify`` in
-#: spirit -- that carve-out excludes ``re-verify`` from being a cue at all;
-#: this one instead keeps ``re-run`` a cue AND still recognizes it as
-#: clause-initial.
 _RE_PREFIX_TAIL_RE = re.compile(r"re-\s*$", re.IGNORECASE)
 
-#: Fronted-adverbial boundary. An English imperative may carry a
-#: comma-separated adverbial phrase in front of its verb without ceasing to
-#: be an imperative ("Before you report back, run pytest across your
-#: changes."), and that phrase routinely contains its own subject ("you").
-#: The governance check below therefore measures from the LAST comma in the
-#: clause rather than from the clause start, so a fronted adverbial is never
-#: mistaken for the cue's own subject. A comma is deliberately NOT a
 #: ``_CLAUSE_BOUNDARY_RE`` member (that would reopen the "Run: pytest"
-#: label-idiom recall hole); it is a boundary for THIS check only.
 _FRONTED_ADVERBIAL_BOUNDARY_RE = re.compile(r",")
 
-#: Lead-in that may sit in front of a genuine imperative's verb without
-#: making the clause declarative: a coordinating conjunction, a discourse
-#: adverb, or any single ``-ly`` manner adverb ("Then run pytest", "Finally,
-#: re-run pytest", "Carefully run pytest"). Stripped repeatedly from the
-#: START of the pre-cue text before the leftover is tested for substance.
-#: Note ``please``/``just`` are absent deliberately -- they are themselves
 #: members of ``_IMPERATIVE_CUE_RE``, so the cue search finds THEM first and
-#: the pre-cue text is empty before this ever runs.
 _IMPERATIVE_LEAD_ADVERB_RE = re.compile(
     r"^(?:(?:and|or|but|so|then|now|next|first|finally|also|again|"
     r"afterwards|subsequently|optionally|ideally|instead)\b|\w+ly\b)\s*",
@@ -4513,22 +3398,8 @@ _IMPERATIVE_LEAD_ADVERB_RE = re.compile(
 )
 
 #: Governance test: does anything of SUBSTANCE sit between the start of the
-#: cue's own clause-or-fronted-adverbial segment and the cue itself? A
-#: genuine English imperative has no overt subject -- the verb IS the clause
-#: head -- so any surviving leftover (a subject NP, an auxiliary, a modal, a
 #: copula, a governing preposition) means the clause is DECLARATIVE prose
-#: about running something rather than an instruction to run it.
-#:
-#: This replaced a narrower adjacency-only check (2026-07-28) that tested
 #: only for an auxiliary/modal/copula sitting IMMEDIATELY before the cue.
-#: Adjacency caught the three reported repros but not the class: an
-#: intervening adverb ("sessions were repeatedly running pytest", "CI is
-#: currently running pytest") or a bare finite verb with no auxiliary at all
-#: ("Peer sessions run pytest on a shared worktree") walked straight through
-#: it -- the last being the reported incident sentence merely rephrased out
-#: of the progressive. A lexicon of auxiliaries is a smaller bag of words
-#: than a lexicon of cue verbs, but it is still a bag of words; presence of
-#: a subject is the structural property that actually discriminates.
 _SUBSTANTIVE_LEFTOVER_RE = re.compile(r"\w")
 
 
@@ -4619,14 +3490,8 @@ def _cue_is_clause_head(clause: str) -> bool:
     m = _IMPERATIVE_CUE_RE.search(clause) or _START_CUE_TAIL_RE.search(clause)
     if not m:
         return True
-    # Line-scope the pre-cue text FIRST, before the fronted-adverbial comma
     # split: ``clause`` (per ``_CLAUSE_BOUNDARY_RE``, punctuation-only) can
-    # legitimately span multiple lines -- that reach is what the reported-
     # speech check needs (see ``_CLAUSE_BOUNDARY_RE``'s docstring) -- but a
-    # cue's OWN governance must not look further back than its own line, or
-    # an unrelated preceding line's prose (or, worse, hundreds of characters
-    # of padding) reads as a subject sitting in front of this line's cue.
-    # See ``test_position_imperative_bare_line_negation_too_far_above``.
     before = clause[:m.start()].rsplit("\n", 1)[-1]
     before = _FRONTED_ADVERBIAL_BOUNDARY_RE.split(before)[-1]
     before = _RE_PREFIX_TAIL_RE.sub("", before)
@@ -4639,13 +3504,6 @@ def _cue_is_clause_head(clause: str) -> bool:
     return not _SUBSTANTIVE_LEFTOVER_RE.search(before)
 
 
-#: Sentence-punctuation character class matched at the END of a
-#: whitespace-delimited token -- the ``.`` in "run pytest." -- as opposed to
-#: punctuation INSIDE one, which is load-bearing argv content
-#: (``tests/test_foo.py``, ``pytest.ini``, ``test_foo.py::test_bar``).
-#: ``_strip_sentence_punctuation`` walks the string itself (quote-aware,
-#: see its own docstring) rather than a single regex substitution, so this
-#: is a plain character set, not a compiled pattern.
 _SENTENCE_PUNCTUATION_CHARS = ".,;:!?"
 
 
@@ -4718,15 +3576,6 @@ def _mask(text: str, spans: Sequence[Tuple[int, int]]) -> str:
 def _fence_spans(
     text: str,
 ) -> Tuple[List[Tuple[int, int, int, int]], Optional[Tuple[int, int, int, int]]]:
-    """Pair up consecutive ``` occurrences into fenced-code-block spans.
-
-    Returns ``(fences, unterminated)`` where each fence/the unterminated tail
-    is ``(content_start, content_end, fence_open_start, fence_full_end)``.
-    An odd trailing ``` (no closing fence before end of text) is reported
-    separately as ``unterminated`` rather than silently paired or dropped --
-    a truncated brief's dangling fence is genuinely ambiguous, not code and
-    not prose, hence ``position="unknown"`` for anything found inside it.
-    """
     positions = [m.start() for m in re.finditer(r"```", text)]
     fences: List[Tuple[int, int, int, int]] = []
     i = 0
@@ -4749,30 +3598,10 @@ _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 
 
 def _iter_prose_candidates(text: str) -> List[Tuple[int, str, str, int, int]]:
-    """Enumerate every prose candidate a ``classify_text``-family API must
-    inspect: each non-blank line of fenced-code content, each non-blank line
-    of an unterminated trailing fence, each non-blank line of an inline-code
-    span's content, and each bare (non-fenced, non-inline) line that both
-    carries a runner-prefilter hit and passes
-    ``_bare_line_is_command_shaped``.
-
-    Returns ``(abs_start, line_body, base_position, window_start,
-    window_end)`` tuples -- single-sourced extraction shared by
-    ``classify_text`` and ``classify_text_precision`` so the fence/inline/
-    bare-line walk and the negation-lookback window computation can never
-    silently drift between the two consumers. ``window_start``/
-    ``window_end`` are fixed per enclosing block (fence, inline span, or
-    bare line), not recomputed per physical line within it -- unchanged from
-    ``classify_text``'s prior single-consumer behavior.
-    """
     out: List[Tuple[int, str, str, int, int]] = []
 
     def _add_block(sub_start: int, content: str, base_position: str,
                    window_start: int, window_end: int) -> None:
-        # Enumerate line-by-line, not the whole (possibly multi-line) blob as
-        # ONE command -- a fenced block quoting several independent commands
-        # is several commands, not one command whose later lines shlex-split
-        # into bogus positional arguments of the first.
         offset = 0
         for line in content.splitlines(keepends=True):
             line_body = line.rstrip("\n")
@@ -4804,9 +3633,7 @@ def _iter_prose_candidates(text: str) -> List[Tuple[int, str, str, int, int]]:
         line_start = text.rfind("\n", 0, full_start) + 1
         line_end_idx = text.find("\n", full_end)
         line_end = line_end_idx if line_end_idx != -1 else len(text)
-        # Same reach as the fenced/bare-line passes: a negation marker on the
         # PRECEDING line ("Do not run this:\n`pytest`") is otherwise
-        # invisible to a window confined to the backtick-span's own line.
         _add_block(content_start, text[content_start:content_end], "inline_code",
                   line_start - _NEGATION_LOOKBACK, line_end)
 
@@ -4818,27 +3645,11 @@ def _iter_prose_candidates(text: str) -> List[Tuple[int, str, str, int, int]]:
         prefilter_match = _RUNNER_PREFILTER_RE.search(line)
         if not prefilter_match:
             continue
-        # A bare line's runner token is scanned as a command only when
-        # something on the line actually signals command intent -- an
-        # execution verb, or the runner being the line's own head. Absent
-        # that, the runner token is just as likely a narrative/nominal
-        # mention ("... is in pytest `testpaths` and", "a pytest oracle")
-        # as an instruction to run it, and treating every such mention as
-        # an invocation is the P1 false-positive class this guards against.
-        # See ``_bare_line_is_command_shaped`` for the full rationale.
         if not _bare_line_is_command_shaped(line[:prefilter_match.start()]):
             continue
-        # Anchor the candidate at the runner token itself, not the start of
-        # the line -- ordinary prose text before it ("Run ", "Before you
-        # report back, ") is not part of any argv and would otherwise become
-        # a bogus argv[0] the classifier can't recognize as a runner at all.
         candidate_start = line_match.start() + prefilter_match.start()
         real_candidate = _strip_sentence_punctuation(
             text[candidate_start:line_match.end()])
-        # Give the bare-line pass the same look-back reach as the fenced
-        # pass: a negation marker on a preceding prose line ("Do not run
-        # this:\npytest") is otherwise invisible here, since the matched
-        # line alone never contains it.
         out.append((candidate_start, real_candidate, "imperative",
                    max(0, line_match.start() - _NEGATION_LOOKBACK), line_match.end()))
 
@@ -4847,60 +3658,25 @@ def _iter_prose_candidates(text: str) -> List[Tuple[int, str, str, int, int]]:
 
 def _resolve_position(text: str, abs_start: int, base_position: str,
                       window_start: int, window_end: int) -> str:
-    """Final ``position`` label for a match found at ``abs_start`` within
-    ``text``, given the enclosing candidate's ``base_position`` and
-    negation-lookback window. Single-sourced by ``classify_text`` and
-    ``classify_text_precision`` -- see ``_iter_prose_candidates``.
-    """
     w_start = max(0, window_start)
     w_end = min(len(text), window_end)
     window = text[w_start:w_end]
     if _NEGATION_RE.search(window):
         return "negated"
     # Reported-speech is checked in the BACKWARD-ONLY, CLAUSE-scoped slice of
-    # the same already-computed ``window`` -- never a second, independently
     # windowed regex pass. This is deliberately NARROWER than
     # ``_NEGATION_RE``'s reach (which scans the whole window, forward and
-    # back, across clause boundaries): a reported-speech cue several
-    # sentences before a genuinely separate, later imperative command on the
-    # same physical line must NOT suppress that later command. Repro this
-    # guards: "They could not run pytest. Run `pytest -q` yourself and
-    # report the result." -- the first clause's "could not run" is reported
-    # speech (and is itself correctly classified "reported" when ``pytest``
-    # there is picked up as its own bare-line match), but must not bleed
-    # forward and demote the SECOND, genuinely imperative `pytest -q`
-    # command out of "imperative".
     backward = window[:max(0, abs_start - w_start)]
     clause = _CLAUSE_BOUNDARY_RE.split(backward)[-1]
     if _REPORTED_SPEECH_RE.search(clause):
         return "reported"
     if base_position == "imperative" and not _cue_is_clause_head(clause):
-        # The bare-line pass's own gate (``_bare_line_is_command_shaped``)
-        # already decided this mention is command-shaped enough to include
-        # -- per DR-088 layer 2's negative spec (module docstring) a found
         # match is never dropped. This is the STRUCTURAL check on TOP of
-        # that inclusion decision: the cue word is present in the clause,
-        # but does not GOVERN the runner token as the clause's own head verb
-        # (a subject or auxiliary/modal/copula sits in that position
-        # instead), so the strongest "imperative" label is withheld in
-        # favor of "descriptive" -- see ``_cue_is_clause_head``.
         return "descriptive"
     return base_position
 
 
 def classify_text(text: str, *, cwd: Optional[str] = None) -> List[SuiteMatch]:
-    """Extract and classify candidate command strings out of arbitrary prose
-    (a dispatch brief), zero-to-many matches. Makes no assumption that
-    ``text`` is markdown -- fenced code blocks and inline-code spans are
-    recognized where present, but a bare line with no backticks at all is
-    still scanned when it contains a known runner token.
-
-    Reports ``position`` per match (see ``SuiteMatch``) so the caller can
-    apply its own policy to a quoted/negated command differently from an
-    imperative one -- this function only classifies, it never decides.
-
-    Spec backlink: cross-repo/inbox/2026-07-23-claude-central-em-dr088-grant-spec-and-layer2-seam.md § Ask 1 (false-positive leg)
-    """
     if not isinstance(text, str) or not text:
         return []
 
@@ -4918,36 +3694,13 @@ def classify_text(text: str, *, cwd: Optional[str] = None) -> List[SuiteMatch]:
     return matches
 
 
-# ---------------------------------------------------------------------------
-# Public precision-classification API (DR-088 R9 layer-2 seam) -- see
-# negative spec and spec backlink in the module docstring above.
-# ---------------------------------------------------------------------------
-
 @dataclasses.dataclass(frozen=True)
 class PrecisionMatch:
-    """One R9-refusable precision match found by ``classify_command_
-    precision`` or ``classify_text_precision``: a pytest-family invocation
-    that is NOT suite-shaped (``classify_command``/``classify_text`` report
-    nothing for it) but that names a directory positional -- exactly the
-    shape DR-088 R9's precision leg (``_pytest_directory_args``, ``check()``
-    leg 0) refuses for a dispatched agent.
 
-    ``position`` is advisory metadata for the CALLER's own policy, same
-    discipline as ``SuiteMatch.position`` -- this dataclass never decides
-    anything; it only describes what was found and where.
-    """
-
-    #: Runner label, e.g. ``"pytest"`` or ``"python -m pytest"``.
     detected: str
-    #: The exact matched command substring, control-character-sanitized.
     matched_text: str
-    #: ``(start, end)`` character offsets of ``matched_text`` into the input
-    #: string passed to ``classify_command_precision``/``classify_text_precision``.
     span: Tuple[int, int]
-    #: Same vocabulary and semantics as ``SuiteMatch.position``.
     position: str
-    #: The directory positionals that make this match R9-refusable, in the
-    #: literal spelling the caller used -- see ``_pytest_directory_args``.
     directory_args: List[str]
 
     def as_dict(self) -> Dict[str, Any]:
@@ -4966,18 +3719,6 @@ def _classify_command_precision_core(
     testpaths: Sequence[str],
     configured: Sequence[ConfiguredCmd],
 ) -> List[PrecisionMatch]:
-    """Shared precision-classification core for ``classify_command_
-    precision`` and ``classify_text_precision``.
-
-    Runs each segment of ``command`` through the same segment/argv machinery
-    ``_classify_command_core`` uses, but reports a match only for a segment
-    that is (1) a pytest-family invocation, (2) NOT already suite-shaped --
-    that shape is ``_classify_command_core``'s own business, never restated
-    here -- and (3) carries at least one directory positional per
-    ``_pytest_directory_args``. Fails open (``[]``) without a ``cwd``,
-    mirroring ``_pytest_directory_args``'s own fail-open discipline: a
-    directory cannot be distinguished from a filter string on shape alone.
-    """
     out: List[PrecisionMatch] = []
     if not command or not cwd:
         return out
@@ -4995,7 +3736,7 @@ def _classify_command_precision_core(
         trail = len(seg_text) - len(seg_text.rstrip())
         seg_start, seg_end = start + lead, end - trail
         if _is_suite_shaped(seg_start, seg_end):
-            continue  # classify_command's/classify_text's business, not ours
+            continue
 
         tokens = _tokens(stripped)
         argv = _strip_command_prefix(tokens)
@@ -5024,12 +3765,6 @@ def _classify_command_precision_core(
 
 
 def classify_command_precision(command: str, *, cwd: Optional[str] = None) -> List[PrecisionMatch]:
-    """Classify EVERY segment of one shell command string for DR-088 R9's
-    precision shape, zero-to-many matches. Never short-circuits on the
-    first match, mirroring ``classify_command``.
-
-    Spec backlink: cross-repo/inbox/2026-07-28-example-market-data-repo-em-dispatched-agent-scoped-test-breadth.md (DoE-claude repo)
-    """
     if not isinstance(command, str) or not command or not cwd:
         return []
     repo_root = resolve_git_root(cwd) or cwd
@@ -5039,18 +3774,6 @@ def classify_command_precision(command: str, *, cwd: Optional[str] = None) -> Li
 
 
 def classify_text_precision(text: str, *, cwd: Optional[str] = None) -> List[PrecisionMatch]:
-    """Extract and classify DR-088 R9 precision matches out of arbitrary
-    prose (a dispatch brief), zero-to-many matches. Shares the exact fence/
-    inline-code/bare-line extraction and ``position`` machinery
-    ``classify_text`` runs through (see ``_iter_prose_candidates``,
-    ``_resolve_position``) -- a second hand-rolled prose walk would drift on
-    the next fence/negation-window edit.
-
-    Fails open (``[]``) without a ``cwd`` -- see
-    ``_classify_command_precision_core``.
-
-    Spec backlink: cross-repo/inbox/2026-07-28-example-market-data-repo-em-dispatched-agent-scoped-test-breadth.md (DoE-claude repo)
-    """
     if not isinstance(text, str) or not text or not cwd:
         return []
 

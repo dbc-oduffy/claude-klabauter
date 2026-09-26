@@ -118,24 +118,14 @@ from coordinator_core.hooks.block_unenumerated_agent_type import (
 CLASS = "hard-deny"
 MATCHERS = ("Agent",)
 
-#: Escape hatch -- see module docstring "ESCAPE HATCH" for why this is an
-#: env var and not a prompt marker. Read inline at `check()` call time only.
 _OVERRIDE_ENV = "COORDINATOR_OVERRIDE_AGENT_MODEL_PIN"
 
-#: `fork` is a harness dispatch shape, not an agent definition -- the Agent
-#: tool's own schema states a fork always runs on the parent's model and a
-#: `model` override is ignored, so there is never a pin to defend and
-#: denying would be a false positive. Mirrors
 #: `block_unenumerated_agent_type._HARNESS_BUILTIN_TYPES`'s own `fork` note.
 _FORK_TYPE = "fork"
 
-#: Model cost ordering (see module docstring "MODEL ORDER"). `fable` is
 #: deliberately absent -- see "NEGATIVE SPEC" above. Do not add it here by
-#: guessing a rank.
 _MODEL_ORDER: Dict[str, int] = {"haiku": 0, "sonnet": 1, "opus": 2}
 
-#: Effort cost ordering, verbatim from the Agent tool's own enum (see
-#: module docstring "EFFORT ORDER").
 _EFFORT_ORDER: Dict[str, int] = {"low": 0, "medium": 1, "high": 2, "xhigh": 3, "max": 4}
 
 
@@ -184,9 +174,6 @@ def _advisory_context(subagent_type: str, source_path: str, advisories: "list[tu
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the model/effort pin gate against a `PreToolUse(Agent)`
-    payload. See module docstring for the full comparison rule.
-    """
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
 
@@ -246,10 +233,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def main() -> int:
-    """Standalone stdin-JSON / stdout-JSON / exit-0 entrypoint -- unused by
-    the composed path (see module docstring "Two entrypoints"), kept for
-    parity with the sibling module's own calling convention.
-    """
     try:
         raw = sys.stdin.read()
     except Exception:

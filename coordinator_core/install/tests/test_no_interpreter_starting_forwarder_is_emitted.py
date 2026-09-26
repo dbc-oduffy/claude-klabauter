@@ -75,15 +75,8 @@ def _stamp_engine_root(root: Path, *entrypoints: str) -> None:
 
 def _skip_if_no_prebuilt() -> None:
     # Skipping here drops the guard's entire BEHAVIORAL leg on a
-    # platform/checkout with no committed prebuilt door, leaving only leg 1's
-    # structural (hasattr) coverage in place.
     if not door_install._PREBUILT_DOOR_EXE.exists():
         pytest.skip("no committed prebuilt door for this platform in this checkout")
-
-
-# --- Leg 1: structural -- the two condemned writers are gone, not merely
-# unreachable. A reintroduction (even unused) is the drift this test exists
-# to catch before it becomes a live emission again. ------------------------
 
 
 def test_cmd_and_ps1_forwarder_writers_do_not_exist():
@@ -104,16 +97,10 @@ def test_cmd_and_ps1_forwarder_writers_do_not_exist():
 
 
 def test_policy_gate_module_does_not_exist():
-    """Per DR-365, `policy_gate` goes with the `.ps1` leg -- once nothing
-    emits `.ps1` launchers the gate has nothing to gate (C12's own body)."""
     import importlib
 
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("coordinator_core.install.policy_gate")
-
-
-# --- Leg 2: behavioral -- a real write pass over a mixed eligible/doorless
-# population leaves no .cmd/.ps1 anywhere under the destination. ----------
 
 
 def _all_cmd_or_ps1_files(bin_dst: Path) -> "list[Path]":

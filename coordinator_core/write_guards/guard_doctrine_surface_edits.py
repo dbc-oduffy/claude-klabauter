@@ -171,10 +171,6 @@ CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 PRIORITY = 127
 
-#: Generator-provenance declaration (coordinator_core/ops/generator_provenance.py).
-#: This module's only write is _write_repo_identity_advisory_log()'s best-effort
-#: append to <repo_root>/.git/coordinator-sessions/<session_id>/repo-identity-gate.log
-#: -- inside .git/, never a tracked repo artifact (see DR-277, read-only/advisory).
 GENERATES = []
 
 _GUARDED_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
@@ -184,22 +180,10 @@ _APPROVAL_WINDOW_SECONDS = 30 * 60
 
 
 def _norm(path: str) -> str:
-    """Resolve to an absolute, symlink-free real path."""
     return os.path.realpath(os.path.abspath(path))
 
 
 def _git_root() -> "str | None":
-    """Repo root via the shared memoized resolver
-    (`coordinator_core.write_guards._repo_root.resolve_repo_root`), which
-    delegates to `coordinator_core.git.repo_root.show_toplevel` -- see that
-    module for the walk-first/spawn-fallback resolution and per-process memo
-    policy.
-
-    Any failure (not a git repo, git missing, timeout) returns None; the
-    caller falls back to the HOME-only protected-path check and treats the
-    approval sentinel as absent (deny), per this guard's fail-closed
-    posture.
-    """
     try:
         return resolve_repo_root() or None
     except Exception:
@@ -230,20 +214,6 @@ _doe_root_memo: "list[str | None]" = []
 
 
 def _doe_root() -> "str | None":
-    """The DoE-claude repo root, resolved independently of the session's cwd.
-
-    Delegates to `coordinator_core.doe_root_pointer.read_doe_root_pointer`
-    (registry `repos.doe_claude`, then the durable and legacy `.doe-root`
-    pointer files). Memoized per process: this runs on the PreToolUse path
-    for every `Write`/`Edit`, and the resolver is a registry read plus up to
-    two file reads with no spawn -- cheap, but not free, and the pointer does
-    not move inside a session.
-
-    Returns None on an unresolvable pointer, which the caller treats as
-    "protect nothing extra" rather than as an error: the two surfaces this
-    anchors are additive (see `_protected_entries`), so failing to resolve
-    can only ever leave protection where it already was.
-    """
     if not _doe_root_memo:
         try:
             resolved = read_doe_root_pointer() or None
@@ -327,15 +297,6 @@ _FOREIGN_ROOT_BASENAMES = ("CLAUDE.md", "coordinator.local.md")
 
 
 def _foreign_repo_root_surface(target: str) -> "str | None":
-    """The target's own repo root, when `target` is that repo's root-level
-    `CLAUDE.md` or `coordinator.local.md`, independent of the session's
-    `repo_root`.
-
-    `_protected_entries` anchors only on the session root and `_doe_root()`,
-    so a sibling repo's root doctrine file (example-retrieval-repo-ue-addon/CLAUDE.md
-    edited from a example-retrieval-repo session) would otherwise pass unguarded. The
-    basename gate keeps the walk-only root resolution off every other path.
-    """
     basename = os.path.basename(target)
     if basename not in _FOREIGN_ROOT_BASENAMES:
         return None
@@ -398,12 +359,6 @@ def _local_config_path(repo_root: "str | None") -> "str | None":
 
 
 def _why_protected(is_local_config: bool) -> str:
-    """The class-specific first sentence of the deny message.
-
-    Split per the class-1/class-2 distinction in the module docstring: the
-    generic always-loaded-doctrine wording is FALSE of coordinator.local.md
-    and reads as such to anyone who has opened the file.
-    """
     if is_local_config:
         return (
             "is this repo's privileged configuration — its frontmatter holds "
@@ -422,12 +377,8 @@ def _why_protected(is_local_config: bool) -> str:
     )
 
 
-#: Same env var and literal `_git_root`-independent read as
 #: `coordinator_core.hooks.repin_cloud_engine_root.REMOTE_ENV_VAR` /
 #: `REMOTE_ENV_TRUE` — kept as local literals rather than an import because
-#: that module's constants govern engine-root repinning, an unrelated
-#: concern; the two must stay byte-identical readings of the same venue
-#: signal, not the same symbol.
 _CLOUD_VENUE_ENV_VAR = "CLAUDE_CODE_REMOTE"
 _CLOUD_VENUE_ENV_TRUE = "true"
 
@@ -511,22 +462,7 @@ def _write_repo_identity_advisory_log(
         from datetime import datetime, timezone
 
         log_dir = Path(repo_root) / ".git" / "coordinator-sessions" / session_id
-        # NEVER mkdir here. This used to be `mkdir(parents=True,
         # exist_ok=True)`, which let an ADVISORY log line MINT a session
-        # directory for whatever `session_id` it was handed — including test
-        # fixture ids exercising this guard against the real repo root. Nine
-        # such dirs (`sess-1`, `sess-abc`, `test-session-abc123`, the
-        # `sess-msys-*` dispatcher slugs) had accumulated in this repo's real
-        # hub by 2026-08-19, and `liveness.live_session_ids` enumerates every
-        # non-denylisted child as a SESSION — so an advisory write was
-        # manufacturing phantom sessions into the corpus that claim
-        # attribution and scope computation both read.
-        #
-        # A real session's directory is created by `core.init`. If it does not
-        # exist, there is no session here to annotate and the correct action
-        # is to drop the line — an advisory log has no business creating
-        # session state. Pinned by
-        # `test_advisory_log_never_creates_a_session_dir`.
         if not log_dir.is_dir():
             return
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -552,12 +488,6 @@ def _sentinel_write_deny_reason() -> str:
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the doctrine-surface guard against a PreToolUse payload.
-
-    Returns ``None`` (allow) or the nested hard-deny envelope. Mirrors the
-    source `main()` control flow exactly, minus the stdin/stdout plumbing
-    the engine already handles.
-    """
     if payload.get("tool_name", "") not in _GUARDED_TOOLS:
         return None
 
@@ -576,24 +506,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     repo_root = _git_root()
 
-    # C4 (docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md):
-    # record C1's repo-identity gate verdict as an advisory
     # `gates.repo_identity` fact. Read-only, ADVISORY ONLY — see the
-    # DR-277 note in `_write_repo_identity_advisory_log`'s docstring. The
-    # verdict is NEVER read again below and never participates in the
-    # allow/deny decision this function returns.
     session_id = payload.get("session_id") or ""
     if repo_root:
         repo_identity_gate = compute_repo_identity_gate(Path(repo_root), session_id or None)
         _write_repo_identity_advisory_log(repo_root, session_id, repo_identity_gate)
 
-    # The sentinel itself is unwritable through the file-write tools, and this
-    # check runs BEFORE the approval lookup below -- deliberately, because
-    # consulting approval here would let a valid approval authorize extending
-    # itself. Removal stays available via `rm`; only creation is the
-    # boundary. Delegated to the shared _sentinel_write_guard helper -- see
-    # that module's docstring for the ordering contract this call site
-    # relies on.
     denial = sentinel_write_denial(
         target, _SENTINEL_NAME, _sentinel_write_deny_reason(), payload=payload
     )
@@ -608,18 +526,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             owning_root = entry_root
             break
     if not matched:
-        # A sibling repo's own root doctrine file -- see
-        # `_foreign_repo_root_surface`.
         foreign_root = _foreign_repo_root_surface(target)
         if foreign_root is None:
             return None
         matched = True
         owning_root = foreign_root
 
-    # The approval is read at the root that OWNS the matched surface, falling
-    # back to the session's repo root -- see `_protected_entries`. An entry
-    # carrying its own root is one whose file lives in another repo, and an
-    # approval sitting in this session's repo says nothing about it.
     state = _sentinel_state(owning_root or repo_root)
     if state == "allow":
         return None

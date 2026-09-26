@@ -1,19 +1,3 @@
-"""test_git_perf_currency_probe — binds `workday-start-health-probes.py
-git-perf-currency`'s detection contract to real assertions.
-
-Spec: this chunk's dispatch brief, "the discoverable git-perf sweep needs a
-cadence caller" (2026-08-30). Mirrors `test_mis_channelled_box_probe.py`'s
-import-by-path shape.
-
-Covers: key present in every registered worktree -> exit 0; key absent in
-one -> exit 1 naming that repo; `mirror` targets skipped silently; `missing`
-targets reported; a `.git` gitlink file resolved to its real gitdir
-(following `commondir` for a linked worktree); an unreadable config
-reported, never silently passed; the bare detector never spawns a
-subprocess even when `subprocess.run`/`Popen` would raise.
-
-Run: python -m pytest coordinator/bin/tests/test_git_perf_currency_probe.py -q
-"""
 from __future__ import annotations
 
 import contextlib
@@ -138,9 +122,6 @@ def test_missing_targets_are_reported(tmp_path, monkeypatch):
 
 
 def test_gitlink_file_is_resolved_via_commondir(tmp_path, monkeypatch):
-    """A linked worktree's `.git` is a text file pointing at a private
-    gitdir; the real `config` lives in the COMMON dir, reached via
-    `commondir`."""
     common = tmp_path / "common" / ".git"
     common.mkdir(parents=True)
     (common / "config").write_text("[core]\n\tuntrackedCache = true\n", encoding="utf-8")
@@ -169,9 +150,6 @@ def test_gitlink_file_is_resolved_via_commondir(tmp_path, monkeypatch):
 def test_unreadable_config_is_reported_not_silently_passed(tmp_path, monkeypatch):
     repo = tmp_path / "unreadable"
     (repo / ".git").mkdir(parents=True)
-    # No config file at all -> gitdir resolves, but read fails on the
-    # config path itself only if unreadable; simulate an unreadable gitdir
-    # by pointing the gitlink at a nonexistent target instead.
     broken = tmp_path / "broken-worktree"
     broken.mkdir()
     (broken / ".git").write_text("gitdir: " + str(tmp_path / "nonexistent-gitdir") + "\n", encoding="utf-8")
@@ -259,13 +237,6 @@ def _run_bare() -> tuple[int, str]:
 
 
 def test_unavailable_registry_helpers_is_not_reported_as_a_current_fleet(monkeypatch):
-    """A walk that could not run must not read as health.
-
-    This is the exact shape `cmd_hook_currency`'s negative spec names and
-    `apply_fleet` refuses: exiting 0 when the registry could not be reached
-    makes a broken machine indistinguishable from a swept one, on the very
-    machine most likely to be misconfigured.
-    """
     from coordinator_core.install import git_perf_config as gpc
 
     monkeypatch.setattr(gpc, "_git_hook_install_registry_helpers", lambda: None)
@@ -297,17 +268,6 @@ def test_empty_registry_is_explicit_not_success(monkeypatch):
     assert "not the same fact as" in err
 
 
-# --- _config_has_untracked_cache parser axes -------------------------------
-#
-# Direct unit coverage of the four divergences the code review named against
-# real git config semantics: a bare implicit-true key, non-"true" boolean
-# spellings, a trailing inline comment, and (unlike the first three, which
-# are all safe-direction false-drift) duplicate `[core]` blocks -- where
-# first-match would report a false `present` for a config git itself would
-# resolve as absent. This last one is a correctness fix, not a robustness
-# nicety: it asserts the LAST block wins, mirroring git's own resolution.
-
-
 def test_bare_key_with_no_equals_is_implicit_true():
     text = "[core]\n\tuntrackedCache\n"
     assert _mod._config_has_untracked_cache(text) is True
@@ -325,11 +285,5 @@ def test_trailing_inline_comment_on_value_is_stripped():
 
 
 def test_duplicate_core_blocks_last_one_wins():
-    """git resolves a repeated key to its LAST occurrence, including across
-    duplicate `[core]` blocks (e.g. a manual edit appended below an existing
-    stanza). A first-match parser would report this config as `present`
-    when git itself -- and `apply()`'s own `git config --get` read -- would
-    resolve it as absent; that is a false `present`, the one divergence
-    direction worse than a needless false-drift re-sweep."""
     text = "[core]\n\tuntrackedCache = true\n[core]\n\tuntrackedCache = false\n"
     assert _mod._config_has_untracked_cache(text) is False

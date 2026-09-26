@@ -46,14 +46,6 @@ _SPELLINGS = ["--group-em-session-id", "--crown-session-id"]
 def test_watch_routes_both_spellings_to_the_same_handler_argument(
     spelling, tmp_path, monkeypatch
 ):
-    """The value REACHES the handler, not merely the parser.
-
-    Both the root resolver and `tick_once` are stubbed, so this asserts the argv wiring
-    and nothing about what a watch over an empty fixture directory would decide. The
-    assertion is on the captured keyword rather than the exit code deliberately: `_cli`
-    returns 2 for an unresolvable repo root as well as for an argparse refusal, so an
-    exit-code check cannot tell the failure this guards from an unrelated one.
-    """
     seen: dict = {}
     monkeypatch.setattr(
         watch.repo_root_arg, "resolve_repo_root_arg", lambda v: str(tmp_path)
@@ -73,13 +65,6 @@ def test_watch_routes_both_spellings_to_the_same_handler_argument(
 
 @pytest.mark.parametrize("spelling", _SPELLINGS)
 def test_idle_report_does_not_refuse_either_spelling(spelling, tmp_path):
-    """argv level on the second entry point.
-
-    NOT an exit-code assertion, for the same reason as above: only an argparse REFUSAL
-    is in scope here, and argparse signals that by raising SystemExit before any handler
-    runs. Whatever the report then concludes about an empty directory is another test's
-    business.
-    """
     try:
         idle_report._cli(["--repo-root", str(tmp_path), spelling, _SID, "--json"])
     except SystemExit as exc:
@@ -87,14 +72,6 @@ def test_idle_report_does_not_refuse_either_spelling(spelling, tmp_path):
 
 
 def test_watch_both_spellings_on_one_argv_the_later_flag_wins(tmp_path, monkeypatch):
-    """Pins argparse's same-dest overwrite order against a future usage change.
-
-    # Verified safe by reading argparse semantics
-    # (shared dest, later-on-argv overwrites); this pins that behavior rather than
-    # merely trusting it, so a `required=True` or custom Action added later fails loud.
-    Both entry points build their parser inside `_cli`, so this goes through argv like
-    the parametrized cases above, not through direct handler calls.
-    """
     seen: dict = {}
     monkeypatch.setattr(
         watch.repo_root_arg, "resolve_repo_root_arg", lambda v: str(tmp_path)
@@ -119,11 +96,6 @@ def test_watch_both_spellings_on_one_argv_the_later_flag_wins(tmp_path, monkeypa
     "module", [watch, idle_report], ids=["watch", "idle_report"]
 )
 def test_the_retired_spelling_is_accepted_but_never_advertised(module, capsys):
-    """Pins the half that keeps this from being vocabulary backsliding.
-
-    An operator reading `--help` is never taught the retired word; only an agent that
-    already had it keeps working.
-    """
     with pytest.raises(SystemExit):
         module._cli(["--help"])
     out = capsys.readouterr().out

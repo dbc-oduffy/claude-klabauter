@@ -31,20 +31,10 @@ from typing import Optional
 
 from coordinator_core.ops._path_guard import contained_path
 
-#: Where an archived sizing lands. Month-nested, hence `rglob` below.
 _ARCHIVE_SIZINGS_SUBDIR = ("archive", "sizings")
 
 
 def _archive_sizings_fallback(repo_root: Path, cited: str) -> Optional[Path]:
-    """Probe `<repo_root>/archive/sizings/**` for a same-basename record.
-
-    Returns the single matching path, or `None` when the archive subtree is
-    absent, holds no match, or holds MORE THAN ONE same-basename file. The
-    live corpus resolves 29/29 by basename with zero collisions today, but
-    that is a property of this corpus and not a guarantee — a second match
-    means the resolver cannot say which record the plan meant, so it says
-    nothing and the citation stays unresolved.
-    """
     archive_root = repo_root.joinpath(*_ARCHIVE_SIZINGS_SUBDIR)
     if not archive_root.is_dir():
         return None
@@ -58,20 +48,6 @@ def _archive_sizings_fallback(repo_root: Path, cited: str) -> Optional[Path]:
 
 
 def resolve_sizing_citation(repo_root: str | os.PathLike[str], cited: str) -> Optional[Path]:
-    """Resolve `cited` under `repo_root`, falling back to `archive/sizings/**`.
-
-    Returns the path that actually answered — the literal `repo_root / cited`
-    when it exists, else the single same-basename record under
-    `archive/sizings/**` — or `None` when neither resolves. A citation that
-    resolves at NEITHER path is a genuine dangling citation and stays one:
-    this fallback repairs the archived-record case only, it never turns a
-    never-written record green.
-
-    Containment is checked post-`resolve()` (`_path_guard.contained_path`), so
-    a citation escaping the repo via `..` or an absolute path resolves to
-    `None` rather than reaching outside the tree. Callers keep their own
-    is-file/is-dir discipline; this returns whichever path exists.
-    """
     root = Path(repo_root)
     resolved = contained_path(root / cited, [root])
     if resolved is not None and resolved.exists():

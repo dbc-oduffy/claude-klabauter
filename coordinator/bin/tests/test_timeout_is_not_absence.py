@@ -1,19 +1,3 @@
-"""test_timeout_is_not_absence.py — a timeout on prune-closed-bugs.py's ACT
-call must report indeterminate, never a completed/absent archive count.
-
-Defect this closes (C13, plan 2026-08-20-a-refusal-cannot-exit-zero): the ACT
-call's `except RuntimeError` handler collapsed every transport failure --
-including `cc_invoke.is_timeout_error`'s own TimeoutExpired-derived
-RuntimeError -- into "N candidate(s) selected but not archived (transport
-error)". CLAUDE.md § Load norm: a timeout is a SLOW op, not a stopped one --
-the op may be mid-`git mv`+commit and about to succeed, so reporting "not
-archived" here is a false negative that re-dispatches the same ids on the
-next sweep. `is_timeout_error` (C7/C8) is the discriminator that lets this
-script distinguish "engine was simply busy" from every other transport
-failure, without re-deriving or substring-matching cc_invoke's error text.
-
-Spec backlink: state/dispatch-briefs/2026-08-20-a-refusal-cannot-exit-zero/C13.md
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -34,8 +18,6 @@ def _load_module(filename: str, alias: str):
 
 
 class _RouteMutationStub:
-    """Stand-in for cc_invoke.route_mutation: the dry-run preview call,
-    returning one candidate."""
 
     def __call__(self, op, params, repo_root, fallback):
         return {"candidates": [{"id": "state/x.md"}], "exit_code": 0}
@@ -54,10 +36,6 @@ class PruneClosedBugsTimeoutTest(unittest.TestCase):
         def _route_raises(op, params, repo_root, fallback):
             raise timeout_exc
 
-        # `self.mod.cc_invoke` is the process-wide `cc_invoke` module every
-        # coordinator/bin script imports by bare name — assigning `route` on
-        # it without a restore poisons every later test in the same pytest
-        # worker, which is why this goes through patch.object + addCleanup.
         patcher = unittest.mock.patch.object(self.mod.cc_invoke, "route", _route_raises)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -88,10 +66,6 @@ class PruneClosedBugsTimeoutTest(unittest.TestCase):
         def _route_raises(op, params, repo_root, fallback):
             raise other_exc
 
-        # `self.mod.cc_invoke` is the process-wide `cc_invoke` module every
-        # coordinator/bin script imports by bare name — assigning `route` on
-        # it without a restore poisons every later test in the same pytest
-        # worker, which is why this goes through patch.object + addCleanup.
         patcher = unittest.mock.patch.object(self.mod.cc_invoke, "route", _route_raises)
         patcher.start()
         self.addCleanup(patcher.stop)

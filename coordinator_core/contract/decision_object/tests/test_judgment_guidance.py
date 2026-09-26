@@ -1,11 +1,3 @@
-"""Tests for `build_disposition`'s optional `guidance` parameter.
-
-Covers AC1 (omitted by default, emitted when supplied -- and every
-existing caller's output stays byte-identical), AC2 (fail-loud `ValueError`
-on a non-str, non-None value).
-
-Spec backlink: pln-build-disposition-carries-per-399055
-"""
 
 from __future__ import annotations
 

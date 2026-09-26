@@ -93,8 +93,6 @@ def test_each_leg_degrades_independently(tmp_path, monkeypatch):
         "changed": [],
         "first_tick": True,
     }
-    # `as_of` is load-bearing through every degrade path per the module
-    # docstring -- a nomination-leg failure must not blank it.
     assert result.get("as_of")
 
 
@@ -131,31 +129,13 @@ def test_roster_failure_degrades_digest_but_not_baseline(tmp_path, monkeypatch):
     assert result["baseline"] is not None
     assert "baseline_error" not in result
     assert result["nomination"]["claimed"] is True
-    # roster AND digest both failed/degraded in this one call -- `as_of` is
-    # ONE clock for the whole call, not per-leg, so it must survive both.
     assert result.get("as_of")
 
 
 def test_registry_outage_reports_roster_unknown_not_an_empty_fleet(tmp_path, monkeypatch):
-    """A registry outage (`fetch_live_agents` raising `EmptySnapshotError`, box-wide,
-    before the cwd filter) must not read as "looked, found nobody" for any leg
-    that consumes the shared enumeration.
-
-    Regression for `state/bug-backlog/2026-09-01-build-roster-reports-a-registry-outage-as-an-empty-fleet.yaml`'s
-    residual: `_group_em_enter`'s own `try/except -> agents = None` around
-    `fetch_live_agents` could never fire, because the outage arrived as `[]`
-    rather than as a raised exception. Threading `raise_on_failure=True,
-    raise_on_empty_snapshot=True` alone is not sufficient either: `build_roster`
-    treats `agents=None` as "not yet fetched" and silently re-fetches with its
-    own non-raising defaults, so `_run_roster_and_excluded` must also refuse to
-    forward a `None` enumeration into that call."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-outage")
 
     def _outage_aware_fetch(*a, raise_on_empty_snapshot=False, **k):
-        # Mirrors the real asymmetry: a caller that opts in to
-        # `raise_on_empty_snapshot` sees the outage; a caller that does not
-        # (e.g. `build_roster`'s own internal "agents is None" re-fetch)
-        # would silently get `[]` back, masking it.
         if raise_on_empty_snapshot:
             raise gee.group_em_read_pass.peer_roster.EmptySnapshotError(
                 "registry snapshot is empty box-wide"
@@ -184,13 +164,6 @@ def test_registry_outage_reports_roster_unknown_not_an_empty_fleet(tmp_path, mon
 
 
 def test_baseline_tracks_the_peer_set_not_the_candidate_roster(tmp_path, monkeypatch):
-    """A peer that stops being a nudge candidate has not exited.
-
-    The regression this pins: `_run_baseline` used to build `current_peers`
-    from the roster, so a peer dropping out of the PAUSED candidate set --
-    by resuming work, or by the classifier failing to reach a verdict --
-    was reported under `exited`.
-    """
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-4")
     monkeypatch.setattr(
         gee.group_em_nomination,
@@ -203,8 +176,6 @@ def test_baseline_tracks_the_peer_set_not_the_candidate_roster(tmp_path, monkeyp
         {"sessionId": "peer-idle", "status": "idle", "cwd": str(tmp_path)},
     ]
     monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: agents)
-    # Roster admits ONLY the idle peer as a candidate; the busy one is not a
-    # candidate but is emphatically still present.
     monkeypatch.setattr(
         gee.group_em_read_pass,
         "build_roster",
@@ -214,8 +185,6 @@ def test_baseline_tracks_the_peer_set_not_the_candidate_roster(tmp_path, monkeyp
     first = gee._group_em_enter({"repo_root": str(tmp_path)})
     assert first["baseline"]["first_tick"] is True
 
-    # Second tick: the idle peer picks work back up. It leaves the roster, but
-    # it has NOT exited -- and its state transition is what the diff reports.
     agents[1]["status"] = "busy"
     monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: [])
 
@@ -226,10 +195,6 @@ def test_baseline_tracks_the_peer_set_not_the_candidate_roster(tmp_path, monkeyp
 
 
 def test_live_incumbent_refusal_stops_before_digest(tmp_path, monkeypatch):
-    """The load-bearing assertion: a REFUSED Group-EM (live incumbent) must never call
-    `build_send_digest` -- the bug is the side effect (cooldown arming), not the return
-    shape. Spy on the digest builder rather than only checking its absence in the
-    payload."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-7")
 
     roster_spy_calls: list = []
@@ -280,10 +245,6 @@ def test_live_incumbent_refusal_stops_before_digest(tmp_path, monkeypatch):
     assert result["nomination"]["superseded_incumbent"]["live"] is True
     assert result["nomination"]["superseded_incumbent"]["live_reason"] == "live"
 
-    # ABSENT, not null: an empty roster is a fact ("looked, found nobody"); an
-    # absent one means "had no standing to look". Assert via `not in`, never
-    # via `is None`, or this regresses to the exact bug the constraint exists
-    # to prevent.
     assert "roster" not in result
     assert "roster_excluded" not in result
     assert "digest" not in result
@@ -292,8 +253,6 @@ def test_live_incumbent_refusal_stops_before_digest(tmp_path, monkeypatch):
     assert "roster_excluded_error" not in result
     assert "digest_error" not in result
     assert "baseline_error" not in result
-    # A refusal is the earliest-stopping path there is -- `as_of` must still
-    # be present since it is claimed to survive EVERY degrade/refusal path.
     assert result.get("as_of")
 
 
@@ -410,7 +369,6 @@ def test_pid_not_running_incumbent_is_auto_replaced_not_refused(tmp_path, monkey
     assert replaced["session_id"] == "dead-incumbent-sid"
     assert replaced["live_reason"] == "pid_not_running"
 
-    # Group-EM was successfully claimed -- roster/digest/baseline all run, keys present.
     assert digest_spy_calls != [], "an auto-replace must proceed to build the digest"
     assert result["roster"] == []
     assert result["roster_excluded"] == []
@@ -499,8 +457,6 @@ def test_reentry_by_holder_is_distinguishable_from_fresh_claim(tmp_path, monkeyp
 
 
 def test_auto_replace_group_em_is_not_a_refusal_and_runs_roster(tmp_path, monkeypatch):
-    """`replaced_holder` (case 4 -- pid_not_running) is NOT a refusal: `claimed` is True,
-    so roster/digest/baseline must all run, unlike the two refusal cases above."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-11")
     monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [])
     monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: [])
@@ -539,7 +495,6 @@ def test_auto_replace_group_em_is_not_a_refusal_and_runs_roster(tmp_path, monkey
     assert result["nomination"]["already_held"] is False
     assert result["nomination"]["replaced_holder"]["session_id"] == "dead-incumbent-sid"
     assert result["nomination"]["replaced_holder"]["live_reason"] == "pid_not_running"
-    # Not a refusal -- roster/digest/baseline all ran, none absent.
     assert result["roster"] == []
     assert result["roster_excluded"] == []
     assert result["digest"] == {"entries": [], "gate_declaration_required": False}
@@ -547,12 +502,6 @@ def test_auto_replace_group_em_is_not_a_refusal_and_runs_roster(tmp_path, monkey
 
 
 def test_baseline_leg_writes_under_the_acted_on_repo_root_not_claude_klabauter(tmp_path, monkeypatch):
-    """Regression for the P1: `_run_baseline` used to call `diff_and_persist`
-    without a `repo_root`, so its default (`baseline._repo_root()` == the
-    claude-klabauter checkout) swallowed every `groupem.enter` call against another
-    repo. This test deliberately does NOT monkeypatch `diff_and_persist` --
-    it exercises the real function, over a real `tmp_path` `repo_root`, and
-    asserts the baseline file lands under THAT root."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-6")
     monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [])
     monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: [])
@@ -594,8 +543,6 @@ def test_baseline_leg_writes_under_the_acted_on_repo_root_not_claude_klabauter(t
 
 
 def _group_em_with_teammates(tmp_path, monkeypatch, metas, session_id):
-    """Plant `metas` as `.meta.json` sidecars in a fake home's subagents dir for
-    `session_id`, and return the repo root to enter with."""
     import json
 
     home = tmp_path / "home"
@@ -603,10 +550,6 @@ def _group_em_with_teammates(tmp_path, monkeypatch, metas, session_id):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     repo_root = str(tmp_path / "repo")
-    # The repo root has to EXIST: `watch_heartbeat.stamp` refuses to mint one
-    # (a writer that conjures a repo tree put a stray directory inside a publish
-    # mirror on 2026-09-01), so a test that stamps into a path nothing created
-    # is testing the refusal, not the leg.
     Path(repo_root).mkdir(parents=True, exist_ok=True)
     directory = Path(gee.group_em_teammates.subagents_dir(repo_root, session_id))
     directory.mkdir(parents=True, exist_ok=True)
@@ -664,9 +607,6 @@ def test_teammates_leg_reports_both_agents_present(tmp_path, monkeypatch):
 
 
 def test_teammates_leg_reports_a_group_em_holding_neither_agent(tmp_path, monkeypatch):
-    """The regression this op exists to end: a Group-EM that skipped the dispatch
-    used to produce no error, no warning, and no record. It now carries an
-    unmet obligation on every tick, with the fleet watcher named first."""
     session_id = "aaaaaaaa-bbbb-cccc-dddd-ffffffffffff"
     _stub_legs(monkeypatch, session_id)
     repo_root = _group_em_with_teammates(
@@ -698,8 +638,6 @@ def test_teammates_leg_reports_the_watcher_missing_on_its_own(tmp_path, monkeypa
 
 
 def test_teammates_absent_entirely_on_a_refused_group_em(tmp_path, monkeypatch):
-    """A session with no standing to hold the Group-EM owes no teammates -- the key
-    is OMITTED, never reported as an unmet obligation it does not carry."""
     session_id = "aaaaaaaa-bbbb-cccc-dddd-777777777777"
     _stub_legs(monkeypatch, session_id, claimed=False)
 
@@ -710,18 +648,6 @@ def test_teammates_absent_entirely_on_a_refused_group_em(tmp_path, monkeypatch):
 
 
 def test_teammates_leg_reports_could_not_establish_when_unreadable(tmp_path, monkeypatch):
-    """C8: entry asserts the standing assistant was actually dispatched -- and
-    must distinguish "confirmed absent" from "could not establish" rather than
-    reading a probe that never looked as a clean green.
-
-    No subagents directory was ever created for this session (the harness's
-    own `~/.claude/projects/<cwd>/<session>/subagents/` tree does not exist
-    for a session id nothing dispatched under), so `teammates.presence`
-    cannot LIST anything -- it must report `unreadable: True`, not
-    `present: False`. A test asserting only `present is False` here would
-    pass on the exact defect this chunk exists to close: an absent probe
-    read as a confirmed-absent teammate.
-    """
     session_id = "aaaaaaaa-bbbb-cccc-dddd-c8c8c8c8c8c8"
     _stub_legs(monkeypatch, session_id)
 
@@ -752,14 +678,7 @@ def test_teammates_leg_degrades_without_taking_the_others(tmp_path, monkeypatch)
     assert result.get("as_of")
 
 
-# --- watch_liveness: dispatched is not ticking -----------------------------
-
-
 def test_watch_liveness_reports_absent_when_nothing_ever_stamped(tmp_path, monkeypatch):
-    """The live failure this leg exists for, from the outside: the Group-EM holds a
-    dispatch record for a watcher whose subprocess never started, so the
-    teammates leg is satisfied and nothing is watching. Measured 2026-09-01 in
-    example-game-workbench-repo -- `ListAgents` read `idle` for thirteen minutes."""
     session_id = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
     _stub_legs(monkeypatch, session_id)
     repo_root = _group_em_with_teammates(
@@ -800,8 +719,6 @@ def test_watch_liveness_reports_armed_on_a_fresh_stamp(tmp_path, monkeypatch):
 
 
 def test_watch_liveness_reports_stale_past_the_deadline_the_tick_set_itself(tmp_path, monkeypatch):
-    """Not an mtime read: the deadline is one the previous tick wrote for
-    itself off its own cadence. Missing a deadline you set is evidence."""
     session_id = "aaaaaaaa-bbbb-cccc-dddd-333333333333"
     _stub_legs(monkeypatch, session_id)
     repo_root = _group_em_with_teammates(tmp_path, monkeypatch, [], session_id)
@@ -860,9 +777,6 @@ def test_roster_considered_separates_looked_from_found(tmp_path, monkeypatch):
 
 
 def test_roster_considered_survives_a_raising_roster_leg(tmp_path, monkeypatch):
-    """The count is the answer to "did anything look", so it must outlive the
-    leg whose failure raises that question. A roster leg that raised leaves
-    `roster` None with an error sibling; `roster_considered` still reports."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-rc2")
     monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [
         {"sessionId": "peer-a", "cwd": str(tmp_path), "status": "busy"},
@@ -893,9 +807,6 @@ def test_roster_considered_survives_a_raising_roster_leg(tmp_path, monkeypatch):
 
 
 def test_roster_considered_is_absent_on_a_refused_group_em(tmp_path, monkeypatch):
-    """Same rule as `roster`: a leg that never ran is ABSENT, not zero. A
-    `roster_considered` of 0 under a refused Group-EM would assert an empty fleet
-    this op had no standing to enumerate."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-rc3")
     monkeypatch.setattr(
         gee.group_em_nomination,
@@ -911,9 +822,6 @@ def test_roster_considered_is_absent_on_a_refused_group_em(tmp_path, monkeypatch
     assert "roster_considered" not in result
     assert "roster" not in result
     assert "roster_excluded" not in result
-
-
-# --- roster_excluded: C1, docs/plans/2026-09-06-group-em-tooling-surface-six-defects.md -----
 
 
 def test_roster_excluded_is_the_strict_complement_of_the_admitted_population(tmp_path, monkeypatch):
@@ -961,16 +869,11 @@ def test_roster_excluded_is_the_strict_complement_of_the_admitted_population(tmp
     excluded_ids = {v["session_id"] for v in result["roster_excluded"]}
     assert roster_ids == {"peer-candidate", "peer-unclassifiable", "peer-contradicted"}
     assert excluded_ids == {"peer-excluded"}
-    # AC 5: len(roster) + len(roster_excluded) == roster_considered, for a
-    # fixture forcing at least one peer that is none of the three signals.
     assert len(result["roster"]) + len(result["roster_excluded"]) == result["roster_considered"]
-    # AC 6: the excluded entry carries the reader/tail reason already
-    # attached by classify_peer -- not a generic string.
     assert result["roster_excluded"][0]["reason"] == "status-busy"
 
 
 def test_roster_excluded_absent_on_a_refused_group_em(tmp_path, monkeypatch):
-    """AC 4: same rule as `roster`/`digest`/`baseline` -- ABSENT, not `None`."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-rx2")
     monkeypatch.setattr(
         gee.group_em_nomination,
@@ -988,9 +891,6 @@ def test_roster_excluded_absent_on_a_refused_group_em(tmp_path, monkeypatch):
 
 
 def test_shared_roster_call_feeds_both_roster_and_digest_admitted_population(tmp_path, monkeypatch):
-    """AC 7b: `result["roster"]` is the SAME admitted list `_run_digest` -> `build_send_digest`
-    receives -- asserted on the digest leg's actual call argument, not merely on the
-    payload gaining a key."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-rx3")
     monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [])
     classified = [
@@ -1027,8 +927,6 @@ def test_shared_roster_call_feeds_both_roster_and_digest_admitted_population(tmp
 
 
 def test_one_shared_build_roster_call_per_invocation(tmp_path, monkeypatch):
-    """AC 7a: exactly one classification pass -- `build_roster` is called ONCE per
-    `groupem.enter` invocation, not once for `roster` and again for `roster_excluded`."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-rx4")
     monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [])
     call_count = {"n": 0}
@@ -1060,13 +958,6 @@ def test_one_shared_build_roster_call_per_invocation(tmp_path, monkeypatch):
 
 
 def test_classify_peer_runs_exactly_once_per_peer_per_invocation(tmp_path, monkeypatch):
-    """AC 7a, module docstring's `_run_roster_and_excluded` note: `roster` and
-    `roster_excluded` are derived from ONE shared `build_roster` call, so the
-    real per-peer unit of work -- `read_pass.classify_peer` -- must run exactly
-    once per enumerated peer, never once for `roster` and again for
-    `roster_excluded`. Monkeypatches a counter on `classify_peer` itself
-    (through the real, unmocked `build_roster`) rather than asserting on a
-    comment."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-rx5")
     agents = [
         {"sessionId": "peer-a", "cwd": str(tmp_path), "status": "busy", "name": "a"},

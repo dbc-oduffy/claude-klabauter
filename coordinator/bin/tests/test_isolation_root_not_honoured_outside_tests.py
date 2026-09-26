@@ -61,8 +61,6 @@ def test_override_honoured_when_under_test(monkeypatch, tmp_path) -> None:
 
 def test_override_dropped_when_not_under_test(monkeypatch, tmp_path, capsys) -> None:
     cli_shared = _cli_shared()
-    # A fresh warn-set per case: the helper warns once per var per process, so a
-    # sibling case in the same worker would otherwise swallow the stderr line.
     monkeypatch.setattr(cli_shared, "_ISOLATION_ROOT_WARNED", set())
     monkeypatch.setenv("QUEUE_APPEND_OUTPUT_ROOT", str(tmp_path))
     monkeypatch.delenv(cli_shared.UNDER_TEST_ENV, raising=False)
@@ -102,10 +100,7 @@ def test_inherited_override_does_not_capture_a_real_write(stamped_engine_env: st
         )
         env = dict(os.environ)
         env["QUEUE_APPEND_OUTPUT_ROOT"] = override_root
-        # This is the reproduction: an inheriting session is NOT under pytest.
         env.pop("PYTEST_CURRENT_TEST", None)
-        # The stamped engine the box actually dispatches to — the source
-        # checkout carries no build stamp and the stamp gate refuses it.
         env["COORDINATOR_ENGINE_ROOT"] = stamped_engine_env
 
         result = subprocess.run(

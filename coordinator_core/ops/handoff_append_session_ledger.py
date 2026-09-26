@@ -146,15 +146,9 @@ from coordinator_core.session_ledger.aggregate_chain_loe import (
     unparseable_ledger_rows,
 )
 
-# Any level-2 ATX heading — the block-boundary detector every write-time/
-# detection site in this family uses (mirrors `aggregate_chain_loe.
 # _ANY_HEADING_RE`, not imported since that name is that module's own
-# private block-scanning detail; this is the identical one-line grammar).
 _ANY_HEADING_RE = re.compile(r"^## ")
 
-# Same disambiguation-window bound `handoff_discharge_criteria` uses for its
-# own backward context expansion — a body this repetitive within this many
-# lines is a distinct, reported refusal rather than silent overreach.
 _MAX_CONTEXT_EXPANSION_LINES = 30
 
 
@@ -163,18 +157,6 @@ def _err(msg: str) -> dict:
 
 
 def _explicit_counts(params: dict) -> "tuple[Optional[tuple[int, int]], Optional[str]]":
-    """Resolve the caller-supplied `(agent_dispatches, opus_dispatches)` pair.
-
-    Returns `(None, None)` when neither is supplied (the ordinary case, where
-    the counts are read off disk), `((ad, od), None)` when both are, and
-    `(None, "<reason>")` on any malformed input.
-
-    The two are ONE measurement and are taken as a pair: `opus_dispatches`
-    alone is not a fact about anything, and `agent_dispatches` alone would
-    write an opus count of zero with the same false confidence this param pair
-    exists to remove. `bool` is rejected explicitly — it is an `int` subclass,
-    so `True` would otherwise pass every check below and write `1d`.
-    """
     supplied = {k: params[k] for k in ("agent_dispatches", "opus_dispatches") if k in params
                 and params[k] is not None}
     if not supplied:
@@ -202,10 +184,6 @@ def _explicit_counts(params: dict) -> "tuple[Optional[tuple[int, int]], Optional
 def _resolve_read_path(
     handoff_path_raw: str, repo_root: Path
 ) -> "tuple[Optional[Path], Optional[str]]":
-    """Read-only path resolution mirroring `handoff_correct_body._handler`'s
-    own live-then-archive resolution, duplicated here SOLELY so this wrapper
-    can read the target's current body before delegating the write (same
-    convention as `handoff_discharge_criteria._resolve_read_path`)."""
     worktree = main_worktree_root(repo_root)
     p = Path(handoff_path_raw)
     if not p.is_absolute():
@@ -237,16 +215,6 @@ def _resolve_read_path(
 
 
 def _find_ledger_block(lines: "list[str]") -> "tuple[Optional[int], Optional[int], Optional[str]]":
-    """Locate the SOLE `## Session Ledger` heading's line index and the
-    index one PAST the block's last line (next `## ` heading, or EOF).
-
-    Returns `(heading_idx, section_end, error)`. Zero occurrences and
-    multiple occurrences are both refused with a distinct error — zero
-    because there is nothing to append under (every scaffolded handoff is
-    born with the block; C3's own refusal already guarantees this), and
-    more than one because this op picks exactly one insertion point and
-    must not guess which.
-    """
     heading_idxs = [i for i, ln in enumerate(lines) if SESSION_LEDGER_HEADING_RE.match(ln)]
     if not heading_idxs:
         return None, None, "no '## Session Ledger' heading found in the body"
@@ -384,14 +352,6 @@ async def _handler(
         return _err("created must be a string when supplied")
     created = (created_raw or "").strip() or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    # Explicit cwd, NOT `sessions_dir()`'s bare ambient-cwd form
-    # `_dispatch_fallback_record` uses — that reader runs inside a cold,
-    # per-invocation CLI trampoline where ambient cwd IS the target repo;
-    # this op runs inside the warm daemon serving arbitrary repos
-    # concurrently, where the ambient process cwd names no particular
-    # caller's repo at all. Scoping explicitly to `worktree` is what makes
-    # this resolve the CALLING repo's own session hub rather than
-    # whichever repo the daemon process happened to start in.
     counts_supplied, counts_err = _explicit_counts(params)
     if counts_err:
         return _err(counts_err)
@@ -404,8 +364,6 @@ async def _handler(
         ad, od = None, None
 
     if counts_supplied is not None:
-        # The caller measured, so the caller wins: a present file keyed to an
-        # id whose session ran on another host is not the better source.
         agent_dispatches, opus_dispatches = counts_supplied
         dispatch_source = "params"
     elif ad is not None:
@@ -413,20 +371,7 @@ async def _handler(
         dispatch_source = "agents_file"
     elif session_id_override:
         # THE ABSENCE-IS-A-REAL-ZERO RULE DOES NOT REACH THE OVERRIDE BRANCH.
-        # It is sound only because the normal path is invoked BY the live
-        # session it appends a row FOR (module docstring's "Nd / No"). Supply
-        # `session_id` and that premise inverts: the row is FOR a session that
-        # died on another host or died with its hub, so its
         # `dispatched-agents.txt` is absent BY CONSTRUCTION and the recovery
-        # path writes `XS | 0d / 0o` not sometimes but always. Measured in
-        # example-store-repo 2026-09-02: session ...203689 backfilled as 0d / 0o with
-        # 15 agent sidecars (2 opus) on disk, `compute_tshirt(15, 2, None)` = M.
-        # It is worse than one wrong row -- `aggregate_chain_loe` sums these,
-        # a `0d / 0o` row parses perfectly, and the session renders as no
-        # effort at all, which is the silent zero the ledger's own inline
-        # comment warns about, reached through `exit_code: 0`. And the row is
-        # unrepairable here: the duplicate guard below refuses a second append
-        # for the same sid6.
         return _err(
             f"session_id override {session_id!r} names a session with no "
             f"dispatched-agents.txt on this host, so its dispatch counts are "
@@ -438,11 +383,6 @@ async def _handler(
             f"agent_dispatches / opus_dispatches"
         )
     else:
-        # Absence -> a real zero, not an unmeasured unknown — see module
-        # docstring's "Nd / No" paragraph for why this op's absence-handling
-        # diverges from `_dispatch_fallback_record`'s (a past-session-
-        # reconstruction reader). Reached only on the non-override path, where
-        # the appending session IS the session the row is for.
         agent_dispatches, opus_dispatches = 0, 0
         dispatch_source = "absent_means_zero"
     tshirt = compute_tshirt(agent_dispatches, opus_dispatches, None)
@@ -483,12 +423,6 @@ async def _handler(
         return _err(new_string_or_err)
     new_string = new_string_or_err
 
-    # Defensive round-trip check (never expected to fire — `format_oneline_row`
-    # guarantees a parseable row for any hex-tailed session_id, and a real
-    # session id is UUID-shaped — see that function's own docstring) rather
-    # than trust the guarantee silently: this op is the write-time inverse of
-    # `unparseable_ledger_rows`'s read-time check, so it verifies its own
-    # output against the SAME grammar before ever reaching the write.
     check_findings = unparseable_ledger_rows("## Session Ledger\n\n" + row_line + "\n")
     if check_findings:
         return _err(

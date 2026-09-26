@@ -24,11 +24,8 @@ import pytest
 
 from coordinator_core.warm.entry_seam import per_request_state
 
-# Platform-absolute per `os.path.isabs`, the same gate the production code
-# checks against -- never a hardcoded platform-specific literal, so this
-# suite behaves identically under POSIX and Windows interpreters alike.
-_HOME_ABS = os.path.abspath("carried-settings-home")  # abs-path-ok: cwd-relative synthetic fixture, never resolved
-_SPAWNER_HOME = os.path.abspath("spawner-settings-home")  # abs-path-ok: cwd-relative synthetic fixture, never resolved
+_HOME_ABS = os.path.abspath("carried-settings-home")
+_SPAWNER_HOME = os.path.abspath("spawner-settings-home")
 
 
 def _set_spawner_env(monkeypatch):
@@ -36,8 +33,6 @@ def _set_spawner_env(monkeypatch):
 
 
 def test_carried_home_isolated_binds_the_callers_home(monkeypatch):
-    """(a) Inside the block under isolated=True, the borrowed home is what
-    `settings_home()` resolves to."""
     _set_spawner_env(monkeypatch)
 
     with per_request_state(settings_home=_HOME_ABS, isolated=True):
@@ -47,8 +42,6 @@ def test_carried_home_isolated_binds_the_callers_home(monkeypatch):
 
 
 def test_restore_unwinds_even_when_the_block_raises(monkeypatch):
-    """(b) After the block, os.environ is byte-identical to before, including
-    the case where the block raises."""
     _set_spawner_env(monkeypatch)
     before = dict(os.environ)
 
@@ -61,8 +54,6 @@ def test_restore_unwinds_even_when_the_block_raises(monkeypatch):
 
 
 def test_not_isolated_leaves_os_environ_untouched(monkeypatch):
-    """(c) Under isolated=False the variable is untouched -- shared with
-    every other in-flight connection on that leg."""
     _set_spawner_env(monkeypatch)
     before = dict(os.environ)
 
@@ -74,9 +65,6 @@ def test_not_isolated_leaves_os_environ_untouched(monkeypatch):
 
 @pytest.mark.parametrize("bad", ["", "relative/path", "not-a-home", "C:foo"])
 def test_malformed_claim_pops_rather_than_binds(monkeypatch, bad):
-    """(d) A malformed claim (empty, relative) pops rather than binds --
-    never mirrored into os.environ where every ambient settings_home()
-    reader downstream would trust it."""
     _set_spawner_env(monkeypatch)
 
     with per_request_state(settings_home=bad, isolated=True):
@@ -87,10 +75,6 @@ def test_malformed_claim_pops_rather_than_binds(monkeypatch, bad):
 
 @pytest.mark.parametrize("bad", ["", "relative/path", "not-a-home", "C:foo"])
 def test_malformed_claim_emits_a_diagnostic(monkeypatch, bad):
-    """(d2) A malformed claim is popped AND surfaced to a warm caller's own
-    diagnostic sink -- the cold leg already raises ValueError on the same
-    input (`_settings_home._require_rooted`), so the warm leg silently
-    swallowing it left the caller unable to tell its override was ignored."""
     _set_spawner_env(monkeypatch)
     diagnostics: list = []
 
@@ -102,9 +86,6 @@ def test_malformed_claim_emits_a_diagnostic(monkeypatch, bad):
 
 
 def test_absence_binds_nothing(monkeypatch):
-    """(e) Absence binds nothing -- inherit-on-absent, matching this seam's
-    other axes: a request that carried no claim leaves the enclosing scope's
-    value untouched."""
     _set_spawner_env(monkeypatch)
 
     with per_request_state(isolated=True):
@@ -114,12 +95,6 @@ def test_absence_binds_nothing(monkeypatch):
 
 
 def test_absent_claim_after_a_carried_one_resolves_the_workers_own_home(monkeypatch):
-    """(f) A request carrying NO claim, run immediately after one that did on
-    the same worker, resolves the worker's own pristine home -- the
-    inherit-on-absent + failed-restore composition (b) and C2's leakage leg
-    do not jointly cover, since both of those pin a SINGLE request's own
-    round trip rather than a second request's view of what the first left
-    behind."""
     _set_spawner_env(monkeypatch)
 
     with per_request_state(settings_home=_HOME_ABS, isolated=True):

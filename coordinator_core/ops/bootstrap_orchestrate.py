@@ -102,11 +102,6 @@ from coordinator_core.win_portability import no_console_creationflags
 
 _CREATIONFLAGS = no_console_creationflags()
 
-# Generator-provenance declaration (generator_provenance.py).
-# _coordinator_currency_write stamps docs/coordinator-currency.yaml under
-# `actual_path`, the target repo being bootstrapped by
-# /coordinator:repo-setup --batch (a fleet repo, not claude-klabauter itself) --
-# caller-supplied target repo outside claude-klabauter's own tree.
 GENERATES = []
 
 _GIT_TIMEOUT_SECS = 30
@@ -174,13 +169,6 @@ Destructive-action prohibition:
 )
 
 
-# ---------------------------------------------------------------------------
-# DoE sibling-root resolution (copied ladder, per the convention already used
-# by coordinator_core.ops.bootstrap_repo / learn_lessons_roots — a local copy,
-# not a shared import, per those modules' own stated convention)
-# ---------------------------------------------------------------------------
-
-
 def _resolve_coordinator_root() -> str:
     """Resolve the DoE coordinator/ root.
 
@@ -191,9 +179,6 @@ def _resolve_coordinator_root() -> str:
     override = os.environ.get("COORDINATOR_ROOT") or os.environ.get("CLAUDE_PLUGIN_ROOT")
     if override:
         return override
-    # Best-effort fallback if invoked without the trampoline's env seed (e.g.
-    # directly from a test): unconditional flat-layout default, matching the
-    # sibling ports' rung-4 fallback.
     claude_home = os.path.join(
         os.environ.get("CLAUDE_HOME")
         or os.environ.get("HOME")
@@ -218,20 +203,11 @@ def _import_bootstrap_repo_main():
     return _bootstrap_repo_main
 
 
-# ---------------------------------------------------------------------------
-# Small helpers
-# ---------------------------------------------------------------------------
-
-
 def _print(*args, **kwargs) -> None:
     print(*args, **kwargs)
 
 
 def _normalize_path(p: str) -> str:
-    """Convert Windows-style X:\\foo -> POSIX /x/foo for existence checks.
-
-    Lowercase ONLY the drive letter; preserve path case for POSIX filesystems.
-    """
     out = p.replace("\\", "/")
     m = re.match(r"^([A-Za-z]):/(.*)$", out)
     if m:
@@ -266,12 +242,6 @@ def _git(args: List[str], root: str, timeout: int = _GIT_TIMEOUT_SECS) -> "subpr
     )
 
 
-# ---------------------------------------------------------------------------
-# working-repos.yaml parsing (unit1) — hand-rolled state machine, no
-# yq/PyYAML dependency, mirroring the bash oracle's own no-dependency
-# constraint (see module docstring Negative-spec).
-# ---------------------------------------------------------------------------
-
 _PATH_LINE_RE = re.compile(r"^[ \t]*-[ \t]*path:[ \t]*(.+)$")
 _TOP_LEVEL_KEY_RE = re.compile(r"^[A-Za-z_]")
 _LEADING_WS_RE = re.compile(r"^[ \t]")
@@ -279,11 +249,6 @@ _WS_HASH_RE = re.compile(r"[ \t]#")
 
 
 def _strip_yaml_value(raw_path: str) -> str:
-    """Strip a whitespace-preceded inline '#' comment, then trailing whitespace.
-
-    A bare '#' with no leading whitespace is a literal path character, not a
-    comment (negative-spec: do not truncate `/repos/a#b` to `/repos/a`).
-    """
     m = _WS_HASH_RE.search(raw_path)
     if m:
         raw_path = raw_path[: m.start()]
@@ -291,12 +256,6 @@ def _strip_yaml_value(raw_path: str) -> str:
 
 
 def _parse_repo_paths(yaml_path: str) -> Tuple[List[str], bool]:
-    """Parse `  - path: <value>` entries from the `repos:` block only.
-
-    Returns (repo_paths, any_path_rejected). A leading-'-' value is rejected
-    (loudly, to stderr) rather than silently collected — it would otherwise be
-    misread as a CLI flag by bootstrap_repo.main's `--root` consumer.
-    """
     repo_paths: List[str] = []
     any_rejected = False
     in_repos_block = False
@@ -337,13 +296,7 @@ def _parse_repo_paths(yaml_path: str) -> Tuple[List[str], bool]:
     return repo_paths, any_rejected
 
 
-# ---------------------------------------------------------------------------
-# Currency stamp delegation (cross-boundary — see module docstring)
-# ---------------------------------------------------------------------------
-
-
 def _currency_read_schema_version(plugin_root: str) -> Optional[str]:
-    """Read the schema-version stamp from `plugin_root/coordinator-schema-version`."""
     ver_file = os.path.join(plugin_root, "coordinator-schema-version")
     try:
         with open(ver_file, "r", encoding="utf-8") as fh:
@@ -358,7 +311,6 @@ def _currency_read_schema_version(plugin_root: str) -> Optional[str]:
 
 
 def _currency_read_stamp(stamp_path: str) -> Optional[str]:
-    """Read the current schema-version value out of an existing currency stamp file."""
     try:
         with open(stamp_path, "r", encoding="utf-8") as fh:
             text = fh.read()
@@ -375,17 +327,6 @@ def _currency_read_stamp(stamp_path: str) -> Optional[str]:
 
 
 def _coordinator_currency_write(actual_path: str, plugin_root: str) -> bool:
-    """Port of: coordinator-currency.sh::coordinator_currency_write (DoE 9cc1d315, 2026-07-21).
-
-    Idempotent: no-ops (returns True, no file change) if the stamp already
-    carries the current schema version. Otherwise writes
-    `<repo_root>/docs/coordinator-currency.yaml` via temp-file + atomic
-    rename, mirroring the bash oracle's `mktemp` + `mv` sequence. Prints
-    diagnostics to stdout/stderr exactly as the bash function did (it never
-    redirected its own output into a variable either). Returns False on any
-    failure (unreadable schema-version file, directory-create failure,
-    write failure) — same fail-loud contract as the bash oracle's `return 1`.
-    """
     current_version = _currency_read_schema_version(plugin_root)
     if current_version is None:
         _print(
@@ -401,7 +342,7 @@ def _coordinator_currency_write(actual_path: str, plugin_root: str) -> bool:
     if os.path.isfile(stamp_path):
         existing_version = _currency_read_stamp(stamp_path)
         if existing_version == current_version:
-            return True  # already current — no file change
+            return True
 
     try:
         os.makedirs(stamp_dir, exist_ok=True)
@@ -434,11 +375,6 @@ def _coordinator_currency_write(actual_path: str, plugin_root: str) -> bool:
         try:
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(contents)
-            # Mkstemp hardcodes 0600 regardless of
-            # umask; os.replace preserves that mode across the rename, so
-            # without this chmod the stamp ends up owner-only instead of the
-            # 644 a bash `printf > file` redirect (the retired oracle's
-            # behavior) would have produced.
             os.chmod(tmp_path, 0o644)
         except OSError:
             os.close(fd)
@@ -464,13 +400,7 @@ def _coordinator_currency_write(actual_path: str, plugin_root: str) -> bool:
     return True
 
 
-# ---------------------------------------------------------------------------
-# main
-# ---------------------------------------------------------------------------
-
-
 def main(argv: List[str]) -> int:
-    # ---- arg parsing ---------------------------------------------------
     non_interactive = False
     check_only = False
 
@@ -484,7 +414,7 @@ def main(argv: List[str]) -> int:
             non_interactive = True
         elif arg == "--check-only":
             check_only = True
-            non_interactive = True  # check-only implies non-interactive
+            non_interactive = True
         elif arg.startswith("-"):
             _print(f"bootstrap-orchestrate.sh: unknown flag: {arg}", file=sys.stderr)
             return 1
@@ -493,7 +423,6 @@ def main(argv: List[str]) -> int:
             return 1
         i += 1
 
-    # ---- prerequisite checks --------------------------------------------
     coordinator_root = _resolve_coordinator_root()
     plugin_root = coordinator_root
 
@@ -510,7 +439,6 @@ def main(argv: List[str]) -> int:
         _print("bootstrap-orchestrate.sh: git is not available on PATH", file=sys.stderr)
         return 1
 
-    # ---- resolve working-repos.yaml -------------------------------------
     home = (
         os.environ.get("CLAUDE_HOME")
         or os.environ.get("HOME")
@@ -534,7 +462,6 @@ def main(argv: List[str]) -> int:
         _print("", file=sys.stderr)
         return 2
 
-    # ---- parse repo paths -------------------------------------------------
     repo_paths, any_path_rejected = _parse_repo_paths(working_repos_yaml)
 
     if not repo_paths:
@@ -545,7 +472,6 @@ def main(argv: List[str]) -> int:
         _print("  The file exists but the repos: block is empty or malformed.", file=sys.stderr)
         return 1
 
-    # ---- filter to repos that exist on disk --------------------------------
     existing_repos: List[str] = []
     missing_repos: List[str] = []
 
@@ -577,7 +503,6 @@ def main(argv: List[str]) -> int:
         for m in missing_repos:
             _print(f"  - {m}")
 
-    # ---- check-only: print action list and exit ----------------------------
     if check_only:
         _print("")
         _print("=== /repo-setup --batch --check-only: per-repo action list ===")
@@ -588,9 +513,6 @@ def main(argv: List[str]) -> int:
             actual_path = posix if os.path.isdir(posix) else repo
             _print("")
             _print(f"  Repo: {repo}")
-            # Capture bootstrap_repo_main's merged stdout+stderr and prefix each line
-            # with 4 spaces — matches the bash oracle's `2>&1 | sed 's/^/    /'` piping
-            # of the sibling subprocess's output into the action list.
             _buf = io.StringIO()
             with contextlib.redirect_stdout(_buf), contextlib.redirect_stderr(_buf):
                 bootstrap_repo_main(["--root", actual_path, "--non-interactive", "--dry-run"])
@@ -613,7 +535,6 @@ def main(argv: List[str]) -> int:
             return 3
         return 0
 
-    # ---- SELECT: EXPRESS or CUSTOM -----------------------------------------
     selected_repos: List[str] = []
 
     if non_interactive:
@@ -659,10 +580,6 @@ def main(argv: List[str]) -> int:
     if not selected_repos:
         _print("")
         _print("repo-setup: no repos selected. Nothing to do.")
-        # This early-return bypassed the
-        # any_path_rejected check the success path (below) honors, silently
-        # losing the exit-3 malformed-path-rejection signal the module
-        # docstring's exit-code table documents.
         if any_path_rejected:
             _print(
                 "  Note: one or more malformed repo paths were rejected during parsing "
@@ -672,12 +589,8 @@ def main(argv: List[str]) -> int:
             return 3
         return 0
 
-    # ---- bootstrap each selected repo --------------------------------------
     succeeded: List[str] = []
     failed: List[str] = []
-    # Renamed from skipped_already_current (the
-    # only path that populates it is bs_exit == 2, "not a git repo" — the
-    # old name implied "already up to date, nothing to do").
     skipped_not_git_repo: List[str] = []
 
     for repo in selected_repos:
@@ -743,7 +656,6 @@ def main(argv: List[str]) -> int:
             _print(f"  bootstrap: FAILED (bootstrap-repo.sh exit {bs_exit})")
             failed.append(repo)
 
-    # ---- summary table ------------------------------------------------------
     _print("")
     _print("=== /repo-setup --batch summary ===")
     _print("")

@@ -83,41 +83,12 @@ from coordinator_core.session import claims
 
 _MODE = "handoffs_for_plan"
 
-# The two record_type homes a plan-minted handoff can be found in — live
-# (state/handoffs/) and archived (archive/handoffs/). Order is preserved in
-# the returned candidates (live first) so a repair op sees the still-open
-# batons before the already-closed ones.
 _PLAN_HANDOFF_TYPES = ("handoff", "handoff-archived")
 
-# Output-shape key for the DR-084-resolved claim holder (see
-# _candidate_from_record's docstring below). This module emits the claim
-# holder's field name as a dict key in its candidate shape — that's OUTPUT
-# data, never a frontmatter lookup, so it's a legitimate, greppable field
-# name rather than a DR-084 single-accessor violation. query_records() does
-# NOT normalize the dual claim-holder vocabulary for this field (only status
-# and the claim-timestamp field get normalized), which is why
-# _candidate_from_record() resolves it through
-# claims.handoff_lifecycle().claim_holder() instead of reading it raw.
-_CLAIMED_BY_KEY = "claimed_by"  # dr084: write-not-read, output dict key emitted to callers, not a frontmatter lookup
+_CLAIMED_BY_KEY = "claimed_by"
 
 
 def _candidate_from_record(record: dict, *, record_type: str, plan_id: str) -> dict:
-    """Build one candidate dict from a query_records() result.
-
-    Carries the six frozen fleet.* candidate keys (contract §2.1) plus the
-    per-row detail a repair op needs: deployment_state, shipped_in,
-    claimed_by, origin_plan_id (echoed back for a caller that merges several
-    plans' results), and live (True for "handoff", False for "handoff-archived").
-
-    The claim-holder field is resolved through the DR-084 single accessor
-    (``coordinator_core.session.claims.handoff_lifecycle().claim_holder()``)
-    rather than a raw frontmatter-dict lookup of the field name by itself —
-    ``query_records()`` does NOT normalize the dual claim-holder vocabulary
-    this field can be recorded under (it only normalizes ``status`` and the
-    claim-timestamp field from a body marker), so a legacy-vocabulary handoff
-    whose holder is recorded under the OLD field name would otherwise
-    silently resolve to a missing value here.
-    """
     fm = record["frontmatter"]
     path = record["path"]
     title = fm.get("title") or Path(path).stem
@@ -127,7 +98,7 @@ def _candidate_from_record(record: dict, *, record_type: str, plan_id: str) -> d
         "title": title,
         "status": fm.get("status"),
         "family": "handoff",
-        "terminal_since": None,  # not materialised for handoffs (contract allows null)
+        "terminal_since": None,
         "note": None,
         "deployment_state": fm.get("deployment_state"),
         "shipped_in": fm.get("shipped_in"),
@@ -223,11 +194,6 @@ def _handoffs_for_plan(params: dict, repo_root: Optional[Path] = None) -> dict:
     try:
         candidates = _collect_plan_handoffs(worktree_root, plan_id)
     except SystemExit as exc:
-        # query_records' own _parse_where raises SystemExit on an unparseable
-        # where clause. plan_id is interpolated into an equality clause here
-        # (never caller-supplied where syntax directly), so this should be
-        # unreachable in practice — surfaced as a setup error rather than
-        # letting a bare SystemExit escape the op handler.
         print(
             f"fleet.handoffs_for_plan: query_records where-clause parse failed "
             f"for plan_id={plan_id!r}: {exc}",

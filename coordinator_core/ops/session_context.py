@@ -110,7 +110,4 @@ def resolve_current_session_id(worktree_root: Optional[Path] = None) -> Optional
           tell it from a genuine one. Cold is untouched: ``os.environ`` there IS
           the caller's own.
     """
-    # Routed through the one
-    # shared accessor (session.core.attributable_session_id) rather than
-    # re-deriving the warm/cold branch here.
     return _session_core.attributable_session_id() or None

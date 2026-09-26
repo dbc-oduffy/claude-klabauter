@@ -32,9 +32,6 @@ import pytest
 
 from coordinator_core.warm import breadcrumb
 
-# Measured floor (module docstring): four concurrent starters inside 1.3s
-# during one real succession window. Kept >= 5 per C4's own instruction that
-# the test's N must not be softened to a token 2.
 N_CALLERS = 8
 
 
@@ -131,8 +128,6 @@ def test_a_live_holders_claim_expires_after_the_boot_window(tmp_path):
     )
 
     # Proceeding past an expired claim RESTARTS the window rather than leaving
-    # the claim permanently expired: a permanent herd is not a fix for a
-    # permanent block.
     assert breadcrumb.try_claim_boot(lock_path, now=past + 0.01) is False
 
 
@@ -192,11 +187,8 @@ def test_a_holder_killed_mid_boot_releases_and_the_next_caller_spawns(tmp_path):
         line = proc.stdout.readline().strip()
         assert line == "claimed", f"holder subprocess did not claim the lock: {line!r}"
 
-        # While the holder is alive, a fresh caller must be denied.
         assert breadcrumb.should_spawn_decision(None, lock_path=lock_path) is False
 
-        # Kill it WITHOUT letting it clean up -- proves release-on-death, not
-        # release-on-orderly-exit.
         proc.kill()
         proc.wait(timeout=10)
 

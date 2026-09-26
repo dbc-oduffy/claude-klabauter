@@ -47,12 +47,7 @@ from coordinator_core.bash_guards.tests.guard_message_capture import (
     capture_one_guard,
 )
 
-#: The exemption manifest. Keyed `(guard_name, input_id)`, value a WRITTEN
-#: prose reason -- never a bare `True`/placeholder string. Ships empty; see
-#: module docstring. `input_id` is a caller-chosen short label identifying
-#: which corpus cell (e.g. a C3 corpus row, or a fixture in
 #: `_EXEMPTION_FIXTURES` below) the exemption covers -- it is not itself
-#: interpreted by this module beyond dead-entry lookup.
 GUARD_MESSAGE_EXEMPTIONS: Dict[Tuple[str, str], str] = {
     ("guard-repo-setup-claude-home-refusal", "guard-repo-setup-claude-home-refusal-fire"): (
         "this text is byte-pinned to DoE-claude's cold `guard-repo-setup-"
@@ -243,11 +238,6 @@ GUARD_MESSAGE_EXEMPTIONS: Dict[Tuple[str, str], str] = {
 }
 
 def _guard_doctrine_surface_bash_write_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
-    """Mirrors `guard_message_corpus.py`'s own
-    `_rehomed_doctrine_surface_setup` + `guard-doctrine-surface-bash-write-
-    fire` row exactly, so this exemption's `test_exemption_cells_still_
-    exceed_cap` re-measures the SAME cell shape the leg-1 ceiling test
-    fires, never a hand-derived approximation of it."""
     scratch_dir = Path(tempfile.mkdtemp(prefix="guard-message-exemption-scratch-"))
     (scratch_dir / "governed-authoring-surfaces.json").write_text(
         '["docs/wiki/governed-thing.md"]', encoding="utf-8"
@@ -266,10 +256,6 @@ def _guard_doctrine_surface_bash_write_fire_fixture() -> Tuple[str, str, str, Di
 
 
 def _guard_host_subagent_bash_ban_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
-    """Mirrors `guard_message_corpus.py`'s own `_rehomed_subagent_bash_ban_
-    setup` + `guard-host-subagent-bash-ban-fire` row exactly -- same cohort
-    opt-in marker, same executor identity, no `plugin_root` override (the
-    exemption reason's whole point)."""
     scratch_dir = Path(tempfile.mkdtemp(prefix="guard-message-exemption-scratch-"))
     (scratch_dir / "coordinator.local.md").write_text(
         "---\nsubagent_bash_policy: deny\n---\n", encoding="utf-8"
@@ -289,9 +275,6 @@ def _guard_host_subagent_bash_ban_fire_fixture() -> Tuple[str, str, str, Dict[st
 
 
 def _guard_host_subagent_bash_spawn_shapes_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
-    """Mirrors `guard_message_corpus.py`'s own `_rehomed_subagent_spawn_
-    shapes_setup` + `guard-host-subagent-bash-spawn-shapes-fire` row
-    exactly."""
     scratch_dir = Path(tempfile.mkdtemp(prefix="guard-message-exemption-scratch-"))
     (scratch_dir / "coordinator.local.md").write_text(
         "---\nsubagent_bash_spawn_shapes: deny\n---\n", encoding="utf-8"
@@ -311,13 +294,6 @@ def _guard_host_subagent_bash_spawn_shapes_fire_fixture() -> Tuple[str, str, str
 
 
 def _block_reviewer_bash_outside_allowlist_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
-    """Mirrors `guard_message_corpus.py`'s own
-    `block-reviewer-bash-outside-allowlist-fire` row: `curl https://
-    example.com`, `coordinator:code-reviewer` identity. No back-pointer
-    monkeypatch needed -- an unresolvable `cwd` leaves the back-pointer-
-    derived `subagent_type` unknown, so `_resolve_effective_type` falls
-    back to the payload's own `agent_type` (verified live: this fires the
-    identical deny the real corpus row does)."""
     cmd = "curl https://example.com"
     session_id = "guard-message-exemption-%s" % uuid.uuid4().hex
     cwd = "/nonexistent-guard-message-exemption-dir"
@@ -333,9 +309,6 @@ def _block_reviewer_bash_outside_allowlist_fire_fixture() -> Tuple[str, str, str
 
 
 def _grep_via_bash_guard_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
-    """Mirrors `guard_message_corpus.py`'s own `grep-via-bash-guard-fire`
-    row: a grep-via-bash pipeline (`grep ... | wc -l`) whose partial-pipe
-    rewrite embeds a real runnable `python3 -c` replacement verbatim."""
     cmd = "grep -rn TODO src/ | wc -l"
     session_id = "guard-message-exemption-%s" % uuid.uuid4().hex
     cwd = "/nonexistent-guard-message-exemption-dir"
@@ -349,10 +322,6 @@ def _grep_via_bash_guard_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], 
 
 
 def _guard_repo_setup_claude_home_refusal_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
-    """Mirrors `guard_message_corpus.py`'s own `guard-repo-setup-claude-
-    home-refusal-fire` row: the guard denies only when the scaffold's
-    resolved target root EQUALS Claude Home, so the payload's own `env`
-    declares a scratch home and the command targets that same path."""
     home = Path(tempfile.mkdtemp(prefix="guard-message-exemption-home-")) / ".claude"
     home.mkdir(parents=True, exist_ok=True)
     cmd = "python3 -m coordinator_core.install.scaffold_structure --root %s" % home
@@ -369,8 +338,6 @@ def _guard_repo_setup_claude_home_refusal_fire_fixture() -> Tuple[str, str, str,
 
 
 def _multiprobe_banner_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
-    """Mirrors `guard_message_corpus.py`'s own `multiprobe-banner-fire`
-    row: the same multi-probe session-facts banner command."""
     cmd = '''echo "=== facts ==="; pwd; whoami; git status; git rev-parse HEAD'''
     session_id = "guard-message-exemption-%s" % uuid.uuid4().hex
     cwd = "/nonexistent-guard-message-exemption-dir"
@@ -384,8 +351,6 @@ def _multiprobe_banner_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bo
 
 
 def _block_subagent_destructive_action_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
-    """Mirrors `guard_message_corpus.py`'s own `block-subagent-destructive-
-    action-fire` row: `git rebase -i HEAD~3` under the executor identity."""
     cmd = "git rebase -i HEAD~3"
     session_id = "guard-message-exemption-%s" % uuid.uuid4().hex
     cwd = "/nonexistent-guard-message-exemption-dir"
@@ -400,16 +365,8 @@ def _block_subagent_destructive_action_fire_fixture() -> Tuple[str, str, str, Di
     return cmd, session_id, cwd, payload, False
 
 
-#: Fixture-builders for `test_exemption_cells_still_exceed_cap`'s live
-#: re-measurement, owned alongside the manifest (never imported from a
-#: sibling corpus module, so this file's dead-entry enforcement never
-#: depends on another chunk's shape). Keyed identically to
 #: `GUARD_MESSAGE_EXEMPTIONS`; value a zero-arg callable returning
-#: `(cmd, session_id, cwd, payload, host_is_windows)` -- the exact
-#: positional/keyword shape `guard_message_capture.capture_one_guard`
 #: takes. An entry in `GUARD_MESSAGE_EXEMPTIONS` with no matching fixture
-#: here fails `test_exemption_cells_still_exceed_cap` loud, by design: a
-#: reason with no reproducible cell to check is not a verifiable exemption.
 _EXEMPTION_FIXTURES: Dict[Tuple[str, str], Callable[[], Tuple[str, str, str, Dict[str, Any], bool]]] = {
     (
         "guard-doctrine-surface-bash-write",
@@ -446,20 +403,11 @@ _EXEMPTION_FIXTURES: Dict[Tuple[str, str], Callable[[], Tuple[str, str, str, Dic
 }
 
 
-#: Re-measurement lookup for the eight `directory:hooks`-band exemptions
-#: above (composed-dispatcher / context-injection cells). Unlike
 #: `_EXEMPTION_FIXTURES` above -- independently-authored fixtures re-fired
-#: through `capture_one_guard`, bash_guards' native-band capture seam --
-#: each of these entries' whole written reason IS "this cell is C3's own
 #: `HOOK_ROWS` row for this exact (guard, row_id), re-fired and measured
-#: exactly as `test_leg1_ceiling_per_band` already fires it." Re-deriving
-#: an independent fixture here would not verify that claim; it would
 #: verify a DIFFERENT, hand-authored cell that happens to resemble it. So
 #: this lookup keys directly into `guard_message_corpus.HOOK_ROWS` rather
-#: than owning a duplicate fixture -- the one deliberate exception to
 #: `_EXEMPTION_FIXTURES`'s own "never imported from a sibling corpus
-#: module" rule, because for THESE entries the sibling corpus row is the
-#: evidence, not a shape to be independently reproduced.
 _HOOK_EXEMPTION_ROWS: Dict[Tuple[str, str], "guard_message_corpus.HookRow"] = {
     (row.guard, row.row_id): row
     for row in guard_message_corpus.HOOK_ROWS
@@ -489,17 +437,9 @@ def _live_guard_names() -> set:
 
 
 def test_exemption_guards_are_currently_registered():
-    """An exemption naming a guard that no longer exists in the chain is
-    dead config -- it would silently stop covering anything without this
-    check ever telling anyone. Modeled on
-    `test_override_route_inventory.test_allowlist_entries_are_actually_registered_guards`."""
     live_names = _live_guard_names()
-    #: `directory:hooks`-band entries name a hooks module, never a
-    #: `dispatch.GuardEntry.name` -- `_live_guard_names` reads only
-    #: `dispatch._build_guard_chain`'s bash_guards registrations, so those
     #: keys are checked for liveness against `_HOOK_EXEMPTION_ROWS`
     #: (itself keyed off `guard_message_corpus.HOOK_ROWS`, C3's own live
-    #: hooks-row registry) instead, below.
     hook_exempted = {guard_name for guard_name, _ in _HOOK_EXEMPTION_ROWS}
     stale = {
         guard_name
@@ -562,9 +502,5 @@ def test_exemption_cells_still_exceed_cap():
 
 
 def test_exemption_entries_carry_a_written_reason():
-    """Every value is a non-empty prose string -- guards against a future
-    entry landing with a placeholder/blank reason, the exact failure mode
-    the written-reason requirement exists to prevent (see module
-    docstring)."""
     blank = [key for key, reason in GUARD_MESSAGE_EXEMPTIONS.items() if not reason or not reason.strip()]
     assert not blank, "these exemption entries have no written reason: %s" % blank

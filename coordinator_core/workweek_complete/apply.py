@@ -108,30 +108,15 @@ from coordinator_core.contract.apply_base import assert_dispatchable
 if TYPE_CHECKING:
     from coordinator_core.composition_budget import CompositionBudget
 
-# ---------------------------------------------------------------------------
 # Exit-code contract (apply-side, 0-4) — SEPARATE from `brief.WorkweekExitCode`
-# (0-3). computed-skills.md § Exit-code contract for a mutating half requires
-# each half to pin its own enumeration; this one is never reused by brief().
-# Built from the shared `ceremony_common.apply_halt` ladder (C2h) so this
-# module's numbering can never independently drift from
-# `workday_complete.apply`'s own.
-# ---------------------------------------------------------------------------
 WorkweekApplyExitCode = build_ceremony_halt_exit_codes("WorkweekApplyExitCode")
 
 
-#: THE closed dispatch table (security-load-bearing — see module docstring).
 #: Every key is a literal member of `brief.CONSUMES_MANIFEST`; every value is
-#: this module's own fixed, `Path(__file__)`-relative script location under
-#: `coordinator/bin/`. Resolved once at import time — never mutated at
-#: runtime, never resolved via glob/search.
 _CLI_SCRIPT_ROOT = resolve_cli_script_root()
 
 
 def _resolve_script_path(name: str) -> Path:
-    """A consumes-manifest CLI ships as either `<name>.py` or a bareword
-    launcher shim `<name>` (no extension) under `coordinator/bin/` — both
-    shapes are fixed, literal candidates checked in that order; this is not
-    a glob/search, just a two-candidate literal lookup."""
     py_path = _CLI_SCRIPT_ROOT / f"{name}.py"
     if py_path.exists():
         return py_path
@@ -142,10 +127,6 @@ _CLI_DISPATCH: dict[str, Path] = {
     name: _resolve_script_path(name) for name in CONSUMES_MANIFEST
 }
 
-#: Mirrors the shared `cli_dispatch` primitive's own per-process cache so
-#: that `_load_cli_module`'s "no partial dispatch side effect on a denied
-#: cli" contract stays introspectable from this module (an admission
-#: refusal in `_resolve_cli` must never populate this before raising).
 _LOADED_MODULES: dict[str, ModuleType] = {}
 
 
@@ -196,20 +177,6 @@ def _load_cli_module(cli_name: str) -> ModuleType:
 
 
 def _invoke_cli_main(module: ModuleType, args: list[str]) -> tuple[int, str, CliExitClass]:
-    """Invokes `module.main` in-process via the shared
-    `ceremony_common.cli_dispatch.invoke_cli_main` primitive (C1/C5) and
-    narrows its 4-tuple superset return (`exit_code, stdout, stderr,
-    exit_class`) down to this module's own 3-tuple `(exit_code, stderr,
-    exit_class)` — this module never captures stdout (unlike its two
-    siblings, which thread captured stdout into inter-directive value
-    substitution): this chunk's directives never consume another
-    directive's stdout, so that capture was never added here, and the
-    shared primitive's stdout capture is simply discarded rather than
-    threaded through. Stderr capture and re-emission onto apply's own
-    stderr is unchanged (see `_dispatch_directive`). The shared primitive's
-    `ValueError` on a `main()`-less module is translated to
-    `UnrecognizedDirective` to keep this module's own exception contract
-    unchanged for its callers."""
     try:
         exit_code, _stdout_text, stderr_text, exit_class = _shared_invoke_cli_main(module, args)
     except ValueError as exc:
@@ -220,12 +187,6 @@ def _invoke_cli_main(module: ModuleType, args: list[str]) -> tuple[int, str, Cli
 
 
 def _dispatch_directive(directive: dict[str, Any]) -> dict[str, Any]:
-    """Loads and invokes the one CLI a single `directives[]` entry names,
-    returning a small result record. Raises `UnrecognizedDirective` before
-    any dispatch on an unrecognized `cli`. The invoked CLI's own captured
-    stderr is re-emitted onto apply's own stderr here (see
-    `_invoke_cli_main`'s docstring) so nothing that used to print to the
-    ceremony run's console goes silent."""
     module = _load_cli_module(directive["cli"])
     exit_code, stderr_text, exit_class = _invoke_cli_main(module, directive.get("args", []))
     if stderr_text:
@@ -238,11 +199,6 @@ def _dispatch_directive(directive: dict[str, Any]) -> dict[str, Any]:
         "stderr": stderr_text,
         "exit_class": exit_class.value,
     }
-
-
-# ---------------------------------------------------------------------------
-# Halt contract — per-directive, disposition-value-aware (module docstring).
-# ---------------------------------------------------------------------------
 
 
 def _judgment_points_by_id(judgment_points: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -307,29 +263,9 @@ def _execute_directives(
             "budget_breach": pre_mutation_breach,
         }
 
-    # Whole-run admission pre-pass (F1, cold review 2026-08-19): an
-    # un-admitted `cli` must fail the WHOLE run before any directive
-    # dispatches, mirroring `apply_base.execute_directives`'s own
-    # whole-list pre-validation — never degrade to a per-directive
-    # skip-and-continue on an admission/manifest-membership refusal. This
-    # is admission-only (`_resolve_cli` raising `UnrecognizedDirective`);
-    # the per-directive halt contract below (gates, non-zero exits,
-    # `best_effort`) is untouched. Scope, stated because the first cut of
-    # this pre-pass widened it silently: every directive that CAN dispatch in
-    # this run is checked, including a gate-blocked one; an `already_satisfied`
-    # directive is skipped, because it cannot.
     try:
         for directive in directives:
-            # An `already_satisfied` directive ran in an earlier pass and hits
-            # `continue` below without ever dispatching, so its verb name is
-            # never resolved by the main loop either. Admission-checking it here
-            # would refuse the WHOLE run over a name that cannot dispatch --
-            # a false refusal on a replayed directive whose verb has since left
             # `ASSEMBLER_DISPATCHABLE` (slice-B review finding 1, 2026-08-20).
-            # A gate-blocked directive is deliberately NOT skipped: it is still
-            # a live member of this run's list and dispatches the moment its
-            # gate resolves, so an un-admitted verb there is a structurally
-            # invalid list, which is exactly what this pre-pass exists to catch.
             if directive.get("already_satisfied"):
                 continue
             _resolve_cli(directive["cli"])
@@ -449,9 +385,6 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
 
 
 def main(argv: list[str]) -> int:
-    """`main()`'s `apply` dispatch arm — `--decisions <json>` (or its
-    file-borne sibling `--decisions-file <path>`) is the one supported flag,
-    mirroring `workday_complete.apply`'s CLI shape."""
     decisions: Optional[dict[str, Any]] = None
     conflict = detect_conflicting_payload_channels(argv)
     if conflict is not None:

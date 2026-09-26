@@ -1,4 +1,3 @@
-"""Tests for coordinator_core.ops.learn_lessons_config_update."""
 
 from __future__ import annotations
 
@@ -32,7 +31,6 @@ def test_meta_repo_cwd_is_silent_noop(tmp_path, monkeypatch, capsys):
 
 
 def test_registered_repo_is_silent_noop(tmp_path, monkeypatch, capsys):
-    """cwd matches a machine-local repos.* entry -> silent no-op, exit 0."""
     home_parent = tmp_path / "home"
     claude_home = home_parent / ".claude"
     claude_home.mkdir(parents=True)
@@ -61,11 +59,6 @@ def test_registered_repo_is_silent_noop(tmp_path, monkeypatch, capsys):
 
 
 def test_registered_repo_among_multiple_dump_entries_is_silent_noop(tmp_path, monkeypatch, capsys):
-    """Multi-item dump: cwd matches the SECOND of several repos.* entries -> still a
-    no-op. A single-entry dump fixture would pass identically whether the lookup
-    scans the whole snapshot or short-circuits on the first key, masking a
-    batching regression that only shows up with >1 registered repo (the same gap
-    that let a batched `_own_frozen_diff_shas` ship wrong on 2026-08-19)."""
     home_parent = tmp_path / "home"
     claude_home = home_parent / ".claude"
     claude_home.mkdir(parents=True)
@@ -119,7 +112,6 @@ def test_unregistered_repo_prints_hint_and_exits_zero(tmp_path, monkeypatch, cap
 
 
 def test_missing_machine_local_falls_through_to_hint(tmp_path, monkeypatch, capsys):
-    """machine-local absent entirely -> fail-open to the advisory hint, exit 0."""
     home_parent = tmp_path / "home"
     claude_home = home_parent / ".claude"
     claude_home.mkdir(parents=True)
@@ -154,7 +146,5 @@ def test_norm_resolves_existing_dir(tmp_path):
 
 
 def test_norm_nonexistent_path_returns_input_or_realpath():
-    # realpath() on a nonexistent path still returns a normalized absolute path
-    # (it doesn't require the path to exist) -- assert it doesn't raise.
     result = _norm("/definitely/does/not/exist/path")
     assert isinstance(result, str)

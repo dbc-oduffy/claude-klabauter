@@ -29,10 +29,6 @@ from coordinator_core.lifecycle_constants import (
 _HANDOFF_NEW_VOCAB_TOKENS = frozenset({"open", "claimed", "continued", "closed"})
 
 
-# ---------------------------------------------------------------------------
-# dual-vocabulary membership
-# ---------------------------------------------------------------------------
-
 def test_claimed_is_a_handoff_terminal_status() -> None:
     assert "claimed" in HANDOFF_TERMINAL_STATUS
 
@@ -65,20 +61,14 @@ def test_handoff_archival_terminal_statuses_widens_with_terminal_status() -> Non
     assert "claimed" in HANDOFF_ARCHIVAL_TERMINAL_STATUSES
 
 
-# ---------------------------------------------------------------------------
 # axis separation — HANDOFF_* new-vocabulary tokens must not leak onto
-# PLAN_*/SPEC_* axes
-# ---------------------------------------------------------------------------
 
 def test_plan_terminal_status_free_of_handoff_vocabulary_tokens() -> None:
     assert PLAN_TERMINAL_STATUS.isdisjoint(_HANDOFF_NEW_VOCAB_TOKENS)
 
 
-# ---------------------------------------------------------------------------
 # C8b rename — PLAN_TERMINAL_STATUS is now a backward-compatible alias of the
 # question-named PLAN_ARCHIVABLE_STATUS (archivability, not liveness/
-# flippability — see lifecycle_constants.py's own comment at the definition).
-# ---------------------------------------------------------------------------
 
 def test_plan_archivable_status_is_the_canonical_name() -> None:
     assert PLAN_ARCHIVABLE_STATUS is PLAN_TERMINAL_STATUS

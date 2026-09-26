@@ -1,15 +1,3 @@
-"""Tests for `coordinator_core.git.ls_files_bytes :: tracked_files_bytes`.
-
-The point of the module under test is byte-exactness, so these assert on the
-properties a decoding enumerator would silently lose: a `bytes` return, parity
-with the decoding sibling on an all-ASCII tree, and no U+FFFD substitution.
-The argv/spawn-shape assertions exist because the module's whole reason to be a
-sibling rather than an edit is that it must keep `ls_files.py`'s one-spawn-per-
-(root, pathspec) contract -- AC3 bounds the census at three spawns per repo, and
-a regression here is invisible until that budget blows.
-
-Spec backlink: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md, C1.
-"""
 
 from __future__ import annotations
 
@@ -67,9 +55,6 @@ def test_no_empty_entries_from_nul_split(repo: Path) -> None:
 
 
 def test_matches_decoding_sibling_on_ascii_tree(repo: Path) -> None:
-    """On an all-ASCII tree the two enumerators must agree exactly; any
-    divergence here means the bytes path is parsing `-z` output differently,
-    not merely preserving more of it."""
     decoded = tracked_files(repo)
     as_bytes = tracked_files_bytes(repo)
     assert tuple(sorted(e.decode("utf-8") for e in as_bytes)) == tuple(sorted(decoded))
@@ -82,9 +67,6 @@ def test_pathspec_scopes_the_result(repo: Path) -> None:
 
 
 def test_never_substitutes_replacement_character(repo: Path) -> None:
-    """U+FFFD encodes to b'\\xef\\xbf\\xbd'. Its presence would mean a decode
-    happened somewhere on the path -- the exact defect this module exists to
-    avoid."""
     assert all(b"\xef\xbf\xbd" not in entry for entry in tracked_files_bytes(repo))
 
 
@@ -94,7 +76,6 @@ def test_non_repo_folds_to_empty(tmp_path: Path) -> None:
 
 
 def test_one_spawn_per_root_pathspec_pair(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The lru_cache contract AC3's three-spawn budget rests on."""
     _tracked_files_bytes_cached.cache_clear()
     calls: list[list[str]] = []
     real_run_git = ls_files_bytes.run_git
@@ -103,9 +84,6 @@ def test_one_spawn_per_root_pathspec_pair(repo: Path, monkeypatch: pytest.Monkey
         calls.append(list(args))
         return real_run_git(args, *rest, **kwargs)
 
-    # The observed seam is `run_git`, not `subprocess.run`: this module spawns
-    # through `coordinator_core.git.run` now, and the budget these tests pin is
-    # one SPAWN per (root, pathspec) -- one run_git call is exactly one spawn.
     monkeypatch.setattr(ls_files_bytes, "run_git", counting_run_git)
     tracked_files_bytes(repo)
     tracked_files_bytes(repo)
@@ -129,8 +107,6 @@ def test_argv_convention_matches_the_sibling_module(
     monkeypatch.setattr(ls_files_bytes, "run_git", capturing_run_git)
     tracked_files_bytes(repo, "*.py")
 
-    # No leading "git": `run_git` takes the subcommand and its arguments, and
-    # owns the binary itself.
     assert seen_argv == [
         "-C",
         str(Path(repo).resolve()),
@@ -144,20 +120,13 @@ def test_argv_convention_matches_the_sibling_module(
         "with errors='replace' and defeats the byte-exactness it exists for"
     )
     # No `timeout=`: the bound is `run.LOCAL_PLUMBING_BUDGET_SECS`, and a
-    # module-private number here is exactly what test_shared_git_runner exists
-    # to stop growing back.
 
 
 def test_use_cache_false_sees_files_added_after_the_first_cached_call(
     repo: Path,
 ) -> None:
-    """F4 regression: the cached path pins a root's tracked-file list for
-    the life of the cache (correct for a one-shot CLI, wrong for a
-    warm-served caller). `use_cache=False` must bypass that pin and see a
-    file added after the FIRST cached call, without needing to
-    `cache_clear()`."""
     _tracked_files_bytes_cached.cache_clear()
-    before = tracked_files_bytes(repo)  # populates the cache
+    before = tracked_files_bytes(repo)
     assert b"new.py" not in before
 
     (repo / "new.py").write_bytes(b"z = 3\n")
@@ -177,9 +146,6 @@ def test_use_cache_false_sees_files_added_after_the_first_cached_call(
 def test_use_cache_false_never_populates_or_reads_the_cache(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A `use_cache=False` call must always re-spawn -- never served from,
-    and never written into, the `lru_cache` -- independent of any other
-    cached call for the same (repo_root, pathspec)."""
     _tracked_files_bytes_cached.cache_clear()
     calls: list[list[str]] = []
     real_run_git = ls_files_bytes.run_git
@@ -188,9 +154,6 @@ def test_use_cache_false_never_populates_or_reads_the_cache(
         calls.append(list(args))
         return real_run_git(args, *rest, **kwargs)
 
-    # The observed seam is `run_git`, not `subprocess.run`: this module spawns
-    # through `coordinator_core.git.run` now, and the budget these tests pin is
-    # one SPAWN per (root, pathspec) -- one run_git call is exactly one spawn.
     monkeypatch.setattr(ls_files_bytes, "run_git", counting_run_git)
     tracked_files_bytes(repo, use_cache=False)
     tracked_files_bytes(repo, use_cache=False)
@@ -200,8 +163,6 @@ def test_use_cache_false_never_populates_or_reads_the_cache(
 
 
 def test_tracked_files_is_unmodified_by_this_module() -> None:
-    """C1's negative spec: the decoding enumerator keeps its Tuple[str, ...]
-    return and five-plus call sites keep working."""
     from coordinator_core.git import ls_files
 
     assert ls_files.__all__ == ["tracked_files"]

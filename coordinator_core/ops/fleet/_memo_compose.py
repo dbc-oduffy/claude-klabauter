@@ -69,37 +69,15 @@ from coordinator_core.ops.fleet._memo_summary import (
 
 
 def body_opens_frontmatter(body: str) -> bool:
-    """True iff `body` itself opens with a parseable YAML frontmatter block —
-    i.e. the caller pasted a WHOLE memo draft (its own `---` frontmatter plus
-    body) as the `body` param, rather than only the prose that belongs below
-    the closing `---` (memo.draft owns the frontmatter; a `body` composing
-    ANOTHER frontmatter block on top of it delivers a memo whose own body
-    opens with a second, spurious YAML document).
-
-    Normalises `\\r\\n` to `\\n` first — a body's own line endings must not
-    change the verdict — then delegates entirely to `parse_frontmatter`
-    (no new regex, no new YAML parse): `True` iff
-    `parse_frontmatter(body)["frontmatter"] is not None`.
-
-    Negative-spec: does NOT reject a mid-body `---` horizontal rule (only a
-    LEADING frontmatter block matters — `parse_frontmatter` only looks at the
-    start of the string), a leading horizontal rule followed by ordinary
-    prose (that does not parse as a YAML mapping), or a body that opens with
-    a fenced YAML code block (an indented/fenced example, not a real leading
-    `---`-delimited document).
-    """
     normalized = body.replace("\r\n", "\n")
     return parse_frontmatter(normalized)["frontmatter"] is not None
 
 _LOG = logging.getLogger(__name__)
 
-# Topic slug: filesystem-safe, no path-traversal chars.
 # Mirrors cross-repo-memo CLI _TOPIC_SLUG_RE exactly — enforces the same
 # YYYY-MM-DD-<topic>.md filename contract (5-lockstep-site invariant).
 _TOPIC_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9\-]*$")
 
-# DR-026 sender-namespacing: byte-for-byte port of DoE cross-repo-memo
-# _memo_filename's sanitization regexes (coordinator/bin/cross-repo-memo.py ~line 1410-1418).
 _SENDER_SLUG_INVALID_RE = re.compile(r"[^a-z0-9-]+")
 _SENDER_SLUG_RUN_DASH_RE = re.compile(r"-{2,}")
 _TOPIC_DOUBLED_DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}-)+")
@@ -166,9 +144,6 @@ def _resolve_engine_sender_id(root: Optional[str] = None) -> str:
             owner = _read_publish_mirrors().get(mirror_key, {}).get("owner")
             if owner:
                 return owner
-    # _read_registry_repos() is only
-    # consumed by the terminal em_id_for_root() leg below; moved past the
-    # mirror-owner early return so it is not paid on a path that discards it.
     try:
         all_repos = _read_registry_repos()
     except RegistryReadError:
@@ -177,41 +152,6 @@ def _resolve_engine_sender_id(root: Optional[str] = None) -> str:
 
 
 def resolve_sender_id(from_id: Optional[str], root: Optional[str] = None) -> str:
-    """Resolve the caller-declared sender identity, defaulting to the sending
-    repo's own identity.
-
-    `root` (optional): the caller's own resolved repo worktree, forwarded to
-    `_resolve_engine_sender_id` — see that function's docstring for why this
-    must be the CALLER'S root, not the engine process's ambient cwd, under
-    the warm resident engine. Callers with no repo context (e.g. memo.list's
-    preview) omit it and get the ambient-cwd fallback.
-
-    Single authority for the `from_id or <engine default>` default every
-    memo-writing op applies to its own `from_id` param. memo.list's
-    resolution-mode preview (`memo_list._resolve_candidate`) calls this SAME
-    function — rather than hardcoding a sentinel — so a caller that declares
-    `from_id` to memo.list's preview and later to a real send gets a
-    byte-identical `resolved_filename`/actual-write filename pair.
-
-    A falsy `from_id` (None or empty string) resolves via
-    `_resolve_engine_sender_id()` — the asyncio engine has no EM session
-    identity of its own, so it signs a defaulted send with the SENDING
-    REPO'S resolved receiver identity, not a fixed literal (see that
-    function's docstring for why a literal is the defect this replaces).
-
-    Sender-side canonicalization: when the resolved identity is itself a
-    central/redirect alias (the DoE seat sending FROM e.g. `claude-central-em`
-    or a redirect alias), it is canonicalized to the SAME repo-matching
-    central id the receiver-side addressee gate uses
-    (`_memo_resolver.canonical_receiver_id`) — otherwise outbound filenames
-    from that one seat split across whichever alias each caller happened to
-    pass as `from_id`, defeating the DR-026 sender-namespace de-duplication
-    this function's filename consumers rely on. Degrades to the raw
-    (uncanonicalized) identity on `RegistryReadError`/`AmbiguousReceiverError`
-    — sender-slug canonicalization is a filename-namespacing convenience, not
-    the addressee-gate correctness surface, so it must never raise out of a
-    function every memo-writing op's param validation calls unconditionally.
-    """
     raw = from_id or _resolve_engine_sender_id(root)
     try:
         return _canonical_receiver_id(raw)
@@ -273,11 +213,6 @@ def resolve_and_assert_sender_id(from_id: Optional[str], root: Optional[str] = N
     try:
         inbox_dir, _receiver_repo_path, _all_repos = _resolve_receiver_inbox(resolved)
     except (RegistryReadError, AmbiguousReceiverError) as exc:
-        # The degrade itself is
-        # deliberate (a registry-read hiccup should not block a send
-        # resolve_sender_id already degraded through), but it must not be
-        # SILENT: this is the compose-time addressability assertion being
-        # skipped, matching resolve_sender_id's own degrade-branch warning.
         _LOG.warning(
             "resolve_and_assert_sender_id: compose-time addressability "
             "assertion for defaulted sender %r SKIPPED (degrading to "
@@ -301,47 +236,13 @@ def resolve_and_assert_sender_id(from_id: Optional[str], root: Optional[str] = N
 
 
 def _normalize_in_reply_to(value: str) -> str:
-    """Normalize a caller-supplied `in_reply_to` value to a bare basename.
-
-    Accepts either a bare basename (`2026-07-25-foo.md`) or a path
-    (`cross-repo/inbox/2026-07-25-foo.md`, an absolute path, etc.) — the
-    emitted frontmatter value is always just the basename, matching what
-    `coordinator_core.pickup_assemble._candidate_is_linked` matches against
-    (basename or basename-minus-`.md`).
-    """
     return Path(value.strip()).name
 
 
-# scoped_to sub-keys — presence-triggered completeness (2026-07-21 fix):
-# scoped_to as a WHOLE is optional; the moment the caller supplies ANY
-# scoped_to_* field it is declaring a change-control memo, and the FULL
-# triple — artifact + exactly one of (version|sha) + seam — becomes
-# required. A partial triple fails loud; it is never silently completed.
 _SCOPED_TO_KNOWN_SUBKEYS = frozenset({"artifact", "version", "sha", "seam"})
 
 
 def _validate_space_param(op_mode: str, value: Any, dry_run: bool):
-    """Validate/normalize the optional `space` param — shared by every
-    memo-composing op.
-
-    `space` (2026-07-28) is a sender-declared thread/problem-space hint,
-    deliberately unvalidated against any vocabulary: it is a grouping hint
-    the receiver may override, not a taxonomy. Only the "non-empty string
-    when supplied" shape check applies (mirrors campaign_id's posture).
-
-    Args:
-        op_mode: the caller's own `_MODE` constant — used both as the
-            `build_setup_error_result` mode field and to compose the
-            op-namespaced message prefix ("memo.<op_mode>: ...").
-        value: the raw `space` param (params.get("space")).
-        dry_run: passed straight through to build_setup_error_result.
-
-    Returns:
-        (normalized_value_or_None, error_envelope_or_None) — normalized_value
-        is the stripped string on pass (or None when value was None/absent);
-        error_envelope is a build_setup_error_result dict on failure, else
-        None. Exactly one of the two return slots is non-None.
-    """
     if value is None:
         return None, None
     if not isinstance(value, str) or not value.strip():
@@ -352,18 +253,6 @@ def _validate_space_param(op_mode: str, value: Any, dry_run: bool):
     return value.strip(), None
 
 
-#: Repo-relative anchors a `supersedes` reference may legitimately start from.
-#: An absolute path containing one of these is truncated to it; anything else
-#: absolute falls back to its basename. Ordered longest-first so the most
-#: specific anchor wins.
-#:
-#: Both outbox roots are anchors, not a swap: `.coordinator-local/memo-outbox/`
-#: is where memo.draft/send now write, but `supersedes` values are authored
-#: on a PEER machine and read back much later, so a reference minted before
-#: the 2026-09-03 relocation legitimately still says `state/memo-outbox/` --
-#: dropping that anchor would silently stop truncating those, falling
-#: through to the "absolute, no anchor" basename-only case instead. Both
-#: stay live for as long as any live `supersedes` value can cite either.
 _SUPERSEDES_ANCHORS = (
     "state/cross-repo/inbox/",
     "state/cross-repo/archive/",
@@ -373,10 +262,6 @@ _SUPERSEDES_ANCHORS = (
     f"{LEGACY_MEMO_OUTBOX_RELDIR}/",
 )
 
-#: A value that begins like a filesystem-absolute path on EITHER platform --
-#: POSIX `/x` or Windows `X:\x` / `X:/x`. Deliberately platform-agnostic: the
-#: value being normalized was written on whatever host the SENDER ran on, and
-#: the observed defect is a macOS-shaped path arriving on a Windows box.
 _ABSOLUTE_REF_RE = re.compile(r"^(?:/|[A-Za-z]:[\\/])")
 
 
@@ -472,27 +357,11 @@ def _validate_supersedes_param(op_mode: str, supersedes_raw: Any, dry_run: bool)
                 f"memo.{op_mode}: supersedes must be a string or a list of "
                 f"strings, got {type(supersedes_raw).__name__}",
             )
-        # Blank/whitespace-only bare string is ABSENCE, not an error — see
-        # unified rule above.
         supersedes = _normalize_supersedes_ref(supersedes_raw) or None
     return supersedes, None
 
 
-# ---------------------------------------------------------------------------
-# DR-026 sender-namespaced receiver filename
-# ---------------------------------------------------------------------------
-
 def _sender_slug(sender: str) -> str:
-    """Slug-sanitize a sender identity for filename namespacing (DR-026).
-
-    Byte-for-byte port of DoE cross-repo-memo._memo_filename's sanitization:
-    lowercase, collapse any run of non-[a-z0-9-] chars to a single dash,
-    collapse consecutive dashes, strip leading/trailing dashes.
-
-    Spec backlink: DR-026 (DoE-claude docs/decisions/DR-026-cross-repo-memo-
-    receiver-filename-namespace.md); DoE coordinator/bin/cross-repo-memo.py
-    _memo_filename (~line 1410-1412).
-    """
     if not sender:
         return ""
     return _SENDER_SLUG_RUN_DASH_RE.sub(
@@ -539,24 +408,7 @@ def _memo_filename(today: str, sender: str, topic: str) -> str:
     return f"{today}-{sanitized}-{stripped_topic}.md"
 
 
-# ---------------------------------------------------------------------------
-# YAML rendering
-# ---------------------------------------------------------------------------
-
 def _yaml_quote(value: str) -> str:
-    """Double-quote a string for YAML, escaping backslashes, double-quotes, control chars.
-
-    Mirrors memo_compose._yaml_quote (DoE shared lib, bin/lib/memo_compose.py).
-    Inlined here to avoid a cross-repo import dependency while the DoE resolver
-    surface is pending. Both implementations must stay in sync with the memo schema.
-
-    Sync note: this copy adds ASCII control-char escaping (0x00-0x08, 0x0B, 0x0C,
-    0x0E-0x1F, 0x7F → \\uXXXX) that the DoE memo_compose._yaml_quote may lack —
-    if DoE's copy is updated to fix the same gap, re-sync the two implementations.
-
-    Negative-spec: ALWAYS wraps in double-quotes (never bare YAML) — memo frontmatter
-    requires unambiguous quoting. Do not switch to bare YAML or single-quote form.
-    """
     escaped = (
         value.replace("\\", "\\\\")
         .replace('"', '\\"')
@@ -564,8 +416,6 @@ def _yaml_quote(value: str) -> str:
         .replace("\r", "\\r")
         .replace("\t", "\\t")
     )
-    # Escape remaining ASCII control chars (0x00-0x08, 0x0B, 0x0C, 0x0E-0x1F, 0x7F)
-    # that are invalid in YAML 1.1 double-quoted strings.
     escaped = re.sub(
         r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]",
         lambda m: f"\\u{ord(m.group()):04x}",
@@ -575,13 +425,6 @@ def _yaml_quote(value: str) -> str:
 
 
 def _yaml_scalar(value: Any) -> str:
-    """Render a leaf scalar (str/bool/int/float/None) for YAML — the leaf case
-    the structural renderer below bottoms out at.
-
-    Strings recurse through `_yaml_quote` (the always-double-quote scalar
-    renderer). Non-string scalar types get their normal YAML literal spelling
-    — booleans/null are lowercase, numbers are bare.
-    """
     if isinstance(value, str):
         return _yaml_quote(value)
     if isinstance(value, bool):
@@ -597,15 +440,6 @@ def _yaml_scalar(value: Any) -> str:
 
 
 def _render_yaml_block(value: Any, indent: int) -> list[str]:
-    """Render dict/list `value` as indented YAML block lines, recursing to
-    `_yaml_scalar` at the leaves.
-
-    Sibling structural renderer to `_yaml_quote`: `_yaml_quote` stays the
-    SCALAR renderer; this function is what lets a nested mapping (e.g.
-    `scoped_to: {artifact, version, seam}`) round-trip as a real YAML mapping
-    instead of being forced through `_yaml_quote` into a single
-    double-quoted scalar string.
-    """
     pad = " " * indent
     lines: list[str] = []
     if isinstance(value, dict):
@@ -627,26 +461,15 @@ def _render_yaml_block(value: Any, indent: int) -> list[str]:
 
 
 def _render_extra_field(key: str, value: Any) -> str:
-    """Render one declared-extra frontmatter field (e.g. `scoped_to`) as a
-    single multi-line YAML fragment, dict/list values as a nested block,
-    scalars inline on the `key:` line.
-    """
     if isinstance(value, (dict, list)):
         block_lines = _render_yaml_block(value, 2)
         return "\n".join([f"{key}:"] + block_lines)
     return f"{key}: {_yaml_scalar(value)}"
 
 
-# kind enum — re-exported from `memo_kinds`, which is import-free on purpose.
-# Kept as a module-level name because five call sites and several tests already
 # read `_memo_compose._VALID_KINDS`; the value is not defined here.
 _VALID_KINDS = _CANONICAL_VALID_KINDS
 
-# Single source of truth for the two frontmatter literals that matter most for
-# receiver-lifecycle correctness. `_compose_memo`'s self-validation call and
-# its emitted `lines` list both reference these constants (never separate
-# literals) so the validated values and the emitted values cannot silently
-# diverge.
 _STATUS_OPEN = "open"
 _DELIVERY_MODE_RECEIVER_REPO = "receiver-repo"
 
@@ -662,21 +485,6 @@ def _self_validate_frontmatter_fields(
     summary: Optional[str],
     kind: Optional[str],
 ) -> list[str]:
-    """Defense-in-depth frontmatter self-check before write (invariant b).
-
-    The engine bypasses the session-side PreToolUse Write hook that would
-    otherwise validate outgoing memo frontmatter against the (DoE-owned,
-    NOT vendored here) cross-repo memo schema — so every composing op must
-    self-enforce the required-field shape before every write.
-
-    Mirrors DoE cross-repo-memo._validate_outbox_frontmatter's field-presence
-    semantics (~line 1777-1815): title/from/to/created/delivery_mode must be
-    non-empty; status must literally equal "open" for a receiver-side
-    delivery memo; summary's KEY must be present but MAY be empty; kind is
-    valid-or-absent against the DR-214/D2-6 enum.
-
-    Returns a list of error strings; empty list = valid.
-    """
     errors: list[str] = []
     for field_name, value in (
         ("title", title),
@@ -716,72 +524,16 @@ def _compose_memo(
     space: Optional[str] = None,
     sent_by: Optional[str] = None,
 ) -> str:
-    """Compose a schema-valid cross-repo memo document (frontmatter + body).
-
-    Schema-valid: to: / from: / status: open / delivery_mode: receiver-repo / kind:
-    frontmatter per the cross-repo memo schema (D2 criterion 6, DoE Ask-1
-    concurrence condition 1). topic lives in the filename, NOT in frontmatter
-    (same as cross-repo-memo CLI convention).
-
-    `today` is passed in by the caller (a single `datetime.date.today()` call
-    at the call site) so the filename date and `created:` frontmatter field
-    cannot diverge across midnight.
-
-    Total emission over declared params, fail-loud on unknown params, and
-    nested-mapping support for `scoped_to` are claude-klabauter-owned ergonomic
-    divergences (A11) from DoE's memo_compose, not a byte-identical mirror.
-    The nine canonical fields below keep their CURRENT fixed order and
-    quoting (DR-026 / schema lockstep + the strang-03 round-trip fixture both
-    depend on it) — `scoped_to` renders strictly AFTER `kind:`/`supersedes:`.
-
-    Negative-spec: status is ALWAYS 'open' (never 'actioned', 'draft', or
-    'closed') — this composes a delivery memo, never a self-receipt.
-
-    campaign_id (DEC-3/C7, optional, additive): when supplied, renders as its
-    own frontmatter line AFTER `supersedes:` and BEFORE `scoped_to:` — the
-    fixed nine-field core above is untouched. Never validated for shape
-    beyond non-empty-string (enforced by the caller, not here) — this
-    composer only renders what it is given.
-
-    in_reply_to (2026-07-25, optional, additive): when supplied, renders as
-    its own frontmatter line AFTER `campaign_id:` and BEFORE `scoped_to:` —
-    the value this composer receives is expected to already be normalized to
-    a bare basename (see `_normalize_in_reply_to`); this composer only
-    renders what it is given. Consumed by
-    `coordinator_core.pickup_assemble._candidate_is_linked` (basename or
-    basename-minus-`.md`, case-insensitive match).
-
-    sent_by (C7, docs/plans/2026-08-13-session-identity-earns-its-keep.md):
-    when supplied, renders as its own frontmatter line AFTER `in_reply_to:`
-    and BEFORE `scoped_to:` — mirrors `picked_up_by` on the receive path.
-    Resolved by the CALLER at send time — this composer never resolves
-    session identity itself, same negative-spec as every other
-    identity-bearing field it only renders. Optional in the schema (never
-    required) — omitted entirely when falsy.
-    """
-    # Derive summary via the shared prose-first rule (footgun #4) when not
-    # provided — skips ATX headings/blank/HTML-comment lines and takes the
-    # first prose sentence, so composed-summary and derived-summary paths
-    # stay consistent.
-    # A placeholder-valued summary reaching this defense-in-depth backstop is
-    # ABSENT, not an explicit value — sentinel to None so it falls into the
-    # `if summary is None` derivation branch below rather than the
-    # length-check one.
     if summary is not None and is_placeholder_summary(summary):
         summary = None
     if summary is None:
         summary = derive_prose_summary(body)
     else:
         # Fail loud, never truncate an EXPLICITLY authored summary — this
-        # raise is the defense-in-depth backstop for a direct caller that
-        # bypasses the op's own send-time cap check.
         error = validate_explicit_summary("send_backstop", summary)
         if error:
             raise ValueError(error)
 
-    # Invariant b — self-validate before composing (defense-in-depth; the
-    # engine bypasses the session-side PreToolUse Write hook, so nothing else
-    # checks this).
     fm_errors = _self_validate_frontmatter_fields(
         title=title,
         from_id=from_id,
@@ -807,13 +559,9 @@ def _compose_memo(
         f"status: {_STATUS_OPEN}",
         f"delivery_mode: {_DELIVERY_MODE_RECEIVER_REPO}",
         f"summary: {_yaml_quote(summary)}",
-        f"kind: {_yaml_quote(kind)}",   # required field — D2-6
+        f"kind: {_yaml_quote(kind)}",
     ]
     if supersedes:
-        # List form (2026-07-28) renders through _render_extra_field as a real
-        # nested YAML sequence — never _yaml_quote'd into one scalar string,
-        # which would round-trip as a single bogus reference rather than N.
-        # The string form keeps its exact pre-existing single-line shape.
         if isinstance(supersedes, list):
             lines.append(_render_extra_field("supersedes", supersedes))
         else:

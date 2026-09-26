@@ -1,25 +1,3 @@
-"""test_cartography_cli — pytest tests for coordinator/bin/cartography.py.
-
-Spec backlink: A8 (cartography operator-seam spinoff, 2026-08-06 wave)
-
-Coverage:
-  op enumeration:
-    test_cartography_ops_derived_from_registry_map_not_hardcoded
-  op-name resolution:
-    test_resolve_op_name_accepts_bare_suffix
-    test_resolve_op_name_accepts_fully_qualified
-    test_resolve_op_name_unknown_exits_1
-  CLI surface (in-process argv):
-    test_main_list_prints_known_ops_and_exits_0
-    test_main_missing_op_exits_1
-    test_main_missing_target_root_exits_1
-    test_main_malformed_params_json_exits_1
-    test_main_params_non_object_exits_1
-  end-to-end (subprocess, real coordinator_core.invoke spawn):
-    test_end_to_end_file_index_against_tmp_git_repo
-    test_end_to_end_unknown_op_exits_1
-    test_end_to_end_tree_against_tmp_git_repo
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -32,17 +10,7 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
-# Declared, not excused: the end-to-end tests below (see the "end-to-end
-# (real subprocess spawn of coordinator_core.invoke)" section) spawn a real
-# `git`-backed repo and a real `coordinator_core.invoke` engine subprocess
-# because the property under test is the cartography CLI's real spawn
-# contract (argv building, real op dispatch through the engine, real
-# file-index/tree results against actual git-tracked files), which no mock
-# stands in for. `_init_repo` is invoked per-test, not hoisted to module
-# scope, since each end-to-end test seeds different tracked files. The
 # spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
-# explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _BIN_DIR = Path(__file__).parent.parent
@@ -61,18 +29,11 @@ def _load_module():
 _mod = _load_module()
 
 
-# ---------------------------------------------------------------------------
-# op enumeration
-# ---------------------------------------------------------------------------
-
-
 def test_cartography_ops_derived_from_registry_map_not_hardcoded() -> None:
     from coordinator_core.ops._registry_map import OP_MODULE_MAP
 
     expected = sorted(op for op in OP_MODULE_MAP if op.startswith("cartography."))
     assert _mod._cartography_ops() == expected
-    # The eight ops named in the brief must all be present (a ninth,
-    # op_edges, may or may not be, depending on concurrent-wave state).
     for suffix in (
         "tree",
         "file_index",
@@ -84,11 +45,6 @@ def test_cartography_ops_derived_from_registry_map_not_hardcoded() -> None:
         "chunk_table",
     ):
         assert f"cartography.{suffix}" in expected
-
-
-# ---------------------------------------------------------------------------
-# op-name resolution
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_op_name_accepts_bare_suffix() -> None:
@@ -106,11 +62,6 @@ def test_resolve_op_name_unknown_exits_1() -> None:
     with pytest.raises(SystemExit) as exc:
         _mod._resolve_op_name("bogus", known)
     assert exc.value.code == 1
-
-
-# ---------------------------------------------------------------------------
-# CLI surface (in-process)
-# ---------------------------------------------------------------------------
 
 
 def test_main_list_prints_known_ops_and_exits_0(capsys) -> None:
@@ -143,11 +94,6 @@ def test_main_params_non_object_exits_1(capsys) -> None:
     rc = _mod.main(["file_index", "--target-root", "/tmp", "--params", "[1, 2]"])
     assert rc == 1
     assert "must decode to a JSON object" in capsys.readouterr().err
-
-
-# ---------------------------------------------------------------------------
-# end-to-end (real subprocess spawn of coordinator_core.invoke)
-# ---------------------------------------------------------------------------
 
 
 def _init_repo(tmp_path: Path) -> Path:

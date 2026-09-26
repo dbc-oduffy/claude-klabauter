@@ -1,12 +1,3 @@
-"""
-test_session_hierarchy — parse/reject tests for the SessionHierarchy entity (ccos-5).
-
-Pytest port of DoE `coordinator/cockpit-contract/test/session-hierarchy.test.ts`.
-
-Spec backlinks:
-  - docs/plans/2026-06-30-ccos-8-cockpit-read-contract-spine-entities.md § C2
-  - docs/wiki/cockpit-contract-entity-addition-protocol.md §Steps (Step 9)
-"""
 from __future__ import annotations
 
 from coordinator_core.contract.cockpit_schema.entities.session_hierarchy import (

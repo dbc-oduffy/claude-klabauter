@@ -21,11 +21,6 @@ from coordinator_core.ops import group_em_stamp as ges
 from coordinator_core.op_scopes import OP_KEY_SCOPE
 
 
-# ---------------------------------------------------------------------------
-# groupem.stamp
-# ---------------------------------------------------------------------------
-
-
 def test_stamp_resolves_through_registry():
     assert "groupem.stamp" in _registry_map.OP_MODULE_MAP
     assert _registry_map.OP_MODULE_MAP["groupem.stamp"] == "coordinator_core.ops.group_em_stamp"
@@ -75,11 +70,6 @@ def test_stamp_false_on_decline_passes_through(tmp_path, monkeypatch):
     assert result == {"stamped": False}
 
 
-# ---------------------------------------------------------------------------
-# groupem.resolve_addressee
-# ---------------------------------------------------------------------------
-
-
 def test_resolve_addressee_resolves_through_registry():
     assert "groupem.resolve_addressee" in _registry_map.OP_MODULE_MAP
     assert (
@@ -121,11 +111,6 @@ def test_resolve_addressee_none_is_a_refusal_not_a_fallback(tmp_path, monkeypatc
     assert result == {"name": None}
 
 
-# ---------------------------------------------------------------------------
-# groupem.idle_report
-# ---------------------------------------------------------------------------
-
-
 def test_idle_report_resolves_through_registry():
     assert "groupem.idle_report" in _registry_map.OP_MODULE_MAP
     assert (
@@ -162,9 +147,6 @@ def test_idle_report_returns_same_answer_as_underlying_function(tmp_path, monkey
 
 
 def test_idle_report_observed_exits_unhashable_raises_named_value_error(tmp_path, monkeypatch):
-    """P2 pin: an accepted shape (a list) with unhashable contents (dicts) must
-    raise a named `ValueError`, not propagate the bare `TypeError` frozenset()
-    itself raises."""
 
     def _fake_build_report(repo_root, **kwargs):
         raise AssertionError("must not reach build_report on a mis-shaped observed_exits")
@@ -180,13 +162,6 @@ def test_idle_report_observed_exits_unhashable_raises_named_value_error(tmp_path
 
 
 def test_stamp_refuses_when_no_holder_can_be_resolved(tmp_path, monkeypatch):
-    """A crown row that names no crown is worse than no row.
-
-    `caller_session_id` returns Optional[str], and `watch_heartbeat.stamp`
-    validates only `writer_session_id`. A call supplying an explicit writer
-    while the environment carries no session id therefore reached the writer
-    with `holder_session_id=None` and wrote it verbatim.
-    """
     monkeypatch.setattr(ges.group_em_read_pass, "caller_session_id", lambda: None)
 
     with pytest.raises(ValueError) as excinfo:
@@ -204,15 +179,6 @@ def test_stamp_refuses_when_no_holder_can_be_resolved(tmp_path, monkeypatch):
 
 
 def test_stamp_refuses_a_writer_naming_itself_as_someone_else(tmp_path, monkeypatch):
-    """A guard authenticated by the party it guards is not a guard.
-
-    `writer_session_id` is what `is_fresh_and_foreign` compares to decide
-    whether to decline, and what `_writer_identity` compares to decide
-    whether to persist a `prior_*` trace. Accepting it as a free wire param
-    let one caller supply another instrument's identity and thereby bypass
-    the decline AND suppress the trace in a single call -- destroying that
-    instrument's declination rows with no record at all.
-    """
     monkeypatch.setattr(ges.group_em_read_pass, "caller_session_id", lambda: "real-caller-1111")
 
     with pytest.raises(ValueError) as excinfo:
@@ -230,14 +196,6 @@ def test_stamp_refuses_a_writer_naming_itself_as_someone_else(tmp_path, monkeypa
 
 
 def test_stamp_refuses_an_unverifiable_writer_claim_with_no_resolved_caller(tmp_path, monkeypatch):
-    """P1 fail-closed pin: an unresolvable caller must not disarm the guard.
-
-    Supplying `holder_session_id` explicitly sidesteps the earlier
-    unresolvable-holder raise, so this reaches the writer-identity branch
-    with `resolved_caller` falsy -- previously the `elif resolved_caller and
-    ...` guard short-circuited to False here and let ANY writer_session_id
-    through unverified. It must now raise instead.
-    """
     monkeypatch.setattr(ges.group_em_read_pass, "caller_session_id", lambda: None)
 
     with pytest.raises(ValueError) as excinfo:

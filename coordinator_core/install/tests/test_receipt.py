@@ -1,13 +1,3 @@
-"""
-coordinator_core.install.tests.test_receipt
-
-Behavioural tests for the install receipt (coordinator_core.install.receipt)
-— derivation of concrete on-this-machine facts from a writer's declared
-write surface.
-
-Spec backlink: pln-writer-declared-write-surface-49d3bd,
-chunk C5
-"""
 
 from __future__ import annotations
 
@@ -197,11 +187,6 @@ def test_unrecognized_clause_type_raises_type_error() -> None:
         derive_receipt_entries(decl)
 
 
-# ---------------------------------------------------------------------------
-# Coverage — reported/unreported writer tracking (C2)
-# ---------------------------------------------------------------------------
-
-
 def test_build_receipt_records_unreported_writer_id_without_deriving() -> None:
     decl = WriteSurfaceDeclaration(
         writer_id="configure-git",
@@ -215,9 +200,6 @@ def test_build_receipt_records_unreported_writer_id_without_deriving() -> None:
     assert receipt.reported("configure-git") is True
     assert receipt.reported("ensure-venv") is False
     assert receipt.reported("wrapper-onto-path") is False
-    # A writer never mentioned at all is a distinct, honest "not asked" —
-    # never conflated with "reported nothing" (declared-empty) or
-    # "explicitly unreported". This is the negative spec's whole point.
     assert receipt.reported("register-discovered-repos") is None
     assert receipt.for_writer("ensure-venv") == ()
 
@@ -229,7 +211,6 @@ def test_unreported_writer_id_distinguishable_from_reported_empty_writer() -> No
         clauses=(),
     )
     receipt = build_receipt([(empty_decl, None)], unreported_writer_ids=["never-ran"])
-    # Both writers have zero entries — but coverage tells them apart.
     assert receipt.for_writer("noop-writer") == ()
     assert receipt.for_writer("never-ran") == ()
     assert receipt.reported("noop-writer") is True
@@ -274,11 +255,6 @@ def test_reported_writer_ids_default_empty_on_bare_construction() -> None:
     assert receipt.unreported_writer_ids == frozenset()
 
 
-# ---------------------------------------------------------------------------
-# Persistence — persist_receipt / load_receipt (C2)
-# ---------------------------------------------------------------------------
-
-
 def _sample_receipt() -> InstallReceipt:
     decl = WriteSurfaceDeclaration(
         writer_id="configure-git",
@@ -311,8 +287,6 @@ def test_persist_then_load_round_trips(tmp_path, monkeypatch) -> None:
 
 
 def test_persist_writes_atomically_via_shared_primitive(tmp_path, monkeypatch) -> None:
-    """Not a hand-rolled write-then-rename — no leftover tempfile after a
-    successful persist (the `_shared.atomic_write_bytes` contract)."""
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     persist_receipt(_sample_receipt(), settings_home_override=tmp_path)
     leftovers = [p for p in tmp_path.iterdir() if p.name.startswith(".atomic-write.")]
@@ -356,8 +330,6 @@ def test_load_receipt_returns_none_on_unrecognized_schema_version(tmp_path) -> N
 
 
 def test_load_receipt_returns_none_on_wrong_shape_that_does_not_round_trip(tmp_path) -> None:
-    """Well-formed JSON, wrong document shape — a real corruption class
-    distinct from "not JSON at all"."""
     doc = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
         "entries": "this should be a list, not a string",
@@ -371,7 +343,7 @@ def test_load_receipt_returns_none_on_wrong_shape_that_does_not_round_trip(tmp_p
 def test_load_receipt_returns_none_on_entry_missing_required_key(tmp_path) -> None:
     doc = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
-        "entries": [{"kind": "git-config-key"}],  # missing writer_id
+        "entries": [{"kind": "git-config-key"}],
         "reported_writer_ids": [],
         "unreported_writer_ids": [],
     }
@@ -388,10 +360,6 @@ def test_load_receipt_returns_none_when_settings_home_unresolvable(tmp_path, mon
 
 
 def test_load_receipt_returns_none_when_writer_id_in_both_reported_and_unreported(tmp_path) -> None:
-    """A malformed/tampered on-disk receipt with the same writer_id in both
-    lists must degrade to None, not silently resolve reported() to True —
-    build_receipt enforces this disjointness at construction, and the load
-    path must enforce it too."""
     doc = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
         "entries": [],
@@ -403,9 +371,6 @@ def test_load_receipt_returns_none_when_writer_id_in_both_reported_and_unreporte
 
 
 def test_load_receipt_returns_none_on_entry_with_non_string_path(tmp_path) -> None:
-    """A corrupted receipt with e.g. an integer path must degrade to None
-    (shape mismatch), not reconstruct a ReceiptEntry with a non-string
-    path."""
     doc = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
         "entries": [
@@ -421,11 +386,6 @@ def test_load_receipt_returns_none_on_entry_with_non_string_path(tmp_path) -> No
 def test_persist_receipt_raises_receipt_persistence_error_when_settings_home_unresolvable(
     monkeypatch,
 ) -> None:
-    """persist_receipt's own docstring and ReceiptPersistenceError's
-    docstring both document an unresolvable settings-home as surfacing
-    ReceiptPersistenceError — matching load_receipt's degrade contract on
-    the write side. Mirrors
-    test_load_receipt_returns_none_when_settings_home_unresolvable."""
     from coordinator_core.install.receipt import ReceiptPersistenceError
 
     monkeypatch.delenv("CLAUDE_HOME", raising=False)

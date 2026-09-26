@@ -104,10 +104,6 @@ from coordinator_core.benchmarks.process_time import (
     batched_process_time_ms,
 )
 
-# Spawns real external processes (K=20 batches, plus one unbatched
-# verification run per corpus payload) and constructs real git repos via
-# `guard_message_corpus.py`'s own fixtures; runs at cadence gates, not per
-# commit. Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 K_INVOCATIONS = 20
@@ -136,10 +132,6 @@ for C3's own point-of-use derivation (AC8)."""
 
 
 def _require_supported_platform() -> None:
-    """Windows (job object) or Darwin (kqueue + `wait4`) -- the two
-    platforms `coordinator_core.benchmarks.process_time` implements
-    (`batched_process_time_ms`'s own module docstring). Every other
-    platform still has no process-time primitive here at all."""
     if not (IS_WINDOWS or IS_DARWIN):
         pytest.skip(
             "process-time accounting has no primitive for this platform "
@@ -147,39 +139,6 @@ def _require_supported_platform() -> None:
         )
 
 
-# ---------------------------------------------------------------------------
-# AC1 -- standing process-time gate over the claude-klabauter-owned dispatch
-# entrypoint (bash_guards.dispatch::evaluate_payload_json).
-# ---------------------------------------------------------------------------
-
-
-#: `bash_cat_pyproject_head` is KNOWN over the brightline pre-fix -- live
-#: on this box (opro-guards-under-the-brightline, 2026-08-21): 625.8ms,
-#: 3.1 procs/call, above both this file's own measurement and the research
-#: doc's 469.5ms/6.8-proc figure (a different corpus command, box-load
-#: dependent either way). This is Site 1's own two `python.exe` spawns
-#: (`_bt_python3_invocation()`'s per-firing interpreter resolution) --
-#: exactly what C2 exists to kill. Marked `pending_fix`, not silently
-#: loosened or deleted: DR-344 forbids moving the bar to accommodate a
-#: miss, and this chunk changes no guard behaviour, so today's genuine
-#: over-budget cost must be VISIBLE (this assertion still runs and still
-#: fails) without gating the fast/full tiers red before C2 lands.
-#: EMPTIED 2026-08-21, once the cost the comment above describes was actually
-#: found and removed. The attribution in that comment was WRONG and is kept
-#: only as a record of it: the residual was never Site 1's interpreter spawns
-#: (C2's cache retired those, verified at zero spawns). It was
-#: `_advisory_dedupe.terse_alternative_text` importing `_alternative_liveness`
-#: for two regex constants, which ran `discover_write_guard_names()` at import
-#: time and pulled in the whole `coordinator_core.ops` registry -- 480-710ms,
-#: paid on every repeat firing of an advisory. Homing those constants in the
-#: leaf module took `cat pyproject.toml | head -5` from 437ms median to 109ms,
-#: 0/15 samples over budget.
-#:
-#: This set is EMPTY on purpose, and the gate is enforcing again for every
-#: corpus row. Re-populating it silently converts DR-344's ratchet back into a
-#: record of a known breach: a `pending_fix` row still runs but gates nothing,
-#: so a regression lands green. If a row goes over budget, that is a finding to
-#: fix or to take to the PM, not an entry to add here.
 _KNOWN_OVER_BUDGET_PRE_FIX: set = set()
 
 
@@ -207,17 +166,7 @@ def test_dispatch_entrypoint_process_time_is_under_the_brightline(label):
     )
 
 
-# ---------------------------------------------------------------------------
-# AC2 -- the derived floor.
-# ---------------------------------------------------------------------------
-
-
 def test_derived_floor_components_are_monotonically_increasing():
-    """`bare_interpreter <= import_closure <= chain_spawns_nothing`, each a
-    strict superset of the cost below it (module docstring's own
-    definition of the three legs) -- a sanity check that the floor
-    measurement itself is coherent, not a specific-value assertion (which
-    would be machine-pinned and re-fail on every box this gate runs on)."""
     _require_supported_platform()
     floor = measure_derived_floor(k=K_INVOCATIONS)
     bare_ms = floor.bare_interpreter["process_time_ms"]
@@ -226,10 +175,6 @@ def test_derived_floor_components_are_monotonically_increasing():
     assert floor.bare_interpreter["rc"] == 0
     assert floor.import_closure["rc"] == 0
     assert floor.chain_spawns_nothing["rc"] == 0
-    # A few ms of tick noise is tolerated (trap 2's own ~15.6ms
-    # quantisation) rather than asserting a hard `<=`, which would flake on
-    # a component whose true costs sit within one scheduler tick of each
-    # other.
     tolerance_ms = 15.6
     assert bare_ms <= closure_ms + tolerance_ms, (
         f"bare_interpreter ({bare_ms}ms) unexpectedly costlier than "
@@ -248,19 +193,7 @@ def test_derived_floor_components_are_monotonically_increasing():
     )
 
 
-# ---------------------------------------------------------------------------
-# AC6 -- full spawn-set enumeration.
-# ---------------------------------------------------------------------------
-
-
 def test_spawn_set_enumeration_completes_and_every_record_has_a_stack():
-    """No spawns-per-call target is asserted here (this chunk's dispatch
-    brief: "no procs/call target is safe to commit to -- do not set one
-    before the set is closed") -- this only proves the enumeration
-    mechanism itself runs to completion over the full AC3-AC5 corpus and
-    that every observed spawn carries a non-empty call stack (the whole
-    point of AC6 over a named-spawn trace: attributing Finding 7's
-    currently-unattributed processes)."""
     spawns = enumerate_spawn_set_for_corpus()
     assert set(spawns) == set(CORPUS_PAYLOADS)
     for label, records in spawns.items():
@@ -270,38 +203,11 @@ def test_spawn_set_enumeration_completes_and_every_record_has_a_stack():
 
 
 def test_powershell_get_childitem_spawns_nothing_registered_guard_can_see():
-    """A live, named check on the one corpus command in this plan's
-    Problem statement that Site 1/Site 2 do not apply to at all -- C2 does
-    not fire on this path (dispatch's own `("Bash",)`-default matchers
-    exclude a PowerShell payload from every guard that has not explicitly
-    widened), and C3's `bump_foreign_repo_write`/`bump_outside_repo_write`
-    are also `("Bash",)`-matched. Recorded here as a fact this baseline
-    already shows, not as a spawns-per-call ceiling (AC6's own
-    enumeration is the artifact; this is one readable consequence of it)."""
     spawns = enumerate_spawn_set_for_corpus()
     assert spawns["powershell_get_childitem"] == []
 
 
-# ---------------------------------------------------------------------------
-# AC9/AC10/AC11 -- baseline capture self-consistency.
-# ---------------------------------------------------------------------------
-
-
 def test_message_baseline_capture_is_non_empty_and_every_row_is_a_non_negative_int():
-    """NOT a two-call determinism check (see this test's own history):
-    `guard_message_corpus.py`'s `validate-commit-fire` row was found live,
-    on this box, to measure a different byte count across two back-to-back
-    fires in the same process (0 vs 607) -- a pre-existing nondeterminism
-    in that row's own fixture (out of this chunk's writable scope; the
-    corpus module is not in C1's `writes:` list), not something this
-    capture function introduces. Reported to the dispatching EM separately.
-    C2/C3's own AC9 exit gate compares a FRESH `capture_message_baseline()`
-    call against C1's committed baseline across a real code change, which
-    is a different, coarser comparison than firing twice in one process --
-    but a flaky row means that comparison may itself flap on
-    `validate-commit-fire` independent of anything C2/C3 change, which
-    C2/C3 should account for (e.g. by excluding that one key from a strict
-    equality, or re-deriving it) rather than assume-away."""
     first = capture_message_baseline()
     assert first, "message baseline capture produced no rows at all"
     for key, value in first.items():
@@ -311,18 +217,13 @@ def test_message_baseline_capture_is_non_empty_and_every_row_is_a_non_negative_i
 
 
 def test_message_baseline_substitutes_out_the_resolved_interpreter_prefix():
-    """Mutation probe for AC9's machine-pinning problem: a message that
-    embeds `_bt_python3_invocation()`'s resolved, box-specific prefix must
-    measure the SAME byte count as one with the generic placeholder, proving
-    the substitution actually collapses the two -- not merely that the
-    substitution call runs without erroring."""
     from coordinator_core.bash_guards import dispatch_checks
     from coordinator_core.benchmarks import bash_dispatch_probe as probe
 
     original = dispatch_checks._bt_python3_invocation
     try:
         dispatch_checks._bt_python3_invocation = (
-            lambda: r"C:\some\very\long\resolved\path\python.exe"  # abs-path-ok: synthetic mutation-probe fixture, not a real machine path
+            lambda: r"C:\some\very\long\resolved\path\python.exe"
         )
         prefix = probe._resolved_python3_invocation_prefix()
         text_with_prefix = "run: %s -c 'do_thing()'" % prefix

@@ -73,10 +73,6 @@ def test_an_acted_id_with_no_matching_move_is_skipped():
     assert "_scope_touch_paths" not in result
 
 
-# ---------------------------------------------------------------------------
-# The two real call sites
-# ---------------------------------------------------------------------------
-
 import pytest
 
 import coordinator_core.ops.fleet.archive_actioned_memos as memos_op

@@ -1,12 +1,3 @@
-"""Behavior tests for coordinator_core.ops.verify_skill_anchor_links.
-
-Covers path-directed resolution (each citation checked against the file IT
-names), the optional doctrine-surface manifest, and the 0/1/2 exit-code split
-between "checked, clean", "checked, dead anchors" and "could not check".
-
-Spec backlink: coordinator/commands/update-docs.md § Phase 11h
-Origin: verify-skill-anchor-links.sh (DoE b5a4192c, 2026-07-20)
-"""
 from __future__ import annotations
 
 import json
@@ -37,14 +28,6 @@ GLOBAL_DOCTRINE = """## Engineering Defaults
 
 
 def _make_tree(tmp_path: Path, skill_md_body: str) -> Path:
-    """Build a repo-root/plugin-root pair mirroring DoE's real layout.
-
-    repo_root/
-      coordinator/                 <- plugin_root
-        snippets/doctrine-a.md
-        skills/plan/SKILL.md
-      global-doctrine/CLAUDE.md
-    """
     repo_root = tmp_path / "repo"
     plugin_root = repo_root / "coordinator"
     (plugin_root / "snippets").mkdir(parents=True)
@@ -74,8 +57,6 @@ def _write_manifest(tmp_path: Path, monkeypatch, payload) -> Path:
     monkeypatch.setenv("COORDINATOR_DOCTRINE_MANIFEST", str(path))
     return path
 
-
-# --- path-directed resolution -------------------------------------------------
 
 def test_ok_match_exact_heading(tmp_path):
     root = _make_tree(
@@ -110,14 +91,6 @@ def test_ok_and_dead_against_different_cited_files_in_one_consumer(tmp_path):
 
 
 def test_heading_present_only_in_another_file_is_DEAD_not_unioned(tmp_path):
-    """Anti-union regression guard — the single most important property here.
-
-    `Only In File B` exists as a heading in doctrine-b.md and nowhere else. A
-    citation naming doctrine-a.md must be DEAD. If a future edit unions the
-    surface set's headings into one list, this citation goes green while
-    pointing at a section that does not exist in the file it names — partial
-    success reading as health.
-    """
     root = _make_tree(
         tmp_path,
         "_See `coordinator/snippets/doctrine-a.md` § Only In File B._\n",
@@ -186,7 +159,6 @@ def test_formerly_annotation_is_historical_not_dead(tmp_path):
 
 
 def test_carried_citation_missing_on_a_global_line_is_qualified_not_dead(tmp_path):
-    """DoE prose puts the file AFTER the section as often as before it."""
     root = _make_tree(
         tmp_path,
         "_See `coordinator/snippets/doctrine-a.md` § How to Decide and "
@@ -214,12 +186,6 @@ def test_line_without_a_md_citation_is_ignored(tmp_path):
 
 
 def test_bare_section_marker_with_drifted_punctuation_is_dropped_but_counted(tmp_path):
-    """Finding 6 (P2) — a `§` whose preceding punctuation falls outside the
-
-    tight citation regex (e.g. a colon between path and `§`) is silently
-    never scanned as a citation, but must be visible as a coarse
-    format-drift diagnostic distinct from a line with no `§` at all.
-    """
     root = _make_tree(
         tmp_path,
         "_See `coordinator/snippets/doctrine-a.md`: § How to Decide._\n",
@@ -241,13 +207,6 @@ def test_missing_consumer_is_skipped_not_errored(tmp_path):
 
 
 def test_all_consumers_missing_is_could_not_check_not_a_clean_zero(tmp_path):
-    """Finding 1 (P1) — total wipeout must not degrade to exit 0/zero coverage.
-
-    If every consumer path in the allowlist has vanished, that is COULD NOT
-    CHECK (error set, would exit 2 via main()), never a clean 0 with
-    total=0/dead=0 — the exact defect class the surrounding exit-code
-    rewrite exists to close.
-    """
     root = _make_tree(
         tmp_path, "_See `coordinator/snippets/doctrine-a.md` § How to Decide._\n"
     )
@@ -274,8 +233,6 @@ def test_unresolved_path_is_reported_but_not_fatal(tmp_path, monkeypatch, capsys
     assert "unresolved=1" in out
     assert "dead=0" in out
 
-
-# --- qualification (no manifest) ---------------------------------------------
 
 def test_qualified_global_tilde_path_when_no_manifest(tmp_path):
     root = _make_tree(tmp_path, "_See ~/.claude/CLAUDE.md § Anything At All._\n")
@@ -315,8 +272,6 @@ def test_manifest_absent_still_exits_1_on_a_dead_anchor(tmp_path, monkeypatch, c
     assert "dead=1" in capsys.readouterr().out
 
 
-# --- manifest present and valid ----------------------------------------------
-
 def _valid_manifest_payload():
     return {
         "schema_version": 1,
@@ -350,8 +305,6 @@ def test_valid_manifest_emits_no_absent_note(tmp_path, monkeypatch):
     report = scan(str(root), _consumers(root))
     assert report.notes == []
 
-
-# --- manifest present and broken ⇒ exit 2 ------------------------------------
 
 def test_unparseable_manifest_exits_2(tmp_path, monkeypatch, capsys):
     root = _make_tree(tmp_path, "_See `coordinator/snippets/doctrine-a.md` § X._\n")
@@ -396,10 +349,6 @@ def test_manifest_surfaces_entry_missing_from_disk_exits_2(tmp_path, monkeypatch
 def test_manifest_alias_target_missing_from_disk_exits_2_with_alias_wording(
     tmp_path, monkeypatch, capsys
 ):
-    """Finding 4 (nit) — alias-target failure must name the alias, not say
-
-    'surfaces entry' for a target that came from `aliases`, not `surfaces`.
-    """
     root = _make_tree(tmp_path, "_See `coordinator/snippets/doctrine-a.md` § X._\n")
     payload = _valid_manifest_payload()
     payload["aliases"]["~/.claude/CLAUDE.md"] = "global-doctrine/vanished-alias-target.md"
@@ -427,8 +376,6 @@ def test_missing_plugin_root_exits_2(tmp_path, monkeypatch, capsys):
     assert "plugin root not found" in capsys.readouterr().err
 
 
-# --- exit-code split ----------------------------------------------------------
-
 def test_main_exit_code_0_on_clean(tmp_path, monkeypatch, capsys):
     root = _make_tree(
         tmp_path, "_See `coordinator/snippets/doctrine-a.md` § How to Decide._\n"
@@ -449,8 +396,6 @@ def test_main_exit_code_1_on_dead(tmp_path, monkeypatch, capsys):
     assert "dead=1" in out
 
 
-# --- --list mode --------------------------------------------------------------
-
 def test_main_list_mode(tmp_path, monkeypatch, capsys):
     root = _make_tree(
         tmp_path, "_See `coordinator/snippets/doctrine-a.md` § How to Decide._\n"
@@ -470,8 +415,6 @@ def test_main_list_mode_does_not_require_any_doctrine_file(tmp_path, monkeypatch
     assert main(["--list"]) == 0
     assert "skills/plan/SKILL.md" in capsys.readouterr().out
 
-
-# --- _plugin_root resolution --------------------------------------------------
 
 def test_plugin_root_claude_plugin_root_env_wins_verbatim(monkeypatch):
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", "/some/explicit/plugin/root")

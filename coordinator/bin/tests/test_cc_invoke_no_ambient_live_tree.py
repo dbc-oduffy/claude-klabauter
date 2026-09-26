@@ -49,17 +49,10 @@ if str(_LIB_DIR) not in sys.path:
 import cc_invoke as _mod  # noqa: E402  (import after path setup)
 
 
-# Declared, not excused: the behavioral case below spawns a real subprocess
-# because the behaviour under test IS the spawn (a hermetic, no-ambient-state
-# child) — mirrors test_cc_invoke_self_location_rung.py's own declared
-# rationale (test_no_new_spawning_tests.py Rule 2).
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
-# ---------------------------------------------------------------------------
 # Source-level guard — neither Rung 1 nor Rung 3 answers the DISPATCH
-# question directly any more; both must route through `_delegate_to_gate`.
-# ---------------------------------------------------------------------------
 
 
 def test_rung1_and_rung3_no_longer_return_their_candidate_directly():
@@ -92,13 +85,6 @@ def test_pointer_rungs_are_the_only_surviving_direct_return():
     source = inspect.getsource(_mod._resolve_claude_klabauter_root)
     assert "return _published_pointer_val" in source
     assert "return _pointer_val" in source
-
-
-# ---------------------------------------------------------------------------
-# Behavioral guard — self-location's answer can now genuinely diverge from
-# the self-located path, proving delegation is real dispatch, not a
-# pass-through wrapper around the same verbatim value.
-# ---------------------------------------------------------------------------
 
 
 _DROP_PREFIXES = ("REPO_", "CLAUDE", "COORDINATOR_")
@@ -148,10 +134,6 @@ def _build_self_locatable_checkout_with_gate_stub(root: Path, *, gate_answer: st
     )
 
     cc_invoke_copy = lib_dir / "cc_invoke.py"
-    # Copy the WHOLE lib, not a hand-listed pair. A named copy set silently
-    # stops being complete the next time a module is split out of cc_invoke —
-    # which is what `engine_bootstrap` (2026-08-21) did, leaving the child
-    # dying on `ModuleNotFoundError` rather than exercising the resolver.
     for module in sorted(_LIB_DIR.glob("*.py")):
         shutil.copyfile(module, lib_dir / module.name)
     return checkout_root, cc_invoke_copy

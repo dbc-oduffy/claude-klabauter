@@ -63,8 +63,6 @@ SKIP_STATUSES = SPEC_SKIP_STATUSES
 
 @dataclass(frozen=True)
 class SkipRecord:
-    """One skipped spec: its path, the status found (or None if absent), and a
-    human-readable reason."""
 
     path: str
     status: str | None
@@ -73,20 +71,12 @@ class SkipRecord:
 
 @dataclass(frozen=True)
 class RipeFilterResult:
-    """Partition of a spec dir's Markdown files into harvest-ripe paths, skip records, and
-    the process-scaffolding sidecar cohort (rel-posix paths, sorted). `sidecars` defaults to
-    an empty list so existing callers constructing a `RipeFilterResult(harvest=..., skip=...)`
-    without naming it keep working (additive field — F5/C4)."""
 
     harvest: list[str]
     skip: list[SkipRecord]
     sidecars: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        """Serialize to the plan-specified JSON shape, extended additively with
-        `sidecars`: {harvest: [...], skip: [{path, status, reason}], sidecars: [...]}.
-        The C8-contract's consumers tolerate added keys (verified against the contract
-        text at C4 authorship time); this is not a breaking shape change."""
         return {
             "harvest": list(self.harvest),
             "skip": [
@@ -120,30 +110,11 @@ def _classify_one(path: Path) -> tuple[bool, str | None, str | None]:
 
 
 def scan_spec_dir(spec_dir: Path) -> RipeFilterResult:
-    """Scan every `*.md` file under `spec_dir` (recursing into subdirectories, so a
-    month-foldered `YYYY-MM/` archive layout is one scan) and partition into
-    harvest-ripe paths vs skip records.
-
-    Paths in the output are relative to `spec_dir` with `/` separators on every
-    platform, sorted for deterministic output. Files that fail to parse (no
-    frontmatter, unreadable) are treated as SKIP with a reason, never raised — a
-    single malformed spec must not abort the whole scan.
-
-    An unreadable `spec_dir` (or any subdirectory of it) is a different failure
-    class: it is NOT the same as "spec_dir has no ripe specs" and must not be
-    silently reported as such. This fails loud (raises OSError) rather than
-    returning a well-formed empty result.
-    """
     spec_dir = Path(spec_dir)
     harvest: list[str] = []
     skip: list[SkipRecord] = []
     sidecars: list[str] = []
 
-    # NOTE: walks via iterdir(), NOT glob()/rglob() — Path.glob()'s selector
-    # silently swallows PermissionError while walking (an unreadable spec_dir yields
-    # an empty iterator, no exception), which would make a permission-denied spec_dir
-    # indistinguishable from a genuinely empty one. iterdir() raises OSError as
-    # expected, so the caller sees the failure instead of a silent empty partition.
     md_paths: list[Path] = []
     pending_dirs: list[Path] = [spec_dir]
     while pending_dirs:
@@ -159,15 +130,11 @@ def scan_spec_dir(spec_dir: Path) -> RipeFilterResult:
             elif entry.suffix == ".md" and entry.is_file():
                 md_paths.append(entry)
 
-    # as_posix() keeps the JSON output byte-identical across Windows and POSIX.
     md_paths.sort(key=lambda p: p.relative_to(spec_dir).as_posix())
 
     for md_path in md_paths:
         rel_path = md_path.relative_to(spec_dir).as_posix()
 
-        # Sidecar check happens BEFORE any frontmatter read: a sidecar is
-        # scaffolding-class regardless of what status: (if any) it happens to carry,
-        # and must never reach RIPE/SKIP classification (F5).
         if is_sidecar_filename(md_path.name):
             sidecars.append(rel_path)
             continue
@@ -175,10 +142,6 @@ def scan_spec_dir(spec_dir: Path) -> RipeFilterResult:
         try:
             is_ripe, status, reason = _classify_one(md_path)
         except (OSError, UnicodeDecodeError) as exc:
-            # Was f"unreadable: {exc}",
-            # which for OSError often embeds the full absolute path, leaking the
-            # invoking machine's directory structure into an otherwise portable JSON
-            # output. Use the exception class name only.
             skip.append(
                 SkipRecord(path=rel_path, status=None, reason=f"unreadable: {exc.__class__.__name__}")
             )

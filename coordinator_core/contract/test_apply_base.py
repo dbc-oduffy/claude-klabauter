@@ -43,11 +43,6 @@ import pytest
 from coordinator_core.contract import apply_base
 
 
-# ---------------------------------------------------------------------------
-# A synthetic, non-pickup-shaped dispatch table — proves the module carries
-# no domain opinion of its own.
-# ---------------------------------------------------------------------------
-
 def _handler_ok(args: list[str], repo_root: Path) -> dict[str, Any]:
     return {"args": args, "repo_root": str(repo_root)}
 
@@ -58,10 +53,6 @@ def _handler_raises(args: list[str], repo_root: Path) -> dict[str, Any]:
 
 _DISPATCH_TABLE = {"noop-cli": _handler_ok, "raising-cli": _handler_raises}
 
-
-# ---------------------------------------------------------------------------
-# (a) resolve_cli
-# ---------------------------------------------------------------------------
 
 class TestResolveCli:
     def test_resolves_a_real_entry(self):
@@ -78,11 +69,7 @@ class TestResolveCli:
         assert table == _DISPATCH_TABLE
 
 
-# ---------------------------------------------------------------------------
-# (a2) resolve_op / assert_dispatchable — resolve_cli's exact refusal shape,
 # for `directives[].op`. `ASSEMBLER_DISPATCHABLE` is monkeypatched per test
-# (it is a MappingProxyType — immutable by design) rather than mutated.
-# ---------------------------------------------------------------------------
 
 _OP_DISPATCH_TABLE = {"handoff.stamp_phase": _handler_ok, "handoff.author_fork": _handler_ok}
 _OP_DISPATCH_TABLE__SUBJECT_CLASS = "op-name"
@@ -116,10 +103,6 @@ class TestAssertDispatchable:
             apply_base.assert_dispatchable("pickup_assemble", "handoff.stamp_phase")
 
     def test_shared_across_a_stand_in_second_caller(self, monkeypatch):
-        """Proves `assert_dispatchable` is ONE shared checker, not
-        hand-copied per caller — a stand-in second caller (standing in for
-        one of C7's three private `_resolve_cli` functions) gets the exact
-        same admission decision `resolve_op` does, from the same call."""
         monkeypatch.setattr(
             apply_base,
             "ASSEMBLER_DISPATCHABLE",
@@ -202,15 +185,6 @@ class TestResolveOp:
         assert calls == []
 
     def test_whole_run_fails_before_any_directive_executes(self, monkeypatch):
-        """Replaces the prior vacuous version (cold review 2026-08-19,
-        Test-quality table): the old test never called `execute_directives`
-        at all — it hand-looped `resolve_op` and then ran a no-op `for
-        handler in resolved: pass`, so deleting the pre-validation pass
-        entirely from `execute_directives` left this test green. This drives
-        directives THROUGH `execute_directives` with a real tracking
-        handler: `d1` is earlier in the list and individually resolvable, so
-        only a genuine whole-list pre-pass keeps it from dispatching when
-        `d2` (later, un-allowlisted) fails pre-validation."""
         calls: list[Any] = []
 
         def _tracking_handler(args, repo_root):
@@ -235,10 +209,6 @@ class TestResolveOp:
         assert calls == []
 
 
-# ---------------------------------------------------------------------------
-# (b) normalize_primitive_result
-# ---------------------------------------------------------------------------
-
 class TestNormalizePrimitiveResult:
     def test_bool_true_passes_through(self):
         assert apply_base.normalize_primitive_result(True) is True
@@ -258,10 +228,6 @@ class TestNormalizePrimitiveResult:
             apply_base.normalize_primitive_result("0")
 
 
-# ---------------------------------------------------------------------------
-# (c) order_by_depends_on / DirectiveDependencyCycle
-# ---------------------------------------------------------------------------
-
 class TestOrderByDependsOn:
     def test_stable_order_when_no_dependencies(self):
         directives = [{"id": "d1"}, {"id": "d2"}, {"id": "d3"}]
@@ -277,7 +243,6 @@ class TestOrderByDependsOn:
         assert [d["id"] for d in ordered] == ["d1", "d2"]
 
     def test_depends_on_naming_a_non_directive_id_is_ignored(self):
-        # e.g. a judgment-point id left on the dict by the assembler.
         directives = [{"id": "d1", "depends_on": "j1"}]
         ordered = apply_base.order_by_depends_on(directives)
         assert [d["id"] for d in ordered] == ["d1"]
@@ -290,10 +255,6 @@ class TestOrderByDependsOn:
         with pytest.raises(apply_base.DirectiveDependencyCycle):
             apply_base.order_by_depends_on(directives)
 
-
-# ---------------------------------------------------------------------------
-# (d) disposition_resolves_directive / directive_gate_open
-# ---------------------------------------------------------------------------
 
 _JP_TWO_WAY = {
     "id": "j1",
@@ -313,8 +274,6 @@ class TestDispositionResolvesDirective:
         assert apply_base.disposition_resolves_directive(_JP_TWO_WAY, decisions, "d1") is True
 
     def test_disposition_set_but_resolves_list_empty_does_not_resolve(self):
-        # A disposition being PICKED is not sufficient — its own `resolves`
-        # list must name the directive (the Director of Engineering v2 finding-1 predicate).
         decisions = {"j1": {"disposition": "reject"}}
         assert apply_base.disposition_resolves_directive(_JP_TWO_WAY, decisions, "d1") is False
 
@@ -350,10 +309,6 @@ class TestDirectiveGateOpen:
         assert ready is True
         assert blocking == []
 
-
-# ---------------------------------------------------------------------------
-# (e) execute_directives
-# ---------------------------------------------------------------------------
 
 class TestExecuteDirectives:
     def test_clean_run_dispatches_and_reports_landed(self, tmp_path):
@@ -495,8 +450,6 @@ class TestExecuteDirectives:
             directives, [], tmp_path, _DISPATCH_TABLE
         )
         assert exit_code == apply_base.APPLY_EXIT_TRANSPORT_FAIL
-        # "mutates nothing" — d1 never dispatched despite being valid, because
-        # the WHOLE directive list is pre-validated before any of it runs.
         assert report["landed"] == []
 
     def test_both_cli_and_op_present_aborts_the_whole_run_pre_validation(self, tmp_path, monkeypatch):
@@ -573,14 +526,6 @@ class TestExecuteDirectives:
         assert report["failed_directive"] == "d2"
 
 
-# ---------------------------------------------------------------------------
-# (e-2) execute_directives — the optional `compensators` seam. Additive and
-# opt-in: every test in `TestExecuteDirectives` above already proves the
-# byte-identical-when-omitted claim (none of them pass `compensators` at
-# all). These tests exercise the seam itself, directly against the same
-# synthetic dispatch table.
-# ---------------------------------------------------------------------------
-
 class TestExecuteDirectivesCompensators:
     def test_fires_on_partial_mutation_in_reverse_landing_order(self, tmp_path):
         directives = [
@@ -597,12 +542,11 @@ class TestExecuteDirectivesCompensators:
             directives, [], tmp_path, _DISPATCH_TABLE, compensators=compensators
         )
         assert exit_code == apply_base.APPLY_EXIT_PARTIAL_MUTATION
-        assert order == ["d2", "d1"]  # reverse landing order
+        assert order == ["d2", "d1"]
         assert report["compensation"] == [
             {"directive_id": "d2", "attempted": True, "succeeded": True},
             {"directive_id": "d1", "attempted": True, "succeeded": True},
         ]
-        # the original failure signal is unchanged
         assert report["failed_directive"] == "d3"
         assert report["landed"] == ["d1", "d2"]
 
@@ -651,9 +595,6 @@ class TestExecuteDirectivesCompensators:
             {"id": "d2", "cli": "raising-cli"},
         ]
         called = {"count": 0}
-        # "d1" has no entry here — only an unrelated id is registered — so
-        # the compensation pass must run (compensators is non-empty) but
-        # find nothing to do for the one directive that actually landed.
         compensators = {"unrelated-id": lambda directive, repo_root, detail: called.__setitem__("count", 1)}
         exit_code, report = apply_base.execute_directives(
             directives, [], tmp_path, _DISPATCH_TABLE, compensators=compensators
@@ -700,14 +641,6 @@ class TestExecuteDirectivesCompensators:
         assert captured["repo_root"] == tmp_path
         assert captured["detail"] == {"args": ["x"], "repo_root": str(tmp_path)}
 
-
-# ---------------------------------------------------------------------------
-# (e-3) execute_directives — the per-directive `"advisory"` marker
-# (AC3-AC6, docs/plans/2026-08-15-coverage-gate-advisory-failure-and-
-# warn-flood.md chunk C2). Every test in `TestExecuteDirectives` above
-# already proves the byte-identical-when-omitted claim (none of them set
-# `"advisory"` on any directive). These tests exercise the marker itself.
-# ---------------------------------------------------------------------------
 
 class TestExecuteDirectivesAdvisory:
     def test_advisory_failure_does_not_take_the_run_to_partial_mutation(self, tmp_path):
@@ -769,10 +702,7 @@ class TestExecuteDirectivesAdvisory:
         assert "advisory_failures" not in report
 
     def test_earlier_advisory_failure_survives_a_later_partial_mutation(self, tmp_path):
-        # An advisory directive fails first (recorded, run continues), then
         # a later NON-advisory directive fails (returns PARTIAL_MUTATION).
-        # The earlier advisory failure must still be named in the report —
-        # dropping it here is exactly the silent-swallow AC4 exists to stop.
         directives = [
             {"id": "d1", "cli": "raising-cli", "advisory": True},
             {"id": "d2", "cli": "raising-cli"},
@@ -786,10 +716,6 @@ class TestExecuteDirectivesAdvisory:
             {"directive_id": "d1", "error": "synthetic handler failure"}
         ]
 
-
-# ---------------------------------------------------------------------------
-# (f) assert_in_repo_root / reject_path_traversal / scoped_commit
-# ---------------------------------------------------------------------------
 
 class TestAssertInRepoRoot:
     def test_in_repo_relative_path_resolves(self, tmp_path):
@@ -812,9 +738,6 @@ class TestRejectPathTraversal:
 
 
 class _RecordingRunGit:
-    """A fake `run_git` callable recording every invocation — proves
-    `scoped_commit` never shells out itself and always resolves `cwd` from
-    the caller-supplied `repo_root`."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[list[str], Path]] = []
@@ -824,7 +747,7 @@ class _RecordingRunGit:
         if args[0] == "add":
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         if args[:2] == ["diff", "--cached"]:
-            return SimpleNamespace(returncode=1, stdout="", stderr="")  # "changed"
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
         if args[0] == "commit":
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         if args == ["rev-parse", "HEAD"]:
@@ -880,8 +803,6 @@ class TestScopedCommit:
             apply_base.scoped_commit(tmp_path, "state/h1.md", "apply: d1", _failing_add)
 
     def test_non_lock_add_failure_fails_fast_with_zero_retries(self, tmp_path):
-        # "disk full" is not lock-shaped stderr -- the AssertionError on any
-        # call past the first `add` proves no retry was attempted.
         calls: list[list[str]] = []
 
         def _failing_add(args, cwd):

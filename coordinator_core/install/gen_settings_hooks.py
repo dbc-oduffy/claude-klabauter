@@ -175,15 +175,9 @@ from coordinator_core.ops.session.guard_settings_integrity import (
     detect_hook_delivery_duplication,
 )
 
-# Generator-provenance declaration (generator_provenance.py). generate()
-# writes the operator's ~/.claude/settings.json hooks block (out_path resolved
-# outside this repo per install.md contract §3.5c) and a consent marker file
-# under the operator's settings-home -- never a tracked claude-klabauter artifact.
 GENERATES = []
 
-# ---------------------------------------------------------------------------
 # helpers — CPR (${CLAUDE_PLUGIN_ROOT}) filter/rewrite
-# ---------------------------------------------------------------------------
 
 _CPR = "${CLAUDE_PLUGIN_ROOT}"
 
@@ -202,11 +196,6 @@ _POSITIVE_MARKER_NAME = ".coordinator-hooks-enabled"
 creates (`_create_positive_marker`) — extracted so `_positive_marker_path`
 and `WRITE_SURFACE` agree on one spelling."""
 
-# A resolved coordinator_root never legitimately contains these — a Windows
-# drive letter surviving into an emitted command means the portability
-# rewrite below was bypassed (e.g. a future edit re-introducing a baked
-# absolute path). Checked by `_assert_portable_command` as a structural
-# backstop, not merely documentation.
 _DRIVE_LETTER_RE = re.compile(r"[A-Za-z]:[\\/]")
 
 
@@ -244,22 +233,13 @@ the other three clauses are `StaticClause`s and need no resolution."""
 
 
 def _record_resolution(clause_index: int, entries) -> None:
-    """Deferred-import wrapper over `resolution_journal.record_resolution`
-    — see `clone_sibling_repo._record_resolution`'s docstring for why a
-    module-level import of `resolution_journal` is not used here (this
-    module is transitively reachable from `coordinator_core.ops`'s eager
-    op-registration walk via its own downstream import graph, and this
-    module already imports `substrate` at module level)."""
     from coordinator_core.install import resolution_journal
 
     resolution_journal.record_resolution("gen-settings-hooks", clause_index, entries)
 
 
 class GenSettingsHooksError(RuntimeError):
-    """Fail-loud generator business error — CLI entry converts to exit 1.
-    Mirrors the bash ``die()`` helper's single undifferentiated exit-1
-    contract (all business errors — bad arg, missing coordinator root,
-    missing hooks.json, stray hook detected — share rc=1 in the oracle)."""
+    pass
 
 
 def _is_cpr_command(hook: Dict[str, Any]) -> bool:
@@ -308,12 +288,7 @@ def _finalize_command(
     guarded = wrap_hook_command_guarded(
         rewritten, windows=(os.name == "nt"), python_bin_resolved=python_bin_resolved
     )
-    # Belt-and-suspenders: cannot fire given `wrap_hook_command_guarded`'s
-    # current implementation (it only quotes/wraps an already-validated
-    # `rewritten` string, so it cannot reintroduce a residual
     # `${CLAUDE_PLUGIN_ROOT}` token or a drive-letter path) — kept as
-    # defense-in-depth against a future change to that function, not because
-    # this path is reachable today (code-reviewer F3, 2026-07-28).
     _assert_portable_command(guarded, event=event)
     return guarded
 
@@ -338,11 +313,6 @@ def _assert_portable_command(command: str, *, event: str) -> None:
             "  Generated commands must be machine-portable — see "
             "hook_root_env_expr() in coordinator_core.install._shared."
         )
-
-
-# ---------------------------------------------------------------------------
-# unit 1 — arg parse, kill-switch, hooks.json locate, stray-check
-# ---------------------------------------------------------------------------
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -401,10 +371,6 @@ def resolve_settings_out_path(out_path: Optional[str] = None) -> str:
 
 
 def kill_switch_marker_path(out_path: Optional[str] = None) -> Path:
-    """Public wrapper over :func:`_kill_switch_marker` for callers that need
-    to report the marker's path (not just whether it fired) — e.g. an
-    installer orchestrator surfacing "delete this file to re-enable" to the
-    operator without duplicating the kill-switch's own naming convention."""
     return _kill_switch_marker(resolve_settings_out_path(out_path))
 
 
@@ -461,8 +427,6 @@ def _has_local_generation_evidence(current_settings: Dict[str, Any]) -> bool:
 
 
 def _create_positive_marker(marker: Path, *, reason: str) -> None:
-    """Create the positive consent marker. Content is a human-breadcrumb
-    only (never parsed) — existence, not content, is the signal."""
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(
         f"# coordinator hook generation is ENABLED on this machine.\n"
@@ -476,22 +440,6 @@ def _create_positive_marker(marker: Path, *, reason: str) -> None:
 def ensure_positive_marker(
     out_path: Optional[str] = None,
 ) -> Tuple[Path, bool, bool]:
-    """Idempotent migration/probe entry point, reusable by both `generate()`
-    itself and any OTHER caller that needs the same decision (e.g. the
-    post-merge/post-checkout marker-resync gate, so the two never drift on
-    what "should this machine be enabled" means).
-
-    Returns ``(marker_path, is_enabled, migrated)``:
-      - ``is_enabled`` — True if the marker exists (already, or just-now via
-        migration). False means "leave generation off."
-      - ``migrated`` — True iff THIS call just created the marker via the
-        local-evidence migration path (never true for a pre-existing marker
-        or a pre-existing absence with no evidence).
-
-    Never mutates when the marker already exists (read-only probe in that
-    case) and never mutates on a from-scratch machine with no local
-    evidence — see `_has_local_generation_evidence` for what counts as
-    evidence and why it cannot arrive over git."""
     resolved_out = resolve_settings_out_path(out_path)
     marker = _positive_marker_path(resolved_out)
     if marker.is_file():
@@ -500,17 +448,6 @@ def ensure_positive_marker(
     try:
         current_settings = _load_current_settings(resolved_out)
     except GenSettingsHooksError:
-        # Malformed settings.json on the not-yet-enabled path degrades to
-        # "not enabled" rather than raising — matches the pre-2026-07-28
-        # ordering, where `_load_current_settings` ran AFTER coordinator-root
-        # resolution and a clone-absent machine never reached this parse at
-        # all (soft "skipped (clone absent)"). This call now runs BEFORE
-        # that resolution (`ensure_positive_marker` must decide enablement
-        # before `generate()` even attempts to resolve a coordinator root),
-        # so a first-run machine with both a malformed settings.json AND an
-        # unresolvable clone must still get the graceful skip it got before,
-        # not a hard failure on a file this path was never trying to parse
-        # for its own sake — see review finding F3 (2026-07-28 s2 review).
         return marker, False, False
 
     if _has_local_generation_evidence(current_settings):
@@ -541,10 +478,6 @@ def _load_current_settings(out_path: str) -> Dict[str, Any]:
 def _build_will_emit_set(
     hooks_json: Dict[str, Any], coordinator_root: str, python_bin_resolved: bool = False
 ) -> set:
-    """Build the set of commands (already CPR-rewritten) this generator WILL
-    emit — used by the stray-check to detect a hand-authored hook living
-    under the generator-owned dir that would be silently clobbered on
-    regeneration."""
     will_emit: set = set()
     for event, groups in (hooks_json.get("hooks") or {}).items():
         for group in groups:
@@ -608,11 +541,6 @@ def _stray_check(
                 if cmd_path not in will_emit_paths:
                     strays.append((event, command))
     return strays
-
-
-# ---------------------------------------------------------------------------
-# unit 2 — build new-generated, extract preserved, merge, atomic write
-# ---------------------------------------------------------------------------
 
 
 def _clamp_hook_timeout(
@@ -684,8 +612,6 @@ def _build_new_generated(
 
 
 def _extract_preserved(current_settings: Dict[str, Any], generated_hooks_dir: str) -> Dict[str, List[Dict[str, Any]]]:
-    """Preserved: groups where NO command hook has a path under
-    ``<coordinator_root>/hooks/``."""
     preserved: Dict[str, List[Dict[str, Any]]] = {}
     for event, groups in (current_settings.get("hooks") or {}).items():
         kept = [g for g in groups if not _group_is_generated(g, generated_hooks_dir)]
@@ -698,8 +624,6 @@ def _merge_hooks(
     preserved: Dict[str, List[Dict[str, Any]]],
     new_generated: Dict[str, List[Dict[str, Any]]],
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """Merge: preserved_groups + new_generated_groups per event, events
-    sorted alphabetically for deterministic/idempotent output."""
     all_events = sorted(set(preserved.keys()) | set(new_generated.keys()))
     merged: Dict[str, List[Dict[str, Any]]] = {}
     for event in all_events:
@@ -741,12 +665,6 @@ def _merge_env(
 
 
 def _atomic_write_json(target: str, data: Dict[str, Any]) -> None:
-    """Atomic write via tempfile-in-same-dir + os.replace. Preserves the
-    target's prior permission bits on the replacement file (addendum A5) —
-    ``os.replace`` does not carry mode bits forward from a freshly
-    ``mkstemp``-ed file, so an existing settings.json's permissions
-    (operator-set, e.g. 0600) must be explicitly re-applied rather than
-    silently reset to the tempfile default."""
     out_dir = os.path.dirname(target) or "."
     os.makedirs(out_dir, exist_ok=True)
     prior_mode = None
@@ -754,10 +672,6 @@ def _atomic_write_json(target: str, data: Dict[str, Any]) -> None:
         prior_mode = os.stat(target).st_mode
     fd, tmp_name = tempfile.mkstemp(prefix=".gen-settings-hooks.", dir=out_dir)
     try:
-        # newline="" disables universal-newline translation — the emitted
-        # settings.json is a byte-contract; without this, Windows text mode
-        # silently rewrites every embedded "\n" (from json.dump(indent=2))
-        # to "\r\n", breaking byte-identity across platforms/re-runs.
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             json.dump(data, f, indent=2)
             f.write("\n")
@@ -768,7 +682,7 @@ def _atomic_write_json(target: str, data: Dict[str, Any]) -> None:
         try:
             os.remove(tmp_name)
         except OSError:
-            pass  # best-effort cleanup on an already-failing path; original exception re-raises below
+            pass
         raise
 
 
@@ -819,29 +733,14 @@ def generate(
             file=sys.stderr,
         )
         print("  Delete that file to re-enable coordinator hook generation.", file=sys.stderr)
-        # Operator kill-switch refused this run's generation outright — a
-        # genuine "resolved to nothing" fact, not "we never got there".
         _record_resolution(_HOOKS_MERGE_CLAUSE_INDEX, ())
         return "skipped (disabled by operator marker)"
 
     if check_only:
-        # install.md contract: check-only never resolves or mutates —
-        # matches the retired bash trampoline's own check-only branch,
         # which short-circuited before even checking DOE_CLONE. Also never
-        # touches the positive marker (`ensure_positive_marker` is not
-        # called on this path) — check-only must not create/mutate ANY
-        # marker, per the 2026-07-28 polarity-inversion requirements.
         return "skipped (check-only)"
 
     # Double-fire refusal (see module docstring): only skip on POSITIVE
-    # evidence that plugin-side delivery is already live and fully
-    # resolvable -- never on absence of evidence. Checked ahead of the
-    # marker-gated path below because it is a stronger, orthogonal signal:
-    # if plugin delivery already covers every hook this generator would
-    # emit, generating is wrong regardless of whether this machine has
-    # opted into the (legacy) marker-gated generation path at all. Never
-    # touches settings.json on this branch -- returns before
-    # `_load_current_settings`/`_atomic_write_json` are reached.
     delivery_report = detect_hook_delivery_duplication(
         config_dir=Path(os.path.dirname(resolved_out) or ".")
     )
@@ -857,9 +756,6 @@ def generate(
             "deliberate, not a bug: settings.json is left untouched.",
             file=sys.stderr,
         )
-        # Positive-evidence refusal: this run deliberately generates
-        # nothing because plugin-side delivery already covers it — a
-        # genuine "resolved to nothing" fact for this clause this run.
         _record_resolution(_HOOKS_MERGE_CLAUSE_INDEX, ())
         return "skipped (plugin delivery already live)"
 
@@ -874,8 +770,6 @@ def generate(
             "  Create that file (empty is fine) to enable coordinator hook generation on this machine.",
             file=sys.stderr,
         )
-        # This machine has never consented to generation — resolved to
-        # nothing for this run, same reasoning as the kill-switch branch.
         _record_resolution(_HOOKS_MERGE_CLAUSE_INDEX, ())
         return "skipped (no positive marker)"
     if migrated:
@@ -891,15 +785,9 @@ def generate(
         try:
             coordinator_root = resolve_coordinator_root()
         except RuntimeError:
-            # Discovery (the coordinator-root resolver) came up empty —
-            # resolved to nothing this run.
             _record_resolution(_HOOKS_MERGE_CLAUSE_INDEX, ())
             return "skipped (clone absent)"
 
-    # Windows portability: normalise drive-letter backslash to forward slash
-    # (mirrors bash's belt-and-suspenders normalisation — see bash comment
-    # block on the equivalent line; canonical fix lives at the
-    # machine-local cmd_get emission point, this is defense-in-depth).
     coordinator_root = coordinator_root.replace("\\", "/")
 
     if not os.path.isdir(coordinator_root):
@@ -921,21 +809,10 @@ def generate(
                 f"malformed JSON in hooks.json: {hooks_json_path}\n  {exc}"
             ) from exc
 
-    # Windows portability: build with an explicit forward-slash join, not
-    # os.path.join — os.path.join uses os.sep (backslash on Windows)
-    # regardless of the separator style already present in `coordinator_root`
-    # (already forward-slash-normalised above), which would silently produce
-    # a mixed-separator prefix that never startswith()-matches the
-    # all-forward-slash command paths emitted by `_rewrite_cpr` (both the
-    # stray-check and `_group_is_generated` compare against this prefix).
     generated_hooks_dir = f"{coordinator_root}/hooks"
 
     current_settings = _load_current_settings(resolved_out)
 
-    # Resolved ONCE per run (plan C2) — never per-command — and the same
-    # value threaded into `_stray_check` (via `_build_will_emit_set`),
-    # `_build_new_generated`, and `_merge_env`, so all three agree on
-    # whether an interpreter was resolved for this generation pass.
     python_bin = resolve_hook_python_bin()
     python_bin_resolved = bool(python_bin)
 
@@ -983,10 +860,6 @@ def generate(
     _atomic_write_json(resolved_out, final_settings)
     print(f"gen-settings-hooks: hooks block written to {resolved_out}", file=sys.stderr)
 
-    # Journal the concrete `hooks.<event>` keys THIS run actually merged in
-    # via `_merge_hooks` (`new_generated`'s own event keys) — not every key
-    # in `merged_hooks`, which also includes preserved (non-generator-owned)
-    # groups this run left untouched.
     resolved_entries = tuple(
         WriteSurfaceEntry(
             kind="structured-file-key",
@@ -1005,13 +878,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
     writer_id="gen-settings-hooks",
     source_module="coordinator_core.install.gen_settings_hooks",
     clauses=(
-        # Clause 1 — `_merge_hooks`/`generate`: the `hooks` top-level key of
         # an existing settings.json is REPLACED with the merge of preserved
-        # (non-generator-owned) groups plus this run's newly generated
-        # groups. SHAPED: the set of `hooks.<event>` keys touched is
-        # whatever `hooks.json` declares, not enumerable in source — a
-        # structured-file-key merge (every other top-level key untouched),
-        # never a whole-file overwrite.
         ShapedClause(
             discovered_by="_merge_hooks (per-event group merge, keyed by hooks.json's own event names)",
             entry_template=WriteSurfaceEntry(
@@ -1022,9 +889,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
             ),
         ),
         # Clause 2 — `_merge_env`: `env[COORDINATOR_CONTENT_ROOT_ENV_KEY]` is
-        # set/overwritten every successful run, the ONE place this
-        # machine's coordinator location is baked (see module docstring's
-        # 2026-07-28 history).
         StaticClause(
             entries=(
                 WriteSurfaceEntry(
@@ -1036,10 +900,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
             ),
         ),
         # Clause 3 — `_merge_env`: `env[COORDINATOR_PYTHON_BIN_ENV_KEY]` is
-        # written when `resolve_hook_python_bin()` resolves a value this
-        # run, and POPPED (an explicit delete, not left stale) when it does
-        # not — see `_merge_env`'s own docstring (code-reviewer F2,
-        # 2026-08-03).
         StaticClause(
             entries=(
                 WriteSurfaceEntry(
@@ -1057,9 +917,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 ),
             ),
         ),
-        # Clause 4 — `_create_positive_marker` (via `ensure_positive_marker`'s
-        # migration path): the positive per-machine consent-marker file, a
-        # human-breadcrumb-only file-path write, next to settings.json.
         StaticClause(
             entries=(
                 WriteSurfaceEntry(

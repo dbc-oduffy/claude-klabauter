@@ -1,19 +1,3 @@
-"""Tests for coordinator_core.session.claim_index.
-
-Plan: docs/plans/2026-08-08-claim-index-the-commit-gate-never-had.md,
-chunk C1. Every fixture here is a synthetic session/agent dir tree built
-under ``tmp_path`` — no process is spawned, and the real
-``.git/coordinator-sessions/`` is never touched (every call passes
-``sessions_dir=str(tmp_path)`` explicitly).
-
-The two exceptions are C8's ``TestAC18RebuildAtCorpusCWidth`` (docs/plans/
-2026-08-25-the-touched-files-record-gets-a-designed-shape.md), which spawn
-real ``sys.executable`` driver processes through
-``benchmarks.process_time.batched_process_time_ms`` to get a real
-process-time/spawn-count figure for ``rebuild()`` at Corpus C width — each
-is marked ``spawns_process`` and ``cadence`` per this repo's spawn ratchet
-(``coordinator_core/tests/test_no_new_spawning_tests.py``).
-"""
 
 import os
 import sys
@@ -39,17 +23,6 @@ def _touch_line(verb, path, when="2026-08-08T10:00:00.000000Z"):
 
 
 def _append_fixture_line(sink, session_id, agent_id, line):
-    """Parse one `_touch_line`-produced OLD-dialect string
-    (``'<verb> <iso8601> <path>'``) and append it as a NEW-dialect
-    ``touch-record.jsonl`` event via ``touch_record.append_event``.
-
-    C7b: this module's reader no longer reads ``touched.txt`` at all (the
-    AC21 transitional union-read and its enumeration arm are deleted), so
-    every fixture writer in this file must emit the seam's own dialect.
-    Parsing `_touch_line`'s pre-existing textual shape here (rather than
-    reworking every call site below) keeps every test body byte-identical
-    to before this chunk landed.
-    """
     verb, ts_str, path = line.split(None, 2)
     ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
     touch_record.append_event(
@@ -64,10 +37,6 @@ def _session_touched(base, sid, lines):
 
 
 def _append_named_fixture_line(sink, session_id, agent_id, line, name):
-    """Same as ``_append_fixture_line``, but pins an explicit ``name`` on
-    the event (C2, docs/plans/2026-09-01-the-claim-record-carries-the-
-    name.md) rather than letting ``append_event`` resolve one off the test
-    process's own (absent) harness registry record."""
     verb, ts_str, path = line.split(None, 2)
     ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
     touch_record.append_event(
@@ -82,8 +51,6 @@ def _append_named_fixture_line(sink, session_id, agent_id, line, name):
 
 
 def _session_touched_named(base, sid, lines_and_names):
-    """Like ``_session_touched``, but each entry is a ``(line, name)`` pair
-    so a fixture can pin a per-event recorded name."""
     sink = os.path.join(str(base), sid, "touch-record.jsonl")
     for line, name in lines_and_names:
         _append_named_fixture_line(sink, sid, None, line, name)
@@ -97,11 +64,6 @@ def _agent_touched(base, agent_id, owner_sid, lines):
     _write(os.path.join(agent_dir, "em-session-id.txt"), owner_sid + "\n")
 
 
-# ---------------------------------------------------------------------------
-# Round trip
-# ---------------------------------------------------------------------------
-
-
 def test_round_trip_claimed_path(tmp_path):
     base = str(tmp_path)
     _session_touched(base, "sess-a", [_touch_line("T", "foo/bar.py")])
@@ -109,8 +71,6 @@ def test_round_trip_claimed_path(tmp_path):
     result = claim_index.lookup(["foo/bar.py"], sessions_dir=base)
 
     assert result == {"foo/bar.py": ["sess-a"]}
-    # Unconditional rebuild: a second, independent lookup() call re-derives
-    # the same answer from the substrate, not from any persisted cache.
     result_again = claim_index.lookup(["foo/bar.py"], sessions_dir=base)
     assert result_again == {"foo/bar.py": ["sess-a"]}
 
@@ -132,22 +92,12 @@ def test_rebuild_returns_in_memory_state_only(tmp_path):
 
     assert state.complete is True
     assert state.claims == {"foo.py": ["sess-a"]}
-    # No persisted index file is written anywhere under the sessions dir.
     for _root, dirs, _files in os.walk(base):
         assert ".index" not in dirs
 
 
-# ---------------------------------------------------------------------------
-# Torn-line tolerance
-# ---------------------------------------------------------------------------
-
-
 def test_torn_trailing_line_in_touch_record_is_discarded(tmp_path):
     base = str(tmp_path)
-    # A complete claim line, then a torn (no trailing newline) fragment
-    # simulating a reader that caught a concurrent writer mid-append --
-    # C7b: exercised against the NEW `touch-record.jsonl` dialect, the only
-    # one this module reads any more.
     complete_line = touch_record.encode_line(
         session_id="sess-a", agent_id=None, verb="T", path="complete.py",
         timestamp=1723107600.0,
@@ -162,13 +112,10 @@ def test_torn_trailing_line_in_touch_record_is_discarded(tmp_path):
     result = claim_index.lookup(["complete.py", "partial-wr"], sessions_dir=base)
 
     assert result["complete.py"] == ["sess-a"]
-    assert result["partial-wr"] == []  # torn line never resolved -> not claimed
+    assert result["partial-wr"] == []
 
 
-# ---------------------------------------------------------------------------
 # unconditional rebuild -- lookup() must see an append to an EXISTING
-# claimant's touched.txt, not just a brand-new session dir landing
-# ---------------------------------------------------------------------------
 
 
 def test_lookup_sees_second_claim_appended_to_existing_session(tmp_path):
@@ -188,8 +135,6 @@ def test_lookup_sees_second_claim_appended_to_existing_session(tmp_path):
     first = claim_index.lookup(["other.py"], sessions_dir=base)
     assert first == {"other.py": []}
 
-    # Organic append: same session dir, same file, no os.utime anywhere --
-    # exactly what scope.py::touch does for a 2nd-and-later claim.
     touched_path = os.path.join(base, "sess-a", "touch-record.jsonl")
     touch_record.append_event(
         touched_path, session_id="sess-a", agent_id=None, verb="T", path="other.py"
@@ -202,9 +147,6 @@ def test_lookup_sees_second_claim_appended_to_existing_session(tmp_path):
 def test_lookup_unresolvable_sessions_dir_is_unanswerable(tmp_path):
     result = claim_index.lookup(["foo.py"], sessions_dir="")
     assert result == {"foo.py": [claim_index.UNANSWERABLE]}
-    # C1 (docs/plans/2026-08-11-claim-index-abort-cause-and-cli-blindness.md,
-    # AC6) -- the empty-base cause is reported as structured data, not just
-    # membership. AC2 above still holds: membership alone is untouched.
     assert result.abort_cause == claim_index.ABORT_CAUSE_EMPTY_BASE
 
 
@@ -212,18 +154,11 @@ def test_lookup_missing_sessions_dir_on_disk_is_unclaimed_not_unanswerable(tmp_p
     missing = os.path.join(str(tmp_path), "does-not-exist-yet")
     result = claim_index.lookup(["foo.py"], sessions_dir=missing)
     assert result == {"foo.py": []}
-    # A genuinely-absent directory is an honest empty, never an abort (C1
-    # AC6) -- must not be mislabelled with any of the three abort causes.
     assert result.complete is True
     assert result.abort_cause is None
 
 
-# ---------------------------------------------------------------------------
-# An I/O error reading a claim
-# source (as opposed to that source genuinely not existing) must surface as
 # UNANSWERABLE, never silently collapse to "unclaimed" -- that is the one
-# answer that authorizes a write.
-# ---------------------------------------------------------------------------
 
 
 def test_lookup_permission_error_scanning_sessions_dir_is_unanswerable(
@@ -263,8 +198,6 @@ def test_lookup_permission_error_scanning_agents_subdir_is_unanswerable(
 
     monkeypatch.setattr(claim_index.os, "scandir", fake_scandir)
 
-    # A path resolvable from the session-dir scan still resolves fine; the
-    # incompleteness only bites paths this walk never actually reached.
     result = claim_index.lookup(["foo.py", "never/touched.py"], sessions_dir=base)
 
     assert result["foo.py"] == ["sess-a"]
@@ -332,9 +265,6 @@ def test_lookup_permission_error_reading_touch_record_body_is_unanswerable(
 
 
 def test_torn_tail_content_read_still_reports_complete(tmp_path):
-    """Regression guard on invariant 1: a torn (mid-append) trailing line is
-    a normal read outcome, not an IO error -- the walk must still report
-    complete=True, abort_cause=None."""
     base = str(tmp_path)
     complete_line = touch_record.encode_line(
         session_id="sess-a", agent_id=None, verb="T", path="complete.py",
@@ -354,8 +284,6 @@ def test_torn_tail_content_read_still_reports_complete(tmp_path):
 
 
 def test_empty_touch_record_still_reports_complete(tmp_path):
-    """Regression guard on invariant 2: a genuinely empty record file is not
-    an IO error."""
     base = str(tmp_path)
     _write(os.path.join(base, "sess-a", "touch-record.jsonl"), "")
 
@@ -367,20 +295,12 @@ def test_empty_touch_record_still_reports_complete(tmp_path):
 
 
 def test_missing_touch_record_still_reports_complete(tmp_path):
-    """Regression guard on invariant 3: FileNotFoundError reading a
-    claimant's record content is not an IO error -- it means no claims yet
-    from that claimant, not a substrate failure."""
     base = str(tmp_path)
     os.makedirs(os.path.join(base, "sess-a"), exist_ok=True)
     touched_path = os.path.join(base, "sess-a", "touch-record.jsonl")
-    # Create then remove so _enumerate_claim_sinks sees it as a file at
-    # enumeration time but the content read below hits FileNotFoundError.
     _write(touched_path, "")
     os.remove(touched_path)
 
-    # C4 retired `_read_lines_discard_torn_tail`; the property it pinned now
-    # lives on the seam read -- an absent file is "no claims from this
-    # claimant", never a substrate failure.
     claims, read_ok = claim_index._read_stream_claims(touched_path)
 
     assert claims == {}
@@ -388,9 +308,6 @@ def test_missing_touch_record_still_reports_complete(tmp_path):
 
 
 def test_enumeration_io_error_wins_over_later_content_read_error(tmp_path, monkeypatch):
-    """First-detected-cause-wins: an enumeration-time IO error (agent
-    backpointer unreadable) must not be overwritten by a later content-read
-    IO error encountered further along the same walk."""
     base = str(tmp_path)
     _agent_touched(base, "agent-1", "sess-owner", [_touch_line("T", "x.py")])
     backptr = os.path.join(base, ".agents", "agent-1", "em-session-id.txt")
@@ -424,18 +341,10 @@ def test_enumeration_io_error_wins_over_later_content_read_error(tmp_path, monke
     assert state.abort_cause == claim_index.ABORT_CAUSE_IO_ERROR
 
 
-# ---------------------------------------------------------------------------
-# Process-time cap -- the module's other surviving degradation route
-# ---------------------------------------------------------------------------
-
-
 def test_rebuild_cap_exceeded_mid_walk_marks_incomplete(tmp_path, monkeypatch):
     base = str(tmp_path)
     _session_touched(base, "sess-a", [_touch_line("T", "foo.py")])
 
-    # Force the very first cap check inside the walk to already be past
-    # deadline, deterministically, without depending on real wall-clock
-    # timing (a real 500ms sleep would be a needless fixture cost).
     monkeypatch.setattr(claim_index, "REBUILD_PROCESS_TIME_CAP_SECS", -1.0)
 
     state = claim_index.rebuild(sessions_dir=base)
@@ -472,10 +381,7 @@ def test_rebuild_cap_exceeded_after_one_file_reports_cap_exceeded_not_empty_base
     _session_touched(base, "sess-a", [_touch_line("T", "foo.py")])
     _session_touched(base, "sess-b", [_touch_line("T", "bar.py")])
 
-    # sess-a sorts first; consume it, then trip the deadline before sess-b.
     ticks = iter([0.0, 0.0, 10_000.0] + [10_000.0] * 64)
-    # AC18 re-keyed the cap from wall clock to process time; same
-    # construction, driven through the instrument the module now reads.
     monkeypatch.setattr(claim_index.time, "process_time", lambda: next(ticks))
 
     state = claim_index.rebuild(sessions_dir=base)
@@ -483,11 +389,6 @@ def test_rebuild_cap_exceeded_after_one_file_reports_cap_exceeded_not_empty_base
     assert state.complete is False
     assert state.abort_cause == claim_index.ABORT_CAUSE_CAP_EXCEEDED
     assert state.claims == {"foo.py": ["sess-a"]}
-
-
-# ---------------------------------------------------------------------------
-# Both agent-dir and session-dir are read
-# ---------------------------------------------------------------------------
 
 
 def test_agent_dir_claim_attributed_to_owner_session(tmp_path):
@@ -522,16 +423,10 @@ def test_agent_dir_with_no_backpointer_contributes_no_claims(tmp_path):
     _write(
         os.path.join(agent_dir, "touched.txt"), _touch_line("T", "orphan.py") + "\n"
     )
-    # No em-session-id.txt written -- unresolvable owner.
 
     result = claim_index.lookup(["orphan.py"], sessions_dir=base)
 
     assert result == {"orphan.py": []}
-
-
-# ---------------------------------------------------------------------------
-# Released-then-reclaimed round trip
-# ---------------------------------------------------------------------------
 
 
 def test_claim_then_release_resolves_unclaimed(tmp_path):
@@ -552,9 +447,6 @@ def test_claim_then_release_resolves_unclaimed(tmp_path):
 
 def test_claim_release_reclaim_resolves_to_reclaimant(tmp_path):
     base = str(tmp_path)
-    # sess-a claims then releases doc.md; sess-b claims it afterward. The
-    # negative spec this guards: a T-only reader would still see sess-a's
-    # T and wrongly report it claimed by the releasing session.
     _session_touched(
         base,
         "sess-a",
@@ -591,16 +483,6 @@ def test_same_session_reclaims_after_releasing(tmp_path):
     assert result == {"doc.md": ["sess-a"]}
 
 
-# ---------------------------------------------------------------------------
-# R1 -- a backslashed caller pathspec must not read as unclaimed. Keys
-# parsed from touched.txt are POSIX-separated (scope.py's write side); the
-# production caller (_check_claim_conflicts in scoped_git_commit.py) may
-# pass a backslashed relative pathspec on Windows, this repo's first-class
-# platform. A raw string-equality miss there authorizes a write against a
-# live claim purely on separator dialect.
-# ---------------------------------------------------------------------------
-
-
 def test_lookup_backslashed_input_resolves_claimed_posix_key(tmp_path):
     base = str(tmp_path)
     _session_touched(base, "sess-a", [_touch_line("T", "a/b/c.py")])
@@ -635,11 +517,6 @@ def test_lookup_dot_dot_normalizing_input_resolves_claimed(tmp_path):
     result = claim_index.lookup(["a/x/../b/./c.py"], sessions_dir=base)
 
     assert result == {"a/x/../b/./c.py": ["sess-a"]}
-
-
-# ---------------------------------------------------------------------------
-# C1d — edit_ts widening (state/audits/2026-08-13-edit-recency-spike.md)
-# ---------------------------------------------------------------------------
 
 
 def test_lookup_edit_ts_carries_last_t_timestamp_for_claimant(tmp_path):
@@ -681,23 +558,6 @@ def test_lookup_edit_ts_removed_on_release(tmp_path):
 
     assert result["foo.py"] == []
     assert result.edit_ts.get("foo.py") is None
-
-
-# `test_lookup_edit_ts_ignores_unparseable_timestamp` removed by C7b: it
-# pinned a bare-path legacy `touched.txt` line (no verb, no timestamp) being
-# skipped by this module's OLD reader. That scenario has no counterpart in
-# the new `touch-record.jsonl` dialect this module now reads exclusively --
-# `touch_record.encode_line`/`decode_line` require every field, so a "bare
-# path, unknown time" event cannot be constructed or fed through the seam at
-# all. See this chunk's own report for the C7b AC21-deletion writeup.
-
-
-# ---------------------------------------------------------------------------
-# C2 — recorded_name widening (docs/plans/2026-09-01-the-claim-record-
-# carries-the-name.md). Mirrors the edit_ts block above byte-for-byte on
-# shape and lifecycle: populated on TOUCH, popped on RELEASE, absent (never
-# a degrade signal) for a claimant whose event carries no name.
-# ---------------------------------------------------------------------------
 
 
 def test_lookup_value_shape_is_byte_compatible_plain_dict_of_lists(tmp_path):
@@ -767,9 +627,6 @@ def test_lookup_recorded_name_removed_on_release(tmp_path):
 
 
 def test_lookup_recorded_name_survives_reclaim_after_release_by_new_name(tmp_path):
-    """Last-event-wins applies to the recorded name too: a re-claim after a
-    release carries whatever name (if any) the RE-claim's own event
-    recorded, never the earlier claim's stale name."""
     base = str(tmp_path)
     _session_touched_named(
         base,
@@ -788,9 +645,6 @@ def test_lookup_recorded_name_survives_reclaim_after_release_by_new_name(tmp_pat
 
 
 def test_lookup_recorded_name_no_extra_io_no_git_spawn(tmp_path, monkeypatch):
-    """Same cost-class negative spec as ``edit_ts``: the name was already
-    parsed off every touch-record line before this widening, and no new
-    file read or subprocess spawn is introduced by carrying it through."""
     import subprocess
 
     def _forbid_spawn(*args, **kwargs):
@@ -813,11 +667,6 @@ if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
 
 
-# ---------------------------------------------------------------------------
-# commit_set — "what belongs to me to commit?"
-# ---------------------------------------------------------------------------
-
-
 def test_commit_set_returns_this_sessions_outstanding_paths(tmp_path):
     _session_touched(tmp_path, "sid-mine", [_touch_line("T", "a.py"), _touch_line("T", "b.py")])
     _session_touched(tmp_path, "sid-peer", [_touch_line("T", "c.py")])
@@ -830,8 +679,6 @@ def test_commit_set_returns_this_sessions_outstanding_paths(tmp_path):
 
 
 def test_commit_set_excludes_a_released_path(tmp_path):
-    # Committing releases the claim, so the answer is "still outstanding",
-    # never "ever touched" -- the distinction the PM named explicitly.
     _session_touched(
         tmp_path,
         "sid-mine",
@@ -848,9 +695,6 @@ def test_commit_set_excludes_a_released_path(tmp_path):
 
 
 def test_commit_set_withholds_a_contested_path_but_names_it(tmp_path):
-    # A peer's path is not yours, so it is not offered -- but it IS named, so
-    # the operator learns why something they edited is missing instead of
-    # wondering. Silent omission would reintroduce the doubt this removes.
     _session_touched(tmp_path, "sid-mine", [_touch_line("T", "shared.py"), _touch_line("T", "solo.py")])
     _session_touched(tmp_path, "sid-peer", [_touch_line("T", "shared.py")])
 
@@ -880,7 +724,6 @@ def test_commit_set_includes_paths_an_agent_touched_for_this_session(tmp_path):
 
 
 def test_commit_set_spawns_no_subprocess(tmp_path, monkeypatch):
-    # The whole point. The mechanism this replaces cost 73 processes per call.
     import subprocess
 
     def _explode(*args, **kwargs):  # pragma: no cover - must never run
@@ -896,12 +739,6 @@ def test_commit_set_spawns_no_subprocess(tmp_path, monkeypatch):
 
 
 def test_commit_set_propagates_an_unresolvable_base_as_incomplete(monkeypatch):
-    # An aborted or unresolvable walk may under-report BOTH buckets, so the
-    # caller must be able to say "this may be partial" rather than presenting
-    # a short answer as THE answer. Note the contract this does NOT test: a
-    # sessions_dir that simply does not exist resolves fine and honestly means
-    # "no claims here" (complete=True, paths=[]) -- absence of a directory is
-    # an answer, absence of a resolution is not.
     monkeypatch.setattr(claim_index, "_resolve_base", lambda *a, **k: "")
 
     result = claim_index.commit_set("sid-mine", sessions_dir="/irrelevant")
@@ -909,12 +746,6 @@ def test_commit_set_propagates_an_unresolvable_base_as_incomplete(monkeypatch):
     assert result.complete is False
     assert result.abort_cause == claim_index.ABORT_CAUSE_EMPTY_BASE
     assert result.paths == []
-
-
-# ---------------------------------------------------------------------------
-# C1 (docs/plans/2026-08-27-safe-commit-offer-excludes-a-live-agent.md) --
-# reproduction: a live agent's in-flight claim is offered as the EM's own.
-# ---------------------------------------------------------------------------
 
 
 def test_commit_set_offers_a_live_agents_inflight_claim_as_the_ems_own(tmp_path):
@@ -954,23 +785,6 @@ def test_commit_set_offers_a_live_agents_inflight_claim_as_the_ems_own(tmp_path)
 def test_commit_set_reports_attribution_only_no_liveness_verdict_for_an_agent_claim(
     tmp_path,
 ):
-    """MOVED here from ``test_commit_set_leaves_a_dead_agents_orphaned_claim_
-    in_mine`` (C3, docs/plans/2026-08-27-safe-commit-offer-excludes-a-live-
-    agent.md): that test asserted DEAD-agent behaviour at this surface, but
-    ``commit_set`` performs NO liveness check of its own (module docstring)
-    -- a guard asserting a dead-agent verdict here asserts something this
-    surface is designed never to know, whether the agent behind the claim is
-    live, dead, or undetermined. The real dead-agent regression guard now
-    lives at ``safe_commit_offer.compute_offer``, the surface where
-    liveness is actually resolved -- see ``TestComputeOffer::
-    test_a_dead_agents_orphaned_claim_stays_in_mine`` in
-    ``coordinator_core/ops/session/tests/test_safe_commit_offer.py``.
-
-    What THIS surface knows, and all this test asserts: a path claimed
-    SOLELY through a dispatched agent's own touch record is attributed to
-    that agent and withheld from ``paths`` -- present instead in
-    ``in_flight_agent_claims`` -- with no verdict rendered either way.
-    """
     base = str(tmp_path)
     _agent_touched(
         base, "agent-1", "sess-em", [_touch_line("T", "docs/research/orphaned.md")]
@@ -982,11 +796,6 @@ def test_commit_set_reports_attribution_only_no_liveness_verdict_for_an_agent_cl
     assert result.in_flight_agent_claims == {"docs/research/orphaned.md": ["agent-1"]}
     assert result.contested == {}
     assert result.peers == {}
-
-
-# ---------------------------------------------------------------------------
-# classify_paths — "is THIS path mine?" for a pathspec already in hand
-# ---------------------------------------------------------------------------
 
 
 def test_classify_paths_separates_mine_from_peer_from_unclaimed(tmp_path):
@@ -1005,8 +814,6 @@ def test_classify_paths_separates_mine_from_peer_from_unclaimed(tmp_path):
 
 
 def test_classify_paths_denies_a_path_a_peer_also_holds(tmp_path):
-    # Shared with a peer is NOT mine: `commit_set` withholds it, and the gate
-    # must refuse it, or the two answers disagree about the same path.
     _session_touched(tmp_path, "sid-mine", [_touch_line("T", "shared.py")])
     _session_touched(tmp_path, "sid-peer", [_touch_line("T", "shared.py")])
 
@@ -1021,9 +828,6 @@ def test_classify_paths_denies_a_path_a_peer_also_holds(tmp_path):
 def test_classify_paths_never_answers_mine_or_unclaimed_on_an_aborted_walk(
     tmp_path, monkeypatch
 ):
-    # C10's fail-open, closed by construction: both of those verdicts are
-    # claims about what the walk did NOT find, and a walk that stopped early
-    # found nothing it did not reach.
     _session_touched(tmp_path, "sid-mine", [_touch_line("T", "mine.py")])
     real_rebuild = claim_index.rebuild
 
@@ -1045,7 +849,6 @@ def test_classify_paths_never_answers_mine_or_unclaimed_on_an_aborted_walk(
 
 
 def test_classify_paths_still_names_a_peer_found_before_the_abort(tmp_path, monkeypatch):
-    # A peer claim this walk DID reach is a fact the abort does not undo.
     _session_touched(tmp_path, "sid-peer", [_touch_line("T", "theirs.py")])
     real_rebuild = claim_index.rebuild
 
@@ -1075,8 +878,6 @@ def test_classify_paths_credits_this_sessions_agent(tmp_path):
 
 
 def test_classify_paths_normalizes_the_callers_path_dialect(tmp_path):
-    # A backslashed pathspec and the forward-slash key touched.txt records are
-    # the same path; the answer is keyed by what the CALLER passed.
     _session_touched(tmp_path, "sid-mine", [_touch_line("T", "pkg/mod.py")])
 
     answer = claim_index.classify_paths(
@@ -1087,8 +888,6 @@ def test_classify_paths_normalizes_the_callers_path_dialect(tmp_path):
 
 
 def test_classify_paths_spawns_no_subprocess(tmp_path, monkeypatch):
-    # This runs on the COMMIT HOT PATH -- every dispatched-committer
-    # invocation pays it. The mechanism it replaces cost 73 processes.
     import subprocess
 
     def _explode(*args, **kwargs):  # pragma: no cover - must never run
@@ -1108,10 +907,6 @@ def test_classify_paths_spawns_no_subprocess(tmp_path, monkeypatch):
 
 
 def test_commit_set_names_peer_only_claims_separately_from_contested(tmp_path):
-    # `paths`/`contested` answer "what is mine"; `peers` answers the different
-    # question a dirty-tree sweep asks about a path it did NOT get from here --
-    # "does a peer own this, or has nobody claimed it?". Collapsing the two
-    # reads a peer's in-flight file as unattributed.
     _session_touched(tmp_path, "sid-mine", [_touch_line("T", "mine.py"), _touch_line("T", "shared.py")])
     _session_touched(tmp_path, "sid-peer", [_touch_line("T", "shared.py"), _touch_line("T", "theirs.py")])
 
@@ -1131,8 +926,6 @@ def test_commit_set_peers_excludes_a_path_nobody_holds(tmp_path):
 
 
 def test_commit_set_peers_drops_a_released_peer_claim(tmp_path):
-    # Last-event-wins applies here exactly as it does to `paths`: a peer that
-    # committed and released no longer holds the path, so it is nobody's.
     _session_touched(
         tmp_path,
         "sid-peer",
@@ -1145,26 +938,6 @@ def test_commit_set_peers_drops_a_released_peer_claim(tmp_path):
     result = claim_index.commit_set("sid-mine", sessions_dir=str(tmp_path))
 
     assert result.peers == {}
-
-
-# `test_unmigrated_writer_claim_is_still_seen_during_the_cutover` and
-# `test_old_format_record_is_not_a_malformed_new_format_record` removed by
-# C7b: both pinned the AC21 transitional union-read (touch-record.jsonl
-# UNION legacy touched.txt) that this chunk deletes by name and in full --
-# `_read_stream_claims`/`_enumerate_claim_sinks` no longer look at
-# `touched.txt` at all, so "an unmigrated claimant's legacy file is still
-# seen" and "old bytes don't read as corrupt" are no longer properties this
-# module has (or needs -- C7c deletes the legacy WRITER too). See this
-# chunk's own report for the AC21-deletion writeup; no replacement pin is
-# owed, mirroring C5's removal of the peer-release tests in
-# test_scope.py (scope.py module docstring, `release_committed_claims`).
-
-
-# ---------------------------------------------------------------------------
-# C8 / AC18 — the process-time re-key is pinned, and the abort residual is
-# re-measured at Corpus C width post-cutover.
-# docs/plans/2026-08-25-the-touched-files-record-gets-a-designed-shape.md
-# ---------------------------------------------------------------------------
 
 
 def test_ac18_rebuild_cap_is_immune_to_time_monotonic(tmp_path, monkeypatch):
@@ -1209,10 +982,7 @@ def test_ac18_lookup_cap_withheld_returns_unanswerable_never_empty(tmp_path, mon
 
     assert result.complete is False
     assert result.abort_cause == claim_index.ABORT_CAUSE_CAP_EXCEEDED
-    # sess-a sorts first and is consumed before the deadline trips; sess-b
-    # is never reached -- its resolved-known claim (`foo.py`) is NOT
     # downgraded to UNANSWERABLE by the abort (a peer claim the walk DID
-    # reach is a fact the abort does not undo), while the path the walk
     # never reached comes back UNANSWERABLE, never a silent `[]`.
     assert result["foo.py"] == ["sess-a"]
     assert result["bar.py"] == [claim_index.UNANSWERABLE]
@@ -1239,15 +1009,6 @@ def _projected_depth(rank: int, claimant_count: int) -> int:
 
 
 def _write_projected_claimant(base: Path, index: int, depth: int) -> None:
-    """One claim-bearing directory holding *depth* T/R events on one sink,
-    written as raw encoded bytes. Verb churns 80% T / 20% R.
-
-    `depth` 0 writes an EMPTY sink, not a missing one -- the measured
-    bottom decile is a claimant whose file exists and holds nothing, which
-    `_has_claim_surface` answers on the cheap `isfile` arm. That is a
-    different cost from a directory with no sink at all
-    (`_write_projected_empty_dir`), and the two must not be collapsed.
-    """
     sid = f"projected-claimant-{index:05d}"
     sink = base / sid / "touch-record.jsonl"
     sink.parent.mkdir(parents=True, exist_ok=True)
@@ -1345,32 +1106,16 @@ def _write_rebuild_floor_driver(driver_path: Path) -> None:
 
 
 #: THE LIVE CORPUS, MEASURED 2026-08-27 -- not a chosen width.
-#: `.git/coordinator-sessions/` on this box, read through
-#: `_enumerate_claim_sinks` itself (session dirs plus `.agents/`), after
-#: 43.7 days of accumulation with NO retention prune of claimant dirs.
-#: Re-measure with the probe recorded in
-#: docs/research/spike-verdicts/2026-08-27-corpus-c-is-wrong-on-both-axes-
-#: and-the-fingerprint-prize-collapses-at-real-width.md before changing any
-#: figure below; none of them is an estimate.
 _MEASURED_CANDIDATE_DIRS = 491
 _MEASURED_CLAIMANTS = 270
 _MEASURED_EVENTS = 2561
 _MEASURED_WINDOW_DAYS = 43.7
-#: Per-claimant event depth, deciles 0..9 of the measured distribution.
-#: mean 9.49, median 5. The p95/p99/max tail is carried separately because
-#: flattening it into the top decile understates exactly the claimants a
-#: per-claimant read cost concentrates on.
 _MEASURED_DEPTH_DECILES = (0, 1, 2, 3, 4, 5, 7, 10, 12, 16)
 _MEASURED_DEPTH_P95 = 33
 _MEASURED_DEPTH_P99 = 70
 _MEASURED_DEPTH_MAX = 169
 
 #: THE PROJECTION, and the one judgement call in this fixture: one year of
-#: the SAME measured accumulation rate. Claimant directories are never
-#: pruned (no retention mechanism exists -- see the problem doc's Item 0),
-#: so the corpus grows monotonically and the only free variable is the
-#: horizon. One year is stated, not derived; every other number here is
-#: measured and scales from it.
 _PROJECTION_HORIZON_DAYS = 365.0
 _PROJECTION_FACTOR = _PROJECTION_HORIZON_DAYS / _MEASURED_WINDOW_DAYS
 _PROJECTED_CLAIMANTS = round(_MEASURED_CLAIMANTS * _PROJECTION_FACTOR)
@@ -1378,22 +1123,10 @@ _PROJECTED_EMPTY_DIRS = (
     round(_MEASURED_CANDIDATE_DIRS * _PROJECTION_FACTOR) - _PROJECTED_CLAIMANTS
 )
 
-#: CORPUS C (50 peers x 5000 lines, and C0's 541.48ms against it) IS
-#: RETIRED as a width, 2026-08-27, by measurement and NOT to make anything
-#: green. Its constants are deleted rather than left unreferenced: it was
 #: wrong on BOTH axes in OPPOSITE directions -- 5.2x UNDER on claimant
-#: count (the axis the pre-parse floor scales with) and 35x OVER on
-#: per-claimant depth -- and its 5000-line single sink is a shape no live
 #: writer can emit, since `MAX_RECORD_BYTES` is 256KiB at a measured 197.5
-#: bytes/event, so rotation fires near 1327 events per generation. Do not
-#: reinstate it as a comparison baseline; a retired width is not a datum.
-#:
 #: `rebuild()` over the corpus that ACTUALLY exists today, cap lifted,
-#: process time, two independent runs: 61.458ms both times -- 12.3% of the
-#: brightline, `complete=True`, no cap abort. There is no LIVE breach at
 #: this site. The gate below asserts against the PROJECTED width instead,
-#: which is the honest question: does a year of unpruned accumulation
-#: breach the bar.
 _MEASURED_TODAY_MS = 61.458
 _BRIGHTLINE_MS = 500.0
 
@@ -1498,21 +1231,9 @@ def test_ac18_rebuild_at_projected_corpus_width_process_time_and_spawn_count(tmp
     for index in range(_PROJECTED_EMPTY_DIRS):
         _write_projected_empty_dir(base, index)
 
-    # Cap lifted: price the WALK, not the governor. See
-    # `_write_rebuild_driver`'s docstring for why the capped call cannot
-    # answer this AC's question.
     driver = tmp_path / "rebuild_driver.py"
     _write_rebuild_driver(driver, base, cap_secs=600.0)
 
-    # The startup floor is measured, never assumed. `batched_process_time_ms`
-    # times a SPAWNED process, so the full driver's figure carries this
-    # interpreter start plus the `claim_index` import graph on top of
-    # `rebuild()`'s own cost. Every figure this gate compares against is a
-    # `rebuild()`-only one, so comparing the startup-inclusive total
-    # against them is apples-to-oranges and manufactures a regression that
-    # is not there. Subtract, then
-    # compare like for like -- and gate on the subtracted number, because
-    # the interpreter floor is not this index's cost to answer for.
     floor_driver = tmp_path / "rebuild_floor_driver.py"
     _write_rebuild_floor_driver(floor_driver)
 
@@ -1526,9 +1247,6 @@ def test_ac18_rebuild_at_projected_corpus_width_process_time_and_spawn_count(tmp
     delta_vs_today = round(rebuild_only_ms - _MEASURED_TODAY_MS, 3)
     delta_vs_bar = round(rebuild_only_ms - _BRIGHTLINE_MS, 3)
     verdict = "PASSES" if rebuild_only_ms <= _BRIGHTLINE_MS else "FAILS"
-    # Single computation, reused in
-    # both the printed detail and the assertion below (was computed twice
-    # via slightly different rounding paths).
     procs_excess = round(result["procs_per_call"] - floor["procs_per_call"], 3)
     detail = (
         f"AC18 projected-width rebuild(): rebuild_only="
@@ -1547,33 +1265,11 @@ def test_ac18_rebuild_at_projected_corpus_width_process_time_and_spawn_count(tmp
     )
     print(detail)
     # DIFFERENTIAL, not absolute -- for the same reason `rebuild_only_ms`
-    # subtracts the floor rather than asserting against the total. Measured
-    # 2026-09-01: a driver whose entire body is `print('x')`, importing no
-    # coordinator module and calling no `rebuild()`, also reports
-    # `procs_per_call=2.0` through this harness on Windows. The absolute
-    # `== 1.0` form therefore priced the HARNESS, not the code under test,
-    # and could not pass on this box whatever `rebuild()` did -- a live gate
-    # red for a reason no change to `claim_index` could ever clear.
-    #
-    # What the assertion is actually for survives intact and is what is
-    # asserted here: `rebuild()` must spawn NO subprocess BEYOND what
-    # importing its own module graph already costs. The floor driver is
-    # byte-identical to the real one above its `rebuild()` call (see
-    # `_write_rebuild_floor_driver`'s negative spec), so any excess is
-    # `rebuild()`'s and nothing else's. Independently corroborated the same
-    # day by instrumenting `subprocess.run` across a live `rebuild()` over a
-    # synthetic 30-session / 600-event corpus: zero calls.
-    #
-    # procs_per_call moves in exact 1/k steps under a job object -- no noise
-    # for a tolerance to absorb; do not widen `abs=0.01`.
     assert procs_excess == pytest.approx(0.0, abs=0.01), (
         f"a pure-Python rebuild driver must spawn no subprocess of its own "
         f"BEYOND its import floor: driver={result['procs_per_call']} "
         f"floor={floor['procs_per_call']} excess={procs_excess}. {detail}"
     )
-    # The real AC18 gate, and it holds at one year of measured growth. It
-    # is a LIVE gate now, not `designed_red`: a regression here means the
-    # walk got more expensive, not that a known-open defect is still open.
     assert rebuild_only_ms <= _BRIGHTLINE_MS, (
         f"AC18 UNMET: {detail}"
     )

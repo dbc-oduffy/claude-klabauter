@@ -45,10 +45,6 @@ import pytest
 
 from coordinator_core.testing.doe_root import resolve_doe_root
 
-# ---------------------------------------------------------------------------
-# Import guard — fires ALL @register_op(...) side-effects, including
-# "records.query".  MUST precede all test functions.
-# ---------------------------------------------------------------------------
 import coordinator_core.ops  # noqa: F401 — populates _REGISTRY
 
 from coordinator_core.ipc import _REGISTRY, CallerFacingValidationError
@@ -76,18 +72,12 @@ from coordinator_core.write_guards.nudge_improvement_queue_write import (
     _ENTRY_LINE_RE as _WRITE_GUARD_ENTRY_LINE_RE,
 )
 
-# ---------------------------------------------------------------------------
-# Registry completeness assertion (universal positive floor)
-# ---------------------------------------------------------------------------
 
 assert len(_REGISTRY) > 0, (
     "registry is empty after 'import coordinator_core.ops' — "
     "all @register_op decorators must have fired at module import time"
 )
 
-# Query grammar tests seed real commits (lines ~107-119) so the op's --where
-# clauses run against actual repo/HEAD state, not a stubbed reader — the
-# suite's own purpose is byte-parity with the real records-query surface.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _OP_NAME = "records.query"
@@ -95,11 +85,6 @@ assert _OP_NAME in _REGISTRY, (
     f"import guard failed: {_OP_NAME!r} not in _REGISTRY — "
     "coordinator_core.ops.records_query @register_op did not fire"
 )
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _run(coro):
@@ -154,7 +139,6 @@ def _write_handoff(
     """Write a minimal handoff .md file with YAML frontmatter (quoted roadmap_id)."""
     handoffs_dir.mkdir(parents=True, exist_ok=True)
     path = handoffs_dir / filename
-    # Use YAML quoted string for roadmap_id — the key regression this test guards.
     content = dedent(f"""\
         ---
         kind: {kind}
@@ -166,11 +150,6 @@ def _write_handoff(
     """)
     path.write_text(content, encoding="utf-8")
     return path
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture()
@@ -209,11 +188,6 @@ def tmp_repo(tmp_path: Path):
     return git_dir, worktree
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 class TestQueryQuotedRoadmapId:
     """AC2 / C1a smoke: equality filter works on quoted YAML roadmap_id values.
 
@@ -236,7 +210,6 @@ class TestQueryQuotedRoadmapId:
             )
         )
         records = result["records"]
-        # Two files match (hoff-match-1.md and hoff-match-2.md).
         assert isinstance(records, str)
         paths = [p for p in records.split("\n") if p]
         assert len(paths) == 2
@@ -279,7 +252,6 @@ class TestQueryQuotedRoadmapId:
             assert "path" in rec
             assert "frontmatter" in rec
             fm = rec["frontmatter"]
-            # Frontmatter dict must carry the dequoted roadmap_id value.
             assert fm.get("roadmap_id") == "claude-klabauter-strangler-2026-07-04"
             assert fm.get("kind") == "spinoff-roadmap"
 
@@ -299,8 +271,6 @@ class TestEmptyPayloadGuards:
         valid set. Example-cockpit-repo-em could not tell a typo'd `--type` from a
         real internal fault and triaged the wrong one.
         """
-        # F10 — pass a real git_dir so only the unknown-type guard fires,
-        # not the absent-repo_root guard.
         git_dir, _worktree = tmp_repo
         with pytest.raises(CallerFacingValidationError) as exc_info:
             _run(
@@ -421,14 +391,8 @@ class TestEmptyPayloadGuards:
                 repo_root=None,
             )
         )
-        # Well-formed empty payload, no raise.
         assert "records" in result
         assert result["records"] == "" or result["records"] == []
-
-
-# ---------------------------------------------------------------------------
-# Tests (F2 smoke): boolean coercion parity — Python True/False → 'true'/'false'
-# ---------------------------------------------------------------------------
 
 
 class TestBooleanCoercion:
@@ -440,12 +404,10 @@ class TestBooleanCoercion:
 
     def test_bool_field_true_matches(self, tmp_path: Path):
         """draft=true query matches a handoff with `draft: true` YAML frontmatter."""
-        # F2 — smoke test for boolean coercion parity
         worktree = tmp_path / "repo"
         git_dir = _make_git_repo(worktree)
         handoffs_dir = worktree / "state" / "handoffs"
 
-        # Write a handoff with a boolean `draft: true` field.
         handoffs_dir.mkdir(parents=True, exist_ok=True)
         (handoffs_dir / "draft-handoff.md").write_text(
             "---\nkind: spinoff-roadmap\nroadmap_id: test-rmap\n"
@@ -495,15 +457,8 @@ class TestBooleanCoercion:
         assert "nondraft-handoff.md" in Path(paths[0]).name
 
 
-# ---------------------------------------------------------------------------
-# Tests (T4d-g1c): full --where grammar operator support
-#
 # Pre-T4d-g1c, these operators (!=, <, >, <=, >=, in) were REJECTED with
-# sys.exit(1) — the op only supported equality-AND conjunctions. T4d-g1c
-# EXTENDS records_query.py to the full query-records.js grammar (freeze-
 # query-records-grammar.md Surface 3), so these operators are now SUPPORTED,
-# not rejected. Only a genuinely unparseable clause still exits loud.
-# ---------------------------------------------------------------------------
 
 
 class TestWhereGrammarOperators:
@@ -672,8 +627,6 @@ class TestLivenessPredicateSmoke:
 
     def test_handoff_two_axis(self):
         assert liveness({"deployment_state": "awaiting_gate"}, "handoff") == "BLOCKED"
-        # DR-084: status: claimed is the current vocabulary; status: consumed is
-        # the retired predecessor, kept here as an old-name tolerance check —
         # _TERMINAL_STATUS is old-union-new widened (lifecycle_constants.py).
         assert liveness({"status": "claimed"}, "handoff") == "DONE"
         assert liveness({"status": "consumed"}, "handoff") == "DONE"
@@ -701,11 +654,6 @@ class TestLivenessPredicateSmoke:
         assert liveness({"status": "consumed"}, "handoff-ledger") == "DONE"
 
 
-# ---------------------------------------------------------------------------
-# Tests (F9): smoke coverage for type=plan sidecar exclusion + consumed-marker
-# ---------------------------------------------------------------------------
-
-
 class TestPlanTypeSmoke:
     """F9a: always-on smoke test for type=plan positive canonical allowlist.
 
@@ -722,15 +670,12 @@ class TestPlanTypeSmoke:
         plans_dir = worktree / "docs" / "plans"
         plans_dir.mkdir(parents=True, exist_ok=True)
 
-        # Canonical plan — must be included.
         (plans_dir / "2026-07-01-my-plan.md").write_text(
             "---\nstatus: implemented\n---\nPlan body.\n", encoding="utf-8"
         )
-        # Timestamped sidecar — must be excluded.
         (plans_dir / "2026-07-01-my-plan.plan-coverage-check.2026-07-01T08-00-00Z.md").write_text(
             "---\nstatus: implemented\n---\nSidecar body.\n", encoding="utf-8"
         )
-        # Classic sidecar — must be excluded.
         (plans_dir / "2026-07-01-my-plan.prior-art-check.md").write_text(
             "---\nstatus: implemented\n---\nPrior-art sidecar.\n", encoding="utf-8"
         )
@@ -773,8 +718,6 @@ class TestConsumedMarkerSmoke:
         git_dir = _make_git_repo(worktree)
         handoffs_dir = worktree / "state" / "handoffs"
 
-        # Consumed-marker-lagged: frontmatter says ready_to_fire, body has consumed marker.
-        # applyConsumedMarker must normalize to shipped BEFORE --where filtering.
         _write_handoff(
             handoffs_dir,
             "consumed-lagged.md",
@@ -783,7 +726,6 @@ class TestConsumedMarkerSmoke:
             body="<!-- consumed: 2026-07-01 -->\nConsumed handoff body.",
         )
 
-        # Non-consumed ready_to_fire: should still appear.
         _write_handoff(
             handoffs_dir,
             "live-rtf.md",
@@ -811,12 +753,6 @@ class TestConsumedMarkerSmoke:
         assert "live-rtf.md" in basenames, (
             "Non-consumed ready_to_fire handoff should be included in results."
         )
-
-
-# ---------------------------------------------------------------------------
-# Directory-scan failure — distinguishability from legitimate-empty (silent-
-# success audit, state/audits/2026-07-22-silent-success-audit.md)
-# ---------------------------------------------------------------------------
 
 
 class TestDirectoryScanFailureSignal:
@@ -865,15 +801,6 @@ class TestDirectoryScanFailureSignal:
             "an unreadable handoffs dir must carry a non-empty 'error' "
             "diagnostic naming what could not be scanned."
         )
-
-
-# ---------------------------------------------------------------------------
-# Legacy prose-queue invisibility signal (DR-115 —
-# docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md,
-# DoE repo). Six sibling repos still carry pre-migration line-per-row prose
-# queues that were previously silently unread by this query — this signal
-# makes that invisibility loud rather than indistinguishable from "empty".
-# ---------------------------------------------------------------------------
 
 
 class TestLegacyProseQueueSignal:
@@ -1032,17 +959,9 @@ class TestLegacyProseQueueSignal:
         module's regex needs multi-shape coverage for ITS job (counting
         entries in a whole real file accumulated across incompatible
         skill-authored conventions)."""
-        # The write guard's one shape must still be a SUBSET the widened
-        # regex recognises — an improvement-queue.md dated-pipe row (the one
-        # shape both regexes agree is a real entry) must match both.
         dated_pipe_row = "- 2026-07-01 | self | notes | proposed target: x"
         assert _WRITE_GUARD_ENTRY_LINE_RE.search(dated_pipe_row)
         assert _LEGACY_PROSE_ENTRY_LINE_RE.search(dated_pipe_row)
-        # The divergence itself is proven
-        # behaviorally: a real bug/debt-backlog table row the write guard's
-        # narrow dated-pipe shape does NOT recognise, but this module's
-        # widened regex does. A bare `.pattern != .pattern` string inequality
-        # (removed here) proved nothing about actual matching behavior.
         table_id_row = "| BS-2026-06-14-11 | pipeline-extract-build | P2 | text | evidence |"
         assert not _WRITE_GUARD_ENTRY_LINE_RE.search(table_id_row)
         assert _LEGACY_PROSE_ENTRY_LINE_RE.search(table_id_row)
@@ -1050,31 +969,20 @@ class TestLegacyProseQueueSignal:
     @pytest.mark.parametrize(
         "line",
         [
-            # markdown table row, ID-shaped first cell (bug/debt-backlog.md shape)
             "| BS-2026-06-14-11 | pipeline-extract-build | P2 | text | evidence |",
             "| DSR-2026-04-11-2 | RAG / NLM Intake | P3 | text | source | open | 2026-04-11 |",
-            # struck-through closed table row (example-sim-repo-md bug-backlog.md shape)
             "| ~~BS-2026-04-09-1~~ | FDM | ~~P2~~ CLOSED | text | N/A | 2026-04-09 |",
-            # short non-dated ID in a table (bug-backlog "Spun off" table shape)
             "| BS-030 | chunk_csharp_docs.py brace-counting | handoff path | reason |",
-            # non-dated hyphenated ID with letter+digit segments, no date at all
             "| WAA-A-P0-1 | Routing | Middleware dead code |",
             "| TD-PARITY-PS1 | example-game-repo-docs | P3 | text | source | open |",
             # bulleted bold ALL-CAPS identifier (debt-backlog.md shape)
             "- **DSR-2026-06-16-1** [for-doc-sweep] text here",
             "- **F-C-02 false-positive lesson:** SQLite backslash text",
             "- **BS-2026-06-01-CLIRUNNER-EXECSYNC-BLANK-PROMPT** → handoff path",
-            # bulleted bold all-lowercase multi-segment slug (spinoff-entry shape)
             "- **embed-sidecar-anyio-portal-flaky-crash** — the residual blocker",
             "- **json-retrieval-quality** — RESOLVED (commit abc123)",
-            # unbolded bulleted ID-first pipe row (debt-backlog.md shape)
             "- DSR-2026-05-24-1 | 2026-05-24 | file.py | one-line description | target",
-            # legacy dated-pipe bullet (improvement-queue.md shape, pre-existing)
             "- 2026-06-15 | self | one-line lesson | proposed target: wiki",
-            # branch (a) with irregular/multi-space whitespace — deliberately
-            # widened from the old single-space shape (`^- \d{4}-\d{2}-\d{2} \|`);
-            # exercises the widened boundary rather than merely assuming it's
-            # harmless. Review: code-reviewer (Finding 4).
             "-   2026-06-15   |  self | one-line lesson | proposed target: wiki",
         ],
     )
@@ -1086,33 +994,20 @@ class TestLegacyProseQueueSignal:
     @pytest.mark.parametrize(
         "line",
         [
-            # narrative bullet inside a prose section — no entry-identifier token
             "- The lesson: verify SQL backslash semantics empirically first.",
             "- Rejected: the sweeper's hypothesis does not survive engine source review.",
-            # mixed-case natural-language bold lead-in — a lower-case segment
-            # ("regressions retrospective") after the first hyphen means it's
             # not ALL-CAPS, so branch (c) can't match (digit presence in "2"
-            # is irrelevant) — real fleet false-positive candidate: project-
-            # rag-ue-addon bug-backlog.md "Notes" section.
-            # Comment was swapped with
-            # the C3-priming line below; each now describes its own line.
             "- **Round-2 regressions retrospective:** three round-1 fixes broke tests.",
             # short label starting with an ALL-CAPS-with-digit token ("C3")
-            # followed by a lower-case segment ("priming") — same exclusion
             # mechanism as above (not ALL-CAPS throughout), NOT "no digit":
-            # C3 plainly contains one. Real fleet false-positive candidate
-            # (example-retrieval-repo bug-backlog.md summary section).
             "- **C3-priming:** 14/15 already-fixed, 1 file-removed.",
             "- **C1-core:** stale TODOs cited are now rationale comments.",
-            # indented sub-bullet — must never match regardless of leading content
             "  - Same family — a flaky order-dependence issue, RESOLVED 2026-06-01.",
             "  - **BS-2026-06-01-CLIRUNNER**: an indented duplicate must not match.",
             # code-fenced schema placeholder — literal "YYYY-MM-DD", not real digits
             "- YYYY-MM-DD | <source-file>:<line> | <one-line lesson> | proposed target: <target>",
-            # markdown table header / separator rows
             "| ID | System | Severity | Summary | Source | Status | Added |",
             "|----|--------|----------|---------|--------|--------|-------|",
-            # markdown table continuation row with an empty first cell
             "| | | | UPDATE 2026-07-21: additional detail on a prior row. |",
         ],
     )
@@ -1123,20 +1018,11 @@ class TestLegacyProseQueueSignal:
         coverage without losing precision."""
         assert not _LEGACY_PROSE_ENTRY_LINE_RE.search(line), f"unexpected match: {line!r}"
 
-    # Branch (b) (markdown-table ID cell)
-    # has no digit requirement or case constraint, unlike its sibling ID
-    # branches, so it has no adversarial negative coverage for its own
-    # broadest failure mode. These document the current (accepted) false-
-    # positive surface rather than asserting a fix — see the digit-lookahead
     # note on `_LEGACY_PROSE_ENTRY_LINE_RE`'s branch (b) comment for why the
-    # lookahead was NOT added (it drops a real corpus row,
-    # example-stats-repo/state/debt-backlog.md's `| G-OVR | ... |`).
     @pytest.mark.parametrize(
         "line",
         [
-            # plausible hyphenated-but-non-ID first cell (glossary/legend-shaped
             # row) — CURRENTLY matches branch (b); no real corpus row does this
-            # today, but the branch has no digit/case guard against it.
             "| high-priority | items flagged for immediate attention |",
             "| self-review | a reviewer checking their own prior work |",
         ],
@@ -1150,14 +1036,6 @@ class TestLegacyProseQueueSignal:
             f"expected branch (b) to currently match (documented false-"
             f"positive surface, not yet guarded): {line!r}"
         )
-
-
-# ---------------------------------------------------------------------------
-# T4d-g1c EXTEND — type-set widening (8 new types), .yaml whole-file parsing,
-# wildcard-directory globs (roadmap/completion), and roadmap status
-# normalization. Spec backlink: query-records.js _buildTypeToGlob
-# (bin/query-records.js:211-272) and normalizeRoadmapStatus (:1052-1080).
-# ---------------------------------------------------------------------------
 
 
 class TestNewTypeGlobCoverage:
@@ -1194,11 +1072,7 @@ class TestNewTypeGlobCoverage:
         assert _TYPE_TO_GLOB["debt"] == "state/debt-backlog/*.yaml"
         assert _TYPE_TO_GLOB["improvement"] == "state/improvement-queue/*.yaml"
         assert _TYPE_TO_GLOB["tracker"] == "docs/project-tracker.md"
-        # Widened with DoE's roadmap.schema.json 1.4.0 (their 1c5f0d849): the
-        # consumer glob must move with applies_to or a nested roadmap validates
-        # while staying invisible to `query-records --type roadmap`.
         assert _TYPE_TO_GLOB["roadmap"] == "state/roadmap/**/OVERVIEW.md"
-        # Single-`*` per spine.schema.json's own applies_to — one spine per run-id.
         assert _TYPE_TO_GLOB["spine"] == "state/roadmap/*/SPINE.md"
         assert _TYPE_TO_GLOB["health-status"] == "state/health/*.md"
         assert _TYPE_TO_GLOB["decision-guide"] == "docs/guides/*-decisions.md"
@@ -1330,32 +1204,14 @@ class TestTypeToGlobDerivedGate:
     skip guard.
     """
 
-    # Resolved via the canonical coordinator_core.testing.doe_root pointer-file
-    # resolver, not a relative-sibling-checkout guess — see that module's
-    # docstring for why a hardcoded parents[N]/"DoE-claude" walk is retired
-    # rather than mirrored here.
     _doe_root_str = resolve_doe_root()
     _DOE_REPO = Path(_doe_root_str) if _doe_root_str else None
     _SCHEMAS_DIR = _DOE_REPO / "coordinator" / "schemas" if _DOE_REPO is not None else None
 
-    # Deliberately-excluded types — every member of the delta between
     # build_type_to_glob's schema-derived set and this module's _TYPE_TO_GLOB
-    # (post-goal, post-research-synthesis/gap-report/coverage-audit,
-    # post-archived-memo, post-sizing-object, post-cutover) NOT wired into
     # _TYPE_TO_GLOB.
-    # Two categories, each type's reason inline:
-    #
-    #   (A) NOT a query-servable record collection at all — either a single
-    #       fixed-path file (no wildcard: "query the record set" is meaningless
-    #       for exactly one file) or a JSON file/glob that would hit this
-    #       module's .md/.yaml frontmatter parser branches and silently
-    #       collect zero records rather than parsing.
-    #   (B) A genuine record-shaped collection (wildcard glob, .md or .yaml)
     #       that is simply not yet wired into _TYPE_TO_GLOB — out of scope
-    #       for this fix, not structurally unqueryable. Candidates for a
-    #       future add when a caller needs them.
     _TYPE_TO_GLOB_DELIBERATE_EXCLUSIONS: dict[str, str] = {
-        # --- (A) not a record collection ---
         "capability-manifest":     "single JSON file (state/capabilities/manifest.json), no wildcard, not frontmatter-shaped",
         "fleet-capability-index":  "single JSON file (state/capabilities/fleet-index.json), no wildcard, not frontmatter-shaped",
         "coordinator-local-md":    "single fixed file (coordinator.local.md), no wildcard — not a record set",
@@ -1369,7 +1225,6 @@ class TestTypeToGlobDerivedGate:
         "review-integration-record": "JSON glob (state/review-trail/*-integration.json) — unparseable by this module's .md/.yaml branches",
         "review-trail":            "JSON glob (state/review-trail/*.json) — unparseable by this module's .md/.yaml branches",
         "session-hierarchy":       "JSON glob (state/session-hierarchy.*.json) — unparseable by this module's .md/.yaml branches",
-        # --- (B) record-shaped, not yet wired (out of scope for this fix) ---
         "atlas-doc":               "record-shaped (docs/architecture/*.md) — not yet wired, out of scope for this fix",
         "atlas-system-doc":        "record-shaped (docs/architecture/systems/*.md) — not yet wired, out of scope for this fix",
         "audit-record":            "record-shaped (docs/architecture/audit-records/*.md) — not yet wired, out of scope for this fix",
@@ -1476,7 +1331,6 @@ class TestEachNewTypeCollectsAndParses:
         (d / "project-tracker.md").write_text(
             "---\nstatus: active\n---\nTracker body.\n", encoding="utf-8",
         )
-        # A sibling non-matching file must NOT be collected (literal-filename match).
         (d / "other.md").write_text("---\nstatus: active\n---\nOther.\n", encoding="utf-8")
         files = _collect_files(tmp_path, "tracker")
         assert [f.name for f in files] == ["project-tracker.md"]
@@ -1495,7 +1349,6 @@ class TestEachNewTypeCollectsAndParses:
         (d / "fifa-decisions.md").write_text(
             "---\nstatus: active\n---\nBody.\n", encoding="utf-8",
         )
-        # A sibling .md file that does NOT match the *-decisions.md suffix is excluded.
         (d / "unrelated.md").write_text("---\nstatus: active\n---\nBody.\n", encoding="utf-8")
         files = _collect_files(tmp_path, "decision-guide")
         assert [f.name for f in files] == ["fifa-decisions.md"]
@@ -1663,14 +1516,7 @@ class TestSiblingExclusionDerivedFromWiredSet:
     _DOE_REPO = Path(_doe_root_str) if _doe_root_str else None
     _SCHEMAS_DIR = _DOE_REPO / "coordinator" / "schemas" if _DOE_REPO is not None else None
 
-    # 'plan' is exempted: its docs/plans/*.md glob DOES have genuine unwired
-    # suffix-sidecar siblings (docs-check-sidecar/integration-summary/
-    # plan-coverage-check/prior-art-check/review-sidecar), but those are
     # already excluded by the SEPARATE, dedicated `_apply_plan_filename_filter`
-    # positive-allowlist — the same "both filters coexist" architecture the
-    # oracle itself uses (query-records.js's own comment at bin/query-records.js
-    # :1325-1326). No divergence risk: the sidecar files never reach
-    # `_apply_sibling_exclusion` matched into a plan result either way.
     _EXEMPT_WIRED_TYPES: frozenset[str] = frozenset({'plan'})
 
     def _skip_if_unresolvable(self):
@@ -1718,7 +1564,7 @@ class TestSiblingExclusionDerivedFromWiredSet:
                     continue
                 sample = self._sample_for_filename_glob(Path(unwired_glob).name)
                 if not wired_re.match(sample):
-                    continue  # more "specific" by string-length alone, but no actual overlap
+                    continue
                 violations.append(
                     f"unwired {unwired_type!r} ({unwired_glob!r}) is a more "
                     f"specific sibling of wired {wired_type!r} ({wired_glob!r}) and "
@@ -1758,9 +1604,6 @@ class TestSiblingExclusionTieBreak:
         shared_file = base_dir / 'shared.md'
         shared_file.write_text('x', encoding='utf-8')
 
-        # Same file, same specificity_key on both sides — queried from EITHER
-        # type's perspective, the tie must resolve in the QUERIED type's favor
-        # (kept), never spuriously excluded by its equal-specificity sibling.
         assert rq._apply_sibling_exclusion([shared_file], 'fixture-a', base_dir) == [shared_file]
         assert rq._apply_sibling_exclusion([shared_file], 'fixture-b', base_dir) == [shared_file]
 
@@ -1769,8 +1612,6 @@ class TestWildcardDirOrderingParity:
     """_walk_glob_segments enumerates wildcard-dir levels in scandir-alphasort order."""
 
     def test_alpha_sorted_across_unsorted_creation_order(self, tmp_path: Path):
-        # Create directories out of alphabetical order to prove sorting, not
-        # creation-order or filesystem-native order, drives the result.
         for name in ("zzz-roadmap", "aaa-roadmap", "mmm-roadmap"):
             d = tmp_path / "state" / "roadmap" / name
             d.mkdir(parents=True)
@@ -1807,8 +1648,6 @@ class TestArbitraryDepthDoubleStarGlob:
         ]
 
     def test_zero_level_matches_directly_under_anchor(self, tmp_path: Path):
-        # `**` also admits ZERO intervening directories — a cutovers/ dir
-        # living directly under state/roadmap/ (no namespace segment at all).
         d = tmp_path / "state" / "roadmap" / "cutovers"
         d.mkdir(parents=True)
         (d / "c.md").write_text("---\nstatus: open\n---\nBody.\n", encoding="utf-8")
@@ -1859,7 +1698,7 @@ class TestRoadmapStatusNormalization:
     def test_noop_for_non_roadmap_type(self):
         fm = {"status": "draft"}
         _normalize_roadmap_status(fm, "plan")
-        assert fm["status"] == "draft"  # untouched — draft is not a plan enum value either
+        assert fm["status"] == "draft"
 
     def test_noop_when_status_absent(self):
         fm = {}
@@ -1905,23 +1744,12 @@ class TestSinceFilteringNewTypes:
         assert titles == {"Recent bug"}
 
 
-# ---------------------------------------------------------------------------
-# Node-parity regression fixtures — three constructs a strict yaml.safe_load /
-# dag._read_meta parse diverged on vs. query-records.js's lenient _parseYaml
-# (freeze-query-records-grammar.md parity harness, 2026-07-22).
-# ---------------------------------------------------------------------------
-
-
 class TestWholeFileYamlLenientParse:
     """.yaml whole-file records parse through the byte-parity ``parse_yaml`` port
     (coordinator_core.frontmatter.schema_validate), not strict ``yaml.safe_load`` —
     query-records.js's ``_parseYaml`` accepts real on-disk shapes PyYAML rejects."""
 
     def test_backtick_leading_title_accepted(self, tmp_path: Path):
-        # Mirrors state/debt-backlog/2026-06-15-agent-install.yaml: an unquoted
-        # scalar value that begins with a backtick — a hard PyYAML parse error
-        # ("found character '`' that cannot start any token"), but a plain
-        # string under the lenient line-oriented parser.
         d = tmp_path / "state" / "debt-backlog"
         d.mkdir(parents=True)
         (d / "2026-07-22-example.yaml").write_text(
@@ -1933,11 +1761,6 @@ class TestWholeFileYamlLenientParse:
         assert rec["frontmatter"]["title"] == "`agent-install"
 
     def test_unquoted_mid_line_colon_value_accepted(self, tmp_path: Path):
-        # Mirrors state/bug-backlog/2026-07-14-token-fchmod-and-liveness-bash-
-        # dep-win32.yaml: an unquoted scalar value containing ": " mid-line —
-        # PyYAML raises "mapping values are not allowed here" (it re-parses the
-        # embedded ": " as a nested key:value), but the line-oriented parser
-        # takes everything after the FIRST top-level colon as the scalar value.
         d = tmp_path / "state" / "bug-backlog"
         d.mkdir(parents=True)
         (d / "2026-07-22-example.yaml").write_text(
@@ -1961,9 +1784,6 @@ class TestMdFrontmatterScalarAndListParity:
     schema.js oracle on these two constructs)."""
 
     def test_scientific_notation_looking_scalar_stays_string(self, tmp_path: Path):
-        # Mirrors archive/completed/.../...-7b374f.md's `commits: ['9e015366', ...]`
-        # — a bare list item that LOOKS like scientific notation (digit-e-digit)
-        # must stay the literal string '9e015366', not overflow to float('inf').
         d = tmp_path / "archive" / "completed" / "2026-07"
         d.mkdir(parents=True)
         (d / "entry.md").write_text(
@@ -1981,9 +1801,6 @@ class TestMdFrontmatterScalarAndListParity:
         assert rec["frontmatter"]["commits"] == ["9e015366", "8ed8906c"]
 
     def test_list_item_nested_mapping(self, tmp_path: Path):
-        # Mirrors docs/plans/2026-07-14-claude-klabauter-windows-portability.md's
-        # `related:` list, whose second entry is `- memory: <value>` — a
-        # single-key nested mapping, not a flat scalar string.
         d = tmp_path / "docs" / "plans"
         d.mkdir(parents=True)
         (d / "2026-07-22-example.md").write_text(
@@ -2005,13 +1822,6 @@ class TestMdFrontmatterScalarAndListParity:
         }
 
 
-# ---------------------------------------------------------------------------
-# Wave1: decision / review / lesson / handoff-ledger / research-claim —
-# the 5 record types outstanding after T4d-g1c. Spec backlink:
-# cross-repo memo 2026-07-16-claude-central-em-records-query-surface-gaps.
-# ---------------------------------------------------------------------------
-
-
 class TestDecisionType:
     """decision: static glob (docs/decisions/*.md), ordinary .md frontmatter parse."""
 
@@ -2027,7 +1837,6 @@ class TestDecisionType:
         rec = _load_record(files[0], tmp_path, "decision")
         assert rec is not None
         assert rec["frontmatter"]["title"] == "Example Decision"
-        # decision liveness single-axis rule: accepted -> DONE.
         assert rec["frontmatter"]["liveness"] == "DONE"
 
     def test_absent_directory_yields_empty(self, tmp_path: Path):
@@ -2049,7 +1858,6 @@ class TestReviewType:
         rec = _load_record(files[0], tmp_path, "review")
         assert rec is not None
         assert rec["frontmatter"]["reviewer"] == "the Staff Engineer"
-        # review has no dedicated liveness() branch — graceful default applies.
         assert rec["frontmatter"]["liveness"] == "LIVE"
 
     def test_absent_directory_yields_empty(self, tmp_path: Path):
@@ -2100,7 +1908,6 @@ class TestHandoffLedgerParsing:
         fields = blocks[0]
         assert fields["agent_dispatches"] == "26"
         assert fields["opus_dispatches"] == "4"
-        # Commas stripped so numeric compare/sort works.
         assert fields["em_tokens"] == "482000"
         assert fields["tshirt"] == "L"
         assert fields["session_id"] == "sid-1"
@@ -2170,7 +1977,6 @@ class TestHandoffLedgerCollection:
         ]
         assert records[0]["frontmatter"]["session_id"] == "live-sid"
         assert records[1]["frontmatter"]["session_id"] == "archived-sid"
-        # Graceful-default liveness — no status field on a ledger record.
         assert records[0]["frontmatter"]["liveness"] == "LIVE"
 
     def test_multiple_ledger_blocks_get_distinct_fragment_indices(self, tmp_path: Path):
@@ -2214,7 +2020,6 @@ class TestResearchClaimCollection:
         ]
         assert records[0]["frontmatter"]["claim_text"] == "First claim"
         assert records[1]["frontmatter"]["confidence"] == "low"
-        # Graceful-default liveness — no status field on a claim record.
         assert records[0]["frontmatter"]["liveness"] == "LIVE"
 
     def test_non_array_top_level_is_skipped(self, tmp_path: Path):
@@ -2378,8 +2183,6 @@ class TestUnattachedUnionLens:
             encoding="utf-8",
         )
 
-        # A non-member type — must never surface in the union even though it's
-        # unattached-shaped (no initiative field at all).
         decisions_dir = worktree / "docs" / "decisions"
         decisions_dir.mkdir(parents=True)
         (decisions_dir / "not-in-union.md").write_text(
@@ -2398,7 +2201,7 @@ class TestUnattachedUnionLens:
         types = {r["_type"] for r in records}
 
         assert types == {"bug", "debt", "improvement", "roadmap", "handoff", "plan"}
-        assert len(records) == 6  # exactly one unattached record per member type
+        assert len(records) == 6
         for rec in records:
             assert rec["frontmatter"].get("initiative") is None
 
@@ -2407,7 +2210,6 @@ class TestUnattachedUnionLens:
         assert "Unattached debt" in titles
         assert "Unattached improvement" in titles
 
-        # Non-member type never leaks into the union.
         paths = {r["path"] for r in records}
         assert not any("not-in-union" in p for p in paths)
 
@@ -2444,11 +2246,7 @@ class TestUnattachedUnionLens:
         )
         records = result["records"]
         assert len(records) == 3
-        # All 6 unattached fixtures share created=2026-07-02, so a stable sort
-        # keeps the union's collection order (bug, debt, improvement, roadmap,
         # handoff, plan) for the first 3 — proves limit sliced the ASSEMBLED
-        # union rather than truncating per type (a per-type limit=3 with only
-        # ~1-2 unattached records per type would never even trigger a slice).
         types_kept = [r["_type"] for r in records]
         assert types_kept == ["bug", "debt", "improvement"]
 
@@ -2514,9 +2312,6 @@ class TestParseRelativeDateUsesUtcClock:
         class _FixedUtcDateTime(datetime):
             @classmethod
             def now(cls, tz=None):
-                # Pre-fix code calls `datetime.now()` with no `tz` argument —
-                # asserting tz is not None pins the UTC-aware call shape and
-                # fails loudly (not silently-wrong-date) against the old code.
                 assert tz is not None, (
                     "_parse_relative_date must call datetime.now(timezone.utc), "
                     "not naive datetime.now() — local-time cutoffs skew the "
@@ -2532,7 +2327,6 @@ class TestParseRelativeDateUsesUtcClock:
         assert rq._parse_relative_date("1m", "older-than") == "2025-12-16"
 
     def test_iso_literal_bypasses_clock_entirely(self):
-        # Sanity: the ISO-literal branch never touches now() at all.
         import coordinator_core.ops.records_query as rq
 
         assert rq._parse_relative_date("2026-01-01", "since") == "2026-01-01"

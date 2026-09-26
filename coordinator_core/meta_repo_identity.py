@@ -43,7 +43,7 @@ from coordinator_core.git import repo_root as _repo_root_seam
 
 
 class MetaRepoResolutionError(RuntimeError):
-    """Raised when the git root or meta-repo home directory cannot be resolved."""
+    pass
 
 
 def _resolve_home_dir() -> Path:
@@ -88,7 +88,6 @@ def _resolve_meta_repo_root() -> Path:
 
 
 def _resolve_git_root(git_root: Optional[str]) -> str:
-    """Resolve the git root from cwd if not provided by the caller."""
     if git_root:
         return git_root
 
@@ -103,9 +102,6 @@ def _resolve_git_root(git_root: Optional[str]) -> str:
 
 
 def _canonicalize(path: Path) -> str:
-    """Canonicalize a path via realpath; falls back to the literal path if
-    the directory does not exist on disk (mirrors the shell original's
-    `cd ... && pwd -P || echo "$path"` fallback)."""
     try:
         return str(path.resolve(strict=False))
     except OSError:

@@ -59,69 +59,33 @@ from __future__ import annotations
 
 from typing import Dict
 
-#: A third-party installer script fetched over the network (`curl -fsSL ...`),
-#: piped into a shell the vendor supplies. Network leg only — the execution
 #: that follows is bounded by `TOOLCHAIN_BOOTSTRAP_SECS`.
 NETWORK_FETCH_SECS = 60
 
-#: `python -m venv` against a resolved base interpreter. Local disk plus
-#: ensurepip; the ceiling is a wedged-child guard, not an expectation.
 VENV_CREATE_SECS = 120
 
-#: A post-provision import probe that proves the environment it just built is
-#: usable. Bounded by the heaviest declared import (`torch`, seconds cold),
-#: never by a package manager.
 HEALTH_PROBE_SECS = 120
 
-#: `brew uninstall` of a guarded platform Python, reached only after explicit
-#: interactive consent. Removal, not installation, so it does no network work.
 PLATFORM_UNINSTALL_SECS = 120
 
-#: `git clone` of a sibling repository. Network plus checkout of a tree whose
-#: size we do not control.
 REPO_CLONE_SECS = 300
 
-#: A version-manager / toolchain bootstrap (`brew install fnm`, the vendor's
-#: `bash -s` installer). Downloads and unpacks a toolchain we do not ship.
 TOOLCHAIN_BOOTSTRAP_SECS = 300
 
-#: One `pip install` invocation against a target interpreter. Network plus
-#: wheel builds for whichever declared deps have no wheel for this platform.
 PACKAGE_INSTALL_SECS = 600
 
-#: One generic install-phase subprocess in the cold maximalist orchestrator,
-#: whose heaviest member is a `pip install` — so it shares that ceiling
-#: rather than inventing a second one.
 PHASE_SUBPROCESS_SECS = 600
 
-#: `brew install` of a large formula (node). Homebrew compiles from source
-#: when no bottle matches the platform, which is the case this number exists
-#: for; a bottled install is a small fraction of it.
 PLATFORM_PACKAGE_INSTALL_SECS = 900
 
-#: A full `scripts/setup.py` run, driven end-to-end by the Windows install
-#: acceptance harness. Bounds the whole chain, so it is at least the largest
-#: single leg it can reach.
 FULL_INSTALL_RUN_SECS = 900
 
-#: `uv lock` — resolving ~250 packages across three platforms against a
-#: possibly-cold uv cache.
 DEPENDENCY_LOCK_SECS = 1800
 
-#: `uv sync --frozen` — installing that resolved set, including a multi-GB
-#: cu130 torch build. The largest member of the family, and the one whose
-#: cost is most obviously not ours.
 DEPENDENCY_SYNC_SECS = 3600
 
-#: No member may exceed this. Not a budget in DR-349's sense (these sites are
-#: carved out of that budget); a ceiling on how far the carve-out itself may
-#: stretch, so a future admission has a number to argue against rather than
-#: an open field.
 FAMILY_CEILING_SECS = 3600
 
-#: The audit table. Every member above appears here with the provisioning
-#: work it bounds; `tests/test_install_timeout_family.py` asserts the two
-#: stay in step, so a constant cannot be added without describing itself.
 MEMBERS: Dict[str, int] = {
     "NETWORK_FETCH_SECS": NETWORK_FETCH_SECS,
     "VENV_CREATE_SECS": VENV_CREATE_SECS,

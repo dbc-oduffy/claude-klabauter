@@ -136,12 +136,6 @@ from coordinator_core.bash_guards.tests.guard_message_exemptions import (
     GUARD_MESSAGE_EXEMPTIONS,
 )
 
-# ---------------------------------------------------------------------------
-# Population plumbing: one `_Cell` per fired corpus row, shared by all three
-# legs and by AC7's falsifiability tests, so every leg reasons over the
-# identical shape C1/C2/C3 actually produce.
-# ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class _Cell:
@@ -152,11 +146,6 @@ class _Cell:
 
 
 def _measure_all_cells() -> Tuple[List[_Cell], float]:
-    """Fire every row in C3's corpus (bash_guards' three bands, write_guards,
-    hooks) through C1's capture seam / write_guards' `guard.check()` /
-    hooks' `op()`, and measure each through C2. Returns `(cells, elapsed)`
-    -- `elapsed` is AC9's own measured wall-clock figure, not an assumed
-    one."""
     t0 = time.perf_counter()
     cells: List[_Cell] = []
 
@@ -169,9 +158,6 @@ def _measure_all_cells() -> Tuple[List[_Cell], float]:
 
     for row in WRITE_GUARD_ROWS:
         if row.unverified_reason is not None:
-            # Registration-only rows (AC2's job, not this leg's) -- no
-            # reproducible fire to measure. See guard_message_corpus.py's
-            # own `WriteGuardRow.unverified_reason` docstring.
             continue
         capture = fire_write_guard_row(row)
         measurement = measure_envelope(
@@ -196,32 +182,16 @@ def measured_corpus() -> Tuple[List[_Cell], float]:
 
 
 def _select_speakers(cells: List[_Cell]) -> List[_Cell]:
-    """THE speaker-selection function -- every leg below, and AC7's own
-    falsifiability tests, call this and only this to turn a raw cell
-    population into the speaker population. Uses C2's own `is_speaker`
-    (`prose_bytes > 0`), never `envelope is not None` (§ Problem's
-    "Correction: the speaker predicate reconstitutes the silent-shim trap
-    one level down")."""
     return [c for c in cells if c.measurement.is_speaker]
 
 
 def _require_nonempty_population(speakers: List[_Cell], leg_name: str) -> None:
-    """AC7's vacuity guard: an empty `speakers` list must never let a leg
-    pass by falling through an `all(...)`/`for` loop that is vacuously true
-    over zero elements -- that is silent, arithmetically valid Python, and
-    the exact failure mode that would let this whole suite measure nothing
-    while reporting green."""
     if not speakers:
         raise ValueError(
             "%s: zero speaker cells in the population -- refusing to pass "
             "vacuously. This means the corpus fixture returned nothing "
             "measurable, not that every guard in the tree is silent." % leg_name
         )
-
-
-# ---------------------------------------------------------------------------
-# Leg 1 -- ceiling, per band (AC3, AC14).
-# ---------------------------------------------------------------------------
 
 
 def leg1_ceiling_violations(cells: List[_Cell]) -> List[str]:
@@ -240,30 +210,8 @@ def leg1_ceiling_violations(cells: List[_Cell]) -> List[str]:
     return violations
 
 
-# ---------------------------------------------------------------------------
-# Leg 2 -- distribution: pooled mean, per-band deviation assertion (AC4,
-# AC14).
-# ---------------------------------------------------------------------------
-
-#: A band with fewer than this many speaker cells is ceiling-gated only
-#: (leg 1), never distribution-gated (leg 2) -- per § Problem's "Correction:
-#: leg 2's per-band distribution bound is noise over small bands". Chosen
-#: against this corpus's own live population: `platform-conditioned-deny`
-#: (n=2, grep-confirmed against `dispatch.py`'s live registration, not the
-#: plan's original "~3") and `directory:hooks` (n=3) are the two bands this
-#: threshold is built to exclude; `confinement-deny` (n=16),
-#: `advisory-rewrite` (n=16), and `directory:write_guards` (n=33) all clear
-#: it comfortably, so N=5 excludes exactly the bands the correction names
-#: as noise without excluding any band big enough to mean anything.
 MIN_BAND_POPULATION_FOR_LEG2_DEVIATION = 5
 
-#: No band's mean may exceed the pooled corpus-wide mean by more than this
-#: factor. Chosen with headroom over this corpus's own live ratios among
-#: qualifying (n>=5) bands -- the widest observed is
-#: `directory:write_guards` at ~1.13x the pooled mean -- so 1.5x catches a
-#: genuinely uniformly-verbose band settling at its own elevated baseline
-#: (the failure mode leg 2 exists to prevent) without false-reding on
-#: today's actual spread.
 LEG2_DEVIATION_FACTOR = 1.5
 
 
@@ -295,37 +243,15 @@ def leg2_band_deviation_violations(cells: List[_Cell]) -> List[str]:
     return violations
 
 
-# ---------------------------------------------------------------------------
-# Leg 3 -- ratchet: mean prose bytes per speaker cell, per band, may only
-# decrease (AC5).
-# ---------------------------------------------------------------------------
-
-
 def _ceil_to_5(value: float) -> int:
     return int(-(-value // 5) * 5)
 
 
-#: R11 (docs/plans/2026-09-22-spawn-budget-and-census.md, C10) -- the jitter
-#: allowance leg-3's baselines carry, sized from two census-row-3 runs at
-#: fire HEAD (32aacc6a73), one under the platform-default TMPDIR and one
-#: under an 80+-char TMPDIR (a Windows-length checkout path), the two spans
-#: this module's path-dependent prose is sensitive to. Per-band |delta|
-#: (default-TMPDIR mean minus long-TMPDIR mean): advisory-rewrite=0.0,
-#: confinement-deny=0.0, directory:hooks=2.1618, directory:write_guards=1.4681,
-#: platform-conditioned-deny=0.0. Max = 2.1618, `_ceil_to_5(2.1618)` = 5.
 JITTER_ALLOWANCE_BYTES = max(5, _ceil_to_5(2.1618))
 
-#: Live-measured baseline, this tree, this host, re-measured at C10
-#: (docs/plans/2026-09-22-spawn-budget-and-census.md, fire HEAD 32aacc6a73,
 #: default-TMPDIR run) as `_ceil_to_5(live_mean) + JITTER_ALLOWANCE_BYTES` --
-#: see module docstring's "Known limitation" note on cross-host/checkout
 #: jitter, which `JITTER_ALLOWANCE_BYTES` now absorbs explicitly (measured,
-#: not guessed) on top of `_ceil_to_5`'s per-band rounding.
-#: A future chunk that genuinely trims a band's prose must lower the
-#: matching entry here by hand (mirroring `test_operator_override_note_
 #: retains_affordances._MAX_BYTES`'s own manually-ratcheted-down precedent)
-#: -- this dict does not self-update, by design (a ratchet that rewrites
-#: its own ceiling on every green run is not a ratchet).
 RATCHET_BASELINE_MEAN_PROSE_BYTES_PER_BAND: Dict[str, int] = {
     "confinement-deny": 250 + JITTER_ALLOWANCE_BYTES,
     "advisory-rewrite": 165 + JITTER_ALLOWANCE_BYTES,
@@ -365,27 +291,8 @@ def leg3_ratchet_violations(cells: List[_Cell]) -> List[str]:
     return violations
 
 
-# ---------------------------------------------------------------------------
-# The three leg tests.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.pending_fix
 def test_leg1_ceiling_per_band(measured_corpus):
-    """Leg 1 is RED on arrival by construction, and that is the gate working.
-
-    The ceiling is what names today's over-cap guards; row C10 of
-    docs/plans/2026-09-11-trim-the-remaining-over-cap-guard-messages.md consumes
-    that list and brings each cell under cap or into C4's adjudicated manifest.
-    Until it lands, the marker keeps a shared branch's fast tier green for every
-    other session without weakening the assertion itself — C10 removes the
-    marker as its closing act, which is also what makes AC9's no-marker
-    requirement true at plan completion rather than at chunk-authoring time.
-
-    Deleting this marker without fixing the cells, or softening the assertion to
-    pass, both defeat the plan: the ceiling is the only thing that makes legs 2
-    and 3 mean anything.
-    """
     cells, _elapsed = measured_corpus
     violations = leg1_ceiling_violations(cells)
     assert not violations, "leg-1 ceiling violations (%d), none exempted in C4's manifest:\n%s" % (
@@ -436,23 +343,12 @@ def test_leg3_baseline_is_not_slack(measured_corpus):
     assert not violations, "leg-3 baseline is slack, not ratchet -- lower by hand:\n%s" % "\n".join(violations)
 
 
-# ---------------------------------------------------------------------------
-# AC2 -- dead-entry enforcement over `guard_message_exemptions.
 # GUARD_MESSAGE_EXEMPTIONS`. A lookup over the SAME cells `measured_corpus`
-# already fires once (`_measure_all_cells`), not a second firing path.
-# ---------------------------------------------------------------------------
 
 
 def _stale_exemptions(
     manifest: Dict[Tuple[str, str], str], cells: List[_Cell]
 ) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
-    """Looks `manifest` entries up as a dict keyed by `(guard, row_id)`
-    against `cells` (the values `measured_corpus`'s `_measure_all_cells`
-    already produced). A missing key is an unknown entry -- no corpus row
-    exists for it, so it names no reproducible cell. A present key whose
-    measurement is `not over_cap` is a stale entry -- the guard's message
-    must have been trimmed or the input stopped triggering it. Pure: never
-    fires anything itself."""
     cell_by_key: Dict[Tuple[str, str], MessageSizeMeasurement] = {
         (c.guard, c.row_id): c.measurement for c in cells
     }
@@ -464,9 +360,6 @@ def _stale_exemptions(
 
 
 def test_exemption_entries_name_known_corpus_rows(measured_corpus):
-    """An exemption naming no corpus row is dead config -- a corpus row
-    exists only for a firing guard, so this is a stricter, corpus-grounded
-    replacement for the retired bash-only registered-guard check."""
     cells, _elapsed = measured_corpus
     unknown_keys, _under_cap_keys = _stale_exemptions(GUARD_MESSAGE_EXEMPTIONS, cells)
     assert not unknown_keys, (
@@ -489,9 +382,6 @@ def test_exemption_entries_still_exceed_cap(measured_corpus):
 
 
 def test_exemption_entries_carry_a_written_reason():
-    """Every value is a non-empty prose string -- guards against a future
-    entry landing with a placeholder/blank reason, the exact failure mode
-    the written-reason requirement exists to prevent."""
     blank = [
         key for key, reason in GUARD_MESSAGE_EXEMPTIONS.items() if not reason or not reason.strip()
     ]
@@ -536,12 +426,6 @@ def test_ac2b_stale_exemptions_flags_a_manifest_entry_that_no_longer_exceeds_cap
     assert under_cap_keys == [(under_cap_cell.guard, under_cap_cell.row_id)]
 
 
-# ---------------------------------------------------------------------------
-# AC7 -- the falsifiability tests. Without these the three legs above can
-# pass vacuously while measuring nothing; not optional.
-# ---------------------------------------------------------------------------
-
-
 def test_ac7a_speaker_selection_excludes_suppression_manufactured_zero_prose_cell():
     """`find-exec-rewrite` (ADVISORY_REWRITE, WINDOWS_COST_ONLY) fired live
     on a non-Windows host returns a real, speaking envelope. Passing that
@@ -550,12 +434,6 @@ def test_ac7a_speaker_selection_excludes_suppression_manufactured_zero_prose_cel
     WINDOWS_COST_ONLY advisory is suppressed off-Windows -- manufactures the
     exact rewrite-leg-only, zero-prose, non-`None` envelope § Problem's
     correction warns about. `_select_speakers` must exclude it."""
-    # `\;`, not `+`, and the terminator is load-bearing for the FIXTURE only:
-    # this case needs any real speaking envelope out of `find-exec-rewrite` so
-    # the suppression path has something to manufacture from, and the guard
-    # stopped speaking to `+` shapes at C1 of the 2026-08-31 batched-form plan
-    # (an already-batched command gets a silent allow, because the "forks one
-    # process PER MATCH" claim is false of it). Nothing here is about find.
     cmd = "find . -type f -exec rm {} \\;"
     sid = "ac7a-suppressed-rewrite-only-%s" % uuid.uuid4().hex
     capture = capture_one_guard(
@@ -589,10 +467,6 @@ def test_ac7a_speaker_selection_excludes_suppression_manufactured_zero_prose_cel
 
 
 def test_ac7b_over_cap_speaker_injected_is_present_in_selected_population(measured_corpus):
-    """An over-cap speaker cell, injected into the real fired population,
-    must appear in `_select_speakers`'s output directly -- asserted on the
-    selected set itself, not on whether it moves a downstream statistic (§
-    Problem's "Correction: AC7's second clause is false for a median...")."""
     cells, _elapsed = measured_corpus
     synthetic_envelope = {
         "hookSpecificOutput": {"additionalContext": "x" * (MESSAGE_PROSE_CAP_BYTES + 500)}
@@ -607,9 +481,6 @@ def test_ac7b_over_cap_speaker_injected_is_present_in_selected_population(measur
 
 
 def test_gate_fails_on_deliberately_vacuous_population():
-    """Every leg's population function must refuse to pass vacuously over
-    zero speaker cells, rather than let an empty `for`/`all(...)` loop
-    report a clean, meaningless green."""
     with pytest.raises(ValueError):
         leg1_ceiling_violations([])
     with pytest.raises(ValueError):
@@ -618,11 +489,6 @@ def test_gate_fails_on_deliberately_vacuous_population():
         leg2_pooled_mean([])
     with pytest.raises(ValueError):
         leg3_ratchet_violations([])
-
-
-# ---------------------------------------------------------------------------
-# AC13 -- deny-survives-over-cap (folded in from the removed C7).
-# ---------------------------------------------------------------------------
 
 
 def test_ac13_confinement_deny_survives_message_forced_over_cap():
@@ -657,11 +523,6 @@ def test_ac13_confinement_deny_survives_message_forced_over_cap():
     assert padded_envelope["hookSpecificOutput"]["permissionDecision"] == original_hso["permissionDecision"]
 
 
-# ---------------------------------------------------------------------------
-# AC9 -- fast tier, measured wall-clock.
-# ---------------------------------------------------------------------------
-
-
 def test_ac9_measured_wallclock_runtime_reported(measured_corpus):
     cells, elapsed = measured_corpus
     assert elapsed > 0
@@ -671,16 +532,6 @@ def test_ac9_measured_wallclock_runtime_reported(measured_corpus):
     )
 
 
-# ---------------------------------------------------------------------------
-# Corpus total -- reporting/sanity constant, NOT the leg-3 ratchet (see
-# module docstring).
-# ---------------------------------------------------------------------------
-
-#: Roughly 1.5x this corpus's own live-measured pooled total (~59.3KB across
-#: 70 speaker cells at authoring time) -- a generous, coarse guard-rail
-#: against a runaway population bug (e.g. a row registered twice), not a
-#: precision budget. The three legs above are the precision gates; this is
-#: a defense-in-depth sanity check in the same inline-constant-with-a-
 #: justifying-docstring style as `claude_md_budget.SOFT_LIMIT_BYTES`/
 #: `HARD_LIMIT_BYTES`, `test_operator_override_note_retains_affordances.
 #: _MAX_BYTES`, and `guard_memory_store_cap.MAX_MEMORY_MD_BYTES`.

@@ -137,29 +137,16 @@ from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
 
 _STATE_SUBDIR = "state"
 
-#: Review: code-reviewer — duplicated from the C3 shim's
 #: `RESOLUTION_RESOLVED_ENGINE` module-level string constant
-#: (`coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py`) rather than loading
-#: the shim just to read one string, mirroring the SAME duplication pattern
-#: `coordinator_core.engine_root` already uses for
 #: `_RESOLUTION_LIVE_WORKING_TREE_LITERAL` (see that module's comment for the
-#: full rationale). Per the shim's own docstring, this string is "part of the
-#: contract, not just its name" — if the shim's constant value ever changes,
-#: this one must change with it.
 _RESOLUTION_RESOLVED_ENGINE_LITERAL = "resolved-engine"
 
 
 class StateRootError(RuntimeError):
-    """Rc-1 shape: a state-root resolution failure (bad flags, unresolvable root)."""
+    pass
 
 
 class CrossCuttingStateRoot(StateRootError):
-    """Rc-2 shape: Rule 3 artifact classified cross-cutting; human routing required.
-
-    Subclasses StateRootError so a caller that only distinguishes success/failure
-    still treats it as a failure, while a caller that wants the bash oracle's
-    exit-2 semantics can catch this specifically.
-    """
 
     def __init__(self, artifact: str, message: str):
         super().__init__(message)
@@ -168,13 +155,10 @@ class CrossCuttingStateRoot(StateRootError):
 
 
 def _state_of(root: str) -> str:
-    """Append the ``state`` subdir to a resolved root, matching the bash oracle's
-    ``printf '%s/state'`` — os.path.join keeps this correct on Windows roots."""
     return os.path.join(root, _STATE_SUBDIR)
 
 
 def _doe_state() -> str:
-    """Rule 1 helper: DoE doctrine state root. Fail-loud; no claude-klabauter fallback."""
     doe = coordinator_doe_root()
     if not doe:
         raise StateRootError(
@@ -291,12 +275,6 @@ def _live_engine_source_root(refused_root: str) -> Optional[str]:
 
 
 def _resolve_git_root(git_root: Optional[str] = None) -> str:
-    """Resolve cwd's git root for Rule 5, or return an explicitly-supplied
-    ``git_root`` unchanged (skips the subprocess round-trip entirely for a
-    caller that already resolved its own repo root — see
-    ``coordinator_state_root``'s ``git_root`` parameter). Fail-loud
-    (StateRootError) when empty or unresolvable — never silently pick a
-    branch (detect-then-fail-loud)."""
     if git_root:
         return git_root
     resolved = _repo_root_seam.show_toplevel()
@@ -316,21 +294,6 @@ def coordinator_state_root(
     artifact: Optional[str] = None,
     git_root: Optional[str] = None,
 ) -> str:
-    """Resolve the coordinator state-root path via the 5-rule dispatch.
-
-    Returns the resolved ``<root>/state`` path. Raises StateRootError on failure
-    (the bash oracle's rc-1) or CrossCuttingStateRoot on a cross-cutting artifact
-    (Rule 3, the bash oracle's rc-2).
-
-    ``git_root`` (Rule 5 only; ignored when
-    ``central=True``) lets a caller that has already resolved its own repo
-    root (e.g. a subprocess-spawn boundary that would otherwise need a
-    process-global ``os.chdir`` to make Rule 5's cwd-based git-toplevel
-    resolution see the right tree) pass it through explicitly instead.
-    Mirrors ``coordinator_core.meta_repo_identity.is_meta_repo``'s own
-    optional ``git_root`` parameter.
-    """
-    # Argument validation (mirrors the bash oracle).
     if subject is not None and artifact is not None:
         raise StateRootError(
             "coordinator_state_root: subject and artifact are mutually exclusive; "
@@ -338,24 +301,22 @@ def coordinator_state_root(
         )
 
     if central:
-        # Rule 1 / Rule 2: explicit subject override.
         if subject is not None:
             if subject == "doctrine":
-                return _doe_state()  # Rule 1
+                return _doe_state()
             if subject == "engine":
-                return _claude_klabauter_state()  # Rule 2
+                return _claude_klabauter_state()
             raise StateRootError(
                 f"coordinator_state_root: unknown subject value '{subject}'; "
                 "expected 'engine' or 'doctrine'"
             )
 
-        # Rule 3: artifact-subject classification routes to the appropriate plane.
         if artifact is not None:
             classified = classify(artifact)
             if classified == Subject.DOCTRINE:
-                return _doe_state()  # -> Rule 1
+                return _doe_state()
             if classified == Subject.ENGINE:
-                return _claude_klabauter_state()  # -> Rule 2
+                return _claude_klabauter_state()
             # Subject.CROSS_CUTTING: fail-loud, preserve exit-2 semantics.
             raise CrossCuttingStateRoot(artifact, remediation_message(artifact))
 
@@ -363,9 +324,6 @@ def coordinator_state_root(
         return _claude_klabauter_state()
 
     # Rule 5: default branch (central=False). BACKWARD-COMPAT DEFAULT.
-    # Call _resolve_git_root() zero-arg when no override is supplied (matches
-    # its long-standing zero-arg call shape byte-for-byte) and only pass
-    # git_root through when a caller actually supplied one.
     resolved_git_root = _resolve_git_root(git_root) if git_root else _resolve_git_root()
     try:
         meta = is_meta_repo(resolved_git_root)
@@ -373,20 +331,8 @@ def coordinator_state_root(
         raise StateRootError(str(exc)) from exc
 
     if meta:
-        # Meta-repo -> central state is in claude-klabauter.
         return _claude_klabauter_state()
-    # Sibling repo -> per-repo state stays in the repo itself, UNLESS this
-    # sibling IS the registered published-engine mirror clone (see this
-    # module's docstring, "Published-mirror guard") — reuses the exact same
-    # `repos.claude_klabauter` discriminator `_claude_klabauter_state()` already
-    # applies via `coordinator_engine_root_with_class`, exposed standalone as
-    # `published_engine_mirror_path()` so this branch can ask the question
-    # for an arbitrary candidate path rather than only for "my own" root.
     _mirror = published_engine_mirror_path()
-    # realpath (not normpath) so a registry value and a git-toplevel-resolved
-    # path that differ only by an unresolved symlink component (e.g. macOS
-    # /var -> /private/var) still compare equal -- normpath alone would
-    # under-fire on exactly that class of path.
     if _mirror and os.path.realpath(_mirror) == os.path.realpath(resolved_git_root):
         raise StateRootError(
             "coordinator_state_root: cwd's git root "
@@ -401,24 +347,6 @@ def coordinator_state_root(
 
 
 def coordinator_state_root_central() -> str:
-    """Shared ``coordinator_state_root(central=True)`` wrapper, folding
-    ``StateRootError`` to ``""``.
-
-    Previously hand-duplicated verbatim across
-    ``coordinator_core.ops.central_run_due`` and
-    ``coordinator_core.ops.learn_lessons_roots`` (Rule 4 -- no subject/artifact
-    given, so it resolves to ``<coordinator_engine_root()>/state``, matching
-    the retired bash oracle's ``coordinator-state-root.sh --central``
-    default). Centralized here so both callers share one definition instead of
-    two independently-maintained copies -- the same C11 centralization
-    principle this porting wave already applied to
-    ``resolve_coordinator_clone.resolve_content_root()``.
-
-    Returns "" on any failure -- callers that shelled out to
-    ``coordinator-state-root.sh --central`` folded a failed resolution into an
-    unconditional string-concat rather than checking exit code; this
-    preserves that contract exactly.
-    """
     try:
         return coordinator_state_root(central=True)
     except StateRootError:
@@ -426,16 +354,8 @@ def coordinator_state_root_central() -> str:
 
 
 def print_map() -> str:
-    """Return the central map as a single-line JSON object (no trailing newline),
-    mirroring ``coordinator_state_root --print-map``.
-
-    Unresolvable subjects emit JSON null (not a hard error); one WARN line per
-    unresolvable subject is written to stderr. Always returns a string (rc 0
-    semantics).
-    """
     subjects: dict = {}
 
-    # Doctrine root. On failure: null + one stderr WARN line, continue.
     doe = coordinator_doe_root()
     if doe:
         subjects["doctrine"] = _state_of(doe)
@@ -446,12 +366,6 @@ def print_map() -> str:
         )
         subjects["doctrine"] = None
 
-    # Engine root. Routed through the class-aware resolver so the printed
-    # map reflects the same published-mirror guard `_claude_klabauter_state()` applies
-    # (Rule 2/4/5) — the class-less `coordinator_engine_root()` would happily
-    # report a mirror path that the resolver itself refuses to hand out for
-    # writing, which is worse than no diagnostic. On failure OR on a resolved
-    # published-mirror class: null + one stderr WARN line, continue.
     try:
         engine_root, resolution_class = coordinator_engine_root_with_class()
         if resolution_class == _RESOLUTION_UNVERIFIED_ENV_LITERAL:
@@ -480,10 +394,6 @@ def print_map() -> str:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """CLI-shaped wrapper preserving the bash oracle's exit codes for parity:
-    prints the resolved path to stdout (no trailing newline) and returns 0; or
-    writes remediation to stderr and returns 1 (StateRootError) / 2
-    (CrossCuttingStateRoot). ``--print-map`` prints the JSON map and returns 0."""
     args = list(sys.argv[1:] if argv is None else argv)
 
     central = False

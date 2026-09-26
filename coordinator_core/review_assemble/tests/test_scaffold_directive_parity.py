@@ -1,61 +1,3 @@
-"""coordinator_core.review_assemble.tests.test_scaffold_directive_parity --
-C5's parity pin.
-
-Purpose: `review_assemble` emits the `review-findings` scaffold through the
-shared `coordinator-doc-new` directive constructor
-(`scaffold_directive.build_scaffold_directive`, C1), for the one row C0's
-checked-in table (`coordinator_core/ops/doctype_hosts.py`) marks `emitted`
-against this module: `review-findings` (keyed `ceremony="review-assemble"`).
-This pin is the module's own instance of the plan's § Test surface
-"Parity/pin per emitted type" shape
-(`coordinator_core/frontmatter/tests/test_plan_scaffold_census_parity.py`'s
-precedent, same idiom `roadmap_planning_assemble`'s C3 pin already ships):
-it calls `review_assemble.brief()` -- never hand-assembles a directive --
-and checks the resulting `args` against `coordinator-doc-new`'s OWN real
-argument parser, so a future required-flag addition on that CLI fails this
-test rather than silently authoring an invalid scaffold.
-
-Loaded by file path (`importlib.machinery.SourceFileLoader`), same idiom as
-`test_plan_scaffold_census_parity.py` and
-`roadmap_planning_assemble/tests/test_scaffold_directive_parity.py`:
-`coordinator-doc-new.py` is an extensionless-polyglot-style entry point,
-imported for its `_build_parser` alone -- `main()` is never invoked, so
-this test writes nothing to disk and spawns no subprocess (mirrors this
-module's own zero-subprocess-in-`brief()` invariant, § Which discriminator
-this plan uses).
-
-Covers (AC2/AC3/AC4, this module's slice):
-  - `brief(slice_id=..., scope=[...])` emits a `review-findings` directive
-    whose `cli == "coordinator-doc-new"` and whose `args` parse clean under
-    the real parser, with both `required=True` flags present (`--slice`,
-    `--scope`) and `--scope` comma-joined (not repeated -- `--scope` is not
-    an `append` flag on the real parser).
-  - The emitted directive's `--out` resolves under the repo root (AC4's
-    containment, exercised end-to-end through this host rather than
-    re-asserted at the constructor level -- that unit coverage is C2's).
-  - Omitting either `slice_id` or `scope` emits no directive at all --
-    the additive-only, backward-compatible shape this module's `brief`
-    docstring promises every pre-C5 caller (mirrors C3's own "neither
-    emitted" pin).
-
-Negative-spec: does NOT re-assert the constructor's own unit-level
-behaviour (omit-when-None, `--out` escape rejection, the falsifier reds) --
-that is C2's `roadmap_planning_assemble/tests/test_scaffold_directive.py`,
-a sibling test module this one does not duplicate. Does NOT assert on
-`already_satisfied` truthiness for an on-disk fixture -- the constructor's
-own existence-stat behaviour is C2's unit surface; this pin only asserts
-the key is present and boolean. Does NOT exercise `residue.brief` or the
-`--surface` ladder -- that is `test_residue.py`'s and
-`test_review_assemble_seam_exercise.py`'s surface, untouched by C5. Zero
-subprocess: `coordinator-doc-new.py` is exec'd in-process via
-`SourceFileLoader`, never invoked as a CLI. No `pytest.mark.spawns_process`.
-
-Spec backlink: docs/plans/2026-09-11-document-scaffolding-is-emitted-not-
-remembered.md, chunk C5.
-
-Run:
-    pytest coordinator_core/review_assemble/tests/test_scaffold_directive_parity.py -v
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -138,9 +80,6 @@ class ReviewFindingsScaffoldParityTest(unittest.TestCase):
 
 
 class NeitherEmittedWithoutBothInputsTest(unittest.TestCase):
-    """Additive-only: a pre-C5-shaped caller (missing `slice_id` or
-    `scope`) gets no `review-findings` directive -- the module docstring's
-    backward-compatibility claim, pinned."""
 
     def test_missing_scope_emits_no_directive(self):
         result = review_assemble.brief(slice_id="A")

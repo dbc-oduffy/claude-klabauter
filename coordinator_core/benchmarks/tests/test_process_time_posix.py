@@ -156,12 +156,6 @@ if [ "$n" -gt 1 ]; then
   /bin/sh "$0" $((n-1))
 fi
 """
-# A self-recursing shell script, not nested `-c` quoting: nesting depth 19
-# via `shlex.quote`-wrapped `-c` strings grows the argv exponentially and
-# fails outright ("Argument list too long") well before depth 19 (verified
-# during this file's own construction) -- `/bin/sh "$0" $((n-1))` spawns
-# exactly one new process per decrement, giving a count that IS `n`, no
-# quoting blow-up, and no ambiguity about what was actually counted.
 
 
 def _require_darwin() -> None:
@@ -171,10 +165,6 @@ def _require_darwin() -> None:
 
 @pytest.fixture(scope="module")
 def chain_script(tmp_path_factory):
-    # Gated behind the module's own Darwin skip (Finding 4, S3-tests
-    # review): a git-less non-Darwin box should skip this Darwin-only file
-    # cleanly, not fail collection over dead setup work for tests that
-    # would skip anyway.
     _require_darwin()
     path = tmp_path_factory.mktemp("process_time_posix") / "chain.sh"
     path.write_text(_CHAIN_SCRIPT)
@@ -184,29 +174,13 @@ def chain_script(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def git_binary():
-    # Gated behind the module's own Darwin skip (Finding 4, S3-tests
-    # review): a git-less non-Darwin box should skip cleanly rather than
-    # fail collection on this fixture's own assert.
     _require_darwin()
     git_path = shutil.which("git")
     assert git_path, "no git binary resolvable on PATH -- fixture cannot pin a binary that isn't there"
     return git_path
 
 
-# ---------------------------------------------------------------------------
-# AC10 -- negative spec: a wall-clock value smuggled under the process-time
-# key must fail this test.
-# ---------------------------------------------------------------------------
-
-
 def test_process_time_key_is_not_wall_clock():
-    """`sleep 0.2` is large wall, near-zero CPU -- a wall-clock value
-    reintroduced behind `process_time_ms` (DR-344 names this exact
-    substitution) would read ~200ms here; the real process-time primitive
-    reads a few ms of scheduling/exec overhead only. The two are asserted
-    to differ by at least an order of magnitude, not merely "process_time
-    < wall" (which a slightly-mismeasured-but-still-wall-clock-shaped value
-    could also satisfy)."""
     _require_darwin()
     result = batched_process_time_ms(["/bin/sh", "-c", "sleep 0.2"], k=1)
     assert result["rc"] == 0, f"sleep fixture did not exit 0: {result!r}"
@@ -222,25 +196,9 @@ def test_process_time_key_is_not_wall_clock():
     )
 
 
-# ---------------------------------------------------------------------------
-# AC11/AC12 -- triangulated exact counts across three independently-derived
-# fixtures, chosen so a x2 (or x0.5) defect cannot hide behind any one of
-# them (module docstring).
-# ---------------------------------------------------------------------------
-
-
 def test_nested_shell_chain_count_is_exactly_prime_nineteen(chain_script):
-    """The key triangulation leg: 19 is PRIME, so a doubling defect (38) or
-    a halving defect (9.5) cannot alias with the true count -- unlike an
-    even fixture, where a x2 defect is invisible."""
     _require_darwin()
     result = batched_process_time_ms(["/bin/sh", chain_script, "19"], k=3)
-    # `rc` reports only the LAST of the k=3 invocations by primitive contract
-    # (process_time.py) -- this check cannot see an earlier invocation's rc
-    # through the current API (Finding 1, S3-tests review). Kept at k=3
-    # rather than dropped to k=1: the exact `== 19.0` equality below is what
-    # actually carries the rest -- an off-invocation folded into the k=3
-    # average would almost certainly perturb it away from an exact integer.
     assert result["rc"] == 0, f"19-chain fixture did not exit 0: {result!r}"
     assert result["procs_per_call"] == 19.0, (
         f"19-process nested /bin/sh chain measured procs_per_call="
@@ -250,16 +208,6 @@ def test_nested_shell_chain_count_is_exactly_prime_nineteen(chain_script):
 
 
 def test_python_to_git_oracle_count_is_exactly_two(git_binary):
-    """DERIVED, not observed-then-blessed: `1 interpreter + 1 git` (2.0),
-    against the Windows decomposition in the now-deleted
-    `test_detect_staged_rollback_spawn_budget.py`
-    (1 interpreter + 1 git + 1 conhost) minus the conhost term, which has
-    no Darwin analogue -- `_darwin_one_invocation` performs no console
-    suppression step to allocate one for. `sys.executable` and an
-    explicit, PATH-resolved git binary are used rather than a bare
-    `python3`/`git`: an xcode-select `python3` stub or a Homebrew-vs-
-    system git mismatch would inflate this count for a reason unrelated
-    to the instrument under test."""
     _require_darwin()
     cmd = [
         sys.executable,
@@ -268,9 +216,6 @@ def test_python_to_git_oracle_count_is_exactly_two(git_binary):
         "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)",
     ]
     result = batched_process_time_ms(cmd, k=3)
-    # rc covers only the final of the k=3 invocations (primitive contract);
-    # the exact `== 2.0` equality below carries the rest (Finding 1,
-    # S3-tests review).
     assert result["rc"] == 0, f"python->git oracle fixture did not exit 0: {result!r}"
     assert result["procs_per_call"] == 2.0, (
         f"python->git oracle measured procs_per_call={result['procs_per_call']}, "
@@ -334,14 +279,8 @@ def test_immediate_reap_adversary_count_is_exactly_five_hundred_one():
 
 
 def test_deep_chain_count_is_exactly_prime_eleven(chain_script):
-    """The third, independent triangulation leg -- also prime (11), so it
-    cannot alias with a doubling/halving defect against itself OR against
-    the depth-19 fixture above."""
     _require_darwin()
     result = batched_process_time_ms(["/bin/sh", chain_script, "11"], k=3)
-    # rc covers only the final of the k=3 invocations (primitive contract);
-    # the exact `== 11.0` equality below carries the rest (Finding 1,
-    # S3-tests review).
     assert result["rc"] == 0, f"11-chain fixture did not exit 0: {result!r}"
     assert result["procs_per_call"] == 11.0, (
         f"11-process deep chain measured procs_per_call="
@@ -349,29 +288,12 @@ def test_deep_chain_count_is_exactly_prime_eleven(chain_script):
     )
 
 
-# ---------------------------------------------------------------------------
 # AC6 -- the ESRCH seam. NOTE_TRACK is off-limits (C1); a reaped/nonexistent
-# pid drives the same registration-rejection path.
-# ---------------------------------------------------------------------------
 
 
 def test_registering_a_reaped_pid_raises_rather_than_reporting_one_process(monkeypatch):
-    """A pid this test itself spawned and already reaped via `os.waitpid`
-    is genuinely, unambiguously dead before `_darwin_one_invocation` ever
-    tries to register a kevent on it -- `_posix_spawnp_suspended` is
-    monkeypatched to hand that pid back as the "freshly spawned" root, so
-    kevent registration hits ESRCH for real. The observable failure
-    (verified live during this file's construction) is a raise --
-    concretely `ProcessLookupError` from the subsequent `os.kill` on the
-    already-reaped pid -- never a silent `procs_per_call == 1`."""
     _require_darwin()
-    # Darwin-only site (_require_darwin() above; os.waitpid is POSIX-only), so
-    # the splat is inert AT RUNTIME -- review: coordinatorcode-reviewer
     # .ad915a07f1fc080c3 Finding 4, declined. It is not inert to the STANDING
-    # GATE: `test_no_bare_test_tree_spawn` walks the test tree by AST and knows
-    # nothing about platform guards, so deleting the splat reads as a bare
-    # spawn and trips it. Teaching that gate to evaluate `_require_darwin()`
-    # reachability, for one site, costs more than a no-op mapping does.
     proc = subprocess.Popen(["/bin/sh", "-c", "true"], **no_console_passthrough_kwargs())
     reaped_pid = proc.pid
     os.waitpid(reaped_pid, 0)
@@ -382,24 +304,7 @@ def test_registering_a_reaped_pid_raises_rather_than_reporting_one_process(monke
         process_time._darwin_one_invocation(["/bin/sh", "-c", "true"], None, None)
 
 
-# ---------------------------------------------------------------------------
-# AC4 -- process-time is correctly SCOPED: unrelated concurrent child CPU,
-# reaped by a different thread, must not move the measured figure.
-# ---------------------------------------------------------------------------
-
-
 def _spawn_detached_noise_and_reap_first_child(cpu_ms: int) -> None:
-    """Double-forks a noise process that burns roughly `cpu_ms` of CPU,
-    detached from the measuring process's own child list. The immediate
-    child forks once more then exits immediately (reaped synchronously
-    here, before this function returns), orphaning the grandchild -- which
-    `setsid()`s and execs the actual busy loop, running concurrently with
-    whatever measurement the caller performs next, entirely outside this
-    process's `proc_listchildpids(os.getpid())` view. This is what lets
-    the noise be genuine and concurrent without tripping
-    `_darwin_one_invocation`'s own pre/post ambient-children purity
-    assertion (see module docstring above for why a same-process,
-    different-thread `Popen.wait()` does not work as a seam here)."""
     busy_loop = (
         "import time; t0 = time.process_time();\n"
         f"while (time.process_time() - t0) * 1000.0 < {cpu_ms}: pass"
@@ -415,13 +320,6 @@ def _spawn_detached_noise_and_reap_first_child(cpu_ms: int) -> None:
 
 
 def test_measurement_is_scoped_and_unmoved_by_concurrent_unrelated_child_cpu():
-    """Interleaved control/treatment, not a bare before/after (load
-    variance note, dispatch brief): each of `n` rounds measures the light
-    fixture once with no noise (control) and once with ~200ms of unrelated,
-    detached, concurrent CPU running on the box (treatment), and the two
-    medians are compared with an explicit tolerance. This asserts the
-    NUMBER stays put under contamination pressure -- not that some guard
-    fired, which a guard that fires on nothing would also satisfy."""
     _require_darwin()
     light_cmd = [sys.executable, "-c", "pass"]
     n = 5
@@ -429,9 +327,6 @@ def test_measurement_is_scoped_and_unmoved_by_concurrent_unrelated_child_cpu():
 
     control = []
     treatment = []
-    # Both k=3 probes below: rc covers only the final invocation (primitive
-    # contract, Finding 1, S3-tests review) -- this test's actual claim is
-    # carried by the control/treatment median comparison, not by rc.
     for _ in range(n):
         control_result = batched_process_time_ms(light_cmd, k=3)
         assert control_result["rc"] == 0
@@ -451,12 +346,6 @@ def test_measurement_is_scoped_and_unmoved_by_concurrent_unrelated_child_cpu():
         "this is exactly the getrusage(RUSAGE_CHILDREN) process-wide "
         "contamination trap C1's wait4-scoped fix exists to close"
     )
-
-
-# ---------------------------------------------------------------------------
-# AC18 -- the instrument's own overhead, priced against the same brightline
-# it gates.
-# ---------------------------------------------------------------------------
 
 
 def test_instrument_overhead_is_priced_against_the_brightline():

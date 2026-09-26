@@ -41,8 +41,6 @@ from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -251,20 +249,17 @@ def test_emit_goal_from_artifact(tmp_path):
     repo = os.path.join(tmp_base, "repo")
     _write_goal(repo, "goal-legibility.yaml", FIXTURE_LEGIBILITY)
 
-    # --- T1/T2: single valid goal -> exit 0, exactly one invocation ---
     log1 = os.path.join(tmp_base, "log1.log")
     r1 = _run_emitter(repo, shim, log1)
     assert r1.returncode == 0, f"emitter exits 0 for a valid goal artifact: stderr={r1.stderr}"
     lines1 = _read_log(log1)
     assert len(lines1) == 1, f"append-goal-event.py invoked exactly once, got {len(lines1)}"
 
-    # --- T3/T4/T5: invocation carries period / period_value / identity-chain text ---
     inv = lines1[0]
     assert "--period repo" in inv, inv
     assert "DoE-2026" in inv, inv
     assert "goal-legibility" in inv, inv
 
-    # --- T6: two goal artifacts -> two invocations ---
     _write_goal(repo, "goal-tooling.yaml", FIXTURE_TOOLING)
     log6 = os.path.join(tmp_base, "log6.log")
     r6 = _run_emitter(repo, shim, log6)
@@ -272,7 +267,6 @@ def test_emit_goal_from_artifact(tmp_path):
     lines6 = _read_log(log6)
     assert len(lines6) == 2, f"two goal artifacts -> two invocations, got {len(lines6)}"
 
-    # --- T7: identity chain stability across two independent runs ---
     log7a = os.path.join(tmp_base, "log7a.log")
     log7b = os.path.join(tmp_base, "log7b.log")
     _run_emitter(repo, shim, log7a)
@@ -280,7 +274,6 @@ def test_emit_goal_from_artifact(tmp_path):
     assert sorted(_read_log(log7a)) == sorted(_read_log(log7b)) and _read_log(log7a), \
         "identity chain stable — same args across two runs"
 
-    # --- T8: missing 'period' field -> exit 2, not forwarded ---
     repo_bad = os.path.join(tmp_base, "repo-bad")
     _write_goal(repo_bad, "bad-goal.yaml", FIXTURE_BAD)
     log8 = os.path.join(tmp_base, "log8.log")
@@ -288,24 +281,20 @@ def test_emit_goal_from_artifact(tmp_path):
     assert r8.returncode == 2, f"missing period field -> exit 2, rc={r8.returncode}"
     assert not _read_log(log8), "bad goal not forwarded to append-goal-event.py"
 
-    # --- T9: absent state/goals dir -> exit 0 ---
     repo_nogoals = os.path.join(tmp_base, "repo-nogoals")
     os.makedirs(repo_nogoals, exist_ok=True)
     r9 = _run_emitter(repo_nogoals, shim, os.path.join(tmp_base, "log9.log"))
     assert r9.returncode == 0, f"absent state/goals dir -> exit 0, rc={r9.returncode}"
 
-    # --- T10: empty state/goals dir -> exit 0 ---
     repo_empty = os.path.join(tmp_base, "repo-emptygoals")
     os.makedirs(os.path.join(repo_empty, "state", "goals"), exist_ok=True)
     r10 = _run_emitter(repo_empty, shim, os.path.join(tmp_base, "log10.log"))
     assert r10.returncode == 0, f"empty state/goals dir -> exit 0, rc={r10.returncode}"
 
-    # --- T11: --dry-run does not invoke append-goal-event.py ---
     log11 = os.path.join(tmp_base, "log11.log")
     _run_emitter(repo, shim, log11, extra_args=["--dry-run"])
     assert not _read_log(log11), "--dry-run does not invoke append-goal-event.py"
 
-    # --- T12: invocation carries --repo and --root ---
     log12 = os.path.join(tmp_base, "log12.log")
     env12 = dict(os.environ)
     env12["COORDINATOR_APPEND_GOAL_HELPER"] = shim
@@ -321,7 +310,6 @@ def test_emit_goal_from_artifact(tmp_path):
     assert "myorg/myrepo" in inv12, inv12
     assert "--root" in inv12, inv12
 
-    # --- T13/T14: C11 passthrough — parent_goal_id present-as-null, weekly_perceptible absent-when-absent ---
     repo_c11 = os.path.join(tmp_base, "repo-c11")
     _write_goal(repo_c11, "goal-no-parent.yaml", FIXTURE_NO_PARENT)
     log13 = os.path.join(tmp_base, "log13.log")
@@ -332,7 +320,6 @@ def test_emit_goal_from_artifact(tmp_path):
     assert lines13 and "--weekly-perceptible" not in lines13[0], \
         f"weekly_perceptible absent-from-artifact -> flag absent (D9): {lines13}"
 
-    # --- T15: C11 passthrough — parent_goal_id + weekly_perceptible present ---
     _write_goal(repo_c11, "goal-with-parent.yaml", FIXTURE_WITH_PARENT)
     log15 = os.path.join(tmp_base, "log15.log")
     _run_emitter(repo_c11, shim, log15)
@@ -341,7 +328,6 @@ def test_emit_goal_from_artifact(tmp_path):
     assert "--parent-goal-id goal-parent-quarter" in inv15, inv15
     assert "--weekly-perceptible true" in inv15, inv15
 
-    # --- T16: key_results_status[] projection drops evidence_source + per-KR weekly_perceptible ---
     repo_kr = os.path.join(tmp_base, "repo-krstatus")
     _write_goal(repo_kr, "goal-kr-status.yaml", FIXTURE_KR_STATUS)
     log16 = os.path.join(tmp_base, "log16.log")
@@ -353,16 +339,11 @@ def test_emit_goal_from_artifact(tmp_path):
     assert "evidence_source" not in inv16, "key_results_status[] JSON drops evidence_source (C11 field map)"
     assert "weekly_perceptible" not in inv16, "key_results_status[] JSON drops per-KR weekly_perceptible (C11 field map)"
 
-    # --- T17: key_results_status[] JSON is valid and machine-parseable ---
-    # Uses raw_decode (not a full-string json.loads) because --key-results-status
-    # is no longer guaranteed to be the last flag on the invocation line
-    # (--status, forwarded after it as of 2026-07-25, trails it here).
     assert inv16 and "--key-results-status" in inv16
     json_start = inv16.index("--key-results-status") + len("--key-results-status ")
     parsed, _end = json.JSONDecoder().raw_decode(inv16[json_start:])
     assert isinstance(parsed, list) and parsed and parsed[0].get("id") == "kr-1", parsed
 
-    # --- T18-T20: artifact status -> wire status mapping (--status forwarding) ---
     repo_status = os.path.join(tmp_base, "repo-status")
     _write_goal(repo_status, "goal-status-active.yaml", FIXTURE_STATUS_ACTIVE)
     _write_goal(repo_status, "goal-status-achieved.yaml", FIXTURE_STATUS_ACHIEVED)

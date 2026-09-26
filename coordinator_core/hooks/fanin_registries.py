@@ -68,9 +68,6 @@ from __future__ import annotations
 import importlib
 from typing import Callable, Dict, Tuple
 
-#: carrier module name (a `coordinator_core.hooks.<name>` member) -> the
-#: `hooks.json` key its carried guards are delivered under. Down-selected
-#: to carriers landed in THIS repo — see module docstring.
 FANIN_DISPATCHERS: Dict[str, str] = {
     "preuse_write_dispatch": "PreToolUse",
     "stop_dispatch": "Stop",
@@ -79,9 +76,6 @@ FANIN_DISPATCHERS: Dict[str, str] = {
 
 
 def load_carrier(module_name: str):
-    """Imports a fan-in carrier by its `coordinator_core.hooks` member
-    name. Any import failure propagates -- a carrier this module cannot
-    even import is a defect the caller must see, not swallow."""
     return importlib.import_module(f"coordinator_core.hooks.{module_name}")
 
 

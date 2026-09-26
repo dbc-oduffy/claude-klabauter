@@ -146,7 +146,7 @@ def test_missing_baseline_file_fails_loud(tmp_path):
     root = str(tmp_path)
     d_d, gd_d = _fresh_repo(root, "d")
     write(os.path.join(d_d, "coordinator", "lib", "some-tool.sh"), TRAMPOLINE_BODY)
-    _commit_all(d_d)  # no baseline file ever written in this repo
+    _commit_all(d_d)
     r = _run_guard(gd_d)
     assert r.returncode == 2, f"expected exit 2, got {r.returncode}"
     assert "ERROR" in r.stderr
@@ -178,11 +178,6 @@ def test_clean_repo_with_no_sh_files_is_ok(tmp_path):
 
 
 def test_same_basename_different_dir_hazard(tmp_path):
-    # Two files named identically ("dup-tool.sh") in different directories.
-    # coordinator/lib/dup-tool.sh IS baselined (by full repo-relative path);
-    # coordinator/tests/dup-tool.sh is NOT. A basename-keyed baseline would
-    # wrongly treat the tests/ one as baselined too (basename match) — the
-    # repo-relative-path keying must keep them distinct.
     root = str(tmp_path)
     d_g, gd_g = _fresh_repo(root, "g")
     write(

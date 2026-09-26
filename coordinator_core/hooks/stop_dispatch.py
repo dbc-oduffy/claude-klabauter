@@ -129,26 +129,6 @@ from coordinator_core.hooks.runtime_tripwire_em_check import _handler as _runtim
 from coordinator_core.hooks.watchdog_undischarged_next_move import _handler as _watchdog_undischarged_next_move_handler
 from coordinator_core.ipc import register_op
 
-# ---------------------------------------------------------------------------
-# guard-kira-verdict-routed.py — the decision logic previously ported inline
-# here (docs/plans/2026-08-31-six-hook-scripts-become-engine-ops.md chunk
-# C3) now lives in its own registered module,
-# `coordinator_core.hooks.guard_kira_verdict_routed` (W4-C14,
-# docs/plans/2026-09-18-doe-holds-no-scripts.md), so `hook-run` can dial
-# `hooks.guard_kira_verdict_routed` directly. `_guard_kira_verdict_routed_handler`
-# is imported from there and composed into this fan-in unchanged.
-# `_guard_kira_verdict_routed` itself is re-imported (not just its handler)
-# so this module's own name keeps resolving for existing callers/tests that
-# reach it as `stop_dispatch._guard_kira_verdict_routed`.
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Thin @register_op wrappers for the three library modules whose own `op()`
-# carries no handler (out of this chunk's `writes:` scope — see module
-# docstring items 5-7).
-# ---------------------------------------------------------------------------
-
 
 def _wrap_flat_op(op_fn) -> dict:
     """Call a flat `op(payload) -> dict | None` function and normalise its
@@ -173,12 +153,7 @@ def _wrap_flat_op(op_fn) -> dict:
     return _handler
 
 
-# These three keys had no
-# registration, dispatch site, or cross-module caller (grepped across
-# claude-klabauter and DoE-claude); DoE's own hook shims import
-# `coordinator_core.hooks.<module>.op` directly and never go through
 # `_REGISTRY`. @register_op removed from all three; the plain functions
-# the fan-in below actually calls are unchanged.
 _stop_em_report_altitude_handler = _wrap_flat_op(_em_report_altitude_op)
 _nudge_harness_directive_dispatch_handler = _wrap_flat_op(
     _nudge_harness_directive_dispatch_op
@@ -186,11 +161,8 @@ _nudge_harness_directive_dispatch_handler = _wrap_flat_op(
 _nudge_unrouted_sizing_handler = _wrap_flat_op(_nudge_unrouted_sizing_op)
 
 
-# ---------------------------------------------------------------------------
-# Aggregation: normalise every leg's own return shape uniformly, then
 # CONCATENATE-ALL per the source dispatcher's own contract (see module
 # docstring "AGGREGATION CONTRACT").
-# ---------------------------------------------------------------------------
 
 
 def _extract_advisory(result) -> "tuple[bool, Optional[str]]":
@@ -245,27 +217,14 @@ async def _handler(params: dict, repo_root=None) -> dict:
         try:
             result = leg_call()
         except Exception:
-            continue  # per-leg dispatch; one failing leg must not block the other legs' verdicts
+            continue
         is_block, text = _extract_advisory(result)
         if is_block:
-            # A block must survive the
-            # fold even with a falsy reason; decoupling is_block from text
-            # would let a deny("Stop", "") evaporate silently.
             block_reasons.append(text or "<no reason given>")
         elif text:
             advisories.append(text)
 
     # receiver_state_sensor — PRODUCER only (see module docstring item 8):
-    # composed for its write side-effect; its return is never folded into
-    # this aggregate's verdict. It is "common_dir"-scoped, so under normal
-    # IPC dispatch its `repo_root` handler arg is `git_common_dir(request_
-    # repo)` (ipc.py::resolve_op_repo_key) — resolved here explicitly from
-    # the SAME payload["cwd"] every other leg above already reads, since
-    # this in-process call bypasses that resolution. Never the ambient
-    # process cwd: leaving `repo_root` at its own default here previously
-    # wrote a `sess-1` entry into THIS repo's own `.git/coordinator-sessions/`
-    # from a `tmp_path`-rooted test payload (caught by
-    # coordinator_core/conftest.py's live-session-hub litter guard).
     try:
         cwd = payload.get("cwd")
         common_dir = None
@@ -280,7 +239,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
         }
         await _receiver_state_sensor_handler(sensor_params, repo_root=common_dir)
     except Exception:
-        pass  # producer-only side effect (module docstring item 8); its verdict is never consumed
+        pass
 
     if block_reasons:
         return deny("Stop", "\n\n".join(block_reasons))

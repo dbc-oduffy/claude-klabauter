@@ -92,7 +92,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
         try:
             result = await asyncio.to_thread(leg_call)
         except Exception:
-            continue  # per-leg dispatch; one failing leg must not block the other legs' banners
+            continue
         text = _extract_context(result)
         if text:
             texts.append(text)

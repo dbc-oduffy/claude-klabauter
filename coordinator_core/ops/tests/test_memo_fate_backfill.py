@@ -1,27 +1,3 @@
-"""
-coordinator_core.ops.tests.test_memo_fate_backfill
-
-Unit tests for coordinator_core.ops.memo_fate_backfill (ruling (a) of the
-2026-08-06 cross-repo ask, item 1).
-
-Coverage:
-  derive_fate:
-    (a) decision in {noop, fyi-ack} -> ephemeral
-    (b) decision=accepted + resolvable realized_by (inline) -> commitment
-    (c) decision=accepted + unresolvable realized_by -> quarantined
-    (d) decision=accepted + absent realized_by -> quarantined
-    (e) decision absent -> quarantined
-    (f) decision=partial/declined/superseded -> quarantined (not silently
-        mapped to ratification — no confirmed vocabulary for that rule)
-    (g) each malformed prose-fragment literal from the source ask is
-        quarantined, never coerced or crashed on
-  backfill_fates (integration over collect_memo_records):
-    (h) already-stamped memo -> skipped_already_stamped, not re-derived
-    (i) counts partition invariant: every record lands in exactly one bucket
-    (j) quarantined set is never truncated/capped
-
-Spec backlink: cross-repo/inbox/2026-08-06-example-retrieval-repo-em-distill-fate-coverage-and-legacy-log-reader.md § 1(a)
-"""
 
 from __future__ import annotations
 
@@ -38,16 +14,10 @@ from coordinator_core.ops.memo_fate_backfill import (
     derive_fate,
 )
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
-
-# ---------------------------------------------------------------------------
-# derive_fate
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("decision", ["noop", "fyi-ack"])
@@ -84,8 +54,6 @@ def test_derive_fate_decision_absent_quarantined(tmp_path: Path):
 
 @pytest.mark.parametrize("decision", ["partial", "declined", "superseded"])
 def test_derive_fate_boundary_shape_decisions_quarantined_not_guessed(decision, tmp_path: Path):
-    # No confirmed decision:-value vocabulary for "boundary/shape ruling" ->
-    # never coerced into ratification; quarantined for a human read instead.
     fate, reason = derive_fate({"decision": decision}, tmp_path)
     assert fate is None
     assert "outside the closed backfill mapping" in reason
@@ -99,11 +67,6 @@ def test_derive_fate_malformed_literals_quarantined(malformed, tmp_path: Path):
     fate, reason = derive_fate({"decision": malformed}, tmp_path)
     assert fate is None
     assert "outside the closed backfill mapping" in reason
-
-
-# ---------------------------------------------------------------------------
-# collect_memo_records / backfill_fates — integration
-# ---------------------------------------------------------------------------
 
 
 def _write_memo(archive_dir: Path, name: str, body: str) -> None:
@@ -179,12 +142,6 @@ def test_backfill_quarantined_set_never_truncated(tmp_path: Path):
     reason="root bypasses POSIX permission bits -- chmod 0o000 does not make a file unreadable to root",
 )
 def test_backfill_unreadable_memo_surfaces_read_error_not_silently_dropped(tmp_path: Path):
-    # A per-file OSError used to
-    # `continue` with only a stderr log; the memo vanished from the corpus
-    # with zero trace in the returned outcome. Pins that it now surfaces via
-    # `read_errors`, distinct from (and never folded into) the four-way
-    # counts partition — this op's purpose is surfacing candidates for human
-    # review, so a silently-dropped memo is itself a review-visibility gap.
     archive_dir = tmp_path / "cross-repo" / "archive"
     _write_memo(archive_dir, "readable.md", "---\nfrom: a\nto: b\ndecision: noop\n---\nbody\n")
     unreadable = archive_dir / "unreadable.md"
@@ -202,6 +159,5 @@ def test_backfill_unreadable_memo_surfaces_read_error_not_silently_dropped(tmp_p
     assert outcome["read_errors"][0]["path"] == "cross-repo/archive/unreadable.md"
     assert "PermissionError" in outcome["read_errors"][0]["reason"]
     assert outcome["counts"]["read_errors"] == 1
-    # The readable memo still made it through — only the unreadable one dropped.
     assert outcome["counts"]["total"] == 1
     assert outcome["degraded"] is False

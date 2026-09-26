@@ -1,24 +1,3 @@
-"""coordinator/bin/tests/test_publish_dry_run_success_qualifies_skipped_guards.py —
-regression test for state/bug-backlog/2026-08-10-percolate-dry-run-reports-8-
-8-rows-succe-3efe8a7583ca.yaml.
-
-Mechanism: `dispatch_percolate_post_rsync`/`dispatch_percolate_inject`/
-`dispatch_percolate_pre_ci` — the phases carrying the post_rsync guard set
-(e.g. the no-residual-pattern guard) — are gated `not dry_run` in
-`process_target`, so `--dry-run` never evaluates them at all. Before this
-fix, a row `--dry-run` counted as succeeded (`totals.processed` advanced)
-still printed an unqualified "Rows succeeded: N/N", which read as
-unconditional clearance even though a real run over the same tree can fail
-that row on a guard `--dry-run` structurally cannot observe (the real
-incident this row records: a dry-run reported 8/8 minutes before a real run
-over the same tree reported 7 FAILED, exit 1). This test drives `main()`'s
-REAL per-row loop under `--dry-run` — same harness shape as
-`test_publish_skipped_row_not_counted_succeeded.py` — with `process_target`
-faked to model every row previewing cleanly, and asserts the summary block
-now names the guard phases dry-run never evaluated.
-
-Run: python -m pytest coordinator/bin/tests/test_publish_dry_run_success_qualifies_skipped_guards.py -q
-"""
 
 from __future__ import annotations
 
@@ -40,10 +19,6 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 def _init_git_repo(root: Path) -> None:
     # IDEMPOTENT ON PURPOSE — see the sibling fixture
-    # (`test_publish_skipped_row_not_counted_succeeded.py::_init_git_repo`)
-    # for why: `publish.py` resolves targets twice per invocation, and this
-    # helper runs once per resolution inside the monkeypatched `load_targets`
-    # fake.
     if (root / ".git").is_dir():
         return
 
@@ -139,10 +114,6 @@ def _wire_common_fakes(monkeypatch, tmp_path, *, rows_reached: list):
 
 
 def test_dry_run_all_rows_succeeded_names_skipped_guard_phases(monkeypatch, tmp_path, capsys):
-    """The regression this closes: every row previewing cleanly under
-    `--dry-run` must not print an unqualified "Rows succeeded: N/N" — the
-    post_rsync/inject/pre_ci engine-phase guards that decide a real run's
-    outcome never ran, and the summary must say so."""
     rows_reached: list = []
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, rows_reached=rows_reached)
@@ -158,9 +129,6 @@ def test_dry_run_all_rows_succeeded_names_skipped_guard_phases(monkeypatch, tmp_
 
 
 def test_real_run_all_rows_succeeded_does_not_carry_the_dry_run_qualifier(monkeypatch, tmp_path, capsys):
-    """Sanity counterpart — a non-preview run that actually dispatched the
-    engine phases must not print the dry-run qualifier line; it would be
-    false there (the phases DID run)."""
     rows_reached: list = []
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, rows_reached=rows_reached)

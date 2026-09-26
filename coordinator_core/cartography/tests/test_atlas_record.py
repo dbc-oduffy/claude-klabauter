@@ -1,9 +1,3 @@
-"""
-coordinator_core.cartography.tests.test_atlas_record — tests for atlas_record.
-
-Spec backlink: pln-cartography-churn-emergent-det-8f59ce
-§ chunk C2.
-"""
 
 from __future__ import annotations
 
@@ -30,8 +24,6 @@ def real_atlas() -> RecordedAtlas:
     return atlas
 
 
-# --- is_source_candidate -----------------------------------------------
-
 @pytest.mark.parametrize(
     "relpath,expected",
     [
@@ -55,8 +47,6 @@ def real_atlas() -> RecordedAtlas:
 def test_is_source_candidate(relpath: str, expected: bool) -> None:
     assert is_source_candidate(relpath) is expected
 
-
-# --- recorded_system_for_path (rule ordering / dispatch) ----------------
 
 def test_rule4_wins_over_rule9_emit_engine(real_atlas: RecordedAtlas) -> None:
     assert (
@@ -112,9 +102,6 @@ def test_uncatalogued_when_no_rule_covers(real_atlas: RecordedAtlas) -> None:
 
 
 def test_rule10_covers_group_em_housekeeping_review_trail(real_atlas: RecordedAtlas) -> None:
-    """`group_em/`, `housekeeping/`, and `review_trail/` appeared with no
-    directory-to-system rows (2026-08-31 census, cluster R25), leaving every
-    file under them uncatalogued; confirms all three now resolve."""
     assert recorded_system_for_path("coordinator_core/group_em/watch.py", real_atlas) is not None
     assert (
         recorded_system_for_path("coordinator_core/housekeeping/cycle.py", real_atlas)
@@ -125,8 +112,6 @@ def test_rule10_covers_group_em_housekeeping_review_trail(real_atlas: RecordedAt
         is not None
     )
 
-
-# --- load_recorded_atlas --------------------------------------------------
 
 def test_load_recorded_atlas_real_repo(real_atlas: RecordedAtlas) -> None:
     assert real_atlas.error is None
@@ -145,13 +130,11 @@ def test_load_recorded_atlas_missing(tmp_path: Path) -> None:
     assert atlas.last_mapped is None
 
 
-# --- expand_recorded_mapping ----------------------------------------------
-
 def test_expand_recorded_mapping_small_list(real_atlas: RecordedAtlas) -> None:
     tracked = [
-        "coordinator_core/cartography/atlas_record.py",  # recorded package -> by_system
-        "coordinator_core/some_new_pkg/x.py",  # not in recorded table -> uncatalogued
-        "archive/should_be_excluded.py",  # excluded -> neither, not counted
+        "coordinator_core/cartography/atlas_record.py",
+        "coordinator_core/some_new_pkg/x.py",
+        "archive/should_be_excluded.py",
     ]
     expansion = expand_recorded_mapping(tracked, real_atlas)
 

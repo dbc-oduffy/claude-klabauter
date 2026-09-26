@@ -1,21 +1,3 @@
-"""C0: `forwarder_self_heal` is the path that actually keeps writing native
-door images between full installs, and before this chunk it never touched
-the native-forwarder manifest at all -- every image self-heal writes was
-invisible to `_sweep_orphaned_agent_helpers`'s manifest-based protection
-(condition 0) and to C1's manifest-backed reap.
-
-The fix is read-union-write (`_union_native_forwarder_manifest`), not a
-second overwrite caller -- see that function's docstring for why a naive
-"call `_write_native_forwarder_manifest` with self-heal's own `missing`
-names" fix silently drops every other name already on record. This module
-reproduces today's box state (missing forwarder + a stale/non-empty
-manifest) and asserts the post-heal manifest contains BOTH the healed name
-AND every name the fixture manifest already listed -- the union half a
-naive fix drops.
-
-Spec backlink: docs/plans/2026-08-30-twenty-one-bin-names-reach-the-door-or-
-are-thoroughly-dead.md, task C0.
-"""
 from __future__ import annotations
 
 from coordinator_core.install import substrate
@@ -52,11 +34,6 @@ def test_union_against_absent_manifest_writes_only_the_new_names(tmp_path):
 
 
 def test_self_heal_inner_unions_into_a_stale_nonempty_manifest(monkeypatch, tmp_path):
-    """Reproduce today's box state: a stale-but-non-empty manifest recording
-    a name self-heal did not touch this invocation, plus a forwarder that IS
-    missing and gets healed via the native door path this invocation. The
-    naive fix (overwrite with only this invocation's `missing` names) drops
-    `already-recorded-cli` from the manifest; the union fix keeps it."""
     from coordinator_core.install import forwarder_self_heal
 
     agent_bin = tmp_path / "coordinator" / "bin"

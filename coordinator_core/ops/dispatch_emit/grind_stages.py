@@ -59,30 +59,17 @@ from coordinator_core.contract.grind_vocab import (
 from coordinator_core.ops.dispatch_emit.emit import _degrade_agent_type
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
-#: The two non-op agent types this module's composers dispatch under.
 #: ``OP_RUNNER_AGENT_TYPE`` (imported above) is the third.
 GENERAL_PURPOSE_AGENT_TYPE = "general-purpose"
 COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
 
-#: Written directly at every composer's call site (module docstring above,
-#: plan body's "the model literal 'sonnet' is written at every agent( call
-#: site"). Never routed through ``emit._model_opt``.
 _MODEL_LITERAL = "model: 'sonnet'"
 
-#: The positive-rule sentence every non-commit composer's prompt carries
-#: verbatim (trap 2). States the rule it wants followed, never the
-#: forbidden git verbs (plan body, § Design § Stage library: "Prompts state
-#: the positive rule ... and never name the forbidden git verbs").
 _NO_STAGING_CLAUSE = (
     "You do not stage or commit anything. Only the committer stage does "
     "that."
 )
 
-#: Design item 5 (plan docs/plans/2026-09-22-port-the-remaining-bug-backlog-
-#: grind-les.md, P145-C2). Interpolated into the triage, refute-close and
-#: fix prompts -- peers share this checkout, so a file `git status
-#: --porcelain` shows as modified must be judged at its committed content,
-#: never at whatever a peer has dirtied it to.
 _JUDGE_AGAINST_HEAD_CLAUSE = (
     "If `git status --porcelain -- <path>` shows a file you are judging as "
     "modified, judge its `git show HEAD:<path>` content instead, because "
@@ -91,10 +78,6 @@ _JUDGE_AGAINST_HEAD_CLAUSE = (
 
 
 def _schema_opt(schema: dict) -> str:
-    """Render ``schema`` as the JS object-literal text for an ``agent(...)``
-    call's ``schema:`` option. A JSON document is valid JS object-literal
-    syntax, so ``json.dumps`` (sorted, for determinism across re-emits) is
-    sufficient -- no separate JS-object serializer is needed."""
     return f"schema: {json.dumps(schema, sort_keys=True)}"
 
 
@@ -171,9 +154,6 @@ def _preamble_parts(preamble_expr: Optional[str]) -> list[tuple[str, str]]:
 
 
 def _list_parts(files: Sequence[str], files_js: Optional[str]) -> list[tuple[str, str]]:
-    """One or more ``_join_prompt_parts`` parts rendering a file/row-id list
-    clause: a live ``files_js`` JS expression (joined with ``', '`` at run
-    time) when given, else the static ``files`` list (or ``(none)``)."""
     if files_js:
         return [("expr", f"({files_js}).join(', ')")]
     return [("lit", ", ".join(files) if files else "(none)")]
@@ -197,21 +177,6 @@ def compose_triage_call(
     repo_root: str = ".",
     preamble_expr: Optional[str] = None,
 ) -> str:
-    """`triage` (general-purpose, sonnet, medium). Runs `backlog-grind-assemble grind-row check`
-    first, then per row returns verdict, evidence, a t-shirt size plus
-    sizing evidence, a tradeoff statement (empty when there is none),
-    triage-declared files, and a fix plan. Appends one ledger line per row
-    (`backlog-grind-assemble grind-row append --profile P --row-id R --digest D --stage triage
-    --verdict V --outcome O --evidence-file F --run-stamp T --repo-root
-    <repo_root>`) as it finishes, and writes the per-batch triage record to
-    `<run_dir>/records/<batch-id>.json` for a verify op to read.
-
-    ``batch_id_js``/``triage_depth_js``/``rows_js``/``script_path_js``/
-    ``run_id_js`` name JS runtime expressions to interpolate instead of the
-    static values -- letting ONE composed call site serve every batch,
-    telling the agent its own rows (row_id/path/digest) and the exact
-    `backlog-grind-assemble grind-row check`/`append` invocations rather than a literal
-    `<script>` placeholder."""
     batch_id_part: tuple[str, str] = ("expr", batch_id_js) if batch_id_js else ("lit", batch_id)
     depth_part: tuple[str, str] = ("expr", triage_depth_js) if triage_depth_js else ("lit", triage_depth)
     rows_part: tuple[str, str] = ("expr", rows_js) if rows_js else ("lit", "[]")
@@ -309,20 +274,6 @@ def compose_refute_close_call(
     repo_root: str = ".",
     preamble_expr: Optional[str] = None,
 ) -> str:
-    """`refute-close` (general-purpose, sonnet, medium). Tries to refute
-    each close proposal it is handed. Closes only the confirmed ones, via
-    `backlog-grind-assemble grind-row close --profile-dir D --profile P --row <path> --digest DIG
-    --verdict refute-close --evidence-file F --closed-by refute-close
-    --run-stamp T --repo-root <repo_root>`, reporting the `{old,new}` path
-    pair the command prints so the committer can stage the archive add and
-    declare the queue-path removal.
-
-    ``proposals_js``/``run_id_js`` name JS runtime expressions -- the
-    proposal rows (row_id/path/digest/triage evidence/origin) this batch's
-    refute-close node actually reached, and the run stamp -- interpolated
-    instead of a static/omitted value. Each proposal's ``origin`` records
-    where the close proposal came from (``triage:<verdict>`` for a triage
-    proposal), never derived from the batch id."""
     proposals_part: tuple[str, str] = ("expr", proposals_js) if proposals_js else ("lit", "[]")
     profile_dir_part: tuple[str, str] = ("expr", profile_dir_js) if profile_dir_js else ("lit", profile_dir)
     run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", "<run-id>")
@@ -407,9 +358,6 @@ def compose_refute_close_call(
     )
 
 
-#: The three answers `resize` may return, verbatim, and no other value
-#: (design item 4, docs/plans/2026-09-22-port-the-remaining-bug-backlog-
-#: grind-les.md, P145-C3).
 RESIZE_ANSWERS: tuple[str, ...] = ("plan-weight", "focused-fix", "not-reproduced")
 
 
@@ -426,29 +374,6 @@ def compose_resize_call(
     repo_root: str = ".",
     preamble_expr: Optional[str] = None,
 ) -> str:
-    """`resize` (general-purpose, sonnet, medium). One read-only re-size per
-    triage batch, called before any baton hand-back for that batch's
-    size-floor-routed rows (design item 4). Read-only: it does not fix,
-    close, or stage anything itself.
-
-    For each row it is handed, decides `plan-weight` (genuinely needs a
-    plan -- the row's own hand-back reason is this answer's
-    `design_question`), `focused-fix` (fits a normal fix after all), or
-    `not-reproduced` (the defect is not reproduced). Appends one ledger
-    line per row via `backlog-grind-assemble grind-row append --profile P --row-id R
-    --digest D --stage triage --verdict resize --outcome <verdict>`, where
-    `<verdict>` is one of the profile's OWN declared triage verdicts --
-    never an invented `resize-`-prefixed string (eng-director F1, option
-    (a): the ledger outcome stays profile-declared). ``fix_verdict``/
-    ``close_verdict`` are the caller's own resolution (from the profile's
-    triage edges) of which declared verdict routes to a fix-kind /
-    refute-close-kind node -- `None` when that resolution is ambiguous
-    (e.g. two fix-kind triage targets), in which case this prompt says so
-    rather than naming a made-up verdict.
-
-    ``rows_js``/``run_id_js`` name JS runtime expressions (this batch's
-    baton-routed rows -- row_id/path/digest -- and the run stamp) to
-    interpolate instead of a static value."""
     rows_part: tuple[str, str] = ("expr", rows_js) if rows_js else ("lit", "[]")
     run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", "<run-id>")
     if fix_verdict:
@@ -677,14 +602,6 @@ def compose_verify_agent_call(
     agent_type_host: Optional[str] = None,
     preamble_expr: Optional[str] = None,
 ) -> str:
-    """`verify` in its agent form (general-purpose, sonnet, high). Tries to
-    reject the fix it is handed. Read-only apart from the named tests.
-
-    ``row_id_js``/``row_path_js``/``touched_files_js``/``evidence_js``/
-    ``fix_plan_js`` name JS runtime expressions -- the row's own id/path,
-    the fixer's touched files, the triage evidence and the fix plan -- so
-    the verifier is handed something to verify rather than a bare
-    "reject the fix" instruction with no row context."""
     parts: list[tuple[str, str]] = [
         *_preamble_parts(preamble_expr),
         ("lit", "You are the verify stage for row "),
@@ -739,15 +656,6 @@ def compose_verify_op_call(
     batch_id_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
 ) -> str:
-    """`verify` in its op form (`coordinator:queue-grind-op-runner`, sonnet,
-    low). Shell-only: runs
-    `coordinator-invoke <op> --params-file <run_dir>/records/<batch-id>.json`
-    and returns the JSON verbatim. Exit 0 passes; otherwise the JSON names
-    the failing ids.
-
-    ``op_js``/``batch_id_js`` name JS expressions (a per-batch-key verify-op
-    const, and the row's owning batch id) to interpolate at RUN time --
-    letting ONE composed call site serve every batch-key's op variant."""
     op_part: tuple[str, str] = ("expr", op_js) if op_js else ("lit", op)
     batch_id_part: tuple[str, str] = ("expr", batch_id_js) if batch_id_js else ("lit", batch_id)
     parts: list[tuple[str, str]] = [
@@ -783,9 +691,6 @@ def compose_verify_op_call(
     )
 
 
-#: `commit`'s own wire schema -- identical for both the per-row form and the
-#: ledger-only form (batch-end/drain): both are the SAME `coordinator:
-#: git-commit-agent` stage kind, only the staged content differs.
 _COMMIT_SCHEMA = {
     "type": "object",
     "required": ["outcome"],
@@ -796,10 +701,6 @@ _COMMIT_SCHEMA = {
     },
 }
 
-#: The trailing "then commit" clause every `commit` prompt ends on
-#: (trap 4: an indeterminate outcome is reconciled against `git log`/`git
-#: status` before any retry, never retried blind) -- shared verbatim by
-#: `compose_commit_call` and `compose_commit_ledger_only_call`.
 _COMMIT_TAIL_LIT = (
     " Then commit via `coordinator/bin/coordinator-safe-commit.py`, passing "
     "`--declared-revert <path>` for every removed path above (this row's "
@@ -815,8 +716,6 @@ _COMMIT_TAIL_LIT = (
 def _compose_commit_agent_call(
     parts: list[tuple[str, str]], *, label: str, phase_title: str, agent_type_host: Optional[str]
 ) -> str:
-    """Shared tail: both `commit` forms hand their own prompt ``parts`` in
-    here to finish the same way (schema, agent type, effort, ``is_expr``)."""
     return _agent_call(
         _join_prompt_parts(parts),
         label=label,
@@ -911,18 +810,6 @@ def compose_commit_ledger_only_call(
     repo_root: str = ".",
     agent_type_host: Optional[str] = None,
 ) -> str:
-    """`commit` (ledger-only) (`coordinator:git-commit-agent`, sonnet, low).
-    At batch end and on drain, commits exactly the unsettled rows' ledger
-    files. On the drain commit only, additionally runs `backlog-grind-
-    assemble grind-row run-record` to write and stage
-    `state/queue-grind/<profile>/runs/<run-id>.json` in the same commit --
-    the committer has no Write tool, so the run record is written through
-    this verb rather than hand-written (§ Design § Row verbs, `run-record`).
-
-    ``unsettled_row_ids_js``/``run_id_js`` name JS expressions to
-    interpolate at RUN time instead of the static values -- the real
-    unsettled-row set at commit time, and the real run stamp, neither of
-    which is known at emit time."""
     run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", str(run_id))
     parts: list[tuple[str, str]] = [
         (
@@ -987,12 +874,6 @@ def compose_undo_call(
     agent_type_host: Optional[str] = None,
     preamble_expr: Optional[str] = None,
 ) -> str:
-    """`undo` (general-purpose, sonnet, low). Restores the fixer's own
-    touched files from HEAD and removes the files it created.
-
-    ``touched_files_js``/``created_files_js`` name JS expressions (the
-    fixer's own returned touched/created lists) to interpolate at RUN time
-    instead of the static lists."""
     parts: list[tuple[str, str]] = [*_preamble_parts(preamble_expr), ("lit", "Restore these files from HEAD: [")]
     parts.extend(_list_parts(touched_files, touched_files_js))
     parts.append(("lit", "], and remove these files the fix created: ["))

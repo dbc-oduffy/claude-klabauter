@@ -104,9 +104,6 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(args: list[str], cwd: Path, *, check: bool = True) -> subprocess.CompletedProcess:
-    # popup-intentional-last-resort — test-only real-git spawn, mirrors the
-    # governed real_git.py fixture's own unguarded pattern; no console window
-    # risk on the CI/dev platforms this suite runs on.
     return subprocess.run(
         ["git", *args],
         cwd=str(cwd),
@@ -129,25 +126,10 @@ def _init_repo(root: Path) -> None:
 
 
 def _seed_unrelated_tracked_file(root: Path) -> None:
-    """Seeds ONE tracked file the call under test never touches.
-
-    Load-bearing, not scenery. Without it the repo's only tracked file is
-    the candidate itself, so `rm_and_commit`'s `git rm` empties the private
-    index and `_empty_private_index_breach` refuses BEFORE the commit ladder
-    is reached at all — the test then passes against pre-fix and post-fix
-    code alike, proving nothing about the race it names. Measured 2026-08-25
-    against `8350b8fa0^`: sole-candidate seed → green pre-fix (vacuous);
-    with this file → red pre-fix (peer commit reverted), green post-fix (CAS
-    refuses), at both call sites.
-    """
     (root / "keep.md").write_text("unrelated tracked file\n", encoding="utf-8")
 
 
 def _land_peer_commit(root: Path) -> str:
-    """Simulates a concurrent session's own commit landing on the SAME
-    branch, in the window between `read_tree HEAD` and this call's own
-    commit. Returns the peer file's repo-relative path -- the caller checks
-    for its survival in HEAD's tree after the function under test returns."""
     peer_file = root / "peer-landed-while-we-were-committing.md"
     peer_file.write_text("peer session's own concurrent work\n", encoding="utf-8")
     _git(["add", "--", peer_file.name], root)
@@ -156,13 +138,6 @@ def _land_peer_commit(root: Path) -> str:
 
 
 def _patch_hash_object_lands_peer_commit(monkeypatch, root: Path) -> None:
-    """`archive_and_commit`-specific interception (see module docstring's
-    2026-08-26 re-target). `_hash_object_stdin_paths` is the one spawn C2
-    left between `old_head`'s capture and the commit landing for a
-    `restage_src=True` move; it is a synchronous wrapper (`subprocess.run`
-    under the hood, offloaded to a thread), so it is intercepted by wrapping
-    the module-level name `archive_and_commit` actually calls, not by
-    patching `asyncio.create_subprocess_exec`."""
     import coordinator_core.ops.fleet._common as _common_mod
 
     orig = _common_mod._hash_object_stdin_paths
@@ -218,14 +193,7 @@ def test_archive_and_commit_never_reverts_a_peer_commit_landed_mid_race(tmp_path
     log = _git(["log", "--format=%H"], root).stdout.strip().splitlines()
     assert len(log) >= 2, "peer commit must still be reachable from HEAD (or its own ref) — history was not erased"
 
-    # The one unacceptable outcome: the peer's own commit is gone from
-    # history, or its content is missing from HEAD's tree — the silent
-    # revert this fix exists to close. Either refusal (failed[] carries the
     # candidate) or a successful landing that PRESERVES the peer's file is
-    # acceptable.
-    # check=False: a path missing from HEAD exits 128, and letting that raise
-    # would replace this test's own diagnostic assertion with a bare
-    # CalledProcessError — the silent-revert signal reported as plumbing noise.
     show = _git(
         ["show", "HEAD:peer-landed-while-we-were-committing.md"], root, check=False
     )
@@ -255,9 +223,6 @@ def test_rm_and_commit_never_reverts_a_peer_commit_landed_mid_race(tmp_path, mon
     log = _git(["log", "--format=%H"], root).stdout.strip().splitlines()
     assert len(log) >= 2, "peer commit must still be reachable from HEAD (or its own ref) — history was not erased"
 
-    # check=False: a path missing from HEAD exits 128, and letting that raise
-    # would replace this test's own diagnostic assertion with a bare
-    # CalledProcessError — the silent-revert signal reported as plumbing noise.
     show = _git(
         ["show", "HEAD:peer-landed-while-we-were-committing.md"], root, check=False
     )

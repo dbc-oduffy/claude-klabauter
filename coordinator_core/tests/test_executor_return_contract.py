@@ -1,13 +1,3 @@
-"""Tests for `coordinator_core.executor_return_contract`.
-
-The load-bearing assertion in this module: each builder reproduces BOTH
-existing callers' current rendered text EXACTLY, given that caller's own
-parameters — which is what makes C2 (deleting the duplicate constants and
-importing this module instead) a safe refactor rather than a rewrite. The
-comparison constants are imported from the live readers, never re-typed,
-so a future edit to either reader's text fails this test rather than
-silently drifting from what C1 pins.
-"""
 
 from coordinator_core.backlog_grind_assemble.readers_blitz import (
     _DONE_SUMMARY_CONSTRAINT_TEMPLATE as _BLITZ_DONE_SUMMARY,
@@ -47,11 +37,6 @@ def test_footprint_constraint_template_pinned_bytes():
 
 
 def test_footprint_constraint_names_the_write_tools_and_forbids_bash_writes():
-    """A Bash write records no session claim, so the wave's committer sees a
-    determinate orphan and refuses it. Measured 2026-09-19 across four
-    concurrent emitted runs in two repos: every one of them halted at its
-    commit phase on orphan paths its executor had produced through Bash, and
-    each cost a manual EM adoption plus a restamp-and-resume round trip."""
     text = FOOTPRINT_CONSTRAINT_TEMPLATE
     assert "Write/Edit" in text
     assert "never with a Bash heredoc, sed, tee or redirection" in text
@@ -66,11 +51,6 @@ def test_self_verify_constraint_reproduces_mise_hand_dispatch_bytes():
 
 
 def test_self_verify_constraint_step_four_does_not_ban_the_step_two_git_read():
-    """Step (2) mandates a `git status --porcelain` read; step (4) must
-    forbid only mutating git state, not reading it -- an absolute ban
-    contradicts step (2) and an executor resolving that conflict in favour
-    of (4) silently skips the footprint computation step (2) exists to
-    deliver."""
     rendered = self_verify_constraint(commit_authority="the EM")
     assert "you do not invoke git under any circumstance" not in rendered
     assert "git status --porcelain -- <footprint paths>" in rendered
@@ -91,9 +71,6 @@ def test_self_verify_constraint_emitted_path_names_named_authority():
 
 
 def test_self_verify_constraint_deferred_verification_authority_defaults_to_commit_authority():
-    """Omitting `deferred_verification_authority` must reproduce the same
-    bytes as passing it equal to `commit_authority` -- the shape every
-    hand-dispatch caller (one shared authority) relies on."""
     rendered = self_verify_constraint(commit_authority="the EM")
     assert rendered == self_verify_constraint(
         commit_authority="the EM", deferred_verification_authority="the EM"
@@ -101,11 +78,6 @@ def test_self_verify_constraint_deferred_verification_authority_defaults_to_comm
 
 
 def test_self_verify_constraint_splits_commit_and_deferred_verification_authority():
-    """The two clauses take independent values -- naming who commits must
-    not also name who broader verification is deferred to, and vice versa
-    (Review: coordinator:code-reviewer, finding 1, EM-agreed break-class
-    fix: a shared value previously rendered "Only <commit phase> and
-    <test-runner phase> commits", which is false)."""
     rendered = self_verify_constraint(
         commit_authority="the `coordinator:git-commit-agent` phase",
         deferred_verification_authority=(

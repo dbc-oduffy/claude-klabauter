@@ -1,15 +1,3 @@
-"""AC6 — a cross-sprint gate emits as its OWN descriptor-altitude edge row.
-
-Negative-spec this pins, restated so it is not re-derived from the AC text:
-a sprint gate is NEVER flattened to stub-to-stub. Flattening either
-under-describes the gate or becomes the cross-product of two sprints' stubs
-and truncates silently at rag's 1000-row default.
-
-The traversal half matters as much as the emission half: `blocks-sprint`
-endpoints resolve to no `RoadmapDagNode` by design (D47), so a consumer must
-discriminate on `type` before resolving one. `test_sprint_gate_is_not_walked_
-as_a_stub_edge` is the pin that `_compute_critical_path` does.
-"""
 from __future__ import annotations
 
 import textwrap
@@ -66,7 +54,6 @@ def test_cross_sprint_gate_emits_its_own_edge_row(tmp_path):
 
 
 def test_sprint_gate_is_not_flattened_to_stub_to_stub(tmp_path):
-    """The negative half: no stub-altitude edge is invented for the gate."""
     _write_spine(
         tmp_path,
         "rm-1",
@@ -78,8 +65,6 @@ def test_sprint_gate_is_not_flattened_to_stub_to_stub(tmp_path):
 
 
 def test_sprint_gate_is_not_walked_as_a_stub_edge(tmp_path):
-    """`blocks-sprint` endpoints resolve to no node, so the critical-path
-    traversal must filter on type rather than resolve them."""
     _write_spine(
         tmp_path,
         "rm-1",
@@ -92,13 +77,11 @@ def test_sprint_gate_is_not_walked_as_a_stub_edge(tmp_path):
 
 
 def test_absent_spine_contributes_no_sprint_edges(tmp_path):
-    """A roadmap that never ran sprint-planning is a normal state."""
     result = assemble_roadmap_dag("rm-nospine", tmp_path)
     assert [e for e in result["edges"] if e["type"] == "blocks-sprint"] == []
 
 
 def test_spine_for_another_roadmap_is_not_joined(tmp_path):
-    """Edges are scoped by the record's own `roadmap_id`, not by path."""
     _write_spine(
         tmp_path,
         "rm-other",

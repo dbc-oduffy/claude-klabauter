@@ -32,8 +32,6 @@ import yaml
 
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -54,11 +52,6 @@ def _load_module():
 
 
 _mod = _load_module()
-
-
-# ---------------------------------------------------------------------------
-# cutoff — derive_cutoff()
-# ---------------------------------------------------------------------------
 
 
 def test_cutoff_latest_completed_wins(tmp_path):
@@ -126,11 +119,6 @@ def test_cutoff_cli_prints_date_on_stdout(tmp_path):
     )
     assert result.returncode == 0
     assert result.stdout.strip() == "2026-06-01"
-
-
-# ---------------------------------------------------------------------------
-# check-strip-orphans — find_strip_orphans()
-# ---------------------------------------------------------------------------
 
 
 def test_strip_orphans_none_when_all_routed():

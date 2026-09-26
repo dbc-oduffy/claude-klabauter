@@ -53,10 +53,6 @@ def _no_ignore():
 
 
 def _seed(tmp_path: Path) -> "tuple[Path, Path]":
-    """A source and destination that agree on `kept/` and disagree on two
-    destination-only top-level directories: `sibling/` (a second row's
-    output) and `stray/` (a genuine orphan nobody owns). Mirrors the shape a
-    real mirror-root row plus a sibling subdirectory row produces."""
     src = tmp_path / "src"
     dst = tmp_path / "dst"
     (src / "kept").mkdir(parents=True)
@@ -70,9 +66,6 @@ def _seed(tmp_path: Path) -> "tuple[Path, Path]":
 
 class TestForeignDirNamesExemptsASiblingRow:
     def test_sibling_subdir_exempted_preflight_and_sweep_stay_quiet(self, tmp_path, capsys):
-        """Both consumers of the single `orphans` list -- the top-level
-        presence preflight and the rmtree sweep -- must stay quiet on a
-        name in `foreign_dir_names`."""
         src, dst = _seed(tmp_path)
 
         synced, removed = publish_sync.sync_mirror(
@@ -87,9 +80,6 @@ class TestForeignDirNamesExemptsASiblingRow:
         assert "sibling" not in captured.err
 
     def test_a_genuine_orphan_alongside_an_exempted_one_still_aborts(self, tmp_path):
-        """Proves the exemption is name-scoped, not a blanket disarm: a
-        second, genuinely-stray directory at the same level must still
-        FATAL-abort the publish even though `sibling/` is exempted."""
         src, dst = _seed(tmp_path)
         (dst / "stray").mkdir()
         (dst / "stray" / "orphan.py").write_text("stray\n", encoding="utf-8")
@@ -109,10 +99,6 @@ class TestForeignDirNamesExemptsASiblingRow:
         assert (dst / "stray" / "orphan.py").is_file()
 
     def test_omitting_the_parameter_aborts_exactly_as_today(self, tmp_path):
-        """The version-skew arm: a caller (or a copy of this module) that does
-        not know about `foreign_dir_names` must see zero behaviour change --
-        the sibling directory is indistinguishable from a stray one and the
-        publish aborts exactly as it did before this parameter existed."""
         src, dst = _seed(tmp_path)
 
         try:

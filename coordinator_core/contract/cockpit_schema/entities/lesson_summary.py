@@ -87,11 +87,6 @@ class LessonSummary(BaseModel):
     """Non-nullable on every record — ok for clean decomposition, partial for degraded (C-F2)."""
     provenance: ProvenanceEnvelope
 
-    # Nullable fields (D9 present-as-null). `change_kind` is populated only from
-    # outbox/drained records. `target_wiki`, `from_repo`, `evidence`, and
-    # `created` can be populated from either the per-entry YAML (born-
-    # attributable captures) or the outbox/drained join; null only when absent
-    # from all sources.
 
     change_kind: str | None
     """8-value enum on the outbox/drained record; null for captured-only entries (not in per-entry YAML)."""

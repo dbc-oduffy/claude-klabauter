@@ -1,4 +1,3 @@
-"""Tests for `coordinator_core.ops.baton_carry_forward`."""
 
 from __future__ import annotations
 
@@ -32,9 +31,6 @@ def _session(repo: Path, sid: str) -> Path:
 
 
 def test_note_lands_and_reports_where(tmp_path):
-    """The return value must name the baton path: a session very often does
-    not know it has one, so an op that lands a note silently has not made the
-    affordance discoverable."""
     repo = _make_repo(tmp_path)
     _session(repo, "sid-cf")
     out = CF.append_note("check the retry budget before trusting the timings",
@@ -55,7 +51,6 @@ def test_notes_accumulate_and_identical_notes_collapse(tmp_path):
 
 
 def test_an_earlier_note_is_never_displaced(tmp_path):
-    """The hedge is worthless if a later note can cost an earlier one."""
     repo = _make_repo(tmp_path)
     _session(repo, "sid-keep")
     for n in ("a", "b", "c"):
@@ -90,8 +85,6 @@ def test_empty_and_whitespace_notes_are_refused(tmp_path):
 
 
 def test_note_is_capped_and_the_refusal_names_the_alternative(tmp_path):
-    """The baton is read on every UserPromptSubmit, so its size is on a hot
-    path. The cap's message has to name what to do instead."""
     repo = _make_repo(tmp_path)
     _session(repo, "sid-cap")
     out = CF.append_note("x" * (CF.MAX_NOTE_CHARS + 1), session_id="sid-cap",
@@ -108,16 +101,13 @@ def test_note_is_stripped_before_storage(tmp_path):
 
 
 def test_absent_session_directory_is_fail_open_not_a_raise(tmp_path):
-    """This sits on the context-pressure path. A record write that blocks its
-    caller is worse than a note that did not land."""
-    repo = _make_repo(tmp_path)  # no session dir minted
+    repo = _make_repo(tmp_path)
     out = CF.append_note("note", session_id="sid-missing", cwd=str(repo))
     assert out["ok"] is False
     assert "session directory" in out["reason"]
 
 
 def test_appending_does_not_advance_the_batons_lifecycle(tmp_path):
-    """A note is an addition to a live journal, never a transition of it."""
     repo = _make_repo(tmp_path)
     _session(repo, "sid-life")
     CF.append_note("note", session_id="sid-life", cwd=str(repo))

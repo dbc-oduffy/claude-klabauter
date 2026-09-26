@@ -1,12 +1,3 @@
-"""Unit tests for `coordinator_core.git.tree_spine`, relocated (2026-08-26,
-C1 of docs/plans/2026-08-26-the-archival-commit-helper-computes-its-own-tree.md)
-out of `coordinator_core.ops.ceremony.git_native`. The sha-identity-against-
-real-git oracle for `_rewrite_head_spine` travels WITH the code and stays in
-`coordinator_core/ops/ceremony/tests/test_git_native.py` (its
-`test_rewrite_head_spine_prunes_emptied_dirs_like_git`) -- these tests cover
-the module's own basic shape (import surface, sentinel identity, simple
-level-write/rewrite behaviour) without duplicating that oracle.
-"""
 
 from __future__ import annotations
 

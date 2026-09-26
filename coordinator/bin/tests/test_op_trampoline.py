@@ -186,10 +186,6 @@ class TestRun(unittest.TestCase):
         self.assertIn("transport down", stderr.getvalue())
 
     def test_route_mutation_refusal_returns_1_not_0(self):
-        """C26: an in-envelope refusal (exit_code!=0 inside a successfully-
-        transported result) must not be printed and exited 0 as if it were a
-        success payload. Red against pre-plan HEAD, where `run()` called the
-        bare `route()` and never inspected the envelope at all."""
         refusal_result = {"exit_code": 1, "error": "op-level refusal"}
         with mock.patch.object(
             op_trampoline,

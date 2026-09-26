@@ -80,16 +80,11 @@ from typing import List, Optional
 from coordinator_core._settings_home import resolve_machine_local_cli
 from coordinator_core.session.declared_writes import declare_write
 
-_PROG = "gen-claude-doe-shim.sh"  # literal program-name prefix, matches the DoE filename
+_PROG = "gen-claude-doe-shim.sh"
 
 SENTINEL_BEGIN = "# --- coordinator claude-doe shim [generated] ---"
 SENTINEL_END = "# --- end coordinator claude-doe shim ---"
-# The legacy stopgap written by hand during the 2026-07-04 maximalist bringup.
 LEGACY_MARKER = "# --- coordinator maximalist launch ---"
-# The invariant lead-in shared by every observed hand-written variant of the
-# marker line above -- real-world instances append a trailing comment/padding
-# suffix (e.g. "... (DoE-resident plugin source) ----------------") after
-# "launch", so detection matches this as a line PREFIX (after strip), never
 # the full LEGACY_MARKER string as a whole-line equality check.
 LEGACY_MARKER_PREFIX = "# --- coordinator maximalist launch"
 
@@ -99,9 +94,6 @@ EXPECTED_SOURCE_LINE = (
 )
 
 # PowerShell counterpart of EXPECTED_SOURCE_LINE, selected by --shell powershell.
-# Multi-line is fine: _extract_sentinel_body/_nonblank_join both operate over the
-# whole sentinel body, not a single line. Mirrors the bash guard's semantics (only
-# dot-source when the shim file exists, so a missing file never errors the
 # profile) using $env:CLAUDE_HOME, falling back to $HOME exactly like the bash
 # oracle's ${CLAUDE_HOME:-$HOME}.
 EXPECTED_SOURCE_LINE_POWERSHELL = (
@@ -113,15 +105,10 @@ EXPECTED_SOURCE_LINE_POWERSHELL = (
 SHELL_FAMILIES = ("bash", "powershell")
 
 # Generator-provenance: writes the rendered shim under <CLAUDE_HOME|HOME>/
-# .claude/shell/claude-doe-shim.sh and wires a sentinel block into the
-# operator's interactive rc (~/.bashrc or ~/.zshrc) -- entirely outside
-# claude-klabauter's own tracked tree.
 GENERATES = []
 
 
 def _shim_filename(shell_family: str) -> str:
-    """bash/zsh render a POSIX-sourced ``.sh`` shim; PowerShell dot-sources a
-    ``.ps1`` counterpart at the same ``.claude/shell/`` location."""
     return "claude-doe-shim.ps1" if shell_family == "powershell" else "claude-doe-shim.sh"
 
 
@@ -164,16 +151,10 @@ Exit codes:
 
 
 def _nonblank_join(text: str) -> str:
-    """Mirror the bash oracle's `awk 'NF'` filter: drop whitespace-only lines,
-    keep all others verbatim, rejoin with newlines (matches `$(... | awk 'NF')`
-    command-substitution semantics, which also strips the trailing newline)."""
     return "\n".join(line for line in text.split("\n") if line.strip() != "")
 
 
 def _extract_sentinel_body(text: str, begin: str, end: str) -> str:
-    """Mirror the bash oracle's awk sentinel-body extractor:
-    `$0 == b {f=1; next} $0 == e {f=0} f {print}` — lines strictly between an
-    exact-match begin marker and an exact-match end marker, both exclusive."""
     lines: List[str] = []
     capturing = False
     for line in text.split("\n"):
@@ -258,12 +239,6 @@ def _commented_out_source_lines(rc_text: str, expected_source_line: str) -> List
 
 
 def _disabled_block_report(target_rc: str, evidence: List[str]) -> List[str]:
-    """Operator-facing lines for a detected disabled block.
-
-    Remediation is a runnable command, never a slash command: this fires while
-    the operator has no coordinator session, so naming an agentic remedy names
-    one that cannot run.
-    """
     lines = [
         f"WARNING: {target_rc} contains a DISABLED coordinator shim block "
         f"({len(evidence)} commented source line(s)).",
@@ -287,36 +262,17 @@ def _resolve_claude_home_base() -> str:
 
 
 def _default_shell_family() -> str:
-    """The shell family to target when --shell is not given.
-
-    Windows defaults to ``powershell``; everything else (including Git Bash /
-    MSYS, which sets MSYSTEM) keeps ``bash``. Without this, a Windows operator
-    with no ``$SHELL`` fell through the POSIX ladder to "defaulting to
-    ~/.zshrc", and the generator then wrote a POSIX ``.sh`` shim and edited a
-    ``~/.zshrc`` that no shell on the box reads — a silently inert install whose
-    own success message told the operator to run `source`, which is not a
-    PowerShell command. An explicit ``--shell`` still wins.
-    """
     if os.name == "nt" and not os.environ.get("MSYSTEM"):
         return "powershell"
     return "bash"
 
 
 def _powershell_profile_path() -> str:
-    """The pwsh 7+ per-user profile, matching the `.ps1` shim leg.
-
-    Documents/PowerShell/Microsoft.PowerShell_profile.ps1 is pwsh 7's location;
-    Windows PowerShell 5.1 uses Documents/WindowsPowerShell/. pwsh is the
-    coordinator's Windows shell of record, so 7 is what gets wired.
-    """
     home = _resolve_home()
     return os.path.join(home, "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1")
 
 
 def _reload_hint(shell_family: str, target_rc: str) -> str:
-    """The 'pick this up now' invocation for the wired rc file. PowerShell
-    dot-sources with `. <path>`; `source` is a POSIX builtin and printing it to
-    a PowerShell operator is a command that does not exist."""
     verb = "." if shell_family == "powershell" else "source"
     return f"{verb} {target_rc}"
 
@@ -388,7 +344,6 @@ def main(argv: List[str]) -> int:
             print(_USAGE, file=sys.stderr)
             return 0
         else:
-            # Silently ignored -- see docstring.
             i += 1
 
     if graceful_skip_unresolved and not check_only:
@@ -399,11 +354,6 @@ def main(argv: List[str]) -> int:
 
             doe_resolved = bool(_registry_get("repos.doe_claude"))
             if not doe_resolved:
-                # `registry_get` alone misses the CLI's autodiscovery/
-                # `path-exceptions.toml` rungs -- fall back to the CLI on a
-                # registry miss so this install gate doesn't skip the shim
-                # write for a DoE clone the CLI would still resolve
-                # (2026-08-16 review finding, repos.* 4-rung ladder).
                 import shutil
                 import subprocess
 
@@ -430,13 +380,6 @@ def main(argv: List[str]) -> int:
             return 0
 
     if not template_override:
-        # This module has no co-located DoE-side script path to derive the oracle's
-        # `${_script_dir}/../templates/shell/claude-doe-shim.sh.tmpl` default from —
-        # the DoE trampoline resolves that default itself (relative to its own
-        # on-disk location) and always passes --template explicitly, so this branch
-        # is reached only when a caller invokes main() directly without one. Fail
-        # loud rather than guess a cwd-relative path that could silently pick up the
-        # wrong template.
         print(
             f"{_PROG}: --template not supplied and no default resolvable "
             "(the DoE trampoline should always pass one explicitly).",
@@ -488,7 +431,6 @@ def main(argv: List[str]) -> int:
                 file=sys.stderr,
             )
 
-    # ---- resolve target rc, first hit wins: the --rc flag, then the
     # COORDINATOR_SHIM_RC env var, then SHELL-based detection ----
     if rc_override:
         target_rc = rc_override
@@ -514,7 +456,6 @@ def main(argv: List[str]) -> int:
                 )
                 target_rc = os.path.join(home, ".zshrc")
 
-    # ---- check-only path ----
     if check_only:
         tmp_fd, tmp_shim = tempfile.mkstemp(
             prefix="claude-doe-shim-check.", dir=tempfile.gettempdir()
@@ -573,10 +514,6 @@ def main(argv: List[str]) -> int:
                 disabled = _commented_out_source_lines(rc_text, expected_source_line)
                 if disabled:
                     # A DISABLED block is a live misconfiguration, not a
-                    # pending install: this box is running every session
-                    # without coordinator right now. check-only exists to
-                    # report exactly that, so it fails rather than reporting
-                    # the same "would add source block" as a clean machine.
                     for line in _disabled_block_report(target_rc, disabled):
                         print(f"[check-only] {line}", file=sys.stderr)
                     print("claude_shim: check failed: shim block is disabled (see stderr)")
@@ -596,7 +533,6 @@ def main(argv: List[str]) -> int:
         print(f"claude_shim: check failed: {shim_dest} is stale or absent (would install)")
         return 1
 
-    # ---- render shim (atomic) ----
     os.makedirs(shell_dir, exist_ok=True)
     tmp_fd, tmp_shim = tempfile.mkstemp(
         prefix=f"{os.path.basename(shim_dest)}.tmp.", dir=shell_dir
@@ -607,8 +543,6 @@ def main(argv: List[str]) -> int:
         with os.fdopen(tmp_fd, "wb") as fh:
             fh.write(content)
         os.replace(tmp_shim, shim_dest)
-        # DR-276: declared AFTER the write lands, at the FINAL destination,
-        # never the discarded tmp_shim.
         declare_write(shim_dest)
     except OSError:
         try:
@@ -620,15 +554,8 @@ def main(argv: List[str]) -> int:
         raise
     print(f"Wrote shim: {shim_dest}", file=sys.stderr)
 
-    # ---- wire source line into rc (sentinel-guarded, detect-then-fail-loud on hand-mod) ----
     if not os.path.isfile(target_rc):
         try:
-            # The rc file's PARENT may not exist: a POSIX rc sits directly in
-            # $HOME, but the pwsh profile lives at
-            # Documents/PowerShell/Microsoft.PowerShell_profile.ps1 and pwsh does
-            # not create that directory until a profile is first saved. Without
-            # this the Windows leg failed with "Cannot create rc file" on any box
-            # where the operator had never written a profile.
             parent = os.path.dirname(target_rc)
             if parent:
                 os.makedirs(parent, exist_ok=True)
@@ -662,11 +589,6 @@ def main(argv: List[str]) -> int:
             print("claude_shim: failed (see stderr for gen-claude-doe-shim.py output)")
             return 1
     else:
-        # Repair path. A disabled block is repaired the same way as a missing
-        # one (the live block below re-enables coordinator), but it is reported
-        # first: the operator needs to know the box HAS been running without
-        # coordinator, and the commented lines are theirs to delete — this
-        # generator never edits an operator's own text.
         disabled = _commented_out_source_lines(rc_text, expected_source_line)
         if disabled:
             for line in _disabled_block_report(target_rc, disabled):
@@ -678,8 +600,6 @@ def main(argv: List[str]) -> int:
                 fh.write(rc_text)
                 fh.write(new_block)
             os.replace(tmp_rc, target_rc)
-            # DR-276: declared AFTER the write lands, at the FINAL
-            # destination, never the discarded tmp_rc.
             declare_write(target_rc)
         except OSError:
             try:

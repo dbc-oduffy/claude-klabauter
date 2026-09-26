@@ -1,13 +1,3 @@
-"""Unit + cadence tests for coordinator_core.benchmarks.interleave.
-
-Mocked tests (default tier) cover `run_interleaved`'s API-shape guarantees --
-the single-primitive refusal, the round-robin shuffle discipline, and stats
-reduction -- without spawning anything. Cadence-tiered tests exercise the
-real `default_baseline_primitives()` against this box's actual git/python/
-stdlib-walk primitives.
-
-Spec backlink: docs/plans/2026-08-16-a-process-per-predicate.md, chunk C1.
-"""
 
 from __future__ import annotations
 
@@ -67,7 +57,6 @@ def test_run_interleaved_collects_n_samples_per_primitive():
 
 
 def test_run_interleaved_reports_median_and_p90_distinctly():
-    # Adversarial spread so median and p90 cannot coincidentally collapse.
     values = [1.0, 2.0, 3.0, 4.0, 100.0]
     primitive_a = _counting_primitive("a", list(values))
     primitive_b = _const_primitive("b", 0.0)
@@ -81,12 +70,6 @@ def test_run_interleaved_reports_median_and_p90_distinctly():
 
 
 def test_run_interleaved_draw_order_is_not_grouped_by_primitive():
-    """Regression guard for the interleaving contract itself: with a fixed
-    seed, the underlying draw order must not be a full block of one
-    primitive followed by a full block of the other -- that would be
-    exactly the block-sampled shape this module exists to make
-    inexpressible at the single-primitive level, and to actively avoid at
-    the multi-primitive level."""
     call_log = []
 
     def _logging_invoke(name):
@@ -103,16 +86,8 @@ def test_run_interleaved_draw_order_is_not_grouped_by_primitive():
     run_interleaved(primitives, n=10, rng=random.Random(42))
 
     assert len(call_log) == 20
-    # A fully block-sampled order would be 10 of one name followed by 10 of
-    # the other, i.e. exactly one transition. Interleaved round-robin with
-    # independent per-round shuffles produces many more.
     transitions = sum(1 for i in range(1, len(call_log)) if call_log[i] != call_log[i - 1])
     assert transitions > 1, f"draw order looks block-sampled: {call_log!r}"
-
-
-# Spawns real child processes (python, git) for the baseline primitives;
-# runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 
 
 @pytest.mark.spawns_process

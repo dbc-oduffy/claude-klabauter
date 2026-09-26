@@ -1,68 +1,3 @@
-"""
-coordinator_core.ops.session_baton_mint — "session_baton.mint" op.
-
-Purpose: mint or update a session's lazy baton record
-(``coordinator_core.session_baton.store``, C1) with the session's first user
-prompt. Idempotent — designed to be invoked from a ``UserPromptSubmit`` hook,
-NEVER ``SessionStart`` (whose input carries no prompt field at all — see
-``docs/plans/2026-08-18-a-session-always-has-a-baton.md`` § Anti-scope). The
-op itself takes the prompt as a plain argument and does not care which hook
-supplies it; the hook wiring choice stays the caller's (DoE-side).
-
-Spec backlink: docs/plans/2026-08-18-a-session-always-has-a-baton.md § C2
-
-Self-registration: importing this module calls
-``register_op("session_baton.mint", _handler)`` as a side-effect. Add this
-module to ``coordinator_core/ops/__init__.py`` to trigger registration at
-``start_server()`` time.
-
-Op scope "none" (same fleet-generic per-repo target-resolution convention as
-``coordinator_core.ops.session.record_pickup``): the handler's own
-``repo_root`` arg is unused (always ``None`` for scope-"none" ops). This op
-instead accepts an optional ``cwd`` wire param, threaded verbatim into
-``coordinator_core.session_baton.store``'s own ``cwd`` kwarg — the SAME
-optional-cwd convention that store already exposes (C1), so a caller
-resolving a repo other than claude-klabauter's own dispatching tree (or a test
-fixture) can pin it explicitly. ``cwd`` omitted resolves against the current
-process cwd, exactly as store's own functions do.
-
-Budget (D-A: this fires on the first prompt of EVERY session — 39-92/day in
-this repo alone, 34 live concurrently at measurement): one file write, no
-subprocess, no git invocation of this op's own. It delegates entirely to
-store's read/merge; store's own git-common-dir resolution
-(``coordinator_core.git.repo_root :: git_common_dir``) walks parent
-directories for a ``.git`` entry rather than spawning ``git rev-parse`` in
-the ordinary case (see that module's own docstring) — this op adds no
-further process-spawning on top of that. Asserted in the test surface via a
-``subprocess.run`` monkeypatch that raises if the git-spawn fallback is ever
-reached.
-
-Idempotent (C2's own contract): a second call for the SAME ``session_id``
-updates the record in place — ``store.merge_baton`` read-modify-writes ONE
-file, never duplicates. The FIRST prompt this op ever sees for a session is
-preserved permanently: once ``first_prompt`` is set (non-``None``), a later
-call supplying a different ``prompt`` value does NOT overwrite it — this is
-what makes the field honestly mean "first prompt of the session", not merely
-"most recently minted", and protects the record against a caller that (in
-spite of the documented once-per-session ``UserPromptSubmit`` contract) fires
-this op more than once in a session.
-
-Negative-spec:
-    - Does NOT write anything outside ``.git/coordinator-sessions/<sid>/`` —
-      inherits C1's store's own hard constraint verbatim; this op has no
-      write path of its own beyond delegating to store.
-    - ``title``/``intent`` ARE accepted (this chunk takes the escape clause
-      below) — but only ever threaded into ``merge_baton`` when the caller
-      actually supplies them; an omitted param must never reach the call
-      (``store``'s ``_UNSET`` sentinel means an explicit ``None`` would
-      overwrite). Unlike ``first_prompt``, neither has a capture-once guard:
-      a later call with a new value replaces the stored one by design.
-    - Does NOT promote a baton into a real handoff artifact — that is C3
-      (``ops/session_baton_promote.py``); this op has no knowledge of
-      promotion and never reads/writes ``promoted_to``.
-    - Does NOT overwrite an already-set ``first_prompt`` — see "Idempotent"
-      above; this is a deliberate first-wins policy, not an oversight.
-"""
 
 from __future__ import annotations
 
@@ -73,7 +8,6 @@ from coordinator_core.session_baton import store
 
 
 def _err(msg: str) -> dict:
-    """Return an exit_code=1 setup-error reply."""
     return {
         "exit_code": 1,
         "error": msg,
@@ -162,11 +96,6 @@ def _handler(params: dict, repo_root: Optional[str] = None) -> dict:
 
     merged = store.merge_baton(session_id, cwd, **merge_kwargs)
     if merged is None:
-        # `None` has two causes since C6 of docs/plans/2026-08-19-batons-unify-into-
-        # one-successor.md removed the store's `mkdir`: an unresolvable session hub,
-        # and a session directory that does not exist yet (`cs_init` not having run).
-        # Reporting the second as the first sends an operator hunting a git-repo
-        # problem that is not there.
         if store.baton_path(session_id, cwd) is None:
             return _err(
                 "session_baton.mint: could not resolve the session hub for "

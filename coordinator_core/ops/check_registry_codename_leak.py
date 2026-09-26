@@ -50,52 +50,10 @@ from typing import List, Optional, Sequence
 
 from coordinator_core.machine_resolver import merged_flat_registry as _merged_flat_registry
 
-# D1 keep-set — prefix-matched against slug (strip repos. prefix first).
-# 'coordinator' matches 'coordinator_claude'; 'deep_research' matches
-# 'deep_research_claude'; 'project_rag' matches 'example_retrieval_repo_ue_addon'.
-# 'doe_claude' kept: OSS resolve-coordinator-clone.sh reads repos.doe_claude
-# at runtime (PM-ratified 2026-07-10).
-# 'example_doctrine_repo' kept: a SECOND machine-local registry alias for the
-# same DoE-claude clone (`machine-local get repos.example_doctrine_repo` ==
-# `machine-local get repos.doe_claude`, both resolving to this machine's
-# DoE-claude clone path, verified 2026-08-13) -- it was this machine's
-# anonymizing scrub placeholder
-# for `doe_claude` before the 2026-08-13 PM ruling (571a4d78f535) stopped
-# scrubbing the DoE family. Removing that `doe_claude -> example_doctrine_repo`
-# depersonalize mapping collaterally removed the ONLY thing that had been
-# excluding this alias's own text from the no-residual-pattern leak-check --
-# `example_doctrine_repo` was never itself KEEPSET, only ever exempted as
-# "this row's own placeholder output". Once nothing produces it as placeholder
-# output anymore, the guard correctly starts treating it as a bare registered
-# `repos.*` slug and flags every source-comment citation of the incident it
-# documents (e.g. coordinator_core/ops/percolate_run.py's own docstring,
-# coordinator_core/ops/coordinator_doe_root.py). Same sibling, same ruling,
-# same disclosure -- KEEPSET is the narrow, named fix; not a pattern loosen.
-# 'fleet_root' kept: `repos.fleet_root` is not a private repo codename -- it
 # names the CONTAINER directory the fleet's repos live under.
 # `git_hook_install.py`'s own `_CONTAINER_REGISTRY_KEYS` comment says these
-# "are not unclassifiable repos; they are not repos at all, and never reach a
-# verdict." Same generic/public-slug class as 'game_dev', 'web_dev',
-# 'data_science', 'coordinator', 'experiments' above.
 # 'claude_klabauter' kept: this is THIS MIRROR'S OWN PUBLIC IDENTITY -- the
-# name every other slug in the store scrubs TO, not a private codename that
-# leaks. Same class as 'doe_claude' above (the sibling mirror's public
-# identity), and the two were jointly renamed onto each mirror's public
-# identity by the 2026-08-05 cross-mirror audit
-# (cross-repo/inbox/2026-08-05-doe-claude-em-joint-rename-agreed-our-outlier-
-# is-worse.md); 'doe_claude' was added to KEEPSET then and this one was not.
-# Scrubbing it is incoherent by construction: `base.depersonalize` maps
-# claude_klabauter -> claude_klabauter, so a rule satisfying the leak oracle
-# for this slug would have to rewrite the placeholder the sweep itself
-# just produced, corrupting every published byte that names the mirror.
-# Registered as `repos.claude_klabauter` and classified by
 # `consumer_corpus_preflight` (NON_FLEET_EXCLUDED_KEYS, not FLEET_REPO_KEYS),
-# which is how it entered the leak oracle's slug universe with no KEEPSET
-# entry and left `test_registry_slug_scrub_coverage` red across 9 targets --
-# so the pin that exists to catch a missing scrub rule before a live publish
-# was itself failing, and caught nothing. Found 2026-09-18 when
-# `example_orchestration_hub_repo` reached a live publish refusal behind
-# that silence. KEEPSET is the narrow, named fix; not a pattern loosen.
 KEEPSET: Sequence[str] = (
     "project_rag",
     "deep_research",
@@ -138,12 +96,6 @@ def _is_kept(slug: str, no_exempt: Sequence[str] = ()) -> bool:
 
 
 def _validate_no_exempt(no_exempt: Sequence[str]) -> None:
-    """Raise ValueError if any re-admitted slug is not an exact KEEPSET member.
-
-    A silent no-op here would let a `doe-claude` (hyphen) vs `doe_claude`
-    (underscore) authoring slip through as a no-op re-admission — the target
-    would keep its original (unintended) exemption instead of failing loud.
-    """
     invalid = [s for s in no_exempt if s not in KEEPSET]
     if invalid:
         raise ValueError(
@@ -172,10 +124,6 @@ def _resolve_registry_keys(env: dict) -> List[str]:
 
 
 def _is_probably_binary(path: Path) -> bool:
-    """Approximate grep -I: treat a file as binary if it contains a NUL byte
-    in its first 8KB (matches grep's own binary-detection heuristic closely
-    enough for this guard's purposes — a false-negative here just means one
-    extra file gets scanned, not a missed leak)."""
     try:
         with open(path, "rb") as f:
             chunk = f.read(8192)
@@ -308,9 +256,6 @@ def main(argv: Optional[List[str]] = None, env: Optional[dict] = None) -> int:
                 all_hits.extend(hits)
 
     # BEHAVIOUR CHANGE (2026-07-22, break-class fix): restores this guard's
-    # own documented fail-closed contract — an incomplete scan (any file we
-    # couldn't read) is treated as non-clean rather than silently reported
-    # as "clean" alongside a narrowed scanned set.
     if unreadable_files:
         uniq_unreadable = sorted(set(unreadable_files))
         print(
@@ -332,9 +277,6 @@ def main(argv: Optional[List[str]] = None, env: Optional[dict] = None) -> int:
             "  extend the D1 keep-set in this script (load-bearing system vocabulary only):",
             file=sys.stderr,
         )
-        # Trailing blank line matches the bash oracle's `echo "$all_hits"`,
-        # which double-terminates (each hit line already ends in a newline
-        # from the accumulation loop, and `echo` appends one more).
         print("\n".join(all_hits) + "\n", file=sys.stderr)
         return 1
 

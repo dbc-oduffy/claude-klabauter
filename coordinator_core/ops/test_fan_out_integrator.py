@@ -1,16 +1,3 @@
-"""
-Tests for coordinator_core.ops.fan_out_integrator (7 assertions: happy-path,
-per-block structure, overlap, missing-sidecar, non-git-repo, empty-spec,
-malformed-row). Each test below mirrors one bats test by name/number.
-
-Also covers two Python-port-specific edge cases the bash oracle's `read -ra`
-comma-split behavior has that a naive `str.split(",")` port would silently get
-wrong (see fan_out_integrator._parse_file_lists's inline comment): a trailing
-comma in the file-list column must NOT produce a spurious empty-path-entry
-error, matching bash's `IFS=',' read -ra` one-trailing-empty-field drop.
-
-Port of: test-fan-out-integrator.sh (DoE 432e3285, 2026-07-22)
-"""
 from __future__ import annotations
 
 import io
@@ -23,17 +10,10 @@ import pytest
 from coordinator_core.ops import fan_out_integrator as mod
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture()
@@ -85,11 +65,6 @@ def run_main(spec_text, monkeypatch, capsys, spec_file=None):
     return rc, captured.out, captured.err
 
 
-# ---------------------------------------------------------------------------
-# T1: happy path — 3 slices, no overlap, all sidecars present
-# ---------------------------------------------------------------------------
-
-
 def test_happy_path_three_slices(git_repo, plugin_root, monkeypatch, capsys):
     sidecars = git_repo / "sidecars"
     make_sidecar(sidecars / "slice-A.json")
@@ -110,11 +85,6 @@ def test_happy_path_three_slices(git_repo, plugin_root, monkeypatch, capsys):
         assert sid in out
     assert "EM REMINDERS" not in out
     assert "EM REMINDERS" in err
-
-
-# ---------------------------------------------------------------------------
-# T2: per-block structure
-# ---------------------------------------------------------------------------
 
 
 def test_per_block_structure(git_repo, plugin_root, monkeypatch, capsys):
@@ -147,11 +117,6 @@ def test_per_block_structure(git_repo, plugin_root, monkeypatch, capsys):
     assert "slice-A" in block("slice-B")
 
 
-# ---------------------------------------------------------------------------
-# T3: overlap detection
-# ---------------------------------------------------------------------------
-
-
 def test_overlap_detection(git_repo, plugin_root, monkeypatch, capsys):
     sidecars = git_repo / "sidecars"
     make_sidecar(sidecars / "slice-A.json")
@@ -169,11 +134,6 @@ def test_overlap_detection(git_repo, plugin_root, monkeypatch, capsys):
     assert "shared.py" in err
 
 
-# ---------------------------------------------------------------------------
-# T4: missing sidecar
-# ---------------------------------------------------------------------------
-
-
 def test_missing_sidecar(git_repo, plugin_root, monkeypatch, capsys):
     sidecars = git_repo / "sidecars"
     make_sidecar(sidecars / "slice-A.json")
@@ -189,11 +149,6 @@ def test_missing_sidecar(git_repo, plugin_root, monkeypatch, capsys):
     assert "slice-B-MISSING.json" in err
 
 
-# ---------------------------------------------------------------------------
-# T5: non-git-repo cwd
-# ---------------------------------------------------------------------------
-
-
 def test_non_git_repo(tmp_path, plugin_root, monkeypatch, capsys):
     non_git_dir = tmp_path / "non-git"
     non_git_dir.mkdir()
@@ -207,22 +162,12 @@ def test_non_git_repo(tmp_path, plugin_root, monkeypatch, capsys):
     assert "git repository" in err
 
 
-# ---------------------------------------------------------------------------
-# T6: empty spec
-# ---------------------------------------------------------------------------
-
-
 def test_empty_spec(git_repo, plugin_root, monkeypatch, capsys):
     rc, out, err = run_main("", monkeypatch, capsys)
 
     assert rc == 2
     assert out == ""
     assert "empty spec" in err
-
-
-# ---------------------------------------------------------------------------
-# T7: malformed row
-# ---------------------------------------------------------------------------
 
 
 def test_malformed_row(git_repo, plugin_root, monkeypatch, capsys):
@@ -238,18 +183,10 @@ def test_malformed_row(git_repo, plugin_root, monkeypatch, capsys):
     assert "field" in err
 
 
-# ---------------------------------------------------------------------------
-# Port-specific: trailing comma in file-list column (bash read -ra parity)
-# ---------------------------------------------------------------------------
-
-
 def test_trailing_comma_does_not_spuriously_error(git_repo, plugin_root, monkeypatch, capsys):
     sidecars = git_repo / "sidecars"
     make_sidecar(sidecars / "slice-A.json")
 
-    # Trailing comma after the last real path — bash's `IFS=',' read -ra` drops
-    # exactly one trailing empty field here (verified empirically against the
-    # bash oracle's shape), so this must NOT trip the "empty path entry" error.
     spec = f"slice-A\t{sidecars}/slice-A.json\tauth.py,auth_test.py,"
     rc, out, err = run_main(spec, monkeypatch, capsys)
 
@@ -257,11 +194,6 @@ def test_trailing_comma_does_not_spuriously_error(git_repo, plugin_root, monkeyp
     assert "empty path entry" not in err
     assert "auth.py" in out
     assert "auth_test.py" in out
-
-
-# ---------------------------------------------------------------------------
-# Missing snippet file — exit-2 "environment" bucket (module docstring contract)
-# ---------------------------------------------------------------------------
 
 
 def test_missing_snippet_is_exit_2(git_repo, monkeypatch, capsys, tmp_path):

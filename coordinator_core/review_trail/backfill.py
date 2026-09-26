@@ -86,38 +86,18 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 from coordinator_core import coverage
 from coordinator_core.review_trail import reviewed_set as _store
 
-#: Bounded fan-out for the "special" (plan-kind / foreign-scoped) per-range
-#: `git rev-list` resolution below — mirrors `coverage.py`'s own
 #: `_REVLIST_MAX_WORKERS` bound (distinct ranges are independent read-only
-#: shell-outs; unbounded fan-out is the "365-spawn fan-out... wearing a
-#: migration's clothes" shape this chunk's brief explicitly refuses).
 _REVLIST_MAX_WORKERS = 16
 
 
 class RecordDisposition:
-    """String constants for `resolve_and_fold`'s per-record verdict."""
 
     FOLDED = "folded"
-    #: Rule-excluded: verdict=pending, scope_kind=integration, a stored
-    #: literal-HEAD range, or an unrecognized/missing range shape. Permanent
-    #: — the record's own fields never change (additive-create trail), so
-    #: this classification is stable and the id is marked folded (with zero
-    #: contribution) so it is never re-attempted.
     EXCLUDED = "excluded"
-    #: Retryable: an endpoint or range could not be resolved this call
-    #: (abbreviated SHA, malformed ^N, git failure, ...). NOT marked folded
-    #: — the next `resolve_and_fold` call (write-time retry is out of
-    #: scope; backfill's next run is the retry path) re-attempts it.
     UNRESOLVED = "unresolved"
 
 
 def _record_kind(record: dict) -> Optional[str]:
-    """The record's creditable `kind`, or `None` if it is excluded outright
-    (unrecognized/`"integration"` scope_kind, or a missing/non-diff-shaped
-    range on a legacy record) — mirrors `coverage.py::build_reviewed_set`'s
-    own Phase 1 classification exactly, since the folded set must credit
-    the identical corpus the retiring per-call builder did (C2's
-    equivalence proof)."""
     scope_kind = record.get("scope_kind")
     sha_range = record.get("sha_range") or ""
     if scope_kind is not None:
@@ -166,8 +146,6 @@ def _resolve_special(
 
     endpoint_shas = _store._resolve_endpoints_batch(sorted(tokens), repo_root)
 
-    # (record_id, record, kind, sha_range) for everything whose endpoints
-    # resolved and land in the reach-set.
     resolvable: List[Tuple[str, dict, str, str]] = []
     for record_id, record, kind in special:
         if record_id in dispositions:
@@ -215,8 +193,6 @@ def _resolve_special(
             s.strip() for s in out.splitlines() if s.strip()
         )
 
-    # Rule 3 — one _classify_bookkeeping_shas pass for the WHOLE plan-kind
-    # bucket across every still-live "special" record, not per record.
     plan_pool: Set[str] = set()
     for sha_range, entries in distinct_ranges.items():
         if sha_range not in range_shas:
@@ -231,8 +207,6 @@ def _resolve_special(
         )
         planning_set = planning
 
-    # Rule 4 — shared narrowing cache across records (many share a range or
-    # session_id).
     session_cache: Dict[Tuple[str, Optional[str]], FrozenSet[str]] = {}
 
     new_shas: Set[str] = set()
@@ -264,30 +238,11 @@ def _resolve_special(
     if folded_ids or new_shas:
         existing = _store.read_reviewed_set(repo_root)
         to_append = frozenset(new_shas - existing)
-        # Write ordering (finding 1, mirrored from `fold_in`): SHAs first
-        # and flushed, THEN the folded ids.
         _store._append_shas(repo_root, to_append)
         _store._append_folded_ids(repo_root, folded_ids)
 
 
 def resolve_and_fold(repo_root: str, records: List[Tuple[str, dict]]) -> Dict[str, str]:
-    """Apply the five credit rules to `records` and fold every creditable
-    result into the reviewed_set store. Returns `{record_id: disposition}`
-    (see `RecordDisposition`).
-
-    `records` is folded unconditionally — a caller wanting idempotency
-    (i.e. `run_backfill`) must filter out ids already in
-    `reviewed_set.read_folded_record_ids` BEFORE calling this. The
-    write-time caller (`ops.review_trail_write`) always passes a brand-new
-    record id, so it never needs to filter.
-
-    The common case (a "diff"-kind record with no foreign-session
-    narrowing owed) is delegated straight to `reviewed_set.fold_in` — the
-    already-shipped, already-spawn-budgeted endpoint-normalization +
-    range-fold path (C1). Only records actually needing rule 3 (plan-kind
-    partitioning) or rule 4 (foreign-session narrowing) take the slower
-    `_resolve_special` path.
-    """
     dispositions: Dict[str, str] = {}
     excluded_permanent: List[str] = []
     plain: List[Tuple[str, str]] = []
@@ -329,20 +284,12 @@ def resolve_and_fold(repo_root: str, records: List[Tuple[str, dict]]) -> Dict[st
     return dispositions
 
 
-# ---------------------------------------------------------------------------
-# One-shot backfill over the already-on-disk corpus.
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class BackfillResult:
-    """Outcome of one `run_backfill` call."""
 
     folded: List[str] = field(default_factory=list)
     excluded: List[str] = field(default_factory=list)
     unresolved: List[str] = field(default_factory=list)
-    #: Files present on disk that could not be parsed at all (neither JSON
-    #: nor JSONL) — reported, never silently dropped.
     parse_failures: List[str] = field(default_factory=list)
 
 
@@ -439,9 +386,6 @@ def run_backfill(repo_root: str) -> BackfillResult:
 
 
 def _main(argv: Optional[List[str]] = None) -> int:
-    """Minimal operator CLI: `python -m coordinator_core.review_trail.backfill <repo_root>`.
-    Prints a one-line summary and exits 0 always — this is a report, never
-    a gate; an unresolved record is reported, not treated as a failure."""
     import sys
 
     args = argv if argv is not None else sys.argv[1:]

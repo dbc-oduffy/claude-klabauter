@@ -1,8 +1,3 @@
-"""
-Tests for coordinator_core.ops.fleet_machinery_sweep (C14).
-
-Spec: docs/plans/2026-09-02-state-keeps-the-work-not-the-machinery.md, chunk C14.
-"""
 from __future__ import annotations
 
 import os
@@ -23,8 +18,6 @@ from coordinator_core.ops.fleet_machinery_sweep import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns real external `git` processes; runs at cadence gates like its C4
-# sibling test module.
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -51,10 +44,6 @@ def _init_repo(root: str) -> None:
     _git(root, "config", "user.name", "test")
 
 
-# ---------------------------------------------------------------------------
-# Selector discipline -- the negative case is the one worth a test here.
-# ---------------------------------------------------------------------------
-
 def test_selector_matches_full_prefix():
     paths = [
         "state/subagent-share/abc/sidecar.md",
@@ -64,11 +53,6 @@ def test_selector_matches_full_prefix():
 
 
 def test_selector_rejects_name_token_lookalike():
-    """`coordinator_core/session/subagent_share.py` is engine source one
-    underscore away from the `state/subagent-share/` bucket -- a loose
-    (name-token) selector already gets the positive case right, so this
-    negative case is the one that actually proves the selector is
-    prefix-anchored."""
     paths = [
         "coordinator_core/session/subagent_share.py",
         "docs/reference/state-subagent-share-notes.md",
@@ -81,15 +65,9 @@ def test_selector_rejects_name_token_lookalike():
 
 
 def test_selector_matches_bucket_root_itself():
-    # An empty-directory placeholder committed as the bucket root, no
-    # trailing content -- the bucket prefix without a trailing slash.
     paths = ["state/review-trail"]
     assert select_machinery_paths(paths) == ["state/review-trail"]
 
-
-# ---------------------------------------------------------------------------
-# Publish-repo exclusion -- basename denylist, never a substring match.
-# ---------------------------------------------------------------------------
 
 def test_publish_repo_excluded_by_basename(tmp_path):
     pub = tmp_path / "claude-klabauter"
@@ -98,8 +76,6 @@ def test_publish_repo_excluded_by_basename(tmp_path):
 
 
 def test_repo_with_publish_substring_not_excluded(tmp_path):
-    # Contains the publish name as a substring but is not it -- must not
-    # be excluded by a loose match.
     decoy = tmp_path / "claude-klabauter-notes"
     decoy.mkdir()
     assert _is_publish_repo(str(decoy)) is False
@@ -120,10 +96,6 @@ def test_discover_sibling_repos_excludes_self_and_publish(tmp_path):
     found_names = {os.path.basename(p) for p in found}
     assert found_names == {"sibling-repo"}
 
-
-# ---------------------------------------------------------------------------
-# Dry-run selection -- read-only, one git ls-files spawn.
-# ---------------------------------------------------------------------------
 
 def test_dry_run_select_full_set(tmp_path):
     root = str(tmp_path)
@@ -157,10 +129,6 @@ def test_sweep_repo_dry_run_does_not_mutate(tmp_path):
     assert "state/subagent-share/abc/sidecar.md" in result["selected"]
 
 
-# ---------------------------------------------------------------------------
-# Ignore-block idempotency.
-# ---------------------------------------------------------------------------
-
 def test_write_ignore_block_is_idempotent(tmp_path):
     root = str(tmp_path)
     os.makedirs(root, exist_ok=True)
@@ -172,10 +140,6 @@ def test_write_ignore_block_is_idempotent(tmp_path):
         content = fh.read()
     assert content.count("state/subagent-share/") == 1
 
-
-# ---------------------------------------------------------------------------
-# Full mutate leg, on a throwaway repo only -- never a sibling's tree.
-# ---------------------------------------------------------------------------
 
 def test_sweep_repo_mutate_relocates_and_untracks(tmp_path):
     root = str(tmp_path)
@@ -197,7 +161,6 @@ def test_sweep_repo_mutate_relocates_and_untracks(tmp_path):
     assert "state/review-trail/findings/x.md" not in tracked
     assert "state/subagent-share/abc/sidecar.md" not in tracked
     assert "README.md" in tracked
-    # Never commits -- the mutation stays staged/dirty for the repo's own EM.
     status = subprocess.run(
         ["git", "status", "--porcelain"], cwd=root, capture_output=True,
         text=True, **no_console_creationflags(),
@@ -220,20 +183,14 @@ def test_relocate_buckets_defers_on_existing_destination(tmp_path):
     assert deferred[0]["bucket"] == "state/review-trail/"
 
 
-# ---------------------------------------------------------------------------
-# Test trap named explicitly by the C14 stub: OSError(13, ...) IS a
-# PermissionError under CPython (OSError.__new__ remaps errno 13 to the
 # subclass), so a narrowing test built on errno 13 asserts the OPPOSITE of
-# what it reads as. Use errno 9 (EBADF) to prove the retry primitive is
-# reached and reported as a genuine, permanent, non-retryable failure.
-# ---------------------------------------------------------------------------
 
 def test_relocate_buckets_records_permanent_oserror_as_deferred(tmp_path):
     root = str(tmp_path)
     _write(root, "state/ceremony/record.md")
 
     def rename_fn(src, dst):
-        raise OSError(9, "Bad file descriptor")  # errno 9, NOT 13 -- see docstring above
+        raise OSError(9, "Bad file descriptor")
 
     moved, deferred = _relocate_buckets(root, rename_fn, buckets=("state/ceremony/",))
     assert moved == []
@@ -242,8 +199,5 @@ def test_relocate_buckets_records_permanent_oserror_as_deferred(tmp_path):
 
 
 def test_errno_13_is_a_permission_error_not_a_bare_oserror():
-    """Documents the trap itself: constructing OSError(13, ...) yields a
-    PermissionError instance under CPython. A test asserting `type(exc) is
-    OSError` on errno 13 would be asserting something CPython does not do."""
     exc = OSError(13, "Permission denied")
     assert isinstance(exc, PermissionError)

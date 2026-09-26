@@ -220,31 +220,12 @@ from coordinator_core import tracker_holder
 from coordinator_core import tracker_store
 
 
-#: F1 (the Director of Engineering boundary review, 2026-08-20) — the three C12 refusal classes'
-#: stable, machine-readable discriminators, pinned as module constants so a
-#: rename is caught by `test_refusal_class_values_are_pinned`. This is the
-#: contract cockpit (or any process-boundary caller) builds against: the
-#: value folded into `error["message"]`'s leading `refusal_class=<value>: `
-#: token by `PushSuggestionRefused.__str__` below — see that class's
-#: docstring for why this is the field that survives to the wire.
 _REFUSAL_CLASS_MALFORMED = "malformed"
 _REFUSAL_CLASS_UNAUTHORIZED = "unauthorized"
 _REFUSAL_CLASS_SCHEMA_STALE = "schema_stale"
-#: C3 (review-driven correction, 2026-08-20) — the D2(4) peer-delivery
-#: collision, addressed on the minted event id after C1, is now evidence of
-#: a successful prior delivery, not a malformed request; cockpit must be
-#: able to treat it as success-on-retry. Pinned alongside the three C12
-#: classes so a rename is caught by the same `test_refusal_class_values_
-#: are_pinned` this joins.
 _REFUSAL_CLASS_DUPLICATE_DELIVERY = "duplicate_delivery"
-#: P144-C4 (idempotency-key binding, spike verdict § 3) — the fifth
 #: refusal class: `idempotency_key` reuse under a DIFFERENT logical
-#: payload, own-shard/own-history only (`tracker_store.
 #: TrackerStoreKeyMisuseError`). The OPPOSITE message from
-#: `duplicate_delivery` — that class is success-on-retry evidence; this one
-#: is a refusal an cockpit-side caller must NOT retry as-is, so it cannot
-#: be folded into `duplicate_delivery` without corrupting the very
-#: distinction `refusal_class=` exists to let a caller parse.
 _REFUSAL_CLASS_KEY_MISUSE = "key_misuse"
 
 
@@ -389,30 +370,10 @@ class PushSuggestionKeyMisuseError(PushSuggestionRefused):
     refusal_class = _REFUSAL_CLASS_KEY_MISUSE
 
 
-#: This op's own wire-contract version (module docstring § Rejection
-#: contract, C12 class 3/3). Bump on any breaking change to the
-#: `params`/`event` shape this handler requires; a caller supplying an older
-#: `contract_version` is refused loud via `PushSuggestionSchemaStaleError`
-#: rather than silently misinterpreted against the new shape.
 _CONTRACT_VERSION = 1
 
 
-# ---------------------------------------------------------------------------
-# Ownership resolution (routes on the event payload, never a separate wire param)
-# ---------------------------------------------------------------------------
-
-
 def _resolve_owning_repo(event: dict) -> Optional[str]:
-    """Resolve the `owning_repo` value to hand `tracker_holder.write_root_for`,
-    reading it from the event payload itself (see module docstring § Ownership
-    routing exception).
-
-    `scope == "fleet-authored"` routes on `event["authority"]["emitter_repo"]`;
-    every other payload routes on `event["repo"]`. An empty-string owner
-    (cockpit's legacy "no owner" encoding) is translated to `None` here —
-    `write_root_for` itself refuses a bare `""` (AC7) and requires the
-    caller to have already made this translation.
-    """
     if not isinstance(event, dict):
         raise PushSuggestionMalformedError(
             f"tracker.push_suggestion: event must be an object, got "
@@ -442,11 +403,6 @@ def _resolve_owning_repo(event: dict) -> Optional[str]:
             f"string or null, got {owning!r}"
         )
     return owning
-
-
-# ---------------------------------------------------------------------------
-# Peer-delivery envelope (DR-338 D1(a)/D2 — never a direct cross-tree write)
-# ---------------------------------------------------------------------------
 
 
 def _compose_envelope(owning_repo: Optional[str], event: dict) -> str:
@@ -483,21 +439,12 @@ def _compose_envelope(owning_repo: Optional[str], event: dict) -> str:
 
 
 def _write_envelope_file(target_path: Path, content: str) -> None:
-    """O_EXCL exclusive create — D2(4) fail-loud on collision, never a
-    clobbering overwrite. Mirrors `memo.send`'s `_write_memo_file` (same
-    newline="\\n" discipline: this write lands in a foreign, possibly-
-    Windows-cloned working tree, and Python text mode would otherwise
-    translate "\\n" to "\\r\\n" there regardless of the receiver's own
-    .gitattributes)."""
     target_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(target_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
         f.write(content)
 
 
-#: Deliverable this op ships under, stamped as a trailer on every delivery
-#: commit so a receiver can attribute a file that appeared in their tree
-#: without any of their operators running anything.
 _DELIVERABLE_ID = "dlv-sat-06"
 
 
@@ -542,16 +489,10 @@ def _delivery_commit_message(rel_path: str) -> str:
     """
     lines = [
         # Prose, not `EVENT_KIND_FRONTMATTER_LABEL`: that constant is the
-        # hyphenated `kind:` value (line 435's use), and substituting it here
-        # renders the subject "deliver sovereign-tracker-event <path>".
         f"cross-repo: deliver sovereign-tracker event {rel_path}",
         "",
         f"Deliverable-Id: {_DELIVERABLE_ID}",
     ]
-    # Routed through the one
-    # shared accessor (session.core.attributable_session_id); the strip()
-    # and exception guard stay here, since the accessor itself makes no
-    # such contract and this site's `.strip()`/`except` shape is its own.
     try:
         session_id = (_session_core.attributable_session_id() or "").strip()
     except (OSError, ValueError):
@@ -596,43 +537,6 @@ def _commit_envelope(receiver_repo_path: Path, rel_path: str, content: str) -> d
 
 
 def _deliver_envelope(target_root: Path, owning_repo: Optional[str], event: dict) -> dict:
-    """Peer-delivery arm: compose + write + commit ONE envelope into
-    `target_root`'s `cross-repo/inbox/` — DR-338 D1(a)/D2, never a direct
-    cross-tree write (D4). `target_root` is always registry-resolved by
-    `tracker_holder.write_root_for` before this function is ever called
-    (D2(2), registry-enumerated receiver only — never wire-derived).
-
-    Addressed on the MINTED `event["id"]`, never a caller-supplied field
-    (C1, review-driven correction, 2026-08-20). `_push_suggestion_sync`
-    assigns `event["id"]` before routing, so it is guaranteed present here
-    — asserted, not defaulted. Two reasons this is the only correct
-    addressing key:
-
-      - Idempotency, date-independently. `event["id"]` is itself
-        content-derived and (with `idempotency_key` supplied) stable across
-        a same-payload retry — see `_mint_event_id`. Addressing the
-        filename on it means a retry re-derives the SAME filename and
-        `O_EXCL` refuses the duplicate delivery regardless of which UTC day
-        each attempt lands on. The prior `{today}-...-{item_id}` shape
-        broke exactly this across a midnight boundary: same payload, same
-        key, different date prefix, different filename, no collision, a
-        second envelope silently delivered.
-      - Confinement. The caller-supplied `item_id`/`event_id` this filename
-        used to be built from received no path-hostile treatment beyond
-        `.strip()` — a value like `"../../../../escaped"` composes real
-        `..` path segments that `mkdir(parents=True)` and `os.open` both
-        resolve, verified to escape the receiver repository entirely.
-        `event["id"]` is machine-minted with a fixed, grammar-constrained
-        shape (`evt-<machine_slug>-<12 hex>`, see `_mint_event_id`) and was
-        never caller-supplied text in the first place — a caller-supplied
-        `event.id` is refused loud before this function is ever reached
-        (the handler's `if "id" in event` check). This is not a sanitizer
-        bolted onto a caller-controlled string; it is removing the
-        caller-controlled string from the path entirely. See also the
-        `target_path.resolve()` confinement assertion below, which exists
-        so a future editor cannot reintroduce a caller-controlled path
-        component here without an explicit, loud failure.
-    """
     event_id = event.get("id")
     if not isinstance(event_id, str) or not event_id:
         raise PushSuggestionRefused(
@@ -642,23 +546,10 @@ def _deliver_envelope(target_root: Path, owning_repo: Optional[str], event: dict
             "path from an absent addressing key"
         )
     filename = f"tracker-event-{event_id}.md"
-    # Single resolver call — `_memo_resolver`/C5: the receiver's inbox root
-    # is probed ONCE here via `receiver_inbox_root` (per-receiver, C10a
-    # migration-window aware), and every downstream consumer of that root
-    # (the write path, the confinement assertion, the D2(7) gitignore check)
-    # derives from THIS one result rather than re-spelling `cross-repo/inbox`
-    # independently. Resolving the root a second time (rather than deriving
-    # three times from one call) is the one shape that would introduce a
-    # TOCTOU here.
     corpus_root_str, _ = receiver_inbox_root(str(target_root))
     inbox_root = (Path(corpus_root_str) / "inbox").resolve()
     target_path = inbox_root / filename
 
-    # Confinement: the composed path must resolve inside the receiver's
-    # inbox and nowhere else. Hardens against a future editor reintroducing
-    # a caller-controlled path component into `filename` above — this
-    # assertion, not just the minted-id addressing, is what a regression
-    # trips (P1-2, review-driven correction, 2026-08-20).
     if target_path.resolve().parent != inbox_root:
         raise PushSuggestionRefused(
             f"tracker.push_suggestion: composed delivery path "
@@ -666,18 +557,8 @@ def _deliver_envelope(target_root: Path, owning_repo: Optional[str], event: dict
             f"{inbox_root} — refusing; nothing was written"
         )
 
-    # `rel_path` is DERIVED from the same resolved target, never re-spelled
-    # against a separate `cross-repo/inbox/` literal — a second, independently
-    # spelled `rel_path` is exactly the fail-open the D2(7) gitignore guard
-    # was hardened against (staff-eng finding #5).
     rel_path = target_path.resolve().relative_to(target_root.resolve()).as_posix()
 
-    # D2(7) gitignore delivery guard — refuse-on-ignored, BEFORE any write.
-    # `check_ignore`'s own contract is three-valued: 0 = ignored,
-    # 1 = evaluated and not ignored, >=2 = could not evaluate. Admitting on
-    # anything but 1 (review-driven correction, 2026-08-20) means a
-    # receiver mid-rebase or holding an `index.lock` — ordinary at this
-    # box's documented load norm — no longer silently loses the guard.
     ignore_result = check_ignore(target_root, [rel_path])
     if ignore_result.returncode == 0:
         raise PushSuggestionRefused(
@@ -718,21 +599,6 @@ def _deliver_envelope(target_root: Path, owning_repo: Optional[str], event: dict
 def _write_local(
     worktree: Path, event: dict, idempotency_key: Optional[str] = None
 ) -> dict:
-    """Local arm: the target IS the caller's own repo — a direct, same-repo
-    write through `tracker_store.append_event`. Not a cross-tree crossing
-    and not DR-338's subject (see module docstring negative-spec).
-
-    P144-C4: passes *idempotency_key* through as `tracker_store.
-    append_event`'s `key` keyword, so the own-shard/own-history
-    duplicate-key comparison runs. A same-key, same-payload retry returns
-    the pre-existing bound event (idempotent success — `stored` is that
-    event, not a new append). A same-key, different-payload reuse raises
-    `tracker_store.TrackerStoreKeyMisuseError`, reclassified here to this
-    op's own caller-facing `PushSuggestionKeyMisuseError` (module docstring
-    § Rejection contract) rather than propagated verbatim — unlike the
-    other `TrackerStoreError` types, which stay verbatim per that same
-    docstring section, this one needs the wire-visible `refusal_class`
-    token a bare `TrackerStoreError` does not carry."""
     try:
         stored = tracker_store.append_event(
             dict(event), repo_root=worktree, key=idempotency_key
@@ -808,12 +674,6 @@ def _mint_event_id(event: dict, idempotency_key: Optional[str] = None) -> str:
     return f"evt-{machine_slug()}-{digest}"
 
 
-#: The exact, stable substring `tracker_holder._resolve_repos_key_for_slug`
-#: raises for a slug with no `repo_slug.<slug>` registry index entry (C5's
-#: own non-member-slug refusal) — the ONE `tracker_holder` rung this op
-#: reclassifies as `PushSuggestionUnauthorizedError` (module docstring
-#: negative-spec: every OTHER rung is operator misconfiguration, not a
-#: caller-supplied unauthorized identifier, and stays unclassified).
 _NON_MEMBER_SLUG_MARKER = "is not a known repos.* member"
 
 
@@ -851,9 +711,7 @@ def _push_suggestion_sync(
     return _deliver_envelope(target_root, owning_repo, event)
 
 
-# ---------------------------------------------------------------------------
 # JSON-RPC handler
-# ---------------------------------------------------------------------------
 
 
 @register_op("tracker.push_suggestion")
@@ -924,7 +782,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     common_dir = Path(repo_root)
     worktree = main_worktree_root(common_dir)
 
-    # D3: optional repo_root consistency check (contract §3.3 doctrine).
     mismatch = check_repo_root(params.get("repo_root"), common_dir)
     if mismatch:
         raise PushSuggestionMalformedError(f"tracker.push_suggestion: {mismatch}")
@@ -936,9 +793,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             f"{type(event).__name__}"
         )
 
-    # claude-klabauter mints the event id (RULING 2026-08-20, C4) — a caller-supplied
-    # `id` is refused loud, never silently overwritten (which would leave
-    # the caller believing its id is the stored key).
     if "id" in event:
         raise PushSuggestionMalformedError(
             "tracker.push_suggestion: event must not carry a caller-"
@@ -946,8 +800,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "bound (i)); refusing rather than silently overwriting it"
         )
 
-    # C12 class 3/3 — schema-stale: an explicit, older contract_version is
-    # refused loud; absence is treated as current (module docstring).
     contract_version = params.get("contract_version")
     if contract_version is not None:
         if not isinstance(contract_version, int) or isinstance(contract_version, bool):
@@ -963,10 +815,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 "rebuilt against the current wire contract"
             )
 
-    # F5 (the Director of Engineering boundary review, 2026-08-20) — optional idempotency key,
-    # folded into the minted id's digest in place of the wall-clock nonce so
-    # a same-payload retry collides on tracker_store's duplicate-id guard
-    # instead of double-appending (see _mint_event_id).
     idempotency_key = params.get("idempotency_key")
     if idempotency_key is not None and (
         not isinstance(idempotency_key, str) or not idempotency_key.strip()

@@ -63,16 +63,6 @@ _log = logging.getLogger(__name__)
 
 
 def _record(declared: List[str], cwd: Optional[str]) -> None:
-    """Hand `declared` to the one existing recorder.
-
-    Reuses `ipc._record_self_reported_touches` by handing it the same
-    `{_scope_touch_paths: [...]}` envelope shape the wire path builds, so the
-    in-process path inherits every rule that contract already enforces rather
-    than restating any of them here.
-
-    Fail-open, unconditionally: a failure anywhere in recording must never fail
-    an op that already succeeded — the same discipline the wire path applies.
-    """
     if not declared:
         return
     try:
@@ -132,43 +122,6 @@ def run_op_main(
     cwd: Optional[str] = None,
     entrypoint: str = "main",
 ) -> int:
-    """Import `op_module`, run its `main(argv)` in-process, record its declared
-    writes, and return the op's exit code.
-
-    Args:
-        op_module: Fully-qualified module path exposing `main(argv) -> int`,
-            e.g. `"coordinator_core.ops.append_integrator_dispositions"`.
-        argv: Argument vector WITHOUT the program name (`sys.argv[1:]`).
-        cwd: Directory whose repo the session claim belongs to. Defaults to the
-            process cwd, which is the caller's own worktree for every
-            `coordinator/bin/` trampoline.
-        entrypoint: Attribute name on `op_module` to call as `entrypoint(argv)`.
-            Defaults to `"main"`, matching every existing trampoline. Exists
-            because some operator CLIs deliberately expose a different, wider
-            entrypoint than `main` — the live instance is
-            `coordinator/bin/install-meta-repo-precommit-hook.py`, which calls
-            `main_install_all` because it drives the pre-commit AND
-            post-merge/post-checkout gates together; that module's own
-            docstring warns against repointing it back at bare `main`, since
-            that reintroduces the narrower gate set. Routing such a CLI
-            through `run_op_main` with the default `entrypoint` would silently
-            regress it to the narrower entrypoint — this parameter exists so
-            that conversion doesn't have to happen.
-
-    Returns:
-        The op's exit code, verbatim — including when the entrypoint returns
-        None, which is normalized to 0 to match `sys.exit(None)` semantics.
-
-    Raises:
-        ImportError: if `op_module` is not importable, or exposes no
-            `entrypoint`. Deliberately NOT caught — an unresolvable op module
-            is a transport failure the trampoline reports with its own exit
-            code, not something to swallow into a success.
-
-    Declarations are recorded even when the op exits non-zero: a handler that
-    wrote a file and then failed still wrote that file, and leaving it unclaimed
-    is precisely the orphan this seam exists to prevent.
-    """
     module = importlib.import_module(op_module)
     op_main = getattr(module, entrypoint, None)
     if op_main is None:

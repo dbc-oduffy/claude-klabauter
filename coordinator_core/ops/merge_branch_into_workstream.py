@@ -80,11 +80,6 @@ _GIT_TIMEOUT = 60
 def _git(
     args: list[str], cwd: _PathLike = None, env: Optional[dict] = None
 ) -> subprocess.CompletedProcess:
-    """Direct list-argv git subprocess (CC-1) with hang cap + console suppression.
-
-    Override variables travel via the `env=` dict — never a POSIX inline-env
-    prefix (settlement A4's Windows-portability closure).
-    """
     return subprocess.run(
         ["git", *args],
         cwd=str(cwd) if cwd is not None else None,
@@ -98,13 +93,6 @@ def _git(
 
 
 def _branch_is_ancestor(candidate_sha: str, of_sha: str, repo: Path) -> bool:
-    """Call the reused `orphan_branch_sweep._is_ancestor` against *repo*.
-
-    Direct `cwd=` call — no `os.chdir` fallback (see module docstring: the
-    peer module's `cwd=` keyword is already on disk in this diff's combined
-    state, and `os.chdir` is process-global, a hazard under
-    `asyncio.to_thread`).
-    """
     return _is_ancestor(candidate_sha, of_sha, cwd=repo)
 
 
@@ -126,15 +114,6 @@ def _merge_head_path(repo: Path) -> Path:
 def merge_branch_into_workstream(
     branch: str, reason: str, repo_root: Union[str, Path]
 ) -> dict:
-    """Idempotently merge *branch* into the checked-out workstream branch.
-
-    Raises (CC-7 fail-loud):
-      ValueError   — empty branch, repo_root not a git worktree, branch
-                     unresolvable.
-      RuntimeError — merge failed with no conflict in progress, or
-                     `git merge --abort` itself failed (tree left dirty —
-                     surfaced, never silently swallowed).
-    """
     if not branch:
         raise ValueError("branch.merge_into_workstream: `branch` is required")
     repo = Path(repo_root)
@@ -156,7 +135,6 @@ def merge_branch_into_workstream(
             "(unborn branch?)"
         )
 
-    # Idempotency pre-check (settlement A4): already merged → no-op.
     if _branch_is_ancestor(branch_sha, head_sha, repo):
         return {"merged": False, "already_ancestor": True, "conflict": False}
 
@@ -180,9 +158,6 @@ def merge_branch_into_workstream(
         return {"merged": True, "already_ancestor": False, "conflict": False}
 
     if _merge_head_path(repo).exists():
-        # Conflict in progress — restore a clean tree before returning
-        # (fence-documented abort path; caller never inherits a conflicted
-        # index).
         abort = _git(["merge", "--abort"], cwd=repo, env=env)
         if abort.returncode != 0:
             raise RuntimeError(

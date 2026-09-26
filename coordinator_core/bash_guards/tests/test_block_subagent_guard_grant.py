@@ -72,15 +72,12 @@ class TestNonBashOrEmpty:
 
 class TestDashMForm:
     def test_em_grant_allows(self):
-        """No `agent_id` at all -> main-loop EM -> allowed."""
         assert guard.check(_payload(_MODULE_M_GRANT)) is None
 
     def test_subagent_grant_denies(self):
-        """Subagent (`agent_id` present) invoking `grant` -> DENY."""
         _reason(guard.check(_payload(_MODULE_M_GRANT, agent_id="a1")))
 
     def test_present_but_unresolvable_agent_id_denies(self):
-        """Fails CLOSED on a present-but-unresolvable `agent_id` (AC-3)."""
         _reason(
             guard.check(
                 _payload(_MODULE_M_GRANT, agent_id="unresolvable-nonexistent-id")
@@ -88,7 +85,6 @@ class TestDashMForm:
         )
 
     def test_subagent_read_allows(self):
-        """`read` is not gated."""
         assert guard.check(
             _payload(
                 "python3 -m coordinator_core.session.em_guard_grant read",
@@ -97,7 +93,6 @@ class TestDashMForm:
         ) is None
 
     def test_subagent_check_allows(self):
-        """`check` is not gated."""
         assert guard.check(
             _payload(
                 "python3 -m coordinator_core.session.em_guard_grant check",
@@ -140,8 +135,6 @@ class TestDashCForm:
         assert guard.check(_payload(_DASH_C_GRANT)) is None
 
     def test_subagent_dash_c_read_allows(self):
-        """A `-c` payload referencing only a read/check-shaped name mirrors
-        the `-m` form's grant-only gating."""
         assert guard.check(_payload(_DASH_C_READ, agent_id="a1")) is None
 
 
@@ -164,10 +157,6 @@ class TestPowerShellParity:
 
 
 class TestDispatchWiring:
-    """The one thing dispatch registration delivers that every other case
-    in this file would pass identically against a completely unregistered
-    guard: reachability through the dispatcher entrypoint, not merely
-    callable in isolation."""
 
     def test_registered_in_confinement_deny_run(self):
         chain = dispatch._build_guard_chain(
@@ -223,7 +212,6 @@ class TestScopeEqualsEnforcement:
         assert guard.check(_payload(_DASH_C_READ, agent_id="a1")) is None
 
     def test_does_not_deny_dash_c_mentioning_lookalike_func_name(self):
-        """Word-boundary match, not substring containment."""
         payload = (
             "python3 -c \"from coordinator_core.session.em_guard_grant import "
             "_write_em_guard_grant_helper as w; w()\""
@@ -240,10 +228,6 @@ class TestScopeEqualsEnforcement:
 
 
 class TestUnparseableCommandRecordsSilent:
-    """An `_tokenize_full_command`-unparseable PowerShell shape must not
-    silently return an unrecorded `None` -- it must declare a SILENT verdict
-    on the out-of-band channel (`_verdict.record_silent`), so the miss is
-    observable rather than indistinguishable from a genuine clean verdict."""
 
     _HERESTRING_APOSTROPHE = "$x = @'\nit's a note\n'@"
     _BACKTICK_UNTERMINATED = "python3 -c `\n  'unterminated payload"

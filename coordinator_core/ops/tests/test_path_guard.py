@@ -39,11 +39,6 @@ from pathlib import Path
 from coordinator_core.ops._path_guard import contained_path, safe_id
 
 
-# ---------------------------------------------------------------------------
-# safe_id
-# ---------------------------------------------------------------------------
-
-
 def test_safe_id_accepts_plain_alphanumeric():
     assert safe_id("abc123") is True
 
@@ -62,7 +57,6 @@ def test_safe_id_rejects_backslash():
 
 
 def test_safe_id_rejects_bare_double_dot():
-    """The regex alone admits '..' (all dots); the explicit not-in check rejects it."""
     assert safe_id("..") is False
 
 
@@ -72,11 +66,6 @@ def test_safe_id_rejects_bare_single_dot():
 
 def test_safe_id_rejects_empty_string():
     assert safe_id("") is False
-
-
-# ---------------------------------------------------------------------------
-# contained_path
-# ---------------------------------------------------------------------------
 
 
 def test_contained_path_accepts_candidate_under_root(tmp_path):
@@ -113,9 +102,6 @@ def test_contained_path_accepts_candidate_under_second_of_multiple_roots(tmp_pat
 
 
 def test_contained_path_symlink_escape_is_rejected(tmp_path):
-    """A symlink inside the allowed root pointing outside it must be rejected —
-    .resolve() follows the symlink, and the resolved target is not under any
-    allowed root."""
     root = tmp_path / "allowed"
     root.mkdir()
     outside_target = tmp_path / "elsewhere" / "secret.md"
@@ -126,8 +112,6 @@ def test_contained_path_symlink_escape_is_rejected(tmp_path):
     try:
         symlink_path.symlink_to(outside_target)
     except OSError:
-        # Symlink creation can fail on some platforms/permissions; skip rather
-        # than fail the suite over an environment limitation.
         import pytest
         pytest.skip("symlink creation not permitted in this environment")
 
@@ -136,43 +120,17 @@ def test_contained_path_symlink_escape_is_rejected(tmp_path):
 
 
 def test_contained_path_macos_tmp_resolve_symmetry(tmp_path):
-    """Both candidate and allowed-root must be passed through .resolve() so a
-    macOS /tmp -> /private/tmp symlink mismatch does not spuriously reject.
-
-    tmp_path fixtures live under a tmp dir that .resolve() may remap (e.g.
-    macOS /tmp -> /private/tmp). contained_path resolves the root internally
-    (root.resolve()), so passing an UN-resolved root here still succeeds.
-    """
     root = tmp_path / "state" / "handoffs"
     root.mkdir(parents=True)
     candidate = root / "h.md"
     candidate.write_text("x", encoding="utf-8")
 
-    # Pass the allowed root WITHOUT pre-resolving it — contained_path must
-    # resolve it internally before the relative_to check.
     result = contained_path(candidate, [root])
     assert result == candidate.resolve()
     assert str(result) == os.path.realpath(candidate)
 
 
-# ---------------------------------------------------------------------------
-# Windows extended-length-prefix asymmetry (2026-08-03 residual close).
-# `Path.resolve()` is monkeypatched, keyed on the specific operand, to
-# reproduce the exact length-triggered shape a real Windows host produces:
-# ONE operand's internal resolve gains the `\\?\` (or UNC `\\?\UNC\`) prefix,
-# the other does not. This is a macOS box; live resolve() never produces the
-# prefix here (docs/problems/2026-07-08-op-family-path-containment-
-# investigation.md Anti-scope: "do not assume macOS behaviour generalizes"),
-# so the asymmetry must be injected rather than reproduced live.
-# ---------------------------------------------------------------------------
-
-
 def test_contained_path_extended_length_prefix_on_candidate_only_still_contained(tmp_path, monkeypatch):
-    r"""Pre-fix, this failed: `resolved.relative_to(root.resolve())` compared
-    a `\\?\`-prefixed candidate Path against a bare root Path, raised
-    ValueError on every root, and contained_path returned None for a
-    candidate genuinely inside the allowed root. Red assertion pre-fix:
-    `assert result is not None` -> AssertionError (result was None)."""
     root = tmp_path / "allowed"
     root.mkdir()
     candidate = root / "file.md"
@@ -192,16 +150,10 @@ def test_contained_path_extended_length_prefix_on_candidate_only_still_contained
 
     assert result is not None
     # Load-bearing negative: the RETURNED path is the real resolved path,
-    # prefix intact — normalization is comparison-only, never returned.
     assert str(result).startswith("\\\\?\\")
 
 
 def test_contained_path_extended_length_prefix_on_root_only_still_contained(tmp_path, monkeypatch):
-    """Mirror of the above with the prefix on the ROOT side instead of the
-    candidate — the asymmetry is directionless; either operand can be the
-    one whose internal resolve() happens to grow the prefix. Red assertion
-    pre-fix: `assert result is not None` -> AssertionError (result was
-    None)."""
     root = tmp_path / "allowed"
     root.mkdir()
     candidate = root / "file.md"
@@ -220,43 +172,15 @@ def test_contained_path_extended_length_prefix_on_root_only_still_contained(tmp_
     result = contained_path(candidate, [root])
 
     assert result is not None
-    # Candidate side untouched here — return value carries no prefix.
     assert not str(result).startswith("\\\\?\\")
 
 
 def _has_extended_length_prefix(path: Path) -> bool:
-    """True when `path` still carries a Windows extended-length prefix, in
-    either spelling.
-
-    `\\\\?\\` is the raw form straight off Windows; `//?/` is the
-    forward-slash-normalized form `strip_extended_length_prefix` also accepts
-    (its own docstring names both). A test that hard-codes one spelling is
-    asserting which host it runs on, so the prefix-survives negative is
-    checked through this instead.
-    """
     text = str(path)
     return text.startswith("\\\\?\\") or text.startswith("//?/")
 
 
 def test_contained_path_unc_prefix_asymmetry_also_still_contained(monkeypatch):
-    r"""UNC form (`\\?\UNC\<server>\<share>\...`) is the other prefix shape
-    `strip_extended_length_prefix` recognizes — collapses to the bare UNC
-    double-separator rather than to nothing, so it is exercised separately
-    from the plain-prefix tests above. `Path.resolve()` is faked entirely
-    (no real filesystem backing) since UNC path decomposition is
-    Windows-`WindowsPath`-specific (backslash-delimited parts do not
-    decompose under this macOS suite's `PosixPath`, which only splits on
-    `/`) — the forward-slash UNC spelling is used instead, a shape
-    `strip_extended_length_prefix` explicitly also accepts (its own
-    docstring: "raw backslash form straight off Windows, or already
-    forward-slash normalized"), so `relative_to` can actually decompose
-    the parts on this host. `Path.resolve()` is faked entirely (no real
-    filesystem backing): the fake resolves both operands directly to their
-    post-`.resolve()` UNC-shaped strings, one prefixed, one bare, exactly
-    as `strip_extended_length_prefix`'s own unit tests
-    (`write_guards/tests/test__case_fold_path.py`) probe the UNC branch.
-    Red assertion pre-fix: `assert result is not None` -> AssertionError
-    (result was None)."""
     root = Path("root-marker")
     candidate = Path("candidate-marker")
     bare_unc = "//server/share/dir"
@@ -274,19 +198,7 @@ def test_contained_path_unc_prefix_asymmetry_also_still_contained(monkeypatch):
     result = contained_path(candidate, [root])
 
     assert result is not None
-    # Compared as PATHS, not as strings. The invariant under test is "the
-    # returned path is the caller's resolved path with its extended-length
-    # prefix intact" -- not any particular separator spelling. `WindowsPath`
-    # canonicalizes `/` to `\\` at construction, so a `str(...) ==` against
-    # this test's forward-slash literal can never hold on Windows no matter
-    # what `contained_path` returns; it was asserting the host's separator
-    # convention, not the guard's behaviour. `Path.__eq__` normalizes per
-    # platform, so this reads the same on both.
     assert result == Path(prefixed_unc_candidate)
-    # Load-bearing negative, kept explicit and separator-agnostic: the
-    # extended-length prefix must SURVIVE. Normalization inside
-    # `contained_path` is comparison-only; a stripped return value would
-    # still fail here, which is the whole point of this assertion.
     assert _has_extended_length_prefix(result)
 
 
@@ -314,8 +226,5 @@ def test_contained_path_genuinely_long_windows_path_return_value_keeps_prefix(tm
     result = contained_path(candidate, [root])
 
     assert result is not None
-    # Path-compared for the same reason as the UNC test above: `long_form` is
-    # built with a `/` separator before the final component, which
-    # `WindowsPath` rewrites to `\\` on construction.
     assert result == Path(long_form)
     assert _has_extended_length_prefix(result)

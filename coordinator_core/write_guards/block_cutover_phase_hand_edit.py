@@ -74,25 +74,16 @@ CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
 PRIORITY = 112
 
-#: Escape hatch — recovery-only, mirrors the sibling guards' override pattern.
 _OVERRIDE_ENV = "COORDINATOR_OVERRIDE_CUTOVER_PHASE_HAND_EDIT"
 
-#: '..' as a full path component.
 _TRAVERSAL_RE = re.compile(r"(^|/)\.\.(/|$)")
 
-#: Cutover-record path shape: state/roadmap/<anything>/cutovers/<name>.md.
-#: Matches the schema's own `applies_to: state/roadmap/**/cutovers/*.md`
-#: (see plan D2/AC1) — one or more path segments between `state/roadmap/`
-#: and the literal `cutovers/` directory.
 _CUTOVER_RECORD_RE = re.compile(r"(^|/)state/roadmap/.+/cutovers/[^/]+\.md$")
 
-#: Frontmatter `phase:` line, first-block only (mirrors the sibling guard's
-#: `_extract_fm_field` field matcher).
 _PHASE_LINE_RE = re.compile(r"^phase:[ \t]*(.*)$")
 
 
 def _collapse_slashes(value: str) -> str:
-    """Backslash -> slash, collapse slash runs."""
     normalized = value.replace("\\", "/")
     while "//" in normalized:
         normalized = normalized.replace("//", "/")
@@ -100,19 +91,6 @@ def _collapse_slashes(value: str) -> str:
 
 
 def _resolve_git_root(cwd: Optional[str]) -> Optional[str]:
-    """``git rev-parse --show-toplevel``. Fails open.
-
-    AC4 (docs/plans/2026-08-07-no-window-subprocess-primitive.md, chunk C3b):
-    delegates to the shared, process-lifetime-memoized
-    ``write_guards._repo_root.resolve_repo_root`` instead of hand-rolling its
-    own spawn — same fail-open-to-``None`` contract as the prior inline
-    ``subprocess.run``, so no verdict changes. The prior inline spawn also
-    logged a forensic diagnostic on ``OSError`` ("treating as no git root");
-    the shared resolver swallows all failures silently (never raises), so
-    that diagnostic is restored here explicitly rather than lost -- verdict
-    is still unaffected either way (``_normalize_and_gate`` already treats
-    ``None`` the same as any other unresolved git root).
-    """
     result = resolve_repo_root(cwd)
     if result is None:
         print(
@@ -124,8 +102,6 @@ def _resolve_git_root(cwd: Optional[str]) -> Optional[str]:
 
 
 def _extract_candidates(payload: Dict[str, Any]) -> List[str]:
-    """Top-level ``file_path`` (Write/Edit), or every ``edits[].file_path``
-    (MultiEdit) when there is no top-level ``file_path``."""
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         return []
@@ -144,9 +120,6 @@ def _extract_candidates(payload: Dict[str, Any]) -> List[str]:
 
 
 def _normalize_and_gate(cand: str, git_root: Optional[str]) -> Optional[str]:
-    """Normalize + traversal-reject + containment-gate + path-shape-gate a
-    single candidate. Returns the normalized string, or ``None`` if this
-    candidate is out of scope."""
     cn = _collapse_slashes(cand)
 
     if _TRAVERSAL_RE.search(cn):
@@ -157,9 +130,6 @@ def _normalize_and_gate(cand: str, git_root: Optional[str]) -> Optional[str]:
             abs_cn = cn
         else:
             # `rstrip("/\\")`, never `rstrip("/")` -- a trailing BACKSLASH
-            # (e.g. a drive-root `git_root` of `X:\`) survives the latter and
-            # composes a double-slash prefix below (see the matching note on
-            # `expected_prefix`).
             abs_cn = git_root.rstrip("/\\") + "/" + cn
         try:
             abs_cn_canon = casefold_path(str(Path(abs_cn).resolve(strict=False)))
@@ -167,12 +137,6 @@ def _normalize_and_gate(cand: str, git_root: Optional[str]) -> Optional[str]:
             print(f"block_cutover_phase_hand_edit: path resolve failed for "
                   f"{abs_cn!r}, gating on unresolved form: {exc}", file=sys.stderr)
             abs_cn_canon = abs_cn
-        # Case-folded per block_memo_status_hand_edit.py's own note: git_root
-        # is real on-disk casing, but the candidate segment appended onto it
-        # is caller-supplied and may differ only in case on a case-insensitive
-        # filesystem — comparing un-folded would silently miss that bypass.
-        # `rstrip("/\\")`, never `rstrip("/")` -- see block_memo_status_hand_edit.py's
-        # `_normalize_and_gate` for the drive-root double-slash-inertness this avoids.
         expected_prefix = casefold_path(git_root.rstrip("/\\") + "/state/roadmap/")
         if not abs_cn_canon.startswith(expected_prefix):
             return None
@@ -184,9 +148,6 @@ def _normalize_and_gate(cand: str, git_root: Optional[str]) -> Optional[str]:
 
 
 def _touches_phase_line(fragment: Optional[str]) -> bool:
-    """``True`` if any line in ``fragment`` matches the ``phase:``
-    frontmatter field shape (used against Edit/MultiEdit ``old_string`` /
-    ``new_string`` chunks, which are not full files)."""
     if not fragment:
         return False
     for line in fragment.splitlines():
@@ -198,20 +159,6 @@ def _touches_phase_line(fragment: Optional[str]) -> bool:
 def _edit_touches_phase(
     tool_name: str, tool_input: Dict[str, Any], cand: str, pre_image: Optional[str] = None
 ) -> bool:
-    """Whether the specific edit targeting ``cand`` would touch the
-    ``phase:`` field. ``Write`` supplies a full ``content`` replacement;
-    ``Edit``/``MultiEdit`` supply ``old_string``/``new_string`` fragments.
-
-    A ``Write`` whose NEW content omits the
-    ``phase:`` line entirely (rather than changing its value) previously went
-    undetected: the old check only looked for a ``phase:``-shaped line
-    IN the new content, so replacing the whole file with content that drops
-    the field silently deleted it without a deny. That is worse than the
-    hand-edit this guard exists to close. ``pre_image`` (the on-disk text
-    before this Write) lets a ``Write`` that had a ``phase:`` line and no
-    longer does also count as "touches phase" — parity with Edit/MultiEdit,
-    where ``old_string`` must already contain the line to match at all.
-    """
     if tool_name == "Write":
         content = tool_input.get("content")
         content_str = content if isinstance(content, str) else None
@@ -276,13 +223,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 continue
             candidate_disk = Path(cn) if Path(cn).is_absolute() else (base_dir / cn)
             # A record that does not exist yet is being AUTHORED, not
-            # hand-edited — out of scope (negative-spec above).
             if not candidate_disk.is_file():
                 continue
-            # A Write's pre-image is needed to detect
             # a phase-field DELETION (new content omits phase: entirely), not
-            # just a phase-value change. Read failures fail open (no
-            # pre_image), consistent with this guard's fail-open discipline.
             pre_image: Optional[str] = None
             if tool_name == "Write":
                 try:

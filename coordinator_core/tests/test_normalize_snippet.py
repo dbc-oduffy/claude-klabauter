@@ -1,14 +1,3 @@
-"""Parity tests for coordinator_core.text.normalize_snippet.normalize_snippet.
-
-Ports the 7 hand-picked cases from DoE-side test-normalize-snippet.sh (bash
-oracle, retired on cutover) plus a differential fuzz pass against the
-original bash `normalize()` function when the DoE sibling repo is
-discoverable on disk.
-
-Port of: normalize-snippet.sh (DoE 67202df6, 2026-07-16)
-Test oracle: test-normalize-snippet.sh (DoE 67202df6, 2026-07-16)
-Spec backlink: DoE scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-normalize-snippet.md § 6
-"""
 from __future__ import annotations
 
 import os
@@ -23,22 +12,10 @@ from coordinator_core.text.normalize_snippet import normalize_snippet
 from coordinator_core.testing.doe_root import resolve_doe_root
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
-
-# ---------------------------------------------------------------------------
-# (a)-(g) — ported verbatim from test-normalize-snippet.sh, with each input/
-# expected value pre-resolved through bash's $(...) trailing-newline-strip
-# semantics (the original test assigns inputs via command substitution,
-# which strips ALL trailing newlines from the captured value BEFORE
-# normalize() ever sees it — so e.g. input_b's literal trailing "\n\n" is
-# already gone by the time it reaches the function under test). Values below
-# are the POST-strip strings, matching what the bash test actually exercised.
-# ---------------------------------------------------------------------------
 
 
 def test_a_leading_blank_lines_stripped():
@@ -46,9 +23,6 @@ def test_a_leading_blank_lines_stripped():
 
 
 def test_b_trailing_blank_lines_stripped():
-    # Command substitution already stripped the trailing blank lines from
-    # both input and expected in the bash oracle — this exercises identity
-    # on already-clean input, faithfully mirroring the original test.
     assert normalize_snippet("hello\nworld") == "hello\nworld"
 
 
@@ -78,19 +52,8 @@ def test_g_clean_content_unchanged():
     assert normalize_snippet("alpha\nbeta\ngamma") == "alpha\nbeta\ngamma"
 
 
-# ---------------------------------------------------------------------------
-# Differential fuzz — byte-equality against the bash oracle. Skips if the
-# DoE sibling repo (holding coordinator/lib/normalize-snippet.sh) is not
-# discoverable, or if `bash` is unavailable — this is a cross-repo parity
-# proof, not a hard dependency of the claude-klabauter test suite.
-# ---------------------------------------------------------------------------
-
-
 def _find_doe_normalize_lib() -> str | None:
-    # DoE sibling repo, resolved via the shared registry-first ladder
-    # (coordinator_core.testing.doe_root.resolve_doe_root, which already
     # layers the CLAUDE_KLABAUTER_TEST_DOE_ROOT override on top) rather than a
-    # __file__-anchored checkout-depth guess.
     root = resolve_doe_root()
     if not root:
         return None

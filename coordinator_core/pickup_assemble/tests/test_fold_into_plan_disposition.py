@@ -46,11 +46,6 @@ def test_resolves_the_action_directive_on_both_kinds():
 
 
 def test_maps_to_accepted_so_realized_by_is_required():
-    # `accepted` is the channel `_build_action_memo_args` routes through
-    # `--decision`, and it is what makes `--realized-by` mandatory. A
-    # disposition that resolved `d-action-memo` with no map row would reach
-    # `cs_action_memo` with neither `--decision` nor `--actioned-note` and
-    # fail loud at dispatch.
     assert pa._MEMO_ACTION_DECISION_MAP[("fyi", "fold-into-plan")] == "accepted"
     assert pa._MEMO_ACTION_DECISION_MAP[("proposal", "fold-into-plan")] == "accepted"
 
@@ -62,8 +57,6 @@ def test_re_plan_survives_as_a_distinct_option():
 def test_re_plan_no_longer_forbids_the_direct_edit():
     guidance = _by_value("fyi")["re-plan"]["guidance"]
     assert "not a direct edit" not in guidance
-    # and it must point at the smaller response rather than leaving the EM
-    # to conclude there isn't one
     assert "fold-into-plan" in guidance
 
 
@@ -72,14 +65,10 @@ def test_guidance_ships_the_staging_discipline():
         guidance = _by_value(kind)["fold-into-plan"]["guidance"]
         assert "apply --cached" in guidance, kind
         assert "stash" in guidance, kind
-        # the annotate-don't-rewrite half, which is what keeps a fold from
-        # becoming a re-scope of someone else's work
         assert "superseded-in-part" in guidance, kind
         assert "re-scope" in guidance, kind
 
 
 def test_guidance_says_why_the_reply_is_not_enough():
-    # The reasoning is the load-bearing part: an EM who does not understand
-    # WHY declining the edit loses the finding will decline it again.
     guidance = _by_value("fyi")["fold-into-plan"]["guidance"]
     assert "chunk" in guidance

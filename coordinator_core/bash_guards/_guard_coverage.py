@@ -58,11 +58,6 @@ from coordinator_core.bash_guards._command_tokenizer import (
     tokenize_full_command,
 )
 
-# The 2026-07-28 negative-space baseline this module measures against --
-# state/plan-sidecars/2026-07-28-bash-tax-negative-space.md (DoE-claude)
-# § Existing-guard coverage detail. Do not "correct" these to match a later
-# re-measurement; they are the fixed historical reference point, not a
-# rolling value.
 BASELINE_PCT: Dict[str, float] = {
     "check_runaway_find": 1.4,
     "check_offer_git_c": 3.2,
@@ -70,13 +65,6 @@ BASELINE_PCT: Dict[str, float] = {
 
 
 def iter_corpus_commands(path: str) -> Iterator[str]:
-    """Yield each Bash command string from a JSONL corpus file, one JSON
-    object per line, command text under the ``"c"`` key (the shape the
-    2026-07-28 baseline extraction produced) with ``"command"``/``"cmd"``
-    accepted as fallback keys for a hand-built corpus. Lines that fail to
-    parse as JSON, or whose command field is not a string, are skipped
-    rather than raising -- a single malformed line must not abort a
-    62,487-line corpus read."""
     with open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
             line = line.strip()
@@ -98,13 +86,6 @@ def iter_corpus_commands(path: str) -> Iterator[str]:
 
 
 def is_find_invocation(cmd: str) -> bool:
-    """Target-class predicate for ``check_runaway_find``: does ``cmd``
-    invoke ``find`` anywhere in its tokenized form. Tokenizer-based, never a
-    raw-text regex, so a quoted string or heredoc body containing the
-    literal word "find" is not miscounted as a find invocation. Fails
-    CLOSED (returns False) when the command does not tokenize (unterminated
-    quote, trailing backslash) -- consistent with the fail-closed direction
-    every guard in this package already takes on the same condition."""
     toks = tokenize_full_command(cmd)
     if toks is None:
         return False
@@ -112,11 +93,6 @@ def is_find_invocation(cmd: str) -> bool:
 
 
 def is_leading_cd(cmd: str) -> bool:
-    """Target-class predicate for ``check_offer_git_c``: does ``cmd`` open
-    with ``cd`` as the very first token of its first segment -- the
-    "cd-prefixed command" class the 2026-07-28 baseline's 18,685-command
-    denominator was measured against. Tokenizer-based; fails CLOSED on an
-    unparseable command."""
     toks = tokenize_full_command(cmd)
     if toks is None:
         return False
@@ -128,7 +104,6 @@ def is_leading_cd(cmd: str) -> bool:
 
 @dataclass
 class CoverageResult:
-    """One guard's measured reach against its own target command class."""
 
     guard: str
     target_class_size: int
@@ -139,8 +114,6 @@ class CoverageResult:
 
     @property
     def delta_pct(self) -> float:
-        """Positive: this run reaches further than the 2026-07-28 baseline.
-        Negative: reach has regressed relative to it."""
         return self.measured_pct - self.baseline_pct
 
 
@@ -149,10 +122,6 @@ def _pct(numerator: int, denominator: int) -> float:
 
 
 def measure_runaway_find(commands: Sequence[str]) -> CoverageResult:
-    """Measure ``check_runaway_find``'s reach: of every command that
-    invokes ``find`` at all, how many does the shipped guard function
-    actually deny. Stateless -- each command is checked independently, no
-    corpus ordering assumed."""
     target = [c for c in commands if is_find_invocation(c)]
     fired = sum(1 for c in target if _checks.check_runaway_find(c) is not None)
     return CoverageResult(
@@ -166,11 +135,6 @@ def measure_runaway_find(commands: Sequence[str]) -> CoverageResult:
 
 
 def measure_offer_git_c(commands: Sequence[str]) -> CoverageResult:
-    """Measure ``check_offer_git_c``'s reach: of every leading-``cd``
-    command, how many does the shipped guard function actually rewrite or
-    deny (any non-``None`` return -- allow-rewrite and deny both count as
-    "reached", since both mean the guard recognized and acted on the
-    shape). Stateless."""
     target = [c for c in commands if is_leading_cd(c)]
     fired = sum(1 for c in target if _guard_offer_git_c.check_offer_git_c(c) is not None)
     return CoverageResult(
@@ -190,8 +154,6 @@ MEASURERS: Dict[str, Callable[[Sequence[str]], CoverageResult]] = {
 
 
 def measure_all(commands: Sequence[str]) -> List[CoverageResult]:
-    """Run every registered guard's coverage measurement against the same
-    corpus, in a stable, deterministic order."""
     return [MEASURERS[name](commands) for name in ("check_runaway_find", "check_offer_git_c")]
 
 

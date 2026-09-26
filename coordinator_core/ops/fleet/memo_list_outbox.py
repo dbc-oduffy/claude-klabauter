@@ -67,25 +67,12 @@ from coordinator_core.ops.fleet.memo_draft import merged_outbox_drafts
 
 _LOG = logging.getLogger(__name__)
 
-# Mode constant for the envelope mode field — memo.list_outbox is a
-# single-mode op (no `to`/resolution-mode split like memo.list); it always
-# just enumerates.
 _MODE = "list_outbox"
 
-# Frontmatter fields surfaced per candidate — the useful subset a sender
-# would want to see when deciding what to compose/send next. Mirrors what
-# memo_draft.compose_draft_frontmatter actually writes (title, from, to,
-# created, status, summary, kind) minus delivery_mode/scoped_to, which are
-# internal wiring rather than sender-facing triage fields.
 _SURFACED_FIELDS = ("title", "from", "to", "created", "status", "summary", "kind")
 
 
 def _validate_list_outbox_params(params: dict):
-    """Validate memo.list_outbox params; return dry_run (bool) or a setup-error dict.
-
-    Required: dry_run (bool) — must be True; memo.list_outbox has no act mode
-    (it only ever enumerates, never writes).
-    """
     dry_run = params.get("dry_run")
     if not isinstance(dry_run, bool):
         return build_setup_error_result(
@@ -102,21 +89,6 @@ def _validate_list_outbox_params(params: dict):
 
 
 def _candidate_for_draft(draft_path: Path) -> dict:
-    """Build one candidate dict for a single outbox draft file.
-
-    Read-only: reads the file's raw text and parses its YAML frontmatter via
-    the shared `frontmatter.primitives` helpers (same primitives
-    memo_compose.py uses) — no hand-rolled parsing. `topic` is derived from
-    the filename stem (memo_draft.py writes `<topic>.md`, topic never lives
-    in frontmatter — same convention documented in
-    memo_draft.compose_draft_frontmatter's own docstring).
-
-    Unreadable or unparseable files degrade gracefully: the candidate still
-    appears (filename/topic always populated), with `None` for every
-    surfaced frontmatter field and a `note` explaining why — an outbox
-    listing must never silently drop a draft just because it is malformed;
-    that's exactly the kind of file a sender needs to see and fix.
-    """
     topic = draft_path.stem
     candidate = {
         "id": str(draft_path),
@@ -146,17 +118,6 @@ def _candidate_for_draft(draft_path: Path) -> dict:
 
 
 def _enumerate_outbox_candidates(worktree_root: Path) -> list:
-    """Build one candidate dict per `*.md` file in the calling repo's outbox,
-    merged across the new `.coordinator-local/memo-outbox/` root and the
-    retired `state/memo-outbox/` root (2026-09-03 relocation:
-    `machinery_paths.legacy_memo_outbox_dir`'s own docstring).
-
-    Sorted by filename for deterministic, stable output across calls.
-
-    # Merge logic moved to the
-    # shared `memo_draft.merged_outbox_drafts` (was duplicated verbatim here
-    # and in memo_reconcile_outbox._reconcile).
-    """
     return [_candidate_for_draft(p) for p in merged_outbox_drafts(worktree_root)]
 
 
@@ -188,7 +149,7 @@ def _memo_list_outbox(params: dict, repo_root: Optional[Path] = None) -> dict:
     """
     validated = _validate_list_outbox_params(params)
     if isinstance(validated, dict):
-        return validated  # exit_code:1 setup-error envelope
+        return validated
 
     dry_run = validated
 

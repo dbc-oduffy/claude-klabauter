@@ -28,13 +28,8 @@ from __future__ import annotations
 
 import os
 
-#: The resolution class the stub reports. `cc_invoke` does not branch on it
-#: (see `_delegate_to_gate`'s "this rung only needs root" note); it is part of
-#: the entry point's return contract, not a behaviour switch.
 STUB_RESOLUTION_CLASS = "live-working-tree"
 
-#: The live `coordinator_core` package directory — the fall-through target an
-#: `overlay=True` stub appends to its own `__path__`.
 _REAL_PACKAGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -89,14 +84,6 @@ def write_fake_engine_root(root: str | os.PathLike[str], *, overlay: bool = Fals
 
 
 def _overlay_engine_root_prelude() -> str:
-    """Source that re-exports the live ``engine_root``'s globals into a stub.
-
-    Loaded by PATH rather than by import: at the time this source runs, the
-    stub file IS ``coordinator_core.engine_root``, so importing that name
-    would return the stub itself. Private names are copied along with public
-    ones — the real module's own resets (``_reset_root_memo`` and friends) are
-    reached by test code by their underscore names.
-    """
     real = os.path.join(_REAL_PACKAGE_DIR, "engine_root.py")
     return (
         "import importlib.util as _ilu\n"
@@ -112,18 +99,6 @@ def _overlay_engine_root_prelude() -> str:
 
 
 def write_overlay_package_init(root: str | os.PathLike[str], subpackage: str) -> str:
-    """Make ``coordinator_core.<subpackage>`` under ``root`` fall through too.
-
-    ``overlay`` on the top-level package only rescues submodules of
-    ``coordinator_core`` itself. A fixture that stubs, say,
-    ``coordinator_core/ops/changelog_ops.py`` also creates ``ops/__init__.py``,
-    and THAT package shadows the real ``coordinator_core.ops`` wholesale — so
-    every sibling op the CLI reaches for goes missing again, one level down.
-    This writes the same ``__path__`` fall-through for that subpackage.
-
-    Returns the directory it wrote into. Dotted names are accepted for deeper
-    subpackages (``"ops.emit"``); each level needs its own call.
-    """
     root = os.fspath(root)
     parts = subpackage.split(".")
     pkg_dir = os.path.join(root, "coordinator_core", *parts)
@@ -134,19 +109,6 @@ def write_overlay_package_init(root: str | os.PathLike[str], subpackage: str) ->
 
 
 def write_fake_cli_entry(root: str | os.PathLike[str], *, overlay: bool = False) -> str:
-    """Give ``root`` a ``coordinator_core.cli_entry.run_op_main`` and return it.
-
-    A stub root SHADOWS the real ``coordinator_core`` package once the gate
-    accepts it, so a CLI trampoline that reaches its op through
-    ``cli_entry.run_op_main`` (the DR-276 scope-touch route) finds no
-    ``cli_entry`` at all and dies with a link failure before the fixture's
-    stand-in op is ever imported. This writes the minimum that route needs:
-    import the named module, call its ``main(argv)``, return its code.
-
-    ``ImportError`` is deliberately left to propagate — that is the signal a
-    trampoline turns into its documented "op not importable at that root"
-    exit, which is exactly what a seam-absent fixture is asserting.
-    """
     root = os.fspath(root)
     write_fake_engine_root(root, overlay=overlay)
     with open(

@@ -36,14 +36,7 @@ from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 from coordinator_core.win_portability import no_console_creationflags
 
-# Real-git spawn is load-bearing: `release_committed_claims` reads real
-# post-commit divergence/porcelain state that a mocked git cannot fake. The
-# `repo` fixture stays per-test (not hoisted to module scope) because each
-# test mutates it (seeds distinct tracked files, commits per-route) and
-# per-test isolation prevents cross-test claim/commit-state bleed. The spawn
 # ratchet's `_BASELINE` is shrink-only pre-existing residue and is
-# explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -79,31 +72,6 @@ def _own_sid(monkeypatch, sid: str) -> None:
 
 
 def _released_paths(repo: Path, sid: str) -> set:
-    """Release (``R``) events for THIS session, read off the live sink.
-
-    Reads ``touch-record.jsonl``, not ``touched.txt``. Both `scope.touch` and
-    `release_committed_claims`' session-side arm write the record file since the
-    C4 writer flip; `touched.txt` survives only as the AGENT-side dialect, which
-    no assertion in this module exercises. Pointed at the legacy name, this helper
-    returned an empty set for a release that had in fact happened — and an empty
-    set is indistinguishable from "nothing was released", so both tests below read
-    as a live claim-release defect in `archive_and_commit`. They were stale
-    fixtures: same class as the two `91e7b9b07` migrated, simply not yet reached.
-
-    Kept reading the file directly rather than through a higher-level offer helper,
-    per this module's own docstring — the point is to assert on what actually
-    landed on disk.
-
-    `parse_touch_event` parses the OLD `'<verb> <ts> <path>'` dialect, not a raw
-    `touch-record.jsonl` line (a JSON object) — feeding it JSON lines directly
-    makes every parse fall into its own fail-safe ('T', None, <line>) branch, so
-    a real `R` event reads back as an unparsed `T`-shaped line and never lands
-    in `released`. `_read_touch_record_as_legacy_lines` is this module's own
-    read adapter (C0) that decodes the jsonl family and re-renders each event
-    into that legacy dialect — the same seam every real in-module reader goes
-    through — so this helper is routed through it too instead of parsing the
-    jsonl bytes itself.
-    """
     record = _sdir(repo, sid) / session_scope._TOUCH_RECORD_FILENAME
     if not record.exists():
         return set()
@@ -117,9 +85,6 @@ def _released_paths(repo: Path, sid: str) -> set:
 
 
 def test_archive_and_commit_releases_claim_on_both_src_and_dst(repo, monkeypatch):
-    """AC1 (archive_and_commit route): a claim on either the vacated src or
-    the newly-tracked dst clears once the git-mv commit lands, even though
-    that commit itself carries no trailing pathspec (private-index form)."""
     sid = "archive-and-commit-claim-test"
     _own_sid(monkeypatch, sid)
 
@@ -149,8 +114,6 @@ def test_archive_and_commit_releases_claim_on_both_src_and_dst(repo, monkeypatch
 
 
 def test_rm_and_commit_releases_claim_on_reaped_path(repo, monkeypatch):
-    """AC1 (rm_and_commit route): a claim on a tracked path clears once
-    that path's git-rm-and-commit lands."""
     sid = "rm-and-commit-claim-test"
     _own_sid(monkeypatch, sid)
 

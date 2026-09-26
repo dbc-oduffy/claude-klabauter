@@ -1,22 +1,3 @@
-"""coordinator/bin/tests/test_publish_partial_round_commits_succeeded_rows.py
-— regression test for docs/plans/2026-09-23-partial-round-strand.md (P179-C1):
-`publish.py::main` used to `return 1` on a partial round (some rows failed,
-gates green) BEFORE `_commit_published_dests` ever ran, leaving every
-succeeded row's synced bytes uncommitted on disk. This module pins the fixed
-behaviour: `main()` now commits the succeeded rows' bytes despite the failed
-row(s), excludes a failed row's own dest-dir subtree from that commit, skips
-a repo root a failed row actually mutated (`PublishSwapPartial(content_
-swapped=True)`) whole, and names the residue on every non-zero return.
-
-Reuses `test_publish_row_failure_aggregates_gates.py`'s fixture shape (same
-fake-row / real-git-dest wiring), but the fake `process_target` here writes
-REAL files into its dest dir and populates the sinks `main()`'s own
-`process_target` call populates on a real publish, so the commit this test
-exercises is `main()`'s real end-of-run `_commit_published_dests` call
-running against real git state — not a hand-rolled stand-in for it.
-
-Run: python -m pytest coordinator/bin/tests/test_publish_partial_round_commits_succeeded_rows.py -q
-"""
 
 from __future__ import annotations
 
@@ -59,9 +40,6 @@ def _init_git_repo(root: Path) -> None:
     keeper.write_text("", encoding="utf-8")
     _git(root, "add", ".gitkeep")
     _git(root, "commit", "-m", "chore: init")
-    # A self-origin the dest is level with — `main()` refuses a dest whose
-    # branch tracks nothing (§ `percolate.dest_refresh.refresh_dest_from_origin`),
-    # same shape as the aggregate-gates fixture this module reuses.
     _git(root, "remote", "add", "origin", str(root))
     _git(root, "fetch", "--no-tags", "origin")
     _git(root, "branch", "--set-upstream-to=origin/main", "main")
@@ -86,10 +64,6 @@ publish = _load_publish_module()
 
 
 def _wire_common_fakes(monkeypatch, tmp_path, rows):
-    """Same shape as `test_publish_row_failure_aggregates_gates.py::
-    _wire_common_fakes`, minus the identity/entrypoint knobs this module
-    does not need — every end-of-run gate is wired green so a row failure
-    is the only source of a non-zero exit unless a test says otherwise."""
 
     monkeypatch.setattr(
         publish, "_resolve_percolate_root_and_rung", lambda **kw: (tmp_path, "test-rung")
@@ -136,12 +110,6 @@ def _row_string(name: str, src: Path, dst: Path) -> str:
 
 
 def test_partial_round_commits_succeeded_rows_excludes_failed(monkeypatch, tmp_path, capsys):
-    """AC1 + AC5. Three rows against one git dest, per-row subdirs: the
-    middle row raises in `process_target`, the other two write real files
-    under their dest dirs. `main()` exits 1, but dest HEAD contains both
-    succeeded rows' files, `git status --porcelain` is clean under their
-    dirs, the commit subject names exactly the two succeeded rows, and the
-    residue line names the failed row's dest root."""
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     dest_root = tmp_path / "dest-repo"
     _init_git_repo(dest_root)
@@ -188,10 +156,6 @@ def test_partial_round_commits_succeeded_rows_excludes_failed(monkeypatch, tmp_p
     assert "row-a" in log_subject and "row-c" in log_subject
     assert "row-b" not in log_subject
 
-    # `row-b` wrote nothing before its raise (pre-check), and the commit for
-    # this shared root succeeded for everything else — no residue remains,
-    # so AC5's "commit succeeded for every [affected] root" carve-out
-    # applies and no residue line is printed.
     assert "publish.py: uncommitted in" not in combined
 
 
@@ -209,10 +173,6 @@ def test_failed_row_subtree_excluded_even_as_succeeded_ancestor(monkeypatch, tmp
     failed_subdir.mkdir(parents=True, exist_ok=True)
     pre_existing = failed_subdir / "existing.txt"
     pre_existing.write_text("pre-existing dirty content\n", encoding="utf-8")
-    # Left untracked deliberately — the failed row never wrote anything
-    # (pre-check: nothing after the swap can fail a row except
-    # `PublishSwapPartial(content_swapped=True)`), so this file is dirty
-    # for a reason unrelated to this round and must stay untouched by it.
 
     rows = [
         _row_string("row-top", tmp_path / "src-top", dest_root),
@@ -249,9 +209,6 @@ def test_failed_row_subtree_excluded_even_as_succeeded_ancestor(monkeypatch, tmp
 
 
 def test_mutated_root_skipped_nothing_committed(monkeypatch, tmp_path, capsys):
-    """AC3. A row raising `PublishSwapPartial(content_swapped=True)` marks
-    its whole repo root skipped this round — nothing is committed there —
-    and the residue line names it."""
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     dest_root = tmp_path / "dest-repo"
     _init_git_repo(dest_root)
@@ -266,7 +223,6 @@ def test_mutated_root_skipped_nothing_committed(monkeypatch, tmp_path, capsys):
 
     def fake_process_target(target, setup_dir, totals, **kwargs):
         if target.name == "row-b":
-            # Content DID land at dest before the raise (content_swapped=True).
             target.dest_dir.mkdir(parents=True, exist_ok=True)
             (target.dest_dir / "swapped.txt").write_text("landed\n", encoding="utf-8")
             raise publish.PublishSwapPartial(
@@ -288,9 +244,6 @@ def test_mutated_root_skipped_nothing_committed(monkeypatch, tmp_path, capsys):
     combined = out + err
 
     assert rc == 1
-    # `row-a` is the only row whose subtree could be committed this round —
-    # `row-b`'s mutated ROOT (the whole dest_root, since both rows share it)
-    # is skipped whole, so nothing at all is committed.
     log_count = _git(dest_root, "rev-list", "--count", "HEAD").stdout.strip()
     assert log_count == "1", "the mutated root must gain no new commit this round"
     porcelain_after = _porcelain(dest_root)
@@ -301,9 +254,6 @@ def test_mutated_root_skipped_nothing_committed(monkeypatch, tmp_path, capsys):
 
 
 def test_gate_failure_alone_still_commits_nothing(monkeypatch, tmp_path, capsys):
-    """AC4. Every row succeeds but an end-of-run gate fails: no commit is
-    made (AC15 fail-closed, unchanged), exit code is 2, and the residue
-    line names the dest root left with synced-but-uncommitted bytes."""
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     dest_root = tmp_path / "dest-repo"
     _init_git_repo(dest_root)
@@ -336,8 +286,6 @@ def test_gate_failure_alone_still_commits_nothing(monkeypatch, tmp_path, capsys)
 
 
 def test_clean_round_no_residue_line(monkeypatch, tmp_path, capsys):
-    """No residue line, and a clean exit 0, on a round with no failed row
-    and every gate green — the happy path is unaffected by this fix."""
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     dest_root = tmp_path / "dest-repo"
     _init_git_repo(dest_root)

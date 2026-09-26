@@ -1,10 +1,3 @@
-"""A forwarder write replaces its own name and never writes through a hardlink.
-
-The door cutover hardlinks one image to hundreds of settings-home names. An
-in-place write to any one of them landed on the shared inode, so the forwarder
-loop left all ~371 slots carrying whichever forwarder it wrote last, and every
-CLI on the box exec'd the wrong script.
-"""
 
 from __future__ import annotations
 

@@ -1,23 +1,3 @@
-"""coordinator_core/hooks/tests/test_arrival_w4_c8.py — the W4-C8 arrival
-gate for the Agent/Bash dispatch guard family.
-
-Subject: nine `hooks.*` ops landed by
-`docs/plans/2026-09-18-doe-holds-no-scripts.md` § W4-C8 —
-`preuse_bash_dispatch`, `guard_host_subagent_bash_ban`,
-`guard_host_subagent_bash_spawn_shapes`, `guard_named_dispatch_tool_
-restriction`, `enforce_agent_dispatch_mode`, `preuse_agent_dispatch`,
-`preuse_skill_dispatch`, plus a new `hooks.block_unenumerated_agent_type`
-op registration on an already-landed module, and
-`nudge_foreground_agent_dispatch` (already landed — its own arrival gate
-predates this row; only re-touched here indirectly through the fan-in
-tests below).
-
-Each op is exercised directly (no stdin/stdout, no subprocess — every op is
-a same-repo, in-process `params: dict -> dict` coroutine per this package's
-own `hooks.<name>` contract), covering the ordinary pass, the guard's own
-fail-closed leg where one exists, and the fan-in isolation contract for the
-two dispatchers whose registry legs are not all landed as of this dispatch.
-"""
 
 from __future__ import annotations
 
@@ -30,11 +10,6 @@ def _run(result):
     if asyncio.iscoroutine(result):
         return asyncio.run(result)
     return result
-
-
-# ---------------------------------------------------------------------------
-# hooks.preuse_bash_dispatch
-# ---------------------------------------------------------------------------
 
 
 def test_preuse_bash_dispatch_registers_op():
@@ -68,14 +43,6 @@ def test_preuse_bash_dispatch_allows_ordinary_command():
 
 
 def test_preuse_bash_dispatch_fails_open_when_chain_raises(monkeypatch):
-    """Fail-open, but VISIBLY: a chain failure must surface as an allow
-    carrying additionalContext naming the failure, never a bare `{}` —
-    `{}` is what a guard that ran clean and had nothing to say also looks
-    like, and this was the case: `state/bug-backlog/2026-09-23-pretooluse-
-    bash-guard-fails-to-evaluate-0abe3f44d9d8.yaml` records the "Missing
-    required routing key ... requires _origin_worktree" chain failure being
-    swallowed into exactly this indistinguishable-from-a-pass shape.
-    """
     from coordinator_core.hooks import preuse_bash_dispatch as mod
 
     def _boom(*a, **kw):
@@ -95,11 +62,6 @@ def test_preuse_bash_dispatch_fails_open_when_chain_raises(monkeypatch):
 
 
 def test_preuse_bash_dispatch_missing_origin_worktree_surfaces_visibly(monkeypatch):
-    """The exact real-world shape: a Bash call whose cwd resolves outside every
-    registered worktree makes `evaluate_payload_json` raise on the missing
-    `_origin_worktree` routing key (`ipc.py`'s ValueError). That must reach the
-    caller as a visibly-unevaluated advisory, never a silent `no_advisory()`.
-    """
     from coordinator_core.hooks import preuse_bash_dispatch as mod
 
     def _raise_missing_routing_key(*a, **kw):
@@ -121,28 +83,11 @@ def test_preuse_bash_dispatch_missing_origin_worktree_surfaces_visibly(monkeypat
     assert "_origin_worktree" in (hso.get("additionalContext") or "")
 
 
-#: A command the chain denies from its own rule table, with no plugin-root
-#: manifest behind it. `git add -A` would read better but degrades to fail-open
-#: whenever the manifest does not resolve -- true under pytest -- which would
-#: make these tests pass or fail on ambient env rather than on the handler.
-#
-# A bare hardcoded `/tmp/x` bakes a
-# POSIX-only absolute path into a shared fixture; `_banned_command` takes
-# `tmp_path` instead so the argument is platform-neutral, matching this
-# repo's macOS+Windows portability lens (never executed, only fed to the
-# guard chain as a string, but no reason to rely on that).
 def _banned_command(tmp_path) -> str:
     return f"git worktree add {tmp_path / 'x'}"
 
 
 def _wire_params(tmp_path, command):
-    """The params dict BOTH doors actually send — `{"payload": <event>}`, with
-    the payload built by the same function the transport uses.
-
-    Every other test in this block hands `_handler` a flat payload it hand-rolls,
-    which is why none of them saw the fail-open: the flat shape is the one shape
-    no caller sends.
-    """
     from coordinator_core.warm.hook_http import payload_from_event
 
     return {
@@ -163,15 +108,6 @@ def _decision(out):
 
 
 def test_preuse_bash_dispatch_denies_through_the_envelope_the_doors_send(tmp_path):
-    """The load-bearing one: a denied command must deny when the payload
-    arrives WRAPPED, which is how `hook_http.build_request` and
-    `coordinator/bin/hook-run.py` both send it.
-
-    The handler used to serialise the envelope itself, so the guard chain found
-    no `tool_input`, matched nothing, and allowed every command through both
-    doors — deny and allow returning byte-identical output on the one surface
-    whose job is to tell them apart.
-    """
     from coordinator_core.hooks.preuse_bash_dispatch import _handler
 
     assert _decision(_handler(_wire_params(tmp_path, _banned_command(tmp_path)))) == "deny"
@@ -190,18 +126,10 @@ def test_preuse_bash_dispatch_deny_and_allow_are_distinguishable(tmp_path):
 
 
 def test_preuse_bash_dispatch_still_reads_a_flat_payload(tmp_path):
-    """A real PreToolUse payload carries no `payload` key, so the two shapes are
-    unambiguous and the flat one stays readable. Refusing it would convert a
-    caller mismatch into a second fail-open rather than a verdict."""
     from coordinator_core.hooks.preuse_bash_dispatch import _handler
 
     flat = _wire_params(tmp_path, _banned_command(tmp_path))["payload"]
     assert _decision(_handler(flat)) == "deny"
-
-
-# ---------------------------------------------------------------------------
-# hooks.guard_host_subagent_bash_ban / hooks.guard_host_subagent_bash_spawn_shapes
-# ---------------------------------------------------------------------------
 
 
 def test_bash_ban_op_registers_and_reaches_check():
@@ -209,7 +137,6 @@ def test_bash_ban_op_registers_and_reaches_check():
     from coordinator_core.hooks.guard_host_subagent_bash_ban import _handler
 
     assert "hooks.guard_host_subagent_bash_ban" in _REGISTRY
-    # No agent_id -> EM, out of scope -> no_advisory.
     assert _handler({"tool_name": "Bash", "cwd": "/tmp"}) == {}
 
 
@@ -245,11 +172,6 @@ def test_bash_spawn_shapes_op_registers_and_fails_open_on_non_dict():
     assert _handler(None) == {}
 
 
-# ---------------------------------------------------------------------------
-# hooks.block_unenumerated_agent_type — new op registration on landed module
-# ---------------------------------------------------------------------------
-
-
 def test_block_unenumerated_agent_type_op_registers():
     from coordinator_core.ipc import _REGISTRY
     import coordinator_core.hooks.block_unenumerated_agent_type  # noqa: F401
@@ -261,11 +183,6 @@ def test_block_unenumerated_agent_type_op_no_op_for_non_agent():
     from coordinator_core.hooks.block_unenumerated_agent_type import _handler
 
     assert _handler({"tool_name": "Bash"}) == {}
-
-
-# ---------------------------------------------------------------------------
-# hooks.guard_named_dispatch_tool_restriction
-# ---------------------------------------------------------------------------
 
 
 def test_named_dispatch_restriction_op_registers():
@@ -306,11 +223,6 @@ def test_named_dispatch_restriction_passes_unnamed_ordinary_type():
 
 
 def test_named_dispatch_restriction_denies_through_the_wrapped_envelope():
-    """Both engine doors send `params`
-    as `{"payload": <event>}`. Through the wrapped door this guard's own
-    fail-closed leg (an unrecognised `tool_input` key on a named
-    Explore/Plan dispatch) was unreachable, same defect class as
-    `block_worktree_tool`."""
     from coordinator_core.hooks.guard_named_dispatch_tool_restriction import _handler
 
     out = _handler(
@@ -328,11 +240,6 @@ def test_named_dispatch_restriction_denies_through_the_wrapped_envelope():
     )
     hso = out["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
-
-
-# ---------------------------------------------------------------------------
-# hooks.enforce_agent_dispatch_mode
-# ---------------------------------------------------------------------------
 
 
 def test_enforce_agent_dispatch_mode_registers():
@@ -390,11 +297,6 @@ def test_enforce_agent_dispatch_mode_mode_escape_hatch(monkeypatch):
     assert out == {}
 
 
-# ---------------------------------------------------------------------------
-# hooks.preuse_agent_dispatch — fan-in isolation
-# ---------------------------------------------------------------------------
-
-
 def test_preuse_agent_dispatch_registers():
     from coordinator_core.ipc import _REGISTRY
     import coordinator_core.hooks.preuse_agent_dispatch  # noqa: F401
@@ -409,9 +311,6 @@ def test_preuse_agent_dispatch_no_op_on_non_dict():
 
 
 def test_preuse_agent_dispatch_skips_absent_suite_invocation_leg_and_reaches_leg4():
-    """Leg 1 (`block_dispatch_suite_invocation`) is not landed in this
-    engine as of this dispatch — its import must fail, get isolated, and
-    the fan-in must still reach leg 4's own decision rather than raising."""
     from coordinator_core.hooks.preuse_agent_dispatch import _handler
 
     out = _handler(
@@ -425,8 +324,6 @@ def test_preuse_agent_dispatch_skips_absent_suite_invocation_leg_and_reaches_leg
 
 
 def test_preuse_agent_dispatch_first_deny_wins_over_leg4():
-    """block_unenumerated_agent_type (leg 2) denies an unenumerated
-    subagent_type before leg 4 (enforce_agent_dispatch_mode) ever runs."""
     from coordinator_core.hooks.preuse_agent_dispatch import _handler
 
     out = _handler(
@@ -442,11 +339,6 @@ def test_preuse_agent_dispatch_first_deny_wins_over_leg4():
     hso = out.get("hookSpecificOutput")
     assert hso is not None
     assert hso.get("permissionDecision") == "deny"
-
-
-# ---------------------------------------------------------------------------
-# hooks.preuse_skill_dispatch — fan-in isolation, no legs landed yet
-# ---------------------------------------------------------------------------
 
 
 def test_preuse_skill_dispatch_registers():

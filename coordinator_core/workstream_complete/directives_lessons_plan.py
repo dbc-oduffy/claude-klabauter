@@ -89,24 +89,8 @@ from collections.abc import Mapping
 from typing import Any, NamedTuple, Optional
 
 
-# ---------------------------------------------------------------------------
-# gates.governing_plan — Step 2 (locate) / Step 2.4 + 2.4b (predicate)
-# ---------------------------------------------------------------------------
-
-#: `docs/plans/<slug>.md` then `tasks/plans/<slug>.md` — checked for the two
-#: explicit EM-supplied overrides only (`decisions["governing_plan_slug"]`),
-#: never for a guess. `docs/plans/` first because it is this repo's
-#: canonical plan location (`CLAUDE.md § Key Files`). Also read directly by
-#: `__init__.py`'s own additional-governing-plan-slugs sweep — same-package
-#: sibling constant, do not rename without checking that call site (C10,
-#: docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md).
 _GOVERNING_PLAN_GLOB_DIRS = ("docs/plans", "tasks/plans")
 
-#: The `decisions` keys this module's functions read — declared once so a
-#: caller (`__init__.py`'s `preflight.decisions_template` composition) can
-#: import and union this tuple rather than hand-copying the key list. See
-#: AC3 (docs/plans/2026-07-29-workstream-complete-the-envelope-names-t.md):
-#: the arg-builder and the template read this SAME constant.
 _KEY_GOVERNING_PLAN_SLUG = "governing_plan_slug"
 _KEY_GOVERNING_PLAN_PATH = "governing_plan_path"
 _KEY_ADDITIONAL_GOVERNING_PLAN_SLUGS = "additional_governing_plan_slugs"
@@ -142,9 +126,6 @@ class GoverningPlan(NamedTuple):
 
 
 def _rel_to_repo(candidate: Path, repo_root: Path) -> str:
-    """`candidate`'s repo-relative POSIX form, or its absolute POSIX form when
-    it lies outside `repo_root` (an explicitly-supplied absolute path may).
-    Never raises -- a path the CLI can open beats a path-shaped guess."""
     try:
         return candidate.relative_to(repo_root).as_posix()
     except ValueError:
@@ -152,12 +133,6 @@ def _rel_to_repo(candidate: Path, repo_root: Path) -> str:
 
 
 def _normalize_handoff_governing_plan_field(raw: Optional[Any]) -> Optional[str]:
-    """A handoff's `governing_plan:` frontmatter value is producer-written,
-    not schema-enforced — a known hazard in this area (fixed for comment-
-    stripping in `a571e6d3`) is an FK-typed field carrying the *string*
-    `'null'` (or `'none'`, or an all-whitespace scalar) rather than a real
-    `None` for "no governing plan on record". Collapse all three to
-    absent so callers never treat the literal text as a path."""
     if raw is None:
         return None
     value = str(raw).strip()
@@ -275,17 +250,7 @@ def resolve_governing_plan_with_source(
 
 
 def governing_plan_predicate(governing_plan: Optional[GoverningPlan]) -> bool:
-    """Step 2.4 / Step 2.4b's shared negative-spec gate
-    (`d-governing-plan-predicate`) — fires only when a governing plan was
-    resolved; both plan-gated directive builders below skip entirely
-    (return no directives) when this is `False`. Pure existence check —
-    no CLI, no disk write, nothing to invoke."""
     return governing_plan is not None
-
-
-# ---------------------------------------------------------------------------
-# directives[] — Step 2.4 claim + stamp, Step 2.4b harvest
-# ---------------------------------------------------------------------------
 
 
 def _directive(
@@ -342,7 +307,7 @@ def build_plan_claim_and_stamp_directives(governing_plan: Optional[GoverningPlan
     """
     if not governing_plan_predicate(governing_plan):
         return []
-    assert governing_plan is not None  # narrows for the type checker; predicate already proved it
+    assert governing_plan is not None
     slug = governing_plan.slug
     plan_rel = governing_plan.rel
     return [
@@ -397,39 +362,8 @@ def build_deferral_harvest_directives(governing_plans: list[GoverningPlan]) -> l
     return directives
 
 
-# ---------------------------------------------------------------------------
-# directives[] — Step 1 lesson capture, Step 1.2 mechanical queue-append tail
-# ---------------------------------------------------------------------------
-
-# The per-lesson id suffix exists in exactly ONE place (these two helpers) and
-# is consumed by BOTH the directive builder below and the `lesson-worth-
-# capturing` judgment point's `resolves` list (`judgments.py`, via
-# `lesson_capture_resolves_ids`). Formatting it independently in the two places
-# is the defect this centralization exists to prevent: `apply`'s gate matches a
-# `resolves` entry against a directive id EXACTLY (never by prefix), so a
-# `resolves` naming the unsuffixed base silently never opens the gate, and the
-# captured lesson is never written while `apply` still reports success.
-
-
-#: Keys every `decisions["lessons"]` entry must carry before a lesson-add
-#: directive can be composed. Validated up front rather than indexed blind:
-#: a missing key previously surfaced as a bare `KeyError` traceback out of
-#: `build_lesson_capture_directives`, which reads as an engine crash mid-
-#: ceremony rather than as the malformed-input error it actually is, and
-#: gives the author no clue which entry or which key was at fault.
-#: Negative-spec: do NOT default a missing value here. These are
-#: author-composed prose; substituting a placeholder would put an
-#: unauthored lesson on disk, which is worse than refusing.
 _LESSON_REQUIRED_KEYS: tuple[str, ...] = ("title", "scope")
 
-#: The body transport pair. Forwarded by `_lesson_body_args`, which picks
-#: ONE of them per entry, never the generic loop below — an entry carrying
-#: both flags is what `coordinator_core.argv_fidelity.resolve_body` refuses
-#: outright. Listed here so the pair stays declared in one place alongside
-#: the facets, and so the drift guard
-#: (`test_assembler_covers_every_optional_flag_the_lesson_cli_accepts`)
-#: reads them as forwarded: they are optional at the CLI's argparse layer
-#: (exactly-one-of is enforced after parse), so the guard counts them.
 _LESSON_BODY_FLAGS: tuple[tuple[str, str], ...] = (
     ("body", "--body"),
     ("body_file", "--body-file"),
@@ -438,9 +372,6 @@ _LESSON_BODY_FLAGS: tuple[tuple[str, str], ...] = (
 _LESSON_BODY_KEYS: frozenset[str] = frozenset(key for key, _flag in _LESSON_BODY_FLAGS)
 
 
-#: The title transport pair. `coordinator-lesson-add` requires EXACTLY ONE
-#: of `--title`/`--title-file`, so these are not facets: running them through
-#: the generic loop below would forward both halves of a mutually-exclusive
 #: pair over a REQUIRED field. Forwarded by `_lesson_title_args`.
 _LESSON_TITLE_FLAGS: tuple[tuple[str, str], ...] = (
     ("title", "--title"),
@@ -449,9 +380,7 @@ _LESSON_TITLE_FLAGS: tuple[tuple[str, str], ...] = (
 
 _LESSON_TITLE_KEYS: frozenset[str] = frozenset(key for key, _flag in _LESSON_TITLE_FLAGS)
 
-#: The `why` transport pair. `--why-file` is a second body-shaped pair over an
 #: OPTIONAL facet, not a seventh facet: the CLI resolves the two through
-#: `resolve_optional_prose`, which refuses both at once.
 _LESSON_WHY_FLAGS: tuple[tuple[str, str], ...] = (
     ("why", "--why"),
     ("why_file", "--why-file"),
@@ -459,12 +388,6 @@ _LESSON_WHY_FLAGS: tuple[tuple[str, str], ...] = (
 
 _LESSON_WHY_KEYS: frozenset[str] = frozenset(key for key, _flag in _LESSON_WHY_FLAGS)
 
-#: Optional `decisions["lessons"][n]` keys → the `coordinator-lesson-add` flag
-#: that carries them, in the order they are appended to the directive's argv.
-#: Every optional flag the CLI accepts appears here: a facet the EM composes but
-#: the assembler has no flag for is a facet silently dropped on the way to disk,
-#: which is what forces an author to bypass the directive and hand-run the CLI.
-#: The body pair leads (its two keys are handled by `_lesson_body_args`, and
 #: the generic loop skips them via `_LESSON_BODY_KEYS`); the facets follow.
 _LESSON_OPTIONAL_FLAGS: tuple[tuple[str, str], ...] = _LESSON_BODY_FLAGS + _LESSON_TITLE_FLAGS + _LESSON_WHY_FLAGS + (
     ("trigger", "--trigger"),
@@ -474,29 +397,11 @@ _LESSON_OPTIONAL_FLAGS: tuple[tuple[str, str], ...] = _LESSON_BODY_FLAGS + _LESS
     ("evidence", "--evidence"),
 )
 
-#: Where a multi-paragraph `body` is materialized so it can travel as
-#: `--body-file`. Content-addressed and therefore idempotent: the same body
-#: re-composed on a re-run resolves to the same path with the same bytes,
-#: so a repeated `apply` pass adds no file and mutates none.
 _LESSON_BODY_SPOOL_RELDIR = "state/ceremony/wsc-lesson-body"
 
 
-#: `preflight.decisions_template`'s discoverable stand-in for the bare
-#: `None` a free-value key gets by default (`__init__.py::build_decisions_
 #: template`). `_LESSON_REQUIRED_KEYS`/`_LESSON_BODY_KEYS`/
 #: `_LESSON_OPTIONAL_FLAGS` plus the queue-append facet keys
-#: `_iter_capturable_lessons` reads for `wants_queue` are ALL represented
-#: here, keyed to `None`, so a caller can discover every key this module's
-#: builders read by looking at the template's OWN output rather than
-#: reverse-engineering this module's source — the exact gap
-#: `build_lesson_capture_directives`'s `ValueError`s used to surface only a
-#: round trip later, after a malformed `--decisions` was already composed
-#: and rejected. A single-entry list, not an empty one: an empty `[]`
-#: reads as "the shape is a list of lessons" with no clue what a lesson
-#: dict looks like, which is the same discoverability gap in a different
-#: costume. Never resolved to anything else at runtime — this is a static
-#: hint, not a computed fact, so it carries no `resolved_free_values`
-#: entry the way `governing_plan_slug` does.
 LESSONS_TEMPLATE_DEFAULT: list[dict[str, Any]] = [
     {
         "title": None,
@@ -519,22 +424,17 @@ LESSONS_TEMPLATE_DEFAULT: list[dict[str, Any]] = [
     }
 ]
 
-#: Union source for `build_decisions_template`'s static-shape overrides
 #: (mirrors `FREE_VALUE_KEYS`'s own per-submodule union pattern) — a free-
-#: value key that wants a discoverable non-`None` template default rather
-#: than the generic `None` every other free-value key gets.
 FREE_VALUE_KEY_STATIC_DEFAULTS: dict[str, Any] = {
     _KEY_LESSONS: LESSONS_TEMPLATE_DEFAULT,
 }
 
 
 def lesson_add_directive_id(idx: int) -> str:
-    """`d-add-lesson-<n>` for the 0-based lesson index `idx`."""
     return f"d-add-lesson-{idx + 1}"
 
 
 def lesson_queue_directive_id(idx: int) -> str:
-    """`d-queue-append-lesson-<n>` for the 0-based lesson index `idx`."""
     return f"d-queue-append-lesson-{idx + 1}"
 
 
@@ -566,18 +466,11 @@ def lesson_capture_resolves_ids(decisions: dict[str, Any]) -> list[str]:
 
 
 def _lesson_body_spool_path(repo_root: Path, body: str) -> Path:
-    """Content-addressed spool path for `body` under `repo_root`."""
     digest = hashlib.sha256(body.encode("utf-8")).hexdigest()[:24]
     return Path(repo_root) / _LESSON_BODY_SPOOL_RELDIR / f"{digest}.md"
 
 
 def _spool_body_to_file(repo_root: Path, body: str) -> str:
-    """Materialize `body` at its content-addressed spool path and return the
-    path as a string. Shared by `_lesson_body_args` (the `--body`/`--body-file`
-    leg) and the queue-append `--body` leg below — same idempotent
-    write-if-absent behaviour both need: a repeated `apply` pass composing the
-    same body resolves to the same path with the same bytes, so it adds no
-    file and mutates none on a re-run."""
     path = _lesson_body_spool_path(repo_root, body)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_str = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.stem}.tmp.", suffix=".md")
@@ -595,13 +488,6 @@ def _spool_body_to_file(repo_root: Path, body: str) -> str:
 
 
 def _lesson_title_args(idx: int, lesson: Mapping[str, Any]) -> list[str]:
-    """The two-element title transport for one lesson's argv — `--title` or
-    `--title-file`, never both, mirroring `_lesson_body_args`.
-
-    An explicit `title_file` wins and is forwarded verbatim. A title is one
-    line by contract, so a newline-bearing `title` refuses here with the
-    remedy named rather than composing argv `coordinator-lesson-add` is
-    certain to reject after the launcher has already truncated it."""
     title_file = str(lesson.get("title_file") or "").strip()
     if title_file:
         return ["--title-file", title_file]
@@ -615,8 +501,6 @@ def _lesson_title_args(idx: int, lesson: Mapping[str, Any]) -> list[str]:
 
 
 def _lesson_why_args(lesson: Mapping[str, Any]) -> list[str]:
-    """`--why` or `--why-file`, never both — the CLI's `resolve_optional_
-    prose` refuses the pair. Absent on both keys, the facet is omitted."""
     why_file = str(lesson.get("why_file") or "").strip()
     if why_file:
         return ["--why-file", why_file]
@@ -657,24 +541,6 @@ def _lesson_body_args(idx: int, lesson: Mapping[str, Any], repo_root: Optional[P
 
 
 def _queue_body_args(idx: int, lesson: Mapping[str, Any], repo_root: Optional[Path]) -> list[str]:
-    """The two-element body transport for one lesson's `coordinator-queue-
-    append` argv — `--body` for a single-line `queue_body`, `--body-file`
-    for a multi-paragraph one, mirroring `_lesson_body_args` exactly.
-
-    `coordinator-queue-append` does not refuse a newline-bearing `--body`
-    the way `coordinator-lesson-add` does (it silently `str.replace`s a
-    literal `\\n` escape, which is not the same thing as a REAL embedded
-    newline surviving a `.cmd` launcher's argv — see that CLI's own
-    `--body-file` docstring: "cmd.exe truncates its argv at the first LF").
-    A real multi-paragraph `queue_body` composed as `--body` therefore loses
-    every line after the first the same way a lesson body did before this
-    fix, just without the CLI raising to say so — so this leg spools
-    exactly like the lesson-add leg rather than trusting the silent
-    single-line success.
-
-    `repo_root` is required to spool. `None` is legal only while
-    `queue_body` is single-line — a multi-paragraph one then refuses here
-    rather than composing argv the CLI would silently truncate."""
     body = str(lesson["queue_body"])
     if "\n" not in body:
         return ["--body", body]
@@ -686,55 +552,20 @@ def _queue_body_args(idx: int, lesson: Mapping[str, Any], repo_root: Optional[Pa
     return ["--body-file", _spool_body_to_file(repo_root, body)]
 
 
-#: The scope values `coordinator-lesson-add` will accept. Authority is
 #: DOWNSTREAM of this module -- lesson-add forwards `--scope` verbatim to the
-#: record-writing CLI, whose enum is the real gate, and the same three values
-#: are hard-coded at `coordinator/bin/coordinator-queue-append.py`'s own
 #: `_VALID_LESSON_SCOPES`. Duplicated here rather than imported.
-#:
-#: Review: overengineering-reviewer (finding #4) — the prior comment here
-#: claimed this could not be imported because a bin script is "not an
-#: importable module". That claim is false and this session's own diff
-#: falsifies it twice over: `coordinator/bin/tests/test_cc_invoke_
-#: indeterminate.py` and `test_cross_repo_memo_indeterminate_reconcile.py`
-#: both import across this exact boundary (one via `sys.path.insert` onto
-#: `bin/lib`, the other via `SourceFileLoader` on the hyphenated `.py`), and
-#: `ceremony_common.cli_dispatch.load_cli_module` (this package's own
 #: `apply.py` sibling) does the same at PRODUCTION runtime to invoke bin
-#: CLIs from `workstream_complete`/`workday_complete`/`workweek_complete`.
-#: The honest reason for duplicating anyway: `load_cli_module` is scoped to
 #: directive DISPATCH time and its own docstring disclaims isolating a
-#: loaded script's top-level side effects/argv/env -- reaching for it here,
-#: at directive-BUILD time (this module runs well before any directive
-#: executes), to read one three-value constant would import
-#: `coordinator-queue-append.py`'s full top-level (argparse setup and all)
-#: on a path that has nothing to do with dispatching it, for a cost this
-#: three-value enum does not justify. If a fourth value is ever added, this
-#: set is one of three places that must move together; the alternative --
 #: discovering the mismatch at dispatch -- costs a PARTIAL_MUTATION after
-#: the commit tail has landed.
 _VALID_LESSON_SCOPES = frozenset({"universal", "project", "wiki-only"})
 
 
 def _iter_capturable_lessons(
     decisions: dict[str, Any],
 ) -> "list[tuple[int, Mapping[str, Any], bool]]":
-    """Every `decisions["lessons"]` entry, validated, as
-    `(idx, lesson, wants_queue_append)`.
-
-    The one place an entry's shape is checked, so `lesson_capture_resolves_ids`
-    and `build_lesson_capture_directives` cannot disagree about which entries
-    are capturable. Validated up front rather than indexed blind: a missing
-    key previously surfaced as a bare `KeyError` traceback, which reads as an
-    engine crash mid-ceremony rather than the malformed-input error it is."""
     out: list[tuple[int, Mapping[str, Any], bool]] = []
     for idx, lesson in enumerate(decisions.get(_KEY_LESSONS, []) or []):
         if not isinstance(lesson, Mapping):
-            # A bare string is the natural first guess at this shape, and it
-            # used to reach `.get` and die on AttributeError -- a traceback
-            # where the block below is deliberately designed to name the
-            # offending entry and its missing keys. Same refusal, same
-            # nothing-written guarantee, just legible.
             raise ValueError(
                 f"decisions[{_KEY_LESSONS!r}][{idx}] is a "
                 f"{type(lesson).__name__}, not a mapping (required keys: "
@@ -742,9 +573,6 @@ def _iter_capturable_lessons(
                 "apply -- this is a malformed decisions map, not a ceremony "
                 "failure, and nothing has been written."
             )
-        # `title` is satisfied by either half of its transport pair: the CLI
-        # requires exactly one of `--title`/`--title-file`, so an entry
-        # carrying only `title_file` is complete, not missing a key.
         missing = [
             k
             for k in _LESSON_REQUIRED_KEYS
@@ -761,17 +589,8 @@ def _iter_capturable_lessons(
         scope = str(lesson.get("scope") or "").strip()
         if scope not in _VALID_LESSON_SCOPES:
             # VALIDATED HERE, BEFORE THE COMMIT TAIL, because the cost of
-            # validating it downstream was measured: example-market-data-repo-em
-            # supplied `scope: "local"`, the assembler forwarded it unchecked,
-            # `coordinator-lesson-add` rejected it, BOTH lesson directives
             # returned exit 1 -- and the commit tail had ALREADY SUCCEEDED, so
             # apply returned exit 4 (PARTIAL_MUTATION) on a ceremony that
-            # looked done while both lessons were silently lost. They found it
-            # by grepping state/lessons/ afterwards (cross-repo/archive/
-            # 2026-08-11-example-market-data-repo-em-workstream-complete-engine-
-            # defects.md, defect 2). A caller-supplied value the engine can
-            # check must not be checked by a subprocess that runs after the
-            # irreversible half.
             raise ValueError(
                 f"decisions[{_KEY_LESSONS!r}][{idx}] has scope {scope!r}, which "
                 f"is not one of {sorted(_VALID_LESSON_SCOPES)!r}. Supply a valid "

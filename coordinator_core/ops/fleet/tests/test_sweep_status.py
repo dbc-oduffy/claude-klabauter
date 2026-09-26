@@ -1,36 +1,3 @@
-"""
-coordinator_core.ops.fleet.tests.test_sweep_status — Tier-T coverage for
-`fleet.archive_sweep_status` (AC-3, state/handoffs/2026-08-25_roadmap-archival-
-sweeps-03.md).
-
-Imports the handler function directly from
-`coordinator_core.ops.fleet.sweep_status`, never resolved by op key — same
-rationale as `test_archive_terminal_handoffs.py`: resolving by key would race
-any concurrent registration-key work in a peer chunk.
-
-Coverage:
-  - Missing receipt file degrades to an empty, healthy result (never raises).
-  - Malformed lines (unparseable JSON, non-dict, missing required keys) are
-    skipped without blinding the read to the well-formed rows around them.
-  - Last-row-per-sweep summarization: `last_outcome`/`last_at`/`last_detail`
-    reflect the most recently appended row for that sweep, not the first.
-  - `consecutive_failures` counts only the trailing run of `failed` rows and
-    resets on any other outcome (including `skipped-gated`/`skipped-contended`,
-    which are neither success nor failure).
-  - `last_success_at` only advances on `applied`/`nothing-to-do` rows.
-  - `unhealthy`/`unhealthy_sweeps`/`healthy` are derived purely from
-    `last_outcome == "failed"`.
-  - Zero subprocess spawns (a `subprocess.run` spy asserts this directly,
-    never inferred from timing).
-
-Negative-spec:
-  - Does NOT exercise the real op-registry dispatch path (`ipc.py`) — this
-    tests the handler function in isolation, matching the sibling fleet op
-    test files' own convention.
-  - Does NOT test `_sweep_receipt.record_sweep_outcome`'s own write path —
-    that module's existing tests own that; this file only ever reads
-    fixtures it writes itself via plain `Path.write_text`.
-"""
 
 from __future__ import annotations
 
@@ -74,8 +41,8 @@ def test_malformed_lines_are_skipped_not_fatal(tmp_path):
     rows = [
         "not json at all {{{",
         json.dumps(["not", "a", "dict"]),
-        json.dumps({"sweep": "fleet.b"}),  # missing outcome
-        json.dumps({"outcome": "applied"}),  # missing sweep
+        json.dumps({"sweep": "fleet.b"}),
+        json.dumps({"outcome": "applied"}),
         json.dumps(good),
     ]
     _write_receipt(tmp_path, rows)
@@ -135,8 +102,6 @@ def test_skipped_outcomes_reset_but_do_not_count_as_failure_or_success(tmp_path)
     result = _handler({}, repo_root=tmp_path)
 
     entry = result["sweeps"][0]
-    # the skipped-gated row breaks the streak from the first failed row —
-    # only the single trailing failed row is counted.
     assert entry["consecutive_failures"] == 1
     assert entry["last_success_at"] is None
     assert entry["unhealthy"] is True

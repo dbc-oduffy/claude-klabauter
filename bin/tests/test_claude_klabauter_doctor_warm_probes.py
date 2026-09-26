@@ -50,12 +50,6 @@ _BIN_PROBE = _REPO_ROOT / "bin" / "claude-klabauter-doctor-probe.py"
 
 
 def _load_probe_module() -> Optional[ModuleType]:
-    """Import bin/claude-klabauter-doctor-probe.py as a fresh module via importlib.
-
-    Mirrors test_claude_klabauter_doctor_new_probes.py's loader exactly (own module
-    key, so the two test files' module instances never collide in
-    sys.modules).
-    """
     if not _BIN_PROBE.exists():
         return None
     _KEY = "claude_klabauter_doctor_probe_warm_probes_unit"
@@ -101,17 +95,12 @@ def _is_parseable_probe_result(r: object) -> bool:
 
 
 class _FakeProc:
-    """Stand-in for a psutil.Process yielded by process_iter(attrs)."""
 
     def __init__(self, info: dict) -> None:
         self.info = info
 
 
 def _make_fake_psutil(procs):
-    """Minimal fake psutil exposing only process_iter — the sole primitive
-    `_run_probe_warm_residency` calls on the module directly (reachability
-    itself is exercised via `_warm_check_pipe_reachable`, monkeypatched
-    separately per test)."""
     import types
 
     fake = types.ModuleType("psutil")
@@ -125,19 +114,6 @@ def _server_cmdline(engine_root: Path) -> list[str]:
 
 
 def _stub_pipe_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the token/pipe-name resolution the residency probe performs
-    BEFORE it reaches `_warm_check_pipe_reachable`.
-
-    Stubbing only the reachability primitive is not enough to exercise
-    classification: the probe first calls `skew.compute_client_token` and
-    `election.pipe_name` against the server's own engine root, which for a
-    synthetic `tmp_path` root raises, and the probe's outer guard correctly
-    turns any such failure into `classification="cannot_tell"`. The
-    reachability stub is then never consulted and every classification
-    assertion reads `cannot_tell`. Verified against the live box, where the
-    unstubbed path resolves and classifies `reachable` — so this is the
-    fixture missing a seam, not the probe declining to classify.
-    """
     from coordinator_core.warm import election, skew
 
     monkeypatch.setattr(skew, "compute_client_token", lambda engine_root: "stub-token")
@@ -150,14 +126,6 @@ def _stub_pipe_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _stub_reachability(monkeypatch: pytest.MonkeyPatch, mod: ModuleType, classification: str) -> None:
-    """Force both transports' reachability primitives to one classification.
-
-    The probe dispatches on `sys.platform`, so stubbing only the Windows
-    primitive leaves every classification assertion platform-dependent — the
-    thing this file's header promises it is not. Both legs are stubbed so the
-    classification tests below assert the probe's aggregation logic, which is
-    shared, on whichever host runs them.
-    """
     reachable_tuple = {
         "reachable": (True, False),
         "orphan": (False, False),
@@ -170,7 +138,6 @@ def _stub_reachability(monkeypatch: pytest.MonkeyPatch, mod: ModuleType, classif
 
 
 class TestWarmResidencyProbe:
-    """_run_probe_warm_residency() — AC7, AC9, AC10."""
 
     def test_no_resident_servers_is_pass(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -190,7 +157,6 @@ class TestWarmResidencyProbe:
     def test_reachable_server_is_pass(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AC7's healthy counterpart: a resident, addressable server is PASS."""
         mod = _require_module()
 
         engine_root = tmp_path / "engine"
@@ -236,9 +202,6 @@ class TestWarmResidencyProbe:
     def test_orphan_remediation_names_no_action(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AC10 — the orphan condition names NO remediation. `warm-engine-stop`
-        targets the current, breadcrumb-elected server; naming it here would
-        risk killing the live server while leaving the orphan running."""
         mod = _require_module()
 
         engine_root = tmp_path / "engine"
@@ -258,9 +221,6 @@ class TestWarmResidencyProbe:
     def test_breadcrumb_absent_yields_cannot_tell_not_no_server_running(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AC9 — breadcrumb absence enriches per-server state as "cannot_tell",
-        never a claim that no server is running (a resident server WAS found
-        via psutil; the breadcrumb is orthogonal enrichment only)."""
         mod = _require_module()
 
         engine_root = tmp_path / "engine"
@@ -269,7 +229,6 @@ class TestWarmResidencyProbe:
         monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
         _stub_pipe_resolution(monkeypatch)
         _stub_reachability(monkeypatch, mod, "reachable")
-        # No breadcrumb file exists under tmp_path/engine — read_breadcrumb returns None.
 
         result = mod._run_probe_warm_residency(tmp_path)
 
@@ -282,9 +241,6 @@ class TestWarmResidencyProbe:
     def test_reachability_indeterminate_reports_cannot_tell_required_true(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When the reachability primitive itself is skipped (e.g. POSIX),
-        the probe reports skipped=True with required=True (AC9/AC10's intent
-        — stated explicitly, not read off the TOML manifest footer)."""
         mod = _require_module()
 
         engine_root = tmp_path / "engine"
@@ -304,7 +260,6 @@ class TestWarmResidencyProbe:
     def test_psutil_missing_is_info_skipped(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Mirrors _run_probe_orphaned_execnet_gateways's ImportError guard shape."""
         mod = _require_module()
 
         real_import = __import__
@@ -335,16 +290,6 @@ class TestWarmResidencyProbe:
 
 @pytest.fixture
 def short_sock_dir():
-    """A directory short enough to hold an AF_UNIX path.
-
-    `pytest`'s `tmp_path` is nested deep enough under macOS's private temp
-    root that `sockaddr_un.sun_path`'s 104-byte budget is blown before the
-    socket name is even appended — `connect` then raises "AF_UNIX path too
-    long", which is a fixture defect, not the behaviour under test.
-    Production hits the same wall honestly: `election.socket_path` raises
-    `SocketPathTooLongError` up front rather than leaving `bind` to report
-    it as an unexplained OSError.
-    """
     import shutil
     import tempfile
 
@@ -429,7 +374,6 @@ class TestWarmSocketReachabilityPrimitive:
     def test_absent_endpoint_survives_into_the_probe_detail_string(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The distinction is worthless if aggregation flattens it."""
         mod = _require_module()
 
         engine_root = tmp_path / "engine"
@@ -450,7 +394,6 @@ class TestWarmSocketReachabilityPrimitive:
     def test_probe_cap_bounds_per_resident_connect_cost(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Residents past the cap report cannot_tell, never an unprobed PASS."""
         mod = _require_module()
 
         engine_root = tmp_path / "engine"

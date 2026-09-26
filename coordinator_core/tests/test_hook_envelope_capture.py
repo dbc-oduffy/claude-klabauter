@@ -1,15 +1,3 @@
-"""
-coordinator_core.tests.test_hook_envelope_capture — instrumentation seam
-coverage for coordinator_core._hook_envelope's capture sink.
-
-The capture_session()/_record()
-seam introduced for the guard message-size discipline corpus had zero test
-coverage: no test proved capture actually happens, nests correctly, or
-restores the prior sink on exit. A broken restore leaks a sink across tests
-and corrupts any corpus built afterwards after this module's tests run.
-
-Spec backlink: pln-runtime-measured-message-size--0669ac
-"""
 
 from __future__ import annotations
 
@@ -25,16 +13,8 @@ from coordinator_core._hook_envelope import (
 
 
 def test_no_op_without_a_sink_installed():
-    """Calling a prose-carrying builder with no capture_session() active must
-    not raise and must not have any observable side effect (the sink stays
-    None — this is the hot-path no-measurement-work guarantee)."""
     import coordinator_core._hook_envelope as hook_envelope
 
-    # Read through `.get()`: `_capture_sink` became a `contextvars.ContextVar`
-    # (C8, warm-engine plan) so two concurrent `capture_session()` blocks cannot
-    # cross-contaminate. `hook_envelope._capture_sink` is now the ContextVar
-    # object itself, which is never None, so the bare identity check silently
-    # stopped testing the no-sink guarantee it was written for.
     assert hook_envelope._capture_sink.get() is None
     envelope = context_only("PreToolUse", "hello")
     assert envelope["hookSpecificOutput"]["additionalContext"].endswith("hello")
@@ -42,8 +22,6 @@ def test_no_op_without_a_sink_installed():
 
 
 def test_capture_session_accumulates_across_all_five_builders():
-    """Every one of the five prose-carrying builders must append to the
-    active sink, in call order, as (builder_name, envelope) pairs."""
     with capture_session() as sink:
         allow_advisory("PreToolUse", "a")
         context_only("PreToolUse", "b")
@@ -63,8 +41,6 @@ def test_capture_session_accumulates_across_all_five_builders():
 
 
 def test_no_advisory_is_not_captured():
-    """no_advisory() carries no prose and is explicitly not instrumented —
-    it must never appear in the sink."""
     with capture_session() as sink:
         no_advisory()
         context_only("PreToolUse", "captured")
@@ -74,9 +50,6 @@ def test_no_advisory_is_not_captured():
 
 
 def test_nested_capture_session_restores_prior_sink():
-    """A nested capture_session() must restore the OUTER (possibly non-None)
-    sink on exit, not clobber it back to None — a broken restore here leaks
-    a sink across tests and corrupts any corpus built afterwards."""
     with capture_session() as outer_sink:
         context_only("PreToolUse", "outer-before")
 
@@ -86,8 +59,6 @@ def test_nested_capture_session_restores_prior_sink():
         assert len(inner_sink) == 1
         assert inner_sink[0][0] == "context_only"
 
-        # The outer sink must be active again (not None) after the inner
-        # block exits, and must not have received the inner call.
         import coordinator_core._hook_envelope as hook_envelope
 
         assert hook_envelope._capture_sink.get() is outer_sink

@@ -75,13 +75,6 @@ def _default_plugins_dir() -> Path:
 
 
 def _default_validate_schemas_path() -> Optional[Path]:
-    """Resolve `.github/scripts/validate-json-schemas.py`, DoE-claude-repo-
-    relative — mirrors the retired bash step's plain-relative-path lookup
-    (which assumed cwd == the DoE-claude repo root at install time). Tries
-    the resolved DoE root first (works regardless of caller cwd), falling
-    back to a literal cwd-relative lookup for parity with the old bash
-    behavior. Returns None if neither resolves to an existing file — the
-    caller treats that as "nothing to validate", not an error."""
     doe_root = coordinator_doe_root()
     if doe_root:
         candidate = Path(doe_root) / ".github" / "scripts" / "validate-json-schemas.py"
@@ -135,8 +128,6 @@ def run(
     plugins_dir: Optional[Path] = None,
     validate_schemas_path: Optional[Path] = None,
 ) -> int:
-    """Core orchestration. Returns the process rc (0 success, 1 error, matching
-    install.md Step 9's own contract — see module docstring status rows)."""
     known_marketplaces_path = known_marketplaces_path or _default_known_marketplaces_path()
     plugins_dir = plugins_dir or _default_plugins_dir()
 

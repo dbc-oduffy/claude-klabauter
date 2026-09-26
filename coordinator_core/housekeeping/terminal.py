@@ -57,25 +57,15 @@ from typing import Any, Callable, Dict, List, Optional
 
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 
-#: Terminal deployment states for archival purposes — reused verbatim from
-#: the single source of truth (`closed`, `abandoned`, `continued`,
-#: `shipped`). `continued` IS terminal (a record with a successor is
-#: finished, not retained) — the counter-intuitive case the plan body
-#: calls out for its own test.
 TERMINAL_DEPLOYMENT_STATES = HANDOFF_TERMINAL_DEPLOYMENT
 
 
 class TerminalSetCapError(ValueError):
-    """Raised by `compute_terminal_set` when `cap` is missing, zero, or
-    negative — a caller setup error, never silently coerced into an
-    unbounded full sweep."""
+    pass
 
 
 @dataclass(frozen=True)
 class TerminalEntry:
-    """One record selected into the terminal set: its live-corpus path
-    plus the (possibly gate-clear-mutated, in-memory) record dict that
-    qualified it."""
 
     path: Path
     record: Dict[str, Any]

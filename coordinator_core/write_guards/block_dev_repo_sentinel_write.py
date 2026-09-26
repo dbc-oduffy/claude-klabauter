@@ -89,20 +89,13 @@ from coordinator_core.bash_guards._helpers import operator_override_note
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
-PRIORITY = 122  # advisory band slot (docs/wiki/write-guard-priority-bands.md)
+PRIORITY = 122
 
-#: The exact basename this guard protects.
 _SENTINEL_NAME = ".coordinator-dev-repo"
 
-#: Same override env var as the Bash-leg sibling
-#: (`block_dev_repo_sentinel_removal.py`) -- one operator decision, one
-#: variable, covering both legs.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL"
 
 def _advisory_reason(payload: Optional[Dict[str, Any]]) -> str:
-    """Per-call reason builder (not a module-level constant): the trailing
-    ``operator_override_note`` call needs this request's ``payload`` to
-    resolve audience, which an import-time constant cannot carry."""
     _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
     base = (
         "[dev-repo guard] This file's mere presence is the dev-vs-OSS "
@@ -114,13 +107,6 @@ def _advisory_reason(payload: Optional[Dict[str, Any]]) -> str:
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the dev-repo-sentinel-write guard against a PreToolUse
-    payload.
-
-    Returns `None` (allow) or the nested advisory envelope -- the write is
-    never blocked; `additionalContext` only surfaces the recreate-instead-
-    of-edit alternative.
-    """
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
 

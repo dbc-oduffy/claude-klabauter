@@ -83,27 +83,17 @@ from coordinator_core.win_portability import is_executable, no_console_creationf
 
 try:
     import psutil
-except ImportError:  # psutil is a declared engine dependency (pyproject.toml);
-    # the guard exists ONLY so this module stays importable on a host missing
-    # it (mirrors coordinator_core/session/core.py's own psutil guard). Every
-    # call site below that is actually load-bearing on it (Windows cores/RAM)
-    # falls back to None rather than silently degrading past this module's
-    # documented fail-loud contract.
+except ImportError:
     psutil = None  # type: ignore[assignment]
 
-# Windows "Display" device-setup class GUID — stable across Windows versions,
-# documented by Microsoft (docs.microsoft.com/windows-hardware/drivers/install/
 # system-defined-device-setup-classes-available-to-vendors, GUID_DEVCLASS_DISPLAY).
-# Reading DriverDesc / HardwareInformation.{qwMemorySize,MemorySize} under each
-# numbered adapter subkey is the standard non-WMI way native tools (e.g.
-# GPU-Z-class utilities) resolve GPU name + VRAM without shelling out.
 _DISPLAY_CLASS_GUID = (
     r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
 )
 
-_PROG = "detect-hardware"  # literal program-name prefix, matches the DoE oracle's echo prefix
+_PROG = "detect-hardware"
 
-_BYTES_PER_GB = 1073741824  # 1024**3
+_BYTES_PER_GB = 1073741824
 _ROUND_HALF_GB = 536870912  # _BYTES_PER_GB // 2, for round-to-nearest-GB
 
 
@@ -121,19 +111,6 @@ def _resolve_machine_local() -> Optional[str]:
 
 
 def _platform() -> str:
-    """Classify the running platform as 'windows', 'macos', or 'linux'.
-
-    Deliberately does NOT read $OSTYPE (unlike the bash oracle) — OSTYPE is a
-    bash-builtin variable, not an exported environment variable, so it is
-    invisible to a Python process reached via the polyglot trampoline's `exec`
-    (which replaces the bash process rather than forking a child that inherits
-    bash's internal variable table). Using `sys.platform` instead is the
-    process-boundary-safe equivalent: 'darwin' -> macos, 'win32'/'cygwin' ->
-    windows, else -> linux, matching the bash oracle's OSTYPE classification
-    outcomes on every real platform it targets. OS=Windows_NT (a genuinely
-    exported env var on Windows, unlike OSTYPE) is kept as an additional
-    windows signal for parity with the oracle's second branch.
-    """
     if os.environ.get("OS", "") == "Windows_NT" or sys.platform.startswith("win") or sys.platform == "cygwin":
         return "windows"
     if sys.platform == "darwin":
@@ -142,7 +119,6 @@ def _platform() -> str:
 
 
 def _run(cmd: List[str]) -> Optional[str]:
-    """Run cmd, return raw stdout on success, None on any failure."""
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, check=False, **no_console_creationflags()
@@ -171,7 +147,6 @@ def _detect_cores_windows() -> Optional[int]:
 
 
 def _detect_ram_bytes_windows() -> Optional[int]:
-    """Windows total physical RAM in bytes via psutil (no shell spawn)."""
     if psutil is None:
         return None
     try:
@@ -207,19 +182,12 @@ def _coerce_registry_int(value: object) -> Optional[int]:
 
 
 def _adapter_vram_bytes(adapter_key) -> Optional[int]:
-    """VRAM in bytes for one adapter registry key, or None.
-
-    Prefers the 64-bit `HardwareInformation.qwMemorySize` (present on modern
-    drivers) and falls back to the older 32-bit `HardwareInformation.MemorySize`
-    (which under-reports on adapters with >4GB VRAM — a known limitation of this
-    registry path, not a bug here)."""
     import winreg
 
     for value_name in ("HardwareInformation.qwMemorySize", "HardwareInformation.MemorySize"):
         try:
             raw, _ = winreg.QueryValueEx(adapter_key, value_name)
         except FileNotFoundError:
-            # this value name is absent under this adapter; try the next one
             continue
         as_int = _coerce_registry_int(raw) if raw else None
         if as_int:
@@ -271,14 +239,12 @@ def _detect_gpu_windows() -> Tuple[Optional[str], Optional[int]]:
                         try:
                             driver_desc, _ = winreg.QueryValueEx(adapter_key, "DriverDesc")
                         except FileNotFoundError:
-                            # this adapter subkey has no driver description; skip it
                             continue
                         vram_bytes = _adapter_vram_bytes(adapter_key)
                         if best_desc is None or (vram_bytes or 0) > (best_bytes or 0):
                             best_desc = driver_desc
                             best_bytes = vram_bytes
                 except OSError:
-                    # adapter subkey unreadable; skip it
                     continue
     except OSError:
         return None, None
@@ -290,7 +256,6 @@ def _detect_gpu_windows() -> Tuple[Optional[str], Optional[int]]:
 
 
 def _detect_cores(platform: str) -> Optional[int]:
-    """Detect CPU core count. Returns None if undetectable (fail-loud caller decides)."""
     if platform == "windows":
         return _detect_cores_windows()
 
@@ -302,7 +267,6 @@ def _detect_cores(platform: str) -> Optional[int]:
         else:
             raw = None
     else:
-        # Linux
         if shutil.which("nproc"):
             out = _run(["nproc"])
             raw = out.strip() if out is not None else None
@@ -321,7 +285,6 @@ def _detect_cores(platform: str) -> Optional[int]:
 
 
 def _detect_ram_gb(platform: str) -> Optional[int]:
-    """Detect total RAM, rounded to the nearest GB. Returns None if undetectable."""
     ram_bytes: Optional[int] = None
 
     if platform == "windows":
@@ -333,7 +296,6 @@ def _detect_ram_gb(platform: str) -> Optional[int]:
             if raw is not None and raw.isdigit():
                 ram_bytes = int(raw)
     else:
-        # Linux: /proc/meminfo reports kB
         if os.path.isfile("/proc/meminfo"):
             try:
                 with open("/proc/meminfo", "r", encoding="utf-8", errors="replace") as f:
@@ -353,16 +315,12 @@ def _detect_ram_gb(platform: str) -> Optional[int]:
 
 
 def _detect_gpu(platform: str) -> Tuple[Optional[str], Optional[int]]:
-    """Best-effort GPU name + VRAM (GB) detection. Never raises; returns (None, None)
-    on any failure or unsupported platform (Linux VRAM is never detected, matching the
-    bash oracle — only the name is probed there via lspci)."""
     gpu: Optional[str] = None
     vram_gb: Optional[int] = None
 
     if platform == "windows":
         name, vram_gb = _detect_gpu_windows()
         if name:
-            # bash oracle: `tr -s ' '` collapses runs of spaces, `head -1` keeps first line.
             collapsed = re.sub(r" +", " ", name)
             lines = collapsed.splitlines()
             gpu = lines[0] if lines else collapsed
@@ -378,13 +336,11 @@ def _detect_gpu(platform: str) -> Tuple[Optional[str], Optional[int]]:
                         gpu = m.group(1)
                         break
     else:
-        # Linux
         if shutil.which("lspci"):
             out = _run(["lspci"])
             if out:
                 for line in out.splitlines():
                     if re.search(r"vga|3d|display", line, re.IGNORECASE):
-                        # bash oracle: sed 's/.*: //' then sed 's/ (.*//'
                         after_colon = re.sub(r"^.*: ", "", line, count=1)
                         gpu = re.sub(r" \(.*", "", after_colon, count=1)
                         break
@@ -393,7 +349,6 @@ def _detect_gpu(platform: str) -> Tuple[Optional[str], Optional[int]]:
 
 
 def _ml_set(ml_bin: str, key: str, value: str) -> int:
-    """Invoke `machine-local set --concern hardware <key> <value>`, returns exit code."""
     try:
         result = subprocess.run(
             [ml_bin, "set", "--concern", "hardware", key, value],
@@ -437,12 +392,6 @@ def main(argv: List[str]) -> int:
 
     gpu, vram_gb = _detect_gpu(platform)
 
-    # Flush after every print: the `machine-local` calls below are unbuffered
-    # child-process writes to the SAME stdout, and stdout interleaving order
-    # is part of the bash oracle's observable output contract (each
-    # `[detect-hardware] ...` line precedes the `machine-local: set ...` line
-    # it triggers) — without an explicit flush here, Python's buffered stdout
-    # can reorder relative to the child's unbuffered writes.
     print(f"[{_PROG}] cores={cores} ram_gb={ram_gb}")
     sys.stdout.flush()
     _ml_set(ml_bin, "hardware.cores", str(cores))
@@ -451,12 +400,12 @@ def main(argv: List[str]) -> int:
     if gpu:
         print(f"[{_PROG}] gpu={gpu}")
         sys.stdout.flush()
-        _ml_set(ml_bin, "hardware.gpu", gpu)  # best-effort — `|| true` in the bash oracle
+        _ml_set(ml_bin, "hardware.gpu", gpu)
 
     if vram_gb is not None and vram_gb > 0:
         print(f"[{_PROG}] vram_gb={vram_gb}")
         sys.stdout.flush()
-        _ml_set(ml_bin, "hardware.vram_gb", str(vram_gb))  # best-effort — `|| true` in the bash oracle
+        _ml_set(ml_bin, "hardware.vram_gb", str(vram_gb))
 
     print(f"[{_PROG}] hardware audit complete — values in hardware.local.toml")
     return 0

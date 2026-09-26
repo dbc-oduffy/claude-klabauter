@@ -101,25 +101,18 @@ from coordinator_core import py_probe_sh as _py_probe_sh
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
 from coordinator_core.session.declared_writes import declare_write
-# Cross-package import of the SSOT doc-pointer display string (same
-# precedent write_guards already uses for operator_override_note itself) --
-# emitted hook-body remediation text points readers at the doc that
-# enumerates these keys, never names a key inline (B6/B8, see
-# docs/wiki/guard-messaging.md § Register). Repo-qualified ("claude-klabauter
-# <path>"), so it stays fleet-addressable when this hook fires inside
-# DoE-claude's own tree, not just claude-klabauter's.
 from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY
 
-GENERATES = []  # writes only DoE-claude's own .git/hooks/pre-commit, never a tracked path
+GENERATES = []
 
 _PROG = "install-doe-claude-precommit-hook"
 
 
 @dataclass(frozen=True)
 class _Gate:
-    marker: str        # presence key: substring searched for in the hook body to find this gate's region
-    filename: str       # bin-dir filename (relative to the resolved gate-script dir)
-    label: str          # human label for the BLOCKED banner
+    marker: str
+    filename: str
+    label: str
     override_env: str   # env var that bypasses a CANNOT-RUN/CANNOT-PROCEED block
 
 
@@ -127,34 +120,12 @@ _GATE_REGISTRY: List[_Gate] = [
     _Gate(
         marker="guard-doctrine-surface-ratio",
         # The ENFORCING leg (1b). `guard-doctrine-surface-ratio.py` is leg 1a, an
-        # advisory-only PreToolUse guard that DoE-claude's own hook roster maps to
-        # `preuse-write-dispatch.py` — naming it here installed a gate that cannot
-        # block, leaving the ratchet with no enforcing leg installed by anything.
         filename="guard-doctrine-surface-ratio-precommit.py",
         label="doctrine-surface-ratio",
         override_env="COORDINATOR_OVERRIDE_PRECOMMIT_DOCTRINE_SURFACE_RATIO",
     ),
     _Gate(
         marker="guard-phantom-staged-deletion",
-        # The NATIVE-`git commit` leg of the committer-P0
-        # (state/audits/2026-08-31-committer-p0-*). The engine route is
-        # already covered in-process: `commit_paths` refuses a declared
-        # deletion for a path still on disk (62fe8736d1), and
-        # `_split_paths_for_commit_v2` no longer infers a deletion from a
-        # failed probe (6a2e5223cf). Neither reaches a bare `git commit`:
-        # `ceremony.commit_v2` is `commit-tree` plumbing that fires NO git
-        # hooks, and conversely a native commit never enters those checks.
-        # So a phantom staged deletion arriving by the native route had no
-        # guard at all on either side, which is what this entry closes.
-        # overengineering-reviewer flagged this row as inert (script
-        # absent, wrong repo) — false: guard-phantom-staged-deletion-precommit.py
-        # was authored in DoE-claude on 2026-08-28 (55add252c, 1b40e1865),
-        # predating this row. Scope limit that IS real: this installer only
-        # ever targets DoE-claude, so this row closes the native-`git commit`
-        # leg for DoE-claude only. Claude-klabauter's own native-`git commit` leg stays
-        # uncovered because claude-klabauter has had no pre-commit hook by design since
-        # 2026-08-25 ("the staged rollback gate dies without blocking a
-        # commit") — there is no hook here to hang a gate on.
         filename="guard-phantom-staged-deletion-precommit.py",
         label="phantom-staged-deletion",
         override_env="COORDINATOR_OVERRIDE_PRECOMMIT_PHANTOM_STAGED_DELETION",
@@ -168,13 +139,6 @@ _GATE_REGISTRY: List[_Gate] = [
 ]
 
 
-#: Gate-script directory as repo-root-relative POSIX segments, inside
-#: DoE-claude's own tree. Single source of truth for BOTH the install-time
-#: existence check (resolved absolute against the target repo root) and the
-#: path EMITTED into the hook body (relative, see `_gate_block`) — so the two
-#: can never drift apart. NOT `coordinator/bin/` — that is DoE-claude's
-#: general CLI surface; its pre-commit gate scripts live under
-#: `coordinator/hooks/scripts/`.
 _BIN_SUBDIR = ("coordinator", "hooks", "scripts")
 
 
@@ -194,21 +158,10 @@ def _bin_dir(repo_root: str) -> Path:
 
 
 def _resolve_doe_root() -> str:
-    """The DoE-claude repo root, per the canonical registry-first resolver —
-    the identity anchor for "is the target DoE-claude". Exposed as its own
-    function (rather than called inline) so tests can monkeypatch it to
-    point at a throwaway `tmp_path` repo, the same way `_self_repo_root()`
-    is independently monkeypatchable in the claude-klabauter installer. Returns `""`
-    on an unresolved `repos.doe_claude` — never raises (see
-    `coordinator_core.doe_root_pointer`'s own negative-spec) — and that is
-    treated as a clean advisory skip by the caller, not an error here."""
     return read_doe_root_pointer()
 
 
 def _canon(path: str) -> str:
-    """Canonicalize a path: "" on any failure (non-existent/non-directory
-    target, or an OSError resolving it) so a failed canon can only match
-    another failed canon — never a false positive against a real path."""
     if not path:
         return ""
     try:
@@ -221,37 +174,20 @@ def _canon(path: str) -> str:
 
 
 def _git_toplevel(target: str) -> Optional[str]:
-    """Resolve the repo root for `target` via `git -C <target> rev-parse
-    --show-toplevel`. Returns None on any git failure (not a git repo, git
-    missing, etc.)."""
     return _show_toplevel(cwd=target)
 
 
 def _atomic_write(path: str, content: str) -> None:
-    """Write `content` to `path` atomically: write to a `.tmp.<pid>` sibling,
-    then rename, so a concurrent git-commit never reads a torn hook. Chmods
-    0o755 after on POSIX, where a git hook must be executable to fire at
-    all — the POSIX exec bit is meaningless on Windows (git for Windows
-    invokes the hook via its own shebang-aware shell layer regardless), so
-    the chmod is skipped there rather than issued as a harmless no-op."""
     tmp_path = f"{path}.tmp.{os.getpid()}"
     with open(tmp_path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(content)
     os.replace(tmp_path, path)
     if os.name != "nt":
         os.chmod(path, 0o755)
-    # DR-276: declared AFTER the write lands, at the FINAL destination
-    # (`path`), never the discarded `tmp_path` — this is the single real
-    # write site every `_install_or_append_hook` call routes through.
     declare_write(path)
 
 
 def _strip_trailing_exit0(text: str) -> str:
-    """Strip a bare trailing `exit 0` line so gates appended after it are not
-    dead code — a `sh` script that already returned never reaches anything
-    appended past it. Every hook this installer writes re-adds exactly one
-    trailing `exit 0` at the true end, so this strip-then-reappend keeps that
-    invariant regardless of how many times gates get appended."""
     rstripped = text.rstrip("\n")
     lines = rstripped.split("\n") if rstripped else []
     if lines and lines[-1].strip() == "exit 0":
@@ -263,13 +199,6 @@ def _strip_trailing_exit0(text: str) -> str:
 
 
 def _py_resolve_line() -> str:
-    """POSIX `sh` interpreter probe, resolved in-order (python3, python, py)
-    and skipping any hit resolved under `WindowsApps` — shared with the
-    other two installers via `coordinator_core.py_probe_sh` rather than
-    re-hand-rolled here; see that module's docstring for the "why one shared
-    implementation" reasoning, and this module's own docstring for why only
-    THIS probe is shared while the surrounding gate-block machinery stays
-    independently duplicated."""
     return _py_probe_sh.python_probe_lines("_py")
 
 
@@ -319,9 +248,6 @@ def _gate_block(gate: _Gate) -> List[str]:
         f'_gate_script="{script_path}"',
         'if [ ! -f "$_gate_script" ]; then',
     ]
-    # See install_meta_repo_precommit_hook's own note at the same branch:
-    # name the runnable script, because a retired gate's vague remediation can
-    # point at an installer the retiring commit deleted.
     lines += _cannot_proceed_branch(
         "missing script $_gate_script",
         "run coordinator/bin/install-doe-claude-precommit-hook.py to restore it, "
@@ -345,10 +271,6 @@ def _gate_block(gate: _Gate) -> List[str]:
     return lines
 
 
-#: Opening lines of a body THIS module wrote. Used as the authorship test in
-#: `_install_or_append_hook`: a hook starting with this is ours end to end and
-#: may be rewritten wholesale when stale; anything else is treated as a custom
-#: hook and only ever appended to.
 _BODY_HEADER = (
     "#!/bin/sh\n"
     "# DoE-claude pre-commit gates — fire before doctrine drift can land.\n"
@@ -356,33 +278,6 @@ _BODY_HEADER = (
 
 
 def _marker_is_installed(existing_text: str, gate: _Gate) -> bool:
-    """Is `gate` present as a REAL gate in `existing_text`, rather than
-    merely as a substring somewhere in it (e.g. a retirement or provenance
-    comment naming the marker)?
-
-    2026-08-25-class fix, ported from
-    `install_meta_repo_precommit_hook._marker_is_installed` (same defect,
-    independent copy — see this module's own docstring for why the two stay
-    duplicated rather than shared). The bare `gate.marker in existing_text`
-    test this replaces is true for a marker mentioned only in a COMMENT,
-    which silently makes the gate un-installable forever: it falls out of
-    `missing_gates` (never appended) while `_gate_region_is_current` also
-    can never fire (the region this module would emit is not present
-    either), leaving a registry entry that can never reach the hook.
-
-    Presence means either of:
-      - this gate's own `# --- Gate: <label> (<marker>) ---` region header
-        (the ONE comment this module's own emitted body legitimately
-        carries the marker in), or
-      - the marker on the CODE portion of some line — the part before any
-        `#`, whether the line is comment-only or code with a trailing
-        inline comment — word-bounded so one marker can never cross-match
-        as a substring of another.
-
-    Only a mention confined entirely to OTHER comment text (a retirement
-    note, a provenance sentence, anything that is not this module's own
-    region header) now counts as absent.
-    """
     header = f"# --- Gate: {gate.label} ({gate.marker}) ---"
     if header in existing_text:
         return True
@@ -395,22 +290,10 @@ def _marker_is_installed(existing_text: str, gate: _Gate) -> bool:
 
 
 def _gate_region_is_current(existing_text: str, gate: _Gate) -> bool:
-    """Whether `existing_text` contains this gate's block EXACTLY as it would
-    be emitted today.
-
-    The gate's marker being present proves only that some version of the gate
-    is wired; it says nothing about whether that version is the current one.
-    This compares the emitted lines themselves, so a changed script path,
-    override name, or exit-code clamp reads as stale rather than as installed.
-    """
     return "\n".join(_gate_block(gate)) in existing_text
 
 
 def _hook_body(gates: List[_Gate]) -> str:
-    """Assemble a full hook body for exactly `gates` (in registry order).
-
-    Takes no bin dir: every emitted gate path is repo-root-relative (see
-    `_gate_block`), so the body is independent of where this checkout lives."""
     lines = [
         *_BODY_HEADER.rstrip("\n").split("\n"),
         "# Registry-driven (coordinator_core.ops.install_doe_claude_precommit_hook);",
@@ -452,11 +335,6 @@ def _warn_if_gate_script_missing(repo_root: str, gates: List[_Gate]) -> None:
 
 
 def _install_or_append_hook(repo_root: str, gates: List[_Gate]) -> int:
-    """Install/append `.git/hooks/pre-commit` in `repo_root` against
-    `gates`. Fresh install writes the full body; an existing hook gets
-    whatever gates are missing appended (after stripping a trailing bare
-    `exit 0` so the appended gates are reachable); a hook that already
-    carries every gate marker is a no-op."""
     hook_path = os.path.join(repo_root, ".git", "hooks", "pre-commit")
     _warn_if_gate_script_missing(repo_root, gates)
 
@@ -478,14 +356,6 @@ def _install_or_append_hook(repo_root: str, gates: List[_Gate]) -> int:
         print(f"{_PROG}: installed {hook_path}.", file=sys.stderr)
         return 0
 
-    # Marker-presence alone is NOT "up to date" — the now-deleted
-    # `install_claude_klabauter_precommit_hook._install_or_append_hook`'s own comment
-    # carried (2026-07-28) the empirical incident this guards against.
-    # A hook this installer wrote is compared against what it WOULD write
-    # now, and rewritten on any difference. A hook carrying foreign content is
-    # never rewritten wholesale — appending is the only safe move there, and a
-    # stale gate region inside a foreign hook is surfaced loudly rather than
-    # silently rewritten around someone else's edits.
     ours_wholesale = existing_text.startswith(_BODY_HEADER)
     if ours_wholesale:
         desired = _hook_body(gates)
@@ -529,10 +399,6 @@ def _install_or_append_hook(repo_root: str, gates: List[_Gate]) -> int:
 
 
 def _resolve_doe_claude_target(target: str) -> Optional[str]:
-    """Identity guard: resolve `target` to DoE-claude's own repo root, or
-    None if `target` is not a git repo / not DoE-claude / DoE-claude's root
-    cannot presently be resolved at all (AC3 — a clean advisory skip, never a
-    block)."""
     toplevel = _git_toplevel(target)
     if toplevel is None:
         print(f"{_PROG}: {target} not in a git repo — skipping.", file=sys.stderr)
@@ -563,10 +429,6 @@ def _resolve_doe_claude_target(target: str) -> Optional[str]:
 
     if _canon(toplevel) != canon_doe_root:
         # foreign-identity: NOT-REACHABLE — basis: DELIBERATE INVOCATION, not true
-        # unreachability. Install-time-only pre-commit hook installer (the operator
-        # runs the claude-klabauter installer/`setup.py` deliberately); a third-repo session
-        # cannot hit this ambiently, but an installing operator CAN reach it by
-        # running the installer (same basis as audit rows 6/11/12).
         print(f"{_PROG}: not DoE-claude ({toplevel}) — skipping.", file=sys.stderr)
         return None
     return toplevel

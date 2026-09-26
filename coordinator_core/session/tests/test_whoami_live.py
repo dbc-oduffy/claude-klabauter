@@ -29,8 +29,6 @@ def test_dead_session_shape(monkeypatch):
 
 
 def test_unresolvable_session_id_never_calls_liveness(monkeypatch):
-    """Empty `resolve_session_id()` short-circuits to `live: False` without
-    calling `liveness.session_live` on an empty string."""
     monkeypatch.setattr(core, "resolve_session_id", lambda cwd=None: "")
 
     def _fail_if_called(sid, cwd=None):
@@ -43,6 +41,5 @@ def test_unresolvable_session_id_never_calls_liveness(monkeypatch):
 
 
 def test_params_ignored():
-    """No params are consumed -- an arbitrary dict is accepted unchanged."""
     result = _session_whoami_live({"unused": "value"})
     assert set(result.keys()) == {"session_id", "live"}

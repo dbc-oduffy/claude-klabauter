@@ -30,15 +30,6 @@ import pytest
 
 
 def require_named_clone(report: dict) -> None:
-    """Raise `ValueError` if `report` carries a figure with no named clone.
-
-    A "figure" is any of the numeric measurement fields P8 names (`min_ms`,
-    `p50_ms`, `p95_ms`, `max_ms`, `n`, `concurrent_sessions`) or a bare
-    `value`. `clone` must be present and a non-empty string -- `None`, `""`,
-    and a missing key are all violations, matching P7's "meaningless without
-    one" framing rather than treating an empty string as a degraded-but-
-    acceptable answer.
-    """
     figure_keys = {"min_ms", "p50_ms", "p95_ms", "max_ms", "n", "concurrent_sessions", "value"}
     reports_a_figure = any(key in report for key in figure_keys)
     if not reports_a_figure:
@@ -67,6 +58,4 @@ def test_a_report_naming_its_clone_is_accepted():
 
 
 def test_a_report_with_no_figures_at_all_needs_no_clone():
-    """A pure metadata dict (no measurement figure present) is not what P7
-    is about -- only a report that actually asserts a number is in scope."""
     require_named_clone({"note": "queue prototype, never reviewed"})

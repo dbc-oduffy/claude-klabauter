@@ -18,13 +18,7 @@ import pytest
 from coordinator_core.ops.check_version_consistency import main
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Declared, not excused: this file spawns real git because the bash-oracle parity
-# contract (test-check-version-consistency.sh) it ports depends on real git-tree
-# state (tracked-file layout) that `check_version_consistency.main` reads via git
-# plumbing -- no mock stands in for that. Each test builds its own throwaway repo
-# via `_make_bundle`, so there is no shared state to hoist. The spawn ratchet's
 # `_BASELINE` is shrink-only pre-existing residue and is explicitly not the route
-# for this file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -193,13 +187,6 @@ def test_bad_root_reproduces_oracle_double_message_bug(tmp_path, capsys):
     assert "no CHANGELOG.md found" in captured.err
 
 
-# ---------------------------------------------------------------------------
-# P124-C1 — the version gate identifies the coordinator-claude bundle in its
-# caller before it may fail it. All --repo-root, never --root: these tests
-# exercise the auto-discovery/identity/N/A path, not the unchanged --root path.
-# ---------------------------------------------------------------------------
-
-
 def _make_v3_bundle(root: Path, pver: str, mver: str, cver: str, name: str = "coordinator-claude") -> None:
     """DoE-claude's real v3 source layout: the bundle lives under
     `<root>/coordinator/.claude-plugin/`, with the CHANGELOG one level below
@@ -224,8 +211,6 @@ def _make_v3_bundle(root: Path, pver: str, mver: str, cver: str, name: str = "co
 
 
 def test_c1_a_v3_layout_from_repo_root_reaches_ok(tmp_path, capsys):
-    """The compliance path (example-store-repo proposal 2): DoE running its own
-    ceremony from its own root with no --root. Must reach OK, never N/A."""
     d = tmp_path / "doe"
     d.mkdir()
     _make_v3_bundle(d, "2.9.0", "2.9.0", "2.9.0")
@@ -237,9 +222,6 @@ def test_c1_a_v3_layout_from_repo_root_reaches_ok(tmp_path, capsys):
 
 
 def test_c1_b_root_marketplace_named_something_else_reaches_na(tmp_path, capsys):
-    """A plugin repo whose root marketplace.json is named something other than
-    coordinator-claude (e.g. Example-retrieval-repo's own) must never be mistaken for the
-    bundle -- reaches a stated N/A, not a fail and not a silent pass."""
     d = tmp_path / "project-rag"
     (d / ".claude-plugin").mkdir(parents=True)
     (d / ".claude-plugin" / "marketplace.json").write_text('{"name": "project-rag"}\n')
@@ -261,10 +243,6 @@ def test_c1_c_no_marketplace_reaches_na_even_under_quiet(tmp_path, capsys):
 
 
 def test_c1_e_directive_args_carry_repo_root(tmp_path, capsys):
-    """--repo-root round-trips: identical bundle reached whether passed
-    explicitly or (if it happened to be cwd) discovered by default -- this is
-    the flag-plumbing half; test_workweek_complete_contract.py owns the actual
-    directive-args assertion for d_step4b_4k_version_consistency."""
     d = tmp_path / "doe2"
     d.mkdir()
     _make_v3_bundle(d, "3.1.0", "3.1.0", "3.1.0")
@@ -273,10 +251,6 @@ def test_c1_e_directive_args_carry_repo_root(tmp_path, capsys):
 
 
 def test_c1_f_nested_repo_root_reaches_ok_via_bundle_holder(tmp_path, capsys):
-    """A --repo-root naming a path NESTED under a bundle holder's own git
-    worktree still resolves to that holder's root and reaches OK -- discovery
-    normalizes through show_toplevel, it does not require repo_root to BE the
-    exact bundle-holder root."""
     d = tmp_path / "doe3"
     d.mkdir()
     _make_v3_bundle(d, "2.9.0", "2.9.0", "2.9.0")
@@ -319,9 +293,6 @@ def test_c1_g_corrupt_marketplace_json_fails_loud_not_na(tmp_path, capsys):
 
 
 def test_c1_h_explicit_repo_root_never_reads_cwd(tmp_path, capsys, monkeypatch):
-    """cwd holds a coordinator-claude bundle while --repo-root names a
-    bundle-less repo: the gate must reach N/A for repo_root, proving no rung
-    consults cwd."""
     bundle_holder = tmp_path / "holder"
     bundle_holder.mkdir()
     _make_v3_bundle(bundle_holder, "2.9.0", "2.9.0", "2.9.0")
@@ -337,8 +308,6 @@ def test_c1_h_explicit_repo_root_never_reads_cwd(tmp_path, capsys, monkeypatch):
 
 
 def test_c1_no_rung_reads_cwd_via_getcwd_default(tmp_path, capsys, monkeypatch):
-    """With --repo-root omitted entirely, the default IS cwd (unchanged
-    behaviour) -- a bundle at cwd reaches OK with no --repo-root given."""
     d = tmp_path / "cwd-bundle"
     d.mkdir()
     _make_v3_bundle(d, "2.9.0", "2.9.0", "2.9.0")
@@ -349,9 +318,6 @@ def test_c1_no_rung_reads_cwd_via_getcwd_default(tmp_path, capsys, monkeypatch):
 
 
 def test_c1_bad_root_still_reproduces_oracle_double_message_and_repo_root_ignored(tmp_path, capsys):
-    """Item 4: an explicit --root is unaffected by --repo-root, and stays
-    fail-loud/unchanged (test_bad_root_reproduces_oracle_double_message_bug's
-    sibling, with a --repo-root also passed to prove it is ignored)."""
     bundle_holder = tmp_path / "holder2"
     bundle_holder.mkdir()
     _make_v3_bundle(bundle_holder, "2.9.0", "2.9.0", "2.9.0")

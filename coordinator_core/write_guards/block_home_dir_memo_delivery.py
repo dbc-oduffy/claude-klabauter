@@ -93,24 +93,14 @@ CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 PRIORITY = 125
 
-#: Deliberately unadvertised maintainer/test escape hatch.
 OVERRIDE_ENV = "COORDINATOR_OVERRIDE_HOME_MEMO_GUARD"
 
-#: Tools whose tool_input names a file this guard must vet.
 _GUARDED_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 
-#: tool_input keys that can carry the target path, in probe order.
-#: NotebookEdit uses notebook_path; the rest use file_path.
 _PATH_KEYS = ("file_path", "notebook_path", "path")
 
 _CLAUDE_DIRNAME = ".claude"
 
-#: Both the legacy bare dirname and the current `state/`-nested one are
-#: guarded unconditionally, per this chunk's negative spec: this guard polices
-#: a FOREIGN root it has no authority to probe/resolve, so BOTH literals are
-#: pinned here rather than consulting `memo_corpus_root`/`receiver_inbox_root`
-#: (neither is authoritative over a foreign root, and a probing resolver would
-#: select one and stop watching the other).
 _CROSS_REPO_RELDIRS = ("cross-repo", "state/cross-repo")
 
 
@@ -206,6 +196,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         }
     except Exception:
-        # Fail-open on any unexpected error, matching every documented
-        # fail-open branch in the reference hook.
         return None

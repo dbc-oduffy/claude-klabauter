@@ -92,11 +92,6 @@ def test_append_not_overwrite_across_separate_calls():
 
 
 def test_rows_for_the_same_writer_and_clause_accumulate():
-    """One clause is commonly resolved from several call sites — `dep_check`'s
-    `visited_set_init` and `visited_set_crash_cleanup` both resolve clause 1.
-    Each row is a partial contribution, so they union. Under the original
-    last-write-wins reading the first site's entry silently vanished from the
-    receipt, and uninstall never learned about a surface that was written."""
     entry_first = WriteSurfaceEntry(kind="git-config-key", key="first")
     entry_second = WriteSurfaceEntry(kind="git-config-key", key="second")
 
@@ -111,8 +106,6 @@ def test_rows_for_the_same_writer_and_clause_accumulate():
 
 
 def test_identical_entry_journalled_twice_is_not_doubled():
-    """A call site that runs twice in one process, or re-journals after a
-    retry, must not double its entry into the receipt."""
     entry = WriteSurfaceEntry(kind="git-config-key", key="same")
 
     target.record_resolution("writer-a", 0, [entry])
@@ -124,9 +117,6 @@ def test_identical_entry_journalled_twice_is_not_doubled():
 
 
 def test_empty_row_marks_the_clause_reported_without_contributing_entries():
-    """The module's central invariant: "resolved to nothing on this machine"
-    (a present, empty resolution) stays distinguishable from "never reported"
-    (absent from the mapping entirely)."""
     target.record_resolution("writer-a", 0, [])
 
     journal = target.read_journal()
@@ -139,9 +129,6 @@ def test_truncated_final_line_is_skipped(_journal_env):
     entry = WriteSurfaceEntry(kind="git-config-key", key="ok")
     target.record_resolution("writer-a", 0, [entry])
 
-    # Simulate a run that died mid-append: a second, well-formed row minus
-    # its trailing newline (the truncated-tail shape a crash mid-os.write
-    # would leave behind).
     with open(_journal_env, "a", encoding="utf-8") as f:
         f.write('{"writer_id": "writer-b", "clause_index": 0, "entries": []')
 
@@ -217,7 +204,7 @@ def test_disabled_guard_refuses_append_and_clear(monkeypatch, _journal_env):
 
     monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
     target.clear_journal()
-    assert _journal_env.exists()  # refused — file untouched
+    assert _journal_env.exists()
 
 
 def test_clear_journal_removes_file(_journal_env):
@@ -232,7 +219,7 @@ def test_clear_journal_removes_file(_journal_env):
 
 
 def test_clear_journal_absent_file_is_noop():
-    target.clear_journal()  # must not raise
+    target.clear_journal()
 
 
 def test_default_journal_path_uses_settings_home(monkeypatch, tmp_path):

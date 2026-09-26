@@ -1,29 +1,3 @@
-"""
-coordinator_core.ops.tests.test_initiatives_serve
-
-Tests for the "initiative.serve_set" op.
-
-Import guard: ``import coordinator_core.ops`` MUST precede all test functions so
-that ALL op registrations fire (not just the single op under test).  This satisfies
-the universal-registry-completeness-tests-ov lesson: asserting a non-empty registry
-BEFORE per-op assertions prevents a silent false-positive over an empty registry.
-
-Coverage:
-  (a) registry-completeness — registry is non-empty after coordinator_core.ops import
-  (b) op-registered — "initiative.serve_set" is in the registry
-  (c) empty store — directory absent → returns empty initiatives list
-  (d) well-formed files — payload contains {id, label, status, target_date, shape}
-  (e) shape derivation — target_date=null → "ongoing"; ISO-date → "completion"
-  (f) malformed files — missing id/label → quarantined (skipped), others still served
-  (g) status coercion — invalid status → null; valid status → passed through
-  (h) null repo_root — returns empty initiatives list without raising
-
-Fixture approach: real on-disk YAML files in a tmp_path directory — matches the
-production ``state/initiatives/<id>.yaml`` shape (lesson: test-fidelity-seed-fixtures-
-in-the-real).
-
-Spec backlink: pln-claude-klabauter-served-initiative-roadm-8e0492 § C2 (AC2)
-"""
 
 from __future__ import annotations
 
@@ -33,30 +7,17 @@ from typing import Optional
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Import guard — fires ALL @register_op(...) side-effects, including
-# "initiative.serve_set".  MUST precede all test functions.
-# ---------------------------------------------------------------------------
 import coordinator_core.ops  # noqa: F401 — populates _REGISTRY
 
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.initiatives_serve import _handler
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
-# ---------------------------------------------------------------------------
-# Registry completeness assertion (universal positive floor)
-#
-# Lesson: universal-registry-completeness-tests-ov — import coordinator_core.ops
-# FIRST, then assert non-empty registry BEFORE any per-op assertion.  An empty
-# registry would make all per-op assertions vacuously pass (false-positive).
-# ---------------------------------------------------------------------------
 
 assert len(_REGISTRY) > 0, (
     "registry is empty after 'import coordinator_core.ops' — "
@@ -70,12 +31,6 @@ assert _OP_NAME in _REGISTRY, (
 )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-
 def _seed_initiative(
     initiatives_dir: Path,
     filename: str,
@@ -86,12 +41,6 @@ def _seed_initiative(
     target_date: Optional[str] = None,
     description: Optional[str] = None,
 ) -> Path:
-    """Write a ``state/initiatives/<filename>.yaml`` fixture file.
-
-    Omitting ``id_val`` or ``label`` produces a file that should be quarantined
-    (used by malformed-file tests).  ``target_date=None`` writes ``target_date: null``
-    (the claude-klabauter schema's ongoing/burn-down convention).
-    """
     initiatives_dir.mkdir(parents=True, exist_ok=True)
     lines = []
     if id_val is not None:
@@ -112,7 +61,6 @@ def _seed_initiative(
 
 
 def _make_git_repo(root: Path) -> Path:
-    """Create a minimal git repo at ``root`` and return its common_dir (.git path)."""
     root.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         ["git", "init", "-b", "main"],
@@ -135,16 +83,9 @@ def _make_git_repo(root: Path) -> Path:
     return (root / ".git").resolve()
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 class TestRegistryCompleteness:
-    """Positive-floor registry checks (must pass before any per-op test)."""
 
     def test_registry_is_non_empty(self):
-        """Registry populated after coordinator_core.ops import (positive floor)."""
         assert len(_REGISTRY) > 0
 
     def test_op_name_registered(self):
@@ -153,16 +94,13 @@ class TestRegistryCompleteness:
 
 
 class TestInitiativeServeSet:
-    """Payload and shape-derivation tests for initiative.serve_set."""
 
     def test_empty_store_directory_absent(self, tmp_path):
-        """No state/initiatives/ directory → empty initiatives list."""
         common_dir = _make_git_repo(tmp_path / "repo")
         result = _handler({}, repo_root=common_dir)
         assert result == {"initiatives": []}
 
     def test_empty_store_directory_present_but_empty(self, tmp_path):
-        """state/initiatives/ exists but has no YAML files → empty list."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         (repo_root / "state" / "initiatives").mkdir(parents=True)
@@ -170,7 +108,6 @@ class TestInitiativeServeSet:
         assert result == {"initiatives": []}
 
     def test_single_active_ongoing_initiative(self, tmp_path):
-        """Well-formed active/ongoing initiative → correct payload fields."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         ini_dir = repo_root / "state" / "initiatives"
@@ -187,7 +124,6 @@ class TestInitiativeServeSet:
         assert entry["shape"] == "ongoing"
 
     def test_completion_shape_when_target_date_set(self, tmp_path):
-        """Initiative with ISO target_date → shape='completion'."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         ini_dir = repo_root / "state" / "initiatives"
@@ -209,11 +145,9 @@ class TestInitiativeServeSet:
         assert entry["shape"] == "completion"
 
     def test_ongoing_shape_when_target_date_null(self, tmp_path):
-        """Initiative with target_date: null → shape='ongoing' (burn-down convention)."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         ini_dir = repo_root / "state" / "initiatives"
-        # target_date=None writes "target_date: null"
         _seed_initiative(
             ini_dir,
             "claude-klabauter-strangler.yaml",
@@ -229,7 +163,6 @@ class TestInitiativeServeSet:
         assert entry["shape"] == "ongoing"
 
     def test_multiple_initiatives_sorted_by_filename(self, tmp_path):
-        """Multiple YAML files → all returned (sorted by filename)."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         ini_dir = repo_root / "state" / "initiatives"
@@ -239,10 +172,9 @@ class TestInitiativeServeSet:
         result = _handler({}, repo_root=common_dir)
 
         ids = [e["id"] for e in result["initiatives"]]
-        assert ids == ["first", "second"]  # sorted by filename a-first < b-second
+        assert ids == ["first", "second"]
 
     def test_malformed_missing_id_skipped(self, tmp_path):
-        """File without 'id' field is skipped; other files still served."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         ini_dir = repo_root / "state" / "initiatives"
@@ -255,7 +187,6 @@ class TestInitiativeServeSet:
         assert ids == ["good"]
 
     def test_malformed_missing_label_skipped(self, tmp_path):
-        """File without 'label' field is skipped; other files still served."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         ini_dir = repo_root / "state" / "initiatives"
@@ -268,7 +199,6 @@ class TestInitiativeServeSet:
         assert ids == ["valid"]
 
     def test_invalid_status_coerced_to_null(self, tmp_path):
-        """File with unrecognised status → status field is None in payload."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         ini_dir = repo_root / "state" / "initiatives"
@@ -277,7 +207,7 @@ class TestInitiativeServeSet:
             "weird-status.yaml",
             id_val="weird",
             label="Weird Status",
-            status="complete",  # rejected canonical-3 value (not in canonical-4)
+            status="complete",
         )
 
         result = _handler({}, repo_root=common_dir)
@@ -286,7 +216,6 @@ class TestInitiativeServeSet:
         assert entry["status"] is None
 
     def test_valid_status_passed_through(self, tmp_path):
-        """Each canonical-4 status value passes through unmodified."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         ini_dir = repo_root / "state" / "initiatives"
@@ -306,8 +235,7 @@ class TestInitiativeServeSet:
         for status in ("active", "paused", "shipped", "abandoned"):
             assert returned_statuses[status] == status
 
-    def test_repo_root_none_returns_empty(self):  # no_ctx_repo_root fragment is a dead transition-time artifact; ctx fully stripped
-        """repo_root=None → empty list without raising."""
+    def test_repo_root_none_returns_empty(self):
         result = _handler({}, repo_root=None)
         assert result == {"initiatives": []}
 

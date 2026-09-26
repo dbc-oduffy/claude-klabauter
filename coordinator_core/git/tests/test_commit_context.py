@@ -39,13 +39,13 @@ def _entry_fixed(mode: int, sha_hex: str, size: int, mtime: int, name_len: int,
                   mtime_nsec: int = 0) -> bytes:
     fixed = struct.pack(
         ">IIIIIIIIII",
-        0, 0,               # ctime s/ns
-        mtime, mtime_nsec,  # mtime s/ns
-        0,          # dev
-        0,          # ino
+        0, 0,
+        mtime, mtime_nsec,
+        0,
+        0,
         mode,
-        0,          # uid
-        0,          # gid
+        0,
+        0,
         size,
     )
     fixed += bytes.fromhex(sha_hex)
@@ -55,8 +55,6 @@ def _entry_fixed(mode: int, sha_hex: str, size: int, mtime: int, name_len: int,
 
 
 def _build_index(entries, *, version=2):
-    """`entries`: list of dicts with keys mode(int), sha(hex str),
-    size(int), mtime(int), name(str), mtime_nsec(int, default 0)."""
     out = _SIGNATURE + struct.pack(">II", version, len(entries))
     for e in entries:
         name = e["name"].encode("utf-8")
@@ -71,7 +69,7 @@ def _build_index(entries, *, version=2):
         entry_len = len(fixed) + len(name) + 1
         padding = (8 - (entry_len % 8)) % 8
         out += fixed + name + b"\x00" + (b"\x00" * padding)
-    out += b"\x00" * 20  # fake trailing checksum, never verified
+    out += b"\x00" * 20
     return out
 
 
@@ -88,15 +86,8 @@ def _plain_repo(tmp_path: Path) -> Path:
 
 
 def _no_head(monkeypatch):
-    """Most tests here care about the index/worktree axes only -- pin HEAD
-    to a fixed sha and empty tree so a test failure there cannot be
-    mistaken for one on this module's own wiring."""
     monkeypatch.setattr(commit_context, "head_sha", lambda repo: None)
     monkeypatch.setattr(commit_context, "head_blobs", lambda repo, paths: {})
-
-
-# ---------------------------------------------------------------------------
-# Basic wiring
 
 
 def test_index_entry_and_stat_present(tmp_path, monkeypatch):
@@ -137,7 +128,6 @@ def test_staged_but_deleted_from_worktree(tmp_path, monkeypatch):
         [{"mode": 0o100644, "sha": "c" * 40, "size": 1, "mtime": 1, "name": "gone.txt"}]
     )
     _write_index(repo / ".git", raw)
-    # deliberately never created on disk
 
     ctx = build_commit_context(repo, ["gone.txt"])
 
@@ -177,10 +167,6 @@ def test_head_blob_wired_through_to_path_context(tmp_path, monkeypatch):
     assert ctx.paths["other.txt"].head is None
 
 
-# ---------------------------------------------------------------------------
-# AC9 shape: entry-count scaling, never more than k against a five-figure index
-
-
 def test_context_never_materialises_an_entry_outside_paths(tmp_path, monkeypatch):
     _no_head(monkeypatch)
     repo = _plain_repo(tmp_path)
@@ -206,12 +192,7 @@ def test_context_never_materialises_an_entry_outside_paths(tmp_path, monkeypatch
 
     ctx = build_commit_context(repo, wanted)
 
-    # The scoped walk itself must never materialise more entries than were
-    # asked for -- the whole design this test exists to pin (AC9).
     assert seen_identity_len["n"] <= len(wanted)
-    # And the context's own per-path map holds exactly the requested paths,
-    # regardless of the 20,000-entry index behind it -- never more, never
-    # fewer.
     assert set(ctx.paths.keys()) == set(wanted)
     assert len(ctx.paths) == len(wanted)
     for name in wanted:
@@ -219,10 +200,6 @@ def test_context_never_materialises_an_entry_outside_paths(tmp_path, monkeypatch
 
 
 def test_context_entry_count_bounded_by_k_at_multiple_index_sizes(tmp_path, monkeypatch):
-    """AC9's own shape at module scope: equality of materialised-entry
-    counts across two synthesised index sizes at the same pathspec width --
-    a static per-function scaling detector is explicitly NOT what AC9 asks
-    for; this asserts the empirical invariant instead."""
     _no_head(monkeypatch)
 
     def _context_for_index_size(n: int) -> CommitContext:
@@ -241,10 +218,6 @@ def test_context_entry_count_bounded_by_k_at_multiple_index_sizes(tmp_path, monk
     large = _context_for_index_size(10_000)
 
     assert len(small.paths) == len(large.paths) == 2
-
-
-# ---------------------------------------------------------------------------
-# Return shape
 
 
 def test_returns_namedtuples(tmp_path, monkeypatch):

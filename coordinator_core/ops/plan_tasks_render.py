@@ -86,15 +86,9 @@ import yaml
 
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 
 _OPEN = "open"
 
-# Fixed render order — not sorted, not schema-enum order (schema order is
-# open|coded|spun_off|backlogged|wont_do; this list omits coded/open and
-# fixes the remaining three so output is stable across runs).
 _CLOSED_SECTION_DISPOSITIONS = ("spun_off", "backlogged", "wont_do")
 
 _DISPOSITION_SECTION_TITLES = {
@@ -102,11 +96,6 @@ _DISPOSITION_SECTION_TITLES = {
     "backlogged": "Backlogged",
     "wont_do": "Won't do",
 }
-
-
-# ---------------------------------------------------------------------------
-# Loading rows out of a plan's raw source
-# ---------------------------------------------------------------------------
 
 
 class RowsResult(NamedTuple):
@@ -149,54 +138,11 @@ def load_rows(source: str) -> RowsResult:
 
 
 def _disposition(row: dict) -> str:
-    """Row's disposition, defaulting to 'open' per the schema default (D1)."""
     value = row.get("disposition")
     return value if isinstance(value, str) and value else _OPEN
 
 
-# ---------------------------------------------------------------------------
-# (b) unresolved-head / closed-tail-count projection
-# ---------------------------------------------------------------------------
-
-
 def spine_projection(rows: list, *, governed: bool = False) -> dict:
-    """Unresolved-head/closed-tail-count projection (C9 output (b)).
-
-    Returns ``{"open": [<row>, ...], "closed_count": <int>, "unratified_deferrals":
-    [<row id>, ...]}`` — every ``open``-disposition row in full (a subagent
-    sidecar reading this projection sees exactly the live work, unabridged),
-    plus a bare count of everything else. D5 sorts closed rows to the
-    spine's tail; this projection is the machine-consumable form of that
-    same head/tail split — the sidecar never needs the closed rows'
-    content, only how many there are. ``closed_count`` follows D5's full
-    non-open partition (``coded`` included), which is intentionally wider
-    than ``render_closed_items``'s narrower closed-SECTION scope — see the
-    module docstring's "Closed-set scope decision" for why the two differ.
-
-    ``unratified_deferrals`` is a LIST OF ROW IDS, never prose — the whole
-    failure this key closes is that prose interpretation of the deferred
-    flag was load-bearing, so a paragraph here would rebuild the defect at
-    a new address. Empty list when there are none: a declared empty is a
-    finding a consumer can act on, an absent key is one it has to guess
-    about. The predicate is imported from
-    ``coordinator_core.frontmatter.schema_validate.is_unratified_deferral``
-    rather than restated here — a projection predicate that disagrees with
-    the validator (e.g. a bare ``pm_approved is not True`` blind to plan
-    kind) trains consumers to ignore the signal, which is the defect this
-    plan closes (docs/plans/2026-09-11-the-unratified-deferral-gets-a-
-    mechanism.md P119-C1/C4). Imported inside this function, not at module
-    top: this module does not import ``schema_validate`` at module scope
-    today, and ``coordinator/bin/plan-task-brief.py`` imports this module
-    cold for ``load_rows`` alone — a module-level import would add
-    ``schema_validate``'s load to every such cold start for a key it never
-    reads.
-
-    ``governed`` mirrors ``is_unratified_deferral``'s own kwarg: pass
-    ``is_governed_plan(fm)`` when the caller holds the plan frontmatter.
-    Default ``False`` leaves the one existing caller
-    (``workstream_complete/directives_spine_worklist.py``) unchanged; it
-    does not read this key.
-    """
     from coordinator_core.frontmatter.schema_validate import is_unratified_deferral
 
     open_rows = [row for row in rows if _disposition(row) == _OPEN]
@@ -210,11 +156,6 @@ def spine_projection(rows: list, *, governed: bool = False) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# (c) the disposition-write payload behind a delivered row (klabauter#44)
-# ---------------------------------------------------------------------------
-
-
 def dispositions_for_delivered(
     rows: list,
     delivered_ids,
@@ -222,38 +163,6 @@ def dispositions_for_delivered(
     disposition: str = "coded",
     disposition_ref: str | None = None,
 ) -> list[dict]:
-    """Derive the ``plan.tasks.mutate resolve`` batch payload that would
-    close every row in ``delivered_ids`` — the computation klabauter#44
-    found missing: nothing produced this payload, so nothing was ever
-    handed to ``resolve``, and a delivered row's ``disposition`` stayed at
-    its schema default (``open``) forever, re-emitting as live on every
-    subsequent read of the spine.
-
-    Returns one ``{"id": ..., "disposition": ...}`` dict per row in
-    ``rows`` whose ``id`` is in ``delivered_ids`` AND whose CURRENT
-    disposition is still ``open`` (via ``_disposition``, D1-tolerant) — an
-    id already resolved to some other disposition is left out, so a
-    caller can pass this straight to ``resolve``'s batch param without
-    re-deriving idempotency itself (re-resolving an already-closed row is
-    the caller's decision, not this function's). ``disposition_ref`` is
-    included only when supplied, and then on every returned entry
-    uniformly — this function has no way to derive a per-row ref (a commit
-    sha, a queue path) from ``rows`` alone; the caller who knows what
-    landed supplies it or leaves it to ``resolve``'s own required-only-
-    conditionally validation.
-
-    ``delivered_ids`` may be any iterable — a ``set`` is not required, and
-    passing a ``list`` (e.g. straight off a dispatch report) works
-    unchanged. An id in ``delivered_ids`` naming no row in ``rows`` is
-    silently ignored: this function derives payload for rows that exist,
-    it does not validate the caller's delivery evidence.
-
-    Row ORDER in the return mirrors ``rows``' own order, not
-    ``delivered_ids``' — matching ``resolve``'s own batch semantics, which
-    treat order as insignificant but this keeps output deterministic for a
-    given ``rows`` input regardless of how ``delivered_ids`` was built
-    (e.g. from an unordered set).
-    """
     wanted = set(delivered_ids)
     updates: list[dict] = []
     for row in rows:
@@ -269,13 +178,7 @@ def dispositions_for_delivered(
     return updates
 
 
-# ---------------------------------------------------------------------------
-# (a) human-legible "Closed items" section
-# ---------------------------------------------------------------------------
-
-
 def _render_row_bullet(row: dict) -> str:
-    """One bullet line for a single closed row: id, title, ref and/or detail."""
     row_id = row.get("id", "?")
     title = row.get("title", "")
     ref = row.get("disposition_ref")
@@ -290,22 +193,6 @@ def _render_row_bullet(row: dict) -> str:
 
 
 def render_closed_items(rows: list) -> str:
-    """Render the human-legible "Closed items" markdown section from spine rows.
-
-    Generated, never hand-maintained (D6) — every call recomputes fresh
-    from the current rows; there is no stored rendering to go stale.
-    Groups by disposition — Spun off / Backlogged / Won't do, in that
-    fixed order — with one bullet per row naming its ``id``, ``title``,
-    and whichever of ``disposition_ref``/``disposition_detail`` it
-    carries. ``coded`` and ``open`` rows are excluded from this section —
-    see the module docstring's "Closed-set scope decision" for why.
-
-    Returns ``""`` (no section at all, not an empty placeholder) when no
-    row carries a disposition this section covers — a plan with nothing
-    yet spun off, backlogged, or declined renders nothing, matching D6's
-    generated-not-maintained intent: there is no stale empty section to
-    leave behind.
-    """
     body_lines: list = []
     for disposition in _CLOSED_SECTION_DISPOSITIONS:
         matching = [row for row in rows if _disposition(row) == disposition]

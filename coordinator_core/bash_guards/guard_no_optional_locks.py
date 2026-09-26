@@ -91,57 +91,20 @@ from coordinator_core.bash_guards._dialect import dialect_from_tool_name
 from coordinator_core.bash_guards._shape_classifier import Shape, classify_command
 from coordinator_core.conservatism import SafeDirection, declares_safe_direction
 
-#: The two subcommands this guard rewrites -- the two lock-acquiring
-#: commands agents reach for constantly (see module docstring). Deliberately
-#: closed and small: widening this set is a future decision, not something
-#: this guard infers from a subcommand's name.
 _REWRITE_SUBCOMMANDS = frozenset({"status", "diff"})
 
-#: A `git diff` argument spelling this guard treats as "already excluded
-#: from the worktree lock" -- rewriting these would be a no-op flag, not a
-#: contention fix (see module docstring's NOT-rewritten list).
 _DIFF_STAGED_FLAGS = frozenset({"--cached", "--staged"})
 
 #: `git diff` spellings that must NOT be rewritten for the OPPOSITE reason
 #: to `_DIFF_STAGED_FLAGS`: not because the flag would be inert, but because
-#: `--no-optional-locks` actively breaks what the caller is doing.
-#:
-#: `--quiet` is the phantom-clearing probe. An ordinary `git diff` refreshes
-#: the index stat-cache and WRITES IT BACK, which is how a stat-cache
-#: phantom (a file git believes is dirty because its mtime moved while its
-#: content did not) heals itself. `--no-optional-locks` suppresses exactly
-#: that write-back. Rewrite a `--quiet` probe and the phantom it is probing
-#: for can never clear: every subsequent probe re-reads dirty, forever.
-#: `commit_gates`' own EOL-phantom probe path runs straight through here.
-#:
-#: Reported as item 1 of DoE-claude's 2026-08-12 six-defect bundle and
-#: re-verified 2026-08-31 (`state/audits/2026-08-31-the-six-defect-bundle-
-#: reverified.md`) -- the one item of that bundle's five that reproduced.
-#: DoE fixed the same mechanism on their own side by excluding
-#: `git_native.diff_quiet`, pinned by their
-#: `test_phantom_clearing_readers_keep_the_optional_lock`.
-#:
 #: Kept as its own set rather than folded into `_DIFF_STAGED_FLAGS`: the two
-#: answer different questions ("would the flag do nothing?" vs "would the
-#: flag do harm?"), and a future reader widening one must not silently
-#: inherit the other's rationale.
 _DIFF_PHANTOM_CLEARING_FLAGS = frozenset({"--quiet"})
 
-#: Token characters that make a shlex punctuation token a command separator
 #: -- identical set to `guard_offer_git_c._OFFER_SEP_TOKEN_CHARS`, not
-#: imported from there because that name is that module's own private
-#: implementation detail, not a shared export.
 _SEP_TOKEN_CHARS = frozenset(";&|")
 
 
 def _diff_args_are_ref_shaped(args: List[str]) -> bool:
-    """Return ``True`` when any non-flag `git diff` argument looks like a
-    ref-to-ref or ref:path comparison (``<sha>..HEAD``, ``HEAD:file``,
-    ``stash@{0}:file``) rather than an ordinary worktree-vs-index diff.
-
-    Heuristic, not a real ref resolution (this guard has no repository
-    access on the PreToolUse hot path) -- a flag token (leading ``-``) is
-    never inspected, since a flag's OWN spelling cannot itself be a ref."""
     for arg in args:
         if arg.startswith("-"):
             continue
@@ -244,33 +207,6 @@ def _is_unmasked_sep_char(text: str, i: int) -> bool:
 
 
 def _raw_token_spans(text: str) -> Optional[List[Tuple[str, int, int]]]:
-    """Quote-aware scan of raw command TEXT into ``(value, start, end)``
-    triples -- the offset-tracking twin of `tokenize_full_command`'s
-    value-only token stream, hand-rolled rather than instrumenting `shlex`
-    itself (`shlex.shlex` buffers pushback internally, so its stream
-    position mid-token is not a reliable offset source). Mirrors the same
-    grammar `tokenize_full_command` applies over `text` directly: POSIX
-    single/double-quote handling, an unquoted backslash escaping exactly the
-    next character, `;`/`&`/`|` as always-separate punctuation runs (via
-    `_is_unmasked_sep_char`), and the `&>`-combine-redirect exception that
-    keeps such an `&` inside its surrounding word.
-
-    Returns ``None`` on an unterminated quote or a trailing unescaped
-    backslash -- the same unparseable signal `tokenize_full_command` reports
-    via its own `ValueError` catch, so `check_git_no_optional_locks` needs
-    no separate fail-closed branch for this scanner's version of the same
-    failure.
-
-    Deliberately NOT a general reimplementation of the shared tokenizer: it
-    does not model `preserve_windows_backslashes=True` (this guard never
-    passes it) or the unquoted-newline-to-`;` conversion
-    `split_unquoted_newlines` performs (the caller bails before ever
-    reaching this function when `text` contains a raw newline -- see
-    `check_git_no_optional_locks`'s own header comment). Its output is never
-    trusted on faith either way: the caller diffs this function's token
-    VALUES against `tokenize_full_command`'s own output and bails on any
-    mismatch, rather than risk an insertion offset computed from a grammar
-    deviation neither implementation anticipated."""
     spans: List[Tuple[str, int, int]] = []
     i = 0
     n = len(text)
@@ -438,18 +374,7 @@ def check_git_no_optional_locks(
         return None
 
     # Shape precedence: a command whose PRIMARY shape is MULTI_PROBE_BANNER
-    # is already owned by the `multiprobe-banner`/`multiprobe-banner-
-    # rewrite` guards (dispatch.py), whose remedy (collapsing every probe,
-    # including any bare `git status`, into one process) strictly subsumes
-    # this guard's own single-flag insertion -- rewriting just the `git
-    # status` segment here would offer a weaker fix AND short-circuit the
-    # dispatch chain before the banner guards (registered in a later band,
-    # see dispatch.py's `GuardBand` ordering) ever run. Mirrors the same
-    # shape-precedence deferral `guard_multiprobe_banner.check` itself
     # already honors against `Shape.GREP_VIA_BASH` (AC-7). Dialect-aware
-    # (payload's `tool_name`) so this also defers correctly under
-    # PowerShell, where `dialect_from_tool_name` resolves a dialect this
-    # guard's own bash-only tokenizer above cannot classify shapes for.
     dialect = dialect_from_tool_name(
         (payload or {}).get("tool_name") if isinstance(payload, dict) else None
     )

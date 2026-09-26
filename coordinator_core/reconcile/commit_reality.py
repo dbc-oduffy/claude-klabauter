@@ -36,15 +36,6 @@ from __future__ import annotations
 from typing import Sequence
 
 
-#: Fallback mechanical-commit-subject denylist used only when a caller's policy dict omits
-#: `mechanical_commit_denylist` (defensive default). Kept in sync with the plan's five prefixes,
-#: plus the archival/migration-machinery prefixes `archive_stamp.resolve_source_ship_sha` /
-#: `stamp_shipped_in`'s scope-derived walk-back added (2026-08-05): a handoff or plan's most
-#: recent toucher is very often the fleet-archive sweep or a corpus-wide vocabulary migration, not
-#: the work itself — a false `shipped_in` reads as authoritative to every later reconciler, so
-#: this denylist is the single shared exclusion list `archive_stamp.py` consumes (see
-#: `archive_stamp._mechanical_commit_denylist`, which imports this tuple directly rather than
-#: keeping a second, driftable copy).
 _DEFAULT_MECHANICAL_DENYLIST: tuple = (
     "pickup:",
     "reclaim(docs)",
@@ -57,19 +48,12 @@ _DEFAULT_MECHANICAL_DENYLIST: tuple = (
     "change_kind:",
     "migrate_handoff_vocabulary",
     "migrate handoff corpus",
-    # `chore(handoffs):` (2026-09-11, docs/plans/2026-09-07-baton-lifecycle-refusal-drain-authz.md
-    # P029-T1): the walk-back resolvers observed `chore(handoffs): apply shipped/consumed`
-    # outside this repo, and it was a miss on HEAD. PREFIX only, not a
     # `_SUBSTRING_FAMILY_TOKENS` member — a real feature subject that merely contains this
-    # token mid-subject must not be denylisted.
     "chore(handoffs):",
 )
 
 #: Denylist tokens matched as a SUBSTRING (family marker) rather than a prefix — catches a whole
-#: commit-subject family wherever the marker sits (e.g. "chore: handoff.transition: ship <id>",
-#: "fix(migrate_handoff_vocabulary): ..."). Every other denylist entry is matched as a
 #: case-insensitive PREFIX only: a real feature commit whose subject merely CONTAINS a token like
-#: "memo:" or "pickup:" mid-subject (not as a prefix) must not be silently denylisted.
 _SUBSTRING_FAMILY_TOKENS: frozenset = frozenset({
     "handoff.transition",
     "migrate_handoff_vocabulary",

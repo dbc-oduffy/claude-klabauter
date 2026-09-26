@@ -128,18 +128,8 @@ from coordinator_core.win_portability import no_console_creationflags
 
 _SUBPROCESS_TIMEOUT_SEC = 15
 
-#: The exact field set `deliverable_cascade.py` (frontmatter depth) and
-#: `cascade_baton_rows.py` (row depth) ever write. See module docstring
 #: § BYTE-ATTRIBUTABLE. Deliberately the union of `deliverable_cascade._advance_one`'s
-#: two frontmatter fields (`advanced_by`/`advanced_at`, plus the ship-mutate's own
 #: `deployment_state`/`shipped_in`) and `cascade_baton_rows._ROW_STAMP_LINE_RE`'s
-#: four row fields — never widened independently of those two writers.
-#:
-#: Review: coordinator:code-reviewer — content-only, this regex cannot tell
-#: "this line's field name happens to match" from "this is the specific
-#: field the cascade wrote". It is now ONLY the first gate; every row-depth
-#: match is additionally position-correlated against this candidate's own
-#: row provenance in `_divergence_reason` below before being accepted.
 _CASCADE_FIELD_LINE_RE = re.compile(
     r"^[ \t]*(deployment_state|shipped_in|shipped_in_kind|disposition(?:_ref|_detail)?"
     r"|advanced_by|advanced_at):[ \t]"
@@ -147,20 +137,12 @@ _CASCADE_FIELD_LINE_RE = re.compile(
 
 #: Row-depth-only subset of `_CASCADE_FIELD_LINE_RE` — mirrors
 #: `cascade_baton_rows._ROW_STAMP_LINE_RE` exactly. A line matching this is
-#: ambiguous between frontmatter and row depth by field name alone
-#: (`advanced_by`/`advanced_at` are written at BOTH depths); position
-#: inside a `## Tasks` row span is what disambiguates it, not the name.
 _ROW_DEPTH_FIELD_LINE_RE = re.compile(
     r"^[ \t]*(disposition(?:_ref|_detail)?|advanced_by|advanced_at):[ \t]"
 )
 
 
 def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    """Own local copy of the module-private git subprocess wrapper — same
-    established per-module convention this package already follows (see e.g.
-    `deliverable_cascade._validate_fm`'s docstring note on why each mutating
-    module keeps its own local copy rather than importing another module's
-    private symbol)."""
     return subprocess.run(
         ["git", *args],
         cwd=str(cwd),
@@ -173,8 +155,6 @@ def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
 
 
 def _git_show_head(repo_root: Path, path_rel: str) -> tuple[Optional[str], Optional[str]]:
-    """Returns (content, error). `content` is None with `error` set when `path_rel`
-    has no resolvable HEAD version (untracked, or HEAD itself unresolvable)."""
     try:
         result = _run_git(["show", f"HEAD:{path_rel}"], repo_root)
     except (subprocess.TimeoutExpired, OSError) as exc:
@@ -182,12 +162,6 @@ def _git_show_head(repo_root: Path, path_rel: str) -> tuple[Optional[str], Optio
     if result.returncode != 0:
         return None, (result.stderr or "").strip() or f"git show HEAD:{path_rel} failed"
     return result.stdout, None
-
-
-# ---------------------------------------------------------------------------
-# Candidate collection — provenance markers as the retraction index (never a
-# re-query of live work-state; see module docstring).
-# ---------------------------------------------------------------------------
 
 
 def _scan_dir_for_advanced_by(base_dir: Path, deliverable_id: str, recursive: bool) -> List[Path]:
@@ -212,25 +186,9 @@ def _scan_dir_for_advanced_by(base_dir: Path, deliverable_id: str, recursive: bo
 
 
 def _collect_candidates(worktree_root: Path, deliverable_id: str) -> tuple[List[Path], List[Path]]:
-    """Returns (live_candidates, archived_candidates) — every record (live or
-    archived) whose OWN frontmatter carries `advanced_by == deliverable_id`.
-    `state/handoffs/` is scanned non-recursively (mirrors `deliverable_cascade`'s
-    own flat containment discipline); `archive/handoffs/` is month-nested and
-    scanned recursively (mirrors `handoff_transition._resolve_blocker_deployment_
-    state`'s own per-root discrimination).
-
-    `advanced_by` was stamped with whichever id a prior
-    `deliverable.cascade_terminal` call was invoked with — matched exactly
-    against THIS call's `deliverable_id`.
-    """
     live = _scan_dir_for_advanced_by(worktree_root / "state" / "handoffs", deliverable_id, recursive=False)
     archived = _scan_dir_for_advanced_by(worktree_root / "archive" / "handoffs", deliverable_id, recursive=True)
     return live, archived
-
-
-# ---------------------------------------------------------------------------
-# Byte-attributable diff gate — refuse-and-name, never blind-revert.
-# ---------------------------------------------------------------------------
 
 
 def _row_spans_for_divergence(
@@ -348,17 +306,9 @@ def _divergence_reason(
     return None
 
 
-# ---------------------------------------------------------------------------
-# Write — restore HEAD content verbatim, one locked_rmw per candidate.
-# ---------------------------------------------------------------------------
-
-
 def _retract_one(
     candidate_path: Path, repo_root: Path, path_rel: str, deliverable_id: str
 ) -> tuple[bool, str]:
-    """Attempt to retract a single candidate. Returns (reverted, reason) — `reason`
-    is a refusal string when `reverted` is False, or a success message when True.
-    Never raises — every failure mode folds into a named refusal."""
     head_text, head_error = _git_show_head(repo_root, path_rel)
     if head_text is None:
         return False, f"no HEAD version resolvable: {head_error}"
@@ -370,9 +320,6 @@ def _retract_one(
         if divergence is not None:
             raise MutateAbort(divergence)
         if head_text == old_text:
-            # Only reachable if HEAD changed between the pre-lock read above and
-            # the locked read here (concurrent commit) — treat as the same
-            # already-committed refusal, not a crash.
             raise MutateAbort(
                 "already committed — nothing uncommitted to revert "
                 "(see module docstring § Scoping call)"
@@ -393,9 +340,7 @@ def _retract_one(
     return bool(_state["applied"]), _state["message"]
 
 
-# ---------------------------------------------------------------------------
 # JSON-RPC handler
-# ---------------------------------------------------------------------------
 
 
 @register_op("deliverable.cascade_retract")

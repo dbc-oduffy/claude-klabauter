@@ -78,13 +78,9 @@ __all__ = [
     "build_haiku_verifier_dispatch",
 ]
 
-#: values common to both call sites — every `enum_set` passed to
-#: `build_haiku_verifier_dispatch` must carry both.
 PASS = "PASS"
 FOOTPRINT_VIOLATION = "FOOTPRINT-VIOLATION"
 
-#: bug-blitz's verdict set (`bug-blitz.md` Phase 3 step 3) — diff-plus-
-#: cited-code evidence, `state/scratch/bug-blitz/{run-id}/{item-id}.verify.md`.
 BUG_BLITZ_VERIFIER_ENUM: tuple[str, ...] = (
     PASS,
     "PATTERN-STILL-PRESENT",
@@ -92,9 +88,6 @@ BUG_BLITZ_VERIFIER_ENUM: tuple[str, ...] = (
     "REGRESSION",
 )
 
-#: mise-en-place's verdict set (`mise-en-place.md` Phase 5 step 2) — diff-
-#: plus-spec-plus-deferred-verification-audit evidence,
-#: `tasks/mise-verify/<item-id>.md`.
 MISE_VERIFIER_ENUM: tuple[str, ...] = (
     PASS,
     FOOTPRINT_VIOLATION,
@@ -103,10 +96,6 @@ MISE_VERIFIER_ENUM: tuple[str, ...] = (
     "NEEDS-EM",
 )
 
-#: `cli` verb this module's directives carry — C4's own closed dispatch-
-#: table entry (`apply.py`, not this module), never invoked here. Public
-#: (not underscore-private) because `apply.py` imports it directly rather
-#: than hand-maintaining its own verbatim copy — one string, one owner.
 HAIKU_VERIFIER_CLI = "dispatch-haiku-verifier"
 
 _SHARED_ENUM_VALUES = (PASS, FOOTPRINT_VIOLATION)

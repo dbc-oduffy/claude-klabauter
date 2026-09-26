@@ -45,8 +45,6 @@ from __future__ import annotations
 
 from typing import NamedTuple, Optional
 
-#: The closed set of reasons an `excluded` row may carry. C8's coverage pin
-#: fails if any row's `reason` is outside this set (AC5).
 EXCLUSION_REASONS = frozenset({"no-ceremony-module", "prohibited-by-doctrine"})
 
 
@@ -54,18 +52,12 @@ class DoctypeHostRow(NamedTuple):
     type: str
     ceremony: Optional[str]
     module: Optional[str]
-    state: str  # "emitted" | "excluded"
+    state: str
     reason: Optional[str] = None
     citation: Optional[str] = None
 
 
-#: The checked-in table. See module docstring for row-key semantics and
-#: docs/research/2026-09-11-doc-scaffold-emitter-homes.md for the derivation
-#: of every row below.
 DOCTYPE_HOSTS: tuple[DoctypeHostRow, ...] = (
-    # --- Already emitted today, pre-existing donor shapes (not built by this
-    # plan's C1-C6; C0 records them so the table is a complete census, not
-    # just this plan's delta). ---
     DoctypeHostRow(
         type="handoff",
         ceremony="baton-continuation",
@@ -78,8 +70,6 @@ DOCTYPE_HOSTS: tuple[DoctypeHostRow, ...] = (
         module="coordinator_core.baton_assemble",
         state="emitted",
     ),
-    # --- Newly emitted by this plan's B-wave (C3-C6), through the shared
-    # constructor C1 builds in roadmap_planning_assemble. ---
     DoctypeHostRow(
         type="roadmap-baton",
         ceremony="roadmap-planning",
@@ -140,9 +130,6 @@ DOCTYPE_HOSTS: tuple[DoctypeHostRow, ...] = (
         module="coordinator_core.backlog_grind_assemble",
         state="emitted",
     ),
-    # --- Excluded: prohibited by doctrine. A negative is not emittable; the
-    # prohibition's evidence lives in DoE-claude prose (§ Which shape is
-    # canonical). ---
     DoctypeHostRow(
         type="review-findings",
         ceremony="persona-review-dispatch",
@@ -171,9 +158,6 @@ DOCTYPE_HOSTS: tuple[DoctypeHostRow, ...] = (
             " fallback', and line 229: 'pre-provisioned, no scaffold step'."
         ),
     ),
-    # --- Excluded: host-less. No in-repo ceremony module was found that
-    # mandates scaffolding this type; see the research doc for the negative
-    # search performed for each. ---
     DoctypeHostRow(
         type="problem-set",
         ceremony=None,
@@ -199,15 +183,12 @@ DOCTYPE_HOSTS: tuple[DoctypeHostRow, ...] = (
 
 
 def emitted_rows() -> tuple[DoctypeHostRow, ...]:
-    """Return every row whose `state == "emitted"`."""
     return tuple(row for row in DOCTYPE_HOSTS if row.state == "emitted")
 
 
 def excluded_rows() -> tuple[DoctypeHostRow, ...]:
-    """Return every row whose `state == "excluded"`."""
     return tuple(row for row in DOCTYPE_HOSTS if row.state == "excluded")
 
 
 def rows_for_module(module: str) -> tuple[DoctypeHostRow, ...]:
-    """Return every emitted row naming `module` as its host, in table order."""
     return tuple(row for row in DOCTYPE_HOSTS if row.module == module)

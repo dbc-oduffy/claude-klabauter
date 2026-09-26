@@ -123,15 +123,11 @@ def test_overlapping_dispatch_keeps_distinct_identities():
 
     def _dispatch(msg: dict, *, caller=None, isolated=False) -> dict:
         declared_writes.declare_write(f"path-{msg['id']}.txt")
-        barrier.wait(timeout=5)  # force the two threads to overlap
+        barrier.wait(timeout=5)
         seen[msg["id"]] = list(declared_writes.active_declarations() or [])
         return {"jsonrpc": "2.0", "id": msg["id"], "result": "ok"}
 
     def _run(io_obj: _FakeIO) -> None:
-        # A real connection thread opens its own scope via `_run_dispatch`'s
-        # `per_request_state()`; this test opens the same primitive directly
-        # around the fake `_dispatch` above so isolation is observable
-        # without a real op registry dispatch in the loop.
         with declared_writes.collecting():
             server._handle_connection(
                 io_obj,
@@ -194,7 +190,7 @@ def test_wedged_op_does_not_stall_the_next():
     assert not t_fast.is_alive()
     assert order == ["fast"]
     assert _written_responses(io_fast)[0]["result"] == "ok"
-    assert t_wedged.is_alive()  # still wedged -- proves it never blocked the fast one
+    assert t_wedged.is_alive()
 
     wedge_released.set()
     t_wedged.join(timeout=5)
@@ -217,9 +213,6 @@ def test_shutdown_trigger_mid_request_completes_in_flight_before_exit():
     io_obj = _FakeIO([_frame(id_=7, extra={"_engine_token": "client-token"})])
 
     def drain() -> None:
-        # In-flight must already be zero here -- this request's own slot
-        # was released by `_serve_line` before `evict_on_skew` ever calls
-        # `drain`, so this assertion is the deadlock guard, not a formality.
         assert in_flight() == 0
         lifecycle.drain_and_exit(
             in_flight_count=in_flight,
@@ -284,7 +277,7 @@ def test_shutdown_trigger_waits_for_a_separate_in_flight_request_before_exit():
     deadline = time.monotonic() + 5
     while in_flight() < 1 and time.monotonic() < deadline:
         time.sleep(0.01)
-    assert in_flight() == 1  # A is genuinely counted in-flight before B triggers shutdown
+    assert in_flight() == 1
 
     def drain() -> None:
         lifecycle.drain_and_exit(
@@ -308,8 +301,6 @@ def test_shutdown_trigger_waits_for_a_separate_in_flight_request_before_exit():
     )
     t_b.start()
 
-    # The drain loop has had time to start polling; it must NOT have
-    # reached exit yet, because A is still genuinely in flight.
     time.sleep(0.2)
     assert exit_calls == []
     assert not other_done.is_set()
@@ -433,15 +424,6 @@ def test_pool_dispatch_worker_captures_handler_stdout_into_stderr_field(monkeypa
     assert "pool worker stdout line" in result["_stderr"]
 
 
-# ---------------------------------------------------------------------------
-# C6 -- a warm-served refusal keeps its diagnostic. `emit_diagnostic`'s 3
-# call sites are bridged by `entry_seam`'s own sink already (see
-# test_setup_error_reaches_a_warm_caller.py); the other ~1512 sites write
-# straight to `sys.stderr`, which only a REAL stderr capture -- not the
-# sink -- can bridge. These pin that bridge, and tie it to
-# `cc_invoke.RouteMutationError.op_stderr`, the field root cause 1 names.
-# ---------------------------------------------------------------------------
-
 def test_run_dispatch_captures_raw_handler_stderr_write_into_stderr_field(monkeypatch):
     """A REFUSING op's own diagnostic sentence, written directly to
     `sys.stderr` (not via `emit_diagnostic`) -- the shape of the other 1512
@@ -521,16 +503,6 @@ def test_captured_stderr_sentence_reaches_route_mutation_error_op_stderr(monkeyp
     assert "the receiver is not registered" in exc.op_stderr
 
 
-# ---------------------------------------------------------------------------
-# Pending-listener pool (problem 3 of docs/problems/2026-08-19-the-warm-
-# engine-serves-one-caller-at-a-t.md): `_accept_and_replenish` posts one
-# replacement per accept, so steady state was exactly ONE pending listener
-# regardless of demand. `_start_pending_listener_pool` posts N at boot
-# instead of one, letting that same one-for-one replenish invariant sustain
-# a constant pool of N rather than a pool of one.
-# ---------------------------------------------------------------------------
-
-
 def test_boot_pool_starts_one_accept_chain_per_pending_instance(monkeypatch):
     """`_start_pending_listener_pool` must start exactly `pool_size` accept
     chains -- one bound to the caller-supplied `first_handle` (election's
@@ -551,7 +523,7 @@ def test_boot_pool_starts_one_accept_chain_per_pending_instance(monkeypatch):
     def _fake_accept_and_replenish(self, handle):
         with started_lock:
             started_with.append(handle)
-        release.wait(timeout=5)  # hold the thread open, like a real blocked ConnectNamedPipe
+        release.wait(timeout=5)
 
     monkeypatch.setattr(server._ServerContext, "_accept_and_replenish", _fake_accept_and_replenish)
 
@@ -564,7 +536,7 @@ def test_boot_pool_starts_one_accept_chain_per_pending_instance(monkeypatch):
     release.set()
 
     assert sorted(started_with) == sorted([1] + created_handles)
-    assert len(created_handles) == 4  # pool_size - 1 freshly created instances
+    assert len(created_handles) == 4
     assert len(set(started_with)) == 5  # five DISTINCT chains, not one replayed
 
 
@@ -594,14 +566,14 @@ def test_boot_pool_creation_failure_shrinks_the_pool_without_raising(monkeypatch
     monkeypatch.setattr(server._ServerContext, "_accept_and_replenish", _fake_accept_and_replenish)
 
     ctx = server._ServerContext(name="pipe-x", sid="sid-x", version_state=_FakeVersionState())
-    ctx._start_pending_listener_pool(1, pool_size=4)  # 3 creation attempts, 1 fails
+    ctx._start_pending_listener_pool(1, pool_size=4)
 
     deadline = time.monotonic() + 5
     while len(started_with) < 3 and time.monotonic() < deadline:
         time.sleep(0.01)
     release.set()
 
-    assert len(started_with) == 3  # first_handle + 2 of the 3 creation attempts (one failed)
+    assert len(started_with) == 3
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="named pipes are Windows-only")
@@ -623,10 +595,8 @@ def test_pool_serves_more_than_one_simultaneous_connection(monkeypatch, tmp_path
     first_handle = election.elect(name, user_sid=sid)
 
     ctx = server._ServerContext(name=name, sid=sid, version_state=_FakeVersionState())
-    # Small pool -- just enough to prove ">1 outstanding", not a full 30.
     ctx._start_pending_listener_pool(first_handle, pool_size=3)
 
-    # Give the accept threads a moment to post their ConnectNamedPipe calls.
     time.sleep(0.2)
 
     opened = []
@@ -638,14 +608,7 @@ def test_pool_serves_more_than_one_simultaneous_connection(monkeypatch, tmp_path
         for fh in opened:
             fh.close()
 
-    assert len(opened) == 2  # both opens succeeded -- more than one instance was listening
-
-
-# ---------------------------------------------------------------------------
-# Idle-demotion / breadcrumb wiring (C30 gap: idle.py and breadcrumb.py had
-# no production call site -- see the module docstring's "idle demotion" /
-# "breadcrumb" ownership notes).
-# ---------------------------------------------------------------------------
+    assert len(opened) == 2
 
 
 def test_idle_watchdog_demotes_a_zero_invocation_server(monkeypatch):
@@ -682,7 +645,7 @@ def test_idle_watchdog_demotes_a_zero_invocation_server(monkeypatch):
     ctx._idle_watchdog_stop.set()
     t.join(timeout=3)
 
-    assert calls == [0]  # zero-invocation server: served_count() reads 0
+    assert calls == [0]
     assert ctx._is_listening() is False
 
 
@@ -774,7 +737,7 @@ def test_idle_demotion_survives_token_rotation_after_serving(tmp_path):
     token_before = skew.compute_client_token(tmp_path)
     skew.write_engine_stamp(tmp_path, "sha-after-rotation")
     token_after = skew.compute_client_token(tmp_path)
-    assert token_before != token_after  # rotation mints a new generation token
+    assert token_before != token_after
 
     worker = tmp_path / "_predecessor_worker.py"
     worker.write_text(
@@ -802,7 +765,7 @@ def test_idle_demotion_survives_token_rotation_after_serving(tmp_path):
     import subprocess
 
     env = dict(_os.environ)
-    env["MACHINE_LOCAL_ENGINE_WARM_IDLE_MINUTES"] = "0.02"  # 1.2s
+    env["MACHINE_LOCAL_ENGINE_WARM_IDLE_MINUTES"] = "0.02"
 
     started = time.monotonic()
     proc = subprocess.run(
@@ -813,20 +776,14 @@ def test_idle_demotion_survives_token_rotation_after_serving(tmp_path):
     )
     elapsed = time.monotonic() - started
 
-    assert proc.returncode == 0  # demoted on its own, not the sys.exit(1) escape hatch
-    assert elapsed >= 1.0  # did not fire instantly -- genuinely waited out the idle deadline
+    assert proc.returncode == 0
+    assert elapsed >= 1.0
 
 
 def _engine_clone_root_for_test():
     from pathlib import Path
 
     return Path(server.__file__).resolve().parents[2]
-
-
-# ---------------------------------------------------------------------------
-# C-warm-identity -- per-request identity binding (state/bug-backlog/
-# 2026-08-18-a-warm-server-stamps-every-op-it-serves-eeb801fc6bee.yaml)
-# ---------------------------------------------------------------------------
 
 
 def test_serve_line_resolves_the_caller_identity_carried_on_the_request(monkeypatch):
@@ -844,16 +801,13 @@ def test_serve_line_resolves_the_caller_identity_carried_on_the_request(monkeypa
     session_b = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 
     monkeypatch.setenv("COORDINATOR_SESSION_ID", session_a)
-    assert session_core.resolve_session_id() == session_a  # server's own default, pre-dispatch
+    assert session_core.resolve_session_id() == session_a
 
     from coordinator_core.warm.entry_seam import per_request_state
 
     observed: list[str] = []
 
     def _dispatch(msg: dict, *, caller=None, isolated=False) -> dict:
-        # Mirrors `server._run_dispatch`'s own real binding of the seam --
-        # this stub swaps out only the `asyncio.run(dispatch_message(...))`
-        # body, not the per-request scoping around it.
         with per_request_state(session_id=caller.session_id if caller else None, isolated=True):
             observed.append(session_core.resolve_session_id())
         return {"jsonrpc": "2.0", "id": msg["id"], "result": "ok"}
@@ -869,11 +823,9 @@ def test_serve_line_resolves_the_caller_identity_carried_on_the_request(monkeypa
         dispatch=_dispatch,
     )
 
-    assert observed == [session_b]  # resolved the CALLER's id, not the server's own
-    assert session_core.resolve_session_id() == session_a  # unwound back to the server's own default
-    # `_caller` never reaches the dispatched handler's own msg -- popped
-    # the same way `_engine_token` already is.
-    assert "_caller" not in json.loads(io_obj.written[0])  # response frame, not the request
+    assert observed == [session_b]
+    assert session_core.resolve_session_id() == session_a
+    assert "_caller" not in json.loads(io_obj.written[0])
 
 
 def test_run_dispatch_itself_binds_the_given_session_id(monkeypatch):
@@ -903,7 +855,7 @@ def test_run_dispatch_itself_binds_the_given_session_id(monkeypatch):
         isolated=True,
     )
     assert response["result"] == session_b
-    assert session_core.resolve_session_id() != session_b  # unwound after the call
+    assert session_core.resolve_session_id() != session_b
 
 
 def test_run_dispatch_itself_binds_the_carried_caller_pid(monkeypatch):
@@ -934,7 +886,7 @@ def test_run_dispatch_itself_binds_the_carried_caller_pid(monkeypatch):
         isolated=True,
     )
     assert response["result"] == "90210"
-    assert _os.environ["CLAUDE_PID"] == "424242"  # unwound after the call
+    assert _os.environ["CLAUDE_PID"] == "424242"
 
 
 def test_pool_dispatch_worker_binds_the_carried_caller_pid(monkeypatch):
@@ -988,7 +940,7 @@ def test_serve_line_with_no_carried_identity_strips_rather_than_falls_back(monke
             observed.append(session_core.resolve_session_id())
         return {"jsonrpc": "2.0", "id": msg["id"], "result": "ok"}
 
-    io_obj = _FakeIO([_frame(id_="req-1")])  # no _caller field at all
+    io_obj = _FakeIO([_frame(id_="req-1")])
     server._handle_connection(
         io_obj,
         version_state=_FakeVersionState(),
@@ -1032,7 +984,7 @@ def test_serve_line_with_no_carried_pid_never_hands_on_the_servers_own(monkeypat
         return {"jsonrpc": "2.0", "id": msg["id"], "result": "ok"}
 
     server._handle_connection(
-        _FakeIO([_frame(id_="req-1")]),  # no _caller field at all
+        _FakeIO([_frame(id_="req-1")]),
         version_state=_FakeVersionState(),
         server_sha="x",
         close_listener=lambda: None,
@@ -1045,15 +997,7 @@ def test_serve_line_with_no_carried_pid_never_hands_on_the_servers_own(monkeypat
     assert seen != [str(_os.getpid())]
 
 
-# ---------------------------------------------------------------------------
-# Accept-and-queue (docs/plans/2026-08-19-the-fired-path-reaches-the-engine.md
-# § C5, AC7/AC8): `_enqueue_connection` claims the in-flight slot at ENQUEUE,
 # then hands `io` to one `queue.Queue` a fixed `WORKER_POOL_SIZE` pool of
-# worker threads (`_worker_loop`) drains -- dispatch concurrency is bounded
-# independently of how fast connections are accepted, and a drain must wait
-# for accepted-but-not-yet-dispatched work, never merely for the workers
-# that happen to be busy right now.
-# ---------------------------------------------------------------------------
 
 
 def test_enqueue_connection_counts_in_flight_before_a_worker_ever_runs():
@@ -1098,15 +1042,15 @@ def test_worker_pool_bounds_concurrent_dispatch(monkeypatch):
     deadline = time.monotonic() + 5
     while len(running) < 2 and time.monotonic() < deadline:
         time.sleep(0.01)
-    assert len(running) == 2  # bounded at the pool size, not the 5 enqueued
+    assert len(running) == 2
 
-    release.set()  # let every held and future call through without blocking
+    release.set()
 
     deadline = time.monotonic() + 5
     while not ctx._queue.empty() and time.monotonic() < deadline:
         time.sleep(0.01)
 
-    assert max_running[0] == 2  # never exceeded the worker pool size
+    assert max_running[0] == 2
 
 
 def test_worker_loop_survives_an_unhandled_exception_from_handle_connection(monkeypatch):
@@ -1139,7 +1083,7 @@ def test_worker_loop_survives_an_unhandled_exception_from_handle_connection(monk
     while calls != ["boom", "after"] and time.monotonic() < deadline:
         time.sleep(0.01)
 
-    assert calls == ["boom", "after"]  # the worker kept draining after "boom" raised
+    assert calls == ["boom", "after"]
 
 
 def test_drain_waits_for_queued_but_not_yet_dispatched_work():
@@ -1169,7 +1113,6 @@ def test_drain_waits_for_queued_but_not_yet_dispatched_work():
         assert started_first.wait(timeout=5)
         ctx._enqueue_connection("second")
 
-        # Both are already counted in-flight -- "second" is queued, unstarted.
         assert ctx.in_flight() == 2
 
         exit_calls: list[int] = []
@@ -1183,7 +1126,7 @@ def test_drain_waits_for_queued_but_not_yet_dispatched_work():
         drain_thread.start()
 
         time.sleep(0.2)
-        assert exit_calls == []  # "second" is still queued -- must not have drained yet
+        assert exit_calls == []
         assert not dispatched_second.is_set()
 
         hold_first.set()
@@ -1194,11 +1137,6 @@ def test_drain_waits_for_queued_but_not_yet_dispatched_work():
         assert ctx.in_flight() == 0
     finally:
         server._handle_connection = orig_handle_connection
-
-
-# ---------------------------------------------------------------------------
-# Superseded-generation retirement (the publish-strands-an-engine defect)
-# ---------------------------------------------------------------------------
 
 
 def test_token_is_stale_flips_when_a_publish_rewrites_the_engine_stamp(tmp_path):
@@ -1221,7 +1159,6 @@ def test_token_is_stale_flips_when_a_publish_rewrites_the_engine_stamp(tmp_path)
     skew.write_engine_stamp(tmp_path, "sha-after-publish")
 
     assert ctx._token_is_stale() is True
-    # ...and the reason it is unreachable: no client computes its pipe name.
     assert (
         election.pipe_name(
             skew.compute_client_token(tmp_path),
@@ -1359,9 +1296,6 @@ def test_boot_binds_the_pipes_own_token_as_the_boot_token():
 
     windows_arm = inspect.getsource(server._elect_windows_pipe)
     assert "name = election.pipe_name(token" in windows_arm
-    # The token the pipe name is built from and the token handed to the
-    # context must be the same object, not two derivations: one parameter,
-    # threaded from `_run_guarded`'s single `compute_client_token` call.
     assert "token = skew.compute_client_token(repo_root)" in boot
     assert boot.count("compute_client_token") == 1
 
@@ -1406,9 +1340,6 @@ def test_record_accept_ready_writes_a_second_row_distinct_from_the_first(tmp_pat
         listener_at=listener_at,
     )
 
-    # The module-level, pre-accept-loop row `_record_own_boot` would have
-    # already written from `_run_guarded` -- constructed directly here so
-    # this test does not depend on booting a real server.
     telemetry.record_server_boot(
         listener_secs=listener_at - spawn_epoch,
         ready_secs=2.0,
@@ -1424,9 +1355,6 @@ def test_record_accept_ready_writes_a_second_row_distinct_from_the_first(tmp_pat
     assert first["listener_secs"] == second["listener_secs"] == round(
         listener_at - spawn_epoch, 3
     )
-    # The first row's ready_secs is the pre-accept-loop measurement (2.0s);
-    # the second is re-measured at accept-ready time and must be a distinct,
-    # larger value (this test's own spawn_epoch is 5s in the past).
     assert second["ready_secs"] != first["ready_secs"]
     assert second["ready_secs"] > 4.0
 
@@ -1447,7 +1375,7 @@ def test_record_accept_ready_never_raises_on_a_telemetry_failure(tmp_path, monke
         raise OSError("disk is gone")
 
     monkeypatch.setattr(telemetry, "record_server_boot", _boom)
-    ctx._record_accept_ready()  # must not raise
+    ctx._record_accept_ready()
 
 
 def test_serve_forever_variants_call_record_accept_ready_before_blocking():

@@ -47,8 +47,6 @@ def _date_from_argv(argv: list[str]) -> str:
 
 
 def _run_backfill(module, monkeypatch, fake_run) -> tuple[int, list[str]]:
-    """Wire `fake_run` in as `subprocess.run` for the duration of the call and return
-    (overall_rc, dates dispatched in call order)."""
     calls: list[str] = []
 
     def _tracking_run(argv, *args, **kwargs):
@@ -62,8 +60,6 @@ def _run_backfill(module, monkeypatch, fake_run) -> tuple[int, list[str]]:
 
 
 def test_one_row_failure_does_not_abort_remaining_rows(monkeypatch):
-    """A non-zero rc from one row must still leave every other row dispatched, and the
-    aggregate rc must reflect the failure (not swallow it)."""
     module = load_bin_module("workday-complete-close.py")
 
     def fake_run(argv, *args, **kwargs):
@@ -85,8 +81,6 @@ def test_one_row_failure_does_not_abort_remaining_rows(monkeypatch):
 
 
 def test_one_row_timeout_does_not_abort_remaining_rows(monkeypatch):
-    """A `TimeoutExpired` from one row's subprocess call must fail THIS row only -- the
-    contract the in-source comment names explicitly -- never abort the loop."""
     module = load_bin_module("workday-complete-close.py")
 
     def fake_run(argv, *args, **kwargs):
@@ -107,11 +101,6 @@ def test_one_row_timeout_does_not_abort_remaining_rows(monkeypatch):
 
 
 def test_repeated_for_date_flag_is_last_wins():
-    """Secondary oracle: `--for-date` is a plain `store` action on the production parser, so
-    two occurrences on one invocation resolve to the SECOND -- last-wins, exactly one day
-    processed. Exercises the real `main()` parser (not a re-declared copy) by stubbing the
-    dispatch command out before `args.func(args)` runs, so no stdin read or subprocess spawn
-    is reached."""
     module = load_bin_module("workday-complete-close.py")
     captured: list[argparse.Namespace] = []
 
@@ -145,8 +134,6 @@ def test_repeated_for_date_flag_is_last_wins():
 
 
 def test_oracle_target_remains_importable():
-    """The two isolation-contract oracles above are worth nothing if the module they pin
-    stops being importable or loses the functions they call."""
     module = load_bin_module("workday-complete-close.py")
     for name in ("cmd_backfill_dispatch_rows", "_dispatch_step9_row", "main"):
         assert callable(getattr(module, name, None)), (

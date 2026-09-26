@@ -191,13 +191,6 @@ _LOG = logging.getLogger(__name__)
 
 
 class RegistryReadError(Exception):
-    """Raised when the machine-local registry cannot be read/parsed.
-
-    Distinct from "no registry configured" (which is `{}`, not an error) — this
-    is raised only for a PRESENT registry file that fails to parse, or when
-    `tomllib` itself is unavailable. Callers MUST fail loud on this (never
-    fall back to a folder scan or any other implicit resolution).
-    """
 
     def __init__(self, reason: str):
         self.reason = reason
@@ -205,14 +198,6 @@ class RegistryReadError(Exception):
 
 
 class AmbiguousReceiverError(Exception):
-    """Raised when a central receiver id fans in to more than one registered key.
-
-    identity.centralReceiverIds names several ids (e.g. 'central-em',
-    'doe-claude-em') that are all supposed to fan in to ONE authoritative
-    registry key. If more than one distinct repos.* key is registered across
-    that id set, the manifest and the machine-local registry disagree about
-    which repo is "central" — fail loud rather than arbitrarily pick one.
-    """
 
     def __init__(self, receiver_em_id: str, candidate_keys):
         self.receiver_em_id = receiver_em_id
@@ -224,10 +209,6 @@ class AmbiguousReceiverError(Exception):
             f"machine-local registry/manifest disagreement."
         )
 
-
-# ---------------------------------------------------------------------------
-# Registry reader
-# ---------------------------------------------------------------------------
 
 _MACHINE_LOCAL_IMPL_ENV = "MACHINE_LOCAL_IMPL"
 
@@ -310,18 +291,7 @@ def read_doe_identity() -> dict:
     the load-bearing repos.* registry itself. Never raises.
     """
     try:
-        # The full DR-071 ladder, per this function's own docstring: registry
-        # `repos.doe_claude`, then <settings-home>/machine-local/.doe-root,
         # then the legacy path. This read USED to be a bare `<CLAUDE_HOME>/
-        # .claude/.doe-root` file read — rung 3 alone, the one rung the
-        # docstring above explicitly identifies as "a location no writer has
-        # written since ops.gen_doe_root_pointer moved the pointer to rung 2".
-        # So it reproduced, verbatim, the reader/writer split the docstring
-        # narrates as already fixed: every receiver's `is_central` came back
-        # False and manifest-backed resolution silently disabled itself on a
-        # machine where `repos.doe_claude` was registered and delivery worked.
-        # `read_doe_root_pointer` was already imported at the top of this
-        # module and simply never called.
         raw_root = read_doe_root_pointer()
         if not raw_root.strip():
             _LOG.warning(
@@ -361,15 +331,6 @@ def read_doe_identity() -> dict:
 
 
 def read_receiver_aliases() -> dict[str, str]:
-    """Return {shortname: registryKey} from the DoE manifest's identity.repoAliases.
-
-    DoE-ratified alias surface: DoE consult 2026-07-05 strang-03 follow-up, Q1.
-    Manifest + doe-root resolution: `read_doe_identity()` (DR-071 ladder).
-
-    Graceful degradation: returns {} if the manifest does not resolve — the
-    convention fallback in receiver_em_to_repo_key handles non-aliased
-    receivers; the alias set is small and stable.
-    """
     try:
         aliases: dict[str, str] = {}
         for entry in read_doe_identity().get("repoAliases", []):
@@ -386,17 +347,6 @@ def read_receiver_aliases() -> dict[str, str]:
 
 
 def read_central_receiver_ids() -> set[str]:
-    """Return the lowercased set of central receiver EM ids from the DoE manifest.
-
-    DoE-ratified central-receiver surface: identity.centralReceiverIds in
-    <doe-root>/coordinator/schemas/coordinator-registry.manifest.json (same
-    manifest, same DR-071 doe-root ladder as read_receiver_aliases(), via
-    read_doe_identity()).
-
-    Graceful degradation: returns set() if the manifest does not resolve —
-    mirrors read_receiver_aliases()'s degradation contract exactly (ergonomic
-    convenience layer, not fail-loud).
-    """
     try:
         central_ids: set[str] = set()
         for entry in read_doe_identity().get("centralReceiverIds", []):
@@ -411,29 +361,6 @@ def read_central_receiver_ids() -> set[str]:
 
 
 def read_redirect_aliases() -> set[str]:
-    """Return the lowercased, stripped set of redirect-alias ids from the DoE manifest.
-
-    Sibling reader of read_central_receiver_ids() — same read_doe_identity()
-    ladder → graceful-degradation-to-empty structure. Reads
-    identity.get("redirectAliases", []): receiver ids that
-    redirect to *self* (e.g. DoE's `.claude-em` / `claude-home` /
-    `coordinator-claude` / `coordinator-claude-em`, all redirecting to
-    `centralReceiverIds[0]`, `doe-claude-em` today — NOT to
-    `claude-central-em`, which DoE retired outright at their b787bf0f0
-    (2026-08-26) and which no longer resolves at all). DoE promoted
-    `identity.redirectAliases` into the
-    manifest 2026-07-21; a manifest that lacks the field (or is absent/
-    unreadable) still degrades to `set()` per the graceful-degradation
-    contract below.
-
-    Graceful degradation: returns set() if the manifest does not resolve —
-    mirrors read_central_receiver_ids()'s degradation contract exactly
-    (ergonomic convenience layer, not fail-loud).
-
-    Negative-spec: does NOT hardcode any alias literal — the redirect set is
-    read declaratively from the manifest only, same discipline as every other
-    reader in this module.
-    """
     try:
         redirect_aliases: set[str] = set()
         for entry in read_doe_identity().get("redirectAliases", []):
@@ -448,32 +375,6 @@ def read_redirect_aliases() -> set[str]:
 
 
 def read_retired_central_receiver_ids() -> dict[str, str]:
-    """Return `{retired id: live successor id}` from the DoE manifest, lowercased.
-
-    Third projection over `read_doe_identity()`, beside
-    `read_central_receiver_ids()` and `read_redirect_aliases()` — same ladder,
-    same graceful-degradation-to-empty contract.
-
-    THESE ARE NOT ALIASES, AND NOTHING HERE MAKES THEM RESOLVE. DoE retired
-    `claude-central-em`, `central-em` and `central` from
-    `identity.centralReceiverIds` at their b787bf0f0 (2026-08-26); their absence
-    is the operative rule and a send to one must keep failing loudly. This map
-    is consulted ONLY after resolution has already failed, to say WHERE the seat
-    went. Promoting any key here back into `centralReceiverIds` would undo a
-    ratified decision — see the manifest's own `_retiredCentralReceiverIdsNote`,
-    which exists to stop exactly that "fix".
-
-    Why the map lives in the manifest rather than as a literal here: this
-    module's readers do not hardcode identity strings, because a second copy of
-    DoE's identity data in this tree is the drift `identity.redirectAliases` was
-    promoted in 2026-07-21 to prevent (their `_redirectAliasesNote` records that
-    sequence as a mistake not to repeat). Landed on their side at 7f5ff0531 in
-    reply to `cross-repo/inbox/2026-08-31-doe-claude-em-retired-central-ids-
-    successor-map-landed.md`.
-
-    Graceful degradation: `{}` if the manifest does not resolve, is unparseable,
-    or predates the field — mirrors both sibling readers exactly.
-    """
     try:
         retired: dict[str, str] = {}
         raw = read_doe_identity().get("retiredCentralReceiverIds", {})
@@ -498,30 +399,8 @@ def read_retired_central_receiver_ids() -> dict[str, str]:
 
 
 def read_registry_repos() -> dict[str, str]:
-    """Read repos.* keys from the machine-local registry (baseline + local layer).
-
-    DoE-ratified resolver surface (DoE consult 2026-07-05 strang-03 follow-up, Q1):
-    direct registry.toml + registry.local.toml read via stdlib tomllib is the
-    sanctioned surface for the engine. The coordinator_registry Python loader
-    [DoE-side, DR-210:58] is explicitly NOT used here.
-
-    Layer order: registry.toml (tracked baseline) merged with registry.local.toml
-    (per-machine local overrides). Only non-empty string values are included —
-    an empty string means "declared but unset on this machine" (not a hit).
-
-    Returns {} when NEITHER registry.toml NOR registry.local.toml is present —
-    a legitimate "nothing configured on this machine yet" state, not a failure.
-
-    Raises:
-        RegistryReadError: a registry file IS present but fails to parse, or
-            tomllib itself is unavailable (Python <3.11). NO folder-scan
-            fallback is attempted in either case — this is the fail-loud
-            hardening C3/AC3 requires; the pre-C3 memo_send.py implementation
-            silently swallowed both into {}, indistinguishable from "not
-            configured".
-    """
     try:
-        import tomllib  # stdlib Python 3.11+
+        import tomllib
     except ImportError as exc:
         raise RegistryReadError(
             f"tomllib unavailable — requires Python 3.11+: {exc}"
@@ -541,77 +420,16 @@ def read_registry_repos() -> dict[str, str]:
                 f"could not parse registry file {path}: {exc}"
             ) from exc
         for key, val in data.items():
-            # repos.* keys with non-empty string values are registered receivers.
             if key.startswith("repos.") and isinstance(val, str) and val:
                 merged[key] = val
     return merged
 
 
-# ---------------------------------------------------------------------------
-# Publish-target mirror ownership — shared classification seam (C5 addition)
-#
-# Publish-target mirrors (OSS distribution destinations, e.g. `coordinator-claude`,
-# `deep-research-claude`) are NOT EM working trees — they are outward `publish.sh`
-# destinations. A memo addressed `to` a mirror is invisible to any EM and gets
-# clobbered on the next publish run (mirrors DoE cross-repo-memo's
-# `_is_publish_target_em` / `_get_publish_target_owners` guard, C4 2026-06-30).
-# Mirrors live in the SAME `registry.toml`/`registry.local.toml` files
 # `read_registry_repos()` reads, under a DISTINCT `[publish.mirrors.<key>]`
-# namespace (never `repos.*` — mirrors were removed from `repos.*` by the
-# 2026-06-30 registry-publish-vs-working-targets migration).
-#
-# Spec backlink: pln-memo-tool-rebuild-claude-klabauter-owns--bd5745 § C5 (AC5)
-#                 Parity source: DoE coordinator/bin/cross-repo-memo.py
-#                 `_get_publish_target_owners` / `_derive_mirror_alias_set`.
-# ---------------------------------------------------------------------------
 
 def _read_merged_publish_mirrors() -> dict[str, dict]:
-    """Shared TOML-merge internals for `read_publish_mirror_owners()`/`read_publish_mirrors()`.
-
-    Reads `registry.toml` (baseline) then `registry.local.toml` (local overrides
-    win), extracting the `publish.mirrors.<key>.*` namespace and merging
-    per-mirror sub-dicts (not whole-table-overwriting) across the two files —
-    a mirror's `owner` typically lives in the tracked baseline and its
-    per-machine `path` in the local override, both contributing to the SAME
-    mirror table. Returns `{mirror_key: {raw TOML sub-dict}}`, `{}` on any
-    read/parse failure or when `tomllib` is unavailable (graceful degradation,
-    never raises — see the two public readers' docstrings for why this layer
-    is advisory rather than fail-loud). Internal — public callers use
-    `read_publish_mirror_owners()` or `read_publish_mirrors()`.
-
-    2026-08-07 incident fix: this previously read ONLY the genuine nested-TOML
-    shape (`[publish.mirrors.<key>]` header, `tomllib` yielding
-    `data["publish"]["mirrors"][<key>]`). But the sanctioned per-machine
-    writer, `machine-local set <key> <value>` (`_machine_local.py:cmd_set` —
-    the SAME tool `repos.*` entries are written with, and the tool this
-    repo's own `registry.local.toml` header tells operators to use instead of
-    hand-editing), writes a FLAT quoted-dotted key —
-    `"publish.mirrors.<key>.<field>" = "<value>"` — never a nested table.
-    `tomllib` parses that as a top-level string key, not nested structure, so
-    `data.get("publish", {})` found nothing for every mirror entry an
-    operator actually added via `machine-local set` (verified: this
-    machine's real `registry.local.toml` has `publish.mirrors.coordinator_
-    claude.path` and `publish.mirrors.claude_klabauter.{path,owner}` in
-    exactly this flat form) — `read_publish_mirrors()`/
-    `read_publish_mirror_owners()` silently returned `{}` for every
-    machine-local mirror declaration ever made the sanctioned way, which is
-    why `block_oss_mirror_memo_delivery`'s `_guarded_roots()` (built on
-    `read_publish_mirrors()`) never had a root to guard, independent of the
-    owner-vs-path gap fixed alongside this. Both shapes are now merged: the
-    nested-table walk stays (covers direct hand-edits and every existing
-    test fixture), plus a flat-key scan splitting on `publish.mirrors.` and
-    the trailing `.<field>` segment.
-
-    Intra-file precedence: within a SINGLE file, if the same field for the
-    same mirror key is declared via BOTH shapes, the flat-key scan runs
-    AFTER the nested-table walk (see code order below) and its `.update()`/
-    assignment silently wins — the flat quoted-dotted value overrides the
-    nested-table value for that field. (Cross-file precedence is separate
-    and documented on the two public readers: `registry.local.toml` wins
-    over `registry.toml`.)
-    """
     try:
-        import tomllib  # stdlib Python 3.11+
+        import tomllib
     except ImportError:
         print(f"skip: _read_merged_publish_mirrors: import tomllib  # stdlib Python 3.11+ failed: {sys.exc_info()[1]}", file=sys.stderr)
         return {}
@@ -635,7 +453,6 @@ def _read_merged_publish_mirrors() -> dict[str, dict]:
             )
             continue
 
-        # Shape 1: genuine nested TOML table (`[publish.mirrors.<key>]`).
         mirrors = data.get("publish", {})
         mirrors = mirrors.get("mirrors", {}) if isinstance(mirrors, dict) else {}
         if isinstance(mirrors, dict):
@@ -644,13 +461,6 @@ def _read_merged_publish_mirrors() -> dict[str, dict]:
                     continue
                 merged_mirrors.setdefault(mirror_key, {}).update(entry)
 
-        # Shape 2: flat quoted-dotted key, the `machine-local set` output
-        # format — `"publish.mirrors.<key>.<field>" = "<value>"`. Only the
-        # three known per-mirror fields are recognised (matches the DoE
-        # CLI's own `.owner`/`.path`/`.aliases` sentinel set); `aliases` is
-        # newline-joined text here (mirrors `_machine_local_get(...)
-        # .splitlines()` on the DoE CLI side), split into a list to match
-        # the nested-table shape's list-of-strings contract.
         for raw_key, val in data.items():
             if not isinstance(raw_key, str) or not raw_key.startswith(_FLAT_PREFIX):
                 continue
@@ -660,7 +470,7 @@ def _read_merged_publish_mirrors() -> dict[str, dict]:
                 if remainder.endswith(suffix):
                     mirror_key = remainder[: -len(suffix)]
                     if not mirror_key or "." in mirror_key:
-                        continue  # not a one-segment mirror key — skip
+                        continue
                     if field == "aliases" and isinstance(val, str):
                         val = [a.strip() for a in val.splitlines() if a.strip()]
                     merged_mirrors.setdefault(mirror_key, {})[field] = val
@@ -669,33 +479,6 @@ def _read_merged_publish_mirrors() -> dict[str, dict]:
 
 
 def read_publish_mirror_owners() -> dict[str, str]:
-    """Return {alias: owner_em_id} for every publish-target mirror in publish.mirrors.*.
-
-    See module docstring's Public API entry for the full contract. A mirror key
-    with no `.owner` contributes no aliases (an incomplete/malformed mirror
-    table is silently excluded, not fail-loud — see negative-spec).
-
-    Alias derivation per mirror key (mirrors DoE `_derive_mirror_alias_set`):
-      - Mechanically-derived pair: `<hyphenated-key>` and `<hyphenated-key>-em`
-        (e.g. `coordinator_claude` -> `coordinator-claude`, `coordinator-claude-em`).
-      - Plus any explicit `<key>.aliases` list entries (legacy short-forms not
-        derivable from the key name, e.g. `deep-research`, `deep-research-em`
-        for `deep_research_claude`).
-    All aliases are lowercased/stripped before becoming dict keys.
-
-    Graceful degradation, mirrors `read_receiver_aliases()`/`read_central_receiver_ids()`:
-    returns `{}` on any read/parse failure of EITHER registry file, or when
-    neither is present. This is deliberately NOT fail-loud (unlike
-    `read_registry_repos()`) — publish-target detection is an advisory
-    safety layer over `resolve_receiver_inbox()`'s authoritative resolution;
-    a corrupt registry file already surfaces fail-loud via
-    `read_registry_repos()`/`resolve_receiver_inbox()`, so this reader degrading
-    silently does not mask a genuine registry defect. Never raises.
-
-    Negative-spec: does NOT hardcode any mirror key or owner literal — both are
-    read declaratively from the registry files only, same discipline as every
-    other reader in this module.
-    """
     merged_mirrors = _read_merged_publish_mirrors()
     owners: dict[str, str] = {}
     for mirror_key, entry in merged_mirrors.items():
@@ -706,10 +489,6 @@ def read_publish_mirror_owners() -> dict[str, str]:
         ):
             continue
         if not owner or not isinstance(owner, str):
-            # 2026-08-07 incident fix: a mirror declared via `.path` alone
-            # (no `.owner` set — the exact claude_klabauter registration
-            # gap) must still classify as a publish target, mirroring the
-            # DoE CLI's `_get_publish_target_owners` placeholder-owner fix.
             owner = (
                 f"<owner unset — run: machine-local set "
                 f"publish.mirrors.{mirror_key}.owner <em-id>>"
@@ -756,7 +535,6 @@ def _path_is_within(candidate: Path, root: Path) -> bool:
         root_parts = os.path.normcase(str(root.resolve())).split(os.sep)
     except Exception:
         return False
-    # Strip trailing empty segments from a trailing separator, if any.
     candidate_parts = [p for p in candidate_parts if p != ""] or candidate_parts
     root_parts = [p for p in root_parts if p != ""] or root_parts
     if len(root_parts) > len(candidate_parts):
@@ -869,51 +647,18 @@ def read_publish_mirrors() -> dict[str, dict]:
     return result
 
 
-# ---------------------------------------------------------------------------
-# Receiver identity → inbox resolution seam
-# ---------------------------------------------------------------------------
-
 def convention_repo_key(receiver_em_id: str) -> str:
-    """Pure convention mapping: strip trailing '-em', dashes→underscores, prefix 'repos.'.
-
-    Example: 'example-retrieval-repo-em' → 'repos.project_rag'.
-
-    Shared by receiver_em_to_repo_key's convention-fallback branch and the
-    central-receiver resolution path in resolve_receiver_inbox — factored out
-    so both call sites use the identical mapping rule (no divergent literal).
-    """
     shortname = receiver_em_id[:-3] if receiver_em_id.endswith("-em") else receiver_em_id
     return "repos." + shortname.replace("-", "_")
 
 
 def receiver_em_to_repo_key(receiver_em_id: str) -> str:
-    """Map a receiver EM identity to its machine-local repos.* registry key.
-
-    Resolution order:
-    1. Manifest alias lookup: identity.repoAliases in coordinator-registry.manifest.json
-       maps shortname → registryKey (e.g. Example-game-repo → example_game_workbench_repo).
-    2. Convention fallback: strip trailing '-em', dashes→underscores, prefix 'repos.'.
-       Example: 'example-retrieval-repo-em' → 'repos.project_rag'.
-
-    Central receiver IDs (identity.centralReceiverIds in the manifest, e.g. 'central-em',
-    'doe-claude-em') are NOT resolved through this function's convention path — they
-    fan-in to a single authoritative registry key via read_central_receiver_ids() +
-    the central-resolution branch in resolve_receiver_inbox (multiple aliases, one
-    registered repo). This function remains the non-central resolution path.
-
-    DoE-ratified alias surface: DoE consult 2026-07-05 strang-03 follow-up, Q1.
-    """
     shortname = receiver_em_id[:-3] if receiver_em_id.endswith("-em") else receiver_em_id
-    # Removed unreachable `if not shortname` guard; _validate_send_params
-    # rejects empty `to` before this point, so the "-em"-alone → empty-shortname path is
-    # unreachable from the handler. Caller gets repos. (missing suffix), correctly fails lookup.
 
-    # Manifest alias lookup (DoE-ratified; alias set is small and stable).
     aliases = read_receiver_aliases()
     if shortname in aliases:
         return "repos." + aliases[shortname]
 
-    # Convention fallback: dashes → underscores.
     return convention_repo_key(receiver_em_id)
 
 
@@ -947,58 +692,22 @@ def _central_fan_in_matches(
 
 
 def canonical_receiver_id(receiver_em_id: str) -> str:
-    """Canonicalize a receiver identity to the repo-matching central id, or pass through.
-
-    See module docstring's Public API entry for the full contract. Existence of
-    this function answers the addressee-gate verifiability problem: a receiver
-    seat is addressable via several aliases (`doe-claude-em`, plus redirect
-    aliases like `coordinator-claude` / `coordinator-claude-em` / `.claude-em`
-    / `claude-home`) that all fan in to ONE registered repo — without
-    canonicalization, a memo's
-    stamped `to:` echoes whichever alias the sender typed, and a reader cannot
-    verify by inspection that two differently-addressed memos went to the same
-    seat.
-
-    Negative-spec: does NOT hardcode any alias/central-id literal — the
-    central-id and redirect-alias sets are read declaratively from the DoE
-    manifest (`read_central_receiver_ids()`, `read_redirect_aliases()`), same
-    discipline as every other reader in this module.
-    """
     normalized = receiver_em_id.strip().lower()
     central_ids = read_central_receiver_ids()
     redirect_aliases = read_redirect_aliases()
     if normalized not in central_ids and normalized not in redirect_aliases:
         return normalized
-    all_repos = read_registry_repos()  # RegistryReadError propagates, fail-loud
+    all_repos = read_registry_repos()
     matched_keys = _central_fan_in_matches(central_ids, all_repos)
     if len(matched_keys) > 1:
         raise AmbiguousReceiverError(receiver_em_id, matched_keys.keys())
     repo_key = next(iter(matched_keys), None)
     if repo_key is None:
-        # Central/redirect alias, but no central repo registered anywhere yet —
-        # nothing to canonicalize TO. Passthrough; resolve_receiver_inbox is
-        # the authority that turns this into a fail-loud setup error at the
-        # point a send/list actually needs the registered inbox.
         return normalized
     return _repo_key_to_receiver_em_id(repo_key)
 
 
 def reroute_owner(receiver_em_id: str) -> Optional[str]:
-    """The EM id a memo addressed to `receiver_em_id` is delivered to instead, or None.
-
-    Two kinds of address are not receivers and route to an owner:
-      - a manifest redirect alias (`identity.redirectAliases`: `.claude-em`,
-        `claude-home`, `coordinator-claude`, `coordinator-claude-em`) routes to the
-        central receiver, `doe-claude-em`;
-      - a publish mirror routes to its declared owner, whether it is addressed by
-        one of its aliases (`read_publish_mirror_owners`) or by a `repos.*`
-        receiver whose path is a declared mirror path. The published engine is
-        registered in `repos.*` on purpose so tools can find it, which is how
-        `claude-klabauter-em` used to resolve into the mirror's own inbox; it
-        routes to `claude-klabauter-em`.
-    An ownerless mirror returns None here; `resolve_receiver_inbox` still refuses
-    its path a delivery. Never raises.
-    """
     normalized = receiver_em_id.strip().lower()
     if normalized in read_redirect_aliases():
         try:
@@ -1081,41 +790,12 @@ def resolve_receiver_inbox(
     receiver_repo_path = Path(repo_path_str)
     if publish_mirror_path_match(receiver_repo_path):
         return None, None, all_repos
-    # Per-receiver probe (C5, C10a migration window): the receiver's OWN
-    # corpus root — never this repo's `memo_corpus_root`, never a hardcoded
-    # `cross-repo` literal — decides where its inbox lives; a migrated peer
-    # resolves to `state/cross-repo/inbox`, an unmigrated one to the legacy
-    # `cross-repo/inbox`. `memo_list.py`'s enumeration and this function are
-    # now the SAME call, not two independent resolutions that could disagree.
     corpus_root_str, _ = receiver_inbox_root(str(receiver_repo_path))
     inbox_dir = Path(corpus_root_str) / "inbox"
     return inbox_dir, receiver_repo_path, all_repos
 
 
-# ---------------------------------------------------------------------------
-# Nearest-match "did you mean?" suggestion (C4, footgun #2)
-# ---------------------------------------------------------------------------
-
 def same_repo_path(a: Path, b: Path) -> bool:
-    """True if two paths resolve to the same directory (cross-platform).
-
-    `samefile` when both exist; `normcase`+`realpath` fallback so an absent
-    repo (a registry entry pointing at a not-yet-cloned sibling) never
-    raises. Mirrors DoE CLI's `_same_path` helper (`bin/cross-repo-memo`).
-
-    THE ONE path-equality helper for receiver/self resolution in
-    `coordinator_core` — `memo_check_addressee.py` imports this rather than
-    carrying its own copy (2026-07-26 subprocess-elision spinoff).
-
-    DRIFT SEAM — a third copy exists that CANNOT import this one:
-    `_same_repo_path` in DoE-claude's `coordinator/hooks/scripts/_engine_root.py`.
-    That module bootstraps engine resolution, so importing `coordinator_core`
-    would close a cycle; it reimplements these exact semantics by necessity.
-    Changing the semantics here (not the implementation — the ANSWER for some
-    pair of paths) silently desynchronizes the engine-working-repo gate that
-    reads it, and no test on either side catches the divergence. Claude-Klabauter owns
-    this note; a semantics change here ships with a memo to `doe-claude-em`.
-    """
     try:
         return os.path.samefile(str(a), str(b))
     except OSError:
@@ -1172,25 +852,8 @@ def resolve_self_em_id(self_root: Path) -> str:
 
 
 def _repo_key_to_self_em_id(repo_key: str) -> str:
-    """Alias-aware inverse of the registry key -> EM id mapping, for
-    `resolve_self_em_id` ONLY — the load-bearing self-identity form.
-
-    Mirrors the DoE CLI's `repo_key_to_em_id`
-    (`bin/lib/coordinator_registry.py:235-260`): checks
-    `read_receiver_aliases()`'s reverse mapping (registry-key suffix ->
-    alias shortname) before falling back to the naive underscore->dash
-    convention, so an aliased repo (e.g. `example_game_workbench_repo` ->
-    `example-game-repo` -> `example-game-repo-em`) resolves to the SAME id the CLI produces,
-    not just the un-aliased convention form.
-
-    Distinct on purpose from `_repo_key_to_receiver_em_id` below, which is
-    deliberately lossy and reserved for "did you mean?" suggestion text —
-    do not reuse that helper here, and do not reuse this one there (it does
-    an extra alias-manifest read this fast, spam-prone suggestion path
-    doesn't need).
-    """
     suffix = repo_key[len("repos."):] if repo_key.startswith("repos.") else repo_key
-    aliases = read_receiver_aliases()  # {shortname: registryKey-suffix}
+    aliases = read_receiver_aliases()
     reverse_aliases = {registry_key: shortname for shortname, registry_key in aliases.items()}
     canonical = reverse_aliases.get(suffix)
     if canonical is not None:
@@ -1219,26 +882,6 @@ def _repo_key_to_receiver_em_id(repo_key: str) -> str:
 def _nearest_receiver_matches(
     receiver_em_id: str, all_repos: dict[str, str], n: int
 ) -> list[str]:
-    """Shared candidate-pool + fuzzy-match internals for the did-you-mean surfaces below.
-
-    Candidate pool: every currently-registered `repos.*` key (converted back to
-    its conventional receiver-em-id form), plus every DoE-manifest alias
-    shortname whose aliased registry key is itself currently registered. Only
-    receivers actually present in `all_repos` are ever candidates — this never
-    suggests an id that would ALSO fail to resolve.
-
-    Returns up to `n` closest candidates (case-preserved, best-first), or `[]`
-    if nothing is within a reasonable edit-distance similarity threshold
-    (cutoff 0.5) or the registry has no candidates at all.
-
-    Callers detecting uniqueness (`unique_nearest_receiver`)
-    rely on calling this with `n=2` and treating a returned length of exactly 2 as
-    "ambiguous" (2+ candidates cleared the cutoff) vs exactly 1 as "unique" — i.e.
-    on `difflib.get_close_matches(..., n=2, ...)` returning exactly 2 entries iff
-    2 or more candidates clear the cutoff. Do not change this truncation behavior
-    (e.g. a "soft cap" that can return fewer entries even when more exist, or a
-    different tie-break) without updating that caller's ambiguity gate.
-    """
     candidates: set[str] = set()
     for repo_key in all_repos:
         candidates.add(_repo_key_to_receiver_em_id(repo_key))
@@ -1301,11 +944,6 @@ def suggest_nearest_receiver(
         receiver_em_id.strip().lower()
     )
     if successor is not None:
-        # The function's standing invariant is that it never suggests an id that
-        # would ALSO fail to resolve (see `_nearest_receiver_matches`). A
-        # successor is only better than the fuzzy answer if it is registered on
-        # THIS machine; where it is not, fall through rather than trade a wrong
-        # suggestion for an unreachable one.
         if convention_repo_key(successor) in all_repos:
             return successor
         aliases = read_receiver_aliases()
@@ -1363,32 +1001,8 @@ def unique_nearest_receiver(
     return matches[0] if len(matches) == 1 else None
 
 
-# ---------------------------------------------------------------------------
-# Never-inbox mirrors (PM ruling 2026-09-23) — the ONE chokepoint every
-# delivery path (memo.send's `to:` and `cc:` legs, and the `cross-repo-memo`
-# CLI which forwards onto memo.send) must call before writing a byte.
-#
-# coordinator-claude and claude-klabauter are publish mirrors, not EM working
-# trees, and must NEVER receive a cross-repo/inbox/ write — on ANY machine,
-# regardless of how (or whether) that machine's registry declares them.
-# `reroute_owner()`/`publish_mirror_path_match()` above already rereoute a
 # CORRECTLY-registered mirror to its owner, but that routing is itself
-# registry-state-dependent (`publish.mirrors.<key>.path`/`.owner` must be
-# set) — the live hole this closes (2026-09-23, reported by example-retrieval-repo-em):
-# a `to: coordinator-claude-em` item on a machine where that mirror wasn't
-# (fully) declared fell through registry-driven classification entirely,
-# resolved as an ordinary `repos.*` receiver, and got written+committed+
-# marked `status: sent` into a coordinator-claude clone.
-#
-# Deliberately hardcoded, unlike every other reader in this module: this is
-# not a registry fact to read declaratively, it is a fixed identity these two
-# repos always carry (their receiver-EM names, or the mirror's own path
-# basename) — no registry state should ever be able to change the answer.
-# ---------------------------------------------------------------------------
 
-#: The mirror clone's own folder-name convention — catches "anything
-#: resolving to those repos" even when addressed by an unlisted alias, so
-#: long as the resolved repo path's basename matches (case-insensitive).
 _NEVER_INBOX_MIRROR_PATH_BASENAMES = frozenset({"coordinator-claude", "claude-klabauter"})
 
 
@@ -1433,14 +1047,6 @@ def never_inbox_mirror_refusal(
     )
 
 
-# ---------------------------------------------------------------------------
-# Structural undeliverable-checkout detection. `never_inbox_mirror_refusal`
-# knows two mirror basenames; this catches any publish mirror or missing
-# checkout by properties of the path itself, never a second name list.
-# ---------------------------------------------------------------------------
-
-#: Reason codes `receiver_checkout_defect` returns — named so a caller can
-#: compose a reason-specific message without re-deriving the classification.
 _CHECKOUT_DEFECT_NO_CHECKOUT = "no-checkout"
 _CHECKOUT_DEFECT_PUBLISH_MIRROR = "publish-mirror"
 
@@ -1484,8 +1090,6 @@ def receiver_checkout_defect(receiver_repo_path: Optional[Path]) -> Optional[str
 def undeliverable_checkout_refusal(
     receiver_em_id: str, receiver_repo_path: Optional[Path],
 ) -> Optional[str]:
-    """Refusal text for `receiver_checkout_defect`, or None when deliverable.
-    Check before any write, alongside `never_inbox_mirror_refusal`."""
     reason = receiver_checkout_defect(receiver_repo_path)
     if reason is None:
         return None

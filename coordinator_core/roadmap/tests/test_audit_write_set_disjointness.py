@@ -1,19 +1,3 @@
-"""
-coordinator_core.roadmap.tests.test_audit_write_set_disjointness — regression
-net for Audit 6 (`derive_write_set` / `_audit6_write_set_disjointness`).
-
-Spec backlink: docs/plans/2026-09-12-audit-roadmap-derives-its-write-set-
-from.md § Tasks C2. Each case pins a behaviour the plan's Anti-scope says
-would otherwise break: reusing `plan_gate`'s resolver and its refusals,
-counting every row whose work has not run (including one blocked only by a
-gated predecessor, which `read_spine`'s `exclusions` list never names),
-filtering superseded plans and per-plan malformed spines, and the mandatory
-coverage line (§ The three questions).
-
-Zero spawns; every case builds its corpus under `tmp_path` with an explicit
-`--root`-equivalent (`run_audit`/`derive_write_set` both take `data_root`
-directly, no CLI/rooting involved).
-"""
 
 from __future__ import annotations
 
@@ -30,10 +14,6 @@ from coordinator_core.roadmap.audit import (
     derive_write_set,
     run_audit,
 )
-
-# ---------------------------------------------------------------------------
-# Fixture helpers
-# ---------------------------------------------------------------------------
 
 
 def _init_tree(tmp_path: Path) -> Path:
@@ -139,11 +119,6 @@ def _plan(
     return rel
 
 
-# ---------------------------------------------------------------------------
-# Two live plans declaring one path -> collision
-# ---------------------------------------------------------------------------
-
-
 def test_two_live_plans_declaring_one_path_collide(tmp_path: Path) -> None:
     root = _init_tree(tmp_path)
     run_id = "roadmap-collide"
@@ -164,11 +139,6 @@ def test_two_live_plans_declaring_one_path_collide(tmp_path: Path) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# The superseded false positive
-# ---------------------------------------------------------------------------
-
-
 def test_sharing_only_with_a_superseded_plan_passes(tmp_path: Path) -> None:
     root = _init_tree(tmp_path)
     run_id = "roadmap-superseded"
@@ -181,11 +151,6 @@ def test_sharing_only_with_a_superseded_plan_passes(tmp_path: Path) -> None:
     _audit6_write_set_disjointness(r, run_id, root, root)
     assert r.exit_code == 0
     assert r.stderr_lines == []
-
-
-# ---------------------------------------------------------------------------
-# Within-plan overlap is not a collision
-# ---------------------------------------------------------------------------
 
 
 def test_within_plan_overlap_passes(tmp_path: Path) -> None:
@@ -208,11 +173,6 @@ def test_within_plan_overlap_passes(tmp_path: Path) -> None:
     assert r.stderr_lines == []
 
 
-# ---------------------------------------------------------------------------
-# The weak-basis decline: no manufactured collision between siblings
-# ---------------------------------------------------------------------------
-
-
 def test_weak_sizing_object_basis_does_not_manufacture_a_collision(tmp_path: Path) -> None:
     root = _init_tree(tmp_path)
     run_id = "roadmap-weak-basis"
@@ -224,10 +184,7 @@ def test_weak_sizing_object_basis_does_not_manufacture_a_collision(tmp_path: Pat
         root, "plan-y", "approved", [_plan_row("C1", ["only/in/y.py"])],
         sizing_object="shared-sizing",
     )
-    # Neither baton links via governing_plan -- both resolve ONLY via the
     # shared sizing_object, a _WEAK_PLAN_LINK_BASES member. Each baton's
-    # `link_plans` hit set is therefore [plan_x, plan_y] (both cite the same
-    # sizing object), which `_best_plan` must decline rather than guess.
     _baton(root, "baton-x", run_id, sizing_object="shared-sizing")
     _baton(root, "baton-y", run_id, sizing_object="shared-sizing")
 
@@ -239,11 +196,6 @@ def test_weak_sizing_object_basis_does_not_manufacture_a_collision(tmp_path: Pat
     _audit6_write_set_disjointness(r, run_id, root, root)
     assert r.exit_code == 0
     assert r.stderr_lines == []
-
-
-# ---------------------------------------------------------------------------
-# Path normalization: backslash vs slash collide
-# ---------------------------------------------------------------------------
 
 
 def test_backslash_and_slash_spelled_paths_collide(tmp_path: Path) -> None:
@@ -263,11 +215,6 @@ def test_backslash_and_slash_spelled_paths_collide(tmp_path: Path) -> None:
     assert r.exit_code == 1
 
 
-# ---------------------------------------------------------------------------
-# Gated / operator rows still contribute their writes
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "row_kwargs",
     [
@@ -278,15 +225,6 @@ def test_backslash_and_slash_spelled_paths_collide(tmp_path: Path) -> None:
 def test_a_row_whose_work_has_not_run_still_contributes(
     tmp_path: Path, row_kwargs: Dict[str, Any]
 ) -> None:
-    """Both classes reach the write set through the SAME fall-through.
-
-    Parametrized rather than written twice because the implementation reads
-    neither key: the rule is "count it unless its work has landed or will
-    never happen", so a gated row and an operator row are one behaviour seen
-    from two doors. They are both kept as cases because they are the two row
-    shapes a reader will ask about, and a rule change that special-cased
-    either would have to break this test to do it.
-    """
     root = _init_tree(tmp_path)
     run_id = "roadmap-not-run"
     plan_a = _plan(
@@ -301,12 +239,6 @@ def test_a_row_whose_work_has_not_run_still_contributes(
 
 
 def test_writes_under_prefix_collides_and_stays_a_directory_claim(tmp_path: Path) -> None:
-    """`writes_under:` joins the write set, in its own string space.
-
-    Two plans declaring one directory prefix collide. A plan creating `gen/`
-    and a plan writing a FILE named `gen` do not — collapsing the trailing
-    separator would fuse two claims that are not the same claim.
-    """
     root = _init_tree(tmp_path)
     run_id = "roadmap-under"
     plan_a = _plan(
@@ -326,17 +258,6 @@ def test_writes_under_prefix_collides_and_stays_a_directory_claim(tmp_path: Path
 
 
 def test_row_blocked_only_by_a_gated_predecessor_still_contributes(tmp_path: Path) -> None:
-    """The transitive-closure leg, which an `exclusions`-keyed re-admit misses.
-
-    `spine_read.read_spine` appends an `exclusions` entry only for a row
-    excluded on its OWN properties. A row dropped by the transitive closure —
-    blocked solely because something it `depends_on` carries an uncleared
-    execution-blocking gate — is removed from the return value with NO entry
-    appended. So a write set that re-admits by reading that list drops exactly
-    the rows nobody has executed, and the list's apparent completeness hides
-    the loss. C2 here has run no more than C1 has; its writes are still a live
-    collision.
-    """
     root = _init_tree(tmp_path)
     run_id = "roadmap-transitive"
     plan_a = _plan(
@@ -377,11 +298,6 @@ def test_operator_row_still_contributes(tmp_path: Path) -> None:
     assert sorted(result["paths"]["shared/thing.py"]) == sorted([plan_a, plan_b])
 
 
-# ---------------------------------------------------------------------------
-# Closed / deferred rows do NOT contribute
-# ---------------------------------------------------------------------------
-
-
 def test_closed_disposition_row_does_not_contribute(tmp_path: Path) -> None:
     root = _init_tree(tmp_path)
     run_id = "roadmap-closed"
@@ -396,8 +312,6 @@ def test_closed_disposition_row_does_not_contribute(tmp_path: Path) -> None:
     _baton(root, "baton-plain3", run_id, governing_plan=plan_b)
 
     result = derive_write_set(run_id, root, root)
-    # plan_a's only row is closed (landed) -- its writes do not contribute,
-    # so `shared/thing.py` is declared by plan_b alone: no collision.
     assert result["paths"].get("shared/thing.py") == [plan_b]
 
     r = _Reporter()
@@ -418,15 +332,8 @@ def test_deferred_row_does_not_contribute(tmp_path: Path) -> None:
 
     result = derive_write_set(run_id, root, root)
     assert "shared/thing.py" not in result["paths"]
-    # fully_resolved, NOT undeclared: the row said what it writes and that work
-    # is not happening. See test_a_landed_plan_is_not_reported_as_declaring_nothing.
     assert result["undeclared_plans"] == []
     assert plan_a in result["fully_resolved_plans"]
-
-
-# ---------------------------------------------------------------------------
-# Coverage line
-# ---------------------------------------------------------------------------
 
 
 def test_coverage_line_names_unplanned_batons_on_a_clean_roadmap(tmp_path: Path) -> None:
@@ -446,18 +353,10 @@ def test_coverage_line_names_unplanned_batons_on_a_clean_roadmap(tmp_path: Path)
     )
 
 
-# ---------------------------------------------------------------------------
-# A malformed spine fails THAT plan by name; the run still reports (exit 1,
-# not exit 3) and does not destroy the other audits.
-# ---------------------------------------------------------------------------
-
-
 def test_malformed_spine_fails_that_plan_and_run_audit_reports_exit_1(tmp_path: Path) -> None:
     root = _init_tree(tmp_path)
     run_id = "roadmap-malformed"
     plan_ok = _plan(root, "plan-ok", "approved", [_plan_row("C1", ["fine/thing.py"])])
-    # A plan record with NO task-spine block at all -- read_spine raises
-    # SpineReadError (ABSENT, not LOCATED).
     plan_bad_rel = "docs/plans/plan-bad.md"
     (root / plan_bad_rel).write_text(
         "---\ntitle: \"plan-bad\"\nstatus: approved\n---\n\nNo tasks here.\n",
@@ -475,9 +374,6 @@ def test_malformed_spine_fails_that_plan_and_run_audit_reports_exit_1(tmp_path: 
     assert r.exit_code == 1
     assert any("plan-bad" in line for line in r.stderr_lines)
 
-    # And end-to-end through run_audit: the malformed spine does not blow
-    # the whole run up to exit 3 -- it is caught per-plan inside Audit 6 and
-    # r.fail'd by name, same as every other audit failure.
     _write_reconciliation = root / "state" / "roadmap" / run_id / "reconciliation.md"
     _write_reconciliation.parent.mkdir(parents=True, exist_ok=True)
     _write_reconciliation.write_text("Verdict: KEEP\nVerdict: KEEP\n", encoding="utf-8")
@@ -487,21 +383,6 @@ def test_malformed_spine_fails_that_plan_and_run_audit_reports_exit_1(tmp_path: 
 
 
 def test_a_plan_file_that_vanished_is_named_not_silently_dropped(tmp_path: Path) -> None:
-    """A baton whose `governing_plan` file is gone must still be VISIBLE.
-
-    It does not reach the per-plan read at all: `build_plan_index` scans disk,
-    so a deleted plan is simply not in the index and `link_plans` resolves
-    nothing. The baton therefore lands in the unresolved bucket and is NAMED
-    on the coverage line — which is the property that matters, because the
-    alternative is a PASS that quietly covered one baton fewer than the reader
-    believes.
-
-    The broad `except` in `_plan_declared_write_set` is NOT what saves this
-    case and is not pinned by it: it covers the narrow race where a plan is
-    indexed and then removed or rewritten before it is read, plus an indexed
-    file that will not decode. Both would otherwise escape to `main()` as a
-    whole-run exit 3.
-    """
     root = _init_tree(tmp_path)
     run_id = "roadmap-vanished"
     plan_ok = _plan(root, "plan-present", "approved", [_plan_row("C1", ["fine/thing.py"])])
@@ -561,8 +442,6 @@ def test_a_landed_plan_is_not_reported_as_declaring_nothing(tmp_path: Path) -> N
     assert r.exit_code == 0
     landed_lines = [line for line in r.stdout_lines if plan_landed in line]
     silent_lines = [line for line in r.stdout_lines if plan_silent in line]
-    # The landed plan is never described as declaring nothing, and the line it
-    # DOES appear on says why it contributed no paths.
     assert landed_lines and all("declaring no writes" not in line for line in landed_lines)
     assert any("has landed or will not happen" in line for line in landed_lines)
     assert any("declaring no writes" in line for line in silent_lines)

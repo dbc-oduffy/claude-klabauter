@@ -1,21 +1,3 @@
-"""test_refresh_plugin_live_install_containment_guard — pytest coverage for the
-shared live_path containment guard in refresh-plugin-live-install.py.
-
-Spec backlink: git-managed leg (`_handle_default`) previously had NO rm-rf-class
-containment guard on its registry-supplied `live_path`, unlike the copy_install
-leg (`_handle_copy_install`), which already resolved+verified `live_path` before
-touching it. `git checkout <ref>` / `git checkout <ref> -- <f>` rewrites the
-index AND the worktree, so an unguarded git-managed leg could fetch/checkout
-inside ANY directory the registry names — including a live source working tree.
-
-`_resolve_contained_live_path` is the single shared helper both legs now call:
-  1. live_path must resolve (strict) to an existing directory.
-  2. resolved live_path must be under the resolved coordinator plugins dir
-     (`Path.is_relative_to` semantics — not a substring test).
-  3. resolved live_path must not equal resolved source_path, UNLESS
-     propagation_mode == "source_is_live".
-No fallback, no warn-and-continue: every refusal returns None.
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -25,7 +7,6 @@ _BIN_DIR = Path(__file__).parent.parent
 
 
 def _load_module():
-    """Load refresh-plugin-live-install.py by file path (hyphenated name bypass)."""
     spec = importlib.util.spec_from_file_location(
         "refresh_plugin_live_install",
         _BIN_DIR / "refresh-plugin-live-install.py",
@@ -120,9 +101,6 @@ def test_nonexistent_source_path_is_refused_when_not_source_is_live(tmp_path):
 
 
 def test_copy_install_leg_uses_same_containment_guard(tmp_path):
-    """_handle_copy_install must reject a live_path outside the plugins dir via
-    the shared helper, matching pre-existing behaviour after the refactor that
-    replaced its inline guard with a call to _resolve_contained_live_path."""
     plugins_dir = tmp_path / "plugins"
     plugins_dir.mkdir()
     live_path = tmp_path / "elsewhere" / "not-in-plugins"

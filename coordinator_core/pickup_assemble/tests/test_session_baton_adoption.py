@@ -1,22 +1,3 @@
-"""
-coordinator_core.pickup_assemble.tests.test_session_baton_adoption
-
-Purpose: proves C3's unwired half (docs/plans/2026-08-18-a-session-always-
-has-a-baton.md § C3, "a pickup adopts the session baton as a fan-in edge")
-is actually wired: a pickup `brief()` that takes the `claim_at_brief` lock
-records the picked-up artifact's path into THIS session's baton record's
-`adopted_artifacts[]` (`session_baton.store.merge_baton`).
-
-Negative-spec covered:
-  - re-briefing the same artifact in the same session never duplicates the
-    entry (`merge_baton`'s own dedup-extend contract, exercised end to end)
-  - a baton store that cannot be written (session hub unresolvable) never
-    breaks the pickup itself — `_adopt_into_baton`'s fail-open posture,
-    mirroring `quick_wrap_assemble._print_commits_into_baton`.
-
-Run from the repo root: python -m pytest
-coordinator_core/pickup_assemble/tests/test_session_baton_adoption.py -q
-"""
 from __future__ import annotations
 
 import os
@@ -32,9 +13,6 @@ import coordinator_core.pickup_brief as pb
 from coordinator_core.session import liveness as liveness_mod
 from coordinator_core.session_baton.store import read_baton
 
-# Declared, not excused: spawns a real git process, same convention as the
-# sibling files in this package (test_brief_claim_lease.py,
-# test_pickup_claim_stage_stamp_evidence.py).
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -81,11 +59,6 @@ def as_session(monkeypatch):
 
 
 def _ensure_session_dir(repo: Path, sid: str) -> Path:
-    """Pre-create the per-session directory ``cs_init`` mints on every real
-    session start — this store (C6, docs/plans/2026-08-19-batons-unify-into-
-    one-successor.md § C6) no longer mkdir's it itself, so a fixture binding
-    a session id via env var alone (bypassing real session init) must bring
-    it into being before `_adopt_into_baton`'s `merge_baton` call can land."""
     sdir = repo / ".git" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True, exist_ok=True)
     return sdir
@@ -119,9 +92,6 @@ def test_rebrief_same_artifact_does_not_duplicate(tmp_path, as_session):
 
 
 def test_brief_survives_broken_baton_store(tmp_path, as_session, monkeypatch):
-    """A pickup that cannot touch its baton (session hub unresolvable) still
-    succeeds — `_adopt_into_baton`'s fail-open posture must never surface
-    into `brief()`'s own return value or raise."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     _seed_handoff(repo, "h1.md")
@@ -138,7 +108,6 @@ def test_brief_survives_broken_baton_store(tmp_path, as_session, monkeypatch):
     assert result.decision_object["artifact"]["path"] == "state/handoffs/h1.md"
 
 def test_intent_prefers_session_goal_when_the_handoff_carries_one(tmp_path, as_session):
-    """`session_goal` is the field that means goal, so it wins outright."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     _seed_handoff(repo, "h1.md", fm_extra="session_goal: Ship the thing.\n")
@@ -153,19 +122,6 @@ def test_intent_prefers_session_goal_when_the_handoff_carries_one(tmp_path, as_s
 
 
 def test_intent_falls_back_to_summary_and_says_so(tmp_path, as_session):
-    """With no `session_goal`, `intent` borrows `summary` -- labelled.
-
-    `session_goal` is optional and, measured 2026-08-31, carried by 0 of 295
-    live handoffs with no producer anywhere in the engine, so the derivation
-    that read it alone could never fire: `intent` was null on 18 of 18 baton
-    records while `title` reached 11 of 11 adopters. `summary` is required by
-    cross-field rule and present on 295 of 295.
-
-    The prefix is the load-bearing part, not decoration. A summary is
-    retrospective and a goal is forward-looking; borrowing one for the other
-    silently would make the record assert something it does not know. This
-    pins that the borrowing is always disclosed on the record itself.
-    """
     repo = tmp_path / "repo"
     _init_repo(repo)
     _seed_handoff(repo, "h1.md", fm_extra="summary: What the session did.\n")
@@ -205,7 +161,6 @@ def test_second_different_adoption_never_clobbers_first_intent(tmp_path, as_sess
 
 
 def test_intent_stays_unset_when_neither_field_is_present(tmp_path, as_session):
-    """No goal and no summary means no intent -- never an invented one."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     _seed_handoff(repo, "h1.md")

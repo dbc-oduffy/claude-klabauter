@@ -44,8 +44,6 @@ from coordinator_core.session import touch_record
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -63,9 +61,6 @@ def _make_repo(tmp_path):
 
 
 def _decoded_paths(sink_path: Path) -> list[str]:
-    """Read a `touch-record.jsonl` sink and return every decoded entry's
-    `path` field, in file order. Fails loudly (via `decode_line`) on a
-    malformed line — these tests exercise only well-formed writes."""
     if not sink_path.exists():
         return []
     events = [
@@ -76,16 +71,6 @@ def _decoded_paths(sink_path: Path) -> list[str]:
 
 
 class TestNormalizeTouchPathIsolatedUnit:
-    """Unit-isolated coverage for ``session.scope.normalize_touch_path`` itself,
-    called directly with a hand-built worktree root — the SAME root shape the
-    `_handler` end-to-end path (see ``TestHandlerEndToEndCommonDirScopedRoot``
-    below) derives via ``main_worktree_root(common_dir)`` before handing it to
-    this function as ``cwd``. This class deliberately bypasses the handler's
-    own common_dir → worktree-root derivation step; it does NOT cover that
-    derivation (a wrong derivation would still make these cases pass). That
-    derivation is exercised end-to-end only by
-    ``TestHandlerEndToEndCommonDirScopedRoot``.
-    """
 
     def test_relative_path_passthrough(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -104,25 +89,18 @@ class TestNormalizeTouchPathIsolatedUnit:
         assert ttf.normalize_touch_path(str(target), str(repo)) == "src/new.py"
 
     def test_cross_drive_relpath_failure_skips_not_absolute(self, tmp_path, monkeypatch):
-        """Simulates the Windows cross-drive ValueError os.path.relpath raises
-        when file_path is on a different drive than git_root — the fallback
-        MUST return None (skip), never file_path unchanged (absolute)."""
         repo = _make_repo(tmp_path)
 
         def _boom(*a, **k):
             raise ValueError("simulated cross-drive relpath failure")
 
         monkeypatch.setattr(touch_scope.os.path, "relpath", _boom)
-        outside = "/totally/outside/xyz.py"  # git ls-files will miss this
+        outside = "/totally/outside/xyz.py"
         result = ttf.normalize_touch_path(outside, str(repo))
         assert result is None
         assert result != outside
 
     def test_drive_qualified_path_recognized_as_absolute(self):
-        # A Windows drive-qualified path is recognized as absolute by the
-        # module's own leading-slash-or-drive-letter regex, the same class
-        # scope._is_absolute matches — pure regex check, no filesystem
-        # involved, and no concrete machine path cited.
         drive_letter = "X"
         drive_qualified = drive_letter + ":" + "\\some\\path\\file.py"
         assert re.match(r"^[A-Za-z]:", drive_qualified) is not None
@@ -154,7 +132,7 @@ class TestHandlerEndToEndCommonDirScopedRoot:
         target = repo / "src" / "new.py"
         target.write_text("y")
 
-        common_dir = git_common_dir(repo)  # production shape: <repo>/.git
+        common_dir = git_common_dir(repo)
 
         params = {
             "session_id": "deadbeefcafe0001",
@@ -184,16 +162,6 @@ class TestHandlerEndToEndCommonDirScopedRoot:
 
 
 class TestHandlerRuntimeErrorFallbackNonGitFixture:
-    """Drives the `except RuntimeError` fallback branch in `_handler` (fires
-    when `git_common_dir(repo_root)` raises — non-git fixture / git
-    unavailable). Confirms the fallback resolves `_sessions_base` to
-    `<repo_root>/coordinator-sessions` (no doubled `.git` segment) and that
-    `_handler` does not raise, even though `_common_dir` stays `None` and
-    both `_sessions_base` and `_worktree_root` collapse onto the same
-    `git_root` value on this path (Finding 1, coordinatorcode-reviewer-228e0ba7.md
-    — documented-inert for production; this test only confirms it stays inert
-    and crash-free for a non-git fixture, not that the collapse is fixed).
-    """
 
     def test_session_dir_created_without_doubled_git_segment(self, tmp_path):
         non_git_root = tmp_path / "not_a_repo"
@@ -220,23 +188,6 @@ class TestHandlerRuntimeErrorFallbackNonGitFixture:
 
 
 class TestHandlerNormalizeTouchPathRootWiring:
-    """Pins the `_handler` call site's `normalize_touch_path(..., root=...)`
-    keyword wiring (break-class fix, 2026-08-08): `asyncio.to_thread` forwards
-    positionally, so the pre-fix call `normalize_touch_path(file_path,
-    _worktree_root)` bound `_worktree_root` to `cwd` only, never `root` —
-    `normalize_touch_path`'s ``resolved_root = root if root else
-    core.git_root(cwd)`` fallback then re-spawned ``git rev-parse
-    --show-toplevel`` on every untracked path, the exact spawn the ``root``
-    parameter exists to remove. `TestNormalizeTouchPathSpawnCount` in
-    `coordinator_core/session/tests/test_scope.py` calls
-    `normalize_touch_path` directly with `root=` and so never exercised this
-    caller; this class drives the real `_handler` entrypoint instead.
-
-    Monkeypatches `scope.core.git_root` (the sole subprocess seam for the
-    worktree-root re-derivation `normalize_touch_path` falls back to when
-    `root` is absent) to a plain counter — a call count of 0 proves the hook
-    supplied `root` and no re-derivation spawn occurred.
-    """
 
     def test_untracked_path_handled_without_git_root_respawn(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
@@ -244,7 +195,7 @@ class TestHandlerNormalizeTouchPathRootWiring:
         target = repo / "src" / "new.py"
         target.write_text("y")
 
-        common_dir = git_common_dir(repo)  # production shape: <repo>/.git
+        common_dir = git_common_dir(repo)
 
         calls = {"git_root": 0}
         real_git_root = session_core.git_root
@@ -324,7 +275,7 @@ class TestHandlerZeroSpawnFastArmAtCaller:
         self, tmp_path, monkeypatch
     ):
         repo = _make_repo(tmp_path)
-        target = repo / "README.md"  # tracked by _make_repo, guard-eligible
+        target = repo / "README.md"
 
         git_run_calls = []
         real_git_run = touch_scope._git_run
@@ -343,7 +294,7 @@ class TestHandlerZeroSpawnFastArmAtCaller:
         monkeypatch.setattr(touch_scope, "_git_run", _counted_git_run)
         monkeypatch.setattr(touch_scope.core, "git_root", _counted_git_root)
 
-        common_dir = git_common_dir(repo)  # production shape: <repo>/.git
+        common_dir = git_common_dir(repo)
 
         params = {
             "session_id": "deadbeefcafe0004",
@@ -376,27 +327,13 @@ class TestHandlerZeroSpawnFastArmAtCaller:
 
 
 class TestAC3OutOfWorktreePathReachableThroughHandler:
-    """AC3: with `normalize_touch_path` no longer the only thing holding the
-    out-of-worktree invariant, `touch_record.encode_line`'s own
-    `OutOfWorktreePath` containment check (touch_record.py AC23) becomes
-    reachable through this hook's write path — a second, independent layer,
-    not merely a documented intention.
-
-    Proven, not merely noted: `ttf.normalize_touch_path` is monkeypatched to
-    return an absolute path that slips past the handler's own `if not
-    file_path_norm: return` guard (which only checks for falsy/None, not
-    absoluteness — the handler trusts `normalize_touch_path` to have already
-    excluded that case). This simulates a defect in `normalize_touch_path`
-    to exercise the SECOND layer directly, proving it is live at this call
-    site rather than merely present in `touch_record.py`'s own unit tests.
-    """
 
     def test_absolute_normalized_path_is_rejected_by_encode_line_not_written(
         self, tmp_path, monkeypatch
     ):
         repo = _make_repo(tmp_path)
         target = repo / "README.md"
-        common_dir = git_common_dir(repo)  # production shape: <repo>/.git
+        common_dir = git_common_dir(repo)
 
         def _return_absolute(*args, **kwargs):
             return "/etc/passwd"
@@ -409,9 +346,6 @@ class TestAC3OutOfWorktreePathReachableThroughHandler:
             "file_path": str(target),
         }
 
-        # Must not raise: OutOfWorktreePath is caught and swallowed by
-        # `_append_touch_record`'s silent-failure contract (this hook must
-        # never block or error-propagate to the tool call).
         asyncio.run(ttf._handler(params, repo_root=common_dir))
 
         touch_record_sink = (

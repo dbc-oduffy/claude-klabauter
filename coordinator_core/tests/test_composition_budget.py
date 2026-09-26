@@ -1,12 +1,3 @@
-"""
-Tests for coordinator_core.composition_budget (docs/plans/2026-08-15-composition-
-invocation-budgets.md § C9).
-
-Covers: elapsed-only skip-and-surface parity with percolate's extracted shape,
-invocation-count ceiling, fail-loud BudgetBreach message shape (AC9), the
-injectable identity channel (env / file / composer-local fallback), the on_count
-injection point, and the mid-directive advisory (never-raises) call shape.
-"""
 
 from __future__ import annotations
 
@@ -24,7 +15,6 @@ from coordinator_core.composition_budget import (
 
 
 class _FakeClock:
-    """Deterministic, hand-advanced clock for budget tests."""
 
     def __init__(self, start: float = 0.0) -> None:
         self.now = start
@@ -47,18 +37,15 @@ def test_no_budget_set_never_breaches():
 
 
 def test_elapsed_budget_skip_and_surface_parity_with_percolate_shape():
-    """§ C9 body: `_budget_ok()` parity -- elapsed strictly greater than the budget breaches,
-    elapsed equal to the budget does not (matches run_entrypoint_gate's `<=` comparison)."""
     clock = _FakeClock()
     budget = CompositionBudget(composition_id="c1", aggregate_elapsed_budget=10.0, clock=clock)
 
     clock.advance(10.0)
-    assert budget.check() is True  # exactly at budget: still ok, mirrors `<=`
+    assert budget.check() is True
 
     clock.advance(0.001)
-    assert budget.check() is False  # now over
+    assert budget.check() is False
     assert budget.breached_units == ("elapsed",)
-    # skip-and-surface: never raises
     assert budget.disposition == SKIP_AND_SURFACE
 
 
@@ -74,8 +61,6 @@ def test_invocation_count_ceiling_is_independent_of_elapsed():
 
 
 def test_fail_loud_raises_budget_breach_with_named_composition_fanout_unit_and_count():
-    """AC9: breach fails loudly with a message naming the composition, the fan-out unit,
-    and the count -- asserted here on the message shape."""
     clock = _FakeClock()
     budget = CompositionBudget(
         composition_id="wsc-close-42",
@@ -122,11 +107,8 @@ def test_advisory_check_never_raises_regardless_of_disposition():
         composition_id="c1", max_invocations=1, disposition=FAIL_LOUD, clock=clock
     )
     budget.record_invocation()
-    # advisory_check must not raise even though disposition is fail-loud
     assert budget.advisory_check() is False
     assert budget.breached_units == ("invocations",)
-    # a later boundary check() still raises -- advisory is observation-only, not a
-    # substitute for the boundary check
     with pytest.raises(BudgetBreach):
         budget.check()
 
@@ -153,7 +135,7 @@ def test_on_count_not_called_by_check_or_advisory_check():
     assert calls == [("invocation", 1)]
     budget.check()
     budget.advisory_check()
-    assert calls == [("invocation", 1)]  # unchanged -- check()/advisory_check() are read-only
+    assert calls == [("invocation", 1)]
 
 
 def test_new_composition_id_is_unique_and_pid_prefixed():
@@ -196,7 +178,7 @@ def test_for_composition_uses_resolver_when_it_returns_a_value():
 
 def test_for_composition_falls_back_to_new_id_when_resolver_returns_none():
     budget = CompositionBudget.for_composition(identity_resolver=lambda: None)
-    assert budget.composition_id  # non-empty, minted
+    assert budget.composition_id
     assert "-" in budget.composition_id
 
 
@@ -215,17 +197,7 @@ def test_breached_units_is_append_only_and_never_cleared():
 
 
 class TestFleetDialsAreUntouchedByTheFactLayerPlan:
-    """AC8, plan 2026-08-27-the-fact-layer-is-measured-on-the-one-hot-path.
 
-    `fl-core-04` arms its OWN dial (X) in
-    `coordinator_core/session/session_facts_budget.py` and must leave DR-325's
-    two fleet dials byte-identical. The plan never edits
-    `composition_budget.py`; this assertion is the mechanical proof, and it
-    lives here rather than there for the same reason X does — the check
-    belongs beside the constants it pins, not beside the new dial.
-    """
-
-    #: DR-325's armed values, docs/research/2026-08-18-composition-budget-armed-values.md.
     PRE_PLAN_FLEET_AGGREGATE_ELAPSED_BUDGET = 1200.0
     PRE_PLAN_FLEET_MAX_INVOCATIONS = 110
 
@@ -240,8 +212,6 @@ class TestFleetDialsAreUntouchedByTheFactLayerPlan:
         assert FLEET_MAX_INVOCATIONS == self.PRE_PLAN_FLEET_MAX_INVOCATIONS
 
     def test_the_fact_layer_dial_is_a_separate_constant_in_a_separate_module(self):
-        """X must not have been added beside the fleet dials — the whole
-        argument of the plan's "Where X lives" section."""
         from coordinator_core import composition_budget
         from coordinator_core.session import session_facts_budget
 

@@ -69,10 +69,7 @@ try:
         DESTINATION_PUBLISH,
     )
 except ImportError:
-    # C2 (destination-axis constants on _write_bump_message) has not landed
     # yet in this working tree -- see module docstring, "EXPECTED RED
-    # PENDING {C3, C4, C5}". Sentinels keep this file collectible; the
-    # actual assertions below (not this import) are what carries the red.
     DESTINATION_PUBLISH = "__DESTINATION_PUBLISH_NOT_YET_LANDED__"
     DESTINATION_FOREIGN = "__DESTINATION_FOREIGN_NOT_YET_LANDED__"
 
@@ -81,8 +78,6 @@ from coordinator_core.bash_guards.tests.test_bump_outside_repo_write import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -91,15 +86,7 @@ pytestmark = [
 _MISSING = object()
 
 
-
 def _posix(p) -> str:
-    """POSIX-slash string form of a path for embedding in a bash
-    command-line string -- the tokenizer under test parses commands as
-    real bash/POSIX-sh syntax (backslash is an escape character), so a
-    native Windows ``str(Path)`` (backslash-separated) embedded directly
-    into a ``cmd`` string is not a realistic Bash-tool payload and
-    silently corrupts the path once tokenized. Accepts a ``Path`` or a
-    plain ``str``."""
     return p.as_posix() if hasattr(p, "as_posix") else str(p).replace("\\", "/")
 
 
@@ -120,11 +107,6 @@ def _init_repo(tmp_path: Path, name: str) -> Path:
 
 
 def _write_registry(reg_dir: Path, mirror_path: str | None = None, mirror_owner: str = "some-owner-em") -> None:
-    """Merged-registry fixture for `_all_publish_destinations`/
-    `target_is_publish_destination` (C1) -- a real `[publish.mirrors.<key>]`
-    nested table, not the flat-string shape that would silently fail to
-    parse as a bracket table (per this plan's own D4/`_memo_resolver`
-    sibling tests' documented trap)."""
     reg_dir.mkdir(parents=True, exist_ok=True)
     if mirror_path is None:
         return
@@ -138,11 +120,6 @@ def _write_registry(reg_dir: Path, mirror_path: str | None = None, mirror_owner:
 
 
 def _spy_render(captured: list) -> callable:
-    """Replaces `render_bump_message` at a guard module's own call site so
-    this test can inspect the kwargs each front-end actually passed --
-    specifically the not-yet-existing `destination_class` kwarg C2/C4/C5 add
-    -- without depending on the rendered message TEXT, which C2 is free to
-    keep rewriting independently of this axis."""
 
     def _fake(**kwargs):
         captured.append(kwargs)
@@ -152,9 +129,6 @@ def _spy_render(captured: list) -> callable:
 
 
 def _build_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str) -> dict:
-    """One shared row-builder for the parametrized table below. `kind` is one
-    of the three classes in the plan's own Design table:
-    `publish_destination`, `foreign_source`, `outside_any_repo`."""
     home = tmp_path / "home"
     home.mkdir()
     anchor = _init_repo(tmp_path, "anchor")
@@ -194,12 +168,6 @@ def _build_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str) -> d
     }
 
 
-# ---------------------------------------------------------------------------
-# AC8 -- one shared table, identical destination class through both
-# front-ends. AC9 -- bump_applies() asserted True before any verdict.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize("kind", ["publish_destination", "foreign_source", "outside_any_repo"])
 def test_ac8_bash_and_tool_surfaces_agree_on_destination_class(tmp_path, monkeypatch, kind):
     case = _build_case(tmp_path, monkeypatch, kind)
@@ -208,11 +176,8 @@ def test_ac8_bash_and_tool_surfaces_agree_on_destination_class(tmp_path, monkeyp
     target_file = case["target_file"]
     session_id = case["session_id"]
 
-    # AC9 -- non-negotiable precondition before asserting any guard verdict.
     assert applicability.bump_applies(session_id, cwd=str(anchor)) is True
 
-    # Fixture sanity: C1's own pinned classifier agrees with this row's
-    # intended shape before any guard is exercised.
     assert applicability.target_is_publish_destination(str(target_repo)) == (
         kind == "publish_destination"
     )
@@ -242,11 +207,6 @@ def test_ac8_bash_and_tool_surfaces_agree_on_destination_class(tmp_path, monkeyp
     assert bash_result is not None, f"{kind}: Bash-surface guard did not bump for {target_repo}"
     assert tool_result is not None, f"{kind}: tool-surface guard did not bump for {target_repo}"
 
-    # Fire-vs-no-fire alone (the `is not None` pair above) would not have
-    # caught the envelope-class divergence `b280d1116` fixed -- one surface
-    # composing a real `permissionDecision: "deny"` while the other only
-    # returned `additionalContext`. Compare the actual decision value so the
-    # next divergence of this class fails a test, not a live incident.
     bash_decision = bash_result["hookSpecificOutput"]["permissionDecision"]
     tool_decision = tool_result["hookSpecificOutput"]["permissionDecision"]
     assert bash_decision == tool_decision, (
@@ -281,26 +241,10 @@ def test_ac8_bash_and_tool_surfaces_agree_on_destination_class(tmp_path, monkeyp
     )
 
 
-# ---------------------------------------------------------------------------
 # Lessons-outbox parity -- a SEPARATE, focused test rather than a fourth
-# `_build_case` row. `_build_case`'s shared assertions (`bash_result is not
-# None`, `tool_result is not None`) assume every row BUMPS; the
-# lessons-outbox case is the opposite shape (both surfaces must stay
-# SILENT), so contorting the shared row-builder/assertion block to also
-# express "silent" would blur, not share, the fixture. See dispatch brief:
-# "if it does not [accommodate cleanly], add a separate focused parity test
-# rather than contorting the builder."
-# ---------------------------------------------------------------------------
 
 
 def test_lessons_outbox_write_silent_on_both_surfaces(tmp_path, monkeypatch):
-    """Both surfaces stay SILENT on a foreign-repo `state/lessons-outbox/`
-    write (the false-positive `coordinator-lesson-promote` fix, mirrored
-    from the tool surface's `_target_is_lessons_outbox_write` onto the Bash
-    surface's own `bump_foreign_repo_write._target_is_lessons_outbox_write`
-    -- the parity gap named in
-    `state/improvement-queue/2026-08-03-bash-surface-write-bump-does-not-
-    exempt-c1eb1f482b0f.yaml`)."""
     home = tmp_path / "home"
     home.mkdir()
     anchor = _init_repo(tmp_path, "anchor")
@@ -338,29 +282,10 @@ def test_lessons_outbox_write_silent_on_both_surfaces(tmp_path, monkeypatch):
     assert tool_result is None, "tool surface bumped on a foreign-repo state/lessons-outbox write"
 
 
-# ---------------------------------------------------------------------------
-# AC7 -- the `~/.claude` destination class C1 (docs/plans/2026-08-10-carve-
-# claude-out-and-close-the-backslash-bypass.md) introduced via
 # `target_is_under_claude_home`. A SEPARATE, focused test rather than a
-# fourth `_build_case` row, for the same reason the lessons-outbox case
-# above is separate: every `_build_case` row assumes the target BUMPS, but
-# `~/.claude` is the opposite shape -- both surfaces must stay SILENT (no
-# `permissionDecision` envelope at all), so there is no `destination_class`
-# value to compare the way AC8 compares one. The parity this test enforces
-# is therefore "identical silence, not merely `is not None`" -- both
-# surfaces are exercised against the SAME `~/.claude` target and BOTH must
-# return `None`, which is the same substance AC8's cross-surface comparison
-# has for a class that fires (a divergence here would show up as one
-# surface returning an envelope and the other staying silent, exactly the
-# shape `b280d1116` fixed on the firing classes).
-# ---------------------------------------------------------------------------
 
 
 def _init_claude_home_repo(home: Path) -> Path:
-    """`~/.claude` as a REAL git checkout, mirroring `target_is_under_claude_
-    home`'s own docstring ("`~/.claude` IS a real git checkout on this
-    machine") -- a fixture that made `~/.claude` a bare directory would not
-    exercise the unconditional-on-git-dir-state code path C1 added."""
     claude_home = home / ".claude"
     claude_home.mkdir()
     _git(str(claude_home), "init", "-q")
@@ -373,10 +298,6 @@ def _init_claude_home_repo(home: Path) -> Path:
 
 
 def test_claude_home_write_silent_on_both_surfaces(tmp_path, monkeypatch):
-    """AC7: the `~/.claude` destination class stays SILENT on both the
-    foreign-repo Bash guard and the tool guard -- `~/.claude` is a real git
-    checkout, so a write into it is otherwise indistinguishable from an
-    ordinary foreign-sibling-repo write except for C1's carve-out."""
     home = tmp_path / "home"
     home.mkdir()
     anchor = _init_repo(tmp_path, "anchor")
@@ -392,7 +313,6 @@ def test_claude_home_write_silent_on_both_surfaces(tmp_path, monkeypatch):
     session_start.write_session_start_record(session_id, launch_cwd=str(anchor))
 
     assert applicability.bump_applies(session_id, cwd=str(anchor)) is True
-    # Fixture sanity, matching the AC8 rows' own pre-guard sanity check.
     assert applicability.target_is_under_claude_home(str(target_file)) is True
 
     cmd = f"git -C {_posix(claude_home)} commit --allow-empty -m x"
@@ -460,9 +380,6 @@ def test_claude_home_env_call_site_consistency_under_injected_home(tmp_path, mon
     session_start.write_session_start_record(session_id, launch_cwd=str(anchor))
 
     # HOME injected to a DIFFERENT directory than the one `claude_home` was
-    # built under -- `target_is_under_claude_home` must now resolve `False`
-    # everywhere, since none of the three checkers' `os.environ` disagrees
-    # with any other's.
     monkeypatch.setenv("HOME", str(other_home))
 
     assert applicability.bump_applies(session_id, cwd=str(anchor)) is True
@@ -479,10 +396,6 @@ def test_claude_home_env_call_site_consistency_under_injected_home(tmp_path, mon
     }
     tool_result = tool_guard.check(payload)
 
-    # Both surfaces must now BUMP (the ~/.claude exemption no longer applies
-    # against the injected HOME) -- and, per this test's own docstring, they
-    # do: no observable disagreement from the env-threading inconsistency
-    # under the only injection seam available to a black-box caller.
     assert bash_result is not None, (
         "foreign-repo Bash guard stayed silent despite the injected HOME no "
         "longer matching claude_home -- would mask a cross-surface "

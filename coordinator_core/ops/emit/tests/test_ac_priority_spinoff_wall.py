@@ -31,8 +31,6 @@ import pytest
 
 from coordinator_core.ops.emit.priority_resolve import resolve_priority
 
-# _write_node/_ledger extracted to conftest.py
-# (shared across the five priority-ledger test modules that used a byte-for-byte copy).
 from coordinator_core.ops.emit.tests.conftest import _ledger, _write_node  # noqa: F401
 
 
@@ -41,14 +39,6 @@ def node_dir(tmp_path: Path) -> Path:
     d = tmp_path / "state" / "handoffs"
     d.mkdir(parents=True)
     return d
-
-
-# ---------------------------------------------------------------------------
-# AC5, case 1 — a spinoff carrying BOTH forked_from AND origin_handoff
-# pointing at an explicit-urgent parent must resolve to UNSET, not urgent.
-# predecessor: none is the spinoff shape; both lineage pointers are
-# non-edges for this walk.
-# ---------------------------------------------------------------------------
 
 
 def test_spinoff_with_forked_from_and_origin_handoff_does_not_inherit(node_dir: Path):
@@ -70,14 +60,6 @@ def test_spinoff_with_forked_from_and_origin_handoff_does_not_inherit(node_dir: 
     assert result["effective_priority"] != "urgent"
 
 
-# ---------------------------------------------------------------------------
-# AC5, case 2 — the spinoff's own value is unset AND it has a forked_from
-# parent carrying an explicit value; it must not resolve THROUGH itself to
-# that parent either (guards against a resolver that treats forked_from as
-# a fallback only when predecessor is absent, rather than never).
-# ---------------------------------------------------------------------------
-
-
 def test_spinoff_unset_does_not_resolve_through_forked_from_parent(node_dir: Path):
     _write_node(node_dir, "parent2.md", handoff_id="parent2_id", predecessor=None)
     spinoff_path = _write_node(
@@ -95,15 +77,6 @@ def test_spinoff_unset_does_not_resolve_through_forked_from_parent(node_dir: Pat
     assert result["effective_priority"] is None
     assert result["origin"] == "none"
     assert result["source_id"] is None
-
-
-# ---------------------------------------------------------------------------
-# AC5, case 3 — parametrized over EVERY non-edge lineage field named in the
-# resolver's negative-spec. A node whose ONLY path to an explicit-priority
-# ancestor is via one of these fields resolves to unset. Parametrizing means
-# a newly-added lineage edge someone later wires into the walk trips this
-# test immediately.
-# ---------------------------------------------------------------------------
 
 
 NON_EDGE_FIELDS = [
@@ -135,15 +108,6 @@ def test_non_edge_lineage_field_is_never_traversed(node_dir: Path, non_edge_fiel
     assert result == {"effective_priority": None, "origin": "none", "source_id": None}
 
 
-# ---------------------------------------------------------------------------
-# AC10 — resolution is unchanged when an explicit ancestor archives. The
-# resolver reads live AND archived ledger entries precisely so that an
-# archival git mv of the ancestor's .md file (and/or its ledger entry, when
-# ledger entries themselves get archived) does not silently drop a live
-# descendant's inherited priority.
-# ---------------------------------------------------------------------------
-
-
 def test_resolution_unchanged_when_explicit_ancestor_archives(tmp_path: Path):
     state_root = tmp_path / "state"
     live_handoffs = state_root / "handoffs"
@@ -159,17 +123,10 @@ def test_resolution_unchanged_when_explicit_ancestor_archives(tmp_path: Path):
     before = resolve_priority(str(descendant_path), "descendant_id", ledger_entries=ledger)
     assert before == {"effective_priority": "high", "origin": "inherited", "source_id": "ancestor_id"}
 
-    # Archive the ancestor: move its .md file to archive/handoffs/<YYYY-MM>/,
-    # mirroring the real archival git-mv shape. The descendant stays live.
     archive_dir = tmp_path / "archive" / "handoffs" / "2026-06"
     archive_dir.mkdir(parents=True)
     shutil.move(str(live_handoffs / "ancestor.md"), str(archive_dir / "ancestor.md"))
 
-    # descendant.md's own predecessor field still names "ancestor.md" by
-    # relative reference; dag.walk_forward / resolve_target must find it in
-    # its new archived location for this to remain "unchanged" resolution
-    # (that live+archive union is exactly what this AC guards). The ledger
-    # entry itself is untouched — it was never file-colocated with the .md.
     after = resolve_priority(str(descendant_path), "descendant_id", ledger_entries=ledger)
 
     assert after == before

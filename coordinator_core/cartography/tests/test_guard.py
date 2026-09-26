@@ -1,22 +1,3 @@
-"""
-coordinator_core.cartography.tests.test_guard
-
-Unit tests for coordinator_core.cartography._guard.path_guard — the shared
-target_root containment helper every cartography primitive (tree,
-file_index, churn, symbols, edges) imports before touching a
-caller-supplied path.
-
-Coverage:
-  (a) accepts a relative path that resolves inside target_root
-  (b) accepts an absolute path that resolves inside target_root
-  (c) rejects a relative '../' escape outside target_root
-  (d) rejects an absolute path outside target_root
-  (e) symlink escape is caught (resolves outside target_root -> raises)
-  (f) nested subdirectory candidate is accepted
-
-Spec backlink: pln-claude-klabauter-cartography-substrate-a-26eb2e
-§ chunk C2 (package foundation + containment helper).
-"""
 
 from __future__ import annotations
 

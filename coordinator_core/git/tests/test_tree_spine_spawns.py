@@ -1,11 +1,3 @@
-"""coordinator_core.git.tests.test_tree_spine_spawns -- the tree-spine
-legs that shell out to real git.
-
-SPLIT OUT 2026-08-27. `_git_out` spawns, and a spawn site in a non-test
-function forces the module-level tier form (spawn ratchet Rule 4 -- a marker
-on a helper is inert). Keeping it beside the pure in-process tests would
-have tiered those off the fast tier too, to declare these.
-"""
 from __future__ import annotations
 
 import subprocess
@@ -38,9 +30,6 @@ def test_absent_is_a_distinct_sentinel_object():
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_write_tree_level_matches_git_mktree(tmp_path):
-    """Real `git mktree` is the assertion here (sha-identity), not a
-    convenience -- the oracle this test checks against IS a git spawn.
-    """
     subprocess.run(
         ["git", "init", "-q"],
         cwd=tmp_path,

@@ -34,10 +34,6 @@ _IDENTITY = {"agent_id": "deadbeef0123", "agent_type": "coordinator:executor"}
 
 @pytest.fixture(autouse=True)
 def _wire_subagent_identity(monkeypatch):
-    """Seam-patch identity resolution so the DENY path fires without a real
-    git repo / back-pointer chain on disk -- the pattern each guard's own
-    test file already uses.
-    """
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/git-root")
     monkeypatch.setattr(
         guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123"
@@ -60,10 +56,6 @@ def _verdict(command: str, tool_name: str) -> str:
     return "deny" if guard.check(payload) is not None else "allow"
 
 
-#: Every form here is a real worktree-destroying invocation. Each is asserted
-#: to deny under POSIX FIRST (the anchor), then asserted equal across dialects
-#: -- a bare ``bool(ps) == bool(posix)`` would pass with both allowing, which
-#: is precisely the regression this file pins.
 _DESTRUCTIVE = [
     "git checkout -- .",
     "git checkout -- path/to/file",
@@ -76,7 +68,6 @@ _DESTRUCTIVE = [
     "git stash clear",
 ]
 
-#: Benign, and the last two specifically route through ``tokens is None``.
 _BENIGN = [
     "git status",
     "git log --oneline",
@@ -84,8 +75,6 @@ _BENIGN = [
     "echo hello",
 ]
 
-#: Hazard-documenting prose -- the doe-claude shape the cohort's Problem
-#: section names. Must NOT deny: the command is quoted, not issued.
 _PROSE = [
     'Write-Output "do not run git reset --hard here"',
     "echo 'git checkout -- . is destructive'",
@@ -112,14 +101,6 @@ def test_hazard_documenting_prose_does_not_deny(command):
 
 
 def test_pathspec_separator_actually_takes_the_parse_failure_route():
-    """Pins the PREMISE, not just the verdict.
-
-    If a future tree-sitter-pwsh upgrade starts parsing `--`, the parity
-    assertions above would still pass while silently no longer exercising
-    the parse-failure route -- and the fail-open hole could return unnoticed
-    on some other unparseable form. This test fails loudly at that point so
-    the coverage gap is visible rather than silent.
-    """
     assert (
         resolve_segments_for_dialect(
             "git checkout -- .", Dialect.POWERSHELL, guard_name="test"
@@ -129,6 +110,5 @@ def test_pathspec_separator_actually_takes_the_parse_failure_route():
 
 
 def test_parse_failure_route_denies_directly():
-    """The scanner itself denies on a hit -- not merely the whole guard."""
     assert guard._evaluate_legacy_powershell_git("git checkout -- .") is not None
     assert guard._evaluate_legacy_powershell_git("git status") is None

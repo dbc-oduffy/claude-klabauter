@@ -1,40 +1,3 @@
-"""
-test_coordinator_lesson_promote.py — smoke tests for the coordinator-lesson-promote CLI.
-
-Spec backlink: docs/plans/2026-06-15-universal-lesson-routing-mechanical-capture.md § C1
-
-Tests:
-  1. --help exits 0 with non-empty stdout.
-  2. Missing --title → exit non-zero, stderr names the missing field.
-  3. Missing --change-kind → exit non-zero, stderr names the missing field.
-  4. Invalid --change-kind value → exit non-zero, stderr names valid enum values.
-  5. Valid invocation → exit 0, exactly one YAML file produced in temp outbox,
-     file parseable as YAML with all required schema fields present.
-  6. Roundtrip: write entry, read YAML back, all field values match what was passed.
-  7. Schema missing → fail loud, non-zero exit, stderr names the schema problem.
-  8. Multi-line --body round-trips byte-exact (|- strip chomping).
-  9. --target-wiki not in the central wiki inventory → exit 2, stderr offers
-     closest-match suggestions (design-as-offers), nothing written.
-  10. --allow-new-wiki bypasses the inventory check for a genuine new-wiki target.
-  11. --target-wiki 'unknown' bypasses the inventory check (schema sentinel).
-  12. --target-wiki normalization: bare name / .md-suffixed / already-canonical all
-      collapse to the identical 'docs/wiki/<name>.md' string in the written YAML.
-  13. DoE-claude root unresolvable during --target-wiki validation → exit 3,
-      remediation naming `machine-local set repos.doe_claude`, nothing written.
-  14. DoE-claude root unresolvable at write time (validation bypassed via
-      'unknown') → exit 3 via the legacy_fn path, nothing written.
-  15. change_kind: skill-edit with a SKILL.md --target-wiki round-trips
-      byte-identically (no docs/wiki/ collapse, no inventory validation) and
-      exits 0 — regression test for the A7/A9 non-wiki-change_kind defect.
-  16. change_kind: wiki-append with a bogus --target-wiki still fails loud
-      (exit 2, closest-match suggestions) — confirms wiki-targeting kinds
-      keep their full validation after the change_kind gate was added.
-  17. --change-kind wiki-append --allow-new-wiki → exit 2 at argparse time
-      (mismatch rejected before the inventory check runs) — --allow-new-wiki
-      is only sound for a genuine wiki-new promotion.
-
-Run with: python3 -m pytest coordinator/bin/test_coordinator_lesson_promote.py
-"""
 
 from __future__ import annotations
 
@@ -46,7 +9,7 @@ import tempfile
 import pytest
 
 try:
-    import yaml as _yaml  # PyYAML — available on most coordinator installs
+    import yaml as _yaml
     _YAML_AVAILABLE = True
 except ImportError:
     _yaml = None  # type: ignore[assignment]
@@ -54,23 +17,12 @@ except ImportError:
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-# ---------------------------------------------------------------------------
-# Test infrastructure
-# ---------------------------------------------------------------------------
-
 
 def _script_path() -> str:
-    """Return the absolute path to coordinator-lesson-promote."""
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "coordinator-lesson-promote.py")
 
 
 def _python() -> str:
-    """Return the Python interpreter to use for subprocess invocations.
-
-    Uses sys.executable — the interpreter running this test script is always a
-    valid Python interpreter. This is the Windows-compatible zero-probe pattern
-    (avoids FileNotFoundError from subprocess probing python3/python on Windows).
-    """
     return sys.executable
 
 
@@ -94,8 +46,6 @@ def _run_cli(args: list[str], env: dict[str, str | None] | None = None) -> subpr
                 effective_env.pop(key, None)
             else:
                 effective_env[key] = value
-    # cli_shared refuses an isolation root under the temp dir that does not exist
-    # (the swept-tmp_path shape), so a live fixture's root must exist up front.
     outbox = effective_env.get("LESSON_PROMOTE_OUTBOX_ROOT")
     if outbox:
         os.makedirs(outbox, exist_ok=True)
@@ -124,7 +74,6 @@ def _wiki_root_with(tmpdir: str, *names: str) -> str:
 
 
 def _parse_yaml_file(path: str) -> dict:
-    """Parse a YAML file. Falls back to a minimal line-parser if PyYAML unavailable."""
     try:
         with open(path, encoding="utf-8") as fh:
             content = fh.read()
@@ -135,24 +84,15 @@ def _parse_yaml_file(path: str) -> dict:
                     return parsed
             except Exception:
                 pass
-        # Minimal fallback: parse simple key: value lines between --- delimiters.
         return _minimal_yaml_parse(content)
     except OSError as exc:
         raise RuntimeError(f"could not read YAML file {path}: {exc}") from exc
 
 
 def _minimal_yaml_parse(content: str) -> dict:
-    """Minimal YAML frontmatter parser for simple key: value lines.
-
-    Handles:
-    - Scalar values (quoted and unquoted)
-    - Block scalars (|) — collects lines until next key or end marker
-    Sufficient for the coordinator-lesson-promote output schema.
-    """
     result: dict = {}
     lines = content.splitlines()
     i = 0
-    # Skip opening ---
     while i < len(lines) and lines[i].strip() == "---":
         i += 1
 
@@ -165,10 +105,6 @@ def _minimal_yaml_parse(content: str) -> dict:
             key = key.strip()
             value = rest.strip()
             if value in ("|", "|-"):
-                # Block scalar — collect subsequent indented lines.
-                # Extended to handle "|-" (strip
-                # chomping) in addition to "|" (clip chomping). The .rstrip("\n") already
-                # normalises both — behavior is identical for the test's verification needs.
                 block_lines = []
                 i += 1
                 while i < len(lines) and (lines[i].startswith("  ") or lines[i].strip() == ""):
@@ -177,7 +113,6 @@ def _minimal_yaml_parse(content: str) -> dict:
                 result[key] = "\n".join(block_lines).rstrip("\n")
                 continue
             elif value.startswith('"'):
-                # Quoted string — unescape basic escapes.
                 inner = value[1:]
                 if inner.endswith('"'):
                     inner = inner[:-1]
@@ -188,10 +123,6 @@ def _minimal_yaml_parse(content: str) -> dict:
     return result
 
 
-# ---------------------------------------------------------------------------
-# Test 1 — --help exits 0 with non-empty stdout
-# ---------------------------------------------------------------------------
-
 def test_help_exits_zero() -> None:
     name = "Test 1 — --help exits 0 with non-empty stdout"
     result = _run_cli(["--help"])
@@ -200,10 +131,6 @@ def test_help_exits_zero() -> None:
     if not result.stdout.strip():
         raise AssertionError(f"{name}: " + ("--help produced empty stdout"))
 
-
-# ---------------------------------------------------------------------------
-# Test 2 — Missing --title → exit non-zero, stderr names the missing field
-# ---------------------------------------------------------------------------
 
 def test_missing_title_fails() -> None:
     name = "Test 2 — missing --title → exit non-zero, stderr names field"
@@ -223,10 +150,6 @@ def test_missing_title_fails() -> None:
         raise AssertionError(f"{name}: " + (f"error output does not name 'title'. stderr: {result.stderr!r}"))
 
 
-# ---------------------------------------------------------------------------
-# Test 3 — Missing --change-kind → exit non-zero, stderr names the missing field
-# ---------------------------------------------------------------------------
-
 def test_missing_change_kind_fails() -> None:
     name = "Test 3 — missing --change-kind → exit non-zero, stderr names field"
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -245,10 +168,6 @@ def test_missing_change_kind_fails() -> None:
         raise AssertionError(f"{name}: " + (f"error output does not name 'change-kind'. stderr: {result.stderr!r}"))
 
 
-# ---------------------------------------------------------------------------
-# Test 4 — Invalid --change-kind value → exit non-zero, stderr names valid values
-# ---------------------------------------------------------------------------
-
 def test_invalid_change_kind_fails() -> None:
     name = "Test 4 — invalid --change-kind → exit non-zero, stderr names valid enum values"
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -264,14 +183,9 @@ def test_invalid_change_kind_fails() -> None:
     if result.returncode == 0:
         raise AssertionError(f"{name}: " + ("expected non-zero exit for invalid --change-kind; got 0"))
     combined = result.stdout + result.stderr
-    # stderr should name at least one valid value to serve as a hint.
     if "doctrine-edit" not in combined:
         raise AssertionError(f"{name}: " + (f"error output should name valid enum values (e.g. 'doctrine-edit'). stderr: {result.stderr!r}"))
 
-
-# ---------------------------------------------------------------------------
-# Test 5 — Valid invocation produces exactly one YAML file with required fields
-# ---------------------------------------------------------------------------
 
 _REQUIRED_SCHEMA_FIELDS = ("id", "created", "from_repo", "title", "body", "change_kind", "target_wiki")
 
@@ -296,7 +210,6 @@ def test_valid_invocation_writes_yaml() -> None:
         if result.returncode != 0:
             raise AssertionError(f"{name}: " + (f"CLI exited {result.returncode}: {result.stderr!r}"))
 
-        # Exactly one YAML file must exist.
         if not os.path.isdir(outbox):
             raise AssertionError(f"{name}: " + (f"outbox directory not created: {outbox}"))
 
@@ -314,10 +227,6 @@ def test_valid_invocation_writes_yaml() -> None:
         if missing:
             raise AssertionError(f"{name}: " + (f"YAML missing required fields: {missing}. Parsed: {parsed}"))
 
-
-# ---------------------------------------------------------------------------
-# Test 6 — Roundtrip: field values match what was passed
-# ---------------------------------------------------------------------------
 
 def test_roundtrip_field_values() -> None:
     name = "Test 6 — roundtrip: all passed field values preserved in YAML"
@@ -358,7 +267,6 @@ def test_roundtrip_field_values() -> None:
         except RuntimeError as exc:
             raise AssertionError(f"{name}: " + (f"YAML parse error: {exc}"))
 
-        # Verify all passed fields round-trip exactly.
         checks = [
             ("title", title),
             ("body", body),
@@ -371,25 +279,18 @@ def test_roundtrip_field_values() -> None:
             if got != expected:
                 raise AssertionError(f"{name}: " + (f"field {field!r}: expected {expected!r}, got {got!r}"))
 
-        # id must be a non-empty UUID-shaped string.
         entry_id = parsed.get("id", "")
         if not entry_id or len(entry_id) < 32:
             raise AssertionError(f"{name}: " + (f"id field looks wrong: {entry_id!r}"))
 
-        # created must be a non-empty ISO timestamp.
         created = parsed.get("created", "")
         if not created or "T" not in created:
             raise AssertionError(f"{name}: " + (f"created field looks wrong: {created!r}"))
 
-        # from_repo must be non-empty.
         from_repo = parsed.get("from_repo", "")
         if not from_repo:
             raise AssertionError(f"{name}: " + ("from_repo field is empty"))
 
-
-# ---------------------------------------------------------------------------
-# Test 7 — schema missing → fail loud with non-zero exit and remediation in stderr
-# ---------------------------------------------------------------------------
 
 def test_schema_missing_fails_loud() -> None:
     """Test 7 — bad CLAUDE_KLABAUTER_ROOT (native schema seam unreachable) causes fail-loud exit.
@@ -422,37 +323,18 @@ def test_schema_missing_fails_loud() -> None:
         )
     if result.returncode == 0:
         raise AssertionError(f"{name}: " + ("expected non-zero exit when CLAUDE_KLABAUTER_ROOT has no coordinator_core; got 0"))
-    # The engine-root gate now rejects the bad root before schema.describe runs;
-    # either refusal names the cause.
     combined = (result.stdout + result.stderr).lower()
     if "schema" not in combined and "not a valid claude-klabauter checkout" not in combined:
         raise AssertionError(f"{name}: " + (f"error output names neither the schema nor the engine root. stderr: {result.stderr!r}"))
 
 
-# ---------------------------------------------------------------------------
-# Test 8 — multi-line --body round-trip: |- header, no trailing newline
-# ---------------------------------------------------------------------------
-
 def test_multiline_body_roundtrip() -> None:
-    """A multi-line body must round-trip
-    without a trailing newline. The _yaml_str fix changes | (clip chomping) to
-    |- (strip chomping) so 'First line.\\nSecond line.' parses back as exactly
-    that string with NO trailing newline added.
-
-    Carried through --body-file, not --body: the CLI refuses a --body value
-    containing a newline outright ("pass --body-file instead"), so --body-file
-    is the multi-line input it actually accepts and the only one this
-    assertion can be made through. The subject is unchanged — |- header, exact
-    bytes, no trailing newline.
-    """
     name = "Test 8 — multi-line body roundtrip: |- header, exact bytes, no trailing newline"
     body_input = "First line.\nSecond line."
 
     with tempfile.TemporaryDirectory() as tmpdir:
         outbox = os.path.join(tmpdir, "state", "lessons-outbox")
         wiki_root = _wiki_root_with(tmpdir, "roundtrip-multiline.md")
-        # newline="" so the exact bytes reach the CLI on Windows too — the
-        # trailing-newline assertion below is the whole point of this test.
         body_path = os.path.join(tmpdir, "body.md")
         with open(body_path, "w", encoding="utf-8", newline="") as fh:
             fh.write(body_input)
@@ -480,13 +362,11 @@ def test_multiline_body_roundtrip() -> None:
 
         yaml_path = os.path.join(outbox, yaml_files[0])
 
-        # Check the raw YAML contains the |- header (strip chomping, not clip).
         with open(yaml_path, encoding="utf-8") as fh:
             raw = fh.read()
         if "body: |-" not in raw:
             raise AssertionError(f"{name}: " + (f"expected 'body: |-' (strip chomping) in raw YAML; got: {raw!r}"))
 
-        # Parse and verify no trailing newline (byte-fidelity guarantee).
         try:
             parsed = _parse_yaml_file(yaml_path)
         except RuntimeError as exc:
@@ -500,23 +380,8 @@ def test_multiline_body_roundtrip() -> None:
                 f"(trailing newline indicates | clip chomping instead of |- strip chomping)"))
 
 
-# ---------------------------------------------------------------------------
-# Shared env-forcing helpers for A7/A13 tests
-# ---------------------------------------------------------------------------
-
-# `_force_doe_unresolvable_env()` used to live here — DELETED 2026-08-25, and
-# deliberately not replaced. It claimed to make doe_root() raise
 # _DoeUnresolvable by unsetting DOE_ROOT/REPO_DOE_CLAUDE and pointing
 # MACHINE_LOCAL_IMPL at a nonexistent script. That was true when the registry
-# rung spawned the `machine-local` CLI; it reads the registry in-process now,
-# and five codename-free rungs have since been added below it. The helper
-# therefore returned an env in which doe_root() still resolved, and its only
-# caller was asserting exit 3 against a box where the CLI exited 2.
-#
-# Do not rebuild it by adding more env keys: the same ladder carries
-# coordinator_registry's import-time manifest bootstrap, so an env with every
-# rung dead fails at IMPORT with an install-integrity error, never reaching the
-# branch under test. Patch `doe_root` in-process instead — see Test 13/14.
 
 
 def _force_legacy_route_env(tmpdir: str) -> dict[str, str]:
@@ -529,10 +394,6 @@ def _force_legacy_route_env(tmpdir: str) -> dict[str, str]:
     os.makedirs(fake_root, exist_ok=True)
     return {"COORDINATOR_ENGINE_ROOT": fake_root}
 
-
-# ---------------------------------------------------------------------------
-# Test 9 — --target-wiki not in inventory → exit 2, offers closest matches
-# ---------------------------------------------------------------------------
 
 def test_target_wiki_not_in_inventory_fails() -> None:
     name = "Test 9 — --target-wiki not in inventory (wiki-new) → exit 2, stderr offers closest matches"
@@ -559,10 +420,6 @@ def test_target_wiki_not_in_inventory_fails() -> None:
         raise AssertionError(f"{name}: " + ("outbox has entries but validation should have rejected before any write"))
 
 
-# ---------------------------------------------------------------------------
-# Test 10 — --allow-new-wiki bypasses the inventory check
-# ---------------------------------------------------------------------------
-
 def test_allow_new_wiki_bypasses_validation() -> None:
     name = "Test 10 — --allow-new-wiki bypasses inventory check for a genuine new-wiki target"
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -587,10 +444,6 @@ def test_allow_new_wiki_bypasses_validation() -> None:
         if len(yaml_files) != 1:
             raise AssertionError(f"{name}: " + (f"expected exactly 1 YAML file; found {len(yaml_files)}: {yaml_files}"))
 
-
-# ---------------------------------------------------------------------------
-# Test 11 — --target-wiki 'unknown' bypasses the inventory check
-# ---------------------------------------------------------------------------
 
 def test_target_wiki_unknown_bypasses_validation() -> None:
     name = "Test 11 — --target-wiki 'unknown' bypasses inventory check (schema sentinel)"
@@ -622,10 +475,6 @@ def test_target_wiki_unknown_bypasses_validation() -> None:
         if parsed.get("target_wiki") != "unknown":
             raise AssertionError(f"{name}: " + (f"expected target_wiki 'unknown'; got {parsed.get('target_wiki')!r}"))
 
-
-# ---------------------------------------------------------------------------
-# Test 12 — target_wiki normalization: all equivalent input forms collapse
-# ---------------------------------------------------------------------------
 
 def test_target_wiki_normalization_collapses_equivalent_forms() -> None:
     name = "Test 12 — target_wiki normalization: bare/.md/canonical forms all collapse identically"
@@ -661,10 +510,6 @@ def test_target_wiki_normalization_collapses_equivalent_forms() -> None:
             if got != expected:
                 raise AssertionError(f"{name}: " + (f"variant {variant!r}: expected target_wiki {expected!r}; got {got!r}"))
 
-
-# ---------------------------------------------------------------------------
-# Test 13 — DoE root unresolvable during --target-wiki validation → exit 3
-# ---------------------------------------------------------------------------
 
 def test_doe_unresolvable_during_validation_exits_three() -> None:
     """Test 13 — DoE root unresolvable during --target-wiki validation → exit 3.
@@ -735,10 +580,6 @@ def test_doe_unresolvable_during_validation_exits_three() -> None:
             raise AssertionError(f"{name}: " + ("outbox has entries but the write should have been skipped"))
 
 
-# ---------------------------------------------------------------------------
-# Test 14 — DoE root unresolvable at write time (validation bypassed) → exit 3
-# ---------------------------------------------------------------------------
-
 def test_doe_unresolvable_at_write_time_exits_three() -> None:
     """Test 14 — DoE root unresolvable at write time (validation bypassed via 'unknown') → exit 3.
 
@@ -776,7 +617,6 @@ def test_doe_unresolvable_at_write_time_exits_three() -> None:
     loader.exec_module(cli_mod)
 
     def _fake_route(op, params, repo_root, legacy_fn):
-        # Simulate seam-absent for queue.promote specifically: call legacy_fn directly.
         return legacy_fn()
 
     captured_err = _io.StringIO()
@@ -858,11 +698,6 @@ def test_native_route_carries_the_validated_doe_root() -> None:
     assert seen.get("doe_root") == "/doe/from/env"
 
 
-# ---------------------------------------------------------------------------
-# Test 15 — skill-edit with a SKILL.md target_wiki round-trips unchanged, no
-# inventory validation (A7/A9 non-wiki change_kind regression)
-# ---------------------------------------------------------------------------
-
 def test_skill_edit_target_wiki_bypasses_wiki_normalization() -> None:
     name = (
         "Test 15 — skill-edit + SKILL.md --target-wiki round-trips byte-identically, "
@@ -871,10 +706,6 @@ def test_skill_edit_target_wiki_bypasses_wiki_normalization() -> None:
     target = "coordinator/skills/pickup/SKILL.md"
     with tempfile.TemporaryDirectory() as tmpdir:
         outbox = os.path.join(tmpdir, "state", "lessons-outbox")
-        # Deliberately empty inventory (and no SKILL.md name in it) — if the CLI
-        # regressed to validating this target_wiki against the wiki inventory, this
-        # would fail either with a corrupted 'docs/wiki/coordinator/skills/pickup/
-        # SKILL.md' value or an inventory-miss exit 2. Neither should happen.
         wiki_root = _wiki_root_with(tmpdir, "unrelated.md")
         result = _run_cli(
             [
@@ -904,11 +735,6 @@ def test_skill_edit_target_wiki_bypasses_wiki_normalization() -> None:
                 "(a docs/wiki/-prefixed value here means the change_kind gate regressed)"))
 
 
-# ---------------------------------------------------------------------------
-# Test 16 — wiki-append with a bogus target_wiki still fails loud (validation
-# retained for wiki-targeting change_kinds after the change_kind gate)
-# ---------------------------------------------------------------------------
-
 def test_wiki_append_bogus_target_still_validates() -> None:
     name = (
         "Test 16 — wiki-append + bogus --target-wiki → exit 2, closest-match "
@@ -936,10 +762,6 @@ def test_wiki_append_bogus_target_still_validates() -> None:
     if os.path.isdir(outbox) and os.listdir(outbox):
         raise AssertionError(f"{name}: " + ("outbox has entries but validation should have rejected before any write"))
 
-
-# ---------------------------------------------------------------------------
-# Test 17 — --allow-new-wiki rejected for change_kind != wiki-new (Finding 2)
-# ---------------------------------------------------------------------------
 
 def test_allow_new_wiki_rejected_for_wiki_append() -> None:
     name = (

@@ -1,22 +1,4 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
-"""bin/tests/test_workweek_complete_advisories.py
-
-Purpose: unit tests for coordinator/bin/workweek-complete-advisories.py — the
-M3 chunk WWC-1 port of genuine bash-logic fences out of DoE-claude's
-`coordinator/commands/workweek-complete.md` (tripwire fire-log summarization,
-improvement-queue depth counting, and cruft-sweep last-run parsing). A fourth,
-`ubt-unresolved`, was drained 2026-09-06 with the Step 4c gate it served --
-DR-372/DR-374 deleted its scanner and the requirement is discharged by the
-owning UE repo's own ceremonies.
-
-Coverage:
-  test_tripwire_absent_file_returns_none
-  test_tripwire_summary_counts_and_recurring_agents
-  test_improvement_queue_depth_absent_dir
-  test_improvement_queue_depth_counts_and_oldest
-  test_cruft_sweep_last_run_absent
-  test_cruft_sweep_last_run_parses_pipe_delimited_log
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -30,7 +12,6 @@ _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
 def _load_module():
-    """Load workweek-complete-advisories.py by file path (hyphenated name bypass)."""
     spec = importlib.util.spec_from_file_location(
         "workweek_complete_advisories",
         _BIN_DIR / "workweek-complete-advisories.py",
@@ -42,11 +23,6 @@ def _load_module():
 
 
 _mod = _load_module()
-
-
-# ---------------------------------------------------------------------------
-# tripwire-summary — Step 3.5 oracle fence (workweek-complete.md:608-617)
-# ---------------------------------------------------------------------------
 
 
 def test_tripwire_absent_file_returns_none(tmp_path: Path) -> None:
@@ -69,7 +45,6 @@ def test_tripwire_summary_counts_and_recurring_agents(tmp_path: Path) -> None:
     assert summary is not None
     assert summary["total_rows"] == 4
     assert summary["fire_type_counts"] == {"em-side": 3, "agent-side": 1}
-    # agent-a fired 3 times (>=3 threshold); agent-b fired once (excluded).
     assert summary["recurring_agents"] == [("agent-a", 3)]
 
 
@@ -79,11 +54,6 @@ def test_tripwire_cmd_prints_absent_message(tmp_path: Path, capsys: pytest.Captu
     assert rc == 0
     out = capsys.readouterr().out
     assert "absent — skipping." in out
-
-
-# ---------------------------------------------------------------------------
-# improvement-queue-depth — Step 4 oracle fence (workweek-complete.md:746-755)
-# ---------------------------------------------------------------------------
 
 
 def test_improvement_queue_depth_absent_dir(tmp_path: Path) -> None:
@@ -98,7 +68,6 @@ def test_improvement_queue_depth_counts_and_oldest(tmp_path: Path) -> None:
     (queue_dir / "2026-07-20-first.yaml").write_text("title: first\n", encoding="utf-8")
     (queue_dir / "2026-07-22-second.yaml").write_text("title: second\n", encoding="utf-8")
     (queue_dir / "2026-07-21-third.yaml").write_text("title: third\n", encoding="utf-8")
-    # Non-yaml file must not be counted.
     (queue_dir / "README.md").write_text("not an entry\n", encoding="utf-8")
 
     count, oldest = _mod.improvement_queue_depth(queue_dir)
@@ -115,12 +84,6 @@ def test_improvement_queue_cmd_reports_absent_dir(tmp_path: Path, capsys: pytest
     assert "0 entries." in out
 
 
-# ---------------------------------------------------------------------------
-# cruft-sweep-last-run — cruft-sweep verification oracle fence
-# (workweek-complete.md:1037-1041, Review: code-reviewer Slice C F5)
-# ---------------------------------------------------------------------------
-
-
 def test_cruft_sweep_last_run_absent(tmp_path: Path) -> None:
     missing = tmp_path / "cruft-sweep-log.md"
     assert _mod.cruft_sweep_last_run(missing) is None
@@ -128,9 +91,6 @@ def test_cruft_sweep_last_run_absent(tmp_path: Path) -> None:
 
 def test_cruft_sweep_last_run_parses_pipe_delimited_log(tmp_path: Path) -> None:
     log_path = tmp_path / "cruft-sweep-log.md"
-    # Pipe-delimited: <class> | <timestamp> | <reclaimed>. A naive whitespace
-    # split (awk '{print $1}') would return the literal "|" separator, not the
-    # timestamp — this regression guard is the entire point of F5.
     log_path.write_text(
         "all | 2026-07-10T09:00:00Z | 12MB\n"
         "all | 2026-07-23T14:30:00Z | 4MB\n",
@@ -145,5 +105,4 @@ def test_cruft_sweep_cmd_reports_never_when_absent(tmp_path: Path, capsys: pytes
     assert rc == 0
     out = capsys.readouterr().out
     assert "Cruft-sweep last run: never" in out
-
 

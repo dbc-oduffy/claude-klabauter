@@ -59,15 +59,6 @@ def _load_cli_module():
 
 _MOD = _load_cli_module()
 
-# The exact strings `main()` assigns when --title is omitted, one per affected
-# doc_type family. Copied verbatim rather than imported: if the scaffolder's
-# defaults are reworded, these tests must FAIL loudly (the guard's prefix contract
-# may no longer hold) instead of silently tracking the new wording.
-#
-# goal-seed/roadmap-seed now have
-# their own dedicated title-default branches (F3 fix), so they are represented here
-# by their own distinct strings rather than sharing the generic memo fallback by
-# coincidence.
 _PLACEHOLDER_TITLES = [
     "PLACEHOLDER — replace with one-line handoff title",
     "PLACEHOLDER — replace with one-line recovery handoff title",
@@ -92,9 +83,6 @@ class TestIsPlaceholderTitle(unittest.TestCase):
                 )
 
     def test_real_titles_are_not_flagged(self):
-        # The third case is the one that makes this more than a smoke test: a
-        # legitimate title ABOUT placeholder ids must still mint. A naive
-        # `"placeholder" in title.lower()` check passes the first two and fails this.
         for title in [
             "Guard placeholder ids at mint time",
             "C2 supersede gate: honest refusal reason",
@@ -117,10 +105,7 @@ class TestMintRefusal(unittest.TestCase):
                 )
 
     def test_hnd_cmp_mint_refuses_on_placeholder(self):
-        # pln- was removed from
         # the guard (never in gate_eval._HANDOFF_ID_PATTERN's blast radius; guarding
-        # it broke the D3 "plan_id always present, never null" contract). hnd-/cmp-
-        # now route through the shared _mint_artifact_id_from_title wrapper (F2).
         for title in _PLACEHOLDER_TITLES:
             with self.subTest(title=title):
                 self.assertIsNone(
@@ -135,7 +120,6 @@ class TestMintRefusal(unittest.TestCase):
 
     def test_real_title_still_mints_each_id_space(self):
         title = "Guard placeholder ids at mint time"
-        # plan_id is unconditional (D3) — no placeholder guard applies to it (F1).
         self.assertTrue(
             _MOD._mint_plan_id(_MOD._slug_from_title(title)).startswith("pln-")
         )
@@ -152,16 +136,10 @@ class TestMintRefusal(unittest.TestCase):
         minted_dlv = _MOD._mint_deliverable_id_from_title(title, "handoff")
         self.assertIsNotNone(minted_dlv)
         self.assertTrue(minted_dlv.startswith("dlv-"))
-        # Deliberately NOT asserting "placeholder" is absent from the id: this
-        # title contains the word, so the correct id does too. What must be absent
         # is the SCAFFOLD SENTINEL's slug -- the `placeholder-replace-with-` shape
-        # that only a defaulted title produces.
         self.assertNotIn("placeholder-replace-with", minted_dlv.lower())
 
     def test_carry_path_unaffected_by_placeholder_title(self):
-        # Carry derives from a caller-supplied id, never the title -- a placeholder
-        # title must not suppress it. Pins the guard's blast radius, so a future
-        # broadening that routes carry through the refusal fails here.
         carried = _MOD._mint_deliverable_id(
             deliverable_id="dlv-real-carried-id-abc123", carry_source="explicit --deliverable-id"
         )
@@ -170,17 +148,7 @@ class TestMintRefusal(unittest.TestCase):
 
 class TestFalseClearMechanism(unittest.TestCase):
     def test_resolver_refuses_a_placeholder_id(self):
-        # Originally this pinned the DEFECT's premise -- that the polluted id MATCHED
-        # gate_eval's pattern and so resolved-and-cleared a blocked_by. That premise
-        # is now false by construction: review finding (code-reviewer 913d6318/F1 and
-        # fad4c85d/F1) established the schema narrow alone did NOT close the class,
-        # because gate_eval reads frontmatter straight off disk and never validates,
         # so _HANDOFF_ID_PATTERN itself was tightened to match.
-        #
-        # Flipped rather than deleted: the assertion that the resolver REFUSES a
-        # placeholder id is the regression guard for that fix, and it fails loudly if
-        # anyone widens the pattern back. Deleting it would have removed the only
-        # direct pin on the mechanism this whole change exists to close.
         polluted = "hnd-placeholder-replace-with-one-l-5f04ba"
         self.assertIsNone(
             _HANDOFF_ID_PATTERN.match(polluted),
@@ -193,8 +161,6 @@ class TestFalseClearMechanism(unittest.TestCase):
         )
 
     def test_guard_output_cannot_false_clear(self):
-        # Refusal yields None -> the field emits as absent/null, which cannot match
-        # the pattern and therefore dangles honestly instead of clearing.
         refused = _MOD._mint_artifact_id_from_title(
             "hnd", "PLACEHOLDER — replace with one-line handoff title",
             "handoff", "handoff_id",

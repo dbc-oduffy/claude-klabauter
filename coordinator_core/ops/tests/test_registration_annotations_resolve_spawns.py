@@ -1,11 +1,3 @@
-"""coordinator_core.ops.tests.test_registration_annotations_resolve_spawns
--- the leg that reads the eager table at HEAD via real git.
-
-SPLIT OUT 2026-08-27. `_git`/`_head_eager_table` spawn, and a spawn site in a
-non-test function forces the module-level tier form (spawn ratchet Rule 4 --
-a marker on a helper is inert). The remaining assertions in the sibling file
-resolve annotations in process and stay on the fast tier.
-"""
 from __future__ import annotations
 
 import ast
@@ -19,8 +11,6 @@ from coordinator_core.ipc import get_op_handler
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-#: Shared with the in-process half of this suite. Imported rather than
-#: duplicated so the two files cannot drift apart.
 from coordinator_core.ops.tests.test_registration_annotations_resolve import (  # noqa: E402
     _advertised_at_head,
     _REGISTRY_MAP_PATH,
@@ -32,7 +22,6 @@ from coordinator_core.ops.tests.test_registration_annotations_resolve import (  
 
 
 def _git(args, cwd, stdin=None):
-    """Run one git command, returning stdout, or None when git/HEAD is unusable."""
     try:
         proc = subprocess.run(
             ["git", *args],
@@ -72,7 +61,7 @@ def _head_eager_table(root):
             continue
         for target in targets:
             if isinstance(target, ast.Name) and target.id == "_EAGER_OP_MODULES":
-                if node.value is None:  # a bare annotation, no value to read
+                if node.value is None:
                     return None
                 try:
                     return ast.literal_eval(node.value)
@@ -83,13 +72,6 @@ def _head_eager_table(root):
 
 @pytest.mark.spawns_process
 def test_every_advertised_op_is_served_at_head():
-    """HEAD's annotations may not name an op HEAD does not implement.
-
-    A failure here means a commit advertised something whose implementation is
-    still uncommitted -- most often a peer's in-flight work on a shared branch.
-    The remedy is the one the worktree leg already prescribes: strike the name.
-    It goes back in the commit that lands the op, where it is true.
-    """
     root = _repo_root()
     table = _head_eager_table(root)
     if table is None:

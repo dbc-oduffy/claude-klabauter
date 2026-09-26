@@ -1,6 +1,3 @@
-"""Tests for `session.machinery_paths` -- path shapes only, per its own
-negative-spec (owns paths, never creates a directory, never does I/O).
-"""
 
 from __future__ import annotations
 
@@ -127,11 +124,6 @@ def test_module_never_creates_a_directory(tmp_path):
 
 
 def test_the_back_compat_alias_is_gone_after_c2():
-    """C1 leaves `session/subagent_share.py` as a re-exporting alias so the engine has no
-    broken window between C1's rename and C2's repoint; C2 deletes it as its LAST step.
-    Asserting the alias is ABSENT is what pins that deletion -- the earlier version of this
-    test asserted the alias EXISTS, which C2 then falsified by doing its job.
-    """
     import importlib
     try:
         importlib.import_module("coordinator_core.session.subagent_share")
@@ -142,11 +134,6 @@ def test_the_back_compat_alias_is_gone_after_c2():
     )
 
 def test_every_allowlist_entry_resolves_to_a_real_path_under_state():
-    """A typo in the allowlist fails loudly rather than silently widening
-    the untrack -- exit criterion 2's write-side half. Checked against
-    `git ls-files`, not the filesystem: a tracked path can be momentarily
-    absent from a live working tree (mid-edit, mid-move) on a box with ~50
-    concurrent sessions, and that is not what a typo test is for."""
     out = subprocess.run(
         ["git", "ls-files", "state/"],
         cwd=_REPO_ROOT_ON_DISK,
@@ -198,12 +185,6 @@ def test_every_tracked_state_first_segment_is_on_the_allowlist():
 
 
 def test_subagent_share_id_pattern_captures_the_id_under_either_root():
-    """The read-side accessor C4 added, tested directly rather than only
-    through `artifact_owner`'s use of it. Both roots and both separator
-    spellings, because a pattern that matches only the spelling its author
-    happened to type is the defect at `2acd5ca032` -- it reported "no owner"
-    for every live sidecar and said nothing while doing it.
-    """
     pat = machinery_paths.subagent_share_id_pattern()
     for path in (
         ".coordinator-local/subagent-share/sid-9/report.md",
@@ -218,11 +199,6 @@ def test_subagent_share_id_pattern_captures_the_id_under_either_root():
 
 
 def test_subagent_share_id_pattern_does_not_match_a_foreign_bucket():
-    """A directory that merely SITS beside the bucket is not the bucket.
-    Asserted because the failure mode this accessor exists to prevent is a
-    silent one: an over-broad pattern captures a wrong id and every caller
-    downstream believes it.
-    """
     pat = machinery_paths.subagent_share_id_pattern()
     for path in (
         ".coordinator-local/review-trail/sid-9/report.md",
@@ -245,9 +221,6 @@ def test_machinery_path_prefixes_covers_current_and_legacy_roots():
 
 
 def test_machinery_path_prefixes_returns_bare_relative_strings():
-    """No `repo_root` join -- a name-based excluder tests a repo-relative
-    candidate string, it never resolves a filesystem path.
-    """
     for prefix in machinery_paths.machinery_path_prefixes():
         assert not os.path.isabs(prefix)
         assert "\\" not in prefix
@@ -258,9 +231,6 @@ def test_machinery_path_prefixes_is_a_tuple():
 
 
 def test_subagent_share_id_pattern_is_cached():
-    """Compiled once per process, not per call: this module is on the
-    per-turn Stop-family hook path its own docstring names.
-    """
     assert (
         machinery_paths.subagent_share_id_pattern()
         is machinery_paths.subagent_share_id_pattern()

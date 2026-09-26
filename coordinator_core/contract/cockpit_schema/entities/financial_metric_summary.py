@@ -1,26 +1,3 @@
-"""
-FinancialMetricSummary — example-market-data-repo financial fact (Level-2 aggregate),
-sourced from example-market-data-repo's sc1-06 EDGAR XBRL quantitative-claim output.
-Pydantic port of DoE `coordinator/cockpit-contract/src/entities/financial-metric-summary.ts`
-(Zod source), emitted as a third top-level peer array `financial_metrics[]`.
-
-v2.21.0 addition (D31 bilateral: emitter-ownership transfer makes this widen
-bilateral by construction — DoE ratifies the shape, claude-klabauter's emitter produces
-the bytes). This is an entity-anchored financial fact (a company, via
-provenance.entity_anchor): `repo` may legitimately be `""` with an
-entity_anchor set, mirroring the ProvenanceEnvelope entity-first carve-out
-CompetitorSummary/IntelligenceSignal already use. Natural key store-side is
-`(repo, claim_id, content_key)`. `coordinator_root_path` is nullable
-present-as-null (D9), never omitted. `content_key` is nullable-present on the
-hosted contract — producer-side non-null enforcement stays in market-intel
-(cgs-03); identical situation to IntelligenceSignal.content_key.
-`extra="forbid"` per DD-7.
-
-Spec backlink: cross-repo/inbox/2026-07-21-claude-central-em-financial-metric-summary-entity-emitter.md
-Spec backlink: coordinator/docs/wiki/cockpit-contract-entity-addition-protocol.md
-Source of record: example-market-data-repo's FinancialMetricRecord
-(market_intel/contract/schema/financial_metric.schema.json)
-"""
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -44,7 +21,6 @@ class FinancialMetricSummary(BaseModel):
             "provenance.entity_anchor."
         )
     )
-    # Connector key — nullable present-as-null (D9): null = not machine-bound.
     coordinator_root_path: str | None
     claim_id: str
     """example-market-data-repo producer-local surrogate id. Part of the natural key (repo, claim_id, content_key)."""
@@ -77,7 +53,6 @@ class FinancialMetricSummary(BaseModel):
     class_partition: str
     """OPEN STRING partition class for grouping/display."""
 
-    # Nullable fields (D9 present-as-null).
     decimals_or_scale: int | None
     """XBRL decimals/scale attribute, when reported."""
     comparability_reason: str | None

@@ -1,20 +1,3 @@
-"""Tests for
-``coordinator_core.bash_guards.guard_reap_stale_git_lock.check_reap_stale_git_lock``
--- the self-heal leg of the fleet-wide `.git/index.lock` contention
-campaign.
-
-Covers the base no-op/reap behaviors plus the two 2026-08-12 backlog fixes:
-- P1 (939c65ee3472): `-C`/subdirectory-aware lock path resolution, instead
-  of the plain `<cwd>/.git` heuristic that missed every `git -C <repo>`
-  call and every lock-taking call issued from a nested subdirectory.
-- P2 (edb6c786408f): the widened index-writing subcommand list, and
-  offering `next-index-*.lock`/`objects/maintenance.lock` to `do_reap` in
-  addition to `index.lock`.
-
-All without spawning any git subprocess itself (constraint 2).
-
-Spec backlink: coordinator_core/bash_guards/guard_reap_stale_git_lock.py
-"""
 
 from __future__ import annotations
 
@@ -94,9 +77,6 @@ def _age_lock(lock, age_sec=999):
 
 
 class TestDashCAndSubdirectoryResolution:
-    """P1 (939c65ee3472): the lock path must resolve via `-C`/`--git-dir`
-    when present, and otherwise walk up from `cwd` to the enclosing repo
-    root -- not just stat `<cwd>/.git`."""
 
     def test_git_dash_c_repo_from_subdirectory_reaps(self, tmp_path, monkeypatch):
         monkeypatch.setenv("COORDINATOR_LOCK_REAP_NO_SLEEP", "1")
@@ -154,8 +134,6 @@ class TestDashCAndSubdirectoryResolution:
 
 
 class TestWidenedSubcommandCoverage:
-    """P2 (edb6c786408f): the closed subcommand list now covers the
-    index-writing set, not just {add, commit, status, diff, mv, stash}."""
 
     def test_checkout_reaps_stale_lock(self, tmp_path, monkeypatch):
         monkeypatch.setenv("COORDINATOR_LOCK_REAP_NO_SLEEP", "1")
@@ -183,9 +161,6 @@ class TestWidenedSubcommandCoverage:
 
 
 class TestWidenedLockFileCoverage:
-    """P2 (edb6c786408f): `next-index-*.lock` and
-    `objects/maintenance.lock` are now offered to `do_reap`, using
-    `reap_stale_locks`'s own thresholds (not invented ones)."""
 
     def test_next_index_lock_is_reaped(self, tmp_path, monkeypatch):
         monkeypatch.setenv("COORDINATOR_LOCK_REAP_NO_SLEEP", "1")

@@ -1,4 +1,3 @@
-"""Tests for `coordinator_core.benchmarks.measure` (R5, C6)."""
 
 from __future__ import annotations
 

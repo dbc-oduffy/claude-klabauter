@@ -45,8 +45,6 @@ import entry_point_shim  # noqa: E402
 import cc_invoke  # noqa: E402
 
 # name -> dotted engine module, per `entry_point_shim._ENGINE_ENTRIES`'s own
-# construction of these three (the only three routed through
-# `_native_route_entry`).
 _ROUTED_TARGETS = {
     "pickup-assemble": "coordinator_core.pickup_brief",
     "baton-assemble": "coordinator_core.baton_assemble",
@@ -56,9 +54,6 @@ _ROUTED_TARGETS = {
 
 @pytest.fixture(autouse=True)
 def _decouple_from_real_engine_root(monkeypatch):
-    """Same isolation as `test_entry_point_shim_warm_route.py`'s own
-    fixture: reach each dotted module directly against THIS repo's tree,
-    never via the machine-local registry's resolved root."""
     monkeypatch.setattr(
         entry_point_shim,
         "_import_engine_module",
@@ -67,8 +62,6 @@ def _decouple_from_real_engine_root(monkeypatch):
 
 
 def _stub_route(result=None, exc=None):
-    """Builds a `cc_invoke.route`-shaped stub: returns `result` on success,
-    or raises `exc` when given (never both)."""
 
     def _route(op, params, repo_root, legacy_fn, **kwargs):
         if exc is not None:
@@ -79,14 +72,8 @@ def _stub_route(result=None, exc=None):
 
 
 def _seam_absent_route(op, params, repo_root, legacy_fn, **kwargs):
-    """Mirrors `route()`'s real State-1 contract: seam absent -> call
-    `legacy_fn()` and pass its return through unchanged."""
     return legacy_fn()
 
-
-# ---------------------------------------------------------------------------
-# `params.entrypoint` -- the route names THIS name, and nothing else.
-# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("name, dotted", list(_ROUTED_TARGETS.items()))
 def test_route_call_carries_this_name_as_entrypoint(monkeypatch, name, dotted):
@@ -108,11 +95,6 @@ def test_route_call_carries_this_name_as_entrypoint(monkeypatch, name, dotted):
     assert isinstance(seen["params"]["cwd"], str) and seen["params"]["cwd"]
 
 
-# ---------------------------------------------------------------------------
-# State-1 -- seam absent, `route()` calls `legacy_fn` (our `_simple_entry`
-# reproduction), whose int return passes straight through.
-# ---------------------------------------------------------------------------
-
 @pytest.mark.parametrize("name, dotted", list(_ROUTED_TARGETS.items()))
 def test_state1_seam_absent_falls_back_to_legacy_entry(monkeypatch, name, dotted):
     entry = entry_point_shim._ENGINE_ENTRIES[name]
@@ -127,11 +109,7 @@ def test_state1_seam_absent_falls_back_to_legacy_entry(monkeypatch, name, dotted
         "_simple_entry",
         lambda n, d: _fake_legacy,
     )
-    # Rebuild the entry with the patched _simple_entry as its closed-over
-    # legacy_entry -- `_native_route_entry` binds `legacy_entry` at
     # construction time, so patching `_simple_entry` after `_ENGINE_ENTRIES`
-    # is built has no effect on the already-built closure. Constructing a
-    # fresh one here is the only way to observe the patched legacy path.
     routed = entry_point_shim._native_route_entry(name, dotted)
     monkeypatch.setattr(cc_invoke, "route", _seam_absent_route)
 
@@ -142,10 +120,6 @@ def test_state1_seam_absent_falls_back_to_legacy_entry(monkeypatch, name, dotted
 
 
 def test_state1_legacy_entry_is_byte_identical_simple_entry(monkeypatch, capsys):
-    """Without patching `_simple_entry`, State-1's `legacy_fn` IS
-    `_simple_entry(name, dotted)` -- same import target, same error-message
-    text, same transport-fail exit code -- reproduced here via a forced
-    import failure."""
     name, dotted = "pickup-assemble", "coordinator_core.pickup_brief"
     monkeypatch.setattr(
         entry_point_shim,
@@ -161,11 +135,6 @@ def test_state1_legacy_entry_is_byte_identical_simple_entry(monkeypatch, capsys)
     assert code == entry_point_shim._TRANSPORT_FAIL
     assert f"{name}: {dotted} not importable" in err
 
-
-# ---------------------------------------------------------------------------
-# State-2 -- seam present, native result: print stdout/stderr, return
-# exit_code.
-# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("name, dotted", list(_ROUTED_TARGETS.items()))
 def test_state2_native_result_prints_and_returns_exit_code(monkeypatch, name, dotted, capsys):
@@ -195,11 +164,6 @@ def test_state2_non_int_exit_code_defaults_to_one(monkeypatch, name, dotted):
 
     assert entry(["apply"]) == 1
 
-
-# ---------------------------------------------------------------------------
-# State-2 raise -- a post-seam-confirmation transport failure is a HARD
-# raise, never a fallback to legacy_fn. THIS is the pin C4's row demands.
-# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("name, dotted", list(_ROUTED_TARGETS.items()))
 def test_state2_transport_failure_raises_hard_never_falls_back(monkeypatch, name, dotted):

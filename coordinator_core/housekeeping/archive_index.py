@@ -45,20 +45,10 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from coordinator_core.housekeeping.head_scan import scan_keys
 
-#: `(mtime_ns, size)` — the revalidation signal BINDING per the spike
-#: verdict. Comparing both catches an in-place modify whose size happens to
-#: be unchanged (mtime is the only signal in that case) as well as one whose
-#: size DID change.
 StatSignature = Tuple[int, int]
 
-#: The id an archived record is INDEXED BY, and it is `stub_id`, not
-#: `handoff_id`: the index exists to answer "which archived record is this
-#: gate blocked on?", and `blocked_by` names stub ids (`[sat-06]`). Keying
-#: by `handoff_id` builds an index no blocker lookup can ever hit.
 _BLOCKER_ID_KEY = "stub_id"
 
-#: Kept because a record's own identity is still worth carrying; it is not
-#: the lookup key.
 _HANDOFF_ID_KEY = "handoff_id"
 
 
@@ -87,23 +77,10 @@ class ArchiveIndex:
     stat_by_path: Dict[str, StatSignature] = field(default_factory=dict)
 
     def lookup(self, handoff_id: str) -> List[Path]:
-        """Return the current candidate paths for `handoff_id`, or an empty
-        list if none are known — a miss here means "scan the archive for
-        this one id", never "this id does not exist"."""
         return [Path(p) for p in self.by_id.get(handoff_id, ())]
 
 
 def _iter_archive_entries(archive_dir: Path, onerror: Callable[[OSError], None]):
-    """Recursively yield `(path_str, os.DirEntry)` for every `.md` file
-    under `archive_dir`, covering both `YYYY-MM/`-nested and archive-root-
-    level records (the spike verdict's own "Scan-root detail"). Uses
-    `os.scandir` at every level — never `os.walk` — so each yielded entry's
-    `DirEntry` still carries the OS's cached stat buffer for a zero-extra-
-    syscall `entry.stat()` (the spike's own explanation of why `os.scandir`
-    is 16x cheaper than `Path.rglob` + `Path.stat()` on Windows). Yields the
-    raw string path (`entry.path`), never a `Path` wrapper — see
-    `ArchiveIndex`'s own docstring for why that is load-bearing, not a
-    style choice."""
     stack = [str(archive_dir)]
     while stack:
         current = stack.pop()
@@ -131,9 +108,6 @@ def _signature_from_entry(entry: "os.DirEntry") -> StatSignature:
 
 
 def _remove_path_from_by_id(index: ArchiveIndex, path: str) -> None:
-    """Drop `path` from whichever id list(s) currently hold it, pruning any
-    id whose candidate list becomes empty — a stale entry left behind after
-    a delete/rename would otherwise report a phantom candidate."""
     empty_ids = []
     for hid, paths in index.by_id.items():
         if path in paths:
@@ -147,11 +121,6 @@ def _remove_path_from_by_id(index: ArchiveIndex, path: str) -> None:
 def build_index(
     archive_dir: Path, *, onerror: Optional[Callable[[OSError], None]] = None
 ) -> ArchiveIndex:
-    """Full build: walk `archive_dir` once, head-scan every record's
-    `handoff_id`, and populate a fresh `ArchiveIndex`. A record whose
-    `handoff_id` cannot be determined (missing, or `head_scan`+fall-through
-    both fail to resolve it) is simply not added to `by_id` — it is still a
-    real file on disk, but it is not a candidate for any id lookup."""
     onerror = onerror or _default_onerror
     index = ArchiveIndex(archive_dir=Path(archive_dir))
 
@@ -168,21 +137,6 @@ def build_index(
 def revalidate(
     index: ArchiveIndex, *, onerror: Optional[Callable[[OSError], None]] = None
 ) -> Set[Path]:
-    """The cheap leg (BINDING budget: 5ms independently, at 1,470 files —
-    see module docstring): a fresh `os.scandir` walk of `index.archive_dir`
-    comparing each file's current `(mtime_ns, size)` against what was last
-    recorded. Only a path whose signature differs (add, in-place modify —
-    including a modify whose SIZE is unchanged — or delete) is re-scanned
-    for its `handoff_id` and has `index.by_id`/`index.stat_by_path` patched
-    in place; every unchanged path costs exactly one cheap `DirEntry.stat()`
-    and one string-keyed dict lookup, and nothing else. Returns the set of
-    paths (as `Path` objects, only for the small changed subset — never the
-    whole scanned set) whose signature changed.
-
-    This function DOES NOT re-read the archive tree's content for unchanged
-    files, and it never opens the winning path for the caller — `lookup`
-    plus a fresh act-time read (contract 1, C5's own job) is how a caller
-    turns "candidate" into "truth"."""
     onerror = onerror or _default_onerror
 
     seen: Dict[str, StatSignature] = {}
@@ -212,79 +166,30 @@ def revalidate(
     return {Path(p) for p in changed}
 
 
-# ---------------------------------------------------------------------------
-# Persistence — the leg that makes `revalidate` mean anything
-# ---------------------------------------------------------------------------
-#
-# `revalidate`'s 1.95ms is the cost of checking an index that ALREADY EXISTS.
-# Rebuilt from scratch each cycle, the index costs 171.9ms at 1,470 records
-# (measured, 85% of a 203ms cycle) because `build_index` must open every
-# archived file to read its `handoff_id` -- zero of 878 real archived records
-# carry an id derivable from the filename, so enumeration alone cannot supply
-# it. A per-cycle rebuild is also exactly what the plan's own Anti-scope
-# forbids: "Do not build anything whose per-cycle cost is linear in the
-# archive."
-#
-# So the index persists between cycles, and `revalidate` patches it.
-#
 # CORRECTNESS DOES NOT DEPEND ON THE CACHE. It is a pure derived artifact, and
-# every failure mode collapses to "rebuild": missing, unreadable, corrupt,
-# wrong schema version, or built against a different archive_dir. That is the
-# same asymmetry the module docstring already states for index entries
-# themselves -- a stale cache costs a wasted scan, never a wrong answer --
-# extended one level out. Nothing here may become load-bearing for a verdict.
-#
 # CONCURRENCY, on a tree with ~50 live peers: no lock, deliberately. The write
-# is atomic (tempfile in the same directory + `os.replace`), so a reader sees
-# either the whole previous file or the whole new one, never a torn one. Two
-# peers finishing a cycle together both write a valid cache and the last wins;
-# whichever survives is revalidated by its next reader anyway. A lock here
-# would serialise ~50 sessions behind a file that is safe to lose.
-#
-# The cache lives under the git common dir, not the worktree: it is derived,
-# per-checkout, and must never be committed -- an archive-index blob churning
-# on a shared `work/*` branch is noise every peer would pay for. This reuses
-# the `.git/coordinator-*` convention already established here by
-# `.git/coordinator-sessions/`.
 
 import json
 import tempfile
 
-#: Bump when the on-disk shape changes. An older/newer file is not migrated,
-#: it is discarded and rebuilt -- migration code for a rebuildable cache is
-#: cost with no benefit.
 CACHE_SCHEMA_VERSION = 1
 
 _CACHE_DIRNAME = "coordinator-housekeeping"
 _CACHE_FILENAME = "archive-index.json"
 
-#: Generator-provenance declaration: save_index()'s only write is
-#: `cache_path_for(common_dir)` = `<git common dir>/coordinator-housekeeping/
-#: archive-index.json` — a rebuildable cache under the checkout's git COMMON
-#: dir (same standing as R5's `git_common_dir(...)` exclusion), never a
-#: tracked repo artifact.
 GENERATES = []
 
 
 def cache_path_for(common_dir: Path) -> Path:
-    """The archive index cache path for a checkout, given its git common dir
-    (`coordinator_core.lifecycle.git_common_dir`)."""
     return Path(common_dir) / _CACHE_DIRNAME / _CACHE_FILENAME
 
 
 def save_index(index: ArchiveIndex, cache_path: Path) -> bool:
-    """Atomically write `index` to `cache_path`. Returns True on success.
-
-    Never raises on an I/O failure: a cache that cannot be written is a lost
-    optimisation, not a failed cycle."""
     cache_path = Path(cache_path)
     payload = {
         "version": CACHE_SCHEMA_VERSION,
         "archive_dir": str(index.archive_dir),
         "by_id": index.by_id,
-        # JSON has no tuple type; the (mtime_ns, size) pair round-trips as a
-        # 2-list and is re-tupled on load so signature comparison stays an
-        # ordinary `==` against `_signature_from_entry`'s tuple.
         "stat_by_path": {p: list(sig) for p, sig in index.stat_by_path.items()},
     }
     try:
@@ -308,8 +213,6 @@ def save_index(index: ArchiveIndex, cache_path: Path) -> bool:
 
 
 def load_index(archive_dir: Path, cache_path: Path) -> Optional[ArchiveIndex]:
-    """Load a cached index for `archive_dir`, or None if there is no usable
-    one. None is an ordinary outcome meaning "rebuild", never an error."""
     archive_dir = Path(archive_dir)
     try:
         with open(cache_path, "r", encoding="utf-8") as handle:
@@ -321,8 +224,6 @@ def load_index(archive_dir: Path, cache_path: Path) -> Optional[ArchiveIndex]:
         return None
     if payload.get("version") != CACHE_SCHEMA_VERSION:
         return None
-    # A cache built against a different archive root tells us nothing about
-    # this one; its paths would be revalidated to "all deleted" anyway.
     if payload.get("archive_dir") != str(archive_dir):
         return None
 
@@ -352,16 +253,6 @@ def open_index(
     *,
     onerror: Optional[Callable[[OSError], None]] = None,
 ) -> Tuple[ArchiveIndex, bool]:
-    """The cycle's entry point: a ready-to-query index, from cache where one
-    is usable and from a full walk where it is not.
-
-    Returns `(index, rebuilt)` -- `rebuilt` True when the full 171.9ms walk
-    was paid, False when the cached index was revalidated instead. Callers
-    assert on it (a cycle that rebuilds every run is the defect this exists to
-    close), never branch correctness on it.
-
-    `cache_path=None` disables persistence entirely and always builds: the
-    explicit opt-out for a caller with nowhere durable to write."""
     archive_dir = Path(archive_dir)
     if cache_path is not None:
         cached = load_index(archive_dir, cache_path)

@@ -59,12 +59,6 @@ DEFAULT_DOC_VERIFY_IGNORE: tuple[str, ...] = ()
 
 @dataclass(frozen=True)
 class DocRegistryConfig:
-    """Resolved per-repo doc-health configuration.
-
-    Every field carries the fleet default whenever the corresponding
-    `coordinator.local.md` frontmatter key is absent for the queried repo —
-    callers never need to apply their own default/fallback logic.
-    """
 
     human_facing_docs: List[str] = field(default_factory=lambda: list(DEFAULT_HUMAN_FACING_DOCS))
     doc_staleness_commits: int = DEFAULT_DOC_STALENESS_COMMITS
@@ -73,14 +67,6 @@ class DocRegistryConfig:
 
 
 def _parse_flow_list(raw: str) -> List[str]:
-    """Parse a YAML flow-style list string (`[a, b, c]`) into a str list.
-
-    `raw` is the literal value `cs_read_local_md_key` returned for a list
-    key — already quote-stripped at the outer-wrapper level by that helper.
-    Returns `[]` for an empty/absent value. Each element is stripped of
-    surrounding whitespace and, independently, one layer of wrapping quotes
-    (an element may itself be quoted, e.g. `["a b.md", c.md]`).
-    """
     raw = raw.strip()
     if not raw:
         return []
@@ -98,11 +84,6 @@ def _parse_flow_list(raw: str) -> List[str]:
 
 
 def _parse_int(raw: str, default: int) -> int:
-    """Parse a bare-integer frontmatter value, falling back to `default`.
-
-    Never raises — an absent, empty, or malformed value resolves to
-    `default` (mirrors `cs_read_local_md_key`'s "always succeeds" contract).
-    """
     raw = raw.strip()
     if not raw:
         return default
@@ -117,16 +98,6 @@ DEFAULT_TEST_LOCATOR_SUFFIXES: tuple[str, ...] = ()
 
 @dataclass(frozen=True)
 class TestLocatorConfig:
-    """Resolved per-repo test-locator configuration.
-
-    Mirrors `DocRegistryConfig`: `test_locator_suffixes` carries the fleet
-    default (an empty list — no additional convention) whenever the repo's
-    `coordinator.local.md` declares no `test_locator_suffixes:` override.
-    This dataclass carries only the repo-declared convention itself; it does
-    not derive test-target candidates — that derivation lives in
-    `coordinator_core.ops.dispatch_emit.pathspec` (`_candidate_test_targets`),
-    which is the consumer of this config, not this module's concern.
-    """
 
     test_locator_suffixes: List[str] = field(
         default_factory=lambda: list(DEFAULT_TEST_LOCATOR_SUFFIXES)
@@ -161,27 +132,6 @@ def resolve_test_locator_config(repo_root: str) -> TestLocatorConfig:
 
 
 def resolve_doc_registry_config(repo_root: str) -> DocRegistryConfig:
-    """Resolve the doc-health config for `repo_root` from `coordinator.local.md`.
-
-    This is the pinned public entrypoint C1/C2/C6b author against. `repo_root`
-    is the consumer repo's root (the directory containing its
-    `coordinator.local.md`), never a cwd-implicit default — callers resolve
-    their own root first (e.g. via `Path(__file__)`, never process cwd).
-
-    Reads four flat top-level frontmatter keys via `cs_read_local_md_key`,
-    one call per key (mirrors that helper's single-key contract — it has no
-    batch form):
-        human_facing_docs      -- YAML flow list, e.g. [README.md, INSTALL.md]
-        doc_staleness_commits  -- bare integer
-        doc_staleness_days     -- bare integer
-        doc_verify_ignore      -- YAML flow list, may be empty: []
-
-    Any key absent from frontmatter (or the file itself absent) resolves to
-    the fleet default documented on `DocRegistryConfig`. This function never
-    raises for a missing file, a missing key, or a malformed int/list value —
-    it degrades to the fleet default in every such case, matching
-    `cs_read_local_md_key`'s own always-succeeds contract.
-    """
     docs_raw = cs_read_local_md_key(repo_root, "human_facing_docs")
     commits_raw = cs_read_local_md_key(repo_root, "doc_staleness_commits")
     days_raw = cs_read_local_md_key(repo_root, "doc_staleness_days")

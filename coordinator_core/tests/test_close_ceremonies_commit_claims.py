@@ -141,7 +141,7 @@ def test_quick_wrap_auto_commit_failure_does_not_block_completion(qw_repo, monke
     _stub_facts_all_computed(monkeypatch, qw_repo)
     monkeypatch.setattr(qwa, "commit_session_offer_async", _boom)
 
-    envelope = qwa.brief(commit=True)  # must not raise
+    envelope = qwa.brief(commit=True)
 
     assert envelope["gates"]["commit_outcome"]["status"] == "error"
     assert "next_move" in envelope
@@ -161,8 +161,4 @@ def test_quick_wrap_renders_outcome_and_residue(qw_repo, monkeypatch):
     outcome = envelope["gates"]["commit_outcome"]
     assert outcome["status"] == "committed"
     assert outcome["committed_paths"] == ["state/foo.md"]
-    # AC9 residue: carried on the wire response so it stays visible for the
-    # next session's own workstream-start dirty-tree read (structural — the
-    # residue paths remain dirty on disk; this pins that this ceremony's own
-    # output does not swallow that fact).
     assert outcome["residue"] == residue

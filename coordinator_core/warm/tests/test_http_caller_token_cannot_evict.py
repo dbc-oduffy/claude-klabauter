@@ -63,9 +63,6 @@ SERVER_TOKEN = "5e4be47a0000ffff"
 
 
 def _live_listener(tmp_path):
-    """A real supervisor handler on a real socket, over a real cookie and a real
-    engine stamp -- the refusal under test is a property of the live path, not of a
-    frame helper."""
     skew.write_engine_stamp(tmp_path, "sha-test")
     token = cookie.ensure(tmp_path)
     ctx = supervisor._ServerContext(
@@ -117,13 +114,10 @@ HOSTILE_TOKEN = "deadbeefdeadbeef"
 
 
 def _top_level_token(frame: bytes):
-    """The value `_serve_line`'s `msg.pop("_engine_token", None)` would actually read."""
     return json.loads(frame.decode("utf-8")).get("_engine_token")
 
 
 def _hostile_event():
-    """A posted event carrying a caller-chosen `_engine_token`, spelled every way the
-    frame might absorb it -- top level of the body and inside a nested payload."""
     return {
         "hook_event_name": "PreToolUse",
         "tool_name": "Bash",
@@ -181,8 +175,6 @@ def test_a_burst_of_stale_callers_cannot_drain_the_engine(tmp_path):
 
 
 def test_build_request_never_lifts_a_caller_token_to_the_top_level():
-    """`build_request` nests the caller's event under `params`, so nothing the caller
-    writes is read as the frame's own token -- true even before the stamp overwrites it."""
     frame = hook_http.build_request(_hostile_event(), hook_http.DEFAULT_OP_NAME)
 
     assert _top_level_token(frame) is None, (

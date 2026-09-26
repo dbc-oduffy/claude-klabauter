@@ -22,7 +22,6 @@ import inspect
 
 import coordinator_core.archive_stamp as archive_stamp
 
-#: Sequence annotations that would REFUTE a one-record claim if a verb ever grew one.
 _PLURAL_HINTS = ("list[", "List[", "Sequence[", "Iterable[", "tuple[", "Tuple[", "set[")
 
 
@@ -58,10 +57,6 @@ def test_archive_stamp_verbs_take_exactly_one_handoff():
 
 
 def test_archive_stamp_verbs_name_a_single_path_parameter():
-    """The complement of the above, and the reason it is not circular: the first parameter must
-    actually BE the handoff, not merely be non-plural. A verb refactored to take a config object
-    or a repo root first would pass a scalar-annotation check while quietly having gained a
-    batch form elsewhere in its signature."""
     for verb in ("stamp_shipped_in", "cs_ship_handoff", "cs_unclaim_handoff", "cs_claim_handoff"):
         signature = inspect.signature(getattr(archive_stamp, verb))
         first = next(iter(signature.parameters.values()))

@@ -72,10 +72,7 @@ from pathlib import Path
 
 _ENTRYPOINTS: "tuple[str, ...]" = ("coordinator-invoke", "coordinator-cockpit-emit-schema")
 
-# Harmless, side-effect-free flags per entrypoint -- prove the resolved
 # binary actually EXECUTES (not just that a name resolves to a path), per
-# the plan's "resolve AND execute" acceptance criterion. Neither flag
-# dispatches an op, writes a file, or spawns a further subprocess.
 _EXEC_PROOF_ARGS: "dict[str, tuple[str, ...]]" = {
     "coordinator-invoke": ("--dump-op-timeouts",),
     "coordinator-cockpit-emit-schema": ("--help",),
@@ -99,12 +96,6 @@ class PathResolutionReport:
     checks: "list[EntrypointCheck]" = field(default_factory=list)
     platform_caveat: "str | None" = None
     transport_error: "str | None" = None
-    #: Bare-name shadows found beside a resolved entrypoint (Windows only; see
-    #: `_detect_bare_name_shadows`). Deliberately NOT folded into `all_ok`: a
-    #: shadowed door still resolves and still executes, so every check passes.
-    #: What it costs is the door's whole reason to exist -- an interpreter start
-    #: on the hot path -- which is a performance defect to report, not a
-    #: resolution failure to fail the probe on.
     shadow_warnings: "list[str]" = field(default_factory=list)
 
     @property
@@ -131,10 +122,6 @@ def _posix_login_shell() -> str:
     return os.environ.get("SHELL") or "/bin/sh"
 
 
-#: Delimiter marking the start of each entrypoint's output block inside the single
-#: combined -lc payload `_check_posix` builds -- lets one login-shell spawn report
-#: on every entrypoint instead of one spawn per entrypoint. Chosen to be effectively
-#: impossible for a resolved path or exec-proof output to collide with.
 _POSIX_ENTRY_MARKER = "===coordinator-path-probe-entry==="
 
 
@@ -142,11 +129,6 @@ def _check_posix(names: "tuple[str, ...]") -> PathResolutionReport:
     shell = _posix_login_shell()
     checks: "list[EntrypointCheck]" = []
 
-    # PATH is built once at login-shell startup (profile files re-sourced by `-lc`),
-    # not per name looked up inside it -- so every entrypoint's `command -v` +
-    # exec-proof block can share ONE login-shell spawn instead of one per name. Each
-    # block is prefixed with a marker + the entrypoint name so the single combined
-    # stdout can be split back apart per entrypoint below.
     blocks: "list[str]" = []
     for name in names:
         args = " ".join(_EXEC_PROOF_ARGS[name])
@@ -162,10 +144,6 @@ def _check_posix(names: "tuple[str, ...]") -> PathResolutionReport:
             [shell, "-lc", script],
             capture_output=True, text=True, timeout=_PROBE_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
-            # This caller consumes the output itself (`capture_output=True`),
-            # so the creationflags-only helper is the correct one — and it
-            # returns `{}` off Windows, leaving this POSIX-only login-shell
-            # probe bit-for-bit unchanged.
             **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -282,10 +260,6 @@ def _check_windows(names: "tuple[str, ...]") -> PathResolutionReport:
             proc = subprocess.run(
                 [where, *args], capture_output=True, text=True, timeout=_PROBE_TIMEOUT_SECS,
                 stdin=subprocess.DEVNULL,
-                # The Windows arm, and the one that actually needed this: an
-                # exec-proof probe fired during install would otherwise flash a
-                # conhost window per entrypoint. `capture_output=True` already
-                # wires the handles, so the creationflags-only helper is correct.
                 **no_console_creationflags(),
             )
             executed_ok = proc.returncode == 0
@@ -308,13 +282,6 @@ def _check_windows(names: "tuple[str, ...]") -> PathResolutionReport:
 def check_entrypoint_path_resolution(
     names: "tuple[str, ...]" = _ENTRYPOINTS,
 ) -> PathResolutionReport:
-    """Resolve-and-execute check for `names` on the current platform.
-
-    Never raises -- any transport-level failure (no login shell resolvable,
-    subprocess machinery itself broken) is folded into
-    `PathResolutionReport.transport_error`, matching this install chain's
-    other probes' "report, don't crash the caller" contract.
-    """
     try:
         if platform.system() == "Windows":
             return _check_windows(names)
@@ -326,12 +293,6 @@ def check_entrypoint_path_resolution(
 
 
 def main(argv: "list[str] | None" = None) -> int:
-    """Standalone-script entry point — the plan's "standalone script" leg,
-    distinct from the doctor-probe registration (bin/claude-klabauter-doctor-probe.py
-    :: _run_probe_entrypoints_path_resolved), which is the "chain-walk" leg.
-    Prints a human-readable summary; exit 0 iff every checked entrypoint
-    resolved AND executed cleanly.
-    """
     report = check_entrypoint_path_resolution()
     print(f"[path-resolution-probe] platform={report.platform} method={report.method}")
     if report.platform_caveat:

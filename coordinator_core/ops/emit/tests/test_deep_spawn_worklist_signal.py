@@ -1,10 +1,3 @@
-"""Reader-side tests for the ``deep_spawn_worklist`` RoutineSignal (C1).
-
-Pins the emitter's cheap-by-construction contract (reads ONE small JSON file, never
-walks the corpus or imports the worklist module) and its five computed_state states.
-
-Spec backlink: state/dispatch-briefs/2026-08-26-the-worklist-gets-a-reader/C1.md
-"""
 
 from __future__ import annotations
 
@@ -39,10 +32,6 @@ def _iso(dt: datetime) -> str:
 
 
 def test_never_imports_the_worklist_module():
-    """The emitter must not walk the corpus or import the worklist module -- the hard
-    constraint the dispatch brief names as the whole point of this chunk. Pinned by
-    asserting the worklist test module is not among this process's imported modules
-    after calling the signal function (a corpus-walking import would register it)."""
     worklist_module_name = "coordinator_core.tests.test_deep_per_item_spawn_worklist"
     sys.modules.pop(worklist_module_name, None)
     _deep_spawn_worklist_signal(_ctx())

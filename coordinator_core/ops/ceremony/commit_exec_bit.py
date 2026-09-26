@@ -77,20 +77,12 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.git_native import _git
 from coordinator_core.ops.fleet._common import check_repo_root, main_worktree_root
 
-#: Index mode of a tracked executable regular file.
 _MODE_EXECUTABLE = "100755"
 
-#: Index mode of a tracked non-executable regular file (the only mode this op
-#: is defined to promote — anything else is an unclassified state, CC-7).
 _MODE_REGULAR = "100644"
 
 
 def _error(message: str, **extra: object) -> dict:
-    """Build the structured-error result envelope for this op.
-
-    Purpose: uniform fail-loud shape — contract fields present with mutation
-    flags false, plus "error" (and any naming payload such as foreign_staged).
-    """
     result: dict = {
         "committed": False,
         "sha": None,
@@ -102,12 +94,6 @@ def _error(message: str, **extra: object) -> dict:
 
 
 def _staged_mode(worktree_root: Path, rel_path: str) -> Tuple[Optional[str], Optional[str]]:
-    """Read the index mode of rel_path via `git ls-files --stage -- <path>`.
-
-    Returns (mode, None) when the path has exactly one index entry, (None, None)
-    when the path is untracked (no entry), and (None, error_message) when the
-    git invocation itself failed or the entry line is unparseable.
-    """
     result = _git(["ls-files", "--stage", "--", rel_path], cwd=worktree_root)
     if not result.ok:
         return None, (
@@ -116,9 +102,7 @@ def _staged_mode(worktree_root: Path, rel_path: str) -> Tuple[Optional[str], Opt
         )
     lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
     if not lines:
-        return None, None  # untracked — no index entry
-    # Format: "<mode> <object> <stage>\t<path>". A merge-conflicted path yields
-    # multiple stage entries — that is an unclassified half-state for this op.
+        return None, None
     if len(lines) > 1:
         return None, (
             f"path {rel_path!r} has {len(lines)} index entries (merge conflict "
@@ -131,12 +115,6 @@ def _staged_mode(worktree_root: Path, rel_path: str) -> Tuple[Optional[str], Opt
 
 
 def _foreign_staged_entries(worktree_root: Path, rel_path: str) -> Tuple[Optional[List[str]], Optional[str]]:
-    """List staged index entries other than rel_path (B2 foreign-staged guard).
-
-    Returns (foreign_entries, None) on success — empty list means the index is
-    clean or holds solely the target — or (None, error_message) when the git
-    invocation failed.
-    """
     result = _git(["diff", "--cached", "--name-only"], cwd=worktree_root)
     if not result.ok:
         return None, (
@@ -186,9 +164,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     raw_path = params.get("path")
     if not isinstance(raw_path, str) or not raw_path.strip():
         return _error("params.path is required and must be a non-empty string")
-    # git's plumbing output (diff --cached --name-only, ls-files) is always
-    # /-separated repo-relative; normalize the param once so a Windows caller's
-    # backslash path compares equal.
     rel_path = raw_path.strip().replace("\\", "/")
 
     dry_run = bool(params.get("dry_run", False))
@@ -199,9 +174,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     worktree_root = main_worktree_root(repo_root)
 
-    # ------------------------------------------------------------------
-    # 1. Idempotency short-circuit: staged mode already executable → no-op.
-    # ------------------------------------------------------------------
     mode, mode_err = _staged_mode(worktree_root, rel_path)
     if mode_err is not None:
         return _error(mode_err)
@@ -213,19 +185,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if mode == _MODE_EXECUTABLE:
         return {"committed": False, "sha": None, "already_executable": True}
     if mode != _MODE_REGULAR:
-        # Symlink (120000), gitlink (160000), or anything else: promoting its
-        # mode is undefined for this op — CC-7 fail-loud, never guess.
         return _error(
             f"path {rel_path!r} has index mode {mode}, not {_MODE_REGULAR} — "
             f"exec-bit promotion is defined only for regular files (CC-7 fail-loud)"
         )
 
-    # ------------------------------------------------------------------
     # 2. Foreign-staged-entries guard (B2 AMENDMENT). Unrestricted commit under
     #    live concurrency is the safe-commit stomp hazard: it commits EVERYTHING
-    #    staged. Any index entry other than the target → fail loud, name them,
-    #    touch nothing (never sweep, never reset/unstage — DEC-3).
-    # ------------------------------------------------------------------
     foreign, guard_err = _foreign_staged_entries(worktree_root, rel_path)
     if guard_err is not None:
         return _error(guard_err)
@@ -238,9 +204,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             foreign_staged=foreign,
         )
 
-    # ------------------------------------------------------------------
-    # 3. dry_run: everything resolved and validated; zero writes (CC-6).
-    # ------------------------------------------------------------------
     if dry_run:
         return {
             "committed": False,
@@ -249,9 +212,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "dry_run": True,
         }
 
-    # ------------------------------------------------------------------
-    # 4. Stage the mode and re-verify it landed (DR-151 step).
-    # ------------------------------------------------------------------
     chmod = _git(["update-index", "--chmod=+x", "--", rel_path], cwd=worktree_root)
     if not chmod.ok:
         return _error(
@@ -269,20 +229,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             f"an unverified mode (CC-7 fail-loud)"
         )
 
-    # ------------------------------------------------------------------
-    # 5. Commit WITHOUT path restriction — the DR-151 point. A path-restricted
-    #    commit silently resets the staged mode under core.fileMode=false.
-    #    This branch runs on every platform; there is no POSIX variant.
-    #
-    #    Claim-release ineligible (C3, docs/plans/2026-08-11-claim-release-
-    #    and-the-gate-that-cannot-clear.md): this commit is issued with NO
-    #    pathspec at all (`["commit", "-m", ...]`, no `--`) — deliberately,
-    #    per the DR-151 point above. `release_committed_claims` releases
-    #    exactly the caller-supplied paths that turn out clean; a release
-    #    keyed off "what this commit covered" has no bounded answer when
-    #    the commit itself covers whatever was staged, unrestricted. No
-    #    release call is added here.
-    # ------------------------------------------------------------------
     commit = _git(
         ["commit", "-m", f"chore: restore executable bit on {rel_path} (DR-151)"],
         cwd=worktree_root,

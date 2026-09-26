@@ -1,23 +1,3 @@
-"""Behavioral tests for
-coordinator_core.write_guards.block_derived_global_doctrine_write — the
-derived-vs-authoring routing guard for the global-doctrine CLAUDE.md-class
-surface family (see the module's own docstring for the full contract).
-
-Covers: FIRES on the derived live copy (~/.claude/CLAUDE.md), case-varied
-and Windows-separator-form (via pure string normalization — no WindowsPath
-construction needed, unlike the contained_path/Path.resolve()-based guards
-this module's docstring distinguishes itself from); SILENT on the authoring
-surface, a repo-root project CLAUDE.md, ordinary ~/.claude config writes,
-and the two coordinator/snippets/*.md surfaces; override env var honored.
-
-Path literals below use the placeholder segment ``alice``, per this repo's
-own concrete-path-citation guard convention (a generic username, not a real
-operator's). Windows-separator literals are raw strings with a SINGLE
-placeholder segment right after the drive root (that guard's own exemption
-checks only the first segment after a drive root, so a doubled-backslash
-source literal or a two-segment ``Users``/``alice`` shape would not read as
-exempt the same way).
-"""
 
 from __future__ import annotations
 
@@ -75,10 +55,6 @@ class TestFiresOnDerivedLiveCopy:
         _deny("/Users/alice/.CLAUDE/Claude.MD")
 
     def test_windows_separator_form_denied(self):
-        """Windows-separator payload, asserted from a POSIX interpreter —
-        this guard matches by pure string normalization, so no WindowsPath
-        construction is needed (contrast the contained_path/Path.resolve()
-        guards, which are unreachable this way off-Windows)."""
         _deny(r"C:\alice\.claude\CLAUDE.md")
 
     def test_windows_separator_case_varied_denied(self):
@@ -101,7 +77,6 @@ class TestFiresOnDerivedLiveCopy:
 
 class TestSilentOnEverythingElse:
     def test_authoring_surface_allowed(self):
-        """DoE-claude's own authoring copy — writes here are correct."""
         _allow("/Users/alice/repos/DoE-claude/global-doctrine/CLAUDE.md")
 
     def test_repo_root_project_claude_md_allowed(self):
@@ -125,8 +100,6 @@ class TestSilentOnEverythingElse:
         _allow("/Users/alice/.claude/docs/decisions/DR-104.md")
 
     def test_bare_claude_md_relative_allowed(self):
-        """No home-anchored .claude/ prefix at all — must not match on
-        basename alone."""
         _allow("CLAUDE.md")
 
 
@@ -184,10 +157,6 @@ class TestDenyTextNamesAlternativeAndConsequence:
         assert "/opt/some/doe-claude/global-doctrine/CLAUDE.md" in reason
 
     def test_unregistered_root_names_the_key_not_a_fabricated_path(self, monkeypatch):
-        """An unresolvable root renders the registry key the operator sets,
-        never an invented location. A literal fallback here would name a path
-        that exists on no machine — and, if it carried a codename, would
-        publish as a placeholder naming nothing at all."""
         monkeypatch.setattr(guard, "registry_get", lambda key: None)
         result = guard.check(_payload("/Users/alice/.claude/CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]

@@ -31,7 +31,6 @@ from coordinator_core.session import claim_index, core, scope
 from coordinator_core.ops.session import safe_commit_offer
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
-# Real git spawn is load-bearing, same rationale as test_safe_commit_offer.py.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -47,11 +46,6 @@ def _make_repo(tmp_path):
 
 class TestAC6PeerIsolationSameDirectory:
     # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
-    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
-    # max 150021ms against a 2000ms bar). Red at HEAD before this workstream
-    # touched anything, and left unmarked by the change that suspended the op --
-    # marked here because an unexplained red is a worklist entry nobody can
-    # action. NOT the attribution kill: that was rebuilt and
     # `_MECHANISM_DISABLED` is gone. Re-greens when the op leaves the roster.
     @pytest.mark.designed_red
     def test_peer_claimed_artifact_beside_own_survives_uncommitted(self, tmp_path):
@@ -77,8 +71,8 @@ class TestAC6PeerIsolationSameDirectory:
         status = subprocess.run(
             ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True
         , **no_console_creationflags()).stdout
-        assert "state/peer.txt" in status  # still untracked, never committed
-        assert "state/mine.txt" not in status  # ours landed
+        assert "state/peer.txt" in status
+        assert "state/mine.txt" not in status
 
 
 class TestDegradedOrIndeterminateCommitsNothing:
@@ -94,21 +88,8 @@ class TestDegradedOrIndeterminateCommitsNothing:
         (repo / "shared.py").write_text("s")
         scope.touch("mine", "mine.py", cwd=str(repo))
 
-        # The read seam moved with the 2026-08-21 rebuild: `compute_offer`
-        # reads claims through `claim_index`, whose reader reports
-        # unreadability as a `(lines, ok)` pair rather than by raising and
-        # does not go through `pathlib.Path.read_text` at all. Patching the
-        # old seam leaves the precondition unestablished and takes the test
-        # red for a reason unrelated to the code under test.
         scope.touch("other", "shared.py", cwd=str(repo))
-        # The seam moved AGAIN after the comment above was written:
-        # `_read_lines_discard_torn_tail` was deleted outright by the
-        # 2026-08-21 rebuild, so patching it raised AttributeError and took
-        # this test red for exactly the reason that comment warns about. The
-        # reader is now `claim_index._read_stream_claims(sink) ->
         # (claims, content_read_ok)`. Blind on the peer's session DIRECTORY,
-        # not a `touched.txt` filename -- the sink is `touch-record.jsonl`
-        # now, and filename matching would patch nothing silently.
         other_dir = os.path.normcase(core.session_dir("other", cwd=str(repo)))
         real_reader = claim_index._read_stream_claims
 
@@ -129,7 +110,7 @@ class TestDegradedOrIndeterminateCommitsNothing:
         status = subprocess.run(
             ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True
         , **no_console_creationflags()).stdout
-        assert "mine.py" in status  # never committed, even though uncontested
+        assert "mine.py" in status
 
     def test_degraded_ownership_read_skips_the_whole_call(self, tmp_path, monkeypatch):
         """Same underlying signal, read via `ownership["degraded"]` instead
@@ -142,21 +123,8 @@ class TestDegradedOrIndeterminateCommitsNothing:
         (repo / "shared.py").write_text("s")
         scope.touch("mine", "mine.py", cwd=str(repo))
 
-        # The read seam moved with the 2026-08-21 rebuild: `compute_offer`
-        # reads claims through `claim_index`, whose reader reports
-        # unreadability as a `(lines, ok)` pair rather than by raising and
-        # does not go through `pathlib.Path.read_text` at all. Patching the
-        # old seam leaves the precondition unestablished and takes the test
-        # red for a reason unrelated to the code under test.
         scope.touch("other", "shared.py", cwd=str(repo))
-        # The seam moved AGAIN after the comment above was written:
-        # `_read_lines_discard_torn_tail` was deleted outright by the
-        # 2026-08-21 rebuild, so patching it raised AttributeError and took
-        # this test red for exactly the reason that comment warns about. The
-        # reader is now `claim_index._read_stream_claims(sink) ->
         # (claims, content_read_ok)`. Blind on the peer's session DIRECTORY,
-        # not a `touched.txt` filename -- the sink is `touch-record.jsonl`
-        # now, and filename matching would patch nothing silently.
         other_dir = os.path.normcase(core.session_dir("other", cwd=str(repo)))
         real_reader = claim_index._read_stream_claims
 
@@ -168,7 +136,7 @@ class TestDegradedOrIndeterminateCommitsNothing:
         monkeypatch.setattr(claim_index, "_read_stream_claims", _unreadable)
 
         offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
-        assert offer["ownership"]["degraded"] is True  # precondition for this test
+        assert offer["ownership"]["degraded"] is True
 
         report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
         assert report["outcome"]["status"] in ("skipped_indeterminate", "skipped_degraded")
@@ -211,8 +179,6 @@ class TestGitFailureReturnsNonBlocking:
         scope.touch("mine", "a.py", cwd=str(repo))
 
         # A git-level commit failure is an EXCEPTION from `commit_paths`
-        # (`CommitRefused`), not a return-value shape -- `_commit_group`
-        # catches it and maps it onto `GroupResult`.
         def _failed_commit(*args, **kwargs):
             raise CommitRefused("simulated git-level commit failure")
 
@@ -222,7 +188,7 @@ class TestGitFailureReturnsNonBlocking:
 
         assert len(report["failed_groups"]) == 1
         assert report["failed_groups"][0]["commit_failed"] is True
-        assert report["outcome"]["status"] == "empty"  # nothing landed
+        assert report["outcome"]["status"] == "empty"
 
 
 class TestStagedSetMismatchDeferred:
@@ -237,11 +203,6 @@ class TestStagedSetMismatchDeferred:
 
 class TestDirtyPathAlreadyDirtyFromAnotherWriterFailsClosed:
     # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
-    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
-    # max 150021ms against a 2000ms bar). Red at HEAD before this workstream
-    # touched anything, and left unmarked by the change that suspended the op --
-    # marked here because an unexplained red is a worklist entry nobody can
-    # action. NOT the attribution kill: that was rebuilt and
     # `_MECHANISM_DISABLED` is gone. Re-greens when the op leaves the roster.
     @pytest.mark.designed_red
     def test_claimed_path_also_seen_as_peer_claim_is_withheld(self, tmp_path):
@@ -294,12 +255,12 @@ class TestDirtyPathAlreadyDirtyFromAnotherWriterFailsClosed:
         assert report["outcome"]["conflicted_paths"] == ["contested.py"]
         committed = {p for g in report["groups"] for p in g["paths"] if g["committed"]}
         assert "contested.py" not in committed
-        assert "clean.py" in committed  # the uncontested path still lands
+        assert "clean.py" in committed
 
         status = subprocess.run(
             ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True
         , **no_console_creationflags()).stdout
-        assert "contested.py" in status  # withheld, never committed
+        assert "contested.py" in status
 
 
 class TestUnresolvedGitRootFailsClosed:
@@ -369,9 +330,6 @@ class TestUnresolvedGitRootFailsClosed:
         assert report["groups"] == []
         assert report["failed_groups"] == []
 
-        # The return value is not the evidence that matters -- a commit that
-        # deleted the file would still report an empty `committed_paths` on
-        # some other status. Ask git.
         head_after = subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True,
             **no_console_creationflags(),
@@ -382,7 +340,7 @@ class TestUnresolvedGitRootFailsClosed:
             ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True,
             **no_console_creationflags(),
         ).stdout
-        assert "mine.py" in status  # never committed, and never deleted
+        assert "mine.py" in status
         assert (repo / "mine.py").exists()
 
     def test_a_resolvable_root_still_commits(self, tmp_path):

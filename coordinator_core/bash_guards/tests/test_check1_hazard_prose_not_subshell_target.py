@@ -57,7 +57,6 @@ FALSE_POSITIVES = {
         "EOF\n"
         ')"'
     ),
-    # No heredoc anywhere. This is why the fix is not a heredoc-stripping fix.
     "trailing_comment": (
         'python -c "print(1)"  # the doc mentions ' + BT + HAZARD + BT
     ),
@@ -65,9 +64,6 @@ FALSE_POSITIVES = {
         "python -c 'print(\"docs say " + BT + HAZARD + BT + " is the hazard\")'"
     ),
     # Stresses the across-newlines pair matching specifically: two SEPARATE
-    # code spans on different lines, whose stray halves a newline-crossing
-    # scan could falsely pair with each other. The upstream strippers must
-    # remove this body before the pair scan ever sees it.
     "multiline_prose_two_code_spans": (
         "python - <<'PY'\n"
         'a = "' + BT + HAZARD + BT + ' is the hazard"\n'
@@ -84,9 +80,6 @@ REAL_INVOCATIONS = {
     "command_substitution_parens": HAZARD + " " + SUBST_OPEN + "git rev-parse origin/main)",
     "command_substitution_backticks": HAZARD + " " + BT + "git rev-parse origin/main" + BT,
     "nested_in_compound": "cd /tmp && " + HAZARD + " " + SUBST_OPEN + "echo HEAD~5)",
-    # Ordinary shell, and the shape a single-line-only matched-pair rule drops
-    # out of CHECK 1 entirely: it survived only via the dirty-tree arm, which
-    # does not fire on a clean tree, so the deny looked present and was not.
     "multiline_command_substitution_parens": (
         HAZARD + " " + SUBST_OPEN + "\n  git rev-parse origin/main\n)"
     ),
@@ -98,7 +91,6 @@ REAL_INVOCATIONS = {
 
 @pytest.mark.parametrize("name", sorted(FALSE_POSITIVES))
 def test_hazard_prose_is_not_denied_as_a_subshell_target(name):
-    """Prose naming the hazard is documentation, not an invocation."""
     decision, reason = _decision(FALSE_POSITIVES[name])
     assert SUBSHELL_DENY_MARKER not in reason, (
         f"{name}: hazard-documenting prose denied as a subshell-resolved target.\n"
@@ -109,7 +101,6 @@ def test_hazard_prose_is_not_denied_as_a_subshell_target(name):
 
 @pytest.mark.parametrize("name", sorted(REAL_INVOCATIONS))
 def test_real_subshell_resolved_reset_still_denied(name):
-    """The load-bearing half: relaxing the scan must not drop a genuine deny."""
     decision, reason = _decision(REAL_INVOCATIONS[name])
     assert decision == "deny", f"{name}: real subshell-resolved reset was ALLOWED"
     assert SUBSHELL_DENY_MARKER in reason, (
@@ -118,24 +109,11 @@ def test_real_subshell_resolved_reset_still_denied(name):
     )
 
 
-# --- The load-bearing half of the FIX itself -------------------------------
-#
-# The two discriminators added to close the cases above are narrow by
-# construction: comments are text the shell never executes, and a backtick is
-# a spawn indicator only in the languages where it means command
-# substitution. These pin both narrowings so a later "simplification" cannot
-# widen them back into a dropped deny.
-#
 # Body VISIBILITY is what the backtick narrowing controls, so the cases below
-# assert it through CHECK 2's force-push deny rather than CHECK 1's own: a
-# `git reset --hard` whose target orphans nothing is allowed by design, which
-# would make a reset-shaped case here pass for the wrong reason.
 
 FORCE_PUSH = "git push origin main --force"
 
 FIX_MUST_STILL_DENY = {
-    # Backtick IS command substitution in Perl/Ruby/PHP -- narrowing the
-    # indicator by interpreter must leave every one of those bodies visible.
     "perl_heredoc_backtick_spawn": (
         "perl - <<'PL'\n"
         "my $out = " + BT + FORCE_PUSH + BT + ";\n"
@@ -151,19 +129,12 @@ FIX_MUST_STILL_DENY = {
         "$out = " + BT + FORCE_PUSH + BT + ";\n"
         "PHP"
     ),
-    # Python bodies keep every NON-backtick indicator: the backtick arm is the
-    # only thing that narrowed.
     "python_heredoc_subprocess_spawn": (
         "python - <<'PY'\n"
         "import subprocess\n"
         "subprocess.run(['git', 'push', 'origin', 'main', '--force'])\n"
         "PY"
     ),
-    # (An unrecognized-but-parseable command word classifies as "prose" and
-    # never reaches the indicator at all, so it is pinned at the unit level in
-    # `test_python_backtick_alone_no_longer_holds_a_body_visible` instead.)
-    # `#` inside a quoted span is not a comment -- the stripper must not eat
-    # the rest of a real invocation.
     "hash_inside_quotes_is_not_a_comment": (
         "git commit -m 'refs #12' && " + HAZARD + " " + SUBST_OPEN + "echo HEAD~5)"
     ),
@@ -172,16 +143,12 @@ FIX_MUST_STILL_DENY = {
 
 @pytest.mark.parametrize("name", sorted(FIX_MUST_STILL_DENY))
 def test_narrowed_scans_did_not_drop_a_real_deny(name):
-    """Each case is a shape the two narrowings could plausibly have dropped."""
     decision, reason = _decision(FIX_MUST_STILL_DENY[name])
     assert decision == "deny", f"{name}: real destructive invocation was ALLOWED"
     assert reason.strip(), f"{name}: denied with no reason text"
 
 
 def test_python_backtick_alone_no_longer_holds_a_body_visible():
-    """The narrowing itself, at the unit the fix changed: a lone backtick is a
-    spawn indicator for Perl/Ruby/PHP and for an unresolved interpreter, and is
-    NOT one for Python/Node, where it is a syntax error rather than a spawn."""
     body = ["s = " + BT + HAZARD + BT]
     assert not dispatch_checks._heredoc_body_has_spawn_indicator(body, "python")
     assert not dispatch_checks._heredoc_body_has_spawn_indicator(body, "node")
@@ -195,9 +162,6 @@ def test_python_backtick_alone_no_longer_holds_a_body_visible():
 
 
 def test_comment_stripping_does_not_unblock_check2_stash_exclusion():
-    """`_seg_resolved_git_subcommand`'s own documented mirror-image hazard: a
-    comment naming `git stash push` must not suppress CHECK 2 on a real forcing
-    push. Stripping comments strengthens that walk rather than competing."""
     decision, reason = _decision(FORCE_PUSH + "  # git stash push")
     assert decision == "deny", "a real forcing push was ALLOWED behind a comment"
     assert reason.strip()

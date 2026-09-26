@@ -62,7 +62,7 @@ def test_in_flight_counter_increments_at_enter_not_at_a_later_pickup():
 
 def test_drain_and_exit_blocks_while_a_queued_but_unstarted_request_is_in_flight():
     counter = server.InFlightCounter()
-    counter.enter()  # simulates _enqueue_connection's claim; nobody has picked it up
+    counter.enter()
 
     shutdown_calls: list[bool] = []
     exit_calls: list[int] = []
@@ -88,7 +88,7 @@ def test_drain_and_exit_blocks_while_a_queued_but_unstarted_request_is_in_flight
             "or for some other signal to look idle."
         )
 
-        counter.exit()  # the request is finally processed
+        counter.exit()
         thread.join(timeout=5.0)
         assert not thread.is_alive(), "drain never noticed the queue emptying"
         assert shutdown_calls == [True]

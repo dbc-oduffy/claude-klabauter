@@ -38,7 +38,6 @@ _POLICY_BASENAME = "subagent-sandbox-policy.yaml"
 
 @pytest.fixture(autouse=True)
 def _clear_resolution_cache():
-    """The process-level `resolution_class` memo leaks across tests otherwise."""
     warm_guard_evaluate._RESOLUTION_CLASS = None
     yield
     warm_guard_evaluate._RESOLUTION_CLASS = None
@@ -75,7 +74,6 @@ def _payload(plugin_root=None):
 
 
 def test_policy_file_comes_from_the_payloads_plugin_root(recorded):
-    """(a) The path is built under the CALLER's root, not this process's."""
     _run(_payload(plugin_root="/caller/clone/coordinator"))
     got = recorded[0]["policy_file"]
     assert got is not None
@@ -83,11 +81,6 @@ def test_policy_file_comes_from_the_payloads_plugin_root(recorded):
 
 
 def test_policy_file_is_recomputed_per_caller(recorded):
-    """(b) Two callers, two roots, two answers -- the anti-memoization pin.
-
-    This is the test that fails if someone folds `policy_file` into the same process-level
-    cache `resolution_class` uses. On a single call a frozen value looks correct.
-    """
     _run(_payload(plugin_root="/first/clone/coordinator"))
     _run(_payload(plugin_root="/second/clone/coordinator"))
     first, second = recorded[0]["policy_file"], recorded[1]["policy_file"]
@@ -97,13 +90,6 @@ def test_policy_file_is_recomputed_per_caller(recorded):
 
 
 def test_absent_plugin_root_passes_none_and_does_not_raise(recorded, monkeypatch):
-    """(c) A payload miss degrades to today's behaviour, never to a guessed path.
-
-    `resolve_caller_context` falls back to an ambient probe on a payload miss, so the ambient
-    leg is stubbed to `None` here to pin what THIS op does with an unresolvable root: pass
-    `None`, which makes the reviewer guard use its hardcoded default ruleset -- never an
-    empty/unconfined one.
-    """
     monkeypatch.setattr(
         warm_guard_evaluate,
         "resolve_caller_context",
@@ -114,11 +100,6 @@ def test_absent_plugin_root_passes_none_and_does_not_raise(recorded, monkeypatch
 
 
 def test_resolution_class_is_stable_within_a_process(recorded, monkeypatch):
-    """(d) The opposite assertion to (b): this one IS cached, deliberately.
-
-    Counts resolutions rather than comparing values, so it fails if the memo is removed even
-    when the underlying value happens to be constant.
-    """
     calls = {"n": 0}
 
     def _fake_with_class():
@@ -135,7 +116,6 @@ def test_resolution_class_is_stable_within_a_process(recorded, monkeypatch):
 
 
 def test_unresolvable_resolution_class_degrades_to_none_and_is_negative_cached(recorded, monkeypatch):
-    """A failing resolution must not re-pay the shim load on every subsequent Bash call."""
     calls = {"n": 0}
 
     def _boom():

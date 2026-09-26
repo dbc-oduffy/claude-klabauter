@@ -30,11 +30,9 @@ from coordinator_core.contract.cockpit_schema.provenance import ContentHash, Pro
 
 
 class RoadmapDagNode(BaseModel):
-    """One stub-node in a roadmap dependency graph."""
 
     model_config = ConfigDict(extra="forbid")
 
-    # Connector-injected registry shortname.
     repo: str = Field(
         description=(
             "Owner-qualified repo identity: '<owner>/<repo>'. Owner carries the "
@@ -45,29 +43,12 @@ class RoadmapDagNode(BaseModel):
             "owner-qualified string is the canonical cross-entity join anchor."
         )
     )
-    # Connector-injected — matches other summary entities.
     coordinator_root_path: str
-    # Stable identifier for the roadmap this node belongs to.
     roadmap_id: str
-    # Stable identifier for the stub (stub_id in the roadmap DAG).
     stub_id: str
-    # Per-stub roadmap phase status — free string, NOT an enum.
-    # Null when the DAG computation could not resolve a status for this node.
     status: str | None
-    # Sprint label assigned to this stub; string or numeric YAML value, null
-    # if unscheduled.
-    # Int included explicitly (not just float) so an
-    # integer-labeled sprint round-trips as e.g. `3`, not `3.0`, matching the
-    # oracle's number-preserving str|number|null wire type byte-for-byte.
     sprint: str | int | float | None
-    # Wave label assigned to this stub; string or numeric YAML value, null if
-    # unscheduled.
     wave: str | int | float | None
-    # Git SHA at which this stub shipped; null if not yet shipped.
     shipped_sha: str | None
     provenance: ProvenanceEnvelope
-    # R5 content-hash change-signal (optional; sibling of provenance). Omitted
-    # by claude-klabauter for records with no resolvable single source file (rolled-up
-    # aggregates, empty-path computed records). Version-neutral optional —
-    # absent on all existing records. Spec: producer-contract § 3.3.
     content_hash: ContentHash | None = None

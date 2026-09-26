@@ -1,10 +1,3 @@
-"""Behavioral tests for coordinator_core.write_guards.guard_memory_store_cap.
-
-Covers each of AC14's four limits on its deny side and its passing side, an
-unrelated write passing untouched, and the shrink-toward-compliance
-carve-out (the single most important passing case -- denying a shrinking
-edit on an over-cap file would trap that file permanently).
-"""
 
 from __future__ import annotations
 
@@ -134,7 +127,6 @@ class TestShrinkTowardComplianceCarveOut:
         target.write_text(over_cap_content, encoding="utf-8")
         assert len(over_cap_content.encode("utf-8")) > guard.MAX_MEMORY_MD_BYTES
 
-        # Shrinks the file, but the result is STILL over cap.
         smaller_still_over_cap = "# Memory Index\n\n" + ("y" * 2500)
         assert len(smaller_still_over_cap.encode("utf-8")) > guard.MAX_MEMORY_MD_BYTES
         assert len(smaller_still_over_cap) < len(over_cap_content)
@@ -153,23 +145,12 @@ class TestShrinkTowardComplianceCarveOut:
             _edit_payload(str(target), old="y" * 2100, new="y" * 2100 + "z" * 500)
         )
         assert result is not None
-        # DR-345 flips this guard hard-deny; the previous negative assertion
         # here pinned the ADVISORY shape on purpose (see the DR-277-flip
-        # comment this replaces). Per spec
-        # state/tasks/2026-08-21-memory-cap-hard-deny-and-count-cap.md, a
-        # deny is now the correct, intended result.
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert "permissionDecisionReason" in result["hookSpecificOutput"]
 
 
 class TestCaseVariedTargetDenied:
-    """macOS/APFS is case-insensitive-but-case-preserving: a Write to
-    Projects/-Some-project/Memory/MEMORY.md lands inside the same real
-    guarded memory/ directory on disk. os.path.normcase is a no-op on
-    POSIX, so this guard must casefold explicitly (mirrors
-    block_home_dir_memo_delivery's own case test).
-    (Review: code-reviewer -- case bypass in this guard, 2026-07-31.)
-    """
 
     def test_case_varied_memory_md_denied(self, memory_dir):
         home = memory_dir.parent.parent.parent.parent
@@ -179,8 +160,6 @@ class TestCaseVariedTargetDenied:
         content = "# Memory Index\n\n" + ("x" * 2100)
         result = guard.check(_write_payload(target, content))
         assert result is not None
-        # DR-345 flips this guard hard-deny (see comment on the analogous
-        # shrink-carve-out assertion above).
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert "permissionDecisionReason" in result["hookSpecificOutput"]
 
@@ -197,14 +176,6 @@ class TestCaseVariedTargetDenied:
 
 
 class TestDenyMessageNamesDisambiguatingSlug:
-    """Review finding (coordinatorcode-reviewer-54284751, Finding 4, P2):
-    the guard's scope is a wildcard per-project directory
-    (``<home>/.claude/projects/<any-slug>/memory/**``), so multiple distinct
-    project memory stores can each hold a same-named ``MEMORY.md``/body
-    file. A deny message naming only the bare filename can't tell an
-    operator working across several project memory stores WHICH one
-    tripped. Pins the project-relative ``<slug>/memory/<filename>`` form
-    the message must carry."""
 
     def test_memory_md_deny_names_project_slug(self, memory_dir):
         target = str(memory_dir / "MEMORY.md")
@@ -244,18 +215,6 @@ class TestDenyMessageNamesDisambiguatingSlug:
 
 
 class TestExtendedLengthPrefixAsymmetry:
-    """Finding 1 (review, coordinatorcode-reviewer-d278904f, 2026-08-03): the
-    containment gate's resolved+casefolded comparison correctly detects a
-    candidate whose `.resolve()` grows the `\\\\?\\` extended-length prefix
-    while the guarded root's does not, but the relative-parts extraction
-    immediately below it sliced the RAW (non-prefix-stripped) strings by
-    length -- under this exact asymmetry the slice offset by the prefix's
-    width, `len(parts) == 3` failed, and the guard silently treated a
-    governed MEMORY.md write as unrelated (fail-open). Simulates the
-    asymmetry the same way
-    test_block_home_dir_memo_delivery.test_extended_length_prefix_asymmetry_still_denies
-    does: the candidate's resolve grows the prefix, the root's does not.
-    """
 
     def test_over_cap_write_still_denied_under_prefix_asymmetry(self, monkeypatch, memory_dir):
         from pathlib import Path
@@ -276,8 +235,6 @@ class TestExtendedLengthPrefixAsymmetry:
         content = "# Memory Index\n\n" + ("x" * 2100)
         result = guard.check(_write_payload(target, content))
         assert result is not None
-        # DR-345 flips this guard hard-deny (see comment on the analogous
-        # shrink-carve-out assertion above).
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert "permissionDecisionReason" in result["hookSpecificOutput"]
 
@@ -289,21 +246,12 @@ class TestDenyMessageShape:
         result = guard.check(_write_payload(target, content))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "evict" in reason
-        # The memory-vs-lessons routing test replaced the eviction-ORDER
-        # detail here (PM ruling 2026-08-21): at the row cap the decision
-        # being made is "does this belong in memory at all", and the order
-        # to evict in is downstream of that. The order still ships on the
-        # byte-cap deny, which fires when the answer is already "yes".
         assert "force-read" in reason
         assert "TRUE" in reason
         assert "lesson" in reason
         assert "state/lessons/" in reason
 
     def test_file_count_deny_names_the_routing_test_and_both_routes(self, memory_dir):
-        """The count cap is the moment the wrong choice gets made, so its
-        deny must carry the routing test AND both PM-named exits: the
-        lessons route for anything not boot-critical, and the oldest file
-        as the eviction candidate when it is."""
         import os
         import time
         for i in range(guard.MAX_MEMORY_FILES):
@@ -333,7 +281,6 @@ class TestFileCountCap:
         for i in range(n):
             p = memory_dir / f"body-{i}.md"
             p.write_text("x", encoding="utf-8")
-            # Strictly increasing mtimes so body-0.md is unambiguously oldest.
             stamp = now - (n - i) * 10
             os.utime(p, (stamp, stamp))
 
@@ -360,9 +307,6 @@ class TestFileCountCap:
         assert result is None
 
     def test_memory_md_never_counted_as_body_file(self, memory_dir):
-        # 19 real body files + MEMORY.md (20 files total in the dir) --
-        # MEMORY.md must not count toward the body-file cap, so a 20th
-        # NEW body file is still admitted.
         (memory_dir / "MEMORY.md").write_text("# Memory Index\n", encoding="utf-8")
         self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES - 1)
         target = str(memory_dir / "new-one.md")
@@ -371,16 +315,6 @@ class TestFileCountCap:
 
 
 class TestRowLengthDenyNamesWhatItCounted:
-    """The refusal has to answer the two questions it used to leave open: which
-    rows, and why rows the writer never authored.
-
-    Measured 2026-09-11 on example-store-repo: one write refused for four overlong
-    rows, three of them pre-existing and written under an older, looser
-    guideline. Trimming them is the intent — the cap is a property of the file,
-    not of the diff — but a refusal that names rows the writer did not author,
-    without saying that is deliberate, reads as a corrupted file rather than a
-    bill, and gets worked around by whoever is in a hurry.
-    """
 
     def test_the_deny_says_the_count_covers_pre_existing_rows(self):
         reason = guard._deny_reason_row_length("repo", ["- " + "x" * 120])
@@ -396,14 +330,11 @@ class TestRowLengthDenyNamesWhatItCounted:
         assert row not in reason, "the whole row would blow the prose budget"
 
     def test_the_deny_stays_inside_the_prose_budget(self):
-        """220 bytes is the cap every message in this module is written to."""
         rows = ["- [" + "z" * 200 + "](f.md)"] * 9
 
         assert len(guard._deny_reason_row_length("claude-klabauter", rows).encode()) <= 220
 
     def test_a_short_row_is_quoted_whole(self):
-        """The excerpt is a budget device, not a redaction — a row that fits is
-        shown as it is, so the operator matches it by eye."""
         row = "- [Short](f.md) — hook"
 
         assert row in guard._deny_reason_row_length("repo", [row])
@@ -428,7 +359,6 @@ class TestByteDenyNamesWhereTheBytesAre:
         assert reason.index("Trim the prose") < reason.index("evict a row")
 
     def test_a_row_heavy_file_still_gets_the_eviction_ladder_alone(self):
-        """Where the bytes really are in the rows, nothing changes."""
         rows = ["- " + "x" * 90] * 20
 
         reason = guard._deny_reason_bytes("repo", 2100, rows)

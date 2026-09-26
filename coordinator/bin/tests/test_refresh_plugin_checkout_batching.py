@@ -1,14 +1,3 @@
-"""test_refresh_plugin_checkout_batching — pytest coverage for the batched
-interactive-partial-checkout leg in refresh-plugin-live-install.py.
-
-Spec backlink: state/ledgers/amp-wave4-worklist.md W2 -- chunk C2's
-amplification burn-down. `_handle_default`'s interactive-partial branch
-previously spawned one `git checkout <ref> -- <f>` per approved file; a
-single-item test passes identically before and after a batching change (the
-exact gap this worklist's own C2 brief calls out as having shipped a wrong
-batched fix elsewhere on 2026-08-19), so this file asserts the MULTI-item
-shape explicitly.
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -55,7 +44,6 @@ def test_checkout_approved_files_makes_one_call_for_many_files(monkeypatch, tmp_
 
 
 def test_checkout_approved_files_single_file_still_one_call(monkeypatch, tmp_path):
-    """Single-item shape must not regress -- still exactly one call."""
     calls = []
 
     def fake_git(args, cwd):

@@ -63,20 +63,9 @@ from typing import Optional
 
 from coordinator_core.resolve_validation_cmd import cs_read_local_md_key
 
-#: The R6 frontmatter key, spelled once. Every other module that needs it
-#: goes through the reader below rather than re-spelling it.
 FAST_TIER_UNSCOPED_REASON_KEY = "fast_tier_unscoped_reason"
 
 
 def fast_tier_unscoped_declaration(repo_root: Optional[str]) -> str:
-    """The non-empty R6 declaration prose this repo carries in its
-    ``coordinator.local.md`` frontmatter, or ``""`` when the key is absent,
-    empty, or whitespace-only.
-
-    ``repo_root`` defaults to the process cwd when ``None`` or empty,
-    matching every other repo-root-taking helper on this path. The return
-    is stripped, so "declared" means exactly "non-empty after strip" for
-    both consumers -- the one definition of the term, in one place.
-    """
     root = repo_root if repo_root else os.getcwd()
     return cs_read_local_md_key(root, FAST_TIER_UNSCOPED_REASON_KEY).strip()

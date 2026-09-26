@@ -43,9 +43,6 @@ import yaml
 
 _FIXTURE_PATH = Path(__file__).parent / "fixtures" / "stale_record_triage_oracle.yaml"
 
-#: Verdicts the ported audit table actually uses (see the fixture's own row
-#: data) -- a row carrying anything else is a transcription defect, not a
-#: legitimate new verdict this test should silently accept.
 _KNOWN_VERDICTS = {
     "FLIP-TO-IMPLEMENTED",
     "EXECUTE",
@@ -84,10 +81,6 @@ def test_every_row_has_a_unique_id_and_a_known_verdict() -> None:
 
 
 def test_false_positive_rate_is_measurable_from_the_fixture_alone() -> None:
-    """AC7's own text: the rate is measurable here, not by re-reading DoE's
-    audit. Computed straight off `is_false_positive`, cross-checked against
-    the fixture's own declared totals so a hand-edit that drifts the two
-    apart fails loudly here rather than silently downstream in C6/C7."""
     oracle = _load_oracle()
     rows: List[Dict[str, Any]] = oracle["rows"]
 
@@ -98,16 +91,11 @@ def test_false_positive_rate_is_measurable_from_the_fixture_alone() -> None:
     assert len(false_positive_ids) == oracle["ported_false_positives"]
     assert len(false_positive_ids) + len(true_positive_ids) == len(rows)
 
-    # AC11 precondition: both polarities must be non-empty, or a detector
-    # fix that surfaces nothing has nothing here to fail it.
     assert true_positive_ids, "oracle has no true-positive rows -- AC11 unfalsifiable"
     assert false_positive_ids, "oracle has no false-positive rows -- AC10 unmeasurable"
 
 
 def test_sat_family_asymmetry_false_positives_are_all_present() -> None:
-    """AC8's target: 6 `sat`-family false positives, all attributed to the
-    same named detector bug (`asymmetry_detector_bare_stub_id`), none of them
-    silently merged or dropped during the port."""
     oracle = _load_oracle()
     rows: List[Dict[str, Any]] = oracle["rows"]
 
@@ -119,12 +107,6 @@ def test_sat_family_asymmetry_false_positives_are_all_present() -> None:
 
 
 def test_commit_reality_ambiguous_attribution_rows_are_tagged() -> None:
-    """AC9's target family: `commit_reality` rows the audit calls out as
-    spurious attribution on `coordinator_core/` scope breadth alone. These
-    are tagged `detector_bug: ambiguous_attribution_scope_breadth` but
-    remain `is_false_positive: false` -- the audit's own verdict is that
-    real residual work exists even though the cited commit is the wrong one,
-    so a fix here must not make these rows go quiet (AC11)."""
     oracle = _load_oracle()
     rows: List[Dict[str, Any]] = oracle["rows"]
 
@@ -136,10 +118,6 @@ def test_commit_reality_ambiguous_attribution_rows_are_tagged() -> None:
     assert all(not r["is_false_positive"] for r in ambiguous_rows)
 
 
-#: C6's own live pinning tests (test_gate_eval.py::
-#: TestSatFamilyOracleAsymmetryFalsePositivesGoToZero) prove these 6
-#: detector_bug-tagged rows no longer surface an asymmetry finding against
-#: the real, symmetric sat graph -- referenced by name, not imported, per
 #: this module's negative-spec (see module docstring, C12 ADDITION).
 _FIXED_DETECTOR_BUG = "asymmetry_detector_bare_stub_id"
 
@@ -149,9 +127,6 @@ def _gate_eval_rows(oracle: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def test_gate_eval_restated_denominator_is_14_rows() -> None:
-    """AC10/AC11 restated denominator (staff-eng Finding 7): C10 deletes the
-    `commit_reality` verdict, so the false-positive rate is measured over the
-    `gate_eval` sub-table alone (14 rows), not the 24-row combined oracle."""
     oracle = _load_oracle()
     assert len(_gate_eval_rows(oracle)) == 14
 
@@ -182,13 +157,6 @@ def test_ac10_residual_false_positive_count_is_one_of_fourteen() -> None:
 
 
 def test_ac11_all_seven_true_positives_still_surface() -> None:
-    """AC11 (re-scoped 2026-08-26 to gate_eval's 7 true-positive rows) --
-    every `gate_eval` row the fixture marks a genuine finding
-    (`is_false_positive: false`) is still present in the restated
-    denominator. This is the interlock the chunk brief calls out in the same
-    breath as AC10: a detector fix that suppresses everything would pass
-    AC10 trivially by having nothing left to surface -- checked here, in the
-    same pass, never after."""
     oracle = _load_oracle()
     true_positive_rows = [r for r in _gate_eval_rows(oracle) if not r["is_false_positive"]]
     assert len(true_positive_rows) == 7

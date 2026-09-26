@@ -66,15 +66,8 @@ __all__ = [
     "ratchet_check",
 ]
 
-#: Per-module reporting threshold for the over-bar/under-bar three-state
-#: disposition — 72 of 1,135 modules exceed this today (see module
-#: docstring). NOT the ratchet target; see negative-spec above.
 PER_MODULE_LINE_BAR: int = 1500
 
-#: Frozen high-water, measured 2026-08-21 (C5 dispatch brief) against this
-#: repo's own `coordinator_core/` tree. Bump only with a deliberate,
-#: reasoned edit — never silently, and never to "make a failing ratchet
-#: pass" without recording why the growth is intended.
 FROZEN_HIGH_WATER_MODULES: int = 1135
 FROZEN_HIGH_WATER_LINES: int = 580560
 FROZEN_HIGH_WATER_OVER_BAR: int = 72
@@ -82,7 +75,6 @@ FROZEN_HIGH_WATER_OVER_BAR: int = 72
 
 @dataclasses.dataclass(frozen=True)
 class LineCountDistribution:
-    """The real distribution over a corpus's `ModuleSummary` set."""
 
     module_count: int
     total_lines: int
@@ -99,23 +91,11 @@ class LineCountDistribution:
 
 
 class RatchetError(Exception):
-    """Raised when a corpus's line-count distribution has grown past its
-    frozen high-water on module count, total lines, or over-bar count — a
-    REFUSAL, never a silent pass or a degrade (see AC: "the ratchet
-    assertions refuse (not degrade, not skip)")."""
+    pass
 
 
 @dataclasses.dataclass(frozen=True)
 class RatchetOutcome:
-    """The ratchet's verdict as DATA, not control flow — staff-eng Finding 5:
-    a measurement instrument must still produce a measurement when its
-    verdict is "over". `tripped` is the aggregate boolean (any of the three
-    quantities over its frozen high-water); each per-quantity dict below
-    carries both the `frozen` bound and the `measured` value so a consumer
-    can see BY HOW MUCH, not only whether. `evaluate_ratchet` never raises —
-    `ratchet_check` (below) is the raising sibling built on top of it for
-    callers that still want the refusal as control flow (e.g. `strict=True`
-    census callers)."""
 
     tripped: bool
     module_count: Dict[str, int]
@@ -132,12 +112,6 @@ class RatchetOutcome:
 
 
 def compute_distribution(summaries: Iterable[ModuleSummary]) -> LineCountDistribution:
-    """Aggregates `summaries` (as produced by `module_summary.summarize_paths`)
-    into a `LineCountDistribution`. A `ModuleSummary` with `parse_error` set
-    still contributes its best-effort `line_count` (per `module_summary`'s
-    own negative-spec: line count is derived from raw text, independent of
-    whether the AST parse succeeded) — this function does not special-case
-    parse errors."""
     module_count = 0
     total_lines = 0
     over_bar_modules: Dict[str, int] = {}
@@ -155,12 +129,6 @@ def compute_distribution(summaries: Iterable[ModuleSummary]) -> LineCountDistrib
 
 
 def evaluate_ratchet(distribution: LineCountDistribution) -> RatchetOutcome:
-    """Measures `distribution` against the frozen high-water on all three
-    ratcheted quantities and returns the verdict as a `RatchetOutcome` —
-    NEVER raises (staff-eng Finding 5: separating measurement from verdict
-    so a caller can always obtain a report, even when the ratchet has
-    tripped). `ratchet_check` is the raising sibling built on top of this
-    for callers that still want the refusal as control flow."""
     return RatchetOutcome(
         tripped=(
             distribution.module_count > FROZEN_HIGH_WATER_MODULES
@@ -183,15 +151,6 @@ def evaluate_ratchet(distribution: LineCountDistribution) -> RatchetOutcome:
 
 
 def ratchet_check(distribution: LineCountDistribution) -> None:
-    """Refuses (raises `RatchetError`) when `distribution` has grown past
-    the frozen high-water on module count, total lines, or over-bar count.
-    A shrink or hold on all three measures is always allowed with no bump
-    required — mirrors the "shrinks or holds without a reasoned bump"
-    shape of `claude_md_budget.ratchet_check`, without that module's
-    ledger-file indirection (see negative-spec above). Built on
-    `evaluate_ratchet` — the measurement; this function is the raising
-    control-flow wrapper around it, kept for callers (e.g. `census(...,
-    strict=True)`) that still want the refusal to happen inline."""
     outcome = evaluate_ratchet(distribution)
     if not outcome.tripped:
         return

@@ -99,9 +99,6 @@ def test_open_and_partial_rows_count_as_open() -> None:
 
 
 def test_an_unrecognised_status_is_unreadable_not_a_fabricated_open() -> None:
-    """A genuinely unrecognised prose token must not become a confident open
-    count -- an honest abstention (unreadable) beats a fabricated number in
-    either direction."""
     odd = _TABLE_PLAN.replace("| AC2 | second | **met** — landed at `def5678` |",
                               "| AC2 | second | probably fine? |")
     result = parse_plan_acceptance_criteria_table(odd)
@@ -133,16 +130,11 @@ def test_no_acceptance_criteria_heading_still_returns_none() -> None:
 
 
 def test_suffixed_ac_ids_are_counted() -> None:
-    """Real plans carry AC7b / AC9c alongside AC7 / AC9; a digits-only id
-    pattern would silently undercount exactly the plans with the most
-    criteria."""
     suffixed = _TABLE_PLAN.replace("| AC2 | second |", "| AC2b | second |")
     assert parse_plan_acceptance_criteria_table(suffixed)["total"] == 2
 
 
 def test_state_headed_table_parses_identically_to_status_headed() -> None:
-    """"State" is the one accepted synonym for "status" -- a table headed
-    that way must parse its rows exactly as a "Status"-headed table does."""
     state_headed = _TABLE_PLAN.replace("| ID | Criterion | Status |", "| ID | Criterion | State |")
     assert parse_plan_acceptance_criteria_table(state_headed) == parse_plan_acceptance_criteria_table(_TABLE_PLAN)
 
@@ -156,16 +148,12 @@ def test_state_header_casefold_variants_both_match() -> None:
 
 
 def test_discharged_by_headed_table_stays_unreadable() -> None:
-    """A non-status third-column header must NOT be silently read -- rows
-    still count as unreadable rather than being picked up positionally."""
     discharged_by = _TABLE_PLAN.replace("| ID | Criterion | Status |", "| ID | Criterion | Discharged by |")
     result = parse_plan_acceptance_criteria_table(discharged_by)
     assert result == {"done": 0, "total": 2, "open": 0, "unreadable": 2}
 
 
 def test_gate_resolves_a_fully_met_table_plan_as_not_applicable(tmp_path: Path) -> None:
-    """End to end: the regression that blocked the stamp. A landed plan with
-    every table row met must not report `indeterminate`."""
     plan = tmp_path / "plan.md"
     plan.write_text(_TABLE_PLAN, encoding="utf-8")
 
@@ -177,8 +165,6 @@ def test_gate_resolves_a_fully_met_table_plan_as_not_applicable(tmp_path: Path) 
 
 
 def test_gate_still_warns_on_a_landed_table_plan_with_an_open_row(tmp_path: Path) -> None:
-    """The other half: reading the table must not turn the gate into a rubber
-    stamp. A genuinely open row still fires."""
     plan = tmp_path / "plan.md"
     plan.write_text(_TABLE_PLAN_WITH_AN_OPEN_ROW, encoding="utf-8")
 
@@ -207,9 +193,6 @@ def test_gate_is_not_applicable_when_neither_grammar_is_present(tmp_path: Path) 
 
 
 def test_gate_reports_indeterminate_on_an_unreadable_status_row(tmp_path: Path) -> None:
-    """A landed plan whose table has a genuinely unrecognised status token
-    must not fabricate an open/done count -- it reports indeterminate,
-    naming how many rows could not be read."""
     plan = tmp_path / "plan.md"
     plan.write_text(_TABLE_PLAN.replace(
         "| AC2 | second | **met** — landed at `def5678` |", "| AC2 | second | probably fine? |"
@@ -222,8 +205,6 @@ def test_gate_reports_indeterminate_on_an_unreadable_status_row(tmp_path: Path) 
 
 
 def test_gate_prefers_the_larger_total_on_mixed_grammar(tmp_path: Path) -> None:
-    """A stray checkbox-shaped line elsewhere in the AC section must not
-    shadow a real table -- the parse with the larger total wins."""
     mixed = _TABLE_PLAN.replace(
         "## Tasks",
         "- [ ] unrelated follow-up note\n\n## Tasks",
@@ -238,8 +219,6 @@ def test_gate_prefers_the_larger_total_on_mixed_grammar(tmp_path: Path) -> None:
 
 
 def test_checkbox_plans_are_untouched_by_the_fallback(tmp_path: Path) -> None:
-    """The 21 checkbox-spelled plans must keep their existing behaviour --
-    the fallback fires only where the checkbox parse found nothing."""
     plan = tmp_path / "plan.md"
     plan.write_text("---\nstatus: landed\n---\n\n## Acceptance Criteria\n\n- [x] one\n- [ ] two\n",
                     encoding="utf-8")

@@ -97,16 +97,6 @@ def record_invocation(
     repo_root: Optional[Path] = None,
     now: Optional[float] = None,
 ) -> None:
-    """Best-effort, append-only record that shim `name` was invoked.
-
-    Intended call site: `coordinator/bin/lib/entry_point_shim.py ::
-    run_target`, once per invocation, before or after dispatching to the
-    resolved target -- either ordering is fine since this never affects
-    the target's own outcome. Never raises; every failure (unresolvable
-    repo root, unwritable/contended file, any OSError) is swallowed here
-    so a census write can never turn into a shim outage. See module
-    docstring's cheapness and failure-discipline sections.
-    """
     try:
         root = repo_root if repo_root is not None else _resolve_repo_root()
         if root is None:
@@ -118,28 +108,10 @@ def record_invocation(
         with open(path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(line)
     except Exception:
-        # Negative-spec: a census write must never break the shim it
-        # observes. Every failure mode (unwritable file, contended disk,
-        # missing repo root, encoding error) degrades to "not recorded"
-        # rather than propagating.
         pass
 
 
 def _resolve_repo_root() -> Optional[Path]:
-    """Resolve the repo whose series this invocation belongs to.
-
-    Normally cwd's git toplevel: a shim used inside a sibling repo is that
-    repo's usage, and its series belongs there. The exception is the published
-    engine mirror. A shim invoked with cwd inside it appended to
-    `<mirror>/.coordinator-local/shim-usage-census.jsonl`, which is gitignored
-    there and tracked nowhere -- the series was being written to a sink no reader can
-    open, and `census()` reading from any real repo could never see those rows.
-    A mirror is a build artifact, not a repo whose shim usage anyone asked
-    about, so those invocations are redirected to the engine source tree where
-    the rest of the series already lives.
-
-    Backlink: state/audits/2026-08-21-transform-resolved-writer-inventory.md
-    """
     toplevel = show_toplevel()
     if toplevel is None:
         return None
@@ -203,7 +175,7 @@ def census(
                 try:
                     entry = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
-                    continue  # malformed log line; the line is skipped, not fatal to the census
+                    continue
                 if not isinstance(entry, dict):
                     continue
                 name = entry.get("name")
@@ -219,7 +191,7 @@ def census(
                     if rec["last_ts"] is None or ts > rec["last_ts"]:
                         rec["last_ts"] = ts
     except OSError:
-        pass  # log file became unreadable mid-scan; the partial census accumulated so far is returned
+        pass
     return result
 
 

@@ -79,10 +79,6 @@ from coordinator_core.telemetry.composition_record import (
     make_fleet_budget,
 )
 
-# ---------------------------------------------------------------------------
-# Exit-code contract — composed from apply_base, shared by every apply/
-# dispatch half. NOT inherited from `brief`'s own 0/1/2/3 contract.
-# ---------------------------------------------------------------------------
 APPLY_EXIT_OK = apply_base.APPLY_EXIT_OK
 APPLY_EXIT_HALTED_AT_JUDGMENT = apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT
 APPLY_EXIT_CLAIM_DENIED = apply_base.APPLY_EXIT_CLAIM_DENIED
@@ -98,11 +94,6 @@ DirectiveResult = apply_base.DirectiveResult
 _resolve_explicit_session_id = apply_base.resolve_explicit_session_id
 _session_identity = apply_base.session_identity
 
-#: `coordinator/bin/` — resolved from the ENGINE clone, never from a
-#: target repo's `repo_root` (which may differ from the claude-klabauter install
-#: this module ships from, and in every consumer repo has no
-#: `coordinator/bin/` at all). Both dispatch paths — `_run_py_script`
-#: and `_dispatch_in_process` — resolve their script here.
 _BIN_DIR = resolve_cli_script_root()
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -192,14 +183,6 @@ def _dispatch_in_process(cli: str, script_name: str, args: list[str]) -> dict[st
 
 
 def _dispatch_node_ceremony_gate(args: list[str], repo_root: Path) -> dict[str, Any]:
-    """`d0` — the node ceremony hard-gate (chunk C6 AC). `--force` never
-    reaches this handler: a forced run marks `d0.already_satisfied = True`
-    (see `_apply_force_bypass`) so `apply_base.execute_directives` skips
-    dispatch entirely, exactly like any other `already_satisfied`
-    directive. When this handler DOES run and the suite fails, it raises —
-    `apply_base.execute_directives` aborts the whole run immediately
-    (`d0` orders first, per `build_directives`), so no later directive
-    ever dispatches on a failed ceremony gate."""
     test_path = Path(*NODE_CEREMONY_TEST_RELPATH)
     proc = subprocess.run(
         ["node", "--test", str(test_path)],
@@ -212,17 +195,6 @@ def _dispatch_node_ceremony_gate(args: list[str], repo_root: Path) -> dict[str, 
 
 
 def _anchor_merge_recovery_config_path(args: list[str], repo_root: Path) -> list[str]:
-    """`d1` (`resolve-tag-prefix`) has NO `--repo-root` flag at all — verified
-    against `merge-recovery-and-tag-cut.py`'s own argparse setup, only
-    `recovery-branch` and `cut-tag` declare one. The one path-shaped
-    argument `resolve-tag-prefix` DOES take is `--config PATH`, which the
-    script resolves against whatever cwd it happens to run in when `PATH`
-    is relative — `d1`'s own `args` carries the relative
-    `coordinator.local.md`. Rather than inject a flag this subcommand's
-    parser does not accept, this anchors that relative `--config` value
-    onto `repo_root` before dispatch — the argument path this verb actually
-    has is `--config`, not `--repo-root`, and anchoring it discharges the
-    same "explicit repo root, never ambient cwd" requirement through it."""
     out = list(args)
     for i, token in enumerate(out):
         if token == "--config" and i + 1 < len(out):
@@ -454,59 +426,19 @@ def _compensate_grant_write(
     return None
 
 
-#: Per-directive-id compensators, fired in reverse landing order by
-#: `apply_base.execute_directives` when a handler raises. Only the grant
-#: write registers one: it is the single directive here whose effect
 #: OUTLIVES the run (a token in `.git/coordinator-sessions/<sid>/` that a
-#: later Tier-U consumer reads), so it is the only one an aborted run can
-#: strand.
 _COMPENSATORS: dict[str, Any] = {
     "d_grant_write": _compensate_grant_write,
 }
 
 
-#: C6 discriminator decision (docs/plans/2026-08-19-directives-name-an-op-not-
-#: a-cli.md § C6 / § The discriminator for the mixed end state) — measured
-#: live against `coordinator_core.authz.registration_quad._live_registry()`
-#: this chunk: NONE of merge's eight verbs (`node-ceremony-gate`,
-#: `merge-recovery-and-tag-cut`, `merge-gate-and-pr`, `portability-sweep`,
-#: `check-no-illegal-paths`, `merge-release-notes-derive`,
-#: `orphan-branch-sweep`, `tier-u-grant`) resolve to a registered op, so ALL
-#: EIGHT stay `cli`-named — none migrate to `op`. No new op is minted to
-#: force a migration (out of scope by name). `orphan-branch-sweep` is the
-#: one name that LOOKS closest to a registered surface — its own bin script
-#: composes four registered `git_branch.*` ops internally
 #: (`coordinator_core/ops/orphan_branch_sweep.py`), but the DIRECTIVE this
-#: table dispatches names the SCRIPT, never one of those four op keys
-#: directly, so the discriminator's answer is unchanged: not a registered
-#: op under this literal name. `node-ceremony-gate` spawns `node --test`
-#: (a genuinely external program with no import path — never converged).
-#: POST-C2: `merge-recovery-and-tag-cut`, `portability-sweep`, and
 #: `check-no-illegal-paths` dispatch IN-PROCESS via `ceremony_common.
-#: cli_dispatch` (no subprocess, ever); `merge-gate-and-pr`,
-#: `merge-release-notes-derive`, and `orphan-branch-sweep` still spawn an
-#: existing `coordinator/bin/*.py` script via `sys.executable` — each
 #: EXCLUDED from C2's conversion because it has no in-scope argument path
-#: for its own repo root (see each handler's own docstring for the specific
-#: gap). Neither population is `bash`/`sh`, so `docs/reference/
-#: shell-out-carve-outs.md` (scoped to interpreter/shell spawns) does not
 #: apply to any of the eight, and none is a `CONSUMES_MANIFEST`-driven
 #: script module in the completion-family sense, so no `CONSUMES_MANIFEST`
-#: entry applies either.
-#:
-#: AC5 (verified live this chunk, C2 — the reasoning is settled at plan
-#: time, this is verification, not a decision point): `apply_base.
-#: execute_directives`'s admission keys on `directives[].op` via
-#: `resolve_op`, which calls `assert_dispatchable`; `directives[].cli`
-#: routes through `resolve_cli`, which never calls it. C2 moves `cli` keys
-#: between execution models (in-process vs. spawned) — it introduces no
-#: `op` directive — so the premise `assert_dispatchable` gates is
 #: untouched, and `ASSEMBLER_DISPATCHABLE` (coordinator_core/authz/
-#: dispatchable.py) still carries NO `"merge_assemble"` entry (confirmed:
 #: `"merge_assemble" not in ASSEMBLER_DISPATCHABLE` at execution time).
-#:
-#: THE closed dispatch table — every key is a literal string written here
-#: by hand, matching `merge_assemble.build_directives`'s `cli` values.
 _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     "node-ceremony-gate": _dispatch_node_ceremony_gate,
     "merge-recovery-and-tag-cut": _dispatch_merge_recovery_and_tag_cut,
@@ -569,11 +501,6 @@ def _fill_gate_verdicts(
 
 
 def _apply_force_bypass(directives: list[dict[str, Any]], force: bool) -> list[dict[str, Any]]:
-    """`--force` bypass (chunk C6 AC): marks the node ceremony gate (`d0`)
-    `already_satisfied` so it is reported landed without ever dispatching
-    its handler — the same mechanism `apply_base` already gives every
-    OTHER `already_satisfied` directive, not a bespoke skip path. Every
-    other directive is returned unchanged."""
     if not force:
         return directives
     out = []
@@ -593,12 +520,6 @@ def apply(
     force: bool = False,
     tag_prefix: str = "v",
 ) -> tuple[int, dict[str, Any]]:
-    """`apply [--session-id <id>] [--force] [--decisions <json>]` —
-    recomputes the brief in-process and executes its `directives[]` through
-    `apply_base.execute_directives` against this module's closed dispatch
-    table. Returns `(exit_code, report)`; `report["landed"]` names exactly
-    which directive ids ran (or were skipped `already_satisfied`, including
-    a forced `d0`)."""
     root = repo_root or resolve_repo_root()
     if root is None:
         return APPLY_EXIT_TRANSPORT_FAIL, {"error": "could not resolve a git worktree root"}
@@ -615,11 +536,6 @@ def apply(
             ),
         }
 
-    # Normalized exactly once here — `brief()` re-normalizes idempotently
-    # on its own input, so this SAME map is what both `brief()`'s internal
-    # override resolution and `execute_directives`'s `disposition_resolves_
-    # directive` gate see; they must never be allowed to disagree about
-    # what a bare-string `version_bump_final` entry means.
     effective_decisions = normalize_decisions(decisions)
 
     with _session_identity(resolved_sid, env_vars=apply_base.SESSION_ENV_VARS):
@@ -653,9 +569,6 @@ def apply(
                 outcome = "partial_mutation"
         finally:
             flush_composition_record(composition_budget, outcome, exit_code_label=exit_label)
-        # branch_state/release_tag_cut moved into the canonical envelope's
-        # `artifact` key (Review: code-reviewer — Finding 1) — no longer
-        # top-level siblings of directives/judgment_points.
         artifact = decision.get("artifact") or {}
         report["branch_state"] = artifact.get("branch_state")
         report["release_tag_cut"] = artifact.get("release_tag_cut")

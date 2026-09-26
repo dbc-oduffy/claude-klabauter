@@ -45,11 +45,6 @@ from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
     build_scaffold_directive,
 )
 
-# C6: the shared constructor's (C1) per-type required-flag computation for
-# this host's one emitted row (coordinator_core/ops/doctype_hosts.py --
-# keyed (type="health-status", ceremony="plugin-health"),
-# module=this package). No flag beyond `--type`/`--out` is required or
-# even accepted by the real parser for this type.
 _HEALTH_STATUS_FLAG_SPEC: tuple[Flag, ...] = ()
 
 
@@ -74,13 +69,6 @@ def _health_status_directive() -> dict[str, Any]:
 
 
 def brief(*, emit_health_status: bool = False) -> dict[str, Any]:
-    """C6: this module's own scaffold-emission compute. Returns
-    `{"directives": [...]}`: a `health-status` directive when the caller
-    has resolved `emit_health_status` true (a daily health-status record
-    is due), else an empty list — additive and gated, same shape as
-    `roadmap_planning_assemble.brief`'s C3 precedent, so a caller not
-    passing it is unaffected.
-    """
     directives: list[dict[str, Any]] = []
     if emit_health_status:
         directives.append(_health_status_directive())

@@ -1,11 +1,3 @@
-"""
-Tests for coordinator_core.install.substrate's Python port of
-claude-machine-local.sh's key-normalization + export-resolution loop.
-
-Port source: coordinator/templates/bin/claude-machine-local.sh [DoE-claude
-repo]. The .sh remains sourced-only (unported, unchanged) — these tests
-cover the standalone Python helper only, not a trampoline.
-"""
 from coordinator_core.install.substrate import (
     repo_key_to_env_var,
     resolve_repo_env_exports,
@@ -41,8 +33,6 @@ def test_resolve_exports_rc1_clean_absence_not_exported():
     assert errors == []
     assert len(warnings) == 1
     assert "not resolved by ladder" in warnings[0]
-    # Negative-spec: never exports "" for a clean absence (would corrupt
-    # "$REPO_X/subdir" path joins to "/subdir").
     assert "REPO_MISSING" not in exports
 
 

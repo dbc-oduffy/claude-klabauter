@@ -1,11 +1,3 @@
-"""Tests for coordinator_core.ops.check_posix_tmpdir_fallback.
-
-Covers both detected AST shapes (two-arg `.get()` default, `or`-fallback),
-the negative case (`tempfile.gettempdir()` never flags), and a real-tree
-wiring check that this repo's own tracked sources are currently clean
-(the 2026-07-28 dispatch that authored this guard also fixed both
-pre-existing true positives it was measured against).
-"""
 
 from __future__ import annotations
 
@@ -52,10 +44,6 @@ def _commit_all(repo: Path, message: str = "seed") -> None:
     _git(repo, "commit", "-q", "-m", message)
 
 
-# ---------------------------------------------------------------------------
-# Two-arg `.get(name, "/tmp")` shape.
-# ---------------------------------------------------------------------------
-
 def test_scan_source_detects_two_arg_default():
     src = 'import os\ntmp_dir = os.environ.get("TMPDIR", "/tmp")\n'
     hits = scan_source(src)
@@ -72,21 +60,11 @@ def test_scan_source_detects_two_arg_default_for_temp_and_tmp():
     assert [k for _, k in hits] == ["two_arg_default", "two_arg_default"]
 
 
-# ---------------------------------------------------------------------------
-# `.get(name) or "/tmp"` shape.
-# ---------------------------------------------------------------------------
-
 def test_scan_source_detects_or_fallback():
     src = 'import os\nstate_dir = os.environ.get("TMPDIR") or "/tmp"\n'
     hits = scan_source(src)
     assert hits == [(2, "or_fallback")]
 
-
-# ---------------------------------------------------------------------------
-# `os.getenv(...)` spelling (Review: code-reviewer Finding 1, 2026-07-28 —
-# functionally identical to `os.environ.get(...)` and at least as common;
-# the original matcher missed it entirely).
-# ---------------------------------------------------------------------------
 
 def test_scan_source_detects_getenv_two_arg_default():
     src = 'import os\ntmp_dir = os.getenv("TMPDIR", "/tmp")\n'
@@ -106,10 +84,6 @@ def test_scan_source_detects_bare_getenv_alias_import():
     assert hits == [(2, "two_arg_default")]
 
 
-# ---------------------------------------------------------------------------
-# Negative case: tempfile.gettempdir() is never flagged.
-# ---------------------------------------------------------------------------
-
 def test_scan_source_ignores_tempfile_gettempdir():
     src = (
         'import tempfile\n'
@@ -128,10 +102,6 @@ def test_scan_source_ignores_unrelated_or_fallback():
     src = 'import os\nx = os.environ.get("HOME") or "/root"\n'
     assert scan_source(src) == []
 
-
-# ---------------------------------------------------------------------------
-# scan() — fixture-repo wiring (git ls-files enumeration).
-# ---------------------------------------------------------------------------
 
 def test_scan_detects_violation_in_fixture_repo(tmp_path):
     repo = _init_repo(tmp_path)
@@ -164,10 +134,6 @@ def test_scan_ignores_untracked_files(tmp_path):
 
     assert scan(repo) == []
 
-
-# ---------------------------------------------------------------------------
-# Real-tree wiring: this repo's own tracked sources are clean.
-# ---------------------------------------------------------------------------
 
 def test_real_tree_has_no_posix_tmpdir_fallback_violations():
     result = scan(_REPO_ROOT)

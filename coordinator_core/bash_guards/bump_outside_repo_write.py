@@ -313,9 +313,6 @@ from coordinator_core.session import machinery_paths
 from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
 from coordinator_core.write_guards._case_fold_path import casefold_path
 
-#: This surface's stand-down audit token and tracked-sink filename. Named
-#: per-surface, so the three write-confinement bumps leave three
-#: distinguishable records rather than one ambiguous stream.
 _STAND_DOWN_MARKER = "STAND-DOWN-OUTSIDE-REPO-WRITE"
 _STAND_DOWN_SINK = "outside-repo-write.log"
 _STAND_DOWN_LABEL = "outside-repo-write"
@@ -327,20 +324,6 @@ def _stand_down_instead_of_denying(
     target_label: str,
     stood_down,
 ) -> None:
-    """Record and announce that this bump stood down, and return NOTHING.
-
-    Both legs of this guard (bash and PowerShell) reach their deny site with
-    the same four facts, so the stand-down wiring lives here once rather than
-    twice -- the duplicated-predicate failure mode `_write_bump_stand_down`
-    was extracted to end applies just as much within one module.
-
-    Negative-spec: returns `None`, never an envelope. `dispatch`'s chain loop
-    is `if out is not None: return out`, so any non-`None` value would claim
-    the slot and silently skip every guard registered after this one -- the
-    regression `_write_bump_stand_down.stand_down_notice` records. It also
-    does NOT decide whether to stand down; the caller does that, after its
-    marker check and after every exemption.
-    """
     log_environment_stand_down(
         anchor_git_root,
         effective_sid,
@@ -357,9 +340,6 @@ def _stand_down_instead_of_denying(
 
 
 def _deny(reason: str) -> Dict[str, Any]:
-    """Same envelope shape as C4's own `_deny` -- inlined for the identical
-    reason that module states: no dependency on `dispatch_checks.py` for two
-    lines of dict literal."""
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -370,10 +350,6 @@ def _deny(reason: str) -> Dict[str, Any]:
 
 
 def _resolve_and_casefold(raw: str) -> Optional[str]:
-    """`os.path.realpath` then `casefold_path`, or `None` on any resolution
-    failure. Mirrors `bump_foreign_repo_write._resolve_and_casefold` /
-    `_write_bump_applicability._resolve_path` exactly so every guard in this
-    wave agrees on what "resolved" means for a path comparison."""
     if not raw:
         return None
     try:
@@ -384,25 +360,11 @@ def _resolve_and_casefold(raw: str) -> Optional[str]:
 
 
 def _is_under(candidate_cf: str, parent_cf: str) -> bool:
-    """Case-folded prefix containment -- both inputs already resolved via
-    `_resolve_and_casefold`. Mirrors `_write_bump_applicability._is_under`."""
     parent_stripped = parent_cf.rstrip("/")
     return candidate_cf == parent_stripped or candidate_cf.startswith(parent_stripped + "/")
 
 
-# ---------------------------------------------------------------------------
-# AC9 -- always-allowed destinations. See module docstring for the full
-# resolution rationale of each.
-# ---------------------------------------------------------------------------
-
-
 def _sandbox_root(git_root: Optional[str], session_id: str) -> str:
-    """`<machinery_root>/subagent-share/<session_id>/` under `git_root` --
-    resolved through `machinery_paths.share_dir` (the sole owner of this
-    path shape, per `docs/plans/2026-09-02-state-keeps-the-work-not-the-
-    machinery.md` chunk C3), mirroring `bump_foreign_repo_write.
-    _sandbox_root_hint`. Returns `""` when either input is empty -- no
-    fabricated path for an unresolvable case."""
     if not git_root or not session_id:
         return ""
     return machinery_paths.share_dir(git_root, session_id)
@@ -422,12 +384,6 @@ def _always_allowed_roots(
     if settings_home:
         roots.append(settings_home)
 
-    # System temp / session scratchpad are NOT handled through this
-    # containment-list mechanism -- see `_target_is_always_allowed`'s own
-    # call to the shared `target_is_bare_temp_scratch` classifier, which
-    # covers the full recognized-temp-root set (not `tempfile.gettempdir()`
-    # alone -- see that classifier's docstring for why the harness
-    # scratchpad needs more than `gettempdir()` on macOS).
 
     sandbox = _sandbox_root(anchor_git_root, effective_sid)
     if sandbox:
@@ -443,32 +399,13 @@ def _target_is_always_allowed(
     if target_cf is None:
         return False
 
-    # System temp / session scratchpad -- shared classifier (see module
     # docstring, "ALWAYS-ALLOWED DESTINATIONS"), NOT the settings-home/
-    # sandbox containment-list mechanism below: `target_is_bare_temp_scratch`
-    # both covers the full recognized-temp-root set AND re-asserts the
-    # no-git-repo conjunction itself, so it is correct even if a future
-    # caller ever invokes this helper without first excluding
-    # git-resolved candidates the way `check_bump_outside_repo_write` does
-    # today.
     if target_is_bare_temp_scratch(target_dir, env=env):
         return True
 
-    # Agent memory store -- Claude Code's own per-project persistent memory
-    # (`<home>/.claude/projects/<slug>/memory/**`), governed on its own
-    # terms by `guard_memory_store_cap.py` and never a sibling repo or a
-    # cross-repo delivery -- see `is_agent_memory_store_path`'s own
-    # docstring for the false-positive this closes.
     if is_agent_memory_store_path(target_dir):
         return True
 
-    # ~/.claude carve-out (docs/plans/2026-08-10-carve-claude-out-and-
-    # close-the-backslash-bypass.md, C1, AC1-AC4). Unconditional, like the
-    # agent-memory check immediately above: `~/.claude` IS a real git
-    # checkout on this fleet, so it must not be gated on a resolved
-    # `target_gitdir` the way `_target_is_under_settings_home` gates the
-    # tool-surface settings-home exemption -- see `target_is_under_claude_
-    # home`'s own docstring.
     if target_is_under_claude_home(target_dir, env=env):
         return True
 
@@ -481,11 +418,7 @@ def _target_is_always_allowed(
     return False
 
 
-# ---------------------------------------------------------------------------
-# AC4 -- inline `python`/`python3 -c` payload unwrap. bash/sh/zsh are
-# already unwrapped for free by `resolve_command_positions` itself (module
 # docstring, "INLINE PYTHON `-c` PAYLOADS").
-# ---------------------------------------------------------------------------
 
 
 def _extract_inline_c_payload(tokens_after_interpreter: List[str]) -> Optional[str]:
@@ -507,10 +440,7 @@ def _extract_inline_c_payload(tokens_after_interpreter: List[str]) -> Optional[s
     return None
 
 
-# ---------------------------------------------------------------------------
-# Candidate extraction -- plain-bash write sinks only (see module docstring,
 # "WRITE-SINK CLASSIFICATION", for why this deliberately excludes git).
-# ---------------------------------------------------------------------------
 
 
 def _iter_write_sink_candidates(
@@ -607,10 +537,6 @@ def _iter_write_sink_candidates(
         if rc.depth == 0 and head_base == "cd":
             positional = [t for t in rc.tokens[1:] if not t.startswith("-")]
             if len(positional) == 1:
-                # `None` means untranslatable -- a `cd` we cannot resolve
-                # must not poison every subsequent candidate in this
-                # segment, so leave `effective_cwd` at its previous value
-                # rather than clobbering it with `None`.
                 resolved = _resolve_relative(effective_cwd, positional[0])
                 if resolved is not None:
                     effective_cwd = resolved
@@ -739,28 +665,14 @@ def _no_git_repo_target_label(
         return label
     flag_off_target = flag_off_candidates[candidate_index][0]
     if flag_off_target == target_dir:
-        # Quoted (or no backslash survived either way) -- bash preserves
-        # it, intent and effect already agree, nothing to add.
         return label
     return "no git repo (%s; unquoted backslashes, so bash writes into cwd instead)" % (
         target_dir,
     )
 
 
-# ---------------------------------------------------------------------------
-# The guard itself.
-# ---------------------------------------------------------------------------
-
-
-#: Shape-only unexpanded-variable target (bug-backlog record 2026-08-14,
-#: 4a1e7c93b256): `$D` or `${D}` with nothing else in the raw token. Matches
-#: the shape a caller left un-set/un-exported, not the SET of characters a
-#: legal path could also contain -- so `$D/out.txt` (a variable used as a
-#: path PREFIX, still plausibly a real path once expanded) does not match.
 _UNEXPANDED_VAR_TARGET_RE = re.compile(r"^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$")
 
-#: A name the command itself assigns before use: `D=...`, `export D=...`,
-#: `local`/`declare`/`readonly D=...`, `for D in`, `read [-flags] D`.
 _ASSIGNED_NAME_RE = re.compile(
     r"(?:^|[\s;&|(])(?:(?:export|local|declare|readonly|typeset)\s+(?:-\w+\s+)*)?"
     r"([A-Za-z_][A-Za-z0-9_]*)\+?="
@@ -845,24 +757,8 @@ def check_bump_outside_repo_write(
          marker (checked against the session's own anchor gitdir) already
          clears it.
     """
-    # DIALECT GATE (C4e, 2026-08-07 -- guard-dialect-coverage.md row 15;
-    # follow-up dispatch, same date, converted the blanket PowerShell SILENT
-    # below into real detection once the PM authorized extending this
     # cohort's scope into `_write_bump_sink_shapes.py`). `Dialect.POWERSHELL`
-    # now routes to `_check_bump_outside_repo_write_powershell`, which
-    # detects ONLY the cmdlet-shaped write table C3's triage named as the
-    # genuinely unmatched gap (`New-Item`/`Set-Content`/`Add-Content`/
-    # `Copy-Item`/`Move-Item`/`Out-File`/`Tee-Object`, added to
     # `_write_bump_sink_shapes.py` as `PS_WRITE_SINK_CMDLETS`/
-    # `extract_write_sink_targets_powershell`) -- `cp`/`mv` PowerShell
-    # aliases are NOT duplicated here (already fire via alias collision
-    # elsewhere) and `>`/`>>` are left alone (same operator characters in
-    # both dialects, not this leg's to re-derive). Every other PowerShell
-    # shape -- a bare redirect, an alias, an unrecognized cmdlet, or a
-    # command this dialect's tokenizer cannot parse at all -- still records
-    # SILENT and declines, per "prefer SILENT to a guess wherever PowerShell
-    # semantics are unclear" (see that function's own docstring). `Dialect.
-    # BASH`/`None` falls through unchanged below (AC4).
     dialect = dialect_from_tool_name(payload.get("tool_name") if isinstance(payload, dict) else None)
     if dialect is Dialect.POWERSHELL:
         return _check_bump_outside_repo_write_powershell(cmd, session_id, cwd, payload)
@@ -876,9 +772,6 @@ def check_bump_outside_repo_write(
         return None
 
     # APPLICABILITY BEFORE ROOT RESOLUTION (C3) -- decide from the parsed
-    # command alone, no subprocess, whether this command has a write sink at
-    # all. `echo hello`/`git status --short` never reach the git spawns
-    # below.
     candidates = list(_iter_write_sink_candidates(cmd, cwd))
     if not candidates:
         return None
@@ -891,8 +784,6 @@ def check_bump_outside_repo_write(
         return None
     anchor_gitdir = resolve_gitdir(anchor)
     if anchor_gitdir is None:
-        # Contradicts `session_anchor_has_git_repo` above only under a race
-        # (repo vanished between the two calls) -- fail open.
         return None
 
     agent_id = payload.get("agent_id") or "" if isinstance(payload, dict) else ""
@@ -902,15 +793,7 @@ def check_bump_outside_repo_write(
     assigned = _names_assigned_in(cmd)
     for candidate_index, (target_dir, _label, raw_target) in enumerate(candidates):
         if _is_unexpanded_variable_target(raw_target, assigned):
-            # Own branch, BEFORE git-root resolution: `_resolve_relative`
             # already resolved `$D` LITERALLY against `effective_cwd`, so
-            # from a repo root it lands at `<repo>/$D` -- which the
-            # git-root check below would then correctly find INSIDE the
-            # anchor's own repo and silently skip (this guard's whole
-            # predicate is "no git root at all"). That is exactly how this
-            # class fell between both guards' contracts (bug-backlog
-            # 4a1e7c93b256) -- caught here, ahead of that check, so a
-            # same-repo-looking `$D` target never reaches it.
             if bump_is_cleared(anchor, session_id, git_root=anchor_git_root_str, agent_id=agent_id):
                 continue
             stood_down = environment_stands_the_bump_down(env)
@@ -928,14 +811,9 @@ def check_bump_outside_repo_write(
 
         probe_dir = _nearest_existing_ancestor(target_dir)
         if probe_dir is None:
-            # No existing ancestor at all -- cannot resolve a git root
-            # either way; fail open.
             continue
         target_gitdir = resolve_gitdir(probe_dir)
         if target_gitdir is not None:
-            # Resolves under SOME git root -- not this guard's predicate
-            # (same repo, a different repo, or a registered repo -- all C4's
-            # territory or already allowed).
             continue
 
         if _target_is_always_allowed(probe_dir, anchor_git_root_str, effective_sid, env=env):
@@ -949,15 +827,8 @@ def check_bump_outside_repo_write(
             _sandbox_root(anchor_git_root_str, effective_sid) if agent_class == AGENT_CLASS_SUBAGENT else ""
         )
 
-        # C1 -- classify via the SAME closed-set membership test C4 uses.
-        # This guard's own defining predicate (`target_gitdir is not None:
-        # continue`, above) means `target_dir` never resolves to a git repo
-        # by the time execution reaches here, so a `publish.mirrors.*.path`
-        # match (itself always a real repo) is structurally unreachable --
         # this always classifies DESTINATION_FOREIGN in practice. Classified
         # explicitly anyway (rather than hardcoding DESTINATION_FOREIGN)
-        # per C5's own instruction to consume C1 for classification, not
-        # re-derive or assume it.
         destination_class = (
             DESTINATION_PUBLISH
             if target_is_publish_destination(target_dir, env=env)
@@ -991,13 +862,6 @@ def check_bump_outside_repo_write(
             destination_owner=destination_owner,
             raw_target=raw_target if raw_target != target_dir else "",
         )
-        # Consulted HERE and nowhere earlier: every applicability gate, the
-        # marker, and every exemption above have already resolved that this
-        # command WOULD bump. The question left is whether the rule is
-        # coherent on this host at all -- see `_write_bump_stand_down`.
-        # `anchor_git_root_str`, not `target_dir`: the target resolves under
-        # no git root by this guard's own predicate, so there is no `.git/`
-        # there to hold an audit line.
         stood_down = environment_stands_the_bump_down(env)
         if stood_down is not None:
             _stand_down_instead_of_denying(
@@ -1007,17 +871,6 @@ def check_bump_outside_repo_write(
         return _deny(message)
 
     return None
-
-
-# ---------------------------------------------------------------------------
-# PowerShell-dialect leg (C4e follow-up, 2026-08-07, guard-dialect-coverage.md
-# row 15). Mirrors `check_bump_outside_repo_write`'s own applicability/
-# marker/message wiring exactly -- kept as a fully separate function (not
-# interleaved into the bash body) so the bash leg's AC4 byte-identical-
-# behaviour requirement carries zero risk from this addition, matching the
-# same "kept separate" reasoning `block_subagent_destructive_action.
-# _check_powershell` states for its own PowerShell leg.
-# ---------------------------------------------------------------------------
 
 
 def _check_bump_outside_repo_write_powershell(
@@ -1082,17 +935,12 @@ def _check_bump_outside_repo_write_powershell(
 
     segments = resolve_segments_for_dialect(cmd, Dialect.POWERSHELL, guard_name="bump-outside-repo-write")
     if segments is None:
-        # SILENT already recorded by `resolve_segments_for_dialect` itself
-        # (ImportError, `has_error` parse residue, absent dialect) -- no
-        # second SILENT path needed for that case.
         return None
 
     effective_cwd = cwd or os.getcwd()
     matched_any_cmdlet = False
     cwd_unresolved = False
     # APPLICABILITY BEFORE ROOT RESOLUTION (C3) -- collected here, from the
-    # parsed command alone (no subprocess), and checked for emptiness below
-    # BEFORE `session_anchor_has_git_repo`/`resolve_gitdir` ever spawns.
     candidates: List[Tuple[str, str]] = []
 
     for tokens, _pipe_before in segments:
@@ -1103,19 +951,10 @@ def _check_bump_outside_repo_write_powershell(
         if head_low in PS_SET_LOCATION_ALIASES:
             target = extract_set_location_target_powershell(tokens, head_low)
             if target is None:
-                # Bare `Set-Location`/`cd` with no argument -- treated as
-                # "cwd unchanged", never as "cwd now unknown" (see this
-                # function's own docstring).
                 continue
             if cwd_unresolved:
-                # Already lost track of the base -- nothing this segment
-                # resolves against can be trusted either, so skip without
-                # re-recording (one SILENT per command is enough signal).
                 continue
             if "$" in target:
-                # Variable-valued target -- never composed onto
-                # `effective_cwd` (would guess a base); go SILENT for the
-                # rest of this command instead.
                 cwd_unresolved = True
                 record_silent(
                     "bump-outside-repo-write",
@@ -1147,17 +986,11 @@ def _check_bump_outside_repo_write_powershell(
         matched_any_cmdlet = True
 
         if cwd_unresolved:
-            # The base this segment's candidates would resolve against is
-            # untrusted (an earlier Set-Location in this command failed to
-            # resolve) -- decline every candidate rather than judge them
-            # against a wrong parent (see this function's own docstring).
             continue
 
         for raw_target in raw_targets:
             target_dir = _resolve_relative(effective_cwd, raw_target)
             if target_dir is None:
-                # Untranslatable -- fail open, no verdict for this
-                # candidate (this guard family's FAIL OPEN posture).
                 continue
             candidates.append((target_dir, raw_target))
 
@@ -1172,9 +1005,6 @@ def _check_bump_outside_repo_write_powershell(
         )
 
     # APPLICABILITY BEFORE ROOT RESOLUTION (C3) -- no candidate at all means
-    # no write sink was parsed out of this command; return before
-    # `session_anchor_has_git_repo`/`resolve_gitdir` ever spawns a `git`
-    # subprocess.
     if not candidates:
         return None
 
@@ -1242,9 +1072,6 @@ def _check_bump_outside_repo_write_powershell(
             destination_owner=destination_owner,
             raw_target=raw_target if raw_target != target_dir else "",
         )
-        # Same placement as the bash leg above -- after the marker and every
-        # exemption, immediately before the deny is composed. A stand-down
-        # that fired earlier would suppress bumps this host still wants.
         stood_down = environment_stands_the_bump_down(env)
         if stood_down is not None:
             _stand_down_instead_of_denying(

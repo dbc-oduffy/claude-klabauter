@@ -69,11 +69,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
     writer_id="git-perf-config",
     source_module="coordinator_core.install.git_perf_config",
     clauses=(
-        # Clause 1 — `apply()`'s one adopted key, plus the index extension
-        # the key alone is inert without (module docstring: "the cache
-        # lives INSIDE `.git/index`"). Per-repo, per this module's own
-        # negative spec: never `~/.gitconfig`, and a differing existing
-        # value is reported and left alone, never overwritten.
         StaticClause(
             entries=(
                 WriteSurfaceEntry(
@@ -83,10 +78,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 ),
             ),
         ),
-        # Clause 2 — the three maintenance keys `_apply_maintenance_keys`
-        # sets alongside clause 1, same idempotent/never-clobber contract.
-        # Never unset on uninstall (module docstring: git's compiled
-        # defaults resume harmlessly once the keys are gone).
         StaticClause(
             entries=(
                 WriteSurfaceEntry(kind="git-config-key", key="maintenance.strategy"),
@@ -99,36 +90,15 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
 
 
 def filesystem_supports_untracked_cache(repo: Path) -> bool:
-    """git's own mtime probe. Returns False rather than raising, so a filesystem
-    that cannot carry the cache is a skip and never an install failure."""
     return run_git(["update-index", "--test-untracked-cache"], cwd=str(repo)).returncode == 0
 
 
 def apply(repo: Path, *, dry_run: bool = False) -> List[str]:
-    """Apply `core.untrackedCache` to `repo`, idempotently.
-
-    Returns a single-element report line describing what happened -- whether it
-    changed, was already correct, was skipped, or was left alone because a peer
-    had set it to something else. A caller that prints nothing on a no-op cannot
-    tell "already correct" from "never ran".
-
-    Idempotent by construction: a second call finds the value already correct
-    and reports `ok`, changing nothing.
-    """
-    # This was a loop over a
     # one-entry SETTINGS dict, but the entry's real behaviour (the fs-probe gate
-    # and the index-extension step below) was reached by two literal
-    # key == "core.untrackedCache" checks inside the loop body, so the
-    # abstraction never generalized. A second setting starts by re-reading the
-    # module docstring's measurement bar, not by restoring the dict.
     key, wanted = "core.untrackedCache", "true"
     report: List[str] = []
     current_result = run_git(["config", "--get", key], cwd=str(repo))
-    # An unread current value (timeout/missing
-    # git) must not be folded into "unset", which the branch below treats as
     # license to write. That would let a peer's deliberately differing value
-    # (the negative spec's own "never overwritten" case) get clobbered simply
-    # because this read never came back, not because it was confirmed absent.
     if current_result.timed_out or current_result.returncode == 127:
         report.append("skip    %s (could not read current value: git did not answer)" % key)
         return report
@@ -137,8 +107,6 @@ def apply(repo: Path, *, dry_run: bool = False) -> List[str]:
     if current == wanted:
         report.append("ok      %s = %s (already set)" % (key, wanted))
     elif current is not None:
-        # NOT AN ERROR AND NOT OURS TO WIN. A peer machine may differ
-        # deliberately; the negative spec forbids clobbering it.
         report.append(
             "left    %s = %s (differs from %s -- not overwritten)" % (key, current, wanted)
         )
@@ -157,8 +125,6 @@ def apply(repo: Path, *, dry_run: bool = False) -> List[str]:
         report.append("set     %s = %s" % (key, wanted))
 
     if not dry_run:
-        # THE CONFIG KEY ALONE IS INERT -- the cache lives in the index and
-        # must be extended into it. Cheap and idempotent when already present.
         extend = run_git(["update-index", "--untracked-cache"], cwd=str(repo))
         if extend.returncode != 0:
             report[-1] += " (index not extended: %s)" % extend.stderr.strip()
@@ -167,55 +133,11 @@ def apply(repo: Path, *, dry_run: bool = False) -> List[str]:
     return report
 
 
-# The three keys that hand maintenance to the ceremony leg. They live HERE and
 # not in configure_git's _SETTINGS because they are actions taken against a
-# repo at install time, not declarations -- the same reason
-# `update-index --untracked-cache` lives here.
-#
 # maintenance.prefetch.enabled=false IS NOT IN THE ORIGINATING ASK. It is
-# required by the spike: git's schedules CASCADE, so `prefetch` runs at the
-# daily and weekly tiers as well as hourly, and it is the one task in this
-# otherwise network-free design that goes to the network -- a `git fetch`
-# against every remote plus two `gh auth git-credential` round-trips, 293.8 ms
-# and 11.2 processes. With prefetch enabled the daily tier measures 575.0 ms
-# and weekly 618.8 ms, both over the 500 ms brightline; with it disabled they
-# are 190.6 ms and 178.1 ms.
-#
 # THE ALTERNATIVE NOT TAKEN: pinning daily and weekly to explicit `--task=`
-# lists, the shape `git_maintenance` already gives hourly. The key wins because
-# it is one key set once per repo, versus a task list that must be kept in sync
-# with git's own strategy definition across git versions -- if a future git
-# adds a task to `--schedule=daily`, the task-list shape silently drifts back
-# open while the key shape does not.
-#
-# The key suppresses prefetch for ALL `git maintenance` invocations in this
-# repo, including manual ones and future ones no coordinator code authors --
-# not only the daily/weekly tiers the ceremony drives.
-#
 # THE TWO-WRITER ROLLOUT WINDOW, mirrored from configure_git._SETTINGS's own
-# comment on `gc.auto`: `coordinator_core.ops.configure_git` writes `gc.auto=0`
-# on a separate invocation path from this module's `apply()`/`apply_fleet()`.
-# A repo can sit with `gc.auto=0` already written and these three maintenance
-# keys still at git's defaults (`maintenance.auto` true, `prefetch.enabled`
-# true) until this module's sweep reaches it -- an installer ordering where
-# configure_git's Phase 1 runs before the fleet-sweep phase in
-# `maximalist.py`, or a repo-setup-onboarded worktree awaiting its first
-# fleet sweep. In that window `git maintenance run --auto`, including the
-# network-touching `prefetch` task, keeps firing unconstrained. WHAT CLOSES
-# IT: the daily workday-start ceremony's `git-perf-currency` health probe
-# (`orient_assemble.readers_health_reaper :: _read_git_perf_currency`) --
-# its `--fix` path calls `apply_fleet` in-process, which reaches these three
-# keys via `apply()` on every registered worktree. The window is bounded to
-# "until the next workday-start ceremony run," not indefinite; it is not
-# transactional, and co-locating the two writers into one op is a design
-# change beyond this module's scope.
-#
 # UNINSTALL DISPOSITION, stated rather than left silent: none of the three are
-# unset on uninstall, and that is deliberate. git's compiled defaults
-# (maintenance.strategy unset, maintenance.auto true, prefetch enabled) resume
-# harmlessly the moment the keys are gone, and a coordinator-uninstalled
-# worktree reverting to git's own defaults is what an uninstall is supposed to
-# do -- not a residue needing its own removal step.
 _MAINTENANCE_KEYS: tuple[tuple[str, str], ...] = (
     ("maintenance.strategy", "incremental"),
     ("maintenance.auto", "false"),
@@ -240,7 +162,6 @@ def _apply_maintenance_keys(repo: Path, *, dry_run: bool = False) -> List[str]:
     report: List[str] = []
     for key, wanted in _MAINTENANCE_KEYS:
         current_result = run_git(["config", "--get", key], cwd=str(repo))
-        # Same "unread is not unset" gap as
         # `apply()` above: a timeout must not license the write branch below.
         if current_result.timed_out or current_result.returncode == 127:
             report.append(
@@ -318,19 +239,6 @@ def _git_hook_install_registry_helpers():
 
 
 class FleetWalkResult:
-    """Zero-spawn result of `iter_fleet_worktrees` -- the enumerate/classify/
-    skip-mirror/collect-missing half of a fleet walk, shared by `apply_fleet`
-    and `workday-start-health-probes.py :: cmd_git_perf_currency` so that walk
-    exists once rather than twice (see `iter_fleet_worktrees`'s docstring).
-
-    `ok=False` means the walk itself could not run -- `reason` is one of
-    `"helpers_unavailable"`, `"registry_error"` (with `detail` set to the
-    exception text) or `"no_roots"`. `ok=True` means `items` is populated:
-    each entry is `(kind, key, root)` for `kind in ("missing", "worktree")`,
-    or `(kind, key, root, detail)` for `kind == "error"` (classify_target
-    raised for that one root -- isolated per-item so one bad root cannot
-    discard the walk).
-    """
 
     __slots__ = ("ok", "reason", "detail", "roots_count", "items")
 
@@ -343,25 +251,6 @@ class FleetWalkResult:
 
 
 def iter_fleet_worktrees(bin_dir: Path) -> "FleetWalkResult":
-    """Zero-spawn enumeration of every registered `worktree` repo, shared by
-    `apply_fleet` (which applies to each) and `cmd_git_perf_currency` (which
-    reads each `.git/config`) -- the only difference that was ever real
-    between the two callers. Neither `_registry_repo_roots` nor
-    `_classify_target` spawns a process; this function stays zero-spawn end
-    to end so the health-probe caller can run it inside the 500ms
-    `/workday-start` brightline.
-
-    `mirror` targets are silently, permanently skipped -- see
-    `_classify_target`'s own docstring. `missing` targets (a registry entry
-    whose path is gone or was never a git repo) are surfaced as `"missing"`
-    items, because that is a broken registry entry, not a healthy no-op.
-    `classify_target` raising for one root is isolated into an `"error"`
-    item rather than aborting the walk, so one bad registry entry cannot
-    discard the results already collected for the roots before it.
-
-    Never raises: an unresolvable helper import or an unreadable registry
-    both degrade to `ok=False` rather than propagating.
-    """
     helpers = _git_hook_install_registry_helpers()
     if helpers is None:
         return FleetWalkResult(ok=False, reason="helpers_unavailable")
@@ -370,7 +259,7 @@ def iter_fleet_worktrees(bin_dir: Path) -> "FleetWalkResult":
 
     try:
         roots = registry_repo_roots(str(bin_dir))
-    except Exception as exc:  # defensive: registry I/O must never abort install
+    except Exception as exc:
         return FleetWalkResult(ok=False, reason="registry_error", detail=str(exc))
 
     if not roots:
@@ -394,46 +283,6 @@ def iter_fleet_worktrees(bin_dir: Path) -> "FleetWalkResult":
 
 
 def apply_fleet(bin_dir: Path, *, dry_run: bool = False) -> List[str]:
-    """Apply `core.untrackedCache` to every registered `worktree` repo on this machine.
-
-    WHY THIS EXISTS. `apply()` above is per-repo, and until now was called on
-    exactly one repo (the claude-klabauter root, from `scripts/setup.py`) -- every
-    other registered repo on the box never got `core.untrackedCache` at all.
-    That gap is permanent, not one-time: the config key lives INSIDE
-    `.git/index` (see module docstring), and since the session-init hook was
-    removed 2026-07-15 nothing re-applies git config to an already-registered
-    repo either. `ensure_hooks_fleet` (`coordinator/bin/lib/git_hook_install.py`)
-    already solved exactly this drift class for hooks by sweeping every
-    `repos.*` registry entry instead of the one repo a caller happened to be
-    standing in; this function joins that sweep to `apply()` instead of
-    re-deriving a second registry-enumeration scheme.
-
-    REUSES `_registry_repo_roots`/`_classify_target` from `git_hook_install`
-    (via `_git_hook_install_registry_helpers`) rather than
-    `~/.claude/working-repos.yaml` -- that YAML is a competing, hand-maintained
-    source consumed by `/repo-setup --batch` and is explicitly not this
-    module's source of truth.
-
-    Applies to `worktree` targets only. `mirror` targets (e.g. an outward
-    publish mirror like claude-klabauter) are silently, permanently skipped --
-    `_classify_target`'s own docstring explains why reporting a permanent,
-    correct exclusion on every run is how an operator learns to ignore the
-    output. `missing` targets (registry entry whose path is gone or was never
-    a git repo) ARE reported, because that is a broken registry entry, not a
-    healthy no-op.
-
-    Returns one report line per repo (each itself carrying the one line
-    `apply()` returns), plus a summary line. Never raises: an
-    unresolvable helper import, an unreadable registry, or a single repo's
-    `classify_target`/`apply()` raising unexpectedly (e.g. `git` absent from
-    PATH) all degrade to a report line -- the per-repo loop body is wrapped so
-    one bad repo cannot discard the report already accumulated for the repos
-    before it. This is an install-time sweep, never a gate.
-
-    REUSES `iter_fleet_worktrees` for the enumerate/classify/skip-mirror/
-    collect-missing half; only the per-worktree action (`apply()`) and this
-    function's own report wording are its own.
-    """
     report: List[str] = []
 
     walk = iter_fleet_worktrees(bin_dir)
@@ -448,7 +297,7 @@ def apply_fleet(bin_dir: Path, *, dry_run: bool = False) -> List[str]:
             report.append(
                 f"advisory: could not read repo registry ({walk.detail}) -- configured nothing fleet-wide."
             )
-        else:  # no_roots
+        else:
             report.append(
                 "found no registered repos -- configured nothing; this is not the "
                 "same fact as 'every repo is current'."
@@ -462,12 +311,6 @@ def apply_fleet(bin_dir: Path, *, dry_run: bool = False) -> List[str]:
             report.append(f"missing  {key} -> {root} (registry entry unreachable, not a git repo)")
             continue
         if kind == "error":
-            # classify_target() is not
-            # wrapped by apply()'s own returncode handling for a raise from
-            # subprocess.run itself (e.g. FileNotFoundError if git is absent
-            # from PATH). Isolated per-repo (inside iter_fleet_worktrees) so
-            # one bad repo degrades to a FAILED line instead of losing the
-            # whole report.
             report.append(f"FAILED  {key}: {item[3]}")
             continue
         try:
@@ -475,10 +318,6 @@ def apply_fleet(bin_dir: Path, *, dry_run: bool = False) -> List[str]:
             for line in apply(Path(root), dry_run=dry_run):
                 report.append(f"{key}: {line}")
         except Exception as exc:
-            # apply() itself is not expected to raise (it wraps its own git
-            # calls via CompletedProcess/returncode), but isolated the same
-            # way as classify_target above so one bad repo cannot discard the
-            # report already accumulated for the repos before it.
             report.append(f"FAILED  {key}: {exc}")
             continue
 
@@ -487,12 +326,3 @@ def apply_fleet(bin_dir: Path, *, dry_run: bool = False) -> List[str]:
     )
     return report
 
-
-# Dropped the `main()` /
-# `__main__` CLI entrypoint. Its two real callers (scripts/setup.py::
-# apply_git_perf_config and maximalist.py Step 3.5a.1c) both import and call
-# apply()/apply_fleet() in-process; nothing names an operator invoking
-# `python -m coordinator_core.install.git_perf_config`, and the CLI only ever
-# reached apply(), never the apply_fleet() sweep that is the actual
-# deliverable. Dropping is less code than adding a --fleet flag nobody asked
-# for.

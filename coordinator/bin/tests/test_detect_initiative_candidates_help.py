@@ -1,23 +1,3 @@
-"""test_detect_initiative_candidates_help.py — `--help`/`-h` must exit 0
-without touching stdin (2026-08-13 fix).
-
-Defect this closes: `detect-initiative-candidates` had no `--help` handling
-at all. `main()` decided its input source with `not sys.stdin.isatty()` —
-True for ANY non-tty stdin, including `subprocess.DEVNULL` (no piped data at
-all, just "not a terminal"). The end-of-run entrypoint gate
-(`coordinator_core.percolate.engine.run_entrypoint_gate` /
-`_run_one_entrypoint`) launches every scanned entrypoint as
-`[interpreter, script, "--help"]` with `stdin=subprocess.DEVNULL` and treats
-a non-zero exit as a genuine failure. Without an early `--help` exit, this
-script fell into the stdin-pipe branch, read an empty buffer, and failed
-JSON parsing — reporting "failed to parse JSON from stdin" for a CLI that in
-fact starts cleanly.
-
-Spec backlink: docs/plans/2026-07-04-initiative-govern-sweep-prioritize-doe-d.md § C4 (AC5)
-
-Run:
-    python3 -m pytest coordinator/bin/tests/test_detect_initiative_candidates_help.py -v
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -69,9 +49,6 @@ class TestHelpExitsCleanWithoutTouchingStdin(unittest.TestCase):
         self.assertEqual(rc, 0)
 
     def test_empty_devnull_stdin_without_help_still_fails_loudly(self):
-        # Unchanged, pre-existing behavior: real (non---help) invocations
-        # with no piped data must keep failing loudly, not get silently
-        # patched into a false pass by this fix.
         fake_stdin = unittest.mock.Mock()
         fake_stdin.isatty.return_value = False
         fake_stdin.read.return_value = ""

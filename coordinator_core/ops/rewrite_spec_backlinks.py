@@ -55,27 +55,9 @@ from coordinator_core.session.declared_writes import declare_write
 
 PathLike = Union[str, Path]
 
-# Peer-repo qualifier for a citation that resolves ONLY in DoE-claude, never
-# locally. Sourced from `doe_root()`'s own basename (DoE-claude coordinator/
-# docs/wiki/cross-repo-citation-conventions.md § "Foreign spec-backlink id
-# form" -- the qualifier examples there are repo directory basenames:
-# claude-klabauter, example-retrieval-repo, example-game-repo-control). This module's own repo
-# (claude-klabauter) never qualifies its own citations -- only a citation this
-# repo's index cannot resolve, but DoE-claude's can, gets the `<repo>:`
-# prefix.
 _PEER_REPO_NAME = "DoE-claude"
 
-# Resolver contract (C1, coordinator_core.ops.spec_backlink_resolve): a
-# callable taking the cited docs/plans/...md path and returning a
-# JSON-serializable dict with an "outcome" key of "hit" / "miss" /
-# "ambiguity" (case-insensitive on read here -- the stub-based unit tests in
 # this file's test module pin uppercase "HIT"/"MISS"/"AMBIGUITY" values, C1's
-# real resolver emits lowercase; both must keep working unchanged). On a hit
-# the dict also carries "plan_id" and "deliverable_id" (either may be
-# None/absent -- "real" means present, non-None, and non-empty after
-# stripping). C1's real values already carry their own `pln-`/`dlv-` prefix
-# on disk (e.g. `plan_id: "pln-foo-451b3e"`) -- `_emit_id` below must not
-# double-prefix.
 Resolver = Callable[[str], Dict[str, object]]
 
 
@@ -170,7 +152,6 @@ def _default_resolver(worktree_root: PathLike) -> Resolver:
 
 
 def _is_real_id(value: object) -> bool:
-    """A "real" id: present, not None/null, not the empty/whitespace string."""
     if value is None:
         return False
     if isinstance(value, str) and not value.strip():
@@ -179,16 +160,11 @@ def _is_real_id(value: object) -> bool:
 
 
 def _with_single_prefix(value: str, prefix: str) -> str:
-    """Prepend `prefix` unless `value` already carries it -- C1's real id
-    values are already fully prefixed on disk (`plan_id: "pln-foo-451b3e"`),
-    so a bare `f"{prefix}{value}"` would double-prefix into `pln-pln-...`."""
     value = value.strip()
     return value if value.startswith(prefix) else f"{prefix}{value}"
 
 
 def _emit_id(outcome: Dict[str, object]) -> Optional[str]:
-    """Apply the pln->dlv preference order to a HIT outcome dict. Returns
-    None if the record carries neither id as a real value (unresolvable)."""
     plan_id = outcome.get("plan_id")
     if _is_real_id(plan_id):
         return _with_single_prefix(str(plan_id), "pln-")
@@ -227,21 +203,6 @@ def rewrite_file(
     resolver: Optional[Resolver] = None,
     worktree_root: Optional[PathLike] = None,
 ) -> Dict[str, object]:
-    """Rewrite path-form spec-backlink citations to id-form in one file, in
-    place. Only lines passing the two-stage filter (spec.?backlink AND the
-    literal "docs/plans/" substring) are scanned for candidate paths; each
-    resolved `docs/plans/...md` candidate on such a line is substituted via
-    a whole-line `str.replace` (every occurrence of that candidate string,
-    not a single anchored span), byte-for-byte preserving everything else
-    including the `§ <anchor>` suffix.
-
-    Returns a report dict:
-      {"path": <str>, "rewritten": [<cited_path>, ...],
-       "unresolvable": [<cited_path>, ...]}
-
-    An unresolvable citation leaves the line untouched (AC4) and is reported,
-    never dropped or guessed.
-    """
     resolver = resolver or _default_resolver(worktree_root or Path.cwd())
     full_path = str(full_path)
 
@@ -275,7 +236,6 @@ def rewrite_file(
                     unresolvable.append(cited_path)
                 continue
             if cited_path not in new_line:
-                # already rewritten earlier in this same line pass
                 continue
             new_line = new_line.replace(cited_path, replacement)
             changed = True
@@ -285,14 +245,6 @@ def rewrite_file(
 
     if changed:
         new_content = "".join(new_lines)
-        # Atomic write (mkstemp sibling + os.replace,
-        # same idiom as coordinator_core.locked_write.locked_rmw) rather than a
-        # plain open(..., "w") over the live path. This rewriter mutates real
-        # docs/plans/*.md corpus files in place; a kill mid-write must never
-        # leave one truncated on disk. mkstemp in the target's own directory
-        # keeps os.replace same-filesystem (required for its atomicity
-        # guarantee on POSIX, and os.replace is likewise atomic on Windows
-        # for same-volume renames).
         target_path = Path(full_path)
         tmp_fd, tmp_path = tempfile.mkstemp(
             dir=str(target_path.parent), prefix=f".{target_path.name}.", suffix=".tmp"
@@ -309,8 +261,7 @@ def rewrite_file(
                 try:
                     os.unlink(tmp_path)
                 except OSError:
-                    pass  # best-effort tempfile cleanup after a failed replace; the raised error above already propagates
-        # DR-276: declared AFTER the in-place edit lands, never before.
+                    pass
         declare_write(full_path)
 
     return {"path": full_path, "rewritten": rewritten, "unresolvable": unresolvable}
@@ -321,14 +272,6 @@ def rewrite_spec_backlinks(
     resolver: Optional[Resolver] = None,
     worktree_root: Optional[PathLike] = None,
 ) -> Dict[str, object]:
-    """Batch entry point over an explicit file list (C4 fans this out across
-    executors on disjoint directory scopes -- this function does not walk
-    the filesystem itself). Returns the aggregate reported set consumed by
-    C7 (deferred cross-repo) and C8 (unresolvable disposition):
-
-      {"rewritten": {<path>: [<cited_path>, ...]},
-       "unresolvable": {<path>: [<cited_path>, ...]}}
-    """
     resolver = resolver or _default_resolver(worktree_root or Path.cwd())
     rewritten: Dict[str, List[str]] = {}
     unresolvable: Dict[str, List[str]] = {}
@@ -342,10 +285,6 @@ def rewrite_spec_backlinks(
 
 
 def main(argv: List[str]) -> int:
-    """CLI/op entry point: `python -m coordinator_core.ops.rewrite_spec_backlinks
-    <path> [<path> ...]`. Exit 0 always (a no-op on unresolvable citations is
-    success, not failure) -- callers inspect the reported set for
-    disposition, per AC4."""
     if not argv:
         print("usage: rewrite_spec_backlinks.py <path> [<path> ...]", file=sys.stderr)
         return 0

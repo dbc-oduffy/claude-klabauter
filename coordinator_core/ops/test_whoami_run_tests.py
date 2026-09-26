@@ -1,13 +1,3 @@
-"""
-Tests for coordinator_core.ops.whoami_run_tests.
-
-Port of: run-tests.sh (DoE 6fb5fb37, 2026-07-22). Golden-oracle parity
-targets (captured 2026-07-17): fresh provision -> full suite green (exit 0); provisioned +
-selector -> exit 0; provisioned + missing-file selector -> pytest exit 4.
-Full end-to-end venv provisioning is exercised only in the `slow` marker
-(real network/pip I/O); the fast tests fake out subprocess/pytest to pin the
-control-flow contract (sentinel gating, ERR-path venv cleanup, argv passthrough).
-"""
 
 from __future__ import annotations
 
@@ -20,8 +10,6 @@ from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -51,15 +39,9 @@ def test_provisions_venv_when_sentinel_absent(tmp_path: Path) -> None:
     assert rc == 0
     sentinel = tmp_path / ".venv" / ".deps-installed"
     assert sentinel.is_file()
-    # venv create + upgrade pip + editable install + pytest install + final pytest run
     assert len(calls) == 5
     assert calls[0][:3] == ["python3", "-m", "venv"]
     assert calls[-1][1:3] == ["-m", "pytest"]
-    # Every spawn is suppressed -- pins whoami_run_tests to console-popup
-    # suppression WITH passthrough (not bare no_console_creationflags()): a
-    # provisioning/nested-pytest-run step is exactly the "operator must see
-    # the child's output" case win_portability.no_console_passthrough_kwargs()
-    # documents.
     expected = no_console_passthrough_kwargs()
     assert all(kwargs == expected for kwargs in suppression_kwargs)
 
@@ -104,7 +86,6 @@ def test_pytest_nonzero_exit_passes_through(tmp_path: Path) -> None:
 def test_provisioning_failure_removes_half_built_venv_and_returns_1(tmp_path: Path) -> None:
     def _fake_run(cmd, check=False, cwd=None, env=None, **kwargs):
         if cmd[:3] == ["python3", "-m", "venv"]:
-            # Simulate venv creation succeeding on disk (as real `python3 -m venv` would)
             (tmp_path / ".venv" / "bin").mkdir(parents=True, exist_ok=True)
             return _FakeCompleted(0)
         raise subprocess.CalledProcessError(1, cmd)

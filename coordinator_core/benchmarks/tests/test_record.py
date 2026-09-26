@@ -1,11 +1,3 @@
-"""Unit tests for coordinator_core.benchmarks.record (ConformanceRecord / Tolerance).
-
-Covers AC2: to_json()/from_json() round-trip carries every AC2-pinned field,
-and schema_version is pinned to 2 (machine + ambient-context fields, C2 of
-pln-2026-08-18-latency-gate-gets-a-real-baseline).
-
-Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C8 (AC2).
-"""
 
 from __future__ import annotations
 
@@ -76,8 +68,6 @@ def test_to_json_from_json_round_trip_preserves_all_ac2_fields():
 
 
 def test_round_trip_preserves_every_dataclass_field_individually():
-    """Enumerate every field on the dataclass (not just equality on the whole
-    object) so a future field-set change to record.py surfaces here."""
     original = _make_record()
     payload = original.to_json()
     restored = ConformanceRecord.from_json(payload)
@@ -116,8 +106,6 @@ def test_from_json_reconstructs_tolerance_as_dataclass_instance():
 
 
 def test_ac2_field_set_is_complete():
-    """Pin the exact set of dataclass field names -- guards against silent
-    field drops/renames on this qsub-01<->qsub-03 contract surface."""
     expected_fields = {
         "op",
         "op_class",
@@ -201,8 +189,6 @@ def test_machine_and_ambient_fields_default_to_none():
 
 
 def test_from_json_migrates_v1_payload_missing_machine_and_ambient_keys():
-    """A v1 record (schema_version=1, no machine/ambient_* keys) must not
-    raise -- from_json() defaults every one of those fields to None."""
     v1_fields = dict(
         op="coverage.gate",
         op_class="COMPUTE_ONLY",

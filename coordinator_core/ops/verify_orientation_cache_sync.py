@@ -89,15 +89,6 @@ _CREATIONFLAGS = no_console_creationflags()
 
 _SUBPROCESS_TIMEOUT_SECS = 10
 
-# Must stay in sync with what `orientation.regenerate_cache`'s `_render_cache` actually
-# emits — a heading the emitter produces but this tuple omits makes the verifier flag the
-# engine's own output as out-of-schema, which is a verifier bug, not a cache defect.
-# `Housekeeping` was such an omission: emitted since 2026-07-23 (C17b), added here
-# 2026-07-28 after a diagnosis found every compliant cache failing on it.
-#
-# C6 (2026-07-30): ``Project``/``Counters``/``Priorities`` retired; ``Wiki``/
-# ``Architecture atlas``/``Fast test``/``Audits & censuses`` added — see module
-# docstring.
 ALLOWED_HEADINGS = (
     "Trust caveats",
     "Active workstreams",
@@ -118,31 +109,13 @@ _WORKSTREAM_RE = re.compile(r"^[0-9]+\. [A-Za-z]")
 _PINBOARD_RE = re.compile(r"^- [0-9]{4}-[0-9]{2}-[0-9]{2} [a-z0-9-]+: .{1,120}$")
 _AUTOPUSH_RE = re.compile(r"^- ⚠ [0-9]+ unpushed commit")
 _SLUG_RE = re.compile(r"^[a-z0-9-]+$")
-# Purpose-map pointer shape (C6): every bullet in Wiki/Architecture
-# atlas/Fast test/Audits & censuses is "- `<path>` — <prose>" or
-# "- <label>: `<cmd>`" — a bounded bullet line, never a bare number. This is
-# intentionally loose: the writer's own negative-spec (no counts) is enforced
-# by code review of `regenerate_cache.py`'s emit_* probes, not by a regex here
 # trying to prove a NEGATIVE (the absence of a digit run would also reject a
-# legitimate path segment or command flag that happens to contain one).
 _POINTER_RE = re.compile(r"^- .+$")
 
 # WORKSTREAM_BODY_CAP, LINE_CEILING, and WORKSTREAM_MAX are imported above
-# from the writer (coordinator_core.orientation.regenerate_cache), not
-# redeclared here — that module is the single source of truth for every
 # bound that actually constrains what the writer produces (see LINE_CEILING's
-# own docstring for the 2026-07-28 reconciliation this replaces: this module
 # used to independently declare a stale `_LINE_CEILING = 35`, checked
-# post-hoc only, that silently disagreed with the writer's own byte budget).
-#
 # _PINBOARD_MAX / _AUTOPUSH_MAX / _TRUST_CAVEATS_MAX stay declared HERE, not
-# moved: none of them corresponds to a number the writer itself enforces or
-# could drift against. The writer's Pinboard/Auto-push-health sections are
-# structurally single-line by construction (`_first_line`, a scalar return
-# type) rather than parameterized by a count constant, and Trust caveats
-# never emits more than one line today — these three are pure shape/count
-# assertions this verifier makes about the artifact, with no writer-side
-# counterpart to reconcile against.
 _PINBOARD_MAX = 1
 _AUTOPUSH_MAX = 1
 _TRUST_CAVEATS_MAX = 5
@@ -154,9 +127,6 @@ def is_allowed_heading(heading: str) -> bool:
 
 
 def _section_lines(lines: List[str], heading: str, *, bullets_only: bool) -> List[str]:
-    """Mirror the bash awk state machine:
-    /^## <heading>$/{in_s=1; next} /^## /{in_s=0} in_s && <cond>{print}
-    """
     target = "## " + heading
     out: List[str] = []
     in_section = False
@@ -248,8 +218,6 @@ def _check_workstreams(lines: List[str]) -> List[str]:
         if not _WORKSTREAM_RE.match(line):
             violations.append(f"workstream line fails name-only regex: '{line}'")
         if len(line) > WORKSTREAM_BODY_CAP:
-            # Message now cites the enforced
-            # constant instead of a hardcoded "80-char" that had drifted from
             # WORKSTREAM_BODY_CAP=84.
             violations.append(f"workstream line exceeds {WORKSTREAM_BODY_CAP}-char body cap: '{line}'")
     if len(ws_lines) > WORKSTREAM_MAX:
@@ -302,9 +270,6 @@ def _check_trust_caveats(lines: List[str]) -> Tuple[List[str], List[str], str]:
 
 
 def _git_ls_files_uproject(repo_root: str) -> Optional[str]:
-    """Caller MUST already have confirmed repo_root is inside a git work tree
-    (see `_has_git_worktree`) — not re-checked here to avoid a duplicate
-    subprocess spawn per invocation."""
     try:
         result = subprocess.run(
             ["git", "-C", repo_root, "ls-files", "*.uproject"],
@@ -322,11 +287,6 @@ def _git_ls_files_uproject(repo_root: str) -> Optional[str]:
     first = result.stdout.strip().splitlines()
     if not first:
         return None
-    # Forward-slash on purpose: this path is a WIRE VALUE — it is interpolated
-    # into the violation message this op emits, and the bash oracle emitted
-    # `git ls-files` output, which is always forward-slash. os.path.join would
-    # hand back a backslash form on Windows and break byte-parity with the
-    # oracle. Same normalization as _find_uproject's return.
     return Path(repo_root, first[0]).as_posix()
 
 
@@ -344,16 +304,10 @@ def _find_uproject(repo_root: str, *, exclude_git_and_node_modules: bool) -> Opt
                 matches.append(os.path.join(dirpath, fname))
         if matches:
             break
-    # as_posix for the same wire-value reason as _git_ls_files_uproject above:
-    # the winning match is interpolated into the emitted violation text.
     return Path(matches[0]).as_posix() if matches else None
 
 
 def _detect_uproject(repo_root: str) -> Optional[str]:
-    """Mirror the bash three-branch detector exactly (git-ls-files, then
-    excluded-find fallback when git is present-but-empty, or unfiltered-find
-    when git is entirely unavailable/not-a-worktree).
-    """
     has_git = _has_git_worktree(repo_root)
     if has_git:
         found = _git_ls_files_uproject(repo_root)
@@ -400,20 +354,10 @@ def _check_uproject_guard(
 
 
 def verify(cache_path: str, repo_root: str) -> Tuple[List[str], int]:
-    """Run every schema check against ``cache_path``.
-
-    Returns (violations, line_count). line_count mirrors `wc -l` exactly
-    (counts newline bytes, not "number of lines of content").
-    """
     with open(cache_path, "rb") as fh:
         raw = fh.read()
     line_count = raw.count(b"\n")
     text = raw.decode("utf-8", errors="replace")
-    # Strip CRLF line endings before splitting so schema regexes (many are
-    # anchored with `$` or an exact tail match) see clean content on both
-    # Windows-authored (CRLF) and POSIX-authored (LF) cache files. line_count
-    # above is computed from the raw byte count on purpose and stays
-    # `wc -l`-parity even though CRLF halves the byte-level newline shape.
     lines = text.replace("\r\n", "\n").split("\n")
 
     violations: List[str] = []
@@ -436,12 +380,6 @@ def verify(cache_path: str, repo_root: str) -> Tuple[List[str], int]:
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: ``verify_orientation_cache_sync.py <cache_file> <repo_root>``.
-
-    Assumes the caller (the DoE trampoline) has already confirmed
-    ``cache_file`` exists and resolved ``repo_root`` — see module docstring's
-    division-of-labor note.
-    """
     if len(argv) < 2:
         print(
             "verify-orientation-cache-sync: usage: <cache_file> <repo_root>",

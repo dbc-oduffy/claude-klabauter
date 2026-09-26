@@ -1,24 +1,3 @@
-"""test_publish_report_net_change -- pins what `publish.py ::
-_report_published_diff` counts as a change, and the run-level net fold the
-round manifest is built from (`_net_changed_paths`).
-
-Two measured defects at claude-klabauter, 2026-09-11, both chronic:
-
-- The root flat-mirror row's content-transform sweep reaches files a later
-  row owns, and the two rows' tables disagree (base `path_rewrite`), so 46
-  files were rewritten and then restored within one run. Each row truthfully
-  printed `UPDATE:`, the union named 46 changes, and the round then found all
-  46 identical to HEAD: "N reported change(s) not carried" on every commit.
-- Bytecode generated at dest or staging between the staging copy and the
-  comparison (3 `.pyc` UPDATEs, 1 `.pyc` REMOVE per round) was reported as
-  payload -- uncommittable (gitignored), and the REMOVE recreated by the next
-  import before the commit leg looked.
-
-Negative-spec: runs no publish round and no git; the manifest block itself is
-not called (it lives inside `main`).
-
-Run: python -m pytest coordinator/bin/tests/test_publish_report_net_change.py -q
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -72,8 +51,6 @@ def test_bytecode_is_never_reported_on_either_side(tmp_path):
 
 
 def test_a_file_rewritten_and_restored_in_one_run_is_not_a_net_change(tmp_path):
-    """Row A (whole-mirror sweep) rewrites `pkg/mod.py`; row B (its owner)
-    writes the original back. Both report it; the net set does not."""
     dest = _tree(tmp_path / "dest", {"pkg/mod.py": "owner\n", "pkg/real.py": "old\n"})
     digests: "dict[Path, object]" = {}
 

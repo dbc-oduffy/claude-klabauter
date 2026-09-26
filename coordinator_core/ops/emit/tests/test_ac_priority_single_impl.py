@@ -27,8 +27,6 @@ from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.emit.sections import handoffs as handoffs_section
 from coordinator_core.write_guards import block_priority_ledger_edit as ledger_guard
 
-# _write_node extracted to conftest.py
-# (shared across the five priority-ledger test modules that used a byte-for-byte copy).
 from coordinator_core.ops.emit.tests.conftest import _write_node  # noqa: F401
 
 
@@ -76,13 +74,7 @@ def _emission_records(tmp_path: Path, records: list[dict], ledger_entries: dict,
         return handoffs_section.collect(ctx)
 
 
-# ---------------------------------------------------------------------------
-# AC16 — dangling target: a ledger entry whose target_id resolves to no
 # emitted handoff is REPORTED in the malformed bucket, never carried as a
-# record. Inverse: a non-"handoff" target_kind entry is NOT flagged by the
-# handoffs section (the ledger holds assignments for targets defined
-# elsewhere; a plan-targeted entry is not a handoffs-section defect).
-# ---------------------------------------------------------------------------
 
 
 def test_dangling_handoff_target_reported_not_carried_as_record(tmp_path: Path):
@@ -103,7 +95,7 @@ def test_dangling_handoff_target_reported_not_carried_as_record(tmp_path: Path):
 
     assert len(emitted) == 1
     emitted_ids = {r["handoff_id"] for r in emitted}
-    assert "hnd-ghost-999999" not in emitted_ids  # never becomes a record
+    assert "hnd-ghost-999999" not in emitted_ids
 
     dangling = [m for m in malformed if "hnd-ghost-999999" in m.get("reason", "")]
     assert len(dangling) == 1
@@ -130,14 +122,6 @@ def test_dangling_check_ignores_non_handoff_target_kind(tmp_path: Path):
     assert malformed == []
 
 
-# ---------------------------------------------------------------------------
-# AC9 — handoff_id is populated on EVERY emitted record: authored (matching
-# the minted shape) where present, derived otherwise, with
-# handoff_id_derivation discriminating the two. No emitted record ever has a
-# null handoff_id.
-# ---------------------------------------------------------------------------
-
-
 def test_handoff_id_authored_and_derived_both_present_never_null(tmp_path: Path):
     handoff_dir = tmp_path / "state" / "handoffs"
     handoff_dir.mkdir(parents=True)
@@ -153,7 +137,7 @@ def test_handoff_id_authored_and_derived_both_present_never_null(tmp_path: Path)
         },
         {
             "path": "state/handoffs/no-id.md",
-            "frontmatter": _base_handoff_fm(),  # no handoff_id key at all
+            "frontmatter": _base_handoff_fm(),
         },
     ]
 
@@ -176,12 +160,6 @@ def test_handoff_id_authored_and_derived_both_present_never_null(tmp_path: Path)
     assert derived_record["handoff_id_derivation"] == "derived"
 
 
-# ---------------------------------------------------------------------------
-# AC2 — a hand-edit of the ledger directory is intercepted by a path-matched
-# guard that NAMES the op (design-as-offers: an offer, not a bare refusal).
-# ---------------------------------------------------------------------------
-
-
 def test_ledger_hand_edit_is_redirected_and_names_priority_set():
     payload = {
         "tool_name": "Write",
@@ -195,17 +173,9 @@ def test_ledger_hand_edit_is_redirected_and_names_priority_set():
 
     assert result is not None
     # a69586381 flipped this guard from a hard deny to an ADVISORY redirect (guard-class
-    # census, DR-27): it now emits `additionalContext` and no `permissionDecision` at all.
-    # That is the doctrine's ergonomics-over-enforcement default — the acceptance criterion
-    # here was never "deny", it was "the redirect names the op", which the advisory shape
-    # carries verbatim. Pin the message, not the enforcement class.
     hook_output = result["hookSpecificOutput"]
     assert "permissionDecision" not in hook_output
     reason = hook_output["additionalContext"]
 
-    # The guard's denial MESSAGE names the alternative op — not a bare
-    # refusal. This is the acceptance-level pin: the guard offers the
-    # `priority.set` op (via its `priority-set` CLI trampoline name) as the
-    # right way to accomplish what the blocked hand-edit was trying to do.
     assert "priority-set" in reason
     assert "priority.set" in reason

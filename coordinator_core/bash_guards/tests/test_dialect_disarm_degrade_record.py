@@ -71,10 +71,6 @@ def test_settings_home_log_write_failure_does_not_suppress_record_degrade(monkey
 
 
 def test_a_second_DIFFERENT_guard_in_the_same_process_still_gets_attributed(monkeypatch, tmp_path):
-    """DEFECT ONE fix (Y3): the gate is per-guard-identity, not per-process.
-    Two distinct guards degrading in one process must produce TWO durable
-    rows, each naming its own guard -- not one row that reads as the whole
-    account of what degraded (reviewer finding 4)."""
     _reset_once_per_process_gate(monkeypatch)
     monkeypatch.setattr(_dialect, "_dialect_parser_unavailable_log_path", lambda: tmp_path / "log.txt")
 
@@ -103,9 +99,6 @@ def test_a_second_DIFFERENT_guard_in_the_same_process_still_gets_attributed(monk
 
 
 def test_the_SAME_guard_called_twice_in_one_process_is_still_deduped(monkeypatch, tmp_path):
-    """The cost caveat: dedup by guard identity, not by process, so a guard
-    that keeps failing on every command in a long-lived warm process does
-    not write a row per call -- only once per guard."""
     _reset_once_per_process_gate(monkeypatch)
     monkeypatch.setattr(_dialect, "_dialect_parser_unavailable_log_path", lambda: tmp_path / "log.txt")
 

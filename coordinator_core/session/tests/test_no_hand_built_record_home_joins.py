@@ -61,20 +61,9 @@ _SCAN_ROOT = os.path.join(_REPO_ROOT, "coordinator_core")
 
 _EXCLUDED_FILES = {
     os.path.join(_SCAN_ROOT, "session", "record_homes.py"),
-    #: This guard's own source: its docstring and pattern-comment prose cite
-    #: example literals like `"state/handoffs"` for illustration, which the
-    #: scan would otherwise mistake for a hand-built join in itself.
     os.path.abspath(__file__),
 }
 
-#: A hand-built `state/<kind>` join for one of the declared work-record
-#: kinds: either a single-string literal spelling the joined path
-#: (`"state/handoffs"`, `'state/handoffs/foo.md'`), or two adjacent
-#: string-literal arguments to a join call
-#: (`os.path.join(..., "state", "handoffs", ...)`, `Path(...) / "state" /
-#: "handoffs"`). A caller routed correctly through `record_homes.home_dir`/
-#: `record_path`/`home_pattern` never spells `"state"` immediately followed
-#: by a declared kind segment as a literal -- only a hand-built join does.
 _KIND_ALTERNATION = "|".join(
     re.escape(kind) for kind in sorted(record_homes.HOMES, key=len, reverse=True)
 )
@@ -87,11 +76,6 @@ _JOIN_PATTERN = re.compile(
 
 _KNOWN_LITERAL_SITES = frozenset({
     # 2026-09-06 -- seeded when `cross-repo` was DECLARED in
-    # `record_homes.HOMES`. The kind set growing brings pre-existing
-    # `state/cross-repo` literals into this guard's scope for the first
-    # time; each site predates the declaration and is unchanged by it.
-    # The ratchet still only shrinks -- a NEW literal in any of them, or
-    # in any file not listed, still fails.
     'memo_corpus.py',
     'ops/ceremony/tests/test_update_docs_scan.py',
     'ops/fleet/memo_send.py',
@@ -689,10 +673,6 @@ def _iter_py_files():
 
 @lru_cache(maxsize=1)
 def _sites_with_literal():
-    """Both tests ask the same question of the same tree, so the walk is
-    paid once. This guard runs in the fast tier on a box carrying ~50
-    concurrent sessions -- a second full walk of `coordinator_core/` buys
-    nothing a cached frozenset does not already hold."""
     hits = set()
     for fpath in _iter_py_files():
         try:
@@ -720,11 +700,6 @@ def test_no_new_hand_built_record_home_joins():
 
 
 def test_seeded_sites_still_carry_a_literal():
-    """A seeded site that no longer carries a literal fails -- the ratchet
-    is one-directional (the set can only shrink), so a file repointed onto
-    `record_homes.py`'s accessors must have its exemption removed rather
-    than silently kept.
-    """
     hits = _sites_with_literal()
     stale = _KNOWN_LITERAL_SITES - hits
     assert not stale, (

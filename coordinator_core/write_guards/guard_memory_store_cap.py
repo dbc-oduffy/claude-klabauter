@@ -162,16 +162,14 @@ from coordinator_core.write_guards._case_fold_path import (
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
-PRIORITY = 136  # hard-deny band; next free slot after bump_out_of_repo_tool_write (135)
+PRIORITY = 136
 
-#: AC14's four numbers, verbatim.
 MAX_MEMORY_MD_BYTES = 2000
 MAX_MEMORY_MD_ROWS = 20
 MAX_ROW_CHARS = 100
 MAX_BODY_FILE_BYTES = 1500
 
 #: DR-345 — 1:1 with MAX_MEMORY_MD_ROWS so index and store cannot disagree
-#: about how many memories exist. Fires only on NEW body-file creation.
 MAX_MEMORY_FILES = 20
 
 _CLAUDE_DIRNAME = ".claude"
@@ -179,7 +177,6 @@ _PROJECTS_DIRNAME = "projects"
 _MEMORY_DIRNAME = "memory"
 _MEMORY_MD_FILENAME = "MEMORY.md"
 
-#: tool_input keys that can carry the target path.
 _PATH_KEYS = ("file_path",)
 
 _INTERCEPTED_TOOLS = {"Write", "Edit", "MultiEdit"}
@@ -317,16 +314,6 @@ def _memory_target(target_raw: str) -> "Optional[Tuple[Path, str, str]]":
 
 
 def _simulate(tool_name: str, tool_input: Dict[str, Any], abs_file_path: str) -> Optional[str]:
-    """Reconstruct the FULL post-edit file content. Mirrors
-    ``check_claude_md_size._simulate`` byte-for-byte (same replace-once-vs-
-    replace-all branch, same read-before-replace shape for Edit/MultiEdit).
-    A not-yet-existing target under Edit/MultiEdit reads as empty content --
-    this only matters for the shrink carve-out (old_size is separately
-    computed as 0 for a not-yet-existing file), the simulate result itself
-    is not reachable on a genuinely missing file in normal harness use
-    (Edit/MultiEdit require an existing file), kept here only so a caller
-    error surfaces as fail-open, not a raised exception.
-    """
     if tool_name == "Write":
         return tool_input.get("content", "") or ""
 
@@ -374,44 +361,15 @@ def _deny(reason: str) -> Dict[str, Any]:
     }
 
 
-#: The eviction-priority order, condensed to fit the 220-byte prose cap --
-#: full rationale (why this order, not a semantic verdict) is the module
-#: docstring's job, not the deny message's.
 _EVICT_ORDER = "stale fact, then doctrine dup, then oldest"
 
-#: The memory-vs-lessons routing test, in the deny because that is the moment
-#: the wrong choice is being made (PM ruling 2026-08-21). An agent reaching for
-#: memory is usually acting on "this matters, it must not be forgotten" -- a
-#: durability instinct. Durability is what LESSONS give. What memory gives is
-#: something else, and strictly more dangerous: force-read, unbidden, by every
-#: EM at birth, and believed TRUE until someone purges it. So the test is not
-#: "is this important" (everything an EM wants to save is important) -- it is
-#: "must every EM believe this before it does anything." Almost nothing clears
-#: that bar. Kept to one clause per route so it survives the 220-byte cap.
 _ROUTING = "memory is force-read as TRUE every boot; a lesson is found when reached for"
 
 
-#: Below this share of the file, the non-row bytes are not worth naming and the
-#: eviction ladder is the whole answer. Above it, evicting a memory would be
-#: paying for prose with someone's fact.
 _PREAMBLE_SHARE_WORTH_NAMING = 0.25
 
 
 def _deny_reason_bytes(display: str, new_size: int, rows: "List[str]") -> str:
-    """Say which bytes to remove — the rows, or the prose around them.
-
-    The eviction ladder is about ROWS, and this message named it unconditionally.
-    Measured 2026-09-11 on example-store-repo: an operator corrected their index's
-    header, pushed the file over the byte cap by doing so, and was told to evict
-    a memory. Followed literally, that deletes a fact to make room for
-    documentation ABOUT the cap. They rewrote the header instead and everything
-    fit, which was the right move and not the one the message asked for.
-
-    So when the non-row bytes are a real share of the file, the message names
-    them first and leaves eviction as the second option. The ladder is unchanged
-    and still stated; what changes is that a file that grew in its preamble is
-    told where it actually grew.
-    """
     row_bytes = sum(len((row + "\n").encode("utf-8")) for row in rows)
     other = max(new_size - row_bytes, 0)
     if new_size and other >= new_size * _PREAMBLE_SHARE_WORTH_NAMING:
@@ -435,29 +393,10 @@ def _deny_reason_rows(display: str, rows: "List[str]") -> str:
     )
 
 
-#: How much of a flagged row the deny quotes. Enough to find it in the file by
-#: eye, short enough that naming one row does not spend the 220-byte prose cap.
 _ROW_EXCERPT_CHARS = 44
 
 
 def _deny_reason_row_length(display: str, overlong_rows: "List[str]") -> str:
-    """Name the cap, that it counts EVERY row, and one row to start with.
-
-    The old text said "shorten the flagged row(s)" and flagged nothing, which
-    left two questions unanswered at the moment they were being asked. Which
-    rows: a store can hold fifty and the write names none of them. And whose:
-    the check runs over the whole file, so a session adding one memory is
-    refused for rows it did not author. Measured 2026-09-11 on example-store-repo —
-    one write, four overlong rows, three of them pre-existing and written under
-    an older, looser guideline.
-
-    Trimming those three IS the intent: the cap is a property of the file, not
-    of the diff, and a store that drifted over it does not get to stay there
-    because the drift predates you. But an operator who reads a refusal naming
-    rows they never wrote, with no statement that this is deliberate, reads it
-    as a corrupted file rather than a bill — and the ones in a hurry work around
-    it. So the message says so outright.
-    """
     first = overlong_rows[0].strip()
     if len(first) > _ROW_EXCERPT_CHARS:
         first = first[:_ROW_EXCERPT_CHARS].rstrip() + "..."
@@ -494,11 +433,6 @@ def _check_body_file(new_size: int, display: str) -> Optional[Dict[str, Any]]:
 
 
 def _body_file_count_and_oldest(mem_dir: Path) -> "Tuple[int, Optional[Path]]":
-    """Body files (excluding MEMORY.md) directly in ``mem_dir``, plus the
-    oldest by mtime -- the cheapest correct eviction candidate, per the PM
-    ruling this cap implements. A listing failure (dir vanished, permission
-    error) reads as zero, matching this module's fail-open posture -- it
-    only ever widens what passes, never narrows it."""
     try:
         files = [
             p
@@ -580,9 +514,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             old_size = 0
         new_size = len(new_content.encode("utf-8"))
 
-        # Shrink-toward-compliance carve-out: never deny an edit that makes
-        # the file strictly smaller than it is on disk today, regardless of
-        # which cap the (still possibly over-cap) result violates.
         if new_size < old_size:
             return None
 
@@ -590,6 +521,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return _check_memory_md(new_content, new_size, display)
         return _check_body_file(new_size, display)
     except Exception:
-        # Fail-open on any unexpected error, matching every guard this
-        # idiom is copied from.
         return None

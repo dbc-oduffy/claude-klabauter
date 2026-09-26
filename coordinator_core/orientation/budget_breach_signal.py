@@ -54,23 +54,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-#: Attempts an op needs before its breach rate is allowed to speak. A cold clone's
-#: first few dispatches routinely land over the bar (imports, page cache, a warm
-#: server not yet elected) and say nothing about the op. 10 is the same order as
 #: `warm_health_signal.MIN_SAMPLES` (20) scaled to a PER-OP count rather than a
-#: whole-clone one: it is reachable inside one working session for any op a session
-#: actually uses, and it is above the 1-2 attempt noise that dominates the tail of
-#: any real sink. Not a measured constant -- `ceremony.commit` cleared it 3x over at
 #: n=31 while every METHOD_NOT_FOUND straggler in the same window sat at n=2.
 MIN_ATTEMPTS = 10
 
-#: Breach rate at which an op stops being occasionally-unlucky and becomes a defect
-#: an operator should see at boot. Deliberately well under a half: DR-344's bar is a
-#: kill bar, so an op breaching a quarter of the time is already failing its
-#: contract for one caller in four, and the two live examples this module was built
-#: against sat far above it (`ceremony.commit` 34/35, `push.outstanding` 9/35). Set
-#: low because the cost of a false line is one ignorable boot message and the cost
-#: of a missed one is 28 hours of a broken commit path nobody looked at.
 BREACH_RATE = 0.25
 
 

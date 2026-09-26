@@ -151,86 +151,23 @@ CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 PRIORITY = 45
 
-#: RESHAPE (guard-class census, docs/plans/2026-08-06-apply-guard-class-
 #: census.md, chunk C18): the deny leg below is now DIRECTIONAL. The
-#: original shape denied every dispatched-subagent write to a CLAUDE.md-
-#: class surface unconditionally -- including a write that SHRINKS the
-#: file, which is backwards: the +27% growth DR-104 exists to stop cannot
-#: happen from a shrinking edit, and denying the shrink case blocked
-#: exactly the remediation (trim content) the deny text itself offers as
 #: the discharge hierarchy's first rung. CLASS/PRIORITY are unchanged --
-#: this module keeps its hard-deny leg for the case that genuinely
-#: warrants it (net growth), and advises (does not block) on the
-#: over-fire case (net shrink or size-neutral).
-#:
-#: Direction is measured the same way ``check_claude_md_size._simulate``
-#: already measures the post-edit byte size for its own (advisory) budget
-#: check -- reconstruct the full post-edit content and compare its UTF-8
-#: byte length against the CURRENT on-disk byte length. A file that does
-#: not yet exist has a baseline of 0 bytes, so a brand-new CLAUDE.md-class
-#: file is always "growth" (deny) -- there is no shrink case for content
-#: that does not yet exist.
-#:
-#: Simulation failure (unreadable existing file, decode error, or a
-#: NotebookEdit -- whose ``new_source``/``cell_id`` shape this module does
 #: not reconstruct, matching ``check_claude_md_size``'s own MATCHERS
-#: negative-spec excluding NotebookEdit from its byte simulation) is NOT
-#: treated as ALLOW here (unlike that advisory module's own fail-open
-#: choice on ITS leg) -- this leg still gates a hard deny, so an
-#: undeterminable direction defaults to the safer, pre-existing behavior
-#: (deny) rather than silently downgrading to advisory on a case this
-#: module cannot actually evaluate.
 
-#: Reference-shape tool-name guard (mirrors every sibling write_guards
-#: module's defense-in-depth tool_name check).
 _INTERCEPTED_TOOLS = {"Write", "Edit", "NotebookEdit", "MultiEdit"}
 
-#: Rare-use escape hatch — read the module docstring before invoking. This
-#: is NOT the named override path the deny text leads with; see allow
-#: condition (4) above for why the two are distinct.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_CLAUDE_MD_WRITE"
 
-#: Fallback form of the grant-CLI invocation the advisory (shrink/size-
-#: neutral) text names as the legitimate, PM-ratified override path (C5's
-#: grant CLI) -- the deny leg no longer renders this invocation at all
-#: (C4(b), docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-
-#: keys.md). Used only when this host's claude-klabauter root cannot be resolved
-#: in-process — see ``_grant_cli_invocation()``, which is what
-#: ``_advisory_reason`` calls.
-#:
-#: Two preconditions are stated inline because omitting them made the
 #: remediation fail SILENTLY: the grant module is claude-klabauter-resident but the
-#: grant file is written into a session dir resolved from CWD, so running
-#: this from claude-klabauter (the obvious place, since that is where the module
-#: lives) files the grant against claude-klabauter's session dir while the guard
-#: checking a write in the consumer repo looks up that repo's — a mismatch
-#: that reads as "no grant" with no error. Hence: cwd is the repo being
 #: unblocked, and claude-klabauter reaches the interpreter via PYTHONPATH rather than
-#: cwd.
-#:
-#: This env-ladder form was ALSO a silent-failure shape, in a third way, and
-#: that is why it is now only the fallback: it asks the reader's shell to
-#: resolve the root, and on a host where neither variable is exported and the
-#: repo does not sit at ``$HOME/claude-klabauter`` every rung misses. The reader
-#: then runs a command that cannot work, against a guard whose whole contract
-#: is to name a remediation that does. Resolving the root here instead — this
-#: code runs inside claude-klabauter — is what keeps the deny from dead-ending.
 _GRANT_CLI_INVOCATION_FALLBACK = (
     'PYTHONPATH="${REPO_CLAUDE_KLABAUTER:-${CLAUDE_KLABAUTER_ROOT:-$HOME/claude-klabauter}}" '
     'python3 -m coordinator_core.session.claude_md_grant grant pm "<verbatim PM note>"'
 )
 
 
-#: Characters that would break out of, or be interpreted inside, the double-quoted
 #: ``PYTHONPATH="…"`` the resolved root is interpolated into. The rendered command is
-#: meant to be pasted verbatim into a shell, so a root carrying any of these would
-#: produce a remediation that silently does the wrong thing — the same class of defect
-#: as the dead-end deny this resolution exists to fix, one layer down.
-#:
-#: Rejected rather than escaped on purpose: ``shlex.quote`` is POSIX-specific and would
-#: render wrongly for a reader on cmd/PowerShell, and this text reaches both. Falling
-#: back to the env-ladder form is the honest answer for a path we cannot quote correctly
-#: for every shell the reader might be in.
 _ROOT_SHELL_UNSAFE = set('"\'`$\\\n\r')
 
 
@@ -297,21 +234,15 @@ def _grant_cli_invocation() -> str:
     )
 
 
-#: Control-whitespace/C0-control sanitization before interpolating an
-#: attacker-influenced file_path into a deny reason (same discipline as
-#: the sibling write_guards modules).
 _CONTROL_CHARS = str.maketrans({c: " " for c in "\t\r\n\f\v"})
 
 
 def _sanitize_file_path_for_reason(file_path: str) -> str:
-    """Neutralize control whitespace before interpolating an
-    attacker-influenced ``file_path`` into a deny reason string."""
     safe = file_path.translate(_CONTROL_CHARS)
     return "".join(ch for ch in safe if ord(ch) >= 0x20)
 
 
 def _extract_file_path(payload: Dict[str, Any]) -> str:
-    """``file_path``, falling back to ``notebook_path`` for NotebookEdit."""
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         return ""
@@ -319,8 +250,6 @@ def _extract_file_path(payload: Dict[str, Any]) -> str:
 
 
 def _normalize_path(file_path: str) -> str:
-    """Backslash -> slash, collapse repeated slashes — matches every
-    sibling write_guards module's normalization discipline."""
     normalized = file_path.replace("\\", "/")
     while "//" in normalized:
         normalized = normalized.replace("//", "/")
@@ -330,13 +259,6 @@ def _normalize_path(file_path: str) -> str:
 def _simulate_new_content(
     tool_name: str, tool_input: Dict[str, Any], abs_file_path: str
 ) -> Optional[str]:
-    """Reconstruct the full post-edit content, mirroring
-    ``check_claude_md_size._simulate`` (same replace-once-vs-replace-all
-    branch, same read-before-replace shape). Returns ``None`` when the
-    direction cannot be determined (NotebookEdit, or a read/decode failure)
-    -- callers of this function treat ``None`` as "cannot determine",
-    not "no growth".
-    """
     if tool_name == "Write":
         return tool_input.get("content", "") or ""
 
@@ -361,7 +283,6 @@ def _simulate_new_content(
                 buf = buf.replace(old_s, new_s, 1)
         return buf
 
-    # NotebookEdit -- not reconstructed here, matches
     # check_claude_md_size's own MATCHERS scope.
     return None
 
@@ -486,61 +407,22 @@ def _deny_reason(agent_id: str, file_path: str) -> str:
         f"  Target: `{file_path_safe}`\n"
         "  Reason: needs a live CLAUDE.md write grant for this session.\n"
     )
-    # NO override pointer appended, deliberately (2026-08-13,
-    # docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md, C1).
-    # This reason renders ONLY for a dispatched subagent -- the check leg
-    # allows unconditionally when no `agent_id` is present -- so its audience
-    # is, by construction, the one AC-1 forbids showing any unlock statement
-    # to, in any shape, pointer included. Threading `payload=` here would be
-    # the wrong fix: it would compute an audience this call site already
     # knows the answer to. `_OVERRIDE_ENV_VAR` stays wired in `check()`.
-    #
     # C4(b) removed the resolved `PYTHONPATH=... python3 -m ...` grant
-    # invocation and its cwd/session precondition that used to render here
-    # (docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md
-    # § Problem "The design premise (PM ruling, 2026-08-13)", task C4(b)):
-    # the EM's route when blocked is "check with your PM" -- rung-1
-    # familiar, names no unfamiliar artifact, requires no inspection. A
-    # message that refuses and says who to ask is complete; the inline
-    # resolved CLI was never what made it complete, it was an extra
-    # affordance whose cost (a pasteable grant invocation shown exclusively
-    # to the agent forbidden to run it) is exactly what this removes. Do
-    # NOT re-add a pointer, wiki reference, or "an unlock exists" marker
-    # here -- this guard has no EM audience to point at; see the ruling.
-    # `_grant_cli_invocation()` itself is retained, unused by any renderer
-    # as of C4(c) (docs/plans/2026-08-13-guard-messages-stop-handing-
-    # agents-the-keys.md): `_advisory_reason` (the shrink/size-neutral leg)
-    # used to call it directly, and that render was the same "shown the
-    # button, told not to press it" shape closed here. Kept, not deleted --
-    # its own test coverage
-    # (`TestDenyTextNamesAlternativeAndOverride::test_grant_cli_*`) still
-    # pins the claude-klabauter-live-root resolution/fallback/shell-safety logic on its
-    # own merits, independent of whether any guard message renders it.
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the CLAUDE.md-class write guard against a PreToolUse payload.
-
-    Returns ``None`` (allow) or the nested hard-deny envelope. See module
-    docstring "Allow conditions" for the four pass-through cases, in the
-    order they are checked below.
-    """
-    # (4) Rare-use override, honored first (defense-in-depth — matches
-    # every sibling write_guards module's escape-hatch-first ordering).
     if os.environ.get(_OVERRIDE_ENV_VAR, "0") == "1":
         return None
 
-    # Tool-name guard — defense-in-depth.
     tool_name = payload.get("tool_name") or ""
     if tool_name not in _INTERCEPTED_TOOLS:
         return None
 
-    # (1) No agent_id -> EM-inline write -> allow.
     agent_id = payload.get("agent_id") or ""
     if not agent_id:
         return None
 
-    # (2) Path not CLAUDE.md-class -> allow.
     file_path = _extract_file_path(payload)
     if not file_path:
         return None
@@ -548,29 +430,18 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not is_claude_md_class(normalized):
         return None
 
-    # (3) Live session grant -> allow.
     cwd = payload.get("cwd")
     granted, _record = check_claude_md_write_grant(cwd)
     if granted:
         return None
 
-    # Directional deny (RESHAPE, see the module-level comment above
     # MATCHERS/PRIORITY): only a net-growth edit is denied. A shrink or
-    # size-neutral edit -- and an undeterminable direction, per
-    # ``_is_growth``'s own "cannot determine" contract -- keeps the
-    # pre-existing deny behavior; a determined non-growth edit advises
-    # instead.
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         tool_input = {}
     if os.path.isabs(file_path):
         abs_file_path = file_path
     else:
-        # Resolve relative to the payload's OWN cwd, never this guard
-        # process's cwd -- ``file_path`` in a real PreToolUse payload is
-        # relative to the firing session's cwd, which is not necessarily
-        # this hook process's cwd (and must not accidentally resolve
-        # against, say, this very repo's own real CLAUDE.md on disk).
         abs_file_path = os.path.abspath(os.path.join(cwd or ".", file_path))
     growth = _is_growth(tool_name, tool_input, abs_file_path)
     if growth is False:

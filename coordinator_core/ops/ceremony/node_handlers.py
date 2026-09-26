@@ -46,11 +46,6 @@ from coordinator_core.ops.ceremony.receipt_schema import (
     make_x_node,
 )
 
-# ---------------------------------------------------------------------------
-# Step-ID constants — canonical keys for the wsc node map
-# ---------------------------------------------------------------------------
-# Step IDs mirror the wsc SKILL step numbering; used as dict keys and node IDs
-# throughout the ceremony pipeline.
 
 STEP_0 = "step_0"
 STEP_1A = "step_1a"
@@ -102,28 +97,9 @@ STEP_3_5B = "step_3.5b"
 STEP_4A = "step_4a"
 STEP_4B = "step_4b"
 
-# ---------------------------------------------------------------------------
-# Node-type classification — canonical map for the wsc ceremony
-# ---------------------------------------------------------------------------
-# Source: node-map § Step-by-Step Node-Type Table + Count Summary (corrected).
-# 39 D / 8 J / 1 F / 1 B / 0 X = 49 pipeline steps.
-#
-# STEP_2B/STEP_4B reclassified F->D 2026-09-20 (bug-blitz audit of
-# state/bug-backlog/2026-07-08-wsc-step2b-step4b-disk-first-audit.yaml):
-# grep across coordinator_core found no wsc_commit transcriber for either
-# step_id outside this module — same disk-first / no-fill-target shape
 # STEP_1B/STEP_2_4B had before their Option B reclassification (memo
-# 2026-07-08). STEP_2B's own slot description ("plan doc is updated in
-# place") already named the disk-first authorship; STEP_4B's narrative is
-# likewise EM-authored straight to disk with no op-side payload consumer.
-#
-# Negative-spec: step_4c is documented in the node-map table as a J-labelled
-# meta-step that describes the EM's flag-severity-triage practice (CLAUDE.md
-# § Flag Severity), but it is NOT counted in the 49 pipeline steps and is NOT
-# emitted as a pipeline node.  Do NOT add it here.
 
 _STEP_NODE_TYPES: dict[str, str] = {
-    # -------- D — deterministic-with-receipt --------
     STEP_0:       "D",
     STEP_1C:      "D",
     STEP_2A:      "D",
@@ -143,7 +119,7 @@ _STEP_NODE_TYPES: dict[str, str] = {
     STEP_2_75:    "D",
     STEP_2_8B:    "D",
     STEP_2_9A:    "D",
-    STEP_2_9B:    "D",  # reclassified from J in Scout A; now D-evidence feeding B1
+    STEP_2_9B:    "D",
     STEP_2_9C:    "D",
     STEP_2_9D:    "D",
     STEP_2_9E:    "D",
@@ -156,14 +132,13 @@ _STEP_NODE_TYPES: dict[str, str] = {
     STEP_3_5A:    "D",
     STEP_3_5B:    "D",
     STEP_4A:      "D",
-    STEP_2_6_3:   "D",  # reclassified X→D: started_at + git log --diff-filter=A (C1)
-    STEP_2_96:    "D",  # reclassified X→D: completeness-checklist mirror read (C3)
-    STEP_2_67A:   "D",  # reclassified X→D: filesystem-mtime scratch scan (C2 spinoff)
-    STEP_1B:      "D",  # reclassified F→D: lesson authored disk-first via coordinator-lesson-add; op records provenance, not payload (Option B, memo 2026-07-08)
+    STEP_2_6_3:   "D",
+    STEP_2_96:    "D",
+    STEP_2_67A:   "D",
+    STEP_1B:      "D",
     STEP_2_4B:    "D",  # reclassified F→D: plan-reconciliation ALLOWLIST edit written in place at Step 2.4; op records provenance, not payload (Option B, memo 2026-07-08)
-    STEP_2B:      "D",  # reclassified F→D: plan completion notes written in place, no wsc_commit transcriber (bug-blitz audit, 2026-09-20)
-    STEP_4B:      "D",  # reclassified F→D: work-done narrative authored disk-first, no wsc_commit transcriber (bug-blitz audit, 2026-09-20)
-    # -------- J — judgment-elicited (8) --------
+    STEP_2B:      "D",
+    STEP_4B:      "D",
     STEP_1A:      "J",
     STEP_1_2:     "J",
     STEP_2_6_7:   "J",
@@ -172,22 +147,10 @@ _STEP_NODE_TYPES: dict[str, str] = {
     STEP_2_8A:    "J",
     STEP_2_8C:    "J",
     STEP_2_95B:   "J",
-    # -------- F — free-authored prose (1) --------
     STEP_2_6_6C:  "F",
-    # -------- X — illegible-state gap (0 — reserved; BranchResolution/receipts may still emit X) --------
-    # -------- B — EM-turn bracket (1) --------
     STEP_B1:      "B",
 }
 
-# ---------------------------------------------------------------------------
-# J-question corpus (8 discriminating questions)
-# ---------------------------------------------------------------------------
-# Authoritative text sourced from node-map § Step-by-Step Node-Type Table.
-# answer="" until the EM fills the J-node during the EM turn.
-#
-# These are 1-2-choice prompts — the EM answers yes/no or supplies the bounded
-# set.  The handler DOES NOT auto-answer (anti-scope: J nodes must not be
-# pre-resolved; pre-resolving a J step re-introduces hallucination risk).
 
 J_QUESTIONS: dict[str, str] = {
     STEP_1A: (
@@ -239,19 +202,7 @@ J_QUESTIONS: dict[str, str] = {
     ),
 }
 
-# ---------------------------------------------------------------------------
-# F-slot corpus (1 authoring slot)
-# ---------------------------------------------------------------------------
-# Slot descriptions sourced from node-map § Step-by-Step Node-Type Table.
-# filled="" until the EM authors the prose during the EM turn.
-#
-# These are irreducible EM prose slots — no bounded-choice framing applies.
-# The handler DOES NOT author prose (anti-scope).
-#
-# Negative-spec: STEP_2B/STEP_4B are NOT here — reclassified F→D (see
 # _STEP_NODE_TYPES comment above). Both are disk-first EM authorship with no
-# wsc_commit transcriber; re-adding either here without a real op-side fill
-# target reopens the silent-drop shape the reclassification closed.
 
 F_SLOTS: dict[str, str] = {
     STEP_2_6_6C: (
@@ -261,28 +212,14 @@ F_SLOTS: dict[str, str] = {
     ),
 }
 
-# ---------------------------------------------------------------------------
-# X-step missing-signal descriptions
-# ---------------------------------------------------------------------------
-# Authoritative text sourced from node-map § X-step contract-gap index.
 
 X_MISSING_SIGNALS: dict[str, str] = {
-    # X is currently unpopulated: all prior X-steps reclassified to D (C1/C2/C3 spinoffs).
-    # BranchResolution and receipt consumers may still emit X nodes at runtime; this dict
-    # governs only the step-registry entries (wsc_resolve pipeline steps).
 }
 
-# ---------------------------------------------------------------------------
 # STEP_2_65B bulk-eligibility classifier (C2)
-# ---------------------------------------------------------------------------
-# Spec backlink: pln-give-the-memo-disposition-flip-e580c2
-#   § C2 / AC4a — PM ruling (2026-07-26) on the bulk no-action-needed fast path.
 
 
-#: `_resolve_in_reply_to_target` (branch_resolution.py, disk-backed) returns one of
-#: these three strings, or the caller passes `None` when `in_reply_to` itself
-#: is absent (not applicable — no resolution was ever attempted).
-TargetResolution = Optional[str]  # "open" | "closed" | "unresolvable" | None
+TargetResolution = Optional[str]
 
 
 def classify_bulk_eligibility(
@@ -337,11 +274,6 @@ def classify_bulk_eligibility(
     )
 
 
-# ---------------------------------------------------------------------------
-# D handler
-# ---------------------------------------------------------------------------
-
-
 def handle_d(
     step_id: str,
     resolving_op: str = "",
@@ -372,11 +304,6 @@ def handle_d(
     )
 
 
-# ---------------------------------------------------------------------------
-# J handler
-# ---------------------------------------------------------------------------
-
-
 def emit_j(step_id: str, answer: str = "") -> dict[str, Any]:
     """Produce a J-node dict with the canonical discriminating question for step_id.
 
@@ -398,42 +325,13 @@ def emit_j(step_id: str, answer: str = "") -> dict[str, Any]:
     Raises:
         KeyError: if step_id is not one of the 8 registered J-steps.
     """
-    question = J_QUESTIONS[step_id]  # intentional KeyError if not a J-step
+    question = J_QUESTIONS[step_id]
     return make_j_node(node_id=step_id, question=question, answer=answer)
 
 
-# ---------------------------------------------------------------------------
-# F handler
-# ---------------------------------------------------------------------------
-
-
 def emit_f(step_id: str, filled: str = "") -> dict[str, Any]:
-    """Produce an F-node dict with the canonical slot description for step_id.
-
-    The slot description is sourced from F_SLOTS (authoritative corpus).
-    Raises KeyError if step_id is not the 1 registered F-step.
-
-    Anti-scope: does NOT author prose.  filled="" until the EM authors the prose
-    during the EM turn.  The 1 F-step is irreducible EM writing —
-    completion narrative.
-
-    Args:
-        step_id: canonical step ID; must be a key in F_SLOTS.
-        filled:  EM-authored prose (empty string in phase-1 receipt).
-
-    Returns:
-        Schema-valid F-node dict (receipt_schema.make_f_node shape).
-
-    Raises:
-        KeyError: if step_id is not the 1 registered F-step.
-    """
-    slot = F_SLOTS[step_id]  # intentional KeyError if not an F-step
+    slot = F_SLOTS[step_id]
     return make_f_node(node_id=step_id, slot=slot, filled=filled)
-
-
-# ---------------------------------------------------------------------------
-# B handler
-# ---------------------------------------------------------------------------
 
 
 def emit_b(
@@ -441,43 +339,11 @@ def emit_b(
     pre_resolved_evidence: dict[str, Any] | None = None,
     em_adjudication: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Produce a B-node dict with the generic two-slot shape.
-
-    GENERIC — the slot names (pre_resolved_evidence / em_adjudication) are
-    ceremony-independent.  For wsc B1 (the post-implementation code-review wave):
-      pre_resolved_evidence carries the review-wave dispatch-plan keys:
-        {slice_count, partition_boundaries, docs_checker_inclusion} — pre-resolved
-        as D-evidence by wsc_resolve from steps 2.9a + 2.9b + 2.9e.
-      em_adjudication carries the EM-filled review verdict after the EM runs the
-        wave: {aggregate_verdict: "WARN"|"BLOCKED", integration_disposition: ...}.
-
-    A different ceremony fills different blob content WITHOUT renaming these keys.
-    The tell that the schema was built wrong: a second ceremony needs a rename.
-
-    Anti-scope: do NOT add wsc-specific keys (dispatch_plan, adjudication,
-    review_verdict) here — those are instance data in the blobs, not schema keys.
-
-    Args:
-        step_id:               canonical step ID (e.g. STEP_B1).
-        pre_resolved_evidence: D-evidence blob from the resolve phase; {} if not
-                               yet available (e.g. when scaffolding the receipt
-                               before wsc_resolve fills in the review-wave plan).
-        em_adjudication:       EM-filled verdict blob; {} in the phase-1 receipt
-                               (filled by the EM during the B-bracket turn).
-
-    Returns:
-        Schema-valid B-node dict (receipt_schema.make_b_node shape).
-    """
     return make_b_node(
         node_id=step_id,
         pre_resolved_evidence=pre_resolved_evidence,
         em_adjudication=em_adjudication,
     )
-
-
-# ---------------------------------------------------------------------------
-# X handler (convenience; wsc_resolve builds X-nodes for contract-gap steps)
-# ---------------------------------------------------------------------------
 
 
 def emit_x(step_id: str) -> dict[str, Any]:
@@ -503,13 +369,8 @@ def emit_x(step_id: str) -> dict[str, Any]:
         2026-07-06 (C1/C2/C3 spinoffs). X_MISSING_SIGNALS is now empty; emit_x raises KeyError
         for all step IDs until a new X-step is registered.
     """
-    missing_signal = X_MISSING_SIGNALS[step_id]  # intentional KeyError if not X
+    missing_signal = X_MISSING_SIGNALS[step_id]
     return make_x_node(node_id=step_id, missing_signal=missing_signal)
-
-
-# ---------------------------------------------------------------------------
-# Classification helper
-# ---------------------------------------------------------------------------
 
 
 def classify_step(step_id: str) -> str | None:
@@ -529,15 +390,12 @@ def classify_step(step_id: str) -> str | None:
 
 
 def known_j_step_ids() -> list[str]:
-    """Return the ordered list of the 8 canonical J-step IDs."""
     return [s for s, t in _STEP_NODE_TYPES.items() if t == "J"]
 
 
 def known_f_step_ids() -> list[str]:
-    """Return the ordered list of the 3 canonical F-step IDs."""
     return [s for s, t in _STEP_NODE_TYPES.items() if t == "F"]
 
 
 def known_b_step_ids() -> list[str]:
-    """Return the list of canonical B-step IDs (currently 1: step_B1)."""
     return [s for s, t in _STEP_NODE_TYPES.items() if t == "B"]

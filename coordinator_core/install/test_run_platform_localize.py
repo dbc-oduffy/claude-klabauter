@@ -1,15 +1,3 @@
-"""
-Co-located pytest for coordinator_core.install.run_platform_localize
-(install.md § Step 9 native port, DoE-claude repo). Covers: --check-only
-never invokes platform_localize.main() nor mutates anything; a live run
-that completes with rc 0 emits the "ran" status row and (when a validator
-+ known_marketplaces.json are both present) runs the schema-validation
-branch; a live run with an empty/absent plugins dir emits the maximalist
-"no local plugin dirs" variant (install.md F9); and a non-zero
-platform_localize.main() rc surfaces as the "error (see stderr)" row.
-
-Spec backlink: coordinator/commands/install.md § Step 9 [DoE-claude repo]
-"""
 
 from __future__ import annotations
 
@@ -85,8 +73,8 @@ def test_live_run_no_local_plugin_dirs_is_not_a_failure(capsys, tmp_path):
     or empty ~/.claude/plugins dir means platform-localize legitimately
     writes no known_marketplaces.json — this is an EXPECTED no-op, not an
     error, and must surface via the dedicated status-row variant."""
-    known_mp = tmp_path / "known_marketplaces.json"  # never created
-    plugins_dir = tmp_path / "plugins"  # never created — absent, not just empty
+    known_mp = tmp_path / "known_marketplaces.json"
+    plugins_dir = tmp_path / "plugins"
 
     with mock.patch.object(rpl.platform_localize, "main", return_value=0):
         rc = rpl.run(
@@ -106,7 +94,7 @@ def test_live_run_no_local_plugin_dirs_is_not_a_failure(capsys, tmp_path):
 def test_live_run_empty_plugins_dir_is_not_a_failure(capsys, tmp_path):
     known_mp = tmp_path / "known_marketplaces.json"
     plugins_dir = tmp_path / "plugins"
-    plugins_dir.mkdir()  # present but empty
+    plugins_dir.mkdir()
 
     with mock.patch.object(rpl.platform_localize, "main", return_value=0):
         rc = rpl.run(

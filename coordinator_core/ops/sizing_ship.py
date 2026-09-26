@@ -123,27 +123,18 @@ from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
 
-# Vendored sizing-object schema path — own local copy per this package's
 # established per-module convention (see e.g. deliverable_cascade._SIZING_SCHEMA_PATH,
 # sizing_decline._SIZING_SCHEMA_PATH).
 _SIZING_SCHEMA_PATH: Path = (
     Path(__file__).parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
 )
 
-#: Only a `sized` or `routed` sizing can transition to `shipped` via this op —
-#: see module docstring for why `draft` is excluded and both `sized`/`routed`
-#: are included (unlike `sizing_decline`'s narrower `{"routed"}`).
 _SHIPPABLE_FROM = frozenset({"sized", "routed"})
 
-#: Terminal/near-terminal statuses this op must never overwrite — each names a
-#: different, incompatible fact from "shipped" (see module docstring).
 _INCOMPATIBLE_TERMINAL = frozenset({"declined", "superseded"})
 
 
 def _validate_sizing_fm(fm_text: str) -> list:
-    """Parse fm_text as whole-document YAML and validate against the sizing-object
-    schema. Mirrors sizing_decline._validate_sizing_fm's contract exactly.
-    """
     try:
         fm_dict = yaml.safe_load(fm_text) or {}
     except Exception as exc:  # noqa: BLE001
@@ -209,13 +200,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     _state = {"applied": False, "prior_status": None}
 
     def mutate(old_text: str) -> str:
-        # Whole-document YAML, no `---` frontmatter fence — same shape as
-        # sizing_decline._handler's own mutate closure.
         current_status = read_fm_field_unquoted(old_text, "status")
         _state["prior_status"] = current_status
 
         if current_status == "shipped":
-            # Already terminal — idempotency floor, byte-identical no-op.
             return old_text
 
         if current_status in _INCOMPATIBLE_TERMINAL:

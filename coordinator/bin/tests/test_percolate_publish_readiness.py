@@ -50,9 +50,6 @@ def gate():
 
 
 def test_the_report_never_stops_at_the_first_failure(gate, monkeypatch, capsys):
-    """The whole point: a failing check contributes a line and the rest still
-    run. Serial rediscovery is the bug this command exists to kill, and a report
-    that returns early reintroduces it one layer up."""
     monkeypatch.setattr(gate, "_check_engine_root", lambda f: (f.append((gate._FAIL, "engine-root", "boom")), None)[1])
     args = gate._build_parser().parse_args(["publish-readiness", "claude-klabauter"])
     rc = args.func(args)
@@ -79,8 +76,6 @@ def test_a_worktree_that_is_the_deployed_engine_is_a_fail_with_the_fix(gate, mon
 
 
 def test_rows_landing_in_two_worktrees_are_refused(gate, tmp_path):
-    """One publish round writes one mirror. Two roots means the caller selected
-    rows that do not belong to a single mirror, which the round cannot honour."""
     roots = []
     for name in ("a", "b"):
         repo = tmp_path / name
@@ -94,8 +89,6 @@ def test_rows_landing_in_two_worktrees_are_refused(gate, tmp_path):
 
 
 def test_an_existing_remote_branch_needs_no_creation_permission(gate, tmp_path):
-    """A push that UPDATES a ref is never subject to a creation rule, so this
-    answers locally and costs no API call."""
     origin = tmp_path / "origin"
     origin.mkdir()
     _git(origin, "init", "-b", "main")
@@ -114,9 +107,6 @@ def test_an_existing_remote_branch_needs_no_creation_permission(gate, tmp_path):
 
 
 def test_an_unanswerable_creation_question_warns_and_never_passes(gate, tmp_path, monkeypatch):
-    """"We could not check" and "it is allowed" are the two answers this check
-    exists to stop conflating, so an unreachable rules endpoint is a WARN
-    naming what is unknown -- never a PASS."""
     origin = tmp_path / "origin"
     origin.mkdir()
     _git(origin, "init", "-b", "main")
@@ -134,7 +124,6 @@ def test_an_unanswerable_creation_question_warns_and_never_passes(gate, tmp_path
     verdict, _name, detail = findings[0]
     assert verdict == gate._WARN
     assert "would CREATE" in detail
-    # The dry-run trap, named where an operator will read it.
     assert "--dry-run" in detail
 
 
@@ -166,8 +155,6 @@ def test_a_remote_that_forbids_creation_fails_and_names_the_allowed_branches(
 
 
 def _fake_git_for_creation(gate, clone: Path):
-    """`ls-remote` against a URL that does not exist would hit the network; the
-    rest of the legs are real. Only the two remote reads are substituted."""
     real = gate._readiness_git
 
     class _Proc:

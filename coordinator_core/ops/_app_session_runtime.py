@@ -47,24 +47,6 @@ try:
 except ImportError:  # pragma: no cover — sys.path bootstrap fallback
     import sys as _sys
 
-    # The bootstrap lives HERE, not in `app_session`, because `app_session`
-    # imports THIS module at its own module scope — an unguarded top-level
-    # `from coordinator.bin.lib...` here poisons `app_session`'s eager
-    # registration before its own guarded import is ever reached, and the
-    # namespace package `coordinator/` is only importable while the claude-klabauter
-    # root happens to be on `sys.path` (callers such as `cc_invoke` insert
-    # it and pop it again around their own imports).
-    #
-    # C10 (staff-eng review finding 8): this block runs once, at module
-    # import time — Python's import lock guarantees no concurrent second
-    # run of this exact block in one process, so no refcounting is needed
-    # here (contrast doctor.py's `_sys_path_push`/`_sys_path_pop`, which
-    # guards a function called repeatedly and concurrently). Pop the entry
-    # again once this module's own bootstrap import has resolved, leaving
-    # `sys.path` exactly as this module found it — a permanently widened
-    # `sys.path` lets a LATER, unrelated import elsewhere in a warm,
-    # long-lived process silently resolve against a directory it never
-    # asked for.
     _lib_dir = str(Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "lib")
     _lib_dir_already_present = _lib_dir in _sys.path
     if not _lib_dir_already_present:
@@ -76,19 +58,11 @@ except ImportError:  # pragma: no cover — sys.path bootstrap fallback
             try:
                 _sys.path.remove(_lib_dir)
             except ValueError:
-                pass  # already absent — nothing to restore
+                pass
 
 
 @dataclass
 class ResolvedRuntime:
-    """Result of resolving a launch config's runtime kind to a spawnable argv.
-
-    Exactly one of (`argv` non-None) or (`error` non-None) holds on return —
-    never both, never neither. Callers distinguish "resolved" from "not
-    installed" (or any other resolution failure) by checking `ok`, never by
-    truthiness of `argv` alone (an empty-but-non-None argv is not a valid
-    resolved state and never produced by any resolver here).
-    """
 
     ok: bool
     argv: Optional[List[str]] = None
@@ -96,20 +70,10 @@ class ResolvedRuntime:
     binary: Optional[str] = None
 
 
-# Resolver signature: (config: dict, repo_root: str) -> ResolvedRuntime
 RuntimeResolver = Callable[[dict, str], ResolvedRuntime]
 
 
 def _resolve_plain_argv(config: dict, repo_root: str) -> ResolvedRuntime:
-    """Generic fallback resolver — NO resolution step, just argv-ify `command`.
-
-    This is what an unrecognised or absent runtime kind degrades to. Reads
-    `config["command"]` (a shell-shaped string, e.g. "pnpm dev") and splits it
-    with `win_safe_shlex_split` — the shared spawn substrate (Hard constraint
-    2), not a bespoke split. An absent or blank `command` is a resolution
-    failure, reported the same way a missing binary is: `ok=False` with a
-    structured `error`, never a raised exception.
-    """
     command = config.get("command") if isinstance(config, dict) else None
     if not command or not str(command).strip():
         return ResolvedRuntime(ok=False, error="no command configured")
@@ -146,43 +110,18 @@ def _electron_binary_path(repo_root: str) -> Path:
 
 
 def _resolve_electron(config: dict, repo_root: str) -> ResolvedRuntime:
-    """Electron runtime resolver — first entry in the registry, not the
-    mechanism (see module docstring).
-
-    Resolves the electron binary per `_electron_binary_path` (following
-    symlinks — pnpm layouts store the real package elsewhere, so the
-    existence/realpath check below MUST resolve through a symlinked
-    `node_modules/electron`), then builds argv as `[binary] + extra_args`
-    where `extra_args` comes from `config["args"]` (a list) or, if absent,
-    `config["command"]` split via `win_safe_shlex_split`.
-
-    On a missing binary: returns `ok=False` with
-    `error="electron not installed at <path>"` and does NOT attempt any
-    download (Hard constraint 3) — the one place this port deliberately
-    diverges from the JS original, which `spawnSync`s a download here.
-    """
     try:
         binary = _electron_binary_path(repo_root)
     except (OSError, ValueError):
-        # path.txt missing, unreadable, or containing invalid UTF-8
-        # (UnicodeDecodeError is a ValueError, not an OSError) — same
-        # terminal outcome as a missing binary: report and stop, never
-        # download. Matches the fail-closed style already used in
-        # `_handle_is_live` (app_session.py); resolve_runtime's own
-        # docstring promises "never raises" and a raw UnicodeDecodeError
-        # here would break that contract.
         missing = Path(repo_root) / "node_modules" / "electron" / "path.txt"
         return ResolvedRuntime(
             ok=False, error=f"electron not installed at {missing}"
         )
 
-    # Follow symlinks (pnpm layouts store the real package elsewhere) before
-    # deciding whether the binary exists.
     resolved_binary = binary
     try:
         resolved_binary = binary.resolve(strict=False)
     except OSError:
-        # unresolved binary path is still checked below; resolution is a best-effort improvement
         pass
 
     if not resolved_binary.is_file():
@@ -200,10 +139,6 @@ def _resolve_electron(config: dict, repo_root: str) -> ResolvedRuntime:
     return ResolvedRuntime(ok=True, argv=argv, binary=str(resolved_binary))
 
 
-# Registry keyed by runtime kind. `electron` is the FIRST resolver added, not
-# the mechanism — the whole point of this shape is that the runtime-kind axis
-# was there from the start, not grown on later. Extend by adding a function
-# plus one entry here; never inline a new kind's logic at a call site.
 RUNTIME_RESOLVERS: Dict[str, RuntimeResolver] = {
     "electron": _resolve_electron,
 }

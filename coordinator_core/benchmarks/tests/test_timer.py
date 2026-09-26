@@ -35,8 +35,6 @@ def _completed(returncode: int, stdout: str):
 
 @mock.patch("coordinator_core.benchmarks.timer.subprocess.run")
 def test_exit_code_1_is_rejected_even_with_success_looking_stdout(mock_run):
-    """AC9: non-zero exit code invalidates the sample regardless of stdout
-    content -- must raise, never return a timing."""
     mock_run.return_value = _completed(
         1, json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"ok": True}})
     )
@@ -70,8 +68,6 @@ def test_exit_0_with_error_envelope_is_rejected(mock_run):
 
 @mock.patch("coordinator_core.benchmarks.timer.subprocess.run")
 def test_exit_0_with_result_envelope_is_accepted_and_timed(mock_run):
-    """The valid-sample control case: exit 0 + a 'result' envelope must
-    return a float elapsed_ms and must not raise."""
     mock_run.return_value = _completed(
         0, json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"ok": True}})
     )
@@ -95,9 +91,6 @@ def test_exit_0_with_unparsable_stdout_is_rejected(mock_run):
 
 @mock.patch("coordinator_core.benchmarks.timer.subprocess.run")
 def test_invalid_sample_never_reaches_a_timing_return(mock_run):
-    """Explicitly assert the AC9 contract's second half: an invalid sample
-    does not merely raise eventually -- it raises BEFORE any value is
-    returned to the caller (no partial/garbage timing leaks out)."""
     mock_run.return_value = _completed(
         1, json.dumps({"jsonrpc": "2.0", "id": 1, "error": {"code": -1, "message": "boom"}})
     )
@@ -106,7 +99,6 @@ def test_invalid_sample_never_reaches_a_timing_return(mock_run):
     try:
         result = time_invocation("ping", "{}", repo=None)
     except BenchmarkSampleInvalid:
-        # Expected per the AC9 contract under test -- the assertion below is the check.
         pass
 
     assert result is None
@@ -114,9 +106,6 @@ def test_invalid_sample_never_reaches_a_timing_return(mock_run):
 
 @mock.patch("coordinator_core.benchmarks.timer.subprocess.run")
 def test_repo_flag_passed_through_for_worktree_scoped_op(mock_run):
-    """Sanity check that the mocked call receives the --repo argv shape for
-    a worktree-scoped op -- not an AC9 assertion, but guards the fixture
-    setup used by the AC9 tests above."""
     mock_run.return_value = _completed(
         0, json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}})
     )
@@ -150,8 +139,6 @@ def test_exit_0_with_scalar_json_body_is_rejected(mock_run):
 
 @mock.patch("coordinator_core.benchmarks.timer.subprocess.run")
 def test_subprocess_timeout_is_rejected_as_invalid_sample(mock_run):
-    """A hung child process must
-    fail loud like any other invalid sample, not wedge the run forever."""
     mock_run.side_effect = subprocess.TimeoutExpired(cmd=["invoke"], timeout=SUBPROCESS_TIMEOUT_S)
 
     with pytest.raises(BenchmarkSampleInvalid):

@@ -36,11 +36,6 @@ from coordinator_core.testing.home_sandbox import sandbox_home
 from coordinator_core.write_guards import bump_out_of_repo_tool_write as guard
 from coordinator_core.win_portability import no_console_creationflags
 
-# Real git repos are load-bearing: the AC2 in-vs-out-of-repo verdict this
-# guard exists for is computed against real repo-root resolution
-# (_write_bump_applicability), which a mocked git object model cannot
-# reproduce -- these tests need genuine repo boundaries to prove a path
-# outside the session's repo is actually detected as such.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -80,27 +75,16 @@ def _payload(tool_name, file_path, session_id, cwd, agent_id="", notebook=False)
     }
 
 
-# ---------------------------------------------------------------------------
-# AC13/AC19 -- registration attributes are explicit, not left to default
-# ---------------------------------------------------------------------------
-
-
 def test_ac13_ac19_registration_attributes_are_explicit():
     assert guard.CLASS == "hard-deny"
     assert guard.CLASS != "advisory"
     assert set(guard.MATCHERS) == {"Write", "Edit", "MultiEdit", "NotebookEdit"}
     assert isinstance(guard.PRIORITY, int)
-    assert guard.PRIORITY != 100  # not the engine's silent default
+    assert guard.PRIORITY != 100
 
 
 def test_ac13_check_is_callable_matching_engine_interface():
     assert callable(guard.check)
-
-
-# ---------------------------------------------------------------------------
-# AC2 -- a Write/Edit/MultiEdit/NotebookEdit outside the session's own repo
-# bumps; the same tool inside its own repo never does.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("tool_name", ["Write", "Edit", "MultiEdit"])
@@ -117,7 +101,7 @@ def test_ac2_cross_repo_write_bumps(tmp_path, tool_name):
 
     assert result is not None
     ctx = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "hookEventName" not in ctx  # sanity: ctx is the message string, not the envelope
+    assert "hookEventName" not in ctx
     assert result["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert str(foreign) in ctx
@@ -125,12 +109,7 @@ def test_ac2_cross_repo_write_bumps(tmp_path, tool_name):
 
 
 def test_unwritable_marker_gitdir_fails_open(tmp_path, monkeypatch):
-    # Mirrors `bump_foreign_repo_write._evaluate_foreign_repo_candidate`'s
-    # `marker_gitdir is None or not marker_gitdir_is_writable(marker_gitdir)`
     # guard (STAFF-ENG F0/AC5, "never an unclearable deny") -- a marker
-    # location that resolves but is not writable/readable must fail open
-    # exactly like an unresolvable one, not advertise a `touch` that can
-    # never succeed.
     own = _init_repo(tmp_path, "own-repo")
     foreign = _init_repo(tmp_path, "foreign-repo")
     session_id = "sess-unwritable-marker"
@@ -183,11 +162,6 @@ def test_ac2_non_matcher_tool_never_bumps(tmp_path):
     assert guard.check(payload) is None
 
 
-# ---------------------------------------------------------------------------
-# Marker clears the bump -- one clear stands down every subsequent target.
-# ---------------------------------------------------------------------------
-
-
 def test_marker_present_in_own_gitdir_clears_the_bump(tmp_path):
     """MIGRATION GUARANTEE, not the advertised shape (2026-08-10 per-target
     narrowing). An anchor-sited marker is the PRE-narrowing location; it
@@ -212,18 +186,6 @@ def test_marker_present_in_own_gitdir_clears_the_bump(tmp_path):
     other_foreign = _init_repo(tmp_path, "another-foreign-repo")
     payload2 = _payload("Edit", str(other_foreign / "y.txt"), session_id, str(own))
     assert guard.check(payload2) is None
-
-
-# ---------------------------------------------------------------------------
-# Per-target marker narrowing (2026-08-10 parity pass) -- one clear covers
-# the target it was made for, not every target for the session. Mirrors the
-# Bash leg's AC4 (docs/plans/2026-08-03-narrow-write-confinement-bump.md).
-#
-# AC9: every verdict-asserting test below first asserts `bump_applies()` is
-# True AND that the guard actually FIRES on the un-cleared target, so the
-# "still denies elsewhere" half can never pass vacuously against a guard
-# that never engaged.
-# ---------------------------------------------------------------------------
 
 
 def _assert_denies(payload) -> str:
@@ -314,10 +276,6 @@ def test_marker_falls_back_to_anchor_when_target_is_in_no_repo(tmp_path, monkeyp
     payload = _payload("Write", str(loose / "x.txt"), session_id, str(own))
     _assert_denies(payload)
 
-    # Marker-siting invariant proved behaviourally, not via message text
-    # (2026-08-13, C4d -- no renderer prints a clear line any more): the
-    # fallback marker lives at the ANCHOR's own gitdir when the target has
-    # no gitdir to narrow into, so touching it clears this write.
     own_gitdir = marker.resolve_gitdir(str(own))
     assert own_gitdir is not None
 
@@ -336,19 +294,12 @@ def test_marker_locations_split_advertised_from_grandfathered(tmp_path):
         foreign_gitdir,
         own_gitdir,
     )
-    # No target repo -> anchor, nothing grandfathered (the location never
-    # moved for this shape).
     assert guard._marker_locations(own_gitdir, None) == (own_gitdir, None)
-    # No session repo -> target, unchanged from pre-narrowing behaviour.
     assert guard._marker_locations(None, foreign_gitdir) == (foreign_gitdir, None)
-    # Same repo on both sides -> never a duplicate stat of one directory.
     assert guard._marker_locations(own_gitdir, own_gitdir) == (own_gitdir, None)
 
 
 def test_narrowing_adds_no_expiry_identity_gating_or_fail_closed(tmp_path):
-    """AC6 of docs/plans/2026-08-03-narrow-write-confinement-bump.md, asserted
-    NON-vacuously: the guard is shown to fire first, and the absence
-    properties are asserted against that fired-then-cleared path."""
     own = _init_repo(tmp_path, "own-repo")
     foreign = _init_repo(tmp_path, "foreign-repo")
     session_id = "sess-ac6-absence"
@@ -361,33 +312,19 @@ def test_narrowing_adds_no_expiry_identity_gating_or_fail_closed(tmp_path):
     gitdir = marker.resolve_gitdir(str(foreign))
     assert gitdir is not None
     marker_file = gitdir / marker.marker_basename(session_id)
-    # A bare `touch` of an ordinary, zero-byte file -- no body, no identity,
     # no signature -- still clears, exactly as XREPO_MARKER_IS_ORDINARY_FILE
-    # requires. The clear is not gated on who created it or when.
     marker_file.touch()
     assert marker_file.stat().st_size == 0
-    os.utime(marker_file, (0, 0))  # epoch-old: no expiry window may exist
+    os.utime(marker_file, (0, 0))
     assert guard.check(payload) is None
 
-    # Band/posture unchanged by the narrowing: still the `write_guards`
-    # hard-deny CLASS it already had, with no `fail_closed` promotion and no
-    # `GuardBand` membership of its own (this surface is registered by
     # `write_guards/engine.py`, which has no CONFINEMENT_DENY band).
     assert guard.CLASS == "hard-deny"
     assert getattr(guard, "fail_closed", False) is False
     assert getattr(guard, "BAND", None) is None
 
 
-# ---------------------------------------------------------------------------
-# C5 -- destination-class axis wired through, consuming C1's classifier
-# (never re-derived locally). AC9 asserted first in every case.
-# ---------------------------------------------------------------------------
-
-
 def _write_publish_registry(reg_dir, mirror_path, owner: str = "claude-central-em") -> None:
-    """A real `[publish.mirrors.<key>]` nested table -- the shape
-    `target_is_publish_destination` (C1) parses, not the flat-string shape
-    `_write_registry`'s own `[repos]` table uses."""
     reg_dir.mkdir(parents=True, exist_ok=True)
     escaped = str(mirror_path).replace("\\", "\\\\")
     lines = ["[publish.mirrors.testmirror]", f'path = "{escaped}"', f'owner = "{owner}"']
@@ -436,16 +373,8 @@ def test_ac1_ordinary_foreign_repo_write_keeps_foreign_class_copy(tmp_path, monk
     assert "is publish mirror" not in ctx
 
 
-# ---------------------------------------------------------------------------
-# § Where the bump does not fire -- session anchor in no git repo.
-# ---------------------------------------------------------------------------
-
-
 def test_outside_any_repo_anchor_unregistered_target_never_bumps(tmp_path, monkeypatch):
-    # No git repo to write C0's session-start record against (sessions_dir()
-    # itself requires a git root) -- the anchor here can only resolve via the
     # CLAUDE_PROJECT_DIR fallback, exactly like _write_bump_applicability's
-    # own AC11 tests for this same anchor-outside-any-repo shape.
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "no-such-registry-dir"))
     scaffold = tmp_path / "Documents" / "new-project"
     scaffold.mkdir(parents=True)
@@ -476,18 +405,8 @@ def test_outside_any_repo_anchor_registered_target_still_bumps(tmp_path, monkeyp
     assert result is not None
 
 
-# ---------------------------------------------------------------------------
-# coordinator-claude#42 B2 -- CLOUD REPRO: a top-level, PM-facing session
-# whose anchor resolves to no git repo at all (a launcher-less container's
-# workspace PARENT, one level above the repo it actually cloned) must still
-# be recognized as writing its OWN repo when the payload's own `cwd` sits
-# squarely inside it -- even though that same repo is ALSO a registered
-# sibling (every fleet repo is). Before the fix, `own_repo_write_gitdir` did
 # not exist and this fell straight into the 2026-08-10 "a REGISTERED target
-# still bumps unconditionally" rule, denying a session's own repo the
-# identical write `test_outside_any_repo_anchor_registered_target_still_
 # bumps` above correctly denies for a GENUINELY foreign registered target.
-# ---------------------------------------------------------------------------
 
 
 def test_cloud_top_level_session_own_registered_repo_allows(tmp_path, monkeypatch):
@@ -502,9 +421,7 @@ def test_cloud_top_level_session_own_registered_repo_allows(tmp_path, monkeypatc
     _write_registry(reg_dir, coordinator_claude=str(own))
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
 
-    workspace_parent = tmp_path  # `own` lives one level under this, mirroring
-    # the cloud container's workspace root sitting one level above the repo
-    # it actually cloned (coordinator-claude#42 issue body).
+    workspace_parent = tmp_path
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(workspace_parent))
     session_id = "sess-cloud-top-level-own-repo"
 
@@ -567,10 +484,7 @@ def test_genuine_subagent_in_cloud_layout_still_bumped_for_a_foreign_target(
         str(foreign_target / "f.txt"),
         session_id,
         str(subagent_cwd),
-        # Bare-hex form -- `_canonical_agent_id`'s leg (a) -- so this
-        # canonicalizes to a non-empty `agent_id` and `resolve_agent_class`
         # actually resolves SUBAGENT rather than degrading to UNKNOWN on an
-        # unrecognized id shape.
         agent_id="abcdef123456789012",
     )
 
@@ -596,13 +510,6 @@ def test_unknown_agent_identity_never_gets_sandbox_routing_or_subagent_copy(
     try:
         payload = _payload("Write", str(foreign / "f.txt"), session_id, str(own))
 
-        # Force `resolve_agent_class`'s own verdict to UNKNOWN directly,
-        # rather than making the shared `resolve_effective_types` raise --
-        # `check()` also calls that resolver a second time (to canonicalize
-        # `agent_id` for `effective_session_id`), unguarded by its own
-        # try/except, so breaking it globally would fail the WHOLE guard
-        # open before ever reaching message rendering. Patching the class
-        # verdict directly isolates the one thing this test is about.
         monkeypatch.setattr(guard, "resolve_agent_class", lambda *_a, **_k: "unknown")
 
         result = guard.check(payload)
@@ -628,19 +535,7 @@ def test_unknown_agent_identity_never_gets_sandbox_routing_or_subagent_copy(
                     record_path.unlink(missing_ok=True)
 
 
-# ---------------------------------------------------------------------------
 # ANCHOR-RESOLUTION MISFIRE REGRESSION (bug reproduced live in-session,
-# 2026-08-15). `resolve_gitdir(anchor)` returning `None` is ambiguous
-# between "the anchor genuinely sits in no git repo" and "the `git rev-parse
-# --git-dir` SPAWN failed" (timeout, missing binary, transient error --
-# expected under this box's documented load norm, `docs/wiki/machine-load-
-# norm.md`). `check()` now disambiguates via `path_has_git_ancestor`
-# (`_write_bump_marker.py`, filesystem-only, no subprocess) before ever
-# reaching `_verdict_bumps`. These tests reproduce the spawn failure
-# directly by patching `guard.resolve_gitdir` to return `None` ONLY for the
-# anchor's own cwd, leaving every other call (the target's own resolution)
-# untouched -- exactly the shape a real transient `git` failure has.
-# ---------------------------------------------------------------------------
 
 
 def _patch_resolve_gitdir_to_fail_for(monkeypatch, failing_cwd: str) -> None:
@@ -649,17 +544,13 @@ def _patch_resolve_gitdir_to_fail_for(monkeypatch, failing_cwd: str) -> None:
 
     def _flaky_resolve_gitdir(cwd=None):
         if cwd is not None and os.path.abspath(str(cwd)) == failing_abs:
-            return None  # simulated transient `git rev-parse --git-dir` spawn failure
+            return None
         return real_resolve_gitdir(cwd)
 
     monkeypatch.setattr(guard, "resolve_gitdir", _flaky_resolve_gitdir)
 
 
 def test_transient_anchor_gitdir_spawn_failure_does_not_bump_a_same_repo_write(tmp_path, monkeypatch):
-    """The anchor's `.git` entry is real and present on disk, so
-    `path_has_git_ancestor` still finds it even while `resolve_gitdir` is
-    patched to simulate the failed spawn -- a write squarely inside the
-    session's own repo must ALLOW, not deny on a mis-read 'no repo here'."""
     own = _init_repo(tmp_path, "own-repo")
     session_id = "sess-transient-anchor-spawn-failure"
     session_start.write_session_start_record(session_id, launch_cwd=str(own))
@@ -721,27 +612,8 @@ def test_genuinely_repo_less_anchor_still_bumps_registered_target_after_the_fix(
     assert result is not None
 
 
-# ---------------------------------------------------------------------------
 # PINS THE EXACT PAYLOAD SHAPE FROM THE EM's VERIFICATION TRANSCRIPT
-# (2026-08-10, bug 2026-08-10-cross-repo-write-boundary-denies-on-bash-
-# b6fd16ed9ab9 follow-up). The EM's manual repro used a hand-typed
-# `session_id` ("verify-boundary-probe") that was never passed through a
-# SessionStart hook, so it has no session-start anchor record and no
 # `CLAUDE_PROJECT_DIR` -- `resolve_launch_anchor` returns `None`,
-# `bump_applies` is `False`, and the guard fails open BY DESIGN (see
-# `_write_bump_applicability.resolve_launch_anchor`'s own docstring, and
-# this module's negative-spec: an unresolvable anchor never bumps, on
-# EITHER surface -- confirmed by parity below). This is not a defect this
-# fix introduced or should have caught: EVERY real session gets its anchor
-# record written automatically by `session-start-write-bump-anchor.py`
-# (DoE-claude repo) at SessionStart, before any Write/Edit tool call can
-# happen -- a hand-constructed payload that skips that step is testing a
-# state a live session can never actually be in. Both tests below use the
-# EM's own literal payload (same tool_input, same session_id, same cwd);
-# the first proves the fail-open is real and matches the Bash sibling
-# exactly (parity, not a hole); the second proves the SAME payload denies
-# once the session has the anchor record every live session gets for free.
-# ---------------------------------------------------------------------------
 
 
 def test_em_repro_payload_unanchored_session_fails_open_and_matches_bash_parity(tmp_path):
@@ -751,15 +623,6 @@ def test_em_repro_payload_unanchored_session_fails_open_and_matches_bash_parity(
     allow is the shared applicability contract's fail-open behaviour, not an
     asymmetry between the Bash and tool-write legs."""
     session_id = "verify-boundary-probe"
-    # Foreign-target literal is derived from the RUNNING platform rather than
-    # hardcoded as a Windows drive letter: on POSIX, `X:\...` backslashes are
-    # ordinary filename characters and the literal resolves INSIDE the
-    # session repo, so the guard's "foreign write" premise never holds
-    # (state/bug-backlog/2026-08-22-windows-path-literals-make-two-write-
-    # guard-tests-red-on-posix.yaml). The `nt` leg keeps the EM's original
-    # drive-letter transcript byte-for-byte; the POSIX sibling expresses the
-    # identical foreignness (a path outside the session repo) in POSIX
-    # grammar.
     if os.name == "nt":
         cwd = r"X:\claude-klabauter"
         foreign_file = r"X:\experiments\coordinator.local.md"
@@ -786,8 +649,6 @@ def test_em_repro_payload_unanchored_session_fails_open_and_matches_bash_parity(
     payload_with_agent = dict(payload, agent_id="probe-agent-123")
     assert guard.check(payload_with_agent) is None
 
-    # Bash-surface parity, same unanchored session_id -- must agree, not
-    # merely both happen to allow for unrelated reasons.
     from coordinator_core.bash_guards.bump_foreign_repo_write import (
         check_bump_foreign_repo_write,
     )
@@ -811,17 +672,6 @@ def test_em_repro_payload_denies_once_session_has_its_real_anchor_record(tmp_pat
     (`additionalContext`, non-blocking) instead of a real `permissionDecision:
     "deny"`."""
     session_id = "verify-boundary-probe-anchored"
-    # See the platform-derivation note above the sibling unanchored test:
-    # the drive-letter literal only expresses a foreign target on `nt`. On
-    # POSIX, a non-existent `/opt/...` literal is not enough on its own --
-    # `_verdict_bumps` only denies a repo-less anchor's write when the
-    # TARGET resolves to its own real git-dir (or a registered repo); a
-    # nonexistent target directory resolves to no git-dir at all and
-    # `check()` fails open (allow), which is a different bug to the one
-    # this test pins. Two REAL git repos (this file's own `_init_repo`
-    # helper, already used by every other repo-boundary test here) give the
-    # POSIX leg a target that genuinely resolves to a foreign git-dir --
-    # the same property the `nt` literal expresses via an unreachable drive.
     if os.name == "nt":
         cwd = r"X:\claude-klabauter"
         foreign_file = r"X:\experiments\coordinator.local.md"
@@ -850,17 +700,6 @@ def test_em_repro_payload_denies_once_session_has_its_real_anchor_record(tmp_pat
         assert out["permissionDecision"] == "deny"
         assert "experiments" in out["permissionDecisionReason"]
     finally:
-        # Clean up BOTH records `write_session_start_record` writes into REAL,
-        # shared locations (never a `tmp_path`-scoped fixture dir) -- this
-        # repo's own machine-local settings home AND this repo's own `.git`,
-        # both read by other concurrent sessions:
-        #   1. `_settings_home_anchor_dir()` (settings-home hub, primary read).
-        #   2. `sessions_dir(cwd)` (in-repo `.git/coordinator-sessions/<sid>`,
-        #      same-repo fallback read) -- missed on the first pass of this
-        #      test (DoE finding, verification transcript): leaving this one
-        #      behind poisoned a LATER test in this same file that asserts
-        #      this exact `session_id` has NO anchor, because
-        #      `resolve_launch_anchor` found this leftover record first.
         import shutil
 
         for anchor_dir in (
@@ -875,11 +714,6 @@ def test_em_repro_payload_denies_once_session_has_its_real_anchor_record(tmp_pat
                     shutil.rmtree(record_path, ignore_errors=True)
                 else:
                     record_path.unlink(missing_ok=True)
-
-
-# ---------------------------------------------------------------------------
-# Fail-open surfaces.
-# ---------------------------------------------------------------------------
 
 
 def test_no_session_id_no_anchor_fails_open(tmp_path):
@@ -902,13 +736,6 @@ def test_never_raises_on_malformed_payload():
     assert guard.check({"tool_name": "Write", "tool_input": "not-a-dict"}) is None
 
 
-# ---------------------------------------------------------------------------
-# Parity -- this surface's verdict is driven entirely by the shared C2/C3
-# primitives, not by any independent logic of its own (see module docstring
-# "PARITY GAP" for why this cannot yet compare directly against C4).
-# ---------------------------------------------------------------------------
-
-
 def test_parity_verdict_matches_manual_composition_of_shared_primitives(tmp_path):
     own = _init_repo(tmp_path, "own-repo")
     foreign = _init_repo(tmp_path, "foreign-repo")
@@ -918,9 +745,6 @@ def test_parity_verdict_matches_manual_composition_of_shared_primitives(tmp_path
     target = str(foreign / "notes.txt")
     payload = _payload("Write", target, session_id, str(own))
 
-    # Manual composition using ONLY the shared applicability/marker modules
-    # (the same primitives the Bash-surface guards consume), independent of
-    # this module's own private helpers.
     applies = applicability.bump_applies(session_id, cwd=str(own))
     anchor = applicability.resolve_launch_anchor(session_id, cwd=str(own))
     own_gitdir = marker.resolve_gitdir(anchor)
@@ -960,40 +784,14 @@ def test_parity_same_repo_no_bump_matches_manual_composition(tmp_path):
     assert expected_bump is False
 
 
-# ---------------------------------------------------------------------------
-# System-temp scratch is not a foreign repo -- the harness designates a
-# per-session scratchpad under the system temp root for ALL temporary files,
-# and a bare temp path is in NO repo, so the cross-repo advice this guard
-# renders is a category error there. See the guard's own docstring,
 # "SYSTEM-TEMP SCRATCH IS NOT A FOREIGN REPO".
-#
-# The temp root is PINNED in these tests rather than read live: pytest's own
-# `tmp_path` already sits under the real `tempfile.gettempdir()` on macOS and
-# Linux, so "outside the temp root" is not expressible against the live value.
-# Pinning makes both sides of the conjunctive condition reachable on every
-# platform, Windows included.
-# ---------------------------------------------------------------------------
 
 
 def _pin_temp_root(monkeypatch, root: Path) -> None:
-    """Repoints BOTH recognized-temp-root primitives this module's
-    `_target_is_bare_temp_scratch` now delegates to (the SHARED
-    `_write_bump_applicability.target_is_bare_temp_scratch` -- this module
-    no longer owns a `tempfile` reference of its own): `gettempdir()` AND
-    the `_posix_tmp_literal()` seam. Both must move together for isolation
-    to hold on every platform -- see that seam's own docstring: on a
-    platform where pytest's `tmp_path` defaults to living directly under
-    the real `/tmp` (Linux, no `TMPDIR` set), the unconditional `/tmp`
-    candidate would otherwise still catch every fixture path regardless of
-    a `gettempdir()`-only patch."""
     root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(applicability.tempfile, "gettempdir", lambda: str(root))
     monkeypatch.setattr(applicability, "_posix_tmp_literal", lambda: str(root))
-    # The shared classifier ALSO consults `TMPDIR`/`TEMP`/`TMP` directly
-    # (not merely via `gettempdir()`) -- clear them so this process's own
     # real `TMPDIR` (which, on this host, is an ANCESTOR of pytest's own
-    # `tmp_path`) cannot leak a second, unpinned recognized-temp-root
-    # candidate into these isolation-sensitive tests.
     for var in ("TMPDIR", "TEMP", "TMP"):
         monkeypatch.delenv(var, raising=False)
 
@@ -1058,8 +856,6 @@ def test_real_git_repo_under_temp_root_still_bumps(tmp_path, monkeypatch):
 
 
 def test_foreign_repo_outside_temp_root_still_bumps(tmp_path, monkeypatch):
-    """Pre-existing behaviour, asserted against an explicitly pinned temp
-    root so the exemption cannot be what is carrying this test."""
     own = _init_repo(tmp_path, "own-repo")
     foreign = _init_repo(tmp_path, "foreign-repo")
     session_id = "sess-outside-temp-foreign"
@@ -1130,25 +926,16 @@ def test_bare_relative_file_path_does_not_resolve_against_engine_process_cwd(
 
     monkeypatch.chdir(str(decoy_repo))
 
-    # Anchored against the payload's own cwd (`own`), "decoy" (no dirname)
-    # walks up `own`'s own ancestry (since `own` has no "decoy"
-    # subdirectory) and resolves to `own`'s git-dir -- NEVER to
-    # `decoy_repo`'s git-dir, which is what a process-cwd-relative
-    # resolution would wrongly produce.
     resolved = guard._resolve_target_gitdir("decoy", str(own))
     own_gitdir = marker.resolve_gitdir(str(own))
     decoy_gitdir = marker.resolve_gitdir(str(decoy_repo))
     assert resolved == own_gitdir
     assert resolved != decoy_gitdir
 
-    # No payload cwd at all -- fail closed to None rather than falling back
-    # to the ambient process cwd.
     assert guard._resolve_target_gitdir("decoy", None) is None
 
 
 def test_non_temp_path_outside_any_repo_is_not_exempted(tmp_path, monkeypatch):
-    """The exemption keys on the temp root, not on "no repo" alone -- the
-    outside-any-repo branch keeps its own registry-gated verdict."""
     _pin_temp_root(monkeypatch, tmp_path / "tmproot")
     elsewhere = tmp_path / "Documents" / "loose"
     elsewhere.mkdir(parents=True)
@@ -1157,10 +944,6 @@ def test_non_temp_path_outside_any_repo_is_not_exempted(tmp_path, monkeypatch):
 
 
 def test_symlinked_temp_root_resolves_to_the_same_verdict(tmp_path, monkeypatch):
-    """`/tmp` -> `/private/tmp` shape, expressed portably: a target reached
-    through a symlink to the temp root must resolve to the same verdict as
-    one spelled with the real path. Skips where symlinks are unavailable
-    (unprivileged Windows) rather than hard-failing."""
     real_temp = tmp_path / "private-tmproot"
     real_temp.mkdir()
     link_temp = tmp_path / "tmplink"
@@ -1188,9 +971,6 @@ def test_symlinked_temp_root_resolves_to_the_same_verdict(tmp_path, monkeypatch)
 
 
 def test_macos_private_tmp_symlink_shape(monkeypatch):
-    """The literal shape from the live incident, on a box that actually has
-    the macOS `/tmp` -> `/private/tmp` symlink. Pure helper call -- no
-    filesystem writes outside pytest's own tmp area."""
     if not os.path.islink("/tmp"):
         pytest.skip("/tmp is not a symlink on this platform")
 
@@ -1200,8 +980,6 @@ def test_macos_private_tmp_symlink_shape(monkeypatch):
 
 
 def test_temp_exemption_never_raises_on_unresolvable_temp_root(tmp_path, monkeypatch):
-    """Fail open, unconditionally: a `gettempdir()` that blows up must yield
-    no bump, never a raise -- matching this module's outer contract."""
 
     own = _init_repo(tmp_path, "own-repo")
     foreign_dir = tmp_path / "loose"
@@ -1221,24 +999,13 @@ def test_temp_exemption_never_raises_on_unresolvable_temp_root(tmp_path, monkeyp
 
 
 def test_live_temp_root_is_resolvable_and_non_trivial():
-    """Sanity on the primitive the exemption keys off: `gettempdir()` must
-    yield a real, non-root directory. A `/` here would exempt everything."""
     root = tempfile.gettempdir()
     assert root
     assert os.path.isdir(root)
     assert os.path.realpath(root).rstrip("/") != ""
 
 
-# ---------------------------------------------------------------------------
 # REGRESSION -- the confirmed live false positive: the harness-designated
-# per-session scratchpad is NOT covered by `tempfile.gettempdir()` alone on
-# macOS (`TMPDIR` resolves under `/var/folders/...`; the scratchpad lives
-# under `/private/tmp`). Uses a REAL session-start record so applicability is
-# genuinely True -- a test that passes only because applicability failed open
-# proves nothing. MUST fail against the pre-fix module (the old
-# `_target_is_bare_temp_scratch`, keyed on `tempfile.gettempdir()` alone, no
-# `/tmp` realpath candidate).
-# ---------------------------------------------------------------------------
 
 
 def test_regression_real_harness_scratchpad_shape_never_bumps(tmp_path, monkeypatch):
@@ -1246,9 +1013,6 @@ def test_regression_real_harness_scratchpad_shape_never_bumps(tmp_path, monkeypa
     session_id = "sess-real-scratchpad-c7"
     session_start.write_session_start_record(session_id, launch_cwd=str(own))
 
-    # Simulate the live macOS divergence: `gettempdir()` (TMPDIR) points
-    # somewhere OTHER than the scratchpad's real root -- only the `/tmp`
-    # realpath candidate (via the testability seam) catches it.
     fake_gettempdir_root = tmp_path / "var-folders-stand-in"
     fake_gettempdir_root.mkdir()
     real_tmp_stand_in = tmp_path / "private-tmp-stand-in"
@@ -1288,16 +1052,6 @@ def test_regression_git_repo_under_temp_root_still_bumps_on_tool_surface(tmp_pat
     result = guard.check(payload)
     assert result is not None
     assert str(foreign) in result["hookSpecificOutput"]["permissionDecisionReason"]
-
-
-# ---------------------------------------------------------------------------
-# DoE finding #2 (parity) -- the settings-home exemption. Before this fix,
-# this module contained neither `_settings_home_dir_from_env` nor a
-# `_settings_home` concept at all, so a write into the SAME destination
-# bumped here while `bump_outside_repo_write.py` (Bash surface) already
-# exempted it via its own AC9 always-allowed-roots list. Binds AC7: the two
-# surfaces must agree on this destination.
-# ---------------------------------------------------------------------------
 
 
 def test_settings_home_write_never_bumps_on_tool_surface(tmp_path, monkeypatch):
@@ -1384,16 +1138,9 @@ def test_settings_home_exemption_parity_with_bash_surface(tmp_path, monkeypatch)
     assert tool_verdict is False
 
 
-# ---------------------------------------------------------------------------
 # LESSONS-OUTBOX IS NOT A MISWRITE -- `coordinator-lesson-promote` writes a
-# universal lesson's durable home to `<doe_root>/state/lessons-outbox/*.yaml`
-# BY DESIGN; a foreign-repo write there is not the "used the wrong repo"
-# mistake this guard exists to flag. See the guard's own module docstring,
 # "LESSONS-OUTBOX IS NOT A MISWRITE, EVEN THOUGH IT IS A FOREIGN REPO", and
 # the dispatch brief's CRITICAL CONSTRAINT -- this must NOT widen to
-# `cross-repo/inbox/`/`cross-repo/outbox/`, which stay forbidden and must
-# keep bumping.
-# ---------------------------------------------------------------------------
 
 
 def test_foreign_repo_lessons_outbox_write_never_bumps(tmp_path):
@@ -1430,9 +1177,6 @@ def test_foreign_repo_lessons_outbox_exemption_covers_every_matcher(tmp_path):
 
 
 def test_foreign_repo_lessons_outbox_subdirectory_also_exempted(tmp_path):
-    """`priority_drain.py` adopts a `drained/` subdirectory under
-    `state/lessons-outbox/` -- the exemption must cover it too, not merely
-    the direct-child file shape."""
     own = _init_repo(tmp_path, "own-repo")
     foreign = _init_repo(tmp_path, "foreign-repo")
     session_id = "sess-lessons-outbox-drained"
@@ -1467,9 +1211,6 @@ def test_foreign_repo_cross_repo_inbox_write_still_bumps(tmp_path):
 def test_ordinary_foreign_repo_write_still_bumps_alongside_lessons_outbox_exemption(
     tmp_path,
 ):
-    """Sanity: the new exemption is narrowly keyed on the literal
-    `state/lessons-outbox` segment -- an ordinary foreign-repo write
-    elsewhere in the same tree keeps bumping."""
     own = _init_repo(tmp_path, "own-repo")
     foreign = _init_repo(tmp_path, "foreign-repo")
     session_id = "sess-ordinary-foreign"
@@ -1481,18 +1222,6 @@ def test_ordinary_foreign_repo_write_still_bumps_alongside_lessons_outbox_exempt
     result = guard.check(payload)
     assert result is not None
     assert str(foreign) in result["hookSpecificOutput"]["permissionDecisionReason"]
-
-
-# ---------------------------------------------------------------------------
-# AGENT MEMORY STORE IS NOT A FOREIGN REPO -- Claude Code's own persistent
-# per-project memory (`<home>/.claude/projects/<slug>/memory/**`) is not a
-# sibling repo, not a doctrine surface, and not a cross-repo delivery, even
-# though `~/.claude` is itself a real git checkout on this fleet -- see the
-# shared `is_agent_memory_store_path` classifier's own docstring for the
-# false positive this closes. Other `~/.claude` paths (`settings.json`,
-# `CLAUDE.md`, `skills/`, etc.) are discovery/doctrine surfaces and MUST
-# still bump -- asserted below alongside the exemption itself.
-# ---------------------------------------------------------------------------
 
 
 def _isolate_home(monkeypatch, home_dir: Path) -> None:
@@ -1566,15 +1295,6 @@ def test_agent_memory_store_exemption_covers_every_matcher(tmp_path, monkeypatch
 
 
 def test_settings_json_under_claude_home_now_allowed(tmp_path, monkeypatch):
-    """AC1 (docs/plans/2026-08-10-carve-claude-out-and-close-the-backslash-
-    bypass.md, C1): superseded by the C1 `target_is_under_claude_home`
-    carve-out, which is unconditional across ALL of `~/.claude`, not scoped
-    to `memory/` -- `settings.json` no longer bumps. Prior to C1 this test
-    asserted the opposite (`test_settings_json_under_claude_home_still_
-    bumps`); the agent-memory exemption immediately above this section was
-    scoped to `memory/` only, and `settings.json` is exactly the case that
-    narrower exemption did not cover -- C1 widens the carve-out to the
-    whole `~/.claude` tree per AC1/AC3."""
     own = _init_repo(tmp_path, "own-repo")
     claude_home = _init_repo(tmp_path, "claude-home-settings")
     _isolate_home(monkeypatch, claude_home)
@@ -1588,12 +1308,6 @@ def test_settings_json_under_claude_home_now_allowed(tmp_path, monkeypatch):
 
 
 def test_project_dir_write_not_under_memory_now_allowed(tmp_path, monkeypatch):
-    """AC1 companion to the settings.json case immediately above: a write
-    under a project slug directory (not `memory/`) is ALSO under `~/.claude`
-    as a whole, so C1's carve-out allows it too -- superseded from this
-    test's prior name/assertion (`..._still_bumps_on_tool_surface`), which
-    predates C1 and proved only the narrower `memory/`-scoped exemption's
-    own boundary."""
     own = _init_repo(tmp_path, "own-repo")
     claude_home = _init_repo(tmp_path, "claude-home-project-dir")
     _isolate_home(monkeypatch, claude_home)
@@ -1609,11 +1323,6 @@ def test_project_dir_write_not_under_memory_now_allowed(tmp_path, monkeypatch):
 
 
 def test_agent_memory_store_case_insensitive_directory_still_exempted(tmp_path, monkeypatch):
-    """Case-insensitive-filesystem behaviour -- mirrors this family's own
-    `_case_fold_path` treatment (`guard_memory_store_cap.py`'s "Memory" vs
-    "memory" case-bypass finding). A case-varied `Memory/` directory name
-    resolves under the same real guarded path on a case-insensitive-but-
-    case-preserving filesystem (macOS APFS) and must still be exempted."""
     own = _init_repo(tmp_path, "own-repo")
     claude_home = _init_repo(tmp_path, "claude-home-case")
     _isolate_home(monkeypatch, claude_home)
@@ -1628,18 +1337,10 @@ def test_agent_memory_store_case_insensitive_directory_still_exempted(tmp_path, 
     assert guard.check(payload) is None
 
 
-# ---------------------------------------------------------------------------
-# C1 (docs/plans/2026-08-10-carve-claude-out-and-close-the-backslash-bypass.md)
 # -- `~/.claude` is exempt from the write boundary WHOLESALE, from any
-# session anchor, even though `~/.claude` is itself a real git checkout.
-# AC1/AC3/AC4.
-# ---------------------------------------------------------------------------
 
 
 def test_ac1_settings_json_write_allowed_from_any_repo_anchor(tmp_path, monkeypatch):
-    """AC1: a Write payload targeting `~/.claude/settings.json` returns
-    allow (`None`) from `check()`, from a session anchored in an ordinary
-    repo (not `~/.claude` itself)."""
     own = _init_repo(tmp_path, "own-repo")
     claude_home = _init_repo(tmp_path, "claude-home-ac1")
     _isolate_home(monkeypatch, claude_home)
@@ -1676,23 +1377,10 @@ def test_ac3_claude_home_carve_out_resolves_from_env_not_a_hardcoded_path(
     session_start.write_session_start_record(session_id_b, launch_cwd=str(own))
     target_b = str(home_b / ".claude" / "settings.json")
     assert guard.check(_payload("Write", target_b, session_id_b, str(own))) is None
-    # `target_a` no longer sits under the NOW-resolved home (`home_b`) --
-    # asserted directly against the predicate (not `check()`, which would
-    # also need a fresh anchor's own-gitdir to genuinely differ) to isolate
-    # exactly the env-resolution claim this test is about.
     assert not applicability.target_is_under_claude_home(target_a)
 
 
 def test_ac4_non_repo_destination_still_bumps(tmp_path, monkeypatch):
-    """AC4 regression: an ordinary non-repo destination outside `~/.claude`
-    keeps bumping -- the carve-out must not widen anything else.
-
-    `tempfile.gettempdir()`/`_posix_tmp_literal()` are repointed off
-    `tmp_path`'s own ancestry (pytest's `tmp_path` lives under the REAL
-    system temp root) so this destination is not ALSO caught by the
-    pre-existing, unrelated `target_is_bare_temp_scratch` AC9 exemption --
-    same repoint `test_bump_outside_repo_write.py`'s own `_clean_bump_env`
-    fixture applies for the identical reason."""
     fake_system_temp = tmp_path / "not-the-real-system-temp-ac4"
     fake_system_temp.mkdir()
     monkeypatch.setattr(applicability.tempfile, "gettempdir", lambda: str(fake_system_temp))
@@ -1717,8 +1405,6 @@ def test_ac4_non_repo_destination_still_bumps(tmp_path, monkeypatch):
 
 
 def test_ac4_unregistered_repo_destination_still_bumps(tmp_path, monkeypatch):
-    """AC4 regression: an unregistered foreign git repo outside `~/.claude`
-    keeps bumping."""
     own = _init_repo(tmp_path, "own-repo")
     foreign = _init_repo(tmp_path, "foreign-unregistered-ac4")
     claude_home = tmp_path / "claude-home-ac4-unreg"
@@ -1770,36 +1456,13 @@ def test_target_is_lessons_outbox_write_helper_path_shape(tmp_path):
     assert not guard._target_is_lessons_outbox_write("")
 
 
-# ---------------------------------------------------------------------------
-# C4 (docs/plans/2026-08-07-guard-posix-path-rerooting.md) -- the tool-write
-# surface's `_resolve_target_gitdir` gets the same MSYS drive-mount
-# translation fix C1/C2 give the two Bash-surface bump guards. AC1/AC2/AC3
-# run for real against this actual Windows host (no simulation needed);
-# AC4 simulates a POSIX host via the same `os.path` swap pattern
-# `test_windows_platform_simulation.py` uses. AC6 pins the fail-open branch
-# never reaching the ancestor walk. AC7 proves reachability through the
-# write-guard dispatcher, not merely a direct `check()` call (DR-280).
-# ---------------------------------------------------------------------------
-
-
 def _msys_form(p: Path) -> str:
-    """`X:\\Users\\...` -> `/x/Users/...` -- the MSYS/MinGW drive-mount
-    spelling Git-for-Windows' bash hands tools as `$PWD`/argument expansion,
-    constructed from a REAL path so the resulting candidate resolves to a
-    real, existing (or creatable) location on this host."""
-    drive = p.drive  # e.g. "X:"
+    drive = p.drive
     rest = str(p)[len(drive):].replace("\\", "/")
     return f"/{drive[0].lower()}{rest}"
 
 
 def test_ac1_msys_absolute_target_resolves_inside_own_repo_no_bump(tmp_path):
-    """AC1 regression, on THIS actual Windows host: a tool-surface write to
-    a `/x/claude-klabauter/<path>`-shaped MSYS path resolves inside the
-    session's own repo and must NOT bump. Confirmed red before the fix by
-    temporarily reverting `_resolve_target_gitdir` to the pre-C4 join shape
-    and re-running this exact test: pre-fix, `own_gitdir` resolved correctly
-    but `target_gitdir` re-rooted onto the process's own drive and resolved
-    to `None`, producing `result is not None` (a wrongful bump)."""
     if os.name != "nt":
         pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
     own = _init_repo(tmp_path, "own-repo")
@@ -1813,9 +1476,6 @@ def test_ac1_msys_absolute_target_resolves_inside_own_repo_no_bump(tmp_path):
 
 
 def test_ac2_msys_path_translates_to_its_drive_form(tmp_path):
-    """AC2: a `/c/Users/...`-shaped path translates to its drive form --
-    asserted via `_resolve_target_gitdir` resolving to the SAME git-dir as
-    the native-spelled equivalent."""
     if os.name != "nt":
         pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
     own = _init_repo(tmp_path, "own-repo")
@@ -1828,8 +1488,6 @@ def test_ac2_msys_path_translates_to_its_drive_form(tmp_path):
 
 
 def test_ac3_msys_foreign_target_still_bumps(tmp_path):
-    """AC3: a genuinely foreign target, spelled in MSYS form, still bumps --
-    the fix must not turn a real bump into a permit."""
     if os.name != "nt":
         pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
     own = _init_repo(tmp_path, "own-repo")
@@ -1841,22 +1499,10 @@ def test_ac3_msys_foreign_target_still_bumps(tmp_path):
     payload = _payload("Write", target, session_id, str(own))
 
     result = guard.check(payload)
-    # Verdict only -- see AC7 dispatcher test's own comment for why the
-    # rendered message's `target_repo` display string (a separate,
-    # untranslated call site, out of this chunk's scope) is not asserted on.
     assert result is not None
 
 
 def test_ac4_simulated_posix_host_matches_pre_fix_join_semantics(monkeypatch):
-    """AC4: on a simulated POSIX host, behaviour is byte-identical to today.
-    Swaps `os.path` to `posixpath` (native semantics, per the pattern in
-    `test_windows_platform_simulation.py`) AND the shared `_host_is_windows`
-    seam to `False` -- per the C1 executor's own warning, forgetting the
-    `os.path` swap on this actual Windows box would silently run under
-    native backslash semantics and prove nothing. `nearest_existing_ancestor`
-    and `resolve_gitdir` are stubbed to identity so this test isolates the
-    translation-and-join step this chunk changes, independent of filesystem
-    state."""
     import posixpath
 
     from coordinator_core.bash_guards import _write_bump_sink_shapes as shapes
@@ -1866,25 +1512,16 @@ def test_ac4_simulated_posix_host_matches_pre_fix_join_semantics(monkeypatch):
     monkeypatch.setattr(guard, "nearest_existing_ancestor", lambda p: p)
     monkeypatch.setattr(guard, "resolve_gitdir", lambda p: p)
 
-    # Absolute target -- no payload cwd needed, unchanged from before the fix.
     assert guard._resolve_target_gitdir("/repo/sub/file.txt", None) == "/repo/sub"
 
-    # Relative target -- joined against payload cwd, identical to the old
-    # `os.path.join(payload_cwd, target_dir)` shape.
     assert guard._resolve_target_gitdir("relative/file.txt", "/base/cwd") == posixpath.join(
         "/base/cwd", "relative"
     )
 
-    # Relative target, no payload cwd -- fail open to None, unchanged.
     assert guard._resolve_target_gitdir("relative/file.txt", None) is None
 
 
 def test_ac6_untranslatable_target_never_reaches_ancestor_walk(monkeypatch):
-    """AC6: an untranslatable candidate (an MSYS-shaped leading-slash form
-    `translate_msys_path` deliberately does not decode, e.g. `/usr/...`)
-    takes the SAME fail-open `None` branch as any other unresolvable anchor
-    -- never treated as a bump, and never reaching
-    `nearest_existing_ancestor`/`resolve_gitdir`."""
     if os.name != "nt":
         pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
     called = {"hit": False}
@@ -1896,7 +1533,7 @@ def test_ac6_untranslatable_target_never_reaches_ancestor_walk(monkeypatch):
     monkeypatch.setattr(guard, "nearest_existing_ancestor", _fake_ancestor)
 
     result = guard._resolve_target_gitdir(
-        "/usr/local/bin/file", "C:\\Users\\me"  # abs-path-ok: untranslatable-shape test fixture, not a machine-specific citation
+        "/usr/local/bin/file", "C:\\Users\\me"
     )
 
     assert result is None
@@ -1922,18 +1559,10 @@ def test_ac7_msys_foreign_target_still_bumps_through_dispatcher(tmp_path):
 
     result = engine.evaluate(payload)
 
-    # Verdict only -- the rendered message's `target_repo` display string is
-    # composed from the RAW (untranslated) `file_path` at a separate call
-    # site in `check()` and is out of this chunk's scope (only
-    # `_resolve_target_gitdir`, which drives the bump/no-bump verdict, is
-    # touched here); asserting on message content would couple this test to
-    # that unrelated display-string behaviour.
     assert result is not None
 
 
 def test_ac7_msys_own_repo_target_never_bumps_through_dispatcher(tmp_path):
-    """AC7 companion -- the AC1 own-repo no-bump shape, also proven through
-    the dispatcher rather than only a direct `check()` call."""
     if os.name != "nt":
         pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
     from coordinator_core.write_guards import engine
@@ -1950,16 +1579,6 @@ def test_ac7_msys_own_repo_target_never_bumps_through_dispatcher(tmp_path):
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# C4b (docs/plans/2026-08-07-guard-posix-path-rerooting.md) -- the SAME
-# module resolves the target twice more, and one of them is a verdict.
-# `_verdict_bumps`' `own_gitdir is None` branch and `check()`'s own
-# `target_repo`/`destination_class` resolution both recomputed
-# `os.path.dirname(file_path) or file_path` RAW before this chunk -- these
-# tests pin both fixes.
-# ---------------------------------------------------------------------------
-
-
 def test_c4b_verdict_bumps_untranslated_msys_path_was_red_before_fix(tmp_path):
     """RED-before-fix regression: `_verdict_bumps` on the `own_gitdir is
     None` branch, given the RAW (untranslated) MSYS-form `file_path`, would
@@ -1972,10 +1591,6 @@ def test_c4b_verdict_bumps_untranslated_msys_path_was_red_before_fix(tmp_path):
 
     raw_msys_target_dir = _msys_form(registered) if os.name == "nt" else str(registered)
 
-    # Manual reproduction of the pre-fix call shape: pass the RAW dirname
-    # (as `_verdict_bumps` used to compute it internally) as `target_dir`.
-    # On Windows this MSYS spelling never matches the registry (raw path
-    # comparison), reproducing the pre-fix false-negative directly.
     if os.name == "nt":
         assert guard.target_is_registered_repo(raw_msys_target_dir) is False
 
@@ -1996,9 +1611,6 @@ def test_c4b_verdict_bumps_uses_translated_target_dir_for_registered_target(tmp_
 
 
 def test_c4b_verdict_bumps_untranslatable_target_dir_never_bumps():
-    """`target_dir is None` (untranslatable) takes the same fail-open
-    `return False` branch as `target_gitdir is None` -- never a bump on a
-    path this guard could not resolve."""
     assert (
         guard._verdict_bumps("sess", None, "anchor", None, Path("some-gitdir"), None)
         is False
@@ -2049,18 +1661,11 @@ def test_c4b_check_target_repo_resolved_from_translated_msys_path(tmp_path):
     result = guard.check(payload)
     assert result is not None
     ctx = result["hookSpecificOutput"]["permissionDecisionReason"]
-    # The message names the foreign repo's NATIVE path (the translated
-    # form), which exists on disk -- never the raw MSYS spelling.
     assert str(foreign) in ctx
     assert os.path.isdir(str(foreign))
 
 
 def test_c4b_simulated_posix_host_byte_identical_for_verdict_and_target_repo(monkeypatch):
-    """AC4-style regression for C4b's two sites: on a simulated POSIX host,
-    with a native drive-absolute-equivalent (already-native) input,
-    `_verdict_bumps` and `check()`'s `target_repo` resolution behave
-    byte-identically to before this chunk -- `translate_msys_path` is
-    identity on POSIX."""
     import posixpath
 
     from coordinator_core.bash_guards import _write_bump_sink_shapes as shapes
@@ -2073,9 +1678,6 @@ def test_c4b_simulated_posix_host_byte_identical_for_verdict_and_target_repo(mon
 
 
 def test_c4b_ac7_msys_registered_target_bumps_through_dispatcher(tmp_path, monkeypatch):
-    """AC7 companion for the `_verdict_bumps` fix -- proven through
-    `write_guards.engine.evaluate`, not only a direct `check()` call
-    (DR-280)."""
     if os.name != "nt":
         pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
     from coordinator_core.write_guards import engine
@@ -2098,13 +1700,6 @@ def test_c4b_ac7_msys_registered_target_bumps_through_dispatcher(tmp_path, monke
 
 
 def test_extended_length_prefix_does_not_desync_same_gitdir(monkeypatch, tmp_path):
-    """`state/handoffs/2026-08-03-windows-extended-length-prefix-desync.md`
-    -- tool-write surface (C7). Same injected-asymmetry shape as the
-    bash-surface test in `test_bump_foreign_repo_write.py`: `os.path.
-    realpath` returns the Windows extended-length form for one gitdir and
-    the bare form for the other. Before this fix, `_normalize_for_compare`'s
-    `casefold_path` call preserved the prefix and `_same_gitdir` wrongly
-    reported "different gitdir" for the identical directory."""
     real_dir = tmp_path / "gitdir"
     real_dir.mkdir()
     bare_form = str(real_dir)
@@ -2124,19 +1719,8 @@ def test_extended_length_prefix_does_not_desync_same_gitdir(monkeypatch, tmp_pat
     assert guard._same_gitdir(Path("gitdir-a"), Path("gitdir-b")) is True
 
 
-# ---------------------------------------------------------------------------
-# C4c (docs/plans/2026-08-07-guard-posix-path-rerooting.md) -- the exemption
-# predicates (`_target_is_bare_temp_scratch`, `_target_is_under_settings_
-# home`, `_target_is_lessons_outbox_write`, `is_agent_memory_store_path`)
-# never got the translated `file_path` C4/C4b already thread to the VERDICT
 # resolution -- see review finding [P3] on commit fc1419657. THE HEADLINE
 # REGRESSION: an MSYS-spelled write to the harness scratchpad on Windows
-# matched no recognized native temp root (raw POSIX-spelled string, compared
-# against native temp roots), so the temp-scratch exemption never fired and
-# the write fell through to `_verdict_bumps`, which bumped it -- fails
-# CLOSED, the one branch in this module the docstring says must never do
-# that.
-# ---------------------------------------------------------------------------
 
 
 def test_c4c_headline_regression_msys_scratchpad_write_never_bumps(tmp_path, monkeypatch):
@@ -2167,8 +1751,6 @@ def test_c4c_headline_regression_msys_scratchpad_write_never_bumps(tmp_path, mon
 
 
 def test_c4c_msys_settings_home_write_never_bumps(tmp_path, monkeypatch):
-    """Same defect, the settings-home exemption -- an MSYS-spelled path
-    under settings home must still be exempt, not just the native form."""
     if os.name != "nt":
         pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
     own = _init_repo(tmp_path, "own-repo-c4c-settings")
@@ -2190,13 +1772,6 @@ def test_c4c_msys_settings_home_write_never_bumps(tmp_path, monkeypatch):
 def test_c4c_untranslatable_file_path_no_bump_no_crash_outside_any_repo_anchor(
     tmp_path, monkeypatch
 ):
-    """Untranslatable candidates (`/tmp/...`, `//server/share/...` -- shapes
-    `translate_msys_path` deliberately does not decode) must never bump and
-    must never raise. Exercised on the anchor-outside-any-repo branch, whose
-    own `target_dir is None` fail-open route is already established/in-scope
-    for this guard (C4b) -- this test proves the exemption predicates
-    upstream of it degrade the same way (fall through to "not exempt")
-    rather than raising on the untranslatable input."""
     if os.name != "nt":
         pytest.skip("untranslatable-shape probe is Windows-specific (identity on POSIX)")
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "no-such-registry-dir"))
@@ -2211,28 +1786,12 @@ def test_c4c_untranslatable_file_path_no_bump_no_crash_outside_any_repo_anchor(
 
 
 def test_c4c_untranslatable_translated_path_predicates_fall_through_safely():
-    """Direct predicate-level probe: an empty/untranslatable translated
-    `file_path` (what `_resolve_translated_file_path` yields as `None`,
-    coerced to `""` at each call site) never crashes.
-    `_target_is_bare_temp_scratch` delegates to the SHARED classifier
-    (`_write_bump_applicability.target_is_bare_temp_scratch`), whose own
-    documented contract fails OPEN (`True`, i.e. "treat as scratch, do not
-    bump") on an unresolvable candidate -- so `""` in gives `True`, not a
-    widening of THIS chunk's own logic, and consistent with `check()`'s
-    overall "never bump on a path this guard could not resolve" contract.
-    The other two predicates gate on `not file_path` explicitly and return
-    `False` ("not exempt") -- also safe, since `check()`'s `_verdict_bumps`
-    independently no-bumps whenever the translated `target_dir` is `None`
-    on the `own_gitdir is None` branch (out of this chunk's scope; C4b)."""
     assert guard._target_is_bare_temp_scratch("", None) is True
     assert guard._target_is_under_settings_home("", None) is False
     assert guard._target_is_lessons_outbox_write("") is False
 
 
 def test_c4c_msys_foreign_target_still_bumps_not_converted_to_permit(tmp_path):
-    """A genuinely foreign target, MSYS-spelled, must still bump -- proves
-    this chunk's predicate-threading fix did not accidentally widen any
-    exemption into covering an ordinary foreign-repo write."""
     if os.name != "nt":
         pytest.skip("MSYS drive-mount re-rooting defect is Windows-specific")
     own = _init_repo(tmp_path, "own-repo-c4c-foreign")
@@ -2248,12 +1807,6 @@ def test_c4c_msys_foreign_target_still_bumps_not_converted_to_permit(tmp_path):
 
 
 def test_c4c_posix_host_and_native_drive_absolute_byte_identical(monkeypatch):
-    """POSIX-host regression -- `translate_msys_path` is identity on POSIX,
-    so `_resolve_translated_file_path` must resolve a POSIX-absolute
-    `file_path` unchanged. Simulates POSIX via BOTH the `_host_is_windows`
-    seam AND `os.path` -> `posixpath` (per this chunk's own instruction --
-    the second swap is required or the assertions silently run under native
-    backslash semantics and prove nothing)."""
     import posixpath
 
     from coordinator_core.bash_guards import _write_bump_sink_shapes as shapes
@@ -2271,9 +1824,6 @@ def test_c4c_posix_host_and_native_drive_absolute_byte_identical(monkeypatch):
 
 
 def test_c4c_native_drive_absolute_byte_identical(tmp_path):
-    """Native-drive-absolute input regression -- `translate_msys_path` is a
-    no-op for an already-native path on every host; the translated file path
-    must equal the input unchanged."""
     target = str(tmp_path / "already-native" / "f.txt")
     assert guard._resolve_translated_file_path(target, None) == target
 

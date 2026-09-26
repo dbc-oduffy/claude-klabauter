@@ -158,10 +158,6 @@ def test_lessons_verify_extraction_bad_input_exit_is_a_refusal_not_a_fail(
 ):
     _no_spawn(monkeypatch)
     # An empty extraction DIRECTORY with no `*-extracted-full.{yaml,json}`
-    # inside is `verify()`'s own exit-2 bad-input case (§ module docstring
-    # `_discover_extractions`/"no extractions found") -- distinct from a
-    # grounding failure (exit 1), which this adapter must never conflate
-    # with `ok=False`.
     empty_extraction_dir = tmp_path / "extractions"
     empty_extraction_dir.mkdir()
     with pytest.raises(grind_ops.VerifyRefusalError):
@@ -198,8 +194,6 @@ def test_doctrine_surface_split_regenerate_no_spawn(
     )
     assert result == {"exit_code": 0}
 
-    # Idempotent: a second regenerate against the now-refreshed README.md
-    # is a no-drift no-op under check_mode.
     result = grind_ops._doctrine_surface_split_regenerate(
         {"split_dir": str(split_dir), "check_mode": True}, tmp_path
     )
@@ -209,13 +203,6 @@ def test_doctrine_surface_split_regenerate_no_spawn(
 def test_doctrine_surface_split_regenerate_default_path_spawns_exactly_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """The default call (both `check_mode` and `allow_dirty` omitted) is the
-    ONE branch that is not spawn-free: `regenerate_split_dir()` ->
-    `dirty_bodies()` -> `git_native._git(["status", "--porcelain", ...])`,
-    a real `subprocess.run`. Review-confirmed load-bearing (§ module
-    docstring negative-spec) -- this pins the count at exactly 1 rather than
-    asserting zero, so a regression either direction (a second spawn, or the
-    dirty-check silently dropped) fails this test."""
     from coordinator_core.ops.grind_ops import _load
 
     split_module = _load("generate-doctrine-surface-split")

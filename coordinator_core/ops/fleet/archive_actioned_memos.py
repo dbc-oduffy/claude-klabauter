@@ -127,87 +127,36 @@ from coordinator_core.ops.fleet.archive_terminal_handoffs import (
 
 _LOG = logging.getLogger(__name__)
 
-# Destination archive family label for the wire envelope (contract §2.1).
 _FAMILY = "memo"
 
-# The op key this module registers under.
 _OP_KEY = "fleet.archive_actioned_memos"
 
-# Terminal `status:` values a memo may sit in and still be sweepable. Four
-# are terminal-committed states of the memo_transition lifecycle
-# (action -> actioned/superseded, close -> closed, withdraw -> withdrawn) —
-# none of them is in_progress or open, and none is further mutated by
-# memo_transition except an already-actioned memo's own append-only
-# supersede-reversal path, which leaves `status:` itself unchanged.
-# `withdrawn` was missing here (item 52): a withdrawn memo is as terminal as
-# a closed one, and its absence meant this sweep never archived it — it sat
-# in cross-repo/inbox/ forever, indistinguishable from a genuinely open memo
-# to every reader that trusts this frozenset.
 _TERMINAL_MEMO_STATUSES = frozenset({"actioned", "superseded", "closed", "withdrawn"})
 
-# Refusal reasons — same "every rail names itself" discipline as the
 # handoff precedent's `_SCAN_REASON_*` block.
 _SCAN_REASON_NOT_TERMINAL = "not-terminal"
 _SCAN_REASON_WORKTREE_DIRTY = "worktree-dirty: uncommitted changes, retained pending commit"
 _SCAN_REASON_LIVE_CLAIM = "live-claim-holder: claim dir holds a live session"
 
-# Recommended cap VALUE for a future caller of this op — a CHOICE, not a
-# fallback this module substitutes. Mirrors the handoff precedent's own
 # `_RECOMMENDED_CAP_CHOICE` framing; `cap` stays a required param with no
-# default.
 _RECOMMENDED_CAP_CHOICE = 150
 
-# Fallback receipt sink for the one setup-error shape that has NO common_dir
-# to root a receipt under at all (`repo_root` handler arg absent/None, with
-# or without an also-bad `cap`). `_sweep_receipt.record_sweep_outcome` is
-# common_dir-rooted by design and unconditionally no-ops when handed
-# `None` (see its own module docstring/negative-spec) — before this constant
-# existed, both the bad-cap branch (which degrades its receipt dir to `None`
-# when `repo_root` is also `None`) and the standalone `repo_root is None`
-# branch called `record_sweep_outcome` and had it silently write ZERO rows,
-# a genuine gap in the "every exit path calls record_sweep_outcome" AC-3
-# guarantee this handler's own docstring claims. A machine-wide temp
-# location is the only siting that survives "there is no repo to root it
-# under" — it is deliberately NOT the per-repo
-# `<common_dir>/coordinator-sessions/archive-sweeps.receipt.jsonl` file
-# every other exit writes to, so a reader diagnosing a `repo_root:None`
-# failure must look here instead.
 _NO_REPO_ROOT_RECEIPT_DIR = Path(tempfile.gettempdir()) / "coordinator-fleet-no-repo-root"
 
 
 def _memo_sessions_dir(common_dir: Path) -> Path:
-    """<common_dir>/coordinator-sessions/ — the shared claim-dir root."""
     return common_dir / "coordinator-sessions"
 
 
 def _memo_claim_dir(common_dir: Path, memo_path: Path) -> Path:
-    """Derive the memo claim-lock dir for a given memo path.
-
-    `<common_dir>/coordinator-sessions/memo-claims/<memo_path.name>` — the
-    convention `write_guards/block_memo_status_hand_edit.py` (~line 76,
-    ~293) already documents by this exact name and mirrors independently;
-    this module is that convention's origin, not a second copy of it.
-    """
     return _memo_sessions_dir(common_dir) / "memo-claims" / memo_path.name
 
 
 def _memo_lock_path(common_dir: Path) -> Path:
-    """This op's own single-flight lock file — separate from
-    `archive_terminal_handoffs`'s `archive-terminal-handoffs.lock` so a
-    handoff sweep and a memo sweep never contend on the same mutex.
-    """
     return _memo_sessions_dir(common_dir) / "archive-actioned-memos.lock"
 
 
 def collect_inbox_memo_paths(worktree_root: Path) -> List[Path]:
-    """Return sorted absolute paths for all memos in cross-repo/inbox/*.md.
-
-    Raises OSError when cross-repo/inbox/ exists but cannot be enumerated
-    (permission-denied) — uses iterdir(), not glob("*.md"), for the same
-    silent-PermissionError-swallow reason `collect_live_handoff_paths`
-    documents. Callers MUST catch OSError and degrade to "no candidates
-    visible this call".
-    """
     inbox_dir = Path(memo_corpus_root(str(worktree_root))) / "inbox"
     if not inbox_dir.is_dir():
         return []
@@ -222,20 +171,10 @@ def collect_inbox_memo_paths(worktree_root: Path) -> List[Path]:
 
 
 def memo_archive_dest(worktree_root: Path, memo_path: Path) -> Path:
-    """Derive archive destination: <memo_corpus_root>/archive/<filename> —
-    FLAT, not nested by date. See this module's own negative-spec for why:
-    the live tree carries zero archive subdirectories.
-    """
     return Path(memo_corpus_root(str(worktree_root))) / "archive" / memo_path.name
 
 
 def _terminal_since(meta: dict, memo_path: Path) -> Optional[str]:
-    """Best-effort RFC3339 terminal_since — reads 'action_taken_at',
-    'closed_at', 'picked_up_at', or 'created' frontmatter fields in
-    preference order, falling back to the file's mtime. Mirrors
-    `archive_terminal_handoffs._terminal_since`'s own fallback ladder,
-    reordered for the memo schema's own field names.
-    """
     for field in ("action_taken_at", "closed_at", "picked_up_at", "created"):
         val = meta.get(field)
         if val:
@@ -250,9 +189,6 @@ def _terminal_since(meta: dict, memo_path: Path) -> Optional[str]:
 
 
 def _sort_key(terminal_since: Optional[str]) -> str:
-    """Oldest-first ordering — a missing terminal_since sorts LAST, mirroring
-    the handoff precedent's own `_sort_key`.
-    """
     return terminal_since if terminal_since else "9999-99-99T99:99:99Z"
 
 
@@ -287,12 +223,6 @@ def _scan_terminal_memos(
         if skipped is not None:
             skipped.append({"id": candidate_id, "reason": reason})
 
-    # An in-plane caller that already walked the inbox this invocation passes
-    # its own list through rather than paying a second `iterdir` + `resolve()`
-    # per entry (2026-08-30: cycle.run collected these to build the dirty-check
-    # union, then this scan re-walked the same directory -- measured 31ms of the
-    # two-family cycle at an 86-memo corpus, for a walk whose result the caller
-    # already held).
     if inbox_paths is None:
         try:
             inbox_paths = collect_inbox_memo_paths(worktree_root)
@@ -373,15 +303,6 @@ def plan_sweep(
     scan_skipped: Optional[List[dict]] = None,
     inbox_paths: Optional[List[Path]] = None,
 ) -> Tuple[List[Move], List[dict]]:
-    """Classification-only planning: scan, cap-slot, and every exclusion
-    rail. Mutates nothing, commits nothing, spawns nothing beyond what
-    `_scan_terminal_memos` itself spawns.
-
-    Mirrors `archive_terminal_handoffs.plan_sweep`'s own two candidate_ids
-    modes (None: in-plane oldest-first cap-slot; provided: act-path
-    re-verify/defer/duplicate semantics) byte-for-byte in shape, retargeted
-    at memos.
-    """
     terminal = _scan_terminal_memos(
         worktree_root, common_dir, known_dirty_relpaths=known_dirty_relpaths,
         skipped=scan_skipped, inbox_paths=inbox_paths,
@@ -443,13 +364,6 @@ def plan_sweep(
 
 
 def apply_sweep(moves: List[Move]) -> Tuple[List[dict], List[dict]]:
-    """Apply pre-planned moves via `os.replace` only — no git spawn.
-
-    Byte-identical shape to `archive_terminal_handoffs.apply_sweep`; kept as
-    a separate function (not imported) because the two ops' `Move` lists
-    come from disjoint corpora and a shared apply path would blur which
-    sweep a given move belongs to in a stack trace.
-    """
     acted: List[dict] = []
     failed: List[dict] = []
 
@@ -495,10 +409,6 @@ def _handle_act(
     acted: List[dict] = []
     failed: List[dict] = []
 
-    # `declare_move_claims` runs on EVERY exit, including the no-moves one
-    # (a second, idempotent fire plans nothing), so it cannot be imported
-    # inside the branch that commits -- that read as `UnboundLocalError` at
-    # the return below rather than as a missing import.
     from coordinator_core.ops.fleet._common import declare_move_claims
 
     if moves:
@@ -564,9 +474,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     cap = params.get("cap")
     if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
-        # No common_dir to root a receipt under when repo_root is ALSO None —
-        # fall back to the machine-wide sink rather than letting
-        # record_sweep_outcome's own None-no-op swallow this row (see
         # _NO_REPO_ROOT_RECEIPT_DIR's own comment).
         _receipt_dir = Path(repo_root) if repo_root is not None else _NO_REPO_ROOT_RECEIPT_DIR
         record_sweep_outcome(

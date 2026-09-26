@@ -68,16 +68,10 @@ def _environment_requires_doe_clone() -> bool:
 
 
 def _resolve_docgen_doe_clone() -> None:
-    """Raise iff the DoE-HEAD byte-identity conformance lane's clone is unresolvable."""
     resolve_doe_clone()
 
 
 def _resolve_contract_blocks_doe_root() -> None:
-    """Raise iff the contract_blocks/header_style byte-identity lane's DoE root
-    is unresolvable — the same ``coordinator_core.testing.doe_root`` resolver
-    ``test_provision_report_contract_blocks_byte_identity.py`` gates its own
-    module-level ``skipif`` on.
-    """
     root, present = doe_root_and_present()
     if not present:
         raise DoeResolveError(
@@ -85,10 +79,6 @@ def _resolve_contract_blocks_doe_root() -> None:
         )
 
 
-#: Each entry: ``(lane_id, human description used in the failure message, resolver)``.
-#: ``resolver`` raises (any exception) iff the lane's DoE dependency is
-#: unresolvable, and returns normally iff it resolved. Append a new tuple here
-#: to register a new guarded lane — never author a second canary module.
 LANES: list[tuple[str, str, Callable[[], None]]] = [
     (
         "docgen-byte-identity",
@@ -111,14 +101,6 @@ LANES: list[tuple[str, str, Callable[[], None]]] = [
 def test_doe_clone_conformance_lane_ran_or_environment_is_documented_optional(
     lane_id: str, description: str, resolver: Callable[[], None]
 ) -> None:
-    """FAIL (not skip) if this environment should have run ``description``'s
-    lane but the DoE clone is unresolvable — the exact silent-skip class a
-    code-review finding flagged. A genuinely clone-absent, non-CI dev machine
-    is the documented optional-skip lane and is allowed to skip this canary
-    too, so the conformance guarantee's absence is at least loud where it
-    matters (CI, or an opted-in dev machine) without forcing every consumer
-    install to carry a sibling DoE clone it has no other reason to have.
-    """
     if not _environment_requires_doe_clone():
         pytest.skip(
             "DOCUMENTED optional-skip lane: neither CLAUDE_KLABAUTER_REQUIRE_DOE_CONFORMANCE "

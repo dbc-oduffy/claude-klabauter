@@ -1,43 +1,9 @@
-"""
-coordinator_core.cartography.tests.test_symbols
-
-Unit tests for coordinator_core.cartography.symbols — per-Python-file AST
-symbol table extraction (classes/functions/signatures/module-constants-with-
-values/docstrings).
-
-Coverage:
-  (a) module docstring extraction
-  (b) module-level constant extraction, literal value captured
-  (c) module-level constant with a non-literal RHS -> value is None
-  (d) top-level function: name, signature (args + return annotation), docstring
-  (e) async function is flagged is_async
-  (f) class: bases, docstring, methods (each with signature/docstring)
-  (g) a SyntaxError file is captured into the "error" field, not raised
-  (h) build_symbols aggregates multiple files under {"files": [...]}
-  (i) path containment: an escaping file_path raises PathEscapeError
-  (j) emitted "path" is target_root-relative POSIX
-  (k) import-guard + registry — "cartography.symbols" registered after import
-  (l) op handler — missing target_root/files raises ValueError; happy path
-      delegates to build_symbols
-  (m) op handler guards target_root via path_guard(target_root, ".") BEFORE
-      build_symbols runs any per-file work (Finding 2, 2026-07-12-codereview-
-      slicecartography-substrate-b-wave)
-
-Spec backlink: pln-claude-klabauter-cartography-substrate-a-26eb2e
-§ chunk C4 (cartography.symbols).
-"""
 
 from __future__ import annotations
 
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Import guard — MUST precede any test so @register_op fires first.
-# this file never imported the op module, so register_op never fired and the
-# @register_op-decorated handler body (param extraction, error behavior) was
-# exercised by nothing.
-# ---------------------------------------------------------------------------
 import coordinator_core.ops.cartography_symbols  # noqa: F401 — fires @register_op
 
 from coordinator_core.ipc import _REGISTRY
@@ -115,7 +81,7 @@ def test_module_constant_set_literal_is_json_safe_sorted_list(tmp_path):
 
     import json
 
-    json.dumps(result)  # must not raise TypeError: Object of type set is not JSON serializable
+    json.dumps(result)
 
 
 def test_module_constant_nested_set_in_dict_is_json_safe(tmp_path):
@@ -232,11 +198,6 @@ def test_emitted_path_is_target_root_relative_posix(tmp_path):
     assert result["path"] == "pkg/sub/mod.py"
 
 
-# ---------------------------------------------------------------------------
-# Op handler
-# ---------------------------------------------------------------------------
-
-
 def test_op_missing_target_root_raises_value_error():
     with pytest.raises(ValueError):
         _cartography_symbols({"files": ["mod.py"]})
@@ -261,15 +222,6 @@ def test_op_happy_path(tmp_path):
 
 
 def test_op_guards_target_root_before_build_symbols_is_called(tmp_path, monkeypatch):
-    """
-    substrate-b-wave) — cartography.symbols must validate target_root via
-    path_guard(target_root, ".") at the handler boundary, mirroring
-    cartography.tree/file_index, BEFORE build_symbols runs any per-file work.
-    Proven by making path_guard raise and asserting build_symbols is never
-    reached (a plain `target_root` string can't be made to fail path_guard's
-    own containment check on its own — "." relative to itself never escapes
-    — so the up-front-vs-per-file call-stack positioning is the property
-    under test, not a new failure mode)."""
     import coordinator_core.ops.cartography_symbols as op_mod
 
     root = tmp_path / "repo"

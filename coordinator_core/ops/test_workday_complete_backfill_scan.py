@@ -32,25 +32,10 @@ import pytest
 from coordinator_core.ops.workday_complete_backfill_scan import main
 from coordinator_core.win_portability import no_console_creationflags
 
-# Declared, not excused: this file's `main()` calls genuinely shell out to
-# `git log --after/--before` (see `_window_args` below) to build per-day commit
-# windows -- the property under test IS git's own date-window resolution and
-# local-timezone interpretation, which no mock stands in for. The module port's
 # own oracle-parity contract requires this. The spawn ratchet's `_BASELINE` is
-# shrink-only pre-existing residue and is explicitly not the route for this
-# file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
-# `_window_args` passes bare (offset-less) date-times to `git log --after/--before`,
 # which git's date parser interprets in the INVOKING PROCESS's local system timezone
-# (documented git behavior) — a faithfully-reproduced oracle seam, not a bug (see the
-# module docstring's negative-spec list). Every commit fixture in this file is stamped
-# with an explicit `Z` (UTC) offset, so the window computation and the fixture commit
-# instants only agree deterministically when the test process itself runs in UTC. Pin
-# it here so results are host/CI-timezone-independent regardless of the local operator's
-# or CI runner's `TZ`. Confirmed empirically (2026-07-19 review): without this pin,
-# `TZ=Pacific/Auckland` flips 5 of 11 tests in this file (window-boundary and
-# root-commit-fallback both drift with the host offset).
 os.environ["TZ"] = "UTC"
 if hasattr(time, "tzset"):
     time.tzset()
@@ -72,10 +57,6 @@ def _git(repo: Path, *args: str, env: Optional[dict] = None) -> str:
 def _make_repo(tmp_path_factory) -> Path:
     repo = tmp_path_factory.mktemp("backfill-repo")
     _git(repo, "init", "-q")
-    # Pin the default branch to "main" regardless of the host git's
-    # init.defaultBranch config — _collect_union_refs sweeps refs/heads/main
-    # by literal name, so tests that rely on the union including the default
-    # branch (AC3) need a deterministic name.
     _git(repo, "symbolic-ref", "HEAD", "refs/heads/main")
     _git(repo, "config", "user.email", "test@test.com")
     _git(repo, "config", "user.name", "test")
@@ -104,7 +85,6 @@ def _commit_on(repo: Path, day: str, msg: str, fname: Optional[str] = None, time
 
 
 def _branch_commit_from(repo: Path, branch: str, start_sha: str, day: str, time_: str, msg: str, fname: str) -> str:
-    """Create/checkout `branch` at `start_sha`, add one commit dated `day`T`time_`."""
     result = subprocess.run(
         ["git", "-C", str(repo), "checkout", "-b", branch, start_sha, "-q"],
         capture_output=True,
@@ -147,11 +127,6 @@ def repo(tmp_path_factory):
     return _make_repo(tmp_path_factory)
 
 
-# ---------------------------------------------------------------------------
-# core per-day scan (global-fallback, single-lineage)
-# ---------------------------------------------------------------------------
-
-
 def test_commit_no_summary_emitted_and_summary_present_excluded(repo, monkeypatch, capsys):
     _commit_on(repo, "2026-02-20", "old (out of lookback)")
     _commit_on(repo, "2026-03-10", "missed day A")
@@ -166,18 +141,17 @@ def test_commit_no_summary_emitted_and_summary_present_excluded(repo, monkeypatc
 
     assert rc == 0
     assert "\n2026-03-10\t" in "\n" + out
-    assert "2026-03-12\t" not in out  # both artifacts present -> excluded
-    assert "2026-03-11\t" not in out  # no-commit day absent
-    assert "2026-02-20\t" not in out  # beyond lookback
+    assert "2026-03-12\t" not in out
+    assert "2026-03-11\t" not in out
+    assert "2026-02-20\t" not in out
 
     row = next(ln for ln in out.splitlines() if ln.startswith("2026-03-10\t"))
     fields = row.split("\t")
-    # <day>\t<count>\t<base>\t<tip>\t<shas>, no machine column
     assert len(fields) == 5
-    assert fields[1] == "2"  # commit count
+    assert fields[1] == "2"
     assert len(fields[4].split(",")) == int(fields[1])
-    assert fields[2] != fields[3]  # baseline != tip (root-commit fallback did not fire)
-    assert len(fields[2]) >= 7  # well-formed sha
+    assert fields[2] != fields[3]
+    assert len(fields[2]) >= 7
 
 
 def test_bad_lookback_rejected(repo, monkeypatch, capsys):
@@ -197,10 +171,6 @@ def test_lookback_signed_value_rejected(repo, monkeypatch, capsys):
 
 
 def test_bad_today_rejected(repo, monkeypatch, capsys):
-    # Regression for the silent-success bug: a malformed --today used to make
-    # every `_date_minus` call return "", so the scan loop `continue`d every
-    # iteration and the tool exited 0 having scanned zero days. It must now be
-    # rejected as a usage error at parse time instead.
     monkeypatch.setenv("COORDINATOR_ROOT", str(repo))
     rc = main(["--lookback", "5", "--today", "not-a-date"])
     assert rc == 1
@@ -230,11 +200,6 @@ def test_date_minus_end_to_end(repo, monkeypatch, capsys):
     assert "2026-03-14\t" in out
 
 
-# ---------------------------------------------------------------------------
-# AC1: one uncovered day -> exactly one row
-# ---------------------------------------------------------------------------
-
-
 def test_ac1_one_uncovered_day_emits_exactly_one_row(repo, monkeypatch, capsys):
     _commit_on(repo, "2026-03-10", "solo missed-day commit")
 
@@ -250,29 +215,15 @@ def test_ac1_one_uncovered_day_emits_exactly_one_row(repo, monkeypatch, capsys):
     assert day == "2026-03-10"
     assert count == "1"
     assert len(base) >= 7 and len(tip) >= 7
-    assert shas.split(",") == [tip]  # the lone commit of the day IS the union
-    # Root-commit-fallback case: the sole commit here IS the repo's root commit,
-    # so `git rev-parse {sha}^` fails and `_rev_parse_parent` falls back to `sha`
-    # itself — base and tip are the same SHA.
+    assert shas.split(",") == [tip]
     assert fields[2] == fields[3]
-
-
-# ---------------------------------------------------------------------------
-# AC2: transition-tolerant `<day>*.md` glob (DEC-1) — either the new
-# de-machined `<day>.md` shape or the legacy `<day>-<machine>.md` shape is
-# accepted for EACH artifact directory independently. As of the 2026-08-06 AND
-# fix, BOTH `state/week-changelog/` and `archive/daily-summaries/` must carry
-# a matching file for the day to be suppressed — the glob tolerance is
-# per-directory filename-shape tolerance, not a substitute for the other
-# directory.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "changelog_fname,summary_fname",
     [
-        ("2026-03-10.md", "2026-03-10.md"),  # new de-machined shape, both sides
-        ("2026-03-10-somemachine.md", "2026-03-10-somemachine.md"),  # legacy shape, both sides
+        ("2026-03-10.md", "2026-03-10.md"),
+        ("2026-03-10-somemachine.md", "2026-03-10-somemachine.md"),
     ],
 )
 def test_ac2_transition_tolerant_coverage_suppresses_row(repo, monkeypatch, capsys, changelog_fname, summary_fname):
@@ -290,11 +241,6 @@ def test_ac2_transition_tolerant_coverage_suppresses_row(repo, monkeypatch, caps
 
 
 def test_ac2_summary_only_no_longer_suppresses_row(repo, monkeypatch, capsys):
-    """Regression for the 2026-08-06 incident's failure mode 2 (order-sensitivity /
-    summary-written-first no-op): a daily-summary file alone, with NO matching
-    week-changelog block, must NOT suppress the row -- the changelog block still
-    needs to land. Under the old OR this silently suppressed the gap and made
-    Step 6 -> Step 6b ordering load-bearing; under AND it is correctly reported."""
     _commit_on(repo, "2026-03-10", "summary written before changelog step ran")
     (repo / "archive" / "daily-summaries" / "2026-03-10.md").write_text("summary only\n")
 
@@ -306,11 +252,6 @@ def test_ac2_summary_only_no_longer_suppresses_row(repo, monkeypatch, capsys):
 
 
 def test_ac2_changelog_only_dangling_link_no_longer_suppresses_row(repo, monkeypatch, capsys):
-    """Regression for the 2026-08-06 incident's failure mode 1 (dangling-link
-    blindness): a week-changelog block alone, whose own `Links:` line may point at
-    a daily-summary file that was never written, must NOT suppress the row. Under
-    the old OR the changelog block's mere existence was enough and the missing
-    summary went undetected; under AND it is correctly reported."""
     _commit_on(repo, "2026-03-10", "changelog block written, summary never written")
     week_changelog_dir = repo / "state" / "week-changelog"
     week_changelog_dir.mkdir(parents=True)
@@ -324,14 +265,6 @@ def test_ac2_changelog_only_dangling_link_no_longer_suppresses_row(repo, monkeyp
 
     assert rc == 0
     assert "2026-03-10\t" in out
-
-
-# ---------------------------------------------------------------------------
-# Item 3 (2026-08-11 fix, cross-repo/inbox/2026-08-11-example-retrieval-repo-em-backfill-
-# changelog-cli-three-defects.md): a `backfill_gaps()`-synthesized raw-git-log
-# stub must NOT satisfy the changelog half of `_day_covered` -- its own
-# heading says a human never wrote it.
-# ---------------------------------------------------------------------------
 
 
 def _write_synthesized_stub(path, day: str, host: str = "some-machine") -> None:
@@ -350,10 +283,6 @@ def _write_synthesized_stub(path, day: str, host: str = "some-machine") -> None:
 
 
 def test_synthesized_backfill_stub_does_not_suppress_row(repo, monkeypatch, capsys):
-    """A live `state/week-changelog/<day>-<host>-backfill.md` synthesized stub
-    (the exact shape `changelog_ops._compose_backfill_block` writes) must NOT
-    be read as changelog coverage even though it matches the `<day>*.md` glob
-    -- the day must still be reported as a gap."""
     _commit_on(repo, "2026-03-10", "day only covered by a synthesized stub")
     (repo / "archive" / "daily-summaries" / "2026-03-10.md").write_text("summary\n")
     week_changelog_dir = repo / "state" / "week-changelog"
@@ -365,15 +294,11 @@ def test_synthesized_backfill_stub_does_not_suppress_row(repo, monkeypatch, caps
 
     assert rc == 0
     assert "2026-03-10\t" in captured.out
-    # Item 3's visibility requirement: the substitution must be reported, not silent.
     assert "synthesized backfill stub" in captured.err
     assert "2026-03-10-some-machine-backfill.md" in captured.err
 
 
 def test_archived_synthesized_backfill_stub_does_not_suppress_row(repo, monkeypatch, capsys):
-    """The same synthesized-stub exclusion applies to the archived location --
-    a content marker survives the weekly archive sweep; a filename convention
-    would not have."""
     _commit_on(repo, "2026-03-10", "day only covered by an archived synthesized stub")
     (repo / "archive" / "daily-summaries" / "2026-03-10.md").write_text("summary\n")
     archived_week = repo / "archive" / "week-changelogs" / "2026-03-09"
@@ -388,10 +313,6 @@ def test_archived_synthesized_backfill_stub_does_not_suppress_row(repo, monkeypa
 
 
 def test_synthesized_backfill_stub_alongside_real_block_still_covers(repo, monkeypatch, capsys):
-    """A real, human-curated block for the same day (e.g. after a later
-    `/workday-complete --for-date` run lands one alongside a stale synthesized
-    stub) still counts as coverage -- the exclusion targets the stub content,
-    not the whole directory."""
     _commit_on(repo, "2026-03-10", "day with both a stub and a real block")
     (repo / "archive" / "daily-summaries" / "2026-03-10.md").write_text("summary\n")
     week_changelog_dir = repo / "state" / "week-changelog"
@@ -407,12 +328,6 @@ def test_synthesized_backfill_stub_alongside_real_block_still_covers(repo, monke
 
 
 def test_archived_week_changelog_block_still_counts_as_covered(repo, monkeypatch, capsys):
-    """A closed week's changelog blocks are swept out of `state/week-changelog/`
-    into `archive/week-changelogs/<week-start>/`; only the CURRENT week stays live.
-    Checking the live directory alone (the shape the 2026-08-06 AND fix first
-    shipped with) flagged every day older than the current week as a permanent
-    gap — measured on claude-klabauter's own tree the same day: 11 of 11 days in a 14-day
-    lookback, every one of them carrying both artifacts, just archived."""
     _commit_on(repo, "2026-03-10", "day whose week has since been archived")
     (repo / "archive" / "daily-summaries" / "2026-03-10.md").write_text("summary\n")
     archived_week = repo / "archive" / "week-changelogs" / "2026-03-09"
@@ -454,30 +369,16 @@ def test_state_root_unresolvable_with_commits_reports_gap_even_if_summary_presen
     assert _day_covered(str(repo), None, "2026-03-10") is False
 
 
-# ---------------------------------------------------------------------------
-# AC3/DEC-3: full-day union span across two work/*/* branches + main picks
-# the GLOBAL oldest-parent base and GLOBAL newest tip and de-duplicated
-# count — never one lineage's own endpoints.
-# ---------------------------------------------------------------------------
-
-
 def test_ac3_full_day_union_span_picks_global_base_and_tip(repo, monkeypatch, capsys):
     day = "2026-03-14"
 
-    # Shared root, well before the window, on main.
     root_sha = _commit_on(repo, "2026-03-12", "shared root", fname="root.txt")
 
-    # work/m1/<day>: earliest commit of the day (08:00), parented on root_sha.
-    # This branch's own tip would be its own 08:00 commit if scanned alone.
     m1_early = _branch_commit_from(repo, f"work/m1/{day}", root_sha, day, "08:00:00Z", "m1 early", "m1.txt")
 
-    # main: mid-day commit (12:00), also parented on root_sha.
     _git(repo, "checkout", "main", "-q")
     main_mid = _commit_on(repo, day, "main mid-day commit", fname="main-mid.txt", time_="12:00:00Z")
 
-    # work/m2/<day>: latest commit of the day (20:00), parented on root_sha.
-    # This branch's own base would be root_sha too, but its own tip alone
-    # would NOT reflect m1's earlier commit's existence in the count.
     m2_late = _branch_commit_from(repo, f"work/m2/{day}", root_sha, day, "20:00:00Z", "m2 late", "m2.txt")
 
     rc = _run_scan(repo, monkeypatch, capsys, lookback=1, today="2026-03-15")
@@ -490,14 +391,12 @@ def test_ac3_full_day_union_span_picks_global_base_and_tip(repo, monkeypatch, ca
     assert len(fields) == 5
     _, count, base, tip, shas = fields
 
-    assert count == "3"  # m1_early + main_mid + m2_late, deduped union across refs
-    assert base == root_sha  # parent of the GLOBAL oldest commit (m1_early), not m2's own base
-    assert tip == m2_late  # GLOBAL newest commit, not main's or m1's own tip
+    assert count == "3"
+    assert base == root_sha
+    assert tip == m2_late
     assert tip != m1_early
     assert tip != main_mid
 
-    # The fifth column is the explicit union, oldest-first, and it is the only
-    # field that answers "which commits" without lying.
     assert shas.split(",") == [m1_early, main_mid, m2_late]
     assert len(shas.split(",")) == int(count)
 
@@ -505,16 +404,6 @@ def test_ac3_full_day_union_span_picks_global_base_and_tip(repo, monkeypatch, ca
 def test_ac3_the_sha_column_names_commits_the_base_tip_range_does_not_contain(
     repo, monkeypatch, capsys
 ):
-    """`count` and `base..tip` describe different commit sets — this pins the
-    divergence rather than papering over it.
-
-    Three commits on three refs off one shared root: only the newest is an
-    ancestor of `tip`, so `git rev-list base..tip` returns ONE commit while
-    `count` is 3. Both are correct about different questions. Before the fifth
-    column existed there was no field a consumer could read to get the union,
-    and a consumer that recomputed `count` from `base..tip` would silently
-    under-report by two.
-    """
     day = "2026-03-16"
     root_sha = _commit_on(repo, "2026-03-13", "shared root", fname="rootc.txt")
     m1_early = _branch_commit_from(repo, f"work/m1/{day}", root_sha, day, "08:00:00Z", "m1 early", "c1.txt")
@@ -537,13 +426,7 @@ def test_ac3_the_sha_column_names_commits_the_base_tip_range_does_not_contain(
     union = shas.split(",")
     assert sorted(union) == sorted([m1_early, main_mid, m2_late])
     assert len(union) == int(count)
-    # The two the range drops are exactly the ones only the sha column carries.
     assert m1_early not in in_range and main_mid not in in_range
-
-
-# ---------------------------------------------------------------------------
-# empty output on covered / no-commit window
-# ---------------------------------------------------------------------------
 
 
 def test_empty_output_when_all_covered(repo, monkeypatch, capsys):
@@ -564,37 +447,17 @@ def test_empty_output_when_no_commit_window(repo, monkeypatch, capsys):
     assert out == ""
 
 
-# ---------------------------------------------------------------------------
-# DEC-5: per-day predicate semantics — a day carrying BOTH artifact types
-# (changelog block + daily summary, per the 2026-08-06 AND fix) is "covered,"
 # even if they belong to one machine (M1) and a DIFFERENT machine (M2) has
-# genuinely older, unrecorded co-committed work on that same day. This is the
 # INTENTIONAL semantic shift from the pre-de-machining behavior: retiring
 # per-machine EXCLUSIVITY ATTRIBUTION wholesale (2026-07-19 PM ruling) means
-# the prior TM5/TM6 "reconcile-only machine" false-negative guard rail, and
-# the finer-grained per-machine coverage check it protected against, are BOTH
-# gone — coverage is now day-level, full stop. See DEC-5
-# (docs/plans/2026-07-19-de-machine-backfill-scan-per-day.md) and the
-# 2026-07-01 multi-machine-coverage blind-spot-1 plan
-# (docs/plans/2026-07-01-workday-complete-multi-machine-coverage.md) /
-# 2026-06-30 machine-a incident it documents, whose per-machine coverage check
-# this scanner deliberately no longer performs.
-# ---------------------------------------------------------------------------
 
 
 def test_dec5_any_block_covers_the_day_even_with_older_unrecorded_peer_work(repo, monkeypatch, capsys):
     day = "2026-03-20"
     root_sha = _commit_on(repo, "2026-03-18", "shared root", fname="root2.txt")
 
-    # M2's genuinely older, unrecorded co-committed work on the same day —
-    # under the OLD per-machine predicate this would have been flagged as a
-    # gap (TM5/TM6 blind-spot-1 territory). Under the new per-day predicate
-    # it is NOT independently checked.
     _branch_commit_from(repo, f"work/m2/{day}", root_sha, day, "08:00:00Z", "m2 older unrecorded work", "m2older.txt")
 
-    # M1's own record for the day, with no per-machine keying required
-    # anymore — its existence (both artifact types, per the 2026-08-06 AND
-    # fix) covers the whole day.
     (repo / "archive" / "daily-summaries" / f"{day}.md").write_text("m1's summary\n")
     week_changelog_dir = repo / "state" / "week-changelog"
     week_changelog_dir.mkdir(parents=True)
@@ -604,4 +467,4 @@ def test_dec5_any_block_covers_the_day_even_with_older_unrecorded_peer_work(repo
     out = capsys.readouterr().out
 
     assert rc == 0
-    assert f"{day}\t" not in out  # day-level coverage suppresses the row despite m2's unrecorded work
+    assert f"{day}\t" not in out

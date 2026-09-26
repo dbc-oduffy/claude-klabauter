@@ -71,10 +71,6 @@ def test_head_tail_plumbing_rewrite_powershell_leg_is_reached_via_dispatch():
 
 
 def test_head_tail_plumbing_rewrite_bash_payload_never_reaches_the_powershell_leg():
-    """Negative control for the spy above: a Bash-tool_name payload with the
-    identical shape must still route to the BASH body, never the
-    PowerShell leg -- confirms the spy is a meaningful signal, not a
-    tautology that always fires."""
     calls = []
 
     import coordinator_core.bash_guards.guard_head_tail_rewrite as module
@@ -103,14 +99,6 @@ def test_head_tail_plumbing_rewrite_bash_payload_never_reaches_the_powershell_le
 
 
 def test_block_dev_repo_sentinel_removal_advisory_powershell_reached_via_dispatch():
-    """`block-dev-repo-sentinel-removal-advisory`'s registered leg
-    (`check_advisory`) already derives its dialect from `payload["tool_name"]`
-    internally via `_dialect.dialect_from_tool_name` -- the registration's
-    own `matchers` must actually admit a PowerShell payload for that internal
-    dialect derivation to ever run. Drives the real dispatcher with a
-    PowerShell removal of the sentinel basename and asserts the advisory
-    fires (a live signal that the entry was reached and rendered), not a
-    silent allow."""
     raw = json.dumps(
         {
             "tool_name": "PowerShell",

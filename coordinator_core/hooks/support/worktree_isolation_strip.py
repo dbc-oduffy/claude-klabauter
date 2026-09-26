@@ -94,11 +94,6 @@ def _git_root() -> "str | None":
 
 
 def sentinel_override_active() -> bool:
-    """Repo-root sentinel file override, ONLY leg -- no env-var leg by
-    design (see module docstring: a subagent can set its own env, which
-    would defeat a guard that must bind subagents too). Fails toward "no
-    override" (returns False) on any resolution failure.
-    """
     root = _git_root()
     if not root:
         return False
@@ -109,18 +104,6 @@ def sentinel_override_active() -> bool:
 
 
 def compute_strip(tool_input: dict) -> Optional[tuple[dict, str]]:
-    """Pure computation, no I/O beyond the override-sentinel git-root check.
-
-    Returns `(merged_tool_input, note)` when `tool_input["isolation"] ==
-    "worktree"` and no override sentinel is active -- `merged_tool_input` is
-    a FULL COPY of `tool_input` with the `isolation` key removed (never a
-    partial object), and `note` is the fixed advisory string every caller
-    surfaces via `hookSpecificOutput.additionalContext`.
-
-    Returns `None` when there is nothing to strip: `isolation` absent, any
-    non-"worktree" value (including "remote", which passes through
-    byte-identical), or the override sentinel is active.
-    """
     if tool_input.get("isolation") != "worktree":
         return None
     if sentinel_override_active():

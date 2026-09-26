@@ -43,12 +43,9 @@ _SID_NO_SCRATCHPAD = "55555555-5555-5555-5555-555555555555"
 
 _ALL_SIDS = (_SID_LIVE, _SID_DEAD_RECENT, _SID_DEAD_OLD, _SID_SELF, _SID_NO_SCRATCHPAD)
 
-_OLD_AGE_SECS = 10 * 86400  # 10 days — past the default 7-day TTL
-_RECENT_AGE_SECS = 60  # 1 minute — well inside the default TTL
+_OLD_AGE_SECS = 10 * 86400
+_RECENT_AGE_SECS = 60
 
-# Default fixed slug -> root map for tests that don't care about the mapping
-# itself — the fixture's project-slug resolves to SOME known root so the
-# liveness/age gates under test actually get exercised.
 _DEFAULT_SLUG_MAP = {
     "X--claude-klabauter": "X:/claude-klabauter",
     "Y--other-project": "Y:/other-project",
@@ -80,7 +77,6 @@ def _build_fixture(tmp_path, project_slug="X--claude-klabauter"):
         elif sid == _SID_DEAD_RECENT:
             _age_file(f, _RECENT_AGE_SECS)
 
-    # Non-UUID siblings — must never be touched, at either enumeration layer.
     (tmp_path / "pytest-of-example-operator").mkdir(exist_ok=True)
     (tmp_path / "repro").mkdir(exist_ok=True)
     (claude_root / "not-a-uuid-dir").mkdir()
@@ -161,7 +157,6 @@ def test_dead_and_old_is_reclaimed_when_opted_in(tmp_path):
 def test_own_session_never_reclaimed_even_if_dead_and_old(tmp_path):
     fixture_root = _build_fixture(tmp_path)
     self_scratch = fixture_root / "claude" / "X--claude-klabauter" / _SID_SELF / "scratchpad"
-    # Age it well past the TTL — the self-check must win regardless.
     _age_file(self_scratch / "a.txt", _OLD_AGE_SECS)
 
     result = _sweep(tmp_path, reclaim=True)
@@ -188,7 +183,6 @@ def test_non_uuid_siblings_never_enumerated(tmp_path):
 
 def test_ttl_days_is_configurable(tmp_path):
     _build_fixture(tmp_path)
-    # A 20-day TTL makes even the "old" (10-day) fixture too-recent.
     result = _sweep(tmp_path, ttl_days=20.0)
     entry = _entry_for(result, _SID_DEAD_OLD)
     assert entry["verdict"] == "too-recent"
@@ -226,8 +220,6 @@ def test_one_bad_directory_does_not_sink_the_sweep(tmp_path, monkeypatch):
 
     result = _sweep(tmp_path, reclaim=True)
 
-    # Fail-open: an exception from the liveness call reads as live, not
-    # reclaimed — and every OTHER directory is still fully processed.
     bad_entry = _entry_for(result, _SID_DEAD_OLD)
     assert bad_entry["verdict"] == "live"
     assert _entry_for(result, _SID_LIVE)["verdict"] == "live"
@@ -240,15 +232,7 @@ def test_counts_are_consistent_with_entries(tmp_path):
     assert sum(result["counts"].values()) == len(result["entries"])
 
 
-# ---------------------------------------------------------------------------
-# Per-project-slug liveness scoping (the cross-repo false-dead fix)
-# ---------------------------------------------------------------------------
-
-
 def test_unmapped_slug_is_undeterminable_never_reclaimable(tmp_path):
-    """A project-slug absent from the map must never be treated as dead —
-    it must read undeterminable and never be reclaimed, even when dead+old
-    and reclaim=True (the exact shape that deleted a live peer's tree)."""
     _build_fixture(tmp_path, project_slug="Z--unknown-project")
     scratch = tmp_path / "claude" / "Z--unknown-project" / _SID_DEAD_OLD / "scratchpad"
     assert scratch.is_dir()
@@ -260,13 +244,10 @@ def test_unmapped_slug_is_undeterminable_never_reclaimable(tmp_path):
     entry = _entry_for(result, _SID_DEAD_OLD)
     assert entry["verdict"] == "undeterminable"
     assert scratch.is_dir(), "an undeterminable slug must never be reclaimed"
-    # session_live must never even be consulted for an unmapped slug.
     assert entry["live"] is None
 
 
 def test_undeterminable_never_reclaimed_even_when_live_session_mocked_dead(tmp_path):
-    """Belt-and-braces: even if the (unreachable) liveness mock would have said
-    dead, an unmapped slug must short-circuit BEFORE session_live is called."""
     _build_fixture(tmp_path, project_slug="Z--unknown-project")
 
     result = _sweep(
@@ -317,7 +298,6 @@ def test_build_slug_to_root_map_drops_encoding_collisions(monkeypatch):
         lambda: ["X:/project.claude-klabauter", "X:/claude-klabauter"],
     )
     mapping = _build_slug_to_root_map()
-    # Both encode to "X--claude-klabauter" — collision, dropped.
     assert "X--claude-klabauter" not in mapping
 
 
@@ -331,9 +311,7 @@ def test_build_slug_to_root_map_keeps_unambiguous_roots(monkeypatch):
     assert mapping["X--DoE-claude"] == "X:/DoE-claude"
 
 
-# ---------------------------------------------------------------------------
 # JSON-RPC handler surface
-# ---------------------------------------------------------------------------
 
 
 def test_handler_default_dry_run(tmp_path, monkeypatch):
@@ -364,11 +342,6 @@ def test_handler_invalid_params_structured_error(bad_params):
     assert "error" in result
 
 
-# ---------------------------------------------------------------------------
-# Size-cut pass (additive to the TTL gate above)
-# ---------------------------------------------------------------------------
-
-
 def _make_dated_session(claude_root, sid, age_days, size_bytes=100):
     sdir = claude_root / sid
     sdir.mkdir()
@@ -380,14 +353,11 @@ def _make_dated_session(claude_root, sid, age_days, size_bytes=100):
 
 
 def test_size_cut_not_triggered_when_target_already_met(tmp_path):
-    """Default 500 MB target with a tiny fixture — TTL behaviour unchanged,
-    no cohorts pruned."""
     _build_fixture(tmp_path)
     result = _sweep(tmp_path, reclaim=True)
 
     assert result["size_cut"]["met"] is True
     assert result["size_cut"]["cohorts"] == []
-    # Existing TTL behaviour: dead+old still reclaimed via the TTL gate alone.
     assert _entry_for(result, _SID_DEAD_OLD)["verdict"] == "reclaimed"
 
 
@@ -416,8 +386,6 @@ def test_size_cut_stops_at_right_threshold_whole_cohorts_only(tmp_path):
     )
 
     sc = result["size_cut"]
-    # 600 total; prune 6,5,4 (100 each) -> remaining 300 > 250; prune 3 ->
-    # remaining 200 <= 250: stop. 2 and 1 untouched.
     pruned_days = {c["age_days"] for c in sc["cohorts"] if c["pruned"]}
     assert pruned_days == {6, 5, 4, 3}
     assert sc["met"] is True
@@ -471,9 +439,6 @@ def test_size_cut_spares_live_directory_and_does_not_count_its_bytes(tmp_path, m
     sid_below_floor = "30000000-0000-0000-0000-000000000005"
     _make_dated_session(claude_root, sid_dead, 3.1, size_bytes=100)
     _make_dated_session(claude_root, sid_live, 3.1, size_bytes=100)
-    # Below the 1-day floor — never eligible, keeps the remainder above
-    # target after the pruneable cohort is exhausted so this test can assert
-    # an unmet shortfall alongside the spared live directory.
     _make_dated_session(claude_root, sid_below_floor, 0.5, size_bytes=300)
 
     def _live_only_one(sid, cwd=None):
@@ -532,12 +497,6 @@ def test_size_cut_dry_run_full_accounting_no_deletion(tmp_path):
     assert sc["bytes_reclaimable"] >= 100
 
 
-# ---------------------------------------------------------------------------
-# Size-cut arithmetic edge cases (targeted at _apply_size_cut directly — no
-# filesystem/liveness plumbing needed for the pure floor/ttl/accounting math)
-# ---------------------------------------------------------------------------
-
-
 def _entry(sid, *, verdict, age_days, bytes_=100, path="unused"):
     return {
         "project_slug": "X--claude-klabauter",
@@ -553,10 +512,6 @@ def _entry(sid, *, verdict, age_days, bytes_=100, path="unused"):
 
 
 def test_fractional_floor_days_never_prunes_below_the_stated_floor():
-    """floor_days=1.5 must never make an entry aged 1.0-1.499 eligible — the
-    whole day==1 cohort straddles the floor, so it must be excluded entirely
-    rather than included via floor(1.5)==1. Regression for the P1 finding:
-    pre-fix, math.floor(floor_days) let the day==1 cohort through whole."""
     entries = [
         _entry("a", verdict="too-recent", age_days=1.2, bytes_=100),
         _entry("b", verdict="too-recent", age_days=1.8, bytes_=100),
@@ -572,9 +527,6 @@ def test_fractional_floor_days_never_prunes_below_the_stated_floor():
 
 
 def test_fractional_ttl_days_still_visits_the_boundary_cohort(tmp_path):
-    """ttl_days=7.5 must still let the size cut visit the day==7 cohort
-    (ages 7.0-7.499, legitimately too-recent) — pre-fix, starting the loop at
-    ttl_floor - 1 skipped it permanently regardless of target/floor."""
     a_dir = tmp_path / "a"
     a_dir.mkdir()
     (a_dir / "f.txt").write_text("x" * 100, encoding="utf-8")
@@ -588,10 +540,6 @@ def test_fractional_ttl_days_still_visits_the_boundary_cohort(tmp_path):
 
 
 def test_partial_cohort_delete_failure_is_not_subtracted_from_remaining(tmp_path):
-    """One entry's rmtree failing mid-cohort must not have its bytes
-    subtracted from `remaining` — it's still on disk. Pre-fix, `remaining -=
-    cohort_bytes` used the pre-computed cohort total regardless of which
-    entries actually deleted."""
     ok_dir = tmp_path / "ok"
     ok_dir.mkdir()
     (ok_dir / "f.txt").write_text("x" * 100, encoding="utf-8")
@@ -609,17 +557,11 @@ def test_partial_cohort_delete_failure_is_not_subtracted_from_remaining(tmp_path
 
     assert entries[0]["verdict"] == "size-cut-reclaimed"
     assert entries[1]["verdict"] == "error"
-    # Only the successfully-deleted 100 bytes were subtracted — the failed
-    # entry's 200 bytes are still real, on-disk usage.
     assert report["remaining_after_size_cut"] == 300 - 100
     assert report["met"] is False
 
 
 def test_apply_size_cut_own_filter_excludes_live_verdict_even_with_age_days(tmp_path):
-    """Targeted pin on _apply_size_cut's own cohort filter: a "live"-verdict
-    entry that (hypothetically) carries a non-None age_days must still be
-    excluded by the verdict half of the filter, not merely by age_days being
-    None (which is all the upstream-liveness-gate-only fixture pinned)."""
     dead_dir = tmp_path / "dead"
     dead_dir.mkdir()
     (dead_dir / "f.txt").write_text("x" * 100, encoding="utf-8")
@@ -635,27 +577,11 @@ def test_apply_size_cut_own_filter_excludes_live_verdict_even_with_age_days(tmp_
     assert entries[1]["verdict"] == "size-cut-reclaimed"
 
 
-# ---------------------------------------------------------------------------
-# Per-file size predicate (2026-08-16) — a directory whose largest single
-# file is >= size_cut_large_file_bytes uses size_cut_large_file_floor_days
-# as its floor instead of size_cut_floor_days. Fixture-only, small explicit
-# thresholds throughout (never the real 256 MB / 0.5-day production
-# defaults, which would require multi-hundred-MB fixture files) so these
-# tests stay fast — the defaults themselves are exercised only by AC8's
-# manual dry-run against the real temp root, not by the automated tier.
-# ---------------------------------------------------------------------------
-
-
 def test_large_file_directory_eligible_at_the_shorter_floor(tmp_path):
-    """AC2: a directory carrying a file >= size_cut_large_file_bytes becomes
-    size-cut-eligible from size_cut_large_file_floor_days, well before it
-    would clear the ordinary size_cut_floor_days."""
     slug = "X--claude-klabauter"
     claude_root = tmp_path / "claude" / slug
     claude_root.mkdir(parents=True)
     sid_large = "80000000-0000-0000-0000-000000000001"
-    # Aged 0.7d: past the 0.5d large-file floor, short of the 1.0d ordinary
-    # floor — the exact gap this predicate exists to reach into.
     _make_dated_session_with_files(claude_root, sid_large, 0.7, {"staging.db": 2000})
 
     result = _sweep(
@@ -677,10 +603,6 @@ def test_large_file_directory_eligible_at_the_shorter_floor(tmp_path):
 
 
 def test_small_file_directory_same_age_is_not_eligible(tmp_path):
-    """AC2, second half: "nothing changes for a directory whose largest file
-    is under the threshold" — same age as the large-file case above, but its
-    largest file is below size_cut_large_file_bytes, so it stays governed by
-    the ordinary (unreached) size_cut_floor_days and is untouched."""
     slug = "X--claude-klabauter"
     claude_root = tmp_path / "claude" / slug
     claude_root.mkdir(parents=True)
@@ -706,9 +628,6 @@ def test_small_file_directory_same_age_is_not_eligible(tmp_path):
 
 
 def test_live_directory_with_large_file_never_selected_at_any_threshold(tmp_path, monkeypatch):
-    """AC3: liveness gating stays unconditionally upstream of the per-file
-    predicate — a live entry must never be selected, even at the most
-    aggressive large-file thresholds (near-zero size, zero floor)."""
     slug = "X--claude-klabauter"
     claude_root = tmp_path / "claude" / slug
     claude_root.mkdir(parents=True)
@@ -738,10 +657,6 @@ def test_live_directory_with_large_file_never_selected_at_any_threshold(tmp_path
 
 
 def test_apply_size_cut_large_file_floor_never_selects_live_verdict():
-    """AC3 at the _apply_size_cut unit boundary directly: a "live"-verdict
-    entry carrying a largest_file_bytes above threshold and a non-None
-    age_days must still never be size-cut eligible — the verdict filter
-    alone must exclude it, at any large-file threshold."""
     entries = [
         _entry("live-large", verdict="live", age_days=5.0, bytes_=5000, path="unused"),
     ]
@@ -760,11 +675,6 @@ def test_apply_size_cut_large_file_floor_never_selects_live_verdict():
 
 
 def test_large_file_floor_above_ordinary_floor_still_gates_the_upper_cohort(tmp_path):
-    """When large_file_floor_days
-    exceeds floor_days, the day >= floor_int branch must still exclude a
-    large-file entry that hasn't reached its own (higher) floor. Pre-fix,
-    reaching floor_int admitted the whole cohort unconditionally, deleting
-    a large-file directory before its stated floor."""
     large_dir = tmp_path / "large"
     large_dir.mkdir()
     (large_dir / "f.bin").write_text("x" * 100, encoding="utf-8")
@@ -790,9 +700,6 @@ def test_large_file_floor_above_ordinary_floor_still_gates_the_upper_cohort(tmp_
 
 
 def test_large_file_floor_above_ordinary_floor_boundary_is_eligible(tmp_path):
-    """Same inverted-floor configuration, but aged exactly at (and past) the
-    higher large_file_floor_days — must become eligible once it clears its
-    own floor, on the day >= floor_int path."""
     large_dir = tmp_path / "large"
     large_dir.mkdir()
     (large_dir / "f.bin").write_text("x" * 100, encoding="utf-8")
@@ -815,9 +722,6 @@ def test_large_file_floor_above_ordinary_floor_boundary_is_eligible(tmp_path):
 
 
 def test_large_file_floor_equal_to_ordinary_floor_is_eligible(tmp_path):
-    """Equal-value boundary: large_file_floor_days == floor_days is the
-    shipped-defaults ordering's edge case — a large-file entry at exactly
-    the shared floor must still be eligible via the day >= floor_int path."""
     large_dir = tmp_path / "large"
     large_dir.mkdir()
     (large_dir / "f.bin").write_text("x" * 100, encoding="utf-8")
@@ -840,10 +744,6 @@ def test_large_file_floor_equal_to_ordinary_floor_is_eligible(tmp_path):
 
 
 def test_fractional_floor_days_with_larger_large_file_floor_gates_correctly(tmp_path):
-    """Fractional floor_days paired with a larger large_file_floor_days —
-    the exact combination the reviewer named as untested. An entry past the
-    fractional ordinary floor but short of the larger large-file floor must
-    stay excluded; one past both must become eligible."""
     short_dir = tmp_path / "short"
     short_dir.mkdir()
     (short_dir / "f.bin").write_text("x" * 100, encoding="utf-8")
@@ -877,9 +777,6 @@ def test_fractional_floor_days_with_larger_large_file_floor_gates_correctly(tmp_
 
 
 def test_size_cut_large_file_params_flow_through_the_op_handler(tmp_path, monkeypatch):
-    """AC1: size_cut_large_file_bytes/size_cut_large_file_floor_days are
-    accepted, keyword-only-defaulted params on the op handler surface, not
-    just on sweep_scratchpads directly."""
     _build_fixture(tmp_path)
     monkeypatch.setattr(
         "coordinator_core.ops.scratchpad_sweep._build_slug_to_root_map",
@@ -893,7 +790,7 @@ def test_size_cut_large_file_params_flow_through_the_op_handler(tmp_path, monkey
         }
     )
     assert "error" not in result
-    assert result["size_cut"]["floor_days"] == 1.0  # ordinary floor unaffected
+    assert result["size_cut"]["floor_days"] == 1.0
 
 
 @pytest.mark.parametrize(
@@ -918,15 +815,7 @@ def test_registered_under_op_key():
     assert get_op_handler("scratchpad.sweep") is _handler
 
 
-# ---------------------------------------------------------------------------
-# Archive-shaped exemption (size-cut-scoped only — TTL gate unaffected)
-# ---------------------------------------------------------------------------
-
-
 def _make_dated_session_with_files(claude_root, sid, age_days, files):
-    """Like `_make_dated_session` but takes {filename: size_bytes} so a
-    fixture can drop an archive-shaped file alongside (or instead of) a
-    plain one."""
     sdir = claude_root / sid
     sdir.mkdir()
     scratch = sdir / "scratchpad"
@@ -1002,8 +891,6 @@ def test_too_recent_entry_with_archive_is_no_longer_size_cut_exempt(tmp_path):
 
     sid_archive = "70000000-0000-0000-0000-000000000003"
     sid_plain = "70000000-0000-0000-0000-000000000004"
-    # Same cohort (day 3), same size — both must be size-cut identically now
-    # that the archive-shaped exemption has fallen.
     _make_dated_session_with_files(claude_root, sid_archive, 3.1, {"release.tar.gz": 100})
     _make_dated_session_with_files(claude_root, sid_plain, 3.1, {"a.txt": 100})
 
@@ -1026,18 +913,12 @@ def test_too_recent_entry_with_archive_is_no_longer_size_cut_exempt(tmp_path):
     assert plain_entry["verdict"] == "size-cut-reclaimed"
     assert plain_entry["size_cut_exempt"] is False
 
-    # The exemption bookkeeping keys survive (report-shape stability) but the
-    # exemption itself never fires anymore.
     sc = result["size_cut"]
     assert sc["archive_exempt_entries"] == 0
     assert sc["archive_exempt_bytes"] == 0
 
 
 def test_stderr_warning_still_fires_for_archive_taken_by_ttl_gate(tmp_path, capsys):
-    """The named stderr "no silent reclaim" line is the archive class's SOLE
-    remaining protection post-reversal — it must still fire when the TTL
-    gate (unaffected by the size-cut exemption reversal) reclaims an
-    archive-carrying directory."""
     slug = "X--claude-klabauter"
     claude_root = tmp_path / "claude" / slug
     claude_root.mkdir(parents=True)
@@ -1059,8 +940,6 @@ def test_stderr_warning_still_fires_for_archive_taken_by_ttl_gate(tmp_path, caps
 
 
 def test_archive_past_ttl_is_still_reclaimed_by_ttl_gate(tmp_path):
-    """Size-cut exemption is scoped to the size-cut pass only — an archive
-    aged past ttl_days is still reclaimed by the (unaffected) TTL gate."""
     slug = "X--claude-klabauter"
     claude_root = tmp_path / "claude" / slug
     claude_root.mkdir(parents=True)
@@ -1081,8 +960,6 @@ def test_archive_past_ttl_is_still_reclaimed_by_ttl_gate(tmp_path):
 
 
 def test_short_circuit_entries_carry_archive_keys(tmp_path):
-    """self / live / no-scratchpad / undeterminable entries must never be
-    missing the archive keys, even though _scan_dir never ran for them."""
     _build_fixture(tmp_path)
     result = _sweep(tmp_path)
     for entry in result["entries"]:
@@ -1119,12 +996,6 @@ def test_archives_seen_flat_list_sorted_by_bytes_desc(tmp_path):
 
 
 def test_watchdog_ceiling_bails_remaining_directories_never_touches_them(tmp_path):
-    """coordinator_core.ops.scratchpad_sweep::sweep_scratchpads --
-    watchdog_ceiling_secs=0 must trip before the first session directory is
-    evaluated, so every directory in the fixture reports "watchdog-bail" and
-    is never scanned/reclaimed -- regression for
-    state/bug-backlog/2026-08-10-scratchpad-sweep-has-no-watchdog-ceiling.yaml
-    ("Its walk is uninterruptible once started")."""
     tmp_path = _build_fixture(tmp_path)
 
     result = _sweep(tmp_path, watchdog_ceiling_secs=0.0)
@@ -1133,8 +1004,6 @@ def test_watchdog_ceiling_bails_remaining_directories_never_touches_them(tmp_pat
     bail_sids = {
         e["session_id"] for e in result["entries"] if e["verdict"] == "watchdog-bail"
     }
-    # Every non-self directory the fixture built is reported bailed --
-    # nothing was scanned, sized, or reclaimed once the ceiling tripped.
     assert bail_sids == {_SID_LIVE, _SID_DEAD_RECENT, _SID_DEAD_OLD, _SID_NO_SCRATCHPAD}
     assert result["bytes_reclaimed"] == 0
     assert result["bytes_reclaimable"] == 0

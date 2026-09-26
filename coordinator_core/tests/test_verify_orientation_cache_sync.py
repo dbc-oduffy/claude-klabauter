@@ -1,20 +1,3 @@
-"""Parity tests for coordinator_core.ops.verify_orientation_cache_sync.
-
-Golden oracle: the bash original, snapshotted against a positive fixture +
-a battery of negative fixtures (schema violations covering every check the
-bash script performs) plus UE-detector-guard fixtures (uproject
-present/absent x trust-caveats present/absent), pre-port. This test suite
-reproduces the same fixtures and asserts byte-identical violation text +
-exit-code parity.
-
-Port of: verify-orientation-cache-sync.sh (DoE b5a4192c, 2026-07-20)
-Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
-
-C6 (2026-07-30): the positive fixture and its heading-shape negative tests
-were updated for the writer's purpose-map rewrite -- ``## Project`` /
-``## Counters`` are no longer schema-legal headings; ``## Wiki`` (one of the
-four replacement routing sections) stands in for them here.
-"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -23,8 +6,6 @@ from coordinator_core.ops.verify_orientation_cache_sync import main, verify
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -92,9 +73,6 @@ def test_out_of_schema_heading(tmp_path: Path) -> None:
 
 
 def test_project_counters_priorities_headings_are_retired(tmp_path: Path) -> None:
-    """C6: the three census/answer-shaped headings the writer retired must
-    now be flagged the same as any other out-of-schema heading, not silently
-    accepted as legacy content."""
     cache = _write(
         tmp_path,
         "cache.md",

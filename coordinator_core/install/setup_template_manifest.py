@@ -1,15 +1,3 @@
-"""coordinator_core/install/setup_template_manifest.py — leaf module for
-`SubstrateFatalError` and the `setup-templates-manifest.py` loader.
-
-Relocated out of `substrate.py` (P077-C1) so a caller needing only the
-manifest read (or only the fatal-error type) does not have to import all of
-`substrate.py`'s install machinery to get it. `substrate.py` imports all
-three names back under their original names, so every existing caller, test
-import and `pytest.raises(SubstrateFatalError)` is untouched — this is a
-relocation, not a behaviour change.
-
-Stdlib-only imports, deliberately: this module is a leaf.
-"""
 
 from __future__ import annotations
 
@@ -19,7 +7,7 @@ from pathlib import Path
 
 
 class SubstrateFatalError(RuntimeError):
-    """Mirrors a bash `exit 1` FATAL precondition failure."""
+    pass
 
 
 _MANIFEST_ATTRS = ("SETUP_TEMPLATE_FILES", "SETUP_TEMPLATE_EXEC_FILES", "SETUP_TEMPLATE_HOOK_FILES")

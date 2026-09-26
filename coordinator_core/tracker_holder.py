@@ -235,13 +235,6 @@ from coordinator_core.machine_resolver import registry_get
 
 _ROLE_KEY = "tracker.holder_repo"
 
-#: The claude-klabauter SOURCE TREE key. Deliberately NOT the engine root: this module's
-#: brightline compares a `repos.*` holder clone path against claude-klabauter's own clone
-#: path, which is a path-identity test between two repo working trees. The
-#: engine root answers a different question ("which engine executes") and can
-#: legitimately be the published mirror, so routing this comparison at it makes
-#: the guard compare a holder clone against a build output and pass when it
-#: should refuse. See docs/decisions/DR-326 for the dispatch/locator axis split.
 _CLAUDE_KLABAUTER_SOURCE_TREE_KEY = "repos.claude_klabauter"
 
 
@@ -261,9 +254,6 @@ def _claude_klabauter_source_tree() -> Path:
     """
     value = registry_get(_CLAUDE_KLABAUTER_SOURCE_TREE_KEY)
     if not value:
-        # foreign-identity: SUBJECT — same shape as state_root.py:223; remedy
-        # names the live checkout (claude-klabauter) the reader must point at
-        # (audit row 19)
         raise RuntimeError(
             "cannot check the holder brightline: the machine-local registry "
             f"has no '{_CLAUDE_KLABAUTER_SOURCE_TREE_KEY}' entry, so claude-klabauter's own source "
@@ -273,25 +263,10 @@ def _claude_klabauter_source_tree() -> Path:
         )
     return Path(value)
 
-# Slug -> repos.* key indirection (C5). See module docstring § Slug ->
-# repos.* key resolution for the measured fork this settles and why a
-# per-write git spawn was rejected. Operator-set-only, same as `repos.*`
-# itself; never auto-seeded by this module.
 _SLUG_INDEX_PREFIX = "repo_slug."
 
 
 def _resolve_repos_key_for_slug(slug: str) -> str:
-    """Resolve an owner-qualified `"<owner>/<repo>"` slug to its `repos.*`
-    key NAME (not a path) via the `repo_slug.<slug>` registry index.
-
-    Raises a distinct, operator-actionable RuntimeError if the index entry
-    itself is unset — distinct from `write_root_for`'s own key-unset (rung 3)
-    and path-absent (rung 4) messages for the subsequent `repos.<key>` hop
-    (AC9: absent ownership and broken ownership are different facts and must
-    not share a message).
-
-    Never returns a sentinel, never returns None or "" — raises instead.
-    """
     index_key = f"{_SLUG_INDEX_PREFIX}{slug}"
     repo_key = registry_get(index_key)
     if not repo_key:
@@ -486,10 +461,4 @@ def write_root_for(*, owning_repo: str | None, repo_root: Path) -> Path:
                 f"cloned. Remediation: clone {repo_key} to {resolved}"
             )
 
-    # No caller-root guard on this arm, deliberately: a producer that STATES
-    # an owning repo which happens to be the caller's own is the ordinary
-    # matched case DEC-11 describes — writes land in the consuming repo's own
-    # state/sovereign-tracker/. The brightline being guarded is an UNOWNED
-    # write silently landing in whatever repo the engine happens to run in,
-    # which is the `owning_repo is None` arm above, not this one.
     return resolved

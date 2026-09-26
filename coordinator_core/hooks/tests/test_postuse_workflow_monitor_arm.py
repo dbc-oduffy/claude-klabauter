@@ -1,22 +1,3 @@
-"""
-coordinator_core.hooks.tests.test_postuse_workflow_monitor_arm — tests for the
-fifth PostToolUse advisory leg folded into `postuse_advisory_dispatch.py`:
-`_check_workflow_monitor_arm_sync` and its composition inside `_handler`.
-
-Covers: the tool_name gate (fires only on "Workflow", silent on the
-dispatcher's other narrow-gated tools -- Agent, Write -- and on an unrelated
-tool -- Edit); the transcript-tail scan for a well-formed
-`async_launched`/`local_workflow` record (absent record, wrong taskType,
-malformed/unreadable transcript); the emitted advisory shape (finite
-`timeout_ms`, never `persistent: true`); the once-per-task-id sentinel
-discipline (disjoint from `advisory-hook-state-{session_id}.json`); that the
-other four legs still fire unaffected by this fold; and a negative-payload
-pin (Review: staff-eng Finding 2) -- the check reads no field from `params`
-beyond the six `_handler` actually receives.
-
-Spec backlink: coordinator_core/hooks/postuse_advisory_dispatch.py
-`_check_workflow_monitor_arm_sync` (module under test).
-"""
 
 from __future__ import annotations
 
@@ -39,16 +20,6 @@ from coordinator_core.hooks import postuse_advisory_dispatch as pad  # noqa: E40
 
 @pytest.fixture(autouse=True)
 def _isolated_state_dir(tmp_path, monkeypatch):
-    """Point the module under test at a per-test temp dir instead of the box's.
-
-    The sentinel and advisory-state files are located via
-    `tempfile.gettempdir()`. Redirecting that to a fresh `tmp_path` isolates
-    every test by construction, so no cleanup sweep is needed: pytest discards
-    the directory itself. The sweep this replaced ran `glob.glob` over the
-    SHARED system temp three times in both setup and teardown of every test --
-    ~1.3s a pass on a box running dozens of concurrent sessions, ~40s across
-    this file, all of it stolen from peers for state that was never shared.
-    """
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     yield
 
@@ -71,15 +42,11 @@ def _installed_workflow_watch_launcher(tmp_path, monkeypatch):
     yield str(bin_dir / "workflow-watch")
 
 
-
-
 SESSION = "test-session-wf-monitor"
 
 
 def _async_launched_record(task_id="task-abc", task_type="local_workflow", run_id="wf_123", transcript_dir="/tmp/wf-dir"):
     # Field order matches _ASYNC_LAUNCH_RE verbatim: status, taskId, taskType,
-    # runId, transcriptDir -- embedded inside a larger (not standalone-JSON)
-    # transcript line, mirroring the plan's evidence transcript shape.
     payload = {
         "status": "async_launched",
         "taskId": task_id,
@@ -94,11 +61,6 @@ def _write_transcript(tmp_path, *lines):
     transcript = tmp_path / "transcript.jsonl"
     transcript.write_text("".join(lines), encoding="utf-8")
     return str(transcript)
-
-
-# ---------------------------------------------------------------------------
-# Gate: fires only on tool_name == "Workflow".
-# ---------------------------------------------------------------------------
 
 
 def test_fires_on_workflow_tool_with_well_formed_record(tmp_path):
@@ -119,11 +81,6 @@ def test_silent_on_other_tools_even_with_well_formed_record(tmp_path, tool_name)
     assert result == ""
 
 
-# ---------------------------------------------------------------------------
-# No record / wrong taskType near the tail.
-# ---------------------------------------------------------------------------
-
-
 def test_silent_when_no_async_launched_record_found(tmp_path):
     transcript_path = _write_transcript(tmp_path, "just some ordinary transcript content\n")
 
@@ -140,11 +97,6 @@ def test_silent_when_task_type_is_not_local_workflow(tmp_path):
     result = pad._check_workflow_monitor_arm_sync(SESSION, transcript_path, "Workflow")
 
     assert result == ""
-
-
-# ---------------------------------------------------------------------------
-# Malformed / unreadable transcript never raises.
-# ---------------------------------------------------------------------------
 
 
 def test_returns_empty_not_raises_on_unreadable_transcript():
@@ -185,11 +137,6 @@ def test_returns_empty_not_raises_when_tail_reader_itself_raises(tmp_path, monke
     assert result == ""
 
 
-# ---------------------------------------------------------------------------
-# Emitted advisory shape: finite timeout_ms, never persistent: true.
-# ---------------------------------------------------------------------------
-
-
 def test_advisory_names_finite_timeout_ms_and_never_persistent_true(tmp_path):
     transcript_path = _write_transcript(tmp_path, _async_launched_record())
 
@@ -199,11 +146,6 @@ def test_advisory_names_finite_timeout_ms_and_never_persistent_true(tmp_path):
     assert "timeout_ms=1800000" in result
     assert "persistent=true" not in result
     assert "persistent=false" in result
-
-
-# ---------------------------------------------------------------------------
-# Once-per-task sentinel discipline; disjoint from advisory-hook-state-*.json.
-# ---------------------------------------------------------------------------
 
 
 def test_fires_once_per_task_id_via_per_task_sentinel(tmp_path):
@@ -243,12 +185,6 @@ def test_never_touches_the_shared_advisory_hook_state_file(tmp_path):
 
     assert result != ""
     assert not os.path.isfile(shared_state_path)
-
-
-# ---------------------------------------------------------------------------
-# _handler composition: the fifth leg must not clobber or short-circuit the
-# other four -- the live risk this fold-in named explicitly.
-# ---------------------------------------------------------------------------
 
 
 def test_handler_five_way_merge_all_legs_fire_in_fixed_order(tmp_path):
@@ -291,8 +227,6 @@ def test_handler_five_way_merge_all_legs_fire_in_fixed_order(tmp_path):
 
 
 def test_handler_other_four_legs_fire_unaffected_by_non_workflow_tool(tmp_path):
-    """The fifth leg's own internal gate must not suppress its siblings when
-    it stays silent (non-Workflow tool_name)."""
     with mock.patch.object(pad, "_check_context_pressure_sync", return_value="cp text"):
         with mock.patch.object(pad, "_check_runtime_tripwire_sync", return_value="rt text"):
             with mock.patch.object(
@@ -331,24 +265,7 @@ def test_handler_workflow_monitor_alone_still_post_advisory(tmp_path):
     assert "WORKFLOW MONITOR" in hso["additionalContext"]
 
 
-# ---------------------------------------------------------------------------
-# Negative-payload pin (Review: staff-eng Finding 2, EM-adjudicated): the
-# check reads no field from `params` beyond the six `_handler` receives --
-# session_id, transcript_path, agent_id, tool_name, file_path, content.
-# A future edit that reaches for e.g. a `tool_result`/`taskId` field on
-# `params` directly (bypassing the transcript-tail derivation route) must
-# break this test.
-# ---------------------------------------------------------------------------
-
-
 class _ExplodingOnUnexpectedKey(dict):
-    """A dict that raises if any key outside the allowed six is looked up.
-
-    `field()` (coordinator_core.hooks._payload) is the only sanctioned
-    accessor for `params` in this module -- it does a plain `.get`, so a
-    dict subclass overriding `__getitem__`/`get` is what actually pins the
-    contract regardless of which accessor style a future edit reaches for.
-    """
 
     _ALLOWED = {"session_id", "transcript_path", "agent_id", "tool_name", "file_path", "content"}
 
@@ -385,13 +302,7 @@ def test_handler_reads_no_params_field_beyond_the_six_mapped_fields(tmp_path):
     assert "WORKFLOW MONITOR" in context
 
 
-# ---------------------------------------------------------------------------
-# The emitted command has to survive the shell that runs it
-# ---------------------------------------------------------------------------
-
-
 def _launch_transcript(tmp_path, dirname="sub agents", session_name="my session.jsonl"):
-    """A transcript whose launch record points at a path containing a space."""
     transcript_dir = tmp_path / dirname / "wf_abc123"
     transcript_dir.mkdir(parents=True)
     (transcript_dir / "journal.jsonl").write_text("", encoding="utf-8")
@@ -416,30 +327,10 @@ def _launch_transcript(tmp_path, dirname="sub agents", session_name="my session.
 def _emitted_args(advisory):
     command = re.search(r'command="(.*?)", timeout_ms', advisory).group(1)
     argv = shlex.split(command)
-    # argv[0] is the absolute launcher path; flag/value pairs follow it. The
-    # earlier slice started at 3 because the command opened with the three
-    # tokens `python3 -m coordinator_core.workflow_watch`, a form that only
-    # ran inside the engine's own environment.
     return dict(zip(argv[1::2], argv[2::2]))
 
 
 def test_emitted_paths_survive_a_posix_shell_and_resolve(tmp_path):
-    """The emitted argument must tokenize identically in BOTH shells.
-
-    The earlier version quoted with `shlex.quote` and parsed with
-    `shlex.split` -- POSIX on both sides, so it could only fail if those two
-    disagreed, and it rested on a measured-once claim that the harness pipes
-    the command through bash. That is a POSIX-only primitive on a
-    Windows-first repo, so it is gone. The emitted form is a double-quoted
-    path with forward slashes, which cmd.exe and a POSIX shell read the same
-    way.
-
-    The watcher would then poll a file it can never open, `TailReader` would
-    swallow the OSError, and it would run the FULL cap before exiting 1 --
-    silently becoming the very "monitor that outlives its run" this check
-    exists to remove. A path containing a space breaks the unquoted form in
-    any shell on any host, which is what this fixture uses.
-    """
     advisory = pad._check_workflow_monitor_arm_sync(
         "sess-quote", str(_launch_transcript(tmp_path)), "Workflow"
     )
@@ -449,11 +340,6 @@ def test_emitted_paths_survive_a_posix_shell_and_resolve(tmp_path):
 
 
 def test_journal_path_is_json_decoded_not_raw_capture(tmp_path):
-    """`transcriptDir` is captured out of raw transcript text as a JSON string
-    LITERAL, so a Windows path arrives with every separator still escaped.
-    Using it undecoded yields a doubled-separator path -- wrong even where it
-    happens to resolve.
-    """
     advisory = pad._check_workflow_monitor_arm_sync(
         "sess-decode", str(_launch_transcript(tmp_path)), "Workflow"
     )
@@ -463,9 +349,6 @@ def test_journal_path_is_json_decoded_not_raw_capture(tmp_path):
 
 
 def test_journal_path_does_not_double_append_the_run_id(tmp_path):
-    """`transcriptDir` already ends in the run id; appending it again names a
-    directory that never exists, so the renderer would emit nothing at all.
-    """
     advisory = pad._check_workflow_monitor_arm_sync(
         "sess-runid", str(_launch_transcript(tmp_path)), "Workflow"
     )
@@ -473,11 +356,6 @@ def test_journal_path_does_not_double_append_the_run_id(tmp_path):
 
 
 def test_two_async_launch_records_in_one_tail_prefers_the_workflow(tmp_path):
-    """A concurrent background dispatch can land its own async_launched record
-    later in the tail than this Workflow's. "Last match wins" then reads the
-    wrong record. Assert the check does not go silent when the real
-    local_workflow launch is present.
-    """
     run_dir = tmp_path / "wf_abc123"
     run_dir.mkdir(parents=True)
     (run_dir / "journal.jsonl").write_text("", encoding="utf-8")
@@ -504,21 +382,10 @@ def test_two_async_launch_records_in_one_tail_prefers_the_workflow(tmp_path):
     advisory = pad._check_workflow_monitor_arm_sync(
         "sess-shadow", str(transcript), "Workflow"
     )
-    # Documents CURRENT behaviour: the shadowing record wins and the check goes
-    # quiet. It is fail-safe (never a wrong advisory) but it is a real miss, and
-    # it now leaves a stderr breadcrumb instead of being indistinguishable from
-    # "no Workflow launched". Pinned so a future fix is a deliberate change.
     assert advisory == ""
 
 
 def test_sentinel_is_not_written_when_composition_never_completes(tmp_path, monkeypatch):
-    """The once-per-task sentinel must not outlive a failed composition.
-
-    Written before the advisory is built, any later failure leaves the sentinel
-    on disk while the caller gets nothing — and because the handler collects
-    exceptions rather than raising, every later launch of that task id would
-    short-circuit on the sentinel and stay silent permanently.
-    """
     transcript = _launch_transcript(tmp_path)
 
     def _boom():
@@ -533,9 +400,6 @@ def test_sentinel_is_not_written_when_composition_never_completes(tmp_path, monk
 
 
 def test_emitted_args_carry_no_posix_only_quoting(tmp_path):
-    """No single quotes and no backslashes -- the two things that make a
-    command line mean different things to cmd.exe and to a POSIX shell.
-    """
     advisory = pad._check_workflow_monitor_arm_sync(
         "sess-portable", str(_launch_transcript(tmp_path)), "Workflow"
     )
@@ -545,17 +409,6 @@ def test_emitted_args_carry_no_posix_only_quoting(tmp_path):
 
 
 def test_unformattable_path_emits_nothing_rather_than_a_wrong_command(tmp_path):
-    """A character with no form safe in both shells must silence the advisory.
-
-    Uses `$`, which is legal in a Windows filename and still expands inside
-    POSIX double quotes -- so it is the realistic case, not a contrived one.
-    (A literal double quote cannot be tested this way: Windows forbids it in
-    a filename, so no such path can exist to be passed in.)
-
-    Emitting anyway would produce a command line that tokenizes differently
-    depending on which shell ran it -- a watcher aimed at the wrong path, or a
-    filename interpolating a shell expression.
-    """
     transcript = _launch_transcript(tmp_path, dirname='we$rd dir')
     advisory = pad._check_workflow_monitor_arm_sync(
         "sess-unsafe", str(transcript), "Workflow"
@@ -594,13 +447,6 @@ def test_command_names_the_installed_launcher_not_a_bare_dash_m(tmp_path, _insta
 
 
 def test_stays_silent_when_no_launcher_is_installed(tmp_path, monkeypatch):
-    """No launcher on disk => no advisory, rather than a second broken command.
-
-    A command naming a launcher that was never provisioned fails
-    command-not-found, which an EM reads as "this watcher does not exist" —
-    indistinguishable from the ModuleNotFoundError it replaced. Silence is
-    recoverable; the EM keeps their own monitor.
-    """
     empty_home = tmp_path / "empty-settings-home"
     (empty_home / "bin").mkdir(parents=True)
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(empty_home))
@@ -629,22 +475,7 @@ def test_sentinel_is_not_written_when_the_launcher_is_missing(tmp_path, monkeypa
     assert not os.path.isfile(sentinel)
 
 
-# ---------------------------------------------------------------------------
-# Concurrent launches: the "last match wins" premise is false, and the
-# advisory must say so rather than assert a task id it cannot verify.
-# ---------------------------------------------------------------------------
-
-
 def test_concurrent_launches_are_flagged_rather_than_guessed_through(tmp_path, capsys):
-    """Reported independently three times on 2026-09-11 — example-store-repo-fb,
-    example-market-data-repo-fa (wrong id on FOUR of five launches in one run), and
-    example-cockpit-repo-f6. Routed by doe-claude-b9.
-
-    Nothing in this function can see the tool call it fired on: the hook's
-    declared input carries no tool_response. So under concurrent fires it
-    cannot know which launch is its own, and a driver pasting the line watches
-    the wrong workflow with no tell that anything is wrong.
-    """
     transcript_path = _write_transcript(
         tmp_path,
         _async_launched_record(task_id="task-fire-1", run_id="wf_one"),
@@ -655,26 +486,17 @@ def test_concurrent_launches_are_flagged_rather_than_guessed_through(tmp_path, c
     result = pad._check_workflow_monitor_arm_sync(SESSION, transcript_path, "Workflow")
 
     assert "WORKFLOW MONITOR" in result
-    # Still names the most recent — the advisory stays useful, since refusing
-    # outright would silence it in exactly the concurrent case it is for.
     assert "task-fire-3" in result
-    # ...but the reader, who holds the tool result this hook cannot see, is
-    # told what to check and what happens if it does not match.
     assert "CHECK BEFORE PASTING" in result
     assert "wf_three" in result
     assert "watches the wrong run" in result
 
-    # Same-type shadowing breadcrumbs too. The pre-existing branch only
     # breadcrumbed a DIFFERENT taskType, so the plan-blitz case — every
-    # reported case — passed silently.
     err = capsys.readouterr().err
     assert "3 local_workflow launches" in err
 
 
 def test_an_ambiguous_read_does_not_write_the_once_per_task_sentinel(tmp_path):
-    """The sentinel is keyed on task_id, so a wrong id suppresses the advisory
-    for a task that never got one while leaving the real task unguarded — a
-    silent wrong answer made permanent. Re-advising is the cheap failure."""
     transcript_path = _write_transcript(
         tmp_path,
         _async_launched_record(task_id="task-fire-1", run_id="wf_one"),
@@ -694,9 +516,6 @@ def test_an_ambiguous_read_does_not_write_the_once_per_task_sentinel(tmp_path):
 
 
 def test_a_single_launch_is_unchanged_and_still_writes_its_sentinel(tmp_path, capsys):
-    """The negative verdict. One launch is unambiguous, so nothing about the
-    ordinary path moves: no caveat, no breadcrumb, and the once-per-task
-    sentinel is written exactly as before."""
     transcript_path = _write_transcript(
         tmp_path, _async_launched_record(task_id="task-solo", run_id="wf_solo")
     )
@@ -728,16 +547,6 @@ def test_a_repeated_launch_record_for_one_task_is_not_ambiguity(tmp_path, capsys
 
     assert "CHECK BEFORE PASTING" not in result
     assert "local_workflow launches" not in capsys.readouterr().err
-
-
-# ---------------------------------------------------------------------------
-# Run-id capture persistence (mise-workflow-run-id-across-compaction memo):
-# _persist_workflow_run_record writes {run_id, scriptPath, args, fired_at,
-# session_id} at fire time so context_pressure_precompact.py can carry the
-# resume call across a /compact. This capture is independent of the
-# once-per-task advisory sentinel above -- it must land on every fire, not
-# just the first.
-# ---------------------------------------------------------------------------
 
 
 def _record_with_script_path(task_id="task-cap", run_id="wf_cap1", script_path="a/b.workflow.mjs", args=None):
@@ -794,9 +603,6 @@ def test_persists_run_record_with_scriptpath_missing_as_none(tmp_path, monkeypat
 
 
 def test_persist_happens_even_when_monitor_arm_advisory_is_already_sentinelled(tmp_path, monkeypatch):
-    """The advisory's own once-per-task sentinel must not starve the run-id
-    capture -- a second Workflow PostToolUse fire re-persists the record even
-    though the monitor-arm advisory itself stays silent."""
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     transcript_path = _write_transcript(
         tmp_path, _record_with_script_path(task_id="task-cap3", run_id="wf_cap3", script_path="a/b.workflow.mjs")
@@ -805,18 +611,15 @@ def test_persist_happens_even_when_monitor_arm_advisory_is_already_sentinelled(t
     first = pad._check_workflow_monitor_arm_sync(SESSION, transcript_path, "Workflow")
     assert first != ""
     second = pad._check_workflow_monitor_arm_sync(SESSION, transcript_path, "Workflow")
-    assert second == ""  # advisory sentinel suppresses the second fire
+    assert second == ""
 
     record_path = pad._workflow_run_record_path(str(tmp_path), SESSION, "task-cap3")
     assert os.path.isfile(record_path)
 
 
 def test_persist_never_raises_on_unwritable_target(tmp_path):
-    """_persist_workflow_run_record fails open (module docstring's own
-    contract) -- a nonexistent tmpdir means the open() call raises internally,
-    and the function must swallow it rather than propagate."""
     missing_dir = str(tmp_path / "does" / "not" / "exist")
-    pad._persist_workflow_run_record(missing_dir, SESSION, "task-x", "wf_x", None, None)  # must not raise
+    pad._persist_workflow_run_record(missing_dir, SESSION, "task-x", "wf_x", None, None)
 
 
 def test_capture_script_path_and_args_defensive_on_garbage_text():
@@ -834,10 +637,6 @@ def test_capture_accepts_object_args():
 
 
 def test_persisted_record_is_not_contaminated_by_a_later_unrelated_launch(tmp_path, monkeypatch):
-    """A later, unrelated tool call's scriptPath/args in the same transcript
-    tail must not be persisted against an earlier launch's record --
-    _capture_script_path_and_args is now scoped to the text between this
-    launch's own async_launched record and the next one."""
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     first = _record_with_script_path(
         task_id="task-first", run_id="wf_first", script_path="first.workflow.mjs", args=["--first"]
@@ -849,10 +648,6 @@ def test_persisted_record_is_not_contaminated_by_a_later_unrelated_launch(tmp_pa
 
     pad._check_workflow_monitor_arm_sync(SESSION, transcript_path, "Workflow")
 
-    # _check_workflow_monitor_arm_sync picks the LAST local_workflow match
-    # ("last match wins") -- here that is task-second, and the fix must scope
-    # its capture window to that record only, not leak the first record's
-    # values by mistake in the other direction either.
     record_path = pad._workflow_run_record_path(str(tmp_path), SESSION, "task-second")
     with open(record_path, encoding="utf-8") as fh:
         record = json.load(fh)
@@ -861,9 +656,6 @@ def test_persisted_record_is_not_contaminated_by_a_later_unrelated_launch(tmp_pa
 
 
 def test_workflow_run_record_path_rejects_unsafe_task_id():
-    """`_workflow_run_record_path` must never build a path outside tmpdir --
-    a task_id containing a path separator or traversal segment is rejected
-    rather than silently joined in."""
     with pytest.raises(ValueError):
         pad._workflow_run_record_path("/tmp", SESSION, "../../etc/passwd")
     with pytest.raises(ValueError):
@@ -877,9 +669,6 @@ def test_async_launch_regex_task_id_excludes_path_separators():
     reaching a path join."""
     text = _async_launched_record(task_id="../../etc/passwd")
     match = pad._ASYNC_LAUNCH_RE.search(text)
-    # The unsafe taskId is outside the narrowed charset -- the regex either
-    # fails to match this record at all, or (if it partially matches some
-    # other field ordering) never captures the traversal segment.
     if match is not None:
         assert "/" not in match.group("task_id")
         assert ".." not in match.group("task_id")

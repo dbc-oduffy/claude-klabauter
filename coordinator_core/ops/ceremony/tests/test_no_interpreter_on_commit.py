@@ -36,9 +36,6 @@ from coordinator_core.win_portability import no_console_creationflags
 
 from .fixtures.real_git import real_git_repo
 
-# Real-git spawn is load-bearing: a real commit through both entrypoints is
-# the only way to prove no interpreter child is spawned as a SIDE EFFECT of
-# landing it -- a mocked git would only prove the mock itself does nothing.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -56,13 +53,6 @@ def _write_msg(tmp_path: Path, text: str) -> Path:
 
 
 class _PopenSpy:
-    """Wraps the real `subprocess.Popen`, recording every argv[0] spawned
-    during the test so a Python-interpreter child (the shape
-    `hooks/auto_push._detach_and_run` used to `Popen`) can be asserted
-    absent -- not merely "the mocked replay function was never called",
-    which would pass even if a regression re-wired the same spawn through a
-    different call path.
-    """
 
     def __init__(self, real_popen):
         self._real_popen = real_popen

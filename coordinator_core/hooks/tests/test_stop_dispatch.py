@@ -72,9 +72,6 @@ def test_stop_dispatch_op_registers_and_resolves_through_op_for_path() -> None:
         assert name in _REGISTRY, name
         assert op_for_path(HOOK_PATH + "/" + name) == name
 
-    # The four residue/wrapper functions above are deliberately NOT
-    # registered (overengineering-reviewer finding, 2026-08-31): no
-    # consumer names them as ops anywhere in claude-klabauter or DoE-claude.
     for name in (
         "hooks.guard_kira_verdict_routed",
         "hooks.stop_em_report_altitude",
@@ -211,13 +208,9 @@ def test_aggregate_stop_dispatch_folds_kira_block(tmp_path) -> None:
 
 
 # --- CONCATENATE-ALL aggregation parity -------------------------------------
-#
 # The source dispatcher's contract is CONCATENATE-ALL, never first-fires-wins
 # (`_stop_family_runner_contract.py`, and this module's own AGGREGATION
 # CONTRACT docstring). A port that returned on the first firing leg would pass
-# every single-leg test above and every no-signal test -- the divergence is
-# only observable when TWO legs fire at once, which is why this asserts on the
-# second leg's text specifically rather than on the first.
 
 
 def _aggregate(payload):
@@ -230,8 +223,6 @@ def _aggregate(payload):
 
 
 def _silence_all_legs(monkeypatch, mod):
-    """Every composed leg silent by default, so a test names exactly the legs
-    it expects to fire rather than inheriting whatever the real legs decide."""
     for name in (
         "_runtime_tripwire_em_check_handler",
         "_watchdog_undischarged_next_move_handler",
@@ -262,12 +253,6 @@ def test_two_firing_advisory_legs_both_appear_not_just_the_first(monkeypatch):
         mod, "_nudge_unrouted_sizing_handler",
         lambda _p: post_advisory("BRAVO-LEG-TEXT"), raising=True)
 
-    # session_id="" is load-bearing:
-    # `_silence_all_legs` does not patch `_receiver_state_sensor_handler`,
-    # so the real handler runs; a falsy session_id keeps it a no-op (see
-    # that module's own "field(...) treats '' as absent" docstring). Do
-    # not fill this in with a non-empty session_id without also patching
-    # the sensor leg.
     _mod, result = _aggregate({"cwd": "", "session_id": "", "transcript_path": ""})
     blob = str(result)
     assert "ALPHA-LEG-TEXT" in blob, f"first firing leg lost: {result!r}"
@@ -290,8 +275,6 @@ def test_two_blocking_legs_both_reasons_appear(monkeypatch):
         mod, "_runtime_tripwire_em_check_handler",
         lambda _p: deny("Stop", "BLOCK-REASON-TWO"), raising=True)
 
-    # session_id="" is load-bearing here
-    # too, see the identical note in the advisory-arm test above.
     _mod, result = _aggregate({"cwd": "", "session_id": "", "transcript_path": ""})
     blob = str(result)
     assert "BLOCK-REASON-ONE" in blob and "BLOCK-REASON-TWO" in blob, (

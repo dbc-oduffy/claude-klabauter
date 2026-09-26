@@ -28,9 +28,6 @@ from __future__ import annotations
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Import guard — MUST precede any test so @register_op fires first.
-# ---------------------------------------------------------------------------
 import coordinator_core.ops.detect_primary_languages  # noqa: F401 — fires @register_op
 
 from coordinator_core.ipc import _REGISTRY
@@ -66,7 +63,6 @@ def test_op_invalid_top_n_raises_value_error(tmp_path):
             
                 _detect_primary_languages({"target_root": str(root), "top_n": bad})
             
-
 
 def test_happy_path_ranks_by_count_then_name(tmp_path):
     root = tmp_path / "repo"

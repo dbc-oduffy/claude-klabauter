@@ -69,74 +69,26 @@ import pytest
 from coordinator_core.bash_guards import check_test_suite_invocation as _ctsi
 from coordinator_core.bash_guards._helpers import operator_override_note
 
-#: The actual fingerprint of a hand-written "set this to 1" instruction --
-#: same regex `test_no_handwritten_override_clauses.py` uses, applied here to
 #: a RENDERED string rather than a folded AST constant.
-#:
-#: Review: coordinator:code-reviewer -- extended to also match the
-#: REASON-shaped assignment (`NAME="<reason>"`) `operator_override_note`'s
-#: `reason_placeholder` param now emits for the PUNT-family vars
 #: (`COORDINATOR_QUEUE_PUNT`, `COORDINATOR_BATON_BODY_PUNT`), whose own
-#: `_is_trivial_reason` guard denylists the literal `"1"`. The original
-#: flag-shaped `NAME=1` alternative stays untouched; both shapes are scanned
-#: by the SAME regex so neither can silently drift out of this gate's view,
-#: and both are still required to carry the reachability marker below.
 _VIOLATION_RE = re.compile(
     r'\bCOORDINATOR_(?:ALLOW|OVERRIDE|DISABLE)_[A-Z0-9_]+=1\b'
     r'|\bCOORDINATOR_[A-Z0-9_]+="[^"\n]*"'
 )
 
-#: The one fact `operator_override_note` used to attach to every such
-#: mention. A `NAME=1` instruction with this phrase NOT within a short
-#: lookahead window is the dead-end shape this gate exists to catch: the
-#: env var is named, but the reader has no way to know it cannot be set
-#: from inside the session.
-#:
-#: 2026-08-11 reshape #1: `operator_override_note` stopped rendering a
-#: `NAME=1`/`NAME="..."` assignment at all (see that function's own
 #: docstring, NEGATIVE SPEC 4, and
-#: `test_operator_override_note_no_assignment_form.py`), so this marker/
 #: lookahead machinery already only mattered for a HAND-WRITTEN `NAME=1`
-#: site that bypasses the builder entirely (e.g. `_deny_reason_mutex`'s own
 #: known, out-of-scope `%s=1`, see `_KNOWN_UNFIXED_SITES` below).
-#:
-#: 2026-08-11 reshape #2, SAME DAY (docs/plans/2026-08-11-guard-messages-
-#: point-to-docs-never-name.md) -- `operator_override_note` stopped naming
-#: the env var at all (any form, assigned or bare) and this phrase is no
-#: longer present in ITS output either; the pre-launch-only fact it names
-#: moved wholly into the reference doc
-#: (`test_operator_override_note_retains_affordances.py`'s
-#: `test_reference_doc_states_the_env_var_is_not_reachable_in_session`
 #: pins it there now). This marker/lookahead machinery is UNCHANGED in
 #: purpose by reshape #2 -- it still exists solely to catch a HAND-WRITTEN
 #: `NAME=1` site outside the builder (`_KNOWN_UNFIXED_SITES`) -- and is kept
-#: verbatim rather than retired, since that class of violation is
-#: independent of what the builder itself renders. `TestDetectorSelfTest.
-#: test_negative_note_produced_by_the_real_builder_is_not_caught` below is
-#: the one control this reshape DOES change: it is updated to assert
 #: `_VIOLATION_RE` finds no match in the builder's output directly (AC-5:
-#: non-vacuous), rather than relying on `assert_render_carries_
-#: reachability_constraint`'s own zero-iteration loop to "pass" the same
-#: way whether or not the builder still carried anything this gate cares
-#: about.
 _REACHABILITY_MARKER = "unsettable from inside this session"
 
-#: How far past the end of a `NAME=1` match the reachability marker may
-#: appear and still count as "attached to this mention" -- generous enough
-#: to span a hand-written `"%s=1 (unsettable from inside this session)"`-
-#: style layout while still failing a mention on the opposite end of a long
-#: paragraph.
 _LOOKAHEAD_CHARS = 60
 
 
 def assert_render_carries_reachability_constraint(text: str, *, context: str) -> None:
-    """Fail if `text` names an override env var as `NAME=1` without the
-    pre-launch-only marker appearing shortly after -- the runtime-render
-    counterpart to `test_no_handwritten_override_clauses.py`'s static AST
-    scan. Exported (not module-private) so a future guard's own test module
-    can reuse this exact assertion rather than hand-rolling a second copy --
-    see module docstring "prefer one gate" framing.
-    """
     for m in _VIOLATION_RE.finditer(text):
         window = text[m.end(): m.end() + _LOOKAHEAD_CHARS]
         assert _REACHABILITY_MARKER in window, (
@@ -148,10 +100,6 @@ def assert_render_carries_reachability_constraint(text: str, *, context: str) ->
         )
 
 
-#: Known, NAMED sites in THIS module carrying the identical defect shape,
-#: deliberately left unfixed by this dispatch's explicit do-not-touch scope
-#: (see module docstring). Listed here so their exclusion is visible in the
-#: test file itself, not merely absent from it.
 _KNOWN_UNFIXED_SITES = ("_deny_reason_subagent", "_deny_reason_mutex")
 
 
@@ -176,15 +124,6 @@ def test_deny_reason_grant_render_carries_reachability_constraint(is_tie: bool) 
 
 @pytest.mark.parametrize("is_tie", [True, False])
 def test_deny_reason_grant_render_never_names_an_override_route(is_tie: bool) -> None:
-    """Inverted (was: `..._render_embeds_the_ssot_note_verbatim`, which
-    asserted `operator_override_note`'s output WAS present). The Tier-F
-    escape hatch is now the Tier-U grant-CLI ask, not an env-var override --
-    `_deny_reason_grant`'s current render carries no override-doc pointer at
-    all for this payload shape (`{"session_id": ...}` has no `agent_id`/
-    `subagent_type`, so `resolves_em_audience` is False). Positively asserts
-    both the absence of any override-note fragment AND the presence of the
-    real, current Tier-U grant-ask shape, so this cannot pass vacuously on a
-    render that has neither."""
     rendered = _ctsi._deny_reason_grant("pytest", "pytest tests/", is_tie=is_tie)
     note = operator_override_note(_ctsi._OVERRIDE_ENV_VAR, payload=None)
     assert note == ""
@@ -273,13 +212,6 @@ def test_deny_reason_grant_tie_branch_stays_within_word_budget() -> None:
 
 
 def test_deny_reason_subagent_directory_render_never_names_an_override_route() -> None:
-    """Inverted (was: `..._render_carries_reachability_constraint`, which
-    asserted `operator_override_note`'s output WAS present). The current
-    render is the directory-arg-refusal shape (DR-088 R9) with no
-    override-doc pointer at all -- positively asserts both the absence of
-    any override-note fragment AND the presence of the real, current
-    refusal text, so this cannot pass vacuously on a render carrying
-    neither."""
     rendered = _ctsi._deny_reason_subagent_directory(
         ["tests/some_dir"], "pytest tests/some_dir", []
     )
@@ -291,11 +223,6 @@ def test_deny_reason_subagent_directory_render_never_names_an_override_route() -
 
 
 class TestDetectorSelfTest:
-    """Positive/negative controls against `assert_render_carries_
-    reachability_constraint` itself -- the runtime-scan analog of
-    `test_no_handwritten_override_clauses.py`'s own `TestDetectorSelfTest`,
-    proving this gate fires on the exact defect shape it exists to catch,
-    including the specific partial-tuple-% shape the static folder misses."""
 
     def test_positive_bare_env_var_instruction_is_caught(self) -> None:
         text = "Override (rare-use — read the guard source before invoking):\n  COORDINATOR_OVERRIDE_FOO=1"

@@ -108,33 +108,12 @@ from coordinator_core.ops.peer_notice_check import list_unread_notices
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
-PRIORITY = 101  # advisory-phase band; see module docstring for the same-surface
-# collision reasoning (docs/wiki/write-guard-priority-bands.md)
+PRIORITY = 101
 
 _MAX_NOTICES = 5
 
 
 def _repo_root(cwd: Optional[str]) -> Path:
-    """Best-effort repo root -- ``cwd`` if it (or an ancestor, bounded) holds
-    ``.git``, else ``cwd`` itself. No subprocess, no ``git`` invocation --
-    mirrors ``nudge_terminal_artifact_edit._repo_root`` exactly.
-
-    The upward walk itself is NOT ``lifecycle.main_worktree_root``'s job --
-    that helper takes an already-known git-common-dir (or worktree-root) path
-    and does not search for one, and this guard has only a PreToolUse
-    ``cwd`` that may be a subdirectory. But once the walk finds a directory
-    holding ``.git``, resolution of "the main worktree root from here" IS
-    exactly what ``main_worktree_root`` already does for the ops
-    (``peer_notice_send`` / ``peer_notice_check``) -- so the found directory
-    is handed to it rather than returned as-is, closing the previous
-    independent-reimplementation gap (Review: code-reviewer, P2
-    repo-root-divergence finding) for the common case where a session's cwd
-    sits under the main worktree root. ``main_worktree_root`` raises
-    ``ValueError`` only on a layout its own negative-spec excludes (bare
-    repo, unusual ``--separate-git-dir``); this guard's blanket
-    ``except Exception`` in ``check()`` already covers that without a local
-    ``try`` here.
-    """
     base = Path(cwd) if cwd else Path.cwd()
     probe = base
     for _ in range(8):
@@ -157,11 +136,6 @@ def _format_notice(notice: dict) -> str:
 
 
 def _deliver(notice: dict) -> None:
-    """Move a surfaced notice into ``.delivered/`` so it is not repeated.
-
-    Failure here is swallowed -- a stuck/undeliverable move must never flip
-    this guard's decision or suppress the ``additionalContext`` already
-    built for this call (see module docstring)."""
     path = notice.get("_path")
     if path is None or not isinstance(path, Path):
         return
@@ -194,12 +168,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not session_id:
             return None
         if not safe_id(session_id):
-            # Unsafe id (path separators, "..", etc.) -- session_id is
-            # interpolated into a directory name by list_unread_notices, so
-            # this must be rejected here rather than audited post-join
-            # (Review: code-reviewer, P1 path-traversal finding). An advisory
-            # guard never raises into the caller's write -- an unusable id
-            # just means "nothing to surface," same as no notices at all.
             return None
 
         repo_root = _repo_root(payload.get("cwd"))

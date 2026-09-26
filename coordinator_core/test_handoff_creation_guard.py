@@ -1,22 +1,3 @@
-"""
-coordinator_core.test_handoff_creation_guard — unit tests for
-``coordinator_core.handoff_creation_guard`` (the archived-twin creation guard).
-
-Coverage:
-  (a) find_archived_twin_by_filename — sharded (archive/handoffs/YYYY-MM/<f>),
-      unsharded (archive/handoffs/<f>), and no-match cases.
-  (b) find_archived_twin_by_handoff_id — frontmatter handoff_id match, no
-      handoff_id supplied, no match found.
-  (c) assert_no_archived_twin — raises HandoffArchivedTwinError naming the
-      archived twin's path on a filename collision AND on a handoff_id
-      collision; message names the corrective action (git mv / fresh id);
-      no-op (returns None) when no twin exists.
-  (d) no escape/force parameter exists on assert_no_archived_twin (absolute
-      guard, per the negative-spec in the module docstring).
-
-Spec backlink: state/subagent-share/41c1917d-53d5-49f9-9e70-cf281768cc5d/
-coordinatorexecutor-953c07e8.md
-"""
 
 from __future__ import annotations
 
@@ -86,10 +67,6 @@ class TestFindArchivedTwinByHandoffId:
         assert find_archived_twin_by_handoff_id("", tmp_path) is None
 
     def test_id_in_body_not_frontmatter_is_ignored(self, tmp_path):
-        """Narrowing must not turn a body-only occurrence into a false positive:
-        the guard only ever matched the frontmatter scalar (extract_frontmatter_scalar
-        already stopped scanning at the second fence before this narrowing), and the
-        streamed head-read must preserve that exactly."""
         archived = tmp_path / "archive" / "handoffs" / "2026-07" / "2026-07-22-foo.md"
         archived.parent.mkdir(parents=True, exist_ok=True)
         archived.write_text(
@@ -109,11 +86,6 @@ class TestFindArchivedTwinByHandoffId:
         assert find_archived_twin_by_handoff_id("hnd-body-only-999", tmp_path) is None
 
     def test_malformed_no_closing_fence_still_resolves(self, tmp_path):
-        """The malformed-fence fallback
-        (no closing '---' found before EOF) falls through to returning
-        whatever was read so far, matching the pre-narrowing full-file read.
-        Pin that a handoff_id living in an unterminated frontmatter block
-        still resolves, exactly as it did before this narrowing."""
         archived = tmp_path / "archive" / "handoffs" / "2026-07" / "2026-07-22-malformed.md"
         archived.parent.mkdir(parents=True, exist_ok=True)
         archived.write_text(
@@ -123,7 +95,6 @@ class TestFindArchivedTwinByHandoffId:
                     'title: "Malformed"',
                     "handoff_id: hnd-malformed-1",
                     "status: closed",
-                    # No closing '---' fence anywhere in the file.
                     "",
                     "# Body runs right in without a second fence",
                 ]
@@ -135,8 +106,6 @@ class TestFindArchivedTwinByHandoffId:
         assert found == archived
 
     def test_large_corpus_narrowing_reads_only_frontmatter(self, tmp_path):
-        """Pins the narrowing itself: a large body must not be read to find a match
-        that lives in the frontmatter block near the top of the file."""
         huge_body = "\n".join(f"filler line {i} of an enormous archived body" for i in range(50_000))
         archived = tmp_path / "archive" / "handoffs" / "2026-07" / "2026-07-22-huge.md"
         archived.parent.mkdir(parents=True, exist_ok=True)
@@ -179,14 +148,12 @@ class TestAssertNoArchivedTwin:
         assert str(archived) in msg
 
     def test_filename_match_checked_before_handoff_id(self, tmp_path):
-        """Filename basis alone is sufficient — no handoff_id needed to trip the guard."""
         _seed_archived(tmp_path, "2026-07/2026-07-22-foo.md")
         target = tmp_path / "state" / "handoffs" / "2026-07-22-foo.md"
         with pytest.raises(HandoffArchivedTwinError):
             assert_no_archived_twin(target, tmp_path, handoff_id=None)
 
     def test_no_escape_parameter(self):
-        """Negative-spec: no force/escape kwarg on the public guard function."""
         sig = inspect.signature(assert_no_archived_twin)
         for forbidden in ("force", "escape", "override", "skip"):
             assert forbidden not in sig.parameters, (

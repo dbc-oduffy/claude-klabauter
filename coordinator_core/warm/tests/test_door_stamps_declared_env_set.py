@@ -1,25 +1,3 @@
-"""The native door tells the server the declared env-forwarding set's names,
-through one envelope-level `_env` object, rather than two hand-written blocks.
-
-Spec backlink: docs/plans/2026-09-01-the-warm-door-forwards-a-declared-env-set.md
-chunk C2. `door.c`'s own `_env` loop comment carries the shape rationale; this
-file is the half that can only be proved by running the SHIPPED BINARY, same
-reason `test_door_stamps_settings_home.py` and `test_door_stamps_session_id.py`
-give for doing the same -- the frame `door.c` builds is C string assembly no
-Python test can substitute for. Same fixtures, same file layout as those two
-immediate precedents.
-
-WHAT THIS FILE DOES NOT ASSERT, deliberately: that a served op resolves any
-name out of `_env`. That is `test_declared_env_served_per_request.py`'s job
-(C4); duplicating it here would pin the same behaviour twice while proving
-nothing new about the binary.
-
-Negative spec: this plan's door legs no longer stamp the legacy top-level
-`_settings_home` field or a `_caller.session_id` field -- both folded into
-`_env`, keyed by their own environment-variable name. This file asserts their
-ABSENCE from the door's own output as a property of the new shape, not merely
-as an omission.
-"""
 
 from __future__ import annotations
 
@@ -49,9 +27,6 @@ pytestmark = [
 _ENV_FIELD = "_env"
 
 #: The full declared set (`door_env_set.h` / `env_forwarding.FORWARDING_SET`),
-#: named here rather than imported from the header -- this file asserts the
-#: WIRE shape the binary actually produces, not a re-derivation of the C
-#: leg's own table.
 _DECLARED_NAMES = (
     "COORDINATOR_SETTINGS_HOME",
     "COORDINATOR_SESSION_ID",
@@ -106,8 +81,6 @@ def _exchange(root: Path, env_overrides: "dict[str, str] | None"):
 
 
 def test_a_resolved_name_is_stamped_by_its_own_key(tmp_path: Path) -> None:
-    """The replacement's whole point: a declared name that resolves reaches the
-    server keyed by its own environment-variable name, inside `_env`."""
     root = _make_stub_engine_root(tmp_path)
     named_home = str(tmp_path / "an-overridden-settings-home")
 
@@ -117,9 +90,6 @@ def test_a_resolved_name_is_stamped_by_its_own_key(tmp_path: Path) -> None:
 
 
 def test_every_resolved_declared_name_gets_its_own_key(tmp_path: Path) -> None:
-    """Unlike the retired `session_env_precedence` walk (first-non-empty-wins
-    over one slot), every declared name that resolves is carried -- the three
-    session-id names can all be present at once."""
     root = _make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(
@@ -140,8 +110,6 @@ def test_every_resolved_declared_name_gets_its_own_key(tmp_path: Path) -> None:
 
 
 def test_an_unresolved_name_is_omitted_never_an_empty_string(tmp_path: Path) -> None:
-    """Absence is what the server reads as 'this caller has no opinion' -- an
-    unset declared name must not appear in `_env` at all."""
     root = _make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(root, {"COORDINATOR_SETTINGS_HOME": str(tmp_path / "home")})
@@ -152,9 +120,6 @@ def test_an_unresolved_name_is_omitted_never_an_empty_string(tmp_path: Path) -> 
 
 
 def test_no_declared_name_resolved_omits_env_entirely(tmp_path: Path) -> None:
-    """The plain path (no override set anywhere) stays byte-identical on the
-    wire (HARD AC): `_env` itself must be absent, never sent as `{}`, and the
-    call must still serve exactly as it does today."""
     root = _make_stub_engine_root(tmp_path)
 
     request, proc = _exchange(root, None)
@@ -165,12 +130,6 @@ def test_no_declared_name_resolved_omits_env_entirely(tmp_path: Path) -> None:
 
 
 def test_the_stamp_is_envelope_level_not_an_op_param(tmp_path: Path) -> None:
-    """Sibling of `_engine_token`/`_caller`, never inside `params` -- the
-    opposite of `entrypoint`'s placement, and deliberately so: transport
-    metadata the server pops before it dispatches, not an argument any op
-    reads. `entrypoint` shipped in the wrong half of this same envelope once
-    already (door.c's own note, 2026-08-27), and `_settings_home` carried the
-    identical assertion before this row folded it into `_env`."""
     root = _make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(root, {"COORDINATOR_SETTINGS_HOME": str(tmp_path / "home")})
@@ -179,8 +138,6 @@ def test_the_stamp_is_envelope_level_not_an_op_param(tmp_path: Path) -> None:
 
 
 def test_the_legacy_settings_home_field_is_no_longer_stamped(tmp_path: Path) -> None:
-    """The retired shape's own field name must not reappear -- this row folds
-    it into `_env`, it does not stamp it twice."""
     root = _make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(root, {"COORDINATOR_SETTINGS_HOME": str(tmp_path / "home")})
@@ -189,8 +146,6 @@ def test_the_legacy_settings_home_field_is_no_longer_stamped(tmp_path: Path) -> 
 
 
 def test_the_legacy_caller_session_id_field_is_no_longer_stamped(tmp_path: Path) -> None:
-    """`_caller` still carries `pid` (unchanged, C2's own instruction), but no
-    longer resolves or carries `session_id` -- that moved into `_env`."""
     root = _make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(root, {"CLAUDE_CODE_SESSION_ID": "8b40d62c-55ef-4702-83ce-0cd8dc6513e3"})
@@ -199,10 +154,6 @@ def test_the_legacy_caller_session_id_field_is_no_longer_stamped(tmp_path: Path)
 
 
 def test_caller_pid_is_still_stamped_unconditionally(tmp_path: Path) -> None:
-    """`_caller.pid` and the engine-root read stay where they are (C2's own
-    instruction) -- `GetCurrentProcessId()` never fails, unlike an
-    environment-sourced value, so this is sent on every call regardless of
-    what `_env` carries."""
     root = _make_stub_engine_root(tmp_path)
 
     request, proc = _exchange(root, None)

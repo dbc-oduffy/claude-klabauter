@@ -1,11 +1,3 @@
-"""
-coordinator_core.ops.session.tests.test_legacy_touch_corpus_migrate —
-coverage for the one-shot touched.txt -> touch-record.jsonl corpus
-migration (AC8, C9a).
-
-Spec backlink: docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-
-repointing-its-writers.md § AC8, chunk C9a.
-"""
 
 from __future__ import annotations
 
@@ -102,12 +94,6 @@ def test_dropped_entry_is_reported_and_never_written(tmp_path):
     report = run_migration(sessions_base, tmp_path, apply=True)
 
     outcome = report.dirs[0]
-    # A dir that HAD entries and lost every one to the containment rule is
-    # `stranded_all_dropped`, never `migrated` (2026-08-27). Reporting it as a
-    # migration -- and leaving the empty sink this used to assert -- is what
-    # made the drain unrepeatable: the sink satisfied the old exists()-based
-    # already-drained predicate in both this module and the drain check, so the
-    # dir was permanently "done" with its claims invisible to compute_scope.
     assert outcome.status == "stranded_all_dropped"
     assert outcome.entries_written == 0
     assert outcome.entries_dropped == 1
@@ -167,7 +153,6 @@ def test_agent_dir_without_owner_backpointer_is_skipped_untouched(tmp_path):
     sessions_base = tmp_path / "coordinator-sessions"
     agent_dir = sessions_base / ".agents" / "orphan-agent"
     _write(agent_dir / "touched.txt", "a/b.py\n")
-    # No em-session-id.txt written.
 
     report = run_migration(sessions_base, tmp_path, apply=True)
 
@@ -220,7 +205,6 @@ def test_already_drained_dir_is_left_alone_and_untouched_bytes(tmp_path):
 @pytest.mark.cadence
 def test_unrecognized_shape_is_reported_and_untouched(tmp_path):
     sessions_base = tmp_path / "coordinator-sessions"
-    # Three-level nesting NOT under .agents/ — not a recognized shape.
     _write(sessions_base / "sid-1" / "nested" / "touched.txt", "a/b.py\n")
 
     report = run_migration(sessions_base, tmp_path, apply=True)
@@ -237,7 +221,6 @@ def test_unknown_timestamp_entries_use_epoch_sentinel(tmp_path, monkeypatch):
     )
     sessions_base = tmp_path / "coordinator-sessions"
     touched = sessions_base / "sid-1" / "touched.txt"
-    # Bare-path legacy line: parse_touch_event returns ts=None for this.
     _write(touched, "a/b.py\n")
 
     run_migration(sessions_base, tmp_path, apply=True)
@@ -273,8 +256,6 @@ def test_totals_and_report_shape(tmp_path):
     report = run_migration(sessions_base, tmp_path, apply=False)
 
     totals = report.totals()
-    # sid-1 salvages its entry (migrated); sid-2's only entry escapes the
-    # worktree, so it is stranded, not migrated.
     assert totals["migrated"] == 1
     assert totals["stranded_all_dropped"] == 1
     assert report.entries_written_total() == 1

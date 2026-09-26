@@ -1,32 +1,3 @@
-"""
-Contract tests for two out-of-repo-write concurrency fixes found during the
-2026-08-14 install-path safety audit (dispatch: coordinatorexecutor-9251b1e9).
-
-1. `substrate._write_agent_helper_forwarders` (Step 3b's real-install write
-   loop) previously called `_write_agent_forwarder`/`_write_agent_cmd_forwarder`
-   (the second of which is since deleted -- 91771f631d, "the cmd forwarder
-   dies"; every name gets the native door image or the bare-Python forwarder
-   now, never a `.cmd`) — both plain in-place `Path.write_text`, not
-   atomic-temp-and-rename — with NO lock held, unlike `forwarder_self_heal.py`'s
-   identical writer(s), which already take
-   `coordinator_core.locked_write.held_lock` on the same `<settings-home>/bin`
-   directory before writing. A concurrent installer run, or a concurrent
-   self-heal (routine at session boot per CLAUDE.md § Load norm), could
-   interleave on the same destination file. Fixed by wrapping the real
-   (non-check_only) write loop in the same `held_lock` primitive.
-
-2. `uninstall_legs.uninstall_remove_substrate` removed only the live
-   `.coordinator-venv` path via `_rmtree_target`, never the
-   `.coordinator-venv.build-<pid>-<hex>`/`.coordinator-venv.stale-<pid>-<hex>`
-   swap siblings a crashed rebuild or a Windows deferred-reclaim can leave
-   behind (`ensure_venv.py`'s `_swap_in_new_venv`/`_sweep_orphaned_swap_dirs`
-   — the latter only runs on the venv's NEXT rebuild, which uninstall may
-   make never happen). Fixed by reusing `ensure_venv._sweep_orphaned_swap_dirs`
-   from the uninstall leg instead of reimplementing the prefix match.
-
-No `cadence`/`pending_fix`/`designed_red` module marks — this file runs on
-the fast gate.
-"""
 
 from __future__ import annotations
 
@@ -47,15 +18,8 @@ def _target_map_for(tmp_path: Path) -> "dict[str, str]":
 
 
 class TestForwarderWriteLoopTakesHeldLock:
-    """`_write_agent_helper_forwarders`'s real-write branch must serialise
-    against another holder of the SAME `bin_dst` lock — proving it acquires
-    `held_lock`, not merely that its output happens to look right."""
 
     def _isolate_lock_root(self, monkeypatch, tmp_path):
-        # held_lock's default anchor is a real per-user machine directory
-        # (~/.coordinator/coordinator-locks) -- relocate it for test
-        # isolation via the documented test-only escape hatch, never the
-        # operator's real one.
         monkeypatch.setenv("COORDINATOR_LOCK_ROOT", str(tmp_path / "lock-root"))
 
     def test_real_write_loop_blocks_on_a_lock_already_held_for_bin_dst(
@@ -66,8 +30,6 @@ class TestForwarderWriteLoopTakesHeldLock:
         bin_dst.mkdir()
         target_map = _target_map_for(tmp_path)
 
-        # Hold the SAME lock `_write_agent_helper_forwarders` must acquire,
-        # from this thread, before the write loop runs on another thread.
         with held_lock(bin_dst, holder_label="test-holder", timeout=5.0):
             result: "dict[str, object]" = {}
 
@@ -82,8 +44,6 @@ class TestForwarderWriteLoopTakesHeldLock:
             t = threading.Thread(target=_call)
             t.start()
             t.join(timeout=3.0)
-            # The writer thread must still be blocked waiting for the lock
-            # this test holds -- it must not have written anything yet.
             assert t.is_alive() or "timeout" in result
             assert not (bin_dst / "widget").exists()
 
@@ -100,10 +60,6 @@ class TestForwarderWriteLoopTakesHeldLock:
             target_map, bin_dst, False,
         )
         assert (bin_dst / "widget").is_file()
-        # No `.cmd` half exists to assert on any more -- the writer is deleted
-        # (PM ruling 2026-08-29, one native entrypoint per platform). This
-        # `engine_root=None` call is the doorless path, so the bare Python
-        # forwarder above is the whole product.
         assert not (bin_dst / "widget.cmd").exists()
 
     def test_check_only_mode_never_touches_the_lock(self, monkeypatch, tmp_path):
@@ -112,9 +68,6 @@ class TestForwarderWriteLoopTakesHeldLock:
         bin_dst.mkdir()
         target_map = _target_map_for(tmp_path)
 
-        # check_only mode raises SubstrateFatalError for a missing/stale
-        # destination -- confirm that failure is the ordinary check-mode
-        # complaint, not a lock timeout (i.e. no lock is attempted at all).
         with pytest.raises(substrate.SubstrateFatalError):
             substrate._write_agent_helper_forwarders(
                 target_map, bin_dst, True,
@@ -122,9 +75,6 @@ class TestForwarderWriteLoopTakesHeldLock:
 
 
 class TestUninstallSweepsOrphanedVenvSwapSiblings:
-    """`uninstall_remove_substrate` must remove `.coordinator-venv.build-*`/
-    `.coordinator-venv.stale-*` siblings alongside the live `.coordinator-venv`
-    it already removes -- not just the live dir."""
 
     def _isolate_settings_home(self, monkeypatch, tmp_path):
         for var in ("CLAUDE_HOME", "HOME", "USERPROFILE", "COORDINATOR_SETTINGS_HOME"):
@@ -147,7 +97,6 @@ class TestUninstallSweepsOrphanedVenvSwapSiblings:
         (build_sibling / "marker").write_text("orphan", encoding="utf-8")
         (stale_sibling / "marker").write_text("orphan", encoding="utf-8")
 
-        # Unrelated sibling sharing only a loose prefix must survive.
         unrelated = settings_home / ".coordinator-venv-unrelated"
         unrelated.mkdir()
 

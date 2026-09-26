@@ -1,10 +1,3 @@
-"""
-Tests for coordinator_core.ops.extract_scope_paths.
-
-Byte-parity fixtures lifted from the bash oracle this module ports.
-
-Port of: test-extract-scope-paths.sh (DoE 894d4bc6, 2026-07-22)
-"""
 
 from __future__ import annotations
 
@@ -83,7 +76,6 @@ status: dispatched
 
 
 def test_scope_last_field_terminates_at_close_fence(tmp_path, capsys):
-    """Scope as the LAST frontmatter field — body `  - ` bullets must not leak."""
     f = _write(
         tmp_path,
         "scope_last.md",
@@ -127,9 +119,6 @@ commits: []
 
 
 def test_non_ascii_lowercase_does_not_terminate_scope_block(tmp_path, capsys):
-    """ASCII-only `[a-z]` stop condition — matches bash `/^[a-z]/` and
-    dirty_tree_gate.py's twin stop condition, NOT str.islower() (which is
-    True for non-ASCII lowercase code points like 'ñ')."""
     f = _write(
         tmp_path,
         "non_ascii.md",
@@ -150,9 +139,6 @@ status: dispatched
 
 
 def test_non_default_key_scans_a_different_top_level_list_block():
-    """`key` param — a caller can scan `completeness_checklist:` (or any
-    top-level list-shaped key) with the same scanner rather than a second
-    copy of it."""
     text = (
         "---\n"
         "scope:\n"
@@ -167,14 +153,10 @@ def test_non_default_key_scans_a_different_top_level_list_block():
         "live: the server responds",
         "restart-gated: config reload takes effect",
     ]
-    # The default key is untouched by scanning past it for a different key.
     assert _extract_scope_paths(text) == ["widget.py"]
 
 
 def test_quoted_items_are_unquoted():
-    """`unquote_yaml_scalar` strips one layer of quoting — a no-op on bare
-    `scope:` paths (Finding 6/7 wiring: this scanner now also powers
-    `completeness_checklist:`, whose items are quoted strings)."""
     text = '---\nnotes:\n  - "quoted value"\n  - \'single quoted\'\n  - bare-value\nstatus: x\n---\n'
     assert _extract_scope_paths(text, key="notes") == [
         "quoted value",
@@ -230,10 +212,6 @@ def test_non_default_key_empty_block_returns_empty_list():
 
 
 def test_crlf_line_endings_multi_item_and_non_default_key():
-    """`text.splitlines()` handles `\\r\\n` uniformly, but nothing asserted
-    it for either key before this — a CRLF fixture converts an
-    "should work by inspection" claim into a tested one, per the review
-    brief's explicit call-out. Review: code-reviewer — Finding 3."""
     text = (
         "---\r\n"
         "scope:\r\n"

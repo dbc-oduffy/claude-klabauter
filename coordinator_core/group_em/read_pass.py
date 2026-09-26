@@ -151,66 +151,22 @@ from coordinator_core.session.receiver_state import classify as receiver_state_c
 from coordinator_core.session.receiver_state import read_receiver_state
 from coordinator_core.session.receiver_state import reduce_transcript_tail
 
-#: The peer is actively producing -- either the harness reports it executing
 #: (`EXECUTING_STATUSES`), or an `idle` peer whose transcript tail shows live
-#: conversational activity.
 STATE_PRODUCING = "PRODUCING"
 
-#: Harness statuses that each assert the same fact: this session is executing
-#: right now. `busy` is the general one; `shell` is the narrower claim that the
-#: session is inside a shell call, and it reaches this module ONLY from the
-#: registry -- `claude agents --json` collapses it into `busy`, so a reader
-#: sampling that surface cannot see the arm is missing.
-#:
-#: Measured 2026-09-02 on this box: 5 of 28 live sessions sat in `shell`,
-#: including two of three claude-klabauter peers, and every one of them fell
 #: through to `unrecognized-status:shell` -> `STATE_UNKNOWN`. Plain UNKNOWN
-#: rows are invisible to the parked derivation, so ~18% of the fleet was in a
-#: status the ladder had no rung for -- not misclassified, unclassifiable.
-#:
-#: The under-read is safe in one direction only (an executing peer is never
-#: falsely reported parked) and that is exactly why it survived: the sensor
-#: looked healthy while it had stopped answering for a fifth of its input.
 EXECUTING_STATUSES = frozenset({"busy", "shell"})
 
-#: The wire spelling of a paused verdict, on both legs -- the reader leg
-#: returns this directly; the fallback leg maps `receiver_state.classify`'s
-#: `Verdict(verdict="PAUSED", ...)` onto it in `classify_fallback_status`.
 STATE_PAUSED = "PAUSED"
 
-#: Neither the reader, nor the status leg, nor the transcript tail could
-#: place this peer. First-class and expected -- never a paused-like guess.
 STATE_UNKNOWN = "UNKNOWN"
 
-#: How old a reader-leg `stamped_at` snapshot may be, on the `idle` side,
-#: before a PAUSED verdict it carries is no longer trusted as a candidate.
-#: Pinned at the **p50 (108s)** turn-ended dwell measured in
-#: state/audits/2026-08-30-group-em-cooldown-vs-candidacy-window.md over 222
-#: live episodes -- deliberately NOT p75 (274s) or p90 (546s): the audit's
-#: own observed failure (peer `30342983`, offered mid-turn on a snapshot
-#: stamped ~210s earlier) sits above p50 but below p75, so a p75+ threshold
-#: would not have caught the exact case this guard exists to close. A
-#: snapshot older than the median lifetime of the state it reports is, more
-#: likely than not, already stale.
 STALE_SNAPSHOT_SECONDS = 108
 
 _PATH_SEP_RE = re.compile(r"[/\\:]")
 
 
 def _parse_iso_stamp(value: Any) -> Optional[datetime]:
-    """Parse a `stamped_at`-shaped ISO8601 string to a tz-aware `datetime`.
-
-    Returns `None` on anything that is not a non-empty, parseable ISO8601
-    string -- missing field, wrong type, or malformed text. A naive result
-    (no explicit offset) is assumed UTC. Never raises.
-
-    The body was a second
-    implementation of `receiver_state.parse_iso_timestamp`, character for
-    character. Kept as a name because this module's callers read `stamped_at`
-    (a receiver-state field) rather than a transcript `timestamp`, and that
-    distinction is worth a name; the PARSE is one implementation, over there,
-    because this module already imports that one and not the reverse.
-    """
     parsed = parse_iso_timestamp(value)
     return parsed
 
@@ -237,12 +193,6 @@ def _staleness_seconds(stamped_at: Any, now: Optional[datetime]) -> Optional[flo
 
 
 def caller_session_id(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
-    """This session's own id, so it can be excluded from its own roster.
-
-    Never resolved from `claude agents --json` itself -- that would require
-    guessing which entry is "us" from shape alone. The harness exports it
-    directly.
-    """
     env = os.environ if env is None else env
     return env.get("CLAUDE_CODE_SESSION_ID")
 
@@ -253,42 +203,6 @@ def fetch_live_agents(
     raise_on_failure: bool = False,
     raise_on_empty_snapshot: bool = False,
 ) -> list[dict[str, Any]]:
-    """Read the live, already-cwd-filtered peer roster fresh. Never cache.
-
-    Sources `coordinator_core.session.peer_roster.build_roster(repo_root=...)`
-    -- an in-process `harness_registry.snapshot()` read, zero subprocesses --
-    in place of the former `claude agents --json` child-process spawn. Each
-    `PeerRow` is mapped to the `{"sessionId", "status", "cwd", "name"}`-shaped
-    dict this module's classification ladder already reads, so no downstream
-    function needs to change its dict-key assumptions.
-
-    `name` was added 2026-09-01 and is the reason a whole downstream feature
-    read null. `PeerRow.name` is populated upstream; this projection dropped
-    it, so `watch._holder_name` -- written specifically to put the Group-EM's
-    name on the heartbeat for a reader that cannot reach this box's registry
-    -- could only ever return `None`, and `state/group-em-watch.json` read
-    `holder_name: null` on every tick including ones its own watch stamped.
-    Established by doe-claude-27. A projection that silently narrows its
-    source is invisible to every caller downstream of it. Returns `[]` on any
-    internal `build_roster` failure -- a read pass with no peers to show is a
-    legitimate, quiet outcome, not a raised exception; `build_roster` itself
-    already degrades to `[]` rather than raising, so no extra try/except is
-    needed here.
-
-    `raise_on_failure` (default `False`, so every existing caller is
-    unchanged) forwards `build_roster`'s own already-reviewed escape hatch: a
-    caller that DIFFS two consecutive rosters cannot use the default. An
-    unreadable registry and a genuinely empty repo both answer `[]`, and a
-    differ handed the first one concludes that every peer it knew about has
-    gone -- one broken read, the whole fleet reported dead. `watch.gone` is
-    that caller. An empty snapshot and an empty cwd filter are still `[]`
-    under this flag; only the registry read itself and `self_record()` raise.
-
-    `raise_on_empty_snapshot` is the half that actually fires, and a differ
-    needs BOTH -- why: `coordinator_core.session.peer_roster.EmptySnapshotError`,
-    the fact's home. It is a box-wide count taken before the cwd filter: a
-    repo with no peers still answers a quiet `[]`.
-    """
     rows = peer_roster.build_roster(
         repo_root=repo_root,
         raise_on_failure=raise_on_failure,
@@ -309,14 +223,6 @@ def enumerate_repo_peers(
     agents: list[dict[str, Any]],
     exclude_session_id: Optional[str] = None,
 ) -> list[dict[str, Any]]:
-    """Drop the caller's own entry from an already-repo-filtered roster.
-
-    `agents` is expected to already be cwd-filtered to `repo_root` (as
-    `fetch_live_agents` -> `peer_roster.build_roster` already does) -- this
-    function no longer re-derives that filter itself. `exclude_session_id` is
-    the only mechanism that removes an entry: there is no "shouldn't be here"
-    inference beyond the caller's own exclusion.
-    """
     peers = []
     for agent in agents:
         session_id = agent.get("sessionId")
@@ -327,16 +233,6 @@ def enumerate_repo_peers(
 
 
 def _transcript_path_for(session_id: str, cwd: str) -> str:
-    """The on-disk transcript path the harness itself writes to for a peer.
-
-    Convention observed under `~/.claude/projects/<encoded-cwd>/<session_id>.jsonl`:
-    every path separator and drive-letter colon in `cwd` is replaced with `-`.
-    Not a public contract -- if this ever drifts, `receiver_state.reduce_transcript_tail`
-    fails closed (missing file) to `[]`, never a crash. Private: nothing outside
-    this module derives a peer transcript path from a bare session id, so this
-    stays an internal helper rather than the small public surface the classifier
-    collapse (overengineering review finding 1) retired.
-    """
     projects_root = os.path.join(os.path.expanduser("~"), ".claude", "projects")
     encoded_cwd = _PATH_SEP_RE.sub("-", cwd)
     return os.path.join(projects_root, encoded_cwd, f"{session_id}.jsonl")
@@ -367,31 +263,6 @@ def _transcript_mtime_epoch(session_id: str, cwd: str) -> Optional[float]:
 
 
 def transcript_activity_epoch(session_id: str, cwd: str) -> tuple[Optional[float], bool]:
-    """PUBLIC BY NAME BECAUSE IT IS PUBLIC BY USE. `group_em.send_pass` and
-    `group_em.watch` both call this, and both module docstrings name it as the
-    ONE place a session id becomes a transcript activity instant -- the rule
-    that stops a third clock site from appearing. It carried an underscore
-    anyway, so the symbol said "private to this module" while two siblings
-    depended on its signature and nothing pinned it; an edit here with no
-    reason to look for foreign callers could have broken either silently.
-
-    When this peer last actually MOVED, as `(epoch, trusted)`.
-
-    `trusted` is True only when the number came from a record's own
-    `timestamp`. The mtime fallback is returned with `trusted=False` and is an
-    UPPER BOUND, never evidence: it is the newest moment the file could have
-    been touched, including by a bookkeeping rewrite the session did not
-    perform. Callers must not let an untrusted value win a comparison that
-    makes a peer look busier -- see `send_pass._dwell_seconds`, where doing
-    exactly that is what hid a 12-minute stall from four consecutive ticks.
-
-    `(None, False)` means nothing could be established at all -- absent or
-    unreadable transcript -- and, as with `_transcript_mtime_epoch`, must
-    never be read as "has not moved" or as an age of zero.
-
-    The clock this replaces, and the measurement that condemned it, are
-    documented once at `receiver_state.activity_epoch_from_reduced`.
-    """
     reduced, _unparseable, _cap = reduce_transcript_tail(_transcript_path_for(session_id, cwd))
     epoch = activity_epoch_from_reduced(reduced)
     if epoch is not None:
@@ -431,14 +302,7 @@ def _transcript_moved_since(
         return None
     if trusted:
         return activity_epoch > stamp_dt.timestamp()
-    # The untrusted (mtime) fallback
-    # is barred from answering "moved", never from answering "has not moved".
     # The bias is ONE-DIRECTIONAL: a bookkeeping rewrite can only push mtime
-    # forward, and any real write is at or before it, so `mtime <= stamp`
-    # bounds the peer's true last activity at or before the stamp too -- real
-    # evidence of stillness, and the reinstatement case a blanket `None` here
-    # silently gave up. Only the forward direction is unsafe, because that is
-    # the one a rewrite can manufacture.
     if activity_epoch <= stamp_dt.timestamp():
         return False
     return None
@@ -526,10 +390,6 @@ def classify_peer(
             "candidate": False,
             "unclassifiable": False,
             "contradicted": False,
-            # `cwd` threaded
-            # onto every verdict row so `send_pass._dwell_seconds` can use the
-            # peer's own cwd (`peer.get("cwd") or repo_root`), matching this
-            # module's own pattern, instead of always assuming `repo_root`.
             "cwd": peer.get("cwd"),
         }
 
@@ -543,35 +403,8 @@ def classify_peer(
             reader_verdict == STATE_PAUSED and live_status in EXECUTING_STATUSES
         )
 
-        # Idle-side close (defect B): a stale PAUSED snapshot with harness
-        # `idle` is exactly the failure mode `live_busy_contradicts` cannot
-        # see -- the audit's peer 30342983 was mid-turn while the harness read
-        # `idle`, so live status is NOT trustworthy corroboration here.
-        # Staleness is measured against the reader record's OWN write time
-        # (`stamped_at`) -- never a status field -- and an indeterminate
-        # staleness fails CLOSED (never a candidate), same as an
         # over-threshold one. See `STALE_SNAPSHOT_SECONDS`'s docstring for the
-        # p50 pin.
-        #
         # AGE ALONE IS NOT THE QUESTION (2026-08-30). Age was standing in for
-        # "has this peer done anything since the snapshot?", and it answers
-        # that question wrongly in one direction: `receiver-state.json` is
-        # written by the peer's Stop hook at turn end, so a genuinely PARKED
-        # peer's snapshot does nothing but age. Past 108s every such peer was
-        # disqualified permanently, and the longer one sat stuck the more
-        # certain the roster was to hide it -- measured live on this box, the
-        # roster oscillated 0 -> 3 -> 0 across consecutive ticks and read
-        # empty while five peers sat idle, one blocked for hours on a gate
-        # only the Group EM could clear.
-        #
-        # The transcript answers it directly. A peer that has written nothing
-        # since its snapshot has not moved, however old the snapshot is; a
-        # peer whose transcript is NEWER than its snapshot has acted since,
-        # which is the mid-turn case defect B exists to catch and catches it
-        # on evidence rather than on elapsed time. Fail-closed is preserved
-        # end to end: an unreadable transcript mtime leaves the age verdict
-        # standing, and an unresolvable `stamped_at` is still never a
-        # candidate.
         staleness = None
         stale_idle_contradicts = False
         if reader_verdict == STATE_PAUSED and live_status == "idle":
@@ -582,7 +415,6 @@ def classify_peer(
                 moved = _transcript_moved_since(
                     session_id, peer.get("cwd") or repo_root, stamp_dt
                 )
-                # `None` = could not establish; leave the age verdict standing.
                 if moved is False:
                     stale_idle_contradicts = False
 
@@ -599,24 +431,9 @@ def classify_peer(
             reason = reader_reason
 
         # Defect 4 close: a frozen PRODUCING verdict (typically the step-7
-        # delegation override, `classify`'s "delegated (overrides ...)"
-        # reason) is never rewritten once the session stops taking turns --
-        # `write_receiver_state` has exactly one writer, the Stop hook, and a
-        # stopped session never fires it again. Freshness is knowable from
-        # the SAME evidence bd96b64b already reads for the idle-side PAUSED
-        # guard above (`_transcript_moved_since`: has the peer's own
-        # transcript grown since `stamped_at`?) -- reused verbatim, not a
-        # second comparison, and never against `now` (a clock threshold is
-        # exactly what bd96b64b replaced). A transcript that kept moving
-        # after the verdict was frozen is positive evidence the frozen
         # PRODUCING snapshot no longer describes the peer's current state.
-        #
         # NEGATIVE SPEC: this must resolve to UNKNOWN, never PAUSED -- a
         # stale PRODUCING is "could not classify", not "guessed idle". And
-        # UNKNOWN alone is invisible to `build_candidate_roster` (only
-        # `candidate: True` rows survive), so this is surfaced as an
-        # explicit `unclassifiable: True` row instead of a silent drop --
-        # the Group EM is told "no verdict, and why" rather than nothing.
         if reader_verdict == STATE_PRODUCING:
             stamp_dt = _parse_iso_stamp(reader_record.get("stamped_at"))
             moved = _transcript_moved_since(
@@ -647,33 +464,12 @@ def classify_peer(
             "reason": reason,
             "candidate": reader_verdict == STATE_PAUSED and not contradicted,
             "unclassifiable": False,
-            # Carried through so `send_pass` can emit a `suppressed` row for a
-            # contradicted peer instead of it vanishing at this filter --
-            # C4, state/dispatch-briefs/2026-09-01-the-crowns-standing-
-            # surfaces-report-themselves/C4.md. `reason` above already holds
-            # the gate name that excluded it (`live-busy-contradicts-paused`,
-            # `stale-snapshot-contradicts-paused`, `stale-snapshot-unresolved`)
-            # -- this flag is what lets `build_candidate_roster` keep the row.
             "contradicted": contradicted,
             "cwd": peer.get("cwd"),
         }
 
     status = peer.get("status")
     reduced_lines: list = []
-    # overengineering-reviewer (finding out of this reviewer's own
-    # scope, flagged by it as staff-eng's; applied here per EM instruction)
-    # -- this local used to be named `transcript_activity_epoch`, the exact
-    # name of the module function promoted to public in this same session
-    # (see that function's own docstring). Nothing here called the function,
-    # so nothing broke, but the comment below reads as if it refers to this
-    # variable rather than the shadowed function, and any future call in
-    # this scope would silently get a float instead of the function object.
-    # Renamed to `activity_epoch` here; `classify_fallback_status`'s own
-    # parameter of the same name is left alone -- it forwards its value to
-    # `receiver_state.classify` under the keyword `transcript_activity_epoch`,
-    # a contract this module does not own, and renaming the parameter would
-    # only relocate the shadow, not remove the risk, while adding churn to
-    # every test that calls it by keyword.
     activity_epoch: Optional[float] = None
     if status == "idle":
         cwd = peer.get("cwd") or repo_root
@@ -682,11 +478,6 @@ def classify_peer(
         else:
             transcript_path = _transcript_path_for(session_id, cwd)
             reduced_lines, _any_unparseable, _cap_reached = reduce_transcript_tail(transcript_path)
-        # Derived from the tail ALREADY reduced above -- no second read, and
-        # no `transcript_activity_epoch` call, which would re-reduce the same
-        # file. Falls back to mtime only when no line in that tail carries a
-        # timestamp, which is the same upper-bound-not-evidence fallback
-        # `transcript_activity_epoch` makes, kept identical on both paths.
         activity_epoch = activity_epoch_from_reduced(list(reduced_lines or []))
         if activity_epoch is None and read_tail is None:
             activity_epoch = _transcript_mtime_epoch(session_id, cwd)
@@ -706,17 +497,8 @@ def classify_peer(
         "reason": reason,
         "candidate": state == STATE_PAUSED,
         "unclassifiable": False,
-        # The fallback leg has no reader record to contradict -- never a
-        # contradicted row.
         "contradicted": False,
         "cwd": peer.get("cwd"),
-        # This leg
-        # already reduced the tail and derived the epoch; threading it onto the
-        # verdict (the same way `cwd` is) lets `watch._parked_line` report the
-        # peer's idle time without re-reducing the same file in the same tick.
-        # `None` on the reader leg, which never reduced a tail to reuse -- the
-        # consumer falls back to reading, which is then a FIRST read, not a
-        # second.
         "activity_epoch": activity_epoch,
     }
 
@@ -759,18 +541,6 @@ def build_roster(
 
 
 def is_admitted(verdict: Mapping[str, Any]) -> bool:
-    """The one admission predicate -- True when `verdict` belongs in
-    `build_candidate_roster`'s shortlist: `candidate`, `unclassifiable`, or
-    `contradicted` (never folded together, never redefined per caller).
-
-    Extracted (chunk C1,
-    docs/plans/2026-09-06-group-em-tooling-surface-six-defects.md,
-    eng-director F3) so `group_em_enter._run_roster_and_excluded` can derive
-    `roster_excluded` -- the strict complement of this predicate against one
-    shared `build_roster` population -- without a second, drifting copy of
-    this rule in the ops layer. `build_candidate_roster` below is this
-    module's only other caller; there are no others in the tree
-    (plan census, non-test callers of `build_candidate_roster` == 1)."""
     return bool(verdict["candidate"] or verdict.get("unclassifiable") or verdict.get("contradicted"))
 
 

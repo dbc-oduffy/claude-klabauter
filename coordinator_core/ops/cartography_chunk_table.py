@@ -139,41 +139,18 @@ __all__ = [
     "write_chunk_table",
 ]
 
-#: Schema version for this op's emitted JSON artifact — always the first key
-#: written on disk (mirrors coordinator_core.distill.manifest_schema's
-#: convention, DR-228 § D6(v)). A standalone constant (not manifest_schema's
 #: SCHEMA_VERSION) because this artifact is a genuinely different shape
-#: (chunk-table, not scope/disposal/curation-status) with its own independent
-#: version lineage. This is the version emitted when `oversized_threshold` is
-#: absent — unchanged, so an absent-param call stays byte-identical to every
-#: prior run (AC1).
 SCHEMA_VERSION: int = 1
 
-#: Schema version emitted ONLY when the caller supplies `oversized_threshold`
-#: (the additive `oversized` field). Gated on the param rather than an
-#: unconditional bump: DoE's forward-version fail-loud consumer declines any
-#: run on an unrecognized schema_version, so bumping unconditionally would
-#: trip their gate on the default (no-threshold) path for zero delivered
-#: benefit — staff-eng review Finding 0, 2026-08-06.
-#:
 #: A member of `_KNOWN_SCHEMA_VERSIONS` below, so `check_schema_version`
-#: accepts an artifact this module itself just emitted — an op whose own
-#: reader rejects its own output is a latent break for the first real
-#: caller, not a deferrable gap. Adding a future version means adding it to
 #: `_KNOWN_SCHEMA_VERSIONS`, not just defining a new constant here.
 SCHEMA_VERSION_OVERSIZED: int = 2
 
-#: Every schema_version this module can consume without failing loud — the
-#: set `check_schema_version` validates against, not a single ceiling. A
-#: version outside this set is unknown-forward by definition, whether or not
-#: it happens to be numerically less than some other known version.
 _KNOWN_SCHEMA_VERSIONS: frozenset[int] = frozenset({SCHEMA_VERSION, SCHEMA_VERSION_OVERSIZED})
 
 
 class ChunkTableSchemaError(ValueError):
-    """Raised when a chunk-table JSON artifact carries an unknown FORWARD
-    schema_version (newer than this module knows) — fail-loud consumption,
-    per DR-228 § D6(v)."""
+    pass
 
 
 def check_schema_version(payload: dict[str, Any]) -> None:
@@ -255,14 +232,6 @@ def build_chunk_table_artifact(
 
 
 def write_chunk_table(target_root: Path, run_id: str, artifact: dict[str, Any]) -> Path:
-    """Write the chunk-table artifact to
-    <target_root>/state/scratch/cartography-chunk-table/<run_id>/chunk-table.json,
-    atomically (mkstemp + os.replace, DR-228 § D6(ii) create-or-full-rewrite
-    only — never a partial in-place edit of an existing artifact).
-
-    Write-confined (D6(i)): only this run-id's own subdirectory under
-    state/scratch/cartography-chunk-table/ is touched.
-    """
     run_dir = target_root / "state" / "scratch" / "cartography-chunk-table" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     target = run_dir / "chunk-table.json"
@@ -281,7 +250,6 @@ def write_chunk_table(target_root: Path, run_id: str, artifact: dict[str, Any]) 
             try:
                 os.unlink(tmp_path)
             except OSError:
-                # tmp file already gone (or the replace above already consumed it)
                 pass
     return target
 

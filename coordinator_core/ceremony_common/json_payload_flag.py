@@ -43,12 +43,6 @@ from typing import Any, NamedTuple, Optional, Sequence
 
 
 class JsonPayloadFlag(NamedTuple):
-    """The result of attempting to resolve one JSON-payload flag at argv
-    index `i`. `consumed` is the number of tokens belonging to this flag —
-    0 when `tokens[i]` is not one of `--<flag>` / `--<flag>-file` at all,
-    else 2 (the flag token plus its value). `error`, when set, carries no
-    program-name prefix — the caller prefixes its own, matching how each
-    of the eleven existing sites already renders its diagnostics."""
 
     consumed: int
     value: Optional[Any]
@@ -58,24 +52,6 @@ class JsonPayloadFlag(NamedTuple):
 def resolve_json_payload_flag(
     tokens: Sequence[str], i: int, flag: str = "decisions"
 ) -> JsonPayloadFlag:
-    """Resolves `--<flag>` or `--<flag>-file` at `tokens[i]`, returning a
-    `JsonPayloadFlag`. Neither form is preferred over the other here —
-    `detect_conflicting_payload_channels` is what rejects supplying both,
-    since that requires scanning the whole argv rather than one token.
-
-    The file form reads UTF-8 explicitly and parses with the same
-    `json.loads` the inline form uses, so a malformed payload produces the
-    identical diagnostic shape regardless of which channel carried it —
-    only the file path is appended, as provenance.
-
-    `utf-8-sig`, not `utf-8`: Windows PowerShell 5.1's
-    `Set-Content -Encoding utf8` writes a BOM, so the most obvious way for
-    an operator on this platform to produce a payload file yields bytes
-    that plain `utf-8` rejects with `Unexpected UTF-8 BOM`. That surfaces
-    as `malformed --decisions JSON`, pointing the reader at their own
-    payload — the same misdirection the file channel exists to end.
-    `utf-8-sig` strips a BOM when present and decodes plain UTF-8
-    unchanged when it is not."""
     inline_flag = f"--{flag}"
     file_flag = f"--{flag}-file"
     token = tokens[i]
@@ -169,11 +145,6 @@ def _inline_transport_hint(raw: str, flag: str) -> str:
 def detect_conflicting_payload_channels(
     tokens: Sequence[str], flag: str = "decisions"
 ) -> Optional[str]:
-    """Scans the whole argv for both `--<flag>` and `--<flag>-file` present
-    together — a usage error `resolve_json_payload_flag` cannot see from a
-    single token, since it only inspects one flag position at a time. The
-    caller invokes this once, before its token loop, and treats a non-`None`
-    return as a usage-error message to render in its own vocabulary."""
     inline_flag = f"--{flag}"
     file_flag = f"--{flag}-file"
     has_inline = inline_flag in tokens

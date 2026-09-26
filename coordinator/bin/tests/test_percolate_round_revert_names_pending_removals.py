@@ -1,23 +1,3 @@
-"""test_percolate_round_revert_names_pending_removals -- pins
-`_pending_removal_warning`, which stops the round's own revert instruction
-from reading as a free undo.
-
-`_cmd_round`'s architecture comment justifies declining AFTER the sync on the
-grounds that the sync is `git reset --hard HEAD && git clean -fd`-revertible,
-and both decline paths print that command to the operator. The claim holds for
-the bytes a round ADDS. It does not hold for removals already pending in the
-dest worktree: publish.py's `_report_published_diff` compares staging against
-that worktree, so a path already absent from it leaves nothing to observe and
-is never re-reported. The worktree is their only record, and `reset --hard`
-restores every one of them -- silently, by following the module's own
-documented remedy. Measured at 66 such paths on one mirror.
-
-Negative-spec: the warning NAMES, it never blocks. The revert stays the right
-move for an operator who wants the round undone; what was missing was that it
-is not free.
-
-Run: python3 -m pytest coordinator/bin/tests/test_percolate_round_revert_names_pending_removals.py -q
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -65,15 +45,11 @@ def _dest_with(files: dict, tmp_path: Path) -> Path:
 
 
 def test_clean_dest_produces_no_warning(tmp_path):
-    """Nothing pending, nothing to say -- the ordinary decline still prints
-    the bare remedy, unchanged."""
     dest = _dest_with({"a.md": "a\n"}, tmp_path)
     assert _mod._pending_removal_warning(str(dest)) == ""
 
 
 def test_pending_removals_are_counted_and_named(tmp_path):
-    """A path deleted from the worktree and still tracked at HEAD is the
-    class that `reset --hard` destroys and no later round can re-report."""
     dest = _dest_with({"a.md": "a\n", "b.md": "b\n", "c.md": "c\n"}, tmp_path)
     (dest / "b.md").unlink()
     (dest / "c.md").unlink()
@@ -84,10 +60,6 @@ def test_pending_removals_are_counted_and_named(tmp_path):
 
 
 def test_modified_and_untracked_files_are_not_counted(tmp_path):
-    """Only a `D` in the staged or worktree column counts. A modified or
-    untracked file is genuinely restored or discarded by the remedy with
-    nothing lost, so counting it would manufacture a warning about a cost
-    that is not being paid."""
     dest = _dest_with({"a.md": "a\n", "b.md": "b\n"}, tmp_path)
     (dest / "a.md").write_text("changed\n", encoding="utf-8")
     (dest / "new.md").write_text("new\n", encoding="utf-8")
@@ -99,12 +71,6 @@ def test_modified_and_untracked_files_are_not_counted(tmp_path):
 
 
 def test_staged_deletion_is_counted(tmp_path):
-    """A deletion `git add`-staged but not yet committed (`"D "` in porcelain)
-    is the same lost-record hazard as an unstaged one -- it is exactly the
-    state left behind by a prior invocation of this module's own commit leg
-    (`commit_pipeline.explicit_stage`'s `git add -- <paths>`) that died
-    between staging and committing, before this widened check existed only
-    the unstaged (`" D"`) case was caught."""
     dest = _dest_with({"a.md": "a\n", "b.md": "b\n"}, tmp_path)
     (dest / "b.md").unlink()
     _git(["git", "add", "-A"], dest)
@@ -115,8 +81,6 @@ def test_staged_deletion_is_counted(tmp_path):
 
 
 def test_unreadable_dest_says_nothing(tmp_path):
-    """Fails toward silence: a probe failure must not manufacture a warning
-    about a count it does not have."""
     not_a_repo = tmp_path / "nope"
     not_a_repo.mkdir()
     assert _mod._pending_removal_warning(str(not_a_repo)) == ""

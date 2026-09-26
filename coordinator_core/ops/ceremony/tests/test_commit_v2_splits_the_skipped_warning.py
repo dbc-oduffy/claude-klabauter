@@ -1,22 +1,3 @@
-"""The operator-facing half of the phantom-deletion flip: refused, not warned.
-
-`_handler` used to render every `no_delta` path, including one declared
-deleted that HEAD never carried, as "contributed nothing -- already at
-HEAD" -- a sentence that is FALSE for that case, and is what an untracked
-new file became once `_split_paths_for_commit_v2` misclassified it from the
-wrong cwd. `commit_paths` now raises `PhantomDeletionDeclared` for that
-member before anything is written, refusing the whole call, so this module
-pins the operator-facing half of that: `committed: False`, with the path
-named in the error, never folded into an "already at HEAD" warning
-(`state/audits/2026-08-31-committer-p0-root-cause-cwd-probe-becomes-deletion.md`,
-signature B).
-
-`coordinator_core/git/tests/test_declared_absent_from_head_is_split_out.py`
-pins the engine-side raise this reads. This module pins only what the
-operator sees.
-
-Throwaway `tmp_path` repos throughout; the working repo is never touched.
-"""
 
 from __future__ import annotations
 
@@ -102,10 +83,6 @@ def test_a_path_matching_head_still_gets_the_already_at_head_sentence(tmp_path):
 
 
 def test_both_kinds_together_still_refuses_the_whole_call_on_the_phantom(tmp_path):
-    # The collapse this fix exists to undo: one sentence covering both halves
-    # necessarily said "already at HEAD" about a path HEAD never had. Now the
-    # phantom refuses the whole call, so the ordinary no-delta member never
-    # gets a chance to land either.
     repo = _repo(tmp_path)
     (repo / "extra.md").write_bytes(b"extra\n")
     _git(["add", "--", "extra.md"], repo)

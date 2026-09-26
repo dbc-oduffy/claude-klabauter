@@ -131,16 +131,9 @@ from coordinator_core import _settings_home
 
 _PROG = "check-machine-local-regeneratability"
 
-# Coordinator-owned keys: the canonical set of keys expected classified in the
-# [regeneratability] table. Matched via _key_matches_regen_entry(): exact-string,
 # plus the two named family-prefix arms in FAMILY_PREFIX_ENTRIES below (plugin.mirrors
-# is a per-plugin namespace set via `machine-local set`); every other key requires an
-# exact match.
 # PROVENANCE ONLY — not load-bearing. Check 1 derives its key set from the
 # registry via `_declared_owned_keys`; see this module's docstring § SUPERSEDED
-# for why a hardcoded literal list cannot survive publication. Retained as the
-# bash parity artifact, so the verbatim-reproduction rule below governs this
-# list's fidelity to its oracle, NOT what the observer checks.
 COORDINATOR_OWNED_KEYS: List[str] = [
     "coordinator.python",
     "plugin.mirrors",
@@ -157,12 +150,7 @@ COORDINATOR_OWNED_KEYS: List[str] = [
     "repos.claude_klabauter",
 ]
 
-# Family-prefix match arms (AC8, docs/plans/2026-08-07-two-tier-engine-root-adopt-dr132.md
-# chunk C6b): a bare family entry in [regeneratability] satisfies any dotted key that has
-# it as a strict dotted-prefix. Named and bounded — not a general glob (see module
-# docstring negative-spec). "engine.working_repos" is DoE-declared on their plane; claude-klabauter
 # only supplies the arm that can match it, not the key itself (COORDINATOR_OWNED_KEYS is
-# deliberately NOT extended with any engine.working_repos.* spelling).
 FAMILY_PREFIX_ENTRIES: List[str] = [
     "plugin.mirrors",
     "engine.working_repos",
@@ -247,13 +235,6 @@ def _resolve_registry_dir() -> Path:
 
 
 def _parse_toml_file(path: Path, emit_errors: bool) -> Optional[dict]:
-    """Parse a TOML file in-process. Returns None (never raises) on any failure.
-
-    emit_errors mirrors the bash oracle's mode-gated stderr behavior: the "regen"
-    read (Check 1's table load) emits parse/import errors; the flat_str/flat_nondict
-    reads (Check 2's tracked/local key inventories) stay silent on the same failures,
-    exactly as the bash helper's `if mode == "regen":` gate did.
-    """
     if not path.is_file():
         return None
     try:
@@ -301,9 +282,7 @@ def _flat_nondict_keys_from_file(path: Path) -> List[str]:
     return [k for k, v in data.items() if not isinstance(v, dict)]
 
 
-#: Namespaces whose declared keys this observer holds to the classification
 #: requirement. NAMESPACES, not key literals, because a namespace survives
-#: percolation and a codename does not — see `_declared_owned_keys`.
 COORDINATOR_OWNED_NAMESPACES: List[str] = [
     "coordinator",
     "plugin",
@@ -353,22 +332,9 @@ def _declared_owned_keys(ml_dir: Path) -> List[str]:
             head, _, tail = key.partition(".")
             if head not in COORDINATOR_OWNED_NAMESPACES:
                 continue
-            # Both TOML spellings of the same declaration. `["repos.example-sim-repo"]`
-            # (quoted) parses to a flat dotted top-level key; `[repos.example-sim-repo]`
-            # (bare) parses to a NESTED table under `repos`. The machine-local
-            # registry uses the quoted form today, but the classification this
-            # observer checks is a property of the declaration, not of which
-            # spelling the file happens to use — reading only one shape makes
-            # the check silently blind to a registry written the other way.
             if tail:
                 declared.add(key)
             elif isinstance(value, dict):
-                # Only sub-tables are declarations. A bare `[repos]` table can
-                # also carry namespace-level scalars (`[repos]` + `default = "x"`),
-                # and admitting those would invent a `repos.default` key that was
-                # never declared -- then report it unclassified forever, which is
-                # the fabricated-finding half of the defect this function fixes,
-                # rebuilt from the other side.
                 declared.update(
                     f"{head}.{sub}"
                     for sub, sub_value in value.items()
@@ -384,23 +350,6 @@ def _tracked_toml_files(ml_dir: Path) -> List[Path]:
 
 
 def _ladder_snapshot(machine_local_bin: Path) -> Optional[Dict[str, str]]:
-    """One `dump --prefix repos --format json` call resolving every repos.* key
-    at once — batch counterpart to the per-key `machine-local get <key>` probe
-    this Check 2 arm used to spawn once per repos.* finding candidate (W6/C6,
-    2026-08-19 amplification burn-down; same primitive already proven in
-    `coordinator/bin/lib/cli_shared.py::machine_local_dump_repos` and
-    `coordinator_core/ops/register_discovered_repos.py::_registry_snapshot`,
-    whose docstring cites `_machine_local.py::cmd_dump` sharing `resolve_one`
-    with `get` — a dumped value is byte-identical to what a per-key `get`
-    would print).
-
-    Returns None (never {}) on a missing binary, timeout, or any subprocess/parse
-    failure or non-zero returncode — fail-safe: `_key_ladder_resolves` below then
-    treats every repos.* key as "does not resolve", so the key still gets
-    evaluated by the normal tracked/local check, matching the ladder-probe's
-    original `if ... ; then continue; fi` behaviour (a non-zero/errored probe
-    falls through, never crashes).
-    """
     if not machine_local_bin.is_file():
         return None
     try:
@@ -427,9 +376,6 @@ def _ladder_snapshot(machine_local_bin: Path) -> Optional[Dict[str, str]]:
 
 
 def _key_ladder_resolves(snapshot: Optional[Dict[str, str]], key: str) -> bool:
-    """True if `key` resolved in the batched ladder snapshot (or is missing
-    from a `None`/absent snapshot, which fails safe to "does not resolve").
-    """
     if snapshot is None:
         return False
     return bool(snapshot.get(key))
@@ -461,16 +407,10 @@ def main(argv: List[str]) -> int:
     ml_dir = _resolve_registry_dir()
     local_registry = ml_dir / "registry.local.toml"
 
-    # ------------------------------------------------------------------
-    # Collect ALL [regeneratability] table entries across tracked files
-    # ------------------------------------------------------------------
     regen_table: Dict[str, str] = {}
     for f in _tracked_toml_files(ml_dir):
         regen_table.update(_regen_table_from_file(f))
 
-    # ------------------------------------------------------------------
-    # Check 1: Unclassified coordinator-owned keys
-    # ------------------------------------------------------------------
     findings = 0
 
     for canon_key in _declared_owned_keys(ml_dir):
@@ -498,10 +438,6 @@ def main(argv: List[str]) -> int:
             )
             findings += 1
 
-    # ------------------------------------------------------------------
-    # Check 2: session-accumulated-must-survive-crash entries in gitignored
-    # .local.toml only (no tracked baseline) — install-surface-completeness defect.
-    # ------------------------------------------------------------------
     local_keys = _flat_str_from_file(local_registry)
 
     tracked_keys: set = set()
@@ -511,16 +447,10 @@ def main(argv: List[str]) -> int:
     machine_local_bin = Path(claude_dir) / "bin" / "machine-local"
     if os.name == "nt":
         # The bare shim is EXTENSION-LESS, so CreateProcess cannot exec it
-        # (WinError 193) — prefer the delivered .cmd sibling on Windows.
-        # Mirrors coordinator_core.install._shared.resolve_machine_local_cli.
         cmd_sibling = machine_local_bin.with_suffix(".cmd")
         if cmd_sibling.is_file():
             machine_local_bin = cmd_sibling
 
-    # One batched dump replacing a per-repos.*-key `machine-local get` spawn —
-    # see `_ladder_snapshot`. Computed unconditionally but cheaply (single
-    # spawn, memoised for the whole loop below); `_key_ladder_resolves` fails
-    # safe to "not resolved" if the binary is missing or the dump errors.
     ladder_snapshot = _ladder_snapshot(machine_local_bin)
 
     for key, val in regen_table.items():
@@ -530,9 +460,6 @@ def main(argv: List[str]) -> int:
         in_tracked = key in tracked_keys
         in_local = local_keys.get(key)
 
-        # For repos.* keys: consult the batched ladder snapshot before flagging as
-        # a gap. Presence in the dump means rung-2 autodiscovery (or another ladder
-        # rung) can derive the value on a fresh-machine clone — NOT a manual-re-entry gap.
         if key.startswith("repos.") and _key_ladder_resolves(ladder_snapshot, key):
             continue
 
@@ -564,7 +491,6 @@ def main(argv: List[str]) -> int:
             print("     by any current installer.", file=sys.stderr)
             findings += 1
 
-    # Exit 0 always (offer-shaped, never blocking)
     return 0
 
 

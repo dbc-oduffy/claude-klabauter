@@ -46,8 +46,6 @@ from coordinator_core.ops.emit.sections.rollups import (
     _review_trail_facts,
 )
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -60,18 +58,12 @@ def _write(path: Path, text: str) -> None:
 
 
 class TestCountDistillBacklogShape:
-    """Locks the ``{"pending_count": int, "threshold_days": 30, "computed_state": str}``
-    output shape (the exact keys ``count-distill-backlog.sh --format json`` emits via
-    ``jq -cn``)."""
 
     def test_missing_archive_root_raises(self, tmp_path: Path) -> None:
-        """No archive/completed dir → RuntimeError (bash oracle: ``exit 1`` + stderr)."""
         with pytest.raises(RuntimeError, match="archive root not found"):
             _count_distill_backlog(tmp_path / "repo", tmp_path / "coordinator")
 
     def test_empty_archive_dir_is_unknown(self, tmp_path: Path) -> None:
-        """archive/completed exists but has zero .md files → computed_state 'unknown'
-        (bash:143-146: archive_files_found == 0 → unknown, distinct from 'fresh')."""
         root = tmp_path / ".claude"
         (root / "archive" / "completed").mkdir(parents=True)
         coordinator_root = root / "plugins" / "coordinator-claude" / "coordinator"
@@ -85,7 +77,6 @@ class TestCountDistillBacklogShape:
         }
 
     def test_all_entries_within_cutoff_is_fresh(self, tmp_path: Path) -> None:
-        """Entries exist but none older than the 30-day cutoff → 'fresh', pending_count 0."""
         root = tmp_path / ".claude"
         today = datetime.date.today().isoformat()
         _write(
@@ -101,8 +92,6 @@ class TestCountDistillBacklogShape:
         assert result["threshold_days"] == 30
 
     def test_old_entry_not_in_wiki_is_pending(self, tmp_path: Path) -> None:
-        """An entry older than cutoff whose slug is absent from the wiki corpus counts as
-        pending (bash:97-122 grep -qFl miss)."""
         root = tmp_path / ".claude"
         old_day = (datetime.date.today() - datetime.timedelta(days=45)).isoformat()
         _write(
@@ -120,7 +109,6 @@ class TestCountDistillBacklogShape:
         }
 
     def test_old_entry_present_in_wiki_is_not_pending(self, tmp_path: Path) -> None:
-        """Same shape as above, but the slug DOES appear in the wiki corpus → not pending."""
         root = tmp_path / ".claude"
         old_day = (datetime.date.today() - datetime.timedelta(days=45)).isoformat()
         _write(
@@ -139,7 +127,6 @@ class TestCountDistillBacklogShape:
         }
 
     def test_chain_non_null_used_as_slug(self, tmp_path: Path) -> None:
-        """chain: <slug> (non-null) overrides filename-derived slug (bash:99-101)."""
         root = tmp_path / ".claude"
         old_day = (datetime.date.today() - datetime.timedelta(days=45)).isoformat()
         _write(
@@ -154,7 +141,6 @@ class TestCountDistillBacklogShape:
         assert result["pending_count"] == 0
 
     def test_six_or_more_pending_is_stale(self, tmp_path: Path) -> None:
-        """pending_count >= 6 → 'stale' band (bash:150-154)."""
         root = tmp_path / ".claude"
         old_day = (datetime.date.today() - datetime.timedelta(days=45)).isoformat()
         for i in range(6):
@@ -170,9 +156,6 @@ class TestCountDistillBacklogShape:
         assert result["computed_state"] == "stale"
 
     def test_missing_created_frontmatter_skipped_not_errored(self, tmp_path: Path) -> None:
-        """A non-empty .md with no ``created:`` line is a counted-but-skipped legacy
-        rollup file (bash: `[[ -z "$created" ]] && continue`) — contributes to
-        archive_files_found (so state isn't 'unknown') but not to pending_count."""
         root = tmp_path / ".claude"
         _write(
             root / "archive" / "completed" / "2026-05" / "legacy-rollup.md",
@@ -191,18 +174,12 @@ class TestCountDistillBacklogShape:
     def test_archive_scan_is_rooted_at_repo_root_not_coordinator_root(
         self, tmp_path: Path
     ) -> None:
-        """The archive/completed scan reads *repo_root* — the emitting repo's own
-        archive, parity with the docs/bug-sweep signals beside this one — never the
-        coordinator root's install-layout-inferred tree. A populated repo_root archive
-        must be counted even when coordinator_root has no archive of its own at all."""
         repo_root = tmp_path / "some-emitting-repo"
         old_day = (datetime.date.today() - datetime.timedelta(days=45)).isoformat()
         _write(
             repo_root / "archive" / "completed" / "2026-05" / "2026-05-01-undistilled-a1b2c3.md",
             f"---\ncreated: {old_day}\nchain: null\n---\nbody\n",
         )
-        # A coordinator_root elsewhere entirely, with no archive/completed reachable
-        # from it at all (not even via _resolve_distill_root's ladder/fallback).
         coordinator_root = tmp_path / "unrelated-coordinator-checkout"
         coordinator_root.mkdir(parents=True)
 
@@ -212,11 +189,6 @@ class TestCountDistillBacklogShape:
 
 
 class TestCollectDistillBacklogUsesRepoRoot:
-    """``collect()``'s distill-backlog signal must read ``ctx.repo_root``'s own
-    archive/completed, matching its ``docs``/``bug-sweep`` siblings in the same
-    function — the defect this module exists to close (tc-3 always reported
-    pending_count=0/computed_state='unknown' because it scanned ctx.coordinator_root
-    instead)."""
 
     def test_collect_reports_nonzero_pending_from_repo_root_archive(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -257,9 +229,6 @@ class TestCollectDistillBacklogUsesRepoRoot:
     reason="chmod 0o000 permission denial is not reliable on Windows or as root",
 )
 class TestCountDistillBacklogUnreadableSubtree:
-    """Silent-success guard (state/audits/2026-07-22 audit): a chmod'd dated subdirectory
-    must degrade the verdict to 'unknown' — never 'fresh'/'mild' — and must never let the
-    caller compute overdue=False from an undercounted pending_count."""
 
     def test_unreadable_subdir_with_many_pending_entries_is_unknown_not_fresh(
         self, tmp_path: Path
@@ -270,11 +239,9 @@ class TestCountDistillBacklogUnreadableSubtree:
         root = tmp_path / ".claude"
         old_day = (datetime.date.today() - datetime.timedelta(days=45)).isoformat()
 
-        # A readable, genuinely-clean subdir (nothing pending here).
         readable_dir = root / "archive" / "completed" / "2026-06"
         _write(readable_dir / "fresh-entry.md", f"---\ncreated: {(datetime.date.today()).isoformat()}\nchain: null\n---\nbody\n")
 
-        # A subdir hiding 6 old, undistilled entries — chmod'd unreadable after creation.
         hidden_dir = root / "archive" / "completed" / "2026-05"
         for i in range(6):
             _write(
@@ -304,9 +271,6 @@ class TestCountDistillBacklogUnreadableSubtree:
     def test_routine_signals_collect_overdue_not_false_on_skipped_subtree(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """routine_signals.collect()'s distill-backlog signal must not report
-        overdue=False when _count_distill_backlog reports a skipped subtree — the
-        pending_count in that case is an undercount, not a verified-clean signal."""
         monkeypatch.setattr(
             routine_signals,
             "_count_distill_backlog",
@@ -343,8 +307,6 @@ class TestCountDistillBacklogUnreadableSubtree:
 
 
 class TestDistillSlugDerivation:
-    """Locks the filename→slug glob-strip semantics (bash `${base%-??????}` /
-    `${no_hash#????-??-??-}`) independent of the full-scan integration tests above."""
 
     def test_chain_wins_over_filename(self) -> None:
         assert _distill_slug("/x/2026-05-01-foo-a1b2c3.md", "explicit-chain") == "explicit-chain"
@@ -373,7 +335,6 @@ class TestResolveDistillRoot:
     def test_falls_back_to_claude_home_env_when_absent(self, tmp_path: Path, monkeypatch) -> None:
         fallback_home = tmp_path / "fallback-home"
         monkeypatch.setenv("CLAUDE_HOME", str(fallback_home))
-        # coordinator_root nested somewhere with NO archive/completed 4 levels up.
         coordinator_root = tmp_path / "elsewhere" / "coordinator"
         coordinator_root.mkdir(parents=True)
 
@@ -381,10 +342,6 @@ class TestResolveDistillRoot:
 
 
 class TestRunStalenessNative:
-    """Locks ``_run_staleness_native``'s degrade-to-"unknown" contract (bash: ``bash "$script"
-    2>/dev/null || echo "UNKNOWN"``) — the exception path, the non-zero-exit path, and the
-    None-state-root short-circuit, independent of which staleness module (check-weekly /
-    check-arch-audit) is wired in."""
 
     def test_exception_degrades_to_unknown(self, tmp_path: Path) -> None:
         def _boom(argv: list[str]) -> int:
@@ -407,11 +364,6 @@ class TestRunStalenessNative:
         assert _run_staleness_native(_ok, str(tmp_path)) == "fresh"
 
     def test_none_state_root_short_circuits_without_calling_main_fn(self) -> None:
-        """Finding 1 (P1, sliceroutine-signals-ac5-gate-slice2): when the caller could
-        not resolve a coordinator state root, this must degrade to "unknown" WITHOUT
-        calling main_fn at all — calling it with an empty argv would let the staleness
-        module fall through to its own cwd-based _resolve_state_root(), silently
-        reintroducing the implicit-cwd dependency AC-5 exists to eliminate."""
 
         def _explode(argv: list[str]) -> int:
             raise AssertionError("main_fn must not be called when state_root is None")
@@ -420,11 +372,6 @@ class TestRunStalenessNative:
 
 
 class TestResolveCoordinatorStateRoot:
-    """Locks ``_resolve_coordinator_state_root``'s four branches (Finding 3, sliceroutine-
-    signals-ac5-gate-slice2): meta-repo cwd routes to the engine root/state, sibling-repo cwd
-    routes to <git-root>/state, not-a-git-repo returns None, and meta-repo-but-engine-root-
-    unresolvable returns None. Mirrors check_weekly_staleness's own
-    test_resolve_state_root_* branch coverage, applied to the explicit-cwd variant."""
 
     def test_not_a_git_repo_returns_none(self, monkeypatch, tmp_path: Path) -> None:
         monkeypatch.setattr(routine_signals, "_cws_git_root", lambda cwd=None: None)
@@ -466,7 +413,6 @@ class TestCommitsSinceLastBatch:
     binding: what they pin is which function that caller resolves."""
 
     def _repo(self, tmp_path: Path, subjects: list[str]) -> Path:
-        """Build a throwaway repo whose commits carry *subjects*, oldest first."""
         root = tmp_path / "cadence-repo"
         root.mkdir()
         run_git(["-C", str(root), "init", "-q"])
@@ -492,7 +438,6 @@ class TestCommitsSinceLastBatch:
             root, {"docs": "update-docs", "bug": "bug-sweep|bug_sweep"}
         )
 
-        # HEAD is "feat: c"; bug-sweep is 2 back, update-docs 4 back.
         assert result == {"docs": 4, "bug": 2}
         assert len(spawns) == 1, f"one spawn for all patterns, got {len(spawns)}: {spawns}"
 
@@ -506,8 +451,6 @@ class TestCommitsSinceLastBatch:
         assert result == {"docs": commit_delta._VERY_STALE}
 
     def test_marker_beyond_the_depth_cap_reads_very_stale(self, tmp_path, monkeypatch) -> None:
-        """Past the cap the honest integer and the sentinel say the same thing — both land
-        in the same 'stale / overdue' band, which is all `collect()` branches on."""
         monkeypatch.setattr(commit_delta, "_SCAN_DEPTH", 3)
         root = self._repo(tmp_path, ["update-docs run", "a", "b", "c", "d"])
         result = commit_delta._commits_since_last_batch(root, {"docs": "update-docs"})
@@ -520,9 +463,6 @@ class TestCommitsSinceLastBatch:
         assert result == {"docs": commit_delta._VERY_STALE, "bug": commit_delta._VERY_STALE}
 
     def test_never_asks_git_to_do_the_matching(self, tmp_path, monkeypatch) -> None:
-        """`--grep` is what made the walk history-scaled. Matching belongs in Python,
-        against a bounded slice — a reader reintroducing `--grep` here reintroduces the
-        O(repo history) cost this rebuild removed."""
         root = self._repo(tmp_path, ["update-docs run"])
         seen: list[list[str]] = []
         real = commit_delta.run_git
@@ -604,7 +544,6 @@ class TestReviewTrailFacts:
             "2026-07-20-101500-sess-a.json",
             {"sha_range": "aaa..bbb", "reviewer": "code-reviewer", "verdict": "OK"},
         )
-        # Missing sha_range — quarantined, excluded from both count and verdicts.
         self._write_record(
             state_root,
             "2026-07-20-101600-sess-b.json",
@@ -633,15 +572,6 @@ class TestReviewTrailFacts:
 
 
 class TestReviewTrailFactsPeriodScope:
-    """The week row's review legs count the week, not the lifetime.
-
-    ``_review_trail_facts`` took no window and counted the ENTIRE live+archive trail, so
-    a week row published ``chains_completed`` for its ISO week beside
-    ``reviews_conducted``/``verdicts`` for all time under one ``period`` label — measured
-    on this repo at 35 beside 3167. Same defect class as the completion legs fixed at
-    130435f60c, one field over, and a flat contradiction of the ``fact_window`` the row
-    now carries.
-    """
 
     def _write_record(self, root: Path, name: str, verdict: str = "OK") -> None:
         path = root / "review-trail" / name
@@ -663,7 +593,6 @@ class TestReviewTrailFactsPeriodScope:
         state_root = tmp_path / "state"
         self._write_record(state_root, "2026-07-06-101500-in-a.json", "OK")
         self._write_record(state_root, "2026-07-12-101500-in-b.json", "warn")
-        # One day before the window opens and one day after it closes — the off-by-one
         # pair, since both bounds are INCLUSIVE.
         self._write_record(state_root, "2026-07-05-101500-out-before.json", "OK")
         self._write_record(state_root, "2026-07-13-101500-out-after.json", "OK")
@@ -686,11 +615,6 @@ class TestReviewTrailFactsPeriodScope:
     def test_undatable_filename_is_excluded_not_attributed_to_the_window(
         self, tmp_path: Path
     ) -> None:
-        """A stem too short to carry a date reads 1970-01-01 — outside every real window.
-
-        Pins the direction of the failure: an unreadable date drops the record from a
-        period-scoped count rather than silently crediting it to the current period.
-        """
         state_root = tmp_path / "state"
         self._write_record(state_root, "short.json", "OK")
 
@@ -702,11 +626,6 @@ class TestReviewTrailFactsPeriodScope:
     def test_week_row_facts_and_fact_window_agree(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        """The emitted row's window and its review legs come from the same two values.
-
-        The regression this forecloses is the two drifting apart again — a row whose
-        ``fact_window`` says one thing while its counts were taken over another.
-        """
         from coordinator_core.ops.emit.sections import rollups
 
         state_root = tmp_path / "state"
@@ -732,8 +651,6 @@ class TestReviewTrailFactsPeriodScope:
 
         week = next(r for r in recs if r["grain"] == "week")
         assert captured["window"] == (week["fact_window"]["start"], week["fact_window"]["end"])
-        # 2026-07-08 is ISO 2026-W28 (Mon 07-06 .. Sun 07-12): the in-window record is
-        # counted and the June one is not — the lifetime leg would have returned 2.
         assert week["fact_window"] == {
             "kind": "iso-week",
             "start": "2026-07-06",

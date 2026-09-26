@@ -30,11 +30,6 @@ from coordinator_core.write_guards.block_illegal_filename import _OVERRIDE_ENV, 
 
 
 def illegal_path_refusal(assembled: Mapping[str, object]) -> Optional[str]:
-    """`None` when every path the commit adds or modifies is legal on every
-    checkout platform; otherwise one refusal line per offending path.
-
-    `assembled` is `_commit_via_head_spine`'s `{path: (mode, sha) | _ABSENT}`;
-    a value that is not a `(mode, sha)` pair is a deletion."""
     if os.environ.get(_OVERRIDE_ENV) == "1":
         return None
     refusals = []

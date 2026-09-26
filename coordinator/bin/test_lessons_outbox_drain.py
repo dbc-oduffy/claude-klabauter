@@ -1,22 +1,3 @@
-"""Fixture-based end-to-end test for lessons-outbox-drain.py.
-
-Builds fake peer repos as plain temp directories (never a real peer repo — the whole point
-of this test is that the drain can be exercised without touching sibling working trees).
-`read`/`dedup_entries` operate purely on the filesystem and never shell out to git, so the
-fixtures need no git state of their own.
-
-Covers both surviving subcommands: read (+dedupe across two peers) and assert-empty
-(peer-root enumeration monkeypatched via `drain.resolve_roots` — never a real peer repo,
-never the real machine-local registry, never the real state/lessons-outbox/). The peer-
-fetch/writeback/manifest model (`sync`, `write-manifest`, `writeback`, `record-outcome`)
-this test used to also cover was retired from the script itself — see its module docstring
-— once the central-write architecture made per-peer writeback dead weight; this test was
-trimmed to match.
-
-Converted from a hand-rolled runner (`lessons-outbox-drain.test.py`) to a pytest-collectable
-module; the sequential fixture-building narrative is preserved as one function since later
-steps depend on state built by earlier ones.
-"""
 
 from __future__ import annotations
 
@@ -52,7 +33,6 @@ def _write_outbox_entry(peer: Path, filename: str, **fields) -> Path:
 def test_lessons_outbox_drain(tmp_path: Path) -> None:
     tmp = tmp_path
 
-    # --- fixture peers ---
     peer_a = tmp / "peer-a"
     peer_b = tmp / "peer-b"
 
@@ -77,7 +57,6 @@ def test_lessons_outbox_drain(tmp_path: Path) -> None:
         change_kind="wiki-append", target_wiki="docs/wiki/learn-lessons-routing.md",
     )
 
-    # --- read + dedupe across two peers ---
     entries_a, warn_a = drain.read_peer_outbox(peer_a)
     entries_b, warn_b = drain.read_peer_outbox(peer_b)
     assert len(entries_a) == 2, f"read_peer_outbox(peer_a) expected 2 entries, got {len(entries_a)}"
@@ -95,10 +74,6 @@ def test_lessons_outbox_drain(tmp_path: Path) -> None:
         f"dedup merged entry sources expected [peer-a, peer-b], got {from_repos}"
     )
 
-    # --- dedup_entries: target_wiki suffix-spelling variance (A9) ---
-    # Two entries, same (title, change_kind), one spelled with the `.md` suffix and
-    # one without — the raw triple treats these as distinct; the canonicalized triple
-    # must treat them as a convergence.
     entry_suffix_bare = {
         "id": "c-uuid-1", "created": "2026-07-22T10:00:00Z", "from_repo": "peer-c",
         "title": "Same lesson, bare target_wiki spelling", "body": "Body C1.",
@@ -125,15 +100,6 @@ def test_lessons_outbox_drain(tmp_path: Path) -> None:
         f"got {merged_suffix[0]['sources']}"
     )
 
-    # --- dedup_entries: change_kind-gated canonicalization (A7/A9 tool-alignment fix) ---
-    # Two wiki-append entries whose target_wiki differs only by directory-prefix
-    # spelling ("test-design-discipline.md" vs "docs/wiki/test-design-discipline.md")
-    # — the FULL collapse (now shared with coordinator-lesson-promote's own
-    # normalization via target_wiki_canon) must treat these as the same target for
-    # a wiki-targeting change_kind, closing the promote/drain canonicalization
-    # mismatch (promote writes 'docs/wiki/foo.md'; the corpus also has legacy bare
-    # 'foo.md' entries that never composed with promote's form under the old
-    # suffix-only drain canonicalization).
     entry_prefix_bare = {
         "id": "e-uuid-1", "created": "2026-07-23T10:00:00Z", "from_repo": "peer-e",
         "title": "Same lesson, directory-prefix spelling variance", "body": "Body E1.",
@@ -156,9 +122,6 @@ def test_lessons_outbox_drain(tmp_path: Path) -> None:
         f"got {merged_prefix[0]['sources']}"
     )
 
-    # Non-wiki change_kinds must NOT get the directory-prefix collapse — two distinct
-    # skill-edit entries whose target_wiki both end in the shared basename SKILL.md
-    # must NOT merge just because a naive basename-only collapse would equate them.
     entry_skill_a = {
         "id": "f-uuid-1", "created": "2026-07-23T11:00:00Z", "from_repo": "peer-g",
         "title": "Different skill entirely", "body": "Body F1.",
@@ -178,11 +141,6 @@ def test_lessons_outbox_drain(tmp_path: Path) -> None:
         f"got {len(merged_skill)}: {merged_skill}"
     )
 
-    # --- read_peer_outbox: leading+trailing `---` document markers must still parse ---
-    # Real on-disk entries in both claude-klabauter and DoE-claude carry this shape;
-    # `yaml.safe_load` (single-document) rejects it as "expected a single document in
-    # the stream" — verified against the real corpus, every entry failed to parse
-    # under the pre-fix code. `read_peer_outbox` must recover the first document.
     wrapped_peer = tmp / "wrapped-peer"
     wrapped_outbox = wrapped_peer / "state" / "lessons-outbox"
     wrapped_outbox.mkdir(parents=True)
@@ -207,8 +165,6 @@ def test_lessons_outbox_drain(tmp_path: Path) -> None:
         f"read_peer_outbox(wrapped `---` entry) parsed wrong id: {wrapped_entries[0]}"
     )
 
-    # --- read: peer_path defaults to cwd when omitted (nargs="*" -> Path.cwd() fallback,
-    # since SKILL.md has only ever invoked `read` with exactly one root — the drain's own) ---
     cwd_peer = tmp / "cwd-peer"
     _write_outbox_entry(
         cwd_peer, "2026-07-24T09-00-00-cwd-default.yaml",
@@ -224,9 +180,6 @@ def test_lessons_outbox_drain(tmp_path: Path) -> None:
         os.chdir(prior_cwd)
     assert cwd_default_output == 0, f"main(read, no peer_path) expected exit 0, got {cwd_default_output}"
 
-    # --- assert-empty: detector for the one-root invariant (never a real peer repo;
-    # resolve_roots() is monkeypatched to a fixture peer-root list so this test never
-    # touches the real machine-local registry or any real state/lessons-outbox/ tree) ---
     self_root = tmp / "assert-empty-self"
     self_root.mkdir()
 
@@ -246,20 +199,16 @@ def test_lessons_outbox_drain(tmp_path: Path) -> None:
         "id: old\n", encoding="utf-8"
     )
 
-    peer_absent = tmp / "ae-peer-does-not-exist"  # deliberately never created
+    peer_absent = tmp / "ae-peer-does-not-exist"
 
-    # (d) self-root excluded, (e) absent peer skipped-with-reason — fixture roots
-    # returned in a deliberately non-canonical order, including the self-root itself
-    # and a trailing slash variant of it, to prove the path-normalized subtraction.
     fixture_roots = [
-        str(self_root) + os.sep,  # trailing-slash variant of the self-root
+        str(self_root) + os.sep,
         str(peer_verified_empty),
         str(peer_drained_only),
         str(peer_absent),
     ]
     drain.resolve_roots = lambda: fixture_roots
 
-    # (a) all (non-stranded) peers empty -> PASS
     result_pass = drain.assert_empty(self_root)
     assert result_pass["status"] == "PASS", f"assert_empty(all empty) expected PASS, got {result_pass}"
     assert str(self_root.resolve()) not in result_pass["checked"] and str(self_root.resolve()) not in [
@@ -270,7 +219,6 @@ def test_lessons_outbox_drain(tmp_path: Path) -> None:
         f"assert_empty(all empty) expected [ae-peer-drained-only, ae-peer-empty] in checked "
         f"(drained/-only peer must count as verified-empty, not skipped or FAIL), got {checked_names}"
     )
-    # (e) absent peer root is skipped-with-reason, never counted verified-empty
     skipped_names = {Path(s["peer_root"]).name: s["reason"] for s in result_pass["skipped"]}
     assert "ae-peer-does-not-exist" in skipped_names, (
         f"assert_empty: registered-but-absent peer root must be skipped-with-reason, "
@@ -281,7 +229,6 @@ def test_lessons_outbox_drain(tmp_path: Path) -> None:
         f"got {skipped_names['ae-peer-does-not-exist']!r}"
     )
 
-    # (b) one peer non-empty -> FAIL, correct root + count reported
     fixture_roots_with_stranded = fixture_roots + [str(peer_stranded)]
     drain.resolve_roots = lambda: fixture_roots_with_stranded
     result_fail = drain.assert_empty(self_root)
@@ -296,9 +243,7 @@ def test_lessons_outbox_drain(tmp_path: Path) -> None:
     )
 
     # CLI exit-code contract: assert-empty is FAIL-LOUD (non-zero on FAIL), the
-    # deliberate opposite of learn-lessons-roots.py's always-exit-0 convention — this
-    # divergence is the entire point of the subcommand (see module docstring).
-    drain.resolve_roots = lambda: fixture_roots  # no stranded peer
+    drain.resolve_roots = lambda: fixture_roots
     exit_pass = drain.main(["assert-empty", str(self_root)])
     assert exit_pass == 0, f"main(assert-empty, all empty) expected exit 0, got {exit_pass}"
 

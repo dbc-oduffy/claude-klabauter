@@ -23,7 +23,6 @@ _BIN_DIR = Path(__file__).parent.parent
 
 
 def _load_module():
-    """Load refresh-plugin-live-install.py by file path (hyphenated name bypass)."""
     spec = importlib.util.spec_from_file_location(
         "refresh_plugin_live_install_argv_contract",
         _BIN_DIR / "refresh-plugin-live-install.py",
@@ -39,20 +38,6 @@ ArgvCommandError = _mod.ArgvCommandError
 
 
 def test_windows_backslash_path_survives_argv_parsing(tmp_path):
-    # bare `shlex.split` runs POSIX mode on every platform and treats
-    # `\` as a C-style escape character, so a Windows-authored drive-letter
-    # path with backslash separators (abs-path-ok: illustrative example, not
-    # a real path) silently mangles down to a garbled token — and the
-    # mangled token then surfaced verbatim in the ArgvCommandError
-    # diagnostic, accusing the operator of a path they never typed.
-    # `_win_safe_shlex_split` must preserve the backslashes intact. Uses a
-    # real resolvable file (this test's own tmp_path target) so the
-    # resolvability check downstream of the split also passes, proving the
-    # fix end-to-end rather than just at the tokenizer.
-    # POSIX filesystems treat `\` as an ordinary filename character, not a
-    # separator — so a file literally named "tools\refresh.exe" (single
-    # path component, backslash embedded) is a faithful macOS-runnable
-    # stand-in for a Windows drive-letter path's backslash separators.
     windows_shaped_name = "tools\\refresh.exe"
     fake_exe = tmp_path / windows_shaped_name
     fake_exe.parent.mkdir(parents=True, exist_ok=True)
@@ -79,9 +64,6 @@ def test_unbalanced_quotes_raise_with_diagnostic():
 
 
 def test_shell_word_form_with_unresolvable_executable_raises():
-    """A shell-word-form value (e.g. VAR=value prefix or a non-existent
-    binary) fails the argv-only contract with a diagnostic naming the
-    offending config key, not a bare traceback or silent skip."""
     with pytest.raises(ArgvCommandError) as excinfo:
         _parse_argv_command(
             "FOO=bar ./definitely-not-a-real-executable-xyz", "plugin.mirrors.demo.refresh_cmd"
@@ -98,9 +80,6 @@ def test_empty_string_raises_with_diagnostic():
 
 
 def test_copy_install_snapshot_restore_fires_on_parse_failure(tmp_path):
-    """Site 2 (_handle_copy_install): an unparseable/unresolvable refresh_cmd
-    must take the same failure route a non-zero return code does — the
-    existing snapshot-restore-on-failure path fires unchanged."""
     plugins_dir = tmp_path / "plugins"
     live_path = plugins_dir / "my-plugin"
     live_path.mkdir(parents=True)
@@ -129,8 +108,6 @@ def test_copy_install_snapshot_restore_fires_on_parse_failure(tmp_path):
 
 
 def test_copy_install_snapshot_restore_fires_on_nonzero_rc(tmp_path):
-    """Baseline: the pre-existing non-zero-rc snapshot-restore path still
-    fires for an argv-shaped command that runs but exits non-zero."""
     plugins_dir = tmp_path / "plugins"
     live_path = plugins_dir / "my-plugin"
     live_path.mkdir(parents=True)

@@ -36,8 +36,6 @@ from coordinator_core.ops.fleet.memo_check_addressee import (
 import pytest
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -45,20 +43,12 @@ pytestmark = [
 
 
 def _run(result):
-    """Run an async coroutine synchronously, or pass a plain (already
-    computed) result through unchanged (2026-08-07: `_memo_check_addressee`
-    is now plain `def`)."""
     if asyncio.iscoroutine(result):
         return asyncio.run(result)
     return result
 
 
 def _make_claude_home(tmp_path: Path, receiver_repos: dict) -> Path:
-    """Minimal machine-local registry fixture (mirrors test_memo_list.py's factory).
-
-    receiver_repos: {registry_key_suffix: repo_path_str} e.g. {"project_rag": "/..."}
-    -> writes "repos.project_rag" = <path> in registry.local.toml.
-    """
     claude_home = tmp_path / "claude-home"
     machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
     machine_local.mkdir(parents=True)
@@ -74,11 +64,6 @@ def _make_claude_home(tmp_path: Path, receiver_repos: dict) -> Path:
 
 
 def _registered_doe_claude(machine_local: Path) -> Path | None:
-    """Return this fixture's `repos.doe_claude` path, or None if unregistered.
-
-    Handles both spellings the fixtures use: the flat quoted-dotted key
-    (`"repos.doe_claude" = "..."`) and the nested `[repos]` table.
-    """
     import tomllib
 
     for fname in ("registry.local.toml", "registry.toml"):
@@ -99,14 +84,6 @@ def _registered_doe_claude(machine_local: Path) -> Path | None:
 def _write_doe_manifest(
     claude_home: Path, tmp_path: Path, manifest: dict, doe_root: Path | None = None
 ) -> None:
-    """Write a .doe-root sentinel + coordinator-registry.manifest.json fixture.
-
-    Mirrors test_memo_send.py's `_make_doe_manifest`: the sentinel lands on the
-    DR-071 ladder's durable rung (`<settings-home>/machine-local/.doe-root`),
-    and the doe-root defaults to this fixture's own `repos.doe_claude` when
-    registered — the ladder's canonical registry rung outranks the pointer file,
-    and on a real machine the two agree.
-    """
     machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
     doe_root = (
         doe_root or _registered_doe_claude(machine_local) or (tmp_path / "doe-root")
@@ -121,7 +98,6 @@ def _write_doe_manifest(
 
 
 def _git_common_dir(repo_root: Path) -> Path:
-    """Init a minimal git repo at repo_root and return its .git common dir."""
     import subprocess
 
     subprocess.run(
@@ -130,10 +106,6 @@ def _git_common_dir(repo_root: Path) -> Path:
     )
     return (repo_root / ".git").resolve()
 
-
-# ===========================================================================
-# 1. MATCH
-# ===========================================================================
 
 class TestMatch:
     def test_self_resolves_to_same_repo_as_to(self, tmp_path, monkeypatch):
@@ -159,9 +131,7 @@ class TestMatch:
         assert candidate["to_repo"] == str(self_repo)
 
 
-# ===========================================================================
 # 2. MISMATCH
-# ===========================================================================
 
 class TestMismatch:
     def test_to_resolves_to_a_different_registered_repo(self, tmp_path, monkeypatch):
@@ -191,9 +161,7 @@ class TestMismatch:
         assert candidate["to_repo"] == str(other_repo)
 
 
-# ===========================================================================
 # 3. UNRESOLVED + suggestion (defect 2, GREEN)
-# ===========================================================================
 
 class TestUnresolvedWithSuggestion:
     def test_near_miss_receiver_gets_did_you_mean_suggestion(self, tmp_path, monkeypatch):
@@ -223,10 +191,6 @@ class TestUnresolvedWithSuggestion:
         assert "Did you mean" in candidate["note"]
         assert "claude-klabauter-em" in candidate["note"]
 
-
-# ===========================================================================
-# 4. setup errors
-# ===========================================================================
 
 class TestSetupErrors:
     def test_missing_to_rejected(self):
@@ -264,35 +228,13 @@ class TestSetupErrors:
         assert result["exit_code"] == 1
 
 
-# ===========================================================================
-# 4b. resolver-exception -> setup-error mapping (Review: code-reviewer, Finding 2)
-# ===========================================================================
-
 class TestResolverExceptionMapping:
-    """Cover the RegistryReadError/AmbiguousReceiverError -> setup-error mapping.
-
-    Dispatch-brief correctness property #4: "Resolver-read failures fail loud,
-    never fall back to a scan — RegistryReadError and AmbiguousReceiverError
-    from resolve_receiver_inbox must both become setup-error envelopes." The
-    handler code already implements this; these tests are the regression net
-    the review found missing.
-    """
 
     def test_corrupt_registry_returns_setup_error(self, tmp_path, monkeypatch):
-        """A present-but-unparseable registry.toml -> RegistryReadError -> exit_code:1.
-
-        Mirrors test_memo_resolver.py's TestReadRegistryReposFailLoud corrupt-file
-        fixture, but exercised through the handler's own exception->envelope path.
-        """
-        # `repo_root` reaches `main_worktree_root` as the socket-authoritative
-        # common dir, which refuses to guess a worktree for a path that is
-        # neither named `.git` nor has one beneath it — a bare tmp_path dies
-        # there before the registry read this test is about.
         (tmp_path / ".git").mkdir()
         claude_home = tmp_path / "claude-home"
         machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
         machine_local.mkdir(parents=True)
-        # Invalid TOML: unterminated string.
         (machine_local / "registry.toml").write_text(
             'schema = 1\n"repos.broken" = "unterminated\n', encoding="utf-8"
         )
@@ -304,14 +246,6 @@ class TestResolverExceptionMapping:
         assert result["exit_code"] == 1
 
     def test_ambiguous_central_receiver_returns_setup_error(self, tmp_path, monkeypatch):
-        """Two distinct central ids fan in to two different registered repos ->
-        AmbiguousReceiverError -> exit_code:1.
-
-        Mirrors test_memo_resolver.py's TestAmbiguousCentralReceiver fixture; `to`
-        is itself one of the ambiguous central ids.
-        """
-        # See the sibling test: `main_worktree_root` refuses a bare tmp_path as
-        # the common dir, ahead of the ambiguity this test asserts on.
         (tmp_path / ".git").mkdir()
         claude_home = _make_claude_home(
             tmp_path,
@@ -341,27 +275,8 @@ class TestResolverExceptionMapping:
         assert result["exit_code"] == 1
 
 
-# ===========================================================================
-# 5. defect-1 redirect-MATCH — DoE promoted identity.redirectAliases 2026-07-21
-# ===========================================================================
-
 class TestRedirectMatchDefect1:
     def test_redirect_alias_matches_central_self(self, tmp_path, monkeypatch):
-        """`to` is a DoE redirect alias literal; self resolves to the central repo.
-
-        Manifest declares `identity.redirectAliases: ["coordinator-claude"]` (the
-        field DoE promoted 2026-07-21) plus a SINGLE central receiver id,
-        `"doe-claude-em"`. read_redirect_aliases() picks up the normalized `to`
-        ("coordinator-claude"), so the redirect branch fires: it takes
-        `sorted(central_ids)[0]` == `"doe-claude-em"` and resolves it through
-        `resolve_receiver_inbox()`, which (via `convention_repo_key`) maps to
-        registry key `repos.doe_claude` — registered here to the SAME repo as
-        self. Two distinct repo paths (self_root from the git common_dir, to_root
-        from the registry) that happen to be the same directory -> MATCH.
-        Manifest-driven end to end: no alias or central-id literal is hardcoded
-        in the handler, only read declaratively via read_redirect_aliases()/
-        read_central_receiver_ids().
-        """
         central_repo = tmp_path / "doe-claude-repo"
         central_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"doe_claude": str(central_repo)})
@@ -372,10 +287,6 @@ class TestRedirectMatchDefect1:
             tmp_path,
             {
                 "identity": {
-                    # Single central id, so sorted(central_ids)[0] is unambiguous
-                    # and maps (via convention_repo_key) to the one registered
-                    # repos.doe_claude key above -> the redirect branch resolves
-                    # to central_repo, the same repo as self.
                     "centralReceiverIds": ["doe-claude-em"],
                     "repoAliases": [],
                     "redirectAliases": ["coordinator-claude"],

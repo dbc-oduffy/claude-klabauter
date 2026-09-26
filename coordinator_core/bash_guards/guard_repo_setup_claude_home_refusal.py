@@ -133,35 +133,20 @@ CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
-#: Identifiers naming the engine-plane scaffold mechanism (see module
-#: docstring "SEAM CHOICE"). A bare substring test would deny a command that
 #: merely MENTIONS one of these strings (a `grep scaffold_structure ...`, a
-#: `git log --grep=...`) without invoking it -- `_names_scaffold_mechanism`
 #: below requires the marker to appear in an INVOKED-program-ish position,
-#: not merely anywhere in the text.
 _SCAFFOLD_MECHANISM_MARKERS = (
     "repo-setup-args-and-register",
     "coordinator_core.install.scaffold_structure",
     "scaffold_structure",
 )
 
-#: ``--root <val>`` / ``--target <val>`` (also ``--root=val``), tolerating a
-#: single- or double-quoted value. Mirrors SKILL.md's own documented flag
-#: pair (``--root``, alias ``--target``).
 _ROOT_FLAG_RE = re.compile(r"--(?:root|target)(?:=|\s+)(\"[^\"]*\"|'[^']*'|\S+)")
 
-#: ``--dry-run`` is the scaffold CLI's own no-write mode: it prints the
-#: ``create``/``skip (exists)`` plan and touches nothing. This guard exists
-#: to keep a WRITE off Claude Home, so a dry run has nothing to refuse -- and
-#: the `coordinator-doctor` P-12 probe reads Claude Home's structure through
 #: exactly that flag. NEGATIVE-SPEC: this is a no-write exemption, never a
-#: bypass -- drop the flag and the write is denied again.
 _DRY_RUN_RE = re.compile(r"(?:^|\s)--dry-run(?:[=\s]|$)")
 
-#: A leading ``cd <path> &&``/``cd <path> ;`` or PowerShell
-#: ``Set-Location``/``sl`` (optionally ``-Path``) prefix -- see module
 #: docstring "LEADING cd/Set-Location HANDLING". Must anchor the START of
-#: the command (modulo leading whitespace); only ONE such prefix is
 #: recognized (see NEGATIVE-SPEC).
 _LEADING_CD_RE = re.compile(
     r"""^\s*(?:cd|Set-Location|sl)\s+(?:-Path\s+)?
@@ -181,12 +166,6 @@ def _resolve_env(payload: Optional[Dict[str, Any]]) -> Dict[str, str]:
     return dict(os.environ)
 
 
-#: A drive-letter (``C:\\``, ``C:/``) or UNC (``\\\\server``) path. Recognized
-#: on EVERY host, not only Windows: the payload and env may carry a
-#: Windows-spelled path while the guard runs on POSIX (the cold/warm parity
-#: oracle, a cross-host fixture), where ``pathlib.Path`` treats ``\\`` as an
-#: ordinary character and a drive-letter path as relative. Ported from
-#: DoE-claude ``guard-repo-setup-claude-home-refusal.py`` at 7e9841cc9.
 _WINDOWS_SPELLED_RE = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
 
 
@@ -195,8 +174,6 @@ def _is_windows_spelled(path: str) -> bool:
 
 
 def _join_onto_cwd(raw: str, cwd: Optional[str]) -> str:
-    """``raw`` made absolute against ``cwd`` in ``cwd``'s own path flavour,
-    or ``raw`` unchanged when it is already absolute or there is no cwd."""
     if _is_windows_spelled(raw) or Path(raw).is_absolute() or not cwd:
         return raw
     if _is_windows_spelled(cwd):
@@ -205,11 +182,6 @@ def _join_onto_cwd(raw: str, cwd: Optional[str]) -> str:
 
 
 def _canonical(path: str) -> str:
-    """The comparison key for a path. A Windows-spelled path is compared
-    by Windows rules (separators and ``..`` normalized, case folded); off
-    Windows it is never handed to ``Path.resolve()``, which would root it
-    under the process cwd. Everything else is ``Path.resolve()``d. Raises
-    ``OSError`` as ``resolve`` does."""
     if not (_is_windows_spelled(path) and os.name != "nt"):
         path = str(Path(path).resolve())
     if _is_windows_spelled(path):
@@ -312,11 +284,6 @@ def _extract_candidate_root(cmd: str, cwd: Optional[str], env: Dict[str, str]) -
 
 
 def resolves_to_claude_home(path: str, env: Dict[str, str]) -> bool:
-    """True iff ``path`` resolves to Claude Home -- the comparison this guard
-    denies, exposed for the in-process callers of the scaffold that this
-    PreToolUse guard never sees (``ops/bootstrap_repo.py``,
-    ``install/maximalist.py``), so every refusal shares one definition.
-    False when either side cannot be resolved (fail open, as below)."""
     claude_home = _resolve_claude_home(env)
     if not claude_home:
         return False
@@ -329,9 +296,6 @@ def resolves_to_claude_home(path: str, env: Dict[str, str]) -> bool:
 def is_denied_repo_setup_claude_home(
     cmd: str, cwd: Optional[str], env: Dict[str, str]
 ) -> bool:
-    """The whole predicate, isolated from payload plumbing so it is directly
-    unit-testable. Returns True (deny) iff ``cmd`` invokes the scaffold
-    mechanism AND its resolved candidate target root is Claude Home."""
     if not _names_scaffold_mechanism(cmd):
         return False
 
@@ -340,16 +304,16 @@ def is_denied_repo_setup_claude_home(
 
     claude_home = _resolve_claude_home(env)
     if not claude_home:
-        return False  # cannot resolve what to compare against -- fail open
+        return False
 
     candidate = _extract_candidate_root(cmd, cwd, env)
     if not candidate:
-        return False  # no cwd and no explicit flag -- nothing to compare
+        return False
 
     try:
         resolved_candidate = _canonical(candidate)
     except OSError:
-        return False  # unresolvable candidate path -- fail open
+        return False
 
     return resolved_candidate == claude_home
 
@@ -363,14 +327,6 @@ def _deny_reason() -> str:
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the repo-setup-Claude-Home-refusal gate against a PreToolUse
-    payload. Returns `None` (allow) or the nested hard-deny envelope. Never
-    identity-gated -- fires for every caller.
-
-    Deliberately no try/except here -- fail-CLOSED-on-exception is the
-    dispatcher's job for hard-deny guards; the internal resolution helpers
-    each fail open on their own narrow uncertainty per their own docstrings.
-    """
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
 

@@ -44,8 +44,6 @@ from coordinator_core.plugin_health.drift import (
 )
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -85,7 +83,7 @@ def test_a_standalone_repo_root_returns_own_canon(tmp_path: Path):
 def test_b_regression_nested_data_only_dir_returns_none(tmp_path: Path):
     parent = tmp_path / "parent"
     _mkrepo(parent)
-    nested = parent / "plugins" / "data-only-live"  # no nested .git — escapes to parent pre-fix
+    nested = parent / "plugins" / "data-only-live"
     nested.mkdir(parents=True)
     (nested / "data.bin").write_text("payload\n")
 
@@ -111,8 +109,6 @@ def test_e_regression_dirty_parent_nested_data_only_live_path_no_false_positive(
     nested = parent / "plugins" / "data-only-live"
     nested.mkdir(parents=True)
     (nested / "data.bin").write_text("payload\n")
-    # Make the PARENT working tree dirty — if Leg 3 escaped upward, `git status`
-    # would be non-empty and emit the false "refresh blocked".
     with (parent / "seed.txt").open("a") as f:
         f.write("dirty\n")
 
@@ -122,13 +118,12 @@ def test_e_regression_dirty_parent_nested_data_only_live_path_no_false_positive(
         str(nested),
         "origin/main",
         "",
-        "",  # prop_mode="" reaches the default leg (Leg 3)
+        "",
         "",
     )
 
     joined_lines = "\n".join(result.lines)
     assert "working-tree:" not in joined_lines or "refresh blocked" not in joined_lines
-    # Emits the [info] skip diagnostic (live_path IS a git path via the parent).
     joined_stderr = "\n".join(result.stderr_lines)
     assert "Leg 3 skipped — live_path is not its own work-tree root" in joined_stderr
 
@@ -152,11 +147,6 @@ def test_f_standalone_dirty_repo_still_flagged(tmp_path: Path):
     joined_lines = "\n".join(result.lines)
     assert "working-tree:" in joined_lines and "refresh blocked" in joined_lines
     assert result.ok is False
-
-
-# ---------------------------------------------------------------------------
-# NEW regression cases (plan-directed behavior deltas — not ports of bash coverage)
-# ---------------------------------------------------------------------------
 
 
 def test_mapping_check_rejects_malicious_finder(tmp_path: Path):
@@ -209,20 +199,10 @@ def test_default_leg_git_state_fetch_failure_warns(tmp_path: Path, monkeypatch):
 
     joined_stderr = "\n".join(result.stderr_lines)
     assert "git fetch failed (offline?)" in joined_stderr
-    # Probe still returns a verdict (does not crash) — stale-ref rev-list against
-    # HEAD..origin/main with no remote configured yields no count -> no drift claim
-    # from Leg 1, but the probe completes and returns a DriftResult either way.
     assert result is not None
 
 
 def test_copy_install_content_equivalence_batches_multi_file_hash_object(tmp_path: Path):
-    """`_check_copy_install`'s content-equivalence leg batches every mismatched-
-    sentinel file's `git hash-object` into ONE `--stdin-paths` call instead of
-    one spawn per file. A single-item fixture would pass identically whether
-    the batch call were correctly zipped back to its paths or silently
-    shuffled — this fixture uses THREE files (one matching, two diverging) so a
-    misattributed index would flip a false [ok] into a missed [drift] or vice
-    versa."""
     source = tmp_path / "source"
     _mkrepo(source)
     plugin_dir = source / "plugin" / "demo"
@@ -254,8 +234,6 @@ def test_copy_install_content_equivalence_batches_multi_file_hash_object(tmp_pat
     (live / "same.txt").write_text("unchanged\n")
     (live / "changed_a.txt").write_text("live-a-DIFFERENT\n")
     (live / "changed_b.txt").write_text("live-b-DIFFERENT\n")
-    # sentinel deliberately stale (not source HEAD) to force the
-    # content-equivalence leg to run instead of the fast sentinel-match exit.
     (live / "version.txt").write_text("0" * 40)
 
     claude_home = tmp_path

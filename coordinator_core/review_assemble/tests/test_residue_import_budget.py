@@ -85,10 +85,6 @@ _MODULES_CHECK_ARGV = [
 
 
 def test_residue_module_does_not_import_pickup_assemble():
-    """Structural leg: importing `residue.py` in a fresh interpreter must
-    never bring `coordinator_core.pickup_assemble` into `sys.modules` --
-    the exact regression this gate exists to catch, checked directly rather
-    than inferred from timing alone."""
     result = subprocess.run(
         _MODULES_CHECK_ARGV,
         capture_output=True,

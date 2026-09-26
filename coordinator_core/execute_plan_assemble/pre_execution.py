@@ -30,13 +30,11 @@ from coordinator_core.contract.decision_object.judgment import (
     build_untrusted_gate_judgment_point,
 )
 
-#: Judgment-point ids, named so ordering below stays obviously self-consistent.
 _J_REMAINING_CONTEXT = "j-remaining-context"
 _J_EXECUTABILITY_GATE = "j-executability-gate"
 _J_ROADMAP_EXECUTION_GATE = "j-roadmap-execution-gate"
 _J_WAVE_MAP = "j-wave-map"
 
-#: The three gates d3 depends on; d4 depends on these plus the wave map.
 _GATE_IDS = (_J_REMAINING_CONTEXT, _J_EXECUTABILITY_GATE, _J_ROADMAP_EXECUTION_GATE)
 
 
@@ -51,10 +49,6 @@ def _slug_for(plan_path: str) -> str:
 
 
 def _build_judgment_points() -> list[dict[str, Any]]:
-    """The three stop-capable gates plus the wave map, each an untrusted
-    gate judgment point — none of these is mechanically decidable from disk
-    state alone, matching the skill's own judgment residue at each step.
-    """
     return [
         build_untrusted_gate_judgment_point(
             id=_J_REMAINING_CONTEXT,
@@ -102,12 +96,6 @@ def _build_judgment_points() -> list[dict[str, Any]]:
 def pre_execution_directives(
     plan_path: str, *, autonomous: bool = False
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Return `(directives, judgment_points)` for `/execute-plan` Phase 1,
-    in the shape `apply_base.execute_directives` consumes.
-
-    `autonomous=True` omits d1/d2 (the skill skips both under `/autonomous`)
-    and returns d3+d4 only, still gated by the same `judgment_points`.
-    """
     slug = _slug_for(plan_path)
 
     d3 = {

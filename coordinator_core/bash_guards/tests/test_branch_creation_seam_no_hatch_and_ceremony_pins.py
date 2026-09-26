@@ -51,16 +51,10 @@ def _advisory_ctx(out):
     return hso["additionalContext"]
 
 
-# ---------------------------------------------------------------------------
-# AC3 helpers -- see TestAC3NoHatch.test_override_key_absent_from_guard_
-# module_source for why these two checks replace a single raw substring
 # scan (that scan tripped on a REQUIRED negative-spec docstring paragraph;
-# see docstring on the test method itself).
-# ---------------------------------------------------------------------------
 
 #: A hatch-shaped env-var key: COORDINATOR_(ALLOW|OVERRIDE|DISABLE)_<rest>.
 #: Matches the retired COORDINATOR_OVERRIDE_BRANCH and any future sibling
-#: of the same shape.
 _HATCH_KEY_RE = re.compile(r"COORDINATOR_(?:ALLOW|OVERRIDE|DISABLE)_[A-Z0-9_]+")
 
 
@@ -162,7 +156,7 @@ def _environ_key_node(node, environ_names, getenv_names):
             return _key_from_call(node)
     if isinstance(node, ast.Subscript) and _is_environ_expr(node.value):
         slice_node = node.slice
-        if isinstance(slice_node, ast.Index):  # py<3.9 compat
+        if isinstance(slice_node, ast.Index):
             slice_node = slice_node.value
         return slice_node
     return None
@@ -195,17 +189,8 @@ def _hazard_repo_by_default(monkeypatch):
         monkeypatch.setattr(g, "_is_hazard_repo", lambda git_root: True)
 
 
-# ---------------------------------------------------------------------------
-# AC3 -- the no-hatch pin.
-# ---------------------------------------------------------------------------
-
-
 class TestAC3NoHatch:
     # C1 flipped CONFINEMENT_DENY -> ADVISORY_REWRITE in 2ac049c5b (C14b,
-    # per DR-277 "guards are advisory by default"); these two tests still
-    # pin AC3's real guarantee -- the retired env-prefix hatch does not let
-    # a caller escape the guard's notice -- now expressed against the
-    # advisory envelope instead of a deny.
     def test_env_prefix_override_still_advises(self):
         out = c1.check(_payload('COORDINATOR_OVERRIDE_BRANCH=1 git checkout -b bad-name'))
         _advisory_ctx(out)
@@ -300,32 +285,12 @@ class TestAC3NoHatch:
             )
 
     def test_override_key_absent_from_every_emitted_message(self, monkeypatch):
-        # C1 advisory (post-2ac049c5b flip, see class-level note above).
         c1_ctx = _advisory_ctx(c1.check(_payload("git checkout -b fix/some-topic")))
         assert "COORDINATOR_OVERRIDE_BRANCH" not in c1_ctx
 
 
-# ---------------------------------------------------------------------------
-# AC5 -- ceremony non-regression (unit-level shape checks, not e2e runs).
-#
-# Ceremony-side creation (session_ensure_branch.py, workday-start-step0.py,
-# merge-recovery-and-tag-cut.py) mints these exact command shapes via
-# in-process subprocess.run(argv-list) and NEVER as a Bash-tool call -- so
-# the first, load-bearing leg of each case below is that C1 never even sees
-# a non-Bash-tool invocation. The second leg is defense in depth: even if
-# one of these shapes WERE somehow observed at the Bash seam, the behavior
-# is the one already ratified elsewhere (bare today-branch creation allows;
-# -N collision suffixes are C1's own documented, deliberate incoherence per
-# daily_branch.py's module docstring; rename is untouched).
-# ---------------------------------------------------------------------------
-
-
 class TestAC5CeremonyNonRegression:
     def test_non_bash_tool_shapes_never_match_any_guard(self):
-        # session_ensure_branch.py / merge-recovery-and-tag-cut.py invoke
-        # subprocess.run directly -- never surfaced through the PreToolUse
-        # Bash tool at all. A payload whose tool_name isn't "Bash" is the
-        # closest unit-level stand-in for "this op never transits the seam".
         shapes = [
             "git checkout -b work/machine-b/2026-08-01",
             "git checkout -b work/machine-b/2026-08-01-2",
@@ -339,18 +304,9 @@ class TestAC5CeremonyNonRegression:
                 assert g.check(payload) is None
 
     def test_bare_today_branch_checkout_allows(self):
-        # session_ensure_branch's fresh-cut default shape, and merge-
-        # recovery-and-tag-cut's recovery-branch default shape.
         assert c1.check(_payload("git checkout -b work/machine-b/2026-08-01")) is None
 
     def test_collision_suffix_shapes_are_c1s_own_documented_incoherence(self):
-        # daily_branch.py's own module docstring: -N collision suffixes are
-        # NOT accepted by is_canonical_branch and never will be, because the
-        # guard never has to judge them at the seam (they never arrive as
-        # Bash). This is the accepted, non-regressed state -- not something
-        # this pin asks C1 to change. C1 fires (now advisory, not deny --
-        # see TestAC3NoHatch's class-level note on the 2ac049c5b flip)
-        # rather than staying silent on them.
         for n in range(2, 10):
             out = c1.check(_payload("git checkout -b work/machine-b/2026-08-01-%d" % n))
             _advisory_ctx(out)
@@ -363,22 +319,13 @@ class TestAC5CeremonyNonRegression:
                 assert g.check(_payload(cmd)) is None
 
     def test_recovery_branch_cut_shape_allows(self):
-        # merge-recovery-and-tag-cut.py's cmd_recovery_branch: `git checkout
-        # -b work/{host}/{today}` -- same canonical shape as the daily cut.
         assert c1.check(_payload("git checkout -b work/some-host/2026-08-01")) is None
 
 
-# ---------------------------------------------------------------------------
 # AC9 -- no branch-DATE-vs-current-date COMPARISON in C1 specifically.
-# ---------------------------------------------------------------------------
 
 
 class TestAC9NoDateComparisonInC1:
-    # Post-2ac049c5b (C14b), C1's remediation-text helper is named
-    # `_advisory_reason` (was `_deny_reason`) -- see DR-277 and
-    # TestAC3NoHatch's class-level note above. The AC9 guarantee itself
-    # (local_day never feeds a comparison, only remediation text) is
-    # unchanged by the flip.
     def test_local_day_only_referenced_inside_advisory_reason(self):
         """Structural (AST) assertion: `local_day` is named nowhere in C1's
         module except inside `_advisory_reason` (remediation text only)."""
@@ -435,11 +382,6 @@ class TestAC9NoDateComparisonInC1:
         assert out_b is None
 
 
-# ---------------------------------------------------------------------------
-# AC10/AC14 -- rename untouched; `git branch <name>` create is advised.
-# ---------------------------------------------------------------------------
-
-
 class TestAC10AC14RenameVsCreate:
     @pytest.mark.parametrize("flag", ["-m", "-M"])
     def test_branch_rename_untouched(self, flag):
@@ -448,15 +390,8 @@ class TestAC10AC14RenameVsCreate:
             assert g.check(_payload(cmd)) is None
 
     def test_branch_create_advised_by_c1(self):
-        # C1 fires (advisory, post-2ac049c5b flip -- see TestAC3NoHatch's
-        # class-level note above).
         cmd = "git branch some-noncanonical-name"
         _advisory_ctx(c1.check(_payload(cmd)))
-
-
-# ---------------------------------------------------------------------------
-# AC13 -- C1 gates on _is_hazard_repo BEFORE evaluating any predicate.
-# ---------------------------------------------------------------------------
 
 
 class TestAC13HazardRepoGateFirst:
@@ -465,8 +400,8 @@ class TestAC13HazardRepoGateFirst:
             monkeypatch.setattr(g, "_is_hazard_repo", lambda git_root: False)
 
         shapes = [
-            "git checkout -b fix/some-topic",  # C1 would otherwise deny
-            "git branch fix/some-topic",  # C1 would otherwise deny
+            "git checkout -b fix/some-topic",
+            "git branch fix/some-topic",
         ]
         for cmd in shapes:
             for g in _GUARDS:

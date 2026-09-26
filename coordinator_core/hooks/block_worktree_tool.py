@@ -60,18 +60,11 @@ _DENY_PROSE = (
 
 
 def _deny_message(env: object = None) -> str:
-    """Pure composer for the deny message — kept separate from the handler so
-    it can be measured/unit-exercised without payload plumbing."""
     return render(compose(_DENY_PROSE, anchor=_WIKI_ANCHOR), env=env)
 
 
 @register_op("hooks.block_worktree_tool")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PreToolUse(EnterWorktree|ExitWorktree) op: deny EnterWorktree unless
-    the repo-root sentinel override is active; always allow ExitWorktree."""
-    # Params arrives wrapped as
-    # {"payload": event} through both engine doors; payload_of reads either
-    # shape (see preuse_bash_dispatch's identical fix, same defect class).
     params = payload_of(params)
     tool_name = params.get("tool_name") or ""
 
@@ -85,6 +78,6 @@ def _handler(params: dict, repo_root=None) -> dict:
         if sentinel_override_active():
             return no_advisory()
     except Exception:
-        pass  # sentinel check failure falls through to the deny below, fail-closed
+        pass
 
     return deny("PreToolUse", _deny_message(params.get("env")))

@@ -48,12 +48,6 @@ def _stub_probe_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _make_env_root(tmp_path: Path) -> Path:
-    """A plain (non-junction) generation directory with a real interpreter
-    symlink at the conventional `bin/python` path — `junction.junction_target`
-    on a plain directory returns `None`, which is a legal, consistent
-    `generation` key value throughout this file (never a junction swap
-    case; that is the module's own junction-layer's surface, not this
-    chunk's)."""
     env_root = tmp_path / "fleet-env"
     (env_root / "bin").mkdir(parents=True)
     (env_root / "bin" / "python").symlink_to(Path(sys.executable))
@@ -69,18 +63,13 @@ def _raising_subprocess_run(*args, **kwargs):
 def test_key_match_skips_the_child_probe_entirely(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The whole point of the stamp: once a stamp is written after a real
-    pass, a second call with nothing changed makes zero `subprocess.run`
-    calls — proven by monkeypatching `subprocess.run` to raise."""
     _stub_probe_inputs(monkeypatch)
     env_root = _make_env_root(tmp_path)
     python_bin = fleet_env._env_python_path(env_root)
 
-    # First call: real probe runs and passes, stamp gets written.
     assert fleet_env._fleet_env_healthy_stamped(python_bin, env_root) is True
     assert fleet_env._health_stamp_path(env_root).is_file()
 
-    # Second call: any subprocess spawn is a hard failure.
     monkeypatch.setattr(fleet_env.subprocess, "run", _raising_subprocess_run)
     assert fleet_env._fleet_env_healthy_stamped(python_bin, env_root) is True
 
@@ -99,13 +88,10 @@ def test_key_match_skips_the_child_probe_entirely(
 def test_each_key_input_change_forces_a_re_probe(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mutate: str
 ) -> None:
-    """A changed lock hash, interpreter mtime, site-packages mtime, probe
-    tuple, minor, or generation name each reads as a stamp miss and re-runs
-    the real probe (never silently trusts a stale stamp)."""
     _stub_probe_inputs(monkeypatch)
     env_root = _make_env_root(tmp_path)
     python_bin = fleet_env._env_python_path(env_root)
-    (env_root / "lib").mkdir()  # ensure a site-packages dir exists for the mtime key
+    (env_root / "lib").mkdir()
     monkeypatch.setattr(
         fleet_env, "_site_packages_dir", lambda root: env_root / "lib"
     )
@@ -130,10 +116,6 @@ def test_each_key_input_change_forces_a_re_probe(
         import os
         import shutil
 
-        # Never mutate the real, shared `sys.executable` on disk (this box
-        # is a 50-70-session fleet machine) — copy it into tmp_path first,
-        # point `python_bin` at the independent copy, then bump the copy's
-        # own mtime.
         python_bin.unlink()
         copy_path = tmp_path / "python-copy"
         shutil.copy2(sys.executable, copy_path)
@@ -159,9 +141,6 @@ def test_each_key_input_change_forces_a_re_probe(
         )
 
     if mutate == "minor":
-        # A mismatched minor makes the re-probe itself fail (unhealthy),
-        # not merely re-run — assert the miss was detected and no stamp
-        # survives the failed re-probe.
         assert fleet_env._fleet_env_healthy_stamped(python_bin, env_root) is False
     else:
         assert fleet_env._fleet_env_healthy_stamped(python_bin, env_root) is True
@@ -171,7 +150,6 @@ def test_each_key_input_change_forces_a_re_probe(
 def test_corrupt_stamp_forces_re_probe_without_raising(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A present-but-unparseable stamp reads as a miss, not an error."""
     _stub_probe_inputs(monkeypatch)
     env_root = _make_env_root(tmp_path)
     python_bin = fleet_env._env_python_path(env_root)
@@ -183,8 +161,6 @@ def test_corrupt_stamp_forces_re_probe_without_raising(
 def test_failing_probe_never_writes_a_stamp(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A real probe that fails must never leave a stamp behind that a later
-    call could wrongly trust."""
     monkeypatch.setattr(fleet_env, "LOCK_PYTHON_MINOR", _current_minor_string())
     monkeypatch.setattr(fleet_env, "_FLEET_ENV_IMPORT_PROBES", ("definitely_not_a_real_module_xyz",))
     monkeypatch.setattr(fleet_env, "_is_windows_shell", lambda: False)
@@ -198,15 +174,10 @@ def test_failing_probe_never_writes_a_stamp(
 def test_post_build_call_ignores_a_present_matching_stamp(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The post-build health check (`_fleet_env_healthy` called directly,
-    never `_fleet_env_healthy_stamped`) must always run the real probe even
-    when a matching stamp is present — proven by making the probe itself
-    observably run via a counting `subprocess.run` wrapper."""
     _stub_probe_inputs(monkeypatch)
     env_root = _make_env_root(tmp_path)
     python_bin = fleet_env._env_python_path(env_root)
 
-    # Prime a matching stamp via the stamped path.
     assert fleet_env._fleet_env_healthy_stamped(python_bin, env_root) is True
     assert fleet_env._health_stamp_path(env_root).is_file()
 
@@ -226,19 +197,12 @@ def test_post_build_call_ignores_a_present_matching_stamp(
 def test_junction_retarget_mid_probe_skips_the_stamp_write(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """If `env_root`'s junction target changes between the key being
-    computed and the probe finishing (a concurrent rebuild's publish), the
-    stamp write must be skipped — never land a stamp computed for a
-    generation that is about to be reclaimed, and never write into the new
-    one either."""
     _stub_probe_inputs(monkeypatch)
     env_root = _make_env_root(tmp_path)
     python_bin = fleet_env._env_python_path(env_root)
 
     key = fleet_env._health_stamp_key(python_bin, env_root)
     assert key is not None
-    # Simulate a retarget: the key names one generation, but by the time we
-    # write, the junction (per this mock) points elsewhere.
     monkeypatch.setattr(
         fleet_env.junction, "junction_target", lambda p: tmp_path / "a-different-generation"
     )
@@ -250,8 +214,6 @@ def test_junction_retarget_mid_probe_skips_the_stamp_write(
 def test_check_only_uses_the_stamped_path_too(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """`ensure_fleet_env(check_only=True)` reports "ready" from the stamp
-    with no probe spawn, on a second call."""
     _stub_probe_inputs(monkeypatch)
     env_root = _make_env_root(tmp_path)
     monkeypatch.setattr(fleet_env, "resolve_environment_root", lambda **_: env_root)

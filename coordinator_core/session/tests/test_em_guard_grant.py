@@ -1,39 +1,3 @@
-"""
-coordinator_core.session.tests.test_em_guard_grant — tests for
-coordinator_core.session.em_guard_grant, the EM-exercisable session-scoped
-grant for a bounded tier of hard-deny guards (docs/plans/
-2026-08-13-em-exercisable-in-band-grant-route.md § C1).
-
-Grant round-trip / validation / liveness tests below are PURE PYTHON — no
-git spawn. `core.session_dir` / `core.resolve_session_id` /
-`liveness.session_live` are monkeypatched directly onto the module objects
-(the same seam-patching pattern `test_block_subagent_commit.py` uses for
-identity resolution) rather than spawning a real git repo the way
-`test_claude_md_grant.py` does — this file needs no spawn-ratchet
-admission as a result.
-
-``TestAC7UnanswerableLegNeverCleared`` is the one exception: pinning AC-7
-requires the real ``ceremony.scoped_git_commit`` op end to end (the
-`unanswerable` leg is that op's own internal state, not something this
-module's mechanism can be asked about in isolation), so that one test
-spawns a real git repo and is individually marked
-``@pytest.mark.spawns_process`` per
-``coordinator_core/tests/test_no_new_spawning_tests.py`` Rule 2 (a
-per-function marker satisfies the ratchet without a module-wide
-``pytestmark``, keeping the rest of this file spawn-free).
-
-Two mandatory test conventions (§ Verification, both from
-``test_scoped_git_commit_ownership.py``'s DR-260 block): (1) never a
-literal session id for anything that touches ``guard_unlock_sentinel`` —
-``sentinel_path()`` resolves under the real, shared platform temp dir, and
-this box runs 50-70 concurrent sessions, so ``_unique_sid(prefix)`` mints
-``f"{prefix}-{uuid.uuid4().hex[:12]}"``; (2) every sentinel this file mints
-is removed in a ``finally:``, best-effort, swallowing ``OSError``.
-
-Spec backlink: pln-an-em-exercisable-in-band-gran-6bfb4a § C1
-Precedent: coordinator_core/session/tests/test_claude_md_grant.py
-Precedent: coordinator_core/ops/ceremony/tests/test_scoped_git_commit_ownership.py
-"""
 
 from __future__ import annotations
 
@@ -62,25 +26,6 @@ def _cleanup_sentinel(session_id: str, guard_name: str) -> None:
 
 
 class _FakeSessionSeam:
-    """Monkeypatches `core.ensure_session` / `core.session_dir` /
-    `core.resolve_session_id` / `liveness.session_live` so every test in this
-    class runs against a plain `tmp_path` directory tree -- no real git repo,
-    no subprocess spawn. Sessions default to LIVE; `kill(sid)` flips one to
-    dead.
-
-    `ensure_session` MUST be patched here, not just `session_dir`: it is the
-    session directory's one constructor and it is what the module under test
-    now calls. With only `session_dir` patched, the module resolved the REAL
-    repo's hub from the process cwd and minted session directories into the
-    live tree -- caught by `conftest`'s live session-hub litter guard, which is
-    what this seam exists to make unnecessary.
-
-    The fake writes a `meta.json` as well as the directory, because that is the
-    real constructor's postcondition. A fake that created a record-less
-    directory would reproduce in the fixture exactly the state `ensure_session`
-    exists to prevent, and any test resting on it would be pinning a shape the
-    system is not allowed to be in.
-    """
 
     def __init__(self, monkeypatch, tmp_path: Path, default_sid: str):
         self._root = tmp_path
@@ -118,18 +63,10 @@ class _FakeSessionSeam:
         self._dead.add(sid)
 
 
-# ---------------------------------------------------------------------------
-# write_em_guard_grant -- allowlist validation, verbatim reason, ordering
-# ---------------------------------------------------------------------------
-
-
 class TestWriteEmGuardGrantValidation:
     def test_name_outside_allowlist_raises_using_the_real_withheld_guard(
         self, tmp_path, monkeypatch
     ):
-        """scoped_git_commit_claim_conflict is a REAL, analysed guard name
-        deliberately withheld from wave-1 -- it must be rejected exactly
-        like a nonsense string, never silently no-op'd."""
         _FakeSessionSeam(monkeypatch, tmp_path, "s1")
         with pytest.raises(ValueError):
             eg.write_em_guard_grant(
@@ -187,10 +124,6 @@ class TestWriteEmGuardGrantRecord:
             _cleanup_sentinel(sid, guard_name)
 
     def test_record_written_before_sentinel(self, tmp_path, monkeypatch):
-        """The record must exist on disk before the sentinel is minted --
-        pin the ORDER directly by asserting the record is readable the
-        instant the sentinel first appears (a crash between the two must
-        never leave a sentinel with no record)."""
         sid = _unique_sid("s1")
         seam = _FakeSessionSeam(monkeypatch, tmp_path, sid)
         guard_name = "bump-foreign-repo-write"
@@ -225,11 +158,6 @@ class TestWriteEmGuardGrantRecord:
             assert expected.is_file()
         finally:
             _cleanup_sentinel(sid, guard_name)
-
-
-# ---------------------------------------------------------------------------
-# read_em_guard_grant / check_em_guard_grant -- liveness, no-glob, round trip
-# ---------------------------------------------------------------------------
 
 
 class TestReadCheckEmGuardGrant:
@@ -318,10 +246,6 @@ class TestReadCheckEmGuardGrant:
 
 
 class TestConsumeRoundTripOneShot:
-    """AC-2: the mechanism this module writes into is one-shot -- true True
-    once, False on a second call -- pinned directly against
-    `guard_unlock_sentinel.consume`, the exact primitive that clears the
-    write this grant authorizes."""
 
     def test_consume_returns_true_once_then_false(self, tmp_path, monkeypatch):
         sid = _unique_sid("s1")
@@ -335,9 +259,7 @@ class TestConsumeRoundTripOneShot:
             _cleanup_sentinel(sid, guard_name)
 
 
-# ---------------------------------------------------------------------------
 # Subset invariant: every _GRANTABLE_GUARDS member is actually consumable
-# ---------------------------------------------------------------------------
 
 
 class TestGrantableGuardsSubsetInvariant:
@@ -368,14 +290,6 @@ class TestGrantableGuardsSubsetInvariant:
             assert entry is not None, f"{name} is not a registered bash guard"
             eligible = entry.fail_closed or name in bash_dispatch._SENTINEL_ELIGIBLE_ADVISORY_GUARDS
             assert eligible, f"{name} is in _GRANTABLE_GUARDS but not sentinel-eligible"
-
-
-# ---------------------------------------------------------------------------
-# AC-14: a sentinel for scoped_git_commit_claim_conflict never composes
-# with a subagent commit -- direct-sentinel technique (minted via
-# guard_unlock_sentinel, bypassing the grant CLI's allowlist entirely,
-# since this guard is not a wave-1 member).
-# ---------------------------------------------------------------------------
 
 
 def _commit_payload(agent_id="deadbeef0123", session_id="sess1"):
@@ -409,17 +323,4 @@ class TestAC14SubagentCommitNeverComposesWithGrant:
 
 
 # AC-7 WITHDRAWN, 2026-08-13 — its test lived here and was removed with it.
-# It pinned "a grant never clears `_check_claim_conflicts`'s `unanswerable`
-# leg". That function was DELETED outright by
-# `docs/plans/2026-08-13-claim-release-deadlock-and-the-doctrine-that-rejects-it.md`
-# (PM-authorized): a path-touch claim is a swimlane courtesy, not a safety
-# mechanism, so the whole hard-deny goes rather than being narrowed. There is no
-# longer an `unanswerable` leg for a grant to clear, so the invariant is moot by
-# construction — the same reasoning that withdrew this plan's C10. Removed rather
-# than left xfailing: a permanently-xfailing test that also spawns would need
-# spawn-ratchet admission to pin behaviour that no longer exists.
-#
-# AC-14 is NOT affected and its test remains below/above: that one pins
-# `block_subagent_commit.py` refusing a subagent commit even with a live
-# sentinel, which is independent of the deleted gate.
 

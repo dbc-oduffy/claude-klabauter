@@ -27,9 +27,6 @@ def isolated_home(tmp_path, monkeypatch):
     return tmp_path
 
 
-# --- set/show round-trip ---------------------------------------------------
-
-
 def test_set_then_show_round_trip_bool_key(isolated_home):
     record = mode_control.set_fleet_mode_key("autonomous", "on")
     assert record["autonomous"] is True
@@ -65,9 +62,6 @@ def test_bool_accepts_true_false_tokens(isolated_home):
     assert record["autonomous"] is False
 
 
-# --- unknown key / bad value rejection --------------------------------------
-
-
 def test_set_unknown_key_rejected_with_known_key_list(isolated_home):
     with pytest.raises(ValueError) as exc_info:
         mode_control.set_fleet_mode_key("not_a_real_key", "on")
@@ -99,17 +93,11 @@ def test_bad_set_does_not_write_anything(isolated_home):
 
 
 def test_failed_write_raises_oserror_and_leaves_no_partial_state(isolated_home, monkeypatch):
-    # Review finding: a failed write_fleet_mode() must not be silently
-    # reported as success -- forces the return-False path and asserts
-    # both the OSError and the absence of any partial write.
     monkeypatch.setattr(mode_control, "write_fleet_mode", lambda record: False)
     with pytest.raises(OSError) as exc_info:
         mode_control.set_fleet_mode_key("autonomous", "on")
     assert "autonomous" in str(exc_info.value)
     assert mode_control.read_fleet_mode() == {}
-
-
-# --- show self-explains precedence and variant-selector floor --------------
 
 
 def test_show_names_precedence_rule_per_key(isolated_home):
@@ -126,7 +114,6 @@ def test_show_names_variant_that_fires_and_declares_unsuppressible(isolated_home
     entry = _entry(rendered, "compaction_warnings")
     assert entry["is_variant_selector"] is True
     assert entry["suppressible"] is False
-    # Absent fleet value still names a concrete variant that will fire.
     assert entry["variant_that_fires"] in ("standard", "informational")
 
 
@@ -142,9 +129,6 @@ def test_show_absent_file_still_renders_every_known_key(isolated_home):
     assert seen == set(mode_control.known_keys())
     for entry in rendered["keys"]:
         assert entry["fleet_value"] is None
-
-
-# --- no subprocess, no session enumeration ----------------------------------
 
 
 def test_set_spawns_no_subprocess(isolated_home, monkeypatch):
@@ -166,17 +150,12 @@ def test_show_spawns_no_subprocess(isolated_home, monkeypatch):
 
 
 def test_module_resolves_no_session_list():
-    # Static assertion, matching C4's own negative-spec: the module names
-    # no session-registry / peer-address / messaging surface at all.
     import inspect
 
     source = inspect.getsource(mode_control)
     forbidden_terms = ("session_registry", "resolve_peer", "dispatch_message", "SessionRegistry")
     for term in forbidden_terms:
         assert term not in source, f"mode_control.py must not reference {term!r}"
-
-
-# --- op handlers -------------------------------------------------------------
 
 
 def test_op_handler_set_requires_key_and_value(isolated_home):
@@ -211,17 +190,10 @@ class TestShowReportsTheVariantThatActuallyFires:
         from coordinator_core.ops.fleet import mode_control as MC
 
         monkeypatch.setattr(MC, "read_fleet_mode", lambda: {})
-        # `ModeKey` is a frozen dataclass, so the entry's callable cannot be
         # patched. It does not need to be: the registry stores a LATE-BOUND
-        # lambda that resolves this name through module globals at call time,
-        # which is what keeps the seam testable at all.
         monkeypatch.setattr(
             "coordinator_core.session.mode_resolution."
             "_compaction_default_for_environment",
-            # One positional `env`, matching the real
-            # `_compaction_default_for_environment` signature -- a zero-arg
-            # stub passed this test while production raised `TypeError` on
-            # every call, which is the defect that hid here.
             lambda env: "informational",
         )
         entry = next(e for e in MC.show_fleet_mode()["keys"]

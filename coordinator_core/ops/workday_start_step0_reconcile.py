@@ -96,16 +96,6 @@ def _merge_in_progress(repo_root: Path) -> bool:
 
 
 def _index_readable(repo_root: Path) -> bool:
-    """Whether the index can be parsed cleanly right now (no unmerged
-    entries, no other parse failure).
-
-    `fresh=True` because the index was mutated by the merge subprocess
-    microseconds earlier and a cached read would be stale. Only
-    `IndexParseError` is caught -- covers both an unmerged (conflicted)
-    index and any other unparseable index (e.g. a split index) alike, by
-    that exception's own contract; the message is never inspected, since
-    message-sniffing is not a discriminant.
-    """
     try:
         read_index(repo_root, fresh=True)
     except IndexParseError:
@@ -191,9 +181,7 @@ def main(argv: list[str]) -> int:
         print(f"RECONCILED-MERGE branch={current}")
         return 0
 
-    # Both probes MUST be read strictly before the abort below — `git merge
     # --abort` clears unmerged index entries and removes MERGE_HEAD, and a
-    # probe placed after it would read clean every time, inverting the
     # discrimination to "always RECONCILE-MERGE-NOT-STARTED".
     repo_root = Path(show_toplevel() or Path.cwd())
     merge_in_progress = _merge_in_progress(repo_root)
@@ -204,7 +192,6 @@ def main(argv: list[str]) -> int:
     _echo_to_stderr(abort)
     print(f"{outcome} branch={current}")
     if outcome == "RECONCILE-CONFLICT":
-        # Byte-identical to today's text (AC3) — the conservative-arm note
         # below is an ADDITION, never a replacement of this line.
         print(
             "Reconcile with origin/main hit a conflict — surface A/B/C Branch "

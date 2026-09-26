@@ -49,10 +49,6 @@ _FALSE = frozenset({"0", "false", "no", "off"})
 
 
 class Capability(NamedTuple):
-    """One capability, and the evidence that produced it. Consumers render
-    `evidence` wherever a capability changes behaviour — a verdict that cannot
-    explain itself gets the mechanism disabled the first time it surprises
-    someone."""
 
     name: str
     value: bool
@@ -70,7 +66,7 @@ def _override(name: str, env: Mapping[str, str]) -> Optional[bool]:
         return True
     if raw in _FALSE:
         return False
-    return None  # unparseable is IGNORED, never read as false
+    return None
 
 
 def _cap(name: str, value: bool, evidence: str, env: Mapping[str, str]) -> Capability:
@@ -85,18 +81,10 @@ def _cap(name: str, value: bool, evidence: str, env: Mapping[str, str]) -> Capab
     )
 
 
-# ---------------------------------------------------------------------------
-# Venue — reported, never branched on.
-# ---------------------------------------------------------------------------
-
-#: Markers a managed remote container sets. Read, not merely cited: an earlier
-#: version of this module claimed these as "corroboration" while consulting
-#: none of them.
 _REMOTE_MARKERS = ("CLAUDE_CODE_CONTAINER_ID", "CCR_SESSION_PROFILE", "CCR_AGENT_PROXY_ENABLED")
 
 
 def detect_venue(env: Optional[Mapping[str, str]] = None) -> str:
-    """`remote` | `local` | `unknown`, for reporting."""
     e = _env_map(env)
     if str(e.get("CLAUDE_CODE_ENTRYPOINT", "")).strip().lower() == "remote":
         return "remote"
@@ -105,11 +93,6 @@ def detect_venue(env: Optional[Mapping[str, str]] = None) -> str:
     if e.get("CLAUDECODE"):
         return "local"
     return "unknown"
-
-
-# ---------------------------------------------------------------------------
-# Probes.
-# ---------------------------------------------------------------------------
 
 
 def _settings_home(env: Mapping[str, str]) -> Optional[Path]:
@@ -178,9 +161,6 @@ def _probe_engine_installed(env: Mapping[str, str]) -> Capability:
 
 
 def _probe_durable_repo(env: Mapping[str, str]) -> Capability:
-    """Is there a durable sink — a git remote — for a record that must outlive
-    this host? Consulted by the stand-down audit leg, which must not write its
-    only copy inside `.git` on a container that gets reclaimed."""
     try:
         git_dir = Path(os.getcwd())
         for candidate in (git_dir, *git_dir.parents):
@@ -195,9 +175,6 @@ def _probe_durable_repo(env: Mapping[str, str]) -> Capability:
 
 
 def _probe_fleet_present(env: Mapping[str, str]) -> Capability:
-    """Is this session inside an installed coordinator fleet? Consulted from
-    the PreToolUse hot path, so it stays env-and-stat only and never reads a
-    memo corpus."""
     installed = _probe_engine_installed(env)
     ephemeral = _probe_ephemeral_host(env)
     if installed.value and not ephemeral.value:
@@ -219,9 +196,6 @@ _PROBES: Dict[str, Callable[[Mapping[str, str]], Capability]] = {
 
 
 def capability(name: str, env: Optional[Mapping[str, str]] = None) -> Capability:
-    """One capability, probed lazily. Unknown name or raising probe both yield
-    a permissive `True` carrying the reason — never an exception on a hot
-    path."""
     e = _env_map(env)
     probe = _PROBES.get(name)
     if probe is None:

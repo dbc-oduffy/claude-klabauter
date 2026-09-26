@@ -1,10 +1,3 @@
-"""Tests for coordinator_core.ops.resolve_baton_path (op baton.resolve_path_and_repo).
-
-Wave-3 settlement B5 coverage: native path resolution, git-computed relative path
-(no manual prefix strip), outside-any-repo structured error, and the CC-4
-double-invocation idempotency proof. Git runs only against tmp_path throwaway
-repos — never the working repo.
-"""
 from __future__ import annotations
 
 import subprocess
@@ -17,8 +10,6 @@ from coordinator_core.win_portability import (
     no_console_passthrough_kwargs,
 )
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -64,8 +55,6 @@ def test_baton_in_repo_subdir(repo):
 
     assert "error" not in result
     assert result["abs_path"] == str(baton.resolve())
-    # repo_root comes verbatim from git — compare against git's own answer so the
-    # assertion is macOS-/private-symlink- and Windows-drive-form agnostic.
     assert result["repo_root"] == _rev_parse_toplevel(baton_dir)
     assert result["git_relative_path"] == "state/handoffs/2026-07-22_baton.md"
 
@@ -132,8 +121,6 @@ def test_missing_param_structured_error():
 
 
 def test_double_invocation_identical_result(repo):
-    """CC-4 idempotency proof: pure read — second call with identical inputs is a
-    safe no-op returning the identical documented shape."""
     baton_dir = repo / "state"
     baton_dir.mkdir()
     baton = baton_dir / "baton.md"

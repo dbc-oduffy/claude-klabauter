@@ -54,12 +54,6 @@ def _require_module() -> ModuleType:
 def test_field_is_false_when_the_only_degrade_row_is_unrelated_to_the_dialect_guard(
     monkeypatch, tmp_path
 ):
-    """A `cold_run` row (warm/hook_http.py's own, unrelated call site) exists in
-    degrade.jsonl, but the dialect guard itself is ARMED under every checked
-    interpreter -- `durable_degrade_record_exists` must read False, not True,
-    because the guard never degraded. The pre-fix `.exists()` check reads True
-    here, which is exactly defect two: a field conflating any degrade with
-    this one."""
     mod = _require_module()
 
     from coordinator_core.warm import telemetry as _telemetry
@@ -90,8 +84,6 @@ def test_field_is_false_when_the_only_degrade_row_is_unrelated_to_the_dialect_gu
 
 
 def test_field_is_true_when_this_guard_actually_degraded(monkeypatch, tmp_path):
-    """Sanity check on the other side: once THIS guard's own disarm event has
-    written its attributable row, the field reads True."""
     mod = _require_module()
 
     from coordinator_core.bash_guards import _dialect as _dialect_mod

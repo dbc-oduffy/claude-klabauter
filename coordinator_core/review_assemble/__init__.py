@@ -87,22 +87,10 @@ class _ReviewAssembleExitCode:
     TRANSPORT = 3
 
 
-#: The printed usage string's `--surface` value set, derived from
 #: `residue.EXPLICIT_SURFACES` (the caller-facing surface vocabulary) rather
-#: than a fourth hand-spelled copy -- three hand-synced literals is how the
-#: help text went stale after C2 added `roadmap` (Review: code-reviewer --
-#: C2 residual).
 _SURFACE_USAGE = "|".join(residue.EXPLICIT_SURFACES)
 
 
-# C5: the shared constructor's (C1) per-type required-flag computation for
-# this host's one emitted row (coordinator_core/ops/doctype_hosts.py --
-# keyed (type="review-findings", ceremony="review-assemble"),
-# module=this package). `--scope` is comma-joined at the call site (the
-# real parser's `--scope` is a single `PATH[,PATH...]` string argument, not
-# an `action="append"` flag) -- same reason `roadmap_planning_assemble`
-# joins `--goals` rather than letting the shared constructor's per-item
-# repeat shape run over a list value.
 _REVIEW_FINDINGS_FLAG_SPEC: tuple[Flag, ...] = (
     Flag("--slice", "slice_id", required=True),
     Flag("--scope", "scope", required=True),
@@ -110,11 +98,6 @@ _REVIEW_FINDINGS_FLAG_SPEC: tuple[Flag, ...] = (
 
 
 def _review_findings_out_slug(scope: Sequence[str]) -> str:
-    """Lowercase-dash slug of the joined scope paths, mirroring
-    `coordinator-doc-new`'s own `_slug_from_scope` closely enough for a
-    computed (never free-text) `--out` default -- collapses any run of
-    non-alphanumeric characters to a single dash and strips leading/
-    trailing dashes."""
     text = ",".join(scope)
     out = []
     prev_dash = False
@@ -181,14 +164,6 @@ def brief(
     scope: Optional[Sequence[str]] = None,
     session_id: Optional[str] = None,
 ) -> dict[str, Any]:
-    """C5: this module's own scaffold-emission compute -- distinct from
-    `residue.brief` (the resident-segment renderer this module does not
-    wrap). Returns `{"directives": [...]}`: a `review-findings` directive
-    when the caller has resolved BOTH `slice_id` and `scope` (the review
-    fan-out dispatcher's own per-persona assignment), else an empty list --
-    additive and gated, same shape as `roadmap_planning_assemble.brief`'s
-    C3 precedent, so a caller supplying neither is unaffected.
-    """
     directives: list[dict[str, Any]] = []
     if slice_id and scope:
         directives.append(
@@ -277,9 +252,7 @@ def _dispatch_brief(rest: list[str]) -> int:
     return _ReviewAssembleExitCode.SUCCESS
 
 
-#: Known subcommand tokens -> handler. `brief` is also reachable via
 #: FALLTHROUGH (see `main`) so it does not strictly need to appear here,
-#: but registering it keeps this the one place a new subcommand is added.
 _SUBCOMMANDS = {
     "brief": _dispatch_brief,
 }

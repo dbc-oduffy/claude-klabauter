@@ -45,12 +45,6 @@ DEFAULT_AGE_DAYS = 90
 
 @dataclass(frozen=True)
 class MemoPruneResult:
-    """Three-state B6 verdict over `cross-repo/archive/*.md`.
-
-    `prunable`/`retained`/`indeterminate` are sorted path lists (POSIX-style,
-    relative to `repo_root`). No per-leg evidence dict -- the only caller
-    emits paths and counts, never a per-file audit trail.
-    """
 
     prunable: list[str] = field(default_factory=list)
     retained: list[str] = field(default_factory=list)
@@ -60,16 +54,6 @@ class MemoPruneResult:
 def compute_memo_prune_candidates(
     repo_root: Path | str, age_days: int = DEFAULT_AGE_DAYS
 ) -> MemoPruneResult:
-    """Compute the B6 prune-candidate partition over `cross-repo/archive/*.md`.
-
-    A candidate is `prunable` iff `status: actioned` AND mtime age >= `age_days`.
-    A candidate with no `status:` key is `indeterminate`, never `prunable`,
-    regardless of age. Everything else (a real, non-`actioned` status) is
-    `retained`.
-
-    Raises `UpdatedocsTargetMissing` if `cross-repo/archive/` does not exist
-    under `repo_root`.
-    """
     repo_root = Path(repo_root)
     archive_dir = Path(memo_corpus_root(str(repo_root))) / "archive"
     if not archive_dir.is_dir():
@@ -88,10 +72,7 @@ def compute_memo_prune_candidates(
         try:
             mtime = file_path.stat().st_mtime
         except OSError:
-            # Present at glob time, gone or unreadable by the stat. "We could
             # not look" is INDETERMINATE, never a silent drop: the three lists
-            # must account for every file the glob returned, or a caller
-            # reconciling totals finds a gap.
             indeterminate.append(rel)
             continue
 
@@ -110,10 +91,6 @@ def compute_memo_prune_candidates(
             continue
 
         status_leg = status == "actioned"
-        # An unstat-able file has no age, and "no age" is not "age 0": it can
-        # never satisfy the age leg, and it must not be reported as failing it
-        # on a measurement that was never taken. (age_days_actual is always
-        # set here since the stat above already succeeded.)
         age_leg = age_days_actual >= age_floor_days
 
         if status_leg and age_leg:

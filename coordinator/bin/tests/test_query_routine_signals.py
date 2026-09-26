@@ -1,27 +1,3 @@
-"""test_query_routine_signals.py -- C4's own test surface for `coordinator/bin/
-query-routine-signals.py`.
-
-Spec backlink: plan `2026-08-11-three-trampolines-and-the-bare-repo-producer.md`
-§ C4.
-
-Pins, per C4's body: the six signal names in the emitter's own fixed order
-(weekly, docs, arch-audit, bug-sweep, dormant-repo, distill-backlog); exit 1
-with a diagnostic on repo-root-resolution failure and on a `collect()`
-failure; and the two `--help` honesty strings (dormant-repo is a hardcoded
-placeholder; `collect()` is not cheap). `--help`/`-h` and an unrecognized
-argument both go through `argparse`, which raises `SystemExit` (0 and 2
-respectively) rather than returning -- matching `query-roadmap-serve.py`'s
-convention.
-
-`collect()` itself is stubbed throughout -- it spawns real subprocesses and
-60s-timeout git calls, which this suite must never invoke live (see
-`test_op_trampoline.py`'s own stubbing pattern, mirrored here).
-
-AC8 (red-before-green): before this chunk, `coordinator/bin/query-routine-
-signals.py` did not exist, so every test in this file failed on
-`ModuleNotFoundError`/import error against the pre-change tree. They pass
-now that the file exists and behaves as pinned.
-"""
 from __future__ import annotations
 
 import io
@@ -135,10 +111,6 @@ class TestMain(unittest.TestCase):
         self.assertIn("boom", stderr.getvalue())
 
     def test_claude_klabauter_root_resolution_failure_returns_1_without_calling_collect(self):
-        # resolve_claude_klabauter_root_or_exit() itself never raises -- it catches
-        # RuntimeError internally and returns 1 (see test_op_trampoline.py's
-        # own coverage of that path). This CLI only needs to propagate the
-        # int short-circuit without calling collect().
         with mock.patch.object(
             query_routine_signals, "resolve_repo_root_or_exit", return_value="/repo/match"
         ), mock.patch.object(

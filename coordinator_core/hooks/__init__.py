@@ -135,128 +135,103 @@ import sys as _sys
 import traceback as _traceback
 from typing import Dict
 
-# ---------------------------------------------------------------------------
-# Eager-import table: dotted module path per hook module that used to be a bare
-# `from coordinator_core.hooks import X` statement. Kept as data (mirroring
 # coordinator_core.ops._EAGER_OP_MODULES) so _eager_import_all() is a single
-# loop rather than 20 duplicated import lines, and so it can be re-invoked
-# on demand (C2's registry-miss fallback and guard_roster_ops.py's roster
-# call) without re-running module-level code. Retained deliberately, not
 # apparatus residue — mirroring C6's own note for _EAGER_OP_MODULES: it is
-# the table _eager_import_all() iterates, so retaining the function retains
-# the list.
-# ---------------------------------------------------------------------------
 _EAGER_HOOK_MODULES: list[str] = [
-    "coordinator_core.hooks.nudge_foreground_agent_dispatch",  # registers "hooks.nudge_foreground_agent_dispatch"
-    "coordinator_core.hooks.nudge_named_agent_report_delivery",  # registers "hooks.nudge_named_agent_report_delivery"
-    "coordinator_core.hooks.suggest_sonnet_research",  # registers "hooks.suggest_sonnet_research"
-    "coordinator_core.hooks.nudge_em_code_dispatch",  # registers "hooks.nudge_em_code_dispatch"
-    "coordinator_core.hooks.nudge_unauthorized_handoff",  # registers "hooks.nudge_unauthorized_handoff"
-    "coordinator_core.hooks.postuse_advisory_dispatch",  # registers "hooks.postuse_advisory_dispatch"
-    "coordinator_core.hooks.track_touched_files",  # registers "hooks.track_touched_files"
-    "coordinator_core.hooks.agent_completion_log",  # registers "hooks.agent_completion_log"
-    "coordinator_core.hooks.track_dispatched_agents",  # registers "hooks.track_dispatched_agents"
-    "coordinator_core.hooks.agent_postuse_dispatch",  # registers "hooks.agent_postuse_dispatch"
-    "coordinator_core.hooks.context_pressure_precompact",  # registers "hooks.context_pressure_precompact"
-    "coordinator_core.hooks.subagent_zero_tool_use",  # registers "hooks.subagent_zero_tool_use"
-    "coordinator_core.hooks.subagent_zero_tool_use_surface",  # registers "hooks.subagent_zero_tool_use_surface"
-    "coordinator_core.hooks.subagent_zero_tool_use_resolve",  # registers "hooks.subagent_zero_tool_use_resolve"
-    "coordinator_core.hooks.subagent_arrival_check",  # registers "hooks.subagent_arrival_check"
-    "coordinator_core.hooks.subagent_fabrication_check",  # registers "hooks.subagent_fabrication_check"
-    "coordinator_core.hooks.receiver_state_sensor",  # registers "hooks.receiver_state_sensor"
-    "coordinator_core.hooks.subagent_sidecar_fill_check",  # registers "hooks.subagent_sidecar_fill_check"
-    "coordinator_core.hooks.subagent_review_mark",  # registers "hooks.subagent_review_mark"
-    "coordinator_core.hooks.cater_subagent_start",  # registers "hooks.cater_subagent_start"
-    "coordinator_core.hooks.nudge_autonomous_askuserquestion",  # registers "hooks.nudge_autonomous_askuserquestion"
-    "coordinator_core.hooks.sessionend_archive_session",  # registers "hooks.sessionend_archive_session"
-    "coordinator_core.hooks.watchdog_undischarged_next_move",  # registers "hooks.watchdog_undischarged_next_move"
-    "coordinator_core.hooks.plan_persistence_check",  # registers "hooks.plan_persistence_check"
-    "coordinator_core.hooks.runtime_tripwire_em_check",  # registers "hooks.runtime_tripwire_em_check"
-    "coordinator_core.hooks.stop_dispatch",  # registers "hooks.stop_dispatch"
-    # W4-C16: register wave 4's hook bodies (W4-C5..C14) so hook-run's
-    # single command entrypoint can reach every hooks.<name> op this wave
-    # landed, mirroring the eager-registration shape above.
-    "coordinator_core.hooks.check_claude_md_size",  # registers "hooks.check_claude_md_size"
-    "coordinator_core.hooks.derive_global_doctrine_live_copy",  # registers "hooks.derive_global_doctrine_live_copy"
-    "coordinator_core.hooks.derive_setup_copies",  # registers "hooks.derive_setup_copies"
-    "coordinator_core.hooks.guard_doctrine_surface_bash_write",  # registers "hooks.guard_doctrine_surface_bash_write"
-    "coordinator_core.hooks.guard_doctrine_surface_ratio",  # registers "hooks.guard_doctrine_surface_ratio"
-    "coordinator_core.hooks.guard_doctrine_changelog_prose",  # registers "hooks.guard_doctrine_changelog_prose"
-    "coordinator_core.hooks.preuse_write_dispatch",  # registers "hooks.preuse_write_dispatch"
-    "coordinator_core.hooks.guard_python_syntax_on_write",  # registers "hooks.guard_python_syntax_on_write"
-    "coordinator_core.hooks.guard_posix_invocation_doctrine_write",  # registers "hooks.guard_posix_invocation_doctrine_write"
-    "coordinator_core.hooks.guard_test_tree_git_fixture_spawn",  # registers "hooks.guard_test_tree_git_fixture_spawn"
-    "coordinator_core.hooks.guard_handoff_summary_cap_on_write",  # registers "hooks.guard_handoff_summary_cap_on_write"
-    "coordinator_core.hooks.guard_repo_setup_claude_home_refusal",  # registers "hooks.guard_repo_setup_claude_home_refusal"
-    "coordinator_core.hooks.guard_review_integrator_sidecar_intake",  # registers "hooks.guard_review_integrator_sidecar_intake"
-    "coordinator_core.hooks.nudge_plan_test_surface_tier",  # registers "hooks.nudge_plan_test_surface_tier"
-    "coordinator_core.hooks.preuse_agent_dispatch",  # registers "hooks.preuse_agent_dispatch"
-    "coordinator_core.hooks.preuse_skill_dispatch",  # registers "hooks.preuse_skill_dispatch"
-    "coordinator_core.hooks.preuse_search_dispatch",  # registers "hooks.preuse_search_dispatch"
-    "coordinator_core.hooks.enforce_agent_dispatch_mode",  # registers "hooks.enforce_agent_dispatch_mode"
-    "coordinator_core.hooks.block_unenumerated_agent_type",  # registers "hooks.block_unenumerated_agent_type"
-    "coordinator_core.hooks.guard_named_dispatch_tool_restriction",  # registers "hooks.guard_named_dispatch_tool_restriction"
-    "coordinator_core.hooks.guard_host_subagent_bash_ban",  # registers "hooks.guard_host_subagent_bash_ban"
-    "coordinator_core.hooks.guard_host_subagent_bash_spawn_shapes",  # registers "hooks.guard_host_subagent_bash_spawn_shapes"
-    "coordinator_core.hooks.preuse_bash_dispatch",  # registers "hooks.preuse_bash_dispatch"
-    "coordinator_core.hooks.block_workflow_foreign_emission",  # registers "hooks.block_workflow_foreign_emission"
-    "coordinator_core.hooks.block_workflow_unmodeled_agent",  # registers "hooks.block_workflow_unmodeled_agent"
-    "coordinator_core.hooks.allow_emitted_workflow_fire",  # registers "hooks.allow_emitted_workflow_fire"
-    "coordinator_core.hooks.nudge_workflow_authoring_trampoline",  # registers "hooks.nudge_workflow_authoring_trampoline"
-    "coordinator_core.hooks.nudge_multiwave_workflow",  # registers "hooks.nudge_multiwave_workflow"
-    "coordinator_core.hooks.block_dispatch_suite_invocation",  # registers "hooks.block_dispatch_suite_invocation"
-    "coordinator_core.hooks.strip_worktree_isolation",  # registers "hooks.strip_worktree_isolation"
-    "coordinator_core.hooks.block_worktree_tool",  # registers "hooks.block_worktree_tool"
-    "coordinator_core.hooks.sessionstart_dispatch",  # registers "hooks.sessionstart_dispatch"
-    "coordinator_core.hooks.sessionstart_async_dispatch",  # registers "hooks.sessionstart_async_dispatch"
-    "coordinator_core.hooks.assert_em_role",  # registers "hooks.assert_em_role"
-    "coordinator_core.hooks.sweep_boot",  # registers "hooks.sweep_boot"
-    "coordinator_core.hooks.session_start_announce_job_mode",  # registers "hooks.session_start_announce_job_mode"
-    "coordinator_core.hooks.session_start_register_doe_claude_root",  # registers "hooks.session_start_register_doe_claude_root"
-    "coordinator_core.hooks.session_start_register_published_engine",  # registers "hooks.session_start_register_published_engine"
-    "coordinator_core.hooks.repin_cloud_engine_root",  # registers "hooks.repin_cloud_engine_root"
-    "coordinator_core.hooks.session_start_repair_prepare_commit_msg_hook",  # registers "hooks.session_start_repair_prepare_commit_msg_hook"
-    "coordinator_core.hooks.session_start_write_plugin_root_breadcrumb",  # registers "hooks.session_start_write_plugin_root_breadcrumb"
-    "coordinator_core.hooks.sessionstart_bin_drift_refresh",  # registers "hooks.sessionstart_bin_drift_refresh"
-    "coordinator_core.hooks.sessionstart_ensure_http_forwarder",  # registers "hooks.sessionstart_ensure_http_forwarder"
-    "coordinator_core.hooks.guard_hook_generation_self_probe",  # registers "hooks.guard_hook_generation_self_probe"
-    "coordinator_core.hooks.session_start_guard_plane_check",  # registers "hooks.session_start_guard_plane_check"
-    "coordinator_core.hooks.project_orientation",  # registers "hooks.project_orientation"
-    "coordinator_core.hooks.pickup_autofire",  # registers "hooks.pickup_autofire"
-    "coordinator_core.hooks.mise_autofire",  # registers "hooks.mise_autofire"
-    "coordinator_core.hooks.handoff_segment_inject",  # registers "hooks.handoff_segment_inject"
-    "coordinator_core.hooks.group_em_autofire",  # registers "hooks.group_em_autofire"
-    "coordinator_core.hooks.nudge_initiative_goals_ladder",  # registers "hooks.nudge_initiative_goals_ladder"
-    "coordinator_core.hooks.offer_exploration_tier_dispatch",  # registers "hooks.offer_exploration_tier_dispatch"
-    "coordinator_core.hooks.observe_config_change",  # registers "hooks.observe_config_change"
-    "coordinator_core.hooks.observe_post_compact",  # registers "hooks.observe_post_compact"
-    "coordinator_core.hooks.postuse_stop_family_dispatch",  # registers "hooks.postuse_stop_family_dispatch"
-    "coordinator_core.hooks.sessionend_auto_commit",  # registers "hooks.sessionend_auto_commit"
-    "coordinator_core.hooks.subagent_zero_tool_use_detect",  # registers "hooks.subagent_zero_tool_use_detect"
-    "coordinator_core.hooks.group_em_park_spool",  # registers "hooks.group_em_park_spool"
-    "coordinator_core.hooks.guard_kira_verdict_routed",  # registers "hooks.guard_kira_verdict_routed"
-    "coordinator_core.hooks.guard_manufactured_blocker",  # registers "hooks.guard_manufactured_blocker"
+    "coordinator_core.hooks.nudge_foreground_agent_dispatch",
+    "coordinator_core.hooks.nudge_named_agent_report_delivery",
+    "coordinator_core.hooks.suggest_sonnet_research",
+    "coordinator_core.hooks.nudge_em_code_dispatch",
+    "coordinator_core.hooks.nudge_unauthorized_handoff",
+    "coordinator_core.hooks.postuse_advisory_dispatch",
+    "coordinator_core.hooks.track_touched_files",
+    "coordinator_core.hooks.agent_completion_log",
+    "coordinator_core.hooks.track_dispatched_agents",
+    "coordinator_core.hooks.agent_postuse_dispatch",
+    "coordinator_core.hooks.context_pressure_precompact",
+    "coordinator_core.hooks.subagent_zero_tool_use",
+    "coordinator_core.hooks.subagent_zero_tool_use_surface",
+    "coordinator_core.hooks.subagent_zero_tool_use_resolve",
+    "coordinator_core.hooks.subagent_arrival_check",
+    "coordinator_core.hooks.subagent_fabrication_check",
+    "coordinator_core.hooks.receiver_state_sensor",
+    "coordinator_core.hooks.subagent_sidecar_fill_check",
+    "coordinator_core.hooks.subagent_review_mark",
+    "coordinator_core.hooks.cater_subagent_start",
+    "coordinator_core.hooks.nudge_autonomous_askuserquestion",
+    "coordinator_core.hooks.sessionend_archive_session",
+    "coordinator_core.hooks.watchdog_undischarged_next_move",
+    "coordinator_core.hooks.plan_persistence_check",
+    "coordinator_core.hooks.runtime_tripwire_em_check",
+    "coordinator_core.hooks.stop_dispatch",
+    "coordinator_core.hooks.check_claude_md_size",
+    "coordinator_core.hooks.derive_global_doctrine_live_copy",
+    "coordinator_core.hooks.derive_setup_copies",
+    "coordinator_core.hooks.guard_doctrine_surface_bash_write",
+    "coordinator_core.hooks.guard_doctrine_surface_ratio",
+    "coordinator_core.hooks.guard_doctrine_changelog_prose",
+    "coordinator_core.hooks.preuse_write_dispatch",
+    "coordinator_core.hooks.guard_python_syntax_on_write",
+    "coordinator_core.hooks.guard_posix_invocation_doctrine_write",
+    "coordinator_core.hooks.guard_test_tree_git_fixture_spawn",
+    "coordinator_core.hooks.guard_handoff_summary_cap_on_write",
+    "coordinator_core.hooks.guard_repo_setup_claude_home_refusal",
+    "coordinator_core.hooks.guard_review_integrator_sidecar_intake",
+    "coordinator_core.hooks.nudge_plan_test_surface_tier",
+    "coordinator_core.hooks.preuse_agent_dispatch",
+    "coordinator_core.hooks.preuse_skill_dispatch",
+    "coordinator_core.hooks.preuse_search_dispatch",
+    "coordinator_core.hooks.enforce_agent_dispatch_mode",
+    "coordinator_core.hooks.block_unenumerated_agent_type",
+    "coordinator_core.hooks.guard_named_dispatch_tool_restriction",
+    "coordinator_core.hooks.guard_host_subagent_bash_ban",
+    "coordinator_core.hooks.guard_host_subagent_bash_spawn_shapes",
+    "coordinator_core.hooks.preuse_bash_dispatch",
+    "coordinator_core.hooks.block_workflow_foreign_emission",
+    "coordinator_core.hooks.block_workflow_unmodeled_agent",
+    "coordinator_core.hooks.allow_emitted_workflow_fire",
+    "coordinator_core.hooks.nudge_workflow_authoring_trampoline",
+    "coordinator_core.hooks.nudge_multiwave_workflow",
+    "coordinator_core.hooks.block_dispatch_suite_invocation",
+    "coordinator_core.hooks.strip_worktree_isolation",
+    "coordinator_core.hooks.block_worktree_tool",
+    "coordinator_core.hooks.sessionstart_dispatch",
+    "coordinator_core.hooks.sessionstart_async_dispatch",
+    "coordinator_core.hooks.assert_em_role",
+    "coordinator_core.hooks.sweep_boot",
+    "coordinator_core.hooks.session_start_announce_job_mode",
+    "coordinator_core.hooks.session_start_register_doe_claude_root",
+    "coordinator_core.hooks.session_start_register_published_engine",
+    "coordinator_core.hooks.repin_cloud_engine_root",
+    "coordinator_core.hooks.session_start_repair_prepare_commit_msg_hook",
+    "coordinator_core.hooks.session_start_write_plugin_root_breadcrumb",
+    "coordinator_core.hooks.sessionstart_bin_drift_refresh",
+    "coordinator_core.hooks.sessionstart_ensure_http_forwarder",
+    "coordinator_core.hooks.guard_hook_generation_self_probe",
+    "coordinator_core.hooks.session_start_guard_plane_check",
+    "coordinator_core.hooks.project_orientation",
+    "coordinator_core.hooks.pickup_autofire",
+    "coordinator_core.hooks.mise_autofire",
+    "coordinator_core.hooks.handoff_segment_inject",
+    "coordinator_core.hooks.group_em_autofire",
+    "coordinator_core.hooks.nudge_initiative_goals_ladder",
+    "coordinator_core.hooks.offer_exploration_tier_dispatch",
+    "coordinator_core.hooks.observe_config_change",
+    "coordinator_core.hooks.observe_post_compact",
+    "coordinator_core.hooks.postuse_stop_family_dispatch",
+    "coordinator_core.hooks.sessionend_auto_commit",
+    "coordinator_core.hooks.subagent_zero_tool_use_detect",
+    "coordinator_core.hooks.group_em_park_spool",
+    "coordinator_core.hooks.guard_kira_verdict_routed",
+    "coordinator_core.hooks.guard_manufactured_blocker",
 ]
 
 
-# module dotted-path -> the exception raised the last time we tried to import
-# it. Populated by _eager_import_all() on a per-module ImportError/Exception;
-# cleared on a subsequent successful import of that same module (self-healing
-# if the module is fixed mid-process). Mirrors
 # coordinator_core.ops._POISONED_MODULES in name and role — read by
-# coordinator_core.ipc's dispatch path to turn a registry MISS on a poisoned
-# hooks.* module's op into the real cause instead of a generic "Method not
-# found".
 _POISONED_MODULES: Dict[str, BaseException] = {}
 
 
 def get_poisoned_modules() -> Dict[str, BaseException]:
-    """Return a shallow copy of {module dotted-path: last import exception}.
-
-    Purpose: read-only seam mirroring coordinator_core.ops.get_poisoned_modules,
-    for a future ipc.py disambiguation of a hooks.* registry MISS caused by an
-    import failure rather than an unknown op.
-    """
     return dict(_POISONED_MODULES)
 
 
@@ -308,11 +283,4 @@ def _eager_import_all() -> None:
             _POISONED_MODULES.pop(module_path, None)
 
 
-# Lazy is the only mode: importing this bare package never eagerly registers
 # any op. The former `_lazy_ops_requested()` gate (COORDINATOR_CORE_LAZY_OPS
-# env var / sys._coordinator_core_lazy_ops in-process attribute, reused
-# verbatim from coordinator_core.ops's own now-retired channel) is retired —
-# there is no longer a flag to read or a channel to arm, so no conditional
-# call to _eager_import_all() happens here. Callers reach registration
-# through the targeted per-op import (ipc.py's registry-miss path) or, for
-# the rare full-registration need, by calling _eager_import_all() directly.

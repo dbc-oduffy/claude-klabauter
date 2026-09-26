@@ -90,10 +90,6 @@ class ScaffoldHandoffPredecessorTest(unittest.TestCase):
             )
 
     def test_existing_recovery_scaffolder_unaffected(self):
-        """Non-regression: `_scaffold_recovery`'s own `predecessor:` field
-        (a crashed commit SHA, or null -- NOT a baton path) must be
-        completely untouched by this fix -- it takes no new `predecessor`
-        path parameter and its own hardcoded/conditional shape is unchanged."""
         content = _cli._scaffold_recovery(
             title="t", branch="b", recovers_session="sid-1"
         )

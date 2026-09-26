@@ -70,9 +70,7 @@ from coordinator_core.plan_assemble.predicates import PredicateContext, undeterm
 
 _SOURCE_MEMO_RE = re.compile(r"^source_memo:\s*(.+?)\s*$", re.MULTILINE)
 
-#: Frontmatter block delimiter — `---` alone on its own line, opening and
 #: closing the YAML block. Used to scope `_SOURCE_MEMO_RE` to genuine
-#: frontmatter rather than the whole file body.
 _FRONTMATTER_BLOCK_RE = re.compile(r"\A---\s*\n(.*?\n)---\s*(?:\n|\Z)", re.DOTALL)
 
 
@@ -92,13 +90,6 @@ def _frontmatter_block(text: str) -> str:
 
 
 def _today_dated_plan_collision(repo_root: Path) -> dict[str, Any]:
-    """Leg (a): does another plan file dated today already exist under
-    `docs/plans/`, or does today's git history already carry a commit
-    touching `docs/plans/`.
-
-    Returns a dict of raw evidence — never a verdict. `undetermined(...)`
-    only if `docs/plans/` itself cannot be listed at all.
-    """
     plans_dir = repo_root / "docs" / "plans"
     if not plans_dir.is_dir():
         return undetermined(reason="docs/plans/ is not a directory under repo_root")
@@ -143,13 +134,6 @@ def _today_dated_plan_collision(repo_root: Path) -> dict[str, Any]:
 def _source_memo_collision(
     repo_root: Path, source_memo: str | None, own_plan_path: Path | None
 ) -> dict[str, Any]:
-    """Leg (b): does any OTHER plan file already carry a `source_memo:`
-    frontmatter key naming *source_memo*, with a body-mention fallback.
-
-    Returns `undetermined(...)` if `source_memo` was not supplied (this
-    plan is not actioning a cross-repo memo, so the leg does not apply) or
-    if `docs/plans/` cannot be listed.
-    """
     if not source_memo:
         return undetermined(
             reason="plan frontmatter carries no source_memo: — leg (b) does not apply"

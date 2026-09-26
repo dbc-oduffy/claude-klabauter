@@ -84,29 +84,8 @@ from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import allow_advisory, no_advisory, payload_of
 from coordinator_core.hooks._payload import field
 
-# A brief that already routes its report through SendMessage-to-main needs no advisory.
-# Deliberately loose: it must match the shapes an EM actually writes ("SendMessage to
-# main", 'SendMessage({to: "main"})', "send your report to main via SendMessage"), and a
 # false NEGATIVE here costs only a redundant advisory on an already-correct brief, while a
-# false positive silences the case this hook exists for. Ordering-independent (the two
-# tokens may appear either way round) and case-insensitive.
 # A SIDECAR-PROVISIONED DISPATCH IS NEVER SUPPRESSED, however well its brief
-# is worded. The suppression below assumes a brief naming SendMessage-to-main is
-# correctly briefed and needs no warning. For a sidecar dispatch that premise is
-# wrong in the direction that costs work: doe-claude-em session `36630d4c`
-# (2026-08-10) briefed all four named reviewers with both tokens present, and
-# three of the four returned findings by SendMessage while leaving the
-# provisioned sidecar at its 703-byte scaffold. `review-integrator` then refused
-# on its empty-scaffold intake guard, correctly, and every finding needed a
-# round trip to recover -- in exactly the fan-out shape partitioned review
-# mandates.
-#
-# The gap is audience, not wording: the advisory addresses the EM WRITING the
-# brief, while the agent READING it substitutes the message for the write --
-# reasonably, since every sidecar-writing agent definition says to write
-# findings and then return a pointer, and for a teammate the return IS
-# SendMessage. A correctly-worded brief is not evidence the file will be
-# written, so this is the one case the suppression must not cover.
 _SIDECAR_RE = re.compile(r"sidecar|subagent-share", re.I)
 _SENDMESSAGE_RE = re.compile(r"sendmessage", re.I)
 _MAIN_TARGET_RE = re.compile(r"\bmain\b", re.I)
@@ -150,7 +129,6 @@ def _handler(params: dict, repo_root=None) -> dict:
         return no_advisory()
 
     # Already-correct briefs stay silent — see _SENDMESSAGE_RE's note on why this
-    # suppression is deliberately generous rather than precise.
     prompt = tool_input.get("prompt")
     if (
         isinstance(prompt, str)

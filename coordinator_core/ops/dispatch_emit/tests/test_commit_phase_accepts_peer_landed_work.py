@@ -31,8 +31,6 @@ def test_the_peer_landed_state_is_named_as_a_success():
 
 
 def test_it_demands_both_checks_rather_than_a_clean_tree_alone():
-    """The original clause's whole point is that tracked-and-clean is equally
-    true of a path this run never touched. The new branch may not relax that."""
     prompt = _prompt()
     assert "git status --porcelain" in prompt
     assert "git diff HEAD" in prompt
@@ -40,12 +38,10 @@ def test_it_demands_both_checks_rather_than_a_clean_tree_alone():
 
 
 def test_it_requires_the_real_carrying_commits_be_named():
-    """The success token reports HEAD, so attribution would otherwise be lost."""
     assert "git log --oneline -1" in _prompt()
 
 
 def test_the_original_resumed_run_clause_survives():
-    """A third state is added; the two that existed are not loosened."""
     prompt = _prompt()
     assert "ALREADY COMMITTED" in prompt
     assert "do not report success on clean-tree" in prompt

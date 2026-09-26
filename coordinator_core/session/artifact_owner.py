@@ -149,38 +149,14 @@ from coordinator_core.frontmatter.primitives import (
 )
 from coordinator_core.session import claims, liveness, machinery_paths, reachability
 
-#: `claimed_by` is handled separately (it leads the ordering, § docstring) --
-#: this constant covers only the two remaining top-level scalar conventions.
 _SCALAR_OWNER_FIELDS = ("authoring_session", "created_by_session")
 
-#: Claim classes probed for a `claim_dir` owner, per `claims.claim_artifact`
-#: -- basename-only identity across all three, never inferred from the
-#: artifact's own directory (module docstring, convention 2).
 _CLAIM_DIR_CLASSES = ("handoff", "memo", "plan")
 
-#: Claim classes whose dir is keyed on the artifact's STEM, not its full
-#: basename. `claims.claim_plan` REFUSES a `.md`-suffixed slug outright
-#: (`cs_claim_plan: expected a bare plan slug`), so every plan claim dir on
-#: disk is stem-keyed while handoff/memo dirs keep the extension. Probing
-#: all three with one spelling silently misses the whole plan class -- the
-#: "who owns this plan?" read returned no owners for plans that were in
-#: fact claimed. Keyed off the writer's own contract, not a guess.
 _STEM_KEYED_CLAIM_CLASSES = frozenset({"plan"})
 
 _AGENT_SESSIONS_ENTRY_RE = re.compile(r'^\s*-\s*["\']?([^"\'|]+)')
 
-#: Either machinery root is accepted. The bucket moved from `state/subagent-share/`
-#: to `.coordinator-local/subagent-share/` (docs/plans/2026-09-02-state-keeps-the-
-#: work-not-the-machinery.md); a pattern pinned to the old root matches no live
-#: sidecar, and convention 6's owner read then returns "no owner" for every one of
-#: them -- silently, because an unmatched path is indistinguishable from an artifact
-#: that is simply not a sidecar. Both spellings stay accepted rather than swapping:
-#: pre-relocation paths persist in committed citations and archived records, and a
-#: reader that refuses them re-breaks the corpus the relocation left readable.
-#:
-#: Owned by `machinery_paths.subagent_share_id_pattern` -- this module calls
-#: the shared accessor rather than hand-spelling the pattern a second time
-#: (the failure this consolidation exists to close).
 _SUBAGENT_SHARE_DIR_RE = machinery_paths.subagent_share_id_pattern()
 
 
@@ -207,17 +183,6 @@ def _basename_cross_platform(artifact_path: str) -> str:
 
 @dataclass(frozen=True)
 class OwnerRecord:
-    """One extracted owner id, tagged with the frontmatter field/convention
-    it came from -- never collapsed with any other owner found on the same
-    artifact (module docstring's "do not silently pick one").
-
-    `claim_live`/`claim_stage` are populated ONLY for `source_field ==
-    "claim_dir"` -- the claim dir's own liveness verdict
-    (`liveness.claim_holder_live`) and stage (`brief`/`apply`), a signal
-    distinct from `resolve_address`'s reachability outcome on the same id
-    and never collapsed into it (AC2, module docstring). Every other
-    convention leaves both `None`: it names no claim dir of its own to ask.
-    """
 
     session_id: str
     source_field: str
@@ -227,9 +192,6 @@ class OwnerRecord:
 
 @dataclass(frozen=True)
 class OwnerResolution:
-    """One `OwnerRecord` paired with its `reachability.resolve_address()`
-    outcome, surfaced verbatim -- see module docstring's negative-spec on
-    never collapsing `not_reachable`/`ambiguous` into a boolean."""
 
     owner: OwnerRecord
     result: "reachability.ResolveResult"
@@ -237,12 +199,6 @@ class OwnerResolution:
 
 @dataclass(frozen=True)
 class ArtifactOwnerResult:
-    """The whole answer for one artifact path.
-
-    `owners` is `[]` -- not `None`, not an error -- when the artifact has no
-    recognised owner field; a distinct, explicit outcome from a read/parse
-    failure, which instead sets `file_error`.
-    """
 
     artifact_path: str
     owners: List[OwnerResolution] = field(default_factory=list)
@@ -250,14 +206,6 @@ class ArtifactOwnerResult:
 
 
 def _extract_agent_sessions_ids(fm: str) -> List[str]:
-    """Every `session_id` named by an `agent_sessions:` nested-block entry,
-    in file order.
-
-    Entries are encoded `"<session_id>|<status>|<created_at>"`
-    (`coordinator_core.ops.completion_ops._apply_session_append`'s own
-    write-side contract) -- this only reads the first `|`-delimited field,
-    same as that module's own idempotency check does on the write side.
-    """
     block = read_fm_nested_field(fm, "agent_sessions")
     if not block:
         return []
@@ -270,9 +218,6 @@ def _extract_agent_sessions_ids(fm: str) -> List[str]:
 
 
 def _extract_subagent_share_dir_id(artifact_path: str) -> Optional[str]:
-    """The `<id>` path segment immediately after `state/subagent-share/`,
-    when `artifact_path` sits under one -- the sixth recording convention
-    (session directory name, not a frontmatter field)."""
     m = _SUBAGENT_SHARE_DIR_RE.search(artifact_path)
     return m.group(1) if m else None
 
@@ -299,16 +244,6 @@ def _extract_claim_dir_owners(artifact_path: str, cwd: Optional[str] = None) -> 
         return []
 
     owners: List[OwnerRecord] = []
-    # `_claim_base`'s `class_` param is
-    # only used inside its baton-repo diagnostic branch, and this call always
-    # takes the legacy (baton_repo_root="") path where it's inert; all three
-    # classes therefore resolve to the same base, so it is resolved ONCE
-    # (using the first real class, keeping the call honest for a future
-    # reader even though it's a no-op today) rather than once per iteration
-    # -- the loop previously re-called this per class, and on the production
-    # no-cwd path (`core.sessions_dir(cwd=None)` is deliberately never
-    # cached) that meant 3 uncached `git rev-parse` subprocess spawns per
-    # `resolve_artifact_owner` call instead of one.
     base = claims._claim_base(_CLAIM_DIR_CLASSES[0], "", cwd)
     if not base:
         return owners
@@ -320,8 +255,6 @@ def _extract_claim_dir_owners(artifact_path: str, cwd: Optional[str] = None) -> 
             continue
         sid = claims._read_claim_field(claim_dir, "session_id")
         if not sid:
-            # Legacy pid-only claim dir (pre `session_id` upgrade) -- no
-            # session id to key an owner on under this convention.
             continue
         owners.append(
             OwnerRecord(
@@ -335,18 +268,6 @@ def _extract_claim_dir_owners(artifact_path: str, cwd: Optional[str] = None) -> 
 
 
 def extract_owners(artifact_path: str, file_text: str, cwd: Optional[str] = None) -> List[OwnerRecord]:
-    """Every owner id recorded on `artifact_path`, tagged by source field,
-    in the fixed order documented on this module (`claimed_by`, `claim_dir`
-    entries in class order, `authoring_session`, `created_by_session`,
-    `agent_sessions` entries in file order, `subagent_share_dir`).
-
-    Returns `[]` -- not `None` -- when `file_text` has no parseable
-    frontmatter, no recognised owner field, and no claim dir exists; that is
-    a distinct, explicit "no owner recorded" outcome, not an error (module
-    docstring negative-spec). The `claim_dir` convention is independent of
-    `file_text` entirely (AC5) -- it still resolves when `file_text` is
-    empty (unreadable source file) or has no frontmatter.
-    """
     owners: List[OwnerRecord] = []
 
     split = split_frontmatter(file_text)
@@ -354,9 +275,6 @@ def extract_owners(artifact_path: str, file_text: str, cwd: Optional[str] = None
     if claimed_by:
         owners.append(OwnerRecord(session_id=claimed_by, source_field="claimed_by"))
 
-    # Deliberately OUTSIDE the `if split is not None:` guard below (AC5):
-    # claim identity is basename-only and independent of a successful
-    # frontmatter read, so this must not be moved inside that block.
     owners.extend(_extract_claim_dir_owners(artifact_path, cwd))
 
     if split is not None:
@@ -377,21 +295,6 @@ def extract_owners(artifact_path: str, file_text: str, cwd: Optional[str] = None
 
 
 def resolve_artifact_owner(artifact_path: str, cwd: Optional[str] = None) -> ArtifactOwnerResult:
-    """Read `artifact_path`, extract every recorded owner id, and resolve
-    each through `reachability.resolve_address()` -- surfaced verbatim, one
-    `OwnerResolution` per owner found.
-
-    A read/parse failure (missing file, unreadable, no frontmatter) sets
-    `file_error` -- but, unlike the five frontmatter/path conventions, does
-    NOT force `owners` empty (AC5): the `claim_dir` convention is keyed on
-    the basename alone and resolves independently of a successful file
-    read, so a missing or frontmatter-less artifact with a live claim still
-    reports that owner. Never raises, matching `reachability.resolve_
-    address`'s own advisory-read discipline. An artifact that reads fine
-    but names no owner field and has no claim dir ALSO returns `owners=[]`,
-    with `file_error=None` -- the two empty cases are distinguishable only
-    via `file_error`, never conflated.
-    """
     file_error: Optional[str] = None
     try:
         with open(artifact_path, "r", encoding="utf-8") as fh:

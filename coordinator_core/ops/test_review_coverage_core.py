@@ -1,18 +1,3 @@
-"""
-test_review_coverage_core.py — pytest unit tests for
-coordinator_core.ops.review_coverage_core.
-
-Independent parity derivation: builds real git fixtures (bare origin + working
-clone) and asserts against ground truth computed directly from `git rev-list`
-output in each test, rather than mirroring the bash oracle's assertions
-verbatim.
-
-Port of: review-coverage-core.test.sh (DoE c6d97219, 2026-07-22) — the bash
-oracle's assertions on the CLI's byte-shape (WARN/ERROR text, exit codes).
-
-Spec backlink: docs/plans/2026-06-23-chain-end-review-coverage-gate.md § C2
-Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
-"""
 
 from __future__ import annotations
 
@@ -27,13 +12,6 @@ from coordinator_core.ops.review_coverage_core import main
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
-
-
-# ---------------------------------------------------------------------------
-# Fixture helpers — bare origin + working clone (mirrors the bash oracle's
-# _make_fixture / _add_commit so a real `git rev-list origin/main..HEAD`
-# range is resolvable).
-# ---------------------------------------------------------------------------
 
 
 def _git(*args, cwd):
@@ -110,11 +88,6 @@ def _write_trail(repo: Path, name: str, obj: dict) -> Path:
     return p
 
 
-# ---------------------------------------------------------------------------
-# --reviewed-set mode
-# ---------------------------------------------------------------------------
-
-
 def test_reviewed_set_trail_path_arg_content_never_parsed_even_when_malicious(
     tmp_path, monkeypatch, capsys,
 ):
@@ -151,7 +124,6 @@ def test_reviewed_set_json_single_object(tmp_path, monkeypatch):
     rc = main(["--reviewed-set", str(trail)], cwd=str(repo))
     assert rc == 0
 
-    # independent ground truth
     expected = set(
         subprocess.run(
             ["git", "-C", str(repo), "rev-list", f"{origin}..{sha2}"],
@@ -163,11 +135,6 @@ def test_reviewed_set_json_single_object(tmp_path, monkeypatch):
 
 
 def test_reviewed_set_trail_file_content_never_credited(tmp_path, monkeypatch, capsys):
-    """A dual-JSON-object-per-line trail file shaped like a real diff record
-    (the shape `--segments-json` mode's `_parse_trail_file` still parses)
-    contributes nothing to --reviewed-set mode's output: post-C4, this mode
-    never loads or classifies trail records — only the resident store's own
-    membership is credited."""
     repo = _make_fixture(tmp_path)
     sha1 = _add_commit(repo, "src/a.py")
     sha2 = _add_commit(repo, "src/b.py")
@@ -204,13 +171,6 @@ def test_reviewed_set_non_diff_scope_kinds_skipped_silently(tmp_path, monkeypatc
 def test_reviewed_set_unrecognized_scope_kind_empty_sha_range_skipped_silently(
     tmp_path, monkeypatch, capsys,
 ):
-    """An unrecognized scope_kind ("inline-dispatch") with an empty sha_range
-    hits the `if not sha_range:` early return before the unrecognized-kind
-    accumulation branch, same as any other non-diff kind. It must produce no
-    WARN (the empty-sha_range WARN is diff-only) and must not appear in the
-    aggregated unrecognized-kind WARN either, since that branch is never
-    reached. Locks in the breadth of the `scope_kind == "diff" and warn`
-    guard — it is not scoped to recognized kinds like "plan" alone."""
     repo = _make_fixture(tmp_path)
     _add_commit(repo, "src/inline.py")
     trail = _write_trail(repo, "nd.json", {"scope_kind": "inline-dispatch", "artifact": "x"})
@@ -260,11 +220,6 @@ def test_reviewed_set_empty_trail_no_crash(tmp_path, monkeypatch, capsys):
 
 
 def test_reviewed_set_output_is_store_union_not_per_record_computation(tmp_path, monkeypatch, capsys):
-    """The SHA union across multiple review sessions is folded into the
-    resident store at write time (`review_trail.reviewed_set.fold_in`);
-    --reviewed-set mode performs no per-record range resolution or union
-    itself post-C4 — it prints exactly `read_reviewed_set()`'s membership,
-    verbatim, regardless of how many trail-path args are passed."""
     repo = _make_fixture(tmp_path)
     sha1 = _add_commit(repo, "src/u1.py")
     sha2 = _add_commit(repo, "src/u2.py")
@@ -279,14 +234,6 @@ def test_reviewed_set_output_is_store_union_not_per_record_computation(tmp_path,
 
 
 def test_reviewed_set_unrecognized_scope_kind_credit_comes_from_store_only(tmp_path, monkeypatch, capsys):
-    """Pre-C4, an unrecognized scope_kind ("inline-dispatch") record earned
-    zero credit and a loud WARN (2026-08-10 coverage-gate wedge). Post-C4
-    (docs/plans/2026-08-27-the-reviewed-set-is-a-file-not-a-computation.md
-    § C4) --reviewed-set mode never classifies scope_kind at all — credit is
-    exactly the resident store's membership regardless of what an (unread)
-    trail file's scope_kind says, and no WARN is possible since no record is
-    ever loaded here (that classification now lives only in --segments-json
-    mode / write-time fold-in)."""
     repo = _make_fixture(tmp_path)
     unrecognized_sha = _add_commit(repo, "src/inline.py")
     diff_sha = _add_commit(repo, "src/normal.py")
@@ -317,15 +264,6 @@ def test_reviewed_set_unrecognized_scope_kind_credit_comes_from_store_only(tmp_p
 def test_reviewed_set_never_emits_unrecognized_scope_kind_warn(
     tmp_path, monkeypatch, capsys,
 ):
-    """Pre-C4, a corpus with >=2 unrecognized-scope_kind records emitted ONE
-    aggregated WARN line (AC1, regression guard for the WARN flood that
-    buried example-retrieval-repo-em's real trailing error, 2026-08-15 memo). That
-    aggregation lived in the per-record classification this mode no longer
-    performs post-C4 (docs/plans/2026-08-27-the-reviewed-set-is-a-file-not-
-    a-computation.md § C4): with any number of unread trail-path args, no
-    WARN is ever emitted here, because no record is loaded in
-    --reviewed-set mode at all — the live equivalent of this guard now
-    belongs to --segments-json / the write-time fold-in path."""
     repo = _make_fixture(tmp_path)
     trail_paths = []
     for i in range(5):
@@ -350,10 +288,6 @@ def test_reviewed_set_never_emits_unrecognized_scope_kind_warn(
 
 
 def test_reviewed_set_garbage_trail_file_never_causes_failure(tmp_path, monkeypatch):
-    """--reviewed-set mode 'cannot fail' (module docstring): a garbage,
-    unparseable trail file passed as a positional arg is inert here post-C4
-    — the --on-record-error=fail default has nothing to act on since the
-    file is never opened in this mode."""
     repo = _make_fixture(tmp_path)
     _add_commit(repo, "src/g.py")
     trail = repo / "state" / "review-trail" / "garbage.json"
@@ -364,10 +298,6 @@ def test_reviewed_set_garbage_trail_file_never_causes_failure(tmp_path, monkeypa
 
 
 def test_reviewed_set_on_record_error_skip_has_no_effect(tmp_path, monkeypatch, capsys):
-    """--on-record-error is accepted but inert in --reviewed-set mode post-
-    C4 (no record is ever loaded to skip or fail on): passing skip alongside
-    a garbage file and a real-looking trail file changes nothing — output is
-    exactly the resident store's membership, with no WARN."""
     repo = _make_fixture(tmp_path)
     sha = _add_commit(repo, "src/sib.py")
     origin = _origin_main(repo)
@@ -386,10 +316,6 @@ def test_reviewed_set_on_record_error_skip_has_no_effect(tmp_path, monkeypatch, 
 
 
 def test_reviewed_set_unresolvable_ref_never_affects_reviewed_set_mode(tmp_path, monkeypatch, capsys):
-    """Ref resolution (`git rev-list`) happens only in --segments-json mode
-    post-C4; an unresolvable sha_range in a trail file passed to
-    --reviewed-set changes nothing under either --on-record-error value,
-    since no ref is ever resolved in this mode."""
     repo = _make_fixture(tmp_path)
     sha = _add_commit(repo, "src/r.py")
     bad_range = f"{sha}..WORKING"
@@ -409,11 +335,6 @@ def test_reviewed_set_unresolvable_ref_never_affects_reviewed_set_mode(tmp_path,
 
 
 def test_reviewed_set_intersect_filters_output(tmp_path, monkeypatch, capsys):
-    """--intersect is the one piece of --reviewed-set mode's classification
-    still live post-C4 (module docstring): it narrows the resident store's
-    membership to SHAs present in the intersect file. Seed the store via
-    `read_reviewed_set` directly (the trail-path arg is inert) rather than
-    a trail file, matching the C4 read-only contract."""
     repo = _make_fixture(tmp_path)
     sha1 = _add_commit(repo, "src/i1.py")
     sha2 = _add_commit(repo, "src/i2.py")
@@ -427,11 +348,6 @@ def test_reviewed_set_intersect_filters_output(tmp_path, monkeypatch, capsys):
     lines = set(out.splitlines())
     assert sha1 in lines
     assert sha2 not in lines
-
-
-# ---------------------------------------------------------------------------
-# --segments-json mode
-# ---------------------------------------------------------------------------
 
 
 def test_segments_json_shape_and_file_attribution(tmp_path, monkeypatch, capsys):
@@ -454,7 +370,6 @@ def test_segments_json_shape_and_file_attribution(tmp_path, monkeypatch, capsys)
     assert sha1 in all_shas and sha2 in all_shas
     assert "src/seg-a.py" in seg["files"]
     assert "src/seg-b.py" in seg["files"]
-    # deterministic ordering
     assert seg["shas"] == sorted(seg["shas"])
     assert seg["files"] == sorted(seg["files"])
 
@@ -504,11 +419,6 @@ def test_segments_json_independence_parse_failure_fails_loud_despite_ref_skip(tm
     assert rc == 1
 
 
-# ---------------------------------------------------------------------------
-# Usage / flag validation
-# ---------------------------------------------------------------------------
-
-
 def test_no_args_prints_usage_and_fails(capsys):
     rc = main([])
     assert rc == 1
@@ -541,6 +451,5 @@ def test_on_unresolvable_ref_inherits_on_record_error(tmp_path, monkeypatch):
         {"scope_kind": "diff", "sha_range": f"{origin}..{sha_valid}", "verdict": "ok", "artifact": "good"},
     )
     monkeypatch.chdir(repo)
-    # --on-record-error skip, no --on-unresolvable-ref → inherits skip.
     rc = main(["--reviewed-set", "--on-record-error", "skip", str(bad), str(good)], cwd=str(repo))
     assert rc == 0

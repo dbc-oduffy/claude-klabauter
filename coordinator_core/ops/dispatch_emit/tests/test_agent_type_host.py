@@ -49,11 +49,6 @@ def _one_wave_fixture():
     return [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"])]]
 
 
-# ---------------------------------------------------------------------------
-# resolve_agent_type_host -- each ladder rung
-# ---------------------------------------------------------------------------
-
-
 def test_rung1_explicit_env_var_wins_over_everything():
     assert (
         resolve_agent_type_host(
@@ -63,7 +58,6 @@ def test_rung1_explicit_env_var_wins_over_everything():
         )
         == "coordinator"
     )
-    # Passed through unchanged even if it happens to be the degrade sentinel.
     assert (
         resolve_agent_type_host(
             coordinator_agent_type_host="host",
@@ -108,8 +102,6 @@ def test_default_degrade_when_no_rung_resolves():
 
 
 def test_resolve_agent_type_host_reads_no_environment_itself(monkeypatch):
-    # Pure function: setting the real env vars must have zero effect --
-    # every rung's value only ever comes from the caller-supplied kwargs.
     monkeypatch.setenv("COORDINATOR_AGENT_TYPE_HOST", "coordinator")
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", "/somewhere")
     assert (
@@ -120,11 +112,6 @@ def test_resolve_agent_type_host_reads_no_environment_itself(monkeypatch):
         )
         == _AGENT_TYPE_HOST_DEGRADED
     )
-
-
-# ---------------------------------------------------------------------------
-# _degrade_agent_type -- roster substitution, never a model literal
-# ---------------------------------------------------------------------------
 
 
 def test_degrade_agent_type_unchanged_when_not_degraded():
@@ -146,19 +133,10 @@ def test_degrade_agent_type_substitutes_known_types_on_degrade():
 
 
 def test_degrade_agent_type_leaves_unregistered_type_unchanged():
-    # An explicit spine-row override this module owns no host-native mapping
-    # for (e.g. `coordinator:workflow-maker`) is left alone rather than
-    # guessed.
     assert (
         _degrade_agent_type("coordinator:workflow-maker", _AGENT_TYPE_HOST_DEGRADED)
         == "coordinator:workflow-maker"
     )
-
-
-# ---------------------------------------------------------------------------
-# compose_script -- degraded agentType literals, untouched model literals,
-# and the narration line
-# ---------------------------------------------------------------------------
 
 
 def test_compose_script_leaves_agent_types_untouched_absent_agent_type_host():
@@ -209,4 +187,4 @@ def test_compose_script_degrade_never_touches_model_literal():
     baseline_models = _MODEL_LITERAL_RE.findall(baseline)
     degraded_models = _MODEL_LITERAL_RE.findall(degraded)
     assert baseline_models == degraded_models
-    assert baseline_models  # sanity: the fixture actually emits model literals
+    assert baseline_models

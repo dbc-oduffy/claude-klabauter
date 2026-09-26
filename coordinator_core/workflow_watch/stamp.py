@@ -1,42 +1,3 @@
-"""
-coordinator_core.workflow_watch.stamp — persist the one fact `terminal.py`
-already knows but never writes down: that a run ended, and how.
-
-Purpose: two entry points onto the same idempotent append.
-
-    1. `stamp_terminal(journal_path, task_id, record)` — called by
-       `__init__.py`'s poll loop the moment `TerminalWatcher.check_record()`
-       positively matches, for a run someone was actively watching.
-    2. `reconcile(run_dir)` — the CLI path (wired from `__init__.py`'s
-       `--reconcile`) for a run nobody was watching: it locates the
-       launching transcript from `run_dir`'s OWN location (never rebuilt
-       from slug/session parts — see `__init__.py`'s own negative-spec),
-       finds the task id for that `wf_` run id in the launch payload, then
-       runs the identical positive-match-or-nothing path as (1).
-
-Both write AT MOST one line, ever, to a given `journal.jsonl`: `_is_stamped`
-is the idempotency gate, checked before every append. Neither path ever
-rewrites the file — one open-append-close, one trailing newline.
-
-Classifying `halted` vs `completed`: the harness's own `<status>` on a
-`<task-notification>` is `completed` for BOTH an ordinary finish and a
-script that hit one of `dispatch_emit/emit.py`'s halt gates — the harness
-has no notion of the emitted script's own `{ halted: ... }` / `{ completed:
-... }` return shape, only that the task ended without error. What
-distinguishes them is the `<result>` text sitting beside `<status>` in the
-SAME notification block: it is the script's return value, JSON-stringified,
-and a halt gate's return is exactly `{ "halted": "<reason>" }` (observed in
-a real transcript, not inferred — see the plan named in this package's own
-module docstrings). `classify()` parses that JSON and reads the key; on any
-parse failure, a non-dict payload, or the key's absence, the record was
-never anything but a positive-status `completed`.
-
-Fail-safe throughout: every public function here swallows `OSError` and
-`json`-decode failures and returns a "no-op" value (`False` / `None`) —
-never raises. `stamp_terminal` in particular must never be the reason
-`__init__.py`'s watcher fails to exit correctly once it has already
-observed a terminal record.
-"""
 
 from __future__ import annotations
 
@@ -61,26 +22,10 @@ _TYPE_BY_STATUS = {
     "stopped": "stopped",
 }
 
-#: Bound on how many lines `_find_task_id_for_run` will scan looking for the
-#: launch payload before giving up — a runaway transcript must not turn a
-#: reconcile call into an unbounded read. Generous relative to any observed
-#: transcript (the launch line is typically within the first few hundred).
 _LAUNCH_SCAN_LINE_CAP = 200_000
 
 
 def _unescape_once(text: str) -> str | None:
-    """Undo one layer of JSON-string escaping, or `None` if `text` is not
-    validly escaped content.
-
-    `result_text` is `terminal.py`'s raw capture between `<result>` and
-    `</result>` in the transcript's own on-disk bytes. In a real transcript
-    that block sits INSIDE a JSON string value (the launching session's own
-    transcript line is itself a JSON object), so the bytes on disk carry one
-    extra layer of `\\"`/`\\\\` escaping the regex never strips — observed
-    directly in a real transcript, not assumed (see module docstring).
-    Wrapping the captured text in a pair of quotes and decoding it as a JSON
-    string literal is exactly the inverse of that encoding step.
-    """
     try:
         return json.loads('"' + text + '"')
     except ValueError:
@@ -88,12 +33,6 @@ def _unescape_once(text: str) -> str | None:
 
 
 def _parse_result_payload(result_text: str) -> dict | None:
-    """Parse `result_text` as a JSON object, trying it both as literal JSON
-    (the plain-text-transcript case, e.g. this package's own fixtures) and
-    as one layer of JSON-string-escaped JSON (the real-transcript case —
-    see `_unescape_once`). Returns `None` on any failure of either attempt,
-    or if the decoded value is not a dict — never raises, never guesses.
-    """
     for candidate in (result_text, _unescape_once(result_text)):
         if candidate is None:
             continue
@@ -132,15 +71,6 @@ def classify(record: TerminalRecord) -> str:
 
 
 def _is_stamped(journal_path: str) -> bool:
-    """True if `journal_path` already carries a line this module wrote.
-
-    Contains, not "ends with": membership is the cheaper property to hold
-    under a concurrent reader/writer. Any read failure (absent file,
-    permission error, transient I/O) reads as "not yet stamped" — the
-    caller's own append is still gated by its own single positive match,
-    so a false "not stamped" costs at most one harmless duplicate line,
-    never a false "terminal" claim.
-    """
     try:
         with open(journal_path, "r", encoding="utf-8") as handle:
             for line in handle:
@@ -198,10 +128,6 @@ def stamp_terminal(journal_path: str, task_id: str, record: TerminalRecord) -> b
 
 
 def _stamp_terminal_locked(journal_path: str, task_id: str, record: TerminalRecord) -> bool:
-    """The check-and-append body of `stamp_terminal`, run while the caller
-    holds (or, on lock unavailability, without) the exclusive lock — split
-    out so the lock scope wraps exactly this and nothing else.
-    """
     if _is_stamped(journal_path):
         return False
     line = json.dumps(
@@ -219,12 +145,6 @@ def _stamp_terminal_locked(journal_path: str, task_id: str, record: TerminalReco
 
 
 def _extract_task_id(node, run_id: str, _depth: int = 0) -> str | None:
-    """Depth-bounded walk of one parsed transcript line, looking for a
-    dict carrying both `runId == run_id` and a string `taskId` — the shape
-    observed in a real Workflow launch's `toolUseResult`. Never raises on
-    a malformed or deeply-nested shape; `_depth` caps recursion rather than
-    trusting transcript JSON to stay shallow.
-    """
     if _depth > 6:
         return None
     if isinstance(node, dict):
@@ -278,14 +198,6 @@ def _find_task_id_for_run(transcript_path: str, run_id: str) -> str | None:
 
 
 def _derive_transcript_path(run_dir: str) -> str:
-    """The launching transcript's path, derived from `run_dir`'s OWN
-    location on disk: `run_dir` is `<project>/<session>/subagents/
-    workflows/wf_*`, so three levels up is the session directory, and the
-    transcript sits beside it as `<project>/<session>.jsonl`. Never
-    reconstructed from a slug/session pair handed in separately — see
-    `__init__.py`'s module docstring for why that convention is out of
-    scope here.
-    """
     session_dir = os.path.dirname(os.path.dirname(os.path.dirname(run_dir)))
     project_dir = os.path.dirname(session_dir)
     session_id = os.path.basename(session_dir)
@@ -293,15 +205,6 @@ def _derive_transcript_path(run_dir: str) -> str:
 
 
 def reconcile(run_dir_or_journal: str) -> int:
-    """The `--reconcile` entry point: stamp a run's journal from its own
-    on-disk location, for a run nobody was actively watching.
-
-    Accepts a run dir or its `journal.jsonl` path verbatim. Returns a
-    process exit code (0 stamped or already-stamped, 1 anything could not
-    be positively matched) and writes exactly one explanatory line to
-    stderr on any non-zero path — never guesses, per this whole package's
-    fail-safe posture.
-    """
     path = os.path.abspath(run_dir_or_journal)
     if os.path.basename(path) == "journal.jsonl":
         journal_path = path

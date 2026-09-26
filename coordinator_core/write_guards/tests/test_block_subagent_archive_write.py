@@ -1,23 +1,3 @@
-"""Behavioral tests for coordinator_core.write_guards.block_subagent_archive_write
--- the wrap-up self-log backstop guard (see the module's own docstring for
-the reference-hook port this is a faithful engine-ification of).
-
-Covers the 2026-08-03 widening (memo
-cross-repo/inbox/2026-08-03-doe-claude-em-archive-write-guard-pincer.md):
-
-  (A) the fire condition now gates on RAW agent_id presence, not the
-      bare-hex-only format guard -- a named-teammate agent_id
-      (a<name>-<16hex>) is no longer treated as "no agent_id" (allow).
-  (B) a resolved agent whose back-pointer subagent_type is exactly
-      coordinator:review-integrator gets a sanctioned archive/ write path,
-      with an asymmetric fail-open discipline: a failed/missing
-      back-pointer lookup must NOT allow (falls through to deny), the
-      opposite fail direction from block_subagent_plan_body_write.
-
-No dedicated behaviour test file previously existed for this guard --
-only test_deny_text_reachable_override.py and
-test_guard_registry_manifest.py referenced it in passing.
-"""
 
 from __future__ import annotations
 
@@ -74,9 +54,6 @@ def _stub_subagent_type_raises():
 
 
 class TestBareHexIdentityStillDenies:
-    """Pre-existing behaviour preserved: a bare-hex agent_id writing under
-    archive/ outside the carve-outs is denied.
-    """
 
     def test_bare_hex_agent_id_archive_write_denied(self, tmp_path, monkeypatch):
         monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
@@ -94,10 +71,6 @@ class TestBareHexIdentityStillDenies:
 
 
 class TestNamedTeammateIdentityNowDenies:
-    """The regression this fixes -- would have passed as ALLOW before
-    2026-08-03 (bare-hex-only format gate treated a named-teammate agent_id
-    as no-agent-id).
-    """
 
     def test_named_teammate_agent_id_archive_write_denied(self, tmp_path, monkeypatch):
         monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
@@ -115,7 +88,6 @@ class TestNamedTeammateIdentityNowDenies:
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        # Resolved canonical identity, not the raw a<name>-<16hex> shape.
         assert "executor-teammate@session-3819c0e9" in reason
         assert "archive/foo.md" in reason
 
@@ -171,10 +143,6 @@ class TestCarveOutsAllowForBothIdentityShapes:
 
 
 class TestReviewIntegratorAllowCondition:
-    """2026-08-03 widening: coordinator:review-integrator gets a sanctioned
-    archive/ write path, with fail-CLOSED lookup semantics (opposite of
-    block_subagent_plan_body_write).
-    """
 
     def test_review_integrator_backpointer_allows(self, tmp_path, monkeypatch):
         monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
@@ -201,10 +169,6 @@ class TestReviewIntegratorAllowCondition:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_missing_backpointer_lookup_denies_not_allows(self, tmp_path, monkeypatch):
-        """Asymmetric fail-open discipline: a lookup-fail (empty string,
-        missing/unreadable back-pointer) must NOT allow here -- it falls
-        through to the normal deny path.
-        """
         monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
         monkeypatch.setattr(guard, "_read_backpointer_subagent_type", _stub_subagent_type(""))
         monkeypatch.setattr(guard, "_write_block_log", lambda *a, **kw: None)
@@ -216,8 +180,6 @@ class TestReviewIntegratorAllowCondition:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_unresolvable_git_root_denies_not_allows(self, tmp_path, monkeypatch):
-        """git_root resolution failure -> back-pointer lookup skipped
-        entirely -> still denies (never allows on lookup-unreachable)."""
         monkeypatch.setattr(guard, "_resolve_git_root", lambda cwd: None)
         monkeypatch.setattr(guard, "_read_backpointer_subagent_type", _stub_subagent_type_raises())
         monkeypatch.setattr(guard, "_write_block_log", lambda *a, **kw: None)
@@ -230,10 +192,6 @@ class TestReviewIntegratorAllowCondition:
 
 
 class TestWeekChangelogsCarveOut:
-    """2026-08-06 widening (memo
-    cross-repo/inbox/2026-08-06-example-cockpit-repo-em-archive-write-guard-week-changelogs-gap.md):
-    week-changelogs carve-out and deny-message routing.
-    """
 
     @pytest.mark.parametrize("agent_id", [_BARE_HEX_AGENT_ID, _NAMED_TEAMMATE_AGENT_ID])
     def test_dated_daily_block_allows(self, tmp_path, monkeypatch, agent_id):
@@ -329,25 +287,12 @@ class TestWeekChangelogsCarveOut:
         result = guard.check(payload)
 
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        # Byte-for-byte format drift (not a content/semantic change): the
-        # message body edit that landed this text dropped the trailing
-        # newline after this line -- it is now the LAST line of the
-        # rendered reason, not followed by more text. Still an assert-
-        # PRESENT of the real, current byte-for-byte text (not weakened to
-        # a substring-of-a-substring or a vacuous check).
         assert reason.endswith(
             "Use instead: `archive/daily-summaries/YYYY-MM-DD.md` (or `-<machine>.md`)."
         )
 
 
 class TestOtherArchiveSubtreesGetSafeDefaultDenyText:
-    """2026-08-06 widening (second): a denied write under an archive/
-    subtree that is neither week-changelogs nor daily-summary-shaped must
-    not be told to file itself under a carve-out it does not describe --
-    see the investigation naming /distill (archive/specs) and
-    /update-docs -> /learn-lessons (archive/lessons-archived) as the live
-    callers that surfaced this.
-    """
 
     @pytest.mark.parametrize(
         "rel_path",
@@ -374,10 +319,6 @@ class TestOtherArchiveSubtreesGetSafeDefaultDenyText:
 
 
 class TestAllDeniedTargetsStillDeny:
-    """A future carve-out must not get smuggled in under a text-only
-    change -- every target this module docstring names as denied must
-    still be denied after the 2026-08-06 deny-text restructure.
-    """
 
     @pytest.mark.parametrize(
         "rel_path",

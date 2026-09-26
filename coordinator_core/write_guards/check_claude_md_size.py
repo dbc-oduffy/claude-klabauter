@@ -143,9 +143,6 @@ from coordinator_core.ops.measure_token_envelope import estimate_tokens
 
 
 def _find_repo_root(start: str) -> Optional[str]:
-    """Walk up from ``start`` looking for a ``.git`` entry (directory or
-    file, for worktrees/submodules) -- no ``git`` subprocess spawn, per this
-    repo's standing anti-spawn ruling on the PreToolUse hot path."""
     current = Path(start).resolve()
     if current.is_file():
         current = current.parent
@@ -162,11 +159,6 @@ _INTERCEPTED_TOOLS = {"Write", "Edit", "MultiEdit"}
 
 
 def _simulate(tool_name: str, tool_input: Dict[str, Any], abs_file_path: str) -> Optional[str]:
-    """Reconstruct the FULL post-edit file content -- never just the
-    proposed new fragment -- since the byte budget below is measured
-    against the whole file, not the delta. Mirrors the source hook's own
-    ``simulate()`` byte-for-byte (same replace-once-vs-replace-all branch,
-    same read-before-replace shape for Edit/MultiEdit)."""
     if tool_name == "Write":
         return tool_input.get("content", "") or ""
 
@@ -195,8 +187,6 @@ def _simulate(tool_name: str, tool_input: Dict[str, Any], abs_file_path: str) ->
 
 
 def _token_note(new_content: str) -> str:
-    """Best-effort token annotation -- omitted (not a failure) if the
-    estimator raises, matching the source hook's own best-effort framing."""
     try:
         tokens = estimate_tokens(new_content)
     except Exception:
@@ -207,9 +197,6 @@ def _token_note(new_content: str) -> str:
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the CLAUDE.md SIZE hard-deny leg against a PreToolUse
-    payload. Returns ``None`` (allow) or the nested hard-deny envelope.
-    """
     tool_name = payload.get("tool_name") or ""
     if tool_name not in _INTERCEPTED_TOOLS:
         return None
@@ -244,29 +231,14 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     size = len(new_content.encode("utf-8"))
 
-    # C7b (AC4): the per-surface ratchet watermark -- unarmed (no ledger, no
-    # "## Watermark" section) is a silent no-op. A malformed ("armed but
-    # broken") watermark fails loud, same as the DoE-resident admission gate.
     if repo_root:
         surface = os.path.relpath(abs_file_path, repo_root).replace(os.sep, "/")
         ledger_path = resolve_ledger_path(repo_root, surface)
         try:
             watermark = parse_watermark(ledger_path)
         except RatchetWatermarkError as exc:
-            # A malformed ledger is auxiliary-bookkeeping corruption, NOT a
-            # statement about whether THIS edit is legitimate -- denying
-            # every edit to the governed surface until an operator happens
-            # to notice and hand-repair the ledger is a wedge with no
             # escape hatch (this module carries zero COORDINATOR_OVERRIDE_*
-            # keys). Fail OPEN on the ratchet leg exactly like `_simulate`'s
-            # own explicit fail-open above (this makes the two failure
-            # paths on this module consistent, not merely fixes one of
-            # them): treat the surface as UNARMED for this evaluation (same
-            # as "no ledger" -- `watermark = None`), print a stderr warning
-            # naming the malformed ledger path so the operator can repair
-            # it, and fall through to the real size/ratchet evaluation
             # below. The flat `HARD_LIMIT_BYTES` check further down still
-            # applies regardless of this leg's outcome.
             print(
                 f"[check_claude_md_size] WARNING: ratchet watermark ledger "
                 f"at {ledger_path} is malformed, ratchet leg unarmed for "

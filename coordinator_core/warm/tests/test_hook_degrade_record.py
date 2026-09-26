@@ -1,15 +1,3 @@
-"""A cold run or a hook-budget overrun leaves a durable, attributable row.
-
-PM ruling 2: a stderr print into a hook response is not something anyone
-reads a week later -- the "running cold for weeks" case the PM named. This
-file holds `telemetry.record_degrade` to the same recorder shape every
-other appender in `telemetry.py` already keeps (never raises, omits rather
-than fabricates, one row per event), and holds `http_listener.py`'s own
-`_Handler.do_POST` to actually calling it at the two named seams: a
-dispatch failure (once a request HAS been delivered and this process
-chooses to run cold) and a dispatch exceeding its internal budget (the
-"hook timed out" case, recorded before the caller-side timeout fires).
-"""
 
 from __future__ import annotations
 
@@ -34,11 +22,6 @@ def _post(port: int, payload: dict, timeout: float = 5.0):
         return resp.status, resp.read()
 
 
-# ---------------------------------------------------------------------------
-# The recorder itself (telemetry.record_degrade / degrade_samples)
-# ---------------------------------------------------------------------------
-
-
 def test_record_degrade_writes_a_row_with_kind_and_cause(tmp_path):
     telemetry.record_degrade(
         kind=telemetry.KIND_COLD_RUN, cause="something ran cold", engine_root=tmp_path
@@ -61,8 +44,6 @@ def test_record_degrade_accepts_hook_timeout_kind(tmp_path):
 
 
 def test_record_degrade_rejects_an_unknown_kind(tmp_path):
-    """An unattributable kind is a caller bug, not a row -- see
-    `ServerTelemetry.record_exit`'s identical closed-set contract."""
     with pytest.raises(ValueError):
         telemetry.record_degrade(kind="something-else", cause="x", engine_root=tmp_path)
 
@@ -80,7 +61,7 @@ def test_recorder_never_raises_past_a_locking_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(telemetry.locked_write, "held_lock", _boom)
     telemetry.record_degrade(
         kind=telemetry.KIND_COLD_RUN, cause="x", engine_root=tmp_path
-    )  # must not raise
+    )
 
 
 def test_multiple_rows_append_rather_than_overwrite(tmp_path):
@@ -89,11 +70,6 @@ def test_multiple_rows_append_rather_than_overwrite(tmp_path):
 
     rows = telemetry.degrade_samples(tmp_path)
     assert [r["kind"] for r in rows] == [telemetry.KIND_COLD_RUN, telemetry.KIND_HOOK_TIMEOUT]
-
-
-# ---------------------------------------------------------------------------
-# The wiring: http_listener.py's do_POST actually calls the recorder.
-# ---------------------------------------------------------------------------
 
 
 def test_dispatch_failure_records_a_cold_run(monkeypatch):
@@ -119,7 +95,6 @@ def test_dispatch_failure_records_a_cold_run(monkeypatch):
 
 
 def test_fast_dispatch_records_nothing(monkeypatch):
-    """The common case: served well under budget, nothing appended."""
     recorded = []
     monkeypatch.setattr(
         telemetry, "record_degrade", lambda **kw: recorded.append(kw)

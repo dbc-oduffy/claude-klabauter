@@ -53,10 +53,6 @@ def test_merge_cli_verbs_are_the_expected_closed_set() -> None:
 
 
 class TestNoneOfMergesVerbsAreRegisteredOps:
-    """The C6 discriminator finding, checked live rather than only asserted
-    in a comment: none of merge's eight verbs resolve to a registered op —
-    including `orphan-branch-sweep`, the one name closest to a registered
-    surface."""
 
     def test_none_resolve_via_live_registry(self) -> None:
         registry = _live_registry()
@@ -73,16 +69,12 @@ class TestNoneOfMergesVerbsAreRegisteredOps:
 
 
 class TestZeroEntriesMigrated:
-    """C1's "ship it EMPTY except for entries actually migrated" — zero
-    migrated here, so merge_assemble must carry no entry at all."""
 
     def test_merge_assemble_has_no_assembler_dispatchable_entry(self) -> None:
         assert "merge_assemble" not in ASSEMBLER_DISPATCHABLE
 
 
 class TestResolveCliUnitUnchanged:
-    """The unit did not change for any of the eight verbs — `resolve_cli`
-    still resolves each to its existing hand-written adapter."""
 
     @pytest.mark.parametrize("verb", _MERGE_CLI_VERBS)
     def test_resolve_cli_still_resolves_each_verb(self, verb: str) -> None:
@@ -95,10 +87,6 @@ class TestResolveCliUnitUnchanged:
 
 
 class TestResolveOpReachesNothingForMergesVerbs:
-    """AC8's shape: attempting to dispatch any of merge's eight verbs via
-    the `op` seam (`resolve_op`) — the path a directive would need to use
-    to treat them as op-named — is refused, since none is allowlisted for
-    `merge_assemble` (in fact no `merge_assemble` entry exists at all)."""
 
     @pytest.mark.parametrize("verb", _MERGE_CLI_VERBS)
     def test_resolve_op_refuses_each_verb(self, verb: str) -> None:
@@ -107,12 +95,6 @@ class TestResolveOpReachesNothingForMergesVerbs:
 
 
 class TestC2InProcessConvergence:
-    """C2 (docs/plans/2026-08-26-merges-directives-stop-starting-
-    interpreters.md): three of the six named AC3 verbs converge onto
-    `ceremony_common.cli_dispatch` (no subprocess); three stay on
-    `_run_py_script` because none has an in-scope argument path for its own
-    repo root (see each handler's own docstring for the specific gap).
-    `node-ceremony-gate` and `tier-u-grant` are untouched by this chunk."""
 
     _CONVERGED_HANDLERS = (
         ma_apply._dispatch_merge_recovery_and_tag_cut,

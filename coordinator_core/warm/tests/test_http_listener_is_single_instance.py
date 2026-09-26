@@ -34,19 +34,8 @@ from coordinator_core.warm import election, skew, supervisor
 pytestmark_win = pytest.mark.skipif(sys.platform != "win32", reason="election.elect is Windows-only")
 
 
-# ---------------------------------------------------------------------------
-# The core defect, isolated from all of main()'s other machinery: does
-# holding the won handle open actually exclude a second election, and does
-# closing it release the exclusion?
-# ---------------------------------------------------------------------------
-
-
 @pytestmark_win
 def test_holding_the_won_handle_excludes_a_second_election(tmp_path: Path) -> None:
-    """The measured defect, reproduced at the mechanism level. A second
-    `elect()` against the SAME pipe name must lose while the first handle
-    is still open -- this is what `main()` relies on now that it no longer
-    closes the handle immediately after winning."""
     skew.write_engine_stamp(tmp_path, "sha-single-instance-hold")
     name = supervisor.supervisor_pipe_name(tmp_path)
 
@@ -58,12 +47,6 @@ def test_holding_the_won_handle_excludes_a_second_election(tmp_path: Path) -> No
         import _winapi
 
         _winapi.CloseHandle(handle)
-
-
-# ---------------------------------------------------------------------------
-# _ServerContext holds and releases the handle at the right point in its own
-# shutdown sequence.
-# ---------------------------------------------------------------------------
 
 
 @pytestmark_win
@@ -98,8 +81,6 @@ def test_ctx_shutdown_closes_the_election_handle_it_was_given(monkeypatch: pytes
 
 @pytestmark_win
 def test_ctx_shutdown_is_a_noop_when_no_handle_was_given(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A context built without `election_handle=` (e.g. an older caller, or
-    a test double) must not raise on shutdown."""
 
     class _FakeHttpd:
         def shutdown(self) -> None:
@@ -113,16 +94,7 @@ def test_ctx_shutdown_is_a_noop_when_no_handle_was_given(monkeypatch: pytest.Mon
         engine_root=None,
         version_state=_FakeVersionState(),
     )
-    ctx.ctx_shutdown()  # must not raise
-
-
-# ---------------------------------------------------------------------------
-# The acceptance probe, run in-process with synchronization instead of two
-# real subprocesses: a second `main()` invocation against one clone must
-# return 0 without writing a discovery record while the first is still
-# serving, and only after the first tears down does a fresh election
-# succeed again.
-# ---------------------------------------------------------------------------
+    ctx.ctx_shutdown()
 
 
 @pytestmark_win
@@ -170,7 +142,6 @@ def test_second_main_loses_the_election_while_first_still_serving(
     thread.start()
     assert booted.wait(timeout=10), "first main() never reached serve_forever"
 
-    # Second invocation, same clone, while the first is still serving.
     second_rc = supervisor.main()
 
     assert second_rc == 0, "a lost election must exit 0, not deny or raise"
@@ -180,9 +151,6 @@ def test_second_main_loses_the_election_while_first_still_serving(
     thread.join(timeout=10)
     assert first_result.get("rc") == 0
 
-    # After the first has torn down (ctx_shutdown ran, closing its held
-    # handle), a fresh election against the same name must succeed again --
-    # the lock is process-lifetime scoped, not permanently stuck.
     name = supervisor.supervisor_pipe_name(tmp_path)
     handle = election.elect(name)
     import _winapi

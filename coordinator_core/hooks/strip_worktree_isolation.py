@@ -34,9 +34,6 @@ from coordinator_core.ipc import register_op
 
 @register_op("hooks.strip_worktree_isolation")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PreToolUse(Workflow) op: strip a banned `isolation: "worktree"` field."""
-    # Normalize the two params shapes
-    # both engine doors and the cold chain send (see block_worktree_tool).
     params = payload_of(params)
     if params.get("tool_name") != "Workflow":
         return no_advisory()

@@ -85,21 +85,10 @@ from coordinator_core.ops.list_reverse_drift_cmds import _run
 
 _PROG = "workweek-complete-reverse-drift-gate"
 
-# Same guard list as Group B's user-configured-command call sites
-# (docs/2026-07-29-debash-residual-sites-spec.md) — a reverse_drift_cmd
-# containing one of these implies real shell semantics a flat argv cannot
-# reproduce (piping, chaining, sequencing, redirection, command
-# substitution). Deliberately does NOT flag bare `$` (plain variable
-# reference) — same exclusion list_reverse_drift_cmds._run's own advisory
-# quote-check already makes for this config value.
 _SHELL_METACHAR_RE = re.compile(r"&&|\|\||[|;<>`]|\$\(")
 
 
 def _shell_metachar_check(cmd: str) -> Optional[str]:
-    """Returns the matched substring if `cmd` contains a shell metacharacter
-    this direct-exec port cannot safely honor; None when `cmd` looks like a
-    plain argument vector safe for shlex.split + subprocess.run(shell=False).
-    """
     match = _SHELL_METACHAR_RE.search(cmd)
     return match.group(0) if match else None
 
@@ -168,8 +157,6 @@ def run_gate(scope_repo: Optional[str], *, override: Optional[bool] = None) -> T
         )
         return messages, (0 if override else 1)
 
-    # rc == 0: run each registered command from its source_path. Empty rows =
-    # no copy_install plugins on this machine = genuinely N/A (clean pass).
     any_failed = False
     for row in stdout_lines:
         parts = row.split("|", 2)
@@ -203,9 +190,6 @@ def run_gate(scope_repo: Optional[str], *, override: Optional[bool] = None) -> T
             continue
 
         if not argv:
-            # Empty after parsing (e.g. whitespace-only) — matches the retired
-            # bash oracle's no-op-empty-script behavior: nothing to run, no
-            # failure.
             continue
 
         result = subprocess.run(

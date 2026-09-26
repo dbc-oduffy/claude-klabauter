@@ -54,7 +54,6 @@ class GoalSeedRoadmapSeedOmitPickupReadyTest(unittest.TestCase):
         self.assertNotIn("pickup_ready", content)
 
     def test_goal_seed_still_awaiting_gate(self):
-        """Non-regression: only pickup_ready was removed, not the gate axis."""
         content = _cli._scaffold_goal_seed(title="t", branch="b")
         self.assertIn("deployment_state: awaiting_gate", content)
 
@@ -64,8 +63,6 @@ class GoalSeedRoadmapSeedOmitPickupReadyTest(unittest.TestCase):
 
 
 class CoherentArmsStillEmitPickupReadyTrueTest(unittest.TestCase):
-    """The other three arms pair pickup_ready: true with ready_to_fire --
-    this fix must not touch them."""
 
     def test_handoff_still_emits_pickup_ready_true(self):
         content = _cli._scaffold_handoff(title="t", branch="b")
@@ -76,12 +73,7 @@ class CoherentArmsStillEmitPickupReadyTrueTest(unittest.TestCase):
         self.assertIn("pickup_ready: true", content)
 
     def test_spinoff_still_emits_pickup_ready_true(self):
-        # Ambient-env-independent (2026-08-21): `_scaffold_spinoff`'s
-        # authoring_session gate exits fail-loud when no session id resolves
         # (COORDINATOR_SESSION_ID / CLAUDE_SESSION_ID / CLAUDE_CODE_SESSION_ID
-        # all unset) -- this test asserts pickup_ready coherence, not session
-        # resolution, so it pins the resolver rather than depending on
-        # whichever of those vars happens to be set in the invoking shell.
         with mock.patch.object(_cli, "_resolve_session_id", return_value="sess-fixture"):
             content = _cli._scaffold_spinoff(title="t", branch="b")
         self.assertIn("pickup_ready: true", content)

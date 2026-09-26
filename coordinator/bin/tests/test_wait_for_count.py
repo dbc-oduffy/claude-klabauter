@@ -1,18 +1,3 @@
-"""test_wait_for_count.py — pytest tests for coordinator/bin/wait-for-count.py.
-
-Covers count_matches (non-existent dir counts as 0, pattern filtering),
-wait_for_count's polling contract (returns immediately when already met, no
-sleep call in that case; times out and returns the last-seen count when the
-deadline elapses; polls again after a sleep when the count changes
-mid-wait), and the CLI's exit-code/message contract (0 + stdout summary on
-met, 1 + stderr TIMEOUT line otherwise).
-
-wait_for_count's now_fn/sleep_fn are injected fakes throughout -- no test in
-this suite performs a real time.sleep, so the whole file runs in
-well under a second.
-
-Run: python -m pytest coordinator/bin/tests/test_wait_for_count.py -q
-"""
 from __future__ import annotations
 
 import contextlib
@@ -38,9 +23,6 @@ def mod():
 
 
 class _FakeClock:
-    """A monotonic clock fake: now_fn returns the current tick; sleep_fn
-    advances the tick by the requested amount (no real wall-clock wait) and
-    records each call for assertion."""
 
     def __init__(self, start: float = 0.0):
         self.now = start
@@ -52,11 +34,6 @@ class _FakeClock:
     def sleep_fn(self, seconds: float) -> None:
         self.sleep_calls.append(seconds)
         self.now += seconds
-
-
-# ---------------------------------------------------------------------------
-# count_matches
-# ---------------------------------------------------------------------------
 
 
 def test_count_matches_nonexistent_dir_is_zero(mod, tmp_path):
@@ -78,11 +55,6 @@ def test_count_matches_respects_pattern(mod, tmp_path):
     (tmp_path / "c.txt").write_text("x")
 
     assert mod.count_matches(tmp_path, "*.json") == 2
-
-
-# ---------------------------------------------------------------------------
-# wait_for_count
-# ---------------------------------------------------------------------------
 
 
 def test_wait_for_count_returns_immediately_when_already_met(mod, tmp_path):
@@ -143,8 +115,6 @@ def test_wait_for_count_clamps_final_sleep_to_remaining_time(mod, tmp_path):
     )
 
     assert met is False
-    # poll_interval_sec (30) exceeds timeout_sec (10) -- the single sleep
-    # call must be clamped to the remaining budget, not the full interval.
     assert clock.sleep_calls == [10]
 
 
@@ -158,11 +128,6 @@ def test_wait_for_count_zero_timeout_never_sleeps(mod, tmp_path):
 
     assert met is False
     assert clock.sleep_calls == []
-
-
-# ---------------------------------------------------------------------------
-# CLI (main)
-# ---------------------------------------------------------------------------
 
 
 def _run_cli(mod, args: list[str]):
@@ -206,11 +171,6 @@ def test_cli_treats_missing_dir_as_zero_not_error(mod, tmp_path):
     assert "count=0" in err
 
 
-# ---------------------------------------------------------------------------
-# Timeout ceiling — a caller may ask for LESS, never for more
-# ---------------------------------------------------------------------------
-
-
 def test_over_ceiling_dials_are_clamped(mod):
     over = mod.clamp_dials(mod.MAX_TIMEOUT_SEC * 100, mod.MAX_POLL_INTERVAL_SEC * 100)
     assert over == (mod.MAX_TIMEOUT_SEC, mod.MAX_POLL_INTERVAL_SEC)
@@ -226,13 +186,6 @@ def test_clamp_dials_is_idempotent(mod):
 
 
 def test_wait_for_count_cannot_be_asked_to_wait_past_the_ceiling(mod, tmp_path):
-    """A caller naming a day-long budget must still return at the ceiling.
-
-    The fake clock advances only on sleep, so the loop's own arithmetic — not
-    wall time — decides when this returns. An unclamped timeout_sec would drive
-    the fake clock to 86400, and an unclamped poll_interval_sec would record a
-    single 86400s sleep call.
-    """
     clock = _FakeClock()
 
     met, count = mod.wait_for_count(
@@ -247,8 +200,6 @@ def test_wait_for_count_cannot_be_asked_to_wait_past_the_ceiling(mod, tmp_path):
 
 
 def test_cli_timeout_message_reports_the_clamped_budget(mod, tmp_path):
-    """The TIMEOUT line must name what was actually waited, not what was asked
-    for — reporting the over-ask back would tell the caller its dial worked."""
     rc, out, err = _run_cli(
         mod,
         ["--dir", str(tmp_path), "--min", "1", "--timeout-sec", "0", "--poll-interval-sec", "99999"],

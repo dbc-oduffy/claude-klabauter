@@ -88,9 +88,6 @@ __all__ = [
 ]
 
 # Retired SINGLETON_BLOCKING_ACQUIRE_TIMEOUT_SECS used DISPATCH_TIMEOUT_SECS
-# + 5s margin; this keeps only the margin half live, since the ceiling now
-# tracks `ipc`'s dispatch timeout dynamically (see `_drain_ceiling_secs`)
-# rather than pinning a duplicate constant that could drift from it.
 DRAIN_CEILING_MARGIN_SECS = 5.0
 
 _DRAIN_POLL_INTERVAL_SECS = 0.05
@@ -98,52 +95,21 @@ _DRAIN_POLL_INTERVAL_SECS = 0.05
 _guard_lock = threading.Lock()
 _shutdown_entered = False
 
-#: The mandatory final-sweep hook (`warm.push_cadence`'s C4), run inside
-#: `_run_tail` above `exit_fn` -- see that function's own docstring. A
-#: zero-arg callable with no return value, or `None` (the default) when no
-#: caller has registered one. Registered as a settable module-level hook
-#: rather than threaded through `begin_shutdown`/`drain_and_exit`'s own
-#: kwargs because FOUR independent call sites reach these two entry points
-#: -- `warm/front_door.py:1218`, `warm/idle.py:285`, `warm/supervisor.py:898`
-#: (all `begin_shutdown`), and `warm/server.py:1631` (`drain_and_exit`) --
-#: and only `server.py` holds a reference to the sweep it must run. A kwarg
-#: would have to be threaded through all four, and a caller that forgot it
-#: would produce a silent no-sweep exit; a module-global hook makes "every
-#: exit sweeps" structural, reachable from every trigger without each call
-#: site needing to know the sweep exists. (Re-verified 2026-08-30 against
-#: `state/audits/2026-08-30-four-push-close-backlog-items-probe.py` leg G;
-#: Finding 8's premise -- that this can now collapse into a threaded kwarg
-#: because C4's idle.py write-scope constraint expired -- is FALSE: the
-#: constraint that mattered was never idle.py's writable-scope status, it
-#: was these four callers' inability to source the sweep themselves.)
 _final_sweep_hook_lock = threading.Lock()
 _final_sweep_hook: Optional[Callable[[], None]] = None
 
 
 def set_final_sweep_hook(hook: Optional[Callable[[], None]]) -> None:
-    """Register (or clear, with `None`) the final-sweep hook every shutdown
-    sequence runs, once, above `exit_fn` -- see the module-level docstring
-    on `_final_sweep_hook` for why this is a settable hook rather than a
-    `begin_shutdown`/`drain_and_exit` kwarg. `warm.server._ServerContext`
-    binds this once at boot to its own live served-repo sweep; nothing else
-    in this module ever calls it.
-    """
     global _final_sweep_hook
     with _final_sweep_hook_lock:
         _final_sweep_hook = hook
 
 
 def reset_final_sweep_hook_for_test() -> None:
-    """Test-only: clear the registered hook so a fresh test starts from
-    "nothing registered". Never called by production code.
-    """
     set_final_sweep_hook(None)
 
 
 def _try_enter_once() -> bool:
-    """Atomic test-and-set: True for exactly one caller across this
-    process's life, False for every other (concurrent or later) caller.
-    """
     global _shutdown_entered
     with _guard_lock:
         if _shutdown_entered:
@@ -153,11 +119,6 @@ def _try_enter_once() -> bool:
 
 
 def reset_shutdown_guard_for_test() -> None:
-    """Test-only: clear the single-shot guard so a fresh test can exercise
-    entry again. Never called by production code -- a real server process
-    shuts down at most once by construction, so there is no live call site
-    for this outside `test_drain_exit_order.py`.
-    """
     global _shutdown_entered
     with _guard_lock:
         _shutdown_entered = False
@@ -182,15 +143,6 @@ def _wait_for_drain(
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> bool:
-    """Poll `in_flight_count()` until it reaches zero or `ceiling_secs`
-    elapses. Returns True on a clean drain, False if the ceiling was hit.
-
-    The ceiling bounds shutdown LATENCY -- it is not a guarantee that no
-    in-flight request was interrupted; a caller that hits it still
-    proceeds to `ctx_shutdown()` and `os._exit(0)` (see `_run_tail`),
-    since an unbounded wait would reintroduce exactly the kind of
-    unbounded shutdown hang this chunk exists to close off.
-    """
     deadline = clock() + ceiling_secs
     while in_flight_count() > 0:
         if clock() >= deadline:
@@ -206,19 +158,6 @@ def _run_tail(
     exit_fn: Callable[[int], None],
     drain_ceiling_secs: Optional[float],
 ) -> None:
-    """Steps 2-4, shared by both entry points below. AST-pinned by
-    `test_drain_exit_order.py`: must call `exit_fn` (defaulting to
-    `os._exit`) as its last action and must never call `sys.exit`.
-
-    A registered final-sweep hook (`set_final_sweep_hook`) runs after
-    `ctx_shutdown()` and before `exit_fn`, on EVERY path through this
-    function regardless of which entry point (`begin_shutdown` or
-    `drain_and_exit`) reached it -- this is what makes the cadence's
-    "always sweep before the box goes quiet" bound non-vacuous for idle
-    demotion and superseded-generation retirement, not merely for skew
-    eviction. Swallows any exception the hook raises: a sweep failure must
-    never prevent `exit_fn` from running.
-    """
     ceiling = _drain_ceiling_secs() if drain_ceiling_secs is None else drain_ceiling_secs
     _wait_for_drain(in_flight_count, ceiling_secs=ceiling)
     ctx_shutdown()
@@ -276,12 +215,6 @@ def drain_and_exit(
     exit_fn: Callable[[int], None] = os._exit,
     drain_ceiling_secs: Optional[float] = None,
 ) -> bool:
-    """Steps 2-4 only: wait for drain -> ctx shutdown -> exit, sharing
-    `begin_shutdown`'s single-shot guard. Bind this as `warm.skew.
-    evict_on_skew`'s `drain=` argument -- `evict_on_skew` already runs
-    `close_listener` itself (step 1) before invoking `drain()`, so this
-    entry point does not repeat it.
-    """
     if not _try_enter_once():
         return False
     _run_tail(

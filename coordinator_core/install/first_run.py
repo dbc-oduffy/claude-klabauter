@@ -90,38 +90,17 @@ from coordinator_core.ops.discover_working_repos import main as _discover_workin
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 
 
-# ---------------------------------------------------------------------------
 # Exit-code contract (PORTER-BRIEF-ADDENDUM § 3/3b).
-#   0 -- success (incl. dry-run preview, interactive-abort, non-interactive
-#        print-and-exit -- all no-op-safe terminal states, matching the
-#        oracle's own posture for those branches).
-#   1 -- a real business failure (unknown arg, brew/toolchain install failed,
-#        a post-toolchain step failed). Matches the oracle's uniform use of
-#        exit 1 for every failure branch -- first-run.sh predates the
-#        dedicated-code convention and never distinguished failure classes;
-#        faithfully reproduced, not "improved" mid-port.
 #   3 -- DEDICATED transport-failure code for the TRAMPOLINE layer only (the
-#        claude-klabauter link/import failed before this module's own main() could
-#        run at all) -- never returned by this module itself, only by the
-#        DoE polyglot trampoline that imports it. Documented here so the two
-#        files' contracts are readable together.
-# ---------------------------------------------------------------------------
 EXIT_OK = 0
 EXIT_FAIL = 1
 
 _SHORT_TIMEOUT = 20
 
-# `brew install` of a large formula (node), which Homebrew compiles from
-# source when no bottle matches. A member of the named `install` timeout
-# family (DR-349 § Carve-outs) — the number and the membership test live in
-# `install/timeouts.py`.
 _INSTALL_TIMEOUT = PLATFORM_PACKAGE_INSTALL_SECS
 
 
 def _run(cmd: List[str], timeout: int = _SHORT_TIMEOUT, **kwargs) -> subprocess.CompletedProcess:
-    """Every subprocess call in this module funnels through here: bounded
-    timeout, stdin closed (never blocks waiting on a child's stdin read),
-    console-flash suppressed on Windows (DR-054)."""
     return subprocess.run(
         cmd,
         timeout=timeout,
@@ -158,11 +137,6 @@ def parse_args(argv: List[str]) -> _Args:
         elif tok == "--no-git-lfs":
             args.no_git_lfs = True
         elif tok == "--post-toolchain":
-            # Accepted for CLI-shape compatibility with the retired oracle's
-            # re-exec marker; this port never re-execs itself (see module
-            # docstring), so the flag is a no-op here -- present so a caller
-            # (or muscle-memory operator) invoking with the old flag does not
-            # hit the unknown-argument branch.
             args.post_toolchain = True
         elif tok == "--non-interactive":
             args.non_interactive = True
@@ -178,29 +152,11 @@ class _UsageError(Exception):
         self.unknown_arg = unknown_arg
 
 
-# ---------------------------------------------------------------------------
-# unit3 (detection half) -- toolchain probes. Mirrors the oracle's 3.2-safe
 # detection block (L266-312): own minimal probes, no shared prereq_probe.
-# ---------------------------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
-# Host platform + package-manager resolution.
-#
-# This module was Homebrew-only with no platform or root guard. Homebrew's
-# installer aborts by design when run as EUID 0, so on any root container --
-# the ordinary shape for a cloud box or CI runner -- `_install_homebrew()`
 # returned EXIT_FAIL and killed the entire first-run flow, reported only as a
-# bare non-zero exit with no statement that the box was unsupported. Linux is
-# a first-class platform for this system, so the toolchain leg needs the
-# platform's own package manager, not a second copy of macOS's.
-#
-# macOS behaviour is unchanged: `_host_platform() == "darwin"` routes every
-# install back through `_brew_install`/`_install_homebrew` exactly as before.
-# ---------------------------------------------------------------------------
 
-#: Linux package managers, most-specific first. The first one on PATH wins.
-#: Each entry is (manager, install-argv-prefix).
 _LINUX_PKG_MANAGERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("apt-get", ("apt-get", "install", "-y")),
     ("dnf", ("dnf", "install", "-y")),
@@ -210,13 +166,6 @@ _LINUX_PKG_MANAGERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("apk", ("apk", "add", "--no-cache")),
 )
 
-#: Homebrew formula -> per-manager package name. Only formulae whose distro
-#: name actually differs from the formula name need an entry; anything absent
-#: falls through to the formula name itself.
-#:
-#: `uv` is deliberately NOT here: no mainstream distro packages it, so it is
-#: special-cased in `_pkg_install` rather than given a name that would resolve
-#: to "no such package" on every manager in the table.
 _LINUX_PKG_NAMES: dict[str, dict[str, str]] = {
     "python@3.12": {
         "apt-get": "python3",
@@ -239,7 +188,6 @@ _LINUX_PKG_NAMES: dict[str, dict[str, str]] = {
 
 
 def _host_platform() -> str:
-    """"darwin" | "linux" | "windows" | "unknown"."""
     if sys.platform == "darwin":
         return "darwin"
     if sys.platform.startswith("linux"):
@@ -250,9 +198,6 @@ def _host_platform() -> str:
 
 
 def _running_as_root() -> bool:
-    """True when this process can mutate system packages without `sudo`.
-
-    `os.geteuid` is POSIX-only; its absence (Windows) is not root."""
     geteuid = getattr(os, "geteuid", None)
     if geteuid is None:
         return False
@@ -270,9 +215,6 @@ def _detect_linux_pkg_manager() -> Optional[str]:
 
 
 def _pkg_install_argv(manager: str, formula: str) -> List[str]:
-    """The exact argv this box would run to install `formula` -- also what
-    `build_plan` prints, so the operator's consent surface names the real
-    command rather than a macOS one."""
     prefix = next(argv for name, argv in _LINUX_PKG_MANAGERS if name == manager)
     package = _LINUX_PKG_NAMES.get(formula, {}).get(manager, formula)
     argv = list(prefix) + [package]
@@ -282,8 +224,6 @@ def _pkg_install_argv(manager: str, formula: str) -> List[str]:
 
 
 def _install_uv() -> int:
-    """`uv` is packaged by no mainstream distro. Prefer an already-present
-    pip; fall back to the vendor's own installer script."""
     print("[first-run] installing uv...")
     py = shutil.which("python3") or sys.executable
     try:
@@ -327,10 +267,6 @@ def _linux_pkg_install(formula: str, label: Optional[str] = None) -> int:
 
 
 def _pkg_install(formula: str, label: Optional[str] = None) -> int:
-    """Install one toolchain prerequisite using this platform's own mechanism.
-
-    Darwin routes to `_brew_install` unchanged -- the macOS path through this
-    function is byte-identical to what it was before the dispatcher existed."""
     platform = _host_platform()
     if platform == "darwin":
         return _brew_install(formula, label)
@@ -355,8 +291,6 @@ class _Env:
         self.uv_ok = False
         self.git_lfs_ok = False
         self.brew_ok = False
-        #: Resolved Linux package manager, or None off Linux / when none is
-        #: on PATH. `brew_ok` is meaningful on Darwin only.
         self.pkg_manager: Optional[str] = None
 
 
@@ -370,9 +304,6 @@ def _bash_version_ok(bash_path: str) -> bool:
     try:
         proc = _run([bash_path, "--version"], capture_output=True, text=True)
     except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
-        # Absent/broken bash is a routine, expected prereq-probe outcome —
-        # env.bash_ok=False surfaces via build_plan's install-step list below,
-        # so no separate diagnostic here.
         return False
     if proc.returncode != 0:
         return False
@@ -396,7 +327,7 @@ def detect_environment() -> _Env:
             proc = _run([py3, "-c", "import sys; sys.exit(0 if sys.version_info>=(3,11) else 1)"])
             env.python_ok = proc.returncode == 0
         except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
-            env.python_ok = False  # routine prereq-probe outcome; surfaces via build_plan
+            env.python_ok = False
 
     env.node_ok = shutil.which("node") is not None
 
@@ -406,7 +337,7 @@ def detect_environment() -> _Env:
         proc = _run(["git", "lfs", "version"], capture_output=True, text=True)
         env.git_lfs_ok = proc.returncode == 0
     except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
-        env.git_lfs_ok = False  # routine prereq-probe outcome; surfaces via build_plan
+        env.git_lfs_ok = False
 
     env.brew_ok = shutil.which("brew") is not None
     if _host_platform() == "linux":
@@ -415,19 +346,10 @@ def detect_environment() -> _Env:
     return env
 
 
-# ---------------------------------------------------------------------------
-# unit3 (plan-building half) -- mirrors _fr_next_step / _fr_build_plan
 # (L318-356). Plain list, no bash-4 arrays needed here either.
-# ---------------------------------------------------------------------------
 
 
 def _plan_install_line(env: _Env, formula: str, suffix: str = "") -> str:
-    """One plan line naming the command THIS box will run.
-
-    `build_plan` is the operator's consent surface -- what it prints is what
-    they are agreeing to. Printing `brew install ...` on a Debian box asked
-    for consent to a command that would never run and told the operator
-    nothing about what would."""
     if _host_platform() == "darwin":
         return f"brew install {formula}{suffix}"
     if formula == "uv":
@@ -439,9 +361,6 @@ def _plan_install_line(env: _Env, formula: str, suffix: str = "") -> str:
 
 def build_plan(env: _Env, no_git_lfs: bool) -> List[str]:
     steps: List[str] = []
-    # Homebrew is bootstrapped on macOS only. Off Darwin the distribution's own
-    # package manager is used, and Homebrew's installer aborts as EUID 0 anyway
-    # -- which is how the whole flow used to die on a root container.
     if _host_platform() == "darwin" and not env.brew_ok:
         steps.append("install Homebrew (absent on this machine)")
     if not env.bash_ok:
@@ -461,10 +380,6 @@ def build_plan(env: _Env, no_git_lfs: bool) -> List[str]:
         steps.append(_plan_install_line(env, "git-lfs", "  then  git lfs install  (global, idempotent)"))
     elif no_git_lfs:
         steps.append("git-lfs SKIPPED (--no-git-lfs passed; LFS-backed clones will be pointer-only)")
-    # Review-parity note: the oracle emits a bash>=4.3 re-exec step here only
-    # when bash_ok is false; this port never re-execs (see module docstring)
-    # so that step line is intentionally NOT reproduced -- it would describe
-    # a mechanism this port doesn't use. Everything downstream is unchanged.
     steps.append("seed machine-local registry  (post-toolchain, C1b, Step 3)")
     steps.append("run install-substrate -> platform-localize  (post-toolchain, C1b, Step 4)")
     steps.append("tell you to /reload-plugins")
@@ -475,11 +390,6 @@ def _print_plan(steps: List[str]) -> None:
     print("about to:")
     for i, step in enumerate(steps, start=1):
         print(f"  [{i}] {step}")
-
-
-# ---------------------------------------------------------------------------
-# unit2 -- _fr_run_post_toolchain (182 LOC in the oracle). Steps 1-6.
-# ---------------------------------------------------------------------------
 
 
 _ML_REPOS_KEY_PREFIX = "repos."
@@ -496,11 +406,6 @@ resolution."""
 
 
 def _record_resolution(clause_index: int, entries) -> None:
-    """Deferred-import wrapper over `resolution_journal.record_resolution`
-    — see `clone_sibling_repo._record_resolution`'s docstring for why a
-    module-level import of `resolution_journal` is not used here (this
-    module is transitively reachable from `coordinator_core.ops`'s eager
-    op-registration walk via its own downstream import graph)."""
     from coordinator_core.install import resolution_journal
 
     resolution_journal.record_resolution("first-run", clause_index, entries)
@@ -534,49 +439,6 @@ def _derive_repo_key(repo_base: str) -> str:
 
 
 def _seed_machine_local_registry(confirm: bool, non_interactive: bool) -> None:
-    """Step 3. Prompts unless --confirm/--yes or non-interactive or stdin is
-    not a TTY -- mirrors the oracle's prompt gate exactly.
-
-    Discovery is an in-process call into
-    ``coordinator_core.ops.discover_working_repos`` -- this repo's own
-    native three-tier discovery port -- not a ``bash``-spawned subprocess.
-    The DoE-side ``discover-working-repos.sh`` this used to shell out to is
-    itself only a polyglot trampoline back onto that same claude-klabauter module (see
-    that file's own header), so the subprocess hop was pure indirection with
-    no logic on the other end to preserve; calling the module directly
-    drops one more bash-spawn with no behavior change to the discovered-repo
-    output.
-
-    Registration is now an in-process write via
-    ``coordinator_core.machine_resolver.registry_set`` -- NOT a
-    ``machine-local`` CLI subprocess. ``coordinator/bin/machine-local`` (and
-    its ``.cmd``/``.ps1`` Windows twins) were deleted in ``3bd2738f4``
-    (2026-08-14, "C5: delete the three dead bareword forwarders and their
-    Windows twins") as unreachable dead code; this function used to guard on
-    that binary's existence before spawning it, so from that date forward
-    the guard always failed and this step silently never seeded anything.
-    See ``registry_set``'s own docstring for the write contract and why the
-    fix is a genuine in-process write rather than resurrecting the deleted
-    forwarder. (An earlier iteration of this fix routed through
-    ``coordinator/bin/lib/coordinator_registry.py`` instead -- reverted:
-    that module lives in ``coordinator/bin/lib/``, which is not on
-    ``coordinator_core``'s import path, and reaching sideways into a sibling
-    tree via a ``sys.path`` hack is exactly the fragile cross-tree coupling
-    ``coordinator_core.data_root``'s own docstring documents avoiding for
-    the same DR-047 boundary reason -- ``machine_resolver.py`` is the
-    coordinator_core-native home for registry I/O and already owns
-    ``registry_get``/``registry_dir``.)
-
-    Missing-registry-directory tolerance is deliberate, not a gap: this step
-    seeds the registry with OTHER discovered sibling repos (a convenience so
-    a fresh machine doesn't have to hand-register every working repo), not
-    the load-bearing ``repos.claude_klabauter`` entry itself -- that
-    registration is scripts/setup.py's own job (see its module docstring,
-    responsibility 3). A fresh install's later steps (ensure-venv,
-    platform-localize) do not read anything this step writes, so
-    warn-and-continue is the correct posture here, same as the retired
-    oracle's own prompt-and-skip gate.
-    """
     print("[post-toolchain] Seeding machine-local registry...")
 
     try:
@@ -585,8 +447,6 @@ def _seed_machine_local_registry(confirm: bool, non_interactive: bool) -> None:
     except RuntimeError as exc:
         print(f"[post-toolchain] WARNING: cannot resolve CLAUDE_KLABAUTER_ROOT to locate machine-local: {exc}", file=sys.stderr)
         print("  Register repos manually later: machine-local set repos.<name> <path>")
-        # Discovery precondition (the engine root) unresolvable — resolved to
-        # nothing this run, not "we never got there".
         _record_resolution(_REPOS_REGISTRY_CLAUSE_INDEX, ())
         return
 
@@ -601,8 +461,6 @@ def _seed_machine_local_registry(confirm: bool, non_interactive: bool) -> None:
             print("[post-toolchain] Registry seeding skipped. Register later: machine-local set repos.<name> <path>")
 
     if not do_seed:
-        # Operator declined the consent prompt — resolved to nothing this
-        # run (a declined consent gate, per the design note's own example).
         _record_resolution(_REPOS_REGISTRY_CLAUSE_INDEX, ())
         return
 
@@ -630,103 +488,25 @@ def _seed_machine_local_registry(confirm: bool, non_interactive: bool) -> None:
         except (ValueError, OSError) as exc:
             print(f"[post-toolchain] WARNING: failed to register {registry_key}: {exc} — skipping.", file=sys.stderr)
             continue
-        # Only a genuinely-succeeded registry write is journaled — a failed
-        # registration performed no write to record.
         registered.append(WriteSurfaceEntry(kind="machine-local-key", key=registry_key))
 
     if not found_any:
         print("[post-toolchain] No repos discovered. Register later: machine-local set repos.<name> <path>")
 
-    # Discovery ran (found_any True or False, and each attempted
-    # registration succeeded or failed) — `registered` is the concrete,
-    # fully-resolved set this run actually wrote, possibly empty (no repos
-    # discovered, or every registration attempt failed).
     _record_resolution(_REPOS_REGISTRY_CLAUSE_INDEX, tuple(registered))
 
 
-# ---------------------------------------------------------------------------
-# Stamped-engine provisioning (docs/plans/2026-08-19-an-engine-root-is-a-
 # stamped-build.md chunk C1) -- PREREQUISITE FOR that plan's C4 (fail-closed
-# on an unstamped engine root). Without this, a fresh box would have no
-# mirror and no way to get one once C4 lands: `_resolve_published_engine`
-# would return None forever and the ladder would have nothing left to fall
-# back to.
-#
-# SHAPE CHOSEN: (b) from C1's plan body -- a stamped LOCAL BUILD OUTPUT
 # DIRECTORY, never the live working tree (`write_engine_stamp`'s own
-# docstring forbids that: "never a development convenience", because it
-# pins the generation while the code moves underneath it). (b) is admissible
-# ONLY if it runs the SAME `_resolve_claude_klabauter_root` -> `_resolve_claude_klabauter_root`
-# identifier transform a human publish round runs (see C11) -- this
-# provisioning step satisfies that by invoking the REAL `coordinator/bin/
-# publish.py` machinery (never reimplemented -- Hard constraint 6), targeting
-# the `publish-mirror:claude_klabauter` row set, exactly as a human publish
-# round does. Because the destination is a freshly `git init`'d local
-# directory rather than a network clone of the published repo, (b) needs NO
-# NETWORK AT ALL: a fresh clone with no connectivity still reaches a
-# stamped, registered engine via this path -- this is (a) minus the network
-# clone, per the plan body's own framing ("(b) is (a) minus the network
-# clone -- a legitimate lighter-weight shape").
-#
-# Advisory, never fail-closed: this step WARNS and continues on any failure
-# (git unavailable, publish.py exiting non-zero) -- C1 ships and is verified BEFORE C4 removes
-# the unstamped fallback (Hard constraint 3), so a failure here must not
-# brick the rest of first-run/setup.py.
-# NOT a member of the `install` timeout family, and it must never be moved
-# there. `install/timeouts.py` admits only work we do not own; what this
-# bounds is `coordinator/bin/publish.py` — claude-klabauter's own compute — so it is
-# governed by DR-344's budget like any other op of ours, and the hitlist
-# (docs/problems/2026-08-21-the-over-budget-timeout-hitlist.md § G11,
-# Exception 1) names it as the campaign's thesis in one line: an author
-# measured their own code at a large number, wrote the number down, and wrote
-# the excuse next to it ("a real percolate round over ~40 rows is not fast").
-#
 # MEASUREMENT that retires the excuse (2026-08-21, normal tier, warm):
-# `publish.py claude-klabauter-bin --dry-run` — the preview leg, which copies
-# nothing and skips every engine phase — cost **80.8s of process time** in the
-# parent alone, children uncounted. The real round is strictly more. So the
-# 900 was never buying a slow network; it was absorbing eighty-plus seconds of
-# our own CPU to preview forty rows, silently, on a box carrying 50-70 peers.
-#
-# WHAT THIS BUDGET IS INSTEAD. `provision_stamped_engine` is advisory at both
-# call sites: every failure path already prints a runnable remediation and the
-# install proceeds. So the honest question is not "how slow is publish.py"
-# (a defect report against that file, not a licence for this one) but "how
-# long may an advisory install step block an operator". The answer is a slice,
-# not a quarter-hour: on expiry the step prints the same one-line remediation
-# it prints for a non-zero exit, and the operator reaches a stamped engine by
-# running it. Raising this number does not fix anything — it re-buries the
-# 80.8s. The fix is in `publish.py`.
 _PUBLISH_ROUND_ADVISORY_BUDGET_SECS = 30
 _ENGINE_BUILD_SUBDIR = ("engine-build", "claude-klabauter")
 _KLABAUTER_MIRROR_REGISTRY_KEY = "repos.claude_klabauter"
 _KLABAUTER_MIRROR_PATH_REGISTRY_KEY = "publish.mirrors.claude_klabauter.path"
-# One row from `setup/publish-targets.portable` whose dest sigil is
-# `publish-mirror:claude_klabauter` and who has siblings sharing that sigil
-# -- naming ANY one such row causes `publish.py`'s own `main()` to auto-
-# expand the request to the row's WHOLE mirror (see that file's
-# "Mirror-name/row-name collision resolution" block) -- so this single name
-# publishes every row of the mirror, not just this one.
 _KLABAUTER_MIRROR_ROW_NAME = "claude-klabauter-bin"
 
 
 def _register_engine_key(key: str, value: str) -> bool:
-    """Write one engine-provisioning registry key in-process. Returns False
-    (with a printed WARNING) on a refused or failed write, matching the
-    warn-and-continue contract every caller here already had.
-
-    Negative spec: this used to be `_run([*machine_local_argv, "set", ...])`
-    behind a `_resolve_machine_local_argv` guard on
-    `<claude_klabauter_root>/coordinator/bin/machine-local` — a binary deleted in
-    `3bd2738f4` (2026-08-14). From that date the guard could never pass, so
-    `provision_stamped_engine` warn-and-returned False on every box and the
-    fresh-clone-reaches-a-stamped-engine path never ran. Same defect class,
-    and the same remedy, as `_seed_machine_local_registry`'s Step 3 restore
-    — see `machine_resolver.registry_set`'s docstring for why the fix is an
-    in-process write and NOT a resurrected forwarder. Both keys written here
-    (`repos.*`, `publish.mirrors.*.path`) are flat root-namespace keys, which
-    is exactly that function's declared scope.
-    """
     try:
         registry_set(key, value)
     except (ValueError, OSError) as exc:
@@ -769,7 +549,6 @@ def provision_stamped_engine(
 
     stamp_path = dest / "coordinator_core" / skew.ENGINE_STAMP_FILENAME
     if stamp_path.is_file():
-        # Already stamped — just make sure the registry agrees (idempotent).
         _register_engine_key(_KLABAUTER_MIRROR_REGISTRY_KEY, str(dest))
         return True
 
@@ -875,31 +654,10 @@ def run_post_toolchain(plugin_root: Path, args: _Args) -> int:
 
 
 def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
-    """Steps 1-6 proper. Split out of ``run_post_toolchain`` so the env overlay
-    wraps the whole sequence without re-indenting it; not a separate seam."""
     print(f"[post-toolchain] PLUGIN_ROOT={plugin_root}")
 
-    # Step 2: optional preflight via the coordinator-claude install-chain
-    # walker (non-fatal on the walker's own failure). The retired oracle's
-    # `plugin_root/scripts/setup.sh` was itself a python3-shebanged
-    # trampoline over this SAME engine's coordinator_core.ops.setup_chain_walker
-    # -- an in-process call replaces the stale `bash <path>` spawn, which fed
-    # the trampoline's Python source to bash as a script (never worked;
-    # reimplemented native, not merely de-bashed). The trampoline's SOURCE
-    # FILE has since moved: the b644d5a9 executable-surface relocation moved
-    # coordinator/scripts/ (and coordinator/lib/, coordinator/bin/) out of the
     # DoE-claude CLAUDE_PLUGIN_ROOT entirely and into claude-klabauter's OWN checkout
-    # (this repo's `coordinator/` tree) -- so the walker's repo_root/lib_dir
-    # env vars (mirroring the trampoline's own `main()`: repo_root =
-    # <coordinator-tree-root>, lib_dir = <coordinator-tree-root>/scripts/lib,
     # SCRIPT_DIR-relative not repo_root-relative -- see that file's header)
-    # must resolve off coordinator_claude_klabauter_root(), never plugin_root. Unlike
-    # site 3 below, an unresolvable engine root here is fail-loud: this is
-    # install-path code and a broken/absent claude-klabauter checkout at this point
-    # means the rest of Steps 4a-4c (which import coordinator_core modules
-    # that live in THIS SAME checkout) cannot possibly succeed either --
-    # silently skipping the preflight and stumbling into those steps would
-    # produce a much more confusing failure downstream.
     try:
         claude_klabauter_root_for_preflight_str, _resolution_class = coordinator_engine_root_with_class()
         claude_klabauter_root_for_preflight = Path(claude_klabauter_root_for_preflight_str)
@@ -910,10 +668,6 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
     coordinator_tree_root = claude_klabauter_root_for_preflight / "coordinator"
     if coordinator_tree_root.is_dir():
         print("[post-toolchain] Running setup preflight (toolchain status, non-fatal)...")
-        # Scoped to the walker call only (2026-07-21): these two vars are the
-        # retired trampoline's own argv-equivalent — they were a CHILD process's
-        # env when this was a `bash <path>` spawn and have no business outliving
-        # the in-process call that replaced it.
         try:
             walker_env = {
                 "COORDINATOR_SETUP_REPO_ROOT": str(coordinator_tree_root),
@@ -932,16 +686,9 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
             file=sys.stderr,
         )
 
-    # Step 3: seed machine-local registry.
     _seed_machine_local_registry(args.confirm, args.non_interactive)
 
-    # Step 3b: provision a stamped engine root (docs/plans/2026-08-19-an-
-    # engine-root-is-a-stamped-build.md C1), best-effort. On a genuinely
-    # fresh box this usually no-ops here (claude-klabauter is not yet cloned,
-    # so the engine root is unresolvable) -- `scripts/setup.py`'s own
     # `register_claude_klabauter_root` is the AUTHORITATIVE call site for that case
-    # and calls the same function once claude-klabauter's own installer runs.
-    # This call site exists for the re-run/already-registered case.
     try:
         claude_klabauter_root_for_engine_str, _resolution_class = coordinator_engine_root_with_class()
         provision_stamped_engine(Path(claude_klabauter_root_for_engine_str))
@@ -952,10 +699,6 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
             "once claude-klabauter is installed.",
         )
 
-    # Step 4a: install-substrate — in-process import (template-variant #1,
-    # direct-import; this caller is now Python, so the subprocess `python3
-    # -m coordinator_core.install.substrate` the oracle used is upgraded to
-    # a plain call, same as coordinator-auto-push / handoff-gate-aging).
     print("[post-toolchain] Step 4a: install-substrate...")
     try:
         from coordinator_core.install.substrate import main as _substrate_main
@@ -968,29 +711,8 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
         return EXIT_FAIL
     print("[post-toolchain] install-substrate: done.")
 
-    # Step 4b: ensure-coordinator-venv -- RETIRED (docs/plans/2026-08-18-
-    # retire-coordinator-venv.md chunk C4, AC5). `ensure_coordinator_venv`
-    # is now reachable ONLY via the explicit `--allow-venv-fallback` opt-in
-    # (`scripts/setup.py`'s `_fallback_to_venv` / `provision_deps`, and
-    # `coordinator_core.install.substrate`'s flag-gated Step C10a-3); this
-    # unconditional first-run call site is retired outright, not
-    # flag-gated, because first-run.py's own CLI carries no such flag.
-    # Machine-interpreter `coordinator_whoami` provisioning no longer
-    # depends on this call — it is handled independently by
-    # `scripts/setup.py`'s post-registration advisory step (chunk C10).
 
-    # Step 4c: platform-localize -- native in-process call (2026-07-21
-    # pure-Python-shop cutover). `plugin_root/bin/platform-localize.sh` is
-    # itself a python3-shebanged trampoline over this SAME engine's
-    # coordinator_core.hooks.platform_localize (DoE-owned file kept
-    # `.sh`-suffixed for caller-path stability -- see that trampoline's own
-    # header); the retired `bash <path>` spawn fed the trampoline's Python
-    # source to bash as a script, which never worked -- reimplemented
-    # native, not merely de-bashed. This also RETIRES the module docstring's
-    # previously-documented "platform-localize.sh not found at
     # $PLUGIN_ROOT/bin/" negative-spec bug: this port no longer looks for
-    # that file on disk at all, so the resolved-source-tree-vs-install-
-    # destination path mismatch it described can no longer fire.
     print("[post-toolchain] Step 4c: platform-localize...")
     try:
         from coordinator_core.hooks.platform_localize import main as _platform_localize_main
@@ -1003,7 +725,6 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
         return EXIT_FAIL
     print("[post-toolchain] platform-localize: done.")
 
-    # Step 5: git-lfs (unless --no-git-lfs). `git lfs install` is idempotent.
     if args.no_git_lfs:
         print("[post-toolchain] Skipping git lfs install (--no-git-lfs). LFS-backed clones will be pointer-only.")
     else:
@@ -1016,7 +737,6 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
             print("[post-toolchain] WARNING: git lfs install failed (is git-lfs installed?). Continuing.", file=sys.stderr)
         print("[post-toolchain] git lfs install: done.")
 
-    # Step 6: closing instruction.
     print()
     print("================================================================")
     print("  first-run complete.")
@@ -1032,10 +752,7 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
     return EXIT_OK
 
 
-# ---------------------------------------------------------------------------
 # Homebrew install + brew-offers (oracle L421-493). Live system mutation --
-# each step idempotent (brew install is a no-op when already sufficient).
-# ---------------------------------------------------------------------------
 
 
 def _install_homebrew() -> int:
@@ -1053,10 +770,6 @@ def _install_homebrew() -> int:
         print(f"[first-run] ERROR: Homebrew install failed to run: {exc}", file=sys.stderr)
         return EXIT_FAIL
 
-    # Deliberate process-env write: the `_brew_install` steps that follow in
-    # `_main_body` resolve `brew` off os.environ["PATH"], so this cannot be dropped.
-    # Bounded by the empty `env_overlay` wrapping `main()` -- see its docstring.
-    # Linuxbrew's default prefix was absent from this list entirely.
     for candidate in (
         "/opt/homebrew/bin/brew",
         "/usr/local/bin/brew",
@@ -1089,24 +802,10 @@ def _brew_install(formula: str, label: Optional[str] = None) -> int:
     return EXIT_OK
 
 
-# ---------------------------------------------------------------------------
 # unit3 -- top-level orchestration (main). Mirrors oracle L358-526.
-# ---------------------------------------------------------------------------
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """CLI entry.
-
-    Env scoping (2026-07-21): the whole run executes under an empty
-    ``env_overlay``, so every ``os.environ`` write it performs is unwound on
-    return. The load-bearing one is ``_install_homebrew``'s PATH prepend, which is
-    NOT deletable -- the ``_brew_install`` calls that follow it (and the
-    ``shutil.which("brew")`` re-probe) resolve ``brew`` off ``os.environ["PATH"]``.
-    As a bash script that export died with the process; as an imported module it
-    persisted for the interpreter's life and leaked into every later subprocess
-    child. Scoping here rather than around the assignment keeps the downstream
-    steps' view of PATH intact while bounding the write to this invocation.
-    """
     with env_overlay({}):
         return _main_body(argv)
 
@@ -1126,18 +825,11 @@ def _main_body(argv: Optional[List[str]] = None) -> int:
         return EXIT_FAIL
 
     # unit1: PLUGIN_ROOT = parent of the resolved coordinator source tree.
-    # The trampoline resolves and passes this via env (see DoE-side file);
-    # fall back to this module's own package location for direct-import
-    # callers/tests that don't go through the trampoline.
     plugin_root_env = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
     if plugin_root_env:
         plugin_root = Path(plugin_root_env)
     else:
-        # coordinator_core/install/first_run.py has no reliable relative path
-        # to a DoE coordinator/ tree in the general case (they are separate
-        # repos) — callers that need the toolchain-mutation flow to actually
         # locate `bin/`, `lib/`, `scripts/` MUST pass CLAUDE_PLUGIN_ROOT
-        # (the trampoline always does — see its own header).
         plugin_root = Path.cwd()
 
     env = detect_environment()
@@ -1189,13 +881,6 @@ def _main_body(argv: Optional[List[str]] = None) -> int:
         rc = _pkg_install("bash", "bash")
         if rc != EXIT_OK:
             return rc
-        # env.bash_ok is intentionally NOT re-derived here. Nothing downstream reads
-        # it again -- Step 4c is a native in-process call (platform-localize) that
-        # doesn't invoke bash at all (2026-07-21 pure-Python-shop cutover retired
-        # the last bash-dependent Step 4c path); Step 4b (ensure-coordinator-venv)
-        # is retired outright (docs/plans/2026-08-18-retire-coordinator-venv.md
-        # chunk C4) and never ran under bash either. A re-check here would just
-        # be dead state.
 
     if not env.python_ok:
         rc = _pkg_install("python@3.12", "python@3.12")
@@ -1227,12 +912,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
     writer_id="first-run",
     source_module="coordinator_core.install.first_run",
     clauses=(
-        # Clause 1 — `_seed_machine_local_registry`'s Step 3: registers
-        # every sibling repo `discover_working_repos` finds under
-        # `repos.<derived-key>` via `machine-local set`. SHAPED: the key
-        # set depends on what's discovered on this machine at run time, not
-        # enumerable in source. Same `repos.<derived-key>` shape as
-        # write_surface.py's own SHAPED-form worked example.
         ShapedClause(
             discovered_by="_seed_machine_local_registry (discover_working_repos)",
             entry_template=WriteSurfaceEntry(
@@ -1240,11 +919,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 key=f"{_ML_REPOS_KEY_PREFIX}<derived-key>",
             ),
         ),
-        # Clause 2 — Step 5: `git lfs install` (global, idempotent),
-        # skipped when `--no-git-lfs`. A real global git-config mutation,
-        # but the exact `filter.lfs.*` key set is owned by the installed
-        # git-lfs binary, not knowable from this repo's own source — stated
-        # reason, not a fabricated key list.
         StaticClause(
             entries=(
                 WriteSurfaceEntry(
@@ -1253,14 +927,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 ),
             ),
         ),
-        # Clause 3 — `_brew_install` (bash/python@3.12/node/uv/git-lfs
-        # formulae, invoked from `_main_body` when `detect_environment`
-        # finds a tool absent). No kind in the eight-kind vocabulary
-        # honestly names an unbounded third-party-installer footprint (see
         # `_BREW_INSTALL_REASON`) — a stated-reason entry naming the
-        # mechanism, deliberately not a fabricated `file-path`, so this
-        # surface is visible to a future drift/uninstall pass rather than
-        # silently missing.
         StaticClause(
             entries=(
                 WriteSurfaceEntry(

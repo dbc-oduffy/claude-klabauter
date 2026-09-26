@@ -51,11 +51,6 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
-# ---------------------------------------------------------------------------
-# Git repo + registry factories (mirrors test_memo_send.py / test_memo_heal.py)
-# ---------------------------------------------------------------------------
-
-
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check,
@@ -81,13 +76,6 @@ def _make_sender_repo(tmp_path: Path, name: str = "sender-repo") -> Path:
 
 
 def _make_receiver_repo(tmp_path: Path, name: str = "receiver-repo") -> Path:
-    """A root-level `.gitkeep` only -- NOT one inside `cross-repo/inbox/`
-    itself (`memo.send` creates that directory on demand). A tracked
-    `inbox/.gitkeep` would sit in `heal_inbox`'s present-map as an
-    unanchored, tracked file and get swept into ADOPT, where `_memo_anchor`
-    refuses it outright (a leading `.` fails `_valid_ref_component`),
-    failing the WHOLE adopt+retire+rekey transaction for every real memo
-    batched alongside it."""
     root = tmp_path / name
     root.mkdir()
     _git(root, "init", "-b", "main")
@@ -145,9 +133,6 @@ def _write_draft(sender_repo: Path, topic: str, *, to: str = "example-retrieval-
 
 
 def _deliver(sender_repo: Path, topic: str, *, to: str = "example-retrieval-repo-em", body: str = "Body prose.\n") -> dict:
-    """Draft + `memo.send`, act mode. Returns the op result; asserts success
-    (every call site in this module wants a landed delivery, not a partial
-    one to inspect)."""
     _write_draft(sender_repo, topic, to=to, body=body)
     result = _memo_send({"dry_run": False, "topic": topic}, repo_root=sender_repo)
     assert result["exit_code"] == 0, result
@@ -194,14 +179,6 @@ def _delete_and_commit(receiver_repo: Path, relpath: str) -> None:
 
 
 def _inbox_names(receiver_repo: Path) -> set:
-    """Both corpus roots, unioned -- matches `memo_heal._present_map`'s own
-    convention. Which root is live can change mid-test: `memo.send`'s
-    target (`memo_corpus.receiver_inbox_root`) falls back to the LEGACY
-    `cross-repo/` when neither root exists yet, but a restore's target
-    (`memo_corpus.memo_corpus_root`) mints the NEW `state/cross-repo/` when
-    neither exists -- so a delivery lands in one root and a later restore,
-    run against a tree a destructive gesture has emptied back to neither-
-    exists, lands in the other."""
     names = set()
     for corpus in ("cross-repo", "state/cross-repo"):
         inbox = receiver_repo / corpus / "inbox"
@@ -211,13 +188,6 @@ def _inbox_names(receiver_repo: Path) -> set:
 
 
 def _resolved_inbox_path(receiver_repo: Path, filename: str) -> Path:
-    """The file's ACTUAL path under whichever corpus root
-    `memo_corpus.memo_corpus_root` currently resolves to -- the same
-    resolver `memo_heal._inbox_write_target` uses for a restore. Needed
-    anywhere this module inspects or mutates a file AFTER a gesture has
-    emptied the tree back to neither-root-exists, since a restore that
-    follows mints the NEW root even though the original delivery landed
-    under the legacy one."""
     from coordinator_core import memo_corpus
 
     return Path(memo_corpus.memo_corpus_root(str(receiver_repo))) / "inbox" / filename
@@ -229,13 +199,6 @@ def _anchor_filenames(common_dir: Path) -> set:
 
 def _object_present(repo: Path, sha: str) -> bool:
     return _git(repo, "cat-file", "-e", sha, check=False).returncode == 0
-
-
-# ---------------------------------------------------------------------------
-# The gesture family the prime exit criterion names, each ending on branch
-# `main` at `root_sha`, the branch that carried every prior commit gone, and
-# unreferenced objects reclaimed.
-# ---------------------------------------------------------------------------
 
 
 def _gesture_rename_and_recreate(repo: Path, root_sha: str) -> None:
@@ -269,12 +232,6 @@ _GESTURES = {
 }
 
 
-# ---------------------------------------------------------------------------
-# The prime exit criterion: deliver, destroy, gc, heal, back -- archived and
-# deleted stay gone; a restore's own anchor doesn't resurrect a later delete.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize("gesture", _GESTURES.values(), ids=_GESTURES.keys())
 def test_prime_exit_criterion_deliver_destroy_gc_heal_back(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gesture: Callable[[Path, str], None],
@@ -294,29 +251,20 @@ def test_prime_exit_criterion_deliver_destroy_gc_heal_back(
     delivery_sha_a = result_a["acted"][0]["delivery_commit_sha"]
     delivered_bytes_a = (receiver / "cross-repo" / "inbox" / fname_a).read_bytes()
 
-    # In the receiver: archive B, delete D, each committed.
     _archive_and_commit(receiver, fname_b)
     _delete_and_commit(receiver, f"cross-repo/inbox/{fname_d}")
 
-    # One heal BEFORE the gestures -- retires B (archived) and D (reachable
-    # from HEAD, deliberately removed).
     heal_1 = _heal(receiver)
     assert heal_1["exit_code"] == 0, heal_1
     assert {"id": fname_b, "action": "retired"} in heal_1["acted"]
     assert {"id": fname_d, "action": "retired"} in heal_1["acted"]
 
-    # The gestures + gc -- proves the test destroyed what the incident
-    # destroyed.
     gesture(receiver, root_sha)
     assert not _object_present(receiver, delivery_sha_a)
 
-    # A second heal: A comes back; B and D stay gone.
     heal_2 = _heal(receiver)
     assert heal_2["exit_code"] == 0, heal_2
     assert {"id": fname_a, "action": "restored"} in heal_2["acted"]
-    # The gesture emptied the tree back to neither-corpus-root-exists, so
-    # the restore mints the NEW root -- `state/cross-repo/`, not the
-    # `cross-repo/` the original delivery landed under.
     restored_path = _resolved_inbox_path(receiver, fname_a)
     assert restored_path.read_bytes() == delivered_bytes_a
     restored_relpath = restored_path.relative_to(receiver).as_posix()
@@ -329,8 +277,6 @@ def test_prime_exit_criterion_deliver_destroy_gc_heal_back(
     assert fname_b not in anchored
     assert fname_d not in anchored
 
-    # A third heal is a genuine no-op with zero spawns. Patched by hand
-    # (not via `monkeypatch`) so restoring it does not also undo the
     # COORDINATOR_SETTINGS_HOME env-var patch this test still needs below.
     def _forbidden(*a, **k):
         raise AssertionError("no git subprocess expected on a converged heal")
@@ -345,12 +291,6 @@ def test_prime_exit_criterion_deliver_destroy_gc_heal_back(
     assert heal_3["acted"] == []
     assert heal_3["failed"] == []
 
-    # (Review: apm A1) restore-then-delete -- A's restore re-keyed the
-    # anchor to the restore commit; deleting A on the branch the receiver
-    # KEPT (this one -- no further gesture) and healing twice must not bring
-    # it back a second time, and must retire its anchor for good. Delete
-    # via the resolved path -- the restore minted the NEW corpus root, so
-    # A no longer lives under the legacy one the original delivery used.
     _delete_and_commit(receiver, restored_relpath)
     heal_4 = _heal(receiver)
     assert {"id": fname_a, "action": "retired"} in heal_4["acted"]
@@ -363,14 +303,6 @@ def test_prime_exit_criterion_deliver_destroy_gc_heal_back(
 
 def _common_dir(repo: Path) -> Path:
     return repo / ".git"
-
-
-# ---------------------------------------------------------------------------
-# Extra case 1 (Review: eng-director F2): archived on the branch the
-# gestures destroy, with NO heal pass in between -- the archiving itself
-# was lost along with the branch that carried it, so the corrected rule
-# says RESTORE, never retire.
-# ---------------------------------------------------------------------------
 
 
 def test_archived_with_no_heal_before_the_gestures_is_restored_not_retired(
@@ -386,7 +318,6 @@ def test_archived_with_no_heal_before_the_gestures_is_restored_not_retired(
     fname_b = _delivered_filename(result_b["acted"][0])
     delivered_bytes_b = (receiver / "cross-repo" / "inbox" / fname_b).read_bytes()
 
-    # Archive it, but never heal before the gestures run.
     _archive_and_commit(receiver, fname_b)
 
     _gesture_reset_hard_only(receiver, root_sha)
@@ -394,18 +325,9 @@ def test_archived_with_no_heal_before_the_gestures_is_restored_not_retired(
     heal = _heal(receiver)
     assert heal["exit_code"] == 0, heal
     assert {"id": fname_b, "action": "restored"} in heal["acted"]
-    # The gesture emptied the tree back to neither-corpus-root-exists, so
-    # the restore mints the NEW root, not the legacy one the delivery used.
     restored_path = _resolved_inbox_path(receiver, fname_b)
     assert restored_path.read_bytes() == delivered_bytes_b
     assert fname_b in _anchor_filenames(_common_dir(receiver))
-
-
-# ---------------------------------------------------------------------------
-# Extra case 2 (Review: eng-director F2): reachable only from a SECOND live
-# branch the gestures never touch -- neither restored (not unreachable from
-# every branch) nor retired (not reachable from HEAD).
-# ---------------------------------------------------------------------------
 
 
 def test_reachable_only_from_a_kept_second_branch_is_left_alone(
@@ -420,11 +342,8 @@ def test_reachable_only_from_a_kept_second_branch_is_left_alone(
     result_e = _deliver(sender, "memo-e")
     fname_e = _delivered_filename(result_e["acted"][0])
 
-    # A second branch, still at the tip carrying E, kept alive throughout.
     _git(receiver, "branch", "side")
 
-    # Gesture ONLY the branch heal_inbox will run from -- `side` is never
-    # deleted, so E's delivery commit stays reachable (just not from HEAD).
     _gesture_reset_hard_only(receiver, root_sha)
     assert _rev_parse(receiver, "side") != _rev_parse(receiver, "HEAD")
 

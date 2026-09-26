@@ -30,15 +30,12 @@ from coordinator_core.testing import golden
 
 @pytest.fixture()
 def goldens_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect golden.py's caller-resolved `_goldens/` dir to a throwaway tmp dir."""
     target = tmp_path / "_goldens"
     monkeypatch.setattr(golden, "_resolve_goldens_dir", lambda: target)
     return target
 
 
 def test_resolve_goldens_dir_points_beside_caller() -> None:
-    """Un-monkeypatched: resolves relative to THIS file's own directory (pure path
-    computation only — asserts the value, never writes anything to disk)."""
     resolved = golden._resolve_goldens_dir()
     assert resolved == Path(__file__).resolve().parent / "_goldens"
 
@@ -49,8 +46,6 @@ def test_load_golden_missing_raises_hard_error(goldens_dir: Path) -> None:
 
 
 def test_load_golden_missing_never_skips(goldens_dir: Path) -> None:
-    # Explicit negative-spec proof: the exception raised is exactly GoldenMissingError
-    # — a plain hard failure, not pytest's Skipped outcome or any other escape hatch.
     with pytest.raises(golden.GoldenMissingError) as excinfo:
         golden.load_golden("ns", "case", kind="json")
     assert type(excinfo.value) is golden.GoldenMissingError
@@ -66,7 +61,6 @@ def test_capture_then_load_round_trips_text(
     monkeypatch.delenv("CAPTURE_GOLDENS", raising=False)
     loaded = golden.load_golden("ns", "text-case", kind="text")
     assert loaded == b"hello world\n"
-    # Round-trip also satisfies the assertion path (no exception raised).
     golden.assert_matches_golden(b"hello world\n", "ns", "text-case", kind="text")
 
 
@@ -91,12 +85,9 @@ def test_json_comparison_is_normalized_not_literal_text(
     )
     monkeypatch.delenv("CAPTURE_GOLDENS", raising=False)
 
-    # Different key order and whitespace than what was captured — still matches,
-    # because comparison is on the parsed object, not the literal fixture text.
     reordered = '{\n  "b": 2,\n  "a": 1\n}'
     golden.assert_matches_golden(reordered, "ns", "normalize-case", kind="json")
 
-    # Genuine value divergence still fails loud.
     with pytest.raises(AssertionError):
         golden.assert_matches_golden(
             json.dumps({"a": 1, "b": 999}), "ns", "normalize-case", kind="json"

@@ -1,25 +1,3 @@
-"""Op-route leg of `state/bug-backlog/2026-08-31-four-bug-blitz-commits-
-deleted-five-file-6216c89502b9.yaml`: `commit_paths` refuses a genuine,
-HEAD-tracked deletion whose commit message never mentions a removal.
-
-The bash-route sibling (`bash_guards.commit_tripwires.check_undeclared_
-staged_deletion`, Check 14 of `check_validate_commit`) covers only the
-plain `git commit` shape a PreToolUse guard can see. The four accident
-commits this row was filed against (`8730aeb007` et al -- each "0
-insertions, N deletions" with a subject describing an unrelated fix) went
-through `ceremony.commit_v2 -> commit.commit_paths`, an in-process op route
-no bash guard is ever invoked for. This module drives the same predicate
-(`action_guard.assert_no_undeclared_staged_deletion`) through that route
-directly.
-
-Negative-spec:
-  - Does NOT re-derive the deletion-verb word list -- imports nothing from
-    `bash_guards.commit_tripwires`; `action_guard`'s own copy is what fires.
-  - Does NOT fire on a phantom (already-absent-from-HEAD) declared deletion
-    -- that path never reaches `genuine_deletions` at all (see
-    `test_declared_absent_from_head_is_split_out.py`, unaffected by this
-    guard).
-"""
 
 from __future__ import annotations
 
@@ -98,9 +76,6 @@ def test_a_genuine_deletion_whose_message_names_it_still_commits(repo):
 
 
 def test_a_phantom_declared_deletion_is_not_reached_by_this_guard(repo):
-    """`gone.txt` is still on disk here, so the phantom-deletion refusal
-    (an earlier check in `commit_paths`) fires first -- this guard must
-    never be reached, message or no message."""
     with pytest.raises(CommitRefused) as excinfo:
         gcommit.commit_paths(
             repo, ["keep.txt"], "no verb here at all", deleted_paths=["gone.txt"]
@@ -119,8 +94,6 @@ def test_an_ordinary_commit_with_no_declared_deletion_is_unaffected(repo):
 
 
 def test_zero_new_process_spawns_for_the_refused_call(repo, monkeypatch):
-    """DR-344: the predicate is a pure in-process call, same as its
-    `assert_pathspec_shape_permitted` sibling."""
     (repo / "gone.txt").unlink()
     spawned = []
     real_run = subprocess.run

@@ -34,15 +34,9 @@ import time
 from typing import Optional
 
 
-# Single shared home for the
-# Windows-popup-guard creationflags idiom; harness.py and op_fixtures.py import
 # this instead of each re-declaring `getattr(subprocess, "CREATE_NO_WINDOW", 0)`.
 SUBPROCESS_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-# Bounded timeout (seconds) for every subprocess.run call in this package —
-# A hung op must fail loud (AC9's
-# "erroring op fails loud" spirit extends to "a hanging op fails loud"), not
-# wedge the whole benchmark run indefinitely.
 SUBPROCESS_TIMEOUT_S = 60
 
 
@@ -87,17 +81,6 @@ def _child_env_with_benchmark_origin() -> dict:
 
 
 def _build_argv(op: str, params_json: str, repo: Optional[str]) -> list[str]:
-    """Builds the invoke argv, omitting --repo for bare/none-scoped ops.
-
-    Always carries `--allow-unstamped-dispatch`: this harness's whole point
-    is timing the live/dev engine tree (see this module's own docstring),
-    which by construction has no build stamp. Per-invocation CLI flag on a
-    freshly spawned child process -- ipc.py's in-process
-    `allow_unstamped_dispatch()` (set by the parent pytest process's own
-    `conftest.py::pytest_configure`) does not reach this subprocess, so the
-    gate has to be opted out of again here, the second of the two sanctioned
-    carve-outs named in `ipc.allow_unstamped_dispatch`'s docstring.
-    """
     argv = [
         sys.executable, "-m", "coordinator_core.invoke", op, params_json,
         "--allow-unstamped-dispatch",
@@ -136,8 +119,6 @@ def time_invocation(op: str, params_json: str, repo: Optional[str]) -> float:
             env=child_env,
         )
     except subprocess.TimeoutExpired as exc:
-        # A hung child process must
-        # fail loud like any other invalid sample, not wedge the run forever.
         excerpt = (exc.stdout or "")[:500] if isinstance(exc.stdout, str) else ""
         raise BenchmarkSampleInvalid(op, -1, f"TIMEOUT after {SUBPROCESS_TIMEOUT_S}s: {excerpt}")
     elapsed_ms = (time.perf_counter() - start) * 1000.0
@@ -146,16 +127,10 @@ def time_invocation(op: str, params_json: str, repo: Optional[str]) -> float:
     error_envelope = False
     try:
         parsed = json.loads(stdout)
-        # A parsable-but-non-dict JSON
         # body (a bare list/scalar) is not a valid JSON-RPC envelope either; only
-        # a dict without an "error" key is accepted.
         error_envelope = not isinstance(parsed, dict) or "error" in parsed
     except (json.JSONDecodeError, ValueError):
-        # Rewritten to name the actual
-        # mechanism: unparsable stdout is treated as an invalid sample regardless
         # of returncode. A healthy exit 0 always emits a parsable JSON-RPC
-        # envelope, so a parse failure alone is sufficient grounds to invalidate
-        # the sample -- it does not "route via the returncode check".
         error_envelope = True
 
     if completed.returncode != 0 or error_envelope:

@@ -88,20 +88,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
     writer_id="fleet-env-resolve",
     source_module="coordinator_core.install.fleet_env_resolve",
     clauses=(
-        # clauses[0] -- `_is_writable_root`'s writability probe. Does NOT
-        # create or provision the environment itself (see module docstring's
-        # negative-spec) -- the ONE real write this ladder performs is a
-        # uniquely-named directory it `mkdir()`s inside the nearest existing
-        # ancestor of whichever rung is being tested (the registry
-        # candidate, or `<settings-home>/.fleet-env`), then `rmdir()`s in a
-        # `finally` block. SHAPED: the probed root is caller-supplied
-        # (rung 1) or settings-home-derived (rung 2), never a literal
-        # constant, and the probe's own name embeds pid/id/monotonic-ns.
-        # Not folded into the sandbox_check-style "lands inside a
-        # tempfile.mkdtemp() sandbox" exemption: the ancestor directory
-        # itself is a REAL candidate root on the machine (the registry value
-        # or settings-home), not a throwaway temp tree -- a failed rmdir
-        # (caught, best-effort) can leave the probe directory behind.
         ShapedClause(
             discovered_by="_is_writable_root (candidate-root writability probe)",
             entry_template=WriteSurfaceEntry(
@@ -122,16 +108,10 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
 
 
 class FleetEnvResolutionError(RuntimeError):
-    """No rung of the fallback ladder resolved to a writable root."""
+    pass
 
 
 def _nearest_existing_ancestor(path: Path) -> "Optional[Path]":
-    """Return the nearest existing directory in `path`'s own ancestry.
-
-    Walks `path` itself, then each of `path.parents`, returning the first
-    one that exists on disk. Returns `None` if nothing in the chain exists
-    (the no-such-drive / no-such-volume case this ladder exists to catch).
-    """
     for candidate in (path, *path.parents):
         if candidate.exists():
             return candidate
@@ -139,32 +119,7 @@ def _nearest_existing_ancestor(path: Path) -> "Optional[Path]":
 
 
 def _is_writable_root(path: Path) -> bool:
-    """True if `path` is usable as a fleet-environment root.
-
-    Not a `Path.exists()` check on the leaf — the leaf is expected to be
-    absent pre-provision (C4 creates it). Usable means: the nearest existing
-    ancestor is a real directory this process can actually write into,
-    proven by attempting to create and remove a uniquely-named temporary
-    entry inside it — not `os.access(path, os.W_OK)`. On Windows,
-    `os.access(..., os.W_OK)` reports only the read-only file attribute and
-    ignores ACLs entirely, so for a directory it returns `True` in
-    essentially all cases, including ACL-denied or elevation-required paths
-    this process cannot actually write to. That would make rung 1 accept an
-    unwritable registry candidate silently, so the ladder never falls
-    through to rung 2 and C4 fails later at provisioning time with a bare
-    permission error instead of this module's loud, actionable
-    `FleetEnvResolutionError`. Same trap, different flag, as documented for
-    `os.access(..., os.X_OK)` in `coordinator/bin/lib/machine_local_resolve
-    .py`'s module docstring (the `WinError 193` precedent) — an actual probe
-    is the only reliable cross-platform answer and it works identically on
-    POSIX.
-    """
     if path.exists() and not path.is_dir():
-        # A stray non-directory file already occupies the candidate leaf
-        # (e.g. a prior partial/corrupted install) — the ancestor being
-        # writable doesn't make this root usable; `_swap_in_new_env`'s
-        # rename-swap expects a directory (or nothing) at env_root, not a
-        # file. Review: coordinatorcode-reviewer-97d5c433 finding 5.
         return False
     ancestor = _nearest_existing_ancestor(path)
     if ancestor is None:
@@ -190,19 +145,6 @@ def resolve_fleet_env_fallback_root(
     *,
     settings_home_factory: "Callable[[], Path]" = _default_settings_home,
 ) -> Path:
-    """Resolve a usable fleet-environment root, walking the fallback ladder.
-
-    `primary_candidate` is C1's `resolve_fleet_env_root()` result (the
-    registry value, or `None` on absence) — this function performs no
-    registry read of its own. Accepts the candidate unchanged when its
-    ancestry is writable; otherwise degrades to `<settings-home>/.fleet-env`;
-    raises `FleetEnvResolutionError` if that also fails.
-
-    `settings_home_factory` is injectable so a test can point rung 2 at a
-    `tmp_path` fixture instead of the real settings home, and pair that with
-    a deliberately-unreachable `primary_candidate` to prove both rungs
-    without requiring a machine with no `X:` and no Dev Drive.
-    """
     if primary_candidate is not None:
         candidate_path = Path(primary_candidate)
         if _is_writable_root(candidate_path):

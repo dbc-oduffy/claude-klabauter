@@ -56,7 +56,6 @@ from coordinator_core.ipc import register_op
 
 
 class UnsupportedPlatformError(ValueError):
-    """Raised when sys.platform matches none of the three native branches."""
 
     def __init__(self, platform: str) -> None:
         self.platform = platform
@@ -68,7 +67,6 @@ class UnsupportedPlatformError(ValueError):
 
 
 class HibernateDispatchError(RuntimeError):
-    """Raised when a hibernate dispatch binary exits nonzero (CC-7 fail-loud)."""
 
     def __init__(self, argv: List[str], returncode: int, stderr: str) -> None:
         self.argv = list(argv)
@@ -80,16 +78,6 @@ class HibernateDispatchError(RuntimeError):
 
 
 def _run_binary(argv: List[str]) -> None:
-    """Direct list-argv spawn of a platform binary (CC-1: no shell interpreter).
-
-    Raises HibernateDispatchError on a nonzero exit — the caller never reports
-    a failed dispatch as success.
-    """
-    # The ctypes-primary path never
-    # spawns a subprocess, but this shutdown-/h fallback does; without these
-    # two flags it risks the Windows console-popup / interactive-hang classes
-    # `git_native.py` and `run_pre_ci_hooks.py` this same wave already guard
-    # against (cross-repo/archive/2026-05-30-windows-popup-child-process-hypothesis.md).
     proc = subprocess.run(
         argv,
         capture_output=True,
@@ -103,13 +91,6 @@ def _run_binary(argv: List[str]) -> None:
 
 
 def _windows_ctypes_suspend() -> bool:
-    """Attempt PowrProf.SetSuspendState(1, 0, 0) — TRUE first arg → hibernate.
-
-    Returns True when the call is available AND reports success (nonzero
-    BOOLEAN per the Win32 contract); False when ctypes.windll is absent
-    (non-Windows interpreter), the symbol fails to resolve, or the call
-    reports failure — the caller then falls back to `shutdown /h` per B1.
-    """
     import ctypes
 
     windll = getattr(ctypes, "windll", None)
@@ -123,16 +104,6 @@ def _windows_ctypes_suspend() -> bool:
 
 
 def hibernate(platform: Optional[str] = None) -> dict:
-    """Dispatch a native hibernate for the current (or given) platform.
-
-    platform: sys.platform-shaped string; None → sys.platform. Injectable so
-    tests exercise every branch without monkeypatching the interpreter's own
-    sys.platform (tests mock the dispatch helpers — never actually suspend).
-
-    Returns {platform, method, dispatched: True} on successful dispatch.
-    Raises UnsupportedPlatformError on an unknown platform and
-    HibernateDispatchError on a failed spawn.
-    """
     plat = sys.platform if platform is None else platform
 
     if plat == "darwin":

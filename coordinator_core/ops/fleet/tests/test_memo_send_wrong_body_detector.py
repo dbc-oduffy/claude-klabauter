@@ -36,9 +36,6 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _stage_two_drafts(tmp_path, monkeypatch, *, first_body: str, second_body: str):
-    """Two drafts staged in one session — `earlier-topic` first, then
-    `later-topic` carrying `second_body`. Returns (sender_repo, receiver_repo).
-    """
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
     claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -65,23 +62,18 @@ class TestWrongBodyCollisionRefused:
         err = capsys.readouterr().err
         assert "earlier-topic" in err, err
 
-        # Nothing was delivered into the receiver's inbox.
         inbox_files = [
             p for p in (receiver_repo / "cross-repo" / "inbox").glob("*.md")
             if p.name != ".gitkeep"
         ]
         assert inbox_files == []
 
-        # Nothing sender-side moved either — the refusal is before any write.
         assert (sender_repo / "state" / "memo-outbox" / "later-topic.md").exists()
         assert not (sender_repo / "state" / "memo-outbox" / "sent").exists()
 
     def test_trailing_whitespace_and_blank_lines_still_collide(
         self, tmp_path, monkeypatch, capsys,
     ):
-        """The comparison normalises trailing whitespace per line and
-        collapses trailing blank lines — a body differing only in that is
-        still the same draft resent, per `_normalize_body`."""
         sender_repo, receiver_repo = _stage_two_drafts(
             tmp_path, monkeypatch,
             first_body="The bug is in memo_send.py today.\n",
@@ -100,29 +92,15 @@ class TestCorruptSiblingDraftIsSkipped:
     def test_non_utf8_sibling_draft_is_skipped_and_send_still_succeeds(
         self, tmp_path, monkeypatch,
     ):
-        """A stray/corrupt sibling draft with non-UTF-8 bytes must be skipped
-        by the duplicate-body scan, not raise out of it — module docstring
-        `_find_duplicate_draft_topic`: "A candidate this cannot read or parse
-        is skipped rather than treated as a match or a failure — a
-        stray/corrupt sibling draft must not block an unrelated send."
-
-        Pins the fix for
-        `except OSError:` (too narrow; `UnicodeDecodeError` is a `ValueError`
-        subclass) missing this exact case. Fails against the pre-fix
-        `except OSError:` and passes once widened to `(OSError, ValueError)`.
-        """
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
-        # The send's own draft — an unrelated body.
         _write_draft(
             sender_repo, "later-topic",
             body="An entirely unrelated body about something else.\n",
         )
-        # A corrupt sibling draft directly in the outbox, non-UTF-8 bytes —
-        # never committed/tracked, mirroring an on-disk-only stray file.
         outbox = sender_repo / "state" / "memo-outbox"
         (outbox / "corrupt-sibling.md").write_bytes(b"\xff\xfe\x00garbage not utf-8")
 

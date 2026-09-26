@@ -57,29 +57,10 @@ class _StubClaudeKlabauter:
 
 
 def _fake_process_target_succeeds(target, setup_dir, totals, **kwargs):
-    # `main()`'s row loop (§ the row-honesty fix, `test_publish_skipped_row_
-    # not_counted_succeeded.py`) treats "`process_target` did not raise AND
-    # `totals.processed` did not advance" as a FAILED row — a `None`-
-    # returning no-op fake (this fixture's original shape) therefore marks
-    # every row FAILED (and `main()` returns before even reaching the
-    # gate under test's "proceeds" branch). Advance `totals.processed` to
-    # model the row genuinely landing, matching every other `main()`-
-    # driving publish test fixture in this package.
     totals.processed += 1
 
 
 def _stub_dest_refresh(monkeypatch) -> None:
-    """Neutralise the destination-refresh precondition (PM ruling 2026-09-02).
-
-    `publish.main` brings every destination level with its origin before the
-    first row materializes anything, and fail-closes on a dest whose checked-out
-    branch has no upstream tracking ref (§ `percolate.dest_refresh.
-    refresh_dest_from_origin`). This fixture's dest repo is a bare `.git`
-    directory in a tmp tree, not a clone, so that refusal fires and returns 1
-    after the populated-patterns gate under test has already proceeded.
-
-    Patched on the engine module rather than on `publish`, because `main`
-    imports the callable from `percolate.dest_refresh` at call time."""
     publish._bootstrap_engine()
     from percolate import dest_refresh as _dest_refresh
 
@@ -93,10 +74,6 @@ def _stub_dest_refresh(monkeypatch) -> None:
 
 
 def _wire_main_preconditions_except_identity(monkeypatch, *, setup_dir: Path, rows: list) -> None:
-    """Same shape as `_wire_main_preconditions` in
-    `test_percolate_identity_check_gate.py`, deliberately WITHOUT stubbing
-    `check_identity_file_present` / `check_identity_file_safe` /
-    `parse_percolate_identity` — those three are the gate under test here."""
     _stub_dest_refresh(monkeypatch)
     percolate_root = setup_dir.parent
     monkeypatch.setattr(
@@ -111,14 +88,6 @@ def _wire_main_preconditions_except_identity(monkeypatch, *, setup_dir: Path, ro
     monkeypatch.setattr(publish, "_import_publish_sync", lambda setup_dir: object())
     monkeypatch.setattr(publish, "check_publish_sync_contract", lambda *a, **k: None)
     monkeypatch.setattr(publish, "process_target", _fake_process_target_succeeds)
-    # This file's gate under test is the PRE-loop populated-patterns check —
-    # the four POST-loop end-of-run legs are out of scope here (each has its
-    # own dedicated test file) and, unlike `_StubClaudeKlabauter` in those sibling
-    # files, this fixture's stub carries no `run_parse_sweep`/
-    # `enumerate_gate_entrypoints`, so leaving the function/entrypoint gates
-    # un-stubbed would fail them on an AttributeError rather than exercising
-    # anything this file cares about. Stub all four inert so a "proceeds"
-    # test's rc depends only on the identity-populated gate + row success.
     monkeypatch.setattr(publish, "dispatch_end_of_run_identity_check", lambda *a, **k: True)
     monkeypatch.setattr(publish, "dispatch_end_of_run_install_doc_payload_check", lambda *a, **k: True)
     monkeypatch.setattr(publish, "dispatch_end_of_run_unscanned_published_check", lambda *a, **k: True)
@@ -131,10 +100,6 @@ def _row(name: str, repo_root: Path) -> str:
 
 
 def _write_identity(setup_dir: Path, *, review_patterns: list[str] | None) -> Path:
-    """`review_patterns=None` writes an EMPTY array literal (present, parses,
-    but empty); an empty list writes the array key with only whitespace/
-    comment lines (still empty after parsing); a populated list writes real
-    tokens."""
     identity_path = setup_dir / ".percolate-identity"
     if review_patterns is None:
         body = ""
@@ -176,8 +141,6 @@ class TestEmptyIdentityFileAbortsRun:
         assert "FATAL" in captured.err
         assert "PERSONAL_REVIEW_PATTERNS" in captured.err
         assert ".percolate-identity.example" in captured.err
-        # process_target must never have been reached — this aborts the WHOLE
-        # run before any target dispatch, not a per-target skip.
         assert "Done." not in captured.out or "0 target" not in captured.out
 
 
@@ -208,9 +171,6 @@ class TestParsedButEmptyReviewPatternsAbortsRun:
         assert ".percolate-identity.example" in captured.err
 
     def test_whitespace_only_comment_body_aborts_run(self, tmp_path, monkeypatch, capsys):
-        """Array body contains only a comment line (no real token) —
-        `shlex.split` on a comment-stripped body yields an empty list, same
-        as the fully-empty case; must still abort."""
         setup_dir = tmp_path / "percolate-root" / "setup"
         setup_dir.mkdir(parents=True)
         identity_path = setup_dir / ".percolate-identity"

@@ -1,9 +1,3 @@
-"""
-Tests for coordinator_core.ops.fleet.work_state — "fleet.work_state".
-
-Spec backlink: docs/plans/2026-08-19-fleet-work-state-who-holds-which-baton.md,
-chunk C5.
-"""
 from __future__ import annotations
 
 import subprocess
@@ -79,9 +73,6 @@ Body.
 
 @pytest.fixture(autouse=True)
 def _stub_snapshot(monkeypatch):
-    """Every test stubs `harness_registry.snapshot()` to a cheap, deterministic
-    empty registry unless it explicitly overrides this — keeps tests off any
-    real live-session substrate."""
     from coordinator_core.session import harness_registry
 
     monkeypatch.setattr(harness_registry, "snapshot", lambda: {})
@@ -192,19 +183,10 @@ class TestZeroSpawnOverNonGitFixture:
     def test_no_git_subprocess_spawned_with_a_non_git_sibling_present(
         self, tmp_path, monkeypatch,
     ) -> None:
-        """AC9b: patches `subprocess.run`/`Popen`/`check_output`/`check_call`
-        on the `subprocess` module object for a sibling set that includes a
-        registered-but-not-a-git-repo entry, and asserts the whole loop
-        resolves with none of them called. (Review: staff-eng, Finding 7)
-        NOT a proof against every spawn shape: a module in the call chain
-        that did `from subprocess import run` at import time would bind the
-        original, invisible to this patch, and `os.system`/`os.popen` are
-        not covered either — narrower than "the runtime proof the static
-        AST gate cannot provide" this docstring previously claimed."""
         sib_git = tmp_path / "sib-git"
         sib_non_git = tmp_path / "sib-non-git"
         _make_git_repo(sib_git)
-        sib_non_git.mkdir(parents=True)  # exists, is a dir, no .git — a bare alias/volume-root case
+        sib_non_git.mkdir(parents=True)
         _write_handoff(sib_git, "a.md", _unclaimed_handoff("hnd-fleet-spawn-000007"))
         _make_registry(tmp_path, monkeypatch, {"git": sib_git, "non_git": sib_non_git})
 
@@ -228,13 +210,6 @@ class TestZeroSpawnOverNonGitFixture:
 
 
 class TestRootNormalization:
-    """`build_fleet_work_state` previously
-    handed the registry path to `build_work_state` with NO root
-    normalization, unlike `session.work_state`'s `main_worktree_root` fix.
-    The walk-only pre-check WALKS UP, so a registered path that is a
-    subdirectory of a repo passed the pre-check and then silently scanned an
-    empty `<subdir>/state/handoffs` — reported as a confident, well-formed
-    empty repo, with no `errors[]` entry."""
 
     def test_subdirectory_of_a_standard_repo_normalizes_to_the_real_root(
         self, tmp_path, monkeypatch,
@@ -255,12 +230,6 @@ class TestRootNormalization:
     def test_non_standard_layout_degrades_to_errors_not_a_silent_empty_repo(
         self, tmp_path, monkeypatch,
     ) -> None:
-        """A registered path that IS a bare-repo-shaped directory (`HEAD`,
-        `objects/`, `refs/` markers) resolves via the walk-only pre-check to
-        itself (`kind == "bare"`), which is neither named `.git` nor
-        contains a `.git` entry — `main_worktree_root` refuses to guess and
-        raises `ValueError`, degraded here into the same `errors[]` shape as
-        any other per-repo failure, rather than a silently-empty repo."""
         bare = tmp_path / "sib-bare"
         bare.mkdir(parents=True)
         (bare / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
@@ -276,10 +245,6 @@ class TestRootNormalization:
 
 
 def test_registration_quad_clean_for_fleet_work_state():
-    """Unpinned invariant: `session.
-    work_state` (its sibling C3 op) carries this same one-line assertion;
-    `fleet.work_state` did not, though its own module docstring makes the
-    five-surface claim explicitly."""
     violations = check_registration_quad()
     op_keys_with_violations = {v.op_key for v in violations}
     assert "fleet.work_state" not in op_keys_with_violations

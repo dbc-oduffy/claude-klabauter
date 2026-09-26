@@ -1,8 +1,3 @@
-"""
-Tier T tests for coordinator_core.ops.gate_liveness.emit_discharge.
-
-Spec backlink: docs/plans/2026-08-21-a-discharged-gate-tells-the-row-waiting.md § C4
-"""
 from __future__ import annotations
 
 import pytest
@@ -133,7 +128,6 @@ class TestEmitDischarge:
         assert "delivery_mode: receiver-repo" in composed
         assert "discharges:" in composed
         assert "The blocker landed." in composed
-        # discharges block sits inside the frontmatter, before the closing marker
         front, _, rest = composed.partition("\n---\n")
         assert "discharges:" in front
         assert "discharges:" not in rest
@@ -175,9 +169,6 @@ class TestEmitDischarge:
             )
 
     def test_never_writes_or_sends(self, tmp_path, monkeypatch):
-        # No file I/O of any kind — this module is a pure composer. Assert
-        # the tmp_path directory stays empty across a call, as a cheap
-        # negative-spec check on the "does not write a file" claim.
         monkeypatch.chdir(tmp_path)
         emit_discharge(
             closure_key=_VALID_CLOSURE_KEY,

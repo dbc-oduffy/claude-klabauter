@@ -77,14 +77,6 @@ def test_directory_target_is_never_claimed(tmp_path):
 
 
 def test_real_destination_still_claimed_alongside_a_junk_redirect(tmp_path):
-    """A junk token in the same command must not suppress the real claim --
-    only the junk token itself is rejected. Uses a redirect-operator shape
-    (`echo ... > f.py`, extracted via the `>`-operator branch) rather than
-    `cp`'s own "last positional is the destination" rule, since a glued
-    `2>&1` trailing a `cp` invocation is mis-attributed as the destination
-    by the shared extractor itself (a pre-existing, out-of-footprint
-    limitation of `bump_outside_repo_write`'s own positional-argument rule,
-    not this module's filter)."""
     root = _repo(tmp_path)
     record_write_claims("echo hi > f.py 2>&1", _SESSION_ID, root, denied=False)
     touched = _touched_paths(root)

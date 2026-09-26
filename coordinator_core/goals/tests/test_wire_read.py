@@ -1,15 +1,3 @@
-"""Regression tests for the shared goals-log reader (``coordinator_core.goals.wire_read``).
-
-Pins the preserved-failure-path contract this module exists to guarantee: the
-os.scandir-before-glob probe, per-shard provenance pairing, malformed-line/non-dict-JSON
-quarantine, the undecodable/unreadable-shard guard, legacy-row goal_id unification against
-``goal_append._goal_id``, and the strict ``>`` declared_at tie-break. The reader itself
-must stay policy-neutral — an unscannable root is reported back as ``unreadable_error``,
-never raised (see ``coordinator_core/ops/emit/sections/goals.py`` for the emit-path raise
-policy and its own ``test_unreadable_central_state_root_raises_not_zero_goals``).
-
-Spec backlink: pln-day-scoped-goal-close-out-life-69a25c § C1
-"""
 
 from __future__ import annotations
 

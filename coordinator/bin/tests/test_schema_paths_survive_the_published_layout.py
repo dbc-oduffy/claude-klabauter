@@ -44,7 +44,6 @@ def _load_from_published_layout(tmp_path: Path, name: str):
     published_bin.mkdir(parents=True)
     copy = published_bin / name
     shutil.copyfile(_BIN_DIR / name, copy)
-    # The CLIs bootstrap through their colocated `lib/`, which ships beside them.
     shutil.copytree(_BIN_DIR / "lib", published_bin / "lib", ignore=shutil.ignore_patterns("__pycache__", "tests"))
     mod_name = "published_" + name.replace("-", "_").removesuffix(".py")
     loader = importlib.machinery.SourceFileLoader(mod_name, str(copy))

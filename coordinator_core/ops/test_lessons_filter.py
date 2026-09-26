@@ -1,10 +1,3 @@
-"""Tests for coordinator_core.ops.lessons_filter (ops
-lessons.filter_undated_universal, lessons.reject_orphan_strip_entries).
-
-Covers the pure filter functions, both async register_op handler contracts,
-and AC7 double-invocation idempotency proofs (both ops are pure reads with
-no side effects).
-"""
 from __future__ import annotations
 
 import pytest
@@ -16,10 +9,6 @@ from coordinator_core.ops.lessons_filter import (
     filter_undated_universal,
     reject_orphan_strip_entries,
 )
-
-# ---------------------------------------------------------------------------
-# filter_undated_universal / lessons.filter_undated_universal
-# ---------------------------------------------------------------------------
 
 
 def _extraction_yaml(records):
@@ -78,11 +67,6 @@ def test_filter_double_invocation_is_idempotent_no_op():
     first = filter_undated_universal(payload)
     second = filter_undated_universal(payload)
     assert first == second
-
-
-# ---------------------------------------------------------------------------
-# reject_orphan_strip_entries / lessons.reject_orphan_strip_entries
-# ---------------------------------------------------------------------------
 
 
 def _write_yaml(path, data):

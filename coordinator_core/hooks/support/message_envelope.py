@@ -47,71 +47,33 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional
 
-#: The cap, defined once. Every future exception-manifest / gate-test module
-#: imports this constant rather than redeclaring it.
-#:
-#: Kept at 280 CHARS, deliberately NOT converged with this engine's own
-#: separate guard-message cap conventions elsewhere in `coordinator_core` —
-#: 280 was derived against the Category-A hook population this cap governs;
-#: a shared number with an unrelated corpus would be true of neither by
-#: construction. Converging the two on sight is a number-matching move, not
-#: a corpus-derived one.
 CEILING = 280
 
-#: Environment variable that switches `emit()` from writing a hook's real
-#: channel output to writing a structured measurement record instead.
 MEASURE_ENV_VAR = "COORDINATOR_HOOK_MESSAGE_MEASURE"
 
-#: The three channel shapes in use across Category-A hooks. `emit()`
-#: accepts exactly one of these.
 CHANNEL_STOP = "stop"
 CHANNEL_ADDITIONAL_CONTEXT = "additional_context"
 CHANNEL_DENY = "deny"
 
 _CHANNELS = frozenset({CHANNEL_STOP, CHANNEL_ADDITIONAL_CONTEXT, CHANNEL_DENY})
 
-#: A bounded line count for the fenced alternative block. Not specified
-#: numerically by the original spec; picked generous enough for a real
-#: copy-pasteable command/diff (a few lines) while still ruling out a
-#: converted hook smuggling paragraphs of prose into the exempt slot under
-#: cover of a fence.
 ALTERNATIVE_MAX_LINES = 10
 
 
 @dataclass(frozen=True)
 class Message:
-    """The result of `compose()` -- what `emit()` writes to a real channel
-    or a measurement record. `prose` is the only field the 280-char ceiling
-    counts; `alternative` and `anchor` are structurally separate and EXEMPT
-    from the count (see `validate_alternative_shape`)."""
 
     prose: str
     alternative: Optional[str] = None
     anchor: Optional[str] = None
 
 
-# --------------------------------------------------------------------------
-# Alternative-block shape validation -- the structural exemption.
-# --------------------------------------------------------------------------
-
-#: First non-blank-line "looks like a command or path" proxy. Deliberately
-#: cheap, not a real shell parser -- see `_looks_like_command_or_path`'s own
-#: docstring for what it does and does not catch. A token carrying a literal
-#: `$` (a `${VAR}`/`$VAR` shell expansion) is checked against the WIDER
 #: `_SHELL_VAR_TOKEN_RE` instead. A Windows drive-letter prefix -- a single
-#: letter immediately followed by `:` and a path separator -- is admitted as
-#: an optional leading segment, mirroring the identical narrow carve-out
 #: `_PROSE_PUNCT_RE` already applies to the SAME shape.
 _COMMAND_TOKEN_RE = re.compile(r"^(?:[A-Za-z]:[\\/])?[A-Za-z0-9_./\\-]+$")
 _SHELL_VAR_TOKEN_RE = re.compile(r"^[A-Za-z0-9_./\\${}:=,@%+~-]+$")
 _SENTENCE_END_RE = re.compile(r"[.!?]\s*$")
-#: A comma/semicolon/em-dash, or a colon that is not part of a
-#: drive-letter-style path prefix (a single letter immediately followed by
-#: `:` and a path separator) -- punctuation shapes common in natural
-#: -language prose and rare in a single command or path invocation.
 _PROSE_PUNCT_RE = re.compile(r"[,;—]|(?<![A-Za-z]):(?![\\/])")
-#: Curated content-word list -- two or more hits among the line's tokens is
-#: treated as prose.
 _STOPWORDS = frozenset(
     {
         "the",
@@ -133,11 +95,7 @@ _STOPWORDS = frozenset(
         "for",
     }
 )
-#: Closed-class English grammar words -- ANY single hit among the line's
 #: tokens is treated as prose, unlike `_STOPWORDS`'s >=2 threshold.
-#: Deliberately excludes everyday CLI-subcommand-shaped verbs (`add`,
-#: `remove`, `use`, `fix`, ...) -- those are NOT closed-class and appear in
-#: genuine commands (`git add`).
 _FUNCTION_WORDS = frozenset(
     {
         "the", "a", "an",
@@ -201,21 +159,6 @@ def _looks_like_command_or_path(line: str) -> bool:
 def validate_alternative_shape(
     alternative: Optional[str], *, max_lines: int = ALTERNATIVE_MAX_LINES
 ) -> "tuple[bool, Optional[str]]":
-    """The alternative-block structural validator, importable directly so a
-    gate test can drive it with synthesized data rather than live disk
-    state.
-
-    Returns `(True, None)` when `alternative` is `None` (no block supplied
-    -- always valid) or a valid runnable block. Returns `(False, reason)`
-    otherwise. Enforces, in order:
-
-      - non-empty text;
-      - no embedded triple-backtick fence -- callers pass RAW block text,
-        this module owns the fencing at render time (`render()`);
-      - at most `max_lines` lines;
-      - the first non-blank line parses as a command or path invocation
-        (`_looks_like_command_or_path`).
-    """
     if alternative is None:
         return True, None
     if not isinstance(alternative, str) or not alternative.strip():
@@ -237,24 +180,9 @@ def validate_alternative_shape(
     return True, None
 
 
-# --------------------------------------------------------------------------
-# The pure composer.
-# --------------------------------------------------------------------------
-
-
 def compose(
     prose: str, alternative: Optional[str] = None, anchor: Optional[str] = None
 ) -> Message:
-    """Build a `Message` from a hook's diagnosis (`prose`, the ONLY field
-    the 280-char ceiling counts), an optional fenced runnable `alternative`
-    (structurally separate, exempt from the count -- see
-    `validate_alternative_shape`), and an optional wiki `anchor` naming
-    where the relocated explanation lives.
-
-    Pure: no I/O, no environment read, no process interaction. Raises
-    `ValueError` on a shape violation (empty prose, an invalid alternative
-    block, or an empty-string anchor) rather than composing a malformed
-    `Message`."""
     if not isinstance(prose, str) or not prose.strip():
         raise ValueError("message_envelope.compose: prose must be non-empty text")
     if alternative is not None:
@@ -268,45 +196,11 @@ def compose(
     return Message(prose=prose.strip(), alternative=alternative, anchor=anchor)
 
 
-# --------------------------------------------------------------------------
-# Wiki-citation resolution.
-#
 # ADAPTATION FROM THE PORTED SOURCE, not a straight port: DoE's
-# `_message_envelope.resolve_wiki_citation` resolved a `docs/wiki/<page>.md`
-# citation to an absolute path anchored at `_coordinator_dir()`, computed as
-# `Path(__file__).resolve().parent.parent.parent` -- correct there because
-# that module lived inside the doctrine-plane `coordinator/hooks/scripts/`
-# tree, three levels under the doctrine root that actually holds
-# `docs/wiki/`. This module now lives inside the ENGINE
-# (`coordinator_core/hooks/support/`), whose own `__file__`-relative
-# ancestor is this claude-klabauter checkout's root, not the doctrine-plane root that
-# holds `docs/wiki/` -- porting the old computation verbatim would silently
-# resolve every citation into the WRONG repo's tree.
-#
-# This repo's own already-landed hooks (e.g.
-# `coordinator_core/hooks/nudge_harness_directive_dispatch.py`) already
-# settle this: they emit a doctrine-plane wiki citation as a literal,
-# unresolved `coordinator/docs/wiki/<page>.md` string rather than attempting
-# runtime absolute-path resolution, consistent with
-# `docs/reference/boundary-and-data-planes.md`'s planes split (doctrine
-# content is coordinator-claude's, not claude-klabauter's, to resolve). This module
-# follows that established convention: `resolve_wiki_citation` rewrites a
 # citation to an absolute path ONLY when `CLAUDE_PLUGIN_ROOT` names a real
-# doctrine root at call time (the one reliable, harness-supplied anchor for
-# "where is the doctrine plane running from" -- unlike a `__file__`-relative
-# guess, it cannot point at the wrong repo), and leaves the citation
-# untouched otherwise -- never resolves into this engine's own tree.
-# --------------------------------------------------------------------------
 
-#: `docs/wiki/`, optionally `coordinator/`-prefixed -- the two forms
 #: observed across the ported `_WIKI_ANCHOR` constants and the hand-rolled
-#: "Reference:" citations already landed in `coordinator_core/hooks/`.
-#:
 #: The page part spans SUBDIRECTORIES, not just a flat page name. Each
-#: interior segment must itself match the same conservative character class
-#: and the final one must end `.md`, so a directory-only target
-#: (`docs/wiki/`, `docs/wiki/coordinator-tripwires/`) still does not match
-#: and is emitted verbatim.
 _WIKI_CITATION_RE = re.compile(
     r"(?:coordinator/)?docs/wiki/((?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.md)"
 )
@@ -404,28 +298,7 @@ def resolve_wiki_citation(
     return _WIKI_CITATION_RE.sub(_sub, text)
 
 
-# --------------------------------------------------------------------------
-# Rendering (pure*) and emission (impure) -- attaches to the existing hook
-# seam, does not create a parallel one. (*`render()` reads the environment
-# via `resolve_wiki_citation()` -- no filesystem/network/process I/O.)
-# --------------------------------------------------------------------------
-
-
 def render(message: Message, *, env: "Optional[Mapping[str, str]]" = None) -> str:
-    """Flatten `message` to the text a real (non-measurement) channel
-    carries: the prose, then the alternative re-fenced in triple backticks
-    (if present), then a trailing pointer at the wiki anchor (if present).
-    The anchor is resolved via `resolve_wiki_citation()` (see above) so the
-    emitted pointer resolves for the reader wherever the doctrine plane is
-    running from, and is left as the literal citation text when it cannot
-    be.
-
-    `env` is the session-scoped `params["env"]` mapping the calling op
-    received (never this process's own `os.environ` -- see
-    `_doctrine_root`'s docstring); forwarded to `resolve_wiki_citation`.
-    Omitted, a caller with no `params` to read from (e.g. a bare
-    Stop-channel composition) degrades to the documented `os.environ`
-    fallback rather than losing citation resolution outright."""
     parts = [message.prose]
     if message.alternative:
         parts.append("")
@@ -448,13 +321,6 @@ def _measurement_record(message: Message) -> str:
 
 
 def _write_measurement_record(message: Message) -> None:
-    """Write the structured measurement record for `message` to stdout, which
-    measurement mode leaves free (see `emit`).
-
-    Trap: never write to a bare inherited fd such as 3. Nothing opens one for
-    this record, so a bare fd is whatever the parent happened to leave there --
-    under pytest-xdist on Windows it is the worker's control pipe, and the
-    write hung the worker."""
     sys.stdout.write(_measurement_record(message) + "\n")
 
 
@@ -496,10 +362,6 @@ def emit(
     text = render(message, env=env)
 
     if channel == CHANNEL_STOP:
-        # .buffer.write bypasses Python's Windows text-mode newline
-        # translation (stderr in text mode would silently turn every LF
-        # into CRLF, breaking byte-fidelity with siblings that write the
-        # same way).
         sys.stderr.buffer.write(text.encode("utf-8"))
         return 2
 

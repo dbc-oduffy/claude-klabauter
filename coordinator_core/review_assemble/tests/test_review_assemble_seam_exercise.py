@@ -30,8 +30,6 @@ from pathlib import Path
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -117,9 +115,6 @@ def _run_trampoline(repo: Path, content_root: Path, *extra_argv: str) -> subproc
 def test_explicit_surface_roadmap_selects_a_genuinely_different_segment_set(
     tmp_path: Path,
 ) -> None:
-    """Live-decision-object acceptance bar: `--surface roadmap` against the
-    real trampoline selects a distinct segment set from `plan`/`diff` --
-    proof this is a real subject class, not an alias of an existing one."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     content_root = _make_content_root(tmp_path)
@@ -140,9 +135,6 @@ def test_explicit_surface_roadmap_selects_a_genuinely_different_segment_set(
 def test_explicit_surface_roadmap_differs_from_plan_and_diff_segment_sets(
     tmp_path: Path,
 ) -> None:
-    """`roadmap`'s selected segment set is disjoint from both `plan`'s and
-    `diff`'s droppable segments -- the SEGMENT SET is genuinely different,
-    not merely a differently-labeled copy of an existing one."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     content_root = _make_content_root(tmp_path)
@@ -167,9 +159,6 @@ def test_explicit_surface_roadmap_differs_from_plan_and_diff_segment_sets(
 def test_explicit_surface_roadmap_never_inferred_from_artifact_or_diff(
     tmp_path: Path,
 ) -> None:
-    """`roadmap` is reachable ONLY through an explicit `--surface roadmap` --
-    a dirty tree (would otherwise infer `diff`) and no `--surface` flag must
-    NOT resolve to `roadmap`; it stays `diff`, matching the pre-C2 ladder."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     content_root = _make_content_root(tmp_path)

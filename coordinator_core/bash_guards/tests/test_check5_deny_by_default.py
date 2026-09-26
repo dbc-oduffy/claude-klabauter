@@ -22,8 +22,6 @@ from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external `git` process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -46,11 +44,6 @@ def _init_repo(tmp_path: Path) -> str:
 
 
 def _push_started_at_to_future(root: str, sid: str) -> None:
-    """Mirrors ``test_check5_foreign_hunk.py``'s own helper: pushes
-    ``started_at`` an hour into the future so ``compute_scope``'s mtime
-    fallback never auto-adopts a freshly-staged file into ``my_scope`` on
-    its own -- every claim in this suite is made explicit through
-    ``_claim``."""
     sdir = Path(root) / ".git" / "coordinator-sessions" / sid
     future = datetime.fromtimestamp(
         datetime.now(timezone.utc).timestamp() + 3600, tz=timezone.utc
@@ -61,10 +54,6 @@ def _push_started_at_to_future(root: str, sid: str) -> None:
 
 
 def _claim(root: str, sid: str, path: str) -> None:
-    """Records ``path`` as claimed by ``sid`` through the canonical writer
-    (``touch_record.append_event``), no content fingerprint -- this suite
-    exercises the directory-pathspec/foreign-path granularity, not the
-    foreign-hunk one (see ``test_check5_foreign_hunk.py``)."""
     from coordinator_core.session import touch_record
 
     sdir = Path(root) / ".git" / "coordinator-sessions" / sid
@@ -99,9 +88,6 @@ def _stage_dir_with_one_foreign_file(
 
 class TestCheckFiveDenyByDefault:
     def test_directory_commit_denies_foreign_staged_path_naming_it(self, tmp_path):
-        """Un-overridden default: a directory pathspec commit carrying a
-        provably peer-owned foreign staged path inside is REFUSED, naming
-        that path."""
         root = _init_repo(tmp_path)
         sid, other_sid = "my-sess", "other-sess"
         assert core.init(sid, cwd=root)
@@ -118,10 +104,6 @@ class TestCheckFiveDenyByDefault:
         assert "sub/theirs.txt" in out["permissionDecisionReason"]
 
     def test_directory_commit_all_owned_paths_still_passes(self, tmp_path):
-        """Unmutated negative control: a directory pathspec commit whose
-        staged paths this session genuinely owns must still pass -- the
-        flip must not turn scoped work the session actually did into a
-        false-positive deny."""
         root = _init_repo(tmp_path)
         sid = "my-sess"
         assert core.init(sid, cwd=root)

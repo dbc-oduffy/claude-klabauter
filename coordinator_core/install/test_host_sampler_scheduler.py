@@ -1,8 +1,3 @@
-"""Unit tests for coordinator_core.install.host_sampler_scheduler.
-
-Every test stubs subprocess.run so nothing here touches a real Task
-Scheduler entry -- live registration is verified separately, out of band
-(see the run-report sidecar for this dispatch)."""
 
 from __future__ import annotations
 
@@ -49,7 +44,7 @@ class TestRegisterHostSamplerTask:
         (argv,), kwargs = run_mock.call_args
         assert argv[0] == "schtasks.exe"
         assert "/Create" in argv
-        assert "/F" in argv  # idempotent overwrite, not error-on-duplicate
+        assert "/F" in argv
         assert hss.TASK_NAME in argv
         assert "/XML" in argv
         xml_content = written_xml["content"]

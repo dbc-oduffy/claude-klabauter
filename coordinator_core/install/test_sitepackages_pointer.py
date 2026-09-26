@@ -36,10 +36,6 @@ from coordinator_core.install.ensure_venv import (
 
 @pytest.fixture(autouse=True)
 def _trust_any_root(monkeypatch):
-    # Mirrors test_ensure_venv.py's fixture: bypasses
-    # coordinator_trusted_root_guard so an arbitrary tmp_path plugin_root
-    # can be used without registering it as a real coordinator/DoE/claude-klabauter
-    # anchor.
     monkeypatch.setenv("COORDINATOR_PLUGIN_ROOT_TRUSTED", "1")
 
 
@@ -50,24 +46,14 @@ def _settings_home(tmp_path: Path) -> Path:
 
 
 def test_write_sitepackages_pointer_no_longer_exists():
-    """Chunk C2 deletes `_write_sitepackages_pointer` outright -- keeping a
-    dead function around after its only call site is removed is exactly the
-    "unread computation is cost" case the plan's north star names."""
     assert not hasattr(ensure_venv_mod, "_write_sitepackages_pointer")
 
 
 def test_sitepackages_pointer_name_constant_still_present():
-    """The constant survives the authorship retirement -- `substrate.py`'s
-    Step 3e orphan-prune union still needs it to recognize a stale
-    pre-migration pointer as a prune candidate rather than an orphan outside
-    the mechanism meant to clean it up."""
     assert SITEPACKAGES_POINTER_NAME == "hook-sitepackages.txt"
 
 
 def test_fast_path_already_healthy_does_not_write_pointer(tmp_path, monkeypatch):
-    """The already-healthy fast path (no lock, no rebuild) used to be the
-    exit this chunk's predecessor most easily missed. Post-retirement it
-    must not write the pointer on any real success exit."""
     settings_home = _settings_home(tmp_path)
     venv_dir = settings_home / ".coordinator-venv"
     venv_dir.mkdir()
@@ -102,14 +88,10 @@ def test_preexisting_pointer_from_prior_run_is_left_in_place(tmp_path, monkeypat
     result = ensure_coordinator_venv(tmp_path, settings_home, site="test")
 
     assert result == "ready"
-    # Left untouched -- ensure_coordinator_venv is not the removal mechanism.
     assert stale_pointer.exists()
 
 
 def test_check_only_still_writes_nothing(tmp_path, monkeypatch):
-    """A dry-run/check-only invocation must not mutate disk -- unaffected by
-    the retirement, still asserted here so a future re-add of pointer
-    authorship can't slip past check_only."""
     settings_home = _settings_home(tmp_path)
     venv_dir = settings_home / ".coordinator-venv"
     venv_dir.mkdir()

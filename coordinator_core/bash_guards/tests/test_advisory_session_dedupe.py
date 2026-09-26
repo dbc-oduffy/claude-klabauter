@@ -1,16 +1,3 @@
-"""Tests for the per-session, per-(guard,shape) advisory dedupe (item 7,
-state/handoffs/2026-07-30-boot-context-bloat-non-orientation-surfaces.md;
-baseline: state/audits/2026-08-14-boot-payload-baseline.md § "Item 7 --
-bash-spawn guard advisories").
-
-Exercises `dispatch.evaluate_payload_json`'s advisory-return seam end-to-end,
-isolating a single fake `GuardEntry` via `dispatch._build_guard_chain`
-monkeypatched -- the same isolation technique `test_advisory_value_host_
-default.py` and `test_advisory_fire_counter.py` already established -- plus
-unit coverage of `_advisory_dedupe` itself for the fail-open branches that
-are awkward to induce through the full dispatcher (an unwritable dedupe
-directory, a raising fingerprint).
-"""
 
 from __future__ import annotations
 
@@ -346,15 +333,6 @@ class TestAdvisoryDedupeKeyUnit:
 
 
 class TestRealBuilderRoundTrip:
-    """Every existing dedupe test hand-writes the `Command:`-labeled
-    envelope shape rather than calling a real builder -- a relabel at the
-    builder site (e.g. `Command:` -> `Cmd:`) would silently revert dedupe
-    to command-instance keying with every hand-written test still green.
-    This exercises the actual shipped builder
-    (`guard_plumbing_and_loops._generic_advisory`) so the wire path from
-    builder output to `advisory_dedupe_key` is covered by something that
-    would actually break on a relabel.
-    """
 
     def test_generic_advisory_same_shape_different_command_collides(self):
         payload = {"session_id": "round-trip-sess"}
@@ -408,14 +386,8 @@ class TestSweepStaleSessionDirs:
 
 
 class TestSweepThrottle:
-    """The sweep must not run on every `mark_advised` call, and the
-    throttle clock must be governed by a dedicated sentinel that ordinary
-    session-directory creation never bumps."""
 
     def test_first_call_sweeps_once_then_throttles(self, tmp_path, monkeypatch):
-        """Nothing to throttle yet on a brand-new root -- the very first
-        `mark_advised` call performs the sweep (fail-open on a missing
-        sentinel), and only THEN does the throttle window start."""
         gitdir = tmp_path
         calls = []
         real_sweep = _advisory_dedupe._sweep_stale_session_dirs
@@ -468,11 +440,6 @@ class TestSweepThrottle:
     def test_old_root_gets_swept_and_resets_clock(self, tmp_path, monkeypatch):
         gitdir = tmp_path
         root = gitdir / "advisory-dedupe"
-        # Pre-create the session's own dir so `mark_advised`'s `mkdir` is a
-        # no-op under `root` -- otherwise creating a NEW entry under `root`
-        # bumps `root`'s own mtime to "now" before the throttle check runs,
-        # which is correct self-throttling behavior but would defeat this
-        # test's attempt to force a stale-root sweep.
         (root / "sess-a").mkdir(parents=True)
         old_time = __import__("time").time() - (60 * 60)
         os.utime(root, (old_time, old_time))
@@ -493,8 +460,6 @@ class TestSweepThrottle:
         assert calls == [1], "sweep re-ran before the throttle interval elapsed again"
 
     def test_current_session_never_reaped_regardless_of_throttle(self, tmp_path):
-        """Property the reviewer verified sound must survive the throttle
-        change: the current session's own directory is never reaped."""
         gitdir = tmp_path
         root = gitdir / "advisory-dedupe"
         root.mkdir(parents=True)
@@ -521,10 +486,6 @@ _ADVISORY_ENVELOPE_WITH_ALT = {
 
 
 class TestDegradeNotSilence:
-    """A repeat firing must degrade to the terse alternative, never fall
-    fully silent -- and the (guard, shape) slot returned must still be the
-    higher-precedence guard's, not a lower one that used to win it via the
-    old `continue`."""
 
     def test_repeat_firing_returns_alternative_not_prose(self, tmp_path, monkeypatch):
         entry = _advisory_entry("fake-guard", _ADVISORY_ENVELOPE_WITH_ALT)
@@ -560,15 +521,11 @@ class TestDegradeNotSilence:
         second_ctx = second["hookSpecificOutput"]["additionalContext"]
 
         assert "Use instead" in first_ctx
-        # guard-b (lower precedence) must NOT win the slot on the repeat --
-        # its distinguishing text ("shape Y") must never appear.
         assert "shape Y" not in second_ctx
         assert "Use instead" in second_ctx
 
 
 class TestSessionIdValidation:
-    """`session_id` is used directly as a path component -- reject anything
-    outside the safe charset rather than trusting it verbatim."""
 
     def test_valid_ids_accepted(self):
         assert _advisory_dedupe._valid_session_id("abc-DEF_123.456") is True
@@ -587,22 +544,12 @@ class TestSessionIdValidation:
         gitdir = tmp_path
         _advisory_dedupe.mark_advised(gitdir, "../escape", "guard__aaa")
 
-        # No write anywhere -- specifically, nothing escapes the intended
-        # `advisory-dedupe` subtree.
         assert not (gitdir.parent / "escape").exists()
         dedupe_root = gitdir / "advisory-dedupe"
         assert not dedupe_root.exists() or not any(dedupe_root.rglob("guard__aaa"))
 
 
 class TestTheRewriteBlockDoesNotReKeyTheShape:
-    """The `Example:` rewrite block is the SECOND inlining of the operator's
-    command, so it varies per invocation and — before this — landed in the
-    hash, giving a fresh key per firing and leaving dedupe inert for exactly
-    the guard family the `Command:`-line strip was written to rescue.
-
-    Origin: cross-repo/archive/2026-08-18-doe-claude-em-advisory-dedupe-inert.md,
-    measured off 28 sessions' `.git/advisory-dedupe/` markers.
-    """
 
     @staticmethod
     def _ctx(cmd: str) -> dict:

@@ -44,9 +44,6 @@ def _resolve_sh_interpreter() -> Optional[str]:
         return "/bin/sh"
     git_path = shutil.which("git")
     if git_path:
-        # git.exe normally resolves to <root>/cmd/git.exe or <root>/bin/git.exe;
-        # `sh.exe` lives at <root>/bin/sh.exe and <root>/usr/bin/sh.exe, neither
-        # of which git-for-windows adds to PATH.
         git_root = Path(git_path).resolve().parent.parent
         for candidate in (git_root / "bin" / "sh.exe", git_root / "usr" / "bin" / "sh.exe"):
             if candidate.is_file():

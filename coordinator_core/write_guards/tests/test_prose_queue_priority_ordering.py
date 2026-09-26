@@ -47,6 +47,4 @@ def test_new_improvement_queue_with_justification_creation_guard_wins(tmp_path):
     assert result is not None
     hso = result["hookSpecificOutput"]
     assert "permissionDecision" not in hso
-    # Confirm it's the creation guard (119) that fired, not the escape-hatch
-    # guard (120) somehow producing its own advisory for an unrelated reason.
     assert "coordinator-queue-append" in hso["additionalContext"]

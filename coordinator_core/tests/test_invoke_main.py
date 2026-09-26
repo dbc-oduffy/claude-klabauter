@@ -70,39 +70,20 @@ import pytest
 from coordinator_core.invoke.__main__ import _exit_code_for_response
 from coordinator_core.ipc import STRUCTURAL_PIN_ERROR
 
-# Declared, not excused: main() calls os._exit, so it cannot be tested in-process --
-# every test spawns a real `sys.executable -m coordinator_core.invoke` child and
-# asserts on returncode/stdout/stderr, which is the entrypoint's own process-exit
-# contract, not mockable. Each test spawns its own child (no shared fixture) because
-# the property under test IS that fresh-process boundary.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
-# ---------------------------------------------------------------------------
 # Project root — needed for PYTHONPATH injection so subprocess can import
-# coordinator_core regardless of cwd (tests may run from temp dirs).
-# ---------------------------------------------------------------------------
 
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 
 # Portable Windows console-suppression flag — resolves to CREATE_NO_WINDOW (0x08000000)
-# on Windows and 0 (no-op) on macOS/Linux.  Required for every python.exe subprocess so
-# the headless Bash-tool parent does not get a focus-stealing console window.
 _NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 # A cheap, read-only op in WORKTREE_SCOPED_OPS, used as the vehicle for the two
-# `_origin_worktree`-injection branches below. Requirements on the vehicle: it must
-# be worktree-scoped (so main() resolves a repo root and injects it) and its cost
-# must not scale with the repo's history or corpora — see
-# `test_worktree_scoped_op_dispatches_inside_repo`'s "Vehicle note" for the
-# incident behind that second requirement. The candidate path is deliberately one
 # that does not exist: the handler resolves it RELATIVE to the injected repo root
-# and reports it back, so the resulting error string is itself the witness that
-# repo_root arrived.
 # `_WORKTREE_SCOPED_PROBE` / `_PROBE_EXPECTED_ERROR` lived here: a production op
-# borrowed as a worktree-scope vehicle, plus the error string that stood in for a
 # witness. Both cases that used them now drive `_WORKTREE_SCOPED_PROBE_SCRIPT`,
-# which owns its op and reports the root directly.
 
 
 def _make_env(**overrides: str) -> dict[str, str]:
@@ -119,20 +100,11 @@ def _make_env(**overrides: str) -> dict[str, str]:
 
 
 #: Breadcrumbs the engine emits on stderr that are CONFIGURATION notices, not the log
-#: noise the "stderr must be empty" assertions exist to catch. Each is a once-per-process
-#: line stating a deliberate operator setting, and whether it appears depends on the box
-#: rather than on the code under test -- so asserting a literally empty stderr made those
-#: cases pass or fail on where they ran. `[warm-settings]` fires on any machine with
-#: warmth disabled, which is a supported configuration and turns every dispatching case
-#: in this module red for a reason none of them is about.
-#:
 #: Deliberately a prefix ALLOWLIST, not a regex over the whole stream: an unrecognised
-#: line is still a failure, which is the property these assertions are for.
 _BENIGN_STDERR_PREFIXES = ("[warm-settings]",)
 
 
 def _stderr_noise(result: subprocess.CompletedProcess) -> str:
-    """`result.stderr` with the benign configuration breadcrumbs removed."""
     return "\n".join(
         line
         for line in result.stderr.splitlines()
@@ -181,10 +153,6 @@ def _invoke(*args: str, cwd: str | Path | None = None, env: dict | None = None,
     )
 
 
-# ---------------------------------------------------------------------------
-# Branch 1 — Happy path: ping '{}' → exit 0, stdout JSON, stderr empty
-# ---------------------------------------------------------------------------
-
 def test_happy_path_ping_exits_zero():
     """Branch 1: ping '{}' → exit 0, stdout is a JSON-RPC result with ok: true.
 
@@ -211,16 +179,7 @@ def test_happy_path_ping_exits_zero():
     )
 
 
-# ---------------------------------------------------------------------------
-# Branch 1b — --bare: success path prints ONLY the bare `result` object
-# ---------------------------------------------------------------------------
-
 def test_bare_flag_prints_only_result_object():
-    """--bare success path: stdout is json.dumps(response["result"]) with no
-    jsonrpc/id envelope and no indentation -- the single-spawn transport
-    contract cc_invoke relies on to consume stdout directly instead of
-    spawning a second process to strip the envelope.
-    """
     result = _invoke("ping", "{}", "--bare")
 
     assert result.returncode == 0, (
@@ -229,7 +188,6 @@ def test_bare_flag_prints_only_result_object():
     )
 
     parsed = json.loads(result.stdout)
-    # Bare output IS the result object directly -- no envelope wrapper.
     assert "jsonrpc" not in parsed, f"--bare must omit the jsonrpc envelope; got {parsed}"
     assert "result" not in parsed, f"--bare must omit the 'result' nesting key; got {parsed}"
     assert parsed.get("ok") is True, f"--bare result must be the ping payload directly; got {parsed}"
@@ -240,9 +198,6 @@ def test_bare_flag_prints_only_result_object():
 
 
 def test_bare_flag_matches_default_result_payload():
-    """--bare output must equal response["result"] from the default (non-bare) call --
-    same op, same params, only the envelope differs.
-    """
     default_result = _invoke("ping", "{}")
     bare_result = _invoke("ping", "{}", "--bare")
 
@@ -250,9 +205,6 @@ def test_bare_flag_matches_default_result_payload():
     bare_parsed = json.loads(bare_result.stdout)
     default_result_obj = default_parsed["result"]
 
-    # ping's payload includes a live `ts` timestamp that legitimately differs
-    # between two separate subprocess spawns, so compare shape (key set) and
-    # the timestamp-independent `ok` field rather than exact dict equality.
     assert set(bare_parsed.keys()) == set(default_result_obj.keys()), (
         f"--bare payload must have the same keys as the default envelope's 'result' key. "
         f"bare keys: {sorted(bare_parsed.keys())!r} default result keys: {sorted(default_result_obj.keys())!r}"
@@ -271,7 +223,6 @@ def test_default_output_unchanged_by_bare_flag_existence():
     result = _invoke("ping", "{}")
 
     assert result.returncode == 0
-    # indent=2 formatting means multi-line stdout for a non-trivial payload.
     _NL = chr(10)
     assert _NL in result.stdout.rstrip(_NL), (
         f"Default output must remain indent=2 (multi-line); got {result.stdout!r}"
@@ -280,10 +231,6 @@ def test_default_output_unchanged_by_bare_flag_existence():
     assert parsed.get("jsonrpc") == "2.0"
     assert "result" in parsed
 
-
-# ---------------------------------------------------------------------------
-# Branch 2 + 7 — Invalid params_json → _fatal_stderr → exit 1, STDERR not STDOUT
-# ---------------------------------------------------------------------------
 
 def test_invalid_params_json_writes_to_stderr():
     """Branch 2 + 7: ping 'not json' → exit 1; error JSON emitted to STDERR, not STDOUT.
@@ -303,7 +250,6 @@ def test_invalid_params_json_writes_to_stderr():
         f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
     )
 
-    # stdout must be EMPTY — fatal abort before any result is printed.
     assert result.stdout.strip() == "", (
         f"stdout must be empty on _fatal_stderr path; got {result.stdout!r}"
     )
@@ -320,7 +266,6 @@ def test_invalid_params_json_writes_to_stderr():
     assert parsed_err["error"]["code"] == -32603, (
         f"Expected INTERNAL_ERROR code -32603; got {parsed_err['error']['code']}"
     )
-    # Informative message — must mention the params problem.
     assert "params_json" in parsed_err["error"]["message"].lower() or \
            "json" in parsed_err["error"]["message"].lower(), (
         f"Error message should reference 'params_json' or 'json'; "
@@ -329,7 +274,6 @@ def test_invalid_params_json_writes_to_stderr():
 
 
 def test_params_not_a_dict_writes_to_stderr():
-    """Branch 2 variant: params_json that is valid JSON but not an object → exit 1, STDERR."""
     result = _invoke("ping", '"just a string"')
 
     assert result.returncode == 1, (
@@ -342,10 +286,6 @@ def test_params_not_a_dict_writes_to_stderr():
     assert "error" in parsed_err, f"Expected error envelope on stderr; got {parsed_err}"
     assert parsed_err["error"]["code"] == -32603
 
-
-# ---------------------------------------------------------------------------
-# Branch 3 — _origin_worktree injection: worktree-scoped op runs inside repo
-# ---------------------------------------------------------------------------
 
 def test_worktree_scoped_op_dispatches_inside_repo():
     """Branch 3: a worktree-scoped op run from the repo cwd dispatches.
@@ -376,7 +316,6 @@ def test_worktree_scoped_op_dispatches_inside_repo():
     Contrast with test_none_scoped_outside_git_tree: a none-scoped op never calls
     _resolve_repo_root(), so running OUTSIDE a git tree still exits 0.
     """
-    # Run from the claude-klabauter repo root — git rev-parse will succeed here.
     result = _worktree_scope_probe()
 
     assert result.returncode == 0, (
@@ -384,7 +323,6 @@ def test_worktree_scoped_op_dispatches_inside_repo():
         f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
     )
 
-    # stdout must be non-empty and valid JSON (dispatched, not a fatal abort).
     assert result.stdout.strip(), (
         f"stdout must contain a JSON-RPC response; got empty stdout.\n"
         f"stderr: {result.stderr!r}"
@@ -400,34 +338,14 @@ def test_worktree_scoped_op_dispatches_inside_repo():
         f"the handler must have been handed the resolved repo root; got {parsed}"
     )
 
-    # stderr must be empty — no fatal pre-dispatch error.
     assert _stderr_noise(result) == "", (
         f"stderr must be empty when dispatch succeeds; got {result.stderr!r}"
     )
 
 
-# ---------------------------------------------------------------------------
-# Branch 4 — C2 regression: none-scoped op outside any git tree exits 0
-# ---------------------------------------------------------------------------
-
 def test_none_scoped_outside_git_tree():
-    """Branch 4 (AC3 — C2 regression): ping from a non-git temp dir exits 0.
-
-    Before C2's fix, _resolve_repo_root() was called unconditionally and would
-    crash via git rev-parse when run outside any git working tree.  After C2,
-    none-scoped ops skip _resolve_repo_root() entirely — repo_root stays None.
-
-    This test verifies that behavior: ping '{}' succeeds from a directory that
-    is definitively not inside any git repository.
-
-    AC3 cross-reference: the dispatch brief calls this 'AC3 none-scope-outside-git'.
-    """
-    # Create a temp directory guaranteed to be outside any git repo.
-    # tempfile.gettempdir() returns a system temp dir (/var/folders/... on macOS,
-    # /tmp on Linux) — none of which are inside a git working tree.
     tmp_dir = tempfile.mkdtemp(dir=tempfile.gettempdir(), prefix="cc_invoke_test_")
     try:
-        # Verify the temp dir is truly outside any git repo (defense-in-depth).
         probe = subprocess.run(
             ["git", "-C", tmp_dir, "rev-parse", "--git-dir"],
             capture_output=True,
@@ -438,7 +356,6 @@ def test_none_scoped_outside_git_tree():
             f"this invalidates the C2 regression test.  Choose a path outside all repos."
         )
 
-        # Run ping from the non-git temp dir — must exit 0 without crashing.
         result = _invoke("ping", "{}", cwd=tmp_dir)
 
         assert result.returncode == 0, (
@@ -457,10 +374,6 @@ def test_none_scoped_outside_git_tree():
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
-
-# ---------------------------------------------------------------------------
-# Branch 5 — --repo explicit path is honored for a worktree-scoped op
-# ---------------------------------------------------------------------------
 
 def test_explicit_repo_flag_honored():
     """Branch 5: a worktree-scoped op with --repo <root> resolves the repo explicitly.
@@ -500,10 +413,6 @@ def test_explicit_repo_flag_honored():
         f"stderr must be empty with a valid --repo; got {result.stderr!r}"
     )
 
-
-# ---------------------------------------------------------------------------
-# Branch 6 — C3 regression: handler timeout does not wedge the process (AC4)
-# ---------------------------------------------------------------------------
 
 def test_no_hang_under_handler_timeout():
     """Branch 6 (AC4 — C3 regression): os._exit terminates promptly even when
@@ -548,7 +457,7 @@ def test_no_hang_under_handler_timeout():
 
     try:
         result = _run_probe_script(
-            _SLOW_OP_SCRIPT, env=env, timeout=15  # outer guard — must exit well within 15s
+            _SLOW_OP_SCRIPT, env=env, timeout=15
         )
     except subprocess.TimeoutExpired:  # pragma: no cover
         raise AssertionError(
@@ -557,17 +466,13 @@ def test_no_hang_under_handler_timeout():
             "This is the hang that a manual loop + os._exit must prevent."
         )
 
-    # Process exited — returncode must be set (not None).
     assert result.returncode is not None, "returncode must be set after normal exit"
 
-    # The handler sleeps far past 1ms, so the timeout branch is the only reachable
-    # one — no "if by fluke it completed" arm, which is what made this probabilistic.
     assert result.returncode == 1, (
         f"Expected exit 1 after the dispatch timeout; got {result.returncode}.\n"
         f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
     )
 
-    # stdout must be valid JSON — the response was emitted and flushed before os._exit.
     assert result.stdout.strip(), "stdout must contain the JSON-RPC response"
     parsed = json.loads(result.stdout.strip())
     assert parsed.get("jsonrpc") == "2.0"
@@ -576,10 +481,6 @@ def test_no_hang_under_handler_timeout():
         f"Expected 'timed out' in error message; got {parsed['error']['message']!r}"
     )
 
-
-# ---------------------------------------------------------------------------
-# Branch 8 -- --params-file: large (>32KB) JSON params payload via a file
-# ---------------------------------------------------------------------------
 
 def test_params_file_reads_large_payload(tmp_path):
     """Branch 8: --params-file with a >32KB JSON params payload dispatches
@@ -593,7 +494,7 @@ def test_params_file_reads_large_payload(tmp_path):
     cheapest op to exercise the read-from-file path without also depending
     on any particular op's params schema.
     """
-    padding = "x" * 40_000  # comfortably over the ~32KB ARG_MAX danger zone
+    padding = "x" * 40_000
     payload = {"padding": padding}
     params_path = tmp_path / "large-params.json"
     params_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -618,24 +519,7 @@ def test_params_file_reads_large_payload(tmp_path):
     )
 
 
-# ---------------------------------------------------------------------------
-# Branch 8b -- --params-file "-": params JSON read from stdin
-# ---------------------------------------------------------------------------
-
 def test_params_file_dash_reads_stdin():
-    """`--params-file -` reads the params JSON from stdin.
-
-    This is the quoting-immune transport, and the reason it exists is a
-    SHELL failure, not an engine one: a payload carrying an apostrophe (a
-    commit message saying "C1's half") ends the single-quoted argv span in
-    bash, so the payload never reaches this process intact and no
-    engine-side handling can recover it. Fed by a quoted heredoc, stdin has
-    no interpolation and no quote sensitivity.
-
-    The payload here therefore carries the exact byte classes that break the
-    argv form -- apostrophe, parentheses, `$`, backtick, real newlines --
-    and the assertion is that they arrive as written.
-    """
     payload = {
         "message": "C1's half (build, not harden)\n\n$HOME and `date` verbatim\n",
     }
@@ -658,7 +542,6 @@ def test_params_file_dash_reads_stdin():
 
 
 def test_params_file_dash_rejects_invalid_stdin_json():
-    """Unparseable stdin fails loud on stderr, same contract as a file."""
     result = subprocess.run(
         [sys.executable, "-m", "coordinator_core.invoke", "ping",
          "--params-file", "-"],
@@ -675,13 +558,6 @@ def test_params_file_dash_rejects_invalid_stdin_json():
 
 
 def test_params_file_dash_empty_stdin_rejects_same_as_malformed():
-    """Empty/EOF stdin fails the same exit-1/"Invalid params_json" contract
-    as malformed JSON, distinct from the malformed-JSON case above.
-
-    Empty stdin (json.loads("")
-    raises JSONDecodeError) is a plausible accidental-invocation shape (a
-    caller forgets the heredoc body) that was not separately pinned.
-    """
     result = subprocess.run(
         [sys.executable, "-m", "coordinator_core.invoke", "ping",
          "--params-file", "-"],
@@ -698,26 +574,6 @@ def test_params_file_dash_empty_stdin_rejects_same_as_malformed():
 
 
 def test_params_file_dash_reads_non_ascii_stdin_as_utf8():
-    """`--params-file -` decodes stdin as explicit UTF-8, not the platform
-    locale codec -- reproduced even when the child's own locale is forced
-    to a non-UTF-8 codec.
-
-    A str payload piped via
-    subprocess.run(text=True, input=<str>) is encoded by the PARENT using
-    its own locale default, so parent and child agree and a
-    locale-vs-UTF-8 mismatch never reproduces even with non-ASCII content.
-    This test instead feeds raw UTF-8 BYTES (text=False) AND forces
-    LC_ALL=C in the child's env, so locale.getpreferredencoding() resolves
-    to a strict ASCII-range codec inside the child -- the same shape as
-    Windows resolving a redirected pipe to the (also non-UTF-8) ANSI code
-    page. Pre-fix (sys.stdin.read(), locale-dependent decode) this would
-    raise UnicodeDecodeError against the forced non-UTF-8 locale; post-fix
-    (sys.stdin.buffer.read().decode("utf-8")) decode is locale-independent
-    and must succeed regardless of the child's own locale env. ping ignores
-    its params entirely, so this cannot assert content fidelity through the
-    op's response -- it asserts the decode step itself does not raise
-    under a hostile locale, which is the actual boundary Finding 1 fixed.
-    """
     payload = {
         "message": "em dash —, curly quotes “quoted”, "
                     "non-Latin 日本語 verbatim\n",
@@ -744,18 +600,7 @@ def test_params_file_dash_reads_non_ascii_stdin_as_utf8():
     assert json.loads(stdout).get("ok") is True
 
 
-# ---------------------------------------------------------------------------
-# Branch 9 -- mutual exclusivity: positional params_json AND --params-file
-# ---------------------------------------------------------------------------
-
 def test_params_file_and_positional_params_json_are_mutually_exclusive(tmp_path):
-    """Branch 9: passing BOTH the positional params_json AND --params-file
-    is rejected via _fatal_stderr -- exit 1, error on STDERR, empty STDOUT.
-
-    __main__.py's main() checks `args.params_file is not None and
-    args.params_json is not None` before resolving either source, so this
-    must fail fast rather than silently preferring one over the other.
-    """
     params_path = tmp_path / "params.json"
     params_path.write_text("{}", encoding="utf-8")
 
@@ -779,10 +624,6 @@ def test_params_file_and_positional_params_json_are_mutually_exclusive(tmp_path)
         f"got {parsed_err['error']['message']!r}"
     )
 
-
-# ---------------------------------------------------------------------------
-# Branch 10 -- --dump-op-timeouts
-# ---------------------------------------------------------------------------
 
 def test_dump_op_timeouts_emits_valid_json_with_default_and_overrides():
     """--dump-op-timeouts: no <op> required, exit 0, valid JSON on stdout.
@@ -893,8 +734,6 @@ def test_dump_op_timeouts_projects_the_transport_deadline():
             "collapse this projection exists to prevent"
         )
 
-    # The two ops whose membership a prefix test cannot see. Their presence here is the
-    # whole reason membership is published rather than mirrored.
     for alias in ("commit.exec_bit_change", "review.snapshot_diff_and_head"):
         assert not alias.startswith("ceremony.")
         assert f"__ceremony__{alias}" in parsed, (
@@ -941,14 +780,9 @@ def test_dump_op_timeouts_default_reflects_live_env_override():
 
 
 def test_dump_op_timeouts_requires_no_op_argument():
-    """--dump-op-timeouts works with NO op argument at all -- the whole point of the
-    nargs='?' relaxation on the positional `op` arg. Omitting --dump-op-timeouts
-    entirely (no op, no flag) must still fail with the pre-existing 'op is required'
-    contract, proving the relaxation didn't silently make op optional everywhere.
-    """
     result = _invoke("--dump-op-timeouts")
     assert result.returncode == 0
-    json.loads(result.stdout)  # must be valid JSON
+    json.loads(result.stdout)
 
     no_op_no_flag = _invoke()
     assert no_op_no_flag.returncode != 0, (
@@ -958,12 +792,6 @@ def test_dump_op_timeouts_requires_no_op_argument():
 
 
 def test_dump_op_timeouts_takes_priority_over_op_positional():
-    """--dump-op-timeouts wins when an <op> positional is also passed.
-
-    The precedence ("flag wins, <op> is
-    silently ignored") was previously undocumented and untested; this locks
-    it in as intended behavior rather than incidental control flow.
-    """
     result = _invoke("ping", "--dump-op-timeouts")
 
     assert result.returncode == 0, (
@@ -977,12 +805,7 @@ def test_dump_op_timeouts_takes_priority_over_op_positional():
     )
 
 
-# ---------------------------------------------------------------------------
-# Branch 11 -- _exit_code_for_response: success / transient-error / structural-error
-# ---------------------------------------------------------------------------
-
 def test_exit_code_for_response_success_is_zero():
-    """No 'error' key → exit 0."""
     response = {"jsonrpc": "2.0", "id": 1, "result": {"ok": True}}
     assert _exit_code_for_response(response, STRUCTURAL_PIN_ERROR) == 0
 
@@ -1012,23 +835,7 @@ def test_exit_code_for_response_structural_pin_error_is_two():
     assert _exit_code_for_response(response, STRUCTURAL_PIN_ERROR) == 2
 
 
-# ---------------------------------------------------------------------------
-# Branch 14 -- stdout transport hardening: a handler print() must not corrupt
 # the JSON-RPC envelope on stdout.
-#
-# Live incident this pins: coordinator_core/ops/plan_tasks_mutate.py's
-# _resolve() calls close_out_and_stamp._stamp_plan_landed(...) in-process,
-# which unconditionally print()s a status line. That line landed on the same
-# stdout stream cc_invoke parses as JSON, breaking every
-# coordinator/bin/ CLI built on cc_invoke with "invoke stdout is not valid
-# JSON". main()'s dispatch loop must capture ANY handler-level stdout write
-# and relay it to stderr, never letting it interleave with the envelope.
-#
-# A throwaway op is registered directly in the SAME subprocess that runs
-# main() (via `python -c`, not `python -m coordinator_core.invoke`) — main()
-# calls os._exit so it cannot be exercised in-process from THIS test process,
-# but the registration + main() call can still share one child process.
-# ---------------------------------------------------------------------------
 
 _PRINT_OP_SCRIPT = """
 import sys
@@ -1063,13 +870,6 @@ main()
 
 #: The worktree-scope vehicle, OWNED. `WORKTREE_SCOPED_OPS` is a frozenset computed
 #: from `_OP_KEY_SCOPE` at import, and `main()` reads it from `ipc` at call time, so a
-#: probe can enter the class by rebinding that name before calling `main()` -- without
-#: touching the production table or depending on any production op continuing to exist.
-#:
-#: The handler REPORTS the `repo_root` it was handed, which is a direct witness that
-#: resolution and `_origin_worktree` injection both happened. The borrowed-op versions
-#: could only infer it: they asserted a specific handler error string that was merely
-#: unreachable without a resolved root, and each died with its vehicle.
 _WORKTREE_SCOPED_PROBE_SCRIPT = """
 import sys
 from coordinator_core import ipc
@@ -1102,15 +902,10 @@ main()
 
 
 def _worktree_scope_probe(*extra_argv: str) -> subprocess.CompletedProcess:
-    """The worktree-scope probe, optionally with extra argv (e.g. ``--repo``)."""
     argv = "EXTRA_ARGV = " + repr(list(extra_argv)) + "\n"
     return _run_probe_script(argv + _WORKTREE_SCOPED_PROBE_SCRIPT)
 
 
-#: Sleeps on a real executor thread, which is the precondition the C3 regression is
-#: about: `asyncio.to_thread` work still live when the internal `wait_for` gives up.
-#: A handler that merely `await asyncio.sleep`s would be cancelled cleanly and would
-#: never exercise the omitted `shutdown_default_executor()` this test guards.
 _SLOW_OP_SCRIPT = """
 import asyncio
 import sys
@@ -1132,12 +927,6 @@ main()
 def _run_probe_script(
     script: str, env: dict | None = None, timeout: int = 30
 ) -> subprocess.CompletedProcess:
-    """Run a probe script that registers its own op and then calls `main()`.
-
-    A test-OWNED vehicle. Cases here that borrowed a production op as a vehicle
-    have gone red twice when that op was deleted or killed, each time asserting
-    something about the borrowed op rather than about `invoke`.
-    """
     cmd = [sys.executable, "-c", script]
     return subprocess.run(
         cmd,

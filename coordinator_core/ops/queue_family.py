@@ -1,33 +1,3 @@
-"""
-coordinator_core.ops.queue_family — the queue-family read seam C3/C4/C5 share.
-
-Purpose: normalize the three on-disk queue-family names (``improvement-queue``,
-``debt-backlog``, ``bug-backlog``) onto the ``record_type`` values
-``coordinator_core.ops.ceremony.records_query.query_records`` expects
-(``improvement``, ``debt``, ``bug``), and expose ONE load function that
-delegates every record-collection/parse/skip-unparseable concern to that
-seam. Per-family required-field differences are a lookup table over the
-records ``query_records`` already returns — never a second file-loading path.
-
-Spec backlink: pln-queue-triage-terminus-ops-clus-043c40 § C1
-
-Negative-spec:
-  - Does NOT glob, walk directories, or parse YAML/frontmatter itself — all
-    loading routes through ``query_records``. A caller reaching for
-    ``Path.glob``/``Path.iterdir``/``yaml.safe_load`` instead of this module's
-    ``load_family_records`` is reimplementing the read seam this module
-    exists to prevent.
-  - Does NOT build on ``coordinator_core.ops.queue_append._output_dir_for_schema``
-    — that resolver belongs to the WRITE path (where a new entry gets
-    written), not the read path. This module is READ-only.
-  - Does NOT add a fourth queue family or a theme/subsystem field — the
-    three families and their field tables below are the closed set.
-
-Import cost for spawn-per-call callers: this module lives under
-``coordinator_core.ops``, whose ``__init__`` registers ops lazily by default —
-package import no longer walks every op module body to populate the registry.
-``load_family_records`` needs no registry and pays only its own import cost.
-"""
 
 from __future__ import annotations
 
@@ -46,16 +16,10 @@ FAMILY_TO_RECORD_TYPE: dict[str, str] = {
 
 
 class UnknownQueueFamilyError(ValueError):
-    """Raised by :func:`normalize_family` for a family name outside the closed set."""
+    pass
 
 
 def normalize_family(family: str) -> str:
-    """Map a queue-family name to its ``query_records`` ``record_type``.
-
-    Raises ``UnknownQueueFamilyError`` (a ``ValueError`` subclass) naming the
-    offending value and the full set of valid families, for an unrecognized
-    ``family``.
-    """
     try:
         return FAMILY_TO_RECORD_TYPE[family]
     except KeyError:
@@ -65,15 +29,6 @@ def normalize_family(family: str) -> str:
         ) from None
 
 
-# Per-family field table over query_records()'s returned frontmatter dicts.
-#
-# ``required`` mirrors each family's JSON Schema ``required`` array
-# (coordinator_core/frontmatter/schemas/{improvement-queue,debt-backlog,
-# bug-backlog}.schema.json). ``optional`` lists the cross-family fields that
-# are schema-declared but frequently absent on real entries (per the
-# "read defensively" convention — a missing optional field is normal input).
-# This is a lookup TABLE, not a per-family branch: callers index it by the
-# already-normalized family name, they never write ``if family == ...``.
 FAMILY_FIELDS: dict[str, dict[str, tuple[str, ...]]] = {
     "improvement-queue": {
         "required": (
@@ -199,36 +154,10 @@ def load_family_records(
 
 
 def _looks_like_git_common_dir(path: Path) -> bool:
-    """True iff ``path`` has the shape of a git common dir: ``HEAD`` plus ``objects``/``refs``.
-
-    Contents-based, not name-based — a bare repo's common dir and a
-    submodule's common dir (``.git/modules/<name>/``) both have this shape
-    without being literally named ``.git``, which is exactly the case the
-    rejected ``repo_root.name == ".git"`` heuristic missed.
-    """
     return (path / "HEAD").is_file() and (path / "objects").is_dir() and (path / "refs").is_dir()
 
 
 def _resolve_worktree_root(repo_root: Path) -> Path:
-    """Resolve ``repo_root`` (a worktree root OR a git common dir) to the worktree root.
-
-    Only ``repo_root``s that look like a git common dir (``HEAD`` plus
-    ``objects``/``refs`` directly present — see :func:`_looks_like_git_common_dir`)
-    trigger derivation at all; anything else is trusted as an already-worktree-root
-    path unchanged, exactly as before (this module's own tests, and any future
-    non-IPC caller, routinely hand it a plain directory with no git structure of
-    its own — ``query_records`` needs no git repo to function). Within the
-    common-dir branch, this function raises ``ValueError`` rather than silently
-    falling through to "treat as worktree root" whenever the DERIVED root fails
-    its own verification — see :func:`load_family_records`'s docstring for why a
-    name-based discriminator (``repo_root.name == ".git"``) was rejected in favor
-    of this contents-based check: a bare repo or a submodule's common dir
-    (``.git/modules/<name>/``) has the common-dir shape without being literally
-    named ``.git``, and its derived worktree root reliably fails the ``.git``-entry
-    verification below (a bare repo's or a submodule ``.git/modules/`` parent is
-    never itself a worktree root), so the failure is caught rather than silently
-    reproducing the original bug one layer down.
-    """
     if not _looks_like_git_common_dir(repo_root):
         return repo_root
     candidate = main_worktree_root(repo_root)
@@ -245,11 +174,5 @@ def _resolve_worktree_root(repo_root: Path) -> Path:
 
 
 def fields_for_family(family: str) -> dict[str, tuple[str, ...]]:
-    """Return the ``{"required": (...), "optional": (...)}`` field tuple for ``family``.
-
-    Raises ``UnknownQueueFamilyError`` for an unrecognized family — kept in
-    sync with :func:`normalize_family` by construction (same validation,
-    same closed set).
-    """
-    normalize_family(family)  # validates + raises the shared clear error
+    normalize_family(family)
     return FAMILY_FIELDS[family]

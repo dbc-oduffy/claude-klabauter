@@ -39,10 +39,6 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 _OUTBOX = ("state", "memo-outbox")
 
 
-# ---------------------------------------------------------------------------
-# memo.send fixtures (mirrors test_memo_send.py's own factories)
-# ---------------------------------------------------------------------------
-
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git"] + list(args), cwd=str(repo), capture_output=True, check=check,
@@ -116,10 +112,6 @@ def _write_draft(sender_repo: Path, topic: str, *, to: str = "example-retrieval-
     return draft_path
 
 
-# ---------------------------------------------------------------------------
-# memo.send
-# ---------------------------------------------------------------------------
-
 class TestMemoSendDeclaresTouches:
     def test_act_run_declares_sent_copy_and_ledger(self, tmp_path, monkeypatch):
         sender_repo = _make_sender_git_repo(tmp_path)
@@ -138,8 +130,6 @@ class TestMemoSendDeclaresTouches:
         ledger_path = sender_repo / ".coordinator-local" / "memo-outbox" / _SENT_LEDGER_FILENAME
         assert sent_path in touched
         assert ledger_path in touched
-        # Never the receiver-side inbox path — a different repo's own write,
-        # already committed independently via commit_authored_new_file.
         receiver_inbox = receiver_repo / "cross-repo" / "inbox"
         assert not any(receiver_inbox in p.parents for p in touched)
 
@@ -155,10 +145,6 @@ class TestMemoSendDeclaresTouches:
         assert result["exit_code"] == 0, result
         assert "_scope_touch_paths" not in result
 
-
-# ---------------------------------------------------------------------------
-# memo.reconcile_outbox
-# ---------------------------------------------------------------------------
 
 @pytest.fixture
 def worktree(tmp_path: Path) -> Path:
@@ -192,7 +178,6 @@ class TestMemoReconcileOutboxDeclaresTouches:
         target = worktree / ".coordinator-local" / "memo-outbox" / "sent" / "delivered.md"
         assert source in touched, "the vacated source is a deletion this session owns too"
         assert target in touched
-        # A draft that never moved contributes no touch entries.
         live = worktree.joinpath(*_OUTBOX, "live.md")
         assert live not in touched
 

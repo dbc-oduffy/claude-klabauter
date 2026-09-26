@@ -32,8 +32,6 @@ import pytest
 from coordinator_core.ops.ceremony import commit_v2
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns real external `git` processes; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
@@ -84,8 +82,6 @@ def spy(monkeypatch):
 
 
 def test_commit_records_one_ledger_entry_for_its_sha(repo, spy):
-    """(a) a landed commit writes exactly one ledger entry, carrying the
-    sha the handler itself reports."""
     rel = "state/notes.md"
     f = repo / rel
     f.parent.mkdir(parents=True)
@@ -100,9 +96,6 @@ def test_commit_records_one_ledger_entry_for_its_sha(repo, spy):
 
 
 def test_ledger_paths_cover_deletions_too(repo, spy):
-    """(b) the billed pathspec is the FULL declared set -- `deleted_paths`
-    are part of what this commit delivered, and a ledger row naming only the
-    added half under-reports the commit's weight basis."""
     rel_keep = "state/keep.md"
     rel_gone = "state/gone.md"
     for rel in (rel_keep, rel_gone):
@@ -118,10 +111,6 @@ def test_ledger_paths_cover_deletions_too(repo, spy):
     result = _call(repo, {
         "paths": [rel_keep],
         "deleted_paths": [rel_gone],
-        # The fixture seeds both files one commit ago, so P2d's rollback gate
-        # sees `gone.md`'s ABSENT returning at depth 2 and refuses without this.
-        # Declaring the revert is the plan's own route for a legitimate one and
-        # does not touch what this test asserts -- which paths the ledger bills.
         "declared_reverts": [rel_gone],
         "message": "drop gone",
     })
@@ -132,9 +121,6 @@ def test_ledger_paths_cover_deletions_too(repo, spy):
 
 
 def test_closure_facts_are_threaded_from_the_message(repo, spy):
-    """(c) `Closes:` is read off the message text and threaded through, so
-    the closure pipe carries rows on this route as it does on the two
-    sibling producers that already call `record_ledger_entry`."""
     rel = "state/notes.md"
     f = repo / rel
     f.parent.mkdir(parents=True)

@@ -1,10 +1,3 @@
-"""Unit tests for coordinator_core.search.sources_powershell.
-
-Covers parse-and-produce for `Get-Content`/aliases and `Get-ChildItem`/aliases,
-and, more importantly, the decline set: the PowerShell-specific escapes this
-module must refuse rather than approximate. No subprocess -- a differential
-oracle against a real PowerShell host, if ever built, is a later chunk's job.
-"""
 
 from __future__ import annotations
 
@@ -20,16 +13,13 @@ from coordinator_core.search.engine import MAX_RENDER_BYTES, Unanswerable
 @pytest.fixture()
 def workdir(tmp_path):
     (tmp_path / "a.txt").write_text("one\ntwo\nthree\n", newline="")
-    (tmp_path / "b.txt").write_text("four\nfive", newline="")  # no trailing newline
+    (tmp_path / "b.txt").write_text("four\nfive", newline="")
     (tmp_path / "empty.txt").write_text("", newline="")
     return str(tmp_path)
 
 
 def _produce(tokens, cwd, newline="\r\n"):
     return sp.parse_content_segment(tokens).produce(cwd, newline=newline)
-
-
-# --------------------------------------------------------------------------- Get-Content
 
 
 def test_get_content_single_file(workdir):
@@ -42,9 +32,6 @@ def test_get_content_aliases_recognized(workdir, alias):
 
 
 def test_get_content_line_object_stream_always_ends_with_newline(workdir):
-    # Unlike `cat`, Get-Content emits one line-object per source line, so a
-    # file with no trailing newline still renders with one after the last
-    # line -- this is the fidelity divergence the module docstring names.
     assert _produce(["Get-Content", "b.txt"], workdir) == "four\r\nfive\r\n"
 
 
@@ -67,9 +54,6 @@ def test_get_content_relative_operand_joins_cwd(workdir):
     with open(os.path.join(sub, "c.txt"), "w", newline="") as fh:
         fh.write("x")
     assert _produce(["Get-Content", "c.txt"], sub) == "x\r\n"
-
-
-# --------------------------------------------------------------------------- Get-Content: -TotalCount/-First/-Tail/-Last
 
 
 def test_get_content_totalcount(workdir):
@@ -111,9 +95,6 @@ def test_get_content_totalcount_non_numeric_declines():
 def test_get_content_duplicate_totalcount_declines():
     with pytest.raises(Unanswerable):
         sp.parse_content_segment(["Get-Content", "-TotalCount", "1", "-First", "2", "a.txt"])
-
-
-# --------------------------------------------------------------------------- Get-Content: decline set
 
 
 @pytest.mark.parametrize("flag", ["-Raw", "-Encoding", "-Stream", "-Force", "-Wait"])
@@ -221,9 +202,6 @@ def test_get_content_at_cap_file_is_still_served(workdir):
     assert _produce(["Get-Content", "exact.txt"], workdir) == "x" * MAX_RENDER_BYTES + "\r\n"
 
 
-# --------------------------------------------------------------------------- Get-ChildItem: parsing
-
-
 def test_parse_bare_get_childitem():
     spec = sp.parse_childitem_segment(["Get-ChildItem"])
     assert spec == sp.ChildItemSpec(directory=".")
@@ -281,9 +259,6 @@ def test_get_childitem_declines_non_filesystem_provider():
         sp.parse_childitem_segment(["Get-ChildItem", "Env:"])
 
 
-# --------------------------------------------------------------------------- Get-ChildItem: run
-
-
 @pytest.mark.skipif(sys.platform != "win32", reason="enumeration-order equivalence is win32-only")
 def test_run_childitem_lists_visible_entries(tmp_path):
     (tmp_path / "visible.txt").write_text("x", encoding="utf-8")
@@ -326,9 +301,6 @@ def test_run_childitem_declines_off_windows(tmp_path, monkeypatch):
     spec = sp.ChildItemSpec(directory=".")
     with pytest.raises(Unanswerable):
         sp.run_childitem(spec, cwd=str(tmp_path))
-
-
-# --------------------------------------------------------------------------- dispatch
 
 
 def test_parse_powershell_segment_dispatches_content():

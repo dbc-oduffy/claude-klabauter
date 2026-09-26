@@ -65,20 +65,9 @@ from typing import Optional
 
 from coordinator_core.win_portability import no_console_creationflags
 
-# Fixed task name -- the identity idempotency keys on. Changing this string
-# orphans any previously-registered task under the old name; do not rename
-# without adding an uninstall leg for the old name too.
 TASK_NAME = "CoordinatorHostSampler"
 
 # Mirrors coordinator_core.telemetry.host_sampler._DEFAULT_INTERVAL_SECS
-# (1200s == 20 minutes -- PM ruling 2026-08-16, superseding the original
-# 120s/2min figure; see that module's docstring "Cadence arithmetic" for
-# the tradeoff arithmetic). Kept as an independent literal rather than an
-# import of that module's private constant -- this is an OS-scheduler
-# cadence declaration, not a runtime read of the sampler's own tuning, and
-# the two are allowed to drift apart if a future change retunes one without
-# the other (an explicit rebuild record either way, per that module's own
-# ratchet doctrine).
 _INTERVAL_MINUTES = 20
 
 _IS_WINDOWS = os.name == "nt" or sys.platform == "win32"
@@ -89,9 +78,6 @@ def _schtasks_argv(*args: str) -> list:
 
 
 def _run_schtasks(*args: str) -> "subprocess.CompletedProcess | None":
-    """Run ``schtasks.exe`` with the given args. Returns the completed
-    process, or ``None`` if ``schtasks.exe`` itself could not be spawned
-    (missing/PATH issue) -- never raises."""
     try:
         return subprocess.run(
             _schtasks_argv(*args),
@@ -105,7 +91,6 @@ def _run_schtasks(*args: str) -> "subprocess.CompletedProcess | None":
 
 
 def _host_sampler_script_path(repo_root: Path) -> Path:
-    """Absolute path to the sampler's own source file under ``repo_root``."""
     return repo_root / "coordinator_core" / "telemetry" / "host_sampler.py"
 
 
@@ -202,9 +187,6 @@ def register_host_sampler_task(
     print("--- Install: host-resource sampler scheduled task (Windows Task Scheduler) ---")
 
     if not _IS_WINDOWS:
-        # Says what is lost and how to get it, not only that a step was
-        # skipped: an advisory naming neither leaves the operator to work out
-        # both. Register doctrine -- one fact, once, plus a terse alternative.
         script = _host_sampler_script_path(repo_root)
         print(
             "[ADVISORY] not running on Windows — skipping host-sampler task "
@@ -223,11 +205,6 @@ def register_host_sampler_task(
 
     task_xml = _task_xml(python_exe, repo_root)
 
-    # Task Scheduler XML is documented as UTF-16 (see _task_xml's XML
-    # declaration) -- schtasks /Create /XML reads the file's own declared
-    # encoding, so it must actually be written that way, not UTF-8-with-a-
-    # UTF-16-label. Written to a real temp file (not stdin) because
-    # schtasks's /XML flag takes a path, not piped content.
     xml_path = None
     try:
         fd, xml_path = tempfile.mkstemp(suffix=".xml", prefix="host-sampler-task-")
@@ -267,13 +244,6 @@ def register_host_sampler_task(
 
 
 def unregister_host_sampler_task() -> bool:
-    """Remove the Windows Task Scheduler entry registered by
-    ``register_host_sampler_task``, if present.
-
-    Advisory / never raises. Idempotent: an absent task is treated as
-    success (nothing to remove), matching the bool contract every other
-    ``uninstall_legs`` leg uses. Returns False only on a genuine,
-    non-absent-related failure."""
     if not _IS_WINDOWS:
         return True
 
@@ -288,11 +258,6 @@ def unregister_host_sampler_task() -> bool:
         return False
     if proc.returncode != 0:
         combined = (proc.stderr or proc.stdout or "").strip()
-        # schtasks /Delete on an absent task prints "ERROR: The system
-        # cannot find the file specified." and exits non-zero -- that is
-        # success (nothing to remove), not a failure, matching every other
-        # leg's already-absent-is-success contract (e.g. git config --unset
-        # exit 5 in this same module).
         if "cannot find" in combined.lower():
             return True
         print(

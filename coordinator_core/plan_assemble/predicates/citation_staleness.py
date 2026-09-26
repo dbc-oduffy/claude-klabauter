@@ -110,38 +110,16 @@ from coordinator_core.plan_assemble.predicates import PredicateContext, undeterm
 
 
 def _history_records(repo_root, rel_path):
-    """Thin, deliberately-named wrapper over `doc_staleness._log_follow_records`.
-
-    code-reviewer flagged the direct cross-module import of an
-    underscore-prefixed, non-`__all__` helper as undocumented-contract
-    coupling — `doc_staleness.py` is free to rename or reshape that
-    symbol without breaking its own public API. This wrapper does not
-    solve that (it cannot, without `doc_staleness.py` promoting the
-    symbol itself) but it localizes the coupling to one call site, so a
-    future signature change surfaces here rather than at every call in
-    `scope_paths_staleness`, and is the explicit acknowledgment the
-    reviewer asked for that both sides know this is deliberate composed-
-    over reuse (see module docstring, Leg 1), not an accident."""
     return _doc_staleness_log_follow_records(repo_root, rel_path)
 
-#: `path:line` (or `path:line-line2`) citation tokens, backtick-quoted,
-#: matching the shape this repo's own docs already use (e.g.
-#: `` `plan.schema.json:43` ``). The path segment requires a dotted
-#: extension so a bare contract-row reference like `` `:85-87` `` (no
-#: path, just a colon-prefixed number) is never mistaken for a citation.
 _CITATION_RE = re.compile(
     r"`([A-Za-z0-9_./\-]+\.[A-Za-z0-9_]+):(\d+)(?:-\d+)?`"
 )
 
-#: Any backtick-quoted span, used to locate a citation's adjacent anchor text.
 _BACKTICK_SPAN_RE = re.compile(r"`([^`\n]+)`")
 
-#: How far (in characters) either side of a citation token this module
-#: looks for an adjacent backtick-quoted anchor span.
 _ANCHOR_SEARCH_WINDOW = 80
 
-#: Anchor text shaped like a bare identifier is eligible for ladder rung 3
-#: (enclosing-symbol match).
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 
 
@@ -169,9 +147,6 @@ def _extract_citations(plan_body: str) -> list[dict[str, Any]]:
 
 
 def _find_anchor_text(text: str, start: int, end: int) -> Optional[str]:
-    """The nearest backtick-quoted span adjacent to a citation token —
-    preceding span preferred (the repo's own convention is `` `SYMBOL`
-    at/in `path:line` ``), falling back to the next following span."""
     preceding = text[max(0, start - _ANCHOR_SEARCH_WINDOW) : start]
     preceding_spans = [
         m for m in _BACKTICK_SPAN_RE.finditer(preceding) if m.group(1).strip()
@@ -184,18 +159,11 @@ def _find_anchor_text(text: str, start: int, end: int) -> Optional[str]:
     ]
     if following_spans:
         return following_spans[0].group(1)
-    # A whitespace-only backtick span (` ` `) is
-    # filtered out above rather than returned as anchor_text: it would
-    # otherwise match almost every non-empty target line at rung 1
-    # (`anchor_text in line`), producing a bogus non-undetermined match
     # instead of the `undetermined` this module's RESOLUTION RULE reserves
-    # for "no adjacent quoted anchor text found".
     return None
 
 
 def _anchor_line(target_lines: list[str], anchor_text: str) -> Optional[int]:
-    """Run the anchoring ladder against `target_lines`; return the 1-based
-    line the anchor resolves to, or `None` if all three rungs miss."""
     for idx, line in enumerate(target_lines):
         if anchor_text in line:
             return idx + 1
@@ -219,15 +187,6 @@ def _anchor_line(target_lines: list[str], anchor_text: str) -> Optional[int]:
 
 
 def scope_paths_staleness(context: PredicateContext) -> dict[str, Any]:
-    """`:85-87` Leg 1 -> `gates.substrate.staleness.scope_paths_stale`
-    (bool), `.stale_paths` (list).
-
-    For each `scope:` entry in the plan's frontmatter, a path present on
-    disk is never stale. A missing path is reported stale, with evidence
-    of whether `_log_follow_records` (composed, not re-derived) found any
-    prior history for it — a path with no history at all is likely a
-    typo rather than something that was deleted or renamed away, and the
-    evidence says which."""
     if context.plan_frontmatter is None:
         return undetermined("no plan frontmatter available (--plan not supplied or unparseable)")
 

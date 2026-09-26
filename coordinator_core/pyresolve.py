@@ -50,35 +50,11 @@ _WINDOWS_PYORG_VERSIONS = ("313", "312", "311", "310")
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # Windowless (``/SUBSYSTEM:WINDOWS``) interpreter basenames -- a general-purpose
-# shim baked/resolved with one of these gives a child with a live stdin pipe a
-# null/invalid stdin handle. Shared between ``coordinator_core.install.substrate``
-# (``_resolve_baked_python_bin``) and ``coordinator_core.ops.ensure_python3_exe_shim``
-# (``_resolve_python_bin``) -- both bake/shim a general-purpose interpreter and both
-# need the same defense-in-depth rejection; lifted here as the one definition so
-# neither caller carries its own copy. See ``resolve_python_bin()``'s
-# ``prefer_windowless`` docstring for the general windowless-vs-console rationale,
-# and ``coordinator_core.install.substrate._resolve_baked_python_bin``'s docstring
-# for the originating incident.
 _WINDOWLESS_BASENAMES = ("pythonw.exe", "pyw.exe")
 
 
 def _console_sibling(windowless_path: str) -> str:
-    """Given a resolved windowless interpreter path (``...\\pythonw.exe``), return
-    the console sibling in the same install dir (``...\\python.exe``) if it exists
-    on disk, else ``""``. Pure filesystem lookup, no resolver re-invocation --
-    python.org installs always ship both binaries side by side, so this is cheaper
-    and more direct than re-running the resolver with a different preference."""
     # `windowless_path` is a WINDOWS-shaped path string (baked/resolved for a
-    # Windows target), parsed here regardless of the host running this code --
-    # `os.path` is bound to the HOST's flavour at interpreter start (`posixpath`
-    # on a POSIX dev box), so it silently mis-splits a backslash path. `ntpath`
-    # is the explicit, host-independent flavour selection, mirroring the
-    # precedent in `coordinator_core.win_portability` (see that module's own
-    # docstring). `os.path.isfile` stays as-is below: that call dereferences the
-    # real filesystem, which only ever happens against a real path on the host
-    # actually running this code (and is mocked outright in the tests exercising
-    # this branch on a non-Windows dev box) -- a host-local check, not a
-    # Windows-path parse, so it correctly keeps host semantics.
     directory = ntpath.dirname(windowless_path)
     basename = ntpath.basename(windowless_path).lower()
     if basename == "pythonw.exe":
@@ -89,20 +65,6 @@ def _console_sibling(windowless_path: str) -> str:
         return ""
     return sibling if os.path.isfile(sibling) else ""
 
-# ---------------------------------------------------------------------------
-# per-process memoization -- see resolve_python_bin's "highest per-invocation
-# win" spawn-census finding (state/audits/2026-08-06-repo-root-and-git-wrapper-
-# hitlist.md): both the pin-validation probe and the machine-local shell-out
-# are genuine subprocess isolation boundaries (not convertible in-process, see
-# module docstring), so the fix is memoizing the *result* per process rather
-# than converting the call. Caches persist for the life of the importing
-# process (spawn-per-call model means that's one op invocation) and must be
-# cleared explicitly between test cases via clear_resolution_cache().
-#
-# The machine-local shell-out itself (``_machine_local_get``) and its cache
-# now live in ``coordinator_core._claude_klabauter_root`` (R4 shared-helper extraction)
-# -- imported above, not redefined here.
-# ---------------------------------------------------------------------------
 
 _validate_cache: Dict[str, bool] = {}
 
@@ -120,10 +82,7 @@ def clear_resolution_cache() -> None:
 
 
 class PythonPinInvalid(RuntimeError):
-    """Raised when a pinned interpreter (env var or machine-local) exists on disk but
-    fails ``-c 'import sys'`` validation -- e.g. a dangling venv shim. Mirrors the bash
-    resolver's hard-failure contract: a broken pin must never silently fall through to
-    the OS-detect tier."""
+    pass
 
 
 def _validate_interpreter(path: str) -> bool:
@@ -163,28 +122,15 @@ def _validate_interpreter(path: str) -> bool:
     return valid
 
 
-# ---------------------------------------------------------------------------
-# Windows OS-detect tier
-# ---------------------------------------------------------------------------
-
-
 def _is_windows() -> bool:
     return os.name == "nt" or sys.platform == "cygwin"
 
 
 def _is_store_python(path: str) -> bool:
-    """Reject the Microsoft Store Python install -- sandboxed, inconsistent
-    permissions; python.org installs are always preferred. Ported verbatim from
-    ``_resolve_python_is_store``."""
     return "windowsapps" in path.lower()
 
 
 def _pyorg_search(prefer_windowless: bool) -> Optional[str]:
-    """Probe known python.org install locations in descending version order, looking
-    for a windowless interpreter first (console-flash suppression) then the console
-    binary. Returns the first absolute path found, or None. Ported from
-    ``_resolve_python_pyorg_search``; the Windows-native path handling in Python needs
-    no cygpath translation the bash oracle required."""
     candidates: List[str] = []
 
     localappdata = os.environ.get("LOCALAPPDATA", "")
@@ -196,9 +142,6 @@ def _pyorg_search(prefer_windowless: bool) -> Optional[str]:
                 for name in os.listdir(programs_python)
                 if name.startswith("Python3")
             ]
-            # sort -r gives descending lex order; matches the bash oracle exactly
-            # (including its documented 3.9-vs-3.10 lex-sort limitation -- not fixed
-            # here for byte-parity with the resolution corpus).
             candidates.extend(sorted(children, reverse=True))
 
     for ver in _WINDOWS_PYORG_VERSIONS:
@@ -235,23 +178,16 @@ def _launcher_available(cmd: str) -> bool:
 
 
 def _resolve_windows(prefer_windowless: bool) -> Tuple[str, List[str]]:
-    # Step 1 -- direct probe of python.org installer locations, bypassing PATH (and
-    # therefore the Store-Python symlink farm).
     hit = _pyorg_search(prefer_windowless=prefer_windowless)
     if hit:
         return hit, []
 
-    # Step 2 -- PATH resolution, rejecting any match under WindowsApps. Probe order
-    # mirrors the windowless preference so a general-purpose (console-wanting) caller
-    # doesn't get handed a *w.exe binary here even though pyorg_search above already
-    # honored prefer_windowless.
     names = ("pythonw", "python3", "python") if prefer_windowless else ("python3", "python", "pythonw")
     for name in names:
         candidate = _which(name)
         if candidate and not _is_store_python(candidate):
             return candidate, []
 
-    # Step 3 -- the py / pyw launcher (PEP 514 registry-backed selection).
     if _launcher_available("pyw"):
         return "pyw", ["-3"]
     if _launcher_available("py"):
@@ -266,11 +202,6 @@ def _resolve_non_windows() -> Tuple[str, List[str]]:
         if candidate:
             return candidate, []
     return "", []
-
-
-# ---------------------------------------------------------------------------
-# Public resolver
-# ---------------------------------------------------------------------------
 
 
 def resolve_python_bin(prefer_windowless: bool = True) -> Tuple[str, List[str]]:
@@ -354,19 +285,6 @@ def resolve_machine_python_bin(prefer_windowless: bool = True) -> Tuple[str, Lis
 
 
 def _prepend_path(bin_path: str) -> None:
-    """Prepend ``bin_path``'s directory to this process's ``PATH`` so any child this
-    process spawns by bare interpreter name (rare in CLI mode, but mirrors the bash
-    oracle's side effect for parity) resolves the same install. Skipped for the py/pyw
-    launcher, which resolves via the Windows registry (PEP 514), not PATH -- ported
-    verbatim from the bash guard.
-
-    Unguarded ``os.environ`` write, deliberately: reachable only from this module's
-    own ``main()`` under its ``__main__`` guard, itself only ever ``subprocess``-spawned
-    (never imported and called in-process) -- under the DR-215 spawn-per-call model the
-    process that makes this write exits immediately after, same as the bash `export` it
-    ports. No env_overlay wrap needed; see the wider unguarded-write review in
-    state/review-trail/findings/2026-07-22-codereview-sliceenv-hygiene-cluster-... .md
-    (Finding 4)."""
     if not bin_path or bin_path in ("py", "pyw"):
         return
     bin_dir = os.path.dirname(bin_path)
@@ -399,7 +317,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
-    # PATH-seeding side effect -- CLI-mode-only per module docstring.
     _prepend_path(python_bin)
 
     print(f"{python_bin}\t{' '.join(python_args)}")

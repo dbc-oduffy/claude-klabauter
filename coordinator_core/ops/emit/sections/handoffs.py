@@ -160,59 +160,27 @@ from .handoff_columns import (
     _resolve_shipped_in_dates as _resolve_shipped_in_dates_batch,
 )
 
-# Required non-nullable fields; a record missing any (non-string) is quarantined (bash:245-249).
 _REQUIRED_STRING_FIELDS = ("title", "created", "status", "deployment_state")
 
-# DR-084 P4 transitional ingest tolerance (module docstring) — old->new legacy tolerance,
-# restored 2026-07-23. Old-vocabulary ``status``/``deployment_state`` values are coerced UP to
-# the NEW wire vocabulary here; new-vocabulary values pass through untouched (absent from these
 # maps). ``_STATUS_RECOGNIZED``/``_DEPLOYMENT_RECOGNIZED`` are the union of old-and-new legal
-# values for each axis — a value outside that union is neither, and is per-record quarantined
-# into ``malformed`` (2026-08-08), not raised. These records arrive from a corpus this repo does
-# not own — a sibling repo authors handoffs into a shared vocabulary — so a whole-emit hard-abort
-# gives one foreign artifact's unrecognized value fleet-wide blast radius over an unrelated
-# ceremony (every other workstream's cadence step wedged by one record it has no stake in).
-# ``superseded`` is the already-retired handoff status (2026-06-26); it maps to ``claimed``
-# under the new vocabulary for the same reason it mapped to ``consumed`` under the old one —
-# a superseded handoff is no longer "in play" (see ``HandoffStatus`` docstring, contract), and
 # this mapping is a SEPARATE, permanently-grandfathered axis, not part of the transitional
-# old->new tolerance described above.
 _STATUS_OLD_TO_NEW = {"active": "open", "consumed": "claimed", "superseded": "claimed"}
 _STATUS_RECOGNIZED = {"active", "consumed", "superseded", "open", "claimed"}
 # _DEPLOYMENT_RECOGNIZED moved to handoff_columns.py (C1) — imported above.
 
-# Acceptance-criteria checklist line matchers (bash awk regexes :402-403). [[:space:]] == \s.
 _AC_DONE_RE = re.compile(r"^[ \t\r\n\f\v]*- \[[xX]\]")
 _AC_OPEN_RE = re.compile(r"^[ \t\r\n\f\v]*- \[ \]")
 
-# Authored handoff_id shape (coordinator-doc-new's _mint_artifact_id(prefix="hnd", slug) —
-# frontmatter/schemas/handoff.schema.json :230). A frontmatter value that doesn't match this
-# shape is NOT trusted as an authored id — it falls through to derivation below, same as an
-# absent value.
 _HANDOFF_ID_RE = re.compile(r"^hnd-[a-z0-9-]+-[0-9a-f]{6}$")
 
 
 def _jq_or(value: Any, default: Any) -> Any:
-    """Mirror jq ``//`` — return ``default`` when ``value`` is null or false, else ``value``.
-
-    jq's alternative operator treats only ``null`` and ``false`` as falsy (empty string / empty
-    array stay), which is the exact semantics the bash normalization relies on (:235-242, 262-289).
-    """
     if value is None or value is False:
         return default
     return value
 
 
 def _query_records(ctx: EmitContext, record_type: str) -> list[dict]:
-    """Enumerate ``record_type`` records via the native records-query seam; [] on any failure.
-
-    Parity: bash :221-222 ``… 2>/dev/null || echo "[]"`` — see module docstring "Node-subprocess
-    retirement" for the full repoint rationale. ``worktree_root`` mirrors the retired spawn's
-    root resolution (``ctx.subprocess_root`` override, else ``ctx.repo_root``); the broad
-    ``except Exception`` mirrors the bash oracle's unconditional stderr-swallow-and-fall-back-to
-    ``[]`` — this call site has no use for a partial/error-flagged result, only the same
-    degraded-empty-list behavior the spawn already had.
-    """
     worktree_root = ctx.subprocess_root if ctx.subprocess_root is not None else ctx.repo_root
     try:
         result = _ceremony_query_records(record_type, worktree_root, limit=0)
@@ -222,22 +190,10 @@ def _query_records(ctx: EmitContext, record_type: str) -> list[dict]:
 
 
 def _resolve_shipped_in_dates(ctx: EmitContext, raw_shas: list[str]) -> dict[str, str]:
-    """Resolve distinct raw ``shipped_in`` SHAs to commit dates via ONE git log.
-
-    Thin ``EmitContext``-shaped wrapper over ``handoff_columns._resolve_shipped_in_dates``
-    (moved there at C1) — this section's callers already have a ``ctx``, so this keeps that
-    call shape rather than repointing every call site to pass ``ctx.repo_root`` directly.
-    """
     return _resolve_shipped_in_dates_batch(ctx.repo_root, raw_shas)
 
 
 def _acceptance_criteria(root: Path, path: Optional[str]) -> Optional[dict]:
-    """Parse a handoff body checklist into {done, total}, or None (bash awk :395-405).
-
-    Counts ``- [x]``/``- [X]`` (done+total) and ``- [ ]`` (total); returns None when the file
-    is absent/untracked or has no checklist items (total == 0). File-absent → None matches the
-    bash behaviour (the awk only sees existing ``$ROOT/$path`` files, :388-390).
-    """
     if not path:
         return None
     full = root / path
@@ -261,18 +217,6 @@ def _acceptance_criteria(root: Path, path: Optional[str]) -> Optional[dict]:
 
 
 def _origin_goal_id_triples(fm: dict) -> Optional[list[dict]]:
-    """Wrap frontmatter ``origin_goal_id`` (bare ``list[str]`` goal ids) into the contract's
-    ``ForeignOriginTriple`` shape (``{id, kind, label}``).
-
-    ``goal`` is a FOREIGN kind (not itself emitted as a HandoffSummary row elsewhere in this
-    contract), so the schema wants a full triple per element rather than a bare id (see the
-    module docstring's ``origin_*`` sourcing note). No goal-title lookup is available in this
-    section (that would require joining into the ``goals`` porter's own JSONL read — out of
-    scope for this fix), so ``label`` is set to the bare id itself as a documented placeholder.
-
-    Returns ``None`` when the frontmatter key is absent, null, or an empty list (D9 present-
-    as-null: absent input stays null, never an empty array).
-    """
     raw = fm.get("origin_goal_id")
     if not isinstance(raw, list) or not raw:
         return None
@@ -281,9 +225,6 @@ def _origin_goal_id_triples(fm: dict) -> Optional[list[dict]]:
         for goal_id in raw
         if goal_id
     ] or None
-
-
-# _coerce_legacy_abandoned moved to handoff_columns.py (C1) — imported above.
 
 
 _TIMESTAMP_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(_\d{6})?_")
@@ -377,34 +318,14 @@ def _resolve_handoff_id(repo: str, path: Optional[str], fm: dict) -> tuple[str, 
 
 
 def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
-    """Build the HandoffSummary records + malformed bucket (parity: bash SECTION 1 + 1.5)."""
     raw_records = _query_records(ctx, "handoff") + _query_records(ctx, "handoff-archived")
 
     records: list[dict] = []
     malformed: list[dict] = []
 
-    # C9 activation switch (module docstring / _shared.human_axis_vendored): resolved
-    # once per collect() call, not per record — same posture as the priority ledger load
-    # below. While this is False, `human_assignee`/`human_claimant` never reach a
-    # record's dict at all (see the gated block below), and the pydantic model's default
-    # is stripped back out post-dump — the byte-identity leg of AC7 depends on both.
     _human_axis_on = human_axis_vendored()
 
-    # baton_class.py's `_load_mapping`
-    # deliberately re-reads+re-parses the vendored schema on every call and its own
-    # docstring tells a tight-loop caller to cache at its own boundary instead of
-    # asking the module to cache silently. `kind` is drawn from a small, bounded
-    # vocabulary (HandoffKind literal, ~9 values), so caching by `kind` here collapses
     # this loop's cost to at most one schema read per DISTINCT kind for the whole
-    # `collect()` call, not one read+parse per handoff record.
-    #
-    # `baton_class()` can raise
-    # `BatonClassSchemaError` (missing/corrupt/unparseable vendored schema). Every other
-    # failure mode in this file degrades rather than aborting (`_query_records` broad-
-    # excepts to `[]`; per-record contract violations are quarantined into `malformed`),
-    # so a schema-read failure here degrades every record's `baton_class` to `None` for
-    # this emit run instead of hard-crashing `collect()` — and is reported once as a
-    # `malformed` diagnostic below (fail-open, but the degrade is observable, not silent).
     _baton_class_cache: dict[str, Optional[str]] = {}
     _baton_class_schema_error: Optional[str] = None
 
@@ -428,7 +349,6 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
         fm = normalize_frontmatter(rec)
         path = rec.get("path")
 
-        # Quarantine: any required field not a string (bash select :245-249 / :317-322).
         if not all(isinstance(fm.get(f), str) for f in _REQUIRED_STRING_FIELDS):
             malformed.append({
                 "path": path,
@@ -438,10 +358,6 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             continue
 
         status = fm["status"]
-        # DR-084 transitional coerce shim (module-level constants' docstring) — old->new
-        # legacy tolerance at ingest. ``superseded`` folds into the old->new map too (both
-        # retired tokens land on ``claimed``), so a single lookup handles all three
-        # legacy/retired inputs.
         if status not in _STATUS_RECOGNIZED:
             malformed.append({
                 "path": path,
@@ -452,7 +368,6 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
         status = _STATUS_OLD_TO_NEW.get(status, status)
 
         deployment_state = fm["deployment_state"]
-        # DR-084 transitional coerce shim (module-level constants' docstring).
         if deployment_state not in _DEPLOYMENT_RECOGNIZED:
             malformed.append({
                 "path": path,
@@ -472,9 +387,6 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             continued_into = None
             closed_reason = None
 
-        # DR-084 transitional coerce shim: legacy consumed_at/consumed_by are read as a
-        # fallback when the new-named field is absent, so old-vocabulary records still
-        # project onto the NEW wire field names below.
         claimed_at = fm.get("claimed_at")
         if claimed_at is None:
             claimed_at = fm.get("consumed_at")
@@ -483,15 +395,11 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
 
         claimed_by = _jq_or(fm.get("claimed_by"), _jq_or(fm.get("consumed_by"), None))
 
-        # _shipped_in_sha temp value: raw frontmatter SHA, coerced to string (bash:299).
         raw_shipped = _jq_or(fm.get("shipped_in"), None)
         shipped_sha_raw = None if raw_shipped is None else str(raw_shipped)
 
         handoff_id, handoff_id_derivation = _resolve_handoff_id(ctx.repo_name, path, fm)
 
-        # Derived from the SAME normalised value that is emitted as `kind` below, not
-        # from `fm.get("kind")` — reading frontmatter a second time here is how the
-        # emitted pair would come to disagree on a record whose `kind:` is absent.
         emitted_kind = _jq_or(fm.get("kind"), "session-handoff")
 
         record = {
@@ -514,75 +422,40 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             "continued_into": continued_into,
             "closed_reason": closed_reason,
             "picked_up_by": _jq_or(fm.get("picked_up_by"), None),
-            # shipped_in / acceptance_criteria enriched below; keep temp SHA under a private key.
             "shipped_in": None,
             "acceptance_criteria": None,
             "deliverable_id": _jq_or(fm.get("deliverable_id"), None),
-            # Dead-join fix (2026-07-21): handoff frontmatter authors `origin_plan_id`
-            # (the `origin_*` convention shared with `origin_goal_id` / `origin_handoff` /
-            # `origin_session`), never the bare `plan_id` key this field used to read — that
-            # key is authored 0 times, so the wire field was always null. `origin_plan_id`
-            # values are `pln-*` ids minted by `coordinator-doc-new --type plan`, identical in
-            # shape to PlanSummary.plan_id and docs/plans/*.md frontmatter `plan_id` — same
-            # join target, only the reader's key name was wrong. The wire field name itself
-            # stays `plan_id` (contract-frozen); `plan_id` is kept as a fallback read for any
-            # future/legacy record that authors the bare key directly.
             "plan_id": _jq_or(fm.get("origin_plan_id"), _jq_or(fm.get("plan_id"), None)),
             "initiative": _jq_or(fm.get("initiative"), None),
             "caption": _jq_or(fm.get("caption"), None),
             "status_reason": _jq_or(fm.get("status_reason"), None),
             "owner": _jq_or(fm.get("owner"), None),
-            "last_meaningful_activity": None,  # emit-DERIVED (LMA); stamped later.
+            "last_meaningful_activity": None,
             "workstream_type": _jq_or(fm.get("category"), None),
-            "shipped_sha": None,  # emit-DERIVED (§1.5 merge-verification); stamped later.
-            "deliverable_status": None,  # emit-DERIVED (§8.16 cross-join); stamped later.
+            "shipped_sha": None,
+            "deliverable_status": None,
             "provenance": ctx.provenance("local_fs", path=path, derivation="parsed"),
-            # Ancestry-origin family (D9 present-as-null; contract-required since 2.10.0 —
-            # see module docstring "Contract-model-load-bearing fix"). Frontmatter authors
-            # these directly, unlike the `plan_id` dead-join above.
             "origin_session": _jq_or(fm.get("origin_session"), None),
             "origin_handoff": _jq_or(fm.get("origin_handoff"), None),
             "origin_plan_id": _jq_or(fm.get("origin_plan_id"), None),
             "origin_goal_id": _origin_goal_id_triples(fm),
-            # roadmap_id (4.2.0): roadmap-baton's only mint-time parent edge —
-            # that kind carries `predecessor: none` from the scaffolder and
-            # acquires a predecessor only at succession, so without this a
-            # consumer cannot place the row. Straight frontmatter passthrough.
             "roadmap_id": _jq_or(fm.get("roadmap_id"), None),
-            # Wire-level handoff_id derivation (C4) — see _resolve_handoff_id/_derive_handoff_id.
             "handoff_id": handoff_id,
             "handoff_id_derivation": handoff_id_derivation,
-            # Priority-ledger resolution (C6a) — suggested_priority is a straight frontmatter
-            # passthrough set here; pm_priority/pm_priority_origin/pm_priority_source_id are
-            # placeholders filled by the resolver pass below (needs the full `records` list
-            # assembled first, so a target's ledger-entry-vs-no-emitted-handoff dangling check
-            # can run against the complete `known_handoff_ids` set).
             "suggested_priority": _jq_or(fm.get("suggested_priority"), None),
             "pm_priority": None,
             "pm_priority_origin": None,
             "pm_priority_source_id": None,
-            # Producer axis (C6a) — model + emit pass-through only; the resolver
-            # that supplies the value is a separate chunk, so this carries null
-            # until that chunk lands.
             "producer": _jq_or(fm.get("producer"), None),
             "_shipped_in_sha": shipped_sha_raw,
         }
-        # Human axis (C9), activation-gated (module docstring). `human_assignee`,
         # `human_claimant`, and `human_owner` are OPTIONAL nullable HandoffSummary
-        # fields (entities/summaries.py) — while the switch is off, the keys never
-        # reach this dict at all (the model's own default=None supplies them for
-        # validation below), so the post-model_dump pop further down and this
-        # omission agree on one shape: no new key on the wire until cockpit has
-        # vendored it.
         if _human_axis_on:
             record["human_assignee"] = _jq_or(fm.get("human_assignee"), None)
             record["human_claimant"] = _jq_or(fm.get("human_claimant"), None)
             record["human_owner"] = _jq_or(fm.get("human_owner"), None)
         records.append(record)
 
-    # Surface the baton_class degrade
-    # (if any) as an observable diagnostic rather than a silent None on every record;
-    # mirrors the dangling-priority-ledger-reference diagnostic pattern below.
     if _baton_class_schema_error is not None:
         malformed.append({
             "path": None,
@@ -592,7 +465,6 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             ),
         })
 
-    # Enrich shipped_in ({sha, date}) via a single git SHA→date resolution (bash §1 step 2/4).
     sha_dates = _resolve_shipped_in_dates(
         ctx, [r["_shipped_in_sha"] for r in records if r["_shipped_in_sha"] is not None]
     )
@@ -604,37 +476,18 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             r["shipped_in"] = None
         r["acceptance_criteria"] = _acceptance_criteria(ctx.repo_root, r["provenance"]["path"])
 
-    # Priority-ledger resolution (C6a) — populates pm_priority/pm_priority_origin/
-    # pm_priority_source_id per record via the SOLE resolver entrypoint
-    # (priority_resolve.resolve_priority); this section never re-implements the
-    # predecessor-spine walk (module docstring, priority_resolve.py). The ledger is
-    # loaded ONCE here (not per-record inside resolve_priority) so the same snapshot
-    # both drives every record's resolution AND backs the dangling-target check below.
     ledger_entries = load_priority_ledger()
     known_handoff_ids = {r["handoff_id"] for r in records}
     repo_root_str = str(ctx.repo_root)
 
-    # C6b perf hoist — the id-index / corpus-wide parent-map build resolve_priority()
-    # would otherwise redo once per record (360x over a real corpus, ~90% of a
-    # 28s aggregation per the profile that motivated this) is invariant for this
-    # whole collect() call; build it ONCE and share it across every record below.
-    # See PriorityResolveCache's own docstring for why this is a pure speed-up, not
-    # a behaviour change.
     priority_cache = PriorityResolveCache(repo_root_str)
 
     def _priority_node_id(meta: dict, node_path: str) -> Optional[str]:
-        # Mirrors the exact derivation used to mint this section's own `handoff_id`
-        # (`_resolve_handoff_id`) so ledger lookups made while walking ancestors key on
-        # the SAME target_id this section emits for those ancestors — see
-        # priority_resolve.py's node_id_fn contract ("pass the SAME derivation the
-        # caller used to key start_target_id itself").
         return _resolve_handoff_id(ctx.repo_name, node_path, meta)[0]
 
     for r in records:
         provenance_path = r["provenance"].get("path")
         if not provenance_path:
-            # No on-disk path to walk the predecessor spine from; fields stay null
-            # (placeholders set at record construction).
             continue
         abs_path = str((ctx.repo_root / provenance_path).resolve())
         try:
@@ -647,18 +500,13 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
                 cache=priority_cache,
             )
         except Exception:
-            # Fail-open, same posture as _query_records' subprocess degrade: a
-            # resolution failure for one record must not abort the whole emission.
             continue
         origin = resolved.get("origin")
         r["pm_priority"] = resolved.get("effective_priority")
         r["pm_priority_origin"] = origin
         r["pm_priority_source_id"] = resolved.get("source_id") if origin == "inherited" else None
 
-    # Dangling-target detection: a ledger entry (target_kind: handoff) whose target_id
     # matches no emitted handoff_id is a REPORTED diagnostic, not a silently-carried or
-    # record-shaped value — the ledger holds assignments for targets defined elsewhere,
-    # never a second work registry (chunk brief, PART 2).
     for target_id, entry in ledger_entries.items():
         if not isinstance(entry, dict) or entry.get("target_kind") != "handoff":
             continue
@@ -672,18 +520,6 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             ),
         })
 
-    # Route every fully-assembled record through the pydantic HandoffSummary model — this is
-    # the fix that makes the model load-bearing (module docstring "Contract-model-load-bearing
-    # fix"): a record whose shape doesn't satisfy the contract (e.g. a future model field this
-    # section forgets to populate) is quarantined here, LOUD, instead of silently reaching the
-    # wire with a missing/wrong-shaped key. `model_dump()` re-serializes back to a plain dict —
-    # downstream envelope code (content-hash stamping, LMA/shipped_sha/deliverable_status
-    # enrichment) expects plain dicts, not model instances.
-    #
-    # pydantic + cockpit_schema deferred to first use here (not module scope) — cockpit_schema
-    # is a large pydantic entity tree (~40ms) that otherwise loads on every eager `ops/__init__`
-    # import even for read-only /pickup callers that never reach validation. Spec:
-    # docs/plans/2026-07-24-canonical-resolution-engine.md task W0-1.
     from pydantic import ValidationError
 
     from coordinator_core.contract.cockpit_schema import HandoffSummary
@@ -692,19 +528,8 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
     for r in records:
         try:
             dumped = HandoffSummary(**r).model_dump()
-            # content_hash is absent-when-absent (schema: plain "type": "object", NOT
-            # `anyOf`-null — unlike additional_predecessors/forked_from's genuine
-            # `.nullable().optional()` combo). This section never populates it (stamped
-            # later by envelope._stamp_content_hash, or left OMITTED when unresolvable);
-            # `model_dump()` always materializes a default=None field, so strip the key
-            # back out rather than emit a schema-invalid explicit null.
             if dumped.get("content_hash") is None:
                 dumped.pop("content_hash", None)
-            # Human axis (C9), activation-gated: strip the model's own default=None
-            # materialization for human_assignee/human_claimant/human_owner whenever
-            # the switch is off, so a flag-OFF emission carries none of the keys at
-            # all — the behavioural leg of AC7 (byte-identical to today's shape)
-            # depends on this pop, not just on the raw-dict omission above.
             if not _human_axis_on:
                 dumped.pop("human_assignee", None)
                 dumped.pop("human_claimant", None)

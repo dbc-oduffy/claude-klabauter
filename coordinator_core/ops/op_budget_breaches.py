@@ -112,150 +112,36 @@ __all__ = [
     "headline_for",
 ]
 
-#: Bound on rows read from the current generation. Same number and same
 #: discipline as `op_census_report.MAX_TELEMETRY_ROWS`, restated rather than
-#: imported: importing it would drag this telemetry-only op's import graph
-#: through `module_summary`/`line_count`/`spawn_bearing_ops` for one integer.
-#: `coordinator_core.telemetry.tests.test_breach_summary` asserts the two
-#: numbers still agree.
 MAX_TELEMETRY_ROWS = 200_000
 
 #: The bound that actually bites. `MAX_TELEMETRY_ROWS` sits at 200,000
-#: against a live generation of ~47,000 rows, so it bounds nothing today and
-#: the parse cost tracks sink growth instead — measured 140-219ms over the
-#: whole current generation on 2026-08-21, already brushing DR-344's 200ms
-#: per-process bar and rising as peers appended during the session. 6MB of
-#: tail is ~21,000 rows and roughly a day of traffic at this box's load norm,
-#: parses in well under half that budget, and stays flat as the sink grows.
-#: Recency is what a breach view needs: the newest rows carry the trend, and
-#: `source.head_truncated` says plainly when older ones went unread.
 MAX_TAIL_BYTES = 6 * 1024 * 1024
 
-#: Ranked rows returned by default. The list is a work queue for deletions,
-#: not a dashboard — `totals.breaching_ops` always carries the untruncated
-#: count, so a short list can never read as a clean box.
 DEFAULT_TOP_N = 20
 
 #: How an op DECLARES that one of its arms spends its time on a remote, so
-#: this view can stop prescribing a remedy that arm cannot take. An op splits
-#: its own telemetry into arms and names them itself (`push_outstanding`'s
 #: `_ARM_NOOP`/`_ARM_NETWORK` is the worked example); an arm named with this
-#: suffix is the op saying "this half is a round trip, not local work".
-#:
-#: This is deliberately NOT a denylist of op names.
-#: `telemetry.op_latency.breach_summary`'s own docstring rules that out — "no
-#: name-based denylist belongs here — a hardcoded op-name list is exactly what
-#: the `origin` field replaced" — and a central list here would be that
-#: denylist under another name, maintained away from the op it describes and
-#: stale the moment an op is renamed. The suffix travels WITH the emitting op,
-#: in the row the op itself writes, so opting in is a local edit at the arm and
-#: nothing here needs to know the op exists.
-#:
-#: What it changes is the remedy clause ONLY. A network arm still counts as a
-#: breach, still carries its stolen_ms, and still ranks — the numbers are
-#: honest and this does not hide them
-#: (`state/audits/2026-08-27-push-outstanding-breach-is-network-time.md` is
-#: explicit that the view reports what it measures). What was wrong was the
-#: imperative: "Delete it, or rebuild it under the bar" is unactionable for a
-#: cost that is one round trip to a remote, and an operator who reads it at
-#: every session boot either deletes a healthy op or learns to ignore the line.
 NETWORK_ARM_SUFFIX = ".network"
 
-#: DR-344 constraint 1 and constraint 7 — this op asserts against both.
 BRIGHTLINE_BUDGET_MS = 500.0
 PER_PROCESS_BAR_MS = 200.0
 
-#: The register cap `headline_for` is held to (`docs/wiki/guard-messaging.md`
-#: § Register). Structural, not test-observed: `headline_for` computes the
-#: byte budget left for the op name AFTER every fixed-width field (counts,
-#: `bar_ms`, the two `stolen_ms` figures, `trend`, the remedy clause) and
-#: elides the op name to fit, so a longer registered op name shrinks the
-#: display rather than growing the banner past this cap. Review finding:
-#: `state/subagent-share/d49845f9-5fa3-4ee1-97cd-816c1ae75793/coordinatorcode-reviewer.a6a0df83ba2cb4da6.md`
-#: (Finding 3) — the prior cap was arithmetic the author had to re-verify by
-#: hand on every wording change, with no guard against a longer op name.
 MAX_HEADLINE_BYTES = 220
 
-#: Appended when `_fit_op_name` elides an op name — never a claim the op is
-#: unknown, only that the display cut it short. Single-character and ASCII
-#: so it never itself becomes the reason a byte budget is missed.
 _OP_TRUNC_MARKER = "~"
 
-#: What `trend` reads when the generation was read from the tail and older
-#: rows in it went unread. `_trend` splits the rows IT WAS GIVEN into two
-#: halves, so on a truncated read both halves sit inside the tail and a rise
-#: that happened before the window is not merely unmeasured — it is invisible,
-#: and the surviving rows can be genuinely flat against each other. The
-#: direction is then unsupported in the one way that matters: it reads "flat"
-#: for an op that is getting worse.
-#:
-#: Observed, not hypothesised. `ceremony.scoped_git_commit` reported "flat"
-#: off a 6MB tail of a 14.8MB generation with 78.6MB of rotated history never
-#: read, while a full-generation read showed hourly p50 going 3-8s to 85.4s on
-#: the same day (claude-klabauter-84, session 6d3e6581, 2026-08-21).
-#:
 #: This is `TREND_MIN_ATTEMPTS_PER_HALF`'s rule applied to the other axis:
-#: that constant refuses a direction when a half-window holds too FEW rows,
-#: and this refuses one when the window itself is a fraction of the
-#: generation. Both say "insufficient", never "flat" — reading "flat" off a
-#: sample that cannot support it is the false-pass `op_census.timing`'s
-#: three-state rule forbids.
-#:
-#: Negative-spec: this does NOT widen the read. Reading the whole corpus to
-#: earn a trend would put 90+MB behind a 500ms op, which is the trade DR-344
-#: refuses. The op stays cheap and stops claiming what a cheap read cannot
-#: support; an unqualified direction is the thing being deleted here, not the
-#: bound that made it unqualified.
 TREND_WINDOW_LIMITED = "window_limited"
 
-#: Minimum completed-and-all--32601 attempts before a "dead dial" is reported.
-#: Measured spread, not a guess: the motivating leak (`session.warm_start`,
-#: gravestoned twice, a SessionStart hook still dialling it) logged 73
 #: METHOD_NOT_FOUND completions over 33 hours; every other -32601-only op
-#: measured on this repo's current generation on 2026-08-30 (a human mistyping
-#: an op name at a CLI, or a test fixture dialling a name that never existed)
-#: topped out at 2. 10 sits with wide headroom above the human-typo ceiling and
-#: wide headroom below the machine-loop floor.
-#:
-#: Applied per op, summed across every caller — a leak split between two
-#: callers (e.g. a pool dispatcher and a CLI invoker) is still caught; see
-#: `dead_dial_findings`'s accumulator, keyed by `op` alone.
-#:
-#: Scope, stated plainly: this is a threshold on ONE bounded-tail read
 #: (`MAX_TAIL_BYTES`, current generation only — see module docstring's
-#: negative-spec), never on an op's true lifetime attempt count.
-#: `op_census.breaches` does not accumulate across generations or across
-#: separate invocations — doing so would mean a second sink read, which the
-#: negative-spec rules out and which would put a multi-generation parse (tens
-#: of MB) over DR-344's 500ms bar. At this sink's measured growth
-#: (`telemetry/log_rotation.py`, ~7.3MB/day against a 6MB tail), the real
-#: detection window is ~20 hours, not "a generation" and not "per-op
-#: lifetime". Reaching 10 inside that window needs a leak sustaining roughly
-#: >=0.5 dials/hour — both known leaks clear it comfortably (`session.
-#: warm_start` ~2.2/h, `ops.list` ~3.4/h), and a hook firing per session start
-#: on a ~50-session box clears it easily too.
-#:
-#: Accepted limit, not a bug: a leak slower than ~0.5/hour, or one that ends
-#: near a rotation boundary before accumulating 10 completions in a single
-#: tail window, will not fire here. Catching that shape would require reading
-#: rotated history, which this op deliberately does not do (see module
-#: docstring's negative-spec and the plan's Out of scope). A caller that needs
-#: to catch a slower leak is expected to poll `op_census.breaches`
-#: repeatedly and read this threshold as "10 in one window", never "10 ever".
 DEAD_DIAL_MIN_ATTEMPTS = 10
 
-#: Caller-module prefix excluded from dead-dial detection entirely — a test
-#: suite dialling a nonexistent op on purpose (`no.such.op`,
-#: `test.this_op_does_not_exist_anywhere`) is not a caller that needs fixing.
-#: The `caller` field is what separates a hook looping in production from a
 #: test fixture exercising the METHOD_NOT_FOUND path deliberately.
 TEST_CALLER_PREFIX = "coordinator_core.tests."
 
 #: `dead_dials.ledger_status` values. `LEDGER_ABSENT` is a distinguishable
-#: result from "the ledger was read and nothing qualified" — the published
-#: mirror ships `coordinator_core/` without claude-klabauter's `state/` corpus (see
-#: `kill_ledger_inventory`'s own docstring), and rendering that as an empty
-#: `findings` list would turn a published mirror into a silent all-clear.
 DEAD_DIAL_LEDGER_OK = "ok"
 DEAD_DIAL_LEDGER_ABSENT = "absent"
 
@@ -374,24 +260,6 @@ def _join_ledger_fate(findings: List[dict]) -> dict:
 
 
 def _tail_entries(path: Path, *, tail_bytes: int, max_rows: int):
-    """Parse the LAST `tail_bytes` of one JSONL generation, newest rows kept.
-
-    Why a byte bound and not `engine_report.iter_sink_entries`'s row bound:
-    that reader walks generations OLDEST-first and caps total lines read, a
-    shape its own docstring flags as unable to protect recency, and a row cap
-    set above the live row count (200,000 against ~47,000 today) bounds
-    nothing at all — the parse cost tracks sink GROWTH, and this op is held to
-    DR-344's 200ms per-process bar. Measured 2026-08-21: parsing the whole
-    current generation cost 140-219ms and rose across the session as peers
-    appended. A byte bound is flat against growth.
-
-    No semantics live here. Which rows count, and as what, is entirely
-    `op_latency.breach_summary`'s — this returns raw dicts and nothing else,
-    so there is no second opinion about a row to drift from the first.
-
-    The first line after the seek is almost always a partial row and is
-    dropped. Never raises: a missing or unreadable generation yields nothing.
-    """
     import json
 
     entries: List[dict] = []
@@ -411,7 +279,7 @@ def _tail_entries(path: Path, *, tail_bytes: int, max_rows: int):
                 try:
                     entry = json.loads(line.decode("utf-8", errors="replace"))
                 except (json.JSONDecodeError, ValueError):
-                    continue  # malformed log line; a truncated/hand-edited record is skipped, not fatal to the scan
+                    continue
                 if isinstance(entry, dict):
                     entries.append(entry)
     except OSError:
@@ -420,11 +288,6 @@ def _tail_entries(path: Path, *, tail_bytes: int, max_rows: int):
 
 
 def _current_generation_paths(repo_root: Path) -> List[Path]:
-    """The newest op-latency generation only, as a one-element list.
-
-    Never raises: an unresolvable sink degrades to an empty list, matching
-    `op_census_report._read_current_generation_entries`'s failure discipline.
-    """
     try:
         return sink_generations(repo_root)[:1]
     except OSError:
@@ -469,8 +332,6 @@ def _fit_op_name(op: str, budget_bytes: int) -> str:
     keep = budget_bytes - len(marker_bytes)
     if keep <= 0:
         return _OP_TRUNC_MARKER[:budget_bytes]
-    # errors="ignore" drops a byte-split multi-byte char at the cut point
-    # rather than raising — a display truncation must never crash the op.
     return op_bytes[:keep].decode("utf-8", errors="ignore") + _OP_TRUNC_MARKER
 
 
@@ -527,9 +388,6 @@ def headline_for(summary: dict) -> str:
         f"{worst['breaches']}/{worst['attempts']}, {worst['trend']}). "
         + remedy
     )
-    # Structural cap: the op name is the only unbounded-length field in this
-    # line, so it is the one elided to make the 220-byte register cap hold
-    # for every registered op name, not just the ones exercised by a test.
     op_budget = MAX_HEADLINE_BYTES - len(prefix.encode("utf-8")) - len(suffix.encode("utf-8"))
     return prefix + _fit_op_name(worst["op"], op_budget) + suffix
 
@@ -582,11 +440,6 @@ def breach_report(
         "max_rows": MAX_TELEMETRY_ROWS,
         "rows_capped": rows_capped,
         "tail_bytes": MAX_TAIL_BYTES,
-        # True means older rows in this same generation went unread. Every
-        # figure above is then "within the read window", not all-time —
-        # `window.first_seen` in particular is the oldest row READ, never the
-        # op's true first sighting. Reported so a bounded read can never be
-        # mistaken for a whole-corpus one.
         "head_truncated": head_truncated,
         "top_n": top_n,
     }
@@ -594,11 +447,7 @@ def breach_report(
     dead_dials = _join_ledger_fate(dead_dial_findings(entries))
     dead_dials["min_attempts"] = DEAD_DIAL_MIN_ATTEMPTS
     dead_dials["window"] = {
-        # Reuses `source`'s own bound machinery — never a parallel figure to
-        # drift from it. Tells a reader what the `min_attempts` count above
-        # was measured OVER: a single bounded-tail read of the current
         # generation, not the op's lifetime. See DEAD_DIAL_MIN_ATTEMPTS's
-        # docstring for the ~20-hour/~0.5-per-hour arithmetic this implies.
         "generation": sink_name,
         "head_truncated": head_truncated,
     }
@@ -607,14 +456,6 @@ def breach_report(
     handler_total_ms = (time.process_time() - handler_t0) * 1000.0
     summary["self_assessment"] = {
         "handler_total_ms": round(handler_total_ms, 3),
-        # Empirically-observed tick size of THIS process's `time.process_time()`
-        # (see `process_clock_resolution_ms`'s own docstring for why this is
-        # read, never probed, and never `time.get_clock_info`'s nominal unit).
-        # `None` until some `process_time` row has been recorded in this
-        # process -- a real absence, not a claim of infinite precision.
-        # Exposed so a reader can judge `handler_total_ms` against the tick
-        # that actually produced it, the same honesty `source.head_truncated`
-        # gives a bounded read -- see module docstring's negative-spec.
         "clock_resolution_ms": process_clock_resolution_ms(),
         "brightline_budget_ms": BRIGHTLINE_BUDGET_MS,
         "per_process_bar_ms": PER_PROCESS_BAR_MS,
@@ -625,13 +466,6 @@ def breach_report(
 
 
 def _read_params(params: dict) -> Optional[int]:
-    """Validate `params`, returning `top_n`.
-
-    `bar_ms` is REFUSED, not ignored. Accepting it would let any caller
-    produce a clean report by naming a bar the op already fits — the report
-    would be true of the number supplied and useless as evidence, and the
-    refusal is cheaper than a footnote nobody reads.
-    """
     if not isinstance(params, dict):
         return DEFAULT_TOP_N
 

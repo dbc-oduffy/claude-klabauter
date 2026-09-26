@@ -104,50 +104,25 @@ from typing import List, Optional, Sequence, Union
 
 from coordinator_core.search.engine import MAX_RENDER_BYTES, Unanswerable
 
-#: Literal tokens PowerShell itself resolves to `Get-Content` -- matched
-#: case-insensitively (PowerShell cmdlet/alias names are case-insensitive by
-#: language design, the same convention `_dialect.py`'s own
 #: `_START_PROCESS_NAMES` documents).
 _CONTENT_VERBS = frozenset({"get-content", "cat", "gc", "type"})
 
-#: Literal tokens PowerShell itself resolves to `Get-ChildItem`.
 _CHILDITEM_VERBS = frozenset({"get-childitem", "gci", "ls", "dir"})
 
-#: `Get-Content` flags that change the BYTES produced -- fail closed by name
-#: (module docstring negative-spec).
 _UNSUPPORTED_CONTENT_FLAGS = frozenset({
     "-raw", "-encoding", "-stream", "-delimiter", "-wait", "-force",
     "-filter", "-include", "-exclude", "-credential", "-readcount",
 })
 
-#: `-TotalCount`/`-First` share one arity (leading-N-lines); `-Tail`/`-Last`
-#: share the other (trailing-N-lines). `-First`/`-Last` are the unambiguous
-#: prefix-abbreviations the real cmdlet also accepts.
 _HEAD_FLAGS = frozenset({"-totalcount", "-first"})
 _TAIL_FLAGS = frozenset({"-tail", "-last"})
 
-#: Redirection operators PowerShell recognizes -- exact-match tokens, same
-#: discipline `sources_read.py`/`sources_listdir.py` already apply to bash's
-#: own redirect set.
 _REDIRECT_EXACT = frozenset({">", ">>", "<", "2>", "2>>", ">&1", "*>", "*>>"})
 
-#: Substring markers for PowerShell's subexpression/command-substitution-
-#: shaped escapes -- checked via containment, since these can appear glued to
-#: other characters (`$(cmd)`, a backtick escape, `<(cmd)`, a bare `$var`).
 _SUBSTITUTION_MARKERS = ("$(", "`", "<(", "$")
 
-#: Statement/pipe boundary tokens -- `_dialect.py`'s own "Output shape"
-#: section documents `;`/`&`/`|` as the punctuation its PowerShell tokenizer
-#: emits for exactly these boundaries. A bare `&` surviving into operand
-#: position here (rather than being consumed as a leading no-op separator by
-#: the shared segmenter) is the call-operator/background escape this module
-#: must still refuse by name.
 _STATEMENT_BOUNDARY = frozenset({";", "&", "|"})
 
-#: Non-filesystem PSDrive provider path -- `Env:`/`Registry::`/`Function:`/
-#: `Cert:`/`WSMan:`/`Variable:`/`Alias:`, or a bare `Provider::path`. An
-#: `Env:` read is not a file read (module docstring negative-spec, verbatim
-#: from the dispatch brief).
 _NON_FILESYSTEM_PROVIDER_RE = re.compile(
     r"^(?:[A-Za-z][A-Za-z0-9_]*::|(?:Env|Registry|Function|Variable|Alias|"
     r"Cert|WSMan)\:)",
@@ -158,10 +133,6 @@ _GLOB_METACHARS = ("*", "?", "[")
 
 
 def _reject_escapes(tokens: Sequence[str]) -> None:
-    """Decline, by name, any operand-position token that is a redirection,
-    substitution, statement-boundary, or non-filesystem-provider escape --
-    checked before any per-shape parser looks at what remains of the operand
-    list, same discipline `sources_read.py`/`sources_listdir.py` apply."""
     for tok in tokens:
         if tok in _REDIRECT_EXACT:
             raise Unanswerable("redirection token %r in PowerShell read command" % tok)
@@ -188,34 +159,14 @@ def _resolve_operand(operand: str, cwd: str) -> str:
     return base
 
 
-# --------------------------------------------------------------------------- Get-Content
-
-
 @dataclass
 class ContentSpec:
-    """A parsed `Get-Content` invocation, not yet resolved against a cwd or
-    read."""
 
     operand: str
     head_count: Optional[int] = None
     tail_count: Optional[int] = None
 
     def produce(self, cwd: str = ".", newline: str = "\r\n") -> str:
-        """Resolve the operand and return the text the real host would print.
-
-        `newline` is an explicit, named argument (never a silently-baked
-        default the caller cannot override) -- `Get-Content` renders one
-        line-object per source line joined by the HOST's own line ending, not
-        necessarily the file's own terminator. A caller that cannot establish
-        which line ending the real host would use must not call this with a
-        guessed value (see module docstring negative-spec).
-
-        Raises `Unanswerable` for a missing/non-regular/unreadable operand, an
-        oversized file, or content that does not decode as strict UTF-8 --
-        the same decoding discipline `sources_read._read_text_strict` applies,
-        for the same reason: the deliverable IS the bytes, not a search
-        result a mojibake substitution could tolerate.
-        """
         path = _resolve_operand(self.operand, cwd)
         text = _read_text_strict(path)
         lines = text.splitlines()
@@ -231,9 +182,6 @@ class ContentSpec:
 
 
 def parse_content_segment(tokens: Sequence[str]) -> ContentSpec:
-    """Parse one `Get-Content`-family argv into a `ContentSpec`, or raise
-    `Unanswerable`. Does not touch the filesystem -- see `ContentSpec.produce`.
-    """
     if not tokens:
         raise Unanswerable("empty PowerShell read segment")
     verb = tokens[0].lower()
@@ -309,14 +257,6 @@ def _read_text_strict(path: str) -> str:
         raise Unanswerable("cannot read %r: %s" % (path, exc))
     if b"\x00" in data:
         raise Unanswerable("%r does not decode as text (NUL byte found)" % path)
-    # Strip a UTF-8 BOM, because real `Get-Content` does. This is NOT the same policy as
-    # `sources_read`, and the divergence is deliberate: `cat` prints a BOM straight
-    # through as bytes, while PowerShell's provider consumes it as an encoding mark and
-    # never emits it. Decoding "the same way for both" would be the bug -- fidelity here
-    # means matching the command being stood in for, not matching our other source.
-    # Caught by test_get_content_utf8_with_bom, differentially against pwsh 7.6.5: a
-    # leaked U+FEFF renders as an invisible leading character on the first line, so the
-    # agent has no way to see that the body it was handed is not what the host prints.
     if data.startswith(b"\xef\xbb\xbf"):
         data = data[3:]
     try:
@@ -325,23 +265,13 @@ def _read_text_strict(path: str) -> str:
         raise Unanswerable("%r does not decode as UTF-8: %s" % (path, exc))
 
 
-# --------------------------------------------------------------------------- Get-ChildItem
-
-
 @dataclass
 class ChildItemSpec:
-    """A parsed `Get-ChildItem` invocation: which directory. No flags are
-    accepted at all (module docstring negative-spec) -- there is no analogue
-    to `sources_listdir.LsSpec.show_all` here, since `-Force` (the closest
-    PowerShell equivalent) is explicitly declined rather than modeled."""
 
     directory: str = "."
 
 
 def parse_childitem_segment(tokens: Sequence[str]) -> ChildItemSpec:
-    """Parse one `Get-ChildItem`-family argv into a `ChildItemSpec`, or raise
-    `Unanswerable`. Accepts only: bare, or with a single non-flag directory
-    operand. Everything else declines by name."""
     if not tokens:
         raise Unanswerable("empty PowerShell listing segment")
     verb = tokens[0].lower()
@@ -365,16 +295,6 @@ def parse_childitem_segment(tokens: Sequence[str]) -> ChildItemSpec:
 
 
 def run_childitem(spec: ChildItemSpec, cwd: str = ".") -> List[str]:
-    """Execute a `ChildItemSpec`, returning the entry names real
-    `Get-ChildItem` would print for a non-`-Force` listing.
-
-    Windows-only (module docstring negative-spec: the enumeration-order
-    equivalence this relies on -- `os.scandir`/`os.listdir` and .NET's
-    directory enumeration both reading the same NTFS index via
-    `FindFirstFileW`/`FindNextFileW` -- does not hold on any other platform).
-    Declines (raises `Unanswerable`) on a nonexistent path, a file operand, an
-    unreadable directory, or any platform other than Windows.
-    """
     if sys.platform != "win32":
         raise Unanswerable("Get-ChildItem enumeration order is only reproduced on win32")
 
@@ -397,18 +317,12 @@ def run_childitem(spec: ChildItemSpec, cwd: str = ".") -> List[str]:
 
 
 #: `FILE_ATTRIBUTE_HIDDEN` (0x2) | `FILE_ATTRIBUTE_SYSTEM` (0x4) -- the two
-#: attributes `Get-ChildItem` excludes by default (i.e. without `-Force`).
 _FILE_ATTRIBUTE_HIDDEN = 0x2
 _FILE_ATTRIBUTE_SYSTEM = 0x4
 _INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
 
 
 def _is_hidden_or_system_windows(path: str) -> bool:
-    """True iff `path` carries the Windows Hidden or System attribute --
-    the two `Get-ChildItem` excludes by default. Only ever called on win32
-    (see `run_childitem`'s own guard); never raises -- an attribute query
-    that fails is treated as "not hidden" rather than aborting the whole
-    listing over one unreadable entry's metadata."""
     import ctypes
 
     try:
@@ -420,15 +334,7 @@ def _is_hidden_or_system_windows(path: str) -> bool:
     return bool(attrs & (_FILE_ATTRIBUTE_HIDDEN | _FILE_ATTRIBUTE_SYSTEM))
 
 
-# --------------------------------------------------------------------------- dispatch
-
-
 def parse_powershell_segment(tokens: Sequence[str]) -> Union[ContentSpec, ChildItemSpec]:
-    """Parse one PowerShell argv into a `ContentSpec` or `ChildItemSpec`,
-    dispatching on its first token, or raise `Unanswerable`. The single entry
-    point a wiring layer (C11) calls once it has already tokenized/segmented
-    a PowerShell command via `_dialect.tokenize_command`/
-    `resolve_segments_for_dialect`."""
     if not tokens:
         raise Unanswerable("empty PowerShell segment")
     verb = tokens[0].lower()

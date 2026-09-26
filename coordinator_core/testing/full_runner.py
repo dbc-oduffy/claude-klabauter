@@ -1,35 +1,3 @@
-"""
-coordinator_core.testing.full_runner — CLI entrypoint orchestrating C1
-discovery (`collect.discover`) and C2 execution (`run.run_suites`).
-
-Purpose: owns the DEC-1 exit contract (a directly-runnable Python CLI, never
-routed through `cc_invoke`/`strangle_route` — no exit-masking green-wash) and
-the DEC-10 fail-loud reporting: discover -> filter by --families -> for each
-family named by --expect with zero matched files, emit a loud warning AND
-mark the run failed (AC7); families NOT named by --expect that are empty get
-a warning only and the run stays green (AC9) ->
-run -> stream per-suite PASS/FAIL as suites complete -> emit a final
-machine-scannable tally line. Process exit is 0 iff every dispatched suite
-passed AND no `--expect`-named family was empty.
-
-Port source: none — net-new (DR-059 harness authoring).
-Spec backlink: pln-claude-klabauter-python-full-test-runner-f8ca5a § C3 (DEC-1, DEC-10)
-
-Negative-spec:
-    - Is NOT a shell polyglot trampoline (Finding 7) — a normal importable
-      Python module invoked as `python3 -m coordinator_core.testing.full_runner`
-      (DEC-11), with a plain `def main(argv) -> int` and a
-      `if __name__ == "__main__": sys.exit(main(sys.argv[1:]))` tail.
-    - Does NOT silently green an `--expect`-named empty family (AC7) — an
-      empty family named by `--expect` always flips the exit non-zero,
-      regardless of whether every dispatched suite otherwise passed.
-    - Does NOT fail on an empty family that `--expect` did not name (AC9) —
-      `--repo .` with no `--expect` (claude-klabauter's own self-run, 3 of 4 families
-      legitimately empty) stays green; this is the DEC-10 default warn-not-fail.
-    - Does NOT swallow C2's fail-loud discipline (missing runner rc 127,
-      timeout rc 124) — those are just failed suites folded into the same
-      tally and exit contract as any other failure.
-"""
 
 from __future__ import annotations
 
@@ -49,14 +17,9 @@ logger = logging.getLogger(__name__)
 
 
 def _git_toplevel(cwd: Path) -> Path:
-    """Resolve the git toplevel of `cwd`, falling back to `cwd` itself if the
-    lookup fails (e.g. not inside a git working tree)."""
     top = show_toplevel(str(cwd))
     if top:
         return Path(top)
-    # Debug (not warning): running outside a git working tree is a
-    # routine, expected case (see docstring's fallback contract), not a
-    # fault worth surfacing on every normal invocation.
     logger.debug("full_runner: git toplevel lookup at %s failed, using cwd", cwd)
     return cwd
 
@@ -109,9 +72,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _resolve_expect_families(expect: Sequence[str] | None) -> frozenset[str] | None:
-    """Resolve `--expect` values to a concrete family set. `None` means unset
-    (DEC-10 default: warn-not-fail on empty families). `["all"]` (or a
-    literal `"all"` anywhere in the list) expands to every known family."""
     if expect is None:
         return None
     if any(name == "all" for name in expect):
@@ -148,9 +108,6 @@ def main(argv: list[str]) -> int:
     present_families = _families_present(suites)
     expect_failed = False
 
-    # DEC-10: iterate every requested family (not just the --expect subset) so
-    # an empty family outside --expect still gets its warn-only message (AC9);
-    # only membership in expect_families decides fail-vs-warn per family.
     for family in sorted(requested_families):
         if family not in present_families:
             if expect_families is not None and family in expect_families:
@@ -165,22 +122,8 @@ def main(argv: list[str]) -> int:
                     file=sys.stderr,
                 )
 
-    # DR-088 layer 6 (R10, 2026-07-28). The mutex shipped and the guard's
-    # deny leg consumed it correctly, but nothing ever CALLED acquire(), so
-    # holder() always returned None and no suite run was ever serialized
-    # against any other -- the module was live, the wiring was not. This is
-    # the take side: full_runner is the one path in this repo that runs whole
-    # suites concurrently against a shared tree, which is the exact harm
     # DR-088 was raised over (concurrent runs producing CORRUPTED results,
-    # not merely slow ones).
-    #
-    # Waiting, not failing, is deliberate: a second runner blocked here is a
-    # queued run, and aborting it would turn a resource control into a
     # correctness-irrelevant failure. ``suite_mutex.MUTEX_WAIT_SECS`` bounds
-    # the wait so a stale-but-not-yet-reclaimable holder cannot wedge a run
-    # forever; a timed-out acquire proceeds unserialized rather than
-    # refusing, matching the fail-OPEN posture the guard's own mutex leg
-    # takes.
     owner = suite_mutex.mutex_owner("full_runner")
     start = time.monotonic()
     with suite_mutex.held(owner, "full_runner", timeout=suite_mutex.MUTEX_WAIT_SECS) as acquired:

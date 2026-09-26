@@ -1,20 +1,3 @@
-"""coordinator/bin/tests/test_publish_batch_delta_honest_reporting.py —
-regression tests for the three publish-driver deliverables in this task:
-
-  1. Batch (`main()`'s `requested_names` comma-split) — a comma-separated
-     `target` CLI arg selects exactly the named rows, not a substring/single
-     match, without raising on a multi-name request.
-  2. Delta (`delta_row_unchanged`, `compute_delta_invalidation_signature`,
-     `write_delta_record`/`load_delta_record`) — a row is provably-unchanged
-     only when EVERY one of signature/source-sha/dest-HEAD/clean-tree holds;
-     any single mismatch (a store/code signature change, a source commit, a
-     destination commit, or destination drift) forces "do not skip".
-  3. Honest change reporting (`files_differ`) — byte-identical content is
-     "unchanged" even when the source's mtime is far newer than the
-     destination's (the git-archive-materialization case this fixes).
-
-Run: python -m pytest coordinator/bin/tests/test_publish_batch_delta_honest_reporting.py -q
-"""
 
 from __future__ import annotations
 
@@ -27,8 +10,6 @@ from pathlib import Path
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -71,16 +52,12 @@ def _commit_all(path: Path, message: str) -> str:
     return _git("rev-parse", "HEAD", cwd=path)
 
 
-# ---------------------------------------------------------------------------
-# Deliverable 3 — honest change reporting.
-# ---------------------------------------------------------------------------
 def test_files_differ_ignores_mtime_when_bytes_identical(tmp_path):
     src = tmp_path / "src.txt"
     dst = tmp_path / "dst.txt"
     dst.write_text("same content", encoding="utf-8")
     time.sleep(0.05)
     src.write_text("same content", encoding="utf-8")
-    # src is strictly newer than dst here, but bytes are identical.
     assert src.stat().st_mtime >= dst.stat().st_mtime
     assert publish.files_differ(src, dst) is False
 
@@ -99,9 +76,6 @@ def test_files_differ_true_when_dst_missing(tmp_path):
     assert publish.files_differ(src, tmp_path / "absent.txt") is True
 
 
-# ---------------------------------------------------------------------------
-# Deliverable 1 — batch: comma-separated target selection in main()'s loop.
-# ---------------------------------------------------------------------------
 def test_requested_names_comma_split_selects_exact_names():
     class FakeArgs:
         target = "claude-klabauter,claude-klabauter-bin"
@@ -111,8 +85,6 @@ def test_requested_names_comma_split_selects_exact_names():
         [n.strip() for n in args.target.split(",") if n.strip()] if args.target else []
     )
     assert requested_names == ["claude-klabauter", "claude-klabauter-bin"]
-    # Substring match must NOT select a sibling row that merely shares a
-    # prefix (e.g. "claude-klabauter-lib" must not match "claude-klabauter").
     assert "claude-klabauter-lib" not in requested_names
 
 
@@ -127,9 +99,6 @@ def test_requested_names_empty_means_unfiltered():
     assert requested_names == []
 
 
-# ---------------------------------------------------------------------------
-# Deliverable 2 — delta invalidation + row-unchanged proof.
-# ---------------------------------------------------------------------------
 def test_delta_record_round_trip(tmp_path):
     setup_dir = tmp_path / "setup"
     publish.write_delta_record(
@@ -216,8 +185,6 @@ def test_delta_row_unchanged_false_on_signature_mismatch(tmp_path, monkeypatch):
     publish.write_delta_record(
         setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
     )
-    # A different signature (store or transform code changed) must
-    # invalidate the row even though source/dest are untouched.
     assert publish.delta_row_unchanged(setup_dir, target, "sigB", {}) is False
 
 
@@ -247,9 +214,6 @@ def test_delta_row_unchanged_false_when_source_advances(tmp_path, monkeypatch):
 
 
 def test_delta_row_unchanged_false_when_destination_drifts(tmp_path, monkeypatch):
-    """Repo-mode (non-mirror) destination: the clean-tree condition still
-    applies in full — a `--delta` publish must never let a skip paper over
-    a human's uncommitted edit sitting in a REPO-mode destination."""
     setup_dir = tmp_path / "setup"
     source_repo = tmp_path / "source"
     dest_repo = tmp_path / "dest"
@@ -260,8 +224,6 @@ def test_delta_row_unchanged_false_when_destination_drifts(tmp_path, monkeypatch
     (dest_repo / "f.txt").write_text("payload", encoding="utf-8")
     _commit_all(dest_repo, "dest init")
 
-    # "manifest" is declared non-mirror-like (is_mirror_like=False) in
-    # percolate.publish_modes — a repo-mode destination for this check.
     target = _make_target("sample", dest_repo, source_repo, mode="manifest")
     monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
 
@@ -271,28 +233,11 @@ def test_delta_row_unchanged_false_when_destination_drifts(tmp_path, monkeypatch
         setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
     )
 
-    # Someone edited the published tree without committing — HEAD is
-    # unchanged, but the working tree is now dirty. Must NOT skip.
     (dest_repo / "f.txt").write_text("edited by hand", encoding="utf-8")
     assert publish.delta_row_unchanged(setup_dir, target, "sigA", {}) is False
 
 
-# ---------------------------------------------------------------------------
-# Mirror-mode clean-tree exemption (bug-backlog
-# 2026-08-10-delta-is-unreachable-on-publish-mirrors-56a2531183a3.yaml) — a
-# publish mirror's working tree carries the drift of every prior publish
-# forever (C5/C6 of the swap plan never commit published bytes into it), so
-# the clean-tree condition can never hold there and must not gate a mirror
-# row's skip decision. The other four legs (dest-dir exists, store+
-# transform signature, source HEAD, destination HEAD) still do the real
-# work.
-# ---------------------------------------------------------------------------
 def test_delta_row_unchanged_true_for_mirror_row_despite_dirty_tree(tmp_path, monkeypatch):
-    """The genuinely-unchanged direction: a mirror row whose destination
-    carries the pipeline's own uncommitted prior-publish drift (dirty
-    working tree, HEAD unmoved) must still be provably unchanged and SKIP —
-    this is the exact case that was previously unreachable (measured: a
-    --delta run against an unchanged mirror row re-synced 189 files)."""
     setup_dir = tmp_path / "setup"
     source_repo = tmp_path / "source"
     dest_repo = tmp_path / "dest"
@@ -312,17 +257,11 @@ def test_delta_row_unchanged_true_for_mirror_row_despite_dirty_tree(tmp_path, mo
         setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
     )
 
-    # The mirror pipeline's own prior-publish output sitting uncommitted —
-    # exactly the permanent-drift state C5/C6 leave behind. HEAD is
-    # unmoved. Must skip.
     (dest_repo / "f.txt").write_text("prior publish's own uncommitted output", encoding="utf-8")
     assert publish.delta_row_unchanged(setup_dir, target, "sigA", {}) is True
 
 
 def test_delta_row_unchanged_false_for_mirror_row_when_source_advances(tmp_path, monkeypatch):
-    """The genuinely-changed direction: even with the clean-tree leg
-    exempted, a mirror row whose SOURCE moved must NOT skip — a --delta
-    that skips a changed row would publish stale bytes to a public repo."""
     setup_dir = tmp_path / "setup"
     source_repo = tmp_path / "source"
     dest_repo = tmp_path / "dest"
@@ -342,10 +281,7 @@ def test_delta_row_unchanged_false_for_mirror_row_when_source_advances(tmp_path,
         setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
     )
 
-    # Mirror's own uncommitted drift, same as the skip test above...
     (dest_repo / "f.txt").write_text("prior publish's own uncommitted output", encoding="utf-8")
-    # ...but the SOURCE also moved since the recorded publish. Must NOT
-    # skip regardless of the clean-tree exemption.
     (source_repo / "f.txt").write_text("payload v2", encoding="utf-8")
     _commit_all(source_repo, "source update")
     assert publish.delta_row_unchanged(setup_dir, target, "sigA", {}) is False

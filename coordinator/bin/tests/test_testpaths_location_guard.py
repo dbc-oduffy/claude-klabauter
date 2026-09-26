@@ -110,49 +110,20 @@ from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
 _TESTS_DIR = Path(__file__).resolve().parent
-# .../coordinator/bin/tests -> .../coordinator/bin -> .../coordinator -> repo root
 _REPO_ROOT = _TESTS_DIR.parents[2]
 _PYPROJECT = _REPO_ROOT / "pyproject.toml"
 
-# The four basename shapes a reader would call "a test file". `test_*.py` is
-# the only one `python_files` collects; the other three are here because a
-# file wearing them is a test in intent and will be read as gating by anyone
-# who finds it, whether or not pytest agrees. All three were extinct in the
-# tree as of 2026-07-28 — the dotted shape only because
-# `coordinator-artifact-subject.test.py` was renamed that same day, having
-# been uncollectable for its whole life.
 _TEST_SHAPES = ("test_*.py", "*.test.py", "test-*.py", "*_test.py")
 
-#: Top-level directories excluded from the scan outright — not a `testpaths`
-#: root and never intended to become one. `scratchpad` holds session-scoped
-#: working files (backups, snapshots, in-progress drafts of test-shaped
-#: files) swept aggressively per repo convention; it is not production
-#: surface and a test-shaped file parked there is not "gating nothing
-#: silently", it is scratch that was never meant to gate anything.
 _EXCLUDED_DIR_NAMES = {"scratchpad"}
 
-# ---------------------------------------------------------------------------
 # _OUTSIDE_TESTPATHS_EXEMPT — test-shaped files that legitimately live outside
-# every `testpaths` root. Every entry is ONE repo-root-relative file path plus
-# the specific reason THAT file must stay unreachable by both tiers. Globs,
-# directory prefixes and "known offenders" buckets are forbidden.
-#
-# It is currently EMPTY, and that is load-bearing rather than incidental: the
-# 2026-07-28 whole-tree sweep verified zero dotted `*.test.py`, zero dashed
-# `test-*.py`, zero trailing `*_test.py`, and — after admitting `bin` and
-# `scripts` — zero `test_*.py` outside `testpaths`. If clearing a failure here
-# needs an entry, prefer widening `testpaths` (the fix the two 2026-07-28
-# admits took) or deleting the file. Reach for an entry only when neither is
-# right, and say why in the value.
-# ---------------------------------------------------------------------------
 _OUTSIDE_TESTPATHS_EXEMPT: dict[str, str] = {}
 
 
@@ -166,12 +137,6 @@ def _fail(label: str, detail: str = "") -> None:
 
 
 def _configured_testpaths() -> list[str]:
-    """Return pyproject.toml's `testpaths` — read at runtime, never hardcoded.
-
-    Fails loud rather than defaulting: a guard that falls back to a
-    hardcoded config when it cannot read the real one is asserting against
-    a fiction.
-    """
     try:
         with open(_PYPROJECT, "rb") as fh:
             data = tomllib.load(fh)
@@ -199,11 +164,6 @@ def _configured_testpaths() -> list[str]:
 
 
 def _tracked_files() -> list[str]:
-    """Every tracked path, repo-root-relative with forward slashes.
-
-    `git ls-files` emits forward slashes on every platform, so the result
-    compares directly against `testpaths` entries on Windows too.
-    """
     try:
         proc = subprocess.run(
             ["git", "ls-files", "-z"],
@@ -261,11 +221,6 @@ def _is_excluded(rel_path: str) -> bool:
 
 
 def _under_testpaths(rel_path: str, testpaths: list[str]) -> bool:
-    """True if `rel_path` is a `testpaths` entry or sits beneath one.
-
-    Compares whole path segments, so a `testpaths` entry of `bin` admits
-    `bin/tests/test_x.py` without also admitting a sibling `bin-scratch/`.
-    """
     parts = PurePosixPath(rel_path).parts
     for entry in testpaths:
         entry_parts = PurePosixPath(entry).parts
@@ -275,13 +230,6 @@ def _under_testpaths(rel_path: str, testpaths: list[str]) -> bool:
 
 
 def test_every_test_shaped_file_lives_under_testpaths() -> None:
-    """No tracked test-shaped file sits outside every `testpaths` root.
-
-    A file outside `testpaths` is collected by no tier and therefore
-    asserts nothing, however green it is when run by hand — which is
-    exactly how `bin/tests/`'s 166 passing tests and `scripts/test_setup.py`'s
-    23 gated nothing for months.
-    """
     testpaths = _configured_testpaths()
     tracked = _tracked_files()
 

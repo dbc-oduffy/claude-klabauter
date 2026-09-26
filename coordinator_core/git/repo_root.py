@@ -161,32 +161,13 @@ from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
 
 _TIMEOUT_SECS = 2.0
 
-# cwd-keyed memo: absolute-cwd -> (toplevel_or_None, gitdir_or_None,
-# common_dir_or_None), populated by the WALK-based path. Deliberately
-# module-level (unlike `bash_guards.dispatch_checks._new_git_memo`, which
-# is per-call-scoped because it must not outlive one hook invocation) --
-# this module IS the process-lifetime seam those per-call memos would
-# otherwise reinvent. See module docstring for the lifetime/invalidation
-# story.
 _MemoEntry = Tuple[Optional[str], Optional[str], Optional[str]]
 _memo: Dict[str, _MemoEntry] = {}
 
-# (resolved-cwd, form) -> spawned value, for the forms that always spawn
-# (`--show-prefix`, `--absolute-git-dir`, `--is-inside-work-tree`) or that
-# fall back to a spawn when the walk finds nothing. Kept separate from
-# `_memo` because those forms have no walk-derived value to key off. Values
 # are never `None` -- only a SUCCESSFUL spawn is memoized here (see
-# `_spawn_cached`), and a successful spawn's value is always a `str` (the
-# empty string included); a genuine failure is never written to this dict
-# at all, so the type is `str`, not `Optional[str]`.
 _spawn_memo: Dict[Tuple[str, str], str] = {}
 
 def clear_memo() -> None:
-    """Drop every memoized resolution. Not called automatically -- see the
-    module docstring's "Memo lifetime and invalidation" section. Exists for
-    the rare caller (or test) that needs a fresh resolution after the
-    on-disk repo identity at a previously-resolved cwd has changed.
-    """
     _memo.clear()
     _spawn_memo.clear()
 
@@ -228,16 +209,6 @@ def _looks_like_git_dir(candidate: Path) -> bool:
 
 
 def _walk_for_repo(start: Path) -> Optional[Tuple[str, Path]]:
-    """Climb from `start` looking for a repo. Returns `("worktree", dir)`
-    for a directory containing a `.git` entry (directory OR file -- see
-    module docstring), `("bare", dir)` for a directory that IS a git dir,
-    or None if neither is found before the filesystem root.
-
-    The `.git` check comes first at each level: a worktree is identified by
-    its `.git` entry, and only a directory with no `.git` is tested for
-    being a bare repo itself (which is also how a cwd INSIDE a bare repo --
-    `<bare>/refs`, say -- resolves, by climbing to the bare root).
-    """
     current = start
     while True:
         if (current / ".git").exists():
@@ -269,11 +240,6 @@ def _spawn_rev_parse(args: list, cwd: str) -> Tuple[bool, Optional[str]]:
     the split would serve.
     """
     # Function-local: this is the spawn FALLBACK — the walk answers the ordinary
-    # case without it, so on the common path `subprocess` and its ~10 transitive
-    # modules (select/selectors/signal/threading/locale/math) never load. This
-    # module sits on `coordinator_core.ipc`'s cold-start path, measured against a
-    # module-count ceiling in
-    # `coordinator_core/benchmarks/import-budget-manifest.json`. Do not hoist.
     import subprocess
 
     try:
@@ -299,19 +265,10 @@ def _memo_entry(cwd: Optional[str]) -> Tuple[str, _MemoEntry]:
     if entry is None:
         found = _walk_for_repo(Path(resolved))
         if found is None:
-            # Deliberately NOT stored in `_memo` -- see "Negative caching"
-            # in the module docstring. A "no `.git` entry found" outcome is
             # not repo IDENTITY, it is the absence of one, and can flip to
-            # present at any time (e.g. `git init` runs at `resolved` after
-            # this call). Caching it would poison every subsequent call at
-            # this cwd for the rest of the process.
             return resolved, (None, None, None)
         kind, found_path = found
         if kind == "bare":
-            # A bare repo has NO worktree, so `show_toplevel` correctly has
-            # nothing to report (real git: exit 128, "must be run in a work
-            # tree"). Its git dir and common dir are the directory itself --
-            # `--git-dir`/`--git-common-dir` both answer `.` there.
             entry = (None, str(found_path), str(found_path))
         else:
             entry = (
@@ -330,10 +287,6 @@ def _spawn_cached(resolved: str, form: str, args: list) -> Optional[str]:
     succeeded, value = _spawn_rev_parse(args, resolved)
     if succeeded:
         # Only a SUCCESSFUL spawn is memoized -- see "Negative caching" in
-        # the module docstring. Both callers of this helper spawn
-        # unconditionally, so a memoized failure would outlive a `git init`
-        # at the same cwd. A successful spawn with empty output (e.g.
-        # `--show-prefix` at the toplevel) is still memoized here.
         _spawn_memo[key] = value
     return value
 
@@ -376,40 +329,11 @@ def show_toplevel(cwd: Optional[str] = None) -> Optional[str]:
 
 
 def git_dir(cwd: Optional[str] = None) -> Optional[str]:
-    """Mirror `git rev-parse --git-dir`: the repo's (private) gitdir, or
-    None. WALKS ONLY -- never spawns.
-
-    The spawn fallback here existed for the one case the walk could not
-    answer: a BARE repo, where there is no `.git` entry to find and real
-    git still reports `.`. `_walk_for_repo` now recognizes that case
-    directly from the filesystem markers git itself uses, so the fallback
-    has nothing left to answer.
-    """
     _resolved, entry = _memo_entry(cwd)
     return entry[1]
 
 
 def git_common_dir(cwd: Optional[str] = None) -> Optional[str]:
-    """Mirror `git rev-parse --git-common-dir`: the repo's COMMON dir
-    (worktree/submodule-indirection-resolved), or None. WALKS ONLY --
-    never spawns. Delegates to
-    `coordinator_core.git.git_dir.resolve_git_common_dir`, whose result is
-    always absolute; a bare repo resolves to the bare directory itself.
-
-    Like `git_dir`, this had a spawn fallback for the bare-repo case, and
-    `_walk_for_repo` now answers that case from the filesystem. Deleting it
-    also retired two guards that only ever protected against shapes the
-    SPAWN could produce and the walk cannot: a successful spawn emitting
-    empty stdout (which would have made `Path("")` normalize to `Path(".")`
-    and silently return the CALLER'S CWD as the common dir), and a
-    `resolved`-relative answer with literal `..` segments needing lexical
-    normalization. Neither is reachable from `resolve_git_common_dir`,
-    which returns an absolute path or nothing.
-
-    Negative-spec: do NOT reintroduce a spawn fallback to "be safe" without
-    also reinstating those two guards -- they were load-bearing for the
-    spawn's output shape specifically, not for this function's contract.
-    """
     _resolved, entry = _memo_entry(cwd)
     return entry[2]
 
@@ -448,19 +372,6 @@ def absolute_git_dir(cwd: Optional[str] = None) -> Optional[str]:
 
 
 def show_prefix(cwd: Optional[str] = None) -> Optional[str]:
-    """Mirror `git rev-parse --show-prefix`: `cwd`'s path relative to the
-    repo toplevel, git-normalized (trailing slash, symlink-resolved per
-    git's own rules -- see module docstring for why this always spawns
-    rather than being computed from `show_toplevel()` with `Path` math).
-
-    Returns the EMPTY STRING (not `None`) when `cwd` IS the repo toplevel
-    -- `--show-prefix` legitimately emits empty stdout there, and that is
-    a successful resolution, not a failure. Only a genuine failure (not a
-    repo, git missing, timeout) returns `None`. A caller branching on
-    `is None` to bail relies on this: collapsing the toplevel case to
-    `None` would make it indistinguishable from failure and silently bail
-    at the repo root -- see module docstring's "Negative caching" section.
-    """
     resolved, _ = _memo_entry(cwd)
     return _spawn_cached(resolved, "show-prefix", ["--show-prefix"])
 

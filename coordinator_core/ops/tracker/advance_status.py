@@ -160,8 +160,6 @@ from coordinator_core.wire_paths import rel_id
 
 _LINE_ENDINGS = ("\r\n", "\n", "\r")
 
-# Markdown emphasis/code wrappers stripped (one layer) from a table cell before
-# comparing it against a caller-supplied stub id.
 _CELL_WRAPPERS = ("**", "__", "`")
 
 
@@ -173,9 +171,6 @@ class TrackerRowError(ValueError):
 
 
 def _split_line_ending(line: str) -> Tuple[str, str]:
-    """Split a line into (content, ending). ending is one of "", "\\n", "\\r\\n",
-    "\\r" — preserved verbatim so a rewritten line reattaches the SAME ending the
-    original had (never normalized), per the module docstring's atomic-write note."""
     for ending in _LINE_ENDINGS:
         if line.endswith(ending):
             return line[: -len(ending)], ending
@@ -183,8 +178,6 @@ def _split_line_ending(line: str) -> Tuple[str, str]:
 
 
 def _normalize_cell(raw: str) -> str:
-    """Strip whitespace and one layer of surrounding markdown emphasis/code
-    markers (`**`, `__`, `` ` ``) from a table cell, for stub-id comparison."""
     s = raw.strip()
     for wrapper in _CELL_WRAPPERS:
         if len(s) >= 2 * len(wrapper) and s.startswith(wrapper) and s.endswith(wrapper):
@@ -199,11 +192,6 @@ def _cell_matches_stub_id(cell: str, stub_id: str) -> bool:
 
 
 def _is_table_row(content: str) -> bool:
-    """A line "looks like" a markdown table row iff its stripped form contains
-    at least two `|` characters (opening + one cell boundary) — matches the
-    header, separator (`|---|---|`), and data-row shapes alike; separator/header
-    rows never match a real stub_id in `_cell_matches_stub_id` so they self-
-    exclude without special-casing."""
     return content.strip().count("|") >= 2
 
 
@@ -336,9 +324,7 @@ def advance_status(tracker_file: Path, stub_ids: List[str], to_status: str) -> d
     return {"updated": updated, "unchanged": unchanged, "changed": True}
 
 
-# ---------------------------------------------------------------------------
 # JSON-RPC handler
-# ---------------------------------------------------------------------------
 
 
 @register_op("tracker.advance_status")

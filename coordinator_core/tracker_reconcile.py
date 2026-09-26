@@ -119,17 +119,6 @@ _APPLY_TWIN_ID_DIGEST_LEN = 12
 
 
 def _mint_apply_twin_id(applied_from: str) -> str:
-    """Mint an applied-twin event's `id` — content-addressed on
-    `("apply", applied_from)`, mirroring `tracker_transitions.py`'s
-    no-nonce, digest-of-identity minting shape
-    (`_mint_transition_event_id`/`_mint_snapshot_event_id`/
-    `_mint_withdrawal_event_id`): two racing reconcile passes over the SAME
-    queued event mint the SAME twin id, so the slower
-    `tracker_store.append_event` call collides on
-    `TrackerStoreDuplicateIdError` rather than double-appending — the
-    operative no-op re-apply guard this module relies on (module
-    docstring).
-    """
     canonical = json.dumps(["apply", applied_from], sort_keys=False)
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[
         :_APPLY_TWIN_ID_DIGEST_LEN
@@ -138,15 +127,6 @@ def _mint_apply_twin_id(applied_from: str) -> str:
 
 
 def _read_own_shard_raw(repo_root: Path) -> list[dict]:
-    """Read THIS machine's own shard file directly, bypassing
-    `tracker_store.read_events`'s `applied_at is not None` participation
-    filter — a queued/suggest-tier candidate carries `applied_at: null` by
-    design and would never appear in `read_events`'s output (module
-    docstring, rule 2). Never opens a peer shard file. Malformed lines are
-    skipped defensively rather than raised, mirroring `read_events`'
-    tolerance elsewhere in this store; a shard that does not exist yet
-    yields an empty list.
-    """
     own_shard = tracker_store.shard_path(repo_root)
     if not own_shard.exists():
         return []
@@ -158,7 +138,7 @@ def _read_own_shard_raw(repo_root: Path) -> list[dict]:
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
-            continue  # malformed JSONL line; skip it, not fatal to the read
+            continue
         if isinstance(record, dict):
             records.append(record)
     return records
@@ -212,11 +192,6 @@ def _build_apply_twin_event(candidate: dict, *, actor: str) -> dict:
     event["observed_at"] = observed_at
     event["applied_at"] = observed_at
     event["schema_version"] = tracker_transitions._SCHEMA_VERSION
-    # `generation` is carried forward from *candidate* unchanged, with
-    # absence treated as `0` per AC7a — never recomputed here from current
-    # store contents. A live re-derivation at apply time silently
-    # reintroduces the revert-of-revert collision sat-04 C3/D8 closed
-    # (docs/plans/2026-08-18-sat-04-completion-axis-policy.md).
     event["generation"] = candidate.get("generation", 0)
     event["applied_from"] = candidate["id"]
     event["id"] = _mint_apply_twin_id(candidate["id"])
@@ -224,20 +199,6 @@ def _build_apply_twin_event(candidate: dict, *, actor: str) -> dict:
 
 
 def reconcile(*, repo_root: Path, actor: str) -> list[dict]:
-    """Run one local reconcile pass against THIS machine's own shard.
-
-    Merge (read this machine's own shard, post-merge — rule 1), then for
-    every non-withdrawn candidate (rules 2/3), append exactly one applied
-    twin via `tracker_store.append_event` — never the queued row itself.
-    Returns the list of twin events newly appended (or already present,
-    for a no-op re-apply) this pass, in candidate order. A withdrawn
-    candidate contributes nothing to the returned list; both rows stay in
-    the log exactly as written.
-
-    Never opens a shard other than this machine's own — a foreign shard's
-    queued event is left exactly as found, and a cross-shard withdrawal is
-    never seen at all (module docstring rule 2/3).
-    """
     records = _read_own_shard_raw(repo_root)
     withdrawn_ids = {
         record.get("withdraws")
@@ -255,10 +216,6 @@ def reconcile(*, repo_root: Path, actor: str) -> list[dict]:
         try:
             appended = tracker_store.append_event(twin, repo_root=repo_root)
         except tracker_store.TrackerStoreDuplicateIdError:
-            # Two racing reconcile passes minted the same twin id; the
-            # existing twin already on disk is the authoritative result of
-            # this candidate having been applied — an idempotent no-op
-            # re-apply, not an error (module docstring).
             continue
         results.append(appended)
     return results

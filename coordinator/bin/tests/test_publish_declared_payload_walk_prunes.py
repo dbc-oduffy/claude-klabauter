@@ -37,10 +37,6 @@ def _load_publish():
     )
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
-    # Registered before exec: publish.py defines dataclasses, and
-    # `dataclasses._is_type` resolves a field's annotation through
-    # `sys.modules[cls.__module__]` — absent that entry the import dies at
-    # collection. Same idiom as every other publish.py test in this directory.
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     return mod
@@ -50,9 +46,6 @@ _mod = _load_publish()
 
 
 def _mirror(tmp_path: Path) -> Path:
-    """A dest dir shaped like a real flat-mirror row's: payload at the root,
-    a `.git` beside it, plus the two scratch classes a destination
-    accumulates on its own."""
     root = tmp_path / "mirror"
     (root / ".git" / "objects" / "ab").mkdir(parents=True)
     (root / ".git" / "objects" / "ab" / "cdef123").write_text("object")
@@ -71,10 +64,6 @@ def _mirror(tmp_path: Path) -> Path:
 
 
 def test_walk_names_the_binary_the_scan_surface_misses(tmp_path):
-    """The whole reason the widening exists: a non-transform-eligible file
-    the row genuinely published is tracked at dest HEAD and absent from every
-    scan set. `door.exe` is the measured witness from the klabauter mirror.
-    """
     root = _mirror(tmp_path)
 
     found = _mod._walk_published_payload([root])
@@ -85,7 +74,6 @@ def test_walk_names_the_binary_the_scan_surface_misses(tmp_path):
 
 
 def test_walk_never_descends_into_dot_git(tmp_path):
-    """The defect that would have refused every future round."""
     root = _mirror(tmp_path)
 
     found = _mod._walk_published_payload([root])
@@ -97,8 +85,6 @@ def test_walk_never_descends_into_dot_git(tmp_path):
 
 
 def test_walk_never_names_a_publish_staging_directory(tmp_path):
-    """Round `eebf1c67` put 1,028 files of a stranded staging directory into
-    the public mirror. Re-declaring one here would reopen that path."""
     root = _mirror(tmp_path)
 
     found = _mod._walk_published_payload([root])
@@ -107,8 +93,6 @@ def test_walk_never_names_a_publish_staging_directory(tmp_path):
 
 
 def test_walk_never_names_locally_generated_bytecode(tmp_path):
-    """`__pycache__`/`.pyc`/`.pyo` are created AT the destination by anything
-    that runs Python there. No row publishes them."""
     root = _mirror(tmp_path)
 
     found = _mod._walk_published_payload([root])
@@ -118,8 +102,6 @@ def test_walk_never_names_locally_generated_bytecode(tmp_path):
 
 
 def test_no_published_dirs_yields_nothing():
-    """A round that published nowhere declares nothing extra — the same
-    fail-direction the empty row scope gets on the removal side."""
     assert _mod._walk_published_payload([]) == set()
 
 
@@ -198,8 +180,6 @@ def test_over_declaring_silently_disables_removals(tmp_path):
     (root / "coordinator_core").mkdir(parents=True)
     (root / "coordinator_core" / "real.py").write_text("x = 1\n")
 
-    # The shape that caused it: a large gitignored tree sitting in the row's
-    # own published dir, published by nothing.
     venv = root / ".fleet-env" / "lib" / "python3.11" / "site-packages"
     venv.mkdir(parents=True)
     for i in range(50):
@@ -214,7 +194,4 @@ def test_over_declaring_silently_disables_removals(tmp_path):
         "declared_payload then empties and the removal side goes inert, "
         "silently, with the round still reporting PASS"
     )
-    # The invariant, stated as the thing that actually matters: what the walk
-    # declares stays proportionate to real payload, never swamped by a
-    # destination's own local scratch.
     assert len(found) == 1

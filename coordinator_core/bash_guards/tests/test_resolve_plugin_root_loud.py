@@ -38,7 +38,6 @@ def _payload(**extra: Any) -> Dict[str, Any]:
 
 @pytest.fixture
 def recorded_fires(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[Any, ...]]:
-    """Capture `record_advisory_fire` calls without touching the real counter."""
     calls: List[Tuple[Any, ...]] = []
 
     def _fake(*args: Any, **kwargs: Any) -> None:
@@ -52,7 +51,6 @@ class TestMissIsLoudButOpen:
     def test_miss_returns_none_rather_than_denying(
         self, monkeypatch: pytest.MonkeyPatch, recorded_fires: List[Tuple[Any, ...]], capsys
     ) -> None:
-        """The whole point of the chunk: unresolvable plugin root allows."""
         monkeypatch.setattr(
             dispatch, "_resolve_caller_context", lambda payload: _ctx(plugin_root=None)
         )
@@ -80,8 +78,6 @@ class TestMissIsLoudButOpen:
     def test_a_raising_counter_does_not_escape(
         self, monkeypatch: pytest.MonkeyPatch, capsys
     ) -> None:
-        """The counter is best-effort telemetry. If it throws, the Bash call
-        must still proceed -- a broken counter cannot become a broken shell."""
 
         def _boom(*args: Any, **kwargs: Any) -> None:
             raise RuntimeError("counter is down")
@@ -105,8 +101,6 @@ class TestHitIsSilent:
     def test_hit_is_silent_and_counts_nothing(
         self, monkeypatch: pytest.MonkeyPatch, recorded_fires: List[Tuple[Any, ...]], capsys
     ) -> None:
-        """A per-Bash-call hot path: the common case must emit nothing at
-        all, or the stderr line stops being a signal."""
         monkeypatch.setattr(
             dispatch, "_resolve_caller_context", lambda payload: _ctx(plugin_root="/plug/root")
         )
@@ -116,7 +110,6 @@ class TestHitIsSilent:
 
 
 def _ctx(*, plugin_root):
-    """Minimal stand-in for `warm.caller_context.CallerContext`."""
     from coordinator_core.warm.caller_context import CallerContext
 
     return CallerContext(

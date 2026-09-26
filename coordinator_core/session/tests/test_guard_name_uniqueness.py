@@ -31,23 +31,11 @@ try:
         _CLAIM_CONFLICT_GUARD_NAME,
     )
 except ImportError:
-    # The op-level registry is a registry of exactly one hand-written
-    # constant, and that guard is being deleted outright by
-    # `docs/plans/2026-08-13-claim-release-deadlock-and-the-doctrine-that-
-    # rejects-it.md` (PM-authorized): a path-touch claim is a swimlane
-    # courtesy, so the whole hard-deny goes. Tolerated in both directions on
-    # purpose — the invariant this file exists to pin is that the guard-name
-    # key space is flat and collision-free, which holds over however many
-    # registries currently populate it. Binding the test to the presence of
-    # one constant would make it fail on a deletion it has no opinion about.
     _CLAIM_CONFLICT_GUARD_NAME = None
 
 
 def test_no_guard_name_collides_across_the_three_registries() -> None:
     bash_names = [entry.id for entry in guard_roster()]
-    # `import_failed` names are folded in, not discarded: a guard whose module
-    # fails to import still occupies its name in the flat key space, and
-    # dropping it here would let exactly that guard collide unnoticed.
     write_names, import_failed = discover_guard_names()
     op_names = [_CLAIM_CONFLICT_GUARD_NAME] if _CLAIM_CONFLICT_GUARD_NAME else []
 

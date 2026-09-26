@@ -80,9 +80,6 @@ _DEFAULT_PHASE_TITLE = "Run"
 
 
 def _js_string_literal(value: str) -> str:
-    """Render `value` as a single-quoted JS string literal, escaping
-    backslashes/single-quotes/newlines so the emitted meta block stays a
-    PURE LITERAL (no unescaped delimiter can prematurely close the string)."""
     escaped = (
         value.replace("\\", "\\\\")
         .replace("'", "\\'")
@@ -92,11 +89,6 @@ def _js_string_literal(value: str) -> str:
 
 
 def _normalize_phases(phases: Optional[list]) -> list:
-    """Return a non-empty list of {"title", "detail"} dicts. An empty/omitted
-    `phases` param falls back to a single default phase so the emitted
-    script is always phase-conformant by construction (a script with zero
-    phases would have nothing for the scaffold's placeholder phase()/agent()
-    calls to match against)."""
     if not phases:
         return [{"title": _DEFAULT_PHASE_TITLE, "detail": "primary work"}]
     normalized = []
@@ -135,11 +127,6 @@ def _compose_script(name: str, description: str, phases: list, pattern: str) -> 
 
     template = HOUSE_PATTERNS[pattern]
 
-    # Top-level, never `async function run(ctx) { ... }` -- the harness
-    # Workflow contract executes the script BODY directly and never looks
-    # for, defines, or calls a `run` export; see
-    # coordinator_core/ops/dispatch_emit/emit.py module docstring §
-    # Top-level body, never a defined-but-uninvoked wrapper.
     return (
         f"{meta_block}\n"
         f"{phase_calls}\n"

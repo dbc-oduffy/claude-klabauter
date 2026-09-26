@@ -1,12 +1,3 @@
-"""coordinator_core/hooks/tests/test_block_workflow_foreign_emission_receipt_rule.py
-
-Subject: `coordinator_core.hooks.block_workflow_foreign_emission`'s § Read-only
-exemption / no-receipt deny, added per issue #87 item 3 (PM ruling
-2026-09-25): a hand-rolled Workflow that dispatches at least one write-capable
-(or untyped) `agent()` call and carries no verifying receipt is now DENIED,
-not silently let through — unless every `agent()` call resolves to a
-read-only `agentType`.
-"""
 
 from __future__ import annotations
 
@@ -88,10 +79,6 @@ def test_every_call_read_only_by_frontmatter_is_exempt(tmp_path, monkeypatch):
 
 
 def test_named_allowlist_wins_over_a_write_capable_tools_list(tmp_path, monkeypatch):
-    """The real `premise-checker` definition carries `Write`/`Bash` in its
-    `tools:` list (scratch-file/probe use), but PM ruling 2026-09-25 names it
-    read-only for this purpose -- the allowlist must win over the raw
-    inventory, not the other way round."""
     agents_dir = _agents_dir(tmp_path)
     _write_agent_def(agents_dir, "premise-checker", '["Read", "Grep", "Bash", "Write"]')
     _patch_agents_dir(monkeypatch, agents_dir)
@@ -180,8 +167,6 @@ def test_inline_read_only_fanout_is_exempt(tmp_path, monkeypatch):
 
 
 def test_no_agent_calls_at_all_is_vacuously_exempt(tmp_path):
-    """Pinned as `test_bwfe_no_receipt_no_advisory` already asserts — no
-    dispatch means no cost/write risk this guard cares about."""
     script = tmp_path / "hand-authored.workflow.mjs"
     script.write_text("console.log('a');\n", encoding="utf-8")
     result = bwfe._handler(
@@ -195,9 +180,6 @@ def test_no_agent_calls_at_all_is_vacuously_exempt(tmp_path):
 
 
 def test_emit_wave_fire_receipt_shape_is_sanctioned(tmp_path):
-    """The receipt shape is producer-agnostic — a receipt written by
-    emit-wave-fire (same keys as emit-dispatch-workflow's) verifies and
-    silences this guard identically. See `emit-wave-fire.py::_write_fire_receipt`."""
     import hashlib
     import json
 

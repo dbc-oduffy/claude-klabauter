@@ -1,13 +1,3 @@
-"""Execution evidence for the ``_is_hard_deny_envelope`` gating fix in
-``coordinator_core.bash_guards.dispatch.evaluate_payload_json``: a Bash
-cross-repo deny (``bump-foreign-repo-write``, registered ``fail_closed=
-False``) must now be reachable through ``guard_unlock_sentinel``, exactly
-like every other hard-deny envelope, because the gate is the envelope's own
-``permissionDecision`` rather than the guard's crash-routing policy.
-
-Spec backlink: state/bug-backlog/2026-08-10-cross-repo-write-boundary-
-denies-on-bash-b6fd16ed9ab9.yaml, chunk 2.
-"""
 
 from __future__ import annotations
 
@@ -18,13 +8,7 @@ from pathlib import Path
 
 import pytest
 
-# Every test here builds real anchor/foreign git repos and drives real
-# `git commit`/`git status` invocations through `dispatch.evaluate_payload_json`
-# to prove the cross-repo hard-deny gate reads actual repo boundaries -- no
-# mock stands in for `git -C <path>` argv parsing and real on-disk repo
 # identity. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
-# residue and is explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 from coordinator_core.bash_guards import dispatch
@@ -92,22 +76,6 @@ def _cross_repo_payload(session_id, repos):
 
 
 class TestBashCrossRepoDenyIsSentinelClearable:
-    """The chunk-2 claim: a real ``bump-foreign-repo-write`` deny (a
-    ``fail_closed=False`` guard's OWN normal-path deny, not a crash) is
-    (a) reachable through ``guard_unlock_sentinel`` and (b) actually
-    clearable by dropping the sentinel, mirroring every hard-deny guard.
-
-    2026-08-13 (C4d, docs/plans/2026-08-13-guard-messages-stop-handing-
-    agents-the-keys.md AC-2): the deny reason itself no longer prints a
-    pasteable unlock recipe (the ``guard-unlock-<session-id>`` sentinel
-    filename/touch command) for EITHER audience -- see
-    ``_write_bump_message.render_em_message``'s docstring. The message
-    register contract (docs/wiki/guard-messaging.md) is now: one fact,
-    stated once (the EM's own in-band grant route, `DR-298` -- 2026-09-18,
-    superseding the "check with your PM" lead), plus a terse alternative
-    (cross-repo-memo) -- never the override key. Sentinel-clearability
-    itself (b) is unaffected and still covered by
-    ``test_sentinel_clears_the_deny_and_is_consumed_once`` below."""
 
     def test_deny_advertises_the_in_band_route_not_the_unlock_recipe(self, repos, monkeypatch):
         _set_anchor(monkeypatch, repos, "sess-deny-1")
@@ -129,7 +97,6 @@ class TestBashCrossRepoDenyIsSentinelClearable:
         assert decision == "allow"
         assert not sentinel.exists()
 
-        # One-shot: the same command is re-denied on immediate retry.
         decision2, _out2 = _decision(_cross_repo_payload("sess-deny-2", repos))
         assert decision2 == "deny"
 

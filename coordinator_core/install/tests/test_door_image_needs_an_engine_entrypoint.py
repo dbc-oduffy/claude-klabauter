@@ -78,10 +78,6 @@ def _engine_root(tmp_path, *, names=(), stamped=True):
 
 
 def test_engine_carries_entrypoint_script_is_keyed_on_the_name_the_door_sends(tmp_path):
-    """`<name>.py`, not the on-disk target the generator resolved and not a
-    close relative of the name. A rename at publish time leaves a script that
-    IS published under a name the door will never ask for, and treating that
-    as coverage is the exact miss that shipped."""
     root = _engine_root(tmp_path, names=["check-claude-klabauter-doctor-sentinel"])
 
     assert door_install.engine_carries_entrypoint_script(
@@ -93,15 +89,6 @@ def test_engine_carries_entrypoint_script_is_keyed_on_the_name_the_door_sends(tm
 
 
 def test_a_name_the_engine_cannot_serve_gets_no_launcher(tmp_path, capsys):
-    """PM ruling 2026-08-29, on `publish`: "we shouldn't need a publish.exe
-    nor a publish.cmd".
-
-    These are repo-side tools -- the publisher chain, claude-klabauter's own migrations
-    and probes -- deliberately not carried into the published engine. Neither
-    leg of the door can work for them, and they were never PATH tools: they
-    run from their own checkout. So no launcher is written, and the message
-    says how to run it instead.
-    """
     root = _engine_root(tmp_path, names=["coordinator-invoke"])
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
@@ -111,16 +98,8 @@ def test_a_name_the_engine_cannot_serve_gets_no_launcher(tmp_path, capsys):
     )
 
     # `is _NO_LAUNCHER_FOR_THIS_NAME`, not `is None`. This assertion read
-    # `is None` until 2026-09-06 and was a FALSE GREEN over the defect the
     # docstring above already forbade: `None` is the caller's DOORLESS-
     # FALLBACK signal ("no door, write the Python pair"), so
-    # `_write_agent_helper_forwarders` answered this branch by writing an
-    # extensionless Python forwarder -- unexecutable on Windows, no PATHEXT
-    # match -- for the same 14 names it had just printed "no launcher
-    # installed" for. The test could not see it because it only checked the
-    # NATIVE image path, which this function indeed never wrote; the bad
-    # file came from the caller, one layer up. Both halves are now pinned:
-    # the identity here, and the end state in the caller-level test below.
     assert result is substrate._NO_LAUNCHER_FOR_THIS_NAME
     assert not door_install.named_forwarder_path(bin_dst, "publish").exists()
     assert not (bin_dst / "publish").exists()
@@ -169,9 +148,6 @@ def test_the_forwarder_loop_writes_nothing_at_all_for_an_unservable_name(tmp_pat
 
 
 def test_a_stale_launcher_from_an_earlier_install_is_taken_back(tmp_path):
-    """The removal is the point, not a side effect: a box that already ran an
-    install which wrote these images keeps a launcher that fails both warm and
-    cold until the next run takes it back."""
     root = _engine_root(tmp_path, names=["coordinator-invoke"])
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
@@ -186,8 +162,6 @@ def test_a_stale_launcher_from_an_earlier_install_is_taken_back(tmp_path):
 
 
 def test_check_only_removes_nothing(tmp_path):
-    """`check_only` is read-only across this module; a probe that deleted a
-    launcher would make `--check-only` a mutating verb."""
     root = _engine_root(tmp_path, names=["coordinator-invoke"])
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
@@ -201,9 +175,6 @@ def test_check_only_removes_nothing(tmp_path):
     assert stale.exists()
 
 def test_a_name_the_engine_carries_still_gets_its_launcher(tmp_path, capsys):
-    """Negative-spec companion: the warning must name only the broken names.
-    A detector that fires on every name is noise an operator learns to skip,
-    which is how the 14 stayed unnoticed in the first place."""
     _skip_if_no_prebuilt()
     root = _engine_root(tmp_path, names=["coordinator-invoke", "handoff-housekeeping"])
     bin_dst = tmp_path / "bin"
@@ -218,22 +189,11 @@ def test_a_name_the_engine_carries_still_gets_its_launcher(tmp_path, capsys):
 
 
 def test_a_name_with_no_py_twin_in_either_tree_keeps_its_launcher(tmp_path, capsys):
-    """The extensionless twelve -- chunk-commits, static-check,
-    with-suite-mutex, coordinator-precommit-foreign-platform-check and
-    siblings -- have no .py in EITHER tree, so _resolve_entrypoint_script
-    has never resolved them (a separate, already-recorded defect). They are
-    live PATH tools the git hooks this installer writes invoke by name.
-
-    The engine-only predicate could not tell them from the publish-excluded
-    set and queued all 26 for removal, hook CLIs included. This is the pin for
-    the narrowing."""
     _skip_if_no_prebuilt()
     root = _engine_root(tmp_path, names=["coordinator-invoke"])
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
 
-    # with-suite-mutex has no coordinator/bin/with-suite-mutex.py in this
-    # repo, which is exactly what distinguishes it from publish.
     dest = substrate._write_native_door_forwarder(
         "with-suite-mutex", bin_dst, check_only=False, engine_root=root
     )
@@ -243,18 +203,6 @@ def test_a_name_with_no_py_twin_in_either_tree_keeps_its_launcher(tmp_path, caps
 
 
 def test_a_killed_op_image_is_reaped_by_the_orphan_sweep_even_without_manifest_membership(monkeypatch, tmp_path):
-    """C1, docs/plans/2026-08-30-twenty-one-bin-names-reach-the-door-or-are-
-    thoroughly-dead.md: `coordinator-write-review-trail`,
-    `list-review-trail-records`, and `repair-empty-review-trail-ranges`
-    were killed under K-068 -- `.py` deleted from both trees -- which is
-    exactly the shape `launcher_is_installable` cannot distinguish from the
-    extensionless twelve (see that function's docstring). A killed op's
-    stale image therefore is never reaped by the per-name install loop, and
-    may never have been recorded in the native-forwarder manifest at all
-    (dropped from the roster before C0's manifest fix landed, or written by
-    an install that predates the manifest entirely). The sweep's killed-op
-    name match (condition 0b) must reap it anyway -- roster- and
-    manifest-independent."""
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
@@ -267,15 +215,6 @@ def test_a_killed_op_image_is_reaped_by_the_orphan_sweep_even_without_manifest_m
 
 
 def test_the_auto_push_forwarder_is_reaped_in_all_three_shapes(monkeypatch, tmp_path):
-    """C8 of docs/plans/2026-08-30-who-pushes-and-when.md deleted
-    `coordinator/bin/coordinator-auto-push.py` and its `bin-inventory.json`
-    row together, leaving three forwarder shapes on disk with nothing to
-    forward to. They are not merely inert: `_resolve_claude_klabauter.exec_cli` exits
-    127 telling the reader to run `scripts/setup.py` to repair a tree that
-    has nothing missing, and every repo's still-installed post-commit hook
-    reaches one of them on every commit (reported from example-cockpit-repo
-    2026-09-01). One stem covers all three shapes, so one roster entry must
-    retire the whole family."""
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
@@ -293,8 +232,6 @@ def test_the_auto_push_forwarder_is_reaped_in_all_three_shapes(monkeypatch, tmp_
 
 
 def test_a_killed_op_image_check_only_reports_but_does_not_remove(tmp_path):
-    """`check_only` stays read-only across every identification path here,
-    including the killed-op one -- a probe must not mutate."""
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     stale = bin_dst / "list-review-trail-records.exe"
@@ -311,11 +248,6 @@ def test_a_killed_op_image_check_only_reports_but_does_not_remove(tmp_path):
 
 
 def test_the_canonical_door_is_never_removed_as_stale(tmp_path):
-    """`remove_stale_named_forwarder` is retained for the repair path, and its
-    one hard invariant is that it never takes the canonical door: for
-    `coordinator-invoke`, `named_forwarder_path` resolves to the path
-    `install_door` writes, and removing it strips every session on the box of
-    its engine entrypoint."""
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     canonical = bin_dst / door_install.DOOR_INSTALLED_NAME
@@ -354,7 +286,6 @@ def test_a_renamed_native_image_is_reaped_on_windows_not_only_posix(monkeypatch,
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
 
-    # The manifest records the BARE name, exactly as the writer does.
     substrate._write_native_forwarder_manifest(bin_dst, {"renamed-away-cli"})
     stale = bin_dst / "renamed-away-cli.exe"
     stale.write_bytes(b"MZ-an-opaque-native-image")

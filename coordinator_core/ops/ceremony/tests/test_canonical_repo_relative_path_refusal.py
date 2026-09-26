@@ -1,14 +1,3 @@
-"""
-coordinator_core.ops.ceremony.tests.test_canonical_repo_relative_path_refusal
-
-Pins `git_native.canonical_repo_relative_path_refusal` / `first_non_canonical_
-path_refusal` -- the shared validator `_commit_via_head_spine` calls before
-writing any tree entry, closing the gap commit 528eee8314 exposed: a caller
-path carrying a `..` component (`coordinator/../coordinator_core/x.py`)
-reached git's own tree-entry write, which refuses it only at `update-index`/
-`read-tree` time ("invalid path"), after a "successful" local commit and a
-rejected push. Pure string validation -- no git spawn, no fixture.
-"""
 
 from __future__ import annotations
 

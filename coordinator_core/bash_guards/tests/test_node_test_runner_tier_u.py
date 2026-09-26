@@ -46,10 +46,6 @@ from coordinator_core.bash_guards.check_test_suite_invocation import (
     _is_node_scope,
 )
 
-#: Stand-in for a repo whose configured roots include a `tests` directory --
-#: supplied explicitly so these cases do not depend on this repo's own
-#: pyproject, which would make the suite-shaped rows pass for the wrong
-#: reason the day someone edits `testpaths`.
 _TESTPATHS: Tuple[str, ...] = ("coordinator_core", "coordinator/tests", "tests")
 
 
@@ -58,10 +54,6 @@ def _classify(cmd: str) -> "str | None":
 
 
 def test_node_is_in_the_runner_prefilter() -> None:
-    """The whole defect was an absence here, so it gets its own assertion.
-
-    Without this the guard returns before any leg runs, and every case below
-    would pass vacuously against a classifier nothing ever calls."""
     assert _RUNNER_PREFILTER_RE.search("node --test")
 
 
@@ -79,13 +71,6 @@ _SUITE_SHAPED: List[str] = [
 
 @pytest.mark.parametrize("cmd", _SUITE_SHAPED, ids=_SUITE_SHAPED)
 def test_unscoped_node_test_shapes_are_suite_shaped(cmd: str) -> None:
-    """An unscoped runner invocation is Tier U by DR-088's disjunct, and by
-    DoE's own R1 ruling that tier is a property of the invocation's SHAPE
-    rather than of the config key it was read from.
-
-    A testpaths ROOT is included deliberately: `node --test tests` selects
-    the whole configured suite while wearing a scope's clothing, which is
-    the case `_is_real_scope` exists to reject."""
     assert _classify(cmd) == "node --test"
 
 
@@ -100,15 +85,10 @@ _SCOPED: List[str] = [
 
 @pytest.mark.parametrize("cmd", _SCOPED, ids=_SCOPED)
 def test_file_scoped_node_test_shapes_are_permitted(cmd: str) -> None:
-    """A positional naming a file is scope, by the same predicate that
-    permits `pytest tests/test_one.py`."""
     assert _classify(cmd) is None
 
 
 def test_plain_node_is_not_a_test_runner() -> None:
-    """`--test` is the flag that makes node a runner, so it is the flag that
-    makes this leg apply. Without it this guard would fire on every node
-    invocation in the fleet -- a build script, a codegen step, a one-off."""
     assert _classify("node run.js") is None
     assert _classify("node server.js --port 3000") is None
     assert _classify("node -e 'console.log(1)'") is None
@@ -132,11 +112,6 @@ def test_the_reported_invocation_stays_permitted_and_that_is_the_ruling() -> Non
 
 
 def test_node_scope_predicate_never_re_admits_a_testpaths_root() -> None:
-    """`_is_node_scope` adds a JS/TS-suffix arm on top of `_is_real_scope`.
-
-    The arm must not become an escape hatch: a testpaths root that happens
-    to end in a Node suffix is still the whole suite, because the testpaths
-    checks run before the suffix arm."""
     testpaths: Sequence[str] = ("bundle.js", "coordinator_core")
     assert _is_node_scope("bundle.js", testpaths, None) is False
     assert _is_node_scope("other.js", testpaths, None) is True
@@ -145,7 +120,5 @@ def test_node_scope_predicate_never_re_admits_a_testpaths_root() -> None:
 
 
 def test_suffix_arm_is_case_insensitive() -> None:
-    """A capitalised suffix is the same file on Windows, which is
-    first-class in this repo."""
     assert _is_node_scope("A.MJS", _TESTPATHS, None) is True
     assert _is_node_scope("Test.JS", _TESTPATHS, None) is True

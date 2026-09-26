@@ -1,13 +1,3 @@
-"""Tests for coordinator_core.ops.list_files_newer_than_marker — the
-percolate.list_files_newer_than_marker RPC wrapper.
-
-Covers the op-classification audit's contract for this op: `.percolate-ignore`-relative
-mtime drift listing, capped at `limit`, silent (no error) when the marker is missing, and
-a safe-no-op second invocation (AC7).
-
-Negative-spec: this module's fixtures use only synthetic tmp_path trees — no persona
-names, no live codenames, no consumer-home literals.
-"""
 
 from __future__ import annotations
 
@@ -53,9 +43,6 @@ class TestNewerThanMarker:
     def test_marker_itself_excluded_from_its_own_listing(self, tmp_path):
         base = time.time()
         _touch(tmp_path / ".percolate-ignore", mtime=base)
-        # Bump the marker's own mtime forward-in-comparison scenario is
-        # irrelevant here -- the point is it must never appear in `files`
-        # even if some pathological clock skew made it compare > itself.
         result = list_files_newer_than_marker(str(tmp_path))
 
         assert ".percolate-ignore" not in result["files"]

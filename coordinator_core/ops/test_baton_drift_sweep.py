@@ -14,12 +14,6 @@ import pytest
 from coordinator_core.archival import reverse_membership
 from coordinator_core.dag import referenced_by
 import coordinator_core.ops.baton_drift_sweep as _sweep_mod
-# Import guard (FIFTH LEG / C1): fires @register_op("handoff.archive_transition")
-# and gives this file the SAME import site
-# `coordinator_core.ops.handoff_archive_transition.cs_claim_holder_live` that
-# baton_drift_sweep's `_handoff_live_holder_session` reads from — mirrors
-# ops/tests/test_handoff_archive_transition_holder_live.py's own monkeypatch
-# idiom (see that file's docstring), never a real live session.
 import coordinator_core.ops.handoff_archive_transition as _archive_transition_mod
 from coordinator_core.ops.baton_drift_sweep import baton_drift_sweep
 
@@ -74,28 +68,8 @@ def test_held_when_live_successor_references_it(tmp_path: Path) -> None:
     result = baton_drift_sweep(root)
 
     assert result["held"] == 1
-    assert result["tips"] == 1  # child itself has no successor
+    assert result["tips"] == 1
     assert result["stranded"] == 0
-
-
-# ---------------------------------------------------------------------------
-# baton_drift_sweep's `reverse_membership` call
-# (the HELD test) relies on unpinned/implicit `handoff_dir` inference —
-# unlike the sibling `referenced_by` call in the same loop body, which passes
-# `handoff_dir` explicitly. This currently works only because
-# `_collect_handoff_paths` happens to enumerate `state/handoffs/` entries
-# before `archive/handoffs/**` ones and never sorts the combined list, so
-# `dag_index[0]` is guaranteed to sit in `state/handoffs/`. Widening
-# `reverse_membership`'s own signature to accept an explicit `handoff_dir`
-# (mirroring `referenced_by`) touches `coordinator_core/archival.py`, which
-# is outside this dispatch's write-scope (completion_ops.py /
-# reconcile-completion-commits.py / baton_drift_sweep.py / their CLIs and
-# tests only) — see the review-integration report for the disposition. This
-# regression test is the in-scope half of the reviewer's suggested fix: pin
-# the invariant that HELD classification does not depend on dag_index
-# ordering, so a future reorder (or refactor of _collect_handoff_paths) that
-# actually breaks it fails loud here.
-# ---------------------------------------------------------------------------
 
 
 def test_reverse_membership_held_classification_independent_of_dag_index_order(
@@ -129,17 +103,6 @@ def test_reverse_membership_held_classification_independent_of_dag_index_order(
 def test_stranded_when_only_terminal_successor_references_it(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     parent = root / "state" / "handoffs" / "parent.md"
-    # archival._is_terminal_or_archived_child keys off `status:` (consumed /
-    # superseded / claimed / abandoned) — a distinct axis from
-    # baton_drift_sweep's own `deployment_state:` terminal check on the
-    # PARENT. `status: superseded` is terminal unconditionally (no
-    # deployment_state:in_flight carve-out — see archival.py's own header).
-    #
-    # C5: `status="claimed"` on the PARENT is load-bearing post-split — this
-    # test pins the successor-terminal shape landing in `stranded` (the
-    # claimed-or-shipped bucket), not `never_started`; see
-    # test_never_started_when_parent_was_never_claimed below for the sibling
-    # case with an unclaimed parent.
     child = root / "state" / "handoffs" / "child.md"
     _write_handoff(parent, predecessor="none", status="claimed")
     _write_handoff(child, predecessor="parent.md", status="superseded")
@@ -152,23 +115,14 @@ def test_stranded_when_only_terminal_successor_references_it(tmp_path: Path) -> 
     assert result["never_started"] == 0
 
 
-# ---------------------------------------------------------------------------
 # C1 (AC1) — STRANDED via an ARCHIVED successor, not a terminal-status one.
-# docs/plans/2026-08-05-stranded-baton-drainage-make-the-detecto.md § Anti-scope:
-# the existing test_stranded_when_only_terminal_successor_references_it uses a
-# successor terminal by `status:` alone, still resident under state/handoffs/.
 # This fixture's successor is terminal by ARCHIVE RESIDENCY alone (no status,
-# no deployment_state on the child) — pinning the shape a "restrict the DAG
-# index to live handoffs" rewrite would silently stop detecting.
-# ---------------------------------------------------------------------------
 
 
 def test_stranded_when_only_successor_is_archived(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     parent = root / "state" / "handoffs" / "parent.md"
     child = root / "archive" / "handoffs" / "2026-07" / "child.md"
-    # C5: claimed, so this successor-terminal shape lands in `stranded`
-    # (drainable), not `never_started` — see module docstring's third axis.
     _write_handoff(parent, predecessor="none", status="claimed")
     _write_handoff(child, predecessor="parent.md")
 
@@ -178,14 +132,6 @@ def test_stranded_when_only_successor_is_archived(tmp_path: Path) -> None:
     assert result["stranded_paths"] == [str(parent.resolve())]
     assert result["held"] == 0
     assert result["never_started"] == 0
-
-
-# ---------------------------------------------------------------------------
-# C1 (AC2) — handoff_id / predecessor_id resolution. Every fixture above uses
-# filename-shaped predecessor: values; build_handoff_id_index and
-# resolve_target's id_index tier (dag.py) are otherwise entirely untested by
-# this suite.
-# ---------------------------------------------------------------------------
 
 
 def test_held_when_successor_references_it_via_predecessor_id(tmp_path: Path) -> None:
@@ -199,15 +145,13 @@ def test_held_when_successor_references_it_via_predecessor_id(tmp_path: Path) ->
 
     assert result["held"] == 1
     assert result["stranded"] == 0
-    assert result["tips"] == 1  # child itself has no successor
+    assert result["tips"] == 1
 
 
 def test_stranded_when_only_successor_via_predecessor_id_is_terminal(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     parent = root / "state" / "handoffs" / "parent.md"
     child = root / "state" / "handoffs" / "child.md"
-    # C5: claimed, so this successor-terminal shape lands in `stranded`
-    # (drainable), not `never_started`.
     _write_handoff(
         parent, predecessor="none", handoff_id="hnd-parent-a1b2c3", status="claimed"
     )
@@ -226,17 +170,7 @@ def test_stranded_when_only_successor_via_predecessor_id_is_terminal(tmp_path: P
     assert result["never_started"] == 0
 
 
-# ---------------------------------------------------------------------------
-# C1 (AC3) — unresolvable-ref basename fallback. dag.referenced_by falls back
-# to `os.path.basename(raw_ref) == target_basename` only when resolve_target
-# exhausts all three tiers (live path, on-disk archive, git-history) and
 # returns None. This is unreachable via baton_drift_sweep's own STRANDED path
-# (its target is always a state/handoffs file, and resolve_target's
-# root-anchored `repo_root/state/handoffs/<basename>` tier resolves any
-# same-basename ref to that file before the None branch is ever reached) —
-# pinned directly against dag.referenced_by, mirroring this file's existing
-# direct-primitive-test idiom (see the dag_index-ordering test above).
-# ---------------------------------------------------------------------------
 
 
 def test_referenced_by_falls_back_to_basename_when_target_unresolvable(
@@ -244,10 +178,6 @@ def test_referenced_by_falls_back_to_basename_when_target_unresolvable(
 ) -> None:
     root = tmp_path / "repo"
     handoff_dir = root / "state" / "handoffs"
-    # Deliberately OUTSIDE any convention resolve_target's tiers know how to
-    # find (not state/handoffs, not archive/handoffs, not git-history) —
-    # resolve_target must exhaust every tier and return None for any ref
-    # naming it, no matter the ref's basename.
     target = root / "custom" / "weird_location" / "special-target.md"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("---\npredecessor: none\n---\n# target\n", encoding="utf-8")
@@ -290,14 +220,7 @@ def test_referenced_by_basename_fallback_does_not_false_match(tmp_path: Path) ->
     assert result["referencedBy"] == []
 
 
-# ---------------------------------------------------------------------------
 # C5 — split STRANDED into drainable (claimed-or-shipped) vs never_started
-# (never claimed, never shipped). docs/plans/2026-08-05-stranded-baton-
-# drainage-make-the-detecto.md § C4 result / § C5. Uses the SAME predicate
-# `handoff.archive_transition` mode=supersede's own DR-242 refusal site
-# imports (`claimed_or_shipped_at_path`) — these fixtures exercise the two
-# outcomes of that boolean, not a re-derivation of it.
-# ---------------------------------------------------------------------------
 
 
 def test_never_started_when_parent_was_never_claimed(tmp_path: Path) -> None:
@@ -346,11 +269,6 @@ def test_stranded_and_never_started_never_double_count(tmp_path: Path) -> None:
 
 
 def test_no_open_handoffs_dir_returns_zeroed_result(tmp_path: Path) -> None:
-    # C5: this asserts the EXACT full result dict — adding `never_started` /
-    # `never_started_paths` keys MUST fail it until updated here. That is
-    # the shape guard doing its job (docs/plans/2026-08-05-stranded-baton-
-    # drainage-make-the-detecto.md § C5); updated deliberately, not worked
-    # around.
     root = tmp_path / "repo"
     result = baton_drift_sweep(root)
 
@@ -374,13 +292,6 @@ def test_no_open_handoffs_dir_returns_zeroed_result(tmp_path: Path) -> None:
         "retained_paths": [],
         "retained_eligible": {},
     }
-
-
-# ---------------------------------------------------------------------------
-# SECOND LEG — reconciled-to-terminal, no successor (durable audit-record
-# evidence). cross-repo/inbox/2026-08-04-example-market-data-repo-em-baton-
-# terminal-state-not-cleared-programmatically.md, defect 1, item 3.
-# ---------------------------------------------------------------------------
 
 
 def _write_audit(
@@ -459,9 +370,6 @@ def test_reconciled_no_successor_does_not_double_count_stranded(tmp_path: Path) 
     root = tmp_path / "repo"
     parent = root / "state" / "handoffs" / "parent.md"
     child = root / "state" / "handoffs" / "child.md"
-    # C5: claimed, so this lands in `stranded`, not `never_started` — the
-    # mutual-exclusion claim under test is against `reconciled_no_successor`,
-    # orthogonal to the claimed-or-shipped axis.
     _write_handoff(parent, predecessor="none", status="claimed")
     _write_handoff(child, predecessor="parent.md", status="superseded")
     _write_audit(
@@ -502,18 +410,6 @@ def test_no_audits_dir_is_a_clean_no_op(tmp_path: Path) -> None:
 
     assert result["reconciled_no_successor"] == 0
     assert result["tips"] == 1
-
-
-# ---------------------------------------------------------------------------
-# C1 — a reaped chain tip is invisible to baton_drift_sweep TODAY.
-# docs/plans/2026-08-05-reaper-preserves-closure-evidence.md § AC1/AC2. Written
-# and passing against the CURRENT implementation (no `reaped_orphan` bucket
-# exists yet) — these tests document the gap, they do not rationalise C4.
-# Both fixtures are non-terminal, live, chain-tip handoffs (no successor
-# references them, nothing distinguishes them from a genuinely live baton in
-# today's classification loop) that were, in fact, reaped from a dead
-# session's crash-orphaned claim.
-# ---------------------------------------------------------------------------
 
 
 def _write_reaped_tip(
@@ -594,12 +490,7 @@ def test_post_fix_reaped_tip_with_reaped_from_session_classifies_as_reaped_orpha
     assert result["reaped_orphan_paths"] == [str(lone.resolve())]
 
 
-# ---------------------------------------------------------------------------
 # C4 — precedence between RECONCILED_NO_SUCCESSOR and REAPED_ORPHAN when a
-# baton qualifies for both. docs/plans/2026-08-05-reaper-preserves-closure-
-# evidence.md § AC10: reconciled evidence (a human/session conclusion the
-# work is done) is the stronger signal and wins.
-# ---------------------------------------------------------------------------
 
 
 def test_reconciled_no_successor_takes_precedence_over_reaped_orphan(
@@ -650,13 +541,6 @@ def test_reaped_orphan_drains_when_active_claim_present(tmp_path: Path) -> None:
     assert result["tips"] == 1
 
 
-# ---------------------------------------------------------------------------
-# C6/AC11 — baton_drift_sweep writes nothing. A REAL read-only assertion (file
-# content AND mtime unchanged), not a diff-read.
-# docs/plans/2026-08-05-reaper-preserves-closure-evidence.md § AC11.
-# ---------------------------------------------------------------------------
-
-
 def test_sweep_is_read_only_content_and_mtime_unchanged(tmp_path: Path) -> None:
     """baton_drift_sweep is a diagnostic (module docstring): it must not
     mutate any file it walks. Cover every population the sweep classifies —
@@ -702,22 +586,11 @@ def test_sweep_is_read_only_content_and_mtime_unchanged(tmp_path: Path) -> None:
 
     result = baton_drift_sweep(root)
 
-    assert result["total_live"] >= 1  # sweep actually walked the fixtures
+    assert result["total_live"] >= 1
     for p in all_paths:
         content_after, mtime_after = p.read_bytes(), p.stat().st_mtime_ns
         assert content_after == before[p][0], f"{p} content changed"
         assert mtime_after == before[p][1], f"{p} mtime changed"
-
-
-# ---------------------------------------------------------------------------
-# FIFTH LEG (C1, docs/plans/2026-08-18-retained-supersede-finishes-its-archive.md)
-# — the `retained` bucket. `handoff.archive_transition` mode=supersede's own
-# retain grounds commit the status flip (deployment_state:continued +
-# continued_into) but skip the archival git-mv; nothing ever drains that
-# promise. These fixtures pin AC1 (hit predicate), AC2 (current eligibility),
-# AC3 (report-only), and the Anti-scope location predicate (a `continued`
-# record already under archive/handoffs/ is the SUCCESS case, never a hit).
-# ---------------------------------------------------------------------------
 
 
 def _write_retained_handoff(
@@ -755,8 +628,6 @@ def test_retained_hit_when_continued_with_nonempty_continued_into(tmp_path: Path
 
     assert result["retained"] == 1
     assert result["retained_paths"] == [str(parent.resolve())]
-    # Still counted in terminal_not_archived too — this leg looks INSIDE that
-    # population, not instead of it (module docstring, FIFTH LEG).
     assert result["terminal_not_archived"] == 1
 
 
@@ -800,8 +671,6 @@ def test_retained_ignores_archived_location(tmp_path: Path) -> None:
 
     assert result["retained"] == 0
     assert result["retained_paths"] == []
-    # Never walked as a live baton at all — archive/handoffs/ is outside
-    # open_paths (state/handoffs/ only).
     assert result["total_live"] == 0
 
 
@@ -919,8 +788,6 @@ def test_retained_eligible_true_despite_a_live_unrelated_child(
     parent = root / "state" / "handoffs" / "parent.md"
     _write_retained_handoff(parent, continued_into="successor.md")
     _write_handoff(root / "state" / "handoffs" / "successor.md", predecessor="parent.md")
-    # The second referencer is the point: live, non-terminal, and NOT the
-    # continued_into target, so the old exclude could never have covered it.
     _write_handoff(root / "state" / "handoffs" / "bystander.md", predecessor="parent.md")
     _make_claim_dir(common_dir, "parent.md", session_id="dead-session-xyz789")
 
@@ -931,24 +798,15 @@ def test_retained_eligible_true_despite_a_live_unrelated_child(
     assert result["retained_eligible"][key] is True
 
 
-# ---------------------------------------------------------------------------
-# AC5 — the existing stranded/desynced buckets are byte-identical to
-# pre-change for a corpus that ALSO carries a retained hit (the additive
-# guarantee, not just "the old tests still pass in isolation").
-# ---------------------------------------------------------------------------
-
-
 def test_retained_bucket_is_additive_stranded_and_desynced_unaffected(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "repo"
-    # An ordinary stranded shape (module docstring's existing fixture idiom).
     stranded_parent = root / "state" / "handoffs" / "stranded-parent.md"
     stranded_child = root / "state" / "handoffs" / "stranded-child.md"
     _write_handoff(stranded_parent, predecessor="none", status="claimed")
     _write_handoff(stranded_child, predecessor="stranded-parent.md", status="superseded")
 
-    # A retained-supersede shape alongside it.
     retained_parent = root / "state" / "handoffs" / "retained-parent.md"
     _write_retained_handoff(retained_parent, continued_into="retained-successor.md")
 

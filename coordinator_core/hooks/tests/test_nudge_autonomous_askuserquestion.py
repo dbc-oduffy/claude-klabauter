@@ -21,7 +21,6 @@ from coordinator_core.warm.hook_http import HOOK_PATH, op_for_path
 
 
 def test_op_registers_and_resolves_through_op_for_path() -> None:
-    # Importing the module fires its register_op(...) side effect.
     module = importlib.import_module(
         "coordinator_core.hooks.nudge_autonomous_askuserquestion"
     )
@@ -36,18 +35,11 @@ def test_op_registers_and_resolves_through_op_for_path() -> None:
 
 
 def test_op_is_classified_compute_only() -> None:
-    # Explicit assertion of the classify() call/result — routing alone (a
-    # `hooks.` prefix match) never reaches `_is_compute_only`, so an absent
-    # classification would pass every routing test and still be a dispatch-
     # time authz gap. Assert the call succeeds and answers COMPUTE_ONLY,
-    # rather than merely checking the op's absence from a deny list.
     result = classify("hooks.nudge_autonomous_askuserquestion")
     assert result is OpClass.COMPUTE_ONLY
 
 
-# Name asserted
-# the opposite of the behavior proven; the firing case is covered separately by
-# test_op_returns_allow_advisory_shape_when_sentinel_present.
 def test_op_suppresses_for_a_non_firing_payload() -> None:
     from coordinator_core.hooks.nudge_autonomous_askuserquestion import _handler
 
@@ -58,10 +50,6 @@ def test_op_suppresses_for_a_non_firing_payload() -> None:
         "tool_name": "AskUserQuestion",
         "tool_input": {"questions": [{"question": "Should I use a factory here?"}]},
     }
-    # No sentinel file, and posture resolution fails open to "precision" with no
-    # readable coordinator.local.md / identity file for this synthetic cwd — so
-    # this payload is a NON-firing case by construction, one edge of the D2
-    # shape contract.
     result = _handler({"payload": payload})
     assert result == {}
 
@@ -84,8 +72,6 @@ def test_op_returns_allow_advisory_shape_when_sentinel_present(tmp_path, monkeyp
             "tool_input": {"questions": [{"question": "Should I use a factory here?"}]},
         }
         result = _handler({"payload": payload})
-        # Same hookSpecificOutput shape the source script prints to stdout:
-        # permissionDecision:"allow" + additionalContext, never a blocking deny.
         hso = result["hookSpecificOutput"]
         assert hso["hookEventName"] == "PreToolUse"
         assert hso["permissionDecision"] == "allow"
@@ -103,8 +89,6 @@ def test_op_suppresses_on_agent_id() -> None:
 
 
 def test_op_suppresses_on_override_env_from_payload_not_os_environ(tmp_path, monkeypatch) -> None:
-    """The override MUST be read from params["payload"]["env"], never from this
-    process's os.environ — the hook payload contract this chunk's brief pins."""
     from coordinator_core.hooks.nudge_autonomous_askuserquestion import _handler
 
     monkeypatch.delenv("COORDINATOR_AUTONOMOUS_ASK_OK", raising=False)
@@ -114,12 +98,6 @@ def test_op_suppresses_on_override_env_from_payload_not_os_environ(tmp_path, mon
     }
     assert _handler({"payload": payload}) == {}
 
-    # The prior
-    # inverse case reached the suppression path via fail-open posture, never
-    # via the override branch, so it could not discriminate an accidental
-    # os.environ read. Force the firing branch (sentinel present) so the only
-    # thing that could suppress is an os.environ override being (wrongly)
-    # consulted; asserting "allow" proves it was NOT consulted.
     session_id = "sid-ambient-only"
     sentinel_path = os.path.join(tempfile.gettempdir(), f"autonomous-run-{session_id}")
     with open(sentinel_path, "w", encoding="utf-8") as handle:
@@ -128,8 +106,6 @@ def test_op_suppresses_on_override_env_from_payload_not_os_environ(tmp_path, mon
         monkeypatch.setenv("COORDINATOR_AUTONOMOUS_ASK_OK", "1")
         payload_no_env = {"session_id": session_id, "env": {}}
         result = _handler({"payload": payload_no_env})
-        # Sentinel present -> firing branch; if os.environ were (wrongly)
-        # consulted this would suppress to {} instead.
         assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
     finally:
         os.remove(sentinel_path)

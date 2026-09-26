@@ -40,9 +40,6 @@ from coordinator_core.ops.dispatch_emit.inventory_mint import (
 
 
 def _row(row_id: str, disposition: str, deps: str = "—", footprint: str = None) -> dict:
-    # `deps` cells hold plain, un-backtick-quoted ids (matching
-    # test_inventory_mint.py's fixture shape and `_split_id_list`, which
-    # does not strip backticks).
     return {
         "id": f"`{row_id}`",
         "spec path": "`docs/plans/x.md` (S1)",
@@ -104,7 +101,6 @@ def test_known_closed_satisfied_drops_edge_without_blocking():
 
 def test_unrecognized_disposition_raises_naming_row_and_text():
     rows = [_row("C7", "In Progress (typo'd capitalization variant)")]
-    # "in progress" (space, capitalized) does not start with "in_progress"
     with pytest.raises(UnrecognizedDispositionError) as exc_info:
         mint_rows(rows)
     message = str(exc_info.value)

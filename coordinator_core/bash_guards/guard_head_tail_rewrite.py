@@ -56,12 +56,6 @@ from coordinator_core.bash_guards import _dialect
 
 
 def _bt_head_tail_count(tokens_rest: List[str]) -> Optional[int]:
-    """Parse a `head`/`tail` segment's own argument tokens (everything after
-    the binary name) into a line count -- recognized forms only: no args
-    (bare `head`/`tail`, default 10), `-N` (old-style numeric flag), or
-    `-n N` (two separate tokens). Anything else (a flag this doesn't know,
-    `-c` byte-count mode, etc.) returns `None` so the caller advises instead
-    of guessing."""
     if not tokens_rest:
         return 10
     if len(tokens_rest) == 1:
@@ -77,18 +71,6 @@ def _bt_head_tail_count(tokens_rest: List[str]) -> Optional[int]:
 
 
 def _bt_select_object_first_last(tokens_rest: List[str]) -> Tuple[bool, bool, Optional[int]]:
-    """PowerShell's line-count equivalent of `_bt_head_tail_count` above --
-    parses a `Select-Object` segment's own argument tokens (everything after
-    the cmdlet name) into `(is_head, is_tail, n)`. `-First`/`-Last` are
-    genuine PowerShell VERBS, not an alias of `head`/`tail` (docs/reference/
-    guard-dialect-coverage.md row 13) -- there is no `-N`/bare-count
-    shorthand to recognize here, only the two-token `-First N` / `-Last N`
-    form (flag spelling matched case-insensitively, since PowerShell
-    parameter names are themselves case-insensitive). Anything else (a flag
-    this doesn't know, both `-First` and `-Last` present at once, a missing
-    or non-numeric count) returns `(False, False, None)` so the caller
-    advises instead of guessing -- same discipline as `_bt_head_tail_count`.
-    """
     is_head = False
     is_tail = False
     n: Optional[int] = None
@@ -117,12 +99,6 @@ def _bt_select_object_first_last(tokens_rest: List[str]) -> Tuple[bool, bool, Op
 
 
 def _bt_parse_find_census_segment(tokens: List[str]) -> Optional[Dict[str, Any]]:
-    """Parse a `find`-invocation segment with NO `-exec` (that case belongs
-    to `check_find_exec_rewrite`, not this one) into a
-    ``{"path", "name_pattern", "only_files"}`` census descriptor, or `None`
-    if it carries a flag this function does not recognize, OR a shell
-    redirection operator (`_bt_has_redirection`) -- never guessed.
-    """
     if not tokens or not _bt_token_matches_binary(tokens[0], "find"):
         return None
     if "-exec" in tokens:
@@ -147,17 +123,11 @@ def _bt_parse_find_census_segment(tokens: List[str]) -> Optional[Dict[str, Any]]
             only_files = pred[i + 1] == "f"
             i += 2
             continue
-        return None  # an unrecognized find flag -- don't guess a translation
+        return None
     return {"path": path, "name_pattern": name_pattern, "only_files": only_files}
 
 
 def _bt_parse_ls_segment(tokens: List[str]) -> Optional[Dict[str, Any]]:
-    """Parse a bare `ls`/`ls -1`/`ls -a` segment into a ``{"path"}``
-    descriptor, or `None` for any flag this function does not recognize, OR
-    a shell redirection operator (`_bt_has_redirection`) -- a redirection
-    token is not a path operand (see that helper's own docstring for the
-    live incident this guards against: `ls DIR 2>/dev/null | head -40`
-    silently took `"2>/dev/null"` as the directory to list)."""
     if not tokens or not _bt_token_matches_binary(tokens[0], "ls"):
         return None
     if _bt_has_redirection(tokens[1:]):
@@ -173,22 +143,11 @@ def _bt_parse_ls_segment(tokens: List[str]) -> Optional[Dict[str, Any]]:
 
 
 def _bt_build_generator_lines(kind: str, parsed: Dict[str, Any]) -> Optional[List[str]]:
-    """Return python source LINES that populate an `_out: List[str]`
-    variable with the exact stdout lines the upstream generator segment
-    (``kind`` in ``{"find", "ls", "grep"}``) would have produced -- always
-    SORTED for determinism (`find`'s own directory-traversal order is not
-    guaranteed reproducible across a rewrite, so this rewrite deliberately
-    trades raw `find` order for a stable one rather than guessing at it)."""
     if kind == "find":
         path = parsed["path"]
         pattern = parsed["name_pattern"]
         only_files = parsed["only_files"]
         match_expr = (
-            # fnmatchcase, not fnmatch -- see the identical fix + rationale
-            # in `_bt_find_exec_python_rewrite`, above: `find -name` is
-            # case-sensitive on every platform, but `fnmatch.fnmatch()`
-            # silently isn't on Windows (`os.path.normcase` lower-cases both
-            # sides there).
             "fnmatch.fnmatchcase(fn, %s)" % json.dumps(pattern) if pattern else "True"
         )
         entries_expr = "files" if only_files else "files + dirs"
@@ -198,14 +157,6 @@ def _bt_build_generator_lines(kind: str, parsed: Dict[str, Any]) -> Optional[Lis
             "for root, dirs, files in os.walk(%s):" % json.dumps(path),
             "    for fn in sorted(%s):" % entries_expr,
             "        if %s:" % match_expr,
-            # posixpath.join, not os.path.join -- `find`'s own output joins
-            # path components with a bare '/' on every platform (it never
-            # runs on Windows itself; a Windows caller sees Git-Bash's `find`
-            # binary, which is POSIX). `os.path.join` on a Windows host
-            # would instead glue the filename on with a native '\\',
-            # producing a byte-for-byte divergence from the real command
-            # this rewrite is supposed to reproduce exactly, even though
-            # both spellings resolve to the same file.
             "            _out.append(posixpath.join(root, fn))",
         ]
     if kind == "ls":
@@ -227,18 +178,9 @@ def _bt_build_generator_lines(kind: str, parsed: Dict[str, Any]) -> Optional[Lis
             "_out = []",
             "for base in targets:",
             "    walk = os.walk(base) if os.path.isdir(base) else "
-            # posixpath.dirname/posixpath.basename, not the os.path forms --
-            # same rationale as the `posixpath.join` note below: a bare
-            # single-file `grep` target is split on '/' the way the real
-            # (POSIX) grep binary's own reporting would spell it, not on a
-            # native Windows '\\'.
             '[(posixpath.dirname(base) or ".", [], [posixpath.basename(base)])]',
             "    for root, dirs, files in walk:",
             "        for fn in sorted(files):",
-            # posixpath.join, not os.path.join -- see the identical note in
-            # `_bt_build_generator_lines`'s `find` branch: keeps the emitted
-            # path byte-identical to what the real grep/find binary (always
-            # POSIX, even when the caller is on Windows) would have printed.
             "            p = posixpath.join(root, fn)",
             "            try:",
             '                with open(p, encoding="utf-8", errors="replace") as fh:',
@@ -452,7 +394,7 @@ def _check_head_tail_plumbing_powershell(
         cmd, _dialect.Dialect.POWERSHELL, guard_name="guard_head_tail_rewrite"
     )
     if tokens is None:
-        return None  # SILENT already recorded by `_dialect` for the parse failure
+        return None
 
     segments = _bt_segments_from_tokens_with_pipe_flag(tokens)
 
@@ -466,23 +408,15 @@ def _check_head_tail_plumbing_powershell(
         for seg_tokens, pipe_before in segments
     )
     if not has_select_object_target:
-        return None  # not this shape at all -- a genuine clean, not a decline
+        return None
 
     if len(segments) != 2:
-        # This branch has already computed that no rewrite would help (a
-        # chain longer than the conservative two-stage shape this rewrite
-        # covers means reproducing the upstream stages would cost MORE forks
-        # than the chain as written, not fewer) -- an advisory with no offer
-        # is a nag, not a service. Same disposition `check_multiprobe_banner_
-        # rewrite` already takes on its own no-applicable-rewrite exit.
-        # Silent per the measured fleet-wide fire volume: cross-repo/inbox/
-        # 2026-08-11-doe-claude-em-advisory-fires-with-no-rewrite.md
         return None
     (up_tokens, up_pipe_before), (ht_tokens, ht_pipe_before) = segments
     if up_pipe_before or not ht_pipe_before or not ht_tokens or not up_tokens:
-        return None  # not the `generator | Select-Object` shape this check owns
+        return None
     if not _is_select_object(ht_tokens[0]):
-        return None  # matched on the upstream segment, not the tail one; not ours
+        return None
 
     is_head, is_tail, n = _bt_select_object_first_last(ht_tokens[1:])
     if n is None:
@@ -513,14 +447,6 @@ def _check_head_tail_plumbing_powershell(
         kind = "grep" if parsed else None
 
     if kind is None or parsed is None:
-        # This branch has already computed that no rewrite would help: the
-        # upstream stage is not one this guard can reproduce in Python, so a
-        # python3 -c would have to RUN it as a subprocess anyway -- more
-        # forks than the pipeline as written, not fewer. An advisory with no
-        # offer is a nag, not a service. Same disposition `check_multiprobe_
-        # banner_rewrite` already takes on its own no-applicable-rewrite exit.
-        # Silent per the measured fleet-wide fire volume: cross-repo/inbox/
-        # 2026-08-11-doe-claude-em-advisory-fires-with-no-rewrite.md
         return None
 
     if kind in ("find", "ls") and not os.path.exists(parsed["path"]):
@@ -647,18 +573,10 @@ def check_head_tail_plumbing_rewrite(
 
     segments = _bt_segments_from_tokens_with_pipe_flag(classification.tokens)
     if len(segments) != 2:
-        # This branch has already computed that no rewrite would help (a
-        # chain longer than the conservative two-stage shape this rewrite
-        # covers means reproducing the upstream stages would cost MORE forks
-        # than the chain as written, not fewer) -- an advisory with no offer
-        # is a nag, not a service. Same disposition `check_multiprobe_banner_
-        # rewrite` already takes on its own no-applicable-rewrite exit.
-        # Silent per the measured fleet-wide fire volume: cross-repo/inbox/
-        # 2026-08-11-doe-claude-em-advisory-fires-with-no-rewrite.md
         return None
     (up_tokens, up_pipe_before), (ht_tokens, ht_pipe_before) = segments
     if up_pipe_before or not ht_pipe_before or not ht_tokens or not up_tokens:
-        return None  # not the `generator | head-or-tail` shape this check owns
+        return None
     is_head = _bt_token_matches_binary(ht_tokens[0], "head")
     is_tail = _bt_token_matches_binary(ht_tokens[0], "tail")
     if not (is_head or is_tail):
@@ -697,37 +615,12 @@ def check_head_tail_plumbing_rewrite(
         kind = "grep" if parsed else None
 
     if kind is None or parsed is None:
-        # This branch has already computed that no rewrite would help: the
-        # upstream stage is not one this guard can reproduce in Python, so a
-        # python3 -c would have to RUN it as a subprocess anyway -- more
-        # forks than the pipeline as written, not fewer. An advisory with no
-        # offer is a nag, not a service. Same disposition `check_multiprobe_
-        # banner_rewrite` already takes on its own no-applicable-rewrite exit.
-        # Silent per the measured fleet-wide fire volume: cross-repo/inbox/
-        # 2026-08-11-doe-claude-em-advisory-fires-with-no-rewrite.md
         return None
 
-    # Fail open when the upstream `find`/`ls` root does not resolve on THIS
-    # host -- an unquoted Windows path (`find C:\Users\x\tmp`) is
-    # de-escaped by bash's own tokenizing before this guard ever sees it
-    # (`C:\Users\x\tmp` -> `C:Usersxtmp`; not this guard's doing, see
-    # `_command_tokenizer.py`'s own module docstring), and the generated
-    # `os.walk`/`os.listdir` root would then be that same de-separated,
     # non-existent path. Left alone, the ORIGINAL `find`/`ls` command would
-    # fail LOUDLY (`find: 'C:Usersxtmp': No such file or directory`) --
-    # substituting a rewrite here instead would swap that loud failure for
-    # a silent, zero-line, exit-0 result an agent reads as "no matches"
-    # rather than "your path was wrong". Not offering the rewrite (`None`,
-    # not `_advisory`) lets the original command run and produce its own
-    # error -- no guess at intent, no attempt to repair the path. A root
-    # that DOES exist is completely unaffected by this check.
     if kind in ("find", "ls") and not os.path.exists(parsed["path"]):
         return None
 
-    # SERVE the answer in-process instead of handing back a python3 one-liner,
-    # for the `find`-census shape C0's spike (docs/research/2026-09-10-in-
-    # process-census-evaluator-spike.md) certified faithful. `None` here means
-    # `coordinator_core.search.census` declined the shape -- fall through to
     # the existing generator rewrite below UNCHANGED, never guessing (AC4).
     if kind == "find":
         served = _bt_serve_find_census(up_tokens, is_head, n, payload)
@@ -738,15 +631,6 @@ def check_head_tail_plumbing_rewrite(
     if gen_lines is None:  # pragma: no cover -- defensive, kind is always recognized here
         return None
 
-    # HEAD: short-circuit the walk once the first `n` items are collected
-    # (`_bt_head_short_circuit_lines`) instead of enumerating the whole
-    # generator only to discard everything past item `n` -- the fork-count
-    # benchmark's finding this fix exists for (`head -n 5` over a large
-    # tree walked the WHOLE tree first). `n <= 0` (only reachable via an
-    # explicit `-n 0`/`-0` -- bare `head` defaults to 10, see
-    # `_bt_head_tail_count`) needs no walk at all: the first 0 items of
-    # anything is empty, so the generator body is skipped entirely rather
-    # than run and immediately unwound.
     if is_head:
         slice_expr = "_out[:%d]" % n
         if n > 0:
@@ -754,16 +638,11 @@ def check_head_tail_plumbing_rewrite(
         else:
             body_lines = ["_out = []"]
     # TAIL: the whole stream must still be OBSERVED (there is no way to know
-    # which items are the last `n` without seeing them all), so this bounds
-    # MEMORY via a fixed-size ring (`_bt_tail_ring_buffer_lines`) rather than
-    # walk time -- `_out` is already exactly the last `n` items once the
-    # ring buffer is in place, so the final slice collapses to `_out` itself
-    # instead of re-slicing a list that was never allowed to grow past `n`.
     elif n > 0:
         slice_expr = "_out"
         body_lines = ["import collections"] + _bt_tail_ring_buffer_lines(gen_lines, kind, n)
     else:
-        slice_expr = "[]"  # `tail -n 0` -- Python's `_out[-0:]` would (wrongly) return everything
+        slice_expr = "[]"
         body_lines = gen_lines
 
     script_lines = body_lines + ["for _l in %s:" % slice_expr, "    print(_l)"]

@@ -158,49 +158,29 @@ from coordinator_core.text.query_record_display import format_records
 from coordinator_core.ops.ceremony.records_query import query_records
 from coordinator_core.ops.records_query import _sort_records
 
-# Generator-provenance declaration (generator_provenance.py). process_file rewrites
-# whichever tracked `*.md` files under the repo (found via walk_md/resolve_files_opt)
-# contain `<!-- BEGIN query: ... -->` callouts -- a data-dependent set of markdown
-# files across the doc corpus, not a fixed artifact.
 MUTATES = ["**/*.md"]
 
 BEGIN_PREFIX = "<!-- BEGIN query:"
 END_MARKER = "<!-- END query -->"
 
-# A `roadmap_id=` clause on a `handoff` callout is, by construction, a
 # roadmap STUB-INDEX chunk-status tracker (every such callout on disk in
 # this repo is exactly that shape — `state/roadmap/*/STUB-INDEX.md`) rather
-# than a "what's currently live" query. Mirrors the union
-# `coordinator_core.roadmap.audit`'s `_audit1_stub_coverage` et al. already
-# perform explicitly (`query_records("handoff", ...) + query_records(
-# "handoff-archived", ...)` over the same `roadmap_id`-scoped `where`) — see
-# `_run_query_records_native`'s archive-union branch below, which reuses the
 # same two calls rather than widening `_TYPE_TO_GLOB['handoff']` itself
-# (that glob is depended on elsewhere — session_hierarchy_derive.py,
-# ceremony/renderers.py, roadmap/number_stubs.py — for strictly-live
-# semantics; narrowing this fix to the roadmap_id-filtered case keeps those
-# callers untouched).
 _ROADMAP_ID_WHERE_RE = re.compile(r"(?:^|[\s(])roadmap_id=")
 
 EXCLUDED_DIRS = frozenset({"node_modules", ".git", "archive"})
 
 
 class ArgParseError(Exception):
-    """CLI usage error — an unrecognized argument. Mapped to exit code 2."""
+    pass
 
 
 class QueryRecordsBusinessError(Exception):
-    """queryRecords()/formatRecords() itself reported a business failure
-    (e.g. unknown query type, malformed --where). Mirrors the oracle's
-    per-callout try/catch around queryRecords — folds into errorCount /
-    exit 1, NOT the dedicated transport-failure code."""
+    pass
 
 
 class QueryRecordsTransportError(Exception):
-    """The native queryRecords()/formatRecords() call itself crashed
-    unexpectedly for one callout (any exception outside the documented
-    business-error shapes). Dedicated exit code 3 — see module docstring's
-    exit-code contract."""
+    pass
 
 
 class ProcessFileResult(TypedDict):
@@ -224,22 +204,7 @@ class QuerySpec(TypedDict):
     format: str
 
 
-# ---------------------------------------------------------------------------
-# Unit 1 — parsing / traversal helpers
-# (parseArgs, detectRoot, parseQuerySpec, walkMd, buildCodeBlockLineSet,
-#  lineOfOffset in the oracle — coordinator/bin/refresh-queries.js L47-174)
-# ---------------------------------------------------------------------------
-
-
 def parse_args(argv: List[str]) -> ParsedArgs:
-    """Parse CLI args (already stripped of program name — mirrors the
-    oracle's `argv.slice(2)`, i.e. callers pass sys.argv[1:]).
-
-    Raises ArgParseError on an unrecognized argument (the oracle instead
-    does process.exit(1) directly inside parseArgs — see module docstring's
-    exit-code contract for why this port surfaces it as an exception
-    mapped to a dedicated CLI-usage exit code instead).
-    """
     opts: ParsedArgs = {"root": None, "check": False, "files": None}
     i = 0
     while i < len(argv):
@@ -259,24 +224,18 @@ def parse_args(argv: List[str]) -> ParsedArgs:
 
 
 def detect_root(specified: Optional[str]) -> str:
-    """Resolve the repo root: explicit --root, else `git rev-parse
-    --show-toplevel`, else cwd (mirrors the oracle's try/catch fallback)."""
     if specified:
         return os.path.abspath(specified)
     out = show_toplevel()
     if out:
         return out
-    return os.getcwd()  # not inside a git repo (or git unavailable) — fall back to cwd
+    return os.getcwd()
 
 
 _LIMIT_LEADING_INT_RE = re.compile(r"^\s*[+-]?\d+")
 
 
 def _parse_int_like_js(s: str) -> Optional[int]:
-    """Best-effort mirror of JS `parseInt(s, 10)`: parses a leading integer,
-    ignoring trailing non-digit content; returns None (JS NaN's closest
-    Python analogue for this field, still int-or-None as when it travelled
-    over the now-retired JSON bridge) if there is no leading digit run."""
     m = _LIMIT_LEADING_INT_RE.match(s)
     if not m:
         return None
@@ -284,12 +243,6 @@ def _parse_int_like_js(s: str) -> Optional[int]:
 
 
 def parse_query_spec(begin_marker: str) -> QuerySpec:
-    """Parse a "<!-- BEGIN query: type [key=value ...] -->" spec line into
-    a queryRecords/formatRecords-compatible opts dict.
-
-    Raises ValueError (mirrors the oracle's `throw new Error(...)`) if the
-    spec is empty after stripping the BEGIN/END delimiters.
-    """
     inner = re.sub(r"^<!--\s*BEGIN query:\s*", "", begin_marker)
     inner = re.sub(r"\s*-->$", "", inner).strip()
 
@@ -318,13 +271,11 @@ def parse_query_spec(begin_marker: str) -> QuerySpec:
             opts["since"] = t[len("since=") :]
         elif t.startswith("format="):
             opts["format"] = t[len("format=") :]
-        # Unknown tokens are ignored gracefully — forward compat (oracle-matched).
 
     return opts
 
 
 def walk_md(dir_: str, results: Optional[List[str]] = None) -> List[str]:
-    """Recursive walk for **/*.md under dir_, excluding node_modules/.git/archive."""
     if results is None:
         results = []
     try:
@@ -337,7 +288,7 @@ def walk_md(dir_: str, results: Optional[List[str]] = None) -> List[str]:
             is_dir = e.is_dir(follow_symlinks=False)
             is_file = e.is_file(follow_symlinks=False)
         except OSError:
-            continue  # entry vanished between scandir() and stat() — skip it
+            continue
         if is_dir:
             if e.name not in EXCLUDED_DIRS:
                 walk_md(e.path, results)
@@ -347,8 +298,6 @@ def walk_md(dir_: str, results: Optional[List[str]] = None) -> List[str]:
 
 
 def build_code_block_line_set(content: str) -> set:
-    """Return a set of 0-based line numbers inside fenced (``` or ~~~) code
-    blocks — used to skip markers appearing in documentation examples."""
     lines = content.split("\n")
     in_code: set = set()
     inside = False
@@ -368,34 +317,12 @@ def build_code_block_line_set(content: str) -> set:
 
 
 def line_of_offset(content: str, offset: int) -> int:
-    """Given a byte offset into content, return its 0-based line number."""
     return content.count("\n", 0, offset)
-
-
-# ---------------------------------------------------------------------------
-# Native queryRecords()+formatRecords() — see module docstring's
-# "query-records.js dependency" note. Replaces the retired node -e bridge.
-# ---------------------------------------------------------------------------
 
 
 def _run_query_records_native(
     query_opts: QuerySpec, root: str, from_dir: Optional[str] = None
 ) -> str:
-    """In-process queryRecords()+formatRecords(), returning the markdown
-    expansion string for one callout.
-
-    Raises QueryRecordsBusinessError for a business-shaped failure (unknown
-    query type, or an unparseable --where/--since value) — the caller folds
-    this into the per-callout warning/errorCount path, matching the oracle's
-    own try/catch around queryRecords.
-
-    Raises QueryRecordsTransportError for anything else — an unexpected
-    exception inside `query_records`/`format_records` itself — so a genuine
-    crash surfaces as a dedicated exit code, never silently conflated with a
-    business outcome (addendum rule 3b), and stays isolated to THIS callout
-    rather than aborting the whole file walk (see module docstring's
-    per-callout crash-isolation negative-spec).
-    """
     record_type = query_opts["type"]
     where = query_opts.get("where")
     since = query_opts.get("since")
@@ -403,22 +330,11 @@ def _run_query_records_native(
     limit = query_opts.get("limit")
     fmt = query_opts.get("format") or "markdown-list"
 
-    # query_records()/_parse_where()/_parse_since() write their own
-    # diagnostic messages to stderr before raising — captured here so an
-    # unparseable --where/--since surfaces its real message as the
-    # QueryRecordsBusinessError text instead of a generic one, while any
-    # OTHER stderr output (e.g. a `_collect_files` failure note) is still
-    # forwarded to the real stderr once the call returns cleanly.
     captured_stderr = io.StringIO()
     try:
         with contextlib.redirect_stderr(captured_stderr):
             records = query_records(record_type, Path(root), where=where, since=since, limit=0)
             if record_type == "handoff" and where and _ROADMAP_ID_WHERE_RE.search(where):
-                # A shipped/archived baton for this roadmap_id must still
-                # appear here (with its true terminal deployment_state, and
-                # a link resolved to its actual archive/handoffs/ location)
-                # rather than silently dropping out of the list the moment
-                # it archives — see module docstring's archive-follow note.
                 archived = query_records(
                     "handoff-archived", Path(root), where=where, since=since, limit=0
                 )
@@ -451,17 +367,10 @@ def _run_query_records_native(
         raise QueryRecordsTransportError(f"native format_records crashed: {exc}") from exc
 
 
-# ---------------------------------------------------------------------------
-# Unit 2 — refresh/check logic + orchestration
-# (processFile, resolveFilesOpt, main in the oracle —
 #  coordinator/bin/refresh-queries.js L175-432)
-# ---------------------------------------------------------------------------
 
 
 def process_file(file_path: str, root: str, check_mode: bool) -> ProcessFileResult:
-    """Find all query callouts in file_path, expand them, and (unless
-    check_mode) write the result back. Returns
-    {"changed": bool, "changedCount": int, "errorCount": int}."""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
@@ -524,10 +433,6 @@ def process_file(file_path: str, root: str, check_mode: bool) -> ProcessFileResu
             error_count += 1
             offset = line_end + 1
             continue
-        # QueryRecordsTransportError intentionally propagates uncaught — the
-        # native query/format call itself crashed unexpectedly, not a
-        # per-callout business outcome; see module docstring's exit-code
-        # contract (dedicated code 3).
 
         updated = replace_block(
             working, begin_marker, END_MARKER, expansion + "\n" if expansion else ""
@@ -543,10 +448,6 @@ def process_file(file_path: str, root: str, check_mode: bool) -> ProcessFileResu
         if updated != working:
             changed_count += 1
         working = updated
-        # Advance past the begin marker using its pre-update position (idx),
-        # which replace_block preserves verbatim. Re-searching from 0 would
-        # re-find the marker string if it appears inside the replacement
-        # content, risking an infinite loop (oracle-matched).
         offset = idx + len(begin_marker)
         if offset >= len(working):
             break
@@ -555,12 +456,6 @@ def process_file(file_path: str, root: str, check_mode: bool) -> ProcessFileResu
         if not check_mode:
             with open(file_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(working)
-            # Register this write with the active coordinator session's
-            # touched.txt (parity with the oracle's lib/coordinator_session.js
-            # selfClaim() shim). Best-effort: claims.self_claim() itself never
-            # raises except on an empty path (never true here — file_path is
-            # always a concrete on-disk path), but the call is still wrapped
-            # so a self-claim failure can never break the write it accompanies.
             try:
                 claims.self_claim(file_path)
             except (OSError, ValueError) as exc:
@@ -573,9 +468,6 @@ def process_file(file_path: str, root: str, check_mode: bool) -> ProcessFileResu
 
 
 def resolve_files_opt(files_opt: str, root: str) -> List[str]:
-    """Resolve --files into a concrete exact-path file list. Splits on
-    comma, resolves each entry relative to root (or absolute as-is), keeps
-    only existing .md files. No glob engine — exact-path allowlist only."""
     entries = [s.strip() for s in files_opt.split(",") if s.strip()]
     resolved: List[str] = []
     for entry in entries:
@@ -586,7 +478,7 @@ def resolve_files_opt(files_opt: str, root: str) -> List[str]:
             if os.path.isfile(abs_path):
                 resolved.append(abs_path)
         except OSError:
-            pass  # Missing/unreadable — skip silently (allowlist semantics, oracle-matched).
+            pass
 
     if len(resolved) < len(entries):
         sys.stderr.write(
@@ -597,10 +489,6 @@ def resolve_files_opt(files_opt: str, root: str) -> List[str]:
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry point. argv is sys.argv[1:] (program name already stripped).
-
-    See module docstring's exit-code contract.
-    """
     try:
         opts = parse_args(argv)
     except ArgParseError as exc:

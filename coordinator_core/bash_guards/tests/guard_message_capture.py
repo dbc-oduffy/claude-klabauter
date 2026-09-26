@@ -90,12 +90,6 @@ from coordinator_core.session.guard_unlock_sentinel import annotate_deny as _ann
 
 @dataclass(frozen=True)
 class GuardCapture:
-    """One `(guard_name, band, envelope)` cell -- the return shape of
-    `capture_all_guards`. `envelope` is `None` for a non-firing guard on
-    this input, exactly the value `GuardEntry.fn()` itself returned; this
-    module performs no None-filtering, since a `None` cell is itself part
-    of what C3's corpus (and C5's "non-triggering cells too" requirement)
-    needs to see."""
 
     name: str
     band: dispatch.GuardBand
@@ -120,11 +114,6 @@ def _maybe_annotate_deny(
     session_id: str,
     agent_id: str,
 ) -> Optional[Dict[str, Any]]:
-    """AC-6: append `guard_unlock_sentinel.annotate_deny`'s unlock-block
-    text to a genuine hard-deny envelope, mirroring `dispatch.py`'s own
-    `_is_hard_deny_envelope and _sentinel_eligible` gate -- see this
-    module's docstring, "AC-6" section, for exactly what is and is not
-    mirrored (never `_consume_unlock`)."""
     if not _is_hard_deny_envelope(envelope):
         return envelope
     sentinel_eligible = fail_closed or entry_name in dispatch._SENTINEL_ELIGIBLE_ADVISORY_GUARDS
@@ -148,18 +137,6 @@ def capture_all_guards(
     policy_file: Optional[str] = None,
     host_is_windows: Optional[bool] = None,
 ) -> List[GuardCapture]:
-    """Invoke every `GuardEntry.fn` in `_build_guard_chain`'s output for one
-    `(cmd, session_id, cwd, payload)` fixture, unconditionally -- no
-    short-circuit on the first non-`None` result, unlike
-    `evaluate_payload_json`'s loop.
-
-    `host_is_windows` is pinned explicitly per call (AC15's per-cell
-    determinism requirement) via `_resolve_host_is_windows_public`, the
-    same resolution `evaluate_payload_json` itself performs
-    (`dispatch.py:711`) -- passing `None` here resolves against the real
-    host, exactly like production; a caller measuring both host legs
-    (AC15) passes `True`/`False` explicitly per call.
-    """
     effective_host_is_windows = _resolve_host_is_windows_public(host_is_windows)
     chain = dispatch._build_guard_chain(
         cmd=cmd,
@@ -191,11 +168,6 @@ def capture_one_guard(
     policy_file: Optional[str] = None,
     host_is_windows: Optional[bool] = None,
 ) -> GuardCapture:
-    """Convenience wrapper over `capture_all_guards` for a caller (e.g. C3's
-    corpus rows) that only wants one named cell without re-deriving the
-    lookup-by-name each time. Raises `KeyError` if `guard_name` is not a
-    registered entry in this call's chain -- fails loud rather than
-    returning a manufactured `None` cell for a typo'd name."""
     captures = capture_all_guards(
         cmd,
         session_id,
@@ -206,19 +178,6 @@ def capture_one_guard(
     )
     by_name = {c.name: c for c in captures}
     return by_name[guard_name]
-
-
-# ---------------------------------------------------------------------------
-# Self-test surface (C1's own AC1/AC15 proof). Deliberately kept in this same
-# file rather than a sibling `test_guard_message_capture.py` -- this chunk's
-# dispatch stub pins exactly one surface to write. Not auto-discovered by the
-# suite's `python_files = ["test_*.py"]` glob (pyproject.toml); run directly
-# via `pytest coordinator_core/bash_guards/tests/guard_message_capture.py`,
-# which pytest collects fine given an explicit path. Downstream chunks (C3's
-# corpus) import `capture_all_guards`/`capture_one_guard` into their own
-# `test_*.py` modules, which is how this seam re-enters the auto-discovered
-# suite for good.
-# ---------------------------------------------------------------------------
 
 
 def _bash_payload(command: str, session_id: str) -> Dict[str, Any]:
@@ -249,13 +208,10 @@ def test_seam_captures_a_firing_guard_with_name_band_envelope():
     assert capture.envelope is not None
     hso = capture.envelope["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
-    assert "no-verify" not in hso  # sanity: this is the envelope, not a wrapper
+    assert "no-verify" not in hso
 
 
 def test_seam_captures_a_non_firing_guard_as_none_envelope():
-    """A harmless command leaves `no-verify` silent -- the seam still
-    returns a `(name, band, envelope)` triple, with `envelope is None`,
-    rather than omitting the cell."""
     cmd = "git status"
     sid = "guard-message-capture-nonfiring"
     capture = capture_one_guard(
@@ -301,22 +257,11 @@ def test_seam_captures_two_different_band_guards_on_the_same_input_no_short_circ
     assert advisory.envelope["hookSpecificOutput"]["permissionDecision"] == "allow"
     assert "additionalContext" in advisory.envelope["hookSpecificOutput"]
 
-    # The two bands actually differ -- otherwise this would not be a
-    # different-band proof, just two guards in the same band.
     assert deny.band != advisory.band
 
 
 def test_seam_pins_host_is_windows_explicitly_per_cell():
-    """AC15: the seam's `host_is_windows` kwarg is honored per call, not
-    re-resolved from the real host -- the same platform-conditioned guard
-    fires differently depending on the pinned value, proving the pin is
-    live rather than ignored."""
-    # Seam-confirmed multiprobe shape (every segment a recognized single-
-    # process-rewritable form) -- same fixture literal as
     # `test_guard_multiprobe_banner.py`'s own `_BANNER_CMD_CONFIRMED`, whose
-    # docstring there records this exact command as the deny/advise-split
-    # fixture: DENY on the Windows leg, allow+advisory on the non-Windows
-    # leg for the identical command.
     cmd = 'echo "=== facts ==="; pwd; whoami; git status; git rev-parse HEAD'
     sid_win = "guard-message-capture-host-windows"
     sid_mac = "guard-message-capture-host-mac"
@@ -338,9 +283,6 @@ def test_seam_pins_host_is_windows_explicitly_per_cell():
     )
     assert win_capture.band == dispatch.GuardBand.PLATFORM_CONDITIONED_DENY
     assert mac_capture.band == dispatch.GuardBand.PLATFORM_CONDITIONED_DENY
-    # Windows leg denies; non-Windows leg is suppressed to an
-    # advisory-shaped or None envelope -- either way, the two legs must not
-    # be identical, proving the pin actually reached the guard.
     win_decision = (win_capture.envelope or {}).get("hookSpecificOutput", {}).get("permissionDecision")
     mac_decision = (mac_capture.envelope or {}).get("hookSpecificOutput", {}).get("permissionDecision")
     assert win_decision == "deny"

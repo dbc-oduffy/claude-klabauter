@@ -53,11 +53,6 @@ def _git(args: Sequence[str], cwd: Path) -> None:
 
 
 def _init_repo_with_pushed_upstream(tmp_path: Path) -> Path:
-    """A `work/*`-branch repo with `origin` already configured and an
-    upstream tracking ref already set (mirrors what any live `push_with_
-    retry` caller's repo looks like -- upstream is established by an
-    EARLIER push, never by this call).
-    """
     remote = tmp_path / "remote.git"
     remote.mkdir()
     _git(["init", "-q", "--bare"], remote)
@@ -77,11 +72,6 @@ def _init_repo_with_pushed_upstream(tmp_path: Path) -> Path:
 
 
 class _GitSpy:
-    """Wraps `git_native._git`, recording every argv this test's call to
-    `push_with_retry` actually spawns -- a true spawn count, not a mock
-    standing in for one, since every `git_native` wrapper `push_with_retry`
-    can reach routes through this single choke point (module docstring).
-    """
 
     def __init__(self, real_git):
         self._real_git = real_git
@@ -108,14 +98,10 @@ def test_push_with_retry_local_half_costs_zero_spawns(tmp_path, monkeypatch):
     assert outcome.acted == ["push"]
     assert outcome.pushed_count == 1
 
-    # Exactly two spawns: the push itself, and the pushed-range REPORT
-    # (rev-list --count), spent only because this push actually landed.
     assert len(spy.calls) == 2, spy.calls
     assert spy.calls[0][0] == "push"
     assert spy.calls[1][:2] == ["rev-list", "--count"]
 
-    # No local-half spawn survived: no `git remote`, no `git rev-parse`
-    # (branch/upstream/HEAD) anywhere in what was actually spawned.
     spawned_subcommands = {call[0] for call in spy.calls}
     assert "remote" not in spawned_subcommands
     assert "rev-parse" not in spawned_subcommands

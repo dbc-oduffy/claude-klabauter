@@ -55,12 +55,6 @@ class ArchiveTransitionRefusalReasonTest(unittest.TestCase):
             encoding="utf-8",
         )
 
-        # The live-children guard used to be stubbed here to a safe verdict so
-        # the call could reach the move. It was deleted from the op on
-        # 2026-08-28 (PM ruling — see the deletion note in
-        # handoff_archive_transition), so there is nothing left to stub and
-        # these tests reach the move on their own. Nothing about what they
-        # actually assert -- refusal-reason plumbing -- has changed.
         self._orig_move = _op.archive_and_commit
         self.addCleanup(self._restore)
 

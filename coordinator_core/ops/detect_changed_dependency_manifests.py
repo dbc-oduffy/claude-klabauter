@@ -62,9 +62,6 @@ from coordinator_core.ipc import register_op
 
 _DEFAULT_SINCE_DAYS = 14
 
-# Cross-ecosystem dependency-manifest / lockfile basenames this detector
-# gates on. Matched against `git ls-files`/`git log --name-only` basenames
-# via fnmatch, so a manifest under any subdirectory still counts.
 _MANIFEST_GLOB_PATTERNS: Tuple[str, ...] = (
     "package.json",
     "package-lock.json",
@@ -102,11 +99,6 @@ def _is_manifest_path(path: str) -> bool:
 
 
 def _run_git(repo_root: Path, args: List[str]) -> Optional[str]:
-    """Run a read-only `git` subprocess in `repo_root`; return stdout on
-    success, None on any failure (not a git repo, `git` missing, no
-    commits yet, timeout) — every failure mode collapses to "nothing to
-    report" rather than raising, per the module negative-spec.
-    """
     try:
         proc = subprocess.run(
             ["git", *args],
@@ -125,10 +117,6 @@ def _run_git(repo_root: Path, args: List[str]) -> Optional[str]:
 
 
 def tracked_manifest_files(repo_root: Path) -> List[str]:
-    """Stage 1 I/O: list every git-tracked path under `repo_root` whose
-    basename matches a manifest pattern. Empty list when `repo_root` is not
-    a git worktree, has no tracked files, or tracks no manifest.
-    """
     stdout = _run_git(repo_root, ["ls-files"])
     if stdout is None:
         return []
@@ -136,11 +124,6 @@ def tracked_manifest_files(repo_root: Path) -> List[str]:
 
 
 def changed_manifest_files_since(repo_root: Path, since_days: int) -> List[str]:
-    """Stage 2 I/O: list git-tracked manifest paths touched by any commit
-    in the last `since_days` days. Empty list when `repo_root` is not a
-    git worktree, has no commits yet, or no manifest path was touched in
-    the window.
-    """
     stdout = _run_git(
         repo_root,
         ["log", f"--since={since_days} days ago", "--name-only", "--pretty=format:"],
@@ -151,13 +134,6 @@ def changed_manifest_files_since(repo_root: Path, since_days: int) -> List[str]:
 
 
 def detect(repo_root: Path, since_days: int = _DEFAULT_SINCE_DAYS) -> dict:
-    """Pure-ish two-stage gate over an already-resolved `repo_root`.
-
-    Stage 2 (`changed_manifest_files_since`) is only invoked when stage 1
-    (`tracked_manifest_files`) found at least one manifest — mirrors the
-    oracle's short-circuit and skips walking commit history for a repo
-    that never tracked a manifest to begin with.
-    """
     manifests = tracked_manifest_files(repo_root)
     if not manifests:
         return {"has_manifests": False, "changed_recently": False, "changed_files": []}
@@ -171,10 +147,6 @@ def detect(repo_root: Path, since_days: int = _DEFAULT_SINCE_DAYS) -> dict:
 
 
 def _resolve_since_days(raw: object) -> int:
-    """Coerce `params["since_days"]` to int, falling back to the default on
-    anything non-coercible (mirrors the standalone `python3 -m` invocation
-    path, which can plausibly hand this through as a string).
-    """
     if raw is None:
         return _DEFAULT_SINCE_DAYS
     try:

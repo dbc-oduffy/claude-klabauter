@@ -1,38 +1,3 @@
-"""test_archive_stamp_cli_close_handoff.py — argv-parsing unit test for
-`archive-stamp-cli close-handoff` (2026-07-25, plan C10).
-
-Defect this closes: DR-084 (2026-07-22) widened the handoff terminal
-vocabulary to add deployment_state:closed + a required closed_reason
-(cancelled|displaced|stale), but no archive-stamp-cli subcommand could write
-it. Three days later an executor tried to close a genuinely dead baton
-(roadmap-lvv-07) and, lacking a correct verb, archived it via
-chain-archive-handoff with a zero-byte frontmatter diff — leaving an
-archived handoff still reading status: open, which
-handoff-archived.schema.json does not admit. Reverted in commit f145480d.
-
-The `_import_module()` seam is monkeypatched (same idiom as
-test_archive_stamp_cli_ship_handoff.py) so this suite never requires
-the engine root to resolve or coordinator_core to be importable — it asserts
-ONLY the argv -> `cs_close_handoff(...)` call-shape translation, not the
-engine behind it (that is
-coordinator_core/ops/tests/test_handoff_transition.py's job, which exercises
-the `close` verb's frontmatter-write/validation/idempotency contract
-directly).
-
-Loaded by file path (`importlib.machinery.SourceFileLoader`) since
-archive-stamp-cli is an extensionless polyglot entrypoint, not a `.py`
-module — same load idiom as test_archive_stamp_cli_ship_handoff.py.
-
-Spec backlink: DoE-claude:pln-cutover-state-machine-a-phase--96db57 § C10;
-state/roadmap/lifecycle-vocab/cutovers/closed-reason-terminal.md.
-
-Run:
-    pytest coordinator/bin/tests/test_archive_stamp_cli_close_handoff.py -v
-
-Renamed from the hyphenated, pytest-uncollectable
-test-archive-stamp-cli-close-handoff.py to this test_* filename; test
-bodies unchanged (already unittest.TestCase).
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -59,9 +24,6 @@ _cli = _load_cli_module()
 
 
 class _RecordingCloseHandoffMod:
-    """Stand-in for coordinator_core.archive_stamp — records the exact
-    kwargs cs_close_handoff was called with, so each test can assert the
-    argv -> call-shape translation without a real claude-klabauter checkout."""
 
     def __init__(self):
         self.calls: list[dict] = []
@@ -117,11 +79,6 @@ class CloseHandoffArgvParsingTest(unittest.TestCase):
         self.assertEqual(self.stub.calls, [])
 
     def test_engine_refusal_propagates_verbatim(self):
-        """A CLI-layer PASS (reason supplied) must still propagate an
-        engine-layer refusal (e.g. an out-of-enum reason, or a conflicting
-        shipped/continued terminal) rather than masking it — the CLI does
-        NOT re-validate the enum itself; cs_close_handoff/the close verb is
-        the single authoritative gate for that."""
 
         class _RefusingMod:
             def cs_close_handoff(self, handoff_path, reason):

@@ -1,12 +1,3 @@
-"""
-Tests for coordinator_core.housekeeping.corpus — Step A of the housekeeping
-pseudocode, the ONE live-corpus read (plan chunk C3).
-
-Covers contract 7's scan-root split (live non-recursive, archive recursive,
-the `.archive/` decoy never descended into), the PermissionError-as-gap
-distinguishability requirement, the exactly-one-read-per-record assertion,
-and the 20 ms leg budget measured against the real-shaped fixture corpus.
-"""
 
 from __future__ import annotations
 
@@ -22,11 +13,6 @@ from coordinator_core.housekeeping.tests.corpus_fixture import (
     TOTAL_LIVE,
     build_corpus,
 )
-
-
-# ---------------------------------------------------------------------------
-# Scan roots: live is non-recursive and never descends into .archive/
-# ---------------------------------------------------------------------------
 
 
 def test_list_live_handoffs_is_non_recursive_and_skips_archive_decoys(tmp_path):
@@ -53,11 +39,6 @@ def test_list_archived_handoffs_covers_nested_and_root_records(tmp_path):
     root_level = [p for p in paths if p.parent == fixture.archive_dir]
     assert nested, "fixture's month-nested archive records were not found"
     assert root_level, "fixture's root-level archive records were not found"
-
-
-# ---------------------------------------------------------------------------
-# PermissionError surfaces as a distinguishable scan gap, never an absence
-# ---------------------------------------------------------------------------
 
 
 def test_permission_error_on_live_dir_is_a_distinguishable_gap(tmp_path, monkeypatch):
@@ -91,9 +72,6 @@ def test_permission_error_gap_is_distinct_from_a_genuinely_empty_dir(tmp_path, m
 
     assert denied_paths == []
     assert denied_gaps != []
-    # The two "empty paths" results are reached through observably different
-    # states -- an empty gaps list vs a non-empty one -- so a caller can
-    # always tell "nothing here" from "could not look".
     assert empty_gaps != denied_gaps
 
 
@@ -116,13 +94,7 @@ def test_permission_error_on_archive_walk_is_a_distinguishable_gap(tmp_path):
 
     assert len(gaps) == 1
     assert "permission denied" in gaps[0]
-    # A partial gap does not suppress the records that WERE listed.
     assert len(paths) == len(fixture.archived_records)
-
-
-# ---------------------------------------------------------------------------
-# Step A: read_live_corpus — one read per record, correct fields, budget
-# ---------------------------------------------------------------------------
 
 
 def test_read_live_corpus_returns_every_live_record_with_requested_keys(tmp_path):
@@ -164,9 +136,6 @@ def test_read_live_corpus_read_count_is_exactly_one_per_record(tmp_path):
 
     assert calls == TOTAL_LIVE
     assert result.read_count == TOTAL_LIVE
-    # Re-reading the same corpus a second time in the same process must not
-    # reuse or double-count the first call's reads -- each call is its own
-    # single pass, matching "nothing else re-reads it" for THIS cycle.
     second = corpus.read_live_corpus(fixture.live_dir, reader=_counting_reader)
     assert second.read_count == TOTAL_LIVE
     assert calls == TOTAL_LIVE * 2
@@ -231,9 +200,6 @@ corpus's own convention in this same package."""
 def test_read_live_corpus_leg_budget(tmp_path):
     fixture = build_corpus(tmp_path)
 
-    # Warm the OS page cache / directory entries before measuring, matching
-    # the plan's own convention that a cold first pass is not what the
-    # budget governs.
     corpus.read_live_corpus(fixture.live_dir)
 
     samples_ms = []

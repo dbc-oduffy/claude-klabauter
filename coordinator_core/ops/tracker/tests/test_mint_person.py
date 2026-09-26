@@ -43,7 +43,6 @@ from unittest import mock
 
 import pytest
 
-# ---- Import guard: fires @register_op side-effect for tracker.mint_person. ----
 import coordinator_core.ops.tracker.mint_person  # noqa: F401
 
 from coordinator_core.ipc import _REGISTRY, dispatch_message
@@ -57,8 +56,6 @@ from coordinator_core.tracker_projection import fold_person_registry, resolve_al
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-# Duplicated locally rather than imported — see module docstring's
-# "Import-hygiene note".
 _EVENTS_DIR_RELPATH = "state/sovereign-tracker"
 _EVENTS_SHARD_GLOB = "events.*.jsonl"
 
@@ -68,7 +65,6 @@ def _run(coro):
 
 
 def _make_git_repo(root: Path) -> Path:
-    """Init a minimal git repository under *root* and return the repo root."""
     root.mkdir(parents=True, exist_ok=True)
 
     def _git(*args: str) -> None:
@@ -102,18 +98,8 @@ _FIXTURE_BUNDLE = {
 }
 
 
-# ---------------------------------------------------------------------------
-# (a) Import-guard floor assertion
-# ---------------------------------------------------------------------------
-
-
 def test_tracker_mint_person_registered():
     assert "tracker.mint_person" in _REGISTRY
-
-
-# ---------------------------------------------------------------------------
-# (b) End-to-end mint + resolve (AC1)
-# ---------------------------------------------------------------------------
 
 
 def test_mint_person_core_mints_and_resolves(tmp_path):
@@ -131,18 +117,11 @@ def test_mint_person_core_mints_and_resolves(tmp_path):
     resolved_id = resolve_alias("github_id", "240204332", registry=registry)
     assert resolved_id == result["person_id"]
 
-    # The numeric id is NOT a `github` value: the handle renames, the id does
-    # not, and the namespace is the axis a consumer enumerates on.
     assert resolve_alias("github", "240204332", registry=registry) is None
     resolved_email = resolve_alias("email", "dan@example.com", registry=registry)
     assert resolved_email == result["person_id"]
     resolved_display = resolve_alias("display", "Dónal example-operator", registry=registry)
     assert resolved_display == result["person_id"]
-
-
-# ---------------------------------------------------------------------------
-# (c) Idempotence — a second call resolves the same person
-# ---------------------------------------------------------------------------
 
 
 def test_mint_person_core_second_call_is_idempotent(tmp_path):
@@ -157,11 +136,6 @@ def test_mint_person_core_second_call_is_idempotent(tmp_path):
     assert second["person_id"] == first["person_id"]
 
 
-# ---------------------------------------------------------------------------
-# (d) Empty bundle mints nothing (DEC-41)
-# ---------------------------------------------------------------------------
-
-
 def test_mint_person_core_empty_bundle_is_a_clean_no_op(tmp_path):
     repo = _make_git_repo(tmp_path / "repo")
 
@@ -169,11 +143,6 @@ def test_mint_person_core_empty_bundle_is_a_clean_no_op(tmp_path):
 
     assert result == {"minted": False, "reason": "empty_bundle", "person_id": None}
     assert not _shard_files(repo)
-
-
-# ---------------------------------------------------------------------------
-# (e) Write target is the LOCAL repo_root only (WRITE BOUND)
-# ---------------------------------------------------------------------------
 
 
 def test_mint_person_core_writes_only_the_local_repo_root(tmp_path):
@@ -189,16 +158,9 @@ def test_mint_person_core_writes_only_the_local_repo_root(tmp_path):
     )
 
 
-# ---------------------------------------------------------------------------
-# (f) Concurrent collision retries via resolve_alias, never raises to caller
-# ---------------------------------------------------------------------------
-
-
 def test_mint_person_core_collision_retries_via_resolve_alias(tmp_path):
     repo = _make_git_repo(tmp_path / "repo")
 
-    # Simulate a concurrent session that already won the race on the
-    # `github` alias before this call's own mint attempt runs.
     winner_id = mint_person_id()
     emit_person_created(winner_id, display_name="Winner", repo_root=repo)
     emit_person_alias_added(winner_id, "github", "dbc-example-operator", repo_root=repo)
@@ -211,13 +173,6 @@ def test_mint_person_core_collision_retries_via_resolve_alias(tmp_path):
 
 
 def test_mint_person_core_collision_on_non_github_alias_resolves_via_that_alias(tmp_path):
-    """A collision on a non-`github` alias, with no `github` value in the
-    losing bundle at all, still recovers — via the alias that actually
-    collided (`email` here), not a hardcoded `github` retry.
-
-    # Regression coverage for the
-    # retry using whichever alias actually collided rather than always
-    # `github`; this bundle has no `github` key to fall back on at all."""
     repo = _make_git_repo(tmp_path / "repo")
 
     winner_id = mint_person_id()
@@ -233,19 +188,8 @@ def test_mint_person_core_collision_on_non_github_alias_resolves_via_that_alias(
 
 
 def test_mint_person_core_collision_on_later_alias_resolves_to_true_winner(tmp_path):
-    """The untested ordering the P1 finding named: THIS call's own `github`
-    alias lands uncontested, and a LATER alias (`github_id`) collides with a
-    genuinely different, pre-existing person. The retry must resolve via
-    `github_id` (the alias that actually collided), returning the TRUE
-    winner's `person_id` — not resolve `github` back to this call's own
-    just-written orphan and misreport a real conflict as resolved.
-
-    # This is the exact untested
-    # collision ordering the finding identified."""
     repo = _make_git_repo(tmp_path / "repo")
 
-    # A pre-existing, unrelated person who owns the `github_id` this call's
-    # bundle will also carry — no collision on `github` at all.
     winner_id = mint_person_id()
     emit_person_created(winner_id, display_name="Someone Else", repo_root=repo)
     emit_person_alias_added(winner_id, "github_id", "240204332", repo_root=repo)
@@ -256,10 +200,6 @@ def test_mint_person_core_collision_on_later_alias_resolves_to_true_winner(tmp_p
     assert result["reason"] == "collision_resolved"
     assert result["person_id"] == winner_id
 
-    # This call's OWN `github` alias landed uncontested before the
-    # `github_id` collision struck — confirm resolving `github` finds the
-    # orphan this call created, distinct from the true winner, proving the
-    # retry did NOT fall back to resolving `github`.
     registry = fold_person_registry(repo_root=repo)
     orphan_id = resolve_alias("github", "dbc-example-operator", registry=registry)
     assert orphan_id is not None
@@ -267,12 +207,6 @@ def test_mint_person_core_collision_on_later_alias_resolves_to_true_winner(tmp_p
 
 
 def test_mint_person_core_collision_on_person_created_reraises(tmp_path, monkeypatch):
-    """A `TrackerEntityError` raised by `emit_person_created` itself (nothing
-    of this call's own has succeeded yet) must never attempt an alias-based
-    recovery — re-raise rather than guess at a recovery target.
-
-    # Regression coverage for scoping
-    # the collision-recoverable `try` to only the alias-emission loop."""
     from coordinator_core.tracker_entities import TrackerEntityError
 
     repo = _make_git_repo(tmp_path / "repo")
@@ -286,11 +220,6 @@ def test_mint_person_core_collision_on_person_created_reraises(tmp_path, monkeyp
 
     with pytest.raises(TrackerEntityError):
         _mint_person_core(bundle=dict(_FIXTURE_BUNDLE), repo_root=repo)
-
-
-# ---------------------------------------------------------------------------
-# (g) No second lock acquisition in the retry path
-# ---------------------------------------------------------------------------
 
 
 def test_mint_person_core_retry_path_acquires_no_additional_lock(tmp_path):
@@ -307,15 +236,7 @@ def test_mint_person_core_retry_path_acquires_no_additional_lock(tmp_path):
         result = _mint_person_core(bundle=dict(_FIXTURE_BUNDLE), repo_root=repo)
 
     assert result["reason"] == "collision_resolved"
-    # The retry path re-reads via fold_person_registry/resolve_alias exactly
-    # once — it never imports or calls a lock-acquiring RMW primitive of its
-    # own (sat-05's no-second-lock anti-scope).
     assert spied_fold.call_count == 1
-
-
-# ---------------------------------------------------------------------------
-# (h) AC1 — four-surface wiring + command-type smoke
-# ---------------------------------------------------------------------------
 
 
 def test_handler_repo_root_none_raises_runtime_error():

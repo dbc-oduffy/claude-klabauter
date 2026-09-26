@@ -32,10 +32,6 @@ from coordinator_core.install import substrate
     reason="this test asserts the POSIX skip path; run only where os.name != 'nt'",
 )
 def test_skips_cleanly_on_posix(monkeypatch):
-    """On a non-Windows shell, `_is_windows_shell()` is False regardless of
-    any other mocking, so the function must return immediately without
-    touching `_resolve_python_bin`, `_cygpath_w`, or the registry-facing
-    helpers — a real skip, not a vacuous pass that happens to do nothing."""
     monkeypatch.delenv("OSTYPE", raising=False)
     monkeypatch.delenv("OS", raising=False)
     assert substrate._is_windows_shell() is False
@@ -57,12 +53,9 @@ def _force_windows_shell(monkeypatch):
     assert substrate._is_windows_shell() is True
 
 
-# Deliberately NOT tmp_path-derived — tmp_path lives under the system temp
-# dir, which `_refuse_machine_mutation` blocks as "the signature of a test
 # sandbox path" (see test_substrate.py's own `_FAKE_REAL_INSTALL_PATH`
-# convention this mirrors). A literal string that never touches disk.
 _FAKE_REAL_INTERPRETER_DIR = (
-    r"C:\fake-operator-profile\real-interpreter"  # abs-path-ok: fixture, never resolved on disk
+    r"C:\fake-operator-profile\real-interpreter"
     if os.name == "nt"
     else "/fake-operator-profile/real-interpreter"
 )
@@ -110,7 +103,6 @@ def test_idempotent_on_second_run(monkeypatch, tmp_path, capsys):
         lambda: py_bin,
     )
     monkeypatch.setattr(substrate, "_cygpath_w", lambda p: p)
-    # Already present this time — mirrors the state after the first run.
     monkeypatch.setattr(
         substrate,
         "_win_user_path_entries",

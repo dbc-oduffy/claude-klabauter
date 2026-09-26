@@ -38,10 +38,6 @@ from typing import Any, Iterator
 
 from coordinator_core.contract.emit_memo_schema import emit_schemas
 
-# Mirrors the plan's discriminator examples (DoE-claude, example-retrieval-repo,
-# cockpit, example-fleet/machine-b, example-game-repo) — any codename followed closely by a
-# navigation verb ("see"/"read"/"check"/"visit") is the broken shape a
-# publish-scrub turns into a dead pointer.
 _CODENAMES = ("DoE-claude", "project-rag", "cockpit", "example-fleet", "example-game-repo")
 _NAVIGATION_PATTERN = re.compile(
     r"\b(see|read|check|visit)\b[^.]{0,60}(" + "|".join(_CODENAMES) + r")",
@@ -96,10 +92,6 @@ class TestDescriptionsDoNotDirectReadersToUnreachableRepos:
                     )
 
     def test_functional_repo_keys_still_present(self, tmp_path: Path) -> None:
-        """Guards against over-correction: `repos.doe_claude` /
-        `repos.project_rag` registry-key examples inside `to_repo`'s
-        description are functional identifiers, not navigation prose, and
-        must stay."""
         emitted = emit_schemas(out_dir=tmp_path)
         to_repo_desc = emitted["cross-repo-memo"]["properties"]["to_repo"][
             "description"
@@ -109,11 +101,6 @@ class TestDescriptionsDoNotDirectReadersToUnreachableRepos:
 
 
 class TestSentByPresentAndOptional:
-    """C7 (docs/plans/2026-08-13-session-identity-earns-its-keep.md):
-    `sent_by` is a real, described property on the emitted memo schema, and
-    is NEVER in the `required` array — additive-optional, mirroring
-    `picked_up_by`'s own optional/never-required shape on the receive path.
-    """
 
     def test_sent_by_property_present_with_description(self, tmp_path: Path) -> None:
         emitted = emit_schemas(out_dir=tmp_path)

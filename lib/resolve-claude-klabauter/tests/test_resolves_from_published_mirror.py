@@ -64,11 +64,6 @@ from typing import Optional
 
 import pytest
 
-# Both cases spawn a real interpreter to resolve from the published mirror
-# under genuinely unreachable live-tree rungs -- an in-process resolution
-# would prove nothing, since the rungs under test are the ones a same-process
-# import has already satisfied. The spawn is the point, so the file is tiered
-# onto the cadence suite rather than the fast one.
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -79,9 +74,6 @@ _SHIM_PATH = _REPO_ROOT / "coordinator" / "lib" / "resolve-claude-klabauter" / "
 
 
 def _load_local_shim():
-    """Load THIS repo's shim by path — used only to discover the currently
-    registered mirror path; never to resolve FROM it (that happens inside
-    the subprocess, against the mirror's own copy)."""
     spec = importlib.util.spec_from_file_location("_c2_local_resolve_claude_klabauter_shim", _SHIM_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -90,16 +82,11 @@ def _load_local_shim():
 
 
 def _registered_mirror_root() -> Optional[str]:
-    """The live ``repos.claude_klabauter`` mirror path on THIS box, or
-    ``None`` if unregistered/unusable. Never hardcoded — read fresh off the
-    real machine-local registry every call."""
     shim = _load_local_shim()
     return shim._resolve_published_engine(shim._ml_dir())
 
 
 def _mirror_carries_required_files(mirror_root: str) -> bool:
-    """Checks the mirror's REAL published (redacted) shape — never the
-    source-side "claude-klabauter" names, which the publish pipeline renames away."""
     root = Path(mirror_root)
     return (
         (root / "coordinator_core" / "claude_klabauter_root.py").is_file()
@@ -191,26 +178,11 @@ def test_repointed_resolution_resolves_class_from_mirror_only():
         not_the_working_repo = scratch / "not-the-working-repo"
         not_the_working_repo.mkdir()
         registered_other_working_repo = scratch / "some-other-registered-working-repo"
-        # TOML single-quoted strings are LITERAL -- wrap the raw path in
-        # single quotes directly, never Python's `!r` repr. `!r` on a
-        # backslash-separated Windows path escapes each backslash a SECOND
-        # time before it lands in the TOML literal string, which the TOML
-        # parser then reads back with doubled backslashes -- this bug
-        # pre-dates C4 and is unrelated to the gate mechanism below;
         # RESOLVED_CLASS parsed correctly either way, only RESOLVED_ROOT's
-        # string comparison broke.
         (ml_dir / "registry.local.toml").write_text(
             f'"repos.claude_klabauter" = \'{_mirror_root()}\'\n'
             f'"engine.working_repos.other" = \'{registered_other_working_repo}\'\n'
-            # docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C5
-            # (AC20): the published-engine divert requires `engine.target` to be
             # READABLE — presence-only, its value never inspected. Omitting it
-            # here (as every fixture built before C5 did) means step 1 of the
-            # ladder never fires regardless of the stamp/gate above, falling
-            # through to the live-tree rung and resolving `live-working-tree`
-            # instead of `resolved-engine`. Same one-line fixture fix as
-            # `_make_published_engine_fixture` in
-            # test_working_repos_is_locator_only.py.
             '"engine.target" = \'main\'\n',
             encoding="utf-8",
         )
@@ -223,12 +195,7 @@ def test_repointed_resolution_resolves_class_from_mirror_only():
         env = dict(os.environ)
         env.pop("CLAUDE_KLABAUTER_ROOT", None)
         env.pop("CLAUDE_KLABAUTER_ROOT", None)
-        # Set (not cleared) to a directory that is NOT the registered
-        # working repo above — this is what lets `_is_engine_working_repo`
         # return the CONFIRMED `False` this module's gate requires, rather
-        # than the `None` ("undeterminable") a missing/absent session root
-        # would produce, which would fall through to the live-tree ladder
-        # instead of proving the published rung answered.
         env["CLAUDE_PROJECT_DIR"] = str(not_the_working_repo)
         env["MACHINE_LOCAL_REGISTRY_DIR"] = str(ml_dir)
 
@@ -252,18 +219,6 @@ def test_repointed_resolution_resolves_class_from_mirror_only():
 
 @pytest.mark.skipif(_SKIP_REASON is not None, reason=str(_SKIP_REASON))
 def test_real_op_executes_from_mirror_under_unreachable_live_tree():
-    """Runs a real, side-effect-free op (archive-stamp-cli.py --help)
-    straight out of the mirror's own coordinator/bin/, under the same
-    unreachable-live-tree env as above. Asserts no partial-checkout error
-    fires (exit 0, no traceback on stderr) and the op produces its normal
-    argparse usage output.
-
-    archive-stamp-cli.py is chosen because (unlike
-    publish-resolve-target.py, which is a publish-side tool deliberately
-    never allowlisted into the mirror) it IS genuinely published, is
-    side-effect-free under ``--help`` (prints its subcommand usage banner
-    and exits 0 without touching any handoff/archive state), and is
-    confirmed present via ``_mirror_carries_required_files`` above."""
     target = Path(_mirror_root()) / "coordinator" / "bin" / "archive-stamp-cli.py"
 
     with tempfile.TemporaryDirectory() as td:
@@ -275,9 +230,6 @@ def test_real_op_executes_from_mirror_under_unreachable_live_tree():
         env.pop("CLAUDE_KLABAUTER_ROOT", None)
         env.pop("CLAUDE_PROJECT_DIR", None)
         # Deliberately no MACHINE_LOCAL_REGISTRY_DIR override here — the op
-        # is exec'd directly (not via exec_cli's own resolution ladder), so
-        # this leg proves the mirror's CODE runs standalone once resolved,
-        # not a second resolution pass.
 
         result = subprocess.run(
             [sys.executable, str(target), "--help"],

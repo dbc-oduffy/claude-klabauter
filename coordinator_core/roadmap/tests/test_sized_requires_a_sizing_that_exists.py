@@ -48,8 +48,6 @@ def test_a_citation_nothing_answers_is_unresolved(tmp_path):
 
 
 def test_an_archived_sizing_still_counts_as_sized(tmp_path):
-    """The work was done and filed. Refusing it would re-scout a baton whose
-    sizing exists — the opposite error, and just as wasteful."""
     _sizing(tmp_path, "archive/sizings/2026-08/a.yaml")
     index = _archived_sizing_index(tmp_path)
     resolved, unresolved = _resolve_sizing_citations(
@@ -64,7 +62,6 @@ def test_the_archive_index_is_empty_when_there_is_no_archive(tmp_path):
 
 
 def test_a_mixed_citation_list_splits(tmp_path):
-    """One good citation does not launder a dangling sibling: both are reported."""
     _sizing(tmp_path, "state/sizings/here.yaml")
     resolved, unresolved = _resolve_sizing_citations(
         tmp_path, ["state/sizings/here.yaml", "state/sizings/gone.yaml"], {}

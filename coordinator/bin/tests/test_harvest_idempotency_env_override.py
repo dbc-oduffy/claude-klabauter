@@ -44,8 +44,8 @@ import pytest
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_BIN_DIR = os.path.dirname(_THIS_DIR)  # coordinator/bin
-_COORDINATOR_DIR = os.path.dirname(_BIN_DIR)  # coordinator/
+_BIN_DIR = os.path.dirname(_THIS_DIR)
+_COORDINATOR_DIR = os.path.dirname(_BIN_DIR)
 
 _HARVEST_CLI = os.path.join(_BIN_DIR, "coordinator-harvest-deferrals.py")
 _FIXTURES_DIR = os.path.join(_THIS_DIR, "fixtures", "plan-tasks-spine")
@@ -89,8 +89,6 @@ def test_second_run_idempotent_with_env_override_and_mismatched_cwd(stamped_engi
 
         cmd = ["python3", os.path.abspath(_HARVEST_CLI), "--plan", plan_path]
 
-        # Deliberately mismatched cwd: NOT plan_dir, NOT output_root — this
-        # repo's tests dir (a real git repo, distinct git-root from either).
         mismatched_cwd = _THIS_DIR
 
         r1 = subprocess.run(
@@ -146,8 +144,6 @@ def main() -> int:
         print(f"ERROR: fixture not found at {_FIXTURE_VALID}", file=sys.stderr)
         return 1
 
-    # Guard: never allow this test to touch the real state dirs even if a
-    # future edit accidentally drops an env override or cwd redirect.
     real_queue_dir = os.path.join(_COORDINATOR_DIR, "..", "state", "improvement-queue")
     real_queue_dir = os.path.normpath(real_queue_dir)
     before = set(os.listdir(real_queue_dir)) if os.path.isdir(real_queue_dir) else set()

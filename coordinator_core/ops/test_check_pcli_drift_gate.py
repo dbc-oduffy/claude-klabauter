@@ -1,9 +1,3 @@
-"""Tests for coordinator_core.ops.check_pcli_drift_gate.
-
-Fixtures are synthetic, written into tmp_path — the boundary tests must not
-depend on the live DoE-claude clone. See that module's docstring for the
-granularity/staleness-window reasoning these tests hold to a fixed shape.
-"""
 
 from __future__ import annotations
 
@@ -18,20 +12,12 @@ import pytest
 from coordinator_core.ops import check_pcli_drift_gate as gate
 
 
-# ---------------------------------------------------------------------------
-# Leg 1 — contract-vs-capture drift (pure predicate)
-# ---------------------------------------------------------------------------
-
 _MATCHING_CONTRACT_PROPS = set(gate._MIRRORED.keys()) | gate._CONTRACT_ONLY
 _MATCHING_CAPTURE_OPTS = set(gate._MIRRORED.values()) | gate._CAPTURE_ONLY
 
 
 def test_mirrored_contract_only_capture_only_literal_content():
-    # Ground truth captured by hand this session — not derived from
     # gate._MIRRORED/_CONTRACT_ONLY/_CAPTURE_ONLY, unlike the fixtures
-    # above. A wrong edit to those tables must fail this test even though
-    # it would leave the derived fixtures and their assertions self-
-    # consistent (review-integrator finding #3, coordinatorcode-reviewer-e234de67.md).
     assert gate._MIRRORED == {
         "label": "label",
         "agent_type": "agentType",
@@ -73,11 +59,6 @@ def test_drift_fires_on_missing_mirrored_capture_key():
     assert any("agentType" in r and "missing from capture opts_fields" in r for r in reasons)
 
 
-# ---------------------------------------------------------------------------
-# Leg 2 — staleness (pure predicate, boundary-tested)
-# ---------------------------------------------------------------------------
-
-
 def test_staleness_zero_at_13_days():
     result = gate.compute_staleness(
         "2026-08-01", "workflow-tool-api-capture.2026-08-01.json", today=date(2026, 8, 14)
@@ -111,7 +92,6 @@ def test_staleness_filename_captured_at_mismatch_fails():
 
 
 def test_staleness_max_age_days_shortens_window():
-    # 7-day capture override: fresh at 7, fires at 8.
     fresh = gate.compute_staleness(
         "2026-08-01",
         "workflow-tool-api-capture.2026-08-01.json",
@@ -132,7 +112,6 @@ def test_staleness_max_age_days_shortens_window():
 
 
 def test_staleness_max_age_days_lengthening_is_ignored():
-    # 30-day capture override is ignored — still fires at 15 (14-day authority).
     result = gate.compute_staleness(
         "2026-08-01",
         "workflow-tool-api-capture.2026-08-01.json",
@@ -141,11 +120,6 @@ def test_staleness_max_age_days_lengthening_is_ignored():
     )
     assert result["verdict"] == "STALE"
     assert result["threshold_days"] == 14
-
-
-# ---------------------------------------------------------------------------
-# Leg 3 — C7 hash drift
-# ---------------------------------------------------------------------------
 
 
 def test_hash_drift_clean_on_matching_files(tmp_path):
@@ -165,9 +139,6 @@ def test_hash_drift_fires_on_mismatch(tmp_path):
 
 
 def test_hash_drift_is_eol_insensitive(tmp_path):
-    """The digest is a cross-repo agreement with DoE's export generator, so it
-    must not depend on which OS checked the sources out. CRLF and LF content
-    that differs only in line endings hashes identically on both sides."""
     lf = tmp_path / "lf.md"
     crlf = tmp_path / "crlf.md"
     lf.write_bytes(b"alpha\nbeta\n")
@@ -179,8 +150,6 @@ def test_hash_drift_is_eol_insensitive(tmp_path):
 
 
 def test_hash_drift_still_fires_on_real_content_change(tmp_path):
-    """EOL normalization must not soften the leg: a genuine content edit still
-    drifts, so the CRLF tolerance above is not blanket tolerance."""
     target = tmp_path / "file.md"
     target.write_bytes(b"alpha\r\nbeta\r\n")
     expected = hashlib.sha256(b"alpha\nGAMMA\n").hexdigest()
@@ -191,11 +160,6 @@ def test_hash_drift_still_fires_on_real_content_change(tmp_path):
 def test_hash_drift_raises_gate_error_on_unsupported_algorithm(tmp_path):
     with pytest.raises(gate.GateError):
         gate.compute_hash_drift(tmp_path, "not-a-real-algorithm", {})
-
-
-# ---------------------------------------------------------------------------
-# run_gate — full integration over a synthetic DoE-clone-shaped tmp_path tree
-# ---------------------------------------------------------------------------
 
 
 def _write_contract(schemas_dir: Path, extra_props: dict | None = None) -> None:
@@ -308,8 +272,6 @@ def test_run_gate_nonzero_on_source_hash_mismatch(tmp_path):
 
 
 def test_run_gate_clock_ignores_backdated_mtime(tmp_path):
-    """Backdating the capture file's mtime must not change the verdict — the
-    gate clocks off captured_at, never mtime."""
     doe_root, schemas_dir = _doe_root(tmp_path)
     _write_contract(schemas_dir)
     _write_capture(schemas_dir, captured_at="2026-08-05", filename_date="2026-08-05")
@@ -384,13 +346,6 @@ def test_run_gate_missing_dispatch_feed_schema_raises_gate_error(tmp_path):
         gate.run_gate(doe_root, today=date(2026, 8, 10))
 
 
-# ---------------------------------------------------------------------------
-# Two-tier staleness window (select_window_days) — the 14/90 reconciliation.
-# Negative-spec under test: the wide tier is EARNED by a second capture, never
-# defaulted to and never settable from the capture's own bytes.
-# ---------------------------------------------------------------------------
-
-
 def test_select_window_days_narrow_until_a_second_capture_exists():
     assert gate.select_window_days(0) == gate._MAX_AGE_DAYS
     assert gate.select_window_days(1) == gate._MAX_AGE_DAYS
@@ -454,8 +409,6 @@ def test_run_gate_second_capture_widens_window_and_clears_the_stale_fail(tmp_pat
     _write_capture(schemas_dir, captured_at="2026-08-14", filename_date="2026-08-14")
     _write_resolution(doe_root, schemas_dir)
 
-    # 19d past the newest capture: STALE under the narrow tier, FRESH under the
-    # wide one. The second capture is the only thing that changed.
     lines = gate.run_gate(doe_root, today=date(2026, 9, 2))
     assert lines == [], lines
 
@@ -484,16 +437,12 @@ def test_run_gate_reads_the_newest_capture_when_several_exist(tmp_path):
     )
     _write_resolution(doe_root, schemas_dir)
 
-    # The drift lives ONLY in the newest capture — proving the gate reads it
-    # rather than the lexicographically-first one.
     lines = gate.run_gate(doe_root, today=date(2026, 8, 20))
     assert any("LEG 1" in line for line in lines)
     assert any("brandNewLiveOption" in line for line in lines)
 
 
 def _flat_mirror_root(tmp_path: Path) -> tuple[Path, Path]:
-    """The published flat mirror: schemas/ sits at the repo root, which is the
-    content root by virtue of its own plugin manifest."""
     doe_root = tmp_path / "coordinator-claude"
     (doe_root / ".claude-plugin").mkdir(parents=True)
     (doe_root / ".claude-plugin" / "plugin.json").write_text("{}\n", encoding="utf-8")

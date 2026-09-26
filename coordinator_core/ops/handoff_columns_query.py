@@ -83,11 +83,6 @@ from coordinator_core.ops.records_query import (
 
 _LOG = logging.getLogger(__name__)
 
-# The four columns' keys, plus baton_class, plus the path identifier — see
-# module docstring's "Row shape" section. Kept as a named tuple of keys
-# (rather than inlined at each call site) so the row-shape contract is
-# grep-able in one place and the row-shape test can assert against it
-# directly if desired.
 _COLUMN_KEYS: tuple[str, ...] = (
     "status", "deployment_state", "predecessor", "shipped_in", "baton_class",
 )
@@ -147,8 +142,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     worktree_root = main_worktree_root(repo_root)
 
-    clauses = _parse_where(where_str) if where_str else []  # may sys.exit(1) on bad syntax
-    since_cutoff = _parse_since(since_str)  # may sys.exit(1) on bad syntax
+    clauses = _parse_where(where_str) if where_str else []
+    since_cutoff = _parse_since(since_str)
 
     records = _collect_type_records(
         worktree_root, "handoff", include_archived=include_archived,
@@ -157,18 +152,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         records, since_cutoff=since_cutoff, clauses=clauses,
     )
 
-    # ONE batch call for the whole matching set — O(1) git-log spawns, not
-    # O(records). See module docstring and compute_handoff_columns_batch's
-    # own docstring for the full rationale.
     columns = compute_handoff_columns_batch(
         [rec["frontmatter"] for rec in records], worktree_root,
     )
 
     # baton_class resolved over the DISTINCT `kind` values only, per
-    # frontmatter.baton_class's own docstring instruction to callers wanting
-    # to avoid repeated schema-file I/O in a tight loop — one dict
-    # comprehension over the corpus's distinct kinds (not O(records) reads
-    # of the ~60KB vendored schema), then joined back per record below.
     distinct_kinds = {rec["frontmatter"].get("kind") for rec in records}
     baton_class_by_kind = {kind: baton_class(kind) for kind in distinct_kinds}
 

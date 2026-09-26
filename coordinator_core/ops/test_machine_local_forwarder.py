@@ -21,11 +21,6 @@ def test_forwards_to_real_machine_local_when_present(tmp_path, monkeypatch):
     real.write_text("#!/bin/sh\necho hi\n")
     real.chmod(0o755)
 
-    # `bare_forwarder.forward` resolves via `win_portability.is_executable`
-    # (stat-based exec-bit / PATHEXT check) rather than `os.access` -- the
-    # 2026-08 cutover named in `is_executable`'s own docstring (os.access(X_OK)
-    # silently degrades to existence-only on Windows, which this replaces).
-    # Patch the predicate `forward` actually calls, not the superseded one.
     monkeypatch.setattr(
         "coordinator_core.bare_forwarder.is_executable",
         lambda path: str(path) == str(real),
@@ -39,12 +34,6 @@ def test_forwards_to_real_machine_local_when_present(tmp_path, monkeypatch):
         raise SystemExit(0)
 
     monkeypatch.setattr(os, "execv", fake_execv)
-    # Deliberately diverge sys.argv from the argv passed to main() — Review:
-    # code-reviewer — Finding 1 (2026-07-22 sidecar): main(argv) used to
-    # silently ignore its own argv and forward process-global sys.argv
-    # instead, so this test could only catch drift by keeping the two in
-    # sync by hand. Now that argv is threaded through explicitly, forwarding
-    # must reflect the argv parameter even when sys.argv disagrees.
     monkeypatch.setattr("sys.argv", ["machine-local", "SHOULD-NOT-BE-FORWARDED"])
 
     with pytest.raises(SystemExit) as exc_info:
@@ -72,12 +61,7 @@ def test_falls_back_to_home_when_claude_home_unset(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     # `home_dir()`'s fallback is `Path.home()`, which reads USERPROFILE on
-    # Windows and ignores HOME entirely (`_settings_home.py`'s own
     # `home_dir` docstring: "already honours USERPROFILE" -- HOME is a
-    # POSIX-only rung there). Setting env HOME alone leaves this test
-    # resolving against the real machine's actual home dir on Windows, not
-    # tmp_path. Patch the resolver `forward` actually calls so the fallback
-    # is exercised identically on every platform.
     monkeypatch.setattr("coordinator_core.bare_forwarder.home_dir", lambda: tmp_path)
     real = tmp_path / ".claude" / "bin" / "machine-local"
     real.parent.mkdir(parents=True)

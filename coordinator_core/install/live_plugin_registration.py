@@ -60,13 +60,8 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
 )
 
-#: The record file the platform reads to resolve an installed plugin.
 _INSTALLED_PLUGINS_REL = ("plugins", "installed_plugins.json")
 
-#: Where a COPIED plugin lands. Only a previous ``installPath`` under this
-#: subtree is reported as a displaced copy — an installPath somewhere else
-#: entirely is someone's deliberate choice and is reported as such, not as
-#: cache residue.
 _PLUGIN_CACHE_REL = ("plugins", "cache")
 
 STATUS_ABSENT = "absent"
@@ -76,12 +71,6 @@ STATUS_REPOINTED = "repointed"
 STATUS_UNREADABLE = "unreadable"
 
 
-
-# The single write this module performs: repointing the live plugin record
-# so a marketplace-installed copy stops shadowing the working tree. Declared
-# SHAPED rather than STATIC because the destination root is the caller's
-# `claude_home` parameter, not a constant this module owns -- only the tail
-# (`plugins/installed_plugins.json`) is fixed.
 WRITE_SURFACE = WriteSurfaceDeclaration(
     writer_id="live-plugin-registration",
     source_module="coordinator_core.install.live_plugin_registration",
@@ -150,13 +139,6 @@ def installed_plugin_paths(claude_home: Path) -> dict[str, str]:
 
 
 def read_plugin_name(live_plugin_root: Path) -> Optional[str]:
-    """The plugin's own declared name, read from the clone it lives in.
-
-    Never hardcoded: the record's key is ``<name>@<marketplace>`` and the name
-    half is the plugin's to declare. A hardcoded 'coordinator' would survive
-    exactly until the plugin is renamed, and then repoint nothing while
-    reporting success.
-    """
     manifest = live_plugin_root / ".claude-plugin" / "plugin.json"
     try:
         data = json.loads(manifest.read_text(encoding="utf-8"))
@@ -171,23 +153,6 @@ def _same_path(a: str, b: str) -> bool:
 
 
 def _is_within(candidate: str, root: str) -> bool:
-    """Whether `candidate` sits inside `root`.
-
-    WHY NOT A BARE `os.path.commonpath`. On Windows that raises
-    `ValueError: Paths don't have the same drive` for two absolute paths on
-    different drives -- and different drives is not an error condition here,
-    it is the clearest possible NO. A plugin recorded at `X:/...` against a
-    cache root at `C:/...` is simply not a displaced copy inside the cache,
-    and the caller wants that answer rather than an exception. The same
-    ValueError also fires for a mixed relative/absolute pair, which is
-    likewise a NO rather than a fault.
-
-    Negative-spec: resolves nothing and touches no disk -- a pure string
-    comparison over normcase/normpath, matching `_same_path` above. A
-    symlinked path that reaches into `root` by another name reads as
-    outside; that is deliberate, because the records this reads are compared
-    literally elsewhere in this module too.
-    """
     try:
         return _same_path(os.path.commonpath([candidate, root]), root)
     except ValueError:
@@ -197,18 +162,6 @@ def _is_within(candidate: str, root: str) -> bool:
 def assert_live_plugin_registration(
     claude_home: Path, live_plugin_root: Path, *, dry_run: bool = False
 ) -> dict[str, Any]:
-    """Point every installed record for this plugin at `live_plugin_root`.
-
-    Idempotent by construction — a record already naming the clone with no
-    pinned SHA is left byte-identical and reported ``already-live``.
-
-    Returns a report dict: ``status`` (one of the module's STATUS_* values),
-    ``entries`` (one dict per record acted on, each carrying ``key``,
-    ``previous_path``, ``displaced_copy`` and ``dropped_sha``), and ``path``
-    (the record file). Never raises on a missing or unreadable record file: a
-    box that has never installed a plugin has nothing to assert, and that is an
-    ordinary outcome, not a failure.
-    """
     record_path = claude_home.joinpath(*_INSTALLED_PLUGINS_REL)
     report: dict[str, Any] = {"path": str(record_path), "entries": []}
 
@@ -278,20 +231,12 @@ def assert_live_plugin_registration(
 
 
 def _atomic_write_json(path: Path, data: Any) -> None:
-    """Write through a sibling temp + replace.
-
-    The record file is read by every ``claude`` process on the box, and this
-    install runs on a machine carrying dozens of live sessions — a torn read of
-    a half-written record would strip coordinator from whichever session read
-    it.
-    """
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
     tmp.replace(path)
 
 
 def format_report(report: dict[str, Any]) -> list[str]:
-    """Installer-facing lines. One fact each, no reassurance."""
     status = report.get("status")
     if status == STATUS_ALREADY_LIVE:
         return ["PASS [plugin] coordinator plugin already registered at its live clone"]

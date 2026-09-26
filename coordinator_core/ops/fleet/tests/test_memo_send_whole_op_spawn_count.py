@@ -50,32 +50,19 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
-#: Fire-time re-ask of census row 1 (§ Anti-scope step 0) found a THIRD
-#: reachable site absent from the plan's own census (taken at HEAD
-#: 27f3041975): `coordinator_core/git/commit_signing.py::write_signed_
-#: commit_object`, reached from `git_native._commit_via_head_spine` when
-#: `commit_signing_enabled(root)` is true. This file works the live set,
-#: per this row's own body step 0, rather than the two-site set the plan
-#: text was written against.
-
 
 class _AttributedSpawn(NamedTuple):
     argv: tuple[str, ...]
     origin: str
 
 
-#: Frame-file suffix -> gate-site name, matching the gate's own
 #: `_LEGITIMIZED_SITES` key shape (`(relpath, enclosing, argv0, ordinal)`'s
-#: `relpath`/`enclosing` pair). Compared as `Path(...).as_posix()` suffixes
-#: so the match holds on Windows (drive letters and backslashes never enter
-#: the comparison).
 _GIT_NATIVE_SUFFIX = "coordinator_core/ops/ceremony/git_native.py"
 _RUN_GIT_SUFFIX = "coordinator_core/git/run.py"
 _COMMIT_SIGNING_SUFFIX = "coordinator_core/git/commit_signing.py"
 
 
 def _attribute_frame(frame) -> str | None:
-    """Walk one frame; return the gate site it belongs to, or `None`."""
     filename = Path(frame.f_code.co_filename).as_posix()
     if filename.endswith(_GIT_NATIVE_SUFFIX) and frame.f_code.co_name == "_invoke":
         return "_git._invoke"
@@ -91,15 +78,6 @@ def _attribute_frame(frame) -> str | None:
 
 @contextmanager
 def _count_spawns_attributed(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[_AttributedSpawn]]:
-    """Record EVERY `subprocess.Popen` construction while the block runs,
-    each tagged with the gate site (per `_attribute_frame`) found by walking
-    the constructing stack, or `"unattributed"` when no frame matches.
-
-    Unlike `test_commit_authored_new_file.py`'s `_count_git_spawns`, this
-    records every construction (not only git-shaped argv) -- a non-git spawn
-    on this op is itself a finding this gate exists to surface, and
-    filtering it out would hide exactly that.
-    """
     recorded: list[_AttributedSpawn] = []
     real_popen = subprocess.Popen
 
@@ -128,11 +106,6 @@ def _budget() -> dict:
     return load_manifest()["overrides"]["memo.send"]["spawn_count_budget"]
 
 
-# ---------------------------------------------------------------------------
-# green path — ordinary delivery
-# ---------------------------------------------------------------------------
-
-
 def test_green_path_spawn_count_matches_budget_and_is_attributed(tmp_path, monkeypatch):
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
@@ -151,12 +124,6 @@ def test_green_path_spawn_count_matches_budget_and_is_attributed(tmp_path, monke
     origins = [s.origin for s in spawns]
     assert "unattributed" not in origins, origins
     assert "_git._invoke" in origins, origins
-
-
-# ---------------------------------------------------------------------------
-# head-spine-unreadable refusal — reaches run_git, then _commit_via_head_spine
-# declines rather than falling to a spawning ladder
-# ---------------------------------------------------------------------------
 
 
 def test_unreadable_head_spine_refusal_spawn_count_matches_budget_and_reaches_run_git(
@@ -195,14 +162,6 @@ def test_unreadable_head_spine_refusal_spawn_count_matches_budget_and_reaches_ru
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     _write_draft(sender_repo, "head-spine-unreadable-topic")
 
-    # `_head_entry_for`'s fallback is `git_state.head_blobs`, which -- being
-    # defined in `git_state.py` itself -- resolves its OWN internal
-    # `read_tree_spine(...)` call against `git_state`'s own module globals,
-    # not `git_native`'s imported copy. Patching `git_native.read_tree_spine`
-    # alone leaves `head_blobs` reading a perfectly healthy spine and
-    # answering in-process at zero spawns (measured; see this row's own
-    # return summary). Both bindings are patched so the ls-tree fallback
-    # inside `head_blobs` is actually forced.
     monkeypatch.setattr(git_native, "read_tree_spine", lambda *a, **kw: None)
     monkeypatch.setattr(git_state, "read_tree_spine", lambda *a, **kw: None)
 
@@ -211,7 +170,6 @@ def test_unreadable_head_spine_refusal_spawn_count_matches_budget_and_reaches_ru
             {"dry_run": False, "topic": "head-spine-unreadable-topic"}, repo_root=sender_repo
         )
 
-    # Fail loud: nonzero exit, no sender receipt, receiver inbox untouched.
     assert result["exit_code"] != 0, result
     assert result["acted"] == []
     assert not (
@@ -230,25 +188,9 @@ def test_unreadable_head_spine_refusal_spawn_count_matches_budget_and_reaches_ru
     assert "run_git" in origins, origins
 
 
-# ---------------------------------------------------------------------------
-# receiver signing enabled — reaches write_signed_commit_object
-# ---------------------------------------------------------------------------
-
-
 def test_receiver_signing_enabled_spawn_count_matches_budget_and_reaches_write_signed_commit_object(
     tmp_path, monkeypatch
 ):
-    """NATURAL precondition, no monkeypatch of production code: the receiver
-    repo's own `commit.gpgsign` is set `true` (real `git config`, same
-    fixture shape `_make_receiver_git_repo` already uses to set it `false`).
-    `git_native._commit_via_head_spine` reads `commit_signing_enabled(root)`
-    and calls `write_signed_commit_object`, which spawns `git commit-tree -S`
-    regardless of whether a signing key exists on this box -- DR-308 means a
-    missing/unusable key fails the SIGN attempt, not the spawn, and the
-    commit falls through to the same zero-spawn native write it would have
-    used unsigned. This is the site the fire-time census (this row's own
-    body step 0) found beyond the plan's original two-site set.
-    """
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
     subprocess.run(

@@ -47,8 +47,6 @@ def test_home_relative_interpreter_drops_the_username():
 
 
 def test_interpreter_outside_home_is_left_alone():
-    """The negative control. Blanket-stripping paths would break every advisory
-    on a system-wide install, so the non-home case must survive untouched."""
     outside = os.path.join("C:" + os.sep, "Program Files", "Python313", "python.exe")
     rendered = _bt_render_interpreter_path(outside)
     assert "$HOME" not in rendered
@@ -56,43 +54,23 @@ def test_interpreter_outside_home_is_left_alone():
 
 
 def test_home_rendering_uses_expandable_quotes_not_literal_ones():
-    """`shlex.quote` would emit single quotes, which make `$HOME` literal and the
-    advisory unrunnable. The whole value of these advisories is that they can be
-    pasted and run."""
     rendered = _bt_render_interpreter_path(_home_interpreter())
     assert not rendered.startswith("'"), "single quotes would suppress $HOME expansion: %r" % rendered
     assert "\\" not in rendered, "backslashes escape inside a double-quoted shell string: %r" % rendered
 
 
 def test_live_invocation_carries_no_username():
-    """The end-to-end property on THIS box, through the cache path the advisories
-    actually call."""
     username = os.path.basename(os.path.expanduser("~"))
     assert username not in _bt_python3_invocation()
 
 
 def test_rendering_stays_paste_runnable_by_construction():
-    """An advisory that does not run is worse than none — DR-363 § Options, and
-    the reason a bare `python3` stayed ruled out even after the rejection.
-
-    This asserts the two properties that make the string runnable rather than
-    running it. A test that actually spawned a shell here would add an unmarked
-    spawning test and redden `test_no_new_spawning_tests.py`, so the execution
-    check was done by hand instead, on 2026-08-26, in both hosts this fleet runs:
-
-        bash:       "$HOME/AppData/.../python.exe" -c 'print(...)'   -> ran
-        PowerShell: & "$HOME/AppData/.../python.exe" -c "print(...)"  -> ran
-
-    `$HOME` is what makes one rendering serve both — Git Bash exports it and
-    PowerShell defines it as an automatic variable."""
     rendered = _bt_render_interpreter_path(_home_interpreter())
     assert rendered.startswith('"$HOME/') and rendered.endswith('"')
     assert "/" in rendered and "\\" not in rendered
 
 
 def test_rendering_version_is_folded_into_the_cache_key():
-    """A warm cross-process cache would otherwise keep serving the pre-DR-363
-    string, username and all, until `_machine_local.py` happened to change."""
     from coordinator_core.bash_guards.dispatch_checks import (
         _BT_INTERPRETER_RENDERING_VERSION,
         _bt_python3_invocation_cache_key,

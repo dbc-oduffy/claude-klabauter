@@ -97,12 +97,6 @@ class TestUnscannedPublishedCheckDirect:
         assert ok is True
 
     def test_narrowed_row_extensionless_no_shebang_file_still_fails(self, tmp_path, capsys):
-        """A row that explicitly opts INTO the pre-inversion narrowing
-        (`narrow_to_include_extensions: true`) still gets the old,
-        extension-gated behavior -- the narrowing opt-out this leg's
-        classifier (`_classify_unscanned_reason`) documents as dormant-not-
-        dead. No real store row sets this key today; this proves the path
-        stays correct for the day one does."""
         target = _target(tmp_path)
         (target.dest_dir / "some-cli-trampoline").write_text(
             "# a comment, not a shebang\nprint('raw claude-klabauter')\n", encoding="utf-8"
@@ -124,8 +118,6 @@ class TestUnscannedPublishedCheckDirect:
         assert "narrow_to_include_extensions is set" in captured.err
 
     def test_binary_content_is_unscanned_and_fails_even_by_default(self, tmp_path, capsys):
-        """The one exclusion that survives the inversion unconditionally:
-        content-detected binary. No `narrow_to_include_extensions` needed."""
         target = _target(tmp_path)
         (target.dest_dir / "asset.bin").write_bytes(b"\x00\x01binary")
         section = {"file_surface": {}}
@@ -178,16 +170,6 @@ class TestUnscannedPublishedCheckDirect:
         assert ok is True
 
     def test_pycache_pyc_is_structurally_excluded_not_flagged(self, tmp_path):
-        """`__pycache__/*.pyc` is a locally-generated Python build artifact,
-        never copied into a destination clone by any row's sync (source-side
-        `.percolate-ignore` already excludes it) -- anything that
-        subsequently RUNS Python inside the destination (a pytest run, a
-        stray `python -m`) recreates it there with no row ever having
-        "published" it. Measured live: a real
-        claude-klabauter-publish-repo-toplevel run reported 499 such
-        findings, all `__pycache__/*.pyc`, drowning any real finding.
-        Structural exclusion (`_is_structurally_never_published`), same
-        mechanism as `.git/*`, not a per-file ratified exception."""
         target = _target(tmp_path)
         pycache = target.dest_dir / "coordinator_core" / "__pycache__"
         pycache.mkdir(parents=True)
@@ -201,11 +183,6 @@ class TestUnscannedPublishedCheckDirect:
         assert ok is True
 
     def test_unscanned_source_file_still_fails_alongside_pycache_noise(self, tmp_path, capsys):
-        """The direction that proves the pycache fix is a narrow noise
-        exclusion, not a hole: a real unscanned SOURCE file (`.md`/`.py`)
-        sitting right next to `__pycache__` noise in the same tree must
-        still fail the gate, loudly, and the pycache file must not appear
-        in the failure output."""
         target = _target(tmp_path)
         pycache = target.dest_dir / "coordinator_core" / "__pycache__"
         pycache.mkdir(parents=True)
@@ -248,10 +225,6 @@ class TestUnscannedPublishedCheckDirect:
         assert ok is True
 
     def test_unscanned_source_file_still_fails_alongside_fleet_env_noise(self, tmp_path, capsys):
-        """The direction that proves the `.fleet-env` fix is a narrow noise
-        exclusion, not a hole: a real unscanned SOURCE file sitting right next
-        to `.fleet-env` noise in the same tree must still fail the gate,
-        loudly, and no `.fleet-env` path may appear in the failure output."""
         target = _target(tmp_path)
         venv = target.dest_dir / ".fleet-env" / "lib" / "python3.14" / "site-packages"
         venv.mkdir(parents=True)
@@ -294,10 +267,6 @@ class TestUnscannedPublishedCheckDirect:
         assert ok is True
 
     def test_unscanned_source_file_still_fails_alongside_fleet_env_prior_noise(self, tmp_path, capsys):
-        """The direction that proves the `.fleet-env.prior` fix is a narrow noise
-        exclusion, not a hole: a real unscanned SOURCE file sitting right next to
-        `.fleet-env.prior` noise in the same tree must still fail the gate, loudly,
-        and no `.fleet-env.prior` path may appear in the failure output."""
         target = _target(tmp_path)
         venv = target.dest_dir / ".fleet-env.prior" / "Lib" / "site-packages"
         venv.mkdir(parents=True)
@@ -375,15 +344,6 @@ class TestUnscannedPublishedCheckDirect:
         assert "unscanned-published check unavailable" in captured.err
 
     def test_target_filtered_run_still_hard_fails(self, tmp_path, capsys):
-        """Unlike the identity and install-doc-payload legs, --target
-        filtering does not make this leg advisory -- each finding is a
-        property of one row's own dest tree, with no cross-row dependency
-        to legitimately excuse it. Uses binary content (the one exclusion
-        that survives the admission inversion unconditionally) rather than
-        an extensionless-no-shebang fixture, since that shape is now
-        correctly admitted by default (§ test_extensionless_no_shebang_file_
-        is_admitted_by_default_and_passes) and would not exercise a failure
-        at all."""
         target = _target(tmp_path)
         (target.dest_dir / "asset.bin").write_bytes(b"\x00binary")
         section = {"file_surface": {}}
@@ -413,7 +373,6 @@ class TestUnscannedPublishedCheckDirect:
         section = {"file_surface": {"include_extensions": ["*.py"]}}
         repo_root = publish._dest_repo_root(target.dest_dir) or target.dest_dir
 
-        # Only "scrubbed.py" was actually visited this run -- the other file is
         # published (on disk) and ELIGIBLE (matches *.py) but was never recorded.
         visited_files_by_repo_root = {repo_root: {target.dest_dir / "scrubbed.py"}}
 
@@ -440,11 +399,6 @@ class TestUnscannedPublishedCheckDirect:
         assert ok is True
 
     def test_visited_files_by_repo_root_never_merged_with_eligibility_rederivation(self, tmp_path):
-        """A file matching the row's file_surface params but ABSENT from the
-        supplied visited set must fail even though the pre-fix `iter_surface_files`
-        re-derivation would happily call it eligible -- proves the fix does not
-        fall back to (or merge with) eligibility re-derivation once a real visited
-        set is supplied for this repo root."""
         target = _target(tmp_path)
         (target.dest_dir / "eligible_but_unvisited.py").write_text("print('x')\n", encoding="utf-8")
         section = {"file_surface": {"include_extensions": ["*.py"]}}
@@ -471,9 +425,9 @@ class TestUnscannedPublishedCheckDirect:
         (sub_dir / "only_yaml_row_catches.yaml").write_text("x: 1\n", encoding="utf-8")
 
         row_a = publish.ResolvedTarget(name="a", mode="mirror", source_dir=src, dest_dir=sub_dir)
-        section_a = {"file_surface": {"include_extensions": ["*.py"]}}  # would NOT catch .yaml
+        section_a = {"file_surface": {"include_extensions": ["*.py"]}}
         row_b = publish.ResolvedTarget(name="b", mode="flat-mirror", source_dir=src, dest_dir=repo_root)
-        section_b = {"file_surface": {"include_extensions": ["*.yaml"]}}  # catches it
+        section_b = {"file_surface": {"include_extensions": ["*.yaml"]}}
 
         ok = publish.dispatch_end_of_run_unscanned_published_check(
             [(row_a, section_a), (row_b, section_b)], target_filtered=False

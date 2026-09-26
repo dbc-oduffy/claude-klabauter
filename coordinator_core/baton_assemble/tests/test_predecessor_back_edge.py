@@ -36,33 +36,16 @@ from coordinator_core.test_baton_assemble import (
     _ReplayHarness,
 )
 
-# `_ReplayHarness` drives a REAL `apply()` run against a real git repo and the
-# REAL `handoff.archive_transition` op — no mock stands in for the write this
-# file pins. Mirrors the spawn/cadence marking of its sibling suites in this
-# directory (`test_ledger_claim_record_liveness.py`,
-# `test_apply_degrade_no_compensation.py`), which use the same harness.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 @pytest.fixture(autouse=True)
 def _stub_operator_config(monkeypatch):
-    """Restated per-module, as every sibling suite using `_ReplayHarness`
-    does — an autouse fixture is module-scoped and does not cross into this
-    one. See `test_apply_degrade_no_compensation.py`'s identical fixture for
-    why: without it, `resolve_operator_config()` fails loud under this
-    suite's HOME quarantine and every `apply()` run aborts at d1."""
     monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
     monkeypatch.setattr(ba_apply, "_resolve_claude_klabauter_bin", lambda: _REPO_CLAUDE_KLABAUTER_BIN)
 
 
 def test_supersede_stamped_back_edge_is_read_by_wsc_leg_b_as_a_live_child(tmp_path, monkeypatch):
-    """The end-to-end contract: run a real `apply()` supersede (d1 mints a
-    successor, d6 supersedes+archives the predecessor), then hand the
-    archived predecessor's own repo-relative path to `workstream_complete
-    ._dispatch_has_live_children` exactly as `_evaluate_consumed_handoff_
-    completeness_element` does — and confirm it reports a live child, off
-    the SAME `continued_into` field d6 just stamped, with no op dispatch,
-    no IPC hop, no corpus walk."""
     harness = _ReplayHarness(tmp_path, monkeypatch)
     exit_code, report = harness.run()
 
@@ -81,10 +64,6 @@ def test_supersede_stamped_back_edge_is_read_by_wsc_leg_b_as_a_live_child(tmp_pa
 
 
 def test_a_never_superseded_predecessor_reads_as_no_children(tmp_path, monkeypatch):
-    """The negative case, over the SAME harness fixture, run only through
-    seeding (no `apply()` call): a predecessor carrying no `continued_into`
-    at all reads as leg B's genuine "no-children" verdict, `exit_code=1` —
-    not a fallback scan, because none exists anymore."""
     harness = _ReplayHarness(tmp_path, monkeypatch)
 
     result = _dispatch_has_live_children(harness.repo, _PRED_REL)

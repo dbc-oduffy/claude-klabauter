@@ -198,13 +198,6 @@ def _iter_scan_files(plugin_root: str, bundled_wiki: str) -> List[str]:
 
 
 def _discover_wiki_names(plugin_root: str, bundled_wiki: str) -> "tuple[List[str], List[str]]":
-    """Port of the oracle's grep+sed+sort+placeholder-filter pipeline.
-
-    Returns (wiki_names, unreadable_files). A file that cannot be opened is a
-    hole in the scan, not a clean miss -- it could be exactly the file citing
-    the mirror/orphan doc this tool exists to catch, so the caller must treat
-    a non-empty unreadable_files as scan-incomplete rather than folding it
-    silently into "no citations found here"."""
     names = set()
     unreadable: List[str] = []
     for path in _iter_scan_files(plugin_root, bundled_wiki):
@@ -212,9 +205,7 @@ def _discover_wiki_names(plugin_root: str, bundled_wiki: str) -> "tuple[List[str
             with open(path, encoding="utf-8", errors="replace") as fh:
                 text = fh.read()
         except OSError:
-            # --- Tier 2 (behaviour change -- PM sign-off required) ---
             unreadable.append(path)
-            # --- end Tier 2 ---
             continue
         for match in _WIKI_CITATION_RE.findall(text):
             name = match[len("docs/wiki/") : -len(".md")]
@@ -279,7 +270,6 @@ def main(argv: List[str]) -> int:
             log(f"  {path}")
 
     if not names:
-        # --- Tier 2 (behaviour change -- PM sign-off required) ---
         if unreadable_files:
             log(
                 "No docs/wiki/ references found among readable files, but the "
@@ -287,7 +277,6 @@ def main(argv: List[str]) -> int:
                 "the single-tree invariant holds."
             )
             return 1
-        # --- end Tier 2 ---
         log("No docs/wiki/ references found in plugin files. Nothing to validate.")
         return 0
 
@@ -345,7 +334,6 @@ def main(argv: List[str]) -> int:
     if missing_bundled > 0:
         log(f"Note: {missing_bundled} referenced wiki(s) missing from bundled tree. doc-link-checker handles broken links separately.")
 
-    # --- Tier 2 (behaviour change -- PM sign-off required) ---
     if unreadable_files:
         log(
             f"Plugin-bundled wiki: INCOMPLETE -- {len(unreadable_files)} file(s) "
@@ -353,7 +341,6 @@ def main(argv: List[str]) -> int:
             f"{missing_bundled} missing-bundled warnings among readable files)."
         )
         return 1
-    # --- end Tier 2 ---
 
     log(f"Plugin-bundled wiki: clean ({validated} validated, {missing_bundled} missing-bundled warnings).")
     return 0

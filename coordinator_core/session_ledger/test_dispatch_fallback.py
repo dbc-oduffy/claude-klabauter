@@ -1,19 +1,3 @@
-"""
-coordinator_core.session_ledger.test_dispatch_fallback
-
-Covers the ``dispatched-agents.txt`` fallback added to
-``aggregate_chain_loe`` per state/debt-backlog/2026-08-11-chain-loe-renders-
-a-fully-dispatched-ses-d6981e622244.yaml — a chain-terminal handoff carrying
-NO ``## Session Ledger`` block (e.g. a machine-generated crash-
-reconstruction recovery baton) now falls back to the per-session
-``dispatched-agents.txt`` already written by ``track_dispatched_agents.py``,
-rather than silently reporting zero effort.
-
-Fixture layout mirrors ``test_aggregate_chain_loe.py``'s own git-repo helper
-but drives ``aggregate()`` directly (not the CLI) so ``_session_core.
-sessions_dir`` can be monkeypatched to a controlled temp directory instead
-of resolving the real machine's git-common-dir session hub.
-"""
 from __future__ import annotations
 
 import subprocess
@@ -24,14 +8,7 @@ import pytest
 from coordinator_core.session_ledger import aggregate_chain_loe as agg
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Real-git spawn is load-bearing: the fixture mirrors
-# test_aggregate_chain_loe.py's own git-repo helper, and `aggregate()` reads
-# real git-common-dir/session-hub state via monkeypatched `sessions_dir` --
-# a mock repo would not exercise the fallback-file discovery path itself.
-# Per-test isolation via tmp_path fixtures, not hoisted. The spawn ratchet's
 # `_BASELINE` is shrink-only pre-existing residue and is explicitly not the
-# route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -116,14 +93,10 @@ def test_fallback_counts_dispatched_agents_when_no_ledger_block(tmp_path, monkey
     assert result["opus_dispatches"] == 1
     assert result["chain_sessions_with_ledger"] == "0 of 1"
     assert result["chain_sessions_with_dispatch_fallback"] == "1 of 1"
-    assert result["tshirt"] != "XS" or result["agent_dispatches"] == 3  # tshirt recomputed from real counts
+    assert result["tshirt"] != "XS" or result["agent_dispatches"] == 3
 
 
 def test_fallback_absent_when_no_dispatched_agents_file(tmp_path, monkeypatch):
-    """A ledger-less handoff whose recovers_session has no dispatched-agents.txt
-    at all degrades to the pre-existing zero-record behavior — no fabricated
-    zero-effort record is synthesized (distinct from a present-but-empty file,
-    which legitimately yields (0, 0))."""
     repo = _init_repo(tmp_path)
     sessions_dir = tmp_path / "sessions-hub"
     sessions_dir.mkdir()
@@ -146,16 +119,13 @@ def test_fallback_absent_when_no_dispatched_agents_file(tmp_path, monkeypatch):
 
 
 def test_fallback_never_double_counts_when_both_sources_present(tmp_path, monkeypatch):
-    """A handoff carrying a REAL Session Ledger block must never also draw
-    from dispatched-agents.txt for the same session — the fallback is a
-    fallback, not an additional source."""
     repo = _init_repo(tmp_path)
     sessions_dir = tmp_path / "sessions-hub"
     sid = "sid-with-both"
     _write_agents_file(
         sessions_dir,
         sid,
-        ["a1\tclaude-sonnet-5\tcoordinator:executor\t1"] * 8,  # would be 8 if double-counted
+        ["a1\tclaude-sonnet-5\tcoordinator:executor\t1"] * 8,
     )
     monkeypatch.setattr(agg._session_core, "sessions_dir", lambda: str(sessions_dir))
 
@@ -170,7 +140,7 @@ def test_fallback_never_double_counts_when_both_sources_present(tmp_path, monkey
     )
 
     assert result["exit_code"] == 0
-    assert result["agent_dispatches"] == 3  # from the ledger row only, NOT 3+8
+    assert result["agent_dispatches"] == 3
     assert result["chain_sessions_with_ledger"] == "1 of 1"
     assert result["chain_sessions_with_dispatch_fallback"] == "0 of 1"
 

@@ -1,24 +1,3 @@
-"""test_prune_closed_improvements.py — self-contained test suite for
-prune-closed-improvements.py.
-
-Sibling of test_prune_closed_bugs.py, same structure. The one structural
-difference under test: fleet.archive_queue_entry does NOT self-select
-candidates (unlike fleet.prune_closed_bugs), so this script does client-side
-discovery via load_family_records and dispatches the BATCH form of
-fleet.archive_queue_entry (params.entry_paths) — ONE dry_run:true preview call
-and ONE dry_run:false act call over the WHOLE candidate set, not one call pair
-per candidate (2026-08-06, F9 fix — see prune-closed-improvements.py's own
-module docstring for the incident this replaces: a per-entry-commit sweep
-raced HEAD and lost one entry to a `cannot lock ref 'HEAD'` collision while
-still exiting 0).
-
-Runs bash-free: `python3 test_prune_closed_improvements.py` (or via the
-coordinator test runner).  Exit 0 = all tests pass; non-zero = at least one
-failure.
-
-Spec backlink: coordinator/commands/update-docs.md (DoE-claude) § Phase 11i
-Spec backlink: docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
-"""
 from __future__ import annotations
 
 import contextlib
@@ -42,12 +21,6 @@ def _pass(label: str) -> None:
 
 
 def _fail(label: str, detail: str = "") -> None:
-    """Fail the enclosing test.
-
-    Negative-spec: this MUST raise. It previously only printed and bumped a
-    module-global counter that nothing ever asserted on, which made every
-    check in this file decorative. Do not "restore" the counting-only shape.
-    """
     global FAIL
     print(f"  FAIL: {label}")
     if detail:
@@ -57,7 +30,6 @@ def _fail(label: str, detail: str = "") -> None:
 
 
 def _load_module():
-    """Import prune-closed-improvements.py as a fresh module object each call."""
     path = os.path.join(SCRIPT_DIR, "prune-closed-improvements.py")
     spec = importlib.util.spec_from_file_location("prune_closed_improvements_under_test", path)
     mod = importlib.util.module_from_spec(spec)
@@ -67,7 +39,6 @@ def _load_module():
 
 
 def _run_main_capturing(mod, argv=None, fake_load_records=None, fake_route=None):
-    """Run mod.main(argv or []) with stdout/stderr captured; optionally fake both seams."""
     orig_load_records = mod.load_family_records
     orig_route = mod.route
     if fake_load_records is not None:
@@ -84,9 +55,6 @@ def _run_main_capturing(mod, argv=None, fake_load_records=None, fake_route=None)
     return rc, out.getvalue(), err.getvalue()
 
 
-# ===========================================================================
-# Empty candidates from discovery -> Call 1/2 skipped, "nothing to prune".
-# ===========================================================================
 def test_empty_candidates_skips_all_calls():
     mod = _load_module()
 
@@ -121,13 +89,6 @@ def test_empty_candidates_skips_all_calls():
         _fail("empty candidates: 'nothing to prune' message printed", f"stdout: {out!r}")
 
 
-# ===========================================================================
-# Two-call BATCH shape: Call 1 (dry_run:true, entry_paths=<whole set>)
-# previews; Call 2 (dry_run:false, entry_paths=<previewed set>) archives in
-# ONE call -- exactly two route() calls total regardless of candidate count,
-# and the entry_paths param carries the WHOLE list each time (never a
-# per-candidate call). Full success prints the true count, no WARN.
-# ===========================================================================
 def test_two_call_batch_shape():
     mod = _load_module()
     calls = []
@@ -164,7 +125,6 @@ def test_two_call_batch_shape():
     else:
         _fail("two-call-batch: exit 0", f"got rc={rc}")
 
-    # ONE dry_run:true call + ONE dry_run:false call, regardless of candidate count.
     if len(calls) == 2:
         _pass("two-call-batch: exactly 2 route() calls total (1 preview + 1 act)")
     else:
@@ -196,9 +156,6 @@ def test_two_call_batch_shape():
         _pass("two-call-batch: no WARN on full success")
 
 
-# ===========================================================================
-# --dry-run mode skips the act call (Call 2) entirely.
-# ===========================================================================
 def test_dry_run_mode_skips_act_calls():
     mod = _load_module()
 
@@ -235,10 +192,6 @@ def test_dry_run_mode_skips_act_calls():
         _fail("dry-run mode: preview message printed", f"stdout: {out!r}")
 
 
-# ===========================================================================
-# An item whose preview (Call 1) errors is dropped with a WARN and never
-# reaches the act call's entry_paths (Call 2).
-# ===========================================================================
 def test_preview_failure_drops_candidate():
     mod = _load_module()
     act_entry_paths = []
@@ -294,11 +247,6 @@ def test_preview_failure_drops_candidate():
         _fail("preview failure: surviving candidate still archived", f"stdout: {out!r}")
 
 
-# ===========================================================================
-# Discovery itself fails (e.g. transport/read-seam error) -> WARN + skip,
-# exit 0 -- discovery failure, unlike an archive failure, never attempted a
-# mutation.
-# ===========================================================================
 def test_discovery_failure_is_non_blocking():
     mod = _load_module()
 
@@ -323,12 +271,7 @@ def test_discovery_failure_is_non_blocking():
         _fail("discovery failure: WARN on stderr", f"stderr: {err!r}")
 
 
-# ===========================================================================
-# F9 fix, primary regression case: a per-item error in the ACT call's
-# response (e.g. one entry lost the batch commit to `cannot lock ref 'HEAD'`
 # while the rest landed) is named AND makes the process exit NON-ZERO --
-# never swallowed into a WARN-only exit 0.
-# ===========================================================================
 def test_partial_act_failure_is_named_and_nonzero():
     mod = _load_module()
 
@@ -375,10 +318,6 @@ def test_partial_act_failure_is_named_and_nonzero():
         _fail("partial act failure: surviving entry still reported archived", f"stdout: {out!r}")
 
 
-# ===========================================================================
-# A total batch-commit failure (the act call's transport itself raises, or
-# every item comes back with an error) also exits non-zero, never 0.
-# ===========================================================================
 def test_batch_dispatch_transport_failure_is_nonzero():
     mod = _load_module()
 
@@ -408,10 +347,6 @@ def test_batch_dispatch_transport_failure_is_nonzero():
         _fail("batch transport failure: reason surfaced on stderr", f"stderr: {err!r}")
 
 
-# ===========================================================================
-# An act item returning archived:False with NO error (idempotent replay --
-# already archived / concurrent archive) is NOT reported as a failure.
-# ===========================================================================
 def test_idempotent_noop_is_not_a_failure():
     mod = _load_module()
 

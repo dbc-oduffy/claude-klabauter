@@ -1,11 +1,3 @@
-"""Tests for coordinator_core.ops.repo_bootstrap.
-
-Machine-local registry calls are faked via an in-memory dict monkeypatched
-over `_machine_local_registry_get`/`_machine_local_set` (no real `machine-local`
-binary is required/invoked). Every `git` invocation runs against a throwaway
-source repo created fresh under pytest's `tmp_path` fixture and cloned via
-the real `clone_idempotent()` — never the working claude-klabauter repo.
-"""
 from __future__ import annotations
 
 import subprocess
@@ -16,8 +8,6 @@ import pytest
 from coordinator_core.ops import repo_bootstrap as rb
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -41,7 +31,6 @@ def _run_git(args: list[str], cwd: Path) -> None:
 
 
 def _make_source_repo(tmp_path: Path) -> Path:
-    """A throwaway local git repo (one commit) to clone from."""
     src = tmp_path / "source-repo"
     src.mkdir()
     _run_git(["init"], cwd=src)
@@ -54,8 +43,6 @@ def _make_source_repo(tmp_path: Path) -> Path:
 
 
 class _FakeRegistry:
-    """Stand-in for the machine-local registry, monkeypatched over the
-    module's own get/set helpers so no real `machine-local` CLI is needed."""
 
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
@@ -98,9 +85,6 @@ def test_fresh_clone_and_register(tmp_path, fake_registry):
 
 
 def test_second_invocation_is_a_safe_no_op(tmp_path, fake_registry):
-    """AC7 — double-invocation with identical inputs is idempotent: no
-    re-clone, no re-registration, no mutation of the already-present checkout
-    or the already-registered key."""
     src = _make_source_repo(tmp_path)
     target = tmp_path / "cloned" / "sibling"
 
@@ -120,12 +104,10 @@ def test_second_invocation_is_a_safe_no_op(tmp_path, fake_registry):
         "already_present": True,
     }
     assert marker.stat().st_mtime == original_mtime
-    assert fake_registry.set_calls == set_calls_after_first  # no new registration write
+    assert fake_registry.set_calls == set_calls_after_first
 
 
 def test_on_disk_but_not_registered_completes_registration_only(tmp_path, fake_registry):
-    """Partial-state repair: a pre-existing manual clone (on disk, never
-    registered) gets registered without being re-cloned."""
     src = _make_source_repo(tmp_path)
     target = tmp_path / "manual-clone"
     _run_git(["clone", str(src), str(target)], cwd=tmp_path)
@@ -147,8 +129,6 @@ def test_on_disk_but_not_registered_completes_registration_only(tmp_path, fake_r
 
 
 def test_registered_but_missing_on_disk_reclones_only(tmp_path, fake_registry):
-    """Partial-state repair: a registered key whose target directory has
-    since vanished gets re-cloned without touching the registry again."""
     src = _make_source_repo(tmp_path)
     target = tmp_path / "vanished" / "sibling"
     fake_registry.store["repos.sibling"] = str(target)
@@ -162,7 +142,7 @@ def test_registered_but_missing_on_disk_reclones_only(tmp_path, fake_registry):
         "already_present": False,
     }
     assert (target / ".git").is_dir()
-    assert fake_registry.set_calls == []  # already-registered key was never re-written
+    assert fake_registry.set_calls == []
 
 
 def test_resolve_machine_local_bin_fallback_uses_userprofile_when_home_absent(
@@ -186,7 +166,6 @@ def test_resolve_machine_local_bin_fallback_uses_userprofile_when_home_absent(
     fallback.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     fallback.chmod(0o755)
     # Path.home() only consults USERPROFILE on a real Windows interpreter;
-    # simulate that resolution here so the test proves the delegation shape.
     monkeypatch.setattr(Path, "home", lambda: userprofile_home)
 
     assert rb._resolve_machine_local_bin() == str(fallback)
@@ -226,9 +205,6 @@ def test_machine_local_set_failure_raises_repo_bootstrap_error(tmp_path, monkeyp
     with pytest.raises(rb.RepoBootstrapError):
         rb.clone_and_register_sibling_repo("repos.sibling", str(src), str(target))
 
-    # Clone itself must have succeeded even though registration failed —
-    # the repo is on disk but unregistered, matching the raised error's
-    # own remediation text.
     assert (target / ".git").is_dir()
 
 

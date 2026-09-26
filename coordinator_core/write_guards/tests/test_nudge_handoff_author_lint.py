@@ -275,8 +275,7 @@ class TestMultisetDedupe:
         )
         assert result is not None
         context = _context(result)
-        assert context.count("LEDGER_ROW_UNPARSEABLE".lower()) == 0  # not embedded literally
-        # exactly one relayed line for the ledger finding
+        assert context.count("LEDGER_ROW_UNPARSEABLE".lower()) == 0
         ledger_lines = [
             line for line in context.splitlines() if "Session Ledger" in line
         ]

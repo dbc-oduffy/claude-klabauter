@@ -60,22 +60,11 @@ from typing import List, Optional
 _TERMINATE_TIMEOUT_SECS = 5.0
 _KILL_TIMEOUT_SECS = 3.0
 
-# `scratch/` and not a new name: `.gitignore` already ignores it AT ANY DEPTH
-# ("`scratch/` matches at any depth (top-level scratch/, tasks/scratch/, etc.)"
-# -- that file's own comment), so this needs no ignore-rule edit to stay out of
-# `git status`, and a peer reading the tree already knows what it is. The
-# `benchmark-clones/` leaf keeps these separable from anything else that lands
-# in `scratch/`, so a sweep can target them by name.
 _SCRATCH_RELPATH = ("scratch", "benchmark-clones")
 
 
 class RootlessCloneDestination(RuntimeError):
-    """A clone destination that resolves under no git root.
-
-    Its own class rather than a bare `AssertionError` so a caller can catch it
-    narrowly, and so `-O` (which strips `assert`) cannot silently disarm the
-    check -- this is a correctness guard, not a debug aid.
-    """
+    pass
 
 
 def _assert_under_git_root(destination: Path) -> None:
@@ -102,9 +91,6 @@ def _assert_under_git_root(destination: Path) -> None:
     )
 
 
-# A clone older than this is not a live fixture's -- the gates that mint them
-# run in seconds, and a stuck one is bounded by pytest's own --timeout=300.
-# An hour is far past both, so nothing in flight is ever reaped.
 _STALE_CLONE_AGE_SECS = 3600.0
 
 
@@ -139,34 +125,12 @@ def _reap_stale_clones(scratch: Path) -> None:
             if now - entry.stat().st_mtime < _STALE_CLONE_AGE_SECS:
                 continue
         except OSError:
-            # Race (deleted between iterdir() and here) or a Windows
-            # reparse-point/permission error -- either way "not demonstrably
-            # a stale clone", never a reason to fail the mint path.
             continue
         reap_processes_under(entry)
         shutil.rmtree(entry, ignore_errors=True)
 
 
 def mkdtemp_for_clone(source_root: Path, *, prefix: str) -> Path:
-    """Make a fresh throwaway directory for an isolated engine clone, on the
-    same volume as `source_root` and under a git root.
-
-    Same volume is a HARD requirement, not a preference: `os.link` cannot
-    cross volumes, and these clones are hardlinked. That is what rules out
-    `tempfile.gettempdir()` and why this takes `source_root` rather than a
-    destination -- callers must not be able to answer the volume question
-    wrongly.
-
-    Returns the `mkdtemp`'d parent. The caller owns removing it, and should do
-    so through `reap_processes_under` + `rmtree_or_raise` below rather than a
-    bare `rmtree` -- see this module's docstring for what a bare one hides.
-
-    RAISES `RootlessCloneDestination` when no `.git` is found above the
-    resolved destination. This is the one place the question can be answered
-    honestly: "resolves under no git root" is a fact about where this box has
-    the tree checked out, not a property of the source text, so it is decidable
-    at runtime here and NOT decidable by any static reading of the call.
-    """
     scratch = source_root.joinpath(*_SCRATCH_RELPATH)
     _assert_under_git_root(scratch)
     scratch.mkdir(parents=True, exist_ok=True)
@@ -175,25 +139,11 @@ def mkdtemp_for_clone(source_root: Path, *, prefix: str) -> Path:
 
 
 def _normalized(path: Path) -> str:
-    """Comparison form for a root: absolute, symlink-resolved, and
-    case-folded on the platforms whose paths are case-insensitive, so a
-    cmdline spelling that differs only in case or in 8.3-vs-long form still
-    matches the root it actually runs out of."""
     resolved = os.path.realpath(str(path))
     return resolved.casefold() if sys.platform in ("win32", "darwin") else resolved
 
 
 def _process_is_rooted_under(proc, root_norm: str) -> bool:
-    """True when this process's command line or working directory resolves
-    under `root_norm`.
-
-    Both axes are needed and neither subsumes the other: the detached
-    supervisor names its script path in `cmdline` (matching there), while a
-    child it spawns in turn may carry only an inherited `cwd`. Every psutil
-    accessor here can raise on a process that exits mid-inspection or that
-    this user cannot open -- all of which mean "not demonstrably ours", so
-    they resolve False rather than propagating.
-    """
     import psutil
 
     try:
@@ -202,13 +152,6 @@ def _process_is_rooted_under(proc, root_norm: str) -> bool:
         cmdline = ""
     if cmdline:
         probe = cmdline.casefold() if sys.platform in ("win32", "darwin") else cmdline
-        # Not a bare substring test: a cmdline is not a path, so it cannot use
-        # a pure path-boundary check, but "root_norm in probe" alone would
-        # also match a sibling whose path merely appears as a longer prefix
-        # (`...warm-door-gate-AAAA` inside `...warm-door-gate-AAAAX`). Require
-        # the root to be followed by a path separator or to end the string --
-        # same boundary strength as the cwd axis below, different mechanism
-        # because a cmdline can embed the root anywhere, not just as a prefix.
         idx = probe.find(root_norm)
         while idx != -1:
             end = idx + len(root_norm)
@@ -268,7 +211,7 @@ def reap_processes_under(root: Path) -> List[int]:
 
 
 class CloneTeardownLeak(RuntimeError):
-    """A clone survived its own teardown, and something is still holding it."""
+    pass
 
 
 def rmtree_or_raise(root: Path, *, label: str, reaped: Optional[List[int]] = None) -> bool:

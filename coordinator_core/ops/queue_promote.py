@@ -59,7 +59,7 @@ DR authority: docs/decisions/DR-213-queue-write-substrate-carveout.md
 
 from __future__ import annotations
 
-GENERATES = []  # writes only into DoE-claude's central state/lessons-outbox/, never claude-klabauter's own tree
+GENERATES = []
 
 import datetime
 import hashlib
@@ -82,45 +82,18 @@ from coordinator_core.telemetry import op_latency
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 
 _SLUG_MAX_CHARS = 40
 
-# Env var override for test isolation.
 _OUTBOX_ROOT_ENV = "LESSON_PROMOTE_OUTBOX_ROOT"
 
 
 class _DoeUnresolvable(RuntimeError):
-    """Raised when the DoE-claude central root cannot be resolved.
-
-    Callers catch this and degrade gracefully (WARN+skip, exit 0) per AC6.
-    Negative-spec: NO cwd fallback — stop-the-rot C12 closes the cwd-fallback landmine;
-    the same negative-spec applies here even though C12 was written against the
-    claude-klabauter-rooted queue.append central scope (see ``coordinator_doe_root``'s own
-    fail-loud-to-None contract for the DoE-side rung chain).
-    Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC13
-    """
+    pass
 
 
 class _OssMirrorWriteRefused(_DoeUnresolvable):
-    """Raised when the resolved DoE-claude root is actually the OSS publish
-    mirror, not the DoE-claude working tree (claude-klabauter#39).
-
-    The 2026-09-19 fleet learn-lessons run wrote 370 duplicate outbox
-    entries into ``/root/coordinator-claude`` (untracked) because the
-    container's machine-local registry resolved ``repos.doe_claude`` to the
-    OSS publish mirror instead of the real DoE-claude working tree. Doctrine
-    (DoE-claude ``CLAUDE.md``): the OSS mirror is a publish target, never a
-    working tree — it authors no handoffs/plans/lessons and must never
-    receive an outbox entry.
-
-    Subclasses ``_DoeUnresolvable`` so the existing WARN+skip degrade in
-    ``_queue_promote_handler`` (AC6: exit 0, ``{skipped: True, reason: ...}``)
-    covers this case too, without a second except-clause — a resolved-but-
-    unusable root degrades the same way an unresolvable one does.
-    """
+    pass
 
 
 def _is_oss_publish_mirror(root: str) -> bool:
@@ -140,11 +113,6 @@ def _is_oss_publish_mirror(root: str) -> bool:
         return os.path.isfile(os.path.join(root, *FLAT_CONTENT_ROOT_MARKER))
     except (TypeError, ValueError):
         return False
-
-
-# ---------------------------------------------------------------------------
-# Output path helper
-# ---------------------------------------------------------------------------
 
 
 def _outbox_root_override() -> "str | None":
@@ -219,18 +187,7 @@ def _outbox_root(doe_root: Optional[str] = None) -> str:
     return os.path.join(doe, "state", "lessons-outbox")
 
 
-# ---------------------------------------------------------------------------
-# Slug and timestamp helpers
-# ---------------------------------------------------------------------------
-
-
 def _slug_from_title(title: str) -> str:
-    """Sanitize a title into a filesystem-safe slug (40 chars max).
-
-    Mirrors coordinator-lesson-promote._slug_from_title:
-        lowercase → collapse non-[a-z0-9] runs to '-' → strip leading/trailing '-'
-        → truncate to 40 chars → rstrip trailing '-' left by truncation.
-    """
     slug = title.lower()
     slug = re.sub(r"[^a-z0-9]+", "-", slug)
     slug = slug.strip("-")
@@ -238,10 +195,6 @@ def _slug_from_title(title: str) -> str:
 
 
 def _now_iso() -> str:
-    """Return current UTC datetime as ISO 8601 string (seconds precision).
-
-    Mirrors coordinator-lesson-promote._now_iso.
-    """
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
 
@@ -256,22 +209,7 @@ def _ts_for_filename(iso_ts: str) -> str:
     return re.sub(r"[:+]", "-", iso_ts)
 
 
-# ---------------------------------------------------------------------------
-# YAML serialization (byte-parity with coordinator-lesson-promote)
-#
-# F2 pin: ordered string formatting, NOT yaml.safe_dump.
-# This format uses ``---`` / ``---`` fences (distinct from queue.append's fenceless format).
-# ---------------------------------------------------------------------------
-
-
 def _yaml_str(value: str) -> str:
-    """Serialize a string value for YAML.
-
-    Multi-line → strip-chomped block scalar (``|-``).
-    Single-line → quoted when YAML-special.
-
-    Mirrors coordinator-lesson-promote._yaml_str.
-    """
     if "\n" in value:
         indented = "\n".join("  " + line if line.strip() else "" for line in value.splitlines())
         return "|-\n" + indented
@@ -291,12 +229,6 @@ def _yaml_str(value: str) -> str:
 
 
 def _compose_yaml(fields: dict) -> str:
-    """Compose a YAML document from an ordered dict of fields with ``---`` fences.
-
-    Handles ``str`` and ``list[str]`` values. None values are serialized as empty string.
-
-    Mirrors coordinator-lesson-promote._compose_yaml.
-    """
     lines = ["---"]
     for key, value in fields.items():
         if value is None:
@@ -312,11 +244,6 @@ def _compose_yaml(fields: dict) -> str:
             lines.append(f"{key}: {_yaml_str(str(value))}")
     lines.append("---")
     return "\n".join(lines) + "\n"
-
-
-# ---------------------------------------------------------------------------
-# Content digest (collision guard — DR-213 D2(i) amendment)
-# ---------------------------------------------------------------------------
 
 
 def _content_digest(fields: dict) -> str:
@@ -348,41 +275,15 @@ def _content_digest(fields: dict) -> str:
     NO disk read — computed entirely from in-hand params (DR-213 D4; op remains
     write-always / additive-create, not a dedup pre-check).
     """
-    # Derive emit_order from fields.keys() minus provenance
-    # (id/created) rather than a hardcoded literal list, so a future field added to
-    # promote_lesson's fields dict (line ~502) participates automatically instead of
-    # silently dropping out of the digest (Finding 5). fields is built in fixed
-    # insertion order (see "byte-parity" comment at promote_lesson), so key order here
-    # is deterministic across calls.
     emit_order = [k for k in fields if k not in ("id", "created")]
 
-    # hand-joined "key=value" pipe strings had no delimiter
-    # escaping; free-text fields (body, title, etc.) containing '|' or '=' could collide
-    # two distinct entries onto one digest. Structured JSON serialization handles
-    # internal escaping so no field value can inject a false separator (Finding 1).
     ordered_content = {key: fields.get(key) for key in emit_order}
     content_key = json.dumps(ordered_content, ensure_ascii=False, sort_keys=False)
     full_hash = hashlib.sha1(content_key.encode("utf-8")).hexdigest()
     return full_hash[:12]
 
 
-# ---------------------------------------------------------------------------
-# Core write logic
-# ---------------------------------------------------------------------------
-
-
 def _validate_change_kind(change_kind: str) -> None:
-    """Validate change_kind against the lessons-outbox schema enum.
-
-    Mirrors coordinator-lesson-promote argparse-choices validation:
-    derives valid values from an in-process ``schema_validate.describe("lessons-outbox")``
-    call at call time (native replacement for the former ``schema-cli.js --describe``
-    subprocess shell-out).
-
-    Raises:
-        ValueError — if change_kind is not in the schema's enum.
-        RuntimeError — if the schema cannot be described (unexpected schema structure).
-    """
     described = _describe_schema("lessons-outbox")
     try:
         valid_values: tuple = tuple(described["enums"]["change_kind"])
@@ -411,53 +312,22 @@ def promote_lesson(
     created: Optional[str] = None,
     doe_root: Optional[str] = None,
 ) -> dict:
-    """Write a lessons-outbox YAML entry.
-
-    Byte-parity port of coordinator-lesson-promote._write_entry + main() write path.
-
-    Parameters:
-        title        — one-line lesson title.
-        body         — lesson body prose.
-        change_kind  — kind of change (validated against schema enum).
-        target_wiki  — central wiki path this lesson targets.
-        scope_tags   — optional list of scope tags.
-        evidence     — optional evidence reference.
-        from_repo    — from_repo identity; defaults to caller_worktree basename + "-em".
-        caller_worktree — caller's worktree root (for from_repo fallback; not used for
-                          path routing since outbox is always central claude-klabauter state).
-        entry_id     — uuid4 string; if None, a fresh uuid is generated.
-        created      — ISO timestamp; if None, now(utc) is generated.
-        doe_root     — caller-resolved DoE root; see ``_outbox_root``.
-
-    Returns:
-        {out_path: str, entry_id: str, from_repo: str, change_kind: str, target_wiki: str}
-
-    Raises:
-        ValueError — invalid change_kind.
-        RuntimeError — schema description unavailable (unexpected schema structure).
-        _DoeUnresolvable — DoE-claude root unresolvable (caller degrades gracefully).
-    """
-    # Validate change_kind.
     _validate_change_kind(change_kind)
 
-    # Generate deterministic fields when not supplied (by caller or test harness).
     if entry_id is None:
         entry_id = str(uuid.uuid4())
     if created is None:
         created = _now_iso()
 
-    # Resolve from_repo.
     if from_repo is None:
         if caller_worktree is not None:
             from_repo = os.path.basename(str(caller_worktree)) + "-em"
         else:
             from_repo = "unknown-sender-em"
 
-    # Resolve outbox root (_DoeUnresolvable propagates to caller).
     outbox = _outbox_root(doe_root)
     os.makedirs(outbox, exist_ok=True)
 
-    # Build fields in fixed insertion order (byte-parity with lesson-promote._write_entry).
     fields: dict = {
         "id": entry_id,
         "created": created,
@@ -472,22 +342,15 @@ def promote_lesson(
     if evidence:
         fields["evidence"] = evidence
 
-    # Compute content digest (no disk read — in-hand params only, DR-213 D4).
     digest12 = _content_digest(fields)
 
     ts_safe = _ts_for_filename(created)
     slug = _slug_from_title(title)
-    # Filename is content-keyed (DR-213 D2(i) amendment, 2026-07-08): the trailing
-    # -<digest12> disambiguates distinct same-second+slug entries (both survive) while
-    # a genuine re-run of an identical lesson still dedups to one file. See
-    # _content_digest for field-set/exclusion rationale.
     filename = f"{ts_safe}-{slug}-{digest12}.yaml"
     out_path = os.path.join(outbox, filename)
 
     content = _compose_yaml(fields)
 
-    # Upgraded from plain open() to atomic temp+os.replace (output bytes identical;
-    # atomicity is non-observable in file content — safe upgrade, not a parity break).
     dir_path = os.path.dirname(out_path)
     fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".tmp")
     try:
@@ -511,9 +374,7 @@ def promote_lesson(
     }
 
 
-# ---------------------------------------------------------------------------
 # JSON-RPC handler
-# ---------------------------------------------------------------------------
 
 
 @register_op("queue.promote")
@@ -545,12 +406,10 @@ def _queue_promote_handler(
 
     On ``_DoeUnresolvable``: logs WARN, returns ``{skipped: true, reason: "..."}``.
     """
-    # Derive caller's worktree from socket-authoritative common_dir.
     caller_worktree: Optional[Path] = None
     if repo_root is not None:
         caller_worktree = main_worktree_root(repo_root)
 
-    # Parse scope_tags: accept list or comma-separated string.
     scope_tags = params.get("scope_tags")
     if isinstance(scope_tags, str):
         scope_tags = [t.strip() for t in scope_tags.split(",") if scope_tags.strip() and t.strip()]
@@ -572,7 +431,6 @@ def _queue_promote_handler(
             doe_root=params.get("doe_root") or None,
         )
     except _DoeUnresolvable as exc:
-        # AC6: graceful-degrade on unresolvable DoE-claude root — WARN + skip, exit 0.
         logger.warning(
             "queue.promote: DoE-claude root unresolvable — skipping write: %s. "
             "Remediation: set REPO_DOE_CLAUDE or run "
@@ -581,19 +439,6 @@ def _queue_promote_handler(
         )
         return {"skipped": True, "reason": str(exc)}
 
-    # Self-report scope-touch contract (design (b), 2026-08-04 — see
     # coordinator_core.ipc's module-level comment above `_SCOPE_TOUCH_PATHS_KEY`).
-    # `out_path` is the ONE file this call actually wrote (promote_lesson's write
-    # primitive is a single write-temp + atomic-rename) — declare exactly that.
-    # This IS a cross-repo write (the DoE-claude outbox, not the caller's own
-    # worktree) — as of the 2026-08-04 F1 fix, `_record_self_reported_touches`
-    # anchors containment on the CALLER's OWN repo, so this declaration is
-    # SKIPPED (logged, never recorded) whenever the caller's worktree isn't
-    # the DoE-claude root itself. That is deliberate, not a bug: recording a
-    # claim in a repo this caller has no standing in was reproduced stealing
-    # a live native session's own file in that repo (see the ipc.py contract
-    # comment). The write still lands on disk; it stays an orphan at the
-    # DoE-claude sink, which owns its own adoption path for that residual.
-    # `dispatch_message` strips this key before the wire envelope is built.
     result["_scope_touch_paths"] = [result["out_path"]]
     return result

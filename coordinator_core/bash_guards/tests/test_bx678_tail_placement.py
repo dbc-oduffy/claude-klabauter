@@ -65,8 +65,6 @@ PLATFORM_GUARDS = {
 
 #: `grep-via-bash-guard` moved from PLATFORM_CONDITIONED_DENY to
 #: ADVISORY_REWRITE (H11(a), 2026-07-30, docs/plans/2026-07-30-os-aware-
-#: guard-advisory-defaults.md) -- its own substitutable/deny branch was
-#: removed the same day (0 denies on either platform, provably
 #: unreachable). Checked against ADVISORY_REWRITE_NAMES separately below
 #: (never folded into PLATFORM_GUARDS) so the two band-membership
 #: assertions this module makes -- `PLATFORM_GUARDS` is exactly
@@ -76,9 +74,6 @@ GREP_VIA_BASH_GUARD_NAME = "grep-via-bash-guard"
 
 # Every ADVISORY_REWRITE entry that can return allow+updatedInput (a genuine
 # rewrite) -- the subset of ADVISORY_REWRITE_NAMES this test cares about
-# short-circuiting ahead of the platform guards. `validate-commit` and
-# `inprocess-search` are advisory/content, not rewrites, and are
-# deliberately excluded here (mirrors the retired
 # `test_hard_denies_precede_rewrites.py`'s own `REWRITING_GUARDS` set).
 REWRITING_GUARDS = {
     "offer-git-c",
@@ -137,7 +132,6 @@ def test_platform_guards_are_band_tagged_platform_conditioned_deny_not_confineme
     )
     assert not (PLATFORM_GUARDS & set(CONFINEMENT_DENY_NAMES))
     assert not (PLATFORM_GUARDS & set(ADVISORY_REWRITE_NAMES))
-    # `grep-via-bash-guard` is the mirror-image assertion: it must now be
     # ADVISORY_REWRITE, never PLATFORM_CONDITIONED_DENY or CONFINEMENT_DENY.
     assert by_name[GREP_VIA_BASH_GUARD_NAME] is GuardBand.ADVISORY_REWRITE
     assert GREP_VIA_BASH_GUARD_NAME in ADVISORY_REWRITE_NAMES

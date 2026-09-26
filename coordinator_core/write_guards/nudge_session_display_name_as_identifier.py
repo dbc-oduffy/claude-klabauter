@@ -165,19 +165,9 @@ from coordinator_core.write_guards.nudge_windows_subprocess_popup import (
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
-# Advisory band; next free slot after nudge_handoff_ac_shape (220). See
-# docs/wiki/write-guard-priority-bands.md for the band convention. No
-# lower-numbered advisory guard scans record-body prose for a session
-# display name, so no same-surface collision applies.
 PRIORITY = 221
 
-#: In-scope path segments (forward-slash form; a raw payload path is
-#: normalized to forward slashes before this check runs). A record class
 #: is in scope iff its normalized path CONTAINS one of these as a
-#: substring segment — matches `nudge_private_git_fact_resolver.py`'s own
-#: "hot path marker" substring-containment style rather than a rooted
-#: prefix compare, since the payload path may be absolute, cwd-relative,
-#: or already git-root-relative depending on caller.
 _IN_SCOPE_MARKERS = (
     "state/bug-backlog/",
     "state/debt-backlog/",
@@ -189,11 +179,7 @@ _IN_SCOPE_MARKERS = (
 )
 
 #: Explicitly out-of-scope markers, checked BEFORE `_IN_SCOPE_MARKERS` —
-#: named here (not merely absent from that tuple) so a reader sees the
-#: exclusion is deliberate. None of these strings currently collide with
 #: an `_IN_SCOPE_MARKERS` entry, but the explicit-first check keeps that
-#: true even if a future in-scope marker were ever a substring of one of
-#: these (e.g. a nested `archive/` mirror of a scoped directory).
 _OUT_OF_SCOPE_MARKERS = (
     "state/subagent-share/",
     ".coordinator-local/subagent-share/",
@@ -201,10 +187,7 @@ _OUT_OF_SCOPE_MARKERS = (
     "docs/research/",
 )
 
-#: Known live repo shortnames a session display name is built from. Widen
-#: freely as new repos join the fleet; see module docstring "KNOWN
 #: DISPLAY-NAME SLUGS" for why narrowing this is a silent regression, not
-#: a tightening.
 _KNOWN_SLUGS = (
     "claude-klabauter",
     "doe-claude",
@@ -216,36 +199,23 @@ _KNOWN_SLUGS = (
     "example-store-repo",
 )
 
-#: A known slug immediately followed by `-<1-4 alnum chars containing at
 #: least one digit>`, word-bounded on both ends. Built from `_KNOWN_SLUGS`
-#: at import time so the two never drift apart. The suffix charclass is
-#: deliberately narrow (1-4 chars) -- see module docstring "SUFFIX SHAPE".
 #: Kept as a STRING (not compiled directly) so `_ATTRIB_VERB_RE`/
 #: `_ATTRIB_ADDRESS_RE`/`_ATTRIB_FIELD_RE` below can embed the identical
-#: pattern inside their own larger constructions without drifting from it.
 _NAME_CORE = (
     r"(?:" + "|".join(re.escape(slug) for slug in _KNOWN_SLUGS) + r")"
     r"-(?=[0-9a-zA-Z]{1,4}\b)[0-9a-zA-Z]*[0-9][0-9a-zA-Z]*"
 )
 
-#: Full-uuid shape (mirrors `coordinator_core.session.core._UUID_RE`) --
-#: never itself flagged; a uuid is the correct identifier this guard
-#: steers authors toward.
 _UUID_RE = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
 )
 
-#: Fenced code block (``` ... ```), non-greedy, DOTALL so it spans lines.
 _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 
-#: Inline code span (`` `...` ``), single line only -- markdown inline code
-#: never spans a newline.
 _INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 
-#: Crediting/attributing verb phrases -- the name is their grammatical
-#: OBJECT ("FIXED BY claude-klabauter-49"). See module docstring
 #: "ATTRIBUTION/ADDRESS CONSTRUCTION" for the rationale and the
-#: deliberately-non-exhaustive stance.
 _ATTRIB_VERB_PHRASES = (
     "fixed by",
     "reported by",
@@ -266,25 +236,10 @@ _ATTRIB_VERB_PHRASES = (
     "addressed to",
 )
 
-#: Crediting frontmatter fields -- the name is their VALUE (`found_by:
 #: claude-klabauter-49`). See module docstring "ATTRIBUTION/ADDRESS
 #: CONSTRUCTION".
-#:
 #: DELIBERATELY EXCLUDES `author` (2026-08-30 coordinator ruling, second
-#: pass). `author:` is not human-written on a plan/lesson: `coordinator/bin/
-#: coordinator-doc-new.py :: _resolve_plan_author()` stamps it automatically
 #: at SCAFFOLD time with the session's display name -- that mechanism, not
-#: a human crediting someone, is what put `author: claude-klabauter-49` into
-#: `docs/plans/2026-08-29-the-265ms-floor-is-a-global-stanza.md`. Nudging on
-#: it fires on a line the author didn't write and can't act on at the write
-#: this guard sees (the offending line was already on disk before they
-#: touched the file) -- an advisory with no available action is exactly
-#: what trains a reader to dismiss the whole guard. `author:` IS a real
-#: instance of the underlying defect (a name there is just as unresolvable
-#: later as anywhere else), but the fix belongs at the producer
-#: (`_resolve_plan_author`), not at a lint pointed at the producer's
-#: output -- do not re-add `author` here without first fixing the
-#: scaffolder; that fix is out of scope for this guard.
 _ATTRIB_FIELDS = (
     "found_by",
     "reported_by",
@@ -299,26 +254,18 @@ _ATTRIB_FIELDS = (
 )
 
 #: Verb phrase, case-insensitive (the incident's own shape is "ESTABLISHED
-#: AND FIXED BY"), immediately or near-immediately (optional "the"/
-#: "session") followed by the display-name shape -- the name stays
 #: case-SENSITIVE (a display name is conventionally all-lowercase; loosely
-#: matching would risk pulling in unrelated capitalized hyphenated prose).
-#: Captured in group(1).
 _ATTRIB_VERB_RE = re.compile(
     r"(?i:\b(?:" + "|".join(re.escape(p) for p in _ATTRIB_VERB_PHRASES) + r")\b)"
     r"\s+(?:the\s+)?(?:session\s+)?(\b" + _NAME_CORE + r"\b)"
 )
 
-#: "message ... to <name>" addressing construction -- the name is the
 #: RECIPIENT, not the subject. Bounded gap (`{0,30}`, no newline) between
-#: "message" and "to" so this does not reach across unrelated sentences.
 _ATTRIB_ADDRESS_RE = re.compile(
     r"(?i:\bmessage(?:d|s)?\b)[^\n]{0,30}?(?i:\bto\b)"
     r"\s+(\b" + _NAME_CORE + r"\b)"
 )
 
-#: A crediting frontmatter field, at the START of a line (optionally
-#: indented), followed by `:` and an optional quote, then the display
 #: name. `re.MULTILINE` so `^` matches per-line inside a whole-file scan.
 _ATTRIB_FIELD_RE = re.compile(
     r"(?im:^[ \t]*(?:" + "|".join(re.escape(f) for f in _ATTRIB_FIELDS) + r")\s*:\s*)"
@@ -333,11 +280,6 @@ _ADVISORY_TEMPLATE = (
 
 
 def _is_in_scope(file_path: str) -> bool:
-    # Both sides casefolded: on Windows and APFS `State/Bug-Backlog/x.yaml` is
-    # the SAME file as `state/bug-backlog/x.yaml`, and a raw comparison walks
-    # this scope check with nothing but a shift key. Markers are declared
-    # lowercase, so only the candidate needs folding -- `casefold_path` also
-    # normalizes separators, which is why the manual `replace` is gone.
     normalized = casefold_path(file_path)
     if any(marker in normalized for marker in _OUT_OF_SCOPE_MARKERS):
         return False
@@ -409,5 +351,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         }
     except Exception:
-        # Fail-OPEN on any unexpected error (module docstring negative-spec).
         return None

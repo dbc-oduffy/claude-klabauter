@@ -38,8 +38,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -55,9 +53,6 @@ def _make_completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> 
 
 
 def _assert_precedes_subcommand(argv, subcommand: str) -> None:
-    """`--no-optional-locks` must appear before `subcommand`, and nothing
-    between it and `git`/`-C <dir>` may itself be (mis-mistaken for) the
-    subcommand token."""
     assert "--no-optional-locks" in argv, f"flag missing from argv={argv!r}"
     lock_idx = argv.index("--no-optional-locks")
     assert subcommand in argv, f"subcommand {subcommand!r} missing from argv={argv!r}"
@@ -66,11 +61,6 @@ def _assert_precedes_subcommand(argv, subcommand: str) -> None:
         f"--no-optional-locks must precede the '{subcommand}' subcommand "
         f"(appended after it, git exits 129 'unknown option'). argv={argv!r}"
     )
-
-
-# ---------------------------------------------------------------------------
-# bash_guards.dispatch_checks
-# ---------------------------------------------------------------------------
 
 
 def _init_repo(repo: Path) -> None:
@@ -95,14 +85,6 @@ def _init_repo(repo: Path) -> None:
 
 
 def test_check_destructive_rm_status_probe_precedes_subcommand(tmp_path: Path):
-    """The status probe only fires on the directory/recursive leg (`tgt_is_dir
-    or recursive`) -- a plain file target with no `-r` never reaches it, so
-    this drives it with `rm -rf <dir>` against a real tiny repo. Real git is
-    spawned here (wrapped, not stubbed) because the surrounding function also
-    issues several `rev-parse`/scratch-allowlist probes whose return values
-    gate whether the status call is reached at all -- stubbing all of them
-    plausibly is more fragile than letting git answer for real in an isolated
-    tmp_path repo."""
     from coordinator_core.bash_guards import dispatch_checks
 
     repo = tmp_path / "repo"
@@ -147,15 +129,7 @@ def test_check_destructive_git_revert_status_oracle_precedes_subcommand():
         _assert_precedes_subcommand(argv, "status")
 
 
-# ---------------------------------------------------------------------------
-# hooks.context_pressure_precompact
-# ---------------------------------------------------------------------------
-
-
 def test_build_git_section_bare_diff_precedes_subcommand():
-    # `_run_git` does `import subprocess` INSIDE the function (module-level
-    # `cpp.subprocess` does not exist) -- patch the real `subprocess` module
-    # instead, which is the same object either way resolves to.
     from coordinator_core.hooks import context_pressure_precompact as cpp
 
     calls = []
@@ -177,19 +151,12 @@ def test_build_git_section_bare_diff_precedes_subcommand():
     for argv in bare_diff_calls:
         _assert_precedes_subcommand(argv, "diff")
 
-    # The --staged sibling never took the lock (cached-equivalent) -- must
-    # NOT be touched.
     staged_calls = [c for c in diff_calls if "--staged" in c]
     assert staged_calls, "expected the --staged diff call to remain present"
     for argv in staged_calls:
         assert "--no-optional-locks" not in argv, (
             f"--staged diff never takes index.lock -- must stay unmodified, got {argv!r}"
         )
-
-
-# ---------------------------------------------------------------------------
-# baton_assemble whole-tree status probe
-# ---------------------------------------------------------------------------
 
 
 def test_baton_assemble_dirty_tree_status_probe_precedes_subcommand(tmp_path: Path, monkeypatch):
@@ -215,12 +182,6 @@ def test_baton_assemble_dirty_tree_status_probe_precedes_subcommand(tmp_path: Pa
     for argv in status_calls:
         assert argv[0] == "git"
         _assert_precedes_subcommand(argv, "status")
-
-
-
-# ---------------------------------------------------------------------------
-# consolidate_assemble
-# ---------------------------------------------------------------------------
 
 
 def test_consolidate_assemble_worktree_is_dirty_precedes_subcommand(tmp_path: Path):

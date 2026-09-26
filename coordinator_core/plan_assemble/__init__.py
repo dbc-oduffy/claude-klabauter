@@ -78,29 +78,12 @@ from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
     build_scaffold_directive,
 )
 
-# C4: the shared constructor's (C1) per-type required-flag computation for
-# this host's one emitted row (coordinator_core/ops/doctype_hosts.py, keyed
-# (type="plan", ceremony="plan-assemble"), module=this package). `--title`
-# is optional (never `required=True`): it is computed from the cited sizing
-# object's `intent:` field when one is supplied, and simply omitted
-# otherwise -- `--title` itself is optional on the real CLI for `--type
-# plan` (AC3 binds only the flags the CLI itself requires; `--sizing-
-# object`/`--no-sizing-object` is that one mutex here, and it is appended
-# by hand below -- same store_true-leg workaround
-# `roadmap_planning_assemble._roadmap_baton_and_seed_directives` documents,
-# never `MutexFlagPair`, which would render the malformed
-# `--no-sizing-object=True`).
 _PLAN_FLAG_SPEC: tuple[Flag, ...] = (
     Flag("--title", "title", required=False),
 )
 
 
 def _slug(text: str) -> str:
-    """Lowercase-dash slug, mirroring `coordinator-doc-new._slug_from_title`'s
-    observable shape closely enough for a computed (never free-text)
-    `--out` default -- same small helper `roadmap_planning_assemble._slug`
-    duplicates rather than importing (one hierarchy per consumer, no
-    cross-package private-helper dependency)."""
     out = []
     prev_dash = False
     for ch in text.lower():
@@ -114,9 +97,6 @@ def _slug(text: str) -> str:
 
 
 def _intent_from_sizing_object(path: Path) -> Optional[str]:
-    """The `intent:` a sizing object states about itself, or `None` --
-    mirrors `residue._route_from_sizing_object`'s best-effort, silent-on-
-    failure read (same file, a different key), never a second parser."""
     try:
         text = Path(path).read_text(encoding="utf-8")
     except OSError:
@@ -134,11 +114,6 @@ def _intent_from_sizing_object(path: Path) -> Optional[str]:
 
 
 def _plan_scaffold_directive(sizing_object_path: Optional[Path]) -> dict[str, Any]:
-    """C4: emits the `plan` scaffold directive through the shared
-    constructor. `--out` is computed the same way
-    `coordinator-doc-new._default_output_path` computes it for `--type
-    plan` (`docs/plans/<today>-<slug>.md`), never left to the CLI's own
-    default, so `already_satisfied` (AC4) can be computed here."""
     root = Path.cwd()
     today = date.today().isoformat()
     intent = (
@@ -173,10 +148,6 @@ def brief(
     sizing_object_path: Optional[Path] = None,
     caller_flags: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    """C4: wraps `residue.brief(...)` unchanged, appending the `plan`
-    scaffold directive when the resolved route is `"plan"` (see module
-    docstring). Every exception `residue.brief` raises propagates
-    unchanged."""
     decision_object = residue.brief(
         explicit_route=explicit_route,
         plan_path=plan_path,
@@ -216,16 +187,8 @@ def _usage() -> int:
     return _PlanAssembleExitCode.USAGE
 
 
-#: `caller_flags` bool-valued flags' accepted literal tokens -> Python
-#: `bool`. Review: caller-flags fix wires the CLI to the previously-dead
-#: `:100`/`:108` rows — an explicit `true`/`false` string, not a bare
-#: presence flag, matching `--route`'s "consume the next token as the
-#: value" shape rather than inventing a new parsing style for these two.
 _BOOL_FLAG_TOKENS = {"true": True, "false": False}
 
-#: `:32a`'s only two legal `caller_flags["arrival"]` values — anything else
-#: is a usage error, matching `--route`'s own closed-enum-or-usage-error
-#: shape.
 _ARRIVAL_VALUES = {"fresh_inbound", "return_edge"}
 
 
@@ -357,9 +320,7 @@ def _dispatch_brief(rest: list[str]) -> int:
     return _PlanAssembleExitCode.SUCCESS
 
 
-#: Known subcommand tokens -> handler. `brief` is also reachable via
 #: FALLTHROUGH (see `main`) so it does not strictly need to appear here,
-#: but registering it keeps this the one place a new subcommand is added.
 _SUBCOMMANDS = {
     "brief": _dispatch_brief,
 }

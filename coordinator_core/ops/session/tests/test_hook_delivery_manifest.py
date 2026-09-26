@@ -1,15 +1,3 @@
-"""
-coordinator_core.ops.session.tests.test_hook_delivery_manifest
-
-Tests for `hook_delivery_manifest.read_hook_delivery_manifest` — the reader
-for the `x-effective-delivery` block DoE's carriers publish to the
-`coordinator/hooks/effective-delivery.json` sidecar. See the module docstring and
-`docs/plans/2026-08-07-detector-effective-guard-sets.md` task C2 / AC2 for
-the full contract.
-
-Tier: T (own scoped file only — do not fold into the repo fast/full tier
-run here; that is the EM's job at the wave boundary).
-"""
 
 from __future__ import annotations
 
@@ -175,16 +163,12 @@ def test_never_raises_on_garbage_input():
         assert isinstance(result, HookDeliveryManifest)
         assert result.state in {"ok", "absent", "malformed", "version_unsupported", "stale"}
 
-    # `declared_script_keys=None` (or any non-iterable) must degrade, not raise.
     result = read_hook_delivery_manifest(_manifest_block(), None)
     assert isinstance(result, HookDeliveryManifest)
     assert result.state in {"ok", "absent", "malformed", "version_unsupported", "stale"}
 
 
 def test_never_raises_on_declared_script_keys_element_garbage():
-    # Element-level garbage inside an otherwise-list/tuple `declared_script_keys`:
-    # a dict/list element is unhashable, so a naive `key not in accounted` set
-    # membership probe would raise `TypeError` — these must degrade, not raise.
     garbage_elements = [
         [{"a": 1}],
         [["nested", "list"]],
@@ -196,9 +180,6 @@ def test_never_raises_on_declared_script_keys_element_garbage():
         assert isinstance(result, HookDeliveryManifest)
         assert result.state in {"ok", "absent", "malformed", "version_unsupported", "stale"}
 
-    # A dict element is simply dropped, not treated as "accounted for" or
-    # crashing the comparison — the real string key alongside it still
-    # round-trips normally.
     result = read_hook_delivery_manifest(
         _manifest_block(), [{"a": 1}, "scripts/preuse-write-dispatch.py"]
     )
@@ -228,9 +209,6 @@ def test_tool_names_parsed_clean_list():
 
 
 def test_tool_names_element_violating_string_contract_is_malformed():
-    # `tool_names` is a required matcher-critical field with "no default
-    # fallback" (C1) — a control-char-violating element is fatal to the
-    # entry, same as a non-string element, not silently dropped.
     hooks_json = _manifest_block(
         direct=[
             {
@@ -246,9 +224,6 @@ def test_tool_names_element_violating_string_contract_is_malformed():
 
 
 def test_tool_names_missing_or_malformed_is_malformed():
-    # `tool_names` is a required field (docs/reference/hook-delivery-manifest.md):
-    # missing, non-list, or an element that isn't a string all make the
-    # manifest `malformed`, matching every other required-field check.
     non_list_value = _manifest_block(
         direct=[
             {"id": "some_guard", "script": "scripts/some-guard.py", "tool_names": "not-a-list"}
@@ -277,11 +252,6 @@ def test_tool_names_missing_or_malformed_is_malformed():
 
 
 def test_dual_delivered_guard_is_ok_not_malformed():
-    """A guard delivered by BOTH a direct registration and a carrier's
-    carry is a real, declarable shape — the sender cannot drop either side
-    without hiding a live delivery path. Reported by doe-claude-e6
-    2026-08-19: `runtime-tripwire-em-check.py` and
-    `watchdog-undischarged-next-move.py` are each delivered twice."""
     hooks_json = _manifest_block(
         direct=[
             {
@@ -300,11 +270,6 @@ def test_dual_delivered_guard_is_ok_not_malformed():
 
 
 def test_fan_in_module_hosting_many_guards_is_ok_not_malformed():
-    """The contract's script key is the last two path segments, so N
-    distinct guards living in one module normalize onto one key BY DESIGN.
-    Reported by doe-claude-e6 2026-08-19: sixteen engine-plane guards live
-    in `bash_guards/dispatch_checks.py`, and reading that as `malformed`
-    discarded their whole block — the detector went fully blind."""
     hooks_json = _manifest_block(
         carriers={
             "scripts/preuse-write-dispatch.py": {
@@ -326,8 +291,6 @@ def test_fan_in_module_hosting_many_guards_is_ok_not_malformed():
 
 
 def test_duplicate_guard_id_within_one_surface_is_malformed():
-    """The residual real defect the duplicate check exists to catch: one
-    guard id declared twice inside a SINGLE delivery surface."""
     hooks_json = _manifest_block(
         direct=[
             {
@@ -366,8 +329,6 @@ def test_guard_id_in_both_live_and_retired_is_malformed():
 
 
 def test_retired_guard_sharing_a_fan_in_module_with_live_guards_is_ok():
-    """Keying the live/retired contradiction on the script tail key would
-    call the normal fan-in case a contradiction; it is keyed on guard id."""
     hooks_json = _manifest_block(
         carriers={
             "scripts/preuse-write-dispatch.py": {

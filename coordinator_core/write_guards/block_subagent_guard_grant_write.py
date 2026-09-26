@@ -147,26 +147,14 @@ CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 
 #: PRIORITY 47 -- unique within the HARD-DENY phase (46 and 50 taken by
-#: this module's grant-adjacent neighbours,
-#: ``block_subagent_grant_record_write`` (46) and
-#: ``block_consumed_handoff_edit`` (50)). Slotting immediately after 46
-#: keeps the two grant-write-channel legs co-located in evaluation order;
-#: the phase runs first-non-None-wins, so relative order among
-#: non-overlapping-path guards has no behavioral effect — grouping only.
 PRIORITY = 47
 
-#: Reference-shape tool-name guard (mirrors every sibling write_guards
-#: module's defense-in-depth tool_name check).
 _INTERCEPTED_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
-#: Rare-use escape hatch — read the module docstring before invoking.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_SUBAGENT_GUARD_GRANT_WRITE"
 
 
 def _normalize_path(file_path: str) -> str:
-    """Backslash -> slash, collapse repeated slashes — same helper shape as
-    ``block_subagent_grant_record_write._normalize_path``, including its
-    UNC-root preservation step."""
     normalized = file_path.replace("\\", "/")
     is_unc = normalized.startswith("//")
     while "//" in normalized:
@@ -177,12 +165,6 @@ def _normalize_path(file_path: str) -> str:
 
 
 def _collapse_traversal(abs_path: str) -> str:
-    """Lexically collapse ``.``/``..`` segments in an already-absolute,
-    forward-slash-normalized candidate via ``posixpath.normpath`` — pure
-    string manipulation, no filesystem access. See
-    ``block_subagent_grant_record_write._collapse_traversal`` for the full
-    rationale (denying every ``..``-bearing candidate unconditionally is an
-    unscoped false positive, not a fix)."""
     is_unc = abs_path.startswith("//")
     collapsed = posixpath.normpath(abs_path)
     if is_unc and not collapsed.startswith("//"):
@@ -191,7 +173,6 @@ def _collapse_traversal(abs_path: str) -> str:
 
 
 def _extract_file_path(payload: Dict[str, Any]) -> str:
-    """``file_path``, falling back to ``notebook_path`` for NotebookEdit."""
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         return ""
@@ -199,8 +180,6 @@ def _extract_file_path(payload: Dict[str, Any]) -> str:
 
 
 def _resolve_git_common_dir(cwd: Optional[str]) -> Optional[str]:
-    """Resolve ``cwd``'s repo's git COMMON dir without spawning ``git``.
-    Mirrors ``block_subagent_grant_record_write._resolve_git_common_dir``."""
     repo_root = resolve_repo_root(cwd)
     if not repo_root:
         return None
@@ -208,8 +187,6 @@ def _resolve_git_common_dir(cwd: Optional[str]) -> Optional[str]:
 
 
 def _resolve_abs_candidate(normalized_file_path: str, base_dir: str) -> str:
-    """Resolve ``normalized_file_path`` to an absolute, traversal-collapsed
-    candidate against ``base_dir`` when it is not already absolute."""
     if normalized_file_path.startswith("/") or (
         len(normalized_file_path) >= 2 and normalized_file_path[1] == ":"
     ):
@@ -273,9 +250,6 @@ def _is_sentinel_path(normalized_file_path: str) -> bool:
 
 
 def _deny_reason(file_path: str, payload: Optional[Dict[str, Any]] = None) -> str:
-    """Design-as-offers deny text. Never names the grant CLI, never reveals
-    that an unlock mechanism exists — per B6/B8, a dispatched subagent gets
-    the refusal and exactly one terse alternative, nothing else."""
     _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
     return (
         "BLOCKED: this write is not available to a dispatched agent.\n\n"
@@ -287,16 +261,10 @@ def _deny_reason(file_path: str, payload: Optional[Dict[str, Any]] = None) -> st
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the guard-grant write guard against a PreToolUse payload.
-
-    Returns ``None`` (allow) or the hard-deny envelope. See module
-    docstring "Allow-conditions".
-    """
     tool_name = payload.get("tool_name") or ""
     if tool_name not in _INTERCEPTED_TOOLS:
         return None
 
-    # (1) No agent_id -> EM-inline write -> allow.
     agent_id = payload.get("agent_id") or ""
     if not agent_id:
         return None
@@ -307,7 +275,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     normalized = _normalize_path(file_path)
 
-    # Leg (2): sentinel path — does not require git resolution.
     if _is_sentinel_path(normalized):
         reason = _deny_reason(file_path, payload)
         return {
@@ -318,7 +285,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         }
 
-    # Leg (1): durable grant record — requires git common-dir resolution.
     cwd = payload.get("cwd")
     common_dir = _resolve_git_common_dir(cwd)
     if not common_dir:

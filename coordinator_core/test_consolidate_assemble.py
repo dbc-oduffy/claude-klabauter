@@ -1,17 +1,3 @@
-"""Tests for coordinator_core.consolidate_assemble + coordinator_core.
-consolidate_assemble.apply — the `/consolidate-git` computed skill (B4
-chunk C8).
-
-Scope: `brief()`'s compute-only outputs (branch/worktree ownership
-categorization, unique-commit judgment evidence, absorb/delete directive
-shape) and `apply()`'s composition of `apply_base` (closed dispatch table
-resolution, session-id gating). Does NOT invoke a real git subprocess for a
-directive handler — those are monkeypatched; `coordinator_core.contract.
-test_apply_base` already covers the generic directive-execution engine this
-module composes.
-
-Spec backlink: DoE-claude:pln-b4-baton-branch-lifecycle-comp-780d48, chunk C8
-"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -26,9 +12,6 @@ def _git(returncode=0, stdout="", stderr=""):
 
 
 def _refs(*shorts, email="me@x", operator=""):
-    """Mimics `ref_rows`' `for-each-ref` output:
-    `refname<TAB>short<TAB>email<TAB>operator` per ref. An `origin/`-led short
-    name is a remote-tracking ref; anything else is a local branch."""
     lines = []
     for short in shorts:
         refname = f"refs/remotes/{short}" if short.startswith("origin/") else f"refs/heads/{short}"
@@ -37,9 +20,6 @@ def _refs(*shorts, email="me@x", operator=""):
 
 
 def _show_stdout(shas):
-    """Mimics `git show --stat <sha>...`: concatenated per-commit blocks, each
-    opening with a column-0 `commit <sha>` line and carrying a four-space
-    indented message body."""
     blocks = [
         f"commit {sha}0000\nAuthor: me <me@x>\n\n    subject for {sha}\n\n f | 1 +\n" for sha in shas
     ]
@@ -47,7 +27,6 @@ def _show_stdout(shas):
 
 
 def _dispatch(rules):
-    """Builds a `run_git` stub keyed on `args[0]` (the git subcommand)."""
 
     def _run(args, cwd):
         for prefix, result in rules.items():
@@ -57,10 +36,6 @@ def _dispatch(rules):
 
     return _run
 
-
-# ---------------------------------------------------------------------------
-# categorize_branch
-# ---------------------------------------------------------------------------
 
 class TestCategorizeBranch:
     def test_current_branch(self):
@@ -85,10 +60,6 @@ class TestCategorizeBranch:
             == "cloud-session"
         )
 
-
-# ---------------------------------------------------------------------------
-# list_branches / list_worktrees parsing
-# ---------------------------------------------------------------------------
 
 class TestListBranches:
     def test_parses_local_and_remote_skips_head_alias(self):
@@ -125,10 +96,6 @@ class TestListWorktrees:
         assert out[1]["branch"] == "feature/x"
         assert out[1]["locked"] is True
 
-
-# ---------------------------------------------------------------------------
-# brief()
-# ---------------------------------------------------------------------------
 
 class TestBrief:
     def _stub(
@@ -311,7 +278,7 @@ class TestBrief:
 
         do = consolidate_assemble.brief(repo_root=tmp_path, run_git=recording)
         stale = [b for b in do["gates"]["branches"] if b["category"] == "mine-stale"]
-        assert len(stale) == 2  # two branches feeding the one spawn below, not one
+        assert len(stale) == 2
 
         show_calls = [args for args in calls if args[0] == "show"]
         assert len(show_calls) == 1
@@ -323,20 +290,10 @@ class TestBrief:
         inspections_b = jp_b["evidence"]["inspections"]
         assert [i["sha"] for i in inspections_a] == ["aaa111"]
         assert [i["sha"] for i in inspections_b] == ["bbb222", "ccc333"]
-        # Each block is byte-identical to that commit's own `git show --stat` -- the batch
-        # separator git emits BETWEEN objects never bleeds into a neighboring commit's evidence,
-        # and the fan-out from the one shared spawn attributes each block to the right branch.
         for i in inspections_a + inspections_b:
             assert i["stat"].startswith(f"commit {i['sha']}")
             assert i["stat"] == _show_stdout([i["sha"]])
 
-        # Regression: each branch's absorb directive must carry ITS OWN
-        # `ref`, not whatever `ref` the pass-1 loop last left bound.
-        # `stale-a` is local (`ref == name == "stale-a"`); `stale-b` is
-        # remote-only (`ref == "origin/stale-b"`, and its directive also
-        # appends "origin" as the remote-delete arg) -- the two refs differ
-        # from each other AND from `stale-b`'s own name, so a single leaked
-        # value cannot satisfy both.
         absorb_a = next(d for d in do["directives"] if d["id"] == "d-absorb-stale-a")
         absorb_b = next(d for d in do["directives"] if d["id"] == "d-absorb-stale-b")
         assert absorb_a["args"] == ["stale-a", "stale-a"]
@@ -345,13 +302,6 @@ class TestBrief:
     def test_tip_author_and_branch_reachable_spawns_do_not_grow_with_branch_or_worktree_count(
         self, monkeypatch, tmp_path
     ):
-        """PINS: `tip_author`'s branch-loop spawns collapse to ONE
-        `for-each-ref` call and `branch_reachable`'s worktree-loop spawns
-        collapse to ONE `git branch --merged` call, both independent of N
-        (here: 3 stale/others branches, 2 non-current/main worktrees) --
-        not one `git log -1`/`git merge-base --is-ancestor` per item. Model:
-        `test_schema_drift_watch.py::TestSchemaAdvisoryBatch::
-        test_process_count_does_not_grow_with_the_set`."""
         calls: list[list[str]] = []
 
         def run_git(args, cwd):
@@ -498,10 +448,6 @@ class TestBrief:
                 assert dep in directive_ids
 
 
-# ---------------------------------------------------------------------------
-# apply() — dispatch-table composition (no real subprocess)
-# ---------------------------------------------------------------------------
-
 class TestApplyDispatchTable:
     def test_every_brief_directive_cli_resolves_in_the_closed_table(self, monkeypatch, tmp_path):
         run_git = _dispatch(
@@ -571,9 +517,6 @@ class TestApplyDispatchTable:
 
 
 class TestDeleteBranchLocalLeg:
-    """`brief` emits `delete-only` for remote-only branches too (`is_local:
-    false`), so the local leg must be conditional — an unconditional `git
-    branch -d` on one exits 1 and halts the whole apply."""
 
     def _recorder(self, local_exists: bool):
         calls: list[list[str]] = []
@@ -610,9 +553,6 @@ class TestDeleteBranchLocalLeg:
 
 
 class TestMainBriefTransportFailure:
-    """`main()`'s brief-half transport-failure branch: exit 3 means compute
-    never ran, so stdout must stay empty (no fabricated/partial decision
-    object) and the diagnostic goes to stderr only."""
 
     def test_transport_failure_leaves_stdout_empty(self, monkeypatch, capsys):
         def _boom():

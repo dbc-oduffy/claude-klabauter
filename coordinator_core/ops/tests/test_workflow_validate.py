@@ -1,31 +1,3 @@
-"""
-coordinator_core.ops.tests.test_workflow_validate
-
-Tests for the "workflow.validate" op (coordinator_core/ops/workflow_validate.py)
-— the authoritative RPC lint against the shared pattern-contract SSOT
-(coordinator_core.ops._workflow_contract, landed in C1). Exercises the op
-HANDLER directly (not dispatch_message — that wire-level smoke lives in
-test_op_registration.py per its established pattern), covering:
-
-  (a) footgun cases (AC5): impure meta -> ERROR; each forbidden global
-      (Math.random / Date.now / argless new Date()) -> ERROR, each actionable;
-      a conformant script -> ok:true, zero ERROR; the F1 false-positive
-      fixture (agent() prompt body literally containing "Date.now()") ->
-      ok:true, zero ERROR.
-  (b) heuristic + advisory cases (AC6, all WARN not ERROR): parallel-
-      transform-parallel -> WARN; a legitimate barrier does NOT hard-fail;
-      phase()-title mismatch -> WARN; agent-options phase: mismatch -> WARN.
-  (c) missing script_path -> descriptive ValueError.
-  (d) path-guard containment: script_path outside the derived/explicit
-      containment root raises PathEscapeError, not a silent read.
-  (e) AC7a hand-authored fixture corpus: a large, realistic shipped-shaped
-      Workflow script (populated agent() prompt bodies) asserted ok:true
-      (false-positive guard), plus hand-mutated malformed variants of it
-      asserted to produce the expected ERROR/WARN findings (false-negative
-      guard).
-
-Spec backlink: pln-workflow-skeleton-stamper-maki-adab0d § C2
-"""
 
 from __future__ import annotations
 
@@ -55,10 +27,6 @@ def _write(tmp_path, name, text):
     p.write_text(text, encoding="utf-8")
     return p
 
-
-# ---------------------------------------------------------------------------
-# (a) footgun cases — AC5
-# ---------------------------------------------------------------------------
 
 _CONFORMANT_SCRIPT = """\
 export const meta = {
@@ -97,7 +65,7 @@ export const meta = {
     assert "meta-impure-interpolation" in codes or "meta-impure-template-literal" in codes
     for f in result["findings"]:
         if f["severity"] == "ERROR":
-            assert len(f["message"]) > 20  # actionable, not a bare "invalid"
+            assert len(f["message"]) > 20
 
 
 @pytest.mark.parametrize(
@@ -140,8 +108,6 @@ def test_conformant_script_is_ok_zero_error(tmp_path):
 
 
 def test_f1_date_now_literal_in_prompt_body_is_not_error(tmp_path):
-    # F1 false-positive fixture: a conformant script whose agent() prompt
-    # BODY contains the literal text "Date.now()" — must validate clean.
     script = _write(
         tmp_path,
         "f1.mjs",
@@ -167,11 +133,6 @@ async function run(ctx) {
     assert result["error_count"] == 0
 
 
-# ---------------------------------------------------------------------------
-# (b) heuristic + advisory cases — AC6, always WARN not ERROR
-# ---------------------------------------------------------------------------
-
-
 def test_parallel_transform_parallel_is_warn(tmp_path):
     script = _write(
         tmp_path,
@@ -191,7 +152,7 @@ async function run(ctx) {
 """,
     )
     result = _validate(script)
-    assert result["ok"] is True  # WARN does not fail
+    assert result["ok"] is True
     codes = {f["code"] for f in result["findings"]}
     assert "barrier-vs-pipeline" in codes
     finding = next(f for f in result["findings"] if f["code"] == "barrier-vs-pipeline")
@@ -283,19 +244,9 @@ async function run(ctx) {
     assert finding["severity"] == "WARN"
 
 
-# ---------------------------------------------------------------------------
-# (c) missing script_path
-# ---------------------------------------------------------------------------
-
-
 def test_missing_script_path_raises_value_error():
     with pytest.raises(ValueError, match="script_path"):
         _run(_workflow_validate({}))
-
-
-# ---------------------------------------------------------------------------
-# (d) path-guard containment
-# ---------------------------------------------------------------------------
 
 
 def test_script_path_outside_target_root_raises_path_escape_error(tmp_path):
@@ -311,17 +262,9 @@ def test_script_path_outside_target_root_raises_path_escape_error(tmp_path):
 
 def test_script_path_derives_containment_root_from_parent_when_omitted(tmp_path):
     script = _write(tmp_path, "derived-root.mjs", _CONFORMANT_SCRIPT)
-    result = _validate(script)  # no target_root passed
+    result = _validate(script)
     assert result["ok"] is True
 
-
-# ---------------------------------------------------------------------------
-# (e) AC7a — hand-authored fixture corpus: a large, realistic shipped-shaped
-# script with populated agent() prompt bodies (false-positive guard), plus
-# hand-mutated malformed variants (false-negative guard). This same large
-# fixture doubles as the throwaway budget benchmark's input (see AC3 —
-# benchmarked separately, not asserted on here).
-# ---------------------------------------------------------------------------
 
 LARGE_REALISTIC_SCRIPT = '''\
 export const meta = {
@@ -419,8 +362,6 @@ def test_large_realistic_fixture_is_ok_zero_error(tmp_path):
     result = _validate(script)
     assert result["ok"] is True
     assert result["error_count"] == 0
-    # Every agent() call in this fixture carries an explicit model: — no
-    # model-default WARN noise expected from a well-formed corpus entry.
     codes = {f["code"] for f in result["findings"]}
     assert "agent-model-default" not in codes
 
@@ -458,7 +399,7 @@ def test_large_fixture_mutated_phase_mismatch_is_warn_not_error(tmp_path):
     )
     script = _write(tmp_path, "mutated-phase-mismatch.mjs", mutated)
     result = _validate(script)
-    assert result["ok"] is True  # WARN only, never fails
+    assert result["ok"] is True
     codes = {f["code"] for f in result["findings"]}
     assert "phase-call-title-mismatch" in codes
     finding = next(f for f in result["findings"] if f["code"] == "phase-call-title-mismatch")

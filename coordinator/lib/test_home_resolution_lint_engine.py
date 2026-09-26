@@ -1,15 +1,3 @@
-"""Engine-level unit tests for the X_OK guard-shape exemption.
-
-Spec backlink: `home_resolution_lint.py`'s `find_x_ok_checks` /
-`_guard_polarity` docstrings -- this file is the both-sides test the fix
-for the "message names a remediation the engine can't accept" defect
-needed and did not have (2026-07-28). Every shape enumerated in
-`find_x_ok_checks`'s "recognised" and "explicitly NOT recognised" lists
-gets a case here, on synthetic source written to a tmp_path repo rather
-than against the live tree -- the live-tree assertions belong to
-`coordinator_core/tests/test_home_resolution_lint.py`, this file is the
-engine's own contract test, independent of any one caller's scan roots.
-"""
 
 from __future__ import annotations
 
@@ -24,11 +12,6 @@ def _engine_for(tmp_path: Path, source: str) -> HomeResolutionLintEngine:
     (tmp_path / "pkg").mkdir(exist_ok=True)
     (tmp_path / "pkg" / "mod.py").write_text(source, encoding="utf-8")
     return HomeResolutionLintEngine(repo_root=tmp_path, scan_roots=("pkg",))
-
-
-# ---------------------------------------------------------------------------
-# Still reported -- must not regress.
-# ---------------------------------------------------------------------------
 
 
 def test_bare_unguarded_call_is_reported(tmp_path):
@@ -57,9 +40,6 @@ def test_call_inside_unrelated_if_is_reported(tmp_path):
 
 
 def test_call_inside_windows_only_guard_is_reported(tmp_path):
-    """The deliberately-covered inversion (task step 2): `os.name == "nt"`
-    wraps Windows-only execution of a check meaningless on Windows -- must
-    still be reported, never exempted."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -86,9 +66,6 @@ def test_call_inside_sys_platform_windows_only_guard_is_reported(tmp_path):
 
 
 def test_guarded_caller_does_not_exempt_unguarded_callee_body(tmp_path):
-    """A call whose CALLER is invoked from inside a guard is still reported
-    -- the guard does not propagate through a function call, only through
-    lexical (syntactic) nesting."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -105,9 +82,6 @@ def test_guarded_caller_does_not_exempt_unguarded_callee_body(tmp_path):
 
 
 def test_unrecognised_shape_startswith_win_is_not_silently_exempted(tmp_path):
-    """`sys.platform.startswith("win")` is explicitly out of the recognised
-    inventory (a Call, not a Compare) -- a call guarded ONLY by this shape
-    must still be reported."""
     engine = _engine_for(
         tmp_path,
         "import os, sys\n"
@@ -117,11 +91,6 @@ def test_unrecognised_shape_startswith_win_is_not_silently_exempted(tmp_path):
     )
     findings = engine.find_x_ok_checks()
     assert len(findings) == 1
-
-
-# ---------------------------------------------------------------------------
-# Now exempt -- the recognised guard shapes.
-# ---------------------------------------------------------------------------
 
 
 def test_os_name_not_nt_guard_is_exempt(tmp_path):
@@ -158,9 +127,6 @@ def test_sys_platform_not_win32_guard_is_exempt(tmp_path):
 
 
 def test_windows_only_else_branch_is_exempt(tmp_path):
-    """`if os.name == "nt": ... elif <X_OK call>:` -- the `elif`/`else`
-    branch of a windows-only guard is itself windows-excluded (this is the
-    live shape `coordinator_core/install/_shared.py` needed)."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -174,8 +140,6 @@ def test_windows_only_else_branch_is_exempt(tmp_path):
 
 
 def test_guard_recognised_when_nested_inside_another_block(tmp_path):
-    """Required case: a recognised guard nested arbitrarily deep still
-    exempts (a bare `if`/`for` wrapping the guard does not defeat it)."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -189,18 +153,7 @@ def test_guard_recognised_when_nested_inside_another_block(tmp_path):
     assert engine.find_x_ok_checks() == []
 
 
-# ---------------------------------------------------------------------------
-# AC1/AC2/AC3 -- extensionless-shebang discovery, vendored-tree exclusion,
-# and a countable parse-failure path. Spec:
-# `docs/plans/2026-08-07-home-resolution-gate-family-reference-rule.md`,
-# `## Tasks` / `- id: C1`.
-# ---------------------------------------------------------------------------
-
-
 def test_extensionless_shebang_file_is_discovered(tmp_path):
-    """`coordinator/bin/archive-stamp-cli`-shaped: no `.py` suffix, but the
-    first line names a Python interpreter -- the exact miss named in
-    `state/lessons/2026-07-28-grep-include-py-hides-this-repo-s-extens-e85a40277f72.yaml`."""
     (tmp_path / "pkg").mkdir(exist_ok=True)
     (tmp_path / "pkg" / "mod.py").write_text("import os\n", encoding="utf-8")
     script = tmp_path / "pkg" / "some-cli"
@@ -216,9 +169,6 @@ def test_extensionless_shebang_file_is_discovered(tmp_path):
 
 
 def test_extensionless_non_shebang_file_is_not_discovered(tmp_path):
-    """An extensionless file with no `#!` first line, or a shebang that does
-    not name Python, must not be swept in -- the widening is shebang-scoped,
-    not "every extensionless file"."""
     (tmp_path / "pkg").mkdir(exist_ok=True)
     (tmp_path / "pkg" / "README").write_text("just some notes\n", encoding="utf-8")
     (tmp_path / "pkg" / "run-sh").write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
@@ -229,9 +179,6 @@ def test_extensionless_non_shebang_file_is_not_discovered(tmp_path):
 
 
 def test_extensionless_shebang_file_under_excluded_tree_is_skipped(tmp_path):
-    """AC2: the vendored `pip` tree is excluded for BOTH populations, not
-    just the `*.py` glob -- an extensionless shebang file under a `pip/`
-    path component must not surface."""
     vendored = tmp_path / "pkg" / "pip" / "cache" / "http-v2"
     vendored.mkdir(parents=True, exist_ok=True)
     (vendored / "blob").write_text("#!/usr/bin/env python\nx = 1\n", encoding="utf-8")
@@ -242,24 +189,17 @@ def test_extensionless_shebang_file_under_excluded_tree_is_skipped(tmp_path):
 
 
 def test_unparseable_extensionless_file_is_skipped_not_raised_and_counted(tmp_path):
-    """AC3: a shebang-sniffed file that fails to parse (embedded null byte --
-    `SyntaxError` on this box's Python 3.13, `ValueError` on the repo's 3.11
-    floor) is skipped, never raised, and shows up in `parse_failure_count()`
-    -- the skip is countable, not silent."""
     (tmp_path / "pkg").mkdir(exist_ok=True)
     (tmp_path / "pkg" / "mod.py").write_text("import os\n", encoding="utf-8")
     bad = tmp_path / "pkg" / "bad-cli"
     bad.write_bytes(b"#!/usr/bin/env python\nx = 1\x00\n")
     engine = HomeResolutionLintEngine(repo_root=tmp_path, scan_roots=("pkg",))
-    findings = engine.run_all_rules()  # must not raise
+    findings = engine.run_all_rules()
     assert all(f.path != "pkg/bad-cli" for rule in findings.values() for f in rule)
     assert engine.parse_failure_count() == 1
 
 
 def test_stable_sort_order_is_unaffected_by_shebang_widening(tmp_path):
-    """`iter_py_files()` still returns a stably-sorted sequence with the
-    widened population mixed in -- baseline keys must not churn on ordering
-    alone."""
     (tmp_path / "pkg").mkdir(exist_ok=True)
     (tmp_path / "pkg" / "z_mod.py").write_text("x = 1\n", encoding="utf-8")
     (tmp_path / "pkg" / "a-cli").write_text("#!/usr/bin/env python\nx = 1\n", encoding="utf-8")
@@ -268,19 +208,7 @@ def test_stable_sort_order_is_unaffected_by_shebang_widening(tmp_path):
     assert names == sorted(names)
 
 
-# ---------------------------------------------------------------------------
-# C1 -- alias-aware `Path` receiver resolution in `_is_path_home_call` (Gap
-# 2 / DoE fixture C: `from pathlib import Path as _Path`, then `... or
-# _Path.home()`, wrongly reported one finding on the pre-C1 engine).
-# Spec: docs/plans/2026-09-11-home-resolution-lint-extractor-gaps.md, `##
-# Tasks` / `- id: C1`.
-# ---------------------------------------------------------------------------
-
-
 def test_bare_or_chain_with_module_scope_aliased_path_home_terminal_is_exempt(tmp_path):
-    """DoE fixture C (module-scope alias): `from pathlib import Path as
-    _Path`, terminal `_Path.home()` -- must be recognised as the same
-    exempting rung a bare `Path.home()` already is."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -292,9 +220,6 @@ def test_bare_or_chain_with_module_scope_aliased_path_home_terminal_is_exempt(tm
 
 
 def test_bare_or_chain_with_function_local_aliased_path_home_terminal_is_exempt(tmp_path):
-    """The same alias shape, bound inside the function rather than at module
-    scope -- `_is_path_home_call`'s receiver-name collection must walk the
-    whole tree, not just the module body."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -306,8 +231,6 @@ def test_bare_or_chain_with_function_local_aliased_path_home_terminal_is_exempt(
 
 
 def test_bare_or_chain_with_unaliased_path_home_terminal_still_exempt(tmp_path):
-    """DoE fixture D (plain `Path.home()`, no alias) must stay clean after
-    C1 -- the literal `"Path"` name always matches, alias set or not."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -319,12 +242,6 @@ def test_bare_or_chain_with_unaliased_path_home_terminal_still_exempt(tmp_path):
 
 
 def test_bare_or_chain_variable_named_like_path_alias_is_not_a_false_exemption(tmp_path):
-    """A receiver named `_Path`, never bound to `pathlib.Path` by any import
-    in this tree, must not start exempting merely by naming coincidence --
-    the alias analogue of
-    `test_bare_or_chain_variable_named_home_is_not_a_false_exemption`. Only a
-    name this tree actually binds to `pathlib.Path` via `from pathlib
-    import Path as X` counts."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -335,16 +252,7 @@ def test_bare_or_chain_variable_named_like_path_alias_is_not_a_false_exemption(t
     assert len(findings) == 1
 
 
-# ---------------------------------------------------------------------------
-# C2 -- structural terminal-rung detection for `find_bare_home_or_chains`.
-# Spec: `docs/plans/2026-08-07-home-resolution-gate-family-reference-rule.md`,
-# `## Tasks` / `- id: C2`.
-# ---------------------------------------------------------------------------
-
-
 def test_bare_or_chain_with_genuine_path_home_terminal_is_exempt(tmp_path):
-    """The still-recognised correct shape: a real `Path.home()` call as the
-    chain's final rung -- must not regress."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -356,9 +264,6 @@ def test_bare_or_chain_with_genuine_path_home_terminal_is_exempt(tmp_path):
 
 
 def test_bare_or_chain_ternary_path_home_terminal_is_exempt(tmp_path):
-    """A `Path.home()` reached through a ternary (`X if cond else
-    Path.home()`) is a correct terminal rung -- required cross-repo shape
-    (DoE-claude `host_probes.py:1118`)."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -372,11 +277,6 @@ def test_bare_or_chain_ternary_path_home_terminal_is_exempt(tmp_path):
 
 
 def test_bare_or_chain_variable_named_home_is_not_a_false_exemption(tmp_path):
-    """Regression fixture: `Path(home).is_absolute()` false-positived the
-    old substring-based `_chain_has_windows_rung` (`"Path" in dumped and
-    "home" in dumped.lower()`) purely on the local variable name `home` --
-    with no genuine `Path.home()` call anywhere in the chain, this must
-    still be reported."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -391,12 +291,6 @@ def test_bare_or_chain_variable_named_home_is_not_a_false_exemption(tmp_path):
 
 
 def test_bare_or_chain_with_path_home_and_variable_named_home_is_exempt(tmp_path):
-    """The exact regression this chunk exists to prevent: a chain containing
-    BOTH a `Path(home).is_absolute()`-shaped naming coincidence AND a
-    genuine `Path.home()` terminal (reached through a ternary) -- the
-    fleet's MOST correct site shape. Structural matching finds the real
-    `Path.home()` call directly, independent of the unrelated `home`-named
-    local elsewhere in the same file. NO finding expected."""
     (tmp_path / "pkg").mkdir(exist_ok=True)
     (tmp_path / "pkg" / "mod.py").write_text(
         "import os\n"
@@ -415,9 +309,6 @@ def test_bare_or_chain_with_path_home_and_variable_named_home_is_exempt(tmp_path
 
 
 def test_bare_or_chain_literal_tilde_is_reported(tmp_path):
-    """A literal `"~"` is a violation, never a terminal rung -- it requires
-    a subsequent `expanduser`/environment-variable lookup to become a real
-    path, and is not itself Windows-safe."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -445,9 +336,6 @@ def test_bare_or_chain_unguarded_expanduser_is_no_longer_exempt(tmp_path):
 
 
 def test_bare_or_chain_nearby_expanduser_mention_is_no_longer_exempt(tmp_path):
-    """Same drop applied to the nearby-source-window fallback: a comment
-    mentioning `expanduser` a few lines away must no longer exempt the
-    chain either."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -494,15 +382,7 @@ def test_bare_or_chain_with_genuine_userprofile_rung_is_exempt(tmp_path):
     assert engine.find_bare_home_or_chains() == []
 
 
-# ---------------------------------------------------------------------------
-# C4 -- ladder-extraction seam (`_iter_ladder_sites`) across four shapes,
-# deduped per site. Spec: `docs/plans/2026-08-07-home-resolution-gate-family-
-# reference-rule.md`, `## Tasks` / `- id: C4`.
-# ---------------------------------------------------------------------------
-
-
 def test_shape_boolop_or_chain_still_reported_when_bare(tmp_path):
-    """Shape 1 (BoolOp `or`-chain) -- unchanged behavior, no Windows rung."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -532,8 +412,6 @@ def test_shape_guard_ladder_bare_is_reported(tmp_path):
 
 
 def test_shape_guard_ladder_with_path_home_terminal_is_exempt(tmp_path):
-    """Shape 2, correct terminal -- must not regress into a false positive
-    now that the guard-ladder is extracted at all."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -547,8 +425,6 @@ def test_shape_guard_ladder_with_path_home_terminal_is_exempt(tmp_path):
 
 
 def test_shape_ternary_standalone_bare_is_reported(tmp_path):
-    """Shape 3 (standalone ternary, not nested inside a BoolOp) -- no
-    Windows rung."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -560,7 +436,6 @@ def test_shape_ternary_standalone_bare_is_reported(tmp_path):
 
 
 def test_shape_ternary_standalone_with_path_home_terminal_is_exempt(tmp_path):
-    """Shape 3, correct terminal reached directly (no local name binding)."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -600,11 +475,6 @@ def test_shape_default_arg_ladder_bare_is_reported(tmp_path):
 
 
 def test_dedup_function_reported_once_not_twice(tmp_path):
-    """Dedup is a rule-contract obligation, not a nicety (spec): the spike's
-    prototype reported the same function twice -- once as an expression
-    (the BoolOp/ternary walk) and once as a function-body guard-ladder. A
-    function combining both an `if`/`return` guard AND a trailing bare-or
-    chain as its fallback must yield exactly ONE finding, not two."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -615,14 +485,6 @@ def test_dedup_function_reported_once_not_twice(tmp_path):
     )
     findings = engine.find_bare_home_or_chains()
     assert len(findings) == 1
-
-
-# ---------------------------------------------------------------------------
-# C2 -- Gap 1: an or-chain's rungs flatten through a call argument only when
-# that argument is itself an `or` BoolOp (recursively). Spec:
-# docs/plans/2026-09-11-home-resolution-lint-extractor-gaps.md task C2 /
-# AC2.
-# ---------------------------------------------------------------------------
 
 
 def test_c2_fixture_a_nested_or_in_join_argument_is_reported(tmp_path):
@@ -672,11 +534,6 @@ def test_c2_nested_or_userprofile_rung_inside_join_argument_is_exempt(tmp_path):
 
 
 def test_c2_unrelated_call_with_tilde_default_stays_a_leaf(tmp_path):
-    """C2 must not become `_extract_rungs`'s broader "every Call is
-    transparent" rule: an or-chain operand that is a Call with no `or`
-    BoolOp argument at all (`os.environ.get("XDG_X", "~")`) stays an
-    opaque leaf, so it is never decomposed into a spurious `rung_order`
-    TILDE violation. Zero `rung_order` violations expected."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -687,10 +544,6 @@ def test_c2_unrelated_call_with_tilde_default_stays_a_leaf(tmp_path):
 
 
 def test_c2_dedup_test_stays_unedited_and_green(tmp_path):
-    """C2's own stop condition: `test_dedup_function_reported_once_not_twice`
-    (above) must stay green unedited -- the covered-node-id dedup contract
-    holds under the flattening change. Re-run here as a same-file C2
-    witness, not a duplicate spec."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -703,19 +556,7 @@ def test_c2_dedup_test_stays_unedited_and_green(tmp_path):
     assert len(findings) == 1
 
 
-# ---------------------------------------------------------------------------
-# Cross-repo fixtures (DoE-claude@9e0fb5c44 shapes, verbatim) -- required so
-# C2's structural terminal detection is proven against them before this
-# ladder-extraction widening lands. Every one terminates in `Path.home()`
-# and must stay exempt against an EMPTY baseline.
-# ---------------------------------------------------------------------------
-
-
 def test_cross_repo_guard_ladder_return_path_home_is_exempt(tmp_path):
-    """DoE shape 1: a guard-ladder `return Path.home()`, with each guard's
-    test/return value bound to a preceding local variable -- exercises
-    `_extract_guard_ladder`'s name-binding resolution, not just the trivial
-    direct-call form."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -733,11 +574,6 @@ def test_cross_repo_guard_ladder_return_path_home_is_exempt(tmp_path):
 
 
 def test_cross_repo_ternary_over_locally_bound_env_read_is_exempt(tmp_path):
-    """DoE shape 2: a ternary over a locally-bound env read terminating in
-    `Path.home()` -- NOT extracted as a ladder site at all (the declared
-    known miss), so it naturally produces no finding and "stays exempt" by
-    virtue of being invisible to this rule, not by being classified as
-    correct."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -763,15 +599,7 @@ def test_cross_repo_boolop_or_str_path_home_is_exempt(tmp_path):
     assert engine.find_bare_home_or_chains() == []
 
 
-# ---------------------------------------------------------------------------
-# C5 -- `rung_order`: subsequence test against the master ordering
 # CLAUDE_HOME -> HOME -> USERPROFILE -> Path.home(). Ladder-kind-agnostic --
-# no fixture here branches on bootstrap-vs-contents kind before scoring
-# order. Spec: `docs/plans/2026-08-07-home-resolution-gate-family-reference-
-# rule.md`, `## Tasks` / `- id: C5`; transcribed from
-# `DoE-claude@coordinator/docs/wiki/portability-gates-spec.md` spec_version
-# 1.3.0 Home-resolution gate family (read at `DoE-claude@9e0fb5c44`).
-# ---------------------------------------------------------------------------
 
 
 def test_rung_order_transposed_rungs_is_reported(tmp_path):
@@ -810,8 +638,6 @@ def test_rung_order_claude_home_userprofile_home_is_reported(tmp_path):
 
 
 def test_rung_order_literal_tilde_terminal_is_reported(tmp_path):
-    """Spike fixture table: a literal `"~"` terminal FAILS -- never a valid
-    terminal rung regardless of order."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -823,11 +649,6 @@ def test_rung_order_literal_tilde_terminal_is_reported(tmp_path):
 
 
 def test_rung_order_unguarded_expanduser_is_a_warn_not_a_violation(tmp_path):
-    """C5d fix, per `DoE-claude@coordinator/docs/wiki/portability-gates-spec.md`
-    spec_version 1.3.0, "Terminal rung": "An unguarded `expanduser` is a
-    **warn**." -- distinct from a literal `"~"` (still a violation). Must NOT
-    appear in `find_rung_order_violations`; must appear in the WARN-tier
-    `find_rung_order_warnings` accessor."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -840,11 +661,6 @@ def test_rung_order_unguarded_expanduser_is_a_warn_not_a_violation(tmp_path):
 
 
 def test_rung_order_expanduser_with_transposed_rungs_stays_a_violation(tmp_path):
-    """A site that is ALSO a transposition (or a literal `"~"`) stays
-    reported via the violation channel even when it also carries an
-    `expanduser` rung -- `find_rung_order_warnings`'s contract is warn-only,
-    never a superset of the fail list, so this same site must NOT double-
-    report in both accessors."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -898,8 +714,6 @@ def test_rung_order_absent_rung_mid_ladder_passes(tmp_path):
 
 
 def test_rung_order_canonical_contents_ladder_passes(tmp_path):
-    """Spike fixture table: the canonical contents ladder (all four rungs,
-    in master order) PASSES."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -946,14 +760,6 @@ def test_rung_order_unrelated_chain_is_not_a_site(tmp_path):
     assert engine.find_rung_order_violations() == []
 
 
-# ---------------------------------------------------------------------------
-# C5b -- false-positive fix: a shape-4 default-arg ladder's OUTER rung (the
-# whole `environ.get(key, default)` call) must classify by its OWN key, not
-# by a `Path.home()` call nested inside its default arg. Spec: chunk C5b
-# dispatch brief, root-caused against `_classify_rung`'s check order.
-# ---------------------------------------------------------------------------
-
-
 def test_rung_order_default_arg_ladder_with_nested_path_home_default_passes(tmp_path):
     """C5b regression table row 1: `os.environ.get("CLAUDE_HOME",
     str(Path.home()))` is correct code -- the outer rung is the CLAUDE_HOME
@@ -971,8 +777,6 @@ def test_rung_order_default_arg_ladder_with_nested_path_home_default_passes(tmp_
 
 
 def test_rung_order_boolop_all_four_rungs_in_order_passes(tmp_path):
-    """C5b regression table row 2 (control): a BoolOp chain visiting all
-    four rungs in master order stays clean -- must not regress."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -1030,15 +834,7 @@ def test_rung_order_boolop_userprofile_before_home_is_reported(tmp_path):
     assert len(findings) == 1
 
 
-# ---------------------------------------------------------------------------
-# C5c -- `_contains_path_home_call` blind to `Path.home() / "suffix"`
-# (`ast.BinOp` never recursed into). Spec: chunk C5c dispatch brief, the
-# nine-row regression table -- all nine held simultaneously.
-# ---------------------------------------------------------------------------
-
-
 def test_c5c_bare_path_home_still_exempt(tmp_path):
-    """Row 1 (control): `Path.home()` alone stays a correct terminal."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -1050,7 +846,6 @@ def test_c5c_bare_path_home_still_exempt(tmp_path):
 
 
 def test_c5c_str_path_home_still_exempt(tmp_path):
-    """Row 2 (control): `str(Path.home())` stays a correct terminal."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -1062,8 +857,6 @@ def test_c5c_str_path_home_still_exempt(tmp_path):
 
 
 def test_c5c_path_home_binop_join_is_exempt(tmp_path):
-    """Row 3 -- the defect: `Path.home() / ".claude"` must now be recognised
-    as a correct terminal rung, not silently missed via `ast.BinOp`."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -1088,7 +881,6 @@ def test_c5c_bare_or_with_binop_join_rung_is_exempt(tmp_path):
 
 
 def test_c5c_guard_ladder_binop_join_terminal_is_exempt(tmp_path):
-    """Row 5: guard-ladder ending `return Path.home() / ".claude"`."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -1166,9 +958,6 @@ def test_c5c_transposed_userprofile_before_path_home_still_reported(tmp_path):
 
 
 def test_self_scan_is_clean_and_terminates(tmp_path):
-    """Self-measuring-gate check (`state/lessons/2026-08-07-a-gate-that-measures-a-corpus-must-not-l-dec459bb6300.yaml`):
-    `home_resolution_lint.py`'s own file scores clean under the widened
-    discovery and the run completes -- no circular re-invocation hang."""
     repo_root = Path(__file__).resolve().parents[2]
     engine = HomeResolutionLintEngine(repo_root=repo_root, scan_roots=("coordinator/lib",))
     findings = engine.run_all_rules()
@@ -1179,19 +968,6 @@ def test_self_scan_is_clean_and_terminates(tmp_path):
         if f.path == "coordinator/lib/home_resolution_lint.py"
     ]
     assert self_hits == []
-
-
-# ---------------------------------------------------------------------------
-# C5f -- false-positive fix: one local binding is ONE ladder. A function that
-# references a bound ladder from more than one return path re-expanded it once
-# per reference, and the splice between two copies read as a rung
-# transposition. Root-caused live against
-# `coordinator_core/ops/install_shell_init_guard_seam.py:_resolve_rc_path` and
-# `coordinator_core/ops/migrate_state_to_claude_klabauter.py:main`, both of which the
-# corpus gate reported immediately after a remediation wave gave them correct
-# ladders -- the recurrence loop recorded in
-# `state/handoffs/2026-08-08-home-resolution-gate-family-reference-rule.md`.
-# ---------------------------------------------------------------------------
 
 
 def test_rung_order_bound_ladder_reused_across_two_returns_passes(tmp_path):
@@ -1263,10 +1039,6 @@ def test_rung_order_transposed_bound_ladder_reused_is_still_reported(tmp_path):
 
 
 def test_rung_order_two_literal_transposed_ladders_still_reported(tmp_path):
-    """Control: the once-only set keys on the BINDING name, not on rung
-    shape, so a transposition written out literally twice (no binding
-    involved) is untouched -- proving the fix did not degrade into a global
-    structural dedup, which would have swallowed the second copy."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -1276,17 +1048,6 @@ def test_rung_order_two_literal_transposed_ladders_still_reported(tmp_path):
         "    return os.environ.get('USERPROFILE') or os.environ.get('HOME')\n",
     )
     assert len(engine.find_rung_order_violations()) == 1
-
-
-# ---------------------------------------------------------------------------
-# Reviewer finding P1 (code-reviewer 818d3fe7): cross-branch rung splice --
-# two distinct, individually-correct literal ladders in sibling branches of
-# one function still splice into one ordered sequence and false-positive.
-# Known gap, not fixed here -- the correct fix (per-ladder scoring) is its
-# own restructure plan. This test asserts the CURRENT wrong behaviour so the
-# gap is visible rather than silently undiscovered; see
-# `_rung_order_is_violation`'s docstring "Declared limit" paragraph.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.designed_red
@@ -1319,22 +1080,11 @@ def test_rung_order_cross_branch_ladder_splice_false_positive_known_gap(tmp_path
         "        return os.environ.get('USERPROFILE')\n"
         "    return os.environ.get('CLAUDE_HOME') or os.environ.get('HOME')\n",
     )
-    # Correct behaviour would be []; this asserts the current false positive.
     findings = engine.find_rung_order_violations()
     assert len(findings) == 1
 
 
-# ---------------------------------------------------------------------------
-# C3 -- example-game-repo form 2: probe-then-guard functions. Spec:
-# docs/plans/2026-09-11-home-resolution-lint-extractor-gaps.md task C3 /
-# AC3. Reduced (not verbatim -- no live read access to
-# example-game-workbench-repo from this session) reconstruction of example-game-repo's
-# `scripts/_setup_routing.py::_claude_home` per the plan's own C-pre census
-# description (task C3 body, and the "Gap 1 and Gap 2 reproduce" table): a
 # single-level `claude_home = os.environ.get('CLAUDE_HOME', ...)` probe,
-# then `if claude_home:` with a multi-statement body ending in a valued
-# `return`, then a post-guard rung two statements past the guard.
-# ---------------------------------------------------------------------------
 
 
 def test_c3_probe_then_guard_relaxed_body_is_clean_for_bare_or(tmp_path):
@@ -1359,12 +1109,6 @@ def test_c3_probe_then_guard_relaxed_body_is_clean_for_bare_or(tmp_path):
 
 
 def test_c3_probe_then_guard_tilde_terminal_reports_at_probe_line(tmp_path):
-    """The same fixture's `'~'` terminal IS a genuine `rung_order` TILDE
-    violation (the example-game-repo memo's own noted finding, per this plan's C9
-    section) -- and because the relaxed guard form is what qualified the
-    function, the representative node is the probe `environ.get(...)` Call,
-    not the `FunctionDef`, so the finding reports at the probe line (4), not
-    a line inside the function body."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -1427,10 +1171,6 @@ def test_c3_binop_transparent_wrapper_resolves_joined_terminal(tmp_path):
 
 
 def test_c3_shape_default_arg_ladder_bare_is_reported_stays_unedited(tmp_path):
-    """C3 stop condition, re-run here as a same-file witness (the original
-    lives above, unedited): a bare single-level `environ.get('HOME', '')`
-    with no `if` guard at all must stay visible via the shape-4 pass -- the
-    relaxed guard predicate must not swallow the no-guard case."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -1439,23 +1179,6 @@ def test_c3_shape_default_arg_ladder_bare_is_reported_stays_unedited(tmp_path):
     )
     findings = engine.find_bare_home_or_chains()
     assert len(findings) == 1
-
-
-# ---------------------------------------------------------------------------
-# C4 -- example-game-repo form 1: exempt a rung that delegates to a resolution-
-# complete same-module function. Spec:
-# docs/plans/2026-09-11-home-resolution-lint-extractor-gaps.md task C4 /
-# AC4. Reduced (not verbatim -- no live read access to
-# example-game-workbench-repo from this session) reconstruction of example-game-repo's
-# `scripts/lib/resolve_claude_home.py` per the task body: `resolve_home_base`
-# (directly resolution-complete), `resolve_claude_home` (delegates via the
-# `_memoised(key, fn)` form), `_resolve_claude_home_uncached` (a C3
-# probe-then-guard site whose post-guard rung delegates to
-# `resolve_home_base`), `_resolve_claude_json_uncached` (`.parent /
-# ".claude.json"` on `resolve_claude_home()`), and
-# `_resolve_claude_plugins_uncached` (`/ "plugins"` on
-# `resolve_claude_home()`).
-# ---------------------------------------------------------------------------
 
 
 _EXAMPLE_GAME_REPO_RESOLVE_CLAUDE_HOME = (
@@ -1528,10 +1251,6 @@ def test_c4_delegation_to_non_complete_helper_reports(tmp_path):
 
 
 def test_c4_delegation_to_imported_name_reports(tmp_path):
-    """Same-module only: a delegation to a name that resolves to an import
-    (not a top-level `FunctionDef` in THIS module) is never followed, so it
-    can never exempt the caller regardless of what the imported function
-    actually does -- it still reports."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -1549,10 +1268,6 @@ def test_c4_delegation_to_imported_name_reports(tmp_path):
 
 
 def test_c4_delegation_to_bare_path_home_helper_is_clean(tmp_path):
-    """A delegation to a same-module helper that returns only
-    `Path.home()` -- the staff-eng F3 shape, no ladder or guard of its own
-    at all -- is directly resolution-complete, so the delegating site is
-    exempt."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -1573,11 +1288,6 @@ def test_c4_delegation_to_bare_path_home_helper_is_clean(tmp_path):
 
 
 def test_c4_two_function_mutual_recursion_terminates(tmp_path):
-    """A two-function mutual-recursion fixture (`f` delegates to `g`, `g`
-    delegates to `f`, neither independently resolution-complete) must
-    terminate the fixpoint rather than infinite-loop, and -- correctly --
-    neither is resolution-complete, so the bare_or site delegating to `f`
-    still reports."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -1601,12 +1311,6 @@ def test_c4_two_function_mutual_recursion_terminates(tmp_path):
     assert len(findings) == 1
 
 
-# ---------------------------------------------------------------------------
-# C5 -- example-game-repo site 8: an env read interpolated only into a print message
-# is not a ladder site.
-# ---------------------------------------------------------------------------
-
-
 def test_env_read_interpolated_only_into_print_message_is_not_reported(tmp_path):
     """Example-Game-Repo site 8: a reduced copy of `machine_local_reader.py::
     _warn_legacy_claude_home_shape_once`'s `print(f"...{os.environ.get(
@@ -1626,9 +1330,6 @@ def test_env_read_interpolated_only_into_print_message_is_not_reported(tmp_path)
 
 
 def test_env_read_assigned_from_fstring_still_reports(tmp_path):
-    """An assigned or returned `f"{os.environ.get('HOME', '')}/.claude"` is
-    NOT the print-message shape C5 exempts -- it must still report, same as
-    before this rule existed."""
     engine = _engine_for(
         tmp_path,
         "import os\n"

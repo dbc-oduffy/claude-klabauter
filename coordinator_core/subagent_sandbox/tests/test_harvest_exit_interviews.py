@@ -1,17 +1,3 @@
-"""
-coordinator_core.subagent_sandbox.tests.test_harvest_exit_interviews --
-scoped pytest harness for the exit-interview grep-and-concatenate harvest.
-
-Builds a fake <machinery-root>/subagent-share/<sid>/ tree with one answered sidecar
-and one still-blank sidecar, then asserts the harvester includes the
-answered one's content, excludes the blank one's, and reports exactly one
-skipped-empty.
-
-Spec backlink: pln-claude-klabauter-subagent-run-report-aut-f51428
-(the sidecar this module reads); this test covers the harvest leg of
-coordinator baton G0 (agent citizenship), leg (c).
-Module under test: coordinator_core/subagent_sandbox/harvest_exit_interviews.py
-"""
 
 from __future__ import annotations
 
@@ -107,7 +93,6 @@ def test_harvest_includes_answered_excludes_empty_and_counts_skipped(tmp_path: P
     assert "agent_type=coordinator:code-reviewer" in report_text
     assert "The exact frontmatter key name for agent_type" in report_text
 
-    # The unanswered doc's provenance/agent_type must not leak into the report.
     assert "coordinator:executor" not in report_text
 
 
@@ -124,15 +109,6 @@ def test_harvest_session_filter_restricts_to_one_session(tmp_path: Path) -> None
 
 
 def test_harvest_includes_plan_derivable_sidecars(tmp_path: Path) -> None:
-    """The plan-derivable home (canonical spec § 2.7) must be harvested
-    alongside the session-keyed subagent-share tree, not just the latter.
-
-    Both fixtures build under `.coordinator-local/`, the root the reader
-    resolves through `machinery_paths`. They spelled `state/` until the
-    relocation moved the reader and left them behind, which is what made
-    this module red. They follow the seam rather than the writer: pointing
-    them back at `state/` would have turned them green against a writer
-    still emitting where nothing reads."""
     _write_sidecar(tmp_path, "session-1", "a.md", _ANSWERED_DOC)
     _write_plan_sidecar(tmp_path, "my-plan.prior-art-check.md", _ANSWERED_DOC)
 
@@ -144,9 +120,6 @@ def test_harvest_includes_plan_derivable_sidecars(tmp_path: Path) -> None:
 
 
 def test_harvest_plan_sidecars_included_regardless_of_session_filter(tmp_path: Path) -> None:
-    """A plan-sidecar file has no session to filter by -- it is always
-    harvested in full even when --session restricts the subagent-share
-    leg to one session_id."""
     _write_sidecar(tmp_path, "session-1", "a.md", _ANSWERED_DOC)
     _write_plan_sidecar(tmp_path, "my-plan.docs-check.md", _ANSWERED_DOC)
 
@@ -159,8 +132,6 @@ def test_harvest_plan_sidecars_included_regardless_of_session_filter(tmp_path: P
 
 
 def test_harvest_plan_sidecars_absent_directory_no_crash(tmp_path: Path) -> None:
-    """No plan-sidecars directory at all (a repo predating this convention)
-    must not raise -- fail open to zero plan-sidecar hits."""
     _write_sidecar(tmp_path, "session-1", "a.md", _ANSWERED_DOC)
 
     report_text, included, skipped_empty = harvest(tmp_path, session=None)

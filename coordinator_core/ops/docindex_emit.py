@@ -141,26 +141,18 @@ from coordinator_core.docindex.spec import IndexSpec, IndexSpecError, parse_inde
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.ipc import register_op
 
-#: Declared per DR-084-class provenance discipline (see module docstring
 #: "GENERATOR-PROVENANCE RATCHET"): this module rewrites the emitted region
-#: of whichever tracked markdown file currently self-declares
-#: `index_source_dir:` in its own frontmatter — a data-dependent set, never
 #: a fixed artifact GENERATES could name. `**/*.md` carries a literal file
-#: extension (never the catch-all `*`/`**`/`**/*`/`*/*` shape) and a
-#: wildcard metacharacter, matching the corpus-mutator convention this
-#: repo's other MUTATES declarations already use.
 MUTATES = ["**/*.md"]
 
 _EXCLUDED_TOP_SEGMENTS = ("state", "archive", "tasks")
 
 
 class DocindexEmitError(ValueError):
-    """Raised when target_root is missing/invalid or `git ls-files` fails."""
+    pass
 
 
 def _list_tracked_markdown(repo_root: Path) -> list[str]:
-    """One `git ls-files '*.md'` spawn (AC10/AC15) — the sole subprocess call
-    anywhere in this module."""
     from coordinator_core.git.run import run_git
 
     result = run_git(["-C", str(repo_root), "ls-files", "*.md"])
@@ -203,9 +195,6 @@ def _resolves_under_excluded_root(index_source_dir: str, repo_root: Path) -> boo
 
 
 def _discover_index_paths(repo_root: Path) -> list[str]:
-    """Every tracked, pruned `*.md` path whose leading frontmatter carries
-    `index_source_dir:` — the AC6 discovery clause. Text/grep scanning is
-    never used (F7's self-poisoning hazard)."""
     candidates: list[str] = []
     for rel_path in _list_tracked_markdown(repo_root):
         if _is_pruned(rel_path):
@@ -245,7 +234,7 @@ def _resolve_one(repo_root: Path, rel_path: str) -> tuple[IndexSpec, dict]:
         coerced = read_entry(
             entry_path, spec.entry_kind, spec.entry_fields, spec.index_exclude_when
         )
-        if coerced is None:  # AC16-excluded
+        if coerced is None:
             continue
         raw = _raw_entry_values(entry_path, set(coerced.keys()))
         merged = {k: raw.get(k, coerced[k]) for k in coerced}
@@ -272,9 +261,6 @@ def _docindex_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
     else:
         rel_paths = _discover_index_paths(guarded_root)
 
-    # AC13: uniqueness on (index_source_dir, entry_kind), refusing both
-    # documents by name on collision. Parse first so a malformed spec still
-    # surfaces its own IndexSpecError rather than being swallowed here.
     specs: dict = {}
     refused: list[dict] = []
     for rel_path in rel_paths:

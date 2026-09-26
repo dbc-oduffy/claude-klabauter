@@ -126,27 +126,6 @@ _EPISTEMIC_PREMISE = "epistemic-premise"
 
 
 class WaveRow(NamedTuple):
-    """One emitted row within a wave, carrying its predecessor edges for C4.
-
-    ``agent_type``/``agent_model`` (state/sizings/2026-09-05-a-plan-row-can-
-    name-the-agent-that-runs.yaml) are the per-row spine overrides
-    ``EmitterRow`` carries through, both defaulting to ``None`` so a spine
-    declaring neither key maps exactly as before either field existed.
-
-    ``change_kind`` is carried for ``emit._row_agent_type``, which needs a
-    row's WORK class to refuse one no agent type can serve — a
-    ``verification`` row writing only an immutable plan body. The write path
-    alone cannot answer that question, so without this field the
-    contradiction is invisible until the dispatched agent refuses on charter.
-
-    Note the end-to-end coverage lives in ``tests/test_emit.py`` (spine YAML
-    -> ``read_spine`` -> ``build_waves`` -> ``compose_script``), NOT here:
-    this module's own tests construct ``WaveRow`` directly and so cannot see
-    a break in the parsing seam above it, which is exactly how the two
-    agent-override fields first shipped inert. ``change_kind`` was threaded
-    with that history in hand — a test that hand-builds a ``WaveRow`` proves
-    nothing about whether ``read_spine`` ever populates it.
-    """
 
     id: str
     title: str
@@ -163,53 +142,15 @@ class WaveRow(NamedTuple):
 
 
 class WaveCycleError(ValueError):
-    """Raised when depends_on/read-after-write edges form a cycle (finding 3).
-
-    Covers both a self-edge (a row depending on itself, directly or via its
-    declared reads/writes) and a longer cycle among two or more rows.
-    """
+    pass
 
 
 def _normalize_path(path: str) -> PurePosixPath:
-    """Normalize a declared path string for containment comparison.
-
-    Two pure-string transforms, neither touching disk (that would violate
-    the package's no-tree-survey negative spec):
-
-      1. ``posixpath.normpath`` collapses a leading ``./``, redundant
-         separators, and ``..`` segments (``dir/../other.py`` and
-         ``other.py`` become the same normalized path) — string-only, no
-         filesystem access.
-      2. Case-fold to lowercase — the fleet's dominant dev box (macOS,
-         case-insensitive HFS+/APFS by default) treats ``docs/Wiki/x.md``
-         and ``docs/wiki/x.md`` as the same file on disk; without this the
-         containment check would call them non-overlapping.
-
-    Case-folding is deliberately WRONG on a case-sensitive filesystem, and
-    safe anyway because its error runs one way only. On Linux ``Foo.py`` and
-    ``foo.py`` are two files, so folding can declare an overlap that does not
-    exist — which costs an unnecessary wave boundary and serializes two rows
-    that could have run together. It can never do the reverse: fold two
-    genuinely-colliding paths apart. Over-serializing is a slower plan;
-    under-serializing is a corrupted tree at execution time. Do not "fix"
-    this by dropping the fold without replacing it with a per-platform
-    case-sensitivity probe — the fold is the conservative branch, not an
-    oversight.
-
-    Both gaps flagged
-    as path-comparison cases the containment logic missed.
-    """
     normalized = posixpath.normpath(path)
     return PurePosixPath(normalized.lower())
 
 
 def _paths_overlap(a: str, b: str) -> bool:
-    """True if declared paths ``a`` and ``b`` name the same surface.
-
-    Path-containment-aware in both directions: exact equality, OR one path
-    is a directory ancestor of the other (``docs/wiki/`` overlaps
-    ``docs/wiki/dispatch-emit.md``).
-    """
     path_a, path_b = _normalize_path(a), _normalize_path(b)
     if path_a == path_b:
         return True
@@ -338,12 +279,6 @@ def _predecessors(
                 if normalized in write_paths:
                     collisions.append((read_path, write_paths[normalized]))
                     continue
-                # Both directions
-                # of containment count, matching `_paths_overlap`'s
-                # writes/writes check: the reader's path may sit beneath the
-                # prefix (the ordinary case), or the reader may declare an
-                # ancestor of the prefix (e.g. reading `state/` against a
-                # writer prefix `state/audits/`).
                 under = next(
                     (
                         prefix
@@ -360,14 +295,6 @@ def _predecessors(
                 continue
             if reader.id in declared_closure[writer.id]:
                 read_path, write_path = collisions[0]
-                # Reported once per FULL-graph derivation pass, not per call:
-                # build_waves calls _predecessors twice (once for the cycle
-                # check, once over the post-holdout row set) and downstream
-                # emit/pathspec call build_waves again, so an unguarded
-                # warning repeated one dropped edge four times per emit. The
-                # provenance out-param is supplied only by the authoritative
-                # full-graph pass, which makes it the right gate — one fact,
-                # stated once (docs/wiki/guard-messaging.md § Register).
                 if provenance is not None:
                     direct = reader.id in declared[writer.id]
                     relation = (
@@ -401,8 +328,6 @@ def _predecessors(
 
 
 def _epistemic_premise_predecessors(row: EmitterRow) -> list[str]:
-    """Row ids named by one of ``row``'s ``depends_on`` edges whose
-    ``gate_kind`` is ``epistemic-premise``. Empty if none."""
     return [
         edge.get("chunk")
         for edge in row.depends_on
@@ -442,10 +367,6 @@ def _compute_held_out(
                 + ", surface not yet declared"
             )
 
-    # Fixed-point closure: a row held this round can make another row
-    # eligible next round (a chain of depends_on edges through held rows).
-    # Bounded by len(rows) — each round holds at least one more row or the
-    # loop stops.
     changed = True
     while changed:
         changed = False
@@ -461,10 +382,6 @@ def _compute_held_out(
 
 
 def _report_held_out(held: dict[str, str]) -> None:
-    """Log every held-out row by id and reason (never silent — see module
-    docstring § Epistemic-premise holdout). ``logging.warning`` reaches the
-    caller's stderr via Python's last-resort handler with no configuration
-    required, so an operator sees this without reading code."""
     for row_id in sorted(held):
         _logger.warning(
             "wave_map: held %s out of this pass's wave graph (%s)",
@@ -476,13 +393,6 @@ def _report_held_out(held: dict[str, str]) -> None:
 def _cycle_message(
     members: list[str], provenance: dict[tuple[str, str], str] | None
 ) -> str:
-    """The ``WaveCycleError`` body for cycle path ``members``.
-
-    Each hop is annotated with the provenance of the edge that produced it,
-    so an EM can see which leg was authored and which was inferred without
-    re-deriving the graph by hand (example-retrieval-repo-em cross-repo memo,
-    2026-08-20: "the error names neither leg's provenance").
-    """
     head = "cycle detected among rows: " + " -> ".join(members)
     if not provenance:
         return head
@@ -497,11 +407,6 @@ def _detect_cycle(
     preds: dict[str, set[str]],
     provenance: dict[tuple[str, str], str] | None = None,
 ) -> None:
-    """Raise ``WaveCycleError`` if ``preds`` contains a cycle or self-edge.
-
-    ``provenance`` (``_predecessors``' out-param) annotates each leg of the
-    reported cycle with the edge source that minted it.
-    """
     WHITE, GRAY, BLACK = 0, 1, 2
     color = {node: WHITE for node in preds}
     path: list[str] = []
@@ -509,12 +414,7 @@ def _detect_cycle(
     def visit(node: str) -> None:
         color[node] = GRAY
         path.append(node)
-        # sorted(): preds[node] is a set, and Python's set iteration order
-        # for str elements depends on per-process hash randomization
         # (PYTHONHASHSEED) — without a deterministic visit order, WHICH
-        # predecessor is visited first (and so which cycle path/member
-        # ordering ends up in the raised message) could vary run to run,
-        # even though whether a cycle exists is itself deterministic.
         for pred in sorted(preds[node]):
             if pred == node:
                 raise WaveCycleError(
@@ -537,17 +437,6 @@ def _detect_cycle(
 
 
 def _topological_order(rows: list[EmitterRow], preds: dict[str, set[str]]) -> list[EmitterRow]:
-    """Order ``rows`` so every predecessor precedes its dependents.
-
-    Ties (rows with no ordering relationship) preserve input order —
-    Kahn's algorithm, scanning the still-pending list in its original order
-    each round.
-
-    O(n^2) (linear scan + list.remove per placement) — a deliberate small-n
-    tradeoff, fine at plan-sized row counts (single/low-double digits). A
-    future caller batching much larger spines would hit this silently;
-    revisit with an ordered structure if that ever becomes real.
-    """
     placed_ids: set[str] = set()
     ordered: list[EmitterRow] = []
     pending = list(rows)
@@ -568,35 +457,6 @@ def _topological_order(rows: list[EmitterRow], preds: dict[str, set[str]]) -> li
 
 
 def build_waves(rows: list[EmitterRow]) -> list[list[WaveRow]]:
-    """Derive an ordered list of waves from ``rows``.
-
-    Each wave is a list of ``WaveRow`` objects that may dispatch in parallel.
-    Raises ``WaveCycleError`` if the combined depends_on + read-after-write
-    predecessor graph contains a cycle (including a self-edge).
-
-    Wave order is deterministic for a given input: rows are placed in
-    predecessor-respecting (topological) order, each into the earliest wave
-    that is simultaneously (a) free of any write-overlap conflict with every
-    row already placed in that wave and (b) at or past every one of the
-    row's predecessor waves + 1.
-
-    A row held out under § Epistemic-premise holdout (module docstring)
-    never reaches wave placement at all — it, and every row that
-    transitively depends on it, is removed from ``rows`` before the
-    predecessor graph used for placement is (re)computed, and reported by
-    id via ``logging.warning``. This does not weaken the wave-level
-    ``NoWritesDeclaredError``-style refusal for any OTHER reason a wave
-    might end up with no declared writes — it carves out exactly this one
-    named, justified case.
-
-    Cycle detection runs against the FULL, unfiltered predecessor graph —
-    before any holdout row is removed — so a cycle consisting entirely of
-    held-out rows (each blocked on the other, so neither's epistemic-premise
-    gate can ever resolve) still raises ``WaveCycleError`` instead of being
-    silently swallowed as two ordinary holds. Removing a strict subset of
-    nodes (and their edges) from an already-acyclic graph cannot introduce a
-    cycle, so no second cycle check against the filtered graph is needed.
-    """
     provenance: dict[tuple[str, str], str] = {}
     full_preds = _predecessors(rows, provenance)
     _detect_cycle(full_preds, provenance)

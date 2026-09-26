@@ -76,11 +76,6 @@ from typing import Optional, Sequence, Tuple
 _LOG_PREFIX = "[check-windows-ssh-binary]"
 _PIN_HINT = '  git config --global core.sshCommand "C:/Windows/System32/OpenSSH/ssh.exe"'
 
-# fnmatch patterns are matched against the resolved ssh path AFTER
-# backslash-to-forward-slash normalization and lower-casing, so every
-# pattern here is written lowercase/forward-slash to match 1:1 against the
-# bash oracle's `case` patterns (which operated on the same normalized
-# value).
 _WIN32_OPENSSH_PATTERNS = (
     "*:/windows/system32/openssh/ssh.exe",
     "/?/windows/system32/openssh/ssh.exe",
@@ -97,28 +92,18 @@ _MSYS_PATTERNS = (
 
 
 def _is_windows() -> bool:
-    """OS gate. WSL reports the Linux platform value — correctly excluded,
-    mirroring the sibling ensure_python3_exe_shim.py convention (see module
-    docstring "Negative-spec" for why this differs from the bash oracle's
-    OSTYPE gate)."""
     return sys.platform.startswith("win")
 
 
 def _run_git(args: Sequence[str]) -> Optional[str]:
-    """Run a git subcommand, returning stripped stdout on success or None on
-    any failure (missing git, non-zero exit, no repo, no such config key) —
-    collapses every failure mode to the same "not available" signal, matching
-    the bash oracle's `2>/dev/null || true` fallback-to-empty shape."""
     try:
         result = subprocess.run(
             ["git", *args],
             capture_output=True,
             text=True,
             **no_console_creationflags(),
-        )  # popup-safe-env-suppressed
+        )
     except OSError as exc:
-        # Replaced a stringified fragment
-        # of the try-block's own source with a plain human sentence.
         print(f"skip: git subcommand failed: {exc}", file=sys.stderr)
         return None
     if result.returncode != 0:
@@ -127,18 +112,11 @@ def _run_git(args: Sequence[str]) -> Optional[str]:
 
 
 def _has_ssh_remote() -> bool:
-    """True iff `git remote get-url origin` resolves to an SSH-shaped URL
-    (git@... or ssh://...). Case-sensitive prefix match, matching the bash
-    oracle's `case` statement (bash case is case-sensitive by default, no
-    nocasematch)."""
     origin_url = _run_git(["remote", "get-url", "origin"]) or ""
     return origin_url.startswith("git@") or origin_url.startswith("ssh://")
 
 
 def _first_token(value: str) -> str:
-    """Whitespace-split and take the first token, matching bash `read -r
-    _resolved _ <<<"$value"` — IFS-default splitting, discarding everything
-    after the first token (see module docstring "Known limitation")."""
     parts = value.split()
     return parts[0] if parts else ""
 
@@ -172,9 +150,6 @@ def _warn(*lines: str) -> None:
 
 
 def _classify_and_warn(resolved: str, source: str) -> None:
-    """Normalize the resolved path and emit the matching warning (or none,
-    on PASS). Every branch is a no-op with respect to the process exit code
-    — callers always return 0 (see module docstring negative-spec)."""
     resolved_norm = resolved.replace("\\", "/")
     resolved_lc = resolved_norm.lower()
 
@@ -188,7 +163,6 @@ def _classify_and_warn(resolved: str, source: str) -> None:
         return
 
     if any(fnmatch.fnmatchcase(resolved_lc, pat) for pat in _WIN32_OPENSSH_PATTERNS):
-        # PASS: resolved to Win32-OpenSSH. Silent, no warning.
         return
 
     if any(fnmatch.fnmatchcase(resolved_lc, pat) for pat in _MSYS_PATTERNS):

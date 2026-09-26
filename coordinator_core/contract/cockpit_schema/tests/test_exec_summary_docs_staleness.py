@@ -1,10 +1,3 @@
-"""
-test_exec_summary_docs_staleness — parse/reject tests for `ExecSummary.
-docs_staleness` and its leaf `DocStalenessEntry` (C6,
-`entities/exec_summary.py`).
-
-Spec backlink: DoE-claude:pln-human-facing-doc-staleness-det-d9c047 § C6
-"""
 from __future__ import annotations
 
 from coordinator_core.contract.cockpit_schema.entities.exec_summary import (
@@ -55,11 +48,6 @@ EXEC_SUMMARY_VALID = {
 }
 
 
-# ===========================================================================
-# DocStalenessEntry — leaf shape
-# ===========================================================================
-
-
 def test_doc_staleness_entry_valid_parses():
     zod_parse(DocStalenessEntry, ONE_DOC)
 
@@ -92,25 +80,16 @@ def test_doc_staleness_entry_rejects_extra_field():
     assert not zod_safe_parse_ok(DocStalenessEntry, extra)
 
 
-# ===========================================================================
-# ExecSummary.docs_staleness — required-with-null (D9), not optional
-# ===========================================================================
-
-
 def test_exec_summary_with_docs_staleness_array_parses():
     zod_parse(ExecSummary, EXEC_SUMMARY_VALID)
 
 
 def test_exec_summary_docs_staleness_null_parses():
-    """null == "detector did not run for this repo" — a distinct, valid
-    state from `[]` ("ran, nothing stale")."""
     nulled = {**EXEC_SUMMARY_VALID, "docs_staleness": None}
     zod_parse(ExecSummary, nulled)
 
 
 def test_exec_summary_docs_staleness_empty_list_parses():
-    """[] == "detector ran, nothing stale" — distinct from null; both are
-    valid and must not collapse to the same wire shape."""
     empty = {**EXEC_SUMMARY_VALID, "docs_staleness": []}
     zod_parse(ExecSummary, empty)
 

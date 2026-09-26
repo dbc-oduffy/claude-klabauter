@@ -94,14 +94,7 @@ __all__ = [
     "compose_grind_script",
 ]
 
-# ---------------------------------------------------------------------------
-# Calibration constants (module docstring above records source/ref/n/PARTIAL)
-# ---------------------------------------------------------------------------
 
-#: Median output tokens per agent call, by ledger/label-prefix stage kind.
-#: Partial sample -- see module docstring. Every member here is a measured,
-#: positive value; a stage kind absent from this dict has no sample yet
-#: (never an invented 0/placeholder).
 STAGE_OUTPUT_TOKENS: dict[str, int] = {
     "triage": 5786,
     "close": 8,
@@ -120,9 +113,6 @@ def batch_reserve(batch_size: int) -> int:
     dominant = max(STAGE_OUTPUT_TOKENS.values())
     return dominant * batch_size
 
-# ---------------------------------------------------------------------------
-# Routing table -- the profile's own graph, rendered once as data
-# ---------------------------------------------------------------------------
 
 _TSHIRT_ORDER: tuple[str, ...] = ("XS", "S", "M", "L", "XL", "XXL")
 
@@ -135,10 +125,6 @@ def _tshirt_rank(size: Optional[str]) -> int:
 _PLAN_WEIGHT_FLOOR_RANK = _tshirt_rank(vocab.PLAN_WEIGHT_FLOOR)
 
 def build_routing_table(profile: Profile) -> dict[str, dict[str, Any]]:
-    """The routing table emitted ONCE as data: ``node_id -> {kind, edges,
-    on_fail}``. Both the pure-Python model and the rendered ``.mjs``
-    interpreter read the SAME table -- never a hand-duplicated re-statement
-    of the profile's graph."""
     return {
         node_id: {"kind": node.kind, "edges": dict(node.edges), "on_fail": node.on_fail}
         for node_id, node in profile.graph.items()
@@ -153,9 +139,6 @@ def _triage_node_id(profile: Profile) -> str:
 def route_after_triage(
     routing: Mapping[str, dict], triage_node_id: str, verdict: str, tshirt_size: Optional[str], tradeoff: str
 ) -> tuple[str, str]:
-    """``("handback", type)`` or ``("node", node_id)`` -- the engine-fixed
-    size/tradeoff gate runs before the profile's own verdict edge (§ Design
-    § Profile "Engine-fixed routing rules")."""
     if _tshirt_rank(tshirt_size) >= _PLAN_WEIGHT_FLOOR_RANK:
         return ("handback", "baton")
     if tradeoff:
@@ -167,12 +150,6 @@ def route_after_triage(
     return ("node", target)
 
 def resize_verdict_map(routing: Mapping[str, dict], triage_node_id: str) -> tuple[Optional[str], Optional[str]]:
-    """``(fix_verdict, close_verdict)`` -- the profile's OWN declared
-    triage verdicts whose edge off ``triage_node_id`` targets a fix-kind /
-    refute-close-kind node, resolved once from the profile's graph (design
-    item 4, docs/plans/2026-09-22-port-the-remaining-bug-backlog-grind-
-    les.md). Either is ``None`` when ambiguous (more than one verdict
-    targets that kind) -- never an invented value."""
     edges = routing[triage_node_id]["edges"]
     fix_verdicts = [v for v, t in edges.items() if t in routing and routing[t]["kind"] == "fix"]
     close_verdicts = [v for v, t in edges.items() if t in routing and routing[t]["kind"] == "refute-close"]
@@ -182,8 +159,6 @@ def resize_verdict_map(routing: Mapping[str, dict], triage_node_id: str) -> tupl
 
 
 def follow_edge(routing: Mapping[str, dict], node_id: str, outcome: str, row: "Row") -> tuple[str, str]:
-    """``("handback", type)`` or ``("node", node_id)`` for a non-triage
-    node's outcome, honouring the single ``on_fail`` back-edge per row."""
     node = routing[node_id]
     target = node["edges"].get(outcome)
     if target is None:
@@ -198,9 +173,6 @@ def follow_edge(routing: Mapping[str, dict], node_id: str, outcome: str, row: "R
         return ("handback", target)
     return ("node", target)
 
-# ---------------------------------------------------------------------------
-# Pure-Python admission model -- the behavioural test drives this directly.
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Row:
@@ -218,15 +190,7 @@ class Row:
     on_fail_used: bool = False
     done: bool = False
     sha: str = ""
-    #: Where this row's most recent close proposal came from --
-    #: ``triage:<verdict>`` for a triage-routed proposal (design item 3,
-    #: docs/plans/2026-09-22-port-the-remaining-bug-backlog-grind-les.md).
-    #: Derived from the row's own record, never from the batch id.
     origin: str = ""
-    #: The refuter's own reason, set only when a refute-close `refuted`
-    #: entry revives this row (design item 2) -- consumed by the fix
-    #: composer's ``refute_note_js`` and echoed into a later hand-back's
-    #: `reason` alongside `origin` (design item 2's last bullet).
     refute_note: str = ""
 
 @dataclass
@@ -295,8 +259,6 @@ def run_admission(
     settled: list[dict] = []
     admitted: dict[str, _Batch] = {}
     exhausted = False
-    #: `by_refute_origin[origin] = {"confirmed": n, "refuted": n}` -- design
-    #: item 3's per-origin refute-verdict accounting.
     by_refute_origin: dict[str, dict[str, int]] = {}
 
     def _bump_refute_origin(origin: str, key: str) -> None:
@@ -311,9 +273,6 @@ def run_admission(
 
     def _handback(row: Row, htype: str, reason: str) -> None:
         row.done = True
-        # Design item 2's last bullet: a row revived after a refuted close
-        # proposal that later hands back gives, in its reason, the origin
-        # of that refuted proposal.
         if row.refute_note:
             reason = f"{reason} (revived from a refuted close proposal, origin {row.origin!r}: {row.refute_note!r})"
         if any(h["row"] == row.row_id and h["type"] == htype for h in handed_back):
@@ -352,15 +311,10 @@ def run_admission(
             action = route_after_triage(
                 routing, triage_node_id, rec["verdict"], rec.get("tshirt_size"), tradeoff
             )
-            # Design item 4: a row's size-floor baton is deferred to one
-            # read-only resize call per batch, never handed back straight
-            # off triage.
             if action == ("handback", "baton"):
                 to_resize.append(row)
                 continue
             _apply_route(row, action, f"triage verdict {rec['verdict']!r}")
-        # A row triage never returned a record for must not stay pending
-        # forever: hand it back rather than spin.
         for rid in batch.row_ids:
             row = rows[rid]
             if rid not in seen and not row.done and row.node is None:
@@ -403,11 +357,6 @@ def run_admission(
             row.touched_files = list(row.touched_files) + [item.get("new_path", "")]
             action = follow_edge(routing, row.node, "confirmed", row)
             _apply_route(row, action, "refute-close confirmed")
-            # Parity with the rendered
-            # `.mjs`'s inline archive-move-commit branch: a confirmed-close
-            # row whose route is a direct handback (no explicit `commit`
-            # node between it and its terminal type) is committed here,
-            # inline, and its successful commit is recorded in `settled` --
             # never silently dropped from `HANDBACK.settled`/`_counts`.
             if action[0] == "handback":
                 commit_result = _record_call("commit", row.row_id) or {}
@@ -472,8 +421,6 @@ def run_admission(
         outcome = result.get("outcome")
         if outcome == "fail":
             if not row.verify_retried:
-                # DR-404: route BACK to fix with the verifier's own reason
-                # as feedback -- never a blind re-verify of the same fix.
                 row.verify_retried = True
                 row.verify_feedback = result.get("reason", "")
                 row.node = row.fix_node or row.node
@@ -535,21 +482,15 @@ def run_admission(
         if not queue and not admitted:
             break
         if not queue:
-            break  # stuck admitted batch with no progress possible -- defensive
+            break
 
         if max_agent_calls is not None and len(call_log) >= max_agent_calls:
             exhausted = True
             break
-        # Parity with the rendered `.mjs`'s
         # BUDGET_TOKENS ceiling (a caller-supplied hard cap, distinct from
-        # budget.total/remaining() below): halts admission once the next
-        # batch's reserve would carry cumulative spend past it.
         if budget_tokens is not None and (budget.spent() - start_spent) + reserve > budget_tokens:
             exhausted = True
             break
-        # One ceiling check via
-        # budget.total/remaining(); budget_tokens/spent_delta was a redundant
-        # second check over the same number on the default path.
         if budget.total is not None and (budget.remaining() or 0) <= reserve:
             exhausted = True
             break
@@ -575,13 +516,8 @@ def run_admission(
         },
     }
 
-# ---------------------------------------------------------------------------
-# Manifest batching
-# ---------------------------------------------------------------------------
 
 def _group_into_batches(manifest: Manifest, knobs: Mapping[str, Any]) -> list[tuple[str, list[ManifestEntry]]]:
-    """Group ``manifest.entries`` (already ordered) into batches, keyed by
-    ``batch_key``, chunked to that key's resolved ``batch_size``."""
     batch_size_knob = knobs.get("batch_size", 4)
     groups: dict[str, list[ManifestEntry]] = {}
     for entry in manifest.entries:
@@ -598,21 +534,10 @@ def _group_into_batches(manifest: Manifest, knobs: Mapping[str, Any]) -> list[tu
         size = max(1, int(size))
         for i in range(0, len(entries), size):
             chunk = entries[i : i + size]
-            # `-`, not `:` -- this id is embedded verbatim as a
-            # `records/<batch-id>.json` filename in the composed triage and
-            # verify-op stage prompts (grind_stages.py::compose_triage_call,
-            # compose_verify_op_call). `:` is NTFS-illegal (the write guard's
-            # own `block_illegal_filename` denies it, per
             # coordinator_core/bash_guards/_helpers.py::_ILLEGAL_CHARS_ORDER)
-            # and is never parsed back out (grind_rows.py::_extract_batch_rows
-            # matches the id by exact string equality), so the separator
-            # carries no meaning worth an NTFS-illegal char.
             batches.append((f"{key}-b{i // size}", chunk))
     return batches
 
-# ---------------------------------------------------------------------------
-# .mjs rendering
-# ---------------------------------------------------------------------------
 
 _NODE_CHECK_COMMENT = (
     "// This script runs inside the Workflow runner, which executes this\n"
@@ -621,13 +546,6 @@ _NODE_CHECK_COMMENT = (
     "// file -- that is not a defect."
 )
 
-#: Runtime mutex: a Set of held keys plus a waiter queue, acquired
-#: all-or-nothing over the sorted union of keys a stage needs (precedent:
-#: the hand-run's own `tasks/backlog-grind-2026-09-21/backlog-grind.
-#: workflow.js`'s `locked`/`waiters` pair). No `lock.acquire`/`lock.release`
-#: runtime global is assumed -- the mutex is defined in-script. A single
-#: `@commit` key serialises every commit call, including the ledger-only
-#: commit (eng-director F3).
 _MUTEX_HELPERS = (
     "const _locked = new Set();\n"
     "const _waiters = [];\n"
@@ -660,8 +578,6 @@ _MUTEX_HELPERS = (
     "}"
 )
 
-#: The engine-fixed routing gate (size floor, tradeoff) plus the generic
-#: edge follower -- rendered once, read by every stage dispatcher below.
 _ROUTING_HELPERS = (
     "const _TSHIRT_ORDER = ['XS', 'S', 'M', 'L', 'XL', 'XXL'];\n"
     "function _tshirtRank(size) { const i = _TSHIRT_ORDER.indexOf(size || 'XS'); return i < 0 ? 0 : i; }\n"
@@ -708,23 +624,10 @@ def _manifest_const(manifest: Manifest) -> str:
     )
 
 def _capture(call_text: str, stage_kind: str, *, return_expr: str = "_result", tail: Optional[str] = None) -> str:
-    """Wrap a ``grind_stages.compose_*`` call (which returns a bare
-    ``await agent(...);`` statement, discarding the result) so the caller
-    gets the parsed schema object back AND every call site records itself.
-    ``return_expr`` lets a caller return a
-    field off ``_result`` (e.g. triage's ``_result.rows``) instead of the
-    raw object. ``tail``, when given, replaces the trailing
-    ``return <return_expr>;`` entirely -- for a caller (op-mode verify)
-    that must post-process ``_result`` before deciding what to return."""
     prefix = "  await agent("
     suffix = ");"
     if not call_text.startswith(prefix) or not call_text.endswith(suffix):
         raise ValueError(f"grind_compose._capture: unexpected composer output shape: {call_text[:40]!r}")
-    # `|| {}` guards every consumer against a null/undefined agent result --
-    # a null fix/verify/commit/close result then reads as an empty object
-    # (missing `.outcome`/`.confirmed`/etc.) rather than throwing, so the
-    # row routes to `stage-dead` via the normal "unhandled outcome" path
-    # instead of killing the run (finding 1).
     body = "  const _result = (await agent(" + call_text[len(prefix) : -len(suffix)] + ")) || {};"
     body += f"\n  _recordCall({_js_string_literal(stage_kind)});"
     if tail is not None:
@@ -732,8 +635,6 @@ def _capture(call_text: str, stage_kind: str, *, return_expr: str = "_result", t
     return body + f"\n  return {return_expr};"
 
 def _indent_block(text: str, indent: str) -> str:
-    """Re-indent every line of ``text`` by ``indent`` -- the join pattern
-    every captured-call block below shares."""
     return indent + f"\n{indent}".join(text.splitlines())
 
 
@@ -745,18 +646,6 @@ def _ledger_commit_block(
     profile_name: str,
     agent_type_host: Optional[str],
 ) -> str:
-    """One ``async function <fn_signature> { ... }`` ledger-only commit
-    block (§ Stage library, batch-end and drain forms) -- shared by both
-    call sites below, which differ only in how ``unsettled`` is computed
-    and whether it is the drain form (adds the run-cost record clause and
-    interpolates ``RUN_ID``). Always guarded behind ``if (unsettled.length)``
-    -- committing zero rows is a no-op, never attempted. A row whose ledger
-    this commit lands for is added to ``_ledgerCommitted`` so neither the
-    drain nor a later batch-end commit re-stages it (nit: `_drainCommit`
-    filtered only on `_settled`, so it re-staged ledgers `_finishBatch`
-    already committed); a `commit-failed` outcome here is recorded in the
-    hand-back, one entry per row of this ledger set, instead of silently
-    dropped."""
     label = "commit-ledger:drain" if is_drain else "commit-ledger:batch"
     raw = stages.compose_commit_ledger_only_call(
         label=label,
@@ -787,11 +676,6 @@ def _ledger_commit_block(
         "    for (const r of unsettled) { _ledgerCommitted.add(r); }\n"
         "  }"
     )
-    # The drain form always runs (even over an empty unsettled set) -- it is
-    # the sole write path for the run-cost record file (finding 4): gating it
-    # behind `if (unsettled.length)` silently skipped that write whenever
-    # every row had already settled through its own per-row commit. The
-    # batch-end form stays guarded -- committing zero rows there is a no-op.
     guarded_call = call_block if is_drain else ("  if (unsettled.length) {\n" + _indent_block(call_block, "  ") + "\n  }")
     body = (
         f"  const unsettled = {unsettled_expr};\n"
@@ -810,11 +694,8 @@ def _verify_mode_for_key(profile: Profile, node_id: str, batch_key: str) -> tupl
         return "op", mode.get("op")
     return (mode or "agent"), None
 
-#: Fail-fast check on the fire-time ``args`` before any agent spends a token. A
 #: missing arg, or a ``run_stamp`` without the leading ``YYYYMMDD`` that
-#: ``grind-row close`` dates rows from, otherwise surfaces rows later as one
 #: ``carries no YYYYMMDD date`` refusal per close. The emitter prints the
-#: well-formed call.
 _FIRE_ARGS_CHECK = (
     "if (!args || !args.run_stamp || !args.script_path || !args.profile_dir"
     " || !/^\\d{8}/.test(String(args.run_stamp).replace(/-/g, ''))) {"
@@ -857,15 +738,6 @@ def compose_grind_script(
     own discipline, ``emit.py``'s ``SharedBlocks``), and never spliced into
     ``verify-op`` or ``commit``, which are not executor prompts. A no-op
     when omitted."""
-    # POSIX-normalized regardless of platform: the composed script text is a
-    # deterministic function of its arguments (module docstring, "Pure
-    # function"), and a bare `str(Path(...))` renders OS-native separators on
-    # Windows -- a `\` spliced into a single-quoted JS literal changes the
-    # path the runtime resolves, not merely the golden's bytes. Production's
-    # one caller (`queue_emit.emit_queue_script`) already pre-converts via
-    # `.as_posix()`, so this only bit a caller passing a bare `Path` directly
-    # (every test in this module does) -- `Path(run_dir).as_posix()` makes
-    # the guarantee hold for any caller, not only the one that remembered.
     run_dir_s = Path(run_dir).as_posix()
     grouped = _group_into_batches(manifest, knobs)
     window = int(knobs.get("window", 6))
@@ -875,7 +747,6 @@ def compose_grind_script(
     budget_tokens = knobs.get("budget_tokens")
     triage_depth_knob = knobs.get("triage_depth", "standard")
     triage_node_id = _triage_node_id(profile)
-    # Inlined single-caller comprehension.
     node_kind = {node_id: node.kind for node_id, node in profile.graph.items()}
     routing_table = build_routing_table(profile)
     resize_fix_verdict, resize_close_verdict = resize_verdict_map(routing_table, triage_node_id)
@@ -883,12 +754,6 @@ def compose_grind_script(
     resize_fix_target = resize_edges.get(resize_fix_verdict) if resize_fix_verdict else None
     resize_close_target = resize_edges.get(resize_close_verdict) if resize_close_verdict else None
 
-    # Per-batch-key data (a small const, NOT unrolled per row/per batch --
-    # the number of `agent(` call SITES must be a small constant
-    # independent of row count. Every stage kind is composed exactly ONCE
-    # below, as an in-script function taking the row/batch object;
-    # per-batch-key variation (triage depth, verify mode/op) is a runtime
-    # lookup into these consts, never unrolled code.
     batches_const: list[dict[str, Any]] = [
         {"id": batch_id, "batch_key": entries[0].batch_key, "rows": [e.row_id for e in entries]}
         for batch_id, entries in grouped
@@ -932,12 +797,7 @@ def compose_grind_script(
     lines.append(f"const RESERVE = {batch_reserve(reserve_batch_size)};")
     lines.append(f"const MAX_AGENT_CALLS = {json.dumps(max_agent_calls)};")
     lines.append(f"const BUDGET_TOKENS = {json.dumps(budget_tokens)};")
-    # the guard MUST run before any `const ... = args.*` read below --
-    # `args` is a fire-time global the Workflow runner supplies, absent
-    # entirely on a bare `Workflow({scriptPath})` fire with no `args`. A
-    # read ahead of this check throws a raw `TypeError: Cannot read
     # properties of undefined` instead of `_FIRE_ARGS_CHECK`'s named,
-    # actionable refusal -- exactly the defect this ordering fixes.
     lines.append(_FIRE_ARGS_CHECK)
     lines.append(f"const RUN_ID = args.run_stamp;")
     lines.append(f"const SCRIPT_PATH = args.script_path;")
@@ -991,9 +851,6 @@ def compose_grind_script(
         "}"
     )
 
-    # ONE composed call site per stage kind (verify: one per mode) --
-    # row/batch-count-independent. Each function takes the live row/batch
-    # object and interpolates its runtime fields via grind_stages' `*_js`
     # params; per-batch-key variation reads TRIAGE_DEPTH_BY_KEY/VERIFY_SPEC.
     triage_raw = stages.compose_triage_call(
         label="triage", phase_title="Grind", run_dir=run_dir_s, profile=profile.name,
@@ -1324,12 +1181,6 @@ def compose_grind_script(
         "}"
     )
 
-    # Both ledger-only commits interpolate the REAL runtime row/run-id
-    # values (`unsettled`/`RUN_ID`, in scope as closures over the enclosing
-    # `withLock` callback) via `compose_commit_ledger_only_call`'s `*_js`
-    # params -- never a static per-batch approximation. One shared builder,
-    # since the two forms differ only in how `unsettled` is computed and
-    # whether the drain clause/RUN_ID applies.
     lines.append(
         _ledger_commit_block(
             "_finishBatch(batchState)",
@@ -1351,10 +1202,6 @@ def compose_grind_script(
         )
     )
 
-    # The batch-scheduler state (`triaged`/`closeCalled` flags per admitted
-    # batch id) plus the bounded-concurrency worker pool (§ Design §
-    # Composer, "up to `window` batches in flight" -- real fan-out, never
-    # `pipeline()` over all batches).
     lines.append(
         "const _admitted = {};\n"
         "const _queue = BATCHES.map((b) => b.id);\n"

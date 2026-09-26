@@ -1,67 +1,3 @@
-"""
-coordinator_core.distill.tests.test_delete_guard
-
-Unit tests for coordinator_core.distill.delete_guard — the mechanical delete-safety
-guard for handoffs and cross-repo memos.
-
-Coverage:
-  check_shipped_in:
-    (a) present + non-empty -> passes
-    (b) absent -> blocks
-  check_status_actioned:
-    (c) status: actioned -> passes
-    (d) status: active -> blocks
-  check_active_reference:
-    (e) needle referenced under docs/ -> blocks (still-referenced)
-    (f) needle not referenced anywhere -> passes
-  check_commitment_closure (real closure check over the ledger's `status:` field —
-  replaced the former always-block "closure schema not yet defined" placeholder,
-  which hard-blocked every candidate the moment the surface existed):
-    (g) FAIL LOUD: state/cross-repo-commitments absent -> blocks with the exact
-        "commitment-closure: surface absent" detail (never a silent pass)
-    (g2) OPEN commitment referencing the candidate -> blocks
-    (g3) CLOSED commitment referencing the candidate -> passes
-    (g4) open commitment NOT referencing the candidate -> passes
-    (g5) unparseable ledger entry -> fail-closed block with a reason naming the entry
-    (g6) ledger entry with no status field -> fail-closed block
-    (g7) open commitment citing the candidate's delivery path (cross-repo/inbox/)
-        while the candidate lives in cross-repo/archive/ -> still blocks (bare
-        filename matching bridges the inbox->archive sweep)
-  resolve_realized_by / check_realized_by (per-value-shape dispatch, one fixture row
-  per shape — this is the reviewer-flagged high-risk section):
-    (h) path-shaped, file exists -> True
-    (i) path-shaped, file absent -> False
-    (j) full 40-char SHA, real git object -> True (via git cat-file -e)
-    (k) full 40-char SHA, not a real object -> False
-    (l) bare-short SHA (e.g. b812d89 / b6143a5 shape), real git object -> True —
-        MUST NOT be coerced to Infinity (realized-by-short-sha-scientific-notation-trap)
-    (m) bare-short SHA, not a real object -> False
-    (n) literal "inline" sentinel -> True unconditionally
-    (o) absent realized_by field entirely -> blocks with a distinct detail message
-  #12 memory-pointer exclusion:
-    (p) basis_refs citing ONLY a ~/.claude path -> forced RETAIN (ineligible),
-        "memory-pointer-exclusion" present in blocked_by regardless of the other
-        5 guards' outcome
-    (q) basis_refs citing a ~/.claude path PLUS another non-memory reference ->
-        exclusion does NOT fire (mixed basis is not "ONLY")
-    (r) no basis_refs at all -> exclusion does not fire
-  classify_artifact + class-keyed guard dispatch (the 2026-07-23 cockpit
-  164/164-blocked defect: shipped_in ran against every memo and status-actioned
-  against every handoff — class-inapplicable guards must not run at all):
-    (u) from:+to: frontmatter -> memo; deployment_state: -> handoff; path-prefix
-        fallback (cross-repo/ -> memo, handoffs segment -> handoff); neither ->
-        None
-    (v) a memo is never evaluated by shipped_in; a handoff never by
-        status-actioned
-    (w) an unclassifiable candidate fails CLOSED with "artifact-class-unresolved"
-  evaluate_candidate (integration):
-    (s) a candidate that clears every applicable guard -> eligible True,
-        blocked_by empty
-    (t) a candidate that fails several guards -> eligible False, blocked_by lists
-        every failing guard name
-
-Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C3
-"""
 
 from __future__ import annotations
 
@@ -94,18 +30,8 @@ from coordinator_core.win_portability import no_console_creationflags
 _HAS_RG = shutil.which("rg") is not None
 _requires_rg = pytest.mark.skipif(not _HAS_RG, reason="ripgrep (rg) not installed")
 
-# Declared, not excused: the `git_repo` fixture and `_commit_dated` spawn real git
-# because the properties under test are real git object resolution --
-# `resolve_realized_by`/`_git_objects_exist` dispatch through `git cat-file` against
-# real full/short SHAs (the scientific-notation-coercion hazard needs a real
-# resolvable object, not a mock), and `check_distill_fate`'s absent-fate branch reads
 # real `git log`-derived commit dates to compare against DISTILL_FATE_STAMPING_CUTOVER.
-# `git_repo` stays function-scoped (default fixture scope) because
-# `test_distill_fate_absent_real_file_no_git_history_blocks_retain` and its siblings
-# add distinct uncommitted/differently-dated files per test that must not leak between
 # tests sharing a repo. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
-# residue and is explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -122,8 +48,6 @@ def _git(repo_root: Path, *args: str) -> subprocess.CompletedProcess:
 
 @pytest.fixture
 def git_repo(tmp_path: Path) -> Path:
-    """A throwaway git repo with one committed file, giving us a real, resolvable
-    full-length SHA and a real, resolvable bare-short-SHA prefix to test against."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     _git(repo_root, "init", "-q")
@@ -140,10 +64,6 @@ def _commit_sha(repo_root: Path) -> str:
     return result.stdout.strip()
 
 
-# ---------------------------------------------------------------------------
-# check_shipped_in
-# ---------------------------------------------------------------------------
-
 def test_shipped_in_present_passes():
     result = check_shipped_in("shipped_in: 68b27420\nstatus: actioned\n")
     assert result.passed is True
@@ -155,10 +75,6 @@ def test_shipped_in_absent_blocks():
     assert "absent" in result.detail
 
 
-# ---------------------------------------------------------------------------
-# check_status_actioned
-# ---------------------------------------------------------------------------
-
 def test_status_actioned_passes():
     result = check_status_actioned("status: actioned\n")
     assert result.passed is True
@@ -169,10 +85,6 @@ def test_status_active_blocks():
     assert result.passed is False
     assert "active" in result.detail
 
-
-# ---------------------------------------------------------------------------
-# check_active_reference
-# ---------------------------------------------------------------------------
 
 @_requires_rg
 def test_active_reference_still_referenced_blocks(tmp_path: Path):
@@ -189,10 +101,6 @@ def test_active_reference_not_referenced_passes(tmp_path: Path):
     result = check_active_reference("totally-unreferenced-slug.md", tmp_path)
     assert result.passed is True
 
-
-# ---------------------------------------------------------------------------
-# check_commitment_closure — real closure check over the ledger's status field
-# ---------------------------------------------------------------------------
 
 _NEEDLE = "cross-repo/archive/2026-07-01-some-memo.md"
 
@@ -213,15 +121,11 @@ def test_commitment_closure_absent_surface_fails_loud(tmp_path: Path):
 
 
 def test_commitment_closure_never_silently_passes_when_absent(tmp_path: Path):
-    # Explicit negative-spec assertion: absence must never resolve to passed=True.
     result = check_commitment_closure(_NEEDLE, tmp_path)
     assert result.passed is not True
 
 
 def test_commitment_closure_empty_surface_passes(tmp_path: Path):
-    # An existing ledger dir with no entries has no open commitments — the
-    # former "closure schema not yet defined" placeholder hard-blocked here
-    # (the 2026-07-23 cockpit defect, part a); the real check must not.
     (tmp_path / "state" / "cross-repo-commitments").mkdir(parents=True)
     result = check_commitment_closure(_NEEDLE, tmp_path)
     assert result.passed is True
@@ -284,8 +188,6 @@ def test_commitment_closure_missing_status_field_fails_closed(tmp_path: Path):
 
 def test_commitment_closure_matches_bare_filename_across_inbox_archive_sweep(tmp_path: Path):
     # Ledger entries cite memos by their DELIVERY path (cross-repo/inbox/...);
-    # an actioned candidate has been swept to cross-repo/archive/ under the same
-    # filename. The filename leg of reference detection must bridge that.
     _write_commitment(
         tmp_path,
         "2026-07-01-inbox-cited-entry.yaml",
@@ -295,10 +197,6 @@ def test_commitment_closure_matches_bare_filename_across_inbox_archive_sweep(tmp
     result = check_commitment_closure(_NEEDLE, tmp_path)
     assert result.passed is False
 
-
-# ---------------------------------------------------------------------------
-# resolve_realized_by — one fixture row per value SHAPE
-# ---------------------------------------------------------------------------
 
 def test_realized_by_path_shaped_exists(tmp_path: Path):
     target = tmp_path / "state" / "handoffs" / "some-handoff.md"
@@ -325,20 +223,14 @@ def test_realized_by_full_sha_fake_object(git_repo: Path):
 def test_realized_by_bare_short_sha_real_object(git_repo: Path):
     sha = _commit_sha(git_repo)
     short = sha[:7]
-    # Sanity: this is exactly the shape (hex-only, 7 chars) that a naive
-    # numeric-coercion path would misread as scientific notation.
     assert resolve_realized_by(short, git_repo) is True
 
 
 def test_realized_by_bare_short_sha_fake_object(git_repo: Path):
-    # b812d89-shaped (7 hex chars) but not a real object in this throwaway repo.
     assert resolve_realized_by("b812d89", git_repo) is False
 
 
 def test_realized_by_bare_short_sha_not_coerced_to_infinity(git_repo: Path):
-    # The exact hazard named in the auto-memory lesson: a bare short SHA like
-    # 717e385 must resolve via git, never via float()/int() coercion (which
-    # would silently produce Infinity instead of raising or resolving False).
     result = resolve_realized_by("717e385", git_repo)
     assert result in (True, False)
     assert result != float("inf")
@@ -354,10 +246,6 @@ def test_realized_by_absent_field_blocks(tmp_path: Path):
     assert result.passed is False
     assert "absent" in result.detail
 
-
-# ---------------------------------------------------------------------------
-# _git_objects_exist (batched sibling of _git_object_exists)
-# ---------------------------------------------------------------------------
 
 def test_git_objects_exist_empty_list_returns_empty_dict_no_spawn(tmp_path: Path, monkeypatch):
     def _fail_if_called(*args, **kwargs):
@@ -407,17 +295,12 @@ def test_git_objects_exist_duplicate_shas_collapse_to_one_entry(git_repo: Path):
 
 
 def test_git_objects_exist_missing_reconciles_false_never_true(git_repo: Path):
-    # Reconciliation regression: a `<sha> missing` batch-check record must
-    # never be misread as "exists" — the delete-guard's failure direction is
-    # asymmetric (a false "exists" permits a deletion it should have blocked).
     fake = "0" * 40
     result = delete_guard._git_objects_exist([fake], git_repo)
     assert result[fake] is False
 
 
 def test_git_objects_exist_no_git_repo_fails_closed(tmp_path: Path):
-    # tmp_path is not a git repo at all — cat-file itself fails; every
-    # requested sha must resolve to False, never crash, never True.
     result = delete_guard._git_objects_exist(["f" * 40], tmp_path)
     assert result == {"f" * 40: False}
 
@@ -432,16 +315,9 @@ def test_check_realized_by_path_shaped_integration(tmp_path: Path):
 
 
 def test_check_realized_by_unquotes_quoted_all_digit_sha(tmp_path: Path, monkeypatch):
-    # Regression: memo_transition.py writes realized_by with numeric_quoting=True,
-    # so an all-digit short SHA lands on disk as `realized_by: '44379324'` and
-    # reads back WITH quotes. check_realized_by must unquote before dispatching
-    # to resolve_realized_by's SHA regex — otherwise the quoted value falls
-    # through to the path-shaped fallback (always False, since "'44379324'" is
-    # never a real path) and a legitimately-resolvable realized_by falsely
-    # blocks an eligible delete.
     bare_sha = "44379324"
     quoted_on_disk = serialize_yaml_scalar(bare_sha, numeric_quoting=True)
-    assert quoted_on_disk == f"'{bare_sha}'"  # precondition: on-disk shape is quoted
+    assert quoted_on_disk == f"'{bare_sha}'"
 
     seen = []
 
@@ -457,10 +333,6 @@ def test_check_realized_by_unquotes_quoted_all_digit_sha(tmp_path: Path, monkeyp
     assert result.passed is True
     assert seen == [bare_sha], "resolve_realized_by must see the unquoted bare SHA, not the raw quoted form"
 
-
-# ---------------------------------------------------------------------------
-# check_distill_fate — Guard 6 (2026-07-23 distill-delete-guard-fate-enforcement E1)
-# ---------------------------------------------------------------------------
 
 def _commit_dated(repo_root: Path, filename: str, content: str, date: str) -> Path:
     """Commit `filename` with both author and committer date pinned to `date`
@@ -485,9 +357,7 @@ def _commit_dated(repo_root: Path, filename: str, content: str, date: str) -> Pa
 
 
 def test_distill_fate_absent_predates_cutover_blocks_retain(git_repo: Path):
-    # Ruling (b), the safety-floor fix: an absent-fate memo whose git-history
     # actioned date predates DISTILL_FATE_STAMPING_CUTOVER must RETAIN, never
-    # be silently delete-eligible.
     path = _commit_dated(git_repo, "pre-stamp-memo.md", "status: actioned\n", "2026-07-01")
     result = check_distill_fate("status: actioned\n", path, git_repo)
     assert result.passed is False
@@ -503,8 +373,6 @@ def test_distill_fate_absent_postcutover_passes(git_repo: Path):
 
 
 def test_distill_fate_absent_undeterminable_blocks(tmp_path: Path):
-    # A non-repo path (git log fails) is undeterminable -> fail-closed retain,
-    # never treated as "must be recent".
     path = tmp_path / "uncommitted-memo.md"
     path.write_text("status: actioned\n", encoding="utf-8")
     result = check_distill_fate("status: actioned\n", path, tmp_path)
@@ -513,14 +381,7 @@ def test_distill_fate_absent_undeterminable_blocks(tmp_path: Path):
 
 
 def test_distill_fate_absent_real_file_no_git_history_blocks_retain(git_repo: Path):
-    # A real, on-disk file inside a
-    # WORKING git repo (git log succeeds, returncode 0) but with ZERO commit
     # history for that exact path is the `_UNTRACKED` fast-path. This must
-    # fail-closed (retain), not PASS: a shallow clone, a `git gc` after a
-    # rebase/squash, or a sparse/filtered checkout can each produce this exact
-    # signature for a genuinely old, fully-committed memo, indistinguishable
-    # from "never committed" to `_candidate_actioned_date`. No prior fixture
-    # exercised this — every `git_repo` fixture use committed the file first.
     path = git_repo / "never-committed-memo.md"
     path.write_text("status: actioned\n", encoding="utf-8")
     result = check_distill_fate("status: actioned\n", path, git_repo)
@@ -535,8 +396,6 @@ def test_distill_fate_ephemeral_passes(tmp_path: Path):
 
 
 def test_distill_fate_commitment_passes(tmp_path: Path):
-    # Commitment defers its durable-capture obligation to Guard 5
-    # (realized_by) — this guard alone does not independently block it.
     result = check_distill_fate("distill_fate: commitment\n", tmp_path / "x.md", tmp_path)
     assert result.passed is True
 
@@ -582,9 +441,6 @@ def test_distill_fate_unrecognized_value_blocks(tmp_path: Path):
 
 @_requires_rg
 def test_distill_fate_flows_into_receipts_blocked_by(tmp_path: Path):
-    # A ratification candidate missing its durable capture must both block
-    # eligibility AND surface in evaluate_candidate_receipts's blocked_by/
-    # guards_run — the manifest-assembly consumer of the same dispatch order.
     (tmp_path / "state" / "cross-repo-commitments").mkdir(parents=True, exist_ok=True)
     memo = tmp_path / "cross-repo" / "archive" / "ratified-memo.md"
     memo.parent.mkdir(parents=True, exist_ok=True)
@@ -608,19 +464,8 @@ def test_distill_fate_flows_into_receipts_blocked_by(tmp_path: Path):
     assert fate_receipt["verdict"] == "block"
 
 
-# ---------------------------------------------------------------------------
-# check_harvest_provenance — Guard 7 (2026-07-23 code-review Finding 1: the
-# Gap 2 fold into realized_by alone was insufficient — see delete_guard.py's
-# module docstring guard-6/7 entries)
-# ---------------------------------------------------------------------------
-
 @_requires_rg
 def test_commitment_inline_no_docs_citation_blocks_via_harvest_provenance(tmp_path: Path):
-    # This is the exact gap Finding 1 named: distill_fate=commitment +
-    # realized_by=inline sails through check_distill_fate (defers) and
-    # check_realized_by (inline resolves True unconditionally) with zero
-    # verification the content ever reached docs/wiki or docs/decisions.
-    # check_harvest_provenance must independently block it.
     (tmp_path / "state" / "cross-repo-commitments").mkdir(parents=True, exist_ok=True)
     memo = tmp_path / "cross-repo" / "archive" / "committed-memo.md"
     memo.parent.mkdir(parents=True, exist_ok=True)
@@ -642,8 +487,6 @@ def test_commitment_inline_no_docs_citation_blocks_via_harvest_provenance(tmp_pa
     assert "harvest-provenance" in guard_names
     harvest_receipt = next(g for g in receipt["guards_run"] if g["guard"] == "harvest-provenance")
     assert harvest_receipt["verdict"] == "block"
-    # The two guards it was formerly deferred to must both still PASS —
-    # harvest-provenance is the ONLY thing blocking this candidate.
     fate_receipt = next(g for g in receipt["guards_run"] if g["guard"] == "distill-fate")
     assert fate_receipt["verdict"] == "pass"
     realized_by_receipt = next(g for g in receipt["guards_run"] if g["guard"] == "realized_by")
@@ -652,9 +495,6 @@ def test_commitment_inline_no_docs_citation_blocks_via_harvest_provenance(tmp_pa
 
 @_requires_rg
 def test_commitment_inline_with_docs_citation_passes(tmp_path: Path):
-    # Positive case: the same commitment/inline shape, but the candidate's
-    # content DID make it into docs/wiki — harvest-provenance must find the
-    # citation and pass, alongside every other applicable guard.
     (tmp_path / "state" / "cross-repo-commitments").mkdir(parents=True, exist_ok=True)
     memo = tmp_path / "cross-repo" / "archive" / "committed-memo-cited.md"
     memo.parent.mkdir(parents=True, exist_ok=True)
@@ -672,10 +512,6 @@ def test_commitment_inline_with_docs_citation_passes(tmp_path: Path):
     wiki_dir = tmp_path / "docs" / "wiki"
     wiki_dir.mkdir(parents=True, exist_ok=True)
     # Cite the BASENAME only, not the full repo-relative path: harvest-provenance
-    # matches needle-OR-basename, but a full-path citation here would also trip
-    # check_active_reference (same needle, same docs/ scope) as "still
-    # referenced" and block the candidate for an unrelated reason — this test
-    # isolates harvest-provenance's own pass condition.
     (wiki_dir / "landing-notes.md").write_text(
         "Landed per committed-memo-cited.md\n",
         encoding="utf-8",
@@ -687,13 +523,7 @@ def test_commitment_inline_with_docs_citation_passes(tmp_path: Path):
     assert harvest_receipt["verdict"] == "pass"
 
 
-# ---------------------------------------------------------------------------
-# #12 memory-pointer exclusion
-# ---------------------------------------------------------------------------
-
 def _full_handoff_candidate(tmp_path: Path, basis_refs: tuple[str, ...]) -> DeleteCandidate:
-    """A handoff-shaped candidate that clears every handoff-applicable guard
-    (empty commitments ledger included, so commitment-closure has a real pass)."""
     (tmp_path / "state" / "cross-repo-commitments").mkdir(parents=True, exist_ok=True)
     handoff = tmp_path / "state" / "handoffs" / "candidate.md"
     handoff.parent.mkdir(parents=True, exist_ok=True)
@@ -712,7 +542,6 @@ def _full_handoff_candidate(tmp_path: Path, basis_refs: tuple[str, ...]) -> Dele
 
 
 def _full_memo_candidate(tmp_path: Path, basis_refs: tuple[str, ...]) -> DeleteCandidate:
-    """A memo-shaped candidate that clears every memo-applicable guard."""
     (tmp_path / "state" / "cross-repo-commitments").mkdir(parents=True, exist_ok=True)
     memo = tmp_path / "cross-repo" / "archive" / "memo-candidate.md"
     memo.parent.mkdir(parents=True, exist_ok=True)
@@ -755,10 +584,6 @@ def test_memory_pointer_exclusion_no_basis_refs_does_not_fire(tmp_path: Path):
     assert "memory-pointer-exclusion" not in outcome["blocked_by"]
 
 
-# ---------------------------------------------------------------------------
-# classify_artifact + class-keyed guard dispatch
-# ---------------------------------------------------------------------------
-
 def test_classify_artifact_frontmatter_shape(tmp_path: Path):
     anywhere = tmp_path / "unplaced.md"
     assert (
@@ -779,9 +604,6 @@ def test_classify_artifact_path_prefix_fallback(tmp_path: Path):
 
 
 def test_classify_artifact_path_prefix_fallback_migrated_root(tmp_path: Path):
-    # C4b: the membership test widened, not replaced -- `state/cross-repo/`
-    # (the migrated root) must classify as "memo" alongside the legacy
-    # `cross-repo/` root, via the same shared "cross-repo" leaf segment.
     memo_path = tmp_path / "state" / "cross-repo" / "archive" / "x.md"
     assert delete_guard.classify_artifact("", memo_path, tmp_path) == "memo"
 
@@ -795,9 +617,6 @@ def test_classify_artifact_unresolvable_returns_none(tmp_path: Path):
 
 @_requires_rg
 def test_memo_not_evaluated_by_shipped_in(tmp_path: Path):
-    # The 2026-07-23 cockpit defect (part b): memos never carry shipped_in, so
-    # the handoff-only guard blocked every memo. Class-keyed dispatch must not
-    # run it against a memo at all.
     candidate = _full_memo_candidate(tmp_path, ())
     outcome = evaluate_candidate(candidate)
     assert outcome["artifact_class"] == "memo"
@@ -807,8 +626,6 @@ def test_memo_not_evaluated_by_shipped_in(tmp_path: Path):
 
 @_requires_rg
 def test_handoff_not_evaluated_by_status_actioned(tmp_path: Path):
-    # Mirror half of the same defect: a live handoff's status vocabulary is
-    # open/closed, never "actioned" — the memo-only guard must not run.
     candidate = _full_handoff_candidate(tmp_path, ())
     outcome = evaluate_candidate(candidate)
     assert outcome["artifact_class"] == "handoff"
@@ -830,16 +647,8 @@ def test_unclassifiable_candidate_fails_closed(tmp_path: Path):
     assert "artifact-class-unresolved" in outcome["blocked_by"]
 
 
-# ---------------------------------------------------------------------------
-# evaluate_candidate — integration
-# ---------------------------------------------------------------------------
-
 @_requires_rg
 def test_evaluate_candidate_fully_eligible(tmp_path: Path):
-    # Formerly pinned as unreachable (the placeholder commitment-closure guard
-    # blocked every candidate the moment the surface existed); with the real
-    # closure check, a clean candidate over an open-commitment-free ledger is
-    # eligible.
     candidate = _full_handoff_candidate(tmp_path, ())
     outcome = evaluate_candidate(candidate)
     assert outcome["eligible"] is True
@@ -861,13 +670,6 @@ def test_evaluate_candidate_open_commitment_blocks(tmp_path: Path):
 
 @_requires_rg
 def test_evaluate_candidate_uses_repo_relative_needle_not_bare_filename(tmp_path: Path):
-    # evaluate_candidate previously passed
-    # candidate.path.name (bare filename) to check_active_reference, a strictly
-    # looser rg needle than sidecar_sweep's sibling caller of the same shared
-    # guard (which passes the repo-relative path). This test pins the fix: a
-    # reference doc that mentions the SAME bare filename under an unrelated
-    # subdirectory must NOT trip the active-reference guard for a candidate
-    # living at a different path — only a hit on the repo-relative path blocks.
     candidate_dir = tmp_path / "cross-repo" / "archive"
     candidate_dir.mkdir(parents=True)
     handoff = candidate_dir / "candidate.md"
@@ -877,8 +679,6 @@ def test_evaluate_candidate_uses_repo_relative_needle_not_bare_filename(tmp_path
     )
 
     # A docs/ note references a DIFFERENT file that happens to share the bare
-    # filename "candidate.md" in an unrelated directory — a bare-filename needle
-    # would false-positive-match this; a repo-relative needle correctly does not.
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "note.md").write_text(
         "see some/other/unrelated/candidate.md for context\n", encoding="utf-8"
@@ -892,11 +692,6 @@ def test_evaluate_candidate_uses_repo_relative_needle_not_bare_filename(tmp_path
 @_requires_rg
 def test_evaluate_candidate_needle_is_forward_slash_not_native_separator(tmp_path: Path):
     # SECURITY-ADJACENT regression, companion to the repo-relative needle test above.
-    # In-repo documents spell their references with '/'. A native-separator needle would read
-    # "cross-repo\\archive\\candidate.md" on Windows, match NOTHING against the forward-slash
-    # citation below, and report a still-referenced artifact as delete-eligible — the guard
-    # failing OPEN. Pins that a live citation of the candidate's own repo-relative posix path
-    # is seen on every platform, for a candidate whose path has separators in it.
     candidate_dir = tmp_path / "cross-repo" / "archive"
     candidate_dir.mkdir(parents=True)
     handoff = candidate_dir / "candidate.md"
@@ -912,9 +707,6 @@ def test_evaluate_candidate_needle_is_forward_slash_not_native_separator(tmp_pat
 
     candidate = DeleteCandidate(path=handoff, repo_root=tmp_path, basis_refs=())
     outcome = evaluate_candidate(candidate)
-    # Asserting the full set, not just membership: `eligible is False` would be satisfied by
-    # the other two guards even under the mutation this test exists to catch, so it would
-    # read as coverage while carrying no signal.
     assert set(outcome["blocked_by"]) == {
         "active-reference",
         "commitment-closure",
@@ -923,12 +715,6 @@ def test_evaluate_candidate_needle_is_forward_slash_not_native_separator(tmp_pat
 
 
 def test_evaluate_candidate_needle_shape_is_posix_on_every_platform(monkeypatch, tmp_path: Path):
-    # Platform-independent companion to the end-to-end test above. That one can only go red
-    # where os.sep != '/', which is correct for the defect (fail-OPEN is Windows-only) but
-    # leaves the fleet floor -- a MacBook, per CLAUDE.md -- with no signal: a contributor on
-    # macOS could land the native-separator regression on a fully green suite. This asserts
-    # the needle's SHAPE at the seam instead of a downstream guard outcome, so it is red on
-    # every platform. Keep both: this pins the string, the other pins the wire path.
     candidate_dir = tmp_path / "cross-repo" / "archive"
     candidate_dir.mkdir(parents=True)
     handoff = candidate_dir / "candidate.md"
@@ -952,16 +738,7 @@ def test_evaluate_candidate_needle_shape_is_posix_on_every_platform(monkeypatch,
     assert not any("\\" in needle for needle in seen)
 
 
-# ---------------------------------------------------------------------------
-# Guard 3 / Guard 7 read the SAME provenance block two opposite ways
-#
-# Guard 3 (active-reference) excludes it: a tombstone is not a dependency, so the artifact
 # is deletable. Guard 7 (harvest-provenance) REQUIRES it: a tombstone is proof the content
-# reached a durable location. Both readings must be implemented; when Guard 7 silently
-# inherited Guard 3's exclusion through their shared callee, it lost its own evidence and
-# the DR-111 self-pinning defect relocated from one guard to the other for the `commitment`
-# class (fail-closed -- permanently undeletable, not wrongly deleted).
-# ---------------------------------------------------------------------------
 
 @_requires_rg
 def test_guard7_counts_provenance_block_as_durable_capture_proof(tmp_path: Path):
@@ -986,9 +763,6 @@ def test_guard7_counts_provenance_block_as_durable_capture_proof(tmp_path: Path)
 
 @_requires_rg
 def test_guard3_excludes_the_same_block_guard7_requires(tmp_path: Path):
-    # The other half of the invariant, over an identical corpus: what Guard 7 reads as proof,
-    # Guard 3 must read as a tombstone. If a change ever makes these two agree, one of them
-    # is wrong -- and which one depends on which direction they agreed in.
     wiki = tmp_path / "docs" / "wiki"
     wiki.mkdir(parents=True)
     (wiki / "guide.md").write_text(
@@ -1007,9 +781,7 @@ def test_guard3_excludes_the_same_block_guard7_requires(tmp_path: Path):
 def test_guard7_basename_collision_in_unrelated_provenance_block_does_not_pass(
     tmp_path: Path,
 ):
-    # 2026-08-29 code-review Finding 1: the basename fallback must NOT match inside a
     # provenance block belonging to a DIFFERENT harvested artifact that merely shares this
-    # candidate's filename. Only a full-path citation inside a provenance block counts.
     wiki = tmp_path / "docs" / "wiki"
     wiki.mkdir(parents=True)
     (wiki / "guide.md").write_text(
@@ -1031,9 +803,6 @@ def test_guard7_basename_collision_in_unrelated_provenance_block_does_not_pass(
 
 @_requires_rg
 def test_guard7_basename_citation_in_prose_still_passes(tmp_path: Path):
-    # Companion to the above: a basename citation OUTSIDE any provenance block (plain
-    # prose) must still count as proof -- only the provenance-block reading of the
-    # basename needle is excluded, not the basename fallback itself.
     wiki = tmp_path / "docs" / "wiki"
     wiki.mkdir(parents=True)
     (wiki / "guide.md").write_text(
@@ -1065,23 +834,12 @@ def test_evaluate_candidate_multiple_guards_fail(tmp_path: Path):
     assert outcome["eligible"] is False
     assert "shipped_in" in outcome["blocked_by"]
     assert "realized_by" in outcome["blocked_by"]
-    # commitment-closure blocks here via the absent-surface fail-loud branch.
     assert "commitment-closure" in outcome["blocked_by"]
-    # Memo-only guard must NOT run against a handoff-classified candidate.
     assert "status-actioned" not in outcome["blocked_by"]
-
-
-# ---------------------------------------------------------------------------
-# evaluate_candidate_detailed — single dispatch-order authority (§ 2a)
-# ---------------------------------------------------------------------------
 
 
 @_requires_rg
 def test_evaluate_candidate_detailed_matches_evaluate_candidate(tmp_path: Path):
-    """evaluate_candidate is now a thin wrapper over evaluate_candidate_detailed
-    (2026-07-23 architecture review § 2a) — pin that the two stay in exact
-    agreement: same artifact_class, same set of guards that ran, same set of
-    guards that blocked."""
     candidate = _full_handoff_candidate(tmp_path, ())
     outcome = evaluate_candidate(candidate)
     artifact_class, guard_results = evaluate_candidate_detailed(candidate.path, candidate.repo_root)

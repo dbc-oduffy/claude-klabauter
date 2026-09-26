@@ -65,10 +65,6 @@ def _gate(params: dict, repo_root) -> dict:
 
 
 def test_derived_consumer_absent_from_confirmed_refuses(tmp_path: Path) -> None:
-    """The red case: derive() finds a live consumer of the vocabulary that
-    confirmed_consumers never named. The gate must REFUSE — not PASS, not
-    silently skip the unnamed consumer — and the reason must name the
-    specific unconfirmed id, per house convention."""
     _write_consumer_writer(tmp_path, "unconfirmed_writer.py")
     record_path = _write_record(tmp_path, confirmed_consumers=[])
 
@@ -85,10 +81,6 @@ def test_derived_consumer_absent_from_confirmed_refuses(tmp_path: Path) -> None:
 def test_derived_consumer_absent_from_confirmed_refuses_even_with_other_confirmed(
     tmp_path: Path,
 ) -> None:
-    """The red case survives a partially-confirmed record: one consumer
-    correctly confirmed does not exempt a SECOND, unconfirmed consumer the
-    same derivation finds — the gate must still REFUSE on the gap, not PASS
-    because *some* coverage exists."""
     _write_consumer_writer(tmp_path, "confirmed_writer.py")
     _write_consumer_writer(tmp_path, "unconfirmed_writer.py")
     record_path = _write_record(
@@ -112,8 +104,6 @@ def test_derived_consumer_absent_from_confirmed_refuses_even_with_other_confirme
 
 
 def test_fully_covered_record_passes(tmp_path: Path) -> None:
-    """The allow path: every consumer the derivation finds has a matching
-    confirmed_consumers entry — two-way agreement holds and the gate PASSES."""
     _write_consumer_writer(tmp_path, "writer.py")
     record_path = _write_record(
         tmp_path,

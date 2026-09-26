@@ -63,110 +63,29 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, FrozenSet, List, Optional, Tuple
 
-#: Matches a trailing Windows executable-launcher suffix, case-
-#: insensitively. `.exe` was the original scope (identical in both prior
-#: copies); `.cmd` was added 2026-07-29 part 2 -- evidence-based, not
-#: general Windows knowledge: `coordinator/bin/gen-launcher-shim.py` (this
-#: project's OWN Windows-launcher generator, the sole producer of launcher
-#: twins for `coordinator-safe-commit` and `coordinator-doc-new`) emits a
-#: `.cmd` twin for EVERY bin/ entrypoint unconditionally
-#: (`generate()`/`render_cmd()`), confirmed on disk
-#: (`coordinator/bin/coordinator-safe-commit.cmd`,
-#: `coordinator/bin/coordinator-doc-new.py.cmd`) -- so `.cmd` is the ordinary,
-#: load-bearing Windows invocation form for those two binaries, not a
-#: hypothetical one (PATHEXT resolves it, and `CreateProcess` cannot exec
-#: their POSIX shebang directly). `.bat` is deliberately NOT included: the
-#: generator never emits one for any entrypoint (grep confirms zero `.bat`
-#: producers in `coordinator/bin/`), so there is no real carrier to
-#: recognize. `.ps1` is also deliberately excluded: the generator emits one
-#: only opt-in via `--ps1`, and the project's own tripwire doctrine records
-#: this as explicitly NOT the convention ("`.ps1` twins are not the
-#: convention (3 of 57 entrypoints carry one)" --
 #: `docs/wiki/coordinator-tripwires.md` BIN-ENTRYPOINT-NEEDS-CMD-TWIN) --
-#: recognizing it here would be scoping to a hypothetical rather than a
-#: confirmed carrier, the same mistake `.bat` would be. `git` itself has no
-#: `.cmd`/`.bat` twin (Git for Windows ships `git.exe` only) -- `.exe`
-#: already covers it.
 _WINDOWS_LAUNCHER_SUFFIX_RE = re.compile(r"\.(?:exe|cmd)$", re.IGNORECASE)
 
 #: Matches a token that is ENTIRELY made of `;`/`&`/`|` characters -- the
-#: shlex punctuation-token output for a command separator, never a
-#: substring match against a word. Identical in both prior copies.
 _SEPARATOR_TOKEN_RE = re.compile(r"^[;&|]+$")
 
-#: The left-hand side of a bash fd-duplication redirection (`>&`, `>>&`,
-#: `<&`, and their fd-prefixed spellings `2>&`, `1>&`, `0<&`) as `shlex`
-#: emits it BEFORE the `&`: `2>&1` lexes as `['2>', '&', '1']` because `&`
-#: is in `punctuation_chars`. See `join_redirection_operator_tokens`.
 _REDIRECT_DUP_LHS_RE = re.compile(r"^\d*(?:>>?|<)$")
 
-#: The right-hand side of an fd duplication -- a bare fd number, optionally
-#: `-`-suffixed (`2>&1`, `2>&-`), or a bare `-` (close). Anything else after
-#: a `>&` is a filename, which `shlex` already keeps as its own token and
-#: which needs no re-joining.
 _REDIRECT_DUP_RHS_RE = re.compile(r"^(?:\d+-?|-)$")
 
 #: SECURITY PROPERTY -- a denial-of-service bound, NOT a tuning knob. Do not
-#: raise this to "let a big command through": raising it re-opens the hang
-#: described below, and the hang is on the PreToolUse hot path where it
-#: stalls the agent's tool call outright.
-#:
 #: `shlex` tokenization is QUADRATIC in the length of the longest single
-#: token. The driver is `shlex.shlex.read_token`'s `self.token += nextchar`:
-#: CPython's in-place string-append optimization fires only when the target
 #: string's refcount is 1, and an INSTANCE-ATTRIBUTE target is referenced by
-#: both the evaluation stack and `self.__dict__`, so every character copies
-#: the entire accumulated token. `punctuation_chars` is incidental, not the
-#: cause -- the same curve is present without it. Note this is per-TOKEN, not
-#: per-command: `echo a b c; ` repeated to 790 KB tokenizes in 0.11 s, while
-#: a single 790 KB quoted argument takes 6.5 s, because a double-quoted
-#: string of any length is ONE token.
-#:
-#: Measured on the guard hot path (2026-08-05, `git commit -m "<one huge
-#: argument>"` through `dispatch.evaluate_payload_json`, which tokenizes the
-#: same command once per consulting guard):
-#:
-#:     32 KB ->   0.21 s      128 KB ->  2.60 s
-#:     64 KB ->   0.53 s      197 KB ->  4.60 s
-#:                            3.2 MB -> ~105 s
-#:
 #: 64 KiB is the largest power-of-two size at which the WORST-CASE shape
-#: (whole command in one token) keeps a full guard dispatch under one second
-#: -- 128 KiB is already 2.6 s. It is not a round number picked for
-#: tidiness: the next size up fails the budget by 2.6x. Headroom against
-#: real commands is ample -- the longest command-shaped string literal
-#: anywhere in this package's own test corpus is 8,020 characters, so the
-#: ceiling sits ~8x above the largest command this project has ever needed
-#: to classify.
-#:
 #: Over-ceiling input is treated exactly as UNPARSEABLE input already is:
-#: `tokenize_full_command` returns `None` and `resolve_command_positions`
 #: returns a single `UNRESOLVED` entry. Both are pre-existing FAIL-CLOSED
-#: signals every caller in this package already handles -- an over-ceiling
-#: command can therefore only ever become MORE restricted, never more
-#: permissive. Verified call-site by call-site, not assumed; see
-#: `tests/test_command_tokenizer_length_ceiling.py`.
 _MAX_TOKENIZABLE_COMMAND_CHARS = 65536
 
 #: Stand-in for an `&` that is SOURCE-ADJACENT to a following `>` (bash's
-#: `&>file`/`&>>file` combine-redirect). Private-use codepoint: `shlex`
-#: treats it as an ordinary word character, so the redirect survives
-#: tokenization as ONE token instead of being split at a punctuation `&`.
-#: Every token is un-masked immediately after lexing, so no caller ever
-#: observes it. See `_mask_adjacent_ampersand_redirects`.
 _AMP_REDIRECT_SENTINEL = ""
 
 #: Stand-in for an UNQUOTED backslash when `preserve_windows_backslashes=True`
-#: (Review: coordinator:code-reviewer P1, 05fb6ef70 follow-up -- see
-#: `_mask_unquoted_backslashes`'s own docstring). Distinct private-use
 #: codepoint from `_AMP_REDIRECT_SENTINEL` so the two maskings cannot
-#: collide or be un-masked into each other. `shlex` treats it as an
-#: ordinary word character (never as its `escape` character), so an
-#: unquoted Windows-path backslash survives tokenization unconsumed without
-#: this module ever having to touch `lex.escape` -- the mechanism that made
-#: quoted-token lexing collateral damage in the first place. Every token is
-#: un-masked back to `\` immediately after lexing, so no caller ever
-#: observes it.
 _BACKSLASH_SENTINEL = ""
 
 
@@ -220,24 +139,8 @@ def normalize_executable_basename(token: str) -> str:
     base = token.rstrip("/\\")
     base = base.rsplit("/", 1)[-1]
     base = base.rsplit("\\", 1)[-1]
-    # NTFS/Windows silently strips ALL trailing dots and spaces from a
-    # filename at resolution time (in any order, repeatedly) -- `git.exe.`
-    # and `git.exe ` both resolve to `git.exe` on a real Windows invocation
-    # (code-reviewer Finding 3, 2026-07-29: same OS-normalization axis as
-    # the `.exe`/`.cmd` launcher-suffix fix above, one character further
-    # along it). `rstrip(" .")` removes any trailing run of either
-    # character before the suffix-strip below, symmetric with the
-    # `rstrip("/\\")` separator-noise strip two lines up.
-    #
-    # GUARD (found while reconciling Finding 1/3, before landing): a token
     # that is ENTIRELY dots/spaces (POSIX `.` dot-source, `..` parent-dir)
-    # would rstrip to an empty string here -- `.` is a meaningful shell
-    # builtin/path token in its own right, not "a real basename with
-    # trailing OS-normalization noise", and callers (e.g.
     # `block_subagent_destructive_action.py`'s `_SOURCE_VERBS` check)
-    # compare the normalized result against the literal `.` string. Only
-    # apply the strip when it leaves a non-empty remainder; otherwise the
-    # dots/spaces ARE the whole (meaningful) token and must survive intact.
     dot_stripped = base.rstrip(" .")
     if dot_stripped:
         base = dot_stripped
@@ -314,15 +217,6 @@ def split_unquoted_newlines(cmd_text: str) -> str:
     while i < n:
         c = cmd_text[i]
         if quote is not None:
-            # `\<newline>` (LF only)
-            # is a real line continuation even inside double quotes and
-            # must be REMOVED like the unquoted case below, confirmed
-            # empirically against real bash. `\<CR><LF>` is NOT a
-            # continuation (POSIX's in-quote backslash-escape rule only
-            # fires before `$`/backtick/`"`/`\`/an actual LF) -- that shape
-            # falls through to the literal-copy branch unchanged, and the
-            # trailing `\n` is then handled by the "newline inside double
-            # quotes stays literal" case a few lines down.
             if c == "\\" and quote == '"' and i + 1 < n and cmd_text[i + 1] == "\n":
                 i += 2
                 continue
@@ -706,19 +600,6 @@ def join_redirection_operator_tokens(tokens: List[str]) -> List[str]:
 def segments_from_tokens_with_pipe_flag(
     tokens: List[str],
 ) -> List[Tuple[List[str], bool]]:
-    """Partition a flat token stream (from `tokenize_full_command`) into
-    per-segment token lists at each unquoted `;`/`&`/`|` boundary, pairing
-    each segment with whether it was immediately preceded by a `|` --
-    needed to detect a bare, argument-less interpreter fed via stdin pipe
-    (e.g. `echo <b64> | base64 -d | bash`).
-
-    This is the richer of the two prior shapes (originally
-    `block_subagent_destructive_action.py`'s `_segments_from_tokens`,
-    return type `list[tuple[list[str], bool]]`). Used by every consumer
-    that needs pipe-precedes-segment tracking:
-    `block_subagent_destructive_action.py`, `block_worktree_creation.py`,
-    `_sentinel_creation_guard.py`.
-    """
     segments: List[Tuple[List[str], bool]] = []
     current: List[str] = []
     pipe_before = False
@@ -779,49 +660,13 @@ def token_matches_binary(token: str, binary: str) -> bool:
 
 
 def segments_from_tokens_simple(tokens: List[str]) -> List[List[str]]:
-    """Partition a flat token stream the same way as
-    `segments_from_tokens_with_pipe_flag`, but return plain per-segment
-    token lists with no pipe-precedes-segment tracking.
-
-    This is the simpler of the two prior shapes (originally
-    `block_subagent_commit.py`'s own-module `_segments_from_tokens`, return
-    type `List[List[str]]`) -- that module's git-commit gate has no need
-    for pipe tracking, so it is not ported; kept as an explicit, separately
-    named function rather than silently dropped or silently unified onto
-    the richer shape, per this module's own consolidation contract (do not
-    pick one caller's behavior for another caller by accident).
-
-    Derived from `segments_from_tokens_with_pipe_flag` (one source of truth
-    for the segmentation walk itself; only the pipe flag is dropped here) --
-    the two prior copies' segmentation loops were identical modulo that
-    flag, verified by inspection before merging them.
-    """
     return [seg for seg, _pipe_before in segments_from_tokens_with_pipe_flag(tokens)]
 
 
-# ---------------------------------------------------------------------------
-# M2 additions (2026-07-29) -- resolve-once command-position resolver,
-# find_git_segment, and the classified wrapper table.
-#
-# LIVE. `dispatch.py` resolves every candidate command through
-# `resolve_command_positions` before guard dispatch, and `dispatch_checks.py`
-# consumes the resolved positions it threads through. New guards should reuse
-# this resolver rather than re-rolling a first-segment-only parser.
-#
 # This is a PROMOTION of behaviour already smeared across five files, not
-# new logic invented for this module: `block_worktree_creation.py`,
-# `dispatch_checks.py`, `block_subagent_commit.py`,
-# `_sentinel_creation_guard.py`, and `block_subagent_destructive_action.py`
-# each carry their own near-identical `_skip_wrapper_own_argv`-shaped
 # wrapper-argument-consumption walk (`_WRAPPER_ARG_FLAGS`/
 # `_TIMEOUT_DURATION_RE`/`_NICE_BARE_NUMERIC_RE`, and in `dispatch_checks.py`
 # alone, `_BYPASS_WRAPPER_BOOL_FLAGS` for `timeout`'s boolean flags,
-# confirmed via differential execution to be the MOST-correct of the five --
-# see that module's own Finding-9 comment). The generic peel below is that
-# union: the four-file baseline plus `dispatch_checks.py`'s boolean-flag
-# addition. None of those five copies are deleted here -- that is chunk
-# M8's job in a later wave; deleting them now would break guards mid-wave.
-# ---------------------------------------------------------------------------
 
 
 class WrapperSemanticClass(Enum):
@@ -852,17 +697,7 @@ class WrapperSemanticClass(Enum):
     APPLET_DISPATCHER = "applet-dispatcher"
 
 
-#: Single source of truth for axis 1. Built from the UNION of every on-disk
-#: wrapper-word literal found while promoting this table (six on-disk
-#: literals were named as the enumeration target for this task;
-#: `test_command_tokenizer_peel_matrix.py`'s
-#: `TestWrapperTableEnumeration` records that a SEVENTH was found --
 #: `dispatch_checks.py`'s `_BYPASS_WRAPPER_WORDS` -- and that it added no
-#: words beyond this union, only a narrower subset of it; see that test and
-#: this chunk's own report for the discrepancy). `time` in particular
-#: appears in every on-disk allowlist that includes it here -- an earlier
-#: draft of a table like this one dropped it, silently narrowing a
-#: confinement guard; it is deliberately present.
 _WRAPPER_SEMANTIC_CLASS: Dict[str, WrapperSemanticClass] = {
     "sudo": WrapperSemanticClass.EXECS_ITS_ARGV,
     "command": WrapperSemanticClass.EXECS_ITS_ARGV,
@@ -882,25 +717,19 @@ _WRAPPER_SEMANTIC_CLASS: Dict[str, WrapperSemanticClass] = {
     "busybox": WrapperSemanticClass.APPLET_DISPATCHER,
 }
 
-#: Axis-1 view: every wrapper that actually execs its own argv -- the
 #: BAND-APPROPRIATE view for CONFINEMENT matching, which may treat this
 #: wider class as suspicious without widening what may be REWRITTEN (that
 #: is axis 2, `REWRITE_FACING_WRAPPERS`, a narrower, independently
-#: initialized subset -- see its own docstring for why it is not derived
-#: from this set).
 EXECS_ITS_ARGV_WRAPPERS: FrozenSet[str] = frozenset(
     word for word, cls in _WRAPPER_SEMANTIC_CLASS.items()
     if cls is WrapperSemanticClass.EXECS_ITS_ARGV
 )
 
-#: Axis-1 view: wrappers that report on a command without ever running it.
 INSPECTS_WITHOUT_EXECING_WRAPPERS: FrozenSet[str] = frozenset(
     word for word, cls in _WRAPPER_SEMANTIC_CLASS.items()
     if cls is WrapperSemanticClass.INSPECTS_WITHOUT_EXECING
 )
 
-#: Axis-1 view: applet dispatchers -- argv selects an applet, not
-#: necessarily a same-named real binary.
 APPLET_DISPATCHER_WRAPPERS: FrozenSet[str] = frozenset(
     word for word, cls in _WRAPPER_SEMANTIC_CLASS.items()
     if cls is WrapperSemanticClass.APPLET_DISPATCHER
@@ -910,24 +739,10 @@ APPLET_DISPATCHER_WRAPPERS: FrozenSet[str] = frozenset(
 #: `EXECS_ITS_ARGV_WRAPPERS`, explicitly and independently initialized --
 #: deliberately NOT `EXECS_ITS_ARGV_WRAPPERS` itself, and NOT computed from
 #: it. Initialized VERBATIM to today's `_FIND_WRAPPER_WORDS`
-#: (`dispatch_checks.py:2675`): `sudo`, `command`, `time`, `env`, `nice`,
-#: `nohup`, `exec`, `timeout`, `stdbuf` -- nine words, no more, no fewer.
-#:
-#: Only a wrapper in THIS set may be carried into an auto-rewrite (e.g.
-#: `check_offer_git_c`'s `-C <dir>` suggestion). `setsid`, `strace`, `doas`,
 #: and `ionice` are `EXECS_ITS_ARGV` for CONFINEMENT-matching purposes but
-#: are deliberately excluded here: they are real execs-its-argv wrappers,
-#: just not yet vetted for rewrite-safety, and a single-axis design would
-#: have widened this set automatically the moment they were classified
-#: execs-its-argv -- exactly the failure this two-axis table exists to
 #: prevent. `which`/`type` (`INSPECTS_WITHOUT_EXECING`) and `busybox`
 #: (`APPLET_DISPATCHER`) can never belong here regardless of future
 #: widening of `EXECS_ITS_ARGV_WRAPPERS`, for the concrete reasons in
-#: `WrapperSemanticClass`'s own docstring: `cd X && which git` rewritten to
-#: `which git -C X` never actually runs git (nothing to confine), and
-#: `busybox` has no git applet to rewrite into at all.
-#:
-#: Widen only by explicit future decision -- never automatically because a
 #: word is added to `EXECS_ITS_ARGV_WRAPPERS`.
 REWRITE_FACING_WRAPPERS: FrozenSet[str] = frozenset(
     {"sudo", "command", "time", "env", "nice", "nohup", "exec", "timeout", "stdbuf"}
@@ -935,10 +750,6 @@ REWRITE_FACING_WRAPPERS: FrozenSet[str] = frozenset(
 
 
 def wrapper_semantic_class(word: str) -> Optional[WrapperSemanticClass]:
-    """Return `word`'s axis-1 `WrapperSemanticClass`, or `None` if `word` is
-    not a recognized wrapper at all. `word` should already be basename-
-    normalized (see `normalize_executable_basename`) -- this is a plain dict
-    lookup, no further normalization is applied here."""
     return _WRAPPER_SEMANTIC_CLASS.get(word)
 
 
@@ -950,26 +761,11 @@ def is_rewrite_facing_wrapper(word: str) -> bool:
     return word in REWRITE_FACING_WRAPPERS
 
 
-#: Ported verbatim (union of the four non-`dispatch_checks.py` copies plus
-#: `dispatch_checks.py`'s own richer boolean-flag addition, confirmed via
-#: differential execution to be the most-correct of the five --
-#: `dispatch_checks.py`'s own Finding-9 comment) from
-#: `_skip_wrapper_own_argv`'s supporting tables in all five files named in
-#: this section's module-level comment above.
 _WRAPPER_ARG_FLAGS: Dict[str, FrozenSet[str]] = {
     "timeout": frozenset({"-k", "--kill-after", "-s", "--signal"}),
     "nice": frozenset({"-n", "--adjustment"}),
     "ionice": frozenset({"-c", "--class", "-n", "--classdata", "-p", "--pid"}),
     "stdbuf": frozenset({"-i", "--input", "-o", "--output", "-e", "--error"}),
-    # 2026-07-30: the four wrappers below previously had NO entry, which this
-    # function's docstring named as a known limitation and left open. It was a
-    # live bypass, not a cosmetic gap -- `sudo -u root git stash drop` and
-    # `doas -u root git worktree add ...` both reached their guards and were
-    # ALLOWED, because the walk stopped at the first separate-token flag and
-    # command-position resolution never reached `git`. Confirmed by direct
-    # probe against `block_stash_destruction` and `block_worktree_creation`.
-    # `sudo` is the highest-value wrapper to close: it is the one an agent
-    # reaches for when a command has just been refused.
     "sudo": frozenset(
         {
             "-u", "--user", "-g", "--group", "-p", "--prompt", "-r", "--role",
@@ -987,15 +783,9 @@ _WRAPPER_ARG_FLAGS: Dict[str, FrozenSet[str]] = {
 _TIMEOUT_DURATION_RE = re.compile(r"^\d+(?:\.\d+)?[smhd]?$")
 _NICE_BARE_NUMERIC_RE = re.compile(r"^-\d+$")
 
-#: Only `dispatch_checks.py`'s copy had this -- GNU `timeout`'s boolean
-#: long/short flags, which take no value token. Promoted here as part of
-#: "the most-correct of the five" per this task's own instruction.
 _WRAPPER_BOOL_FLAGS: Dict[str, FrozenSet[str]] = {
     "timeout": frozenset({"--foreground", "--preserve-status", "-v", "--verbose"}),
-    # Companion to the 2026-07-30 arg-flag additions above. A value-taking
     # table alone does NOT close the bypass: a VALUELESS flag stops the walk
-    # just as hard, and `sudo -E git stash drop` was confirmed to reach allow
-    # for exactly that reason. Both tables are required per wrapper.
     "sudo": frozenset(
         {
             "-A", "--askpass", "-b", "--background", "-E", "--preserve-env",
@@ -1142,68 +932,22 @@ class ResolvedCommand:
     depth: int
 
 
-#: Depth cap for BOTH recursion sources below (interpreter `-c` payloads,
-#: command substitution) -- a single shared cap, not one per source, so a
-#: pathological mix of the two cannot multiply past it. Chosen generously
-#: above any real legitimate nesting (a hand-written command substituting
-#: into an interpreter substituting into another interpreter is already an
-#: edge case) while still bounding recursion on adversarial input.
 _MAX_RESOLVE_DEPTH = 4
 
-#: Interpreters whose `-c <string>` argument is executed code, not inert
-#: text -- same set used throughout this package's guards
 #: (`_C_FLAG_SHELL_INTERPRETERS` in `block_subagent_destructive_action.py`).
 _SHELL_INTERPRETERS_WITH_C = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 
-#: Bundled-or-standalone `-c` short flag, e.g. `-c`, `-ic`, `-ci` -- a
-#: shell's CLI parser accepts bundled short flags, so `sh -ic '<payload>'`
-#: behaves as `sh -i -c '<payload>'`. Same pattern as
 #: `block_subagent_commit.py`'s `_BUNDLED_C_FLAG_RE`.
 _BUNDLED_C_FLAG_RE = re.compile(r"^-[a-zA-Z]*c[a-zA-Z]*$")
 
-#: A heredoc opener: `<<WORD`, `<<-WORD`, `<<'WORD'`, `<<"WORD"`. Group 1 is
-#: the optional quote character (unused beyond matching symmetrically),
-#: group 2 is the delimiter word.
 _HEREDOC_OPEN_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
-#: A token that is entirely a `$NAME`/`${...}` variable reference, or a
-#: leftover empty placeholder -- not a literal binary name we can resolve
-#: statically. Deliberately narrow: an ordinary word is never mistaken for
 #: this, so this can only ever ADD `UNRESOLVED` findings, never suppress a
 #: `RESOLVED`/`PEELED` one.
 _INDETERMINATE_HEAD_RE = re.compile(r"^\$")
 
 
 def _strip_heredocs(text: str) -> str:
-    """Remove every heredoc BODY (and its terminator line) from `text`,
-    leaving the `<<WORD` opener token in place so the command it redirects
-    into still tokenizes normally, and inserting an explicit `;` separator
-    where the terminator line is removed -- a heredoc terminator implicitly
-    ends the command that opened it, and without an explicit separator a
-    following command on the next source line would otherwise be
-    whitespace-joined into the SAME segment by `tokenize_full_command`
-    (which treats a bare newline as ordinary whitespace, not a segment
-    boundary).
-
-    Heredoc body text is DATA (redirected stdin), never itself a
-    command-position segment to walk over -- an unquoted `;`/`&`/`|`
-    inside a heredoc body must not be mistaken for a real segment
-    boundary, which is exactly what stripping the body before segmenting
-    prevents.
-
-    `<<-WORD` (tab-stripping form) matches the terminator line after
-    stripping its own leading tabs, same as real shell behavior. A quoted
-    delimiter (`<<'WORD'`) is treated identically to an unquoted one for
-    terminator-matching purposes (this resolver has no need for the
-    quoted-delimiter distinction of suppressing expansion inside the body,
-    since the body is discarded entirely).
-
-    KEEP IN SYNC: `_write_bump_sink_shapes._iter_heredoc_bodies` hand-mirrors
-    this terminator-walk (it needs the body TEXT, which this function
-    discards, so it cannot simply call this function and diff) -- any change
-    to the opener/terminator/`<<-`-tab-stripping semantics here must be
-    ported there by hand.
-    """
     if "<<" not in text:
         return text
     out: List[str] = []
@@ -1221,8 +965,6 @@ def _strip_heredocs(text: str) -> str:
         i = m.end()
         nl = text.find("\n", i)
         if nl == -1:
-            # No newline after the opener -- there is no body to strip
-            # (single-line command text, the common case for these guards).
             out.append(text[i:])
             i = n
             break
@@ -1243,23 +985,6 @@ def _strip_heredocs(text: str) -> str:
 
 
 def _extract_command_substitutions(text: str) -> Tuple[str, List[str]]:
-    """Single quote-aware, paren-balanced walk over `text` that extracts
-    every top-level `$( ... )` and backtick `` `...` `` command substitution
-    (nested `$( )` correctly paren-balanced; nested backticks are NOT --
-    real shell requires escaping to nest those, which this walk does not
-    attempt to unescape, the same scope real shell syntax itself imposes).
-
-    Substitution is recognized inside double-quoted text (real shell
-    behavior: only single quotes suppress it) but NOT inside single-quoted
-    text. Each recognized substitution's INNER command text is collected
-    (for the caller to recursively resolve) and replaced in the returned
-    text with a single neutral space -- enough for the outer segment's
-    head/argv shape to stay intact for tokenization without the inner
-    command text confusing the outer parse.
-
-    Returns `(text_with_placeholders, [inner_command_text, ...])` in
-    left-to-right encounter order.
-    """
     out: List[str] = []
     subs: List[str] = []
     i = 0
@@ -1283,21 +1008,6 @@ def _extract_command_substitutions(text: str) -> Tuple[str, List[str]]:
             i += 1
             continue
         if text.startswith("$(", i):
-            # Quote-aware paren balance: a `$(...)` substitution opens a
-            # FRESH quoting context (real shell re-tokenizes its contents
-            # independently of whatever quote the substitution itself sits
-            # inside), so a `)` inside a quoted string here must not close
-            # the substitution early. Before this fix the walk tracked only
-            # `\\`/`(`/`)` and a quoted `)` (e.g. `$(echo ')' ; sh -c
-            # '<payload>')`) desynced the counter, truncating the extracted
-            # span before the true closing paren and silently dropping
-            # everything after it from `subs` -- a live guard bypass when
-            # the substitution's outer context also prevented the segment
-            # loop from splitting on the exposed `;` (e.g. double-quoted
-            # outer text keeps the whole thing one token). Mirrors the
-            # quote-tracking already used by the outer walk in this
-            # function and by `tokenize_full_command`/
-            # `_mask_adjacent_ampersand_redirects`.
             depth = 1
             j = i + 2
             inner_sq = False
@@ -1341,10 +1051,6 @@ def _extract_command_substitutions(text: str) -> Tuple[str, List[str]]:
 
 
 def _extract_dash_c_payload(argv_after_interpreter: List[str]) -> Optional[str]:
-    """Scan `argv_after_interpreter` (the tokens following the interpreter
-    binary itself) for a standalone `-c` or a bundled short flag containing
-    `c` (e.g. `-ic`, `-ci`), and return the token immediately following it
-    (the payload string), or `None` if no such flag/payload is present."""
     n = len(argv_after_interpreter)
     for i, tok in enumerate(argv_after_interpreter):
         is_c_flag = tok == "-c" or (
@@ -1516,10 +1222,6 @@ def resolve_command_positions(
 
 
 #: General separator-class characters (mirrors `_SEPARATOR_TOKEN_RE`'s
-#: `;`/`&`/`|`) used by `find_git_segment`'s own quote-aware walk. A run of
-#: one or more of these, unquoted, is one segment boundary -- this
-#: subsumes `&&`/`||`/bare `;`/bare `&`/bare `|` alike, the same separator
-#: concept the rest of this module already uses for tokenized segmentation.
 _GIT_SEGMENT_SEPARATOR_CHARS = ";&|"
 
 
@@ -1607,8 +1309,6 @@ def find_git_segment(cmd: str) -> Dict[str, str]:
     while seg_start <= n:
         i = seg_start
         # Skip leading whitespace, env assignments, and EXECS_ITS_ARGV
-        # wrapper words -- same vocabulary as `_peel_command_position`,
-        # applied to raw text.
         prev = -1
         while i != prev:
             prev = i
@@ -1634,8 +1334,6 @@ def find_git_segment(cmd: str) -> Dict[str, str]:
         git_start = i
         is_git = cmd[i:i + 3] == "git" and (i + 3 >= n or cmd[i + 3] in " \t")
 
-        # Walk this segment (quote-aware) to find its terminating separator
-        # run (or end of string).
         j = i
         in_sq = in_dq = False
         term_start = -1

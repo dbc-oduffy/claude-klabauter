@@ -99,9 +99,6 @@ from coordinator_core.cartography._guard import path_guard
 from coordinator_core.cartography._skip_dirs import SKIP_DIR_NAMES as _SKIP_DIR_NAMES
 from coordinator_core.ipc import register_op
 
-# (language name, extensions) in the fence's own listed order —
-# ".py" / ".ts" ".tsx" / ".js" / ".cpp" ".h" — collapsed to one entry per
-# language so ".ts" and ".tsx" both surface as a single "TypeScript" hit.
 _LANGUAGE_EXTENSIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Python", (".py",)),
     ("TypeScript", (".ts", ".tsx")),
@@ -109,11 +106,8 @@ _LANGUAGE_EXTENSIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("C++", (".cpp", ".h")),
 )
 
-# Test-framework directory names, fence order.
 _TEST_FRAMEWORK_DIRS: tuple[str, ...] = ("tests", "__tests__", "spec", "test")
 
-# Non-glob config file names, fence order (the glob entry, jest.config.*,
-# is handled separately since it is not a single literal filename).
 _CONFIG_FILE_NAMES: tuple[str, ...] = (
     "pytest.ini",
     "pyproject.toml",
@@ -136,7 +130,6 @@ def _walk_extensions(root: Path) -> set[str]:
         try:
             entries = list(current.iterdir())
         except OSError:
-            # directory removed/unreadable mid-walk; skip it
             continue
         for entry in entries:
             if entry.is_dir():
@@ -164,13 +157,6 @@ def _detect_test_frameworks(root: Path) -> list[str]:
 def _detect_configs(root: Path) -> list[str]:
     configs = [name for name in _CONFIG_FILE_NAMES if (root / name).is_file()]
     if any(root.glob("jest.config.*")):
-        # Fence order: jest.config.* sits between pyproject.toml and
-        # tsconfig.json in the original `ls` argument list. Anchor on the
-        # first PRESENT config that fence-order places after jest.config.*
-        # (tsconfig.json, else CMakeLists.txt) — anchoring solely on
-        # tsconfig.json misplaced jest.config.* AFTER CMakeLists.txt when
-        # tsconfig.json was absent but CMakeLists.txt present.
-        # (review: code-reviewer — Finding 2)
         insert_at = next(
             (configs.index(name) for name in ("tsconfig.json", "CMakeLists.txt") if name in configs),
             len(configs),
@@ -180,12 +166,6 @@ def _detect_configs(root: Path) -> list[str]:
 
 
 def detect_project_stack(target_root: str | Path) -> dict:
-    """Fingerprint `target_root` for languages / test frameworks / configs.
-
-    Pure function over an already-resolved, contained root — no param
-    validation, no registry side effect (that lives in the registered
-    handler below). Exposed at module scope for direct unit testing.
-    """
     root = Path(target_root)
     return {
         "target_root": str(root),

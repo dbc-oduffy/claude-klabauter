@@ -201,10 +201,6 @@ def _handle_canonical_write(row: ResolvedRow, repo_root: Path):
 
 
 def evaluate(payload: dict):
-    """Pure core: given a parsed PostToolUse(Write|Edit|MultiEdit) payload,
-    returns the advisory `Message` for a matching write (derived-write
-    warning, or the canonical-write derivation outcome), or `None` for a
-    silent no-op (non-matching path, or repo root unresolvable)."""
     if not isinstance(payload, dict):
         return None
 
@@ -241,9 +237,6 @@ def evaluate(payload: dict):
 
 @register_op("hooks.derive_setup_copies")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PostToolUse(Write|Edit|MultiEdit) op: re-derive a canonical
-    `setup/`-tree write's paired install-template copy, or warn on a write
-    landing directly on a derived copy."""
     params = payload_of(params)
     message = evaluate(params)
     if message is None:

@@ -1,13 +1,3 @@
-"""Tests for coordinator_core.ops.check_surface_inline_budget.
-
-Covers each of the four inline-mechanism signals independently, the
-summed budget-comparison contract (WARN over-budget / OK within-budget /
-INFO no-baseline / ERROR no-file-matched), and glob-based multi-file
-surfaces.
-
-Spec backlink: canonical-resolution-engine plan, chunk W1-A3a (2026-07-24)
-  — AC-11 anti-rebound inline-mechanism budget gate.
-"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -62,13 +52,10 @@ def test_count_inline_mechanism_signals_clean_surface_all_zero() -> None:
 
 def test_count_inline_mechanism_signals_bash_fence() -> None:
     signals = count_inline_mechanism_signals(_OVER_BUDGET_SURFACE)
-    assert signals["bash_fence"] == 2  # ```bash and ```sh
+    assert signals["bash_fence"] == 2
 
 
 def test_count_inline_mechanism_signals_cc_trusted_anchored() -> None:
-    # Whole-line anchor: `_cc_trusted=0` on its own line counts once; a
-    # compound line carrying the same substring does not match (documented
-    # blind spot, mirrors the DoE ancestor's own anchoring rationale).
     text = "_cc_trusted=0\n_cc_trusted=0  # reset\n"
     signals = count_inline_mechanism_signals(text)
     assert signals["cc_trusted"] == 1
@@ -76,13 +63,11 @@ def test_count_inline_mechanism_signals_cc_trusted_anchored() -> None:
 
 def test_count_inline_mechanism_signals_narrated_step() -> None:
     signals = count_inline_mechanism_signals(_OVER_BUDGET_SURFACE)
-    assert signals["narrated_step"] == 2  # the two numbered steps with inline code
+    assert signals["narrated_step"] == 2
 
 
 def test_count_inline_mechanism_signals_inline_payload() -> None:
     signals = count_inline_mechanism_signals(_OVER_BUDGET_SURFACE)
-    # The narrated-step line's own inline span (`git add -- foo && git
-    # commit -m "x"`) plus the standalone `git log && git status` mention.
     assert signals["inline_payload"] == 2
 
 

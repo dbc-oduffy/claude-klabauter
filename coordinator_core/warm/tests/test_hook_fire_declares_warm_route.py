@@ -46,26 +46,6 @@ from coordinator_core.warm.tests.test_supervisor_hook_serves_real_guard import (
 
 
 def test_a_hook_fire_through_a_declared_server_stamps_warm_server_route(tmp_path: Path):
-    """Clause (a), end to end. `_bind_handler` (reused from
-    `test_supervisor_hook_serves_real_guard.py` rather than a second harness) binds
-    the real `_Handler` around a real loopback socket; leaving `dispatch=None` means
-    `_serve_line` falls through to its own default, `_run_dispatch`, which is the
-    real `coordinator_core.ipc.dispatch_message` chokepoint -- not a fake standing in
-    for it. The fired event resolves to the REAL registered `warm_guard.evaluate`
-    op (`coordinator_core/ops/warm_guard_evaluate.py`), so this exercises the exact
-    path a resident server serves a hook through, not a stub of it.
-
-    `supervisor._declare_execution_route()` is called directly, mirroring `main()`'s
-    boot-time call -- `main()` cannot be driven here (it blocks in `serve_forever`
-    over a real bound port). The prior env value is restored in `finally` so this
-    mutation of process-wide `os.environ` never leaks into a later test.
-
-    The assertion reads the LIVE op-latency sink rather than trusting a captured
-    return value: `route` is stamped by `op_latency._write_entry` at the moment the
-    completion row is appended (`ipc.dispatch_message`'s `finally` block), which is
-    the actual telemetry surface AC2 requires proof from -- timing alone (how long
-    the call took) proves nothing about which process executed it.
-    """
     prior_route = os.environ.get(op_latency.ROUTE_ENV)
     supervisor._declare_execution_route()
     own_pid = os.getpid()
@@ -97,12 +77,6 @@ def test_a_hook_fire_through_a_declared_server_stamps_warm_server_route(tmp_path
     assert sinks, "no op-latency sink resolvable for this repo -- cannot verify telemetry"
     entries, _head_truncated = op_latency.tail_entries(sinks[0], tail_bytes=2_000_000, max_rows=20_000)
 
-    # Filtered by THIS process's pid: the sink is shared with every other concurrent
-    # session on the box (module docstring's "no read-modify-write, no lock file"
-    # append discipline), and `_run_dispatch` executes synchronously on this same
-    # request-handling thread -- no ProcessPoolExecutor is in play for the http
-    # transport's default dispatch -- so a completed `warm_guard.evaluate` row
-    # carrying our own pid unambiguously belongs to the fire above.
     own_rows = [
         e
         for e in entries
@@ -115,17 +89,6 @@ def test_a_hook_fire_through_a_declared_server_stamps_warm_server_route(tmp_path
 
 
 def test_stamp_gate_constant_is_wired_into_the_refusal_it_names():
-    """Clause (b), pinned by identity/wiring rather than re-run. The behavioural
-    test for this refusal already lives at
-    `coordinator_core/tests/test_dispatch_message.py ::
-    test_stamp_gate_refuses_when_unstamped_and_opt_in_off` (drives an unstamped
-    root through `dispatch_message`, asserts the handler never ran and the
-    response carries this exact code) -- this test does not re-drive that path.
-    It pins the two facts AC2's clause (b) actually names: the code value itself
-    (-32005, DR-347 Ruling 3's app-code slot) never drifts, and the refusal
-    envelope `dispatch_message` answers with is built from that SAME named
-    constant, not a second literal `-32005` that could silently diverge from it.
-    """
     assert ipc.UNSTAMPED_ENGINE_ROOT_ERROR == -32005
 
     envelope = ipc._unstamped_dispatch_refusal(request_id=7)

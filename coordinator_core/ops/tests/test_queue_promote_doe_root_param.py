@@ -55,9 +55,6 @@ def _seed_oss_mirror_marker(root):
 
 
 def test_registry_resolved_oss_mirror_refuses_write(tmp_path, monkeypatch):
-    """claude-klabauter#39: repos.doe_claude resolving to the OSS publish mirror
-    must refuse the write (WARN+skip, exit 0) rather than writing a duplicate
-    outbox into a tree the mirror doctrine says authors nothing."""
     monkeypatch.delenv("LESSON_PROMOTE_OUTBOX_ROOT", raising=False)
     mirror = tmp_path / "coordinator-claude-mirror"
     _seed_oss_mirror_marker(mirror)
@@ -78,8 +75,6 @@ def test_registry_resolved_oss_mirror_refuses_write(tmp_path, monkeypatch):
 
 
 def test_doe_root_param_resolved_oss_mirror_refuses_write(tmp_path, monkeypatch):
-    """claude-klabauter#39: the same refusal applies when the OSS-mirror path
-    arrives via the caller-resolved doe_root param, not just the registry."""
     monkeypatch.delenv("LESSON_PROMOTE_OUTBOX_ROOT", raising=False)
     mirror = tmp_path / "caller-resolved-mirror"
     _seed_oss_mirror_marker(mirror)

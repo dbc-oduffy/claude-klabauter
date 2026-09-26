@@ -58,7 +58,6 @@ from coordinator_core.ops.emit.context import EmitContext
 
 from ._shared import normalize_frontmatter
 
-# The 5-value RoadmapStatus enum (bash:1756).
 _ROADMAP_STATUS_ENUM = frozenset({"planning", "active", "blocked", "shipped", "archived"})
 
 
@@ -118,7 +117,6 @@ def _no_overview_malformed(ctx: EmitContext, seen_paths: set[str]) -> list[dict]
 
 
 def _is_valid(fm: dict) -> bool:
-    """Required fields present + status within the RoadmapStatus enum (bash:1752-1757)."""
     return (
         isinstance(fm.get("title"), str)
         and isinstance(fm.get("created"), str)
@@ -128,7 +126,6 @@ def _is_valid(fm: dict) -> bool:
 
 
 def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
-    """Build (records, malformed) for the roadmaps section — parity with bash §8.8."""
     raw = _query_roadmap_records(ctx)
 
     records: list[dict] = []
@@ -156,16 +153,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
 
         roadmap_id = fm.get("roadmap_id")
 
-        # Assembler scalars (C2 / F4): populate roll_up and critical_path from the
-        # instance-level memoized assembler when roadmap_id is present.  A null/absent
-        # roadmap_id short-circuits before the call — the assembler requires a string.
         if roadmap_id is not None:
-            # str-cast to match roadmap_dag.py's cache key type.
-            # roadmap_dag.collect() casts roadmap_id = str(roadmap_id) before ctx.assembler_dag();
-            # roadmaps.collect() shares the same _dag_cache via ctx. A YAML-integer roadmap_id
-            # (e.g. roadmap_id: 123) would cache under int(123) here vs str("123") there, causing
-            # a cache miss and duplicate assembler calls. Cast inside the null guard — None must
-            # stay None, not become "None".
             roadmap_id = str(roadmap_id)
             dag = ctx.assembler_dag(roadmap_id)
             roll_up = dag.get("roll_up")
@@ -192,18 +180,15 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             "items": fm.get("items"),
             "blocks": fm.get("blocks"),
             "blocked_by": fm.get("blocked_by"),
-            # Deliverable-spine facets (D9 present-as-null) — authored, read from frontmatter.
             "purpose": fm.get("purpose"),
             "deliverable_id": fm.get("deliverable_id"),
             "initiative": fm.get("initiative"),
             "caption": fm.get("caption"),
             "status_reason": fm.get("status_reason"),
-            # Emit-DERIVED — left null in collect(), stamped by enrich / cross-join (C4b/C4c).
             "last_meaningful_activity": None,
             "workstream_type": None,
             "shipped_sha": None,
             "deliverable_status": None,
-            # Assembler scalars (C2 / v2.6.0) — populated above from ctx.assembler_dag().
             "roll_up": roll_up,
             "critical_path": critical_path,
             "scan_incomplete": scan_incomplete,

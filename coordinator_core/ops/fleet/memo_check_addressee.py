@@ -64,17 +64,10 @@ from coordinator_core.ops.fleet._memo_resolver import (
 
 _LOG = logging.getLogger(__name__)
 
-# Mode constant for the envelope mode field (memo.check_addressee is a single-mode
-# op — it only ever returns the dry_run envelope, matching memo_list.py's pattern).
 _MODE = "check_addressee"
 
 
 def _validate_check_addressee_params(params: dict):
-    """Validate memo.check_addressee params; return (dry_run, to) or a setup-error dict.
-
-    Required: dry_run (bool) — must be True; memo.check_addressee has no act mode.
-    Required: to (str, non-empty after strip) — the memo's `to:` value to check.
-    """
     dry_run = params.get("dry_run")
     if not isinstance(dry_run, bool):
         return build_setup_error_result(
@@ -134,34 +127,19 @@ def compute_check_addressee_candidate(self_root: Path, to: str) -> dict:
             distinct registered `repos.*` key.
     """
     normalized = to.strip().lower()
-    # Tracks which central id the redirect
-    # branch actually resolved against, so note-selection below checks the
     # RESOLVED id, not the caller's original `to`/`normalized`.
     redirected_central_id: Optional[str] = None
-    # Cache the manifest read here so the
     # UNRESOLVED branch below reuses it when the redirect branch already
-    # read it, instead of re-opening/re-parsing the manifest a second time
-    # in the same call. Lazily bound (not read unconditionally at function
     # top) so the common MATCH/MISMATCH path — which needs central_ids in
-    # neither branch — pays for zero manifest reads, same as before this
-    # fix; this function is the hot-path compute core a 1098ms->2.5ms
-    # optimization was built around.
     central_ids: Optional[set[str]] = None
     redirect_aliases = read_redirect_aliases()
     if normalized in redirect_aliases:
         central_ids = read_central_receiver_ids()
         if central_ids:
-            # manifest-driven, not a
-            # hardcoded literal: derive the redirect target from the
-            # manifest's own declared central-id set, taking the FIRST id
-            # in sorted order to match resolve_receiver_inbox's own
-            # `for cid in sorted(central_ids)` iteration.
             redirected_central_id = sorted(central_ids)[0]
             _, to_root, all_repos = resolve_receiver_inbox(redirected_central_id)
         else:
-            # No central ids declared in the manifest at all — nothing to
             # redirect to; degrade cleanly to UNRESOLVED rather than crash
-            # on an empty sorted()[0].
             to_root = None
             all_repos = read_registry_repos()
     else:
@@ -170,8 +148,6 @@ def compute_check_addressee_candidate(self_root: Path, to: str) -> dict:
     note = None
     if to_root is None:
         verdict = "UNRESOLVED"
-        # Check the actually-resolved
-        # central id when the redirect branch fired, not the original `to`.
         central_check_id = (
             redirected_central_id if redirected_central_id is not None else normalized
         )
@@ -207,10 +183,6 @@ def compute_check_addressee_candidate(self_root: Path, to: str) -> dict:
     }
 
 
-#: Exit codes mirroring the DoE CLI's `--check-addressee` branch
-#: (`cross-repo-memo:4088-4105`) — `format_addressee_message` returns one of
-#: these three; there is no fourth verdict string in `compute_check_addressee_
-#: candidate`'s output, so no other exit code is ever produced by this path.
 ADDRESSEE_EXIT_MATCH = 0
 ADDRESSEE_EXIT_MISMATCH = 3
 ADDRESSEE_EXIT_UNRESOLVED = 4
@@ -219,16 +191,6 @@ ADDRESSEE_EXIT_UNRESOLVED = 4
 def format_addressee_message(
     self_em: str, self_root: Path, to_val: str, candidate: dict
 ) -> tuple[str, int]:
-    """Render the `self:`/`to:`/`verdict:` three-line text byte-for-byte
-    against the DoE CLI's `--check-addressee` stdout (`cross-repo-memo:
-    4088-4105`), plus the matching exit code. THE ONE formatter for this
-    prose — every in-process consumer of `compute_check_addressee_candidate`
-    calls this rather than re-deriving the verdict lines.
-
-    `to_root` is read from `candidate["to_repo"]` (already a `str` or `None`)
-    — never re-derived — so the printed `to:` line and the computed verdict
-    can never disagree about what was resolved.
-    """
     verdict = candidate.get("verdict")
     to_root = candidate.get("to_repo")
     lines = [
@@ -245,7 +207,6 @@ def format_addressee_message(
         )
         return "\n".join(lines), ADDRESSEE_EXIT_MISMATCH
     # UNRESOLVED (or any other/unexpected verdict string — treat as
-    # unresolved rather than silently falling through as a MATCH).
     lines.append(
         f"verdict: receiver '{to_val}' does not resolve to a known repo on "
         f"this machine"
@@ -287,7 +248,7 @@ def _memo_check_addressee(params: dict, repo_root: Optional[Path] = None) -> dic
     """
     validated = _validate_check_addressee_params(params)
     if isinstance(validated, dict):
-        return validated  # exit_code:1 setup-error envelope
+        return validated
 
     dry_run, to = validated
 

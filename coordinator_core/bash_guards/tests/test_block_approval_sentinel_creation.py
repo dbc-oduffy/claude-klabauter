@@ -1,17 +1,3 @@
-"""Tests for coordinator_core.bash_guards.block_approval_sentinel_creation.
-
-Covers the DENY set (redirection, `touch`/`cp`/`mv`/`install`/`ln`/`tee`,
-`sed -i`, `python -c`), the ALLOW set (reads and `rm`), chaining/env-
-assignment shell shapes, and -- critically -- dispatch-level (end-to-end via
-`dispatch.evaluate_payload_json`) coverage, since `offer-git-c`'s
-allow+updatedInput short-circuit is exactly what hid the analogous ordering
-bug in `block_worktree_creation.py`: a guard-level-only suite would have
-stayed green while the guard was unreachable for `cd <dir> && <cmd>` shapes.
-
-Pure Python -- no shell spawns, no filesystem writes.
-
-Spec backlink: coordinator_core/bash_guards/block_approval_sentinel_creation.py
-"""
 
 from __future__ import annotations
 
@@ -98,7 +84,6 @@ class TestDenyFileArgCommands:
         _reason(guard.check(_payload("cp somefile %s" % SENTINEL)))
 
     def test_cp_source_position_denies(self):
-        # Default-deny posture: source or destination, see module docstring.
         _reason(guard.check(_payload("cp %s /tmp/copy" % SENTINEL)))
 
     def test_mv_denies(self):
@@ -128,13 +113,6 @@ class TestDenySedInPlace:
         _reason(guard.check(_payload("sed --in-place 's/a/b/' %s" % SENTINEL)))
 
     def test_sed_without_inplace_flag_now_denies_under_default_deny_posture(self):
-        # 2026-07-30 inversion: `sed` is not on the narrow safe-argv0
-        # allowlist (rm + read-only inspection + read-only git), so ANY
-        # mention of the sentinel in a `sed` invocation denies now, -i or
-        # not -- the guard no longer tries to reason about whether this
-        # particular sed call would actually write. Was ALLOW under the
-        # old enumerated-dangerous-command posture; the new default-deny
-        # posture is deliberately stricter (a rephrase is the only cost).
         _reason(guard.check(_payload("sed 's/a/b/' %s" % SENTINEL)))
 
 
@@ -168,8 +146,6 @@ class TestQuotedAndPartiallyQuotedSpellings:
         _reason(guard.check(_payload('touch "%s"' % SENTINEL)))
 
     def test_adjacent_quote_concatenation_denies(self):
-        # shlex merges adjacent quoted segments with no intervening
-        # whitespace into a single token.
         cmd = "touch '.coordinator-doctrine-edit'\"-approved\""
         _reason(guard.check(_payload(cmd)))
 
@@ -230,7 +206,6 @@ class TestNotIdentityGated:
         _reason(out)
 
     def test_denies_with_em_shaped_payload_no_identity(self):
-        # Main-loop EM calls carry no agent_id/agent_type at all -- this
         # guard must still fire (see module docstring "NOT IDENTITY-GATED").
         out = guard.check(_payload("touch %s" % SENTINEL))
         _reason(out)
@@ -238,20 +213,12 @@ class TestNotIdentityGated:
 
 class TestNoOverride:
     def test_env_var_shaped_override_does_not_allow(self, monkeypatch):
-        # This guard deliberately consults NO override env var at all --
-        # confirm setting one that would work for a sibling guard has no
-        # effect here.
         monkeypatch.setenv("COORDINATOR_OVERRIDE_APPROVAL_SENTINEL", "1")
         out = guard.check(_payload("touch %s" % SENTINEL))
         _reason(out)
 
 
 class TestDenyMessageDiscipline:
-    """2026-07-28 fix: this guard used to interpolate the raw command (up
-    to 200 chars) and the literal sentinel basename into its deny text --
-    so a denied `python3 -c "open('...', 'w').close()"` echoed working
-    exploit code straight back to the agent. Brought in line with
-    `block_worktree_sentinel_creation`'s no-echo discipline."""
 
     def test_deny_reason_never_names_the_sentinel(self):
         out = guard.check(_payload("touch %s" % SENTINEL))
@@ -268,13 +235,6 @@ class TestDenyMessageDiscipline:
 
 
 class TestReasonClassSpecificMessages:
-    """2026-07-28 diagnosability fix: an indirection deny (payload
-    unexaminable) used to get the SAME fixed "this command would create or
-    modify" assertion as a direct deny (payload positively matched), which
-    is false on the indirection path -- an operator who greps their own
-    script and finds no sentinel reference gets told the opposite of what
-    the guard actually determined. Covers both branches' message text and
-    confirms no-echo discipline holds on both."""
 
     def test_direct_deny_message_unchanged(self):
         out = guard.check(_payload("touch %s" % SENTINEL))
@@ -284,9 +244,6 @@ class TestReasonClassSpecificMessages:
         assert SENTINEL not in reason
 
     def test_indirection_deny_does_not_assert_creation(self):
-        # bin/install-git-hooks.sh-shaped: bare interpreter-invoked script,
-        # content unexamined -- the exact field-reported false-positive
-        # shape (2026-07-28).
         out = guard.check(_payload("bash bin/install-git-hooks.sh"))
         reason = _reason(out)
         assert "creates/modifies the PM-approval sentinel" not in reason
@@ -301,25 +258,6 @@ class TestReasonClassSpecificMessages:
         assert "indirection wrapper" in reason
 
     def test_indirection_deny_names_the_guard_and_offers_a_path_forward(self):
-        """The path forward must be the one that WORKS, named concretely.
-
-        The message used to say only "run its underlying steps directly",
-        which reads as "replicate what the script does". Two sessions did
-        exactly that on a falsifier whose entire contract is its exit status,
-        producing an instrument reasoned about and never run -- the failure
-        that instrument exists to prevent, one level up. Measured 2026-09-12:
-        the direct form is ALLOWED by this guard and by the worktree, disarm
-        marker and fleet-delegation guards; only the interpreter-invoked form
-        denies. So the remedy is dropping the interpreter, and the message now
-        names it rather than leaving the reader to infer replication.
-
-        # Was three verbatim prose pins
-        # (one of them pinning the clause since deleted for restating a
-        # fact already said once). Structural check instead: extract the
-        # recommended command from the message and assert this same guard
-        # allows it, which pins "a concrete working route is named" as a
-        # property rather than pinning wording.
-        """
         out = guard.check(_payload("bash bin/install-git-hooks.sh"))
         reason = _reason(out)
         assert "approval-sentinel guard" in reason
@@ -330,27 +268,9 @@ class TestReasonClassSpecificMessages:
         assert guard.check(_payload(recommended)) is None
 
     def test_the_direct_invocation_the_message_recommends_is_actually_allowed(self):
-        """The remedy the deny message names must not itself be denied.
-
-        A message recommending a route this same guard blocks would send the
-        reader in a circle, which is worse than naming no route at all.
-        """
-        # Dropped the paired
-        # `bash ... is not None` assertion; it duplicated the preceding
-        # test's deny and `test_bash_bare_file_denies` below.
         assert guard.check(_payload("./bin/install-git-hooks.sh")) is None
 
     def test_recursive_indirection_deny_still_redacts_the_sentinel(self):
-        # bash -c "touch <sentinel>" -- the flagship confirmed bypass.
-        # Under the 2026-07-30 default-deny inversion this is now caught by
-        # the DIRECT path, not the indirection-recursion path: the `-c`
-        # payload is a single shlex-merged token whose text mentions the
-        # sentinel, and the segment's own head command (`bash`) is not on
-        # the safe-argv0 allowlist, so `_segment_denies` matches it before
-        # `_evaluate_segment_indirection` is ever consulted. The message is
-        # therefore the fixed DIRECT-class text, not the indirection
-        # "cannot examine" text -- what still matters, and is still pinned
-        # here, is that the sentinel basename itself never appears in it.
         out = guard.check(_payload('bash -c "touch %s"' % SENTINEL))
         reason = _reason(out)
         assert SENTINEL not in reason
@@ -358,11 +278,6 @@ class TestReasonClassSpecificMessages:
 
 
 class TestIndirectionWrapperShapesDeny:
-    """2026-07-28 fix -- the confirmed live bypass:
-    ``bash -c "touch <sentinel>"`` created the sentinel successfully before
-    this fix, defeating this guard via one level of interpreter
-    indirection. Covers every shape enumerated in the fix dispatch brief.
-    """
 
     def test_bash_dash_c_denies(self):
         _reason(guard.check(_payload('bash -c "touch %s"' % SENTINEL)))
@@ -415,7 +330,6 @@ class TestIndirectionWrapperShapesDeny:
         assert guard.check(_payload("echo hello | xargs cat")) is None
 
     def test_grep_into_xargs_grep_allows(self):
-        # example-market-data-repo F19: the plan-blitz scout's read-only filter.
         cmd = 'grep -rln "def main" coordinator/bin | xargs grep -ln "doc-new\\|doc_new"'
         assert guard.check(_payload(cmd)) is None
 
@@ -456,8 +370,6 @@ class TestIndirectionWrapperShapesDeny:
         assert guard.check(_payload("sh -c 'ls | xargs grep x'")) is None
 
     def test_xargs_echo_verb_allows(self):
-        # coordinator-claude#51 repro: `echo` was absent from the read-only
-        # verb set, so this denied outright before the fix.
         assert guard.check(_payload('echo "a b c" | xargs -n1 echo')) is None
 
     @pytest.mark.parametrize(
@@ -500,14 +412,6 @@ class TestIndirectionWrapperShapesDenyEndToEnd:
 
 
 class TestFormerlyAllowedCreationShapesNowDeny:
-    """2026-07-30 forge-closure fix. A live probe walked straight around
-    the old enumerated-command allowlist (`touch`/`cp`/`mv`/`install`/`ln`/
-    `tee`/`sed -i`/`python -c`/`dd of=`) using tools the allowlist never
-    considered at all: `mkdir`, `curl -o`, `wget -O`, `rsync`, `git checkout
-    HEAD --`, `unzip -d`. Confirmed live via `mkdir
-    .coordinator-doctrine-edit-approved` producing a real, honoured
-    30-minute approval window before this fix. Every shape here must now
-    deny under the default-deny-unless-safe posture."""
 
     def test_mkdir_denies(self):
         _reason(guard.check(_payload("mkdir %s" % SENTINEL)))
@@ -541,10 +445,6 @@ class TestFormerlyAllowedCreationShapesNowDeny:
 
 
 class TestSafeArgv0AllowlistStillWorks:
-    """The narrow safe-op allowlist the inversion carves out: removal (`rm`)
-    and read-only inspection stay ALLOWED even when they name the sentinel
-    directly, and read-only `git` subcommands stay allowed while any
-    write-shaped `git` subcommand denies."""
 
     def test_rm_of_sentinel_allows(self):
         assert guard.check(_payload("rm %s" % SENTINEL)) is None
@@ -566,10 +466,6 @@ class TestSafeArgv0AllowlistStillWorks:
     def test_read_only_inspection_commands_allow(self, cmd_tmpl):
         assert guard.check(_payload(cmd_tmpl % SENTINEL)) is None
 
-    # Driven off the constant, not a hand-copied literal list: the old
-    # hardcoded five omitted `rev-parse` and `describe` (allowlisted but
-    # never exercised) and would have gone on passing while `check-ignore`
-    # was denied. A parametrize over the real set cannot drift from it.
     @pytest.mark.parametrize("sub", sorted(guard._ApprovalSentinelDetector._SAFE_GIT_SUBCOMMANDS))
     def test_read_only_git_subcommands_allow(self, sub):
         assert guard.check(_payload("git %s %s" % (sub, SENTINEL))) is None
@@ -619,19 +515,10 @@ class TestSafeArgv0AllowlistStillWorks:
         assert guard.check(_payload("cat somefile.txt")) is None
 
     def test_redirect_into_sentinel_denies_even_from_safe_argv0(self):
-        # A shell redirect writes the file regardless of which command
-        # precedes it -- `cat` being on the read-only allowlist must not
-        # launder a write via `>`.
         _reason(guard.check(_payload("cat /etc/hostname > %s" % SENTINEL)))
 
 
 class TestIndirectionStillCaughtAfterInversion:
-    """Indirection wrappers around a now-denied creation verb (`mkdir`,
-    rather than the old `touch`) must still deny post-inversion -- the
-    default-deny posture denies these even more readily than before, since
-    the wrapped payload's own text still mentions the sentinel and the
-    wrapper binary (`sh`/`env`/`xargs`) is never on the safe-argv0
-    allowlist."""
 
     def test_sh_dash_c_mkdir_denies(self):
         _reason(guard.check(_payload('sh -c "mkdir %s"' % SENTINEL)))
@@ -652,15 +539,6 @@ class TestIndirectionStillCaughtAfterInversion:
 
 
 class TestVariableTaintClosesRoundTwoForge:
-    """2026-07-30 round-two forge-closure fix. A live probe found that a
-    variable assigned in one segment and dereferenced in a later segment of
-    the SAME command string evaded every rule above, because they are all
-    per-segment with no cross-segment data flow -- while working perfectly
-    when bash actually executes it (bash resolves the variable within the
-    same invocation). Covers the four confirmed-live bypasses plus the
-    taint-propagation shapes (`${VAR}` brace form, double-quoted
-    dereference, `export`, and a multi-segment gap) the fix must also
-    close."""
 
     def test_assign_then_mkdir_denies(self):
         _reason(guard.check(_payload("S=%s; mkdir $S" % SENTINEL)))
@@ -672,8 +550,6 @@ class TestVariableTaintClosesRoundTwoForge:
         _reason(guard.check(_payload("L=%s; ln -s /tmp/x $L" % SENTINEL)))
 
     def test_assign_then_redirect_through_safe_head_denies(self):
-        # `cat` is on the safe-argv0 allowlist -- the redirect target is
-        # what writes the file, not the (safe) head command.
         _reason(guard.check(_payload("S=%s; cat /etc/hostname > $S" % SENTINEL)))
 
     def test_brace_form_dereference_denies(self):
@@ -695,9 +571,6 @@ class TestVariableTaintClosesRoundTwoForge:
         )
 
     def test_untainted_variable_dereference_still_allows(self):
-        # A variable never assigned a value mentioning the sentinel must
-        # not be treated as tainted merely because it is dereferenced next
-        # to a command this guard would otherwise scrutinize.
         assert guard.check(_payload("FOO=bar; mkdir $FOO")) is None
 
     def test_assign_then_mkdir_denied_end_to_end(self):
@@ -712,16 +585,10 @@ class TestVariableTaintClosesRoundTwoForge:
         assert out and '"deny"' in json.dumps(out)
 
     def test_known_open_gap_glob_near_miss_still_allows(self):
-        # Documented in the module docstring's "KNOWN OPEN GAP -- DYNAMIC
         # STRING CONSTRUCTION AND GLOB-SHAPED NEAR-MISSES" block: a purely
-        # lexical matcher cannot statically evaluate a shell glob, so a
-        # single-character-wildcard near-miss of the basename is NOT
-        # detected -- pinned here as a KNOWN gap, not an untested oversight.
         assert guard.check(_payload("touch .coordinator-doctrine-edit-approv?d")) is None
 
     def test_previously_denied_forms_still_deny(self):
-        # Every shape the brief calls out as "already closed" before this
-        # fix must remain denied -- the taint fix must not regress them.
         for cmd in (
             "mkdir %s" % SENTINEL,
             "S=%s mkdir $S" % SENTINEL,
@@ -749,9 +616,6 @@ class TestTransitiveTaintClosesRoundThreeForge:
     module docstring's "KNOWN OPEN GAP" block, not chased into a fix."""
 
     def test_single_hop_chain_denies(self):
-        # A=<sentinel>; B=$A; mkdir $B
-        # shell-doc-ok: the line above transcribes the exact shell payload
-        # under test; it is the case's only statement of what is asserted.
         _reason(
             guard.check(
                 _payload("A=%s; B=$A; mkdir $B" % SENTINEL)
@@ -759,9 +623,6 @@ class TestTransitiveTaintClosesRoundThreeForge:
         )
 
     def test_two_hop_chain_denies(self):
-        # A=<sentinel>; B=$A; C=$B; mkdir $C
-        # shell-doc-ok: the line above transcribes the exact shell payload
-        # under test; it is the case's only statement of what is asserted.
         _reason(
             guard.check(
                 _payload("A=%s; B=$A; C=$B; mkdir $C" % SENTINEL)
@@ -769,7 +630,6 @@ class TestTransitiveTaintClosesRoundThreeForge:
         )
 
     def test_longer_chain_denies(self):
-        # A chain of five hops -- the fixed-point loop must not stop early.
         _reason(
             guard.check(
                 _payload(
@@ -779,8 +639,6 @@ class TestTransitiveTaintClosesRoundThreeForge:
         )
 
     def test_chain_crossing_unrelated_intervening_segment_denies(self):
-        # The chain's second hop is separated from the first by an
-        # unrelated command -- taint must still flow across it.
         _reason(
             guard.check(
                 _payload(
@@ -790,21 +648,12 @@ class TestTransitiveTaintClosesRoundThreeForge:
         )
 
     def test_string_construction_near_miss_is_knowingly_allowed(self):
-        # Documented in the module docstring's "KNOWN OPEN GAP -- DYNAMIC
         # STRING CONSTRUCTION AND GLOB-SHAPED NEAR-MISSES" block, under
         # "VARIABLE-ASSEMBLED BASENAMES": neither `S` nor `S2` is ever
-        # assigned a value containing the sentinel basename as a
-        # contiguous substring -- the basename only becomes complete once
-        # bash concatenates the two fragments at runtime, which is string
-        # construction, not variable chaining, and is explicitly NOT
-        # closed by the transitive-taint fix. Pinned here as a KNOWN gap,
-        # not an untested oversight.
         cmd = 'S=".coordinator-doctrine-edit-"; S2="${S}approved"; mkdir $S2'
         assert guard.check(_payload(cmd)) is None
 
     def test_previously_denied_taint_forms_still_deny(self):
-        # Every shape round two closed must remain denied under the
-        # transitive extension.
         for cmd in (
             "S=%s; mkdir $S" % SENTINEL,
             "S=%s; touch $S" % SENTINEL,
@@ -823,19 +672,6 @@ class TestTransitiveTaintClosesRoundThreeForge:
 
 
 class TestReachableThroughTheDispatchChain:
-    """Guard-level tests are not sufficient for this guard.
-
-    ``guard.check()`` would deny ``cd /tmp && touch
-    .coordinator-doctrine-edit-approved`` from the first commit, yet the
-    same command could be ALLOWED end-to-end if this guard were registered
-    after ``offer-git-c``: that check rewrites ``cd <dir> && git <sub>``
-    into ``git -C <dir> <sub>`` and returns allow+updatedInput, which
-    short-circuits every later guard. This exact bug was found and fixed in
-    ``block_worktree_creation.py`` -- these tests go through
-    ``dispatch.evaluate_payload_json`` so a future reordering that puts a
-    rewrite/offer check ahead of this guard fails loudly here instead of
-    silently disarming the ban.
-    """
 
     @staticmethod
     def _decision(command):
@@ -903,9 +739,6 @@ class TestPowerShellDialect:
         """`Copy-Item` is not in `_SAFE_ARGV0` -- mentioning the sentinel
         anywhere in its tokens denies, same default-deny inversion as the
         bash leg."""
-        # abs-path-ok: a literal PowerShell command-line argument the
-        # detector tokenizes as text -- not a filesystem path this test
-        # resolves or depends on.
         out = guard.check(self._ps_payload("Copy-Item %s C:\\tmp\\x" % SENTINEL))
         assert out is not None
 
@@ -932,12 +765,8 @@ class TestPowerShellDialect:
         assert guard.check(payload) is None
 
     def test_stale_taint_state_not_leaked_from_prior_bash_call(self):
-        """Regression for the module-level singleton `_detector`: a prior
-        bash-dialect call that tainted a variable must not leave
-        `_tainted_vars` populated for a LATER PowerShell-dialect call on the
-        same long-lived detector instance."""
         bash_payload = _payload("S=%s; touch $S" % SENTINEL)
-        assert guard.check(bash_payload) is not None  # bash leg taints S
+        assert guard.check(bash_payload) is not None
 
         ps_out = guard.check(self._ps_payload("git status"))
         assert ps_out is None

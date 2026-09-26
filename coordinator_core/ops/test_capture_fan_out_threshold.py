@@ -31,7 +31,6 @@ class _FakeCompletedProcess:
 
 
 class _FakeRegistry:
-    """In-memory stand-in for the machine-local registry keyed layer."""
 
     def __init__(self, keys: List[str] | None = None):
         self._keys = set(keys or [])
@@ -39,11 +38,7 @@ class _FakeRegistry:
 
     def run(self, argv, **kwargs):
         # The CLI is now RESOLVED to a concrete argv rather than invoked by bare
-        # name — a bare "machine-local" is unrunnable on Windows (extension-less
-        # wrapper -> WinError 193; CreateProcess ignores PATHEXT -> WinError 2).
-        # So the prefix may be ["…/machine-local"], ["…/machine-local.cmd"], or
         # [sys.executable, "…/_machine_local.py"]. Assert the CLI's IDENTITY, not
-        # its spelling, and locate the subcommand rather than fixing its index.
         assert any(
             "machine-local" in os.path.basename(str(a)).lower().replace("_", "-")
             for a in argv
@@ -74,15 +69,6 @@ def _expected_value() -> int:
 
 
 def _patch_registry(monkeypatch, reg: "_FakeRegistry") -> None:
-    """`_key_already_captured` reads `merged_flat_registry()` in-process
-    (2026-08-16 zero-spawn cutover) rather than shelling out to
-    `machine-local keys` -- patch that read directly so `_FakeRegistry`'s
-    `keys` set stays the single source of truth for both the idempotency
-    check and the `machine-local set` write path these tests still assert
-    on. Patching only `subprocess.run` (the pre-cutover contract) leaves the
-    idempotency check reading the REAL on-disk registry, which is exactly
-    the false-green this helper closes.
-    """
     monkeypatch.setattr(mod, "_merged_flat_registry", lambda: dict.fromkeys(reg._keys, ""))
 
 
@@ -163,21 +149,8 @@ def test_missing_machine_local_binary_degrades_to_absent(monkeypatch):
         raise FileNotFoundError("machine-local not found")
 
     # The key-presence probe is an IN-PROCESS registry read since the
-    # 2026-08-16 zero-spawn cutover, so patching `subprocess.run` alone leaves
-    # it reading the operator's REAL machine-local registry -- on any box that
-    # has `fan_out.large_wave_threshold` captured, `capture()` short-circuits
-    # as already-present and never reaches the write this test exists to
-    # exercise. Stub the same seam every other test here stubs, so the
-    # "absent" precondition this test's own name asserts is actually the one
-    # under test rather than an accident of the operator's registry.
     _patch_registry(monkeypatch, _FakeRegistry(keys=[]))
     monkeypatch.setattr(mod.subprocess, "run", _raise)
 
-    # keys-probe degrades to empty -> treated as absent -> attempts a write,
-    # which also raises FileNotFoundError inside capture(); the write call
-    # itself is NOT guarded in the production code (only the keys-probe is),
-    # matching the bash oracle's own asymmetry (only the `keys` read is
-    # wrapped in `|| true`; the `machine-local set` write is unguarded and
-    # was expected to fail loudly if machine-local truly isn't installed).
     with pytest.raises(FileNotFoundError):
         mod.capture(check_only=False)

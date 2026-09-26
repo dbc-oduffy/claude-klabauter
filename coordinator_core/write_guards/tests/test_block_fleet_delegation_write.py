@@ -81,15 +81,11 @@ def _allow(file_path, **kw):
 
 
 def _target_path(monkeypatch, tmp_path):
-    """Point settings_home() at a fresh tmp dir and return the resolved
-    grant-file path under it."""
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     return str(tmp_path / "fleet-delegation.json")
 
 
-# ---------------------------------------------------------------------------
 # Base cases -- unconditional deny (no agent_id gate), all four MATCHERS.
-# ---------------------------------------------------------------------------
 
 
 class TestBaseCases:
@@ -137,8 +133,6 @@ class TestBaseCases:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_sibling_file_in_settings_home_allowed(self, monkeypatch, tmp_path):
-        """Filename-anchored, not directory-anchored: a different file in
-        the SAME settings-home directory is allowed."""
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
         sibling = str(tmp_path / "machine-local" / "some-other-record.json")
         _allow(sibling, cwd=str(tmp_path))
@@ -146,8 +140,6 @@ class TestBaseCases:
     def test_similarly_named_file_outside_settings_home_allowed(
         self, monkeypatch, tmp_path
     ):
-        """Path-anchored, not filename-alone: a same-named file OUTSIDE
-        settings_home() is allowed."""
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
         outside = str(tmp_path / "elsewhere" / "fleet-delegation.json")
         _allow(outside, cwd=str(tmp_path))
@@ -155,12 +147,6 @@ class TestBaseCases:
     def test_non_matcher_tool_name_allowed(self, monkeypatch, tmp_path):
         target = _target_path(monkeypatch, tmp_path)
         _allow(target, tool_name="Read", cwd=str(tmp_path))
-
-
-# ---------------------------------------------------------------------------
-# Traversal and case-fold bypasses -- same shapes pinned for the sibling
-# grant-record guard.
-# ---------------------------------------------------------------------------
 
 
 class TestTraversalAndCaseFoldBypasses:
@@ -186,11 +172,6 @@ class TestTraversalAndCaseFoldBypasses:
     ):
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
         _deny("fleet-delegation.json", cwd=str(tmp_path))
-
-
-# ---------------------------------------------------------------------------
-# Reachable through the auto-discovery dispatcher.
-# ---------------------------------------------------------------------------
 
 
 class TestReachableThroughEngine:

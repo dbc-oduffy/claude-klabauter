@@ -38,8 +38,6 @@ from coordinator_core.cartography.file_index import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -72,12 +70,10 @@ def git_repo_with_untracked(tmp_path: Path) -> Path:
     _git("add", "-A")
     _git("commit", "-m", "seed")
 
-    # Untracked, non-ignored — a fresh input corpus file, staged not committed.
     (root / "coordinator_core" / "fresh.py").write_text("pass\n", encoding="utf-8")
     (root / "state").mkdir()
     (root / "state" / "new.yaml").write_text("k: v\n", encoding="utf-8")
 
-    # gitignored — must stay excluded even with the arm on.
     (root / ".gitignore").write_text("ignored_scratch/\n", encoding="utf-8")
     _git("add", ".gitignore")
     _git("commit", "-m", "add gitignore")
@@ -87,20 +83,10 @@ def git_repo_with_untracked(tmp_path: Path) -> Path:
     return root
 
 
-# ---------------------------------------------------------------------------
-# (a) fails-the-wrong-way-first: default output silently omits untracked
-# ---------------------------------------------------------------------------
-
-
 def test_default_output_omits_untracked_file(git_repo_with_untracked):
     result = build_file_index(git_repo_with_untracked)
     assert "coordinator_core/fresh.py" not in result["index"]
     assert "state/new.yaml" not in result["index"]
-
-
-# ---------------------------------------------------------------------------
-# (b) include_untracked=True folds untracked files in
-# ---------------------------------------------------------------------------
 
 
 def test_include_untracked_true_folds_in_untracked_files(git_repo_with_untracked):
@@ -118,17 +104,11 @@ def test_include_untracked_true_excludes_gitignored(git_repo_with_untracked):
     assert "ignored_scratch/noise.txt" not in result["index"]
 
 
-# ---------------------------------------------------------------------------
-# (c) list_untracked_files
-# ---------------------------------------------------------------------------
-
-
 def test_list_untracked_files_returns_nested_untracked_paths(git_repo_with_untracked):
     untracked = list_untracked_files(git_repo_with_untracked)
     assert "coordinator_core/fresh.py" in untracked
     assert "state/new.yaml" in untracked
     assert "ignored_scratch/noise.txt" not in untracked
-    # Tracked files are not re-listed as untracked.
     assert "README.md" not in untracked
 
 

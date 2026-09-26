@@ -1,11 +1,3 @@
-"""Tests for coordinator_core.ops.resolve_swept_baton (op baton.resolve_swept_in_archive).
-
-Covers: flat cross-repo/archive hit, month-nested archive/handoffs/ hit, mixed
-flat+nested archive/completed hit, search-order precedence, not-found shapes
-(missing basename param, absent repo_root, no match anywhere), raw frontmatter
-pass-through (no vocabulary interpretation, per DR-084), archiving-commit
-resolution via git log, and the AC7 double-invocation idempotency proof.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -16,13 +8,7 @@ import pytest
 from coordinator_core.ops.resolve_swept_baton import _resolve_swept_baton_in_archive
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Declared, not excused: this file spawns real git because the AC7 archiving-commit
-# resolution the module implements genuinely runs `git log` against a real repo --
-# no mock stands in for git's own log/blame plumbing. Each test builds its own
-# tmp_path repo via the `repo` fixture, so mutation (commit history) needs per-test
 # isolation, not a module-scope hoist. The spawn ratchet's `_BASELINE` is
-# shrink-only pre-existing residue and is explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -64,8 +50,6 @@ def repo(tmp_path):
 
 
 def _call(params, repo_root=None):
-    # No pytest-asyncio in this tree — house convention (test_handoff_match.py)
-    # is a bare asyncio.run() wrapper over the async handler.
     return asyncio.run(_resolve_swept_baton_in_archive(params, repo_root=repo_root))
 
 
@@ -118,8 +102,6 @@ def test_mixed_flat_and_nested_completed_dir(repo):
 
 
 def test_search_order_prefers_cross_repo_archive_first(repo):
-    # Same basename present in both cross-repo/archive and archive/handoffs —
-    # the fixed search order must resolve to cross-repo/archive/ first.
     cra = repo / "cross-repo" / "archive"
     cra.mkdir(parents=True)
     ah = repo / "archive" / "handoffs"
@@ -135,8 +117,6 @@ def test_search_order_prefers_cross_repo_archive_first(repo):
 
 
 def test_bare_slug_resolves_to_md(repo):
-    """2026-07-28 defect fix — a literal `rglob(basename)` never matches
-    `<slug>.md` for a bare (extensionless) basename."""
     archive_dir = repo / "archive" / "handoffs"
     archive_dir.mkdir(parents=True)
     baton = archive_dir / "2026-07-25-triage-red-tests.md"
@@ -161,10 +141,6 @@ def test_bare_slug_not_found_stays_not_found(repo):
 
 
 def test_bare_slug_same_dir_collision_prefers_extensionless(repo):
-    """Finding 4 (2026-07-28 review): a same-dir collision between an
-    extensionless file and its `.md` sibling deterministically prefers the
-    extensionless form, because its path string is a strict prefix of the
-    `.md` sibling's and always sorts first."""
     archive_dir = repo / "archive" / "completed"
     archive_dir.mkdir(parents=True)
     extensionless = archive_dir / "dup-slug"
@@ -208,7 +184,6 @@ def test_malformed_frontmatter_degrades_to_empty_dict(repo):
     archive_dir = repo / "archive" / "completed"
     archive_dir.mkdir(parents=True)
     baton = archive_dir / "broken.md"
-    # Unclosed frontmatter fence — no second "---" line.
     baton.write_text("---\ntitle: broken\nbody without closing fence\n", encoding="utf-8")
     _commit_all(repo, "broken frontmatter")
 
@@ -219,8 +194,6 @@ def test_malformed_frontmatter_degrades_to_empty_dict(repo):
 
 
 def test_double_invocation_identical_result(repo):
-    """AC7 idempotency proof: pure read — second call with identical inputs
-    returns the identical documented shape."""
     archive_dir = repo / "cross-repo" / "archive"
     archive_dir.mkdir(parents=True)
     baton = archive_dir / "idempotent.md"
@@ -236,9 +209,6 @@ def test_double_invocation_identical_result(repo):
 
 
 def test_archiving_commit_git_call_carries_hardening_kwargs(repo, monkeypatch):
-    """The one subprocess call in this
-    module was the odd one out relative to every sibling git-wrapper in
-    this wave (missing timeout/creationflags/stdin hardening)."""
     archive_dir = repo / "cross-repo" / "archive"
     archive_dir.mkdir(parents=True)
     baton = archive_dir / "hardening.md"

@@ -59,22 +59,12 @@ from coordinator_core.session.declared_writes import declare_write
 
 _PROG = "ensure-vscode-readonly"
 
-# Generator-provenance: merges guard keys into <--root>/.vscode/settings.json
-# for whatever repo root the caller passes -- a caller-supplied target repo,
-# not a fixed claude-klabauter path.
 GENERATES = []
 
 GUARD_KEYS: dict = {}
 
 
 def _strip_jsonc(text: str) -> str:
-    """Strip // and /* */ comments outside string literals, then drop trailing commas.
-
-    Direct line-for-line port of the bash oracle's inline `stripJsonc` JS helper —
-    a small hand-rolled scanner (not a general JSON5 parser), tracking single-
-    quote/double-quote string state and backslash-escapes to avoid stripping
-    comment-like sequences that appear inside string values.
-    """
     out: List[str] = []
     i = 0
     n = len(text)
@@ -118,11 +108,6 @@ def _strip_jsonc(text: str) -> str:
 
 
 def _merge_settings(settings_path: Path) -> Tuple[int, str]:
-    """Perform the idempotent additive merge. Returns (exit_code, stdout_or_empty).
-
-    stderr diagnostics are written directly (not returned) to mirror the bash
-    oracle's `process.stderr.write` calls at the exact points they fire.
-    """
     raw: str | None
     try:
         raw = settings_path.read_text(encoding="utf-8")
@@ -179,7 +164,6 @@ def _merge_settings(settings_path: Path) -> Tuple[int, str]:
     try:
         tmp.write_text(out_str, encoding="utf-8", newline="\n")
         tmp.replace(settings_path)
-        # DR-276: declared AFTER the write lands, never before — the contract
         # is a report of what was ACTUALLY written, not of an intended surface.
         declare_write(settings_path)
     except OSError as exc:
@@ -199,7 +183,6 @@ def _merge_settings(settings_path: Path) -> Tuple[int, str]:
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: `ensure-vscode-readonly [--root <repo-root>]` (default: cwd)."""
     root = "."
     i = 0
     while i < len(argv):

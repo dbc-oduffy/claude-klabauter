@@ -82,18 +82,11 @@ from typing import Any, Mapping
 
 from coordinator_core.win_portability import no_console_creationflags
 
-#: Mirrors (does not call) `delete_guard.resolve_realized_by`'s shape dispatch:
-#: lowercase first, then hex-only, length 7-40. See module docstring for why
-#: that helper's own spawn is not reused.
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
-#: Bounded well under memo.transition's op-level budget (mirrors dag.py's
 #: single bounded git-log read, `_EVER_TRACKED_CACHE` leg: timeout=3).
 _GIT_TIMEOUT_S = 3.0
 
-#: Six closed verdicts, first-match precedence order (AC2). Never widened
-#: without a spec change -- ``memo_transition.py`` (C2) and
-#: ``archive_stamp.py`` (C3) both branch on membership in this exact set.
 VERDICTS = (
     "no-declared-surface",
     "unresolved-sha",
@@ -105,10 +98,6 @@ VERDICTS = (
 
 
 def _normalize_surface_entry(raw: Any) -> str:
-    """Normalize one declared-surface entry per AC1: strip backticks, drop
-    any text after the first space, convert backslashes to forward slashes,
-    drop a trailing ``::symbol`` suffix, strip a leading ``./`` and a
-    trailing ``/``."""
     entry = str(raw).strip()
     entry = entry.split(" ", 1)[0]
     entry = entry.strip("`")
@@ -121,13 +110,6 @@ def _normalize_surface_entry(raw: Any) -> str:
 
 
 def declared_surface(frontmatter: Mapping[str, Any]) -> list[str]:
-    """Extract the declared surface from a memo's frontmatter (AC1).
-
-    Reads ``scoped_to.artifact`` (string or list) first; if that key is
-    absent or empty, falls back to a top-level ``surface:`` (scalar or
-    list). Returns ``[]`` when neither is present. Every entry is normalized
-    per `_normalize_surface_entry`.
-    """
     raw: Any = None
     scoped_to = frontmatter.get("scoped_to")
     if isinstance(scoped_to, Mapping):
@@ -145,17 +127,6 @@ def declared_surface(frontmatter: Mapping[str, Any]) -> list[str]:
 
 
 def _touched_paths(sha: str, git_root: Path) -> tuple[list[str] | None, str | None]:
-    """One-spawn touched-path read (AC3).
-
-    Returns ``(paths, None)`` on a resolved commit (``paths`` may be empty
-    for a genuinely empty/root commit -- that is a real ``[]``, distinct
-    from the ``None`` this function returns when the SHA does not resolve
-    to a commit at all, is ambiguous, or names a tree/blob object).
-    Returns ``(None, "not-a-commit-here")`` when git ran but could not
-    resolve the peeled SHA to a commit. Returns ``(None, "advisory-failed")``
-    on any other failure (timeout, spawn error, unexpected output) -- never
-    raises.
-    """
     try:
         result = subprocess.run(
             [
@@ -178,9 +149,6 @@ def _touched_paths(sha: str, git_root: Path) -> tuple[list[str] | None, str | No
 
 
 def _declared_matches_touched(declared: str, touched_paths: list[str]) -> bool:
-    """True if `declared` is realized by any of `touched_paths`: an exact
-    match, a path under `declared` as a directory, or `declared` as a
-    touched path's extensionless stem (AC2's `ok` clause)."""
     dir_prefix = declared.rstrip("/") + "/"
     for touched in touched_paths:
         if touched == declared:
@@ -194,9 +162,6 @@ def _declared_matches_touched(declared: str, touched_paths: list[str]) -> bool:
 
 
 def _declared_path_exists_in_tree(declared: list[str], git_root: Path) -> bool:
-    """Working-tree-only existence probe behind `foreign-surface` (AC2/AC8):
-    a declared entry as a file, a directory, or a `<path>.*` stem. Never
-    spawns."""
     for entry in declared:
         candidate = git_root / entry
         if candidate.exists():
@@ -207,12 +172,6 @@ def _declared_path_exists_in_tree(declared: list[str], git_root: Path) -> bool:
 
 
 def _all_paper(touched_paths: list[str]) -> bool:
-    """True (AC2's `paper-realization` clause) when every touched path is
-    bookkeeping or planning-artifact-shaped, the empty set included. Imports
-    `coordinator_core.coverage` function-locally (AC3) -- never at module
-    level, because that ~1765-line module's cold import (3.1-8.5ms, census/
-    AC9) would land on every stamp call, including the majority that never
-    reach this branch."""
     if not touched_paths:
         return True
     from coordinator_core.coverage import (

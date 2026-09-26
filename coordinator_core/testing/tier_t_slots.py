@@ -113,28 +113,12 @@ _LOG = logging.getLogger(__name__)
 
 _SLOTS_DIRNAME = "tier-t-slots"
 
-#: Ceiling for a slot whose holder cannot be shown alive, and — unlike the
-#: suite mutex, which splits its TTL because an honest suite legitimately runs
-#: for hours — for a live holder too. A scoped run that has held a slot for
-#: fifteen minutes is not a slow scoped run; the tier is defined by naming
-#: individual files and node ids. Reclaiming at one flat ceiling keeps a wedged
-#: runner from consuming a slot for the rest of the session, which matters far
-#: more here than at the suite mutex: there a bad reclaim lets a second suite
-#: start, while here the whole point is that K runs are already concurrent and
-#: safe.
 SLOT_STALE_TTL_SECS: float = 15 * 60.0
 
 _OWNER_PREFIX = "tier-t"
 
 
 def slot_cap() -> int:
-    """Return K — how many scoped runs may execute at once on this box.
-
-    Resolved fresh on every call (never cached): the RAM term reads *available*
-    memory, so K falls as the box fills and recovers as it drains. Falls back
-    to a hard floor of 1 if the derivation raises — a box that cannot be
-    measured admits one scoped run at a time, which is slow but never harmful.
-    """
     try:
         from coordinator_core.install.derive_worker_cap import derive_cap
 
@@ -154,7 +138,6 @@ def slots_dir() -> Path:
 
 
 def slot_path(index: int) -> Path:
-    """Return the lock-dir path for slot ``index``."""
     return slots_dir() / f"slot-{index}.lock"
 
 
@@ -181,12 +164,6 @@ def _holder_of(path: Path) -> Optional[dict]:
 
 
 def occupancy() -> Tuple[int, int, List[dict]]:
-    """Return ``(taken, cap, holders)`` for the current instant. Never raises.
-
-    ``holders`` carries one metadata dict per occupied slot, in slot order, so
-    a caller denying on a full semaphore can name who is holding it rather than
-    reporting a bare count.
-    """
     cap = slot_cap()
     holders: List[dict] = []
     try:
@@ -200,23 +177,15 @@ def occupancy() -> Tuple[int, int, List[dict]]:
 
 
 def free_slots() -> int:
-    """Return how many scoped runs could start right now. Never raises."""
     taken, cap, _ = occupancy()
     return max(0, cap - taken)
 
 
 def owner_id() -> str:
-    """Owner id for the calling process, reusing the mutex's session-id resolution."""
     return suite_mutex.mutex_owner(_OWNER_PREFIX)
 
 
 class Slot(NamedTuple):
-    """One held slot: its index, and the unique lease token that owns it.
-
-    ``token`` — not ``owner`` — is what is written into the lock dir, and it is
-    what ``release_slot`` must be handed back. See ``acquire_slot`` for why the
-    two are deliberately different strings.
-    """
 
     index: int
     token: str
@@ -225,32 +194,6 @@ class Slot(NamedTuple):
 
 def acquire_slot(owner: str, cmd: str, timeout: float = 0.0, *,
                  pid: Optional[int] = None) -> Optional[Slot]:
-    """Take one slot. Returns a ``Slot``, or None if all K are occupied.
-
-    ``timeout=0`` (the default) is non-blocking: one sweep over the slots, then
-    None. ``timeout>0`` re-sweeps with backoff until the deadline. Failure is
-    always a None return, never an exception.
-
-    ``pid`` records who is judged for liveness and follows ``suite_mutex.acquire``'s
-    contract exactly: it defaults to this process, and a short-lived acquirer
-    that spawns the runner elsewhere MUST pass the runner's PID or its slot is
-    reclaimed the moment it exits.
-
-    WHY A LEASE TOKEN RATHER THAN ``owner``, and why this is not ceremony:
-    ``suite_mutex.acquire`` treats a lock already held by the SAME owner string
-    as a no-op success, returning True without taking anything. That shallow
-    re-entrancy is right for a mutex — one session runs one suite — and is
-    exactly wrong here, where one session may legitimately hold several slots
-    at once. Passing the caller's ``owner`` straight through made the second
-    acquisition return the FIRST slot's index while occupying one slot, so K
-    concurrent runs from one session consumed one slot and the semaphore
-    silently stopped counting. It was caught by a test asserting two
-    acquisitions differ; it would not have been caught by any test of the
-    bound itself, because the bound still reads K. Each acquisition therefore
-    mints ``<owner>#<uuid4>``, which no other acquisition can collide with, and
-    the human-readable ``owner`` survives as the token's prefix so a deny can
-    still name the session holding a slot.
-    """
     import time
 
     deadline = time.monotonic() + max(0.0, timeout)
@@ -263,8 +206,6 @@ def acquire_slot(owner: str, cmd: str, timeout: float = 0.0, *,
                 path.parent.mkdir(parents=True, exist_ok=True)
             except OSError:
                 pass
-            # Probe for staleness first so a wedged predecessor's slot is
-            # reclaimed and then won here, rather than skipped for its TTL.
             if _holder_of(path) is not None:
                 continue
             token = f"{owner}#{uuid.uuid4().hex}"
@@ -282,7 +223,6 @@ def acquire_slot(owner: str, cmd: str, timeout: float = 0.0, *,
 
 
 def release_slot(slot: Slot) -> None:
-    """Release the slot this lease holds. Logged no-op if it no longer owns it."""
     try:
         suite_mutex.release(slot.token, path=slot_path(slot.index))
     except Exception as exc:
@@ -292,12 +232,6 @@ def release_slot(slot: Slot) -> None:
 @contextmanager
 def held_slot(owner: str, cmd: str, timeout: float = 0.0, *,
               pid: Optional[int] = None) -> Iterator[Optional[Slot]]:
-    """Hold a slot for the block; yields the ``Slot`` or None if none was free.
-
-    Releases on normal exit and on exception alike, and only when this call
-    actually acquired — a None yield releases nothing, so a failed acquire can
-    never free someone else's slot.
-    """
     slot = acquire_slot(owner, cmd, timeout, pid=pid)
     try:
         yield slot

@@ -1,61 +1,3 @@
-"""
-coordinator_core.hooks.subagent_zero_tool_use_resolve — Stage 3 (pull/poll resolve) op.
-
-Purpose: Make the zero-tool-use verdict for ONE dispatched agent resolvable at a
-PostToolUse-Agent moment we control, instead of depending on the `SubagentStop` push
-event having reached the caller. `SubagentStop` is an OPEN, upstream-declined harness
-bug (GH #25147, #33049 — both closed as not-planned) that silently stops firing on
-some builds; when it does not fire, Stage 1 (`hooks.subagent_zero_tool_use`) never
-writes a record, and any consumer that only ever waits on that push is left reporting
-a blanket UNKNOWN for every agent in the session, whether or not Stage 1 actually ran
-for that particular dispatch.
-
-This op does not change how Stage 1 writes or Stage 2 reads. It adds a third read:
-given one `agent_id`, poll the SAME per-session store Stage 1 writes and Stage 2
-surfaces, at a moment the caller controls (e.g. the existing PostToolUse Agent-tool
-hook, which already fires reliably and already carries `agent_id` —
-see hooks.track_dispatched_agents / hooks.agent_completion_log). Resolving per-agent
-rather than dumping the whole store closes the gap for every agent whose Stage-1
-write DID land (SubagentStop is not pinned as the sole trigger; DoE's own spike found
-it fires for most backgrounded dispatches, just not guaranteed to), and gives a loud,
-specific, actionable reason for the remainder — never a bare "UNKNOWN".
-
-Naming note: the underlying store (written by hooks.subagent_zero_tool_use) holds one
-record per verified tool-use count, not only zero — see that module's docstring,
-"Naming note". This op is the one place in the trio that already does the
-`tool_use_count == 0` filtering a caller needs; hooks.subagent_zero_tool_use_surface
-deliberately does not (it returns the raw per-session record list unfiltered).
-
-Verdicts (pinned):
-    "did-work"       — a record for this agent_id exists with tool_use_count > 0.
-    "zero-tool-use"  — a record for this agent_id exists with tool_use_count == 0.
-    "unknown"        — no resolvable record; `reason` always names the store path
-                        checked and the specific cause (missing input, unreadable
-                        store, no record for this agent, or a malformed count field).
-
-Negative-spec:
-    Does NOT write anything — pure read/compute, same posture as
-    hooks.subagent_zero_tool_use_surface. No new store, no new schema; reads the
-    identical `<git_common_dir>/coordinator-sessions/<session_id>/
-    subagent-zero-tool-use.jsonl` file Stage 1 already writes.
-
-    Does NOT perform "dispatched but no record ever will arrive" reconciliation across
-    the whole session — that stays DoE-side per the cross-repo contract. This op only
-    answers "what does the store say about THIS agent_id, right now."
-
-    Does NOT retry, wait, or poll on a timer — a single point-in-time read. If Stage 1
-    has not written yet when this is called, the caller gets an honest "unknown, not
-    yet recorded" rather than a busy-loop; calling again later (the same PostToolUse
-    hook re-firing is not expected, but a manual re-check is cheap and safe) is fine
-    because this is a pure read with no state mutation.
-
-    Design-as-offers: `reason` always leads with the next action ("redispatch <id>",
-    "verify the deliverable manually", "no action needed") rather than only naming
-    the failure.
-
-Spec backlink: cross-repo/inbox/2026-07-25-doe-claude-em-zero-tool-use-detection-verdict-viable.md
-    (constraint 3 — "do not pin SubagentStop as the sole trigger")
-"""
 
 from __future__ import annotations
 
@@ -82,13 +24,6 @@ def _verdict(kind: str, agent_id: str, reason: str, *, tool_use_count=None, stor
 
 
 def _resolve_store_sync(store_path: str, agent_id: str) -> dict:
-    """Read the per-session store and resolve the verdict for one agent_id (blocking I/O).
-
-    Called exclusively via asyncio.to_thread() — must not be awaited directly.
-    Mirrors hooks.subagent_zero_tool_use_surface's parse tolerance (malformed lines
-    and foreign-`kind` lines are skipped, never fatal), but resolves to a single
-    per-agent verdict instead of returning the whole store.
-    """
     if not os.path.exists(store_path):
         return _verdict(
             "unknown",
@@ -111,9 +46,6 @@ def _resolve_store_sync(store_path: str, agent_id: str) -> dict:
             store_path=store_path,
         )
 
-    # Last matching record wins — Stage 1 writes at most one record per verified
-    # dispatch, but taking the last (not first) is defensive against an agent_id
-    # being reused by a later redispatch within the same session.
     matched: dict | None = None
     other_agent_records = 0
     for line in lines:
@@ -123,7 +55,7 @@ def _resolve_store_sync(store_path: str, agent_id: str) -> dict:
         try:
             parsed = json.loads(line)
         except (json.JSONDecodeError, ValueError):
-            continue  # per-line record parse; one malformed JSONL line must not abort the scan
+            continue
         if not isinstance(parsed, dict):
             continue
         if parsed.get("kind") != _RECORD_KIND:

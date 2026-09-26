@@ -37,13 +37,10 @@ def _combined_stdout(names: "tuple[str, ...]") -> str:
 
 class TestCheckPosixSpawnBatch:
     def test_process_count_does_not_grow_with_the_set(self, monkeypatch):
-        """One `subprocess.run` call for the whole `names` tuple, whatever N is --
-        never one spawn per entrypoint."""
         call_count = {"n": 0}
 
         def _fake_run(args, **kwargs):
             call_count["n"] += 1
-            # The single combined script must reference every requested name.
             script = args[-1]
             for name in _NAMES_UNDER_TEST:
                 assert name in script

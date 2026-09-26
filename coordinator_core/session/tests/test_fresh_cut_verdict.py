@@ -1,12 +1,3 @@
-"""C7 — the narrowed fresh-cut predicate, and what must STILL refuse.
-
-These tests exist to fail if the enforcement is removed. The second class in
-particular is the one that fails if someone later "simplifies" the narrowing
-back to ``session_ensure_branch``'s wider ceremony-time admission set.
-
-Spec backlink: DoE-claude
-``docs/plans/2026-08-18-enforce-day-branch-cut-tree-invariant.md`` chunk C7.
-"""
 
 from __future__ import annotations
 
@@ -50,9 +41,6 @@ class TestNarrowedFreshCut:
 
     @pytest.mark.parametrize("current_branch", [None, "", "work/machine-a/2026-08-18"])
     def test_refuses_off_main(self, tmp_path, current_branch):
-        """A detached HEAD (current_branch "" / None) and a zero-ahead non-span
-        branch are NOT "on main" in the PM's words, and the boot path must not
-        cut off them. Pins the admission set at `main` ONLY."""
         repo = _repo_with_live_peer(tmp_path)
         v = worktree_safety.branch_mutation_verdict(
             cwd=str(repo),
@@ -63,9 +51,6 @@ class TestNarrowedFreshCut:
         assert v.outcome == "refused"
 
     def test_unknown_is_not_relaxed_by_the_narrowing(self, tmp_path, monkeypatch):
-        """`unknown` (identity/liveness unresolvable) stays fail-closed even for
-        the content-neutral kind. The narrowing relaxes only the
-        affirmatively-observed-peers case."""
         repo = _make_repo(tmp_path)
 
         def _boom(cwd=None):
@@ -95,9 +80,6 @@ class TestNarrowedFreshCut:
 
 
 class TestHazardousKindsStillRefuse:
-    """The over-application test. Behaviour PER KIND, not the continued
-    existence of two functions — a test defending a seam decays; a test
-    asserting a contract does not."""
 
     @pytest.mark.parametrize("operation", _HAZARDOUS)
     def test_refused_under_peers_even_on_main(self, tmp_path, operation):

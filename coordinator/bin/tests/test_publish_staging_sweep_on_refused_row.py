@@ -111,11 +111,7 @@ def test_source_absent_refusal_still_sweeps_prior_run_orphan(tmp_path):
 
 
 def test_dry_run_reports_but_does_not_remove_stale_orphan(tmp_path):
-    # Finding 1, s3-sweep-and-dirty review: the C3 move made the sweep
     # unconditional with respect to ROW DISPOSITION (this file's whole
-    # point), but a prior version of that move also escaped the `dry_run`
-    # gate every other write in publish.py obeys — under --dry-run the
-    # orphan must survive, and the would-sweep line must still be reported.
     target = _base_target(tmp_path, source_exists=False)
     orphan = _seed_stale_orphan(target.dest_dir)
     assert orphan.exists()
@@ -144,9 +140,6 @@ def test_dry_run_reports_but_does_not_remove_stale_orphan(tmp_path):
 
 
 def test_gate_declined_refusal_still_sweeps_prior_run_orphan(tmp_path, monkeypatch):
-    # Per the brief: the pre-sync-gate-declined path is the LIVE driver of
-    # this defect — --delta is unconditionally dead on mirror rows and is
-    # deliberately not used here.
     target = _base_target(tmp_path, source_exists=True)
     orphan = _seed_stale_orphan(target.dest_dir)
     assert orphan.exists()

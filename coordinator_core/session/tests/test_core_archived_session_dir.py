@@ -1,10 +1,3 @@
-"""Tests for ``core.archived_session_dir`` -- the anchored ``.archive/``
-lookup lifted out of ``claims._dead_holder_record_dir`` (C1a).
-
-Negative-spec: an unanchored ``startswith(sid + "-")`` test would match a
-sid that is a strict string-prefix of another sid's archive entry -- this
-module pins that it does NOT.
-"""
 
 from __future__ import annotations
 
@@ -79,9 +72,6 @@ def test_multiple_dated_entries_resolve_newest_first(tmp_path):
 
 
 def test_dead_holder_record_dir_unchanged_live_tree_wins(tmp_path):
-    """C1b's repoint through C1a's own test file: `_dead_holder_record_dir`
-    must still prefer the live tree over `.archive/` -- the shared
-    characterisation these two halves must not break between them."""
     from coordinator_core.session import claims
 
     repo = _repo(tmp_path)

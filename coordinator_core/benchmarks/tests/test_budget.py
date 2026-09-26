@@ -77,7 +77,6 @@ def test_unknown_tier_raises_keyerror():
     try:
         resolve_budget("some.op", "NOT_A_TIER", manifest=manifest)
     except KeyError:
-        # Expected -- the else-branch below is the actual assertion.
         pass
     else:
         raise AssertionError("expected KeyError for unresolvable op_class tier")
@@ -105,13 +104,6 @@ def test_provisional_flags_match_phase0_measurement_state():
 
 
 def test_measured_overrides_carry_no_provisional_marker():
-    """No override carries `_provisional`. An override is either authored by
-    C9's Phase-0 measurement, or -- per `budget.py`'s module docstring, dated
-    2026-09-24 -- declares shape-only timing in its `_rationale` (its
-    `target_ms`/`tolerance` copy the tier default only to satisfy
-    `_validated_budget`'s required shape; its `_rationale` says so). Neither
-    class is `_provisional`. Asserts the absence (the negative case Slice-A
-    F7 flagged), not just the positive one."""
     manifest = load_manifest()
     for op_name, entry in manifest.get("overrides", {}).items():
         assert "_provisional" not in entry, (

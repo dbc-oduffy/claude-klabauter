@@ -71,33 +71,11 @@ __all__ = [
     "freshness_commit_delta",
 ]
 
-#: Matches the same convention-marker commit-message shapes
-#: `routine_signals.py`'s `collect()` already uses for `docs`/`bug` cadence — restated
-#: here (not imported) because this op runs its OWN single git-log read rather than
-#: sharing `_commits_since_last_batch`'s call (see module docstring). Keep these two
-#: patterns byte-identical to `routine_signals.py`'s literals if either changes; they
-#: are two independent reads of the same convention and must agree.
 _DOC_PATTERN = re.compile("update-docs")
 _BUG_SWEEP_PATTERN = re.compile("bug-sweep|bug_sweep")
 
-#: PATH-scoped signal for `test_commit_delta` — the honest derivation the staff-eng F1
-#: review names (module docstring): there is no commit-message convention for "tests
-#: were last touched", so this matches a CHANGED FILE PATH instead of a message.
-#: Fires on: a path with a `test`/`tests` directory component anywhere in it, a
-#: filename beginning `test_`, or a filename ending `_test.<ext>` — the three
-#: cross-ecosystem test-naming conventions this repo and its siblings actually use
-#: (`coordinator_core/ops/tests/test_*.py`, a bare `test_*.py`, a `*_test.py`/
-#: `*_test.js` sibling-repo shape). Matched against forward-slash paths only —
-#: `git log --name-only` always emits `/`-separated paths regardless of host OS.
 _TEST_PATH_PATTERN = re.compile(r"(^|/)tests?(/|$)|(^|/)test_[^/]*$|[^/]*_test\.[^./]+$")
 
-#: Record separators for the single `git log --name-only` read this op issues.
-#: STX (\x02) opens each commit record, US (\x1f) separates hash from message body,
-#: ETX (\x03) closes the header and hands off to the name-only file list git appends
-#: after the format text for that commit. Chosen (over the NUL sentinel
-#: `_commits_since_last_batch` uses) because `--name-only`'s file list is newline-
-#: delimited and must stay distinguishable from a NUL-joined message body without a
-#: second parse pass.
 _RECORD_START = "\x02"
 _HEADER_SEP = "\x1f"
 _HEADER_END = "\x03"

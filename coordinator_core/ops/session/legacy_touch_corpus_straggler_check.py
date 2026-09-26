@@ -70,8 +70,6 @@ _ARCHIVE_COMPONENT = ".archive"
 
 
 class StragglerReport(NamedTuple):
-    """One drained dir's verdict. ``missing`` is the canonicalized paths whose
-    legacy last-state has no counterpart in the jsonl family."""
 
     directory: str
     missing: List[str]
@@ -88,8 +86,6 @@ def _is_migratable(key: str) -> bool:
 
 
 def _legacy_last_state(legacy_path: str) -> Dict[str, str]:
-    """Last-verb-wins over one legacy file, keyed by canonical path. Unreadable
-    file yields an empty map — this module reports, it does not raise."""
     out: Dict[str, str] = {}
     try:
         with open(legacy_path, encoding="utf-8", errors="replace") as fh:
@@ -110,8 +106,6 @@ def _legacy_last_state(legacy_path: str) -> Dict[str, str]:
 
 
 def scan(sessions_base: str) -> Tuple[int, List[StragglerReport]]:
-    """Return ``(drained_dirs_examined, reports)``; ``reports`` holds only dirs
-    with at least one straggler."""
     examined = 0
     reports: List[StragglerReport] = []
 

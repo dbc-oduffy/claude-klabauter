@@ -1,17 +1,3 @@
-"""A publish must not kill the warm server's in-flight requests.
-
-Pins the two defects behind state/bug-backlog/2026-08-29-the-publish-swap-
-races-the-warm-servers-running-from-the-tree-it-replaces.yaml (macOS half):
-
-  - after `close_listener` a POSIX acceptor dropped one late caller and
-    exited, so every later caller sat unanswered in the kernel backlog until
-    the drain ceiling ended the process;
-  - a drain polled only live connections, so a pool task whose connection
-    had already given up was killed mid-op at exit.
-
-Not `cadence`-marked, unlike `test_server_posix.py`: these are regression
-pins for the fast tier. Threads and a unix socket only; no process spawns.
-"""
 
 from __future__ import annotations
 
@@ -44,8 +30,6 @@ def _reset_shutdown_guard():
 
 @pytest.fixture()
 def short_tmp_path():
-    """The suite-root warm-runtime base (short enough for `sun_path`), used
-    as a stamped engine root -- same shape as `test_server_posix.py`'s."""
     base = Path(os.environ[breadcrumb.RUNTIME_BASE_ENV])
     stamp = base / "coordinator_core" / "_engine_stamp"
     stamp.parent.mkdir(parents=True, exist_ok=True)
@@ -102,7 +86,7 @@ def test_acceptor_refuses_and_keeps_accepting_after_close_listener(monkeypatch) 
     ctx._acceptor_loop(listener)
 
     assert refused == late
-    assert listener.accept_calls == len(late) + 1  # stops only when the socket closes
+    assert listener.accept_calls == len(late) + 1
     assert ctx._queue.qsize() == 0
     assert ctx.in_flight() == 0
 
@@ -127,7 +111,7 @@ def test_a_pool_task_outliving_its_connection_still_holds_the_drain(monkeypatch)
 
     response = ctx._pool_dispatch({"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}})
 
-    assert "error" in response  # the connection got its timeout envelope
+    assert "error" in response
     assert ctx.in_flight() == 0
     assert ctx.drain_outstanding() == 1
     running.set_result({"jsonrpc": "2.0", "id": 1, "result": "late"})
@@ -135,8 +119,6 @@ def test_a_pool_task_outliving_its_connection_still_holds_the_drain(monkeypatch)
 
 
 def test_every_shutdown_trigger_drains_on_drain_outstanding(monkeypatch) -> None:
-    """Both of this server's shutdown triggers -- skew eviction and idle
-    demotion -- must poll `drain_outstanding`, not bare `in_flight`."""
     seen = {}
     monkeypatch.setattr(
         lifecycle, "drain_and_exit", lambda **kw: seen.setdefault("skew", kw["in_flight_count"])
@@ -152,8 +134,6 @@ def test_every_shutdown_trigger_drains_on_drain_outstanding(monkeypatch) -> None
     ctx._idle_tick()
 
     assert seen == {"skew": ctx.drain_outstanding, "idle": ctx.drain_outstanding}
-
-
 
 
 @posix_only

@@ -1,8 +1,3 @@
-"""Tests for ``coordinator_core.ops.review_mint.roster.parse_stages``.
-
-Spec: ``docs/plans/2026-08-19-review-mints-its-own-gated-workflow.md`` task C1.
-Pure unit tests on inline fixture dicts — no file I/O, no sibling clone.
-"""
 
 import pytest
 
@@ -90,8 +85,6 @@ def test_v3_standard_gate_stage_flagged_and_ordered():
 
 
 def test_v3_full_gate_stage_mixes_blocking_and_non_blocking_agent():
-    # docs-checker maps to null (cannot block) but rides the gate stage for
-    # ordering alongside prior-art-checker, which can.
     stages = parse_stages(_v3_fragment(), "full")
     gate_stage = stages[0]
     assert gate_stage.gate is True
@@ -185,8 +178,6 @@ def test_gate_stage_with_no_blocking_agent_refuses():
 
 
 def test_gate_stage_with_no_blocking_verdicts_map_refuses():
-    # A pre-v3 (schema_version 2) fragment with a staged tier but no
-    # top-level blocking_verdicts map: no agent can ever be shown to block.
     fragment = {
         "schema_version": 2,
         "tiers": {
@@ -205,9 +196,6 @@ def test_gate_stage_with_no_blocking_verdicts_map_refuses():
 
 
 def test_parallel_key_is_never_read():
-    # A stray 'parallel' key must not influence composition-relevant output;
-    # this parser does not even look at it. Arity alone will decide
-    # serial-vs-parallel downstream (C2), never a flag.
     fragment = {
         "tiers": {
             "lightweight": {
@@ -233,12 +221,6 @@ def test_parallel_key_is_never_read():
 
 
 def _v4_fragment() -> dict:
-    """schema_version 4: two stages, each naming the signal bucket it absorbs.
-
-    The named stage already carries two personas, so the `full` tier's cap of 3
-    admits exactly one more and the standard tier's cap of 2 admits none —
-    which is what makes the same fragment discriminate the two tiers below.
-    """
     return {
         "schema": "review-roster-fragment",
         "schema_version": 4,
@@ -279,9 +261,6 @@ def _v4_fragment() -> dict:
 
 
 def test_accepts_signals_routes_each_bucket_to_its_own_stage():
-    """A signal lands on the stage whose `accepts_signals` names its bucket,
-    and nowhere else. A bucket no stage accepts is dropped silently — the
-    fragment decides which buckets exist, not the caller."""
     stages = parse_stages(
         _v4_fragment(),
         "full",
@@ -307,9 +286,6 @@ def test_accepts_signals_routes_each_bucket_to_its_own_stage():
 
 
 def test_accepts_signals_honours_the_tier_persona_cap():
-    """The same signal is admitted on `full` (cap 3) and refused on `standard`
-    (cap 2), because the fragment's gated stage already carries two personas.
-    A non-persona signal is never capped."""
     signals = {
         "named": ["coordinator:eng-director", "coordinator:docs-checker"],
     }
@@ -335,8 +311,6 @@ def test_a_signal_already_on_the_stage_is_not_duplicated():
 
 
 def test_omitted_signals_leave_a_v4_fragment_untouched():
-    """`None` is the ordinary call shape for every caller below v4; it must not
-    be read as "no signals matched" in some way that alters the stages."""
     assert parse_stages(_v4_fragment(), "full") == parse_stages(
         _v4_fragment(), "full", signals={}
     )

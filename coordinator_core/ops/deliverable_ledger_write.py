@@ -73,13 +73,8 @@ from coordinator_core.ops.deliverable_equivalence import (
 
 _EQUIVALENCE_ARTIFACT_RELPATH = Path("state") / "deliverable-equivalence.yaml"
 
-#: The ledger key line this module splices on. Matched at column 0, exactly as it
-#: appears in the artifact (`ledger: []` today; `ledger:` alone once rows exist).
 _LEDGER_KEY_RE = re.compile(r"^ledger:.*$")
 
-#: Stable, documented key order for a rendered row — mirrors the schema comment block
-#: directly above `ledger:` in the artifact itself. Optional keys omitted when absent
-#: from the row rather than rendered as an explicit `null`.
 _ROW_KEY_ORDER = (
     "deliverable_id",
     "status",
@@ -93,25 +88,10 @@ _ROW_KEY_ORDER = (
 
 
 class DeliverableLedgerWriteError(RuntimeError):
-    """Raised for a splice-target shape this writer cannot safely locate or mutate."""
+    pass
 
 
 def _find_ledger_key_line(lines: List[str]) -> int:
-    """Index of the line carrying the `ledger:` key, searched top-down.
-
-    Raises `DeliverableLedgerWriteError` when no such line exists — this writer never
-    invents the key or appends a new top-level block; the artifact is expected to
-    already declare `ledger:` (today as `ledger: []`).
-
-    Also raises when MORE than
-    one column-0 `ledger:` line exists, rather than silently taking the
-    first. A header authoring mistake (e.g. a mis-indented block-scalar
-    continuation line landing back at column 0) can put the literal text
-    `ledger:` at column 0 above the real key; silently splicing on the first
-    match would absorb the second occurrence into whichever side of the
-    splice it falls on. A wrong splice on this artifact is data loss, so
-    refusing on ambiguity is correct.
-    """
     matches = [index for index, line in enumerate(lines) if _LEDGER_KEY_RE.match(line)]
     if not matches:
         raise DeliverableLedgerWriteError(
@@ -126,20 +106,8 @@ def _find_ledger_key_line(lines: List[str]) -> int:
 
 
 def _find_ledger_block_end(lines: List[str], ledger_start: int) -> int:
-    """Index of the first line AFTER the `ledger:` block, or `len(lines)` if the
-    block runs to the end of the file.
-
-    The splice previously assumed
-    the `ledger:` block was the last content in the artifact and discarded
-    anything after it. The block is either the single line `ledger: []` (its
-    own line, index `ledger_start + 1` ends it) or `ledger:` followed by an
-    indented block-list — every continuation line of that list is blank or
-    starts with whitespace; the first line back at column 0 (or EOF) ends the
-    block. This lets the caller preserve a future footer instead of deleting it.
-    """
     ledger_line = lines[ledger_start]
     if ledger_line.rstrip("\n").strip() != "ledger:":
-        # `ledger: []` (or any other single-line form) — the block is one line.
         return ledger_start + 1
     index = ledger_start + 1
     while index < len(lines):
@@ -151,26 +119,6 @@ def _find_ledger_block_end(lines: List[str], ledger_start: int) -> int:
 
 
 def _render_scalar(value: Any) -> str:
-    """Single-line YAML scalar for a row value, via `yaml.safe_dump` in flow style.
-
-    Reused for `closure_evidence` (a mapping) too — flow style keeps the ledger block
-    readable without needing block-mapping indentation bookkeeping in the splice.
-
-    `value` is wrapped in a single-element list before dumping and the outer `[`/`]`
-    stripped back off: `yaml.safe_dump` of a bare top-level scalar emits a trailing
-    `...` explicit-document-end marker (YAML's own disambiguation for a
-    document containing only a plain scalar), which is not valid mid-line content
-    here. Dumping `[value]` keeps the stream a single flow-mapping-compatible
-    document with no such marker, at the cost of this one strip step.
-
-    `width=float("inf")` is required alongside that: `safe_dump`'s default ~80-column
-    width line-wraps a long flow scalar (measured: 65 of 437 real seeded rows wrap,
-    mostly the `;`-joined `evidence_source` field) at an arbitrary break point, and this
-    function's caller never accounts for that continuation line breaking the block-list
-    row's fixed 4-space indent — producing invalid YAML that the loader would then
-    silently degrade to an empty ledger. Forcing an unbounded width keeps every rendered
-    scalar on exactly one line regardless of length.
-    """
     dumped = yaml.safe_dump(
         [value], default_flow_style=True, sort_keys=True, width=float("inf")
     ).strip()
@@ -179,17 +127,6 @@ def _render_scalar(value: Any) -> str:
 
 
 def _drop_none_values(row: Dict[str, Any]) -> Dict[str, Any]:
-    """Row dict with every `None`-valued key removed.
-
-    Companion to F5's omit-`None`-keys rendering change: the in-memory row set
-    (`expected_rows`) always carries `closed_at: None`/`superseded_by: None`
-    explicitly for an open row, while the rendered-and-reparsed row omits an
-    absent key entirely — a direct dict comparison between the two would flag
-    a false mismatch on every row with an optional `None` field. Comparisons in
-    `_validate_rendered_tmp_file`/`_verify_write_or_restore` normalize both
-    sides through this helper so the check reflects semantic equality, not
-    presence-vs-absence of a key whose value is `None` either way.
-    """
     return {key: value for key, value in row.items() if value is not None}
 
 
@@ -221,15 +158,11 @@ def _render_row(row: Dict[str, Any]) -> List[str]:
         out.append(f"{prefix}{key}: {rendered}\n")
         first = False
     if first:
-        # A row with none of the known keys present — should be unreachable past
-        # validate_deliverable_ledger_rows (required keys always present), kept as a
-        # defensive guard against a caller bypassing validation.
         raise DeliverableLedgerWriteError(f"row has no renderable keys: {row!r}")
     return out
 
 
 def _render_ledger_block(rows: List[Dict[str, Any]]) -> List[str]:
-    """Full `ledger:` block, rows sorted by `deliverable_id` for a clean re-run diff."""
     if not rows:
         return ["ledger: []\n"]
     sorted_rows = sorted(rows, key=lambda r: r["deliverable_id"])
@@ -242,9 +175,6 @@ def _render_ledger_block(rows: List[Dict[str, Any]]) -> List[str]:
 def _restore_original_content(
     artifact_path: Path, original_content: str, orig_mode: Optional[int]
 ) -> None:
-    """Atomically restore `artifact_path` to `original_content`, best-effort mode-bit
-    preservation, then reset the ledger memo so a subsequent read sees the restored
-    (not the failed-write) bytes."""
     restore_tmp_path = f"{artifact_path}.ledger-write.restore.{os.getpid()}"
     with open(restore_tmp_path, "w", encoding="utf-8", newline="") as fh:
         fh.write(original_content)
@@ -317,26 +247,6 @@ def _verify_write_or_restore(
     orig_mode: Optional[int],
     expected_rows: List[Dict[str, Any]],
 ) -> None:
-    """Post-write read-back verification (defect 2's fix).
-
-    `_render_scalar`'s rendering happens AFTER `validate_deliverable_ledger_rows` runs
-    over the in-memory row set, so validating the intended rows before writing (as
-    `upsert_deliverable_ledger_rows` already does) cannot catch a rendering defect that
-    corrupts the bytes actually written. And `load_deliverable_ledger`'s documented
-    degradation on a parse failure is to return `[]`, not raise — so a corrupt write is
-    otherwise silently indistinguishable from "empty ledger", and a subsequent upsert
-    would merge against zero prior rows and destroy every row already on disk.
-
-    Re-reads the just-written file from disk (forcing a fresh read past the loader's
-    per-process memo — the memo was already reset by the caller, but this function
-    resets it again on both the success and failure paths so no stale state survives
-    either outcome), re-validates it, and confirms the `ledger:` block's rows match
-    `expected_rows` exactly (as a `deliverable_id`-keyed set, order-independent — the
-    renderer sorts by `deliverable_id` but this check does not depend on that). On any
-    mismatch, parse failure, or validation failure, restores the pre-write file content
-    byte-for-byte and raises `DeliverableLedgerWriteError` — the file on disk must never
-    be left in a state the loader would silently read as empty or partial.
-    """
     try:
         _reset_deliverable_ledger_cache()
         readback_rows = load_deliverable_ledger(artifact_path.parent.parent)
@@ -361,28 +271,6 @@ def _verify_write_or_restore(
 def upsert_deliverable_ledger_rows(
     worktree_root: Path, rows: Iterable[Dict[str, Any]]
 ) -> None:
-    """Merge `rows` into the artifact's `ledger:` block, keyed by `deliverable_id`.
-
-    UPSERT, not append: a supplied row replaces any existing row sharing its
-    `deliverable_id`; every on-disk row not mentioned in `rows` is preserved. The full
-    resulting row set is validated via `validate_deliverable_ledger_rows` BEFORE the
-    write lands — a `DeliverableLedgerValidationError` aborts with the on-disk file
-    untouched. Header bytes above the `ledger:` key are copied through verbatim, never
-    reparsed. Resets the ledger read-model's process memo on success.
-
-    Concurrency (Review: coordinatorcode-reviewer c8602a8b — F1): the whole
-    read-existing / merge / render / validate / replace / verify sequence runs
-    under `coordinator_core.locked_write.held_lock` on `artifact_path`, so two
-    overlapping invocations on the same artifact never both read the same
-    `existing_rows` and silently discard one writer's rows — the second
-    invocation's read cannot start until the first has fully released the
-    lock (post-write verify included). `locked_rmw` was considered first but
-    does not fit: its `mutate: str -> str` contract has no room for this
-    function's pre-replace parse/validate guard, its own chmod-preservation,
-    or its post-replace read-back-and-restore-on-mismatch step, all of which
-    must stay inside the held critical section, not just the final text
-    transform. `held_lock` wraps the existing body unchanged instead.
-    """
     rows = list(rows)
     artifact_path = worktree_root / _EQUIVALENCE_ARTIFACT_RELPATH
     if not artifact_path.is_file():
@@ -394,10 +282,6 @@ def upsert_deliverable_ledger_rows(
     ):
         existing_rows = load_deliverable_ledger(worktree_root)
 
-        # A present-but-malformed
-        # on-disk row must fail loud, never be silently excluded from the merge
-        # (contradicts both this module's "every row not mentioned is preserved"
-        # contract and validate_deliverable_ledger_rows's own fail-loud philosophy).
         merged: Dict[str, Dict[str, Any]] = {}
         for index, r in enumerate(existing_rows):
             if not isinstance(r, dict) or not isinstance(r.get("deliverable_id"), str):
@@ -413,11 +297,6 @@ def upsert_deliverable_ledger_rows(
         final_rows = list(merged.values())
         validate_deliverable_ledger_rows(final_rows)
 
-        # _render_row/_render_ledger_block
-        # assume LF-only line endings and a trailing newline immediately before the
-        # `ledger:` key. Check raw bytes for a CRLF BEFORE opening in text mode —
-        # Python's universal-newlines translation silently normalizes "\r\n" to
-        # "\n" on read, which would hide the very shape this guard exists to catch.
         if b"\r\n" in artifact_path.read_bytes():
             raise DeliverableLedgerWriteError(
                 "the artifact contains CRLF line endings — this writer only supports "
@@ -436,8 +315,6 @@ def upsert_deliverable_ledger_rows(
                 "the artifact's header does not end with a trailing newline before "
                 "'ledger:' — refusing to splice onto a non-newline-terminated line"
             )
-        # Preserve any content after
-        # the old ledger block (a future footer) instead of silently discarding it.
         footer_lines = lines[ledger_end:]
         ledger_lines = _render_ledger_block(final_rows)
         original_content = "".join(lines)
@@ -480,13 +357,6 @@ def upsert_deliverable_ledger_rows(
 
         _reset_deliverable_ledger_cache()
 
-        # Belt-and-braces (residual, not the primary guard — see F2's fix above):
-        # this re-reads the just-landed file and restores-on-mismatch. What it does
-        # NOT cover is a torn read of a partially-written file — `os.replace` is
-        # atomic on POSIX so no reader ever observes a partial write; this guard
-        # exists for a defect class this process's own render/validate logic
-        # missed, which `_validate_rendered_tmp_file` above should make
-        # unreachable in practice.
         _verify_write_or_restore(
             artifact_path=artifact_path,
             original_content=original_content,

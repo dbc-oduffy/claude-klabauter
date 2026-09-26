@@ -37,18 +37,10 @@ from typing import List
 import pytest
 from coordinator_core.win_portability import no_console_creationflags
 
-# Declared, not excused: `_classify_bookkeeping_shas`/`_credit_from_kind_partition`
-# classify real commits by their actually-touched paths via `git log`, so several
-# tests below build a real repo via `_init_repo`/`_make_commit`/`_make_path_commit`.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
-# ---------------------------------------------------------------------------
-# Git repo helper (mirrors pattern in test_lifecycle_worktree.py)
-# ---------------------------------------------------------------------------
-
 def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess:
-    """Run a git command in cwd; raise on non-zero exit."""
     return subprocess.run(
         ["git"] + args,
         cwd=str(cwd),
@@ -60,7 +52,6 @@ def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess:
 
 
 def _make_commit(repo: Path, message: str) -> str:
-    """Make an empty commit in repo and return its full SHA."""
     _git(["commit", "--allow-empty", "-m", message], repo)
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -74,14 +65,12 @@ def _make_commit(repo: Path, message: str) -> str:
 
 
 def _init_repo(path: Path) -> None:
-    """Initialise a fresh git repo with required identity config."""
     _git(["init", "-b", "main"], path)
     _git(["config", "user.email", "test@example.com"], path)
     _git(["config", "user.name", "Test"], path)
 
 
 def _make_path_commit(repo: Path, rel_path: str, message: str) -> str:
-    """Commit a single file at rel_path (creating parent dirs) and return its SHA."""
     full = repo / rel_path
     full.parent.mkdir(parents=True, exist_ok=True)
     full.write_text(f"{message}\n", encoding="utf-8")
@@ -94,13 +83,7 @@ def _make_path_commit(repo: Path, rel_path: str, message: str) -> str:
 ).stdout.strip()
 
 
-# ---------------------------------------------------------------------------
-# _parse_trail_file — filename-agnostic parsing (DR-216 same-second-collision
-# uniquifying suffix)
-# ---------------------------------------------------------------------------
-
 def _write_trail_record(path: Path, sha: str) -> None:
-    """Write a minimal trail record JSON with a single-commit sha_range for sha."""
     record = {
         "sha_range": f"{sha}^..{sha}",
         "reviewer": "code-reviewer",
@@ -114,13 +97,6 @@ def _write_trail_record(path: Path, sha: str) -> None:
 
 
 def test_parse_trail_file_reads_suffixed_filename(tmp_path: Path) -> None:
-    """``_parse_trail_file`` (coverage.py) round-trips a ``-2``-suffixed filename.
-
-    ``_parse_trail_file`` parses purely by file *content*, never by filename, so
-    this pins that the DR-216 same-second-collision fix's uniquifying suffix
-    (``review_trail_write.py::_reserve_unique_trail_path``, e.g.
-    ``2026-07-27-140000-abc12345-2.json``) is fully transparent to this consumer.
-    """
     from coordinator_core.coverage import _parse_trail_file
 
     repo = tmp_path / "repo"
@@ -138,11 +114,6 @@ def test_parse_trail_file_reads_suffixed_filename(tmp_path: Path) -> None:
     assert records[0]["sha_range"] == f"{sha}^..{sha}"
 
 
-# ---------------------------------------------------------------------------
-# _verdict_counts — verdict filter (pending excluded; ok/warn/blocked/waived/
-# absent included)
-# ---------------------------------------------------------------------------
-
 def test_verdict_counts_excludes_pending() -> None:
     from coordinator_core.coverage import _verdict_counts
 
@@ -156,13 +127,6 @@ def test_verdict_counts_includes_non_pending(verdict) -> None:
     rec = {} if verdict is None else {"verdict": verdict}
     assert _verdict_counts(rec) is True
 
-
-# ---------------------------------------------------------------------------
-# _record_range_has_stored_head — the sha_range false-COVERED defect (read
-# side): a range with a literal "HEAD" endpoint (with or without ^/~N ops)
-# must be flagged for Phase-1 exclusion, never re-resolved against whatever
-# HEAD happens to be current at gate-run time.
-# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
     "sha_range",
@@ -184,7 +148,7 @@ def test_record_range_has_stored_head_true(sha_range: str) -> None:
     [
         "0227ea17..abc123ff",
         "abc123ff...0227ea17",
-        "origin/main..0227ea17",  # not the literal "HEAD" — deliberately not rejected
+        "origin/main..0227ea17",
     ],
 )
 def test_record_range_has_stored_head_false(sha_range: str) -> None:
@@ -193,11 +157,7 @@ def test_record_range_has_stored_head_false(sha_range: str) -> None:
     assert _record_range_has_stored_head(sha_range) is False
 
 
-# ---------------------------------------------------------------------------
 # _FOREIGN_STRIPPED_SCOPES — the whole admission story for foreign-session
-# narrowing (K-010 removed the per-record attestation exemption that briefly
-# qualified it).
-# ---------------------------------------------------------------------------
 
 def test_foreign_stripped_scopes_is_the_three_narrowed_scopes() -> None:
     """`_FOREIGN_STRIPPED_SCOPES` is the whole admission story: a foreign
@@ -209,12 +169,6 @@ def test_foreign_stripped_scopes_is_the_three_narrowed_scopes() -> None:
 
     assert _FOREIGN_STRIPPED_SCOPES == frozenset({"session", "chain", "workstream-close-auto"})
 
-
-# ---------------------------------------------------------------------------
-# emit_unrecognized_kind_warning — ONE aggregated stderr WARN per walk, never
-# one per record (2026-08-15 example-retrieval-repo-em memo: the per-record flood buried
-# the real trailing error).
-# ---------------------------------------------------------------------------
 
 def test_emit_unrecognized_kind_warning_no_op_when_empty(
     capsys: pytest.CaptureFixture[str],
@@ -240,22 +194,9 @@ def test_emit_unrecognized_kind_warning_aggregates_one_line(
     assert "4" in warn_lines[0] and "chunk" in warn_lines[0] and "inline" in warn_lines[0]
 
 
-# ---------------------------------------------------------------------------
-# _classify_bookkeeping_shas / _credit_from_kind_partition — the kind-aware
-# plan-vs-code credit collapse (C5, docs/plans/2026-08-05-coverage-gate-
-# planning-artifact-class.md § C5). Exercised directly against a pre-built
-# `reviewed_by_kind` partition — this is the exact surface `build_reviewed_set`
-# used to hand these functions after resolving each record's sha_range; only
-# the (now-deleted) resolution step is skipped here.
-# ---------------------------------------------------------------------------
-
 def test_credit_from_kind_partition_plan_credits_planning_artifact_commit(
     tmp_path: Path,
 ) -> None:
-    """AC5: a "plan"-kind bucket credits a commit whose only touched path is a
-    planning-artifact path (docs/plans/), via `_classify_bookkeeping_shas`,
-    reused rather than reinvented.
-    """
     from coordinator_core.coverage import _credit_from_kind_partition
 
     repo = tmp_path / "repo"
@@ -273,11 +214,6 @@ def test_credit_from_kind_partition_plan_credits_planning_artifact_commit(
 
 
 def test_credit_from_kind_partition_plan_never_credits_code_commit(tmp_path: Path) -> None:
-    """AC6 (primary): a "plan"-kind bucket spanning BOTH a planning-artifact
-    commit and a genuine code commit must credit ONLY the planning commit,
-    never the code commit — the naive "union everything" shortcut this chunk
-    replaced would credit both.
-    """
     from coordinator_core.coverage import _credit_from_kind_partition
 
     repo = tmp_path / "repo"
@@ -355,10 +291,6 @@ def test_credit_from_kind_partition_planning_commit_uncredited_without_a_plan_bu
 def test_credit_from_kind_partition_diff_kind_credits_unconditionally(
     tmp_path: Path,
 ) -> None:
-    """"diff" (the legacy/explicit unrestricted kind) credits its resolved
-    SHAs unconditionally, exactly as before this chunk — no bookkeeping/
-    planning classification gate applies to it.
-    """
     from coordinator_core.coverage import _credit_from_kind_partition
 
     repo = tmp_path / "repo"
@@ -385,34 +317,7 @@ def test_credit_from_kind_partition_integration_kind_credits_nothing() -> None:
     assert credited == set()
 
 
-# ---------------------------------------------------------------------------
-# workstream_complete.directives_review._record_membership_shas — spawn-
-# avoidance short-circuit for a single-commit range outside the chain DAG set.
-# Unrelated to this chunk's deletion (never called build_reviewed_set); kept
-# verbatim.
-# ---------------------------------------------------------------------------
-
 def test_single_commit_range_outside_chain_set_resolves_without_a_spawn():
-    """A `<sha>^..<sha>` record outside the chain DAG set must be declined
-    WITHOUT calling the range resolver.
-
-    This pins a spawn-amplification fix, not a micro-optimization. The live
-    `resolve_range_shas` is a `git rev-list` subprocess and the caller loop runs
-    once per trail record; measured 2026-08-18 on a chain-terminal close, the
-    unfiltered loop issued 5392 spawns over 224s against a chain DAG set holding
-    9 commits. The per-range memo inside the resolver cannot help, because every
-    single-commit range is a distinct cache key.
-
-    The skip is sound rather than heuristic: `git rev-list <sha>^..<sha>` can
-    only ever yield `{<sha>}`, and `_record_membership_shas` discards any record
-    whose resolved set misses `chain_dag_sha_set` on the very next line. The
-    records this declines to resolve are exactly the ones it would have thrown
-    away after paying for them.
-
-    Abbreviated endpoints are the live corpus's dominant spelling, so they are
-    pinned here too -- an earlier full-hex-only form of this guard matched
-    nothing real and left the amplification in place.
-    """
     from coordinator_core.workstream_complete.directives_review import (
         _record_membership_shas,
     )
@@ -452,12 +357,6 @@ def test_single_commit_range_outside_chain_set_resolves_without_a_spawn():
 
 
 def test_single_commit_range_inside_chain_set_still_resolves_normally():
-    """The short-circuit must not swallow a record that genuinely contributes.
-
-    Guards the fix's own failure direction: skipping too much would silently
-    under-credit review coverage, which reads as an unreviewed chain rather
-    than as an error.
-    """
     from coordinator_core.workstream_complete.directives_review import (
         _record_membership_shas,
     )

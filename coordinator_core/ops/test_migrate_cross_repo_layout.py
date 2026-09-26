@@ -1,14 +1,3 @@
-"""
-Tests for coordinator_core.ops.migrate_cross_repo_layout.
-
-Mirrors the bash oracle's own fixture-based test suite — same AC-8 scenarios
-(standard migration, idempotent re-run, mixed tracked/untracked,
-target-collision), ported to pytest against the Python module's main()
-directly (subprocess only for the `git` calls the module itself performs —
-matching the oracle's own reliance on a real git repo).
-
-Port of: test-migrate-cross-repo-layout.sh (DoE 290997c7, 2026-07-22)
-"""
 
 from __future__ import annotations
 
@@ -22,8 +11,6 @@ from coordinator_core.session import scope as session_scope
 import pytest
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -123,8 +110,6 @@ def test_mixed_tracked_and_untracked_archive_files(tmp_path, capsys):
         "---\nBody.\n",
         encoding="utf-8",
     )
-    # Deliberately NOT staged/committed — simulates the live central scenario
-    # that regressed under a tracked-only assumption.
 
     rc = main(["--root", str(repo)])
 
@@ -210,15 +195,6 @@ def test_help_flag_exits_0(capsys):
 
 
 def test_untracked_move_with_live_session_relocates_touch_claim(tmp_path, capsys, monkeypatch):
-    """The other tests in this suite never resolve a
-    live session, so they only exercise the plain-shutil.move fallback in
-    `_move_one`'s untracked branch. This is the first to route through the
-    real relocate_touched_path claiming path, modeled on
-    coordinator_core/session/tests/test_claims.py::
-    test_relocated_tracked_file_leaves_both_halves_claimed. Asserts through
-    compute_offer, not touched.txt internals, so it genuinely fails if the
-    untracked branch were reverted to a bare shutil.move.
-    """
     repo = _make_fixture_repo(tmp_path, n_flat=0, m_archive=0, include_dotfile=False)
     src_rel = "archive/cross-repo/2026-05-23-untracked-memo.md"
     (repo / src_rel).parent.mkdir(parents=True, exist_ok=True)
@@ -227,9 +203,6 @@ def test_untracked_move_with_live_session_relocates_touch_claim(tmp_path, capsys
         "---\nBody.\n",
         encoding="utf-8",
     )
-    # Deliberately NOT staged/committed — the untracked branch of `_move_one`
-    # is the one routed through `relocate_touched_path`; a tracked (`git mv`)
-    # source never reaches it (that branch is out of scope for this finding).
 
     session_core.init("mine", cwd=str(repo))
     session_scope.touch("mine", src_rel, cwd=str(repo))
@@ -261,18 +234,10 @@ def test_no_op_when_nothing_to_migrate(tmp_path, capsys):
     assert "no-op" in out
 
 
-# ---------------------------------------------------------------------------
-# Per-item git spawn amplification (coordinator_core/tests/
 # test_no_unbatched_per_item_git_spawn.py _KNOWN_SITES:
-# migrate_cross_repo_layout.py::main -> _move_one)
-# ---------------------------------------------------------------------------
 
 
 def test_process_count_does_not_grow_with_the_set(tmp_path, capsys, monkeypatch):
-    """Model: test_schema_drift_watch.py::TestSchemaAdvisoryBatch::
-    test_process_count_does_not_grow_with_the_set. Each phase's items share
-    one constant destination directory, so the git spawn count for a phase
-    must stay flat as its item count grows, not scale with it."""
     import coordinator_core.ops.migrate_cross_repo_layout as mcrl
 
     spawns: list[list[str]] = []

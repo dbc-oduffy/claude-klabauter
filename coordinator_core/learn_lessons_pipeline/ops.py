@@ -45,14 +45,6 @@ from coordinator_core.learn_lessons_pipeline.apply import apply as _apply
 async def _learn_lessons_pipeline_brief(
     params: dict[str, Any], repo_root: Optional[Path]
 ) -> dict[str, Any]:
-    """Read-only adapter over `learn_lessons_pipeline.brief()`. Mutates
-    nothing.
-
-    params:
-        roots: optional list[str], forwarded to `brief(roots=...)` — the
-               peer-repo roots `d-drain-outbox` reads; omitted/`None`
-               defaults to `ops.learn_lessons_roots.resolve_roots()`.
-    """
     envelope = _brief(repo_root, roots=params.get("roots"))
     return {"exit_code": 0, "decision_object": envelope}
 

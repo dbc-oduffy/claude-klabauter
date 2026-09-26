@@ -1,25 +1,3 @@
-"""test_cross_repo_memo_send_receipt_names_commit_class — the send receipt
-says the delivery commit is the channel, not a cross-repo write grant.
-
-THE DEFECT THIS CLOSES. Nothing at the point of confusion told a sender that
-`cross-repo-memo send`'s delivery commit only ever touches `cross-repo/` —
-CLAUDE.md gates cross-repo commits behind per-session PM assent and says "a
-memo is not cross-repo action" without ever stating the delivery commit is
-inside that carve-out. A receiver read a sender's delivery commit as an
-ungranted write into their tree and flagged it (cross-repo/inbox/2026-08-13-
-doe-claude-em-memo-receipt-should-name-its-own-commit-class.md). The original
-ask targeted a literal line ("Delivery verified: on disk and committed as
-<sha>") that the pre-DR-210 CLI printed; that exact text is gone (`send`
-rewritten 2026-08-25 to forward onto `memo.send` via `cc_invoke.route_
-mutation`), but the receipt site itself survived as the `Receiver-side: ...`
-print in `_cmd_send` — this pins the clarifying line there instead.
-
-Unit-level: `cc_invoke.route_mutation` is monkeypatched via `sys.modules`
-before `_cmd_send`'s local `import cc_invoke` resolves, so no engine, no
-warm server, no real memo delivery.
-
-Run: python -m pytest coordinator/bin/tests/test_cross_repo_memo_send_receipt_names_commit_class.py -q
-"""
 from __future__ import annotations
 
 import argparse

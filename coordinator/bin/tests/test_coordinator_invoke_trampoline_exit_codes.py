@@ -89,6 +89,4 @@ def test_ping_is_the_cheapest_reachability_probe_and_needs_no_new_flag():
     import inspect
 
     src = inspect.getsource(module.main)
-    # `_import_main()` (the resolution step) runs unconditionally, ahead of
-    # any op dispatch — there is no argv branch that skips it for a cheap op.
     assert "op_main = _import_main()" in src

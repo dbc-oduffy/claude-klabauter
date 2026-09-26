@@ -100,7 +100,6 @@ _LOG = logging.getLogger(__name__)
 
 
 def _err(msg: str) -> dict:
-    """Return an exit_code=1 refusal envelope — no write attempted."""
     _LOG.warning("handoff.backfill_claim_stamp: %s", msg)
     return {
         "exit_code": 1,
@@ -112,7 +111,6 @@ def _err(msg: str) -> dict:
 
 
 def _usage_error(msg: str) -> dict:
-    """Return an exit_code=2 usage-error envelope (invalid params)."""
     _LOG.warning("handoff.backfill_claim_stamp: usage error: %s", msg)
     return {
         "exit_code": 2,
@@ -193,22 +191,12 @@ def _validate_backfilled_fields(fm_text: str) -> list:
 
 
 def _verify_commits_batch(shas: Sequence[str], worktree: Path) -> dict[str, bool]:
-    """Resolve MANY evidence commit shas against `worktree` in ONE
-    `git cat-file --batch-check` invocation (AC2), N spawns to 1.
-
-    Reuses `cutover_gate._git_cat_file_batch_check` — the shared
-    `--batch-check` protocol written once for C14 and reused as-is here
-    (C18); do not duplicate it.
-    """
     from coordinator_core.ops.cutover_gate import _git_cat_file_batch_check
 
     return _git_cat_file_batch_check(worktree, list(shas))
 
 
 def _verify_commit(sha: str, worktree: Path) -> bool:
-    """Single-sha convenience wrapper over `_verify_commits_batch`. Never
-    raises: any subprocess/OSError failure reads as "does not resolve",
-    not as a verification pass (see `_git_cat_file_batch_check`)."""
     return _verify_commits_batch([sha], worktree)[sha]
 
 
@@ -278,8 +266,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "CLAUDE_CODE_SESSION_ID all empty) — pass --attested-by explicitly"
         )
 
-    # AC2: every evidence commit must resolve in THIS repo, or refuse with no
-    # write. One batch-check call covers the whole evidence list (C18).
     verified = _verify_commits_batch(evidence_commits, worktree)
     unverifiable = [sha for sha in evidence_commits if not verified.get(sha)]
     if unverifiable:
@@ -290,15 +276,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     try:
         path = _resolve_path(handoff_path_raw, worktree)
-    except Exception as exc:  # _PathNotContained is module-private to handoff_transition
+    except Exception as exc:
         return _err(f"backfill_claim_stamp: {exc}")
 
     rel_id = _wire_rel_id(path, worktree)
 
-    # AC4: already claimed-or-shipped is an idempotent no-op, exit 0, never a
-    # second stamp over an existing one. Read-only call — see module docstring.
-    # This is a fast pre-lock check only; see the in-lock recheck in mutate()
-    # below for the TOCTOU-safe authoritative check.
     if claimed_or_shipped_at_path(str(path)):
         return {
             "exit_code": 0,
@@ -325,36 +307,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
         fm = split.fm_text
 
-        # P2 TOCTOU fix: re-verify AC4's idempotency predicate against THIS
-        # freshly-read, lock-held fm text, immediately before building any
-        # write. The pre-lock check above is a fast-path only — a legitimate
-        # claim landing in the window between that check and lock acquisition
-        # must not be misreported as "backfilled" (mirrors
-        # handoff_reconcile_close_terminal._close's own P1 TOCTOU fix: recheck
-        # inside the locked_rmw mutate closure, atomically with the write it
-        # gates, rather than trusting an unlocked pre-check).
         if claimed_or_shipped(fm):
             _state["applied"] = False
             _state["already_claimed_or_shipped"] = True
-            return old_text  # byte-identical → locked_rmw skips the write
+            return old_text
 
-        # claimed_at — insert if absent, anchored after deployment_state
-        # (same anchor `handoff_transition._claim` uses). A pure presence
-        # test (not a comparison/parse), so `read_fm_field` (not the
-        # comparison-safe `_unquoted` sibling — see that function's own
-        # docstring) is the correct reader here, matching the `claimed_by`
-        # presence test two lines below.
         if read_fm_field(fm, "claimed_at") is None:
             fm = insert_fm_field(fm, "claimed_at", at, "deployment_state")
 
-        # claimed_by — insert if absent, anchored after claimed_at.
         if read_fm_field(fm, "claimed_by") is None:
             fm = insert_fm_field(fm, "claimed_by", attested_by, "claimed_at")
 
         # status_reason — an EXISTING schema field (AC3/Anti-scope: no new
-        # key). Insert if absent (anchored after claimed_by); if already
-        # present, append this attestation rather than clobbering whatever
-        # prior text it carried.
         existing_status_reason = read_fm_field_unquoted(fm, "status_reason")
         if existing_status_reason:
             new_value = f"{existing_status_reason}; {evidence_note}"

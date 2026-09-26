@@ -71,36 +71,10 @@ from coordinator_core.trusted_root_guard import (
 
 
 class OperatorConfigError(RuntimeError):
-    """Raised by ``resolve_operator_config`` when an operator-authored
-    config value is corrupt.
-
-    Corruption, not distrust: this exception is raised for empty/
-    whitespace-only values, an embedded newline (the list-valued registry
-    key shape — see ``_corruption_reason``), a ``/..``/``\\..`` traversal
-    segment, or a path that does not exist as a directory on disk. It is
-    NEVER raised for "root is untrusted" — that is ``guard_plugin_root``'s
-    concern, and the two are not interchangeable (see module docstring).
-    """
+    pass
 
 
 def _corruption_reason(value: str) -> Optional[str]:
-    """Return a corruption reason string, or ``None`` if *value* is clean.
-
-    Corruption set for operator-authored, gitignored, per-machine config
-    (corruption-checked only, never trust-checked — see module docstring):
-
-      - an embedded newline. Pinned edge case: the shipped
-        ``trusted_root_guard._registry_key`` reader joins a
-        list-valued TOML registry key with ``"\\n"`` (``"\\n".join(str(i)
-        for i in val)``) — that shape is a corruption REJECT here, single-line
-        is a hard requirement, not a value this facade silently re-flattens.
-      - empty after ``.strip()``. Pinned edge case: a whitespace-only value
-        (``"   \\n"``) survives the shipped readers' bare ``.rstrip("\\n")``
-        as a non-empty string (``"   "``) — checking truthiness alone would
-        let it through, so this checks ``.strip()`` instead.
-      - a ``/..`` or ``\\..`` traversal segment.
-      - does not exist as a directory on disk.
-    """
     if "\n" in value:
         return "embedded newline (multi-line/list-valued registry value)"
     if not value.strip():
@@ -113,8 +87,6 @@ def _corruption_reason(value: str) -> Optional[str]:
 
 
 def _checked(name: str, value: str) -> str:
-    """Apply ``_corruption_reason`` to *value*, raising ``OperatorConfigError``
-    (naming *name* and the reason) on a hit, else returning *value* unchanged."""
     reason = _corruption_reason(value)
     if reason is not None:
         raise OperatorConfigError(
@@ -190,11 +162,6 @@ def guard_plugin_root(
 
 
 #: Named RUNNABLE SCRIPT for the unreachable verdict — never a slash command
-#: (claude-klabauter#31 item 2; a cold path with no engine can have no session
-#: to run one in). ``scripts/setup.py`` is claude-klabauter's own standalone
-#: installer (see its module docstring, Responsibility 3): it idempotently
-#: writes the ``repos.claude_klabauter`` registry key this probe checks, so
-#: running it from a claude-klabauter checkout is what would flip the verdict.
 _UNREACHABLE_REMEDIATION_SCRIPT = "scripts/setup.py"
 
 

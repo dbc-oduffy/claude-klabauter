@@ -25,9 +25,6 @@ from coordinator_core.resolve_validation_cmd import (
 from coordinator_core.ops._git_root_util import git_root_zero_spawn
 
 
-# --- AC1: cs_read_local_md_mapping --------------------------------------------
-
-
 def test_mapping_basic_nested_block(tmp_path):
     (tmp_path / "coordinator.local.md").write_text(
         "---\n"
@@ -69,11 +66,10 @@ def test_mapping_never_raises_on_malformed_block(tmp_path):
     (tmp_path / "coordinator.local.md").write_text(
         "---\n"
         "app_session:\n"
-        "  desktop\n"  # no colon at all — malformed leaf
+        "  desktop\n"
         "    runtime: electron\n"
         "---\n"
     )
-    # Must not raise; result shape is best-effort.
     result = cs_read_local_md_mapping(str(tmp_path), "app_session")
     assert isinstance(result, dict)
 
@@ -91,8 +87,6 @@ def test_mapping_strips_wrapping_quotes_on_leaf_values(tmp_path):
 
 
 def test_mapping_does_not_match_key_appearing_indented(tmp_path):
-    # An indented line containing "app_session:" must not be mistaken for
-    # the top-level key — only a column-0 match anchors the block.
     (tmp_path / "coordinator.local.md").write_text(
         "---\n"
         "other:\n"
@@ -103,9 +97,6 @@ def test_mapping_does_not_match_key_appearing_indented(tmp_path):
 
 
 def test_read_local_md_key_byte_identical_after_mapping_reader_added(tmp_path):
-    """AC1: cs_read_local_md_key's existing behaviour is untouched by the
-    new sibling — same fixture, same three assertions its own suite makes
-    in coordinator_core/test_resolve_validation_cmd.py."""
     (tmp_path / "coordinator.local.md").write_text(
         "---\nfull_test_cmd: pytest -q\n---\n"
     )
@@ -128,9 +119,6 @@ def test_mapping_and_flat_key_coexist_in_same_file(tmp_path):
     }
 
 
-# --- AC2: git_root_zero_spawn --------------------------------------------------
-
-
 def test_root_resolver_finds_git_directory(tmp_path):
     repo = tmp_path / "consuming-repo"
     (repo / ".git").mkdir(parents=True)
@@ -140,9 +128,6 @@ def test_root_resolver_finds_git_directory(tmp_path):
 
 
 def test_root_resolver_finds_git_file_in_worktree(tmp_path):
-    """A git worktree's `.git` is a FILE holding a `gitdir:` pointer, not a
-    directory. A directory-only test silently fails here — this is the
-    exact anchoring defect the plan names (Hard constraint 6/7)."""
     repo = tmp_path / "worktree-repo"
     repo.mkdir(parents=True)
     (repo / ".git").write_text("gitdir: /somewhere/else/.git/worktrees/x\n")
@@ -193,10 +178,6 @@ def test_root_resolver_spawns_no_subprocess(tmp_path, monkeypatch):
 
 
 def test_root_resolver_fixture_repo_root_is_unrelated_to_code_location(tmp_path):
-    """Anti-scope: a fixture whose repo root and code root coincide proves
-    nothing about anchoring. This repo (claude-klabauter, the code's own
-    tree) is NOT tmp_path — the consuming tree here lives at a path with no
-    relationship to coordinator_core's own location on disk."""
     import coordinator_core
 
     code_root = Path(coordinator_core.__file__).resolve().parent

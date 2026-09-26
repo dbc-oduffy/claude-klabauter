@@ -127,20 +127,6 @@ from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 @dataclasses.dataclass(frozen=True)
 class DeclaredLaunch:
-    """A declared, out-of-process install-health leg's complete argv.
-
-    Purpose: replace `resolve_by_shebang`'s sniff-the-bytes launch resolution
-    with a stated one. Each field closes one corner `resolve_by_shebang`'s
-    own docstring admitted it cut open -- see the design table in
-    `docs/plans/2026-09-11-install-health-legs-declare-how-they-launch.md`
-    (§ Design) for the one-to-one mapping.
-
-    Negative-spec (deliberately NOT done here): no suffix of `script` is ever
-    read to pick an interpreter; no shebang line is ever read; no probe for a
-    same-stem `.cmd`/`.ps1` twin on disk; no `bash`/`sh`/`node` interpreter is
-    ever produced by this class -- `interpreter` is a closed vocabulary of
-    exactly one value.
-    """
 
     script: str
     interpreter: str = "python"
@@ -159,12 +145,6 @@ class DeclaredLaunch:
                 )
 
     def argv(self, claude_klabauter_root: str) -> List[str]:
-        """Return the complete, ready-to-spawn argv for this leg.
-
-        On Windows, when `nt_launcher` is declared, that path IS the whole
-        argv (never combined with `interpreter`/`script`) -- it is never
-        probed for on disk, only ever used because it was declared.
-        """
         if _is_windows() and self.nt_launcher is not None:
             return [os.path.join(claude_klabauter_root, self.nt_launcher)]
         return [
@@ -174,36 +154,8 @@ class DeclaredLaunch:
         ]
 
 
-# Ordered list of (display_name, entrypoint) for every claude-klabauter-owned
-# install-health leg. `entrypoint` is one of two declared kinds: a callable
-# ``(plugin_root, claude_klabauter_root) -> int`` (in-process, as every leg below is
-# today), or a `DeclaredLaunch` (out-of-process, its complete argv stated
 # rather than inferred). Every leg runs UNCONDITIONALLY in `main()` below —
-# no dependency on any file existing in a drop-in directory, and no
-# dependency on `bin/install-health/` existing at all. `display_name`
-# is used only for log/failure messages — it is NOT looked up anywhere.
 _LegEntrypoint = Union[Callable[[str, str], int], DeclaredLaunch]
-#
-# `seed-skill-overrides` needs `claude_klabauter_root` to locate its DoE-resident-
-# named-but-now-claude-klabauter-resident helper (`<claude_klabauter_root>/coordinator/bin/
-# seed-skill-overrides.py`) via the `helper_root` param — kept separate from
-# `plugin_root` (still the trust-check anchor for that module's OWN
-# `_trusted_root`, unchanged) per the dual-anchor split (see module
-# docstring). `ensure_python3_exe_shim` and `check_windows_ssh_binary` need
-# neither root — both are pure OS-gated probes.
-#
-# Ordering note for `ensure-python3-exe-shim`'s ordering constraint: its bash
-# oracle sourced coordinator-trusted-root-guard.sh before doing anything
-# else. That invariant is preserved structurally, not by list order — see
-# `main()`, which runs the trust gate (`is_trusted`) before this registry
-# is ever reached.
-#
-# `check-bareword-path-provisioning` needs neither `plugin_root` nor
-# `claude_klabauter_root` either — like the two OS-gated probes above, it derives
-# everything it needs (settings-home, the operator's own rc files) from the
-# ambient environment. See `check_bareword_path_provisioning`'s own
-# docstring for why it carries two assertions of different epistemic status
-# rather than one report-only probe.
 _NATIVE_LEGS: List[Tuple[str, _LegEntrypoint]] = [
     ("ensure-python3-exe-shim", lambda plugin_root, claude_klabauter_root: ensure_python3_exe_shim.main([])),
     ("check-windows-ssh-binary", lambda plugin_root, claude_klabauter_root: check_windows_ssh_binary.main([])),
@@ -226,30 +178,15 @@ _NATIVE_LEGS: List[Tuple[str, _LegEntrypoint]] = [
         lambda plugin_root, claude_klabauter_root: check_door_route(plugin_root, claude_klabauter_root),
     ),
     # LAST, DELIBERATELY. Every leg above can change what this one reads --
-    # the door legs most of all -- so it runs after them and reports on the
-    # settings-home the whole install actually left behind, not an
-    # intermediate state.
     (
         "check-launch-chain-intact",
         lambda plugin_root, claude_klabauter_root: check_launch_chain_intact(plugin_root, claude_klabauter_root),
     ),
 ]
 
-# Extensions the undeclared-drop-in refusal scans for in the drop-in
-# directory. `.sh`/`.py` are the only extensions the retired glob-and-
-# shebang contract ever ran, so a leg authored against that old contract is
-# the only thing that can be silently orphaned by this change (see § Design,
-# "Undeclared drop-ins", in the plan that retired the glob).
 _DROP_IN_LEG_EXTENSIONS = (".sh", ".py")
 
 _BIN_DST_KNOWN_FORWARDER = "machine-local"
-
-# This used to be a byte-for-byte copy
-# of `wrapper_onto_path._on_path()` (same PATH-membership predicate,
-# same docstring). Imported directly instead (see the module import block
-# above) so a future fix to the PATH-comparison logic doesn't need a second,
-# independently-drifting edit here -- this repo's plan-level convention is
-# that this class of logic exists exactly once.
 
 
 def check_bareword_path_provisioning(plugin_root: str, claude_klabauter_root: str) -> int:
@@ -391,7 +328,7 @@ def check_door_provenance(plugin_root: str, claude_klabauter_root: str) -> int:
     rc = _report_installed_verdict(
         door_install.verify_installed_provenance(settings_home() / "bin")
     )
-    if _is_windows():  # Reuse the file's existing platform predicate instead of re-deriving sys.platform == "win32"
+    if _is_windows():
         rc = max(rc, _report_prebuilt_currency())
     return rc
 
@@ -437,23 +374,13 @@ def _report_installed_verdict(verdict: "door_install.ProvenanceVerdict") -> int:
             file=sys.stderr,
         )
         return 1
-    # "absent"
     print(f"[door-provenance] FAIL: {verdict.detail}", file=sys.stderr)
     return 1
 
 
-#: `ping` is the same op `README-posix.md`'s own manual oracle invokes
-#: (`./door ping`) and the same one `docs/research/2026-09-10-post-install-
-#: door-routing-premises.md` (C1) used for every live measurement this leg's
-#: verdict table is built on.
 _DOOR_ROUTE_OP = "ping"
 
-#: This leg owns its own timeout rather than inheriting
 #: `door_route_signal._DOOR_TIMEOUT_SECS` (30s) -- it sits inside
-#: `maximalist.py`'s required Phase 3 Step 1b, and a hung door must not hold
-#: that phase for half a minute. Chosen so a genuine hang still fails fast
-#: relative to the rest of the install, per C2's own BUDGET AND TIMEOUT
-#: paragraph.
 _DOOR_ROUTE_TIMEOUT_SECS = 5.0
 
 
@@ -607,10 +534,6 @@ def check_door_route(plugin_root: str, claude_klabauter_root: str) -> int:
     return 1
 
 
-#: The one launcher on the interactive chain, and the string that proves the
-#: installed copy is still the trampoline rather than something wearing its
-#: name. `claude-doe`'s entire job is to `exec claude --plugin-dir <clone>/
-#: coordinator`; anything that cannot reach that line cannot start a session.
 _LAUNCH_CHAIN_NAME = "claude-doe"
 _LAUNCH_CHAIN_PROOF = "exec claude"
 _LAUNCH_CHAIN_SOURCE = "claude-doe.py"
@@ -656,9 +579,6 @@ def check_launch_chain_intact(plugin_root: str, claude_klabauter_root: str) -> i
 
     body = launcher.read_bytes()
     if _LAUNCH_CHAIN_FORWARD.encode("utf-8") in body:
-        # The substrate's generated forwarder, which install-substrate writes
-        # before Step 3.5b lays the wrapper bytes over it; it launches by
-        # exec'ing the engine's own wrapper, so that file carries the proof.
         try:
             body = (Path(claude_klabauter_root) / "coordinator" / "bin" / _LAUNCH_CHAIN_SOURCE).read_bytes()
         except OSError:
@@ -726,8 +646,6 @@ def main(argv: List[str], script_path: Optional[str] = None) -> int:
         return 1
 
     # Scoped, not process-wide: a bare `os.environ["CHECK_ONLY"] = ...` here would
-    # leak past this call for the life of the interpreter (2026-07-21
-    # interpreter-global-state sweep) — every drop-in/native leg below still SEES
     # the identical env-var signal the DoE doc block's own `export CHECK_ONLY=1` /
     # `export CHECK_ONLY=` used to set, just scoped to this run.
     with env_overlay({"CHECK_ONLY": "1" if check_only else ""}):
@@ -735,23 +653,9 @@ def main(argv: List[str], script_path: Optional[str] = None) -> int:
 
 
 def _run_legs(plugin_root: str, claude_klabauter_root: str, script_path: Optional[str]) -> int:
-    """Run each declared install-health leg, tallying failures.
-
-    Isolation boundary — still intact, in one line: a `DeclaredLaunch` leg
-    still runs as its own child process, so a crash in foreign code is
-    contained exactly as it was before this leg's launch became declared;
-    an in-process (callable) leg was in-process already. See
-    state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md.
-    """
     failures = 0
 
     # Every leg runs UNCONDITIONALLY here, in declared order, regardless of
-    # whether bin/install-health/ exists under claude_klabauter_root at all. The trust
-    # gate above has already validated plugin_root before this point, which
-    # is what preserves ensure-python3-exe-shim's ordering constraint (its
-    # bash oracle sourced coordinator-trusted-root-guard.sh before doing
-    # anything else; calling the native op after the same gate here keeps
-    # that invariant true without re-sourcing anything).
     declared_scripts: set = set()
     for leg_name, entrypoint in _NATIVE_LEGS:
         if isinstance(entrypoint, DeclaredLaunch):
@@ -774,9 +678,6 @@ def _run_legs(plugin_root: str, claude_klabauter_root: str, script_path: Optiona
         try:
             rc = entrypoint(plugin_root, claude_klabauter_root)
         except Exception as exc:  # pragma: no cover - defensive parity with the OSError branch above
-            # Distinct "raised" prefix so
-            # operators can tell a native-leg crash apart from a clean
-            # non-zero return (below) without reading code.
             print(f"[install-health] FAIL: {leg_name} raised: {exc}", file=sys.stderr)
             failures += 1
             continue
@@ -784,14 +685,6 @@ def _run_legs(plugin_root: str, claude_klabauter_root: str, script_path: Optiona
             print(f"[install-health] FAIL: {leg_name} exit={rc}", file=sys.stderr)
             failures += 1
 
-    # Undeclared drop-ins — resolved off claude_klabauter_root (coordinator_engine_root()),
-    # NOT plugin_root: this directory is claude-klabauter's own tree
-    # (<claude_klabauter_root>/coordinator/bin/install-health/), not a DoE-side
-    # surface, per the dual-anchor split (see module docstring). Listed once
-    # (no spawn) and, for every `.sh`/`.py` file whose stem is not a declared
-    # leg name and whose path is not a declared `script`/`nt_launcher`,
-    # refused by name — loud, but NOT counted as a failure: one stray file
-    # must not abort the whole install (see § Design, "Undeclared drop-ins").
     health_dir = os.path.join(claude_klabauter_root, "coordinator", "bin", "install-health")
 
     declared_names = frozenset(name for name, _ in _NATIVE_LEGS)
@@ -824,8 +717,5 @@ def _run_legs(plugin_root: str, claude_klabauter_root: str, script_path: Optiona
     return 0
 
 
-# Every sibling op module in this
-# slice ends with a __main__ guard, making it directly CLI-runnable/testable as a
-# script; this one lacked it, an inconsistency against the slice's own convention.
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:], script_path=sys.argv[0]))

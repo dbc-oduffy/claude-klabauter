@@ -130,16 +130,9 @@ def _finding(code: str, where: str, error: str, hint: str) -> dict:
 
 
 def _summary_findings(fm_text: str) -> list[dict]:
-    """`summary:` findings, measured on the DECODED value — the same value
-    `schema_validate._cf_summary_length_cap` measures and
-    `handoff_normalize.normalize_present_summary` truncates. Measuring raw
-    on-disk text instead would diverge on quoted escapes and comment tails
-    (see that function's own review note)."""
     try:
         fm = yaml.safe_load(fm_text) or {}
     except Exception:  # noqa: BLE001 — an unparseable frontmatter is the schema
-        # gate's finding to report, not this op's; nothing about `summary:` can
-        # be said about bytes that do not decode.
         return []
     if not isinstance(fm, dict):
         return []
@@ -174,10 +167,6 @@ def _summary_findings(fm_text: str) -> list[dict]:
 
 
 def _acceptance_criteria_findings(body: str) -> list[dict]:
-    """One finding: an `## Acceptance criteria` section that EXISTS and carries
-    zero checkboxes. That is precisely the shape the completeness gate reports
-    as `indeterminate` — present enough to look answered, empty enough to
-    verify nothing."""
     has_section = any(
         _ACC_CRITERIA_HEADING_RE.match(line) for line in body.splitlines()
     )
@@ -212,12 +201,6 @@ def _ledger_findings(body: str) -> list[dict]:
 
 
 def lint_text(text: str) -> list[dict]:
-    """The in-process entry point: findings for an already-in-hand body of
-    text, with no path resolution and no I/O. See module docstring's Entry
-    points section — this exists because a PreToolUse guard runs BEFORE the
-    write lands, so it cannot read a resolved on-disk file the way
-    `_handler` does; it has only the post-write text it can construct
-    itself, and must hand that text here directly."""
     split = split_frontmatter(text)
     fm_text = split.fm_text if split is not None else ""
     body = split.body_with_leading_newline if split is not None else text
@@ -229,17 +212,9 @@ def lint_text(text: str) -> list[dict]:
 
 
 def _resolve_read_path(handoff_path: str, repo_root: Path) -> "tuple[Optional[Path], Optional[str]]":
-    """Resolve a repo-relative handoff path to a readable file, following the
-    live -> archive fallback every other handoff-body op uses (a handoff picked
-    up and archived between authoring and lint is still lintable)."""
     try:
         worktree = main_worktree_root(repo_root)
     except ValueError as exc:
-        # `main_worktree_root` refuses to guess when handed something that is
-        # neither a git common dir nor a worktree root. Surfaced as exit 2
-        # (indeterminate) rather than propagated: a lint that RAISES gives its
-        # caller a stack trace where the envelope already has a place to say
-        # "could not determine".
         return None, str(exc)
     live = contained_path(worktree / handoff_path, [worktree])
     if live is None:
@@ -299,11 +274,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "error": f"unreadable: {exc}",
         }
 
-    # A file with no parseable frontmatter still gets its BODY linted: the
-    # checkbox and ledger grammars are body-only, and refusing to lint them
-    # because the frontmatter is malformed would hand the author a second
-    # silent pass. The frontmatter's own malformation is the schema gate's
-    # finding to report, not this op's.
     findings = lint_text(text)
     return {
         "exit_code": 1 if findings else 0,

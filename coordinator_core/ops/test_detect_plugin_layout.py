@@ -1,10 +1,3 @@
-"""Tests for coordinator_core.ops.detect_plugin_layout (op detect.plugin_layout).
-
-Covers the flat/nested classification, the register_op handler
-contract (plain sync handler), and the CC-4/AC7 double-invocation idempotency
-proof (pure read-only existence check — a second call with identical inputs
-is a no-op that yields byte-identical output).
-"""
 from __future__ import annotations
 
 from coordinator_core.ops.detect_plugin_layout import _handler, classify_plugin_layout

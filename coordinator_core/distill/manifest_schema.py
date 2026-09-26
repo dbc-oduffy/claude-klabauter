@@ -69,17 +69,11 @@ __all__ = [
     "check_schema_version",
 ]
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 
 SCHEMA_VERSION: int = 1
 """Schema version integer for every manifest shape in this module — always the
 first key written on disk. Not semver; mirrors receipt_schema.py's convention."""
 
-#: The four-field disposal-authorization stamp, byte-identical in spirit to
-#: handoff.stamp_phase's execution_authorized_{by,at,sha,note} convention
-#: (DEC-2) — same all-four-or-none posture, same refuse-value-injection intent.
 STAMP_FIELDS: tuple[str, ...] = (
     "disposal_authorized_by",
     "disposal_authorized_at",
@@ -87,10 +81,8 @@ STAMP_FIELDS: tuple[str, ...] = (
     "disposal_authorized_note",
 )
 
-#: Valid values for a per-guard receipt's ``verdict`` field.
 VALID_VERDICTS: frozenset[str] = frozenset({"pass", "block"})
 
-#: Required top-level fields for a scope-manifest.
 _SCOPE_REQUIRED: tuple[str, ...] = (
     "schema_version",
     "run_id",
@@ -100,11 +92,9 @@ _SCOPE_REQUIRED: tuple[str, ...] = (
     "cohorts",
 )
 
-#: Required per-guard-receipt fields.
 _GUARD_RECEIPT_REQUIRED: tuple[str, ...] = ("guard", "verdict", "evidence")
 
 #: Required per-file disposal-row fields (retention_reason is OPTIONAL — present
-#: only on retained/non-eligible rows; log_row is always present, possibly "").
 _DISPOSAL_ROW_REQUIRED: tuple[str, ...] = (
     "path",
     "artifact_class",
@@ -113,14 +103,12 @@ _DISPOSAL_ROW_REQUIRED: tuple[str, ...] = (
     "log_row",
 )
 
-#: Required scan_stats fields.
 _SCAN_STATS_REQUIRED: tuple[str, ...] = (
     "total_scanned",
     "eligible_count",
     "retained_count",
 )
 
-#: Required top-level fields for a disposal-manifest (BEFORE stamping — the
 #: STAMP_FIELDS group is additive, written later by distill.stamp_disposal).
 _DISPOSAL_REQUIRED: tuple[str, ...] = (
     "schema_version",
@@ -130,7 +118,6 @@ _DISPOSAL_REQUIRED: tuple[str, ...] = (
     "mass_throttle",
 )
 
-#: Required per-artifact fields in a curation-status ledger entry.
 _CURATION_ARTIFACT_REQUIRED: tuple[str, ...] = (
     "harvested",
     "ripe",
@@ -139,7 +126,6 @@ _CURATION_ARTIFACT_REQUIRED: tuple[str, ...] = (
     "last_touched",
 )
 
-#: Required top-level fields for a curation-status artifact.
 _CURATION_REQUIRED: tuple[str, ...] = (
     "schema_version",
     "run_id",
@@ -153,12 +139,7 @@ _CURATION_REQUIRED: tuple[str, ...] = (
 
 
 class ManifestSchemaError(Exception):
-    """Raised by check_schema_version on an unknown forward schema_version."""
-
-
-# ---------------------------------------------------------------------------
-# scope-manifest (distill.scope Workflow INPUT JSON — C10)
-# ---------------------------------------------------------------------------
+    pass
 
 
 def make_scope_manifest(
@@ -168,13 +149,6 @@ def make_scope_manifest(
     wiki_slugs: list[str],
     cohorts: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
-    """Return a schema-valid scope-manifest dict.
-
-    ``batches`` is a list of chronological file-path batches (~20-50 files each,
-    per C10). ``cohorts`` is an open dict keyed by cohort name (e.g. "harvest",
-    "skip", "sidecars" per DEC-4) -> list of rel-posix paths; defaults to {}
-    when the caller has none yet (graceful-absent, always key-present).
-    """
     return {
         "schema_version": SCHEMA_VERSION,
         "run_id": run_id,
@@ -186,7 +160,6 @@ def make_scope_manifest(
 
 
 def validate_scope_manifest(manifest: dict[str, Any]) -> list[str]:
-    """Validate a scope-manifest dict. Returns a (possibly empty) error list."""
     errors: list[str] = []
     if not isinstance(manifest, dict):
         return [f"scope-manifest must be a dict; got {type(manifest).__name__}"]
@@ -212,11 +185,6 @@ def validate_scope_manifest(manifest: dict[str, Any]) -> list[str]:
     if not isinstance(manifest["cohorts"], dict):
         errors.append("cohorts must be a dict")
     return errors
-
-
-# ---------------------------------------------------------------------------
-# disposal-manifest (distill.assemble_disposal_manifest — C12)
-# ---------------------------------------------------------------------------
 
 
 def make_guard_receipt(guard: str, verdict: str, evidence: Any = "") -> dict[str, Any]:
@@ -258,7 +226,6 @@ def make_disposal_row(
 def make_scan_stats(
     total_scanned: int, eligible_count: int, retained_count: int
 ) -> dict[str, int]:
-    """Return a schema-valid scan_stats dict."""
     return {
         "total_scanned": total_scanned,
         "eligible_count": eligible_count,
@@ -349,7 +316,6 @@ def validate_disposal_manifest(manifest: dict[str, Any]) -> list[str]:
 
 
 def _validate_disposal_row(row: Any, idx: int) -> list[str]:
-    """Validate one disposal-manifest row. Returns prefixed error strings."""
     errors: list[str] = []
     if not isinstance(row, dict):
         return [f"rows[{idx}] must be a dict; got {type(row).__name__}"]
@@ -402,13 +368,7 @@ def _validate_disposal_row(row: Any, idx: int) -> list[str]:
     return errors
 
 
-# ---------------------------------------------------------------------------
-# Stamp field-group (DEC-2 — mirrors handoff.phase_stamp's execution_authorized_*)
-# ---------------------------------------------------------------------------
-
-
 def make_stamp(by: str, at: str, sha: str, note: str) -> dict[str, str]:
-    """Return the four-field disposal_authorized_* stamp dict."""
     return {
         "disposal_authorized_by": by,
         "disposal_authorized_at": at,
@@ -418,13 +378,6 @@ def make_stamp(by: str, at: str, sha: str, note: str) -> dict[str, str]:
 
 
 def apply_stamp(manifest: dict[str, Any], by: str, at: str, sha: str, note: str) -> dict[str, Any]:
-    """Return a NEW manifest dict with the stamp field-group applied (additive).
-
-    Does not mutate the input dict. Callers (distill.stamp_disposal, C13) are
-    responsible for computing ``sha`` via compute_manifest_sha() over the
-    UN-stamped manifest and for the all-four-or-none / idempotent-when-equal /
-    refuse-on-drift semantics — this helper only shapes the merge.
-    """
     stamped = dict(manifest)
     stamped.update(make_stamp(by, at, sha, note))
     return stamped
@@ -446,11 +399,6 @@ def stamp_partial(manifest: dict[str, Any]) -> bool:
     return 0 < len(present) < len(STAMP_FIELDS)
 
 
-# ---------------------------------------------------------------------------
-# curation-status artifact (distill.curation_status --emit — C11)
-# ---------------------------------------------------------------------------
-
-
 def make_curation_status(
     run_id: str,
     generated_at: str,
@@ -460,18 +408,6 @@ def make_curation_status(
     last_run_age_seconds: float | None,
     prunable: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Return a schema-valid curation-status dict.
-
-    ``artifacts`` is keyed by rel-posix path -> {harvested, ripe, prunable,
-    blocked_by, last_touched}. ``prunable`` is a list of {path, reasons: [...]}
-    dicts (the prunable-set-with-reasons view, DEC-1/AC4). ``last_run_id`` /
-    ``last_run_age_seconds`` describe the last DISTILL run recorded in the
-    canonical distillation log (`state/distillation-log.md`) — NOT the last time
-    this artifact itself was emitted (2026-07-23 fix; see
-    `coordinator_core.ops.distill_curation_status._last_distill_run`). Both are
-    None when the log is absent or has no parseable rows yet (graceful-absent —
-    key always present, value may be null).
-    """
     return {
         "schema_version": SCHEMA_VERSION,
         "run_id": run_id,
@@ -485,7 +421,6 @@ def make_curation_status(
 
 
 def validate_curation_status(manifest: dict[str, Any]) -> list[str]:
-    """Validate a curation-status dict. Returns a (possibly empty) error list."""
     errors: list[str] = []
     if not isinstance(manifest, dict):
         return [f"curation-status must be a dict; got {type(manifest).__name__}"]
@@ -536,11 +471,6 @@ def validate_curation_status(manifest: dict[str, Any]) -> list[str]:
     return errors
 
 
-# ---------------------------------------------------------------------------
-# Canonical serialization + sha (F3) + schema_version consumption gate
-# ---------------------------------------------------------------------------
-
-
 def canonical_manifest_bytes(manifest: dict[str, Any]) -> bytes:
     """Return the canonical byte serialization used for sha computation.
 
@@ -556,18 +486,10 @@ def canonical_manifest_bytes(manifest: dict[str, Any]) -> bytes:
 
 
 def compute_manifest_sha(manifest: dict[str, Any]) -> str:
-    """Return the sha256 hex digest of the manifest's canonical body (F3)."""
     return hashlib.sha256(canonical_manifest_bytes(manifest)).hexdigest()
 
 
 def check_schema_version(manifest: dict[str, Any], *, known_version: int = SCHEMA_VERSION) -> None:
-    """Fail-loud gate for manifest consumption (schema_version discipline).
-
-    Raises ManifestSchemaError if schema_version is missing, non-int, or
-    NEWER than ``known_version`` (an unknown forward version this code
-    cannot safely interpret). A matching (or older, already-known) version
-    passes silently — no return value, no side effect.
-    """
     version = manifest.get("schema_version")
     if version is None:
         raise ManifestSchemaError("manifest missing required field: 'schema_version'")

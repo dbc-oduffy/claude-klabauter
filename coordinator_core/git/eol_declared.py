@@ -65,63 +65,30 @@ __all__ = [
     "repair_declared_eol_drift",
 ]
 
-#: The classes this module has an opinion about. Deliberately NOT every text
-#: file: K-019's own labour census found 0 violations across 593 executable
-#: files and all 43 violations on DATA files (`.diff`/`.patch`/`.sha`) under
-#: scratch dirs (`state/review-slices/`, `state/subagent-share/`). A scratch
-#: `.diff` with the wrong line ending harms nothing; a `.cmd` with the wrong
-#: one does not run. Widening this tuple re-adopts the noise the census
-#: already measured and the baton's anti-scope names by hand.
 EXECUTABLE_SUFFIXES = (".cmd", ".ps1", ".sh", ".bat")
 
-#: The two endings a declaration can name that this module can verify and
-#: repair. `git ls-files --eol` also reports `none` (a file with no line
 #: terminator at all) and `mixed`; neither is a DECLARATION, they are
-#: observations, and neither appears on the left of this membership test.
 _REPAIRABLE_DECLARATIONS = ("lf", "crlf")
 
 _BYTES_FOR = {"lf": b"\n", "crlf": b"\r\n"}
 
-#: `i/<index-eol> w/<worktree-eol> attr/<attrs><TAB><path>`, per `git ls-files
 #: --eol`. The attribute field is space-padded and itself CONTAINS spaces
-#: (`text eol=crlf`), which is why the path is taken off the tab rather than
-#: off a field count. Under `-z` git NUL-terminates records and does NOT
-#: C-quote unusual paths, so `.*` is safe for the tail.
 _RECORD = re.compile(r"^i/(\S*)\s+w/(\S*)\s+attr/(.*?)\s*\t(.*)$", re.DOTALL)
 
 _DECLARED = re.compile(r"\beol=(\w+)")
 
 
 class Drift(NamedTuple):
-    """One executable whose on-disk line ending contradicts its declaration.
-
-    `declared` is what `.gitattributes` says the file must be; `on_disk` is
-    what `git ls-files --eol` reports the working tree actually holds. They
-    are never equal in an instance of this type -- construction is gated on
-    the mismatch.
-    """
 
     path: str
     declared: str
     on_disk: str
 
     def describe(self) -> str:
-        """One-line operator-facing rendering, in the terse register
-        `docs/wiki/guard-messaging.md` § Register asks for: the fact, once.
-        """
         return f"{self.path} (declared {self.declared}, on disk {self.on_disk})"
 
 
 def executable_paths(paths: Iterable[str]) -> List[str]:
-    """The subset of `paths` this module has an opinion about, de-duplicated
-    and order-preserving.
-
-    The whole budget case rests on this function: it spawns nothing, opens
-    nothing, and returns `[]` for the overwhelming majority of commits, which
-    lets every caller below skip its git call entirely. Suffix matching is
-    case-insensitive because Windows path casing is not stable across the
-    producers that write these files.
-    """
     seen: dict = {}
     for path in paths:
         if path.lower().endswith(EXECUTABLE_SUFFIXES):
@@ -132,19 +99,6 @@ def executable_paths(paths: Iterable[str]) -> List[str]:
 def find_declared_eol_drift(
     repo_root: Path | str, paths: Sequence[str], *, timeout: Optional[float] = None
 ) -> List[Drift]:
-    """Executables among `paths` whose working-tree bytes contradict their
-    declared `eol=`. One git spawn, or zero when `paths` carries no executable.
-
-    Never raises and never blocks a caller: a non-zero git exit, an
-    unparseable record, or a path git does not track folds to "no drift
-    found". This is a detector on a commit path, and a detector that can fail
-    a commit is a worse defect than the drift it looks for.
-
-    A path with no `eol=` declaration is not a finding -- there is nothing for
-    the bytes to contradict. Nor is a declaration of anything but `lf`/`crlf`,
-    nor a working tree git reports as `none` (no line terminator present) or
-    as already matching.
-    """
     candidates = executable_paths(paths)
     if not candidates:
         return []
@@ -154,12 +108,6 @@ def find_declared_eol_drift(
         timeout=timeout,
         binary=True,
     )
-    # `stdout_bytes`, NOT `stdout`: under `binary=True` the decoded `stdout`
-    # view is empty by construction, and a `-z` reader needs the undecoded
-    # stream anyway (see `GitResult`'s own field docs). Reading the wrong one
-    # here folds every commit to "no drift found" and the detector reports
-    # clean forever -- exactly the silent-pass failure this module exists to
-    # end, so it is pinned by `test_reads_stdout_bytes_not_stdout`.
     if result.returncode != 0 or not result.stdout_bytes:
         return []
 
@@ -175,10 +123,6 @@ def find_declared_eol_drift(
         match = _RECORD.match(record)
         if match is None:
             continue
-        # The index leg is deliberately unread: check-in normalization means
-        # `i/` says what the blob holds, and the blob is never what breaks a
-        # launcher. `w/` is the only field that describes the bytes cmd.exe
-        # will actually be handed.
         _index_eol, worktree_eol, attrs, path = match.groups()
         declaration = _DECLARED.search(attrs)
         if declaration is None:
@@ -186,12 +130,6 @@ def find_declared_eol_drift(
         declared = declaration.group(1)
         if declared not in _REPAIRABLE_DECLARATIONS:
             continue
-        # "-text" and "" both mean git's own binary-content heuristic (or an
-        # unset worktree eolinfo) is in play, in which case check-in
-        # normalization does NOT touch the bytes -- there is no checkout
-        # filter run to be "byte-identical to" for those states, so treating
-        # either as repairable drift would let this module rewrite bytes
-        # git itself would leave alone. Review finding 2, 2026-08-30.
         if worktree_eol in (declared, "none", "-text", ""):
             continue
         drifts.append(Drift(path=path, declared=declared, on_disk=worktree_eol))
@@ -223,24 +161,12 @@ def repair_declared_eol_drift(
         if want is None:
             continue
         target = root / drift.path
-        # `.gitattributes` matches by pathname, not object type -- a tracked
-        # SYMLINK can match an `eol=` pattern, and `Path.read_bytes`/
-        # `write_bytes` follow a symlink transparently on both POSIX and
-        # Windows. Skip before reading: this checks the target path itself,
-        # not a symlinked PARENT directory component, so a symlinked ancestor
-        # directory is not covered -- a cheap `is_symlink()` here closes the
-        # direct-target case without a stat walk up the path on this hot
-        # path. Review finding 3, 2026-08-30.
         if target.is_symlink():
             continue
         try:
             raw = target.read_bytes()
         except OSError:
             continue
-        # Collapse every existing terminator to LF first, then expand once to
-        # the declared ending. Going straight to CRLF would double the \r on
-        # any line already correct, which is the classic in-place-rewrite bug
-        # this ordering exists to make unrepresentable.
         normalized = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
         rewritten = normalized.replace(b"\n", want)
         if rewritten == raw:

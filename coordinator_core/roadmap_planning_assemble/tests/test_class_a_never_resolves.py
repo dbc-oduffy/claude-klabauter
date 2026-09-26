@@ -76,9 +76,6 @@ import coordinator_core.sprint_planning_assemble as spa  # noqa: E402
 
 _BIN_DIR = os.path.join(_ENGINE_ROOT, "coordinator", "bin")
 
-# Extensions this repo uses for a script whose invocable CLI stem is the
-# filename minus the extension. An extensionless file (see negative-spec)
-# is already its own stem and is never stripped.
 _SCRIPT_EXTENSIONS = (".py", ".sh", ".ps1", ".cjs", ".mjs", ".js")
 
 
@@ -144,9 +141,7 @@ class TestClassAGlueNeverResolves(unittest.TestCase):
         )
 
     def test_class_a_glue_has_eight_names(self):
-        # Non-vacuousness guard on the constant itself: an accidentally
         # emptied CLASS_A_GLUE would make the resolution test above pass
-        # trivially (an empty offenders list from an empty input).
         self.assertEqual(len(rpa.CLASS_A_GLUE), 8)
 
 
@@ -182,9 +177,7 @@ class TestCorrected13OpManifestResolves(unittest.TestCase):
         )
 
     def test_literal_name_ops_resolve_as_real_cli_stems(self):
-        # Non-vacuousness proof: the CLI-stem resolution mechanism must
         # find SOMETHING real, or the disjointness test above would pass
-        # even with a broken resolver.
         literal_name_ops = {"roadmap-number-stubs", "audit-roadmap", "coordinator-doc-new"}
         self.assertTrue(literal_name_ops.issubset(self.manifest))
         missing = literal_name_ops - self.cli_stems

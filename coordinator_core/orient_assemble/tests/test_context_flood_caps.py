@@ -1,27 +1,3 @@
-"""
-coordinator_core.orient_assemble.tests.test_context_flood_caps — covers the
-2026-07-30 context-flood fix: `brief('session')` shipped at 148 judgment
-points / 124KB, ~91 of them one-per-inbound-cross-repo-memo (`j-memo-N`) and
-~40 one-per-surfaced-handoff (`j-auto-reconcile-N`), both unbounded lists
-that grow with disk contents.
-
-Covers:
-    - session-cadence memo suppression (zero `j-memo-*` entries, no depth
-      count anywhere) per the `~/.claude/CLAUDE.md` ruling: "The cross-repo
-      memo inbox doesn't move without deliberate Claude+human action. Depth
-      is not a backlog and waiting memos are not overdue work — don't
-      report the count."
-    - the shared cap helper (`reader_result.cap_judgment_points`) binding
-      and emitting exactly one overflow entry.
-    - day/week cadence are unaffected by the memo suppression (memos still
-      surface, capped).
-    - the cap helper exists in exactly one place and drives both reader
-      families (`readers_clean_ops`, `readers_branch_reconcile`).
-    - `brief('session')`'s serialized byte size stays under a defended
-      budget (see `test_brief_session_stays_under_byte_budget`).
-
-Spec backlink: state/improvement-queue/2026-07-30-orientation-targets-work-finding-but-ems-d7e494b501a2.yaml
-"""
 
 from __future__ import annotations
 
@@ -49,11 +25,6 @@ def _make_judgment_points(n: int) -> list[dict]:
     ]
 
 
-# ---------------------------------------------------------------------------
-# cap_judgment_points — the one shared helper both families call
-# ---------------------------------------------------------------------------
-
-
 def test_cap_helper_passes_through_when_under_cap():
     points = _make_judgment_points(3)
     result = cap_judgment_points(
@@ -75,36 +46,23 @@ def test_cap_helper_binds_and_emits_exactly_one_overflow_entry():
         item_label="fixtures",
         list_command="fixture-cli",
     )
-    assert len(result) == 5  # 4 kept + exactly 1 overflow
+    assert len(result) == 5
     assert [jp["id"] for jp in result[:4]] == [p["id"] for p in points[:4]]
     overflow = result[-1]
     assert overflow["id"] == "j-overflow"
-    assert "6" in overflow["evidence"]  # 10 - 4 = 6 withheld
+    assert "6" in overflow["evidence"]
     assert "fixture-cli" in overflow["evidence"]
     assert overflow["recommendation"] is None
     assert overflow["reason"] == "recommendation-forbidden"
 
 
 def test_cap_helper_is_the_single_shared_implementation():
-    """`readers_clean_ops` must import the SAME cap-and-overflow function
-    object this test file imports — not an independently-written copy.
-    `readers_branch_reconcile` is excluded here: its own auto-reconcile
-    family is retired (§ the module's own docstring) and no longer imports
-    `cap_judgment_points` at all — state/bug-backlog/2026-09-11-orient-
-    assemble-still-probes-the-retired-4775aa35bd49.yaml."""
     import coordinator_core.orient_assemble.readers_clean_ops as rco_mod
 
     assert rco_mod.cap_judgment_points is cap_judgment_points
 
 
-# ---------------------------------------------------------------------------
-# memo family — session suppression, day/week capped surfacing
-# ---------------------------------------------------------------------------
-
-
 def test_memo_surface_suppressed_entirely_at_session_cadence(monkeypatch):
-    """mode="suppress" must short-circuit before any inbox read — zero JPs,
-    no depth count anywhere (not even a summarizing single JP)."""
     monkeypatch.setattr(
         rco,
         "_resolve_inbox_dir",
@@ -137,9 +95,6 @@ def test_memo_surface_collect_suppresses_only_at_session_cadence(monkeypatch, tm
 
 
 def test_collect_threads_repo_root_into_memo_surface_and_worktree_sweep(monkeypatch, tmp_path):
-    """`collect(repo_root=...)` must reach `_read_memo_surface` and
-    `_read_worktree_sweep` — the two readers whose underlying helpers
-    already accept a `cwd` override."""
     seen_memo_root = []
     seen_worktree_root = []
 
@@ -174,9 +129,6 @@ def test_memo_surface_caps_at_day_cadence(monkeypatch, tmp_path):
 
     result = rco._read_memo_surface("surface")
 
-    # Overflow entry is `j-overflow-memo` (Review: code-reviewer — Finding 4)
-    # — a distinct prefix from `j-memo-N`, so a naive `startswith("j-memo-")`
-    # filter can no longer silently include it. No exclusion needed here.
     memo_jps = [jp for jp in result.judgment_points if jp["id"].startswith("j-memo-")]
     overflow_jps = [jp for jp in result.judgment_points if jp["id"] == "j-overflow-memo"]
     assert len(memo_jps) == rco._MEMO_JUDGMENT_POINT_CAP
@@ -185,13 +137,6 @@ def test_memo_surface_caps_at_day_cadence(monkeypatch, tmp_path):
 
 
 def test_memo_cap_keeps_action_required_over_newer_fyi(monkeypatch, tmp_path):
-    """The cap must withhold the least-urgent memos, not an arbitrary tail.
-
-    Band (`"0"` action-required, `"1"` fyi) outranks recency: a full cap's
-    worth of fyi memos created today must NOT push a week-old
-    action-required memo behind the overflow entry. Recency is only the
-    tiebreak within a band.
-    """
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     old_action = "0|2026-07-23|sibling|old but action-required|ask"
@@ -211,7 +156,6 @@ def test_memo_cap_keeps_action_required_over_newer_fyi(monkeypatch, tmp_path):
 
 
 def test_memo_cap_orders_recent_first_within_a_band(monkeypatch, tmp_path):
-    """Within one band, ordering is most-recent-first."""
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     lines = [
@@ -239,19 +183,7 @@ def test_memo_surface_no_overflow_when_under_cap(monkeypatch, tmp_path):
     assert [jp["id"] for jp in result.judgment_points] == ["j-memo-1"]
 
 
-# ---------------------------------------------------------------------------
-# auto-reconcile family — retired: `handoff.reconcile_open` is no longer a
-# registered op (K-026, superseded by K-057). `_read_auto_reconcile` is a
-# permanent no-op and must never dispatch it.
-# Bug-backlog: state/bug-backlog/2026-09-11-orient-assemble-still-probes-the-
-# retired-4775aa35bd49.yaml
-# ---------------------------------------------------------------------------
-
-
 def test_auto_reconcile_probe_never_dispatches(monkeypatch):
-    """The retired probe must not be called, even if a caller still fakes a
-    response for it — proves `_read_auto_reconcile` no longer reaches
-    `check_auto_reconcile.get_response` at all."""
     import coordinator_core.ops.check_auto_reconcile as check_auto_reconcile
 
     def _unexpected_call():
@@ -266,12 +198,6 @@ def test_auto_reconcile_probe_never_dispatches(monkeypatch):
 
     assert result.judgment_points == []
     assert result.directives == []
-
-
-# ---------------------------------------------------------------------------
-# byte budget — the diff's actual claim, pinned to a test (Review:
-# code-reviewer — Finding 2)
-# ---------------------------------------------------------------------------
 
 
 def test_brief_session_stays_under_byte_budget():

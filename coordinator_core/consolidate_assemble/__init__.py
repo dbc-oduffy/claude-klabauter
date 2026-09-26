@@ -88,8 +88,6 @@ EXIT_BUSINESS_FAILURE = 1
 EXIT_USAGE = 2
 EXIT_TRANSPORT_FAIL = 3
 
-# Absorb-strategy threshold (consolidate-git/SKILL.md Step 4): 1-3 unique
-# commits defaults to cherry-pick; more than that defaults to merge.
 _CHERRY_PICK_MAX_COMMITS = 3
 
 
@@ -125,36 +123,10 @@ def resolve_main_branch(run_git: RunGit, repo_root: Path) -> Optional[str]:
 
 
 def list_branches(run_git: RunGit, repo_root: Path) -> list[dict[str, Any]]:
-    """`[{name, ref, is_local, is_remote}]` for every branch. `ref` is the
-    git-log-resolvable reference for a remote-only branch (`origin/<name>`)
-    or the bare local name otherwise.
-
-    Derived from `ref_rows` — the SAME `for-each-ref` call the tip authors
-    come from — rather than a `git branch -a` spawn of its own. `branch -a`
-    enumerates exactly `refs/heads` + `refs/remotes`, which is what that
-    call already walks, so the second spawn was buying a re-listing of refs
-    already in hand: 284 ms of the op's measured 931 ms process time on this
-    repo, the single most expensive call in the brief. Prefer
-    `list_branches_from(rows)` at any call site that also needs the authors,
-    so one call feeds both."""
     return list_branches_from(ref_rows(run_git, repo_root))
 
 
 def list_branches_from(rows: list[tuple[str, ...]]) -> list[dict[str, Any]]:
-    """The parse half of `list_branches`, over already-fetched `ref_rows`,
-    so a caller needing both the branch list and the tip authors spawns
-    `for-each-ref` once rather than twice.
-
-    Local vs remote is decided by the FULL refname (`refs/heads/…` vs
-    `refs/remotes/…`), never by whether the short name happens to contain a
-    remote's name — a local branch called `origin/foo` is legal, and the
-    short name alone cannot tell it from a remote-tracking one.
-
-    `refs/remotes/<remote>/HEAD` is skipped: it is the symbolic alias
-    `git branch -a` renders as `remotes/origin/HEAD -> origin/main`, whose
-    short form is the bare remote name. It names no branch of its own — and
-    read as one it becomes a phantom `origin` branch that categorizes as
-    stale work and drags a `git log` and a `git show` behind it."""
     branches: dict[str, dict[str, Any]] = {}
     for refname, short, *_rest in rows:
         if refname.startswith("refs/heads/"):
@@ -176,27 +148,11 @@ def list_branches_from(rows: list[tuple[str, ...]]) -> list[dict[str, Any]]:
 
 
 def tip_author(run_git: RunGit, repo_root: Path, ref: str) -> str:
-    """`git log -1 --format=%ae <ref>` resolves a single tip commit's
-    author. Retained as the per-ref fallback `tip_authors` falls back to for
-    a ref outside `refs/heads`/`refs/remotes` (e.g. a worktree path) that
-    `git for-each-ref` cannot resolve."""
     proc = run_git(["log", "-1", "--format=%ae", ref], repo_root)
     return proc.stdout.strip()
 
 
 def ref_rows(run_git: RunGit, repo_root: Path) -> list[tuple[str, ...]]:
-    """`[(refname, refname_short, tip_author_email)]` over every local and
-    remote-tracking ref, from ONE `git for-each-ref` call — THE single ref
-    enumeration for the whole brief. Its short names plus full refnames are
-    the branch set (`list_branches_from`); its emails are the tip authors
-    (`tip_authors`). A ref resolved here never needs a spawn of its own for
-    either question.
-
-    Tab-separated, not space-separated: `%(authoremail:trim)` can be empty
-    on a ref with no author line, and a trailing empty space-delimited field
-    is indistinguishable from a missing one. A tab cannot occur inside a
-    refname (git rejects it) and cannot occur inside an email here, so the
-    split is unambiguous for exactly the fields being read."""
     proc = run_git(
         [
             "for-each-ref",
@@ -217,24 +173,16 @@ def ref_rows(run_git: RunGit, repo_root: Path) -> list[tuple[str, ...]]:
             continue
         refname, short = parts[0], parts[1]
         email = parts[2] if len(parts) > 2 else ""
-        # A repeated trailer arrives comma-joined; the first one is the stamp.
         operator = parts[3].split(",", 1)[0].strip() if len(parts) > 3 else ""
         rows.append((refname, short, email, operator))
     return rows
 
 
 def tip_authors(run_git: RunGit, repo_root: Path) -> dict[str, str]:
-    """`{ref: tip_author_email}` — batches `tip_author` across every ref
-    into one spawn. `%(refname:short)` yields `<name>` for a local branch
-    and `origin/<name>` for a remote-only one, the same `ref` shape
-    `list_branches` produces, and `%(authoremail:trim)` strips the `<...>`
-    `git log --format=%ae` never adds, so the map is keyed and valued
-    identically to N per-ref `tip_author` calls."""
     return tip_authors_from(ref_rows(run_git, repo_root))
 
 
 def tip_authors_from(rows: list[tuple[str, ...]]) -> dict[str, str]:
-    """The map half of `tip_authors`, over already-fetched `ref_rows`."""
     return {row[1]: row[2] for row in rows}
 
 
@@ -246,24 +194,10 @@ def tip_operators_from(rows: list[tuple[str, ...]]) -> dict[str, str]:
     return {row[1]: (row[3] if len(row) > 3 else "") for row in rows}
 
 
-#: Branch-name segments that mark a ref as a deliberate safety copy. A backup
-#: ref doing its job perfectly is byte-identical to what it protects, so it has
-#: ZERO unique commits -- which the redundancy test below reads as "safe to
-#: delete outright, no judgment needed" and turns into an unconditional delete
-#: directive with no judgment point in front of it. That is exactly backwards:
-#: emptiness is the backup's success condition, not evidence it is disposable.
-#: Reported after a near-loss of unrecoverable history during an active
-#: blob-purge (recovered via reflog).
-#:
-#: Deliberately broad, and deliberately erring toward retention: a working
-#: branch wrongly spared costs one manual delete, a backup wrongly deleted can
-#: cost history that exists nowhere else. Matched per slash-separated segment,
-#: so `backup/pre-purge`, `wip/backup-2026-08-18`, and `pre-rewrite` all hold.
 _BACKUP_BRANCH_SEGMENT_PREFIXES = ("backup", "pre-")
 
 
 def is_backup_branch(name: str) -> bool:
-    """True when any slash-separated segment of `name` marks a safety copy."""
     return any(
         segment.startswith(prefix)
         for segment in name.split("/")
@@ -271,12 +205,6 @@ def is_backup_branch(name: str) -> bool:
     )
 
 
-#: Claude Code cloud sessions author and commit as this identity, with no
-#: operator identity anywhere on the commit — so a `claude/*` branch never
-#: matches `my_email` and would be stranded as `others`. It does not prove
-#: whose session made it (in a shared repo it may be a peer operator's), so
-#: its category gates every directive behind a judgment point: nothing is
-#: absorbed or deleted without a verdict, including a zero-unique branch.
 CLOUD_SESSION_EMAIL = "noreply@anthropic.com"
 
 
@@ -291,8 +219,6 @@ def categorize_branch(
         return "backup"
     if tip_email == my_email:
         return "mine-stale"
-    # The Operator trailer is what makes a cloud tip provably ours; without
-    # it (or naming someone else) the tip stays behind a verdict.
     if tip_email == CLOUD_SESSION_EMAIL and tip_operator and tip_operator == my_email:
         return "mine-stale"
     if tip_email == CLOUD_SESSION_EMAIL:
@@ -301,9 +227,6 @@ def categorize_branch(
 
 
 def list_worktrees(run_git: RunGit, repo_root: Path) -> list[dict[str, Any]]:
-    """Parses `git worktree list --porcelain` into
-    `[{path, branch, head, locked}]`. `branch` is `None` for a detached
-    worktree (never a candidate here)."""
     proc = run_git(["worktree", "list", "--porcelain"], repo_root)
     worktrees: list[dict[str, Any]] = []
     current: dict[str, Any] = {}
@@ -329,23 +252,6 @@ def list_worktrees(run_git: RunGit, repo_root: Path) -> list[dict[str, Any]]:
 
 
 def worktree_is_dirty(run_git: RunGit, worktree_path: str) -> dict[str, Any]:
-    """Probes whether `worktree_path` has uncommitted changes via `git
-    status --porcelain`. Returns DR-319's degraded-with-evidence posture —
-    never fail-open (`docs/decisions/DR-319-session-fact-facade-shape-and-
-    failure-posture.md`; reference shape, read-only:
-    `coordinator_core/baton_assemble/__init__.py ::
-    _compute_dirty_tree_attribution`). A bare `bool(proc.stdout.strip())`
-    reads a failed call's empty stdout as "clean" (`returncode != 0` never
-    inspected), which then authorizes worktree removal — the single most
-    dangerous direction for this probe, since the caller uses "clean" to
-    unlock a destructive op. A degraded read must be structurally
-    distinguishable from a genuinely-clean one at the call site, never
-    collapsed back to a bool before the caller decides.
-
-    Returns:
-      - computed: {"degraded": False, "value": <bool>}
-      - degraded: {"degraded": True, "evidence": "<why the probe could not run>"}
-    """
     proc = run_git(["--no-optional-locks", "status", "--porcelain"], Path(worktree_path))
     if proc.returncode != 0:
         return {
@@ -365,14 +271,6 @@ def branch_reachable(run_git: RunGit, repo_root: Path, ref: str, target: str) ->
 
 
 def branches_merged_into(run_git: RunGit, repo_root: Path, target: str) -> set[str]:
-    """Batches `branch_reachable` across every local branch against ONE
-    `target` into a single `git branch --merged <target>` call — the
-    full-listing form `merge-base --is-ancestor` has no equivalent of,
-    listing every local branch whose tip is reachable from `target`
-    (ancestor-or-equal), the same relation `branch_reachable` tests
-    per-ref. `target` is loop-invariant across the worktree loop's
-    per-worktree `branch_reachable` calls (always `main_branch or
-    current`), so one call here replaces one per worktree."""
     proc = run_git(["branch", "--merged", target], repo_root)
     names: set[str] = set()
     for raw_line in proc.stdout.splitlines():
@@ -384,45 +282,11 @@ def branches_merged_into(run_git: RunGit, repo_root: Path, target: str) -> set[s
 
 
 def unique_commits(run_git: RunGit, repo_root: Path, current: str, stale_ref: str) -> list[str]:
-    """One call per stale branch by design: `git rev-list a..b c..d` computes
-    `reachable({b, d}) \\ reachable({a, c})`, the union's exclusion against
-    the union's reachable set, not a union of independent per-range
-    subtractions. A naive multi-branch batch would silently misattribute
-    commits across branches, so each `current..stale_ref` range stays its
-    own invocation."""
     proc = run_git(["log", "--oneline", f"{current}..{stale_ref}"], repo_root)
     return [line for line in proc.stdout.splitlines() if line.strip()]
 
 
 def inspect_commits(run_git: RunGit, repo_root: Path, shas: list[str]) -> dict[str, str]:
-    """Returns `{sha: <that commit's `git show --stat` block>}` for every sha
-    in `shas`, from ONE `git show` invocation rather than one per commit.
-
-    `git show` accepts multiple revs and concatenates their blocks, each
-    opening with a column-0 `commit <full-sha>` line; message bodies are
-    indented four spaces in the medium format, so that line can only be a
-    real block boundary. Blocks are matched against `shas` in order, so an
-    abbreviated sha (what `unique_commits` yields) resolves against the full
-    sha git prints. Per-commit bytes are unchanged from the per-commit call
-    this replaces.
-
-    A git spawn on Windows costs ~100ms (DoE memo
-    `cross-repo/inbox/2026-08-08-doe-claude-em-engine-side-git-spawn-cost.md`,
-    7-rep median), so a per-commit shape would cost `unique_commits ×
-    ~100ms`, and a per-branch shape `stale_branches × ~100ms`, on every
-    consolidation.
-
-    Called exactly ONCE per `brief()` invocation, across the union of every
-    stale branch's shas — not once per branch and not once per commit.
-    `test_inspection_gather_is_one_show_spawn_for_all_branches` pins
-    `len(show_calls) == 1` regardless of stale-branch count. Per-branch
-    attribution of the result survives the collapse because a commit's own
-    `git show --stat` block is a pure function of that commit — identical
-    whether it rides alongside one branch's shas or three branches' shas in
-    the same argv — so `brief()`'s caller keys the shared result dict by sha
-    per branch rather than needing this function to know about branches at
-    all. See `brief()`'s call site for the dedup-then-fan-out shape.
-    """
     if not shas:
         return {}
     proc = run_git(["show", "--stat", *shas], repo_root)
@@ -446,9 +310,6 @@ def inspect_commits(run_git: RunGit, repo_root: Path, shas: list[str]) -> dict[s
 
 
 def _drop_batch_separator(block: str) -> str:
-    """Drops the blank line `git show` emits BETWEEN shown objects, so a
-    batched block is byte-identical to that commit's own `git show --stat`
-    output. The final block has no separator and is never passed here."""
     return block[:-1] if block.endswith("\n\n") else block
 
 
@@ -461,9 +322,6 @@ def brief(
     my_email: Optional[str] = None,
     run_git: Optional[RunGit] = None,
 ) -> dict[str, Any]:
-    """Computes the eight-key decision object for `/consolidate-git`. Reads
-    ONLY (no mutation) — every mutating action surfaces as a `directives[]`
-    entry or a `judgment_points[]` entry a caller's `apply.py` resolves."""
     run_git = run_git or default_run_git
     repo_root = repo_root or Path.cwd()
 
@@ -471,10 +329,6 @@ def brief(
     current = current_branch(run_git, repo_root)
     main_branch = resolve_main_branch(run_git, repo_root)
 
-    # ONE `for-each-ref` spawn answers both questions the brief asks of the
-    # ref set: which branches exist, and who authored each tip. The branch
-    # listing used to spawn `git branch -a` for the first — 284 ms on this
-    # repo, re-enumerating refs this call already returns.
     ref_listing = ref_rows(run_git, repo_root)
     all_tip_authors = tip_authors_from(ref_listing)
     all_tip_operators = tip_operators_from(ref_listing)
@@ -483,14 +337,6 @@ def brief(
     directives: list[dict[str, Any]] = []
     judgment_points: list[dict[str, Any]] = []
 
-    # Two passes: gather every stale branch's unique-commit shas first, then
-    # one GLOBAL `inspect_commits` call across the union of all of them
-    # (see that function's docstring for why a commit's `git show --stat`
-    # block is safe to key by sha alone, independent of which branch's loop
-    # iteration it was collected from). This trades "one spawn per stale
-    # branch" for "one spawn total" — see
-    # `test_inspection_gather_is_one_show_spawn_for_all_branches` for the
-    # pinned invariant and its attribution argument.
     stale_branches: list[dict[str, Any]] = []
     all_shas: list[str] = []
 
@@ -504,9 +350,6 @@ def brief(
         operator = all_tip_operators.get(ref, "")
         category = categorize_branch(name, current, main_branch, author, my_email, operator)
         if category not in ("mine-stale", "cloud-session"):
-            # Report the category actually computed. The old literal `"others"`
-            # collapsed every non-stale branch into one bucket, which would have
-            # hidden the `backup` category from the brief the moment it existed.
             branches_report.append({**entry, "tip_author": author, "operator": operator, "category": category})
             continue
 
@@ -525,13 +368,6 @@ def brief(
         stale_branches.append({"entry": entry, "name": name, "category": category, "commits": commits, "shas": shas})
         all_shas.extend(shas)
 
-    # Dedup preserving first-encounter order: the same sha can legitimately
-    # be reachable from more than one stale branch (both diverged from
-    # `current` and share a commit neither has in common with it) — that is
-    # not an attribution hazard, because a commit's own `git show --stat`
-    # block is identical regardless of which branch's argv it rides in on,
-    # so every branch below just looks its own shas up in the one shared
-    # result dict.
     global_stats = inspect_commits(run_git, repo_root, list(dict.fromkeys(all_shas)))
 
     for stale in stale_branches:
@@ -608,10 +444,6 @@ def brief(
     worktree_entries = list_worktrees(run_git, repo_root)
     worktrees_report: list[dict[str, Any]] = []
     branch_names_set = {b["name"] for b in branch_entries}
-    # Hoisted out of the worktree loop: `target` is loop-invariant (always
-    # `main_branch or current`), so one `git branch --merged` call replaces
-    # one `branch_reachable` spawn per worktree (see
-    # `branches_merged_into`'s docstring).
     merged_into_target = branches_merged_into(run_git, repo_root, main_branch or current)
     for wt in worktree_entries:
         branch_name = wt.get("branch")
@@ -632,18 +464,8 @@ def brief(
             worktrees_report.append({**wt, "tip_author": author, "category": "others"})
             continue
 
-        # `worktree_is_dirty` has no batch form at all: `git status
-        # --porcelain` reads one working directory's state, and each
-        # worktree is its own separate tree — no single git invocation
-        # reports every worktree's dirty state at once.
         reachable = branch_name in merged_into_target
         dirty_probe = worktree_is_dirty(run_git, wt_path)
-        # DR-319 posture, applied at the call site: a degraded probe is
-        # never read as clean. This guard authorizes destructive worktree
-        # removal, so "cannot tell" is treated as "do not proceed"
-        # (fail-closed) — a degraded probe routes through the same
-        # judgment-point-gated path as a genuinely dirty tree, never the
-        # unconditional-removal path a false "clean" would unlock.
         dirty = dirty_probe["degraded"] or dirty_probe["value"]
         category = "stale-absorbed" if reachable else "stale-unique-work"
         worktrees_report.append(
@@ -657,11 +479,6 @@ def brief(
         )
 
         if not reachable:
-            # Unique work: goes through the same absorb-or-skip branch flow
-            # above (the branch entry, if it exists, already carries a
-            # judgment point) — the worktree itself is only removed once
-            # that branch's disposition resolves the branch's own delete
-            # directive; no separate worktree-removal directive here.
             continue
 
         remove_directive_id = f"d-worktree-remove-{wt_path}"
@@ -705,15 +522,8 @@ def brief(
             }
         )
 
-    # C6 fix (docs/plans/2026-08-19-directives-name-an-op-not-a-cli.md § C6,
     # BREAK-CLASS): reads whichever key the directive actually carries
-    # (`op` or `cli`) rather than unguardedly subscripting `d["cli"]`. Every
-    # directive `_build_directives` emits today still carries `cli` (none of
-    # consolidate's six verbs migrate — see `apply.py`'s own discriminator
     # comment above its `_CLI_DISPATCH`), so this is a latent-bug fix, not a
-    # behavior change: the moment any consolidate verb carried `op` instead,
-    # this would have raised `KeyError` here, before `apply()` and before
-    # pre-validation.
     if any(d.get("op", d.get("cli")) == "worktree-remove" for d in directives):
         directives.append(
             {"id": "d-worktree-prune", "cli": "worktree-prune", "args": [], "depends_on": None, "already_satisfied": False}
@@ -805,9 +615,6 @@ def main(argv: list[str]) -> int:
     try:
         decision_object = brief()
     except Exception as exc:  # noqa: BLE001 - transport-failure backstop
-        # Exit 3 means compute never ran: there is no decision object to
-        # honestly emit, so the diagnostic goes to stderr and stdout stays
-        # empty rather than carrying a fabricated or partial JSON object.
         print(f"consolidate-assemble: transport failure: {exc}", file=sys.stderr)
         return EXIT_TRANSPORT_FAIL
 

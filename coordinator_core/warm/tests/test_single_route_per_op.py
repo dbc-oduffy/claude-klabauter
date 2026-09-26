@@ -52,9 +52,6 @@ def test_both_row_kinds_carry_the_route(tmp_path, monkeypatch):
     written = []
     monkeypatch.setattr(op_latency, "_append_line", lambda sink, encoded: written.append(encoded))
     monkeypatch.setattr(op_latency, "_sink_path", lambda _p: tmp_path / "sink.ndjson")
-    # `_write_entry` resolves the sink through lifecycle.git_common_dir and swallows
-    # its RuntimeError on a non-repo path -- unstubbed, this test silently writes
-    # nothing and asserts on an empty list.
     monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda _p: tmp_path)
 
     op_latency.record_op_started(op="x.y", t_start=1.0, corr_id="c1", repo_root=tmp_path)
@@ -101,9 +98,6 @@ def test_warm_server_declares_the_warm_server_route(monkeypatch):
     """
     from coordinator_core.warm import server
 
-    # Seed the var so monkeypatch owns its restoration: the production write
-    # below is a deliberate process-wide mutation (a serving process declaring
-    # itself), and an unseeded `delenv` records nothing to roll back.
     monkeypatch.setenv(op_latency.ROUTE_ENV, op_latency.IN_PROCESS)
     server._declare_execution_route()
 

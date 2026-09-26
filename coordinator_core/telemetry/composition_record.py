@@ -70,10 +70,6 @@ from coordinator_core.composition_budget import SKIP_AND_SURFACE, CompositionBud
 from coordinator_core.contract.apply_base import resolve_explicit_session_id
 from coordinator_core.telemetry.op_latency import record_composition_span
 
-#: Every outcome `flush_composition_record` accepts -- see that function and
-#: the pinned interface doc (§ "Call shape C2 and C3 both write") for the
-#: three-way split C4 partitions on: healthy success, a run that mutated
-#: something before failing, and a run that failed before any mutation.
 VALID_OUTCOMES = frozenset({"success", "partial_mutation", "directive_failed"})
 
 
@@ -89,13 +85,7 @@ class _Accumulator:
         self._budget = budget
 
     def bound_on_count(self, unit: str, running_total: int) -> None:
-        """The `on_count` callback wired to `budget.on_count`. Pure in-memory
-        bookkeeping -- `running_total` is already `budget.invocation_count`
-        (the dataclass's own counter), so nothing further needs storing here;
-        this method exists as the assign-after-construction wiring point and
-        the documented shape of `CompositionBudget.on_count`, not because it
-        tracks state `budget` does not already hold itself."""
-        del unit, running_total  # budget.invocation_count is the source of truth at flush
+        del unit, running_total
 
 
 def make_fleet_budget(composition_name: str) -> CompositionBudget:
@@ -143,28 +133,6 @@ def flush_composition_record(
     sid: Optional[str] = None,
     exit_code_label: Optional[str] = None,
 ) -> None:
-    """Never-raising public flush -- the one all 8 `apply.py` call sites use.
-
-    ``exit_code_label`` (additive, optional, default `None`) is threaded
-    straight through to `op_latency.record_composition_span` -- see that
-    function's own docstring. A caller that omits it behaves byte-identically
-    to before this parameter existed.
-
-    NEVER RAISES, and that is load-bearing rather than defensive habit. The
-    pinned call shape puts this call in a `finally`, so an exception escaping
-    here during an unwinding directive loop would REPLACE the composition's
-    own exception with a telemetry error -- a recorder deciding a ceremony's
-    outcome. `contract/apply_base.py :: _budget_call` and
-    `ceremony_common/apply_halt.py :: _budget_call` supply exactly this
-    containment for the budget CHECK calls, but neither wraps the flush, so
-    the containment has to live here. Same contract `op_latency`'s own
-    writers hold ("Never breaks dispatch"); `record_composition_span` is
-    already never-raising, and this wrapper extends that to the argument
-    validation in `_flush_or_raise` below.
-
-    A rejected flush costs one composition's row and one stderr line -- never
-    the run. Tests target `_flush_or_raise` for the validation contract.
-    """
     try:
         _flush_or_raise(
             budget, outcome, repo_root=repo_root, sid=sid, exit_code_label=exit_code_label

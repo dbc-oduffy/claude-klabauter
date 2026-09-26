@@ -37,11 +37,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 from coordinator_core.review_trail import reviewed_set as rs
 from coordinator_core.win_portability import no_console_creationflags
 
-#: High-water mark for `fold_in`'s subprocess count on a single resolvable
-#: record: one `git rev-list --all --parents` (reach-set build) + one
 #: `git rev-parse --verify` PER DISTINCT endpoint token (2 for a two-
-#: endpoint range) + one `git rev-list <range>` (range materialization)
-#: = 4. May be lowered freely; raising it requires editing this constant.
 _SPAWN_HIGH_WATER = {
     "fold_in_single_record": 4,
 }
@@ -78,12 +74,11 @@ def _make_commit(repo: Path, message: str) -> str:
 
 
 def test_read_reviewed_set_spawns_zero_processes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Hard pin, not a ratchet (AC1): the read path must NEVER spawn."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)
     rs._append_shas(str(repo), {"a" * 40})
-    rs.read_reviewed_set(str(repo))  # warm the resident cache
+    rs.read_reviewed_set(str(repo))
 
     counter = _SpawnCounter(subprocess.run)
     monkeypatch.setattr(subprocess, "run", counter)
@@ -113,9 +108,6 @@ def test_fold_in_single_record_spawn_budget_ratchet(tmp_path: Path, monkeypatch:
 
 
 def test_fold_in_spawn_count_flat_across_range_size(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The write-time measurement's central claim: spawn count for `fold_in`
-    is FLAT in commit-range size, not per-commit. One record spanning many
-    commits must cost the same spawn count as one record spanning one."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)

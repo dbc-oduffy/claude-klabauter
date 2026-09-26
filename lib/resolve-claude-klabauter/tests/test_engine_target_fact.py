@@ -93,9 +93,6 @@ def test_missing_registry_files_returns_none(tmp_path: Path) -> None:
 
 
 def test_invalid_value_is_treated_as_absent_never_a_third_state(tmp_path: Path) -> None:
-    """AC20: an unreadable/typo'd value never diverts and is never encoded
-    as a stored third value -- it collapses to the same ``None`` as absence,
-    not a raise and not e.g. ``"unknown"``."""
     ml_dir = tmp_path / "machine-local"
     ml_dir.mkdir()
     _write(ml_dir / "registry.toml", '[engine]\ntarget = "nightly"\n')
@@ -134,8 +131,6 @@ class TestWritingTargetInvalidatesBothMemos:
 
         old_key = engine_root_mod._registry_mtime_pair(ml_dir)
 
-        # Seed both memos as if a prior call had already resolved and cached
-        # under the pre-write registry state.
         engine_root_mod._ROOT_MEMO[old_key] = fake_root
         gate_key = (*old_key, None)
         engine_root_mod._GATE_MEMO[gate_key] = (fake_root, "live-working-tree")
@@ -143,10 +138,6 @@ class TestWritingTargetInvalidatesBothMemos:
         assert engine_root_mod._ROOT_MEMO.get(old_key) is not None
         assert engine_root_mod._GATE_MEMO.get(gate_key) is not None
 
-        # Force a distinguishable mtime bump (some filesystems have coarse
-        # mtime granularity -- back-date the pre-write stat, then write, so
-        # the two are unambiguously different ticks regardless of clock
-        # resolution).
         registry_local = ml_dir / "registry.local.toml"
         stat_before = registry_local.stat()
         backdated = stat_before.st_mtime - 5.0
@@ -157,8 +148,6 @@ class TestWritingTargetInvalidatesBothMemos:
         engine_root_mod._ROOT_MEMO[old_key] = fake_root
         engine_root_mod._GATE_MEMO[(*old_key, None)] = (fake_root, "live-working-tree")
 
-        # Write the engine.target fact -- the only edit this row makes to
-        # the registry state.
         _write(
             registry_local,
             f'[repos]\nclaude_klabauter = "{fake_root}"\n\n[engine]\ntarget = "candidate"\n',
@@ -171,11 +160,7 @@ class TestWritingTargetInvalidatesBothMemos:
             "writing engine.target did not change _registry_mtime_pair -- "
             "the memo would not self-invalidate"
         )
-        # No explicit reset call happened between the write and these reads
-        # -- the stale entries are simply unreachable under the new key,
-        # which is the entire mechanism (no _reset_root_memo() call above).
         assert engine_root_mod._ROOT_MEMO.get(new_key) is None
         assert engine_root_mod._GATE_MEMO.get(new_gate_key) is None
 
-        # And the fact itself is now readable through the shim.
         assert resolve_claude_klabauter.resolve_engine_target(ml_dir) == resolve_claude_klabauter.ENGINE_TARGET_CANDIDATE

@@ -38,14 +38,9 @@ import re
 from typing import Any, Dict, Optional
 
 #: CS_CANONICAL_AGENT_ID_RE — single source of truth for the bare-hex
-#: unnamed-agent format predicate. Format: lowercase hex, >= 12 chars, no
 #: upper bound. Port of ``CS_CANONICAL_AGENT_ID_RE``
-#: (DoE coordinator-session.sh, e34f2484, 2026-07-22).
 CANONICAL_AGENT_ID_RE = re.compile(r"^[a-f0-9]{12,}$")
 
-#: Named-teammate grammar: ``a<name>-<16hex>``. The greedy ``(.+)`` capture
-#: correctly extracts a dash-containing name because the fixed-length
-#: 16-hex suffix anchors the boundary from the right.
 _NAMED_TEAMMATE_RE = re.compile(r"^a(.+)-[a-f0-9]{16}$")
 
 
@@ -88,59 +83,12 @@ def build_canonical_agent_id(name: str, short_session: str) -> str:
 
 
 def resolve_subagent_identity(agent_id: str, session_id: str) -> str:
-    """Port of ``resolve_subagent_identity <agent_id> <session_id>``.
-
-    Translates a subagent-side ``agent_id`` to the canonical EM-side id, or
-    returns the empty string on no-match (fail-closed). Three paths, in
-    order:
-
-    (a) Bare hex ``^[a-f0-9]{12,}$`` — unnamed agent fast path. Returns
-        ``agent_id`` unchanged; ``session_id`` is ignored entirely (not
-        read, not validated).
-
-    (b) Named teammate ``^a(.+)-[a-f0-9]{16}$`` — the greedy ``(.+)``
-        correctly extracts a dash-containing name (e.g.
-        ``aprobe2-teammate-64cd7f42c270a899`` -> name = ``probe2-teammate``)
-        because the fixed-length 16-hex suffix anchors the boundary from
-        the right. Requires ``len(session_id) >= 8`` (strict boundary —
-        exactly 8 passes, 7 fails; NOT ``> 8``). On success, returns
-        ``build_canonical_agent_id(name, session_id[:8])`` — truncates to
-        the first 8 characters, not a hash. On a too-short/absent
-        ``session_id``, returns ``""`` (fail-closed). The empty-name branch
-        is dead code — ``(.+)`` guarantees a non-empty capture.
-
-    (c) Anything else -> ``""`` (fail-closed — unrecognised shape; "don't
-        guess"). Triggers on: empty ``agent_id``, garbage strings, hex
-        shorter than 12 chars, uppercase hex (grammar is lowercase-only),
-        malformed named-teammate shape.
-
-    Always "returns" successfully — failure is signalled ONLY by an empty
-    return value, never an exception (mirrors the bash function's
-    always-exit-0 contract).
-
-    Pure function — no filesystem I/O, no side effects; safe on the hook
-    hot path.
-
-    Forward-compat caveat (verbatim from the bash source comment): grammar
-    (b) is probe-confirmed against harness 2.1.185. A harness change to the
-    subagent ``session_id`` shape or the ``a<name>-<16hex>`` prefix must
-    update THREE surfaces in lockstep: (1) ``build_canonical_agent_id``,
-    (2) this function's grammar, (3) the
-    ``^[A-Za-z0-9_.-]+@session-`` value-guard regex in
-    ``coordinator_core.hooks.track_dispatched_agents``. Until updated, an
-    unrecognised future shape fails closed via path (c), never silently
-    mismaps.
-    """
     agent_id = agent_id or ""
     session_id = session_id or ""
 
-    # (a) Bare hex — unnamed agent fast path; session_id ignored.
-    # fullmatch (not match): closes the trailing-newline-before-`$` gap —
-    # see _format_ok's docstring for the mechanism. Review: code-reviewer nit.
     if CANONICAL_AGENT_ID_RE.fullmatch(agent_id):
         return agent_id
 
-    # (b) Named teammate: a<name>-<16hex>
     named = _NAMED_TEAMMATE_RE.fullmatch(agent_id)
     if named:
         name = named.group(1)
@@ -149,7 +97,6 @@ def resolve_subagent_identity(agent_id: str, session_id: str) -> str:
         short = session_id[:8]
         return build_canonical_agent_id(name, short)
 
-    # (c) Unrecognised shape — fail-closed.
     return ""
 
 
@@ -286,9 +233,6 @@ def resolves_em_audience(
             return False
         raw_agent_id = payload.get("agent_id")
         if raw_agent_id:
-            # Present-but-possibly-unresolvable: distinguish from "no
-            # agent_id key at all" BEFORE the shared resolver canonicalizes
-            # both cases to the same empty string. See "ABSENT VS
             # UNRESOLVABLE" above.
             return False
         from coordinator_core.subagent_sandbox.engine import resolve_effective_types

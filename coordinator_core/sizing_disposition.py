@@ -36,12 +36,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
-#: Tokens that mean "this record carries no id", on BOTH sides of the join.
-#: Same set as `spec_backlink_resolve._real_id`, `deliverable_equivalence.
 #: _YAML_NULL_LITERALS`, and `ops/ceremony/renderers._ID_NULL_SENTINELS` —
-#: defined locally rather than imported because every one of those modules
 #: self-registers a JSON-RPC op on import, and this predicate is read by
-#: `plan`'s admission gate before any op registry exists.
 _NULL_SENTINELS = frozenset({"null", "~"})
 
 
@@ -77,14 +73,6 @@ def _sizing_object_within_root(root: Path, sizing_ref: str) -> bool:
 
 
 def real_id(value: object) -> Optional[str]:
-    """`value` stripped, iff it is a non-empty string naming a real id.
-
-    Both legs of this module's join must apply it, and the failure when
-    either does not is not cosmetic. A baton whose own `origin_plan_id`
-    survived frontmatter parsing as the STRING `"null"` — 80 of the live
-    corpus do — must not read as a citation at all: it is an ABSENT
-    citation, not a broken one. See DR-344 § R1: absence is information.
-    """
     if not isinstance(value, str):
         return None
     stripped = value.strip()
@@ -93,27 +81,10 @@ def real_id(value: object) -> Optional[str]:
     return stripped
 
 
-#: The three values of the axis, in precedence order.
 SIZING_DISPOSITION_VALUES: tuple[str, ...] = ("execution", "sized", "unsized")
 
 
 def cited_plan_fks(fm: dict[str, Any]) -> list[tuple[str, str]]:
-    """`(field, plan_id)` pairs the baton cites -- `origin_plan_id` ONLY.
-
-    DR-346 §5 (Correction, C3 2026-08-21): `plan_ids` is a FAN-IN AUDIT
-    list, never a plan FK, and reading it as one was the live defect that
-    section names -- `2026-08-21-guards-under-the-brightline.md` carried no
-    `origin_plan_id` and resolved `execution` SOLELY through a `plan_ids`
-    entry, a fabricated citation exactly like the `"null"`-string one
-    `real_id`'s own docstring fixes above. `plan_ids` keeps its write side
-    (`resolve_lineage`'s `_ordered_unique` and `baton_assemble/apply.py ::
-    baton-stamp-carried-ids`, both DR-346-threshold-gated at >=2 distinct
-    ids as of this same change) as a pure audit trail; it is never joined
-    into a citation here.
-
-    Negative-spec: does NOT read `fm.get("plan_ids")`. A future reintroduction
-    of that read is the exact regression `test_plan_ids_is_still_read_as_a_
-    citation_dr346` pins against."""
     cited: list[tuple[str, str]] = []
     origin = real_id(fm.get("origin_plan_id"))
     if origin:
@@ -224,16 +195,6 @@ def compute_sizing_disposition(
     return {"value": "unsized", "basis": None, "warning": None}
 
 
-#: Prepended onto a consumer's `next_move` when the value is `unsized`, and
-#: ONLY then — see `compute_sizing_disposition`'s negative-spec for why the
-#: other two arms stay silent. Three texts, because the three unsized arms
-#: are not the same finding: a baton that cites nothing is an ordinary idea;
-#: a baton whose `governing_plan` does not resolve is a broken pointer the
-#: reader needs named; a baton that cites `origin_plan_id` with no
-#: `governing_plan` stamped is a stranding — DR-346 (2026-08-21) retired the
-#: corpus walk that used to resolve the latter by search, and this module is
-#: no longer entitled to call it "dangling" or "does not resolve on disk",
-#: because it no longer knows whether the plan exists at all.
 UNSIZED_NEXT_MOVE_PREFIX = (
     "This baton cites no plan and no sizing object, so it is an unsized ask whatever its "
     "provenance — the room is `coordinator:sizing`, not `plan`. "
@@ -252,9 +213,6 @@ UNSIZED_UNSTAMPED_NEXT_MOVE_PREFIX = (
 
 
 def unsized_next_move_prefix(verdict: dict[str, Any]) -> str:
-    """The `next_move` prefix a verdict earns — empty string on the
-    `execution`/`sized` arms, so a consumer can prepend unconditionally
-    without re-deciding the axis it was just handed."""
     if verdict.get("value") != "unsized":
         return ""
     warning = verdict.get("warning")

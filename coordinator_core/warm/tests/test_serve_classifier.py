@@ -1,22 +1,9 @@
-"""Fixture-shape coverage for `coordinator_core.warm.serve_classifier`,
-lifted alongside the predicate it tests (see that module's docstring). DoE's
-14 predicate tests are the reason their checker can be trusted; a lifted
-predicate without them is an unverified copy -- this file carries the same
-14 structural-purity fixtures PLUS the fixtures for C1's own three deltas
-(arity, script existence, module-scope import purity) and a live-corpus
-smoke test over the real `coordinator/bin` population.
-
-Spec backlink: docs/plans/2026-08-27-every-bin-name-warm-serves-and-a-classifier-says-so.md, chunk C1
-"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from coordinator_core.warm import serve_classifier as sc
-
-
-# --- Lifted structural fixtures (parity with DoE's 14) ----------------------
 
 
 def test_predicate_fails_on_missing_main():
@@ -252,9 +239,6 @@ def main(argv):
     assert "impure class keyword expression" in reasons
 
 
-# --- C1 delta 1: arity -------------------------------------------------------
-
-
 def test_zero_arity_main_is_not_servable():
     source = '''
 """A CLI whose main() takes no argv -- the ~160-name defect."""
@@ -264,7 +248,7 @@ def main():
     return 0
 '''
     tree_findings = sc.find_module_body_violations(source, "fixture/zero_arity.py")
-    assert tree_findings == []  # module body IS inert -- arity is a separate axis
+    assert tree_findings == []
     verdict = sc.ServeVerdict(
         name="zero_arity",
         script_relpath="fixture/zero_arity.py",
@@ -303,9 +287,6 @@ def test_main_star_args_counts_as_servable_arity():
     assert sc._main_arity_ok(fn) is True
 
 
-# --- C1 delta 2: script existence -------------------------------------------
-
-
 def test_classify_entrypoint_missing_script(tmp_path):
     verdict = sc.classify_entrypoint("does-not-exist", bin_dir=tmp_path)
     assert verdict.script_exists is False
@@ -326,14 +307,7 @@ def test_classify_entrypoint_resolves_by_name(tmp_path):
     assert verdict.inert is True
 
 
-# --- C1 delta 3: module-scope import purity (the load-bearing delta) --------
-
-
 def test_module_scope_lib_import_is_flagged():
-    """Verbatim the shape that killed coordinator-auto-push.py on the
-    forwarder route: a module-scope `from lib.X import Y` PASSES the lifted
-    predicate's structural check (Import/ImportFrom is inert-by-construction
-    there) but must fail C1's import-purity conjunct."""
     source = '''
 """A CLI importing a non-stdlib helper at module scope."""
 from lib.cc_invoke import require_dispatch_engine_on_path
@@ -378,11 +352,6 @@ def main(argv):
 
 
 def test_guarded_optional_import_of_non_stdlib_is_still_flagged():
-    """The DoE-permitted `try: import yaml / except ImportError: yaml = None`
-    shape is structurally inert (no process mutation), but `yaml` is
-    non-stdlib -- C1's conjunct must see through the guard, unlike the
-    lifted predicate's own AC6 exemption (which only concerns structural
-    purity, not import identity)."""
     source = '''
 """A CLI with a guarded optional third-party dependency."""
 try:
@@ -429,15 +398,12 @@ def main(argv):
     assert "module-scope non-stdlib import" in reasons
 
 
-# --- Partition report --------------------------------------------------------
-
-
 def test_partition_report_buckets_are_mutually_exclusive_and_sum_to_total():
     verdicts = [
-        sc.ServeVerdict("a", "a.py", False, False, False, ()),  # no_script
-        sc.ServeVerdict("b", "b.py", True, False, False, ()),  # no_main
-        sc.ServeVerdict("c", "c.py", True, True, False, ()),  # zero_arity_main
-        sc.ServeVerdict("d", "d.py", True, True, True, ()),  # main_argv, inert
+        sc.ServeVerdict("a", "a.py", False, False, False, ()),
+        sc.ServeVerdict("b", "b.py", True, False, False, ()),
+        sc.ServeVerdict("c", "c.py", True, True, False, ()),
+        sc.ServeVerdict("d", "d.py", True, True, True, ()),
         sc.ServeVerdict(
             "e",
             "e.py",
@@ -450,7 +416,7 @@ def test_partition_report_buckets_are_mutually_exclusive_and_sum_to_total():
                     is_sys_path_mutation=True,
                 ),
             ),
-        ),  # main_argv, sys_path_mutation
+        ),
     ]
     report = sc.partition_report(verdicts)
     assert report["total"] == 5
@@ -461,7 +427,7 @@ def test_partition_report_buckets_are_mutually_exclusive_and_sum_to_total():
     assert report["cannot_serve"] == 3
     assert report["servable"] == 2
     assert report["sys_path_mutation"] == 1
-    assert report["servable_and_inert"] == 1  # only "d" is servable AND has zero findings
+    assert report["servable_and_inert"] == 1
 
 
 def test_load_allowlist_names_is_a_named_population():
@@ -472,9 +438,6 @@ def test_load_allowlist_names_is_a_named_population():
 
 
 def test_pure_call_target_whitelist_is_reviewed_not_empty():
-    """C1's own re-seed record: the whitelist is non-empty (DoE's shape
-    ported) and does NOT contain any of the repo-local engine-bootstrap
-    helper names the classifier exists to keep flagging."""
     assert len(sc._PURE_CALL_TARGETS) > 0
     for bootstrap_name in (
         "require_dispatch_engine_on_path",
@@ -484,17 +447,7 @@ def test_pure_call_target_whitelist_is_reviewed_not_empty():
         assert bootstrap_name not in sc._PURE_CALL_TARGETS
 
 
-# --- Live-corpus smoke test --------------------------------------------------
-
-
 def test_live_allowlist_population_classifies_without_error():
-    """Runs the classifier over the real, named allowlist population --
-    never a directory glob (Anti-scope: "Do not invoke the 382 to measure
-    them" concerns RUNTIME import; static AST parsing every allowlisted
-    script is exactly this chunk's job). Asserts only that every name
-    produces a verdict and the partition buckets stay internally consistent
-    -- the actual counts are expected to change as C2-C6 land, so this test
-    does not pin any of this session's specific numbers."""
     names = sc.load_allowlist_names()
     verdicts = sc.classify_population(names)
     assert len(verdicts) == len(names)
@@ -508,8 +461,6 @@ def test_live_allowlist_population_classifies_without_error():
 
 
 def test_classify_population_is_over_a_named_list_not_a_glob():
-    """`classify_population` never globs `coordinator/bin` itself -- its
-    only source of names is the list a caller passes in."""
     verdicts = sc.classify_population(["definitely-not-a-real-entrypoint-name"])
     assert len(verdicts) == 1
     assert verdicts[0].script_exists is False
@@ -566,9 +517,6 @@ def test_predicate_passes_method_call_on_a_string_literal():
 
 
 def test_predicate_still_fails_on_method_call_on_a_non_literal():
-    """The literal carve-out is receiver-keyed, so an identical method name on
-    a NON-literal receiver stays flagged. Without this the fix would launder
-    every `.strip()`-shaped call, including one on a module object."""
     source = (
         chr(39) * 3 + "A CLI calling a method on a module, not a literal." + chr(39) * 3 + chr(10)
         + "import os" + chr(10) * 2

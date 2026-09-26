@@ -31,43 +31,12 @@
 
 #include <stddef.h>
 
-/* =========================================================================
- * SHA-1 -- public-domain shape (Steve Reid / Wei Dai lineage), byte buffer
- * in, first 8 digest bytes out as 16 lowercase hex chars.
- * ========================================================================= */
 
-/* `hashlib.sha1(data).hexdigest()[:16]`, byte-identical. `out` must be at
- * least 17 bytes; the result is NUL-terminated.
- *
- * This is the ONLY hash the door computes, and it computes it twice: the
- * engine token (`sha1("engine-stamp:" + stamp_bytes)`, mirroring
- * `warm/skew.py :: compute_client_token`) and the clone hash
- * (`sha1(str(Path(engine_root).resolve()).encode("utf-8"))`, mirroring
- * `warm/election.py :: pipe_name` and `warm/breadcrumb.py :: svc_dir`).
- * Both Python sites truncate the hexdigest at 16 characters; so does this. */
 void sha1_hex16(const unsigned char *data, size_t len, char out[17]);
 
-/* =========================================================================
- * Sidecar trailing-whitespace trim -- shared so the clone hash agrees.
- * ========================================================================= */
 
-/* Trims trailing '\n', '\r', ' ', '\t' from `buf[0..len)` in place, NUL-
- * terminating as it goes, and returns the new length. No leading trim; no
- * other characters are touched, so interior whitespace survives untouched.
- *
- * This exists here, not per-door, because the trimmed bytes are a SHA-1
- * input for the clone hash (`sha1(str(Path(engine_root).resolve())...)`,
- * see `sha1_hex16` above) -- the socket name the door dials. If the two
- * doors ever trimmed a sidecar value differently, they would derive
- * different socket names from the same file, and the door would connect to
- * nothing. That failure is silent (no error, just no listener) and
- * permanent (every rebuild reproduces it), so the trim is written once. */
 size_t trim_sidecar_trailing(char *buf, size_t len);
 
-/* =========================================================================
- * Growable byte buffer -- the outbound JSON request and the inbound
- * response line both live in one of these.
- * ========================================================================= */
 
 typedef struct {
     char *data;
@@ -79,16 +48,9 @@ int buf_init(buf_t *b, size_t initial_cap);
 int buf_append(buf_t *b, const char *data, size_t len);
 int buf_append_cstr(buf_t *b, const char *s);
 
-/* Appends `s` (UTF-8 bytes, `len` of them) as a JSON string LITERAL body --
- * the escaped content between the surrounding quotes, which the caller adds
- * separately. Bytes outside 0x20-0x7E pass through as raw UTF-8, which is
- * valid inside a JSON string per RFC 8259 (only U+0000-U+001F, U+0022,
- * U+005C require escaping). */
+
 int buf_append_json_escaped(buf_t *b, const char *s, size_t len);
 
-/* =========================================================================
- * Response envelope
- * ========================================================================= */
 
 typedef struct {
     buf_t stdout_buf;
@@ -151,25 +113,13 @@ int parse_response_envelope(
  * `warm/client.py::CLI_FALSY` byte-for-byte.
  * ========================================================================= */
 
-/* True iff `value` (a NUL-terminated, already-decoded env value) is one of
- * "0"/"false"/"no"/"off", compared case-insensitively. NULL or any other
- * value is NOT falsy -- unset or unrecognised means "no opinion", the same
- * as every other rung `is_warm_enabled` climbs past. */
+
 int door_env_value_is_falsy(const char *value);
 
-/* Total payload ceiling. NOT derived from any measurement taken on this
- * box -- the spike's cost figures (flat ~0.1ms p50 from 1KB to 256KB) do
- * not gate this number at all, they only established that cost is not the
- * constraint. 1 MiB is a generous ceiling for a JSON hook payload, chosen
- * as a round bound comfortably above anything a Bash guard constructs,
- * while still small enough that holding a refused payload in memory for
- * the length of one refusal is a non-event. */
+
 #define DOOR_STDIN_MAX_BYTES (1024u * 1024u)
 
-/* One incremental read call's own ceiling -- deliberately far below the
- * OS pipe-buffer deadlock point the spike measured (a single-threaded
- * `write(64KB)` blocked before the reader ever ran). `door_drain_stdin_
- * bounded` below never attempts to read the whole payload in one call. */
+
 #define DOOR_STDIN_READ_CHUNK_BYTES 8192
 
 typedef enum {
@@ -243,34 +193,19 @@ door_stdin_status_t door_drain_stdin_bounded(
  * error for a silently wrong payload.
  * ========================================================================= */
 
-/* The two argv spellings the CLI's own `--params-file` accepts for the
- * stdin form -- argparse takes both the separated pair and the joined
- * `=` form. Kept here so neither door hardcodes the text. */
+
 #define DOOR_PARAMS_FILE_FLAG "--params-file"
 #define DOOR_PARAMS_FILE_STDIN_VALUE "-"
-/* Review: overengineering-reviewer -- composed from the two macros above
- * (C string-literal concatenation) rather than re-typed, so the joined
- * spelling cannot drift from the separated pair it must match. */
+
 #define DOOR_PARAMS_FILE_STDIN_JOINED DOOR_PARAMS_FILE_FLAG "=" DOOR_PARAMS_FILE_STDIN_VALUE
 
-/* True iff `argv[1 .. argc-1]` declares the stdin-bound params route.
- * `argv[0]` is excluded: this door never forwards it, and an image whose
- * own path happened to spell the flag is not a caller declaration.
- *
- * A trailing bare `--params-file` (no value) is NOT a declaration -- the
- * CLI's own argparse rejects it, and falling through cold for it would
- * only move the same error. */
+
 int door_argv_declares_params_stdin(int argc, const char *const *argv);
 
-/* The flag `hook-run` accepts ahead of the op name: `hook-run --advisory
- * hooks.<name>`. A bare token, unlike `--params-file` -- no separated or
- * joined value form to match. */
+
 #define DOOR_ADVISORY_FLAG "--advisory"
 
-/* True iff `argv[1 .. argc-1]` declares the row advisory. `argv[0]`
- * excluded for the same reason `door_argv_declares_params_stdin` excludes
- * it: this door never forwards it, and an image whose own path happened to
- * spell the flag is not a caller declaration. */
+
 int door_argv_declares_advisory(int argc, const char *const *argv);
 
 /* =========================================================================
@@ -331,49 +266,15 @@ int door_basename_declares_stdin_read(const char *basename);
  * limit, which applies here verbatim. */
 int door_basename_is_install_class(const char *basename);
 
-/* Appends the top-level `hook_event_name` string of the hook payload `json`
- * to `out` (caller `buf_init`s first), NUL-terminated. Returns 0 when the
- * payload is not an object or carries no such string. */
+
 int door_hook_event_name(const char *json, size_t len, buf_t *out);
 
-/* Builds `hook_http.unreachable_response`'s shape -- exit-0 body, no
- * `permissionDecision`, a `systemMessage` for the operator and, for a named
- * event other than `SessionEnd` (which rejects it), a nested
- * `hookSpecificOutput` carrying that event name and `additionalContext` for
- * the model -- into `out` (caller `buf_init`s first), with a trailing
- * newline. `event_name` NULL or empty -> the `systemMessage` alone, since a
- * wrong `hookEventName` fails the harness's validation. Returns 1 on success.
- *
- * WHAT HOOK MODE EMITS WHEN THE ENGINE IS DOWN: no cold entrypoint, a cold
- * leg that could not start, exited nonzero or wrote nothing. An unreachable
- * engine PASSES LOUDLY, never denies -- these guards are ergonomics, and a
- * deny here walled off every Bash call on the box (DoE-claude
- * coordinator/docs/wiki/coordinator-tripwires/an-unreachable-engine-passes-
- * loudly-never-denies.md). Loud, so an unrun guard never reads as one that
- * passed. Built here so the two doors cannot drift. */
+
 int build_hook_pass_loudly_envelope(buf_t *out, const char *reason, const char *event_name);
 
-/* Builds `{"hookSpecificOutput":{"hookEventName":"PreToolUse",
- * "permissionDecision":"deny","permissionDecisionReason":"<reason>"}}`
- * into `out` (which the caller must `buf_init` first), appending a
- * trailing newline. Returns 1 on success.
- *
- * USED NOW ONLY FOR A PAYLOAD FAULT: stdin over the bound, unreadable, or
- * no memory to hold it. That is not the engine being down -- the payload
- * itself cannot be carried to any guard, warm or cold. Engine-down gets
- * `build_hook_pass_loudly_envelope` above.
- *
- * Same `{"hookSpecificOutput":...}` shape every Bash guard in this repo
- * authors for a deny (e.g.
- * `coordinator_core/bash_guards/block_approval_sentinel_creation.py`), with
- * a reason naming the door so a transcript reader can tell which layer
- * refused. */
+
 int build_hook_deny_envelope(buf_t *out, const char *reason);
 
-/* =========================================================================
- * The safety classification -- the reason this file exists as shared code
- * rather than as two ports.
- * ========================================================================= */
 
 #define JSONRPC_PARSE_ERROR (-32700)
 #define JSONRPC_INVALID_REQUEST (-32600)

@@ -1,14 +1,3 @@
-"""Tests for `_uninstall_remove_navi_role` — the full-remove leg that reverses
-DoE's user-level Navi role file at `<claude_home>/.claude/agents/navi.md`.
-
-Zero spawns: every test drives the helper (or the leg's dispatch to it) with a
-tmp_path home and a stubbed `resolve_coordinator_root`. The one test that runs
-`uninstall_remove_substrate` end-to-end stubs the registry seam rather than
-letting it reach a real `machine-local` CLI.
-
-Spec backlink: DoE-claude docs/plans/2026-09-02-navi-installable-user-level-nudge-role.md § C5
-Commitment: state/cross-repo-commitments/2026-09-02-claude-klabauter-to-land-the-navi-uninstall-leg.yaml
-"""
 
 from __future__ import annotations
 
@@ -39,9 +28,6 @@ def _shipped_template(tmp_path: Path, body: bytes = _TEMPLATE_BODY) -> Path:
 
 @pytest.fixture
 def shipped(tmp_path, monkeypatch):
-    """Stub `resolve_coordinator_root` to a plugin tree carrying the role
-    template — the leg resolves it there, exactly as
-    `_uninstall_purge_operator_config` resolves `templates/CLAUDE.local.md.tmpl`."""
     template = _shipped_template(tmp_path)
     monkeypatch.setattr(
         uninstall_legs, "resolve_coordinator_root", lambda *a, **k: str(tmp_path / "plugin")
@@ -93,9 +79,6 @@ def test_hand_edited_role_file_is_reported_and_left(tmp_path, shipped, capsys):
     assert "hand-edited" in stderr
 
 
-# Both setups land on the
-# same `template is None or not template.is_file()` branch with identical
-# assertions; parametrized rather than kept as two near-duplicate tests.
 @pytest.mark.parametrize(
     "setup",
     [
@@ -104,9 +87,6 @@ def test_hand_edited_role_file_is_reported_and_left(tmp_path, shipped, capsys):
     ],
 )
 def test_template_unavailable_reports_and_leaves(tmp_path, monkeypatch, capsys, setup):
-    """Whether the root itself fails to resolve, or resolves but the asset
-    is not in it (the pre-C1 state, and the state of any install whose
-    plugin tree predates the role), the leg reports and leaves."""
     role_file = _place(tmp_path)
 
     if setup == "unresolvable":
@@ -140,16 +120,6 @@ def test_force_removes_a_hand_edited_role_file(tmp_path, shipped):
 
 
 def test_force_does_not_need_a_resolvable_template(tmp_path, monkeypatch):
-    """--force must not depend on the plugin tree still being on disk.
-
-    # The prior version
-    # monkeypatched resolve_coordinator_root to raise, but `if not force`
-    # short-circuits before resolution is ever reached, so the raise could
-    # never fire; this asserted nothing beyond test_force_removes_a_hand_
-    # edited_role_file. Pinning the real intent directly: force must not
-    # even call resolve_coordinator_root, so a future refactor that hoists
-    # resolution above the force check fails here.
-    """
     role_file = _place(tmp_path, b"rewritten\n")
 
     calls: list[tuple] = []
@@ -167,8 +137,6 @@ def test_force_does_not_need_a_resolvable_template(tmp_path, monkeypatch):
 
 
 def test_unlink_failure_is_a_leg_error_not_a_policy_outcome(tmp_path, shipped, monkeypatch):
-    """An OSError on the unlink is a FAILURE and appends; report-and-leave does not.
-    The two must not collapse into one another."""
     _place(tmp_path)
 
     def _boom(self):
@@ -190,12 +158,9 @@ def test_unlink_failure_is_a_leg_error_not_a_policy_outcome(tmp_path, shipped, m
 def test_substrate_leg_dispatches_only_on_full_remove(
     tmp_path, monkeypatch, mode, expect_called
 ):
-    """The call site, not just the helper: a future edit that drops the
-    dispatch, or moves it out of the full-remove branch, fails here."""
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
-    # Registry seam: no CLI, no spawn, nothing to clear.
     monkeypatch.setattr(shutil, "which", lambda *_a, **_k: None)
     monkeypatch.setattr(uninstall_legs, "ml_set", lambda *a, **k: True)
 

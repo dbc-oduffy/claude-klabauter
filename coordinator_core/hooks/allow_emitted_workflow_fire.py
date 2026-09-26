@@ -72,9 +72,6 @@ def _session_id(params: dict) -> "str | None":
 
 
 def _compose_allow_reason(plan: str, emitter: str, restamped: bool) -> str:
-    """The one prose site — verbatim port of the source's own composer. The
-    script itself is not named here; the tool call being approved already
-    carries its path."""
     stamp = "re-stamped" if restamped else "emitted"
     return (
         f"Receipt verifies: {stamp} from {plan} by session {emitter}. "
@@ -83,7 +80,6 @@ def _compose_allow_reason(plan: str, emitter: str, restamped: bool) -> str:
 
 
 def _decide(params: dict) -> Optional[str]:
-    """Return the auto-approval reason, or None to let the prompt happen."""
     if params.get("tool_name") != "Workflow":
         return None
 
@@ -126,8 +122,6 @@ def _decide(params: dict) -> Optional[str]:
 
 @register_op("hooks.allow_emitted_workflow_fire")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PreToolUse(Workflow) op: auto-approve a fire whose script carries a
-    verifying emission receipt."""
     params = payload_of(params)
     try:
         reason = _decide(params)

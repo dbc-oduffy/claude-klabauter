@@ -89,43 +89,20 @@ from coordinator_core.dag import CONTINUATION_EDGE_KINDS as _DAG_CONTINUATION_ED
 from coordinator_core.dag import walk_forward
 from coordinator_core import session_attribution
 
-# Canonical frontmatter-key resolution. `coordinator_core.frontmatter.primitives`
-# is the single home for the `^key:` pattern — see the negative-specs on
-# _parse_handoff_consumed_by / _parse_handoff_deliverable_id below for why a
-# local `\s*`-padded fork is a break-class defect, not a style preference.
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
 from coordinator_core.claim_state import resolve_claim_state
 
 from coordinator_core.win_portability import no_console_creationflags
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 
 #: SAFE_RANGE — argument-injection validator.
-#: Each side must START with an alphanumeric (blocks leading-dash argument injection,
-#: e.g. "--output=/x..y" reaching `git rev-list` as a flag). Permits legitimate trail
-#: shapes: hex SHAs, HEAD, and ^/~N ancestry suffixes.
 SAFE_RANGE = re.compile(
     r"^[0-9A-Za-z_/.][0-9A-Za-z_/.~^]*\.\.\.?[0-9A-Za-z_/.][0-9A-Za-z_/.~^]*$"
 )
 
-#: A range-endpoint token whose BASE (before any ^/~N ops) is the literal
-#: symbolic ref "HEAD" — case-sensitive, matching git's own ref spelling.
 _STORED_HEAD_ENDPOINT_RE = re.compile(r"^HEAD(?:[~^][0-9]*)*$")
 
-#: DR-234-class default: the code-partition coverage ratio (covered_code /
-#: (covered_code + uncovered_code)) below which the gate WARNs instead of
-#: reporting COVERED. A 100%-or-block
-#: posture was ruled "absurd even for agents" (PM, 2026-08-06) — this is the
-#: SINGLE named home for the threshold; every consumer (coverage.py's own
-#: verdict logic, coordinator/bin/merge-gate-and-pr.py,
-#: coordinator_core/workstream_complete/directives_review.py) reads this
-#: constant rather than hardcoding its own copy. Overridable via the
 #: COORDINATOR_COVERAGE_RATIO_THRESHOLD environment variable (a float string
-#: in [0.0, 1.0]) for local experimentation — an invalid or out-of-range
-#: override is ignored (falls back to the default) rather than raising, since
-#: this constant is read at import time by non-daemon CLI callers too.
 DEFAULT_COVERAGE_RATIO_THRESHOLD = 0.66
 
 
@@ -167,86 +144,31 @@ def _record_range_has_stored_head(sha_range: str) -> bool:
     return bool(_STORED_HEAD_ENDPOINT_RE.match(left) or _STORED_HEAD_ENDPOINT_RE.match(right))
 
 
-#: Deliverable-Id shape pattern (fidelity guard 1, deliverable-attribution
-#: variant). Mirrored the retired `_UUID_RE`'s purpose (Session-Id UUID-shape
-#: validation; see kill-ledger for the DAG-fixpoint cut that removed it) — a
-#: malformed deliverable_id containing
-#: regex metacharacters interpolated raw into `git log --grep` would
-#: over-match commits outside this deliverable → false COVERED. Matches the
-#: two real mint shapes from coordinator_core.ops.mint_deliverable_id
-#: ("dlv-<stub_id>" / "dlv-<slug>-<6hex>") — alphanumeric + hyphen + `.` body,
-#: `dlv-` prefix required (schema cross-field rule). Widened
-#: (docs/plans/2026-08-05-author-the-dlv-pattern-for-deliverable-i.md) to admit
-#: `.` and to reject the scaffolder's placeholder slug — a live carrier
-#: (dlv-first-class-consumer-install-5.8-dogfood-2d336d, example-retrieval-repo-ue-addon)
-#: falsified the previous "matches the two real mint shapes" claim, which was
-#: a blind spot, not cosmetic: a malformed id that this regex under-rejects
-#: still over-matches `git log --grep` and yields a false COVERED. Now
-#: mirrors handoff.schema.json's `deliverable_id` pattern exactly (same
-#: negative lookahead, same body class) and is pinned against it by a shared
-#: case table (coordinator_core/tests/
-#: test_deliverable_id_pattern_parity.py) so the two cannot drift apart
 #: again. Malformed → INDETERMINATE (never FALSE COVERED), same as a
-#: malformed Session-Id.
 _DELIVERABLE_ID_RE = re.compile(r"^dlv-(?!placeholder-replace-with)[0-9a-zA-Z][0-9a-zA-Z.-]*$")
 
-#: Both were defined inside the block C5 deleted, but their consumer is
-#: `_filter_shas_by_scope_paths` — scope filtering, on C5's explicit
 #: NOT-DELETED list — so they are restored here rather than dropped. The
-#: `cat-file --batch-check` line shape they parse is `<sha> <type>`, and the
-#: match is fail-closed: a token that does not resolve to a full 40-hex sha of
-#: a known object type is degraded out of the chunk, never fed to diff-tree.
 _FULL_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 _GIT_OBJECT_TYPES = frozenset({"commit", "tree", "blob", "tag"})
 
 # `_GIT_TIMEOUT` (the per-spawn `git rev-list` timeout convention shared with
-# machine_resolver.py / person_resolver.py) was dropped in the same hunk as
-# the above restoration, but deliberately, not as a second miss: `_run`'s
-# actual timeout is always caller-supplied via its `timeout=` parameter, and
 # grep confirms `_GIT_TIMEOUT` had no reader anywhere in this module — only
-# its own now-removed docstring referenced it.
 
 # `_BULK_SWEEP_ADD_COMMIT_FILE_THRESHOLD` and `_add_commit_touched_file_count`
-# (the leg-(b) bulk-sweep guard for the DAG-mode fixpoint's deliverable
-# attribution) were removed 2026-08-19 along with `_derive_dag_chain_set`,
-# their only caller — see state/kill-ledger.md.
 
-#: Verdict filter:
 #:   pending  → EXCLUDED (review not complete; counting pending as coverage would allow
-#:              the gate to pass on un-reviewed commits — the latent gap this filter closes).
 #:   ok / warn / blocked / waived / absent (no verdict field) → INCLUDED.
 EXCLUDED_VERDICTS: FrozenSet[str] = frozenset({"pending"})
 
 #: The CONTINUATION edge kinds — the lineage edges along which a review
 #: obligation propagates. Derived from `dag.CONTINUATION_EDGE_KINDS` (the
-#: SSOT; see that constant's docstring for why `forked_from` is deliberately
-#: absent — schema rule A3a-3, frontmatter/schema_validate.py::
-#: _cf_spinoff_predecessor_none) rather than restated — see
-#: coordinator_core/tests/test_dag_edge_kind_ssot.py for the drift guard.
-#: (Rule C2-4, _cf_origin_predecessor_none_invariant, reinforces the same
-#: invariant from the origin-axis side but fires only when an `origin_*`
-#: field is present — A3a-3 is the unconditional guarantee this constant
-#: rests on.) Used by BOTH legs of _derive_dag_chain_set — Step 1's walk and
-#: Step 2's blocker enumeration MUST agree on this set or an ancestor gets
-#: deferred to a chain that is structurally incapable of ever claiming it
-#: (false COVERED).
 _CONTINUATION_EDGE_KINDS: FrozenSet[str] = _DAG_CONTINUATION_EDGE_KINDS
 
-# ---------------------------------------------------------------------------
 # Subprocess helper — no shell=True; portable CREATE_NO_WINDOW flag (AC9 safe)
-# ---------------------------------------------------------------------------
 
 _NO_CONSOLE: Dict[str, Any] = no_console_creationflags()
 
-# Max concurrent `git rev-list` spawns for a per-range fan-out over distinct,
-# independent read-only shell-outs. Imported by
-# `coordinator_core.ops.review_coverage_core` (this module's own
-# `build_reviewed_set`, which used to bound its own fan-out with this
-# constant, was removed — see docs/plans/2026-08-27-the-reviewed-set-is-a-
-# file-not-a-computation.md § C5). On Windows each git spawn costs ~90ms
 # (CREATE_NO_WINDOW), so resolving N records serially is N×90ms. Bounded
-# fan-out keeps wall-clock ~= one spawn without launching an unbounded swarm
-# of git.exe at once.
 _REVLIST_MAX_WORKERS = 16
 
 def _run(
@@ -282,27 +204,15 @@ def _run(
         return 1, "", str(exc)
 
 
-# ---------------------------------------------------------------------------
-# Trail file parsing
-# Dual-shape: JSON (single object, pretty or compact) OR JSONL (one per line).
-# ---------------------------------------------------------------------------
-
-
 class _TrailParseError(Exception):
-    """Raised when a trail file cannot be parsed as JSON or JSONL."""
+    pass
 
 
 def _parse_trail_file(path: str) -> List[dict]:
-    """Parse a trail record file; return list of record dicts.
-
-    Supports JSON (single object, pretty or compact) and JSONL (one object per
-    line). Raises _TrailParseError if the file cannot be parsed in either form.
-    """
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             return [json.load(fh)]
     except json.JSONDecodeError as json_err:
-        # JSONL fallback — one object per line
         try:
             records: List[dict] = []
             with open(path, "r", encoding="utf-8", errors="replace") as fh:
@@ -329,15 +239,10 @@ def _verdict_counts(rec: dict) -> bool:
     """
     v = rec.get("verdict")
     if v is None:
-        return True  # legacy record without verdict field — include
+        return True
     return v not in EXCLUDED_VERDICTS
 
 
-#: Scope values whose credited set is narrowed by foreign-session exclusion
-#: (see `_narrow_foreign_session_scope`). Extended 2026-07-27 (C7,
-#: docs/plans/2026-07-27-review-trail-scope-guard.md) from `{"session"}` alone
-#: to all three scope values a review-trail record can carry — see that
-#: function's docstring for the OLD-vs-NEW semantics this widening replaces.
 _FOREIGN_STRIPPED_SCOPES: FrozenSet[str] = frozenset(
     {"session", "chain", "workstream-close-auto"}
 )
@@ -481,61 +386,18 @@ def _narrow_foreign_session_scope(
     return foreign
 
 
-# ---------------------------------------------------------------------------
-# Bookkeeping-vs-code partition (signal-honesty fix — coverage.py is an ORACLE,
-# not a lock; see ops/ceremony/tail_ops.py:698's own disclaimer). A ceremony
-# like /workstream-complete necessarily authors its own bookkeeping commits
-# (completion entry, review-trail record, shipped_in stamp, boot sweep,
-# pickup-assemble claim) AFTER the trail record that would cover them, which
 # used to pin VERDICT=UNCOVERED forever on any workstream that ran the
-# ceremony even when every genuinely-uncovered commit was ceremony
-# bookkeeping, not code a reviewer could open. This partition keeps the
-# verdict keyed on the CODE partition only, while still surfacing the
-# bookkeeping partition (never silently dropping it).
-# ---------------------------------------------------------------------------
 
-#: Path prefixes whose commits are ceremony bookkeeping, never code a reviewer
-#: opens (completion entries, review-trail records, shipped_in stamps, boot
-#: sweep notes, pickup-assemble claims). Editable/greppable single source of
-#: truth for the bookkeeping-vs-code partition below.
-#: Review: code-reviewer — each prefix carries a trailing `/`, which is what
-#: makes `str.startswith` safe here (a path-component match, not a substring
-#: match): "statement.py".startswith("state/") is False. Without the trailing
-#: slash this would false-classify e.g. "statement.py" as bookkeeping.
-#:
-#: Negative-spec: this prefix tuple is NOT the whole discriminator, and must
-#: not be read as one. Path prefix alone cannot separate a handoff being
 #: AUTHORED (trackable content) from ceremony exhaust that merely mutates the
-#: same tree — both land under `state/`. The change-type leg lives in
-#: `_handoff_authoring_shas` below; widening this tuple without consulting it
-#: is how 87578a319 turned the gate vacuous. Do not "simplify" by dropping
-#: `state/` from here and enumerating ceremony subpaths instead: that flips
-#: `shipped_in`-stamp and pickup-assemble-claim commits back to CODE, which
 #: is the permanent false-UNCOVERED tail
-#: 87578a319 existed to remove.
 _BOOKKEEPING_PATH_PREFIXES: Tuple[str, ...] = ("state/", "archive/", "tasks/", "cross-repo/")
 
-#: The handoff corpus. A commit that *introduces* a file here is authoring a
-#: handoff — the primary content the DAG coverage gate exists to track, and
-#: the commit `_derive_dag_chain_set` attributes a node to (it resolves a
-#: node's authoring commit with `git log --follow -M100% --diff-filter=A`,
-#: then reads the `Session-Id` trailer off it). A commit that merely MUTATES a
-#: file here is ceremony exhaust — the `shipped_in` stamp, the
-#: pickup-assemble claim, the fleet archival move — which is what
 #: `_BOOKKEEPING_PATH_PREFIXES` catches. See `_handoff_authoring_shas`.
 _HANDOFF_AUTHORING_PATH_PREFIX = "state/handoffs/"
 
 #: `git log --name-status` status letters that INTRODUCE the destination path
-#: (add, copy, rename-in), as opposed to mutating or removing one. Renames and
-#: copies are included fail-closed: a file appearing at a `state/handoffs/`
-#: path by any means reads as content the gate should keep tracking, and
-#: over-classifying as CODE is the loud direction.
 _PATH_INTRODUCING_STATUSES = ("A", "C", "R")
 
-#: Header line marker for _commit_touched_paths' batched `git log --format=`
-#: output — a control byte that cannot appear in a legitimate path or SHA, so
-#: it unambiguously distinguishes a per-commit header line from a --name-only
-#: path line when parsing the concatenated multi-commit output stream.
 _COMMIT_HEADER_SENTINEL = "\x02"
 
 
@@ -545,19 +407,8 @@ def _is_bookkeeping_path(path: str) -> bool:
 
 
 #: Path prefixes whose commits are PLANNING artifacts — a plan, a piece of
-#: planning research/problem-framing prose, or a plan's own sidecar — never
-#: code a reviewer opens, but ALSO never exempt from review the way EXHAUST
-#: is (see AC9 / _classify_bookkeeping_shas' docstring). Deliberately its OWN
 #: tuple, separate from `_BOOKKEEPING_PATH_PREFIXES` — see the negative-spec
-#: above that constant and AC2: widening the bookkeeping tuple to cover this
-#: class would exempt plan commits from review entirely, the vacuity
-#: direction 87578a319 exists to prevent.
-#:
-#: Widened 2026-08-06 (EM ruling, docs/plans/2026-08-05-coverage-gate-
-#: planning-artifact-class.md § Out of scope) from `docs/plans/` alone to the
-#: four prefixes below — `docs/decisions/`, `docs/reference/`, and
 #: `docs/wiki/` are deliberately EXCLUDED: they are doctrine/reference prose,
-#: not planning artifacts, and stay reviewable exactly like code.
 _PLANNING_ARTIFACT_PATH_PREFIXES: Tuple[str, ...] = (
     "docs/plans/",
     "docs/research/",
@@ -573,16 +424,6 @@ def _is_planning_artifact_path(path: str) -> bool:
 
 
 #: `git --numstat`'s rename-row notation — the CANONICAL definition, shared
-#: by `review_brightline_gate.py` and `workstream_complete/__init__.py`
-#: (both re-export `_resolve_numstat_row_path` below rather than each
-#: keeping its own copy — see this module's own callers' path-predicate
-#: bug this shared home fixes, docs/plans/2026-08-12-numstat-rename-rows-
-#: leak-past-the-noise-fi.md). Homed here, not in either gate module,
-#: because `review_brightline_gate.py` is imported BY
-#: `workstream_complete/__init__.py` at module scope — a straight import
-#: the other direction would be a true two-file cycle, not merely a
-#: fragile ordering; this module is a dependency of both and a dependent
-#: of neither.
 _REVIEW_SCALE_BRACED_RENAME_RE = re.compile(r"^(.*)\{(.*) => (.*)\}(.*)$")
 _REVIEW_SCALE_BARE_RENAME_RE = re.compile(r"^(.*) => (.*)$")
 
@@ -612,13 +453,7 @@ def _resolve_numstat_row_path(path: str) -> str:
     return path
 
 
-#: Chunk size for `_commit_touched_paths`' bare-SHA `git log --no-walk`
 #: positional-args batching — mirrors `_TRAILER_LOOKUP_CHUNK`'s rationale
-#: (keeps each spawn's argv comfortably under Windows' ~32K command-line
-#: length ceiling; a 40-hex SHA plus separator is a few bytes, so 300 per
-#: chunk leaves ample headroom). Unscoped whole-chain runs on this repo have
-#: exceeded 1900 SHAs, which previously blew a single unchunked argv past the
-#: ceiling ([WinError 206] "The filename or extension is too long").
 _TOUCHED_PATHS_CHUNK = 300
 
 
@@ -803,7 +638,6 @@ def _classify_bookkeeping_shas(
         if not paths:
             continue
         if all(_is_bookkeeping_path(p) for p in paths):
-            # EXHAUST wins on overlap — a bookkeeping-only commit (which may
             # include state/plan-sidecars/ paths) never reaches PLANNING.
             by_path.append(sha)
             continue
@@ -811,8 +645,6 @@ def _classify_bookkeeping_shas(
             _is_planning_artifact_path(p) or _is_bookkeeping_path(p) for p in paths
         ):
             planning_by_path.append(sha)
-    # Second git call only for commits already classified-by-path AND touching
-    # the handoff corpus at all — the common uncovered set never reaches it.
     candidates = [
         sha
         for sha in by_path + planning_by_path
@@ -827,18 +659,8 @@ def _classify_bookkeeping_shas(
     return exhaust_set, planning_set, note
 
 
-#: `kind` values a "plan" bucket is credited against no differently from
-#: "diff" — reserved for future kinds this chunk does not add. Kept as a
-#: single-element tuple rather than a bare string comparison so a future kind
-#: addition greps to one obvious spot.
 _UNRESTRICTED_CREDIT_KINDS: Tuple[str, ...] = ("diff",)
 
-#: `scope_kind` values Phase 1 resolves into a credit-bearing `kind` — "diff"
-#: (legacy/explicit) and "plan"; "integration" is a recognized-but-skipped
-#: shape (see the Phase 1 loop above) and never reaches here. Mirrors
-#: review-trail.schema.json's `scope_kind` enum — a schema value outside this
-#: set is a per-record zero-credit degrade (WARN, not a global fatal), never
-#: an AssertionError; see `_credit_from_kind_partition`.
 _RECOGNIZED_SCOPE_KINDS: Tuple[str, ...] = ("diff", "plan", "integration")
 
 
@@ -902,14 +724,6 @@ def _credit_from_kind_partition(
     return credited
 
 
-# ---------------------------------------------------------------------------
-# reviewed_set builder
-# ---------------------------------------------------------------------------
-
-#: Chunk size for `_bulk_trailer_lookup`'s positional-SHA `git log` batching —
-#: keeps each spawn's argv comfortably under Windows' ~32K command-line
-#: length ceiling (a 40-hex SHA plus separator is a few bytes; 300 per chunk
-#: leaves ample headroom for the rest of the argv).
 _TRAILER_LOOKUP_CHUNK = 300
 
 
@@ -957,17 +771,6 @@ def _bulk_trailer_lookup(shas: Set[str], cwd: str) -> Optional[Dict[str, str]]:
 
 
 def emit_unrecognized_kind_warning(unrecognized_kind_counts: Dict[str, int]) -> None:
-    """Emit ONE aggregated stderr WARN for every unrecognized-`scope_kind`
-    record a walk classified, naming the total count and every distinct kind
-    seen. A no-op if the walk saw none. Imported by
-    `coordinator_core.ops.review_coverage_core`'s own `build_reviewed_set`/
-    `build_segments` (this module's own `build_reviewed_set` was removed —
-    see docs/plans/2026-08-27-the-reviewed-set-is-a-file-not-a-computation.md
-    § C5) so both call sites emit identical text (the two were independently
-    maintained until a reviewer flagged the drift risk). The shared copy
-    lives HERE because the existing dependency runs
-    review_coverage_core.py -> coverage.py; putting it the other way round
-    would invert that edge and create an import cycle."""
     if not unrecognized_kind_counts:
         return
     total = sum(unrecognized_kind_counts.values())
@@ -977,16 +780,6 @@ def emit_unrecognized_kind_warning(unrecognized_kind_counts: Dict[str, int]) -> 
         f"each credits nothing: {', '.join(distinct)}",
         file=sys.stderr,
     )
-
-
-# ---------------------------------------------------------------------------
-# Handoff-level utilities for the DAG-mode fixpoint
-#
-# `_build_dag_index` (the in-memory handoff-path index for the archival seam)
-# was removed 2026-08-19 along with `_derive_dag_chain_set`, its only caller —
-# see state/kill-ledger.md. The functions below have their own live consumers
-# and survive independently.
-# ---------------------------------------------------------------------------
 
 
 def _parse_handoff_consumed_by(
@@ -1087,24 +880,6 @@ def _get_handoff_consumed_by(
     common_dir: Optional[Path] = None,
     repo_root: Optional[str] = None,
 ) -> Optional[str]:
-    """Extract the claimed_by session-id for a handoff — ledger-first (C2,
-    this plan), via ``_parse_handoff_consumed_by`` / ``claim_state.
-    resolve_claim_state``.
-
-    DR-084 transitional ingest tolerance (C7) still applies on the
-    frontmatter-mirror fallback leg: ``claimed_by`` wins over the retired
-    ``consumed_by`` name (see ``_parse_handoff_consumed_by`` for the exit
-    condition and precedence rationale) — but the ledger, when it holds a
-    live claim, now wins over the mirror outright.
-    Returns None for unclaimed/open handoffs (both sources) AND for
-    read/parse failures (conservative — callers treat None as "live"). This
-    is the canonical accessor: imported directly by ops/handoff_reconcile.py,
-    ops/ceremony/{resolver,branch_resolution,commit_gates}.py, and
-    ops/fleet/archive_handoffs.py, several of which compare the return value
-    with `is None` / `== sid` — its Optional[str] contract must not change.
-    ``common_dir``/``repo_root`` are optional hot-path pre-resolution hooks,
-    threaded straight through to ``_parse_handoff_consumed_by``.
-    """
     try:
         if common_dir is not None or repo_root is not None:
             return _parse_handoff_consumed_by(
@@ -1112,24 +887,12 @@ def _get_handoff_consumed_by(
             )
         return _parse_handoff_consumed_by(handoff_path)
     except Exception as exc:
-        # --- Tier 2 (behaviour change -- PM sign-off required) ---
-        # Previously: except Exception: return None — silent, no note, no log.
-        # Guard-2's capture-into-result.notes shape (:856/:864) is NOT reachable
-        # here: this function has no result object, and its Optional[str]
-        # contract is depended on verbatim by the 6 external call sites named
-        # above — returning a tuple would silently break their `is None` /
-        # `== sid` comparisons. Fallback per the design call: a stderr
-        # diagnostic, RETURN VALUE unchanged (None → conservative live, same
-        # fail-closed direction as before). The DAG-fixpoint's own call path
-        # (_handoff_session_live below) uses _parse_handoff_consumed_by
-        # directly and DOES get full Guard-2 notes+indeterminate treatment.
         print(
             f"_get_handoff_consumed_by: {handoff_path}: {type(exc).__name__}: {exc} "
             f"(non-fatal, conservative-live default)",
             file=sys.stderr,
         )
         return None
-        # --- end Tier 2 ---
 
 
 def _handoff_session_live(
@@ -1161,37 +924,17 @@ def _handoff_session_live(
             )
         else:
             sid = _parse_handoff_consumed_by(handoff_path)
-    # --- Tier 2 (behaviour change -- PM sign-off required) ---
-    # Previously (via _get_handoff_consumed_by's shared except Exception:
-    # return None): a read/parse failure here was indistinguishable from a
-    # legitimately-unconsumed handoff — silent, no note, no log. Matches
-    # Guard-2 (:856/:864 in this file): capture type(exc).__name__: {exc} and
-    # let the fixpoint call site fold it into result.notes + indeterminate=True.
     except Exception as exc:
         note = (
             f"{handoff_path}: _get_handoff_consumed_by raised "
             f"{type(exc).__name__}: {exc} — INDETERMINATE"
         )
-        return True, note  # still conservative-live, but now flagged
-    # --- end Tier 2 ---
+        return True, note
     if sid is None:
-        return True, None  # unclaimed / unresolved → conservative live
+        return True, None
     return sid in live_sids, None
 
 
-# ---------------------------------------------------------------------------
-# DAG-mode scope_paths filter — chain_set narrowing by git's own pathspec
-# matcher (parity with flat mode's `git rev-list -- scope_paths`). Its
-# original caller, run_coverage_gate's DAG branch, was removed by K-001
-# (2026-08-16, see state/kill-ledger.md).
-# ---------------------------------------------------------------------------
-
-#: Max SHAs per batched `git log --no-walk` scope-filter call. DAG-mode
-#: chain_set is fixpoint-derived and can be arbitrarily large (unlike
-#: _commit_touched_paths' caller-bounded uncovered-set), so this filter needs
-#: its own chunking discipline. Conservative relative to typical OS argv
-#: ceilings (~32K chars on Windows, far higher on macOS/Linux) given 40-char
-#: SHAs plus scope_paths entries.
 _SCOPE_FILTER_CHUNK_SIZE = 200
 
 
@@ -1252,17 +995,6 @@ def _filter_shas_by_scope_paths(
     for i in range(0, len(shas), _SCOPE_FILTER_CHUNK_SIZE):
         chunk = shas[i : i + _SCOPE_FILTER_CHUNK_SIZE]
 
-        # `git diff-tree --stdin` silently no-ops an unresolvable SHA (exit 0,
-        # empty output, no stderr) rather than erroring — indistinguishable
-        # from "resolved but touches nothing in scope_paths" without this
-        # explicit existence check. Fail-closed requires catching that case
-        # before it is misread as a scoping decision. This same call also
-        # resolves each token's FULL object name (%(objectname)) — reused
-        # below (Review: code-reviewer) so an abbreviated input sha is never
-        # fed to diff-tree, and never matched against, in its abbreviated
-        # form: diff-tree echoes an unmatched abbreviation back verbatim
-        # instead of suppressing it, which would otherwise be misread as a
-        # scope match.
         rc_check, out_check, err_check = _run(
             ["git", "cat-file", "--batch-check=%(objectname) %(objecttype)"],
             cwd=cwd,
@@ -1277,12 +1009,6 @@ def _filter_shas_by_scope_paths(
                 f"{err_check.strip() or 'unresolvable SHA'}"
             )
 
-        # Map each input token to its resolved full object name — positional,
-        # mirroring `_batch_check_hex_tokens`' own empirically-verified
-        # order-preserving contract for this exact git subcommand (see that
-        # function's docstring). Any line that doesn't cleanly resolve to a
-        # full 40-char sha degrades that token out of this chunk (fail-closed
-        # — never fed to diff-tree unresolved, never matched).
         full_shas: List[str] = []
         for token, line in zip(chunk, out_check.splitlines()):
             parts = line.split()
@@ -1309,11 +1035,6 @@ def _filter_shas_by_scope_paths(
             if sha in chunk_set:
                 matched.add(sha)
     return frozenset(matched), None
-
-
-# ---------------------------------------------------------------------------
-# DAG-mode chain_set derivation — fixpoint over coverable ancestors
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -1386,65 +1107,16 @@ class _DagNodeAttribution:
 
 @dataclass
 class _DagChainResult:
-    """Internal result of the now-removed `_derive_dag_chain_set` (cut
-    2026-08-19, orphaned by K-007 — see state/kill-ledger.md). This dataclass
-    has no production constructor left in this tree; it is retained solely
-    because `coordinator_core/tests/test_review_brightline_gate.py` still
-    imports the name (unused by any test there) — deleting it would break an
-    out-of-scope test file's collection. Do not build new functionality on
-    this type without re-checking that import first.
-
-    shas:              Flat union of every coverable node's attributed commits
-                       — unchanged pre-existing contract; callers that only
-                       read this field keep working unchanged.
-    ordered_ancestry:  walk_forward's own `orderedPaths` (first-encounter
-                       order, closing handoff first, roots last) — threaded
-                       through verbatim rather than left to go out of scope
-                       after Step 1, so a renderer can present the walked
-                       chain without re-walking the DAG.
-    node_attribution:  {node_path: _DagNodeAttribution} for every node in
-                       closing_set (the coverable set the Step 2 fixpoint
-                       converged on) — the per-node segment data Step 3
-                       already computes but previously discarded at this
-                       dataclass's return boundary. A node absent from
-                       closing_set (blocked by a live predecessor) never
-                       reaches Step 3 and has no entry here, by construction —
-                       its commits are also absent from `shas`.
-    """
 
     shas: List[str] = field(default_factory=list)
     indeterminate: bool = False
     notes: List[str] = field(default_factory=list)
     ordered_ancestry: List[str] = field(default_factory=list)
     node_attribution: Dict[str, _DagNodeAttribution] = field(default_factory=dict)
-    #: C2 (AC3): commits seen in a coverable node's Session-Id segment but
     #: EXCLUDED from that node's leg (b) because the add-commit that would
-    #: have seeded leg (b) was judged a bulk sweep (the threshold constant
     #: this compared against, `_BULK_SWEEP_ADD_COMMIT_FILE_THRESHOLD`, was
-    #: removed 2026-08-19 with its only caller — see state/kill-ledger.md).
-    #: Never a member of `shas` —
-    #: these are "in range, unattributable to this chain", not "this
-    #: chain's inheritance". Reported so a closer sees they exist and are
-    #: someone else's, rather than the report silently shrinking. Additive
-    #: field — existing callers reading only `shas`/`node_attribution` are
-    #: unaffected.
     unattributable_shas: List[str] = field(default_factory=list)
-    #: walk_forward's own `terminatedEarly` discriminator ('' | 'lineage-cycle'
-    #: | 'missing-link'), formerly threaded through from `dag.walk_forward`
-    #: via the now-removed `_derive_dag_chain_set` (cut 2026-08-19, see
-    #: state/kill-ledger.md). No current reader in this tree.
     terminated_early: str = ""
-
-
-# `_DagChainSetContext` (the optional cross-call cache for `_derive_dag_chain_set`)
-# and `_resolve_closing_handoff_disk_path` (its closing-handoff archive-path
-# resolver) were removed 2026-08-19 along with `_derive_dag_chain_set`, their
-# only caller — see state/kill-ledger.md.
-
-
-# ---------------------------------------------------------------------------
-# Trail path collector
-# ---------------------------------------------------------------------------
 
 
 def _collect_trail_paths(repo_root: str) -> List[str]:
@@ -1477,11 +1149,6 @@ def _collect_trail_paths(repo_root: str) -> List[str]:
             for p in sorted(trail_dir.rglob("*.json")):
                 paths.append(str(p))
     return paths
-
-
-# ---------------------------------------------------------------------------
-# Public result type
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -1604,20 +1271,14 @@ class CoverageResult:
     unattributable_shas: List[str] = field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
 # DAG-mode UNCOVERED render — baton-ancestry inheritance disclosure
-# ---------------------------------------------------------------------------
 
-#: Labels assigned to ancestry nodes in chronological (oldest-first) order for
 #: the UNCOVERED render below. Falls back to a numeric "N<i>" token past
 #: len(_ANCESTRY_LABELS) — a real baton chain has never been observed anywhere
-#: near 26 nodes deep, so this is a graceful-degradation floor, not a limit
-#: this code expects to hit.
 _ANCESTRY_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
 def _ancestry_label(index: int) -> str:
-    """Return the display label for ancestry position `index` (0-based)."""
     if index < len(_ANCESTRY_LABELS):
         return _ANCESTRY_LABELS[index]
     return f"N{index}"
@@ -1675,10 +1336,6 @@ def _render_dag_ancestry_notes(
     """
     lines: List[str] = []
 
-    # Chronological order: ordered_ancestry is walk_forward's own
-    # first-encounter order (closing handoff first, roots last — "terminal to
-    # roots"); reversed here to present oldest-to-newest, matching how a
-    # baton chain is actually read (predecessor before successor).
     chronological = [n for n in reversed(ordered_ancestry) if n in node_attribution]
 
     lines.append(
@@ -1709,24 +1366,12 @@ def _render_dag_ancestry_notes(
 
     unclaimed = [sha for sha in uncovered_shas if sha not in claimed]
     if unclaimed:
-        # Fail-visible, not fail-silent: every uncovered_shas member should be
-        # a subset of the union of all node segments (that union is exactly
-        # how chain_set was built) — a non-empty unclaimed set here means
-        # something upstream is inconsistent, and hiding that inconsistency
-        # would defeat the whole point of this render.
         lines.append(
             "  [?]  "
             f"{len(unclaimed)} uncovered commit(s) with no resolved originating "
             f"baton: {', '.join(sha[:9] for sha in unclaimed)}"
         )
 
-    # AC8 / § "Honest accounting — the disclosed limit": this attribution is
-    # trailer-derived (Deliverable-Id: ~5.5%, Session-Id: ~88.9% of historical
-    # commits; older/hook-less commits carry neither) and over-includes rather
-    # than under-includes (staging a chain's plan file acquires its
-    # Deliverable-Id). Crediting is range-based, not per-SHA: a minted waiver
-    # plus a close record covering the range credits every waived commit in
-    # that range whether or not it was individually opened.
     lines.append(
         "NOTE: this attribution is trailer-derived and incomplete (a plan-file "
         "edit can acquire a chain's Deliverable-Id), and crediting is "

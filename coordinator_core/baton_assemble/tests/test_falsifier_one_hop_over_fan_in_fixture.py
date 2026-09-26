@@ -105,9 +105,6 @@ def test_one_hop_answers_completion_for_a_three_prior_fan_in_successor(tmp_path,
 
 
 def test_one_hop_falsifies_when_plan_ids_is_missing(tmp_path, monkeypatch):
-    """Negative control -- a successor minted WITHOUT the plan_ids union
-    (the pre-C2 shape) must FAIL the falsifier, so a green result upstream
-    is never mistaken for 'the criterion doesn't discriminate'."""
     module = _load_falsifier_module()
     monkeypatch.setattr(module, "REPO_ROOT", tmp_path)
 

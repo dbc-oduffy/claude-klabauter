@@ -1,11 +1,3 @@
-"""Tests for coordinator_core.launchable.resolve_launchable.
-
-Both platform branches are exercised on every host by patching the module's
-``_is_windows`` seam -- the whole point of this module is a defect that only
-manifests on Windows, so a suite that skipped the nt branch off-Windows would test
-nothing that matters. (``os.name`` itself is deliberately NOT patched: ``pathlib``
-keys its concrete-class selection on it and raises mid-test.)
-"""
 
 from __future__ import annotations
 
@@ -28,11 +20,6 @@ def as_posix(monkeypatch):
     monkeypatch.setattr(launchable, "_is_windows", lambda: False)
 
 
-# ---------------------------------------------------------------------------
-# POSIX -- bare path always (the shebang is authoritative there)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "script",
     ["/x/query-records.js", "/x/verify-no-console-flash.sh", "/x/machine-local", "/x/t.py"],
@@ -46,11 +33,6 @@ def test_posix_ignores_a_cmd_twin(as_posix, tmp_path):
     script.write_text("//\n")
     (tmp_path / "query-records.js.cmd").write_text("@echo off\n")
     assert resolve_launchable(str(script)) == [str(script)]
-
-
-# ---------------------------------------------------------------------------
-# Windows -- tier 1: the .cmd twin wins when present
-# ---------------------------------------------------------------------------
 
 
 def test_nt_prefers_cmd_twin_over_interpreter_prefix(as_nt, tmp_path):
@@ -70,17 +52,11 @@ def test_nt_prefers_cmd_twin_for_extensionless_script(as_nt, tmp_path):
 
 
 def test_nt_ignores_a_cmd_twin_that_is_a_directory(as_nt, tmp_path):
-    """isfile, not exists -- a directory named ``<script>.cmd`` is not a launcher."""
     script = tmp_path / "thing.sh"
     script.write_text("#!/usr/bin/env bash\n")
     (tmp_path / "thing.sh.cmd").mkdir()
     assert resolve_launchable(str(script))[-1] == str(script)
-    assert len(resolve_launchable(str(script))) == 2  # fell through to bash prefix
-
-
-# ---------------------------------------------------------------------------
-# Windows -- tier 2: interpreter prefix by extension
-# ---------------------------------------------------------------------------
+    assert len(resolve_launchable(str(script))) == 2
 
 
 @pytest.mark.parametrize("suffix", [".js", ".cjs", ".mjs"])
@@ -99,7 +75,6 @@ def test_nt_shell_family_gets_bash_prefix(as_nt, suffix):
 
 
 def test_nt_py_uses_this_interpreter_not_a_path_probe(as_nt):
-    """venv-correct by construction -- see _interpreter_for's docstring."""
     assert resolve_launchable("C:\\x\\t.py") == [sys.executable, "C:\\x\\t.py"]
 
 
@@ -107,24 +82,13 @@ def test_nt_extension_match_is_case_insensitive(as_nt):
     assert len(resolve_launchable("C:\\x\\QUERY-RECORDS.JS")) == 2
 
 
-# ---------------------------------------------------------------------------
-# Windows -- tier 3: bare path when nothing better is known
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize("script", ["C:\\x\\machine-local", "C:\\x\\thing.exe", "C:\\x\\a.pl"])
 def test_nt_unknown_shape_falls_through_to_bare_path(as_nt, script):
     assert resolve_launchable(script) == [script]
 
 
-# ---------------------------------------------------------------------------
-# Shape contract
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize("windows", [True, False])
 def test_script_is_always_the_last_element(monkeypatch, windows):
-    """`[*resolve_launchable(p), *args]` is only correct if p stays adjacent to args."""
     monkeypatch.setattr(launchable, "_is_windows", lambda: windows)
     for script in ("C:\\x\\a.js", "C:\\x\\b.sh", "C:\\x\\c", "C:\\x\\d.py"):
         assert resolve_launchable(script)[-1] == script
@@ -135,26 +99,11 @@ def test_accepts_pathlike(as_posix, tmp_path):
     assert resolve_launchable(script) == [str(script)]
 
 
-# ---------------------------------------------------------------------------
-# which_path_ordered -- directory-major, extension-minor PATH walk
-# ---------------------------------------------------------------------------
-
-
 def _set_path(monkeypatch, *dirs):
     monkeypatch.setenv("PATH", os.pathsep.join(dirs))
 
 
 def test_directory_major_extension_minor_ordering(monkeypatch, tmp_path):
-    """Earlier PATH dir wins even when its only match is a LOWER-priority
-    extension than a match sitting in a LATER dir.
-
-    dir1 (first on PATH) has only a `.BAT` twin of `tool`; dir2 (second on
-    PATH) has a `.EXE` twin, which PATHEXT ranks ahead of `.BAT`. An
-    extension-major implementation (walk `.EXE` across ALL dirs first, then
-    `.BAT` across all dirs) would find dir2's `.EXE` first and return it --
-    wrong, since dir1 precedes dir2 on PATH. The correct directory-major
-    walk must return dir1's `.BAT` instead.
-    """
     dir1 = tmp_path / "dir1"
     dir2 = tmp_path / "dir2"
     dir1.mkdir()
@@ -173,8 +122,6 @@ def test_directory_major_extension_minor_ordering(monkeypatch, tmp_path):
 
 
 def test_pathext_order_honoured_within_a_directory(monkeypatch, tmp_path):
-    """Within one dir, PATHEXT precedence (.EXE before .BAT here) governs
-    which twin wins, not filesystem/alphabetic order."""
     d = tmp_path / "dir1"
     d.mkdir()
     (d / "tool.BAT").write_text("@echo off\n")
@@ -188,9 +135,6 @@ def test_pathext_order_honoured_within_a_directory(monkeypatch, tmp_path):
 
 
 def test_bare_extensionless_name_is_a_candidate(monkeypatch, tmp_path):
-    """A directory holding only the bare `name` (no PATHEXT twin at all)
-    still matches -- the bare form is tried after the suffixed forms in
-    that same directory."""
     d = tmp_path / "dir1"
     d.mkdir()
     bare = d / "tool"
@@ -203,9 +147,6 @@ def test_bare_extensionless_name_is_a_candidate(monkeypatch, tmp_path):
 
 
 def test_extensions_empty_list_matches_only_literal_filename(monkeypatch, tmp_path):
-    """`extensions=[]` must NOT append any PATHEXT suffix -- only the exact
-    `name` should match. This is the shim-supporting mode: a wider match
-    (e.g. picking up a `name.EXE` sibling) would be a real regression."""
     d = tmp_path / "dir1"
     d.mkdir()
     shim = d / "tool.sh"
@@ -248,9 +189,6 @@ def test_not_found_returns_none(monkeypatch, tmp_path):
 
 
 def test_empty_path_entry_is_skipped(monkeypatch, tmp_path):
-    """A `PATH` containing an empty segment (e.g. a trailing/doubled
-    separator) must not raise or match anything spurious -- it is skipped
-    and the walk continues to the next real directory."""
     d = tmp_path / "dir1"
     d.mkdir()
     target = d / "tool"
@@ -263,9 +201,6 @@ def test_empty_path_entry_is_skipped(monkeypatch, tmp_path):
 
 
 def test_path_entry_that_is_not_a_directory_is_skipped(monkeypatch, tmp_path):
-    """A `PATH` entry pointing at a plain file (not a directory) must not
-    raise -- os.path.isfile candidates built under it simply never exist,
-    and the walk falls through to the next entry."""
     not_a_dir = tmp_path / "not-a-dir.txt"
     not_a_dir.write_text("x\n")
     d = tmp_path / "dir1"

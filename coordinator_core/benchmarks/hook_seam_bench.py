@@ -172,11 +172,6 @@ def spawn_arm_process_time(name: str, shape: str, cmd, k: int = 20) -> Dict[str,
         "shape": shape,
         "k": r["k"],
         "process_time_ms": round(r["process_time_ms"], 3),
-        # `procs_per_call` COUNTS the measured command itself. Reporting
-        # `procs_per_call - 1` as "spawns" reads as zero for a command that
-        # spawns exactly one process, which is the opposite of true -- the
-        # `- 1` derivation only makes sense when subtracting a harness's own
-        # wrapper, which this bench does not use. Report the count as measured.
         "procs_per_call": round(procs, 3),
         "grandchildren_per_call": round(max(0.0, procs - 1), 3),
         "rc": r["rc"],
@@ -214,18 +209,6 @@ def to_json(summaries: List[Dict[str, object]],
         },
         indent=2,
     )
-
-
-# --------------------------------------------------------------------------
-# THE DRIVER. Everything above this line is the library; nothing above it
-# runs the three arms and produces a figure. Without this section the repo
-# owns a harness but not a measurement -- the manifest's hand-taken rows are
-# not reproducible by anything committed, which is the gap this driver
-# closes. Three arms, per the 2026-08-25 reconciliation of AC1 (the
-# dispatch brief for this chunk): today's cold chain, HTTP warm hit,
-# control -- not the four-arm list AC1 originally named, which predates the
-# HTTP transport C2/C3 landed and the H4 wiring-gap fix.
-# --------------------------------------------------------------------------
 
 
 def _bind_test_http_listener(engine_root, *, dispatch=None):

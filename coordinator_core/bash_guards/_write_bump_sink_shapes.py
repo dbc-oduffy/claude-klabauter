@@ -89,38 +89,10 @@ from ._command_tokenizer import (
     resolve_command_positions,
 )
 
-#: Redirection operator token shape shlex's tokenizer emits when `>`/`>>`
-#: (optionally fd-prefixed, e.g. `2>`, `1>>`) is surrounded by whitespace --
-#: this is a punctuation-adjacent WORD token (not one of this package's own
-#: `;`/`&`/`|` `punctuation_chars`), so it appears as an ordinary token in a
-#: `tokenize_full_command` stream and is recognised here by shape, not by a
-#: dedicated tokenizer feature.
 _REDIRECT_OP_RE = re.compile(r"^\d*>{1,2}$")
 
-#: A plain redirect to exactly this literal token is never a write-sink
-#: candidate (2026-08-13, out-of-repo write-bump `/dev/null` false positive,
-#: `state/subagent-share/8d387a4c-8595-4b90-8714-f5775401fcb3/`). `/dev/null`
-#: is a null sink, not a write destination -- nothing is written, nothing
-#: leaves the repo, so there is no out-of-repo write to bump. Mirrors the
-#: sibling carve-out already shipped on
-#: `block_reviewer_bash_outside_allowlist._match_devnull_redirect`
-#: (Divergence 8, 2026-07-28) on the identical reasoning, narrowed the same
-#: way: EXACT match only, never a prefix or `/dev/*` pattern, and it exempts
-#: only THIS ONE redirect-operator token pair from candidate extraction --
-#: every other token in the same segment (another redirect to a real path, a
-#: `cp`/`mv`/`tee`/etc. positional target) is still extracted and evaluated
-#: normally, so `echo hi > /dev/null; cp x /elsewhere/y` still bumps on the
-#: `cp` leg.
 _DEVNULL_TARGET = "/dev/null"
 
-#: The plain-bash write-sink BINARY names this table classifies (the
-#: redirection-operator shape above is handled independently of binary
-#: name, since `echo x > /elsewhere/file` is a write sink regardless of
-#: `echo` itself never appearing in this set). Every entry here is a
-#: basename-normalized (see `_command_tokenizer.normalize_executable_
-#: basename`) lowercase binary name -- callers must normalize their own
-#: head token the same way before consulting this set, exactly as every
-#: other binary-identity check in this package already does.
 WRITE_SINK_BINARIES = frozenset(
     {"tee", "cp", "mv", "mkdir", "install", "sed", "rsync", "tar"}
 )
@@ -130,13 +102,6 @@ _SED_SCRIPT_LONG_FLAGS = ("--expression", "--file")
 
 
 def _sed_inplace_targets(args: List[str]) -> List[str]:
-    """The files an in-place `sed` edits, or `[]` when it is not in-place.
-
-    Only `-i`/`--in-place` makes `sed` write a file; otherwise it writes
-    stdout. The edit script is not a target: it is the value of `-e`/`-f`/
-    `--expression`/`--file` when one is given, else the first operand. BSD's
-    separate-token suffix (`-i ''`, `-i .bak`) is skipped too -- an empty
-    token or a slash-free `.`-prefixed one after a bare `-i`."""
     if not any(a.startswith("-i") or a.startswith("--in-place") for a in args):
         return []
     operands: List[str] = []
@@ -212,9 +177,6 @@ def extract_write_sink_targets_for_segment(tokens: List[str], head_base: str) ->
             redirect_target = tokens[i + 1]
             if redirect_target == _DEVNULL_TARGET:
                 # Exact `/dev/null` only -- see `_DEVNULL_TARGET`'s own
-                # docstring. Every other token in this segment is still
-                # scanned normally by this same loop and by the
-                # `head_base`-driven branches below.
                 continue
             targets.append(redirect_target)
 
@@ -225,41 +187,19 @@ def extract_write_sink_targets_for_segment(tokens: List[str], head_base: str) ->
     positional = [t for t in args if not t.startswith("-")]
 
     if head_base == "tee":
-        # Every positional argument is a target file; `tee` fans out to all
-        # of them (plus stdout, not a filesystem write this module cares
-        # about).
         targets.extend(positional)
     elif head_base in ("cp", "mv", "install"):
-        # Last positional argument is the destination -- the ordinary
-        # `cp SRC... DEST` / `mv SRC DEST` / `install [-options] SRC DEST`
-        # shape. A single positional argument (destination only, no source
-        # named -- malformed for these binaries) is skipped rather than
-        # guessed at.
         if len(positional) >= 2:
             targets.append(positional[-1])
     elif head_base == "mkdir":
-        # `mkdir` can create multiple directories in one invocation; every
-        # positional argument is its own target. Triggered regardless of
-        # `-p` presence -- a bare `mkdir /elsewhere/dir` is exactly as
-        # real a foreign-repo write as `mkdir -p /elsewhere/dir`, and the
         # plan's own enumeration ("mkdir -p") names the OBSERVED shape from
-        # the two cited incidents, not an exhaustive gate on the flag.
         targets.extend(positional)
     elif head_base == "sed":
         targets.extend(_sed_inplace_targets(args))
     elif head_base == "rsync":
-        # Last positional argument is the destination, same shape as
-        # `cp`/`mv` above.
         if len(positional) >= 2:
             targets.append(positional[-1])
     elif head_base == "tar":
-        # Only extraction (`-x`/`--extract`, or a bundled short-flag form
-        # containing `x`, e.g. `-xf`) writes to the filesystem at all; the
-        # plan's own enumeration names the `-C <dir>` (or `--directory`)
-        # extraction-target form specifically, not tar's own default-cwd
-        # extraction (which this module deliberately does not attempt to
-        # resolve, since it is not a repo-crossing shape without an
-        # explicit `-C`).
         has_extract = any(
             a in ("-x", "--extract")
             or (a.startswith("-") and not a.startswith("--") and "x" in a)
@@ -275,23 +215,10 @@ def extract_write_sink_targets_for_segment(tokens: List[str], head_base: str) ->
     return targets
 
 
-#: PowerShell cmdlet-shaped write-sink table (C4e follow-up, 2026-08-07,
 #: `docs/reference/guard-dialect-coverage.md` row 15). ADDITIVE to the
 #: `WRITE_SINK_BINARIES` table above, not a replacement -- `cp`/`mv`/`tee`/
-#: `mkdir`/`install`/`sed`/`rsync`/`tar` stay a BASH-only table exactly as
 #: before; this is a SEPARATE, PowerShell-only table for the cmdlets C3's
-#: triage named as the genuinely unmatched gap (row 15's own worked list):
-#: `New-Item`, `Set-Content`, `Add-Content`, `Copy-Item`, `Move-Item`,
-#: `Out-File`, `Tee-Object`. `cp`/`mv` PowerShell ALIASES are deliberately
-#: NOT duplicated here (C3's triage: they already fire via alias collision
-#: on the bash-shaped classifier reused elsewhere in this fleet); `>`/`>>`
-#: are the same operator characters in both dialects and are likewise left
-#: alone here, not re-derived. Every entry is a lowercased FULL cmdlet name
-#: only -- short aliases (`ni`, `sc`, `ac`, `cpi`, `mi`) are NOT covered,
-#: same "do not enumerate evasions" posture the rest of this module
-#: applies; a caller consulting this table must lowercase its own head
 #: token first, mirroring `WRITE_SINK_BINARIES`'s own basename-normalize
-#: contract.
 PS_WRITE_SINK_CMDLETS = frozenset(
     {"new-item", "set-content", "add-content", "copy-item", "move-item", "out-file", "tee-object"}
 )
@@ -329,61 +256,34 @@ def extract_write_sink_targets_powershell(tokens: List[str], head_low: str) -> L
         return []
 
     args = tokens[1:]
-    # Flag-shaped detection happens on the RAW (still-quoted) token
-    # deliberately -- a quoted literal like `"-Path"` is data, not a real
-    # PowerShell parameter name (quoting it is exactly how a script would
-    # spell "the string `-Path`, not the flag"), so filtering BEFORE
-    # stripping is the correct order: stripping first would make a quoted
-    # literal indistinguishable from an actual `-Path` flag and wrongly
-    # exclude it from the positional set.
     positional = [_strip_ps_quotes(t) for t in args if not t.startswith("-")]
     targets: List[str] = []
 
     if head_low == "new-item":
-        # `-Path` (prefix `-pa`, unambiguous against `-ItemType`/`-Value`/
-        # `-Force`/`-Name`) or the first positional argument.
         v = _ps_flag_value(args, ("-pa",))
         if v is not None:
             targets.append(v)
         elif positional:
             targets.append(positional[0])
     elif head_low in ("set-content", "add-content"):
-        # `-Path` (`-pa`) or `-LiteralPath` (`-li`), unambiguous against
-        # `-Value`/`-Encoding`/`-Force`; else first positional.
         v = _ps_flag_value(args, ("-pa", "-li"))
         if v is not None:
             targets.append(v)
         elif positional:
             targets.append(positional[0])
     elif head_low in ("copy-item", "move-item"):
-        # `-Destination` (`-de`, unambiguous against `-Path`/`-Force`/
-        # `-Recurse`) or the LAST positional when two-or-more are present --
-        # the same `SRC... DEST` shape the bash-leg `cp`/`mv` branch uses.
         v = _ps_flag_value(args, ("-de",))
         if v is not None:
             targets.append(v)
         elif len(positional) >= 2:
             targets.append(positional[-1])
     elif head_low == "out-file":
-        # `-FilePath` (`-fi`, unambiguous against `-InputObject`/`-Encoding`/
-        # `-Append`/`-Force`) or the first positional -- `Out-File` accepts
-        # `FilePath` positionally (position 0), including the common
-        # `... | Out-File dest.txt` pipeline-tail shape.
         v = _ps_flag_value(args, ("-fi",))
         if v is not None:
             targets.append(v)
         elif positional:
             targets.append(positional[0])
     elif head_low == "tee-object":
-        # `-FilePath` (`-fi`) or the first positional -- but ONLY when no
-        # `-Variable` (`-va`) flag is present. `Tee-Object`'s `-FilePath`
-        # and `-Variable` parameter sets are mutually exclusive and share
-        # the SAME position-0 positional slot; `Tee-Object -Variable foo`
-        # writes to an in-memory PowerShell variable, not the filesystem,
-        # and `foo` there is `-Variable`'s own value, not a bare positional
-        # `-FilePath` argument -- treating it as one would be a false
-        # write-sink candidate (confirmed live: without this guard, `foo`
-        # was wrongly extracted as a target).
         v = _ps_flag_value(args, ("-fi",))
         has_variable_flag = any(t.lower().startswith("-va") for t in args)
         if v is not None:
@@ -394,11 +294,7 @@ def extract_write_sink_targets_powershell(tokens: List[str], head_low: str) -> L
     return targets
 
 
-#: `Set-Location` and its built-in aliases (`cd`, `sl`, `chdir`) -- the
-#: PowerShell-leg cwd-tracking parity fix (2026-08-07/08, backlog row
-#: `2026-08-07-bump-foreign-repo-write-s-powershell-leg-3254b856d676`).
 #: Lowercased full names only, matching `PS_WRITE_SINK_CMDLETS`'s own
-#: "caller lowercases its head token first" contract.
 PS_SET_LOCATION_ALIASES = frozenset({"set-location", "cd", "sl", "chdir"})
 
 
@@ -424,8 +320,6 @@ def extract_set_location_target_powershell(tokens: List[str], head_low: str) -> 
     v = _ps_flag_value(args, ("-pa", "-li"))
     if v is not None:
         return v
-    # Same filter-before-strip ordering as `extract_write_sink_targets_
-    # powershell` above -- see that function's own comment.
     positional = [_strip_ps_quotes(t) for t in args if not t.startswith("-")]
     if positional:
         return positional[0]
@@ -475,27 +369,17 @@ def nearest_existing_ancestor(path: str) -> Optional[str]:
     return None
 
 
-#: Windows drive-letter absolute form, e.g. `C:\Users\...` or `C:/Users/...`.
-#: Regex SHAPE cited (not imported) from `coordinator_core.ops.goal_append`'s
 #: `_WINDOWS_DRIVE_ABSOLUTE_RE` -- `bash_guards` must not import `coordinator_
-#: core.ops` (see `translate_msys_path`'s own docstring for why).
 _WINDOWS_DRIVE_ABSOLUTE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
-#: Git-for-Windows MSYS toplevel drive-mount form, e.g. `/c/Users/...`.
-#: Regex SHAPE cited (not imported) from `coordinator_core.ops.goal_append`'s
 #: `_MSYS_ABSOLUTE_RE`, same provenance note as above.
 _MSYS_ABSOLUTE_RE = re.compile(r"^/[A-Za-z]/")
 
-#: A bare drive-mount with no trailing path segment at all, e.g. `/c` or
 #: `/C` -- `_MSYS_ABSOLUTE_RE` requires a trailing `/`, so this second
-#: pattern exists purely to catch that one-segment edge the first misses.
 _MSYS_BARE_DRIVE_RE = re.compile(r"^/[A-Za-z]$")
 
 
 def _host_is_windows() -> bool:
-    """`os.name == "nt"`. A monkeypatchable seam -- tests drive both the
-    Windows and POSIX branches of `translate_msys_path`/`resolve_relative`
-    through this one function rather than mocking `os.name` directly."""
     return os.name == "nt"
 
 
@@ -566,17 +450,11 @@ def translate_msys_path(path: str) -> Optional[str]:
         return path
     m = _MSYS_ABSOLUTE_RE.match(path)
     if m:
-        # `rest` still carries MSYS-style forward slashes past the drive
-        # segment (bash never emits backslashes) -- normalize those to the
-        # native separator too, not just the drive prefix, so the WHOLE
-        # result is a well-formed Windows path a subsequent `os.path.join`
-        # (native `ntpath.join`) treats consistently.
         rest = path[3:].replace("/", "\\")
         return f"{path[1].upper()}:\\{rest}"
     if _MSYS_BARE_DRIVE_RE.match(path):
         return f"{path[1].upper()}:\\"
     return None
-
 
 
 def _native_path():
@@ -660,67 +538,15 @@ def resolve_relative(base: str, target: str) -> Optional[str]:
     return native.join(b, t)
 
 
-# ---------------------------------------------------------------------------
-# Interpreter-payload write-sink extraction (C5 plan "the outside-repo bump
-# never looks inside an interpreter body", 2026-08-14, see the PM-ratified
 # reversal recorded in this module's own top docstring). SEPARATE from
-# `extract_write_sink_targets_for_segment` above and NEVER consumed by C4
-# (`bump_foreign_repo_write.py`) -- opted in by `bump_outside_repo_write.py`
-# (C5) only. Operates on the RAW command STRING, not an already-tokenized
-# segment: by the time `_command_tokenizer.resolve_command_positions` hands
-# back tokenized segments, a heredoc BODY has already been stripped
-# (`_strip_heredocs`, deliberately, for its 33 other consumers), so the
-# write-sink shapes this section recognizes are only ever visible in the
-# raw text.
-# ---------------------------------------------------------------------------
 
-#: `python`/`python3` only -- the one PM-ratified interpreter (see module
-#: docstring). A second interpreter (`node -e`, `ruby -e`, `perl -e`) is
-#: explicitly out of scope for this pass (plan's own "Out of scope").
 _PYTHON_C_FLAG_INTERPRETERS = frozenset({"python", "python3"})
 
-#: Quoted-string literal, single- or double-quoted, with escape support --
 #: matched with a NEGATIVE LOOKBEHIND against an immediately preceding
-#: identifier character, so a bare variable name butted up against a quote
-#: never matches.
-#:
 #: VALUE-PRESERVING PREFIXES ARE ADMITTED; `f` IS NOT. The prefix set below
-#: (`r`/`b`/`u`, and the `rb`/`br` pairs, either case) names exactly those
-#: prefixes whose literal TEXT is the value -- for `r'...'` more literally
-#: than for a plain quote, not less. `f'...'` stays excluded, and that
-#: exclusion is the one the plan's AC5 actually argues for ("an f-string ...
-#: yields NOTHING"): this module has no Python parser, does not evaluate an
-#: interpolation, and treating an f-string as a literal path would be simply
-#: wrong. Lumping `r` in with `f` was collateral from one lookbehind serving
-#: both -- a raw string interpolates nothing. `fr`/`rf` stay excluded too:
-#: the lookbehind still sees the `f` on either arm.
-#:
 #: NOT A SINK-TABLE WIDENING. No new write shape is recognized here.
-#: ``Path(r'x').write_text(...)`` is the SAME shape as ``Path('x').
-#: write_text(...)``; only the string-literal reader was failing to see its
-#: own literal. On Windows -- first-class in this repo -- a raw string is the
-#: idiomatic spelling for a backslash path, which is precisely the absolute,
-#: repo-crossing shape ``bump_outside_repo_write`` exists to catch, so the
-#: gap sat directly under this module's own purpose. Measured 2026-08-31:
-#: ``Path(r'S/X.md').write_text('x')`` and ``open(r'S/X.md','w')`` each
-#: yielded NO target while their unprefixed twins yielded one.
-#:
-#: The escape alternation is unchanged and stays correct for a raw string's
-#: SPAN; the captured value is used as ``group(...)[1:-1]`` with no
-#: unescaping anywhere in this module, so raw and cooked literals of the
-#: same text yield the identical string.
-#:
 #: WHY THE FAMILY IS WIDER THAN THE EVIDENCE (Kira, 2026-08-31). ``r`` is the
-#: only prefix with a measured defect behind it; ``b``/``u``/``rb``/``br`` are
-#: admitted by the same value-preserving argument in the paragraph above, not
 #: by any observed shape. They are in because EXCLUDING them would need its
-#: own justification -- a ``b'...'`` path operand is legal Python and its span
-#: and captured value behave identically here -- not because anyone was seen
-#: writing one. ``f``/``fr``/``rf`` remain deliberately OUT and that IS
-#: evidence-backed: an f-string's value is not knowable from its span, so
-#: reading one would yield a target that is not the path written. If this
-#: alternation is ever narrowed, narrow it to ``[rR]`` and keep the f-string
-#: exclusion; do not narrow by deleting the lookbehind.
 _PY_LITERAL_PREFIX = r"(?:[rRbBuU]|[rR][bB]|[bB][rR])?"
 _PY_QUOTED_LITERAL = (
     r"(?<![A-Za-z0-9_])"
@@ -728,64 +554,26 @@ _PY_QUOTED_LITERAL = (
     + r"('(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\")"
 )
 
-#: `open(<path>, <mode>)` -- positional `mode` argument, checked below
-#: (`_mode_allows_write`) for a `w`/`a`/`x` character; a read-only mode
-#: (`'r'`, `'rb'`) is not a write-sink shape at all.
 _PY_OPEN_CALL_RE = re.compile(
     r"\bopen\(\s*" + _PY_QUOTED_LITERAL + r"\s*,\s*" + _PY_QUOTED_LITERAL
 )
 
-#: `<path-literal>).write_text(` / `<path-literal>).write_bytes(` -- the
-#: `Path(...)`/`PurePath(...)`-constructed-then-chained shape (`pathlib.
-#: Path('../mine.patch').write_text('x')`). Matches on the closing paren
-#: immediately before the method call, not on the constructor name itself,
-#: since `Path`/`pathlib.Path`/a re-assigned alias all share this identical
-#: tail shape and this module does not track import aliases.
 _PY_WRITE_TEXT_BYTES_RE = re.compile(
     _PY_QUOTED_LITERAL + r"\s*\)\s*\.\s*(?:write_text|write_bytes)\("
 )
 
-#: `<path-literal>).open(<mode>)` -- `Path(...).open('w')`, the `Path`-object
-#: sibling of the builtin `open(<path>, <mode>)` shape above. Same
-#: mode-must-contain-w/a/x check.
 _PY_DOT_OPEN_RE = re.compile(
     _PY_QUOTED_LITERAL + r"\s*\)\s*\.\s*open\(\s*" + _PY_QUOTED_LITERAL
 )
 
-#: `os.makedirs(<path>)` / `os.mkdir(<path>)`.
 _PY_MAKEDIRS_RE = re.compile(r"\bos\.\s*(?:makedirs|mkdir)\(\s*" + _PY_QUOTED_LITERAL)
 
-#: `shutil.copy*(<src>, <dst>)` / `shutil.move(<src>, <dst>)` -- only
-#: `<dst>` (the second positional argument) is captured; `<src>` is matched
-#: but never captured, as a run of non-comma/non-paren characters --
-#: deliberately coarse (does not balance nested calls in the `<src>`
-#: position) since an unmatched `<src>` shape simply yields no candidate
-#: here, the fail-open direction this whole module already applies
-#: everywhere else.
 _PY_SHUTIL_RE = re.compile(
     r"\bshutil\.\s*(?:copy\w*|move)\(\s*[^,()]*\s*,\s*" + _PY_QUOTED_LITERAL
 )
 
 
-#: ONE alternation, tried in encounter order at each scan position -- see
-#: `_strip_comments_and_docstrings` for why this replaced two sequential
-#: passes (code-reviewer sidecar `ffbcb84d`, findings 1 and 2, EM-directed
-#: fix). `re.sub` scans left to right and, at each position, tries
-#: alternatives in the order written, so whichever construct's opener
-#: STARTS FIRST in the text wins -- exactly the ordering semantics a
-#: two-pass strip cannot express, since the second pass has no memory of
-#: what the first pass already consumed:
-#:
-#:   1. `"""..."""` / `'''...'''` -- a PAIRED triple-quoted block, non-greedy.
-#:   2. `#...` to end of line -- a comment, tried only once no paired
-#:      triple-quote opens earlier at this position.
 #:   3. `"""...` / `'''...` to END OF TEXT -- an UNTERMINATED triple-quote
-#:      opener with no matching close anywhere in the remaining text. Only
-#:      reached when neither #1 nor #2 matched at this position, i.e. this
-#:      is a real string-literal opener, not a comment containing a stray
-#:      `"""`/`'''` token (that case is caught by #2 first, since the `#`
-#:      that starts the comment necessarily precedes the stray quote chars
-#:      inside it).
 _PY_COMMENT_OR_STRING_RE = re.compile(
     r'"""[\s\S]*?"""'
     r"|'''[\s\S]*?'''"
@@ -848,10 +636,6 @@ def _mode_allows_write(mode_literal: str) -> bool:
     return any(c in content for c in "wax")
 
 
-#: `NAME = Path("literal")` / `NAME = pathlib.Path("literal")` / `NAME =
-#: open("literal", <mode>)` -- the single-assignment binding that
-#: `_bound_literal_paths` resolves write receivers against. Scoped to ONE
-#: body; never carried across heredocs.
 _PY_BIND_PATH_RE = re.compile(
     r"^[ 	]*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:\w+\s*\.\s*)?Path\(\s*"
     + _PY_QUOTED_LITERAL
@@ -859,11 +643,7 @@ _PY_BIND_PATH_RE = re.compile(
     re.MULTILINE,
 )
 
-#: Any OTHER assignment to a name (`NAME =`, `NAME +=`, `for NAME in`,
-#: `with ... as NAME`, `NAME, x =`). A name matching this anywhere in the
 #: body beyond its single `_PY_BIND_PATH_RE` binding is DROPPED rather than
-#: resolved -- "never a guess" applies to rebinding exactly as it applies to
-#: a variable receiver.
 _PY_REBIND_RE = re.compile(
     r"^[ 	]*(?:for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\b"
     r"|([A-Za-z_][A-Za-z0-9_]*)\s*(?:[-+*/|&^]|//|\*\*|>>|<<)?=(?!=)"
@@ -871,14 +651,10 @@ _PY_REBIND_RE = re.compile(
     re.MULTILINE,
 )
 
-#: `NAME.write_text(` / `NAME.write_bytes(` -- a write through a bound
-#: receiver. The receiver is resolved by `_bound_literal_paths`; an
-#: unresolvable name still yields nothing, unchanged.
 _PY_BOUND_WRITE_RE = re.compile(
     r"(?<![A-Za-z0-9_.])([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*(?:write_text|write_bytes)\("
 )
 
-#: `NAME.open(<mode>)` through a bound receiver -- mode-checked like
 #: `_PY_DOT_OPEN_RE`.
 _PY_BOUND_OPEN_RE = re.compile(
     r"(?<![A-Za-z0-9_.])([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*open\(\s*"
@@ -961,8 +737,6 @@ def _python_write_targets_in_text(text: str) -> List[str]:
     for m in _PY_SHUTIL_RE.finditer(text):
         targets.append(m.group(1)[1:-1])
 
-    # Bound-receiver writes, resolved against single-assignment literal
-    # bindings in this SAME body -- see `_bound_literal_paths`.
     bound = _bound_literal_paths(text)
     if bound:
         for m in _PY_BOUND_WRITE_RE.finditer(text):
@@ -1026,17 +800,6 @@ def _iter_heredoc_bodies(text: str) -> List[str]:
 
 
 def _iter_python_dash_c_payloads(raw_cmd: str) -> List[str]:
-    """Every inline `-c` payload string handed to a `python`/`python3`
-    interpreter at DEPTH 0 of `raw_cmd` -- tokenizes via `_command_tokenizer.
-    resolve_command_positions` (the package's one resolve-once entry point,
-    per this module's own "reuses rather than reimplements" precedent) and
-    reuses `_command_tokenizer._extract_dash_c_payload` (the SAME
-    bundled/standalone `-c` scan `bump_outside_repo_write._extract_inline_c_
-    payload` itself mirrors) rather than re-deriving that pattern a third
-    time. Depth 0 only -- a `-c` payload nested inside another interpreter's
-    own payload is already out of this module's reach without a second
-    recursive unwrap, and this closed set stays narrow on purpose (see
-    module docstring addendum)."""
     try:
         segments = resolve_command_positions(
             raw_cmd, preserve_windows_backslashes=_host_is_windows()
@@ -1057,27 +820,6 @@ def _iter_python_dash_c_payloads(raw_cmd: str) -> List[str]:
 
 
 def extract_interpreter_payload_write_sink_targets(raw_cmd: str) -> List[str]:
-    """Raw candidate write-target strings found INSIDE an interpreter
-    PAYLOAD carried by `raw_cmd` -- a heredoc body, or a `python`/`python3
-    -c` argument string -- rather than a shell token operand
-    (`extract_write_sink_targets_for_segment`'s own territory). See this
-    section's own module-docstring addendum for the PM-ratified scope this
-    function exists to close.
-
-    Exactly like its sibling: no resolution, no verdict -- the caller
-    resolves each candidate against its own effective cwd and applies its
-    own no-git-root predicate, which is also why an over-broad candidate
-    here is harmless (anything resolving under a git root is dropped by the
-    caller before it can bump).
-
-    FAILS OPEN: any exception at any step of this function -- heredoc
-    scanning, `-c`-payload extraction, or the Python-shape regex scan --
-    yields no candidates for that step rather than propagating; this
-    function itself never raises. Opt-in per guard: both
-    `bump_outside_repo_write._iter_write_sink_candidates` and
-    `bump_foreign_repo_write._iter_write_sink_candidates` call it; this
-    module's own shared bash-shape table above (`extract_write_sink_
-    targets_for_segment`) is untouched by its addition."""
     targets: List[str] = []
 
     try:

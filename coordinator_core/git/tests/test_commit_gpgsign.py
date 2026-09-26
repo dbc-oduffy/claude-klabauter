@@ -84,11 +84,6 @@ def _popen_spy(monkeypatch):
     return seen
 
 
-# ---------------------------------------------------------------------------
-# `_gpgsign_enabled` -- config parsing, zero spawns, default false.
-# ---------------------------------------------------------------------------
-
-
 def test_gpgsign_defaults_false_with_no_config(isolated_config):
     assert commit_mod._gpgsign_enabled(None) is False
 
@@ -127,19 +122,12 @@ def test_gpgsign_cached_across_repeated_resolves(isolated_config, monkeypatch):
 
 
 def test_gpgsign_answers_per_repo_in_one_process(isolated_config):
-    """The warm engine commits for every repo from one process: one repo's
-    local `gpgsign` must not leak into another's answer."""
     signed = isolated_config / "signed"
     plain = isolated_config / "plain"
     _write(signed / ".git" / "config", "[commit]\n\tgpgsign = true\n")
     _write(plain / ".git" / "config", "[core]\n\tbare = false\n")
     assert commit_mod._gpgsign_enabled(signed) is True
     assert commit_mod._gpgsign_enabled(plain) is False
-
-
-# ---------------------------------------------------------------------------
-# `commit_paths` -- unset costs nothing; set signs or degrades to a warning.
-# ---------------------------------------------------------------------------
 
 
 def test_commit_paths_stays_zero_spawn_when_gpgsign_unset(tmp_path, isolated_config, monkeypatch):
@@ -177,7 +165,6 @@ def test_commit_paths_signs_via_commit_tree_when_gpgsign_true(tmp_path, isolated
         repo / ".git" / "config",
         "[commit]\n\tgpgsign = true\n"
         "[gpg]\n\tformat = ssh\n"
-        # as_posix: a Windows path's backslashes are git-config escape sequences.
         f"[user]\n\tsigningkey = {keyfile.as_posix()}\n",
     )
     (repo / "new.txt").write_text("new\n", encoding="utf-8", newline="\n")
@@ -198,7 +185,6 @@ def test_commit_paths_signs_via_commit_tree_when_gpgsign_true(tmp_path, isolated
     assert len(calls) == 1, f"expected exactly one commit-tree -S spawn, got {calls}"
     assert calls[0][:2] == ["commit-tree", "-S"]
     assert outcome.sign_warning is None, outcome.sign_warning
-    # The landed commit is real, signed, and reachable via the real `git` oracle.
     assert _git(repo, "show", "HEAD:new.txt").stdout == "new\n"
     assert _git(repo, "cat-file", "-e", outcome.sha).returncode == 0
     verify = _git(repo, "log", "-1", "--show-signature", outcome.sha, check=False)
@@ -207,10 +193,6 @@ def test_commit_paths_signs_via_commit_tree_when_gpgsign_true(tmp_path, isolated
 
 
 def test_commit_paths_degrades_to_unsigned_on_signing_failure(tmp_path, isolated_config, monkeypatch):
-    """The claude-klabauter#34 shape: gpgsign=true but signing cannot
-    succeed (empty/unreadable signing key, wrong gpg.format, no agent).
-    The commit must still land -- unsigned, with a named warning -- rather
-    than refuse every op on the branch."""
     repo = _repo(tmp_path)
     _write(repo / ".git" / "config", "[commit]\n\tgpgsign = true\n")
     (repo / "new.txt").write_text("new\n", encoding="utf-8", newline="\n")
@@ -229,7 +211,6 @@ def test_commit_paths_degrades_to_unsigned_on_signing_failure(tmp_path, isolated
     assert outcome.sign_warning is not None
     assert "committed unsigned" in outcome.sign_warning
     assert "gpg failed to sign the data" in outcome.sign_warning
-    # The commit landed anyway.
     assert _git(repo, "show", "HEAD:new.txt").stdout == "new\n"
     assert _git(repo, "cat-file", "-e", outcome.sha).returncode == 0
 

@@ -1,26 +1,3 @@
-"""
-Guard: every shipped `.py` module under `coordinator_core/` and
-`coordinator/bin/` must be free of `SyntaxError`.
-
-Purpose: a marker-insertion pass (or any other mechanical rewrite) that
-splices a statement between a module docstring and a `from __future__
-import ...` line produces a hard `SyntaxError` -- future statements must
-precede all other statements. That class of break went unnoticed across
-19 files (§ state/bug-backlog, generator-provenance marker misplacement,
-2026-08-14) because the obvious sanity check, `ast.parse`, does NOT enforce
-future-statement placement or ordering: `ast.parse` happily returns a clean
-tree for a file where `from __future__ import annotations` sits after other
-statements, since that rule is enforced by the compiler's own AST-to-bytecode
-pass (`symtable`/`compile`), not by the parser grammar. This test therefore
-uses `compile(src, path, "exec")`, the same call the interpreter itself makes
-on import, so a module that is importable in practice is exactly the
-population this test admits.
-
-Scoped to `coordinator_core/` and `coordinator/bin/` (not the whole repo)
-to keep this fast-tier-eligible -- these two trees hold the engine's own
-importable surface; `docs/`, `state/`, `archive/`, and vendored/sibling
-trees are out of scope for an import-time guard.
-"""
 
 from __future__ import annotations
 
@@ -57,14 +34,6 @@ def test_every_swept_module_compiles():
 
 
 def test_every_swept_module_is_free_of_syntax_warnings():
-    """A `SyntaxWarning` (e.g. an unescaped backslash in a non-raw string
-    literal) is tomorrow's `SyntaxError` -- CPython has repeatedly promoted
-    invalid-escape-sequence warnings to hard errors across major versions.
-    Catching it here, on the same swept population as
-    `test_every_swept_module_compiles`, means a future interpreter upgrade
-    cannot silently turn a warning this suite already ignored into an import
-    failure nobody saw coming.
-    """
     failures: list[str] = []
     for path in _iter_py_files():
         try:

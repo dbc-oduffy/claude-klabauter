@@ -1,12 +1,3 @@
-"""
-Tests for coordinator_core.ops.parse_resolves_trailer.
-
-Mirrors the bash oracle case-for-case (zero / one / multiple / invalid-commit)
-plus additional coverage for the case-insensitive fallback path and CLI
-usage/exit-code parity.
-
-Port of: parse-resolves-trailer.test.sh (DoE 3a561713, 2026-07-22)
-"""
 
 from __future__ import annotations
 
@@ -20,14 +11,7 @@ from coordinator_core.win_portability import (
     no_console_passthrough_kwargs,
 )
 
-# Declared, not excused: this file spawns real git because the property under test
-# is `Resolves:` trailer parsing off REAL commit metadata (`git log`/`git show`
-# trailer extraction), which no mock stands in for -- the bash-oracle parity
-# contract (parse-resolves-trailer.test.sh) it ports requires it. The `git_repo`
-# fixture is per-test (function-scoped), and mutation (commit-per-case) needs that
 # isolation, so it is not hoisted to module scope. The spawn ratchet's `_BASELINE`
-# is shrink-only pre-existing residue and is explicitly not the route for this
-# file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -127,10 +111,6 @@ def test_fallback_case_insensitive_trailer(git_repo, monkeypatch):
 
 
 def test_fallback_tool_failure_diagnosed_not_silently_zero(git_repo, monkeypatch, capsys):
-    """A failed `git interpret-trailers --parse` must not read as an
-    indistinguishable zero-trailers commit: `run()` keeps its vacuous-pass
-    contract (empty list, rc 0) but now names the tool failure on stderr
-    instead of collapsing it into silence."""
     monkeypatch.chdir(git_repo)
     sha = _commit(git_repo, "no resolves trailer here at all")
     real_run = subprocess.run

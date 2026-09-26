@@ -1,18 +1,3 @@
-"""
-coordinator_core.hooks.test_postuse_advisory_dispatch -- tests for the non-context-
-pressure advisory paths in postuse_advisory_dispatch.py: the post-compaction sentinel
-bridge, the durable throttle state (round-tripped across separate process
-invocations), first-agent-dispatch, unauthorized-handoff, and the runtime tripwire.
-
-The sidecar-sourced context-pressure measurement path (`_check_context_pressure_sync`'s
-Phase 2) is covered by its own test file, not here:
-coordinator_core/hooks/tests/test_postuse_context_pressure.py. The transcript-scan
-measurement machinery this file used to cover -- `_extract_last_usage_tokens`,
-`_resolve_context_window`, `_check_unrecognised_sonnet_generation`, and the byte-based
-proxy fallback -- is deleted; see docs/plans/2026-08-17-the-advisory-reads-the-harness.md.
-
-Spec backlink: coordinator_core/hooks/postuse_advisory_dispatch.py (module under test).
-"""
 
 from __future__ import annotations
 
@@ -32,16 +17,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from coordinator_core.hooks import postuse_advisory_dispatch as pad  # noqa: E402
 
-
-# ---------------------------------------------------------------------------
-# Shared fixture: clean up durable per-session state files between tests.
-#
-# All tests below use session ids prefixed "test-session-" (by convention) so
-# this fixture can sweep them without touching real session state. The state
-# is now file-backed (see postuse_advisory_dispatch.py's module-level comment
-# above _advisory_state_path for why the former in-memory dicts this fixture
-# used to clear were the bug, not the fix).
-# ---------------------------------------------------------------------------
 
 _TEST_SESSION_STATE_GLOBS = (
     "advisory-hook-state-test-session-*.json",
@@ -70,36 +45,8 @@ def _reset_advisory_state_files():
     _sweep_test_session_state_files()
 
 
-# ---------------------------------------------------------------------------
-# _check_context_pressure_sync integration-style tests
-#
-# The transcript-scan measurement path (_extract_last_usage_tokens,
-# _resolve_context_window, _check_unrecognised_sonnet_generation, and the
-# byte-based proxy fallback) is deleted; its coverage is superseded by the
-# sidecar-sourced measurement path's own test file, not duplicated here:
-# coordinator_core/hooks/tests/test_postuse_context_pressure.py.
-# ---------------------------------------------------------------------------
-
-
 def _bypass_throttle(session_id):
-    # Force the 5-min throttle to be considered "expired" for this session --
-    # writes the durable state file directly, since that (not process memory)
-    # is now the source of truth.
     pad._save_advisory_state(tempfile.gettempdir(), session_id, {"throttle_last_check": 0.0})
-
-
-# ---------------------------------------------------------------------------
-# Durable-state regression tests.
-#
-# These cover the actual bug: this op is dispatched via a FRESH process per
-# PostToolUse fire (no resident daemon, DR-215), so any guard kept only in a
-# module-level dict/set re-initializes empty on every call and never
-# suppresses anything. None of these tests share Python-object state between
-# calls -- there is none any more, by construction -- so a call "seeing" a
-# prior call's effect here is proof the durable state FILE (not process
-# memory) is what's doing the suppressing, faithfully simulating what a
-# second, wholly separate process invocation would observe.
-# ---------------------------------------------------------------------------
 
 
 def test_throttle_suppresses_second_call_within_window_across_separate_invocations(
@@ -139,35 +86,12 @@ def test_throttle_suppresses_second_call_within_window_across_separate_invocatio
         persisted = json.load(fh)
     assert persisted["throttle_last_check"] > 0.0
 
-    # "Invocation" 2: same session, well within the 5-minute throttle window.
-    # Nothing in this test process hands state from call 1 to call 2 directly
-    # -- only the file on disk does.
     second = pad._check_context_pressure_sync(session_id, "")
     assert second == ""
 
 def test_throttle_governs_the_orange_band_only_and_never_sits_on_red(
     tmp_path, monkeypatch
 ):
-    """The throttle rate-limits the orange band; the red band answers to
-    bark-once instead.
-
-    Isolates the throttle guard specifically: pre-seed throttle_last_check to
-    "just now" for sessions that have NEVER fired before, so bark-once cannot
-    be what does the suppressing, and vary only the band.
-
-    The throttle exists to keep the ORANGE band's orientation reading off the
-    channel on every tool call. The red band is a hard call with runway to act
-    on it, and a rate limiter must not be what swallows it -- a red reading
-    arriving 30 seconds after an orange one would otherwise be silent for the
-    rest of the 5-minute window, which is most of the runway the red band
-    exists to preserve. What bounds the red band's noise is `critical_fired`
-    (bark-once, asserted below), not elapsed time: it says its piece once per
-    session and then stops.
-
-    Phase 2 is sidecar-sourced, not transcript-byte-sourced (see the module
-    docstring above _check_context_pressure_sync) -- so a reading "that would
-    otherwise fire" is a sidecar percentage, not a byte-sized transcript file.
-    """
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     from coordinator_core.session import context_usage_sidecar as sidecar_module
 
@@ -195,8 +119,6 @@ def test_throttle_governs_the_orange_band_only_and_never_sits_on_red(
     assert "CONTEXT PRESSURE" in red
     assert "~95% of window used" in red
 
-    # ...and having surfaced once, it is bark-once that holds it down, on a
-    # call whose throttle window has long expired.
     pad._save_advisory_state(
         tempfile.gettempdir(),
         red_session,
@@ -209,16 +131,10 @@ def test_throttle_governs_the_orange_band_only_and_never_sits_on_red(
 
 
 def test_compaction_advisory_fires_exactly_once_per_sentinel_and_rearms(tmp_path):
-    """Covers the most severe instance of the regression: the sentinel used to
-    never be deleted (B-F1) and the in-memory consumption marker never
-    survived the fresh-process-per-fire model, so the advisory re-fired on
-    every subsequent call for the rest of the session. Also proves consumption
-    is per-EVENT (delete-on-read), not an eternal per-session flag -- a second,
-    later compaction in the same session must fire again."""
     transcript = tmp_path / "transcript.jsonl"
     transcript.write_text("small transcript content\n" * 5)
     post_size = transcript.stat().st_size
-    pre_size = post_size * 10  # comfortably satisfies the 85%-shrink real-compaction guard
+    pre_size = post_size * 10
 
     session_id = "test-session-compaction-once"
     tmpdir = tempfile.gettempdir()
@@ -233,15 +149,12 @@ def test_compaction_advisory_fires_exactly_once_per_sentinel_and_rearms(tmp_path
     first = pad._check_context_pressure_sync(session_id, str(transcript))
     assert "COMPACTION OCCURRED" in first
     assert "first snapshot" in first
-    # Consumed by delete -- the once-only firing guard for THIS event.
     assert not os.path.isfile(sentinel)
     assert not os.path.isfile(state_snapshot)
 
-    # Second call, same session, no new sentinel written: must NOT re-fire.
     second = pad._check_context_pressure_sync(session_id, str(transcript))
     assert "COMPACTION OCCURRED" not in second
 
-    # A later compaction event in the same long session re-arms correctly.
     with open(sentinel, "w", encoding="utf-8") as fh:
         fh.write(str(pre_size))
     with open(state_snapshot, "w", encoding="utf-8") as fh:
@@ -254,16 +167,6 @@ def test_compaction_advisory_fires_exactly_once_per_sentinel_and_rearms(tmp_path
     assert not os.path.isfile(state_snapshot)
 
 
-# ---------------------------------------------------------------------------
-# _check_first_agent_dispatch_sync unit tests.
-#
-# One-time-per-session advisory telling the EM that coordinator subagents write
-# full findings to an on-disk sidecar. Gated on tool_name == "Agent" (not a
-# subagent_type prefix -- the payload this op receives carries no
-# subagent_type field) plus a durable once-per-session sentinel.
-# ---------------------------------------------------------------------------
-
-
 def test_first_agent_dispatch_fires_once_on_first_agent_call():
     session_id = "test-session-first-agent-dispatch-fires"
 
@@ -272,14 +175,8 @@ def test_first_agent_dispatch_fires_once_on_first_agent_call():
     first = pad._check_first_agent_dispatch_sync(session_id, "Agent")
     assert first != ""
     assert session_id in first
-    # Current (non-retired) share root only -- state/subagent-share/ is the
-    # RETIRED root (coordinator_core/session/machinery_paths.py,
-    # coordinator_core/tests/test_no_hand_built_legacy_share_root.py); an
-    # advisory pointing an EM at it would send them to a bucket new sessions
-    # never write to.
     assert f"{SHARE_RELDIR}/" in first
 
-    # Second Agent-tool call, same session -- must not re-fire.
     second = pad._check_first_agent_dispatch_sync(session_id, "Agent")
     assert second == ""
 
@@ -290,8 +187,6 @@ def test_first_agent_dispatch_silent_for_non_agent_tool_even_on_first_call():
     for tool_name in ("Bash", "Read", "Explore", "general-purpose", ""):
         assert pad._check_first_agent_dispatch_sync(session_id, tool_name) == ""
 
-    # No sentinel written by a non-Agent tool_name -- a later real Agent
-    # dispatch in the same session must still fire.
     fired = pad._check_first_agent_dispatch_sync(session_id, "Agent")
     assert fired != ""
 
@@ -317,11 +212,6 @@ def test_first_agent_dispatch_sentinel_write_failure_degrades_to_silence(monkeyp
 
 
 def test_first_agent_dispatch_sentinel_partial_write_failure_allows_retry(monkeypatch):
-    """If open() succeeds but write()
-    raises mid-write (e.g. disk full), the sentinel file already exists on
-    disk. Without cleanup, every later call in the session would see the
-    partial file and stay silent forever. The failed write must remove the
-    sentinel so a later Agent dispatch in the same session can retry."""
     session_id = "test-session-first-agent-dispatch-partial-write"
 
     real_open = builtins.open
@@ -340,8 +230,6 @@ def test_first_agent_dispatch_sentinel_partial_write_failure_allows_retry(monkey
 
     def _fake_open(path, mode="r", *args, **kwargs):
         if str(path) == sentinel and mode == "w":
-            # Mirrors open() succeeding (the file lands on disk) then
-            # write() raising mid-write.
             real_open(path, "w", encoding=kwargs.get("encoding", "utf-8")).close()
             return _FailingFile()
         return real_open(path, mode, *args, **kwargs)
@@ -352,19 +240,10 @@ def test_first_agent_dispatch_sentinel_partial_write_failure_allows_retry(monkey
     assert result == ""
     assert not os.path.isfile(sentinel)
 
-    # Retry (real open() now, monkeypatch still active but path differs after
-    # the sentinel was removed -- same code path, no partial file to trip on):
     monkeypatch.setattr(pad, "open", real_open, raising=False)
     retried = pad._check_first_agent_dispatch_sync(session_id, "Agent")
     assert retried != ""
     assert os.path.isfile(sentinel)
-
-
-# ---------------------------------------------------------------------------
-# _handler integration: composition with the other two checks (the regression
-# that matters most -- the new third check must never clobber or short-circuit
-# the existing context-pressure / runtime-tripwire advisories).
-# ---------------------------------------------------------------------------
 
 
 def test_handler_first_agent_dispatch_composes_with_existing_advisories():
@@ -387,9 +266,6 @@ def test_handler_first_agent_dispatch_composes_with_existing_advisories():
     assert session_id in context
     assert "\n\n" in context
 
-    # Membership alone doesn't pin the
-    # merge order the commit message claims (cp -> rt -> first-agent-dispatch);
-    # a future reorder of the join would pass the assertions above unnoticed.
     assert context.index("cp text") < context.index("rt text") < context.index(
         "COORDINATOR SIDECAR ADVISORY"
     )
@@ -427,13 +303,6 @@ def test_handler_existing_advisories_unaffected_by_non_agent_tool_name():
     hso = result["hookSpecificOutput"]
     assert hso["additionalContext"].endswith("cp text")
     assert "COORDINATOR SIDECAR ADVISORY" not in hso["additionalContext"]
-
-
-# ---------------------------------------------------------------------------
-# Fourth check: the unauthorized-handoff nudge folded in from DoE's separate
-# PostToolUse(Write) registration (cross-repo memo
-# 2026-08-06-doe-claude-em-postuse-fold-nudge-unauthorized-handoff.md).
-# ---------------------------------------------------------------------------
 
 
 def _handoff_write_params(session_id, **overrides):
@@ -497,8 +366,6 @@ def test_handler_unauthorized_handoff_merges_last_after_existing_advisories():
 
 
 def test_handler_unauthorized_handoff_survives_absent_session_id():
-    """The nudge's predicate is the Write payload alone — the session_id
-    short-circuit that silences the other three must not swallow it."""
     import asyncio
 
     result = asyncio.run(pad._handler(_handoff_write_params("")))
@@ -507,8 +374,6 @@ def test_handler_unauthorized_handoff_survives_absent_session_id():
 
 
 def test_handler_unauthorized_handoff_silent_when_stub_omits_file_path():
-    """DoE's dispatcher stub must map tool_input.file_path/content into params.
-    Until it does, the fourth check stays silent and the other three still fire."""
     import asyncio
     import unittest.mock as mock
 
@@ -544,22 +409,7 @@ def test_handler_unauthorized_handoff_respects_kind_recovery_suppression():
     assert result == {}
 
 
-# ---------------------------------------------------------------------------
-# _check_runtime_tripwire_sync — repo-root resolution goes through the shared
-# memoized seam (coordinator_core.git.repo_root), never a per-tool-call
-# `git rev-parse --show-toplevel` spawn. This check runs from an EMPTY-matcher
-# PostToolUse hook, so a spawn here is one process per tool call.
-# ---------------------------------------------------------------------------
-
-
 def test_runtime_tripwire_is_off_unless_explicitly_armed(tmp_path, monkeypatch):
-    """Default off, and off BEFORE any work happens.
-
-    The check returns "" without consulting git, the agents dir, or the
-    dispatch record — so an unarmed tripwire costs nothing on a hot path that
-    runs once per tool call, and no fixture can accidentally revive it by
-    arranging state further down.
-    """
     from coordinator_core.git import repo_root as repo_root_seam
 
     monkeypatch.delenv("COORDINATOR_RUNTIME_TRIPWIRE", raising=False)
@@ -580,8 +430,6 @@ def test_runtime_tripwire_is_off_unless_explicitly_armed(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("value", ["", "0", "true", "yes", "1 "])
 def test_runtime_tripwire_arms_only_on_exactly_one(value, tmp_path, monkeypatch):
-    """Only the literal "1" arms it — a truthy-looking value does not, so a
-    stray export cannot silently restore fleet-wide wrap-up nagging."""
     from coordinator_core.git import repo_root as repo_root_seam
 
     monkeypatch.setenv("COORDINATOR_RUNTIME_TRIPWIRE", value)
@@ -597,14 +445,6 @@ def test_runtime_tripwire_arms_only_on_exactly_one(value, tmp_path, monkeypatch)
 
 
 def test_runtime_tripwire_resolves_repo_root_via_seam_not_a_spawn(monkeypatch):
-    # `_fail_on_spawn` raising AssertionError
-    # is itself an Exception, and every spawn site it could intercept lives
-    # inside `_check_runtime_tripwire_sync`'s own `except Exception: return ""`,
-    # so a bare `assert result == ""` still passes against the OLD (spawning)
-    # implementation -- the guard could never fail. Record the spawn attempt in
-    # a list BEFORE raising, and assert against that list after the call, so
-    # the evidence survives the swallow and the test genuinely discriminates
-    # old (spawns) vs. new (walks) behavior.
     import subprocess as _subprocess
 
     from coordinator_core.git import repo_root as repo_root_seam
@@ -635,18 +475,8 @@ def test_runtime_tripwire_resolves_repo_root_via_seam_not_a_spawn(monkeypatch):
 def test_runtime_tripwire_happy_path_resolves_through_seam_and_fires(
     tmp_path, monkeypatch
 ):
-    """Both existing seam tests stub
-    show_toplevel to None/raise, so only the earliest early-exit
-    (`if not git_root: return ""`) is ever driven. This test resolves a real
-    root through the seam and continues into the agents-dir / back-pointer /
-    dispatch-record / threshold logic, covering the path that actually
-    changed."""
     from coordinator_core.git import repo_root as repo_root_seam
 
-    # The tripwire is opt-in (PM ruling, 2026-08-18: no wall-clock mechanism
-    # may prescribe a checkpoint, because it cannot honour a context floor).
-    # Arming it here keeps the mechanism itself under test for the day it is
-    # re-derived against context rather than elapsed time.
     monkeypatch.setenv("COORDINATOR_RUNTIME_TRIPWIRE", "1")
 
     git_root = tmp_path
@@ -659,7 +489,7 @@ def test_runtime_tripwire_happy_path_resolves_through_seam_and_fires(
 
     em_dir = git_root / ".git" / "coordinator-sessions" / em_sid
     em_dir.mkdir(parents=True)
-    dispatched_at = int(time.time()) - 999_999  # comfortably past every threshold
+    dispatched_at = int(time.time()) - 999_999
     (em_dir / "dispatched-agents.txt").write_text(
         f"{session_id}\tclaude-sonnet-4-5\tgeneral-purpose\t{dispatched_at}\n",
         encoding="utf-8",
@@ -669,16 +499,6 @@ def test_runtime_tripwire_happy_path_resolves_through_seam_and_fires(
         repo_root_seam, "show_toplevel", lambda cwd=None: str(git_root)
     )
 
-    # This test's bark-once sentinel
-    # (rt-bark-once-{session_id}) lives under the REAL tempfile.gettempdir(),
-    # the same directory this module's autouse _sweep_test_session_state_files
-    # globs before/after every test in the file. Under xdist (--dist load
-    # splits one file across workers), a peer worker's sweep can land in the
-    # microsecond window between this test's two calls and unlink the
-    # sentinel, flipping `second` from "" to a fire -- a latent flake, not
-    # something to paper over with timing. Route this test's tempdir through a
-    # tmp_path-backed shim instead, so its sentinel lives somewhere no other
-    # worker's glob ever reaches.
     isolated_tmpdir = tmp_path / "rt-tripwire-tmpdir"
     isolated_tmpdir.mkdir()
     monkeypatch.setattr(pad, "_tempfile", lambda: type(
@@ -691,19 +511,11 @@ def test_runtime_tripwire_happy_path_resolves_through_seam_and_fires(
     assert "RUNTIME TRIPWIRE" in result
     assert "stop starting new work" in result
 
-    # Bark-once sentinel now present -- second call for the same session_id
-    # must not re-fire.
     second = pad._check_runtime_tripwire_sync(session_id, "")
     assert second == ""
 
 
 def test_runtime_tripwire_fails_open_when_seam_raises(monkeypatch):
-    """Contract test, not a change test -- Review: code-reviewer (P3, W3): this
-    also passes against the pre-image (the stub is never consulted there; real
-    git resolves and the function early-exits at the agents_dir check). It pins
-    the never-raises contract going forward, it does not discriminate the
-    repo-root-via-seam change itself -- see
-    test_runtime_tripwire_resolves_repo_root_via_seam_not_a_spawn for that."""
     from coordinator_core.git import repo_root as repo_root_seam
 
     def _boom(cwd=None):
@@ -713,20 +525,7 @@ def test_runtime_tripwire_fails_open_when_seam_raises(monkeypatch):
 
     assert pad._check_runtime_tripwire_sync("test-session-rt-seam-raises", "") == ""
 
-# ---------------------------------------------------------------------------
-# Failure isolation across the fold.
-#
 # This op replaced four separate hook PROCESSES, and a process boundary
-# isolates a crash for free: one raising script could not suppress the other
-# three's advisories. A bare asyncio.gather gives that away silently -- it
-# propagates the first exception and abandons its siblings' results. All four
-# legs read transcripts and sentinel files off a shared disk on a box running
-# ~50 concurrent sessions, so a transient read failure is the expected case.
-#
-# Found by doe-claude-1d, 2026-08-26, while carrying the property into their
-# hook-transport plan. The module's existing concurrency reasoning is correct
-# and answers a different question; failure isolation was not the axis.
-# ---------------------------------------------------------------------------
 
 
 def _raise(exc):
@@ -737,7 +536,6 @@ def _raise(exc):
 
 
 def test_one_raising_leg_does_not_suppress_its_siblings(monkeypatch, capsys):
-    """The property four separate processes had for free."""
     monkeypatch.setattr(
         pad, "_check_context_pressure_sync", _raise(OSError("transcript unreadable"))
     )
@@ -763,7 +561,6 @@ def test_one_raising_leg_does_not_suppress_its_siblings(monkeypatch, capsys):
 
 
 def test_every_leg_raising_still_returns_a_clean_no_advisory(monkeypatch):
-    """An advisory hook fails open toward silence, never toward an error envelope."""
     for name in (
         "_check_context_pressure_sync",
         "_check_runtime_tripwire_sync",
@@ -787,7 +584,6 @@ def test_every_leg_raising_still_returns_a_clean_no_advisory(monkeypatch):
 
 
 def test_the_session_id_absent_short_circuit_also_fails_open(monkeypatch, capsys):
-    """The single-leg path has no sibling to protect but still must not raise."""
 
     async def _raises(*_a, **_k):
         raise OSError("transcript unreadable")

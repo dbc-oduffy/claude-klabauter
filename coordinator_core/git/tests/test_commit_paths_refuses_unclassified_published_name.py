@@ -1,13 +1,3 @@
-"""`commit_paths` refuses a commit that lands a top-level name under
-`coordinator_core/` or `coordinator/bin/` the landing allowlist does not
-classify -- the wiring proof for `published_tree_classification`.
-
-Real git repo fixture carrying a minimal `setup/publish-targets.portable`
-(two rows) and `setup/publish-allowlist-declarations.yaml`, so the check's
-identity gate and its two landing reads exercise the real files rather than
-injected strings. AC 2-9 of
-`docs/plans/2026-09-23-new-file-under-published-tree.md` live here.
-"""
 
 import subprocess
 import time
@@ -140,7 +130,6 @@ def test_ac4_regenerated_field7_in_pathspec_commits_and_denied_name_commits(repo
     assert out.sha
     assert elapsed_ms < 200.0
 
-    # Denied-name arm (AC9's yaml-reading path, criterion 4 deny arm).
     (repo / "coordinator_core" / "denied_name.py").write_text(
         "x = 1\n", encoding="utf-8", newline="\n"
     )
@@ -258,13 +247,6 @@ def test_ac7_repo_without_declarations_yaml_is_never_refused(tmp_path):
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_ac7_portable_present_declarations_missing_is_never_refused(repo):
-    """Fail-open narrow combo (code-reviewer S4 Finding 2): `portable_text`
-    resolves (so `touched_published_names` finds a missing name for the
-    row) but `setup/publish-allowlist-declarations.yaml` does not -- the
-    `deny_names` leg can't run, so `unclassified` treats this name as not
-    refused rather than refusing conservatively. Confirms the fail-open
-    path fires only for THIS name/row, not by silently swallowing the
-    unrelated already-passing rows."""
     (repo / "setup" / "publish-allowlist-declarations.yaml").unlink()
     (repo / "coordinator_core" / "new_module.py").write_text(
         "x = 1\n", encoding="utf-8", newline="\n"
@@ -279,8 +261,6 @@ def test_ac7_portable_present_declarations_missing_is_never_refused(repo):
 
 
 class _SpawnCounter:
-    """Counts processes started inside the `with` block -- matches
-    `test_commit_zero_spawn.py`'s shape."""
 
     def __init__(self):
         self.argvs = []

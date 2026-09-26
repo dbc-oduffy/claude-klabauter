@@ -1,43 +1,11 @@
 'use strict';
-/**
- * test-cockpit-contract-release-tag.js — anti-drift regression guard for the
- * `cockpit-contract-release` tag-advance seam.
- *
- * PURPOSE
- * AC8 (docs/plans/2026-07-04-doe-emission-conformance-fixture.md) commits DoE
- * to advancing the local `cockpit-contract-release` tag on every intentional
- * cockpit-contract schema change. That obligation used to be implemented in
- * `coordinator/bin/gen-emission-conformance.sh`; the script was deleted
- * 2026-07-08 (commit 454bc0ab, "retire-js-emitter C4 ... D2=REMOVE") when
- * conformance ownership moved to claude-klabauter, and the tag-advance rode
- * along as collateral — never re-homed. Result: the tag silently drifted ten
- * contract versions behind (2.10.0 vs the emitted 2.20.0) with nothing
- * catching it.
- *
- * The real seam today is `coordinator/bin/regen-cockpit-schema.py` — the ONLY
- * entrypoint that regenerates `coordinator/cockpit-contract/schema/*.json`.
- * This test statically greps that file for the tag-advance wiring so a future
- * deletion or refactor that drops it again fails the fast tier immediately,
- * instead of drifting silently for months.
- *
- * SCOPE — hermetic and static only. Does NOT execute the script (it spawns a
- * sibling repo's venv and would regenerate real artifacts), does NOT read or
- * mutate any git tag, and does NOT touch network. Source-level checks only.
- *
- * Run with: node bin/tests/test-cockpit-contract-release-tag.js
- *
- * Spec backlink: DoE-claude:pln-doe-hosted-emission-conformanc-67bca4 § AC8
- * Spec backlink: coordinator/docs/wiki/emission-conformance-contract.md § Dedicated-Ref Freshness Protocol
- */
+
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const fs     = require('fs');
 const path   = require('path');
 
-// ---------------------------------------------------------------------------
-// Paths — resolved from __dirname (coordinator/bin/tests/)
-// ---------------------------------------------------------------------------
 
 const COORDINATOR      = path.resolve(__dirname, '../../');
 const REGEN_SCRIPT      = path.join(COORDINATOR, 'bin', 'regen-cockpit-schema.py');

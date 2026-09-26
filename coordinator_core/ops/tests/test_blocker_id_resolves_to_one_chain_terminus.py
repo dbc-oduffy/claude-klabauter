@@ -58,7 +58,6 @@ def _write(
     continued_into: Optional[str] = None,
     archived: bool = False,
 ) -> dict:
-    """Write one chain record, and return the dict shape the compute index takes."""
     root = worktree / ("archive/handoffs/2026-08" if archived else "state/handoffs")
     root.mkdir(parents=True, exist_ok=True)
     fm = {"stub_id": stub_id, "deployment_state": deployment_state}
@@ -75,14 +74,6 @@ def _write(
 
 
 def _three_record_chain(worktree: Path) -> list:
-    """The sat-06 shape: root -> middle -> terminus, the middle two archived.
-
-    Only the ROOT carries a `continued_into` stamp; the later links are joined by
-    the successor's `predecessor` up-edge alone. That asymmetry is the real corpus
-    shape -- minting a successor writes `predecessor`, while stamping the
-    predecessor `continued`/`continued_into` is a separate later step that is not
-    always reached -- and it is why the collapse reads both edges.
-    """
     return [
         _write(
             worktree, "root", stub_id="chain-01", deployment_state="continued",
@@ -100,7 +91,6 @@ def _three_record_chain(worktree: Path) -> list:
 
 
 def test_a_continued_chain_resolves_to_its_terminus(tmp_path: Path) -> None:
-    """Three records, one stub_id: the chain resolves, it is not ambiguous."""
     _three_record_chain(tmp_path)
 
     state = _resolve_blocker_deployment_state("chain-01", tmp_path)
@@ -114,7 +104,6 @@ def test_a_continued_chain_resolves_to_its_terminus(tmp_path: Path) -> None:
 def test_the_chase_runs_and_clears_a_gate_on_a_continued_blocker(
     tmp_path: Path,
 ) -> None:
-    """The wedge: `_blocker_clears_gate` could never reach its own chase."""
     _three_record_chain(tmp_path)
 
     clears, detail = _blocker_clears_gate("chain-01", tmp_path)
@@ -124,7 +113,6 @@ def test_the_chase_runs_and_clears_a_gate_on_a_continued_blocker(
 
 
 def test_a_genuinely_divergent_set_still_fails_loud(tmp_path: Path) -> None:
-    """The sentinel is narrowed, not removed: two unrelated heads stay ambiguous."""
     _write(tmp_path, "fam-a", stub_id="collide-01", deployment_state="shipped")
     _write(tmp_path, "fam-b", stub_id="collide-01", deployment_state="in_flight")
 
@@ -136,7 +124,6 @@ def test_a_genuinely_divergent_set_still_fails_loud(tmp_path: Path) -> None:
 
 
 def test_a_continuation_cycle_refuses_instead_of_hanging(tmp_path: Path) -> None:
-    """Two records naming each other must terminate on the cycle guard."""
     _write(
         tmp_path, "ping", stub_id="cycle-a", deployment_state="continued",
         continued_into="cycle-b",
@@ -157,21 +144,10 @@ def test_a_continuation_cycle_refuses_instead_of_hanging(tmp_path: Path) -> None
 
 
 def test_both_resolvers_agree_on_the_same_chain(tmp_path: Path) -> None:
-    """Index parity: one shared predicate, two call sites, never two evaluators.
-
-    The compute index appends the archived half AFTER the live half, which is the
-    ordering that used to hand it a superseded record. Feeding that exact order
-    here is what makes this a regression guard rather than a tautology.
-    """
     records = _three_record_chain(tmp_path)
     live = [r for r in records if "archive" not in r["_path"]]
     archived = [r for r in records if "archive" in r["_path"]]
 
-    # `_index_by_id` is called directly rather than `_memoized_index_by_id` (the
-    # path production callers route through) because the memo wrapper caches by
-    # list-object identity, and this test constructs a fresh list on every run --
-    # memoization would be a no-op here, and going through the wrapper would only
-    # obscure which primitive is actually under test.
     index = _index_by_id(archived + live)
     compute_side = index.get("chain-01")
     act_side = _resolve_blocker_deployment_state("chain-01", tmp_path)

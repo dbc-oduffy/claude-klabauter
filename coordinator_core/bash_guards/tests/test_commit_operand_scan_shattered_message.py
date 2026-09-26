@@ -40,9 +40,6 @@ def _scope(cmd: str) -> bool:
     return d._bt_commit_has_explicit_pathspec(shlex.split(cmd, posix=True))
 
 
-#: A heredoc message body carrying an inner double-quoted phrase -- the shape
-#: that shatters. Kept as one constant so both polarities below are provably
-#: the same message, differing only in whether a pathspec follows.
 _SHATTERING_MSG = (
     "\"$(cat <<'EOF'\n"
     "subject line\n"
@@ -54,14 +51,10 @@ _SHATTERING_MSG = (
 
 
 def test_shattered_message_alone_is_not_scope():
-    """The false negative. No pathspec is present, so the bare-commit deny
-    must stay armed."""
     assert _scope("git commit -q -m " + _SHATTERING_MSG) is False
 
 
 def test_shattered_message_does_not_defeat_a_real_pathspec():
-    """The false positive. The same message WITH a correct `-- <paths>` is
-    scoped, and the pre-separator residue must not deny it."""
     assert _scope("git commit -q -m " + _SHATTERING_MSG + " -- foo.py") is True
 
 
@@ -74,9 +67,7 @@ def test_shattered_message_does_not_defeat_a_multi_path_pathspec():
 @pytest.mark.parametrize(
     "cmd,expected",
     [
-        # A clean multi-line message is still unscoped when bare...
         ("git commit -m \"$(cat <<'EOF'\nsubject\n\nplain body.\nEOF\n)\"", False),
-        # ...and still scoped when a pathspec follows.
         (
             "git commit -m \"$(cat <<'EOF'\nsubject\n\nplain body.\nEOF\n)\" -- a.py",
             True,
@@ -85,19 +76,14 @@ def test_shattered_message_does_not_defeat_a_multi_path_pathspec():
         ("git commit -m x a.py", True),
         ("git commit -m x -- a.py", True),
         ("git commit -m x --pathspec-from-file=list.txt", True),
-        # `--include` merges into the staged index and commits the union, so
-        # it is never scope -- the negative spec this walk already carried.
         ("git commit -i -m x a.py", False),
     ],
 )
 def test_unshattered_shapes_are_unchanged(cmd: str, expected: bool):
-    """Pins the pre-existing verdicts the fix must not move."""
     assert _scope(cmd) is expected
 
 
 def test_newline_bearing_operand_is_the_discriminator():
-    """The predicate itself, stated directly: a command-line pathspec never
-    carries a newline, because git receives argv from the shell."""
     assert d._bt_is_shattered_operand("all here.\nEOF\n)") is True
     assert d._bt_is_shattered_operand("foo.py") is False
     assert d._bt_is_shattered_operand("path with spaces.py") is False

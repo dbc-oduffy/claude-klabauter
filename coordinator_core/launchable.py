@@ -89,9 +89,6 @@ from typing import List, Optional
 
 __all__ = ["resolve_launchable", "which_path_ordered"]
 
-# Extension -> interpreter *name* (resolved through PATH at call time). Keyed on the
-# lowercased suffix; extension-less scripts intentionally have no entry and fall
-# through to the bare-path tier.
 _INTERPRETER_BY_SUFFIX = {
     ".js": "node",
     ".cjs": "node",
@@ -102,14 +99,6 @@ _INTERPRETER_BY_SUFFIX = {
 
 
 def _is_windows() -> bool:
-    """Windows-ness as a seam, not an inline ``os.name`` read.
-
-    Tests must exercise BOTH branches on a single host -- a suite that skipped the nt
-    branch off-Windows would test nothing this module exists for. Monkeypatching
-    ``os.name`` itself is not an option: ``pathlib`` keys its concrete-class selection
-    on it and blows up mid-test. So the platform check lives behind one patchable
-    function.
-    """
     return os.name == "nt"
 
 
@@ -156,58 +145,16 @@ def _shebang_launcher(script_path: str) -> List[str]:
 
 
 def _interpreter_for(suffix: str) -> List[str]:
-    """argv prefix for ``suffix``, or ``[]`` when no interpreter is known.
-
-    ``.py`` resolves to ``sys.executable`` rather than a PATH probe: a Python parent
-    spawning a Python child should stay on the same interpreter it is already running
-    under (venv-correct by construction), which is exactly what ``sys.executable``
-    guarantees and what a bare ``python`` on PATH does not.
-    """
     if suffix == ".py":
         return [sys.executable]
     name = _INTERPRETER_BY_SUFFIX.get(suffix)
     if not name:
         return []
-    # shutil.which keeps the vector absolute where possible; fall back to the bare
-    # name so a PATH that is populated in the child but not the parent still works.
     return [shutil.which(name) or name]
 
 
 def which_path_ordered(name: str, *, extensions: Optional[List[str]] = None) -> Optional[str]:
-    """PATH-order-preserving lookup for ``name``, directory-major, extension-minor.
-
-    ``shutil.which`` gets two related cases wrong on Windows:
-
-    - An extensionless command that has no ``PATHEXT``-suffixed twin at all in its
-      OWN directory but DOES have one further along ``PATH`` reports the far match
-      first, because CPython's implementation checks ``PATHEXT`` candidates across
-      the WHOLE ``PATH`` before ever falling back to a bare-name pass. That gets
-      search order backwards: PATH precedence means an EARLIER directory always
-      wins, regardless of which candidate shape (suffixed vs. bare) matched there.
-    - A name that already ends in its own non-``PATHEXT`` extension (e.g. a
-      ``.sh`` test shim) still gets ``PATHEXT`` entries appended
-      (``foo.sh.COM``, ``foo.sh.EXE``, ...) since ``.sh`` isn't itself a
-      ``PATHEXT`` member -- so it never tries the literal filename at all.
-
-    This walks ``PATH`` ourselves, one directory at a time: within each directory,
-    try ``name`` suffixed with each of ``extensions`` (in order), THEN the bare
-    ``name``, before advancing to the next directory. Never checks one candidate
-    shape across all directories before another.
-
-    ``extensions`` defaults to ``PATHEXT`` (split on the literal ``;``, which is
-    ``PATHEXT``'s own delimiter regardless of host ``os.pathsep``) on Windows and
-    ``[]`` on POSIX, matching ``shutil.which``'s own platform default. Pass ``[]``
-    explicitly to force a bare-name-only search even on Windows -- e.g. when
-    ``name`` already carries a full, specific filename (such as a ``.sh`` shim) and
-    no further extension should ever be appended.
-
-    Returns the first existing regular-file candidate, or ``None`` if nothing
-    matched anywhere on ``PATH``.
-    """
     if extensions is None:
-        # PATHEXT is always semicolon-delimited by Windows convention, regardless
-        # of the host OS reading it -- os.pathsep is ':' on POSIX and would leave
-        # the whole value as one unsplit candidate.
         extensions = os.environ.get("PATHEXT", "").split(";") if _is_windows() else []
     for directory in os.environ.get("PATH", "").split(os.pathsep):
         if not directory:
@@ -221,27 +168,6 @@ def which_path_ordered(name: str, *, extensions: Optional[List[str]] = None) -> 
 
 
 def resolve_launchable(script_path: str) -> List[str]:
-    """Return the argv prefix that correctly launches ``script_path`` on this OS.
-
-    The returned list always ends with a path/name for the thing being launched, so
-    ``[*resolve_launchable(p), *args]`` is the complete vector.
-
-    POSIX is no longer "always ``[script_path]``, the shebang is authoritative"
-    (2026-08-13). The POSIX-exec drain
-    (docs/plans/2026-08-13-grind-the-posix-exec-baseline-to-zero.md, chunk C6)
-    renames ``coordinator/bin`` entrypoints to ``<name>.py`` and strips BOTH the
-    shebang and the exec bit, so a caller holding the old bare path gets "can't
-    open file", and a caller holding the new path gets an exec-format error from
-    a file with no shebang to be authoritative. Two probes close both, in the
-    order that keeps a still-extensionless name on its existing path:
-
-      1. bare path missing -> try ``<path>.py``
-      2. resolved target not executable -> prefix ``sys.executable``
-
-    This is the same absorption ``exec_cli`` took for the installed forwarders in
-    ``23d162e6c4ff``; this function is the repo-local half of that surface, and
-    peers hit it within the hour on three separate CLIs in one ceremony.
-    """
     script_path = os.fspath(script_path)
 
     if not os.path.isfile(script_path) and not script_path.endswith(".py"):
@@ -250,18 +176,6 @@ def resolve_launchable(script_path: str) -> List[str]:
             script_path = suffixed
 
     if not _is_windows():
-        # Narrowly `.py`: the drain strips shebang+exec bit from Python
-        # entrypoints only, so this is the one extension whose non-executable
-        # form is known to want `sys.executable`. Prefixing any other
-        # non-executable file would hand `python3` a `.js`/`.sh` it cannot run
-        # — a worse failure than the exec-format error it replaces.
-        # The leading `os.name != "nt"` is redundant against the enclosing
-        # `not _is_windows()` and is deliberate: `check_posix_exec_assumptions`'s
-        # `posix_mode_bits` class recognizes a literal `os.name`/`sys.platform`
-        # test or short-circuit and-chain as a Windows guard, but NOT a
-        # project-local wrapper like `_is_windows()` (that limit is named in its
-        # own docstring). Spelling the guard the detector understands keeps this
-        # correct cross-platform code out of the gate without an exemption.
         if (
             os.name != "nt"
             and script_path.endswith(".py")

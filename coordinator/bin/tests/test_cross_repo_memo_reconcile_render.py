@@ -1,21 +1,3 @@
-"""test_cross_repo_memo_reconcile_render — what `cross-repo-memo reconcile`
-actually puts in front of an operator.
-
-Two defects, both invisible to every test that only asserted the op's envelope:
-
-  - The dry-run listing printed disposition, status and filename and dropped
-    `note`. A `report` row IS its note — the op declining to act and handing
-    the judgement back — so a reported row said only that something was wrong
-    with some file.
-  - The commit hint asked whether a moved entry's `path` lay under the retired
-    `state/memo-outbox/` root. A move always LANDS in the new `sent/` dir and
-    the op overwrites `path` with that target, so the predicate could never be
-    true: every apply run printed "nothing to commit", including the runs
-    whose tracked deletion was the one thing there was to commit.
-
-Unit-level: `_cmd_reconcile` is driven with a stubbed engine seam, so these
-assert the rendering and nothing else.
-"""
 
 from __future__ import annotations
 
@@ -54,8 +36,6 @@ def _run(monkeypatch, capsys, envelope: dict, *, apply_: bool, root: str):
 
 
 def test_a_reported_rows_note_is_printed(monkeypatch, capsys, tmp_path):
-    """The note is the finding. Without it the row names a file and a verdict
-    an operator has no way to act on."""
     envelope = {
         "candidates": [
             {
@@ -77,7 +57,6 @@ def test_a_reported_rows_note_is_printed(monkeypatch, capsys, tmp_path):
 
 
 def test_a_noteless_row_prints_no_empty_continuation(monkeypatch, capsys, tmp_path):
-    """move/keep rows carry no note and must not gain a blank second line."""
     envelope = {
         "candidates": [
             {"disposition": "move", "status": "sent", "filename": "done.md", "note": None}
@@ -93,8 +72,6 @@ def test_a_noteless_row_prints_no_empty_continuation(monkeypatch, capsys, tmp_pa
 
 
 def test_a_tracked_legacy_move_is_told_to_commit(monkeypatch, capsys, tmp_path):
-    """The source is what was tracked; the target is where it landed. Reading
-    the target here is what made this branch unreachable."""
     root = str(tmp_path)
     envelope = {
         "acted": [
@@ -117,10 +94,6 @@ def test_a_tracked_legacy_move_is_told_to_commit(monkeypatch, capsys, tmp_path):
 def test_a_move_that_began_in_the_untracked_root_has_nothing_to_commit(
     monkeypatch, capsys, tmp_path
 ):
-    """The negative half — `.coordinator-local/` drafts are untracked (only
-    `sent/` and the ledger carry history), so that move really does leave
-    nothing behind. Without this the fix above could simply always print the
-    commit line."""
     root = str(tmp_path)
     outbox = tmp_path / ".coordinator-local" / "memo-outbox"
     envelope = {

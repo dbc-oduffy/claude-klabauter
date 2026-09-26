@@ -97,7 +97,6 @@ _STAMP_LINE_RE = re.compile(r"^schema_version:\s*(.*)$", re.MULTILINE)
 
 
 def _strip_one_trailing_slash(value: str) -> str:
-    """Mirror bash `${value%/}` — strips AT MOST one trailing slash."""
     if value.endswith("/"):
         return value[:-1]
     return value
@@ -134,7 +133,6 @@ def _read_stamp(stamp_path: str) -> Optional[str]:
 
 
 def coordinator_currency_probe(repo_root: str, plugin_root: str) -> str:
-    """Read-only classification. Always succeeds (never raises) — returns a status string."""
     current_version = _read_schema_version(plugin_root)
     if current_version is None:
         return (
@@ -161,7 +159,6 @@ def coordinator_currency_probe(repo_root: str, plugin_root: str) -> str:
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: env-only interface (no positional args), mirrors the bash oracle."""
     script_dir = os.environ.get("COORDINATOR_CURRENCY_SCRIPT_DIR", "")
 
     plugin_root = os.environ.get("COORDINATOR_CURRENCY_PLUGIN_ROOT", "")
@@ -174,8 +171,6 @@ def main(argv: List[str]) -> int:
     else:
         claude_home = os.environ.get("CLAUDE_HOME", "")
         # Separator-agnostic: a Windows CLAUDE_HOME arrives backslash-separated
-        # (e.g. "...\.claude"), so a bare "/.claude" suffix check silently
-        # misses the F14 guard on Windows.
         claude_home_cmp = claude_home.replace("\\", "/") if claude_home else claude_home
         if claude_home_cmp and _strip_one_trailing_slash(claude_home_cmp).endswith("/.claude"):
             print(

@@ -26,13 +26,9 @@ from __future__ import annotations
 
 from coordinator_core.warm import breadcrumb as bc
 
-#: The instant every claim below is stamped at, and the origin the `now`
-#: offsets are measured from. Fixed rather than `time.time()` per call so a
-#: test never straddles a real-clock tick.
 _CLAIMED_AT = 1_756_800_000.0
 
 #: A `now` far enough past `_CLAIMED_AT` that the claim has expired, and near
-#: enough that it is not read as a clock that jumped (the window is two-sided).
 _EXPIRED = _CLAIMED_AT + bc.BOOT_CLAIM_MAX_SECS + 0.01
 
 
@@ -42,9 +38,6 @@ def _lock(tmp_path):
 
 class TestBootClaimCeiling:
     def test_a_fresh_claim_still_blocks_a_second_caller(self, tmp_path):
-        # The debounce this primitive exists for is unchanged. If this test
-        # ever goes green by accident (e.g. the ceiling drops to zero), the
-        # ceiling has eaten the feature rather than bounded it.
         assert bc.try_claim_boot(_lock(tmp_path), now=_CLAIMED_AT) is True
         assert bc.try_claim_boot(_lock(tmp_path), now=_CLAIMED_AT) is False
 
@@ -52,15 +45,9 @@ class TestBootClaimCeiling:
         lock = _lock(tmp_path)
         assert bc.try_claim_boot(lock, now=_CLAIMED_AT) is True
 
-        # Still held by this process -- the fd is leaked and never closed.
-        # Before the ceiling, this was False forever.
         assert bc.try_claim_boot(lock, now=_EXPIRED) is True
 
     def test_passing_the_ceiling_restamps_so_the_herd_is_bounded_too(self, tmp_path):
-        # The first caller past the ceiling spawns; the next sees a fresh claim
-        # time and debounces. Without the re-stamp every concurrent caller
-        # reads the same stale stamp and they all spawn at once -- trading a
-        # permanent outage for a thundering herd is not a fix.
         lock = _lock(tmp_path)
         bc.try_claim_boot(lock, now=_CLAIMED_AT)
 
@@ -70,20 +57,15 @@ class TestBootClaimCeiling:
     def test_the_ceiling_is_measured_from_the_claim_not_the_files_creation(
         self, tmp_path
     ):
-        # The lock file long predates any given claim -- it is created once and
-        # reused forever. Measuring its creation time would read every claim as
-        # instantly stale and delete the debounce outright.
         lock = _lock(tmp_path)
         bc.try_claim_boot(lock, now=_CLAIMED_AT)
-        assert bc.try_claim_boot(lock, now=_EXPIRED) is True  # re-stamps
+        assert bc.try_claim_boot(lock, now=_EXPIRED) is True
 
         assert bc.try_claim_boot(lock, now=_EXPIRED) is False
 
 
 class TestDecisionBodyHonoursIt:
     def test_no_record_plus_an_expired_claim_means_spawn(self, tmp_path):
-        # The exact live state: no discovery record has ever been published,
-        # and the claim is held by a process that is not booting.
         lock = _lock(tmp_path)
         bc.try_claim_boot(lock, now=_CLAIMED_AT)
 

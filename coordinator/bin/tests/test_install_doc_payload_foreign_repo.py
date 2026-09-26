@@ -1,20 +1,3 @@
-"""test_install_doc_payload_foreign_repo — coverage for the explicit
-foreign-repo marker (`foreign-repo:<repo-name>/<relative-script-path>`)
-`check-install-doc-payload.py` recognises (chunk C7,
-docs/plans/2026-08-07-publish-identity-scrub-and-two-repo-gates.md).
-
-Why this exists: `check_tree()` resolves every command-referenced path
-against `--tree` and nowhere else, so a legitimately foreign path (a
-"clone the engine repo, then run its installer" instruction) has no way to
-be expressed at all -- DoE's publish fail-closed with 6 findings, every one
-of them a legitimate cross-repo instruction. This marker is a narrow,
-checked escape hatch: well-formed markers are accepted without being
-resolved locally; malformed markers and unmarked bogus paths both still
-fail. See both directions below -- a suite carrying only the accept case
-would be exactly the vacuous-verifier shape this plan exists to close.
-
-Run: python -m pytest coordinator/bin/tests/test_install_doc_payload_foreign_repo.py coordinator/bin/tests/test_install_doc_payload_gate_wiring.py -q
-"""
 
 from __future__ import annotations
 
@@ -67,16 +50,14 @@ class TestParseForeignRepoRef:
         assert repo_name == ""
 
     def test_windows_drive_rooted_path_is_malformed(self):
-        # abs-path-ok: fixture string exercising drive-root rejection, not a real path citation
         repo_name, _ = gate.parse_foreign_repo_ref("foreign-repo:sibling/C:/scripts/setup.py")
         assert repo_name == ""
 
     def test_unc_path_is_malformed(self):
-        repo_name, _ = gate.parse_foreign_repo_ref(r"foreign-repo:sibling/\\evilhost\share\setup.py")  # abs-path-ok: fixture string exercising UNC-path rejection, not a real path citation
+        repo_name, _ = gate.parse_foreign_repo_ref(r"foreign-repo:sibling/\\evilhost\share\setup.py")
         assert repo_name == ""
 
     def test_windows_drive_relative_path_is_malformed(self):
-        # abs-path-ok: fixture string exercising drive-relative rejection, not a real path citation
         repo_name, _ = gate.parse_foreign_repo_ref("foreign-repo:sibling/C:setup.py")
         assert repo_name == ""
 
@@ -101,8 +82,6 @@ class TestCheckTreeAcceptsWellFormedForeignRepoMarker:
             "Clone the engine repo, then:\n\n"
             "```\npython3 foreign-repo:claude-klabauter/scripts/setup.py --i-am-agent\n```\n",
         )
-        # Deliberately nothing under tmp_path/scripts -- the marked path
-        # must not be checked against this tree at all.
         findings = gate.check_tree(tmp_path)
         assert findings == []
 
@@ -159,10 +138,6 @@ class TestCheckTreeStillRejectsUnmarkedBogusPath:
 
 
 class TestExistingKlabauterPlaceholderUnaffected:
-    """DoE's `<klabauter-clone>/scripts/setup.py` placeholder must keep
-    working untouched -- it is a different mechanism (angle-bracket
-    placeholder, invisible to this gate by construction) that C7 must not
-    require migrating."""
 
     def test_angle_bracket_placeholder_produces_no_finding(self, tmp_path):
         _write_doc(

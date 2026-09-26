@@ -1,8 +1,3 @@
-"""test_sweep_argv.py — unit tests for the shared `parse_repo_root_argv` helper.
-
-See coordinator/bin/lib/sweep_argv.py module docstring for the defect this
-helper centralizes the fix for.
-"""
 from __future__ import annotations
 
 import os

@@ -74,12 +74,6 @@ def _parse_dr_key(raw: str) -> tuple[str, int] | None:
 
 
 def _frontmatter_id(path: Path) -> str | None:
-    """Return the record's ``id:`` frontmatter value, or None.
-
-    Bounded read of the leading lines only, mirroring
-    ``dr_allocator._read_frontmatter_dr_id``. Any read failure returns None so
-    an unreadable file is skipped by the caller rather than crashing the sweep.
-    """
     try:
         with path.open(encoding="utf-8") as handle:
             for _ in range(_FRONTMATTER_MAX_LINES):
@@ -95,13 +89,6 @@ def _frontmatter_id(path: Path) -> str | None:
 
 
 def _effective_dr_keys(decisions_dir: Path) -> dict[tuple[str, int], list[str]]:
-    """Map each ``(prefix, number)`` key to the record filenames claiming it.
-
-    Frontmatter wins over the filename when both are present and parse: the
-    frontmatter ``id:`` is what every downstream citation and cross-DR
-    ``related:`` edge joins on, so it is the record's identity even where a
-    filename disagrees.
-    """
     claims: dict[tuple[str, int], list[str]] = defaultdict(list)
     for path in sorted(decisions_dir.glob("*.md")):
         raw = _frontmatter_id(path)
@@ -120,13 +107,6 @@ def _render_key(key: tuple[str, int]) -> str:
 
 
 def test_every_decision_record_claims_a_unique_dr_id():
-    """No two records in docs/decisions/ share a DR id.
-
-    Guard name: dr-corpus-id-uniqueness. If you are grepping for why this test
-    exists: it is the on-disk detector for collisions the write-time guard
-    cannot see, armed after DR-345 carried two records for four days because
-    one of them was hand-authored past ``coordinator-doc-new``.
-    """
     assert _DECISIONS_DIR.is_dir(), (
         f"dr-corpus-id-uniqueness: expected a decisions corpus at "
         f"{_DECISIONS_DIR} and found none — this sweep resolves the repo root "

@@ -88,28 +88,14 @@ from coordinator_core.telemetry import op_latency
 from coordinator_core.telemetry.engine_report import iter_sink_entries
 from coordinator_core.win_portability import no_console_creationflags
 
-#: Re-exported so a caller need not import `op_latency` separately just to
-#: compare a `DoorRouteResult.route` against the two PASS/fall-through values.
 WARM_SERVER = op_latency.WARM_SERVER
 IN_PROCESS = op_latency.IN_PROCESS
 
-#: No matching sink row was found for the invocation -- either a genuine
-#: fall-through whose row never got `route` stamped correctly (should not
-#: happen given the module docstring's route-stamping contract, but this
-#: module never assumes it), or the sink itself is silently inert (kill
-#: switch, unresolvable git common dir, unwritable disk). Distinguish the
-#: two via `run_cold_control_invocation` -- see module docstring.
 UNRESOLVED = "unresolved"
 
-#: The known-cold control invocation ALSO came back `unresolved` -- the sink
-#: itself is inert on this box, so an `unresolved` result from the door
-#: invocation proper cannot be trusted as "fall-through occurred". A distinct
 #: outcome from both `WARM_SERVER` and `IN_PROCESS`, never folded into either.
 DISCRIMINATOR_UNAVAILABLE = "discriminator_unavailable"
 
-#: Timeout for the door subprocess itself -- generous relative to
-#: `README-posix.md`'s measured ~1ms warm / low-double-digit-ms cold shape,
-#: never load-bearing for correctness, only a hang guard.
 _DOOR_TIMEOUT_SECS = 30.0
 
 
@@ -192,9 +178,6 @@ def read_door_route(
     since = time.time()
     argv: List[str] = [str(door_path), op, *(args or [])]
     try:
-        # cwd IS the sink selector: the served row lands in the sink of the
-        # repo the door runs in, so an inherited cwd (setup.py launched from
-        # any other checkout) writes where this function never reads.
         subprocess.run(
             argv,
             cwd=str(repo_root),
@@ -213,8 +196,6 @@ def read_door_route(
     route = row.get("route")
     if route not in (WARM_SERVER, IN_PROCESS):
         # An unstamped or unrecognised route is UNOBSERVABLE, not a route --
-        # matches `engine_report.route_distribution`'s "unstamped is
-        # unobservable, not cold" rule; this module never guesses.
         return DoorRouteResult(UNRESOLVED, row)
 
     return DoorRouteResult(route, row)

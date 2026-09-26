@@ -102,22 +102,9 @@ from coordinator_core.git_scope import (
 )
 from coordinator_core.ops.emit import doe_drift
 
-# Bounded ls-remote timeout (seconds) — the ONE network call this module ever
-# makes, and only when a DoE clone resolved locally first. Kept deliberately
-# small: this runs on every repo's daily ceremony on every machine.
 _LS_REMOTE_TIMEOUT_SECONDS = 5
 
-# Every other subprocess this module runs is a LOCAL git call against the
-# already-resolved DoE clone (peel, log, show, merge-base) — bounded the same
-# way for symmetry, though none of them touch the network.
-#
-# per-call timeouts bound each hop but not
-# the total. Worst case the happy/degraded path chains up to 5 sequential
 # calls (1x _LS_REMOTE_TIMEOUT_SECONDS + up to 4x _LOCAL_GIT_TIMEOUT_SECONDS),
-# ~45s worst case. Not wired to an overall wall-clock budget today — worth
-# revisiting with a budget wrapping `_compute` if this ever becomes a real
-# complaint in practice; per-call timeouts already guarantee it can never
-# hang indefinitely.
 _LOCAL_GIT_TIMEOUT_SECONDS = 10
 
 _RELEASE_REF = "refs/tags/cockpit-contract-release"
@@ -128,9 +115,7 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 class _FreshnessProbeError(Exception):
-    """Internal signal carrying an operator-readable reason string. Never
-    escapes `compute_cockpit_contract_freshness()` — every raise site here is
-    caught by its immediate caller and folded into an UNKNOWN entry."""
+    pass
 
 
 def _now_iso() -> str:
@@ -151,10 +136,6 @@ def _entry(
     candidate_version: Optional[str] = None,
     candidate_ref: Optional[str] = None,
 ) -> dict[str, Any]:
-    # The trailing same-typed (Optional[str])
-    # args are keyword-only so a transposed call fails loudly (TypeError) at
-    # the call site instead of type-checking and silently swapping data in
-    # the emitted envelope.
     return {
         "verdict": verdict,
         "checked_at": checked_at,
@@ -168,10 +149,7 @@ def _entry(
         "candidate": {
             "sha": candidate_sha,
             "contract_version": candidate_version,
-            # Names exactly what the candidate
-            # query was scoped to (see module candidate-scope negative-spec),
             # additive field, agreed FRESH/STALE/DIVERGED/UNKNOWN shape
-            # unchanged.
             "resolved_from_ref": candidate_ref,
         },
     }
@@ -181,9 +159,7 @@ def _unknown(checked_at: str, reason: str) -> dict[str, Any]:
     return _entry("UNKNOWN", checked_at, reason, None)
 
 
-# ---------------------------------------------------------------------------
 # Step 1 — LOCAL-ONLY root resolution (no network, no CLI subprocess).
-# ---------------------------------------------------------------------------
 
 def _resolve_doe_root_local() -> Optional[Path]:
     """DOE_ROOT env -> REPO_DOE_CLAUDE env -> machine-local `repos.doe_claude`
@@ -225,10 +201,6 @@ def _resolve_doe_root_local() -> Optional[Path]:
     except doe_drift.DoeResolveError:
         return None
 
-
-# ---------------------------------------------------------------------------
-# Step 2/3 — ONE bounded network probe, then a LOCAL peel.
-# ---------------------------------------------------------------------------
 
 def _ls_remote_release_tag(doe_root: Path) -> str:
     """One bounded `git ls-remote origin refs/tags/cockpit-contract-release`
@@ -316,16 +288,6 @@ def _peel_to_commit(doe_root: Path, sha: str) -> str:
 
 
 def _current_ref_label(doe_root: Path) -> str:
-    """Human-readable label naming what `_candidate_sha` resolved its answer
-    from — the DoE clone's current HEAD, as an explicit branch name when on
-    one, or the literal `"HEAD (detached)"` otherwise. Never raises; folds
-    any resolution failure into a literal `"HEAD (unresolvable)"` label
-    rather than aborting the probe, since this is a best-effort annotation,
-    not load-bearing for the verdict computation itself.
-
-    Surfaced in the emitted entry's `candidate.resolved_from_ref` field — see
-    the module's candidate-scope negative-spec.
-    """
     try:
         result = subprocess.run(
             ["git", "-C", str(doe_root), "symbolic-ref", "--short", "-q", "HEAD"],
@@ -344,17 +306,7 @@ def _current_ref_label(doe_root: Path) -> str:
     return "HEAD (detached)"
 
 
-# ---------------------------------------------------------------------------
-# Step 4/5 — LOCAL reads only (candidate commit, contract version, ancestry).
-# ---------------------------------------------------------------------------
-
 def _candidate_sha(doe_root: Path) -> str:
-    """Newest commit touching DoE's `coordinator/cockpit-contract/schema/`,
-    reachable from the DoE clone's current `HEAD` — explicitly, not by the
-    absence of a ref argument. See the module's candidate-scope negative-spec
-    for why `HEAD` (not a hardcoded canonical ref) is the deliberate choice
-    here, and `_current_ref_label` for how that scope is surfaced to
-    consumers of the emitted entry."""
     try:
         result = subprocess.run(
             ["git", "-C", str(doe_root), "log", "-1", "--format=%H", "HEAD",
@@ -384,8 +336,6 @@ def _candidate_sha(doe_root: Path) -> str:
 
 
 def _contract_version_at(doe_root: Path, sha: str) -> Optional[str]:
-    """Top-level `"version"` key of `cockpit-contract.schema.json` AT `sha`
-    (never claude-klabauter's own emitter literal — see module negative-spec)."""
     try:
         result = subprocess.run(
             ["git", "-C", str(doe_root), "show", f"{sha}:{_SCHEMA_FILE_RELPATH}"],
@@ -439,22 +389,8 @@ def _is_ancestor(doe_root: Path, ancestor_sha: str, descendant_sha: str) -> Opti
 
 
 def _doe_clone_unusable_reason(doe_root: Path) -> Optional[str]:
-    """None when `doe_root` is readable AS the DoE clone, else why it is not.
-
-    A thin named seam over `git_scope.foreign_repo_unusable_reason` — same
-    module-function stubbing convention every other git hop in this file
-    follows, so the test suite can exercise the verdict logic against a
-    synthetic root without also having to materialise a real clone.
-
-    Runs only AFTER a root resolved, so the module's zero-shell-out
-    consumer-machine cost contract is unaffected.
-    """
     return foreign_repo_unusable_reason(doe_root)
 
-
-# ---------------------------------------------------------------------------
-# Orchestration
-# ---------------------------------------------------------------------------
 
 def _compute(checked_at: str) -> dict[str, Any]:
     try:
@@ -470,12 +406,7 @@ def _compute(checked_at: str) -> dict[str, Any]:
             "zero-network path on a consumer machine with no DoE clone",
         )
 
-    # Gate the whole probe on the DoE clone actually being readable AS the DoE
-    # clone. Without this, an inherited GIT_DIR (or a .git file pointing
-    # elsewhere) lets every call below succeed against the WRONG repository and
     # emit a confident FRESH/STALE/DIVERGED verdict labelled with DoE's path.
-    # Un-answerable is its own outcome — see the module's git-scoping
-    # negative-spec and `coordinator_core/git_scope.py`.
     unusable = _doe_clone_unusable_reason(doe_root)
     if unusable is not None:
         return _unknown(
@@ -503,18 +434,12 @@ def _compute(checked_at: str) -> dict[str, Any]:
             published_peel=published_peel,
         )
 
-    # best-effort annotation naming the scope
-    # `_candidate_sha` measured; never raises, so a resolution failure here
-    # must not abort a verdict the SHA comparison below can still determine.
     candidate_ref: Optional[str] = None
     try:
         candidate_ref = _current_ref_label(doe_root)
     except Exception:  # noqa: BLE001 - best-effort annotation, never load-bearing
         candidate_ref = "HEAD (unresolvable)"
 
-    # Contract-version annotations are best-effort — a read failure here
-    # narrows the entry's usefulness but must not abort a verdict the SHA
-    # comparison below can still determine.
     published_version: Optional[str] = None
     candidate_version: Optional[str] = None
     try:
@@ -523,9 +448,6 @@ def _compute(checked_at: str) -> dict[str, Any]:
         pass
 
     if published_peel == candidate_sha:
-        # Same sha, so re-reading the same blob
-        # via a second identical `git show` would be a redundant subprocess
-        # call; reuse the value already read above.
         candidate_version = published_version
         return _entry(
             "FRESH",
@@ -579,9 +501,6 @@ def _compute(checked_at: str) -> dict[str, Any]:
 
 
 def compute_cockpit_contract_freshness() -> dict[str, Any]:
-    """Compute the `cockpit_contract_freshness` gate entry. Never raises —
-    any unexpected failure anywhere in the probe degrades to UNKNOWN with the
-    exception summary in `reason`, per this module's negative-spec."""
     checked_at = _now_iso()
     try:
         return _compute(checked_at)

@@ -62,26 +62,12 @@ from coordinator_core.session import core as session_core
 
 _LOCK_NAME = "coordinator-day-branch-cut.json"
 
-#: How long a holder asserts it will still be cutting. A local ``checkout -b``
-#: is ~30ms; this is generous headroom for a loaded box, not an estimate of
-#: the work.
 _HOLD_WINDOW_SECONDS = 10.0
 
-#: Grace past ``hold_until`` before a peer calls a still-live holder stale.
-#: The sole surviving copy of this shape — ``auto_push.py``'s copy was
-#: deleted 2026-08-30 (overengineering-reviewer finding 2) once its own
-#: write side had no caller left to serve.
 _STALE_GRACE_SECONDS = 60.0
 
 
 class CutLockVerdict(NamedTuple):
-    """Outcome of an acquire attempt.
-
-    acquired: True iff THIS process holds the lock and must perform the cut.
-    holder_pid / holder_sid: the incumbent when ``acquired`` is False (may be
-      None when the record was unreadable).
-    reason: operator-readable one-liner.
-    """
 
     acquired: bool
     holder_pid: Optional[int]
@@ -90,17 +76,10 @@ class CutLockVerdict(NamedTuple):
 
 
 def lock_path(repo_root: str | Path) -> Path:
-    """``<git-common-dir>/coordinator-day-branch-cut.json``."""
     return resolve_git_common_dir(repo_root) / _LOCK_NAME
 
 
 def read_record(repo_root: str | Path) -> Optional[dict]:
-    """The lock record, or None if absent/corrupt/unreadable.
-
-    A corrupt or partially-written record reads as None — exactly like "no
-    lock" — rather than raising, the same fail-safe shape
-    ``auto_push.py``'s now-deleted pending-record reader used.
-    """
     try:
         text = lock_path(repo_root).read_text(encoding="utf-8")
     except OSError:
@@ -130,11 +109,6 @@ def holder_alive(pid) -> Optional[bool]:
 
 
 def record_is_stale(record: dict, now: Optional[float] = None) -> bool:
-    """Holder confirmed dead, OR ``hold_until`` more than the grace past.
-
-    PID-dead is checked FIRST so a crashed holder is taken over immediately
-    rather than every peer polling a corpse for the full grace window.
-    """
     now = time.time() if now is None else now
     if holder_alive(record.get("holder_pid")) is False:
         return True
@@ -143,12 +117,6 @@ def record_is_stale(record: dict, now: Optional[float] = None) -> bool:
 
 
 def _try_create(path: Path, payload: dict) -> bool:
-    """Atomically create the lock file, or return False if it already exists.
-
-    ``O_CREAT | O_EXCL`` is the filesystem atomicity primitive this module's
-    whole guarantee rests on — exactly one racer's create succeeds. The handle
-    is closed immediately (Windows sharing-violation negative-spec above).
-    """
     try:
         fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except FileExistsError:
@@ -191,8 +159,6 @@ def acquire(
 
     record = read_record(repo_root)
     if record is None or record_is_stale(record, now):
-        # Take over: unlink then re-create under O_EXCL. Exactly one racer's
-        # unlink-plus-create wins; the rest see the winner's fresh record.
         try:
             path.unlink()
         except OSError:
@@ -212,11 +178,6 @@ def acquire(
 
 
 def release(repo_root: str | Path, *, pid: Optional[int] = None) -> bool:
-    """Drop the lock if this process holds it. Never raises.
-
-    A foreign-held record is left alone: releasing someone else's mutex is how
-    two sessions end up cutting.
-    """
     pid = os.getpid() if pid is None else pid
     record = read_record(repo_root)
     if record is not None and record.get("holder_pid") != pid:

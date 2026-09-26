@@ -66,17 +66,12 @@ from coordinator_core._settings_home import settings_home
 
 _FLEET_MODE_FILENAME = "fleet-mode.json"
 
-#: Generator-provenance declaration: write_fleet_mode()'s only write is
 #: `settings_home() / _FLEET_MODE_FILENAME` — the operator's coordinator
-#: settings home, never a path inside this repo's tracked tree. No tracked
 #: artifact exists for `GENERATES` to name.
 GENERATES = []
 
 
 def fleet_mode_path() -> Path:
-    """Resolve ``<settings_home()>/fleet-mode.json`` — the single home for
-    the fleet record. See module docstring "ONE HOME, AND WHY" for why this
-    is a single location, not a dual-home read."""
     return settings_home() / _FLEET_MODE_FILENAME
 
 
@@ -106,24 +101,6 @@ def read_fleet_mode() -> dict:
 
 
 def write_fleet_mode(record: dict) -> bool:
-    """Atomic create-or-overwrite of the fleet record via ``tempfile.mkstemp``
-    + ``os.replace`` in ``settings_home()`` — same atomicity discipline as
-    ``coordinator_core.session.grant.write_tier_u_grant`` — so a reader
-    never observes a partially-written file.
-
-    ``record`` must be a ``dict`` — anything else raises ``TypeError`` (a
-    caller programming error, not an infra failure); this is the WRITE
-    side's validation, distinct from the READ side's never-raise contract
-    (see module docstring).
-
-    Returns True on success; False on ANY infra failure (settings-home
-    directory uncreatable, write/replace failure) — including a ``dict``
-    ``record`` whose contents are not JSON-serializable (e.g. a
-    ``datetime`` value): that is a per-value failure discovered only once
-    serialization is attempted, not the caller-programming-error shape the
-    up-front ``isinstance`` check exists to catch, so it degrades to
-    ``False`` with the tmp file cleaned up rather than propagating.
-    """
     if not isinstance(record, dict):
         raise TypeError(f"record must be a dict, got {type(record).__name__}")
 
@@ -141,9 +118,6 @@ def write_fleet_mode(record: dict) -> bool:
     try:
         fh = os.fdopen(fd, "w", encoding="utf-8", newline="\n")
     except OSError:
-        # os.fdopen failing mid-construction does not guarantee it
-        # consumed fd; close it ourselves so the raw descriptor is never
-        # leaked (Review: code-reviewer, finding 4).
         try:
             os.close(fd)
         except OSError:
@@ -159,15 +133,9 @@ def write_fleet_mode(record: dict) -> bool:
             fh.write("\n")
         os.replace(tmp_name, target)
     except (OSError, TypeError):
-        # Widened to catch json.dump's TypeError on a dict record carrying
-        # a non-JSON-serializable value -- passes the isinstance(dict) gate
-        # above but still must not leak the tmp file (Review: code-reviewer,
-        # finding 1).
         try:
             os.unlink(tmp_name)
         except OSError:
-            # Best-effort tmp-file cleanup on the error path; the caller
-            # already gets a False return regardless.
             pass
         return False
     return True

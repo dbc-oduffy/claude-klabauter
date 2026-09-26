@@ -120,24 +120,14 @@ from coordinator_core.hooks.postuse_advisory_dispatch import (
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.push_failure_verdict import _handler as _push_failure_verdict_handler
 
-#: Generator-provenance declaration (generator_provenance.py's AST sweep):
-#: this module's only writes are `_check_push_failures`'s
-#: `push-failures-cursor.txt` and `_check_hooks_json_staleness`'s
-#: `hooks-json-boot-hash.txt`, both under
-#: `resolve_git_common_dir(...)/coordinator-sessions/<session_id>/` -- a
-#: per-session cursor inside the git COMMON dir, never a tracked repo path
-#: (same standing as R5's `git_common_dir(...)` exclusion). No tracked
 #: artifact exists for `GENERATES` to name.
 GENERATES = []
 
-# ---------------------------------------------------------------------------
 # Charset guard — verbatim from the source script (`_ID_CHARSET_RE`).
-# ---------------------------------------------------------------------------
 _ID_CHARSET_RE = re.compile(r"^[A-Za-z0-9_@-]+$")
 
 # AUTO-PUSH-MID-SESSION-DETECT — verbatim from the source script
 # (`_PUSH_FAILED_LINE_RE`): matches only a genuine, exhausted-retry failure
-# row, never every new line the log happens to grow by.
 _PUSH_FAILED_LINE_RE = re.compile(r"\]\s*PUSH FAILED\b")
 
 _PUSH_FAILURE_REFERENCE_LINE = (
@@ -149,18 +139,7 @@ _HOOKS_JSON_STALE_REFERENCE_LINE = (
 )
 
 
-# This module carried a third
-# in-repo copy of `_resolve_subagent_identity`, difflib-identical to
-# `postuse_advisory_dispatch._resolve_subagent_identity`; now imported from
-# there (see top of module), matching how `stop_dispatch.py` (same
-# workstream) imports private handlers from sibling hooks modules without
-# ceremony.
-
-
 def _fail_open(fn, *args, default=None):
-    """Run one detector, yielding `default` on any exception — mirrors the
-    source script's own `_fail_open`: a bug in one leg must never take down
-    another."""
     try:
         return fn(*args)
     except Exception:
@@ -175,18 +154,6 @@ def _ensure_cursor_dir(cursor_dir: str) -> bool:
         return False
 
 
-# ---------------------------------------------------------------------------
-# _current_branch_cheap — raw `.git/HEAD` read, zero-spawn. Resolved via the
-# worktree-PRIVATE gitdir (`coordinator_core.git.git_dir.resolve_git_dir`,
-# same semantic the source script's own `_resolve_git_dir_no_commondir` hand-
-# rolled: never following the `commondir` indirection, since HEAD is
-# per-worktree state).
-# Delegated to the shared
-# `resolve_git_dir` rather than re-deriving the `.git`-file-vs-directory
-# indirection by hand, matching the sibling C4 chunk
-# (`watchdog_undischarged_next_move.py`), which made and documented the same
-# call on this identical question.
-# ---------------------------------------------------------------------------
 def _current_branch_cheap(git_root: str) -> str:
     try:
         git_dir = str(resolve_git_dir(git_root))
@@ -199,17 +166,12 @@ def _current_branch_cheap(git_root: str) -> str:
         if m:
             return m.group(1)
     except Exception:
-        pass  # branch-name probe is best-effort; absence just means no branch reported
+        pass
     return ""
 
 
-# ---------------------------------------------------------------------------
 # push_failure_verdict — in-process call of the ALREADY-REGISTERED
-# `git.push_failure_verdict` op's own handler (never a subprocess, never a
 # `dispatch_from_hook`/JSON-RPC round-trip: caller and callee already share
-# one process and one import, matching `plan_persistence_check.py`'s own
-# direct-function-call precedent over its analogous op).
-# ---------------------------------------------------------------------------
 def _push_failure_verdict(git_root: str) -> "tuple[Optional[dict], Optional[str]]":
     """Returns `(result, degrade_reason)` — mirrors the source script's own
     contract. `degrade_reason` is `"malformed"` for any response that is not
@@ -242,7 +204,6 @@ def _push_failure_verdict(git_root: str) -> "tuple[Optional[dict], Optional[str]
 def _render_push_failure_verdict(
     verdict_result: dict, n_new: int, branch: str, last_line: str
 ) -> Optional[str]:
-    """Verbatim port of the source script's `_render_push_failure_verdict`."""
     verdict = verdict_result.get("verdict")
     evidence = verdict_result.get("evidence") or {}
     ref = _PUSH_FAILURE_REFERENCE_LINE
@@ -333,7 +294,7 @@ def _render_push_failure_verdict(
             "peer-staged reading is true.\n" + ref
         )
 
-    return None  # unreachable -- `_push_failure_verdict` already validated `verdict`
+    return None
 
 
 def _check_push_failures(git_root: str, session_id: str) -> Optional[str]:
@@ -385,7 +346,7 @@ def _check_push_failures(git_root: str, session_id: str) -> Optional[str]:
             with open(cursor_path, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(str(log_size))
         except Exception:
-            pass  # cursor write is best-effort bookkeeping; a miss just re-reads from baseline next time
+            pass
         return None
 
     if log_size <= baseline:
@@ -397,13 +358,13 @@ def _check_push_failures(git_root: str, session_id: str) -> Optional[str]:
             fh.seek(baseline)
             new_lines = [ln for ln in fh.read().splitlines() if ln.strip()]
     except Exception:
-        pass  # unreadable log tail; treat as no new lines this pass
+        pass
 
     try:
         with open(cursor_path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(str(log_size))
     except Exception:
-        pass  # cursor write is best-effort bookkeeping; a miss just re-reads from baseline next time
+        pass
 
     branch = _current_branch_cheap(git_root)
     if not is_work_branch(branch):
@@ -417,7 +378,7 @@ def _check_push_failures(git_root: str, session_id: str) -> Optional[str]:
             if cache_mtime >= log_mtime:
                 return None
     except Exception:
-        pass  # cache-freshness probe is optional; fall through and report the verdict
+        pass
 
     failed_lines = [ln for ln in new_lines if _PUSH_FAILED_LINE_RE.search(ln)]
     if not failed_lines:
@@ -432,11 +393,6 @@ def _check_push_failures(git_root: str, session_id: str) -> Optional[str]:
         if rendered is not None:
             return rendered
 
-    # Fallback: the in-process classifier answered nothing usable (a
-    # malformed/unexpected shape) — reproduce the pre-classifier alarm
-    # shape rather than going silent, present-tense claim intact per the
-    # source's own fail-toward-firing contract. No `_unpushed_commit_count`
-    # subprocess rung here — see this function's own docstring.
     return (
         "AUTO-PUSH MID-SESSION FAILURE — {n} new push failure(s) landed in "
         ".git/push-failures.log on `{branch}` since this session started, not "
@@ -448,11 +404,7 @@ def _check_push_failures(git_root: str, session_id: str) -> Optional[str]:
     ).format(n=n_new, branch=branch, last=last_line) + _PUSH_FAILURE_REFERENCE_LINE
 
 
-# ---------------------------------------------------------------------------
 # PLUGIN-HOOKS-JSON-RESTART-GATED — verbatim port of the source script's
-# `_check_hooks_json_staleness`. No engine op involved: a single sha256 file
-# hash plus a per-session cursor file.
-# ---------------------------------------------------------------------------
 def _hooks_json_path(git_root: str) -> str:
     return os.path.join(git_root, "coordinator", "hooks", "hooks.json")
 
@@ -497,7 +449,7 @@ def _check_hooks_json_staleness(git_root: str, session_id: str, common_dir: str)
             with open(cursor_path, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(current_hash)
         except Exception:
-            pass  # cursor write is best-effort bookkeeping; a miss just re-hashes next time
+            pass
         return None
 
     if current_hash == baseline:
@@ -507,7 +459,7 @@ def _check_hooks_json_staleness(git_root: str, session_id: str, common_dir: str)
         with open(cursor_path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(current_hash)
     except Exception:
-        pass  # cursor write is best-effort bookkeeping; a miss just re-hashes next time
+        pass
 
     return (
         "PLUGIN-HOOKS-JSON-RESTART-GATED — coordinator/hooks/hooks.json changed on disk "
@@ -522,24 +474,8 @@ def _check_hooks_json_staleness(git_root: str, session_id: str, common_dir: str)
     )
 
 
-# ---------------------------------------------------------------------------
-# Registered op.
-# ---------------------------------------------------------------------------
 @register_op("hooks.runtime_tripwire_em_check")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PostToolUse(Agent) leg of DoE-claude's `runtime-tripwire-em-check.py`.
-
-    Every input comes from `params["payload"]` — never `os.environ` or this
-    process's own `cwd`/session. `repo_root` (the framework-supplied handler
-    argument) is unused — this op is scope "none" and resolves its own git
-    root from `payload["cwd"]`, matching every other payload-cwd-resolving
-    `hooks.*` op in this family.
-
-    Fail-open on every path — this hook is advisory-only. Returns
-    `no_advisory()` whenever there is nothing to report (including a
-    subagent-side firing session, an unresolvable git root, or a malformed
-    payload); otherwise `post_advisory(<text>)`.
-    """
     payload = payload_of(params)
     try:
         session_id = payload.get("session_id") or ""
@@ -573,7 +509,6 @@ def _handler(params: dict, repo_root=None) -> dict:
         if agents_dir and os.path.isfile(os.path.join(agents_dir, session_id, "em-session-id.txt")):
             return no_advisory()
 
-        # --- Resolver-based fallback for named teammates ---
         if agent_id:
             canonical = _resolve_subagent_identity(agent_id, session_id)
             if (

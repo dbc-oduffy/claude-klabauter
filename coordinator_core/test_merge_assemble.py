@@ -1,16 +1,3 @@
-"""Tests for coordinator_core.merge_assemble + coordinator_core.merge_assemble.
-apply — the merge-ceremony computed skill (B4 chunk C6).
-
-Scope: `brief()`'s compute-only outputs (directive shape/order, judgment
-residue, branch-state trichotomy, version-bump proposal) and `apply()`'s
-composition of `apply_base` (closed dispatch table resolution, the
-`--force` node-ceremony bypass expressed via `already_satisfied`). Does NOT
-invoke a real `node`/git subprocess for a directive handler — those are
-monkeypatched; `coordinator_core.contract.test_apply_base` already covers
-the generic directive-execution engine this module composes.
-
-Spec backlink: DoE-claude:pln-b4-baton-branch-lifecycle-comp-780d48, chunk C6
-"""
 from __future__ import annotations
 
 import subprocess
@@ -22,10 +9,6 @@ import pytest
 from coordinator_core import merge_assemble
 from coordinator_core.merge_assemble import apply as merge_apply
 
-
-# ---------------------------------------------------------------------------
-# compute_branch_state
-# ---------------------------------------------------------------------------
 
 class TestComputeBranchState:
     def test_clean_when_zero_ahead_and_behind(self, tmp_path, monkeypatch):
@@ -68,10 +51,6 @@ class TestComputeBranchState:
         )
 
 
-# ---------------------------------------------------------------------------
-# compute_version_bump_proposal
-# ---------------------------------------------------------------------------
-
 class TestComputeVersionBumpProposal:
     def test_proposes_patch_bump_from_latest_tag(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
@@ -91,10 +70,6 @@ class TestComputeVersionBumpProposal:
         result = merge_assemble.compute_version_bump_proposal(tmp_path)
         assert result == {"current": None, "proposed": None, "bump": "patch"}
 
-
-# ---------------------------------------------------------------------------
-# brief()
-# ---------------------------------------------------------------------------
 
 class TestBrief:
     def _stub_git(self, monkeypatch, *, rev_list_out="0\t1\n", tag_out="v1.0.0\n"):
@@ -118,9 +93,6 @@ class TestBrief:
         result = merge_assemble.brief(repo_root=tmp_path)
         assert result.exit_code == merge_assemble.EXIT_OK
         do = result.decision_object
-        # Canonical 8-key envelope (Review: code-reviewer — Finding 1):
-        # branch_state/release_tag_cut/version_bump live in `artifact`;
-        # gate_verdicts lives in `gates` — a relocation, not a redesign.
         assert set(do.keys()) == {
             "artifact",
             "preflight",
@@ -154,9 +126,7 @@ class TestBrief:
     def test_node_ceremony_gate_self_satisfies_when_the_suite_is_absent(
         self, tmp_path, monkeypatch
     ):
-        # A repo that carries no plugin-ecosystem suite has nothing for this
         # gate to run; dispatching anyway is a MODULE_NOT_FOUND abort on the
-        # ceremony's FIRST hard gate, which wedges the whole run.
         self._stub_git(monkeypatch)
         assert not merge_assemble.node_ceremony_gate_entrypoint(tmp_path).exists()
         gate = merge_assemble.brief(repo_root=tmp_path).decision_object["directives"][0]
@@ -167,8 +137,6 @@ class TestBrief:
     def test_node_ceremony_gate_is_not_satisfied_by_a_directory_at_the_entrypoint(
         self, tmp_path, monkeypatch
     ):
-        # is_file(), not exists() — a directory named run.js is not a runnable
-        # suite, and treating it as present would restore the abort.
         self._stub_git(monkeypatch)
         merge_assemble.node_ceremony_gate_entrypoint(tmp_path).mkdir(parents=True)
         gate = merge_assemble.brief(repo_root=tmp_path).decision_object["directives"][0]
@@ -203,9 +171,6 @@ class TestBrief:
         assert all(jp["recommendation"] is None for jp in do["judgment_points"])
 
     def test_directives_are_well_formed_for_apply_base_ordering(self, tmp_path, monkeypatch):
-        # order_by_depends_on requires every depends_on directive-id (not a
-        # judgment-point id) to itself be present in the same directives
-        # list — d7's depends_on=["d2"] must resolve.
         self._stub_git(monkeypatch)
         do = merge_assemble.brief(repo_root=tmp_path).decision_object
         directive_ids = {d["id"] for d in do["directives"]}
@@ -214,13 +179,6 @@ class TestBrief:
                 if dep.startswith("d") and dep[1:].isdigit():
                     assert dep in directive_ids
 
-
-# ---------------------------------------------------------------------------
-# version_bump_final override — the real defect this chunk fixes: the
-# judgment point offers an override the pre-fix data model had no channel
-# for, so resolving it the only way it permitted always froze the PATCH
-# proposal into d2's cut-tag args regardless of PM intent.
-# ---------------------------------------------------------------------------
 
 class TestVersionBumpOverride:
     def _stub_git(self, monkeypatch, *, rev_list_out="0\t1\n", tag_out="v1.0.0\n"):
@@ -281,13 +239,10 @@ class TestVersionBumpOverride:
             "vX.Y.Z",
             "",
             "v1.2.3.4",
-            "v١.٢.٣",  # non-ASCII (Arabic-Indic) digits — str.isdigit() is
-            # True for these too, so a bare isdigit() check alone would
-            # silently accept them (Review: code-reviewer — Finding: non-
-            # ASCII-digit override).
-            "v1.2. 3",  # embedded whitespace
-            " v1.2.3",  # leading whitespace
-            "v1.2.3 ",  # trailing whitespace
+            "v١.٢.٣",
+            "v1.2. 3",
+            " v1.2.3",
+            "v1.2.3 ",
         ],
     )
     def test_malformed_override_fails_loud(self, tmp_path, monkeypatch, bad_value):
@@ -300,10 +255,6 @@ class TestVersionBumpOverride:
         assert "error" in result.decision_object
 
     def test_leading_zeros_in_override_are_normalized_not_passed_verbatim(self, tmp_path, monkeypatch):
-        # "v01.02.03" passes the digit check, but the RAW string must never
-        # reach `git tag` — the reconstructed-from-parsed-ints tag is what
-        # `cut_tag_input`/d2's `cut-tag` arg carries. (Review: code-reviewer
-        # — Finding: leading-zeros-passed-verbatim.)
         self._stub_git(monkeypatch)
         decisions = {
             "version_bump_final": {"disposition": "override", "value": "v01.02.03"}
@@ -316,9 +267,9 @@ class TestVersionBumpOverride:
     @pytest.mark.parametrize(
         "bad_entry",
         [
-            {"disposition": "override"},  # `value` key absent entirely
-            {"disposition": "override", "value": 123},  # non-string value
-            {"disposition": "override", "value": ["v1.0.0"]},  # non-string value
+            {"disposition": "override"},
+            {"disposition": "override", "value": 123},
+            {"disposition": "override", "value": ["v1.0.0"]},
         ],
     )
     def test_malformed_override_shape_fails_loud(self, tmp_path, monkeypatch, bad_entry):
@@ -329,10 +280,6 @@ class TestVersionBumpOverride:
         assert "error" in result.decision_object
 
     def test_confirmed_disposition_with_stray_value_key_is_inert(self, tmp_path, monkeypatch):
-        # `confirmed` short-circuits on `disposition != "override"` before
-        # ever reading `value` — a stray `value` key must not change the
-        # outcome (Review: code-reviewer — probed-and-confirmed-OK item,
-        # now covered by an explicit test).
         self._stub_git(monkeypatch)
         decisions = {
             "version_bump_final": {"disposition": "confirmed", "value": "v9.9.9"}
@@ -371,8 +318,6 @@ class TestVersionBumpOverride:
         d2 = next(d for d in do["directives"] if d["id"] == "d2")
         assert d2["args"] == ["cut-tag", "rel-2.5.0"]
 
-        # Wrong prefix for the override value is rejected even though it
-        # would parse fine under the default "v" prefix.
         bad_decisions = {
             "version_bump_final": {"disposition": "override", "value": "v2.5.0"}
         }
@@ -381,12 +326,6 @@ class TestVersionBumpOverride:
         )
         assert bad_result.exit_code != merge_assemble.EXIT_OK
 
-
-# ---------------------------------------------------------------------------
-# version_bump_final decline — a deliberate "merge, but cut no tag this
-# time" answer, distinct from leaving the point unanswered
-# (docs/plans/2026-09-06-declined-judgment-answer-is-not-silence.md, C2).
-# ---------------------------------------------------------------------------
 
 class TestVersionBumpDecline:
     def _stub_git(self, monkeypatch, *, rev_list_out="0\t1\n", tag_out="v1.0.0\n"):
@@ -406,10 +345,6 @@ class TestVersionBumpDecline:
         assert do["artifact"]["release_tag_cut"] is None
 
     def _stub_all_handlers(self, monkeypatch):
-        # Every directive that lands before the judgment halt (d0/d_grant_write)
-        # must dispatch through a handler that does not need a real repo —
-        # same pattern as TestApplyDispatchTable.test_every_directive_cli_
-        # resolves_in_the_closed_table.
         for name in merge_apply._CLI_DISPATCH:
             monkeypatch.setitem(
                 merge_apply._CLI_DISPATCH, name, lambda args, repo_root, _n=name: {"cli": _n}
@@ -427,7 +362,6 @@ class TestVersionBumpDecline:
         assert "version_bump_final" in report.get("declined_judgment_points", [])
         assert "version_bump_final" not in report.get("unresolved_judgment_points", [])
         # ship_verdict was never answered at all — it stays UNANSWERED, not
-        # conflated with the declined point.
         assert "ship_verdict" in report.get("unresolved_judgment_points", [])
 
     def test_bare_string_decline_normalizes_to_disposition_not_override(self, tmp_path, monkeypatch):
@@ -442,10 +376,6 @@ class TestVersionBumpDecline:
 
     def test_bare_decline_tuple_matches_declared_non_version_dispositions(self):
         # `_VERSION_BUMP_FINAL_BARE_
-        # DECLINE` against the point's own declared dispositions so a fourth
-        # non-d2-resolving disposition added to `version_bump_final` and
-        # forgotten here fails loud, instead of quietly falling through to
-        # the override path and being misdiagnosed as a bad tag shape.
         judgment_points = merge_assemble.build_judgment_points()
         point = next(jp for jp in judgment_points if jp["id"] == "version_bump_final")
         non_version_values = {
@@ -453,10 +383,6 @@ class TestVersionBumpDecline:
         }
         assert non_version_values == set(merge_assemble._VERSION_BUMP_FINAL_BARE_DECLINE)
 
-
-# ---------------------------------------------------------------------------
-# apply() — force bypass + dispatch-table composition (no real subprocess)
-# ---------------------------------------------------------------------------
 
 class TestApplyForceBypass:
     def test_force_marks_node_gate_already_satisfied(self):
@@ -508,9 +434,7 @@ class TestApplyDispatchTable:
             )
 
         exit_code, report = merge_apply.apply(repo_root=tmp_path, force=True)
-        # d2/d4/d5 depend on judgment points with no `decisions` supplied,
         # so the run still reports HALTED_AT_JUDGMENT overall — but every
-        # OTHER directive (including the forced d0) still lands.
         assert exit_code == merge_apply.APPLY_EXIT_HALTED_AT_JUDGMENT
         assert "d0" in report["landed"]
         assert "d1" in report["landed"]
@@ -529,11 +453,6 @@ class TestApplyDispatchTable:
         assert exit_code == merge_apply.APPLY_EXIT_TRANSPORT_FAIL
         assert "error" in report
 
-
-# ---------------------------------------------------------------------------
-# _dispatch_tier_u_grant — P071-C3: one argv path shared with
-# backlog_grind_assemble, and a denied `check` raises here too.
-# ---------------------------------------------------------------------------
 
 class TestDispatchTierUGrant:
     def test_denied_check_raises(self, tmp_path, monkeypatch):

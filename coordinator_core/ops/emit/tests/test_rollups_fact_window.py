@@ -1,9 +1,3 @@
-"""Unit coverage for ``rollups.collect``'s ``fact_window`` — the field naming the window a
-rollup row's facts were computed over, so a consumer no longer has to infer it from
-``max_observed_at`` and deployment topology.
-
-Spec backlink: docs/plans/2026-09-04-rollup-rows-name-their-own-fact-window.md
-"""
 
 from __future__ import annotations
 
@@ -70,8 +64,7 @@ def _rollups(ctx: EmitContext):
 
 
 def test_week_row_fact_window_matches_iso_week_of_observed_at_not_wall_clock(tmp_path):
-    """``observed_at`` is deliberately NOT today, so a wall-clock regression fails this."""
-    observed_at = "2026-03-18T12:00:00Z"  # Wednesday of 2026-W12
+    observed_at = "2026-03-18T12:00:00Z"
     _write_completion(tmp_path, "inside.md", "2026-03-16")
     ctx = _make_ctx(observed_at, tmp_path)
 
@@ -80,18 +73,14 @@ def test_week_row_fact_window_matches_iso_week_of_observed_at_not_wall_clock(tmp
     assert week["period"] == "2026-W12"
     assert week["fact_window"] == {
         "kind": "iso-week",
-        "start": "2026-03-16",  # Monday of 2026-W12
-        "end": "2026-03-22",  # Sunday of 2026-W12
+        "start": "2026-03-16",
+        "end": "2026-03-22",
     }
-    # The bound is NOT derived from the real-world today of whenever this test happens to run.
     assert week["fact_window"]["start"] != datetime.date.today().isoformat()
 
 
 def test_week_row_fact_window_agrees_with_the_iso_year_boundary_selection(tmp_path):
-    """2027-01-01 is ISO 2026-W53; the emitted bounds must agree with the tuple-compared filter
-    that actually selected the records (``collect``'s WEEK narrowing), not a calendar-year
-    recomputation."""
-    observed_at = "2027-01-01T12:00:00Z"  # ISO 2026-W53, calendar year 2027
+    observed_at = "2027-01-01T12:00:00Z"
     _write_completion(tmp_path, "boundary.md", "2026-12-31", chain="chain-a")
     ctx = _make_ctx(observed_at, tmp_path)
 
@@ -100,8 +89,8 @@ def test_week_row_fact_window_agrees_with_the_iso_year_boundary_selection(tmp_pa
     assert week["period"] == "2026-W53"
     assert week["fact_window"] == {
         "kind": "iso-week",
-        "start": "2026-12-28",  # Monday of ISO 2026-W53
-        "end": "2027-01-03",  # Sunday of ISO 2026-W53
+        "start": "2026-12-28",
+        "end": "2027-01-03",
     }
 
 
@@ -118,8 +107,6 @@ def test_day_row_carries_its_own_fact_window(tmp_path):
 
 
 def test_day_and_week_rows_disagree_in_kind_but_both_are_present(tmp_path):
-    """Both grains get a window — a day row without one while the week row has one would
-    invite a consumer to infer absent means 30-day."""
     observed_at = "2026-03-18T12:00:00Z"
     _write_completion(tmp_path, "today.md", "2026-03-18")
     ctx = _make_ctx(observed_at, tmp_path)
@@ -132,8 +119,6 @@ def test_day_and_week_rows_disagree_in_kind_but_both_are_present(tmp_path):
 
 
 def test_entity_accepts_fact_window_absent_and_does_not_default_it(tmp_path):
-    """The rollout case: a row emitted before this field existed. Absence must round-trip as
-    ``None``, never be filled in with any default."""
     ctx = _make_ctx("2026-03-18T12:00:00Z", tmp_path)
     row = _minimal_day_row(ctx, fact_window_present=False)
     model = DayRollup.model_validate(row)
@@ -154,7 +139,6 @@ def test_entity_accepts_fact_window_present_on_day_and_week(tmp_path):
 
 
 def test_fact_window_rejects_extra_keys(tmp_path):
-    """Every rollup model is ``extra=forbid``; ``FactWindow`` must be too."""
     ctx = _make_ctx("2026-03-18T12:00:00Z", tmp_path)
     row = _minimal_day_row(ctx, fact_window_present=True)
     row["fact_window"]["surprise"] = "nope"

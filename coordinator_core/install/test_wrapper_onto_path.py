@@ -1,10 +1,3 @@
-"""Tests for coordinator_core.install.wrapper_onto_path (op install.wrapper_onto_path).
-
-Covers: fresh install, AC7 double-invocation idempotency (true no-write no-op on
-an unchanged rerun, exec bit still reapplied), content-changed rerun overwrites,
-check_only makes no filesystem writes, PATH-membership via os.pathsep (not a
-literal ':'), missing/empty wrapper_src, and a nonexistent wrapper_src.
-"""
 from __future__ import annotations
 
 import os
@@ -21,8 +14,6 @@ from coordinator_core.install.wrapper_onto_path import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -74,7 +65,6 @@ def test_double_invocation_is_a_true_no_write_no_op(wrapper_src, tmp_path, monke
 
     assert second["modified"] is False
     assert second["installed_path"] == first["installed_path"]
-    # Content untouched on the no-op branch: mtime unchanged (no copyfile call).
     assert os.stat(installed_path).st_mtime_ns == mtime_before
 
 
@@ -175,11 +165,6 @@ def test_default_wrapper_bin_dir_is_platform_appropriate():
         assert target == Path.home() / ".local" / "bin"
 
 
-# --------------------------------------------------------------------------
-# resolution journal wiring (C6)
-# --------------------------------------------------------------------------
-
-
 @pytest.fixture(autouse=True)
 def _journal_env(tmp_path, monkeypatch):
     from coordinator_core.install import resolution_journal as rj
@@ -224,8 +209,6 @@ def test_live_install_journals_the_running_platform_clause(wrapper_src, tmp_path
     assert entries[0].kind == "file-path"
     assert entries[0].path == result["installed_path"]
 
-    # The other platform's clause never fired here -- unreported, not an
-    # empty resolution.
     assert _other_platform_clause_index() not in resolutions
 
 
@@ -240,9 +223,6 @@ def test_check_only_never_journals(wrapper_src, tmp_path, monkeypatch):
 
 
 def test_no_op_rerun_still_journals_the_real_on_disk_entry(wrapper_src, tmp_path, monkeypatch):
-    """A second, content-unchanged install (`modified=False`) still
-    reapplies the exec bit and the file is still concretely present --
-    that is a real resolved fact, not a phantom write."""
     from coordinator_core.install import resolution_journal as rj
 
     _patch_bin_dir(monkeypatch, tmp_path)
@@ -274,21 +254,6 @@ def test_nonexistent_wrapper_src_never_journals(tmp_path):
     _install_wrapper_onto_path({"wrapper_src": str(missing)})
 
     assert rj.read_journal() == {}
-
-
-# --- Regression: module-level resolution_journal import vs the ops eager walk
-#
-# wrapper_onto_path.py and dep_check.py both import resolution_journal at
-# module level, unlike every other writer in this diff (clone_sibling_repo.py,
-# detect_test_cmd.py, ensure_venv.py, first_run.py, gen_settings_hooks.py),
-# which defer that import specifically to avoid a load-order-dependent cycle
-# with coordinator_core.ops's eager op-registration walk. The executor's own
-# claim that these two "did not hit this cycle" was self-reported with no
-# accompanying smoke test — and a sibling self-report (substrate.py's) turned
-# out to be stale on this exact branch. This test settles it directly, the
-# same way test_machine_resolver.py's fresh-process regression test does:
-# a genuinely fresh interpreter, not pytest's own already-populated
-# sys.modules, is the only place this class of cycle reproduces.
 
 
 def test_fresh_process_import_does_not_trigger_ops_eager_import_cycle():

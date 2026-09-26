@@ -71,16 +71,10 @@ from coordinator_core.win_portability import (
 from coordinator_core.ops.ceremony.pipeline_context import PipelineContext
 from coordinator_core.session import core as session_core
 
-# Real `git init` fixture + real `git diff`/`git status` scans reached through
-# quick_wrap_assemble.brief() -> commit_session_offer_async -> compute_offer.
-# Spawn ratchet: coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _make_repo(tmp_path: Path) -> Path:
-    """A real, empty git repo with one initial commit (plus the initial
-    commit `test_safe_commit_offer.py::_make_repo` also carries --
-    `commit_session_offer_async`'s own commit path needs a resolvable HEAD)."""
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True,
@@ -94,9 +88,6 @@ def _make_repo(tmp_path: Path) -> Path:
 
 
 def _untracked_under(repo: Path, rel_dir: str) -> list[str]:
-    """Every path `git status --porcelain` reports under *rel_dir* -- scoped
-    to the session's own artifact directory, never a bare/global status
-    check (see module Negative-spec)."""
     proc = subprocess.run(
         ["git", "status", "--porcelain", "--", rel_dir],
         cwd=str(repo),
@@ -116,23 +107,15 @@ def test_quick_wrap_close_commits_declared_artifacts_leaving_no_orphans(
     session_core.init(sid, "test goal", str(repo))
     monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
 
-    # --- C2 producer: emit a ceremony receipt; self-declares via
-    # session_scope.touch_written_path (receipt_emit.py's own contract). ---
     ctx = PipelineContext(ceremony="wsc", scope_mode="auto")
     receipt_path, _op_tail = receipt_emit.emit_receipt(
         ctx, repo_root=repo, sid=sid, emitted_at="2026-08-20T00:00:00Z"
     )
     assert receipt_path.is_file()
 
-    # Sanity check on the fixture itself: before the ceremony runs, the
-    # artifact directory is genuinely dirty (untracked).
     before = _untracked_under(repo, "state/ceremony")
     assert before, "fixture setup did not actually leave dirty declared artifacts"
 
-    # --- Run the one reachable close ceremony (C5): /quick-wrap. ---
-    # `commit=True`: this test exercises the real ceremony's commit path, the one
-    # `main()` caller that opts into C5's carve-out (state/bug-backlog/2026-09-06-
-    # quick-wrap-assemble-brief-commits-while-every-sibling-brief-only-reads.yaml).
     envelope = qwa.brief(worktree_root=repo, commit=True)
     assert envelope["gates"]["commit_outcome"]["status"] in (
         "committed",
@@ -140,13 +123,9 @@ def test_quick_wrap_close_commits_declared_artifacts_leaving_no_orphans(
         "partial",
     ), envelope["gates"]["commit_outcome"]
 
-    # --- AC7: zero untracked paths remain under this session's OWN artifact
-    # directory after the close ceremony ran. ---
     after = _untracked_under(repo, "state/ceremony")
     assert after == [], f"orphaned paths survived the close ceremony: {after!r}"
 
-    # The receipt is genuinely committed, not merely absent from `git status`
-    # because it was deleted.
     assert receipt_path.is_file()
     log = subprocess.run(
         ["git", "log", "--name-only", "--pretty=format:"],

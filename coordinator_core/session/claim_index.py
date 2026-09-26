@@ -176,109 +176,29 @@ from coordinator_core.session import core, touch_record
 from coordinator_core.session.path_dialect import canonicalize_relative_path
 
 #: C4 (AC18) — re-keyed from a wall-clock cap to a PROCESS-TIME cap. The
-#: original ``time.monotonic()`` deadline fires under ordinary machine load
-#: (50-70 concurrent sessions is this repo's load norm, not the peak — see
-#: CLAUDE.md § Load norm) even when THIS rebuild's own CPU cost is trivial —
-#: a wall-clock cap conflates "this walk is slow" with "the box is busy",
-#: and this repo's own rule is that wall clock measures peer load, never
-#: cost. ``time.process_time()`` only advances while this process is
-#: actually executing, so a scheduler-preempted rebuild on a loaded box no
 #: longer degrades to UNANSWERABLE purely because of contention it did not
-#: cause. Renamed 2026-08-27 (docs/problems/2026-08-27-the-touched-record-
-#: workstream-leaves-one-lever-and-nine-tails.md, Item 3) from
 #: ``REBUILD_WALL_CLOCK_CAP_SECS`` — that name asserted the opposite of what
-#: this constant is read against; the CODE was already correct (see AC18
-#: above), only the name lied. Do NOT reinstate C0's 541.48ms / 50-peers-x-
-#: 5000-lines figure as this cap's justification: that width was retired
-#: 2026-08-27 on measurement (the live corpus is 270 claimants at a median
-#: of 5 events, and the 541ms was a capped call timing this very cap). The
-#: cap exists for an unbounded corpus, not for that number.
 REBUILD_PROCESS_TIME_CAP_SECS = 0.5
 
-#: Sentinel returned by lookup() for a path an (aborted or unresolvable)
-#: rebuild could not answer for — distinct from "unclaimed" (an empty
-#: claimant list). The caller (C2, a later plan chunk) applies its own
-#: per-path fail-closed policy to this marker.
 UNANSWERABLE = "__UNANSWERABLE__"
 
 #: ABORT-CAUSE CARRIER (C1, docs/plans/2026-08-11-claim-index-abort-cause-and-
-#: cli-blindness.md). Plain string constants on ``_IndexState.abort_cause`` /
-#: ``_LookupResult.abort_cause``, not an ``enum.Enum``. Chosen over an enum
-#: because every existing consumer of this module treats ``_LookupResult``
 #: as ``UNANSWERABLE``-flavored dict-plus-``complete`` (a plain str/bool
-#: pair, per that class's own docstring) and a CLI (``session-claim-cli``)
-#: is the only other reader added by this plan chunk — it just needs a
-#: printable token, not a type to branch on. A plain module-level string
-#: constant is import-free for that CLI (no ``from claim_index import
-#: AbortCause`` enum dependency) and trivially ``==``-comparable in a test
-#: without an import of the enum member. ``None`` means "not aborted" —
-#: distinct from any of the three string causes below, so
-#: ``abort_cause is None`` doubles as the completeness check without
-#: re-reading ``.complete``.
 ABORT_CAUSE_EMPTY_BASE = "empty_base"
 ABORT_CAUSE_CAP_EXCEEDED = "cap_exceeded"
 ABORT_CAUSE_IO_ERROR = "io_error"
 
 _AGENTS_SUBDIR = ".agents"
-#: C4 — the substrate this module walks flips from the bash-dialect
-#: ``touched.txt`` to C3's self-describing record. AC7: this module reads
-#: the SAME seam ``scope.compute_scope`` reads (``touch_record``'s family +
-#: decode primitives), with no independent path-construction or line-dialect
-#: parsing of its own left in this file.
-#:
 #: NEGATIVE SPEC — what a path's ABSENCE from this index does NOT mean
-#: (2026-08-26, ``state/audits/2026-08-26-touch-ledger-coverage-and-the-
-#: published-dialect-split.md``). Absence is NOT evidence that no session
-#: authored the path. This module reads ONE dialect, and since the compat
-#: union came out (2026-08-26) so does every claim reader in this package —
-#: a pre-cutover ``touched.txt`` is no longer a claim surface anywhere,
-#: having been drained (``legacy_touch_corpus_migrate``, verified by both
-#: ``legacy_touch_corpus_drain_check`` and the content-level
-#: ``legacy_touch_corpus_straggler_check``) with no writer left that can
-#: recreate one. ``bash_guards/dispatch_checks.py`` keeps its own union; it
-#: is an advisory guard, not a claim authority. Two live classes of
-#: authored-but-absent path remain: any file written by a shell redirect,
-#: heredoc, or spawned third-party CLI, which no writer observes at all;
-#: and — whenever the mirror is percolated with a reader ahead of its
-#: writer — every Edit/Write-authored path in the fleet. That second class
-#: was live for hours on 2026-08-26 and produced a fully-populated
-#: ``complete: True`` answer while omitting the caller's own work. Do NOT
-#: read a missing entry as "unclaimed"; read it as "this index cannot say".
-#:
-#: AC7, 2026-08-27: the filename is no longer spelled here. It is
 #: ``touch_record.RECORD_FILENAME``, and the sink is built by
-#: ``touch_record.sink_path``. The negative spec above is what this name
-#: still carries; the literal it used to hold belongs to the record module.
 _TOUCHED_FILENAME = touch_record.RECORD_FILENAME
 
 
 def _has_claim_surface(sink_path: str) -> bool:
-    """True when *sink_path*'s directory holds any readable claim surface: the
-    live jsonl sink or one of its rotated family members.
-
-    Stat-only, no content read, matching this enumerator's contract.
-    """
     return bool(os.path.isfile(sink_path) or touch_record.discover_family(sink_path))
 
 
 def _normalize_key(path: str) -> str:
-    """Canonicalize a path string to the SAME dialect ``touched.txt`` is
-    written in, so a key parsed from disk and a caller-supplied lookup path
-    compare equal regardless of separator dialect.
-
-    A thin call-through to
-    ``coordinator_core.session.path_dialect.canonicalize_relative_path`` —
-    the shared, subprocess-free canonicalizer both this module and
-    ``coordinator_core.session.scope`` (its ``normalize_touch_path`` relative
-    arm, and ``classify_touch_entry``'s inline copy) now import, closing the
-    two-dialect divergence a backslashed relative pathspec used to hit (C1,
-    docs/plans/2026-08-11-claim-release-and-the-gate-that-cannot-clear.md).
-    This module's inputs are already repo-relative (either written by
-    ``scope.py``'s own writer, or a caller-supplied relative pathspec), so no
-    absoluteness handling is needed here — that stays out of scope for this
-    call, matching ``path_dialect.canonicalize_relative_path``'s own
-    contract.
-    """
     return canonicalize_relative_path(path)
 
 
@@ -437,15 +357,8 @@ class _IndexState:
     edit_ts: Dict[str, Dict[str, datetime]] = dataclasses.field(default_factory=dict)
     recorded_name: Dict[str, Dict[str, str]] = dataclasses.field(default_factory=dict)
 
-    #: path -> {claimant_sid: kind}, populated on TOUCH and popped on RELEASE
-    #: exactly as ``recorded_name`` above. The value is ``TouchEvent.kind``
     #: (``touch_record.KIND_WRITE`` / ``KIND_READ``); a claimant whose line
-    #: carries no kind -- every line written before 2026-09-20, and any channel
-    #: that cannot tell -- is ABSENT here rather than defaulted, because a
-    #: guessed kind is worse than a visible unknown. Consumers deciding whether
-    #: a hold blocks must route through ``touch_record.kind_blocks_a_peer_commit``
     #: rather than comparing to ``KIND_READ`` themselves, so absent keeps
-    #: meaning "blocks" in exactly one place.
     recorded_kind: Dict[str, Dict[str, str]] = dataclasses.field(default_factory=dict)
     agent_claims: Dict[str, Dict[str, List[Optional[str]]]] = dataclasses.field(
         default_factory=dict
@@ -453,25 +366,6 @@ class _IndexState:
 
 
 def _read_stream_claims(sink_path: str) -> tuple:
-    """C4 (AC7) — the seam read: one claimant's on-disk family (the live
-    ``touch-record.jsonl`` plus zero or more rotated siblings), decoded and
-    folded to ITS OWN last-verb-wins claim map via
-    ``touch_record._read_stream_claims`` — the exact primitive
-    ``scope.compute_scope`` now reads through too (C4's Step 3/3b). No
-    independent path-construction, family discovery, or line-dialect parse
-    is done in this module any more; this is a thin call-through.
-
-    Returns ``(claims_by_path, read_ok)`` — ``read_ok`` mirrors this
-    module's pre-existing ``(value, complete)`` convention (see
-    ``_agent_owner_sid``/``_enumerate_claim_sinks``): ``False`` iff
-    ``touch_record``'s own degrade flag fired (an unreadable family member,
-    or a complete line that failed to decode — AC6's typed signal), matching
-    the bug-backlog concern the deleted ``_read_lines_discard_torn_tail``
-    docstring named (an unreadable claimant file must never resolve
-    identically to "no claims from this claimant"). A torn/unterminated
-    trailing line is never a degrade signal here either — ``touch_record``
-    already drops it before it reaches decode.
-    """
     claims, degraded, _reasons = touch_record._read_stream_claims(sink_path)
     return claims, not degraded
 
@@ -499,31 +393,6 @@ def _agent_owner_sid(agent_dir_path: str) -> tuple:
 
 
 def _enumerate_claim_sinks(base: str) -> tuple:
-    """Enumerate every ``(touch-record.jsonl path, claimant session id,
-    agent id)`` triple under ``base`` — session dirs directly (``agent id``
-    is ``None`` — the claim is the session's own, not any dispatched
-    agent's), agent dirs via their ``em-session-id.txt`` back-pointer
-    (``agent id`` is that agent dir's own name, the OWNER sid stays the
-    back-pointer target as before). Deterministically ordered (sorted by
-    entry name) so a capped-out walk aborts at a reproducible point. Pure
-    ``os.scandir``/``os.path`` calls — no file CONTENT is read here.
-
-    C2 (docs/plans/2026-08-27-safe-commit-offer-excludes-a-live-agent.md):
-    the agent id is a directory name already read by this walk (the
-    ``agent_entry.name`` this loop already held to resolve ``owner_sid`` via
-    the back-pointer) — widening the tuple to carry it costs ZERO new I/O,
-    same scan, same files, same parse.
-
-    Returns ``(pairs, complete)``. ``complete`` is False iff a directory
-    this walk was able to REACH could not be fully enumerated for a reason
-    other than it genuinely not existing — Review: coordinator:code-reviewer
-    P1, a bare ``except OSError`` here previously collapsed permission
-    errors and other I/O failures into "zero claims" (same verdict as a
-    directory that legitimately does not exist), silently authorizing a
-    write for a path this walk never actually resolved. A genuinely-absent
-    directory (``FileNotFoundError``) is still "no claims" and does not
-    mark the walk incomplete.
-    """
     pairs: List[tuple] = []
     complete = True
 
@@ -547,12 +416,6 @@ def _enumerate_claim_sinks(base: str) -> tuple:
         if not is_dir:
             continue
         touched_path = os.path.join(entry.path, _TOUCHED_FILENAME)
-        # C4: a claimant with no LIVE file but a rotated-away sibling (C2's
-        # rotation, AC17) still has real claims on disk -- the live-file-
-        # only `isfile` check would silently drop them. `discover_family`
-        # is a cheap `glob` + `exists`, not a content read. `_has_claim_surface`
-        # adds the third case: a legacy-only claimant, readable through the
-        # compat union and otherwise unreleasable by any route.
         if _has_claim_surface(touched_path):
             pairs.append((touched_path, entry.name, None))
 
@@ -605,8 +468,6 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
         state = _IndexState(claims={}, complete=False, abort_cause=ABORT_CAUSE_EMPTY_BASE)
         return state
 
-    # AC18 — process-time deadline, not wall-clock (see the constant's own
-    # docstring for why).
     process_deadline = time.process_time() + REBUILD_PROCESS_TIME_CAP_SECS
     claims: Dict[str, set] = {}
     edit_ts: Dict[str, Dict[str, datetime]] = {}
@@ -631,44 +492,22 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
         for path, event in stream_claims.items():
             if event.verb == touch_record.VERB_TOUCH:
                 claims.setdefault(path, set()).add(claimant_sid)
-                # C2: this file's source (None for the claimant's own dir,
-                # else the agent dir name) attributed to this claim.
                 agent_claims.setdefault(path, {}).setdefault(claimant_sid, set()).add(
                     agent_id
                 )
-                # AC21: a legacy line with no parseable timestamp arrives as
-                # `timestamp=0.0` ("unknown time"). `edit_ts`'s own contract
-                # (see `_IndexState`) is that such a claimant is ABSENT from
-                # this mapping while still present in `claims` -- recording
-                # it as a 1970 instant would make an active claimant read as
-                # the stalest on the box.
                 if event.timestamp > 0:
                     edit_ts.setdefault(path, {})[claimant_sid] = datetime.fromtimestamp(
                         event.timestamp, tz=timezone.utc
                     )
-                # C2 (recorded_name): the writer's SendMessage-addressable
-                # name at claim time, when the record carries one. Absence
-                # (legacy line, or a foreign-sid replay -- see
-                # ``touch_record.append_event``'s own docstring) leaves the
-                # claimant simply out of this mapping, same convention as
-                # ``edit_ts`` above -- never a degrade signal.
                 if event.name:
                     recorded_name.setdefault(path, {})[claimant_sid] = event.name
-                # Same convention one line up: present only when the record
-                # states it, absent for every pre-axis line. Never defaulted.
                 if event.kind:
                     recorded_kind.setdefault(path, {})[claimant_sid] = event.kind
-            else:  # RELEASE — a release only ever removes the claimant from
-                # the aggregate bucket. A same-file re-claim after a release
-                # can't reach this branch: this per-file scan already
-                # collapsed to one verb per path (touch_record's own
-                # last-verb-wins fold).
+            else:
                 claims.get(path, set()).discard(claimant_sid)
                 edit_ts.get(path, {}).pop(claimant_sid, None)
                 recorded_name.get(path, {}).pop(claimant_sid, None)
                 recorded_kind.get(path, {}).pop(claimant_sid, None)
-                # C2: drop exactly THIS file's source attribution, not the
-                # whole sid -- a peer agent's own live claim is untouched.
                 sid_sources = agent_claims.get(path, {}).get(claimant_sid)
                 if sid_sources is not None:
                     sid_sources.discard(agent_id)
@@ -924,10 +763,6 @@ def commit_set(
     )
 
 
-#: The four verdicts :func:`classify_paths` returns, one per queried path.
-#: Named constants rather than bare strings because a consumer branches on
-#: them to build an operator-facing refusal, and a typo in a literal reads as
-#: "no branch matched" rather than failing.
 OWNERSHIP_MINE = "mine"
 OWNERSHIP_PEER = "peer"
 OWNERSHIP_UNCLAIMED = "unclaimed"

@@ -1,13 +1,3 @@
-"""test_publish_round_pin_and_identity_attribution — direct unit coverage
-for the SHA-pin mechanism (`_round_pin_source_sha`) and the identity-finding
-attribution helpers (`_attribute_identity_finding_row`,
-`_attribute_identity_findings`) added by the s5-sha-pin-identity-hoist
-slice. These three functions previously shipped with zero direct tests
-despite `_round_pin_source_sha` being the mechanism the slice's own commit
-message calls out as the more important half.
-
-Run: python -m pytest coordinator/bin/tests/test_publish_round_pin_and_identity_attribution.py -q
-"""
 
 from __future__ import annotations
 
@@ -19,8 +9,6 @@ from pathlib import Path
 
 import pytest
 
-# Spawns real git subprocesses; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -72,14 +60,7 @@ def _make_target(name: str, dest_dir: Path, source_dir: Path, *, mode: str = "mi
     )
 
 
-# ---------------------------------------------------------------------------
-# `_round_pin_source_sha`
-# ---------------------------------------------------------------------------
 def test_round_pin_source_sha_caches_once_per_toplevel(tmp_path):
-    """Two contributing roots (subdirectories) sharing one git toplevel
-    must reuse the SAME cached sha — the whole point of the round pin is
-    that every row reading a shared toplevel agrees, not just that each
-    root individually resolves correctly."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     (repo / "a").mkdir()
@@ -96,18 +77,11 @@ def test_round_pin_source_sha_caches_once_per_toplevel(tmp_path):
     assert sha_a == head
     assert sha_b == head
     assert sha_a == sha_b
-    # Only one cache entry — keyed by toplevel, not by root.
     assert len(pinned) == 1
-    # Only the FIRST resolution prints — the second is a cache hit and must
-    # not re-announce (round-start pinning would otherwise double-log a
-    # shared toplevel once per contributing root).
     assert out.getvalue().count("Round source pinned") == 1
 
 
 def test_round_pin_source_sha_cache_survives_head_advancing(tmp_path):
-    """Once a toplevel is pinned, a later call for the SAME toplevel must
-    return the cached sha even if HEAD has since moved — this is the exact
-    mechanism that closes the mid-round-commit race."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     (repo / "f.txt").write_text("v1", encoding="utf-8")
@@ -121,7 +95,7 @@ def test_round_pin_source_sha_cache_survives_head_advancing(tmp_path):
     _commit_all(repo, "v2")
 
     second = publish._round_pin_source_sha(repo, pinned, out=io.StringIO(), late=False)
-    assert second == head1  # still the round-start pin, not the new HEAD
+    assert second == head1
 
 
 def test_round_pin_source_sha_late_pin_announces_itself(tmp_path):
@@ -144,10 +118,6 @@ def test_round_pin_source_sha_raises_git_materialize_error_outside_work_tree(tmp
 
 
 def test_round_pin_source_sha_error_degrades_to_per_row_skip_pattern(tmp_path):
-    """Mirrors `main`'s round-start pinning loop (publish.py ~8767-8781):
-    a `GitMaterializeError` for one root must be caught and reported, never
-    left to propagate and abort the whole round — the try/except there is
-    what's supposed to guarantee this."""
     not_a_repo = tmp_path / "not-a-repo"
     not_a_repo.mkdir()
     pinned: "dict[str, str]" = {}
@@ -157,17 +127,10 @@ def test_round_pin_source_sha_error_degrades_to_per_row_skip_pattern(tmp_path):
     except publish.GitMaterializeError as exc:
         caught = exc
     assert caught is not None
-    # The failing root must never be cached as a false pin.
     assert pinned == {}
 
 
-# ---------------------------------------------------------------------------
-# `_delta_row_source_sha` reading through the round pin (Finding 1 fix)
-# ---------------------------------------------------------------------------
 def test_delta_row_source_sha_reads_through_round_pin_not_fresh_head(tmp_path, monkeypatch):
-    """The delta skip-check/record must agree with the sha this row actually
-    materialized from — not a fresh HEAD read that a peer's mid-round commit
-    could have already moved past the round pin."""
     source_repo = tmp_path / "source"
     _init_repo(source_repo)
     (source_repo / "f.txt").write_text("v1", encoding="utf-8")
@@ -177,20 +140,15 @@ def test_delta_row_source_sha_reads_through_round_pin_not_fresh_head(tmp_path, m
     monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
 
     pinned: "dict[str, str]" = {}
-    # Simulate round-start pinning having already run before this row.
     publish._round_pin_source_sha(source_repo, pinned, out=io.StringIO(), late=False)
 
-    # A peer session commits mid-round.
     (source_repo / "f.txt").write_text("v2", encoding="utf-8")
     _commit_all(source_repo, "v2")
 
     sha = publish._delta_row_source_sha(target, pinned)
-    assert sha == f"{source_repo}:{head1}"  # the PINNED sha, not the drifted HEAD
+    assert sha == f"{source_repo}:{head1}"
 
 
-# ---------------------------------------------------------------------------
-# `_attribute_identity_finding_row` / `_attribute_identity_findings`
-# ---------------------------------------------------------------------------
 def test_attribute_identity_finding_row_longest_prefix_wins(tmp_path):
     repo = tmp_path / "repo"
     _init_repo(repo)
@@ -205,7 +163,7 @@ def test_attribute_identity_finding_row_longest_prefix_wins(tmp_path):
     rows = [toplevel_row, sub_row, nested_row]
 
     resolved = publish._attribute_identity_finding_row("sub/nested/file.txt:1: finding", rows)
-    assert resolved is nested_row  # the longest matching prefix, not "sub"
+    assert resolved is nested_row
 
 
 def test_attribute_identity_finding_row_falls_back_to_toplevel(tmp_path):

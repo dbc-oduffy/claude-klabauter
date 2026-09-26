@@ -63,9 +63,6 @@ from typing import Optional
 from coordinator_core.hooks._envelope import no_advisory, payload_of, post_advisory
 from coordinator_core.ipc import register_op
 
-# One (module_path, op_attr) pair per composed leg — lazy per-call import so
-# a not-yet-landed sibling chunk degrades that leg to silence rather than
-# breaking import of this module.
 _LEG_MODULES = (
     "coordinator_core.hooks.derive_global_doctrine_live_copy",
     "coordinator_core.hooks.derive_setup_copies",
@@ -74,10 +71,6 @@ _LEG_MODULES = (
 
 
 def _extract_text(result) -> "Optional[str]":
-    """Read any `hooks.*` envelope-shaped or flat `{"message": str}`-shaped
-    return uniformly — same reading `stop_dispatch._extract_advisory` uses
-    for its own composed legs, narrowed to text-only since this fan-in's
-    channel has no deny/advisory class distinction (module docstring)."""
     if not isinstance(result, dict):
         return None
     hso = result.get("hookSpecificOutput")

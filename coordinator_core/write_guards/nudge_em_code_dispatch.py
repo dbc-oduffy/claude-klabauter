@@ -50,11 +50,8 @@ PRIORITY = 105
 
 
 def check(payload: dict) -> dict | None:
-    """Delegate to the existing `op(payload)` engine op; normalize its
-    no-advisory shape (`{}`) to the write_guards engine's `None` convention.
-    """
     try:
         result = _op(payload)
     except Exception:
-        return None  # fail-open — never block an edit
+        return None
     return result or None

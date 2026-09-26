@@ -49,11 +49,6 @@ class TestFiresOnNewShFileWrite:
         assert str(target) in text
 
     def test_message_names_the_two_preapproved_exceptions(self, tmp_path):
-        """Review finding (coordinatorcode-reviewer-54284751, Finding 5,
-        nit): the compressed advisory dropped the two named bash exceptions
-        (invoking-shell-bash4-probe.sh / claude-machine-local.sh), leaving
-        an agent re-creating one of them no signal it's already sanctioned.
-        Pins that the primary-fire message still names both."""
         target = tmp_path / "coordinator" / "scripts" / "thing.sh"
         result = guard.check(
             _payload("Write", {"file_path": str(target), "content": "echo hi\n"})
@@ -63,9 +58,6 @@ class TestFiresOnNewShFileWrite:
         assert "claude-machine-local.sh" in text
 
     def test_windows_separator_path_fires(self, tmp_path):
-        # A Windows-separator path that does not exist on this (POSIX) test
-        # host -- exercises the backslash-normalization branch for
-        # extension/basename detection.
         target = str(tmp_path) + "\\scripts\\new_thing.sh"
         result = guard.check(_payload("Write", {"file_path": target, "content": "echo hi\n"}))
         _advisory_text(result)
@@ -143,8 +135,6 @@ class TestFixtureVendorCarveOut:
         assert result is None
 
     def test_carveout_is_full_segment_not_substring(self, tmp_path):
-        # "vendor-scripts" contains "vendor" as a substring but is not the
-        # path segment "vendor" -- must still fire.
         target = tmp_path / "vendor-scripts" / "thing.sh"
         result = guard.check(
             _payload("Write", {"file_path": str(target), "content": "echo hi\n"})
@@ -168,8 +158,6 @@ class TestPassesThroughOnNonMatch:
         )
 
     def test_content_only_sh_mention_does_not_fire(self, tmp_path):
-        """A .sh string appearing only in file CONTENT, not the target
-        path, must not trigger this path-keyed guard."""
         target = tmp_path / "notes.md"
         result = guard.check(
             _payload(

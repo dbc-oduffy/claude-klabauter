@@ -1,4 +1,3 @@
-"""Tests for coordinator_core.docindex.spec :: parse_index_spec / coerce_to_string."""
 from __future__ import annotations
 
 import datetime

@@ -45,9 +45,6 @@ def _git(repo: pathlib.Path, *args: str) -> None:
 
 @pytest.fixture
 def repo(tmp_path: pathlib.Path) -> pathlib.Path:
-    """A real repo: these assertions are about agreeing with git's own idea of
-    a staged blob, so a hand-built index would be asserting against our own
-    construction rather than against the thing that has to match."""
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.name", "p")
     _git(tmp_path, "config", "user.email", "p@x")
@@ -58,8 +55,6 @@ def repo(tmp_path: pathlib.Path) -> pathlib.Path:
 
 
 def _partial_stage(repo: pathlib.Path, name: str = "a.txt") -> None:
-    """Stage one set of bytes, then diverge the worktree from it -- the shape
-    the two functions disagree about."""
     (repo / name).write_text("staged\n", encoding="utf-8")
     _git(repo, "add", name)
     (repo / name).write_text("worktree\n", encoding="utf-8")
@@ -77,9 +72,6 @@ def _committed_bytes(repo: pathlib.Path, name: str = "a.txt") -> bytes:
 
 class TestTheFlipIsReported:
     def test_undeclared_divergence_commits_the_worktree_AND_says_so(self, repo):
-        # The whole finding in one assertion pair: the bytes that land are the
-        # worktree's (the default is unchanged), and the outcome now names the
-        # path whose staged bytes were passed over.
         _partial_stage(repo)
 
         outcome = gcommit.commit_paths(repo, ["a.txt"], "undeclared")
@@ -89,9 +81,6 @@ class TestTheFlipIsReported:
         assert outcome.staged_preferred == ()
 
     def test_declaring_the_stage_lands_the_stage_and_is_not_a_loss(self, repo):
-        # The declared case is safe by construction, so it must NOT appear in
-        # the loss report -- a field that fires on the safe path teaches its
-        # reader to ignore it.
         _partial_stage(repo)
 
         outcome = gcommit.commit_paths(
@@ -103,11 +92,6 @@ class TestTheFlipIsReported:
         assert outcome.worktree_over_staged == ()
 
     def test_an_ordinary_unstaged_edit_is_not_reported_as_a_loss(self, repo):
-        # THE CASE THAT FORBIDS A REFUSAL. Nothing was deliberately staged
-        # here -- the index still holds HEAD's bytes and the worktree moved on,
-        # which is what an ordinary edit looks like and is the common case.
-        # Reporting it would drown the real signal; refusing it would break
-        # every ordinary commit.
         (repo / "a.txt").write_text("just an edit\n", encoding="utf-8")
 
         outcome = gcommit.commit_paths(repo, ["a.txt"], "ordinary edit")
@@ -116,9 +100,6 @@ class TestTheFlipIsReported:
         assert outcome.worktree_over_staged == ()
 
     def test_a_supplied_blob_is_the_callers_own_bytes_and_is_not_a_loss(self, repo):
-        # `supplied_blobs` is the caller stating the bytes outright, which is a
-        # stronger declaration than `prefer_staged`. Nothing is being passed
-        # over against the caller's wishes.
         _partial_stage(repo)
         blob = subprocess.run(
             ["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
@@ -136,8 +117,6 @@ class TestTheFlipIsReported:
         assert outcome.worktree_over_staged == ()
 
     def test_only_the_diverged_path_is_named_not_the_whole_pathspec(self, repo):
-        # A report that names every path in the commit is not a report. Only
-        # the path whose stage was actually passed over may appear.
         (repo / "b.txt").write_text("b seed\n", encoding="utf-8")
         _git(repo, "add", "b.txt")
         _git(repo, "commit", "-qm", "b")
@@ -150,9 +129,6 @@ class TestTheFlipIsReported:
 
 
 class TestPreferDeliberateStagePolicy:
-    """DR-379: `worktree_over_staged` is already the correct discriminator
-    (index-vs-HEAD, not index-vs-worktree); this makes it consumable as a
-    caller-declared substitution rather than only a report."""
 
     def test_policy_on_partial_stage_lands_the_staged_bytes(self, repo):
         _partial_stage(repo)
@@ -165,8 +141,6 @@ class TestPreferDeliberateStagePolicy:
 
     def test_policy_on_ordinary_edit_still_lands_worktree_bytes(self, repo):
         # THE CASE THAT PROVES THE DISCRIMINATOR: index still equals HEAD, so
-        # this is an ordinary unstaged edit, not a deliberate partial stage --
-        # the policy must NOT reach for the stage here even though it is on.
         (repo / "a.txt").write_text("just an edit\n", encoding="utf-8")
 
         outcome = gcommit.commit_paths(
@@ -208,18 +182,12 @@ class TestBothRoutesReportTheDisagreement:
     """
 
     def test_the_v2_route_warns_and_does_not_only_return_a_field(self, repo):
-        # A dict key nobody is obliged to read is the same silence in a new
-        # shape -- the other route has carried a loud success message for
-        # precisely this reason.
         from coordinator_core.ops.ceremony import commit_v2
 
         _partial_stage(repo)
 
         result = commit_v2._handler(
             {"paths": ["a.txt"], "message": "undeclared"},
-            # `repo_root` is a HANDLER argument, not a params key, and it is
-            # the git COMMON DIR rather than the worktree -- the op refuses a
-            # worktree-keyed dispatch outright instead of guessing.
             repo_root=repo / ".git",
         )
 
@@ -227,7 +195,6 @@ class TestBothRoutesReportTheDisagreement:
         assert result["worktree_over_staged"] == ["a.txt"]
         assert len(result["warnings"]) == 1
         assert "a.txt" in result["warnings"][0]
-        # The register: one fact, once, plus the terse alternative.
         assert "prefer_staged" in result["warnings"][0]
 
     def test_no_warning_when_nothing_was_set_aside(self, repo):
@@ -245,13 +212,6 @@ class TestBothRoutesReportTheDisagreement:
 
 
 class TestBlobFallbackLegAlsoReportsTheLoss:
-    """The candidacy check the main loop applies (index differs from the
-    worktree, settled against HEAD) had no counterpart in the `blob_fallback`
-    resolution leg (`commit.py`'s `for p in refused:` loop) -- a path refused
-    by the in-process checkin check (an `eol=crlf` pin over CR bytes here)
-    committed its worktree blob over a divergent stage exactly like the main
-    loop's case, but never entered `staged_passed_over`, so it never reached
-    `worktree_over_staged`. Same loss, silent on this one leg only."""
 
     def test_a_refused_partial_staged_path_is_reported_via_the_fallback_leg(self, repo):
         (repo / ".gitattributes").write_text(
@@ -261,10 +221,6 @@ class TestBlobFallbackLegAlsoReportsTheLoss:
         _git(repo, "commit", "-qm", "attrs")
 
         # Partial stage: one CR-bearing blob staged, a DIFFERENT CR-bearing
-        # blob left in the worktree -- the same shape `_partial_stage`
-        # exercises for the main loop, but on a path the in-process checkin
-        # check refuses (CR bytes under an `eol=crlf` pin), forcing it
-        # through `blob_fallback`.
         (repo / "run.cmd").write_bytes(b"echo staged\r\n")
         _git(repo, "add", "run.cmd")
         (repo / "run.cmd").write_bytes(b"echo worktree\r\n")
@@ -285,9 +241,5 @@ class TestBlobFallbackLegAlsoReportsTheLoss:
             repo, ["run.cmd"], "refused, partial staged", blob_fallback=fallback
         )
 
-        # `eol=crlf` normalizes CRLF -> LF on checkin -- the STORED blob is
-        # LF-normalized even though the worktree bytes are CRLF; this
-        # assertion is about which CONTENT landed (the worktree's, not the
-        # stage's), not about literal byte preservation across the filter.
         assert _committed_bytes(repo, "run.cmd") == b"echo worktree\n"
         assert outcome.worktree_over_staged == ("run.cmd",)

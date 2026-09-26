@@ -1,23 +1,3 @@
-"""
-coordinator_core.hooks.tests.test_postuse_advisory_dispatch — tests for the
-sixth PostToolUse advisory leg folded into `postuse_advisory_dispatch.py`:
-`_check_group_em_watch_arm_sync` and its composition inside `_handler`.
-
-Covers: the universal (no tool_name) gate; the Group-EM check (no session_id, no
-git root, no nomination record, record naming a different session); the
-never-armed transcript scan (armed marker present/absent, unreadable
-transcript); the emitted advisory shape (`persistent=true`, never
-`persistent=false`); the once-per-session sentinel discipline (disjoint from
-`advisory-hook-state-{session_id}.json`); the missing-launcher fail-open path
-(this leg's launcher is never installed today -- see the module-level
-comment above `_check_group_em_watch_arm_sync`); and the `_handler`
-six-way merge (the sixth leg must not clobber or short-circuit the other
-five).
-
-Spec backlink: coordinator_core/hooks/postuse_advisory_dispatch.py
-`_check_group_em_watch_arm_sync` (module under test); C10,
-docs/plans/2026-08-31-the-group-em-tick-carries-standing-obligations.md
-"""
 
 from __future__ import annotations
 
@@ -40,27 +20,12 @@ from coordinator_core.group_em import nomination as group_em_nomination  # noqa:
 
 @pytest.fixture(autouse=True)
 def _isolated_state_dir(tmp_path, monkeypatch):
-    """Point the module under test at a per-test temp dir instead of the box's.
-
-    Same rationale as test_postuse_workflow_monitor_arm.py's own fixture:
-    every sentinel/state path in this module is derived from
-    `tempfile.gettempdir()`, so redirecting it isolates every test by
-    construction.
-    """
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     yield
 
 
 @pytest.fixture
 def _group_em_repo(tmp_path, monkeypatch):
-    """Make `SESSION` read as the Group EM Group-EM holder for a fresh repo root.
-
-    Patches the git-root seam this leg reuses from `_check_runtime_tripwire_sync`
-    (`coordinator_core.git.repo_root.show_toplevel`) and writes a real nomination
-    record via `group_em.nomination.claim` -- the same writer `groupem.enter`
-    itself calls -- rather than hand-building the JSON shape, so a future record
-    shape change fails this fixture instead of silently drifting from it.
-    """
     repo_root = str(tmp_path / "repo")
     os.makedirs(repo_root, exist_ok=True)
     nomination_dir = tmp_path / "group-em-records"
@@ -106,33 +71,18 @@ def _write_transcript(tmp_path, *lines, name="transcript.jsonl"):
     return str(transcript)
 
 
-# ---------------------------------------------------------------------------
-# Universal gate: no session_id => silent, no tool_name dependency at all.
-# ---------------------------------------------------------------------------
-
-
 def test_silent_without_session_id(tmp_path):
     transcript_path = _write_transcript(tmp_path, "irrelevant content\n")
     assert pad._check_group_em_watch_arm_sync("", transcript_path) == ""
 
 
-# ---------------------------------------------------------------------------
-# Group-EM check.
-# ---------------------------------------------------------------------------
-
-
 def test_silent_when_no_git_root(tmp_path, monkeypatch, _installed_group_em_watch_launcher):
-    # Without the
-    # launcher fixture this test short-circuited on the launcher probe
-    # before ever reaching the git-root check it is named for.
     monkeypatch.setattr("coordinator_core.git.repo_root.show_toplevel", lambda: "")
     transcript_path = _write_transcript(tmp_path, "irrelevant content\n")
     assert pad._check_group_em_watch_arm_sync(SESSION, transcript_path) == ""
 
 
 def test_silent_when_git_seam_raises(tmp_path, monkeypatch, _installed_group_em_watch_launcher):
-    # See
-    # test_silent_when_no_git_root above.
     def _boom():
         raise RuntimeError("git absent")
 
@@ -142,8 +92,6 @@ def test_silent_when_git_seam_raises(tmp_path, monkeypatch, _installed_group_em_
 
 
 def test_silent_when_no_nomination_record(tmp_path, monkeypatch, _installed_group_em_watch_launcher):
-    # See
-    # test_silent_when_no_git_root above.
     repo_root = str(tmp_path / "repo")
     os.makedirs(repo_root, exist_ok=True)
     monkeypatch.setattr(
@@ -154,8 +102,6 @@ def test_silent_when_no_nomination_record(tmp_path, monkeypatch, _installed_grou
 
 
 def test_silent_when_group_em_held_by_another_session(tmp_path, monkeypatch, _installed_group_em_watch_launcher):
-    # See
-    # test_silent_when_no_git_root above.
     repo_root = str(tmp_path / "repo")
     os.makedirs(repo_root, exist_ok=True)
     nomination_dir = tmp_path / "group-em-records"
@@ -172,11 +118,6 @@ def test_silent_when_group_em_held_by_another_session(tmp_path, monkeypatch, _in
     )
     transcript_path = _write_transcript(tmp_path, "irrelevant content\n")
     assert pad._check_group_em_watch_arm_sync(SESSION, transcript_path) == ""
-
-
-# ---------------------------------------------------------------------------
-# Never-armed transcript scan.
-# ---------------------------------------------------------------------------
 
 
 def test_fires_when_group_em_never_armed_and_launcher_installed(
@@ -205,9 +146,6 @@ def test_silent_when_armed_marker_already_present(
 def test_returns_empty_not_raises_on_unreadable_transcript(
     tmp_path, _group_em_repo, _installed_group_em_watch_launcher
 ):
-    # Without the
-    # launcher fixture this test short-circuited on the launcher probe
-    # before ever reaching the transcript-read logic it is named for.
     missing_path = os.path.join(tempfile.gettempdir(), "does-not-exist-group-em-watch.jsonl")
     assert not os.path.isfile(missing_path)
 
@@ -217,14 +155,7 @@ def test_returns_empty_not_raises_on_unreadable_transcript(
 
 
 def test_silent_without_transcript_path(tmp_path, _group_em_repo, _installed_group_em_watch_launcher):
-    # See
-    # test_returns_empty_not_raises_on_unreadable_transcript above.
     assert pad._check_group_em_watch_arm_sync(SESSION, "") == ""
-
-
-# ---------------------------------------------------------------------------
-# Emitted advisory shape: persistent=true, never persistent=false.
-# ---------------------------------------------------------------------------
 
 
 def test_advisory_names_persistent_true_never_false(
@@ -237,11 +168,6 @@ def test_advisory_names_persistent_true_never_false(
     assert result != ""
     assert "persistent=true" in result
     assert "persistent=false" not in result
-
-
-# ---------------------------------------------------------------------------
-# Once-per-session sentinel discipline; disjoint from advisory-hook-state-*.json.
-# ---------------------------------------------------------------------------
 
 
 def test_fires_once_per_session_via_sentinel(
@@ -270,12 +196,6 @@ def test_never_touches_the_shared_advisory_hook_state_file(
 
     assert result != ""
     assert not os.path.isfile(shared_state_path)
-
-
-# ---------------------------------------------------------------------------
-# Missing-launcher fail-open path (the current, always-true state of this
-# repo -- see the module-level comment above the function under test).
-# ---------------------------------------------------------------------------
 
 
 def test_stays_silent_when_no_launcher_is_installed(tmp_path, _group_em_repo, monkeypatch):
@@ -318,11 +238,6 @@ def test_the_launcher_probe_resolves_nothing_from_an_empty_settings_home(tmp_pat
     """
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "empty-home"))
     assert pad._group_em_watch_launcher() is None
-
-
-# ---------------------------------------------------------------------------
-# The emitted command survives the shell that runs it (reuses _portable_arg).
-# ---------------------------------------------------------------------------
 
 
 def _emitted_command(advisory):
@@ -378,7 +293,6 @@ def test_unformattable_repo_root_emits_nothing_rather_than_a_wrong_command(
 def test_sentinel_is_not_written_when_composition_never_completes(
     tmp_path, _group_em_repo, _installed_group_em_watch_launcher, monkeypatch
 ):
-    """The once-per-session sentinel must not outlive a failed composition."""
     transcript_path = _write_transcript(tmp_path, "no armed marker here\n")
 
     def _boom(_v):
@@ -390,12 +304,6 @@ def test_sentinel_is_not_written_when_composition_never_completes(
 
     sentinel = pad._group_em_watch_arm_sentinel_path(tempfile.gettempdir(), SESSION)
     assert not os.path.isfile(sentinel)
-
-
-# ---------------------------------------------------------------------------
-# _handler composition: the sixth leg must not clobber or short-circuit the
-# other five.
-# ---------------------------------------------------------------------------
 
 
 def test_handler_six_way_merge_all_legs_fire_in_fixed_order(tmp_path):
@@ -478,12 +386,6 @@ def test_handler_group_em_watch_alone_still_post_advisory(tmp_path):
     hso = result["hookSpecificOutput"]
     assert hso["hookEventName"] == "PostToolUse"
     assert "GROUP EM WATCH" in hso["additionalContext"]
-
-
-# ---------------------------------------------------------------------------
-# Negative-payload pin: the check reads no field from `params` beyond the
-# six `_handler` receives.
-# ---------------------------------------------------------------------------
 
 
 class _ExplodingOnUnexpectedKey(dict):

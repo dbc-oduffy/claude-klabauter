@@ -25,22 +25,10 @@ from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 
 
 class CrossSprintEdgeError(ValueError):
-    """A spine's `cross_sprint_edges` violates a rule spine.schema.json
-    declares as the emitter's to enforce. Fail-loud by design: a silently
-    dropped or silently kept bad sprint gate is the failure mode the
-    disjoint-namespace design exists to make impossible."""
+    pass
 
 
 def read_spine(spine_path: Path) -> Optional[Dict[str, Any]]:
-    """Read and parse `state/roadmap/<run-id>/SPINE.md`'s frontmatter.
-
-    Uses `coordinator_core.frontmatter.schema_validate.parse_frontmatter`
-    (full YAML, not the hand-rolled mapping-only parser in `coordinator_core.
-    dag`) — spine.schema.json's `sprints[]`/`cross_sprint_edges[]` are
-    nested list-of-dict shapes the mapping-only parser is not built to
-    reach. Returns None if the file is absent, unreadable, or does not
-    parse as a `kind: roadmap-spine` record — never raises.
-    """
     try:
         text = spine_path.read_text(encoding="utf-8")
     except OSError:
@@ -53,16 +41,6 @@ def read_spine(spine_path: Path) -> Optional[Dict[str, Any]]:
 
 
 def find_spine(worktree_root: Path, roadmap_id: str) -> Optional[Dict[str, Any]]:
-    """The spine record whose own `roadmap_id` equals `roadmap_id`, or None.
-
-    Matches on the record's FIELD rather than on its directory name: the
-    run-id in the path and the `roadmap_id` in the frontmatter are not
-    guaranteed identical, and the field is the one `cross_sprint_edges`
-    is scoped by (spine.schema.json § roadmap_id — "a peer's edge traversal
-    joins every edge sharing this value"). Absent spine is a normal state,
-    not an error: a roadmap that never ran sprint-planning has no spine and
-    simply contributes no sprint-altitude edges.
-    """
     spine_dir = worktree_root / "state" / "roadmap"
     if not spine_dir.is_dir():
         return None
@@ -74,9 +52,6 @@ def find_spine(worktree_root: Path, roadmap_id: str) -> Optional[Dict[str, Any]]
 
 
 def _assert_acyclic(pairs: List[Tuple[str, str]]) -> None:
-    """Three-colour DFS over the sprint-gate adjacency. Raises on the first
-    cycle found, naming it — a cycle here is unschedulable, and reporting
-    only "a cycle exists" leaves the author to find it by hand."""
     adjacency: Dict[str, List[str]] = {}
     for src, dst in pairs:
         adjacency.setdefault(src, []).append(dst)
@@ -104,16 +79,6 @@ def _assert_acyclic(pairs: List[Tuple[str, str]]) -> None:
 
 
 def cross_sprint_gates(spine: Dict[str, Any]) -> List[Tuple[str, str]]:
-    """`(from, to)` sprint-descriptor pairs from a spine's
-    `cross_sprint_edges`, validated.
-
-    Raises `CrossSprintEdgeError` on a self-edge or a cycle — the two rules
-    spine.schema.json names as the emitter's. Entries that are not dicts, or
-    whose `from`/`to` are not non-empty strings, are skipped rather than
-    raised on: the schema already constrains those, so a malformed one here
-    means the record bypassed validation, and dropping it keeps a single
-    bad row from taking down an otherwise-good roadmap's whole edge set.
-    """
     pairs: List[Tuple[str, str]] = []
     for entry in spine.get("cross_sprint_edges") or []:
         if not isinstance(entry, dict):

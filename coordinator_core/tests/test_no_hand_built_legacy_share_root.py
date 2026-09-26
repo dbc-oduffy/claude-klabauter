@@ -40,40 +40,22 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 
 _SCAN_ROOTS = ("coordinator_core", os.path.join("coordinator", "bin"))
 
-#: The retired spelling, in both separator dialects a constant can carry.
 _LEGACY_FORMS = ("state/subagent-share", "state" + chr(92) + "subagent-share")
 
-#: The adjacent-segment shape — `os.path.join(root, "state", "subagent-share")`
-#: and `Path(root, "state", "subagent-share")` — which no single constant
-#: spells but which builds the same path.
 _LEGACY_SEGMENTS = ("state", "subagent-share")
 
 _EXEMPT = {
     # The OWNER of both spellings. `LEGACY_SHARE_RELDIR` and
-    # `legacy_share_root` are the one place the retired root is named.
     "coordinator_core/session/machinery_paths.py",
     # Extracts historical `state/subagent-share/` CITATIONS out of prose for
-    # the pre-rewrite audit — the legacy root is its subject matter, not its
-    # resolution target.
     "coordinator_core/ops/extract_cited_sidecars.py",
-    # The relocation sweep itself: its bucket list names what it MOVES.
     "coordinator_core/ops/fleet_machinery_sweep.py",
-    # Diff-noise filter over TRACKED `state/` lifecycle paths. The machinery
-    # root is gitignored, so it can never appear in the diff this filters.
     "coordinator_core/ops/review_brightline_gate.py",
-    # Citation surfaces that deliberately list BOTH roots on adjacent lines —
-    # a citation to either was valid when it was written.
     "coordinator_core/ops/dispatch_emit/emit.py",
     "coordinator_core/ops/session/fix_concrete_path_citations.py",
     "coordinator_core/ops/session/guard_concrete_path_citations.py",
     "coordinator_core/write_guards/nudge_session_display_name_as_identifier.py",
-    # FROZEN BYTES. `contract.cockpit_schema`/`emit_memo_schema` emit a schema
-    # a sibling repo consumes; `test_emit_schema_pin.py` refuses any change to
-    # the emitted bytes. Both hits are historical citations inside descriptions
-    # (a dated eng-director ruling sidecar), not a resolution target.
     "coordinator_core/contract/emit_memo_schema.py",
-    # Names WHERE the C12 slice sidecars were written at the time — a pointer
-    # into the pre-relocation corpus, correct as history.
     "coordinator/bin/classify-engine-root-residue.py",
 }
 
@@ -112,7 +94,6 @@ def _docstring_constant_ids(tree: ast.AST) -> set:
 
 
 def _adjacent_segment_hits(tree: ast.AST) -> list:
-    """Constant sequences that spell the retired root as adjacent segments."""
     hits = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
@@ -170,8 +151,6 @@ def test_no_module_hand_builds_the_legacy_share_root():
 
 @pytest.mark.parametrize("rel", sorted(_EXEMPT))
 def test_every_exemption_still_exists_and_still_needs_one(rel):
-    """An exemption that no longer matches is a stale allowlist entry, not a
-    harmless one — it hides the next real offender under the same path."""
     path = os.path.join(_REPO_ROOT, *rel.split("/"))
     assert os.path.isfile(path), f"exempt module no longer exists: {rel}"
     assert _violations(path), (

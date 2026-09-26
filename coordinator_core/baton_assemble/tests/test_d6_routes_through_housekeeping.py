@@ -45,10 +45,6 @@ _SUCCESSOR_REL = "state/handoffs/2026-08-28-successor.md"
 
 
 def _seed(tmp_path: Path) -> None:
-    """A predecessor that honestly satisfies DR-242's claimed-or-shipped gate, and
-    a successor that is NOT a pristine generator scaffold — so `_cleanup_successor`
-    declines to unlink it and the assertions below are about d6's own posture rather
-    than about the cleanup predicate."""
     pred = tmp_path / _PRED_REL
     pred.parent.mkdir(parents=True, exist_ok=True)
     pred.write_text(
@@ -67,8 +63,6 @@ def _seed(tmp_path: Path) -> None:
 
 
 def _housekeeping_returning(transition: dict | None, **envelope):
-    """A stand-in for `_invoke_op_in_process` that records what d6 asked for and
-    answers in `housekeeping.cycle`'s real envelope shape."""
     seen: dict = {}
 
     def _fake(op_name, params, repo_root):
@@ -93,9 +87,6 @@ class TestTheOpItAsksFor:
     def test_d6_calls_the_housekeeping_cycle_and_never_the_suspended_key(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The whole point of the rewire. `handoff.archive_transition` is suspended;
-        naming it here is what raised `OpSuspendedError` and stranded every
-        predecessor."""
         _seed(tmp_path)
         fake, seen = _housekeeping_returning({"exit_code": 0, "superseded": True})
         monkeypatch.setattr(ba_apply, "_invoke_op_in_process", fake)
@@ -128,10 +119,6 @@ class TestTheOpItAsksFor:
     def test_the_corpus_legs_are_off_and_the_cap_is_one(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """d6 runs mid-`/handoff`, inside `apply()`'s transaction. Its remit is one
-        succession — a fleet-wide close pass, or a 150-move archival commit landing
-        on the operator's tree while they are minting a baton, is not something this
-        directive may take on. The ceremonies own the full sweep."""
         _seed(tmp_path)
         fake, seen = _housekeeping_returning({"exit_code": 0, "superseded": True})
         monkeypatch.setattr(ba_apply, "_invoke_op_in_process", fake)
@@ -146,10 +133,6 @@ class TestTheOpItAsksFor:
     def test_no_exclude_reaches_the_op(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """`exclude` fed the live-children guard, deleted from all four of its sites
-        on 2026-08-28 per the PM ruling that having a child says nothing about
-        whether a handoff should be archived. Passing it now would be cargo — and
-        `handoff_archive_transition` no longer reads it."""
         _seed(tmp_path)
         fake, seen = _housekeeping_returning({"exit_code": 0, "superseded": True})
         monkeypatch.setattr(ba_apply, "_invoke_op_in_process", fake)
@@ -166,10 +149,6 @@ class TestTheUnwrap:
     def test_a_superseded_transition_returns_the_inner_result_not_the_envelope(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Downstream readers (`_report`'s committed_by attribution, the operator's
-        own report) key on the transition op's own fields. Handing them the
-        housekeeping envelope instead would lose `moved`, `retained` and the rest
-        without any of them erroring."""
         _seed(tmp_path)
         inner = {"exit_code": 0, "superseded": True, "moved": True, "retained": False}
         fake, _ = _housekeeping_returning(inner)
@@ -185,11 +164,6 @@ class TestTheUnwrap:
     def test_a_half_applied_succession_still_raises_through_the_new_layer(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """`superseded is False` is reached only AFTER the op ran, where the
-        predecessor may be half-stamped. It must keep raising — a successor minted
-        against a predecessor left un-superseded is the exact stranding defect this
-        directive exists to eliminate, and the extra unwrap layer must not soften
-        it into a green return."""
         _seed(tmp_path)
         fake, _ = _housekeeping_returning(
             {"exit_code": 0, "superseded": False, "retained": True,
@@ -205,10 +179,6 @@ class TestTheUnwrap:
     def test_a_housekeeping_refusal_before_the_transition_raises(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A setup error inside housekeeping — a bad cap, an unresolvable worktree —
-        returns exit_code:1 with `transition: None`. Falling through to the
-        `superseded` check would report it as a half-applied succession, which
-        names the wrong cause; it is a refusal before anything was composed."""
         _seed(tmp_path)
         fake, _ = _housekeeping_returning(
             None, exit_code=1, error="cap is required and must be a positive int"
@@ -222,15 +192,6 @@ class TestTheUnwrap:
 
 
 def test_the_in_process_seam_dispatches_a_sync_handler() -> None:
-    """`_invoke_op_in_process` used to `asyncio.run(handler(...))` unconditionally,
-    which raises `ValueError: a coroutine was expected` on a sync op. That was
-    latent until d6 pointed at one: `housekeeping.cycle` is sync at its op
-    boundary, as are `fleet.archive_terminal_handoffs` and
-    `session.sweep_consumed_handoffs`.
-
-    Driven through the REAL seam with a deliberately-invalid cap, so the op refuses
-    at its own first check and touches no disk — the assertion is that the call
-    returns a dict at all rather than raising on the await."""
     result = ba_apply._invoke_op_in_process(
         "housekeeping.cycle", {"cap": 0}, Path.cwd()
     )

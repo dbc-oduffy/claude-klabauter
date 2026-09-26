@@ -117,63 +117,30 @@ from coordinator_core.bash_guards._verdict import record_silent
 
 CLASS = "hard-deny"
 # Widened 2026-08-19 (subagent-boundary MATCHERS parity, see
-# docs/reference/guard-tool-name-membership.md): `_classify_dash_m/c_
-# invocation` fail OPEN (return None) when `_tokenize_full_command` cannot
-# parse `cmd`, so unparseable PowerShell input is a missed detection, never
-# a spurious deny -- not the held stash/worktree fail-closed risk class.
 MATCHERS = COMMAND_TOOL_NAMES
-#: `dispatch.py` hardcodes chain ordering explicitly, so this value governs
-#: nothing at runtime; matches the sibling identity-gated hard-denies
-#: (`block_subagent_commit`, `block_subagent_destructive_action`,
-#: `block_subagent_stash_creation`, `block_subagent_grant_acquisition`) it
-#: is registered near.
 PRIORITY = 40
 
-#: The dotted module path this guard gates acquisition of, matching
-#: `em_guard_grant.py`'s own `python3 -m` invocation contract.
 _GRANT_MODULE = "coordinator_core.session.em_guard_grant"
 
-#: Only `grant` acquires the authorization this guard exists to gate --
-#: `read`/`check` are informational and explicitly NOT gated.
 _GATED_SUBCOMMANDS = frozenset({"grant"})
 
-#: The grant-writing function name -- a `-c` payload referencing this is
-#: grant-shaped, matching the `-m` form's `grant` subcommand.
 _WRITE_FUNC_NAME = "write_em_guard_grant"
 
-#: Read/check-shaped function names -- referenced here only so a `-c`
 #: payload calling one of these (and not `_WRITE_FUNC_NAME`) is documented
-#: as the deliberate non-match, not an oversight. Not consulted as a
 #: positive test anywhere below: absence of `_WRITE_FUNC_NAME` is already
 #: sufficient to not-classify, per the HEURISTIC-NOT-EXHAUSTIVE posture --
-#: this guard does not need to prove a payload is read/check-shaped, only
-#: that it is not grant-shaped.
 _READ_CHECK_FUNC_NAMES = frozenset(
     {"read_em_guard_grant", "check_em_guard_grant"}
 )
 
-#: `python`, `python3`, `python3.11`, `python2` -- re-declared identically
-#: to the sibling guard's own constant of the same name.
 _PYTHON_BASENAME_RE = re.compile(r"^python[0-9.]*$")
 
-#: Bundled `-m<module>` form, e.g. `python3 -mcoordinator_core.session.
-#: em_guard_grant` -- CPython's own arg parser accepts the module path
-#: attached directly to `-m` with no intervening space, same as `-c`'s
-#: documented bundled-short-flag acceptance elsewhere in this package.
 _DASH_M_BUNDLED_RE = re.compile(r"^-m(.+)$")
 
 
 def _extract_dash_m_module_and_rest(
     argv_after_interpreter: List[str],
 ) -> Optional[Tuple[str, List[str]]]:
-    """Scan `argv_after_interpreter` for a standalone `-m <module>` or a
-    bundled `-m<module>` flag, and return `(module, rest)` where `rest` is
-    every token following the module path (the invoked module's own argv,
-    e.g. `["grant", "bump-foreign-repo-write", "<reason>"]`) -- or `None`
-    if no `-m` flag is present. Mirrors
-    `block_subagent_grant_acquisition._extract_dash_m_module_and_rest`'s
-    own bundled/standalone scan shape.
-    """
     n = len(argv_after_interpreter)
     for i, tok in enumerate(argv_after_interpreter):
         if tok == "-m":
@@ -187,11 +154,6 @@ def _extract_dash_m_module_and_rest(
 
 
 def _classify_dash_m_invocation(working: List[str]) -> Optional[str]:
-    """Classify a single already-segmented, subshell/env-stripped token
-    list `working` (head token is the interpreter itself) for the `-m`
-    guard-grant-acquisition shape. Returns a deny_kind label, or `None` if
-    this segment is not a gated `-m` invocation of `em_guard_grant grant`.
-    """
     found = _extract_dash_m_module_and_rest(working[1:])
     if found is None:
         return None
@@ -205,15 +167,7 @@ def _classify_dash_m_invocation(working: List[str]) -> Optional[str]:
 
 
 #: Word-boundary match for `_WRITE_FUNC_NAME` inside a `-c` payload --
-#: plain substring containment would also classify an unrelated identifier
 #: that merely CONTAINS the function name as a substring (e.g. a
-#: hypothetical `_write_em_guard_grant_helper`) as grant-shaped, which is
-#: wider than this module's own "references the grant-writing function
-#: name" claim. `(?<![A-Za-z0-9_])` / `(?![A-Za-z0-9_])` are
-#: identifier-boundary lookarounds, not `\b` -- `\b` alone would still
-#: treat a leading digit boundary inconsistently with Python identifier
-#: rules; the explicit character classes match exactly the set of
-#: characters Python identifiers are made of.
 _WRITE_FUNC_NAME_RE = re.compile(
     r"(?<![A-Za-z0-9_])" + re.escape(_WRITE_FUNC_NAME) + r"(?![A-Za-z0-9_])"
 )
@@ -323,8 +277,6 @@ def check(payload: dict) -> Optional[dict]:
     under that broader triple and have a legitimate grant denied.
     `agent_id` is documented subagent-only.
     """
-    # Deliberately no try/except -- fail-CLOSED-on-exception is the
-    # dispatcher's job for hard-deny guards.
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
 
@@ -334,9 +286,6 @@ def check(payload: dict) -> Optional[dict]:
         return None
     cmd = cmd.replace("\r", "")
 
-    # EM/subagent discriminator -- raw presence of `agent_id` alone, not
-    # whether it resolves further. A present-but-unresolvable `agent_id`
-    # is still, unambiguously, "not the EM" -- see module docstring
     # "IDENTITY-GATE POSTURE".
     raw_agent_id = payload.get("agent_id")
     if not raw_agent_id:
@@ -344,20 +293,6 @@ def check(payload: dict) -> Optional[dict]:
 
     cmd_for_classification = _strip_heredoc_bodies(cmd)
 
-    # Dialect-aware Start-Process expansion (C8,
-    # pln-the-destructive-core-learns-the-she): same gap and same narrow
-    # fix as `block_subagent_grant_acquisition.check` (near-exact port, per
-    # module docstring) -- `_tokenize_full_command` below is Bash-shaped
-    # with no PowerShell awareness, so a `Start-Process python
-    # -ArgumentList '-m','coordinator_core...'` invocation of the gated CLI
-    # evades `_evaluate` even though its own base `python -m ...` argv is
-    # byte-identical across dialects. For a PowerShell payload only,
-    # tokenize via `_dialect.tokenize_command` and run the SAME
-    # `expand_start_process_invocations` pass, then rejoin the expanded
-    # tokens back into text so `_evaluate`'s existing Bash-shaped pipeline
-    # (unchanged, still exercised byte-for-byte on the BASH leg) sees the
-    # target's real argv in command position. A PowerShell parse failure
-    # leaves `cmd_for_classification` untouched.
     _bsgg_dialect = dialect_from_tool_name(payload.get("tool_name"))
     if _bsgg_dialect is Dialect.POWERSHELL:
         _bsgg_ps_tokens = tokenize_command(

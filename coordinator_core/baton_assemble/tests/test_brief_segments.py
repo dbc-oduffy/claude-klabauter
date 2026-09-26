@@ -1,22 +1,3 @@
-"""C2 (docs/plans/2026-08-13-baton-assemble-brief-grows-segments-for.md) --
-coverage for `brief()`'s `segments` key: `_resolve_handoff_residue_active_
-cases`, `_load_handoff_residue_segments`, and the `try`/`except
-(SegmentLoadError, ResolveCoordinatorCloneError)` wiring around them at the
-tail of `brief()`.
-
-Pinned against the AMENDED AC-2 contract (signal fidelity, read off the
-consumer's own resolver) -- NOT the pre-amendment behaviour: `dirty-tree`
-arms on ANY porcelain dirt (not merely dirt attributable to this session),
-and `carried-items` arms only when the predecessor's OWN frontmatter carries
-a non-empty `carried_items:` block (not merely "a predecessor exists").
-
-Loader boundary (`load_segments`) is stubbed throughout -- the segment
-corpus lives in the coordinator content root, not this repo, per this
-module's own docstring at `coordinator_core/baton_assemble/__init__.py`'s
-"`/handoff` residue segments" section banner. `select_segments` itself is
-NOT stubbed, so the sort-by-`order` and filter-by-`case` behaviour under
-test is real, not asserted-by-construction.
-"""
 
 from __future__ import annotations
 
@@ -33,8 +14,6 @@ from coordinator_core.test_baton_assemble import (
     _write_artifact,
 )
 
-# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
-# cadence suite is the separate threshold ruling, not this declaration.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -43,9 +22,6 @@ pytestmark = [
 
 @pytest.fixture(autouse=True)
 def _stub_operator_config(monkeypatch):
-    """Restated per-module (autouse fixtures do not cross module boundaries)
-    -- `brief()` calls `resolve_operator_config()` unconditionally. Mirrors
-    `test_repo_identity_gate.py`'s own fixture of the same name."""
     monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
 
 
@@ -60,9 +36,6 @@ def _segment(segment_id, case, order, segment_class="protected"):
 
 
 def _stub_loader(monkeypatch, segments, content_root=None):
-    """Stub the loader boundary `_load_handoff_residue_segments` reaches:
-    `resolve_content_root()` -> `load_segments(...)`. `select_segments`
-    itself is left real so filter/sort behaviour is genuinely exercised."""
     monkeypatch.setattr(ba, "resolve_content_root", lambda: content_root or "/fake/content-root")
     monkeypatch.setattr(ba, "load_segments", lambda *a, **k: segments)
 
@@ -110,15 +83,8 @@ class TestHappyPathSegmentsPresentAndOrdered:
 
 
 class TestConditionalCasesToggle:
-    """AC-7 leg 2: each conditional case toggles in and out as its own
-    signal flips, `shared` unconditionally present throughout -- exercised
-    directly against `_resolve_handoff_residue_active_cases`'s documented
-    inputs (`dirty_tree_attribution`, `lineage`, `root`), per the amended
-    AC-2 contract."""
 
     def test_dirty_tree_arms_on_whole_tree_dirt_not_only_mine(self):
-        # Amended AC-2: dirty when the tree is dirty AT ALL -- `residue_count`
-        # alone (dirt NOT attributable to this session) must still arm it.
         active = ba._resolve_handoff_residue_active_cases(
             {"mine": [], "residue_count": 2}, {}, None
         )
@@ -186,21 +152,8 @@ class TestConditionalCasesToggle:
 
 
 class TestBadLoadDegradesSegmentsAbsentNoException:
-    """AC-3/AC-7 leg 3: a `SegmentLoadError` or `ResolveCoordinatorCloneError`
-    raised while loading segments leaves the `segments` key ABSENT, no
-    exception escapes `brief()`, and the rest of the decision object is
-    unchanged (proven by diffing the key set against a `segments`-suppressed
-    baseline call)."""
 
     def _baseline_decision(self, tmp_path, monkeypatch, artifact):
-        """Same call with the loader stubbed to return no segments -- the
-        `segments` key that attaches is `[]`, never absent. Used only to
-        compare every OTHER key stays identical; `segments` itself is
-        popped and compared separately per-case below. Verified (not just
-        asserted) that this baseline's `artifact` key is byte-identical to
-        the error-path call's `artifact` key for the same input artifact --
-        `_resolve_handoff_residue_active_cases` runs identically in both
-        (it is not stubbed here), so there is no exclusion to carve out."""
         monkeypatch.setattr(ba, "resolve_content_root", lambda: "/fake/content-root")
         monkeypatch.setattr(ba, "load_segments", lambda *a, **k: [])
         return _brief_decision(tmp_path, monkeypatch, artifact)
@@ -235,11 +188,6 @@ class TestBadLoadDegradesSegmentsAbsentNoException:
 
 
 class TestZeroApplicableSegmentsPresentEmptyList:
-    """AC-4/AC-7 leg 4: zero matches is not an error -- `segments` is
-    PRESENT and `[]`. This is the arm that distinguishes "loader broke"
-    (key absent, previous class) from "loader worked, nothing applied"
-    (key present, empty) -- a careless implementation collapses these two
-    into the same observable shape, so pin them as mutually exclusive."""
 
     def test_zero_matches_key_present_and_empty_not_absent(self, tmp_path, monkeypatch):
         _init_repo(tmp_path)
@@ -248,8 +196,6 @@ class TestZeroApplicableSegmentsPresentEmptyList:
         monkeypatch.setattr(
             ba, "_resolve_handoff_residue_active_cases", lambda *a, **k: {"shared"}
         )
-        # `shared` is active but no segment in the stubbed corpus carries
-        # `case: shared` -- selection legitimately yields nothing.
         segments_without_shared = [
             s for s in segments if s["case"] != "shared"
         ]
@@ -263,8 +209,6 @@ class TestZeroApplicableSegmentsPresentEmptyList:
 
 
 class TestCarriedItemsFailOpen:
-    """AC-7 leg 5 / amended AC-2: a predecessor whose frontmatter is missing
-    or unparseable leaves `carried-items` inactive and raises nothing."""
 
     def test_predecessor_file_does_not_exist_degrades_to_inactive(self, tmp_path):
         active = ba._resolve_handoff_residue_active_cases(

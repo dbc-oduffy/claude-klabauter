@@ -32,15 +32,7 @@ from coordinator_core.ops.discover_working_repos import (
 )
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Declared, not excused: this file spawns a real git process because
-# `_is_git_root`/discovery under test detect real `.git` directory presence
-# and real repo state across a tiered filesystem walk -- no mock stands in
-# for real repo-root detection. Each test builds its own repo at a distinct
-# path shape (tier A/B, nested, decoded-name edges), so `_init_git_repo` is
-# not hoisted to module scope -- per-test isolation. The spawn ratchet's
 # `_BASELINE` is shrink-only pre-existing residue and is explicitly not the
-# route for this file -- coordinator_core/tests/test_no_new_spawning_tests.py
-# Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -82,14 +74,6 @@ class TestIsGitRoot:
         assert _is_git_root(str(tmp_path / "does-not-exist")) is False
 
     def test_forward_slash_path_recognized_on_native_separator_platform(self, tmp_path: Path):
-        # Regression net for the separator-mismatch bug: git rev-parse
-        # --show-toplevel always emits POSIX (forward-slash) separators,
-        # while os.path.realpath emits native separators (backslashes on
-        # Windows). A plain string `==` between the two never held on
-        # Windows even when they name the same directory on disk. Address
-        # the fixture with forward slashes (regardless of host platform) to
-        # force that mismatch and assert identity is still established via
-        # samefile().
         repo = tmp_path / "dev" / "realrepo"
         _init_git_repo(repo)
         forward_slash_path = str(repo).replace("\\", "/")
@@ -102,9 +86,6 @@ class TestIsGitRoot:
 
 
 class TestGateAndDedup:
-    """`mirror_keys=set()` is passed explicitly throughout: the default None
-    spawns machine-local to enumerate publish.mirrors.*, which these tests
-    neither need nor want to depend on."""
 
     def test_keeps_only_the_repo_root(self, tmp_path: Path):
         repo = tmp_path / "dev" / "realrepo"
@@ -129,11 +110,6 @@ class TestGateAndDedup:
         assert out == [_emit_form(str(repo))]
 
     def test_emitted_form_is_forward_slashed_regardless_of_input_form(self, tmp_path: Path):
-        """Regression net: the oracle preserved each repo's first-seen NATIVE
-        form, so one Windows run emitted registry-sourced rows forward-slashed
-        and filesystem-discovered rows backslashed. The consumer double-quotes
-        those into working-repos.yaml, where a backslash-D is an invalid YAML
-        escape — yaml.safe_load then raised ScannerError for every consumer."""
         repo = tmp_path / "dev" / "realrepo"
         _init_git_repo(repo)
         native = str(repo)
@@ -145,8 +121,6 @@ class TestGateAndDedup:
         assert chr(92) not in out[0]
 
     def test_publish_mirror_is_never_emitted(self, tmp_path: Path):
-        """A publish.mirrors.*.path tree is a publish target, not a working
-        tree — doctrine forbids working in one or addressing a memo to one."""
         repo = tmp_path / "dev" / "realrepo"
         mirror = tmp_path / "dev" / "oss-mirror"
         _init_git_repo(repo)
@@ -157,8 +131,6 @@ class TestGateAndDedup:
         assert out == [_emit_form(str(repo))]
 
     def test_mirror_match_is_separator_and_drive_case_insensitive(self, tmp_path: Path):
-        """The mirror set is keyed by `_to_posix_key`, so a registry entry
-        stored as `E:/dev/x` still excludes a discovery hit of `E:\\dev\\x`."""
         mirror = tmp_path / "dev" / "oss-mirror"
         _init_git_repo(mirror)
         native = str(mirror)
@@ -175,7 +147,6 @@ class TestToPosixKey:
         assert _to_posix_key("X:/dev/repo") == "/x/dev/repo"
 
     def test_lowercases_drive_only(self):
-        # Only the drive letter is lowercased — rest of the path keeps case.
         assert _to_posix_key("X:\\Dev\\Repo") == "/x/Dev/Repo"
 
     def test_posix_passthrough(self):
@@ -200,13 +171,6 @@ class TestTierAPosix:
 
 
 class TestFsProbePath:
-    """Regression net for the MSYS-vs-native path-form bug: every existence
-    probe in this module is built in MSYS/POSIX form ("/x/foo"), which is
-    valid under Git Bash (where the bash oracle ran) but which native
-    Windows Python cannot os.path.isdir() — os.path.isdir('/c/Users/x') is
-    False while os.path.isdir('C:/Users/x') is True. _fs_probe_path converts
-    the MSYS form back to a form the running interpreter can actually stat.
-    """
 
     def test_msys_drive_form_converted_on_windows(self, monkeypatch):
         monkeypatch.setattr(os, "name", "nt")
@@ -229,19 +193,11 @@ class TestFsProbePath:
 
 class TestTierAGreedyDecode:
     def test_resolves_hyphenated_dir_name_against_real_fixture_tree(self, tmp_path: Path):
-        # Direct regression net for the reported symptom: a projects-dir
-        # basename like "X--DoE-claude" decodes (naive fast path) to
-        # "X:\\DoE\\claude", which doesn't exist on disk. The greedy walk
-        # must recover "DoE-claude" as one hyphen-containing segment by
-        # probing what actually exists under the fixture root.
         (tmp_path / "DoE-claude").mkdir()
         out = _tier_a_greedy_decode("DoE-claude", "X", str(tmp_path))
         assert out == "X:\\DoE-claude"
 
     def test_resolves_hyphenated_segment(self, tmp_path: Path):
-        # "X:\dev\example-stats-repo" encodes to "X--dev-example-stats-repo"; the naive decode
-        # (blanket - -> \) turns "example-stats-repo" into "fifa\stats" which doesn't
-        # exist. The greedy walk should recover "example-stats-repo" as one segment.
         root = tmp_path
         (root / "dev" / "example-stats-repo").mkdir(parents=True)
         out = _tier_a_greedy_decode("dev-example-stats-repo", "X", str(root))
@@ -265,42 +221,24 @@ class TestDecodeProjectsDirName:
         assert decoded == "X:\\dev\\fifa\\stats"
 
     def test_posix_form_out_of_scope_gap(self):
-        # Faithful oracle-bug repro: non-drive-letter entries decode via a
-        # blanket backslash-join even though the source path was POSIX —
-        # this is a documented, NOT-fixed gap (see module docstring).
         drive, rest, decoded = _decode_projects_dir_name("-Users-example-operator-X-DoE-claude")
         assert drive == ""
         assert decoded == "\\Users\\example-operator\\X\\DoE\\claude"
 
 
 class TestTierAEndToEnd:
-    """No test previously exercised `_tier_a()` as a whole — the naive-decode
-    fast path (`_decode_projects_dir_name`) and the greedy-decode fallback
-    (`_tier_a_greedy_decode`) were only tested in isolation, never composed
-    at the orchestration layer where the MSYS-path-form bug actually lived:
-    a hyphenated projects-dir basename (e.g. "X--DoE-claude") silently
-    discovered nothing because BOTH the fast-path existence probe and the
-    greedy-decode existence probe built an MSYS-form path native Windows
-    Python cannot stat. This is the regression net at that failing layer.
-    """
 
     def test_hyphenated_repo_name_resolved_via_greedy_fallback(self, tmp_path: Path, monkeypatch):
-        # Fixture: a ~/.claude/projects entry whose repo name carries a
-        # literal hyphen — the naive fast-path decode ("X:\\DoE\\claude")
-        # does not exist on disk; only the greedy walk recovers "DoE-claude"
-        # as one segment.
         fake_home = tmp_path / "home"
         projects_dir = fake_home / ".claude" / "projects"
         (projects_dir / "X--DoE-claude").mkdir(parents=True)
 
         # COORDINATOR_TIER_A_FS_ROOT test seam: point existence probes at a
-        # real fixture tree holding the matching (lowercased) directory.
         fs_root = tmp_path / "fsroot"
         (fs_root / "doe-claude").mkdir(parents=True)
 
         monkeypatch.setenv("HOME", str(fake_home))
         # Path.home() on Windows reads USERPROFILE, not HOME — set both so
-        # this test is hermetic on every platform.
         monkeypatch.setenv("USERPROFILE", str(fake_home))
         monkeypatch.setenv("COORDINATOR_TIER_A_FS_ROOT", str(fs_root))
 
@@ -310,8 +248,6 @@ class TestTierAEndToEnd:
 
 
 class TestTierAExcludeRegex:
-    """Ported byte-for-byte from the bash ERE — see module docstring. Each
-    case is one of the three alternation branches."""
 
     def test_appdata_local_temp_excluded(self):
         assert _TIER_A_EXCLUDE_RE.search(r"C:\Users\x\AppData\Local\Temp\foo")
@@ -331,10 +267,6 @@ class TestTierAExcludeRegex:
 
 class TestSortUnique:
     def test_matches_locale_collation_not_ordinal(self):
-        # "sort -u"'s default collation on this host places mixed-case
-        # entries differently than Python's plain ordinal sort — this is the
-        # exact class of bug the byte-parity check against the bash oracle
-        # caught (uppercase-first ordinal vs locale-aware collation).
         out = _sort_unique(["DoE-claude", "example-store-repo", "example-sim-repo-md"])
         assert set(out) == {"DoE-claude", "example-store-repo", "example-sim-repo-md"}
         assert len(out) == 3
@@ -414,10 +346,8 @@ class TestTierA5EnvOverride:
 
 class TestMainNeverBlocks:
     def test_all_tiers_empty_exits_zero_no_stdout(self, tmp_path: Path, monkeypatch, capsys):
-        monkeypatch.setenv("HOME", str(tmp_path))  # no ~/.claude/projects
+        monkeypatch.setenv("HOME", str(tmp_path))
         # Path.home() on Windows reads USERPROFILE, not HOME — set both so
-        # this test isolates _tier_a() from the real machine's
-        # ~/.claude/projects on every platform.
         monkeypatch.setenv("USERPROFILE", str(tmp_path))
         import coordinator_core.ops.discover_working_repos as m
 
@@ -431,8 +361,6 @@ class TestMainNeverBlocks:
     def test_tier_b_hit_emits_and_exits_zero(self, tmp_path: Path, monkeypatch, capsys):
         monkeypatch.setenv("HOME", str(tmp_path))
         # Path.home() on Windows reads USERPROFILE, not HOME — set both so
-        # this test isolates _tier_a() from the real machine's
-        # ~/.claude/projects on every platform.
         monkeypatch.setenv("USERPROFILE", str(tmp_path))
         repo = tmp_path / "dev" / "realrepo"
         _init_git_repo(repo)

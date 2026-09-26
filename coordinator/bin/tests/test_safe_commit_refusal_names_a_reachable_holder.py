@@ -1,25 +1,3 @@
-"""The peer-claim refusal names a holder the caller can actually act on.
-
-`_refuse_contested_pathspec` told the caller to "coordinate with the holder(s)
-first" and identified them by `sid[:8]` -- not an address, and stale by
-default: a session re-points its id while keeping its name (six re-points
-across five of twelve peers in one shift, measured 2026-08-31). A guard whose
-remediation nobody can execute teaches the fleet to route around it, which
-costs its true positives too (this refusal exists because 40abe011d swept two
-peers' hunks; it must survive being inconvenient).
-
-The name is resolved from `harness_registry.snapshot()` at render time. A sid
-carried in from a record or a document is the failure this pins against: that
-exact mistake produced a three-hop misattribution the same day.
-
-These tests pin the two facts that make the sid actionable -- the holder's
-baton title and how long the TOUCH has gone unreleased -- and, separately,
-that every part degrades to the bare sid rather than raising. The degrade
-case is asserted on its own because a renderer that silently always returns
-the bare sid would pass a shape-only test.
-
-Run: python -m pytest coordinator/bin/tests/test_safe_commit_refusal_names_a_reachable_holder.py -q
-"""
 
 from __future__ import annotations
 
@@ -88,8 +66,6 @@ def test_names_how_long_the_touch_has_gone_unreleased(tmp_path):
 
 
 def test_a_minutes_old_claim_is_not_rendered_as_hours(tmp_path):
-    """The age exists to separate live work from residue, so the two ends of
-    that judgment must not render alike."""
     d = _session_dir(tmp_path)
     (d / "touch-record.jsonl").write_text(
         json.dumps(
@@ -122,8 +98,6 @@ def test_a_touch_on_another_path_is_not_this_paths_age(tmp_path, monkeypatch):
 
 
 def test_degrades_to_the_identifier_alone_rather_than_raising(tmp_path, monkeypatch):
-    """No session dir at all: unreadable state must never turn a refusal
-    into a crash."""
     _patch_registry(monkeypatch, {})
     assert (
         safe_commit._holder_context(str(tmp_path), _SID, "some/file.py")
@@ -155,10 +129,6 @@ def test_resolves_the_sid_to_the_stable_name(tmp_path, monkeypatch):
 def test_an_unregistered_sid_is_marked_unnamed_not_printed_as_an_address(
     tmp_path, monkeypatch
 ):
-    """A re-pointed session is the common case, not the exceptional one, and
-    printing its old id bare invites attribution on a stale identifier. The
-    label says what the miss is -- an unresolved name -- and never asserts
-    the holder is dead: this branch has already established it is live."""
     _patch_registry(monkeypatch, {})
     rendered = safe_commit._holder_context(str(tmp_path), _SID, "some/file.py")
     assert "no name in the harness registry" in rendered
@@ -189,9 +159,6 @@ def _patch_liveness_basis(monkeypatch, basis_by_sid):
 
 
 def test_a_shared_stable_pid_holder_is_marked_a_possible_ghost(tmp_path, monkeypatch):
-    """A holder whose liveness rests on a `stable_pid` shared with another
-    session on this box proves only that something under that ancestor is
-    alive, not that this sid is."""
     _patch_registry(monkeypatch, {})
     _patch_liveness_basis(monkeypatch, {_SID: "stable-pid-shared"})
     rendered = safe_commit._holder_context(str(tmp_path), _SID, "some/file.py")
@@ -219,10 +186,6 @@ def _stub_session(mod, monkeypatch, *, session_id="mine", contested=None):
 def test_refusal_text_qualifies_the_release_promise_on_a_shared_ghost(
     tmp_path, monkeypatch, capsys
 ):
-    """The closing remedy line used to promise, unconditionally, that an
-    unnamed holder's claim "frees when that session commits or releases".
-    That is false for a `stable-pid-shared` ghost, which cannot do either --
-    the refusal must qualify the promise rather than repeat it as fact."""
     _stub_session(
         monkeypatch=monkeypatch,
         mod=safe_commit,

@@ -37,26 +37,13 @@ from coordinator_core.bash_guards import guard_inprocess_search as _gis
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.hooks import nudge_em_code_dispatch as _nudge
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
 
-# ---------------------------------------------------------------------------
-# AC8 -- item 1: check_multiprobe_banner_rewrite's pre-fix prose-only
-# advisory (no updatedInput, no genuine alternative -- see this chunk's
-# own dispatch brief and dispatch_checks.py's C4 docstring) vs its C4
-# post-fix silent-fallthrough.
-# ---------------------------------------------------------------------------
-
-
 def _item1_pre_fix_hso(joined_tokens: str) -> dict:
-    """Byte-for-byte reconstruction of the `_advisory(...)` call C4 removed
-    from `check_multiprobe_banner_rewrite`'s unrecognized-segment branch --
-    lifted verbatim from `git diff HEAD -- .../dispatch_checks.py`."""
     text = (
         "Advisory: this multi-probe banner re-derives session facts "
         "the harness already knows (a chained echo/git/pwd/whoami/"
@@ -103,9 +90,6 @@ class TestItem1MultiprobeBannerFiringShape:
         assert not ev.violated
 
     def test_post_fix_recognized_segment_still_names_a_real_alternative(self):
-        """AC10: the emitter must still fire on at least one genuine-trigger
-        case post-fix -- a rewrite-offered banner with every segment
-        recognized."""
         envelope = _dc.check_multiprobe_banner_rewrite(
             'echo "=== SESSION FACTS ==="; pwd; whoami; git status --short', "firing-shape-gate-test"
         )
@@ -116,16 +100,7 @@ class TestItem1MultiprobeBannerFiringShape:
         assert not ev.violated, ev.reasons
 
 
-# ---------------------------------------------------------------------------
-# AC8 -- item 2: guard_inprocess_search's pre-fix unlatched (byte-identical
-# every call) footer vs its C3 post-fix session latch.
-# ---------------------------------------------------------------------------
-
-
 def _item2_pre_fix_footer_text() -> str:
-    """Byte-for-byte reconstruction of the pre-C3 `_footer()` body (no `sid`
-    parameter, no latch) -- lifted verbatim from `git diff HEAD -- .../
-    guard_inprocess_search.py`."""
     return (
         "[Searched inside the coordinator hook process that was already running for this "
         "tool call -- no subprocess was spawned. Nothing to change on your side: keep "
@@ -140,7 +115,7 @@ def _item2_pre_fix_footer_text() -> str:
 class TestItem2InProcessSearchFiringShape:
     def test_pre_fix_fixture_repeats_and_is_flagged(self):
         first = _item2_pre_fix_footer_text()
-        second = _item2_pre_fix_footer_text()  # pre-fix: no session state, always identical
+        second = _item2_pre_fix_footer_text()
         violated, reason = fs.evaluate_report_repetition(first, second)
         assert violated, "pre-fix unlatched footer repetition was not flagged"
         assert reason
@@ -158,8 +133,6 @@ class TestItem2InProcessSearchFiringShape:
         assert second == _gis._ANSWERED_MARKER
 
     def test_post_fix_first_call_still_carries_the_full_explanatory_paragraph(self, tmp_path, monkeypatch):
-        """AC10: the emitter must still fire its real content on at least
-        one genuine-trigger case (the first answered call in a session)."""
         repo = tmp_path / "repo"
         (repo / ".git").mkdir(parents=True)
         monkeypatch.setenv(_gis._SESSION_ID_ENV_VAR, "firing-shape-gate-test-session-2")
@@ -167,16 +140,7 @@ class TestItem2InProcessSearchFiringShape:
         assert "recognized as a search" in first
 
 
-# ---------------------------------------------------------------------------
-# AC8 -- item 3: nudge_em_code_dispatch's pre-fix literal "[TODO: ...]"
-# dispatch-brief placeholder vs its C5 post-fix payload-derived task line.
-# ---------------------------------------------------------------------------
-
-
 def _item3_pre_fix_brief_text(file_path: str, executor_type: str) -> str:
-    """Byte-for-byte reconstruction of the pre-C5 `_build_dispatch_brief`
-    (2-arg signature, TODO placeholders) -- lifted verbatim from
-    `git diff HEAD -- .../nudge_em_code_dispatch.py`."""
     return "\n".join(
         [
             "## Pre-assembled executor dispatch brief",
@@ -211,26 +175,11 @@ class TestItem3NudgeDispatchBriefFiringShape:
         assert "[TODO" not in text
 
     def test_post_fix_brief_still_names_a_concrete_task_line(self):
-        """AC10: the post-fix brief still fires real, payload-derived
-        content -- not merely an absence of the placeholder.
-
-        The expected text carries no column padding: C8c (docs/plans/
-        2026-09-11-trim-the-remaining-over-cap-guard-messages.md) dropped the
-        `file:`/`commit:` lines the padding used to align against, so a
-        padded expectation would now pin a shape the builder no longer
-        renders. What AC10 asserts is unchanged -- the task line names the
-        payload-derived edit, not a `[TODO: ...]` placeholder.
-        """
         edit_description = _nudge._describe_edit(
             {"tool_name": "Write", "tool_input": {"content": "..."}}
         )
         text = _nudge._build_dispatch_brief("some/file.py", "generic-executor", edit_description)
         assert "task: Write: full-file content write" in text
-
-
-# ---------------------------------------------------------------------------
-# The sentinel guards' canonical legal-zero-alternative case (must pass).
-# ---------------------------------------------------------------------------
 
 
 class TestSentinelGuardsZeroAlternativeIsLegal:
@@ -245,18 +194,10 @@ class TestSentinelGuardsZeroAlternativeIsLegal:
         assert not ev.violated, ev.reasons
 
     def test_same_zero_alternative_message_WOULD_fail_if_alternative_were_required(self):
-        """Proof this is a genuine discriminator, not a fixture that would
-        pass regardless of the alternative_required flag."""
         envelope = altlive.LIVE_TRIGGERS["block_worktree_sentinel_creation"]()
         hso = envelope["hookSpecificOutput"]
         ev = fs.evaluate_ask_hso(hso, alternative_required=True)
         assert ev.violated
-
-
-# ---------------------------------------------------------------------------
-# Axis B is orthogonal -- a withheld/offered override is never itself an
-# Axis A alternative, in either direction.
-# ---------------------------------------------------------------------------
 
 
 class TestAxisBOverrideIsOrthogonal:
@@ -286,11 +227,6 @@ class TestAxisBOverrideIsOrthogonal:
         assert not ev.violated
 
 
-# ---------------------------------------------------------------------------
-# Registry / ratchet integrity -- both gaps the plan names closed.
-# ---------------------------------------------------------------------------
-
-
 def test_every_registry_row_has_a_live_violation_check():
     missing = set(fs.REGISTRY) - set(fs.LIVE_VIOLATION_CHECKS)
     assert not missing, "REGISTRY row(s) added without a LIVE_VIOLATION_CHECKS entry: %s" % sorted(missing)
@@ -302,22 +238,11 @@ def test_every_live_violation_check_has_a_registry_row():
 
 
 def test_known_violations_is_a_frozen_set_with_a_pinned_count():
-    """Gap (b): membership COUNT is checked, so growth is a visible diff,
-    never a silent append. Every fix chunk in this plan (C1a/C2/C3/C4/C5/C7)
-    landed before this chunk was authored, so the post-fix corpus this
-    ratchet covers has zero known lingering firing-shape violations -- an
-    empty set is the correct, non-amnestied state here, not a placeholder."""
     assert isinstance(fs.KNOWN_VIOLATIONS, frozenset)
     assert len(fs.KNOWN_VIOLATIONS) == 0
 
 
 def _known_violations_loop(known_violations, live_violation_checks) -> None:
-    """The real ratchet loop body, extracted so both the live-corpus gate
-    test (`test_known_violations_still_violate`, currently vacuous over an
-    empty set) AND a populated-set exercise
-    (`test_known_violations_ratchet_loop_against_a_populated_set`, Finding 5)
-    run the exact SAME code path -- not a re-implementation that could drift
-    from the real thing."""
     for name in known_violations:
         assert live_violation_checks[name](), (
             "%s is listed in KNOWN_VIOLATIONS but its live re-fire no longer "
@@ -374,15 +299,9 @@ def test_known_violations_ratchet_mechanism_can_actually_detect_a_violation():
     envelope = _dc.check_multiprobe_banner_rewrite(
         "sed -n 1,5p a.py; echo ===; sed -n 6,9p b.py", "firing-shape-gate-meta-test"
     )
-    assert envelope is None  # post-fix: silence, so build a synthetic fired case instead
+    assert envelope is None
     hso = _item1_pre_fix_hso("sed -n 1,5p a.py")["hookSpecificOutput"]
     assert fs.evaluate_ask_hso(hso, alternative_required=True).violated
-
-
-# ---------------------------------------------------------------------------
-# AC11 -- determinism across N consecutive runs (never a single-run
-# assumption, per _alternative_liveness.py's own documented hazard).
-# ---------------------------------------------------------------------------
 
 
 def _run_all_live_violation_checks_in_fresh_subprocess() -> dict:
@@ -409,7 +328,7 @@ def _run_all_live_violation_checks_in_fresh_subprocess() -> dict:
         text=True,
         cwd=str(pathlib.Path(__file__).resolve().parents[3]),
         timeout=60,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # popup-safe-env-suppressed
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     assert completed.returncode == 0, (
         "fresh-process live-violation-check run failed: stdout=%r stderr=%r"
@@ -419,24 +338,14 @@ def _run_all_live_violation_checks_in_fresh_subprocess() -> dict:
 
 
 def test_live_violation_checks_are_deterministic_across_n_runs():
-    """AC11: N genuinely separate process invocations, each re-importing
-    `_firing_shape.py` and its siblings from disk, must agree on the exact
-    same verdict set."""
     runs = [_run_all_live_violation_checks_in_fresh_subprocess() for _ in range(5)]
     first = runs[0]
     for i, run in enumerate(runs[1:], start=2):
         assert run == first, "run %d's verdict set diverged from run 1: %r vs %r" % (i, run, first)
-    # And every verdict is exactly the expected all-False state (no known
-    # lingering violation in the current, post-fix corpus).
     assert first == {name: False for name in fs.LIVE_VIOLATION_CHECKS}
 
 
-# ---------------------------------------------------------------------------
-# AC10 promotion (declared once more here at the gate level): the whole
 # LIVE_VIOLATION_CHECKS registry is re-runnable without raising, proving
-# every wired trigger is itself alive (a broken row would raise, not
-# silently report False).
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("name", sorted(fs.LIVE_VIOLATION_CHECKS))

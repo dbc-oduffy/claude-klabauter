@@ -42,13 +42,6 @@ from pathlib import Path
 from coordinator_core.git.run import run_git
 from coordinator_core.git_scope import scoped_git_env
 
-# Committed floor-provenance guardrail. This value is version-controlled and
-# reviewable in this file's own git history — it is NEVER runtime-fetched
-# from a remote/registry. It is bumped as part of the Definition of Done of
-# any fix consumers were demonstrably re-hitting (the wsc_resolve/6fdc7b4
-# class), so the floor tracks known-bad lines rather than "latest".
-#
-# This value is the wsc_resolve phantom-handoff fix that motivated the plan.
 MIN_KNOWN_GOOD_SHA: str = "6fdc7b4de770dc1c996b3c2a42bf2c7984dd67c9"
 
 
@@ -143,11 +136,6 @@ def resolve_engine_dirty() -> bool | None:
     return bool(result.stdout.strip())
 
 
-#: Process-wide memo for `engine_build()`. One entry, set on first call and never
-#: invalidated: a process that re-resolved would report two different builds for
-#: one run, which is exactly the ambiguity this surface exists to remove. The
-#: warm server's lifetime is the memo's lifetime, and a source edit under a live
-#: server is `warm.skew`'s axis to detect, not this one's to paper over.
 _BUILD_MEMO: dict | None = None
 
 

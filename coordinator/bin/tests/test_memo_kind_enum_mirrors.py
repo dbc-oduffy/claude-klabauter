@@ -32,7 +32,6 @@ _BIN = Path(__file__).resolve().parents[1]
 
 
 def _load(script_name: str, module_name: str):
-    """Load a hyphenated bin script as a module (it is not importable by name)."""
     path = _BIN / script_name
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
@@ -64,6 +63,4 @@ def test_cli_memo_kind_mirror_matches_the_engine(script_name, module_name, attr)
 
 
 def test_ack_is_not_a_kind_anywhere():
-    """`ack` is receipt-state, not a sender-declared kind -- asserted at the
-    canonical list so the mirrors inherit it."""
     assert "ack" not in CANONICAL

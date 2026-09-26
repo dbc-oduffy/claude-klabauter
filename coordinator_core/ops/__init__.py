@@ -98,15 +98,6 @@ from typing import Dict, List, Tuple
 
 _logger = _logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Eager-import table: (dotted module path, human-readable "registers ..." note)
-# One entry per op module that used to be a bare `from X import Y` statement.
-# Kept as data (not individual import statements) so _eager_import_all() can
-# wrap EACH import independently in its own try/except — a data-driven loop
-# is the only way to get per-module isolation without ~80 duplicated
-# try/except blocks. The note column preserves the original inline
-# "registers ..." documentation from each import's trailing comment.
-# ---------------------------------------------------------------------------
 _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.ping", 'registers "ping"'),
     ("coordinator_core.ops.invoke_from_argv", 'registers "invoke.from_argv"'),
@@ -145,17 +136,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "module contains no reference to prune before this row; C1's "
         "SUSPENDED_OPS row removal is what makes dispatch reachable)",
     ),
-    # "fleet.archive_completed_plans" is KILLED, not suspended (op_budget_suspension:
-    # p50 996ms against the 200ms bar; compute retained as a library, resolved
-    # in-process by ceremony/commit_pipeline.py and tail_ops.py). The annotation must
-    # not say "registers": the table would be advertising a name that cannot dispatch,
-    # which test_registration_annotations_resolve exists to catch -- its own remedy is
-    # "strike the name, never resurrect". The module stays in this table because it
-    # still declares @register_op and eager-import coverage is a separate invariant.
     ("coordinator_core.ops.fleet.archive_plans", 'eager-imported for library compute; its op is killed'),
-    # `handoff.housekeeping` (and the `handoff_housekeeping.py` / `handoff_reconcile.py`
-    # modules that carried it) is deleted outright — the repoint landed and C7's
-    # replacement below is the only door. Kill means kill forever (PM 2026-08-23).
     ("coordinator_core.housekeeping.cycle", 'registers "housekeeping.cycle"'),
     ("coordinator_core.ops.fleet.capability_index", 'registers "fleet.aggregate_capability_index"'),
     ("coordinator_core.ops.fleet.sweep_status", 'registers "fleet.archive_sweep_status"'),
@@ -256,30 +237,13 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ),
     (
         "coordinator_core.ops.ceremony.post_commit_tail",
-        # KILLED as an op (K-116, 422ms p50 against the 200ms bar) -- the name is
-        # deliberately not advertised here. The module stays eagerly imported
-        # because `workstream_complete/apply.py` calls `fold_completion_entry_commit`
-        # from it directly and its `run()` is retained undecorated for wsc_tail's
-        # in-process path. Do not restore a `registers "..."` claim for it.
         "no reachable op; imported for its in-process helpers only",
     ),
     ("coordinator_core.session_ledger.aggregate_chain_loe", 'registers "session_ledger.aggregate_chain_loe"'),
     ("coordinator_core.ops.records_query", 'registers "records.query"'),
     (
         "coordinator_core.ops.record_history",
-        # KILLED (max 2062ms against the 2000ms bar); its sole caller was the CLI
-        # trampoline `coordinator/bin/query-record-history.py`, which now surfaces
-        # the refusal. Nothing this module declares dispatches.
-        # overengineering-reviewer (finding #1, major) asked this row
-        # struck entirely rather than re-annotated. Left in place: the module
-        # still declares `@register_op("records.history")`
-        # (coordinator_core/ops/record_history.py:657), and
-        # test_eager_op_modules_covers_every_register_op.py requires every
         # such module to be _EAGER_OP_MODULES-reachable or it ships
-        # present-but-dead (registry MISS at dispatch). That test is the
-        # arbiter per this dispatch's brief — striking this row is correct
-        # only once the module's `@register_op` decorator (or the module
-        # itself) is also removed, which is outside this integration pass.
         "no reachable op; `records.history` was killed under the budget",
     ),
     (
@@ -324,14 +288,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.cruft_sweep", ""),
     (
         "coordinator_core.ops.completion_ops",
-        # `completion.reconcile_commits` was struck from this annotation on
-        # 2026-08-26. It was KILLED and rebuilt from scratch per PM ruling
-        # 2026-08-23 (see that module's own docstring, which has said so since),
-        # but the eager-import table went on advertising it for three days. A
-        # registration table that names an op the registry does not serve is the
-        # failure MEMORY.md records twice over -- a killed op name living on in a
-        # string-keyed surface -- and here it was the surface a reader would
-        # trust FIRST to learn what exists.
         'registers "completion.flip_to_released", "plan.append_session" (strang-10 B, DR-216)',
     ),
     (
@@ -348,8 +304,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.reap_integrated_findings", 'registers "fleet.reap_integrated_findings"'),
     (
         "coordinator_core.ops.session.reap",
-        # `session.reap_claims_for_repos` is KILLED (max 34266ms) and is struck from
-        # this claim rather than left advertised; the other two still dispatch.
         'registers "session.reap", "session.audit_unreapable"',
     ),
     ("coordinator_core.ops.session.guard_settings_integrity", 'registers "session.guard_settings_integrity"'),
@@ -673,23 +627,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ),
 ]
 
-# module dotted-path -> the exception raised the last time we tried to import
-# it. Populated by _eager_import_all() on a per-module ImportError/Exception;
-# cleared on a subsequent successful import of that same module (self-healing
-# if the module is fixed mid-process, e.g. under pytest --looponfail). Read by
-# coordinator_core.ipc's dispatch_message to turn a registry MISS on a
-# poisoned module's op into the real cause instead of a generic "Method not
 # found" (see ipc.py's METHOD_NOT_FOUND branch).
 _POISONED_MODULES: Dict[str, BaseException] = {}
 
 
 def get_poisoned_modules() -> Dict[str, BaseException]:
-    """Return a shallow copy of {module dotted-path: last import exception}.
-
-    Purpose: read-only seam for ipc.py's dispatch path to check whether a
-    registry-miss op belongs to a module that failed to import, so it can
-    re-surface the REAL cause instead of a generic "Method not found".
-    """
     return dict(_POISONED_MODULES)
 
 
@@ -715,11 +657,6 @@ def _eager_import_all() -> None:
     for module_path, _note in _EAGER_OP_MODULES:
         try:
             if module_path == "coordinator_core.hooks":
-                # This sub-package is itself lazy — a bare import registers
-                # none of its 19 hooks.* ops. Force ITS eager-import routine
-                # rather than just importing the package (see the entry's
-                # note above and coordinator_core/hooks/__init__.py's own
-                # _eager_import_all() docstring).
                 hooks_module = importlib.import_module(module_path)
                 hooks_module._eager_import_all()
                 for poisoned_path, poisoned_exc in hooks_module.get_poisoned_modules().items():
@@ -731,13 +668,6 @@ def _eager_import_all() -> None:
             # ERROR-severity logging call (§ FUNCTION gate C4C brief "make the
             # silent swallow observable") ALONGSIDE the pre-existing stderr
             # print below — control flow is UNCHANGED (still resilient: no
-            # raise, every other module still gets its own import attempt).
-            # This is purely about making a per-module import failure land
-            # in anything that watches Python's logging machinery (e.g. a
-            # log-aggregation handler attached to the root logger), which a
-            # bare stderr print to an unread hermetic subprocess (§
-            # `coordinator_core/percolate/engine.py` `run_function_gate`,
-            # which only inspects stdout for "GATE_OK"/stderr for a
             # "GATE_FAIL:" marker it never emits here) does not reach.
             _logger.error(
                 "coordinator_core.ops: FAILED to import %r (%s: %s) — its "
@@ -760,10 +690,4 @@ def _eager_import_all() -> None:
             _POISONED_MODULES.pop(module_path, None)
 
 
-# Lazy is the only mode: importing this bare package never eagerly registers
 # any op. The former `_lazy_ops_requested()` gate (COORDINATOR_CORE_LAZY_OPS
-# env var / sys._coordinator_core_lazy_ops in-process attribute) is retired —
-# there is no longer a flag to read or a channel to arm, so no conditional
-# call to _eager_import_all() happens here. Callers reach registration
-# through the targeted per-op import (ipc.py's registry-miss path) or, for the
-# rare full-registration need, by calling _eager_import_all() directly.

@@ -93,10 +93,6 @@ def test_reader_context_detected(repo_tree: Path) -> None:
 
 
 def test_both_modes_run_unconditionally(repo_tree: Path) -> None:
-    """A file with BOTH a writer and a reader occurrence must be found by
-    the union — proving the derivation does not stop after the first mode
-    that matches (the DR-084 writer-only near-miss shape this kind exists
-    to close, Review: the Director of Engineering-cutover-review F2)."""
     both_file = repo_tree / "coordinator" / "lib" / "both.py"
     both_file.write_text(
         "STATE = 'closed'\n\n\ndef is_closed(s):\n    return s == 'closed'\n",
@@ -120,9 +116,6 @@ def test_both_modes_run_unconditionally(repo_tree: Path) -> None:
 
 
 def test_js_hardcoded_reader_detected_via_regex(repo_tree: Path) -> None:
-    """The DR-084 consumed-marker.js near-miss shape: a JS file hardcoding
-    the vocabulary as a string-literal array the AST edge graph cannot
-    parse at all — must be caught by the regex-reader pass."""
     js_file = repo_tree / "coordinator" / "web" / "consumed-marker.js"
     js_file.write_text(
         "const TERMINAL_DEPLOYMENT = ['closed', 'archived'];\n", encoding="utf-8"
@@ -165,9 +158,6 @@ def test_foreign_repo_not_scanned_and_contributes_nothing(repo_tree: Path) -> No
 
 
 def test_unmapped_non_foreign_repo_is_also_unscanned(repo_tree: Path) -> None:
-    """Fail-closed on absence, not merely on a declared foreign:true — a repo
-    the caller never supplied a root for is unscanned regardless of what the
-    record itself claims about foreign-ness."""
     gate_source = {
         "kind": "value-vocabulary",
         "pattern": "closed",
@@ -204,12 +194,6 @@ def test_paths_traversal_entry_is_skipped_not_read(repo_tree: Path) -> None:
 
 
 def test_symlinked_subdir_escaping_root_is_not_walked(repo_tree: Path) -> None:
-    """`_iter_candidate_files` containment-checked
-    only the top-level resolved path and then walked `rglob("*")`
-    unguarded; `rglob` follows symlinked subdirectories, so a symlink under
-    a scanned path resolving outside `root` was walked and read with no
-    second containment check. A per-child `contained_path` re-check inside
-    the walk must skip files reached only via such a symlink."""
     outside_dir = repo_tree.parent / "outside_pkg"
     outside_dir.mkdir()
     (outside_dir / "leaked.py").write_text("x = 'closed'\n", encoding="utf-8")
@@ -233,10 +217,6 @@ def test_symlinked_subdir_escaping_root_is_not_walked(repo_tree: Path) -> None:
 
 
 def test_extensionless_python_shebang_file_is_derived(repo_tree: Path) -> None:
-    """FIX-D — the named house trap: a Python file with NO extension (like
-    the plan's own worked example, coordinator/bin/archive-stamp-cli prior to
-    its C6 rename) must still be reachable by the collector, via its
-    shebang, not its suffix."""
     shebang_file = repo_tree / "coordinator" / "lib" / "some-cli"
     shebang_file.write_text(
         "#!/usr/bin/env python3\nx = 'closed'\n", encoding="utf-8"
@@ -254,9 +234,6 @@ def test_extensionless_python_shebang_file_is_derived(repo_tree: Path) -> None:
 
 
 def test_extensionless_non_python_shebang_file_is_not_derived(repo_tree: Path) -> None:
-    """An extensionless file with a non-python shebang (#!/bin/bash) is not
-    misclassified as Python, and is not swept in by the JS/markdown regex
-    pass either (it carries no recognized text suffix)."""
     shebang_file = repo_tree / "coordinator" / "lib" / "some-script"
     shebang_file.write_text(
         "#!/bin/bash\necho closed\n", encoding="utf-8"
@@ -285,19 +262,11 @@ def test_is_prose_one_word_trailing_punctuation_boundary() -> None:
     `_is_prose`) — this pins the CURRENT documented behavior of that
     boundary so a future change to the heuristic is a visible, deliberate
     diff rather than a silent regression."""
-    # "notes: closed." -- key-stripped value is the single whitespace-token
-    # "closed." (trailing period attached, no internal space) -- one word by
-    # the whitespace-split rule, so classified as NOT prose (structural).
     assert _is_prose("notes: closed.") is False
-    # A genuine multi-word sentence value is still correctly caught as prose.
     assert _is_prose("notes: this was closed after review.") is True
 
 
 def test_docstring_mention_is_not_derived(repo_tree: Path) -> None:
-    """Precision fix (FIX-F): a module docstring mentioning the vocabulary
-    word in an ordinary-English sentence must NOT count as a usage — this is
-    exactly the DR-084-exemplar failure mode (377-consumer over-derivation)
-    the precision fix exists to close."""
     docstring_only = repo_tree / "coordinator" / "lib" / "docstring_only.py"
     docstring_only.write_text(
         '"""This module fails closed when the handoff was closed by a peer."""\n'
@@ -320,11 +289,6 @@ def test_docstring_mention_is_not_derived(repo_tree: Path) -> None:
 
 
 def test_comment_mention_is_not_derived(repo_tree: Path) -> None:
-    """Precision fix (FIX-F): a ``#`` comment mentioning the vocabulary word
-    must NOT count. Comments are never AST nodes, so a correct AST-walking
-    classifier already excludes them structurally — this test guards
-    against a regression back to a raw ``pattern.search(source_text)``
-    sweep over the whole file (which WOULD see comments)."""
     comment_only = repo_tree / "coordinator" / "lib" / "comment_only.py"
     comment_only.write_text(
         "# the ticket was closed after review\n"
@@ -346,9 +310,6 @@ def test_comment_mention_is_not_derived(repo_tree: Path) -> None:
 
 
 def test_markdown_body_prose_not_derived_but_frontmatter_value_is(repo_tree: Path) -> None:
-    """Precision fix (FIX-F): a markdown BODY sentence mentioning the
-    vocabulary word must NOT count, but the SAME file's frontmatter field
-    VALUE (a structured, non-prose position) must."""
     web_dir = repo_tree / "coordinator" / "web"
     prose_md = web_dir / "prose-only.md"
     prose_md.write_text(
@@ -374,11 +335,6 @@ def test_markdown_body_prose_not_derived_but_frontmatter_value_is(repo_tree: Pat
 
 
 def test_real_structural_usage_is_still_derived(repo_tree: Path) -> None:
-    """Precision fix (FIX-F) does not go vacuous: a genuine structural
-    usage — a string-literal membership comparison (``in``), the same shape
-    ``archive-stamp-cli``'s own ``--continued-into`` flag check uses — is
-    still derived alongside a docstring/comment in the SAME file that must
-    NOT be derived on their own."""
     structural_file = repo_tree / "coordinator" / "lib" / "flag_check.py"
     structural_file.write_text(
         '"""This module handles a flag that was continued from a prior release."""\n'
@@ -438,13 +394,6 @@ def test_markdown_fenced_command_call_site_with_args_is_derived(repo_tree: Path)
 
 
 def test_markdown_fenced_comment_line_is_not_derived(repo_tree: Path) -> None:
-    """Regression — Review: code-reviewer F2: removing the fence-line prose
-    filter to catch multi-token call sites (the test above) must not also
-    start counting a comment line's mention of the pattern as a match. A
-    ``#``-prefixed (or ``//``-prefixed) line is unambiguously not a call
-    site in any language this module's fences carry — that is a
-    structural/shape signal, not the word-count heuristic the positive-case
-    fix removed, so it survives as a narrow guard."""
     fence_md = repo_tree / "coordinator" / "web" / "usage.md"
     fence_md.write_text(
         "# Usage\n\n```bash\n# this record was closed after review\n```\n",
@@ -489,21 +438,11 @@ def test_markdown_fenced_prose_sentence_is_accepted_tradeoff_false_positive(repo
     }
     result = derive(gate_source, {"doe": repo_tree})
 
-    # Documents the accepted tradeoff: this prose sentence IS derived, even
-    # though it is not a genuine call site — see docstring negative-spec.
     assert result["derived_ids"] == ["doe:coordinator/web/transcript.md"]
     assert result["derived_count"] == 1
 
 
 def test_markdown_fenced_non_call_site_code_reference_is_accepted_tradeoff(repo_tree: Path) -> None:
-    """Pins the second half of the Finding 2 accepted tradeoff: fenced
-    content that IS code but is not itself a call site (a bare
-    string-literal reference to the pattern, not an invocation) is still
-    treated as a match — the same posture the regex-reader pass already
-    takes for genuinely AST-unparseable files elsewhere in this module. A
-    false positive here (one extra file counted as a reader) is a cheaper
-    failure mode than the false negative (a real call site silently
-    vanishing) this function exists to avoid."""
     fence_md = repo_tree / "coordinator" / "web" / "example.md"
     fence_md.write_text(
         '# Example\n\n```python\nexample_command = "archive-stamp-cli"\n```\n',
@@ -523,8 +462,6 @@ def test_markdown_fenced_non_call_site_code_reference_is_accepted_tradeoff(repo_
 
 
 def test_extensionless_binary_file_is_skipped_without_raising(repo_tree: Path) -> None:
-    """FIX-D fail-quiet: an extensionless file whose first bytes are not
-    valid UTF-8 (a binary file) must be skipped, never raise."""
     binary_file = repo_tree / "coordinator" / "lib" / "some-binary"
     binary_file.write_bytes(b"\xff\xfe\x00\x01closed\x00\x02")
 
@@ -541,14 +478,6 @@ def test_extensionless_binary_file_is_skipped_without_raising(repo_tree: Path) -
 
 
 def test_unparseable_py_file_matching_pattern_is_unknown_not_dead(repo_tree: Path) -> None:
-    """Regression — census fold-in constraint 2 (state/memos/2026-07-25-
-    census-requirement-folded-into-cutover-primitive.md item 2): a
-    ``.py``-suffixed file that fails AST parse (a syntax error) but whose
-    raw text still whole-token-matches ``pattern`` must NOT silently
-    contribute nothing (the pre-existing "AST-unparseable == dead" shape).
-    It is UNKNOWN — a distinct bucket from both a confirmed writer/reader
-    and a non-match — surfaced via ``unknown_ids``/``unknown_count``, never
-    laundered into ``derived_ids`` and never dropped."""
     broken_file = repo_tree / "coordinator" / "lib" / "broken.py"
     broken_file.write_text(
         "def broken(:\n    TOKEN = 'closed'\n",
@@ -570,10 +499,6 @@ def test_unparseable_py_file_matching_pattern_is_unknown_not_dead(repo_tree: Pat
 
 
 def test_unparseable_py_file_not_matching_pattern_is_not_unknown(repo_tree: Path) -> None:
-    """A syntax-broken ``.py`` file whose text does NOT contain ``pattern``
-    at all is not classified unknown — unknown is reserved for files the
-    gate can SEE matching content in but cannot classify, not every
-    unparseable file regardless of relevance."""
     broken_file = repo_tree / "coordinator" / "lib" / "broken.py"
     broken_file.write_text("def broken(:\n    TOKEN = 'irrelevant'\n", encoding="utf-8")
 

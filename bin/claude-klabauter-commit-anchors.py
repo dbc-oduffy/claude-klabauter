@@ -57,24 +57,12 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 
-_SUBPROCESS_TIMEOUT_SECS: float = 3.0   # git subprocess cap
-_INVOKE_TIMEOUT_SECS: float = 10.0      # engine invoke cap — higher than git subprocesses
-                                         # because a cold coordinator_core import may take
-                                         # several seconds on first call; still bounded and
-                                         # fail-open on timeout.
-
-
-# ---------------------------------------------------------------------------
-# Git helpers — subprocess, all capped, never raise
-# ---------------------------------------------------------------------------
+_SUBPROCESS_TIMEOUT_SECS: float = 3.0
+_INVOKE_TIMEOUT_SECS: float = 10.0
 
 
 def _git_show_toplevel() -> Optional[str]:
-    """Return the canonical repo root for CWD, or None on any failure."""
     try:
         r = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
@@ -91,14 +79,6 @@ def _git_show_toplevel() -> Optional[str]:
 
 
 def _git_common_dir(repo_root: str) -> Optional[str]:
-    """Return the git common directory for repo_root, or None on any failure.
-
-    For a normal repo: <repo_root>/.git
-    For a linked worktree: <main-worktree>/.git
-
-    git rev-parse --git-common-dir may return a relative path; we resolve it
-    against repo_root.
-    """
     try:
         r = subprocess.run(
             ["git", "rev-parse", "--git-common-dir"],
@@ -118,35 +98,11 @@ def _git_common_dir(repo_root: str) -> Optional[str]:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Session ID resolution
 # Precedence:  COORDINATOR_SESSION_ID → CLAUDE_SESSION_ID → CLAUDE_CODE_SESSION_ID
-# (KS-6, 2026-08-07 — widened to match the canonical
 # coordinator_core.session.core.SESSION_ENV_PRECEDENCE ladder; this script
-# runs in DoE-claude's git-hook context and invokes claude-klabauter only via the
-# subprocess command entrypoint, so it keeps a hand-mirrored env-var-only
-# copy rather than importing coordinator_core directly — a change to the
-# canonical ladder must be mirrored here too.)
-# ---------------------------------------------------------------------------
 
 
 def _resolve_session_id(repo_root: Optional[str], common_dir: Optional[str] = None) -> Optional[str]:
-    """Resolve the current session ID from env vars only.
-
-    The `.git/coordinator-sessions/.current-session-id` sentinel-file fallback
-    tier was REMOVED 2026-08-07 (KS-1), not merely gated. Two independent
-    reasons: (1) it is unsound by construction under this fleet's
-    concurrency — documented last-writer-wins in
-    `coordinator_core/bash_guards/guard_inprocess_search.py` ~L84 — ~18
-    concurrent sessions on one shared worktree means even a freshly-written
-    sentinel hands session A the id of whichever session wrote last; (2) its
-    writer was `session-init.py` (DoE-claude SessionStart hook), deleted by
-    PM directive 2026-07-15 ("full-kill-keep-fast-orientation") — no
-    production writer survives anywhere, contrary to this module's earlier
-    "written by session-init.sh SessionStart hook" comment. `repo_root` and
-    `common_dir` are retained as parameters for call-site compatibility but
-    are unused now that the sentinel tier is gone.
-    """
     sid = (
         os.environ.get("COORDINATOR_SESSION_ID", "").strip()
         or os.environ.get("CLAUDE_SESSION_ID", "").strip()
@@ -155,11 +111,6 @@ def _resolve_session_id(repo_root: Optional[str], common_dir: Optional[str] = No
     if sid:
         return sid
     return None
-
-
-# ---------------------------------------------------------------------------
-# Command-entrypoint transport (DR-215, C5b) — replaces former UDS transport
-# ---------------------------------------------------------------------------
 
 
 def _invoke_commit_anchors(
@@ -198,7 +149,6 @@ def _invoke_commit_anchors(
     if result.returncode != 0:
         return None
 
-    # Parse the JSON response from stdout (invoke prints indented JSON on success).
     try:
         resp = json.loads(result.stdout)
     except Exception:  # noqa: BLE001
@@ -215,42 +165,27 @@ def _invoke_commit_anchors(
     return trailers
 
 
-# ---------------------------------------------------------------------------
-# Main — all failure paths produce no output and exit 0
-# ---------------------------------------------------------------------------
-
-
 def _main() -> None:
-    # Parse optional --nature CLI arg (env var wins if both supplied)
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--nature", default=None)
     args, _ = parser.parse_known_args()
 
-    # Repo root for the working tree being committed (passed to --repo)
     repo_root = _git_show_toplevel()
     if not repo_root:
         return
 
-    # Git common dir — hoisted before session ID resolution so the sentinel fallback
-    # in _resolve_session_id can use the common dir (not the worktree .git file path,
-    # which is a file pointer for linked worktrees — see F7 fix).
-    # Review: code-reviewer — F7: common_dir hoisted so it can be passed to _resolve_session_id.
     common_dir = _git_common_dir(repo_root)
     if not common_dir:
         return
 
-    # Session ID — required; absent → nothing to stamp
-    # Pass common_dir so sentinel resolution works in linked worktrees.
     session_id = _resolve_session_id(repo_root, common_dir=common_dir)
     if not session_id:
         return
 
-    # Nature — env wins over CLI arg; both optional
     nature: Optional[str] = (
         os.environ.get("CLAUDE_KLABAUTER_COMMIT_NATURE", "").strip() or args.nature or None
     )
 
-    # Call the engine via command entrypoint — fail-open on any transport failure.
     trailers = _invoke_commit_anchors(
         repo_root=repo_root,
         session_id=session_id,
@@ -265,7 +200,5 @@ if __name__ == "__main__":
     try:
         _main()
     except Exception:  # noqa: BLE001
-        # Belt-and-suspenders: any unhandled exception from _main() → fail-open.
-        # SystemExit propagates normally (not caught by `except Exception`).
         pass
     sys.exit(0)

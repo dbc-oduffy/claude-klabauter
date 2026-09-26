@@ -34,7 +34,6 @@ def _write_record(path: Path) -> None:
 
 
 class TestValidateReviewTrailFileSuffixedFilename:
-    """A ``-2``/``-3``-suffixed filename must round-trip identically to the bare form."""
 
     def test_suffixed_filename_parses_same_reviewed_at_as_bare(self, tmp_path: Path) -> None:
         bare = tmp_path / "2026-07-27-140000-abc12345.json"

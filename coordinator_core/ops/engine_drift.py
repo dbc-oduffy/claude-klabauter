@@ -113,33 +113,10 @@ def classify_drift(
 
 
 def _git_is_behind(running_sha: str, floor_sha: str) -> Optional[bool]:
-    """Real ancestry check: is `running_sha` a strict ancestor of `floor_sha`?
-
-    Runs `git merge-base --is-ancestor running floor` in the engine's own git dir
-    (Path(__file__)-derived, same self-locating convention as engine_version.py).
-    Returns True (running is older / behind), False (running is at-or-ahead of the
-    floor — merge-base --is-ancestor fails when running == floor or is a descendant),
-    or None if git itself errors for a reason other than "not an ancestor" (git
-    missing, not a repo, unrelated histories, shallow clone missing one of the SHAs)
-    — the indeterminate sentinel classify_drift() treats as its own distinct state.
-    """
     if running_sha == floor_sha:
         return False
 
     engine_dir = Path(__file__).resolve().parent.parent
-    # Bounded timeout so this read-only probe
-    # can never hang the op's per-invocation budget on a pathological checkout
-    # (index lock held, network-mounted .git, corrupt history). Timeout collapses
-    # to the same indeterminate sentinel as any other git failure — never a false
-    # clean/behind on a merely-slow git call.
-    #
-    # `git_predicate` supplies both the 0/1/other tri-state and the stripped
-    # repo-scoping environment `-C` needs to genuinely select the engine's own
-    # checkout: an inherited GIT_DIR (git exports one to every hook it runs)
-    # otherwise retargets this ancestry question at whatever repo the hook was
-    # running in, and a `returncode != 0` reading would render that as a
-    # confident False (engine at-or-ahead of the floor). See
-    # `coordinator_core/git_scope.py`.
     verdict, reason = git_predicate(
         engine_dir,
         ["merge-base", "--is-ancestor", running_sha, floor_sha],

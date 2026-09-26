@@ -28,16 +28,9 @@ from pathlib import Path
 
 from coordinator_core.git.run import run_git
 
-#: How far back down HEAD's ancestry the cadence scan looks. Chosen against the bands it
-#: feeds, not against repo size: the widest threshold either signal draws is ">15 commits
-#: since the last bug-sweep", so a commit further back than this is "very stale" by a
-#: factor of thirteen and no larger integer would move any verdict. This is what makes
-#: ONE spawn sufficient -- see :func:`_commits_since_last_batch`.
 _SCAN_DEPTH = 200
 
 #: Returned when no matching commit is found within ``_SCAN_DEPTH``. Not a new sentinel:
-#: the bash oracle already returned 99 for "no such commit anywhere", and both readings
-#: land in the same "stale / overdue" band, which is the only thing downstream reads.
 _VERY_STALE = 99
 
 
@@ -94,8 +87,6 @@ def _commits_since_last_batch(repo_root: Path, patterns: dict[str, str]) -> dict
         env=env,
     )
     if not result.ok:
-        # Not a git repo, no commits, git absent, or over budget -- every signal reads
-        # "very stale", which is what the bash oracle also returned when it found nothing.
         return matched
 
     compiled = {name: re.compile(pattern) for name, pattern in patterns.items()}

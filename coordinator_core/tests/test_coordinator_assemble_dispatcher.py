@@ -1,11 +1,5 @@
-# test_coordinator_assemble_dispatcher.py — verifies coordinator-assemble.py
-# (the C8 fan-in dispatcher) and coordinator/bin/lib/entry_point_shim.py.
-#
-# Spec backlink: docs/plans/2026-08-16-a-process-per-predicate.md, chunk C8
 # What this pins: (1) the dispatcher batches MULTIPLE subcommands into ONE
-# process — the whole point of C8 per C7's 7.17x measurement — and (2) no
 # subprocess is ever spawned by the in-process shim path (the REJECTED
-# shape from C7, -0.5123, was exactly a subprocess-spawning forwarder).
 from __future__ import annotations
 
 import importlib.util
@@ -70,8 +64,6 @@ def test_each_target_py_cmd_present_ps1_asymmetric():
 
 
 def test_assemble_targets_partition_engine_vs_by_path():
-    # Mirrors GATE's
-    # test_gate_targets_partition_engine_vs_by_path so a future edit that
     # drops a target from _ENGINE_ENTRIES without adding it to
     # BY_PATH_TARGETS (or vice versa) fails loud here instead of surfacing
     # as a bare KeyError at `_ENGINE_ENTRIES[name]` inside run_target.
@@ -109,10 +101,6 @@ def test_dispatcher_batches_multiple_subcommands_in_one_process(monkeypatch):
         calls.append((name, args, os.getpid()))
         return 0
 
-    # Patch the SOURCE module, not the dispatcher. `main()` does
-    # `from entry_point_shim import ... run_target` at call time (moved
-    # there from module scope by c992b99f73), so the dispatcher module has
-    # no `run_target` attribute to replace and setattr raised AttributeError.
     monkeypatch.setattr(entry_point_shim, "run_target", _fake_run_target)
 
     def _forbidden(*a, **kw):
@@ -146,10 +134,6 @@ def test_dispatcher_first_nonzero_exit_wins(monkeypatch):
     def _fake_run_target(name, args):
         return {"baton-assemble": 0, "consolidate-assemble": 5, "sizing-assemble": 9}[name]
 
-    # Patch the SOURCE module, not the dispatcher. `main()` does
-    # `from entry_point_shim import ... run_target` at call time (moved
-    # there from module scope by c992b99f73), so the dispatcher module has
-    # no `run_target` attribute to replace and setattr raised AttributeError.
     monkeypatch.setattr(entry_point_shim, "run_target", _fake_run_target)
     rc = dispatcher.main(["baton-assemble", "consolidate-assemble", "sizing-assemble"])
     assert rc == 5

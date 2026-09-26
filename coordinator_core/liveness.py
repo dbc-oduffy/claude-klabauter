@@ -44,25 +44,10 @@ from coordinator_core.engine_root import coordinator_engine_root
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import liveness as _session_liveness
 
-# module-level logger matches every other coordinator_core module;
-# allows debug-level signal on liveness-read failures instead of silent pass.
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
 # Lib path resolution — RETAINED for its own dedicated coverage in
-# tests/test_liveness.py (test_lib_path_*), and for callers that still want the
-# on-disk successor path (e.g. diagnostics). Production liveness no longer
-# shells to any coordinator-
-# session lib — it delegates to the native session.* port above. The
-# 3-rung __file__-walk + resolve-coordinator-clone subprocess ladder this
-# function used to run is GONE: coordinator-session.sh was retired
-# repo-wide (migrated to claude-klabauter's coordinator/lib/coordinator_session.py,
-# not to a DoE-side sibling __file__ can walk to), so every one of those
-# rungs always missed. The ladder collapses to a single call through the
-# canonical engine-root resolver (coordinator_core.engine_root) — no
-# __file__-walking, no hardcoded sibling names, no subprocess spawn (and
 # therefore no 15s hang path if CLAUDE_KLABAUTER_ROOT can't be resolved).
-# ---------------------------------------------------------------------------
 _CACHED_LIB: Optional[str] = None
 
 
@@ -88,41 +73,13 @@ def _lib_path() -> Optional[str]:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# Short-TTL per-process cache for resolve_live_session_ids() (C12 — originally
 # Windows bash-spawn cost hardening; RETAINED post-native-port).
-#
-# The native live_session_ids() pass is a single in-process meta.json scan — no
-# per-dir subprocess spawns — so the raw cost is far lower than the old bash
-# shell-out. The TTL cache is kept anyway because the archival/pickup hot path
-# (archive_handoffs._is_terminal) calls this once per scanned handoff, and the
-# underlying 30-minute recency window makes sub-second staleness immaterial: the
-# cached frozenset IS the exact value the uncached pass would return, just reused
-# within one scan pass. cs_claim_holder_live is deliberately NOT cached — its
-# callers (session.reap) take two sequential fresh reads of the SAME claim_path
-# for TOCTOU detection, and caching would silently defeat that race check.
-# ---------------------------------------------------------------------------
-#
 # The cache key is the RESOLVED SESSIONS DIR, not a bare timestamp (break-class
-# fix, 2026-08-07; cross-repo memo `2026-08-07-doe-claude-em-scoped-commit-
-# calls-a-live-peer-dead-and-reapable`). This function is zero-arg and resolves
-# its registry from the PROCESS cwd, so in a process that touches two repos --
-# ordinary in a fleet where one engine serves sibling clones -- an unkeyed
-# cache served repo A's live set as the answer for repo B for up to the TTL.
-# Every one of B's live peers then reads not-live, which downstream renders as
-# a confident DEAD verdict on a live session. Keying on the sessions dir makes
-# a cross-repo hit a MISS rather than a wrong answer; an unresolvable dir
-# (empty key) is cached separately and equally correctly.
 _LIVE_IDS_CACHE_TTL_SEC = 2.0
 _live_ids_cache: Optional[Tuple[str, float, FrozenSet[str]]] = None
 
 
 def _reset_live_ids_cache() -> None:
-    """Test-only helper: clear the resolve_live_session_ids() TTL cache."""
     global _live_ids_cache
     _live_ids_cache = None
 
@@ -162,16 +119,9 @@ def resolve_live_session_ids() -> FrozenSet[str]:
 
 
 def _resolve_live_session_ids_uncached() -> FrozenSet[str]:
-    """Uncached body of resolve_live_session_ids() — see that function's
-    docstring for the contract. Split out so the TTL-cache wrapper above can sit
-    in front of it. Delegates straight to the native port; a defensive
-    ``except`` preserves the seam's empty-on-error contract."""
     try:
         return _session_liveness.live_session_ids()
     except Exception as exc:
-        # Empty-on-error seam contract (see docstring) — should never fire on
-        # a healthy run; logged at debug so a systematic native-port failure
-        # is diagnosable rather than silently degrading every liveness check.
         logger.debug("coordinator_core.liveness: live_session_ids() failed: %s", exc)
         return frozenset()
 

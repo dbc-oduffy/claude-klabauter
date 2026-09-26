@@ -1,31 +1,3 @@
-"""
-coordinator_core.ops.tests.test_workflow_contract
-
-Unit tests for the Workflow-script pattern-contract SSOT
-(coordinator_core/ops/_workflow_contract.py) — the shared scrubber, meta
-extraction + pure-literal check, forbidden-globals (ERROR), phase-mismatch
-set-diff on both surfaces (WARN), barrier-vs-pipeline heuristic (WARN), and
-model-default heuristic (WARN).
-
-Coverage:
-    (a) scrub — strings/templates/comments masked, line count preserved
-    (b) scrub — escaped delimiters do not prematurely close a span
-    (c) extract_meta_block — well-formed + malformed (missing/unterminated)
-    (d) check_meta_pure_literal — each impure shape flagged
-    (e) check_meta_required_fields — missing field flagged
-    (f) check_forbidden_globals — each forbidden global flagged, scrubbed text
-    (g) F1 fixture — "Date.now()" inside a template literal does NOT trip
-        the forbidden-global check
-    (h) phase-mismatch — both phase()-call and agent-options phase: surfaces
-    (i) barrier-vs-pipeline heuristic — flags the shape, spares a legit
-        agent-mediated barrier
-    (j) model-default heuristic — flags model-less agent(), spares an
-        explicit model: call
-    (k) run_checks — end-to-end severity map (ERROR only impure-meta +
-        forbidden-globals)
-
-Spec backlink: pln-workflow-skeleton-stamper-maki-adab0d § C1
-"""
 
 from __future__ import annotations
 
@@ -44,11 +16,6 @@ from coordinator_core.ops._workflow_contract import (
     run_checks,
     scrub,
 )
-
-
-# ---------------------------------------------------------------------------
-# scrub()
-# ---------------------------------------------------------------------------
 
 
 def test_scrub_masks_single_quote_string_contents():
@@ -101,9 +68,7 @@ def test_scrub_preserves_non_string_code_verbatim():
 def test_scrub_honors_escaped_quote_inside_string():
     src = r"const x = 'it\'s Date.now() inside';"
     out = scrub(src)
-    # the escaped quote must not end the string early — Date.now() stays masked
     assert "Date.now()" not in out
-    # and the trailing `;` (real code after the string closes) survives
     assert out.endswith("';")
 
 
@@ -111,11 +76,6 @@ def test_scrub_handles_backslash_before_backtick_in_template():
     src = "const x = `a \\` b Date.now() c`;"
     out = scrub(src)
     assert "Date.now()" not in out
-
-
-# ---------------------------------------------------------------------------
-# extract_meta_block()
-# ---------------------------------------------------------------------------
 
 
 def test_extract_meta_block_well_formed():
@@ -142,11 +102,6 @@ def test_extract_meta_block_nested_braces_balanced():
     block = extract_meta_block(src)
     assert block is not None
     assert block.count("{") == block.count("}")
-
-
-# ---------------------------------------------------------------------------
-# check_meta_pure_literal()
-# ---------------------------------------------------------------------------
 
 
 def test_pure_literal_flags_interpolation():
@@ -197,8 +152,6 @@ def test_pure_literal_clean_meta_has_no_findings():
 
 
 def test_pure_literal_allows_nan_and_infinity_as_bare_identifier_values():
-    # NaN/Infinity are JS literal
-    # values, not variable references; must not be flagged as bare identifiers.
     block = extract_meta_block(
         "export const meta = { name: 'x', description: 'y', retries: Infinity, delta: NaN };"
     )
@@ -212,11 +165,6 @@ def test_pure_literal_messages_are_actionable():
     assert findings
     for f in findings:
         assert "literal" in f.message
-
-
-# ---------------------------------------------------------------------------
-# check_meta_required_fields()
-# ---------------------------------------------------------------------------
 
 
 def test_required_fields_flags_missing_description():
@@ -236,11 +184,6 @@ def test_required_fields_clean_when_both_present():
     block = extract_meta_block("export const meta = { name: 'x', description: 'y' };")
     findings = check_meta_required_fields(block)
     assert findings == []
-
-
-# ---------------------------------------------------------------------------
-# check_forbidden_globals() — ERROR tier, scrubbed text
-# ---------------------------------------------------------------------------
 
 
 def test_forbidden_global_date_now_flagged():
@@ -305,9 +248,6 @@ def test_forbidden_global_real_call_outside_string_still_flagged_alongside_maske
 
 
 def test_forbidden_global_date_now_spares_namespaced_property_access():
-    # myObj.Date.now() is a property
-    # access on a caller-defined object, not the global Date.now(); the
-    # negative lookbehind (?<!\.) must spare it.
     scrubbed = scrub("const t = myObj.Date.now();")
     findings = check_forbidden_globals(scrubbed)
     assert not any(f.code == "forbidden-global-date-now" for f in findings)
@@ -329,11 +269,6 @@ def test_forbidden_global_math_random_still_flags_unqualified_global():
     scrubbed = scrub("const r = Math.random();")
     findings = check_forbidden_globals(scrubbed)
     assert any(f.code == "forbidden-global-math-random" for f in findings)
-
-
-# ---------------------------------------------------------------------------
-# phase-mismatch — both surfaces, WARN only
-# ---------------------------------------------------------------------------
 
 
 def test_phase_titles_extracts_phase_call_sites():
@@ -410,11 +345,6 @@ def test_phase_mismatch_clean_when_all_declared():
     assert findings == []
 
 
-# ---------------------------------------------------------------------------
-# barrier-vs-pipeline heuristic — WARN only, never hard-fails a legit barrier
-# ---------------------------------------------------------------------------
-
-
 def test_barrier_vs_pipeline_flags_double_parallel_with_no_agent_between():
     src = (
         "const a = await parallel(items.map(x => thunk(x)));\n"
@@ -453,11 +383,6 @@ def test_barrier_vs_pipeline_never_error():
     assert all(f.severity == Severity.WARN for f in findings)
 
 
-# ---------------------------------------------------------------------------
-# model-default heuristic — WARN only
-# ---------------------------------------------------------------------------
-
-
 def test_model_default_flags_agent_call_without_model():
     src = "await agent('do the thing');"
     findings = check_model_default(scrub(src))
@@ -489,11 +414,6 @@ def test_model_default_handles_nested_parens_in_args():
     findings = check_model_default(scrub(src))
     assert len(findings) == 1
     assert findings[0].code == "agent-model-default"
-
-
-# ---------------------------------------------------------------------------
-# run_checks() — end-to-end severity map
-# ---------------------------------------------------------------------------
 
 
 def test_run_checks_conformant_script_has_no_error_findings():
@@ -530,9 +450,6 @@ def test_run_checks_missing_meta_block_is_error():
 
 
 def test_run_checks_only_impure_meta_and_forbidden_globals_are_error_tier():
-    """AC1/severity-map: ERROR must contain ONLY impure-meta and
-    forbidden-globals codes — everything else (phase mismatch, barrier,
-    model-default) is WARN."""
     src = (
         "export const meta = { name: someVar, description: 'y', phases: ['Scout'] };\n"
         "phase('Unlisted');\n"
@@ -554,8 +471,6 @@ def test_run_checks_only_impure_meta_and_forbidden_globals_are_error_tier():
 
 
 def test_run_checks_f1_fixture_end_to_end_no_error():
-    """F1 end-to-end: a conformant script whose agent() prompt body contains
-    the literal text "Date.now()" must validate WITHOUT an ERROR."""
     src = (
         "export const meta = { name: 'x', description: 'y', phases: ['Scout'] };\n"
         "phase('Scout');\n"
@@ -588,8 +503,6 @@ def test_run_checks_meta_description_with_call_shape_text_is_not_error():
 
 
 def test_run_checks_genuinely_impure_meta_still_caught_after_scrub_fix():
-    """Companion to the above: the scrub-based fix must not blind the check
-    to REAL impurity (code, not string content) inside the meta block."""
     src = (
         "export const meta = {\n"
         "  name: 'x',\n"
@@ -602,14 +515,6 @@ def test_run_checks_genuinely_impure_meta_still_caught_after_scrub_fix():
 
 
 def test_meta_phase_titles_survives_an_escaped_quote_in_a_neighbouring_detail():
-    """An escaped quote must not shift the pairing and hide later phases.
-
-    The prior scan matched any quote to the next quote, so a `\\'` inside a `detail:`
-    string paired with the wrong partner and every entry after it shifted by one. The
-    failure is silent and inverted: a phase plainly present in `meta.phases` is reported
-    as undeclared, while fragments of `detail:` prose are reported as declared titles. A
-    script survived it only by carrying an even number of escaped quotes.
-    """
     block = (
         "phases: [\n"
         "  { title: 'Alpha', detail: 'it\\'s fine' },\n"
@@ -621,49 +526,16 @@ def test_meta_phase_titles_survives_an_escaped_quote_in_a_neighbouring_detail():
 
 
 def test_meta_phase_titles_reads_titles_only_not_every_quoted_string():
-    """`detail:` prose is not a phase title.
-
-    The declared set is compared against real `phase()` / `phase:` titles; admitting
-    every quoted string made it a superset that could mask a genuine mismatch whenever a
-    phase title happened to appear inside someone's prose.
-    """
     block = "phases: [{ title: 'Only', detail: 'Review is mentioned here' }]"
     assert meta_phase_titles(block) == {"Only"}
 
 
-# The two tests above both pin the fix
-# against ONE shape (homogeneous object-form, single-quote-style detail escaping) and
-# exercise none of the shapes that independently broke it one layer down (Findings
-# 1-3). Each test below is one of those reproductions, added as its own regression case
-# rather than folded into the existing two so a future revert of any one fix fails its
-# own test rather than a shared one.
-
-
 def test_meta_phase_titles_reads_bare_titles_alongside_object_form_siblings():
-    """Finding 1 -- mixing bare-string and object-form entries in one array must not
-    drop the bare entries.
-
-    The prior object-form/bare-string switch was all-or-nothing (`if titles: return
-    titles`): the moment ONE object-form entry appeared anywhere in the array, every
-    bare-string sibling was silently discarded from the declared set, not merged. A
-    `phase('Bare1')` call elsewhere in the same script would then wrongly WARN that
-    'Bare1' is undeclared, even though it plainly is.
-    """
     block = "phases: ['Bare1', { title: 'Obj1', detail: 'x' }, 'Bare2']"
     assert meta_phase_titles(block) == {"Bare1", "Obj1", "Bare2"}
 
 
 def test_meta_phase_titles_reads_template_literal_titles():
-    """Finding 2 -- a backtick-quoted `title:` value must be read as the title, not
-    silently dropped into the bare-string fallback that then admits `detail:` prose.
-
-    The prior title regex matched only `'...'`/`"..."` after `title:`; a template
-    literal was invisible to it. When every title in the array was backtick-quoted,
-    the object-form scan came back empty and the module fell through to the
-    bare-string branch, which reads every quoted string in the array body -- so the
-    real title was lost AND unrelated `detail:` prose was reported as a declared
-    phase, in one input.
-    """
     block = "phases: [{ title: `Templated`, detail: 'x' }]"
     assert meta_phase_titles(block) == {"Templated"}
 
@@ -688,13 +560,5 @@ def test_meta_phase_titles_ignores_a_commented_out_title():
 
 
 def test_meta_phase_titles_ignores_a_title_shaped_fragment_nested_in_detail():
-    """Finding 3b -- a `title:`-shaped substring nested inside a `detail:` string
-    quoted with the OTHER quote character is not a declared phase.
-
-    The prior scan had no string-context tracking, so a `finditer` pass over raw
-    text could not tell that `title: 'Nested'` inside a double-quoted `detail:`
-    value is data, not code -- it read 'Nested' as a second declared title sharing
-    the array with the real one.
-    """
     block = "phases: [{ title: \"Real\", detail: \"see title: 'Nested' for context\" }]"
     assert meta_phase_titles(block) == {"Real"}

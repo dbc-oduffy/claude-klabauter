@@ -42,7 +42,7 @@ import pytest
 from coordinator_core.win_portability import no_console_creationflags
 
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
-_COORDINATOR_ROOT = os.path.dirname(os.path.dirname(_TESTS_DIR))  # bin/tests -> bin -> coordinator
+_COORDINATOR_ROOT = os.path.dirname(os.path.dirname(_TESTS_DIR))
 _LAUNCHER = os.path.join(_COORDINATOR_ROOT, "scripts", "install-maximalist.cmd")
 
 pytestmark = [
@@ -53,28 +53,14 @@ pytestmark = [
     pytest.mark.cadence,
 ]
 
-# Known cmd.exe metacharacter-mangling signatures (F3). Any of these appearing
-# in the output of a clean `--help` invocation means prose (docstring text,
-# usage text, ...) reached cmd.exe as commands instead of reaching Python as
-# argv -- the exact defect this test guards against.
 _MANGLING_SIGNATURES = (
     "is not recognized as an internal or external command",
     "was unexpected at this time",
     "Error occurred while processing:",
-    "A subdirectory or file",  # md/mkdir collision text
+    "A subdirectory or file",
 )
 
 
-# A `!`-bearing token is the ONLY argv shape that discriminates the fixed
-# launcher from the pre-fix one. `--help` does not: under
-# `setlocal enabledelayedexpansion` cmd.exe rewrites `fix!literal!bang` to
-# `fixbang` before Python ever sees it, but leaves a bang-free `--help`
-# byte-identical -- so a `--help`-only suite passes against the very template
-# it exists to reject (2026-07-28 dogfood F11, the argv table under that
-# finding). The token is deliberately unrecognized: `main()` validates argv
-# ahead of every mutating step (F10) and echoes the rejected token verbatim to
-# stderr before exiting 2, which makes the rejection path a read-only mirror of
-# what cmd.exe actually forwarded.
 _BANG_ARG = "--zz-nonexistent-flag=fix!literal!bang"
 _MANGLED_BANG_ARG = "--zz-nonexistent-flag=fixbang"
 
@@ -105,18 +91,6 @@ def test_install_maximalist_cmd_help_is_clean() -> None:
 
 
 def test_install_maximalist_cmd_forwards_bang_bearing_argument_literally() -> None:
-    """A literal `!` in a forwarded argument must survive the launcher intact.
-
-    This is the assertion the sibling `--help` test cannot make. Against the
-    pre-goto-refactor template (`setlocal enabledelayedexpansion`) the echoed
-    token reads `--zz-nonexistent-flag=fixbang`; against the shipped template it
-    reads back byte-for-byte. Anything that reintroduces delayed expansion to
-    `gen-launcher-shim.py`'s `render_cmd` fails here.
-
-    negative-spec: do NOT relax this to a substring check on `fix` or on
-    `nonexistent-flag`. Both survive the mangling, so either one restores the
-    vacuity this test was written to remove.
-    """
     assert os.path.isfile(_LAUNCHER), f"launcher not found: {_LAUNCHER}"
 
     result = subprocess.run(

@@ -75,9 +75,6 @@ from coordinator_core.ops._git_root_util import git_root_zero_spawn
 
 @dataclass(frozen=True)
 class Primitive:
-    """One named, zero-arg timed draw. `invoke()` performs ONE sample and
-    returns its elapsed wall time in milliseconds; it is called fresh for
-    every draw in a `run_interleaved()` round-robin, never batched."""
 
     name: str
     invoke: Callable[[], float]
@@ -85,11 +82,6 @@ class Primitive:
 
 @dataclass(frozen=True)
 class PrimitiveStats:
-    """Reduced median/p90 summary for one primitive's draws within a single
-    `run_interleaved()` call. `samples_ms` is the raw per-draw sequence in
-    the order it was collected (interleaved with the other primitives'
-    draws, not contiguous) -- kept for callers that want their own
-    reduction on top of median/p90."""
 
     name: str
     sample_count: int
@@ -103,19 +95,6 @@ def run_interleaved(
     n: int,
     rng: Optional[random.Random] = None,
 ) -> Dict[str, PrimitiveStats]:
-    """Round-robins `n` rounds across `primitives`, each round independently
-    shuffled, and returns one `PrimitiveStats` per primitive name.
-
-    Refuses (ValueError) rather than degrading: `len(primitives) < 2` (a
-    single primitive cannot be interleaved against anything -- see module
-    docstring), `n < 1`, or duplicate primitive names (stats would silently
-    merge two distinct draws under one name).
-
-    Each round is `rng.shuffle`'d independently -- draws are NOT grouped by
-    primitive at any point, so no contiguous block of same-primitive samples
-    can appear except by chance in an individual round's shuffle output
-    bordering the next round's.
-    """
     declare_benchmark_origin()
     if len(primitives) < 2:
         raise ValueError(
@@ -179,23 +158,12 @@ def _time_subprocess(argv: List[str], cwd: Optional[str] = None) -> float:
 
 
 def _time_callable(fn: Callable[[], object]) -> float:
-    """Generic in-process timer for a pure-Python zero-arg callable (e.g.
-    `stdlib_parent_walk`, which never spawns a subprocess at all)."""
     start = time.perf_counter()
     fn()
     return (time.perf_counter() - start) * 1000.0
 
 
 def default_baseline_primitives(repo_root: Optional[str] = None) -> List[Primitive]:
-    """The four primitives this plan's claims rest on, baselined on THIS box:
-    bare CPython start, a forwarder+dispatcher round trip (the `ping` op),
-    `git rev-parse --show-toplevel`, and the zero-spawn stdlib parent walk
-    that resolves the same answer without a subprocess.
-
-    `repo_root` anchors the git-rooted primitives; defaults to the enclosing
-    repo's toplevel via `git_root_zero_spawn` itself (a one-time, non-timed
-    resolution at primitive-construction time -- never inside a timed draw).
-    """
     resolved_root = repo_root if repo_root is not None else git_root_zero_spawn(Path(__file__))
     if resolved_root is None:
         raise RuntimeError(

@@ -105,11 +105,6 @@ docstring "Timeout ceiling"."""
 
 
 def _count_entries(scratch: Path):
-    """Count direct entries of *scratch* via os.scandir.
-
-    Returns (count, None) on success, (None, error_message) when the directory
-    is missing or unreadable — a premise failure, never a zero count.
-    """
     try:
         with os.scandir(scratch) as it:
             return len(list(it)), None

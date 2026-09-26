@@ -1,16 +1,3 @@
-"""test_coordinator_safe_commit_pathspec_batch.py -- multi-item coverage for
-`coordinator-safe-commit.py::_first_invalid_pathspec` (amplification
-burn-down, `state/ledgers/wave4-dispositions/c1.md`, keys
-`do_scope_from -> _validate_pathspec` and `do_scoped -> _validate_pathspec`).
-
-A single-item test passes identically before and after a batching change --
-see the plan's own warning about `_own_frozen_diff_shas`. These tests assert
-the CALL COUNT (one batched `git ls-files` call on the all-valid path, never
-one per pathspec), not just the returned verdict.
-
-Loaded by file path (`importlib.machinery.SourceFileLoader`), matching this
-directory's existing hyphenated-module idiom.
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -19,20 +6,6 @@ import pathlib
 import types
 
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
-
-# WHY THESE TESTS FAKE THE HEAD PROBE.
-# `main()`'s dry-run preview routes through `_split_paths_for_commit_v2`,
-# whose deletion probe (`_paths_tracked_at_head`, one `git ls-tree HEAD`)
-# FAILS CLOSED — it refuses rather than infer a deletion it cannot confirm.
-# A bare `tmp_path` is not a repo, so that probe errored and the two tests
-# below measured the refusal instead of the preview they name. The probe
-# itself is covered against a REAL repo by
-# `test_a_missing_path_is_a_deletion_only_if_head_has_it.py`; what is under
-# test here is `main()`'s dry-run gate, so the probe is faked rather than
-# spawning git a second time for a fact a sibling already pins (the spawn
-# ratchet, `coordinator_core/tests/test_no_new_spawning_tests.py`, would
-# tier this whole file to `cadence` for it, hiding the three fast
-# `_first_invalid_pathspec` tests above with it).
 
 
 def _load_cli_module():
@@ -74,8 +47,6 @@ def test_one_invalid_pathspec_falls_back_to_per_item_and_names_it(monkeypatch):
     def _fake_run(cmd, **_kwargs):
         calls.append(cmd)
         pathspecs = cmd[3:]
-        # Batch call (3 pathspecs) fails; per-item fallback fails only for
-        # the deliberately-bad one.
         if len(pathspecs) > 1:
             return types.SimpleNamespace(returncode=1, stdout="", stderr="bad pathspec")
         return types.SimpleNamespace(
@@ -87,7 +58,6 @@ def test_one_invalid_pathspec_falls_back_to_per_item_and_names_it(monkeypatch):
     result = mod._first_invalid_pathspec(["a/b.py", "::bad::", "d/e.py"])
 
     assert result == "::bad::"
-    # 1 batched call + up to 3 per-item fallback calls (stops at first bad one).
     assert len(calls) == 3
 
 
@@ -103,19 +73,8 @@ def test_empty_pathspec_list_is_a_zero_spawn_noop(monkeypatch):
 
 
 def test_pathspec_dry_run_never_dispatches_do_pathspec(monkeypatch, tmp_path):
-    """Pins the third real incident of this file's dry-run gate class:
-    `--dry-run "<subject>" -- <paths>` reached a real commit because
-    `main()`'s pathspec branch dispatched to `do_pathspec` without ever
-    reading `args.dry_run` (`do_pathspec` itself does not read it either,
-    since it delegates staging unconditionally to `ceremony.commit_v2` via
-    `cc_invoke`). Asserting `do_pathspec` is never called is the structural
-    check the reviewer called for -- `do_pathspec` is this module's sole
-    caller of `cc_invoke`/`ceremony.commit_v2`, so "do_pathspec not called"
-    and "no commit dispatched" are the same fact. Asserting only on printed
-    preview text would not have caught this regression shape."""
     mod = _load_cli_module()
     monkeypatch.chdir(tmp_path)
-    # Present in the worktree, so the split needs no HEAD probe at all.
     (tmp_path / "somefile.py").write_text("x = 1\n", encoding="utf-8")
     dispatched = []
     monkeypatch.setattr(mod, "do_pathspec", lambda args: dispatched.append(args))
@@ -128,13 +87,6 @@ def test_pathspec_dry_run_never_dispatches_do_pathspec(monkeypatch, tmp_path):
 def test_pathspec_dry_run_preview_matches_split_paths_including_deletion(
     monkeypatch, tmp_path, capsys
 ):
-    """Second half of Finding 1: the previewed present/deleted split must
-    match `_split_paths_for_commit_v2`'s own classification, including the
-    deletion case (a pathspec absent from the worktree but carried by HEAD).
-
-    A path absent from BOTH the worktree and HEAD is REFUSED, not previewed,
-    so the deletion leg needs a HEAD that carries `deleted.py` — faked here
-    at `_paths_tracked_at_head` (see the module-level note above)."""
     mod = _load_cli_module()
     monkeypatch.chdir(tmp_path)
     (tmp_path / "present.py").write_text("x = 1\n", encoding="utf-8")

@@ -1,20 +1,3 @@
-"""Regression test for the 2026-08-05 unguarded-frontmatter-read-in-adopt-
-path break-class fix (`state/sizings/2026-08-05-unguarded-frontmatter-read-
-in-adopt-prio.yaml`).
-
-Reproduces the live crash: `_adopt_prior_attempt_scaffold_path`'s
-per-candidate loop over `state/handoffs/*.md` called `_read_frontmatter`
-outside any `try/except`, so a single unreadable (mode 000) or non-UTF8 live
-handoff crashed the whole `/handoff` cascade -- `baton-assemble brief` and
-`apply` both -- with a raw traceback and exit 1, before any directive could
-run. `_scan_deliverable_collision` (same module) already wraps the identical
-call in `except (OSError, UnicodeDecodeError): continue` and documents that
-the scan never raises -- this test asserts the adopt path is now consistent
-with that established pattern, not a new shape.
-
-Spec backlink: `state/sizings/2026-08-05-unguarded-frontmatter-read-in-adopt-
-prio.yaml`.
-"""
 
 from __future__ import annotations
 
@@ -62,8 +45,6 @@ def _valid_child(root: Path, name: str) -> Path:
 
 
 class TestAdoptPathSurvivesUnreadableCandidate:
-    """Mode-000 candidate alongside a valid one -- the valid candidate must
-    still be identified and adopted, not lost to an unguarded crash."""
 
     def test_unreadable_candidate_is_skipped_valid_one_still_adopted(self, tmp_path):
         _pred(tmp_path)
@@ -86,8 +67,6 @@ class TestAdoptPathSurvivesUnreadableCandidate:
 
 
 class TestAdoptPathSurvivesNonUtf8Candidate:
-    """A non-UTF8 byte in a live candidate must not crash the scan either --
-    same guard, different exception arm."""
 
     def test_non_utf8_candidate_is_skipped_valid_one_still_adopted(self, tmp_path):
         _pred(tmp_path)

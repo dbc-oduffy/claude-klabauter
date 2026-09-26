@@ -39,46 +39,44 @@ pytestmark = pytest.mark.cadence
 
 
 class TestTheSplitAnnouncementGate:
-    """`_reader_owns_one_of_the_split_trees` — the C3 gate wrapping
-    `_announce_engine_cli_split` at its one production call site."""
 
     def test_silent_for_a_reader_who_owns_neither_root(self, monkeypatch):
-        monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"X:\a-cli-root")  # abs-path-ok: synthetic fixture, never resolved on disk
+        monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"X:\a-cli-root")
         monkeypatch.setattr(
             "coordinator_core.git.repo_root.show_toplevel",
-            lambda: r"X:\a-third-repo",  # abs-path-ok: synthetic fixture, never resolved on disk
+            lambda: r"X:\a-third-repo",
         )
         assert (
-            _mod._reader_owns_one_of_the_split_trees(r"X:\a-dispatch-root") is False  # abs-path-ok: synthetic fixture, never resolved on disk
+            _mod._reader_owns_one_of_the_split_trees(r"X:\a-dispatch-root") is False
         )
 
     def test_present_for_a_reader_who_owns_the_cli_root(self, monkeypatch):
-        monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"X:\a-cli-root")  # abs-path-ok: synthetic fixture, never resolved on disk
+        monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"X:\a-cli-root")
         monkeypatch.setattr(
             "coordinator_core.git.repo_root.show_toplevel",
-            lambda: r"X:\a-cli-root",  # abs-path-ok: synthetic fixture, never resolved on disk
+            lambda: r"X:\a-cli-root",
         )
         assert (
-            _mod._reader_owns_one_of_the_split_trees(r"X:\a-dispatch-root") is True  # abs-path-ok: synthetic fixture, never resolved on disk
+            _mod._reader_owns_one_of_the_split_trees(r"X:\a-dispatch-root") is True
         )
 
     def test_present_for_a_reader_who_owns_the_dispatch_root(self, monkeypatch):
-        monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"X:\a-cli-root")  # abs-path-ok: synthetic fixture, never resolved on disk
+        monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"X:\a-cli-root")
         monkeypatch.setattr(
             "coordinator_core.git.repo_root.show_toplevel",
-            lambda: r"X:\a-dispatch-root",  # abs-path-ok: synthetic fixture, never resolved on disk
+            lambda: r"X:\a-dispatch-root",
         )
         assert (
-            _mod._reader_owns_one_of_the_split_trees(r"X:\a-dispatch-root") is True  # abs-path-ok: synthetic fixture, never resolved on disk
+            _mod._reader_owns_one_of_the_split_trees(r"X:\a-dispatch-root") is True
         )
 
     def test_fails_open_when_the_readers_own_repo_is_unresolvable(self, monkeypatch):
-        monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"X:\a-cli-root")  # abs-path-ok: synthetic fixture, never resolved on disk
+        monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"X:\a-cli-root")
         monkeypatch.setattr(
             "coordinator_core.git.repo_root.show_toplevel", lambda: None
         )
         assert (
-            _mod._reader_owns_one_of_the_split_trees(r"X:\a-dispatch-root") is True  # abs-path-ok: synthetic fixture, never resolved on disk
+            _mod._reader_owns_one_of_the_split_trees(r"X:\a-dispatch-root") is True
         )
 
     def test_fails_open_on_any_unexpected_exception(self, monkeypatch):
@@ -87,14 +85,12 @@ class TestTheSplitAnnouncementGate:
 
         monkeypatch.setattr(_mod, "resolve_engine_root", _boom)
         assert (
-            _mod._reader_owns_one_of_the_split_trees(r"X:\a-dispatch-root") is True  # abs-path-ok: synthetic fixture, never resolved on disk
+            _mod._reader_owns_one_of_the_split_trees(r"X:\a-dispatch-root") is True
         )
 
     def test_require_dispatch_engine_on_path_skips_the_announce_call_when_ungated(
         self, monkeypatch, capsys
     ):
-        """Integration half: `require_dispatch_engine_on_path` itself must not
-        call the (still-unconditional) announcer when the gate says no."""
         monkeypatch.setattr(_mod, "_ENGINE_SPLIT_ANNOUNCED", False, raising=False)
         monkeypatch.setattr(_mod, "_reader_owns_one_of_the_split_trees", lambda _root: False)
         called = []
@@ -102,7 +98,7 @@ class TestTheSplitAnnouncementGate:
             _mod, "_announce_engine_cli_split", lambda root: called.append(root)
         )
         monkeypatch.setattr(_mod, "_front_insert_on_path", lambda root: root)
-        monkeypatch.setattr(_mod, "_resolve_claude_klabauter_root", lambda: r"X:\a-root")  # abs-path-ok: synthetic fixture, never resolved on disk
+        monkeypatch.setattr(_mod, "_resolve_claude_klabauter_root", lambda: r"X:\a-root")
         fake_report = type(
             "Report", (), {"verdict": "explicit-not-divergent", "imported_file": None, "engine_root": None}
         )()
@@ -110,7 +106,7 @@ class TestTheSplitAnnouncementGate:
 
         result = _mod.require_dispatch_engine_on_path()
 
-        assert result == r"X:\a-root"  # abs-path-ok: synthetic fixture, never resolved on disk
+        assert result == r"X:\a-root"
         assert called == [], "the gate said no; the announcer must not have been called"
 
 

@@ -32,16 +32,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, List, Optional, Set
 
-# ---------------------------------------------------------------------------
-# Severity + Finding
-# ---------------------------------------------------------------------------
-
 
 class Severity(str, Enum):
-    """ERROR = checks that actually throw at parse/runtime (impure meta,
-    forbidden globals). WARN = everything else — advisory, never a hard fail
-    (design-as-offers: a check that hard-fails false positives becomes a nag
-    EMs route around)."""
 
     ERROR = "ERROR"
     WARN = "WARN"
@@ -49,15 +41,6 @@ class Severity(str, Enum):
 
 @dataclass(frozen=True)
 class Finding:
-    """A single contract violation.
-
-    Attributes:
-        severity: ERROR (fails validation) or WARN (advisory).
-        code: short machine-stable identifier, e.g. "forbidden-global-date-now".
-        message: actionable human-readable text — names the offending token
-            AND the fix, never a bare "invalid" style message.
-        line: 1-indexed line number if known, else None.
-    """
 
     severity: Severity
     code: str
@@ -65,18 +48,8 @@ class Finding:
     line: Optional[int] = None
 
 
-# ---------------------------------------------------------------------------
-# Scrubber (the Staff Engineer F1) — string / template-literal / comment masking
-# ---------------------------------------------------------------------------
-#
 # A minimal, pure-Python, JS-AWARE-BUT-NOT-A-PARSER state machine: it tracks
-# only "am I currently inside a string / template-literal / comment span" and
 # replaces the CONTENTS of each such span with a neutral placeholder
-# character, preserving every newline (so line numbers reported against the
-# scrubbed text still line up with the original script) and preserving the
-# delimiters themselves (so a subsequent check can still see e.g. a `` ` ``
-# opened-and-not-closed shape if that ever matters). This is NOT a JS parser:
-# it does not build an AST or understand statements, only span membership.
 
 
 def scrub(script: str) -> str:
@@ -156,15 +129,8 @@ def scrub(script: str) -> str:
     return "".join(out)
 
 
-# ---------------------------------------------------------------------------
-# Forbidden globals (ERROR tier — run against scrubbed text)
-# ---------------------------------------------------------------------------
-
 FORBIDDEN_GLOBALS = [
     (
-        # Negative lookbehind so a
-        # namespaced property access (myObj.Date.now()) does not false-positive
-        # on the global Date.now() this check targets.
         re.compile(r"(?<!\.)\bDate\.now\s*\("),
         "forbidden-global-date-now",
         "Date.now() is unavailable in Workflow scripts and throws at runtime "
@@ -190,7 +156,6 @@ FORBIDDEN_GLOBALS = [
 
 
 def check_forbidden_globals(scrubbed: str) -> List[Finding]:
-    """ERROR for each forbidden-global occurrence in `scrubbed` text."""
     findings: List[Finding] = []
     for pattern, code, message in FORBIDDEN_GLOBALS:
         for m in pattern.finditer(scrubbed):
@@ -198,10 +163,6 @@ def check_forbidden_globals(scrubbed: str) -> List[Finding]:
             findings.append(Finding(Severity.ERROR, code, message, line))
     return findings
 
-
-# ---------------------------------------------------------------------------
-# meta block extraction + pure-literal check
-# ---------------------------------------------------------------------------
 
 META_REQUIRED_FIELDS = ["name", "description"]
 
@@ -224,7 +185,7 @@ def extract_meta_block(source: str) -> Optional[str]:
     m = _META_START.search(source)
     if not m:
         return None
-    start = m.end() - 1  # index of the opening '{'
+    start = m.end() - 1
     depth = 0
     i = start
     n = len(source)
@@ -250,9 +211,6 @@ _PURE_LITERAL_VIOLATIONS = [
     ),
 ]
 
-# A bare identifier used as a VALUE (not a key) — e.g. `name: someVar,` — is
-# impure. We look for `: <identifier>` NOT followed by a quote/brace/bracket/
-# digit and not one of the JS literal keywords.
 _BARE_IDENTIFIER_VALUE = re.compile(
     r":\s*([A-Za-z_$][\w$]*)\s*[,}\n]"
 )
@@ -260,12 +218,6 @@ _JS_LITERAL_KEYWORDS = {"true", "false", "null", "undefined", "NaN", "Infinity"}
 
 
 def check_meta_pure_literal(block: str) -> List[Finding]:
-    """ERROR for each pure-literal violation found in the scrubbed meta
-    block text (caller must pass `extract_meta_block(scrub(script))`, not
-    a raw block — see `run_checks`): `${`, backticks, spreads (`...`),
-    call-shape `\\w+\\s*\\(`, and bare-identifier values. `export const
-    meta = {...}` must be a pure object literal — any of these shapes
-    fails at parse time in the harness."""
     findings: List[Finding] = []
     for pattern, code, label in _PURE_LITERAL_VIOLATIONS:
         for m in pattern.finditer(block):
@@ -315,35 +267,8 @@ def check_meta_required_fields(block: str) -> List[Finding]:
     return findings
 
 
-# ---------------------------------------------------------------------------
-# phase() / meta.phases / agent-options phase: set-diff (WARN, both surfaces)
-# ---------------------------------------------------------------------------
-
 _PHASE_CALL = re.compile(r"\bphase\s*\(\s*['\"]([^'\"]*)['\"]")
-# Escape-aware, and aware that `phases:` has TWO shipped shapes. A bare quote-pair
-# scan ("any quote to the next quote") pairs an ESCAPED quote inside a `detail:`
-# string with the wrong partner, and every entry after it shifts by one -- so a phase
-# plainly present is reported as undeclared and fragments of prose are reported as
-# declared titles. A script survives that only by carrying an even number of escaped
-# quotes, which is luck, not a property.
-#
-# A per-array-element
 # regex pass (`_META_PHASES_TITLE.finditer(body)` gated by a blanket "if titles: return
-# titles") is the same failure class one layer down: (1) it is all-or-nothing across the
-# WHOLE array, so one object-form entry silently drops every bare-string sibling
-# (Finding 1); (2) it only recognizes `'...'`/`"..."`, so a backtick title is invisible
-# and the bare-string fallback re-admits `detail:` prose as a title (Finding 2); (3) it
-# is a `finditer` over raw text with no comment-stripping and no string-context
-# tracking, so a `title:`-shaped fragment inside a `//` comment, or nested inside a
-# `detail:` string quoted with the OTHER quote character, reads as a genuinely declared
-# title (Finding 3) -- the exact permissive-superset risk this module's own comment
-# above (and the commit this PR follows up on) names. `_scan_meta_phases_body` below
-# replaces both regexes with a single depth- and quote-aware walk: only a string
-# immediately anchored on `title:` is ever read as a title (any of the three quote
-# styles), only a genuinely top-level (object-depth-0) string is ever read as a bare
-# entry, and comment content plus non-title string content is walked over as opaque
-# bytes rather than re-offered to a second regex pass -- so a `title:`-shaped substring
-# that is not real top-level code is structurally unreachable, not merely unmatched.
 _JS_STRING_ESCAPE = re.compile(r"\\(.)")
 _TITLE_KEY_TAIL = re.compile(r"\btitle\s*:\s*\Z")
 _AGENT_OPTIONS_PHASE = re.compile(r"\bphase\s*:\s*['\"]([^'\"]*)['\"]")
@@ -410,14 +335,6 @@ def _strip_comments_keep_strings(text: str) -> str:
 
 
 def _scan_meta_phases_body(body: str) -> Set[str]:
-    """Walk a `phases: [...]` array body once, comment- and quote-aware, and
-    return the union of (a) every string immediately anchored on `title:`
-    (any of `'...'`/`"..."`/`` `...` ``, at any brace depth -- an object
-    entry's declared title) and (b) every string that is a genuine top-level
-    (depth-0) array element (a bare-string entry). A non-title string nested
-    inside an object (e.g. `detail:`'s value) is walked over as opaque
-    content and contributes nothing either way -- it is neither a title nor
-    a bare element, so it can no longer leak into the declared set."""
     clean = _strip_comments_keep_strings(body)
     titles: Set[str] = set()
     bare: Set[str] = set()
@@ -450,7 +367,7 @@ def _scan_meta_phases_body(body: str) -> Set[str]:
                 content_chars.append(clean[i])
                 i += 1
             if i < n:
-                i += 1  # consume the closing quote
+                i += 1
             raw = "".join(content_chars)
             unescaped = _JS_STRING_ESCAPE.sub(r"\1", raw)
             if _TITLE_KEY_TAIL.search(clean[:start]):
@@ -465,11 +382,6 @@ def _scan_meta_phases_body(body: str) -> Set[str]:
 
 
 def phase_titles(source: str) -> Set[str]:
-    """Return the set of phase titles from every `phase('X')` CALL site in
-    `source` text (the phase()-call surface, distinct from the agent-options
-    `phase:` surface — see `agent_options_phase_titles`). Runs against RAW
-    (un-scrubbed) text — the title itself is inside a string literal, which
-    the scrubber would mask."""
     return {m.group(1) for m in _PHASE_CALL.finditer(source)}
 
 
@@ -485,17 +397,6 @@ def agent_options_phase_titles(source: str) -> Set[str]:
 
 
 def meta_phase_titles(block: str) -> Set[str]:
-    """Return the set of phase titles declared in `meta.phases` within the
-    (already-extracted, RAW) meta `block` text. Returns an empty set if no
-    `phases:` array is present.
-
-    `phases:` has TWO shipped shapes and a single array may freely MIX them
-    (a migration in progress, or one entry hand-expanded to carry a
-    `detail:`) -- so titles are resolved per-element via
-    `_scan_meta_phases_body`, not via an all-or-nothing switch on the whole
-    array: an object-form entry's `title:` value is read regardless of
-    whether a sibling entry is still bare, and a bare-string entry is read
-    regardless of whether a sibling entry has already grown a `detail:`."""
     m = re.search(r"phases\s*:\s*\[([^\]]*)\]", block)
     if not m:
         return set()
@@ -503,15 +404,6 @@ def meta_phase_titles(block: str) -> Set[str]:
 
 
 def check_phase_mismatch(source: str, block: Optional[str]) -> List[Finding]:
-    """WARN for each phase() title (and each agent-options phase: title)
-    absent from meta.phases. Both surfaces are checked independently — a
-    title present via phase() but not agent-options (or vice versa) is
-    still only flagged for the surface where it's actually missing from
-    meta.phases. Never ERROR: an unmatched phase title is non-fatal — it
-    just gets its own separate progress group in the harness.
-
-    `source` and `block` are RAW (un-scrubbed) text/sub-text — phase titles
-    live inside string literals, which the scrubber would mask."""
     declared = meta_phase_titles(block) if block else set()
     findings: List[Finding] = []
 
@@ -541,22 +433,11 @@ def check_phase_mismatch(source: str, block: Optional[str]) -> List[Finding]:
     return findings
 
 
-# ---------------------------------------------------------------------------
-# Barrier-vs-pipeline heuristic (WARN)
-# ---------------------------------------------------------------------------
-
 _PARALLEL_CALL = re.compile(r"\bawait\s+parallel\s*\(")
 _AGENT_CALL = re.compile(r"\bagent\s*\(")
 
 
 def check_barrier_vs_pipeline(scrubbed: str) -> List[Finding]:
-    """WARN once if the script contains `await parallel(` ... a non-agent
-    transform ... `await parallel(` again — a shape that usually means the
-    author wanted `pipeline()` (no barrier between stages) but reached for
-    two sequential barriers instead, wasting wall-clock. A legitimate
-    barrier (dedup/early-exit across ALL results before continuing) is a
-    real use case, so this NEVER hard-fails — it is a single advisory WARN,
-    not a per-occurrence ERROR."""
     matches = list(_PARALLEL_CALL.finditer(scrubbed))
     if len(matches) < 2:
         return []
@@ -579,17 +460,10 @@ def check_barrier_vs_pipeline(scrubbed: str) -> List[Finding]:
     return []
 
 
-# ---------------------------------------------------------------------------
-# Model-default heuristic (WARN)
-# ---------------------------------------------------------------------------
-
 _AGENT_CALL_SITE = re.compile(r"\bagent\s*\(")
 
 
 def _find_matching_paren(scrubbed: str, open_paren_idx: int) -> int:
-    """Return the index just past the matching close paren for the '(' at
-    open_paren_idx, via a depth-count scan. Returns len(scrubbed) if
-    unterminated."""
     depth = 0
     i = open_paren_idx
     n = len(scrubbed)
@@ -605,12 +479,6 @@ def _find_matching_paren(scrubbed: str, open_paren_idx: int) -> int:
 
 
 def check_model_default(scrubbed: str) -> List[Finding]:
-    """WARN for each agent(...) call site with no explicit `model:` key in
-    its argument list. An agent() call with no model: inherits the SESSION
-    model (Opus on an Opus session) — a ~4x-cost defect for mechanical
-    fan-outs. Advisory only: the validator cannot textually distinguish a
-    fan-out (should pin model:'sonnet') from a legitimate judgment agent
-    (correctly inheriting Opus), so this is never ERROR."""
     findings: List[Finding] = []
     for m in _AGENT_CALL_SITE.finditer(scrubbed):
         open_paren = m.end() - 1
@@ -633,17 +501,6 @@ def check_model_default(scrubbed: str) -> List[Finding]:
     return findings
 
 
-# ---------------------------------------------------------------------------
-# Registry + entry point
-# ---------------------------------------------------------------------------
-#
-# A "check" here is any Callable[[str], List[Finding]] taking the scrubbed
-# script text (and, for the two meta-block checks, closing over the
-# extracted block via a thin wrapper) — apply_checks folds a registry of
-# these into a single findings list. This is the data-driven-registry shape
-# AC1 requires: adding a new textual check is "append a function to the
-# list," not "add a branch to a giant if/elif."
-
 CheckFn = Callable[[str], List[Finding]]
 
 
@@ -664,11 +521,8 @@ def run_checks(script: str) -> List[Finding]:
         agent() prompt template literal) rather than as real code.
     """
     scrubbed = scrub(script)
-    block = extract_meta_block(script)  # raw block, kept for phase-title extraction
-    # check_meta_pure_literal/check_meta_required_fields
+    block = extract_meta_block(script)
     # must consume the SCRUBBED meta block, not raw text, per F1's mandate: a conformant
-    # description string whose VALUE contains a call-shape token (e.g. "rank them (top 10)")
-    # was false-positiving as a meta-impure-call ERROR because the raw block still exposes
     # the string CONTENTS the check's regexes match against.
     scrubbed_block = extract_meta_block(scrubbed) if block is not None else None
 

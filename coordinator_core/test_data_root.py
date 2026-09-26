@@ -1,20 +1,3 @@
-"""Tests for coordinator_core.data_root.
-
-Mirrors the fixture shape of coordinator/bin/lib's own coordinator_data_root.py
-tests (co-located rung, DoE-resident rung, both-rungs-fail hard error) but
-exercises the coordinator_core-native module, which delegates rung 2 to
-coordinator_core.ops.coordinator_doe_root.coordinator_doe_root() instead of
-coordinator_registry.doe_root() — see data_root.py's module docstring for why.
-
-C2 finding: this module needs NO codename-free ladder of its own. Its rung 2
-already delegates unconditionally to `coordinator_doe_root()`, which gained
-its own rung 1.5 codename-free ladder in C1B (`git show f5d3dde5b523`) — so
-every caller through this module's rung 2, including the twin-parity path
-below, already gets the fix via that delegation. Adding a second ladder here
-would be exactly the reimplementation this module's negative-spec forbids.
-See `test_codename_free_ladder_reaches_both_twins_via_real_delegation` below
-for the real (unstubbed) proof.
-"""
 
 from __future__ import annotations
 
@@ -35,7 +18,6 @@ _BIN_LIB_DIR = Path(__file__).resolve().parent.parent / "coordinator" / "bin" / 
 def test_colocated_rung_wins_when_dir_present(tmp_path, monkeypatch):
     (tmp_path / "schemas").mkdir()
     monkeypatch.setattr(dr_mod, "_colocated_root", lambda: tmp_path)
-    # Rung 2 must never even be consulted when rung 1 resolves.
     monkeypatch.setattr(
         dr_mod,
         "coordinator_doe_root",
@@ -73,7 +55,7 @@ def test_raises_when_doe_root_resolved_but_dir_missing(tmp_path, monkeypatch):
     colocated_base = tmp_path / "colocated"
     colocated_base.mkdir()
     doe_root = tmp_path / "doe"
-    doe_root.mkdir()  # no coordinator/schemas under it
+    doe_root.mkdir()
 
     monkeypatch.setattr(dr_mod, "_colocated_root", lambda: colocated_base)
     monkeypatch.setattr(dr_mod, "coordinator_doe_root", lambda: str(doe_root))
@@ -83,16 +65,10 @@ def test_raises_when_doe_root_resolved_but_dir_missing(tmp_path, monkeypatch):
 
 
 def test_f2_oss_flat_layout_fallback_when_private_join_absent(tmp_path, monkeypatch):
-    """F2 regression (2026-08-08, hermetic-ac-reverify) -- when
-    `coordinator_doe_root()` resolves an OSS-flat root (`schemas/` sits
-    directly under the root, no `coordinator/` segment -- e.g. a real
-    marketplace-cache install), the terminal join must NOT unconditionally
-    insert `coordinator/`. Before the fix this raised RuntimeError even
-    though the resolved root was correct and the dir existed one level up."""
     colocated_base = tmp_path / "colocated"
     colocated_base.mkdir()
     doe_root = tmp_path / "flat-doe-root"
-    (doe_root / "schemas").mkdir(parents=True)  # OSS-flat: no coordinator/ prefix
+    (doe_root / "schemas").mkdir(parents=True)
 
     monkeypatch.setattr(dr_mod, "_colocated_root", lambda: colocated_base)
     monkeypatch.setattr(dr_mod, "coordinator_doe_root", lambda: str(doe_root))
@@ -102,14 +78,11 @@ def test_f2_oss_flat_layout_fallback_when_private_join_absent(tmp_path, monkeypa
 
 
 def test_f2_private_layout_still_wins_when_both_would_resolve(tmp_path, monkeypatch):
-    """F2 regression: the private-layout join (`<doe>/coordinator/<dir_name>`)
-    must still be tried FIRST -- unchanged default behaviour for every
-    existing caller/test resolving a private-layout root."""
     colocated_base = tmp_path / "colocated"
     colocated_base.mkdir()
     doe_root = tmp_path / "both-doe-root"
     (doe_root / "coordinator" / "schemas").mkdir(parents=True)
-    (doe_root / "schemas").mkdir(parents=True)  # would also satisfy the flat fallback
+    (doe_root / "schemas").mkdir(parents=True)
 
     monkeypatch.setattr(dr_mod, "_colocated_root", lambda: colocated_base)
     monkeypatch.setattr(dr_mod, "coordinator_doe_root", lambda: str(doe_root))
@@ -119,13 +92,6 @@ def test_f2_private_layout_still_wins_when_both_would_resolve(tmp_path, monkeypa
 
 
 def test_colocated_root_points_at_coordinator_dir():
-    # coordinator_core/data_root.py -> parent.parent/"coordinator" should be
-    # the coordinator/ directory that sits beside coordinator_core/ in the
-    # repo root — the SAME namespace coordinator_data_root.py's own
-    # `_colocated_root()` resolves (`<coordinator-root>/<dir_name>`), not the
-    # bare claude-klabauter repo root. (Regression: this test previously asserted the
-    # bare repo root was correct, which was pinning the two-namespaces bug —
-    # see data_root.py's `_colocated_root()` negative-spec.)
     resolved = dr_mod._colocated_root()
     repo_root = Path(__file__).resolve().parent.parent
     assert (repo_root / "coordinator_core").is_dir()
@@ -165,15 +131,6 @@ def test_both_data_root_entrypoints_agree(dir_name, monkeypatch):
     monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.delenv("DOE_ROOT", raising=False)
 
-    # The quarantine's throwaway DoE stub (`_build_stub_doe_root` in
-    # coordinator_core/conftest.py) seeds only the registry manifest file —
-    # which incidentally creates `coordinator/schemas/` as a side effect —
-    # not the docs/snippets/templates directories this parametrization also
-    # covers. Minting the missing one here, inside the already-quarantined
-    # per-test stub, keeps that fixture's own seed list narrow (its docstring
-    # is explicit: "an explicit named tuple ... never a directory copy") while
-    # giving every parametrized dir_name, not just "schemas", something both
-    # entrypoints can actually agree on.
     doe_for_seed = dr_mod._resolve_doe_root()
     if doe_for_seed:
         (Path(doe_for_seed) / "coordinator" / dir_name).mkdir(parents=True, exist_ok=True)
@@ -192,17 +149,6 @@ def test_both_data_root_entrypoints_agree(dir_name, monkeypatch):
 
 
 def test_codename_free_ladder_reaches_both_twins_via_real_delegation(tmp_path, monkeypatch) -> None:
-    """C2: exercise the REAL (unstubbed) codename-free ladder for both twins,
-    not a mock of `coordinator_doe_root()` / `coordinator_registry.doe_root()`.
-
-    Only env vars are redirected to a temp layout ("environment redirection
-    to a temp dir only" — no `.doe-root` files or registry TOMLs touched).
-    Both twins' rung-1 (co-located) is forced to miss, and both twins' rung-2
-    delegate (`coordinator_doe_root()` / `coordinator_registry.doe_root()`)
-    is made to explode if reached — proving resolution happens via the C1B
-    ladder (engine side, delegated-to) and the C2 ladder (bin side, local)
-    respectively, and that both land on the SAME path for the same dir_name.
-    """
     import coordinator_registry  # noqa: PLC0415 (bin/lib sibling; see module-level sys.path insert above)
     from coordinator_core.ops import coordinator_doe_root as doe_root_mod
 
@@ -221,11 +167,7 @@ def test_codename_free_ladder_reaches_both_twins_via_real_delegation(tmp_path, m
     (plugin_root / "coordinator" / "schemas" / "coordinator-registry.manifest.json").write_text("{}")
     (plugin_root / "coordinator" / "snippets").mkdir(parents=True)
 
-    # coordinator_doe_root() is NOT stubbed — it IS the C1B ladder this test
-    # proves engine-side gets "for free" via delegation (per C2's finding:
-    # this module needs no ladder of its own). Its rung-1 env override
     # (REPO_DOE_CLAUDE) is cleared so it does not short-circuit ahead of the
-    # ladder this test targets.
     monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.delenv("DOE_ROOT", raising=False)
     monkeypatch.setattr(dr_mod, "_colocated_root", lambda: colocated_core_miss)
@@ -299,10 +241,6 @@ def test_module_imports_standalone_in_an_oss_shaped_hermetic_subprocess(tmp_path
 
 
 def test_deferred_resolver_still_honours_a_monkeypatched_module_attribute(tmp_path, monkeypatch) -> None:
-    """`_resolve_doe_root()` reads the module global at CALL time, so the
-    module-attribute binding every other test in this file monkeypatches stays
-    the contract — the hermetic-import fix above removed the import-time
-    failure, never the seam."""
     colocated_base = tmp_path / "colocated-miss"
     doe_root = tmp_path / "doe"
     (doe_root / "coordinator" / "schemas").mkdir(parents=True)

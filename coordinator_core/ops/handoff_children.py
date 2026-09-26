@@ -159,83 +159,25 @@ from coordinator_core.ops.fleet._common import main_worktree_root
 
 _LOG = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
 # Default edge-kinds set — mirrors EDGE_KINDS_CSV in the bash veneer (:44).
 # Derived from dag.ARCHIVAL_EDGE_KINDS (the SSOT) rather than restated —
-# see coordinator_core/tests/test_dag_edge_kind_ssot.py for the drift guard.
-# ---------------------------------------------------------------------------
 _DEFAULT_EDGE_KINDS: Set[str] = set(ARCHIVAL_EDGE_KINDS)
 
 #: Conclusion-shaped counterpart to `_DEFAULT_EDGE_KINDS`, for a caller asking
-#: "may THIS workstream conclude?" rather than "is it safe to archive THIS
 #: node?". `_DEFAULT_EDGE_KINDS` (all three edge kinds) is correct for the
 #: ARCHIVAL question; it is WRONG for the CONCLUSION question — see
 #: `dag.ARCHIVAL_EDGE_KINDS` / `dag.CONTINUATION_EDGE_KINDS` for the full
-#: rationale (example-cockpit-repo-em, 2026-08-05, cross-repo/inbox/2026-08-05-
-#: example-cockpit-repo-em-wsc-leg-b-counts-spinoffs-as-live-children.md).
-#:
 #: `_DEFAULT_EDGE_KINDS` itself stays UNWIDENED — archival callers depend on
-#: it and `TestBlockedByDependentsPinnedFunctionUnchanged.
-#: test_default_edge_kinds_unwidened` pins it. Every conclusion-shaped caller
-#: must pass THIS constant explicitly via the `edge_kinds` param.
-#:
-#: A wire-shaped CSV string, deterministically ordered (sorted — set iteration
-#: order must never leak into a wire value) and derived from
 #: `dag.CONTINUATION_EDGE_KINDS`, the SSOT. `coordinator_core/workstream_
-#: complete/__init__.py` keeps its OWN local duplicate of this exact CSV
 #: string (`_LEG_B_EDGE_KINDS`) ON PURPOSE — see that module's own comment for
-#: why (a measured, not assumed, cold-invocation import-cost decision), and
-#: `coordinator_core/tests/test_dag_edge_kind_ssot.py` for the drift guard
 #: that keeps it, this constant, and `coverage._CONTINUATION_EDGE_KINDS` in
-#: sync.
 CONCLUSION_EDGE_KINDS = ",".join(sorted(CONTINUATION_EDGE_KINDS))
 
 
-# ---------------------------------------------------------------------------
-# Filesystem scanner — replaces query-records.js double-spawn (:150-158)
-# ---------------------------------------------------------------------------
-
-
 def _collect_handoff_paths(worktree_root: Path) -> "tuple[List[str], List[str]]":
-    """Return (paths, scan_errors) for all handoff files (live + archived) in repo.
-
-    Scans two subtrees to mirror the bash script's query-records.js double-spawn:
-      - state/handoffs/*.md          → --type handoff
-      - archive/handoffs/**/*.md     → --type handoff-archived
-
-    Args:
-        worktree_root: The main worktree root (NOT the git common dir / .git dir).
-                       Callers must derive this via main_worktree_root(common_dir)
-                       before calling — do NOT pass a raw common_dir / .git path here.
-
-    Returns:
-        paths        — list of absolute path strings successfully enumerated.
-        scan_errors  — human-readable strings, one per subtree that could not be
-                       scanned (empty when both subtrees scanned cleanly).
-
-    NOTE: uses os.scandir(), NOT glob()/rglob("*.md") — Path.glob()'s selector
-    silently swallows PermissionError while walking (verified: unreadable dir →
-    glob() yields an empty iterator, no exception), which made the previous
-    `except OSError: pass` here dead code for the exact permission-denied case
-    it existed to guard (mirrors roadmap_dag.py's `_collect_stub_paths` fix).
-    scandir() raises OSError rather than swallowing it, same as the iterdir()/
-    os.walk() shape it replaces — the fail-closed contract below only holds
-    because the enumeration primitive itself never hides a permission error.
-    Descent tests `is_dir(follow_symlinks=False)` and files are confirmed with
-    `is_file()`, which together reproduce `os.walk(followlinks=False)`: a
-    symlinked directory is not descended into (a symlink cycle would otherwise
-    walk forever) and a broken `*.md` symlink is not enumerated as a handoff.
-    Both read the cached dirent and cost nothing beyond the scandir itself.
-    This function is the enumeration behind this op's archive/close safety
-    gate: a live child sitting under an unreadable subtree must never be
-    silently indistinguishable from "candidate has no children" —
-    `_handoff_has_live_children` below now fails closed (exit_code=2) rather
-    than risk a false "safe to archive" verdict on incomplete data.
-    """
     paths: List[str] = []
     scan_errors: List[str] = []
 
-    # Live handoffs: state/handoffs/*.md
     state_dir = worktree_root / "state" / "handoffs"
     if state_dir.is_dir():
         try:
@@ -251,7 +193,6 @@ def _collect_handoff_paths(worktree_root: Path) -> "tuple[List[str], List[str]]"
             )
             scan_errors.append(f"{state_dir}: {exc}")
 
-    # Archived handoffs: archive/handoffs/**/*.md (includes month-foldered subdirs)
     archive_dir = worktree_root / "archive" / "handoffs"
     if archive_dir.is_dir():
         stack: List[str] = [str(archive_dir)]
@@ -275,20 +216,7 @@ def _collect_handoff_paths(worktree_root: Path) -> "tuple[List[str], List[str]]"
     return paths, scan_errors
 
 
-# ---------------------------------------------------------------------------
-# Edge-kinds normaliser
-# ---------------------------------------------------------------------------
-
-
 def _parse_edge_kinds(raw: object) -> Optional[Set[str]]:
-    """Normalise the edge_kinds param to a set of strings, or None for default.
-
-    Accepts:
-      None / absent → None (reverse_membership uses its own default = all three)
-      str (CSV)     → split on comma, strip, build set
-      list / tuple  → convert to set of strings
-      set           → used as-is
-    """
     if raw is None:
         return None
     if isinstance(raw, str):
@@ -298,28 +226,11 @@ def _parse_edge_kinds(raw: object) -> Optional[Set[str]]:
         parts = {str(k).strip() for k in raw if k}
         return parts if parts else None
     if isinstance(raw, set):
-        # Set branch did not filter falsy elements (e.g. None → "None"),
-        # unlike the list/tuple branch which filters via `if k`. Align both branches.
         return {str(k) for k in raw if k} or None
     return None
 
 
-# ---------------------------------------------------------------------------
-# Op handler
-# ---------------------------------------------------------------------------
-
-
 def _is_archive_resident_path(p: str) -> bool:
-    """Whether `p` sits under an `archive/handoffs/` segment.
-
-    The index is built over non-archive nodes only, while membership is
-    still judged against the FULL live+archive path list — archive-resident
-    referencers are dropped by `_is_terminal_or_archived_child`, never by
-    omission from the index.
-
-    <!-- Review: coordinator:overengineering-reviewer — lifted from two
-    byte-identical nested copies. -->
-    """
     parts = Path(p).parts
     return any(
         parts[i] == "archive" and parts[i + 1] == "handoffs"
@@ -328,13 +239,6 @@ def _is_archive_resident_path(p: str) -> bool:
 
 
 def _allowed_candidate_roots(worktree_root: Path) -> List[Path]:
-    """The two roots a candidate path must resolve under.
-
-    This op's live set spans both live and archived handoffs (Review:
-    op-family path-containment sweep, 2026-07-08 —
-    docs/problems/2026-07-08-op-family-path-containment-investigation.md § 4).
-    `exclude` is never resolved to a read, so it is NOT guarded.
-    """
     return [
         worktree_root / "state" / "handoffs",
         worktree_root / "archive" / "handoffs",
@@ -342,10 +246,6 @@ def _allowed_candidate_roots(worktree_root: Path) -> List[Path]:
 
 
 def _resolve_candidate(candidate: str, allowed_roots: List[Path]) -> Tuple[Optional[str], Optional[str]]:
-    """(absolute path, None) for a candidate inside `allowed_roots` and present
-    on disk; (None, error message) otherwise. Both failures are fail-closed
-    conditions — never "no children".
-    """
     resolved = contained_path(Path(candidate), allowed_roots)
     if resolved is None:
         return None, f"candidate escapes state/handoffs or archive/handoffs: {candidate}"
@@ -356,16 +256,6 @@ def _resolve_candidate(candidate: str, allowed_roots: List[Path]) -> Tuple[Optio
 
 
 async def _enumerate_live_set(worktree_root: Path) -> Tuple[List[str], Optional[str]]:
-    """(live_paths, None), or ([], error message) for either whole-corpus
-    fail-closed condition.
-
-    An unscannable subtree could be hiding a live child, which would make
-    `referenced` falsely False (safe-to-archive) on whatever partial set was
-    readable — the same posture as the empty-live-set guard, applied to the
-    "we couldn't fully look" case rather than the "we looked and found
-    nothing" case. Neither is decidable per candidate, so a caller answering
-    many candidates marks them ALL indeterminate on this error.
-    """
     live_paths, scan_errors = await asyncio.to_thread(_collect_handoff_paths, worktree_root)
     if scan_errors:
         return [], (
@@ -469,8 +359,6 @@ async def has_live_children_many(
     worktree_root = main_worktree_root(repo_root)
     allowed_roots = _allowed_candidate_roots(worktree_root)
 
-    # Both guards inside `_enumerate_live_set` are whole-corpus conditions:
-    # no candidate can be decided under them.
     live_paths, corpus_error = await _enumerate_live_set(worktree_root)
     if corpus_error is not None:
         return {c: 2 for c in candidates}
@@ -591,20 +479,7 @@ async def has_live_children_from_metas(
     }
 
 
-# ---------------------------------------------------------------------------
-# Error-shape helper — exit_code=2, fail-closed
-# ---------------------------------------------------------------------------
-
-
 def _indeterminate(error_msg: str) -> dict:
-    """Return a fail-closed exit_code=2 reply dict (mirrors bash :14-17).
-
-    `referenced` is omitted (effectively None for callers using .get()) so
-    that a careless caller checking `referenced` before `exit_code` does NOT
-    see False (which maps to "safe to archive" on exit_code=1) — it sees a
-    missing/None field that cannot be confused with a definitive False verdict.
-    The authoritative signal is always exit_code=2 (W11).
-    """
     return {
         "children": [],
         "live_session_count": 0,
@@ -613,18 +488,12 @@ def _indeterminate(error_msg: str) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# blocked_by_dependents — reverse baton-dependents resolver (C1, PIN-1)
-# ---------------------------------------------------------------------------
-
-
 def _blocked_by_indeterminate(
     error_msg: str,
     *,
     identifiers: Optional[List[str]] = None,
     scan_errors: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Fail-closed reply for `blocked_by_dependents` — always the five-key shape."""
     return {
         "state": "indeterminate",
         "dependents": [],
@@ -639,38 +508,6 @@ def blocked_by_dependents(
     worktree_root: Path,
     exclude: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Which LIVE handoffs list this candidate's stub id in their `blocked_by`?
-
-    PIN-1's reverse baton-dependents resolver — see the module docstring's
-    "`blocked_by_dependents`" section for the full design rationale (surface
-    correction, import discipline, composed primitives).
-
-    Singular front door for `blocked_by_dependents_many`, which carries the
-    resolver's whole body; a caller holding more than one candidate must use
-    that one directly rather than looping here (see its docstring for why).
-
-    Args:
-        candidate_path: Absolute or resolvable path of the handoff whose
-                         dependents are being resolved.
-        worktree_root:  The main worktree root (NOT the git common dir) —
-                         same convention as `_handoff_has_live_children`.
-        exclude:        Optional paths to drop from the scan set before
-                         matching (mirrors `_handoff_has_live_children`'s
-                         `exclude` param — e.g. a scaffolded successor's own
-                         path, so it does not see itself as a dependent of
-                         its predecessor whose `blocked_by` list it inherited).
-
-    Returns a dict with exactly five keys (present on EVERY outcome):
-        state:       "dependents" | "none" | "indeterminate"  (tri-state)
-        dependents:  sorted list of absolute path strings; non-empty only
-                     when state=="dependents".
-        identifiers: sorted list of the candidate's own resolved ids
-                     (stub_id / id / handoff_id) that were matched against.
-        scan_errors: list of strings from `_collect_all_handoffs_for_gate_index`
-                     (plus the `collect_live_handoff_paths` OSError adapter
-                     below) — non-empty only when state=="indeterminate".
-        error:       str or None; non-None only when state=="indeterminate".
-    """
     key = str(candidate_path)
     return blocked_by_dependents_many([candidate_path], worktree_root, exclude)[key]
 
@@ -680,35 +517,6 @@ def blocked_by_dependents_many(
     worktree_root: Path,
     exclude: Optional[List[str]] = None,
 ) -> Dict[str, Dict[str, Any]]:
-    """``{candidate: five-key reply}`` for many candidates over ONE corpus pass.
-
-    Same question, same guards, same verdicts as `blocked_by_dependents` —
-    this exists because that resolver is candidate-independent right up to its
-    `entry in identifiers` comparison, so asking it N times pays N full walks
-    of the live+archive handoff corpus to answer something that needs one. The
-    corpus walk (`_collect_all_handoffs_for_gate_index`) and the per-node
-    `blocked_by` normalisation are hoisted out of the candidate loop and an
-    id -> holders index is built once; what remains per candidate is a set
-    lookup per resolved identifier.
-
-    Keys of the returned dict are the candidate values EXACTLY as passed in
-    (``str()``-ed, not resolved), so a caller can index straight back with the
-    path it supplied. Every candidate gets a reply.
-
-    Fail-closed exactly as the singular resolver, and with the same blast
-    radius: a candidate with no resolvable identifier is indeterminate ALONE,
-    while an unscannable subtree or a malformed `blocked_by` in the corpus is
-    a whole-corpus condition and marks every candidate that could see it
-    indeterminate. "Could see it" is not a hedge — the singular resolver skips
-    a corpus node that IS the candidate (or is excluded) before it ever looks
-    at that node's `blocked_by`, so a malformed `blocked_by` on the
-    candidate's own file cannot make that candidate indeterminate. The
-    per-candidate filter below preserves that exactly.
-
-    `_is_terminal_or_archived_child` results are memoised across candidates:
-    the predicate reads frontmatter, and two candidates sharing a dependent
-    must not re-read it.
-    """
     # Function-local imports — see module docstring's IMPORT DISCIPLINE note.
     from coordinator_core.reconcile.handoff_corpus import _collect_all_handoffs_for_gate_index
 
@@ -718,9 +526,7 @@ def blocked_by_dependents_many(
 
     exclude_abs: Set[str] = {str(Path(p).resolve()) for p in (exclude or [])}
 
-    # Pass 1 — per-candidate identity resolution. A candidate with no
-    # resolvable id is decided here and never reaches the corpus.
-    pending: List[Tuple[str, str, List[str]]] = []  # (key, candidate_abs, identifiers)
+    pending: List[Tuple[str, str, List[str]]] = []
     for candidate_path in candidate_paths:
         key = str(candidate_path)
         candidate_abs = str(Path(candidate_path).resolve())
@@ -747,12 +553,6 @@ def blocked_by_dependents_many(
     if not pending:
         return replies
 
-    # Adapter: collect_live_handoff_paths (ops/fleet/_common.py), called by
-    # _collect_all_handoffs_for_gate_index for the live-set half of its walk,
-    # RAISES OSError on an unreadable state/handoffs/ rather than surfacing it
-    # via scan_errors — none of that function's existing call sites catch it.
-    # Caught here explicitly so an unreadable live subtree fails closed to
-    # "indeterminate" rather than raising past this resolver.
     try:
         all_handoffs, scan_errors = _collect_all_handoffs_for_gate_index(worktree_root)
     except OSError as exc:
@@ -776,10 +576,8 @@ def blocked_by_dependents_many(
             )
         return replies
 
-    # Pass 2 — ONE walk of the corpus, candidate-independent: normalise each
-    # node's `blocked_by` and index it by the ids it names.
     holders_by_id: Dict[str, Set[str]] = {}
-    malformed: List[Tuple[str, str]] = []  # (holder_abs, scan_error message)
+    malformed: List[Tuple[str, str]] = []
     for h in all_handoffs:
         h_path = h.get("_path")
         if not h_path:
@@ -790,12 +588,6 @@ def blocked_by_dependents_many(
         if isinstance(blocked_by, str):
             blocked_by = [blocked_by]
         if blocked_by is not None and not isinstance(blocked_by, (list, tuple)):
-            # A present-but-malformed
-            # `blocked_by` (e.g. a dict/int from bad YAML) is "we could not
-            # fully look", not "this handoff does not reference the
-            # candidate" — silently `continue`-ing past it fails OPEN,
-            # against this resolver's own stated tri-state intent. Accumulate
-            # it and force state="indeterminate" below instead.
             malformed.append(
                 (
                     h_abs,
@@ -810,17 +602,6 @@ def blocked_by_dependents_many(
         for entry in blocked_by:
             if not isinstance(entry, str) or not entry:
                 continue
-            # An `id_index.get(entry)`
-            # fallback here was removed as unreachable dead code: a candidate's
-            # `identifiers` and `id_index` (built by `_index_by_id` over
-            # `all_handoffs`) are both keyed from the exact same
-            # `_read_meta`-sourced `stub_id`/`id`/`handoff_id` fields —
-            # `_collect_all_handoffs_for_gate_index` populates each entry via
-            # `_read_meta(path)` directly (same primitive `identifiers` is
-            # built from for the candidate), so any `entry` that would resolve
-            # through `id_index` back to a candidate is, by construction,
-            # already a member of that candidate's `identifiers` and matches
-            # on the keyed lookup below.
             holders_by_id.setdefault(entry, set()).add(h_abs)
 
     terminal_cache: Dict[str, bool] = {}
@@ -832,11 +613,7 @@ def blocked_by_dependents_many(
             terminal_cache[h_abs] = cached
         return cached
 
-    # Pass 3 — per candidate, set lookups only.
     for key, candidate_abs, identifiers in pending:
-        # A malformed node the singular resolver would have skipped BEFORE
-        # reading its `blocked_by` (the candidate itself, or an excluded
-        # path) must not make this candidate indeterminate.
         visible_malformed = [
             msg
             for h_abs, msg in malformed
@@ -881,11 +658,6 @@ def blocked_by_dependents_many(
     return replies
 
 
-# ---------------------------------------------------------------------------
-# handoff.blocked_by_dependents — op registration wrapper (C1, PIN-1)
-# ---------------------------------------------------------------------------
-
-
 @register_op("handoff.blocked_by_dependents")
 def _handoff_blocked_by_dependents(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "handoff.blocked_by_dependents" handler.
@@ -925,8 +697,6 @@ def _handoff_blocked_by_dependents(params: dict, repo_root: Optional[Path] = Non
     if not candidate:
         return _blocked_by_indeterminate("missing required param: candidate")
 
-    # C1b-ii: repo_root is the router-supplied git common dir — same
-    # main_worktree_root derivation as _handoff_has_live_children above.
     if repo_root is not None:
         worktree_root = main_worktree_root(repo_root)
     else:
@@ -934,11 +704,6 @@ def _handoff_blocked_by_dependents(params: dict, repo_root: Optional[Path] = Non
             "no repo_root resolved — _origin_worktree missing from request"
         )
 
-    # Containment: candidate MUST resolve under state/handoffs/ or
-    # archive/handoffs/ — same op-family path-containment posture as
-    # _handoff_has_live_children (docs/problems/2026-07-08-op-family-path-
-    # containment-investigation.md § 4). `exclude` is never resolved to a
-    # read, so it is NOT guarded here (same as the sibling op).
     allowed_roots = [
         worktree_root / "state" / "handoffs",
         worktree_root / "archive" / "handoffs",
@@ -955,12 +720,6 @@ def _handoff_blocked_by_dependents(params: dict, repo_root: Optional[Path] = Non
     return blocked_by_dependents(candidate_abs, worktree_root, exclude=exclude if exclude else None)
 
 
-# `handoff.has_live_children` was DELETED as an op under the 200ms process-time
-# bar (kill ledger K-060). The verdict it computes is still required in-process
-# by `handoff_close_origin_stub._try_close`, which needs the `children` payload
-# that `has_live_children_many` does not return -- so the body survives here as
-# an undecorated helper with no registry entry, reachable only by direct import.
-# Restoring the `@register_op` line puts the op back over the bar; do not.
 async def _handoff_has_live_children(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "handoff.has_live_children" handler.
 
@@ -995,9 +754,6 @@ async def _handoff_has_live_children(params: dict, repo_root: Optional[Path] = N
         exit_code 1 → referenced=False → safe to archive
         exit_code 2 → error/indeterminate → fail-closed, treat as do-not-archive
     """
-    # ------------------------------------------------------------------
-    # 1. Parse + validate params
-    # ------------------------------------------------------------------
     candidate: str = params.get("candidate") or ""
     exclude: List[str] = params.get("exclude") or []
     edge_kinds: Optional[Set[str]] = _parse_edge_kinds(params.get("edge_kinds"))
@@ -1005,15 +761,8 @@ async def _handoff_has_live_children(params: dict, repo_root: Optional[Path] = N
     if not candidate:
         return _indeterminate("missing required param: candidate")
 
-    # ------------------------------------------------------------------
-    # 2. Build live set — replaces query-records.js double-spawn (:150-158)
-    # ------------------------------------------------------------------
-    # C1b-ii: repo_root is the router-supplied git common dir.
-    #
-    # repo_root is the git common dir (<worktree>/.git), so
-    # main_worktree_root() (= common_dir.parent) correctly derives the worktree root.
     if repo_root is not None:
-        worktree_root = main_worktree_root(repo_root)  # router common_dir → worktree root
+        worktree_root = main_worktree_root(repo_root)
     else:
         return _indeterminate(
             "no repo_root resolved — _origin_worktree missing from request"
@@ -1025,16 +774,10 @@ async def _handoff_has_live_children(params: dict, repo_root: Optional[Path] = N
     if candidate_error is not None:
         return _indeterminate(candidate_error)
 
-    # --- Tier 2 (behaviour change -- PM sign-off required) ---
-    # Both of `_enumerate_live_set`'s guards are fail-closed; see its docstring.
     live_paths, corpus_error = await _enumerate_live_set(worktree_root)
     if corpus_error is not None:
         return _indeterminate(corpus_error)
-    # --- end Tier 2 ---
 
-    # ------------------------------------------------------------------
-    # 3. Reverse-membership check via archival.reverse_membership
-    # ------------------------------------------------------------------
     try:
         children = reverse_membership(
             candidate_abs,
@@ -1047,23 +790,9 @@ async def _handoff_has_live_children(params: dict, repo_root: Optional[Path] = N
     except Exception as exc:  # noqa: BLE001
         return _indeterminate(f"unexpected error in reverse_membership: {exc}")
 
-    # ------------------------------------------------------------------
-    # 4. Liveness seam — route through canonical coordinator_core.liveness
     #    (RAW-PID-LIVENESS floor: no ps -p / kill -0 / psutil.pid_exists here).
-    #    resolve_live_session_ids() returns empty frozenset on error; the result
-    #    is informational metadata only — the core membership decision (referenced)
-    #    matches the bash implementation which does not filter by session liveness.
-    # ------------------------------------------------------------------
-    # resolve_live_session_ids() is a pure in-process meta.json scan
-    # (liveness.py:120-147, TTL-cached) — no subprocess shell-out. Still
-    # wrapped in to_thread so the scan never stalls the asyncio event loop
-    # (AC-3 Gap-3 — ipc.py:486-491); the field is informational only and
-    # does not affect exit_code / referenced.
-    live_sids = await asyncio.to_thread(resolve_live_session_ids)  # frozenset[str]; empty on any error
+    live_sids = await asyncio.to_thread(resolve_live_session_ids)
 
-    # ------------------------------------------------------------------
-    # 5. Build reply
-    # ------------------------------------------------------------------
     referenced = len(children) > 0
     return {
         "referenced": referenced,

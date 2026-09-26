@@ -94,31 +94,12 @@ def _claude_home() -> str:
 
 
 def _same_path(a: str, b: str) -> bool:
-    """Thin alias onto ``coordinator_core.win_portability.same_path`` -- the
-    consolidated primitive (state/sizings/2026-08-07-path-equality-
-    consolidates-onto-one-prim.yaml). Import kept function-local, matching
-    this module's other coordinator_core imports (module docstring: bare
-    ``bash <path>`` subprocess invocation, no top-level coordinator_core
-    dependency). Promoted from realpath-only to samefile-then-fallback
-    semantics: broader (junction-aware) equality is correct here since this
-    call site only checks "is repo_root the meta-repo home", where a
-    junction-aliased home must compare equal."""
     from coordinator_core.win_portability import same_path
 
     return same_path(a, b)
 
 
 def _machine_local_get(key: str) -> Optional[str]:
-    """Resolve `key` via `machine_resolver.registry_get` -- zero-spawn,
-    in-process read of the same registry.local.toml over registry.toml chain
-    the `machine-local get <key>` CLI would consult (2026-08-16 conversion).
-    None on any failure (unreadable registry, missing/empty key).
-
-    Kept as its own copy rather than moved onto `coordinator_core._claude_klabauter_root`
-    (Kira close-review ab37bb04 finding #2): that shared helper's
-    `_machine_local_get` is subprocess-based, the opposite policy of this
-    zero-spawn conversion.
-    """
     from coordinator_core.machine_resolver import registry_get
 
     return registry_get(key)
@@ -134,10 +115,6 @@ def _claude_klabauter_root() -> Optional[str]:
 
 
 def _resolve_state_root(repo_root: str) -> str:
-    """Resolve the state/ directory for repo_root, routing a meta-repo root
-    through the claude-klabauter state seam. Mirrors the bash original's graceful
-    (non-fail-loud) fallback when the engine root is unresolvable.
-    """
     if _same_path(repo_root, _claude_home()):
         claude_klabauter_root = _claude_klabauter_root()
         if claude_klabauter_root:
@@ -146,7 +123,6 @@ def _resolve_state_root(repo_root: str) -> str:
 
 
 def seed_health_ledger(repo_root: str) -> int:
-    """Seed state/health-ledger.md in repo_root; idempotent. Returns process exit code."""
     if not os.path.isdir(repo_root):
         print(
             f"setup-seed-health-ledger: REPO_ROOT does not exist or is not a directory: {repo_root}",

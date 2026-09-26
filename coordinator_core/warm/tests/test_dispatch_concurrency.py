@@ -34,9 +34,6 @@ class _FakeVersionState:
 
 
 def test_worker_loop_dispatches_through_the_process_pool_not_in_process(monkeypatch):
-    """`_worker_loop` must hand `_handle_connection` a `dispatch=` bound to
-    `self._pool_dispatch` -- never `_run_dispatch` (the in-process call C1's
-    Arm A evidence shows does not scale under concurrent threads)."""
     captured: dict[str, object] = {}
 
     def _fake_handle_connection(io, *, dispatch=None, **kwargs):
@@ -60,21 +57,12 @@ def test_worker_loop_dispatches_through_the_process_pool_not_in_process(monkeypa
 
 
 def test_pool_dispatch_is_lazily_constructed():
-    """`_ServerContext.__init__` and `_start_worker_pool` alone must not
-    spawn real OS processes -- the pool is built on first `_pool_dispatch`
-    call only (double-checked-locking in `_ensure_dispatch_pool`), so a test
-    that never exercises real dispatch (this module's own suite, which
-    monkeypatches `_handle_connection` throughout) never pays for one."""
     ctx = server._ServerContext(name="pipe-lazy", sid="sid-lazy", version_state=_FakeVersionState())
     assert ctx._dispatch_pool is None
     ctx._start_worker_pool(pool_size=1)
-    assert ctx._dispatch_pool is None  # starting the pool of THREADS alone must not build it
+    assert ctx._dispatch_pool is None
 
 
 def test_ctx_shutdown_tolerates_a_never_built_dispatch_pool():
-    """`_ctx_shutdown` must not raise when `_dispatch_pool` was never built
-    (the common case for any server life that never actually dispatched) --
-    the `if self._dispatch_pool is not None` guard is the refutation
-    criterion here."""
     ctx = server._ServerContext(name="pipe-shutdown", sid="sid-shutdown", version_state=_FakeVersionState())
-    ctx._ctx_shutdown()  # must not raise
+    ctx._ctx_shutdown()

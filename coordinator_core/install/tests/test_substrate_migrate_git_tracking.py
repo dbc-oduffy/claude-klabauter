@@ -40,18 +40,10 @@ def _mock_posix(monkeypatch):
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
 
 
-# ---------------------------------------------------------------------------
-# structural guard — a git-TRACKED legacy machine-local can never converge
 # (2026-08-22 install dogfood: `DIVERGENT FILE` on machine-local/.gitignore,
-# from a `~/.claude` meta-repo that tracked the whole directory)
-# ---------------------------------------------------------------------------
 
 
 def _git_repo_tracking(claude_base: Path, *, tracked: list[str]) -> None:
-    """Make `claude_base` a real git work tree with `tracked` committed under
-    it. A real repo, not a stub: the guard's whole job is to answer a question
-    about git's index, and a stubbed answer would pin the message while
-    leaving the query itself unverified."""
     import subprocess
 
     claude_base.mkdir(parents=True, exist_ok=True)
@@ -104,9 +96,6 @@ def test_tracked_legacy_dir_fails_with_the_structural_cause_not_a_file_diff(
 
 
 def test_tracked_legacy_dir_guard_mutates_no_git_state(tmp_path, monkeypatch):
-    """Explicitly out of scope, and pinned so it stays that way: the guard
-    reads git and touches nothing. The repo it is reading is an operator's
-    meta-repo synced to their other machines."""
     import subprocess
 
     _mock_posix(monkeypatch)
@@ -156,5 +145,4 @@ def test_untracked_legacy_dir_inside_a_git_repo_still_migrates(tmp_path, monkeyp
 
     assert rc == 0
     assert ml.is_symlink()
-
 

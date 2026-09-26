@@ -51,11 +51,6 @@ def _load_cli_module():
 
 
 class ProcessGroupTeardownTest(unittest.TestCase):
-    """T1-T4: the abort-time process-group teardown wiring around
-    `_run_fast_test_cmd` (see module docstring's coverage list). Exercises
-    the wiring in-process via monkeypatch/fake -- never spawns a real
-    xdist pool or kills real processes, per this box's shared-machine
-    load posture."""
 
     def test_t1_start_new_session_always_set(self) -> None:
         mod = _load_cli_module()
@@ -95,7 +90,6 @@ class ProcessGroupTeardownTest(unittest.TestCase):
         with mock.patch.object(mod.os, "name", "nt"):
             fake_proc = type("FakeProc", (), {"pid": os.getpid() + 1})()
             restore = mod._install_group_teardown(fake_proc)
-            # Must not raise, and restore() itself must not raise either.
             restore()
 
     @unittest.skipIf(os.name == "nt", "POSIX-only killpg leg")
@@ -103,20 +97,12 @@ class ProcessGroupTeardownTest(unittest.TestCase):
         mod = _load_cli_module()
         fake_proc = type("FakeProc", (), {"pid": 999999})()
         with mock.patch.object(mod.os, "killpg", side_effect=OSError("no such process group")):
-            # Must not raise -- AC3: a reap that raises must never change
-            # the run's exit code.
             mod._teardown_process_group(fake_proc)
 
     def test_t3_noop_on_windows(self) -> None:
         mod = _load_cli_module()
         fake_proc = type("FakeProc", (), {"pid": 999999})()
         with mock.patch.object(mod.os, "name", "nt"):
-            # Must not raise or attempt a POSIX killpg call at all.
-            # create=True: os.killpg is POSIX-only and does not exist on
-            # this platform's os module, so patch.object must be told to
-            # synthesize the attribute rather than require it pre-exist —
-            # this test is asserting the Windows no-op path, where killpg
-            # is never touched at all.
             with mock.patch.object(mod.os, "killpg", create=True) as fake_killpg:
                 mod._teardown_process_group(fake_proc)
                 fake_killpg.assert_not_called()
@@ -125,7 +111,6 @@ class ProcessGroupTeardownTest(unittest.TestCase):
         mod = _load_cli_module()
         fake_proc = type("FakeProc", (), {"pid": os.getpid()})()
         self.assertIsNone(mod._assign_windows_job_object(fake_proc))
-        # Must not raise on a None handle or on a non-Windows host.
         mod._close_windows_job_object(None)
         mod._close_windows_job_object("not-a-real-handle")
 

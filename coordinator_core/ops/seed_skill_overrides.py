@@ -93,14 +93,13 @@ def main(
     args: List[str] = []
     if os.environ.get("CHECK_ONLY"):
         args.append("--check-only")
-    # Deep-research is always bundled in coordinator post-C4 — always seed the override.
     args.append("--with-deep-research")
 
     python_cmd = sys.executable or "python3"
     result = subprocess.run(
         [python_cmd, helper] + args,
         **no_console_passthrough_kwargs(),
-    )  # popup-safe-env-suppressed
+    )
     return result.returncode
 
 

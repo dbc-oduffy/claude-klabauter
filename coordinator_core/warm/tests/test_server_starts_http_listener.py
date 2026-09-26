@@ -72,19 +72,9 @@ def _stamp(tmp_path: Path) -> None:
 
 
 def _patch_boot_seams(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Neutralize every part of `_run_guarded`'s boot sequence this test does
-    not exercise: the real election (would create a live named pipe / unix
-    socket), the op-registry eager import (703ms, irrelevant here), console
-    suppression (Windows-only side effect), and the accept loop itself
-    (`serve_forever` never returns under real traffic)."""
     monkeypatch.setattr(server, "_engine_clone_root", lambda: tmp_path)
     monkeypatch.setattr(server, "_preload_op_registry", lambda: None)
     monkeypatch.setattr(server, "_suppress_pool_worker_consoles", lambda: None)
-    # `_declare_execution_route` writes a real `os.environ` entry as its own
-    # documented boot step (server.py's own docstring) -- orthogonal to this
-    # chunk, and the process-env leak guard flags any test that leaves it
-    # set. Stubbed rather than exercised, since real env mutation is not
-    # what this suite is pinning.
     monkeypatch.setattr(server, "_declare_execution_route", lambda: None)
     monkeypatch.setattr(election, "elect", lambda name, user_sid=None: 1)
     monkeypatch.setattr(election, "elect_unix_socket", lambda path: object())
@@ -93,11 +83,6 @@ def _patch_boot_seams(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 
 
 def test_main_boot_path_calls_ensure_listener(tmp_path, monkeypatch):
-    """AC4: `main()`'s boot path reaches `supervisor.ensure_listener()`,
-    called with this process's own resolved engine-clone root, after the
-    election that seam's `_elect_windows_pipe`/`_elect_unix_socket_endpoint`
-    already won -- asserted by spying on the call, not by asserting a real
-    listener bound (this test never starts one)."""
     _stamp(tmp_path)
     _patch_boot_seams(monkeypatch, tmp_path)
 
@@ -115,15 +100,6 @@ def test_main_boot_path_calls_ensure_listener(tmp_path, monkeypatch):
 
 
 def test_pipe_server_boots_unchanged_when_ensure_listener_raises(tmp_path, monkeypatch):
-    """AC5, the load-bearing one. A pipe server that fails to boot because an
-    http listener could not start has inverted the guarantee this chunk
-    exists to provide. Pins the call site's OWN fail-open wrapping: even
-    though `ensure_listener` is documented to return `None` on every failure
-    mode and never raise, this simulates it raising anyway and asserts the
-    pipe server's boot -- election already won, breadcrumb write, execution
-    route declaration, op-registry preload, and the handoff into
-    `serve_forever` -- completes exactly as it would have with no http
-    listener call in the boot path at all."""
     _stamp(tmp_path)
     _patch_boot_seams(monkeypatch, tmp_path)
 
@@ -133,12 +109,6 @@ def test_pipe_server_boots_unchanged_when_ensure_listener_raises(tmp_path, monke
     monkeypatch.setattr(supervisor, "ensure_listener", _boom)
 
     # `main()` dispatches on WHICH ENDPOINT WON the election (server.py's own
-    # comment at the `serve_forever`/`serve_forever_unix` branch), not on a
-    # platform read: on the POSIX box this suite actually runs on, that is
-    # `serve_forever_unix`, never `serve_forever` (the Windows named-pipe
-    # arm `_patch_boot_seams` stubs `election.elect` for but never wins on
-    # this platform). Both are patched so the assertion below is the
-    # platform-appropriate one rather than one hard-coded to Windows.
     served = []
     monkeypatch.setattr(
         server._ServerContext, "serve_forever", lambda self, handle: served.append(handle)
@@ -154,23 +124,11 @@ def test_pipe_server_boots_unchanged_when_ensure_listener_raises(tmp_path, monke
 
 
 def test_pipe_server_boots_unchanged_when_discovery_is_unreadable(tmp_path, monkeypatch):
-    """The AC5 scenario named literally: an unreadable discovery file (not a
-    raise) still yields `ensure_listener() is None` by that function's own
-    fail-open contract, and the pipe server's boot must complete unchanged --
-    the sibling case to the raising one above, exercised through the real
-    (unmonkeypatched) `supervisor.ensure_listener` against a genuinely
-    missing/corrupt discovery file rather than a stand-in."""
     _stamp(tmp_path)
     _patch_boot_seams(monkeypatch, tmp_path)
 
-    # No discovery file has ever been written under this tmp_path root, so
-    # `supervisor.read_discovery` returns None and `ensure_listener` takes
-    # its fail-open "nothing to spawn from, return None this call" path --
-    # this also exercises `should_spawn`, so stub the actual spawn out.
     monkeypatch.setattr(supervisor, "spawn_detached", lambda *a, **kw: False)
 
-    # Both arms patched -- see the sibling test above for why the assertion
-    # is on the platform-appropriate arm rather than the Windows one.
     served = []
     monkeypatch.setattr(
         server._ServerContext, "serve_forever", lambda self, handle: served.append(handle)

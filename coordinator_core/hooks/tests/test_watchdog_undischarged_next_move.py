@@ -48,10 +48,6 @@ def test_op_registers_and_resolves_through_op_for_path() -> None:
 
 
 def test_op_is_classified_mutating() -> None:
-    # Explicit assertion of the classify() call/result — routing alone (a
-    # `hooks.` prefix match) never reaches `_is_compute_only`, so an absent
-    # classification would pass every routing test and still be a
-    # dispatch-time authz gap.
     assert classify(_OP_NAME) is OpClass.MUTATING
 
 
@@ -68,8 +64,6 @@ def test_post_tool_use_leg_is_always_silent(tmp_path) -> None:
     result = _handler({"payload": payload})
     assert result == {}
 
-    # But the ledger side-effect landed — the PostToolUse leg is silent
-    # bookkeeping, not a no-op.
     ledger = _ledger_path(repo_root, "sid-pickup")
     assert os.path.isfile(ledger)
     with open(ledger, "r", encoding="utf-8") as fh:
@@ -93,10 +87,6 @@ def test_stop_leg_reports_undischarged_obligation_at_precision(tmp_path) -> None
     }
     assert _handler({"payload": open_payload}) == {}
 
-    # No coordinator.local.md / identity file resolvable for this synthetic
-    # cwd -> posture fails open to "precision" -> non-blocking allow_advisory,
-    # the same hookSpecificOutput shape the source script prints to stdout at
-    # posture "precision".
     stop_payload = {
         "session_id": session_id,
         "cwd": repo_root,
@@ -108,8 +98,6 @@ def test_stop_leg_reports_undischarged_obligation_at_precision(tmp_path) -> None
     assert hso["permissionDecision"] == "allow"
     assert "Skill|Agent(the narrated next move)" in hso["additionalContext"]
 
-    # One-fire-per-obligation latch: a second Stop for the same undischarged
-    # obligation must stay silent.
     assert _handler({"payload": stop_payload}) == {}
 
 
@@ -191,7 +179,6 @@ def test_discharge_closes_the_obligation_before_stop_fires(tmp_path) -> None:
     }
     assert _handler({"payload": open_payload}) == {}
 
-    # review-a1-a2 discharges on ANY subsequent Agent call.
     discharge_payload = {
         "session_id": session_id,
         "cwd": repo_root,
@@ -215,12 +202,7 @@ def test_post_tool_use_suppresses_on_agent_id() -> None:
     assert _handler({"payload": payload}) == {}
 
 
-# The sizing-route resolution
-# path (`_newest_touched_sizing_path` / `_sizing_route_and_exemption` /
-# `_extract_scalar` / `_extract_detents`, exercised from `_handle_post_tool_use`'s
-# coordinator:sizing/coordinator:plan branch) had zero coverage; add one test
 # per `_ROUTE_TERMINAL` entry, one for the appetite/post-size-prompt exemption,
-# and the negative "spec-dispatch does not open plan->review" case.
 
 
 def _write_touch_record(repo_root: str, session_id: str, rel_sizing_path: str) -> None:
@@ -311,8 +293,6 @@ def test_sizing_route_roadmap_opens_sizing_routed_obligation(tmp_path) -> None:
 
 
 def test_sizing_route_exemption_suppresses_the_obligation(tmp_path) -> None:
-    # appetite_exceeded detent with a null fork holds the exemption open --
-    # no obligation should be opened even though the route resolves.
     from coordinator_core.hooks.watchdog_undischarged_next_move import _handler
 
     repo_root = _make_repo(tmp_path)
@@ -332,7 +312,6 @@ def test_sizing_route_exemption_suppresses_the_obligation(tmp_path) -> None:
 
 
 def test_plan_skill_spec_dispatch_route_does_not_open_plan_review(tmp_path) -> None:
-    # Only the FULL "plan" terminal opens plan->review; "spec-dispatch" must
     # not, even though it is a valid _ROUTE_TERMINAL entry for coordinator:sizing.
     records = _sizing_open_ledger_action(tmp_path, "spec-dispatch", "coordinator:plan")
     assert records is None
@@ -358,11 +337,6 @@ def test_plan_skill_plan_route_opens_plan_review(tmp_path) -> None:
         record = json.loads(fh.readline())
     assert record["seam"] == "plan->review"
     assert record["next_action"] == "Skill(coordinator:review)"
-
-
-# `_drain_intake`'s fold-and-
-# delete behavior (the module's cross-plane consumption contract with
-# `coordinator_core.group_em.obligations`'s producer) had zero coverage.
 
 
 def _intake_path(repo_root: str, session_id: str) -> str:
@@ -391,15 +365,12 @@ def test_drain_intake_folds_open_and_discharge_rows_and_removes_the_file(tmp_pat
             "op": "discharge",
             "obligation_id": "obl-b",
         },
-        # Malformed row (missing obligation_id) -- must be skipped without
-        # aborting the fold of the rows around it.
         {"schema": 1, "session_id": session_id, "op": "open"},
     ]
     with open(_intake_path(repo_root, session_id), "w", encoding="utf-8") as fh:
         for row in rows:
             fh.write(json.dumps(row) + "\n")
 
-    # Pre-seed obl-b as an open obligation so the discharge row has an effect.
     with open(_ledger_path(repo_root, session_id), "w", encoding="utf-8") as fh:
         fh.write(
             json.dumps(
@@ -452,15 +423,11 @@ def test_drain_intake_progress_and_blocked_rows_are_consumed_without_effect(tmp_
 
     _drain_intake(repo_root, session_id)
 
-    # Rows had no observable effect on the ledger (no record ever opened),
-    # but the intake file is still consumed -- not left to accumulate.
     assert not os.path.isfile(_intake_path(repo_root, session_id))
     assert not os.path.isfile(_ledger_path(repo_root, session_id))
 
 
 def test_session_id_is_read_from_payload_never_from_environment(tmp_path, monkeypatch) -> None:
-    """The ledger must be keyed on params["payload"]["session_id"], never on
-    this process's own environment (trap 1 in the module docstring)."""
     from coordinator_core.hooks.watchdog_undischarged_next_move import _handler
 
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "wrong-session-from-env")

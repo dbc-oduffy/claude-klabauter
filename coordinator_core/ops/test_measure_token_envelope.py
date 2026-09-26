@@ -1,7 +1,3 @@
-"""Tests for coordinator_core.ops.measure_token_envelope.
-
-Spec backlink: DoE-claude:pln-always-loaded-doctrine-envelop-cd5932 § C1(a)(c)
-"""
 
 from __future__ import annotations
 
@@ -22,12 +18,10 @@ def test_estimate_tokens_empty_is_zero():
 
 
 def test_estimate_tokens_rounds_up():
-    # 5 chars / 4 chars-per-token = 1.25 -> ceil to 2
     assert estimate_tokens("abcde") == 2
 
 
 def test_estimate_tokens_exact_boundary():
-    # exactly 4 chars per token -> no rounding needed
     assert estimate_tokens("abcd") == 1
     assert estimate_tokens("abcdefgh") == 2
 
@@ -40,7 +34,7 @@ def test_measure_surface_missing_file_degrades_gracefully(tmp_path):
 
 def test_measure_surface_existing_file(tmp_path):
     f = tmp_path / "CLAUDE.md"
-    f.write_text("abcdefgh", encoding="utf-8")  # 8 bytes -> 2 tokens
+    f.write_text("abcdefgh", encoding="utf-8")
     result = measure_surface(f)
     assert result["exists"] is True
     assert result["bytes"] == 8
@@ -51,8 +45,8 @@ def test_measure_surface_existing_file(tmp_path):
 def test_measure_surfaces_totals_and_order(tmp_path):
     a = tmp_path / "a.md"
     b = tmp_path / "b.md"
-    a.write_text("abcd", encoding="utf-8")  # 4 bytes, 1 token
-    b.write_text("abcdefgh", encoding="utf-8")  # 8 bytes, 2 tokens
+    a.write_text("abcd", encoding="utf-8")
+    b.write_text("abcdefgh", encoding="utf-8")
     missing = tmp_path / "missing.md"
 
     result = measure_surfaces([a, missing, b])

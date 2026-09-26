@@ -1,19 +1,3 @@
-"""A broken dispatch pool must never fail a caller.
-
-Spec backlink: docs/plans/2026-08-19-the-fired-path-reaches-the-engine.md § C6.
-
-Regression: a `ProcessPoolExecutor` whose worker dies is broken permanently --
-every later `submit()` raises `BrokenProcessPool`. `_pool_dispatch` originally
-let that propagate, so one dead worker turned a resident server into one that
-failed every request for the rest of its ~15-minute idle life. Observed live
-2026-08-19 against the published mirror: `ping` itself returned
-`BrokenProcessPool` and only a hard kill cleared it.
-
-Negative spec: the recovery degrades to the in-process (GIL-bound) path for the
-failing request. That costs latency under concurrency, which is what C1
-measured and what the pool exists to fix -- but a slow dispatch beats a failed
-one, and the module's NEVER FAIL A CALLER contract was never pool-exempt.
-"""
 
 import concurrent.futures
 from concurrent.futures.process import BrokenProcessPool
@@ -25,7 +9,6 @@ from coordinator_core.warm.caller_context import resolve_caller_context
 
 
 class _BrokenPool:
-    """Stands in for a pool whose worker has died."""
 
     def __init__(self):
         self.shutdown_called = False
@@ -67,7 +50,6 @@ def test_broken_pool_is_discarded_so_the_next_request_rebuilds(ctx, monkeypatch)
 
 
 def test_session_id_survives_the_fallback(ctx, monkeypatch):
-    """Per-request identity is load-bearing; the degraded path must not drop it."""
     seen = {}
 
     def _fake(msg, *, caller=None, isolated=False):
@@ -81,16 +63,10 @@ def test_session_id_survives_the_fallback(ctx, monkeypatch):
         caller=resolve_caller_context({"session_id": "sid-42"}),
     )
     assert seen["session_id"] == "sid-42"
-    # The degrade path runs IN THIS process on an accept thread, so it must
-    # carry the identity without taking the env borrow (C3's `isolated=False`).
     assert seen["isolated"] is False
 
 
 def test_broken_pool_returns_indeterminate_for_a_mutating_op(ctx, monkeypatch):
-    """A dead worker's future.result() also raises BrokenProcessPool for its
-    OWN request -- the worker may have already performed a mutation before
-    dying. Re-running it in-process (as the compute-only path does) would be
-    the server double-executing a possibly-already-done mutation."""
     monkeypatch.setattr(
         server, "_run_dispatch", lambda *a, **k: pytest.fail("re-ran a MUTATING op after an ambiguous pool death")
     )

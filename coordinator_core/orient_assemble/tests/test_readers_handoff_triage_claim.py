@@ -54,9 +54,6 @@ def workspace(tmp_path, monkeypatch):
 
 
 def test_live_ledger_claim_suppresses_the_line(workspace):
-    """AC11: a ledger-claimed (live holder) + mirror-open handoff is ABSENT
-    from the filtered listing, even though the mirror alone would have
-    advertised it (deployment_state=ready_to_fire AND status=open)."""
     repo_root, common_dir = workspace
     link_path = "state/handoffs/2026-08-07-worked.md"
     _write_handoff(repo_root / link_path, status="open")
@@ -71,9 +68,6 @@ def test_live_ledger_claim_suppresses_the_line(workspace):
 
 
 def test_dead_ledger_holder_still_advertised(workspace):
-    """The control case: a ledger claim whose holder is DEAD degrades to "no
-    ledger claim" inside resolve_claim_state — the line must survive the
-    filter (the baton is genuinely available for pickup)."""
     repo_root, common_dir = workspace
     link_path = "state/handoffs/2026-08-07-abandoned.md"
     _write_handoff(repo_root / link_path, status="open")
@@ -88,9 +82,6 @@ def test_dead_ledger_holder_still_advertised(workspace):
 
 
 def test_no_ledger_claim_at_all_still_advertised(workspace):
-    """No ledger claim dir exists at all — resolve_claim_state's source is
-    "none" (or "mirror" if the frontmatter itself carried a claim, which a
-    ready_to_fire/open handoff never does) — the line must survive."""
     repo_root, common_dir = workspace
     link_path = "state/handoffs/2026-08-07-untouched.md"
     _write_handoff(repo_root / link_path, status="open")
@@ -103,9 +94,6 @@ def test_no_ledger_claim_at_all_still_advertised(workspace):
 
 
 def test_mixed_listing_keeps_only_the_unclaimed_and_dead_lines(workspace):
-    """A multi-line listing: one live-claimed line drops, the dead-claimed
-    and unclaimed lines survive — exercises the per-line filter against a
-    realistic multi-handoff markdown-list body."""
     repo_root, common_dir = workspace
     _write_handoff(repo_root / "state/handoffs/2026-08-07-worked.md", status="open")
     _write_claim_dir(common_dir, "2026-08-07-worked.md", "sess-live")
@@ -150,9 +138,6 @@ def test_title_containing_link_syntax_still_resolves_the_real_link_path(workspac
 
 
 def test_title_containing_unbalanced_brackets_still_advertised_when_unclaimed(workspace):
-    """Companion control case: a title with unbalanced brackets/parens and
-    NO live ledger claim must still survive the filter — proves the
-    rightmost-match fix doesn't over-suppress lines that were never claimed."""
     repo_root, common_dir = workspace
     link_path = "state/handoffs/2026-08-07-untouched.md"
     _write_handoff(repo_root / link_path, status="open")
@@ -164,18 +149,7 @@ def test_title_containing_unbalanced_brackets_still_advertised_when_unclaimed(wo
     assert "untouched" in filtered
 
 
-# --- 2026-08-06-orient-assemble-reader-repo-scope C4: caller-threaded
-# `repo_root` reconciliation (sites (a)/(b)/(c)) ---------------------------
-#
-# THE BUG THIS COVERS: readers_handoff_triage was internally split-brained
-# — (a)/(b) scanned claude-klabauter's own plans regardless of the caller's root, and
-# (c) (director review F4) resolved the ledger-claim join, `repo_root=`
 # keyword, AND `git_common_dir` against the module-pinned `_REPO_ROOT`
-# even when a caller (e.g. DoE-claude's `/workday-start`) threaded a
-# foreign root through `collect(repo_root=...)`. (c) is the sharper failure
-# mode: the suppression filter fails OPEN from a foreign root (no ledger
-# claim ever found at the wrong path), so a still-worked handoff gets
-# confidently, wrongly advertised as pickup-ready — not silently omitted.
 
 
 def test_read_orphaned_plans_threads_the_caller_root(tmp_path, monkeypatch):
@@ -204,10 +178,6 @@ def test_read_orphaned_plans_threads_the_caller_root(tmp_path, monkeypatch):
 
 
 def test_read_stale_plans_threads_the_caller_root(tmp_path, monkeypatch):
-    """(b): `_read_stale_plans(repo_root=foreign)` scans
-    `foreign/docs/plans`, not the source CLI's cwd-relative `"docs/plans"`
-    default — so the module agrees with itself about which repo it is
-    scanning at (a) and (b)."""
     foreign_root = tmp_path / "foreign-repo"
     (foreign_root / "docs" / "plans").mkdir(parents=True)
     captured: dict = {}

@@ -51,8 +51,5 @@ def test_build_generator_lines_find_uses_fnmatchcase_not_fnmatch():
 
 
 def test_fnmatchcase_is_case_sensitive_unlike_fnmatch_on_a_folding_platform():
-    """`fnmatchcase` never case-folds, regardless of host OS -- proves the
-    fix's mechanism directly rather than requiring a Windows host to
-    observe the divergence `fnmatch.fnmatch` would have introduced there."""
     assert fnmatch.fnmatchcase("script.py", "*.PY") is False
     assert fnmatch.fnmatchcase("script.PY", "*.PY") is True

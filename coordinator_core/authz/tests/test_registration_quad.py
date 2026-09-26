@@ -29,8 +29,6 @@ from coordinator_core.authz.registration_quad import (
 
 
 class TestGateDetectsPlantedViolation:
-    """The gate must fire on an injected incomplete quad, not just stay quiet on a
-    clean tree (DEC-4, AC6)."""
 
     def test_gate_detects_a_planted_violation(self) -> None:
         registry = {"planted.op": object(), "complete.op": object()}
@@ -50,10 +48,8 @@ class TestGateDetectsPlantedViolation:
         assert len(violations) == 1
         violation = violations[0]
         assert violation.op_key == "planted.op"
-        # Pin the exact surfaces_missing shape, not just
         # membership, so a regression that also spuriously reports _OP_KEY_SCOPE or
         # OP_MODULE_MAP missing for planted.op (both of which the fixture supplies)
-        # would fail this test instead of passing it.
         assert violation.surfaces_missing == ("OP_CLASSIFICATION",)
         assert dict(violation.missing_surface_files)["OP_CLASSIFICATION"] == (
             "coordinator_core/authz/classification.py"
@@ -61,12 +57,8 @@ class TestGateDetectsPlantedViolation:
 
 
 class TestGateVacuityGuards:
-    """Vacuity guards for `check_registration_quad`: a clean or empty fixture must
-    return [] for a real reason, not because the check silently no-ops."""
 
     def test_clean_fixture_returns_no_violations(self) -> None:
-        """Guards against a vacuously-red check: a fully-registered fixture must
-        return []."""
         registry = {"complete.op": object()}
         classification = {"complete.op": "COMPUTE_ONLY"}
         scope = {"complete.op": "common"}
@@ -84,17 +76,6 @@ class TestGateVacuityGuards:
         assert violations == []
 
     def test_empty_registry_returns_no_violations_by_contract(self) -> None:
-        """Contract-documentation, not a vacuity guard: `check_registration_quad`
-        iterates `for op_key in sorted(resolved_registry)`, so an empty registry never
-        enters the loop body under any implementation, including a bare `return []`
-        stub — this test cannot fail on a regression. It exists to pin the documented
-        contract (an empty registry input is well-defined and returns [], never raises)
-        against `classification`/`scope`/`module_map` inputs that carry unrelated data
-        (`stale.op`), rather than to exercise real vacuity risk. Real vacuity risk for
-        an *unpopulated* registry (a missed import, not an intentionally-empty one) is
-        `test_authz_contract.py::test_registry_is_non_empty`'s job, not this test's —
-        that test guards discovery; this one guards the empty-input contract shape.
-        """
         violations = check_registration_quad(
             registry={},
             classification={"stale.op": "COMPUTE_ONLY"},
@@ -175,25 +156,15 @@ class TestEagerOpModulesSurface:
 
 
 class TestUnclassifiedBaselineNeverGrows:
-    """Mirrors test_plan_module_bash_exemptions_is_empty: the known-debt baseline is a
-    ceiling, not a floor. Growing it is a plan amendment, never an executor's local
-    call (AC5)."""
 
     def test_unclassified_baseline_never_grows(self) -> None:
         assert len(_KNOWN_UNCLASSIFIED_OPS_DEBT) <= 65
 
         violations = check_registration_quad()
         # Ops already tracked by the fuller `_KNOWN_INCOMPLETE_REGISTRATIONS` ledger
-        # (registration_quad.py, 2026-08-11) are excluded here — that ledger records
         # their exact missing-surface set (which may include OP_CLASSIFICATION
         # alongside _OP_KEY_SCOPE/OP_MODULE_MAP) with its own never-grows discipline
         # (`_KNOWN_INCOMPLETE_REGISTRATIONS` is a plain literal frozen at measurement
-        # time, never appended to locally). Double-counting them here against a
-        # narrower single-surface baseline that has no shape for their other missing
-        # surfaces would either force growing THIS baseline (forbidden) or force
-        # mis-tracking them as classification-only debt (inaccurate). See
-        # `TestKnownIncompleteRegistrationsLedger` below for that ledger's own
-        # never-grows coverage.
         live_unclassified = {
             violation.op_key
             for violation in violations
@@ -209,16 +180,10 @@ class TestUnclassifiedBaselineNeverGrows:
         )
 
 
-# A separate test function, deliberately NOT
-# folded into TestUnclassifiedBaselineNeverGrows.test_unclassified_baseline_never_grows
-# above (which is currently RED on HEAD for an unrelated, pre-existing reason: three
 # ops missing OP_CLASSIFICATION and absent from the frozen baseline). This assertion
 # must be independent of that pre-existing failure so a live `_EAGER_OP_MODULES`
-# regression of the `roadmap.link_stubs` shape (op fully complete on
 # OP_CLASSIFICATION/_OP_KEY_SCOPE/OP_MODULE_MAP but absent from _EAGER_OP_MODULES) is
-# caught even while the unrelated baseline test stays red. There is no frozen-baseline
 # carve-out for this surface -- any live _EAGER_OP_MODULES-only violation is a bug,
-# never tolerated debt.
 class TestLiveTreeEagerModulesSurfaceNeverViolated:
     """`TestEagerOpModulesSurface` above only exercises the fifth surface against
     explicit `eager_modules=` fixtures -- never against the live tree. This closes
@@ -249,7 +214,6 @@ class TestKnownIncompleteRegistrationsLedger:
     point of freezing an allowlist instead of silently widening the check."""
 
     def test_live_tree_is_green_after_filtering_known_debt(self) -> None:
-        """The gate's actual GREEN condition: zero non-allowlisted violations on HEAD."""
         violations = check_registration_quad()
         filtered = filter_known_violations(violations)
         assert filtered == [], (
@@ -258,14 +222,9 @@ class TestKnownIncompleteRegistrationsLedger:
         )
 
     def test_incomplete_registrations_ledger_never_grows(self) -> None:
-        """Mirrors TestUnclassifiedBaselineNeverGrows: this ledger is a ceiling frozen
-        at 2026-08-11 measurement time, never appended to locally."""
         assert len(_KNOWN_INCOMPLETE_REGISTRATIONS) <= 6
 
     def test_ledger_forgives_only_the_recorded_surface_not_the_whole_op(self) -> None:
-        """An allowlisted op that is ALSO missing a surface not recorded for it must
-        still trip the gate -- the allowlist forgives exactly the known gap, per the
-        bug-backlog entry's proposed_action, not the op wholesale."""
         v = QuadViolation(
             op_key="distill.curate_clusters",
             surfaces_present=("OP_CLASSIFICATION", "_OP_KEY_SCOPE"),
@@ -276,15 +235,11 @@ class TestKnownIncompleteRegistrationsLedger:
             ),
         )
         # The ledger only records OP_MODULE_MAP for this op -- _EAGER_OP_MODULES is a
-        # NEW, unrecorded gap and must survive pruning.
         pruned = prune_known_incomplete(v)
         assert pruned is not None
         assert pruned.surfaces_missing == ("_EAGER_OP_MODULES",)
 
     def test_control_a_planted_unallowlisted_op_still_trips_the_gate(self) -> None:
-        """Deliberate-failure control: a violation for an op that is NOT on either
-        allowlist must survive `filter_known_violations` unchanged -- proving the
-        combined filter still bites and did not silently stop checking."""
         v = QuadViolation(
             op_key="brand.new_unregistered_op",
             surfaces_present=(),

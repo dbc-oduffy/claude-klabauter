@@ -57,5 +57,4 @@ inherited debt.
 
 from __future__ import annotations
 
-# (relpath, line, stripped source line at time of baselining)
 KNOWN_BYPASS_BASELINE: list[tuple[str, int, str]] = []

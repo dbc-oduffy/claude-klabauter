@@ -76,11 +76,6 @@ from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
 from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.win_portability import no_console_creationflags
 
-# module-level alias (not a re-derived duplicate) so this
-# module's own tests can keep monkeypatching a local name; the actual
-# implementation now lives once in coordinator_core.state_root, shared with
-# coordinator_core.ops.learn_lessons_roots (previously two independently
-# hand-duplicated copies of the same 3-line wrapper).
 _coordinator_state_root_central = coordinator_state_root_central
 
 _DEFAULT_THRESHOLD = 150
@@ -111,12 +106,6 @@ def _resolve_doe_content_root(claude_home: str) -> str:
         if content_root is not None:
             return str(content_root)
 
-    # Zero-spawn: `registry_get` reads the same registry.local.toml over
-    # registry.toml chain the `machine-local get` CLI would, in-process --
-    # no `machine-local` binary presence check needed first (see
-    # `coordinator_core.machine_resolver.registry_get` docstring, DR-071:
-    # this is the reset-survival-safe reader, the CLI's exec bits live under
-    # the resettable `~/.claude/bin/`).
     candidate = _registry_get("plugin.mirrors.coordinator-claude.live_path")
     if candidate and os.path.isdir(candidate):
         return candidate
@@ -178,14 +167,6 @@ def _resolve_threshold(argv: List[str], config_path: str) -> Optional[int]:
 
 
 def _find_cutoff(claude_home: str) -> str:
-    """Delegates to the shared `learn_lessons_cutoff.derive_cutoff` oracle.
-
-    This module's own fail-open posture (unreadable tasks dir -> skip line,
-    return "") is unchanged and is contract: `derive_cutoff` returns None
-    rather than raise on a missing/unreadable dir, and the adapter below
-    folds that to "" (this function's own return type stays `str`, never
-    `None`).
-    """
     tasks_dir = Path(claude_home) / "tasks"
     if not tasks_dir.is_dir():
         print(f"skip: _find_cutoff: tasks_dir {tasks_dir} is not a directory", file=sys.stderr)
@@ -194,24 +175,10 @@ def _find_cutoff(claude_home: str) -> str:
 
 
 def _learn_lessons_roots() -> List[str]:
-    """In-process call to the native `coordinator_core.ops.learn_lessons_roots`
-    peer, which is authored (and ported native) in this same repo/wave.
-
-    Retired bash bridge (C11, 2026-07-21): previously shelled out to the
-    DoE-resident `learn-lessons-roots.sh`. That script's own native Python port
-    now lives at `coordinator_core.ops.learn_lessons_roots` -- calling its public
-    `resolve_roots()` in-process is a reuse of the already-ported peer, not a
-    re-derivation, and needed no separate bash bridge or subprocess spawn.
-    """
     return _learn_lessons_roots_mod.resolve_roots()
 
 
 def _count_universals(extract_script: str, lessons_path: str, cutoff: str) -> int:
-    """Shell out to the DoE-resident `extract-lessons.py` (already Python — invoked as
-    a subprocess, not imported, matching the oracle's own subprocess-boundary shape and
-    avoiding a direct DoE→claude-klabauter Python import edge). Returns 0 on any failure, matching
-    the oracle's `|| continue` / missing-record_count → 0 fallback.
-    """
     try:
         proc = subprocess.run(
             [
@@ -286,7 +253,7 @@ def main(argv: List[str]) -> int:
             continue
         root_norm = root.replace("\\", "/").lower()
         if root_norm == home_norm or root_norm.endswith("/.claude"):
-            continue  # self-exclude (~/.claude is the promotion destination)
+            continue
         lessons = os.path.join(root, "state", "lessons.md")
         if not os.path.isfile(lessons):
             continue

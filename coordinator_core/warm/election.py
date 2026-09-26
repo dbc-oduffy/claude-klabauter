@@ -129,17 +129,10 @@ ERROR_ACCESS_DENIED = 5
 
 
 class ElectionError(Exception):
-    """Base for election failures raised by this module."""
+    pass
 
 
 class ElectionLost(ElectionError):
-    """Another process already holds this clone's endpoint.
-
-    ``pipe_name`` carries the endpoint that was contested -- a pipe name on
-    Windows, a socket path on POSIX. The attribute keeps its Windows-era name
-    because call sites (and this module's own test suite) pin it; ``endpoint``
-    is the platform-neutral alias to prefer in new code.
-    """
 
     def __init__(self, name: str):
         self.pipe_name = name
@@ -151,63 +144,21 @@ class ElectionLost(ElectionError):
 
 
 class InsecureRuntimeDirError(ElectionError):
-    """The socket's containing directory is not a 0700 directory this user owns.
-
-    Fatal rather than repaired-and-continued past one chmod attempt: the
-    directory IS the connect-permission boundary on POSIX (module docstring),
-    so a server that cannot establish it would be serving an endpoint any
-    local account could reach.
-    """
+    pass
 
 
 class SocketPathTooLongError(ElectionError):
-    """The derived socket path exceeds ``sockaddr_un.sun_path``.
-
-    Raised BEFORE any bind attempt, because the kernel's own failure for an
-    over-long path is a bare, unexplained ``OSError`` at ``bind()`` time and
-    the operator has no way to read the real cause out of it.
-    """
+    pass
 
 
-#: BYTE read mode for both named-pipe creation sites -- THIS one (the first
-#: instance) and `server._create_pipe_instance` (every follow-on one), which
-#: imports this name rather than repeating the value. They must agree: if they
-#: did not, whether a request is served would depend on which instance
-#: happened to accept it. Defined here rather than in `server` because
-#: `server` already imports this module and the reverse edge would be a cycle.
-#:
 #: `_winapi` publishes no `PIPE_READMODE_BYTE` because the flag IS zero; the
-#: constant exists so both sites NAME the choice instead of silently omitting
-#: a flag.
-#:
-#: WHY BYTE AND NOT MESSAGE. The wire protocol is one newline-terminated JSON
-#: line in each direction -- `server._handle_connection` reads it with
-#: `io.readline()`, `door.c` scans for a newline byte. That is a byte-stream
-#: protocol; the pipe's message framing was read by nothing, and one leg of
-#: it was actively fatal.
-#:
-#: THE DEFECT THIS CLOSES (2026-09-06, reported from a live plan-blitz wave).
 #: Under `PIPE_READMODE_MESSAGE` a `ReadFile` whose buffer is smaller than the
 #: pending message fails with `ERROR_MORE_DATA` instead of returning a partial
-#: read. `server._wrap_handle` hands the pipe to a `BufferedReader` whose
 #: underlying reads are `io.DEFAULT_BUFFER_SIZE` (8192) -- so EVERY request
-#: frame over 8192 bytes made `io.readline()` raise `OSError`, which
-#: `_handle_connection` catches with a bare `return`, closing the connection
-#: without a reply. The caller's door had already delivered the bytes, so it
-#: could only emit `-32004 warm dispatch indeterminate`: the worst failure
-#: shape this transport has, on a request the server never even parsed.
-#: Measured threshold: 8192 bytes served, 8193 refused, exactly.
-#:
 #: THE ASYMMETRY THAT HID IT. A CLIENT handle opened with `CreateFile`
-#: (`client._open_pipe`'s `open(endpoint, "r+b")`, and `door.c`'s
-#: `CreateFileW`) defaults to BYTE read mode regardless of the pipe's type,
 #: and neither ever calls `SetNamedPipeHandleState`. Large RESPONSES therefore
 #: always worked and only large REQUESTS died -- which reads as "that one op
-#: is broken" rather than "every op with a big payload is".
-#:
 #: `PIPE_TYPE_MESSAGE` is deliberately LEFT at both sites: it governs how a
-#: handle's WRITES are framed, which no reader on either end depends on, so
-#: changing it would widen this fix's blast radius for nothing.
 _PIPE_READMODE_BYTE = 0x00000000
 
 def _is_windows() -> bool:
@@ -263,8 +214,6 @@ def current_user_sid() -> str:
 
 
 def _default_engine_clone() -> Path:
-    # Collapsed onto engine_root.current_engine_clone() (plan
-    # 2026-08-19-an-engine-root-is-a-stamped-build § C3).
     return current_engine_clone()
 
 
@@ -274,13 +223,6 @@ def pipe_name(
     engine_clone: Optional[Path] = None,
     user_sid: Optional[str] = None,
 ) -> str:
-    """Compute this engine clone's server pipe name.
-
-    ``engine_token`` is an opaque generation stamp supplied by the caller
-    (C16 computes its value); this function never derives one. ``engine_clone``
-    defaults to this repo's resolved root -- pass it explicitly only to name
-    a different clone's pipe (e.g. from a shared test helper).
-    """
     clone = engine_clone if engine_clone is not None else _default_engine_clone()
     clone_hash = hashlib.sha1(str(Path(clone).resolve()).encode("utf-8")).hexdigest()[:16]
     sid = user_sid if user_sid is not None else current_user_sid()
@@ -307,7 +249,6 @@ def _build_security_attributes(sid: str):
     ]
     advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = wintypes.BOOL
 
-    # D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;<sid>) -- no WD, no AN; P blocks inheritance.
     sddl = f"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{sid})"
     psd = ctypes.c_void_p()
     if not advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -342,8 +283,6 @@ def elect(name: str, *, user_sid: Optional[str] = None) -> int:
     import _winapi
 
     sid = user_sid if user_sid is not None else current_user_sid()
-    # security_attributes must outlive the CreateNamedPipe call; kept as a
-    # local so it is not collected before the syscall consumes its address.
     security_attributes = _build_security_attributes(sid)
 
     try:
@@ -363,47 +302,21 @@ def elect(name: str, *, user_sid: Optional[str] = None) -> int:
         raise
 
 
-# --------------------------------------------------------------------------
-# POSIX unix-domain-socket election. See the module docstring's THE POSIX
-# BRANCH for why this half is longer than the Windows half above.
-# --------------------------------------------------------------------------
-
-#: Filename suffix for a clone's server socket, under `breadcrumb.svc_dir()`.
 SOCKET_SUFFIX = ".sock"
 
-#: Suffix for the flock file guarding probe/unlink/bind. Never read for
-#: content and never consulted for liveness -- only locked.
 LOCK_SUFFIX = ".lock"
 
-#: `listen()` backlog. Deliberately larger than the server's acceptor-thread
-#: count: the backlog is what absorbs a connection burst in the window between
-#: one `accept()` returning and the next being posted, which on Windows is
-#: covered instead by the pre-created pending pipe-instance pool
 #: (`server.PENDING_LISTENER_POOL_SIZE`). A client that overflows it sees
 #: ECONNREFUSED, which `warm.client`'s anti-storm table already handles as a
-#: cold outcome -- but sizing it to the acceptor pool would guarantee that
-#: outcome under exactly the load this engine is built for.
 UNIX_LISTEN_BACKLOG = 128
 
-#: Connect-timeout for the staleness probe. A live server answers a unix-socket
-#: connect in microseconds (it is a memory operation, no network stack), and a
 #: dead one answers ECONNREFUSED just as fast. Only a live-but-backlog-full
-#: server pays this, and that outcome is read as LIVE, so the timeout bounds a
-#: case whose verdict does not depend on waiting it out.
 STALE_PROBE_TIMEOUT_SECS = 0.25
 
-#: `probe_endpoint` verdicts. Deliberately three values rather than a bool:
-#: "nothing is listening" and "there is no file at all" lead to different
-#: election steps, and collapsing them loses the distinction that decides
-#: whether anything gets unlinked.
 PROBE_LIVE = "live"
 PROBE_STALE = "stale"
 PROBE_ABSENT = "absent"
 
-#: Conservative `sockaddr_un.sun_path` budget. The real limits are 104 bytes
-#: on macOS/BSD and 108 on Linux, both including the NUL, so 100 holds on every
-#: target with room for the platform that has least. Checked as BYTES, not
-#: characters -- a non-ASCII home directory costs more than its length.
 SUN_PATH_MAX_BYTES = 100
 
 
@@ -412,20 +325,6 @@ def _is_posix() -> bool:
 
 
 def current_user_id() -> str:
-    """This process's POSIX uid as a string -- the identity analog of
-    ``current_user_sid``.
-
-    NOT a component of the socket path, which is where the SID sits in
-    ``pipe_name``. The Windows pipe namespace is flat and machine-global, so
-    the SID is the only thing keeping two users' servers apart there; the POSIX
-    socket lives under a user-local base directory (``breadcrumb.svc_dir``)
-    that already separates them, and the transport contract the C door
-    reimplements fixes the path as ``<svc dir>/<token>.sock`` with no uid
-    component. The uid's actual job here is ``ensure_private_dir``'s ownership
-    check -- proving the directory this server is about to bind inside belongs
-    to the account running it, which is the property the SDDL ACL buys on
-    Windows and a path component never could.
-    """
     if not _is_posix():
         raise RuntimeError("current_user_id is POSIX-only")
     return str(os.getuid())
@@ -461,23 +360,6 @@ def socket_path(
 
 
 def _interposed_ancestors(path: Path, base: Optional[Path]) -> list:
-    """The directories THIS PACKAGE creates between ``base`` and ``path``,
-    nearest-to-``path`` first -- ``coordinator/warm/`` then ``coordinator/``
-    for a real svc dir.
-
-    Split out of ``ensure_private_dir`` as a pure path computation with no
-    syscall in it, so which directories get guarded is decided by a function
-    testable on any platform. The checks themselves need ``getuid`` and real
-    modes and can only run on POSIX; WHICH set they run over is the part a
-    refactor is most likely to get quietly wrong, and it is the part that
-    decides whether the substitution vector is closed or merely believed to
-    be.
-
-    ``base`` itself is never returned (the operator's own directory, see
-    ``ensure_private_dir``), and neither is anything outside it: a ``path``
-    that is not under ``base`` at all yields nothing rather than walking up
-    to the filesystem root guarding directories that are not ours.
-    """
     if base is None:
         return []
     base = Path(base)
@@ -530,30 +412,6 @@ def _verify_owned_ancestor(path: Path) -> None:
 
 
 def ensure_private_dir(path: Path, *, base: Optional[Path] = None) -> Path:
-    """Create ``path`` as a 0700 directory owned by this user, and VERIFY it
-    -- along with every directory this package interposes between ``base``
-    and ``path``.
-
-    The verification is the point, not the creation. ``mkdir``'s mode argument
-    is masked by the process umask, so a directory requested 0700 under umask
-    022 lands 0755 and the request tells you nothing about what exists. This
-    creates, re-reads the mode, chmods once if it is wrong, re-reads again, and
-    raises ``InsecureRuntimeDirError`` if it is STILL wrong -- rather than
-    binding a socket inside a directory other local accounts can traverse.
-
-    ``base`` (``breadcrumb.runtime_base()``, supplied by
-    ``elect_unix_socket``) marks where the operator's own directory ends and
-    ours begins. Every directory strictly below it and above ``path`` --
-    ``coordinator/`` and ``coordinator/warm/`` -- gets
-    ``_verify_owned_ancestor``'s ownership check. ``base`` ITSELF gets none:
-    ``~/.cache`` at 0755 is the user's own directory and refusing to start
-    over it would be wrong. Omitted, only ``path`` is checked -- the shape
-    the pure-derivation tests use.
-
-    ``lstat``, not ``stat``: a symlink standing where the runtime directory
-    should be would otherwise pass every check while pointing the server's
-    endpoint somewhere the attacker chose.
-    """
     import stat as _stat
 
     path = Path(path)
@@ -628,28 +486,12 @@ def reclaim_stale_socket(
     *,
     probe: Callable[[Path], str] = probe_endpoint,
 ) -> bool:
-    """Unlink ``path`` iff ``probe`` proves nothing is listening on it.
-
-    Returns True when a corpse was removed (so the caller should retry its
-    bind), False when the path is absent or a live owner holds it (so the
-    caller has lost, or never had a conflict).
-
-    ``probe`` is injectable for exactly one reason: this state machine is the
-    part of the POSIX election that has no Windows counterpart and therefore
-    the part most worth testing, and the machine itself contains no syscall --
-    driving it against a fake probe exercises the real decisions on any
-    platform, including the Windows box this was written on. See
-    ``tests/test_election_posix.py``.
-    """
     verdict = probe(path)
     if verdict != PROBE_STALE:
         return False
     try:
         os.unlink(path)
     except FileNotFoundError:
-        # Another process reclaimed the same corpse between the probe and this
-        # unlink. Nothing is there now, which is what the caller wanted; report
-        # True so it retries the bind rather than concluding it lost.
         pass
     return True
 
@@ -721,17 +563,10 @@ def elect_exclusive_lock(path: Path) -> int:
 
 
 def release_exclusive_lock(fd) -> None:
-    """Drop a lock won by ``elect_exclusive_lock``. Best-effort and never
-    raises, mirroring ``_release_election_lock``'s own contract: the kernel
-    releases it on process exit regardless, so a failure here can never leave
-    it held past this process's life."""
     _release_election_lock(fd)
 
 
 def _release_election_lock(fd) -> None:
-    """Drop the election lock. Best-effort: the kernel releases it on process
-    exit regardless, so a failure here can never leave it held past this
-    process's life."""
     if fd is None:
         return
     try:
@@ -747,15 +582,6 @@ def _release_election_lock(fd) -> None:
 
 
 def socket_identity(path: Path) -> Optional[tuple]:
-    """``(st_dev, st_ino)`` of the socket file, or None if it is gone.
-
-    Captured right after a successful bind and re-checked before unlinking, so
-    a departing server removes ITS OWN socket file and not a successor's. Same
-    hazard, same shape, and the same reasoning as
-    ``breadcrumb.unlink_breadcrumb``'s ``owner_pid`` check: one path per clone,
-    every new generation replaces it, so "I bound this path" is not evidence
-    that the file standing there now is the one I bound.
-    """
     try:
         st = os.lstat(path)
     except OSError:
@@ -764,13 +590,6 @@ def socket_identity(path: Path) -> Optional[tuple]:
 
 
 def unlink_if_owned(path: Path, identity: Optional[tuple]) -> bool:
-    """Unlink ``path`` iff it is still the exact file ``identity`` names.
-
-    Never raises -- a shutdown-path cleanup, mirroring
-    ``breadcrumb.unlink_breadcrumb``'s own contract. Returns whether it
-    removed anything. ``identity`` of None (nothing was ever bound) removes
-    nothing.
-    """
     if identity is None:
         return False
     if socket_identity(path) != identity:
@@ -865,9 +684,6 @@ def elect_unix_socket(
                     raise
             bound_identity = socket_identity(path)
 
-            # Defence in depth only -- Linux enforces these bits on connect,
-            # macOS/BSD do not, which is why step 1's directory is the boundary
-            # this election actually relies on (module docstring).
             os.chmod(path, 0o600)
             sock.listen(backlog)
         except BaseException:
@@ -875,10 +691,6 @@ def elect_unix_socket(
                 sock.close()
             except OSError:
                 pass
-            # A bind that succeeded and a listen that then failed leaves the
-            # socket FILE behind -- a corpse the NEXT election would have to
-            # probe and reclaim, for a server that never served. Remove it
-            # here, ownership-checked, rather than banking on that path.
             unlink_if_owned(path, bound_identity)
             raise
         return sock

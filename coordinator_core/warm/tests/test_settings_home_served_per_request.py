@@ -58,10 +58,6 @@ def test_two_requests_each_resolve_their_own_claimed_home(monkeypatch, tmp_path)
 
 
 def test_a_later_request_cannot_observe_an_earlier_ones_home(monkeypatch, tmp_path):
-    """Leakage leg. A caller who names NO home at all -- the ordinary case --
-    must resolve the server's own ambient home, never a prior request's
-    borrowed one left lingering in `os.environ` after that request's scope
-    should already have closed."""
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     from coordinator_core._settings_home import settings_home as _resolve_settings_home
 
@@ -82,10 +78,6 @@ def test_a_later_request_cannot_observe_an_earlier_ones_home(monkeypatch, tmp_pa
 
 
 def test_no_caller_at_all_is_unaffected(monkeypatch, tmp_path):
-    """The pre-C2 no-identity path (`caller=None`, e.g. an older in-process
-    caller of `_pool_dispatch_worker`) must still resolve the server's own
-    ambient home -- adding the sixth axis must not force every caller to
-    supply one."""
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     from coordinator_core._settings_home import settings_home as _resolve_settings_home
 
@@ -99,20 +91,11 @@ def test_no_caller_at_all_is_unaffected(monkeypatch, tmp_path):
     assert result["result"] == ambient_home
 
 
-# ---------------------------------------------------------------------------
 # VERIFY-AT-ENTRY (plan § C1's own contract, landing in C2's file because the
-# machinery is `server.py`'s). The borrow's `finally` restore covers every
-# reader that lives and dies inside the task; it does not cover one that
 # OUTLIVES the task boundary, nor a restore that never runs at all. A pooled
-# worker is REUSED, so a leaked home is inherited by whichever caller lands on
-# it next -- silently, in the direction that disarms guards.
-# ---------------------------------------------------------------------------
 
 
 def test_a_leaked_home_is_repaired_before_the_next_request_binds(monkeypatch, tmp_path):
-    """A worker whose previous task leaked a borrowed home -- a skipped
-    restore, or a background reader that outlived the block -- serves the NEXT
-    no-claim caller against its own pristine home, not the leaked one."""
     pristine = str(tmp_path / "pristine-home")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", pristine)
     monkeypatch.setattr("coordinator_core.ipc.dispatch_message", _echo_settings_home)
@@ -128,9 +111,6 @@ def test_a_leaked_home_is_repaired_before_the_next_request_binds(monkeypatch, tm
 
 
 def test_a_worker_whose_spawner_set_no_home_repairs_by_unsetting(monkeypatch, tmp_path):
-    """`None` captured at process start means "the spawner had none set", and
-    repair must POP rather than write an empty string -- an empty value is not
-    the same disposition as an absent one to `settings_home()`'s own ladder."""
     monkeypatch.setattr("coordinator_core.ipc.dispatch_message", _echo_settings_home)
     monkeypatch.setattr(server, "_worker_pristine_settings_home", None)
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "leaked-home"))
@@ -141,9 +121,6 @@ def test_a_worker_whose_spawner_set_no_home_repairs_by_unsetting(monkeypatch, tm
 
 
 def test_repair_is_inert_in_a_process_that_never_captured(monkeypatch, tmp_path):
-    """The accept process and every direct importer never run
-    `_worker_process_init`, so no pristine disposition is known and repair must
-    not fire -- an uncaptured sentinel is not "the spawner had none set"."""
     ambient = str(tmp_path / "ambient-home")
     monkeypatch.setattr(
         server, "_worker_pristine_settings_home", server._PRISTINE_HOME_UNCAPTURED
@@ -156,17 +133,12 @@ def test_repair_is_inert_in_a_process_that_never_captured(monkeypatch, tmp_path)
 
 
 def test_worker_process_init_captures_the_pristine_disposition(monkeypatch, tmp_path):
-    """The capture leg itself: `_worker_process_init` records the disposition
-    it found, which is what every later repair is measured against."""
     captured = str(tmp_path / "spawner-home")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", captured)
     monkeypatch.setattr(server, "_bind_null_std_streams", lambda: None)
     monkeypatch.setattr(server, "_preload_op_registry", lambda: None)
     monkeypatch.setattr(server.threading, "Thread", lambda **kw: _NoopThread())
 
-    # `_worker_process_init` assigns the module global directly, so
-    # `monkeypatch.setattr` cannot unwind it -- restore it by hand or every
-    # later test in this process inherits this one's captured disposition.
     before = server._worker_pristine_settings_home
     try:
         server._worker_process_init()

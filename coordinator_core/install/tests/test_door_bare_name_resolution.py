@@ -41,34 +41,11 @@ from coordinator_core.install.forwarder_door_census import (
 
 _STEM = "coordinator-invoke"
 
-#: PATHEXT as Windows actually spells it. It is ALWAYS `;`-separated -- the
-#: separator is a property of the variable, not of the host reading it.
 _PATHEXT = ".COM;.EXE;.BAT;.CMD;.VBS;.JS;.PY"
 
 
 @pytest.fixture
 def windows_pathext_semantics(monkeypatch):
-    """Drive `resolve_bare_name`'s PATHEXT branch on EVERY box, POSIX included,
-    rather than excusing the platform with a skip.
-
-    `resolve_bare_name` splits its `pathext` argument on `os.pathsep`, which is
-    `;` on Windows and `:` on POSIX. That single read is the function's only
-    platform coupling and it contradicts the function's own docstring, which
-    calls it "PURE over its arguments ... so the ordering logic is testable on
-    a machine that has no door installed" -- on POSIX a real `;`-separated
-    PATHEXT parses as ONE opaque extension, every candidate misses, and these
-    tests inverted silently for a week after landing (2026-08-27).
-
-    Patching the separator is the honest simulation: it tells the resolver it
-    is parsing a Windows PATHEXT, which is the only kind that exists, and
-    fabricates nothing on disk. The POSIX arrangement the local box actually
-    produces is pinned separately by
-    `test_posix_empty_pathext_resolves_the_extensionless_native_door` -- both
-    platforms are covered, neither is asserted by proxy for the other.
-
-    NOT a substitute for fixing the coupling: `resolve_bare_name` should split
-    on a literal `";"`. That is product code and out of this module's scope.
-    """
     monkeypatch.setattr(os, "pathsep", ";")
 
 
@@ -83,20 +60,9 @@ def _resolve(dirs: "list[Path]") -> "list[Path]":
     return resolve_bare_name(_STEM, [str(d) for d in dirs], _PATHEXT)
 
 
-# WHICH FILE WON, not how the resolver spelled it. `resolve_bare_name` builds
-# each candidate as `stem + <PATHEXT entry as written>`, and PATHEXT is
 # conventionally UPPERCASE (`.COM;.EXE;...`) while the installed door is
-# lowercase `coordinator-invoke.exe`. The candidate hits on a case-insensitive
-# filesystem -- Windows' NTFS and macOS' default APFS alike -- and is then
-# recorded under PATHEXT's casing rather than the name on disk. These tests
 # are about ORDERING, so they compare identity; an equality-on-the-string
-# assertion here was red on every platform, which is why the four Windows
-# cases below never passed anywhere.
-#
-# The casing itself is a PRODUCT finding, reported and deliberately not
-# papered over here: `bare_name_door_report` compares its winner against a
 # lowercase `DOOR_INSTALLED_NAME` with `!=`, so on Windows it declares a
-# correctly-installed door "BROKEN" on casing alone.
 def _same(a: Path, b: Path) -> bool:
     return a.exists() and b.exists() and a.samefile(b)
 
@@ -109,8 +75,6 @@ def _index_of(hits: "list[Path]", wanted: Path) -> int:
 
 
 def test_settings_home_exe_wins_over_a_later_scripts_shim(tmp_path: Path, windows_pathext_semantics) -> None:
-    """The live arrangement: the door's bin/ earlier on PATH than a Python
-    `Scripts/` carrying a same-named console-script shim."""
     bin_dir = tmp_path / "settings" / "bin"
     scripts = tmp_path / "python" / "Scripts"
     door = _touch(bin_dir, f"{_STEM}.exe")
@@ -124,8 +88,6 @@ def test_settings_home_exe_wins_over_a_later_scripts_shim(tmp_path: Path, window
 
 
 def test_an_earlier_scripts_shim_takes_the_bare_name(tmp_path: Path, windows_pathext_semantics) -> None:
-    """The regression this whole module exists for. Nothing but PATH order
-    separates this case from the one above, and the flip is silent."""
     bin_dir = tmp_path / "settings" / "bin"
     scripts = tmp_path / "python" / "Scripts"
     _touch(bin_dir, f"{_STEM}.exe")
@@ -165,8 +127,6 @@ def test_a_ps1_sibling_beats_the_exe_in_the_same_directory(tmp_path: Path) -> No
 
 
 def test_pathext_order_is_honoured_within_one_directory(tmp_path: Path, windows_pathext_semantics) -> None:
-    """`.EXE` ahead of `.CMD` is what keeps the door ahead of its own forwarder
-    sibling, which ships beside it on every install."""
     bin_dir = tmp_path / "settings" / "bin"
     exe = _touch(bin_dir, f"{_STEM}.exe")
     _touch(bin_dir, f"{_STEM}.cmd")
@@ -176,8 +136,6 @@ def test_pathext_order_is_honoured_within_one_directory(tmp_path: Path, windows_
 
 
 def test_extensionless_file_loses_to_every_pathext_entry(tmp_path: Path, windows_pathext_semantics) -> None:
-    """An extensionless `coordinator-invoke` ships beside the door too. cmd tries
-    it only after PATHEXT is exhausted, so it must never take the name."""
     bin_dir = tmp_path / "settings" / "bin"
     exe = _touch(bin_dir, f"{_STEM}.exe")
     bare = _touch(bin_dir, _STEM)
@@ -216,14 +174,10 @@ def test_posix_empty_pathext_resolves_the_extensionless_native_door(tmp_path: Pa
 
 
 def test_resolution_is_empty_when_nothing_matches(tmp_path: Path) -> None:
-    """An empty result is the "door bin/ is not on PATH" signal the census
-    reports as BROKEN -- it must not be confused with a successful resolve."""
     assert _resolve([tmp_path / "empty"]) == []
 
 
 def test_a_native_exe_outside_scripts_is_not_an_interpreter_start(tmp_path: Path) -> None:
-    """The predicate must not over-fire: the whole point is that the real door
-    passes it."""
     door = _touch(tmp_path / "settings" / "bin", f"{_STEM}.exe")
     assert not bare_name_starts_an_interpreter(door)
 
@@ -235,20 +189,10 @@ def test_shell_forwarder_suffixes_are_interpreter_starts(tmp_path: Path) -> None
 
 
 def test_empty_path_entries_are_skipped_not_resolved_against_cwd() -> None:
-    """A trailing `;` in PATH yields an empty string, which `Path("")` turns into
-    the CWD -- resolving there would let any directory a caller happens to sit in
-    claim the bare name."""
     assert resolve_bare_name(_STEM, ["", os.sep], _PATHEXT) == []
 
 
 def test_exact_case_wins_its_own_folded_bucket(tmp_path: Path, windows_pathext_semantics) -> None:
-    """A case-sensitive filesystem can hold `<stem>.exe` and `<stem>.EXE` as two
-    distinct files. A folded-name map that keeps one arbitrary entry per bucket
-    answers with whichever `scandir` yielded last -- readdir order, i.e. not
-    deterministic and, measured, the wrong one. The candidate whose spelling
-    matches the requested extension EXACTLY must win its bucket; folding stays
-    the fallback that keeps `.EXE` matching a lowercase `.exe` on NTFS/APFS.
-    """
     bin_dir = tmp_path / "settings" / "bin"
     lower = _touch(bin_dir, f"{_STEM}.exe")
     upper = bin_dir / f"{_STEM}.EXE"
@@ -305,8 +249,6 @@ def test_posix_rules_ignore_a_powershell_sibling(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(os.name == "nt", reason="needs POSIX mode bits; chmod(0o644) cannot clear an exec bit Windows never had")
 def test_posix_rules_skip_a_non_executable_candidate(tmp_path: Path) -> None:
-    """A mode-0644 file is not a door: a real POSIX shell skips it and keeps
-    searching PATH. The POSIX model says so; the Windows model stays mode-blind."""
     bin_dir = tmp_path / "settings" / "bin"
     later_dir = tmp_path / "settings" / "bin2"
     unreadable = _touch(bin_dir, _STEM)
@@ -325,12 +267,6 @@ def test_posix_rules_skip_a_non_executable_candidate(tmp_path: Path) -> None:
 
 
 def test_the_platform_axis_is_one_named_model_not_a_set_of_flags() -> None:
-    """overengineering-reviewer (Kira, pass 2, finding N2). The seam is
-    ONE bit because that is the whole live requirement -- the impure caller
-    derives `rules` from `sys.platform` alone. Pinning the model names (rather
-    than a pair of independently-settable booleans) is what stops the next
-    platform rule arriving as a third keyword, and an unknown model is a loud
-    ValueError rather than a silent fall-through to the Windows default."""
     import inspect
 
     from coordinator_core.install.forwarder_door_census import _PLATFORM_RULES

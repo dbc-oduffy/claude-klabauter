@@ -1,22 +1,3 @@
-"""
-Tests for coordinator_core.plan_assemble.predicates.composition_lints —
-the seven Layer 0 Branch C (a) leaf readers.
-
-Purpose: proves each of `:136`, `:137`, `:143`, `:150`, `:152`, `:153`,
-`:172` resolves to either a populated field (matching the shape its own
-function docstring names) or `predicates.undetermined(...)`, never a bare
-`False`/`None`/silent absence — the Executor hard constraints' fallback
-rule (docs/plans/2026-08-13-plan-assemble-wave-2-the-predicate-producers.md
-§ Executor hard constraints).
-
-Negative-spec:
-  - Does NOT test `residue.py`'s `gates` assembly — that wiring is C13's
-    exclusive write target and out of this chunk's scope.
-  - Does NOT test any `U`-classified judgment arm (there is none in this
-    module's rows) — AC4 has no surface here to prove.
-
-Spec backlink: pln-plan-assemble-wave-2-the-predi-fad89b, chunk C5
-"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -53,10 +34,6 @@ def _spine(body_yaml: str) -> str:
     return f"{_SPINE_HEADING}```yaml plan-tasks\n{body_yaml}\n```\n"
 
 
-# ---------------------------------------------------------------------------
-# :136 spine_row_shape
-
-
 def test_spine_row_shape_no_plan_is_undetermined():
     result = spine_row_shape(_ctx(plan_body=None))
     assert result["undetermined"] is True
@@ -86,8 +63,6 @@ def test_spine_row_shape_invalid_missing_case_against():
 
 
 def test_spine_row_shape_pm_approval_arm_excluded():
-    # backlogged with case_against but no pm_approved must still pass shape —
-    # the U-classified pm_approved leg is excluded via governed=True.
     body = _spine(
         "- id: C1\n  title: t\n  change_kind: code-edit\n  surface: x\n  "
         "queue_scope: project\n  disposition: backlogged\n  disposition_detail: cut\n  "
@@ -96,10 +71,6 @@ def test_spine_row_shape_pm_approval_arm_excluded():
     )
     result = spine_row_shape(_ctx(plan_body=body))
     assert result == {"valid": True}
-
-
-# ---------------------------------------------------------------------------
-# :137 ac_reject_list
 
 
 def test_ac_reject_list_no_plan_is_undetermined():
@@ -123,10 +94,6 @@ def test_ac_reject_list_inline_style_fallback():
     body = "AC1: this should work fine in most cases.\n"
     result = ac_reject_list(_ctx(plan_body=body))
     assert {"ac_id": "AC1", "matched_pattern": "hedge_should_work"} in result["hits"]
-
-
-# ---------------------------------------------------------------------------
-# :143 deferral_case_against
 
 
 def test_deferral_case_against_no_plan_is_undetermined():
@@ -172,10 +139,6 @@ def test_deferral_case_against_excludes_non_deferral_dispositions():
     assert result["entries"] == []
 
 
-# ---------------------------------------------------------------------------
-# :150 hard_constraints_block
-
-
 def test_hard_constraints_block_no_plan_is_undetermined():
     result = hard_constraints_block(_ctx(plan_body=None))
     assert result["undetermined"] is True
@@ -189,10 +152,6 @@ def test_hard_constraints_block_present():
 def test_hard_constraints_block_absent():
     result = hard_constraints_block(_ctx(plan_body="## Problem\n\ntext\n"))
     assert result == {"present": False}
-
-
-# ---------------------------------------------------------------------------
-# :152 stub_spawns_subagents
 
 
 def test_stub_spawns_subagents_no_plan_is_undetermined():
@@ -223,10 +182,6 @@ def test_stub_spawns_subagents_false_when_no_verb_present():
     assert result is False
 
 
-# ---------------------------------------------------------------------------
-# :153 concurrency_shared_state
-
-
 def test_concurrency_shared_state_no_plan_is_undetermined():
     result = concurrency_shared_state(_ctx(plan_body=None))
     assert result["undetermined"] is True
@@ -248,10 +203,6 @@ def test_concurrency_shared_state_no_match():
     )
     result = concurrency_shared_state(_ctx(plan_body=body))
     assert result == {"candidate": False, "matched_paths": []}
-
-
-# ---------------------------------------------------------------------------
-# :172 chunk_index_sidecar
 
 
 def test_chunk_index_sidecar_no_plan_is_undetermined():

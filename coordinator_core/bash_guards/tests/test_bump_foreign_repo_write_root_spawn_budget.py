@@ -59,10 +59,6 @@ from coordinator_core.bash_guards.tests.test_bump_foreign_repo_write import (
     repos,  # noqa: F401 -- fixture reused rather than re-founded.
 )
 
-#: Extracts the FIRST backtick-quoted token from a deny message -- both
-#: `render_em_message` and `render_subagent_message` (`_write_bump_message.py`)
-#: place `target_repo_label` there first, via `_target_phrase`, before any
-#: other backtick-quoted value (`session_repo`, a sandbox root) appears.
 _FIRST_BACKTICK_TOKEN_RE = re.compile(r"`([^`]+)`")
 
 
@@ -72,40 +68,19 @@ def _target_label_in_message(result: dict) -> str:
     assert m is not None, reason
     return m.group(1)
 
-# Real `git` runs in the `repos` fixture's repo setup, same as the module
-# these fixtures come from. Spawn ratchet:
-# coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
 
-#: Measured on HEAD 2026-08-21 (post `probe_root` spawn removal), one
-#: `check_bump_foreign_repo_write` call with a foreign write sink: one
-#: resolution, for the SESSION anchor's own root (`anchor_root`, threaded to
-#: every candidate). The TARGET's own root (`probe_root`, feeding only
-#: `target_repo_label`) no longer spawns -- see `_evaluate_foreign_repo_
-#: candidate`'s comment at that assignment for why a spawn-free, symlink-safe
-#: walk is safe for a LABEL/classification input that never gates
-#: allow-vs-deny, unlike the AC14 same-repo comparison (still gitdir-derived,
-#: untouched).
 _DENY_PATH_ROOT_RESOLUTION_BUDGET = 1
 
-#: An own-repo write sink resolves the anchor and nothing else: the same-repo
-#: comparison it would have fed is answered from the gitdir, spawn-free.
 _OWN_REPO_ROOT_RESOLUTION_BUDGET = 1
 
 
 @pytest.fixture()
 def root_resolutions(monkeypatch) -> Iterator[List[Optional[str]]]:
-    """Every `cwd` that reaches an actual `git rev-parse --show-toplevel`,
-    in order -- cache HITS never appear here, which is the point.
-
-    Clears the process-local cache first: this suite shares a process with
-    every other module that resolved a root, and a warm cache would report a
-    budget of zero and pass vacuously.
-    """
     engine.reset_resolve_git_root_cache()
     seen: List[Optional[str]] = []
     inner = engine._resolve_git_root_uncached
@@ -157,8 +132,6 @@ def test_root_resolutions_do_not_scale_with_candidate_count(
 def test_own_repo_write_sink_costs_one_root_resolution(
     repos, monkeypatch, root_resolutions  # noqa: F811
 ):
-    """The dominant WRITE case across the fleet: a session writing into its
-    own repo. It allows, and it pays for the anchor alone."""
     _set_anchor(monkeypatch, repos, "sess-budget-3")
     cmd = f"echo hi > {_posix(repos['anchor'] / 'own.txt')}"
 
@@ -173,8 +146,6 @@ def test_own_repo_write_sink_costs_one_root_resolution(
 def test_command_with_no_write_sink_resolves_no_root_at_all(
     repos, monkeypatch, root_resolutions  # noqa: F811
 ):
-    """The dominant case, period: applicability is decided from the parsed
-    command alone, so `echo hello` never reaches a spawn."""
     _set_anchor(monkeypatch, repos, "sess-budget-4")
 
     result = guard.check_bump_foreign_repo_write(
@@ -186,11 +157,6 @@ def test_command_with_no_write_sink_resolves_no_root_at_all(
 
 
 def test_sibling_outside_repo_guard_resolves_no_root(repos, monkeypatch, root_resolutions):  # noqa: F811
-    """The filed defect suspected `bump_outside_repo_write` of carrying the
-    same seam. It does not carry it: that guard reaches for `resolve_gitdir`
-    (filesystem-backed) and never `resolve_git_root`, so its root-resolution
-    budget is zero on the deny path, not merely small. Refuted here by
-    measurement rather than by reading its imports."""
     from coordinator_core.bash_guards import bump_outside_repo_write as sibling
 
     _set_anchor(monkeypatch, repos, "sess-budget-5")
@@ -202,15 +168,6 @@ def test_sibling_outside_repo_guard_resolves_no_root(repos, monkeypatch, root_re
     )
 
     assert root_resolutions == []
-
-
-# ---------------------------------------------------------------------------
-# `target_repo_label` shape pins -- the four gitdir cases named in
-# `_evaluate_foreign_repo_candidate`'s comment at the `probe_root` assignment.
-# Each asserts the LABEL the guard's own deny message carries, not merely
-# that it denies, so a future edit that silently degrades a label to win a
-# spawn count (the exact failure mode this baton named) fails loudly here.
-# ---------------------------------------------------------------------------
 
 
 def test_linked_worktree_target_label_is_the_worktree_root_not_main(
@@ -273,20 +230,8 @@ def test_submodule_target_label_is_the_submodule_root_not_super(
 def test_separated_gitdir_target_label_degrades_to_target_dir(
     repos, monkeypatch, root_resolutions, tmp_path  # noqa: F811
 ):
-    """`GIT_DIR=<gitdir>` naming a gitdir with no `.git` suffix and no
-    worktree binding -- `_worktree_root_for_gitdir_override` leaves it
-    verbatim (only a `.git`-suffixed override is rewritten to its parent), so
-    `probe_dir` IS the gitdir itself. `show_toplevel` there finds no NESTED
-    `.git` entry, recognises the `HEAD`/`objects`/`refs` markers as a bare
-    repo, and correctly reports no toplevel (`None`) -- a NAMED degradation
-    to the pre-existing `target_dir` fallback, not a silent one, and not a
-    false worktree root asserted for a shape that has none."""
     _set_anchor(monkeypatch, repos, "sess-budget-separated-gitdir")
     sep_gitdir = tmp_path / "separated.git"
-    # `git init --bare` alone already writes the three markers
-    # `_looks_like_git_dir` (`show_toplevel`'s bare-repo recognizer) checks
-    # for -- `HEAD`, `objects/`, `refs/` -- no fetch/commit needed to make
-    # this directory present as a bare gitdir.
     _git(str(repos["foreign"].parent), "init", "-q", "--bare", str(sep_gitdir))
     assert show_toplevel(str(sep_gitdir)) is None, "fixture drift: expected a bare-shaped gitdir"
 

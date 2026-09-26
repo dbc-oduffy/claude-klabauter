@@ -1,15 +1,3 @@
-"""Tests for `coordinator_core.git.git_objects`.
-
-The point of the module under test is byte-for-byte compatibility with
-real git's own object/ref-writing machinery -- these assert against real
-`git` (`git cat-file`, `git write-tree`, `git fsck --strict`, `git
-reflog`) in a tmp repo, never against hand-computed shas. `test_cas_ref_*`
-exercises the read-under-lock window itself (a lock file pre-created by a
-"concurrent" writer), not merely a before/after HEAD comparison, per the
-chunk's CAS test requirement.
-
-Spec backlink: docs/plans/2026-08-22-a-commit-is-one-spawn-not-eleven.md, chunk C2
-"""
 
 from __future__ import annotations
 
@@ -56,11 +44,6 @@ def _init_repo(path: Path) -> None:
     _git("commit", "-qm", "seed", cwd=path)
 
 
-# ---------------------------------------------------------------------------
-# write_object
-# ---------------------------------------------------------------------------
-
-
 def test_write_object_blob_matches_git_hash_object(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     gitdir = resolve_git_dir(tmp_path)
@@ -69,8 +52,6 @@ def test_write_object_blob_matches_git_hash_object(tmp_path: Path) -> None:
     sha = write_object(gitdir, b"blob", content)
 
     hash_object = _git("hash-object", "--stdin", cwd=tmp_path, )
-    # git hash-object --stdin reads from stdin; use a dedicated call since
-    # the helper above pipes DEVNULL.
     result = subprocess.run(
         ["git", "hash-object", "--stdin"],
         cwd=str(tmp_path),
@@ -111,11 +92,6 @@ def test_write_object_is_idempotent(tmp_path: Path) -> None:
     assert first_bytes == second_bytes
 
 
-# ---------------------------------------------------------------------------
-# build_tree
-# ---------------------------------------------------------------------------
-
-
 def test_build_tree_matches_git_write_tree(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     gitdir = resolve_git_dir(tmp_path)
@@ -130,8 +106,6 @@ def test_build_tree_matches_git_write_tree(tmp_path: Path) -> None:
     expected_tree_sha = _git("write-tree", cwd=tmp_path).stdout.strip()
 
     ls_tree = _git("ls-tree", "-r", "HEAD" if False else expected_tree_sha, cwd=tmp_path)
-    # Build `{path: (mode, sha)}` straight from git's own index listing so
-    # the input to `build_tree` is exactly what `git write-tree` consumed.
     ls_files = _git("ls-files", "-s", cwd=tmp_path).stdout
     entries: dict = {}
     for line in ls_files.splitlines():
@@ -155,11 +129,6 @@ def test_build_tree_matches_git_write_tree(tmp_path: Path) -> None:
     assert fsck.returncode == 0, fsck.stderr
 
 
-# ---------------------------------------------------------------------------
-# read side (extracted from pickup_assemble)
-# ---------------------------------------------------------------------------
-
-
 def test_read_object_reads_loose_commit(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     common_dir = resolve_git_dir(tmp_path)
@@ -178,8 +147,6 @@ def test_read_object_reads_packed_commit_after_gc(tmp_path: Path) -> None:
     common_dir = resolve_git_dir(tmp_path)
     head_sha = _git("rev-parse", "HEAD", cwd=tmp_path).stdout.strip()
 
-    # Force the loose commit into a pack so the pack-read path is exercised,
-    # not merely the loose fallback.
     _git("gc", cwd=tmp_path)
     assert _read_loose_object(common_dir, head_sha) is None
 
@@ -188,11 +155,6 @@ def test_read_object_reads_packed_commit_after_gc(tmp_path: Path) -> None:
     assert result is not None
     kind, _payload = result
     assert kind == "commit"
-
-
-# ---------------------------------------------------------------------------
-# cas_ref + reflog
-# ---------------------------------------------------------------------------
 
 
 def test_cas_ref_moves_ref_and_git_agrees(tmp_path: Path) -> None:
@@ -259,10 +221,6 @@ def test_cas_ref_rejects_mismatched_expected(tmp_path: Path) -> None:
 
 
 def test_cas_ref_refuses_when_lock_already_held(tmp_path: Path) -> None:
-    """Exercises the read->write window itself: a concurrent holder's lock
-    file exists BEFORE this call attempts its own CAS, so the O_EXCL
-    lockfile acquisition itself must be what fails -- not merely a stale
-    HEAD comparison taken before some other process moved it."""
     _init_repo(tmp_path)
     gitdir = resolve_git_dir(tmp_path)
     real_sha = _git("rev-parse", "refs/heads/main", cwd=tmp_path).stdout.strip()
@@ -276,7 +234,6 @@ def test_cas_ref_refuses_when_lock_already_held(tmp_path: Path) -> None:
         assert ok is False
         still = _git("rev-parse", "refs/heads/main", cwd=tmp_path).stdout.strip()
         assert still == real_sha
-        # The pre-existing lock (not ours) must survive our failed attempt.
         assert lock_path.exists()
     finally:
         lock_path.unlink()

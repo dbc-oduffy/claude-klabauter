@@ -47,16 +47,9 @@ from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, post
 from coordinator_core.ipc import register_op
 from coordinator_core.session.machinery_paths import share_dirs as _share_dirs
 
-# The commit/date C1's terminal-stamp contract lands at — see the source
 # script's own CONTRACT_EPOCH section. Delete this constant and
-# `_kira_postdates_epoch` once no session predating 2026-08-30 can still
-# close.
 _KIRA_CONTRACT_EPOCH_ISO = "2026-08-30T00:00:00Z"
 
-# Pinned against a REAL provisioned sidecar's stamped `agent_type` (see
-# source script docstring) — every real sidecar on disk carries the
-# `coordinator:` namespace prefix; the bare form is compared too via
-# `_kira_normalize_agent_type`.
 _KIRA_AGENT_TYPE = "overengineering-reviewer"
 
 
@@ -97,8 +90,6 @@ def _kira_read_frontmatter(path: str) -> dict:
             i += 1
             continue
         if line[0].isspace():
-            # Indented — belongs to a nested block (e.g. `divergence:`'s own
-            # sub-keys), never a top-level fact. Skip it.
             i += 1
             continue
         if ":" not in line:
@@ -115,7 +106,6 @@ def _kira_read_frontmatter(path: str) -> dict:
             i += 1
             continue
         if rest in ("", "{}"):
-            # Possible block-list continuation (`key:` then `  - item` lines).
             items: list = []
             j = i + 1
             while j < len(body):
@@ -262,8 +252,6 @@ def _guard_kira_verdict_routed(payload: dict) -> dict:
     if not isinstance(payload, dict):
         return no_advisory()
 
-    # Trigger scope, verbatim: a subagent's own Stop (Kira's included) and a
-    # re-entrant Stop replay must never see this guard evaluate at all.
     if payload.get("agent_id"):
         return no_advisory()
     if payload.get("stop_hook_active"):
@@ -283,12 +271,6 @@ def _guard_kira_verdict_routed(payload: dict) -> dict:
             "could not resolve repo root from cwd"
         )
 
-    # A READER consults every share root, not just the live one. This guard
-    # was the reported instance of the fail-open class: pointed at a root
-    # sidecars no longer land in, `os.listdir` reports ABSENCE, not error, so
-    # the guard returns "nothing to see" forever instead of failing. Reading
-    # only the current root has the same shape one relocation later, and for
-    # any session whose sidecars predate the move.
     share_dirs = _share_dirs(repo_root, session_id)
     entries = []
     listed_any = False
@@ -301,9 +283,6 @@ def _guard_kira_verdict_routed(payload: dict) -> dict:
                 if f.endswith(".md") and not f.endswith(".blocks.md")
             ]
         except FileNotFoundError:
-            # A root that does not exist is the NORMAL state for the legacy
-            # leg, and for the live leg in a session that dispatched nobody.
-            # Absence is not an evaluation failure.
             continue
         except OSError:
             unreadable.append(share_dir)
@@ -341,16 +320,6 @@ def _guard_kira_verdict_routed(payload: dict) -> dict:
         answers = _kira_find_answers(kira_file, in_scope)
 
         if findings_count is not None and findings_count > 0 and not answers:
-            # A sidecar carrying an `integrator_receipt` with no
-            # `integrated_from` is evidence an integrator was SPAWNED
-            # somewhere this session, never evidence it claimed THIS
-            # verdict (`_kira_unstamped_integrators`'s own docstring) — a
-            # receipt in a misfiled sidecar (issue #47) satisfies this same
-            # test without ever having seen `kira_file`. Only `answers`
-            # (an `integrated_from` that NAMES this verdict, checked above)
-            # counts as routing; an unstamped receipt is surfaced below as a
-            # count, never as grounds to withhold the owed-route remedy or
-            # to instruct a false `integrated_from` stamp.
             unstamped_count = len(
                 _kira_unstamped_integrators(in_scope, plan=kira_meta.get("plan"))
             )
@@ -378,11 +347,6 @@ def _guard_kira_verdict_routed(payload: dict) -> dict:
 
 @register_op("hooks.guard_kira_verdict_routed")
 def _guard_kira_verdict_routed_handler(params: dict, repo_root=None) -> dict:
-    """Registered wrapper for `_guard_kira_verdict_routed` — scope "none",
-    `repo_root` handler arg unused (this guard resolves its own repo root
-    from `payload["cwd"]`, matching every other payload-cwd-resolving
-    `hooks.*` op in this family). Fail-open: any exception degrades to
-    `no_advisory()`, never propagated."""
     payload = payload_of(params)
     try:
         return _guard_kira_verdict_routed(dict(payload))

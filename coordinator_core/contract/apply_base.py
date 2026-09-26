@@ -208,22 +208,12 @@ from coordinator_core.session import core as session_core
 
 _LOG = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Exit-code contract — shared by every apply/dispatch half. Locally scoped
-# to the mutating half (never inherited from a compute-only `brief`'s own
-# exit codes, which each consumer defines separately per
-# `computed-skills.md` § Exit-code contract).
-# ---------------------------------------------------------------------------
 APPLY_EXIT_OK = 0
 APPLY_EXIT_HALTED_AT_JUDGMENT = 1
 APPLY_EXIT_CLAIM_DENIED = 2
 APPLY_EXIT_TRANSPORT_FAIL = 3
 APPLY_EXIT_PARTIAL_MUTATION = 4
 
-#: Reverse-lookup over this lineage's OWN ladder constants above -- never a
-#: composition-name table (docs/plans/2026-09-11-half-the-compositions-do-
-#: not-finish-clea.md § C1, AC5). Built from the constants themselves so a
-#: future renumbering of one cannot silently drift out of sync with this map.
 _APPLY_EXIT_LABELS: dict[int, str] = {
     APPLY_EXIT_OK: "OK",
     APPLY_EXIT_HALTED_AT_JUDGMENT: "HALTED_AT_JUDGMENT",
@@ -259,35 +249,23 @@ def exit_code_label(exit_code: int, report: Optional[dict] = None) -> Optional[s
 
 
 class UnrecognizedDirective(Exception):
-    """Raised by `resolve_cli` for a `cli` name outside the caller's own
-    closed dispatch table — the run aborts before any directive in it
-    executes ("mutates nothing" means the WHOLE run aborts
-    pre-validation, not merely the one bad directive)."""
+    pass
 
 
 class OutOfRepoPath(Exception):
-    """Raised when a directive-derived path resolves outside `repo_root`
-    — asserted before any mutation."""
+    pass
 
 
 class NoResolvableSessionId(Exception):
-    """Raised when neither an explicit session id nor any entry of the
-    caller's env-read-order resolves one. Callers refuse to fall through
-    to an ambient tier-4 sentinel file under concurrency ambiguity."""
+    pass
 
 
 class DirectiveDependencyCycle(Exception):
-    """Raised by `order_by_depends_on` when `directives[].depends_on`
-    forms a cycle among directive ids. Defensive — no known assembler
-    path produces one — but a silent infinite-stall is worse than a loud
-    one."""
+    pass
 
 
 @dataclasses.dataclass(frozen=True)
 class DirectiveResult:
-    """ONE normalized shape for what happened to a single directive,
-    whether it actually dispatched or was skipped as
-    `already_satisfied`."""
 
     directive_id: str
     already_satisfied: bool
@@ -302,13 +280,6 @@ class DirectiveResult:
 
 
 def normalize_primitive_result(value: Any) -> bool:
-    """Normalizes the two return conventions a composed mutating
-    primitive may use into ONE meaning: `True` iff the call succeeded.
-    Some primitives return `bool` (`True` == success); others return a
-    POSIX-style `int` exit code (`0` == success). Reading an `int` result
-    as a bare truthy value inverts a successful `0` into falsy — exactly
-    the asymmetry this function normalizes in ONE place rather than
-    trusting every call site's own `if`."""
     if isinstance(value, bool):
         return value
     if isinstance(value, int):
@@ -373,13 +344,6 @@ def normalize_decisions(decisions: dict[str, Any]) -> tuple[dict[str, Any], list
 def disposition_resolves_directive(
     jp: dict[str, Any], decisions: dict[str, Any], directive_id: str
 ) -> bool:
-    """"has a disposition been set on `jp`" is NOT sufficient to fire
-    `directive_id` — every judgment point encodes terminal-vs-non-terminal
-    in each disposition's OWN `resolves` list. `directive_id` is
-    resolved-to-fire iff `decisions[jp['id']].disposition` names a
-    disposition on `jp` whose own `resolves` includes `directive_id` —
-    never merely "some disposition was picked" (the Director of Engineering v2 finding-1
-    value-aware predicate, pickup_assemble's chunk C7 Part B)."""
     candidate = declared_disposition_for(jp, decisions)
     return candidate is not None and directive_id in (candidate.get("resolves") or [])
 
@@ -439,13 +403,6 @@ def directive_gate_open(
     jp_by_id: dict[str, dict[str, Any]],
     decisions: dict[str, Any],
 ) -> tuple[bool, list[str]]:
-    """Per-directive judgment-halt: a directive is ready to fire when
-    every judgment-point id its `depends_on` names is resolved to a
-    disposition whose own `resolves` list includes THIS directive's id.
-    A `depends_on` value that does not name a live entry in `jp_by_id`
-    (a directive id, for `order_by_depends_on`'s own directive-to-
-    directive ordering, or a judgment point already absent from this run)
-    never gates here. Returns `(ready, blocking_judgment_point_ids)`."""
     blocking: list[str] = []
     for dep in normalize_depends_on(directive.get("depends_on")):
         jp = jp_by_id.get(dep)
@@ -457,15 +414,6 @@ def directive_gate_open(
 
 
 def order_by_depends_on(directives: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Stable topological sort on `directives[].depends_on` — a directive
-    never dispatches before every directive id it names. A `depends_on`
-    value naming something OTHER than a directive in this same list (e.g.
-    a judgment-point id left on the dict for a branch that never reaches
-    this function because `judgment_points` is already empty by the time
-    it runs) is treated as already-resolved and ignored — it is never an
-    unmet dependency here. Ties break on the directives' original list
-    order, so a run's dispatch order is deterministic and
-    partial-mutation reporting is reproducible."""
     by_id = {d["id"]: d for d in directives}
     deps: dict[str, list[str]] = {
         d["id"]: [dep for dep in normalize_depends_on(d.get("depends_on")) if dep in by_id]
@@ -490,10 +438,6 @@ def order_by_depends_on(directives: list[dict[str, Any]]) -> list[dict[str, Any]
 
 
 def assert_in_repo_root(candidate: Path, repo_root: Path) -> Path:
-    """Resolves `candidate` and asserts it sits inside `repo_root`. Raises
-    `OutOfRepoPath` otherwise. Every dispatch handler that touches a real
-    filesystem path derived from `directives[].args` calls this before
-    handing the resolved path to a mutating primitive."""
     resolved_root = repo_root.resolve()
     resolved = candidate if candidate.is_absolute() else (repo_root / candidate)
     resolved = resolved.resolve()
@@ -505,11 +449,6 @@ def assert_in_repo_root(candidate: Path, repo_root: Path) -> Path:
 
 
 def reject_path_traversal(value: str, *, label: str) -> str:
-    """Defense-in-depth on a directive-derived identifier that is never
-    itself joined into a path by the caller here but IS handed to a
-    composed primitive that builds one internally (e.g. a claim-dir
-    basename) — a `/` or `..` segment has no legitimate value in this
-    slot."""
     if not value or "/" in value or "\\" in value or value in (".", ".."):
         raise OutOfRepoPath(f"{label} {value!r} is not a bare path segment")
     return value
@@ -620,17 +559,8 @@ def resolve_op(
     return handler
 
 
-# ---------------------------------------------------------------------------
-# Session-id propagation — explicit only, never an ambient tier-4
 # sentinel. `SESSION_ENV_VARS` names the two identity chains a resolved
-# explicit id is scoped INTO for the duration of a call, via a
-# `contextvars.ContextVar` per name (see `session_identity` below) — NOT
 # `os.environ` process-wide, since chunk C6. `SESSION_ENV_READ_ORDER` is
-# what an implicit id is read FROM, highest-precedence first, when no
-# explicit id is supplied — that read is a genuine ambient-environment
-# read (the caller's own launch environment), unrelated to the
-# `session_identity` contextvar scope.
-# ---------------------------------------------------------------------------
 SESSION_ENV_VARS = ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID")
 
 SESSION_ENV_READ_ORDER = (
@@ -680,9 +610,6 @@ def resolve_explicit_session_id(
     """
     if session_id:
         return session_id
-    # Imported at call time: `session.core` reaches back into this package's
-    # importers, and `apply_base` is imported at module scope by five assembler
-    # `apply` modules that ops register handlers from.
     from coordinator_core.session.core import carried_session_id, in_warm_served_request
 
     if in_warm_served_request():
@@ -694,12 +621,6 @@ def resolve_explicit_session_id(
     return None
 
 
-# One `ContextVar` per env-var NAME, created lazily and cached here so an
-# arbitrary caller-supplied `env_vars` tuple (baton/pickup/etc. all pass the
-# same two names today, but nothing pins that) still gets a stable, shared
-# contextvar per name across every consumer of this module — never a fresh
-# contextvar per call, which would make `current_session_env` unable to see
-# a value `session_identity` set moments earlier in the same context.
 _SESSION_ID_CONTEXTVARS: dict[str, "contextvars.ContextVar[Optional[str]]"] = {}
 
 
@@ -730,11 +651,6 @@ def session_identity(
 
 
 def current_session_env(env_vars: tuple[str, ...] = SESSION_ENV_VARS) -> dict[str, str]:
-    """Reads the ACTIVE `session_identity()` context's ids, keyed by env-var
-    name — for a caller about to cross the one outermost boundary where a
-    CHILD PROCESS must inherit them (a subprocess spawn), never for a
-    general-purpose ambient read. A var with no active context (or no
-    `session_identity()` entered at all) is omitted, not `None`-valued."""
     result: dict[str, str] = {}
     for var in env_vars:
         val = _contextvar_for(var).get()
@@ -1045,10 +961,6 @@ def execute_directives(
         return APPLY_EXIT_OK, {"landed": []}
 
     if resolve_claim_grant is not None:
-        # Same outermost-boundary rationale as the per-directive handler
-        # call below: `resolve_claim_grant` is a caller-injected zero-arg
-        # closure that may itself resolve session identity from
-        # `os.environ` and shell out (claim-mechanics probes).
         with _mirror_session_env_for_subprocess():
             claim_grant = resolve_claim_grant()
         if claim_grant.get("verdict") not in GRANTED_VERDICTS:
@@ -1057,12 +969,7 @@ def execute_directives(
                 "landed": [],
             }
 
-    # Composition-budget boundary #1 -- before any mutation (§ module
     # docstring "COMPOSITION BUDGET WIRING"). Nothing has mutated yet
-    # regardless of what the loop below finds at its own first entry
-    # (an already_satisfied directive does not mutate either), so this
-    # single pre-loop check is genuinely "before first mutation," not
-    # merely "before first iteration."
     if composition_budget is not None:
         breach_message: Optional[str] = None
         try:
@@ -1089,11 +996,6 @@ def execute_directives(
     except DirectiveDependencyCycle as exc:
         return APPLY_EXIT_TRANSPORT_FAIL, {"error": f"depends_on cycle: {exc}", "landed": []}
 
-    # Pre-validate the WHOLE directive list before executing any of them:
-    # "mutates nothing" on an unrecognized cli means the run aborts
-    # pre-emptively, not merely the offending directive — unaffected by
-    # per-directive judgment gating, which only decides WHETHER a
-    # structurally-valid directive dispatches this pass.
     try:
         resolved = []
         for d in ordered:
@@ -1134,18 +1036,7 @@ def execute_directives(
             blocked_directive_ids.add(directive_id)
             continue
 
-        # A judgment block propagates along directive-to-directive
-        # `depends_on` edges. `directive_gate_open` only reads
-        # judgment-point ids, and `order_by_depends_on` only ORDERS on
-        # directive ids -- so before this, a directive whose named
-        # dependency had just been blocked at its own judgment point still
-        # dispatched, against a repo state that dependency was supposed to
-        # have established. `merge_assemble`'s `d7 depends_on d2` was the
-        # live case: `d2` (cut-tag) blocked on an unresolved
-        # `version_bump_final`, and `d7` fired anyway. Propagation reports
         # the ORIGINATING judgment points, not the intermediate directive
-        # id, so `unresolved_judgment_points` stays a list of things an
-        # operator can actually resolve with `--decisions`.
         upstream_blocked = [
             dep
             for dep in normalize_depends_on(directive.get("depends_on"))
@@ -1157,12 +1048,6 @@ def execute_directives(
 
         try:
             # Outermost boundary (§ module docstring "SESSION IDENTITY
-            # SHAPE"): a dispatch-table handler receives no explicit
-            # session-id parameter -- it resolves identity, if it needs
-            # one, from `os.environ` and may itself shell out (e.g. a
-            # claim-mechanics handler's own git call). Mirror the active
-            # `session_identity()` contextvar scope for the duration of
-            # THIS ONE handler call only.
             with _mirror_session_env_for_subprocess():
                 detail = handler(directive.get("args", []), repo_root)
         except Exception as exc:  # noqa: BLE001 - captured for the partial-mutation report
@@ -1187,9 +1072,6 @@ def execute_directives(
 
         # Mid-directive advisory (§ module docstring "COMPOSITION BUDGET
         # WIRING") -- WARN-ONLY, no control-flow effect, never for an
-        # already_satisfied entry (it did no work this run). Runs right
-        # after the directive that may have just been the slow one, so a
-        # breach surfaces here rather than only at the run's final report.
         if composition_budget is not None:
             _budget_call(
                 "mid-directive advisory",
@@ -1209,15 +1091,10 @@ def execute_directives(
 
             _budget_call("mid-directive advisory", _advise)
 
-    # Composition-budget boundary #2 -- after the last mutation (§ module
     # docstring "COMPOSITION BUDGET WIRING"). Only reachable when the loop
     # above completed WITHOUT raising -- the PARTIAL_MUTATION `except`
-    # branch returns before this point, so this check can never precede
-    # (and therefore never triggers) `_run_compensators`. A breach here is
     # rc=0-with-loud-stderr, never PARTIAL_MUTATION: the mutation already
     # landed successfully, and PARTIAL_MUTATION's own reverse-compensation
-    # pass exists to undo a run that failed mid-mutation, not one that
-    # merely finished slowly.
     post_budget_breach: Optional[str] = None
     if composition_budget is not None:
         try:
@@ -1258,51 +1135,15 @@ def execute_directives(
     return APPLY_EXIT_OK, ok_report
 
 
-# ---------------------------------------------------------------------------
-# Commit ledger join (C11, sweeping the sibling producers C5 left unwired --
-# state/lessons/2026-08-18-a-ruling-applied-at-one-door-leaves-the-siblings-
-# unswept-7c3e1f9a4d22.yaml). ONE shared write helper, consumed by every
-# raw-`git commit` producer this module and its siblings own
-# (`scoped_commit` below, `backlog_grind_assemble.apply._commit_one`, and
-# `ops.ceremony.git_native.commit_authored_content`) rather than each
-# reimplementing `commit_ledger.classify`'s kind/weight derivation a third
-# time -- mirrors `ops.ceremony.scoped_git_commit._ledger_kind_and_weight`'s
-# shape (same two reused primitives, `weight_for_path` +
-# `review_brightline_gate.classify_surface`/`_is_noise_path`) without
-# importing that module's private helper across a package boundary.
-# ---------------------------------------------------------------------------
-
 #: Mirrors `commit_ledger.oracle._DOCS_KIND` -- duplicated as a literal
-#: (not imported) for the same reason `ops.ceremony.scoped_git_commit`
-#: duplicates it: `oracle.py` declares the constant private to its own
-#: two-figure split, and this module is a peer producer of the same
-#: vocabulary, not a consumer of that constant.
 _LEDGER_DOCS_KIND = "doctrine"
 
 #: Mirrors `ops.ceremony.scoped_git_commit._LEDGER_CODE_KIND` -- the oracle
-#: only ever branches on `kind == "doctrine"`, so one stable non-doctrine
-#: label is sufficient here too.
 _LEDGER_CODE_KIND = "code"
 
 
 def _ledger_kind_and_weight(repo_root: str, paths: List[str]) -> "tuple[str, float]":
-    """Commit-level `(kind, weight_basis)` for `paths`, identical shape to
-    `ops.ceremony.scoped_git_commit._ledger_kind_and_weight` (see that
-    function's own docstring) -- kept as a separate, small duplicate here
-    rather than importing that module's private name across a package
-    boundary."""
-    # Local import: `commit_ledger.store` imports `ops.resolve_swept_baton`,
-    # so a module-level import here closes a cycle back into this module and
-    # leaves `commit_ledger.store` partially initialized whenever anything
-    # imports it before `coordinator_core.ops` -- which de-registers this op.
     from coordinator_core.commit_ledger.classify import weight_for_path
-    # Same reason, second edge: `coordinator_core.ops`'s package import is
-    # EAGER, and `ops.session.boot_sweep` name-imports back out of this
-    # module, so a module-level import of anything under `coordinator_core.
-    # ops` here de-registers `session.boot_sweep` and
-    # `session.sweep_consumed_handoffs` for any process that imports this
-    # module before `coordinator_core.ops`. Measured 2026-08-19: 257 ops
-    # instead of 259, at exit 0, with no traceback anywhere.
     from coordinator_core.ops.review_brightline_gate import (
         _is_noise_path,
         classify_surface,
@@ -1323,12 +1164,6 @@ def _ledger_kind_and_weight(repo_root: str, paths: List[str]) -> "tuple[str, flo
 
 
 def _committer_id_for_ledger(repo_root: Path) -> str:
-    """The identity to bill a just-landed commit's ledger entry to:
-    prefers the active `session_identity()` contextvar scope (the shape
-    every caller of `scoped_commit`/`_commit_one` already runs inside),
-    falling back to `session_core.resolve_session_id` -- the same ambient
-    env-var read `ops.ceremony.scoped_git_commit._resolve_committing_
-    session_id` uses -- for a caller with no active scope."""
     for var in SESSION_ENV_VARS:
         val = current_session_env().get(var)
         if val:
@@ -1345,40 +1180,6 @@ def record_ledger_entry(
     closes: Optional[List[str]] = None,
     reverts_sha: Optional[str] = None,
 ) -> None:
-    """Append `sha`'s commit-ledger entry (C1/C5) for a producer that
-    committed OUTSIDE `ceremony.scoped_git_commit` -- this module's own
-    `scoped_commit`, `backlog_grind_assemble.apply._commit_one`, and
-    `ops.ceremony.git_native.commit_authored_content` all call this as the
-    LAST step after their commit has already landed (C11: sweeping the
-    sibling producers C5 left unwired, see this section's own module
-    comment).
-
-    `committer_id_override` -- for a caller that already holds a resolved
-    identity of its own (e.g. `commit_authored_content`'s own
-    `attributed_session_id`) rather than the active `session_identity()`
-    contextvar scope -- passed straight through instead of re-deriving the
-    committer a second, independent way (the same disagreeing-copies hazard
-    `commit_authored_content`'s own docstring names for its trailer
-    resolution). `None` (the default) falls back to
-    `_committer_id_for_ledger`.
-
-    `closes`/`reverts_sha` (C1, state/dispatch-briefs/2026-08-22-the-commit-
-    closure-pipe-carries-rows/C1.md): the closure facts a caller already
-    extracted from the commit message's own raw text (`coordinator_core.git.
-    commit_trailers.extract_closure_facts_from_text`), threaded straight
-    through into the ledger append -- additive, `None` by default,
-    byte-identical to before this chunk when omitted.
-
-    Hard constraint, mirrored from C5's own: a ledger write must never
-    fail the commit it accompanies -- `sha` is `None` (a clean no-op commit)
-    is a silent return, and every other failure mode (classification, owner
-    resolution, the append itself) is swallowed under one broad `except
-    Exception`, logged, never raised.
-    """
-    # Local import: `commit_ledger.store` imports `ops.resolve_swept_baton`,
-    # so a module-level import here closes a cycle back into this module and
-    # leaves `commit_ledger.store` partially initialized whenever anything
-    # imports it before `coordinator_core.ops` -- which de-registers this op.
     from coordinator_core.commit_ledger.resolve_owner import resolve_owner_handoff_id
     from coordinator_core.commit_ledger.store import append_entry as _ledger_append_entry
 
@@ -1388,16 +1189,6 @@ def record_ledger_entry(
         kind, weight_basis = _ledger_kind_and_weight(str(repo_root), paths)
         committer_id = committer_id_override or _committer_id_for_ledger(repo_root)
         if not committer_id:
-            # `resolve_session_id` documents empty as its legal "unresolvable"
-            # return that callers gate on, and `resolve_owner_handoff_id` hard-
-            # raises on it. Reached whenever this runs somewhere the caller's
-            # session identity never arrived -- notably a warm-served op, whose
-            # process env is the supervisor's and whose per-request
-            # `session_identity_override` scope was never bound. Billed to
-            # nobody is the same outcome as `handoff_id is None` below, so take
-            # that arm; the WARNING is what keeps the miss from being silent,
-            # since a swallowed traceback reads as a ledger bug rather than an
-            # identity one.
             _LOG.warning(
                 "contract.apply_base: no committer identity for %s; ledger "
                 "row skipped (the commit already landed and is unaffected)",
@@ -1415,9 +1206,6 @@ def record_ledger_entry(
                 closes=closes,
                 reverts_sha=reverts_sha,
             )
-        # `handoff_id is None` is the legitimate standalone outcome
-        # (`resolve_owner_handoff_id`'s own zero-held-claims arm) -- not an
-        # error, nothing to bill this commit to, no warning.
     except Exception:
         _LOG.warning(
             "contract.apply_base: commit ledger write failed for %s; the "
@@ -1427,38 +1215,12 @@ def record_ledger_entry(
         )
 
 
-# ---------------------------------------------------------------------------
-# Scoped commit — the ONE commit shape every consumer's `apply` makes,
-# pathspec-limited to the artifact it itself just mutated. `apply` runs
-# against a shared concurrent-EM working tree where a sibling session's
-# own edits may already sit staged in the same index — `git add -A`/
-# `git commit` with no pathspec would sweep those peer files into this
-# run's commit. Every git call below instead names the one resolved
-# artifact path explicitly, both on `add` and on `commit`.
-# ---------------------------------------------------------------------------
-
-
 def scoped_commit(
     repo_root: Path,
     artifact_rel_path: str,
     message: str,
     run_git: Callable[[list[str], Path], Any],
 ) -> Optional[str]:
-    """Stages then commits ONLY `artifact_rel_path`, via an explicit
-    pathspec on both the `add` and the `commit`. `run_git` is the
-    caller's own `(args, cwd) -> CompletedProcess`-shaped git runner —
-    this module has no subprocess opinion of its own, so a consumer with
-    an in-process read-model fast path (e.g. pickup_assemble's own
-    `_run_git`) plugs in unchanged. Returns the new commit's SHA, or
-    `None` when there was nothing to commit for this path (a clean run
-    whose directives were all `already_satisfied`, or an artifact path
-    this run never actually wrote to) — a no-op, not a failure.
-
-    Never resolves `run_git`'s `cwd` from anything but the caller-
-    supplied `repo_root`, and never widens the pathspec beyond the one
-    resolved path — there is no seam here through which a second path
-    could be added to this commit.
-    """
     if not artifact_rel_path:
         return None
     resolved = assert_in_repo_root(Path(artifact_rel_path), repo_root)
@@ -1491,12 +1253,6 @@ def scoped_commit(
         sha_proc = run_git(["rev-parse", "HEAD"], repo_root)
     landed_sha = sha_proc.stdout.strip() if sha_proc.returncode == 0 else None
 
-    # C1 (state/dispatch-briefs/2026-08-22-the-commit-closure-pipe-carries-
-    # rows/C1.md): `message` is already in hand -- this is the raw commit
-    # message text about to become `sha`'s own commit object, read
-    # line-anchored (never git's parsed trailer block) so a demoted
-    # `Closes:` (its own paragraph above a trailing `Commit-Token:` block)
-    # still records.
     from coordinator_core.git.commit_trailers import extract_closure_facts_from_text
 
     closes, reverts_sha = extract_closure_facts_from_text(message)

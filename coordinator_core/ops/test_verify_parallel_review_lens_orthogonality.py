@@ -1,14 +1,3 @@
-"""Characterization tests for
-coordinator_core.ops.verify_parallel_review_lens_orthogonality.
-
-Port of: verify-parallel-review-lens-orthogonality.sh (DoE b5a4192c, 2026-07-20);
-parity confirmed against the bash oracle across a positive+negative corpus
-(no-args, valid/colliding/missing/empty chunk manifest, unknown arg, missing
---chunk-manifest value) before this file was written — see the port's
-completion notes.
-
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
-"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -39,7 +28,6 @@ _GOOD_SKILL_MD = """\
 
 
 def _make_repo(tmp_path: Path, skill_md: str = _GOOD_SKILL_MD) -> Path:
-    """Build a minimal DoE-claude-shaped tree: coordinator/skills/... + coordinator/agents/*.md"""
     skills_dir = tmp_path / "coordinator" / "skills" / "parallel-code-review"
     skills_dir.mkdir(parents=True)
     (skills_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
@@ -50,11 +38,6 @@ def _make_repo(tmp_path: Path, skill_md: str = _GOOD_SKILL_MD) -> Path:
         (agents_dir / name).write_text("# agent\n", encoding="utf-8")
 
     return tmp_path
-
-
-# ---------------------------------------------------------------------------
-# static_check
-# ---------------------------------------------------------------------------
 
 
 def test_static_check_passes_with_four_orthogonal_lenses(tmp_path):
@@ -129,11 +112,6 @@ def test_static_check_fails_on_unparseable_reviewer_cell(tmp_path):
     assert any("Could not parse agent path" in line for line in lines)
 
 
-# ---------------------------------------------------------------------------
-# chunk_check
-# ---------------------------------------------------------------------------
-
-
 def test_chunk_check_passes_on_disjoint_partitions(tmp_path):
     manifest = tmp_path / "chunks.tsv"
     manifest.write_text("chunk-1\tfoo.py\nchunk-1\tbar.py\nchunk-2\tbaz.py\n", encoding="utf-8")
@@ -176,11 +154,6 @@ def test_chunk_check_skips_comment_and_blank_lines(tmp_path):
     manifest.write_text("# comment\n\nchunk-1\tfoo.py\n", encoding="utf-8")
     lines, passed = chunk_check(manifest)
     assert passed is True
-
-
-# ---------------------------------------------------------------------------
-# run() — arg parsing, doe_root injection, stdout/stderr split, rc contract
-# ---------------------------------------------------------------------------
 
 
 def test_run_no_args_runs_static_only(tmp_path):

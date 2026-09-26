@@ -1,11 +1,3 @@
-"""coordinator_core.hooks.tests.test_day_branch_assert_remote_prefix -- the
-four `case_b_verdict` outcomes (C3 of docs/plans/2026-09-22-work-branch-
-predicates-read-an-origin-prefixed-name.md).
-
-No test of `case_b_verdict` existed before this file. Zero spawn -- it
-passes `repo_root` as `tmp_path`, never touched, because `case_b_verdict`
-takes `branch` directly and does not shell out.
-"""
 
 from __future__ import annotations
 
@@ -17,7 +9,6 @@ def test_origin_prefixed_work_branch_warns_once_non_escalating(tmp_path):
     assert result.outcome == WARN
     assert result.branch == "origin/work/m/2026-09-22"
     assert "origin/work/m/2026-09-22" in result.message
-    # Non-escalating: not the banner renderer's output shape.
     assert not result.message.startswith("──")
     assert "day-branch NOT cut" not in result.message
     assert "is not a work/* branch" not in result.message

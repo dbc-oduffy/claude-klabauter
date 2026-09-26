@@ -1,18 +1,3 @@
-"""
-RoutineSignal — staleness as a typed derived-signal, NOT a scalar (the Data Science Reviewer P1-D3).
-Pydantic port of DoE `coordinator/cockpit-contract/src/entities/routine-signal.ts`
-(Zod source).
-
-Staleness is at least six distinct derived quantities, each with different
-inputs, thresholds, and units; they must not collapse to one boolean or string.
-Light bitemporal: `observed_at` (when the underlying fact was read) vs
-`computed_as_of` (the wall-clock the threshold was computed against) so the
-dashboard can render "stale (as of 14m ago)" honestly and falsifiably. This is
-NOT full effective-dated revision — only the observed/computed pair on derived
-signals.
-
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
-"""
 from __future__ import annotations
 
 from typing import Literal
@@ -23,12 +8,12 @@ from coordinator_core.contract.cockpit_schema.common import IsoDateTime
 from coordinator_core.contract.cockpit_schema.provenance import ContentHash, ProvenanceEnvelope
 
 RoutineSignalKind = Literal[
-    "weekly",  # week-changelog cadence; threshold: >=5 days AND >=15 commits
-    "bug-sweep",  # bug-backlog cadence; threshold: >50 commits AND >7 days, OR >14 days AND >20 commits
-    "docs",  # update-docs cadence; threshold: any commits since last update-docs run
-    "arch-audit",  # architecture audit cadence; threshold: 10 days
-    "dormant-repo",  # repo inactivity; threshold: default-branch tip >30 days old
-    "distill-backlog",  # undigested archive entries; threshold: >N entries pending (N TBD at tc-3)
+    "weekly",
+    "bug-sweep",
+    "docs",
+    "arch-audit",
+    "dormant-repo",
+    "distill-backlog",
 ]
 """The six named staleness kinds (cockpit-emission corpus § 10). Each has distinct
 inputs/thresholds/units — enumerated, never an open string."""

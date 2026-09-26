@@ -1,37 +1,3 @@
-"""test_archive_stamp_cli_ship_handoff.py — argv-parsing unit test for
-`archive-stamp-cli ship-handoff` (2026-07-22 fix).
-
-Defect 1 this closes: the CLI veneer parsed NO sha at all — a caller passing
-a positional sha (`ship-handoff <path> <sha>`) or a `--sha <sha>` flag had it
-silently swallowed, even though the engine (`cs_ship_handoff` /
-`handoff.archive_transition`) already accepted and threaded a caller-supplied
-sha. This was a veneer-only gap (the capability existed and was unreachable
-from the CLI) — this suite is the missing coverage: EVERY prior test for
-this incident exercised `arstamp.cs_ship_handoff(...)` as a Python function
-call, never the trampoline's own `main()` argv parsing.
-
-The `_import_module()` seam is monkeypatched (same idiom as
-test_session_claim_cli.py) so this suite never requires the engine root to
-resolve or `coordinator_core` to be importable — it asserts ONLY the argv ->
-`cs_ship_handoff(...)` call-shape translation, not the engine behind it
-(that is `coordinator_core/ops/tests/test_handoff_archive_transition.py`'s
-and `coordinator_core/test_archive_stamp.py`'s job).
-
-Loaded by file path (`importlib.machinery.SourceFileLoader`) since
-`archive-stamp-cli` is an extensionless polyglot entrypoint, not a `.py`
-module — same load idiom as test_session_claim_cli.py.
-
-Spec backlink: incident "archive-stamp-cli ship-handoff cannot land" (2026-07-22),
-cross-repo memo 2026-07-22-claude-central-em-deliver-ship-handoff-writes-
-deployment-state-shipped-without-shipped-in.md.
-
-Run:
-    pytest coordinator/bin/tests/test_archive_stamp_cli_ship_handoff.py -v
-
-Renamed from the hyphenated, pytest-uncollectable
-test-archive-stamp-cli-ship-handoff.py to this test_* filename; test
-bodies unchanged (already unittest.TestCase).
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -58,9 +24,6 @@ _cli = _load_cli_module()
 
 
 class _RecordingShipHandoffMod:
-    """Stand-in for coordinator_core.archive_stamp — records the exact
-    kwargs cs_ship_handoff was called with, so each test can assert the argv
-    -> call-shape translation without a real claude-klabauter checkout."""
 
     def __init__(self):
         self.calls: list[dict] = []
@@ -91,8 +54,6 @@ class ShipHandoffArgvParsingTest(unittest.TestCase):
         )
 
     def test_bare_positional_sha_is_forwarded(self):
-        """Regression test for the incident: `ship-handoff <path> <sha>` must
-        thread the sha through, not silently swallow it."""
         rc = _cli.main(["ship-handoff", "state/handoffs/h.md", "f7c81a1d"])
         self.assertEqual(rc, 0)
         self.assertEqual(
@@ -146,9 +107,6 @@ class ShipHandoffArgvParsingTest(unittest.TestCase):
         )
 
     def test_archive_flag_after_positional_sha(self):
-        """Regression test for the incident: the prior parser matched
-        `--archive` ONLY at the fixed rest[1:2] slot, so a sha preceding
-        --archive silently dropped the archive flag."""
         rc = _cli.main(["ship-handoff", "state/handoffs/h.md", "f7c81a1d", "--archive"])
         self.assertEqual(rc, 0)
         self.assertEqual(

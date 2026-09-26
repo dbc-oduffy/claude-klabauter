@@ -53,15 +53,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class _SpawnDetected(AssertionError):
-    """Raised in place of an actual subprocess spawn -- a compute-half
-    host that reaches this is the defect this test exists to catch."""
+    pass
 
 
 @pytest.fixture
 def no_spawn_guard(monkeypatch: pytest.MonkeyPatch):
-    """Patch `subprocess.run`/`subprocess.Popen` repo-wide so any spawn
-    reachable from a host's `brief()`/`route()` call raises immediately,
-    naming the argv that tried to spawn."""
 
     def _blow_up(*args: Any, **kwargs: Any) -> Any:
         raise _SpawnDetected(f"uncounted subprocess spawn: args={args!r} kwargs={kwargs!r}")

@@ -40,14 +40,12 @@ def _decision(out):
 
 
 def _rewrite(out):
-    """The command the guard handed back, or None if it rewrote nothing."""
     if out is None:
         return None
     return out["hookSpecificOutput"].get("updatedInput", {}).get("command")
 
 
 def _slotted(command, *, cwd=None, agent=True):
-    """Did the guard route this command through the slot wrapper?"""
     out = _verdict(command, agent=agent, cwd=cwd)
     assert _decision(out) != "deny", "this leg must never deny"
     return (_rewrite(out) or "").startswith("with-tier-t-slot -- ")
@@ -55,7 +53,6 @@ def _slotted(command, *, cwd=None, agent=True):
 
 @pytest.fixture
 def repo(tmp_path):
-    """A repo root with a pytest testpaths config, so scoping classifies."""
     (tmp_path / "pyproject.toml").write_text(
         '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n', encoding="utf-8"
     )
@@ -63,8 +60,6 @@ def repo(tmp_path):
     (tmp_path / "tests").mkdir()
     return str(tmp_path)
 
-
-# --- the leg fires on the incident's shape -------------------------------
 
 @pytest.mark.parametrize("command", [
     "python3 -m pytest tests/test_a.py",
@@ -88,13 +83,11 @@ def test_this_leg_never_denies(repo):
 
 
 def test_the_rewrite_preserves_the_callers_command_exactly(repo):
-    """A rewrite that alters the command would be a silent corruption hazard."""
     out = _verdict("pytest tests/test_a.py::test_case -q", cwd=repo)
     assert _rewrite(out) == "with-tier-t-slot -- pytest tests/test_a.py::test_case -q"
 
 
 def test_the_note_says_nothing_is_refused(repo):
-    """An agent that reads this as a refusal goes looking for a way around it."""
     out = _verdict("pytest tests/test_a.py", cwd=repo)
     note = out["hookSpecificOutput"]["additionalContext"].lower()
     assert "nothing is being refused" in note
@@ -102,14 +95,11 @@ def test_the_note_says_nothing_is_refused(repo):
 
 
 def test_a_chained_command_is_advised_not_rewritten(repo):
-    """BX-12's single-segment rule: never substitute a chain we did not parse."""
     out = _verdict("cd sub && pytest tests/test_a.py", cwd=repo)
     assert _decision(out) == "allow"
     assert _rewrite(out) is None
     assert "with-tier-t-slot" in out["hookSpecificOutput"]["additionalContext"]
 
-
-# --- the leg allows what it should ---------------------------------------
 
 @pytest.mark.parametrize("command", [
     "with-tier-t-slot -- pytest tests/test_a.py",
@@ -122,12 +112,6 @@ def test_already_wrapped_runs_are_left_completely_alone(command, repo):
 
 
 def test_a_decoy_wrapped_segment_does_not_license_a_bare_runner(repo):
-    """`with-tier-t-slot -- true && pytest ...` wraps a no-op; the real run is bare.
-
-    The sibling suite-mutex wrapper leg shipped with exactly this hole and had
-    to be fixed after review. Pinned here so this one never grows it: the
-    unwrapped `pytest` segment must still draw the leg's attention.
-    """
     out = _verdict("with-tier-t-slot -- true && pytest tests/test_a.py", cwd=repo)
     assert out is not None
     assert "with-tier-t-slot" in out["hookSpecificOutput"].get("additionalContext", "")
@@ -143,29 +127,16 @@ def test_non_runner_commands_are_untouched(command, repo):
     assert _verdict(command, cwd=repo) is None
 
 
-# --- the carve-out is NOT narrowed ---------------------------------------
-
 @pytest.mark.parametrize("command", [
     "pytest tests/test_a.py",
     "python3 -m pytest tests/test_a.py::test_case",
     "pytest -k some_expression",
 ])
 def test_the_em_is_unaffected_by_this_leg(command, repo):
-    """One session cannot fan out; its scoped runs are serial by construction.
-
-    Matches leg 0's subagent-only scope. The EM's command is not even
-    rewritten -- nothing mediates the top-level session's scoped runs.
-    """
     assert _verdict(command, agent=False, cwd=repo) is None
 
 
 def test_scoped_runs_remain_permitted_for_subagents(repo):
-    """R9: a node id stays legal for a subagent regardless of its touched set.
-
-    The whole point of the leg being a rewrite rather than a refusal: the
-    command a dispatched caller asked for still runs, unchanged, on the far
-    side of a slot.
-    """
     bare = "pytest tests/test_a.py::test_the_agent_did_not_author"
     out = _verdict(bare, cwd=repo)
     assert _decision(out) == "allow"
@@ -173,7 +144,6 @@ def test_scoped_runs_remain_permitted_for_subagents(repo):
 
 
 def test_leg_does_not_restate_a_deny_the_identity_leg_owns(repo):
-    """A suite-shaped subagent command is an identity problem and must say so."""
     out = guard.check(_payload("pytest", cwd=repo))
     assert out is not None
     text = out["hookSpecificOutput"]["permissionDecisionReason"]
@@ -181,7 +151,6 @@ def test_leg_does_not_restate_a_deny_the_identity_leg_owns(repo):
 
 
 def test_override_env_var_still_disarms_the_whole_guard(repo):
-    """Documented behaviour of the existing override; the new leg is not exempt."""
     p = _payload("pytest tests/test_a.py", cwd=repo)
     p["env"] = {"COORDINATOR_OVERRIDE_TEST_SUITE_INVOCATION": "1"}
     assert guard.check(p) is None

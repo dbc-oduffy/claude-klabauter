@@ -75,20 +75,11 @@ import sys
 import tempfile
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
-# Declared, not excused: the harvest CLI tests below spawn a real python3
-# subprocess to exercise `coordinator-harvest-deferrals`'s actual exit-code/
-# stdout contract end to end (idempotency counts, dedup notes) -- no
-# in-process call observes that subprocess-boundary behaviour. Each test
-# also `git init`s its own `mkdtemp` fixture dir per test (see the module
-# docstring: exercises the git-root fallback leg), not hoisted to module
-# scope, since every test isolates its own harvest state under
 # QUEUE_APPEND_OUTPUT_ROOT/LESSON_PROMOTE_OUTBOX_ROOT rooted at that dir.
 # The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
-# explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 
 try:
-    import yaml as _yaml  # PyYAML — available on most coordinator installs
+    import yaml as _yaml
     _YAML_AVAILABLE = True
 except ImportError:
     _yaml = None  # type: ignore[assignment]
@@ -101,13 +92,10 @@ except ImportError:
     _jsonschema = None  # type: ignore[assignment]
     _JSONSCHEMA_AVAILABLE = False
 
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_BIN_DIR = os.path.dirname(_THIS_DIR)  # coordinator/bin
-_COORDINATOR_DIR = os.path.dirname(_BIN_DIR)  # coordinator/
+_BIN_DIR = os.path.dirname(_THIS_DIR)
+_COORDINATOR_DIR = os.path.dirname(_BIN_DIR)
 
 _LIB_DIR = os.path.join(_BIN_DIR, "lib")
 if _LIB_DIR not in sys.path:
@@ -115,8 +103,6 @@ if _LIB_DIR not in sys.path:
 from coordinator_data_root import data_root  # noqa: E402
 
 _HARVEST_CLI = os.path.join(_BIN_DIR, "coordinator-harvest-deferrals.py")
-# schemas/ is DoE-resident post-2026-07-22 executable-surface migration (this
-# script moved to claude-klabauter; schemas/ did not) — resolve via the shared
 # two-rung helper rather than a bare _COORDINATOR_DIR-relative path.
 _PLAN_TASKS_SCHEMA = os.path.join(str(data_root("schemas")), "plan-tasks.schema.json")
 _FIXTURES_DIR = os.path.join(_THIS_DIR, "fixtures", "plan-tasks-spine")
@@ -130,10 +116,6 @@ _FIXTURE_ZERO_BLOCKS_WITH_DEFERRED = os.path.join(_FIXTURES_DIR, "zero-blocks-wi
 _FIXTURE_PROSE_BETWEEN = os.path.join(_FIXTURES_DIR, "prose-between-heading-and-fence.md")
 
 _SUBPROCESS_TIMEOUT_SECS = 30
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _read(path: str) -> str:
@@ -173,19 +155,13 @@ def _isolated_harvest_env(tmpdir: str) -> dict[str, str]:
     env = dict(os.environ)
     env["QUEUE_APPEND_OUTPUT_ROOT"] = tmpdir
     outbox_dir = os.path.join(tmpdir, "state", "lessons-outbox")
-    # Must EXIST before the spawn. coordinator-lesson-promote refuses an
     # absent LESSON_PROMOTE_OUTBOX_ROOT under the system temp dir — it cannot
-    # distinguish a never-created fixture dir from a swept tmp_path held by a
-    # long-lived process, and recreating it would file the entry where nobody
-    # looks. Latent until 2026-09-20: the child resolved to the published
     # launcher, which carried no LESSON_PROMOTE_OUTBOX_ROOT handling at all,
-    # so the refusal never ran and the write went to the live sibling repo.
     os.makedirs(outbox_dir, exist_ok=True)
     env["LESSON_PROMOTE_OUTBOX_ROOT"] = outbox_dir
     env["COORDINATOR_WARM"] = "0"
     # Avoid any ambient DOE_ROOT/REPO_DOE_CLAUDE/CLAUDE_KLABAUTER_ROOT bleeding writes
     # out of the isolated tmpdir. REPO_DOE_CLAUDE is doe_root()'s rung-1b
-    # ammo and is exported in a login shell on a provisioned machine —
     # stripping only DOE_ROOT leaves the sibling repo one rung away.
     env.pop("DOE_ROOT", None)
     env.pop("REPO_DOE_CLAUDE", None)
@@ -237,11 +213,6 @@ def _yaml_files_in(directory: str) -> list[str]:
     return sorted(f for f in os.listdir(directory) if f.endswith(".yaml"))
 
 
-# ===========================================================================
-# (a) Spine parses, including the two parser-locate error states
-# ===========================================================================
-
-
 def test_valid_spine_parses_via_harvest_dry_run() -> None:
     name = "test_valid_spine_parses_via_harvest_dry_run"
     result, tmpdir = _run_harvest_in_isolated_repo(_FIXTURE_VALID, dry_run=True)
@@ -268,8 +239,6 @@ def test_zero_fenced_blocks_is_warn_and_skip() -> None:
     result, tmpdir = _run_harvest_in_isolated_repo(_FIXTURE_ZERO_BLOCKS, dry_run=True)
     try:
         # Parser-locate rule: zero fenced blocks -> WARN-AND-SKIP (exit 0) for
-        # the harvest, per the pinned contract (fail-loud is the
-        # coverage-checker's posture, not this CLI's).
         if result.returncode != 0:
             raise AssertionError(
                 name + ": " +
@@ -304,15 +273,6 @@ def test_multiple_fenced_blocks_is_warn_and_skip() -> None:
 
 
 def test_template_comment_is_located_and_deferred_row_harvested(stamped_engine_env: str) -> None:
-    """Regression for the silent-data-loss bug: a plan that still carries
-    the writing-plans.md template's unedited authoring HTML comment
-    directly under '## Tasks' (which embeds a literal
-    ```yaml plan-tasks``` string AND sits as non-blank content between the
-    heading and the real fence — BOTH of _locate_tasks_block's former
-    false-negative paths at once) must still be LOCATED, and its
-    deferred:true/pm_approved:true row (D1) must still be harvested — not
-    silently skipped.
-    """
     name = "test_template_comment_is_located_and_deferred_row_harvested"
     result, tmpdir = _run_harvest_in_isolated_repo(_FIXTURE_TEMPLATE_COMMENT)
     try:
@@ -336,31 +296,6 @@ def test_template_comment_is_located_and_deferred_row_harvested(stamped_engine_e
 
 
 def test_prose_between_heading_and_fence_is_located_and_harvested() -> None:
-    """Regression for the containment-vs-adjacency bug: a plan carrying
-    load-bearing prose (a pinned-interface paragraph, a wave map) between
-    the '## Tasks' heading and the real fence must still be LOCATED, and
-    its deferred:true/pm_approved:true row (D1) harvested.
-
-    The former guard permitted only blank lines between heading and fence,
-    so every real reviewed plan with an interface/wave-map paragraph there
-    warn-and-skipped, silently losing its ratified deferrals. Adjacency was
-    never load-bearing for disambiguation — exactly-one-fence-in-the-whole
-    -document is already enforced before position is examined — so the guard
-    could only produce false negatives. Containment (fence lives inside the
-    '## Tasks' section) is what actually needed enforcing, and the fixture
-    carries a trailing '## Some Later Section' to prove that bound is real.
-
-    Originating incident: docs/plans/2026-07-20-machine-blind-repo-identity.md
-    parsed fine under plan-coverage-checker (8 rows) while this CLI reported
-    "no locatable block" — two consumers of one pinned contract disagreeing
-    on what parses, when the contract says they differ only on severity.
-
-    Uses --dry-run deliberately: the write path subprocesses the extensionless
-    `coordinator-queue-append`, which is not executable on Windows (WinError 193),
-    so the harvest-and-write tests are red on this platform for reasons unrelated
-    to the locator. Dry-run exercises the fixed locator end-to-end and stays
-    platform-clean.
-    """
     name = "test_prose_between_heading_and_fence_is_located_and_harvested"
     result, tmpdir = _run_harvest_in_isolated_repo(_FIXTURE_PROSE_BETWEEN, dry_run=True)
     try:
@@ -384,12 +319,6 @@ def test_prose_between_heading_and_fence_is_located_and_harvested() -> None:
 
 
 def test_zero_blocks_with_deferred_marker_is_loud_nonzero_exit() -> None:
-    """Belt-and-suspenders silent-data-loss guard: when _locate_tasks_block
-    genuinely fails (no real fence anywhere) BUT the '## Tasks' region
-    visibly contains a 'deferred: true' line, the harvest must escalate to
-    a LOUD, non-zero exit — not the default soft exit-0 skip — since that
-    combination is the exact silent-loss shape this fix targets.
-    """
     name = "test_zero_blocks_with_deferred_marker_is_loud_nonzero_exit"
     result, tmpdir = _run_harvest_in_isolated_repo(_FIXTURE_ZERO_BLOCKS_WITH_DEFERRED, dry_run=True)
     try:
@@ -410,11 +339,6 @@ def test_zero_blocks_with_deferred_marker_is_loud_nonzero_exit() -> None:
 
 
 def test_multiple_fenced_blocks_with_deferred_marker_still_soft_skips_when_no_marker() -> None:
-    """Confirms the genuinely-ambiguous two-REAL-fence case (no comment
-    involved) is unaffected by the comment-blanking fix: it must still
-    return None / warn-and-skip at exit 0, since the existing
-    multiple-fenced-blocks.md fixture carries no deferred:true line.
-    """
     name = "test_multiple_fenced_blocks_with_deferred_marker_still_soft_skips_when_no_marker"
     result, tmpdir = _run_harvest_in_isolated_repo(_FIXTURE_MULTI_BLOCKS, dry_run=True)
     try:
@@ -426,20 +350,6 @@ def test_multiple_fenced_blocks_with_deferred_marker_still_soft_skips_when_no_ma
             )
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-
-
-# ===========================================================================
-# (a.1) Locate-rule PARITY against the shared expectation table.
-#
-# This is the test that closes the gap 08cbf4bd's fix exposed: DoE's
-# `_locate_tasks_block` and coordinator_core's `locate_fenced_block` are
-# exercised over the SAME fixture corpus via the SAME expectation table
-# (fixtures/plan-tasks-spine/fixture_expectations.py), so a future
-# divergence fails HERE instead of surviving in a docstring claim of parity.
-# `_locate_tasks_block` is loaded directly (not subprocessed) so this test
-# calls it as a plain function, mirroring test_lesson_promote.py's pattern
-# for importing a hyphenated, extensionless CLI file as a Python module.
-# ===========================================================================
 
 
 _harvest_loader = importlib.machinery.SourceFileLoader("coordinator_harvest_deferrals", _HARVEST_CLI)
@@ -481,22 +391,6 @@ def test_locator_parity_against_shared_expectation_table(fixture_name: str) -> N
                 f"test_locator_parity_against_shared_expectation_table[{fixture_name}]: "
                 f"expected None ({expected_outcome.value}), got a located body: {result!r}"
             )
-
-
-# ===========================================================================
-# (b) Ledger derivation excludes deferred rows AND still applies expansion.
-#
-# execute-plan Phase 1.6's derivation logic is prose in a SKILL.md, not a
-# standalone script — there is no CLI to invoke. The mechanically-testable
-# proxy is the spine ITSELF: assert that (1) a non-deferred row set (the
-# ledger's derivation floor) excludes every deferred:true row by construction
-# via a schema-shaped filter mirroring the documented rule, and (2) a single
-# authoring-time row (C2 in the plan's actual spine, and the C2a/C2b split in
-# our fixture) legitimately expands into >1 write-target when the expansion
-# rule applies — i.e. row-count >= task-count is achievable and is NOT
-# malformed. This test operates purely on the fixture's parsed rows (no
-# subprocess) since there is no execute-plan CLI surface to invoke directly.
-# ===========================================================================
 
 
 def _load_valid_fixture_rows() -> list[dict]:
@@ -543,17 +437,6 @@ def test_ledger_expansion_row_count_exceeds_task_count() -> None:
     rows = _load_valid_fixture_rows()
     non_deferred = [r for r in rows if r.get("deferred") is not True]
 
-    # The fixture's C2a/C2b pair models the disjoint-write-target expansion
-    # rule: what a hand-authored plan would enumerate as a SINGLE "C2" chunk
-    # with two disjoint write-targets (docs/wiki/widget-a.md,
-    # docs/wiki/widget-b.md) is represented here as two already-split spine
-    # rows — i.e. the spine-derived "task count" for the C2 unit of work is
-    # 2, which is >= 1 and demonstrates the row-count-never-== invariant
-    # holds at the row-authoring level (Phase 1.5/1.6 still runs its own
-    # expansion on TOP of whatever the spine derives, per
-    # execute-plan/SKILL.md line ~186 — this fixture proves the floor
-    # relationship, not the Phase 1.6 mechanism itself, since that mechanism
-    # has no standalone CLI to invoke).
     c2_surfaces = {r["surface"] for r in non_deferred if r["id"] in ("C2a", "C2b")}
     if len(c2_surfaces) < 2:
         raise AssertionError(
@@ -564,25 +447,7 @@ def test_ledger_expansion_row_count_exceeds_task_count() -> None:
         raise AssertionError(name + ": " + f"expected derived non-deferred row-count >= 3 (C1, C2a, C2b), got {len(non_deferred)}")
 
 
-# ===========================================================================
-# (c) plan-coverage-checker FLAGS a deferred-without-pm_approved fixture row.
-#
-# plan-coverage-checker is an agent-prompt (agents/plan-coverage-checker.md),
-# not executable code — there is no CLI to invoke against a fixture. The
-# mechanically-testable proxy is the pinned schema's OWN cross-field rule:
-# plan-tasks.schema.json's allOf/if-then conditional requires pm_approved
-# whenever deferred is true. D3 in the valid fixture (deferred:true,
 # pm_approved:false) legitimately VALIDATES against the base per-property
-# schema (pm_approved:false is a valid boolean) but the malformed-row.md
-# fixture's D1 (deferred:true, pm_approved:true, but MISSING change_kind and
-# surface) fails validation outright — that is the more directly testable
-# assertion this suite can make: an incomplete deferred row does not
-# silently validate. For the "unratified but otherwise well-formed" shape
-# (this suite's D3), we assert against the schema's documented conditional
-# directly via jsonschema, which is the same conditional-shape enforcement
-# that backs the checker's Lens 2b prose rule (agents/plan-coverage-checker.md
-# Phase 3.5 Step 3).
-# ===========================================================================
 
 
 def test_schema_conditional_requires_pm_approved_when_deferred() -> None:
@@ -593,17 +458,12 @@ def test_schema_conditional_requires_pm_approved_when_deferred() -> None:
     with open(_PLAN_TASKS_SCHEMA, encoding="utf-8") as fh:
         schema = json.load(fh)
 
-    # A row that is deferred:true but omits pm_approved entirely must fail
-    # the schema's cross-field allOf/if-then rule (pm_approved is
-    # required-when-deferred) — this is the mechanical proxy for the
-    # coverage-checker's "deferral pending PM ratification" finding.
     unratified_row = {
         "id": "D-unratified",
         "title": "Deferred without any pm_approved field at all",
         "change_kind": "skill-edit",
         "surface": "coordinator/skills/some-skill/SKILL.md",
         "deferred": True,
-        # pm_approved deliberately omitted
     }
     try:
         _jsonschema.validate(instance=unratified_row, schema=schema)  # type: ignore[union-attr]
@@ -640,15 +500,7 @@ def test_schema_conditional_allows_ratified_deferral() -> None:
 
 
 def test_coverage_checker_prompt_documents_the_exact_flag_text() -> None:
-    """Ground-truth check: the coverage-checker's agent-prompt (the only
-    artifact this deliverable can inspect, since the checker itself is not
-    executable) must still carry the documented finding text verbatim. This
-    guards against silent drift between C1's schema conditional (tested
-    above) and C3's prose enforcement of the SAME rule.
-    """
     name = "test_coverage_checker_prompt_documents_the_exact_flag_text"
-    # agents/ is DoE-resident post-2026-07-22 executable-surface migration —
-    # resolve via the shared two-rung helper rather than a bare
     # _COORDINATOR_DIR-relative path.
     checker_path = os.path.join(str(data_root("agents")), "plan-coverage-checker.md")
     if not os.path.isfile(checker_path):
@@ -657,12 +509,6 @@ def test_coverage_checker_prompt_documents_the_exact_flag_text() -> None:
     needle = "deferral pending PM ratification"
     if needle not in text:
         raise AssertionError(name + ": " + f"expected agents/plan-coverage-checker.md to contain {needle!r}")
-
-
-# ===========================================================================
-# (d) Harvest call-site fires: project scope, central scope, doctrine-edit
-#     routing, and idempotency on a second run.
-# ===========================================================================
 
 
 def test_harvest_call_site_project_scope_queue_append(stamped_engine_env: str) -> None:
@@ -699,11 +545,6 @@ def test_harvest_call_site_doctrine_edit_routes_to_lesson_promote(stamped_engine
             raise AssertionError(name + ": " + f"expected change_kind: doctrine-edit in written lesson entry, got:\n{content}")
         if "harvest-key: pln-fixture-valid-spine-000001:D2" not in content:
             raise AssertionError(name + ": " + f"expected the harvest-key idempotency marker, got:\n{content}")
-        # D2's queue_scope is 'central' in the fixture — confirm the CLI did
-        # NOT route it through coordinator-queue-append (which would have
-        # required queue_scope: central handling); coordinator-lesson-promote
-        # has no queue_scope concept at all, confirming the doctrine-class
-        # routing bypassed queue-append entirely for this row.
         qdir = os.path.join(tmpdir, "state", "improvement-queue")
         q_files = _yaml_files_in(qdir)
         for qf in q_files:
@@ -765,14 +606,6 @@ def test_harvest_call_site_second_run_is_idempotent(stamped_engine_env: str) -> 
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
-
-# ===========================================================================
-# (d.1) case_against carry-through (DoE cross-repo memo, leg 3): a
-#     `backlogged`/deferred row's `case_against` must survive onto the
-#     harvested improvement-queue entry — and a row with none must harvest
-#     cleanly with the key simply omitted, never an empty string or a
-#     placeholder.
-# ===========================================================================
 
 _FIXTURE_CASE_AGAINST = os.path.join(_FIXTURES_DIR, "valid-spine-with-case-against.md")
 _IMPROVEMENT_QUEUE_SCHEMA = os.path.join(str(data_root("schemas")), "improvement-queue.schema.json")
@@ -863,12 +696,6 @@ def test_harvest_omits_case_against_when_row_carries_none(stamped_engine_env: st
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-# ===========================================================================
-# (e) Malformed row skipped-with-warning by the harvest AND flagged by the
-#     coverage-checker's schema conditional (mechanical proxy, per (c) above).
-# ===========================================================================
-
-
 def test_malformed_row_skipped_with_warning_by_harvest() -> None:
     name = "test_malformed_row_skipped_with_warning_by_harvest"
     result, tmpdir = _run_harvest_in_isolated_repo(_FIXTURE_MALFORMED)
@@ -894,12 +721,6 @@ def test_malformed_row_skipped_with_warning_by_harvest() -> None:
 
 
 def test_malformed_row_fails_schema_validation() -> None:
-    """Mechanical proxy for 'flagged by the coverage-checker' — the
-    malformed fixture's D1 row (deferred:true, pm_approved:true, but missing
-    change_kind and surface) must fail plan-tasks.schema.json validation,
-    which is the schema-level enforcement backing the checker's malformed-row
-    lens (agents/plan-coverage-checker.md Phase 3.5 Step 2/2b).
-    """
     name = "test_malformed_row_fails_schema_validation"
     if not _JSONSCHEMA_AVAILABLE or not _YAML_AVAILABLE:
         pytest.skip("jsonschema and/or PyYAML not installed")
@@ -927,15 +748,6 @@ def test_malformed_row_fails_schema_validation() -> None:
         "validation (required-field check), but validation succeeded",
     )
 
-
-# ===========================================================================
-# (f) Governed-plan selection axis for _select_harvest_candidates — mirrors
-#     plan_tasks_mutate.py's test_resolve_governed_* trio, plus a fourth case
-#     specific to the harvest CLI (Review: code-reviewer Finding 2 — this
-#     branch previously had zero test coverage on the more externally-visible
-#     of the two write paths, since a governed harvest drives a real
-#     queue-append).
-# ===========================================================================
 
 _select_harvest_candidates = _harvest_mod._select_harvest_candidates
 _compute_grouping_digest = _harvest_mod.compute_grouping_digest
@@ -1017,13 +829,6 @@ def test_select_harvest_candidates_governed_refuses_stale_digest() -> None:
 
 
 def test_select_harvest_candidates_governed_never_falls_through_to_legacy_deferred_arm() -> None:
-    """A governed plan carrying a disposition-absent `deferred: true` row must
-    NOT select it — the legacy arm must stay unreachable on a governed plan,
-    even when the row also carries pm_approved: true. Selecting it would be
-    exactly the hole DoE's memo warned about: silently opening the legacy
-    corpus to ungated harvest via the axis that governed plans are supposed
-    to have replaced.
-    """
     name = "test_select_harvest_candidates_governed_never_falls_through_to_legacy_deferred_arm"
     row = _harvest_row(row_id="H2", deferred=True, pm_approved=True)
     del row["disposition"]
@@ -1040,13 +845,6 @@ def test_select_harvest_candidates_governed_never_falls_through_to_legacy_deferr
 
 
 def test_select_harvest_candidates_legacy_plan_still_selects_on_pm_approved_bool() -> None:
-    """A LEGACY plan (no `grouping_approvals` key at all — `plan_fm=None`, or
-    a dict lacking the key) is untouched by the governed re-point: a
-    `disposition: backlogged` row with `pm_approved: true` is still a
-    candidate exactly as before. Pins the read-tolerance half of the
-    legacy-vs-governed axis this plan's contract requires — the governed
-    tests above cover the new branch, this one covers the old branch stays
-    reachable."""
     name = "test_select_harvest_candidates_legacy_plan_still_selects_on_pm_approved_bool"
     rows = [_harvest_row(pm_approved=True)]
 
@@ -1063,10 +861,4 @@ def test_select_harvest_candidates_legacy_plan_still_selects_on_pm_approved_bool
     assert [r["id"] for r in candidates_legacy_fm] == ["H1"], (
         name + ": plan_fm without grouping_approvals key, got " + repr(candidates_legacy_fm)
     )
-
-
-# ===========================================================================
-# Entry point
-# ===========================================================================
-
 

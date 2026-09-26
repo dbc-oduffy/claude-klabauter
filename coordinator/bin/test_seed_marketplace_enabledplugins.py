@@ -1,71 +1,3 @@
-"""
-test_seed_marketplace_enabledplugins.py — tests for seed-marketplace-enabledplugins.py.
-
-Mirrors claude-klabauter's shipped `seed_enabled_plugins.py` test shape (9-test
-skeleton), extended per the Director of Engineering F2/F3's fixture-matrix mandate: nested manifest,
-multi-plugin manifest, malformed manifest (skip+warn+continue), the
-`enabled_plugins_key` trap, and the effective-merged-view clobber check
-(committed settings.json X:false + local absent -> not seeded).
-
-Extended by C7 for D4/AC9 (marketplace registration): present manifest-bearing
-siblings get an `extraKnownMarketplaces` entry in `settings.local.json` AND a
-matching entry in `known_marketplaces.json`; manifestless siblings correctly
-no-op; re-run is idempotent (no duplicates); an existing entry in either
-target file (any shape) is never clobbered. Shares C1/C2's enumeration
-fixture substrate (same registry + manifest helpers) since D1 and D4 walk the
-same present-sibling list.
-
-Spec backlink: DoE-claude:pln-seed-marketplace-sibling-enabl-4806a8
-  § C2 — AC1, AC2, AC3, AC4, AC5, AC8. § C7 — AC9.
-
-Tests:
-  1. --help exits 0. Smoke test.
-  2. AC1: present sibling with a root manifest is seeded true; a present
-     sibling with no discoverable manifest correctly no-ops (no crash, no key).
-  3. AC2: idempotent re-run — second run seeds nothing and leaves the file's
-     enabledPlugins content byte-identical; an existing explicit false in the
-     TARGET file for a present sibling's key is preserved (not flipped true).
-  4. AC3: enumeration is manifest-driven — a registry entry with no matching
-     directory on disk is silently skipped (not an error); presence in a
-     hardcoded table is never consulted (there is none).
-  5. AC4: a manifest named "coordinator-claude" (the inline-load marketplace
-     name) is never seeded, even when it ships a plugins[] array; only `true`
-     is ever written (never `false`) anywhere in the module's own writes.
-  6. AC5a: malformed (non-JSON) settings.local.json -> fails loud, exit != 0,
-     nothing written (verified: reading the raw bytes back is unchanged).
-  7. AC5b: non-dict `enabledPlugins` in settings.local.json -> fails loud,
-     nothing written.
-  8. AC5c: --check-only computes and reports but writes nothing (settings.local.json
-     absent before and after).
-  9. AC5d: --settings-path is honored (writes land at the explicit path, not
-     the default resolution).
-  10. Nested manifest (example-game-repo-shape): manifest only discoverable at
-      <repo>/plugin/.claude-plugin/marketplace.json is found and seeded.
-  11. Multi-plugin marketplace: one manifest with 3 plugins[] entries seeds 3
-      distinct keys, all sharing the same "@marketplace" suffix.
-  12. Malformed manifest skip+warn+continue: one sibling's manifest is invalid
-      JSON; a second, valid sibling is still seeded; run exits 0 (not abort);
-      stderr names the skipped sibling.
-  13. enabled_plugins_key trap: a plugins[] entry carries
-      install.enabled_plugins_key = "<bare-name>" that differs from its own
-      "name" field; the seeded key uses "name@marketplace", never the bare
-      enabled_plugins_key value alone.
-  14. Effective-merged-view clobber (the Director of Engineering F3): committed settings.json has
-      "<key>": false for a present sibling's key; settings.local.json has no
-      entry for that key at all. After running, settings.local.json still has
-      no entry for that key (seeder does not write true over an elsewhere-false).
-  15. AC9: present manifest-bearing sibling gets an extraKnownMarketplaces
-      entry in settings.local.json AND a matching known_marketplaces.json
-      entry (source/installLocation/lastUpdated); a manifestless sibling
-      correctly no-ops on both files.
-  16. AC9: idempotent re-run of registration — second run adds no duplicate
-      entries and leaves both files' registration content byte-identical.
-  17. AC9: an existing extraKnownMarketplaces entry (any shape) in
-      settings.local.json, and an existing known_marketplaces.json entry
-      (any shape), are both preserved untouched — merge-never-clobber.
-
-Run with: python3 -m pytest coordinator/bin/test_seed_marketplace_enabledplugins.py
-"""
 
 from __future__ import annotations
 
@@ -82,25 +14,13 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-# ---------------------------------------------------------------------------
-# Test infrastructure
-# ---------------------------------------------------------------------------
-
-
 def _script_path() -> str:
-    """Return the absolute path to seed-marketplace-enabledplugins.py."""
     return os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "seed-marketplace-enabledplugins.py"
     )
 
 
 def _python() -> str:
-    """Return the Python interpreter to use for subprocess invocations.
-
-    Uses sys.executable — the interpreter running this test script is always a
-    valid Python interpreter. Windows-compatible zero-probe pattern (avoids
-    FileNotFoundError from subprocess probing python3/python on Windows).
-    """
     return sys.executable
 
 
@@ -137,18 +57,7 @@ def _run_cli(
     )
 
 
-# ---------------------------------------------------------------------------
-# Fixture helpers
-# ---------------------------------------------------------------------------
-
-
 def _write_registry(registry_dir: str, repos: dict[str, str]) -> None:
-    """Write registry.local.toml with quoted-literal `"repos.<slug>"` keys.
-
-    The seeder reads top-level keys starting with the literal string
-    "repos." (not TOML dotted-key nesting) — a quoted key
-    `"repos.slug" = "value"` is the TOML shape that produces exactly that.
-    """
     os.makedirs(registry_dir, exist_ok=True)
     lines = []
     for slug, path in repos.items():
@@ -161,7 +70,6 @@ def _write_registry(registry_dir: str, repos: dict[str, str]) -> None:
 def _write_manifest(
     repo_dir: str, plugins: list[dict], marketplace_name: str, nested: bool = False
 ) -> None:
-    """Write a marketplace.json manifest at repo root or the nested plugin/ location."""
     base = os.path.join(repo_dir, "plugin") if nested else repo_dir
     manifest_dir = os.path.join(base, ".claude-plugin")
     os.makedirs(manifest_dir, exist_ok=True)
@@ -171,7 +79,6 @@ def _write_manifest(
 
 
 def _write_malformed_manifest(repo_dir: str) -> None:
-    """Write invalid JSON at the root manifest location."""
     manifest_dir = os.path.join(repo_dir, ".claude-plugin")
     os.makedirs(manifest_dir, exist_ok=True)
     with open(os.path.join(manifest_dir, "marketplace.json"), "w", encoding="utf-8") as f:
@@ -209,17 +116,9 @@ def _registration_args(
     known_marketplaces_path: str,
     extra: list[str] | None = None,
 ) -> list[str]:
-    """Like `_base_args` but also pins `--known-marketplaces-path` (D4/C7's
-    second write target) for test isolation from the developer's real
-    ~/.claude/plugins/known_marketplaces.json."""
     args = _base_args(settings_path, committed_path, registry_dir, extra=extra)
     args += ["--known-marketplaces-path", known_marketplaces_path]
     return args
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 def test_help_smoke() -> None:
@@ -236,7 +135,7 @@ def test_ac1_present_sibling_seeded_manifestless_noop() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         registry_dir = os.path.join(tmp, "registry")
         repo_a = os.path.join(tmp, "repo-a")
-        repo_b = os.path.join(tmp, "repo-b")  # present, no manifest
+        repo_b = os.path.join(tmp, "repo-b")
         os.makedirs(repo_a)
         os.makedirs(repo_b)
         _write_manifest(repo_a, [{"name": "pluginA"}], "marketA")
@@ -258,10 +157,6 @@ def test_ac1_present_sibling_seeded_manifestless_noop() -> None:
 
 
 def test_registry_local_wins_and_empty_tracked_is_a_miss() -> None:
-    """DR-071 axis coverage: registry.local.toml must win over a tracked
-    registry.toml for the same repos.* slug, and an empty-string declaration
-    in the tracked file (no .local override) must not be surfaced as a
-    present (empty-path) repo."""
     name = "registry_local_wins_and_empty_tracked_is_a_miss"
     with tempfile.TemporaryDirectory() as tmp:
         registry_dir = os.path.join(tmp, "registry")
@@ -299,7 +194,6 @@ def test_ac2_idempotent_and_preserve_existing() -> None:
 
         settings_path = os.path.join(tmp, "settings.local.json")
         committed_path = os.path.join(tmp, "settings.json")
-        # Pre-seed pluginB explicitly false in the TARGET file — must survive.
         with open(settings_path, "w", encoding="utf-8") as f:
             json.dump({"enabledPlugins": {"pluginB@marketA": False}}, f)
 
@@ -593,8 +487,6 @@ def test_effective_merged_view_clobber() -> None:
 
         settings_path = os.path.join(tmp, "settings.local.json")
         committed_path = os.path.join(tmp, "settings.json")
-        # Committed (fleet-synced) settings.json explicitly disables pluginA;
-        # settings.local.json has no entry for it at all.
         with open(committed_path, "w", encoding="utf-8") as f:
             json.dump({"enabledPlugins": {"pluginA@marketA": False}}, f)
 
@@ -608,7 +500,6 @@ def test_effective_merged_view_clobber() -> None:
             if "pluginA@marketA" in enabled:
                 raise AssertionError(f"{name}: " + (f"seeder must not seed a key that is explicitly false in the"
                     f" committed settings.json, got {enabled}"))
-        # committed settings.json must never be written to.
         committed_after = _read_json(committed_path)
         if committed_after != {"enabledPlugins": {"pluginA@marketA": False}}:
             raise AssertionError(f"{name}: " + (f"committed settings.json was mutated: {committed_after}"))
@@ -619,7 +510,7 @@ def test_ac9_registration_seeded_manifestless_noop() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         registry_dir = os.path.join(tmp, "registry")
         repo_a = os.path.join(tmp, "repo-a")
-        repo_b = os.path.join(tmp, "repo-b")  # present, no manifest
+        repo_b = os.path.join(tmp, "repo-b")
         os.makedirs(repo_a)
         os.makedirs(repo_b)
         _write_manifest(repo_a, [{"name": "pluginA"}], "marketA")
@@ -712,9 +603,6 @@ def test_ac9_existing_entry_not_clobbered() -> None:
         committed_path = os.path.join(tmp, "settings.json")
         known_marketplaces_path = os.path.join(tmp, "plugins", "known_marketplaces.json")
 
-        # Pre-existing extraKnownMarketplaces entry with a deliberately
-        # different shape (e.g. a hand-authored git-source marketplace) —
-        # merge-never-clobber must leave it exactly as-is.
         existing_extra_entry = {"source": {"source": "git", "url": "https://example.invalid/mkt.git"}}
         with open(settings_path, "w", encoding="utf-8") as f:
             json.dump({"extraKnownMarketplaces": {"marketA": existing_extra_entry}}, f)
@@ -744,17 +632,7 @@ def test_ac9_existing_entry_not_clobbered() -> None:
             raise AssertionError(f"{name}: " + (f"existing known_marketplaces.json['marketA'] was clobbered: {known}"))
 
 
-# ---------------------------------------------------------------------------
 # WRITE_SURFACE declaration
-# ---------------------------------------------------------------------------
-#
-# Spec backlink: pln-writer-declared-write-surface-49d3bd,
-# chunk C3b. This writer's surface (which `<plugin>@<marketplace>` /
-# `<marketplace>` entries get seeded) depends entirely on what
-# `_read_repos_registry` + `_enumerate_present_plugin_keys` find checked out
-# on the machine running install. These tests assert the declaration stays
-# SHAPED and machine-independent — never that it matches any particular
-# machine's actual registry/marketplace state.
 
 import importlib.util as _importlib_util  # noqa: E402
 
@@ -810,8 +688,6 @@ def test_write_surface_has_three_distinct_shaped_clauses() -> None:
             raise AssertionError(f"{name}: expected every clause to be a ShapedClause, got {type(clause)!r}")
         if not hasattr(clause, "discovered_by") or not clause.discovered_by:
             raise AssertionError(f"{name}: clause missing discovered_by")
-    # (path, key) pairs must be pairwise distinct -- two live under the same
-    # file with different keys, the third lives in a different file.
     pairs = {(c.entry_template.path, c.entry_template.key) for c in clauses}
     if len(pairs) != 3:
         raise AssertionError(f"{name}: expected 3 distinct (path, key) pairs, got {pairs}")
@@ -860,7 +736,6 @@ def test_write_surface_is_independent_of_this_machines_actual_registry() -> None
     tmp = tempfile.mkdtemp()
     registry_dir = os.path.join(tmp, "registry")
 
-    # State A: nothing discovered.
     _write_registry(registry_dir, {})
     settings_path = os.path.join(tmp, "a", "settings.local.json")
     committed_path = os.path.join(tmp, "a", "settings.json")
@@ -868,7 +743,6 @@ def test_write_surface_is_independent_of_this_machines_actual_registry() -> None
     if result_a.returncode != 0:
         raise AssertionError(f"{name}: state A run failed: {result_a.stderr!r}")
 
-    # State B: one present, manifest-bearing sibling.
     repo_a = os.path.join(tmp, "repo-a")
     os.makedirs(repo_a)
     _write_manifest(repo_a, [{"name": "pluginA"}], "marketA")

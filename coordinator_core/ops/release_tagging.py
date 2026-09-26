@@ -105,14 +105,12 @@ from coordinator_core.ipc import register_op
 _PathLike = Union[str, Path, None]
 
 _GIT_TIMEOUT = 60
-# `git push` / `gh release` are network calls; cap generously but never hang forever.
 _NETWORK_TIMEOUT = 180
 
 
 def _run(
     cmd: list[str], cwd: _PathLike = None, timeout: int = _GIT_TIMEOUT
 ) -> subprocess.CompletedProcess:
-    """Direct list-argv subprocess with hang cap + console suppression."""
     return subprocess.run(
         cmd,
         cwd=str(cwd) if cwd is not None else None,
@@ -129,7 +127,6 @@ def _git(args: list[str], cwd: _PathLike = None, timeout: int = _GIT_TIMEOUT) ->
 
 
 def _gh(args: list[str], cwd: _PathLike = None) -> subprocess.CompletedProcess:
-    """All `gh` CLI traffic funnels through here — the test seam (mock gh)."""
     return _run(["gh", *args], cwd=cwd, timeout=_NETWORK_TIMEOUT)
 
 
@@ -152,10 +149,6 @@ def _validate_common(repo_root: Union[str, Path], merge_sha: str, tag: str) -> P
     if not tag:
         raise ValueError("release.cut_tag: `tag_prefix` (resolved tag name) is required")
     if tag.startswith("-"):
-        # Tag is passed positionally to
-        # several git subcommands (`tag -a`, `push origin`, `rev-parse`)
-        # with no `--` separator; a value beginning with `-` would be
-        # misparsed as a git flag rather than a ref/tag name.
         raise ValueError(
             f"release.cut_tag: tag {tag!r} looks like a git option (starts "
             "with '-'), not a tag name — refusing"
@@ -169,15 +162,6 @@ def _validate_common(repo_root: Union[str, Path], merge_sha: str, tag: str) -> P
 
 
 def _cut_tag(repo_root: Union[str, Path], merge_sha: str, tag: str) -> dict:
-    """Idempotently cut + push an annotated tag *tag* at *merge_sha*.
-
-    Mirrors the fence's own guard exactly: only creates/pushes when the tag
-    does not already resolve to `merge_sha`. Never force-overwrites a tag
-    pointing at a different sha (raises instead, same as the fence's
-    un-guarded `git tag -a` would on a real collision).
-
-    Returns {tag, created, already_at_sha, pushed}.
-    """
     root = _validate_common(repo_root, merge_sha, tag)
 
     existing_sha = _existing_tag_sha(tag, root)
@@ -201,15 +185,6 @@ def _cut_tag(repo_root: Union[str, Path], merge_sha: str, tag: str) -> dict:
 
 
 def _publish_release(tag: str, repo_root: Path, release_notes: str) -> tuple[bool, Optional[str]]:
-    """Un-draft an existing release for *tag*, or create one if absent.
-
-    Mirrors the fence's `gh release edit ... || gh release create ...`
-    fallback chain. Returns (release_created, release_url); release_created
-    is True only on the create path (edit-of-existing is not a "creation").
-    Fails loud (RuntimeError) only if BOTH the edit and the create fail —
-    an edit failure alone is expected whenever the release does not yet
-    exist (the normal first-publish case).
-    """
     notes_file = None
     try:
         edit_res = _gh(
@@ -259,15 +234,10 @@ def _publish_release(tag: str, repo_root: Path, release_notes: str) -> tuple[boo
             try:
                 Path(notes_file).unlink(missing_ok=True)
             except OSError:
-                pass  # best-effort tempfile cleanup; a leaked release-notes tempfile is harmless
+                pass
 
 
 def cut_tag(repo_root: Union[str, Path], merge_sha: str, tag_prefix: str) -> dict:
-    """Mode A (`tag_anchor: git-tag`): annotated-tag-only disclosure.
-
-    See module docstring's "Param-contract note on `tag_prefix`" — the
-    caller supplies the fully-resolved tag name via `tag_prefix`.
-    """
     return _cut_tag(repo_root, merge_sha, tag_prefix)
 
 
@@ -277,14 +247,6 @@ def cut_tag_and_publish(
     tag_prefix: str,
     release_notes: str,
 ) -> dict:
-    """Mode B (default): annotated tag, sequenced strictly before the
-    GitHub-release publish step (tag-push failure must never be masked by
-    a subsequent release-publish attempt; a release-publish failure must
-    never be conflated with a tag-push failure — C0a manifest hazard note).
-
-    See module docstring's "Param-contract note on `tag_prefix`" — the
-    caller supplies the fully-resolved tag name via `tag_prefix`.
-    """
     tag = tag_prefix
     tag_result = _cut_tag(repo_root, merge_sha, tag)
     root = Path(repo_root)

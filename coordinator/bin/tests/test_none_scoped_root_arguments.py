@@ -44,8 +44,6 @@ _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
 def _load_by_path(module_name: str, filename: str):
-    """Load a `coordinator/bin/*.py` script by file path — none of these
-    are importable package members (hyphenated / extensionless filenames)."""
     path = _BIN_DIR / filename
     loader = SourceFileLoader(module_name, str(path))
     spec = importlib.util.spec_from_file_location(module_name, str(path), loader=loader)
@@ -54,10 +52,6 @@ def _load_by_path(module_name: str, filename: str):
     loader.exec_module(module)
     return module
 
-
-# ---------------------------------------------------------------------------
-# D2 — coordinator-workflow-scaffold.py (workflow.scaffold, scope "none")
-# ---------------------------------------------------------------------------
 
 _workflow_scaffold = _load_by_path(
     "test_none_scoped_workflow_scaffold_cli", "coordinator-workflow-scaffold.py"
@@ -109,10 +103,6 @@ def test_workflow_scaffold_refuses_repo_flag(stub_workflow_cc_invoke_bare, capsy
     assert '"none"' in err
     assert "DR-279" in err
 
-
-# ---------------------------------------------------------------------------
-# D3 — cartography.py (cartography.*, all scope "none")
-# ---------------------------------------------------------------------------
 
 _cartography = _load_by_path("test_none_scoped_cartography_cli", "cartography.py")
 
@@ -171,19 +161,8 @@ def test_cartography_refuses_repo_flag_before_any_git_or_resolution(
 
 
 def test_cartography_module_defines_no_git_spawning_resolver():
-    """D3's own regression guard: `_resolve_repo_root` (the git-spawn-and-
-    sys.exit(2) helper this chunk removed) must not reappear on the module."""
     assert not hasattr(_cartography, "_resolve_repo_root")
 
-
-# ---------------------------------------------------------------------------
-# C28 — reap-integrated-review-findings.py::_reap_native no longer passes the
-# reserved `_claude_klabauter_root=` kwarg into cc_invoke.cc_invoke(). cc_invoke()'s own
-# docstring reserves that keyword for route()'s internal forwarding; callers
-# outside route() should omit it and let cc_invoke() self-resolve.
-#
-# Spec backlink: docs/dispatch-briefs/2026-08-20-a-refusal-cannot-exit-zero/C28.md
-# ---------------------------------------------------------------------------
 
 _reap_findings = _load_by_path(
     "test_none_scoped_reap_integrated_review_findings_cli",

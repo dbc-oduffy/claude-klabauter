@@ -1,17 +1,3 @@
-"""
-coordinator_core.session_ledger.test_closing_session
-
-Covers the ``closing_session`` attribution added to ``aggregate_chain_loe``
-per cross-repo/archive/2026-08-11-example-market-data-repo-em-chain-loe-ledger-
-ordering-and-defeated-tell.md — the chain-terminal session heads no handoff
-and appends its ``## Session Ledger`` row AFTER the completion-entry scaffold
-calls this aggregator, so summing handoff rows alone always undercounts by
-exactly that session's contribution, and the ``N of M`` tell that was supposed
-to reveal it read ``"1 of 1"`` on a single-handoff chain because both halves
-counted handoffs.
-
-Fixture layout mirrors ``test_dispatch_fallback.py``.
-"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -23,9 +9,6 @@ _CLOSING_SID = "22222222-2222-4222-8222-222222222222"
 
 
 def _init_repo(tmp_path: Path) -> Path:
-    """Directory skeleton only — `aggregate()` takes every root explicitly and
-    `dag.walk_forward` infers its own from the handoff path, so no `git init`
-    spawn is owed here (unlike the CLI leg's `resolve_repo_root`)."""
     (tmp_path / "state" / "handoffs").mkdir(parents=True)
     (tmp_path / "archive" / "handoffs").mkdir(parents=True)
     return tmp_path
@@ -62,7 +45,6 @@ def _aggregate(repo: Path, handoff: Path, closing=None):
 
 
 def test_closing_session_row_absent_is_attributed_and_told(tmp_path):
-    """The reported defect: 8 dispatches rendered as the predecessor's 0d/1o."""
     repo = _init_repo(tmp_path)
     h = repo / "state" / "handoffs" / "term.md"
     _write_handoff(h, _ledger_row(_PRED_SID, 0, 1))
@@ -76,13 +58,11 @@ def test_closing_session_row_absent_is_attributed_and_told(tmp_path):
     assert result["exit_code"] == 0
     assert result["agent_dispatches"] == 8
     assert result["opus_dispatches"] == 1
-    # The tell fires: one session accounted for by a row, two owe one.
     assert result["chain_sessions_with_ledger"] == "1 of 2"
     assert result["chain_session_total"] == 2
 
 
 def test_closing_session_row_present_is_not_double_counted(tmp_path):
-    """Idempotence: once the row lands, the caller-supplied tally is inert."""
     repo = _init_repo(tmp_path)
     h = repo / "state" / "handoffs" / "term.md"
     _write_handoff(h, _ledger_row(_PRED_SID, 0, 1) + _ledger_row(_CLOSING_SID, 8, 0))
@@ -99,7 +79,6 @@ def test_closing_session_row_present_is_not_double_counted(tmp_path):
 
 
 def test_closing_session_matches_the_abbreviated_oneline_sid(tmp_path):
-    """The LIVE grammar abbreviates the sid; a raw equality dedup would double-count."""
     repo = _init_repo(tmp_path)
     h = repo / "state" / "handoffs" / "term.md"
     _write_handoff(
@@ -121,7 +100,6 @@ def test_closing_session_matches_the_abbreviated_oneline_sid(tmp_path):
 
 
 def test_closing_session_without_counts_still_fires_the_tell(tmp_path):
-    """An unresolvable dispatched-agents.txt costs the attribution, not the tell."""
     repo = _init_repo(tmp_path)
     h = repo / "state" / "handoffs" / "term.md"
     _write_handoff(h, _ledger_row(_PRED_SID, 4, 2))
@@ -133,7 +111,6 @@ def test_closing_session_without_counts_still_fires_the_tell(tmp_path):
 
 
 def test_no_closing_session_preserves_handoff_based_output(tmp_path):
-    """Negative-spec: the standalone leg stays byte-identical to the oracle."""
     repo = _init_repo(tmp_path)
     h = repo / "state" / "handoffs" / "term.md"
     _write_handoff(h, _ledger_row(_PRED_SID, 4, 2))

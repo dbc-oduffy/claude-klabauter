@@ -1,9 +1,3 @@
-"""Tests for `coordinator_core.warm.dispatch_ack.AckStore` -- the state
-machine `coordinator/contract/dispatch-ack-reconcile-contract.md` describes
-(key, four poll states, five outcomes, retention, tombstone).
-
-Spec backlink: docs/plans/2026-09-23-warm-dispatch-reconcile.md (C3).
-"""
 
 from __future__ import annotations
 
@@ -71,15 +65,10 @@ def test_stamp_not_dispatched_surfaces_as_not_received():
         "state": dispatch_ack.STATE_NOT_RECEIVED,
         "outcome": dispatch_ack.OUTCOME_NOT_DISPATCHED,
     }
-    # The not-dispatched route makes a re-run sound only because `admit`
-    # refuses a replay of the same key (contract § 2, § 4).
     assert store.admit(key, "ceremony.commit_v2") is False
 
 
 def test_absent_key_is_tombstoned_by_the_lookup_itself():
-    """D3: `status` on a never-admitted, non-evicted key answers
-    `not_received` AND writes a tombstone in the same call -- a frame
-    carrying that key arriving later must never be admitted."""
     store = _store()
     key = _key(1, 1_000_500)
     assert store.status(key) == {
@@ -87,7 +76,6 @@ def test_absent_key_is_tombstoned_by_the_lookup_itself():
         "outcome": dispatch_ack.OUTCOME_NOT_DISPATCHED,
     }
     assert store.admit(key, "ceremony.commit_v2") is False
-    # Polling again answers the same way, from the tombstone this time.
     assert store.status(key) == {
         "state": dispatch_ack.STATE_NOT_RECEIVED,
         "outcome": dispatch_ack.OUTCOME_NOT_DISPATCHED,
@@ -105,7 +93,7 @@ def test_admit_refuses_a_key_already_admitted_in_any_state():
 
 def test_key_minted_before_boot_is_unknowable_engine_restarted():
     store = _store()
-    key = _key(1, 500_000)  # before boot_ns=1_000_000
+    key = _key(1, 500_000)
     assert store.status(key) == {
         "state": dispatch_ack.STATE_UNKNOWABLE,
         "reason": dispatch_ack.REASON_ENGINE_RESTARTED,
@@ -119,28 +107,21 @@ def test_eviction_raises_low_water_and_admit_refuses_at_or_below_it():
     for k in keys:
         store.admit(k, "ceremony.commit_v2")
 
-    # FIFO: admitting a 3rd key past capacity 2 evicts the 1st.
     assert store.status(keys[0]) == {
         "state": dispatch_ack.STATE_UNKNOWABLE,
         "reason": dispatch_ack.REASON_EXPIRED,
     }
-    # Refused even though no tombstone record for it personally survived
-    # eviction -- `low_water_ns` alone is the refusal condition (D3, D4).
     assert store.admit(keys[0], "ceremony.commit_v2") is False
 
 
 def test_stamp_on_a_key_the_store_never_admitted_is_a_silent_noop():
     store = _store()
     key = _key(1, 1_000_100)
-    store.stamp(key, dispatch_ack.OUTCOME_RESULT)  # never admitted
-    # No crash, and no phantom record created for it either.
+    store.stamp(key, dispatch_ack.OUTCOME_RESULT)
     assert store.status(key)["state"] == dispatch_ack.STATE_NOT_RECEIVED
 
 
 def test_n_thread_contention_no_key_both_admitted_and_tombstoned():
-    """Concurrent `admit` and `status` racing on the SAME key must never
-    leave it in two states at once -- exactly the 2026-09-01 hazard this
-    store exists to close."""
     store = _store()
     key = _key(1, 1_000_100)
     admit_results: list[bool] = []
@@ -161,10 +142,6 @@ def test_n_thread_contention_no_key_both_admitted_and_tombstoned():
     for t in threads:
         t.join(timeout=5)
 
-    # Whichever ran first, the key ends in exactly one terminal disposition:
-    # either admitted (now executing/stamped) or tombstoned not_received --
-    # never both an admitted True and a not_received tombstone for the same
-    # key surviving side by side.
     final = store.status(key)
     if admit_results[0]:
         assert final["state"] in (dispatch_ack.STATE_EXECUTING, dispatch_ack.STATE_FINISHED)

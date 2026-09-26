@@ -19,14 +19,10 @@ from pathlib import Path
 
 
 def sandbox_home(monkeypatch, home) -> Path:
-    """Point every home-resolution env var at ``home`` and return it as a Path.
-
-    Creates ``home`` if absent so callers can pass a bare ``tmp_path / "home"``.
-    """
     home = Path(home)
     home.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))  # Windows: expanduser prefers this
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.delenv("HOMEDRIVE", raising=False)
     monkeypatch.delenv("HOMEPATH", raising=False)
     return home

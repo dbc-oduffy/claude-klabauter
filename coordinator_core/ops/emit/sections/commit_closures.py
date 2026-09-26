@@ -148,23 +148,10 @@ from coordinator_core.commit_ledger import store as ledger_store
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.emit.context import EmitContext
 
-# %H-derived shas (the pre-ledger source) always emitted a full 40-char lowercase hex SHA;
-# a ledger entry's ``sha`` field is arbitrary JSON, so this defensive check is still owed --
-# a value failing this shape indicates a corrupt/hand-edited ledger line, not a valid commit
-# identity, and is quarantined into ``malformed`` rather than emitted with a bad key.
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _read_all_ledger_entries(ctx: EmitContext) -> List[Dict[str, Any]]:
-    """Read every commit-ledger entry across every ``handoff_id``'s ``.jsonl`` file.
-
-    ``store.read_entries`` is keyed per ``handoff_id``; this globs ``store.ledger_dir(...)``
-    for every ledger file and calls that function once per file (its stem is the
-    ``handoff_id``), reusing its existing malformed-line-skipping and per-sha dedup
-    semantics rather than re-parsing the JSONL shape here. Pure local file I/O -- no
-    subprocess. Returns ``[]`` when the session hub or ledger directory is unresolvable, or
-    when no ledger files exist yet (a fresh repo, or one with no ledger-wired commits).
-    """
     ldir = ledger_store.ledger_dir(str(ctx.repo_root))
     if ldir is None or not ldir.is_dir():
         return []
@@ -213,8 +200,8 @@ def collect(ctx: EmitContext) -> Tuple[List[dict], List[dict]]:
 
     malformed: List[dict] = []
     sha_to_item_ids: Dict[str, List[str]] = {}
-    close_pairs: List[Tuple[str, str]] = []  # (sha, item_id)
-    revert_pairs: List[Tuple[str, str]] = []  # (sha, reverted_sha)
+    close_pairs: List[Tuple[str, str]] = []
+    revert_pairs: List[Tuple[str, str]] = []
     all_shas: set = set()
 
     for entry in entries:
@@ -256,7 +243,7 @@ def collect(ctx: EmitContext) -> Tuple[List[dict], List[dict]]:
     for sha, reverted_sha in revert_pairs:
         item_ids = sha_to_item_ids.get(reverted_sha)
         if not item_ids:
-            continue  # reverted sha names no closure row (AC17) -- "not a revert", never an error.
+            continue
         for item_id in item_ids:
             records.append({
                 "repo": ctx.repo_name,

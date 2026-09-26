@@ -82,13 +82,6 @@ PRIORITY = 129
 #: The exact basename this guard protects (reference hook `_SENTINEL_NAME`).
 _SENTINEL_NAME = ".coordinator-override-worktree-guard"
 
-#: Deny reason. 2026-08-13 (docs/plans/2026-08-13-guard-messages-stop-
-#: handing-agents-the-keys.md, C4c): dropped the trailing "Removing an
-#: override re-locks it" clause, unconditionally, for every audience -- it
-#: is a statement that an unlock/override exists (AC-1 bans this for a
-#: subagent render), and this guard has no doc pointer to substitute for an
-#: EM-audience render (AC-2 caps that render at a wiki pointer only; no
-#: override env var backs this sentinel).
 _DENY_REASON = (
     "[worktree guard] BLOCKED: overrides can't be self-granted.\n"
     "Instead: dispatch scoped, disjoint-path edits in this tree.\n"
@@ -108,11 +101,6 @@ _DENY_REASON = (
     ),
 )
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the worktree-override-sentinel-write-ban gate against a
-    PreToolUse payload.
-
-    Returns `None` (allow) or the nested hard-deny envelope.
-    """
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
 

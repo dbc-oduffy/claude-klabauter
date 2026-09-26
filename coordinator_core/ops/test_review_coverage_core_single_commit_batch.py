@@ -24,11 +24,6 @@ import subprocess
 
 import pytest
 
-# Module-level rather than per-test: every spawn site in this file is a
-# HELPER (`_git`, `_commit`, `_head`, the `repo` fixture), and a decorator
-# only ever reaches a collectible `test_*`. Four of the five tests build a
-# real repo, so tiering the whole file costs one pure-regex test its place
-# on the fast tier and is the honest trade the spawn ratchet asks for.
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 import coordinator_core.ops.review_coverage_core as rcc
@@ -76,14 +71,6 @@ def _records(ranges):
 
 
 def _both_ways(records, cwd, monkeypatch):
-    """(batched_result, unbatched_result, batched_spawns, unbatched_spawns).
-
-    The pristine `subprocess.run` is captured ONCE, before either phase
-    patches it. Re-reading it per phase wraps the second counter around the
-    first, so the first phase's tally silently absorbs the second's -- which
-    is how this helper's first draft reported the batch spawning MORE than
-    the path it replaces.
-    """
     pristine = subprocess.run
     counts = {"batched": 0, "unbatched": 0}
 
@@ -120,11 +107,6 @@ def test_batched_and_unbatched_agree_and_the_batch_spawns_less(repo, monkeypatch
 
 
 def test_a_merge_commit_falls_back_rather_than_over_crediting(repo, monkeypatch):
-    """`X~1..X` on a merge is X PLUS the whole second-parent branch, not {X}.
-
-    This is the case where the fast path would silently UNDER-credit (it would
-    answer `{X}`) if the parent count were assumed rather than read.
-    """
     base = _head(repo)
     _git("checkout", "-q", "-b", "side", cwd=repo)
     side = _commit(repo, "side.txt")
@@ -146,9 +128,6 @@ def test_a_merge_commit_falls_back_rather_than_over_crediting(repo, monkeypatch)
 
 
 def test_a_root_commit_range_falls_back(repo, monkeypatch):
-    """`X~1` does not resolve for a parentless commit; the fallback must
-    reproduce the existing skip behaviour rather than the batch inventing an
-    answer."""
     root = _head(repo)
     records = _records([f"{root}~1..{root}"])
 
@@ -158,8 +137,6 @@ def test_a_root_commit_range_falls_back(repo, monkeypatch):
 
 
 def test_a_multi_commit_range_is_untouched_by_the_batch(repo, monkeypatch):
-    """A genuine range must never enter the batch: combining ranges is the
-    under-count this module's negative spec forbids."""
     first = _commit(repo, "a.txt")
     _commit(repo, "b.txt")
     last = _commit(repo, "c.txt")
@@ -173,9 +150,6 @@ def test_a_multi_commit_range_is_untouched_by_the_batch(repo, monkeypatch):
 
 
 def test_only_the_single_commit_shape_is_recognised():
-    """Pure-regex guard, no repo: the shapes admitted to the fast path are
-    exactly `<sha>~1..<sha>` and `<sha>^..<sha>` with the SAME sha on both
-    sides. A pair of different shas is a real range and must not match."""
     m = rcc._SINGLE_COMMIT_RANGE_RE
     assert m.match("abc1234~1..abc1234")
     assert m.match("abc1234^..abc1234")

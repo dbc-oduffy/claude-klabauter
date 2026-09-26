@@ -39,15 +39,8 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
-# Declared, not excused: `test_cli_subprocess_*` and the other CLI-invoking
-# cases below spawn a real `sys.executable` child running
-# handoff-deliverable-carry.py because the property under test is the
 # real CLI's stdout/exit-code contract (the `DLVR_ID=`/`INITIATIVE_ID=`
-# eval-consumable assignment lines, and the dropped/divergent-join exit
-# codes) -- no in-process call observes that subprocess-boundary contract.
 # The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
-# explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -77,8 +70,6 @@ def _write_frontmatter(path, **fields):
 
 
 def _load_ops():
-    # The CLI's cascade names are placeholders until `_import_ops()` fills
-    # them (lazy imports, 1b6c42324a) — in-process callers must run it too.
     return _module._import_ops()
 
 
@@ -98,7 +89,7 @@ def test_carry_from_plan_frontmatter(tmp_path):
 def test_falls_back_to_predecessor_when_plan_lacks_fields(tmp_path):
     read_frontmatter_field, mint = _load_ops()
     plan = tmp_path / "plan.md"
-    _write_frontmatter(plan)  # no deliverable_id, no initiative
+    _write_frontmatter(plan)
     predecessor = tmp_path / "predecessor.md"
     _write_frontmatter(predecessor, deliverable_id="dlv-predecessor-xyz789", initiative="init-bar")
 
@@ -137,7 +128,6 @@ def test_missing_plan_and_predecessor_paths_degrade_gracefully(tmp_path):
 
 
 def test_active_plan_with_deliverable_id_carries_no_failure(tmp_path):
-    """Case 1 — active plan names a deliverable_id -> unchanged carry path, no failure."""
     read_frontmatter_field, mint = _load_ops()
     plan = tmp_path / "plan.md"
     _write_frontmatter(plan, deliverable_id="dlv-populated-thing-abc123")
@@ -150,18 +140,15 @@ def test_active_plan_with_deliverable_id_carries_no_failure(tmp_path):
 
 
 def test_active_plan_without_deliverable_id_and_no_predecessor_fails_loud(tmp_path):
-    """Case 2 — active plan present but carries NO deliverable_id, no predecessor
-    to fall back to -> this is a dropped join, must fail loud (not silently mint)."""
     read_frontmatter_field, mint = _load_ops()
     plan = tmp_path / "plan.md"
-    _write_frontmatter(plan)  # no deliverable_id
+    _write_frontmatter(plan)
 
     with pytest.raises(_module.DroppedDeliverableJoinError):
         _module.resolve_deliverable_and_initiative(read_frontmatter_field, mint, str(plan), None)
 
 
 def test_no_active_plan_and_no_predecessor_stays_benign_mint(tmp_path):
-    """Case 3 — nothing to carry from at all -> unchanged benign mint-from-slug."""
     read_frontmatter_field, mint = _load_ops()
 
     dlvr_id, initiative_id = _module.resolve_deliverable_and_initiative(
@@ -249,16 +236,6 @@ def test_cli_missing_subcommand_exits_nonzero():
 
 
 def test_additional_predecessor_flag_accumulates_via_append(tmp_path):
-    """Repeated
-    --additional-predecessor flags accumulate and EVERY accumulated rung reaches the
-    cascade's comparison.
-
-    Negative-spec: this must exercise the real CLI, never a locally-reconstructed
-    argparse parser — a parser rebuilt in the test body asserts that argparse's
-    `append` action works (it does) and would keep passing if the flag were deleted
-    from the CLI outright. Three mutually-divergent rungs are used so the raise has to
-    enumerate all of them: a CLI that dropped every flag but the last would still exit
-    5, and only the all-three-ids assertion distinguishes accumulation from that."""
     plan = tmp_path / "plan.md"
     first = tmp_path / "first.md"
     second = tmp_path / "second.md"
@@ -293,7 +270,6 @@ def test_additional_predecessor_flag_accumulates_via_append(tmp_path):
 
 
 def test_additional_predecessor_flag_absent_defaults_to_empty_list():
-    """Flag omitted -> args.additional_predecessor defaults to []."""
     proc = subprocess.run(
         [sys.executable, _CLI, "resolve"],
         capture_output=True,
@@ -310,10 +286,6 @@ def test_additional_predecessor_flag_absent_defaults_to_empty_list():
 
 
 def test_additional_predecessor_reaches_cascade_kwarg_and_flags_divergence(tmp_path):
-    """Pass-through from the CLI flag to resolve_deliverable_and_initiative's
-    additional_predecessors kwarg, including a divergence case that exits non-zero
-    (mirrors the plan/predecessor divergent-join CLI test above, but sourced from
-    --additional-predecessor instead of --predecessor)."""
     plan = tmp_path / "plan.md"
     extra = tmp_path / "extra.md"
     _write_frontmatter(plan, deliverable_id="dlv-plan-side-333")
@@ -344,10 +316,6 @@ def test_additional_predecessor_reaches_cascade_kwarg_and_flags_divergence(tmp_p
 
 
 def test_additional_predecessor_reaches_cascade_kwarg_when_agreeing(tmp_path):
-    """Same pass-through, agreeing case: no divergence, carry proceeds normally,
-    confirming the additional-predecessor value actually reached the kwarg (a plan
-    value alone would also exit 0, so this pins that the extra rung was read and
-    compared, not merely accepted and ignored)."""
     plan = tmp_path / "plan.md"
     extra = tmp_path / "extra.md"
     _write_frontmatter(plan, deliverable_id="dlv-agree-555")

@@ -35,11 +35,6 @@ def _write(path, data=b"payload"):
     path.write_bytes(data)
 
 
-# ---------------------------------------------------------------------------
-# main() OS gate
-# ---------------------------------------------------------------------------
-
-
 def test_main_noop_on_non_windows(monkeypatch):
     monkeypatch.setattr(mod, "_is_windows", lambda: False)
     assert main([]) == 0
@@ -61,17 +56,10 @@ def test_main_reads_check_only_env(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(mod, "_resolve_python_bin", lambda: str(tmp_path / "python.exe"))
     monkeypatch.setenv("CHECK_ONLY", "1")
     rc = main([])
-    # Stale shim -- check-only now fails loud rather than reporting 0.
     assert rc == 1
     captured = capsys.readouterr()
     assert "would install" in captured.out
-    # No mutation happened.
     assert (tmp_path / "python3.exe").read_bytes() == b"bbb"
-
-
-# ---------------------------------------------------------------------------
-# _resolve_python_bin — PythonPinInvalid fallback
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_python_bin_returns_resolved_value(monkeypatch):
@@ -83,8 +71,6 @@ def test_resolve_python_bin_returns_resolved_value(monkeypatch):
 
     monkeypatch.setattr("coordinator_core.pyresolve.resolve_python_bin", _fake_resolve)
     assert _resolve_python_bin() == "/opt/found/python"
-    # Pin the kwarg the callsite is handed
-    # so this test can't pass if prefer_windowless is silently dropped.
     assert captured == {"prefer_windowless": False}
 
 
@@ -99,20 +85,7 @@ def test_resolve_python_bin_falls_back_on_invalid_pin(monkeypatch):
 
     monkeypatch.setattr("coordinator_core.pyresolve.resolve_python_bin", _raise)
     assert _resolve_python_bin() == sys.executable
-    # Pin the kwarg the callsite is handed
-    # so this test can't pass if prefer_windowless is silently dropped.
     assert captured == {"prefer_windowless": False}
-
-
-# ---------------------------------------------------------------------------
-# _resolve_python_bin -- console-vs-windowless shim safety
-# ---------------------------------------------------------------------------
-#
-# Mirrors coordinator_core.install.test_substrate's
-# "_resolve_baked_python_bin -- console-vs-windowless bake safety" coverage:
-# this shim is, like python3.cmd, a general-purpose interpreter any caller may
-# hand a live stdin pipe, so it must (a) request the console interpreter and
-# (b) reject a windowless result outright as defense-in-depth.
 
 
 def test_resolve_python_bin_requests_console_interpreter(monkeypatch):
@@ -180,9 +153,7 @@ def test_resolve_python_bin_pythonpininvalid_fallback_rejects_windowless_sys_exe
     assert "windowless" in err
 
 
-# ---------------------------------------------------------------------------
 # _install_shim — no PYTHON_BIN resolved
-# ---------------------------------------------------------------------------
 
 
 def test_install_shim_no_interpreter_resolved(capsys):
@@ -190,12 +161,7 @@ def test_install_shim_no_interpreter_resolved(capsys):
     assert rc == 0
     captured = capsys.readouterr()
     assert "no Python interpreter resolved" in captured.err
-    assert "PYTHON_BIN" not in captured.err or True  # message names the state, not the literal env var
-
-
-# ---------------------------------------------------------------------------
-# _install_shim — launcher fallback
-# ---------------------------------------------------------------------------
+    assert "PYTHON_BIN" not in captured.err or True
 
 
 @pytest.mark.parametrize("launcher", ["py", "pyw"])
@@ -207,11 +173,6 @@ def test_install_shim_launcher_skip(launcher, capsys):
     assert launcher in captured.err
 
 
-# ---------------------------------------------------------------------------
-# _install_shim — source binary missing
-# ---------------------------------------------------------------------------
-
-
 def test_install_shim_source_missing(tmp_path, capsys):
     missing = tmp_path / "nonexistent" / "python.exe"
     rc = _install_shim(str(missing), check_only=False)
@@ -220,14 +181,9 @@ def test_install_shim_source_missing(tmp_path, capsys):
     assert "not found" in captured.err
 
 
-# ---------------------------------------------------------------------------
-# _install_shim — AppX zero-byte reparse stub (exists, not a regular file)
-# ---------------------------------------------------------------------------
-
-
 def test_install_shim_appx_stub_fails_loud(tmp_path, capsys):
     _write(tmp_path / "python.exe")
-    (tmp_path / "python3.exe").mkdir()  # a directory: exists(), not is_file()
+    (tmp_path / "python3.exe").mkdir()
     rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
     assert rc == 1
     captured = capsys.readouterr()
@@ -235,26 +191,20 @@ def test_install_shim_appx_stub_fails_loud(tmp_path, capsys):
     assert "install-substrate" in captured.err
 
 
-# ---------------------------------------------------------------------------
-# _install_shim — `._pth` executable-basename trap
-# ---------------------------------------------------------------------------
-
-
 def test_install_shim_exe_basename_pth_trap_fails_loud(tmp_path, capsys):
     _write(tmp_path / "python.exe")
-    _write(tmp_path / "python._pth", b"python312.zip\n.\n")  # keyed off python.exe's own basename
+    _write(tmp_path / "python._pth", b"python312.zip\n.\n")
     rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
     assert rc == 1
     captured = capsys.readouterr()
     assert "python._pth" in captured.err
     assert "isolated mode" in captured.err.lower() or "isolation" in captured.err.lower()
-    # No shim installed -- fail loud, not a degraded shim.
     assert not (tmp_path / "python3.exe").exists()
 
 
 def test_install_shim_dll_named_pth_does_not_trip_trap(tmp_path, capsys):
     _write(tmp_path / "python.exe", b"fresh-bytes")
-    _write(tmp_path / "python312._pth", b"python312.zip\n.\n")  # DLL-named -- unaffected
+    _write(tmp_path / "python312._pth", b"python312.zip\n.\n")
     rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
     assert rc == 0
     assert (tmp_path / "python3.exe").is_file()
@@ -262,10 +212,6 @@ def test_install_shim_dll_named_pth_does_not_trip_trap(tmp_path, capsys):
 
 
 def test_install_shim_python3_only_pth_does_not_trip_trap(tmp_path, capsys):
-    # A distribution shipping only python3._pth (no python._pth) does not
-    # trap: the candidate is always built off py_exe.stem, which is
-    # "python", so the checked candidate is always "python._pth" -- never
-    # "python3._pth" -- regardless of what other ._pth files sit alongside.
     _write(tmp_path / "python.exe", b"fresh-bytes")
     _write(tmp_path / "python3._pth", b"python3.zip\n.\n")
     rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
@@ -284,8 +230,6 @@ def test_install_shim_unrelated_basename_pth_does_not_trip_trap(tmp_path, capsys
 
 
 def test_install_shim_pth_trap_case_insensitive_lower(tmp_path, capsys):
-    # Pins the assumed case-insensitive filesystem behavior (default on
-    # Windows) -- a future change in that assumption should break this test.
     _write(tmp_path / "python.exe")
     _write(tmp_path / "Python._pth", b"python312.zip\n.\n")
     rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
@@ -301,11 +245,6 @@ def test_install_shim_pth_trap_case_insensitive_upper(tmp_path, capsys):
     assert not (tmp_path / "python3.exe").exists()
 
 
-# ---------------------------------------------------------------------------
-# _install_shim — already valid (hardlinked) shim is an idempotent no-op
-# ---------------------------------------------------------------------------
-
-
 def test_install_shim_already_valid_noop(tmp_path, capsys):
     _write(tmp_path / "python.exe", b"same-bytes")
     os.link(tmp_path / "python.exe", tmp_path / "python3.exe")
@@ -316,9 +255,7 @@ def test_install_shim_already_valid_noop(tmp_path, capsys):
     assert captured.err == ""
 
 
-# ---------------------------------------------------------------------------
 # _install_shim — CHECK_ONLY on a stale shim reports without mutating
-# ---------------------------------------------------------------------------
 
 
 def test_install_shim_check_only_stale_no_mutation(tmp_path, capsys):
@@ -331,11 +268,6 @@ def test_install_shim_check_only_stale_no_mutation(tmp_path, capsys):
     assert (tmp_path / "python3.exe").read_bytes() == b"old-bytes"
 
 
-# ---------------------------------------------------------------------------
-# _install_shim — stale shim gets removed and re-hardlinked
-# ---------------------------------------------------------------------------
-
-
 def test_install_shim_stale_reshimmed_via_hardlink(tmp_path, capsys):
     _write(tmp_path / "python.exe", b"new-bytes")
     _write(tmp_path / "python3.exe", b"old-bytes")
@@ -344,13 +276,7 @@ def test_install_shim_stale_reshimmed_via_hardlink(tmp_path, capsys):
     captured = capsys.readouterr()
     assert "hardlinked" in captured.err
     assert (tmp_path / "python3.exe").read_bytes() == b"new-bytes"
-    # Confirm it's actually a hardlink (same inode), not a copy.
     assert (tmp_path / "python.exe").stat().st_ino == (tmp_path / "python3.exe").stat().st_ino
-
-
-# ---------------------------------------------------------------------------
-# _install_shim — fresh install (no pre-existing shim) via hardlink
-# ---------------------------------------------------------------------------
 
 
 def test_install_shim_fresh_hardlink(tmp_path, capsys):
@@ -359,11 +285,6 @@ def test_install_shim_fresh_hardlink(tmp_path, capsys):
     assert rc == 0
     assert (tmp_path / "python3.exe").is_file()
     assert (tmp_path / "python3.exe").read_bytes() == b"fresh-bytes"
-
-
-# ---------------------------------------------------------------------------
-# _install_shim — hardlink fails, falls back to copy
-# ---------------------------------------------------------------------------
 
 
 def test_install_shim_hardlink_fails_falls_back_to_copy(tmp_path, monkeypatch, capsys):
@@ -378,11 +299,6 @@ def test_install_shim_hardlink_fails_falls_back_to_copy(tmp_path, monkeypatch, c
     captured = capsys.readouterr()
     assert "copied" in captured.err
     assert (tmp_path / "python3.exe").read_bytes() == b"copy-me"
-
-
-# ---------------------------------------------------------------------------
-# _install_shim — both hardlink and copy fail
-# ---------------------------------------------------------------------------
 
 
 def test_install_shim_hardlink_and_copy_both_fail(tmp_path, monkeypatch, capsys):
@@ -400,11 +316,6 @@ def test_install_shim_hardlink_and_copy_both_fail(tmp_path, monkeypatch, capsys)
     assert rc == 1
 
 
-# ---------------------------------------------------------------------------
-# _is_appx_stub
-# ---------------------------------------------------------------------------
-
-
 def test_is_appx_stub_false_for_nonexistent_path(tmp_path):
     assert _is_appx_stub(tmp_path / "nope.exe") is False
 
@@ -417,13 +328,8 @@ def test_is_appx_stub_false_for_regular_file(tmp_path):
 
 def test_is_appx_stub_true_for_exists_not_file(tmp_path):
     target = tmp_path / "python3.exe"
-    target.mkdir()  # exists(), not is_file() — the module's stand-in for the reparse stub
+    target.mkdir()
     assert _is_appx_stub(target) is True
-
-
-# ---------------------------------------------------------------------------
-# _classify_python3 — install.detect_python3_appx_stub
-# ---------------------------------------------------------------------------
 
 
 def test_classify_python3_not_found(monkeypatch):
@@ -433,7 +339,7 @@ def test_classify_python3_not_found(monkeypatch):
 
 def test_classify_python3_stub_via_appx_probe(monkeypatch, tmp_path):
     stub = tmp_path / "python3"
-    stub.mkdir()  # exists(), not is_file()
+    stub.mkdir()
     monkeypatch.setattr(mod.shutil, "which", lambda name: str(stub))
 
     def _fail_if_called(*args, **kwargs):
@@ -511,18 +417,10 @@ def test_classify_python3_idempotent_double_invocation(monkeypatch, tmp_path):
 
 
 def test_classify_python3_real_machine_does_not_crash():
-    # Unmocked — exercises the real shutil.which / subprocess.run path on
-    # whatever machine runs the suite. Must never raise, and on macOS/Linux
-    # must never misreport "stub" (no AppX reparse-point shape exists here).
     result = _classify_python3()
     assert result["classification"] in {"not_found", "ready", "stub"}
     if sys.platform not in ("win32", "cygwin"):
         assert result["classification"] != "stub"
-
-
-# ---------------------------------------------------------------------------
-# install.detect_python3_appx_stub — registered op handler
-# ---------------------------------------------------------------------------
 
 
 def test_op_registered_under_install_key():

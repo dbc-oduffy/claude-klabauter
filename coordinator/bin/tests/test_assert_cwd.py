@@ -1,20 +1,3 @@
-"""test_assert_cwd — pytest tests for coordinator/bin/assert-cwd.py.
-
-Spec backlink: scratchpad/scout-D-claude-klabauter-sizing.md § Item 2 (new-project
-cwd-assert, DoE-claude new-project/SKILL.md:76).
-
-Subprocess-driven (not in-process import): assert-cwd's whole contract is
-"read the CALLING process's cwd via `git rev-parse --show-toplevel`" -- an
-in-process call can't vary that without chdir'ing the test runner itself
-(unsafe under parallel test execution), so each test spawns the real script
-with an explicit `cwd=` instead.
-
-Coverage:
-    test_match_exits_zero
-    test_mismatch_exits_one_with_stderr_message
-    test_not_a_git_worktree_exits_one
-    test_wrong_arg_count_exits_two
-"""
 from __future__ import annotations
 
 import subprocess
@@ -25,8 +8,6 @@ from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,

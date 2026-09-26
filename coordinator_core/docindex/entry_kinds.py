@@ -70,19 +70,14 @@ _READERS: "dict[str, EntryReader]" = {}
 
 
 class UnknownEntryKindError(ValueError):
-    """Raised when an index declares an `entry_kind` with no registered reader."""
+    pass
 
 
 class MissingEntryFieldError(ValueError):
-    """Raised when an entry file lacks a value for a field its index declares.
-
-    Always names the file and the missing field — never a placeholder, never a
-    silent omission (AC2).
-    """
+    pass
 
 
 def register_reader(kind: str) -> Callable[[EntryReader], EntryReader]:
-    """Register `fn` as the reader for `kind` in the module-level registry."""
 
     def _decorator(fn: EntryReader) -> EntryReader:
         _READERS[kind] = fn
@@ -107,18 +102,11 @@ def read_entry(
     entry_fields: "tuple[EntryField, ...]",
     index_exclude_when: Optional[Mapping[str, object]],
 ) -> Optional["dict[str, str]"]:
-    """Resolve `entry_kind`'s reader and apply it to `file_path`."""
     reader = get_reader(entry_kind)
     return reader(file_path, entry_fields, index_exclude_when)
 
 
 def _load_entry_frontmatter(file_path: Path) -> tuple[dict, str]:
-    """Read `file_path` and return (parsed frontmatter dict, body text).
-
-    Frontmatter parsing is delegated to the existing
-    ``coordinator_core.frontmatter.primitives.split_frontmatter`` parser rather
-    than a fresh regex, per the plan body.
-    """
     text = file_path.read_text(encoding="utf-8")
     split = split_frontmatter(text)
     if split is None:
@@ -135,7 +123,6 @@ def _load_entry_frontmatter(file_path: Path) -> tuple[dict, str]:
 
 
 def _first_heading(body: str) -> Optional[str]:
-    """Return the token following the first `## HEADING` line in `body`, if any."""
     for line in body.splitlines():
         stripped = line.strip()
         if stripped.startswith("## "):

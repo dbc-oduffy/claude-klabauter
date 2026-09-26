@@ -29,10 +29,7 @@ from coordinator_core.ops import warm_guard_evaluate
 from coordinator_core.warm import hook_http
 from coordinator_core.warm.entry_seam import try_warm_guard_dispatch
 
-#: Deliberately SCOPED (`-- foo.py`) so `check_git_commit_safe_commit_advise` -- an
 #: UNCONDITIONAL advisory-deny on any bare, unscoped `git commit`, independent of both
-#: this test's override and any repo state -- never fires alongside it. An unscoped form
-#: would make the assertions below fail for a reason that has nothing to do with
 #: `COORDINATOR_OVERRIDE_NO_VERIFY` or the env-forwarding boundary this suite pins.
 _NO_VERIFY_CMD = "git commit --no-verify -m x -- foo.py"
 
@@ -44,12 +41,6 @@ def _event(
     session_id: str = "s-warm-guard",
     cwd: str = "C:/Windows/Temp",
 ) -> dict:
-    # `cwd` deliberately defaults OUTSIDE this repo's own working tree: several
-    # guards in the real chain (e.g. the shared-staged-index commit-safety advise)
-    # inspect the actual git status of whatever `cwd` resolves to, and this repo's
-    # own tree carries real staged/uncommitted work while these tests run. A
-    # non-repo `cwd` keeps every guard OTHER than the one under test a clean no-op,
-    # so `check_no_verify`'s own verdict is the only one that can fire.
     return {
         "hook_event_name": "PreToolUse",
         "session_id": session_id,
@@ -61,8 +52,6 @@ def _event(
 
 
 def _call(event: dict) -> dict:
-    """Drive the REAL registered handler, synchronously, the way `ipc`'s event loop
-    would await it -- never the raw `evaluate_payload_json` function directly."""
     payload = hook_http.payload_from_event(event)
     return asyncio.run(
         warm_guard_evaluate._warm_guard_evaluate({"payload": payload})
@@ -70,8 +59,6 @@ def _call(event: dict) -> dict:
 
 
 class TestBoundaryDeletion:
-    """AC: 'a server whose OWN environ carries an override the forwarded event does NOT
-    carry -- the guard must NOT see that override.' The doe-claude-em-named pin."""
 
     def test_server_environ_override_is_not_seen(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_OVERRIDE_NO_VERIFY", "1")
@@ -138,7 +125,6 @@ class TestMalformedPayloadRaises:
 
 
 class TestVerdictFromEnvelopeUnit:
-    """Direct unit coverage of the narrowing function, independent of the guard chain."""
 
     def test_none_is_no_objection(self):
         assert warm_guard_evaluate._verdict_from_envelope(None) == {}
@@ -183,9 +169,6 @@ class TestVerdictFromEnvelopeUnit:
 
 
 class TestRealWarmHit:
-    """AC: `try_warm_guard_dispatch("warm_guard.evaluate", ...)` returns `hit=True`,
-    verified by a test, not by inspection -- driven through the REAL registry via
-    `coordinator_core.ipc.dispatch_message`, not a monkeypatched stand-in envelope."""
 
     def _server_side_dispatch(self, msg: dict) -> dict:
         from coordinator_core import ipc
@@ -272,25 +255,12 @@ class TestEagerRegistrationEntry:
 
         ops._eager_import_all()
 
-        # `ipc.get_op_handler` is deliberately NOT used for the assertion: it has
-        # its own registry-miss lazy-import fallback (`_lazy_import_and_lookup`,
-        # keyed off the op name by convention) that would silently re-discover
         # this module even with a broken/missing `_EAGER_OP_MODULES` entry --
-        # confirmed by manually breaking that entry and observing
         # `get_op_handler` still resolve the handler. Reading `ipc._REGISTRY`
-        # directly is the only check that is actually gated on
-        # `_eager_import_all()` having done the registering.
         assert ipc._REGISTRY.get("warm_guard.evaluate") is not None
 
 
 class TestColdPathUnchanged:
-    """AC: cold-path behaviour is unchanged for every caller that never passes a payload
-    at all -- this op is additive; it does not touch `evaluate_payload_json`'s own
-    default-argument behaviour or any caller that invokes it directly (raw string, no
-    `env` key), which every pre-existing dispatch test already covers. This test is a
-    narrow, local restatement: a bare cold-shaped JSON payload with no `env` key
-    reproduces the exact same deny as before this op existed.
-    """
 
     def test_bare_payload_with_no_env_key_still_denies(self, monkeypatch):
         from coordinator_core.bash_guards.dispatch import evaluate_payload_json

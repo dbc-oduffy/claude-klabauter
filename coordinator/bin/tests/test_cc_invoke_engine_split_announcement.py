@@ -55,10 +55,6 @@ pytestmark = pytest.mark.cadence
 
 @pytest.fixture(autouse=True)
 def _rearm(monkeypatch):
-    """The emitter fires at most once per PROCESS, so the module-level latch
-    has to be cleared between cases or every test after the first would pass by
-    silence — which is exactly the failure the agree-case asserts, making it
-    indistinguishable from a real pass."""
     monkeypatch.setattr(_mod, "_ENGINE_SPLIT_ANNOUNCED", False, raising=False)
 
 
@@ -70,42 +66,27 @@ def _announce(monkeypatch, capsys, cli_root, dispatch_root):
 
 class TestItSpeaksOnlyWhenTheTreesDisagree:
     def test_a_split_names_both_roots_on_one_line(self, monkeypatch, capsys):
-        err = _announce(monkeypatch, capsys, r"X:\a-working-tree", r"X:\a-mirror")  # abs-path-ok: synthetic fixture, never resolved on disk
+        err = _announce(monkeypatch, capsys, r"X:\a-working-tree", r"X:\a-mirror")
 
         assert err.count("\n") == 1, f"exactly one line, got: {err!r}"
-        assert r"X:\a-working-tree" in err, "the CLI root must be named"  # abs-path-ok: synthetic fixture, never resolved on disk
-        assert r"X:\a-mirror" in err, "the engine root must be named"  # abs-path-ok: synthetic fixture, never resolved on disk
+        assert r"X:\a-working-tree" in err, "the CLI root must be named"
+        assert r"X:\a-mirror" in err, "the engine root must be named"
 
     def test_agreement_is_silent(self, monkeypatch, capsys):
-        """A single-tree box sees nothing. If this goes red, the line has become
-        noise on every box and stops being read on the one box where the split
-        is real."""
-        assert _announce(monkeypatch, capsys, r"X:\same", r"X:\same") == ""  # abs-path-ok: synthetic fixture, never resolved on disk
+        assert _announce(monkeypatch, capsys, r"X:\same", r"X:\same") == ""
 
     def test_agreement_is_silent_across_separator_and_case_spelling(
         self, monkeypatch, capsys
     ):
-        """The two ladders answer the same tree in different spellings — one
-        returns backslashes, the other forward slashes, and the drive letter's
-        case is not stable between them — so a naive string compare would
-        announce a split on a single-tree box every single time."""
-        assert _announce(monkeypatch, capsys, "X:/Same/Tree", r"X:\same\tree") == ""  # abs-path-ok: synthetic fixture, never resolved on disk
+        assert _announce(monkeypatch, capsys, "X:/Same/Tree", r"X:\same\tree") == ""
 
     def test_realpath_class_spellings_resolve_to_the_same_tree(
         self, monkeypatch, capsys
     ):
-        """A junction/symlink/8.3-short-name spelling difference is exactly
-        the class plain abspath+normcase cannot resolve (Review:
-        code-reviewer P2/P5, slice a6725136cee84332c) -- realpath is what
-        closes it. Simulated via a monkeypatched os.path.realpath rather than
-        a real junction/symlink fixture, since this module has no honest way
-        to construct one on disk; this proves the new call site actually
-        routes the comparison through realpath, not that a live junction
-        resolves correctly on this box."""
-        canonical = r"X:\canonical-tree"  # abs-path-ok: synthetic fixture, never resolved on disk
+        canonical = r"X:\canonical-tree"
         fake_names = {
-            r"X:\PROGRA~1\short-name-tree": canonical,  # abs-path-ok: synthetic fixture, never resolved on disk
-            r"X:\junction-to-tree": canonical,  # abs-path-ok: synthetic fixture, never resolved on disk
+            r"X:\PROGRA~1\short-name-tree": canonical,
+            r"X:\junction-to-tree": canonical,
         }
         monkeypatch.setattr(
             _mod.os.path, "realpath", lambda p: fake_names.get(p, p)
@@ -113,16 +94,16 @@ class TestItSpeaksOnlyWhenTheTreesDisagree:
         err = _announce(
             monkeypatch,
             capsys,
-            r"X:\PROGRA~1\short-name-tree",  # abs-path-ok: synthetic fixture, never resolved on disk
-            r"X:\junction-to-tree",  # abs-path-ok: synthetic fixture, never resolved on disk
+            r"X:\PROGRA~1\short-name-tree",
+            r"X:\junction-to-tree",
         )
         assert err == "", f"realpath-equivalent trees must not announce a split, got: {err!r}"
 
     def test_it_speaks_once_per_process(self, monkeypatch, capsys):
-        monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"X:\cli")  # abs-path-ok: synthetic fixture, never resolved on disk
-        _mod._announce_engine_cli_split(r"X:\engine")  # abs-path-ok: synthetic fixture, never resolved on disk
+        monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"X:\cli")
+        _mod._announce_engine_cli_split(r"X:\engine")
         first = capsys.readouterr().err
-        _mod._announce_engine_cli_split(r"X:\engine")  # abs-path-ok: synthetic fixture, never resolved on disk
+        _mod._announce_engine_cli_split(r"X:\engine")
         second = capsys.readouterr().err
 
         assert first.strip(), "the first call must speak"
@@ -130,22 +111,18 @@ class TestItSpeaksOnlyWhenTheTreesDisagree:
 
 
 class TestItNeverTakesADispatchDown:
-    """The safety half. This sits on the dispatch path of ~200 CLIs and is
-    advisory; a raise here would convert a cosmetic problem into an outage."""
 
     def test_a_resolver_that_raises_is_swallowed(self, monkeypatch, capsys):
         def _boom(_f):
             raise RuntimeError("no checkout found")
 
         monkeypatch.setattr(_mod, "resolve_engine_root", _boom)
-        _mod._announce_engine_cli_split(r"X:\engine")  # abs-path-ok: synthetic fixture, never resolved on disk
+        _mod._announce_engine_cli_split(r"X:\engine")
 
         assert capsys.readouterr().err == ""
 
-    @pytest.mark.parametrize("cli_root, dispatch_root", [(None, r"X:\e"), (r"X:\c", "")])  # abs-path-ok: synthetic fixture, never resolved on disk
+    @pytest.mark.parametrize("cli_root, dispatch_root", [(None, r"X:\e"), (r"X:\c", "")])
     def test_an_unresolvable_root_says_nothing_rather_than_guessing(
         self, monkeypatch, capsys, cli_root, dispatch_root
     ):
-        """Half an answer is worse than none here: naming one root and a blank
-        would read as a split against an empty tree."""
         assert _announce(monkeypatch, capsys, cli_root, dispatch_root) == ""

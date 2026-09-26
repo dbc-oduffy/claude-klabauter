@@ -170,11 +170,6 @@ def _entry_to_dict(entry: WriteSurfaceEntry) -> dict:
 
 
 def _entry_from_dict(data: dict) -> WriteSurfaceEntry:
-    """Reconstruct a `WriteSurfaceEntry` from a decoded JSON object,
-    rejecting anything carrying an unrecognized key or missing the
-    dataclass's required shape — raises `(TypeError, ValueError)` on any
-    mismatch, which `read_journal` catches and treats as an unparseable
-    entry (see that function's tolerant-reader contract)."""
     if not isinstance(data, dict):
         raise TypeError(f"entry is not an object: {data!r}")
     unknown = set(data) - set(_ENTRY_FIELDS)
@@ -277,10 +272,6 @@ def read_journal() -> dict[str, dict[int, ClauseResolution]]:
 
     text = raw.decode("utf-8", errors="strict") if raw else ""
     lines = text.split("\n")
-    # A well-formed file ends in a trailing newline, so the final split
-    # element is "". Anything else there is a truncated last line (the run
-    # died mid-append) — drop it rather than attempting to parse a partial
-    # JSON object.
     if lines and lines[-1] != "":
         lines = lines[:-1]
 
@@ -309,10 +300,6 @@ def read_journal() -> dict[str, dict[int, ClauseResolution]]:
         except (TypeError, ValueError):
             continue
 
-        # Accumulate rather than replace — see this function's docstring on
-        # why a clause's rows are partial contributions, not restatements.
-        # Dedupe on the entry's own field tuple: a re-run call site
-        # re-journaling an identical entry must not double it in the receipt.
         bucket = accumulated.setdefault(writer_id, {}).setdefault(clause_index, [])
         for entry in entries:
             if entry not in bucket:
@@ -328,17 +315,6 @@ def read_journal() -> dict[str, dict[int, ClauseResolution]]:
 
 
 def clear_journal() -> None:
-    """Reset the journal at run start — the orchestrator's job (a later
-    chunk wires this into `maximalist.py`'s run-start sequence), never a
-    writer's own job.
-
-    Removes the journal file outright rather than truncating it in place,
-    so a stale journal from a prior, unrelated run can never be misread as
-    partial data for THIS run. Absent-journal is a no-op, not an error.
-    Honours `_refuse_machine_mutation` exactly like `record_resolution` —
-    a disabled or temp-sandboxed run refuses the delete just as it refuses
-    the append.
-    """
     path = _journal_path()
     blocked = _refuse_machine_mutation(str(path), what="clear the install resolution-journal")
     if blocked:

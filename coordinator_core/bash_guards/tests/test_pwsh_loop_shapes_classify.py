@@ -47,11 +47,6 @@ def _primary(cmd: str, dialect: Dialect):
     return result.primary.shape if result.primary else None
 
 
-# ---------------------------------------------------------------------------
-# The three grammars that used to classify as nothing
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "cmd",
     [
@@ -66,8 +61,6 @@ def test_pwsh_loop_grammars_classify_as_for_loop(cmd):
 
 
 def test_the_foreach_statement_still_classifies():
-    """The control. It classified before; if it stops, the rewrite of this
-    detector broke the case it was already handling."""
     assert (
         _primary("foreach ($f in $files) { git log -1 $f }", Dialect.POWERSHELL)
         is Shape.FOR_LOOP
@@ -75,18 +68,10 @@ def test_the_foreach_statement_still_classifies():
 
 
 def test_the_pipeline_alias_still_wins_its_own_shape():
-    """`%`/`ForEach-Object` is a pipeline STAGE, not a statement, and keeps its
-    own precedence member -- widening the statement detector must not swallow
-    it."""
     assert (
         _primary("Get-ChildItem X: | % { git log -1 $_ }", Dialect.POWERSHELL)
         is Shape.PIPELINE_FOREACH_OBJECT
     )
-
-
-# ---------------------------------------------------------------------------
-# The false-positive floor
-# ---------------------------------------------------------------------------
 
 
 def test_a_plain_command_classifies_as_no_loop():
@@ -94,8 +79,6 @@ def test_a_plain_command_classifies_as_no_loop():
 
 
 def test_foreach_without_an_in_clause_is_not_the_statement_form():
-    """The parenthesised `in` clause is what distinguishes the statement from
-    the pipeline alias; without it there is no iteration to name."""
     assert _primary("foreach ($x) { git log -1 }", Dialect.POWERSHELL) is None
 
 
@@ -107,21 +90,11 @@ def test_a_loop_keyword_without_a_brace_block_does_not_classify():
 
 
 def test_a_loop_keyword_without_a_paren_does_not_classify():
-    """`for`/`while` take a parenthesised condition in PowerShell. Requiring it
-    keeps a command whose first token merely starts with those letters from
-    reading as a loop."""
     assert _primary("while { git log -1 }", Dialect.POWERSHELL) is None
 
 
 def test_do_without_a_trailing_condition_does_not_classify():
-    """`do { }` alone is not a loop in PowerShell -- the `while`/`until` tail is
-    what makes it one."""
     assert _primary("do { git log -1 }", Dialect.POWERSHELL) is None
-
-
-# ---------------------------------------------------------------------------
-# The bash leg must be untouched
-# ---------------------------------------------------------------------------
 
 
 def test_the_posix_for_loop_still_classifies_under_bash():
@@ -132,7 +105,4 @@ def test_the_posix_for_loop_still_classifies_under_bash():
 
 
 def test_pwsh_grammar_does_not_classify_under_bash():
-    """The detectors are table-driven per dialect. A pwsh-shaped command handed
-    to the BASH entry must not pick up the new pwsh arms -- bash has no such
-    grammar, and classifying it would be a confident-wrong verdict."""
     assert _primary("while ($true) { git log -1 }", Dialect.BASH) is None

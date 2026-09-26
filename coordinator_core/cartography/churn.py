@@ -84,20 +84,6 @@ DEFAULT_EXCLUDED_DIRS: tuple[str, ...] = ("docs/", "tasks/", "archive/")
 
 @dataclass(frozen=True)
 class ChurnResult:
-    """Result of an emergent/churn-set computation.
-
-    Attributes:
-        emergent: sorted list of file paths present in ``churned_all`` but
-            absent from ``catalogued``, filtered to paths that (1) still
-            exist at HEAD and (2) fall under a retained source directory
-            (i.e. NOT excluded by ``excluded_dirs``).
-        excluded_by_prefilter: sorted list of paths that would otherwise be
-            emergent but were dropped by the source-dir prefilter (mitigation
-            (c)) — surfaced for diagnostics/testing, not part of ``emergent``.
-        deleted_at_head: sorted list of paths that would otherwise be
-            emergent but do not exist at HEAD (mitigation (b)) — surfaced for
-            diagnostics/testing, not part of ``emergent``.
-    """
 
     emergent: list[str] = field(default_factory=list)
     excluded_by_prefilter: list[str] = field(default_factory=list)
@@ -110,47 +96,14 @@ def compute_emergent_set(
     head_present: list[str],
     excluded_dirs: tuple[str, ...] = DEFAULT_EXCLUDED_DIRS,
 ) -> ChurnResult:
-    """Compute the emergent (changed-but-uncatalogued) file set.
-
-    Mirrors architecture-survey.md:104-120 chunk K, promoted to tested Python.
-
-    Args:
-        churned_all: all file paths changed across the tree in the diff window
-            (the bash's ``churned-all.txt`` — e.g. from
-            ``git log --since=<date> --name-only --pretty=format: | sort -u``).
-        catalogued: file paths changed in the same window that fall under a
-            catalogued system directory (the bash's ``catalogued.txt`` — the
-            same diff, scoped to ``-- <system-dirs>``).
-        head_present: file paths that exist at HEAD (the bash's
-            ``git ls-files`` cross-check universe). A path in ``churned_all``
-            that is NOT in ``head_present`` is a deletion record, never
-            emergent (mitigation (b)).
-        excluded_dirs: path prefixes to exclude from the emergent set before
-            the chunk-K threshold test (mitigation (c)). Matched as a
-            POSIX-style path-prefix test (e.g. ``"docs/"`` matches
-            ``"docs/plans/x.md"`` but not ``"my-docs/x.md"``).
-
-    Returns:
-        ChurnResult with the final ``emergent`` set plus the two diagnostic
-        lists showing what each mitigation removed.
-
-    Mitigation (a) — collation-safe set-difference: implemented as a plain
-    Python ``set`` difference (``set(churned_all) - set(catalogued)``), which
-    is a literal element-wise comparison with no sort/locale precondition —
-    the same guarantee ``grep -vxF`` gives over ``comm``, achieved natively
-    rather than via shell-out.
-    """
     head_present_set = set(head_present)
     catalogued_set = set(catalogued)
 
-    # Mitigation (a): collation-safe hash-set difference (not comm/sort-dependent).
     raw_emergent = set(churned_all) - catalogued_set
 
-    # Mitigation (b): deleted-file-at-HEAD filter.
     deleted_at_head = {p for p in raw_emergent if p not in head_present_set}
     present_at_head = raw_emergent - deleted_at_head
 
-    # Mitigation (c): source-dir prefilter (exclude meta-churn dirs).
     excluded_by_prefilter = {
         p for p in present_at_head if _is_excluded(p, excluded_dirs)
     }
@@ -263,12 +216,6 @@ def compare_against_recorded_atlas(
 
 
 def _is_excluded(path: str, excluded_dirs: tuple[str, ...]) -> bool:
-    """Return True if *path* falls under one of *excluded_dirs* prefixes.
-
-    Uses PurePosixPath-normalized prefix comparison (path-segment aware, not
-    a raw string ``startswith`` — ``"docs/"`` excludes ``"docs/x.md"`` but
-    NOT ``"my-docs/x.md"``).
-    """
     normalized = PurePosixPath(path.replace("\\", "/"))
     for excluded in excluded_dirs:
         excluded_norm = PurePosixPath(excluded.rstrip("/"))

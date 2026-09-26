@@ -1,49 +1,3 @@
-"""
-coordinator_core.ops.ceremony.tests.test_commit_scoped_in_process
-
-Tests for `git_native._commit_scoped_private_index()`'s C8b rewire --
-wiring C8a's tree-input assembler (`_assemble_commit_tree_input`) to C4's
-shared "rewrite HEAD's tree spine -> commit object -> locked `cas_ref` CAS"
-landing helper (`_commit_via_head_spine`), replacing the old private-index
-ladder (`read-tree` + per-path `update-index --cacheinfo` fan-out +
-`write-tree`/`commit-tree`/`update-ref`) for the COMMON case.
-
-Spec backlink: docs/plans/2026-08-22-a-commit-is-one-spawn-not-eleven.md
-chunk C8b.
-
-Runs against REAL git via `fixtures.real_git` (allowlisted below) -- same
-reason `test_commit_scoped.py` does: index/worktree divergence cannot be
-exhibited by a mocked git, and the spawn-count assertions here need a real
-`subprocess.run` to spy on.
-
-Coverage:
-  - the fast (spine-rewrite) path commits correctly and issues NO
-    `update-index --cacheinfo` fan-out, regardless of how many staged paths
-    are in the batch (AC13's spawn floor).
-  - worktree-sourced paths are hashed via AT MOST ONE `git hash-object
-    --stdin-paths` spawn, regardless of pathspec length (AC13) -- zero once
-    C3's in-process `write_object` route clears the clean-pipeline pre-check,
-    which is the ordinary case; never one spawn per path.
-  - a brand-new file under a brand-new subdirectory (HEAD has no entry for
-    that directory at all) falls back to the private-index ladder and still
-    commits correctly -- `_commit_via_head_spine`'s own documented "take
-    the ladder" precondition.
-  - a genuinely staged-for-deletion path (present in `diverged`, absent
-    from the real index) is actually REMOVED from the resulting tree on the
-    fast path, never resurrected via an implicit `read-tree HEAD` seed --
-    the trap `_assemble_commit_tree_input`'s own docstring names.
-  - `mode_only_paths` exclusion-report behaviour survives the rewire
-    byte-identically (already covered end-to-end by
-    `test_commit_scoped.py::test_mixed_batch_mode_only_and_content_edit_
-    both_commit`; re-pinned here directly against the rewired function).
-  - bound 7: a path removed from HEAD via `worktree_deleted` leaves NO
-    surviving entry in the shared `.git/index`, so the next bare commit by
-    any peer session cannot resurrect it -- plus the cost pins that keep
-    that reconciliation off every ordinary commit.
-
-Bound-7 backlink: state/handoffs/2026-08-30-the-commit-path-scoped-commits-
-the-share.md (first owed item).
-"""
 
 from __future__ import annotations
 
@@ -87,11 +41,6 @@ def _committed_files_at_head(repo: Path) -> list[str]:
 
 
 def _spy_git_argvs(monkeypatch) -> list[list[str]]:
-    """Install a spy on `git_native._git()` (not `subprocess.run` directly)
-    so the recorded argv list omits the `git` token itself, matching this
-    module's own `_git(args, ...)` call-site convention -- e.g. a recorded
-    entry of `["update-index", ...]`, never `["git", "update-index", ...]`.
-    """
     real_git_fn = git_native._git
     argvs: list[list[str]] = []
 
@@ -101,11 +50,6 @@ def _spy_git_argvs(monkeypatch) -> list[list[str]]:
 
     monkeypatch.setattr(git_native, "_git", _spy)
     return argvs
-
-
-# ---------------------------------------------------------------------------
-# Fast path: no per-path cacheinfo fan-out
-# ---------------------------------------------------------------------------
 
 
 def test_fast_path_diverged_batch_issues_no_cacheinfo_fanout(tmp_path, monkeypatch):
@@ -126,12 +70,6 @@ def test_fast_path_diverged_batch_issues_no_cacheinfo_fanout(tmp_path, monkeypat
         assert _committed_content_at_head(repo, f"file_{i:03d}.txt") == f"STAGED {i}\n"
 
     # The invariant is NO PER-PATH FAN-OUT, which is not the same as zero
-    # `--cacheinfo` calls and was written as if it were. Bound 6 (this
-    # function's post-landing shared-index refresh, added after this test)
-    # legitimately issues ONE batched `update-index --add` carrying every
-    # committed path on repeated `--cacheinfo` flags -- 25 paths, one spawn.
-    # Asserting `== []` failed on that batch while a genuine 25-spawn
-    # regression and a correct 1-spawn refresh were indistinguishable to it.
     cacheinfo_calls = [a for a in argvs if len(a) > 1 and a[0] == "update-index" and "--cacheinfo" in a]
     assert len(cacheinfo_calls) <= 1, (
         "fast (spine-rewrite) path must never fan `update-index --cacheinfo` "
@@ -170,31 +108,13 @@ def test_fast_path_worktree_sourced_paths_use_one_hash_object_spawn(tmp_path, mo
     for p in new_paths:
         assert _committed_content_at_head(repo, p) == f"content {p}\n"
 
-    # `== 1` was the floor when this test was written and C3 has since beaten
-    # it: `_hash_worktree_blobs` writes each worktree blob IN PROCESS via
-    # `write_object` for every path a clean-pipeline pre-check clears, and
-    # falls back to the one `git hash-object -w --stdin-paths` spawn only for
-    # a path that pre-check REFUSES. Ten ordinary text files clear it, so the
-    # observed count here is zero. The invariant that survives -- and the only
-    # one this test was ever protecting -- is that the fallback never fans out
-    # per path.
     hash_object_calls = [
         a for a in argvs if len(a) > 1 and a[0] == "hash-object" and "--stdin-paths" in a
     ]
     assert len(hash_object_calls) <= 1, hash_object_calls
 
 
-# ---------------------------------------------------------------------------
-# Ladder fall-back: a brand-new subdirectory absent from HEAD's tree
-# ---------------------------------------------------------------------------
-
-
 def test_new_file_under_new_subdirectory_falls_back_to_ladder_and_commits(tmp_path):
-    """`_commit_via_head_spine` returns `None` (take the ladder) when a
-    changed path's parent directory does not exist in HEAD's tree at all --
-    a brand-new file under a brand-new subdirectory, alongside a genuinely
-    diverged path elsewhere, must still land correctly via the private-index
-    ladder rather than failing the whole commit."""
     repo = real_git_repo(tmp_path)
     make_diverged_path(repo, "diverged.txt", staged_content="STAGED\n", worktree_content="WORKTREE\n")
     (repo / "newdir").mkdir()
@@ -226,11 +146,6 @@ def test_new_file_under_new_subdirectory_ladder_never_absorbs_peer_staged_file(t
     assert set(committed) == {"diverged.txt", "newdir/brand_new.txt"}
 
 
-# ---------------------------------------------------------------------------
-# Staged deletion: no implicit resurrection via a `read-tree HEAD` seed
-# ---------------------------------------------------------------------------
-
-
 def test_staged_deletion_is_actually_removed_not_resurrected(tmp_path):
     """A path resolved `_SOURCE_STAGED` (a `diverged` member) but ABSENT
     from the real index at call time -- a staged deletion -- must land as
@@ -259,10 +174,7 @@ def test_staged_deletion_is_actually_removed_not_resurrected(tmp_path):
     result = git_native._commit_scoped_private_index(["doomed.txt"], [], msg_file, repo)
 
     assert result.ok, result.stderr
-    # `git show --name-only` (the `_committed_files_at_head` helper) lists
-    # every path the commit's DIFF touched -- a deletion legitimately
     # appears there too, so tree PRESENCE is checked directly via `ls-tree`
-    # instead.
     ls_tree = _git(["ls-tree", "HEAD", "--", "doomed.txt"], repo).stdout
     assert ls_tree == "", f"doomed.txt must not exist in the new HEAD tree: {ls_tree!r}"
     show = subprocess.run(
@@ -270,12 +182,6 @@ def test_staged_deletion_is_actually_removed_not_resurrected(tmp_path):
         **no_console_creationflags(),
     )
     assert show.returncode != 0, "doomed.txt must not exist in the new HEAD tree"
-
-
-# ---------------------------------------------------------------------------
-# mode_only_paths exclusion-report behaviour (re-pinned directly against the
-# rewired function; end-to-end coverage already lives in test_commit_scoped.py)
-# ---------------------------------------------------------------------------
 
 
 def test_mode_only_path_excluded_from_worktree_excluded_report(tmp_path):
@@ -299,23 +205,7 @@ def test_mode_only_path_excluded_from_worktree_excluded_report(tmp_path):
     assert mode_line.split()[0] == "100755"
 
 
-# ---------------------------------------------------------------------------
-# Bound 7: the shared index must not keep an entry for a path this commit
-# removed from HEAD
-# ---------------------------------------------------------------------------
-
-
 def _archival_deletion_repo(tmp_path: Path) -> Path:
-    """The live archival-sweep shape `_assemble_commit_tree_input`'s own
-    `worktree_deleted` paragraph names: a tracked, committed file is removed
-    from DISK by something that touches no index (`os.replace`, in
-    `commit_pipeline._run_in_plane_archive_sweep`), so its `.git/index` entry
-    still stands when the ceremony commit is asked to land the removal.
-
-    Deliberately not a `git rm`: that is the OTHER way a path reaches
-    `absent` (an already-staged deletion), which leaves nothing behind and is
-    pinned separately below.
-    """
     repo = real_git_repo(tmp_path)
     (repo / "gone.txt").write_text("original\n", encoding="utf-8")
     (repo / "kept.txt").write_text("kept\n", encoding="utf-8")
@@ -326,15 +216,6 @@ def _archival_deletion_repo(tmp_path: Path) -> Path:
 
 
 def test_worktree_deleted_path_leaves_no_entry_in_the_shared_index(tmp_path):
-    """The defect this bound exists for, asserted where it actually bites.
-
-    Before bound 7 this sequence committed the removal correctly and then
-    left `AD gone.txt` in the shared index -- HEAD without the path, the
-    worktree without the path, `.git/index` still carrying HEAD's PRE-commit
-    blob for it. The assertion on `git status` is the one that fails loud on
-    a regression; the bare-commit assertion below is what that residue
-    actually COSTS.
-    """
     repo = _archival_deletion_repo(tmp_path)
     msg_file = _write_msg(tmp_path, "remove gone.txt\n")
 
@@ -353,12 +234,6 @@ def test_worktree_deleted_path_leaves_no_entry_in_the_shared_index(tmp_path):
 
 
 def test_the_next_bare_commit_cannot_resurrect_a_removed_path(tmp_path):
-    """The cost of the residue, stated as the outcome rather than the state:
-    a peer session's ordinary `git commit` immediately after this one must
-    not put the removed file back. This is the shape that lands WRONG
-    CONTENT -- HEAD's pre-removal blob -- at rc=0, with nothing in the
-    commit's own report to notice it by.
-    """
     repo = _archival_deletion_repo(tmp_path)
     msg_file = _write_msg(tmp_path, "remove gone.txt\n")
     assert git_native.commit_scoped(["gone.txt"], msg_file, repo).ok
@@ -371,12 +246,6 @@ def test_the_next_bare_commit_cannot_resurrect_a_removed_path(tmp_path):
 
 
 def test_already_staged_deletion_pays_no_reconcile_spawn(tmp_path, monkeypatch):
-    """Class (1) of `absent`: the caller pre-`git rm`'d the path, so the
-    shared index has already forgotten it and there is genuinely nothing to
-    reconcile. Bound 7 decides that off the index snapshot it already holds,
-    so this must cost ZERO additional spawns -- the reconciliation is for the
-    class that leaves residue, not for every deletion.
-    """
     repo = real_git_repo(tmp_path)
     (repo / "gone.txt").write_text("original\n", encoding="utf-8")
     _git(["add", "--", "gone.txt"], repo)
@@ -393,12 +262,6 @@ def test_already_staged_deletion_pays_no_reconcile_spawn(tmp_path, monkeypatch):
 
 
 def test_ordinary_commit_pays_no_reconcile_spawn(tmp_path, monkeypatch):
-    """The cost pin that matters most: a commit with an empty `absent` set --
-    every ordinary edit -- must not gain a spawn or a second `read_index`
-    from this bound. `.git/index` is a 5.2MB pure-Python parse in this repo;
-    an unconditional re-read here would be a brightline defect on the
-    commonest path in the engine.
-    """
     repo = real_git_repo(tmp_path)
     make_diverged_path(repo, "edited.txt", staged_content="STAGED\n", worktree_content="WORKTREE\n")
     msg_file = _write_msg(tmp_path)
@@ -423,14 +286,6 @@ def test_ordinary_commit_pays_no_reconcile_spawn(tmp_path, monkeypatch):
 
 
 def test_a_reconcile_that_does_not_take_is_reported_not_swallowed(tmp_path, monkeypatch):
-    """The fail-loud half. The reconciliation is best-effort AS TO THE
-    COMMIT -- the CAS has already landed it and a refresh failure must never
-    be returned as a commit failure -- but it must not be silent: a peer
-    holding `.git/index.lock` would otherwise leave the resurrection live
-    with nothing said about it. Simulated by neutering the one
-    `--force-remove` call, which is exactly what a declined write looks like
-    from this function's side.
-    """
     repo = _archival_deletion_repo(tmp_path)
     msg_file = _write_msg(tmp_path, "remove gone.txt\n")
 

@@ -92,9 +92,6 @@ class TestCommitScopeFollowsLeadingCd:
 
         fixture = _make_repo(str(tmp_path / "fixture"))
 
-        # Guard process cwd (and the payload's session-level cwd) sits in
-        # the OUTER repo, which has a staged path -- the pre-fix bug read
-        # that staged path against the fixture's `git commit`.
         monkeypatch.chdir(outer)
         cmd = f"cd {fixture} && git commit -q -m x"
         result = check_validate_commit(cmd, "s1", outer, payload={"cwd": outer})
@@ -135,8 +132,6 @@ class TestDestructiveGitOrphanRelativeCDirResolvesAgainstPayloadCwd:
     ):
         outer, nested = _outer_and_nested_ahead_repo
 
-        # Guard process cwd sits somewhere the relative `-C` cannot resolve
-        # from -- only the payload's own `cwd` can supply the right base.
         monkeypatch.chdir(os.path.dirname(outer))
 
         abs_result = check_destructive_git_orphan(
@@ -170,9 +165,6 @@ class TestDestructiveGitOrphanRelativeCDirResolvesAgainstPayloadCwd:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_relative_c_dir_without_any_base_stays_unresolved(self):
-        """No base directory available at all -- `_orphan_c_cwd` returns the
-        bare relative value unchanged rather than guessing against the wrong
-        repository, per that function's own documented fail direction."""
         from coordinator_core.bash_guards.dispatch_checks import _orphan_c_cwd
 
         assert _orphan_c_cwd("reset", None) == "reset"
@@ -198,9 +190,6 @@ class TestDestructiveRevertFollowsLeadingCd:
 
 
 class TestBtCdChainCwdBefore:
-    """Unit tests for `_bt_cd_chain_cwd_before` in isolation, ahead of the
-    integration tests below that exercise it through
-    `check_destructive_git_orphan`."""
 
     def test_no_prior_cd_segment_returns_none(self):
         segments = ["rm -rf x", "git reset --hard main"]
@@ -266,10 +255,6 @@ class TestDestructiveGitOrphanFollowsCdChain:
         sub = _make_repo(os.path.join(scratch, "sub"))
         _git("branch", "-M", "main", cwd=sub)
 
-        # Guard process cwd (and the payload's session-level cwd) sits in the
-        # ENGINE repo, checked out on `candidate` (ahead of `main`) -- the
-        # pre-fix bug evaluated the reset against this tree instead of the
-        # scratch repo the command actually targets.
         monkeypatch.chdir(engine)
         cmd = (
             f"cd {scratch} && rm -rf other && mkdir other && cd sub && "

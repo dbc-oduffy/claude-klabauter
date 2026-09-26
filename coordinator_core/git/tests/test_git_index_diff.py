@@ -1,16 +1,3 @@
-"""Tests for `coordinator_core.git.git_index.diff_index_name_status`.
-
-Split out of `test_git_index.py` on the same "real git vs synthesised
-fixture" line `test_git_state_against_real_git.py` draws against its own
-sibling: a HEAD-vs-index sha comparison is exactly the kind of assertion a
-synthesised index/commit pair would just be re-checking against itself.
-Every test here spawns real `git` in its own setup (never in the module
-under test -- `diff_index_name_status` itself spawns nothing beyond the
-ONE memoised `head_blobs` call it documents), so the whole file is
-`pytestmark`-tiered onto cadence per that sibling's own module docstring.
-
-Negative spec: nothing here may be de-tiered by faking its git.
-"""
 
 from __future__ import annotations
 
@@ -115,11 +102,6 @@ def test_scoped_to_pathspec_ignores_unrelated_staged_change(tmp_path):
 
 
 def test_second_call_after_git_add_observes_newly_staged_path(tmp_path):
-    """Pins the ordering property this function's docstring names: two
-    calls around a `git add` are NOT duplicates, and this function must
-    never cache a diff result across them -- the second call has to see
-    the path the `git add` in between just staged.
-    """
     repo = tmp_path / "repo"
     _init_repo(repo)
     (repo / "seed.txt").write_text("seed", encoding="utf-8")

@@ -53,11 +53,6 @@ SESSION_ID = "11111111-2222-3333-4444-555555555555"
 
 @pytest.fixture
 def group_em_home(tmp_path, monkeypatch):
-    """A fake home whose projects tree holds one Group-EM session's subagents dir.
-
-    Returns `(repo_root, write_sidecar)` -- call `write_sidecar(stem, meta)` to
-    plant one `.meta.json`.
-    """
     home = tmp_path / "home"
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("HOME", str(home))
@@ -107,7 +102,6 @@ def test_absent_assistant_is_reported_alone(group_em_home):
 
 
 def test_absent_fleet_watch_is_reported_alone(group_em_home):
-    """The worse of the two failures, and the one a single boolean would hide."""
     repo_root, write_sidecar = group_em_home
     write_sidecar("agent-aaaa1", ASSISTANT_META)
 
@@ -131,7 +125,6 @@ def test_neither_teammate_reports_the_watcher_first(group_em_home):
 
 
 def test_unnamed_assistant_matches_on_agent_type(group_em_home):
-    """A dispatch with no `name` still satisfies the obligation via `agentType`."""
     repo_root, write_sidecar = group_em_home
     meta = dict(ASSISTANT_META)
     del meta["name"]
@@ -143,9 +136,6 @@ def test_unnamed_assistant_matches_on_agent_type(group_em_home):
 
 
 def test_fleet_watch_matches_on_name_despite_generic_agent_type(group_em_home):
-    """`coordinator:fleet-watch` is not a registered agent type on this machine;
-    the watcher is dispatched as a NAMED general-purpose agent, and a matcher
-    keyed on `agentType` alone would report it permanently absent."""
     repo_root, write_sidecar = group_em_home
     write_sidecar("agent-aaaa2", WATCH_META)
 
@@ -185,10 +175,6 @@ def test_malformed_sidecar_never_satisfies_the_obligation(group_em_home):
 
 
 def test_presence_reads_no_clock(group_em_home, monkeypatch):
-    """Presence is keyed on a dispatch record, never on freshness. A sidecar
-    stamped far in the past is still evidence, and no mtime/stat-time call is
-    made at all -- an obligation that discharged on recency would re-derive
-    the very mtime lie this probe exists to avoid."""
     repo_root, write_sidecar = group_em_home
     write_sidecar("agent-aaaa1", ASSISTANT_META)
     write_sidecar("agent-aaaa2", WATCH_META)

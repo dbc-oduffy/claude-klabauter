@@ -55,17 +55,6 @@ from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 
 def main(argv: list[str], base_dir: str | None = None) -> int:
-    """Provision (idempotently) the coordinator_whoami .venv and run pytest.
-
-    `base_dir` defaults to os.getcwd() for standalone testability; the DoE
-    trampoline always passes its own resolved directory explicitly.
-
-    Deliberate isolation boundary — do not convert to in-process calls.
-    Mechanism: distinct interpreter + venv construction — `python3 -m venv`
-    builds a dedicated venv, then every subsequent step runs under THAT
-    venv's own python, never this process's `sys.executable`. See
-    state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md.
-    """
     root = Path(base_dir) if base_dir is not None else Path.cwd()
     venv = root / ".venv"
     sentinel = venv / ".deps-installed"
@@ -104,12 +93,6 @@ def main(argv: list[str], base_dir: str | None = None) -> int:
             return 1
         sentinel.touch()
 
-    # env=pytest_child_env(): strip lazy-op registration before handing off to
-    # pytest. The DoE trampoline imports `main` in-process, so this inherits
-    # whatever that process carries; a pytest run that skips eager op
-    # registration fails collection against every module asserting the op
-    # registry at import time. Env hygiene for a spawned child, not the
-    # resolver seam the negative-spec above declines to own.
     result = subprocess.run(
         [str(py), "-m", "pytest", *argv],
         cwd=str(root),

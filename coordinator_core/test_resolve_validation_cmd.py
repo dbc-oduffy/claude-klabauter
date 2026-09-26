@@ -1,9 +1,3 @@
-"""
-test_resolve_validation_cmd.py — pytest coverage for
-coordinator_core.resolve_validation_cmd.
-
-Port of: coordinator-resolve-validation-cmd.sh (DoE c187f5b9, 2026-07-21)
-"""
 
 from __future__ import annotations
 
@@ -32,8 +26,6 @@ from coordinator_core.resolve_validation_cmd import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -44,9 +36,6 @@ pytestmark = [
 def _clean_env(monkeypatch):
     for var in (FAST_TEST_CMD_ENV, FULL_TEST_CMD_ENV, SUPPRESS_METACHAR_WARN_ENV):
         monkeypatch.delenv(var, raising=False)
-
-
-# --- Unit 1: helpers ----------------------------------------------------------
 
 
 def test_redact_for_diag_short_passthrough():
@@ -206,10 +195,6 @@ def test_underscore_normalize_python_token_bare_python_no_args(monkeypatch):
 
 
 def test_underscore_normalize_python_token_bare_python3_no_args(monkeypatch):
-    """Item 17b: the bin-shape sibling ALSO normalizes bare `python3` (venv-
-    first resolution can differ from a bare `python3` on PATH), unlike the
-    module-level `normalize_python_token` which passes `python3` through by
-    design."""
     monkeypatch.setattr(
         "coordinator_core.resolve_validation_cmd._resolve_python_interp",
         lambda repo_root=None: "/repo/.venv/bin/python3",
@@ -251,9 +236,6 @@ def test_underscore_normalize_python_token_raises_when_no_interpreter_for_python
     assert "no python3/python on PATH" in capsys.readouterr().err
 
 
-# --- Unit 2: cs_resolve_fast_test_cmd ------------------------------------------
-
-
 def test_fast_env_var_wins_over_local_md(monkeypatch, tmp_path):
     (tmp_path / "coordinator.local.md").write_text(
         "---\nfast_test_cmd: pytest local\n---\n"
@@ -276,9 +258,6 @@ def test_fast_local_md_preserves_internal_whitespace_strips_quotes(tmp_path):
         '---\nfast_test_cmd: "pytest  -x  tests/"\n---\n'
     )
     result = cs_resolve_fast_test_cmd(str(tmp_path))
-    # _strip_wrapping_quotes removes only the ONE outer wrapping quote pair;
-    # internal double-spacing survives untouched (no interior quotes here, so
-    # this case is unaffected by the wrapping-pair-only fix).
     assert result.cmd == "pytest  -x  tests/"
     assert result.exit_code == 0
 
@@ -298,17 +277,11 @@ def test_fast_local_md_preserves_interior_single_quoted_marker_expression(tmp_pa
         result.cmd
         == "python3 -m pytest -m 'not cadence and not pending_fix and not designed_red'"
     )
-    # The resolved string must remain shell-executable through `sh -c`: the
-    # marker expression is one argv token, not four.
     argv = shlex.split(result.cmd)
     assert argv[:5] == ["python3", "-m", "pytest", "-m", "not cadence and not pending_fix and not designed_red"]
 
 
 def test_full_local_md_preserves_interior_single_quoted_marker_expression(tmp_path):
-    """Same regression for the FULL tier / cs_read_local_md_key path — a
-    distinct implementation from the fast tier's inline parser, and the one
-    that previously corrupted this shape differently (an unbalanced trailing
-    quote from independent, un-paired leading/trailing strips)."""
     (tmp_path / "coordinator.local.md").write_text(
         "---\nfull_test_cmd: \"python3 -m pytest -m 'not pending_fix and "
         "not designed_red'\"\n---\n"
@@ -324,13 +297,6 @@ def test_full_local_md_preserves_interior_single_quoted_marker_expression(tmp_pa
 
 
 def test_fast_local_md_marker_expression_survives_a_real_shell(tmp_path):
-    """End-to-end: resolve, then hand the resolved string to a real POSIX
-    shell (as validate-fast-and-packageability.py's `bash -c` caller does)
-    via `sh -c '<resolved> --collect-only'` against a script that just
-    echoes argv, confirming the marker expression arrives as ONE argument
-    rather than being word-split into stray positional path args (the
-    corrupted-shape symptom: pytest exits 4, "file or directory not found:
-    cadence")."""
     (tmp_path / "coordinator.local.md").write_text(
         "---\nfast_test_cmd: \"python3 -m pytest -m 'not cadence and not "
         "pending_fix and not designed_red'\"\n---\n"
@@ -339,13 +305,6 @@ def test_fast_local_md_marker_expression_survives_a_real_shell(tmp_path):
     assert result.exit_code == 0
     echo_argv = tmp_path / "echo_argv.py"
     echo_argv.write_text("import sys, json; print(json.dumps(sys.argv[1:]))\n")
-    # Windows: tmp_path renders with backslashes, and interpolating that raw
-    # into a string handed to `sh -c` is fatal -- outside quotes, POSIX sh
-    # treats `\U`, `\A`, etc. as escape sequences and strips the backslash,
-    # mangling the path (and, since this cmd's cwd differs, resolving it
-    # against the WRONG directory entirely). Forward slashes are accepted by
-    # both Windows Python and POSIX sh, and shlex.quote guards embedded
-    # spaces/metacharacters -- same fix shape on POSIX, where it's a no-op.
     echo_argv_posix = str(echo_argv).replace("\\", "/")
     shell_cmd = result.cmd.replace(
         "python3 -m pytest", f"python3 {shlex.quote(echo_argv_posix)}", 1
@@ -416,9 +375,6 @@ def test_fast_only_reads_between_first_and_second_marker(tmp_path):
     assert result == ResolvedCommand("pytest tests/", 0)
 
 
-# --- Unit 2: cs_read_local_md_key ----------------------------------------------
-
-
 def test_read_local_md_key_basic(tmp_path):
     (tmp_path / "coordinator.local.md").write_text("---\nfull_test_cmd: pytest -q\n---\n")
     assert cs_read_local_md_key(str(tmp_path), "full_test_cmd") == "pytest -q"
@@ -439,19 +395,11 @@ def test_read_local_md_key_strips_quotes(tmp_path):
 
 
 def test_read_local_md_key_faithful_unanchored_match_no_prefix_strip(tmp_path):
-    """Negative-spec: bash oracle's grep -F is unanchored (matches key: anywhere
-    in the line) but the prefix-strip only fires when key: is at column 0. A
-    line where full_test_cmd: appears mid-line (not a true prefix) is a
-    faithfully-reproduced oracle quirk, NOT a bug fix — the whole line is
-    returned untouched by the (no-op) prefix strip."""
     (tmp_path / "coordinator.local.md").write_text(
         "---\nsome_prefix full_test_cmd: pytest -q\n---\n"
     )
     result = cs_read_local_md_key(str(tmp_path), "full_test_cmd")
     assert result == "some_prefix full_test_cmd: pytest -q"
-
-
-# --- Unit 2: cs_resolve_full_test_cmd ------------------------------------------
 
 
 def test_full_env_var_resolution(monkeypatch):

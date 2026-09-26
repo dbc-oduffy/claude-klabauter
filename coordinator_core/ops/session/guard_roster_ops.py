@@ -97,17 +97,6 @@ class AdvisoryRosterUnavailable(RuntimeError):
 
 @dataclass(frozen=True)
 class AdvisoryOpEntry:
-    """Plain-data identity for one resolved advisory op.
-
-    `id` is the registered op key (e.g. "hooks.postuse_advisory_dispatch").
-    `module`/`qualname` are the handler callable's own `__module__` and
-    `__qualname__` — the only stable identity the op-registry carries
-    beyond the key itself (`register_op` stores bare callables, no
-    metadata object). `qualname` degrades to `__name__` for a callable
-    with no `__qualname__`, and further to `""` if neither attribute is
-    present (e.g. a `functools.partial` or a C-extension callable) — this
-    module never fails a lookup over an exotic handler's missing identity.
-    """
 
     id: str
     module: str

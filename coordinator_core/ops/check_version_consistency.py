@@ -102,13 +102,7 @@ _CHANGELOG_RE = re.compile(r'^## \[([0-9][0-9.]*)\].*')
 
 
 class _GateFailure(Exception):
-    """Internal control-flow signal for the bash oracle's fail()-then-exit-1 shape.
-
-    The message is printed to stderr at the `_fail()` call site (matching the
-    bash oracle's own `echo ... >&2; exit 1`, which prints immediately, not at
-    unwind time) — this exception only carries control flow back to `main()`,
-    which returns 1 without printing anything further.
-    """
+    pass
 
 
 def _fail(msg: str) -> None:
@@ -153,23 +147,12 @@ def _discover_root(root_arg: str) -> str:
 
 
 def _resolve_effective_repo_root(repo_root_arg: str) -> str:
-    """The repo being closed: `--repo-root` if given, else cwd — normalized
-    through `show_toplevel`, exactly as the pre-C1 cwd-derived rungs were, so
-    a caller naming a path NESTED under a bundle holder's own worktree still
-    resolves to that holder's root, and a caller naming a path that is not a
-    git repo at all falls back to that path verbatim (discovered as N/A,
-    naming the path the caller gave — never cwd)."""
     base = repo_root_arg or os.getcwd()
     top = _git_toplevel(base)
     return top or base
 
 
 def _read_bundle_name(path: str) -> str:
-    """Parses `path` (a marketplace.json candidate) as JSON and returns its
-    top-level "name". Fails loud — exit 1, one stderr line naming the file —
-    if the file exists but is not valid JSON or carries no string "name": a
-    corrupt bundle-holder file must never be silently read as "not the
-    bundle", which would turn a real defect into a green not-applicable."""
     try:
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -184,17 +167,6 @@ def _read_bundle_name(path: str) -> str:
 
 
 def _discover_bundle_for_repo_root(repo_root: str) -> Optional[str]:
-    """Auto-discovery for the no-`--root` path. Three rungs, each rooted at
-    `repo_root` ONLY — never cwd, never `_git_toplevel()` re-derived per rung
-    — flat publish/source layout, DoE-claude's v3 source layout (the bundle
-    lives under `coordinator/.claude-plugin/`), and the older nested
-    meta-repo layout (`plugins/coordinator-claude/.claude-plugin/`). A
-    candidate file that exists is identity-checked via `_read_bundle_name`
-    before being accepted — a `example-retrieval-repo`-named marketplace.json is not
-    mistaken for the coordinator-claude bundle, and a corrupt candidate fails
-    loud rather than falling through. Returns the matching bundle root, or
-    None when no rung has a coordinator-claude candidate at all (the
-    not-applicable case, handled by the caller)."""
     for candidate in (
         f"{repo_root}/.claude-plugin/marketplace.json",
         f"{repo_root}/coordinator/.claude-plugin/marketplace.json",
@@ -249,7 +221,6 @@ def _resolve_changelog(bundle_root: str) -> str:
 
 
 def _extract_json_version(path: str) -> str:
-    """First `"version": "X.Y.Z"` line in the given file. plugin.json has exactly one."""
     with open(path, "r", encoding="utf-8", errors="replace") as fh:
         for line in fh:
             m = _VERSION_RE.match(line)
@@ -259,13 +230,6 @@ def _extract_json_version(path: str) -> str:
 
 
 def _extract_market_version(marketplace_path: str) -> str:
-    """marketplace.json: the metadata.version specifically — NOT a plugin entry's.
-
-    Plugin entries today carry no "version" key, but rather than bank on that
-    schema invariant forever, scope the match to the metadata object by
-    dropping everything from the "plugins": array onward before extracting.
-    This stays correct if a plugin entry ever gains a version field.
-    """
     plugins_key_re = re.compile(r'^[ \t]*"plugins"[ \t]*:')
     with open(marketplace_path, "r", encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -288,8 +252,6 @@ def _extract_changelog_version(path: str) -> str:
 
 
 def _latest_v_tag(bundle_root: str) -> Optional[str]:
-    """`--sort=-v:refname` requires git >=2.0; failures are silently skipped
-    (advisory path — matches the oracle's `2>/dev/null`)."""
     try:
         res = subprocess.run(
             ["git", "-C", bundle_root, "tag", "--list", "v*", "--sort=-v:refname"],
@@ -313,9 +275,6 @@ def _run(root_arg: str, repo_root_arg: str, check_tag: bool, quiet: bool) -> int
         repo_root = _resolve_effective_repo_root(repo_root_arg)
         discovered = _discover_bundle_for_repo_root(repo_root)
         if discovered is None:
-            # Stated not-applicable — always printed, even under --quiet
-            # (module docstring, Caller identity): a reader must be able to
-            # tell "not-applicable" apart from "checked and green".
             print(
                 f"{_PROG}: N/A — {repo_root} holds no coordinator-claude bundle "
                 "(looked for .claude-plugin/ and coordinator/.claude-plugin/)"
@@ -374,8 +333,6 @@ def _run(root_arg: str, repo_root_arg: str, check_tag: bool, quiet: bool) -> int
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: arg parse, run the gate, return exit code (the gate prints its
-    own diagnostics as it goes, matching the bash oracle's immediate-echo timing)."""
     check_tag = False
     quiet = False
     root_arg = ""

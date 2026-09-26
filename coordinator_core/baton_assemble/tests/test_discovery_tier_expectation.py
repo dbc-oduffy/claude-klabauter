@@ -49,11 +49,6 @@ from coordinator_core.test_baton_assemble import _write_artifact
 
 
 def _write_deliverable_carrier(root: Path, rel: str, deliverable_id: str) -> Path:
-    """A `docs/plans/*.md`-shaped input carrying only `deliverable_id` --
-    the SAME fixture shape `test_deliverable_collision_warn.py`'s own
-    `_write_deliverable_carrier` uses for the predecessor-carry
-    (`discovery == "artifact"`) tier, restated here since that helper is
-    module-private to its own test file."""
     return _write_artifact(root / rel, [f'deliverable_id: "{deliverable_id}"'])
 
 
@@ -74,19 +69,10 @@ def _write_handoff_predecessor(root: Path, rel: str, deliverable_id: str, handof
 
 
 def _stub_claimed_plan(monkeypatch, claimed_plan_rel: str | None) -> None:
-    """Forces `resolve_lineage`'s claimed-plan rung -- the `plan` tier -- to
-    resolve to `claimed_plan_rel` (or to nothing, when `None`), bypassing
-    the real session-id/git-claim-ledger resolution entirely."""
     monkeypatch.setattr(ba, "resolve_claimed_plan_path", lambda cwd=None: claimed_plan_rel)
 
 
 class TestWrongArtifactRefusesLoudly:
-    """The wrong-artifact case actually hit in the field: the session holds
-    a claimed plan, and the caller declares `predecessor` but supplies that
-    SAME plan as `artifact_path` (mirroring the observed defect: the plan
-    tier answers first, by design, regardless of what artifact_path names).
-    Declaring `predecessor` here is a mismatch against the tier that
-    actually answers -- refused rather than silently accepted."""
 
     def test_declaring_predecessor_but_the_claimed_plan_answers_first_refuses(
         self, tmp_path, monkeypatch
@@ -137,8 +123,6 @@ class TestEachTierAcceptsItsOwnArtifact:
 
 
 class TestAbsentExpectationIsByteIdentical:
-    """The regression test protecting every existing caller, which passes
-    `expected_discovery_tier` as nothing (not even explicitly `None`)."""
 
     def test_absent_expectation_reproduces_todays_exact_result(self, tmp_path, monkeypatch):
         _stub_claimed_plan(monkeypatch, None)
@@ -155,10 +139,6 @@ class TestAbsentExpectationIsByteIdentical:
         assert without_kwarg["discovery"] == "artifact"
 
     def test_absent_expectation_never_raises_on_a_mismatched_artifact(self, tmp_path, monkeypatch):
-        """The exact live shape the defect reproduced: the claimed plan
-        answers the `plan` tier regardless of the (mismatched) artifact_path
-        supplied -- legal, unchanged, and must not raise when no expectation
-        was declared."""
         plan_rel = "docs/plans/2026-09-02-no-expectation-declared.md"
         _write_deliverable_carrier(tmp_path, plan_rel, "DEL-NO-EXPECTATION")
         _stub_claimed_plan(monkeypatch, plan_rel)
@@ -174,10 +154,6 @@ class TestAbsentExpectationIsByteIdentical:
 
 
 class TestExpectDiscoveryTierCliFlag:
-    """`baton-assemble brief --expect-discovery-tier` end-to-end through
-    `ba.main()`, not just the `resolve_lineage`/`brief` kwarg -- the CLI is
-    the only door DoE-claude's loader (this mechanism's actual caller,
-    across the seam) reaches this repo through."""
 
     def test_absent_flag_is_byte_identical_to_todays_exit_code(self, tmp_path, monkeypatch):
         from coordinator_core.test_baton_assemble import _init_repo, _FAKE_OPERATOR_CONFIG
@@ -221,9 +197,6 @@ class TestExpectDiscoveryTierCliFlag:
         assert exit_code == ba.EXIT_OK
 
     def test_declared_tier_refuses_on_the_wrong_artifact_doe_hit(self, tmp_path, monkeypatch, capsys):
-        """The exact live defect: a governing plan supplied where the
-        predecessor baton was wanted -- legal at the cascade level, but now
-        refused when the caller declares `predecessor` via the CLI flag."""
         from coordinator_core.test_baton_assemble import _init_repo, _FAKE_OPERATOR_CONFIG
         import os
 

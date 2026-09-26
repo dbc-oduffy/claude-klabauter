@@ -1,14 +1,3 @@
-"""
-coordinator_core.ops.ceremony.tests.test_receipt_emit_declares — C2.
-
-Purpose: assert emit_receipt() declares the receipt path it wrote via
-session_scope.touch_written_path, following the same shape as
-coordinator_core/subagent_sandbox/provision_report.py's touch_written_path call sites (raw
-sid, after-write-only, phantom-live-peer graceful-absent).
-
-Spec backlink: state/dispatch-briefs/2026-08-20-the-close-ceremony-commits-
-what-the-session-wrote/C2.md
-"""
 
 from __future__ import annotations
 
@@ -21,11 +10,6 @@ from coordinator_core.session import scope as session_scope
 
 
 def _init_git_repo(tmp_path: Path) -> Path:
-    """Build a minimal walk-detectable git repo root -- plain files only,
-    no `git init` spawn.  `git_common_dir` (session_core.sessions_dir's
-    resolver) is walk-only over `.git` filesystem entries and never
-    spawns, so a bare `.git` directory is sufficient fixture state.
-    """
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     (repo_root / ".git").mkdir()
@@ -38,14 +22,6 @@ def _make_ctx(ceremony: str = "wsc") -> PipelineContext:
 
 
 def _claimed_paths(repo_root: Path, sid: str) -> set[str]:
-    """Reads the session's claim state through the same seam production
-    code uses (`session_scope._read_touch_record_as_legacy_lines` over
-    `touch-record.jsonl`) -- NOT a raw `touched.txt` read. The old
-    `touched.txt` sink was fully retired 2026-08-26
-    (`_read_touch_record_as_legacy_lines`'s own docstring, "THE COMPAT
-    UNION IS GONE"); a direct `touched.txt` read here always sees an empty
-    set post-retirement regardless of whether the write actually happened.
-    """
     sdir = Path(session_core.session_dir(sid, str(repo_root)))
     sink_path = sdir / session_scope._TOUCH_RECORD_FILENAME
     lines, _degraded = session_scope._read_touch_record_as_legacy_lines(sink_path)
@@ -92,14 +68,8 @@ def test_emit_receipt_declares_nothing_on_failed_write(tmp_path, monkeypatch):
 
 
 def test_emit_receipt_absent_session_dir_declares_silently(tmp_path):
-    """Pinned behaviour: declaring against an absent session dir (the
-    phantom-live-peer guard's precondition, session/scope.py:1818-1821)
-    returns silently and adds no claim, rather than raising. Do NOT "fix"
-    this as part of this chunk — see the brief.
-    """
     repo_root = _init_git_repo(tmp_path)
     sid = "test-sid-declares-absent-03"
-    # Deliberately do NOT call session_core.init — no session dir exists.
 
     ctx = _make_ctx()
     out_path, _op_tail = receipt_emit.emit_receipt(

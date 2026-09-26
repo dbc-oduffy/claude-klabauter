@@ -54,26 +54,17 @@ from typing import List, Optional, Sequence
 
 from coordinator_core.search.engine import Unanswerable
 
-#: Redirection operators that must decline the whole first segment if present as
-#: an exact token -- checked before any flag/operand parsing, same discipline as
-#: `sources_read.py` (C1) applies to its own operand list.
 _REDIRECT_TOKENS = frozenset({
     ">", ">>", "<", "<<", "<<<", "2>", "&>", "|&",
 })
 
-#: Substring markers of command/process substitution -- checked as substrings
-#: because the shared tokenizer does not split `$(...)`/`` `...` ``/`<(...)` off
-#: from an adjoining token.
 _SUBSTITUTION_MARKERS = ("$(", "`", "<(", "$")
 
-#: Locale identifiers that fall out as the plain byte-sort case rather than being
-#: routed through `setlocale`/`strcoll` at all.
 _BYTE_SORT_LOCALES = frozenset({"C", "POSIX"})
 
 
 @dataclass
 class LsSpec:
-    """A parsed `ls` invocation: which directory, and whether dotfiles show."""
 
     directory: str = "."
     show_all: bool = False
@@ -88,12 +79,6 @@ def _reject_redirection_and_substitution(tokens: Sequence[str]) -> None:
 
 
 def parse_ls_segment(tokens: Sequence[str]) -> LsSpec:
-    """Parse one `ls`-family argv into an LsSpec, or raise Unanswerable.
-
-    Accepts only: `ls`, `ls DIR`, `ls -1 [DIR]`, `ls -a [DIR]`,
-    `ls -1a`/`ls -a1 [DIR]`. Everything else -- `-l`, `-R`, `-t`/`-S`/`-r`,
-    `-F`/`--color`, multiple operands, a glob operand -- declines by name.
-    """
     if not tokens:
         raise Unanswerable("empty ls segment")
     binary = os.path.basename(tokens[0])
@@ -117,8 +102,6 @@ def parse_ls_segment(tokens: Sequence[str]) -> LsSpec:
                 elif ch == "a":
                     show_all = True
                 else:
-                    # Covers -l/-R/-t/-S/-r/-F and any `--long` option (the `-`
-                    # of the second dash is itself an unrecognized flag char).
                     raise Unanswerable("unsupported ls flag -%s" % ch)
             i += 1
             continue
@@ -179,13 +162,6 @@ def _ls_collated_sort(entries: List[str]) -> List[str]:
 
 
 def run(spec: LsSpec, cwd: str = ".") -> List[str]:
-    """Execute an LsSpec, returning the lines real `ls` would print.
-
-    One entry per line -- what real `ls` does when stdout is not a tty, which is
-    always the case under this harness. Declines (raises Unanswerable) rather than
-    approximating on: a nonexistent path, a file operand, or an unreadable
-    directory.
-    """
     base = spec.directory if os.path.isabs(spec.directory) else os.path.join(cwd, spec.directory)
     if not os.path.exists(base):
         raise Unanswerable("ls target %r does not exist" % spec.directory)

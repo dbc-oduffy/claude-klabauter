@@ -50,21 +50,10 @@ _TRAILING_NUM_RE = re.compile(r"[-_](\d+)$")
 
 
 class RoadmapCycleError(Exception):
-    """Raised by ``topo_number`` when the blocked_by graph contains a cycle.
-
-    ``.cycle`` carries the list of node labels that form the detected cycle set.
-    Cycles are authoring bugs to surface, never to linearize around — mirrors the
-    oracle's ``RoadmapCycleError`` class (roadmap-graph.js).
-    """
 
     def __init__(self, cycle: List[str]) -> None:
         super().__init__(f"Roadmap dependency cycle detected among nodes: {', '.join(cycle)}")
         self.cycle = cycle
-
-
-# ---------------------------------------------------------------------------
-# topo_number — constructive topological linearization (Kahn's algorithm)
-# ---------------------------------------------------------------------------
 
 
 def topo_number(
@@ -130,13 +119,6 @@ def topo_number(
     for edge in edges:
         frm = edge["from"]
         to = edge["to"]
-        # Guard: prevents a KeyError during in_degree/successors bookkeeping
-        # for a label that appears in edges but not in `nodes` — does NOT add
-        # the node to the output (`ready`/`order` are seeded from `nodes`
-        # only). Callers must ensure `nodes` is the full label set; this
-        # module's only caller (number_stubs.py's derive_nodes) always
-        # unions from/to into the node set before calling topo_number.
-        # Comment overstated what the guard does.
         if frm not in in_degree:
             in_degree[frm] = 0
         if to not in successors:
@@ -150,7 +132,6 @@ def topo_number(
     depth: Dict[str, int] = {n: 0 for n in nodes}
 
     while ready:
-        # Deterministic selection: sort the ready set, take the first element.
         ready.sort(key=cmp_to_key(cmp))
         node = ready.pop(0)
         order.append(node)
@@ -173,19 +154,6 @@ def topo_number(
     for i, label in enumerate(order):
         number[label] = i + 1
 
-    # Wave assignment: NOT flat depth+1 (that bucket-collapses every same-depth
-    # sibling into one wave, which collides with audit.py's Audit 2 — at most
-    # one ready_to_fire stub per (sprint, wave)). Instead, spread same-depth
-    # siblings across distinct, sequential waves while preserving strict
-    # monotonicity along every edge: sort ALL nodes by (depth, tie_break) --
-    # reusing the same `cmp` comparator `order` was built with, not a second
-    # parallel ordering algorithm -- then assign wave = position + 1. Because
-    # depth strictly increases along every blocked_by edge (see the Kahn's-loop
-    # `candidate = depth[node] + 1` update above), a dependency always sorts
-    # before its dependent here, so wave(dependency) < wave(dependent) holds
-    # for every edge (Audit 5) while every node still gets a unique wave
-    # (Audit 2). This is a deliberate divergence from roadmap-graph.js's flat
-    # depth+1 wave -- see the module docstring's Negative-spec.
     def wave_cmp(a: str, b: str) -> int:
         da, db = depth.get(a, 0), depth.get(b, 0)
         if da != db:
@@ -198,11 +166,6 @@ def topo_number(
         sprint_wave[label] = {"sprint": 1, "wave": i + 1}
 
     return {"order": order, "number": number, "sprintWave": sprint_wave}
-
-
-# ---------------------------------------------------------------------------
-# check_dependency_order — fail-loud verification gate for authored stubs
-# ---------------------------------------------------------------------------
 
 
 def _resolve_number(stub: Dict[str, Any]) -> Optional[int]:
@@ -325,8 +288,6 @@ def check_dependency_order(stubs: List[Dict[str, Any]]) -> Dict[str, Any]:
                         }
                     )
 
-        # `blocks` is the inverse edge -- referential integrity only (no
-        # number/(sprint, wave) monotonicity re-derivation; see docstring).
         for dep_id in (stub.get("blocks") or []):
             if dep_id not in stub_map:
                 unresolved.append(
@@ -344,19 +305,9 @@ def check_dependency_order(stubs: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"ok": ok, "violations": violations, "unresolved": unresolved, "cycle": cycle}
 
 
-# ---------------------------------------------------------------------------
-# Internal: DFS cycle detection
-# ---------------------------------------------------------------------------
-
-
 def _detect_cycles(
     stubs: List[Dict[str, Any]], stub_map: Dict[str, Dict[str, Any]]
 ) -> Optional[List[str]]:
-    """Detect cycles in the blocked_by graph using recursive DFS with three-colour
-    marking. Only traverses edges where both endpoints are in *stub_map* (the
-    provided set). Returns the cycle's stub_ids, or ``None`` if acyclic. Byte-parity
-    port of roadmap-graph.js's ``_detectCycles``.
-    """
     white, gray, black = 0, 1, 2
     color: Dict[str, int] = {stub["stub_id"]: white for stub in stubs}
     cycle_found: Optional[List[str]] = None

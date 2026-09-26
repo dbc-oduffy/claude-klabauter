@@ -66,25 +66,13 @@ __all__ = [
     "marker_call_nodes",
 ]
 
-#: The marker name every consumer of this module currently cares about, as
-#: a named default rather than a repeated string literal — the ratchet's
-#: Rule 4 (`pytest.mark.cadence`) still passes its own marker explicitly to
-#: `has_module_level_pytestmark`, this is only the common-case default.
 SPAWNS_PROCESS_MARKER = "pytest.mark.spawns_process"
 
 
 def decorator_names(decorators: list[ast.expr]) -> list[str]:
-    """Best-effort dotted-name rendering of a decorator list, e.g.
-    `pytest.mark.spawns_process` -> "pytest.mark.spawns_process".
-
-    Lifted verbatim from `test_no_new_spawning_tests.py::_decorator_names`.
-    """
     names: list[str] = []
     for dec in decorators:
         node = dec
-        # `@pytest.mark.spawns_process` parses as an Attribute chain (no
-        # call); `@pytest.mark.spawns_process()` would parse as a Call
-        # wrapping the same Attribute chain -- unwrap it either way.
         if isinstance(node, ast.Call):
             node = node.func
         parts: list[str] = []
@@ -101,25 +89,12 @@ def decorator_names(decorators: list[ast.expr]) -> list[str]:
 def has_marker_decorator(
     decorators: list[ast.expr], marker: str = SPAWNS_PROCESS_MARKER
 ) -> bool:
-    """True if `marker` (dotted form, e.g. "pytest.mark.spawns_process")
-    appears anywhere in `decorators`.
-
-    Lifted verbatim (generalized to any `marker`, default unchanged) from
-    `test_no_new_spawning_tests.py::_has_spawns_process_marker`.
-    """
     return marker in decorator_names(decorators)
 
 
 def has_module_level_pytestmark(
     tree: ast.Module, marker: str = SPAWNS_PROCESS_MARKER
 ) -> bool:
-    """True if the module declares `pytestmark = <marker>` or
-    `pytestmark = [<marker>, ...]` at module level -- the file-wide
-    equivalent of decorating every test individually.
-
-    Lifted verbatim from
-    `test_no_new_spawning_tests.py::_has_module_level_pytestmark`.
-    """
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
@@ -143,9 +118,6 @@ def has_module_level_pytestmark(
 
 
 def _dotted_name(node: ast.expr) -> str:
-    """Best-effort dotted-name rendering, unwrapping one `ast.Call`
-    wrapper -- the same unwrap `decorator_names` does, shared here so the
-    two functions agree on what "matches `marker`" means."""
     target = node.func if isinstance(node, ast.Call) else node
     parts: list[str] = []
     while isinstance(target, ast.Attribute):
@@ -161,31 +133,6 @@ def marker_call_nodes(
     body: list[ast.stmt] | None = None,
     marker: str = SPAWNS_PROCESS_MARKER,
 ) -> list[ast.Call]:
-    """Keyword-aware sibling of `has_marker_decorator` /
-    `has_module_level_pytestmark`: returns the matching `ast.Call` nodes
-    (keywords intact) instead of a bool.
-
-    Takes the same two input shapes those two functions take, so function,
-    class and module levels all go through this one function:
-
-      - `decorators`: a decorator list (`FunctionDef.decorator_list` or
-        `ClassDef.decorator_list`) -- matches over Rule 2 already covers
-        (bare `@pytest.mark.x` and `@pytest.mark.x(...)` alike). A bare
-        `Attribute` match (no call, e.g. `@pytest.mark.spawns_process`
-        with no parens) has no keywords to inspect and is NOT returned --
-        callers that need to know a bare marker is present at all still
-        use `has_marker_decorator`; this function only surfaces the ones
-        whose keywords a caller can actually read.
-      - `body`: a statement body that may carry a `pytestmark = <m>` /
-        `pytestmark = [<m>, ...]` assignment -- `ast.Module.body` for the
-        module level, `ast.ClassDef.body` for the class level (the same
-        body shape `has_module_level_pytestmark` reads off `tree.body`).
-
-    Exactly one of `decorators`/`body` is expected per call; passing both
-    concatenates their matches. Only `ast.Call` candidates whose dotted
-    name equals `marker` are returned -- non-call candidates are dropped
-    for the reason above.
-    """
     calls: list[ast.Call] = []
 
     for dec in decorators or []:

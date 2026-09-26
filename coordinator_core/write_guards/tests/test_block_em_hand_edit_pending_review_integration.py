@@ -52,11 +52,6 @@ def _unfilled_findings_body() -> str:
     )
 
 
-#: The share root each test writes its sidecar under. Parametrized because
-#: this suite wrote ONLY under `state/` while the guard read ONLY under
-#: `state/` -- green on both sides of a defect that made the guard unable to
-#: fire in production, where provisioning writes under `.coordinator-local/`.
-#: A single-root fixture cannot see that class; keep both legs.
 SHARE_ROOTS = (".coordinator-local", "state")
 
 
@@ -115,11 +110,6 @@ def _allow(payload):
     assert result is None, f"expected ALLOW, got {result!r}"
 
 
-# ---------------------------------------------------------------------------
-# Core deny/allow behavior
-# ---------------------------------------------------------------------------
-
-
 class TestDeniesEmHandEditWithUnaddressedFinding:
     def test_em_edit_to_file_with_unintegrated_finding_denied(self, tmp_path):
         _write_sidecar(
@@ -128,11 +118,6 @@ class TestDeniesEmHandEditWithUnaddressedFinding:
         _advise(_payload(tmp_path))
 
     def test_deny_reason_names_target_sidecar_and_override(self, tmp_path):
-        """Negative-spec: the override KEY must never appear in the message
-        (``docs/wiki/guard-messaging.md`` § Register, B6). The compliant shape
-        is a pointer to the override-key doc, which is what
-        ``operator_override_note`` has rendered since the 2026-08-11 reshape
-        dropped the pasteable ``VAR=1`` literal."""
         _write_sidecar(
             tmp_path, "sess-abc", "codereview-sliceA.md", body=_findings_body()
         )
@@ -145,9 +130,6 @@ class TestDeniesEmHandEditWithUnaddressedFinding:
         assert guard._OVERRIDE_ENV_VAR not in reason
 
     def test_deny_reason_names_the_integrator_unavailable_exit(self, tmp_path):
-        """The advisory states no blind absolute: a genuinely dead integrator
-        has a named exit, and the message points at it rather than leaving the
-        EM to pick between a silent override and a shipped defect."""
         _write_sidecar(
             tmp_path, "sess-abc", "codereview-sliceA.md", body=_findings_body()
         )
@@ -204,11 +186,6 @@ class TestScopeIsEmInlineOnly:
 
 class TestAgentTypeGate:
     def test_non_reviewer_sidecar_never_trips_guard(self, tmp_path, monkeypatch):
-        """An enumerated persona type must stay out of scope even under
-        this suite's HOME-quarantined roster resolution (which otherwise
-        fails-closed, per the Design decision, and would put EVERY
-        non-empty-typed sidecar in scope) -- so this now stubs the roster
-        to include the type, matching its real-roster membership."""
         from coordinator_core.bash_guards import _helpers
 
         monkeypatch.setattr(
@@ -226,16 +203,7 @@ class TestAgentTypeGate:
         _allow(_payload(tmp_path))
 
 
-# ---------------------------------------------------------------------------
-# Roster-keyed in-scope predicate
-# (docs/plans/2026-09-23-sidecar-guard-keying.md AC1-AC4, AC6)
-# ---------------------------------------------------------------------------
-
-
 def _stub_roster(monkeypatch, roster, error=None, calls: list | None = None):
-    """Monkeypatch the `resolve_roster` seam both guards' `_LazyRoster`
-    resolve through -- the seam the bash_guards confinement tests already
-    use (see module docstring)."""
     from coordinator_core.bash_guards import _helpers
 
     def _resolve():
@@ -250,8 +218,6 @@ class TestRosterKeyedInScope:
     _STUB_ROSTER = frozenset({"coordinator:staff-eng", "coordinator:enricher"})
 
     def test_invented_type_off_roster_advises(self, tmp_path, monkeypatch):
-        """AC1: at HEAD this returns None (the bug row's repro); after this
-        change it fires."""
         _stub_roster(monkeypatch, self._STUB_ROSTER)
         _write_sidecar(
             tmp_path,
@@ -265,9 +231,6 @@ class TestRosterKeyedInScope:
     def test_missing_and_empty_agent_type_still_allowed_zero_roster_calls(
         self, tmp_path, monkeypatch
     ):
-        """AC2: an empty/missing agent_type stays out of scope, matching
-        HEAD and the helper's own empty-type rule, and never touches the
-        roster."""
         calls: list = []
         _stub_roster(monkeypatch, self._STUB_ROSTER, calls=calls)
 
@@ -281,7 +244,6 @@ class TestRosterKeyedInScope:
         _allow(_payload(tmp_path))
         assert calls == []
 
-        # No `agent_type:` line at all.
         sidecar_dir = tmp_path / ".coordinator-local" / "subagent-share" / "sess-abc"
         (sidecar_dir / "missing-type.md").write_text(
             "---\nstatus: open\n---\n\n" + _findings_body(), encoding="utf-8"
@@ -290,7 +252,6 @@ class TestRosterKeyedInScope:
         assert calls == []
 
     def test_enumerated_persona_on_roster_stays_out_of_scope(self, tmp_path, monkeypatch):
-        """AC3: preserves the persona Negative-spec."""
         _stub_roster(monkeypatch, self._STUB_ROSTER)
         _write_sidecar(
             tmp_path,
@@ -302,8 +263,6 @@ class TestRosterKeyedInScope:
         _allow(_payload(tmp_path))
 
     def test_roster_load_failure_fails_closed_for_off_roster_type(self, tmp_path, monkeypatch):
-        """AC4: a roster-load failure fails CLOSED -- an off-roster type is
-        in scope."""
         _stub_roster(monkeypatch, None, error="roster source unreadable")
         _write_sidecar(
             tmp_path,
@@ -317,9 +276,6 @@ class TestRosterKeyedInScope:
     def test_roster_load_failure_fails_closed_for_enumerated_persona_too(
         self, tmp_path, monkeypatch
     ):
-        """AC4: fail-closed makes EVERY non-empty-typed sidecar in scope
-        during a roster-load failure, including an enumerated persona --
-        not merely extra advisories on already-off-roster types."""
         _stub_roster(monkeypatch, None, error="roster source unreadable")
         _write_sidecar(
             tmp_path,
@@ -331,8 +287,6 @@ class TestRosterKeyedInScope:
         _advise(_payload(tmp_path))
 
     def test_roster_resolved_at_most_once_per_check_call(self, tmp_path, monkeypatch):
-        """AC6: two persona-typed sidecars both covering the target still
-        cost at most one roster resolution for the whole `check()` call."""
         calls: list = []
         _stub_roster(monkeypatch, self._STUB_ROSTER, calls=calls)
         _write_sidecar(
@@ -353,9 +307,6 @@ class TestRosterKeyedInScope:
         assert len(calls) <= 1
 
     def test_no_candidate_covering_target_calls_roster_zero_times(self, tmp_path, monkeypatch):
-        """AC6: only `coordinator:code-reviewer` sidecars in the dir --
-        the cheaper legs resolve every candidate before the type leg, so
-        the roster is never touched."""
         calls: list = []
         _stub_roster(monkeypatch, self._STUB_ROSTER, calls=calls)
         _write_sidecar(
@@ -428,17 +379,7 @@ class TestOverrideAndToolGating:
         _allow(_payload(tmp_path, tool_name="Read"))
 
 
-# ---------------------------------------------------------------------------
-# Share-root coverage — the guard reads BOTH roots
-# ---------------------------------------------------------------------------
-
-
 class TestFiresUnderEitherShareRoot:
-    """Provisioning writes under `.coordinator-local/subagent-share/`; a
-    session provisioned before the relocation republished still writes under
-    `state/subagent-share/`. A guard that reads one root is silently dead for
-    every session homed under the other.
-    """
 
     @pytest.mark.parametrize("share_root", SHARE_ROOTS)
     def test_pending_finding_advises_from_either_root(self, tmp_path, share_root):

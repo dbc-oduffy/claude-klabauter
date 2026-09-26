@@ -66,7 +66,6 @@ def test_render_eligible_and_retained_rows():
     assert "RETAINED" in rendered
     assert "shipped_in" in rendered
     assert "shipped_in absent or empty" in rendered
-    # The PASSING realized_by receipt is not surfaced as a blocker.
     assert "realized_by" not in rendered.split("archive/handoffs/b.md", 1)[1].split("\n")[0]
 
 
@@ -89,9 +88,6 @@ def test_render_multiline_evidence_does_not_break_table():
     manifest = _manifest([row])
     rendered = render_disposal_manifest(manifest)
 
-    # Every table row must be exactly one line — an embedded newline must
-    # have been converted to <br>, never a literal line break that would
-    # split the markdown table row in two.
     table_lines = [
         line for line in rendered.splitlines() if line.startswith("| archive/handoffs/c.md")
     ]

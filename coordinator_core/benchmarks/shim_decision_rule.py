@@ -264,11 +264,6 @@ def calibrate_aa_noise_floor(
         stats = run_interleaved([arm_a, arm_b], n=n_rounds)
         a_stat = getattr(stats["aa_arm_a"], GATING_STATISTIC)
         b_stat = getattr(stats["aa_arm_b"], GATING_STATISTIC)
-        # Review (2026-08-16): tolerance, not exact-zero equality -- a near-zero
-        # but nonzero p90 (plausible for a fast in-process draw under thread/GC
-        # noise) divides down into a huge reduction_fraction swing instead of
-        # being skipped as degenerate. 1e-6ms is well below any real timer
-        # resolution on this box, so it only catches the genuinely-degenerate case.
         if math.isclose(a_stat, 0.0, abs_tol=1e-6):
             continue
         reductions.append(1.0 - (b_stat / a_stat))
@@ -327,12 +322,6 @@ see module docstring 'Wash handling'."""
 
 @dataclass(frozen=True)
 class ShimDecisionRecord:
-    """Purpose-built record for the shim-vs-direct-entry-point decision.
-    Deliberately NOT `record.ConformanceRecord` -- see module docstring for
-    why. Carries statistic / margin / baseline / verdict (AC6's enumerated
-    contents) plus enough provenance to re-derive the verdict from the
-    record alone without re-running the benchmark.
-    """
 
     gating_statistic: str
     """Name of the statistic the verdict was computed against. Must equal
@@ -391,14 +380,10 @@ class ShimDecisionRecord:
     schema_version: int = SCHEMA_VERSION
 
     def to_json(self) -> str:
-        """Serialize this record to a JSON string. Round-trip pair:
-        from_json()."""
         return json.dumps(asdict(self), sort_keys=True)
 
     @staticmethod
     def from_json(payload: str) -> "ShimDecisionRecord":
-        """Deserialize a JSON string produced by to_json() back into a
-        ShimDecisionRecord. Round-trip pair: to_json()."""
         data = json.loads(payload)
         return ShimDecisionRecord(**data)
 
@@ -532,10 +517,8 @@ def evaluate(
 
 
 if __name__ == "__main__":  # pragma: no cover
-    # Re-runs the A/A noise-floor calibration this module's own
     # `CHEAPER_THAN_MARGIN` is derived from -- see module docstring
     # 'Cheaper-than margin' / 'MEASURED RESULT'. `--calibrate` is the only
-    # supported flag; anything else is a usage error.
     if len(sys.argv) != 2 or sys.argv[1] != "--calibrate":
         print(
             f"usage: python -m {__name__} --calibrate", file=sys.stderr

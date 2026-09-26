@@ -52,22 +52,13 @@ from typing import Optional
 
 from coordinator_core.install.door_install import is_native_image as _is_native_image
 
-# Probe order. Extensionless first so a POSIX install (and any Windows box still
-# carrying a pre-migration script) resolves to exactly what it resolved to before,
-# leaving `.exe` as pure additive coverage rather than a behaviour change.
 _FORWARDER_SUFFIXES = ("", ".exe")
 
-# Suffixes whose file is a native executable, launched bare. A suffix is a
 # SUFFICIENT tell and never a necessary one -- see `_is_native_image`.
 _NATIVE_SUFFIXES = (".exe",)
 
 
 def resolve_forwarder(bin_dir: Path, name: str) -> Optional[Path]:
-    """Return the installed forwarder for `name` under `bin_dir`, or None.
-
-    Pair the result with `forwarder_argv` -- the two are a unit, because which
-    variant resolved determines whether an interpreter prefix is required.
-    """
     for suffix in _FORWARDER_SUFFIXES:
         candidate = bin_dir / f"{name}{suffix}"
         try:

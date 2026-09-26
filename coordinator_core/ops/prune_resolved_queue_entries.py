@@ -127,7 +127,7 @@ Negative-spec (faithful oracle-bug repro — do not silently "fix" these):
 
 from __future__ import annotations
 
-GENERATES = []  # operates only on caller-supplied paths basenamed improvement-queue.md/bug-backlog.md, neither currently tracked in claude-klabauter's own tree
+GENERATES = []
 
 import os
 import re
@@ -138,10 +138,8 @@ from coordinator_core.session.declared_writes import declare_write
 
 _PROG = "prune-resolved-queue-entries.sh"
 
-# Path-allowlist guard — only operate on these two basenames.
 _ALLOWED_BASENAMES = frozenset({"improvement-queue.md", "bug-backlog.md"})
 
-# Basenames for which Rule 1 (entry-shape strip) applies.
 _RULE1_BASENAMES = frozenset({"improvement-queue.md"})
 
 _CLOSURE_KEYWORDS = r"FIXED|RESOLVED|CLOSED|DONE|COMPLETED"
@@ -191,16 +189,6 @@ def _is_table_row_closure(content: str) -> bool:
 
 
 def prune_lines(lines: list[str], apply_rule1: bool) -> list[str]:
-    """Apply Rules 1-8 to `lines` (each WITH its trailing line terminator, or
-    without one on a final unterminated line) and return the pruned list.
-
-    Faithful state-machine port of the awk oracle's single pass — the
-    ordering below (Rule-8 orphan-suppression check, then section-suppression
-    fall-through, then heading-closure detectors, then per-line closure-marker
-    drops, then Rule-1 entry buffering) is load-bearing: reordering any of
-    these blocks changes which of two competing rules "wins" on an
-    ambiguous line, exactly as it would in the awk program.
-    """
     out: list[str] = []
     buf: list[str] = []
     buf_resolved = False
@@ -223,37 +211,28 @@ def prune_lines(lines: list[str], apply_rule1: bool) -> list[str]:
             suppress_orphan_sublines = True
 
     for line in lines:
-        # Strip exactly one trailing line terminator for pattern matching;
-        # re-attach whatever was stripped when buffering/emitting the line
-        # itself (never the bare `content`).
         if line.endswith("\n"):
             content = line[:-1]
         else:
             content = line
 
-        # --- Rule 8: orphan-subline suppression (runs first) ---
         if suppress_orphan_sublines:
             if content.startswith("  "):
                 continue
             suppress_orphan_sublines = False
-            # fall through
 
-        # --- Section-suppression handlers run first so we exit on boundaries ---
         if in_h3_closure:
             if content.startswith("## ") or content.startswith("### "):
                 in_h3_closure = False
-                # fall through to normal processing below
             else:
                 continue
 
         if in_resolved_section:
             if content.startswith("## "):
                 in_resolved_section = False
-                # fall through
             else:
                 continue
 
-        # --- Heading-closure detectors (set suppression flags, consume the line) ---
         if _is_h2_closure(content):
             flush_buffer()
             in_resolved_section = True
@@ -264,7 +243,6 @@ def prune_lines(lines: list[str], apply_rule1: bool) -> list[str]:
             in_h3_closure = True
             continue
 
-        # --- Per-line closure-marker drops (Rules 6, 7) ---
         if _is_strikethrough_closure(content) or _is_table_row_closure(content):
             if buf:
                 discard_buffer_to_orphan()
@@ -272,7 +250,6 @@ def prune_lines(lines: list[str], apply_rule1: bool) -> list[str]:
                 flush_buffer()
             continue
 
-        # --- Rule 1: entry-shape strip (queue files only) ---
         if apply_rule1:
             is_main = bool(_RE_MAIN_LINE.match(content))
             is_subline = content.startswith("  ")
@@ -284,9 +261,7 @@ def prune_lines(lines: list[str], apply_rule1: bool) -> list[str]:
                     out.append(line)
                 continue
 
-            # buf non-empty — currently gathering an entry
             if is_subline and not is_main:
-                # Rule 3: ceremony-line strip.
                 if _RE_RECURRING_ZERO.match(content):
                     continue
                 if _RE_RESOLUTION_PENDING.match(content):
@@ -300,7 +275,6 @@ def prune_lines(lines: list[str], apply_rule1: bool) -> list[str]:
                     buf_resolved = True
                 continue
 
-            # Non-sub-line — flush current buffer, then handle this line
             flush_buffer()
             if is_main:
                 buf.append(line)
@@ -317,27 +291,13 @@ def prune_lines(lines: list[str], apply_rule1: bool) -> list[str]:
 
 
 def _atomic_replace(path: str, new_lines: list[str]) -> None:
-    """Write `new_lines` to `path` atomically via a same-directory tempfile.
-
-    Mirrors the oracle's `mktemp "${INPUT}.tmp.XXXXXX"` + `mv "$TMP" "$INPUT"`
-    — a same-directory tempfile guarantees the replace is a same-filesystem
-    rename (atomic), which a cross-filesystem tempdir (e.g. Windows TEMP on a
-    different drive) would not guarantee. Deliberately NOT
-    `tempfile.gettempdir()` — see the migration brief's Windows-portability
-    rule; using the target's own directory sidesteps that hazard entirely
-    rather than needing the TMPDIR-vs-TEMP ladder.
-    """
     target_dir = os.path.dirname(os.path.abspath(path))
     basename = os.path.basename(path)
     fd, tmp_path = tempfile.mkstemp(prefix=f"{basename}.tmp.", dir=target_dir)
     try:
         with os.fdopen(fd, "w", newline="") as fh:
             for line in new_lines:
-                # awk's `print` always appends its ORS ("\n") to every
                 # emitted record, INCLUDING a final input line that itself
-                # lacked a trailing newline — replicate that oracle behavior
-                # (a faithful port, not a "fix": the oracle always newline-
-                # terminates its last line).
                 fh.write(line if line.endswith("\n") else line + "\n")
         os.replace(tmp_path, path)
         declare_write(path)
@@ -351,12 +311,6 @@ def _atomic_replace(path: str, new_lines: list[str]) -> None:
 
 
 def _prune_one(input_path: str) -> int:
-    """Prune a single queue-file. Returns 0/1 with the same messages/behavior
-    `main` had when it only ever accepted one positional — `main` now calls
-    this once per argv entry so a multi-file invocation attributes failure
-    to the specific file that caused it, rather than collapsing N results
-    into one opaque pass/fail.
-    """
     basename = os.path.basename(input_path)
 
     if basename not in _ALLOWED_BASENAMES:
@@ -387,10 +341,6 @@ def main(argv: list[str]) -> int:
         print(f"Usage: {_PROG} <queue-file> [<queue-file> ...]", file=sys.stderr)
         return 1
 
-    # Each queue-file is independent: a bad one is reported (by _prune_one,
-    # via its own stderr message naming that file) and folded into the
-    # aggregate exit code, but does not stop the remaining files from being
-    # pruned in this same process.
     overall_rc = 0
     for input_path in argv:
         if _prune_one(input_path) != 0:

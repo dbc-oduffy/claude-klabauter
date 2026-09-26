@@ -1,10 +1,3 @@
-"""coordinator_core.git.test_git_dir -- unit coverage for
-`resolve_git_common_dir`'s topology handling: plain clone, linked worktree,
-`--separate-git-dir`, submodule (relative gitdir), and the fail-open
-contract. See `coordinator_core/hooks/test_auto_push.py`'s "git-dir topology
-resolution" section for the writer-level (`log_failure`) integration
-coverage of the same topologies.
-"""
 
 from __future__ import annotations
 
@@ -34,10 +27,6 @@ def test_linked_worktree_absolute_gitdir_with_commondir_resolves_to_common(tmp_p
     repo_root.mkdir()
     (repo_root / ".git").write_text(f"gitdir: {private_gitdir}\n", encoding="utf-8")
 
-    # Bare `==`, no `_norm()` on either side. The
-    # `_norm()` wrapper this test used to carry would make an uncollapsed
-    # (buggy) LHS `..` path compare equal to this clean RHS, masking exactly
-    # the regression the sibling test below pins.
     assert resolve_git_common_dir(repo_root) == common_dir
 
 
@@ -73,8 +62,6 @@ def test_linked_worktree_relative_commondir_returns_lexically_clean_path(tmp_pat
 
 
 def test_linked_worktree_commondir_absolute_form(tmp_path):
-    """`commondir` may itself hold an absolute path -- resolve it directly
-    without re-joining against the private gitdir."""
     common_dir = tmp_path / "main" / ".git"
     private_gitdir = tmp_path / "main" / ".git" / "worktrees" / "wt"
     private_gitdir.mkdir(parents=True)
@@ -111,17 +98,12 @@ def test_submodule_relative_gitdir_resolves_against_repo_root(tmp_path):
     repo_root.mkdir()
     (repo_root / ".git").write_text("gitdir: ../.git/modules/sub\n", encoding="utf-8")
 
-    # Bare `==`, no `_norm()` on either side; see
-    # the linked-worktree test above for why the masking shape matters.
     resolved = resolve_git_common_dir(repo_root)
     assert resolved == modules_dir
     assert resolved.is_absolute()
 
 
 def test_submodule_relative_gitdir_no_commondir_private_is_common(tmp_path):
-    """Submodule gitdirs never carry a `commondir` file -- the private
-    gitdir IS the common dir, verified explicitly (not merely implied by the
-    path match above)."""
     superproject = tmp_path / "super"
     modules_dir = superproject / ".git" / "modules" / "sub"
     modules_dir.mkdir(parents=True)
@@ -131,8 +113,6 @@ def test_submodule_relative_gitdir_no_commondir_private_is_common(tmp_path):
     repo_root.mkdir()
     (repo_root / ".git").write_text("gitdir: ../.git/modules/sub\n", encoding="utf-8")
 
-    # Bare `==`, no `_norm()` on either side; see
-    # the linked-worktree test above for why the masking shape matters.
     assert resolve_git_common_dir(repo_root) == modules_dir
 
 
@@ -167,12 +147,7 @@ def test_empty_gitdir_pointer_value_fails_open_to_literal_join(tmp_path):
 
 
 def test_resolver_never_raises_on_unreadable_dot_git(tmp_path):
-    """Directory permission errors and similar OSErrors must fail open, not
-    propagate -- this runs under a hook that must stay quiet."""
     repo_root = tmp_path
-    # A `.git` that is neither a file nor a directory (nonexistent parent) is
-    # the simplest way to force an OSError-shaped path without relying on
-    # platform-specific permission semantics.
     unreachable_root = tmp_path / "does-not-exist" / "nested"
 
     resolved = resolve_git_common_dir(unreachable_root)

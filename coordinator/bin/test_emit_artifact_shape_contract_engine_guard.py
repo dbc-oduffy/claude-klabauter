@@ -36,12 +36,6 @@ _SOURCE_EMITTER = _REPO_ROOT / "coordinator_core" / "ops" / "emit_artifact_shape
 
 
 def _load_by_path(name: str, path: Path):
-    """Import a module by file path, never consulting sys.path.
-
-    Used for both the hyphenated CLI (not an importable module name) and the
-    source emitter (whose whole point is to be read independently of whatever
-    sys.path resolves).
-    """
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None, f"cannot load {path}"
     module = importlib.util.module_from_spec(spec)
@@ -59,13 +53,6 @@ def cli():
 
 
 def test_source_version_read_still_finds_a_version(cli):
-    """The guard's one unguarded assumption: the literal is still readable.
-
-    A None here does not fail loudly anywhere in production — it makes the
-    refusal unreachable and hands the emitter back to whatever sys.path
-    resolved. If this test goes red, the fix is to update the read (or move it
-    off a text scrape), NOT to delete the assertion.
-    """
     assert _SOURCE_EMITTER.is_file(), (
         f"{_SOURCE_EMITTER} not found — the guard resolves the source emitter by "
         "path, so a move breaks it silently. Update _source_contract_version()."
@@ -82,15 +69,12 @@ def test_source_version_read_still_finds_a_version(cli):
 
 
 def test_source_version_matches_the_imported_module():
-    """Cross-check the text scrape against the real value, importing the source
-    emitter BY PATH so this never consults sys.path."""
     module = _load_by_path("_emit_asc_source", _SOURCE_EMITTER)
     cli = _load_script_module()
     assert cli._source_contract_version() == module.CONTRACT_VERSION
 
 
 def test_guard_refuses_when_the_resolved_engine_differs(cli, monkeypatch):
-    """Liveness, red verdict: a resolved engine on a different version refuses."""
     fake = type(sys)("coordinator_core.ops.emit_artifact_shape_contract")
     fake.CONTRACT_VERSION = "0.0.1-not-this-tree"
     fake.__file__ = "/somewhere/else/emit_artifact_shape_contract.py"
@@ -107,7 +91,6 @@ def test_guard_refuses_when_the_resolved_engine_differs(cli, monkeypatch):
 
 
 def test_guard_stays_quiet_when_the_resolved_engine_matches(cli, monkeypatch):
-    """Liveness, green verdict: a guard that always fires is noise, not a guard."""
     fake = type(sys)("coordinator_core.ops.emit_artifact_shape_contract")
     fake.CONTRACT_VERSION = cli._source_contract_version()
     fake.__file__ = str(_SOURCE_EMITTER)

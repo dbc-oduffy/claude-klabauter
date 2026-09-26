@@ -59,10 +59,6 @@ def _plant(bin_dst: Path, name: str, payload: bytes) -> Path:
 
 
 def _plant_door(bin_dst: Path, payload: bytes, *, sources: "dict | None" = None) -> Path:
-    """Install a door image plus a self-consistent provenance sidecar at
-    `bin_dst`. `sources` defaults to THIS tree's real door-source fingerprint,
-    which is what makes the pair read `ok` -- pass a mutated mapping for the
-    build-behind polarity."""
     dest = bin_dst / door_install.DOOR_INSTALLED_NAME
     dest.write_bytes(payload)
     door_install.installed_provenance_path(bin_dst).write_text(
@@ -104,8 +100,6 @@ def test_audit_discriminates_current_from_stale(tmp_path, prebuilt_bytes):
     _plant_door(bin_dst, prebuilt_bytes)
     _plant(bin_dst, "current-one", prebuilt_bytes)
     _plant(bin_dst, "current-two", prebuilt_bytes)
-    # Same length, different bytes: the size short-circuit must not be the
-    # only discriminator, or a same-size rebuild reads as current.
     _plant(bin_dst, "stale-same-size", prebuilt_bytes[:4] + b"\x00" + prebuilt_bytes[5:])
     _plant(bin_dst, "stale-short", door_install.NATIVE_IMAGE_MAGIC[0] + b"short")
 
@@ -116,15 +110,10 @@ def test_audit_discriminates_current_from_stale(tmp_path, prebuilt_bytes):
 
     assert audit.current == ["current-one", "current-two"]
     assert audit.stale == ["stale-same-size", "stale-short"]
-    # An absent slot appears in neither list -- `check_settings_home`'s own
-    # forwarder-missing leg reports it, off a different artifact.
     assert "never-installed" not in audit.current + audit.stale
 
 
 def test_audit_reads_one_inode_once(tmp_path, prebuilt_bytes, monkeypatch):
-    """The slots are hardlinks to a single image by construction. Hashing per
-    name would read the same image once per name -- 373 reads on the measured
-    box, whose load norm is 50-70 concurrent sessions."""
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     _plant_door(bin_dst, prebuilt_bytes)
@@ -149,33 +138,15 @@ def test_audit_reads_one_inode_once(tmp_path, prebuilt_bytes, monkeypatch):
     audit = door_install.audit_installed_image_currency(bin_dst, names)
 
     assert audit.stale == [] and audit.current == names
-    # One read for the reference door, one for the shared inode. Never one
-    # per name.
     assert len(reads) == 2, reads
 
 
 def test_provenance_verdict_separates_currency_from_self_consistency(tmp_path, prebuilt_bytes, monkeypatch):
-    """A stale install's exe and sidecar agree with each other perfectly --
-    that agreement is what `ok` used to certify, and it is exactly what a
-    build-behind box satisfies.
-
-    Pinned to the POSIX source-fingerprint leg of `verify_installed_provenance`
-    (`sys.platform` forced off `win32`): this test asserts against
-    `_current_source_fingerprint`'s drifted-sources detail, which is a
-    question only that leg asks. The Windows leg compares the installed
-    binary's hash against the real committed prebuilt instead (pinned by
-    `test_verify_installed_provenance_ok` and this file's Windows-branch
-    tests), so run unpinned this test's synthetic `prebuilt_bytes` payload
-    reads as `stale` against the real prebuilt for an unrelated reason.
-    """
     monkeypatch.setattr(door_install.sys, "platform", "linux")
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
 
     # BOTH PAIRS ARE INTERNALLY PERFECT. What separates them is whether the
-    # sources the sidecar records are the sources this tree ships -- the only
-    # currency question POSIX can answer, since it ships no prebuilt to compare
-    # an image against (see the `prebuilt_bytes` fixture).
     _plant_door(bin_dst, prebuilt_bytes)
     assert door_install.verify_installed_provenance(bin_dst).status == "ok"
 
@@ -189,8 +160,6 @@ def test_provenance_verdict_separates_currency_from_self_consistency(tmp_path, p
 
 
 def test_report_goes_red_only_when_an_image_diverges(tmp_path, prebuilt_bytes, monkeypatch):
-    """The regression proper: the completeness line must not read PASS while
-    an installed image is a build behind."""
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     monkeypatch.setattr(
@@ -217,10 +186,6 @@ def test_report_goes_red_only_when_an_image_diverges(tmp_path, prebuilt_bytes, m
 
 
 def test_door_leg_never_installs_from_the_live_claude_klabauter_checkout(monkeypatch):
-    """`_door_engine_root` must answer with the install resolver's root, and
-    the live checkout is never that answer -- `engine_root_for_install`'s own
-    negative spec. Passing the checkout through is what silently disabled the
-    whole native leg."""
     from coordinator_core.install import engine_root_for_install
     from coordinator_core.warm.engine_root import is_engine_root
 
@@ -243,9 +208,6 @@ def test_door_leg_never_installs_from_the_live_claude_klabauter_checkout(monkeyp
     )
     assert substrate._door_engine_root() is None
 
-    # The shape that made the live checkout look installable to nobody: it is
-    # not a stamped engine root, so feeding it to the door leg can only ever
-    # produce the silent 382-name fallthrough.
     assert not is_engine_root(Path(__file__).resolve().parents[3])
 
 
@@ -261,7 +223,6 @@ def test_a_cut_over_name_counts_as_present_without_a_python_body(tmp_path, prebu
     monkeypatch.setattr(
         settings_home_report, "expected_forwarders", lambda _root: {"cross-repo-memo": "x"}
     )
-    # No Python body at bin/cross-repo-memo -- only the native image.
     _plant_door(bin_dst, prebuilt_bytes)
     _plant(bin_dst, "cross-repo-memo", prebuilt_bytes)
 
@@ -274,18 +235,6 @@ def test_a_cut_over_name_counts_as_present_without_a_python_body(tmp_path, prebu
 
 
 def test_an_unanswerable_currency_question_is_not_reported_as_ok(tmp_path, monkeypatch):
-    """The P1 the reviewer found, pinned: an unreadable prebuilt used to fall
-    through to `ok`, so a caller could not tell "verified current" from "could
-    not look" -- while `check_settings_home`'s currency leg FAILED loudly on
-    the identical condition. Two sibling gates, opposite verdicts, one cause,
-    inside the very change that exists to stop that shape.
-
-    Pinned to the POSIX source-fingerprint leg (`sys.platform` forced off
-    `win32`): that is the leg `_current_source_fingerprint` feeds, and the
-    Windows leg's own unreadable-prebuilt "unverifiable" case is pinned
-    separately by `test_report_goes_red_only_when_an_image_diverges`'s
-    siblings in this file / `test_verify_installed_provenance_ok`.
-    """
     monkeypatch.setattr(door_install.sys, "platform", "linux")
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
@@ -304,12 +253,6 @@ def test_an_unanswerable_currency_question_is_not_reported_as_ok(tmp_path, monke
 
 
 def test_no_installed_door_is_unanswerable_not_every_slot_stale(tmp_path):
-    """A `bin/` with no door holds no images this install placed, so there is
-    nothing to measure -- and measuring its Python forwarders against a door
-    binary anyway is how the check came to report all 387 slots "a build
-    behind" on a box that had just built every one of them from current source
-    (machine-b, 2026-09-02). The absent door is reported on its own artifact,
-    not restated once per slot."""
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     _plant(bin_dst, "cross-repo-memo", b"#!/usr/bin/env python3\n")
@@ -321,12 +264,6 @@ def test_no_installed_door_is_unanswerable_not_every_slot_stale(tmp_path):
 
 
 def test_a_current_posix_door_is_not_rebuilt(tmp_path, monkeypatch):
-    """`install_named_forwarder` calls `install_door` once per name, and the
-    POSIX build has no `/Brepro` equivalent -- so rebuilding unconditionally
-    manufactured the split the currency audit then reported: 371 slots at one
-    sha, the bare name at another, same sources, same box, three minutes apart
-    (machine-b, 2026-09-02). A door already current for this tree's sources is
-    left alone."""
     if os.name == "nt":
         pytest.skip("the POSIX build branch is not reached on Windows")
     bin_dst = tmp_path / "bin"

@@ -1,47 +1,16 @@
-"""coordinator_core.write_guards._subagent_identity — shared subagent
-identity resolver, factored out of ``block_subagent_plan_body_write.py``
-(2026-08-03) so ``block_subagent_archive_write.py`` can recognise the same
-named-teammate ``agent_id`` shape rather than carrying its own,
-narrower-fidelity bare-hex-only copy. See
-``cross-repo/inbox/2026-08-03-doe-claude-em-archive-write-guard-pincer.md``
-for the composed-defect writeup that prompted this extraction.
-
-Port of DoE coordinator/lib/coordinator-session.sh (DoE ``e34f2484``,
-2026-07-22) ``resolve_subagent_identity`` / ``cs_build_canonical_agent_id``.
-
-Also carries ``_read_backpointer_subagent_type`` — the
-``agent_id -> em_session_id -> dispatched-agents.txt`` row lookup both
-guards need to resolve a canonical agent id to its dispatched
-``subagent_type`` — so there is exactly one implementation of the
-back-pointer chain, not two.
-
-This module has NO ``check()`` entry point and is not itself a write guard;
-it is imported by ``block_subagent_plan_body_write`` and
-``block_subagent_archive_write`` only.
-"""
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
-#: coordinator-session.sh resolve_subagent_identity path (a): bare hex,
-#: unnamed-agent fast path, session_id ignored.
 _BARE_HEX_RE = re.compile(r"^[a-f0-9]{12,}$")
 
-#: coordinator-session.sh resolve_subagent_identity path (b): named teammate
-#: a<name>-<16hex> — capture group extracts <name> (dash-tolerant, e.g.
-#: aprobe2-teammate-64cd7f42c270a899 -> probe2-teammate).
 _NAMED_TEAMMATE_RE = re.compile(r"^a(.+)-[a-f0-9]{16}$")
 
-#: em-session-id.txt back-pointer content format guard.
 _SESSION_ID_FORMAT_RE = re.compile(r"^[a-zA-Z0-9_-]{3,}$")
 
-#: Already-canonical teammate shape as the HARNESS hands it back verbatim on
-#: dispatch (``tool_response.agentId`` / ``.agent_id``): ``<name>@session-<short>``.
 #: Distinct from ``_NAMED_TEAMMATE_RE`` above, which matches the SUBAGENT-side
-#: raw id (``a<name>-<16hex>``) seen from inside a dispatched teammate's own
-#: tool calls — the two shapes are NOT the same string for the same teammate.
 _TEAMMATE_CANONICAL_RE = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+)@session-(?P<short>[a-z0-9-]+)$")
 
 
@@ -92,9 +61,6 @@ def normalize_teammate_agent_id(agent_id: str, live_session_id: str) -> str:
 
 
 def _cs_build_canonical_agent_id(name: str, short_session: str) -> str:
-    """Port of ``cs_build_canonical_agent_id``, DoE coordinator-session.sh
-    (DoE ``e34f2484``, 2026-07-22).
-    """
     return f"{name}@session-{short_session}"
 
 
@@ -185,12 +151,6 @@ def _read_backpointer_subagent_type(
     except OSError:
         return ""
 
-    # ambiguity) -- a bare "return on first match" resolved a duplicate
-    # agent_id (one legacy 2-column row, one full 3+-column row) by file
-    # order rather than by recency. Now: rows with fewer than 3 columns are
-    # ignored outright (never considered a match), and more than one
-    # 3+-column row matching the same agent_id is ambiguous -> fail-closed
-    # ("") rather than picking one by position.
     matches = [
         fields[2]
         for row in rows

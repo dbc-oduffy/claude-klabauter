@@ -20,7 +20,6 @@ from coordinator_core.frontmatter.schema_validate import (
 
 
 def _plan(tasks_yaml: str, *, frontmatter: str | None = None, prose: str = '') -> str:
-    """A minimal plan document, optionally with frontmatter and body prose."""
     head = f"---\n{frontmatter}\n---\n" if frontmatter is not None else ''
     return (
         f"{head}"
@@ -33,8 +32,6 @@ def _plan(tasks_yaml: str, *, frontmatter: str | None = None, prose: str = '') -
     )
 
 
-# A LEGACY (no `grouping_approvals` key) plan whose spine is ordering-VALID,
-# grouping-VALID (no gated disposition), and per-row-VALID.
 _CLEAN = (
     "- id: C1\n"
     "  title: live\n"
@@ -45,9 +42,6 @@ _CLEAN = (
 )
 
 # ORDERING-violating: a `backlogged` (defer) row precedes an `open` (do) row.
-# Legacy plan, so the grouping-approval leg is silent (no gated disposition
-# scan on a legacy plan) and the violation this source carries is ordering
-# ONLY — isolating which leg's error surfaces first.
 _ORDERING_VIOLATING = (
     "- id: C1\n"
     "  title: deferred first\n"
@@ -66,9 +60,6 @@ _ORDERING_VIOLATING = (
 )
 
 # GROUPING-violating: ordering-VALID (open before backlogged), on a GOVERNED
-# plan (bare `grouping_approvals` key, per `is_governed_plan`) whose `defer`
-# block is absent/pending — the grouping-approval leg refuses this, and the
-# ordering leg has nothing to say about it.
 _GROUPING_VIOLATING = (
     "- id: C1\n"
     "  title: live\n"
@@ -86,9 +77,6 @@ _GROUPING_VIOLATING = (
 )
 _GOVERNED_FRONTMATTER = "grouping_approvals: {}"
 
-# BAD-ROW: ordering-VALID, grouping-silent (legacy, no gated disposition),
-# but the row is missing `change_kind` — a per-row JSON-Schema shape defect
-# (`change_kind` is in the schema's own `required` list).
 _BAD_ROW = (
     "- id: C1\n"
     "  title: missing change_kind\n"
@@ -98,7 +86,6 @@ _BAD_ROW = (
 )
 
 # MALFORMED-fence: no `## Tasks` heading at all, so `locate_fenced_block`
-# cannot locate the block under it.
 _MALFORMED_FENCE_SOURCE = (
     "# A plan\n\n"
     "## Not Tasks\n\n"
@@ -161,10 +148,6 @@ class TestSequenceOrder:
             )
 
     def test_declared_subset_skips_the_omitted_leg(self):
-        """Declaring only `per_row` on an ordering-violating source never
-        surfaces the ordering defect — the leg was not declared, so it
-        does not run.
-        """
         source = _plan(_ORDERING_VIOLATING)
         errors, rows = plan_tasks_spine_errors(
             source, None,
@@ -176,10 +159,6 @@ class TestSequenceOrder:
 
 
 class TestCheckPlanTasksSourceRewiring:
-    """`check_plan_tasks_source` declares `legs=("ordering",
-    "grouping_approval", "per_row")` — the behavioural budget is that this
-    door returns the SAME first error it always did, for each defect class.
-    """
 
     def test_ordering_violation_is_first_error(self):
         error = check_plan_tasks_source(_plan(_ORDERING_VIOLATING))
@@ -201,10 +180,6 @@ class TestCheckPlanTasksSourceRewiring:
         assert check_plan_tasks_source(_plan(_CLEAN)) is None
 
     def test_malformed_fence_still_returns_none(self):
-        """The `integrity` leg is NOT declared by `check_plan_tasks_source`
-        — a malformed fence stays a silent pass, exactly as before this
-        rewiring, not a newly-acquired finding.
-        """
         assert check_plan_tasks_source(_MALFORMED_FENCE_SOURCE) is None
 
     def test_unparseable_block_still_returns_none(self):
@@ -213,9 +188,6 @@ class TestCheckPlanTasksSourceRewiring:
 
 class TestRowLabelFmt:
     def test_none_gives_bare_field(self):
-        """`row_label_fmt=None` reproduces `check_plan_tasks_source`'s
-        historical bare-field labelling — no `tasks[...]` prefix.
-        """
         errors, _rows = plan_tasks_spine_errors(
             _plan(_BAD_ROW), None,
             plan_tasks_schema=_PLAN_TASKS_SCHEMA_DICT,

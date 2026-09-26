@@ -71,30 +71,11 @@ try:
 except ImportError:  # pragma: no cover - exercised by the publish pre-swap gate
     # The publish pre-swap FUNCTION gate imports this file as a FLAT, top-level
     # `data_root` module in a hermetic, OSS-shaped subprocess whose PYTHONPATH is
-    # the staging dir itself (`coordinator/bin/publish.py ::
-    # _function_gate_modules_and_search_paths_for_repo_root` strips the
-    # `coordinator_core` prefix for a row staged at its own root). There is no
     # `coordinator_core` package to import through there BY CONSTRUCTION, so a
-    # module-level import of the package from inside one of its own members can
-    # never satisfy the gate, and the engine row cannot publish while one stands.
-    #
-    # The module-level BINDING is load-bearing and is preserved: every test in
-    # `coordinator_core/test_data_root.py` monkeypatches this module attribute,
-    # and `_resolve_doe_root()` below reads the global at call time so that keeps
-    # working. Only the hard import-time FAILURE is removed; a real resolution
-    # under a real package still imports here, at import time, unchanged.
     coordinator_doe_root = None  # type: ignore[assignment]
 
 
 def _resolve_doe_root():
-    """Call the DoE-root resolver, importing it late if module-level import failed.
-
-    Reads the module global at call time so a monkeypatched
-    `coordinator_core.data_root.coordinator_doe_root` still wins. When the
-    module-level import fell through (hermetic gate shape above), the deferred
-    import raises the genuine `ModuleNotFoundError` here rather than at import
-    time -- honest failure at the point of use, never a silent wrong answer.
-    """
     resolver = coordinator_doe_root
     if resolver is None:
         from coordinator_core.ops.coordinator_doe_root import (  # noqa: PLC0415
@@ -160,18 +141,6 @@ def data_root(dir_name: str) -> Path:
             "and the resolve_coordinator_clone fallback all unresolved)."
         )
 
-    # F2 fix (2026-08-08, hermetic-ac-reverify) -- `coordinator_doe_root()`
-    # (and its `_cf_codename_free_root()` ladder in particular, see that
-    # module) accepts EITHER published manifest layout: the private DoE-repo
-    # shape (`<root>/coordinator/schemas/...`) AND the OSS-flat shape
-    # (`<root>/schemas/...`, no `coordinator/` segment). This terminal join
-    # previously ALWAYS inserted `coordinator/`, so a correctly-resolved
-    # OSS-flat root (e.g. a real marketplace-cache install) produced a path
-    # that cannot exist -- `data_root()` was dead for every `dir_name` on
-    # that layout. Try the private-shape join first (unchanged default for
-    # every existing caller/test resolving a private-layout root), then the
-    # OSS-flat shape -- see F2 in
-    # state/review-findings/2026-08-08-successor-partitioned/hermetic-ac-reverify.md.
     private_candidate = Path(doe) / "coordinator" / dir_name
     if private_candidate.is_dir():
         return private_candidate
@@ -187,20 +156,7 @@ def data_root(dir_name: str) -> Path:
         f"{flat_candidate} (OSS-flat layout, not found)."
     )
 
-# `content_root_for` and its marker are
-# PURE, no-intra-package-import primitives, moved to a leaf module so any
-# `coordinator_core` module can import them at module level without risking
-# the cycle that used to force `resolve_coordinator_clone.py` and
-# `coordinator_core/ops/coordinator_doe_root.py` to hand-expand the join
-# instead (findings 4, 8). Re-exported here so every existing
-# `from coordinator_core.data_root import content_root_for` (and
 # `FLAT_CONTENT_ROOT_MARKER`) keeps working unchanged. See
-# `coordinator_core/_content_root_primitive.py` for the implementation and the
-# full rationale.
-#
-# `resolved_content_root()` (the
-# no-arg convenience wrapper around this) is deleted: it had zero call sites
-# anywhere in the diff that introduced it, in either twin.
 from coordinator_core._content_root_primitive import (  # noqa: E402,F401
     FLAT_CONTENT_ROOT_MARKER,
     content_root_for,

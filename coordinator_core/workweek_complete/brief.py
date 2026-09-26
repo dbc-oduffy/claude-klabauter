@@ -93,12 +93,6 @@ from coordinator_core.git.repo_root import git_common_dir
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.resolution.facade import resolve_operator_config
 
-# ---------------------------------------------------------------------------
-# Exit-code contract (brief-side, 0-3) — locally scoped to this compute half,
-# NOT shared with the apply half's own 0-4 enumeration (see apply.py's own
-# `WorkweekApplyExitCode`; computed-skills.md § Exit-code contract for a
-# mutating half requires each half to pin its own set).
-# ---------------------------------------------------------------------------
 WorkweekExitCode = extend_exit_codes(
     "WorkweekExitCode",
     BUSINESS_FAIL=1,
@@ -106,9 +100,6 @@ WorkweekExitCode = extend_exit_codes(
     TRANSPORT_FAIL=3,
 )
 
-#: The C4 consumes-manifest (plan § Tasks C4 body) — the CLOSED set of CLI
-#: names any `directives[].cli` value in this module is drawn from. Never
-#: extended ad hoc; a new mechanical step needs a manifest update first.
 CONSUMES_MANIFEST: tuple[str, ...] = (
     "list-week-changelog",
     "backfill-week-changelog-gaps",
@@ -140,19 +131,9 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
 )
 
 
-#: The canonical dashed ceremony name — the `coordinator.local.md` key
-#: `coordinator-ceremony-hook` resolves, AND the `ceremony` field the Tier-U
-#: grant carries. One constant so the handback's `--only-ceremony` guard can
-#: never drift from the value the write stamped: a mismatch would silently
-#: turn every handback into a no-op and leave the grant live past the
-#: ceremony, the exact unbounded-grant defect the write exists to bound.
 _CEREMONY_NAME = "workweek-complete"
 
 #: Stored VERBATIM in the grant record's `note` (write_tier_u_grant never
-#: normalizes it). Names the ceremony's Tier-U consumers so an auditor
-#: reading a live grant can tell what it was minted for: Step 2's
-#: `plugin-ecosystem/run.js` and Step 8's `/parallel-code-review` Test-Output
-#: Capture, both of which fire before Step 16's nested `/merge-to-main`.
 _TIER_U_GRANT_NOTE = (
     "implicit ceremony grant: /workweek-complete Step 0.9 — bounds Step 2 "
     "(plugin-ecosystem suite) and Step 8 (/parallel-code-review Test-Output "
@@ -181,14 +162,6 @@ def _directive(
 
 
 def _resolve_repo_root_for_doc_staleness(start: Optional[Path] = None) -> Optional[str]:
-    """`git rev-parse --path-format=absolute --git-common-dir` for `start`
-    (default cwd), then `main_worktree_root(common_dir)` -- same two-step
-    ladder as `workday_complete.brief._resolve_repo_common_dir_for_ceremony`
-    (never a bare `git rev-parse --show-toplevel`, so a ceremony invoked
-    from a linked worktree still resolves the doc registry against the
-    MAIN worktree's `coordinator.local.md`, matching where the C4 registry
-    actually lives). Returns `None` on any resolution failure -- never
-    raises; the caller degrades to an empty stale-docs list."""
     cwd = start or Path.cwd()
     out = git_common_dir(str(cwd))
     if not out:
@@ -200,33 +173,6 @@ def _resolve_repo_root_for_doc_staleness(start: Optional[Path] = None) -> Option
 
 
 def _compute_doc_staleness_report() -> list[dict[str, Any]]:
-    """Read-only C5 leg for the doc-staleness gate (plan `docs/plans/2026-
-    07-28-human-facing-doc-staleness-detector.md`, chunk C5): resolves the
-    invoking repo's root, then calls `coordinator_core.ops.doc_staleness
-    .build_doc_staleness_report_from_registry` (C1 -- landed concurrently
-    with this chunk; reads the C4 doc registry + threshold overrides from
-    `coordinator.local.md` itself, so this module supplies only the repo
-    root).
-
-    Never raises and never fails the ceremony (mirrors
-    `workday_complete.brief._compute_open_day_goals`'s degradation
-    posture) -- an unresolvable repo root, an absent op/registry module,
-    or any other failure degrades to an EMPTY report (zero stale docs),
-    never to a spurious ask: unlike `_compute_dirty_tree_verdict`'s "fail
-    toward asking" (a git-state safety probe), a doc-staleness false
-    negative is the correct default here -- this gate is
-    advisory-additive, not safety-critical, so degrading silent is
-    preferred over surfacing a judgment point with no real evidence
-    behind it.
-
-    Returns the report's `docs` list verbatim -- each entry carries AC6's
-    evidence fields for `status: ok` docs (`path`, `stale`, `commits_since`,
-    `days_since`, `last_touch_sha`, `last_touch_date`, `changed_areas`,
-    `threshold_commits`, `threshold_days`), or just `{"path", "status"}`
-    for `absent`/`no_content_modifying_history` docs -- `_stale_doc_entries`
-    filters on the `stale` key so those shapes never reach the judgment
-    points below.
-    """
     repo_root = _resolve_repo_root_for_doc_staleness()
     if repo_root is None:
         return []
@@ -247,17 +193,10 @@ def _compute_doc_staleness_report() -> list[dict[str, Any]]:
 
 
 def _stale_doc_entries(report: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Filters a doc-staleness report down to entries the op marked
-    `stale` with a non-empty `path` -- guards a malformed/partial entry
-    from silently producing a judgment point with no doc to name."""
     return [entry for entry in report if entry.get("stale") and entry.get("path")]
 
 
 def _doc_staleness_slug(path: str) -> str:
-    """Deterministic filesystem-path -> id-fragment slug (e.g.
-    `coordinator/README.md` -> `coordinator_readme_md`) -- stable across
-    runs for the same path and collision-free across a repo's doc
-    registry (each registry path is already unique)."""
     return re.sub(r"[^a-z0-9]+", "_", path.lower()).strip("_")
 
 
@@ -270,10 +209,6 @@ def _doc_staleness_ack_directive_id(path: str) -> str:
 
 
 def _doc_staleness_evidence(entry: dict[str, Any]) -> str:
-    """AC6 evidence line for one stale-doc judgment point -- every field
-    the detector op is specced to emit, rendered verbatim rather than
-    summarized, so the EM's disposition is made against the same numbers
-    the guard-sweep advisory entry (`d_step4b_4k_doc_staleness`) shows."""
     return (
         f"{entry.get('path')}: commits_since={entry.get('commits_since')} "
         f"(threshold {entry.get('threshold_commits')}), "
@@ -285,32 +220,6 @@ def _doc_staleness_evidence(entry: dict[str, Any]) -> str:
 
 
 def _compute_doc_verify_findings() -> list[dict[str, Any]]:
-    """Read-only C6c leg for the doc-content-verification gate (plan
-    `docs/plans/2026-07-28-human-facing-doc-staleness-detector.md`, chunk
-    C6c): resolves the invoking repo's root (reuses
-    `_resolve_repo_root_for_doc_staleness` -- that helper's git-common-dir +
-    main-worktree-root ladder is generic, not staleness-specific, so this
-    leg does not duplicate it), then calls `coordinator_core.ops.
-    doc_content_verify.build_findings_report_from_registry` directly --
-    mirrors how `_compute_doc_staleness_report` consumes `doc_staleness
-    .build_doc_staleness_report_from_registry` for the sibling signal, so
-    the two read consistently to anyone scanning this file. Consumes typed
-    `Finding`/`Citation` objects (surfaced as the same JSON-shaped dict list
-    the op's own CLI prints) rather than shelling out to
-    `doc_content_verify.main` and scraping its captured stdout as an ad hoc
-    API -- that seam was fragile on this hot path (depends on the CLI's
-    stdout formatting, swallows/interleaves anything else written to stdout
-    during the call, and breaks the moment the CLI adds a log line).
-
-    Never raises and never fails the ceremony -- mirrors
-    `_compute_doc_staleness_report`'s degradation posture: an unresolvable
-    repo root, an absent op, or any other failure degrades to an EMPTY
-    findings list, never to a spurious ask.
-
-    Returns the report's `findings` list verbatim -- each entry carries
-    `doc`, `line`, `token`, `reason` (`"absent"` or `"moved"`; never
-    `"resolves-cross-repo"` -- see `doc_content_verify`'s own negative-spec).
-    """
     repo_root = _resolve_repo_root_for_doc_staleness()
     if repo_root is None:
         return []
@@ -333,11 +242,6 @@ def _compute_doc_verify_findings() -> list[dict[str, Any]]:
 def _verify_findings_by_doc(
     findings: list[dict[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
-    """Groups a flat findings list by `doc` -- the AC14 cardinality bound:
-    verification findings are per-citation-per-line and unbounded, so the
-    gate carries at most ONE judgment point per doc (this grouping), with
-    the finding list attached as evidence, never one judgment point per
-    finding."""
     grouped: dict[str, list[dict[str, Any]]] = {}
     for finding in findings:
         doc = finding.get("doc")
@@ -348,9 +252,6 @@ def _verify_findings_by_doc(
 
 
 def _doc_verify_slug(path: str) -> str:
-    """Delegates to `_doc_staleness_slug` -- same path->id-fragment rule,
-    named for this gate's own id family rather than duplicating the
-    regex."""
     return _doc_staleness_slug(path)
 
 
@@ -363,9 +264,6 @@ def _doc_verify_ack_directive_id(path: str) -> str:
 
 
 def _doc_verify_evidence(path: str, findings: list[dict[str, Any]]) -> str:
-    """One evidence line per doc, listing every attached finding verbatim
-    (line/token/reason) -- the doc-level judgment point's evidence is the
-    full finding list, per AC14, never a single summarized count."""
     rendered = "; ".join(
         f"line {finding.get('line')} `{finding.get('token')}` "
         f"({finding.get('reason')})"
@@ -455,13 +353,6 @@ def _build_directives(
     """
     stale_docs = stale_docs or []
     doc_verify_findings_by_doc = doc_verify_findings_by_doc or {}
-    # P124-C1: resolved ONCE per call and threaded explicitly to every
-    # directive below that needs the repo being closed -- cruft-sweep,
-    # detect-initiative-candidates, and d_step4b_4k_version_consistency's
-    # new --repo-root arg -- collapsing the three separate
-    # _resolve_repo_root_for_doc_staleness() call sites this function used
-    # to carry (one per directive, each an uncached git_common_dir spawn)
-    # to this one.
     _repo_root = _resolve_repo_root_for_doc_staleness()
     directives = [
         _directive(
@@ -494,12 +385,6 @@ def _build_directives(
         _directive(
             "d_step4_counts_initiative_candidates",
             cli="detect-initiative-candidates",
-            # `--no-stdin` selects the self-query branch structurally: under
-            # in-process apply there is no producer on stdin, but stdin is not
-            # a tty either, so the CLI's isatty() probe would take the pipe
-            # branch and block the weekly ceremony on an unterminated read.
-            # `--root` follows the pickup/baton/merge precedent of passing the
-            # repo root explicitly rather than deriving it from apply's cwd.
             args=(
                 ["--no-stdin", "--root", _repo_root]
                 if _repo_root
@@ -514,11 +399,6 @@ def _build_directives(
         _directive(
             "d_step4_counts_cruft_sweep",
             cli="cruft-sweep",
-            # cruft-sweep DELETES, and without `--repo-root` it falls back to
-            # `show_toplevel() or os.getcwd()` — under in-process apply that is
-            # whatever tree the ceremony process happens to stand in, not the
-            # repo being closed. The only data-loss-capable directive in this
-            # assembler; the root is passed explicitly for that reason.
             args=(
                 ["--repo-root", _repo_root]
                 if _repo_root
@@ -526,18 +406,6 @@ def _build_directives(
             ),
         ),
         _directive(
-            # Sub-reap (iii), the orphaned-claim-dir cull, was cut out of
-            # `session.reap`'s `_handler` by PM ruling 2026-08-22 (an
-            # irreversible `rm -rf` at boot, the busiest moment) and
-            # relocated to `session.reap_claims_for_repos` — this directive
-            # is the destination it was relocated to. No `depends_on`: an
-            # orphan cull has no live ask to wait on. Idempotent (removes
-            # orphans, does not re-create them), so it is safe to fire again
-            # here even on a week where /workday-complete already ran it —
-            # /workweek-complete does NOT invoke /workday-complete itself
-            # (no reference to workday_complete anywhere in this module or
-            # its apply half), so today the two never double-fire in the
-            # same ceremony chain regardless.
             "d_step4_counts_reap_claims",
             cli="reap-claims-for-repos",
             args=[],
@@ -575,10 +443,6 @@ def _build_directives(
         _directive(
             "d_step4b_4k_version_consistency",
             cli="check-version-consistency",
-            # P124-C1: the gate identifies the coordinator-claude bundle in
-            # its caller before it may fail it -- --repo-root names the repo
-            # being closed so a repo with no bundle reaches a stated
-            # not-applicable rather than the gate's old caller-blind fail.
             args=(["--repo-root", _repo_root] if _repo_root else []),
         ),
         _directive(
@@ -640,20 +504,7 @@ def _build_directives(
             args=["revoke", "--only-ceremony", _CEREMONY_NAME],
         ),
     ]
-    # `hard_block` is metadata only — the halt contract in apply.py does not
-    # read it; it exists so the skill-body render (C6) can preserve
-    # hard-block-vs-advisory granularity per AC9/C8 (see C4's census note on
-    # which of the 4b-4k gates are hard-blocking).
-    # A grant that could not be minted (or handed back) must not turn a
     # ceremony that otherwise fully succeeded into `PARTIAL_MUTATION`,
-    # whose contract tells the operator to stop and reconcile. Both legs
-    # are best-effort for the same reason `merge_assemble.apply`'s handler
-    # tolerates exit 1: `write_tier_u_grant`/`revoke_tier_u_grant` return
-    # False on an INFRA condition (unresolvable sid — routine on a box
-    # running dozens of concurrent sessions), and the DR-088 layer-5 guard
-    # fails CLOSED, so an unminted grant refuses the Tier-U consumer rather
-    # than authorizing it. The failure still reaches the operator, in
-    # `report["degraded"]`.
     best_effort_ids = {
         "d_step0_9_tier_u_grant_write",
         "d_step13_7_tier_u_grant_handback",
@@ -811,13 +662,6 @@ def _build_judgment_points(
             reason="dispatch-decision",
             revalidate_at_dispatch=False,
             round_trip="round_trip",
-            # Action-class, explicitly decided (plan's C1b correction,
-            # premise-finding sidecar channel 3): the EM dispatches a
-            # worker off this answer, with no directive and no gate --
-            # demoting it into narration would silence a real dispatch
-            # decision. `False`, not left unmarked, so this reads as a
-            # deliberate call rather than an oversight the census could
-            # otherwise flag.
             reportable=False,
         ),
         build_judgment_point(
@@ -839,11 +683,6 @@ def _build_judgment_points(
             reason="pm-scoped-tradeoff",
             revalidate_at_dispatch=True,
             round_trip="terminal",
-            # Action-class: `extend_span` widens what Rule-5 treats as already
-            # reviewed, and no directive applies that -- the EM does. A
-            # `pm-scoped-tradeoff` is by definition an answer that matters, so
-            # demoting it into narration would silence the one kind of question
-            # this mechanism exists to preserve.
             reportable=False,
         ),
         build_judgment_point(
@@ -942,16 +781,6 @@ def _build_judgment_points(
 
 
 def _reported_narration(reported_points: list[dict[str, Any]]) -> str:
-    """Renders each `reported`-partition judgment point (see
-    `partition_reportable`) as a `narration` sentence: the question plus its
-    recommendation's `rationale`, so the EM still sees the fact without being
-    asked to answer a question that gates no directive. Returns `""` when
-    `reported_points` is empty -- callers must not append a stray separator
-    in that case. Only ever called with recommendation-carrying points (see
-    `brief()`), so `recommendation` is never `None` here in practice, but a
-    missing key still degrades to an empty rationale rather than raising --
-    this is narration prose, not a control-flow input, and must never fail
-    the ceremony over a formatting concern."""
     lines = []
     for point in reported_points:
         recommendation = point.get("recommendation") or {}
@@ -966,16 +795,6 @@ def _reported_narration(reported_points: list[dict[str, Any]]) -> str:
 def brief(
     *, decisions: Optional[dict[str, Any]] = None, env: Optional[dict[str, str]] = None
 ) -> tuple[int, dict[str, Any]]:
-    """Compute the workweek-complete decision object. Read-only — never
-    mutates disk/git state itself; every mutation is a named `directives[]`
-    entry the apply half (`coordinator_core.workweek_complete.apply`)
-    executes. `decisions` (an EM-supplied `{judgment_point_id: {disposition,
-    ...}}` map) is accepted and threaded through unchanged in the returned
-    envelope's `decisions` key — this module does not resolve it itself.
-
-    Returns `(exit_code, envelope)` using `WorkweekExitCode` (0-3, brief-side
-    only — see module docstring).
-    """
     try:
         resolve_operator_config(env=env)
     except Exception as exc:  # noqa: BLE001 - mirrors workday_complete.brief's own backstop
@@ -986,13 +805,6 @@ def brief(
     directives = _build_directives(stale_docs, doc_verify_findings_by_doc)
     all_judgment_points = _build_judgment_points(stale_docs, doc_verify_findings_by_doc)
 
-    # Partitioned via the shared predicate, scoped to recommendation-carrying
-    # points only -- `partition_reportable` itself has no recommendation carve-out,
-    # but this plan's premise (and this module's Tier-2/Tier-3 docstring
-    # split above) is specifically about recommendation-carrying points; the
-    # Tier-3 `recommendation=None` points (PM-authority, irreversible-action,
-    # pm-scoped-tradeoff without a recommendation) stay asked unconditionally
-    # and are never fed to the predicate.
     recommendation_carrying = [
         point for point in all_judgment_points if point.get("recommendation") is not None
     ]
@@ -1026,8 +838,6 @@ def brief(
 
 
 def main(argv: list[str]) -> int:
-    """`main()`'s `brief` dispatch — no argv options today (mirrors
-    `workday_complete.brief`'s CLI shape). Prints the envelope as JSON."""
     import json
 
     exit_code, envelope = brief()

@@ -1,18 +1,3 @@
-"""
-coordinator_core.pickup_assemble.stamp_check — thin additive CLI verb wrapping
-`compute_execution_stamp_match` (the `gates.execution_stamp_match` gate
-surface) with an external, standalone entrypoint.
-
-Purpose: `compute_execution_stamp_match` was reachable ONLY from inside
-`brief()` (verified at review: the CLI was a closed 3-verb apply/drop/brief
-table, no external caller could invoke the staleness-recompute-and-classify
-check directly). This module adds `pickup-assemble stamp-check <plan-path>`,
-resolving the repo root and the artifact's own frontmatter, then delegating
-straight to `compute_execution_stamp_match` — zero behavior change to that
-function or to the existing apply/brief/drop arms (additive-CLI).
-
-Spec backlink: DoE-claude:pln-computed-skills-b5-planning-cl-a28764, chunk C3a
-"""
 
 from __future__ import annotations
 
@@ -85,8 +70,6 @@ def stamp_check(
 
 
 def main_stamp_check(argv: list[str]) -> int:
-    """`stamp-check <plan-path>` — parses argv, calls `stamp_check`, prints
-    the gate as JSON on stdout, returns its exit code."""
     if not argv:
         print("usage: pickup-assemble stamp-check <plan-path>", file=sys.stderr)
         return EXIT_USAGE

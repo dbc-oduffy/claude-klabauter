@@ -62,11 +62,6 @@ _mod = _load_module()
 
 
 def _seen_from_change_lines(dest: "str", change_lines) -> dict:
-    """Stands in for what `_build_commit_pathspec` used to build internally
-    before handing off to `_filter_commit_pathspec` -- first-seen-wins,
-    dest-relative `rel` joined onto `dest`. No rename resolution and no
-    containment check: neither is a manifest-sourced caller's concern (§
-    module docstring)."""
     dest_root = Path(dest)
     seen: dict = {}
     for tag, rel in change_lines:
@@ -74,15 +69,7 @@ def _seen_from_change_lines(dest: "str", change_lines) -> dict:
     return seen
 
 
-# ---------------------------------------------------------------------------
-# Pathspec pre-filtering (docs/plans/2026-08-14-the-publish-round-commits-
-# the-names-it-a.md follow-up): the 100-declined-path deadlock. Fix 2 drops
-# two knowable-before-committing benign-decline classes from the derived
-# pathspec so `scoped-git-commit` is never asked to land a path that cannot.
 # `_filter_commit_pathspec` itself is UNCHANGED by chunk C4 -- only its
-# caller (`_pathspec_from_manifest`, not exercised directly here per this
-# file's own Anti-scope, "do not re-run a real publish to test") changed.
-# ---------------------------------------------------------------------------
 
 
 def test_gitignored_path_dropped_from_pathspec(tmp_path, monkeypatch):
@@ -105,9 +92,6 @@ def test_gitignored_path_dropped_from_pathspec(tmp_path, monkeypatch):
 
 
 def test_already_absent_deletion_intent_dropped_from_pathspec(tmp_path, monkeypatch):
-    """A `DELETE`/`REMOVE` tag for a path absent from both dest's worktree
-    and its index has nothing left to commit -- the desired end state
-    (absent) already holds."""
     dest = tmp_path / "dest"
     dest.mkdir()
     change_lines = [("REMOVE", "gone-already.sh")]
@@ -127,9 +111,6 @@ def test_already_absent_deletion_intent_dropped_from_pathspec(tmp_path, monkeypa
 
 
 def test_real_add_update_delete_still_appears_in_pathspec(tmp_path, monkeypatch):
-    """A genuine deletion (still index-tracked, only worktree-removed by the
-    real publish run) must NOT be filtered -- only the class of deletion
-    whose path is absent from BOTH worktree and index is dropped."""
     dest = tmp_path / "dest"
     dest.mkdir()
     change_lines = [
@@ -186,11 +167,6 @@ def test_filter_summary_printed_to_stderr(tmp_path, monkeypatch, capsys):
 
 
 def test_pathspec_filter_fails_open_on_undeterminable_dest_state(tmp_path, monkeypatch):
-    """A path this filter cannot actually verify (probe failure, e.g. `dest`
-    is not a git repo in this stub) is left in the pathspec -- a real change
-    that should land is the failure mode this filter must never cause, so
-    an uncertain case surfaces through `scoped-git-commit`'s own decline
-    instead of being silently dropped here."""
     dest = tmp_path / "dest"
     dest.mkdir()
     change_lines = [("REMOVE", "maybe-gone.sh")]
@@ -210,12 +186,6 @@ def test_pathspec_filter_fails_open_on_undeterminable_dest_state(tmp_path, monke
 
 
 def test_check_ignore_result_outside_rel_paths_raises_hard(tmp_path, monkeypatch):
-    """`check-ignore --stdin` can only ever echo back a member of what it was
-    fed once `rel_paths` and its output share one canonical (POSIX) form --
-    a returned path absent from `rel_paths` means that invariant broke, and
-    this must fail LOUD (hard raise) rather than silently filtering nothing:
-    the corrupting direction is a narrowed filter missing a real gitignored
-    path and committing gitignored content into the mirror."""
     dest = tmp_path / "dest"
     dest.mkdir()
     seen = {str(dest / "tracked.md"): ("NEW", "tracked.md")}
@@ -231,10 +201,6 @@ def test_check_ignore_result_outside_rel_paths_raises_hard(tmp_path, monkeypatch
 
 
 def test_check_ignore_result_subset_of_rel_paths_does_not_raise(tmp_path, monkeypatch):
-    """Ordinary legitimate input -- every path `check-ignore` reports as
-    ignored is drawn from what it was asked about -- must never trip the
-    invariant-break raise; only a genuine mismatch does (§ the sibling
-    hard-raise test above)."""
     dest = tmp_path / "dest"
     dest.mkdir()
     seen = {
@@ -250,17 +216,6 @@ def test_check_ignore_result_subset_of_rel_paths_does_not_raise(tmp_path, monkey
     monkeypatch.setattr(_mod, "_run", _fake_run)
     kept = _mod._filter_commit_pathspec(dest, str(dest), seen)[0]
     assert kept == [str(dest / "kept.md")]
-
-
-# ---------------------------------------------------------------------------
-# Real-shape regression (docs/plans/2026-08-14-the-publish-round-commits-
-# the-names-it-a.md follow-up, the 83-decline defect): a REAL git repo, with
-# `dest` a `dest_subdir` beneath the actual `scoped-git-commit --repo` root.
-# A REAL subprocess `git` is used deliberately here (never mocked) -- the
-# defect is in exactly what a real `git ls-files`/`git diff --cached`
-# reports for a `dest_subdir`, which a hand-rolled `_fake_run` cannot stand
-# in for without begging the question.
-# ---------------------------------------------------------------------------
 
 
 import subprocess as _subprocess
@@ -282,11 +237,6 @@ def _init_real_repo(repo_root: Path) -> None:
 
 
 def test_already_absent_deletion_intent_dropped_from_pathspec_real_repo_subdir(tmp_path):
-    """Real-shape fidelity fix: `dest` is a `dest_subdir` under a real repo
-    ROOT that never itself received the removed file (never existed at
-    dest, matching one of the two `_dest_path_exists` "already gone"
-    causes) -- `not _dest_path_exists(...)` must still resolve to True (drop
-    it) when probed via a real `git`, not just a mocked one."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     _init_real_repo(repo_root)
@@ -306,20 +256,6 @@ def test_already_absent_deletion_intent_dropped_from_pathspec_real_repo_subdir(t
 
 
 def test_unstaged_worktree_deletion_kept_but_repo_root_relative(tmp_path):
-    """The other `_dest_path_exists` truth (still index-tracked, only
-    worktree-removed): `_filter_commit_pathspec` must still KEEP it (§
-    `test_real_add_update_delete_still_appears_in_pathspec` above, semantics
-    unchanged by this fix) -- but with `repo_root` given, the kept entry
-    must be `repo_root`-relative, not absolute under `dest_subdir`.
-
-    Why this matters (the actual 83-decline root cause, not the filter's
-    own drop/keep call): `scoped_git_commit.commit_pipeline.explicit_stage`
-    classifies an unstaged deletion via `git_native.ls_files_deleted`, which
-    runs with `cwd=worktree_root` (the `--repo` value, i.e. this test's
-    `repo_root`) and reports matches CWD-relative. An absolute pathspec
-    entry can never equality-match that CWD-relative name -- this is
-    reproduced directly below via the same real-git call `explicit_stage`
-    depends on, without touching `commit_pipeline.py` itself."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     _init_real_repo(repo_root)
@@ -335,9 +271,6 @@ def test_unstaged_worktree_deletion_kept_but_repo_root_relative(tmp_path):
         cwd=str(repo_root), check=True,
     )
 
-    # The real publish swap: physically removed, never staged (§ `publish.py
-    # ::_swap_publish_staging_into_dest` -- a filesystem-level rename, never
-    # a `git rm`).
     target_file.unlink()
 
     change_lines = [("REMOVE", "ops/ceremony/tests/test_claim_cli_remedy_invocations.py")]
@@ -349,20 +282,10 @@ def test_unstaged_worktree_deletion_kept_but_repo_root_relative(tmp_path):
     )[0]
     assert pathspec == ["coordinator_core/ops/ceremony/tests/test_claim_cli_remedy_invocations.py"]
 
-    # Reproduces the actual downstream classification `explicit_stage` runs
-    # (`git_native.ls_files_deleted`) -- confirms the entry this call
-    # produces is the form that probe will actually recognize.
     result = _git_run(["git", "-C", str(repo_root), "ls-files", "--deleted", "--", *pathspec])
     assert result.stdout.strip() == pathspec[0]
 
     # Pins the actual regression: an ABSOLUTE pathspec entry still scopes
-    # `git ls-files --deleted` to the right file (git accepts an absolute
-    # pathspec argument fine), but the reported match is ALWAYS CWD-relative
-    # -- never byte-equal to the absolute input that named it. This is
-    # exactly why `commit_pipeline.explicit_stage`'s `p in worktree_deleted`
-    # containment check (comparing its caller's own pathspec string against
-    # this CWD-relative output set) can never succeed for an absolute `p`,
-    # regardless of whether the file is genuinely, unambiguously deleted.
     absolute_form = str(target_file)
     result_absolute = _git_run(
         ["git", "-C", str(repo_root), "ls-files", "--deleted", "--", absolute_form]
@@ -372,11 +295,6 @@ def test_unstaged_worktree_deletion_kept_but_repo_root_relative(tmp_path):
 
 
 def test_repo_root_relative_pathspec_uses_forward_slashes(tmp_path):
-    """`os.path.relpath` emits
-    OS-native separators (backslash on Windows), which never byte-match
-    git's own always-forward-slash CWD-relative output. Pins the expected
-    string explicitly (never derived from `os.sep`) so this holds on any
-    host, not just a Windows one."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     _init_real_repo(repo_root)
@@ -405,12 +323,6 @@ def test_repo_root_relative_pathspec_uses_forward_slashes(tmp_path):
 
 
 def test_sibling_row_subtree_resolves_without_dotdot(tmp_path):
-    """
-    a real multi-row round's manifest names entries from MANY sibling
-    subtrees of one shared worktree (e.g. `coordinator_core`, `coordinator/
-    bin`). Passing the actual worktree `<root>` as `repo_root` must resolve
-    every entry relative to that shared root, never walking above it with
-    `..`."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     _init_real_repo(repo_root)

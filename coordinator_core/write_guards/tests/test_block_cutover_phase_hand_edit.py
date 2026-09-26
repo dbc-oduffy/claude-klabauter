@@ -83,12 +83,6 @@ class TestFlagsPhaseHandEdit:
         assert "cutover-cli advance" in reason
 
     def test_advisory_reason_leads_with_route_and_names_no_override(self, tmp_path, monkeypatch):
-        """Inverted (was: `..._leads_with_route`, which asserted "override"
-        WAS present). This advisory's current text is the sanctioned-op
-        route ("Use instead: `cutover-cli advance <record>`.") with no
-        override mention at all -- positively asserts both the route AND
-        the absence of "override" anywhere in the reason, so this cannot
-        pass vacuously on a reason carrying neither."""
         repo_root, record_path = _make_repo(tmp_path)
         monkeypatch.setattr(guard, "_resolve_git_root", _resolve_root_for(repo_root))
         payload = {
@@ -150,11 +144,6 @@ class TestFlagsPhaseHandEdit:
         assert "permissionDecision" not in result["hookSpecificOutput"]
 
     def test_write_omitting_phase_line_entirely_flagged(self, tmp_path, monkeypatch):
-        """A Write that replaces the whole file with
-        content that DROPS the phase: line (rather than changing its value)
-        must also be flagged. The old check only inspected the new content
-        for a phase:-shaped line, so a deletion went undetected; this uses
-        the pre-image to catch "had phase, new content doesn't"."""
         repo_root, record_path = _make_repo(tmp_path)
         monkeypatch.setattr(guard, "_resolve_git_root", _resolve_root_for(repo_root))
         new_content = "\n".join(
@@ -179,14 +168,6 @@ class TestFlagsPhaseHandEdit:
 
 
 class TestDriveRootContainmentGate:
-    """Discriminates the drive-root trailing-backslash defect directly:
-    a `git_root` of a bare Windows drive root previously composed a
-    double-slash `expected_prefix` (`rstrip("/")` does not strip a trailing
-    backslash), which never matched the single-slash form `Path.resolve()`
-    produces on the candidate side -- the gate went silently inert and
-    `_normalize_and_gate` returned `None` for every candidate. Proven to
-    fail against the pre-fix `rstrip("/")` spelling before this fix landed.
-    """
 
     @pytest.mark.skipif(
         not sys.platform.startswith("win"),
@@ -205,7 +186,7 @@ class TestDriveRootContainmentGate:
         ),
     )
     def test_drive_root_git_root_still_matches(self):
-        drive_root = "X:" + "\\"  # abs-path-ok: synthetic drive-root literal, not a repo path citation
+        drive_root = "X:" + "\\"
         result = guard._normalize_and_gate(
             "state/roadmap/foo/cutovers/bar.md", drive_root
         )

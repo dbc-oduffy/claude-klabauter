@@ -65,18 +65,12 @@ from coordinator_core.ops.emit.doe_drift import (
     run_drift_check,
 )
 
-# load-bearing negative-spec: AheadOfReleaseWarning must NOT
-# subclass DriftWarning.  The re-vendor post-check kills on DriftWarning but only logs plain
-# UserWarning; a regression in the class hierarchy would silently break that gate.
 assert not issubclass(AheadOfReleaseWarning, DriftWarning), (
     "AheadOfReleaseWarning must not subclass DriftWarning — load-bearing for re-vendor post-check"
 )
 
 # Reuse the EXISTING normalizer and typed sentinels from the shared normalizers module.
 # AC_NORMALIZER: these are the shared AC5-PROVENANCE oracles.
-# Import from normalizers (production module) rather than
-# cross-importing from test_emit_parity (test leaf); avoids pytest collection-isolation
-# breakage and makes the surface available for future runtime callers.
 from coordinator_core.ops.emit.normalizers import (
     _normalize,
     _TS_SENTINEL,
@@ -84,20 +78,13 @@ from coordinator_core.ops.emit.normalizers import (
     _ID_SENTINEL,
 )
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
 
-# ---------------------------------------------------------------------------
-# Helpers — skip guard for live DoE clone
-# ---------------------------------------------------------------------------
-
 def _live_doe_clone() -> Optional[Path]:
-    """Return the live DoE clone path or None if unavailable on this machine."""
     try:
         return resolve_doe_clone()
     except DoeResolveError:
@@ -107,17 +94,11 @@ def _live_doe_clone() -> Optional[Path]:
 _DOE_AVAILABLE = _live_doe_clone() is not None
 
 
-# ---------------------------------------------------------------------------
-# AC_Q-b: fixture read from DoE clone, not co-vendored
-# ---------------------------------------------------------------------------
-
 class TestFixtureResolution:
-    """AC_Q-b: fixture lives in the DoE clone, not co-vendored in claude-klabauter's _vendor/."""
 
     @pytest.mark.skipif(not _DOE_AVAILABLE, reason="DoE clone not available on this machine")
     @pytest.mark.real_home
     def test_fixture_read_from_doe_clone(self) -> None:
-        """Fixture is read from repos.doe_claude (not claude-klabauter's _vendor/)."""
         doe_clone = resolve_doe_clone()
         fixture = read_doe_fixture(doe_clone)
 
@@ -129,11 +110,6 @@ class TestFixtureResolution:
 
     @pytest.mark.skipif(not _DOE_AVAILABLE, reason="DoE clone not available on this machine")
     def test_fixture_not_in_vendor_tree(self) -> None:
-        """The fixture MUST NOT be co-vendored in claude-klabauter's _vendor/ tree.
-
-        Co-vendoring would re-create the co-vendor blindness DR-210 forbids:
-        both the pin and the fixture would drift together silently.
-        """
         from coordinator_core.ops.emit.validate import _VENDOR_CONTRACT
         co_vendored = _VENDOR_CONTRACT / "conformance" / "emission-conformance.json"
         assert not co_vendored.exists(), (
@@ -142,7 +118,6 @@ class TestFixtureResolution:
         )
 
     def test_fixture_parse_failure_raises_doe_resolve_error(self, tmp_path: Path) -> None:
-        """Malformed JSON in the fixture raises DoeResolveError, not a bare JSONDecodeError."""
         bad_fixture = tmp_path / "coordinator/cockpit-contract/conformance"
         bad_fixture.mkdir(parents=True)
         (bad_fixture / "emission-conformance.json").write_text("{bad json", encoding="utf-8")
@@ -151,17 +126,11 @@ class TestFixtureResolution:
             read_doe_fixture(tmp_path)
 
     def test_fixture_absent_raises_doe_resolve_error(self, tmp_path: Path) -> None:
-        """Absent fixture file raises DoeResolveError with guidance."""
         with pytest.raises(DoeResolveError, match="not found"):
             read_doe_fixture(tmp_path)
 
 
-# ---------------------------------------------------------------------------
-# AC_Q-a-band: version-band gate (min_supported, not equality)
-# ---------------------------------------------------------------------------
-
 class TestVersionBand:
-    """AC_Q-a-band: gate semantics — min_supported_contract_version, not equality."""
 
     def _make_fixture(
         self,
@@ -174,44 +143,23 @@ class TestVersionBand:
         }
 
     def test_pinned_equals_min_supported_passes(self) -> None:
-        """Pinned == min_supported → PASS."""
         check_version_band("2.5.0", self._make_fixture("2.5.0", "2.5.0"))
 
     def test_pinned_above_min_supported_passes(self) -> None:
-        """Pinned > min_supported → PASS."""
         check_version_band("2.6.0", self._make_fixture("2.6.0", "2.5.0"))
 
     def test_contract_version_bump_alone_does_not_fail(self) -> None:
-        """Critical: contract_version advances, min_supported stays trailing → no fail.
-
-        This is the reader-first invariant. DoE bumps contract_version first and raises
-        min_supported only after the re-vendor window closes.  claude-klabauter must NOT fail
-        during the window (equality-fail-loud is architecturally incompatible with reader-first).
-        """
-        # Simulate: DoE bumps contract_version to 2.6.0 but leaves min_supported at 2.5.0.
-        # claude-klabauter's pin is 2.5.0 — MUST pass.
-        check_version_band("2.5.0", self._make_fixture("2.6.0", "2.5.0"))  # must not raise
+        check_version_band("2.5.0", self._make_fixture("2.6.0", "2.5.0"))
 
     def test_min_supported_past_pin_fails_loud(self) -> None:
-        """min_supported_contract_version > pinned → DriftError (re-vendor required).
-
-        After the re-vendor window closes DoE raises min_supported.  A still-at-2.5.0
-        claude-klabauter pin must fail loud — the grace window has closed.
-        """
         with pytest.raises(DriftError, match="below the DoE min_supported_contract_version"):
             check_version_band("2.5.0", self._make_fixture("2.6.0", "2.6.0"))
 
     def test_significantly_lagging_pin_fails_loud(self) -> None:
-        """Pin lagging multiple versions also fails loud."""
         with pytest.raises(DriftError):
             check_version_band("2.3.0", self._make_fixture("2.6.0", "2.5.0"))
 
     def test_missing_min_supported_warns_not_raises(self) -> None:
-        """Missing min_supported_contract_version in fixture → WARN, not error.
-
-        DoE commitment: always publish the field.  Absent means DoE has not yet;
-        we warn rather than breaking claude-klabauter (graceful degradation).
-        """
         fixture = {"contract_version": "2.5.0"}
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
@@ -221,20 +169,12 @@ class TestVersionBand:
         )
 
     def test_patch_version_comparison_correct(self) -> None:
-        """Patch component comparison is numeric, not lexicographic (2.5.10 > 2.5.9)."""
-        # 2.5.10 > 2.5.9: should pass (pinned >= min_supported)
         check_version_band("2.5.10", self._make_fixture("2.5.10", "2.5.9"))
-        # 2.5.9 < 2.5.10: should fail
         with pytest.raises(DriftError):
             check_version_band("2.5.9", self._make_fixture("2.5.10", "2.5.10"))
 
 
-# ---------------------------------------------------------------------------
-# AC_Q-a-sha: freshness-ref probe + SHA mismatch / ref-absent paths
-# ---------------------------------------------------------------------------
-
 class TestFreshnessRef:
-    """AC_Q-a-sha: cockpit-contract-release ref probe; fail loud on SHA mismatch."""
 
     def test_ref_absent_graceful_no_exception(self, tmp_path: Path) -> None:
         """AC_REF_ABSENT: ref absent on DoE origin → WARN, no DriftError.
@@ -243,7 +183,6 @@ class TestFreshnessRef:
         strang-02 pickup.  This is the expected path in CI and on live machines until
         DoE publishes the ref.  Must NEVER hard-fail on ref absence.
         """
-        # Write a real pin SHA so we get past the 'pin absent' early exit.
         pin_sha = "aabbccddeeff00112233445566778899aabbccdd"
 
         with (
@@ -253,30 +192,18 @@ class TestFreshnessRef:
             ),
             patch(
                 "coordinator_core.ops.emit.doe_drift.probe_freshness_ref",
-                return_value=None,  # ref absent on origin
+                return_value=None,
             ),
         ):
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
-                check_freshness(doe_clone=tmp_path)  # must not raise
+                check_freshness(doe_clone=tmp_path)
 
         assert any("ref" in str(w.message).lower() for w in caught), (
             "Ref-absent path must emit a warning about the missing ref"
         )
 
     def test_sha_mismatch_raises_drift_error(self, tmp_path: Path) -> None:
-        """AC_Q-a-sha: SHA mismatch → DriftError (re-vendor required).
-
-        Simulates a synthetic SHA advance on origin: the pin records an old SHA but
-        the current DoE origin returns a different (newer) SHA.  Explicitly exercises
-        the "pin behind tag" (False) path — not the indeterminate-via-non-git-tmp_path
-        path that the previous mock gap inadvertently tested.
-
-        Add _tag_is_ancestor_of_pin mock so the test
-        exercises the explicit pin-behind path (return_value=False) rather than the
-        indeterminate path that fires when tmp_path is not a git repo.  Removes the
-        real subprocess call and makes the test name accurate.
-        """
         pin_sha = "1111111111111111111111111111111111111111"
         origin_sha = "2222222222222222222222222222222222222222"
 
@@ -291,24 +218,15 @@ class TestFreshnessRef:
             ),
             patch(
                 "coordinator_core.ops.emit.doe_drift._tag_is_ancestor_of_pin",
-                return_value=False,  # explicit pin-behind path → DriftError
+                return_value=False,
             ),
         ):
             with pytest.raises(DriftError, match="SHA mismatch"):
                 check_freshness(doe_clone=tmp_path)
 
     def test_pin_ahead_of_tag_warns_not_raises(self, tmp_path: Path) -> None:
-        """Pin AHEAD of release tag → AheadOfReleaseWarning, NOT DriftError.
-
-        Reader-first window: claude-klabauter re-vendors v2.6.0 while the tag still points to
-        v2.5.0.  origin_sha != pin_sha, but the tag IS an ancestor of the pin (pin AHEAD).
-        Must emit AheadOfReleaseWarning and NOT raise DriftError.
-
-        Negative-spec: AheadOfReleaseWarning must NOT be a DriftWarning — the re-vendor
-        post-check must not die on it.
-        """
-        pin_sha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"  # v2.6.0 pin
-        origin_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"  # v2.5.0 tag (ancestor)
+        pin_sha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        origin_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
         with (
             patch(
@@ -321,18 +239,13 @@ class TestFreshnessRef:
             ),
             patch(
                 "coordinator_core.ops.emit.doe_drift._tag_is_ancestor_of_pin",
-                return_value=True,  # tag IS ancestor of pin → pin AHEAD
+                return_value=True,
             ),
         ):
             with pytest.warns(AheadOfReleaseWarning):
-                check_freshness(doe_clone=tmp_path)  # must NOT raise
+                check_freshness(doe_clone=tmp_path)
 
     def test_pin_behind_tag_raises(self, tmp_path: Path) -> None:
-        """Pin BEHIND release tag → DriftError with 'SHA mismatch'.
-
-        The ancestry helper returns False (tag is NOT ancestor of pin → pin is behind).
-        Must raise DriftError preserving the 'SHA mismatch' message text.
-        """
         pin_sha = "1111111111111111111111111111111111111111"
         origin_sha = "2222222222222222222222222222222222222222"
 
@@ -347,18 +260,13 @@ class TestFreshnessRef:
             ),
             patch(
                 "coordinator_core.ops.emit.doe_drift._tag_is_ancestor_of_pin",
-                return_value=False,  # not ancestor → pin is behind
+                return_value=False,
             ),
         ):
             with pytest.raises(DriftError, match="SHA mismatch"):
                 check_freshness(doe_clone=tmp_path)
 
     def test_ancestry_indeterminate_raises(self, tmp_path: Path) -> None:
-        """Indeterminate ancestry → DriftError with 'SHA mismatch' (fail-loud safe default).
-
-        When _tag_is_ancestor_of_pin returns None (git error, commits absent, etc.)
-        the module cannot prove the pin is ahead, so it falls through to DriftError.
-        """
         pin_sha = "cccccccccccccccccccccccccccccccccccccccc"
         origin_sha = "dddddddddddddddddddddddddddddddddddddddd"
 
@@ -373,14 +281,13 @@ class TestFreshnessRef:
             ),
             patch(
                 "coordinator_core.ops.emit.doe_drift._tag_is_ancestor_of_pin",
-                return_value=None,  # indeterminate → treat as drift
+                return_value=None,
             ),
         ):
             with pytest.raises(DriftError, match="SHA mismatch"):
                 check_freshness(doe_clone=tmp_path)
 
     def test_sha_match_passes(self, tmp_path: Path) -> None:
-        """SHA match → PASS (no exception, no warning)."""
         sha = "abcdef1234567890abcdef1234567890abcdef12"
 
         with (
@@ -393,7 +300,7 @@ class TestFreshnessRef:
                 return_value=sha,
             ),
         ):
-            check_freshness(doe_clone=tmp_path)  # must not raise
+            check_freshness(doe_clone=tmp_path)
 
     def test_pin_absent_sentinel_skips_freshness(self, tmp_path: Path) -> None:
         """PIN_SHA_FILE containing ABSENT + ref absent on origin → WARN/skip, no error.
@@ -409,19 +316,18 @@ class TestFreshnessRef:
         with (
             patch(
                 "coordinator_core.ops.emit.doe_drift._read_pin_sha",
-                return_value=None,  # sentinel → None from _read_pin_sha
+                return_value=None,
             ),
             patch(
                 "coordinator_core.ops.emit.doe_drift.probe_freshness_ref",
-                return_value=None,  # ref also absent on origin (state A)
+                return_value=None,
             ),
         ):
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
-                check_freshness(doe_clone=tmp_path)  # must not raise
+                check_freshness(doe_clone=tmp_path)
 
         assert caught, "Pin-absent + ref-absent-on-origin path must emit a warning"
-        # Must NOT emit a DriftWarning (that's state B — ref present but pin ABSENT).
         drift_warnings = [w for w in caught if issubclass(w.category, DriftWarning)]
         assert not drift_warnings, (
             "State (A) — ref also absent on origin — must NOT emit DriftWarning; "
@@ -431,38 +337,22 @@ class TestFreshnessRef:
     def test_pin_absent_but_ref_now_on_origin_emits_drift_warning(
         self, tmp_path: Path
     ) -> None:
-        """Pin ABSENT but origin now has the ref → DriftWarning, no DriftError.
-
-        State (B): DoE published the cockpit-contract-release ref but
-        ``bin/claude-klabauter-revendor-cockpit-contract.py`` has not been re-run so the pin file
-        still contains ABSENT.  The SHA-mismatch gate is disabled; a loud, distinct
-        DriftWarning (not DriftError) demands action.
-
-        Rationale for WARN vs ERROR: a hard DriftError the instant DoE publishes would
-        break claude-klabauter before bin/claude-klabauter-revendor-cockpit-contract.py can run.  The
-        DriftWarning category is
-        distinguishable from routine warnings so callers can escalate it in test suites.
-
-        Exercises the "ref now present on origin but pin
-        still ABSENT" transition; mocks probe to return a real SHA.
-        """
-        origin_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"  # 40 hex chars
+        origin_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
         with (
             patch(
                 "coordinator_core.ops.emit.doe_drift._read_pin_sha",
-                return_value=None,  # pin still ABSENT
+                return_value=None,
             ),
             patch(
                 "coordinator_core.ops.emit.doe_drift.probe_freshness_ref",
-                return_value=origin_sha,  # ref NOW present on origin (state B)
+                return_value=origin_sha,
             ),
         ):
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
-                check_freshness(doe_clone=tmp_path)  # must NOT raise DriftError
+                check_freshness(doe_clone=tmp_path)
 
-        # Must emit exactly one DriftWarning (the loud, distinct signal).
         drift_warnings = [w for w in caught if issubclass(w.category, DriftWarning)]
         assert drift_warnings, (
             "State (B) — pin ABSENT but ref present on origin — must emit DriftWarning"
@@ -484,7 +374,6 @@ class TestFreshnessRef:
         assert _read_pin_sha() is None
 
     def test_read_pin_sha_sentinel_returns_none(self, tmp_path: Path, monkeypatch) -> None:
-        """_read_pin_sha returns None for the ABSENT sentinel (ref not yet published)."""
         pin_file = tmp_path / ".doe-ref-pin"
         pin_file.write_text(_PIN_ABSENT_SENTINEL + "\n", encoding="utf-8")
         monkeypatch.setattr(
@@ -494,7 +383,6 @@ class TestFreshnessRef:
         assert _read_pin_sha() is None
 
     def test_read_pin_sha_real_sha_returns_it(self, tmp_path: Path, monkeypatch) -> None:
-        """_read_pin_sha returns the stored SHA when the file contains a real SHA."""
         sha = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
         pin_file = tmp_path / ".doe-ref-pin"
         pin_file.write_text(sha + "\n", encoding="utf-8")
@@ -507,46 +395,20 @@ class TestFreshnessRef:
     @pytest.mark.skipif(not _DOE_AVAILABLE, reason="DoE clone not available on this machine")
     @pytest.mark.real_home
     def test_probe_freshness_ref_live_ref_absent_returns_none(self) -> None:
-        """Live test: DoE origin returns None (ref not yet published) → no exception.
-
-        This is the expected result at strang-02 pickup (live constraint).
-        If the ref IS published, this test passes anyway (None or a SHA, no exception).
-        """
         doe_clone = resolve_doe_clone()
-        # Must not raise — either None (ref absent) or a SHA string.
         result = probe_freshness_ref(doe_clone)
         assert result is None or isinstance(result, str), (
             f"probe_freshness_ref must return None or a SHA string; got {result!r}"
         )
 
 
-# ---------------------------------------------------------------------------
-# Direct unit tests of _tag_is_ancestor_of_pin exit-code branches (Finding 4)
-# ---------------------------------------------------------------------------
-
-
 class TestTagIsAncestorOfPin:
-    """Direct unit tests of _tag_is_ancestor_of_pin exit-code → return-value mapping.
-
-    No test previously called _tag_is_ancestor_of_pin
-    directly; all coverage was via check_freshness (which mocks the function at the
-    call site).  These tests validate the subprocess handling logic — the highest-risk
-    surface in the diff — without hitting the filesystem.
-
-    Exit-code contract:
-      0   → True  (merge-base says tag IS ancestor of pin → pin AHEAD)
-      1   → False (not ancestor → pin behind or diverged)
-      ≥ 2 → None  (git error, commits absent, not-a-commit SHA, etc.)
-      FileNotFoundError → None (git not installed)
-      TimeoutExpired    → None (live: git_predicate always passes a bound)
-    """
 
     _DOE_CLONE = Path("/tmp/fake-doe-clone")
     _TAG_SHA = "aaaa" * 10
     _PIN_SHA = "bbbb" * 10
 
     def test_returncode_0_returns_true(self) -> None:
-        """Exit 0 → True: tag IS an ancestor of pin (pin AHEAD of tag)."""
         with patch(
             "coordinator_core.ops.emit.doe_drift.subprocess.run",
             return_value=MagicMock(returncode=0),
@@ -554,7 +416,6 @@ class TestTagIsAncestorOfPin:
             assert _tag_is_ancestor_of_pin(self._DOE_CLONE, self._TAG_SHA, self._PIN_SHA) is True
 
     def test_returncode_1_returns_false(self) -> None:
-        """Exit 1 → False: not an ancestor (pin behind tag or diverged)."""
         with patch(
             "coordinator_core.ops.emit.doe_drift.subprocess.run",
             return_value=MagicMock(returncode=1),
@@ -562,7 +423,6 @@ class TestTagIsAncestorOfPin:
             assert _tag_is_ancestor_of_pin(self._DOE_CLONE, self._TAG_SHA, self._PIN_SHA) is False
 
     def test_returncode_2_returns_none(self) -> None:
-        """Exit 2 → None (indeterminate: git error, e.g. commits absent from clone)."""
         with patch(
             "coordinator_core.ops.emit.doe_drift.subprocess.run",
             return_value=MagicMock(returncode=2),
@@ -570,12 +430,6 @@ class TestTagIsAncestorOfPin:
             assert _tag_is_ancestor_of_pin(self._DOE_CLONE, self._TAG_SHA, self._PIN_SHA) is None
 
     def test_returncode_128_returns_none(self) -> None:
-        """Exit 128 → None (fatal git error, e.g. annotated tag-object SHA passed to merge-base).
-
-        This was the pre-F1 failure mode: ls-remote without --dereference returned a
-        tag-object SHA; merge-base errors with 128 ('Not a commit') → None → DriftError,
-        silently breaking AheadOfReleaseWarning for annotated tags.
-        """
         with patch(
             "coordinator_core.ops.emit.doe_drift.subprocess.run",
             return_value=MagicMock(returncode=128),
@@ -583,7 +437,6 @@ class TestTagIsAncestorOfPin:
             assert _tag_is_ancestor_of_pin(self._DOE_CLONE, self._TAG_SHA, self._PIN_SHA) is None
 
     def test_file_not_found_returns_none(self) -> None:
-        """FileNotFoundError (git not installed) → None."""
         with patch(
             "coordinator_core.ops.emit.doe_drift.subprocess.run",
             side_effect=FileNotFoundError("git executable not found"),
@@ -604,9 +457,7 @@ class TestTagIsAncestorOfPin:
             assert _tag_is_ancestor_of_pin(self._DOE_CLONE, self._TAG_SHA, self._PIN_SHA) is None
 
 
-# ---------------------------------------------------------------------------
 # AC_NORMALIZER: provenance normalizer — reuse _normalize from strang-01
-# ---------------------------------------------------------------------------
 
 class TestProvenanceNormalizerReuse:
     """AC_NORMALIZER: normalize-then-compare using _normalize from test_emit_parity.
@@ -618,7 +469,6 @@ class TestProvenanceNormalizerReuse:
     """
 
     def _make_record_with_live_provenance(self) -> dict:
-        """Record with 'live' runtime-varying provenance fields."""
         return {
             "repo": "dbc-oduffy/live-repo",
             "title": "some-record",
@@ -709,14 +559,14 @@ class TestProvenanceNormalizerReuse:
             "created": "2026-01-15",
             "provenance": {
                 "source_kind": "local_fs",
-                "repo": "some/repo",   # will be normalized (field 4)
+                "repo": "some/repo",
                 "ref": {
-                    "branch": "work/test",  # normalized (field 3)
-                    "sha": "abc123" * 6 + "abcd",  # normalized (field 2) — 40 hex chars
+                    "branch": "work/test",
+                    "sha": "abc123" * 6 + "abcd",
                 },
-                "path": "state/test.md",  # must NOT be normalized
-                "observed_at": "2026-07-05T00:00:00Z",  # normalized (field 1)
-                "derivation": "parsed",  # must NOT be normalized
+                "path": "state/test.md",
+                "observed_at": "2026-07-05T00:00:00Z",
+                "derivation": "parsed",
             },
         }
         result = _normalize(record)
@@ -734,12 +584,6 @@ class TestProvenanceNormalizerReuse:
     @pytest.mark.skipif(not _DOE_AVAILABLE, reason="DoE clone not available on this machine")
     @pytest.mark.real_home
     def test_doe_fixture_normalizes_consistently(self) -> None:
-        """DoE fixture normalizes to a consistent state (no runtime-varying residue).
-
-        The DoE fixture already uses sentinel values for volatile fields (it was
-        generated against a frozen corpus).  After normalization it must be equal to
-        itself — i.e., normalizing a pre-normalized fixture is idempotent.
-        """
         fixture = read_doe_fixture()
         normalized_once = _normalize(fixture)
         normalized_twice = _normalize(normalized_once)
@@ -749,9 +593,7 @@ class TestProvenanceNormalizerReuse:
         )
 
 
-# ---------------------------------------------------------------------------
 # AC_DRIFT_CHECK: drift fails loud when pinned version lags min_supported
-# ---------------------------------------------------------------------------
 
 class TestRunDriftCheck:
     """AC_DRIFT_CHECK: run_drift_check fail-louds on synthetic version lag."""
@@ -759,11 +601,9 @@ class TestRunDriftCheck:
     @pytest.mark.skipif(not _DOE_AVAILABLE, reason="DoE clone not available on this machine")
     @pytest.mark.real_home
     def test_drift_check_passes_with_current_pin(self) -> None:
-        """Current vendored pin (2.5.0) passes the version-band gate against DoE fixture."""
-        # This also exercises the full resolution path (registry → fixture → version check).
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
-            fixture = run_drift_check()  # must not raise
+            fixture = run_drift_check()
 
         assert "contract_version" in fixture
         assert "min_supported_contract_version" in fixture
@@ -781,7 +621,6 @@ class TestRunDriftCheck:
             "handoffs": [],
             "malformed_records": {},
         }
-        # Write synthetic fixture to tmp_path at the expected relative path.
         fixture_dir = tmp_path / "coordinator/cockpit-contract/conformance"
         fixture_dir.mkdir(parents=True)
         (fixture_dir / "emission-conformance.json").write_text(
@@ -791,14 +630,13 @@ class TestRunDriftCheck:
         with (
             patch(
                 "coordinator_core.ops.emit.doe_drift.check_freshness",
-                return_value=None,  # skip freshness in this unit test
+                return_value=None,
             ),
         ):
             with pytest.raises(DriftError, match="below the DoE min_supported_contract_version"):
                 run_drift_check(pinned_version="2.5.0", doe_clone=tmp_path)
 
     def test_drift_check_passes_when_pinned_above_min_supported(self, tmp_path: Path) -> None:
-        """Pinned version > min_supported → PASS even when contract_version is higher."""
         synthetic_fixture = {
             "contract_version": "3.0.0",
             "min_supported_contract_version": "2.5.0",

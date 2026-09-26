@@ -83,12 +83,6 @@ cost."""
 
 
 def _make_event(idx: int, shard: int) -> dict:
-    """One synthetic `applied_at`-populated event, shaped like a real
-    tracker_store record (see tracker_store.py's ordering-contract docstring
-    for the fields `read_events` reads: `applied_at`, `observed_at`, `id`).
-    Values are deterministic in *idx*/*shard* except the `id` suffix, which is
-    randomized so no two synthetic events across shards or measurement points
-    collide."""
     return {
         "id": f"evt-shard{shard}-{idx:07d}-{uuid.uuid4().hex[:8]}",
         "observed_at": f"2026-07-28T00:00:{idx % 60:02d}.{idx % 1000:03d}Z",
@@ -115,11 +109,6 @@ def materialize_fixture(root: Path, *, events_per_shard: int, shard_count: int) 
 
 
 def _time_probe(repo_root: Path) -> float:
-    """Time one cold spawn of `_read_events_probe` against `repo_root`,
-    from process-spawn to exit -- the same spawn-to-exit shape
-    `timer.time_invocation` uses for real op invocations. Raises
-    `RuntimeError` on a non-zero exit; a probe failure is never silently
-    dropped as a sample."""
     argv = [
         sys.executable,
         "-m",
@@ -151,11 +140,6 @@ def measure(
     n: int = DEFAULT_N,
     warmup: int = DEFAULT_WARMUP,
 ) -> dict:
-    """Materialize one fixture at (events_per_shard, shard_count), draw
-    `warmup` discarded + `n` timed cold-start samples of `read_events`
-    against it, and return the reduced statistics. Fixture is always
-    materialized under a fresh temp root and removed in `finally` -- never
-    points at the real repo `state/` tree."""
     tmp_root = Path(tempfile.mkdtemp(prefix="sat01-read-events-bench-"))
     try:
         materialize_fixture(tmp_root, events_per_shard=events_per_shard, shard_count=shard_count)
@@ -180,10 +164,6 @@ def measure(
 
 
 def _band_ms(target_ms: float, tolerance: dict) -> float:
-    """Same band formula as `gate.evaluate` (relative -> target*(1+value),
-    absolute -> target+value) -- duplicated here (not imported) because
-    `gate.py` is deliberately a zero-I/O leaf over an already-resolved
-    ConformanceRecord shape, not a general tolerance-math helper."""
     if tolerance["kind"] == "relative":
         return target_ms * (1 + tolerance["value"])
     if tolerance["kind"] == "absolute":
@@ -214,11 +194,6 @@ def _extrapolate_breach_total_events(
     that hasn't happened yet; falling through would emit a negative,
     already-in-the-past 'breach point' exactly when the baseline is already
     over budget."""
-    # baseline["min_ms"] > band_ms made
-    # (band_ms - baseline["min_ms"]) negative before any slope was applied,
-    # so a small positive slope produced a negative total-event count. This
-    # branch makes the already-breached case an explicit, unambiguous
-    # sentinel instead of a number a downstream reader has to interpret.
     if baseline["min_ms"] > band_ms:
         return ALREADY_BREACHED_SENTINEL
     delta_events = growth_point["total_events"] - baseline["total_events"]

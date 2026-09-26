@@ -1,23 +1,3 @@
-"""Unit tests for session_hierarchy.collect() — unreadable-state-dir silent-success guard,
-and the session_id-uniqueness quarantine guard.
-
-Pins the fix for the state/audits/2026-07-22 silent-success audit: ``glob.glob()``'s
-selector silently swallows ``PermissionError`` while walking (an unreadable dir yields an
-empty match list, no exception), which previously made a permission-denied
-``central_state_root`` indistinguishable from "no session-hierarchy files exist here" —
-both collapsed to the same graceful-absent ``([], [])`` shape. ``collect()`` now probes
-the dir via ``os.scandir`` before trusting the glob and routes a scan failure into the
-malformed bucket instead.
-
-Also pins the b8a8339a duplicate-``session_id`` fix (reported in
-cross-repo/inbox/2026-07-26-example-cockpit-repo-em-claude-klabauter-duplicate-session-hierarchy-entries.md):
-``session_id`` is the natural key of ``session_hierarchies`` and must be unique within a
-single emission; the first-admitted entry wins and every later duplicate is quarantined into
-``malformed``, whether the duplicate lives in the same source file or a different one, and
-without shadowing an entry's own pre-existing validation failure.
-
-Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P16
-"""
 
 from __future__ import annotations
 
@@ -47,7 +27,6 @@ def _make_ctx(central_state_root: Path) -> EmitContext:
 
 
 def test_absent_state_dir_is_graceful_empty(tmp_path: Path) -> None:
-    """A genuinely-absent central_state_root yields ([], []) — never a failure."""
     ctx = _make_ctx(tmp_path / "does-not-exist")
     records, malformed = session_hierarchy.collect(ctx)
     assert records == []
@@ -55,7 +34,6 @@ def test_absent_state_dir_is_graceful_empty(tmp_path: Path) -> None:
 
 
 def test_valid_entry_is_collected(tmp_path: Path) -> None:
-    """Sanity check: a well-formed entry is collected before testing the failure path."""
     (tmp_path / "session-hierarchy.machine-a.json").write_text(
         json.dumps({
             "session_id": "sess-1",
@@ -76,9 +54,6 @@ def test_valid_entry_is_collected(tmp_path: Path) -> None:
     reason="chmod 0o000 permission denial is not reliable on Windows or as root",
 )
 def test_unreadable_state_dir_is_malformed_not_graceful_empty(tmp_path: Path) -> None:
-    """An unreadable central_state_root must land in the malformed bucket with a
-    'state directory unreadable' reason, never the graceful-absent ([], []) shape a
-    naive glob() read would silently produce for the same failure."""
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     (state_dir / "session-hierarchy.machine-a.json").write_text(
@@ -112,11 +87,6 @@ def test_unreadable_state_dir_is_malformed_not_graceful_empty(tmp_path: Path) ->
 
 
 def test_duplicate_session_id_within_one_file_quarantines_the_loser(tmp_path: Path) -> None:
-    """Two entries in ONE source file sharing a session_id: the first is admitted to
-    ``valid``, the second is quarantined into ``malformed`` with the duplicate reason —
-    pins the b8a8339a fix (cross-repo/inbox/2026-07-26-example-cockpit-repo-em-claude-klabauter-duplicate-
-    session-hierarchy-entries.md): session_id is the natural key of session_hierarchies and
-    must be unique within a single emission."""
     (tmp_path / "session-hierarchy.machine-a.json").write_text(
         json.dumps([
             {
@@ -147,9 +117,6 @@ def test_duplicate_session_id_within_one_file_quarantines_the_loser(tmp_path: Pa
 
 
 def test_duplicate_session_id_across_two_files_first_sorted_file_wins(tmp_path: Path) -> None:
-    """Two entries sharing a session_id but living in TWO different source files: the
-    duplicate-detection set spans the whole collect() call, not just one file — the entry
-    in the first-sorted file wins, the one in the later file is quarantined."""
     (tmp_path / "session-hierarchy.machine-a.json").write_text(
         json.dumps({
             "session_id": "dup-2",
@@ -182,8 +149,6 @@ def test_duplicate_session_id_across_two_files_first_sorted_file_wins(tmp_path: 
 
 
 def test_distinct_session_ids_no_quarantine(tmp_path: Path) -> None:
-    """Regression guard: distinct session_ids across entries/files never trip the
-    duplicate check."""
     (tmp_path / "session-hierarchy.machine-a.json").write_text(
         json.dumps([
             {

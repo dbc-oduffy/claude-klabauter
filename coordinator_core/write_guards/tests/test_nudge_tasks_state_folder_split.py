@@ -138,9 +138,6 @@ class TestSessionIdMirrorExemption:
 
 class TestPathSegmentAnchoring:
     def test_substring_coincidence_does_not_match(self):
-        """A path containing the literal substring 'tasks/' where the
-        directory is not actually named 'tasks' must not match (mirrors
-        nudge_baton_body_bar's anchoring discipline)."""
         assert guard.check(_payload("Write", "vendor/mytasks/lessons.md")) is None
 
     def test_nested_tasks_prefix_still_anchors(self):

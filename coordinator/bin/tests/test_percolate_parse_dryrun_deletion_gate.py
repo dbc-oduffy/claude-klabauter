@@ -42,8 +42,6 @@ def parser():
 
 
 def test_real_publish_sync_remove_line_is_recognized(parser):
-    """Fixture copied verbatim from `publish_sync.py`'s own printed shape,
-    not a hand-written guess at what it might print."""
     stdout_text = "  REMOVE: docs/stale-file.md (not in source)\n"
     assert parser._has_deletions(stdout_text) is True
 
@@ -62,11 +60,6 @@ def _envelope(parser, capsys, argv):
 
 
 def test_changes_file_is_what_the_gate_counts(parser, capsys, tmp_path):
-    """The claude-klabauter 2026-09-11 shape: stdout repeated each file per row
-    and per phase (2464 lines) for a round that changed 105 paths. With the
-    round's manifest handed in, the gate counts the manifest -- including its
-    deletions and sensitive paths -- and a phantom stdout `REMOVE:` from a
-    staged sync phase no longer reads as a deletion."""
     stdout_file = tmp_path / "stdout.txt"
     stdout_file.write_text(
         "".join(f"    UPDATE: f{i}.py\n" for i in range(40))
@@ -97,7 +90,5 @@ def test_changes_file_is_what_the_gate_counts(parser, capsys, tmp_path):
 
 
 def test_stale_deleting_vocabulary_no_longer_matches_on_its_own(parser):
-    """Guards against reintroducing the old `deleting`/`del.` guess as
-    a second, drifting vocabulary alongside the real one."""
     stdout_text = "some unrelated line mentioning deleting nothing real\n"
     assert parser._has_deletions(stdout_text) is False

@@ -115,19 +115,10 @@ from coordinator_core.bash_guards import dispatch_checks as _dc
 from coordinator_core.bash_guards import guard_inprocess_search as _gis
 
 
-# ---------------------------------------------------------------------------
-# (a) The declaration surface -- a registry table keyed by emitter, per the
 # EM decision (2026-08-01, execute-plan) realizing "each emitter DECLARES
-# its class" this way rather than by editing call sites across the emitter
-# modules. A NEW emitter is expected to add its own row here.
-# ---------------------------------------------------------------------------
 
 
 class FiringClass(enum.Enum):
-    """Exactly the two classes Axis A's contract distinguishes. Never a
-    third value -- the sentinel guards' zero-alternative legality is
-    realized as ``EmitterSpec.alternative_required=False`` on an ASK row,
-    not as a separate class (see module docstring)."""
 
     ASK = "ask"
     REPORT = "report"
@@ -138,19 +129,10 @@ class EmitterSpec:
     name: str
     cls: FiringClass
     #: ASK-class only. False marks a DECLARED, reviewed policy exemption
-    #: ("no alternative because none applies") -- never set to silence a
-    #: real prose-only-ask defect ("no alternative because none was
-    #: written"). Meaningless for REPORT rows (repetition is the axis that
-    #: matters there, not alternative presence).
     alternative_required: bool = True
     notes: str = ""
 
 
-#: Every emitter this chunk's ratchet covers. Deliberately the items this
-#: plan's C1a/C3/C4/C5/C7 fix chunks touched plus the two canonical
-#: legal-zero-alternative sentinel guards named explicitly in this chunk's
-#: own brief -- not a corpus-wide sweep (that is D1, deferred and
-#: PM-ungated).
 REGISTRY: Dict[str, EmitterSpec] = {
     "check_multiprobe_banner_rewrite": EmitterSpec(
         name="check_multiprobe_banner_rewrite",
@@ -210,14 +192,6 @@ REGISTRY: Dict[str, EmitterSpec] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# (b) ASK-class evaluation -- the mechanically decidable consequence of
-# Axis A's obligation clause: an alternative-shaped signal must be present
-# (unless declared exempt), it must classify (reusing extract_alternatives
-# rather than re-implementing alternative detection), and no literal
-# "[TODO:" placeholder may stand in for one.
-# ---------------------------------------------------------------------------
-
 TODO_PLACEHOLDER_RE = re.compile(r"\[TODO:")
 
 
@@ -229,12 +203,6 @@ class AskEvaluation:
 
 
 def evaluate_ask_hso(hso: Optional[Dict[str, Any]], *, alternative_required: bool = True) -> AskEvaluation:
-    """Evaluate one fired ASK-class ``hookSpecificOutput`` envelope.
-
-    ``hso is None`` (the emitter chose not to fire at all -- e.g. C4's exit
-    (b) on an unrecognized probe segment) is NOT a violation: asking
-    nothing is never a prose-only-ask defect, it is simply not asking.
-    """
     if hso is None:
         return AskEvaluation(fired=False, violated=False)
 
@@ -253,15 +221,8 @@ def evaluate_ask_hso(hso: Optional[Dict[str, Any]], *, alternative_required: boo
         reasons.append("alternative-shaped cue phrase present but unclassifiable: %s" % exc)
         alts = []
 
-    # Axis B (a withheld/offered override incantation) is orthogonal to
     # Axis A and never satisfies it on its own -- an OVERRIDE-kind
-    # extraction is a bypass, not an offered course of action, so it is
-    # excluded here. Without this exclusion, item 1's pre-fix message
-    # (which names no genuine alternative but DOES embed its
     # `COORDINATOR_ALLOW_MULTIPROBE_BANNER` override note) would have
-    # wrongly graded as satisfying Axis A -- exactly the "syntactically
-    # compliant, substantively nonsense" shape the plan's own Problem
-    # section names.
     non_override_alts = [a for a in alts if a.kind is not altlive.AlternativeKind.OVERRIDE]
 
     if alternative_required and not non_override_alts and not has_updated_input:
@@ -271,42 +232,16 @@ def evaluate_ask_hso(hso: Optional[Dict[str, Any]], *, alternative_required: boo
 
 
 def evaluate_ask_text(text: str, *, alternative_required: bool = True) -> AskEvaluation:
-    """Evaluate a plain-text ASK-class emission that is not itself a
-    ``hookSpecificOutput`` envelope (e.g. ``nudge_em_code_dispatch``'s
-    dispatch-brief string). Only the TODO-placeholder check applies --
-    alternative-shaped-signal extraction is envelope-specific
-    (``permissionDecisionReason``/``additionalContext``/``updatedInput``)
-    and does not generalize to an arbitrary brief string, so this path
-    checks the one property that DOES generalize: no placeholder standing
-    in for a concrete instruction."""
     reasons: List[str] = []
     if TODO_PLACEHOLDER_RE.search(text):
         reasons.append("emitted text carries a literal '[TODO:' placeholder in place of a concrete alternative")
     return AskEvaluation(fired=True, violated=bool(reasons), reasons=reasons)
 
 
-# ---------------------------------------------------------------------------
-# (c) REPORT-class evaluation -- the mechanically decidable consequence of
-# the report clause: two consecutive firings within one session must not be
-# byte-identical.
-# ---------------------------------------------------------------------------
-
-
 def evaluate_report_repetition(first_text: str, second_text: str) -> Tuple[bool, str]:
-    """True (violated) iff two consecutive REPORT-class firings in the same
-    session render byte-identical text -- no already-handled/new-state
-    signal to distinguish call #2 from call #1."""
     if first_text == second_text:
         return True, "REPORT-class emission repeats byte-identical text on a subsequent firing in the same session"
     return False, ""
-
-
-# ---------------------------------------------------------------------------
-# (d) Live-corpus triggers -- one hermetic, no-checkout-required callable
-# per registered emitter this ratchet actually re-fires against the
-# SHIPPED, current code (never a frozen fixture -- fixtures are the pre-fix
-# demonstration's job in the test module, not this ratchet's).
-# ---------------------------------------------------------------------------
 
 
 def _trigger_multiprobe_banner_still_violates() -> bool:
@@ -325,10 +260,6 @@ def _trigger_multiprobe_banner_still_violates() -> bool:
 
 
 def _trigger_inprocess_search_still_violates() -> bool:
-    """Fire ``guard_inprocess_search._footer()`` twice in one synthetic
-    session and evaluate REPORT-class repetition. Hermetic: a bare ``.git``
-    directory (no real git commands -- ``_repo_root_from_cwd`` only checks
-    for its existence) is all the latch path resolution needs."""
     tmp = tempfile.mkdtemp(prefix="firing-shape-inprocess-search-")
     try:
         os.makedirs(os.path.join(tmp, ".git"), exist_ok=True)
@@ -350,8 +281,6 @@ def _trigger_inprocess_search_still_violates() -> bool:
 
 
 def _trigger_nudge_dispatch_brief_still_violates() -> bool:
-    """Build a real dispatch brief via the shipped ``_build_dispatch_brief``
-    + ``_describe_edit`` and evaluate it for a literal TODO placeholder."""
     from coordinator_core.hooks import nudge_em_code_dispatch as _nudge
 
     edit_description = _nudge._describe_edit(
@@ -363,11 +292,6 @@ def _trigger_nudge_dispatch_brief_still_violates() -> bool:
 
 
 def _trigger_worktree_sentinel_still_violates() -> bool:
-    """Re-fire the real, registered ``_alternative_liveness`` trigger for
-    this guard (reused rather than re-derived) and evaluate as ASK-class
-    with the declared zero-alternative exemption -- this row exists to
-    prove the legal-zero-alternative carve-out never fails the gate, so it
-    is expected to always evaluate ``False`` (not violated)."""
     envelope = altlive.LIVE_TRIGGERS["block_worktree_sentinel_creation"]()
     hso = envelope.get("hookSpecificOutput") if envelope else None
     spec = REGISTRY["block_worktree_sentinel_creation"]
@@ -375,18 +299,14 @@ def _trigger_worktree_sentinel_still_violates() -> bool:
 
 
 def _trigger_approval_sentinel_still_violates() -> bool:
-    """Same shape as ``_trigger_worktree_sentinel_still_violates`` above,
-    for ``block_approval_sentinel_creation``."""
     envelope = altlive.LIVE_TRIGGERS["block_approval_sentinel_creation"]()
     hso = envelope.get("hookSpecificOutput") if envelope else None
     spec = REGISTRY["block_approval_sentinel_creation"]
     return evaluate_ask_hso(hso, alternative_required=spec.alternative_required).violated
 
 
-#: One hermetic, re-runnable "does this emitter still violate its declared
 #: class" callable per ``REGISTRY`` row -- the ratchet's live-fire half.
 #: Every ``REGISTRY`` key MUST appear here (checked by the gate) so a new
-#: registry row can never silently escape ratchet coverage.
 LIVE_VIOLATION_CHECKS: Dict[str, Callable[[], bool]] = {
     "check_multiprobe_banner_rewrite": _trigger_multiprobe_banner_still_violates,
     "guard_inprocess_search": _trigger_inprocess_search_still_violates,
@@ -396,18 +316,6 @@ LIVE_VIOLATION_CHECKS: Dict[str, Callable[[], bool]] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# (e) The ratchet -- monotone and self-liquidating. Every fix chunk in this
-# plan (C1a, C2, C3, C4, C5, C7) landed BEFORE this chunk was authored (the
-# EM's deliberate sequencing decision, execute-plan Execution Notes): the
-# known-violations list below is authored against the CURRENT, post-fix
-# corpus, so it is empty by construction -- not amnesty, correctness. Both
-# ratchet gaps the plan names are still closed structurally: (a) a fixed
-# emitter re-listed here would fail the gate until delisted (see
-# ``test_known_violations_still_violate`` in the test module, which
 # iterates this exact set and re-fires each via ``LIVE_VIOLATION_CHECKS``);
-# (b) the set's membership COUNT is asserted so growth is a visible diff,
-# never a silent append.
-# ---------------------------------------------------------------------------
 
 KNOWN_VIOLATIONS: frozenset = frozenset()

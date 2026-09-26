@@ -49,10 +49,6 @@ def _envelope(cmd, **kwargs):
     return result["hookSpecificOutput"]
 
 
-# ---------------------------------------------------------------------------
-# (a) The live incident command fires.
-# ---------------------------------------------------------------------------
-
 _LIVE_INCIDENT_CMD = (
     r'powershell.exe -NoProfile -Command "$p=Get-Process -Id 44448 -EA '
     r'SilentlyContinue; if($p){\"ALIVE $($p.ProcessName)\"}else{\'DEAD\'}; ..."'
@@ -71,16 +67,9 @@ class TestLiveIncidentFires:
         assert "PowerShell" in out["additionalContext"]
 
     def test_names_the_mechanism_not_a_refusal(self):
-        """The message must say a script gets silently ALTERED, never
-        frame this as a refusal or a policy violation."""
         out = _envelope(_LIVE_INCIDENT_CMD)
         ctx = out["additionalContext"]
         assert "expand" in ctx.lower()
-
-
-# ---------------------------------------------------------------------------
-# (b) Single-quoted body -- never fires.
-# ---------------------------------------------------------------------------
 
 
 class TestSingleQuotedBodyNeverFires:
@@ -93,11 +82,6 @@ class TestSingleQuotedBodyNeverFires:
         assert _result(cmd) is None
 
 
-# ---------------------------------------------------------------------------
-# (c) -EncodedCommand/-e -- exempt regardless of quoting.
-# ---------------------------------------------------------------------------
-
-
 class TestEncodedCommandExempt:
     def test_bare_encoded_command_is_silent(self):
         cmd = "powershell.exe -NoProfile -EncodedCommand SQBmACgAJAB0AHIAdQBlACkA"
@@ -108,27 +92,14 @@ class TestEncodedCommandExempt:
         assert _result(cmd) is None
 
 
-# ---------------------------------------------------------------------------
-# (d) Double-quoted, no `$` -- nothing to expand, silent.
-# ---------------------------------------------------------------------------
-
-
 class TestDoubleQuotedNoDollarIsSilent:
     def test_no_dollar_in_body(self):
         cmd = 'powershell.exe -Command "Get-Date"'
         assert _result(cmd) is None
 
     def test_escaped_dollar_only_is_silent(self):
-        """A literal `\\$` inside a double-quoted bash argument is NOT an
-        expansion trigger -- bash treats it as an escaped literal dollar
-        sign, not a variable reference."""
         cmd = r'powershell.exe -Command "echo \$5"'
         assert _result(cmd) is None
-
-
-# ---------------------------------------------------------------------------
-# (e) Binary spelling / case-insensitivity.
-# ---------------------------------------------------------------------------
 
 
 class TestBinarySpellingsAllFire:
@@ -148,11 +119,6 @@ class TestBinarySpellingsAllFire:
         assert _result('powershell.exe -c "Write-Host $HOME"') is not None
 
 
-# ---------------------------------------------------------------------------
-# (f) Non-matches.
-# ---------------------------------------------------------------------------
-
-
 class TestNonMatches:
     def test_non_bash_tool_is_silent(self):
         assert _result(_LIVE_INCIDENT_CMD, tool_name="PowerShell") is None
@@ -164,20 +130,10 @@ class TestNonMatches:
         assert _result('echo "$HOME is set"') is None
 
 
-# ---------------------------------------------------------------------------
-# (g) Escape hatch.
-# ---------------------------------------------------------------------------
-
-
 class TestOverrideEnvVar:
     def test_override_suppresses_the_guard(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_OVERRIDE_POWERSHELL_VIA_BASH_GUARD", "1")
         assert _result(_LIVE_INCIDENT_CMD) is None
-
-
-# ---------------------------------------------------------------------------
-# (h) Never denies.
-# ---------------------------------------------------------------------------
 
 
 class TestNeverDenies:

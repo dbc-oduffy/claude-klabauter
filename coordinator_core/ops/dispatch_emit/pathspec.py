@@ -319,22 +319,6 @@ class NoWritesDeclaredError(ValueError):
 
 
 class NoTestTargetError(ValueError):
-    """Raised when every written path maps to no runnable test target (AC16).
-
-    Distinct from ``NoWritesDeclaredError``: this fires even though
-    ``writes:`` WAS declared (satisfying AC10's literal wording) because
-    no declared path has a co-located test file named for its stem — see
-    module docstring § The sharp edge AC16 exists for.
-
-    Carries ``unmapped_paths``/``testable_omissions`` (both tuples) alongside
-    the formatted message so a catching caller — ``emit.compose_script``'s
-    degrade path — can name the unmapped paths in its own warning without
-    re-parsing this error's prose. This is a locator-blind-spot signal, not
-    necessarily a bad plan (see cross-repo memo
-    ``empty-terminal-test-scope-degrades-not-vetoes``): the caller decides
-    whether to fall back to a falsifier or warn and proceed with no terminal
-    test phase, never this class.
-    """
 
     def __init__(
         self,
@@ -349,23 +333,7 @@ class NoTestTargetError(ValueError):
 
 
 class DirectoryShapedWriteError(ValueError):
-    """Raised when a row's declared ``writes:`` entry is directory-shaped
-    (a trailing ``/``, e.g. ``state/memo-outbox/sent/``) rather than a
-    single committable file.
-
-    ``scoped-git-commit`` refuses a directory pathspec by design — it has
-    no unscoped mode by construction. ``is_concrete_surface`` already
-    applies this exact trailing-slash check to the ``surface:`` fallback
-    (AC3), but the ``writes:`` primary path skipped it entirely whenever a
-    row declared ``writes:`` at all — the fallback path was guarded, the
-    primary path was not. Left uncaught, a directory-shaped ``writes:``
-    entry survives spine-derivation and schema validation alike and is only
-    discovered when a dispatched committer refuses it at runtime, by which
-    point the whole wave's work is stranded uncommitted. This check moves
-    that refusal to spine-derivation time, where the offending row is still
-    identifiable — named in the message, unlike the runtime refusal, which
-    fires against the whole wave's union with no row attribution.
-    """
+    pass
 
 
 def is_concrete_surface(surface: str, *, repo_root: Path | None = None) -> bool:
@@ -428,11 +396,8 @@ def _declared_paths(row: WaveRow) -> list[str]:
     separator-shape only, not full on-disk discrimination.
     """
     if row.writes is not UNDECLARED:
-        # `WaveRow.writes` is typed `object` so one field can carry either a
         # real list or the UNDECLARED sentinel. Identity against the sentinel
-        # is the documented gate (never truthiness — `writes: []` is a
         # POSITIVE declaration), but it does not narrow for a type checker,
-        # and the sentinel is that field's only non-list inhabitant.
         declared = cast("list[str]", row.writes)
         for path in declared:
             if path.endswith("/") or path.endswith("\\"):
@@ -448,10 +413,6 @@ def _declared_paths(row: WaveRow) -> list[str]:
 
 
 def is_zero_contribution(row: WaveRow) -> bool:
-    """True if ``row`` declares ``writes:`` and commits nothing: no declared
-    path, no concrete-surface fallback, no ``writes_under:`` prefix. The one
-    definition both ``commit_pathspec``'s warning and ``emit``'s
-    all-empty-wave check read."""
     return (
         row.writes is not UNDECLARED
         and not _declared_paths(row)
@@ -644,25 +605,10 @@ def candidate_test_additions(pathspec: list[str]) -> list[str]:
 
 
 def commit_prefixes(wave: list[WaveRow]) -> list[tuple[str, tuple[str, ...]]]:
-    """``(row id, its writes_under prefixes)`` for every row in ``wave``
-    declaring any, in row order.
-
-    Kept per row on purpose. The commit prompt bounds each prefix row's
-    reported files to THAT row's own prefixes, so one row's report can never
-    widen the pathspec under a sibling's prefix.
-    """
     return [(row.id, tuple(row.writes_under)) for row in wave if row.writes_under]
 
 
 def _normalized_test_name(stem: str) -> str:
-    """``engine-root-conformance`` -> ``test_engine_root_conformance.py``.
-
-    Separator normalization is the point: a hyphenated stem (a CLI script, a
-    JSON fixture) cannot appear in an importable Python test module name, so
-    a verbatim ``f"test_{stem}.py"`` derives a candidate that can never
-    exist on disk — the derivation would be inert for exactly the paths the
-    non-``.py`` rungs below exist to resolve.
-    """
     return f"test_{stem.replace('-', '_')}.py"
 
 
@@ -671,15 +617,6 @@ def _is_test_file(path: PurePosixPath) -> bool:
 
 
 def _locator_source_suffix(pattern: str) -> str:
-    """The written-file suffix a ``test_locator_suffixes`` pattern covers.
-
-    ``*.test.ts`` names its OWN candidate suffix (``.test.ts``), not the
-    suffix a covered source file carries (``.ts``) — ``PurePosixPath``'s
-    ``.suffix`` already collapses a multi-dot tail to its last segment
-    (``PurePosixPath(".test.ts").suffix == ".ts"``), which is exactly the
-    source suffix this needs, so stripping the pattern's leading ``*`` and
-    reading ``.suffix`` off the remainder gets both jobs from one call.
-    """
     return PurePosixPath(pattern.lstrip("*")).suffix
 
 
@@ -688,30 +625,6 @@ def _candidate_test_targets(
     *,
     test_locator_suffixes: tuple[str, ...] = (),
 ) -> list[PurePosixPath]:
-    """Every stem-derived candidate for ``candidate``, nearest first.
-
-    ``tests/test_<stem>.py`` is probed at each ancestor directory from the
-    written path outward, then the sibling ``test_<stem>.py``. The ancestor
-    walk is what lets ONE rule serve both layouts in the fleet: a repo that
-    co-locates tests beside each package (this one — ``coordinator_core/
-    ops/dispatch_emit/tests/``) hits on the first rung, and a repo that
-    keeps a single flat test directory (DoE-claude's ``coordinator/tests/``,
-    holding the tests for ``coordinator/bin/`` and ``coordinator/lib/``
-    alike) hits on a later one. Before this, a flat layout resolved nothing
-    here and had to be supplied by substituting a private binding in this
-    module from outside the repo.
-
-    Widening WHERE a stem-named test may live is not resolution by
-    proximity, and that is the distinction a future reader will blur: the
-    matcher is unchanged — a candidate counts only if a test named for this
-    exact stem sits at it. Nothing resolves for being merely nearby, and
-    nothing is discovered by listing a directory (module docstring's
-    negative spec). The cost of the longer ladder is a stem collision across
-    unrelated trees — a root ``tests/test_foo.py`` about something else can
-    claim a ``docs/foo.md`` that no closer candidate covers — which is the
-    same stem-name contract the co-located rung always ran on, just reaching
-    further.
-    """
     test_name = _normalized_test_name(candidate.stem)
     targets = [
         parent / "tests" / test_name
@@ -728,34 +641,6 @@ def _candidate_test_targets(
 def _is_testable_surface(
     path: str, *, test_locator_suffixes: tuple[str, ...] = ()
 ) -> bool:
-    """Whether ``path`` is a surface a runnable test could cover AT ALL.
-
-    The discriminator ``terminal_test_scope`` needs to tell two states
-    apart that ``_map_written_path_to_test_target`` returning ``None``
-    collapses into one: "you forgot to declare a test for this module"
-    and "this row is prose." Only the first is an authoring omission; the
-    second cannot be satisfied by any edit the plan author could make.
-
-    ``.py`` is testable unconditionally because ``_candidate_test_targets``
-    always derives ``tests/test_<stem>.py`` for it — pytest is the runner
-    the terminal phase always invokes. A path whose suffix matches a
-    repo-declared ``test_locator_suffixes`` pattern's own source suffix
-    (AC5a — e.g. a TS repo's ``.ts`` under a ``*.test.ts`` convention) is
-    testable for the same reason: ``_candidate_test_targets`` derives a
-    candidate for it too, once that pattern is configured. Absent any
-    configured pattern this stays exactly today's ``.py``-only behaviour. A
-    non-Python path outside a configured pattern may still RESOLVE (a data
-    fixture whose driver test is named for it), and that is unaffected:
-    this predicate is consulted only for paths that already mapped to
-    nothing, to decide whether the miss is an omission or a fact about the
-    surface.
-
-    Negative spec: this is NOT a "is this file important" judgment and must
-    never grow a doc/config allowlist. A new suffix belongs here only when
-    ``_candidate_test_targets`` learns to derive a runnable target for it —
-    which is exactly what a ``test_locator_suffixes`` entry does, and
-    nothing else does.
-    """
     suffix = PurePosixPath(path).suffix
     if suffix == ".py":
         return True
@@ -770,50 +655,6 @@ def _map_written_path_to_test_target(
     repo_root: Path | None = None,
     declared: frozenset[str] = frozenset(),
 ) -> str | None:
-    """Map one written path to its runnable test target, or ``None``.
-
-    Encodes the ``tests/test_<stem>.py`` convention (``spine_read.py`` ->
-    ``tests/test_spine_read.py``, and so on) — no repo-wide "locate a
-    module's tests" helper exists to defer to. A path with no such file
-    present maps to ``None`` — a single, targeted ``Path.is_file()`` probe
-    per derived candidate, never a directory listing (see module
-    docstring's negative spec).
-
-    The same stem derivation runs for a data fixture as for a module. A
-    driver test bound to ``engine-root-conformance.json`` is named for that
-    fixture, so a config-only row resolves to it and becomes emittable
-    instead of refusing emission on a surface that IS covered.
-
-    A written path that IS a test file is its own target, ahead of any
-    derivation: a row whose deliverable is a new test is the row whose test
-    target is knowable with certainty, and deriving instead asks for
-    ``test_test_<stem>.py`` and refuses a test-only row on the one surface
-    it definitionally covers.
-
-    ``declared`` is the spine's own union of ``writes:`` paths, and a
-    candidate it names counts as resolved without existing on disk yet. The
-    spine is authoritative about what will exist by the time the terminal
-    test phase runs, and the shape this serves is the ordinary one: a row
-    writing a module together with the test that covers it. Judged against
-    the tree alone that test does not exist at emission time, so the row
-    mapped to nothing and a spine of only such rows refused — emission
-    failing precisely on new work that carries its own coverage. The
-    tradeoff is emit-time optimism: a spine declaring a test path it never
-    writes still emits, and the terminal phase's actual run, not this
-    derivation, is what catches that. Optimism about a path the spine itself
-    declared is the right direction to fail in; refusing a correctly
-    authored spine is not.
-
-    Negative spec (DoE improvement-queue entry
-    ``2026-08-20-engine-s-map-written-path-to-test-target-72c8a48a56c7``): a
-    non-``.py`` path resolves ONLY through this stem derivation — never by
-    directory proximity, and never because some test cites the path in an
-    assertion message. An earlier cut of that rule scanned test bodies for a
-    citation and resolved a wiki doc to an unrelated test that merely
-    mentioned it. A doc with no test named for it still maps to ``None``, so
-    a row writing only uncovered non-code refuses rather than emitting an
-    empty terminal scope.
-    """
     candidate = PurePosixPath(path)
     if _is_test_file(candidate):
         return candidate.as_posix()
@@ -824,10 +665,6 @@ def _map_written_path_to_test_target(
     if any(
         path.endswith(pattern.lstrip("*")) for pattern in test_locator_suffixes
     ):
-        # A written path that already carries a configured suffix pattern's
-        # own tail (``foo.test.ts`` under a ``*.test.ts`` convention) is its
-        # own target, same as the ``.py`` self-test-file case above — a row
-        # whose deliverable IS the test does not need it re-derived.
         return candidate.as_posix()
     for target in _candidate_test_targets(
         candidate, test_locator_suffixes=test_locator_suffixes
@@ -839,37 +676,6 @@ def _map_written_path_to_test_target(
 
 
 def terminal_test_scope(waves: list[list[WaveRow]], *, repo_root: Path | None = None) -> list[str]:
-    """Derive the terminal ``coordinator:test-runner`` scope across every
-    wave in ``waves`` (AC9). Refuses (``NoWritesDeclaredError``) if NO row
-    in the whole spine declares ``writes:`` (AC10). Refuses
-    (``NoTestTargetError``) if every declared path maps to no runnable test
-    target — a doc-only spine (AC16) satisfies AC10's literal wording while
-    still producing nothing runnable — but ONLY when at least one unmapped
-    path is a testable surface (``_is_testable_surface``), which is what
-    separates an authoring omission from prose. An all-prose spine returns
-    an EMPTY list, and ``emit.compose_script`` omits the terminal phase
-    rather than running it over nothing; see module docstring § The sharp
-    edge AC16 exists for.
-
-    Callers must therefore handle an empty return. It is not an error
-    sentinel and never means "no writes were declared" — that shape raises
-    ``NoWritesDeclaredError`` above and cannot reach here.
-
-    NOT the same union as ``commit_pathspec`` — every written path is
-    mapped through ``_map_written_path_to_test_target`` first, so a doc or
-    non-Python written path drops out rather than landing in the scope
-    verbatim (staff review correction; see module docstring § Pathspec vs
-    test scope).
-
-    The whole spine's declared writes are passed to each mapping as
-    ``declared``, so a candidate this spine will write counts as resolved
-    before it exists on disk — see that function's docstring for why the
-    spine, not the worktree, is authoritative at emission time. The union is
-    whole-spine rather than per-row on purpose: a row writing a module and a
-    LATER row writing the test that covers it is one deliverable split
-    across two rows, and scoping the union per-row would resolve it only
-    when a single row happened to declare both.
-    """
     all_rows = [row for wave in waves for row in wave]
     declares_writes = [row for row in all_rows if row.writes is not UNDECLARED]
     if not declares_writes:
@@ -897,14 +703,6 @@ def terminal_test_scope(waves: list[list[WaveRow]], *, repo_root: Path | None = 
     targets = _dedupe(targets)
 
     if not targets:
-        # `unmapped` empty here means the spine contributed NO written path
-        # at all -- every row declared `writes: []`. That is the zero-
-        # contribution refusal, never "this wave is prose": there is no
-        # surface to call non-testable. Guarding on it keeps the AC16
-        # widening from silently swallowing NoWritesDeclaredError's shape 2.
-        # A spine whose only writes are `writes_under:` prefixes names no
-        # file to map, so its empty scope is a fact about the spine, not an
-        # omission: no edit could name a test for files not chosen yet.
         test_locator_suffixes = tuple(
             resolve_test_locator_config(
                 str(repo_root or _REPO_ROOT)

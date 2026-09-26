@@ -32,7 +32,6 @@ GoalStatus = Literal["active", "done", "superseded", "dropped"]
 
 
 class GoalKeyResultStatus(BaseModel):
-    """Per-KR status projected onto the wire (2.13.0, D24)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -82,7 +81,6 @@ class Goal(BaseModel):
     Scopes cockpit's CEO/weekly view to goals meant for that surface. Version-neutral
     optional — absent on all existing records (2.13.0, D24).
     """
-    # present-as-null (no default — see provenance.py module docstring for the D9 gotcha).
     parent_goal_id: str | None
     """
     Weekly→OKR ladder edge — the parent goal this goal rolls up to. D9:

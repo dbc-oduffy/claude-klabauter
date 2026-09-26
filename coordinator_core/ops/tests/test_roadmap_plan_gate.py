@@ -1,14 +1,3 @@
-"""
-coordinator_core/ops/tests/test_roadmap_plan_gate.py — the "roadmap.plan_gate" op.
-
-Subject: `coordinator_core.ops.roadmap_plan_gate`, the RPC wrapper over the
-two-gate resolver. The resolver's own semantics are pinned in
-`coordinator_core/roadmap/tests/test_plan_gate.py`; what this module pins is the
-WIRE: registration, param validation, and the one-baton `verdict` a caller reads
-instead of re-deriving the gate from the `batons` list.
-
-Zero spawns; every case builds its corpus in `tmp_path`.
-"""
 
 from __future__ import annotations
 
@@ -58,18 +47,12 @@ def test_the_op_is_registered_under_its_wire_name():
 
 
 def test_the_op_is_reachable_through_the_lazy_import_map():
-    """A missing map entry degrades to a full-package import rather than a
-    broken dispatch, so this is a cost gate, not a correctness one — but a
-    silently-unmapped op re-imports ~80 modules on every call."""
     from coordinator_core.ops._registry_map import OP_MODULE_MAP
 
     assert OP_MODULE_MAP["roadmap.plan_gate"] == "coordinator_core.ops.roadmap_plan_gate"
 
 
 def test_the_op_declares_a_key_scope():
-    """An op reading main-worktree-rooted `state/` must be keyed "common_dir",
-    or a call from a linked worktree resolves that worktree's own empty tree and
-    returns a confident, well-formed empty answer."""
     from coordinator_core.op_scopes import _OP_KEY_SCOPE
 
     assert _OP_KEY_SCOPE["roadmap.plan_gate"] == "common_dir"
@@ -111,8 +94,6 @@ def test_subject_verdict_defaults_to_reporting_both_gates(corpus):
 
 
 def test_an_unknown_subject_is_refused_rather_than_reported_open(corpus):
-    """Silence would read as "no gate holds this". A caller asking about a baton
-    that does not exist must not be told to proceed."""
     verdict = _call(corpus, subject="not-a-baton", gate="execution")["verdict"]
 
     assert verdict["resolved"] is False
@@ -120,16 +101,12 @@ def test_an_unknown_subject_is_refused_rather_than_reported_open(corpus):
 
 
 def test_subject_narrows_the_report_but_not_the_scan(corpus):
-    """A baton's gates are a function of the whole corpus, so a subject filter
-    must not shrink what the resolver reads — only what it prints."""
     full = _call(corpus)
     narrowed = _call(corpus, subject="dependent-1")
 
     assert len(narrowed["batons"]) == 1
     assert narrowed["scanned"] == full["scanned"]
     assert narrowed["waves"] == full["waves"]
-    # A count whose denominator moves with a display filter is a count nobody can act on:
-    # "candidates: 2" beside "planning_open: 0" would read as "none of the 2".
     assert narrowed["counts"] == full["counts"]
 
 
@@ -157,18 +134,11 @@ def test_bad_params_raise_rather_than_degrade(corpus, params):
 
 
 def test_a_missing_repo_root_is_refused(corpus):
-    """No cwd fallback: deriving a root from where the caller happened to stand
-    makes the answer depend on the caller's directory."""
     with pytest.raises(ValueError, match="repo_root"):
         op_module._handler({}, repo_root=None)
 
 
 def test_a_held_target_is_matched_not_unmatched(corpus):
-    """`unmatched_targets` means "this id names nothing on disk", and a driver
-    reads it as a typo. A held baton is named by its target and deliberately
-    withheld, so reporting it there sends the driver back to re-type an id that
-    was correct — measured 2026-09-12, where two held batons came back under
-    both `held` and `unmatched_targets` at once."""
     _baton(
         corpus,
         "held-1",

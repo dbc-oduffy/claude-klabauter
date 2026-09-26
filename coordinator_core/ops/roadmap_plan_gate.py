@@ -64,20 +64,12 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.roadmap.plan_gate import assemble_plan_gate
 
-# Generator-provenance: this op writes nothing.
 GENERATES: list = []
 
 _GATE_CHOICES = ("planning", "execution", "both")
 
 
 def _select_verdict(report: Dict[str, Any], subject: Optional[str], gate: str) -> Optional[Dict[str, Any]]:
-    """The one-baton admission verdict, or None when no single subject resolved.
-
-    A `subject` matching no baton returns a verdict of its own — `resolved:
-    False` — rather than None. Silence would read as "no gate holds this", which
-    is the fail-open direction: a caller asking about a baton that does not
-    exist must not be told to proceed.
-    """
     if subject is None:
         return None
     matches = [b for b in report["batons"] if subject in (b["id"], b["path"], b["stub_id"])]
@@ -127,9 +119,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if not isinstance(targets, list) or not all(isinstance(t, str) and t for t in targets):
             raise ValueError("targets must be a list of non-empty strings when supplied")
         if not targets:
-            # An empty list is the caller asking for nothing, which is almost
-            # always a mistake upstream (a filter that matched zero). Refusing is
-            # louder than returning an empty sweep that reads as "nothing to do".
             raise ValueError("targets was supplied but empty — omit it to sweep every baton")
 
     worktree_root = main_worktree_root(repo_root)
@@ -139,8 +128,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         roadmap_id=roadmap_id or None,
         targets=targets,
     )
-    # Matched is decided against every SCANNED record, not the surviving
-    # candidates -- `test_a_held_target_is_matched_not_unmatched` pins why.
     matched = set(report.pop("matched_targets", ()))
     report["unmatched_targets"] = sorted(t for t in targets or () if t not in matched)
     report["verdict"] = _select_verdict(report, subject or None, gate)

@@ -186,72 +186,32 @@ from typing import Any, Dict, Optional
 from coordinator_core.subagent_sandbox.engine import resolve_effective_types
 
 #: The two POSITIVELY RESOLVED agent classes this module's contrast copy is
-#: drafted for (see module docstring, "TWO AGENT CLASSES"). `resolve_agent_
 #: class()` also returns a third value, `AGENT_CLASS_UNKNOWN` below, for the
-#: case where resolution itself failed or found nothing -- that value is
-#: never a positive identity claim and never selects either template this
-#: pair renders (coordinator-claude#42 B2: a resolution failure is not
 #: license to claim EITHER identity, deliberately not folded into a
-#: two-way split).
 AGENT_CLASS_EM = "em"
 AGENT_CLASS_SUBAGENT = "subagent"
 
-#: Resolution did not positively find an agent identity, and did not fail
-#: closed to a manufactured guess either -- an exception out of
-#: `resolve_effective_types`, or a payload carrying no agent signal at all
-#: (see `resolve_agent_class`'s own docstring). Never claims EM's in-band
-#: `DR-298` self-grant (that capability is genuinely EM-only) and never
-#: claims a dispatching EM exists to report to (there may be none) --
-#: `render_unknown_message` states neither and forks the "instead" instead.
 AGENT_CLASS_UNKNOWN = "unknown"
 
 #: The two SURFACES this module's `clear_line()` offer is truthful (or not)
-#: about (chunk 3, state/bug-backlog/2026-08-10-cross-repo-write-boundary-
-#: denies-on-bash-b6fd16ed9ab9.yaml). Orthogonal to both the agent-class and
-#: destination-class axes above -- every one of the four templates renders
 #: under EITHER surface. `SURFACE_BASH` is the two Bash guards
-#: (`bump_foreign_repo_write.py`/`bump_outside_repo_write.py`), whose marker
-#: lives at the TARGET's own gitdir since `_write_bump_marker.py`'s "MARKER
 #: SCOPE -- NARROWED TO ONE TARGET" (chunk C3, docs/plans/2026-08-03-narrow-
-#: write-confinement-bump.md) -- one `touch` clears exactly the target named
 #: in the deny, nothing else. `SURFACE_TOOL` is the `Write`/`Edit`/
-#: `MultiEdit` tool-surface guard (`write_guards/bump_out_of_repo_tool_
-#: write.py`), whose marker instead lives at the SESSION's OWN gitdir
-#: whenever one resolves (`marker_gitdir = own_gitdir if own_gitdir is not
-#: None else target_gitdir`, that module's `check()`) -- so the identical
-#: `touch` there stands the whole Write/Edit boundary down for EVERY future
-#: target for the rest of the session, not the one named in the deny. The
-#: old copy said "clear this target" on both surfaces; that was false on
-#: the tool surface the moment the marker's own siting diverged from the
 #: Bash legs'. Defaults to `SURFACE_BASH` on every template below so the two
-#: pre-existing Bash call sites (which pass no `surface` keyword) render
 #: BYTE-IDENTICAL copy to before this axis existed; the tool-surface call
 #: site must pass `surface=SURFACE_TOOL` explicitly to pick up the honest
-#: wording -- that one-line wiring edit belongs to whichever chunk owns
-#: `bump_out_of_repo_tool_write.py` (this plan's chunk 3 scopes this module
-#: only, not its callers).
 SURFACE_BASH = "bash"
 SURFACE_TOOL = "tool"
 
-#: The two destination classes this module's copy is drafted for (see
 #: module docstring, "TWO AGENT CLASSES x TWO DESTINATION CLASSES"). An
-#: orthogonal axis over the agent-class split above -- never a third agent
-#: class (Anti-scope).
 DESTINATION_FOREIGN = "foreign"
 DESTINATION_PUBLISH = "publish"
 
-#: The durable source-side alternative's doctrine citation (AC15) -- the
-#: doctrine SECTION, never a bare directory, and never the mirror's own
 #: destination path (Anti-scope: "do not hardcode a mirror DESTINATION path
-#: anywhere"). This is a citation of a DoE-claude-resident wiki page name,
-#: not a filesystem path this guard could read or test.
 _PUBLISH_DOCTRINE_CITATION = "plugin-extraction-and-distribution.md"
 _PUBLISH_DOCTRINE_SECTION = "Publish-Repo Content Authoring"
 
-#: Bug-backlog pointer for the classification defect below -- a same-repo
 #: write reaching the FOREIGN-class renderer at all. Named once here so
-#: both defect-notice sites cite the identical string (B2, never a second,
-#: independently-typed copy that could drift).
 _CLASSIFICATION_DEFECT_BACKLOG_ENTRY = (
     "state/bug-backlog/2026-08-21-foreign-write-deny-names-the-same-repo-"
     "on-both-sides.yaml"
@@ -499,12 +459,7 @@ def render_em_message(
     defect = _classification_defect_notice(target_repo, session_repo, "your PM")
     if defect is not None:
         return defect
-    # Axis 3 classification (task C4, per-path, not a shared mechanism -- see
-    # C3's identical per-site declaration shape): `target_repo` and
-    # `raw_target` are SUBJECT (the message's whole point is telling the
-    # reader where "there" is); `session_repo` is the reader's OWN repo and
     # is NOT-FOREIGN, so it renders untouched. A future edit adding a fourth
-    # rendered path here must add its own declaration, not extend this one.
     return (
         "Coordinator guard — instead: writing into "
         f"{_target_phrase(target_repo, raw_target)} (not `{session_repo}`) "
@@ -541,12 +496,7 @@ def render_subagent_message(
     defect = _classification_defect_notice(target_repo, session_repo, "the EM that dispatched you")
     if defect is not None:
         return defect
-    # Axis 3 classification (task C4, per-path, not a shared mechanism -- see
-    # C3's identical per-site declaration shape): `target_repo` and
-    # `raw_target` are SUBJECT (the message's whole point is telling the
-    # reader where "there" is); `session_repo` is the reader's OWN repo and
     # is NOT-FOREIGN, so it renders untouched. A future edit adding a fourth
-    # rendered path here must add its own declaration, not extend this one.
     return (
         "Coordinator guard — instead: no PM here — report to the EM that "
         f"dispatched you before writing into {_target_phrase(target_repo, raw_target)} (not `{session_repo}`); "
@@ -602,23 +552,7 @@ def render_unknown_message(
     )
 
 
-#: `write_verb_label` value `_iter_write_sink_candidates` yields for a `git
-#: push` write-sink candidate (`"git %s" % subcommand` with `subcommand ==
 #: "push"`) -- the one shape this module renders DIFFERENT publish-class
-#: copy for (2026-08-14, cross-repo/inbox percolate-push memo): every other
-#: publish-mirror write (a hand-authored commit/edit into the mirror) keeps
-#: the content-authoring doctrine citation below, since THAT write is what
-#: the citation's "Publish-Repo Content Authoring" section is about. A
-#: `push`, by contrast, is never content authoring -- it ships a commit
-#: that (if legitimate) was already made correctly in source and now needs
-#: to reach the mirror, which is exactly `percolate-push`'s job (see
-#: `coordinator/bin/percolate-push.py`'s own module docstring: this guard
-#: denying an unauthorized push into a publish mirror "is the guard working
-#: as designed", unweakened -- percolate-push never transits Bash, so it
-#: never reaches this guard at all). Citing the content-authoring doctrine
-#: page at a push offers the reader an alternative that does not apply to
-#: what they typed; naming `percolate-push <target>` instead offers one
-#: that does.
 _GIT_PUSH_WRITE_VERB_LABEL = "git push"
 
 

@@ -50,7 +50,6 @@ from coordinator_core.contract.cockpit_schema.provenance import ContentHash, Pro
 class RoadmapDagEdge(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    # Connector-injected registry shortname.
     repo: str = Field(
         description=(
             "Owner-qualified repo identity: '<owner>/<repo>'. Owner carries the "
@@ -61,31 +60,12 @@ class RoadmapDagEdge(BaseModel):
             "owner-qualified string is the canonical cross-entity join anchor."
         )
     )
-    # Connector-injected — matches other summary entities.
     coordinator_root_path: str
-    # Stable identifier for the roadmap this edge belongs to.
     roadmap_id: str
-    # stub_id of the blocking (upstream) node.
     from_: str = Field(alias="from")
-    # stub_id of the blocked (downstream) node.
     to: str
-    # Edge type. D47 (DoE 77018f647) widened this to Literal["blocks",
-    # "blocks-sprint"], MINOR 3.14.0 -> 3.15.0, for sprint-altitude gates.
     # This is atomic with CONTRACT_VERSION -> 3.15.0 in emit_schema.py AND a
-    # regen run (coordinator/bin/regen-cockpit-schema.py), because
-    # test_committed_emit_drift.py compares every committed schema file
-    # against a fresh emit.
-    #
-    # Sprint gates ride this SAME property — no `edge_type` key,
-    # `extra="forbid"` untouched, which is why it is a value widen and not a
-    # shape change. Altitudes stay separable only because the id namespaces
-    # are disjoint (spine.schema.json reserves `^sprint-`); `roadmap_dag_fleet`
-    # has no type filter to lean on.
     type: Literal["blocks", "blocks-sprint"]
     provenance: ProvenanceEnvelope
 
-    # R5 content-hash change-signal (optional; sibling of provenance). Omitted
-    # by claude-klabauter for records with no resolvable single source file (rolled-up
-    # aggregates, empty-path computed records). Version-neutral optional —
-    # absent on all existing records. Spec: producer-contract § 3.3.
     content_hash: ContentHash | None = None

@@ -113,39 +113,14 @@ from coordinator_core.install.write_surface import (
 
 
 class UnresolvedShapedClauseError(RuntimeError):
-    """Raised when `derive_receipt_entries` is asked to derive a receipt
-    from a `ShapedClause` with no matching `ClauseResolution` supplied.
-
-    A `ShapedClause`'s concrete entries are only knowable at run time (see
-    module docstring) — there is no honest default to fall back to, so
-    this raises rather than silently emitting zero entries (which would be
-    indistinguishable from "this writer legitimately wrote nothing here")
-    or guessing at the template placeholder (which would fabricate a
-    receipt entry no write ever produced).
-    """
+    pass
 
 
 class ClauseResolutionMismatchError(RuntimeError):
-    """Raised when a `ClauseResolution` entry does not match the declared
-    shape of the `ShapedClause` it is pinning down.
-
-    # `derive_receipt_entries`
-    # previously accepted a caller-supplied resolution with zero check
-    # against `clause.entry_template`: not `kind`, not a root/path-prefix
-    # relationship. `write_surface.validate()` only validates a
-    # declaration's own shape, never a resolution against it, so nothing
-    # else in the pipeline compensated. A resolved entry of the wrong
-    # `kind`, or one whose `key`/`path` does not extend the template's own
-    # (pre-placeholder) prefix, produced a receipt entry indistinguishable
-    # from a correctly-resolved one — and that receipt entry later drives
-    # uninstall's removal decision (`uninstall_legs.classify_entry_disposition`).
-    """
+    pass
 
 
 def _template_prefix(value: str | None) -> str | None:
-    """The literal, non-placeholder portion of a `ShapedClause` template's
-    `key`/`path` — everything before the first `<` placeholder marker (or
-    the whole string if it has none). `None` in, `None` out."""
     if value is None:
         return None
     return value.split("<", 1)[0]
@@ -154,10 +129,6 @@ def _template_prefix(value: str | None) -> str | None:
 def _check_resolution_matches_template(
     writer_id: str, clause_index: int, entry_index: int, template: WriteSurfaceEntry, entry: WriteSurfaceEntry
 ) -> None:
-    """Verify one resolved `WriteSurfaceEntry` matches the shape its
-    `ShapedClause.entry_template` declared — see
-    `ClauseResolutionMismatchError`. Fails loud rather than silently
-    pinning down a wrong-kind or wrong-root entry."""
 
     if entry.kind != template.kind:
         raise ClauseResolutionMismatchError(
@@ -185,11 +156,6 @@ def _check_resolution_matches_template(
 
 @dataclass(frozen=True)
 class ReceiptEntry:
-    """One concrete fact: this writer wrote (or deleted) this exact thing
-    on this machine. Unlike `WriteSurfaceEntry`, which may carry template
-    placeholders inside a `ShapedClause`, every field here is resolved —
-    a receipt entry never contains a placeholder.
-    """
 
     writer_id: str
     kind: str
@@ -202,11 +168,6 @@ class ReceiptEntry:
 
 @dataclass(frozen=True)
 class ClauseResolution:
-    """The runtime-observed concrete entries a `ShapedClause` resolved to
-    on THIS install run — the pin-down the module docstring describes.
-    Supplied by the caller (the writer's own call site, once C-later wires
-    that up), never derived by this module.
-    """
 
     entries: tuple[WriteSurfaceEntry, ...] = field(default_factory=tuple)
 
@@ -227,21 +188,6 @@ def derive_receipt_entries(
     declaration: WriteSurfaceDeclaration,
     resolutions: Mapping[int, ClauseResolution] | None = None,
 ) -> tuple[ReceiptEntry, ...]:
-    """Derive this writer's receipt entries from its declaration.
-
-    A `StaticClause` at index `i` derives directly, with no resolution
-    needed — its entries are already concrete. A `ShapedClause` at index
-    `i` requires `resolutions[i]`; its absence raises
-    `UnresolvedShapedClauseError` rather than skipping the clause or
-    inventing entries (see module docstring). `resolutions` is keyed by
-    clause index (not writer_id) since one writer may carry several
-    `ShapedClause`s independently resolved (e.g. `scaffold_structure`'s
-    four clauses).
-
-    `clauses=()` (declared-empty, see `write_surface.py`) derives to `()`
-    — a writer that asserts it writes nothing has an empty receipt, which
-    is itself a valid, meaningful fact, not an error.
-    """
 
     resolutions = resolutions or {}
     out: list[ReceiptEntry] = []
@@ -270,23 +216,6 @@ def derive_receipt_entries(
 
 @dataclass(frozen=True)
 class InstallReceipt:
-    """The full receipt for one install run: every `ReceiptEntry` derived
-    across every writer that ran. Flat and writer-agnostic by design — a
-    consumer (e.g. a future uninstall leg) filters by `writer_id` or `kind`
-    itself rather than this module pre-partitioning it.
-
-    `reported_writer_ids`/`unreported_writer_ids` carry the coverage fact
-    the module docstring's "Coverage" section describes — two disjoint,
-    both-explicit sets (`build_receipt` raises if a writer_id appears in
-    both). Neither set is a derived view of `entries`: a writer can be in
-    `reported_writer_ids` with zero entries (declared-empty, a legitimate
-    fact — see `derive_receipt_entries`'s `clauses=()` note) and that is
-    NOT the same recorded fact as the writer being in `unreported_writer_ids`
-    (did not report at all this run). A writer_id absent from BOTH sets was
-    simply never asked about by whatever assembled this receipt — `reported()`
-    returns `None` for that case, not `False`, since this module never
-    infers "did not report" from silence (see Negative spec).
-    """
 
     entries: tuple[ReceiptEntry, ...] = field(default_factory=tuple)
     reported_writer_ids: frozenset[str] = field(default_factory=frozenset)
@@ -299,11 +228,6 @@ class InstallReceipt:
         return tuple(e for e in self.entries if e.kind == kind)
 
     def reported(self, writer_id: str) -> bool | None:
-        """Did `writer_id` report this run? `True` (in `reported_writer_ids`,
-        entries may still be empty — declared-empty), `False` (explicitly in
-        `unreported_writer_ids`), or `None` (this receipt was never told
-        either way about `writer_id` — not a claim of non-report, an honest
-        "not asked")."""
         if writer_id in self.reported_writer_ids:
             return True
         if writer_id in self.unreported_writer_ids:
@@ -362,10 +286,6 @@ def build_receipt(
     )
 
 
-# ---------------------------------------------------------------------------
-# Persistence — C2 of docs/research/2026-08-06-install-receipt-persistence-design.md
-# ---------------------------------------------------------------------------
-
 RECEIPT_SCHEMA_VERSION = 1
 """Bumped whenever the on-disk shape changes incompatibly. `load_receipt`
 treats any value it does not recognize as corrupt (returns `None`), never
@@ -375,10 +295,7 @@ _RECEIPT_FILENAME = "install-receipt.json"
 
 
 class ReceiptPersistenceError(RuntimeError):
-    """Raised by `persist_receipt` when the write is refused (machine-
-    mutation guard) or the settings-home location cannot be resolved. Never
-    raised by `load_receipt` — see that function's degrade-to-`None`
-    contract."""
+    pass
 
 
 def _receipt_path(settings_home_override: str | Path | None = None) -> Path:
@@ -432,10 +349,6 @@ def _receipt_to_jsonable(receipt: InstallReceipt) -> dict:
 
 
 def _receipt_from_jsonable(data: object) -> InstallReceipt:
-    """Reconstruct an `InstallReceipt` from parsed JSON. Raises
-    (`ValueError`/`TypeError`/`KeyError`) on ANY shape mismatch — never
-    degrades itself; `load_receipt` is the sole degrade-to-`None` boundary,
-    so this stays a strict, symmetric inverse of `_receipt_to_jsonable`."""
     if not isinstance(data, dict):
         raise ValueError(f"receipt document is not a JSON object: {type(data)!r}")
 
@@ -454,13 +367,6 @@ def _receipt_from_jsonable(data: object) -> InstallReceipt:
     for raw_entry in raw_entries:
         if not isinstance(raw_entry, dict):
             raise ValueError(f"receipt entry is not a JSON object: {type(raw_entry)!r}")
-        # `key`/`path`/`begin_marker`/
-        # `end_marker` were previously taken via bare `.get(...)` with no
-        # type check, so a corrupted receipt (e.g. an integer `path`) would
-        # reconstruct into a `ReceiptEntry` with a non-string field instead
-        # of being treated as a shape mismatch. Validated here the same way
-        # `writer_id`/`kind` already were, each optional (`None` allowed,
-        # any other non-string type is a shape mismatch).
         raw_key = raw_entry.get("key")
         raw_path = raw_entry.get("path")
         raw_begin_marker = raw_entry.get("begin_marker")
@@ -499,15 +405,6 @@ def _receipt_from_jsonable(data: object) -> InstallReceipt:
     if not isinstance(raw_unreported, list) or not all(isinstance(w, str) for w in raw_unreported):
         raise ValueError(f"'unreported_writer_ids' is not a JSON array of strings: {raw_unreported!r}")
 
-    # `build_receipt` enforces
-    # reported/unreported disjointness at construction (raises `ValueError`
-    # on overlap), but that invariant was previously bypassed entirely on
-    # this load path: a writer_id present in both lists round-tripped into
-    # an `InstallReceipt` whose `reported()` silently resolved to `True`
-    # (it checks `reported_writer_ids` first) — the exact "claims coverage
-    # it does not have" ambiguity the design's negative spec forbids, and a
-    # detectable corruption shape `load_receipt`'s contract says must
-    # degrade to `None`.
     overlap = set(raw_reported) & set(raw_unreported)
     if overlap:
         raise ValueError(
@@ -550,12 +447,6 @@ def persist_receipt(
     its own receipt is a real configuration error, not the honest-unknown
     case `load_receipt` exists to represent.
     """
-    # This docstring and
-    # `ReceiptPersistenceError`'s own docstring both document an
-    # unresolvable settings-home as surfacing `ReceiptPersistenceError`,
-    # but the code previously let `RequireHomeError` propagate raw here
-    # (uncaught), disagreeing with `load_receipt`, which does catch it
-    # explicitly. Wrapped to match the documented contract.
     try:
         target = _receipt_path(settings_home_override)
     except RequireHomeError as exc:
@@ -575,19 +466,6 @@ def persist_receipt(
 
 
 def load_receipt(*, settings_home_override: str | Path | None = None) -> InstallReceipt | None:
-    """Load the persisted receipt, or `None` if none can be honestly
-    reconstructed.
-
-    Degrades to `None` — NEVER raises, NEVER returns a confidently-wrong
-    receipt — for every one of: the file is absent; the settings-home
-    location itself cannot be resolved (`RequireHomeError`); the file is
-    not valid JSON (truncated, malformed); the parsed JSON does not match
-    the expected document shape (missing/mistyped keys); the document
-    names a `schema_version` this reader does not recognize. This receipt
-    drives what an uninstall run deletes from the operator's machine — a
-    wrong answer here is worse than no answer, per the design note's
-    negative spec, so every one of these is a `None`, not a raise.
-    """
     try:
         target = _receipt_path(settings_home_override)
     except RequireHomeError:
@@ -613,16 +491,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
     writer_id="install-receipt",
     source_module="coordinator_core.install.receipt",
     clauses=(
-        # `persist_receipt` is the sole real-machine write this module
-        # performs — everything else here (`derive_receipt_entries`,
-        # `build_receipt`) is pure in-memory assembly, per the module
-        # docstring's Negative spec. Declared even though the AST-walk
-        # enforcement test (`test_write_reaching_modules_declare.py`)
-        # would not itself flag this module (the write goes through the
-        # `atomic_write_bytes`/`_refuse_machine_mutation` NAME-call seam,
-        # not one of that test's flagged attribute names) — the doctrine
-        # `_shared.py`'s own allowlist entry states applies here too: the
-        # CALLER pointing the generic write mechanic at a real target is
         # where the WRITE_SURFACE clause belongs.
         StaticClause(
             entries=(

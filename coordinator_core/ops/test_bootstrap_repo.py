@@ -33,14 +33,7 @@ from coordinator_core.ops.bootstrap_repo import (
 )
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
-# Declared, not excused: this file spawns a real git process because
-# `_validate_target_root_is_git_repo` under test validates a real target
-# root against real git state (baseline commit, HEAD sha resolution) that no
-# mock stands in for. Tests each init/commit their own throwaway repo, so
-# `_init_git`/`_baseline_commit` are not hoisted to module scope -- per-test
 # isolation. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
-# residue and is explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -135,11 +128,6 @@ def _set_coordinator_root(monkeypatch, coordinator_root):
     monkeypatch.setenv("COORDINATOR_ROOT", coordinator_root)
 
 
-# ---------------------------------------------------------------------------
-# Arg parsing
-# ---------------------------------------------------------------------------
-
-
 def test_help_exits_zero_and_prints_usage(capsys):
     rc = main(["--help"])
     assert rc == 0
@@ -174,16 +162,6 @@ def test_target_root_missing_exits_one(tmp_path, capsys):
 
 
 def test_missing_scaffold_manifest_is_advisory_not_fatal(tmp_path, monkeypatch, capsys):
-    """Scaffold is native + advisory (C11): a missing canonical-structure.yaml
-    manifest raises ScaffoldError internally, which stage 3 catches and warns
-    on -- it must NOT block the rest of the bootstrap chain (unlike the retired
-    bash oracle's separate scaffold-script-not-found prereq check, which was a
-    stage-0 fatal precondition on the .sh file itself).
-
-    Must also neutralize the rung 2-4
-    fallback's ambient machine state (real `~/.claude/.doe-root` + machine-local
-    registry), or this test silently passes/fails depending on whether the
-    executing machine happens to carry a real DoE-claude checkout."""
     empty_root = tmp_path / "empty-coordinator"
     bin_dir = empty_root / "bin"
     bin_dir.mkdir(parents=True)
@@ -209,26 +187,11 @@ def test_missing_scaffold_manifest_is_advisory_not_fatal(tmp_path, monkeypatch, 
     out = capsys.readouterr()
     assert rc == 0
     assert "scaffold-canonical-structure failed" in out.err
-    # Scaffold created nothing (manifest missing) -- nothing to stage, but the
-    # chain still ran to completion rather than aborting at the failed stage.
     assert "nothing to commit" in out.out
-
-
-# ---------------------------------------------------------------------------
-# `_resolve_scaffold_manifest_root` — direct unit coverage of the rung ladder
-#
-# The two tests above only exercise this
-# function indirectly and (before this diff) not hermetically. These pin the
-# ladder itself with all ambient rungs neutralized by default: rung-1 hit
-# (fast path, fallback never consulted), rung-1 miss -> rung-2 hit (the actual
-# bug-fix path), and rung-1 miss -> all rungs miss (must stay a loud
-# ScaffoldError, never a silent success -- the original bug was silence).
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_scaffold_manifest_root_rung_one_hit_skips_fallback(tmp_path, monkeypatch):
     coordinator_root = _make_coordinator_root(tmp_path, name="rung-one-hit-coordinator")
-    # Sabotage the fallback so a rung-1 hit provably never reaches it.
     monkeypatch.setattr(
         "coordinator_core.ops.bootstrap_repo._content_root_rungs_2_to_4",
         lambda claude_home: (_ for _ in ()).throw(AssertionError("fallback consulted on rung-1 hit")),
@@ -260,10 +223,6 @@ def test_resolve_scaffold_manifest_root_rung_one_miss_rung_two_hit(tmp_path, mon
 
 
 def test_resolve_scaffold_manifest_root_all_rungs_miss_stays_loud(tmp_path, monkeypatch, capsys):
-    """The case that matters most: if every rung misses, `main()` must still
-    hit `ScaffoldError` (caught + reported as advisory by stage 3), never a
-    silent no-manifest success. Pins against the fallback ever regressing to
-    a silent default that masks a genuinely-missing manifest."""
     empty_root = tmp_path / "empty-coordinator"
     (empty_root / "bin").mkdir(parents=True)
     (empty_root / "bin" / "check-install-divergence.py").write_text(
@@ -282,9 +241,6 @@ def test_resolve_scaffold_manifest_root_all_rungs_miss_stays_loud(tmp_path, monk
     from coordinator_core.ops.bootstrap_repo import _resolve_scaffold_manifest_root
 
     result = _resolve_scaffold_manifest_root(str(isolated_claude_home), str(empty_root))
-    # All rungs miss -> unconditional rung-4 fallback path, which does not
-    # exist on disk -- locate_manifest against it must still raise, and
-    # main() must still surface that as an advisory (non-fatal) failure.
     assert result == os.path.join(str(isolated_claude_home), "plugins", "coordinator-claude", "coordinator")
 
     target = tmp_path / "target"
@@ -296,11 +252,6 @@ def test_resolve_scaffold_manifest_root_all_rungs_miss_stays_loud(tmp_path, monk
     assert rc == 0
     assert "scaffold-canonical-structure failed" in out.err
     assert "nothing to commit" in out.out
-
-
-# ---------------------------------------------------------------------------
-# Stage 1 — ensure-git
-# ---------------------------------------------------------------------------
 
 
 def test_non_git_non_interactive_exits_two_and_writes_nothing(tmp_path, capsys):
@@ -319,9 +270,6 @@ def _claude_home_env(monkeypatch, home):
 
 
 def test_claude_home_target_is_refused_before_any_stage(tmp_path, monkeypatch, capsys):
-    """The in-process leg of `guard_repo_setup_claude_home_refusal`: that
-    PreToolUse guard never sees this op, so the op refuses on its own. The
-    target is a real git repo, so nothing but this check can refuse it."""
     home = tmp_path / "home"
     claude_home = home / ".claude"
     claude_home.mkdir(parents=True)
@@ -346,8 +294,6 @@ def test_claude_config_dir_is_claude_home_for_the_refusal(tmp_path, monkeypatch,
 
 
 def test_eof_at_git_init_prompt_defaults_to_accept(tmp_path, monkeypatch):
-    """Negative-spec regression: bash `${_reply:-Y}` on EOF accepts the git-init
-    offer. Faithfully reproduced -- EOF must NOT silently decline here."""
     target = tmp_path / "target"
     target.mkdir()
 
@@ -355,15 +301,10 @@ def test_eof_at_git_init_prompt_defaults_to_accept(tmp_path, monkeypatch):
         raise EOFError
 
     monkeypatch.setattr("builtins.input", _eof_input)
-    rc = main(["--root", str(target)])  # interactive (no --non-interactive)
+    rc = main(["--root", str(target)])
     assert rc == 0
     assert (target / ".git").is_dir()
     assert _commit_subject(str(target)) == "chore(coordinator): bootstrap"
-
-
-# ---------------------------------------------------------------------------
-# Stage 2 — assert-clean
-# ---------------------------------------------------------------------------
 
 
 def test_dirty_tree_non_interactive_exits_three(tmp_path, capsys):
@@ -429,13 +370,8 @@ def test_eof_at_dirty_tree_prompt_defaults_to_decline(tmp_path, monkeypatch):
         raise EOFError
 
     monkeypatch.setattr("builtins.input", _eof_input)
-    rc = main(["--root", str(target)])  # interactive
+    rc = main(["--root", str(target)])
     assert rc == 3
-
-
-# ---------------------------------------------------------------------------
-# Full pipeline — dry-run and real commit
-# ---------------------------------------------------------------------------
 
 
 def test_dry_run_prints_plan_and_makes_no_commit(tmp_path, capsys):
@@ -466,18 +402,6 @@ def test_first_bootstrap_creates_commit(tmp_path):
 
 
 def test_forced_dirty_tree_commit_does_not_absorb_unrelated_staged_file(tmp_path, monkeypatch):
-    """AMBIENT REPO regression (bug-backlog 2026-08-28-two-bootstrap-ops-bare-
-    commit-into-an-operator-selected-repo.yaml): the Stage 5 commit must carry
-    a pathspec scoped to what THIS bootstrap actually staged, not a bare
-    commit that absorbs whatever else happens to be sitting in the index.
-
-    `unrelated.txt` is pre-staged (`git add`, no commit) before bootstrap
-    runs -- the dirty-tree gate is forced past (the operator's own
-    [Force] path), leaving `unrelated.txt` staged but otherwise unchanged, so
-    Stage 5's own untracked/modified re-derivation never re-discovers it
-    (`git diff --name-only` only reports unstaged changes). A bare commit
-    would still absorb it via the index; a pathspec'd commit must not.
-    """
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -525,11 +449,6 @@ def test_second_bootstrap_is_noop_when_nothing_to_stage(tmp_path, capsys):
     assert _head_sha(str(target)) == sha_after_first
 
 
-# ---------------------------------------------------------------------------
-# Stage 4 — conflict-warn
-# ---------------------------------------------------------------------------
-
-
 def test_conflict_warn_gate_fires_exit_four(tmp_path, monkeypatch):
     target = tmp_path / "target"
     target.mkdir()
@@ -561,26 +480,7 @@ def test_conflict_warn_gate_fires_exit_four(tmp_path, monkeypatch):
     assert rc == 4
 
 
-# ---------------------------------------------------------------------------
-# Negative-spec regressions — dry-run scaffold-failure propagation, hook respect
-# ---------------------------------------------------------------------------
-
-
 def test_dry_run_scaffold_failure_is_advisory_not_propagated(tmp_path, monkeypatch, capsys):
-    """Divergence from the retired bash oracle (documented, not a bug): the old
-    oracle's `set -euo pipefail` meant a failing dry-run scaffold call aborted
-    the WHOLE script with scaffold's raw subprocess exit code -- an artifact of
-    shelling out through a `| sed` pipe. Stage 3 is now an in-process native
-    call (C4's scaffold_canonical_structure, wired in by C11) with no
-    subprocess and no raw exit code to propagate; a scaffold failure is always
-    advisory (caught + logged), matching install.maximalist's Step 7 handling
-    of the identical call. This test locks in the NEW contract.
-
-    Same ambient-state neutralization as
-    test_missing_scaffold_manifest_is_advisory_not_fatal above; without it the
-    rung 2-4 fallback can find a real manifest via this machine's actual
-    `~/.claude/.doe-root`, making the manifest-genuinely-missing case
-    untestable."""
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -589,7 +489,7 @@ def test_dry_run_scaffold_failure_is_advisory_not_propagated(tmp_path, monkeypat
     failing_coord_root = _make_coordinator_root(
         tmp_path,
         name="failing-coordinator",
-        write_manifest=False,  # no canonical-structure.yaml -> ScaffoldError, even in dry-run
+        write_manifest=False,
     )
     monkeypatch.setenv("COORDINATOR_ROOT", failing_coord_root)
     isolated_claude_home = tmp_path / "isolated-home" / ".claude"
@@ -637,11 +537,6 @@ def test_pre_commit_hook_rejection_propagates_and_skips_completion_trailer(tmp_p
     assert "bootstrap complete" not in captured.out
 
 
-# ---------------------------------------------------------------------------
-# repo_setup.validate_target_root ("validate-target-root-is-git-repo")
-# ---------------------------------------------------------------------------
-
-
 def test_validate_target_root_valid_git_repo(tmp_path):
     target = tmp_path / "target"
     target.mkdir()
@@ -672,7 +567,6 @@ def test_validate_target_root_directory_not_a_git_repo(tmp_path):
 
 
 def test_validate_target_root_double_invocation_is_a_safe_no_op(tmp_path):
-    """AC7 — read-only check; a second call with identical input is idempotent."""
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -698,16 +592,7 @@ def test_validate_target_root_op_handler_requires_target_root_param():
         _validate_target_root_op({})
 
 
-# ---------------------------------------------------------------------------
-# Stage 5 — commit staging: acquisition count + lock-retry (AC-7 / AC-8,
-# docs/plans/2026-08-13-commit-seams-inherit-lock-reap-and-retry.md C6)
-# ---------------------------------------------------------------------------
-
-
 def _multi_entry_coordinator_root(tmp_path, n: int, name: str = "fake-coordinator-multi") -> str:
-    """Same shape as `_make_coordinator_root`, but the manifest scaffolds
-    `n` distinct files -- every entry maps to a distinct destination so
-    Stage 5's staging set genuinely has `n` untracked files, not one."""
     entries = "\n".join(
         textwrap.dedent(
             f"""\
@@ -726,8 +611,6 @@ def _multi_entry_coordinator_root(tmp_path, n: int, name: str = "fake-coordinato
 
 
 def test_stage_five_batches_add_into_one_call_not_per_file(tmp_path, monkeypatch):
-    """AC-7 — counted demonstration: N scaffolded files staged for the single
-    bootstrap commit must cost ONE `git add` subprocess call, not N+1."""
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -784,10 +667,8 @@ def test_batch_paths_by_byte_budget_splits_on_bytes_not_count():
 
     batches = _batch_paths_by_byte_budget(long_paths, root)
 
-    # Byte budget forces a split well before the old flat count of 500 would.
     assert len(batches) > 1
     assert sum(len(b) for b in batches) == 400
-    # No round-trip data loss across the split.
     assert [p for batch in batches for p in batch] == long_paths
 
     base = _argv_bytes(["git", "-C", root, "add", "--"])
@@ -797,8 +678,6 @@ def test_batch_paths_by_byte_budget_splits_on_bytes_not_count():
 
 
 def test_batch_paths_by_byte_budget_never_drops_an_oversized_single_path():
-    """A single path that alone exceeds the byte budget must still be
-    attempted in its own one-path batch, never silently dropped."""
     from coordinator_core.ops.bootstrap_repo import (
         _STAGE_BATCH_MAX_ARGV_BYTES,
         _batch_paths_by_byte_budget,
@@ -816,11 +695,6 @@ def test_batch_paths_by_byte_budget_never_drops_an_oversized_single_path():
 
 
 def test_stage_five_add_retries_through_lock_contention(tmp_path, monkeypatch):
-    """AC-8 — retry composed locally in `bootstrap_repo._git` (see its own
-    docstring for the rejected `git_native` route): a transient
-    `.git/index.lock` collision on the staging `add` is retried and the
-    bootstrap commit still lands, rather than aborting on the first
-    collision."""
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -855,25 +729,7 @@ def test_stage_five_add_retries_through_lock_contention(tmp_path, monkeypatch):
     assert (target / "state" / "orientation_cache.md").is_file()
 
 
-# ---------------------------------------------------------------------------
-# _extract_failed_path_from_git_stderr — Review: code-reviewer P3 (misattri-
-# bution risk). Before this fix, `re.search(r"'([^']+)'", stderr) or
-# re.search(r'"([^"]+)"', stderr)` matched ANY quoted substring anywhere in
-# stderr and would confidently name the WRONG path when an unrelated quoted
-# fragment (a hint/advice line, or a quoted token inside a different
-# sentence) appeared before git's real failing-path message. These tests pin
-# the fail-safe: an unrelated quoted string must never produce a named path,
-# and a genuine known-template message must still extract correctly.
-# ---------------------------------------------------------------------------
-
-
 def test_extract_failed_path_ignores_unrelated_quoted_substring():
-    """A hint/advice-shaped stderr line containing an unrelated quoted
-    string, with NO known git add-failure template present, must fall back
-    to None (the honest batch-scoped message) rather than misattributing
-    that unrelated quote as the failing path. This is exactly the
-    misattribution the prior "any quoted substring anywhere" regex was
-    vulnerable to."""
     stderr = (
         "hint: Waiting for your editor to close the file... 'core.editor' is unset\n"
         "hint: see 'git help config' for more details\n"
@@ -887,10 +743,6 @@ def test_extract_failed_path_matches_known_pathspec_template():
 
 
 def test_extract_failed_path_ignores_unrelated_quote_preceding_real_failure():
-    """Even when a genuine known-template failure IS present, an unrelated
-    quoted fragment earlier in stderr must not be picked up instead -- the
-    anchored per-template patterns only match git's own message shape, never
-    an arbitrary preceding quote."""
     stderr = (
         "hint: see 'git help config' for more details\n"
         "fatal: pathspec 'state/real-failure.md' did not match any files\n"
@@ -904,10 +756,6 @@ def test_extract_failed_path_returns_none_for_no_stderr():
 
 
 def test_git_add_batch_env_pins_locale_without_dropping_ambient_env(monkeypatch):
-    """`_git_add_batch_env` must force C-locale git messages (so the
-    anchored English patterns above are sound) while still copying the rest
-    of the ambient environment (PATH, etc.) rather than replacing it --
-    dropping PATH would break the `git` subprocess spawn entirely."""
     monkeypatch.setenv("LC_ALL", "fr_FR.UTF-8")
     monkeypatch.setenv("SOME_UNRELATED_VAR", "keep-me")
     env = _git_add_batch_env()
@@ -919,11 +767,6 @@ def test_git_add_batch_env_pins_locale_without_dropping_ambient_env(monkeypatch)
 
 
 def test_stage_five_add_failure_warning_uses_locale_pinned_extraction(tmp_path, monkeypatch, capfd):
-    """End-to-end: a failed `git add` batch during Stage 5 must invoke git
-    with the locale-pinned env (`_git_add_batch_env`) so that
-    `_extract_failed_path_from_git_stderr`'s anchored templates are sound
-    against whatever git actually emits -- pinned by asserting the captured
-    `env` kwarg on the `add` subprocess call carries `LC_ALL=C`."""
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -947,14 +790,6 @@ def test_stage_five_add_failure_warning_uses_locale_pinned_extraction(tmp_path, 
     for env in seen_envs:
         assert env is not None
         assert env.get("LC_ALL") == "C"
-
-
-# ---------------------------------------------------------------------------
-# `.doe-root` pointer rung: both content layouts. A container registers the
-# published FLAT mirror as its DoE root, where `<root>/coordinator` cannot
-# exist, so the private-only join skipped the rung entirely and fell through
-# to a marketplace path that was not there either.
-# ---------------------------------------------------------------------------
 
 
 def _pointer_home(tmp_path, monkeypatch, doe_root):

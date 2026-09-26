@@ -1,11 +1,3 @@
-"""Unit tests for coordinator_core.search.sources_listdir.
-
-Covers parse-and-produce over the accepted `ls` shapes, the decline set
-(unsupported flags, multiple operands, glob operands, non-directory/nonexistent
-targets, redirection/substitution operands), and the collation behaviour --
-parameterized over more than one locale so a byte-sort implementation masquerading
-as collation-aware would be caught rather than silently passing.
-"""
 
 from __future__ import annotations
 
@@ -39,9 +31,6 @@ _AVAILABLE_UTF8_LOCALE = next(
 )
 
 
-# --------------------------------------------------------------------- parsing
-
-
 def test_parse_bare_ls():
     spec = parse_ls_segment(["ls"])
     assert spec == LsSpec(directory=".", show_all=False)
@@ -69,9 +58,6 @@ def test_parse_ls_dash_a():
 def test_parse_ls_combined_flags(tokens):
     spec = parse_ls_segment(tokens)
     assert spec == LsSpec(directory="subdir", show_all=True)
-
-
-# --------------------------------------------------------------------- decline
 
 
 @pytest.mark.parametrize("flag", ["-l", "-R", "-t", "-S", "-r", "-F"])
@@ -130,9 +116,6 @@ def test_decline_file_operand(tmp_path):
         run(spec, cwd=str(tmp_path))
 
 
-# --------------------------------------------------------------------- listing
-
-
 def test_run_omits_dotfiles_by_default(tmp_path):
     (tmp_path / "visible.txt").write_text("x", encoding="utf-8")
     (tmp_path / ".hidden").write_text("x", encoding="utf-8")
@@ -147,9 +130,6 @@ def test_run_dash_a_includes_dot_and_dotdot(tmp_path):
     spec = LsSpec(directory=".", show_all=True)
     result = run(spec, cwd=str(tmp_path))
     assert set(result) == {".", "..", "visible.txt", ".hidden"}
-
-
-# --------------------------------------------------------------------- collation
 
 
 @pytest.mark.parametrize("env_locale", [

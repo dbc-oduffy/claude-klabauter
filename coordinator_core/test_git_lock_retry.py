@@ -234,17 +234,10 @@ class TestRunWithLockRetry:
         with pytest.raises(subprocess.TimeoutExpired):
             git_lock_retry.run_with_lock_retry(invoke)
 
-        # One lock-contention attempt burned (with its one sleep), then the
-        # timeout on the SECOND call propagates immediately -- the loop
-        # never reaches a third attempt.
         assert len(calls) == 2
         assert sleeps == [git_lock_retry.DEFAULT_BACKOFF_SCHEDULE_S[0]]
 
     def test_never_calls_subprocess_or_shells_out(self):
-        # Structural guard for the module's own negative-spec: it never
-        # imports `subprocess` (prose in its own docstring mentions the
-        # word, so this checks for the import statement, not bare
-        # substring presence).
         import ast
         import inspect
 

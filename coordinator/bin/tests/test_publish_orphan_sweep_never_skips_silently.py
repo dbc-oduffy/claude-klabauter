@@ -40,8 +40,6 @@ _BIN_DIR = Path(__file__).resolve().parents[1]
 
 
 def _load_publish_module():
-    """Import `coordinator/bin/publish.py` by path -- a hyphen-free but
-    non-package script, so there is no import name for it."""
     spec = importlib.util.spec_from_file_location(
         "publish_orphan_sweep_never_skips_silently_under_test", _BIN_DIR / "publish.py"
     )
@@ -56,14 +54,7 @@ publish = _load_publish_module()
 resolve_effective = publish.resolve_effective_renamed_file_names
 
 
-# ---------------------------------------------------------------------------
-# resolve_effective_renamed_file_names -- pure decision
-# ---------------------------------------------------------------------------
-
-
 def test_already_resolved_exemption_passes_through_unchanged():
-    """A resolved exemption (empty or not) is not this function's business --
-    it is returned verbatim, `lookup_ok`/`declares` notwithstanding."""
     for resolved in (frozenset(), frozenset({"renamed.txt"})):
         assert resolve_effective(
             renamed_file_names=resolved,
@@ -73,10 +64,6 @@ def test_already_resolved_exemption_passes_through_unchanged():
 
 
 def test_none_with_confirmed_no_declared_rename_degrades_to_empty_set():
-    """THE FIX. The store was consulted and confirmed this row declares no
-    `basename_rename` at all -- the unresolved exemption has nothing to
-    protect, so the sweep must be allowed to run rather than silently
-    skipped."""
     result = resolve_effective(
         renamed_file_names=None,
         basename_rename_lookup_ok=True,
@@ -87,10 +74,6 @@ def test_none_with_confirmed_no_declared_rename_degrades_to_empty_set():
 
 
 def test_none_with_declared_rename_stays_none_fail_closed():
-    """The row DOES declare a rename and the exemption still could not
-    resolve -- sweeping blind risks deleting a legitimately-renamed
-    published file, so this must stay `None` (the caller's signal to skip,
-    loudly, not silently)."""
     assert resolve_effective(
         renamed_file_names=None,
         basename_rename_lookup_ok=True,
@@ -99,22 +82,11 @@ def test_none_with_declared_rename_stays_none_fail_closed():
 
 
 def test_none_with_failed_lookup_stays_none_fail_closed():
-    """`basename_rename_lookup_ok=False` means "cannot tell", not "no
-    renames" -- `declares_basename_rename` is `False` in this case too (its
-    own tolerated-degradation default), so this is the case that proves the
-    two flags are NOT interchangeable: a failed lookup must fail closed
-    exactly like a confirmed declaration, never fall through to the empty-set
-    arm."""
     assert resolve_effective(
         renamed_file_names=None,
         basename_rename_lookup_ok=False,
         declares_basename_rename=False,
     ) is None
-
-
-# ---------------------------------------------------------------------------
-# _candidate_top_level_orphans -- read-only preview for the loud warning
-# ---------------------------------------------------------------------------
 
 
 def _stub_publish_sync_module():
@@ -130,8 +102,6 @@ class _NullIgnoreMatcher:
 
 
 def test_candidate_top_level_orphans_names_a_file_dropped_from_source(tmp_path):
-    """The exact DoE shape: a file the mirror still ships but the source no
-    longer has is named, not silently dropped."""
     src_dir = tmp_path / "src"
     dst_dir = tmp_path / "dst"
     src_dir.mkdir()
@@ -148,9 +118,6 @@ def test_candidate_top_level_orphans_names_a_file_dropped_from_source(tmp_path):
 
 
 def test_candidate_top_level_orphans_skips_dotfiles_and_ignored(tmp_path):
-    """Dotfiles are publish machinery / repo-owned, never a row's payload --
-    same contract as `_sweep_mirror_top_level_orphans` itself -- and a file
-    the ignore matcher already excludes is not this row's business either."""
     src_dir = tmp_path / "src"
     dst_dir = tmp_path / "dst"
     src_dir.mkdir()
@@ -172,9 +139,6 @@ def test_candidate_top_level_orphans_skips_dotfiles_and_ignored(tmp_path):
 
 
 def test_candidate_top_level_orphans_empty_when_dest_missing(tmp_path):
-    """No destination directory means nothing to preview -- returns an empty
-    list rather than raising, matching `_sweep_mirror_top_level_orphans`'s
-    own `not dst_dir.is_dir(): return 0` guard."""
     src_dir = tmp_path / "src"
     src_dir.mkdir()
     missing_dst = tmp_path / "does-not-exist"

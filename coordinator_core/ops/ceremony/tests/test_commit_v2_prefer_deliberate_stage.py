@@ -20,7 +20,6 @@ from coordinator_core.ops.ceremony import commit_v2
 
 
 def _spy(monkeypatch):
-    """Capture the kwargs commit_v2 hands `commit_paths`, and stop there."""
     seen: dict = {}
 
     def fake_commit_paths(*args, **kwargs):
@@ -47,8 +46,6 @@ def test_the_flag_reaches_commit_paths(monkeypatch, tmp_path):
 
 
 def test_the_default_is_false_when_undeclared(monkeypatch, tmp_path):
-    """The negative spec. Worktree-preference stays what an undeclared call
-    does; flipping it is a fleet-visible change and not this seam's."""
     seen = _spy(monkeypatch)
     with pytest.raises(AssertionError, match="stop-after-capture"):
         _call(tmp_path / ".git", {"paths": ["a.md"], "message": "m"})
@@ -56,10 +53,6 @@ def test_the_default_is_false_when_undeclared(monkeypatch, tmp_path):
 
 
 def test_both_declarations_travel_together(monkeypatch, tmp_path):
-    """`prefer_staged` and `prefer_deliberate_stage` are not exclusive --
-    a `prefer_staged` path is settled before the loop the blanket flag walks,
-    so they cannot both act on one path. Pinned because the seam forwards
-    both and nothing else asserts they survive the same call."""
     seen = _spy(monkeypatch)
     with pytest.raises(AssertionError, match="stop-after-capture"):
         _call(tmp_path / ".git", {
@@ -88,13 +81,6 @@ def test_a_non_boolean_flag_is_refused_not_coerced(tmp_path):
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_the_divergence_warning_names_the_shared_branch_remedy(tmp_path):
-    """The one real-git case, and it is this seam's own output. A warning
-    naming only `prefer_staged` is unactionable on a shared branch, where
-    naming the paths up front is the thing you cannot do -- which is what
-    example-game-repo-em was told before doing the wrong thing about it. Asserted by
-    provoking a real divergence, not by grepping the source for the literal:
-    a string that exists but is never emitted would pass that and fail here.
-    """
     import subprocess
 
     from coordinator_core.win_portability import no_console_creationflags
@@ -112,8 +98,6 @@ def test_the_divergence_warning_names_the_shared_branch_remedy(tmp_path):
     git("add", "--", "peer.md")
     git("commit", "-qm", "seed")
 
-    # A peer's deliberate partial stage: staged bytes, then a further
-    # worktree edit on the same path.
     (repo / "peer.md").write_bytes(b"peer staged this\n")
     git("add", "--", "peer.md")
     (repo / "peer.md").write_bytes(b"and then the worktree moved on\n")

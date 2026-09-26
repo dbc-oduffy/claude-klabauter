@@ -1,14 +1,3 @@
-"""
-coordinator_core.plan_assemble.predicates.test_citation_staleness — Leg 1
-(scope-path staleness) and Leg 2 (content-anchored cited-line staleness)
-for contract row `:85-87`.
-
-Includes the moved-but-intact case (AC8) and the genuinely-changed case as
-distinct assertions — a suite that cannot tell those apart has not tested
-this row.
-
-Spec backlink: pln-plan-assemble-wave-2-the-predi-fad89b, chunk C11
-"""
 from __future__ import annotations
 
 import subprocess
@@ -19,8 +8,6 @@ from coordinator_core.plan_assemble.predicates import citation_staleness as cs
 
 import pytest
 
-# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
-# cadence suite is the separate threshold ruling, not this declaration.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -42,9 +29,6 @@ def _context(tmp_path: Path, **overrides) -> PredicateContext:
     )
     defaults.update(overrides)
     return PredicateContext(**defaults)
-
-
-# --- Leg 1: scope_paths_staleness ---------------------------------------
 
 
 def test_scope_paths_undetermined_when_no_plan_frontmatter(tmp_path):
@@ -133,9 +117,6 @@ def test_scope_paths_accepts_bare_string_scope(tmp_path):
     assert result["stale_paths"][0]["path"] == "coordinator_core/x.py"
 
 
-# --- Leg 2: cited_lines_staleness ---------------------------------------
-
-
 def test_cited_lines_undetermined_when_no_plan_body(tmp_path):
     result = cs.cited_lines_staleness(_context(tmp_path))
     assert result["undetermined"] is True
@@ -182,9 +163,6 @@ def test_cited_lines_exact_match_at_cited_line_is_not_stale(tmp_path):
 
 
 def test_cited_lines_moved_but_intact_is_not_stale_with_moved_to(tmp_path):
-    """AC8: a citation whose target text moved by N lines but is
-    textually intact reports `stale: False` with a `moved_to` line, not
-    a false positive from naive line-equality."""
     target = tmp_path / "foo.py"
     target.write_text(
         "a = 1\n"
@@ -194,8 +172,6 @@ def test_cited_lines_moved_but_intact_is_not_stale_with_moved_to(tmp_path):
         "def some_symbol():\n"
         "    pass\n"
     )
-    # Citation claims the def was at line 3; three lines were inserted
-    # above it, so it now actually lives at line 5.
     body = "The `def some_symbol():` line is at `foo.py:3`."
     result = cs.cited_lines_staleness(_context(tmp_path, plan_body=body))
     assert result["cited_lines_stale"] is False
@@ -251,10 +227,6 @@ def test_cited_lines_target_unreadable_is_undetermined(tmp_path):
 
 
 def test_cited_lines_whitespace_only_anchor_span_is_undetermined_not_a_bogus_match(tmp_path):
-    """Regression: a stray whitespace-only backtick span adjacent to a
-    citation (e.g. `` ` ` ``) must not be treated as real anchor text —
-    it would otherwise match nearly every non-empty target line at rung 1
-    (`anchor_text in line`), producing a false non-`undetermined` result."""
     target = tmp_path / "foo.py"
     target.write_text("a = 1\nb = 2\n")
     body = "See ` ` next to `foo.py:1` for details."

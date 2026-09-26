@@ -1,11 +1,3 @@
-"""Tests for coordinator_core.testing.orphan_reaper (R1).
-
-`test_sessionfinish_reaps_a_detached_sleeper_under_basetemp` spawns a real
-detached process, hence `spawns_process` (admitted by the spawn ratchet,
-`coordinator_core/tests/test_no_new_spawning_tests.py`) and `cadence` (tiered
-off the per-commit path — Rule 4). Every other test here exercises pure
-helpers over synthetic data and spawns nothing.
-"""
 from __future__ import annotations
 
 import os
@@ -20,11 +12,6 @@ import pytest
 from coordinator_core.testing import orphan_reaper
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
-
-
-# ---------------------------------------------------------------------------
-# Pure-helper cases
-# ---------------------------------------------------------------------------
 
 
 def test_is_worker_true_when_workerinput_present():
@@ -103,11 +90,9 @@ def test_reap_processes_empty_when_psutil_missing(monkeypatch):
 
 
 def test_find_orphans_excludes_self_and_ancestors(monkeypatch):
-    """A process that matches on cwd but is the current process (or an ancestor)
-    must never be returned as an orphan."""
     own_pid = os.getpid()
     own_proc = psutil.Process(own_pid)
-    basetemp = own_proc.cwd()  # guarantees a cwd match for own_pid
+    basetemp = own_proc.cwd()
 
     monkeypatch.setattr(orphan_reaper, "collect_ancestor_pids", lambda pid: {os.getppid()})
 
@@ -120,8 +105,6 @@ def test_find_orphans_excludes_self_and_ancestors(monkeypatch):
 
 
 def test_find_orphans_prefilters_by_create_time(monkeypatch):
-    """A process older than session_start_time is excluded even if its cwd matches,
-    because stage one never advances to the cwd/cmdline read for it."""
     own_pid = os.getpid()
     own_proc = psutil.Process(own_pid)
     basetemp = own_proc.cwd()
@@ -147,9 +130,7 @@ def test_pytest_sessionfinish_skips_workers_without_scanning(monkeypatch):
 
 
 def test_pytest_sessionfinish_never_raises_on_broken_config():
-    """A broken/missing config must not propagate past this hook."""
     session = types.SimpleNamespace(config=types.SimpleNamespace())
-    # Should not raise even though session.config carries none of the expected attrs.
     orphan_reaper.pytest_sessionfinish(session, exitstatus=0)
 
 
@@ -157,13 +138,7 @@ def test_pytest_sessionfinish_noop_when_basetemp_none():
     factory = types.SimpleNamespace(_basetemp=None)
     config = types.SimpleNamespace(_tmp_path_factory=factory)
     session = types.SimpleNamespace(config=config)
-    # Must return cleanly with no basetemp to scan.
     orphan_reaper.pytest_sessionfinish(session, exitstatus=0)
-
-
-# ---------------------------------------------------------------------------
-# Real-process case
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.spawns_process
@@ -185,7 +160,6 @@ def test_sessionfinish_reaps_a_detached_sleeper_under_basetemp(tmp_path, capsys)
         **popen_kwargs,
     )
     try:
-        # Let it actually start and settle into its cwd before the scan.
         time.sleep(0.2)
 
         factory = types.SimpleNamespace(_basetemp=fake_basetemp)
@@ -205,4 +179,4 @@ def test_sessionfinish_reaps_a_detached_sleeper_under_basetemp(tmp_path, capsys)
             proc.kill()
         proc.wait(timeout=5)
 
-    assert session.config is config  # exitstatus/session object left untouched
+    assert session.config is config

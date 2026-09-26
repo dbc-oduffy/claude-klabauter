@@ -29,10 +29,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-# The racer HOLDS after acquiring. A winner that exits immediately would be a
 # CONFIRMED-DEAD holder, and the next racer would correctly take the lock
-# over -- which is the crash-recovery path, not the race the guarantee is
-# about. Every racer must be alive at once for this to test atomicity.
 _RACER = textwrap.dedent(
     """
     import json, sys, time
@@ -52,18 +49,11 @@ def repo(tmp_path: Path) -> Path:
 
 
 def _repo_root_of_this_package() -> str:
-    # coordinator_core/session/tests/ -> repo root
     return str(Path(__file__).resolve().parents[3])
 
 
 class TestKeying:
     def test_lock_lives_in_the_git_common_dir(self, repo):
-        """Keyed on resolve_git_common_dir's output, NOT a hashed path string.
-
-        A hashed path fails OPEN under the routes this repo actually sees
-        (`X:\\repo` vs `X:/repo` vs a substituted drive vs UNC): two sessions
-        take two different locks, both win, both cut.
-        """
         assert lock.lock_path(repo) == repo / ".git" / "coordinator-day-branch-cut.json"
 
     def test_path_variants_of_one_tree_resolve_to_one_lock(self, repo):
@@ -74,9 +64,7 @@ class TestKeying:
 
 class TestAcquireRelease:
     def test_first_acquire_wins_second_loses(self, repo):
-        # A LIVE holder pid: this process's own. A fabricated pid reads as
         # CONFIRMED-DEAD and is correctly taken over, which would test the
-        # crash path instead of the mutex.
         live = os.getpid()
         first = lock.acquire(repo, session_id="a", pid=live)
         assert first.acquired
@@ -94,12 +82,10 @@ class TestAcquireRelease:
         assert not lock.lock_path(repo).exists()
 
     def test_dead_holder_is_taken_over_immediately(self, repo):
-        """PID-liveness, not age: a peer must not poll a corpse for the full
-        grace window before the invariant can proceed."""
         payload = {
-            "holder_pid": 999_999_999,  # never live
+            "holder_pid": 999_999_999,
             "holder_sid": "crashed",
-            "hold_until": time.time() + 10_000,  # age alone would NOT free it
+            "hold_until": time.time() + 10_000,
         }
         lock.lock_path(repo).write_text(json.dumps(payload), encoding="utf-8")
         v = lock.acquire(repo, session_id="takeover", pid=2222)
@@ -117,17 +103,11 @@ class TestAcquireRelease:
         assert lock.acquire(repo, session_id="a", pid=os.getpid()).acquired
 
     def test_windows_handle_is_not_held_open(self, repo):
-        """Open-then-close: a held handle turns a takeover's unlink into a
-        sharing violation on Windows."""
         lock.acquire(repo, session_id="a", pid=os.getpid())
-        lock.lock_path(repo).unlink()  # would raise PermissionError if held
+        lock.lock_path(repo).unlink()
 
 
 class TestHolderAlive:
-    """The promoted, shared holder-liveness CHECK: unknown is ``None`` and
-    never a verdict; a non-``int`` pid is unknown; a probe that raises is
-    unknown. ``warm.push_cadence`` imports this same function rather than
-    keeping its own copy."""
 
     def test_live_pid_is_true(self):
         assert lock.holder_alive(os.getpid()) is True
@@ -149,7 +129,6 @@ class TestHolderAlive:
 
 class TestRealProcessRace:
     def test_exactly_one_of_n_processes_acquires(self, repo):
-        """Real processes, not threads — filesystem atomicity is the guarantee."""
         n = 6
         root = _repo_root_of_this_package()
 

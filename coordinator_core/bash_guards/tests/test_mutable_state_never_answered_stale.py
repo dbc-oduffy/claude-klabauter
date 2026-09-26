@@ -74,8 +74,6 @@ from coordinator_core.search import engine, sources_powershell, sources_read
 from coordinator_core.search.answer import answer, plan_for
 
 
-#: Every one of these reports state a concurrent peer can change between the hook
-#: process reading it and the agent acting on it. None is answerable in-process.
 MUTABLE_STATE_COMMANDS = (
     "git status",
     "git status --short",
@@ -91,8 +89,6 @@ MUTABLE_STATE_COMMANDS = (
 )
 
 #: The four verbs the DR-344 plan AC enrolled, pinned POSITIVELY so a later
-#: re-narrowing is as visible as the widening was invisible. Membership here is
-#: the reconciliation in the module docstring, expressed where a test will say it.
 RATIFIED_ANSWERABLE_READS = (
     "cat coordinator_core/search/engine.py",
     "head -50 coordinator_core/search/engine.py",
@@ -102,7 +98,6 @@ RATIFIED_ANSWERABLE_READS = (
 
 
 class TestOnlyReadOnlySearchIsAnswerable:
-    """Contract 1 -- the answerable vocabulary, pinned by membership."""
 
     @pytest.mark.parametrize("command", MUTABLE_STATE_COMMANDS)
     def test_mutable_state_command_is_never_answered(self, command, tmp_path):
@@ -120,9 +115,6 @@ class TestOnlyReadOnlySearchIsAnswerable:
 
     @pytest.mark.parametrize("command", RATIFIED_ANSWERABLE_READS)
     def test_ratified_read_verb_is_answerable(self, command):
-        """The other direction of the same pin. These four are answerable by
-        ratified decision (module docstring); a change that quietly removes one
-        from the vocabulary has to come here and say so."""
         assert plan_for(command) is not None
 
     def test_every_answerable_vocabulary_is_pinned_by_membership(self):
@@ -148,25 +140,17 @@ class TestOnlyReadOnlySearchIsAnswerable:
         assert set(sources_powershell._CHILDITEM_VERBS) == {
             "get-childitem", "gci", "ls", "dir",
         }
-        # `_plan_for_listdir` keys off the `ls` basename literally rather than a
-        # constant, so its vocabulary is asserted by behavior: `ls` in, and the
-        # sibling listing verbs the PowerShell dialect accepts staying out of bash.
         assert plan_for("ls coordinator_core") is not None
         for outside in ("dir coordinator_core", "gci coordinator_core"):
             assert plan_for(outside) is None, outside
 
     def test_absorbed_pipeline_stages_read_no_state(self):
-        """Downstream stages are pure functions over lines the search already
-        produced. A stage that reads the filesystem or a repository would be
-        answering a second, unrelated question inside a search's answer."""
         assert set(engine._STAGE_BUILDERS) == {
             "head", "tail", "wc", "sort", "uniq", "cut", "grep", "egrep", "fgrep",
         }
 
 
 class TestUnreadableFileRefusesRatherThanReadsEmpty:
-    """Contract 2 -- a sharing violation from a peer mid-write must not render as
-    `(no matches)`."""
 
     def test_read_text_raises_on_oserror(self, tmp_path):
         missing = tmp_path / "does-not-exist.py"
@@ -200,12 +184,6 @@ class TestUnreadableFileRefusesRatherThanReadsEmpty:
 
 
 def _payload_script(command: str) -> str:
-    """Strip the `<resolved-interpreter> -c '` wrapper off a rewrite payload.
-
-    The prefix is computed from `_bt_python3_invocation()` rather than hardcoded --
-    a bare `python3` is frequently absent on Windows, so the resolution result is
-    not a constant a test may assume (same posture as
-    `test_bx16_multiprobe_and_headtail_rewrite._payload_prefix`)."""
     prefix = dc._bt_python3_invocation() + " -c '"
     assert command.startswith(prefix) and command.endswith("'"), command
     return command[len(prefix) : -1]
@@ -218,7 +196,6 @@ def _banner_rewrite_script(cmd: str) -> str:
 
 
 class TestBatchedGitStatusNeverFabricatesACleanTree:
-    """Contract 3 -- the defect observed live on 2026-08-21."""
 
     _CMD = 'echo "=== SESSION FACTS ==="; git status --porcelain; git rev-parse HEAD'
 
@@ -227,17 +204,10 @@ class TestBatchedGitStatusNeverFabricatesACleanTree:
         assert "returncode" in script, script
 
     def test_payload_does_not_take_the_index_lock(self):
-        """`--no-optional-locks` is output-identical and lock-free
-        (`guard_no_optional_locks.py`'s measured evidence). Batching every git
-        fact into one call is worthless if that one call is the one contending
-        with eleven peers for `.git/index.lock`."""
         script = _banner_rewrite_script(self._CMD)
         assert '"--no-optional-locks"' in script, script
 
     def test_failed_git_status_propagates_instead_of_printing_a_clean_tree(self):
-        """Exec the real generated payload with `git status` faked to the exact
-        shape index-lock contention produces: non-zero exit, empty stdout, a
-        diagnostic on stderr. It must exit non-zero and print no git fact."""
         script = _banner_rewrite_script(self._CMD)
 
         class _FailedResult:

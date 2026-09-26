@@ -57,9 +57,7 @@ _SESSION_ID = "751ab9de-9319-4d63-b174-36145a4a3045"
 _SANDBOX_ROOT = "state/subagent-share/751ab9de-9319-4d63-b174-36145a4a3045"
 
 _SHORT_TARGET = "x-repo"
-# abs-path-ok: synthetic MSYS-shaped token, never read from disk -- mirrors
 # test_write_bump_message.py's _LONG_RAW_MSYS_TOKEN, exercising the same
-# realistic-length production shape, not a real machine path.
 _LONG_TARGET = (
     "/c/Users/example-operator/AppData/Local/Temp/claude/X--claude-klabauter/a-very-long-"
     "synthetic-foreign-target-path-that-is-much-longer-than-x-repo.txt"
@@ -69,24 +67,6 @@ _LONG_TARGET = (
 def _measure(text: str):
     envelope = {"hookSpecificOutput": {"permissionDecisionReason": text}}
     return measure_envelope(envelope)
-
-
-# Dropped
-# test_em_message_call_site_declares_axis_3_classification and its subagent
-# twin. Both asserted only that a comment string was present in source,
-# duplicating the declaration-presence pinning now owned by
-# coordinator_core/tests/test_foreign_identity_subject_exemptions.py
-# (well-formedness + count, extended per findings 1/2), without protecting
-# any rendered output. The prose-byte-cap and session_repo-renders-once
-# cases below pin the actual rendered text and are kept.
-
-
-# ---------------------------------------------------------------------------
-# Budget -- a backticked span inside the cue window is exempt from the
-# 220-byte prose cap, so a much longer target_repo/raw_target must not cost
-# more prose bytes than a short one. Pinned directly, per the stub's "Pin
-# this in the test rather than trusting it".
-# ---------------------------------------------------------------------------
 
 
 def test_em_message_prose_bytes_stable_across_short_and_long_target(tmp_path):
@@ -117,12 +97,7 @@ def test_subagent_message_prose_bytes_stable_across_short_and_long_target(tmp_pa
     assert long_measurement.over_cap is False
 
 
-# ---------------------------------------------------------------------------
 # `session_repo` is NOT-FOREIGN -- it renders exactly once, in the untouched
-# contrast form, never backticked-and-suppressed like a SUBJECT path would
-# be, and never duplicated the way `target_repo`/`raw_target` legitimately
-# can be (R1).
-# ---------------------------------------------------------------------------
 
 
 def test_em_message_session_repo_renders_exactly_once(tmp_path):

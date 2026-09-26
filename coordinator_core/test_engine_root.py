@@ -134,10 +134,6 @@ def test_rung3_hard_error_when_machine_local_absent(monkeypatch, tmp_path):
 
 
 def test_rung2_timeout_falls_to_error(monkeypatch, tmp_path):
-    """A hung `machine-local` must not hang the caller. This resolver is reached
-    from PreToolUse hook paths, where an unbounded wait blocks an interactive tool
-    call outright -- a timeout takes the same disposition as an exec failure and
-    falls through to Rung 3's actionable error."""
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
     monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     settings_home = tmp_path / "settings-home"

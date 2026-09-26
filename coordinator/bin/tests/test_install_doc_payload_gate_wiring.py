@@ -54,7 +54,6 @@ publish = _load_publish_module()
 
 
 def _write_clean_tree(root: Path) -> None:
-    """An INSTALL.md whose only code-formatted command resolves in-tree."""
     (root / "scripts").mkdir(parents=True)
     (root / "scripts" / "setup.py").write_text("# setup\n", encoding="utf-8")
     (root / "INSTALL.md").write_text(
@@ -63,8 +62,6 @@ def _write_clean_tree(root: Path) -> None:
 
 
 def _write_broken_tree(root: Path) -> None:
-    """An INSTALL.md referencing a script that was never published --
-    the P0 shape this gate exists to catch."""
     root.mkdir(parents=True, exist_ok=True)
     (root / "INSTALL.md").write_text(
         "# Install\n\n```\npython3 scripts/setup.py\n```\n", encoding="utf-8"
@@ -82,9 +79,6 @@ def _write_cross_row_tree(root: Path) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# dispatch_end_of_run_install_doc_payload_check — direct unit tests.
-# ---------------------------------------------------------------------------
 class TestEndOfRunInstallDocPayloadCheckLeg:
     def test_clean_tree_passes(self, tmp_path):
         repo_root = tmp_path / "repo"
@@ -150,27 +144,7 @@ class TestEndOfRunInstallDocPayloadCheckLeg:
         assert ok is False
 
 
-# ---------------------------------------------------------------------------
-# publish.main() wiring -- proves the leg is actually called, dry-run never
-# fires it, and the per-row leg does NOT independently reproduce the
-# cross-row false positive (confirming the placement decision holds
-# end-to-end, not just at the unit level).
-# ---------------------------------------------------------------------------
 class _StubClaudeKlabauter:
-    """Trivial fake `ClaudeKlabauterPercolate` -- these tests exist to prove the
-    install-doc-payload wiring, not engine-phase behaviour, so every engine
-    call is a no-op; `run_identity_check` returns an unconditional CLEAN PASS
-    (`ran=True, skipped=False, exit_code=0`) so the identity leg (already
-    covered by test_percolate_identity_check_gate.py, including its own
-    unfiltered-skip-is-a-hard-failure case) never masks this leg's own
-    pass/fail signal -- a `skipped=True` stand-in would itself hard-fail an
-    unfiltered run before this leg's result could be observed. `file_surface`
-    names `*.md`/`*.py` so `dispatch_end_of_run_unscanned_published_check`
-    (which calls the REAL `coordinator_core.percolate.surface.iter_surface_files`
-    directly, not this stub's own `iter_surface_files` below) sees these
-    fixtures' plain `.md`/`.py` content as in-surface -- an empty
-    `file_surface` would make every published file "unscanned" and fail
-    that leg regardless of what this test is actually exercising."""
 
     def resolve_target(self, store, name):
         return {
@@ -190,46 +164,17 @@ class _StubClaudeKlabauter:
         return {"ran": True, "skipped": False, "exit_code": 0, "findings": "clean"}
 
     def run_parse_sweep(self, repo_root):
-        # `dispatch_end_of_run_function_gate` (chunk C4B, added after this
-        # fixture was authored) calls this unconditionally for every reached
-        # repo root once a run has zero failed rows — see the sibling gap
-        # noted in `test_publish_row_isolation.py`'s `_FakeClaudeKlabauter` docstring.
-        # A parse-clean, zero-file sweep result is a no-op for this file's
-        # own install-doc-payload-check assertions.
         return type("ParseResult", (), {"ok": True, "failures": [], "scanned": 0})()
 
     def enumerate_gate_entrypoints(self, repo_root):
-        # `dispatch_end_of_run_entrypoint_gate` (chunk C3, same sibling gap)
-        # calls this unconditionally too. This fixture's repo roots ship no
-        # entrypoints at all, so an empty tuple short-circuits that gate's
-        # loop without needing to fake `run_entrypoint_gate`/`mktcache_gate_
-        # env` as well.
         return ()
 
 
 def _fake_process_target_succeeds(target, setup_dir, totals, **kwargs):
-    # `main()`'s row loop (§ the row-honesty fix, `test_publish_skipped_row_
-    # not_counted_succeeded.py`) treats "`process_target` did not raise AND
-    # `totals.processed` did not advance" as a FAILED row — a `None`-
-    # returning no-op fake (this fixture's original shape) therefore marks
-    # every row FAILED before any end-of-run gate (the thing this file
-    # actually tests) is ever reached. Advance `totals.processed` to model
-    # the row genuinely landing, matching every other `main()`-driving
-    # publish test fixture in this package.
     totals.processed += 1
 
 
 def _stub_dest_refresh(monkeypatch) -> None:
-    """Neutralise the destination-refresh precondition (PM ruling 2026-09-02).
-
-    `publish.main` brings every destination level with its origin before the
-    first row materializes anything, and fail-closes on a dest whose checked-out
-    branch has no upstream tracking ref (§ `percolate.dest_refresh.
-    refresh_dest_from_origin`). This fixture's dest repo is a bare tmp tree, not
-    a clone, so that refusal fires and returns 1 before the leg under test runs.
-
-    Patched on the engine module rather than on `publish`, because `main`
-    imports the callable from `percolate.dest_refresh` at call time."""
     publish._bootstrap_engine()
     from percolate import dest_refresh as _dest_refresh
 
@@ -243,14 +188,6 @@ def _stub_dest_refresh(monkeypatch) -> None:
 
 
 def _stub_assembled_mirror_leg(monkeypatch) -> None:
-    """Hold the assembled-mirror end-of-run leg inert.
-
-    `dispatch_end_of_run_assembled_mirror_gate` runs a real `pytest
-    --collect-only` against the destination tree and refuses any root whose
-    collection finds no tests and carries no entry in THIS repo's
-    `setup/publish-allowlist-declarations.yaml`. A synthetic fixture tree is
-    neither, so the leg would fail every `main()` run here on live-repo state
-    unrelated to the install-doc leg under test."""
     monkeypatch.setattr(
         publish, "dispatch_end_of_run_assembled_mirror_gate", lambda *a, **k: True
     )
@@ -295,12 +232,6 @@ class TestInstallDocPayloadMainWiring:
         _wire_main_preconditions(monkeypatch, setup_dir=setup_dir, rows=_single_row("t", repo_root))
 
         rc = publish.main([])
-        # Exit 2, not 1 (§ main()'s exit-code-contract docstring,
-        # state/bug-backlog/2026-08-10-coordinator-publish-s-exit-code-is-
-        # not-a-542c9750e55a.yaml): this row's bytes DID land (`process_
-        # target` advanced `totals.processed`) — only the POST-publish
-        # install-doc-payload check failed, which must be distinguishable
-        # from a row that never landed at all.
         assert rc == 2
         captured = capsys.readouterr()
         assert "install-doc payload check FAILED" in captured.err
@@ -334,7 +265,7 @@ class TestInstallDocPayloadMainWiring:
         setup_dir = tmp_path / "percolate-root" / "setup"
         setup_dir.mkdir(parents=True)
         repo_root = tmp_path / "dest-repo"
-        _write_broken_tree(repo_root)  # would fail loudly if the leg fired
+        _write_broken_tree(repo_root)
 
         _wire_main_preconditions(monkeypatch, setup_dir=setup_dir, rows=_single_row("t", repo_root))
 

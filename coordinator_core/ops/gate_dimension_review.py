@@ -147,21 +147,9 @@ from coordinator_core.win_portability import no_console_creationflags
 _GIT_TIMEOUT_SECS = 60
 _CREATIONFLAGS = no_console_creationflags()
 
-#: `\x01` cannot occur in a path (git rejects NUL and this repo's paths are
-#: ordinary text), so prefixing the sha in `--pretty=format:` makes the two
-#: token classes structurally distinguishable — a 40-hex *path* line never
-#: starts with it, so it can no longer be misread as a commit header the way
-#: a bare-shape regex match would.
 _SHA_HEADER_PREFIX = "\x01"
 _FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
-#: Field separator INSIDE the `\x01` commit-header line. The header carries
-#: three fields — sha, committer date, `Session-Id` trailer — because the
-#: receipt credit source below needs the latter two and this is the `git log`
-#: that is already being spawned. `separator=%x20` on the trailers atom is
-#: load-bearing: without it git terminates each trailer with a newline, the
-#: value lands on its own line, and the path-classification loop below reads
-#: it as a touched path. A commit with no trailer yields an empty third field.
 _HEADER_FIELD_SEP = "\x1f"
 _COMMIT_HEADER_FORMAT = (
     f"{_SHA_HEADER_PREFIX}%H{_HEADER_FIELD_SEP}%cI{_HEADER_FIELD_SEP}"
@@ -170,9 +158,6 @@ _COMMIT_HEADER_FORMAT = (
 
 
 def _run_git(args: List[str], cwd: str) -> "tuple[int, str, str]":
-    """Run `git <args>` in `cwd`; never raises — a spawn failure or timeout
-    degrades to a non-zero rc + diagnostic stderr, same shape any other
-    dimension's git call in this package uses."""
     try:
         result = subprocess.run(
             ["git", *args],
@@ -191,15 +176,8 @@ def _run_git(args: List[str], cwd: str) -> "tuple[int, str, str]":
         return 1, "", str(exc)
 
 
-#: AC7 (docs/plans/2026-09-11-the-merge-gate-proves-receipt-coverage.md § C4)
-#: bounds: the FAIL detail's by-session breakdown shows at most this many
-#: sessions, each showing at most this many SHAs, with a `+N more` tail on
-#: both axes.
 _MAX_SESSIONS_IN_DETAIL = 5
 _MAX_COMMITS_PER_SESSION_IN_DETAIL = 3
-#: The label an empty Session-Id trailer groups under (AC7). `cmd_coverage_gate`
-#: (coordinator/bin/merge-gate-and-pr.py) skips this label when marking named
-#: sessions live/ended -- it names no real session to check liveness for.
 _NO_SESSION_ID_LABEL = "no Session-Id"
 
 
@@ -252,8 +230,6 @@ def _uncovered_by_session_detail(
 def _review_dimension_check(
     changed_files: List[str], diff_base: Optional[str], repo_root: Optional[Path]
 ) -> DimensionResult:
-    """The `"review"` dimension's `DimensionCheck` — see module docstring for
-    the full verdict/freshness contract."""
     if not diff_base:
         return DimensionResult(
             dimension="review",
@@ -279,35 +255,9 @@ def _review_dimension_check(
 
     repo_root_str = str(repo_root)
 
-    # ONE spawn, invariant in len(changed_files).
-    #
-    # `changed_files` cannot go into argv at all: above ~1400 paths it
-    # overflows the Windows cap (WinError 206) and the whole check used to
     # fail open with UNAVAILABLE. Pathspec-batching that argv (the first fix)
-    # closed the fail-open but bought a cost linear in the changeset: 2000
-    # paths measured 718.75ms across 55 processes, over the DR-344 500ms
-    # brightline, and the bulk changesets on this branch run past 26,000
-    # files. `git log` has no `--pathspec-from-file`, so the pathspec is
-    # taken out of the argument list entirely: ask git once for the range's
-    # own commits-and-touched-paths and intersect in process. Building
-    # `wanted` is O(len(changed_files)), linear and cheap but real; the
-    # git-output scan against it below is the part that's free, O(paths in
-    # range) and independent of how many paths the caller asked about.
-    #
-    # Set membership, not a scan.
-    #
-    # `-z` because a non-ASCII path is otherwise quoted and would not match
-    # the caller's own spelling. Separators are normalised on both sides so a
-    # Windows caller passing backslashes still matches git's forward slashes.
     wanted = {p.replace("\\", "/").strip() for p in changed_files if p.strip()}
 
-    # `--diff-merges=first-parent` makes a merge commit report the paths it
-    # actually brought in (diffed against its first parent), the same
-    # first-parent simplification `git log <base> -- <paths>` applied by
-    # default before the pathspec left argv. Without it `--name-only` prints
-    # NO path lines for a merge commit at all, so a merge that genuinely
-    # touches a reviewed path would silently drop out of commit_shas below
-    # and never be required to carry a review-trail stamp.
     rc, out, err = _run_git(
         [
             "log",
@@ -327,20 +277,7 @@ def _review_dimension_check(
             detail=f"could not resolve commits for diff_base={diff_base!r}: {last_err}",
         )
 
-    # Records are NUL-separated; a commit's sha arrives newline-joined to the
-    # first of its paths. Classify per line by the `\x01` prefix, not by
-    # 40-hex shape: a path that happens to be exactly 40 lowercase hex
-    # characters (content-addressed asset, git-lfs pointer, generated hash
-    # filename) is otherwise indistinguishable from a sha and would silently
-    # re-anchor current_sha onto a bogus value, dropping the real commit.
-    #: sha -> True if at least one of its wanted-and-touched paths is NOT
-    #: bookkeeping (population rule, DR-421 / module docstring). A commit
-    #: present here only with False entries is bookkeeping-only and never
-    #: joins the population this dimension requires review evidence for.
     commit_has_code_path: "dict[str, bool]" = {}
-    #: sha -> (committer date, Session-Id trailer), harvested from the same
-    #: header line. Only consulted if the resident store leaves something
-    #: uncovered, but collected unconditionally — it is already parsed.
     commit_provenance: "dict[str, tuple[str, str]]" = {}
     current_sha: Optional[str] = None
     for field in out.split("\0"):
@@ -379,35 +316,10 @@ def _review_dimension_check(
             detail = f"covered: no commits in diff_base={diff_base!r} touch changed_files"
         return DimensionResult(dimension="review", verdict=Verdict.PASS, detail=detail)
 
-    # The reviewed-set store (docs/plans/2026-08-27-the-reviewed-set-is-a-
-    # file-not-a-computation.md): a resident, append-only set of already-
-    # credited commit SHAs, revalidated with a single `os.stat` and never
-    # spawning a subprocess. All resolution (verdict filter, HEAD exclusion,
-    # kind partitioning, foreign-session narrowing) already happened at
-    # fold time (`review_trail.backfill.resolve_and_fold`) — this call is a
-    # pure membership read.
     reviewed = read_reviewed_set(repo_root_str)
 
     uncovered = [sha for sha in commit_shas if sha not in reviewed]
 
-    # SECOND CREDIT SOURCE — the reviewer sidecar receipt.
-    #
-    # The store above is fed only by `state/review-trail/*.json` folded in at
-    # write time, and that corpus is frozen: `review_trail.write`'s in-process
-    # wiring was removed 2026-08-23 (PM ruling; DR-372, DR-374) and no
-    # production call site resolves the op. Measured in this clone
-    # 2026-08-28, the store's newest covered commit was 486 commits behind
-    # HEAD and none of the last 400 commits were members — so this dimension
-    # returned a confident FAIL for every recent chain whether or not review
-    # had happened. Reviews now land on the reviewer's own sidecar receipt,
-    # which is what `receipt_credited_shas` reads.
-    #
-    # Ordering matters and is enforced there, not here: a reviewer dispatched
-    # at T cannot have read a commit authored after T. Crediting on receipt
-    # existence alone would have turned 42% of its credits into false
-    # coverage, which is strictly worse than the stale negative it replaces —
-    # a FAIL nobody trusts costs one redundant review, a wrong PASS costs the
-    # review itself.
     if uncovered:
         credited = receipt_credited_shas(
             repo_root_str,

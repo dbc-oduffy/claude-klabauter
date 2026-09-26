@@ -28,7 +28,6 @@ from coordinator_core.bash_guards import dispatch
 
 
 class TestWithLocalConfigSurface:
-    """Unit cover for the composition helper itself."""
 
     def test_appends_when_absent(self) -> None:
         assert dispatch._with_local_config_surface(["CLAUDE.md"]) == [
@@ -41,14 +40,9 @@ class TestWithLocalConfigSurface:
         assert dispatch._with_local_config_surface(surfaces) == surfaces
 
     def test_appends_on_manifest_miss(self) -> None:
-        """`None` is `resolve_governed_authoring_surfaces`'s own miss
-        contract (absent/unreadable/malformed manifest) -- CLASS-2
-        protection must not depend on the DoE manifest resolving at all."""
         assert dispatch._with_local_config_surface(None) == ["coordinator.local.md"]
 
     def test_appends_on_explicit_empty_manifest(self) -> None:
-        """`[]` is the DoE manifest's own "this install governs no CLASS-1
-        surfaces" answer -- still not a reason to leave CLASS-2 unguarded."""
         assert dispatch._with_local_config_surface([]) == ["coordinator.local.md"]
 
 
@@ -96,6 +90,4 @@ class TestBashMediatedLocalConfigWriteIsDenied:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_read_only_command_still_allows(self) -> None:
-        """The read-shape carve-out (`cat`) must stay open -- this guard's
-        job is closing the WRITE escape, not banning every mention."""
         assert _fire_registered_doctrine_surface_bash_write("cat coordinator.local.md") is None

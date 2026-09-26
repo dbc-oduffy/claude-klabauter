@@ -50,17 +50,6 @@ from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import dispatch_checks
 
 
-#: The 2026-08-15 command, reduced to its shape: a scoped `git add`, a bare
-#: `git commit` taking its subject on stdin, and a trailing read after the
-#: heredoc terminator.
-#:
-#: The original also carried a `cd <repo>;` prefix, dropped here on purpose.
-#: `check_offer_git_c` is registered EARLIER in the same band and returns a
-#: deny of its own on that prefix whenever the `cd` target does not resolve
-#: to the payload's `cwd`; since the loop returns the first non-`None`
-#: envelope, keeping the prefix would make these rows assert on THAT guard's
-#: verdict instead of the one under test. The preemption is real and is
-#: reported as its own finding -- it is not this module's subject.
 _SWEEP_SHAPE_CMD = (
     "git add -- a.py b.md && git commit -q -F - <<'EOF'\n"
     "subject line\n"
@@ -83,7 +72,6 @@ def _payload(cmd: str, session_id: str = "sess-delivery") -> str:
 
 
 class _FakeCompleted:
-    """The two attributes `_run_git` reads off `subprocess.run`'s result."""
 
     def __init__(self, stdout: str = "") -> None:
         self.returncode = 0
@@ -91,15 +79,6 @@ class _FakeCompleted:
 
 
 def _install_slow_git(monkeypatch, per_spawn_seconds: float) -> List[List[str]]:
-    """Replace every `subprocess.run` this package reaches with a fake that
-    costs `per_spawn_seconds` and records its argv. A real slow `git` cannot
-    be arranged deterministically on a machine whose whole problem is that
-    its load is not deterministic; the fake makes the cost the test needs to
-    reason about the only cost there is.
-
-    Returns the live argv log, so a caller can count what was spawned and --
-    the point of the exercise -- what was not.
-    """
     spawned: List[List[str]] = []
 
     def _fake_run(args, *_a: Any, **_kw: Any) -> _FakeCompleted:
@@ -113,9 +92,6 @@ def _install_slow_git(monkeypatch, per_spawn_seconds: float) -> List[List[str]]:
 
 @pytest.fixture(autouse=True)
 def _no_leaked_deadline():
-    """A budget armed by a failing assertion mid-dispatch must not survive
-    into the next test in this long-lived process -- the same stale-state
-    hazard `_disarm_git_probe_deadline`'s own docstring names."""
     yield
     dispatch_checks._disarm_git_probe_deadline()
 
@@ -144,12 +120,6 @@ def test_advisory_band_deny_reaches_the_caller(monkeypatch) -> None:
 
 
 def test_probe_budget_declines_unspawned_once_spent(monkeypatch) -> None:
-    """`_run_git` stops spawning once the armed budget is spent, and says so
-    with the fail-OPEN return code rather than the fail-CLOSED timeout one.
-
-    Fails before the fix: without a budget every call spawns, so the third
-    call returns `(0, "")` and the log holds three entries.
-    """
     spawned = _install_slow_git(monkeypatch, per_spawn_seconds=0.15)
     dispatch_checks._arm_git_probe_deadline(0.2)
 
@@ -169,15 +139,7 @@ def test_probe_budget_declines_unspawned_once_spent(monkeypatch) -> None:
 
 
 def test_unarmed_budget_never_declines_a_probe(monkeypatch) -> None:
-    """The budget is inert unless armed -- a check invoked directly (every
-    other test in this package, `_alternative_liveness`'s harness) keeps
-    today's behaviour byte-for-byte."""
     spawned = _install_slow_git(monkeypatch, per_spawn_seconds=0.05)
-    # `.get()`, not the bare attribute: the deadline became a ContextVar (so a
-    # second dispatch cannot resurrect a sibling's budget — see
-    # `_disarm_git_probe_deadline`'s hazard note). A bare `is None` compares the
-    # ContextVar OBJECT, which is never None, so the assertion could neither
-    # pass nor ever catch a budget left armed.
     assert dispatch_checks._git_probe_deadline.get() is None
 
     for _ in range(6):
@@ -187,14 +149,6 @@ def test_unarmed_budget_never_declines_a_probe(monkeypatch) -> None:
 
 
 def test_dispatch_finishes_and_delivers_when_git_is_slow(monkeypatch, capsys) -> None:
-    """LEG 2 regression: with git slow enough that the pre-fix chain would
-    have spent its whole window in subprocesses, the dispatch still declines
-    the overrunning probes and RETURNS -- the property the cancelled hook
-    could not hold.
-
-    Fails before the fix: nothing declines a probe, so no decline line is
-    printed and every git call on this path is spawned.
-    """
     monkeypatch.setattr(dispatch_checks, "_GIT_PROBE_BUDGET_SECONDS", 0.2)
     spawned = _install_slow_git(monkeypatch, per_spawn_seconds=0.15)
 

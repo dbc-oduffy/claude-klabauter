@@ -1,8 +1,3 @@
-"""Tests for coordinator_core.meta_repo_identity — parity checks against
-Port of: coordinator-is-meta-repo.sh (DoE 6fb5fb37, 2026-07-22) and its
-corpus at Port of: test-state-root.sh (DoE 6fb5fb37, 2026-07-22) §
-"Bonus: coordinator_is_meta_repo direct tests".
-"""
 
 from __future__ import annotations
 
@@ -74,13 +69,9 @@ def test_falls_back_to_home_when_claude_home_unset(tmp_path, monkeypatch):
     assert is_meta_repo(str(fake_meta)) is True
 
 
-# --- negative corpus: git-root resolution failure --------------------------
-
-
 def test_raises_when_cwd_is_not_a_git_repo(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "home"))
     monkeypatch.chdir(tmp_path)
-    # tmp_path itself is not a git repo (pytest tmp_path is not git-initialized).
     with pytest.raises(MetaRepoResolutionError):
         is_meta_repo(None)
 
@@ -92,20 +83,11 @@ def test_raises_when_git_binary_missing(tmp_path, monkeypatch):
         raise OSError("git: command not found")
 
     monkeypatch.setattr(subprocess, "run", _boom)
-    # `_resolve_git_root` walks parent directories for a `.git` entry before
-    # ever spawning `git` -- a location with no `.git` ancestor on the walk
-    # (a fresh `tmp_path` outside this repo's tree) is required to actually
-    # reach the spawn fallback this test means to exercise; chdir-ing
-    # anywhere inside the real claude-klabauter checkout would resolve via
-    # the walk and never touch the mocked `subprocess.run` at all.
     not_a_repo = tmp_path / "not-a-repo"
     not_a_repo.mkdir()
     monkeypatch.chdir(not_a_repo)
     with pytest.raises(MetaRepoResolutionError):
         is_meta_repo(None)
-
-
-# --- non-existent directories (realpath-fallback branch) -------------------
 
 
 def test_false_when_neither_side_exists_on_disk(tmp_path, monkeypatch):

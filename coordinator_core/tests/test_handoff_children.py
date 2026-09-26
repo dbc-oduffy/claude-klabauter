@@ -38,72 +38,31 @@ from pathlib import Path
 import pytest
 
 
-# ---------------------------------------------------------------------------
-# Async helper
-# ---------------------------------------------------------------------------
-
 def _run(coro):
-    """Run an async coroutine synchronously — no pytest-asyncio needed.
-
-    Some handlers exercised here are plain ``def`` (no ``await`` in their
-    body) and already resolve to a plain value by the time they reach here;
-    pass those through unchanged.
-    """
     if asyncio.iscoroutine(coro):
         return asyncio.run(coro)
     return coro
 
 
-# ---------------------------------------------------------------------------
-# Minimal ServiceContext stub
-# ---------------------------------------------------------------------------
-
 class _FakeCtx:
-    """Minimal ServiceContext stand-in sufficient for handoff.has_live_children.
-
-    The op only reads ctx.repo_root as a fallback when repo_root kwarg is None.
-    We always supply repo_root explicitly (simulating the router), so ctx.repo_root
-    is None here — matching the global-multiplex topology where ctx carries no
-    founding root.
-    """
     repo_root = None
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 @pytest.fixture()
 def worktree(tmp_path: Path) -> Path:
-    """Return a tmp directory shaped like a git worktree root.
-
-    Creates:
-      <tmp_path>/.git/           — the git common dir (what the router passes as repo_root)
-      <tmp_path>/state/handoffs/ — live handoff scan subtree
-
-    Note: this is NOT a real git repo (no git init).  The op only performs
-    filesystem scans — it does not invoke git — so a real repo is unnecessary.
-    The .git dir is created to simulate the common_dir path the router supplies.
-    """
     git_dir = tmp_path / ".git"
     git_dir.mkdir()
     (tmp_path / "state" / "handoffs").mkdir(parents=True)
     return tmp_path
 
 
-# ---------------------------------------------------------------------------
-# Test: live child present → exit_code=0, referenced=True
-# ---------------------------------------------------------------------------
-
 class TestLiveChildDetected:
-    """Router supplies repo_root=<worktree>/.git; fix maps to worktree root correctly."""
 
     def test_exit_code_0_when_child_references_candidate(self, worktree: Path) -> None:
         from coordinator_core.ops.handoff_children import _handoff_has_live_children
 
         handoff_dir = worktree / "state" / "handoffs"
 
-        # Write the candidate handoff (the one we're testing)
         candidate = handoff_dir / "candidate-handoff.md"
         candidate.write_text(
             textwrap.dedent("""\
@@ -115,7 +74,6 @@ class TestLiveChildDetected:
             """)
         )
 
-        # Write the child handoff — its frontmatter names the candidate via predecessor:
         child = handoff_dir / "child-handoff.md"
         child.write_text(
             textwrap.dedent(f"""\
@@ -128,7 +86,6 @@ class TestLiveChildDetected:
             """)
         )
 
-        # Simulate the router: pass repo_root = <worktree>/.git (the common_dir)
         common_dir = worktree / ".git"
 
         result = _run(
@@ -149,22 +106,8 @@ class TestLiveChildDetected:
         ), f"child-handoff.md not in children: {result.get('children')}"
 
     def test_pre_fix_collect_paths_returns_empty_for_git_dir(self, worktree: Path) -> None:
-        """Genuine pre-fix simulation: _collect_handoff_paths given the raw git common
-        dir returns [] — the pre-fix failure mode that caused every call to return
-        exit_code=2 (indeterminate) regardless of actual handoff state.
-
-        Pre-fix: _collect_handoff_paths received <worktree>/.git directly and
-        scanned <worktree>/.git/state/handoffs/ — which does not exist → live_paths
-        empty → indeterminate exit_code=2.
-
-        Prior version only asserted the wrong path does
-        not exist (fixture-setup sanity check), not that the function returns [].
-        This exercises the actual pre-fix behavior directly.
-        """
         from coordinator_core.ops.handoff_children import _collect_handoff_paths
 
-        # Passing the git common dir (not the worktree root) must return empty —
-        # <worktree>/.git/state/handoffs/ does not exist.
         paths, scan_errors = _collect_handoff_paths(worktree / ".git")
         assert paths == [], (
             f"expected [] when _collect_handoff_paths given raw git common dir; got: {paths}"
@@ -175,19 +118,13 @@ class TestLiveChildDetected:
         )
 
 
-# ---------------------------------------------------------------------------
-# Test: no live children → exit_code=1, referenced=False
-# ---------------------------------------------------------------------------
-
 class TestNoLiveChildren:
-    """Candidate with no children → safe-to-archive verdict."""
 
     def test_exit_code_1_when_no_child_references_candidate(self, worktree: Path) -> None:
         from coordinator_core.ops.handoff_children import _handoff_has_live_children
 
         handoff_dir = worktree / "state" / "handoffs"
 
-        # Candidate handoff
         candidate = handoff_dir / "lone-candidate.md"
         candidate.write_text(
             textwrap.dedent("""\
@@ -232,30 +169,15 @@ class TestNoLiveChildren:
         )
 
 
-# ---------------------------------------------------------------------------
-# Test: archive/handoffs subtree exercised (Finding 4)
-# ---------------------------------------------------------------------------
-
 class TestArchiveSubtree:
-    """Cross-subtree cases: candidate in archive, child in state (and vice versa).
-
-    archive/handoffs/ subtree was never exercised by any
-    test; a regression in the archive scan would be invisible.
-    """
 
     def test_candidate_in_archive_child_in_state(self, worktree: Path) -> None:
-        """Candidate archived; child lives in state/handoffs/ and still references it.
-
-        This is the primary archival-safety scenario: the guard must NOT incorrectly
-        approve archival of a candidate that a live child still references.
-        """
         from coordinator_core.ops.handoff_children import _handoff_has_live_children
 
         archive_dir = worktree / "archive" / "handoffs"
         archive_dir.mkdir(parents=True)
         state_dir = worktree / "state" / "handoffs"
 
-        # Candidate lives in archive/
         candidate = archive_dir / "archived-candidate.md"
         candidate.write_text(
             textwrap.dedent("""\
@@ -267,7 +189,6 @@ class TestArchiveSubtree:
             """)
         )
 
-        # Child lives in state/ and references the archived candidate
         child = state_dir / "live-child-of-archived.md"
         child.write_text(
             textwrap.dedent(f"""\
@@ -296,19 +217,12 @@ class TestArchiveSubtree:
         )
 
     def test_child_in_archive_references_live_candidate(self, worktree: Path) -> None:
-        """Child is archived and references a live candidate.
-
-        Confirms an archive-resident child, though still scanned by rglob, is
-        excluded from the live-children set (archive-residency exclusion) →
-        candidate is safe to archive.
-        """
         from coordinator_core.ops.handoff_children import _handoff_has_live_children
 
         archive_dir = worktree / "archive" / "handoffs" / "2026-06"
         archive_dir.mkdir(parents=True)
         state_dir = worktree / "state" / "handoffs"
 
-        # Candidate lives in state/
         candidate = state_dir / "live-candidate.md"
         candidate.write_text(
             textwrap.dedent("""\
@@ -320,7 +234,6 @@ class TestArchiveSubtree:
             """)
         )
 
-        # Child is in archive/ (month-foldered subdirectory) and references candidate
         child = archive_dir / "archived-child.md"
         child.write_text(
             textwrap.dedent(f"""\
@@ -351,24 +264,11 @@ class TestArchiveSubtree:
         )
 
 
-# ---------------------------------------------------------------------------
-# Test: fail-closed indeterminate path (Finding 5)
-# ---------------------------------------------------------------------------
-
 class TestIndeterminate:
-    """Both repo roots None → fail-closed exit_code=2.
-
-    The indeterminate branch was entirely untested.
-    For a data-loss-adjacent archival-safety guard, the fail-closed path is load-bearing.
-    """
 
     def test_indeterminate_when_no_repo_root(self, tmp_path: Path) -> None:
-        """When repo_root kwarg and ctx.repo_root are both None, the handler returns
-        exit_code=2 (fail-closed) and omits the `referenced` key.
-        """
         from coordinator_core.ops.handoff_children import _handoff_has_live_children
 
-        # Minimal candidate file — validation passes before the repo_root check
         candidate = tmp_path / "orphan-candidate.md"
         candidate.write_text(
             textwrap.dedent("""\
@@ -380,8 +280,6 @@ class TestIndeterminate:
             """)
         )
 
-        # Both roots None — simulates a routing failure (no _origin_worktree in request,
-        # no founding repo_root in ctx)
         result = _run(
             _handoff_has_live_children(
                 params={"candidate": str(candidate)},
@@ -397,22 +295,9 @@ class TestIndeterminate:
         )
 
 
-# ---------------------------------------------------------------------------
-# Test: repo_root=None fail-closed on initiatives_serve and roadmap_serve (Finding 4)
-# ---------------------------------------------------------------------------
-#
-# W3 removed TestCtxRepoRootFallback (correctly — it tested the
-# removed ctx fallback), but the repo_root=None → fail-closed invariant on all three ops
-# (handoff_children, initiatives_serve, roadmap_serve) now had no test for the latter two.
-# handoff_children is covered by TestIndeterminate above. This section covers the other two.
-
 class TestInitiativesServeFailClosed:
-    """initiatives_serve returns empty set when repo_root=None."""
 
     def test_empty_set_when_no_repo_root(self) -> None:
-        """initiative.serve_set returns {initiatives: []} when repo_root=None
-        (fail-safe: empty is safe for a dropdown, no raise).
-        """
         from coordinator_core.ops.initiatives_serve import _handler as _initiatives_handler
 
         result = _initiatives_handler(params={}, repo_root=None)
@@ -422,14 +307,6 @@ class TestInitiativesServeFailClosed:
         )
 
 
-# ---------------------------------------------------------------------------
-# Test: unscannable subtree — silent-success guard (state/audits/2026-07-22
-#     silent-success audit). An unreadable state/handoffs/ or archive/handoffs/
-#     dir must fail closed (exit_code=2), never silently read as "candidate
-#     has no children" (which would falsely green-light an archive of a
-#     candidate whose live child is sitting under the unreadable subtree).
-# ---------------------------------------------------------------------------
-
 _SKIP_CHMOD = pytest.mark.skipif(
     sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
     reason="chmod 0o000 permission denial is not reliable on Windows or as root",
@@ -437,23 +314,9 @@ _SKIP_CHMOD = pytest.mark.skipif(
 
 
 class TestUnscannableSubtreeFailsClosed:
-    """Permission-denied state/handoffs/ or archive/handoffs/ must yield
-    exit_code=2 (indeterminate/fail-closed), distinguishable from the genuine
-    "no live children" exit_code=1 verdict."""
 
     @_SKIP_CHMOD
     def test_unreadable_state_handoffs_dir_fails_closed(self, worktree: Path) -> None:
-        """A live child sitting inside an unreadable state/handoffs/ dir must not
-        be silently missed — the whole op fails closed rather than risk a false
-        "safe to archive" verdict.
-
-        The candidate itself is seeded under archive/handoffs/ (kept readable)
-        so the path-containment/existence checks that run BEFORE the enumeration
-        scan can still resolve it — isolating the assertion to the state/handoffs/
-        scan failure specifically, rather than an earlier "candidate not found"
-        short-circuit that would also happen to return exit_code=2 for the wrong
-        reason.
-        """
         from coordinator_core.ops.handoff_children import _handoff_has_live_children
 
         archive_dir = worktree / "archive" / "handoffs"
@@ -469,10 +332,6 @@ class TestUnscannableSubtreeFailsClosed:
             """)
         )
 
-        # A live child that references the candidate, hidden inside the
-        # unreadable state/handoffs/ dir — if that dir were silently skipped
-        # (pre-fix `except OSError: pass`), this child would go undetected and
-        # the candidate would falsely read as safe-to-archive.
         handoff_dir = worktree / "state" / "handoffs"
         child = handoff_dir / "child-of-unreadable-state.md"
         child.write_text(
@@ -510,8 +369,6 @@ class TestUnscannableSubtreeFailsClosed:
 
     @_SKIP_CHMOD
     def test_unreadable_archive_handoffs_dir_fails_closed(self, worktree: Path) -> None:
-        """Same fail-closed guard, applied to an unreadable archive/handoffs/
-        subtree — mirrors the state/handoffs/ case above."""
         from coordinator_core.ops.handoff_children import _handoff_has_live_children
 
         candidate = worktree / "state" / "handoffs" / "candidate-archive-unreadable.md"
@@ -563,10 +420,6 @@ class TestUnscannableSubtreeFailsClosed:
 
     @_SKIP_CHMOD
     def test_readable_tree_still_yields_definite_verdict(self, worktree: Path) -> None:
-        """Baseline/contrast: the SAME shape with a fully-readable tree still
-        resolves to a definite exit_code (0 or 1), never exit_code=2 — proving
-        the fail-closed path above is specific to the unreadable subtree, not a
-        general regression."""
         from coordinator_core.ops.handoff_children import _handoff_has_live_children
 
         handoff_dir = worktree / "state" / "handoffs"
@@ -594,28 +447,11 @@ class TestUnscannableSubtreeFailsClosed:
         )
 
 
-# ---------------------------------------------------------------------------
-# C6b — regression tests for PIN-1's `blocked_by_dependents` resolver
-# (coordinator_core/ops/handoff_children.py, authored by a peer chunk, C1).
-#
 # RED-BEFORE-GREEN: `blocked_by_dependents` does not exist on disk yet at the
-# time these tests were authored. Every test below imports it function-locally
-# (not at module scope) so that only THESE tests go red with ImportError, not
-# the whole file's collection — the pre-existing tests above, and the
 # `_DEFAULT_EDGE_KINDS` pin test below, must keep passing untouched.
-#
-# Spec: docs/plans/2026-08-02-roadmap-baton-supersession-hazard.md § PIN-1
-# (chunk C6b's own dispatch brief).
-# ---------------------------------------------------------------------------
 
 
 def _write_handoff_fm(path: Path, fields: "dict[str, object]", body: str = "Body.\n") -> Path:
-    """Write a minimal handoff markdown file with arbitrary frontmatter fields.
-
-    `fields` values that are lists are rendered as a YAML flow sequence (e.g.
-    `blocked_by: [foo, bar]`) — sufficient for this test's frontmatter shapes,
-    not a general YAML emitter.
-    """
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["---"]
     for key, value in fields.items():
@@ -632,7 +468,6 @@ def _write_handoff_fm(path: Path, fields: "dict[str, object]", body: str = "Body
 
 
 def _assert_five_key_shape(result: "dict[str, object]") -> None:
-    """PIN-1 item 6: the five-key return shape is present on EVERY outcome."""
     for key in ("state", "dependents", "identifiers", "scan_errors", "error"):
         assert key in result, f"blocked_by_dependents result missing key {key!r}: {result!r}"
     assert result["state"] in ("dependents", "none", "indeterminate"), (
@@ -641,14 +476,8 @@ def _assert_five_key_shape(result: "dict[str, object]") -> None:
 
 
 class TestBlockedByDependents:
-    """PIN-1: `blocked_by_dependents(candidate_path, worktree_root, exclude=None)`.
-
-    Which LIVE handoffs list this candidate's stub id in their `blocked_by`?
-    """
 
     def test_live_referrer_via_blocked_by_yields_dependents(self, worktree: Path) -> None:
-        """Item 1: a candidate with one live handoff listing its stub id in
-        `blocked_by` -> state=="dependents", that path in `dependents`."""
         from coordinator_core.ops.handoff_children import blocked_by_dependents
 
         handoff_dir = worktree / "state" / "handoffs"
@@ -674,8 +503,6 @@ class TestBlockedByDependents:
         assert result["error"] is None
 
     def test_only_terminal_referrer_yields_none(self, worktree: Path) -> None:
-        """Item 2: a candidate whose only `blocked_by` referrer is terminal
-        (per `_is_terminal_or_archived_child`) -> state=="none"."""
         from coordinator_core.ops.handoff_children import blocked_by_dependents
 
         handoff_dir = worktree / "state" / "handoffs"
@@ -704,14 +531,6 @@ class TestBlockedByDependents:
     def test_only_open_status_closed_deployment_state_referrer_yields_none(
         self, worktree: Path
     ) -> None:
-        """DR-084 regression: a candidate whose only `blocked_by` referrer
-        carries `status: open` + a terminal `deployment_state: closed` (the
-        close-handoff verb's shape — status stays open, only deployment_state
-        is stamped terminal) must not count as a live dependent -> state==
-        "none". Sibling to test_only_terminal_referrer_yields_none, at the
-        deployment_state axis rather than the status axis (per
-        `_is_terminal_or_archived_child`'s DR-084 terminal-deployment-state
-        rule)."""
         from coordinator_core.ops.handoff_children import blocked_by_dependents
 
         handoff_dir = worktree / "state" / "handoffs"
@@ -745,8 +564,6 @@ class TestBlockedByDependents:
         failure this guard exists to prevent."""
         from coordinator_core.ops.handoff_children import blocked_by_dependents
 
-        # Candidate kept readable (under archive/handoffs/) so identifier
-        # resolution succeeds before the scan of the unreadable subtree is hit.
         archive_dir = worktree / "archive" / "handoffs"
         candidate = _write_handoff_fm(
             archive_dir / "candidate3.md",
@@ -776,8 +593,6 @@ class TestBlockedByDependents:
         assert result["error"] is not None
 
     def test_no_resolvable_identifier_yields_indeterminate(self, worktree: Path) -> None:
-        """Item 4: a candidate with no resolvable identifier (no stub_id, no
-        id, no handoff_id) -> state=="indeterminate"."""
         from coordinator_core.ops.handoff_children import blocked_by_dependents
 
         handoff_dir = worktree / "state" / "handoffs"
@@ -798,9 +613,6 @@ class TestBlockedByDependents:
         )
 
     def test_exclude_drops_named_path_from_scan_set(self, worktree: Path) -> None:
-        """Item 5: `exclude` drops the named path from the scan set
-        (resolved-absolute comparison) — a would-be dependent that is
-        excluded no longer counts."""
         from coordinator_core.ops.handoff_children import blocked_by_dependents
 
         handoff_dir = worktree / "state" / "handoffs"
@@ -827,12 +639,6 @@ class TestBlockedByDependents:
     def test_malformed_blocked_by_shape_fails_closed_to_indeterminate(
         self, worktree: Path
     ) -> None:
-        """A LIVE handoff whose
-        `blocked_by` field is present but not a str/list/tuple (e.g. a dict,
-        from malformed YAML) must fail CLOSED to state=="indeterminate", not
-        be silently treated as "does not reference the candidate". Conflating
-        "we could not fully look" with "we looked and found nothing" is the
-        exact failure this resolver's tri-state contract exists to prevent."""
         from coordinator_core.ops.handoff_children import blocked_by_dependents
 
         handoff_dir = worktree / "state" / "handoffs"
@@ -867,18 +673,8 @@ class TestBlockedByDependents:
         assert result["error"] is not None
 
 class TestBlockedByDependentsMany:
-    """`blocked_by_dependents_many` — the batched resolver the singular one
-    delegates to. One corpus walk for N candidates, same verdicts.
-
-    The hoist exists because `post_commit_tail`'s gate-cascade-clear leg asked
-    the singular resolver once per stamped baton, paying a full live+archive
-    corpus walk per candidate for an answer that is candidate-independent up to
-    one set membership test.
-    """
 
     def test_batched_verdicts_match_the_singular_resolver(self, worktree: Path) -> None:
-        """Per-candidate parity: every verdict a batch returns is the verdict
-        the singular resolver returns for that same candidate alone."""
         from coordinator_core.ops.handoff_children import (
             blocked_by_dependents,
             blocked_by_dependents_many,
@@ -933,8 +729,6 @@ class TestBlockedByDependentsMany:
     def test_walks_the_corpus_once_for_many_candidates(
         self, worktree: Path, monkeypatch
     ) -> None:
-        """The hoist itself: N candidates cost ONE
-        `_collect_all_handoffs_for_gate_index` call, not N."""
         from coordinator_core.ops import handoff_children
         from coordinator_core.reconcile import handoff_corpus
 
@@ -977,8 +771,6 @@ class TestBlockedByDependentsMany:
     def test_no_identifier_candidate_does_not_contaminate_its_siblings(
         self, worktree: Path
     ) -> None:
-        """Blast radius: an unresolvable candidate is indeterminate ALONE —
-        its siblings still get real verdicts off the shared walk."""
         from coordinator_core.ops.handoff_children import blocked_by_dependents_many
 
         handoff_dir = worktree / "state" / "handoffs"
@@ -1007,11 +799,6 @@ class TestBlockedByDependentsMany:
     def test_malformed_blocked_by_on_the_candidate_itself_is_still_skipped(
         self, worktree: Path
     ) -> None:
-        """Semantic pin on the hoist: the singular resolver skips a corpus node
-        that IS the candidate BEFORE reading its `blocked_by`, so a malformed
-        `blocked_by` on the candidate's own file cannot make that candidate
-        indeterminate. Hoisting the corpus normalisation out of the candidate
-        loop must not quietly widen that."""
         from coordinator_core.ops.handoff_children import (
             blocked_by_dependents,
             blocked_by_dependents_many,
@@ -1048,19 +835,12 @@ class TestBlockedByDependentsMany:
         )
 
     def test_empty_candidate_list_does_no_work(self, worktree: Path) -> None:
-        """No candidates, no corpus walk, empty dict — not an error."""
         from coordinator_core.ops.handoff_children import blocked_by_dependents_many
 
         assert blocked_by_dependents_many([], worktree) == {}
 
 
 class TestBlockedByDependentsOp:
-    """`handoff.blocked_by_dependents` — registered op wrapper around
-    `blocked_by_dependents` (PIN-1 registration, cross-repo/inbox/2026-08-02-
-    doe-claude-em-baton-lifecycle-three-asks-reply.md Ask 3). Mirrors the
-    op-level test shape used for `handoff.has_live_children` above: router
-    supplies repo_root=<worktree>/.git (the common_dir), the op maps it via
-    main_worktree_root before delegating to `blocked_by_dependents`."""
 
     def test_dependents_present_survives_op_boundary(self, worktree: Path) -> None:
         from coordinator_core.ops.handoff_children import _handoff_blocked_by_dependents
@@ -1112,10 +892,6 @@ class TestBlockedByDependentsOp:
     def test_scan_error_surfaces_as_indeterminate_not_none_across_op_boundary(
         self, worktree: Path
     ) -> None:
-        """The tri-state case that matters: a scan error underneath the
-        op boundary must surface as state=="indeterminate", NEVER a quiet
-        "none" — this is the exact protection DoE's accepted reply named
-        as the reason to keep `indeterminate` loud through registration."""
         from coordinator_core.ops.handoff_children import _handoff_blocked_by_dependents
 
         archive_dir = worktree / "archive" / "handoffs"

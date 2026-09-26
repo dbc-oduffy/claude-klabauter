@@ -99,8 +99,6 @@ def checkin_disposition(root: Path, normalized: str) -> str:
                 if tok == "-text":
                     verdict = BINARY
                 elif tok == "text" or tok.startswith("eol="):
-                    # `eol=` implies `text`. Checkin-side both spellings mean
-                    # the same thing; the difference is checkout-only.
                     verdict = TEXT
                 elif tok == "text=auto":
                     verdict = TEXT

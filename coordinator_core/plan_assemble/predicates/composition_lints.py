@@ -100,11 +100,6 @@ from coordinator_core.frontmatter.schema_validate import (
 )
 from coordinator_core.plan_assemble.predicates import PredicateContext, undetermined
 
-#: Vague/untestable phrasing markers `:137` rejects against each `AC-N`
-#: line's criterion text. Deliberately conservative (common hedge words
-#: and open-ended markers only) — "is this AC genuinely binary pass/fail"
-#: stays a `G`, never-decided-here judgment call; this list is pattern
-#: matching, not a testability verdict.
 _AC_REJECT_PATTERNS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
     ("vague_qualifier", re.compile(
         r"\b(properly|appropriately|reasonably|sufficiently|adequately)\b",
@@ -121,24 +116,16 @@ _AC_REJECT_PATTERNS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
     )),
 )
 
-#: A markdown-table AC row: `| ACn | <criterion text> | <status> |`.
 _AC_TABLE_ROW_RE = re.compile(r"^\|\s*(AC-?\d+)\s*\|\s*(.+?)\s*\|", re.MULTILINE)
 
-#: An inline `AC-N: <criterion text>` line (non-table authoring style).
 _AC_INLINE_RE = re.compile(r"(?:^|\s)(AC-?\d+):\s*(.+?)\s*$", re.MULTILINE)
 
-#: `## <heading naming hard constraints>` — case-insensitive, matches this
-#: very plan's own `## Executor hard constraints` heading.
 _HARD_CONSTRAINTS_HEADING_RE = re.compile(
     r"^##\s+.*\bhard constraints\b", re.MULTILINE | re.IGNORECASE
 )
 
-#: Dispatch verbs `:152` greps a stub body for, per the contract's own
-#: literal list (`dispatch`, `spawn`, `Task(`).
 _DISPATCH_VERB_RE = re.compile(r"\b(dispatch|spawn)\b|Task\(", re.IGNORECASE)
 
-#: Path-pattern candidates for `:153`'s shared-state proxy — same shape as
-#: `:59`'s security/privacy-boundary candidate list, evidence only.
 _SHARED_STATE_PATH_PATTERNS: tuple["re.Pattern[str]", ...] = (
     re.compile(r"(^|/)state/"),
     re.compile(r"schema\.json$"),
@@ -147,21 +134,12 @@ _SHARED_STATE_PATH_PATTERNS: tuple["re.Pattern[str]", ...] = (
     re.compile(r"(^|/)locked_write\.py$"),
 )
 
-#: A `chunk-index sidecar` mention followed by a backtick-quoted path.
 _CHUNK_INDEX_SIDECAR_RE = re.compile(
     r"chunk[- ]index\s+sidecar[^`\n]*`([^`]+)`", re.IGNORECASE
 )
 
 
 def _load_spine_rows(ctx: PredicateContext) -> tuple[Optional[list], Optional[dict[str, Any]]]:
-    """Locate and parse the plan's plan-tasks spine.
-
-    Returns `(rows, sentinel)` — exactly one populated, except an absent
-    fence, which returns `([], None)` (zero rows, not a sentinel — the
-    vacuity case every caller in this module treats as "nothing to
-    check", matching `_cf_plan_tasks_disposition_shape`'s own convention
-    for an absent `items` argument).
-    """
     if ctx.plan_body is None:
         return None, undetermined("no --plan supplied; cannot locate the plan-tasks spine")
 
@@ -184,10 +162,6 @@ def _load_spine_rows(ctx: PredicateContext) -> tuple[Optional[list], Optional[di
 
 
 def _extract_ac_lines(plan_body: str) -> list[tuple[str, str]]:
-    """Extract `(ac_id, criterion_text)` pairs from `plan_body`, table
-    style first (this repo's own `## Acceptance Criteria` convention),
-    falling back to inline `AC-N: ...` lines. Table separator rows
-    (`|---|---|`) are skipped; duplicate ids keep the first occurrence."""
     rows: list[tuple[str, str]] = []
     seen: set[str] = set()
     for match in _AC_TABLE_ROW_RE.finditer(plan_body):
@@ -208,10 +182,6 @@ def _extract_ac_lines(plan_body: str) -> list[tuple[str, str]]:
 
 
 def spine_row_shape(ctx: PredicateContext) -> dict[str, Any]:
-    """`:136` — whether every plan-tasks spine row's shape matches the
-    closed-disposition schema, reusing `_cf_plan_tasks_disposition_shape`
-    (`governed=True` unconditionally — the PM-approval arm is
-    `U`-classified and excluded, not detected)."""
     rows, sentinel = _load_spine_rows(ctx)
     if sentinel is not None:
         return sentinel
@@ -238,10 +208,6 @@ def ac_reject_list(ctx: PredicateContext) -> dict[str, Any]:
 
 
 def deferral_case_against(ctx: PredicateContext) -> dict[str, Any]:
-    """`:143` — `case_against` presence/non-vacuity for every plan-tasks
-    row whose `disposition` is one of the PM-approval-gated (deferral)
-    dispositions. The disposition itself (whether the cut stands) is
-    never resolved here."""
     rows, sentinel = _load_spine_rows(ctx)
     if sentinel is not None:
         return sentinel
@@ -263,17 +229,12 @@ def deferral_case_against(ctx: PredicateContext) -> dict[str, Any]:
 
 
 def hard_constraints_block(ctx: PredicateContext) -> dict[str, Any]:
-    """`:150` — presence of a hard-constraints heading among the plan's
-    own fenced-section headers."""
     if ctx.plan_body is None:
         return undetermined("no --plan supplied; cannot lint for a hard-constraints block")
     return {"present": bool(_HARD_CONSTRAINTS_HEADING_RE.search(ctx.plan_body))}
 
 
 def stub_spawns_subagents(ctx: PredicateContext) -> Any:
-    """`:152` — whether any plan-tasks row's `body` greps for a dispatch
-    verb (`dispatch`, `spawn`, `Task(`). Bare `bool` per the contract's
-    scalar field."""
     rows, sentinel = _load_spine_rows(ctx)
     if sentinel is not None:
         return sentinel
@@ -287,9 +248,6 @@ def stub_spawns_subagents(ctx: PredicateContext) -> Any:
 
 
 def concurrency_shared_state(ctx: PredicateContext) -> dict[str, Any]:
-    """`:153` — candidate-only path-pattern match of each plan-tasks
-    row's `surface` against known shared-state path shapes. "Is it
-    actually shared" stays a `G` judgment call, never decided here."""
     rows, sentinel = _load_spine_rows(ctx)
     if sentinel is not None:
         return sentinel
@@ -307,11 +265,6 @@ def concurrency_shared_state(ctx: PredicateContext) -> dict[str, Any]:
 
 
 def chunk_index_sidecar(ctx: PredicateContext) -> dict[str, Any]:
-    """`:172` — file-presence check for a chunk-index sidecar path the
-    plan's own text names (a `chunk-index sidecar ... `<path>`` mention).
-    A plan that names no such path is `undetermined`, not `exists:
-    False` — there being nothing named is a different fact from a named
-    path not existing on disk."""
     if ctx.plan_body is None:
         return undetermined("no --plan supplied; cannot locate a chunk-index sidecar reference")
     match = _CHUNK_INDEX_SIDECAR_RE.search(ctx.plan_body)

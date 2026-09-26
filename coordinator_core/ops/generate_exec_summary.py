@@ -84,11 +84,7 @@ from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.state_root import StateRootError
 from coordinator_core.state_root import _claude_klabauter_state as _guarded_claude_klabauter_state
 
-# Generator-provenance declaration (C2, generator_provenance.py's AST reader).
-# THIS module is the real implementer of the write (main() below) -- `sources`
 # names itself, mirroring the sibling CLI trampoline's own GENERATES entry
-# (coordinator/bin/generate-exec-summary.py), which names this file as its
-# `sources` for the SAME artifact/stamp_key pair.
 GENERATES = [
     {
         "artifact": "docs/exec-summary.md",
@@ -111,11 +107,6 @@ _HAND_GOALS_PLACEHOLDER = (
     "on every refresh — edit once, it survives regen._"
 )
 
-
-# ---------------------------------------------------------------------------
-# State-root resolution (Rule 5 of coordinator-state-root.py only — see module
-# docstring negative-spec for why the other four rules are out of scope here).
-# ---------------------------------------------------------------------------
 
 def _resolve_state_root(repo_root: str) -> str:
     """Resolve the coordinator state root for `repo_root`, mirroring Rule 5 of
@@ -140,7 +131,6 @@ def _resolve_state_root(repo_root: str) -> str:
     try:
         is_meta = _meta_repo_identity.is_meta_repo(repo_root)
     except _meta_repo_identity.MetaRepoResolutionError:
-        # Faithful oracle-bug repro — see module docstring negative-spec.
         is_meta = False
 
     if is_meta:
@@ -148,17 +138,7 @@ def _resolve_state_root(repo_root: str) -> str:
     return os.path.join(repo_root, "state")
 
 
-# ---------------------------------------------------------------------------
-# HAND block validation and extraction
-# (only called on existing files; new files receive placeholder text)
-# ---------------------------------------------------------------------------
-
 def _validate_hand_fences(path: str) -> Tuple[bool, List[str]]:
-    """Validate that both HAND fence pairs (special, goals) are present and paired.
-
-    Returns (ok, error_lines). error_lines is empty when ok is True.
-    Negative-spec: does NOT write any output or modify any file.
-    """
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
             lines = fh.read().splitlines()
@@ -181,27 +161,10 @@ def _validate_hand_fences(path: str) -> Tuple[bool, List[str]]:
     return ok, errors
 
 
-#: `_derive_progress`/`_derive_identity` extract verbatim prose from source
-#: files, so no generic grammar can distinguish every legitimate body line
-#: from hand-authored narrative. This pattern names the one shape neither
-#: deriver ever emits: a bold *inline* citation trailing a sentence, e.g.
-#: `*(narrative-synthesis.md thread 13)*` — a footnote-style attribution that
-#: only appears in hand-authored prose, never in a verbatim section extract,
-#: a raw git-log line, or the fixed placeholder text.
 _MANAGED_INLINE_CITATION_RE = re.compile(r"\*\([^)\n]*\)\*")
 
 
 def _validate_managed_shape(path: str) -> List[str]:
-    """Warn (non-fatal) when an existing file's MANAGED sections carry
-    content that `_derive_identity`/`_derive_progress` could not have
-    produced — evidence of a hand-edit landed inside a MANAGED fence.
-
-    Returns warning_lines, empty when both sections look generator-producible.
-    Negative-spec: does NOT write any output, modify any file, or block the
-    regen that follows — the correct remedy for a hand-edit inside MANAGED
-    is exactly the overwrite this function's caller is about to perform; this
-    only makes that overwrite visible instead of silent.
-    """
     warnings: List[str] = []
     for name in ("identity", "progress"):
         content = _extract_managed(path, name)
@@ -214,7 +177,6 @@ def _validate_managed_shape(path: str) -> List[str]:
 
 
 def _extract_managed(path: str, name: str) -> str:
-    """Extract content between a named MANAGED fence pair, verbatim (excluding fence lines)."""
     begin = f"<!-- BEGIN MANAGED: {name} -->"
     end = f"<!-- END MANAGED: {name} -->"
     try:
@@ -238,7 +200,6 @@ def _extract_managed(path: str, name: str) -> str:
 
 
 def _extract_hand(path: str, name: str) -> str:
-    """Extract content between a named HAND fence pair, verbatim (excluding fence lines)."""
     begin = f"<!-- BEGIN HAND: {name} -->"
     end = f"<!-- END HAND: {name} -->"
     try:
@@ -261,13 +222,7 @@ def _extract_hand(path: str, name: str) -> str:
     return "\n".join(out)
 
 
-# ---------------------------------------------------------------------------
-# Identity derivation (MANAGED: identity)
-# Precedence: README H1 + lead paragraph -> CLAUDE.md first line after H1 -> basename
-# ---------------------------------------------------------------------------
-
 def _first_h1(lines: Sequence[str]) -> str:
-    """First line matching `/^# /`, with the leading '# ' stripped. Empty if none."""
     for line in lines:
         if line.startswith("# "):
             return line[2:]
@@ -275,15 +230,6 @@ def _first_h1(lines: Sequence[str]) -> str:
 
 
 def _strip_leading_noise(lines: Sequence[str]) -> List[str]:
-    """Drop leading blank lines, HTML comments, and image/badge lines from the
-    front of `lines`, stopping at the first genuine content line.
-
-    A hero comment (`<!-- ... -->`, possibly spanning multiple lines) or a
-    leading `![...](...)` image/badge is layout, not the project's actual
-    lead sentence — README.md conventionally opens the H1 with exactly this
-    (hero-art attribution comment, then the hero image itself) before the
-    real prose starts.
-    """
     out = list(lines)
     idx = 0
     in_comment = False
@@ -310,8 +256,6 @@ def _strip_leading_noise(lines: Sequence[str]) -> List[str]:
 
 
 def _first_nonblank_after_h1(lines: Sequence[str]) -> str:
-    """First non-blank, non-comment/image/badge line strictly after the first
-    `/^# /` line. Empty if none."""
     after: Optional[List[str]] = None
     for i, line in enumerate(lines):
         if line.startswith("# "):
@@ -335,7 +279,6 @@ def _read_lines(path: str) -> List[str]:
 
 
 def _derive_project_title(repo_root: str) -> str:
-    """Short project title (first line of identity, cap 200 chars)."""
     result = ""
     readme = os.path.join(repo_root, "README.md")
     if os.path.isfile(readme):
@@ -353,9 +296,6 @@ def _derive_project_title(repo_root: str) -> str:
 
 
 def _extract_lead_paragraph(lines: Sequence[str]) -> str:
-    """First non-blank paragraph after the H1 (up to the next blank line),
-    skipping any leading HTML comment or image/badge lines first — see
-    `_strip_leading_noise`."""
     after: Optional[List[str]] = None
     for i, line in enumerate(lines):
         if line.startswith("# "):
@@ -374,7 +314,6 @@ def _extract_lead_paragraph(lines: Sequence[str]) -> str:
 
 
 def _derive_identity(repo_root: str) -> str:
-    """Full identity block: H1 title + lead paragraph (blank-line separated)."""
     result = ""
     readme = os.path.join(repo_root, "README.md")
     if os.path.isfile(readme):
@@ -396,26 +335,7 @@ def _derive_identity(repo_root: str) -> str:
     return result
 
 
-# ---------------------------------------------------------------------------
-# Progress derivation (MANAGED: progress)
-# Sources: week-changelog Highlights + git-log fallback
-#
-# C6 (2026-07-30): this used to also read orientation_cache.md's ``## Counters``
-# section ("Activity counters") -- that section is retired (the writer now
-# emits a purpose map, never a census: see
-# coordinator_core.orientation.regenerate_cache's module docstring). The read
-# already degraded gracefully to "" on any cache lacking the heading, so this
-# is non-fatal, but leaving the dead branch in place would leave it silently
-# and permanently degraded rather than repointed -- it is removed outright
-# instead, since there is no replacement numeric-activity source to repoint
-# it at (the whole point of the rewrite is that a count is not a fact worth
-# caching). Highlights and the git-log fallback below are unaffected.
-# ---------------------------------------------------------------------------
-
 def _extract_section(text: str, header_line: str) -> str:
-    """Extract non-blank lines of a `## <Header>` section, up to (not including)
-    the next `## ` header line. Blank lines inside the section are skipped, not
-    treated as a terminator (only a new `## ` heading terminates it)."""
     in_section = False
     out: List[str] = []
     for line in text.splitlines():
@@ -431,11 +351,6 @@ def _extract_section(text: str, header_line: str) -> str:
 
 
 def _extract_last_section_by_prefix(text: str, header_prefix: str) -> str:
-    """Extract non-blank lines of the LAST `## <header_prefix>...` section
-    (e.g. the most recent `## Week of <date>` block), up to the next `## `
-    heading. Mirrors _extract_section's terminator rule but matches by
-    prefix and keeps the latest match rather than the first, since these
-    sections are chronological and undated callers want the newest one."""
     out: List[str] = []
     current: List[str] = []
     in_section = False
@@ -473,7 +388,6 @@ def _run_git_log(repo_root: str) -> str:
 
 
 def _trim_trailing_blank(text: str) -> str:
-    """Trim trailing all-whitespace lines so the fence closes cleanly."""
     lines = text.split("\n")
     last = len(lines)
     while last > 0 and lines[last - 1].strip() == "":
@@ -481,27 +395,12 @@ def _trim_trailing_blank(text: str) -> str:
     return "\n".join(lines[:last])
 
 
-# Prose older than this is treated as absent, so the ladder falls through to the
-# always-current git-log rung. Both changelog feeds are written at weekly
-# cadence, so two consecutive silent weeks is not a quiet sprint — it is a
-# stopped feed, and the artifact's job is reporting shipped work rather than
-# preserving the last thing anyone wrote about it.
 _MAX_PROGRESS_INPUT_AGE_DAYS = 14
 
 _ISO_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
 
 def _date_from_path(path: str) -> Optional[datetime]:
-    """Recover an input's authored date from its path, newest component first.
-
-    Deliberately NOT mtime. Every one of these files arrives by checkout on a
-    fresh clone, which stamps mtime at clone time and would report a feed that
-    stopped in July as hours old — the staleness check would then vouch hardest
-    for exactly the machines it is meant to catch. The date in the filename
-    (`2026-08-17.md`, `2026-07-14-pending-release.md`) or its parent directory
-    (`archive/week-changelogs/2026-07-13/`) is the authored date and survives
-    transport.
-    """
     for component in (os.path.basename(path), os.path.basename(os.path.dirname(path))):
         match = _ISO_DATE_RE.search(component)
         if not match:
@@ -509,18 +408,11 @@ def _date_from_path(path: str) -> Optional[datetime]:
         try:
             return datetime.strptime(match.group(1), "%Y-%m-%d").replace(tzinfo=timezone.utc)
         except ValueError:
-            # component matched the date regex but is not a real calendar date; try the next one
             continue
     return None
 
 
 def _is_stale_input(path: str, now: Optional[datetime] = None) -> bool:
-    """True when `path`'s authored date is beyond the freshness bound.
-
-    Undated inputs are treated as fresh: absent a date there is no evidence of
-    staleness, and refusing prose on a naming convention it never agreed to
-    would silently empty the section for any repo that names files differently.
-    """
     authored = _date_from_path(path)
     if authored is None:
         return False
@@ -560,16 +452,11 @@ def _newest_pending_release(repo_dir: str) -> str:
     best = ""
     best_key: Optional[Tuple[datetime, int]] = None
     for rank, root in enumerate(roots):
-        # rank 0 is release-notes, so a HIGHER tie-break value must mean
-        # release-notes: invert rather than reusing the loop index directly.
         tie_break = 1 - rank
         for path in glob.glob(os.path.join(root, "**", "*pending-release*.md"), recursive=True):
             if not os.path.isfile(path):
                 continue
             authored = _date_from_path(path)
-            # An undated candidate sorts oldest rather than being discarded —
-            # it is still the only prose on disk if nothing else matches, and
-            # `_is_stale_input` already treats undated inputs as fresh.
             key = (authored or datetime.min.replace(tzinfo=timezone.utc), tie_break)
             if best_key is None or key > best_key:
                 best_key = key
@@ -582,12 +469,7 @@ def _derive_progress(state_root: str, repo_root: str) -> str:
     output = ""
     highlights = ""
 
-    # --- Highlights from week-changelog (if directory present) ---
     if os.path.isdir(wc_dir):
-        # Newest-first: filenames are date-prefixed, so descending lexicographic
-        # is descending chronological. The `break` below takes the first match,
-        # which must be the freshest. Ascending order here silently pins the
-        # section to the oldest file on disk forever.
         for wc_file in sorted(glob.glob(os.path.join(wc_dir, "*.md")), reverse=True):
             if not os.path.isfile(wc_file):
                 continue
@@ -600,14 +482,10 @@ def _derive_progress(state_root: str, repo_root: str) -> str:
             candidate = _extract_section(wc_text, "## Highlights")
             if candidate:
                 if _is_stale_input(wc_file):
-                    # Newest-first, so the newest is already too old: every
-                    # remaining file is older still. Stop rather than walk down
-                    # into staler prose.
                     break
                 highlights = candidate
                 break
 
-        # Fallback: most recent archived pending-release.md.
         if not highlights:
             repo_dir = os.path.dirname(state_root)
             latest_pr = _newest_pending_release(repo_dir)
@@ -621,21 +499,11 @@ def _derive_progress(state_root: str, repo_root: str) -> str:
                     pr_text = ""
                 highlights = _extract_section(pr_text, "## Highlights")
                 if not highlights:
-                    # Pending-release writer moved to per-week `## Week of
-                    # <date>` blocks (no `## Highlights` heading at all,
-                    # confirmed on the current pending-release grammar) —
-                    # without this, the reader stays permanently stuck on
-                    # rung 3 (raw git-log SHAs) even though prose is on
-                    # disk, silently degrading the cockpit-facing
-                    # docs/exec-summary.md narrative. See cross-repo/archive/
-                    # 2026-08-28-doe-claude-em-exec-summary-highlights-reader-greps-a-retired-heading.md
                     highlights = _extract_last_section_by_prefix(pr_text, "## Week of ")
 
-    # --- Assemble output ---
     if highlights:
         output += f"**Recent highlights:**\n\n{highlights}\n\n"
 
-    # git-log fallback: week-changelog absent OR highlights empty.
     if not os.path.isdir(wc_dir) or not highlights:
         log_out = _run_git_log(repo_root)
         if log_out:
@@ -647,16 +515,6 @@ def _derive_progress(state_root: str, repo_root: str) -> str:
     return _trim_trailing_blank(output)
 
 
-# ---------------------------------------------------------------------------
-# Link rewriting for MANAGED sections
-# The output file lives at docs/exec-summary.md — one directory below repo
-# root — so any repo-root-relative markdown link target needs relativizing
-# to resolve correctly from that location.
-# ---------------------------------------------------------------------------
-
-#: Repo-root-relative path of the generated file — the base every MANAGED
-#: link target below is relativized against via the shared
-#: ``coordinator_core.ops._relative_link`` helper.
 _EXEC_SUMMARY_OUT_PATH = "docs/exec-summary.md"
 
 
@@ -709,10 +567,6 @@ def _rewrite_managed_links(text: str) -> str:
     return "\n".join(out_lines)
 
 
-# ---------------------------------------------------------------------------
-# File emission
-# ---------------------------------------------------------------------------
-
 def _emit_file(
     project_title: str,
     repo_name: str,
@@ -763,14 +617,8 @@ def _emit_file(
         progress,
         "<!-- END MANAGED: progress -->",
     ]
-    # Mirrors the bash oracle's `$(...)` command-substitution trailing-newline strip:
-    # the caller re-adds exactly one trailing newline at write/print time.
     return "\n".join(lines)
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def _resolve_repo_root() -> Optional[str]:
     root = show_toplevel()
@@ -830,12 +678,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if check_only:
         sys.stdout.write(output + "\n")
-        # The rendered `generated: <iso_now>` line changes on every run by
-        # construction, so a raw byte-for-byte compare against the existing
-        # target would report "stale" unconditionally even when nothing else
-        # changed. Strip that one line from both sides before comparing --
         # this is the SAME normalization the MANAGED-section HAND-fence
-        # extraction already treats as immaterial to freshness.
         def _drop_generated_line(text: str) -> str:
             return "\n".join(
                 line for line in text.splitlines() if not line.startswith("generated: ")
@@ -862,7 +705,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     with open(target, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(output + "\n")
 
-    # DR-276: declared AFTER the write lands, never before — the contract is a
     # report of what was ACTUALLY written, not of an intended surface.
     declare_write(target)
 

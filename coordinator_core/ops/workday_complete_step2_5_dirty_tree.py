@@ -178,18 +178,9 @@ from __future__ import annotations
 import dataclasses
 
 # `.gitignore` stays a concrete `MUTATES` path, not a `GENERATES` entry, by
-# design: `_append_to_gitignore` makes a surgical, deduplicated append onto a
-# shared file this module did not create and does not own the rest of
 # (`_act_gitignore`). A stamped `GENERATES` entry would claim this module
-# emits `.gitignore` wholesale, which is false, and stamping a file this
-# module only ever appends one line to is not an option.
-# `generator_provenance.py :: _build_record` therefore scores this module
 # UNDECLARED (docs/plans/2026-08-26-seven-generators-owe-a-staleness-contrac.md,
-# P012-C5) -- an accepted outcome, not a gap: a surgical edit to a shared
-# file has no honest declaration under the checker's current vocabulary.
 # Filed to C6's checker-vocabulary finding. Do not add `GENERATES = []` (the
-# module writes) and do not rewrite this path as a glob to dodge
-# `_mutates_concrete_patterns`.
 MUTATES = [".gitignore", "cross-repo/inbox/**", "cross-repo/archive/**", "state/review-trail/**", "state/memos/**", "state/lessons-outbox/**", "state/improvement-queue/**", "state/debt-backlog/**", "state/bug-backlog/**", "tasks/learn-lessons-**", "tasks/audits/**", "tasks/daily-review-scratch/**", "archive/**", "docs/plans/*-check.md"]
 
 import fnmatch
@@ -208,9 +199,7 @@ _CREATIONFLAGS = no_console_creationflags()
 _PROG = "step2.5"
 _GIT_TIMEOUT_SECS = 30
 
-# ---------------------------------------------------------------------------
 # Unit 3 message text (AUTO-GITIGNORE / AUTO-COMMIT act blocks use these).
-# ---------------------------------------------------------------------------
 _GITIGNORE_COMMIT_MSG = "chore(gitignore): exclude orphaned transients at workday-complete"
 
 # AUTO-GITIGNORE basename/prefix allow-list — pattern written to .gitignore.
@@ -223,10 +212,7 @@ _GITIGNORE_BASENAME_GLOBS = [
     ("*.pid", "*.pid"),
 ]
 
-# CLAIM (C6) commit-roots-seen label for a path committed BY CLAIM rather
-# than by any prefix below -- distinguishes a claim-driven commit-message
 # root entry from a genuine `_COMMIT_PREFIXES` match without inventing a
-# fake filesystem prefix.
 _CLAIM_COMMIT_ROOT_LABEL = "(session claim)"
 
 # AUTO-COMMIT prefix allow-list (path startswith root -> commit_root == root).
@@ -273,13 +259,7 @@ _SOURCE_TREE_PREFIXES = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# Unit 1 — subprocess helper, gitignore file helpers.
-# ---------------------------------------------------------------------------
-
-
 def _run_git(args: List[str], cwd: str) -> subprocess.CompletedProcess:
-    """Run a git subcommand with a bounded timeout, no stdin, no console flash."""
     return subprocess.run(
         ["git"] + args,
         cwd=cwd,
@@ -292,7 +272,6 @@ def _run_git(args: List[str], cwd: str) -> subprocess.CompletedProcess:
 
 
 def _pattern_in_gitignore(pattern: str, gitignore_path: str) -> bool:
-    """Fixed-string, whole-line match — mirrors `grep -qxF`."""
     if not os.path.isfile(gitignore_path):
         return False
     try:
@@ -305,7 +284,6 @@ def _pattern_in_gitignore(pattern: str, gitignore_path: str) -> bool:
 
 
 def _append_to_gitignore(pattern: str, gitignore_path: str, dry_run: bool) -> bool:
-    """Returns True on success (or dry-run no-op); False on write failure."""
     if dry_run:
         print(f"[{_PROG}] DRY-RUN: would append '{pattern}' to {gitignore_path}", file=sys.stderr)
         return True
@@ -319,14 +297,7 @@ def _append_to_gitignore(pattern: str, gitignore_path: str, dry_run: bool) -> bo
         return False
 
 
-# ---------------------------------------------------------------------------
-# Unit 2 — classification predicates (shared by the main pass and the
-# rename-source second pass).
-# ---------------------------------------------------------------------------
-
-
 def _classify_gitignore(path: str, bname: str) -> Optional[str]:
-    """Returns the .gitignore pattern to write, or None if not a gitignore hit."""
     if path.startswith("logs/"):
         return "logs/"
     if bname in _GITIGNORE_BASENAME_EXACT:
@@ -357,16 +328,6 @@ def _classify_orphan_tmp(bname: str) -> bool:
 
 
 def _split_rename(rest: str) -> Tuple[Optional[str], str]:
-    """Porcelain `XY old -> new`: returns (rename_src or None, path).
-
-    `path` is the text after the LAST ` -> ` (destination may itself
-    contain the separator in a pathological name); `rename_src` is the
-    text before the FIRST ` -> ` — mirrors the oracle's
-    `${rest%% -> *}` / `${rest##* -> }` parameter expansions.
-
-    shell-doc-ok: quotes the oracle's real parameter expansions, whose subject is
-    git porcelain's own literal " -> " rename separator.
-    """
     if " -> " not in rest:
         return None, rest
     first = rest.find(" -> ")
@@ -387,8 +348,8 @@ class _Counters:
         self.orphan = 0
         self.gitignore = 0
         self.commit = 0
-        self.claim_mine = 0  # C6 — committed BY CLAIM, never by prefix
-        self.claim_peer = 0  # C6 — reported peer claim, never committed
+        self.claim_mine = 0
+        self.claim_peer = 0
         self.source = 0
         self.ambiguous = 0
 
@@ -400,9 +361,6 @@ class _Accumulators:
         self.commit_paths: List[str] = []
         self.commit_add_paths: List[str] = []
         self.commit_roots_seen: List[str] = []
-        # Per-path stderr notices, collected during classification (never
-        # printed there) so classify_dirty_tree() stays silent; main()
-        # prints these, in collection order, after the error check.
         self.notices: List[str] = []
 
 
@@ -454,13 +412,7 @@ def _resolve_claim_context(
     if not sid:
         return None
 
-    # `full_ownership_map`, not `compute_offer(...)["ownership"]` (2026-08-21):
-    # the offer's `peer` bucket is scoped to paths the CLOSING session itself
-    # holds, and this loop asks about paths it got from `git status` instead.
-    # Read off the offer, a peer's in-flight file that this session never
     # touched is absent from `peer` entirely and classifies AMBIGUOUS -- which
-    # is how an unattended sweep gets nudged toward committing it. See that
-    # function's own docstring for why the wider map is in-process only.
     try:
         mine_paths, peer_map = full_ownership_map(sid, repo_root)
     except Exception:
@@ -481,19 +433,11 @@ def _batch_diff_has_content(paths: List[str], repo_root: str) -> FrozenSet[str]:
         return frozenset()
     res = _run_git(["diff", "--name-only", "-z", "--", *paths], cwd=repo_root)
     if res.returncode not in (0, 1):
-        # git diff exits 1 with --name-only only on error paths this repo
-        # doesn't otherwise see; fail safe by treating every path as having
-        # content (matches the old per-path returncode!=0 -> not-EOL fallthrough).
         return frozenset(paths)
     return frozenset(p for p in res.stdout.split("\0") if p)
 
 
 def _batch_submodule_paths(paths: List[str], repo_root: str) -> FrozenSet[str]:
-    """Batched replacement for a per-path `git ls-files --stage -- <path>`
-    submodule probe. Returns the subset of `paths` staged at gitlink mode
-    160000 — one `git ls-files --stage -z --` call for the whole set instead
-    of one per path. Empty input spawns nothing.
-    """
     if not paths:
         return frozenset()
     res = _run_git(["ls-files", "--stage", "-z", "--", *paths], cwd=repo_root)
@@ -501,7 +445,6 @@ def _batch_submodule_paths(paths: List[str], repo_root: str) -> FrozenSet[str]:
     for record in res.stdout.split("\0"):
         if not record:
             continue
-        # Format: "<mode> <sha> <stage>\t<path>"
         meta, _, rec_path = record.partition("\t")
         if meta.startswith("160000") and rec_path:
             submodules.add(rec_path)
@@ -515,12 +458,9 @@ def _classify_main_pass(
     acc: _Accumulators,
     claim_ctx: Optional[Tuple[FrozenSet[str], Dict[str, dict]]] = None,
 ) -> bool:
-    """Runs the main classification loop. Returns needs_pm."""
     needs_pm = False
 
-    # Pre-pass: parse every status line once and batch the two per-path git
     # probes (EOL-PHANTOM diff check, SUBMODULE stage check) into at most two
-    # subprocess spawns total instead of up to two per dirty path.
     parsed: List[Tuple[str, str]] = []
     eol_check_paths: List[str] = []
     sub_check_paths: List[str] = []
@@ -580,18 +520,10 @@ def _classify_main_pass(
             counters.gitignore += 1
             continue
 
-        # 5.5 CLAIM (C6) — a claim decides before any prefix does, EXCEPT
         # SOURCE-TREE (branch 7): a claim proves WHO wrote a path, never
-        # that it is safe for an unattended ceremony to commit unreviewed.
         # SOURCE-TREE exists precisely to force human review of source
-        # changes, and this carve-out is unconditional -- a source-tree
-        # path provably claimed by the closing session still falls through
         # UNTOUCHED to branch 7 below, exactly as pre-C6 (see the module
         # docstring's CLAIM description and its "SOURCE-TREE carve-out"
-        # paragraph for the full rationale). Skipped entirely when
-        # `claim_ctx` is None (session unresolvable, or the ownership read
-        # failed -- see `_resolve_claim_context`): every path then
-        # classifies by branches 6-8 exactly as before C6.
         if claim_ctx is not None and not _classify_source_tree(path):
             mine_paths, peer_map = claim_ctx
             if path in mine_paths:
@@ -611,8 +543,6 @@ def _classify_main_pass(
                 counters.claim_peer += 1
                 needs_pm = True
                 continue
-            # Unattributed (or non-mine while ownership["degraded"] --
-            # peer_map is already empty in that case): falls through
             # unchanged to AUTO-COMMIT / SOURCE-TREE / AMBIGUOUS below --
             # "stays AMBIGUOUS, rc unchanged" per the plan's own bullet.
 
@@ -646,9 +576,6 @@ def _classify_rename_source_pass(
     counters: _Counters,
     acc: _Accumulators,
 ) -> bool:
-    """F8: re-classify rename SOURCE paths against gitignore/commit/source-tree
-    only (no EOL/submodule/leave-alone/orphan-tmp on the source). Returns
-    whether this pass set needs_pm."""
     needs_pm = False
 
     for status_line in status_lines:
@@ -668,9 +595,6 @@ def _classify_rename_source_pass(
 
         commit_root = _classify_commit(src)
         if commit_root is not None:
-            # Vanished (renamed-away) source: fold into commit_paths only —
-            # never commit_add_paths, never a new root, never double-counted
-            # (the destination side already recorded root + count).
             acc.commit_paths.append(src)
             continue
 
@@ -684,13 +608,10 @@ def _classify_rename_source_pass(
     return needs_pm
 
 
-# ---------------------------------------------------------------------------
 # Unit 3 — act blocks (AUTO-GITIGNORE, AUTO-COMMIT), summary, verdict.
-# ---------------------------------------------------------------------------
 
 
 def _act_gitignore(repo_root: str, dry_run: bool, counters: _Counters, acc: _Accumulators) -> Optional[int]:
-    """Returns an exit code on hard failure, else None."""
     if not acc.gitignore_paths:
         return None
 
@@ -705,17 +626,6 @@ def _act_gitignore(repo_root: str, dry_run: bool, counters: _Counters, acc: _Acc
         if pattern not in patterns_committed:
             patterns_committed.append(pattern)
 
-    # Batched replacement for what used to be a per-path
-    # `git ls-files --error-unmatch` + `git rm --cached` pair (up to 2*N
-    # spawns): ONE `git ls-files -- <paths>` call to determine which of the
-    # candidate paths are tracked (plain `git ls-files` with a pathspec
-    # lists exactly the tracked paths among its arguments -- an untracked
-    # pathspec is silently omitted from stdout rather than erroring, unlike
-    # `--error-unmatch`, so set-membership on stdout is the equivalent
-    # per-path tracked test), then ONE `git rm --cached` over the whole
-    # tracked set. Same two-phase shape `_act_commit`'s `commit_add_paths`
-    # leg (below) and `_diff_name_only`/`_ls_files_stage` (L459/L476, same
-    # file) already use for a pathspec-list git call.
     tracked_res = _run_git(["ls-files", "--", *acc.gitignore_paths], cwd=repo_root)
     tracked = set(tracked_res.stdout.splitlines()) if tracked_res.returncode == 0 else set()
     gi_committed_paths = [p for p in acc.gitignore_paths if p in tracked]
@@ -745,10 +655,6 @@ def _act_gitignore(repo_root: str, dry_run: bool, counters: _Counters, acc: _Acc
         print(f"[{_PROG}] ERROR: git add .gitignore failed", file=sys.stderr)
         return 1
 
-    # No explicit pathspec on the commit — the staged index already holds
-    # both the .gitignore write and the `git rm --cached` deletions; passing
-    # the deleted paths as pathspecs on Windows git re-stages the worktree
-    # copies and undoes the rm --cached.
     commit_res = _run_git(["commit", "-m", _GITIGNORE_COMMIT_MSG], cwd=repo_root)
     if commit_res.returncode != 0:
         print(f"[{_PROG}] ERROR: gitignore commit failed", file=sys.stderr)
@@ -758,7 +664,6 @@ def _act_gitignore(repo_root: str, dry_run: bool, counters: _Counters, acc: _Acc
 
 
 def _act_commit(repo_root: str, dry_run: bool, acc: _Accumulators) -> Optional[int]:
-    """Returns an exit code on hard failure, else None."""
     if not acc.commit_paths:
         return None
 
@@ -780,8 +685,6 @@ def _act_commit(repo_root: str, dry_run: bool, acc: _Accumulators) -> Optional[i
 
     staged_res = _run_git(["diff", "--cached", "--quiet"], cwd=repo_root)
     if staged_res.returncode == 0:
-        # Nothing staged — already committed (idempotent second run) or
-        # content-identical; no-op, matching the oracle.
         return None
 
     commit_res = _run_git(["commit", "-m", commit_msg, "--"] + acc.commit_paths, cwd=repo_root)
@@ -793,8 +696,6 @@ def _act_commit(repo_root: str, dry_run: bool, acc: _Accumulators) -> Optional[i
 
 
 def _build_summary_lines(counters: _Counters, acc: _Accumulators) -> List[str]:
-    """The per-group summary line-builder — the one source `_print_summary`
-    and `DirtyTreeClassification.evidence_lines()` both read from."""
     lines: List[str] = []
 
     if counters.eol > 0:
@@ -807,8 +708,6 @@ def _build_summary_lines(counters: _Counters, acc: _Accumulators) -> List[str]:
         lines.append(f"[{_PROG}] orphan-tmp listed (no action): {counters.orphan}")
 
     if counters.gitignore > 0:
-        # Dedup preserving first-seen order (mirrors the oracle's
-        # patterns_committed reuse rather than re-deriving from a joined string).
         seen: List[str] = []
         for pat in acc.gitignore_patterns:
             if pat not in seen:
@@ -838,19 +737,8 @@ def _print_summary(counters: _Counters, acc: _Accumulators) -> None:
         print(line)
 
 
-# ---------------------------------------------------------------------------
-# Unit 4 — typed, mutation-free, silent classification (main()'s classify
-# half, exposed so brief.py's probe reads a return value, never main()'s
-# print/exit-code contract).
-# ---------------------------------------------------------------------------
-
-
 @dataclasses.dataclass(frozen=True)
 class DirtyTreeClassification:
-    """The classify half's result — no stored evidence field (Design
-    constraints § Evidence): `evidence_lines()` derives evidence from
-    `counters`/`acc` via `_build_summary_lines`, the same builder `main()`'s
-    printer uses, so there is exactly one source for those lines."""
 
     needs_pm: bool
     error: Optional[str]
@@ -858,9 +746,6 @@ class DirtyTreeClassification:
     acc: _Accumulators
 
     def evidence_lines(self) -> List[str]:
-        """The `[step2.5] `-prefixed lines `main()` would print for this
-        classification, minus the act half's `DRY-RUN:` preview lines (those
-        describe acts, not findings). On `error`, the error message alone."""
         if self.error is not None:
             return [self.error]
         lines = _build_summary_lines(self.counters, self.acc)
@@ -870,14 +755,6 @@ class DirtyTreeClassification:
 
 
 def classify_dirty_tree() -> DirtyTreeClassification:
-    """Classifies every dirty path in the cwd's git repo. Mutation-free
-    (no git write, no `.gitignore` edit) and silent (no stdout/stderr) —
-    everything `main()`'s classify half does today up to and including
-    `_classify_rename_source_pass`, minus the act blocks and the prints.
-
-    Both of `main()`'s classify-time failure cases (not a repo; `git
-    status` OSError/TimeoutExpired/non-zero) become `error=<the same
-    message text main() prints today>` rather than a raise."""
     repo_root = show_toplevel()
     if not repo_root:
         return DirtyTreeClassification(
@@ -916,13 +793,7 @@ def classify_dirty_tree() -> DirtyTreeClassification:
     return DirtyTreeClassification(needs_pm=needs_pm, error=None, counters=counters, acc=acc)
 
 
-# ---------------------------------------------------------------------------
-# Entry point.
-# ---------------------------------------------------------------------------
-
-
 def main(argv: List[str]) -> int:
-    # --- Unit 1: parse args ---
     dry_run = False
     for arg in argv:
         if arg == "--dry-run":
@@ -931,14 +802,11 @@ def main(argv: List[str]) -> int:
             print(f"ERROR: unknown argument: {arg}", file=sys.stderr)
             return 1
 
-    # --- classify ---
     classification = classify_dirty_tree()
     if classification.error is not None:
         print(classification.error, file=sys.stderr)
         return 1
 
-    # --- Unit 1: locate repo root for the act half (show_toplevel() never
-    # spawns — see its own docstring — so a second call costs nothing) ---
     repo_root = show_toplevel()
     if not repo_root:
         print(f"[{_PROG}] ERROR: not inside a git repo", file=sys.stderr)
@@ -947,13 +815,9 @@ def main(argv: List[str]) -> int:
     counters = classification.counters
     acc = classification.acc
 
-    # Print the classification notices, in collection order, before the act
-    # blocks — matches HEAD: no stderr output occurred between the two
-    # classification passes and the act blocks other than these notices.
     for notice in acc.notices:
         print(notice, file=sys.stderr)
 
-    # --- Unit 3: act blocks ---
     rc = _act_gitignore(repo_root, dry_run, counters, acc)
     if rc is not None:
         return rc
@@ -961,7 +825,6 @@ def main(argv: List[str]) -> int:
     if rc is not None:
         return rc
 
-    # --- Unit 3: summary + verdict ---
     _print_summary(counters, acc)
 
     if classification.needs_pm:

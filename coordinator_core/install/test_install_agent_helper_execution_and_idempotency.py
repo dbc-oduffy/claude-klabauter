@@ -38,8 +38,6 @@ from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
-# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
-# cadence suite is the separate threshold ruling, not this declaration.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -48,10 +46,6 @@ pytestmark = [
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _AGENT_BIN = _REPO_ROOT / "coordinator" / "bin"
 
-# CLIs known (spot-checked live against this repo, 2026-08-14) to accept
-# `--help`/no-args and exit 0 quickly with no network/state mutation --
-# a real-target execution sample, not an exhaustive census of the ~379
-# derived forwarders (see module docstring on scope).
 _SAMPLE_INSTALLED_NAMES = (
     "coordinator-current-branch",
     "check-mcp-versions",
@@ -100,15 +94,7 @@ def test_sample_forwarders_execute_and_resolve_their_real_target(tmp_path, monke
     bin_dst.mkdir()
     _run_install(tmp_path, monkeypatch, bin_dst)
 
-    # A written forwarder's runtime resolution ladder (_resolve_claude_klabauter.py,
-    # exec'd BY the forwarder as a fresh subprocess) is independent of this
     # install pass's CLAUDE_KLABAUTER_ROOT env-var shortcut -- it consults the
-    # settings-home machine-local registry / `.claude-klabauter-live-root` sentinel, per its
-    # own module docstring's Rung 1/Rung 2. On a genuinely fresh machine
-    # neither exists, and every forwarder rc=1s with "cannot resolve
-    # claude-klabauter" -- an unstated prereq this test surfaces by supplying
-    # the sentinel a real install's operator would also have to write (see
-    # the dispatch report's "unstated prereqs" list).
     settings_home = Path(os.environ["HOME"])
     ml_dir = settings_home / ".coordinator-claude-settings" / "machine-local"
     ml_dir.mkdir(parents=True, exist_ok=True)

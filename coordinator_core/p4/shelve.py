@@ -105,11 +105,6 @@ from coordinator_core.session.core import update_meta_fields
 
 @dataclass(frozen=True)
 class ShelveOutcome:
-    """``ok`` — the leg completed (including the zero-spawn "empty path
-    set" case, which is a success with ``paths == []``). ``error`` is
-    populated only on a git- or p4-side failure and is never raised.
-    ``remint`` is True iff the recorded ``base_sha`` was unreachable and
-    this call re-minted the session CL (D4)."""
 
     ok: bool
     paths: List[str] = field(default_factory=list)
@@ -118,11 +113,7 @@ class ShelveOutcome:
     remint: bool = False
     cl: Optional[int] = None
     error: Optional[runner.P4Error] = None
-    #: D4a — count of paths whose read-only bit was restored at the back of
-    #: the sequence (mode-only-drift residue).
     restored: int = 0
-    #: D4b — count of paths adopted out of an exited session's CL via
-    #: ``reopen`` before reconcile ran.
     adopted: int = 0
 
 
@@ -132,26 +123,6 @@ def _base_reachable(repo_root: str, base_sha: str) -> bool:
 
 
 def _merge_base_with_upstream(repo_root: str) -> Optional[str]:
-    """The merge-base of HEAD and the branch's own upstream tracking ref, or
-    ``None`` if there is no upstream to merge-base against (git itself then
-    fails the resolve) — the D4 fallback base when the recorded
-    ``p4_base_sha`` is unreachable.
-
-    Prefers ``@{u}@{1}`` (the upstream ref's reflog entry ONE BEFORE its
-    current position) over a plain ``@{u}``. This leg always runs AFTER
-    `push_outstanding`'s own git leg has already landed the push (module
-    docstring's "additive... after the git leg"), so by the time this
-    fallback fires, ``@{u}`` has already been fast-forwarded to (or past)
-    HEAD by that same push — a plain ``merge-base HEAD @{u}`` then resolves
-    to HEAD itself, collapsing ``<base>..HEAD`` to an empty range and
-    silently reproducing the exact "empty path set" failure mode this
-    fallback exists to avoid (measured: a from-scratch e2e run with a real
-    p4d found ZERO shelved changes on the re-mint leg until this was
-    fixed). ``@{u}@{1}`` reads the upstream ref's value from immediately
-    BEFORE that push, which is exactly the pre-push base D4's Session-Id
-    walk needs. Falls back to a plain ``@{u}`` when no such reflog entry
-    exists (e.g. the branch's first-ever push, or reflogs disabled) —
-    strictly no worse than the prior behaviour in that narrower case."""
     result = run_git(["-C", repo_root, "merge-base", "HEAD", "@{u}@{1}"])
     if not result.timed_out and result.returncode == 0 and result.stdout.strip():
         return result.stdout.strip()
@@ -162,10 +133,6 @@ def _merge_base_with_upstream(repo_root: str) -> Optional[str]:
 
 
 def _path_set(repo_root: str, base_sha: str, sid: str) -> Optional[List[str]]:
-    """One spawn: ``git log <base>..HEAD --grep='Session-Id: <sid>'
-    --name-only --format=``. Returns ``None`` on a git-level failure —
-    never confused with a genuinely empty, successfully-resolved path set
-    (``[]``)."""
     result = run_git(
         [
             "-C",
@@ -183,15 +150,6 @@ def _path_set(repo_root: str, base_sha: str, sid: str) -> Optional[List[str]]:
 
 
 def _fstat_records(stdout: str) -> List[Dict[str, str]]:
-    """Parses ``-ztag fstat``'s ``... field value`` lines into one dict per
-    file — blank-line-separated blocks, mirroring
-    ``p4_checkout_before_edit.py::_parse_ztag``'s single-record shape,
-    widened here to the multi-path case. Order is NOT load-bearing: the
-    caller keys these records by the ``clientFile`` each record itself
-    names (never a positional zip against ``paths`` — see
-    ``_key_fstat_records_by_path``), since p4 may return fewer records
-    than paths given (a path not yet in the depot, a filtered record, an
-    error line with no ``... `` block)."""
     records: List[Dict[str, str]] = []
     current: Dict[str, str] = {}
     for line in stdout.splitlines():
@@ -210,39 +168,12 @@ def _fstat_records(stdout: str) -> List[Dict[str, str]]:
     return records
 
 
-#: `clientFile` is depot-view syntax, always `//<client>/<rest>` -- the
-#: client name in that prefix is whichever client fstat resolved the path
-#: through (this call's own `-c <client>`; `change`/`action` still report
-#: only THIS client's own open state per the module docstring), so the
-#: match strips the generic two-slash prefix rather than requiring THIS
-#: identity's own client name literally.
 _CLIENT_FILE_PREFIX_RE = re.compile(r"^//[^/]+/(.+)$")
 
 
 def _key_fstat_records_by_path(
     records: List[Dict[str, str]], paths: List[str]
 ) -> "tuple[Dict[str, Optional[Dict[str, str]]], List[str]]":
-    """Keys ``records`` by
-    the ``clientFile`` each record itself names, NEVER by position against
-    ``paths``. ``zip()`` silently truncates to the shorter sequence, and
-    worse, mispairs every path after a short row against the wrong path's
-    record -- exactly the shape that fed D4b's orphan-adoption and D4a's
-    restore off a misclassified path while still returning ``ok=True``.
-
-    ``clientFile`` is depot-view syntax (``//<client>/<path>``, always
-    forward-slash, never an OS filesystem path), so the match is a plain
-    string strip-and-compare against ``paths`` (themselves
-    forward-slash-relative, from ``git log --name-only``) -- no
-    ``os.path`` normalization needed or wanted here.
-
-    Returns ``(per_path, unreconciled)``. ``per_path`` maps every
-    requested path to its record or ``None`` -- a path with no matching
-    record is a legitimate state (not yet in the depot), never a record
-    belonging to a different path. ``unreconciled`` lists any record whose
-    ``clientFile`` could not be matched to a requested path at all (p4
-    reported something this call never asked about); non-empty there means
-    the record/path correspondence cannot be trusted by name either, and
-    the caller must fail closed rather than proceed."""
     path_set = set(paths)
     per_path: Dict[str, Optional[Dict[str, str]]] = {p: None for p in paths}
     unreconciled: List[str] = []
@@ -261,9 +192,6 @@ def _key_fstat_records_by_path(
 
 
 def _restore_read_only(repo_root: str, paths: List[str]) -> int:
-    """D4a — the back of the sequence. Never ``p4 clean``/``reconcile
-    -w``/``sync -f``: a plain local ``os.chmod`` clearing the write bits,
-    the invariant restored rather than the worktree repaired."""
     restored = 0
     for rel_path in paths:
         abs_path = os.path.join(repo_root, rel_path)
@@ -279,15 +207,6 @@ def _restore_read_only(repo_root: str, paths: List[str]) -> int:
 
 
 def _p4ignore_absent(repo_root: str) -> bool:
-    """Reads back
-    ``p4.<repo_key>.p4ignore_absent``, the row `register.py` writes when a
-    registration authored ``.p4ignore`` from scratch (empty of any pattern
-    but the ``.git/`` line this floor needs). That row's own message says
-    reconcile should drop ``-a`` rather than rely on ``.p4ignore`` for full
-    ignore semantics in that case -- previously recorded but never read;
-    this is what reads it. Fails safe (``False``, keep ``-a``) when the
-    repo_key cannot be resolved, matching the unconditional-``-a`` behaviour
-    this call had before F3."""
     from coordinator_core.machine_resolver import registry_get
 
     try:
@@ -312,10 +231,6 @@ def shelve_outstanding(
     cl: int,
     base_sha: str,
 ) -> ShelveOutcome:
-    """The p4 leg proper. ``cl``/``base_sha`` are the caller's
-    already-resolved session CL / recorded ``p4_base_sha`` — this module
-    does not mint or re-read them itself, except for the reachability
-    re-mint below, which is this leg's own concern (D4)."""
     effective_cl = cl
     effective_base = base_sha
     remint = False
@@ -346,17 +261,6 @@ def shelve_outstanding(
     if not paths:
         return ShelveOutcome(ok=True, paths=[], cl=effective_cl, remint=remint)
 
-    # `p4 reconcile` has no end-of-options token: its usage line is
-    # `[-c change#] [-a -e -d -M -f -I -l -m -n -t] [-w [-K]] [--parallel=N]
-    # [file ...]` and a real p4d 2026.1 refuses `--` with `Invalid option: --.`,
-    # so the whole leg failed before reaching revert/shelve. Passing `--` was
-    # a git habit; p4 does not share it.
-    #
-    # `--` was doing real work, though — without it a path beginning with `-`
-    # is parsed as an option. p4 offers no separator to replace it, so refuse
-    # such a path rather than hand p4 an argv that means something else. Git
-    # permits these names; a silent mis-invocation here would reconcile the
-    # wrong fileset into a shelved CL.
     option_shaped = [p for p in paths if p.startswith("-")]
     if option_shaped:
         return ShelveOutcome(
@@ -373,10 +277,6 @@ def shelve_outstanding(
             ),
         )
 
-    # D4b step 0 — hoisted ahead of reconcile: one fstat read drives both
-    # D4b's orphan adoption (right here, `change`) and D4a's read-only-bit
-    # restore (at the back, `haveRev`) — one read, two consumers, zero
-    # extra spawns beyond this single call.
     fstat_result = runner.run(
         identity.port,
         identity.user,
@@ -432,20 +332,6 @@ def shelve_outstanding(
         identity.port,
         identity.user,
         identity.client,
-        # `paths` are repo-relative (git log --name-only). `subprocess.Popen`'s
-        # own `cwd=` kwarg is silently ignored by this box's `p4.exe` when
-        # resolving relative file arguments (measured: `p4 add a.txt` with
-        # `cwd=<client-root>` still resolves `a.txt` against the PARENT
-        # process's cwd and fails "not under client's root") — `p4`'s own
-        # `-d <dir>` global option is the only thing that works, so it is
-        # passed as a leading arg here rather than as `runner.run`'s `cwd=`.
-        # Left unset, reconcile matches nothing and exits 0: a silent empty
-        # shelve rather than an error. The other two spawns below are
-        # CL-scoped and take no paths, so they are unaffected.
-        #
-        # `-a` is dropped when `.p4ignore` was authored by registration from
-        # scratch (F3, `_p4ignore_absent` above) -- the row's own message
-        # promised this and it was previously unkept.
         [
             "-d",
             repo_root,
@@ -467,8 +353,6 @@ def shelve_outstanding(
     if not result.ok:
         return ShelveOutcome(ok=False, paths=paths, cl=effective_cl, remint=remint, error=result.error)
 
-    # D4a — the back of the sequence: restore the read-only bit on every
-    # path that was synced-and-unopened at step 0 (mode-only-drift residue).
     restored = _restore_read_only(repo_root, restore_candidates) if restore_candidates else 0
 
     result = runner.run(

@@ -57,43 +57,22 @@ from typing import Any, Dict, List, Optional
 from coordinator_core.cartography._guard import path_guard
 
 # Kinds that map onto the envelope's "classes" bucket (ENVELOPE MAPPING table,
-# plan § C1). Compared against the string value of `Symbol.kind` (a StrEnum) —
-# never against an exact-set assertion of the enum's full member list, whose
-# vocabulary grows additively upstream.
 _CLASS_KIND_VALUES = frozenset({"class", "struct", "interface", "enum", "namespace"})
 
-# Kinds that map onto the envelope's "functions" bucket.
 _FUNCTION_KIND_VALUES = frozenset({"function", "method"})
 
-# Kinds that map onto the envelope's "constants" bucket (chunk C5 fix — the
 # ENVELOPE MAPPING table's "not modeled by symbol_extract" claim for
 # `constants` was factually wrong; `SymbolKind.CONSTANT` is a live, frequent
-# member of their frozen enum).
 _CONSTANT_KIND_VALUES = frozenset({"constant"})
 
-# Kinds that map onto the envelope's "type_aliases" bucket — no Python-
-# producer analogue key exists, so this is a new key, added only when a file
-# yields at least one (chunk C5).
 _TYPE_ALIAS_KIND_VALUES = frozenset({"type_alias"})
 
-# Static mirror of ``symbol_extract.languages``' frozen public extension map
-# (CPP/PYTHON/TS/MD/JSON/YAML/TOML). This is a copy of an explicitly frozen upstream public
-# surface, kept here so routing decisions (which extensions are even
-# claimed by the foreign-extraction path) work BEFORE the dependency is
-# provisioned — `claimed_extensions()` below prefers the live map whenever
-# `symbol_extract` is importable, so an additive extension on their side is
-# picked up with no lag on our side; this frozenset is only the fallback.
 _STATIC_CLAIMED_EXTENSIONS = frozenset(
     {
-        # CPP
         ".cpp", ".cc", ".cxx", ".c", ".h", ".hh", ".hpp", ".inl",
-        # PYTHON
         ".py",
-        # TS
         ".ts", ".mts", ".cts", ".tsx", ".jsx", ".js", ".mjs", ".cjs",
-        # MD
         ".md", ".mdx",
-        # JSON/YAML/TOML
         ".json", ".yaml", ".yml", ".toml",
     }
 )
@@ -127,18 +106,6 @@ def claimed_extensions() -> "frozenset[str]":
 
 
 def _import_symbol_extract():
-    """Lazily import and return the ``symbol_extract`` module.
-
-    Isolated in its own function — never imported at module scope (AC7) —
-    so tests can monkeypatch this call site, and so any caller that never
-    reaches this seam never pays ``symbol_extract``'s cold-import cost.
-
-    Raises:
-        ImportError: propagated verbatim if ``symbol_extract`` is not
-        installed. Callers (``build_foreign_symbols``) catch this and
-        convert it into a structured, non-raising ``{"unavailable": ...}``
-        result — this function itself never swallows the error.
-    """
     import symbol_extract
 
     return symbol_extract
@@ -148,10 +115,6 @@ def _is_class_kind(kind_value: str) -> bool:
     if kind_value in _CLASS_KIND_VALUES:
         return True
     # "abstract class" / similar compound forms (ENVELOPE MAPPING table:
-    # "class/struct/interface/enum/namespace (and any abstract-class form)").
-    # Speculative forward-compat, not presently reachable: the installed
-    # dependency's frozen `SymbolKind` vocabulary contains no member whose
-    # string value includes "abstract" (review dc659900, Nit).
     return "class" in kind_value and "abstract" in kind_value
 
 
@@ -207,9 +170,6 @@ def _function_entry(symbol: Any) -> Dict[str, Any]:
 
 
 def _constant_entry(symbol: Any) -> Dict[str, Any]:
-    # `symbol_extract` carries no literal value — `value: None` is honest
-    # and distinguishable from the Python `ast` producer's real literals
-    # (chunk C5).
     return {
         "name": symbol.name,
         "value": None,
@@ -226,27 +186,6 @@ def _type_alias_entry(symbol: Any) -> Dict[str, Any]:
 
 
 def _envelope_for_file(rel_path: str, symbols: List[Any]):
-    """Assemble one file's envelope entry from its ``Symbol`` list.
-
-    Class nesting is keyed strictly off ``container_name`` matching a class
-    symbol's own ``name`` within THIS file's symbol set — never off
-    ``qualified_name`` or any other reconstruction (AC6). A method whose
-    ``container_name`` is ``None``, or does not match any class produced in
-    this same file, is emitted flat under ``functions``.
-
-    Returns ``(entry, unmapped_kinds)`` — ``unmapped_kinds`` is a
-    ``{kind_value: count}`` dict of any ``Symbol.kind`` in this file's
-    extraction that matched none of the class/function/constant/type_alias
-    buckets (chunk C5). Never silently dropped: each such symbol is ALSO
-    appended to ``entry["other_symbols"]`` (key present only when non-empty)
-    as ``{"name", "kind", "signature", "lineno"}`` — ``signature`` from
-    ``decl_text``, omitted when falsy — and counted by ``_count_symbols``.
-    The caller additionally rolls ``unmapped_kinds`` into the top-level
-    ``completeness["unmapped_kinds"]`` marker, whose meaning is a census of
-    what landed in ``other_symbols`` across the whole result, not (as of the
-    P1 fix below) a report of data loss — nothing in this envelope is
-    dropped on kind mismatch anymore.
-    """
     classes: List[Dict[str, Any]] = []
     class_by_name: Dict[str, Dict[str, Any]] = {}
     functions: List[Dict[str, Any]] = []
@@ -298,10 +237,6 @@ def _envelope_for_file(rel_path: str, symbols: List[Any]):
     if type_aliases:
         result["type_aliases"] = type_aliases
     if other_symbols:
-        # Any Symbol.kind matching none of the
-        # class/function/constant/type_alias buckets (e.g. markdown
-        # heading/code_fence, both mapped to SymbolKind.UNKNOWN upstream)
-        # lands here instead of vanishing from _count_symbols entirely.
         result["other_symbols"] = other_symbols
     return result, unmapped_kinds
 
@@ -374,14 +309,6 @@ def build_foreign_symbols(target_root: "str | Path", files: List["str | Path"]) 
             symbol_path = (root / symbol_path).resolve()
         rel = rel_by_resolved.get(str(symbol_path))
         if rel is None:
-            # A symbol outside the requested set — not expected given
-            # changed_files scoping. NOTE: this entry is built and
-            # path-attributed here, but `ordered_files` below iterates only
-            # `rel_by_resolved.values()`, so it is NOT emitted in the
-            # returned "files" list — it is not currently visible to any
-            # caller (review dc659900, Nit). Low-likelihood given
-            # changed_files scoping; tighten if this path is meant to be
-            # reachable.
             rel = symbol_path.relative_to(root).as_posix() if symbol_path.is_relative_to(root) else str(symbol_path)
             symbols_by_file.setdefault(rel, [])
         symbols_by_file[rel].append(symbol)
@@ -402,14 +329,6 @@ def build_foreign_symbols(target_root: "str | Path", files: List["str | Path"]) 
                 "message": diag.message,
                 "file": diag.file,
                 "line": diag.line,
-                # `getattr(..., None)` is deliberate and NOT part of the two
-                # transitional fallbacks removed above: the pin declares a
-                # FLOOR, but an installed environment can still lag it (stale
-                # venv, editable install pointing elsewhere). `getattr`
-                # degrades that mismatch to `None` -> no attribution -> the
-                # `unattributed_diagnostic` arm, whereas direct attribute
-                # access would raise `AttributeError` mid-extraction. Do not
-                # "finish the cleanup" by converting these to direct access.
                 "language": getattr(diag, "language", None),
                 "code": getattr(diag, "code", None),
             }
@@ -451,16 +370,6 @@ def build_foreign_symbols(target_root: "str | Path", files: List["str | Path"]) 
         "container_name_resolved": False,
     }
     if unmapped_kinds_total:
-        # A `Symbol.kind` present in the extraction that matched none of the
-        # class/function/constant/type_alias buckets self-discloses here
-        # rather than vanishing (chunk C5) — their vocabulary grows
-        # additively, so this is a count of what fell through, never an
-        # exact-set assertion of what is allowed. Since the P1 fix (review
-        # dc659900), these symbols are NOT dropped from the envelope: each
-        # one also lands in its file entry's `other_symbols` list and is
-        # counted by `_count_symbols`. This marker's meaning is therefore a
-        # per-kind CENSUS of what landed in `other_symbols`, not a report of
-        # data loss.
         completeness["unmapped_kinds"] = unmapped_kinds_total
 
     return {
@@ -472,23 +381,6 @@ def build_foreign_symbols(target_root: "str | Path", files: List["str | Path"]) 
 
 
 def _diagnostic_names_language(diagnostic: Dict[str, Any], language: Any) -> bool:
-    """Decide whether ``diagnostic`` names ``language`` — field-only, exact comparison.
-
-    Floor: ``ExtractionDiagnostic.language`` is guaranteed present by the
-    pinned ``example-retrieval-repo-symbol-extract`` wheel
-    (``60b109cc85b7f1fedc552c178214601040793111``, ``pyproject.toml``) —
-    the transitional prose-substring fallback this helper previously carried
-    is deleted now that its documented death condition (the pin move) has
-    occurred (memo reply 7e6559f1; debt record
-    ``state/debt-backlog/2026-08-11-foreign-symbols-substring-language-match-aw.yaml``).
-
-    This is now a pure EXACT comparison of ``diagnostic["language"]`` against
-    ``language`` — the prose ``message`` is never consulted. A diagnostic
-    whose ``language`` is ``None`` (attribution genuinely unavailable, or a
-    lagging/stale install) returns ``False`` for every candidate language —
-    intended, loud degradation: such a diagnostic is caught by arm 7's
-    ``unattributed_diagnostic`` finding rather than silently misattributed.
-    """
     return diagnostic.get("language") == language
 
 
@@ -701,10 +593,6 @@ def classify_foreign_symbol_coverage(result: Dict[str, Any], census: Dict[str, i
                 }
             )
         else:
-            # symbol_count > 0 and not language_flagged — the ordinary
-            # successful-extraction case. Emitted explicitly rather than by
-            # silence (review dc659900, P1): a caller must never have to
-            # infer "checked and healthy" from an extension's absence.
             findings.append(
                 {
                     "state": "covered",
@@ -731,11 +619,6 @@ def classify_foreign_symbol_coverage(result: Dict[str, Any], census: Dict[str, i
                 }
             )
 
-    # An error-level, file-less diagnostic that names no language present in
-    # the census must not silently vanish — it would otherwise leave the
-    # affected extension's own per-extension arm (above) to fall through to
-    # `corpus_fact`/`covered` with no signal at all that a diagnostic fired
-    # (review dc659900, P2).
     census_languages = {
         _resolve_language(extension)
         for extension in census
@@ -758,24 +641,6 @@ def classify_foreign_symbol_coverage(result: Dict[str, Any], census: Dict[str, i
 
 
 def _count_symbols(entry: Dict[str, Any]) -> int:
-    """Count every symbol surfaced in one envelope entry.
-
-    Must stay exhaustive over the envelope's symbol-bearing buckets, because
-    ``classify_foreign_symbol_coverage`` reads this as "did this extension
-    yield anything." Omitting a bucket makes a file whose symbols live only in
-    that bucket count as zero, which the discriminator then reports as a
-    corpus fact ("0 symbols extracted") or, with a grammar diagnostic present,
-    as a spurious missing_grammar. Counting only functions and classes did
-    exactly that to `constants` and `type_aliases` the moment chunk C5 began
-    surfacing them — 2,268 constants in one real consumer tree.
-
-    A new symbol-bearing bucket added to the envelope MUST be added here too.
-    `other_symbols` (review dc659900, P1) is one such bucket: any extracted
-    kind matching none of the four named buckets — markdown heading/
-    code_fence mapped to SymbolKind.UNKNOWN being the live case at the
-    pinned ref — lands there and is counted here rather than being invisible
-    to this discriminator.
-    """
     count = len(entry.get("functions", []))
     count += len(entry.get("constants", []))
     count += len(entry.get("type_aliases", []))

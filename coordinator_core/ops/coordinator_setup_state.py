@@ -70,9 +70,7 @@ Negative-spec (faithfully reproduced bash-oracle quirks, NOT bugs to fix here):
 
 from __future__ import annotations
 
-# Generator-provenance declaration: cmd_record()/_seed_file_if_absent()
 # write only to <CLAUDE_HOME>/.claude/coordinator-setup-state.yaml -- the
-# operator's home directory, outside claude-klabauter's own tracked tree entirely.
 GENERATES = []
 
 import contextlib
@@ -85,7 +83,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 try:
-    import tomllib  # Python 3.11+
+    import tomllib
 except ImportError:  # pragma: no cover - only on <3.11
     tomllib = None  # type: ignore[assignment]
 
@@ -228,7 +226,6 @@ def _machine_local_dir(env: Optional[dict] = None) -> str:
 
 
 def _key_recorded(key: str, state_file: str) -> bool:
-    """A value is "recorded" when the key exists with a non-empty, non-comment value."""
     if not re.match(r"^[a-z_]+$", key):
         return False
     if not os.path.isfile(state_file):
@@ -244,21 +241,13 @@ def _key_recorded(key: str, state_file: str) -> bool:
 
 
 def _atomic_write(target: str, content: str) -> None:
-    """mktemp-in-same-dir + rename, mirroring the bash oracle's `mktemp`/`mv` pair.
-
-    Raises OSError if the parent directory does not exist (bash-oracle-faithful
-    "mktemp failed" behavior — see module negative-spec).
-    """
     parent = os.path.dirname(target)
     fd, tmp_path = tempfile.mkstemp(prefix=os.path.basename(target) + ".", dir=parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(content)
         os.replace(tmp_path, target)
-        # DR-276: declared AFTER the write lands, never before — the contract
         # is a report of what was ACTUALLY written, not of an intended
-        # surface. This is the one real write site both `_seed_file_if_absent`
-        # and `cmd_record` funnel through.
         declare_write(target)
     except BaseException:
         try:
@@ -340,13 +329,6 @@ def cmd_status(env: Optional[dict] = None) -> int:
 
 
 def _propagation_mode(registry_path: str) -> Optional[str]:
-    """Parse one registry TOML for [plugin.mirrors.coordinator-claude]
-    propagation_mode, mirroring the bash oracle's awk windowed block-match
-    (does not cross-match a different plugin's table). Returns the declared
-    mode string, or None when the file/table/key is absent, unreadable, or the
-    value is empty — the tri-state lets the caller fall through to the tracked
-    ``registry.toml`` per-key (``machine_resolver.registry_get`` precedence)
-    instead of collapsing key-absent to "not source_is_live"."""
     if tomllib is not None:
         try:
             with open(registry_path, "rb") as fh:
@@ -359,8 +341,6 @@ def _propagation_mode(registry_path: str) -> Optional[str]:
         mode = entry.get("propagation_mode")
         return str(mode) if mode else None
 
-    # Fallback: replicate the bash awk state-machine directly (in-block scan,
-    # reset on any new `[...]` table header) if tomllib is unavailable.
     try:
         with open(registry_path, encoding="utf-8") as fh:
             lines = fh.readlines()
@@ -385,10 +365,6 @@ def _propagation_mode(registry_path: str) -> Optional[str]:
 def cmd_auto_record_if_source_is_live(env: Optional[dict] = None) -> int:
     env = env if env is not None else os.environ
     ml_dir = _machine_local_dir(env)
-    # Per-key precedence: registry.local.toml's declared mode wins; the tracked
-    # registry.toml fills the gap when the local file is absent or silent on
-    # the key (previously `.local`-only — a mode declared only in the tracked
-    # file was invisible).
     mode: Optional[str] = None
     for fname in ("registry.local.toml", "registry.toml"):
         registry = os.path.join(ml_dir, fname)
@@ -399,9 +375,6 @@ def cmd_auto_record_if_source_is_live(env: Optional[dict] = None) -> int:
             break
     if mode != "source_is_live":
         return 0
-    # Fire the same record path used by /coordinator:install. Suppress
-    # stdout/stderr — this is a silent self-heal (mirrors the bash oracle's
-    # `"$0" record setup_concluded >/dev/null 2>&1 || true`).
     try:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             cmd_record("setup_concluded", env)
@@ -424,9 +397,7 @@ def main(argv: List[str]) -> int:
     except ValueError as exc:
         # A doubled CLAUDE_HOME reaches here from _claude_home_base. It is
         # reported on every subcommand INCLUDING auto-record-if-source-is-live,
-        # whose "always exits 0, emits nothing" contract covers the no-op case,
         # not a CLAUDE_HOME the resolver cannot honour: swallowing it is how the
-        # receipt silently splits in the first place.
         sys.stderr.write(f"coordinator-setup-state: {exc}\n")
         return 2
 

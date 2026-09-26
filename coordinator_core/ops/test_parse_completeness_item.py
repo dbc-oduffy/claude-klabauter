@@ -1,10 +1,3 @@
-"""
-Tests for coordinator_core.ops.parse_completeness_item.
-
-Mirrors coordinator/tests/completeness-checklist.bats (DoE-claude) case-for-case,
-plus additional coverage for the stdin-truncation oracle quirk (module docstring
-"Oracle quirk" note) and the CLI main() exit-code/output contract.
-"""
 
 from __future__ import annotations
 
@@ -92,9 +85,6 @@ def test_bare_class_colon_malformed():
         parse_completeness_item("live:")
 
 
-# --- main() CLI contract: argv path ----------------------------------------
-
-
 def test_main_argv_live_no_probe(capsys):
     rc = main(["live: x"])
     out = capsys.readouterr().out
@@ -107,9 +97,6 @@ def test_main_argv_malformed_exit_1(capsys):
     captured = capsys.readouterr()
     assert rc == 1
     assert "parse-completeness-item: malformed item:" in captured.err
-
-
-# --- main() CLI contract: stdin path ----------------------------------------
 
 
 def test_main_stdin_input(monkeypatch, capsys):
@@ -137,10 +124,6 @@ def test_main_stdin_blank_lines_skipped(monkeypatch, capsys):
 
 
 def test_main_stdin_unterminated_final_line_dropped(monkeypatch, capsys):
-    """Oracle quirk (module docstring): a stdin payload with no trailing "\\n"
-    is dropped entirely by the `read` loop -- yields an empty item, which then
-    surfaces as the ordinary "empty input" malformed error. Regression test
-    for the read-loop-truncation edge the bash oracle silently exhibits."""
     monkeypatch.setattr("sys.stdin", io.StringIO("live: no trailing newline test"))
     rc = main([])
     captured = capsys.readouterr()

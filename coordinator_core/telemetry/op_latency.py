@@ -137,31 +137,13 @@ from coordinator_core import atomic_append
 
 _DISABLE_ENV = "COORDINATOR_OP_LATENCY_DISABLE"
 
-#: Execution routes a logical op can take. THE one place this set is stated
-#: (AC6c, docs/plans/2026-08-19-the-fired-path-reaches-the-engine.md § C12).
-#:
 #: The invariant AC6c needs is MUTUAL EXCLUSION PER LOGICAL OP, not writer
-#: ownership: a given op takes exactly one of these routes, never two. Writer
-#: ownership alone does not hold the line -- a call that goes over `http` while
-#: a shim also calls `ipc.dispatch_from_hook` emits a second
-#: `record_op_started`/`record_op_latency` pair however careful each writer is,
-#: and that double-count corrupts the traffic census the warm-engine win figures
-#: are derived from. Cross-process is the gap: `dispatch_message` is already the
-#: sole chokepoint WITHIN a process, so nothing below this line is about
-#: double-counting inside one interpreter.
-#:
 #: Ownership rule, once exclusion holds: the process that EXECUTES the op owns
-#: the record. In-process route -> the caller's own hook process; http route ->
-#: the warm server.
 IN_PROCESS = "in_process"
 WARM_SERVER = "warm_server"
 HTTP_SERVER = "http_server"
 EXECUTION_ROUTES = frozenset({IN_PROCESS, WARM_SERVER, HTTP_SERVER})
 
-#: A serving process declares its own route here (PUBLIC: `warm.server.
-#: _declare_execution_route` writes it; this module only ever reads it). Deliberately an env var and
-#: not an import: this module sits on the dispatch hot path and must not import
-#: `warm.server` (or anything that imports the engine) to answer the question.
 ROUTE_ENV = "COORDINATOR_EXECUTION_ROUTE"
 
 
@@ -178,52 +160,21 @@ def execution_route() -> str:
     return declared if declared in EXECUTION_ROUTES else IN_PROCESS
 
 
-#: Invocation ORIGIN — what kind of caller produced this row. Orthogonal to
 #: `route` above, which records the TRANSPORT (which process served the op) and
-#: says nothing about the nature of the caller. Both ship: a warm-server row and
-#: a benchmark row are different facts, and neither answers the other's question.
-#:
-#: Why this exists (the contamination the census could not see): `ping` recorded
-#: 10,832 completions in seven days, none of them production traffic — five
-#: benchmark modules (`benchmarks/floor.py`, `harness.py`, `interleave.py`,
-#: `concurrency_probe.py`, `op_fixtures.py`) time it as the engine's bare-invoke
-#: floor. Before this field, an in-process test dispatch and a real one were
-#: indistinguishable on disk, so EVERY completion count used to convict an op
-#: was contaminated by an unknown amount. Measured 2026-08-25 against the live
-#: sink: `route` and `source_path` both describe transport, and exactly 9 rows in
-#: a 29,596-row generation carried a fixture-shaped `t_start` — so no read-time
-#: heuristic could recover origin either. It has to be written down at the sink.
 PRODUCTION = "production"
 TEST = "test"
 BENCHMARK = "benchmark"
 INVOCATION_ORIGINS = frozenset({PRODUCTION, TEST, BENCHMARK})
 
-# Readers are told "treat absent origin as
-# unknown, never as production" but had nothing to spell that with, and
 # `entry.get("origin", PRODUCTION)` is the tempting wrong reach given this
-# module's own default direction. This is what a READER substitutes for a
-# missing "origin" key on a pre-existing row -- the writer (invocation_origin
-# above) never returns it and never will. Deliberately NOT added to
 # INVOCATION_ORIGINS: that frozenset gates what a caller may DECLARE, and
-# nobody may declare themselves unknown.
 UNKNOWN = "unknown"
 
-#: Declared origins a CENSUS must not convict an op on. Deliberately built from
-#: the declared values only -- `UNKNOWN` is absent, so a pre-field row (no
-#: `origin` key at all) still counts. See `breach_summary`, the reader this
-#: exists for, for why absent-stays-counted is the right direction and why a
-#: name-based denylist would undo the whole point of the field.
 _NON_PRODUCTION_ORIGINS = frozenset({TEST, BENCHMARK})
 
-#: A harness declares its own origin here; benchmark runners set it to
 #: `BENCHMARK`. Same env-var-not-import discipline as ROUTE_ENV: this module is
-#: on the dispatch hot path and must not import a harness to ask what it is.
 ORIGIN_ENV = "COORDINATOR_INVOCATION_ORIGIN"
 
-#: pytest stamps this per test. Reading it is how a test dispatch self-identifies
-#: without every test file having to remember to declare anything — the failure
-#: mode of an opt-in-only tag is that the tests which forget are exactly the ones
-#: contaminating the census.
 _PYTEST_ENV = "PYTEST_CURRENT_TEST"
 
 
@@ -270,13 +221,6 @@ def invocation_origin() -> str:
 
 
 def double_routed_corr_ids(entries) -> set:
-    """`corr_id`s that appear under more than one execution route.
-
-    A non-empty result is the AC6c violation made visible: the same logical op
-    was recorded by two processes, so the census counts it twice. Returns a set
-    rather than raising -- this is a census reader, not a guard, and the rows it
-    reads are already on disk by the time anyone asks.
-    """
     seen: dict = {}
     doubled = set()
     for entry in entries:
@@ -302,35 +246,10 @@ def _log():
 
 
 def _sink_path(git_common_dir_path: Path) -> Path:
-    """Resolve the op-latency sink path under the given git common dir."""
     return Path(git_common_dir_path) / "coordinator-sessions" / "logs" / "op-latency.jsonl"
 
 
 def tail_entries(path, *, tail_bytes: int, max_rows: int):
-    """Parse the LAST ``tail_bytes`` of one JSONL generation, newest rows kept.
-
-    Returns ``(entries, head_truncated)``. Promoted here (2026-08-21) from
-    ``ops.op_budget_breaches._tail_entries``, which still calls through under
-    its old name: it is a SINK READER, and two ops holding two copies of how
-    to read this sink is how the two drift into disagreeing about the same
-    rows. ``op_census_report`` read the whole generation head-first and paid
-    250-312ms of `json.loads` for it against DR-344's 200ms per-process bar,
-    while its sibling had already bounded the same read — the duplication is
-    what let one op carry a fix the other did not.
-
-    Why a byte bound and not ``engine_report.iter_sink_entries``'s row bound:
-    that reader walks generations OLDEST-first and caps total lines read, a
-    shape its own docstring flags as unable to protect recency, and a row cap
-    set above the live row count bounds nothing at all — the parse cost tracks
-    sink GROWTH. A byte bound is flat against growth, and recency is what both
-    consumers need.
-
-    No semantics live here. Which rows count, and as what, belongs entirely to
-    the caller's aggregator, so there is no second opinion about a row to drift
-    from the first. The first line after the seek is almost always a partial
-    row and is dropped. Never raises: a missing or unreadable generation yields
-    ``([], False)``.
-    """
     window: "collections.deque" = collections.deque(maxlen=max_rows)
     try:
         size = path.stat().st_size
@@ -392,30 +311,12 @@ def sink_generations(repo_root: Path) -> list:
     return [p for p in paths if p.is_file()]
 
 
-#: Modules internal to the dispatch chokepoint itself -- never the fact
-#: `caller_module()` exists to name. A frame whose `__name__` equals one of
-#: these, or is a dotted child of one, is skipped rather than reported: it is
-#: this instrument's own plumbing (this module, `coordinator_core.ipc`'s
-#: `dispatch_message` wrapper) or the asyncio machinery that schedules a
-#: coroutine between the caller's own call and the frame that actually runs
-#: it (`loop.run_until_complete(dispatch_message(msg))` interposes several
-#: `asyncio.*` frames between the caller and this point -- see module-level
-#: "Caller provenance" note below for the traced shape). Every OTHER
-#: `coordinator_core.*` submodule is left un-skipped on purpose: an op
-#: handler that itself calls back into `dispatch_message` (rare, but not
-#: forbidden) should attribute to ITS OWN module, not disappear into this
-#: skip list merely for sharing the `coordinator_core` package prefix.
 _CALLER_SKIP_PREFIXES = (
     "coordinator_core.telemetry.op_latency",
     "coordinator_core.ipc",
     "asyncio",
 )
 
-#: Bound on how many frames `caller_module()` walks before giving up. A
-#: finite, small cap -- never an unbounded walk up the stack -- keeps this
-#: within the module's own sub-1ms "Cheap" budget even in the deepest
-#: observed call shape (dispatch_message -> several asyncio scheduling
-#: frames -> the caller).
 _CALLER_WALK_MAX_FRAMES = 20
 
 
@@ -500,24 +401,10 @@ def caller_module() -> Optional[str]:
 
 
 def new_correlation_id() -> str:
-    """Build a correlation id unique across concurrent processes on this box.
-
-    ``f"{pid}-{perf_counter_ns()}"``: pid alone is insufficient (a single
-    process dispatches many ops, and pids get recycled across processes), so
-    it is paired with a per-process monotonic nanosecond counter. Deliberately
-    NOT ``uuid`` — see module docstring's "Cheap" requirement; this sits on
-    the same hot path record_op_latency does.
-    """
     return f"{os.getpid()}-{time.perf_counter_ns()}"
 
 
-#: Cached after first discovery -- `time.process_time()`'s tick is a fixed
-#: OS/HW property for the lifetime of a process, so re-measuring it on every
-#: `record_op_process_time` call would tax the dispatch hot path for a
-#: constant. `None` until discovered; stays `None` forever if discovery
-#: could not complete (never guessed, never hard-coded).
 _PROCESS_CLOCK_RESOLUTION_MS: Optional[float] = None
-
 
 
 def process_clock_resolution_ms() -> Optional[float]:
@@ -566,13 +453,6 @@ def process_clock_resolution_ms() -> Optional[float]:
 
 
 def note_observed_process_ms(process_ms: Optional[float]) -> None:
-    """Fold one measured `process_ms` into this process's observed tick.
-
-    Called by `record_op_process_time` with the figure it just computed.
-    Keeps the smallest non-zero value seen: on a quantized clock that is the
-    tick itself. Never raises -- this sits on the dispatch hot path and a
-    telemetry refinement must never be able to break an op.
-    """
     global _PROCESS_CLOCK_RESOLUTION_MS
     try:
         if process_ms is None or process_ms <= 0:
@@ -585,14 +465,6 @@ def note_observed_process_ms(process_ms: Optional[float]) -> None:
 
 
 def _write_entry(entry: dict, repo_root: Optional[Path]) -> None:
-    """Shared append body for both row kinds: resolve sink, encode, atomic-append.
-
-    Never raises — see module docstring's "Never breaks dispatch" negative-spec.
-    Both ``record_op_latency`` and ``record_op_started`` funnel through this
-    single function so there is exactly one append discipline (one pre-encoded
-    line, one ``atomic_append.append_line`` call) rather than two independently
-    maintained copies of it.
-    """
     try:
         if os.environ.get(_DISABLE_ENV) == "1":
             return
@@ -603,17 +475,6 @@ def _write_entry(entry: dict, repo_root: Optional[Path]) -> None:
         key_source = "envelope"
         if repo_root is None:
             # A None repo_root means the JSON-RPC envelope carried no
-            # `_origin_worktree` (see ipc.resolve_request_repo) — it does NOT mean
-            # the invocation happened outside a repo. Dropping the row here made
-            # every such op invisible to this instrument: `hooks.postuse_advisory_dispatch`
-            # fires on every PostToolUse Write|Edit|MultiEdit|NotebookEdit|Agent and
-            # recorded ZERO rows in 85 hours, so it was absent from every ranking
-            # built on this ledger while plausibly being the single largest consumer.
-            # A blind instrument cannot support the kill disposition's budget rule
-            # (docs/wiki/cost-budgets-and-the-kill-disposition.md: measurement answers
-            # "does this fit"), so fall back to the process cwd rather than dropping.
-            # Zero-spawn: git_common_dir resolves by pure-Python upward walk and is
-            # lru_cached — see its docstring's "hot path may treat this as zero-spawn".
             try:
                 repo_root = Path.cwd()
             except OSError:
@@ -652,19 +513,6 @@ def _write_entry(entry: dict, repo_root: Optional[Path]) -> None:
 
 
 def _append_line(sink: Path, encoded: bytes) -> None:
-    """Atomically append ``encoded`` (already newline-terminated) to ``sink``.
-
-    Thin re-export of ``coordinator_core.atomic_append.append_line`` — the
-    shared atomic-append primitive, promoted out of this module so
-    ``coordinator_core.install.resolution_journal`` and
-    ``coordinator_core.benchmarks.ambient_sampler`` use the same mechanism
-    rather than each carrying its own copy (see that module's docstring for
-    the Windows negative-spec this fixes). Kept as a module-level name here,
-    not inlined at the ``record_op_latency`` call site, so
-    coordinator_core.telemetry.tests.test_op_latency's concurrent-append
-    test can keep importing it directly to exercise the write-concurrency
-    guarantee without dragging in git/repo resolution.
-    """
     atomic_append.append_line(sink, encoded)
 
 
@@ -775,20 +623,10 @@ def record_op_latency(
     _write_entry(entry, repo_root)
 
 
-#: Long enough for an exception class name plus the leading clause that
-#: distinguishes one failure from another, short enough that a path, a sha
-#: range, or a caller's parameter values cannot ride along into a file every
-#: peer on the box can read.
 _ERROR_KIND_MAX_CHARS = 120
 
 
 def _bounded_error_kind(error_kind: Optional[str]) -> Optional[str]:
-    """*error_kind* collapsed to one line and truncated, or None.
-
-    One line because the sink is JSONL and a multi-line message is the kind of
-    value that turns a readable column into a wall; truncated because a message
-    is caller-supplied text, not a vocabulary.
-    """
     if not error_kind:
         return None
     flat = " ".join(str(error_kind).split())
@@ -1029,12 +867,7 @@ def record_fact_span(
     _write_entry(entry, repo_root)
 
 
-# The longest a client-side subprocess.run(timeout=) waits before killing an
-# invocation, for any op that has not overridden its budget — see
-# coordinator/bin/lib/cc_invoke.py::_op_timeout_ceiling:
 #   max(FLOOR=10, engine_budget(op)=DISPATCH_TIMEOUT_SECS default 30 + MARGIN=10) == 40
-# A "started" row younger than this is unfinished, not vanished. Kept as a
-# named module constant rather than inlined so a future cc_invoke change to
 # the FLOOR/MARGIN/DISPATCH_TIMEOUT_SECS numbers has one place to update.
 DEFAULT_STALENESS_CUTOFF_SECS: float = 40.0
 
@@ -1046,41 +879,6 @@ def pairing_summary(
     staleness_cutoff_secs: float = DEFAULT_STALENESS_CUTOFF_SECS,
     now: Optional[float] = None,
 ) -> dict:
-    """Read the real sink and return the started/complete pairing summary (AC3).
-
-    Either ``sink_path`` (used directly, exactly that one file — never
-    generation-spanning, callers and tests depend on single-file reads) or
-    ``repo_root`` (resolved via ``sink_generations``, reading the live sink
-    PLUS every rotated generation on disk — see that function and C1/C3, plan
-    ``2026-08-19-warm-engine-gets-an-honest-instrument``) must be given;
-    ``sink_path`` wins if both are given. Returns a plain dict rather than a
-    registered op — see C2 task body: op registration drags in a
-    classification/authz surface out of proportion to a reader.
-
-    Return shape:
-        {"total": int, "paired": int, "unpaired_started": int,
-         "unpaired_rate": float, "in_flight": int,
-         "malformed_lines_skipped": int}
-
-    ``total`` counts distinct "started" rows (rows with no ``corr_id`` cannot
-    participate in pairing and are excluded — only rows written by the C1
-    instrument carry one). ``paired`` is the count of those whose ``corr_id``
-    also appears on a "complete" row. Of the remainder, a "started" row is
-    ``in_flight`` (excluded from ``unpaired_started``) if
-    ``now - t_start < staleness_cutoff_secs``, else it counts toward
-    ``unpaired_started`` — a genuinely vanished invocation (module docstring's
-    "Vanished vs timed-out" note). ``unpaired_rate = unpaired_started / total``
-    (0.0 if ``total`` is 0).
-
-    Per C1's documented backward-reading rule, a row with no ``"kind"`` field
-    at all (written before this field existed) is treated as ``"complete"``,
-    never ``"started"`` — it therefore cannot introduce a phantom unpaired
-    row, only (harmlessly) a phantom pairing partner nothing needs.
-
-    This reads a JSONL sink several live processes are actively appending to.
-    A torn or unparseable final line (or any line) is skipped and counted in
-    ``malformed_lines_skipped`` rather than raising — never raises.
-    """
     if sink_path is not None:
         sink_paths = [sink_path]
     else:
@@ -1166,78 +964,20 @@ def pairing_summary(
     }
 
 
-# --- budget-breach view ----------------------------------------------------
-#
-# Why here and not beside a reader: the two failure kinds a breach view must
-# never merge are stated in THIS module's own negative-spec ("Vanished vs
-# timed-out"), and the pairing rule that separates them is
-# `pairing_summary`'s directly above. A per-op breach aggregation built in a
-# reader module would restate both, and a restated distinction drifts.
-#
-# `breach_summary` is PURE over already-parsed rows -- no file IO, no sink
-# resolution, no new module-level import, so it costs the hot-path writers in
-# this module nothing (module docstring's "Cheap" requirement).
-# `coordinator_core.ops.op_budget_breaches` does the bounded read and hands
-# the rows in; `coordinator_core.ops.op_census_report.census` passes the rows
-# it has ALREADY read, paying one extra pass rather than a second read.
-
-#: The bar a breach is measured against. Deliberately NOT a per-op caller
-#: timeout: a caller timeout is a dial somebody chose, so an op that was
-#: given a bigger dial reads as compliant against it, and the ops this view
-#: exists to find are exactly the ones that got more grace. DR-344's
-#: brightline is PM-ratified and identical for every op. Stated once, in
 #: `coordinator_core.op_census.timing.PROCESS_TIME_BAR_MS`; mirrored here as
-#: a default only so this module keeps its no-new-imports property -- callers
-#: pass `bar_ms` explicitly, and
-#: `coordinator_core.telemetry.tests.test_breach_summary` asserts the two
-#: numbers still agree.
 DEFAULT_BREACH_BAR_MS: float = 500.0
 
-#: Minimum attempts a half-window must hold before a per-op trend is reported
-#: at all. Below it the answer is `"insufficient_data"`, never `"flat"` -- a
-#: two-sample rate cannot separate a trend from noise, and reading "flat" off
-#: it is the same false-pass `op_census.timing`'s three-state rule forbids.
 TREND_MIN_ATTEMPTS_PER_HALF: int = 20
 
-#: Relative change in breach rate between the two half-windows below which a
-#: trend reads `"flat"`.
 TREND_FLAT_BAND: float = 0.10
 
-#: Breach kinds, kept separate everywhere. Never reported as one number
-#: without the three alongside it:
-#:   over_bar       -- a `complete` row that finished but took at least
-#:                     `bar_ms`. It ran to completion and held the box for
-#:                     the whole of it.
-#:   caller_timeout -- a `complete` row with `outcome: "timeout"`. The CALLER
-#:                     gave up; the handler kept running and MAY STILL HAVE
 #:                     COMMITTED (module docstring, the "timeout" outcome).
-#:   vanished       -- a `started` row with no `complete` row sharing its
-#:                     `corr_id`, older than `staleness_cutoff_secs`. Killed
-#:                     mid-flight; whether it committed is UNKNOWN from this
-#:                     sink alone, and it carries no `elapsed_ms`, so it
-#:                     contributes nothing to `stolen_ms` rather than a
-#:                     fabricated cost.
 BREACH_KINDS = ("over_bar", "caller_timeout", "vanished")
 
-#: Epoch seconds before which a `t_start` cannot be a real invocation time
-#: (2020-01-01). Rows below it exist in the live sink — 5 of 46,416 on
-#: 2026-08-21, sitting at epoch ~1 — so some writer reaches `_write_entry`
-#: with a monotonic or zeroed clock reading instead of a wall-clock epoch.
-#: `breach_summary` counts them (`window.implausible_t_start_rows`) rather
-#: than dropping them silently: they are a defect in a writer, and the
-#: instrument that notices must say so. It does not correct them — the
-#: correction belongs at the writer, and guessing here would hide it.
 PLAUSIBLE_T_START_FLOOR: float = 1_577_836_800.0
 
 
 def _percentile_idx(sorted_vals: list, fraction: float):
-    """Index-based percentile over a pre-sorted list, no interpolation.
-
-    Same rule as `coordinator_core.telemetry.engine_report._percentile`,
-    which this module cannot import -- `engine_report` imports THIS module,
-    and the cycle would fire at hot-path import time. `fraction` is a
-    fraction (0.95), never a percentage.
-    """
     if not sorted_vals:
         return None
     if len(sorted_vals) == 1:
@@ -1408,10 +1148,6 @@ def breach_summary(
     window_last = None
 
     def _op_bucket(op_name: str) -> dict:
-        # Membership test before construction, never `setdefault(op, {...})`:
-        # the dict literal is built on every call there, hit or miss, which
-        # over a 47k-row sink is ~47k throwaway 11-key dicts on a path held
-        # to DR-344's 200ms per-process bar.
         bucket = per_op.get(op_name)
         if bucket is None:
             bucket = {
@@ -1422,11 +1158,6 @@ def breach_summary(
                 "vanished": 0,
                 "stolen_ms": 0.0,
                 "elapsed": [],
-                # (t_start, breached) per complete row, collected here so the
-                # trend split does not need a second full pass over `rows` --
-                # the median that defines the split is not known until every
-                # row has been seen, but re-reading the raw dicts to find it
-                # costs more than carrying two numbers per row.
                 "timeline": [],
                 "first_seen": None,
                 "last_seen": None,
@@ -1475,10 +1206,6 @@ def breach_summary(
             complete_t_starts.append(float(t_start))
         elapsed = entry.get("elapsed_ms")
 
-        # A "timeout" outcome is its OWN kind and is checked first: it is a
-        # breach whatever its elapsed_ms says, and classifying it by elapsed
-        # would fold it into over_bar and lose the may-still-have-committed
-        # distinction this view exists to preserve.
         breached = True
         timed_out = entry.get("outcome") == "timeout"
         if timed_out:
@@ -1489,14 +1216,7 @@ def breach_summary(
             breached = False
 
         # A caller_timeout's `elapsed_ms` is the DEADLINE, not a measurement of
-        # the handler -- which by this view's own `caller_timeout` note kept
-        # running past it and may still have committed. The occupancy is real;
-        # the number is not a reading of it. Summing it into `stolen_ms`, or
-        # letting it into the percentile pool, publishes a precise-looking
-        # arbitrary value that every consumer then reads as measured -- and a
-        # kind marker beside a plausible number loses to the number (see
         # BREACH_KINDS: "contributes nothing to `stolen_ms` rather than a
-        # fabricated cost").
         if isinstance(elapsed, (int, float)) and not timed_out:
             bucket["elapsed"].append(float(elapsed))
 
@@ -1515,13 +1235,6 @@ def breach_summary(
             continue
         _op_bucket(op_name)["vanished"] += 1
 
-    # Split at the MEDIAN t_start, never at (first + last) / 2. Measured on
-    # the live sink 2026-08-21: five of 46,416 rows carry a near-epoch
-    # `t_start` (1970), which drags an arithmetic midpoint to 1998 and leaves
-    # 5 rows early against 46,411 late — every op then reports
-    # "insufficient_data" and the whole trend axis goes dark on a handful of
-    # bad rows. A median is outlier-proof and splits the population evenly by
-    # construction, which is also what a rate comparison wants.
     midpoint = None
     if complete_t_starts:
         ordered = sorted(complete_t_starts)

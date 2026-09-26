@@ -87,32 +87,15 @@ from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import MutateAbort, locked_rmw
 from coordinator_core.state_root import coordinator_state_root
 
-# Enum mirrors — kept as plain tuples (not imported from the schema) since the
-# schema lives in a sibling repo and may not be resolvable at import time (see
-# module docstring "Schema location"). These are the ratified, frozen field
-# values from the plan's § C3 field list; any drift from the schema's actual
-# enum is caught by post-write schema validation on a best-effort basis.
 _TARGET_KINDS = ("handoff", "plan", "roadmap", "deliverable")
 _PRIORITIES = ("urgent", "high", "medium", "low", "none")
 
 # TRUST BOUNDARY — target_id becomes a FILENAME (ledger_dir / f"{target_id}.yaml"
 # below), and priority.set is directly callable over JSON-RPC. Hardcoded rather
 # than schema-loaded, mirroring priority_drain._TARGET_ID_PATTERN's discipline
-# EXACTLY (same rationale, same non-skippable posture): schema validation
-# (_apply_priority_set, below) is best-effort and only runs AFTER this module
-# has already committed to a target_file path, so it must never be this path's
-# sole defense against a traversal-shaped target_id — a pattern that only
-# fires post-hoc, inside a callback that a corrupted/missing vendored schema
 # file could skip, is not a trust boundary. This guard runs UNCONDITIONALLY,
-# before any path interpolation, regardless of whether schema resolution
-# succeeds, and must never become skippable. Mirrors the vendored
-# priority-ledger.schema.json's target_id `pattern` exactly (see that
-# schema's own description for the traversal shapes it rejects: '..', '/',
-# '\\', leading '.', trailing '.').
 _TARGET_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9_-]$|^[A-Za-z0-9]$")
 
-# Vendored schema this op validates writes against. See module docstring
-# "Schema location" — pin-tracked in test_schema_validate.py's
 # _QUEUE_SCHEMA_PINS, re-vendored only via bin/claude-klabauter-revendor-schema.py.
 _VENDORED_SCHEMA_PATH = (
     Path(__file__).resolve().parent.parent / "frontmatter" / "schemas" / "priority-ledger.schema.json"
@@ -149,29 +132,6 @@ def _render_entry(
     source: str = "op",
     source_repo: Optional[str] = None,
 ) -> str:
-    """Serialized via ``yaml.safe_dump`` — fixed key order preserved via
-    ``sort_keys=False``.
-
-    The previous hand-rolled ``"\\n".join(...)`` form
-    did not escape embedded newlines in ``note``/``source_repo``. Since C7
-    made both fields externally-reachable (example-cockpit-repo's priority-intent
-    records, routed through priority_drain.py — "outside our review
-    pipeline" per that module's own docstring), an embedded newline in either
-    field let an attacker inject a second ``source:``/``source_repo:`` line;
-    PyYAML's duplicate-key-last-wins resolution then let the forged line win
-    on parse, silently erasing the ``source: external-intent`` attribution
-    this module's bypass-detectability guarantee depends on. The
-    "small, fully-controlled field set" rationale for hand-rolling (mirroring
-    queue_append/goal_kr_status) stopped holding the moment those two fields
-    became externally-supplied; ``safe_dump`` closes the class of bug, not
-    just this instance.
-
-    ``source``/``source_repo`` (C7, priority.drain): the only caller passing
-    non-default values here is ``coordinator_core.ops.priority_drain``, which
-    threads them through ``set_priority()`` below so the ledger keeps exactly
-    ONE writer (this module) even for externally-originated entries — see
-    that op's module docstring for why a second write path is not an option.
-    """
     entry: dict = {
         "target_id": target_id,
         "target_kind": target_kind,
@@ -196,16 +156,6 @@ def _apply_priority_set(
     source: str = "op",
     source_repo: Optional[str] = None,
 ) -> str:
-    """Pure mutate step for locked_rmw: builds the full replacement ledger
-    entry text (whole-document overwrite — the ledger schema is
-    ``additionalProperties: false`` and this op is the SOLE writer, so there
-    is no pre-existing sibling data to preserve across a rewrite) and gates
-    it through schema validation before returning it.
-
-    Raises MutateAbort (locked_rmw releases the lock, writes nothing) when the
-    resolved schema rejects the proposed entry. Never raises when the schema
-    itself could not be resolved — see _resolve_schema_path.
-    """
     new_text = _render_entry(
         target_id=target_id,
         target_kind=target_kind,
@@ -347,9 +297,7 @@ def set_priority(
     }
 
 
-# ---------------------------------------------------------------------------
 # JSON-RPC handler
-# ---------------------------------------------------------------------------
 
 
 @register_op("priority.set")

@@ -1,16 +1,3 @@
-"""Behavioral tests for
-coordinator_core.write_guards.nudge_session_display_name_as_identifier --
-the session-display-name-as-identifier advisory guard.
-
-Spec backlink: dispatch brief "session citation stops depending on a name"
-  (Deliverable-Id: dlv-session-citation-stops-depending-on-a-name-1c3053)
-
-Covers: a name-shaped token firing in a targeted record body, a uuid never
-firing, exclusion of `state/subagent-share/`/`archive/**`/`docs/research/`,
-the fenced-code/inline-code exclusion vs. the quoted-prose non-exclusion,
-non-Write-tool passthrough, oversized-content passthrough, and registry
-enrollment (module cannot be silently unwired).
-"""
 
 from __future__ import annotations
 
@@ -90,14 +77,6 @@ class TestFiresOnTargetedRecordBody:
 
 
 class TestNarrativeMentionIsSilent:
-    """Pins the module docstring's own negative-spec claim ("A session
-    named in narrative... is silent; pinned by
-    `TestNarrativeMentionIsSilent`"). Fixture is a REAL excerpt, not
-    synthesized -- lifted verbatim from
-    `state/bug-backlog/2026-08-19-a-fix-is-not-live-until-it-is-published.yaml`,
-    one of the 441 records the coordinator's corpus sweep found firing
-    under the pre-narrowing (bare-mention) predicate.
-    """
 
     def test_real_narrative_excerpt_is_silent(self):
         content = (
@@ -247,15 +226,6 @@ class TestPassthrough:
 
 
 class TestScopeIsCaseInsensitive:
-    """The scope check must fold case on both sides.
-
-    On Windows and APFS `State/Bug-Backlog/x.yaml` names the SAME file as
-    `state/bug-backlog/x.yaml`. An unfolded comparison let a caller walk
-    around the entire guard with nothing but a shift key, and the
-    casefold-bypass lint did not catch it -- that lint keys on a narrower
-    set of comparison shapes than `marker in normalized`, so this class is
-    the only thing standing between the guard and that bypass.
-    """
 
     _BODY = "body: ESTABLISHED AND FIXED BY claude-klabauter-49 at 11f1a761e6"
 

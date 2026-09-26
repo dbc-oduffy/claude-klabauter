@@ -30,13 +30,6 @@ import subprocess
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Import guards -- MUST precede any test so both modules' registration side
-# effects fire (gate_validate_invocable's @register_op, then this module's
-# register_dimension("docstrings", ...) call). Mirrors test_gate_dimension_
-# types.py's own import-order discipline -- see gate_validate_invocable.py's
-# bottom-of-module import block comment for why order matters here.
-# ---------------------------------------------------------------------------
 import coordinator_core.ops.gate_validate_invocable  # noqa: F401
 import coordinator_core.ops.gate_dimension_docstrings as doc_dim  # noqa: E402
 
@@ -53,8 +46,6 @@ from coordinator_core.ops.tests._dod_gate_test_helpers import (
 
 @pytest.fixture(autouse=True)
 def _restore_dimension_registry():
-    """Isolate registry mutations across tests, mirroring
-    test_gate_dimension_types.py's own fixture."""
     original = dict(_DIMENSION_REGISTRY)
     yield
     _DIMENSION_REGISTRY.clear()
@@ -212,8 +203,6 @@ def test_timeout_is_unavailable_not_fail(tmp_path) -> None:
 
 
 def test_run_dimension_wraps_docstrings_check(monkeypatch, tmp_path) -> None:
-    """Sanity check the seam-level wrapper (`_run_dimension`) round-trips
-    this dimension's real check the same as any other registered dimension."""
     monkeypatch.setattr(
         doc_dim,
         "resolve_tool",
@@ -225,9 +214,6 @@ def test_run_dimension_wraps_docstrings_check(monkeypatch, tmp_path) -> None:
 
 
 def test_live_smoke_never_raises(tmp_path) -> None:
-    """The real check, against whatever ruff/interrogate state this machine
-    actually has, must never raise -- mirrors test_gate_dimension_types.py's
-    own live-smoke test."""
     result = doc_dim._check_docstrings([], None, None)
     assert result.verdict in (
         Verdict.PASS,

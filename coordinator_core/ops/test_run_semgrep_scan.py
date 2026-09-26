@@ -1,26 +1,3 @@
-"""
-coordinator_core.ops.test_run_semgrep_scan
-
-Characterization tests for the "ci.run_semgrep_scan" op
-(coordinator_core.ops.run_semgrep_scan) — the diff-scoped semgrep wrapper replacing
-the DoE security-audit-worker fence.
-
-Coverage:
-  (a) registered under exactly "ci.run_semgrep_scan" on import
-  (b) missing repo_root / missing diff_base each raise a descriptive ValueError
-  (c) empty diff scope (no changed files) -> clean skip, tier_used="empty_scope",
-      semgrep never invoked (mocked subprocess.run asserts zero calls)
-  (d) semgrep absent from PATH -> tier_used="unavailable", empty findings (mocked
-      shutil.which; no real semgrep install required to pass this suite)
-  (e) happy path: mocked semgrep --json output is mapped to findings +
-      severity_counts, tier_used="semgrep"
-  (f) unresolvable diff_base (git diff exits non-zero) -> ValueError naming the ref
-  (g) semgrep genuine error (exit code outside {0,1}) -> ValueError, not swallowed
-  (h) idempotency (AC7): two invocations with identical params + unchanged tree
-      state produce byte-identical results
-
-Spec backlink: pln-coordinator-ops-buildout-from--903224 § Wave 2
-"""
 
 from __future__ import annotations
 
@@ -30,16 +7,11 @@ from unittest.mock import patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Import guard — MUST precede any test so @register_op fires first.
-# ---------------------------------------------------------------------------
 import coordinator_core.ops.run_semgrep_scan  # noqa: F401 — fires @register_op
 
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.run_semgrep_scan import _run_semgrep_scan
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -89,7 +61,6 @@ def test_empty_diff_scope_skips_semgrep(tmp_path):
         result = _run_semgrep_scan({"diff_base": "main"}, repo_root=tmp_path)
 
     assert result == {"findings": [], "tier_used": "empty_scope", "severity_counts": {}}
-    # Only the git-diff call happened — semgrep was never invoked.
     assert mock_run.call_count == 1
     assert mock_run.call_args[0][0][0] == "git"
 
@@ -105,7 +76,6 @@ def test_semgrep_unavailable_falls_back(tmp_path):
         result = _run_semgrep_scan({"diff_base": "main"}, repo_root=tmp_path)
 
     assert result == {"findings": [], "tier_used": "unavailable", "severity_counts": {}}
-    # git diff ran; semgrep was never invoked (only one subprocess.run call).
     assert mock_run.call_count == 1
 
 
@@ -149,7 +119,6 @@ def test_happy_path_maps_findings_and_severity_counts(tmp_path):
     assert result["findings"][0]["check_id"] == "python.lang.security.eval"
     assert result["findings"][0]["start_line"] == 1
 
-    # config was forwarded verbatim as --config=<value>
     semgrep_call_args = mock_run.call_args_list[1][0][0]
     assert "--config=r/python" in semgrep_call_args
     assert "--json" in semgrep_call_args
@@ -199,9 +168,6 @@ def test_semgrep_genuine_error_raises(tmp_path):
 
 
 def test_git_diff_and_semgrep_calls_carry_timeout(tmp_path):
-    """Neither subprocess.run call carried
-    a timeout; a stuck git/semgrep invocation would wedge this op's worker
-    thread forever."""
     changed = tmp_path / "changed.py"
     changed.write_text("x = 1\n")
 
@@ -228,9 +194,6 @@ def test_git_diff_timeout_raises_value_error(tmp_path):
 
 
 def test_diff_base_leading_dash_rejected(tmp_path):
-    """diff_base is passed positionally
-    to `git diff` with no `--` separator; a value starting with '-' would
-    be misparsed as a git option."""
     with pytest.raises(ValueError, match="looks like a git option"):
         _run_semgrep_scan({"diff_base": "-x"}, repo_root=tmp_path)
 

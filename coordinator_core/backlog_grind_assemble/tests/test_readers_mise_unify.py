@@ -1,19 +1,3 @@
-"""
-coordinator_core.backlog_grind_assemble.tests.test_readers_mise_unify —
-C8 (`docs/plans/2026-08-19-batons-unify-into-one-successor.md`): `/mise`
-inherits execution batons by the `baton_role` axis, with the path-shape
-heuristic as a COUNTED fallback where the axis is absent, and unifies its
-inheritable set into ONE directive per run — never one per item.
-
-Exercises `readers_mise._read_baton_unification` (and `collect()`'s own
-wiring of it) directly, the same idiom `test_backlog_grind_assemble.py`
-already uses for `_read_phase_6_review_scale` — a real on-disk
-`state/mise-inventory/<run-id>.md` record, `_resolve_state_root`
-monkeypatched to the fixture root, no other reader stubbed.
-
-Spec backlink: docs/plans/2026-08-19-batons-unify-into-one-successor.md,
-chunk C8.
-"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -174,7 +158,6 @@ class TestRoleAxisFallbackCounted:
         state_root = tmp_path / "state"
         monkeypatch.setattr(readers_mise, "_resolve_state_root", lambda: str(state_root))
 
-        # No `baton_role` at all -- legacy record, absence is unknown.
         _write_handoff(tmp_path, "docs/plans/2026-08-19-legacy.md", baton_role=None)
         _write_handoff(tmp_path, "state/handoffs/2026-08-19-stamped.md", baton_role="work")
 
@@ -191,8 +174,6 @@ class TestRoleAxisFallbackCounted:
 
         assert len(result.directives) == 1
         directive = result.directives[0]
-        # Both are still inheritable: the legacy leg via the counted
-        # fallback, the stamped leg via the axis.
         assert sorted(directive["additional_predecessors"]) == sorted(
             [
                 "docs/plans/2026-08-19-legacy.md",
@@ -218,9 +199,6 @@ class TestRoleAxisFallbackCounted:
         assert len(result.directives) == 1
         directive = result.directives[0]
         assert directive["additional_predecessors"] == ["tasks/perm/todo.md"]
-        # Frontmatter-less legs are excluded from the fallback count's
-        # denominator (the plan's resolved frontmatter-less-leg note) --
-        # the retirement gate is scoped to frontmatter-bearing artifacts.
         assert directive["role_axis_fallback_count"] == 0
 
     def test_zero_fallback_when_every_leg_is_stamped(self, tmp_path, monkeypatch):
@@ -250,9 +228,6 @@ class TestRoleAxisFallbackCounted:
         state_root = tmp_path / "state"
         monkeypatch.setattr(readers_mise, "_resolve_state_root", lambda: str(state_root))
 
-        # `execution` was ruled against explicitly -- must never be read as
-        # a positive match for either enum member; falls to the counted
-        # heuristic fallback instead.
         _write_handoff(tmp_path, "docs/plans/2026-08-19-weird.md", baton_role="execution")
 
         _write_inventory_record(

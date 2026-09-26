@@ -45,35 +45,13 @@ from typing import Any, Dict, Iterable, Optional, Set, Union
 
 from coordinator_core.dag import _read_meta
 
-#: Bounded read for the head-scan's own file open — independent of, and
-#: never a substitute for, `dag._read_meta`'s full `read_bytes()` (which a
-#: declined file still pays in full via `scan_keys`'s fall-through). Sized
-#: generously above a normal handoff's frontmatter block; a block-scalar or
-#: long-frontmatter file that doesn't fit inside this budget simply finds no
-#: closing delimiter and declines (never guesses). Matches the sibling
-#: mechanism's own budget (`_prefilter_scan_disqualifies`'s
 #: `_PREFILTER_READ_BYTES`) so the two stay commensurable.
 _READ_BUDGET_BYTES = 4096
 
-#: Leading characters that make a scalar value non-plain per contract 8:
-#: single/double quote (quoted), `|`/`>` (block), `[`/`{` (flow),
-#: `&`/`*`/`!` (anchor/alias/tag). A `#` anywhere in the value (possible
-#: inline comment) is checked separately since it is not a leading-char
-#: condition.
 _NON_PLAIN_LEADING_CHARS = "'\"|>[{&*!"
 
 
 def _plain_scalar_or_none(raw: str) -> Optional[str]:
-    """Return `raw` unchanged iff it is a plain, single-line scalar per the
-    contract 8 decline list — else None (ambiguous; caller must decline the
-    whole file).
-
-    Deliberately does NOT reject a value `dag._parse_scalar` would coerce to
-    a non-string (int/float/bool/null) or a value starting with `-` — the
-    decline list is closed to the six triggers named in this module's
-    docstring, and widening it is out of scope (contract 8: "Do not widen
-    the decline list to be helpful").
-    """
     if "#" in raw:
         return None
     if raw and raw[0] in _NON_PLAIN_LEADING_CHARS:
@@ -104,8 +82,7 @@ def head_scan(path: Union[str, Path], keys: Iterable[str]) -> Optional[Dict[str,
         return None
 
     if not chunk.startswith(b"---"):
-        return None  # covers a leading BOM too — the BOM byte(s) shift the
-        # decoded first line away from a literal "---" match below.
+        return None
 
     text = chunk.decode("utf-8", errors="replace")
     lines = text.split("\n")
@@ -118,7 +95,7 @@ def head_scan(path: Union[str, Path], keys: Iterable[str]) -> Optional[Dict[str,
             close_idx = i
             break
     if close_idx is None:
-        return None  # closing delimiter not found inside the read budget
+        return None
 
     block_lines = lines[1:close_idx]
     if any("\t" in ln for ln in block_lines):
@@ -131,7 +108,7 @@ def head_scan(path: Union[str, Path], keys: Iterable[str]) -> Optional[Dict[str,
             continue
         indent = len(ln) - len(ln.lstrip(" "))
         if indent != 0:
-            continue  # nested line — not a top-level key, irrelevant here
+            continue
         colon_idx = stripped.find(":")
         if colon_idx == -1:
             continue
@@ -139,7 +116,7 @@ def head_scan(path: Union[str, Path], keys: Iterable[str]) -> Optional[Dict[str,
         if key not in keys:
             continue
         if key in found:
-            return None  # duplicate key — ambiguous, decline the file
+            return None
         raw_value = stripped[colon_idx + 1:].strip()
         plain = _plain_scalar_or_none(raw_value)
         if plain is None:
@@ -150,16 +127,6 @@ def head_scan(path: Union[str, Path], keys: Iterable[str]) -> Optional[Dict[str,
 
 
 def scan_keys(path: Union[str, Path], keys: Iterable[str]) -> Dict[str, Any]:
-    """Return values for `keys` from `path`'s frontmatter, preferring the
-    cheap `head_scan`; falls through to a full parse of THAT ONE FILE
-    (`dag._read_meta`) when `head_scan` declines — never to a missing
-    value, per contract 8.
-
-    The fallen-through result may carry richer types than `head_scan`'s
-    always-string values (`_read_meta` type-coerces via `_parse_scalar`);
-    callers reading a mix of head-scanned and fallen-through files should
-    not assume a uniform value type across the corpus.
-    """
     keys_set: Set[str] = set(keys)
     scanned = head_scan(path, keys_set)
     if scanned is not None:

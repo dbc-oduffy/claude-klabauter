@@ -145,26 +145,13 @@ _LOG.addHandler(logging.NullHandler())
 
 _TERMINAL_STATUSES: frozenset = SIZING_TERMINAL_STATUS
 
-# Regex to extract YYYY-MM from a filename prefix (e.g. 2026-08-13-foo.yaml → "2026-08").
 _DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2})-\d{2}-")
 
-# Distinct, named refusal reason for AC6's forward-pointer gate — never
-# conflated with any dest-collision or terminality-drift reason string.
 _REASON_FORWARD_PLAN_NOT_TERMINAL = "forward-plan-not-terminal"
 
-# Named reason for the worktree-dirty retention gate (AC5). Re-exported
-# under this module's own naming convention — the single definition lives
 # in `coordinator_core.ops.ceremony.git_native` (`REASON_WORKTREE_DIRTY`),
-# shared with `archive_terminal_handoffs.py`'s identical gate (its own
 # `_SCAN_REASON_WORKTREE_DIRTY` is the same alias) rather than duplicated —
-# the two used to read byte-for-byte the same string from two independent
-# module-local constants.
 _REASON_WORKTREE_DIRTY = REASON_WORKTREE_DIRTY
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
 
 
 def _derive_yyyy_mm(fname: str) -> Optional[str]:
@@ -178,24 +165,16 @@ def _derive_yyyy_mm(fname: str) -> Optional[str]:
 
 
 def _extract_title(path: Path) -> Optional[str]:
-    """Return the 'title' field from YAML frontmatter, or None if absent/unreadable."""
     return parse_frontmatter_field(path, "title")
 
 
 def _read_plan_fk(path: Path) -> Optional[str]:
-    """Return the sizing record's `plan:` FK value, or None if absent/null/unreadable.
-
-    Read-only — this function never writes or infers anything about the
-    referenced plan; it only extracts the pointer itself.
-    """
     plan_fk = parse_frontmatter_field(path, "plan")
     if plan_fk in (None, "", "null", "~"):
         return None
     return plan_fk
 
 
-#: Where an archived plan lands. Plans archive as SPECS, month-nested -- hence
-#: the basename probe below rather than a literal path join.
 _ARCHIVE_PLANS_SUBDIRS = (("archive", "specs"), ("archive", "plans"))
 
 
@@ -237,18 +216,6 @@ def _resolve_plan_fk(worktree_root: Path, plan_fk: str) -> Optional[Path]:
 def _forward_plan_refusal_reason(
     worktree_root: Path, plan_fk: str
 ) -> Optional[str]:
-    """Evaluate AC6's forward-pointer refusal gate for a non-null `plan:` FK.
-
-    Returns None when the sizing may proceed (the FK's target plan is itself
-    plan-terminal). Returns a non-None reason string when the sizing must be
-    refused-in-place — covering both "the plan is not terminal" and "the FK
-    cannot be resolved/read at all" (a dangling or unreadable FK is treated
-    as a refusal, never as 'no constraint').
-
-    This function only READS the target plan's status — it never writes to
-    it and never concludes anything about it beyond "terminal or not, right
-    now" for the purpose of this refusal.
-    """
     plan_path = _resolve_plan_fk(worktree_root, plan_fk)
     if plan_path is None:
         return (
@@ -309,11 +276,6 @@ def _dirty_sizing_relpaths(worktree_root: Path, candidate_relpaths: List[str]) -
     return dirty_relpaths_from_porcelain(worktree_root, candidate_relpaths, caller="archive_sizings")
 
 
-# ---------------------------------------------------------------------------
-# Handler
-# ---------------------------------------------------------------------------
-
-
 @register_op("fleet.archive_terminal_sizings")
 async def _archive_terminal_sizings(
     params: dict, repo_root=None, scan_skipped: Optional[List[dict]] = None,
@@ -346,7 +308,7 @@ async def _archive_terminal_sizings(
     """
     validated = validate_params(params)
     if isinstance(validated, dict):
-        return validated  # setup-error envelope already built
+        return validated
     mode, dry_run, candidate_ids = validated
 
     if repo_root is None:
@@ -364,7 +326,6 @@ async def _archive_terminal_sizings(
 
     sizings_dir = worktree_root / "state" / "sizings"
     if not sizings_dir.is_dir():
-        # No sizings directory — return empty result (consumer-project guard).
         if dry_run:
             return build_dry_run_result(mode, [])
         return build_act_result(mode, [], [], [])
@@ -384,25 +345,16 @@ async def _handle_preview(
     common_dir: Path,
     scan_skipped: Optional[List[dict]] = None,
 ) -> dict:
-    """T1 preview: enumerate terminal sizings, apply the cannot-derive-date
-    and forward-pointer-refusal guards, return candidates.
-
-    See `_archive_terminal_sizings`'s own docstring for `scan_skipped`'s
-    contract — it never affects the returned envelope, only what this
-    function appends to the caller-owned out-list, when given one.
-    """
     candidates: List[dict] = []
 
     for path in sorted(sizings_dir.glob("*.yaml")):
         status = parse_frontmatter_status(path)
         if status not in _TERMINAL_STATUSES:
-            continue  # not terminal — never flipped, never surfaced as a candidate
+            continue
 
         rel_path = rel_id(path, worktree_root)
 
-        # cannot-derive-date guard (T1 filter, mirrors archive_plans): a
         # terminal sizing with no YYYY-MM-DD prefix has no archive
-        # destination — never present it as an archivable candidate.
         if _derive_yyyy_mm(path.name) is None:
             if scan_skipped is not None:
                 scan_skipped.append({
@@ -412,8 +364,6 @@ async def _handle_preview(
                 })
             continue
 
-        # AC6 forward-pointer refusal gate (T1 filter): a live plan FK holds
-        # the sizing in place even though its own status is terminal.
         plan_fk = _read_plan_fk(path)
         if plan_fk is not None:
             refusal = _forward_plan_refusal_reason(worktree_root, plan_fk)
@@ -472,10 +422,6 @@ async def _handle_act(
 
     sizings_dir_safe = sizings_dir.resolve()
 
-    # Pass 1 — classification: path-traversal refusal, source-gone idempotent
-    # skip, and act-time terminality re-verify only. Nothing past this point
-    # is resource-specific (AC6, dest-collision, Move construction) — those
-    # are refinement, not classification, and stay in pass 2.
     classified: List[Tuple[str, Path]] = []
     for cid in candidate_ids:
         sizing_path = worktree_root / cid
@@ -489,13 +435,10 @@ async def _handle_act(
             continue
         sizing_path = resolved
 
-        # Already-archived: source gone → idempotent skip (AC12-pinned string;
-        # do NOT widen this reason string — see module docstring).
         if not sizing_path.exists():
             skipped.append({"id": cid, "reason": "already-archived"})
             continue
 
-        # Act-time terminality re-verify.
         status = parse_frontmatter_status(sizing_path)
         if status not in _TERMINAL_STATUSES:
             skipped.append({
@@ -507,25 +450,17 @@ async def _handle_act(
         classified.append((cid, sizing_path))
 
     # Worktree-dirty retention gate (AC5) — CLASSIFICATION TIME: scoped to
-    # the classification survivors above, applied once as a single batched
-    # status call before any resource-specific refinement (AC6, dest-
-    # collision, Move construction) runs. A peer's uncommitted edit on a
-    # candidate is retained here rather than moved out from under them.
     dirty: Set[str] = set()
     if classified:
         dirty = _dirty_sizing_relpaths(worktree_root, [cid for cid, _p in classified])
 
     candidate_moves: Dict[str, Move] = {}
 
-    # Pass 2 — refinement: AC6 forward-pointer, cannot-derive-date,
-    # dest-collision, Move construction, over the classification+dirty
-    # survivors only.
     for cid, sizing_path in classified:
         if cid in dirty:
             skipped.append({"id": cid, "reason": REASON_WORKTREE_DIRTY})
             continue
 
-        # AC6 forward-pointer refusal gate at T3 (applied at both T1 and T3).
         plan_fk = _read_plan_fk(sizing_path)
         if plan_fk is not None:
             refusal = _forward_plan_refusal_reason(worktree_root, plan_fk)
@@ -548,11 +483,8 @@ async def _handle_act(
         if dst.exists():
             if not _is_identical_duplicate(sizing_path, dst):
                 # A DIFFERENT file already occupies the archive destination —
-                # never "already-archived" (that string is AC12-pinned to the
-                # source-gone case), never clobbered.
                 skipped.append({"id": cid, "reason": _REASON_DEST_CONFLICT})
                 continue
-            # Byte-identical duplicate: converge by archiving over it.
             force = True
 
         candidate_moves[cid] = Move(src=sizing_path, dst=dst, candidate_id=cid, force=force)

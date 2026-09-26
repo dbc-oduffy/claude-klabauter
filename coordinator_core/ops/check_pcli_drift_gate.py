@@ -168,7 +168,6 @@ from coordinator_core.ops.ensure_doe_clone import resolve_doe_clone
 _MAX_AGE_DAYS = 14
 _MAX_AGE_DAYS_WITH_EM_LEG = 90
 
-# contract dispatch_feed property -> capture opts_fields key
 _MIRRORED = {
     "label": "label",
     "agent_type": "agentType",
@@ -178,9 +177,7 @@ _MIRRORED = {
     "phase": "phase",
 }
 _CONTRACT_ONLY = {"brief_ref", "gate_kind", "write_files", "est_min"}
-    # emitter-derived, not agent() API mirrors — their own schema descriptions say so
 _CAPTURE_ONLY = {"isolation"}
-    # present in the live API, deliberately never emitted (worktrees banned at the tool seam)
 
 _CAPTURE_FILENAME_RE = re.compile(r"workflow-tool-api-capture\.(\d{4}-\d{2}-\d{2})\.json$")
 
@@ -195,17 +192,10 @@ class GateError(Exception):
     finding, which is a verdict the gate successfully computed."""
 
 
-# ---------------------------------------------------------------------------
-# Leg 1 — contract-vs-capture drift
-# ---------------------------------------------------------------------------
-
-
 def compute_contract_capture_drift(
     contract_properties: "set[str] | list[str]",
     capture_opts_fields: "set[str] | list[str]",
 ) -> list[str]:
-    """Pure predicate. Returns a list of FAIL reason strings (empty == leg
-    clean) per the closed-allowlist rule described in the module docstring."""
     contract_properties = set(contract_properties)
     capture_opts_fields = set(capture_opts_fields)
     reasons: list[str] = []
@@ -236,11 +226,6 @@ def compute_contract_capture_drift(
             )
 
     return reasons
-
-
-# ---------------------------------------------------------------------------
-# Leg 2 — staleness (the entire live-detection leg; see module docstring)
-# ---------------------------------------------------------------------------
 
 
 def _parse_date(value: Any) -> Optional[date]:
@@ -274,14 +259,6 @@ def compute_staleness(
     base_max_age_days: int = _MAX_AGE_DAYS,
     today: Optional[date] = None,
 ) -> dict[str, Any]:
-    """Pure predicate. Returns a dict with `reasons` (list[str], empty ==
-    FRESH), `verdict` (FRESH/STALE), `days_since`, and `threshold_days` (the
-    applied, possibly-shortened threshold — always present so a FAIL message
-    can name it, precedent: `exec_summary.DocStalenessEntry.threshold_days`).
-
-    Raises GateError if `captured_at_str` itself is missing/unparseable —
-    that is "cannot run", not a staleness verdict.
-    """
     today = today or date.today()
     captured_at = _parse_date(captured_at_str)
     if captured_at is None:
@@ -325,11 +302,6 @@ def compute_staleness(
     }
 
 
-# ---------------------------------------------------------------------------
-# Leg 3 — C7 extension: subagent-catering-resolution.json source_hashes
-# ---------------------------------------------------------------------------
-
-
 def _normalize_eol(raw: bytes) -> bytes:
     """Collapse CRLF and lone CR to LF before hashing.
 
@@ -353,12 +325,6 @@ def compute_hash_drift(
     hash_algorithm: Any,
     source_hashes: dict[str, str],
 ) -> list[str]:
-    """Pure(-ish; reads files) predicate. Returns a list of FAIL reason
-    strings (empty == leg clean).
-
-    Raises GateError if `hash_algorithm` is missing or unsupported by
-    `hashlib` — that is "cannot run", not a per-file drift finding.
-    """
     if not isinstance(hash_algorithm, str) or not hash_algorithm:
         raise GateError("subagent-catering-resolution.json missing 'hash_algorithm'")
     try:
@@ -386,11 +352,6 @@ def compute_hash_drift(
     return reasons
 
 
-# ---------------------------------------------------------------------------
-# File resolution + JSON loading
-# ---------------------------------------------------------------------------
-
-
 def _load_json(path: Path) -> Any:
     try:
         with path.open("r", encoding="utf-8") as fh:
@@ -404,14 +365,6 @@ def _load_json(path: Path) -> Any:
 
 
 def _find_captures(schemas_dir: Path) -> "list[Path]":
-    """Every `workflow-tool-api-capture.<date>.json` under *schemas_dir*, ISO-
-    date-sorted (dates sort lexicographically, so the last entry is the most
-    recent capture). Raises GateError if none exist.
-
-    The COUNT is load-bearing, not incidental: it is `select_window_days`'s
-    only input. Returning the full list rather than just the newest keeps that
-    evidence at one read of one directory.
-    """
     candidates = sorted(schemas_dir.glob("workflow-tool-api-capture.*.json"))
     if not candidates:
         raise GateError(f"no workflow-tool-api-capture.*.json found under {schemas_dir}")
@@ -443,10 +396,6 @@ def _extract_capture_opts_fields(capture: Any, capture_path: Path) -> "set[str]"
 
 
 def run_gate(doe_root: "str | Path", *, today: Optional[date] = None) -> list[str]:
-    """Runs all three legs against a resolved DoE-claude clone root (or any
-    directory shaped like one — tests point this at a synthetic tmp_path
-    fixture, never the live clone). Returns a flat list of report lines:
-    empty == PASS. Raises GateError for any "cannot run" condition."""
     doe_root = Path(doe_root)
     content_root = content_root_for(doe_root)
     if content_root is None:

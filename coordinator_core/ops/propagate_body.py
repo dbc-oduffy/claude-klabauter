@@ -179,40 +179,25 @@ _CREATIONFLAGS = no_console_creationflags()
 
 _LOG = logging.getLogger(__name__)
 
-# AC7 — the canonical, greppable section heading. Created once, appended to
-# on every subsequent delivery (mirrors handoff_correct_body's own single-
-# canonical-heading accumulation shape).
 _PROPAGATED_SECTION_HEADING = "## Propagated"
 
 # Reuses coordinator/skills/plan/SKILL.md's EXISTING amendment-note token
-# family — no new schema, no new marker vocabulary. Only these two kinds are
-# accepted; anything else is refused rather than silently coerced.
 _ALLOWED_KINDS = ("Amended", "Superseded")
 
-# Own net-growth bound (AC7) — sized for a REAL propagation note with
-# file:line citations, not handoff_correct_body's 512-byte correction cap.
-# The reported real-world note (2026-08-01 propagation-note-ruling memo) was
-# ~6KB; 8192 bytes gives ~33% headroom over that observed case while staying
-# far below "no cap" — a delivery is still a bounded note, not an unbounded
-# progress journal.
 _NET_GROWTH_CAP = 8192
 
 _HEADING_LINE_RE = re.compile(r"^#{1,6} ", re.MULTILINE)
 _DELIM_LINE_RE = re.compile(r"^---[ \t]*$", re.MULTILINE)
 
 
-# ---------------------------------------------------------------------------
-# B2 (AC8) — per-verb target spec. Same op, two guard-safe target roots (see
 # module docstring "B2 EXTENSION" above for the full rationale). The two
-# verbs differ only in target root and in whether a status gate applies.
-# ---------------------------------------------------------------------------
 class _TargetSpec(NamedTuple):
-    path_param: str                       # e.g. "handoff_path" / "plan_path"
-    allowed_root_parts: Tuple[str, ...]    # relative to the worktree root
-    root_label: str                       # for error text
-    escaped_label: str                    # what's excluded, for error text
-    not_found_label: str                  # "handoff" / "plan"
-    status_gate: bool                     # require status: claimed/consumed
+    path_param: str
+    allowed_root_parts: Tuple[str, ...]
+    root_label: str
+    escaped_label: str
+    not_found_label: str
+    status_gate: bool
 
 
 _TARGET_SPECS = {
@@ -237,25 +222,16 @@ _TARGET_SPECS = {
     ),
 }
 
-# Same invisible-character defense-in-depth handoff_correct_body carries
-# (security-audit Finding 1, 2026-07-31) — a frozen/append-only audit record
-# has no legitimate use for a zero-width or Unicode format character.
 _ZERO_WIDTH_CHARS = frozenset({
-    "​",  # ZERO WIDTH SPACE
+    "​",
     "‌",  # ZERO WIDTH NON-JOINER
-    "‍",  # ZERO WIDTH JOINER
-    "⁠",  # WORD JOINER
+    "‍",
+    "⁠",
     "﻿",  # ZERO WIDTH NO-BREAK SPACE / BOM
 })
 
 
-
 def _contains_invisible_unicode(s: str) -> bool:
-    """True if `s` contains a Unicode format character (category `Cf`) or a
-    named zero-width character. Mirrors handoff_correct_body's own check —
-    duplicated rather than imported (see that module's own comment on why
-    ops in this family keep small, well-tested helpers local rather than
-    coupling to a sibling op module)."""
     return any(
         unicodedata.category(ch) == "Cf" or ch in _ZERO_WIDTH_CHARS
         for ch in s
@@ -265,11 +241,6 @@ def _contains_invisible_unicode(s: str) -> bool:
 def _err(msg: str) -> dict:
     _LOG.warning("handoff.propagate: %s", msg)
     return {"exit_code": 1, "applied": False, "error": msg}
-
-
-# ---------------------------------------------------------------------------
-# Session-id resolution (audit trail only — NEVER a gate; see module docstring)
-# ---------------------------------------------------------------------------
 
 
 def _resolve_session_id_with_source() -> "Tuple[Optional[str], Optional[str]]":
@@ -292,9 +263,6 @@ def _resolve_session_id_with_source() -> "Tuple[Optional[str], Optional[str]]":
 def _build_propagated_block(
     kind: str, slug: str, summary: str, note: str, session_id: Optional[str], session_source: Optional[str],
 ) -> str:
-    """Compose one delivery's appended text (marker line + audit comment +
-    blank line + note prose), never a new heading — the heading itself is
-    added by `_append_propagated_section` only the first time."""
     ts = datetime.now(timezone.utc).isoformat()
     date = ts[:10]
     if session_id:
@@ -306,22 +274,10 @@ def _build_propagated_block(
 
 
 def _heading_present(text: str, heading: str) -> bool:
-    """True only where ``heading`` occurs as a REAL ATX heading line.
-
-    Line-anchored, not a substring test. These markers are strings that
-    reviewers, integrators, and docs quote in running prose while explaining
-    the mechanism they drive, and a bare ``heading in text`` cannot tell the
-    heading from a mention of it. Both failure directions are silent — see
-    ``ops/append_integrator_dispositions._find_heading`` for the live 2026-08-10
-    case that motivated line-anchoring every consumer of these markers.
-    """
     return re.search(rf"(?m)^{re.escape(heading)}[ 	]*$", text) is not None
 
 
 def _append_propagated_section(body: str, block: str) -> str:
-    """Append `block` under the canonical `## Propagated` heading, creating
-    the heading once and appending to it thereafter — never a new heading
-    per delivery (AC7)."""
     if _heading_present(body, _PROPAGATED_SECTION_HEADING):
         if not body.endswith("\n"):
             body += "\n"
@@ -330,10 +286,6 @@ def _append_propagated_section(body: str, block: str) -> str:
         body += "\n"
     return body + "\n" + _PROPAGATED_SECTION_HEADING + "\n\n" + block
 
-
-# ---------------------------------------------------------------------------
-# AC12 — git preconditions + plumbing commit
-# ---------------------------------------------------------------------------
 
 def _run_git(
     args: List[str], cwd: Path, env: "Optional[Dict[str, str]]" = None,
@@ -351,27 +303,15 @@ def _run_git(
 
 
 def _target_is_dirty(worktree: Path, rel_path: str) -> bool:
-    """AC12 precondition 1 — True if `rel_path` (repo-relative) carries any
-    uncommitted change (staged or unstaged) in the holder's tree, checked
-    BEFORE this op writes anything.
-
-    Converted (P014-C3) onto `session_facts._dirty_paths`, single-path-scoped
-    to `rel_path`. Posture unchanged: fails closed — a degraded read (git
-    error/timeout/nonzero) is treated as dirty (refuse) rather than assumed
-    clean."""
     from coordinator_core.session.session_facts import _dirty_paths
 
     result = _dirty_paths(worktree, pathspecs=[rel_path])
     if result["degraded"]:
-        # Fails closed: an unreadable git-status answer is treated as dirty
-        # (refuse) rather than assumed clean.
         return True
     return result["collision"]
 
 
 def _git_operation_in_progress(worktree: Path) -> Optional[str]:
-    """AC12 precondition 2 — returns a human-readable reason string if a
-    merge/rebase/cherry-pick is in progress or HEAD is detached, else None."""
     git_dir_result = _run_git(["rev-parse", "--git-dir"], worktree)
     if git_dir_result.returncode != 0:
         return "cannot resolve git-dir to check for an in-progress git operation"
@@ -392,7 +332,6 @@ def _git_operation_in_progress(worktree: Path) -> Optional[str]:
     return None
 
 
-#: git's canonical empty tree — what `git write-tree` emits for an index of
 #: zero entries, which is what a MISSING `GIT_INDEX_FILE` silently produces.
 EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
@@ -502,9 +441,6 @@ def _commit_delivery(
             return None, f"git write-tree failed: {write_tree_result.stderr.strip()}"
         tree_sha = write_tree_result.stdout.strip()
 
-        # MUST precede commit-tree: this seam writes the tree straight to HEAD
-        # via update-ref with no pathspec anywhere, so an empty tree here
-        # deletes every tracked file. See `_empty_private_index_refusal`.
         breach = _empty_private_index_refusal(tree_sha, root=worktree, caller="_commit_delivery")
         if breach is not None:
             return None, breach
@@ -512,7 +448,7 @@ def _commit_delivery(
         try:
             temp_index.unlink()
         except OSError:
-            pass  # best-effort tempfile cleanup; a leaked temp git index is harmless
+            pass
 
     subject = f"handoff.propagate: deliver into {rel_path}"
     message = (
@@ -548,15 +484,6 @@ def _commit_delivery(
             f"since {old_head} was captured: {update_ref_result.stderr.strip()}"
         )
 
-    # The tree was built in a private index, so the SHARED index still holds
-    # the pre-delivery blob for `rel_path` and would report it as staged-
-    # modified against the new HEAD — a phantom-dirty entry for a file this
-    # op just committed. Re-point that ONE path at the new HEAD.
-    #
-    # Safe precisely because `_target_is_dirty` already refused the whole op
-    # if `rel_path` carried any staged or unstaged change on entry: there is
-    # no holder-staged version of this path to destroy. Scoped to `rel_path`,
-    # so every other entry a peer staged is left exactly as it was.
     sync_result = _run_git(["reset", "-q", "HEAD", "--", rel_path], worktree)
     if sync_result.returncode != 0:
         return new_sha, (
@@ -728,13 +655,6 @@ async def _propagate(
     if not p.is_file():
         return _err(f"{spec.not_found_label} not found on disk: {target_path_raw}")
 
-    # `slug` gets the SAME three content checks as
-    # `summary`/`note`, plus an explicit no-embedded-newline check. `slug` is
-    # interpolated into the delivery commit message as `Delivered-By: {slug}`
-    # (see `_commit_delivery`) — an embedded newline there can inject an
-    # arbitrary extra "trailer"-shaped line that a downstream trailer consumer
-    # (rollup_derive, coverage.py, this very producer contract) could misread
-    # as real commit metadata for that commit.
     if _contains_invisible_unicode(summary) or _contains_invisible_unicode(note) or _contains_invisible_unicode(slug):
         return _err(
             "summary, note, or slug contains invisible or Unicode format characters "
@@ -787,7 +707,6 @@ async def _propagate(
                 f"{status!r}; an open baton needs no peer-delivery op, edit it normally"
             )
 
-    # AC12 precondition 1 — abort if the target is dirty BEFORE any mutation.
     try:
         rel_path = str(p.relative_to(worktree))
     except ValueError:
@@ -800,7 +719,6 @@ async def _propagate(
             "under the delivering session's authorship"
         )
 
-    # AC12 precondition 2 — abort mid-rebase/merge/cherry-pick or detached HEAD.
     in_progress_reason = _git_operation_in_progress(worktree)
     if in_progress_reason is not None:
         return _err(
@@ -812,11 +730,6 @@ async def _propagate(
     session_id, session_source = _resolve_session_id_with_source()
     block = _build_propagated_block(kind, slug, summary, note, session_id, session_source)
 
-    # Captured so a failed `_commit_delivery` can
-    # restore the working-tree file to exactly what `locked_rmw` read, rather
-    # than leaving the mutated-but-uncommitted (and possibly staged) content
-    # behind — AC12's "never leaves a dirty tree" guarantee applies to a
-    # failed delivery too, not only the happy path.
     pre_mutation_text: List[Optional[str]] = [None]
 
     def _mutate(old_text: str) -> str:
@@ -827,13 +740,8 @@ async def _propagate(
         fm_before = split_inner.fm_text
         inner_body = split_inner.body_with_leading_newline
         new_body = _append_propagated_section(inner_body, block)
-        # Rebuild directly (frontmatter/primitives.py's `rebuild()` always
-        # reuses `split.body_with_leading_newline` verbatim and has no
-        # body-override parameter, so it cannot be reused as-is here) —
-        # same preamble + delimiter shape `rebuild()` itself produces.
         fm_normalized = fm_before if fm_before.endswith("\n") else fm_before + "\n"
         rebuilt = (split_inner.preamble or "") + "---\n" + fm_normalized + "---" + new_body
-        # Byte-identical frontmatter assertion, re-derived post-rebuild.
         final_split = split_frontmatter(rebuilt)
         if final_split is None or final_split.fm_text != fm_before:
             raise MutateAbort(
@@ -853,9 +761,7 @@ async def _propagate(
 
     sha, commit_err = await asyncio.to_thread(_commit_delivery, worktree, rel_path, slug, summary)
     if commit_err is not None:
-        # Roll back the working-tree write on any
-        # commit failure so the holder's tree is never left dirty (AC12).
-        assert pre_mutation_text[0] is not None  # _mutate always ran before this point
+        assert pre_mutation_text[0] is not None
         rollback_err = await asyncio.to_thread(
             _rollback_delivery, worktree, rel_path, pre_mutation_text[0],
         )

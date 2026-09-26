@@ -43,27 +43,12 @@ _CHARS_PER_TOKEN: float = 4.0
 
 
 def estimate_tokens(text: str) -> int:
-    """Estimate a token count for `text` via the ~4-chars-per-token heuristic.
-
-    Returns 0 for empty text. Rounds UP (ceil) so any non-empty text reports
-    at least 1 token rather than truncating to 0 on short strings.
-    """
     if not text:
         return 0
     return math.ceil(len(text) / _CHARS_PER_TOKEN)
 
 
 def measure_surface(path: Union[str, Path]) -> Dict[str, Any]:
-    """Measure one file's byte size and estimated token cost.
-
-    Returns ``{"path": str(path), "bytes": int, "tokens": int, "exists": bool}``.
-
-    A missing or unreadable file reports ``exists=False, bytes=0, tokens=0``
-    rather than raising — a caller measuring a NAMED SURFACE SET expects
-    partial coverage (not every governed surface exists on every machine,
-    e.g. no dev-repo sentinel on this box) to degrade gracefully, not abort
-    the whole report.
-    """
     p = Path(path)
     try:
         data = p.read_bytes()
@@ -80,21 +65,6 @@ def measure_surface(path: Union[str, Path]) -> Dict[str, Any]:
 
 
 def measure_surfaces(paths: List[Union[str, Path]]) -> Dict[str, Any]:
-    """Measure a NAMED SET of surfaces, per-file and total.
-
-    Returns::
-
-        {
-            "surfaces": [ {path, bytes, tokens, exists}, ... ],  # input order preserved
-            "total_bytes": int,
-            "total_tokens": int,
-        }
-
-    A missing surface contributes 0 to both totals (via `measure_surface`'s
-    degrade-gracefully behaviour) — it is still listed in ``surfaces`` with
-    ``exists: False`` so a caller can tell "0 tokens because absent" apart
-    from "0 tokens because genuinely empty".
-    """
     rows = [measure_surface(p) for p in paths]
     return {
         "surfaces": rows,

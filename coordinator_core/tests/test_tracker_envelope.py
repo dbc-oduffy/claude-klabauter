@@ -1,25 +1,3 @@
-"""
-coordinator_core.tests.test_tracker_envelope — C4 shard-to-envelope fold
-tests.
-
-Purpose: cover `tracker_envelope.build_ingest_envelope` — the fold from our
-per-machine JSONL shards into ONE JSON-serializable object for cockpit's
-`ingest_emission`.
-
-Coverage requirements (plan docs/plans/2026-08-18-sat-07-tier-a-wiring.md
-§ Acceptance Criteria, § Task C4):
-  AC12 — every shard folds into one envelope object (multi-shard fixture).
-  AC13 — every item in the envelope carries `fold_membership_wire`'s
-         materialized `projects: string[]`, with `"unassigned"` present for
-         a zero-real-edge item and never an empty array.
-
-Also covers the JSON-serializability of the returned envelope, since that
-is the entire point of folding JSONL shards into one object for cockpit's
-`ingest_emission`.
-
-Spec backlink: docs/plans/2026-08-18-sat-07-tier-a-wiring.md § Task C4,
-§ Acceptance Criteria AC12/AC13.
-"""
 
 from __future__ import annotations
 
@@ -45,10 +23,6 @@ from coordinator_core.tracker_envelope import (
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-# Same real-git-repo requirement as test_tracker_projection.py: append_event's
-# locked_rmw resolves its lock directory via real `git rev-parse
-# --git-common-dir`, so a bare non-git tmp_path fails before this module's
-# own fold logic runs.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -93,10 +67,6 @@ def _make_item(repo_root, *, title="Widget", body="Do the thing"):
 
 
 def test_ac12_multiple_shards_fold_into_one_envelope_object(repo_root, monkeypatch):
-    # Two distinct machines writing to two distinct shard files (mirrors
-    # test_tracker_store.py's multi-machine pattern) -- the envelope must
-    # be the fold of both, not just whichever shard happens to be read
-    # first.
     monkeypatch.setattr(tracker_store, "machine_slug", lambda *a, **kw: "machine-a")
     on_a = _make_item(repo_root, title="OnMachineA", body="from shard a")
 
@@ -132,7 +102,6 @@ def test_ac13_zero_real_edge_item_carries_unassigned(repo_root):
     by_id = {item["id"]: item for item in envelope[TRACKER_ITEMS_KEY]}
     assert by_id[bare_item]["projects"] == [RESERVED_PROJECT_ID]
     assert by_id[with_edge]["projects"] == ["proj-alpha"]
-    # Never an empty array for any item.
     assert all(item["projects"] for item in envelope[TRACKER_ITEMS_KEY])
 
 

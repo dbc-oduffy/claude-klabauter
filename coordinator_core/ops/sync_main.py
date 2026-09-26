@@ -1,57 +1,3 @@
-"""
-coordinator_core.ops.sync_main — branch-creation-invariant enforcer
-(local main == origin/main).
-
-Purpose: DR-059 bash-to-naked-Python port of the DoE-owned script
-`coordinator/bin/sync-main.sh` (~124 lines). Every branch-creation site in the
-coordinator pipeline calls this before `git checkout -b` — after this module's
-`main()` returns 0, local `main` == `origin/main` regardless of which branch
-the working tree is on, so callers can trust `git checkout -b new-branch main`.
-
-Spec backlink: archive/specs/2026-05-01-orphan-branch-prevention.md § 1.1.5
-               docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
-Port of: sync-main.sh (DoE b5a4192c, 2026-07-20)
-
-Negative-spec: does NOT create branches, does NOT push, does NOT merge
-feature/work branches, does NOT touch anything other than the main ref.
-
-Exit codes (parity-critical, preserved from the bash oracle):
-    0 — success (main synced, or silently skipped when not in a git repo or
-        origin/main unreachable), OR >50-commits-behind non-strict warning
-    1 — local main is ahead of origin/main (should never happen — investigate
-        before branching), OR fast-forward pull failed, OR --strict mode hit
-        the >50-commits-behind threshold, OR unknown CLI argument
-    2 — (not used by this port; reserved by the bash oracle's own convention
-        for "not a git repo" cases, which this module instead maps to exit 0
-        per the oracle's own `exit 0` on that branch — see `_is_git_repo`)
-
-Behavior-preservation notes (read alongside the bash source):
-  - On branch `main`: `git fetch origin main` then check local-ahead-of-origin
-    (hard error if so), then `git pull --ff-only origin main` (hard error on
-    failure).
-  - On any other branch: `git fetch origin main:main` (refspec form, updates
-    the local `main` ref without checking it out). If that refspec fetch
-    fails (typically because local main is ahead of origin/main — a refspec
-    fetch cannot fast-forward in that direction), fall back to a bare
-    `git fetch origin main` and check local-ahead-of-origin explicitly,
-    surfacing the same hard error the oracle does.
-  - After sync, if the current (non-main) branch is >50 commits behind the
-    now-updated `main`, warn (or hard-error under --strict).
-
-Known faithfully-reproduced oracle quirk (code-reviewer finding, confirmed
-present verbatim in the bash oracle at 0bfe3269:coordinator/bin/sync-main.sh):
-in the non-main-branch refspec-fetch-failed-but-not-ahead fallback, both the
-bash oracle and this port issue a redundant duplicate `git fetch origin main`
-(no-op — second call has no different args/effect than the first), and the
-subsequent "Local main ref is now at <ref>" message is printed unconditionally
-even though `git fetch origin main` (no refspec) only advances the
-remote-tracking ref (`origin/main`), never `refs/heads/main` — so on this
-fallback path the message can describe the stale, unchanged local `main` ref
-as though it were just updated. Not fixed here: fixing the message text would
-diverge textual/observable behavior from the bash oracle this module is a
-parity port of — a byte-parity-vs-message-honesty tradeoff, not a portability
-bug. See faithful-oracle-repro discipline in the review-integration doctrine.
-"""
 
 from __future__ import annotations
 
@@ -162,7 +108,6 @@ def main(argv: list[str]) -> int:
         info(f"On branch '{current_branch}' — updating local main ref from origin...")
         refspec_fetch = _git("fetch", "origin", "main:main")
         if refspec_fetch.returncode != 0:
-            # fetch with refspec fails when local main is ahead of origin/main
             _git("fetch", "origin", "main")
             local_ahead = _rev_list_count(
                 "refs/remotes/origin/main..refs/heads/main"
@@ -172,11 +117,6 @@ def main(argv: list[str]) -> int:
                     f"Local main is {local_ahead} commit(s) ahead of origin/main. "
                     "Investigate before branching."
                 )
-            # Dropped a redundant duplicate
-            # `_git("fetch", "origin", "main")` here (byte-identical to the
-            # one at the top of this except-block, same args/no different
-            # effect). Pure dead-code removal — the resulting git ref state
-            # is unchanged, only a wasted network round-trip is avoided.
 
         main_short = _git("rev-parse", "--short", "main")
         if main_short.returncode == 0:

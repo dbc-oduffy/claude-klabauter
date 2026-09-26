@@ -183,22 +183,6 @@ def classify_code_complete_tier(
 
 @dataclass(frozen=True)
 class QaVerifiedEvidence:
-    """Structured evidence for a `qa_verified` observation.
-
-    Carries the real `qa_verified` evidence shape per the roadmap research
-    corpus — deliberately not a bare `object` — even though
-    `classify_qa_verified` ignores every field today (AC3). The type IS
-    the negative-spec surface: a strongly-typed, non-trivial parameter is
-    what stops a future editor from quietly wiring an auto path onto this
-    axis, since any such change would have to first give this dataclass
-    fields worth branching on and then still contend with the pinned
-    docstring below.
-
-    `confidence` is named here, not consumed: `evidence.confidence`
-    surfacing for `qa_verified` is deferred to sat-06 by the research
-    corpus (see the plan's Out of scope) — recorded so a reader of this
-    module alone does not assume confidence-scoring lives here.
-    """
 
     source: str
     confidence: float | None = None

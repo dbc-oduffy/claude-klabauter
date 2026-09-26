@@ -40,13 +40,6 @@ EXIT_TRANSPORT_FAILURE = 3
 
 
 def _import_runner():
-    """In-process import, not an RPC invoke — pure local read + compute, same
-    rationale as append-integrator-dispositions.py's own trampoline.
-
-    DR-276: routed through `coordinator_core.cli_entry.run_op_main` for
-    baseline consistency — this op never writes the plan and never takes the
-    file lock (see module docstring), so it declares nothing and this
-    conversion changes no observable behavior."""
     import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
     from cc_invoke import require_dispatch_engine_on_path
 

@@ -17,9 +17,6 @@ from coordinator_core.frontmatter.schema_validate import (
     validate_frontmatter_obj,
 )
 
-# A minimal JSON-Schema-backed schema object, stamped exactly as load_schemas()
-# would stamp a .schema.json file — constructed inline so no schema directory
-# is ever read by this test module.
 _JSON_SCHEMA_OBJ = {
     '_isJsonSchema': True,
     'x-schema-name': 'fixture-json-schema',
@@ -31,7 +28,6 @@ _JSON_SCHEMA_OBJ = {
     },
 }
 
-# A minimal legacy-YAML-dialect schema object (no `_isJsonSchema` stamp) —
 # mirrors _LEGACY_BUG_SCHEMA in test_schema_validate.py.
 _LEGACY_SCHEMA_OBJ = {
     'schema': 'fixture-legacy-schema',
@@ -68,13 +64,6 @@ class TestValidateFrontmatterObjJsonSchemaBacked:
 
 
 class TestValidateFrontmatterObjTypeStringDateAcceptanceRegression:
-    """Standing-ruling pin (DoE PM + claude-klabauter PM, cross-repo memo 2026-08-06):
-    a `datetime.date`/`datetime.datetime` value against a declared
-    `type: string` field must still validate — PyYAML's bare-date coercion
-    feeds this validator ~700 artifacts' worth of date-typed values across
-    both trees. Must NOT regress alongside the schema-valued
-    additionalProperties fix.
-    """
 
     def test_date_value_accepted_for_declared_type_string(self):
         result = validate_frontmatter_obj(
@@ -131,20 +120,8 @@ class TestValidateFrontmatterObjLegacyYamlDialect:
 
 
 class TestValidateFrontmatterObjUnstampedSchemaDispatch:
-    """An unstamped-but-genuine JSON Schema must reach the JSON-Schema
-    validator, not the legacy YAML branch.
-
-    `_isJsonSchema` is stamped only by load_schemas() on a .schema.json file.
-    This seam's contract is that the CALLER owns schema provenance, so a
-    derived, hand-built, or JSON round-tripped schema object arrives without
-    the stamp while still being a JSON Schema. Routing those to the legacy
-    branch was a silent fail-open: that branch treats "no `required` MAPPING"
-    as unconditionally valid, and a JSON Schema's `required` is an ARRAY.
-    """
 
     # _JSON_SCHEMA_OBJ minus the load-time stamp — e.g. what
-    # json.loads(json.dumps(schema)) yields from a corpus that never went
-    # through load_schemas, or what a caller filtering allOf branches holds.
     _UNSTAMPED_JSON_SCHEMA_OBJ = {
         k: v for k, v in _JSON_SCHEMA_OBJ.items() if k != '_isJsonSchema'
     }
@@ -171,25 +148,16 @@ class TestValidateFrontmatterObjUnstampedSchemaDispatch:
         assert result == {'ok': True}
 
     def test_json_schema_without_top_level_required_is_not_a_blanket_pass_by_misroute(self):
-        # The sharpest fail-open shape: no top-level `required`, so the legacy
-        # branch would have returned {'ok': True} for anything. Classified
-        # 'json' via `properties`, the enum constraint still bites.
         schema = {'type': 'object', 'properties': _JSON_SCHEMA_OBJ['properties']}
         assert validate_frontmatter_obj({'status': 'nope'}, schema)['ok'] is False
         assert validate_frontmatter_obj({'status': 'open'}, schema) == {'ok': True}
 
     def test_legacy_yaml_dialect_still_routes_to_legacy_branch(self):
-        # The inference must not steal genuine YAML-dialect schemas: a
-        # `required` MAPPING (not array) keeps them on the legacy path.
         result = validate_frontmatter_obj({'title': 'A bug', 'severity': 'P9'}, _LEGACY_SCHEMA_OBJ)
         assert result['ok'] is False
-        # Legacy-branch-specific error text; the JSON branch words it differently.
         assert any(e['hint'] == 'Add "status:" to frontmatter' for e in result['errors'])
 
     def test_stamp_wins_over_shape_when_present(self):
-        # A stamped object dispatches JSON-side even if its shape is
-        # otherwise ambiguous — registry-resolved provenance is authoritative,
-        # which is what keeps validate()'s path bit-for-bit unchanged.
         result = validate_frontmatter_obj({'anything': 'goes'}, {'_isJsonSchema': True})
         assert result == {'ok': True}
 
@@ -211,18 +179,12 @@ class TestValidateFrontmatterObjNeverRaises:
         assert result['errors'][0]['field'] == '_schema'
 
     def test_none_fm_dict_treated_as_empty_not_a_raise(self):
-        # Parity with validate()/_dispatch_validate: fields=None coerces to {}
-        # rather than raising — a JSON-Schema-backed schema with required
-        # fields then reports them missing, not a TypeError.
         result = validate_frontmatter_obj(None, _JSON_SCHEMA_OBJ)
         assert result['ok'] is False
         assert any(e['error'] == 'required field missing' for e in result['errors'])
 
     def test_no_recognizable_shape_returns_error_result_not_unconditional_pass(self):
         # A dict matching neither dialect's tells is REJECTED, not dispatched
-        # into the legacy branch (whose "no required block" == "everything
-        # passes" negative-spec would return {'ok': True} for any document).
-        # Fail-closed on an undecidable schema; see _classify_schema_dialect.
         result = validate_frontmatter_obj({'anything': 'goes'}, {'no_recognizable_shape': True})
         assert result['ok'] is False
         assert result['errors'][0]['field'] == '_schema'

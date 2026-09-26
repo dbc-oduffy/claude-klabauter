@@ -44,15 +44,8 @@ def _fires(cmd: str) -> bool:
     return dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-c1a") is not None
 
 
-#: (command, fires, existing_coverage, note, fix_group)
-#: ``existing_coverage`` names the near-variant already pinned in
 #: `test_deny_message_accuracy.py`'s SCOPED_FORMS/UNSCOPED_FORMS, or ``None``
-#: for a shape genuinely new to this chunk. ``fix_group`` tags which fix (or
-#: pre-existing baseline shape) the row belongs to, so
-#: `test_table_is_bidirectional_where_applicable` can verify pairing
-#: PER GROUP rather than just "some row somewhere fires."
 FIRING_SHAPE_TABLE = [
-    # --- Unconditional baseline (964fad0a, unchanged by this chunk) ---
     (
         'git commit -m "x" -- one/file.md',
         False,
@@ -68,7 +61,6 @@ FIRING_SHAPE_TABLE = [
         "correct, stays firing, no index-probe suppression exists anywhere",
         "baseline",
     ),
-    # --- git -C / bundled short-flag / segment-join shapes (AC2 explicit) ---
     (
         'git -C /tmp/repo commit -m "x" -- one/file.md',
         False,
@@ -121,7 +113,6 @@ FIRING_SHAPE_TABLE = [
         "||-joined segment with a scoped commit half stays silent",
         "dash-C-bundled-segment-join",
     ),
-    # --- Fix 1: --pathspec-from-file / --pathspec-file-nul (real over-fire) ---
     (
         "git commit -m 'x' --pathspec-from-file list.txt",
         False,
@@ -154,7 +145,6 @@ FIRING_SHAPE_TABLE = [
         "control row: no pathspec flag at all still fires",
         "fix1-pathspec-from-file",
     ),
-    # --- -o/--only: same index-bypassing self-scoped mode (real over-fire) ---
     (
         "git commit -o one/file.md -m 'x'",
         False,
@@ -197,10 +187,7 @@ FIRING_SHAPE_TABLE = [
         "only-flag-scope",
     ),
     # --- SC-DR-020: the separator disambiguates, it does not scope ---
-    # Every row above that establishes scope does it with `-- <paths>`, which
-    # is exactly why the mirror-image gap in _bt_git_add_own_pathspec went
     # uncovered until a live sweep found it. These rows pin the UNSEPARATED
-    # spelling so the same blind spot cannot re-form in this predicate.
     (
         "git commit one/file.md -m 'x'",
         False,
@@ -258,7 +245,6 @@ FIRING_SHAPE_TABLE = [
         "make a sweep-all commit scoped",
         "sc-dr-020-positional-pathspec",
     ),
-    # --- Fix 2: piped git commit segment (real under-fire) ---
     (
         'echo y | git commit -m "x"',
         True,
@@ -275,7 +261,6 @@ FIRING_SHAPE_TABLE = [
         "it does not change the scope predicate itself",
         "fix2-piped-segment",
     ),
-    # --- Fix 3: env-var / wrapper-prefixed git commit (real under-fire) ---
     (
         'GIT_INDEX_FILE=/tmp/i git commit -m "x"',
         True,
@@ -306,11 +291,8 @@ FIRING_SHAPE_TABLE = [
         "wrapper-word-prefixed AND scoped stays silent",
         "fix3-env-wrapper",
     ),
-    # --- Review finding 1 (P0): -S/--gpg-sign standalone must not
     # unconditionally consume the next token (they are OPTIONAL-argument
     # flags whose value must be ATTACHED) -- a standalone occurrence must
-    # render the parse ambiguous and fire, never fabricate a pathspec out
-    # of the next unrelated token and suppress. ---
     (
         'git commit -S -m "x"',
         True,
@@ -344,9 +326,6 @@ FIRING_SHAPE_TABLE = [
         "stays silent",
         "review-finding1-gpg-sign",
     ),
-    # --- Review finding 2 (P2): the operand-scan anchor must be a
-    # global-option-aware positional walk, not a literal `.index("commit")`
-    # search that a `-C`-style global option's VALUE can collide with. ---
     (
         "git -C commit commit -m x",
         True,
@@ -364,8 +343,6 @@ FIRING_SHAPE_TABLE = [
         "half -- must resolve the real subcommand and stay silent",
         "review-finding2-dash-C-value-collision",
     ),
-    # --- Review finding 3 (nit): -t/--template is a real mandatory-arg
-    # option; must resolve cleanly rather than fall to spurious ambiguity. ---
     (
         "git commit -t tmpl.txt -m 'x' foo.py",
         False,
@@ -395,11 +372,6 @@ def test_firing_shape_row(cmd, fires, existing_coverage, note, fix_group):
 
 
 def test_table_is_bidirectional_where_applicable():
-    """AC2: each fixed shape is asserted in BOTH directions (scoped stays
-    silent, unscoped fires) -- verified PER fix_group, not merely "some row
-    somewhere fires and some row somewhere stays silent" (a table that lost
-    every silent companion row for one fix, while keeping them for the
-    others, would still pass the weaker check)."""
     groups: dict[str, set[bool]] = {}
     for _cmd, fires, _existing_coverage, _note, fix_group in FIRING_SHAPE_TABLE:
         groups.setdefault(fix_group, set()).add(fires)

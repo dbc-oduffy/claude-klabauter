@@ -27,11 +27,6 @@ _REL_PATH = "docs/exec-summary.md"
 
 
 def _parse_frontmatter(content: str) -> dict:
-    """Extract flat YAML frontmatter between the first two ``---`` lines (bash:2508-2534).
-
-    Returns a dict of flat ``key: value`` pairs — no PyYAML dependency. Quoted scalars are
-    unwrapped; the sentinels ``null`` / ``~`` / empty become ``None``.
-    """
     lines = content.splitlines()
     if not lines or lines[0].strip() != "---":
         return {}
@@ -60,12 +55,6 @@ def _parse_frontmatter(content: str) -> dict:
 
 
 def _extract_section(content: str, fence_type: str, name: str):
-    """Extract the body between HTML-comment fences (bash:2536-2558).
-
-    ``fence_type`` is ``MANAGED`` or ``HAND``; ``name`` is ``identity`` / ``progress`` /
-    ``special`` / ``goals``. Returns the stripped body, or ``None`` when the fences are
-    absent OR present-but-empty.
-    """
     begin_marker = f"<!-- BEGIN {fence_type}: {name} -->"
     end_marker = f"<!-- END {fence_type}: {name} -->"
     in_section = False
@@ -84,7 +73,6 @@ def _extract_section(content: str, fence_type: str, name: str):
 
 
 def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
-    """Build the ExecSummary record + quarantine list (parity: bash SECTION 8.17 heredoc)."""
     valid: list[dict] = []
     malformed: list[dict] = []
 

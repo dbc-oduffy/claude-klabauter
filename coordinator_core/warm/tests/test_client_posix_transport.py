@@ -36,13 +36,6 @@ from coordinator_core.warm import client
 
 _MSG = {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}
 
-#: Captured at import time, before any test's `os.unlink`/`os.remove`
-#: monkeypatch (`test_the_client_never_unlinks_a_refusing_socket` below
-#: patches both module-wide) -- `_force_rmtree`'s own teardown must not go
-#: through the patched attributes, or it either records a spurious
-#: "unlink" the test never asked for, or (since the fake in that test takes
-#: one positional arg, not `shutil.rmtree`'s own `dir_fd=`-qualified call)
-#: raises a `TypeError` out of fixture teardown.
 _REAL_UNLINK = os.unlink
 _REAL_RMDIR = os.rmdir
 
@@ -234,7 +227,6 @@ def test_an_unclassified_connect_error_goes_cold_LOUDLY(
     noisy = capsys.readouterr().err
     assert "too many open files" in noisy
 
-    # The contrast, in the same test so neither half can rot alone: a
     # CLASSIFIED outcome takes the same cold exit without the diagnostic.
     def _raise_refused(endpoint):
         raise ConnectionRefusedError(errno.ECONNREFUSED, "connection refused")
@@ -256,7 +248,6 @@ def test_endpoint_name_is_the_production_derivation_for_this_platform() -> None:
     source = inspect.getsource(client._endpoint_name)
     assert "election.pipe_name(token)" in source
     assert "election.socket_path(token)" in source
-    # No hand-spelled shape on either arm.
     assert '".sock"' not in source and "'.sock'" not in source
     assert "pipe\\\\" not in source
 

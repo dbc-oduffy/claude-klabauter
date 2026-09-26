@@ -55,7 +55,7 @@ from coordinator_core.data_root import content_root_for
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.trusted_root_guard import is_trusted as _is_trusted_root
 
-_PROG = "refresh-roadmap-callout.sh"  # literal program-name prefix — matches bash oracle's messages
+_PROG = "refresh-roadmap-callout.sh"
 
 _ALLOWLIST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -80,7 +80,6 @@ def _strip_one_quote_layer(value: str) -> str:
 
 
 def _validate_roadmap_id(roadmap_id: str) -> bool:
-    """Allowlist + traversal check — mirrors the bash `case` guard exactly."""
     if not roadmap_id:
         return False
     if ".." in roadmap_id:
@@ -137,10 +136,6 @@ def _resolve_cc_root() -> str:
     return str(content_root)
 
 
-#: Caller label recorded in the shared housekeeping-failures log on a self-commit
-#: failure (C5 residue, 2026-07-23 wsc-tail-slim-down) — lets a reader
-#: distinguish this render's follow-up commit from a sibling render's or an
-#: archive sweep's own failure record.
 _SELF_COMMIT_CALLER_LABEL = "refresh-roadmap-callout.py:self-commit"
 
 
@@ -244,19 +239,10 @@ def main(argv: List[str], *, self_commit: bool = False) -> int:
     rc = _refresh_queries_main(["--files", str(stub_index), "--root", root])
 
     if rc == 0:
-        # DR-276: the actual byte-rewrite happens inside
-        # coordinator_core.text.refresh_queries (out of this module's scope),
-        # but this is the orchestrator that knows the final destination path
-        # and that the delegate reported success — declare it here so the
-        # rewrite becomes a session scope-touch claim rather than an orphan
-        # at the scoped_git_commit sink.
         from coordinator_core.session.declared_writes import declare_write
 
         declare_write(str(stub_index))
 
-    # Do NOT fire into a failed render (constraint 4) — a non-zero rc means the
-    # delegate hit a per-callout error (or worse); nothing here is trustworthy
-    # to commit.
     if self_commit and rc == 0:
         from coordinator_core.ops.ceremony.detached_render_commit import (
             commit_own_artifact,
@@ -267,8 +253,6 @@ def main(argv: List[str], *, self_commit: bool = False) -> int:
         try:
             rel_path = str(stub_index_resolved.relative_to(root_path))
         except ValueError:
-            # stub_index somehow landed outside root — cannot express as a
-            # pathspec relative to the commit cwd; skip rather than guess.
             rel_path = None
         if rel_path is not None:
             ok = commit_own_artifact(

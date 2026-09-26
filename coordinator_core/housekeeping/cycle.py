@@ -114,30 +114,17 @@ _LOG = logging.getLogger(__name__)
 
 PathLike = Union[str, Path]
 
-#: The `deployment_state` value C6's gate-clear machinery acts on — mirrors
 #: `gate_clear._AWAITING_GATE` (not re-imported: that name is module-private
-#: there, and this module's own scope is which records to OFFER to
-#: `evaluate_gate_clear`, not gate-clear's own internal vocabulary).
 _AWAITING_GATE = "awaiting_gate"
 
 
 def _transition_target_rel(worktree_root: Path, transition_params: Any) -> Set[str]:
-    """The repo-relative POSIX path of a targeted transition's own handoff, as
-    a set for `run(exclude=...)`. Empty when no transition ran, or when the
-    named path does not sit under this worktree -- an unresolvable name
-    excludes nothing rather than silently excluding everything.
-    """
     if not isinstance(transition_params, dict):
         return set()
     named = transition_params.get("handoff_path")
     if not named:
         return set()
     # `handoff_path` arrives REPO-RELATIVE from the real callers
-    # (`baton_assemble/apply.py` builds `repo_root / predecessor_path` from
-    # the same string). Resolving it bare would resolve against the process
-    # CWD, so on any caller whose CWD is not the worktree root the exclusion
-    # would silently match nothing -- a fail-OPEN on the one rail whose whole
-    # job is to stop the sweep touching another leg's handoff.
     candidate = Path(named)
     root = worktree_root.resolve()
     if not candidate.is_absolute():
@@ -198,26 +185,9 @@ def run(
     live_dir = worktree_root / "state" / "handoffs"
     archive_dir = worktree_root / "archive" / "handoffs"
 
-    # -- A. ONE read of the live corpus. -------------------------------
     live_result = read_live_corpus(live_dir)
     records = live_result.records
 
-    # -- B. Candidate index over the archive. --------------------------
-    # From cache where one is usable, rebuilt where it is not. A full build
-    # costs 171.9ms at 1,470 records and is linear in the archive, which this
-    # plan's Anti-scope forbids per cycle; a revalidated cache costs ~2ms.
-    # `rebuilt` is reported out for the brightline gate to assert on -- it is
-    # never branched on for correctness, since a cache miss and a cache hit
-    # must produce the same verdicts.
-    # A repo that has never archived a handoff has no `archive/handoffs/` at
-    # all -- an EMPTY archive, not a scan failure. `build_index`'s default
-    # `onerror` re-raises (deliberately: a vanished SUBdirectory mid-walk is a
-    # gap worth failing on), so calling through it on an absent root turns the
-    # first ship/chain/supersede in a freshly onboarded repo into an uncaught
-    # FileNotFoundError out of `cs_ship_handoff` -- a traceback where the
-    # contract is an error dict, and a handoff that never gets stamped.
-    # Persistence is skipped on the same branch: an empty index cached against
-    # a directory that does not exist yet only costs the next cycle a rebuild.
     cache_path = archive_index_mod.cache_path_for(common_dir)
     archive_dir_exists = archive_dir.is_dir()
     archive_idx: ArchiveIndex
@@ -228,7 +198,6 @@ def run(
     else:
         archive_idx, index_rebuilt = ArchiveIndex(archive_dir=archive_dir), False
 
-    # -- C. Close finished handoffs, under the lock, one file at a time. --
     resolver = make_resolver(records, archive_idx)
     gated = [
         (path, record)
@@ -238,16 +207,6 @@ def run(
 
     closed = 0
     conflicts: List[str] = []
-    # `close=False` is for a caller that has already closed records itself and
-    # wants the sweep alone -- the gated list is still computed above so the
-    # result shape does not change shape with the flag.
-    # A failed close pass must not eat the sweep -- the two are different
-    # kinds of failure, and the archival job is still worth doing when gate
-    # evaluation dies. It must not VANISH either: without `close_error` a
-    # caller cannot tell "nothing needed closing" from "the close pass died",
-    # and both render as closed=0. That pair of properties was asserted by
-    # `ops/tests/test_handoff_housekeeping.py`'s fusion-contract tests, which
-    # were deleted with their module before this module carried them.
     close_error: Optional[str] = None
     try:
         for path, record in (gated if close else []):
@@ -263,13 +222,6 @@ def run(
     except Exception as exc:  # noqa: BLE001 -- the sweep survives a close failure
         close_error = f"{type(exc).__name__}: {exc}"
 
-    # -- D. Terminal set, computed from step A + this cycle's own mutations. --
-    # The worktree-dirty rail is asked ONCE, over the terminal candidates only
-    # -- never the whole corpus. `_dirty_handoff_relpaths` answers from a
-    # scoped in-process index walk and falls back to a single scoped `git
-    # status --porcelain` only when that arm declines, so the normal path adds
-    # no spawn to the cycle's budget. It fails CLOSED: a git failure retains
-    # every candidate rather than sweeping them.
     excluded = exclude or frozenset()
     candidate_rels = sorted({
         path.relative_to(worktree_root).as_posix()
@@ -277,17 +229,7 @@ def run(
         if record.get("deployment_state") in TERMINAL_DEPLOYMENT_STATES
     })
 
-    # -- Memo family (C2, the actioned-memo class gets an occasion). --
-    # `archive_actioned_memos.plan_sweep` owns its own scan/classify/cap-slot
-    # machinery entirely -- this module never re-derives it. The ONE thing
-    # folding the memo family into this cycle needs from HERE is its own
-    # candidate relpaths, unioned into the SINGLE dirty-check call below, so
-    # the memo family never triggers a second `git status` spawn.
-    # Resolved through the same named resolver `archive_actioned_memos`'s own
-    # candidate/dest resolution uses -- migration-aware (`state/cross-repo/`
     # vs legacy `cross-repo/`), never the retired `INBOX_RELDIR` literal (see
-    # state/bug-backlog/2026-09-03-cycle-py-fallback-pathspec-still-hardcodes-
-    # the-legacy-cross-repo-inbox-literal.yaml).
     memo_inbox_dir = Path(memo_corpus_root(str(worktree_root))) / "inbox"
 
     memo_scan_error: Optional[str] = None
@@ -297,12 +239,6 @@ def run(
         memo_candidate_paths = []
         inbox_dir = memo_inbox_dir
         memo_scan_error = f"{inbox_dir}: {exc}"
-        # The op's own `inbox_paths=None`
-        # path logs + records a `scan_errors` entry when the inbox can't be
-        # enumerated; this caller degraded to `[]` silently, so a permission
-        # problem on the inbox directory was indistinguishable from a
-        # genuinely empty inbox. Log here, and surface via `memo_scan_error`
-        # in the result dict below, so the degradation stays observable.
         _LOG.warning(
             "cycle.run: cannot scan %s — %s; treating memo family as empty "
             "this cycle (degrade safe)", inbox_dir, exc,
@@ -320,39 +256,15 @@ def run(
         ),
     )
     def _retained(path: Path, record: Dict[str, Any]) -> bool:
-        """Every ground on which a terminal record is NOT this sweep's to
-        file, in one predicate.
-
-        Holder liveness is NOT one of them, as of the PM ruling of
-        2026-09-04: "a claim on a baton shouldn't prevent it from getting
-        archived. What matters is that the baton is complete, not the
-        liveness of the holder." Both arms that read it went -- the claim-dir
-        probe (`cs_claim_holder_live`) and the `claimed_by`/`consumed_by`
-        against `resolve_live_session_ids()` fallback -- taking this cycle's
-        only session-registry resolution with them. The sibling deletion, and
-        why the check protected nothing it was credited with, is at
-        `ops/fleet/archive_terminal_handoffs :: _scan_terminal`.
-        """
         rel = path.relative_to(worktree_root).as_posix()
         return rel in excluded or rel in dirty_rels
 
     terminal_entries = compute_terminal_set(records, cap, retained=_retained)
 
-    # -- E. One move + ONE commit, across BOTH families. -----------------
-    # Handoff Moves, built exactly as `archive_terminal_batch` used to build
-    # them internally before it was widened to accept a prebuilt list (C2).
     handoff_moves = [
         Move(
             src=entry.path,
             dst=handoff_archive_dest(worktree_root, entry.path),
-            # `Move.candidate_id` is
-            # the wire "id" field throughout the result envelope
-            # (`ops/fleet/_common.py:677-678,710`); `wire_paths.rel_id`'s own
-            # docstring names the native-separator `str(relative_to())` form
-            # WRONG for exactly this reason. Using it here made
-            # `archived`/`failed` ids carry `os.sep` while this same diff's
-            # `memos_archived` sibling (via `plan_sweep` -> `rel_id`) carries
-            # forward-slash -- two id shapes in one result dict on Windows.
             candidate_id=rel_id(entry.path, worktree_root),
             force=False,
             restage_src=False,
@@ -360,28 +272,13 @@ def run(
         for entry in terminal_entries
     ]
 
-    # Memo Moves, from the memo op's OWN planner -- `cap` passed straight
-    # through, unmodified, exactly as it is already passed to
-    # `compute_terminal_set` for the handoff family above (no shared-cap-
-    # over-the-union re-derivation here). `known_dirty_relpaths=dirty_rels`
-    # answers the memo family's Rail 1 from the single union dirty-check
-    # already computed above, spawning nothing extra.
     memos_skipped: List[dict] = []
     memo_moves, memo_plan_skipped = archive_actioned_memos.plan_sweep(
         worktree_root, common_dir, cap,
         known_dirty_relpaths=dirty_rels,
         scan_skipped=memos_skipped,
-        # Hand the walk we already did above straight through -- without this
-        # `_scan_terminal_memos` re-walks cross-repo/inbox and re-`resolve()`s
-        # every entry, a second full directory pass per cycle for a list this
-        # caller is already holding.
         inbox_paths=memo_candidate_paths,
     )
-    # `plan_sweep` returns its OWN plan-time skips (dest-conflict,
-    # deferred-cap) separately from the scan-time `scan_skipped` out-param --
-    # both are `plan_sweep`'s own returned skip semantics (RESULT SHAPE,
-    # C2), so `memos_skipped` reports the union rather than only the scan
-    # half.
     memos_skipped.extend(memo_plan_skipped)
 
     subject_parts = []
@@ -392,16 +289,6 @@ def run(
     subject = "housekeeping: archive " + " and ".join(subject_parts) if subject_parts else \
         "housekeeping: archive 0 terminal handoff(s)"
 
-    # Step E: one `os.replace` per Move, landed as ONE commit via the
-    # existing `archive_and_commit` seam (module docstring — no new commit
-    # route, no second-guessing of its `(acted, failed)` split). An empty
-    # combined batch never calls into the seam at all (nothing to move,
-    # nothing to commit — a zero-length batch is not a degenerate call to
-    # make, it is simply not a call).
-    # `archive_terminal_batch` was a
-    # single-caller passthrough (empty-check + one asyncio.run) after the
-    # Move-prebuild moved into run(); inlined here, function and its three
-    # tests deleted.
     combined_moves = handoff_moves + memo_moves
     if combined_moves:
         acted, failed = asyncio.run(
@@ -417,38 +304,11 @@ def run(
     archived = [item["id"] for item in acted if item["id"] in handoff_move_ids]
     failed = [item for item in failed if item["id"] in handoff_move_ids]
 
-    # Gating `revalidate` on `acted`
-    # meant a quiet cycle (this cycle moved nothing) never called it at all,
-    # so archive drift from a peer process or a manual git operation between
-    # cycles was never detected and the stale cache never rewritten.
-    # `revalidate` is `archive_index`'s own cheap (~2ms at 1,470 files),
-    # spawn-free `os.scandir`+stat leg -- call it whenever there is an
-    # archive tree to revalidate against, not only on this cycle's own
-    # `acted` batch; only the expensive `save_index` write below stays gated.
-    # `archive_dir_exists` still guards it: `revalidate`'s default `onerror`
-    # re-raises, and a repo with no `archive/handoffs/` yet has an EMPTY
-    # archive (step B's own branch above), not a scan failure.
     index_changed = (
         bool(archive_index_mod.revalidate(archive_idx)) if archive_dir_exists else False
     )
 
-    # Persist for the next cycle, ONLY when the on-disk cache would differ.
-    # Best-effort by construction: a cache that cannot be written costs the
-    # next cycle a rebuild, nothing else.
-    #
-    # The write is gated because it is NOT free and it was previously
-    # unconditional: `save_index` serialises the whole index to JSON, measured
-    # at 94ms / 16232 `_iterencode` calls over a 1,470-record archive by
-    # cProfile on process_time (2026-08-30). A cycle that archived nothing
-    # rewrote byte-identical content every run, which at backlog scale was the
-    # difference between the two-family cycle sitting inside
     # CYCLE_PROCESS_TIME_BUDGET_MS and breaching it. Two cases genuinely need
-    # the write: a rebuild (there was no usable cache, or it was stale), and a
-    # revalidate that actually patched the index. `revalidate` itself now
-    # runs on every cycle with an archive tree (F4 above), so it also catches
-    # cross-process drift; `save_index` stays gated on the same
-    # `index_rebuilt or index_changed` pair -- only the (cheap) detection
-    # moved off the `acted` gate, not the (expensive) write.
     index_cache_written = (
         archive_index_mod.save_index(archive_idx, cache_path)
         if archive_dir_exists and (index_rebuilt or index_changed)
@@ -472,29 +332,7 @@ def run(
     }
 
 
-# ---------------------------------------------------------------------------
-# The op boundary — `housekeeping.cycle`
-# ---------------------------------------------------------------------------
-#
-# DR-384 admits `housekeeping.cycle` to DR-211 § D1's sanctioned-writer list.
-# That decision was ratified against an op that did not exist: `run()` above is
-# a module function, and nothing in this package called `register_op`. The
-# consequence is not cosmetic -- `handoff.housekeeping`'s key is carried in
 # `authz/classification.py` (as MUTATING) and referenced by the bash guards, and
-# a caller reaches it through the registry, not by import. A replacement that
-# never registers cannot be repointed onto, only imported around.
-#
-# `run()` also does not accept what two of its three real callers pass:
-#   - `close=False`, for a caller that has already closed records itself and
-#     wants the sweep alone.
-#   - `transition`, a targeted transition on ONE named handoff, which
-#     `baton_assemble/apply.py`'s d6 needs because it must stamp
-#     `continued`/`continued_into` on a predecessor whose successor was minted
-#     seconds ago by the same run -- a fact no population scan can derive.
-#
-# So the op boundary lives here, with the same parameter contract, and delegates
-# the transition leg to `handoff_archive_transition` exactly as before (that
-# module is NOT part of this plan's deletion set and stays where it is).
 
 OP_KEY = "housekeeping.cycle"
 
@@ -549,17 +387,12 @@ def _handler(params: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[s
                 _transition_handler(dict(transition_params), common_dir)
             )
         except Exception as exc:  # noqa: BLE001 -- a raising leg is a failed
-            # transition, not a traceback out of an op whose contract is an
-            # error dict. The old library call was reached through a caller
-            # that caught; reaching it through the op boundary is not licence
-            # to drop that.
             return {
                 "exit_code": 1,
                 "error": f"transition raised: {type(exc).__name__}: {exc}",
                 "transition": None,
             }
         if transition_result.get("exit_code") != 0:
-            # Stop, do not sweep on: see the fail-posture note above.
             return {
                 "exit_code": transition_result.get("exit_code", 1),
                 "error": transition_result.get("error", "transition failed"),

@@ -62,11 +62,6 @@ def test_prefix_clause_is_byte_identical_regardless_of_degraded():
 def test_an_undegraded_emit_drops_the_ignore_rule_leg_and_the_pathspec_is_post_filter(
     tmp_path,
 ):
-    """End-to-end: the emitter's own `_gitignored_paths` run (undegraded, a
-    real git repo) both drops the ignored concrete path from the pathspec
-    that reaches the preflight prompt AND removes the model-judged
-    ignore-rule refusal for it -- the two facts are one and the same
-    mechanical guarantee, not two independent claims."""
     repo = _gitignore_repo(tmp_path)
     waves = [[_wave_row("C1", ["registry/registry.db", "a.py"])]]
     script = compose_script(waves, name="wf", description="undegraded", repo_root=repo)

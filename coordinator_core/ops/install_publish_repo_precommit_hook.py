@@ -102,16 +102,9 @@ import sys
 
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.session.declared_writes import declare_write
-# Cross-package import of the SSOT doc-pointer display string (same
-# precedent write_guards already uses for operator_override_note itself) --
-# emitted hook-body remediation text points readers at the doc that
-# enumerates these keys, never names a key inline (B6/B8, see
-# docs/wiki/guard-messaging.md § Register). Repo-qualified ("claude-klabauter
-# <path>"), so it stays fleet-addressable when this hook fires inside the
-# OSS publish repo's own tree, not just claude-klabauter's.
 from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY
 
-GENERATES = []  # writes only the OSS publish repo's own .git/hooks/pre-commit, never tracked
+GENERATES = []
 
 _PROG = "install-publish-repo-precommit-hook"
 
@@ -242,34 +235,6 @@ fi
 
 
 def _canon(path: str) -> str:
-    """Canonicalize a path the same way the bash oracle's `canon()` does.
-
-    C19 — retired the `["/bin/sh", "-c", 'cd "$1" && pwd -P', ...]` bridge:
-    `pwd -P` after a successful `cd` resolves every symlink component and
-    prints the physical absolute path, which is exactly `os.path.realpath`'s
-    contract. This is NOT the :64 carve-out (that one generates a POSIX-sh
-    git-hook BODY that git itself execs; this is claude-klabauter's own runtime
-    resolving a path, no git-hook-exec structural reason applies).
-
-    Empty input, or a `cd`-equivalent failure (path is not a directory),
-    both yield "" — never raises.
-
-    Fixed 2026-07-21: previously shelled out to a literal ``/bin/sh`` to run
-    ``cd "$1" && pwd -P``, mirroring the bash oracle byte-for-byte. That path
-    does not exist on native Windows (even Git for Windows' shell lives at
-    ``...\\Git\\bin\\sh.exe``, never the POSIX absolute path), so the
-    subprocess raised ``FileNotFoundError`` (an ``OSError`` subclass) on
-    every call and this always returned "" — meaning `repo_root` and
-    `expected_repo_root` compared "" == "" (the documented empty-matches-
-    empty edge case) on EVERY invocation, silently defeating the identity
-    guard: any repo, expected or not, was treated as a match. Now uses pure
-    `os.path.realpath` resolution — no subprocess, no platform-specific
-    shell dependency — which also fixes a second latent defect: comparing
-    this against a `repo_root` value straight from `git rev-parse
-    --show-toplevel` (always forward-slash, even on Windows) would fail to
-    match the SAME directory expressed with native backslashes, since both
-    sides are independently resolved through this same function.
-    """
     if not path:
         return ""
     if not os.path.isdir(path):
@@ -282,16 +247,12 @@ def _canon(path: str) -> str:
 
 
 def _git_repo_root(cwd: str) -> str:
-    """Return `git rev-parse --show-toplevel` output for cwd, or "" on failure."""
     return _show_toplevel(cwd=cwd) or ""
 
 
 def main(argv: list[str]) -> int:
     cwd = os.getcwd()
 
-    # ------------------------------------------------------------------
-    # Argument check
-    # ------------------------------------------------------------------
     if not argv or not argv[0]:
         print(
             f"{_PROG}: missing EXPECTED_REPO_ROOT argument — skipping.",
@@ -301,17 +262,11 @@ def main(argv: list[str]) -> int:
     expected_repo_root = argv[0]
     canonical_expected = _canon(expected_repo_root)
 
-    # ------------------------------------------------------------------
-    # Git-repo guard
-    # ------------------------------------------------------------------
     repo_root = _git_repo_root(cwd)
     if not repo_root:
         print(f"{_PROG}: not in a git repo — skipping.", file=sys.stderr)
         return 0
 
-    # ------------------------------------------------------------------
-    # Identity guard: only install inside the expected OSS publish repo.
-    # ------------------------------------------------------------------
     if _canon(repo_root) != canonical_expected:
         print(
             f"{_PROG}: not the expected OSS repo ({repo_root}) — skipping.",
@@ -319,18 +274,8 @@ def main(argv: list[str]) -> int:
         )
         return 0
 
-    # `repo_root` is git's own output (`rev-parse --show-toplevel`), which is
-    # ALWAYS forward-slash even on native Windows — os.path.join would then
-    # append native-separator segments onto a forward-slash prefix, producing
-    # a mixed-separator string (neither valid POSIX nor valid native display
-    # form). This is a real filesystem path (opened/chmod'd below, not a wire
-    # value), so normpath() to one consistent native form for both fs use and
-    # display, rather than routing through wire_paths.rel_id (POSIX-only).
     hook_path = os.path.normpath(os.path.join(repo_root, ".git", "hooks", "pre-commit"))
 
-    # ------------------------------------------------------------------
-    # Idempotency: paths check present -> both gates wired, fully installed.
-    # ------------------------------------------------------------------
     existing = ""
     if os.path.isfile(hook_path):
         try:
@@ -346,13 +291,9 @@ def main(argv: list[str]) -> int:
         )
         return 0
 
-    # ------------------------------------------------------------------
-    # Upgrade path: exec-bit gate present but illegal-path gate absent.
-    # ------------------------------------------------------------------
     if os.path.isfile(hook_path) and _GATE_MARKER in existing:
         with open(hook_path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(_APPEND_TEMPLATE.replace("__OVERRIDE_DOC_POINTER__", OVERRIDE_KEYS_DOC_DISPLAY))
-        # DR-276: declared AFTER the write lands, at the FINAL destination.
         declare_write(hook_path)
         print(
             f"{_PROG}: appended illegal-path gate to existing {hook_path}.",
@@ -360,9 +301,6 @@ def main(argv: list[str]) -> int:
         )
         return 0
 
-    # ------------------------------------------------------------------
-    # Foreign-hook handling: existing hook, not the coordinator shim.
-    # ------------------------------------------------------------------
     if os.path.isfile(hook_path):
         print(
             f"{_PROG}: an existing pre-commit hook is in place; the coordinator "
@@ -372,9 +310,6 @@ def main(argv: list[str]) -> int:
         )
         return 0
 
-    # ------------------------------------------------------------------
-    # Fresh-install path: write the canonical OSS shim.
-    # ------------------------------------------------------------------
     os.makedirs(os.path.dirname(hook_path), exist_ok=True)
     hook_body = _FRESH_HOOK_TEMPLATE.format(expected_repo_root=canonical_expected).replace(
         "__OVERRIDE_DOC_POINTER__", OVERRIDE_KEYS_DOC_DISPLAY
@@ -382,7 +317,6 @@ def main(argv: list[str]) -> int:
     with open(hook_path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(hook_body)
     os.chmod(hook_path, 0o755)
-    # DR-276: declared AFTER the write lands, at the FINAL destination.
     declare_write(hook_path)
     print(f"{_PROG}: installed {hook_path}.", file=sys.stderr)
     return 0

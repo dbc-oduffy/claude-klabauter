@@ -112,28 +112,14 @@ from typing import List, Tuple
 
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
 
-# Generator-provenance declaration: this module writes nothing -- it is a pure
-# reader feeding one orientation-cache section.
 GENERATES = []
 
-#: Bytes of each handoff read to find its frontmatter. Frontmatter sits at the
-#: top by construction; a bounded slice keeps the scan off the body entirely.
 _HEAD_BYTES = 3000
 
-#: Most abandoned claims named individually in the rendered section. The count
-#: is always exact; the enumeration is capped so one bad week cannot push every
-#: other orientation section off the screen.
 _MAX_NAMED = 5
 
 
 def _plausible_timestamp(value: Optional[str]) -> str:
-    """`value` if it opens with a four-digit year, else `""`.
-
-    Deliberately NOT a date parse — the module never parses a timestamp, it sorts
-    one lexically. This rejects the "present but garbage" class only, so a value
-    that reaches the rendered line looks like a date to a reader who has to trust
-    a defect report.
-    """
     if value and len(value) >= 4 and value[:4].isdigit():
         return value
     return ""
@@ -208,15 +194,13 @@ def _scan(
             with open(path, encoding="utf-8", errors="replace") as handle:
                 head = handle.read(_HEAD_BYTES)
         except OSError:
-            continue  # one unreadable record never sinks the scan
+            continue
         session_id = read_fm_field_unquoted(head, "claimed_by")
         if not session_id:
-            continue  # negative-spec: a claim that never stamped is a different defect
+            continue
         if session_id in live_session_ids:
             continue
         if _cascade_has_live_successor(path, repo_root):
-            # Deliverable cascade's own leg (b): already landed under a live
-            # successor/continuation, chain simply never closed out.
             continue
         rows.append(
             (
@@ -231,13 +215,6 @@ def _scan(
 
 
 def emit_abandoned_claims(repo_root: Path) -> str:
-    """Render the ``## Abandoned claims`` section body, or ``""`` to omit it.
-
-    ``""`` on every failure path and whenever no claimed baton has an
-    unreachable claimant — "nothing to report" and "could not tell" render
-    identically here by design, the same fail-open-to-silence contract every
-    ``emit_*`` helper in this package keeps.
-    """
     try:
         handoff_dir = Path(repo_root) / "state" / "handoffs"
         if not handoff_dir.is_dir():
@@ -247,10 +224,6 @@ def emit_abandoned_claims(repo_root: Path) -> str:
 
         live_session_ids = set(harness_registry.snapshot())
         if not live_session_ids:
-            # An empty registry cannot distinguish "every claimant is gone" from
-            # "the registry is unreadable/unbound", and the first reading would
-            # report the entire claimed corpus as unreachable on a box where the
-            # harness simply never wrote records. Stay silent.
             return ""
 
         rows = _scan(handoff_dir, live_session_ids, Path(repo_root))

@@ -1,28 +1,3 @@
-"""test_archive_stamp_cli.py — argv/stdout unit test for `archive-stamp-cli
-claim-handoff`'s AC2 success line and AC2b's per-field failure naming
-(P026-C2 for AC2, P026-C9/Track D for AC2b).
-
-Spec: docs/plans/2026-09-07-a-claim-is-written-twice-and-nothing-compares-them.md
-(P026-C2, P026-C9). AC2: `archive-stamp-cli claim-handoff` prints exactly one
-success line on exit 0, naming the handoff path and the claimant session id.
-AC2b: a run in which a best-effort write failed is distinguishable from a
-clean run by stdout alone, naming by field which write did not land — read
-off AC13's `return_result=True` `writes` map.
-
-The `_import_module()` seam is monkeypatched (same idiom as
-coordinator/bin/tests/test_archive_stamp_cli_close_handoff.py) so this suite
-never requires the engine root to resolve or coordinator_core to be
-importable — it asserts ONLY the CLI's own stdout-on-exit-0 behaviour, not
-the engine's claim-transition semantics (that is
-coordinator_core/ops/tests/test_handoff_transition.py's job).
-
-Loaded by file path (`importlib.machinery.SourceFileLoader`) since
-archive-stamp-cli is an extensionless polyglot entrypoint, not a `.py`
-module — same load idiom as the other archive-stamp-cli test files.
-
-Run:
-    pytest coordinator/bin/test_archive_stamp_cli.py -v
-"""
 from __future__ import annotations
 
 import contextlib
@@ -51,15 +26,6 @@ _cli = _load_cli_module()
 
 
 class _RecordingClaimHandoffMod:
-    """Stand-in for coordinator_core.archive_stamp — records the exact
-    handoff_path cs_claim_handoff was called with, and stands in for
-    resolve_current_session_id so the test controls the sid the CLI prints
-    without a real claude-klabauter checkout or a real environment session id.
-
-    `writes` (AC2b/AC13) — the per-write landed/failed map the real
-    `cs_claim_handoff(..., return_result=True)` attaches to its result dict
-    on a landed claim; `None` here means "omit the key", matching a
-    pre-AC13 engine."""
 
     def __init__(
         self,
@@ -126,10 +92,6 @@ class ClaimHandoffSuccessLineTest(unittest.TestCase):
         self.assertIn("sess-xyz789", lines[0])
 
     def test_engine_refusal_propagates_verbatim_and_prints_nothing(self):
-        """A non-zero exit from cs_claim_handoff (e.g. a terminal-deployment
-        refusal or an unresolvable session id) must not print a success
-        line — the engine already wrote its own error to stderr, and this
-        row's AC2 only governs the exit-0 case."""
         stub = _RecordingClaimHandoffMod(claim_rc=1)
         _cli._import_module = lambda: stub
 
@@ -151,8 +113,6 @@ class ClaimHandoffSuccessLineTest(unittest.TestCase):
 
 
 class ClaimHandoffFailureNamingTest(unittest.TestCase):
-    """AC2b (P026-C9): a run with a failed best-effort write is
-    distinguishable from a clean run by stdout alone, naming the field."""
 
     def setUp(self):
         self._orig_import_module = _cli._import_module
@@ -231,8 +191,6 @@ class ClaimHandoffFailureNamingTest(unittest.TestCase):
         self.assertIn("session_goal", out)
 
     def test_no_writes_key_degrades_to_plain_success_line(self):
-        """A pre-AC13 stub (no `writes` key at all) must not crash the CLI —
-        the map is additive on a landed claim, absence is not a failure."""
         stub = _RecordingClaimHandoffMod(claim_rc=0, sid="sess-abc123", writes=None)
         _cli._import_module = lambda: stub
 

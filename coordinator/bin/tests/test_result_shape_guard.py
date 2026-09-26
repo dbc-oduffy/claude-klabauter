@@ -1,15 +1,3 @@
-"""test_result_shape_guard — coverage for the C27 result-shape guards.
-
-Three `result.get(...)` call sites subscripted a cc_invoke/route() result with
-no `isinstance(result, dict)` guard first: `reassess-goal-krs.py :: main`,
-`reap-integrated-review-findings.py :: _reap_native`, and
-`coordinator-queue-append.py :: _schema_cli_validate`. A non-dict result
-(list/scalar) previously turned into an unhandled `AttributeError` traceback;
-each site now checks the shape first and reports the module's documented
-single-line stderr message instead.
-
-Spec backlink: state/dispatch-briefs/2026-08-20-a-refusal-cannot-exit-zero/C27.md
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -19,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-# Loads real bin/ modules and drives argv/subprocess-shaped call sites.
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -45,11 +32,6 @@ def git_repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-# ---------------------------------------------------------------------------
-# reassess-goal-krs.py :: main
-# ---------------------------------------------------------------------------
-
-
 def test_reassess_goal_krs_main_non_dict_result(git_repo, monkeypatch, capsys):
     mod = _load_module("reassess_goal_krs", "reassess-goal-krs.py")
     monkeypatch.setattr(mod, "cc_invoke", lambda op, params, cwd: ["not", "a", "dict"])
@@ -61,11 +43,6 @@ def test_reassess_goal_krs_main_non_dict_result(git_repo, monkeypatch, capsys):
     assert exc.value.code == 1
     err = capsys.readouterr().err
     assert "reassess-goal-krs: malformed result from cc_invoke: not a dict" in err
-
-
-# ---------------------------------------------------------------------------
-# reap-integrated-review-findings.py :: _reap_native
-# ---------------------------------------------------------------------------
 
 
 def test_reap_native_non_dict_result(git_repo, monkeypatch, capsys):
@@ -84,11 +61,6 @@ def test_reap_native_non_dict_result(git_repo, monkeypatch, capsys):
     assert (
         "fleet.reap_integrated_findings malformed result: not a dict" in err
     )
-
-
-# ---------------------------------------------------------------------------
-# coordinator-queue-append.py :: _schema_cli_validate
-# ---------------------------------------------------------------------------
 
 
 def test_queue_append_schema_cli_validate_non_dict_result(git_repo, monkeypatch, capsys):

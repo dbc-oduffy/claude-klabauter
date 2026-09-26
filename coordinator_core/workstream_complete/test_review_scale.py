@@ -75,14 +75,7 @@ def _write_record(
 def _decoy_filename(index: int) -> str:
     # A real production filename shape (`{TIMESTAMP}-{SESSION_ID[:8]}.json`)
     # for a DIFFERENT session — every decoy is a plausible on-disk record,
-    # never a synthetic name that would trivially miss the filter for an
-    # unrelated reason.
     return f"2026-08-{(index % 27) + 1:02d}-{index:06d}-{_FOREIGN_SID[:8]}.json"
-
-
-# ---------------------------------------------------------------------------
-# `_list_review_trail_paths_for_root` — the name-filter primitive itself.
-# ---------------------------------------------------------------------------
 
 
 def test_name_filter_returns_only_this_sessions_own_candidate(tmp_path):
@@ -98,9 +91,6 @@ def test_name_filter_returns_only_this_sessions_own_candidate(tmp_path):
 
 
 def test_name_filter_scales_with_own_candidates_not_corpus_size(tmp_path):
-    """A 500-decoy corpus (a stand-in for the real 4,337-file measurement)
-    must not change the candidate count this function returns for a session
-    that owns exactly two of them — the whole point of the fix."""
     live_dir = tmp_path / "state" / "review-trail"
     archive_dir = tmp_path / "archive" / "review-trail"
     for i in range(400):
@@ -116,9 +106,6 @@ def test_name_filter_scales_with_own_candidates_not_corpus_size(tmp_path):
 
 
 def test_name_filter_empty_sid_short_preserves_prior_unfiltered_behaviour(tmp_path):
-    """`sid_short=""` (the default) is the escape hatch for any OTHER caller
-    that still wants the whole-corpus listing — unchanged from before this
-    chunk."""
     live_dir = tmp_path / "state" / "review-trail"
     _write_record(live_dir, _decoy_filename(1), session_id=_FOREIGN_SID)
     _write_record(live_dir, f"2026-08-21-000001-{_SID_SHORT}.json")
@@ -129,8 +116,6 @@ def test_name_filter_empty_sid_short_preserves_prior_unfiltered_behaviour(tmp_pa
 
 
 def test_name_filter_missing_directories_degrade_to_empty_list(tmp_path):
-    """Neither `state/review-trail/` nor `archive/review-trail/` exists yet
-    (a fresh worktree) — must degrade to an empty list, never raise."""
     assert wsc._list_review_trail_paths_for_root(tmp_path, sid_short=_SID_SHORT) == []
 
 
@@ -146,21 +131,9 @@ def test_name_filter_non_json_entries_are_ignored(tmp_path):
     assert paths[0].endswith(".json")
 
 
-# ---------------------------------------------------------------------------
-# `_resolve_review_brightline_floor_kwargs` — the open-count claim end to end,
-# git-free (session_start_sha/chain_tip_sha resolution monkeypatched away —
-# not this file's own claim to prove, see module Negative-spec above).
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_floor_kwargs_open_count_bounded_by_own_records_not_corpus_size(monkeypatch, tmp_path):
-    """The scan-cost claim, proven directly: with 300 foreign-session decoys
-    on disk plus this session's own 2 records, `_resolve_review_brightline_
-    floor_kwargs` must open exactly this session's own 2 files — never the
-    302-file corpus — confirming AC4's "no op in scope reads a whole corpus"
-    for this call site."""
     live_dir = tmp_path / "state" / "review-trail"
     for i in range(300):
         _write_record(live_dir, _decoy_filename(i), session_id=_FOREIGN_SID)
@@ -213,8 +186,6 @@ def test_floor_kwargs_short_id_collision_still_filtered_by_field_after_open(monk
     result = wsc._resolve_review_brightline_floor_kwargs(tmp_path, _SID, session_start_time=object())
 
     assert result is not None
-    # Only the genuine own-session record's tip contributes — the collider's
-    # `bbbbbbb` tip must never appear.
     tips = [r["sha_range_head"] for r in result["trail_records"]]
     assert tips == ["aaaaaaa"]
 
@@ -222,9 +193,6 @@ def test_floor_kwargs_short_id_collision_still_filtered_by_field_after_open(monk
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_floor_kwargs_zero_own_records_among_decoys_returns_none(monkeypatch, tmp_path):
-    """A large foreign-session corpus and zero records of this session's own
-    — the ordinary AC2 single-close path — must still resolve `None` (the
-    caller's byte-identical plain-call fallback), never a guessed floor."""
     live_dir = tmp_path / "state" / "review-trail"
     for i in range(50):
         _write_record(live_dir, _decoy_filename(i), session_id=_FOREIGN_SID)

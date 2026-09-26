@@ -42,7 +42,6 @@ import runpy
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-# coordinator_core/benchmarks/ -> coordinator_core/ -> repo root
 _REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))
 _TARGET_PATH = os.path.join(_REPO_ROOT, "coordinator", "bin", "plan-assemble.py")
 

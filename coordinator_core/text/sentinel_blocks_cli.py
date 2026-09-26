@@ -1,30 +1,3 @@
-"""sentinel_blocks_cli — byte-parity port of coordinator/bin/lib/sentinel-blocks-cli.js.
-
-Thin CLI wrapper around sentinel_blocks (extract_block) for use in shell
-scripts.
-
-Port disposition: this module has NO DoE-side trampoline. The DoE `.js` CLI
-wrapper (coordinator/bin/lib/sentinel-blocks-cli.js) is invoked exclusively
-as `node <path> extract <file> <begin> <end>` (hardcoded `node`, never `bash`
-or direct-exec) — there is no dual-exec path for a sh/python polyglot
-trampoline to hook into (node
-does not execute a `''''exec ...''' ` bash/python polyglot line as valid
-JavaScript). Per the precedent set by the underlying library port
-(coordinator_core/text/sentinel_blocks.py docstring), the `.js` file and its
-CLI wrapper are left untouched; this module exists so a future python-native
-caller of the extract-block CLI contract can import it directly, mirroring
-the JS CLI's argv/stdout/exit-code contract exactly.
-
-Spec backlink: archive/specs/2026-05-01-portable-ideas-from-obsidian-research.md
-§W2 (Sentinel-Block Primitives)
-
-CLI contract (byte-parity with sentinel-blocks-cli.js):
-    extract <file> <begin-marker> <end-marker>
-        Prints the block content between markers (exclusive — marker lines
-        not included) to stdout. Exits 1 if either marker is absent, or if
-        the file cannot be read. Exits 1 with a usage message if invoked
-        with no command, an unknown command, or missing `extract` args.
-"""
 from __future__ import annotations
 
 import sys

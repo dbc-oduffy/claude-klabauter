@@ -42,14 +42,12 @@ from coordinator_core.ipc import register_op
 
 @register_op("hooks.guard_host_subagent_bash_ban")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PreToolUse(Bash) op: deny a dispatched subagent's Bash call on a
-    host that declares `subagent_bash_policy: deny`."""
     params = payload_of(params)
 
     try:
         result = check(params)
     except Exception:
-        return no_advisory()  # any resolution failure -> fail-open ALLOW
+        return no_advisory()
 
     if result is None:
         return no_advisory()

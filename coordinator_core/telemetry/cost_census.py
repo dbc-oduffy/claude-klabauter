@@ -111,17 +111,6 @@ from typing import Dict, List, Optional
 
 from coordinator_core.session.claimed_write import append_claimed_line
 
-#: Named hot-path ops this census tracks (baton candidate axis: "per-
-#: invocation cost of anything on the commit/session hot path"). A fixed,
-#: reviewable list rather than "every op seen" so the series stays
-#: comparable run over run even as new ops are added elsewhere — an op
-#: NOT in this list is simply not part of the series yet, not silently
-#: dropped from view (op-latency.jsonl itself still has every row).
-#: `review_brightline_gate.from_handoff` (the K-004 C1 instrument) was
-#: REMOVED from this tuple on 2026-08-19: the op it measured is gone
-#: (state/kill-ledger.md K-007) and can never emit another row, so keeping
-#: it would report a permanent zero as if it were a measurement. Its 117
-#: historical rows remain in op-latency.jsonl and are quoted in K-007.
 HOT_PATH_OPS: tuple = (
     "coverage.gate",
     "handoff.stamp",
@@ -129,29 +118,13 @@ HOT_PATH_OPS: tuple = (
     "review_trail.write",
 )
 
-#: Ratchet, not a target: this module must never read an unbounded number
 #: of lines even if `LOOKBACK_SECS` and rotation both fail to bound it
-#: (e.g. a corrupted/unrotated sink). 2,000,000 is ~9x the 222,572-row
-#: single-sink scale the 2026-08-15 fleet-degradation audit reconstructed
-#: from — comfortably above any one day's traffic, comfortably below
-#: "unbounded."
 MAX_ROWS_SCANNED = 2_000_000
 
-#: Default lookback window for "recent" rows — see module docstring's
-#: cadence section for why 24h (daily) is the chosen granularity.
 LOOKBACK_SECS_DEFAULT = 24 * 60 * 60
 
 
 def _sink_paths(repo_root: Path) -> List[Path]:
-    """The op-latency sink plus its rotated generations, newest first.
-
-    Thin call-through to `op_latency.sink_generations` (promoted there
-    2026-08-19, plan `2026-08-19-warm-engine-gets-an-honest-instrument`
-    C1 — the rotation-aware resolver's supported home, chosen to avoid an
-    import cycle once C3 makes `op_latency.pairing_summary` consume the
-    same resolver). Kept as a wrapper, not inlined at call sites, so this
-    module's existing (newest-first) output shape and every existing
-    caller are unchanged."""
     from coordinator_core.telemetry.op_latency import sink_generations
 
     return sink_generations(repo_root)
@@ -191,13 +164,6 @@ def run_census(
     max_rows: int = MAX_ROWS_SCANNED,
     write: bool = True,
 ) -> dict:
-    """Compute one census row and (if `write`) append it to
-    `state/cost-census.jsonl`. Returns the row unconditionally so a caller
-    (test, or an interactive run) can inspect it without re-reading disk.
-
-    Never raises — a missing/unreadable sink degrades to `n=0` rows and an
-    empty pairing summary, per module docstring negative-spec.
-    """
     if now is None:
         now = time.time()
 
@@ -275,9 +241,6 @@ def run_census(
 
 
 def _append_row(series_path: Path, row: dict) -> None:
-    """Append-only write of one JSON line — never truncates/rewrites the
-    file. Best-effort: a write failure here must not raise past this
-    module's own negative-spec (never blocks whatever cadence calls it)."""
     try:
         os.makedirs(series_path.parent, exist_ok=True)
         line = json.dumps(row, separators=(",", ":")) + "\n"
@@ -287,10 +250,6 @@ def _append_row(series_path: Path, row: dict) -> None:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """CLI entrypoint — `python -m coordinator_core.telemetry.cost_census`.
-    Resolves repo_root from cwd via `git rev-parse --show-toplevel`-free
-    lookup (walks up for a `.git` marker) so this can be invoked from
-    anywhere under the repo without a subprocess spawn."""
     repo_root = _find_repo_root(Path.cwd())
     if repo_root is None:
         print("cost_census: could not resolve repo root (no .git found)")

@@ -105,8 +105,6 @@ class Verdict(str, Enum):
 
 
 def git_root(cwd: Optional[str] = None) -> Optional[Path]:
-    """Resolve a git repo root from *cwd* (or the process cwd), or None if
-    not inside a repo / git is unusable. Never raises."""
     root = show_toplevel(cwd)
     return Path(root) if root else None
 
@@ -135,9 +133,6 @@ def _is_commit_ish(repo_root: Path, token: str) -> bool:
 
 
 def _run_git_log(repo_root: Path, args: list[str]) -> tuple[Optional[list[str]], str]:
-    """Returns `(commits, stderr_detail)`. On success `stderr_detail` is
-    empty; on failure `commits` is None and `stderr_detail` carries the
-    failed command's stderr for the caller's `SinceRange.detail`."""
     try:
         result = subprocess.run(
             ["git", "log", "--format=%H", *args],
@@ -159,23 +154,6 @@ def _run_git_log(repo_root: Path, args: list[str]) -> tuple[Optional[list[str]],
 
 
 def _commits_touching_path(repo_root: Path, range_args: list[str], artifact_path: str) -> tuple[Optional[set[str]], str]:
-    """Batched replacement for what used to be a per-commit `git diff-tree`
-    loop (one spawn per commit in the since-range): ONE `git log` call,
-    scoped to the SAME range portion of *range_args* (the `<since>..HEAD` /
-    `--since=<T>` token(s) preceding the caller's own `--` pathspec) but
-    re-pathspec'd to *artifact_path* alone, returns the SET of commit SHAs
-    in that range that touch *artifact_path* at all. Equivalent to running
-    `git diff-tree --no-commit-id --name-only -r --root <commit> --
-    <artifact_path>` once per commit and collecting the non-empty results —
-    `git log`'s own history-simplification against a pathspec already
-    matches `git diff-tree --root`'s per-commit touch test (both walk the
-    same commit's tree diff against its parent, or the empty tree for a
-    root commit), so this is a set-membership question answered in one
-    call rather than N.
-
-    Returns `(shas, stderr_detail)` with the same failure contract as
-    `_run_git_log`: `None` on failure, `stderr_detail` carrying the failed
-    command's stderr."""
     range_only = range_args[: range_args.index("--")] if "--" in range_args else list(range_args)
     try:
         result = subprocess.run(

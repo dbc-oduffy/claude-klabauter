@@ -1,11 +1,3 @@
-"""
-coordinator_core.roadmap.tests.test_audit — regression net for
-coordinator_core.roadmap.audit, ported from the bash oracle's two test files:
-  - coordinator/bin/tests/test-audit-roadmap-dependency-order.sh (Scenarios A/B/C)
-  - coordinator/bin/tests/test-audit-roadmap-verdict-regex.sh (2nd-cell false-positive)
-
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T3a-g3e
-"""
 
 from __future__ import annotations
 
@@ -48,19 +40,8 @@ def _reset_shared_machine_local_cache() -> None:
     yield
     clear_machine_local_cache()
 
-# Declared, not excused: `test_resolve_repo_root_git_dir_returns_toplevel` and
-# `test_resolve_data_root_derives_from_cwd_repo_root` spawn a real `git init` because
-# the property under test is `resolve_repo_root`'s real `git rev-parse --show-toplevel`
-# resolution against an actual repo (including a nested-cwd case) -- the exact
-# P1 silent-cwd-fallback bug this file's own docstring names required a genuine git
-# repo to catch, not a mock returning a canned toplevel. The spawn ratchet's
 # `_BASELINE` is shrink-only pre-existing residue and is explicitly not the route
-# for this file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
-
-# ---------------------------------------------------------------------------
-# Fixture helpers
-# ---------------------------------------------------------------------------
 
 
 def _write_stub(
@@ -78,11 +59,7 @@ def _write_stub(
     blocks: Optional[List[str]] = None,
     loe: Optional[str] = None,
 ) -> None:
-    # `kind` defaults to the retired
-    # spelling for byte-parity with every pre-existing caller, but callers
-    # below now also pass `kind="roadmap-baton"` (the canonical D1 spelling)
     # to prove `_ROADMAP_BATON_KIND_WHERE`'s `kind in (...)` term actually
-    # finds already-migrated stubs — the live defect this diff fixed.
     num = number if number is not None else int(stub_id.rsplit("-", 1)[-1])
     lines = [
         "---",
@@ -125,11 +102,6 @@ def _write_reconciliation(path: Path, count: int) -> None:
     path.write_text("Verdict: KEEP\n" * count, encoding="utf-8")
 
 
-# ---------------------------------------------------------------------------
-# validate_run_id
-# ---------------------------------------------------------------------------
-
-
 def test_validate_run_id_accepts_lowercase_alnum_hyphen() -> None:
     assert validate_run_id("claude-klabauter-strangler-2026-07-04") is None
 
@@ -137,11 +109,6 @@ def test_validate_run_id_accepts_lowercase_alnum_hyphen() -> None:
 @pytest.mark.parametrize("bad", ["", "Bad-Id", "-leading-hyphen", "under_score", "UP"])
 def test_validate_run_id_rejects_bad_shapes(bad: str) -> None:
     assert validate_run_id(bad) is not None
-
-
-# ---------------------------------------------------------------------------
-# _count_verdict — port of test-audit-roadmap-verdict-regex.sh
-# ---------------------------------------------------------------------------
 
 
 def test_count_verdict_does_not_double_count_2nd_cell_notes_column() -> None:
@@ -166,12 +133,6 @@ def test_count_verdict_prose_fallback() -> None:
 def test_count_verdict_cell_value_with_trailing_note() -> None:
     text = "| cluster | **KEEP** (cross-repo relay) | notes |\n"
     assert _count_verdict(text, "KEEP") == 1
-
-
-# ---------------------------------------------------------------------------
-# check_dependency_order — port of test-audit-roadmap-dependency-order.sh
-# Scenarios A (good), B (inverted), C (cyclic).
-# ---------------------------------------------------------------------------
 
 
 def test_dependency_order_scenario_a_good() -> None:
@@ -230,8 +191,6 @@ def test_dependency_order_unresolved_edge() -> None:
 
 
 def test_dependency_order_blocks_dangling_edge_is_unresolved() -> None:
-    # C1 — referential integrity on the inverse `blocks:` direction. Same FAIL
-    # severity as a dangling `blocked_by:` edge (symmetry, per the C1 body).
     stubs = [
         {"stub_id": "a-1", "number": 1, "sprint": 1, "wave": 1, "blocked_by": [], "blocks": ["zz-ghost"]},
     ]
@@ -244,9 +203,6 @@ def test_dependency_order_blocks_dangling_edge_is_unresolved() -> None:
 
 
 def test_dependency_order_blocks_resolved_edge_not_ordering_checked() -> None:
-    # A resolved `blocks:` edge must not be reported unresolved, and must NOT
-    # be fed into number/(sprint, wave) monotonicity -- re-deriving ordering
-    # from the inverse edge would double-report an edge declared both ways.
     stubs = [
         {"stub_id": "a-1", "number": 1, "sprint": 1, "wave": 1, "blocked_by": [], "blocks": ["a-2"]},
         {"stub_id": "a-2", "number": 2, "sprint": 1, "wave": 2, "blocked_by": []},
@@ -258,7 +214,6 @@ def test_dependency_order_blocks_resolved_edge_not_ordering_checked() -> None:
 
 
 def test_dependency_order_number_derived_from_stub_id_when_absent() -> None:
-    # number omitted entirely — derived from trailing -<N> in stub_id.
     stubs = [
         {"stub_id": "x-1", "sprint": 1, "wave": 1, "blocked_by": []},
         {"stub_id": "x-2", "sprint": 1, "wave": 2, "blocked_by": ["x-1"]},
@@ -267,34 +222,19 @@ def test_dependency_order_number_derived_from_stub_id_when_absent() -> None:
     assert result["ok"] is True
 
 
-# ---------------------------------------------------------------------------
-# _parse_pending_stubs — Audit 4 awk -F'|' port
-# ---------------------------------------------------------------------------
-
-
 def test_parse_pending_stubs_extracts_2nd_visible_column() -> None:
-    # Real table shape (roadmap-planning SKILL.md): | sprint | stub_id | ... | resolved? |
-    # awk -F'|' $3 == the 2nd visible column (fields[0]="" before the leading pipe).
     pmg = "| sprint | stub_id | gate question | resolved? |\n| 2 | foo-3 | ok? | pending |\n"
     assert _parse_pending_stubs(pmg) == ["foo-3"]
 
 
 def test_parse_pending_stubs_ignores_non_matching_cell() -> None:
     pmg = "| 1 | not-a-stub-id-shape | pending |\n"
-    # 2nd visible field here is "not-a-stub-id-shape" — doesn't match the stub-id shape.
     assert _parse_pending_stubs(pmg) == []
 
 
 def test_parse_pending_stubs_ignores_non_pending_rows() -> None:
     pmg = "| id | foo-3 | resolved |\n"
     assert _parse_pending_stubs(pmg) == []
-
-
-# ---------------------------------------------------------------------------
-# End-to-end run_audit — real-tree fixtures under tmp_path (mirrors bash
-# real-tree strategy, without needing PID-scoped cleanup since tmp_path is
-# already isolated per test).
-# ---------------------------------------------------------------------------
 
 
 def _init_tree(tmp_path: Path) -> Path:
@@ -398,9 +338,6 @@ def test_run_audit_loe_band_absent_is_pass_with_count(tmp_path: Path) -> None:
 def _write_spine_for_blocks_test(
     path: Path, roadmap_id: str, stub_ids: List[str]
 ) -> None:
-    """Minimal SPINE.md fixture -- one sprint, one cluster, no cross_sprint_edges.
-    Mirrors test_audit_sprint_scope.py's `_write_spine` shape, kept local
-    since this file must not edit that one (separate footprint)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "---",
@@ -425,8 +362,6 @@ def _write_spine_for_blocks_test(
 
 
 def test_run_audit_end_to_end_dangling_blocks_edge_fails_sprint_scoped(tmp_path: Path) -> None:
-    # Resolve pass E6 (C1 body) -- the widened unresolved-edge check runs on
-    # the sprint-scoped arm too, scoped to that arm's own stub cluster.
     root = _init_tree(tmp_path)
     run_id = "zzz-e2e-blocks-sprint"
     handoffs = root / "state" / "handoffs"
@@ -452,9 +387,6 @@ def test_run_audit_end_to_end_dangling_blocks_edge_fails_sprint_scoped(tmp_path:
 
 
 def test_run_audit_end_to_end_dangling_blocks_edge_fails_whole_roadmap(tmp_path: Path) -> None:
-    # C1's falsifier shape: a stub declaring `blocks:` against an id absent
-    # from the roadmap's stub set fails Audit 5 on the whole-roadmap arm --
-    # the same severity `blocked_by:` already gets.
     root = _init_tree(tmp_path)
     run_id = "zzz-e2e-blocks-dangling"
     handoffs = root / "state" / "handoffs"
@@ -558,10 +490,6 @@ def test_run_audit_pending_row_without_matching_stub_fails(tmp_path: Path) -> No
     _write_reconciliation(root / "state" / "roadmap" / run_id / "reconciliation.md", 0)
     pmg_dir = root / "state" / "roadmap" / run_id
     pmg_dir.mkdir(parents=True, exist_ok=True)
-    # stub_id must match the narrow ^[a-z]+-[0-9]+$ shape (awk-port regex, preserved
-    # exactly from the bash oracle) to be extracted as a pending-row candidate at all —
-    # a multi-hyphen id (e.g. embedding the run_id) would not match, so use a bare
-    # single-word-then-digit id here, decoupled from run_id.
     (pmg_dir / "pm-gates.md").write_text(
         "| sprint | stub_id | resolved? |\n| 1 | ghost-1 | pending |\n",
         encoding="utf-8",
@@ -573,16 +501,7 @@ def test_run_audit_pending_row_without_matching_stub_fails(tmp_path: Path) -> No
     assert any("no stub with that stub_id exists" in line for line in stderr_lines)
 
 
-# ---------------------------------------------------------------------------
-# Canonical `kind: roadmap-baton` spelling — Review: code-reviewer (P1,
-# Finding 1). Every fixture above seeds the RETIRED `kind: spinoff-roadmap`
-# spelling, which already matched the pre-fix hardcoded `kind=spinoff-roadmap`
 # literal — so none of them exercise `_ROADMAP_BATON_KIND_WHERE`'s `kind in
-# (...)` term against the canonical spelling the live defect was about. These
-# tests seed `kind: roadmap-baton` (and one dual-spelling mix) and assert the
-# audit paths find them — the exact regression the live defect would
-# reintroduce if the `where=` fix were ever reverted.
-# ---------------------------------------------------------------------------
 
 
 def test_run_audit_end_to_end_canonical_kind_roadmap_baton(tmp_path: Path) -> None:
@@ -635,8 +554,6 @@ def test_run_audit_canonical_kind_ready_to_fire_uniqueness_violation(
 def test_run_audit_dual_spelling_both_legacy_and_canonical_kind_found(
     tmp_path: Path,
 ) -> None:
-    # Dual-acceptance is the contract: a mid-migration roadmap can carry BOTH
-    # spellings across its stub set, and the audit must count both.
     root = _init_tree(tmp_path)
     run_id = "zzz-e2e-dual-spelling"
     handoffs = root / "state" / "handoffs"
@@ -660,14 +577,7 @@ def test_run_audit_dual_spelling_both_legacy_and_canonical_kind_found(
     assert any("Stub-coverage: 2 stubs" in line for line in stdout_lines)
 
 
-# ---------------------------------------------------------------------------
-# resolve_repo_root / _state_root / _claude_klabauter_root / resolve_data_root —
 # The DATA_ROOT/state-root resolution chain had
-# zero direct unit tests despite ~50 lines of module docstring justifying it
-# as a genuine correctness fix over the oracle. A test exercising
-# resolve_repo_root against a non-git tmp_path would have caught the P1
-# silent-cwd-fallback bug this review found and the first pass fixed.
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_repo_root_non_git_dir_fails_loud(tmp_path: Path) -> None:
@@ -762,9 +672,6 @@ def test_engine_root_wins_while_both_are_set(monkeypatch: pytest.MonkeyPatch) ->
 def test_claude_klabauter_root_pointer_file_fast_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # rung-1.5 pointer-file fast path (Windows
-    # hook-latency fix, ported from coordinator-claude-klabauter-root.sh) must resolve
-    # without ever invoking the subprocess-based machine-local ladder.
     settings_home = tmp_path / "settings-home"
     (settings_home / "machine-local").mkdir(parents=True)
     (settings_home / "machine-local" / ".claude-klabauter-live-root").write_text(
@@ -809,13 +716,6 @@ def test_resolve_data_root_derives_from_cwd_repo_root(tmp_path: Path) -> None:
     assert result == repo_root
 
 
-# ---------------------------------------------------------------------------
-# main() CLI/argv layer — Review: code-reviewer (P2) — no test invoked main()
-# directly; the usage/exit-2 branches, --root consumption, and the exit-3
-# hard-error path were all unexercised end-to-end.
-# ---------------------------------------------------------------------------
-
-
 def test_main_missing_run_id_prints_usage_and_exits_2(capsys: pytest.CaptureFixture) -> None:
     assert main([]) == 2
     err = capsys.readouterr().err
@@ -850,9 +750,7 @@ def test_main_root_flag_consumed_runs_audit(tmp_path: Path) -> None:
 
 
 def test_main_config_error_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A foreseeable config gap (unresolvable
     # CLAUDE_KLABAUTER_ROOT) is a usage/config error, exit 1 — not this module's own
-    # documented exit-3 "unexpected internal error" contract.
     def _boom(root_flag: Optional[str], cwd: Optional[Path] = None) -> Path:
         raise RuntimeError("audit-roadmap: repo_root is the meta-repo but CLAUDE_KLABAUTER_ROOT is unresolvable")
 
@@ -877,25 +775,12 @@ def test_main_hard_error_exits_3(
     assert "hard error while auditing" in err
 
 
-# ---------------------------------------------------------------------------
-# DR-172 succession — a superseded baton leaves TWO records carrying ONE
-# `stub_id` (archived predecessor + live successor) permanently. Audit 1 counts
-# coverage per STUB, not per record, so the pair must read as one stub. Summing
-# record counts made this audit fail forever after the first succession and
-# blocked Phase 3 dispatch on a roadmap whose graph was sound.
-# Source: cross-repo/inbox/2026-08-18-doe-claude-em-roadmap-baton-succession-refusal-comes-out.md § ask 3
-# ---------------------------------------------------------------------------
-
-
 def test_audit1_succession_pair_counts_as_one_stub(tmp_path: Path) -> None:
     root = _init_tree(tmp_path)
     run_id = "zzz-succession"
     handoffs = root / "state" / "handoffs"
     archived = root / "archive" / "handoffs"
 
-    # Two distinct stubs, one of which has undergone a succession: its
-    # predecessor sits in archive/ and its successor in state/, both carrying
-    # `stub_id: <run_id>-1`. Three records, two stubs, two KEEP verdicts.
     _write_stub(
         archived / f"{run_id}-1-predecessor.md",
         run_id,
@@ -923,20 +808,7 @@ def test_audit1_succession_pair_counts_as_one_stub(tmp_path: Path) -> None:
 
     assert exit_code == 0, stderr_lines
     assert any("Stub-coverage: 2 stubs" in line for line in stdout_lines), stdout_lines
-    # The record count is still reported — the succession is visible, not hidden.
     assert any("3 record(s)" in line for line in stdout_lines), stdout_lines
-
-
-# ---------------------------------------------------------------------------
-# Post-reconciliation stub declarations — Audit 1 scoping.
-#
-# `expected` counts KEEP only: a MERGE verdict folds its cluster into an
-# existing KEEP cluster and mints no stub, which is what every reconciliation
-# file in the corpus says in its own prose. Stubs that postdate the Phase-1
-# pass (expansion cohorts, sub-split stub families) carry no verdict row and
-# are declared per-stub in `post-reconciliation-stubs.md` rather than given a
-# fabricated one.
-# ---------------------------------------------------------------------------
 
 
 def test_parse_post_reconciliation_stubs_reads_id_and_provenance() -> None:
@@ -953,8 +825,6 @@ def test_parse_post_reconciliation_stubs_reads_id_and_provenance() -> None:
 
 
 def test_parse_post_reconciliation_stubs_ignores_row_with_empty_provenance() -> None:
-    """An undeclared reason exempts nothing — the file is a scoping
-    declaration, not a suppression list."""
     text = "| stub_id | minted | why |\n| foo-04 | 2026-07-04 |  |\n"
     assert parse_post_reconciliation_stubs(text) == {}
 
@@ -1009,8 +879,6 @@ def test_declared_post_reconciliation_stub_is_excluded_from_coverage(
 
 
 def test_declaration_naming_a_stub_not_on_disk_fails(tmp_path: Path) -> None:
-    """A declaration that outlives its stub is a standing waiver — fail loudly
-    rather than let it keep widening the coverage bar."""
     root = _init_tree(tmp_path)
     run_id = "zzz-post-recon-orphan"
     handoffs = root / "state" / "handoffs"
@@ -1029,14 +897,8 @@ def test_declaration_naming_a_stub_not_on_disk_fails(tmp_path: Path) -> None:
     assert exit_code == 1
     assert any("ghost-99" in line and "not on disk" in line for line in stderr_lines)
 
-# ---------------------------------------------------------------------------
-# Stub-coverage is per-CLUSTER, not a stub count. Step 2.1.6 of the
 # roadmap-planning skill MANDATES folding several clusters into one baton, so
 # `stub_count == keep_count` fails a conforming roadmap BY CONSTRUCTION and
-# fails it harder the larger the roadmap is. The skill says so directly: "Any
-# gate asserting the two counts match is measuring the wrong thing and must
-# read `covers:`." These tests pin the corrected bar and the legacy fallback.
-# ---------------------------------------------------------------------------
 
 _NL = chr(10)
 
@@ -1074,7 +936,6 @@ def test_parse_keep_cluster_ids_honours_column_3_verdict_shape() -> None:
 
 
 def test_one_stub_covering_several_clusters_passes_coverage(tmp_path: Path) -> None:
-    """The fold is mandated, so 2 stubs over 3 KEEP clusters is CORRECT."""
     root = _init_tree(tmp_path)
     run_id = "zzz-fold"
     handoffs = root / "state" / "handoffs"
@@ -1117,8 +978,6 @@ def test_uncovered_keep_cluster_fails_and_is_named(tmp_path: Path) -> None:
 
 
 def test_cluster_covered_twice_fails(tmp_path: Path) -> None:
-    """Coverage AND non-duplication — a cluster claimed by two batons is two
-    sessions doing the same work."""
     root = _init_tree(tmp_path)
     run_id = "zzz-dupe"
     handoffs = root / "state" / "handoffs"
@@ -1135,8 +994,6 @@ def test_cluster_covered_twice_fails(tmp_path: Path) -> None:
 
 
 def test_repeated_id_within_one_stubs_own_covers_passes(tmp_path: Path) -> None:
-    """A stub repeating an id in its own `covers:` (sloppy frontmatter, no
-    second stub involved) must not read as cross-stub duplication."""
     root = _init_tree(tmp_path)
     run_id = "zzz-self-dupe"
     handoffs = root / "state" / "handoffs"
@@ -1174,8 +1031,6 @@ def test_covers_entry_naming_no_keep_cluster_fails_as_unknown(tmp_path: Path) ->
 
 
 def test_backtick_wrapped_covers_entry_matches_plain_table_id(tmp_path: Path) -> None:
-    """`covers:` ids may be backtick-wrapped just like the table's own
-    convention — both sides of the comparison must normalize identically."""
     root = _init_tree(tmp_path)
     run_id = "zzz-backtick-covers"
     handoffs = root / "state" / "handoffs"
@@ -1194,8 +1049,6 @@ def test_backtick_wrapped_covers_entry_matches_plain_table_id(tmp_path: Path) ->
 
 
 def test_roadmap_declaring_no_covers_keeps_the_legacy_count_bar(tmp_path: Path) -> None:
-    """Pre-`covers:` roadmaps must not start failing — the legacy arm is why
-    this change is additive rather than a corpus-wide break."""
     root = _init_tree(tmp_path)
     run_id = "zzz-legacy"
     handoffs = root / "state" / "handoffs"

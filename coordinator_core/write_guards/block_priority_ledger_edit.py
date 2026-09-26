@@ -75,16 +75,10 @@ from coordinator_core.bash_guards._helpers import operator_override_note
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
-PRIORITY = 114  # advisory band; see docs/wiki/write-guard-priority-bands.md
+PRIORITY = 114
 
-#: Escape hatch — recovery-only, mirrors the sibling guards' override pattern.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_PRIORITY_LEDGER_EDIT"
 
-#: Path-tail match: any file directly under a `.../state/priority-ledger/`
-#: directory, regardless of the resolved central root's machine-local
-#: prefix. Deliberately not anchored past the directory name — every entry
-#: under it (today: `<target_id>.yaml`) is in scope, not just today's
-#: extension.
 _LEDGER_RE = re.compile(r"(^|/)state/priority-ledger/[^/]+$")
 
 
@@ -95,8 +89,6 @@ def _extract_file_path(tool_name: str, tool_input: Dict[str, Any]) -> str:
 
 
 def _normalize(file_path: str) -> str:
-    """Backslash -> forward slash, then collapse slash runs (parity with
-    the retired `block_tracker_edit.py`'s F5-fixed normalizer)."""
     normalized = file_path.replace("\\", "/")
     while "//" in normalized:
         normalized = normalized.replace("//", "/")
@@ -105,7 +97,6 @@ def _normalize(file_path: str) -> str:
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
-        # Honor escape hatch first.
         if os.environ.get(_OVERRIDE_ENV_VAR, "0") == "1":
             return None
 
@@ -135,7 +126,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             + ("\n\n" + _note if _note else "")
         )
 
-        # Advisory envelope (DR-277) — additionalContext only, NEVER
         # permissionDecision:"deny". See INTERFACE.md § Envelope — advisory.
         return {
             "hookSpecificOutput": {
@@ -144,7 +134,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         }
     except Exception:
-        # Fail-open on any unexpected error — mirrors every sibling guard's
-        # fail-open-on-error discipline (never fail-closed on an advisory
-        # guard's own internal error).
         return None

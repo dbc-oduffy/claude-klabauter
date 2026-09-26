@@ -80,10 +80,6 @@ _FM_DELIM_RE = re.compile(r"^---")
 
 
 def _run_git(args: List[str], cwd: str) -> Tuple[int, str]:
-    """Run a git subcommand; returns (returncode, stdout). Never raises on
-    a non-git-repo / missing-object condition — mirrors the oracle's
-    `2>/dev/null || echo ""` fallback shape.
-    """
     try:
         result = subprocess.run(
             ["git", *args],
@@ -112,10 +108,6 @@ def _repo_root(cwd: str) -> Optional[str]:
 
 
 def _extract_field(content: str, field_re: re.Pattern) -> str:
-    """Mirror `grep -m1 '^<field>:' | sed 's/^<field>:[[:space:]]*//' |
-    sed 's/[[:space:]]*$//'` — first matching line only, colon-prefix and
-    surrounding whitespace stripped.
-    """
     for line in content.splitlines():
         if field_re.match(line):
             value = field_re.sub("", line, count=1)
@@ -124,9 +116,6 @@ def _extract_field(content: str, field_re: re.Pattern) -> str:
 
 
 def _fm_end_line(content: str) -> Optional[int]:
-    """Line number (1-indexed) of the SECOND line starting with '---' —
-    mirrors `awk '/^---/{c++; if(c==2){print NR; exit}}'`.
-    """
     count = 0
     for idx, line in enumerate(content.splitlines(), start=1):
         if _FM_DELIM_RE.match(line):
@@ -139,8 +128,6 @@ def _fm_end_line(content: str) -> Optional[int]:
 def _has_body_diff(staged_content: str, staged_diff: str, diff_u0: str) -> bool:
     fm_end = _fm_end_line(staged_content)
     if fm_end is None or fm_end < 2:
-        # Malformed frontmatter (no closing ---): conservatively treat any
-        # diff as body diff.
         return bool(staged_diff)
 
     for line in diff_u0.splitlines():
@@ -202,7 +189,6 @@ def main(argv: List[str]) -> int:
     has_body_diff = _has_body_diff(staged_content, staged_diff, diff_u0)
     has_last_mapped_diff = _has_last_mapped_diff(diff_u0)
 
-    # Branch A — evaluated first: atlas was refreshed this pass.
     if has_body_diff and staged_last_mapped == audit_date:
         if staged_last_attested == audit_date:
             print("PASS branch=A")
@@ -213,7 +199,6 @@ def main(argv: List[str]) -> int:
         )
         return 0
 
-    # Branch B — atlas already current, asserted via commit-message token.
     commit_msg_content = ""
     if os.path.isfile(commit_msg_file):
         try:
@@ -222,8 +207,6 @@ def main(argv: List[str]) -> int:
         except OSError:
             commit_msg_content = ""
 
-    # Faithful oracle-bug repro: audit_date is inserted UN-escaped into the
-    # regex, exactly as the bash `grep -E` oracle did. See module docstring.
     token_re = re.compile(r"atlas-current-as-of:[ \t]*" + audit_date)
     has_branch_b_token = bool(token_re.search(commit_msg_content))
 

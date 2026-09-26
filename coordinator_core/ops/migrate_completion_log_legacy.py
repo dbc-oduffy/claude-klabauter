@@ -77,7 +77,6 @@ def _resolve_repo_root(explicit_root: Optional[str], cwd: Optional[str] = None) 
 
 
 def _find_monoliths(completed_dir: str) -> List[str]:
-    """Non-recursive scan of completed_dir for YYYY-MM.md monolith files, sorted."""
     if not os.path.isdir(completed_dir):
         return []
     hits = []
@@ -93,8 +92,6 @@ def _git_mv(repo_root: str, src: str, dst: str) -> bool:
         ["git", "-C", repo_root, "mv", src, dst],
         capture_output=True,
         text=True,
-        # Windows portability convention applied
-        # inconsistently across this wave's siblings; align this call site.
         **no_console_creationflags(),
     )
     if result.returncode != 0 and result.stderr.strip():
@@ -130,13 +127,8 @@ def _git_mv_batch(repo_root: str, srcs: List[str], dst_dir: str) -> bool:
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: arg parse, root resolution, scan, migrate, print, return rc."""
     explicit_root: Optional[str] = None
 
-    # `--root ""` (empty explicit value) previously fell
-    # through unconsumed and silently degraded to env/git-auto-discovery instead
-    # of erroring on the operator's explicit (if empty) flag. Now an explicit
-    # usage error, matching `--root=` below.
     rest = argv[:]
     if rest and rest[0] == "--root" and len(rest) > 1 and not rest[1]:
         print("ERROR: --root requires a non-empty value.", file=sys.stderr)
@@ -201,12 +193,6 @@ def main(argv: List[str]) -> int:
     failed = 0
     failed_files: List[str] = []
 
-    # Skip-if-at-destination stays a per-file, spawn-free (`os.path.exists`)
-    # decision made BEFORE any git call — unchanged from the per-file loop.
-    # Only the actual `git mv` for the surviving set is batched: every one of
-    # them targets the SAME legacy_dir, so `git mv src1 src2 ... legacy_dir`
-    # does the work of N per-file `git mv` spawns in one call (see
-    # `_git_mv_batch`'s docstring for the batch-primitive evidence).
     to_move: List[str] = []
     for src in monoliths:
         filename = os.path.basename(src)
@@ -221,18 +207,10 @@ def main(argv: List[str]) -> int:
         for src in to_move:
             filename = os.path.basename(src)
             dst = os.path.join(legacy_dir, filename)
-            # DR-276: declared AFTER the move lands, never before — the
             # contract is a report of what was ACTUALLY written, not of an
-            # intended surface. `dst` is the final destination `git mv`
-            # rewrote src into, never the pre-move src path.
             declare_write(dst)
             moved += 1
     else:
-        # `git mv` with multiple sources is a single atomic invocation:
-        # a non-zero exit here means it failed for the batch as a whole, so
-        # every candidate in it is reported failed — mirrors the aggregate
-        # "one or more git mv operations failed" exit-code-2 contract this
-        # module already promised, never a bespoke partial-failure shape.
         for src in to_move:
             filename = os.path.basename(src)
             print(f"  FAIL: git mv returned non-zero for {filename}", file=sys.stderr)

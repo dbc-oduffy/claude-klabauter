@@ -68,10 +68,6 @@ _NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _make_stub_engine_root(tmp_path: Path) -> Path:
-    """Same shape as `test_door_read_deadline.py::_make_stub_engine_root`:
-    a throwaway `coordinator_core/_engine_stamp` (what `is_valid_engine_root_w`
-    checks) so the door accepts this as a real engine root, unique per test
-    run so the derived pipe name/hash cannot collide with a real server."""
     root = tmp_path / "stub-engine"
     (root / "coordinator_core").mkdir(parents=True)
     (root / "coordinator_core" / "_engine_stamp").write_text(
@@ -97,10 +93,6 @@ def _run_named_door(exe_path: Path, engine_root: Path, *args: str) -> subprocess
 
 
 def test_renamed_door_with_no_matching_script_fails_closed(tmp_path: Path) -> None:
-    """A door copied to a name with no matching `coordinator/bin/<name>.py`
-    must refuse outright -- no process spawned, a diagnostic naming both the
-    image and the missing script -- never silently substitute
-    `coordinator-invoke.py`'s grammar for it."""
     root = _make_stub_engine_root(tmp_path)
     renamed = tmp_path / "cross-repo-memo.exe"
     shutil.copyfile(_DOOR_EXE, renamed)
@@ -117,9 +109,6 @@ def test_renamed_door_with_no_matching_script_fails_closed(tmp_path: Path) -> No
 
 
 def test_renamed_door_falls_through_to_its_own_matching_script(tmp_path: Path) -> None:
-    """Once `coordinator/bin/<name>.py` DOES exist for the resolved name, the
-    renamed door's cold fallback runs THAT script -- proving the resolution
-    is genuinely name-driven, not merely a refusal that always fires."""
     root = _make_stub_engine_root(tmp_path)
     marker = "CROSS-REPO-MEMO-FALLBACK-RAN"
     (root / "coordinator" / "bin" / "cross-repo-memo.py").write_text(

@@ -1,18 +1,3 @@
-"""A git mutation's exit status read through a pipe.
-
-`git commit -F msg.txt | tail -3 && git push` tests TAIL. A pipeline's status is
-its LAST stage's, so a failed commit reads as success to the harness and to any
-`&&` after it, and the push runs against a commit that never landed.
-
-Measured 2026-09-11 in two repos independently, by two sessions who were at that
-moment each telling the other to distrust unverified green signals. One of them
-had misreported a publish round's exit 1 as exit 0 by the same mechanism. The
-habit behind it is benign -- piping to `tail`/`head` to keep output short --
-which is why it survives: invisible until the first stage fails, and invisible
-again then.
-
-Both verdicts are proven: a read-only pipeline and an unpiped chain stay quiet.
-"""
 
 from __future__ import annotations
 
@@ -51,9 +36,6 @@ def test_a_read_only_or_unpiped_command_is_quiet(cmd):
 
 
 def test_the_named_segment_is_the_git_command_not_the_whole_chain():
-    """The refusal quotes what it parsed. A message naming the whole line leaves
-    the reader to find which stage was the problem, which on a three-stage chain
-    is the question they came with."""
     head = dispatch_checks._piped_exit_code_chain(
         "git add -- R.md && git commit -F m.txt | tail -3 && git push origin main"
     )
@@ -61,10 +43,6 @@ def test_the_named_segment_is_the_git_command_not_the_whole_chain():
 
 
 def test_flags_taking_a_value_do_not_hide_the_subcommand():
-    """`-C <path>` and `-c <k=v>` put a value between the flag and the
-    subcommand. A hand-rolled pattern that stops at the first non-flag token
-    reads the PATH as the subcommand and the detector goes quiet exactly where a
-    scripted call sits."""
     assert dispatch_checks._piped_exit_code_chain(
         "git -C X:/claude-klabauter commit -F m.txt | tail -1"
     ) is not None

@@ -1,12 +1,3 @@
-"""Tests for coordinator_core.install.settings_home_report (C5, docs/plans/
-2026-08-17-machine-first-install-surface.md).
-
-Mutation-test contract asserted here: the check must fail when the settings
-home stops being populated (a member removed on disk), never when only the
-enumeration text changes -- see `test_missing_fixed_member_is_detected` and
-`test_missing_forwarder_is_detected`, which each construct a fully-populated
-fixture then remove exactly one real thing and assert the report flips.
-"""
 
 from __future__ import annotations
 
@@ -47,9 +38,6 @@ def _populate_full_settings_home(root: Path) -> Path:
 
 @pytest.fixture
 def claude_klabauter_root() -> Path:
-    """The real claude-klabauter checkout -- expected_forwarders() derives from its
-    live coordinator/bin/ listing, so tests exercise the real generator
-    rather than a synthetic fixture."""
     return Path(__file__).resolve().parents[3]
 
 
@@ -83,25 +71,11 @@ def test_missing_fixed_member_is_detected(tmp_path: Path, claude_klabauter_root:
 
 
 def test_retired_whoami_absence_is_not_a_failure(tmp_path: Path, claude_klabauter_root: Path) -> None:
-    """`coordinator-whoami/` absent must NOT make the report incomplete.
-
-    The install chain has no provisioning step for it and says so
-    (`scripts/setup.py`'s module docstring: "deliberately absent, not lost").
-    Pinning this because the mixed signal it produced -- a FAIL printed
-    directly above "setup: complete" -- is what left a first-time installer
-    unable to tell whether the install had worked.
-    """
     sh = _populate_full_settings_home(tmp_path)
     (sh / "coordinator-whoami").rmdir()
 
     report = check_settings_home(sh, claude_klabauter_root)
 
-    # Asserted against `fixed_missing` rather than `report.complete`:
-    # completeness also folds in forwarder coverage, which this fixture does
-    # not fully populate, so a `complete` assertion would be answering a
-    # broader question than the one at issue. This is the exact contract --
-    # and it is falsifiable: before the retirement this same call put
-    # coordinator-whoami in the list, which is what the old test asserted.
     labels = [m.label for m in report.fixed_missing]
     assert not any("coordinator-whoami" in label for label in labels), (
         f"a retired member must not be reported missing: {labels}"
@@ -109,8 +83,6 @@ def test_retired_whoami_absence_is_not_a_failure(tmp_path: Path, claude_klabaute
 
 
 def test_missing_forwarder_is_detected(tmp_path: Path, claude_klabauter_root: Path) -> None:
-    """An empty bin/ against a real coordinator/bin/ listing must report
-    every expected forwarder missing, not silently pass."""
     sh = _populate_full_settings_home(tmp_path)
 
     report = check_settings_home(sh, claude_klabauter_root)
@@ -133,9 +105,6 @@ def _land_forwarders(sh: Path, claude_klabauter_root: Path, *, marker: str = _AG
 
 
 def test_forwarder_present_when_landed(tmp_path: Path, claude_klabauter_root: Path) -> None:
-    """Landing exactly the expected forwarder files makes the check pass
-    for forwarders specifically -- proves the oracle is the on-disk bin/
-    listing, not a count or a self-reported manifest."""
     sh = _populate_full_settings_home(tmp_path)
     _land_forwarders(sh, claude_klabauter_root)
 
@@ -149,18 +118,6 @@ def test_forwarder_present_when_landed(tmp_path: Path, claude_klabauter_root: Pa
 def test_publish_excluded_name_is_never_missing(
     tmp_path: Path, claude_klabauter_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A name `launcher_is_installable` says the installer correctly never
-    gives a launcher (the publish chain, PM-ruled 2026-08-29) must not
-    render as `forwarder_missing` when its bin/ file is absent -- the
-    exact false FAIL this test guards against: `expected_forwarders()`
-    over-reports because it has no engine-root-aware filter of its own,
-    and a prior version of this check counted the exclusion as a defect.
-
-    A fake engine root -- carrying every expected name's `.py` EXCEPT
-    `coordinator-publish` -- makes `launcher_is_installable` return False
-    for exactly that one name, deterministically, without depending on
-    this box's actual registered engine root.
-    """
     from coordinator_core.install.engine_root_for_install import InstallEngineRoot
 
     sh = _populate_full_settings_home(tmp_path)
@@ -181,8 +138,6 @@ def test_publish_excluded_name_is_never_missing(
         lambda: InstallEngineRoot(kind="published", root=fake_engine_root, remediation=None),
     )
 
-    # Land every forwarder except the excluded one, so a genuine miss would
-    # still be distinguishable from an exclusion if the filter were wrong.
     for installed_name, target in expected.items():
         if installed_name == excluded_name:
             continue
@@ -212,12 +167,6 @@ def test_format_report_lines_flags_incomplete(tmp_path: Path, claude_klabauter_r
 
 
 def test_check_does_not_leak_derivation_stdout(tmp_path: Path, claude_klabauter_root: Path, capsys) -> None:
-    """coordinator_core.install.substrate._derive_agent_helper_target_map
-    print()s a WARNING on a legacy extensionless/.py-twin collision; the
-    doctor probe's caller emits pure JSON on stdout by contract, so that
-    print must never reach this module's stdout. Regression pin for the
-    stdout-pollution bug this module's docstring on `expected_forwarders`
-    names."""
     sh = _populate_full_settings_home(tmp_path)
 
     check_settings_home(sh, claude_klabauter_root)
@@ -228,13 +177,6 @@ def test_check_does_not_leak_derivation_stdout(tmp_path: Path, claude_klabauter_
 def test_absent_venv_leaves_the_settings_home_complete(
     tmp_path: Path, claude_klabauter_root: Path
 ) -> None:
-    """A machine-first install never creates `.coordinator-venv` -- it is
-    reachable only via the break-glass `--allow-venv-fallback`, required on
-    every run with no automatic or prior-consent path (INSTALL.md
-    § Dependency provisioning item 5). Demanding it made a correct install
-    permanently incomplete, red in both `scripts/setup.py`'s report step and
-    the `claude-klabauter.settings_home.complete` doctor probe.
-    """
     sh = _populate_full_settings_home(tmp_path)
     (sh / ".coordinator-venv").rmdir()
 
@@ -259,12 +201,6 @@ def test_absent_venv_leaves_the_settings_home_complete(
 def test_foreign_root_forwarder_body_is_not_counted_present(
     tmp_path: Path, claude_klabauter_root: Path
 ) -> None:
-    """machine-b, 2026-08-22: settings-home `bin/` is one directory every
-    engine root on the box installs into. A run rooted at the published
-    mirror landed its own forwarder set there -- every name present, every
-    body importing `_resolve_claude_klabauter`. An existence-only count
-    reports that green while nothing routes through this root.
-    """
     sh = _populate_full_settings_home(tmp_path)
     _land_forwarders(sh, claude_klabauter_root, marker=_FOREIGN_MARKER)
 
@@ -283,20 +219,11 @@ def test_foreign_root_forwarder_body_is_not_counted_present(
 def test_door_owned_coordinator_invoke_counts_present(
     tmp_path: Path, claude_klabauter_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """2026-08-22 collision fix: once the native warm-engine door claims
-    the `coordinator-invoke` bare name (door_install.py), that slot's body
-    is no longer the generic forwarder -- `forwarder_body_is_ours` fails
-    there BY DESIGN, not by corruption. The report must count it present
-    via `_is_door_owned_forwarder_slot`, not flag it `body not this root's`.
-    """
     from coordinator_core.install import door_install
 
     sh = _populate_full_settings_home(tmp_path)
     _land_forwarders(sh, claude_klabauter_root)
     bare = door_install.BARE_FORWARDER_NAME
-    # Stand-in for the door's binary -- the report only reads the forwarder
-    # body for the marker/exec_cli pair, so any non-matching bytes exercise
-    # the same "body isn't the generic forwarder" branch the real door hits.
     (sh / "bin" / bare).write_bytes(b"\x7fELF-or-MZ-stand-in-for-the-door-binary")
     monkeypatch.setattr(
         "coordinator_core.install.settings_home_report.is_door_installed",
@@ -317,10 +244,6 @@ def test_door_owned_coordinator_invoke_counts_present(
 def test_door_owned_check_does_not_cover_unrelated_corrupt_forwarders(
     tmp_path: Path, claude_klabauter_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The door-owned exemption is scoped to exactly the `coordinator-invoke`
-    slot -- a corrupt body anywhere else must still fail verification even
-    when the door happens to be installed elsewhere in the same bin/.
-    """
     from coordinator_core.install import door_install
 
     sh = _populate_full_settings_home(tmp_path)
@@ -350,10 +273,6 @@ _byte_copied_is_a_forwarder_slot = pytest.mark.skipif(
 
 
 def _land_byte_copied_member(sh: Path, claude_klabauter_root: Path, *, body: bytes | None = None) -> None:
-    """Overwrite the byte-copied member's slot the way the installer leaves
-    it: the wrapper SOURCE's own bytes, copied through the
-    `~/.local/bin/claude-doe` symlink onto the settings-home file
-    (`maximalist` Step 3.5b + `ops.install_claude_doe_wrapper`)."""
     src = claude_klabauter_root.joinpath(*BYTE_COPIED_BIN_SOURCES[_BYTE_COPIED_NAME])
     (sh / "bin" / _BYTE_COPIED_NAME).write_bytes(src.read_bytes() if body is None else body)
 
@@ -362,13 +281,6 @@ def _land_byte_copied_member(sh: Path, claude_klabauter_root: Path, *, body: byt
 def test_byte_copied_member_matching_this_roots_source_counts_present(
     tmp_path: Path, claude_klabauter_root: Path
 ) -> None:
-    """machine-b, 2026-08-26: every install run ended
-    `FAIL bin/ forwarders: 383/384 verified -- body not this root's: claude-doe`,
-    with a remediation ("re-run scripts/setup.py") that reproduced it exactly.
-    The install was correct: `claude-doe` is delivered by BYTE COPY, so its
-    body can never carry the generated trampoline's marker. Bytes identical to
-    this root's source ARE the verification for that delivery shape.
-    """
     sh = _populate_full_settings_home(tmp_path)
     _land_forwarders(sh, claude_klabauter_root)
     _land_byte_copied_member(sh, claude_klabauter_root)
@@ -415,9 +327,6 @@ def test_byte_copied_member_diverging_from_this_roots_source_is_unverified(
 def test_byte_copy_arm_is_scoped_to_the_declared_member(
     tmp_path: Path, claude_klabauter_root: Path
 ) -> None:
-    """Scoped by NAME, like `_is_door_owned_forwarder_slot`: an unrelated
-    slot holding the wrapper's bytes is a corruption, not a byte-copied
-    member, and must fail verification."""
     sh = _populate_full_settings_home(tmp_path)
     _land_forwarders(sh, claude_klabauter_root)
     other = next(n for n in sorted(expected_forwarders(claude_klabauter_root)) if n != _BYTE_COPIED_NAME)
@@ -432,9 +341,6 @@ def test_byte_copy_arm_is_scoped_to_the_declared_member(
 
 
 def test_missing_resolver_shim_is_detected(tmp_path: Path, claude_klabauter_root: Path) -> None:
-    """Every forwarder body imports `_resolve_claude_klabauter`. The self-heal path
-    writes forwarders but never the shim, so the shim's absence is a state
-    where all 394 names exist and all 394 rc=1 on invocation."""
     sh = _populate_full_settings_home(tmp_path)
     _land_forwarders(sh, claude_klabauter_root)
     (sh / "bin" / "_resolve_claude_klabauter.py").unlink()
@@ -446,8 +352,6 @@ def test_missing_resolver_shim_is_detected(tmp_path: Path, claude_klabauter_root
 
 
 def _load_doctor_probe_module():
-    """bin/claude-klabauter-doctor-probe.py loaded by path -- it is a CLI script, not
-    an importable package member."""
     probe_path = _REPO_ROOT / "bin" / "claude-klabauter-doctor-probe.py"
     spec = importlib.util.spec_from_file_location(
         "_settings_home_report_contract_probe", probe_path
@@ -484,13 +388,6 @@ def _load_doctor_probe_module():
 def test_installer_line_and_doctor_probe_cannot_disagree(
     tmp_path: Path, claude_klabauter_root: Path, monkeypatch: pytest.MonkeyPatch, damage
 ) -> None:
-    """Producer/consumer lock. `scripts/setup.py :: install_verify_settings_home`
-    and the `claude-klabauter.settings_home.complete` probe are two readers of one
-    settings home, and on machine-b (2026-08-22) they returned opposite
-    verdicts minutes apart. Neither may hold a count, a threshold, or a
-    presence rule the other lacks: both must resolve to the same
-    `check_settings_home` report, over every damage shape below.
-    """
     sh = _populate_full_settings_home(tmp_path)
     _land_forwarders(sh, claude_klabauter_root)
     damage(sh, claude_klabauter_root)
@@ -520,11 +417,6 @@ def test_installer_line_and_doctor_probe_cannot_disagree(
 def test_absent_venv_is_demanded_while_an_interpreter_pin_names_it(
     tmp_path: Path, claude_klabauter_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The other half of the condition: a box that DID exercise
-    `--allow-venv-fallback` carries pins aimed into the venv, and there a
-    missing venv is a broken interpreter pin, not a clean machine-first state.
-    Flat-optional would go quiet on exactly the box where it is load-bearing.
-    """
     from coordinator_core.install import settings_home_report as mod
 
     sh = _populate_full_settings_home(tmp_path)

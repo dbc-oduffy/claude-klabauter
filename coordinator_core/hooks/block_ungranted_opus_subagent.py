@@ -159,18 +159,12 @@ from coordinator_core.transcript_tail import resolve_last_assistant_model
 CLASS = "hard-deny"
 MATCHERS = ("Agent",)
 
-#: Grant -- see module docstring "GRANT". Read inline at `check()` call time
-#: only, never hoisted to module scope.
 _OVERRIDE_ENV = "COORDINATOR_OVERRIDE_AGENT_MODEL_GUARD"
 
 #: `fork` is exempt -- see module docstring "EFFECTIVE MODEL RESOLUTION"
 #: rung 1. Mirrors `enforce_agent_model_pin._FORK_TYPE`.
 _FORK_TYPE = "fork"
 
-#: Gated-tier substrings, case-insensitive -- see module docstring "GATED
-#: TIERS". Deliberately includes `fable` alongside `opus`; do not remove
-#: it by analogy with the sibling module's RANK-ordering stance, which
-#: answers a different question (see docstring).
 _GATED_TIER_TOKENS = ("opus", "fable")
 
 #: What a gated INHERITED dispatch is rewritten to -- see module docstring
@@ -178,14 +172,6 @@ _GATED_TIER_TOKENS = ("opus", "fable")
 _INHERITED_REWRITE_MODEL = "sonnet"
 
 def _is_gated_tier(model_id: Optional[str]) -> bool:
-    """True iff `model_id` names an Opus- or Fable-tier model (see module
-    docstring "GATED TIERS"). Never raises; a non-string/empty input is
-    "not gated" by definition (nothing to classify), which is safe here
-    because every call site that reaches this function on a genuinely
-    unresolved value already substitutes a fail-closed literal before
-    calling it -- this function itself never fails open on unresolved
-    input, it simply is never asked to classify one.
-    """
     if not isinstance(model_id, str) or not model_id.strip():
         return False
     lowered = model_id.lower()
@@ -201,9 +187,6 @@ def _deny_reason(subagent_type: str, resolved_model: str, note: str) -> str:
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the Opus/Fable-tier persona-or-grant gate against a
-    `PreToolUse(Agent)` payload. See module docstring for the full rule.
-    """
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
 
@@ -217,15 +200,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     if subagent_type == _FORK_TYPE:
-        # PM ruling 2026-09-18: a fork is a new EM session carrying inherited
-        # backstory, and EMs run Opus -- a named exception, never gated.
         return None
 
     pins, _error_reason = resolve_model_pins()
     if pins is None:
-        # An unreadable roster is not grounds to deny a Sonnet dispatch; the
-        # enumeration leg owns that defect. Proceed as if nothing is pinned,
-        # which can only ever gate MORE, never exempt a type.
         pins = {}
 
     entry = pins.get(subagent_type) or {}
@@ -254,7 +232,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         )
         if parent_model is None:
             resolved_model = "<unresolved>"
-            gated = True  # fail-closed -- see module docstring.
+            gated = True
             note = note + "; parent model unresolved, fail-closed to gated tier"
         else:
             resolved_model = parent_model
@@ -267,9 +245,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     if effective_model is None:
-        # Nobody chose the tier -- it leaked in from the parent (or could not
-        # be read). A rewrite has no decision to override, and unlike a deny it
-        # is not answered by a verbatim re-send, so it closes the hole firmer.
         return rewrite_input(
             "PreToolUse",
             {**tool_input, "model": _INHERITED_REWRITE_MODEL},
@@ -282,10 +257,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def main() -> int:
-    """Standalone stdin-JSON / stdout-JSON / exit-0 entrypoint -- unused by
-    the composed path (see module docstring "Two entrypoints"), kept for
-    parity with the sibling modules' own calling convention.
-    """
     try:
         raw = sys.stdin.read()
     except Exception:

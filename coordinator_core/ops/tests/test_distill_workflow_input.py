@@ -1,30 +1,3 @@
-"""
-coordinator_core.ops.tests.test_distill_workflow_input
-
-Unit + contract tests for coordinator_core.ops.distill_workflow_input — the
-"distill.workflow_input" op that translates a distill.scope scope-manifest
-(producer shape) into the distill-harvest Workflow script's consumer shape.
-
-Coverage:
-  translate_to_workflow_input:
-    (a) run_id -> runId
-    (b) flat-list batches -> [{batchId, files, description, formatHints}]
-    (c) wiki_slugs list-of-dicts -> wikiSlugs flat object map
-    (d) repoRoot is caller-supplied, never inferred
-    (e) batch_count/total_file_count are first-class and correct
-    (f) format_hints applied uniformly per batch, defaults to {}
-  validate_workflow_input (the contract-drift detector):
-    (g) a well-formed payload validates clean
-    (h) missing/renamed top-level field caught
-    (i) missing/renamed per-batch field caught
-    (j) batch_count/total_file_count integrity-mismatch caught
-  handler:
-    (k) missing manifest param raises ValueError
-    (l) missing repo_root param raises ValueError
-    (m) end-to-end dispatch_message smoke via the real registered wiring
-
-Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C10
-"""
 
 from __future__ import annotations
 
@@ -54,11 +27,6 @@ def _sample_manifest() -> dict:
         wiki_slugs=[{"slug": "foo", "path": "docs/wiki/foo.md"}],
         cohorts={"harvest": ["a.md", "b.md", "c.md"]},
     )
-
-
-# ---------------------------------------------------------------------------
-# translate_to_workflow_input
-# ---------------------------------------------------------------------------
 
 
 def test_translate_top_level_field_renames():
@@ -99,11 +67,6 @@ def test_translate_format_hints_applied_uniformly():
     assert all(b["formatHints"] == {"style": "verbose"} for b in payload["batches"])
 
 
-# ---------------------------------------------------------------------------
-# validate_workflow_input — the contract-drift detector
-# ---------------------------------------------------------------------------
-
-
 def test_validate_well_formed_payload_clean():
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/repo")
     assert validate_workflow_input(payload) == []
@@ -111,7 +74,7 @@ def test_validate_well_formed_payload_clean():
 
 def test_validate_catches_renamed_top_level_field():
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/repo")
-    payload["run_id"] = payload.pop("runId")  # simulate a producer-side rename regression
+    payload["run_id"] = payload.pop("runId")
     errors = validate_workflow_input(payload)
     assert any("runId" in e for e in errors)
 
@@ -139,14 +102,9 @@ def test_validate_catches_total_file_count_integrity_mismatch():
 
 def test_validate_catches_wiki_slugs_wrong_type():
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/repo")
-    payload["wikiSlugs"] = [{"slug": "foo", "path": "docs/wiki/foo.md"}]  # regressed to list
+    payload["wikiSlugs"] = [{"slug": "foo", "path": "docs/wiki/foo.md"}]
     errors = validate_workflow_input(payload)
     assert any("wikiSlugs" in e for e in errors)
-
-
-# ---------------------------------------------------------------------------
-# handler
-# ---------------------------------------------------------------------------
 
 
 def test_handler_raises_on_missing_manifest():
@@ -160,11 +118,6 @@ def test_handler_raises_on_missing_repo_root():
 
 
 def test_dispatch_message_smoke():
-    """End-to-end command-type dispatch via the REAL registered wiring
-    (ops/__init__.py eager import + _registry_map.py + op_scopes.py + the
-    @register_op decorator) — proves distill.workflow_input is reachable
-    exactly as a caller would invoke it, not just as a directly-imported
-    Python function."""
     import coordinator_core.ipc as ipc
     import coordinator_core.ops  # noqa: F401 — triggers eager registration
 

@@ -1,35 +1,3 @@
-"""Contract tests for coordinator_core.bash_guards._command_tokenizer.
-
-This is the deliverable, not the consolidation itself (see
-``_command_tokenizer.py``'s own module docstring for the incident this
-responds to). Two failure classes are pinned here:
-
-1. **Re-duplication.** Before 2026-07-29, ``_normalize_executable_basename``/
-   ``_tokenize_full_command``/``_segments_from_tokens`` existed in two
-   independently hand-maintained copies (``block_subagent_commit.py`` and
-   ``block_subagent_destructive_action.py``), and had already silently
-   drifted (a missing case-fold step in one copy). ``TestSingleSourceOfTruth``
-   asserts every guard module's imported name is object-identical to the
-   canonical function -- a future edit that re-introduces a local
-   redefinition (shadowing the import) fails this immediately, rather than
-   drifting silently again.
-
-2. **Return-shape drift.** The two ``_segments_from_tokens`` shapes
-   (``List[List[str]]`` vs. ``list[tuple[list[str], bool]]``) must stay
-   pinned to their own callers' expectations. ``TestReturnShapes`` locks the
-   exact shape each public function returns.
-
-Neither class is the exact bug that bricked Bash fleet-wide on 2026-07-28
-(that was a torn edit to `_sentinel_creation_guard.evaluate()`'s OWN return
-arity, unrelated to this trio -- see the two `cross-repo/inbox/` memos on
-the sentinel-guard crash, and `_sentinel_creation_guard.py`'s own
-`Tuple[bool, str, str]` annotation) -- but it is the SAME shape of failure
-(a shared helper's contract changing underneath a `fail_closed=True`
-consumer, discovered only via a live `ValueError`), applied to the
-different shared surface that DOES exist between these guards today.
-``TestEvaluateArityMatchesConsumers`` guards the sentinel-guard incident's
-own arity directly, end to end, through the real dispatch entrypoints.
-"""
 
 from __future__ import annotations
 
@@ -53,13 +21,6 @@ def _payload(command: str):
 
 
 class TestSingleSourceOfTruth:
-    """Every guard's imported trio name must be the SAME function object as
-    the canonical one in ``_command_tokenizer`` -- not a re-copy that
-    happens to behave the same today. `is` (identity), not `==`
-    (equivalence): a redefinition that is behaviorally identical at the
-    moment it's written still reintroduces the maintenance hazard this
-    module exists to close, and `is` is the only check that catches that.
-    """
 
     def test_destructive_action_reexports_canonical_trio(self):
         assert (
@@ -125,9 +86,6 @@ class TestSingleSourceOfTruth:
 
 
 class TestReturnShapes:
-    """Pin the exact return shape of each public function -- the specific
-    thing a future "simplify this" edit is most likely to quietly change.
-    """
 
     def test_tokenize_full_command_returns_list_or_none(self):
         assert _command_tokenizer.tokenize_full_command("git commit -m x") == [
@@ -150,9 +108,7 @@ class TestReturnShapes:
             seg_tokens, pipe_before = item
             assert isinstance(seg_tokens, list)
             assert isinstance(pipe_before, bool)
-        # Third segment (`bash`) was immediately preceded by a `|`.
         assert segments[-1] == (["bash"], True)
-        # First segment (`echo ...`) was not.
         assert segments[0][1] is False
 
     def test_segments_from_tokens_simple_shape(self):
@@ -164,11 +120,6 @@ class TestReturnShapes:
             assert not isinstance(item, tuple)
 
     def test_simple_and_pipe_flag_partition_identically(self):
-        """The two shapes must agree on WHICH tokens land in which segment
-        -- only the pipe-flag annotation may differ. `segments_from_tokens_
-        simple` is derived from the pipe-flag variant precisely so this
-        can never drift apart again.
-        """
         tokens = _command_tokenizer.tokenize_full_command(
             "git commit -m x ; ls -la | grep foo"
         )
@@ -177,20 +128,12 @@ class TestReturnShapes:
         assert simple == [seg for seg, _pipe_before in with_flag]
 
     def test_normalize_executable_basename_case_folds(self):
-        # The specific drift this consolidation closed: block_subagent_
-        # commit.py's own prior copy did not lowercase, so `GIT.EXE` at
-        # argv0 position silently bypassed that one guard's detection.
         assert _command_tokenizer.normalize_executable_basename("GIT.EXE") == "git"
         assert _command_tokenizer.normalize_executable_basename("Git.exe") == "git"
         assert _command_tokenizer.normalize_executable_basename("git") == "git"
         assert _command_tokenizer.normalize_executable_basename("gitk") == "gitk"
 
     def test_normalize_executable_basename_strips_trailing_dots_and_spaces(self):
-        # code-reviewer Finding 3 (2026-07-29): NTFS silently strips
-        # trailing dots/spaces at resolution time, so `git.exe.`/`git.exe `
-        # resolve to `git.exe` on a real Windows invocation -- same
-        # OS-normalization axis as the `.exe`/`.cmd` suffix strip, one
-        # character further along it.
         neb = _command_tokenizer.normalize_executable_basename
         assert neb("git.exe.") == "git"
         assert neb("git.exe ") == "git"
@@ -198,16 +141,11 @@ class TestReturnShapes:
         assert neb("git.exe. ") == "git"
         assert neb(r"C:\Program Files\Git\bin\git.exe.") == "git"
         # Must not over-broaden: a trailing dot/space on a DIFFERENT
-        # basename still doesn't collapse into "git".
         assert neb("gitk.") == "gitk"
         assert neb("mygit ") == "mygit"
 
     def test_normalize_executable_basename_preserves_all_dot_source_tokens(self):
         # Regression guard: a token that is ENTIRELY dots/spaces (POSIX `.`
-        # dot-source, `..` parent-dir) must survive intact -- these are
-        # meaningful shell tokens in their own right, not OS-normalization
-        # noise on a real filename. Caught while landing the trailing-dot
-        # strip above: it silently emptied `.` and broke
         # `block_subagent_destructive_action.py`'s `_SOURCE_VERBS` check.
         neb = _command_tokenizer.normalize_executable_basename
         assert neb(".") == "."
@@ -224,9 +162,6 @@ class TestReturnShapes:
         assert tmb(r"C:\Git\bin\git.exe", "git")
 
     def test_token_matches_binary_recognizes_cmd_launcher_twin(self):
-        # coordinator-safe-commit.cmd is this project's OWN generated
-        # Windows launcher twin (coordinator/bin/gen-launcher-shim.py),
-        # confirmed present on disk -- not a hypothetical spelling.
         tmb = _command_tokenizer.token_matches_binary
         assert tmb("coordinator-safe-commit.cmd", "coordinator-safe-commit")
         assert tmb("COORDINATOR-SAFE-COMMIT.CMD", "coordinator-safe-commit")
@@ -240,35 +175,11 @@ class TestReturnShapes:
         assert not tmb("gitk", "git")
 
     def test_token_matches_binary_cmd_suffix_does_not_widen_hyphen_boundary(self):
-        # The .cmd widening must not turn a hyphen boundary into a
-        # separator boundary -- stripping happens on the TOKEN's own
-        # basename, never on the binary name being compared against.
         tmb = _command_tokenizer.token_matches_binary
         assert not tmb("evil-coordinator-safe-commit.cmd", "coordinator-safe-commit")
 
 
 class TestCaseFoldNowAppliesInCommitGuardsArgv0Rewrite:
-    """`block_subagent_commit._normalize_windows_git_argv0` decides whether
-    to rewrite a backslash Windows argv0 path to forward-slash form by
-    checking `_normalize_executable_basename(token) == "git"`. Before
-    consolidation, this module's own copy of that helper did not
-    case-fold, so an uppercase-spelled `GIT.EXE`/`Git.exe` path was never
-    rewritten (while `block_subagent_destructive_action.py`'s already-
-    case-folded copy did rewrite the equivalent path). Consolidating onto
-    the canonical, case-folded helper closes that inconsistency.
-
-    UPDATE (2026-07-29, part 2) -- the follow-up gap this class's docstring
-    used to flag as separate and unfixed is now closed too:
-    `_token_matches_binary` (both here and in
-    `block_reviewer_bash_outside_allowlist.py`) is no longer an own-module
-    exact-`/git`-suffix match -- it now delegates to `_command_tokenizer.
-    token_matches_binary`, which strips a `.exe` suffix case-insensitively
-    before comparing. A `git.exe`-spelled invocation (lowercase or
-    uppercase) is now recognized as `git` by `_tokens_reach_commit_after_
-    git`, end to end. See `TestTokenMatchesBinaryClosesExeAndCmdBypass`
-    below for the direct regression (which also covers the `.cmd` twin of
-    this same bypass, found in the same follow-up).
-    """
 
     def test_uppercase_backslash_git_exe_is_rewritten_to_forward_slash(self):
         cmd = r"C:\Git\bin\GIT.EXE commit -m 'msg'"
@@ -277,11 +188,6 @@ class TestCaseFoldNowAppliesInCommitGuardsArgv0Rewrite:
 
 
 class TestSharedTokenMatchesBinaryIdentity:
-    """Both consumers of the canonical `token_matches_binary` matcher must
-    import the SAME function object, not a re-copy -- the same
-    single-source-of-truth discipline `TestSingleSourceOfTruth` applies to
-    the tokenizer trio.
-    """
 
     def test_subagent_commit_reexports_canonical_token_matcher(self):
         assert (
@@ -299,24 +205,7 @@ class TestSharedTokenMatchesBinaryIdentity:
 
 
 class TestTokenMatchesBinaryClosesExeAndCmdBypass:
-    """Direct regression for two confirmed bypasses, closed in the same
-    change: (1, 2026-07-29 part 1) a subagent running `git.exe commit -m x`
-    (the ordinary Windows spelling of `git commit`) was silently ALLOWED by
-    `block_subagent_commit.py` because `_token_matches_binary` never
-    stripped a `.exe` suffix; (2, 2026-07-29 part 2) a subagent running
-    `coordinator-safe-commit.cmd -m x` -- THIS PROJECT'S OWN generated
-    Windows launcher twin for that helper, confirmed present on disk at
-    `coordinator/bin/coordinator-safe-commit.cmd`, not a hypothetical
-    spelling -- was ALSO silently ALLOWED, for the same underlying reason
-    (`.cmd` was not stripped either). Windows is this project's primary
-    platform, so both are the ordinary invocation form, not an exotic edge
-    case. Exercised through the real detector entrypoints (`_has_git_
-    commit`, `_has_coordinator_safe_commit`), not just the bare matcher, so
-    a future edit that reintroduces either gap at a call-site level (not
-    just inside `token_matches_binary` itself) is still caught.
-    """
 
-    # -- red cases: newly-recognized spellings, must now be caught --
 
     def test_git_exe_commit_is_detected(self):
         assert block_subagent_commit._has_git_commit("git.exe commit -m x")
@@ -340,9 +229,6 @@ class TestTokenMatchesBinaryClosesExeAndCmdBypass:
         )
 
     def test_coordinator_safe_commit_cmd_is_detected(self):
-        # THE confirmed bypass: coordinator-safe-commit.cmd (the real,
-        # on-disk generated Windows launcher twin) was silently ALLOWED
-        # before this fix.
         assert block_subagent_commit._has_coordinator_safe_commit(
             "coordinator-safe-commit.cmd -m x"
         )
@@ -359,19 +245,11 @@ class TestTokenMatchesBinaryClosesExeAndCmdBypass:
         assert m._token_matches_binary("GIT.EXE", "git")
 
     def test_reviewer_allowlist_recognizes_coordinator_doc_new_cmd(self):
-        # coordinator-doc-new.cmd is ALSO a real, on-disk generated launcher
-        # twin (coordinator/bin/coordinator-doc-new.py.cmd). Before this fix,
         # this was a Windows-usability defect in the OPPOSITE direction from
-        # the git.exe/coordinator-safe-commit.cmd bypasses: the Tier B
-        # scaffolder-allow gate (_first_token_is_allowlisted_binary) would
-        # have wrongly DENIED the ordinary Windows invocation of a
-        # legitimately-allowed tool, not admitted something that should be
-        # denied.
         from coordinator_core.bash_guards import block_reviewer_bash_outside_allowlist as m
 
         assert m._token_matches_binary("coordinator-doc-new.cmd", "coordinator-doc-new")
 
-    # -- negative controls: the widening must not swallow these --
 
     def test_evil_coordinator_safe_commit_still_not_matched(self):
         assert not block_subagent_commit._has_coordinator_safe_commit(
@@ -379,8 +257,6 @@ class TestTokenMatchesBinaryClosesExeAndCmdBypass:
         )
 
     def test_evil_coordinator_safe_commit_cmd_still_not_matched(self):
-        # The .cmd widening must not turn the hyphen boundary into a
-        # separator boundary.
         assert not block_subagent_commit._has_coordinator_safe_commit(
             "evil-coordinator-safe-commit.cmd -m x"
         )
@@ -404,7 +280,6 @@ class TestTokenMatchesBinaryClosesExeAndCmdBypass:
             "evil-coordinator-doc-new.cmd", "coordinator-doc-new"
         )
 
-    # -- plain git commit still detected (pre-existing behavior, unchanged) --
 
     def test_plain_git_commit_still_detected(self):
         assert block_subagent_commit._has_git_commit("git commit -m x")
@@ -414,14 +289,6 @@ class TestTokenMatchesBinaryClosesExeAndCmdBypass:
 
 
 class TestEvaluateArityMatchesConsumers:
-    """Direct regression for the 2026-07-28 fleet-wide Bash brick: `_sentinel_
-    creation_guard.SentinelCreationDetector.evaluate()`'s return arity (a
-    3-tuple, `Tuple[bool, str, str]`) must match what BOTH of its registered
-    fail_closed=True consumers unpack. Exercised end-to-end through the real
-    `check()` entrypoints (not just introspected) so a future arity change
-    in one place without the other fails a test instead of bricking a live
-    session's Bash tool.
-    """
 
     _COMMANDS = [
         "echo probe",
@@ -442,8 +309,6 @@ class TestEvaluateArityMatchesConsumers:
 
     def test_approval_sentinel_guard_check_does_not_crash(self):
         for cmd in self._COMMANDS:
-            # Must not raise ValueError (the exact crash class from the
-            # 2026-07-28 incident) regardless of allow/deny verdict.
             block_approval_sentinel_creation.check(_payload(cmd))
 
     def test_worktree_sentinel_guard_check_does_not_crash(self):
@@ -452,13 +317,6 @@ class TestEvaluateArityMatchesConsumers:
 
 
 class TestSplitUnquotedNewlines:
-    """`_command_tokenizer.split_unquoted_newlines` -- the 2026-07-30 fix for
-    the multi-line-Bash-command bypass (`tokenize_full_command`'s shlex pass
-    ran with `whitespace_split=True`, which silently consumed an unquoted
-    newline as ordinary whitespace instead of emitting a separator, folding
-    every line after the first into the first line's segment). Covers each
-    semantic bullet from this function's own docstring directly, plus
-    `tokenize_full_command` end to end for the plain multi-line case."""
 
     def test_newline_inside_single_quotes_stays_literal(self):
         assert _command_tokenizer.split_unquoted_newlines("echo 'a\nb'") == "echo 'a\nb'"
@@ -467,46 +325,24 @@ class TestSplitUnquotedNewlines:
         assert _command_tokenizer.split_unquoted_newlines('echo "a\nb"') == 'echo "a\nb"'
 
     def test_backslash_newline_inside_double_quotes_is_a_line_continuation(self):
-        # `\<newline>` (LF, not
-        # preceded by CR) is a real shell line continuation EVEN inside
-        # double quotes, confirmed empirically against real bash
-        # (`x="line one \`<newline>`line two"` -> `x=line one line two`,
-        # no embedded newline, no separator). Both characters are removed,
-        # same as the unquoted case below -- this was the actual P2 defect:
-        # the code used to copy the backslash+newline pair through
-        # literally instead of stripping it.
         assert (
             _command_tokenizer.split_unquoted_newlines('echo "line one \\\nline two"')
             == 'echo "line one line two"'
         )
 
     def test_backslash_crlf_inside_double_quotes_is_not_a_continuation(self):
-        # Deliberate divergence from the LF-only case directly above,
-        # confirmed empirically against real bash: a backslash followed by
-        # `\r` (not an immediate `\n`) does not match bash's in-quote
-        # escape rule (only `$`/backtick/`"`/`\`/an actual `<newline>`
-        # qualify), so the backslash is NOT consumed -- both the backslash
-        # and the `\r` pass through literally, and the `\n` that follows is
-        # then handled by the plain "newline inside double quotes stays
-        # literal" rule (test_newline_inside_double_quotes_stays_literal
-        # above), not stripped as part of a continuation.
         assert (
             _command_tokenizer.split_unquoted_newlines('echo "a\\\r\nb"')
             == 'echo "a\\\r\nb"'
         )
 
     def test_unquoted_backslash_newline_is_a_line_continuation(self):
-        # Both the backslash and the newline are removed -- the two lines
-        # join with no separator emitted, so a continued command is not
-        # split in two.
         assert (
             _command_tokenizer.split_unquoted_newlines("git stash \\\ndrop")
             == "git stash drop"
         )
 
     def test_escaped_quote_does_not_open_a_quote_span(self):
-        # An unquoted, escaped single-quote must not be read as opening a
-        # quote -- the newline that follows it stays subject to conversion.
         assert (
             _command_tokenizer.split_unquoted_newlines("echo \\'\nb")
             == "echo \\';b"
@@ -533,18 +369,6 @@ class TestSplitUnquotedNewlines:
 
 
 class TestPreserveWindowsBackslashesLeavesPosixEscapeUntouched:
-    """`preserve_windows_backslashes` (commit `05fb6ef70`) masks unquoted
-    backslashes with a private-use sentinel before `shlex` runs and
-    un-masks them afterward, leaving `shlex.escape` at its POSIX default --
-    chosen over the alternative of setting `lex.escape = ""`, because that
-    alternative would have disturbed POSIX escape handling. The canonical
-    example (`state/audits/2026-08-07-bash-guard-tokenizer-eats-windows-path-separators.md`)
-    is `find . -name "*.log" -exec rm {} \\;`, whose standalone `\\;` must
-    still lex to `;` identically whether the flag is on or off -- a change
-    that breaks this is a regression toward the rejected `lex.escape = ""`
-    shape, not a Windows-path fix. This is the discriminator: no existing
-    test in this file or `test_bump_foreign_repo_write.py` /
-    `test_bump_outside_repo_write.py` pins this find/exec case."""
 
     def test_find_exec_standalone_semicolon_lexes_identically_with_flag_on_and_off(
         self,
@@ -570,9 +394,6 @@ class TestPreserveWindowsBackslashesLeavesPosixEscapeUntouched:
 
 
 class TestMultilineBypassClosedEndToEnd:
-    """Regression for the bypass itself, through the real guard
-    entrypoints -- reproduces exactly the two commands the 2026-07-30 dispatch
-    brief used to confirm the gap before any fix landed."""
 
     def test_worktree_creation_denies_across_a_newline(self):
         from coordinator_core.bash_guards import block_worktree_creation
@@ -629,8 +450,6 @@ class TestPrivilegeWrapperBypassClosed:
             ), "bypassed via %r" % prefix
 
     def test_previously_covered_wrappers_still_deny(self):
-        """The four wrappers that already had tables must be unaffected by the
-        additions -- this fix widens coverage, it must not perturb it."""
         from coordinator_core.bash_guards import block_stash_destruction
 
         for prefix in ["nice ", "timeout 30 ", "ionice -c2 ", "stdbuf -oL ", ""]:
@@ -641,26 +460,12 @@ class TestPrivilegeWrapperBypassClosed:
 
 
 class TestExtractCommandSubstitutionsIsQuoteAwareWhileBalancing:
-    """`_extract_command_substitutions`'s inner paren-balance walk once tracked
-    only backslashes and parens, never quote state, so a quoted `)` inside a
-    substitution desynced the depth counter and truncated the extracted span --
-    silently dropping everything after it from `subs`.
-
-    Pinned at the tokenizer, not through a guard verdict: `resolve_command_positions`
-    calls this helper and `dispatch.py` runs that before EVERY guard dispatch, so
-    a downstream end-to-end assertion would only cover the callers that happen to
-    exist today. Real bash re-tokenizes inside `$(...)` with normal quote rules
-    and finds the true closing paren; a desync here is the tokenizer disagreeing
-    with the shell in the unsafe direction.
-    """
 
     def test_quoted_close_paren_does_not_truncate_the_span(self):
         _neutralized, subs = _command_tokenizer._extract_command_substitutions(
             """echo "$(echo ')' ; sh -c 'x')" """
         )
         assert len(subs) == 1, "expected one substitution, got %r" % (subs,)
-        # Pre-fix this captured the truncated fragment `echo '` and dropped the
-        # wrapper entirely; the wrapper's presence is the whole point.
         assert "sh -c 'x'" in subs[0], "span truncated at the quoted `)`: %r" % (subs[0],)
 
     def test_quoted_open_paren_does_not_extend_the_span(self):
@@ -678,15 +483,12 @@ class TestExtractCommandSubstitutionsIsQuoteAwareWhileBalancing:
         assert "sh -c 'x'" in subs[0], "nested-quote desync: %r" % (subs[0],)
 
     def test_single_quotes_still_suppress_substitution(self):
-        """The pre-existing correct behaviour the fix must not perturb."""
         _neutralized, subs = _command_tokenizer._extract_command_substitutions(
             """echo '$(sh -c "x")'"""
         )
         assert subs == [], "single-quoted text must yield no substitutions: %r" % (subs,)
 
     def test_unterminated_substitution_still_captures_to_end(self):
-        """Degrades toward scanning MORE text, never toward silently dropping it
-        -- the safe direction, and the fix must keep it."""
         _neutralized, subs = _command_tokenizer._extract_command_substitutions(
             """echo "$(sh -c 'x'"""
         )

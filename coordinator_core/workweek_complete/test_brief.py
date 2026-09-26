@@ -31,8 +31,6 @@ def test_step2_directive_repointed_at_validate_gate_fast_subcommand() -> None:
 
 
 def test_standalone_resolver_cli_is_not_a_manifest_member() -> None:
-    """After the repoint, no directive names the standalone resolver CLI --
-    it has no in-repo gate consumer left (AC11's note)."""
     assert "coordinator-resolve-validation-cmd" not in wwc_brief.CONSUMES_MANIFEST
 
 

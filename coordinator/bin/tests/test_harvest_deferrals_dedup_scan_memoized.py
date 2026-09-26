@@ -57,8 +57,8 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_BIN_DIR = os.path.dirname(_THIS_DIR)  # coordinator/bin
-_COORDINATOR_DIR = os.path.dirname(_BIN_DIR)  # coordinator/
+_BIN_DIR = os.path.dirname(_THIS_DIR)
+_COORDINATOR_DIR = os.path.dirname(_BIN_DIR)
 _REPO_ROOT = os.path.dirname(_COORDINATOR_DIR)
 
 _HARVEST_CLI = os.path.join(_BIN_DIR, "coordinator-harvest-deferrals.py")
@@ -142,16 +142,4 @@ def test_dedup_scan_root_resolution_memoized_across_candidate_rows(monkeypatch) 
         f"expected exactly {expected} total REAL subprocess.run calls across 5 "
         f"candidate rows (memoized), got {total_calls}: {call_count['cmds']!r}"
     )
-    # `_repo_root()` spawns ZERO times since eacbba04a routed it through
-    # `coordinator_core.git.repo_root.show_toplevel`, which walks for the
-    # ordinary case and spawns only when the walk finds no `.git` entry — this
-    # fixture runs inside a real repo, so the walk always answers.
-    # `doe_root()` also spawns ZERO times in the steady state: its rung 2
-    # (`repos.doe_claude`) is now an in-process read via `machine_local_impl_
-    # resolve.registry_get()`, CLI spawn retained only as a fallback rung.
-    # Only `_claude_klabauter_root()` still makes a real `subprocess.run` call (a
-    # `machine-local get repos.claude_klabauter` spawn, memoized after the
-    # first row) — no `git rev-parse` invocation appears in
-    # `call_count["cmds"]` at all, confirming the walk answered without
-    # falling back to a spawn.
     assert not any(cmd[:2] == ["git", "rev-parse"] for cmd in call_count["cmds"] if cmd)

@@ -34,7 +34,6 @@ def _failed(*names):
 
 
 def test_a_failed_name_makes_the_run_raise_rather_than_return():
-    """Non-zero exit, via the fatal this module's `main` turns into one."""
     with pytest.raises(substrate.SubstrateFatalError) as excinfo:
         substrate._raise_if_agent_helper_forwarders_failed(
             _failed("coordinator-doc-new"),
@@ -50,9 +49,6 @@ def test_a_failed_name_makes_the_run_raise_rather_than_return():
 
 
 def test_check_only_failure_also_raises():
-    """The check branch carries the same contract as the write branch; the
-    incident's own second run was a repeat, so a branch that reports success
-    is as harmful here as in the write path."""
     with pytest.raises(substrate.SubstrateFatalError):
         substrate._raise_if_agent_helper_forwarders_failed(
             _failed("coordinator-doc-new"),
@@ -63,7 +59,6 @@ def test_check_only_failure_also_raises():
 
 
 def test_a_clean_run_does_not_raise():
-    """Discriminates the assertion above: it must fail on failure, not always."""
     substrate._raise_if_agent_helper_forwarders_failed(
         [], {"coordinator-doc-new": "x"}, check_only=False, agent_helper_resolved=[],
     )
@@ -79,10 +74,6 @@ def test_summary_names_the_failed_count_on_stderr(capsys):
 
 
 def test_summary_prints_on_a_clean_run_too(capsys):
-    """The all-clear case prints, so a MISSING summary line is itself evidence
-    the run died early -- never silently indistinguishable from a clean one.
-    Without this, absence of bad news reads as good news, which is the exact
-    shape of the original incident."""
     substrate._report_agent_helper_forwarder_summary({"a": "x", "b": "y"}, [])
     captured = capsys.readouterr()
     assert "2 written, 0 failed of 2" in (captured.out + captured.err)

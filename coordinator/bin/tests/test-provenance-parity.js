@@ -29,19 +29,12 @@ const assert = require('node:assert/strict');
 const fs     = require('fs');
 const path   = require('path');
 
-// ---------------------------------------------------------------------------
-// Paths — resolved from __dirname (coordinator/bin/tests/)
-// ---------------------------------------------------------------------------
 
 const COORDINATOR        = path.resolve(__dirname, '../../');
 const COCKPIT_SCHEMA     = path.join(COORDINATOR, 'cockpit-contract', 'schema', 'provenance-envelope.schema.json');
 const ARTIFACT_SCHEMA    = path.join(COORDINATOR, 'artifact-shape-contract', 'artifact-shape-contract.schema.json');
 
-// ---------------------------------------------------------------------------
-// Normalization
-// ---------------------------------------------------------------------------
 
-/** Fields that are pure annotations — legitimately differ between emitters. */
 const STRIP_FIELDS = new Set([
   'title', 'description', '$schema', '$id', '$comment', 'default',
   'format', 'pattern',
@@ -67,21 +60,17 @@ function normalizeSchema(schema) {
   for (const [key, value] of Object.entries(schema)) {
     if (STRIP_FIELDS.has(key)) continue;
 
-    // A redundant `type` alongside an `enum` is an emitter-convention difference,
-    // not a semantic one: Zod (cockpit) emits `{enum:[...], type:'string'}`; the
-    // YAML-sourced artifact emitter emits `{enum:[...]}`. An enum of strings IS
-    // type string — normalize both to the enum-only form. The enum VALUES are
-    // still compared, so a real divergence is never hidden.
+    
     if (key === 'type' && Object.prototype.hasOwnProperty.call(schema, 'enum')) continue;
 
     if (key === 'allOf' && Array.isArray(value)) {
-      // Sort clauses so clause-order differences don't false-fail.
+      
       const normalized = value.map(normalizeSchema);
       result[key] = [...normalized].sort((a, b) =>
         JSON.stringify(a).localeCompare(JSON.stringify(b))
       );
     } else if (key === 'required' && Array.isArray(value)) {
-      // required is a set; order must not matter.
+      
       result[key] = [...value].sort();
     } else if (
       key === 'properties' &&
@@ -101,24 +90,21 @@ function normalizeSchema(schema) {
     }
   }
 
-  // Canonical key order so JSON.stringify produces a stable string.
+  
   return Object.fromEntries(
     Object.entries(result).sort(([a], [b]) => a.localeCompare(b))
   );
 }
 
-// ---------------------------------------------------------------------------
-// Test
-// ---------------------------------------------------------------------------
 
 describe('ProvenanceEnvelope cross-package parity (D4 drift guard)', () => {
   it('cockpit-contract and artifact-shape-contract ProvenanceEnvelope shapes are semantically equal after normalization', () => {
-    // Load schemas
+    
     const cockpitRaw   = JSON.parse(fs.readFileSync(COCKPIT_SCHEMA,  'utf8'));
     const artifactRaw  = JSON.parse(fs.readFileSync(ARTIFACT_SCHEMA, 'utf8'));
 
-    // Extract envelope shape from each source
-    const cockpitEnvelope  = cockpitRaw;                              // root IS ProvenanceEnvelope
+    
+    const cockpitEnvelope  = cockpitRaw;                              
     const artifactEnvelope = artifactRaw['$defs']?.['ProvenanceEnvelope'];
 
     assert.ok(

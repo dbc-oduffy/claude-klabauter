@@ -77,20 +77,12 @@ import pytest
 
 import coordinator_core.workstream_complete as wsc
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
-# Documented consumes-manifest members that are never a `directives[].cli`
 # value because they are invoked by a DISPATCHED WORKER rather than the
-# assembler itself. Empty today -- no current census row is worker-only
-# invoked (unlike workday's `coordinator-queue-append`). Extend by NAME,
-# with a one-line reason, if C2d's review-dispatch shell (or any other
-# submodule) turns out to name a CLI that only a dispatched review worker
-# invokes -- never widen this to a blanket exemption.
 _DISPATCHED_WORKER_ONLY_MANIFEST_MEMBERS: frozenset[str] = frozenset()
 
 _REVIEW_FIELDS_PRESENT = {
@@ -108,10 +100,6 @@ def _gate(
     diagnostics: list[str] | None = None,
     consumed_handoff_paths: tuple[str, ...] | None = None,
 ) -> "wsc.SessionShapeGate":
-    # C3B widened SessionShapeGate with a plural `consumed_handoff_paths`
-    # field. Default it from the scalar `consumed_handoff` when the caller
-    # doesn't supply the plural form explicitly, mirroring
-    # `resolve_disposition`'s own "scalar == plural[0], or empty" contract.
     if consumed_handoff_paths is None:
         consumed_handoff_paths = (consumed_handoff,) if consumed_handoff else ()
     return wsc.SessionShapeGate(
@@ -123,29 +111,11 @@ def _gate(
     )
 
 
-#: Fixed governing-plan slug + session id `_rich_decisions`/`_seed_disk_
-#: fixtures` share -- the sid must match `_gate`'s own hardcoded
-#: `"contract-test-sid"` (the sidecar-fold directive globs `state/subagent-
-#: share/<sid>/<plan_slug>.*.md`, so the two have to agree).
 _GOVERNING_PLAN_SLUG = "contract-test-plan-slug"
 _SESSION_ID = "contract-test-sid"
 
 
 def _seed_disk_fixtures(tmp_path: Path) -> None:
-    """C2a-C2i widened this sweep's live manifest surface far past the
-    three axes the module docstring's original Coverage caveat named
-    (governing_plan_slug presence, disposition, review-fields presence) --
-    several of the ~35 new directives are gated on real ON-DISK state a
-    bare `decisions` key can't fake (`resolve_governing_plan` verifies the
-    plan file exists before resolving a slug; `completion_archive_
-    predicate` checks for a real `archive/` dir or `state/workstreams/`;
-    `compute_run_report_sidecar_gate` globs a real sidecar directory) --
-    see this file's own module docstring negative-spec, which named these
-    exact members as the expected residual red pre-widening. This helper
-    seeds that disk state once per sweep so every conditional axis a
-    submodule actually gates on gets a chance to fire, closing branch (a)
-    of the dispatch brief's Failure 2 (widen the sweep, not the manifest).
-    """
     (tmp_path / "archive").mkdir(parents=True, exist_ok=True)
 
     plans_dir = tmp_path / "docs" / "plans"
@@ -164,28 +134,6 @@ def _seed_disk_fixtures(tmp_path: Path) -> None:
 
 
 def _rich_decisions(*, governing_plan_slug: bool, review_present: bool, tmp_path: Path) -> dict:
-    """The most generous `decisions` payload this file can construct from
-    what is documented today (see module docstring's Coverage caveat) --
-    every decision key the current `build_directives` reads, plus the ones
-    named in the C2a-C2i task bodies that plausibly gate a new directive
-    (subject/prose/stage_paths, deleted/kept paths, msg_file), all set to a
-    synthetic non-empty value so a presence-gated directive fires.
-
-    Widened past the original 3-axis sweep (see `_seed_disk_fixtures`'s
-    docstring): the block below adds the C2a-C2i decision keys that gate
-    `coordinator-lesson-add`/`coordinator-queue-append` (a lesson list with
-    a universal-scoped entry), `coordinator-fold-execution-record` (a
-    plan_path pointing at the seeded governing plan), and the C2d
-    review-dispatch cluster (`freeze-review-diff.py`/`fan-out-integrator.py`/
-    `scan_unresolved_ubt_records.py`/`classify-dispatch-shape.py`) -- all
-    unconditional (not gated behind the two documented axes) because none
-    of C2a-C2i's own gates depend on `governing_plan_slug`/`review_present`
-    the way the pre-existing `d-claim-plan-execution-lock`/`d-write-trail`
-    pair does; `archive-stamp-cli` and `coordinator-harvest-deferrals` need
-    no new decision key at all -- they were only ever gated on the governing
-    plan FILE actually existing on disk, which `_seed_disk_fixtures` now
-    provides on the `governing_plan_slug=True` leg.
-    """
     decisions: dict = {
         "subject": "contract-test commit subject",
         "prose": "contract-test prose",
@@ -206,13 +154,7 @@ def _rich_decisions(*, governing_plan_slug: bool, review_present: bool, tmp_path
             }
         ],
         "plan_path": f"docs/plans/{_GOVERNING_PLAN_SLUG}.md",
-        # AC15's plugin-root sweep axis needs `build_plan_reversibility_
-        # eligibility_directive` to actually fire (gated on a resolved
-        # governing plan path, § Approach table) -- `directives_completion.
         # _KEY_GOVERNING_PLAN_PATH`, a key this sweep did not previously
-        # supply (a genuine new conditional axis, per module docstring's
-        # Coverage caveat, not something `_plugin_cli_reachable` alone
-        # could paper over).
         "governing_plan_path": f"docs/plans/{_GOVERNING_PLAN_SLUG}.md",
         "orientation_cache_exists": True,
         "pinboard_note": "contract-test pinboard note",
@@ -232,24 +174,7 @@ def _rich_decisions(*, governing_plan_slug: bool, review_present: bool, tmp_path
 
 
 def _all_emittable_directive_clis(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> set[str]:
-    """Union of every `cli` value `wsc.brief` can emit across the
-    documented conditional axes -- see the module docstring's Coverage
-    caveat for what this sweep does and does not know about. A single
-    combined call would under-report a directive that only appears on one
-    side of its own axis, making a live-but-conditional CLI name look like
-    a dead manifest entry.
-
-    Calls `_seed_disk_fixtures` once up front -- the disk-gated members
-    (governing plan file, archive dir, run-report sidecar) are static
-    fixtures shared across every leg of the sweep below, not per-leg state.
-    """
     _seed_disk_fixtures(tmp_path)
-    # AC15 (docs/plans/2026-09-07-directive-resolution-reaches-a-plugin-
-    # local-cli.md): the plugin-root reachability axis, forced True on every
-    # box so the two plugin-local barewords are always emitted -- see module
-    # docstring's Coverage caveat. Set once, outside the loop below: unlike
-    # `compute_session_shape_gate`/`_lesson_capture_reachable`, this axis is
-    # not itself varied across sweep legs, only forced on.
     monkeypatch.setattr(wsc, "_plugin_cli_reachable", lambda: True)
     clis: set[str] = set()
     dispositions = (
@@ -320,10 +245,6 @@ def test_every_manifest_entry_is_named_by_at_least_one_directive(monkeypatch, tm
 def test_every_manifest_entry_is_named_with_the_plugin_ladder_unresolvable(
     monkeypatch, tmp_path
 ) -> None:
-    """AC15: the dead-census assertion stays green even when this box's own
-    DoE ladder genuinely does not resolve — `_all_emittable_directive_clis`
-    forces `_plugin_cli_reachable` to `True` regardless, so the real ladder's
-    answer never gates this test's outcome."""
     monkeypatch.setattr(
         "coordinator_core.ceremony_common.cli_dispatch.resolve_plugin_cli_script_root",
         lambda: None,
@@ -335,9 +256,6 @@ def test_every_manifest_entry_is_named_with_the_plugin_ladder_unresolvable(
 
 
 def test_dispatched_worker_only_exemption_set_stays_empty() -> None:
-    """AC15's negative half: the plugin-root reachability axis is the fix —
-    the exemption set is not the mechanism here and must not be widened to
-    cover it (§ Risks)."""
     assert _DISPATCHED_WORKER_ONLY_MANIFEST_MEMBERS == frozenset()
 
 

@@ -77,9 +77,6 @@ def test_read_valid_json_wrong_shape_returns_empty_mapping(isolated_home):
 
 
 def test_read_unknown_key_still_returns_the_mapping_as_is(isolated_home):
-    # An unknown key is a caller-side degradation (the caller does not
-    # recognize the key and falls back to today's behaviour) -- the reader
-    # itself has no schema to enforce, so it still returns the parsed dict.
     record = {"totally_unrecognized_key": "value"}
     fleet_mode.write_fleet_mode(record)
     assert fleet_mode.read_fleet_mode() == record
@@ -92,13 +89,9 @@ def test_write_atomicity_no_partial_file_observable(isolated_home, monkeypatch):
     seen_tmp_files = []
 
     def _spy_replace(src, dst):
-        # At the instant os.replace is invoked, the destination must still
-        # hold the OLD complete record (or be absent on first write) --
-        # never a partially-written new one, and the source must be a
-        # separate tmp file that is a fully-formed JSON document.
         seen_tmp_files.append(src)
         with open(src, "r", encoding="utf-8") as fh:
-            json.loads(fh.read())  # must parse whole -- no partial content
+            json.loads(fh.read())
         return real_replace(src, dst)
 
     monkeypatch.setattr(fleet_mode.os, "replace", _spy_replace)
@@ -113,10 +106,6 @@ def test_write_requires_dict(isolated_home):
 
 
 def test_write_non_serializable_dict_value_leaves_no_tmp_file(isolated_home):
-    """A dict record passes the isinstance(dict) gate but can still fail
-    json.dump on a non-serializable value (e.g. a raw datetime). This must
-    degrade to False, not propagate, and must not leak the mkstemp tmp file
-    into settings_home() (Review: code-reviewer, finding 1)."""
     import datetime
 
     record = {"set_at": datetime.datetime(2026, 8, 29)}

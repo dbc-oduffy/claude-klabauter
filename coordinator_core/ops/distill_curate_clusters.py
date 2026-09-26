@@ -173,21 +173,9 @@ from typing import Optional
 from coordinator_core.ipc import register_op
 
 _PLACEHOLDER_VALUES = {"n/a", "na", "", "tbd", "unknown", "null", "none"}
-# "misc"/"other" were previously
-# included here, which made this denylist their PRIMARY (and only) gating
-# mechanism, contradicting the module's own Negative-spec claim that a
-# denylist is never the primary mechanism, and making the corresponding
 # entries in _BARE_ABSTRACTION_VOCAB dead code (unreachable, since this
-# pre-check consumed those raw strings before the structural test ever ran).
-# Removed so "misc"/"other" fall through to the structural bare-token test
-# below, exactly like every other bare-abstraction word.
 
 # Bounded, closed, purely-grammatical class (pure-abstraction nouns) — SECONDARY
-# signal only. Used exclusively to annotate the "reason" string on an
-# already-structurally-dropped bare tag; removing this set entirely changes
-# NO verdict (see module docstring's discriminator section / the dedicated
-# test asserting this). NOT the gating mechanism — the gating mechanism is
-# the structural bare-vs-compound / family-membership test below.
 _BARE_ABSTRACTION_VOCAB = {
     "meta",
     "decisions",
@@ -201,16 +189,9 @@ _BARE_ABSTRACTION_VOCAB = {
 
 _DEFAULT_KEEP_THRESHOLD = 2
 
-# Corpus-aware auto-threshold cap: the share of total nuggets threshold-2
-# is allowed to drop before the derivation self-limits to threshold 1. See
-# module docstring's `keep_threshold` param section for the calibration.
 _AUTO_THRESHOLD_DROP_SHARE_CAP = 0.25
 _COLD_START_FALLBACK_THRESHOLD = 1
 
-# Sentinel distinguishing "caller omitted keep_threshold" (auto-derive) from
-# any real int value (verbatim, no auto-adjustment) — including an explicit
-# 0 or negative value, which the wire handler normalizes to "omitted"
-# before this function ever sees it.
 _AUTO = object()
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -218,9 +199,6 @@ _DASH_COLLAPSE_RE = re.compile(r"-{2,}")
 
 
 def _normalize_shape(raw: str) -> str:
-    """Canonical kebab-slug form: dots/underscores/whitespace -> "-",
-    lowercase, collapsed/trimmed dashes. Purely a SHAPE transform — does not
-    decide keep/merge/drop, only what the tag would look like if it survives."""
     s = raw.strip()
     s = s.replace(".", "-").replace("_", "-")
     s = _WHITESPACE_RE.sub("-", s)
@@ -256,11 +234,6 @@ def _degraded_reply() -> dict:
 
 
 def _classify(tag_counts: dict, keep_threshold: int) -> list:
-    """Pure classification pass at a FIXED keep_threshold. Returns one
-    verdict dict per raw input tag (unsorted). Split out from
-    ``curate_clusters`` so the auto-threshold derivation can probe
-    threshold-2 behaviour without duplicating the pass logic."""
-    # --- Pass 1: shape-normalize every raw tag; split placeholders out. -----
     raw_to_slug: dict[str, Optional[str]] = {}
     placeholders: set[str] = set()
     for raw in tag_counts:
@@ -270,20 +243,14 @@ def _classify(tag_counts: dict, keep_threshold: int) -> list:
             continue
         raw_to_slug[raw] = slug
 
-    # --- Pass 2: aggregate counts per canonical slug (folds shape-drift
-    # duplicates — e.g. a dotted and a Title-Case raw tag normalizing to the
-    # same slug — into one entity BEFORE family/threshold analysis). --------
     slug_counts: dict[str, int] = {}
     for raw, slug in raw_to_slug.items():
         slug_counts[slug] = slug_counts.get(slug, 0) + int(tag_counts[raw])
 
-    # --- Pass 3: group canonical slugs into families by leading token. -----
     families: dict[str, list[str]] = {}
     for slug in slug_counts:
         families.setdefault(_leading_token(slug), []).append(slug)
 
-    # --- Pass 4: per-family disposition. ------------------------------------
-    # slug -> ("keep" | "merge" | "drop", merge_target|None, reason, drop_cause|None)
     slug_disposition: dict[str, tuple] = {}
     for _leading, members in families.items():
         members_sorted = sorted(members)
@@ -291,9 +258,6 @@ def _classify(tag_counts: dict, keep_threshold: int) -> list:
         bare_members = [s for s in members_sorted if len(s.split("-")) == 1]
 
         if not compound_members:
-            # Every member of this family is a single bare token with no
-            # compound sibling anywhere in the corpus — no domain-qualifier
-            # structure was ever formed. Structural drop, not name lookup.
             for slug in bare_members:
                 note = ""
                 if slug in _BARE_ABSTRACTION_VOCAB:
@@ -309,8 +273,6 @@ def _classify(tag_counts: dict, keep_threshold: int) -> list:
 
         family_total = sum(slug_counts[s] for s in members_sorted)
         # Deterministic primary: highest family-member count among COMPOUND
-        # members only (a bare member can never be the cluster's canonical
-        # name — see module docstring); ties break alphabetically.
         primary = min(
             compound_members,
             key=lambda s: (-slug_counts[s], s),
@@ -342,7 +304,6 @@ def _classify(tag_counts: dict, keep_threshold: int) -> list:
                 None,
             )
 
-    # --- Pass 5: emit one verdict per RAW input tag. ------------------------
     verdicts = []
     for raw in placeholders:
         verdicts.append(
@@ -382,7 +343,7 @@ def _classify(tag_counts: dict, keep_threshold: int) -> list:
                     "drop_cause": None,
                 }
             )
-        else:  # keep, possibly with shape drift -> "normalize" instead
+        else:
             if raw == slug:
                 verdicts.append(
                     {
@@ -413,15 +374,6 @@ def _classify(tag_counts: dict, keep_threshold: int) -> list:
 
 
 def _resolve_keep_threshold(tag_counts: dict, keep_threshold) -> tuple:
-    """Resolve the threshold to apply. Returns (threshold, was_auto_derived).
-
-    Explicit ``keep_threshold`` (anything other than the ``_AUTO`` sentinel)
-    is returned verbatim, never adjusted. Omitted (``_AUTO``) is derived as a
-    pure function of ``tag_counts``: probe classification at threshold 2,
-    measure the SHARE of total nuggets it would drop, and fall back to
-    threshold 1 only if that share exceeds the cold-start cap. See module
-    docstring's `keep_threshold` param section for the full rationale.
-    """
     if keep_threshold is not _AUTO:
         return keep_threshold, False
 
@@ -442,13 +394,6 @@ def curate_clusters(
     *,
     keep_threshold=_AUTO,
 ) -> dict:
-    """Pure classification core. See module docstring for the full contract.
-
-    Deterministic: identical (tag_counts, keep_threshold) always produces an
-    identical verdicts list (sorted by raw tag) and counts summary — no
-    wallclock, no randomness, no I/O. This holds even when keep_threshold is
-    omitted: the auto-derivation is itself a pure function of tag_counts.
-    """
     if not isinstance(tag_counts, dict) or not tag_counts:
         return _degraded_reply()
 

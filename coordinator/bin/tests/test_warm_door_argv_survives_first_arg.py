@@ -50,10 +50,6 @@ def cli_mod():
 
 
 def test_warm_door_call_shape_preserves_first_argument(monkeypatch, cli_mod):
-    """`_run_entrypoint` calls `main_fn(argv)` with a program-name-free argv --
-    e.g. `main(["brief"])` -- not `main(sys.argv)`. `main` must hand
-    `run_target` that SAME list, not `argv[1:]` (which would drop "brief" and
-    leave `run_target` with an empty argv)."""
     seen = {}
 
     def _spy_run_target(name, argv):
@@ -74,10 +70,6 @@ def test_warm_door_call_shape_preserves_first_argument(monkeypatch, cli_mod):
 
 
 def test_cli_entry_still_strips_the_program_name(monkeypatch, cli_mod):
-    """The `if __name__ == '__main__':` leg passes `sys.argv[1:]` to `main` --
-    covered here by calling `main` the way that leg does, confirming the CLI
-    door still receives real user args (not a further-sliced, empty list) when
-    fed a program-name-free argv, same as the warm door."""
     seen = {}
 
     def _spy_run_target(name, argv):

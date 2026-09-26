@@ -1,12 +1,3 @@
-"""
-Tests for coordinator_core.housekeeping.head_scan — the declining
-frontmatter head-scan (plan contract 8, chunk C2).
-
-Covers each of the six closed decline triggers individually, the "absent
-key is not a decline" case, the happy-path multi-key read, and the
-fall-through-to-full-parse path (`scan_keys` falling back to `dag._read_meta`
-when `head_scan` declines).
-"""
 
 from __future__ import annotations
 
@@ -21,11 +12,6 @@ def _write(tmp_path: Path, name: str, content: str) -> Path:
     p = tmp_path / name
     p.write_text(content, encoding="utf-8")
     return p
-
-
-# ---------------------------------------------------------------------------
-# Happy path
-# ---------------------------------------------------------------------------
 
 
 def test_happy_path_returns_plain_scalars(tmp_path):
@@ -69,7 +55,6 @@ def test_nested_key_is_not_a_top_level_match(tmp_path):
 
 
 def test_unrequested_duplicate_key_does_not_decline(tmp_path):
-    # duplicate on a key nobody asked about must not poison the requested keys
     p = _write(
         tmp_path,
         "dup_unrequested.md",
@@ -77,11 +62,6 @@ def test_unrequested_duplicate_key_does_not_decline(tmp_path):
     )
     result = head_scan(p, {"status"})
     assert result == {"status": "open"}
-
-
-# ---------------------------------------------------------------------------
-# Decline triggers — each individually
-# ---------------------------------------------------------------------------
 
 
 def test_decline_no_leading_delimiter(tmp_path):
@@ -134,11 +114,6 @@ def test_decline_missing_file(tmp_path):
     assert head_scan(p, {"status"}) is None
 
 
-# ---------------------------------------------------------------------------
-# Fall-through to full parse
-# ---------------------------------------------------------------------------
-
-
 def test_scan_keys_returns_head_scan_result_when_not_declined(tmp_path):
     p = _write(tmp_path, "plain.md", "---\nstatus: open\n---\nbody\n")
     result = scan_keys(p, {"status"})
@@ -146,8 +121,6 @@ def test_scan_keys_returns_head_scan_result_when_not_declined(tmp_path):
 
 
 def test_scan_keys_falls_through_to_full_parse_on_decline(tmp_path):
-    # A quoted value declines the head-scan but is a fully legal YAML string
-    # that dag._read_meta's full parse resolves without trouble.
     p = _write(tmp_path, "falls_through.md", '---\nstatus: "open"\n---\nbody\n')
     assert head_scan(p, {"status"}) is None
     result = scan_keys(p, {"status"})
@@ -155,8 +128,6 @@ def test_scan_keys_falls_through_to_full_parse_on_decline(tmp_path):
 
 
 def test_scan_keys_fall_through_never_returns_a_missing_value(tmp_path):
-    # blocked_by is a flow list — head_scan declines, and the fall-through
-    # full parse must resolve the real list, never silently omit the key.
     p = _write(tmp_path, "list_falls_through.md", "---\nblocked_by: [a, b]\n---\nbody\n")
     assert head_scan(p, {"blocked_by"}) is None
     result = scan_keys(p, {"blocked_by"})

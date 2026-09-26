@@ -26,9 +26,6 @@ import pytest
 
 from coordinator_core.bash_guards._helpers import is_trivial_reason
 
-#: TERSE-but-genuine reasons that MUST still pass (i.e. ``is_trivial_reason``
-#: returns ``False``) after the tightening. Includes hyphenated single
-#: tokens and short clipped phrases, per the dispatch brief's explicit list.
 GENUINE_REASONS = [
     "genuinely cross-cutting",
     "needs its own plan",
@@ -42,9 +39,6 @@ GENUINE_REASONS = [
     "needs PM ruling first",
 ]
 
-#: Degenerate values that MUST still fail (i.e. ``is_trivial_reason`` returns
-#: ``True``) — the exact-match denylist, the length floor, and the new
-#: character-variety floor, each represented at least once.
 DEGENERATE_REASONS = [
     "",
     "1",
@@ -54,12 +48,12 @@ DEGENERATE_REASONS = [
     "fine",
     "-",
     "x",
-    "short",  # under the length floor, has real letters
-    "aaaaaaaaaaaa",  # 12 chars, 1 distinct letter
-    "abababababab",  # 12 chars, 2 distinct letters
-    "123456789012",  # 12 digits, 0 letters
-    "            ",  # 12 spaces, collapses to the empty-string denylist hit
-    "aaaaaaaaaaaaaaaaaaaa",  # long but still 1 distinct letter
+    "short",
+    "aaaaaaaaaaaa",
+    "abababababab",
+    "123456789012",
+    "            ",
+    "aaaaaaaaaaaaaaaaaaaa",
 ]
 
 

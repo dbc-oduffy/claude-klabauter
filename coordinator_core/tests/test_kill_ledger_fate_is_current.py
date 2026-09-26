@@ -36,15 +36,7 @@ from coordinator_core.session.machinery_paths import kill_ledger_path
 
 LEDGER = Path(kill_ledger_path(str(Path(__file__).resolve().parents[2])))
 
-# The published mirror ships `coordinator_core/` without claude-klabauter's `state/`
-# corpus — working data is deliberately excluded from every publish set — so
 # the ledger is absent there. The `parametrize` below reads it at COLLECTION
-# time, which turns that absence into a collection ERROR for the whole tree
-# rather than one failing test, and a collection error is what makes the
-# end-of-run assembled-mirror gate refuse: every publish then closes FATAL with
-# "treat this run's published bytes as unverified" (AC15 fail-closed), no
-# matter what it shipped. Skipping at module level costs nothing where the
-# corpus exists, which is the only place this guard's question has a subject.
 if not LEDGER.is_file():  # pragma: no cover - only reachable in a published mirror
     pytest.skip(
         f"{LEDGER} is absent — no corpus here for this guard to check",
@@ -67,16 +59,6 @@ def _registry() -> dict:
 
 
 def _entries():
-    """Yield (kid, heading, keys, fate_value) for every `## K-` entry.
-
-    Sourced from `kill_ledger_inventory.fate_entries()` — the shared accessor
-    both parsers now consume — rather than re-deriving heading text and Fate
-    lines here. `LedgerAbsent` is not caught: the module-level `pytest.skip`
-    above already handles the published-mirror case at collection time, so a
-    `LedgerAbsent` reaching this point would be this test's own path
-    disagreeing with the module-level check, which should fail loudly rather
-    than be swallowed.
-    """
     for entry in fate_entries(LEDGER):
         yield entry.key, entry.title, entry.op_keys, entry.fate_values
 

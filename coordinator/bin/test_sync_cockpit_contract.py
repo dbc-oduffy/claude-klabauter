@@ -41,8 +41,6 @@ from coordinator_core.win_portability import no_console_creationflags  # noqa: E
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -50,16 +48,6 @@ pytestmark = [
 
 
 def _resolve_canonical() -> str | None:
-    """Resolve the canonical cockpit-contract schema the same way the script
-    under test does, or None when this machine has no DoE clone.
-
-    `data_root()` RAISES RuntimeError when neither rung resolves, and this
-    resolution happens at module scope — so an unguarded call turns a
-    clone-less machine (fresh clone, CI runner, a Windows box with no DoE
-    checkout) into 7 collection ERRORS instead of 7 skips. Swallowing only
-    RuntimeError keeps that one documented failure mode graceful without
-    masking anything else.
-    """
     try:
         root = data_root("cockpit-contract")
     except RuntimeError:
@@ -70,18 +58,9 @@ def _resolve_canonical() -> str | None:
 _CANONICAL = _resolve_canonical()
 
 # Presence of the SPECIFIC required artifact, not merely of the clone root —
-# the same convention coordinator_core/contract/cockpit_schema/tests/conftest.py
 # uses (`SCHEMA_AVAILABLE`/`skip_no_schema`), and for the same reason: the DoE
-# clone resolving says nothing about whether `cockpit-contract/schema/` still
-# exists at that HEAD.
 _CANONICAL_AVAILABLE = _CANONICAL is not None and os.path.isfile(_CANONICAL)
 
-# Negative-spec: this guard is NOT how the 7 failures were resolved — the
-# resolver swap above is, and it makes every one of them pass on any machine
-# with a DoE clone (i.e. every machine that can exercise the script under test
-# at all). This only covers the clone-less machine, where the production script
-# itself resolves no canonical and exits 2 by design; there is nothing left to
-# assert about vendor-sync drift there.
 requires_canonical = unittest.skipUnless(
     _CANONICAL_AVAILABLE,
     "DoE cockpit-contract schema/ not available on this machine "
@@ -110,13 +89,6 @@ class SyncCockpitContractTest(unittest.TestCase):
 
     @property
     def canonical_version(self) -> str:
-        """The canonical schema's version stamp.
-
-        Read on demand rather than in setUp: test_e (no --vendored) and test_f
-        (explicit --canonical override) never consult the repo canonical, so an
-        unconditional setUp read made them collateral casualties of a canonical
-        that would not resolve.
-        """
         with open(_CANONICAL, "r", encoding="utf-8") as fh:
             return str(json.load(fh).get("version", ""))
 

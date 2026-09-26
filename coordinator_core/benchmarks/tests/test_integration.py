@@ -75,10 +75,6 @@ def _restore_benchmark_origin_env():
 
 
 def test_harness_run_emits_well_formed_records_for_bare_and_worktree_ops():
-    """End-to-end: harness.run() over [ping, records.query] returns one
-    ConformanceRecord per op, each well-formed per AC2, built entirely from
-    real subprocess-spawned samples (AC1) that passed the AC9 exit/error
-    guard inside timer.time_invocation."""
     records = harness.run(ops=_TARGET_OPS, n=_INTEGRATION_N, warmup=1, floor_n=3)
 
     assert len(records) == len(_TARGET_OPS)
@@ -89,10 +85,6 @@ def test_harness_run_emits_well_formed_records_for_bare_and_worktree_ops():
 
 
 def test_harness_run_records_round_trip_through_json():
-    """The emitted records survive the to_json()/from_json() contract
-    (record.py, C1) unmodified -- proves the harness's output is the same
-    shape C7's baseline store and any downstream (qsub-03) consumer would
-    persist/read."""
     records = harness.run(ops=_TARGET_OPS, n=_INTEGRATION_N, warmup=1, floor_n=3)
 
     for record in records:
@@ -101,9 +93,6 @@ def test_harness_run_records_round_trip_through_json():
 
 
 def _assert_well_formed_record(record: ConformanceRecord, expected_n: int) -> None:
-    """Shared AC2 assertion body: every pinned field is present, sane, and
-    internally consistent (min <= p50 <= p95 <= p99; sample_count matches N;
-    verdict is one of the three legal values)."""
     assert isinstance(record.op, str) and record.op
     assert isinstance(record.op_class, str) and record.op_class
     assert isinstance(record.target_ms, (int, float))
@@ -125,7 +114,7 @@ def _assert_well_formed_record(record: ConformanceRecord, expected_n: int) -> No
 
     assert record.verdict in ("pass", "fail", "advisory")
 
-    assert record.baseline_id == ""  # stamped by C7's CLI runner, not harness.run() itself
+    assert record.baseline_id == ""
     assert record.code_sha and len(record.code_sha) == 40
     assert record.timestamp
     assert record.runner_isolation_mode == "shared"
@@ -133,17 +122,6 @@ def _assert_well_formed_record(record: ConformanceRecord, expected_n: int) -> No
 
 
 def test_harness_run_stamps_machine_and_survives_baseline_store_query(tmp_path):
-    """C9 non-vacuity: harness.run() (not __main__.py, not refresh.py) must
-    itself stamp `machine` -- baseline_store.query() (C3) drops any record
-    whose `machine` is None unconditionally, so a record harness.run()
-    forgot to stamp would round-trip through to_json()/append()/query() and
-    silently vanish, exactly the "CLI writes to a store that discards
-    everything it writes" defect C9 exists to fix. Revert C9's stamp (the
-    `dataclasses.replace(record, ambient_after=..., ambient_delta=...)` pass
-    plus the `machine=`/`ambient_before=` kwargs on the ConformanceRecord
-    construction in harness.run()) and this fails: `machine` reads None and
-    `queried` comes back empty.
-    """
     records = harness.run(ops=["ping"], n=1, warmup=1, floor_n=1)
     record = records[0]
 

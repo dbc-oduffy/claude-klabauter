@@ -1,43 +1,3 @@
-"""
-coordinator_core.distill.tests.test_ripe_filter
-
-Unit tests for coordinator_core.distill.ripe_filter -- the pure frontmatter-scan RIPE
-partition script (C1).
-
-Coverage:
-  scan_spec_dir, mixed-status fixture:
-    (a) status: implemented -> harvest
-    (b) status: shipped -> harvest
-    (c) status: superseded -> skip, reason names the status
-    (d) status: abandoned -> skip, reason names the status
-    (e) status: partial -> skip, reason names the status
-    (f) status: draft (not ripe, not an explicit skip status) -> skip, "not yet ripe" reason
-    (g) missing status field entirely -> skip, "no status field" reason
-    (h) missing frontmatter block entirely -> skip, "no frontmatter block" reason
-    (i) non-.md files in the dir are ignored
-    (j) harvest and skip lists are both sorted (deterministic output)
-  recursion (month-foldered archive layout):
-    (n) month-nested layout (specs/2026-07/foo.md) is scanned in one invocation, with
-        output paths relative to the scan root using `/` separators on every platform
-    (o) mixed layout (flat .md files alongside YYYY-MM/ subdirs) partitions both levels
-  to_dict shape:
-    (k) RipeFilterResult.to_dict() matches the plan-specified
-        {harvest: [...], skip: [{path, status, reason}], sidecars: [...]} shape exactly
-  CLI smoke:
-    (l) bin/distill-ripe-filter.py invoked as a subprocess against the fixture dir emits
-        valid JSON on stdout with the expected harvest/skip partition
-    (m) bin/distill-ripe-filter.py exits non-zero on a non-existent directory
-  sidecar cohort (F5, C4):
-    (p) a sidecar-suffixed filename (e.g. `foo.review.md`) with `status: implemented`
-        frontmatter lands in `sidecars`, never in `harvest`
-    (q) a sidecar-suffixed filename with no frontmatter at all also lands in `sidecars`,
-        never in `skip`
-    (r) sidecars are excluded from harvest/skip entirely (three-way disjoint partition)
-    (s) sidecars list is sorted
-    (t) sidecars survive month-nested recursion with rel-posix paths
-
-Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C1
-"""
 
 from __future__ import annotations
 
@@ -58,8 +18,6 @@ from coordinator_core.distill.ripe_filter import (
     scan_spec_dir,
 )
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -94,7 +52,6 @@ def mixed_status_spec_dir(tmp_path: Path) -> Path:
     _write_spec(spec_dir, "f-draft.md", status="draft")
     _write_spec(spec_dir, "g-no-status.md", status=None)
     _write_spec(spec_dir, "h-no-frontmatter.md", status=None, include_fm=False)
-    # Non-.md file -- must be ignored entirely.
     (spec_dir / "i-not-markdown.txt").write_text("ignore me\n", encoding="utf-8")
 
     return spec_dir
@@ -150,10 +107,6 @@ def test_missing_frontmatter_block(mixed_status_spec_dir: Path) -> None:
     reason="chmod 0o000 permission denial is not reliable on Windows or as root",
 )
 def test_unreadable_spec_dir_fails_loud(tmp_path: Path, caplog) -> None:
-    """A permission-denied spec_dir logs a WARNING and raises OSError, rather than
-    silently returning a well-formed empty partition — glob("*.md")'s selector would
-    otherwise swallow the PermissionError and make a blocked spec dir indistinguishable
-    from a genuinely-empty one."""
     spec_dir = tmp_path / "blocked-specs"
     spec_dir.mkdir()
     (spec_dir / "unreachable.md").write_text(
@@ -192,7 +145,6 @@ def test_full_partition_is_exhaustive_and_disjoint(mixed_status_spec_dir: Path) 
     skip_set = {r.path for r in result.skip}
 
     assert harvest_set.isdisjoint(skip_set)
-    # 8 .md fixture files total (a..h); the .txt is excluded.
     assert len(harvest_set) + len(skip_set) == 8
 
 
@@ -223,7 +175,6 @@ def test_to_dict_shape(mixed_status_spec_dir: Path) -> None:
 
 def test_to_dict_json_serializable(mixed_status_spec_dir: Path) -> None:
     result = scan_spec_dir(mixed_status_spec_dir)
-    # Must not raise.
     serialized = json.dumps(result.to_dict())
     reloaded = json.loads(serialized)
     assert reloaded["harvest"] == result.to_dict()["harvest"]
@@ -249,10 +200,6 @@ def test_result_is_frozen_dataclass() -> None:
         result.harvest = ["x.md"]  # type: ignore[misc]
 
 
-# ---------------------------------------------------------------------------
-# Recursion -- month-foldered archive layout (archive/specs/YYYY-MM/*.md)
-# ---------------------------------------------------------------------------
-
 def test_month_nested_layout_scanned_in_one_invocation(tmp_path: Path) -> None:
     spec_dir = tmp_path / "specs"
     month_dir = spec_dir / "2026-07"
@@ -262,7 +209,6 @@ def test_month_nested_layout_scanned_in_one_invocation(tmp_path: Path) -> None:
     _write_spec(month_dir, "bar.md", status="superseded")
 
     result = scan_spec_dir(spec_dir)
-    # Output paths are relative to the scan root with `/` separators, even on Windows.
     assert result.harvest == ["2026-07/foo.md"]
     assert [r.path for r in result.skip] == ["2026-07/bar.md"]
     assert result.skip[0].status == "superseded"
@@ -280,7 +226,6 @@ def test_mixed_flat_and_nested_layout(tmp_path: Path) -> None:
     _write_spec(spec_dir, "flat-draft.md", status="draft")
     _write_spec(month_a, "june-implemented.md", status="implemented")
     _write_spec(month_b, "july-abandoned.md", status="abandoned")
-    # Non-.md file inside a month dir -- ignored, same as at the top level.
     (month_b / "notes.txt").write_text("ignore me\n", encoding="utf-8")
 
     result = scan_spec_dir(spec_dir)
@@ -288,7 +233,6 @@ def test_mixed_flat_and_nested_layout(tmp_path: Path) -> None:
     skip_by_path = {r.path: r for r in result.skip}
     assert set(skip_by_path) == {"flat-draft.md", "2026-07/july-abandoned.md"}
     assert skip_by_path["2026-07/july-abandoned.md"].status == "abandoned"
-    # Both output lists stay sorted across levels.
     assert result.harvest == sorted(result.harvest)
     assert [r.path for r in result.skip] == sorted(r.path for r in result.skip)
 
@@ -298,8 +242,6 @@ def test_mixed_flat_and_nested_layout(tmp_path: Path) -> None:
     reason="chmod 0o000 permission denial is not reliable on Windows or as root",
 )
 def test_unreadable_month_subdir_fails_loud(tmp_path: Path, caplog) -> None:
-    """An unreadable subdirectory is the same failure class as an unreadable spec_dir:
-    fail loud, never a silently-shrunk partition."""
     spec_dir = tmp_path / "specs"
     month_dir = spec_dir / "2026-07"
     month_dir.mkdir(parents=True)
@@ -316,16 +258,9 @@ def test_unreadable_month_subdir_fails_loud(tmp_path: Path, caplog) -> None:
         os.chmod(month_dir, original_mode)
 
 
-# ---------------------------------------------------------------------------
-# Sidecar cohort (F5, C4) -- sidecars are checked BEFORE frontmatter classification
-# and never leak into harvest/skip.
-# ---------------------------------------------------------------------------
-
 def test_sidecar_with_ripe_frontmatter_lands_in_sidecars_not_harvest(tmp_path: Path) -> None:
     spec_dir = tmp_path / "specs"
     spec_dir.mkdir()
-    # A sidecar-suffixed file that happens to carry status: implemented -- must still
-    # land in `sidecars`, never `harvest`.
     _write_spec(spec_dir, "foo.review.md", status="implemented")
     _write_spec(spec_dir, "real-spec.md", status="implemented")
 
@@ -395,10 +330,6 @@ def test_sidecars_survive_month_nested_recursion(tmp_path: Path) -> None:
     assert result.sidecars == ["2026-07/foo.docs-check.md"]
     assert result.skip == []
 
-
-# ---------------------------------------------------------------------------
-# CLI smoke tests -- bin/distill-ripe-filter.py as a subprocess
-# ---------------------------------------------------------------------------
 
 def test_cli_emits_valid_json_partition(mixed_status_spec_dir: Path) -> None:
     proc = subprocess.run(

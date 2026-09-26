@@ -1,7 +1,3 @@
-"""`klabauter-reconcile.py::_published_paths` must find the round manifest at
-the mirror root when the target's dest dir sits below it -- klabauter's dest
-resolves to `<mirror>/coordinator_core`, and reading the manifest there
-refused every `--take-candidate` resolution as unprovable."""
 
 import importlib.util
 import json

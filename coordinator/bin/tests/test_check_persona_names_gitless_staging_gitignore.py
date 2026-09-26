@@ -52,14 +52,9 @@ def _load_repo_module():
 
 
 def _make_gitless_tree(tmp_path: pathlib.Path) -> pathlib.Path:
-    """A staging-shaped tree: no `.git`, a tracked-shaped `.gitignore`
-    declaring `state/` unpublishable, and a stray file under it -- mirrors
-    the real incident's copytree output exactly."""
     (tmp_path / ".gitignore").write_text("state/\n*.bak\n.DS_Store\n", encoding="utf-8")
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    # "machine-b" stands in for the real fleet codename observed live; using
-    # the literal codename here would itself be a residual leak in THIS file.
     (state_dir / "session-hierarchy.machine-b-local.json").write_text("[]\n", encoding="utf-8")
     (tmp_path / "README.md").write_text("hello\n", encoding="utf-8")
     return tmp_path
@@ -87,15 +82,10 @@ def test_gitless_walk_excludes_extension_glob_pattern(tmp_path):
 
 
 def test_gitless_walk_still_enumerates_a_non_ignored_leak_path(tmp_path):
-    """Pin the boundary: narrowing the fallback to gitignored paths must NOT
-    swallow a genuine leak sitting in ordinary, publishable content."""
     module = _load_repo_module()
     root = _make_gitless_tree(tmp_path)
     leak_dir = root / "coordinator_core"
     leak_dir.mkdir()
-    # Fragment-joined per the checker's own `_tok` convention: a contiguous
-    # codename literal in this test file would itself be the residual leak
-    # class this checker exists to catch.
     codename_dirname = "mak" + "ima"
     leaked = leak_dir / f"{codename_dirname}-notes.txt"
     leaked.write_text("published content\n", encoding="utf-8")
@@ -127,7 +117,6 @@ def test_git_aware_walk_excludes_publish_staging_dir(tmp_path):
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     (root / "README.md").write_text("hello\n", encoding="utf-8")
-    # Random-suffixed staging dir, mirroring the real mint shape exactly.
     staging_dir = root / "coordinator" / ".bin.publish-staging-gr7j6dpy"
     staging_dir.mkdir(parents=True)
     codename_dirname = "mak" + "ima"
@@ -179,8 +168,6 @@ def test_tracked_publish_staging_dir_is_scanned_and_flagged(tmp_path):
 
 
 def test_untracked_publish_staging_dir_is_absent_from_the_tracked_enumeration(tmp_path):
-    """Negative spec for `tracked_publish_staging_paths`: untracked staging
-    scratch is the NORMAL mid-publish state and must not fail the round."""
     module = _load_repo_module()
     root = tmp_path
     import subprocess
@@ -214,9 +201,6 @@ def test_basename_containing_publish_staging_is_still_included(tmp_path):
 
 
 def test_unrecognized_gitignore_shapes_are_not_filtered(tmp_path):
-    """Negative spec: anchored/nested/negation patterns are out of scope for
-    this minimal matcher and must fail toward MORE scanning, not silently
-    drop coverage the git-aware path would have provided."""
     module = _load_repo_module()
     root = tmp_path
     (root / ".gitignore").write_text("/anchored-dir/\nnested/path/\n!keep-me\n", encoding="utf-8")

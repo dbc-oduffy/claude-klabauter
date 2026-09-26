@@ -33,7 +33,6 @@ from coordinator_core.bash_guards import dispatch
 
 @pytest.fixture
 def recorded_fires(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[Any, ...]]:
-    """Capture `record_advisory_fire` calls without touching the real counter."""
     calls: List[Tuple[Any, ...]] = []
 
     def _fake(*args: Any, **kwargs: Any) -> None:
@@ -47,8 +46,6 @@ class TestRootMissIsNotDoubleCounted:
     def test_plugin_root_none_returns_none_silently_here(
         self, recorded_fires: List[Tuple[Any, ...]], capsys
     ) -> None:
-        """`resolve_plugin_root_loud` already spoke for a None plugin_root --
-        this function must not repeat the complaint or the counter."""
         result = dispatch.resolve_governed_authoring_surfaces(None, "sess", "/cwd")
         assert result is None
         assert capsys.readouterr().err == ""
@@ -139,8 +136,6 @@ class TestHitIsSilent:
     def test_hit_empty_list_is_a_real_answer_not_a_miss(
         self, tmp_path: Path, recorded_fires: List[Tuple[Any, ...]]
     ) -> None:
-        """An explicit empty list means 'this install governs no surfaces' --
-        a real answer, distinct from a read failure."""
         manifest = tmp_path / dispatch._GOVERNED_AUTHORING_SURFACES_MANIFEST_NAME
         manifest.write_text(json.dumps([]), encoding="utf-8")
         result = dispatch.resolve_governed_authoring_surfaces(

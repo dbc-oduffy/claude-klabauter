@@ -38,7 +38,6 @@ def _git(repo, *args: str) -> subprocess.CompletedProcess:
 
 @pytest.fixture()
 def repo(tmp_path):
-    """A throwaway repository with one commit."""
     subprocess.run(
         ["git", "init", "-q", str(tmp_path)],
         check=True,
@@ -55,12 +54,6 @@ def repo(tmp_path):
 
 
 def test_git_config_unset_takes_exactly_one_key(repo):
-    """`install/uninstall_legs::uninstall_reverse_git_config_group -> config_unset`.
-
-    The exemption says one `--unset` per key is the floor. Note the asymmetry that a wave-4
-    reviewer got wrong in the other direction: the READ side batches fine (`--get-regexp`,
-    `--list`), and the exemption for `configure_git::main -> _git_config_get` was refuted on
-    exactly that ground. Only the WRITE side is single-key."""
     _git(repo, "config", "--local", "a.one", "1")
     _git(repo, "config", "--local", "a.two", "2")
 
@@ -79,7 +72,6 @@ def test_git_config_unset_takes_exactly_one_key(repo):
 
 
 def test_git_config_set_takes_exactly_one_pair(repo):
-    """`ops/configure_git::main -> _git_config_set`."""
     result = _git(repo, "config", "--local", "b.one", "1", "b.two", "2")
 
     assert result.returncode != 0, (
@@ -93,13 +85,6 @@ def test_git_config_set_takes_exactly_one_pair(repo):
 
 
 def test_git_rm_is_atomic_across_its_pathspec(repo):
-    """`ops/fleet/_common::rm_and_commit -> create_subprocess_exec`.
-
-    This exemption is subtler than "no batch form exists" -- `git rm` takes N pathspecs happily.
-    The claim is that batching would DESTROY a property the caller depends on: one dirty path
-    aborts the whole invocation, so a sidecar modified out from under a reap would take every
-    other path down with it. The function's contract is to retain that file and delete the rest,
-    which a batched call cannot express."""
     (repo / "f2").write_text("modified\n", encoding="utf-8")
 
     result = _git(repo, "rm", "--", "f1", "f2")

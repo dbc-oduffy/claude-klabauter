@@ -78,10 +78,6 @@ def test_quoted_stub_id_reachable_by_unquoted_lookup_key(tmp_path: Path):
 
 def test_oversized_frontmatter_still_resolves_via_full_read_fallback(tmp_path: Path):
     repo = tmp_path
-    # Padding pushes the `stub_id:` line well past the 4096-byte truncated
-    # read — the closing `---` fence is not found within that head, which
-    # must trigger `_frontmatter_head_bytes`'s full-file fallback rather
-    # than silently dropping the id.
     padding = "\n".join(f"note_{i}: filler text to pad the frontmatter block" for i in range(200))
     assert len(padding.encode("utf-8")) > _BLOCKER_INDEX_HEAD_BYTES
     path = _write_handoff(
@@ -115,9 +111,6 @@ def test_unresolvable_id_names_nothing_in_the_corpus(tmp_path: Path):
 
 def test_ambiguous_when_more_than_one_head_survives_the_collapse(tmp_path: Path):
     repo = tmp_path
-    # Two independent (non-chained) records sharing the same stub_id is a
-    # genuine cross-family collision — `collapse_to_chain_heads` has nothing
-    # to collapse (neither supersedes the other), so both survive as heads.
     _write_handoff(
         repo / "state" / "handoffs" / "dup-a.md",
         'title: "Dup A"\ncreated: 2026-01-01\nstatus: open\n'
@@ -171,10 +164,6 @@ BLOCKER_FM = (
 
 def test_scalar_blocked_by_is_one_id_not_one_id_per_character(tmp_path: Path):
     # A `str` is iterable, so an unguarded loop resolves it per CHARACTER --
-    # 'sat-06' becoming six blockers named 's','a','t','-','0','6', and a
-    # recommendation naming characters. The schema declares a list but nothing
-    # enforces that at read time, so this function is the place that must not
-    # trust it. Found by the criterion-only reader at 6f146d4d06.
     repo = tmp_path
     _write_handoff(repo / "state" / "handoffs" / "sat-06.md", BLOCKER_FM)
 
@@ -187,13 +176,6 @@ def test_scalar_blocked_by_is_one_id_not_one_id_per_character(tmp_path: Path):
 
 
 def test_scan_incomplete_when_a_corpus_root_is_unreadable(tmp_path: Path, monkeypatch):
-    # Directory-level unreadable subtree — `collect_live_handoff_paths`
-    # raising `OSError` is the shape `_build_blocker_index` already
-    # catches and threads into `scan_errors`. Monkeypatched rather than
-    # `os.chmod`-based: `os.chmod` does not remove read access on Windows
-    # (this repo runs Windows as a first-class host), which would silently
-    # no-op the permission trick and pass for the wrong reason (Review:
-    # code-reviewer — Finding 2).
     import coordinator_core.reconcile.handoff_corpus as hc
 
     repo = tmp_path
@@ -214,13 +196,6 @@ def test_scan_incomplete_when_a_corpus_root_is_unreadable(tmp_path: Path, monkey
 
 
 def test_scan_incomplete_when_a_single_record_file_is_unreadable(tmp_path: Path, monkeypatch):
-    # File-granularity unreadable record — a directory-level walk finds
-    # `path`, but reading it fails (locked/permission-denied). This must
-    # come back `scan_incomplete`, never `unresolvable` — the exact gap
-    # Finding 1 closed (`_frontmatter_head_bytes` now returns `None` on a
-    # read failure instead of silently treating the file as carrying no
-    # id). Monkeypatched at `_frontmatter_head_bytes` itself rather than
-    # `os.chmod`, for the same Windows reason as the test above.
     import coordinator_core.reconcile.handoff_corpus as hc
 
     repo = tmp_path
@@ -237,7 +212,7 @@ def test_scan_incomplete_when_a_single_record_file_is_unreadable(tmp_path: Path,
 
     index, scan_errors = hc._build_blocker_index(repo)
     assert scan_errors != []
-    assert index.get("sat-06") is None  # the id never made it into the index
+    assert index.get("sat-06") is None
 
     evidence = pa.compute_gate_blocker_evidence(repo, ["sat-06"])
     assert evidence[0]["status"] == "scan_incomplete"
@@ -245,14 +220,6 @@ def test_scan_incomplete_when_a_single_record_file_is_unreadable(tmp_path: Path,
 
 
 def test_scan_incomplete_when_the_indexed_file_fails_at_resolve_time(tmp_path: Path, monkeypatch):
-    # The id resolves through the (successfully-built) index — some other
-    # unrelated subtree failed to scan — but the specific file this id
-    # names has become unreadable by the time `compute_gate_blocker_
-    # evidence` re-reads it. `dag._read_meta` swallows the `OSError`
-    # itself (`except Exception: return {}`), so this call site re-probes
-    # with its own direct read to tell "unreadable" apart from "malformed
-    # YAML" (Review: code-reviewer — Finding 1) — this must land
-    # `scan_incomplete`, never `unresolvable`.
     import coordinator_core.pickup_assemble as pa_mod
 
     repo = tmp_path
@@ -282,10 +249,6 @@ def test_scan_incomplete_when_the_indexed_file_fails_at_resolve_time(tmp_path: P
 
 
 def test_unparsed_flow_list_text_is_malformed_not_a_bracketed_id(tmp_path: Path):
-    # The Anti-scope case: `roadmap_link_stubs._as_list` would return
-    # `['[sat-06]']` here, inventing an id nothing can ever match and reporting
-    # it as an ordinary missing blocker. Text that still looks like an unparsed
-    # list is malformed input and says so, rather than resolving a bracket.
     repo = tmp_path
     _write_handoff(repo / "state" / "handoffs" / "sat-06.md", BLOCKER_FM)
 

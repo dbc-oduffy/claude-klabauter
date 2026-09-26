@@ -119,26 +119,13 @@ class _SilentSentinel:
         return "SILENT"
 
     def __bool__(self) -> bool:
-        # A guard-verdict sentinel that evaluated falsy would be
-        # indistinguishable, at an `if verdict:` call site, from an absent
-        # value -- exactly the ambiguity this module exists to close.
-        # Truthy-by-construction is a deliberate tripwire against that
-        # collapse, even though the mandated shape never returns SILENT as
-        # a verdict value in the first place.
         return True
 
 
-#: The one SILENT instance. Recorded on the out-of-band channel via
-#: ``record_silent`` -- never returned from a guard's ``check()``.
 SILENT = _SilentSentinel()
 
 
 class SilentDeclaration(NamedTuple):
-    """One recorded SILENT declaration: which guard declined to rule, and
-    why. ``reason`` is free text for a human/test reader (e.g. "backtick
-    line-continuation: root_node.has_error") -- this module makes no claim
-    about its shape or vocabulary; C4/C5's guards each write their own.
-    """
 
     guard_name: str
     reason: str
@@ -150,22 +137,6 @@ _ACTIVE: ContextVar[Optional[List[SilentDeclaration]]] = ContextVar(
 
 
 def record_silent(guard_name: str, reason: str) -> None:
-    """Record that ``guard_name`` declined to rule on the current command,
-    for the reason given. A NO-OP when no collection is open (``collecting``
-    below was never entered) -- mirrors ``declared_writes.declare_write``'s
-    contract exactly: a guard that calls this outside a test's/caller's
-    collection behaves precisely as it did before this module existed,
-    including on every real production dispatch, since ``dispatch.py``
-    never opens a collection (this chunk's own Anti-scope forbids editing
-    ``dispatch.py`` at all). The out-of-band channel is therefore inert in
-    production and observable only to a caller that deliberately opens it.
-
-    Never raises: called from inside a guard's own hot path, so a defect
-    here must not be the reason a guard fails to return its ordinary
-    verdict. An empty/falsy ``guard_name`` is still recorded as given --
-    this function does not validate its caller's naming convention, only
-    appends what it is given.
-    """
     active = _ACTIVE.get()
     if active is None:
         return
@@ -199,22 +170,8 @@ def collecting() -> Iterator[List[SilentDeclaration]]:
 
 
 def active_silences() -> Optional[List[SilentDeclaration]]:
-    """Return the open collection, or ``None`` when no collection is open.
-
-    Exposed for tests and for a future caller that needs to check whether a
-    collection is live without opening a second, nested one; guards
-    themselves should call ``record_silent`` rather than reaching for this.
-    """
     return _ACTIVE.get()
 
 
 def was_silent(guard_name: str, declarations: List[SilentDeclaration]) -> bool:
-    """``True`` iff ``guard_name`` appears at least once in ``declarations``
-    (the list yielded by ``collecting()``). A small convenience so a test
-    does not hand-roll the same ``any(d.guard_name == ... for d in ...)``
-    scan at every call site -- the exact kind of drift-prone repetition
-    this package's own docstrings elsewhere (see ``_helpers.py``'s
-    ``csn_check``/``is_trivial_reason`` consolidation notes) warn against
-    re-deriving per caller.
-    """
     return any(d.guard_name == guard_name for d in declarations)

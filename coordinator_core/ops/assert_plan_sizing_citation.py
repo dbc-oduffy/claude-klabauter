@@ -75,20 +75,8 @@ from coordinator_core.frontmatter.primitives import (
     split_frontmatter,
 )
 
-# The day the sizing-citation convention landed (see the absence-plan's
-# census: of 13 plans created this day, 5 carried the key and 8 did not).
-# Plans created before this date are the 292-plan pre-convention corpus
-# plan.schema.json explicitly exempts from backfill; only on/after this
-# date does a missing `sizing_object` become a finding.
 _CUTOFF = "2026-08-06"
 
-# `docs/plans/*.md` is not a directory of plans — it also holds 164
-# non-plan sidecars (`.prior-art-check.md`, `.plan-coverage-check.md`,
-# `.sonnet-review.md`, `.docs-check.md`) plus `INDEX.md`/`README.md`. This
-# basename shape, combined with the frontmatter and `kind` checks below,
-# was verified over the live 334-file corpus to select exactly the 170 real
-# plans and zero sidecars — see the absence-plan's substrate-finding table;
-# neither leg of the conjunction alone was sufficient.
 _PLAN_BASENAME = re.compile(r"^\d{4}-\d{2}-\d{2}-[^.]+\.md$")
 
 
@@ -154,14 +142,13 @@ def _scan_plans(
                 dangling.append((rel_path, cited))
             continue
 
-        # cited is absent or explicit null past this point — absence leg.
         if not _PLAN_BASENAME.match(basename):
             continue
         kind = read_fm_field_unquoted(split.fm_text, "kind")
         if kind and kind != "plan":
             continue
         if cited == "null":
-            continue  # explicit null is a satisfied declaration, not a finding
+            continue
         created = read_fm_field_unquoted(split.fm_text, "created")
         if not created or created[:10] < _CUTOFF:
             continue

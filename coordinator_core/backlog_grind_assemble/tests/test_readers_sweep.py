@@ -1,12 +1,3 @@
-"""P071-C5: bug-sweep emits the two `check` rechecks its own doctrine
-mandates (`bug-sweep/SKILL.md:91,163`) via `readers_sweep.collect`.
-
-Pins the two properties this row asserts for bug-sweep (mirroring
-`test_readers_blitz.py`'s pins for bug-blitz's single recheck): both check
-directives carry a `depends_on` edge to the grant's own write directive
-(never its judgment-point id), and neither introduces a second judgment
-point.
-"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -82,8 +73,6 @@ def test_both_rechecks_depend_on_the_grant_write_directive(
 
 def test_rechecks_carry_no_second_judgment_point(tmp_path: Path, monkeypatch) -> None:
     result = _collect_bug_sweep(tmp_path, monkeypatch)
-    # Exactly one judgment point (the grant's) is emitted by the whole
-    # grant flow -- neither check directive introduces a second one.
     grant_jp_ids = [
         jp["id"] for jp in result.judgment_points if jp["id"] == "j-bug-sweep-tier-u-grant"
     ]
@@ -111,10 +100,6 @@ def test_rechecks_carry_no_already_satisfied(tmp_path: Path, monkeypatch) -> Non
 
 
 def test_two_rechecks_are_two_distinct_directives(tmp_path: Path, monkeypatch) -> None:
-    # SKILL.md:91's pre-Track-B recheck and :163's post-fix recheck are two
-    # independently-dispatchable directives, not one directive reported
-    # twice -- a revoked/dead-session grant between the two points is what
-    # each independently re-checks liveness against.
     result = _collect_bug_sweep(tmp_path, monkeypatch)
     check_ids = {
         d["id"] for d in result.directives if d["cli"] == "tier-u-grant-cli" and d["args"] == ["check"]

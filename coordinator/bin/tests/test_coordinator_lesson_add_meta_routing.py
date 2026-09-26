@@ -36,33 +36,21 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
-# ---------------------------------------------------------------------------
-# Path setup — locate CLI relative to this test file
-# test file: coordinator/bin/tests/test_coordinator_lesson_add_meta_routing.py
-# CLI:       coordinator/bin/coordinator-lesson-add
-# ---------------------------------------------------------------------------
 _TESTS_DIR = Path(__file__).resolve().parent
 _BIN_DIR = _TESTS_DIR.parent
 _CLI_PATH = _BIN_DIR / "coordinator-lesson-add.py"
 
-# Load the CLI as a Python module for unit testing.
-# The sh/python trampoline header (''''exec...) is inert when imported as Python.
 _loader = importlib.machinery.SourceFileLoader("coordinator_lesson_add_meta_routing", str(_CLI_PATH))
 _spec = importlib.util.spec_from_loader("coordinator_lesson_add_meta_routing", _loader)
 _cli_mod = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
 _loader.exec_module(_cli_mod)
 
-# Env vars this suite isolates (never leaked into the real process or across tests).
 # "CLAUDE_KLABAUTER_ROOT" and "COORDINATOR_ENGINE_ROOT" are bare literals, not
-# `_cli_mod` attributes: C23 routed `_claude_klabauter_root()` through
-# `coordinator_engine_root_env`, which deleted the module-local
 # `_CLAUDE_KLABAUTER_ROOT_ENV` constant these tests used to import.
 _ENV_VARS = (
     _cli_mod._QUEUE_APPEND_OUTPUT_ROOT_ENV,
@@ -124,9 +112,6 @@ def test_claude_klabauter_unresolvable_falls_back_to_git_root_with_warning(meta_
     """
     fake_home = meta_repo_home
     # Point MACHINE_LOCAL_IMPL at a path that does not exist, so
-    # _machine_local_get's subprocess.run raises OSError (caught -> None),
-    # forcing _claude_klabauter_root() to return None without touching the real
-    # ~/.claude/bin/_machine_local.py or the real machine-local registry.
     monkeypatch.setenv(
         _cli_mod._MACHINE_LOCAL_IMPL_ENV,
         os.path.join(fake_home, "nonexistent", "_machine_local.py"),

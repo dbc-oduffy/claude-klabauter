@@ -87,15 +87,6 @@ def _is_deny(envelope) -> bool:
 
 
 def _call_suite_invocation_leg(params: dict) -> dict:
-    """Leg 1 — `hooks.block_dispatch_suite_invocation`, a sibling row's
-    writes: (docs/plans/2026-09-18-doe-holds-no-scripts.md line 2227), not
-    yet landed in this engine as of this dispatch. Imported lazily, inside
-    this call, inside the caller's own `try`/`except BaseException` — an
-    `ImportError` here (module absent) propagates to that isolation wrapper
-    exactly like any other leg-1 failure and degrades to "skip", never a
-    hard failure of this whole op. Starts firing the moment that sibling row
-    lands, no edit to this file required.
-    """
     from coordinator_core.hooks.block_dispatch_suite_invocation import _handler
 
     result = _handler(params)
@@ -124,9 +115,6 @@ def _call_enforce_dispatch_mode_leg(params: dict) -> dict:
 
 @register_op("hooks.preuse_agent_dispatch")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PreToolUse(Agent) op: run the four-guard fan-in, first-deny-wins.
-    See module docstring for registration order and isolation contract.
-    """
     params = payload_of(params)
 
     skipped: List[str] = []
@@ -150,7 +138,7 @@ def _handler(params: dict, repo_root=None) -> dict:
                         file=sys.stderr,
                     )
                 except Exception:
-                    pass  # stderr write failed; the skip decision above still stands
+                    pass
             return out
 
     if skipped:
@@ -161,10 +149,8 @@ def _handler(params: dict, repo_root=None) -> dict:
                 file=sys.stderr,
             )
         except Exception:
-            pass  # stderr write failed; the skip decision above still stands
+            pass
 
-    # Leg 4 — the sole updatedInput emitter, reached only once legs 1-3
-    # have all declined to deny. NOT isolated — see module docstring.
     out = _call_enforce_dispatch_mode_leg(params)
     if not isinstance(out, dict):
         return no_advisory()

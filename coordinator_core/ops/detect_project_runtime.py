@@ -148,8 +148,6 @@ def _detect_secrets(cwd: str, lines: List[str]) -> None:
     )
     env_example_present = os.path.isfile(os.path.join(cwd, ".env.example"))
 
-    # Default to "unknown / treat as present" for non-git contexts — matches
-    # the bash oracle's `env_tracked=1` initializer exactly (see negative-spec).
     env_tracked = True
     if _is_inside_git_worktree(cwd):
         env_tracked = _tracked_env_files_present(cwd)
@@ -159,12 +157,10 @@ def _detect_secrets(cwd: str, lines: List[str]) -> None:
     if env_example_present and (not infisical_present or env_tracked):
         lines.append("Secrets: .env (template only — .env.example present)")
     if infisical_present and env_example_present and not env_tracked:
-        # Both signals present — list both per plan ("list both if both conditions met").
         lines.append("Secrets: .env.example also present (legacy template)")
 
 
 def scan(cwd: str) -> List[str]:
-    """Run all marker detectors against `cwd` and return the ordered hit list."""
     lines: List[str] = []
     _detect_node(cwd, lines)
     _detect_python(cwd, lines)
@@ -174,7 +170,6 @@ def scan(cwd: str) -> List[str]:
 
 
 def render(cwd: str, lines: List[str]) -> str:
-    """Render the detected marker lines into the oracle's fixed stdout shape."""
     if not lines:
         return f"Detected: no known stack markers (script saw {cwd})."
 
@@ -189,7 +184,6 @@ def render(cwd: str, lines: List[str]) -> str:
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: scan the current working directory, print, always exit 0."""
     cwd = os.getcwd()
     lines = scan(cwd)
     print(render(cwd, lines))

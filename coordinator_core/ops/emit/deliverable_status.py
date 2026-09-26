@@ -1,71 +1,11 @@
-"""
-coordinator_core.ops.emit.deliverable_status — §8.16 deliverable_status cross-entity join.
-
-Purpose: cross-joins HandoffSummary × PlanSummary × RoadmapSummary on ``deliverable_id``,
-derives the deliverable-level status enum, and stamps ``deliverable_status`` back
-in-place on all three arrays. Records with ``deliverable_id=null`` are not grouped;
-their field stays null.
-
-Precedence (§ D5):
-  "shipped"   — ANY record has shipped_sha != null OR handoff deployment_state=="shipped"
-                OR plan status=="implemented" OR roadmap status=="shipped"
-  "abandoned" — ALL phases in the group are "abandoned"
-  otherwise   — max-progress phase across the group (excluding individual abandoned entries)
-
-Phase ordering / scores:
-  shipped(5) > in-review(4) > in-progress(3) > planned(2) > proposed(1) > abandoned(0)
-
-Score→phase fallback (score_to_phase): score 0 → "proposed" (not "abandoned"),
-matching the all-abandoned-group conditional that gates before this path.
-
-Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) — SECTION 8.16.
-Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § C3
-
-sedge-03 s1 review follow-on evidence note (AC6/AC9, 2026-08-11): AC6's five-zombie check
-against the live `state/cockpit-emission.json` corpus was performed as a one-off manual
-run at implementation time, not by a standing automated test at that point — the five real
-ids appeared in this module's test suite only as literals inside hand-built fixture dicts.
-This has since been closed: `test_sedge03_deliverable_status_liveness.py`'s
-`TestShapeA`/`TestShapeB`/`TestAC6RemainingZombies` cover all five ids against fixtures
-transcribed from the live corpus (revert-proven, 2026-08-13).
-
-``plan_review_verified()`` (C7, pln-the-rungs-get-writers-2026-08-20): a
-separate, per-record derived predicate — NOT part of the deliverable_status
-cross-entity join above. It reads a single PlanSummary record's
-``review_verified_by`` attest field (C6a) and answers "has this plan been
-review-attested", an ordering claim layered on top of `status` without adding
-a new `PlanStatus` enum member (hard constraint 1). See its own docstring
-below for the presence-check rationale.
-
-AC9 (golden reconciliation): verified by inspection that this is a
-non-issue rather than an untested claim — `_handoff_phase` already mapped a `continued`
-handoff to `"in-progress"` before this change (it falls through the shipped/closed/
-abandoned checks to the default), and the bridge only changes which groups are marked in
-the new `bridged_ids` side-channel, not the emitted `deliverable_status` value for any
-group. Goldens keyed on `deliverable_status` values alone therefore would not move; no
-golden file changes were needed or made.
-"""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
 
-# --------------------------------------------------------------------------- phase derivation
-# Mirror the jq ``def handoff_phase / plan_phase / roadmap_phase`` functions.
-
 
 def _handoff_phase(r: dict) -> str:
-    """Derive per-record phase for a HandoffSummary.
-
-    Precedence: shipped_sha != null > deployment_state=="shipped" > deployment_state in
-    ("closed", "abandoned") > else "in-progress" (covers status=="open" and any other
-    active-ish states). ``deployment_state=="abandoned"`` is the retired DR-084 token, read
-    here only as a fallback for un-migrated records; ``"closed"`` (deliberate-stop) is its
-    nearest current equivalent for this abandoned-group precedence check. DR-084 does not
-    fold ``"continued"`` into this branch — a continued handoff has live successor work and
-    is not abandoned; it falls through to "in-progress" below.
-    """
     if r.get("shipped_sha") is not None:
         return "shipped"
     ds = r.get("deployment_state") or ""
@@ -77,32 +17,6 @@ def _handoff_phase(r: dict) -> str:
 
 
 def _plan_phase(r: dict) -> str:
-    """Derive per-record phase for a PlanSummary.
-
-    Precedence: shipped_sha != null > status=="implemented" > abandoned/superseded/deferred
-    > status=="landed" > executing > approved/reviewed > else "proposed".
-
-    ``landed`` (C8a, plan-line-item-resolution-model, D9) sits between ``executing`` and
-    ``implemented`` in the schema enum — every chunk's code is on the branch but spine rows
-    are not yet fully dispositioned. It is deliberately NOT bucketed into the "shipped" rung
-    alongside ``implemented``: the deliverable isn't done until resolution closes out, so it
-    gets its own rung between in-progress(3) and shipped(5) — "in-review"(4), matching the
-    "code in, review/close-out pending" shape that rung already names for other axes.
-
-    Question answered (C8b, 2026-07-27): "what phase-score does this plan
-    contribute to a cross-entity deliverable's aggregate progress?" — a
-    6-rung ORDERED SCALE (shipped > in-review > in-progress > planned >
-    proposed > abandoned), not a binary/ternary terminal predicate. This is
-    deliberately NOT the same partition as ``ops.records_query.liveness()``'s
-    plan branch or either of the plan "terminal"-named sets in
-    ``lifecycle_constants.py`` / ``ops.plan_status_transition.py``, and is not
-    expected to agree with them: ``deferred`` folds into the "abandoned" rung
-    here (a deliverable whose plan phase is deferred contributes nothing to
-    the group's progress), whereas ``liveness()`` maps it to BLOCKED (not
-    DONE/abandoned) and the two terminal-named sets disagree with each other
-    on whether ``deferred`` belongs at all — three-then-four independent
-    answers to four different questions about the same status word.
-    """
     if r.get("shipped_sha") is not None:
         return "shipped"
     status = r.get("status") or ""
@@ -120,10 +34,6 @@ def _plan_phase(r: dict) -> str:
 
 
 def _roadmap_phase(r: dict) -> str:
-    """Derive per-record phase for a RoadmapSummary.
-
-    Precedence: shipped_sha != null > status=="shipped" > archived > active/blocked > else "proposed".
-    """
     if r.get("shipped_sha") is not None:
         return "shipped"
     status = r.get("status") or ""
@@ -136,13 +46,8 @@ def _roadmap_phase(r: dict) -> str:
     return "proposed"
 
 
-# --------------------------------------------------------------------------- scoring
-
-# phase → numeric score.
 _PHASE_SCORE: dict[str, int] = {
     "shipped":     5,
-    # in-review: was reserved for a future entity type; now reachable — _plan_phase()
-    # returns it for status=="landed" (C8a, plan-line-item-resolution-model, D9).
     "in-review":   4,
     "in-progress": 3,
     "planned":     2,
@@ -150,46 +55,19 @@ _PHASE_SCORE: dict[str, int] = {
     "abandoned":   0,
 }
 
-# numeric score → phase.
-# Score 0 is the abandoned-group guard; score_to_phase treats it as "proposed"
-# (the guard ``if ($phases | all(. == "abandoned")) then "abandoned"`` fires before this branch).
 _SCORE_TO_PHASE: dict[int, str] = {
     5: "shipped",
-    4: "in-review",  # reachable via plan status=="landed" (C8a)
+    4: "in-review",
     3: "in-progress",
     2: "planned",
     1: "proposed",
-    0: "proposed",  # fallback; all-abandoned gate fires before this branch
+    0: "proposed",
 }
 
 
-# --------------------------------------------------------------------------- review-verified predicate
-
-
 def plan_review_verified(plan: dict) -> bool:
-    """Derived predicate: has this PlanSummary record been review-attested?
-
-    True iff ``review_verified_by`` is present (non-null) on the record — the
-    attest write (C6a, ``plan_status_transition._stamp_review_verified``) sets
-    ``review_verified_by`` / ``review_verified_at`` / ``review_verified_findings``
-    together in ONE ``locked_rmw`` closure, so any one of the three is a sound
-    presence check; ``by`` is used here as the natural "who attested" anchor.
-
-    This does NOT add a new `PlanStatus` enum member (hard constraint 1,
-    pln-the-rungs-get-writers-2026-08-20 § C7) — it is an ordering predicate
-    layered on top of the existing `status` field, not a replacement for it. A
-    review-verified `implemented` plan and a merely-`implemented` plan carry
-    the same `status` value; this predicate is what distinguishes them for any
-    consumer that needs the ordering (e.g. `_deliverable_status`'s "shipped"
-    rung, which today buckets purely off `status` and cannot see this
-    distinction on its own).
-
-    Spec backlink: docs/plans/2026-08-20-the-rungs-get-writers.md § C7 (AC15).
-    """
     return plan.get("review_verified_by") is not None
 
-
-# --------------------------------------------------------------------------- public API
 
 def _compute_map(
     handoffs: list[dict],
@@ -225,44 +103,9 @@ def _compute_map(
     scope for this stub (``resolvers.py`` is not touched here) and is a named, bounded
     follow-on, not an implied completion.
     """
-    # Collect (deliverable_id, phase) pairs — skip records with null deliverable_id.
     pairs: list[tuple[str, str]] = []
-    # Group-level liveness partition (sedge-03 Resolution 2 Step A). Per-group data needed
-    # to detect a live-carrier-less `continued` handoff group, computed with zero extra
-    # filesystem I/O: `provenance.path`'s already-present `archive/` vs `state/` prefix.
-    # `has_live_carrier` answers "does any live artifact carry THIS canonical id" — this
-    # single per-canonical-id test covers BOTH measured failure shapes without needing to
-    # follow `continued_into` at all: Shape A (successor exists live but under a
     # DIFFERENT deliverable_id — the id does not carry forward, so this group's own
-    # `has_live_carrier` is correctly False even though the chain itself continues live
-    # elsewhere, under a different group) and Shape B (`continued_into` dangles — no live
-    # record anywhere, so `has_live_carrier` is trivially False). Cross-referencing
-    # `continued_into` against `envelope["handoffs"]`'s live `provenance.path` values (an
-    # in-memory set lookup, free, no extra I/O) was evaluated as an alternative signal but
-    # is redundant with — and, used as a gate, would wrongly rescue Shape A from bridging,
-    # since its `continued_into` DOES resolve to a live path (just under a different id).
-    # The named soundness caveat therefore lands on `has_live_carrier` itself, not a
-    # `continued_into` lookup: `has_live_carrier` is computed strictly from the RECORDS
-    # actually present in this emission's own arrays, so a successor that legitimately
-    # carries the SAME canonical id forward but was, for whatever reason, not collected
-    # into this run's `handoffs`/`plans`/`roadmaps` arrays would false-negative (bridge a
-    # group that has live work the collector simply didn't see this run) — a named,
-    # accepted gap, not a silent one; `plan`/`roadmap` rows are ipso facto live per
     # `_TYPE_TO_GLOB`.
-    #
-    # Named, accepted gap (sedge-03 s1 review, mixed-membership groups): `all_continued`
-    # requires EVERY handoff member of a canonical group to be `continued` before the
-    # group is bridge-eligible. A group mixing `continued` with `closed`/`abandoned`
-    # handoffs, with zero live carriers, has no live carrier by every measure the bridge
-    # cares about, yet `all_continued` is False for it (one non-`continued` member breaks
-    # the AND-chain) — so it is never bridged and never lands in `bridged_ids`. Its emitted
-    # *status* still lands on "in-progress" via the ordinary max-score path (not all
-    # phases are abandoned), so the value is accidentally correct, but the zombie goes
-    # unmarked in `bridged_ids`. Deliberately NOT widened here: whether the intended bridge
-    # scope is "any live-carrier-less group" or "only uniformly-continued groups" is a
-    # spec-precision question this stub does not settle, and widening `all_continued`
-    # would change emitted values for other group shapes on a bilateral-contract surface.
-    # Surfaced to the PM separately rather than resolved by silent widening.
     has_live_carrier: dict[str, bool] = {}
     all_continued: dict[str, bool] = {}
 
@@ -296,22 +139,13 @@ def _compute_map(
             has_live_carrier[dlv] = True
             all_continued[dlv] = False
 
-    # Group phases by deliverable_id (order-preserving insertion).
     groups: dict[str, list[str]] = {}
     for dlv_id, phase in pairs:
         groups.setdefault(dlv_id, []).append(phase)
 
-    # Derive deliverable-level status per group.
     dlv_map: dict[str, str] = {}
     for dlv_id, phases in groups.items():
-        # Bridge (sedge-03, Resolution 2 Step A): a group whose every handoff member is
-        # `continued`, with no live carrier of any kind (no live handoff, plan, or
-        # roadmap row) under this canonical id. Covers both measured failure shapes (see
-        # the `has_live_carrier` comment above). Named bridge value `in-progress` (per the
         # OVERVIEW's Bridge sub-section) — the only frozen `DeliverableStatus` member that
-        # does not misstate "not stopped" or "not shipped". `shipped_sha` still wins over
-        # the bridge (matches `_handoff_phase`'s own shipped_sha-first precedence). Not a
-        # final shape: retirement AC5 below.
         is_bridged = (
             all_continued.get(dlv_id, False)
             and not has_live_carrier.get(dlv_id, False)
@@ -329,7 +163,6 @@ def _compute_map(
             non_abandoned_scores = [
                 _PHASE_SCORE[p] for p in phases if p != "abandoned"
             ]
-            # ``max // 1`` in jq: if the filtered list is empty, use 1.
             max_score = max(non_abandoned_scores) if non_abandoned_scores else 1
             dlv_status = _SCORE_TO_PHASE.get(max_score, "proposed")
         dlv_map[dlv_id] = dlv_status
@@ -344,26 +177,6 @@ def stamp(
     worktree_root: Optional[Path] = None,
     bridged_ids: Optional[set[str]] = None,
 ) -> None:
-    """Compute and stamp ``deliverable_status`` in-place on all three arrays (bash §8.16).
-
-    Records with ``deliverable_id=null`` receive ``deliverable_status=null`` (no change from
-    the collect() stub). Modifies the lists in-place; no return value.
-
-    Call after shipped_sha enrichment (§1.5) so that ``_handoff_phase`` can read the
-    enriched ``shipped_sha`` field on handoffs.
-
-    ``worktree_root``: defaults to ``Path.cwd()`` — the process-cwd-as-repo-root
-    convention already used elsewhere in this codebase (e.g. ``backlog_grind_assemble.apply``,
-    ``ops.deferral_detect_orphan_memo``) for spawn-per-call entry points that receive no
-    explicit repo root from their caller. Unused by this function's own logic; kept for
-    call-site signature stability.
-
-    ``bridged_ids`` (sedge-03 s1 review follow-on): optional caller-supplied ``set[str]``,
-    threaded straight through to ``_compute_map`` and populated in place with every
-    canonical id whose group was resolved via the in-progress bridge. No current caller of
-    ``stamp`` (i.e. ``envelope.emit``) passes this yet -- wiring the emit envelope to
-    collect and surface it is a named follow-on, out of scope here.
-    """
     dlv_map = _compute_map(handoffs, plans, roadmaps, bridged_ids)
     for r in handoffs:
         dlv = r.get("deliverable_id")

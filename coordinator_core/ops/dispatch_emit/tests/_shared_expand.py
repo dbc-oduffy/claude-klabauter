@@ -1,9 +1,3 @@
-"""Read an emitted script back with every ``_shared`` reference inlined.
-
-Tests assert on what an agent is actually handed. ``emit.SharedBlocks``
-declares repeated prompt text once and references it; this inverts that, so an
-assertion written against the inlined prompt holds either way.
-"""
 
 from __future__ import annotations
 

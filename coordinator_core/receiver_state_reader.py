@@ -95,13 +95,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-#: `_parse_stamp` accepts only exact second-precision
-#: `%Y-%m-%dT%H:%M:%SZ`. If `write_receiver_state` ever emits a different
 #: ISO-8601 variant (fractional seconds, a numeric offset instead of `Z`),
 #: every record silently collapses to REASON_MALFORMED/UNAVAILABLE with no
-#: log. A stamp-format change on the writer side MUST bump `schema_version`
-#: under this reader's contract -- nothing else pins that coupling.
-#: Explicit wall-clock cutoff, stated as an assumption -- see module docstring
 #: § THE STALENESS RULE for why no measured percentile is quoted.
 STALE_AFTER_SECONDS = 3600
 
@@ -111,8 +106,6 @@ _SAFE_SID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 _LADDER_VERDICTS = frozenset({"PAUSED", "PRODUCING", "UNKNOWN"})
 
-#: The fourth verdict value -- never emitted by the ladder itself, so a caller
-#: can distinguish "the carrier said nothing" from "the carrier said UNKNOWN".
 VERDICT_UNAVAILABLE = "UNAVAILABLE"
 
 REASON_NO_FILE = "no-file"
@@ -121,18 +114,11 @@ REASON_MALFORMED = "malformed"
 REASON_BAD_SCHEMA_VERSION = "unrecognised-schema-version"
 REASON_STALE = "stale"
 
-#: The only `schema_version` this reader recognises -- the value
-#: `write_receiver_state` stamps at the ref cited in the module docstring.
 _SUPPORTED_SCHEMA_VERSION = 1
 
 
 def receiver_state_path(repo_root: str, session_id: str) -> Optional[str]:
-    """Absolute path of one peer's `receiver-state.json`, or None if `session_id`
-    is not a safe path component. Does not assert existence. Never rebuilt
-    ad hoc elsewhere in this module -- every reader routes through here."""
     # A bare "." or ".." matches _SAFE_SID_RE (no separator to catch) but is
-    # itself a traversal component; reject explicitly rather than relying on
-    # the character class alone.
     if not session_id or session_id in (".", "..") or not _SAFE_SID_RE.match(session_id):
         return None
     return os.path.join(repo_root, _SESSIONS_DIRNAME, session_id, _SIBLING_FILENAME)
@@ -222,9 +208,6 @@ def read_receiver_state(
         stale["stamped_at"] = stamped_at_raw
         return stale
 
-    # Gated on verdict == "UNKNOWN" so the docstring's "populated only when
-    # the ladder recorded them, i.e. verdict == UNKNOWN" is an enforced
-    # guarantee, not merely today's writer behaviour.
     if verdict == "UNKNOWN":
         unmodelled_type = record.get("unmodelled_type")
         unmodelled_subtype = record.get("unmodelled_subtype")

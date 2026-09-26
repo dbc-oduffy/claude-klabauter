@@ -41,11 +41,6 @@ import pytest
 
 
 def _probe_symlink_capability() -> bool:
-    """Attempt a real directory symlink in a throwaway temp dir; report
-    whether it worked. Cleans up the link and its target unconditionally —
-    a cleanup race (another process/probe reaping the same throwaway
-    directory concurrently) must not fail the caller.
-    """
     base = Path(tempfile.mkdtemp(prefix="symlink-capability-probe-"))
     target = base / "target"
     link = base / "link"

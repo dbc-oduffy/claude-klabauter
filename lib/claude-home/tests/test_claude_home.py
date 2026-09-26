@@ -27,8 +27,6 @@ from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-# Module under test sits alongside this tests/ dir at
-# coordinator/lib/claude-home/_claude_home.py.
 _MODULE_DIR = Path(__file__).resolve().parent.parent
 if str(_MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(_MODULE_DIR))
@@ -47,8 +45,6 @@ from _claude_home import (  # noqa: E402
     write_config,
 )
 
-# The shim lives at coordinator/lib/claude_home_shim.py, a sibling of this
-# hyphenated claude-home/ directory (two levels up from tests/).
 _LIB_DIR = _MODULE_DIR.parent
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
@@ -60,8 +56,6 @@ import claude_home_shim  # noqa: E402
 def _isolated_env(**overrides):
     """Drop CLAUDE_HOME/HOME/USERPROFILE, then apply *overrides*; restore on exit."""
     # Add COORDINATOR_SETTINGS_HOME so _isolated_env-based
-    # test classes are fully environment-isolated; host/CI shells with this var set would
-    # otherwise cause settings_home() to return the wrong path.
     saved = {k: os.environ.get(k) for k in ("CLAUDE_HOME", "HOME", "USERPROFILE", "COORDINATOR_SETTINGS_HOME")}
     for k in saved:
         os.environ.pop(k, None)
@@ -76,11 +70,6 @@ def _isolated_env(**overrides):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
-
-
-# ---------------------------------------------------------------------------
-# Path resolution
-# ---------------------------------------------------------------------------
 
 
 class TestHomeResolution(unittest.TestCase):
@@ -100,8 +89,6 @@ class TestHomeResolution(unittest.TestCase):
             self.assertEqual(home_dir(), self.tmp_path / "custom")
             self.assertEqual(claude_home_dir(), self.tmp_path / "custom" / ".claude")
             self.assertEqual(claude_config_path(), self.tmp_path / "custom" / ".claude.json")
-            # Neither new (<settings-home>/machine-local) nor legacy (.claude/machine-local)
-            # exists in this sandbox, so machine_local_dir() returns the canonical new path.
             self.assertEqual(
                 machine_local_dir(),
                 self.tmp_path / "custom" / ".coordinator-claude-settings" / "machine-local",
@@ -137,8 +124,6 @@ class TestHomeResolution(unittest.TestCase):
 
     def test_relative_claude_home_fails_loud(self):
         # CLAUDE_HOME is a deliberate operator override — a relative value is
-        # a configuration error, not a soft fallback. Spec: 2026-05-28
-        # addon-pluggy audit, INFO finding on env-var absolute-path validation.
         with _isolated_env(CLAUDE_HOME="relative/sandbox"):
             with self.assertRaises(ValueError) as cm:
                 home_dir()
@@ -146,7 +131,6 @@ class TestHomeResolution(unittest.TestCase):
             self.assertIn("absolute", str(cm.exception))
 
     def test_empty_claude_home_fails_loud(self):
-        # An empty string set in the environment is unambiguously
         # malformed; the docstring contract on CLAUDE_HOME is fail-loud, not silent
         # fallthrough. Common when CI clears a variable with `CLAUDE_HOME=`
         # instead of `unset CLAUDE_HOME`.
@@ -156,9 +140,7 @@ class TestHomeResolution(unittest.TestCase):
             self.assertIn("empty", str(cm.exception))
 
     def test_relative_home_is_skipped(self):
-        # Relative HOME (OS-provided) is ignored; resolution falls through to
         # USERPROFILE or stdlib. Prevents env-derived relative path from
-        # anchoring later path-joins at the process cwd.
         fake = self.tmp_path / "win_home"
         with _isolated_env(HOME="../escape", USERPROFILE=str(fake)):
             self.assertEqual(home_dir(), fake)
@@ -171,16 +153,7 @@ class TestHomeResolution(unittest.TestCase):
             self.assertEqual(home_dir(), fake)
 
 
-# ---------------------------------------------------------------------------
-# resolve_home_base — parity with home_dir() across the four-rung precedence
-# ---------------------------------------------------------------------------
-
-
 class TestResolveHomeBase(unittest.TestCase):
-    """resolve_home_base() must match home_dir() exactly — it delegates to it.
-
-    Spec backlink: pln-home-resolution-gate-family-ma-e5c146 § C6
-    """
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -215,22 +188,7 @@ class TestResolveHomeBase(unittest.TestCase):
             self.assertIn("absolute", str(cm.exception))
 
 
-# ---------------------------------------------------------------------------
-# claude_home_shim — the importable seam onto the hyphenated directory
-# ---------------------------------------------------------------------------
-
-
 class TestClaudeHomeShim(unittest.TestCase):
-    """claude_home_shim re-exports resolve_home_base/home_dir via a normal import.
-
-    This is the whole point of the shim: a caller outside claude-home/ can
-    `from claude_home_shim import resolve_home_base` with no sys.path or
-    importlib work of its own. If parity with the direct _claude_home import
-    fails, or if this test needed path surgery beyond ordinary import, the
-    shim has not done its job.
-
-    Spec backlink: pln-home-resolution-gate-family-ma-e5c146 § C6
-    """
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -252,19 +210,7 @@ class TestClaudeHomeShim(unittest.TestCase):
         self.assertEqual(set(claude_home_shim.__all__), {"resolve_home_base", "home_dir"})
 
 
-# ---------------------------------------------------------------------------
-# coordinator_root
-# ---------------------------------------------------------------------------
-
-
 class TestCoordinatorRoot(unittest.TestCase):
-    """Coverage for coordinator_root() — Python-accessible tiers only.
-
-    The full precedence chain (registry live_path, versioned cache glob) lives in
-    resolve-coordinator-clone.py; this class covers the Python-addressable subset.
-
-    Spec backlink: docs/plans/2026-06-23-coordinator-install-surface-dogfood-hardening.md § C2a
-    """
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -294,7 +240,6 @@ class TestCoordinatorRoot(unittest.TestCase):
                 self.assertEqual(result, Path(override))
 
     def test_flat_layout_fallback(self):
-        """Falls back to plugins_dir()/coordinator-claude/coordinator when no env set."""
         with _isolated_env(CLAUDE_HOME=str(self.tmp_path)):
             os.environ.pop("CLAUDE_PLUGIN_ROOT", None)
             os.environ.pop("COORDINATOR_ROOT", None)
@@ -312,7 +257,6 @@ class TestCoordinatorRoot(unittest.TestCase):
                 self.assertEqual(result, Path(cpr))
 
     def test_cli_coordinator_root_subcommand(self):
-        """'claude-home coordinator-root' prints the resolved coordinator root."""
         buf_out, buf_err = __import__("io").StringIO(), __import__("io").StringIO()
         cpr = str(self.tmp_path / "cpr_cli")
         with _isolated_env(CLAUDE_HOME=str(self.tmp_path)):
@@ -322,11 +266,6 @@ class TestCoordinatorRoot(unittest.TestCase):
                     rc = _claude_home._main(["claude-home", "coordinator-root"])
                 self.assertEqual(rc, 0, f"exited {rc}; stderr={buf_err.getvalue()!r}")
                 self.assertEqual(buf_out.getvalue().rstrip("\n"), cpr)
-
-
-# ---------------------------------------------------------------------------
-# read_config
-# ---------------------------------------------------------------------------
 
 
 class TestReadConfig(unittest.TestCase):
@@ -355,18 +294,12 @@ class TestReadConfig(unittest.TestCase):
             self.assertIn(".claude.json", str(cm.exception))
 
     def test_bom_utf8_tolerated(self):
-        """UTF-8 BOM (U+FEFF) from Windows editors does not break parsing."""
         payload = {"projects": {}}
         with _isolated_env(CLAUDE_HOME=str(self.tmp_path)):
             (self.tmp_path / ".claude.json").write_text(
                 "﻿" + json.dumps(payload), encoding="utf-8"
             )
             self.assertEqual(read_config(), payload)
-
-
-# ---------------------------------------------------------------------------
-# write_config
-# ---------------------------------------------------------------------------
 
 
 class TestWriteConfig(unittest.TestCase):
@@ -402,18 +335,12 @@ class TestWriteConfig(unittest.TestCase):
             self.assertEqual(read_config(), {"version": 2})
 
     def test_failure_path_cleans_up_tmp(self):
-        """If os.replace raises, the tempfile must be unlinked (no orphan .tmp files)."""
         with _isolated_env(CLAUDE_HOME=str(self.tmp_path)):
             with patch("_claude_home.os.replace", side_effect=OSError("simulated failure")):
                 with self.assertRaises(OSError):
                     write_config({"any": "data"})
             leftovers = list(self.tmp_path.glob(".claude.json.*.tmp"))
             self.assertEqual(leftovers, [], f"orphan tmp files after failure: {leftovers}")
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 
 class TestCli(unittest.TestCase):
@@ -431,9 +358,6 @@ class TestCli(unittest.TestCase):
         return rc, buf_out.getvalue().rstrip("\n"), buf_err.getvalue()
 
     def test_each_subcommand(self):
-        # machine-local: neither new (<settings-home>/machine-local) nor legacy
-        # (.claude/machine-local) exist in this sandbox, so the canonical new path is returned.
-        # Added settings-home case (previously untested subcommand).
         cases = [
             ("home", str(self.tmp_path)),
             ("path", str(self.tmp_path / ".claude.json")),
@@ -445,9 +369,8 @@ class TestCli(unittest.TestCase):
         with _isolated_env(CLAUDE_HOME=str(self.tmp_path)):
             for sub, expected in cases:
                 with self.subTest(subcommand=sub):
-                    # Reset both once-guards (split from single flag)
-                    _claude_home._legacy_machine_local_divergence_warned = False  # reset one-time guard
-                    _claude_home._legacy_machine_local_deprecated_warned = False  # reset one-time guard
+                    _claude_home._legacy_machine_local_divergence_warned = False
+                    _claude_home._legacy_machine_local_deprecated_warned = False
                     rc, out, err = self._run_cli(sub)
                     self.assertEqual(rc, 0, f"{sub} exited {rc}; stderr={err!r}")
                     self.assertEqual(out, expected)
@@ -496,8 +419,6 @@ class TestCli(unittest.TestCase):
         legacy = self.tmp_path / ".claude" / "machine-local"
         legacy.mkdir(parents=True)
         (legacy / "registry.toml").write_text("# seeded by test\n")
-        # Both dirs hold content and are distinct non-symlink directories: resolve() differs.
-        # Seeding matters — an empty dir is a post-migration husk, not a second home.
         with _isolated_env(CLAUDE_HOME=str(self.tmp_path)):
             _claude_home._legacy_machine_local_divergence_warned = False
             _claude_home._legacy_machine_local_deprecated_warned = False
@@ -505,11 +426,6 @@ class TestCli(unittest.TestCase):
         self.assertEqual(rc, 0, f"expected rc=0; stderr={err!r}")
         self.assertEqual(out, str(new))
         self.assertIn("DIVERGENT", err)
-
-
-# ---------------------------------------------------------------------------
-# _check_machine_local_divergence — warn-and-continue semantics
-# ---------------------------------------------------------------------------
 
 
 class TestMachineLocalDivergence(unittest.TestCase):
@@ -528,7 +444,6 @@ class TestMachineLocalDivergence(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.tmp_path = Path(self.tmp.name)
-        # Reset both once-guards (split from single flag)
         _claude_home._legacy_machine_local_divergence_warned = False
         _claude_home._legacy_machine_local_deprecated_warned = False
 
@@ -551,8 +466,6 @@ class TestMachineLocalDivergence(unittest.TestCase):
         }
 
     def test_divergence_warns_not_exits(self):
-        """Both homes exist with different realpaths → emit warning, return normally (no sys.exit)."""
-        # Seed content in both: an empty dir is a husk, not a divergent second home.
         for d in (self._legacy_path(), self._new_path()):
             d.mkdir(parents=True)
             (d / "registry.toml").write_text("# seeded by test\n")
@@ -560,7 +473,6 @@ class TestMachineLocalDivergence(unittest.TestCase):
         buf = io.StringIO()
         with patch.dict(os.environ, self._env(), clear=False):
             with redirect_stderr(buf):
-                # Must NOT raise SystemExit
                 _claude_home._check_machine_local_divergence()
 
         err = buf.getvalue()
@@ -571,9 +483,7 @@ class TestMachineLocalDivergence(unittest.TestCase):
         self.assertIn("New    realpath", err)
 
     def test_compat_symlink_no_warn(self):
-        """Both paths resolve to the same realpath (compat-symlink) → no warning emitted."""
         self._new_path().mkdir(parents=True)
-        # Create legacy path as a symlink pointing at the new path (same realpath)
         self._legacy_path().parent.mkdir(parents=True, exist_ok=True)
         self._legacy_path().symlink_to(self._new_path())
 
@@ -585,7 +495,6 @@ class TestMachineLocalDivergence(unittest.TestCase):
         self.assertEqual(buf.getvalue(), "", "compat-symlink must not emit any warning")
 
     def test_one_absent_no_warn(self):
-        """Only new home exists → no warning (no divergence possible)."""
         self._new_path().mkdir(parents=True)
 
         buf = io.StringIO()
@@ -594,11 +503,6 @@ class TestMachineLocalDivergence(unittest.TestCase):
                 _claude_home._check_machine_local_divergence()
 
         self.assertEqual(buf.getvalue(), "", "single-home must not emit any warning")
-
-
-# ---------------------------------------------------------------------------
-# machine_local_dir — prefer-new-fallback-to-legacy
-# ---------------------------------------------------------------------------
 
 
 class TestMachineLocalDir(unittest.TestCase):
@@ -617,7 +521,6 @@ class TestMachineLocalDir(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.tmp_path = Path(self.tmp.name)
-        # Reset both once-guards (split from single flag)
         _claude_home._legacy_machine_local_divergence_warned = False
         _claude_home._legacy_machine_local_deprecated_warned = False
 
@@ -640,7 +543,6 @@ class TestMachineLocalDir(unittest.TestCase):
         }
 
     def test_prefer_new_when_both_exist(self):
-        """new exists → return new regardless of legacy presence."""
         self._new_path().mkdir(parents=True)
         self._legacy_path().mkdir(parents=True)
 
@@ -650,7 +552,6 @@ class TestMachineLocalDir(unittest.TestCase):
         self.assertEqual(result, self._new_path())
 
     def test_prefer_new_no_warning_when_new_exists(self):
-        """new exists → no deprecation warning even if legacy also exists."""
         self._new_path().mkdir(parents=True)
         self._legacy_path().mkdir(parents=True)
 
@@ -662,7 +563,6 @@ class TestMachineLocalDir(unittest.TestCase):
         self.assertEqual(buf.getvalue(), "", "no warning expected when new path exists")
 
     def test_fallback_to_legacy_when_new_absent(self):
-        """new absent, legacy present → return legacy + emit one-time warning."""
         self._legacy_path().mkdir(parents=True)
 
         buf = io.StringIO()
@@ -676,7 +576,6 @@ class TestMachineLocalDir(unittest.TestCase):
         self.assertIn("coordinator:install", err)
 
     def test_canonical_new_when_neither_exists(self):
-        """Neither new nor legacy exists → return canonical new path, no warning."""
         buf = io.StringIO()
         with patch.dict(os.environ, self._env(), clear=False):
             with redirect_stderr(buf):
@@ -686,7 +585,6 @@ class TestMachineLocalDir(unittest.TestCase):
         self.assertEqual(buf.getvalue(), "", "no warning expected when neither path exists")
 
     def test_warn_only_once_on_repeated_calls(self):
-        """One-time guard: a second call with legacy-only setup must not re-emit the warning."""
         self._legacy_path().mkdir(parents=True)
 
         lines = []
@@ -701,7 +599,6 @@ class TestMachineLocalDir(unittest.TestCase):
         self.assertEqual(len(lines), 1, "deprecation warning must appear exactly once across multiple calls")
 
     def test_never_return_nonexistent_legacy(self):
-        """When legacy does not exist, must never return legacy path — return new instead."""
         with patch.dict(os.environ, self._env(), clear=False):
             result = _claude_home.machine_local_dir()
 

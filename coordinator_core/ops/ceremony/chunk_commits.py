@@ -111,10 +111,6 @@ from typing import Dict, List, Optional, Union
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.git_native import _git, log_diff_filter
 
-#: Field separator for the range-log `--format` string. A control byte that
-#: cannot appear in a commit subject line (`%s` is single-line by definition —
-#: git itself folds an embedded newline out of the subject placeholder), so a
-#: naive `str.partition` split is unambiguous; no escaping/quoting needed.
 _FIELD_SEP = "\x1f"
 
 
@@ -161,10 +157,6 @@ def resolve_chunk_commits(
             "isn't there (AC6 fail-loud, never a silent empty list)"
         )
 
-    # Stage 1 — add-commit resolution. Composes log_diff_filter (AC8), never a
-    # fresh subprocess call. --follow -M100% --diff-filter=A --format=%H --
-    # <plan_path>, mirroring coverage.py's own add-commit resolution exactly
-    # (see this module's docstring for the coverage.py backlink).
     add_result = log_diff_filter(
         root,
         "A",
@@ -182,14 +174,8 @@ def resolve_chunk_commits(
             f'"{plan_path}" — cannot anchor the chunk-commit range without a '
             "plan add-commit (AC6 fail-loud, never a silent empty list)"
         )
-    # git log is newest-first; the OLDEST add-commit is the last line.
     add_sha = add_shas[-1]
 
-    # Stage 2 — range-scope to <add-sha>..HEAD (AC4: not caller-overridable —
-    # no parameter of this function can widen past this range) and read the
-    # SUBJECT of every commit in it, unfiltered by any pathspec (AC3: no `--`
-    # pathspec here, only stage 1's fixed one). --reverse for oldest-first
-    # output, matching this function's own documented return order.
     range_spec = f"{add_sha}..HEAD"
     log_result = _git(
         ["log", "--reverse", range_spec, f"--format=%H{_FIELD_SEP}%s"],
@@ -201,10 +187,6 @@ def resolve_chunk_commits(
             f"(exit {log_result.returncode}): {log_result.stderr.strip()}"
         )
 
-    # Stage 3 — subject filter (AC2). Deliberately `%s` (git's own
-    # single-line subject placeholder) compared with a plain `str.startswith`
-    # — never `--grep`, which scans every line of the full message (subject
-    # AND body) and is exactly the false-positive this op exists to close.
     prefix = f"{chunk_id}:"
     commits: List[Dict[str, str]] = []
     for line in log_result.stdout.splitlines():
@@ -212,9 +194,6 @@ def resolve_chunk_commits(
             continue
         sha, sep, subject = line.partition(_FIELD_SEP)
         if not sep:
-            # Malformed/unsplit line (should not happen with a well-formed
-            # --format) — skip rather than guess at a subject that isn't
-            # really there.
             continue
         if subject.startswith(prefix):
             commits.append({"sha": sha, "subject": subject})

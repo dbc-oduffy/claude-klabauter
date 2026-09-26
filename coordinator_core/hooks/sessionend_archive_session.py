@@ -54,16 +54,6 @@ from coordinator_core.session.scope import archive
 
 @register_op("hooks.sessionend_archive_session")
 def _handler(params: dict, repo_root=None) -> dict:
-    """SessionEnd: archive this session's claim directory (idempotent, non-fatal).
-
-    `params["payload"]` is the dict `warm/hook_http.py :: payload_from_event`
-    builds from the fired event. `session_id` and `cwd` are read from that
-    payload, never from `os.environ` or this process's own `cwd`.
-
-    Always returns `no_advisory()` (empty dict) — this hook never surfaces
-    advisory text and never blocks, matching the source script's own always-
-    exit-0 contract.
-    """
     payload = payload_of(params)
 
     session_id = payload.get("session_id") or ""
@@ -77,9 +67,6 @@ def _handler(params: dict, repo_root=None) -> dict:
     try:
         archive(session_id, cwd=cwd or None)
     except Exception:
-        # Non-fatal by design (module docstring): a failure here is reported,
-        # not raised — the 24h reaper is the backstop, per this registration's
-        # Reconstructable classification.
         pass
 
     return no_advisory()

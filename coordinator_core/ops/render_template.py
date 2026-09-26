@@ -72,7 +72,7 @@ Negative-spec (unchanged from the bash oracle — do NOT "improve" here):
 
 from __future__ import annotations
 
-GENERATES = []  # writes to a caller-supplied -o <output-path> (or stdout when omitted); no fixed target of its own
+GENERATES = []
 
 import os
 import re
@@ -81,18 +81,12 @@ from typing import List, Optional, Tuple
 
 from coordinator_core.session.declared_writes import declare_write
 
-_PROG = "render-template"  # literal program-name prefix, matches bash oracle's stderr prefix
+_PROG = "render-template"
 _TOKEN_RE = re.compile(r"\{\{([^}]+)\}\}")
 _KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _parse_in_place_args(rest: List[str]) -> Tuple[Optional[List[str]], Optional[List[Tuple[str, str]]], Optional[str]]:
-    """Parse the args following --in-place. Returns (paths, kv_pairs, error_message).
-
-    Paths are the leading run of arguments with no "=" and no leading "-";
-    the first KEY=VALUE-shaped argument ends the path list (see module
-    docstring's Batch in-place contract).
-    """
     i = 0
     paths: List[str] = []
     while i < len(rest) and "=" not in rest[i] and not rest[i].startswith("-"):
@@ -116,12 +110,6 @@ def _parse_in_place_args(rest: List[str]) -> Tuple[Optional[List[str]], Optional
 
 
 def _parse_args(argv: List[str]) -> Tuple[Optional[str], Optional[str], Optional[List[Tuple[str, str]]], Optional[str], Optional[str]]:
-    """Parse CLI args. Returns (template_path, output_path, kv_pairs, guard_sentinel, error_message).
-
-    On error, template_path is None and error_message is set (caller prints
-    to stderr and exits 1, matching the bash oracle's `set -euo pipefail` +
-    early-exit shape).
-    """
     if not argv:
         return None, None, None, None, (
             "usage: render-template.sh <template-path> [-o <output-path>] [KEY=VALUE]..."
@@ -158,11 +146,6 @@ def _parse_args(argv: List[str]) -> Tuple[Optional[str], Optional[str], Optional
 
 
 def _apply_substitutions(rendered: str, kv_pairs: List[Tuple[str, str]]) -> Tuple[Optional[str], Optional[str]]:
-    """Apply each KEY=VALUE literal substitution in order.
-
-    Returns (result, error_message). On an invalid key, result is None and
-    error_message is set.
-    """
     for key, value in kv_pairs:
         if not _KEY_RE.match(key):
             return None, f"invalid key: {key} (must be a bare identifier)"
@@ -171,22 +154,12 @@ def _apply_substitutions(rendered: str, kv_pairs: List[Tuple[str, str]]) -> Tupl
 
 
 def _find_unsubstituted(rendered: str) -> List[str]:
-    """Extract every remaining {{...}} token's stripped inner content, deduped+sorted.
-
-    Mirrors the bash oracle: extract all {{[^}]+}} tokens, strip surrounding
-    whitespace from the inner content, dedupe, sort.
-    """
     tokens = _TOKEN_RE.findall(rendered)
     stripped = {t.strip() for t in tokens}
     return sorted(stripped)
 
 
 def render(template_path: str, kv_pairs: List[Tuple[str, str]]) -> Tuple[Optional[str], int, Optional[str]]:
-    """Render a template file with the given substitutions.
-
-    Returns (rendered_text, exit_code, error_message). rendered_text is None
-    on any failure; error_message is the bare (unprefixed) diagnostic.
-    """
     if not os.access(template_path, os.R_OK) or not os.path.isfile(template_path):
         return None, 1, f"cannot read template: {template_path}"
 
@@ -210,7 +183,6 @@ def render(template_path: str, kv_pairs: List[Tuple[str, str]]) -> Tuple[Optiona
 
 
 def _render_and_write_in_place(path: str, kv_pairs: List[Tuple[str, str]]) -> Tuple[int, Optional[str]]:
-    """Render `path` and atomically overwrite it in place. Returns (rc, error_message)."""
     rendered, rc, err = render(path, kv_pairs)
     if err is not None:
         return rc, err
@@ -221,7 +193,6 @@ def _render_and_write_in_place(path: str, kv_pairs: List[Tuple[str, str]]) -> Tu
         with open(tmp_path, "w", encoding="utf-8", errors="surrogateescape", newline="\n") as f:
             f.write(rendered)
         os.replace(tmp_path, path)
-        # DR-276: declared AFTER the atomic replace lands, never before.
         declare_write(path)
     except OSError as exc:
         try:
@@ -235,12 +206,6 @@ def _render_and_write_in_place(path: str, kv_pairs: List[Tuple[str, str]]) -> Tu
 
 
 def _main_in_place(rest: List[str]) -> int:
-    """--in-place batch entry: render every listed path in place, one process, N files.
-
-    Every path is attempted regardless of earlier failures (per-file error
-    attribution, never a collapsed pass/fail -- see module docstring). The
-    returned rc is the worst severity seen (3 beats 1 beats 0).
-    """
     paths, kv_pairs, err = _parse_in_place_args(rest)
     if err is not None:
         print(f"{_PROG}: {err}", file=sys.stderr)
@@ -260,14 +225,12 @@ def _main_in_place(rest: List[str]) -> int:
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: arg parse, render, write (stdout or -o path), return rc."""
     if argv and argv[0] == "--in-place":
         return _main_in_place(argv[1:])
 
     template_path, output_path, kv_pairs, guard_sentinel, err = _parse_args(argv)
     if err is not None:
         if template_path is None and kv_pairs is None and output_path is None and argv == []:
-            # missing-args usage message: no program-name prefix, matches bash oracle
             print(err, file=sys.stderr)
         else:
             print(f"{_PROG}: {err}", file=sys.stderr)
@@ -317,9 +280,7 @@ def main(argv: List[str]) -> int:
             with open(tmp_path, "w", encoding="utf-8", errors="surrogateescape", newline="\n") as f:
                 f.write(rendered)
             os.replace(tmp_path, output_path)
-            # DR-276: declared AFTER the atomic replace lands, never before —
             # the contract is a report of what was ACTUALLY written, not of
-            # an intended surface.
             declare_write(output_path)
         except OSError as exc:
             try:

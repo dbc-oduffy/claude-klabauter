@@ -96,13 +96,6 @@ from coordinator_core.bash_guards.tests.guard_message_corpus import (
     CorpusRow,
 )
 
-# ---------------------------------------------------------------------------
-# The (now empty) named-exception set (module docstring point 4). Kept as a
-# typed constant rather than deleted outright -- a future violator has an
-# obvious, already-wired place to register a NEW named exception, and
-# `test_no_confinement_deny_guard_is_currently_exempted` below pins it
-# empty so this never silently regrows into a blanket allowlist.
-# ---------------------------------------------------------------------------
 
 _KNOWN_ALLOW_WITH_CONTENT_EXCEPTIONS: frozenset = frozenset()
 
@@ -126,10 +119,6 @@ def _noncanonical_branch_hazard_setup(
 def _subagent_stash_identity_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
-    """`block-subagent-stash-creation` is identity-gated on the raw
-    presence of `agent_id` in the payload (see that module's own docstring)
-    -- merged flatly into the fired payload, the same shape every other
-    identity-gated row in `guard_message_corpus.py` uses."""
     return {"agent_id": "a1", "agent_type": "coordinator:executor"}
 
 
@@ -143,51 +132,21 @@ def _subagent_grant_acquisition_identity_setup(
     return {"agent_id": "a1", "agent_type": "coordinator:executor"}
 
 
-#: Five firing rows (module docstring point 2) topping up the five
 #: CONFINEMENT_DENY guards `guard_message_corpus.CONFINEMENT_ROWS` leaves
-#: control-only, per that module's own "C3c" drift-fix comment. Verified
-#: live against this tree before being pinned here (each command below was
-#: run directly against the guard's own `check()` and confirmed to deny/
-#: advise, not guessed from reading the source alone).
 _EXTRA_FIRING_ROWS: List[CorpusRow] = [
     # `block-dev-repo-sentinel-removal`'s own CONFINEMENT_DENY firing row
-    # (previously here, direct `rm .coordinator-dev-repo`) was REMOVED --
     # not stale-and-forgotten, but stale-and-VERIFIED: commit `d1113d2b8`
     # ("C13: move 4 GuardEntry registrations to ADVISORY_REWRITE, correct
-    # two stale self-counts") retired this guard's hard-deny leg entirely,
-    # per `dispatch.py`'s own inline comment at the
-    # `block-worktree-sentinel-creation` registration site ("`block-dev-
-    # repo-sentinel-removal`'s hard-deny leg was RETIRED here (C13,
-    # docs/plans/2026-08-06-apply-guard-class-census.md), collapsing its
-    # former TWO-LEG SPLIT into the single already-registered
-    # `block-dev-repo-sentinel-removal-advisory` entry ... in
     # ADVISORY_REWRITE"). The live chain no longer registers ANY entry
-    # named `block-dev-repo-sentinel-removal` in ANY band -- only
     # `block-dev-repo-sentinel-removal-advisory` (ADVISORY_REWRITE), which
     # is out of this file's CONFINEMENT_DENY-only scope (module docstring
     # point 2). That same dispatch.py comment flags a known, ALREADY-
-    # TRACKED product gap this file does not re-report: `check_advisory`
-    # still returns `None` (silent allow, no comment) for the direct
-    # `rm`/`mv`/`git rm`/`git mv .coordinator-dev-repo` shape today, pending
-    # a peer chunk widening it -- that is dispatch.py's own module-body
-    # scope, not this test module's.
-    #
-    # The former known exception's own trigger (module docstring point 4,
     # RESOLVED 2026-08-05): a DIRECT match used to still deny via the row
-    # removed above. This xargs-indirection shape used to resolve to this
     # guard's own ADVISORY posture returned DIRECTLY from `check()` -- allow+
     # additionalContext, a CONFINEMENT_DENY-band shape violation. Since the
-    # two-leg split, `check()` (the entry this file's `_classify_chain`
-    # exercises) returns bare `None` for this input -- the advisory now
     # lives in `check_advisory()`'s own separate ADVISORY_REWRITE entry,
-    # which this file's `_classify_chain` deliberately does not walk (module
     # docstring point 2 -- only CONFINEMENT_DENY entries). No corpus row is
-    # needed here any more: this shape is now an ordinary control input for
     # this guard's CONFINEMENT_DENY entry, covered implicitly by every row
-    # above that is NOT this guard's own direct-fire row. Guard-level proof
-    # of the split (both legs, both the three audit trigger shapes, and the
-    # non-shadowing property) lives in `test_block_dev_repo_sentinel_
-    # removal.py::TestAdvisoryLegAtItsNewChainPosition`, not here.
     CorpusRow(
         "block-disarm-marker-sentinel-creation",
         "block-disarm-marker-sentinel-creation-fire",
@@ -222,15 +181,8 @@ _EXTRA_FIRING_ROWS: List[CorpusRow] = [
         False,
         setup=_subagent_stash_identity_setup,
     ),
-    # `block-subagent-grant-acquisition` has no firing row anywhere else in
     # this corpus -- `guard_message_corpus.REGISTER_COVERAGE_EXEMPTIONS`
-    # (test_guard_message_register_lint.py) exempts it from the AC10
-    # message-register gate on "no corpus row yet", but that exemption
-    # covers only the message-register/coverage concern, not THIS file's
     # own invariant that every live CONFINEMENT_DENY guard's non-None
-    # branch is actually exercised (module docstring point 2/3). It is
-    # genuinely fireable -- same shape as its near-exact sibling
-    # `block-subagent-guard-grant`, which already fires above via
     # `CONFINEMENT_ROWS` -- so it gets a real row here, not an exemption.
     CorpusRow(
         "block-subagent-grant-acquisition",
@@ -246,16 +198,7 @@ _EXTRA_FIRING_ROWS: List[CorpusRow] = [
 ALL_ROWS: List[CorpusRow] = list(CONFINEMENT_ROWS) + _EXTRA_FIRING_ROWS
 
 
-# ---------------------------------------------------------------------------
-# Chain construction + shape classification.
-# ---------------------------------------------------------------------------
-
-
 def _dummy_chain() -> List[GuardEntry]:
-    """The live registration with harmless dummy call-time arguments -- same
-    shape `test_guard_band_membership.py`'s own `_dummy_chain` uses. None of
-    the `fn` closures are called here; only `name`/`band` (registration-time
-    facts) are inspected."""
     return dispatch._build_guard_chain(
         cmd="echo confinement-deny-band-shape-probe",
         session_id="confinement-deny-band-shape-probe",
@@ -361,11 +304,6 @@ def _format_violations(violations: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# AC-shaped tests.
-# ---------------------------------------------------------------------------
-
-
 def test_chain_is_readable_and_carries_confinement_deny_entries():
     """Guard the guard: if `_build_guard_chain` stops returning entries, or
     stops carrying any `CONFINEMENT_DENY` entry, every assertion below would
@@ -427,12 +365,6 @@ def test_no_confinement_deny_guard_is_currently_exempted():
     session_id = "confinement-deny-band-shape-no-exemption-probe-%s" % uuid.uuid4().hex
     cmd = "echo .coordinator-dev-repo | xargs rm"
     # Wrapped in `pytest.MonkeyPatch.context()` with `CLAUDE_CODE_SESSION_ID`
-    # set, matching `_fire_row_and_classify`'s per-cell isolation discipline
-    # (module docstring: "load-bearing, not hygiene") -- this only builds
-    # ONE chain now (the former two-build/one-session_id shape this test
-    # used before the exemption resolved is gone), but keeping the same
-    # isolation shape avoids a quiet, unexplained deviation.
-    # (Review: code-reviewer, Finding 3, 2026-08-05).
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("CLAUDE_CODE_SESSION_ID", session_id)
         payload = {

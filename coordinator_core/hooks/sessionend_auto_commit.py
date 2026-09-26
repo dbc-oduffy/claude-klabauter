@@ -80,8 +80,6 @@ def _handler(params: dict, repo_root=None) -> dict:
 
         _safe_commit_offer_handler({"cwd": cwd or None, "session_id": session_id})
     except Exception:
-        # Non-fatal by design (module docstring): a SessionEnd hook must
-        # never brick session teardown.
         pass
 
     return no_advisory()

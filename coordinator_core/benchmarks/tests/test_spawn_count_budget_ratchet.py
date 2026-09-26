@@ -31,42 +31,11 @@ from coordinator_core.benchmarks.budget import load_manifest
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# Each op's high-water mark, one entry per named key inside its
-# `spawn_count_budget` dict. A value may be LOWERED freely -- that is the
-# direction this repo wants and no test should stand in its way; raising one
-# requires editing this table, turning a one-character tune into a visible
-# argument in a diff rather than a silent constant bump in the manifest.
-#
-# `bin.freeze_review_diff.paths_contributing_nothing` and
-# `bin.workweek_complete_drift_guards.shellcheck_sweep` were cut entirely by a
-# concurrent 2026-08-16 pass (advisory-prose removal, confirmed absent from
-# both `budget-manifest.json` and their own dedicated test files at the time
-# this module was written) -- both rows are correspondingly absent here, not
-# left dangling with no manifest entry to ratchet against.
-# `ceremony.scoped_git_commit`'s row was RETIRED on 2026-08-25 along with its
-# fourteen ceilings, because the op it budgeted no longer exists: killed at
-# K-045 / `c07062c99`, handler and registration removed. A budget for a
-# subject that cannot run reads as governed coverage while governing nothing,
-# which is the exact failure this module's docstring cites for the two rows
-# deleted on 2026-08-15/16. Note the orphan pin below did NOT catch it: that
-# check greps the test tree for the row's subject, and the dead op's name
-# still appears in guard-message tests (`test_deny_message_accuracy.py`), so
-# it stayed green on a false negative its own docstring predicts. Found by
-# hand instead.
 _BASELINE_REASON = (
     "Pre-existing baseline mark predating this fix; no per-row rationale "
     "was captured when spawn-count ratcheting was first added to this table."
 )
 
-# Each mark pairs a `ceiling` with a `reason` -- see
-# tasks/opro-03-c08-trace/FIX-H-raise-needs-a-stated-reason.md. A unit test
-# has no prior value to compare against (git history is not a reliable
-# source inside a test), so this table cannot detect a RAISE directly; it
-# instead requires every mark to carry a stated reason, uniformly, present
-# and future -- direction (raise vs. floor vs. re-baseline) stays a
-# review-time judgment made from the reason text, not something computed
-# here. Lowering a value never touches `reason`, so it stays frictionless --
-# only adding a new key or row requires authoring one.
 _SPAWN_COUNT_HIGH_WATER = {
     "changelog.cited_in_range_count": {
         "n_tokens": {"ceiling": 1, "reason": _BASELINE_REASON},
@@ -150,41 +119,10 @@ _SPAWN_COUNT_HIGH_WATER = {
         },
         "n_committed_rows": {"ceiling": 2, "reason": _BASELINE_REASON},
     },
-    # See module-level comment for the `ops.discover_working_repos` context:
-    # `per_call` is a re-baseline (0 -> 1) against newly visible truth, the
-    # `op_total_*` marks are the OP end-to-end (nothing stubbed) and are new
-    # floors first measured 2026-08-19, and
-    # `machine_local_cli_elimination_calls` legitimately keeps `_sort_unique`
-    # stubbed to isolate `_merged_flat_registry`'s CLI elimination.
     # GRAVESTONE -- `ceremony.wsc_tail`'s high-water entry, retired 2026-08-27.
-    # The op was killed 2026-08-23 (state/kill-ledger.md K-046); DR-358 rebuilt
-    # its requirements as in-process calls and explicitly NOT as an op, so no
-    # registered subject has carried this name since. Its pinned ceiling of 34
-    # `op_total_normal_pass` spawns governed something that cannot run, and its
-    # own reason text named the enforcer as
-    # `ops/ceremony/tests/test_wsc_tail_spawn_budget.py` -- a file deleted with
-    # the op.
-    #
     # THIS IS A RETIREMENT, NEVER AN UNBANKED REDUCTION. The ratchet's rule is
-    # that a measured reduction must be banked so the ceiling only tightens;
-    # dropping a row would be ratchet evasion IF a live subject still spawned
-    # under it. Nothing does. The recorded open question this row carried --
-    # the unattributed -3 between C3's 37 and the fixture's 34 -- dies with the
-    # subject rather than being resolved, and must not be inherited by any
-    # successor row: it was measured against a handler that no longer exists.
-    #
     # WHY IT SURVIVED THE KILL, which is the part worth keeping. The orphan
-    # check below, `test_spawn_count_budget_rows_name_a_subject_that_still_
     # exists`, is a SUBSTRING SWEEP of the test tree, and `wsc_tail` still
-    # occurs as prose in guard-message fixtures -- so the sweep found the word,
-    # passed, and the row outlived its subject by four days. That is the SECOND
-    # time this exact false negative has fired: this module's own docstring
-    # already records `ceremony.scoped_git_commit` surviving K-045 the same way,
-    # "found by hand instead." Found by hand again. The durable fix is
-    # resolving a row's subject against the op registry rather than grepping
-    # for its name; surfaced as a design question, deliberately not patched
-    # here, because dropping this row treats the symptom and leaves the sweep
-    # blind to the third occurrence.
     "ops.discover_working_repos": {
         "per_call": {
             "ceiling": 1,
@@ -306,15 +244,6 @@ def _thin_reason_violations(table: dict) -> list:
 
 
 def _manifest_spawn_count_overrides() -> dict:
-    """Every `overrides` row in the live manifest that carries a `spawn_count_budget`.
-
-    A row may carry the `spawn_count_budget`
-    key with a JSON `null` value (the key present, no budget set), distinct
-    from the key being absent entirely. Such a row is simply ungoverned by
-    the ratchet, not a malformed one, so it is excluded here the same as a
-    row lacking the key outright -- rather than surfacing as an unhandled
-    `TypeError` later when a caller indexes into it.
-    """
     manifest = load_manifest()
     overrides = manifest.get("overrides", {})
     return {
@@ -330,26 +259,10 @@ def _stale_high_water_ops(live: dict) -> list:
     return [op for op in _SPAWN_COUNT_HIGH_WATER if op not in live]
 
 
-# The substring sweep that used to live here -- `_op_leaf`,
-# `_live_test_corpus_text`, `_ops_with_no_live_test_reference` -- was REMOVED
-# 2026-08-27, not kept alongside its replacement. It asked whether a row's leaf
-# name appears anywhere in the test corpus, which cannot separate a subject a
-# test exercises from a dead string a test uses as data, so keeping it as a
-# second opinion would only have re-supplied the false negative that let two
-# killed ops keep their budgets. Its design rationale and the two alternatives
-# it was chosen over are preserved in this module's own history and in
-# `_rows_whose_named_enforcer_is_gone`'s docstring below, which records what it
-# measured and why the signal was wrong rather than merely noisy.
-
-#: Any `test_*.py` filename mentioned in a row's own text. Rows name their
-#: enforcing test in `_rationale`/`reason` prose as an existing convention --
-#: all 8 live rows did so unprompted when this check was written -- so the
-#: pointer needs no new manifest field and no manifest-wide hand edit.
 _TEST_FILE_IN_PROSE = re.compile(r"test_[\w.]*\.py")
 
 
 def _named_enforcer_paths(row: dict) -> list:
-    """Every `test_*.py` filename this row's own text names, deduped."""
     return sorted(set(_TEST_FILE_IN_PROSE.findall(json.dumps(row))))
 
 
@@ -405,21 +318,9 @@ def _rows_whose_named_enforcer_is_gone(overrides: dict) -> tuple:
 
 
 def test_spawn_count_budget_never_ratchets_upward():
-    """No manifest `spawn_count_budget` value may exceed its recorded high-water mark.
-
-    Over budget is a kill candidate, not a budget raise -- see
-    docs/wiki/cost-budgets-and-the-kill-disposition.md. A regression that
-    reintroduces a per-item spawn (e.g. `ops.discover_working_repos` falling
-    back to its old per-key CLI shellout) fails this test at the first
-    exceeded key, not silently as an unenforced number in JSON.
-    """
     live = _manifest_spawn_count_overrides()
     for op, keys in _SPAWN_COUNT_HIGH_WATER.items():
         if op not in live:
-            # A concurrent kill (freeze_review_diff / shellcheck_sweep, see
-            # module docstring) may remove the whole op row -- that is a
-            # DROP from this table, flagged as a stale orphan by the
-            # completeness pin below, not a ratchet violation here.
             continue
         for key, mark in keys.items():
             ceiling = mark["ceiling"]
@@ -437,17 +338,6 @@ def test_spawn_count_budget_never_ratchets_upward():
 
 
 def test_spawn_count_high_water_table_covers_every_override():
-    """Every manifest `spawn_count_budget` key carries a high-water mark, so a
-    new op/key cannot enter the manifest above the ratchet's reach and become
-    the next ungoverned constant -- and, in the other direction, a row
-    deleted from the manifest cannot leave a stale high-water entry behind
-    that silently governs nothing.
-
-    This test previously only checked the
-    forward direction (new/live keys missing a high-water mark). The reverse
-    (`_stale_high_water_ops`) closes the gap the ratchet test's own comment
-    already claimed was covered here.
-    """
     live = _manifest_spawn_count_overrides()
     missing = []
     for op, keys in live.items():
@@ -580,8 +470,6 @@ def test_named_enforcer_check_catches_the_row_that_escaped_it_twice():
     )
 
     # AND THE CONVERSE, so this cannot pass by flagging everything: a row
-    # naming an enforcer that DOES exist stays clean. Uses this module's own
-    # file, which is guaranteed present while the test is running.
     live_row = {
         "spawn_count_budget": {"per_call": 1},
         "_rationale": "enforced by test_spawn_count_budget_ratchet.py",
@@ -625,9 +513,6 @@ def test_spawn_count_high_water_table_flags_stale_orphan_via_mutation():
 
 
 def test_manifest_spawn_count_overrides_excludes_explicit_null():
-    """Mutation probe for the F3 fix: a `spawn_count_budget` key present with
-    a JSON `null` value must be excluded (ungoverned), not crash a caller
-    that indexes into it."""
     manifest = load_manifest()
     manifest = dict(manifest)
     overrides = dict(manifest.get("overrides", {}))
@@ -665,15 +550,8 @@ def test_spawn_count_high_water_marks_carry_a_stated_reason():
     )
 
 
-#: The marks that carried no per-row rationale when `reason` was introduced
 #: (opro-03 C7, 2026-08-19). ENUMERATIVE AND CLOSED: `_BASELINE_REASON` is a
-#: grandfather clause, and a grandfather clause nothing pins is just an escape
-#: hatch with a polite name -- a future raise could write
 #: `reason: _BASELINE_REASON` and satisfy the reason check while stating
-#: nothing, which is the exact dodge that check exists to refuse. Pinning the
-#: set means a NEW mark cannot reach for it: it must author a real reason or
-#: fail. This list only ever shrinks -- when one of these earns a real
-#: rationale, delete its entry here in the same commit.
 _BASELINE_REASON_GRANDFATHERED = frozenset(
     {
         "changelog.cited_in_range_count.n_tokens",
@@ -743,11 +621,6 @@ def test_baseline_reason_is_a_closed_set_not_an_escape_hatch():
 
 
 def test_spawn_count_high_water_reason_check_rejects_and_accepts():
-    """Mutation probe: the reason check must actually reject a raise with no
-    stated reason (missing, empty, too short, or a known dodge) and accept
-    the identical raise once a real reason is attached -- proof the check
-    bites, not just parses.
-    """
     bare = {"probe.op": {"raised_key": {"ceiling": 999, "reason": ""}}}
     assert _thin_reason_violations(bare) == ["probe.op.raised_key"], (
         "an empty reason was not flagged -- the presence check is not firing."

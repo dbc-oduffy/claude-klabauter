@@ -1,12 +1,3 @@
-"""Tests for the ported send-digest selection/throttle module.
-
-Covers the negative specs named in the C2 dispatch brief for
-`docs/plans/2026-08-30-group-em-entry-fires-one-warm-op.md`: cooldown arming
-on emit, `unrecorded` on a failed cooldown write, `away` excluded by name
-ahead of any bookkeeping cause, `None`-obligations ranking without excluding,
-and the `max_entries` ceiling reporting `truncated` rather than silently
-cutting.
-"""
 
 from __future__ import annotations
 
@@ -50,7 +41,6 @@ def test_emitting_entry_arms_cooldown_same_call(tmp_path):
     assert len(log) == 1
     assert log[0]["offer_key"] == send_pass.offer_key("caller-one", "peer-one")
 
-    # A second call immediately after must suppress peer-one under cooldown.
     digest2 = send_pass.build_send_digest(repo_root, roster, "caller-one", now=1001.0)
     assert digest2["entries"] == []
     reasons = {s["session_id"]: s["why"] for s in digest2["suppressed"]}
@@ -97,7 +87,6 @@ def test_away_excluded_by_name_ahead_of_bookkeeping(tmp_path):
 
 def test_none_obligations_ranks_without_excluding(tmp_path):
     repo_root = str(tmp_path)
-    # peer-with-ledger has one open obligation; peer-no-ledger has none (None).
     ledger_dir = _share_dir(repo_root, "peer-with-ledger")
     os.makedirs(ledger_dir, exist_ok=True)
     with open(os.path.join(ledger_dir, "next-move-ledger.jsonl"), "w", encoding="utf-8") as fh:
@@ -131,9 +120,6 @@ def test_max_entries_ceiling_reports_truncated(tmp_path):
 
 
 def test_record_offers_batches_under_holder_key_with_nudger_attribution(tmp_path):
-    """AC1: one invocation records N peers and arms the cooldown
-    `_group_em_answer` reads, under the holder's key, with the nudger named
-    on each row."""
     repo_root = str(tmp_path)
 
     unrecorded = send_pass.record_offers(
@@ -153,15 +139,10 @@ def test_record_offers_batches_under_holder_key_with_nudger_attribution(tmp_path
     )
     assert remaining > 0
 
-    # The nudger's own log stays untouched -- the batch lands only under the
-    # holder's key, never the nudger's.
     assert send_pass.read_send_log(repo_root, "nudger-one") == []
 
 
 def test_record_offers_offer_key_derives_from_holder_not_nudger(tmp_path):
-    """AC1b: the written row's `offer_key` equals `offer_key(holder, peer)`
-    when the nudger differs from the holder -- asserts the key derivation
-    itself, not just that suppression happens to work."""
     repo_root = str(tmp_path)
 
     send_pass.record_offers(repo_root, "holder-two", ["peer-x"], "nudger-two", now=1000.0)
@@ -172,24 +153,19 @@ def test_record_offers_offer_key_derives_from_holder_not_nudger(tmp_path):
 
 
 def test_record_offers_refuses_malformed_id_in_any_position(tmp_path):
-    """AC2: a malformed session id in any position is refused, reported not
-    raised -- matching `_record_offer`'s existing contract."""
     repo_root = str(tmp_path)
 
-    # Malformed holder refuses the whole batch.
     unrecorded = send_pass.record_offers(
         repo_root, "../escape", ["peer-y"], "nudger-three", now=1000.0
     )
     assert unrecorded == ["peer-y"]
     assert send_pass.read_send_log(repo_root, "../escape") == []
 
-    # Malformed nudger refuses the whole batch too.
     unrecorded = send_pass.record_offers(
         repo_root, "holder-three", ["peer-y"], "../escape", now=1000.0
     )
     assert unrecorded == ["peer-y"]
 
-    # A malformed peer id is refused per-row; the rest of the batch lands.
     unrecorded = send_pass.record_offers(
         repo_root, "holder-four", ["peer-good", "../escape"], "nudger-four", now=1000.0
     )
@@ -200,12 +176,6 @@ def test_record_offers_refuses_malformed_id_in_any_position(tmp_path):
 
 
 def test_record_offers_single_write_call(tmp_path, monkeypatch):
-    """The batched entry point emits ONE seam append of all N lines joined,
-    never one seam append per row. Migrated onto session/claimed_write.py::
-    append_claimed_line (C7); asserted here by counting calls to the seam
-    entry point itself, rather than monkeypatching the module's `open` --
-    the raw `open(..., 'a')` + `write()` shape this test originally guarded
-    no longer exists in `record_offers`."""
     repo_root = str(tmp_path)
     calls: list[bytes] = []
     real_append_claimed_line = send_pass.append_claimed_line
@@ -225,9 +195,6 @@ def test_record_offers_single_write_call(tmp_path, monkeypatch):
 
 
 def test_record_offer_row_without_attribution_still_suppresses(tmp_path):
-    """AC3: a row written WITHOUT attribution (the Group EM's own send
-    digest) still reads back and still suppresses. The field is additive,
-    never required."""
     repo_root = str(tmp_path)
     roster = [_verdict("peer-plain")]
 
@@ -244,19 +211,12 @@ def test_record_offer_row_without_attribution_still_suppresses(tmp_path):
 
 
 def test_log_key_is_open_excludes_attributed_rows(tmp_path):
-    """AC8b/C3b: `open_obligations` tells the Group EM what IT owes. An
-    offer row carrying `offered_by` (a delegated nudge, C1) creates an
-    obligation for the nudger, not the holder -- `_log_key_is_open` must
-    read it as closed (not open), symmetric with `idle_report.
-    _group_em_answer`'s `stamps` exclusion."""
     key = send_pass.offer_key("holder-six", "peer-six")
     attributed_log = [
         {"outcome": "offer", "offer_key": key, "offered_at": 1000.0, "offered_by": "nudger-six"},
     ]
     assert send_pass._log_key_is_open(attributed_log, key) is False
 
-    # An unattributed offer for the same key is still open -- the exclusion
-    # is scoped to attributed rows only, never a blanket change.
     plain_log = [
         {"outcome": "offer", "offer_key": key, "offered_at": 1000.0},
     ]
@@ -264,8 +224,6 @@ def test_log_key_is_open_excludes_attributed_rows(tmp_path):
 
 
 def test_log_key_is_open_ac8b_end_to_end_via_build_send_digest(tmp_path):
-    """AC8b end-to-end: a delegated row recorded via `record_offers` under
-    cooldown must not surface in `open_obligations`."""
     repo_root = str(tmp_path)
     send_pass.record_offers(
         repo_root, "holder-seven", ["peer-seven"], "nudger-seven", now=1000.0
@@ -277,8 +235,6 @@ def test_log_key_is_open_ac8b_end_to_end_via_build_send_digest(tmp_path):
 
 
 def test_no_per_peer_public_entry_point():
-    """The module must expose no function offering a single peer directly --
-    `build_send_digest` is the sole route to an entry (negative spec)."""
     public_names = [n for n in dir(send_pass) if not n.startswith("_")]
     forbidden_substrings = ("send_one", "send_peer", "offer_peer", "nudge_peer")
     for name in public_names:
@@ -304,12 +260,8 @@ def test_resolve_addressee_returns_live_name(tmp_path):
 
 
 def test_resolve_addressee_refuses_on_repoint(tmp_path):
-    """A name that no longer maps to the queried session id must refuse,
-    not fall back to the last-known name or the bare session id -- this is
-    the exact re-point failure C9 exists to close."""
     repo_root = str(tmp_path)
     # The live roster now shows a DIFFERENT session id under that peer's old
-    # slot -- the queried (now-stale) session id is absent entirely.
     rows = [_FakeRow("peer-sid-NEW", "claude-klabauter-e0")]
 
     name = send_pass.resolve_addressee(
@@ -362,8 +314,6 @@ def test_resolve_addressee_refuses_on_roster_read_failure(tmp_path):
 
 
 def test_resolve_addressee_never_caches_across_calls(tmp_path):
-    """Every call re-reads the roster -- a name resolved once must not be
-    reused once the live roster no longer confirms it."""
     repo_root = str(tmp_path)
     calls = {"rows": [_FakeRow("peer-sid", "claude-klabauter-e0")]}
 
@@ -373,8 +323,6 @@ def test_resolve_addressee_never_caches_across_calls(tmp_path):
     first = send_pass.resolve_addressee(repo_root, "peer-sid", build_roster=_roster)
     assert first == "claude-klabauter-e0"
 
-    # The peer re-pointed away between calls -- the resolver must not have
-    # memoized the earlier answer.
     calls["rows"] = []
     second = send_pass.resolve_addressee(repo_root, "peer-sid", build_roster=_roster)
     assert second is None
@@ -426,8 +374,6 @@ def test_decline_refuses_empty_reason(tmp_path):
 
 
 def test_decline_never_arms_cooldown(tmp_path):
-    """Declining is not offering -- a declined peer must still be eligible
-    on the very next digest, never held under cooldown from the decline."""
     repo_root = str(tmp_path)
     roster = [_verdict("peer-nine")]
 
@@ -469,13 +415,6 @@ def test_dwell_seconds_derived_from_receiver_state_stamp(tmp_path, monkeypatch):
 
 
 def test_dwell_seconds_uses_peer_cwd_not_repo_root(tmp_path, monkeypatch):
-    """Finding 1 (coordinator:code-reviewer, P1): a peer whose `cwd` is a
-    subdirectory of `repo_root` (permitted by `build_roster`'s "within
-    repo_root" filter) must have ITS OWN cwd threaded to
-    `transcript_activity_epoch`, matching `read_pass.classify_peer`'s own
-    `peer.get("cwd") or repo_root` pattern -- else `_transcript_path_for`
-    looks up the wrong encoded path and dwell silently degrades to `None`
-    forever for exactly this population."""
     repo_root = str(tmp_path)
     peer_cwd = str(tmp_path / "nested-worktree")
 
@@ -502,11 +441,6 @@ def test_dwell_seconds_uses_peer_cwd_not_repo_root(tmp_path, monkeypatch):
 
 
 def test_dwell_seconds_prefers_more_recent_of_stamp_and_transcript(tmp_path, monkeypatch):
-    """Finding 2 (coordinator:code-reviewer, P2): the module docstring's
-    entire justification for reading both sources is that the more RECENT
-    of the two wins. Pin both directions -- a rewrite that always preferred
-    `stamped_at` (or always preferred the transcript) would fail one of
-    these."""
     from datetime import datetime, timezone
 
     repo_root = str(tmp_path)
@@ -519,9 +453,6 @@ def test_dwell_seconds_prefers_more_recent_of_stamp_and_transcript(tmp_path, mon
         lambda sid, root: {"stamped_at": "2026-08-31T00:00:00Z"},
     )
 
-    # Transcript is NEWER than the stamp AND trusted (read off a record's own
-    # `timestamp`) -- dwell must be measured from the transcript, not the
-    # stale stamp.
     monkeypatch.setattr(
         send_pass.read_pass,
         "transcript_activity_epoch",
@@ -533,8 +464,6 @@ def test_dwell_seconds_prefers_more_recent_of_stamp_and_transcript(tmp_path, mon
     )
     assert digest["entries"][0]["dwell_seconds"] == 300.0
 
-    # Transcript is OLDER than the stamp -- dwell must be measured from the
-    # (more recent) stamp, not the stale transcript.
     monkeypatch.setattr(
         send_pass.read_pass,
         "transcript_activity_epoch",
@@ -557,8 +486,6 @@ def test_open_obligations_includes_freshly_emitted_entries(tmp_path):
 
 
 def test_open_obligations_survive_cooldown_suppression_until_declined(tmp_path):
-    """The belt to C2's suspenders: a peer offered on an earlier tick and
-    now held by cooldown still names an open obligation -- until declined."""
     repo_root = str(tmp_path)
     roster = [_verdict("peer-ten")]
 
@@ -574,19 +501,10 @@ def test_open_obligations_survive_cooldown_suppression_until_declined(tmp_path):
     assert third["open_obligations"] == []
 
 
-# ---------------------------------------------------------------------------
 # DECLINATIONS -- "a tick that sends nothing records which obligation it
-# declined and why, and cannot close on an empty result". The empty-roster leg
-# is also the plan's acceptance oracle; these cover the paths it does not.
-# ---------------------------------------------------------------------------
 
 
 def test_empty_roster_declines_the_obligation_to_look(tmp_path):
-    """A tick that considered nobody must say so, not return four empty fields.
-
-    This is the shape the criterion forbids: a digest of empty lists is
-    indistinguishable from a tick that never ran.
-    """
     digest = send_pass.build_send_digest(str(tmp_path), [], "caller-empty", now=1000.0)
     assert digest["declined"], "an empty-roster tick closed with no declination"
     assert any(row["reason"].startswith("roster-empty") for row in digest["declined"])
@@ -594,14 +512,6 @@ def test_empty_roster_declines_the_obligation_to_look(tmp_path):
 
 
 def test_every_suppressed_peer_gets_its_own_declination(tmp_path):
-    """DoE's wording: a declination for every roster entry it does not message,
-    naming which gate failed. One suppressed peer, one row, carrying its reason.
-
-    The
-    per-peer declination is a projection of `suppressed`, folded in there
-    (`obligation`/`dwell_seconds` on the row itself) rather than round-tripped
-    through `declined`, which now names only tick-level declinations.
-    """
     roster = [_verdict("peer-away", reason="away", state="away")]
     digest = send_pass.build_send_digest(str(tmp_path), roster, "caller-sup", now=1000.0)
     assert not digest["entries"]
@@ -612,12 +522,6 @@ def test_every_suppressed_peer_gets_its_own_declination(tmp_path):
 
 
 def test_full_roster_none_eligible_still_declines_the_tick(tmp_path):
-    """A non-empty roster where nothing survives is still a tick that sent nothing.
-
-    The per-peer rows alone would let the tick close without ever saying it sent
-    to no one -- the reader would have to infer it from an empty `entries`, which
-    is precisely the inference the criterion refuses to rely on.
-    """
     roster = [_verdict("peer-a", reason="away", state="away"),
               _verdict("peer-b", reason="away", state="away")]
     digest = send_pass.build_send_digest(str(tmp_path), roster, "caller-none", now=1000.0)
@@ -628,8 +532,6 @@ def test_full_roster_none_eligible_still_declines_the_tick(tmp_path):
 
 
 def test_a_tick_that_sends_declines_only_what_it_held_back(tmp_path):
-    """The converse, so `declined` is not just always-non-empty theatre: a tick
-    that actually emits carries no tick-level declination."""
     roster = [_verdict("peer-live")]
     digest = send_pass.build_send_digest(str(tmp_path), roster, "caller-live", now=1000.0)
     assert digest["entries"]
@@ -637,12 +539,6 @@ def test_a_tick_that_sends_declines_only_what_it_held_back(tmp_path):
 
 
 def test_cooldown_declination_carries_dwell_so_the_hold_is_weighable(tmp_path, monkeypatch):
-    """Observed live 2026-08-31: the roster correctly identified a peer parked
-    10.4m and the digest suppressed it on cooldown, with nothing saying how long
-    it had been parked. Cooldown outranking dwell is deliberate -- re-offering to
-    a peer you just messaged is nagging -- but the EM cannot weigh a hold it
-    cannot see, so the declination names both.
-    """
     repo_root = str(tmp_path)
     roster = [_verdict("peer-held")]
     send_pass.build_send_digest(repo_root, roster, "caller-dw", now=1000.0)
@@ -656,9 +552,6 @@ def test_cooldown_declination_carries_dwell_so_the_hold_is_weighable(tmp_path, m
 
 
 def test_non_cooldown_declinations_do_not_pay_for_dwell(tmp_path, monkeypatch):
-    """`away` is not a hold anyone would overturn on dwell, and each computation
-    is two reads per peer. Every row still carries the key, `None` where
-    inapplicable, so a consumer never key-checks by variant."""
     monkeypatch.setattr(
         send_pass, "_dwell_seconds", lambda *a: pytest.fail("dwell computed for a non-cooldown hold")
     )
@@ -670,11 +563,6 @@ def test_non_cooldown_declinations_do_not_pay_for_dwell(tmp_path, monkeypatch):
 
 
 def test_an_untrusted_transcript_clock_never_wins_the_dwell_max(tmp_path, monkeypatch):
-    """The 2026-08-31 defect, pinned. `max(stamp, mtime)` let file mtime --
-    which the harness moves forward with untimestamped bookkeeping rows on
-    STOPPED peers -- win exactly when the reading matters, reporting a stalled
-    peer as freshly active. An untrusted epoch may not make a peer look
-    busier, however recent it looks."""
     from datetime import datetime, timezone
 
     repo_root = str(tmp_path)
@@ -695,17 +583,12 @@ def test_an_untrusted_transcript_clock_never_wins_the_dwell_max(tmp_path, monkey
         repo_root, [_verdict("peer-skewed-mtime")], "caller-untrusted", now=stamp_epoch + 500.0
     )
 
-    # 500s of real dwell, not the 80s the skewed mtime would have reported.
     assert digest["entries"][0]["dwell_seconds"] == 500.0
 
 
 def test_an_untrusted_transcript_clock_is_still_used_when_it_is_the_only_source(
     tmp_path, monkeypatch
 ):
-    """Refusing it outright would report `None` (unknown) for every peer with
-    no receiver-state record -- strictly less information than the upper bound
-    this function has always given. It loses the comparison; it is not
-    discarded."""
     repo_root = str(tmp_path)
     monkeypatch.setattr(send_pass.read_pass, "read_receiver_state", lambda sid, root: None)
     monkeypatch.setattr(
@@ -720,21 +603,6 @@ def test_an_untrusted_transcript_clock_is_still_used_when_it_is_the_only_source(
 
 
 def test_the_share_paths_are_one_owners_answer_not_three_copies(tmp_path):
-    """`send_pass`, `group_em.obligations` and the undischarged-next-move
-    watchdog each carried their own `state/subagent-share/<sid>/` join and
-    their own `"next-move-ledger.jsonl"` literal, with `obligations` reaching
-    into this module's private namespace for one of them. One typo apart, a
-    producer and its reader would have been on different files with nothing
-    to catch it -- all three now call `machinery_paths`'s helpers directly (no
-    module-private alias left to drift), which this exercises end to end: a
-    ledger written at `machinery_paths.ledger_path` is readable through both
-    `send_pass.undischarged_obligations` and `obligations.for_peer`.
-
-    This
-    used to compare three separately-bound private aliases for equality;
-    the aliases are gone, so the meaningful check is that a producer and a
-    reader land on the same file, not that two names for one function match.
-    """
     import json
 
     from coordinator_core.group_em import obligations
@@ -762,19 +630,11 @@ def test_the_share_paths_are_one_owners_answer_not_three_copies(tmp_path):
 
 
 def test_an_unsafe_session_id_is_still_refused_a_path(tmp_path):
-    """The predicate moved modules; it did not relax. A bare `.`/`..` passes
-    the character class alone, which is why the check is not just a regex."""
     from coordinator_core.session import machinery_paths
 
     assert machinery_paths.safe_session_id("sess-1") is True
     for bad in ("..", ".", "", None, "a/b", "a\b", "a:b"):
         assert machinery_paths.safe_session_id(bad) is False
-
-
-# C4 -- state/dispatch-briefs/2026-09-01-the-crowns-standing-surfaces-report-
-# themselves/C4.md: a contradicted peer reaches `suppressed` with the gate
-# that excluded it named, instead of vanishing with no trace at either
-# `read_pass`'s filter or this module's own.
 
 
 def test_contradicted_peer_reaches_suppressed_with_gate_named_live_busy(tmp_path):
@@ -820,9 +680,6 @@ def test_contradicted_peer_reaches_suppressed_with_gate_named_stale_snapshot(tmp
 
 
 def test_digest_counts_sum_to_population_classified_including_contradicted(tmp_path):
-    """`entries` + `suppressed` must account for every verdict this tick
-    classified -- a contradicted peer that reached neither would be an
-    upstream exclusion with no trace anywhere (the defect C4 closes)."""
     repo_root = str(tmp_path)
     roster = [
         _verdict("peer-normal"),
@@ -856,10 +713,6 @@ class _Row:
 
 
 def test_resolve_addressee_refuses_a_name_two_live_sessions_answer_to(tmp_path):
-    """`SendMessage` addresses BY NAME, so returning a name two sessions share
-    hands the caller an address that can land on the wrong one. Stable key in,
-    volatile address out -- only when the address is unambiguous.
-    """
     rows = [_Row("peer-sid", "twin"), _Row("other-sid", "twin")]
     got = send_pass.resolve_addressee(
         str(tmp_path), "peer-sid", build_roster=lambda repo_root=None: rows
@@ -876,10 +729,6 @@ def test_resolve_addressee_returns_the_name_when_it_is_unique(tmp_path):
 
 
 def test_resolve_addressee_raises_on_the_wrong_build_roster(tmp_path):
-    """Two same-named `build_roster`s live in one package with incompatible row
-    shapes. Injecting the dict-yielding one made every `getattr` return None --
-    an unaddressable fleet reported as a clean refusal, raising nothing.
-    """
     dict_rows = [{"session_id": "peer-sid", "name": "alpha"}]
     import pytest
 

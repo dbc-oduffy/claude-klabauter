@@ -1,11 +1,5 @@
-# test_name_ladder — pins coordinator_core.session.name_ladder.resolve_name
 # in isolation, plus the DRIFT-IMPOSSIBLE property this extraction exists
-# for: session-claim-cli.py's `_render_claimant_name` and dispatch_checks.
-# py's `_resolve_owner_writer_name` both delegate rung/reason resolution to
-# this module, so they cannot answer differently for the same input again
-# (state/debt-backlog/2026-09-01-shared-name-resolution-ladder-for-sessio-
 # 026b33fcd43d.yaml). Each surface's own RENDERING (markers, prose, byte
-# budget) is pinned by its own test suite, not here.
 from __future__ import annotations
 
 import importlib.machinery
@@ -23,9 +17,6 @@ _BIN_DIR = Path(__file__).resolve().parents[3] / "coordinator" / "bin"
 
 
 def _load_cli_module():
-    # session-claim-cli.py doesn't sit on sys.path as an importable module
-    # (hyphenated filename) -- same load idiom as
-    # coordinator/bin/tests/test_session_claim_cli.py's `_load_cli_module`.
     loader = importlib.machinery.SourceFileLoader(
         "session_claim_cli_for_ladder_test", str(_BIN_DIR / "session-claim-cli.py")
     )
@@ -108,12 +99,6 @@ def test_rung3_record_resolves_but_carries_no_name():
 def test_both_surfaces_agree_on_rung_and_reason_for_the_same_input(
     monkeypatch, recorded_name, lookup, expect_name_resolves, expected_name
 ):
-    """The deliverable this extraction exists for: drive the SAME input
-    through BOTH real call sites -- `session-claim-cli._render_claimant_name`
-    and `dispatch_checks._resolve_owner_writer_name` -- rather than calling
-    the shared resolver directly (a tautology that pins nothing about
-    either surface actually delegating to it), and assert they agree on
-    whether a name resolves and, when it does, on the exact name."""
     sid = "sid-shared"
     path = "/some/path"
 
@@ -133,8 +118,6 @@ def test_both_surfaces_agree_on_rung_and_reason_for_the_same_input(
         assert guard_name == expected_name
     else:
         assert guard_name is None
-        # CLI rendering carries one of its three distinct rung-3 markers --
-        # never a resolved name -- for the same "nothing resolved" input.
         assert cli_rendering in (
             _cli._NO_REGISTRY_RECORD_MARKER,
             _cli._NAME_UNRESOLVED_MARKER,

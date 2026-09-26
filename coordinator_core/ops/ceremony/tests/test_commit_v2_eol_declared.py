@@ -1,22 +1,3 @@
-"""
-coordinator_core.ops.ceremony.tests.test_commit_v2_eol_declared
-
-The write-scoped EOL check wired into `ceremony.commit_v2` -- the v2 the eol
-family's total deletion (kill-ledger K-064) left owed, rebuilt at the write
-instead of over the corpus.
-
-`coordinator_core/git/tests/test_eol_declared.py` covers the detector itself.
-This module covers only what the WIRING must be true for:
-
-  - a commit carrying no executable pays nothing (the budget case, and the
-    reason this is allowed on the commit path at all);
-  - a commit carrying a drifted launcher lands with the bytes repaired and
-    says so;
-  - the repair does not change what the commit carries, and cannot fail it.
-
-All git operations run against a throwaway repo under `tmp_path` -- never the
-working repo.
-"""
 
 from __future__ import annotations
 
@@ -28,8 +9,6 @@ import pytest
 from coordinator_core.ops.ceremony import commit_v2
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns real external `git` processes; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -66,17 +45,6 @@ def _call(repo: Path, params: dict) -> dict:
 
 
 def test_commit_with_no_executable_spawns_nothing_for_this_check(tmp_path, monkeypatch):
-    """The budget case, and the reason this is affordable on the commit path
-    at all: most commits carry no launcher and must not pay a PROCESS for the
-    check.
-
-    The asserted property is zero spawns, not zero calls. `find_declared_eol_drift`
-    is invoked unconditionally by the handler; its filter-first guard lives
-    inside it (`executable_paths` short-circuits before any git call), which is
-    where the sibling `guard_paths` filter puts it too. Spying the function
-    would pin the call site's shape rather than the cost, and the cost is the
-    thing under budget.
-    """
     import coordinator_core.git.eol_declared as detector
 
     repo = _repo(tmp_path)
@@ -98,8 +66,6 @@ def test_commit_with_no_executable_spawns_nothing_for_this_check(tmp_path, monke
 
 
 def test_a_drifted_launcher_is_repaired_by_the_commit_that_touches_it(tmp_path):
-    """The whole point. A `.cmd` declared CRLF, sitting LF on disk, committed:
-    the commit lands AND the working tree comes out correct."""
     repo = _repo(tmp_path)
     target = repo / "run.cmd"
     target.write_bytes(b"@echo off\r\necho changed\r\n".replace(b"\r\n", b"\n"))
@@ -116,9 +82,6 @@ def test_a_drifted_launcher_is_repaired_by_the_commit_that_touches_it(tmp_path):
 
 
 def test_the_repair_does_not_change_what_the_commit_carries(tmp_path):
-    """Check-in normalization maps drifted and repaired bytes to the same
-    blob, so the committed content is identical either way -- the property
-    that lets this be a silent repair rather than a refusal."""
     repo = _repo(tmp_path)
     (repo / "run.cmd").write_bytes(b"@echo off\necho changed\n")
 
@@ -165,10 +128,6 @@ def test_a_detector_failure_never_fails_the_commit(tmp_path, monkeypatch):
 
 
 def test_repair_skips_a_prefer_staged_path_even_when_drifted(tmp_path):
-    """`prefer_staged` means the caller deliberately wants the INDEX content
-    committed while leaving the working tree diverged -- the repair must not
-    rewrite that file's bytes anyway, even though doing so would not change
-    what lands (review finding 5)."""
     repo = _repo(tmp_path)
     (repo / "run.cmd").write_bytes(b"@echo off\necho changed\n")
     _git(["add", "--", "run.cmd"], repo)

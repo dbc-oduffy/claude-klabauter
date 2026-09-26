@@ -71,15 +71,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, Optional
 
-#: Ceiling for ONE spawn of ONE third-party binary. Not a target: a row takes
-#: the smallest bound that works. Raising this line raises it for every named
-#: site at once — the blast radius DR-349 § 2 chose as the deterrent.
 EXTERNAL_TOOL_BUDGET_SECS: float = 120.0
 
-#: End-to-end ceiling for a whole fan-out (one op spawning the same tool once
-#: per item). Deliberately not a multiple of the per-spawn ceiling: a bound
-#: computed as `per_item * len(items)` is the self-raising dial DR-349
-#: § Anti-patterns names as break-class.
 EXTERNAL_TOOL_SWEEP_BUDGET_SECS: float = 300.0
 
 
@@ -113,21 +106,6 @@ class Trigger(Enum):
 
 @dataclass(frozen=True)
 class ExternalToolSite:
-    """One named site that spawns a third-party binary, and its disposition.
-
-    `site` anchors on the enclosing function, never a line number — repo
-    convention, and the anchor `docs/reference/shell-out-carve-outs.md` uses for
-    the same reason.
-
-    `trigger` is the load-bearing field: it decides the grant, and it is what a
-    reader is owed when they ask why a site is exempt. `consumer_owned` denies a
-    grant independently, for artifacts a publish target may rewrite between runs.
-
-    `remedy` is required on any row that is not granted, and must name a
-    runnable change — "move the pre-CI identity leg off the synchronous publish
-    path", not "reduce the timeout". It is the artifact that keeps a refusal
-    from decaying into a large timeout nobody revisits.
-    """
 
     site: str
     tool: str
@@ -152,19 +130,9 @@ class ExternalToolSite:
             )
 
     def granted(self) -> bool:
-        """True iff this site holds the carve-out.
-
-        Derived from the trigger, never stored, so a row cannot be marked
-        granted while declaring a hot-path trigger — DR-349's "an author may not
-        migrate a tool onto a hot path and carry this carve-out along with it",
-        expressed as something the type system will not let you write.
-        """
         return not self.trigger.hot and not self.consumer_owned
 
     def rationale(self) -> str:
-        """The one-line answer to "why is this exempt", phrased around the
-        trigger rather than the number — the framing DR-349's ratified wording
-        makes load-bearing."""
         if self.granted():
             return f"carved out because it fires at {self.trigger.label}"
         reason = "spawns consumer-owned code" if self.consumer_owned else "is on a hot path"
@@ -283,35 +251,20 @@ _SITES = (
     ),
 )
 
-#: Every named site, keyed by anchor. The complete answer to "what may spawn a
-#: third-party binary here" — granted and refused alike, so a reader never has
-#: to consult a second list to learn a site was considered.
 EXTERNAL_TOOL_SITES: Dict[str, ExternalToolSite] = {entry.site: entry for entry in _SITES}
 
-#: The sites that hold the carve-out: fired by a cadence trigger, tool pinned by
-#: us, nothing waiting on them.
 CARVE_OUTS: Dict[str, ExternalToolSite] = {
     site: entry for site, entry in EXTERNAL_TOOL_SITES.items() if entry.granted()
 }
 
-#: The sites that were considered and refused. Still bounded — at the ceiling,
-#: not above it — and each names the change that retires the row.
 REFUSED: Dict[str, ExternalToolSite] = {
     site: entry for site, entry in EXTERNAL_TOOL_SITES.items() if not entry.granted()
 }
 
-#: Triggers that put a spawn on a path something waits on. Membership here is
-#: what denies a grant; it is not a property of the tool or of its runtime.
 HOT_TRIGGERS = frozenset(trigger for trigger in Trigger if trigger.hot)
 
 
 def bound_for(site: str) -> float:
-    """The bound for a named site.
-
-    Raises KeyError for an unnamed one rather than falling back to the ceiling:
-    a default would make membership implicit, which is the exact failure mode
-    DR-349's "named in this record or it does not exist" forbids.
-    """
     try:
         return EXTERNAL_TOOL_SITES[site].bound_secs
     except KeyError:
@@ -323,21 +276,10 @@ def bound_for(site: str) -> float:
 
 
 def sweep_deadline(now: Optional[float] = None) -> float:
-    """Stamp the monotonic deadline a whole fan-out must finish inside.
-
-    Called once, at op entry — not per item. `now` is injectable so a test can
-    drive the remainder arithmetic without sleeping.
-    """
     base = time.monotonic() if now is None else now
     return base + EXTERNAL_TOOL_SWEEP_BUDGET_SECS
 
 
 def spawn_bound(site: str, deadline: float, now: Optional[float] = None) -> float:
-    """The bound for one spawn inside a fan-out: the site's own bound, or what
-    is left of the sweep deadline, whichever is smaller.
-
-    Returns 0.0 once the deadline has passed, which callers treat as "stop
-    spawning" — never as "spawn with no bound".
-    """
     current = time.monotonic() if now is None else now
     return max(0.0, min(bound_for(site), deadline - current))

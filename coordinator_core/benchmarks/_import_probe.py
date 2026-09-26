@@ -40,15 +40,6 @@ def main() -> None:
     after = set(sys.modules)
     delta = after - before
     module_count = len(delta)
-    # Own-vs-stdlib split (2026-08-17): the total is what the ceiling gates, because
-    # a stdlib module costs a per-file AV scan on Windows exactly like ours does. But
-    # only the own half is ours to shrink, and a breach reached from the OTHER half
-    # means the interpreter's stdlib graph moved under a frozen baseline -- which is
-    # what actually happened when Python 3.14 routed bz2/lzma through the new
-    # `compression` package. Emitting the split here is what stops the next
-    # investigator writing a throwaway script to re-derive it, which is the same
-    # "every regrowth investigation re-derived it from scratch" complaint this
-    # package exists to answer.
     own_module_count = len([m for m in delta if m.split(".", 1)[0] == "coordinator_core"])
     print(f"{module_count} {elapsed_ms:.4f} {own_module_count}")
 

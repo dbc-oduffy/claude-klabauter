@@ -73,11 +73,6 @@ def _quartet_errors(schema_name: str, fm: dict) -> list:
     ]
 
 
-# ---------------------------------------------------------------------------
-# The registration — without it the rule never runs, on either schema
-# ---------------------------------------------------------------------------
-
-
 def test_the_plan_and_handoff_keys_are_registered():
     assert sv._cf_execution_restamp_quartet in sv._CROSS_FIELD_RULES_BY_SCHEMA["plan"]
     assert sv._cf_execution_restamp_quartet in sv._CROSS_FIELD_RULES_BY_SCHEMA["handoff"]
@@ -87,11 +82,6 @@ def test_the_rule_fires_through_the_real_validate_dispatch():
     errors = _quartet_errors("plan", _plan_fm(execution_restamped_by="EM:session-01"))
     assert len(errors) == 1
     assert errors[0]["error"] == "required when any execution_restamped_* field is present"
-
-
-# ---------------------------------------------------------------------------
-# Presence-symmetric, never presence-required
-# ---------------------------------------------------------------------------
 
 
 def test_a_plan_with_no_restamp_fields_is_not_an_error():
@@ -137,11 +127,6 @@ def test_a_blank_scalar_is_not_a_declaration(blank):
     assert errors[0]["field"] == "execution_restamped_by"
 
 
-# ---------------------------------------------------------------------------
-# A restamp needs a prior authorization
-# ---------------------------------------------------------------------------
-
-
 def test_a_complete_quartet_with_no_prior_authorization_is_rejected():
     fm = _plan_fm(**_QUARTET)
     errors = _quartet_errors("plan", fm)
@@ -155,12 +140,6 @@ def test_a_complete_quartet_missing_only_authorized_sha_is_rejected():
     errors = _quartet_errors("plan", fm)
     assert len(errors) == 1
     assert errors[0]["field"] == "execution_authorized_sha"
-
-
-# ---------------------------------------------------------------------------
-# _from_sha must differ from the live authorized sha — a rebind-to-nothing
-# is the shape the revert-to-witnessed-sha path removes the quartet for
-# ---------------------------------------------------------------------------
 
 
 def test_from_sha_equal_to_authorized_sha_is_rejected():
@@ -178,11 +157,6 @@ def test_from_sha_different_from_authorized_sha_validates():
     assert _quartet_errors("plan", _plan_fm(**_AUTH, **_QUARTET)) == []
 
 
-# ---------------------------------------------------------------------------
-# The cutoff
-# ---------------------------------------------------------------------------
-
-
 def test_a_plan_created_before_the_cutoff_is_exempt():
     fm = _plan_fm(execution_restamped_by="EM:session-01")
     fm["created"] = "2026-01-01"
@@ -193,11 +167,6 @@ def test_a_plan_with_no_created_date_is_still_checked():
     fm = _plan_fm(execution_restamped_by="EM:session-01")
     del fm["created"]
     assert len(_quartet_errors("plan", fm)) == 1
-
-
-# ---------------------------------------------------------------------------
-# No collateral onto other schemas
-# ---------------------------------------------------------------------------
 
 
 def test_the_rule_does_not_reach_other_schemas():

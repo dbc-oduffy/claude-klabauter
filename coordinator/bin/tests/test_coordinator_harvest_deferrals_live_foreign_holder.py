@@ -1,23 +1,3 @@
-"""Regression coverage for coordinator-harvest-deferrals' `_refuse_if_live_
-foreign_plan_holder` guard — the deferral-harvest half of the session-shape
-misdetection incident (cross-repo memo `2026-08-10-example-retrieval-repo-em-wsc-
-misdetection-wrote-to-a-live-peers-plan.md`): a misresolved governing plan
-would have this script mint improvement-queue / lessons-outbox entries from
-a LIVE PEER session's deferred rows, and the harvest's own idempotency key
-(`harvest-key: <plan_id>:<row id>`) would then cause the peer's later
-legitimate close of that SAME plan to see those rows as already-harvested
-and silently lose them.
-
-Purpose: pins the guard fires ONLY on a positively-established live foreign
-claim holder (reusing `plan_status_transition._refuse_if_live_foreign_
-holder` verbatim), and is terminal-safe (proceeds) on every ambiguity — a
-guard blocking on absence of evidence would wedge every ordinary close.
-
-All tests invoke the real entry point (`harvest_mod.main`), never a bare
-flag/field assertion — the guard must actually refuse (rc=1, loud stderr,
-zero directive dispatch) or actually proceed (rc=0, normal harvest report)
-through the CLI's own `main()`.
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -218,9 +198,6 @@ def test_ambiguous_multiple_handoffs_proceeds(harvest_mod, tmp_path, monkeypatch
 
 
 def test_unresolvable_repo_root_proceeds(harvest_mod, tmp_path, monkeypatch, capsys):
-    """`_repo_root()` returning `None` (no resolvable git worktree) proceeds
-    rather than refuses — this harvest sweep is best-effort, never a hard
-    gate on plan closure."""
     plan = _plan(tmp_path, "no-root-plan.md", deliverable_id="dlv-no-root-plan-xyz")
 
     monkeypatch.setattr(harvest_mod, "_repo_root", lambda: None)

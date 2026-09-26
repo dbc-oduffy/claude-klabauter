@@ -88,9 +88,6 @@ class TestIntervalDerivation:
         assert run["at_most_secs"] == pytest.approx(30.0)
 
     def test_a_single_long_gap_does_not_set_the_interval(self, tmp_path: Path) -> None:
-        """One stalled sample must not inflate every outage bound -- the median
-        delta is used precisely so a lone outlier cannot become the yardstick.
-        """
         p = tmp_path / "avail.jsonl"
         ts = [0.0, 30.0, 60.0, 600.0, 630.0, 660.0]
         outcomes = [UP, UP, DOWN, DOWN, UP, UP]
@@ -101,9 +98,6 @@ class TestIntervalDerivation:
 
 
 def test_the_caveat_travels_with_the_numbers(tmp_path: Path) -> None:
-    """The bounds are only honest if the reader is told they are bounds. This
-    text is quoted into cross-repo memos, so its absence is a real regression.
-    """
     rep = la.report(_sink(tmp_path, [UP, DOWN, UP]))
     caveat = rep["outage_duration_caveat"]
     assert "at least" in caveat and "at most" in caveat

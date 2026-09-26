@@ -1,20 +1,3 @@
-"""
-Tests for `coordinator_core.quick_wrap_assemble._close_ledger`.
-
-Spec: state/sizings/2026-09-06-close-out-emits-what-is-discharged-so-th.yaml —
-the close ceremony must name what THIS session discharged, mechanically,
-rather than leave an EM to compose a residual "still open" section that can
-re-open an item already closed by the very diff being reported or by a
-landed bug-backlog row.
-
-Negative-spec covered here:
-    - A degraded or untrustworthy leg produces an explicit
-      `could-not-establish` entry, never silent omission (omission would
-      read as "nothing discharged here", the same class of false signal in
-      the opposite direction).
-    - `_close_ledger` never emits an "open"/"remaining" entry for anything —
-      it only names what closed and its landing artifact.
-"""
 from __future__ import annotations
 
 from typing import Any
@@ -87,11 +70,6 @@ def _close_gate(**overrides: Any) -> dict[str, Any]:
     return gate
 
 
-# ---------------------------------------------------------------------------
-# Shape
-# ---------------------------------------------------------------------------
-
-
 def test_ledger_entries_carry_item_and_status():
     entries = _close_ledger(_close_gate(diff=_computed_diff(commit_count=0)))
     for entry in entries:
@@ -109,11 +87,6 @@ def test_nothing_to_report_emits_no_entries():
     assert entries == []
 
 
-# ---------------------------------------------------------------------------
-# Actioned-memo entry appears with its decision
-# ---------------------------------------------------------------------------
-
-
 def test_actioned_memo_appears_with_its_decision():
     gate = _close_gate(
         pickup_kind=_computed_pickup(
@@ -127,11 +100,6 @@ def test_actioned_memo_appears_with_its_decision():
     entry = memo_entries[0]
     assert entry["status"] == _LEDGER_DISCHARGED
     assert "partial" in entry["discharged_by"]
-
-
-# ---------------------------------------------------------------------------
-# Governing plan and diff discharge entries
-# ---------------------------------------------------------------------------
 
 
 def test_governing_plan_present_names_its_status():
@@ -154,11 +122,6 @@ def test_diff_commit_range_is_the_landing_artifact():
     assert diff_entries[0]["status"] == _LEDGER_DISCHARGED
     assert "abc123..def456" in diff_entries[0]["discharged_by"]
     assert "5 commit" in diff_entries[0]["discharged_by"]
-
-
-# ---------------------------------------------------------------------------
-# Degraded / untrustworthy inputs produce could-not-establish, never omission
-# ---------------------------------------------------------------------------
 
 
 def test_degraded_pickup_kind_produces_could_not_establish():
@@ -208,11 +171,6 @@ def test_untrustworthy_diff_never_reads_as_discharged():
     entries = _close_ledger(gate)
     diff_entries = [e for e in entries if e["item"] == "session code changes"]
     assert all(e["status"] != _LEDGER_DISCHARGED for e in diff_entries)
-
-
-# ---------------------------------------------------------------------------
-# Narration
-# ---------------------------------------------------------------------------
 
 
 def test_narration_constant_instructs_verbatim_push_not_composition():

@@ -100,44 +100,14 @@ def _claude_klabauter_root() -> Optional[str]:
 
 
 def _same_path(a: str, b: str) -> bool:
-    """Thin alias onto ``coordinator_core.win_portability.same_path`` -- the
-    consolidated primitive (state/sizings/2026-08-07-path-equality-
-    consolidates-onto-one-prim.yaml). Promoted from realpath-only to
-    samefile-then-fallback semantics: broader (junction-aware) equality is
-    correct here since this call site only checks "is repo_root the meta-repo
-    home", where a junction-aliased home must compare equal."""
     return same_path(a, b)
 
 
 def _git_root(cwd: Optional[str] = None) -> Optional[str]:
-    """Resolve a git repo root, or None if not in one.
-
-    ``cwd``, if given, pins the git invocation's working directory explicitly
-    instead of relying on process-global cwd — the AC-5 no-implicit-cwd bridge
-    for in-process callers (``routine_signals._resolve_coordinator_state_root``)
-    that must resolve a root OTHER than the current process cwd without
-    mutating process-global state. Existing bare callers (``_git_root()``) are
-    unaffected: ``cwd=None`` is a legal ``subprocess.run`` keyword meaning
-    "inherit the caller's cwd", identical to the previous implicit behaviour.
-    """
     return show_toplevel(cwd)
 
 
 def _parse_root_arg(argv) -> Optional[str]:
-    """Extract an explicit ``--root <path>`` value from *argv*, or None if absent.
-
-    When present, the caller (``routine_signals.py``) has already resolved the
-    correct state root itself via an explicit-cwd ``_git_root(cwd=...)`` call and
-    hands it here directly — ``main()`` uses it verbatim, skipping
-    ``_resolve_state_root()``'s cwd-based ``git rev-parse`` entirely (AC-5:
-    no-implicit-cwd). This keeps the in-process callable contract
-    (``main(argv) -> int``) DR-079 chose, rather than reintroducing a
-    subprocess-per-call boundary.
-
-    This function performs zero validation of the extracted value — no strip,
-    no blank-check; it is returned exactly as it appeared in argv. ``main()``
-    is what treats a blank/whitespace-only value as equivalent to absent.
-    """
     if not argv:
         return None
     for i, arg in enumerate(argv):
@@ -168,18 +138,12 @@ def _resolve_state_root() -> Optional[str]:
         claude_klabauter_root = _claude_klabauter_root()
         if claude_klabauter_root is None:
             return None
-        # pathlib join (not os.path.join) — os.path.join left a mixed
-        # separator form ('/claude-klabauter/root\state') when `claude_klabauter_root` came back
-        # forward-slash-rooted from a resolver but the join used os.sep;
-        # Path(...) / "state" renders consistently under the platform's own
-        # separator end to end (C5 root-cause: os.sep-in-wire-id class).
         return str(Path(claude_klabauter_root) / "state")
 
     return os.path.join(git_root, "state")
 
 
 def _compute_staleness(ledger_path: Path, today: Optional[date] = None) -> str:
-    """Pure predicate over a health-ledger.md path. Returns STALE/FRESH/UNKNOWN."""
     if not ledger_path.is_file():
         return "UNKNOWN"
 
@@ -199,10 +163,6 @@ def _compute_staleness(ledger_path: Path, today: Optional[date] = None) -> str:
 
     date_match = _DATE_EXTRACT_RE.search(line)
     if not date_match:
-        # Field present but no parseable date (placeholder / "none" / free
-        # text). The ledger exists but no targeted audit has ever been
-        # recorded → overdue. (Negative-spec: deliberately STALE, not
-        # UNKNOWN — see module docstring.)
         return "STALE"
 
     last_date_str = date_match.group(1)
@@ -210,8 +170,6 @@ def _compute_staleness(ledger_path: Path, today: Optional[date] = None) -> str:
         last_date = datetime.strptime(last_date_str, "%Y-%m-%d").date()
     except ValueError:
         # Shape matched YYYY-MM-DD but the calendar date itself is invalid
-        # (e.g. 2026-13-45) — mirrors the bash oracle's `date -j`/`date -d`
-        # parse failure branch.
         return "UNKNOWN"
 
     if today is None:
@@ -227,12 +185,6 @@ def _compute_staleness(ledger_path: Path, today: Optional[date] = None) -> str:
 def main(argv) -> int:
     state_root = _parse_root_arg(argv)
     if not state_root:
-        # A blank/whitespace-only --root value (e.g. "--root ""), like an absent
-        # --root, must NOT fall through to Path("") — that resolves relative to
-        # ambient process cwd, silently reopening the implicit-cwd dependency
-        # this --root bridge exists to eliminate. Route it through the same
-        # cwd-based resolution an absent --root gets. Applied identically to
-        # check_weekly_staleness.py to preserve parity.
         state_root = _resolve_state_root()
     if not state_root:
         print("UNKNOWN")

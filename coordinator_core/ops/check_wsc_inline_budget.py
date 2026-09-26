@@ -1,33 +1,3 @@
-"""
-coordinator_core.ops.check_wsc_inline_budget — inline bash-block budget gate
-for workstream-complete/SKILL.md.
-
-Purpose: counts ```bash fenced code blocks in the wsc SKILL.md and compares
-against a stored baseline integer. Inline bash blocks are a proxy for
-"mechanism logic that should live in a bin/wsc-*.sh script instead of
-inline in the skill." The check surfaces a WARN when the count grows.
-
-Spec backlink: wsc-asic task (2026-06-30) / skill-step-parallelization.md § wsc wiring rule
-Port of: check-wsc-inline-budget.sh (DoE b5a4192c, 2026-07-20)
-
-Exit codes (parity-critical — caller branches on these):
-  0 — count within baseline (or no baseline file — safe to ship before finalization)
-  1 — count exceeds baseline (WARN — non-blocking by caller convention)
-  2 — fatal error (SKILL.md not found)
-
-Negative-spec:
-    - Does NOT use a Markdown/YAML parser — counts literal ```bash opening
-      fence lines the same way the bash oracle's `awk '/^```bash/{c++}'`
-      does: a line-by-line prefix match on `^```bash`, not a proper fenced-
-      code-block parser. A stray ` ```bash` inside a non-code context would
-      still be counted, mirroring the bash oracle's own imprecision — this
-      is a faithful port, not a fix.
-    - Callers invoke this as a WARN, non-blocking check
-      (`coordinator/commands/workweek-complete.md`); the trampoline itself
-      still exits 1 on budget-exceeded — masking exit 1 into a WARN is the
-      caller's responsibility (`| tail -1` in the current wiring), not this
-      module's.
-"""
 from __future__ import annotations
 
 import sys
@@ -36,16 +6,10 @@ from typing import List, Optional
 
 
 def count_bash_fences(skill_text: str) -> int:
-    """Count lines beginning with ```bash — mirrors the bash oracle's
-    `awk '/^```bash/{c++} END{print c+0}'` line-prefix match exactly."""
     return sum(1 for line in skill_text.splitlines() if line.startswith("```bash"))
 
 
 def check(skill_path: str, baseline_path: str) -> tuple[str, int]:
-    """Core predicate — mirrors the bash oracle's read-count-compare body.
-
-    Returns (message, exit_code).
-    """
     skill_file = Path(skill_path)
     if not skill_file.is_file():
         return (f"ERROR: SKILL.md not found at {skill_path}", 2)

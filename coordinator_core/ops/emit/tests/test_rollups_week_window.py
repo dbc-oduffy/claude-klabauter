@@ -1,9 +1,3 @@
-"""Unit coverage for ``rollups.collect``'s WEEK-grain window narrowing — the fix for the
-week rollup counting the 30-day ``_since_cutoff`` set wholesale instead of narrowing to the
-ISO week its own ``period`` names.
-
-Spec backlink: docs/plans/2026-09-04-the-weekly-completion-count-means-the-week.md § C1/C2
-"""
 
 from __future__ import annotations
 
@@ -14,7 +8,6 @@ from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.emit.sections.rollups import collect
 
 # completion glob is 'archive/completed/*/*.md' (records_query._TYPE_TO_GLOB) — one
-# wildcard subdirectory level, delimited YAML frontmatter.
 _COMPLETED_DIR = "archive/completed/2026-03"
 
 
@@ -79,8 +72,8 @@ def test_completion_inside_observed_week_is_counted(tmp_path):
     pipeline while still passing, which is why the claim is spelled out here rather than
     left implicit. ``_created_date`` normalizes via ``str()`` regardless, so both shapes work
     — that is the seam's own contract, not a coincidence."""
-    observed_at = "2026-03-18T12:00:00Z"  # Wednesday of 2026-W12
-    _write_completion(tmp_path, "inside.md", "2026-03-16")  # Monday of same ISO week
+    observed_at = "2026-03-18T12:00:00Z"
+    _write_completion(tmp_path, "inside.md", "2026-03-16")
     ctx = _make_ctx(observed_at, tmp_path)
 
     week, _day = _week_rollup(ctx)
@@ -93,12 +86,8 @@ def test_completion_inside_observed_week_is_counted(tmp_path):
 
 
 def test_completion_8_days_before_observed_at_is_inside_cutoff_but_outside_week(tmp_path):
-    """This is the regression that would have caught the original defect: 8 days back is
-    inside the 30-day ``_since_cutoff`` window (so the old, unfiltered week rollup counted
-    it) but outside the ISO week named by ``period`` — the corrected rollup must NOT count
-    it."""
-    observed_at = "2026-03-18T12:00:00Z"  # Wednesday of 2026-W12
-    _write_completion(tmp_path, "eight-days-back.md", "2026-03-10")  # W11, 8 days earlier
+    observed_at = "2026-03-18T12:00:00Z"
+    _write_completion(tmp_path, "eight-days-back.md", "2026-03-10")
     ctx = _make_ctx(observed_at, tmp_path)
 
     week, _day = _week_rollup(ctx)
@@ -111,9 +100,6 @@ def test_completion_8_days_before_observed_at_is_inside_cutoff_but_outside_week(
 
 
 def test_day_rollup_and_max_commit_sha_still_reach_the_full_30_day_set(tmp_path):
-    """Proves ``_since_cutoff`` was not narrowed: an old-week completion still contributes
-    to ``max_commit_sha`` (computed across ALL entries) even though it is excluded from the
-    week rollup's facts, and today's completion still reaches the day rollup."""
     observed_at = "2026-03-18T12:00:00Z"
     today = "2026-03-18"
     _write_completion(tmp_path, "today.md", today, commit="1111111")
@@ -128,10 +114,8 @@ def test_day_rollup_and_max_commit_sha_still_reach_the_full_30_day_set(tmp_path)
     assert day["deterministic_facts"]["chains_completed"] == 1
     assert day["deterministic_facts"]["commits"] == 1
     assert day["input_watermark"]["source_count"] == 1
-    # max_commit_sha spans ALL entries in the 30-day set, including the out-of-week one.
     assert week["input_watermark"]["max_commit_sha"] == "fffffff"
     assert day["input_watermark"]["max_commit_sha"] == "fffffff"
-
 
 
 def test_completion_with_missing_created_is_excluded_without_raising(tmp_path):
@@ -167,12 +151,10 @@ def test_created_spanning_the_iso_year_boundary_is_counted(tmp_path):
 
     (An earlier revision of this test asserted 2026-12-28 was 2027-W01. It is 2026-W53 —
     2026 is a 53-week ISO year. The test failed and is kept pointed at a verified boundary.)"""
-    observed_at = "2027-01-01T12:00:00Z"  # ISO 2026-W53, calendar year 2027
-    # Distinct chains: _dedup_by_chain would otherwise collapse these to one, which is
-    # correct behaviour and would mask what this test is actually asking about.
+    observed_at = "2027-01-01T12:00:00Z"
     _write_completion(tmp_path, "boundary-prev-year.md", "2026-12-31", chain="chain-a")
     _write_completion(tmp_path, "boundary-this-year.md", "2027-01-02", chain="chain-b")
-    _write_completion(tmp_path, "boundary-out.md", "2027-01-04", chain="chain-c")  # W01
+    _write_completion(tmp_path, "boundary-out.md", "2027-01-04", chain="chain-c")
     ctx = _make_ctx(observed_at, tmp_path)
 
     week, _day = _week_rollup(ctx)
@@ -201,5 +183,4 @@ def test_timestamp_shaped_created_is_counted_not_silently_dropped(tmp_path):
 
     assert week["deterministic_facts"]["chains_completed"] == 1
     assert week["input_watermark"]["source_count"] == 1
-
 

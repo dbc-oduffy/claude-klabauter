@@ -1,10 +1,3 @@
-"""Tests for coordinator_core.plan_assemble.predicates.composition_graph (C6).
-
-Spec backlink: pln-plan-assemble-wave-2-the-predi-fad89b, chunk C6
-
-Every fixture plan lives under a per-test `tmp_path` — never the live
-`docs/plans/` tree, per the plan's Test surface note (AC10).
-"""
 from __future__ import annotations
 
 import subprocess
@@ -20,8 +13,6 @@ from coordinator_core.plan_assemble.predicates.composition_graph import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
-# cadence suite is the separate threshold ruling, not this declaration.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -50,11 +41,6 @@ def _write_spine_plan(path, spine_body: str, frontmatter: str = "") -> None:
         text += f"---\n{frontmatter}\n---\n"
     text += _SPINE_HEADER + "```yaml plan-tasks\n" + spine_body + "\n```\n"
     path.write_text(text, encoding="utf-8")
-
-
-# ---------------------------------------------------------------------------
-# chunk_overlap (:151)
-# ---------------------------------------------------------------------------
 
 
 def test_chunk_overlap_no_plan_undetermined(tmp_path):
@@ -118,11 +104,6 @@ def test_chunk_overlap_skips_undeclared_writes(tmp_path):
     assert result["pairs"] == []
 
 
-# ---------------------------------------------------------------------------
-# path_rename_or_move (:156)
-# ---------------------------------------------------------------------------
-
-
 def test_path_rename_or_move_no_plan_undetermined(tmp_path):
     result = path_rename_or_move(_ctx(tmp_path))
     assert result["undetermined"] is True
@@ -176,10 +157,6 @@ def test_path_rename_or_move_detects_a_real_rename(tmp_path):
 
 
 def test_path_rename_or_move_process_count_does_not_grow_with_the_set(tmp_path, monkeypatch):
-    """PROCESS COUNT DOES NOT GROW WITH N (amplification hitlist, 2026-08-19):
-    `path_rename_or_move` must issue ONE `_run_git` call for the whole
-    cited-paths set, not one per path — `git log --diff-filter=R
-    --name-status` natively accepts N pathspecs."""
     repo = tmp_path
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True, **_NO_CONSOLE)
     subprocess.run(
@@ -277,11 +254,6 @@ def test_path_rename_or_move_git_oserror_is_undetermined(tmp_path, monkeypatch):
     assert "git log --diff-filter=R failed" in result["reason"]
 
 
-# ---------------------------------------------------------------------------
-# cross_plan_conflict (:160)
-# ---------------------------------------------------------------------------
-
-
 def test_cross_plan_conflict_no_plan_undetermined(tmp_path):
     result = cross_plan_conflict(_ctx(tmp_path))
     assert result["undetermined"] is True
@@ -318,8 +290,6 @@ def test_cross_plan_conflict_finds_scope_overlap(tmp_path):
         {
             "plan_path": "docs/plans/sibling-plan.md",
             "overlapping_paths": ["some/shared/", "some/shared/file.py"],
-            # Both sides declared these in `scope:`, so this is a hit the
-            # scope-only scan also produced — nothing beyond it.
             "beyond_declared_scope": [],
         }
     ]
@@ -383,15 +353,6 @@ scope:
 
 
 def test_cross_plan_conflict_sees_a_write_site_only_the_spine_declares(tmp_path):
-    """The gap this row was widened to close, in its original shape.
-
-    `docs/plans/2026-08-26-the-reaper-identifies-sessions-positively.md`
-    recorded a live co-edit of `coordinator_core/ops/session/reap.py` by a
-    sibling plan whose frontmatter `scope:` did not list that file — the
-    sibling declared it in its `## Tasks` spine instead. The scope-only scan
-    could not surface that to either side; a hand-written Concurrency
-    paragraph was the only thing that caught it, which is not a mechanism.
-    """
     plans_dir = tmp_path / "docs" / "plans"
     plans_dir.mkdir(parents=True)
 
@@ -414,16 +375,12 @@ def test_cross_plan_conflict_sees_a_write_site_only_the_spine_declares(tmp_path)
         {
             "plan_path": "docs/plans/sibling-plan.md",
             "overlapping_paths": ["coordinator_core/ops/session/reap.py"],
-            # The sibling's own `scope:` never named it — this is exactly the
-            # overlap class the old scan was structurally blind to.
             "beyond_declared_scope": ["coordinator_core/ops/session/reap.py"],
         }
     ]
 
 
 def test_cross_plan_conflict_sees_a_write_site_only_an_ac_body_names(tmp_path):
-    """A backtick-cited path in the Acceptance Criteria counts as a declared
-    write site; a bare symbol name in the same cell does not."""
     plans_dir = tmp_path / "docs" / "plans"
     plans_dir.mkdir(parents=True)
 
@@ -449,9 +406,6 @@ def test_cross_plan_conflict_sees_a_write_site_only_an_ac_body_names(tmp_path):
 
 
 def test_cross_plan_conflict_ignores_paths_cited_outside_the_ac_section(tmp_path):
-    """A file a Problem section argues about, or an Anti-scope names precisely
-    to disclaim, is not a declared write site — harvesting the whole body would
-    invent conflicts out of citations."""
     plans_dir = tmp_path / "docs" / "plans"
     plans_dir.mkdir(parents=True)
 
@@ -472,9 +426,6 @@ def test_cross_plan_conflict_ignores_paths_cited_outside_the_ac_section(tmp_path
 
 
 def test_cross_plan_conflict_survives_a_siblings_malformed_spine(tmp_path):
-    """A sibling nobody in this process controls must not be able to blank out
-    the answer for the plan under scan — the tolerant reader takes what parses
-    and the frontmatter `scope:` overlap still lands."""
     plans_dir = tmp_path / "docs" / "plans"
     plans_dir.mkdir(parents=True)
 
@@ -497,10 +448,6 @@ def test_cross_plan_conflict_survives_a_siblings_malformed_spine(tmp_path):
 
 
 def test_cross_plan_conflict_finds_overlap_when_sibling_site_carries_dot_slash(tmp_path):
-    """`_head`'s bucketing must not diverge from `_paths_overlap`'s own
-    normalizer — a `./`-prefixed citation on the SIBLING side used to bucket
-    under `"."` instead of the real first component, silently dropping a
-    genuine overlap. Review: coordinator:code-reviewer (WSC-B, a676367b)."""
     plans_dir = tmp_path / "docs" / "plans"
     plans_dir.mkdir(parents=True)
 
@@ -531,7 +478,6 @@ def test_cross_plan_conflict_finds_overlap_when_sibling_site_carries_dot_slash(t
 
 
 def test_cross_plan_conflict_finds_overlap_when_own_site_carries_dot_slash(tmp_path):
-    """Same failure mode, mirrored onto the OWN side of the comparison."""
     plans_dir = tmp_path / "docs" / "plans"
     plans_dir.mkdir(parents=True)
 
@@ -615,11 +561,6 @@ def test_cross_plan_conflict_skips_closed_sibling(tmp_path):
     result = cross_plan_conflict(ctx)
 
     assert result["hits"] == []
-
-
-# ---------------------------------------------------------------------------
-# amends_assumption (:162)
-# ---------------------------------------------------------------------------
 
 
 def test_amends_assumption_no_plan_undetermined(tmp_path):

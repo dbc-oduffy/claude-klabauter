@@ -73,23 +73,9 @@ from coordinator_core.install.substrate import (
     _resolve_bin_templates_manifest_root,
 )
 
-# `_install_bin_resolvers` formerly reached `_emit_and_verify_ps1_forwarders`,
-# which spawned a real `powershell.exe` execution-policy probe on Windows --
-# that function is deleted 2026-08-29 (docs/plans/2026-08-26-every-forwarder-
-# that-can-reach-the-door-does.md C12, DR-365: the `.ps1` leg is condemned
-# outright). This module's own "dump is an accepted verb" check still spawns
-# `machine-local.cmd` for real -- a genuine OS-process spawn (spawn ratchet
-# Rule 2) independent of that deletion, and reason enough on its own for the
-# cadence tiering below, mirroring `test_bin_family_refresh.py`'s tiering note.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
-    # `real_home` opts out of `conftest.py::_quarantine_real_home` -- its own
-    # docstring says "read-only oracles only". This module IS that read-only
-    # oracle: the checks that resolve against the real home only ever read
-    # it (see this module's own negative-spec above); the one check that
-    # writes does so against a `tmp_path` copy, never the real path this
-    # marker hands back.
     pytest.mark.real_home,
 ]
 
@@ -106,11 +92,6 @@ _FIVE_STATIC_SHIM_NAMES = (
 
 
 def _resolve_real_doe_bin_templates() -> "Path | None":
-    """The real `templates/bin/` directory this box's install would copy
-    from -- resolved the same way an operator's `repos.doe_claude` registry
-    key resolves it, never a fixture. Returns ``None`` when this box has no
-    DoE-claude checkout registered/present (the module's tests then skip
-    with that reason rather than fail -- an environment gap, not a defect)."""
     doe_root_raw = machine_resolver.registry_get("repos.doe_claude")
     if not doe_root_raw:
         return None
@@ -119,9 +100,6 @@ def _resolve_real_doe_bin_templates() -> "Path | None":
 
 
 def _resolve_real_ch_bin() -> Path:
-    """`<claude_klabauter_root>/coordinator/lib/claude-home` -- same resolution
-    `run()` performs (`ch_bin = claude_klabauter_lib / "claude-home"`), rooted at this
-    checkout since this test module lives inside claude-klabauter itself."""
     return _REPO_ROOT / "coordinator" / "lib" / "claude-home"
 
 
@@ -133,10 +111,6 @@ def _static_family_dest_names() -> "list[str]":
 
 
 def _snapshot_static_family(bin_dst: Path) -> "dict[str, tuple[int, str]]":
-    """(size, sha256) per file this module's own install call writes -- a
-    byte-level snapshot restricted to the static family (see module
-    docstring's negative-spec on why the full `bin/` tree is not snapshotted
-    here)."""
     snap: "dict[str, tuple[int, str]]" = {}
     for name in _static_family_dest_names():
         p = bin_dst / name
@@ -170,10 +144,6 @@ def _skip_reason_if_real_bin_absent(bin_dst: Path) -> "str | None":
 
 
 def _run_install_against(bin_dst: Path) -> None:
-    """One `_install_bin_resolvers` pass against `bin_dst`, using real DoE
-    templates and the real `claude-home` family as SOURCE -- never the real
-    `<settings-home>/bin` as destination. Callers choose `bin_dst`; the
-    idempotence check below passes a `tmp_path` copy, never the live path."""
     ml_bin = _resolve_real_doe_bin_templates()
     ch_bin = _resolve_real_ch_bin()
     python3_cmd_resolved_bin = _resolve_baked_python_bin()
@@ -186,10 +156,6 @@ def _run_install_against(bin_dst: Path) -> None:
 
 
 class TestLiveBakeAndRefresh:
-    """AC1, AC6: this operator's actual, already-installed `<settings-home>/
-    bin` has all five static shims baked to zero unbaked tokens and carries
-    the durable `.python-bin` sidecar -- read directly off the real disk
-    content, never produced by running the installer as part of this test."""
 
     def test_five_shims_bake_to_zero_unbaked_tokens_and_sidecar_present(self):
         bin_dst = settings_home() / "bin"
@@ -208,10 +174,6 @@ class TestLiveBakeAndRefresh:
                 f"static shims in the real install, observed {unbaked} at {bin_dst}"
             )
         else:
-            # § macOS verification item 1: there is no .cmd rung at all on
-            # POSIX, so the bake-count assertion is meaningless there --
-            # AC5m tracks this platform's own divergent surfaces separately
-            # and is NOT closeable by this Windows-authored branch.
             pytest.skip(
                 "non-Windows host: the five .cmd shims this assertion covers "
                 "do not exist here -- AC5m is a separate, POSIX-only pass"
@@ -224,9 +186,6 @@ class TestLiveBakeAndRefresh:
 
 
 class TestLiveMachineLocalDumpVerbIsAccepted:
-    """AC1: `machine-local dump` is an accepted verb on this box's real,
-    already-installed CLI -- invoked for real, output parsed, not merely a
-    nonzero-exit check. Never runs the installer as part of this test."""
 
     def test_dump_returns_the_registry_as_json(self):
         bin_dst = settings_home() / "bin"
@@ -258,13 +217,6 @@ class TestLiveMachineLocalDumpVerbIsAccepted:
 
 
 class TestSecondConsecutiveRunIsAByteLevelNoopOnTheStaticFamily:
-    """AC2: idempotence, proven against a `tmp_path` copy of real install
-    content -- a second consecutive `_install_bin_resolvers` pass over that
-    copy, with no intervening template change, writes nothing to the static
-    family this module snapshots. The copy's starting content is the real
-    `<settings-home>/bin`; only the writes land in `tmp_path`, never the
-    real destination. See module docstring's negative-spec for why this is
-    scoped to the static family rather than the full `bin/` tree."""
 
     def test_static_family_byte_identical_across_a_second_pass(self, tmp_path):
         skip = _skip_reason_if_unavailable()

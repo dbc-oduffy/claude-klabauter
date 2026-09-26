@@ -52,11 +52,6 @@ _BIN_PROBE = _REPO_ROOT / "bin" / "claude-klabauter-doctor-probe.py"
 
 
 def _load_probe_module() -> Optional[ModuleType]:
-    """Import bin/claude-klabauter-doctor-probe.py as a fresh module via importlib.
-
-    Mirrors bin/tests/test_claude_klabauter_doctor_warm_probes.py's loader (own
-    module key, so this test file's module instance never collides with a
-    sibling's in sys.modules)."""
     if not _BIN_PROBE.exists():
         return None
     _KEY = "claude_klabauter_doctor_probe_ladder_parity_unit"
@@ -89,10 +84,6 @@ def _require_engine_root_module():
 
 
 def test_neither_ladder_fabricates_a_root_with_no_signal(tmp_path, monkeypatch):
-    """A directory with no `.git`, no env override, and no registry hit
-    resolves to nothing on the doctor's ladder; the shared resolver agrees
-    it is not an engine root either -- both fail closed on an unmarked
-    directory, never inventing a root."""
     probe = _require_probe_module()
     engine_root = _require_engine_root_module()
 
@@ -101,10 +92,6 @@ def test_neither_ladder_fabricates_a_root_with_no_signal(tmp_path, monkeypatch):
 
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
     monkeypatch.setattr(probe, "__file__", str(bare / "bin" / "claude-klabauter-doctor-probe.py"))
-    # Rung 2 reads this box's real machine-local registry, which may well
-    # have `repos.claude_klabauter` registered -- neutralize it so this test
-    # isolates rung 3 (git-root auto-discovery) rather than depending on
-    # this machine's local config being unregistered.
     import coordinator_core.machine_resolver as machine_resolver
 
     monkeypatch.setattr(machine_resolver, "registry_get", lambda *a, **k: None)
@@ -120,12 +107,6 @@ def test_neither_ladder_fabricates_a_root_with_no_signal(tmp_path, monkeypatch):
 
 
 def test_doctor_ladder_is_deliberately_stamp_blind(tmp_path):
-    """The doctor's git-root rung resolves a `.git`-carrying directory
-    regardless of whether it carries a valid engine stamp -- pinning the
-    documented asymmetry (§ 'The fourth site') rather than letting a future
-    edit quietly make the doctor stamp-aware (which would reintroduce the
-    'doctor cannot diagnose a broken coordinator_core import' failure this
-    exclusion protects against)."""
     probe = _require_probe_module()
     engine_root = _require_engine_root_module()
 
@@ -133,14 +114,9 @@ def test_doctor_ladder_is_deliberately_stamp_blind(tmp_path):
     (candidate / ".git").mkdir(parents=True)
     (candidate / "bin").mkdir()
 
-    # No engine stamp written -- `is_engine_root` must say False.
     assert engine_root.is_engine_root(candidate) is False
-    assert probe is not None  # module loaded; exercised for its rung docstring only
+    assert probe is not None
 
-    # Exercise the git-root rung's own resolution shape directly: rung 3
-    # derives `<script>.resolve().parent.parent` as the candidate root, so
-    # a script living at `<candidate>/bin/claude-klabauter-doctor-probe.py` resolves
-    # `<candidate>` regardless of stamp presence.
     fake_script = candidate / "bin" / "claude-klabauter-doctor-probe.py"
     resolved_dir = fake_script.resolve().parent.parent
     assert resolved_dir == candidate
@@ -151,10 +127,6 @@ def test_doctor_ladder_is_deliberately_stamp_blind(tmp_path):
 
 
 def test_engine_root_predicate_does_not_require_a_git_directory(tmp_path):
-    """A valid engine root (stamped) need not carry `.git` -- a published
-    mirror typically will not. Pins that the shared resolver's predicate and
-    the doctor's git-root rung are independent axes, not one implying the
-    other."""
     from coordinator_core.warm.skew import ENGINE_STAMP_FILENAME
 
     engine_root = _require_engine_root_module()

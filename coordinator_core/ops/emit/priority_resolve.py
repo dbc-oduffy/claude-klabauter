@@ -104,18 +104,7 @@ _NONE_SENTINEL = "none"
 _MONTH_DIR_RE = re.compile(r"^\d{4}-\d{2}$")
 
 
-# ---------------------------------------------------------------------------
-# Ledger loading — live + archive union, keyed by target_id (filename stem).
-# ---------------------------------------------------------------------------
-
-
 def _collect_ledger_dir(dir_path: str) -> Dict[str, dict]:
-    """Parse every ``*.yaml`` file directly under *dir_path* into a
-    ``target_id -> entry`` map. ``target_id`` is the filename stem — the
-    ledger schema's filename-as-identity invariant (there is no separate
-    ``id`` field on the entry itself). Missing/unreadable directories yield
-    ``{}``; a single unparsable file is skipped (best-effort), not fatal.
-    """
     out: Dict[str, dict] = {}
     if not dir_path or not os.path.isdir(dir_path):
         return out
@@ -208,28 +197,9 @@ def load_priority_ledger(state_root: Optional[str] = None) -> Dict[str, dict]:
                 continue
             merged.update(_collect_ledger_dir(os.path.join(archive_root, month)))
 
-    # Live entries applied last so they win on a target_id collision.
     merged.update(_collect_ledger_dir(live_dir))
 
     return merged
-
-
-# ---------------------------------------------------------------------------
-# Node identity — pluggable, defaults to a best-effort (repo, basename) mirror
-# of the handoff_id derivation authored at emit time (C4). A caller with its
-# own authoritative derivation (e.g. C4's exact wire logic) MUST pass its own
-# node_id_fn so ledger lookups key on the SAME target_id it emits — this
-# default exists so the resolver is usable standalone / in tests, not as a
-# second source of truth for handoff_id shape.
-#
-# *repo_name* MUST be the SAME owner-qualified slug ``resolve_repo_name``
-# produces (e.g. ``dbc-oduffy/claude-klabauter``, not the bare basename
-# ``claude-klabauter``) — the one canonical producer every other repo-name
-# consumer in this codebase reads, ``_derive_handoff_id`` (sections/
-# handoffs.py) included. Re-deriving a bare basename here would key this
-# fallback on a different repo identity than the rest of the emission
-# pipeline uses for the SAME (repo, basename) pair.
-# ---------------------------------------------------------------------------
 
 
 def _default_node_id(meta: dict, node_path: str, repo_name: Optional[str]) -> Optional[str]:
@@ -243,16 +213,6 @@ def _default_node_id(meta: dict, node_path: str, repo_name: Optional[str]) -> Op
 
 
 def _resolve_default_repo_name(repo_root: Optional[str]) -> Optional[str]:
-    """Resolve the owner-qualified repo slug for ``_default_node_id``'s fallback.
-
-    Delegates to ``resolve_repo_name`` (the sole canonical producer) rather
-    than re-deriving a basename, so this fallback cannot drift from
-    ``_derive_handoff_id``'s own repo-qualification. ``resolve_repo_name``
-    raises only when *repo_root* itself is underivable (None / not a
-    directory) — treated as "no repo qualifier available" here, matching
-    this function's pre-existing graceful-degradation posture rather than
-    propagating a fatal error out of a best-effort default.
-    """
     if not repo_root:
         return None
     try:
@@ -264,49 +224,12 @@ def _resolve_default_repo_name(repo_root: Optional[str]) -> Optional[str]:
 NodeIdFn = Callable[[dict, str], Optional[str]]
 
 
-# ---------------------------------------------------------------------------
-# Predecessor-spine parent map — reuses dag.handoff_edges / dag.resolve_target
-# (the same primitives walk_forward itself uses internally) to recover, for
-# each node walk_forward already discovered, its immediate predecessor +
-# additional_predecessors targets. This is NOT a second traversal: it only
-# ever looks at nodes walk_forward already visited, replaying the same
-# edge-kind field reads walk_forward used to discover them, so fan-in
-# (multiple direct parents) can be detected at each node — a flat
-# {path: frontmatter} map alone cannot distinguish "single ancestor" from
-# "converging ancestors that must agree".
-# ---------------------------------------------------------------------------
-
-
 def _build_parent_map(
     nodes: Dict[str, dict],
     handoff_dir: str,
     repo_root: str,
-    git_history_cache: Optional[Set[str]] = None,  # unused when include_history_tier=False below; kept for signature parity with dag.resolve_target
+    git_history_cache: Optional[Set[str]] = None,
 ) -> Dict[str, List[str]]:
-    """Mirrors ``dag.walk_forward``'s own internal edge-resolution call shape
-    exactly: a single, fixed *handoff_dir* for every ``resolve_target`` call
-    regardless of which node is currently being expanded (walk_forward never
-    re-derives ``handoff_dir`` per visited node either — see its source,
-    ``resolve_target(raw_ref, handoff_dir, repo_root, ...)`` inside the DFS
-    loop). ``resolve_target``'s own candidate list already tries
-    repo_root-anchored ``state/handoffs`` / ``archive/handoffs`` fallbacks,
-    so an ancestor living in a different directory than the start node still
-    resolves correctly. Using a per-node directory here instead would
-    silently diverge from what ``walk_forward`` itself used to discover
-    these very nodes.
-
-    Every ``resolve_target`` call below passes ``include_history_tier=False``
-    — this function's loop discards the ``'git-history'`` sentinel
-    identically to ``None`` (see the ``if target and target != "git-history"``
-    check), so tier 3 (the ``git log`` subprocess fallback) has never
-    produced a distinguishable outcome for any caller of THIS function.
-    Skipping it removes the subprocess spawn per unresolved edge target
-    entirely rather than merely caching it. *git_history_cache* is still
-    accepted and threaded through for signature parity with
-    ``dag.resolve_target`` and any other internal caller that reuses this
-    same *nodes*/*handoff_dir*/*repo_root* shape, but with tier 3 skipped it
-    is inert here — never consulted, never populated on a miss.
-    """
     parent_map: Dict[str, List[str]] = {}
     for path, meta in nodes.items():
         raw_edges = handoff_edges(meta, _EDGE_KINDS)
@@ -326,10 +249,6 @@ def _build_parent_map(
 
 
 def _priority_value(entry: dict) -> Optional[str]:
-    """Ledger ``priority`` field, with the ``"none"`` explicit-clear sentinel
-    normalized to ``None`` (no priority value, but the entry itself still
-    counts as "explicit" to the caller — see module docstring).
-    """
     value = entry.get("priority")
     if value == _NONE_SENTINEL:
         return None
@@ -345,23 +264,9 @@ def _nearest_explicit(
     memo: Dict[str, Tuple[Optional[str], Optional[str], bool]],
     in_progress: Set[str],
 ) -> Tuple[Optional[str], Optional[str], bool]:
-    """Returns ``(value, source_target_id, ambiguous)`` for the nearest
-    explicit ledger entry reachable from *path* (itself included) by walking
-    ONLY predecessor/additional_predecessors edges.
-
-    ``source_target_id is not None`` means "an explicit entry was found
-    somewhere on this branch" — true even when its priority VALUE is
-    ``None`` (the clear sentinel); that distinguishes "found an explicit
-    none" from "found nothing at all" for the caller's fan-in comparison.
-    """
     if path in memo:
         return memo[path]
     if path in in_progress:
-        # Defensive cycle guard — dag.walk_forward already reports
-        # terminatedEarly='lineage-cycle' for a genuine back-edge and does
-        # not re-push a gray node, so this branch is not expected to fire
-        # in practice; treat a re-entrant hit as "nothing found" rather
-        # than recursing forever.
         return (None, None, False)
 
     in_progress.add(path)
@@ -404,88 +309,16 @@ def _nearest_explicit(
     return result
 
 
-# ---------------------------------------------------------------------------
-# PriorityResolveCache — per-emit-run cache, SHARED across many resolve_priority()
-# calls against the same repo corpus (C6b perf hoist).
-#
-# Problem this replaces: called once per handoff (e.g. 360x for a real corpus),
-# resolve_priority() used to pay for a full dag.walk_forward() DFS PLUS a
-# dag.build_handoff_id_index() corpus scan+parse PLUS a _build_parent_map()
-# build on every single call, even though all three are invariant for the
-# whole emit run — walk_forward's own docstring names build_handoff_id_index
-# as something to "build once per scan set", and it was instead being rebuilt
-# once per handoff over the identical directory scan (see the dispatch brief's
-# profile: build_handoff_id_index at 12.1s / 360 calls, _build_parent_map at
-# 22.6s / 360 calls, walk_forward at 15.7s / 360 calls, of a 38.4s aggregate).
-#
 # NEGATIVE-SPEC — why bypassing walk_forward() entirely (when a cache is
 # given) is byte-identical, not merely faster, STRUCTURALLY (not by corpus
-# agreement — a byte-diff over one corpus's records is confirmatory evidence,
-# never the argument itself; a diff can only fail to show a divergence that
-# happens not to be exercised by the sample under test):
-#   1. _build_parent_map's own resolve_target() call (its per-node parent
-#      lookup) has NEVER been passed id_index — not in the pre-cache
-#      walk_forward-based path, not here (see _build_parent_map above: no
-#      id_index kwarg at its resolve_target() call site, in either version
-#      of this file).
 #   2. _nearest_explicit walks ancestors EXCLUSIVELY via parent_map edges
-#      (`parent_map.get(path, [])`) — it never consults `nodes` for
-#      reachability, only for a found node's own meta (ledger key
-#      derivation). `nodes` (whether walk_forward's DFS-limited set or this
-#      cache's full-corpus set) therefore cannot change WHICH ancestors are
-#      visited, only what's available to look up once an ancestor is
-#      already reachable through parent_map.
-#   Therefore (1) + (2): walk_forward's id-index-aware DFS only ever
-#   affected which nodes got recorded into `nodes` — a lookup table, not the
 #   traversal itself — never which ancestors are REACHABLE via parent_map
-#   edges, because that reachability is fully re-derived from each path's
-#   own frontmatter (handoff_edges + a non-id-index-aware resolve_target)
-#   independent of whatever `nodes` dict happens to be sitting nearby. An
-#   id-shaped predecessor_id/origin_handoff_id ref was already unreachable
-#   through parent_map before this cache existed; this cache does not change
-#   that (preserved on purpose, per the dispatch brief's "do not fix it
-#   while you are in there" instruction) — it just stops paying to build an
-#   id_index nothing downstream ever consults. Guarded by
-#   test_priority_resolve_cache.py::test_id_shaped_predecessor_ref_cached_and_uncached_agree.
-#   3. _build_parent_map computes parent_map[path] from (path, meta,
-#      handoff_dir, repo_root) alone — it does not depend on what ELSE is in
-#      its input `nodes` dict. A parent_map built over the FULL on-disk corpus
-#      therefore has, for every path a per-call walk_forward()+_build_parent_map()
 #      pair would have produced an entry for, the IDENTICAL value — it is
-#      simply also computed for extra paths nothing will ever look up.
-#   4. The corpus-wide meta map (`nodes()`) is every handoff's real frontmatter
-#      via the SAME content-hash-cached read (dag.read_handoff_meta ==
-#      dag._read_meta) walk_forward itself used — a strict superset of what
-#      walk_forward's DFS would have visited, so a `nodes.get(path, {})` miss
-#      that the old code could theoretically hit (falling back to `{}`) cannot
-#      happen here; the value returned is the same either way whenever both
-#      paths agree, and this path never returns a WORSE (emptier) answer.
-#
-# Cache scope is per-run, NOT process-lifetime (dispatch brief's explicit
-# constraint) — construct one instance per emit() invocation and let it be
-# garbage-collected at the end; never stash an instance on a module global.
 # dag.py's own process-lifetime caches (_FRONTMATTER_CACHE, _EVER_TRACKED_CACHE)
-# are a separate, lower layer this cache sits above and does not replace —
 # see dag.py's _EVER_TRACKED_CACHE comment block for THEIR invalidation
-# contract, which this class has no bearing on.
-#
-# Keyed per handoff_dir, not globally, because _build_parent_map's own
-# docstring establishes edge resolution is fixed to a single handoff_dir per
-# walk (mirroring walk_forward's own fixed-handoff_dir call shape) — a live
-# handoff (handoff_dir = state/handoffs) and a month-archived one
-# (handoff_dir = archive/handoffs/YYYY-MM) are NOT interchangeable and each
-# get their own parent-map build the first time that handoff_dir is seen.
-# ---------------------------------------------------------------------------
 
 
 class PriorityResolveCache:
-    """Per-emit-run cache for ``resolve_priority()`` — see the module comment
-    block immediately above for the full correctness rationale. Construct one
-    instance per emit run (e.g. once at the top of
-    ``sections/handoffs.py::collect()``) and pass it to every
-    ``resolve_priority(..., cache=...)`` call in that run; never share an
-    instance across runs.
-    """
 
     def __init__(self, repo_root: str):
         self.repo_root = repo_root
@@ -494,31 +327,14 @@ class PriorityResolveCache:
             p: read_handoff_meta(p) for p in self._corpus_paths
         }
         self._parent_maps: Dict[str, Dict[str, List[str]]] = {}
-        # Single upfront `git log --all --name-only` pass (dag.build_git_history_cache),
-        # in place of a per-unresolved-edge `git log --all -- <path>` subprocess spawn
-        # inside every _build_parent_map() tier-3 fallback below. Best-effort: a None
-        # cache (git failure, not a repo, timeout) falls back unchanged to dag.py's
-        # own per-call resolution. Stripped via `dag.as_history_membership_set` —
-        # this cache is built ONCE in this constructor and reused for the REST of
-        # one emit run (per-emit-run cache, per this class's own docstring), so a
-        # target pruned/committed after the snapshot was taken must still resolve
-        # correctly later in the same run; trusting `.complete` across that reuse
-        # window would fast-reject such a miss instead of falling through to the
-        # real per-call git check. See `dag.as_history_membership_set`'s docstring
-        # for the full rationale — a HIT is unaffected either way, only a MISS
-        # changes, and only in the falls-through direction.
         self._git_history_cache: Optional[Set[str]] = as_history_membership_set(
             build_git_history_cache(repo_root)
         )
 
     def nodes(self) -> Dict[str, dict]:
-        """The full corpus's ``{abs_path: frontmatter}`` map, built once."""
         return self._corpus_nodes
 
     def parent_map_for(self, handoff_dir: str) -> Dict[str, List[str]]:
-        """The corpus-wide predecessor-spine parent map for *handoff_dir*,
-        built (and cached) the first time this handoff_dir is requested.
-        """
         key = os.path.normpath(handoff_dir)
         cached = self._parent_maps.get(key)
         if cached is None:
@@ -532,11 +348,6 @@ class PriorityResolveCache:
         return cached
 
 
-# ---------------------------------------------------------------------------
-# Public entrypoint
-# ---------------------------------------------------------------------------
-
-
 def resolve_priority(
     start_path: str,
     start_target_id: str,
@@ -547,32 +358,6 @@ def resolve_priority(
     repo_root: Optional[str] = None,
     cache: Optional[PriorityResolveCache] = None,
 ) -> Dict[str, Any]:
-    """Resolve N's ``effective_priority`` per the four-step algorithm (module
-    docstring). ``start_path`` is N's on-disk path (used to walk the
-    predecessor spine via ``dag.walk_forward``); ``start_target_id`` is N's
-    own ledger key.
-
-    *ledger_entries*, when given, is used verbatim instead of loading via
-    ``load_priority_ledger()`` — the test-injection seam. *node_id_fn*, when
-    given, overrides the default (repo, basename)-mirroring id derivation
-    (see ``_default_node_id``) — pass the SAME derivation the caller used to
-    key *start_target_id* itself, so ancestor lookups are consistent.
-
-    *cache*, when given, is a ``PriorityResolveCache`` built ONCE for the
-    whole emit run (see its docstring for the correctness argument) — its
-    corpus-wide meta map and per-handoff_dir parent map are used in place of
-    a fresh ``dag.walk_forward()`` + ``_build_parent_map()`` pair, which is
-    what still runs when *cache* is omitted (the pre-C6b behaviour, unchanged,
-    still the default for any caller not opting in). *cache.repo_root* MUST
-    match the effective *repo_root* for this call — a mismatch raises
-    ``ValueError`` rather than silently resolving against the wrong corpus.
-
-    Returns ``{"effective_priority": str | None, "origin": "explicit" |
-    "inherited" | "suggested" | "ambiguous" | "none", "source_id": str | None}``.
-    ``source_id`` is the ledger ``target_id`` the value was sourced from
-    (``start_target_id`` for "explicit", the ancestor's target_id for
-    "inherited", ``None`` otherwise).
-    """
     abs_start = os.path.abspath(start_path)
     resolved_handoff_dir = handoff_dir or os.path.dirname(abs_start)
 
@@ -601,9 +386,6 @@ def resolve_priority(
         parent_map = _build_parent_map(nodes, resolved_handoff_dir, resolved_repo_root)
 
     if node_id_fn is None:
-        # Resolved ONCE per resolve_priority() call (not per node visited) —
-        # resolve_repo_name spawns a git subprocess; _default_node_id is
-        # invoked once per ancestor node during the predecessor-spine walk.
         default_repo_name = _resolve_default_repo_name(resolved_repo_root)
         node_id_fn = lambda meta, path: _default_node_id(  # noqa: E731
             meta, path, default_repo_name
@@ -612,7 +394,6 @@ def resolve_priority(
     if ledger_entries is None:
         ledger_entries = load_priority_ledger()
 
-    # Step 1 — explicit entry on N itself.
     own_entry = ledger_entries.get(start_target_id)
     if own_entry is not None:
         return {
@@ -621,9 +402,6 @@ def resolve_priority(
             "source_id": start_target_id,
         }
 
-    # Step 2 — nearest explicit ancestor over the predecessor spine, across
-    # ALL of N's direct parents (predecessor + additional_predecessors);
-    # differing results across parents is fan-in ambiguity.
     memo: Dict[str, Tuple[Optional[str], Optional[str], bool]] = {}
     in_progress: Set[str] = set()
     found: List[Tuple[Optional[str], str]] = []
@@ -650,11 +428,9 @@ def resolve_priority(
         value, source_id = found[0]
         return {"effective_priority": value, "origin": "inherited", "source_id": source_id}
 
-    # Step 3 — suggested_priority on N itself.
     start_meta = nodes.get(abs_start, {})
     suggested = start_meta.get("suggested_priority")
     if suggested:
         return {"effective_priority": str(suggested), "origin": "suggested", "source_id": None}
 
-    # Step 4 — nothing found anywhere.
     return {"effective_priority": None, "origin": "none", "source_id": None}

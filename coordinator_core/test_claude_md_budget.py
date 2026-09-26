@@ -1,9 +1,3 @@
-"""Tests for coordinator_core.claude_md_budget.
-
-Spec backlink: DoE-claude:pln-always-loaded-doctrine-envelop-cd5932 § C1(b)(c);
-C7b (audience manifest + ratchet watermark) per
-docs/plans/2026-07-30-boot-doctrine-cut-and-refill-gate.md § C7b.
-"""
 
 from __future__ import annotations
 
@@ -51,11 +45,6 @@ def test_global_home_claude_md_is_governed(tmp_path):
 
 
 def test_bare_home_claude_md_without_dotclaude_dir_is_NOT_governed(tmp_path):
-    """`~/CLAUDE.md` (no `.claude/` subdir) is not the real global surface —
-    a caller accidentally treating `Path.home()` itself as the governed
-    directory (rather than `Path.home() / ".claude"`) would wrongly match
-    this path; this test pins the correct, narrower behaviour.
-    """
     home = tmp_path / "home"
     home.mkdir()
     bare = home / "CLAUDE.md"
@@ -79,11 +68,6 @@ def test_dev_repo_coordinator_claude_md_is_governed(tmp_path):
 
 
 def test_repo_scoped_claude_md_is_NOT_governed(tmp_path):
-    """DoE-claude's own repo-root CLAUDE.md is a project file, not the global
-    or dev-repo-sentinel-marked coordinator/CLAUDE.md — must not share the
-    fleet budget. This is the live bug the C1 re-siting exists to close: a
-    bare basename match would incorrectly fire on this file.
-    """
     home = tmp_path / "home"
     home.mkdir()
     repo_root = tmp_path / "DoE-claude"
@@ -96,10 +80,6 @@ def test_repo_scoped_claude_md_is_NOT_governed(tmp_path):
 
 
 def test_sibling_repo_without_sentinel_coordinator_claude_md_is_NOT_governed(tmp_path):
-    """A `coordinator/CLAUDE.md`-shaped path in a repo that lacks the
-    dev-repo sentinel (an OSS install, a percolated mirror, or an unrelated
-    sibling repo) must not be treated as governed.
-    """
     home = tmp_path / "home"
     home.mkdir()
     repo_root = tmp_path / "some-other-repo"
@@ -152,9 +132,6 @@ def test_governed_surface_paths_excludes_coordinator_claude_md_without_sentinel(
     assert paths == [home / ".claude" / "CLAUDE.md"]
 
 
-# --- is_claude_md_class: the full 5-surface class, pattern-matched ---------
-
-
 def test_global_home_claude_md_is_claude_md_class(tmp_path):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
@@ -175,12 +152,6 @@ def test_global_doctrine_mirror_claude_md_is_claude_md_class(tmp_path):
 
 
 def test_coordinator_claude_md_is_claude_md_class_even_without_sentinel(tmp_path):
-    """Unlike `is_governed_claude_md`, `is_claude_md_class` is not gated on
-    the dev-repo sentinel — it recognizes the SHAPE (a `coordinator/CLAUDE.md`
-    path), not "is this the one fleet-loaded copy". An OSS install or a
-    sibling repo's `coordinator/CLAUDE.md` (no sentinel) is still
-    CLAUDE.md-class for consumers that need to recognize the whole family.
-    """
     repo_root = tmp_path / "some-other-repo"
     coord_dir = repo_root / "coordinator"
     coord_dir.mkdir(parents=True)
@@ -200,9 +171,6 @@ def test_coordinator_templates_claude_md_tmpl_is_claude_md_class(tmp_path):
 
 
 def test_repo_root_claude_md_is_claude_md_class(tmp_path):
-    """`<repo-root>/CLAUDE.md` (any repo's own project file) is part of the
-    full class, unlike `is_governed_claude_md` which excludes it.
-    """
     repo_root = tmp_path / "some-repo"
     repo_root.mkdir()
     repo_scoped = repo_root / "CLAUDE.md"
@@ -219,9 +187,6 @@ def test_non_claude_md_basename_is_not_claude_md_class(tmp_path):
 
 
 def test_claude_local_md_is_not_claude_md_class(tmp_path):
-    """CLAUDE.local.md is a distinct file class (see
-    coordinator/docs/wiki/claude-md-surfaces.md) -- not matched here.
-    """
     other = tmp_path / "CLAUDE.local.md"
     other.write_text("x", encoding="utf-8")
 
@@ -237,14 +202,7 @@ def test_tmpl_file_outside_templates_dir_is_not_claude_md_class(tmp_path):
     assert is_claude_md_class(tmpl_file) is False
 
 
-# --- is_ledger_admission_scoped: widened C7 CI-tier scoping (C3) -----------
-
-
 def test_ledger_admission_scoped_agrees_with_claude_md_class():
-    """`is_ledger_admission_scoped` is a thin wrapper over
-    `is_claude_md_class` — pin the delegation directly rather than
-    re-deriving every case `is_claude_md_class` already covers above.
-    """
     import inspect
 
     assert (
@@ -254,9 +212,6 @@ def test_ledger_admission_scoped_agrees_with_claude_md_class():
 
 
 def test_sibling_repo_coordinator_claude_md_without_sentinel_is_ledger_scoped(tmp_path):
-    """The case `is_governed_claude_md` deliberately excludes (no dev-repo
-    sentinel) — this is exactly what C3 widens the CI-tier scope to cover.
-    """
     repo_root = tmp_path / "some-other-repo"
     coord_dir = repo_root / "coordinator"
     coord_dir.mkdir(parents=True)
@@ -268,9 +223,6 @@ def test_sibling_repo_coordinator_claude_md_without_sentinel_is_ledger_scoped(tm
 
 
 def test_template_claude_md_tmpl_is_ledger_scoped(tmp_path):
-    """`coordinator/templates/CLAUDE.md.tmpl` — `is_governed_claude_md`
-    never recognizes this basename at all; the widened predicate does.
-    """
     templates_dir = tmp_path / "DoE-claude" / "coordinator" / "templates"
     templates_dir.mkdir(parents=True)
     tmpl_file = templates_dir / "CLAUDE.md.tmpl"
@@ -280,9 +232,6 @@ def test_template_claude_md_tmpl_is_ledger_scoped(tmp_path):
 
 
 def test_repo_root_claude_md_is_ledger_scoped(tmp_path):
-    """A bare `<repo-root>/CLAUDE.md` — also excluded by
-    `is_governed_claude_md`, also part of the widened CI-tier scope.
-    """
     repo_root = tmp_path / "some-repo"
     repo_root.mkdir()
     repo_scoped = repo_root / "CLAUDE.md"
@@ -299,9 +248,6 @@ def test_non_claude_md_basename_is_not_ledger_scoped(tmp_path):
 
 
 def test_global_governed_claude_md_is_still_ledger_scoped(tmp_path):
-    """The widening must not accidentally NARROW coverage — the two
-    surfaces `is_governed_claude_md` already recognized stay in scope.
-    """
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     global_file = home / ".claude" / "CLAUDE.md"
@@ -345,10 +291,6 @@ def test_audience_manifest_relpath_is_coordinator_scoped():
 
 
 def test_a_new_always_on_surface_of_any_name_is_governed_without_a_code_change(tmp_path):
-    """AC3's own falsification test: a surface this module has NEVER heard
-    of (a made-up filename, not `CLAUDE.md`-shaped at all) becomes governed
-    purely because a caller's manifest names it -- no edit to this module
-    was required to add it."""
     home = tmp_path / "home"
     home.mkdir()
     repo_root = tmp_path / "any-repo"
@@ -422,8 +364,6 @@ def test_governed_surface_paths_appends_audience_manifest_entries(tmp_path):
 
 
 def test_governed_surface_paths_unmanifested_repo_unchanged(tmp_path):
-    """No manifest file, no explicit override -- identical to pre-C7b
-    behaviour (regression guard for the widening)."""
     home = tmp_path / "home"
     home.mkdir()
     repo_root = tmp_path / "unmanifested-repo"
@@ -434,16 +374,8 @@ def test_governed_surface_paths_unmanifested_repo_unchanged(tmp_path):
     ]
 
 
-# --- C7b AC4: the ratchet watermark ------------------------------------------
-
-
 class TestSurfaceSlug:
     def test_slashes_become_hyphens_and_md_suffix_drops(self):
-        # Mirrors DoE `_claude_md_ledger.surface_slug` exactly: the trailing
-        # ".md" is stripped BEFORE lower-casing, so "CLAUDE.md" collapses to
-        # "claude" (not "claude-md") -- verified against the live algorithm,
-        # not that module's own illustrative docstring example (which states
-        # the un-stripped form and disagrees with its own code).
         assert surface_slug("global-doctrine/CLAUDE.md") == "global-doctrine-claude"
 
     def test_lowercased(self):
@@ -500,8 +432,6 @@ class TestParseWatermark:
 
 
 class TestRatchetWatermark:
-    """AC4: a governed surface may shrink or hold, never grow past its
-    recorded watermark, without an explicit reasoned bump."""
 
     def test_unarmed_always_allows(self):
         allowed, msg = ratchet_check(999_999, None)

@@ -104,14 +104,6 @@ def _default_wrapper_bin_dir() -> Path:
 
 
 def _on_path_warning(target_dir: Path) -> str:
-    """Actionable text for a resolved-but-off-PATH target dir.
-
-    Paired with an `on_path: False` response field: the field alone was
-    found to be a signal no caller acted on (state/bug-backlog/2026-08-30-
-    wrapper-onto-path-installs-to-a-windows-240282f16634.yaml), so this
-    names the directory and the consequence explicitly rather than leaving
-    the caller to infer it from a bare boolean.
-    """
     return (
         f"{target_dir} is not on PATH -- the installed wrapper will not run "
         "from a bare shell until this directory is added to PATH"
@@ -119,11 +111,6 @@ def _on_path_warning(target_dir: Path) -> str:
 
 
 def _on_path(target_dir: Path) -> bool:
-    """Whether *target_dir* is a member of the current process's PATH.
-
-    Splits on ``os.pathsep`` (``;`` on Windows, ``:`` on POSIX) -- never a
-    literal POSIX ``:``, which would silently mis-report on Windows.
-    """
     raw_path = os.environ.get("PATH", "")
     entries = raw_path.split(os.pathsep)
     target_resolved = str(target_dir.resolve())
@@ -139,13 +126,6 @@ def _on_path(target_dir: Path) -> bool:
 
 
 def _install_one(src: Path, dst: Path) -> bool:
-    """Copy *src* to *dst*, reapplying the exec bit unconditionally.
-
-    Returns True iff content was (re)written (a true modification); False on
-    an identical-content no-op rerun. Mirrors
-    ``coordinator_core/install/substrate.py::_install_one``'s content-diff
-    discipline -- unlike the source fence's unconditional ``cp -p``.
-    """
     dst.parent.mkdir(parents=True, exist_ok=True)
     if not dst.exists() or not filecmp.cmp(src, dst, shallow=False):
         shutil.copyfile(src, dst)
@@ -196,10 +176,6 @@ def _install_wrapper_onto_path(params: dict, repo_root: Optional[Path] = None) -
 
     modified = _install_one(src, installed_path)
 
-    # Journal the branch that actually ran on THIS platform -- the other
-    # platform's clause never fired here, so it stays unreported rather
-    # than journaled as an empty resolution (we never got there on this
-    # OS, we did not determine "nothing to write" for it).
     clause_index = _WINDOWS_CLAUSE_INDEX if os.name == "nt" else _POSIX_CLAUSE_INDEX
     resolution_journal.record_resolution(
         "wrapper-onto-path",
@@ -221,12 +197,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
     writer_id="wrapper-onto-path",
     source_module="coordinator_core.install.wrapper_onto_path",
     clauses=(
-        # POSIX branch: `_install_one` copies the caller-supplied
-        # `wrapper_src` into `~/.local/bin/<wrapper-name>` via
-        # `shutil.copyfile`, reapplying the exec bit. SHAPED: the leaf
-        # filename is `src.name` (the caller-supplied `wrapper_src`
-        # param's basename), never enumerable in source -- one wrapper per
-        # call, whichever the caller names.
         ShapedClause(
             discovered_by="Path(params['wrapper_src']).name (the installed leaf filename)",
             entry_template=WriteSurfaceEntry(
@@ -235,10 +205,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 reason="_install_one (POSIX branch): shutil.copyfile + chmod +x, content-diff short-circuited",
             ),
         ),
-        # Windows branch: same op, target dir resolved under
         # `%LOCALAPPDATA%` (falling back to `~/AppData/Local`) instead of
-        # `~/.local`; never `~/.local/bin`, which is not an idiomatic
-        # Windows PATH entry (see `_default_wrapper_bin_dir`'s docstring).
         ShapedClause(
             discovered_by="Path(params['wrapper_src']).name (the installed leaf filename)",
             entry_template=WriteSurfaceEntry(

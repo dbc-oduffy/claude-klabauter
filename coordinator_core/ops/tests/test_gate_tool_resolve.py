@@ -72,8 +72,6 @@ def test_all_known_tools_have_install_hints() -> None:
 
 
 def test_live_resolution_does_not_raise_for_every_known_tool() -> None:
-    """Smoke test against the real machine (no monkeypatching) -- resolution
-    must never raise regardless of what's actually installed here."""
     for tool in KNOWN_TOOLS:
         result = resolve_tool(tool)
         assert result.tool == tool

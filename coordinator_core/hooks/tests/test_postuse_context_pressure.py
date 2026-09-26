@@ -84,18 +84,12 @@ def _isolated_state(tmp_path, monkeypatch):
     (tmp_path / "tmp").mkdir()
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     # This container runs with CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 live in
-    # its own process environment (the PM's own fleet-wide setting) -- clear
-    # it so every threshold derivation in this file is deterministic against
-    # the 1,000,000-token `context_window_size` the fixtures below assume.
     monkeypatch.delenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", raising=False)
     sidecar_module._last_written.clear()
     yield
 
 
 def _threshold_tokens(context_window_size: int = 1_000_000) -> int:
-    # 33,000 written out, never read back off the module under test: a helper
-    # that recomputes the expectation from the constant it is checking agrees
-    # with any value that constant takes, including a wrong one.
     return context_window_size - 33_000
 
 
@@ -110,10 +104,6 @@ def _red_bound_pct(context_window_size: int = 1_000_000) -> float:
 
 
 def _bypass_throttle(session_id: str) -> None:
-    """Force the 5-min throttle to be considered expired for `session_id`,
-    preserving any other state (bark-once dedup) already on disk — a
-    full-state overwrite here would silently reset the very counters several
-    tests below are asserting on."""
     tmpdir = tempfile.gettempdir()
     state = pad._load_advisory_state(tmpdir, session_id)
     state["throttle_last_check"] = 0.0
@@ -127,9 +117,6 @@ def _write_sidecar(
     context_window_size=1_000_000,
     now: float | None = None,
 ) -> None:
-    """Write a context-usage sidecar block shaped like the real harness
-    payload. `used_percentage` is the only figure the check consults; the rest
-    is present so the fixture stays recognisable against a real record."""
     block: dict = {
         "used_percentage": used_percentage,
         "remaining_percentage": (
@@ -150,20 +137,11 @@ def _check(session_id: str) -> str:
     return pad._check_context_pressure_sync(session_id, "")
 
 
-# ---------------------------------------------------------------------------
-# Silence — no reading at all.
-# ---------------------------------------------------------------------------
-
-
 def test_absent_sidecar_is_silent():
     assert _check("session-absent-sidecar") == ""
 
 
 def test_headless_session_with_no_sidecar_is_silent():
-    """No statusline renders in a headless run, so no sidecar is ever written.
-    That population gets silence — it is not told its context is unmeasurable,
-    because there is nothing it could do about it and the notice would fire on
-    every tool call of every headless session on the machine."""
     assert _check("session-headless") == ""
 
 
@@ -175,9 +153,6 @@ def test_sidecar_with_no_usable_percentage_is_silent():
 
 @pytest.mark.parametrize("bad", ["87", None, True, float("nan")])
 def test_sidecar_with_non_numeric_percentage_is_silent(bad):
-    """A string, a null, a bool, or a NaN is not a percentage. Each yields
-    silence rather than a coerced number — `True` in particular would evaluate
-    as 1 under a bare isinstance(x, int) check."""
     session_id = f"session-bad-{type(bad).__name__}-{bad}"
     _write_sidecar(session_id, bad)
     result = _check(session_id)
@@ -186,12 +161,6 @@ def test_sidecar_with_non_numeric_percentage_is_silent(bad):
 
 
 def test_unmeasured_never_escalates_however_many_fires():
-    """The regression this file exists to prevent.
-
-    A previous model escalated through UNKNOWN notices at the 1st, 3rd and
-    10th consecutive unmeasured check. With the reader pointed at a path
-    nothing wrote, every session on the machine climbed that ladder all day.
-    Twenty fires, no text, no state key counting toward one."""
     session_id = "session-never-escalates"
     for _ in range(20):
         _bypass_throttle(session_id)
@@ -200,37 +169,20 @@ def test_unmeasured_never_escalates_however_many_fires():
     assert "unmeasured_streak" not in state
 
 
-# ---------------------------------------------------------------------------
-# Silence — measured, but below the orange band.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize("pct", [0, 1, 12, 15, 20, 25, 33, 39, 60, 80, 86])
 def test_no_emission_below_the_orange_band(pct):
-    """PM floor: nothing prescribes a checkpoint short of the orange band's
-    own runway to the resolved threshold. The reported symptom that produced
-    this ruling was agents wrapping up at 15-20% of a 1M window, so those
-    values are pinned explicitly rather than left to a boundary test alone;
-    86 pins the point just short of this fixture's own orange bound
-    (`_orange_bound_pct()` ~= 86.7)."""
     session_id = f"session-quiet-{pct}"
     _write_sidecar(session_id, pct)
     assert _check(session_id) == ""
 
 
 def test_just_under_the_orange_bound_is_silent_and_the_bound_itself_is_not():
-    """The boundary, both sides, same session shape."""
     below = _orange_bound_pct() - 0.1
     at = _orange_bound_pct()
     _write_sidecar("session-below-orange", below)
     assert _check("session-below-orange") == ""
     _write_sidecar("session-at-orange", at)
     assert "INFORMATIONAL" in _check("session-at-orange")
-
-
-# ---------------------------------------------------------------------------
-# The orange band.
-# ---------------------------------------------------------------------------
 
 
 def test_orange_band_fires_informational_and_never_recommends_handoff():
@@ -259,7 +211,7 @@ def test_orange_band_fires_informational_and_never_recommends_handoff():
 @pytest.mark.parametrize("offset", [0, 0.5, 1.5])
 def test_orange_band_spans_up_to_the_red_bound(offset):
     pct = _orange_bound_pct() + offset
-    assert pct < _red_bound_pct()  # keep this parametrization inside the band
+    assert pct < _red_bound_pct()
     session_id = f"session-orange-{offset}"
     _write_sidecar(session_id, pct)
     text = _check(session_id)
@@ -276,11 +228,6 @@ def test_advisory_barks_once():
     assert _check(session_id) == ""
 
 
-# ---------------------------------------------------------------------------
-# The red band.
-# ---------------------------------------------------------------------------
-
-
 def test_the_red_bound_fires_handoff_now():
     session_id = "session-red"
     pct = _red_bound_pct()
@@ -292,10 +239,6 @@ def test_the_red_bound_fires_handoff_now():
 
 
 def test_deep_into_the_red_band_still_fires_handoff_now():
-    """The band moved off progressively narrower runways on 2026-08-30 —
-    auto-compaction was observed firing before the act finished at each of
-    them. Deep into the band must read as already-past the call, same as the
-    bound itself."""
     _write_sidecar("session-red-deep", _red_bound_pct() + 5)
     assert "HANDOFF NOW" in _check("session-red-deep")
     _write_sidecar("session-red-deeper", _red_bound_pct() + 10)
@@ -303,9 +246,6 @@ def test_deep_into_the_red_band_still_fires_handoff_now():
 
 
 def test_red_band_fires_ahead_of_the_resolved_threshold_with_positive_runway():
-    """The red band's own reason to exist: it must fire BEFORE the resolved
-    auto-compact threshold, with enough runway left to bring the task spine
-    current and commit -- not at or past the cut itself."""
     threshold = _threshold_tokens()
     red_bound_tokens = threshold - pad._RED_RUNWAY_TOKENS
     assert red_bound_tokens < threshold
@@ -321,14 +261,10 @@ def test_threshold_matches_the_established_cloud_cut_under_the_env_override(
     `context_window_size` a given venue reports."""
     monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "500000")
     assert pad._auto_compact_threshold_tokens(1_000_000, None) == 467_000
-    # And it agrees exactly with a cloud client that reports its OWN window
-    # as the already-overridden 500,000 figure.
     assert pad._auto_compact_threshold_tokens(500_000, None) == 467_000
 
 
 def test_critical_suppresses_a_later_advisory_for_the_same_session():
-    """A session that jumps straight past the orange bound into the red band
-    must not then emit the orange text on a later fire."""
     session_id = "session-jumped"
     _write_sidecar(session_id, _red_bound_pct() + 10)
     assert "HANDOFF NOW" in _check(session_id)
@@ -345,14 +281,7 @@ def test_critical_barks_once():
     assert _check(session_id) == ""
 
 
-# ---------------------------------------------------------------------------
-# Reporting details.
-# ---------------------------------------------------------------------------
-
-
 def test_percentage_is_the_harness_figure_not_a_recomputation():
-    """The check reports what the harness reported. The occupancy breakdown in
-    the same block would compute a different number; it is not consulted."""
     session_id = "session-verbatim"
     pct = _red_bound_pct() + 10
     _write_sidecar(session_id, pct, context_window_size=1_000_000)
@@ -393,8 +322,6 @@ class TestMiseContinuanceRedBand:
         text = _check(session_id)
         assert "Phase 6" in text
         assert "then" in text and "author the handoff" in text
-        # Not the generic bare-handoff nudge, and not the autonomous
-        # informational variant either -- mise gets its own text.
         assert "This is the point to run /handoff" not in text
         assert "INFORMATIONAL" not in text
 
@@ -409,9 +336,6 @@ class TestMiseContinuanceRedBand:
         assert "Phase 6" not in text
 
     def test_absent_sentinel_gets_the_plain_handoff_text(self, tmp_path):
-        """No sentinel at all: `autonomous_run` is False, so `mise_continuance`
-        never even reads the (nonexistent) file -- the red band falls straight
-        through to the bare HANDOFF NOW text, current behaviour untouched."""
         session_id = "session-mise-no-sentinel"
         _write_sidecar(session_id, 60)
         text = _check(session_id)
@@ -438,18 +362,6 @@ class TestMiseContinuanceRedBand:
 
 
 class TestAutonomousSentinelSuppressesTheRecommendation:
-    """The sentinel's contract (`coordinator/commands/autonomous.md`): context
-    pressure messages become informational-only, with NO `/handoff`
-    recommendation.
-
-    The defect these pin: the composer read the sentinel to APPEND a checkpoint
-    clause while leaving the handoff recommendation in the text it appended to.
-    One condition, two consumers, only one wired -- so the mode delivered the
-    exact nudge it exists to remove, at the point in a long run where a session
-    is most likely to take it. Asserting the absence of the recommendation is
-    the whole point; a test that only checks the appended clause is present
-    passes against the defect.
-    """
 
     def test_advisory_band_carries_no_handoff_recommendation(self, tmp_path, monkeypatch):
         session_id = "session-autonomous"
@@ -460,12 +372,6 @@ class TestAutonomousSentinelSuppressesTheRecommendation:
         assert "heckpoint state to disk" in text
         assert "/handoff" not in text
         assert "ADVISORY" not in text
-        # No "Autonomous run" assertion here any more: since the 2026-08-29
-        # ruling this band is informational for EVERY session, so its text is
-        # mode-neutral by design and naming the sentinel would be a claim the
-        # band does not make. The mode clause is asserted in the red band,
-        # where it is
-        # actually selected -- see TestModeClauseNamesOnlyWhatIsTrue.
 
     def test_critical_band_carries_no_handoff_recommendation(self, tmp_path, monkeypatch):
         session_id = "session-autonomous-red"
@@ -477,21 +383,12 @@ class TestAutonomousSentinelSuppressesTheRecommendation:
         assert "HANDOFF NOW" not in text
 
     def test_the_reading_itself_still_reaches_the_session(self, tmp_path, monkeypatch):
-        """Informational-only is not silent -- suppressing the reading would
-        strip the one fact the session needs to decide when to checkpoint."""
         session_id = "session-autonomous-pct"
         _under_sentinel(tmp_path, monkeypatch, session_id)
         _write_sidecar(session_id, _red_bound_pct() + 10)
         assert "~58% of window used" in _check(session_id)
 
     def test_without_the_sentinel_only_the_critical_band_recommends_handoff(self):
-        """The other half of the branch, as the 2026-08-29 ruling leaves it.
-
-        43 without a sentinel still says HANDOFF NOW -- that is the band the
-        mode key governs and the suppression this class is about. 40 no longer
-        recommends anything to anyone, sentinel or not, so asserting a
-        recommendation there would re-pin the behaviour the ruling removed.
-        """
         _write_sidecar("session-no-sentinel-orange", _orange_bound_pct() + 1)
         assert "/handoff" not in _check("session-no-sentinel-orange")
         _write_sidecar("session-no-sentinel-red", _red_bound_pct() + 10)
@@ -499,10 +396,6 @@ class TestAutonomousSentinelSuppressesTheRecommendation:
 
 
 def test_throttle_holds_between_checks():
-    """Two fires inside the 5-minute window, both in the red band (which is
-    bark-once via `critical_fired` rather than throttle-gated -- see the T15
-    comment in the module under test): the second is suppressed by the
-    bark-once dedup even though the reading would otherwise fire again."""
     session_id = "session-throttled"
     _write_sidecar(session_id, _red_bound_pct() + 5)
     assert "HANDOFF NOW" in _check(session_id)
@@ -531,12 +424,7 @@ def test_fractional_percentage_is_an_exact_token_compare_not_a_rounded_one():
 
 
 def test_half_values_use_bankers_rounding_on_both_surfaces():
-    """`round()` is half-to-even in Python. Pinned rather than corrected: the
-    statusline uses the same `round()`, so the terminal and the advisory
-    agree on the odd case too, and agreement is what the boundary needs.
-    Changing one surface to half-up without the other reintroduces exactly
-    the mismatch this pair fixes."""
-    pct = _orange_bound_pct() + 1.5  # an arbitrary in-band value, not a half itself
+    pct = _orange_bound_pct() + 1.5
     half_display = round(pct)
     _write_sidecar("session-half-even", pct)
     text = _check("session-half-even")
@@ -545,15 +433,6 @@ def test_half_values_use_bankers_rounding_on_both_surfaces():
 
 
 def test_unmeasured_path_writes_no_state_at_all(monkeypatch):
-    """The silent path is the common case for headless sessions and runs on
-    every tool call; it writes nothing.
-
-    No band check ran, so there is no throttle stamp to persist: arming the
-    5-minute window off a call that never read a percentage would let an
-    unmeasured fire suppress the next ORANGE band. `throttle_last_check` is
-    stamped only once a band comparison runs against a usable reading, so the
-    silent path leaves both the state and the disk untouched — no mkstemp, no
-    os.replace, on the hottest path this check has."""
     saves = []
     real_save = pad._save_advisory_state
     monkeypatch.setattr(
@@ -569,10 +448,6 @@ def test_unmeasured_path_writes_no_state_at_all(monkeypatch):
 
 
 def _under_fleet_informational(monkeypatch) -> None:
-    """Select the informational variant the way the FLEET key does — with no
-    session sentinel anywhere. Patches the record read rather than writing a
-    real settings-home file so the test never touches machine-wide state that
-    ~50 concurrent peers resolve against."""
     from coordinator_core.session import mode_resolution
 
     monkeypatch.setattr(
@@ -611,26 +486,12 @@ class TestModeClauseNamesOnlyWhatIsTrue:
         assert "Informational mode:" in text
 
     def test_the_fleet_path_still_suppresses_the_recommendation(self, monkeypatch):
-        """The clause fix must not cost the key its actual job."""
         session_id = "session-clause-fleet-handoff"
         _under_fleet_informational(monkeypatch)
         _write_sidecar(session_id, _red_bound_pct() + 10)
         text = _check(session_id)
         assert "/handoff" not in text
         assert "HANDOFF NOW" not in text
-
-
-# ---------------------------------------------------------------------------
-# The venue split at the red band.
-#
-# DoE-claude docs/decisions/DR-cloud-is-a-venue-where-compaction-is-the-
-# continuation-primitive.md: in a managed-remote container compaction IS the
-# continuation primitive, so the red band names a different terminal there.
-# The suite-wide conftest fixture pins the environment rung to ABSTAIN, i.e.
-# attended-box behaviour; the tests below that exercise the cloud venue
-# re-patch it themselves and say so in their names (that fixture's own
-# instruction).
-# ---------------------------------------------------------------------------
 
 
 def _in_a_cloud_reading(monkeypatch) -> None:
@@ -648,16 +509,6 @@ def _in_a_cloud_reading(monkeypatch) -> None:
 
 
 class TestMiseEnPlaceTerminalIsVenueConditional:
-    """The mise-en-place branch is evaluated BEFORE the informational one, so
-    it decided the terminal on its own and a mise run in a container was told
-    to author the handoff — the one instruction the venue ruling stands down.
-
-    What these pin is the BRANCH's behaviour, not a string: in a cloud reading
-    the mise path must not recommend authoring a handoff by any spelling, and
-    must still name the Phase 6 tail, which is owed in both venues. A test
-    asserting only that some new sentence appears would pass against the
-    defect, because the defective text also contained it.
-    """
 
     def test_a_cloud_reading_never_recommends_authoring_a_handoff(
         self, tmp_path, monkeypatch
@@ -674,10 +525,6 @@ class TestMiseEnPlaceTerminalIsVenueConditional:
     def test_a_cloud_reading_still_owes_the_full_phase_six_tail(
         self, tmp_path, monkeypatch
     ):
-        """Standing down the handoff is not standing down the tail: the review
-        loop, verification, tracker sweep and baton disposition are owed in
-        both venues, and dropping them here would trade one wrong terminal for
-        a wrong body."""
         session_id = "session-mise-cloud-tail"
         _in_a_cloud_reading(monkeypatch)
         _under_sentinel(tmp_path, monkeypatch, session_id, mode="mise-en-place")
@@ -720,9 +567,6 @@ class TestMiseEnPlaceTerminalIsVenueConditional:
     def test_an_attended_box_keeps_the_tail_then_handoff_terminal(
         self, tmp_path, monkeypatch
     ):
-        """The other half, and the reason this is a split rather than a
-        replacement: on a durable attended host `/clear` then `/pickup` makes a
-        successor cheap, so the mise run still authors its handoff."""
         monkeypatch.setattr(
             "coordinator_core.session.mode_resolution."
             "_compaction_default_for_environment",
@@ -739,9 +583,6 @@ class TestMiseEnPlaceTerminalIsVenueConditional:
     def test_an_autonomous_sentinel_is_not_a_mise_sentinel_in_either_venue(
         self, tmp_path, monkeypatch
     ):
-        """The venue split must not blur the two sentinel modes together: an
-        autonomous run in a cloud reading still gets the plain informational
-        text, with no Phase 6 tail it does not owe."""
         session_id = "session-autonomous-cloud"
         _in_a_cloud_reading(monkeypatch)
         _under_sentinel(tmp_path, monkeypatch, session_id, mode="autonomous")
@@ -788,10 +629,6 @@ class TestTheCallerEnvReachesTheModeSeam:
     def test_a_caller_carrying_no_env_resolves_ambiently_not_by_accident(
         self, monkeypatch
     ):
-        """`None` is the standing production case and means "this caller
-        carries none" — the rung still runs, it just has nothing carried to
-        resolve against. It must arrive as `None`, never as an empty mapping
-        that would read as a caller who declared an empty environment."""
         seen = []
 
         def _record(env=None):
@@ -809,9 +646,6 @@ class TestTheCallerEnvReachesTheModeSeam:
         assert seen == [None]
 
     def test_both_mode_reads_carry_the_same_caller_env(self, monkeypatch):
-        """Two keys are read here and both must be told the same thing — a
-        single threaded call site is how the hook stops asking two questions in
-        two different environments."""
         calls = []
         real = pad.resolve_mode
 
@@ -828,18 +662,7 @@ class TestTheCallerEnvReachesTheModeSeam:
         assert all(env is carried for _, env in calls)
 
 
-# ---------------------------------------------------------------------------
-# A reading with no window is no reading. Review: code-reviewer (P1) -- the
-# transcript fallback never carries `context_window_size`, and defaulting it
-# to the largest tier computed both bands against a threshold several times
-# too generous on a smaller one, so the fallback under-fired on exactly the
-# venue it exists to serve.
-# ---------------------------------------------------------------------------
-
-
 def test_windowless_reading_is_silent_when_nothing_names_a_window(monkeypatch):
-    """No `context_window_size`, no env override: the window is unknown, so
-    there is no threshold to compare against and no percentage to report."""
     monkeypatch.delenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", raising=False)
     block = {"total_input_tokens": 900_000}
     assert pad._model_window_tokens(block) is None
@@ -848,22 +671,16 @@ def test_windowless_reading_is_silent_when_nothing_names_a_window(monkeypatch):
 
 
 def test_windowless_reading_resolves_from_the_env_override(monkeypatch):
-    """The cloud shape: the transcript names no window, the override does.
-    The cut is the override's, not the largest tier's."""
     monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "500000")
     assert pad._effective_auto_compact_window(None, None) == 500_000
     assert pad._auto_compact_threshold_tokens(None, None) == 467_000
 
 
 def test_override_is_not_clamped_away_when_no_model_window_is_known(monkeypatch):
-    """Clamping needs something to clamp against. With no model window the
-    override stands rather than resolving to None."""
     monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "200000")
     assert pad._effective_auto_compact_window(None, None) == 200_000
 
 
 def test_a_smaller_tier_gets_its_own_bands(monkeypatch):
-    """The defect in one line: a 200,000-token window must not be measured
-    against a 1,000,000-token threshold."""
     monkeypatch.delenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", raising=False)
     assert pad._auto_compact_threshold_tokens(200_000, None) == 167_000

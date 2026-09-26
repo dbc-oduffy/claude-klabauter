@@ -1,11 +1,3 @@
-"""
-Tests for coordinator_core.ops.check_claude_klabauter_doctor_sentinel.
-
-Port of: check-claude-klabauter-doctor-sentinel.sh (DoE b5a4192c, 2026-07-20)
-Golden-oracle corpus captured against the original bash script (positive +
-negative cases) before authoring this module; assertions below mirror that
-oracle's stdout+exit-code behavior line-for-line.
-"""
 
 from __future__ import annotations
 
@@ -137,11 +129,6 @@ def test_non_dict_json_is_treated_as_malformed(tmp_path, monkeypatch, capsys):
 
 
 def test_tolerant_of_sentinel_lacking_vendor_drift_key(tmp_path, monkeypatch, capsys):
-    """Old-shape sentinel (pre-2026-07-26, no `vendor_drift` key at all) parses
-    identically to today's — this module never requires the additive key.
-
-    Spec backlink: cross-repo/inbox/2026-07-26-doe-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md
-    """
     _write_sentinel(
         tmp_path,
         {
@@ -161,9 +148,6 @@ def test_tolerant_of_sentinel_lacking_vendor_drift_key(tmp_path, monkeypatch, ca
 
 
 def test_tolerant_of_sentinel_carrying_vendor_drift_key(tmp_path, monkeypatch, capsys):
-    """New-shape sentinel (carrying the additive `vendor_drift` key) parses
-    identically to the pre-2026-07-26 shape — this module reads only the four
-    fields it has always read (verdict, hint, red_probes, ts) and ignores the rest."""
     _write_sentinel(
         tmp_path,
         {
@@ -232,9 +216,6 @@ def test_amber_advisory_only_renders_advisory_not_amber(tmp_path, monkeypatch, c
 
 
 def test_red_advisory_only_renders_advisory_not_red(tmp_path, monkeypatch, capsys):
-    """Same distinction for RED/BROKEN: a required=False probe can also drive
-    `overall` to BROKEN (e.g. Claude-klabauter.invoke.smoke's timeout case); advisory_only
-    must suppress the RED band there too."""
     _write_sentinel(
         tmp_path,
         {
@@ -259,8 +240,6 @@ def test_red_advisory_only_renders_advisory_not_red(tmp_path, monkeypatch, capsy
 
 
 def test_amber_required_failure_still_renders_amber(tmp_path, monkeypatch, capsys):
-    """A real required-probe failure (advisory_only absent/False) must render
-    exactly as before this change — no regression to the gating case."""
     _write_sentinel(
         tmp_path,
         {"verdict": "AMBER", "red_probes": ["p1"], "hint": "fix p1", "ts": int(time.time())},
@@ -274,8 +253,6 @@ def test_amber_required_failure_still_renders_amber(tmp_path, monkeypatch, capsy
 
 
 def test_red_required_failure_still_renders_red(tmp_path, monkeypatch, capsys):
-    """A real required-probe RED failure with advisory_only explicitly False
-    must render exactly as before."""
     _write_sentinel(
         tmp_path,
         {

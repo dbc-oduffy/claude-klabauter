@@ -177,15 +177,9 @@ import pytest
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
-#: Package directories the scan walks. Mirrors census row 2's exclusion set.
 _SCAN_ROOT = "coordinator_core"
 _EXCLUDED_DIRS = frozenset({"tests", "testing", "benchmarks", "__pycache__"})
 
-#: The three-phase decomposition of census row 2's single ``RAW`` regex,
-#: kept semantically identical (verified against the 281-module population
-#: at authoring time) but cheaper to run — see the module docstring's cost
-#: section. Literal substrings first (fast, no backtracking); only files
-#: containing ``open(`` or ``mode`` fall through to the narrower regexes.
 _RAW_LITERALS: Tuple[bytes, ...] = (
     b".write_text(",
     b".write_bytes(",
@@ -199,20 +193,13 @@ _RAW_LITERALS: Tuple[bytes, ...] = (
 _RAW_OPEN_RE = re.compile(rb"""open\([^)\n]*['"][wax]b?\+?['"]""")
 _RAW_MODE_RE = re.compile(rb"""mode\s*=\s*['"][wax]""")
 
-#: The claims-explicitly token check. An import line alone does not count —
-#: this looks for an actual call/reference to one of the seam's claim
-#: surfaces, not the module merely mentioning the seam module's name.
 _CLAIM_TOKEN_RE = re.compile(
     rb"declare_write\(|_scope_touch_paths|touch_written_path\(|_SCOPE_TOUCH_PATHS_KEY"
 )
 
 #: A module-level ``WRITE_SURFACE = ...`` / ``WRITE_SURFACE: ... = ...``
-#: declaration, scoped by the caller to ``coordinator_core/install/`` only.
 _WRITE_SURFACE_RE = re.compile(rb"^WRITE_SURFACE\s*[:=]", re.M)
 
-#: The closed category set. Two are mechanically enforced
-#: (``claims-explicitly``, ``to-fix``); the other four are unchecked labels
-#: per the module docstring.
 _CATEGORIES = frozenset(
     {
         "claims-explicitly",
@@ -224,8 +211,6 @@ _CATEGORIES = frozenset(
     }
 )
 
-#: The two rule-covered seam/primitive modules (the seam itself, plus the
-#: two primitives it delegates to). Exact repo-relative POSIX paths.
 _RULE_SEAM_MODULES = frozenset(
     {
         "coordinator_core/session/claimed_write.py",
@@ -236,78 +221,11 @@ _RULE_SEAM_MODULES = frozenset(
 
 #: The install-prefix a module must sit under for the ``WRITE_SURFACE`` rule
 #: to apply. A module outside this prefix that declares ``WRITE_SURFACE`` is
-#: NOT rule-covered — see the module docstring.
 _INSTALL_PREFIX = "coordinator_core/install/"
 
-#: ============================================================================
-#: The register. Seeded from state/audits/2026-09-11-state-writer-census.md
-#: (C3) at this chunk's commit — 281 modules total: 3 rule-covered
 #: (seam/primitive), 15 rule-covered (WRITE_SURFACE/install), and 263 with an
-#: explicit register entry below (47 claims-explicitly, 28 outside-repo, 3
-#: git-internal, 129 in-repo-non-state, 56 to-fix; 0 ignored-target at this
-#: commit — no census row needed it). First re-run of the scan at this
-#: chunk's commit reconciled with C3's ref: no new member landed since C3, so
-#: this register and ceiling are C3's table verbatim.
-#: C5 (migration batch A) moved coordinator_core/ops/goal_append.py's state
-#: write onto the seam (session/claimed_write.py::append_claimed_line); the
-#: module's raw-write bytes are gone, so it no longer matches the scan
-#: vocabulary at all and its entry/ceiling membership are deleted rather than
-#: recategorized — 262 explicit entries, 55 to-fix, population 280.
-#: C6 (migration batch B) moved
-#: coordinator_core/bash_guards/block_subagent_destructive_action.py's
-#: `_log_fail_open` append onto the seam (session/claimed_write.py::
-#: append_claimed_line, entry wrapped once at bash_guards/dispatch.py::main
-#: via cli_entry.recording_declared_writes). The module keeps a residual raw
-#: write (`_rotate_fail_open_log_if_oversized`'s `os.replace(` rotation of
-#: the same settings-home-rooted log), so per this batch's body its entry is
 #: RECATEGORIZED (never deleted) to the residual's own category —
-#: outside-repo, matching `_alternative_liveness.py`'s identical
-#: settings-home-rotation shape — rather than swapped to a category that
-#: describes the seam write: 262 explicit entries, 54 to-fix.
-#: C6 also moved
-#: coordinator_core/write_guards/validate_frontmatter_schema_deny.py's
-#: `_capture_guard_forensics` write onto the seam
-#: (session/claimed_write.py::replace_text, entry wrapped once at
-#: write_guards/engine.py::evaluate_payload_json via cli_entry.
-#: recording_declared_writes -- the one entry both `__main__.main()` and the
-#: out-of-repo PreToolUse dispatchers converge on). No residual raw-write
-#: bytes remain, so its entry/ceiling membership are deleted rather than
-#: recategorized: 261 explicit entries, 53 to-fix, population 280.
-#: C7 (migration batch C: every other package's to-fix writers onto the
-#: seam) moved ten modules' state writes onto the seam
-#: (session/claimed_write.py::append_claimed_line/replace_text/
-#: create_exclusive) — coordinator_core/backlog_grind_assemble/apply.py,
-#: coordinator_core/distill/wiki_log_migrate.py,
-#: coordinator_core/engine_provenance_counter.py,
-#: coordinator_core/fact_contract_gate/engine_gap_ratchet.py,
-#: coordinator_core/group_em/send_pass.py,
-#: coordinator_core/roadmap/blitz_land.py,
-#: coordinator_core/telemetry/cost_census.py,
-#: coordinator_core/tracker_store.py, and
-#: coordinator_core/workstream_complete/directives_commit_tail.py — plus
-#: coordinator_core/baton_assemble/__init__.py, whose only "raw-write"
-#: bytes were two docstring mentions of `open(out_path, "w", ...)` (a scan
-#: false positive, not a real write site); all ten no longer match the scan
-#: vocabulary and their entries/ceiling membership are deleted. Eight more
 #: to-fix members held no actual `state/` write and are RECATEGORIZED
-#: (never deleted) to the category their real write target names:
-#: coordinator_core/ceremony_common/_phantom_sweep_providers.py and
-#: coordinator_core/percolate/engine.py + percolate/inject.py write only
-#: under a tmp_path fixture / the percolate publish destination tree (never
-#: a tracked path in this repo) — outside-repo;
-#: coordinator_core/commit_ledger/store.py writes to
-#: <git-common-dir>/coordinator-sessions/.commit-ledger/, and
-#: coordinator_core/contract/emit_memo_schema.py,
-#: coordinator_core/frontmatter/author_dependence.py, and
-#: coordinator_core/orientation/expired_grant_signal.py write a generated
-#: schema file, a committed golden fixture, and a best-effort
-#: .coordinator-local/cache/ index respectively — none of these five is
-#: `state/`, so in-repo-non-state; coordinator_core/session/claims.py's
-#: claim-directory bookkeeping is session-internal (routing it through the
-#: seam would recurse through the very claim machinery the seam feeds, per
-#: this batch's row body) — git-internal. Population unchanged by a
-#: recategorization: 251 explicit entries, 35 to-fix, population 270.
-#: ============================================================================
 
 _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/async_hook_status.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: record_failure'),
@@ -563,9 +481,6 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/write_guards/guard_doctrine_surface_edits.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _write_repo_identity_advisory_log'),
 }
 
-#: Frozen ceiling of ``to-fix`` register members. This is C3's `to-fix` list
-#: verbatim (56 modules) — the migration list C5-C7 shrink. Can only shrink;
-#: see "Ceiling shrink is review-time, not mechanical" above.
 _TO_FIX_CEILING: FrozenSet[str] = frozenset({
     'coordinator_core/bash_guards/_dialect.py',
     'coordinator_core/bash_guards/_write_bump_stand_down.py',
@@ -604,17 +519,10 @@ _TO_FIX_CEILING: FrozenSet[str] = frozenset({
 })
 
 
-#: The asserted budget for the live scan (AC6: "at or below 200ms"). The
-#: measured figure at authoring time was ~184ms (mean of 3 runs); this is
-#: that figure plus a ~16ms stated headroom for host variance, never the
-#: repo's 500ms brightline.
 _SCAN_MS_BUDGET = 200.0
 
 
 def _is_raw_writer(content: bytes) -> bool:
-    """The three-phase prefiltered vocabulary check — see module docstring's
-    cost section. Semantically equivalent to census row 2's single-regex
-    ``RAW`` pattern over the same 281-module population."""
     if any(lit in content for lit in _RAW_LITERALS):
         return True
     if b"open(" in content and _RAW_OPEN_RE.search(content):
@@ -680,15 +588,10 @@ def _evaluate(
     register: Dict[str, Tuple[str, str]],
     ceiling: FrozenSet[str],
 ) -> List[str]:
-    """The gate's core check, parametrized over root/register/ceiling so the
-    AC6 proof tests can drive it against a synthetic tree without touching
-    the real corpus. Returns a list of violation strings; empty means green.
-    """
     violations: List[str] = []
     found = scan_raw_writers(root)
     found_set = set(found)
 
-    # 1. Every flagged module is covered by a rule or a register entry.
     for rel in found:
         content = (root / rel).read_bytes()
         if _rule_covers(rel, content) is not None:
@@ -696,14 +599,12 @@ def _evaluate(
         if rel not in register:
             violations.append(f"undispositioned: {rel}")
 
-    # 2. Every register entry: closed category, non-blank reason.
     for rel, (category, reason) in register.items():
         if category not in _CATEGORIES:
             violations.append(f"unknown category {category!r}: {rel}")
         if not reason.strip():
             violations.append(f"blank reason: {rel}")
 
-    # 3. Stale register entries: module gone, or no longer a raw writer.
     for rel in register:
         target = root / rel
         if not target.is_file():
@@ -712,24 +613,21 @@ def _evaluate(
         if rel not in found_set:
             violations.append(f"stale entry (no raw token): {rel}")
 
-    # 4. claims-explicitly: token-checked.
     for rel, (category, _reason) in register.items():
         if category != "claims-explicitly":
             continue
         target = root / rel
         if not target.is_file():
-            continue  # already reported as stale above
+            continue
         content = target.read_bytes()
         if not _CLAIM_TOKEN_RE.search(content):
             violations.append(f"claims-explicitly without claim token: {rel}")
 
-    # 5. to-fix entries must be a ceiling subset.
     to_fix_entries = {rel for rel, (cat, _r) in register.items() if cat == "to-fix"}
     for rel in to_fix_entries:
         if rel not in ceiling:
             violations.append(f"to-fix entry outside ceiling: {rel}")
 
-    # 6. Ceiling members must have a to-fix entry (stale-ceiling check).
     for rel in ceiling:
         if rel not in to_fix_entries:
             violations.append(f"stale ceiling member (no to-fix entry): {rel}")
@@ -737,17 +635,7 @@ def _evaluate(
     return violations
 
 
-# ==============================================================================
-# The live gate
-# ==============================================================================
-
-
 def test_the_live_gate_is_green():
-    """AC6: the gate is green at close-out. Every raw-writing module under
-    ``coordinator_core`` is covered by a rule or a register entry; the
-    register carries no stale/blank/mis-categorised entries; every
-    claims-explicitly entry's claim token is present; the ceiling and the
-    to-fix set are exact mirrors of each other."""
     violations = _evaluate(_REPO_ROOT, _DISPOSITIONS, _TO_FIX_CEILING)
     assert violations == [], (
         "The disposition gate is RED. Every raw-writing module needs a rule "
@@ -758,12 +646,6 @@ def test_the_live_gate_is_green():
 
 
 def test_to_fix_ceiling_is_an_exact_mirror_of_the_to_fix_set():
-    """AC4 precondition, and the shrink-only discipline's other half: the
-    ceiling and the register's to-fix entries name exactly the same modules
-    — never a superset either way. (The mechanical enforcement of this is
-    split across _evaluate's rules 5 and 6; this test states the invariant
-    directly so a future reader does not have to reconstruct it from two
-    separate violation strings.)"""
     to_fix_entries = {rel for rel, (cat, _r) in _DISPOSITIONS.items() if cat == "to-fix"}
     assert to_fix_entries == _TO_FIX_CEILING
 
@@ -793,12 +675,6 @@ def test_at_close_out_the_ceiling_is_empty():
 
 
 def test_scan_cost_is_at_or_below_the_budget():
-    """AC6: 'The live scan's process time is asserted against the figure C8
-    measured plus the headroom stated in the gate's docstring... The
-    asserted figure is at or below 200ms.' This gate's own scan spawns no
-    subprocess (the git-grep variant was measured for comparison but not
-    kept — see module docstring), so there is no child process time to
-    add."""
     t0 = time.process_time()
     scan_raw_writers(_REPO_ROOT)
     elapsed_ms = (time.process_time() - t0) * 1000.0
@@ -807,13 +683,6 @@ def test_scan_cost_is_at_or_below_the_budget():
         "(measured figure + headroom, per this file's module docstring). Cut "
         "the walk's cost; do not loosen this assertion."
     )
-
-
-# ==============================================================================
-# AC6 proof tests — synthetic tmp_path trees, both directions where one
-# applies. Each test builds a minimal ``coordinator_core/...``-shaped tree
-# under tmp_path and drives ``_evaluate`` directly, never the live register.
-# ==============================================================================
 
 
 def _write(root: pathlib.Path, rel: str, text: str) -> None:
@@ -925,10 +794,6 @@ def test_the_same_write_surface_module_outside_install_goes_red(tmp_path):
 
 
 def test_a_migrated_module_that_regains_a_raw_write_goes_red(tmp_path):
-    """AC5's per-module perturbation, restated at the gate's own grain: a
-    module that had its register entry deleted (because a batch migrated it
-    onto the seam) but regains a raw write with no new entry must go RED —
-    otherwise the gate would not be doing its ratchet job during C5-C7."""
     _write(
         tmp_path,
         "coordinator_core/session/claimed_write.py",
@@ -940,14 +805,10 @@ def test_a_migrated_module_that_regains_a_raw_write_goes_red(tmp_path):
         "from coordinator_core.session.claimed_write import declare_write\n"
         "def write_something(p):\n    declare_write(p)\n",
     )
-    # Fully migrated: only the seam call, no raw-write vocabulary token at
-    # all, so the scan does not even flag this module. No register entry
-    # needed.
     violations_before = _evaluate(tmp_path, {}, frozenset())
     assert violations_before == []
     assert "coordinator_core/migrated_then_regressed.py" not in scan_raw_writers(tmp_path)
 
-    # Regression: a new raw write lands with no register entry.
     _write(
         tmp_path,
         "coordinator_core/migrated_then_regressed.py",

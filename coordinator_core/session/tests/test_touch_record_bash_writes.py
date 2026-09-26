@@ -1,11 +1,3 @@
-"""
-coordinator_core.session.tests.test_touch_record_bash_writes — coverage for
-C2's commit-time reconciliation of a write that never passed through the
-Write/Edit hook (a Bash heredoc, ``sed -i``, ``python3 -c``, etc.).
-
-Spec backlink:
-docs/plans/2026-08-27-a-pathspec-is-not-a-scope.md § C2
-"""
 
 from __future__ import annotations
 
@@ -41,9 +33,6 @@ def _read_events(sink: Path):
     return events
 
 
-# --- session_started_at_epoch -----------------------------------------------
-
-
 def test_session_started_at_epoch_reads_the_stamped_file(tmp_path):
     session_dir = tmp_path / "sess"
     _write_started_at(session_dir, "2026-08-27T00:00:00Z")
@@ -68,15 +57,11 @@ def test_session_started_at_epoch_none_when_blank(tmp_path):
     assert session_started_at_epoch(session_dir) is None
 
 
-# --- reconcile_untouched_bash_writes -----------------------------------------
-
-
 def test_attributes_a_file_modified_after_session_start(tmp_path):
     worktree = tmp_path / "work"
     worktree.mkdir()
     session_dir = tmp_path / "sess"
 
-    # started_at well in the past.
     _write_started_at(session_dir, "2000-01-01T00:00:00Z")
 
     bash_written = worktree / "a.py"
@@ -109,8 +94,6 @@ def test_does_not_attribute_a_file_older_than_session_start(tmp_path):
     pre_existing = worktree / "old.py"
     pre_existing.write_text("x = 1\n", encoding="utf-8")
 
-    # started_at is in the FUTURE relative to the file's mtime, so the file
-    # necessarily predates this session and must never be attributed to it.
     future_iso = time.strftime(
         "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600)
     )
@@ -151,13 +134,10 @@ def test_skips_a_candidate_that_no_longer_exists_on_disk(tmp_path):
 
 
 def test_no_window_short_circuits_to_empty_without_attributing_anything(tmp_path):
-    """No ``started_at`` file means no window is available -- the call must
-    resolve to "attribute nothing", the same fail-toward-nothing posture as
-    an unreadable candidate, rather than guessing a window."""
     worktree = tmp_path / "work"
     worktree.mkdir()
     session_dir = tmp_path / "sess-no-window"
-    session_dir.mkdir()  # no started_at file
+    session_dir.mkdir()
 
     real_write = worktree / "real.py"
     real_write.write_text("x = 1\n", encoding="utf-8")
@@ -202,10 +182,6 @@ def test_multiple_candidates_mixed_attribution(tmp_path):
 
 
 def test_appends_via_the_one_append_mechanism_not_a_bare_open(tmp_path):
-    """Negative-spec check: attribution must land through
-    ``atomic_append.append_line`` (exercised transitively via
-    ``append_event``), never a second, ad-hoc write path -- the resulting
-    file must decode cleanly through the module's own reader."""
     worktree = tmp_path / "work"
     worktree.mkdir()
     session_dir = tmp_path / "sess"

@@ -81,27 +81,15 @@ from coordinator_core.ops.fleet._common import (
 
 _LOG = logging.getLogger(__name__)
 
-# Terminality predicate for bugs.
 _TERMINAL_STATUS = frozenset({"closed"})
 
-# Stage-1 substring needle — matches the plain-YAML `status: closed` line.
 _STAGE1_NEEDLE = "status: closed"
 
 # Filename date-prefix pattern: YYYY-MM-DD-slug.yaml
 _DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2})-\d{2}-")
 
 
-# ---------------------------------------------------------------------------
-# Plain-YAML reader — bug-backlog files are plain YAML (no --- fences)
-# ---------------------------------------------------------------------------
-
 def _read_plain_yaml(path: Path) -> dict:
-    """Read a plain-YAML bug-backlog file and return its content as a dict.
-
-    Returns {} on any parse error, missing file, or non-mapping content — the
-    `created:` fallback in `_archive_month` and every stage-2 caller degrade
-    gracefully when this returns {}.
-    """
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             data = yaml.safe_load(fh)
@@ -112,7 +100,6 @@ def _read_plain_yaml(path: Path) -> dict:
 
 
 def _is_terminal(status: Optional[str]) -> bool:
-    """Return True iff the bug's status is in the terminal set (status: closed)."""
     return status in _TERMINAL_STATUS
 
 
@@ -142,12 +129,7 @@ def _archive_month(path: Path) -> str:
     return "unknown"
 
 
-# ---------------------------------------------------------------------------
-# Two-stage discovery
-# ---------------------------------------------------------------------------
-
 def _enumerate_bugs(worktree_root: Path) -> List[Path]:
-    """Return all *.yaml files under state/bug-backlog/ sorted by name."""
     bug_dir = worktree_root / "state" / "bug-backlog"
     if not bug_dir.is_dir():
         return []
@@ -155,16 +137,6 @@ def _enumerate_bugs(worktree_root: Path) -> List[Path]:
 
 
 def _stage1_frontmatter_bounded_scan(path: Path) -> bool:
-    """Cheap stage-1 candidate test: substring-match `status: closed` on a
-    frontmatter-bounded read.
-
-    Stop reading at the closing `---` line for a file that opens with one; for
-    a file with no leading fence (every state/bug-backlog/*.yaml entry on this
-    corpus), read to EOF — still bounded by the file's own length, never a
-    directory-wide full-corpus yaml.safe_load. This is candidate discovery
-    ONLY: a True result is NOT confirmation, and stage 2 (`yaml.safe_load`)
-    is the sole authority on the parsed `status` value.
-    """
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             first_line = fh.readline()
@@ -172,12 +144,10 @@ def _stage1_frontmatter_bounded_scan(path: Path) -> bool:
             if fence_opened:
                 for line in fh:
                     if line.strip() == "---":
-                        return False  # closing fence reached, no match inside it
+                        return False
                     if _STAGE1_NEEDLE in line:
                         return True
                 return False
-            # No leading fence: needle may be on the first line itself, then
-            # continue reading the rest of the (typically small) file.
             if _STAGE1_NEEDLE in first_line:
                 return True
             for line in fh:
@@ -190,54 +160,32 @@ def _stage1_frontmatter_bounded_scan(path: Path) -> bool:
 
 
 def _discover_candidates(worktree_root: Path) -> List[Path]:
-    """Two-stage discovery: stage-1 cheap substring scan over the whole
-    corpus, stage-2 `yaml.safe_load` confirm on stage-1 candidates only.
-
-    Returns paths confirmed terminal (status: closed) by stage 2. A file
-    whose YAML fails to parse, or that parses but carries no `status` key,
-    never reaches this return set — it is refused, not archived on the
-    stage-1 substring match alone.
-    """
     stage1_candidates = [p for p in _enumerate_bugs(worktree_root) if _stage1_frontmatter_bounded_scan(p)]
 
     confirmed: List[Path] = []
     for path in stage1_candidates:
         meta = _read_plain_yaml(path)
         if not meta:
-            continue  # unparseable, or not a mapping — fail-closed, refused
+            continue
         status = meta.get("status")
         if status is None:
-            continue  # no status key — fail-closed, refused
+            continue
         if _is_terminal(status):
             confirmed.append(path)
     return confirmed
 
 
 def _candidate_dict(path: Path, worktree_root: Path) -> dict:
-    """Build a candidate entry dict for a terminal bug file (dry_run:true output).
-
-    contract §2.1 :176-215 — fields: id, title, status, family, terminal_since, note.
-    - id: repo-relative source path (the wire key, matches Channel-B provenance.path).
-    - title: from frontmatter `title:` field; falls back to filename stem.
-    - status: from frontmatter (should be "closed").
-    - family: "bug".
-    - terminal_since: null — bug entries do not carry a date-of-closure; degrade gracefully.
-    - note: null for bugs (handoff-only field, contract §2.1).
-    """
     meta = _read_plain_yaml(path)
     return {
         "id": rel_id(path, worktree_root),
         "title": meta.get("title") or path.stem,
         "status": meta.get("status") or "closed",
         "family": "bug",
-        "terminal_since": None,  # not tracked in bug entries; degrade gracefully per contract
+        "terminal_since": None,
         "note": None,
     }
 
-
-# ---------------------------------------------------------------------------
-# Handler
-# ---------------------------------------------------------------------------
 
 @register_op("fleet.prune_closed_bugs")
 async def _handler(params: dict, repo_root=None) -> dict:
@@ -259,13 +207,11 @@ async def _handler(params: dict, repo_root=None) -> dict:
                    params.repo_root is the D3 consistency check only — NOT the
                    worktree-root resolution source.
     """
-    # ---- param validation (mode fail-closed, candidate_ids required on act) ----
     result = validate_params(params)
     if isinstance(result, dict):
-        return result  # exit_code:1 setup-error envelope
+        return result
     mode, dry_run, candidate_ids = result
 
-    # ---- D3 repo_root consistency check (contract §3.3) ----
     if repo_root is not None:
         common_dir = Path(repo_root)
         mismatch = check_repo_root(params.get("repo_root"), common_dir)
@@ -273,8 +219,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
             return build_setup_error_result(mode, dry_run, mismatch)
         worktree = main_worktree_root(common_dir)
     else:
-        # repo_root is None only in unit tests that bypass the keying table.
-        # Fail loudly in production; test fixtures supply an explicit value.
         _LOG.error(
             "fleet.prune_closed_bugs: repo_root is None — "
             "_OP_KEY_SCOPE='common_dir' should always supply it in production"
@@ -284,28 +228,21 @@ async def _handler(params: dict, repo_root=None) -> dict:
             "repo_root is None; cannot derive worktree root (keying-table misconfiguration)",
         )
 
-    # ---- dry_run:true — preview (read-only; mutates nothing) ----
     if dry_run:
         confirmed = _discover_candidates(worktree)
         candidates = [_candidate_dict(path, worktree) for path in confirmed]
         return build_dry_run_result(mode, candidates)
 
-    # ---- dry_run:false — act ----
-    # candidate_ids guaranteed non-empty by validate_params.
     acted: List[dict] = []
     skipped: List[dict] = []
     failed: List[dict] = []
     moves: List[Move] = []
 
-    # Resolve the allowed root once outside the loop (path-traversal containment).
     bug_dir_safe = (worktree / "state" / "bug-backlog").resolve()
 
     for cid in candidate_ids:
         src = worktree / cid
 
-        # Path-traversal containment guard: reject candidate_id that resolves
-        # outside state/bug-backlog/ — covers absolute-path override and ../
-        # traversal. Must run BEFORE any file read on src.
         resolved_src = src.resolve()
         if not resolved_src.is_relative_to(bug_dir_safe):
             _LOG.warning(
@@ -316,15 +253,10 @@ async def _handler(params: dict, repo_root=None) -> dict:
             continue
         src = resolved_src
 
-        # Already-archived (source gone): idempotent replay per DR-211 D2(i).
         if not src.exists():
             skipped.append({"id": cid, "reason": "already-archived"})
             continue
 
-        # D1 act-time re-verify: re-read status at T3 (contract §3.1 :231-267).
-        # Fail-closed: unparseable or missing `status` refuses the same as a
-        # non-terminal status — never archived on the earlier discovery match
-        # alone.
         meta = _read_plain_yaml(src)
         status_at_t3 = meta.get("status") if meta else None
         if not _is_terminal(status_at_t3):
@@ -335,14 +267,9 @@ async def _handler(params: dict, repo_root=None) -> dict:
             skipped.append({"id": cid, "reason": f"drifted-open: status={status_at_t3!r}"})
             continue
 
-        # Derive archive destination path.
         ym = _archive_month(src)
         dst = worktree / "archive" / "bug-backlog" / ym / src.name
 
-        # Three-way destination disposition, decided by the CALLER above the
-        # mover seam: differing file at dest -> refuse; byte-identical twin ->
-        # converge (force=True); absent -> normal move. A candidate decided
-        # "skip" never becomes a Move and never reaches archive_and_commit.
         force = False
         if dst.exists():
             if not _is_identical_duplicate(src, dst):
@@ -360,11 +287,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
         moves.append(Move(src=src, dst=dst, candidate_id=cid, force=force))
 
     if moves:
-        # TOCTOU note: a narrow window exists between the per-candidate D1
-        # terminality re-verify above and the in-process rename inside
-        # archive_and_commit below. This is the accepted DR-211 D1-at-act
-        # residual; the T3 re-verify already narrows the window to the
-        # call-site gap (same shape as the sibling archive ops).
         commit_subject = (
             f"fleet: prune {len(moves)} closed bug "
             f"{'entry' if len(moves) == 1 else 'entries'} [fleet.prune_closed_bugs]"

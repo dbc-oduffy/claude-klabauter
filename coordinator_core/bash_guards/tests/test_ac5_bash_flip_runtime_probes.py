@@ -82,11 +82,6 @@ class TestBlockNoncanonicalBranchCreation:
         def _boom(payload):
             raise RuntimeError("simulated crash inside block_noncanonical_branch_creation")
 
-        # `dispatch.py` binds each guard's `check` at IMPORT time
-        # (`from ... import check as _check_X`) -- the chain's own lambda
-        # closures reference that bound name, not `module.check`, so
-        # patching `module.check` alone leaves the registered chain
-        # unaffected. Patch the name dispatch actually calls.
         monkeypatch.setattr(dispatch, "_check_block_noncanonical_branch_creation", _boom)
         out = _evaluate(_payload_dict("git branch bad-name"))
         assert out is None, (

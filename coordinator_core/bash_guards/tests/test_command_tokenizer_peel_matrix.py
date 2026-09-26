@@ -126,21 +126,10 @@ class TestWrapperPeeling:
         assert r.confidence is ct.ResolutionConfidence.RESOLVED
 
     def test_sudo_own_flags_are_peeled_to_reach_the_wrapped_command(self):
-        # Deliberate flip, 2026-07-30 (this test's prior body asked for exactly
-        # that: it pinned the limitation "so a future fix changes this test
-        # deliberately, not by accident"). `sudo` had no arg-flags entry, so
-        # the walk stopped at `-u` and command position never reached `git` --
-        # a live guard bypass, not a cosmetic gap: `sudo -u root git stash
-        # drop` reached allow against `block_stash_destruction`, and the
-        # `git worktree add` equivalent against the worktree ban. `sudo` now
-        # has both an arg-flag and a boolean-flag table.
         r = ct.resolve_command_positions("sudo -u root git push")[0]
         assert r.tokens[0] == "git"
 
     def test_sudo_valueless_flag_is_peeled_too(self):
-        # A valueless flag stopped the walk just as hard as a value-taking
-        # one, so the boolean table is load-bearing on its own -- an arg-flag
-        # table alone would have left `sudo -E <cmd>` open.
         r = ct.resolve_command_positions("sudo -E git push")[0]
         assert r.tokens[0] == "git"
 
@@ -167,7 +156,6 @@ class TestNestedCommandSubstitution:
         results = ct.resolve_command_positions("echo $(echo $(git status))")
         heads = [r.tokens[0] for r in results if r.tokens]
         assert "git" in heads
-        # innermost substitution recurses one level deeper than the outer one
         depths = {tuple(r.tokens): r.depth for r in results}
         assert depths[("git", "status")] == 2
         assert depths[("echo",)] == 1 or any(
@@ -277,9 +265,6 @@ class TestUnresolvedConfidence:
 
 class TestConfidenceReportedNotConsumed:
     def test_confidence_is_a_plain_enum_value_not_wired_to_anything(self):
-        # This is an intentional no-op assertion documenting the contract:
-        # ResolutionConfidence carries no side effects and nothing in this
-        # module branches guard behaviour on it.
         for member in ct.ResolutionConfidence:
             assert isinstance(member.value, str)
 
@@ -369,10 +354,6 @@ class TestRewriteFacingIsNarrowerAndIndependent:
             assert ct.is_rewrite_facing_wrapper(word) is False
 
     def test_time_present_in_rewrite_facing(self):
-        # Precedent named in this task's brief: `time` was dropped from an
-        # earlier draft and is present in every on-disk allowlist that
-        # includes it -- pinning it explicitly so a future edit can't drop
-        # it silently again.
         assert "time" in ct.REWRITE_FACING_WRAPPERS
 
 
@@ -401,9 +382,6 @@ class TestWrapperTableEnumeration:
             set(block_subagent_commit._PASSTHROUGH_WRAPPERS_FOR_COMMIT),
             set(block_subagent_destructive_action._PASSTHROUGH_WRAPPERS),
         ]
-        # _sentinel_creation_guard's copy is a class attribute, not a
-        # module-level name -- included by inspection, not by import, to
-        # keep this test from reaching into a class internal unnecessarily.
         sentinel_literal = {
             "sudo", "command", "time", "exec", "nice", "nohup", "ionice",
             "timeout", "stdbuf", "which", "type", "setsid", "strace", "doas",
@@ -436,14 +414,6 @@ class TestWrapperTableEnumeration:
 
 
 class TestRedirectionOperatorJoining:
-    """`&` is in `shlex`'s `punctuation_chars`, so a redirection containing
-    one (`2>&1`, `>&2`, `&>file`) lexed as a bare `&` token and every
-    segmenter in the package read it as a command separator. Confirmed live
-    2026-08-04 via `block_subagent_commit`: a `coordinator:git-commit-agent`
-    invocation ending in `2>&1` counted as two segments, failed that guard's
-    single-segment allow precondition, and was denied with a message blaming
-    its (correct) pathspec.
-    """
 
     def test_stderr_to_stdout_is_one_token(self):
         assert ct.tokenize_full_command("foo bar 2>&1") == ["foo", "bar", "2>&1"]
@@ -488,16 +458,6 @@ class TestRedirectionOperatorJoining:
         ]
 
     def test_spaced_ampersand_before_a_redirect_is_two_commands(self):
-        """`cmd & >file other` is TWO commands — `&` backgrounds the first and
-        the second genuinely runs — while `cmd &>file` is one. `shlex` lexes
-        both identically once whitespace is gone, so this pair is the whole
-        reason masking happens on the raw text.
-
-        Security-critical: collapsing the spaced form to one segment let a
-        compound command satisfy `block_subagent_commit`'s single-segment
-        precondition and ride through the git-commit-agent allow branch
-        (found 2026-08-04 by security audit).
-        """
         two = ct.segments_from_tokens_simple(
             ct.tokenize_full_command("mybinary -m x -- a.py & >/dev/null secondbinary -a foo")
         )
@@ -527,8 +487,6 @@ class TestRedirectionOperatorJoining:
         ]
 
     def test_no_sentinel_leaks_into_any_token(self):
-        """The mask is an implementation detail — no caller may ever observe
-        it, including on the quoted-data path where it is never applied."""
         for command in (
             "foo &>/tmp/out.log",
             "foo & >/tmp/out.log bar",
@@ -539,12 +497,6 @@ class TestRedirectionOperatorJoining:
             assert all(ct._AMP_REDIRECT_SENTINEL not in token for token in tokens)
 
     def test_the_verbatim_denied_invocation_is_one_segment(self):
-        """The exact shape denied on 2026-08-04, pinned so the incident cannot
-        recur through a tokenizer change alone: a redirect-terminated
-        `scoped-git-commit` must read as ONE segment, because that count is
-        what `block_subagent_commit`'s allow predicate gates on before it ever
-        reaches the ownership check.
-        """
         denied = (
             'scoped-git-commit -m "C1: subject" '
             "-- src/a.py src/a.test.py 2>&1"

@@ -111,67 +111,22 @@ def _rewrite_command(hso):
     return updated["command"]
 
 
-# ---------------------------------------------------------------------------
-# Section 1 -- the three platform-conditioned shape guards (BX-6/7/8),
-# message-vs-trigger correspondence on BOTH platform legs.
-# ---------------------------------------------------------------------------
-
-
 class TestGrepViaBashMessageAccuracy:
-    """guard_grep_via_bash.check -- BX-6, narrowed by H11 (2026-07-30,
-    docs/plans/2026-07-30-os-aware-guard-advisory-defaults.md).
-
-    Classification note for every test rewritten in this class (H11
-    dispatch, 2026-07-30): the guard's substitutable/deny branch
-    (`_platform_verdict_for_shape`) was REMOVED (H11(a)) because it fired
-    on the same set `grep-via-bash-rewrite` already claims and produced 0
-    denies on either platform -- provably unreachable in production. Every
-    test below that used to exercise a deny, or an advisory for a command
-    with no genuine GNU-only construct or partial-rewrite outlet, covered
-    behaviour that was deliberately deleted, not merely reworded -- see
-    each test's own (i)/(ii) note.
-    """
 
     def test_substitutable_residue_never_fires_on_either_host(self):
         # (i) OBSOLETE, not repointed: this command used to trip a
-        # Windows-only deny / macOS-only advisory (the two tests this one
-        # replaces, `test_substitutable_residue_deny_names_grep_shape_and_
-        # real_rewrite` and `test_advisory_leg_same_platform_conditioning`).
-        # That branch is gone (H11(a)) -- `grep-via-bash-rewrite`,
-        # registered earlier in dispatch.py's chain, already claims this
         # exact command as an ADVISORY_REWRITE, so this guard has nothing
-        # left to say about it on ANY host. Kept (not deleted outright) as
-        # a regression guard: if the deny/advise branch is ever
-        # accidentally reintroduced, this is the test that catches it.
         cmd = 'grep -rn "TODO" src/'
         assert guard_grep_via_bash.check(_payload(cmd), host_is_windows=True) is None
         assert guard_grep_via_bash.check(_payload(cmd), host_is_windows=False) is None
 
     def test_composed_pipeline_with_only_portable_flags_stays_silent(self):
         # (i) OBSOLETE, not repointed: this command used to name "runs as
-        # part of a larger shell chain" in a ~2.2KB composed advisory.
-        # H11(b)/(c) narrowed the composed-advisory path to only a real
-        # partial-pipe rewrite or a genuine GNU-only construct -- neither
-        # applies here (`-r`/`-n` are portable, and `grep ... | wc -l` is
-        # exactly the eligible-for-partial-rewrite shape, exercised
-        # separately below where it now offers a REAL alternative instead
-        # of prose). This command uses `;`, which `_partial_pipe_rewrite`
-        # never widens to cover (see that function's own docstring), so
-        # per design-as-offers the honest output is silence.
         cmd = 'grep -rn "TODO" src/ ; echo done'
         assert guard_grep_via_bash.check(_payload(cmd), host_is_windows=True) is None
 
     def test_two_segment_pipe_offers_a_real_partial_rewrite_not_prose(self):
         # (ii) STILL MEANINGFUL, repointed: this is the exact command the
-        # retired `test_composed_pipeline_advisory_names_chained_not_
-        # untranslatable` used, but the composed-advisory prose it used to
-        # produce ("runs as part of a larger shell chain") is gone --
-        # H11(b)/G2's `_partial_pipe_rewrite` now recognizes this narrow
-        # two-segment `grep | downstream` shape and offers a REAL,
-        # runnable one-fewer-fork replacement instead. The property under
-        # test survives: this guard still has something to say about a
-        # composed grep pipeline, just an actionable rewrite now, not
-        # prose about a flag it never named to begin with.
         cmd = 'grep -rn "TODO" src/ | wc -l'
         advisory = _advisory_text(
             _hso(guard_grep_via_bash.check(_payload(cmd), host_is_windows=True))
@@ -182,13 +137,6 @@ class TestGrepViaBashMessageAccuracy:
 
     def test_gnu_only_construct_advisory_names_the_command_and_divergence(self):
         # (ii) STILL MEANINGFUL, repointed: replaces `test_untranslatable_
-        # flag_advisory_names_flag_not_chained`, whose original trigger
-        # (`grep -C 3 ...`) no longer fires at all -- `-C` is untranslatable
-        # but NOT GNU-only (H11(c): only `-P`/`-z`/an unrecognized long
-        # option trip the narrowed check), so per design-as-offers that
-        # command is now silence (asserted separately below). `-P` IS
-        # genuinely GNU-only (behaves differently on BSD grep/macOS), so
-        # this is the live case the narrowed check still fires on.
         cmd = 'grep -Pn "TODO" src/'
         advisory = _advisory_text(
             _hso(guard_grep_via_bash.check(_payload(cmd), host_is_windows=True))
@@ -199,42 +147,21 @@ class TestGrepViaBashMessageAccuracy:
 
     def test_untranslatable_but_portable_flag_stays_silent(self):
         # (i) OBSOLETE, not repointed: the old blanket composed advisory
-        # fired for ANY untranslatable flag and named "a flag" as the
-        # reason. `-C` (context lines) is untranslatable by BX-16's rewrite
-        # but exists identically on BSD grep -- not a genuine portability
-        # hazard, so H11(c)'s narrowed `_has_gnu_only_construct` correctly
-        # does not flag it, and this guard is silent per design-as-offers
-        # (no actionable alternative to name).
         cmd = 'grep -C 3 "TODO" src/file.py'
         assert guard_grep_via_bash.check(_payload(cmd), host_is_windows=True) is None
 
     def test_substitutable_residue_deny_does_not_claim_in_process_or_zero_fork(self):
         # (ii) STILL MEANINGFUL, repointed at the surviving message: the
-        # guard's outlet_summary previously claimed "in-process python3
-        # search -- no subprocess fork", which is false: `python3 -c` is a
-        # genuine subprocess. That deny is gone (H11(a)), but the identical
-        # overstatement risk exists in the guard's remaining composed
-        # advisory (the partial-rewrite lede also names a python3
-        # replacement) -- re-pointed at that surviving message rather than
-        # a now-nonexistent deny.
         cmd = 'grep -rn "TODO" src/ | wc -l'
         advisory = _advisory_text(
             _hso(guard_grep_via_bash.check(_payload(cmd), host_is_windows=True))
         )
         assert "no subprocess fork" not in advisory
-        # The advisory's own lede names its replacement "one-fewer-fork",
-        # never zero-fork/in-process. (2026-07-30, a9fce05a: the message
-        # used to also name a genuinely zero-fork in-process answerer
-        # elsewhere in this text -- that explanation was cut as unusable
-        # prose, so "in-process" no longer appears in this message at all;
-        # see test_partial_rewrite_advisory_names_subagent_dispatch_as_fallback.)
         assert "one-fewer-fork" in advisory
         assert "zero-fork replacement" not in advisory
 
     def test_rewrite_advisory_does_not_claim_harness_can_do_it_in_process(self):
         # (ii) UNCHANGED -- this test exercises `dispatch_checks.check_
-        # grep_via_bash_rewrite` (BX-16's own seam), not `guard_grep_via_
-        # bash`, and H11 does not touch that function at all.
         cmd = 'grep -rn "TODO" src/'
         seam = dispatch_checks.check_grep_via_bash_rewrite(cmd, "sess-bx12")
         hso = _hso(seam)
@@ -243,21 +170,6 @@ class TestGrepViaBashMessageAccuracy:
 
     def test_partial_rewrite_advisory_names_subagent_dispatch_as_fallback(self):
         # (ii) STILL MEANINGFUL, repointed: the retired `test_composed_
-        # pipeline_advisory_names_subagent_dispatch_as_fallback` used a
-        # `;`-joined command that is now silent entirely (see
-        # `test_composed_pipeline_with_only_portable_flags_stays_silent`
-        # above) -- there is no advisory left on that command to assert
-        # the fallback mention against. The property this test protects
-        # (the composed advisory still names the subagent-dispatch
-        # fallback) is still real and still asserted, on the two-segment
-        # pipe shape that still produces an advisory.
-        #
-        # 2026-07-30 (a9fce05a): the sentence explaining that the
-        # in-process search answerer already evaluated and declined this
-        # exact invocation was cut as unusable prose (the reader cannot
-        # re-target that answerer or reorder the chain) -- "in-process" no
-        # longer appears in this message at all, so this test no longer
-        # pins that phrase, only the fallback the reader can actually take.
         cmd = 'grep -rn "TODO" src/ | wc -l'
         advisory = _advisory_text(
             _hso(guard_grep_via_bash.check(_payload(cmd), host_is_windows=True))
@@ -267,21 +179,12 @@ class TestGrepViaBashMessageAccuracy:
 
 
 class TestMultiProbeBannerMessageAccuracy:
-    """guard_multiprobe_banner.check -- BX-7."""
 
     _BANNER_CMD = 'echo "=== SESSION FACTS ==="; git rev-parse --abbrev-ref HEAD; pwd'
 
     def test_advisory_names_multiprobe_shape_and_evidence_banner(self):
         # RETARGETED (DR-280, 2026-08-07): this guard's own deny branch was
-        # retired as structurally unreachable -- it gated on the same seam
         # confirmation an earlier-registered `ADVISORY_REWRITE` chain entry
-        # already consumes and returns on first, so through the real
-        # dispatcher the deny gate could never open (see
-        # `test_guard_multiprobe_banner.py`'s identical retargeting). Was
-        # `test_deny_names_multiprobe_shape_and_evidence_banner`, reading
-        # `_deny_text`; the property under test -- the message names the
-        # multi-probe-banner shape and the evidence banner text -- is still
-        # live, now in the advisory envelope every call renders instead.
         advisory = _advisory_text(
             _hso(guard_multiprobe_banner.check(_payload(self._BANNER_CMD), host_is_windows=True))
         )
@@ -289,29 +192,7 @@ class TestMultiProbeBannerMessageAccuracy:
         assert "SESSION FACTS" in advisory
 
     def test_outlet_example_is_the_real_seam_rewrite_not_a_static_illustration(self):
-        """2026-07-29 duty-of-care promotion, supersedes the prior pinned
-        finding this test used to document: this guard now CALLS
-        `dispatch_checks.check_multiprobe_banner_rewrite` (the same function
-        the separate `multiprobe-banner-rewrite` chain entry uses to perform
-        the actual rewrite) to read its `updatedInput.command` whenever it
-        confirms a genuine outlet for THIS exact command, and renders the
-        Example around that literal string -- exactly matching
-        `guard_grep_via_bash`'s stricter contract (that guard's outlet
-        example already IS the real seam rewrite, verified in
-        `TestGrepViaBashMessageAccuracy` above). The prior static, hand-
-        written `python3 -c "import os, getpass..."` illustration is now
-        used ONLY as the fallback for a command the seam does NOT confirm
-        (see `TestMultiProbeBannerVerdict.test_banner_with_unrecognized_
-        segment_never_denies_even_on_windows` in `test_guard_multiprobe_
-        banner.py`) -- a genuinely composed command never reaches a deny at
-        all now (see the shape-overlap section below), so the old "is this
-        static text a misdescription" question this test used to answer no
-        longer has a live deny case to apply to.
-        """
         # RETARGETED (DR-280, 2026-08-07): was reading `_deny_text`; this
-        # guard's deny branch is retired, but the advisory template's own
-        # Example field carries the identical rewritten command, so the
-        # byte-identity claim this test pins is unaffected.
         advisory = _advisory_text(
             _hso(guard_multiprobe_banner.check(_payload(self._BANNER_CMD), host_is_windows=True))
         )
@@ -319,23 +200,16 @@ class TestMultiProbeBannerMessageAccuracy:
             self._BANNER_CMD, "sess-bx12"
         )
         real_cmd = _rewrite_command(_hso(real_rewrite))
-        assert real_cmd in advisory  # the Example IS the real per-command rewrite now
+        assert real_cmd in advisory
 
     def test_non_banner_command_returns_none(self):
         assert guard_multiprobe_banner.check(_payload("git status"), host_is_windows=True) is None
 
 
 class TestPlumbingAndLoopsMessageAccuracy:
-    """guard_plumbing_and_loops.check -- BX-8 (head/tail-plumbing half)."""
 
     def test_head_tail_plumbing_advisory_names_that_shape_not_for_loop(self):
         # RETARGETED (DR-280, 2026-08-07): mirrors the multi-probe-banner
-        # retargeting above -- this guard's own deny branch was retired as
-        # structurally unreachable. Was
-        # `test_head_tail_plumbing_deny_names_that_shape_not_for_loop`,
-        # reading `_deny_text`; the property under test -- the message
-        # names the head-tail-plumbing shape, not for-loop -- is still
-        # live, now in the advisory envelope every call renders instead.
         cmd = "find . -name '*.py' | head -n 5"
         advisory = _advisory_text(
             _hso(guard_plumbing_and_loops.check(_payload(cmd), host_is_windows=True))
@@ -354,18 +228,11 @@ class TestPlumbingAndLoopsMessageAccuracy:
         advisory = _advisory_text(
             _hso(guard_plumbing_and_loops.check(_payload(cmd), host_is_windows=True))
         )
-        # 2026-07-30 message-trim (76797f17) moved the BX-16/seam-mechanics
-        # explanation to the module docstring; the generic-advisory marker
-        # (never the confirmed-rewrite branch's own "auto-rewritten ...
-        # equivalent" phrasing) is what actually distinguishes this path.
         assert "BASH-SPAWN ADVISORY" in advisory
         assert "auto-rewritten single-process equivalent" not in advisory
         assert "docker ps | head -n 20" in advisory
 
     def test_while_read_advisory_names_that_shape_not_for_loop(self):
-        # AC-5, sixth-shape coverage: the message must name the while-read
-        # shape it actually matched, never the for-loop shape it structurally
-        # resembles.
         cmd = 'cat items.txt | while read x; do echo "$x"; done'
         advisory = _advisory_text(
             _hso(guard_plumbing_and_loops.check(_payload(cmd), host_is_windows=True))
@@ -374,68 +241,35 @@ class TestPlumbingAndLoopsMessageAccuracy:
         assert "for-loop" not in advisory
 
 
-# ---------------------------------------------------------------------------
-# Section 2 -- shape-overlap precedence: a command matching TWO or THREE
 # shapes at once must produce a message naming the PRECEDENCE WINNER, never
-# whichever matcher happened to run first. BX-2's own pinned contract:
 # GREP_VIA_BASH > MULTI_PROBE_BANNER > HEAD_TAIL_PLUMBING > FOR_LOOP >
 # WHILE_READ_LOOP > FIND_EXEC_XARGS.
-# ---------------------------------------------------------------------------
 
 
 class TestShapeOverlapPrecedenceInMessages:
     def test_two_shape_overlap_banner_plus_grep_names_grep_not_banner(self):
-        # Simultaneously a multi-probe banner (>=3 segments, banner-marked
-        # echo) AND grep-via-bash (a segment invoking grep). Per
         # SHAPE_PRECEDENCE, GREP_VIA_BASH outranks MULTI_PROBE_BANNER.
-        # Because the grep segment is chained alongside 2 other segments it
         # is COMPOSED, not substitutable residue (BX-6's own single-segment
-        # rule) -- so this is an advisory on every platform, never a deny;
-        # the precedence claim under test is WHICH guard speaks, not
-        # deny-vs-advise.
-        #
         # (ii) STILL MEANINGFUL, repointed (H11, 2026-07-30): the original
-        # `-rn` trigger used only portable flags, so H11(c)'s narrowed
-        # composed-advisory gate now leaves this exact command silent
-        # (see `test_composed_pipeline_with_only_portable_flags_stays_
-        # silent` above) -- there would be no advisory left for THIS
-        # assertion to inspect. Swapped to `-Pn` (a genuine GNU-only
-        # construct) so the grep guard still has something actionable to
-        # say; the precedence property under test (grep wins, banner stays
-        # silent) is unchanged and still exercised.
-        #
         # (iii) REPOINTED AGAIN (2026-08-14, _shape_classifier false-positive
-        # fix, state/audits/2026-08-14-boot-payload-baseline.md § "The
         # false-positive matcher"): MULTI_PROBE_BANNER now requires every
-        # OTHER top-level (non-pipe-continuation) segment to itself be a
-        # harness-known-fact probe -- a bare top-level `grep ...` segment no
-        # longer counts as banner residue at all (correctly: a real search
-        # is not a session-fact re-probe). Piping `grep` off `pwd` keeps it a
         # pipe CONTINUATION of the `pwd` probe (mirrors the plan's own
-        # canonical overlap example), so this command is still genuinely
-        # both shapes at once -- the precedence property under test is
-        # unchanged.
         cmd = 'echo "=== probe ==="; pwd | grep -Pn "TODO"'
         classification = classify_command(cmd)
         assert classification.primary is not None
         assert classification.primary.shape is Shape.GREP_VIA_BASH
-        assert Shape.MULTI_PROBE_BANNER in classification.matched_shapes  # residue present
+        assert Shape.MULTI_PROBE_BANNER in classification.matched_shapes
 
-        # The grep guard must fire (it IS the precedence winner)...
         grep_advisory = _advisory_text(
             _hso(guard_grep_via_bash.check(_payload(cmd), host_is_windows=True))
         )
         assert "grep-via-bash" in grep_advisory
 
-        # ...and the banner guard must NOT fire on this command at all --
-        # it is explicit in guard_multiprobe_banner's own negative-spec that
         # it only speaks when MULTI_PROBE_BANNER is the precedence winner.
         assert guard_multiprobe_banner.check(_payload(cmd), host_is_windows=True) is None
 
     def test_multiprobe_rewrite_seam_agrees_with_guard_on_grep_primary_command(self):
-        # `check_multiprobe_banner_rewrite` (dispatch_checks.py) previously
         # gated on plain `has_shape(MULTI_PROBE_BANNER)` membership, while
-        # its sibling `guard_multiprobe_banner.check` correctly gates on
         # `primary.shape is MULTI_PROBE_BANNER` (the precedence winner). A
         # command whose PRIMARY shape is GREP_VIA_BASH (which outranks
         # MULTI_PROBE_BANNER) must make BOTH stay silent about banner text.
@@ -451,20 +285,8 @@ class TestShapeOverlapPrecedenceInMessages:
         # banner-marked echo (MULTI_PROBE_BANNER) + a grep segment
         # (GREP_VIA_BASH) + a piped head (HEAD_TAIL_PLUMBING), all in one
         # command, >=3 segments. GREP_VIA_BASH must win.
-        #
         # (ii) STILL MEANINGFUL, repointed (H11, 2026-07-30): same reason as
-        # the two-shape overlap test above -- `-rn` alone leaves this
-        # command silent post-H11(c), so swapped to `-Pn` (GNU-only) to
-        # keep the grep guard actionable while the precedence property
-        # (grep wins over both banner and head-tail residue) stays under
-        # test unchanged.
-        #
         # (iii) REPOINTED AGAIN (2026-08-14, same false-positive fix as the
-        # two-shape overlap test above): the top-level `grep ...; pwd`
-        # ordering put `grep` at a top-level (non-pipe) segment, which no
-        # longer counts as banner residue under the tightened predicate.
-        # `pwd | grep ... | head` keeps `grep`/`head` as pipe continuations
-        # of the `pwd` probe, so all three shapes still genuinely overlap.
         cmd = 'echo "=== probe ==="; pwd | grep -Pn "TODO" | head -n 5'
         classification = classify_command(cmd)
         assert classification.primary is not None
@@ -473,9 +295,6 @@ class TestShapeOverlapPrecedenceInMessages:
         assert Shape.MULTI_PROBE_BANNER in residue_shapes
         assert Shape.HEAD_TAIL_PLUMBING in residue_shapes
 
-        # Only the grep guard may speak for this command; the other two
-        # guards' own negative-specs require them to stay silent when they
-        # are not the precedence winner.
         assert guard_multiprobe_banner.check(_payload(cmd), host_is_windows=True) is None
         assert guard_plumbing_and_loops.check(_payload(cmd), host_is_windows=True) is None
         grep_result = guard_grep_via_bash.check(_payload(cmd), host_is_windows=True)
@@ -485,22 +304,7 @@ class TestShapeOverlapPrecedenceInMessages:
         # MULTI_PROBE_BANNER (>=3 segments, banner echo) + HEAD_TAIL_PLUMBING
         # (a piped head), no grep anywhere. MULTI_PROBE_BANNER outranks
         # HEAD_TAIL_PLUMBING. The piped `pwd | head -n 1` segment is a
-        # genuinely composed stage the sibling rewrite chain entry treats as
-        # unrecognized (2026-07-29 duty-of-care promotion: a piped stage
-        # inside a banner chain is composed, not a bare fact probe -- see
-        # `check_multiprobe_banner_rewrite`'s own docstring).
-        #
         # 2026-08-06 (B2): this used to assert an ADVISORY naming the banner
-        # shape. The unconfirmed-seam branch rendered a fixed
-        # `pwd`/`whoami`/`git status` template regardless of the real command,
-        # so it satisfied "names the right shape" while still misdescribing the
-        # command it fired on -- and offered a subagent no action it could take.
-        # That branch is now silent. Neither guard speaks for this command, and
-        # a message that does not exist cannot misname anything; the
-        # names-banner-not-headtail contract is asserted where the guard DOES
-        # speak (the seam-confirmed advisory in
-        # TestMultiProbeBannerMessageAccuracy.test_advisory_names_multiprobe_shape_and_evidence_banner,
-        # and test_guard_multiprobe_banner.py's own outlet cases).
         cmd = 'echo "=== probe ==="; pwd | head -n 1; whoami'
         classification = classify_command(cmd)
         assert classification.primary is not None
@@ -509,15 +313,6 @@ class TestShapeOverlapPrecedenceInMessages:
 
         assert guard_multiprobe_banner.check(_payload(cmd), host_is_windows=True) is None
         assert guard_plumbing_and_loops.check(_payload(cmd), host_is_windows=True) is None
-
-
-# ---------------------------------------------------------------------------
-# Section 3 -- the seven BX-16 rewrite/advisory functions in
-# dispatch_checks.py. None of these ever deny (see their own module
-# comment) -- the audit here is that a returned rewrite/advisory correctly
-# names ITS OWN trigger and never claims a full-command replacement for
-# work it never inspected.
-# ---------------------------------------------------------------------------
 
 
 class TestFindExecRewriteMessageAccuracy:
@@ -555,19 +350,12 @@ class TestFindExecRewriteMessageAccuracy:
         result = dispatch_checks.check_find_exec_rewrite(cmd, "sess-bx12")
         hso = _hso(result)
         assert hso["permissionDecision"] == "allow"
-        assert "updatedInput" not in hso  # must NOT silently replace the whole command
+        assert "updatedInput" not in hso
         assert "echo hi" not in hso["additionalContext"]
         assert "find . -name *.log -exec rm {}" in hso["additionalContext"]
         assert "runs alongside OTHER work" in hso["additionalContext"]
 
     def test_for_loop_wrapping_a_trailing_find_exec_names_the_segment_correctly(self):
-        """The plan's own named known-defect scenario, reproduced exactly:
-        a for-loop followed by a trailing `find -exec`. The VERDICT (an
-        allow+advisory here, or a deny once `guard_plumbing_and_loops` is
-        registered -- see below) is correct either way; this test pins that
-        the message/rewrite no longer treats the for-loop's own body as
-        interchangeable with the unrelated trailing find-exec segment.
-        """
         cmd = 'for x in 1 2 3; do echo "$x"; done; find . -name "*.log" -exec rm {} \\;'
         result = dispatch_checks.check_find_exec_rewrite(cmd, "sess-bx12")
         hso = _hso(result)
@@ -576,18 +364,10 @@ class TestFindExecRewriteMessageAccuracy:
         assert "find . -name *.log -exec rm {}" in hso["additionalContext"]
 
         # And the platform-gated guard that CONSUMES this seam check (BX-8,
-        # not yet registered in dispatch.py -- see module docstring
         # "ORDERING DEPENDENCY") correctly falls back to a GENERIC advisory
-        # rather than denying toward the (no-longer-produced) corrupting
-        # rewrite -- this is the guard's own `_seam_confirmed_rewrite` gate
-        # working as designed once the seam stopped over-claiming.
         guard_result = guard_plumbing_and_loops.check(_payload(cmd), host_is_windows=True)
         guard_hso = _hso(guard_result)
-        assert guard_hso["permissionDecision"] == "allow"  # advisory, NOT a deny
-        # 2026-07-30 message-trim (76797f17) moved the BX-16/seam-mechanics
-        # explanation to the module docstring; the generic-advisory marker
-        # (never the confirmed-rewrite branch's own "auto-rewritten ...
-        # equivalent" phrasing) is what actually distinguishes this path.
+        assert guard_hso["permissionDecision"] == "allow"
         assert "BASH-SPAWN ADVISORY" in guard_hso["additionalContext"]
         assert "auto-rewritten single-process equivalent" not in guard_hso["additionalContext"]
 
@@ -607,9 +387,6 @@ class TestFindExecRewriteMessageAccuracy:
         assert "chmod" in hso["additionalContext"]
 
     def test_a_verb_on_neither_list_still_gets_prose_and_names_itself(self):
-        """The row the test above used to be. A verb with no python translation
-        AND no measured batch equivalence gets an advisory naming it -- never a
-        guessed rewrite."""
         cmd = 'find . -name "*.bak" -exec frobnicate {} \\;'
         result = dispatch_checks.check_find_exec_rewrite(cmd, "sess-bx12")
         hso = _hso(result)
@@ -658,10 +435,6 @@ class TestCatHeredocWriteAdviseMessageAccuracy:
         assert "DR-258" in advisory
 
     def test_advisory_does_not_name_a_tool_to_prefer(self):
-        # The message states a consequence, not a tool preference. This is the
-        # register the sibling `check_heredoc_repo_write_advise` already uses,
-        # and the assertion is inverted from what this class pinned before:
-        # naming the Write tool is now the defect, not the contract.
         cmd = "cat > out.txt <<'EOF'\nhello\nEOF"
         advisory = _advisory_text(
             _hso(dispatch_checks.check_cat_heredoc_write_advise(cmd, "sess-bx12"))
@@ -671,10 +444,6 @@ class TestCatHeredocWriteAdviseMessageAccuracy:
 
 class TestHeredocRepoWriteAdviseMessageAccuracy:
     def test_advisory_names_the_exact_target_and_what_is_recorded(self, tmp_path, monkeypatch):
-        # `tmp_path` lives under the real $TEMP/$TMP -- clear both so this
-        # stand-in `git_root` isn't itself misclassified as a scratch root
-        # by the guard's own env-var scratch check (see the dedicated test
-        # file's `_isolate_temp_env` fixture for the full explanation).
         monkeypatch.delenv("TEMP", raising=False)
         monkeypatch.delenv("TMP", raising=False)
         cmd = (
@@ -690,15 +459,7 @@ class TestHeredocRepoWriteAdviseMessageAccuracy:
                 )
             )
         )
-        # The "use the Write tool" nudge this assertion used to require is
-        # RETIRED, not lost: DR-258 section "Amendment 2026-08-30" is why.
         # This guard only ever fires on a path the command LITERALLY names,
-        # and `bash_guards.write_claim_record.record_write_claims` now
-        # records exactly those from the same PreToolUse call -- so the
-        # write reaches the commit and there is no longer an alternative to
-        # nudge toward. Restoring the nudge here would re-pin a message that
-        # states a retired fact. What the message must still do is name the
-        # exact resolved target, and say what IS and is NOT recorded.
         assert "coordinator_core/x.py" in advisory
         assert "recorded" in advisory
         assert "does not name" in advisory
@@ -740,8 +501,6 @@ class TestGitCommitSafeCommitAdviseMessageAccuracy:
         deterministically."""
         monkeypatch.setattr(dispatch_checks, "_run_git", lambda *a, **k: (0, ""))
 
-    #: Commit forms that already carry the ratified scope. Firing on any of
-    #: these is a false positive on the doctrinally-correct form.
     SCOPED_FORMS = [
         'git commit -m "fix the thing" -- one/file.md',
         'git commit -m "fix the thing" -- a/b.md c/d.md',
@@ -750,8 +509,6 @@ class TestGitCommitSafeCommitAdviseMessageAccuracy:
         'git commit --message "subject" -- one/file.md',
     ]
 
-    #: Commit forms that name no scope at all -- the cases the advisory is
-    #: actually for.
     UNSCOPED_FORMS = [
         'git commit -m "fix the thing"',
         "git commit -am 'fix the thing'",
@@ -768,9 +525,6 @@ class TestGitCommitSafeCommitAdviseMessageAccuracy:
             assert dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-bx12") is not None, cmd
 
     def test_every_suggested_commit_command_carries_a_scope(self):
-        """Scope-equivalence: any runnable `git commit` the advisory prints
-        must itself be scoped. A suggestion narrower than what the caller
-        typed is the defect this asserts against."""
         for cmd in self.UNSCOPED_FORMS:
             advisory = _advisory_text(
                 _hso(dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-bx12"))
@@ -786,10 +540,6 @@ class TestGitCommitSafeCommitAdviseMessageAccuracy:
                 assert " -- " in commit_tail, "unscoped suggestion %r for %r" % (line, cmd)
 
     def test_advisory_does_not_offer_the_deprecated_raw_helper_form(self):
-        """`coordinator-safe-commit "<subject>"` (no flags) is deprecated by
-        the shared wiki, has no pathspec flag to take a scope back, and its
-        own multi-session abort path bottoms out in `git add -A`. It must
-        not be what this advisory offers."""
         advisory = _advisory_text(
             _hso(dispatch_checks.check_git_commit_safe_commit_advise('git commit -m "s"', "sess-bx12"))
         )
@@ -803,28 +553,10 @@ class TestGitCommitSafeCommitAdviseMessageAccuracy:
         assert "fix the thing" in advisory
 
     def test_the_divergence_case_surface_it_names_is_actually_invocable(self):
-        """The advisory must name a mechanism a caller can reach directly,
-        not an op id and not a deleted forwarder.
-
-        `ceremony.scoped_git_commit` — which this advisory named for its
-        first few hours of life — is a registered op with no bin artifact
-        (doe-claude-em, 2026-07-29: "an op named in doctrine with no
-        reachable entrypoint reads to a caller exactly like no mechanism at
-        all"). Its bin-side counterpart, `coordinator/bin/scoped-git-commit`,
-        was itself killed 2026-08-23 (DR-344 process-budget kill bar,
-        `coordinator-safe-commit.py::usage`'s own "killed 2026-08-23
-        (DR-344), no replacement built yet" text) -- so naming that CLI now
-        reads the same way a dotted op id always did: nothing a caller can
-        actually run. The offer this guard prints must therefore stay
-        plain `git`, which needs no forwarder and cannot be killed out from
-        under it.
-        """
         advisory = _advisory_text(
             _hso(dispatch_checks.check_git_commit_safe_commit_advise('git commit -m "s"', "s"))
         )
         assert "git add" in advisory and "git commit" in advisory
-        # Neither the killed bin forwarder nor the ops-namespace id (never a
-        # caller-reachable surface) may stand in as the offer.
         assert "scoped-git-commit" not in advisory
         assert "ceremony.scoped_git_commit" not in advisory
 
@@ -838,9 +570,6 @@ class TestGitCommitSafeCommitAdviseMessageAccuracy:
         assert dispatch_checks.check_git_commit_safe_commit_advise("git status", "s") is None
 
     def test_non_amend_advisory_text_is_unchanged_by_the_amend_fix(self):
-        """Negative-spec: a command with no `--amend` flag must keep the
-        pre-existing scoped-new-commit remediation text verbatim, never the
-        new amend-specific body."""
         advisory = _advisory_text(
             _hso(dispatch_checks.check_git_commit_safe_commit_advise(
                 'git commit -m "fix the thing"', "s"
@@ -857,15 +586,10 @@ class TestMultiprobeBannerRewriteMessageAccuracy:
         hso = _hso(result)
         assert "updatedInput" in hso
         rewrite_cmd = hso["updatedInput"]["command"]
-        # The rewrite must use the resolved interpreter, not a bare literal.
         assert rewrite_cmd.startswith(dispatch_checks._bt_python3_invocation())
         assert "batching every git fact into ONE status call" in hso["additionalContext"]
 
     def test_unrecognized_probe_emits_nothing_not_a_generic_advisory(self):
-        # C4 (2026-08-01): a probe segment with no concrete rewrite makes
-        # the whole check emit nothing -- exit (b) -- rather than a
-        # prose-only advisory naming the unrecognized segment with no
-        # applicable alternative offered.
         cmd = 'echo "=== SESSION FACTS ==="; pwd; docker ps'
         result = dispatch_checks.check_multiprobe_banner_rewrite(cmd, "sess-bx12")
         assert result is None
@@ -880,12 +604,6 @@ class TestHeadTailPlumbingRewriteMessageAccuracy:
         assert rewrite_cmd.startswith(dispatch_checks._bt_python3_invocation())
 
     def test_longer_chain_silent_not_advised(self):
-        # Reproduces the exact PreToolUse advisory this dispatch's own Bash
-        # calls used to trip mid-session (`cd X && grep ... | head -100`, a
-        # 3-segment chain) -- this branch has already computed that no
-        # rewrite would help (see guard_head_tail_rewrite.py's comment at
-        # this branch, backlinking the fleet-wide fire-volume memo), so it
-        # is now silent rather than a nag with no offer.
         cmd = "cd /tmp && grep -n foo file.py | head -100"
         assert (
             guard_head_tail_rewrite.check_head_tail_plumbing_rewrite(cmd, "sess-bx12")
@@ -893,9 +611,6 @@ class TestHeadTailPlumbingRewriteMessageAccuracy:
         )
 
     def test_unrecognized_upstream_generator_silent_not_advised(self):
-        # Same silencing as the longer-chain case above -- no rewrite
-        # possible for an upstream generator this guard cannot reproduce,
-        # so no advisory either.
         cmd = "docker ps | head -n 20"
         assert (
             guard_head_tail_rewrite.check_head_tail_plumbing_rewrite(cmd, "sess-bx12")
@@ -910,28 +625,7 @@ class TestHeadTailPlumbingRewriteMessageAccuracy:
         assert "-c 100" in advisory
 
 
-# ---------------------------------------------------------------------------
-# Section 4 -- sampled spot-check of pre-existing hard-denies already
-# registered in dispatch.py's guard_chain, confirming the audit method this
-# file establishes also holds outside the BX-6/7/8/16 family. NOT exhaustive
-# -- see module docstring "SCOPE OF THIS PASS".
-# ---------------------------------------------------------------------------
-
-
 class TestSampledPreexistingGuardsMessageAccuracy:
-    """One spot-check only (`check_offer_git_c`) -- see module docstring
-    "SCOPE OF THIS PASS". `check_destructive_rm` and `check_blanket_git_add`
-    were tried here and both returned `None` for their obvious triggering
-    commands (`rm -rf /`, `git add -A`) when called with only the
-    `(cmd, session_id)` signature this module's other checks accept --
-    those two guards evidently require additional preconditions/state this
-    file did not chase down (their own dedicated test files,
-    `test_check_blanket_git_add.py` and the destructive-action suite in
-    `test_block_subagent_destructive_action.py`, are the correct place for
-    that investigation, not a quick sample here). Not treated as a BX-12
-    finding since no message was ever produced to misdescribe; recorded as
-    a residual follow-up in this dispatch's own report instead.
-    """
 
     def test_offer_git_c_rewrite_names_the_actual_cd_and_git_subcommand(self):
         cmd = "cd /tmp/repo && git status"
@@ -941,18 +635,8 @@ class TestSampledPreexistingGuardsMessageAccuracy:
         assert rewrite_cmd == "git -C /tmp/repo status"
 
 
-# ---------------------------------------------------------------------------
-# Section 5 -- dispatch._crash_deny's own message, the generic fail-closed
-# envelope emitted when a fail_closed=True guard itself raises. Two claims
-# in this message were observed FALSE in a live session (2026-07-29): (1)
-# that the deny is total across every subsequent Bash command regardless of
-# shape, when the dispatcher denies per-command and a shape-conditioned
-# crash leaves non-matching shapes unaffected; and (2) that nothing can be
-# done from inside the session, when file-reading tools reach the guard
 # source without Bash at all. The fail-closed DIRECTION is out of scope
 # here (see `_crash_deny`'s own docstring "BLAST-RADIUS DECISION") -- only
-# the message's factual claims are under test.
-# ---------------------------------------------------------------------------
 
 
 class TestCrashDenyMessageAccuracy:
@@ -966,14 +650,6 @@ class TestCrashDenyMessageAccuracy:
         assert "there is no in-session override" not in deny
 
     def test_positively_states_the_two_facts_the_old_wording_denied(self):
-        """The two tests above assert the ABSENCE of specific false
-        substrings, which a reworded version of the same false claim would
-        slip past. These positive assertions are the durable half: the
-        message must actually tell the reader that the deny may be
-        shape-conditioned (so a trivial command is worth trying) and that
-        the guard source is reachable without Bash. Rewording is free;
-        dropping either fact is not.
-        """
         deny = _deny_text(_hso(dispatch._crash_deny("some-guard", ValueError("boom"))))
         assert "shape" in deny, (
             "message must convey that the crash may be shape-conditioned "

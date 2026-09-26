@@ -1,15 +1,3 @@
-"""Every judgment point with `recommendation: null` must use the closed
-`reason` enum (`insufficient-evidence` / `recommendation-forbidden`) that
-`decision-object.schema.json`'s `if/then` conditional binds -- never free
-prose.
-
-Regression for cross-repo/archive/2026-08-13-doe-claude-em-baton-assemble-
-reason-not-in-schema-enum.md: `baton_assemble` emitted prose (e.g. "Judgment
-residue -- ...") on every null-recommendation judgment point while
-`pickup_assemble` already conformed. This test fails if either side of that
-producer/verifier pair regresses: a null-recommendation point emitting a
-non-enum `reason`, or the enum itself narrowing below what these emitters use.
-"""
 
 from __future__ import annotations
 

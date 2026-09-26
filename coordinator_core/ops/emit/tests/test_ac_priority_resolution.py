@@ -21,8 +21,6 @@ import pytest
 
 from coordinator_core.ops.emit.priority_resolve import resolve_priority
 
-# _write_node/_ledger extracted to conftest.py
-# (shared across the five priority-ledger test modules that used a byte-for-byte copy).
 from coordinator_core.ops.emit.tests.conftest import _ledger, _write_node  # noqa: F401
 
 
@@ -33,9 +31,7 @@ def node_dir(tmp_path: Path) -> Path:
     return d
 
 
-# ---------------------------------------------------------------------------
 # AC3 — a CONTINUATION inherits its predecessor priority.
-# ---------------------------------------------------------------------------
 
 
 def test_ac3_continuation_inherits_predecessor_priority(node_dir: Path):
@@ -53,14 +49,7 @@ def test_ac3_continuation_inherits_predecessor_priority(node_dir: Path):
     assert result["source_id"] == "PARENT_id"
 
 
-# ---------------------------------------------------------------------------
 # AC4 — MID-CHAIN OVERRIDE wins. This is the acceptance oracle, not an
-# illustration:
-#     A (explicit: high)
-#     +-- B (explicit: low)      <- mid-chain PM override
-#         +-- C (no explicit call)
-# C resolves to low, and — separately, explicitly — does NOT resolve to high.
-# ---------------------------------------------------------------------------
 
 
 def test_ac4_mid_chain_override_wins(node_dir: Path):
@@ -78,9 +67,6 @@ def test_ac4_mid_chain_override_wins(node_dir: Path):
 
 
 def test_ac4_mid_chain_override_does_not_resolve_to_top_of_chain(node_dir: Path):
-    """The 'top of chain' reading is RETIRED from the spec — a regression to
-    it must fail this assertion loudly, independent of the positive check
-    above (which would also fail on a completely broken resolver)."""
     _write_node(node_dir, "A.md", handoff_id="A_id", predecessor=None)
     _write_node(node_dir, "B.md", handoff_id="B_id", predecessor="A.md")
     c_path = _write_node(node_dir, "C.md", handoff_id="C_id", predecessor="B.md")
@@ -90,11 +76,6 @@ def test_ac4_mid_chain_override_does_not_resolve_to_top_of_chain(node_dir: Path)
     result = resolve_priority(str(c_path), "C_id", ledger_entries=ledger)
 
     assert result["effective_priority"] != "high"
-
-
-# ---------------------------------------------------------------------------
-# AC6 — suggested_priority NEVER overrides an explicit PM call.
-# ---------------------------------------------------------------------------
 
 
 def test_ac6_suggested_priority_loses_to_explicit_ancestor(node_dir: Path):
@@ -131,15 +112,7 @@ def test_ac6_suggested_priority_used_when_no_explicit_ancestor_anywhere(node_dir
     assert result["origin"] == "suggested"
 
 
-# ---------------------------------------------------------------------------
-# AC7 — the `none` sentinel terminates the walk and is distinguishable from
-# unset (no entry at all).
-# ---------------------------------------------------------------------------
-
-
 def test_ac7_none_sentinel_terminates_walk_vs_absent_entry(node_dir: Path):
-    # (i) A (explicit: urgent) -> B (explicit: none) -> C (nothing)
-    #     C must resolve to the cleared state via B, NOT to urgent.
     _write_node(node_dir, "A.md", handoff_id="A_id", predecessor=None)
     _write_node(node_dir, "B.md", handoff_id="B_id", predecessor="A.md")
     c_path = _write_node(node_dir, "C.md", handoff_id="C_id", predecessor="B.md")
@@ -151,8 +124,6 @@ def test_ac7_none_sentinel_terminates_walk_vs_absent_entry(node_dir: Path):
     assert result_cleared["origin"] == "inherited"
     assert result_cleared["source_id"] == "B_id"
 
-    # (ii) A (explicit: urgent) -> B (NO entry at all) -> C (nothing)
-    #      C must resolve to urgent — absence is not a clear.
     _write_node(node_dir, "A2.md", handoff_id="A2_id", predecessor=None)
     _write_node(node_dir, "B2.md", handoff_id="B2_id", predecessor="A2.md")
     c2_path = _write_node(node_dir, "C2.md", handoff_id="C2_id", predecessor="B2.md")
@@ -165,17 +136,8 @@ def test_ac7_none_sentinel_terminates_walk_vs_absent_entry(node_dir: Path):
     assert result_absent["source_id"] == "A2_id"
 
     # The two cases must produce DIFFERENT results — a test checking only
-    # (i) would pass against an implementation that treats deletion and
-    # clearing alike.
     assert result_cleared["effective_priority"] != result_absent["effective_priority"]
     assert result_cleared["source_id"] != result_absent["source_id"]
-
-
-# ---------------------------------------------------------------------------
-# AC8 — fan-in at differing priorities yields NO value and origin
-# "ambiguous"; fan-in where parents agree resolves normally (ambiguity is
-# disagreement, not arity).
-# ---------------------------------------------------------------------------
 
 
 def test_ac8_fan_in_differing_priorities_yields_ambiguous(node_dir: Path):

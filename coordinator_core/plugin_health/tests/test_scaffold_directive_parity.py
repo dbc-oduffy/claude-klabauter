@@ -1,47 +1,3 @@
-"""coordinator_core.plugin_health.tests.test_scaffold_directive_parity --
-C6's parity pin for this host.
-
-Purpose: `plugin_health` emits `health-status` through the shared
-`coordinator-doc-new` directive constructor
-(`scaffold_directive.build_scaffold_directive`, C1), for the one row
-C0's checked-in table (`coordinator_core/ops/doctype_hosts.py`) marks
-`emitted` against this module (keyed `ceremony="plugin-health"`). This
-pin is the module's own instance of the plan's § Test surface
-"Parity/pin per emitted type" shape (`coordinator_core/frontmatter/tests/
-test_plan_scaffold_census_parity.py`'s precedent, same idiom
-`roadmap_planning_assemble`'s C3 pin already ships): it calls
-`plugin_health.brief()` -- never hand-assembles a directive -- and checks
-the resulting `args` against `coordinator-doc-new`'s OWN real argument
-parser, so a future required-flag addition on that CLI fails this test
-rather than silently authoring an invalid scaffold.
-
-Loaded by file path (`importlib.machinery.SourceFileLoader`), same idiom
-as `roadmap_planning_assemble/tests/test_scaffold_directive_parity.py`:
-`coordinator-doc-new.py` is an extensionless-polyglot-style entry point,
-imported for its `_build_parser` alone -- `main()` is never invoked, so
-this test writes nothing to disk and spawns no subprocess.
-
-Covers (AC2/AC3/AC4, this module's slice):
-  - `brief(emit_health_status=True)` emits a `health-status` directive
-    whose `cli == "coordinator-doc-new"` and whose `args` parse clean
-    under the real parser, with `--out` resolving inside the repo root.
-  - `brief()` (the default, `emit_health_status=False`) emits no
-    directive at all -- the additive-only, backward-compatible shape this
-    module's `brief` docstring promises every pre-C6 caller.
-
-Negative-spec: does NOT re-assert the constructor's own unit-level
-behaviour (omit-when-None, `--out` escape rejection, the falsifier reds)
--- that is C2's `roadmap_planning_assemble/tests/test_scaffold_directive.py`,
-a sibling test module this one does not duplicate. Zero subprocess:
-`coordinator-doc-new.py` is exec'd in-process via `SourceFileLoader`,
-never invoked as a CLI. No `pytest.mark.spawns_process`.
-
-Spec backlink: docs/plans/2026-09-11-document-scaffolding-is-emitted-not-
-remembered.md, chunk C6.
-
-Run:
-    pytest coordinator_core/plugin_health/tests/test_scaffold_directive_parity.py -v
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -104,9 +60,6 @@ class HealthStatusScaffoldParityTest(unittest.TestCase):
 
 
 class NotEmittedWithoutTriggeringInputTest(unittest.TestCase):
-    """Additive-only: a pre-C6-shaped caller (default `emit_health_status
-    =False`) gets no directive -- the module docstring's
-    backward-compatibility claim, pinned."""
 
     def test_default_call_emits_no_directive(self):
         result = plugin_health.brief()

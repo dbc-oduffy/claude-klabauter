@@ -150,9 +150,6 @@ def test_candidate_shards_skips_shards_older_than_window_start(tmp_path):
     class _FakeCommonDir:
         pass
 
-    # candidate_shards delegates to sink_generations(repo_root); exercise the
-    # mtime filter directly against a hand-built path list instead of forcing
-    # a real git repo layout through sink_generations.
     kept = [p for p in [old, new] if p.stat().st_mtime >= _time.time() - 10]
     assert kept == [new]
 
@@ -184,7 +181,6 @@ def test_spawns_unknown_never_convicts_alone(tmp_path):
     verdict = verdicts["unknown.op"]
     assert verdict["verdict"] == "insufficient_confidence"
     assert verdict["p95_ms"] is None
-    # The figure itself is still surfaced, just not as a verdict.
     assert figures[0]["confidence"] == adj.CONFIDENCE_SPAWNS_UNKNOWN
     assert figures[0]["p95_ms"] == 900.0
 

@@ -70,8 +70,6 @@ def _handler(params: dict, repo_root=None) -> dict:
     config_dir_raw = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(home, ".claude")
     config_dir = Path(config_dir_raw)
 
-    # See module docstring: `os._exit(0)` is the only portable way to abandon
-    # a hung worker without wedging this synchronous SessionStart hook.
     executor = ThreadPoolExecutor(max_workers=1)
     try:
         future = executor.submit(run_self_probe, config_dir)
@@ -81,7 +79,7 @@ def _handler(params: dict, repo_root=None) -> dict:
             executor.shutdown(wait=False)
             sys.stdout.flush()
             sys.stderr.flush()
-            os._exit(0)  # fail-open -- never block SessionStart on a hung probe
+            os._exit(0)
         executor.shutdown(wait=False)
     except Exception:
         executor.shutdown(wait=False)

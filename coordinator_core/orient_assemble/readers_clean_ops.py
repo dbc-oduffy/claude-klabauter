@@ -74,20 +74,9 @@ from coordinator_core.ops.agent_worktree_sweep import (
     classify_worktree,
 )
 
-#: addon-health severity modes this family's `collect()` cadence-maps onto —
-#: mirrors the CLI's own two live modes (`--check-sentinel-presence` is a
-#: fresh-install bootstrap probe, not a per-cadence orient concern, and is
-#: intentionally not wired here).
-#:
-#: Default-direction convention (Review: code-reviewer — Finding 6, nit): this
-#: map's own `collect()` call-site default (`.get(cadence, "--red-only")`)
 #: and `_MEMO_SURFACE_MODE_BY_CADENCE`'s call-site default
 #: (`.get(cadence, "surface")`) below both fail an UNRECOGNIZED cadence
 #: toward the MORE-VERBOSE mode, never toward suppression — "show more" is
-#: the safe failure direction (never a silent KeyError, never a silent
-#: under-report), and it is deliberate parallelism between the two maps, not
-#: a coincidence. A future map added alongside these two should default the
-#: same direction.
 _ADDON_HEALTH_MODE_BY_CADENCE = {
     "day": "--red-and-stale",
     "session": "--red-only",
@@ -95,14 +84,6 @@ _ADDON_HEALTH_MODE_BY_CADENCE = {
 }
 
 #: Memo-surface behaviour by cadence — mirrors `_ADDON_HEALTH_MODE_BY_CADENCE`'s
-#: cadence→behaviour map shape (Approach § "cadence-parameterized reader
-#: behaviour", not a second, parallel dispatch mechanism). `~/.claude/CLAUDE.md`
-#: ruling (2026-07-30): "The cross-repo memo inbox doesn't move without
-#: deliberate Claude+human action. Depth is not a backlog and waiting memos
-#: are not overdue work — don't report the count." At `session` cadence this
-#: family emits ZERO judgment points and NO depth count anywhere — not a
-#: summary line, not an "N pending" aggregate. `day` (where `/workday-start`
-#: Step 1.45's blitz escalation lives) and `week` keep surfacing memos,
 #: capped per `_MEMO_JUDGMENT_POINT_CAP`.
 _MEMO_SURFACE_MODE_BY_CADENCE = {
     "day": "surface",
@@ -110,18 +91,10 @@ _MEMO_SURFACE_MODE_BY_CADENCE = {
     "week": "surface",
 }
 
-#: Named cap on the memo-surface family's per-item judgment-point list — see
-#: `reader_result.cap_judgment_points`. Unbounded per-inbound-memo lists were
-#: the majority contributor (~91 of 148 JPs) to a 124KB `brief('session')`
-#: payload before this cap existed.
 _MEMO_JUDGMENT_POINT_CAP = 15
 
 
-#: Per-character complement base for `_inverted_date` — one past `"9"`, the
 #: highest code point an ISO-8601 date's digits or `"-"` separator can take.
-#: Complementing each character against it reverses lexicographic order for
-#: that field, letting a single ascending `sorted()` express "band ascending,
-#: date descending" without a second sort pass or a `functools.cmp_to_key`.
 _INVERTED_DATE_SENTINEL = ":"
 
 
@@ -208,10 +181,6 @@ def _read_em_environment() -> ReaderResult:
                     "unpinned/non-medium effort silently inflates cost as "
                     "Anthropic's default drifts upward"
                 ),
-                # Acknowledgement-class (plan's C1b correction): the EM
-                # merely notes session-config drift here; nothing the EM
-                # does off this answer is un-gated action, so demotion into
-                # narration loses nothing.
                 reportable=True,
             )
         )
@@ -230,7 +199,6 @@ def _read_em_environment() -> ReaderResult:
                 ],
                 evidence=f"model={model_warn!r}",
                 reason="EM work is expected to run on Opus",
-                # Acknowledgement-class -- see j-em-env-effort's comment above.
                 reportable=True,
             )
         )
@@ -238,9 +206,6 @@ def _read_em_environment() -> ReaderResult:
 
 
 def _read_addon_health(mode: str) -> ReaderResult:
-    """Addon/doctor health scan — every RED/AMBER/stale/absent/missing-hook
-    line names a would-be remediation action (`/{plugin}:doctor`), so each
-    becomes a directive, never a judgment point (no open human question)."""
     directives: list[dict[str, Any]] = []
     lines, _exit_code = _scan_addon_health_run(mode)
     for idx, line in enumerate(lines):
@@ -258,20 +223,6 @@ def _read_addon_health(mode: str) -> ReaderResult:
 
 
 def _read_memo_surface(mode: str, *, repo_root: str | None = None) -> ReaderResult:
-    """Inbound cross-repo memo staleness — an open human branch (Accept /
-    Decline / Surface-to-PM), never silently auto-resolved.
-
-    `mode="suppress"` (session cadence) emits ZERO judgment points and NO
-    depth count anywhere — per the 2026-07-30 CLAUDE.md ruling, memo-inbox
-    depth is not backlog and is never reported as a count, not even as one
-    summarizing judgment point in place of the per-memo ones. `mode="surface"`
-    (day/week cadence) emits the existing per-memo judgment points, capped
-    via `cap_judgment_points`.
-
-    `repo_root`, when given, is threaded into `_resolve_inbox_dir(cwd=...)`
-    so the inbox resolves against the caller's repo rather than whatever
-    repo this process happens to be invoked from.
-    """
     if mode == "suppress":
         return ReaderResult()
 
@@ -312,9 +263,6 @@ def _read_memo_surface(mode: str, *, repo_root: str | None = None) -> ReaderResu
 
 
 def _read_rag_staleness() -> ReaderResult:
-    """example-retrieval-repo staleness token — stale/unknown implies a repomap
-    regeneration is due; a directive, not an open branch (the gating rule
-    is deterministic per `repomap-rag-gating.md`)."""
     token, _exit_code = check_rag_state()
     if token not in ("stale", "unknown"):
         return ReaderResult()
@@ -337,14 +285,6 @@ def _read_rag_staleness() -> ReaderResult:
 
 
 def _read_worktree_sweep(*, repo_root: str | None = None) -> ReaderResult:
-    """Agent-worktree classification (no `--reap`): reapable states become
-    directives naming the existing `agent-worktree-sweep --reap` CLI;
-    non-benign dirty worktrees become a judgment point (PM must handle,
-    never auto-reaped).
-
-    `repo_root`, when given, is threaded into `_wt_repo_root(cwd=...)` so
-    the swept worktree set resolves against the caller's repo rather than
-    whatever repo this process happens to be invoked from."""
     repo_root_str = _wt_repo_root(cwd=Path(repo_root) if repo_root else None)
     if not repo_root_str:
         return ReaderResult()

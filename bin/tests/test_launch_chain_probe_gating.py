@@ -41,11 +41,6 @@ _BIN_PROBE = _REPO_ROOT / "bin" / "claude-klabauter-doctor-probe.py"
 
 
 def _require_module() -> ModuleType:
-    """Import bin/claude-klabauter-doctor-probe.py, mirroring test_generator_staleness_probe.
-
-    Registered in sys.modules BEFORE exec so dataclass annotation resolution
-    (sys.modules[cls.__module__]) finds a valid namespace.
-    """
     if not _BIN_PROBE.exists():
         pytest.skip("bin/claude-klabauter-doctor-probe.py not on disk")
     key = "claude_klabauter_doctor_probe_launch_chain_unit"
@@ -76,8 +71,6 @@ def probe_env(tmp_path, monkeypatch):
 
 
 def _pin_locality(monkeypatch, call: str) -> None:
-    """Pin `env_locality.locality()` so a gating arm's verdict does not depend on
-    whether the box running the suite is itself a cloud container."""
     import coordinator_core.env_locality as el
 
     monkeypatch.setattr(el, "locality", lambda *a, **k: el.Locality(call, "certain", "test", call))
@@ -102,7 +95,6 @@ def _healthy_body() -> str:
 def _wrong_dialect_body() -> str:
     import os
 
-    # The OTHER family's definition — the shape maximalist used to install.
     return "claude() {\n  echo bash\n}\n" if os.name == "nt" else "function claude {\n  x\n}\n"
 
 
@@ -139,7 +131,6 @@ def test_healthy_shim_passes(probe_env):
 
 
 def test_no_doe_clone_skips_without_degrading(probe_env, monkeypatch):
-    """The marketplace population must not be degraded for lacking this chain."""
     mod = _require_module()
     import coordinator_core.ops.coordinator_doe_root as cdr
 
@@ -156,8 +147,6 @@ def test_no_doe_clone_skips_without_degrading(probe_env, monkeypatch):
 
 
 def test_cloud_box_skips_without_gating(probe_env, monkeypatch):
-    """claude-klabauter#29: a headless container never has an interactive shim, so
-    its absence must not exit 94 out of setup.py."""
     mod = _require_module()
     _shim_path(mod, probe_env).unlink(missing_ok=True)
     _pin_locality(monkeypatch, "cloud")
@@ -170,7 +159,6 @@ def test_cloud_box_skips_without_gating(probe_env, monkeypatch):
 
 
 def test_suspect_locality_still_gates(probe_env, monkeypatch):
-    """An ambiguous box is not rounded to headless — that would silence a desk."""
     mod = _require_module()
     _shim_path(mod, probe_env).unlink(missing_ok=True)
     _pin_locality(monkeypatch, "suspect")

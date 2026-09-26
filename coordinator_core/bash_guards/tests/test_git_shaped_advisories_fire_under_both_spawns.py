@@ -1,12 +1,3 @@
-"""coordinator_core.bash_guards.tests.test_git_shaped_advisories_fire_under
-_both_spawns -- the validate-commit dialect pair, which builds real repos.
-
-SPLIT OUT 2026-08-27. `_git` spawns, and `TestValidateCommitBothDialects` is
-the only class in this suite that reaches it. A spawn site in a non-test
-function forces the module-level tier form (spawn ratchet Rule 4 -- a marker
-on a helper is inert), which undivided would have tiered the four purely
-in-process dialect classes off the fast tier as well.
-"""
 from __future__ import annotations
 
 import time
@@ -61,12 +52,6 @@ class TestValidateCommitBothDialects:
     def test_no_staged_changes_declines_identically_under_both_dialects(
         self, tmp_path
     ):
-        """`check_validate_commit` consults `cmd`/`session_id`/`cwd`/`payload`
-        only -- it never reads `payload["tool_name"]` -- so its own body is
-        dialect-agnostic by construction (per this module's docstring); the
-        clean-repo no-staged-changes decline is the cheapest fixture that
-        proves the widened chain entry still reaches an identical verdict
-        under both dialects, without needing session/scope machinery."""
         root = self._init_repo_with_no_staged_changes(tmp_path)
 
         bash_entry = _entry(_chain("git commit -m x", "sess-a", root, "Bash"), self.NAME)

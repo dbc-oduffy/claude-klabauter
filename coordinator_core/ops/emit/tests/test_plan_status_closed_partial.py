@@ -49,7 +49,6 @@ def _plan_rec(path: str, **overrides) -> dict:
 
 @patch("coordinator_core.ops.emit.sections.plans._query_plan_records")
 def test_closed_partial_status_is_emitted_not_quarantined(mock_qr, tmp_path: Path) -> None:
-    """A plan with ``status: closed_partial`` reaches ``records``, not ``malformed``."""
     ctx = _make_ctx(tmp_path)
     mock_qr.return_value = [
         _plan_rec("docs/plans/2026-09-01-foo.md", status="closed_partial")

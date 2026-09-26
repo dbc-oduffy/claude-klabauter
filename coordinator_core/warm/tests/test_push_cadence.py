@@ -1,16 +1,3 @@
-"""Tests for coordinator_core.warm.push_cadence.
-
-Spec backlink: docs/plans/2026-08-30-who-pushes-and-when.md § C4
-
-Four legs, each pinned to fail if its own trigger stops firing (chunk body):
-  (1) the idle tick fires a sweep at the interval and not before
-  (2) idle demotion fires a final sweep via the shared `_run_tail`
-  (3) a sweep never blocks demotion / never extends server lifetime
-  (4) a second concurrent sweeper on the same repo declines
-
-Plus: touches only served repos, and feeds the failure detector on a
-declined/failed push.
-"""
 
 from __future__ import annotations
 
@@ -51,11 +38,6 @@ class _FakeVersionState:
 
 def _make_context():
     return server._ServerContext(name="test", sid="sid", version_state=_FakeVersionState())
-
-
-# ---------------------------------------------------------------------------
-# Leg 1 -- on_idle_tick fires at the interval, not before
-# ---------------------------------------------------------------------------
 
 
 def test_on_idle_tick_does_not_sweep_before_interval_elapses():
@@ -113,12 +95,6 @@ def test_push_cadence_interval_is_strictly_under_idle_deadline():
     assert push_cadence.PUSH_CADENCE_INTERVAL_SECS < idle.DEFAULT_IDLE_MINUTES * 60.0
 
 
-# ---------------------------------------------------------------------------
-# Leg 2 -- idle demotion fires a final sweep via the SHARED _run_tail, not
-# merely skew eviction.
-# ---------------------------------------------------------------------------
-
-
 def test_begin_shutdown_runs_registered_final_sweep_hook():
     calls = []
     lifecycle.set_final_sweep_hook(lambda: calls.append("swept"))
@@ -132,7 +108,6 @@ def test_begin_shutdown_runs_registered_final_sweep_hook():
     )
 
     assert calls == ["swept"]
-    # ctx_shutdown -> sweep -> exit_fn, in that order.
     assert order.index("ctx_shutdown") < order.index(("exit_fn", 0))
 
 
@@ -150,7 +125,6 @@ def test_drain_and_exit_also_runs_the_final_sweep_hook():
 
 
 def test_no_hook_registered_is_a_silent_no_op():
-    # No set_final_sweep_hook call -- must not raise.
     result = lifecycle.begin_shutdown(
         close_listener=lambda: None,
         in_flight_count=lambda: 0,
@@ -176,18 +150,7 @@ def test_final_sweep_hook_exception_never_blocks_exit_fn():
     assert order == [0]
 
 
-# ---------------------------------------------------------------------------
-# Leg 3 -- a sweep never blocks demotion / never extends server lifetime.
-# ---------------------------------------------------------------------------
-
-
 def test_idle_tick_runs_cadence_only_when_should_demote_is_false(monkeypatch):
-    """`_ServerContext._idle_tick` must never let a cadence sweep run on the
-    SAME tick that actually demotes -- by the time `demote_if_idle` returns
-    True in production, `os._exit` has already fired inside `begin_shutdown`
-    and the process is gone. This test pins that ordering with a fake
-    `exit_fn` standing in for `os._exit`.
-    """
     ctx = _make_context()
     sweep_calls = []
     monkeypatch.setattr(
@@ -196,11 +159,6 @@ def test_idle_tick_runs_cadence_only_when_should_demote_is_false(monkeypatch):
     monkeypatch.setattr(idle, "should_demote", lambda **kwargs: True)
 
     def _fake_demote_if_idle(**kwargs):
-        # Mirrors idle.demote_if_idle's own contract on a True verdict: it
-        # calls begin_shutdown, which (in production) ends the process via
-        # os._exit before control ever returns to _idle_tick -- simulated
-        # here by raising, since a real os._exit is not observable from a
-        # test.
         raise SystemExit(0)
 
     monkeypatch.setattr(idle, "demote_if_idle", _fake_demote_if_idle)
@@ -216,10 +174,6 @@ def test_sweep_total_ceiling_stops_taking_new_repos(tmp_path):
     def _fake_sweep_one(repo_root):
         swept.append(repo_root)
 
-    # First value establishes the deadline (0.0 + total_ceiling_secs); the
-    # second is checked before repo 1 (still under ceiling, proceeds); the
-    # third is checked before repo 2 (past ceiling, breaks without ever
-    # touching repo 2 or repo 3).
     clock_values = iter([0.0, 10.0, 999.0])
 
     def _clock():
@@ -238,16 +192,8 @@ def test_sweep_total_ceiling_stops_taking_new_repos(tmp_path):
     assert len(swept) == 1
 
 
-# ---------------------------------------------------------------------------
-# Leg 4 -- a second concurrent sweeper on the same repo declines.
-# ---------------------------------------------------------------------------
-
-
 def test_second_concurrent_sweeper_declines(tmp_path):
     repo = _repo(tmp_path)
-    # holder_pid must be a genuinely LIVE pid for the staleness check to
-    # treat this as an in-window live holder -- this test process's own pid
-    # stands in for "some resident generation currently mid-sweep".
     live_pid = os_getpid()
     first = push_cadence._acquire_sweep_lock(repo, now=1000.0, pid=live_pid)
     assert first is True
@@ -282,13 +228,6 @@ def test_release_only_removes_own_record(tmp_path):
     assert not push_cadence._sweep_lock_path(repo).exists()
 
 
-# ---------------------------------------------------------------------------
-# Touches only served repos. (Review: overengineering-reviewer Finding 3 --
-# `_sweep_one` no longer drains; `test_sweep_one_drains_before_pushing`
-# retired with the drain call it pinned.)
-# ---------------------------------------------------------------------------
-
-
 def test_sweep_repos_touches_only_the_served_set(tmp_path, monkeypatch):
     served = _repo(tmp_path, "served")
     unserved_marker = []
@@ -315,14 +254,8 @@ def test_server_context_served_repos_reflects_only_recorded_repos(tmp_path):
     repo_a = tmp_path / "a"
     ctx.record_served_repo(repo_a)
     assert ctx.served_repos() == [repo_a]
-    # Recording the same repo again must not duplicate it.
     ctx.record_served_repo(repo_a)
     assert ctx.served_repos() == [repo_a]
-
-
-# ---------------------------------------------------------------------------
-# A declined/failed push records a row through auto_push.log_failure.
-# ---------------------------------------------------------------------------
 
 
 def test_failed_push_feeds_the_failure_detector(tmp_path, monkeypatch):
@@ -353,22 +286,11 @@ def test_failed_push_feeds_the_failure_detector(tmp_path, monkeypatch):
     assert route == "cadence-sweep"
     assert err_class == "sweep-failed"
     assert "non-fast-forward" in first_err
-    # The ladder depth the outcome actually ran, never a literal -- this feed
-    # hardcoded 1 for three months and every reader of push-failures.log took
-    # that as measured (example-retrieval-repo-em memo, 2026-08-30).
     assert attempts == 3
-    # A fake that accepts and ignores a new argument is how this went stale
-    # in the first place -- assert its VALUE too, not merely its presence.
-    # `outcome.failed` is populated (a `failed` outcome), so this is the
-    # non-unconfirmed leg -- `is_unconfirmed` must be False.
     assert unconfirmed is False
 
 
 def test_sweep_feed_reports_the_outcomes_own_attempt_count(tmp_path, monkeypatch):
-    # Regression guard for the fabricated `after 1`: whatever the ladder
-    # reports, including its explicit `None` unknown, reaches log_failure
-    # unchanged. A literal here re-manufactures the false asymmetry between the
-    # cadence-sweep and direct-push routes that this fix removed.
     repo = _repo(tmp_path)
     monkeypatch.setattr(push_cadence, "head_branch", lambda root: "work/x/2026-08-30")
 
@@ -390,12 +312,6 @@ def test_sweep_feed_reports_the_outcomes_own_attempt_count(tmp_path, monkeypatch
         push_cadence._sweep_one(repo)
 
     assert seen == [1, 2, 3, None]
-
-
-# ---------------------------------------------------------------------------
-# C5 -- the cadence sweep gets its own retry budget, separate from the
-# interactive one.
-# ---------------------------------------------------------------------------
 
 
 def test_sweep_one_passes_the_cadence_budget_not_the_interactive_one(tmp_path, monkeypatch):
@@ -427,21 +343,11 @@ def test_sweep_one_passes_the_cadence_budget_not_the_interactive_one(tmp_path, m
 
 
 def test_sweep_repos_refuses_to_start_a_repo_it_cannot_finish(tmp_path):
-    """The (3) regression, pinned directly: a repo entered just under the
-    deadline used to still spend its full per-repo budget, making the true
-    worst case `total_ceiling_secs + per_repo_budget_secs` rather than the
-    ceiling itself. `sweep_repos` must now refuse to START a repo whose own
-    budget would run it past the deadline, even though `now < deadline`
-    still holds at that check."""
     swept = []
 
     def _fake_sweep_one(repo_root):
         swept.append(repo_root)
 
-    # deadline = 0.0 + 10.0 = 10.0. The per-iteration check reads 6.0: still
-    # under the deadline (6.0 < 10.0) so the OLD check alone would proceed,
-    # but 6.0 + per_repo_budget_secs (6.0) = 12.0 > 10.0, so the new
-    # admission guard must refuse to start this repo.
     clock_values = iter([0.0, 6.0])
 
     def _clock():
@@ -478,17 +384,8 @@ def test_sweep_lock_hold_secs_is_keyed_to_the_cadence_budget():
     assert push_cadence._SWEEP_LOCK_HOLD_SECS == push_cadence.CADENCE_PUSH_RETRY_BUDGET_SECS + 10.0
 
 
-# ---------------------------------------------------------------------------
-# P052-C6 (docs/plans/2026-09-10-push-cadence-hang-detection-over-elapsed-
-# timeout.md): the mechanical relationship guard pinning C5's arm-B
-# derivation of the four enumerated constants -- a docstring alone does not
-# discharge AC6, a test asserting the exact formula does. Arm B was
-# selected (docs/research/2026-09-10-git-push-progress-stall-measurement.md):
 # `CADENCE_PUSH_RETRY_BUDGET_SECS` is RETAINED as the fallback rather than
 # retired, and `SWEEP_TOTAL_CEILING_SECS`/`EXIT_SWEEP_CEILING_SECS` are both
-# re-derived off it (this module's own docstrings for each constant name
-# the exact offsets pinned here).
-# ---------------------------------------------------------------------------
 
 
 def test_sweep_total_ceiling_secs_is_cadence_budget_plus_its_named_margin():

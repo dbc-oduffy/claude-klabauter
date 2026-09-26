@@ -1,17 +1,3 @@
-"""
-bin.tests.test_claude_klabauter_doctor_enumeration_cap — the cap on probe-detail enumerations.
-
-A probe detail is one line of install output. Before this cap,
-``claude-klabauter.session.stable_pid_miss`` emitted all 223 missing session ids on that
-line (~15KB), burying every probe result printed after it. The count and the
-named hazard must survive; the tail of identifiers must not.
-
-Covers ``_capped_join`` directly plus its load-bearing caller
-(``_run_probe_stable_pid_miss``) against a large fabricated population.
-
-Spec backlink: CLAUDE.md § Agent-facing message text is a register;
-docs/wiki/guard-messaging.md § Register.
-"""
 
 from __future__ import annotations
 
@@ -28,7 +14,6 @@ _BIN_PROBE = _REPO_ROOT / "bin" / "claude-klabauter-doctor-probe.py"
 
 
 def _load_probe_module() -> Optional[ModuleType]:
-    """Import bin/claude-klabauter-doctor-probe.py as a fresh module via importlib."""
     if not _BIN_PROBE.exists():
         return None
     _KEY = "claude_klabauter_doctor_probe_enumeration_cap_unit"
@@ -36,7 +21,6 @@ def _load_probe_module() -> Optional[ModuleType]:
     if spec is None or spec.loader is None:
         return None
     mod = importlib.util.module_from_spec(spec)
-    # Register BEFORE exec_module so dataclass __module__ lookups succeed.
     sys.modules[_KEY] = mod
     try:
         spec.loader.exec_module(mod)  # type: ignore[union-attr]
@@ -72,7 +56,6 @@ class TestCappedJoin:
 
 
 class TestStablePidMissDetailIsCapped:
-    """The 223-session line: count + hazard survive, identifier tail does not."""
 
     def _stub_scan(self, mod: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         misses = [

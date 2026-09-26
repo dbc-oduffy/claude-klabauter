@@ -25,7 +25,6 @@ from coordinator_core.ops import install_meta_repo_precommit_hook as mod
 
 @pytest.fixture
 def resolver(monkeypatch):
-    """Drive both engine_root seams the guard reads, by name."""
 
     def _set(resolution_class: str, mirror):
         import coordinator_core.engine_root as er
@@ -47,16 +46,11 @@ def test_refuses_from_live_tree_when_a_mirror_is_registered(resolver, tmp_path):
 
     assert msg is not None
     assert "refusing" in msg
-    # The remedy must name the exact command, not describe it: a refusal an
-    # operator cannot act on is the shape that sends them to the override.
     assert str(mirror.resolve()) in msg
     assert "install-meta-repo-precommit-hook.py" in msg
 
 
 def test_allows_on_a_single_tree_box(resolver):
-    """No published mirror registered — `live-working-tree` is the ONLY
-    resolution available, so refusing would break the ordinary install to
-    guard a case that needs two trees to exist."""
     resolver("live-working-tree", None)
 
     assert mod._refuse_if_not_engine_root() is None
@@ -69,8 +63,6 @@ def test_allows_when_running_from_the_published_engine(resolver):
 
 
 def test_allows_when_the_mirror_is_this_very_tree(resolver):
-    """The mirror's own copy of this module resolves `parents[2]` to the
-    mirror root; it must install, not refuse at itself."""
     self_root = Path(mod.__file__).resolve().parents[2]
     resolver("live-working-tree", str(self_root))
 
@@ -78,9 +70,6 @@ def test_allows_when_the_mirror_is_this_very_tree(resolver):
 
 
 def test_resolver_failure_does_not_refuse(monkeypatch):
-    """Fail-open on an unresolvable engine root: 'cannot tell' is not
-    evidence of a wrong tree, and a guard that blocks installs when the
-    resolver is unhappy is worse than the bug it guards."""
     import coordinator_core.engine_root as er
 
     def _boom():
@@ -92,7 +81,6 @@ def test_resolver_failure_does_not_refuse(monkeypatch):
 
 
 def test_install_returns_nonzero_and_writes_no_hook_when_refusing(resolver, tmp_path):
-    """The refusal must abort the install, not merely warn beside it."""
     mirror = tmp_path / "mirror"
     mirror.mkdir()
     resolver("live-working-tree", str(mirror))

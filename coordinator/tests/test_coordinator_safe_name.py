@@ -1,13 +1,3 @@
-"""
-coordinator/tests/test_coordinator_safe_name.py
-
-Exercises the coordinator-safe-name CLI black-box (subcommand -> stdout/exit
-code), matching how every real caller (check-no-illegal-paths.py, agent
-prompts) invokes it.
-
-Spec backlink: docs/plans/2026-06-30-cross-platform-file-naming-helper.md § AC1, AC2
-Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md (Wave E3-c)
-"""
 
 from __future__ import annotations
 

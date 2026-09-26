@@ -1,26 +1,3 @@
-"""test_archive_stamp_cli_repair_archived_deployment_state.py — argv-parsing
-unit test for `archive-stamp-cli repair-archived-deployment-state` (2026-07-26).
-
-Defect this closes: `ship-handoff`'s state/handoffs/-only containment refuses
-archive/handoffs/ paths, so 13 archived handoffs stuck at
-deployment_state: in_flight could not be repaired through any existing verb
-and were instead hand-edited (DoE-claude cross-repo memo, 2026-07-26). This
-suite covers the CLI veneer's argv -> `cs_repair_archived_deployment_state(...)`
-call-shape translation only — not the engine behind it (that is
-coordinator_core/ops/tests/test_handoff_stamp.py's job, which exercises the
-handler's frontmatter-write/cross-field-validation contract directly).
-
-The `_import_module()` seam is monkeypatched (same idiom as
-test_archive_stamp_cli_close_handoff.py) so this suite never requires
-the engine root to resolve or coordinator_core to be importable.
-
-Loaded by file path (`importlib.machinery.SourceFileLoader`) since
-archive-stamp-cli is an extensionless polyglot entrypoint, not a `.py`
-module — same load idiom as the other archive-stamp-cli argv-parsing suites.
-
-Run:
-    pytest coordinator/bin/tests/test_archive_stamp_cli_repair_archived_deployment_state.py -v
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -48,9 +25,6 @@ _cli = _load_cli_module()
 
 
 class _RecordingRepairMod:
-    """Stand-in for coordinator_core.archive_stamp — records the exact kwargs
-    cs_repair_archived_deployment_state was called with, so each test can
-    assert the argv -> call-shape translation without a real claude-klabauter checkout."""
 
     def __init__(self):
         self.calls: list[dict] = []
@@ -130,10 +104,6 @@ class RepairArchivedDeploymentStateArgvParsingTest(unittest.TestCase):
         self.assertEqual(self.stub.calls[-1]["continued_into_override"], False)
 
     def test_continued_into_override_flag_forwarded(self):
-        """--continued-into-override is a bare flag (no value) that must
-        forward continued_into_override=True — the escape valve for a
-        successor recovered from git history / a cross-repo reference this
-        single-repo CLI cannot verify."""
         rc = _cli.main(
             [
                 "repair-archived-deployment-state",
@@ -197,11 +167,6 @@ class RepairArchivedDeploymentStateArgvParsingTest(unittest.TestCase):
         self.assertEqual(self.stub.calls, [])
 
     def test_engine_refusal_propagates_verbatim(self):
-        """A CLI-layer PASS (reason + deployment-state supplied) must still
-        propagate an engine-layer refusal (e.g. continued with no
-        continued_into) rather than masking it — the CLI does NOT re-validate
-        the cross-field rule itself; the handler is the single authoritative
-        gate for that."""
 
         class _RefusingMod:
             def cs_repair_archived_deployment_state(

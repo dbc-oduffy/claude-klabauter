@@ -93,16 +93,8 @@ logger = logging.getLogger(__name__)
 _PLN_PREFIX = "pln-"
 _DLV_PREFIX = "dlv-"
 
-# The only <repo>: qualifier resolve() accepts.
 # Mirrors rewrite_spec_backlinks._PEER_REPO_NAME, the fixed literal the emit
-# side ever produces; a queried_id carrying any OTHER qualifier is refused
-# as a typed miss rather than silently routed to the DoE-claude peer index.
 _RECOGNIZED_PEER_REPO = "DoE-claude"
-
-
-# ---------------------------------------------------------------------------
-# Typed outcome shapes
-# ---------------------------------------------------------------------------
 
 
 def _hit(path: str, queried_id: str) -> dict:
@@ -120,23 +112,7 @@ def _ambiguity(paths: List[str], queried_id: str) -> dict:
     return {"outcome": "ambiguity", "queried_id": queried_id, "path": None, "candidates": paths}
 
 
-# ---------------------------------------------------------------------------
-# Sizing-object reader (whole-document YAML, no frontmatter fence)
-# ---------------------------------------------------------------------------
-
-
 def _read_sizing_yaml(path: Path) -> dict:
-    """Read a `state/sizings/*.yaml` record. Returns {} on any error.
-
-    Sizings are whole-document YAML (no `---` frontmatter fence) — reading
-    them via `_read_meta`'s fence-scanning parser would silently return {}
-    (correctly, but for the wrong reason: it never finds a closing fence).
-    This reader is the whole-document-YAML twin, kept local to this module
-    rather than importing `backfill_deliverable_spine.read_yaml_document` so
-    this module has no runtime coupling to a peer chunk's concurrently-edited
-    file — same "second parser class" distinction that module's own docstring
-    names, re-derived minimally here.
-    """
     try:
         import yaml
     except ImportError:
@@ -155,24 +131,12 @@ def _read_sizing_yaml(path: Path) -> dict:
 
 
 def _real_id(value: object) -> Optional[str]:
-    """Return `value` iff it is a non-empty string not equal to a literal YAML null token.
-
-    Mirrors AC2's "carries a real id" definition: literal `null`/`~` and an
-    absent key both count as lacking one. `_read_meta`/`yaml.safe_load` already
-    parse a bare YAML `null` to Python `None`, so the only extra case handled
-    here is a quoted literal string `"null"`/`"~"` surviving as a str.
-    """
     if not isinstance(value, str):
         return None
     stripped = value.strip()
     if not stripped or stripped.lower() in {"null", "~"}:
         return None
     return stripped
-
-
-# ---------------------------------------------------------------------------
-# Index build — one shot per invocation
-# ---------------------------------------------------------------------------
 
 
 class _BacklinkIndex:
@@ -192,34 +156,13 @@ class _BacklinkIndex:
     def __init__(self) -> None:
         self.plan_id_to_paths: Dict[str, List[str]] = {}
         self.deliverable_id_to_paths: Dict[str, List[str]] = {}
-        # Inverse of the two maps above: path -> {"plan_id": ..., "deliverable_id": ...}.
-        # Only populated for records carrying at least one real id — this is
-        # the seam `rewrite_spec_backlinks.resolve_citation` (C3) needs: given
-        # a cited docs/plans/...md PATH, get the record's ids, not the other
-        # direction id -> path this index otherwise serves.
         self.path_to_ids: Dict[str, Dict[str, Optional[str]]] = {}
-        # basename (with .md extension, e.g. "2026-07-10-qsub-01-....md") ->
-        # [abs path, ...]. The join key `assert_no_dangling_plan_backlinks.py`
-        # already uses (`os.path.basename(rel)`) to match a citation's dated
-        # filename against its archived twin -- reused here verbatim (not
-        # re-derived as a looser stem/slug match) so a cited docs/plans/<x>.md
-        # whose record now lives at archive/specs/<YYYY-MM>/<x>.md still
-        # resolves, and the converse (an archive-path citation whose record
-        # has moved back to docs/plans/) resolves too. Only populated for
-        # records carrying at least one real id, mirroring `path_to_ids`.
-        # More than one path sharing a basename is the existing typed
         # AMBIGUITY outcome, never a silent pick.
         self.basename_to_paths: Dict[str, List[str]] = {}
 
     def _add(self, plan_id: Optional[str], deliverable_id: Optional[str], path: str) -> None:
         if plan_id is not None:
-            # list-valued like deliverable_id_to_paths,
-            # not a single str with last-write-wins. plan_id is documented as
-            # per-file identity, never shared, but a genuine duplicate/copy-
             # pasted plan_id must surface as a typed AMBIGUITY in resolve_id(),
-            # not silently resolve to whichever path an unordered directory
-            # traversal happens to visit last — refuse rather than guess,
-            # matching deliverable_id's own collision handling.
             self.plan_id_to_paths.setdefault(plan_id, []).append(path)
         if deliverable_id is not None:
             self.deliverable_id_to_paths.setdefault(deliverable_id, []).append(path)
@@ -230,7 +173,6 @@ class _BacklinkIndex:
 
 
 def _index_markdown_dir(index: _BacklinkIndex, base_dir: Path) -> None:
-    """Index every *.md file directly under base_dir (flat, non-recursive)."""
     if not base_dir.is_dir():
         return
     try:
@@ -244,7 +186,6 @@ def _index_markdown_dir(index: _BacklinkIndex, base_dir: Path) -> None:
 
 
 def _index_markdown_tree(index: _BacklinkIndex, base_dir: Path) -> None:
-    """Index every *.md file under base_dir, recursively (archive/specs/YYYY-MM/*.md)."""
     if not base_dir.is_dir():
         return
     walk_errors: List[OSError] = []
@@ -279,7 +220,6 @@ def _index_one_markdown(index: _BacklinkIndex, path: Path) -> None:
 
 
 def _index_sizings_dir(index: _BacklinkIndex, base_dir: Path) -> None:
-    """Index every *.yaml file directly under base_dir (state/sizings/, flat)."""
     if not base_dir.is_dir():
         return
     try:
@@ -334,13 +274,6 @@ def build_index(worktree_root: Path) -> _BacklinkIndex:
 
 
 def _doe_root_path() -> Optional[Path]:
-    """Resolve the DoE-claude peer repo root via the canonical resolver.
-
-    Reuses coordinator/bin/lib/coordinator_registry.py::doe_root() rather
-    than re-deriving a ladder — see this module's docstring for why
-    cc_invoke.py::_resolve_claude_klabauter_root() is NOT the right function (it
-    resolves the engine root, this repo, with zero peer-repo awareness).
-    """
     try:
         from coordinator.bin.lib.coordinator_registry import doe_root
     except ImportError as exc:
@@ -354,11 +287,6 @@ def _doe_root_path() -> Optional[Path]:
     if not root:
         return None
     return Path(root)
-
-
-# ---------------------------------------------------------------------------
-# Resolution
-# ---------------------------------------------------------------------------
 
 
 def resolve_id(index: _BacklinkIndex, queried_id: str) -> dict:
@@ -426,10 +354,6 @@ def resolve_path_with_index(index: _BacklinkIndex, worktree_root: Path, cited_pa
     if ids is not None:
         return _path_hit(cited_path, ids.get("plan_id"), ids.get("deliverable_id"))
 
-    # Exact-path miss: the cited path's record may have been git-mv'd by
-    # fleet.archive_completed_plans (docs/plans/ -> archive/specs/YYYY-MM/),
-    # or the converse. Fall back to a basename join against the SAME
-    # already-built index -- no second filesystem pass.
     basename = os.path.basename(cited_path)
     candidates = index.basename_to_paths.get(basename)
     if not candidates:
@@ -442,24 +366,6 @@ def resolve_path_with_index(index: _BacklinkIndex, worktree_root: Path, cited_pa
 
 
 def resolve_path(worktree_root: Path, cited_path: str) -> dict:
-    """Resolve a cited `docs/plans/...md` PATH to the record's `plan_id` /
-    `deliverable_id` — the inverse of `resolve()` (id -> path). This is the
-    seam `rewrite_spec_backlinks.resolve_citation` (C3) needs: it has a
-    citation's PATH, not an id, and must recover whichever real ids that
-    record carries so it can emit the `pln-`/`dlv-` preferred form.
-
-    Typed outcomes mirror `resolve()`'s: a path matching no indexed record
-    (wrong path, or a record with neither id present) is a typed MISS, never
-    a guess. A path matching an indexed record is a typed HIT carrying
-    `plan_id`/`deliverable_id` (either may be None if that record only has
-    the other).
-
-    Single-shot convenience wrapper: builds a fresh index for this one call.
-    A caller resolving MANY citations in one run (a batch/multi-file rewrite)
-    should build the index once via `build_index(worktree_root)` and call
-    `resolve_path_with_index(index, worktree_root, cited_path)` per lookup
-    instead — see that function's docstring.
-    """
     cited_path = (cited_path or "").strip()
     if not cited_path:
         return _path_miss(cited_path)
@@ -496,8 +402,6 @@ def resolve(worktree_root: Path, queried_id: str) -> dict:
             return _miss(queried_id)
         peer_index = build_index(peer_root)
         outcome = resolve_id(peer_index, bare_id)
-        # Re-key the outcome under the originally-queried (qualified) id so the
-        # caller sees back exactly what it asked for.
         outcome["queried_id"] = queried_id
         return outcome
 
@@ -505,9 +409,7 @@ def resolve(worktree_root: Path, queried_id: str) -> dict:
     return resolve_id(local_index, queried_id)
 
 
-# ---------------------------------------------------------------------------
 # JSON-RPC handlers
-# ---------------------------------------------------------------------------
 
 
 @register_op("spec_backlink.resolve")

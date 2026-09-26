@@ -80,16 +80,11 @@ def resolve_settings_home() -> Path:
 
 
 def resolve_backlog_grind_assemble_bin(settings_home: Path) -> Optional[Path]:
-    """Resolve the installed `backlog-grind-assemble` forwarder under
-    `settings_home`. Returns None when unresolvable — the caller treats that
-    as a transport failure and fails open."""
     return resolve_forwarder(settings_home / "bin", "backlog-grind-assemble")
 
 
 class _TransportFailure(Exception):
-    """Raised internally when a `backlog-grind-assemble` invocation could
-    not be completed at all (binary unresolvable, spawn failure, or
-    timeout)."""
+    pass
 
 
 def _run_backlog_grind_assemble(
@@ -151,16 +146,13 @@ def render_additional_context(run_id: str, inventory_path: str, brief: dict) -> 
     try:
         lines.append("Brief decision object:\n" + json.dumps(brief, indent=2, sort_keys=True))
     except (TypeError, ValueError):
-        pass  # unserializable brief; the narration lines above still render
+        pass
 
     rendered = "\n\n".join(lines)
     return rendered[:_CONTEXT_BUDGET_CHARS]
 
 
 def compute_context(payload: dict) -> Optional[str]:
-    """Compute the bare `additionalContext` prose for a single invocation,
-    or `None` when nothing should be emitted (a non-matching verb, or any
-    fail-open step along the mint/brief chain)."""
     inv = read_invocation(payload if isinstance(payload, dict) else {})
     if inv is None:
         return None
@@ -214,20 +206,10 @@ def compute_context(payload: dict) -> Optional[str]:
 
 @register_op("hooks.mise_autofire")
 def _handler(params: dict, repo_root=None) -> dict:
-    """IPC/dispatch_message adapter over `compute_context()`. `params` IS
-    the raw UserPromptExpansion or PreToolUse(Skill) payload dict.
-
-    Returns `context_only("UserPromptExpansion", ...)` when a mise-en-place
-    verb was matched and a mint+brief pair could be computed;
-    `no_advisory()` otherwise (silent pass — matches the DoE source's own
-    "nothing otherwise" stdout contract).
-    """
     params = payload_of(params)
     try:
         additional_context = compute_context(params)
     except Exception:
-        # Defense-in-depth — must never raise; every internal step already
-        # fails open on its own.
         additional_context = None
 
     if additional_context is None:

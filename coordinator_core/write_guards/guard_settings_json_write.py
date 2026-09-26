@@ -119,27 +119,14 @@ PRIORITY = 131
 
 _HOOKS_DISABLED_MARKER = ".coordinator-hooks-disabled"
 
-# Windows drive-letter absolute path, e.g. X:/foo, X:\foo.
-#
-# The lookbehind is load-bearing, not defensive tidying. Without it the drive
-# letter can be satisfied by the last letter of a URL scheme -- `https://`
-# supplies `s` + `:` + `/` -- so every settings.json write introducing an
-# ordinary https URL (an MCP server endpoint, say) matched as a foreign
-# Windows path and was DENIED. This guard advertises no override by design,
-# because the override surface would itself be settings.json's `env` block, so
-# a false positive here wedges the session with no in-harness way out: exactly
-# the unrecoverable shape the 2026-07-28 incident response exists to remove.
-# A real drive letter is never preceded by a word character; `https:` always is.
 _DRIVE_LETTER_RE = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]:[/\\]")
 
-# POSIX absolute paths under /Users/ or /home/.
 _POSIX_HOME_RE = re.compile(r"(?:^|[\s\"'(])(/Users/|/home/)")
 
 _HOOKS_BLOCK_RE = re.compile(r'"hooks"\s*:')
 
 
 def _is_windows() -> bool:
-    """Mockable seam -- tests monkeypatch this rather than os.name directly."""
     return os.name == "nt"
 
 
@@ -151,8 +138,6 @@ def _config_dir() -> Path:
 
 
 def _settings_targets(config_dir: Path) -> "list[str]":
-    """Resolved (symlink-following, non-strict) absolute paths for the two
-    live settings surfaces this guard protects."""
     targets = []
     for name in ("settings.json", "settings.local.json"):
         try:
@@ -169,10 +154,6 @@ def _is_settings_target(target_path: str, config_dir: Path) -> bool:
         resolved = os.path.realpath(os.path.abspath(target_path))
     except Exception:
         return False
-    # Comparison-only fold: this function only decides allow/deny — it never
-    # performs I/O on `resolved` itself (the actual tool call proceeds with
-    # the caller's original-case `target_path`). Both sides must be folded
-    # together, matching `_settings_targets`' own fold below.
     folded = casefold_path(resolved)
     return folded in {casefold_path(t) for t in _settings_targets(config_dir)}
 
@@ -198,11 +179,9 @@ def _extract_new_content(tool_name: str, tool_input: dict) -> str:
 
 
 def _foreign_path_match(content: str) -> "str | None":
-    """Returns the exact offending matched token, or None."""
     if _is_windows():
         match = _POSIX_HOME_RE.search(content)
         if match:
-            # Recover the full path-looking token starting at the match.
             start = match.start(1)
             tail = re.match(r"[^\s\"'()]*", content[start:])
             return tail.group(0) if tail else match.group(1)
@@ -228,11 +207,7 @@ def _deny(reason: str) -> Dict[str, Any]:
 def _foreign_path_deny_reason(
     token: str, payload: Optional[Dict[str, Any]] = None
 ) -> str:
-    """See module docstring "Deny message discipline" -- `payload` is
-    accepted and threaded from `check()` for shape parity with
-    `guard_doctrine_surface_edits._deny_reason`; today's render is
-    audience-invariant (no BYPASS clause survives for any reader)."""
-    del payload  # unused -- see module docstring's REMOVED note
+    del payload
     platform_name = "Windows" if _is_windows() else "POSIX"
     return (
         f"[settings.json guard] BLOCKED: {token!r} unresolvable on "
@@ -242,11 +217,7 @@ def _foreign_path_deny_reason(
 
 
 def _hooks_disabled_deny_reason(payload: Optional[Dict[str, Any]] = None) -> str:
-    """See module docstring "Deny message discipline" -- `payload` is
-    accepted and threaded from `check()` for shape parity with
-    `guard_doctrine_surface_edits._deny_reason`; today's render is
-    audience-invariant (no BYPASS clause survives for any reader)."""
-    del payload  # unused -- see module docstring's REMOVED note
+    del payload
     return (
         "[settings.json guard] BLOCKED: `hooks` block while "
         ".coordinator-hooks-disabled is present -- risks racing recovery or "
@@ -283,8 +254,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         return None
     except Exception:
-        # Fail-open on any unexpected error -- matches the reference hook's
-        # own fail-open-on-error discipline (it never emits a deny from its
-        # own error path, despite CLASS being hard-deny for its two named
-        # predicates).
         return None

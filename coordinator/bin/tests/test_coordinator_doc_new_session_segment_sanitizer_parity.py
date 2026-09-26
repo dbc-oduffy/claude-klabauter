@@ -48,7 +48,7 @@ _REJECTED_SENTINELS = {None, "em-unknown"}
 
 _SHARED_INPUTS = [
     "plain-ascii-segment",
-    "agent@session-1a2b3c4d",  # the canonical EM-side agent id shape '@' exists to preserve
+    "agent@session-1a2b3c4d",
     "has spaces and/slashes",
     "colons:and:more",
     "..",

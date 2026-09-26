@@ -90,41 +90,12 @@ from coordinator_core.ops.fleet._common import main_worktree_root
 
 _LOG = logging.getLogger(__name__)
 
-#: The single provenance edge kind this op is allowed to walk. Fixed — not
-#: caller-overridable — so this op can never accidentally widen into the
-#: lineage/coverage edge namespace (predecessor / additional_predecessors /
-#: forked_from). See module docstring "Namespace isolation".
 _ORIGIN_EDGE_KINDS = {"origin_handoff"}
 
 
 def _resolve_start_path(
     params: dict, worktree_root: Path
 ) -> Optional[Path]:
-    """Resolve the caller-supplied starting handoff to an absolute path on disk.
-
-    Accepts either ``handoff_id`` (filename stem under ``state/handoffs/``,
-    mirroring ``handoff_match.py``'s ``handoff_id`` convention) or an explicit
-    ``path`` (absolute, or relative to ``worktree_root``). ``handoff_id``, if
-    supplied, is authoritative and exclusive — ``path`` is consulted only when
-    ``handoff_id`` is absent, NOT when it fails to resolve (Review:
-    code-reviewer, Finding 4 — a supplied-but-unresolvable ``handoff_id``
-    returns ``None`` immediately; it does not fall through to ``path``).
-
-    Returns ``None`` if neither param is usable or the resolved file does not
-    exist on disk — callers must treat ``None`` as "cannot start the walk".
-
-    Containment guarantee (Review: code-reviewer, Finding 1): both params are
-    constrained to this repo's handoff trees. ``handoff_id`` is validated
-    against an allowlist regex (no ``/``, ``\\``, or ``..`` — no path
-    separators at all) before it is interpolated into a path, so a traversal
-    value is rejected outright rather than resolved. ``path`` is
-    post-resolve-checked to stay under ``state/handoffs/`` or
-    ``archive/handoffs/`` (the ancestry walk can transitively resolve
-    ``origin_handoff`` edges into the archive tree via
-    ``dag._resolve_target``, so archived starting handoffs are a legitimate
-    case) — anything else, including absolute paths elsewhere on disk or
-    symlinks that escape via ``.resolve()``, is rejected.
-    """
     handoff_id = params.get("handoff_id")
     if isinstance(handoff_id, str) and handoff_id.strip():
         handoff_id = handoff_id.strip()
@@ -204,7 +175,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
         return {"ancestry": [], "terminated_early": ""}
 
-    worktree_root = main_worktree_root(repo_root)  # router common_dir → worktree root
+    worktree_root = main_worktree_root(repo_root)
     handoffs_dir = worktree_root / "state" / "handoffs"
 
     start_path = _resolve_start_path(params, worktree_root)
@@ -217,10 +188,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
         return {"ancestry": [], "terminated_early": ""}
 
-    # Plural `handoffs_dir` (this module's
-    # convention, mirrors handoff_match.py/handoff_children.py) vs. singular
-    # `handoff_dir` (dag.walk_forward's param name) is an intentional naming
-    # mismatch across the module boundary, not a typo.
     result = walk_forward(
         str(start_path),
         edge_kinds=_ORIGIN_EDGE_KINDS,

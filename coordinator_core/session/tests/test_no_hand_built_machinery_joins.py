@@ -38,10 +38,6 @@ import re
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 _SCAN_ROOT = os.path.join(_REPO_ROOT, "coordinator_core")
 
-#: Exactly the sites C2 repointed (its own `writes:` list, minus the deleted
-#: `session/subagent_share.py` and this guard's own new test file) plus
-#: `session/machinery_paths.py` itself -- the one file allowed to spell the
-#: two segments together.
 _GUARDED_RELATIVE_FILES = [
     "group_em/baseline.py",
     "guard_advisory_counter.py",
@@ -70,16 +66,6 @@ _EXCLUDED_FILES = {
     os.path.join(_SCAN_ROOT, "session", "machinery_paths.py"),
 }
 
-#: A hand-built join: the OLD two-segment spelling -- literal `"state"`
-#: immediately followed by literal `"subagent-share"` as adjacent path-join
-#: arguments, whether chained with `/` (`Path(...) / "state" / "subagent-
-#: share"`) or passed positionally (`os.path.join(..., "state",
-#: "subagent-share", ...)`). A caller routed correctly through
-#: `machinery_root()`/`share_dir()` never spells `"state"` next to
-#: `"subagent-share"` -- only a hand-built join does, which is exactly what
-#: distinguishes a regression from `machinery_paths.py`'s own sanctioned
-#: `os.path.join(machinery_root(repo_root), "subagent-share")` shape (no
-#: `"state"` literal in that expression at all).
 _JOIN_PATTERN = re.compile(
     r'["\']state["\']\s*[,/]\s*["\']subagent-share["\']'
 )

@@ -65,7 +65,6 @@ def _check_directory_md(repo_root: Path) -> Tuple[bool, str]:
 
 
 def _check_archive_completed_empty(repo_root: Path) -> Tuple[bool, str]:
-    """True (met) iff archive/completed/ is absent or contains no entries."""
     completed = repo_root / "archive" / "completed"
     if not completed.is_dir():
         return True, "archive/completed/ absent"
@@ -75,7 +74,6 @@ def _check_archive_completed_empty(repo_root: Path) -> Tuple[bool, str]:
 
 
 def _check_no_distillable_tasks(repo_root: Path) -> Tuple[bool, str]:
-    """True (met) iff tasks/ has no *.md files (absent tasks/ counts as met)."""
     tasks_dir = repo_root / "tasks"
     if not tasks_dir.is_dir():
         return True, "tasks/ absent"
@@ -86,12 +84,6 @@ def _check_no_distillable_tasks(repo_root: Path) -> Tuple[bool, str]:
 
 
 def probe_fresh_repo(repo_root: Path) -> Tuple[bool, List[str]]:
-    """Run the three-axis freshness check against repo_root.
-
-    Returns (is_fresh, reasons) where is_fresh is True only if ALL three axes are
-    met, and reasons lists a human-readable line per axis (met or unmet) so a
-    caller can see exactly why the verdict landed where it did.
-    """
     checks = (
         _check_directory_md(repo_root),
         _check_archive_completed_empty(repo_root),

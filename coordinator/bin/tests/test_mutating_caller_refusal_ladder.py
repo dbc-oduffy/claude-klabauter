@@ -40,9 +40,6 @@ import cc_invoke as _cc_invoke_mod  # noqa: E402
 
 
 def _load_cli_module(name: str, filename: str):
-    """Import a hyphen-named `coordinator/bin/*.py` CLI by file path — not
-    importable by dotted name, and side-effect-free at import (`main()` is
-    `__main__`-guarded)."""
     path = os.path.join(_BIN_DIR, filename)
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -55,8 +52,6 @@ SUCCESS_ENVELOPE = {"ok": True}
 
 
 class TestReapSessionsInspectsRefusal(unittest.TestCase):
-    """reap-sessions.py: MUST NOT block session start (exit 0 always), but
-    MUST NOT silently discard an in-envelope refusal any more either."""
 
     def setUp(self) -> None:
         self.mod = _load_cli_module("_cli_reap_sessions", "reap-sessions.py")
@@ -86,8 +81,6 @@ class TestReapSessionsInspectsRefusal(unittest.TestCase):
         self.assertNotIn("refused", stderr.getvalue())
 
     def test_transport_failure_still_exits_0(self) -> None:
-        """Unchanged pre-existing contract: a raised RuntimeError from route()
-        (transport failure) is still logged and swallowed to exit 0."""
         stderr = io.StringIO()
         with unittest.mock.patch.object(
             self.mod, "_resolve_repo_root", return_value="/fake/repo"
@@ -101,9 +94,6 @@ class TestReapSessionsInspectsRefusal(unittest.TestCase):
 
 
 class _ExitTwoOnRefusalMixin:
-    """Shared assertions for the three thin CLI doors that call
-    `cc_invoke.cc_invoke()` directly (not `route()`), print the bare result,
-    and exit 0 unconditionally on transport success — before this chunk."""
 
     module_name: str
     filename: str
@@ -169,9 +159,6 @@ class TestSetGoalKrStatusInspectsRefusal(_ExitTwoOnRefusalMixin, unittest.TestCa
 
 
 class TestMutationRefusalMessageHelper(unittest.TestCase):
-    """cc_invoke.mutation_refusal_message — the extracted shared inspection
-    every caller above now uses, mirrored against route_mutation's own two
-    documented refusal shapes."""
 
     def test_nonzero_exit_code_shape_refuses(self) -> None:
         message = _cc_invoke_mod.mutation_refusal_message("op.name", {"exit_code": 2, "failed": [{}]})

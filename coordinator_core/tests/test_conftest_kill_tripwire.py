@@ -1,6 +1,3 @@
-"""The suite-root conftest refuses any kill aimed outside the test's own
-process tree. The real `os.kill` is swapped for a recorder in every case, so
-a broken tripwire fails this test instead of signalling a live session."""
 
 from __future__ import annotations
 

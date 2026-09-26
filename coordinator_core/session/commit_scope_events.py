@@ -80,28 +80,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-#: Filename appended to inside ``.git/coordinator-sessions/<session_id>/``.
 EVENTS_FILENAME = "commit-scope-events.jsonl"
 
-#: Schema tag carried on every record, so a future shape change is detectable
-#: by a reader rather than silently misparsed.
 SCHEMA = "commit-scope-event/v1"
 
-#: Growth bound — see the module docstring. Both are enforced on every append
-#: by head-dropping the oldest records; whichever binds first wins.
 MAX_RECORDS = 500
 MAX_BYTES = 256 * 1024
 
-#: Bounds the COUNT of staged paths recorded per record; does not bound total
-#: record size (individual path length is unbounded) — see `_bounded`'s
-#: newest-survives rule for the byte-budget story.
 MAX_STAGED_PATHS = 1000
 
 _VALID_VERDICTS = ("none", "advisory", "deny")
 
 
 def events_path(session_dir: str | os.PathLike[str]) -> Path:
-    """The JSONL path for a session dir. Pure path math; touches no disk."""
     return Path(session_dir) / EVENTS_FILENAME
 
 
@@ -116,8 +107,6 @@ def build_record(
     verdict: str,
     timestamp: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Build the record dict. Separated from the write so tests can assert the
-    shape without a filesystem, and so the write path has one failure surface."""
     staged_list = [str(p) for p in staged]
     truncated = len(staged_list) > MAX_STAGED_PATHS
     if truncated:
@@ -128,10 +117,6 @@ def build_record(
     for path, fact in (attribution or {}).items():
         if path not in staged_set:
             continue
-        # Accept both an OwnerFact-shaped object (attribute access) and a
-        # plain Mapping (e.g. OwnerFact._asdict()-shaped dict) so a future
-        # caller passing dicts gets real values instead of silent getattr
-        # defaults. Still never raises — this runs inside a fail-open ring.
         if isinstance(fact, Mapping):
             _get = fact.get
         else:
@@ -165,12 +150,8 @@ def _bounded(old_text: str, line: str) -> str:
     lines.append(line)
     if len(lines) > MAX_RECORDS:
         lines = lines[-MAX_RECORDS:]
-    # Byte budget, not character budget: `record_commit_attempt` serializes
-    # with ensure_ascii=False, so non-ASCII content is multi-byte on disk —
-    # counting Python characters here would silently let the real file exceed
     # MAX_BYTES. `len(lines) > 1` bounds the loop even for a single record
     # whose own UTF-8 encoding alone exceeds MAX_BYTES (newest-survives rule
-    # below still applies — that one line is kept regardless).
     while (
         len(lines) > 1
         and sum(len(l.encode("utf-8")) + 1 for l in lines) > MAX_BYTES
@@ -191,11 +172,6 @@ def record_commit_attempt(
     sweep_all: bool,
     verdict: str,
 ) -> None:
-    """Append ONE bounded JSONL record for this commit attempt. Fail-open.
-
-    Returns None always and raises nothing — see this module's negative-spec.
-    Callers must not branch on anything this function does.
-    """
     try:
         record = build_record(
             session_id=session_id,
@@ -217,8 +193,4 @@ def record_commit_attempt(
             missing_ok=True,
         )
     except Exception:
-        # Fail-open by construction: instrumentation never blocks, denies, or
-        # alters a commit decision. Deliberately bare — a lock timeout, a
-        # read-only .git, an unserializable attribution value and an absent
-        # lock backend are all the same non-event to the caller.
         return

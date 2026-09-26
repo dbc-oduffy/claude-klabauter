@@ -1,21 +1,3 @@
-"""Tests for coordinator_core.write_guards.check_claude_md_size -- the
-Write/Edit/MultiEdit SIZE leg ported from DoE-claude
-coordinator/hooks/scripts/check-claude-md-size.py, flipped from hard-deny
-to advisory by plan chunk C2 of
-docs/plans/2026-08-06-apply-guard-class-census.md (DR-277).
-
-Previously untested at this repo level (the leg shipped in the C8 fan-in
-port with no dedicated test file). C7b (docs/plans/2026-07-30-boot-doctrine-
-cut-and-refill-gate.md § C7b) adds two new behaviours this file covers:
-
-  - AC3: governance widens from the two hardcoded fleet-loaded surfaces to
-    ANY surface a repo's own coordinator/audience-manifest.txt names.
-  - AC4: the per-surface ratchet watermark, read from the same repo-local
-    ledger-file convention DoE's (still DoE-resident) admission gate uses.
-
-Spec backlink: DoE-claude:pln-hook-fan-in-fold-the-pretoolus-27c1e9 § C8;
-  docs/plans/2026-07-30-boot-doctrine-cut-and-refill-gate.md § C7b.
-"""
 
 from __future__ import annotations
 
@@ -174,17 +156,12 @@ class TestRatchetWatermarkEnforced:
         assert result is None
 
     def test_malformed_watermark_does_not_deny_and_names_ledger_path(self, tmp_path, capsys):
-        # Fix for the wedge-with-no-escape-hatch defect: a malformed ledger
-        # is auxiliary-bookkeeping corruption, not a statement about
-        # whether THIS edit is legitimate -- this module carries zero
         # COORDINATOR_OVERRIDE_* keys, so a hard deny here had no
-        # in-harness way out. The ratchet leg now fails OPEN (unarmed),
-        # surfacing the malformed ledger path via stderr instead.
         target = self._governed_target(tmp_path)
         ledger_dir = tmp_path / "state" / "audits"
         ledger_dir.mkdir(parents=True)
         ledger_path = ledger_dir / "2026-07-27-doctrine-envelope-classification.md"
-        ledger_path.write_text("## Watermark\n- Bytes: 6000\n", encoding="utf-8")  # no Reason
+        ledger_path.write_text("## Watermark\n- Bytes: 6000\n", encoding="utf-8")
 
         result = guard.check(_write_payload("Write", str(target), content="x" * 10))
 
@@ -193,14 +170,12 @@ class TestRatchetWatermarkEnforced:
         assert str(ledger_path) in err
 
     def test_malformed_watermark_hard_limit_breach_still_denies(self, tmp_path):
-        # Regression: the malformed-ledger fail-open must not swallow the
         # OTHER, unrelated deny leg -- an actual HARD_LIMIT_BYTES breach
-        # still denies exactly as before.
         target = self._governed_target(tmp_path)
         ledger_dir = tmp_path / "state" / "audits"
         ledger_dir.mkdir(parents=True)
         ledger_path = ledger_dir / "2026-07-27-doctrine-envelope-classification.md"
-        ledger_path.write_text("## Watermark\n- Bytes: 6000\n", encoding="utf-8")  # no Reason
+        ledger_path.write_text("## Watermark\n- Bytes: 6000\n", encoding="utf-8")
 
         result = guard.check(
             _write_payload("Write", str(target), content="x" * (HARD_LIMIT_BYTES + 1))
@@ -212,13 +187,9 @@ class TestRatchetWatermarkEnforced:
         assert "additionalContext" in out
 
     def test_over_watermark_shrink_is_admitted(self, tmp_path):
-        # C7c: a surface already over its watermark (grown by a route this
-        # edit-time leg never saw) must still accept the edits that shrink
-        # it back down -- refusing them leaves "raise the watermark" as the
-        # only way out, which is the trap this leg now closes.
         target = self._governed_target(tmp_path)
         self._arm_watermark(tmp_path, bytes_val=6000, reason="post-cut arming, C7b")
-        target.write_text("x" * 8000, encoding="utf-8")  # pre-edit: already over watermark
+        target.write_text("x" * 8000, encoding="utf-8")
 
         result = guard.check(_write_payload("Write", str(target), content="x" * 7000))
 
@@ -260,8 +231,6 @@ class TestRatchetWatermarkEnforced:
         assert result is None
 
     def test_genuine_ratchet_failure_still_denies(self, tmp_path):
-        # Regression: a well-formed watermark whose ratchet check genuinely
-        # fails (growth past the recorded watermark) still denies exactly
         # as before -- only the PARSE-FAILURE branch changed.
         target = self._governed_target(tmp_path)
         self._arm_watermark(tmp_path, bytes_val=6000, reason="post-cut arming, C7b")

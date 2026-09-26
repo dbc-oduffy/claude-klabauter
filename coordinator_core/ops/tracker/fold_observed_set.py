@@ -111,9 +111,7 @@ def run_fold_observed_set(*, repo_root: Path) -> dict:
     return {"ran": True, "reason": "appended", "marker": marker}
 
 
-# ---------------------------------------------------------------------------
 # JSON-RPC handler
-# ---------------------------------------------------------------------------
 
 
 @register_op("tracker.fold_observed_set")
@@ -152,11 +150,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     common_dir = Path(repo_root)
     worktree = main_worktree_root(common_dir)
 
-    # D3: optional repo_root consistency check (contract §3.3 doctrine).
-    # Fail-closed on a genuine mismatch — never silently proceed (see
-    # coordinator_core/ops/fleet/_common.py:check_repo_root's own doctrine,
-    # matched here by boot_sweep.py:1374-1376 and every
-    # coordinator_core/ops/fleet/*.py handler's identical guard).
     mismatch = check_repo_root(params.get("repo_root"), common_dir)
     if mismatch:
         return {"ran": False, "reason": mismatch, "marker": None}

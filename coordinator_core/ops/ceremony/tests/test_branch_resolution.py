@@ -107,8 +107,6 @@ from coordinator_core.ops.ceremony.branch_resolution import (
     ScopingVerdict,
     _detect_foreign_commits,
     _range_is_contiguous_suffix,
-    # _read_session_shape was imported but never used; removed.
-    # _session_added_plans is kept — exercised by the direct unit tests below.
     _read_started_at,
     _resolve_in_repo,
     _sanitize_consumed_handoffs,
@@ -126,30 +124,11 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-# ---------------------------------------------------------------------------
-# Test helpers
-# ---------------------------------------------------------------------------
-
-
 def _run(coro) -> Any:
-    """Run an async handler coroutine synchronously."""
     return asyncio.run(coro)
 
 
 def _wire_origin_pushing_only_current_head(root: Path, tmp_path: Path) -> None:
-    """Add an ``origin`` remote and push ONLY the caller's current HEAD.
-
-    Detector B (``resolver.detect_git_provenance_consumed``) resolves
-    ``merge-base origin/main HEAD`` before scanning; the shared ``git_repo``
-    fixture wires no remote at all, so Detector B's merge-base would be
-    unresolvable for any test that needs it. Call this once, immediately
-    after the fixture's initial commit and BEFORE seeding the commit under
-    test — pushing a later commit would make ``origin/main == HEAD``,
-    collapsing ``merge-base..HEAD`` to empty and hiding the very commit
-    Detector B is supposed to see (the gotcha
-    ``test_resolver_git_provenance.py``'s ``_commit_unpushed`` docstring
-    documents and this helper mirrors).
-    """
     bare = tmp_path / "origin.git"
     subprocess.run(
         ["git", "init", "--bare", "-b", "main", str(bare)],
@@ -170,19 +149,9 @@ def _wire_origin_pushing_only_current_head(root: Path, tmp_path: Path) -> None:
 
 
 class WscResolveRepo:
-    """Lightweight git repo fixture for wsc_resolve tests.
-
-    Provides helpers to:
-      - seed session-shape.json at the correct path
-      - seed consumed handoffs with consumed_by: <sid>
-      - seed open memos in cross-repo/inbox/
-      - seed completion archive entries
-      - create coordinator.local.md with project_subtypes
-    """
 
     def __init__(self, root: Path) -> None:
         self.root = root
-        # Create the required subdirectories
         (root / ".git" / "coordinator-sessions").mkdir(parents=True, exist_ok=True)
         (root / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
         (root / "cross-repo" / "inbox").mkdir(parents=True, exist_ok=True)
@@ -191,7 +160,6 @@ class WscResolveRepo:
 
     @property
     def common_dir(self) -> Path:
-        """Git common dir (= <root>/.git for a standard repo)."""
         return self.root / ".git"
 
     def seed_session_shape(
@@ -204,7 +172,6 @@ class WscResolveRepo:
         schema_version: int = 1,
         extra_fields: Optional[dict[str, Any]] = None,
     ) -> Path:
-        """Write a session-shape.json for the given sid."""
         sid_dir = self.common_dir / "coordinator-sessions" / sid
         sid_dir.mkdir(parents=True, exist_ok=True)
         shape: dict[str, Any] = {
@@ -232,13 +199,6 @@ class WscResolveRepo:
         completeness_checklist: bool = False,
         status: str = "open",
     ) -> Path:
-        """Write a state/handoffs/<name>.md with optional claimed_by.
-
-        Kwarg name kept as ``consumed_by`` (call-site DSL, unchanged) but the
-        frontmatter key written is ``claimed_by`` — DR-084 P4 (C7) retired
-        ``consumed_by`` corpus-wide and ``coverage._get_handoff_consumed_by``
-        is now a single-name ``claimed_by`` read.
-        """
         path = self.root / "state" / "handoffs" / name
         lines = [
             f'title: "Test Handoff"',
@@ -265,12 +225,6 @@ class WscResolveRepo:
         kind: Optional[str] = None,
         in_reply_to: Optional[str] = None,
     ) -> Path:
-        """Write a cross-repo/inbox/<name>.md open memo.
-
-        kind / in_reply_to (C2, AC4a): optional frontmatter fields exercised by
-        the bulk-eligibility tests — omitted entirely when None (matching how
-        real memos predate these fields).
-        """
         path = self.root / "cross-repo" / "inbox" / name
         lines = [f'title: "{title}"', f"status: {status}"]
         if kind is not None:
@@ -282,7 +236,6 @@ class WscResolveRepo:
         return path
 
     def seed_archived_memo(self, name: str) -> Path:
-        """Write a cross-repo/archive/<name>.md — a resolved/terminal memo."""
         path = self.root / "cross-repo" / "archive" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
@@ -292,13 +245,11 @@ class WscResolveRepo:
         return path
 
     def seed_plan(self, name: str) -> Path:
-        """Write a docs/plans/<name>.md plan doc."""
         path = self.root / "docs" / "plans" / name
         path.write_text(f"# Plan\n\nPlan content.\n", encoding="utf-8")
         return path
 
     def seed_completion_entry(self, name: str, chain: str) -> Path:
-        """Write an archive/completed/<name>.md with chain field."""
         path = self.root / "archive" / "completed" / name
         path.write_text(
             f"---\ntitle: Test\nchain: {chain}\n---\n\nEntry.\n",
@@ -307,7 +258,6 @@ class WscResolveRepo:
         return path
 
     def seed_coordinator_local(self, project_subtypes: list[str]) -> Path:
-        """Write coordinator.local.md with project_subtypes."""
         path = self.root / "coordinator.local.md"
         subtypes_yaml = "\n".join(f"  - {st}" for st in project_subtypes)
         path.write_text(
@@ -317,7 +267,6 @@ class WscResolveRepo:
         return path
 
     def seed_started_at(self, sid: str, value: str) -> Path:
-        """Write a started_at file for the given sid."""
         sid_dir = self.common_dir / "coordinator-sessions" / sid
         sid_dir.mkdir(parents=True, exist_ok=True)
         path = sid_dir / "started_at"
@@ -331,10 +280,6 @@ class WscResolveRepo:
         content: str = "scratch\n",
         mtime: Optional[float] = None,
     ) -> Path:
-        """Write a file under tasks/<rel_path> with an optional explicit mtime.
-
-        If mtime is provided, sets the file's atime and mtime via os.utime().
-        """
         path = self.root / "tasks" / rel_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
@@ -343,7 +288,6 @@ class WscResolveRepo:
         return path
 
     def seed_completeness_mirror(self, sid: str, content: str) -> Path:
-        """Write a completeness-checklist.yaml mirror for the given sid."""
         tasks_dir = self.root / "state" / "tasks" / sid
         tasks_dir.mkdir(parents=True, exist_ok=True)
         path = tasks_dir / "completeness-checklist.yaml"
@@ -352,21 +296,11 @@ class WscResolveRepo:
 
 @pytest.fixture
 def repo(tmp_path) -> WscResolveRepo:
-    """Provide a WscResolveRepo for tests."""
     return WscResolveRepo(tmp_path / "repo")
 
 
 @pytest.fixture
 def git_repo(tmp_path) -> WscResolveRepo:
-    """Provide a WscResolveRepo whose root is a live git repository.
-
-    Extracted from the duplicated git-init boilerplate
-    in tests (e), (f), (g).  Each of those tests required a real git repo for the
-    grep-based L1b fallback to work; the setup was copy-pasted three times.
-
-    Yields a WscResolveRepo after running git init, configuring identity, and making
-    an initial commit so git grep has a tree to search against.
-    """
     repo = WscResolveRepo(tmp_path / "repo")
     subprocess.run(["git", "init", "-b", "main"], cwd=str(repo.root),
                    capture_output=True, check=True,
@@ -380,146 +314,12 @@ def git_repo(tmp_path) -> WscResolveRepo:
     subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=str(repo.root),
                    capture_output=True, check=True,
                    **no_console_creationflags(),)
-    # Ensure at least one file so the initial commit does not fail on an empty tree
     (repo.root / ".gitkeep").write_text("", encoding="utf-8")
     subprocess.run(["git", "add", "-A"], cwd=str(repo.root), capture_output=True, check=True, **no_console_creationflags())
     subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo.root),
                    capture_output=True, check=True,
                    **no_console_creationflags(),)
     return repo
-
-
-# ---------------------------------------------------------------------------
-# (a) missing_sid
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (b) missing_repo_root
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (c) disposition_single_session
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (d) disposition_chain_terminal
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (e) disposition_grep_fallback_terminal — absent session-shape.json → grep finds consumed_by
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (f) disposition_grep_fallback_single — absent session-shape.json, no consumed_by
-# ---------------------------------------------------------------------------
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# (g) disposition_absent_pickup_field — session-shape.json present but 'pickup' absent
-# ---------------------------------------------------------------------------
-
-
-    # Removed tautological assertion
-    # `disposition in ("single-session","chain-terminal")` which was always True
-    # regardless of the specific value; the == "single-session" check above is the real gate.
-
-
-
-
-# ---------------------------------------------------------------------------
-# (h) governing_plan_evidence
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (i) nature_classification
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (j) open_memos_scan
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (k) open_memos_zero
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (l) j_questions_emitted — all 8 J-nodes present
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (m) f_slots_emitted — all 3 F-nodes present
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (n) b_node_pre_resolved_evidence
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (o) b_node_generic_keys
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (p) phase1_receipt_written
-# ---------------------------------------------------------------------------
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# (q) receipt_schema_valid
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (r) receipt_graceful_absent
-# ---------------------------------------------------------------------------
 
 
 def test_receipt_graceful_absent(tmp_path):
@@ -529,71 +329,10 @@ def test_receipt_graceful_absent(tmp_path):
     assert is_not_yet_run(receipt), "Absent receipt must return NOT_YET_RUN_SENTINEL"
 
 
-# ---------------------------------------------------------------------------
-# (s) idempotency_guard_no_prior
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (t) idempotency_guard_fired
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (u) scope_mode_from_session_shape
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (v) scope_mode_param_override
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (w) result_exit_code_zero
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (x) result_fields_present
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (y) completeness_checklist_branch
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# (z) loe_path_branch
-# ---------------------------------------------------------------------------
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
 # C1 — STEP_2_6_3 chain-slug case-a: _read_started_at unit tests
-# ---------------------------------------------------------------------------
 
 
 def test_read_started_at_present(tmp_path):
-    """_read_started_at returns trimmed ISO string when file is present."""
     sid = "sess-sa-unit-001"
     common_dir = tmp_path / ".git"
     sid_dir = common_dir / "coordinator-sessions" / sid
@@ -605,7 +344,6 @@ def test_read_started_at_present(tmp_path):
 
 
 def test_read_started_at_absent(tmp_path):
-    """_read_started_at returns None when the started_at file is absent."""
     sid = "sess-sa-unit-002"
     common_dir = tmp_path / ".git"
     (common_dir / "coordinator-sessions" / sid).mkdir(parents=True)
@@ -615,7 +353,6 @@ def test_read_started_at_absent(tmp_path):
 
 
 def test_read_started_at_empty(tmp_path):
-    """_read_started_at returns None when the started_at file is empty."""
     sid = "sess-sa-unit-003"
     common_dir = tmp_path / ".git"
     sid_dir = common_dir / "coordinator-sessions" / sid
@@ -626,20 +363,10 @@ def test_read_started_at_empty(tmp_path):
     assert result is None
 
 
-# ---------------------------------------------------------------------------
 # C1 — STEP_2_6_3: integration tests (positive / negative / absence)
-# ---------------------------------------------------------------------------
 
 
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
 # C3 — STEP_2_96: _read_completeness_mirror unit tests
-# ---------------------------------------------------------------------------
 
 _V1_MIRROR_OPEN = """\
 schema: completeness-checklist-mirror-v1
@@ -680,50 +407,13 @@ items:
 """
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
 # C3 — STEP_2_96: integration tests (presence / absent / mismatch)
-# ---------------------------------------------------------------------------
 
 
-
-
-
-
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
 # STEP_1B/STEP_2_4B D-node emission integration test
-# Finding 1 (P2): reclassified F→D under Option B (memo 2026-07-08); locks the
-# D-node type + resolving_op + disk_first evidence shape this diff exists to fix.
-# ---------------------------------------------------------------------------
 
 
-
-
-# ---------------------------------------------------------------------------
-# New direct unit tests for _session_added_plans
 # Findings 6, 7, 8, 9 (P2/nit): cover --diff-filter=A ADDED-not-MODIFIED
-# semantic, --since temporal boundary, graceful-empty on non-zero git exit,
-# and dedup logic — none of these were exercised by the existing positive tests.
-# ---------------------------------------------------------------------------
-
-
 
 
 def test_session_added_plans_since_boundary_excludes_old_commit(git_repo):
@@ -745,7 +435,6 @@ def test_session_added_plans_since_boundary_excludes_old_commit(git_repo):
     sid = "sess-sap-since-001"
     git_repo.seed_session_shape(sid)
 
-    # Commit a plan with both author and committer date set to the far past
     plan = git_repo.root / "docs" / "plans" / "past-plan.md"
     plan.write_text("# Past Plan\n", encoding="utf-8")
     subprocess.run(["git", "add", str(plan)], cwd=str(git_repo.root),
@@ -760,7 +449,6 @@ def test_session_added_plans_since_boundary_excludes_old_commit(git_repo):
         **no_console_creationflags(),
     )
 
-    # Call _session_added_plans directly with started_at after the commit date
     added = _session_added_plans(git_repo.root, sid, "2026-01-01T00:00:00Z")
 
     assert added == [], (
@@ -769,32 +457,14 @@ def test_session_added_plans_since_boundary_excludes_old_commit(git_repo):
 
 
 def test_session_added_plans_graceful_on_nonzero_git(tmp_path):
-    """_session_added_plans returns [] gracefully when git returns non-zero.
-
-    Calls _session_added_plans against a non-git directory so git log exits 128.
-    Asserts the function returns [] without raising.
-
-    graceful-empty on non-zero git exit (P2).
-    """
     sid = "sess-sap-fail-001"
     non_git_dir = tmp_path / "not-a-git-repo"
     non_git_dir.mkdir()
 
-    # Call with a non-git worktree_root and a valid started_at string;
-    # git log will exit 128 (not a git repository) → graceful [] return.
     result = _session_added_plans(non_git_dir, sid, "2026-01-01T00:00:00Z")
     assert result == [], (
         f"_session_added_plans must return [] on git failure; got {result}"
     )
-
-
-
-
-# ---------------------------------------------------------------------------
-# New unit tests for _read_completeness_mirror
-# Finding 10 (nit): quoted-scalar (state: "open") and column-0 (state: open)
-# anchor cases — the regex must not match either.
-# ---------------------------------------------------------------------------
 
 
 _V1_MIRROR_QUOTED_SCALAR = """\
@@ -815,24 +485,7 @@ items:
 """
 
 
-
-
-
-
-# ---------------------------------------------------------------------------
-# New unit test for _read_started_at
-# Finding 11 (nit): whitespace-only file should be treated as absent/None.
-# ---------------------------------------------------------------------------
-
-
 def test_read_started_at_whitespace_only(tmp_path):
-    """_read_started_at returns None when the started_at file contains only whitespace.
-
-    A file written by a buggy producer as '   \\n   ' is distinct from an empty
-    file but must be treated as absent.
-
-    whitespace-only file → None.
-    """
     sid = "sess-sa-ws-001"
     common_dir = tmp_path / ".git"
     sid_dir = common_dir / "coordinator-sessions" / sid
@@ -845,13 +498,10 @@ def test_read_started_at_whitespace_only(tmp_path):
     )
 
 
-# ---------------------------------------------------------------------------
 # C1 — STEP_2_67A: _scan_session_scratch unit tests
-# ---------------------------------------------------------------------------
 
 
 def test_scan_session_scratch_graceful_negative_no_started_at(git_repo):
-    """_scan_session_scratch returns None when started_at is None (graceful-negative)."""
     result = _scan_session_scratch(git_repo.root, None)
     assert result is None, (
         f"Absent started_at must return None (graceful-negative); got {result!r}"
@@ -859,31 +509,13 @@ def test_scan_session_scratch_graceful_negative_no_started_at(git_repo):
 
 
 def test_scan_session_scratch_no_tasks_dir(git_repo):
-    """_scan_session_scratch returns 0 when tasks/ dir is absent (started_at present)."""
     started_at = "2026-07-06T12:00:00Z"
-    # No tasks/ dir created
     result = _scan_session_scratch(git_repo.root, started_at)
     assert result == 0, f"No tasks/ dir → count=0; got {result!r}"
 
 
 @contextmanager
 def _tz_forced_to_us_pacific():
-    """Force the process-local timezone to America/Los_Angeles for the
-    duration of the `with` block, to catch a naive-local-time regression
-    that would only misbehave under a non-UTC offset (the F2 defect class).
-
-    `time.tzset()` is POSIX-only (AttributeError: module 'time' has no
-    attribute 'tzset' on win32) — there is no cross-platform way to change
-    the interpreter's notion of "local timezone" at runtime without it, and
-    setting the `TZ` env var alone has no effect on Windows (the CRT/Python
-    read the OS timezone database, not `TZ`). On Windows this context
-    manager degrades to a no-op: the test still runs and still asserts the
-    correct count, it just doesn't additionally force a non-UTC skew to
-    prove the assertion isn't accidentally UUTC-coincidental on this box.
-    That is a real, disclosed reduction in the regression-guard's
-    Windows-side specificity, not a weakened assertion — see C7 in
-    state/red-baseline-2026-07-20/root-cause-clusters.md.
-    """
     if not hasattr(time, "tzset"):
         yield
         return
@@ -913,14 +545,12 @@ def test_scan_session_scratch_d_path_untracked_scratch(git_repo):
     This is the CI guard for the F2 fleet-portability defect.
     """
     sid = "sess-67a-unit-dpath-001"
-    # started_at: 2026-07-06 12:00:00 UTC — epoch computed tz-aware to avoid hardcode error.
     started_at = "2026-07-06T12:00:00Z"
     started_epoch_utc = datetime.fromisoformat(
         started_at.replace("Z", "+00:00")
     ).timestamp()
 
-    # File mtime: 30 min after started_at in UTC = 12:30:00 UTC
-    file_mtime = started_epoch_utc + 1800  # 30 min later
+    file_mtime = started_epoch_utc + 1800
 
     scratch_file = git_repo.root / "tasks" / "my-feature" / "scratch.md"
     scratch_file.parent.mkdir(parents=True, exist_ok=True)
@@ -928,7 +558,6 @@ def test_scan_session_scratch_d_path_untracked_scratch(git_repo):
     os.utime(scratch_file, (file_mtime, file_mtime))
 
     with _tz_forced_to_us_pacific():
-        # the Game Dev Reviewer param removed from _scan_session_scratch
         result = _scan_session_scratch(git_repo.root, started_at)
 
     assert result == 1, (
@@ -939,16 +568,14 @@ def test_scan_session_scratch_d_path_untracked_scratch(git_repo):
 
 
 def test_scan_session_scratch_keep_list_excluded(git_repo):
-    """_scan_session_scratch does NOT count keep-listed files (todo.md, plan.md, etc.)."""
     sid = "sess-67a-unit-keeplist-001"
     started_at = "2026-07-06T12:00:00Z"
     started_epoch_utc = datetime.fromisoformat(
         started_at.replace("Z", "+00:00")
     ).timestamp()
 
-    # All of these are keep-listed and must NOT be counted.
     keep_listed_names = ["todo.md", "plan.md", "completion-log.md"]
-    mtime_after = started_epoch_utc + 1800  # 30 min after
+    mtime_after = started_epoch_utc + 1800
 
     for name in keep_listed_names:
         f = git_repo.root / "tasks" / "my-feature" / name
@@ -963,24 +590,12 @@ def test_scan_session_scratch_keep_list_excluded(git_repo):
     )
 
 
-# Add *.plan.md endswith exclusion and .completion
-# substring exclusion tests (both branches were uncovered).
-
-
 def test_scan_session_scratch_plan_md_suffix_excluded(git_repo):
-    """_scan_session_scratch does NOT count files ending in .plan.md (suffix exclusion).
-
-    A file named tasks/<feat>/2026-07-06-something.plan.md with mtime after started_at
-    must be excluded by the endswith('.plan.md') branch.  A refactor that accidentally
-    breaks this (e.g. typo '.planmd') would fail here.
-
-    endswith('.plan.md') branch coverage gap.
-    """
     started_at = "2026-07-06T12:00:00Z"
     started_epoch_utc = datetime.fromisoformat(
         started_at.replace("Z", "+00:00")
     ).timestamp()
-    mtime_after = started_epoch_utc + 1800  # 30 min after
+    mtime_after = started_epoch_utc + 1800
 
     plan_file = git_repo.root / "tasks" / "my-feature" / "2026-07-06-something.plan.md"
     plan_file.parent.mkdir(parents=True, exist_ok=True)
@@ -994,20 +609,12 @@ def test_scan_session_scratch_plan_md_suffix_excluded(git_repo):
 
 
 def test_scan_session_scratch_completion_substring_excluded(git_repo):
-    """_scan_session_scratch does NOT count files with '.completion' anywhere in the name.
-
-    A file named tasks/<feat>/wsc-2026.completion.md has '.completion' at a non-suffix
-    position and must still be excluded by the 'in name' substring filter.
-
-    .completion substring-match (all positions) coverage gap.
-    """
     started_at = "2026-07-06T12:00:00Z"
     started_epoch_utc = datetime.fromisoformat(
         started_at.replace("Z", "+00:00")
     ).timestamp()
-    mtime_after = started_epoch_utc + 1800  # 30 min after
+    mtime_after = started_epoch_utc + 1800
 
-    # File with .completion at a non-suffix position (mid-name)
     comp_file = git_repo.root / "tasks" / "my-feature" / "wsc-2026.completion.md"
     comp_file.parent.mkdir(parents=True, exist_ok=True)
     comp_file.write_text("# Completion notes\n", encoding="utf-8")
@@ -1017,9 +624,6 @@ def test_scan_session_scratch_completion_substring_excluded(git_repo):
     assert result == 0, (
         f"File with '.completion' in name (any position) must be excluded; got {result!r}"
     )
-
-
-# Add ValueError-on-parse graceful-negative test.
 
 
 def test_scan_session_scratch_graceful_negative_unparseable_started_at(git_repo):
@@ -1038,25 +642,17 @@ def test_scan_session_scratch_graceful_negative_unparseable_started_at(git_repo)
     )
 
 
-
-
 def test_scan_session_scratch_zero_path_no_qualifying_files(git_repo):
-    """_scan_session_scratch returns 0 when started_at present but no qualifying files.
-
-    Files exist in tasks/ but all are either keep-listed or have mtime <= started_at.
-    The D path must still fire (count=0, not None).
-    """
     sid = "sess-67a-unit-zero-001"
     started_at = "2026-07-06T12:00:00Z"
     started_epoch_utc = datetime.fromisoformat(
         started_at.replace("Z", "+00:00")
     ).timestamp()
 
-    # File with mtime BEFORE started_at — must not be counted.
     old_file = git_repo.root / "tasks" / "old-feature" / "old-scratch.md"
     old_file.parent.mkdir(parents=True, exist_ok=True)
     old_file.write_text("old scratch\n", encoding="utf-8")
-    mtime_before = started_epoch_utc - 3600  # 1 hour before
+    mtime_before = started_epoch_utc - 3600
     os.utime(old_file, (mtime_before, mtime_before))
 
     result = _scan_session_scratch(git_repo.root, started_at)
@@ -1075,9 +671,8 @@ def test_scan_session_scratch_git_tracked_excluded(git_repo):
     started_epoch_utc = datetime.fromisoformat(
         started_at.replace("Z", "+00:00")
     ).timestamp()
-    mtime_after = started_epoch_utc + 1800  # 30 min after
+    mtime_after = started_epoch_utc + 1800
 
-    # Create a file, add and commit it (tracked).
     tracked_file = git_repo.root / "tasks" / "some-feature" / "tracked.md"
     tracked_file.parent.mkdir(parents=True, exist_ok=True)
     tracked_file.write_text("tracked content\n", encoding="utf-8")
@@ -1095,93 +690,16 @@ def test_scan_session_scratch_git_tracked_excluded(git_repo):
     )
 
 
-# ---------------------------------------------------------------------------
 # C1 — STEP_2_67A: integration tests (Branch 11 flip via full handler invoke)
-# ---------------------------------------------------------------------------
 
 
-
-
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# T1 — applicable_node_ids membership (op-spec §3, Option B; plan D2)
-# ---------------------------------------------------------------------------
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# (T2) consumed_handoff_archive_scan — chain-terminal, missing handoff,
-# predecessor handoff lives in archive/handoffs/ (swept) → still found
-# ---------------------------------------------------------------------------
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# (T3) consumed_handoff_anchored_match — body-prose mention of a sibling sid
-# is NOT a match (anchored frontmatter-only check)
-# ---------------------------------------------------------------------------
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# (T4) session_shape_handoff_path_peer_misattribution — session-shape.json
 # pickup.handoff points at a temporally-adjacent CONCURRENT session's
-# handoff (a peer's, consumed_by != sid), not this session's own predecessor.
-# The resolver must reject the peer path and fall through to the anchored
-# _find_consumed_handoff recovery scan rather than trusting handoff blindly.
-# ---------------------------------------------------------------------------
 
 
-
-
-
-
-
-
-
-
-# Added missing test for the handoff-path-does-not-
-# exist-on-disk rejection sub-case (guard's hf_abs.exists() short-circuit was
-# untested; both prior tests use handoffs that exist on disk).
-
-
-# Added missing test for the handoff-exists-but-no-
-# consumed_by-field rejection sub-case (distinct code path from the mismatch
-# test — _get_handoff_consumed_by returns None here, not a different sid).
-
-
-
-
-# ---------------------------------------------------------------------------
-# _resolve_in_repo — direct unit tests
-#
-# Prior coverage of _resolve_in_repo came only
-# through the full resolve_session_branches -> _resolve_branches integration path (the
-# traversal/absolute regression tests below).  That proves the end-to-end
-# behavior but doesn't pin the helper's own contract, including a case no
-# integration test exercises: a `../` traversal that resolves back INSIDE
 # the repo must be ACCEPTED, not rejected — a naive "reject any candidate
-# containing .." reimplementation would silently break this and nothing in
-# the integration suite would catch it.
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_in_repo_relative_in_repo_path_contained(repo):
-    """A plain repo-relative candidate resolves and is contained."""
     handoff = repo.root / "state" / "handoffs" / "x.md"
     handoff.write_text("body", encoding="utf-8")
 
@@ -1191,14 +709,12 @@ def test_resolve_in_repo_relative_in_repo_path_contained(repo):
 
 
 def test_resolve_in_repo_parent_traversal_rejected(repo):
-    """A `../` candidate that escapes worktree_root is rejected (returns None)."""
     result = _resolve_in_repo(repo.root, "../outside.md")
 
     assert result is None
 
 
 def test_resolve_in_repo_absolute_foreign_path_rejected(repo):
-    """An absolute candidate pointing outside worktree_root is rejected."""
     result = _resolve_in_repo(repo.root, "/absolute/foreign/path.md")
 
     assert result is None
@@ -1219,48 +735,17 @@ def test_resolve_in_repo_traversal_that_resolves_back_inside_contained(repo):
 
 
 def test_resolve_in_repo_dot_is_contained_as_root(repo):
-    """The degenerate candidate "." resolves to worktree_root itself, contained."""
     result = _resolve_in_repo(repo.root, ".")
 
     assert result == repo.root.resolve()
 
 
-# ---------------------------------------------------------------------------
-# Defect A regression — foreign-repo path bleed
-#
-# pickup.handoff is producer-written and NOT trusted: an absolute path
-# (or a ../ traversal) escapes worktree_root via Path.__truediv__, letting the
 # primary-path guard validate a file in a DIFFERENT repo (e.g. Example-retrieval-repo)
-# whose frontmatter even has consumed_by: <sid> — existence + consumed_by
-# alone are insufficient; containment inside worktree_root is the invariant
-# _resolve_in_repo asserts.
-#
-# Spec backlink:
-#   docs/plans/2026-07-10-wsc-resolve-foreign-repo-bleed-and-sid-null.md
-# ---------------------------------------------------------------------------
 
 
-
-
-
-
-# ---------------------------------------------------------------------------
-# Defect A regression (plural array) — foreign-repo bleed into
-# consumed_handoff_paths, the 2026-07-13 example-cockpit-repo incident shape.
-#
-# The per-source scalar guard rejected the foreign pickup.handoff, but the
 # incident receipt still carried the foreign ABSOLUTE path AND a relativized
-# phantom (foreign basename joined to worktree_root) in the PLURAL
 # consumed_handoff_paths array + STEP_2_7 stamp target.  The final-gate
-# sanitizer (_sanitize_consumed_handoffs) enforces containment + sid-ownership
-# on the MERGED set at the one point every source converges, so no
 # foreign/absolute/phantom entry can survive into the receipt or STEP_2_7 even
-# if a per-source guard is bypassed by a different source or a future refactor.
-#
-# Spec backlink:
-#   coordinator_core/ops/ceremony/branch_resolution.py :: _sanitize_consumed_handoffs
-#   docs/plans/2026-07-10-wsc-resolve-foreign-repo-bleed-and-sid-null.md
-# ---------------------------------------------------------------------------
 
 
 def test_sanitize_drops_foreign_absolute_from_merged_set(repo, tmp_path):
@@ -1271,8 +756,6 @@ def test_sanitize_drops_foreign_absolute_from_merged_set(repo, tmp_path):
     """
     sid = "sess-sanitize-abs-001"
 
-    # Foreign repo handoff outside worktree_root, declaring consumed_by: sid
-    # (the trap — existence + consumed_by alone would pass a naive check).
     foreign_repo = tmp_path / "example-cockpit-repo"
     foreign_dir = foreign_repo / "state" / "handoffs"
     foreign_dir.mkdir(parents=True, exist_ok=True)
@@ -1282,24 +765,21 @@ def test_sanitize_drops_foreign_absolute_from_merged_set(repo, tmp_path):
         encoding="utf-8",
     )
 
-    # A local sid-owned handoff that MUST survive alongside the foreign reject.
     local_hf = repo.seed_handoff("real-local.md", consumed_by=sid)
 
     merged = [
-        (str(foreign_hf), {"predecessor": "sess-foreign-pred"}),          # foreign absolute
-        ("state/handoffs/real-local.md", {"predecessor": "sess-local"}),  # in-repo, owned
+        (str(foreign_hf), {"predecessor": "sess-foreign-pred"}),
+        ("state/handoffs/real-local.md", {"predecessor": "sess-local"}),
     ]
     kept, rejected = _sanitize_consumed_handoffs(repo.root, sid, merged)
 
     kept_paths = [p for p, _fm in kept]
-    # Foreign absolute path is gone; no relativized phantom of its basename either.
     assert str(foreign_hf) not in kept_paths
     assert not any("dashboard-placement-rubric-ratify" in p for p in kept_paths)
     assert str(foreign_hf) in rejected
-    # The in-repo sid-owned handoff survives, as a repo-relative path.
     assert "state/handoffs/real-local.md" in kept_paths
     assert all(not Path(p).is_absolute() for p in kept_paths)
-    assert local_hf.exists()  # untouched
+    assert local_hf.exists()
 
 
 def test_sanitize_drops_peer_owned_in_repo_handoff(repo):
@@ -1322,54 +802,16 @@ def test_sanitize_drops_peer_owned_in_repo_handoff(repo):
     assert "state/handoffs/peer.md" in rejected
 
 
-
-
-
-
-# ---------------------------------------------------------------------------
-# Defect B regression — resolved_state.sid = null
-#
-# PipelineContext had no `sid` field, so to_dict() (which becomes the op's
-# resolved_state) structurally could not carry the session id.  The handler
-# must thread sid through so resolved_state["sid"] == the input sid.
-#
-# Spec backlink:
-#   docs/plans/2026-07-10-wsc-resolve-foreign-repo-bleed-and-sid-null.md
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# C4 (wsc-dag-pickup-n-handoffs) — N-handoff resolve integration + all
 # the Staff Engineer-finding regression cases (F0 dedup, F2 STEP_2_7 plural evidence —
 # both the STEP_0 evidence dict AND the STEP_2_7 node's own evidence dict,
-# folded into test_n_handoffs_both_found_live_and_archived_scalar_is_first
-# below, F6 grep-fallback plurality) + C1's F4 divergent-field round-trip.
-# ---------------------------------------------------------------------------
 
 
-
-
-
-
-
-
-# REMOVED 2026-07-29 (kill-list op removal): test_step_2_7_node_carries_plural_evidence_real_read_path
 # asserted the STEP_2_7 plural-evidence contract against wsc_commit._read_step_2_7_evidence,
-# its only reader. wsc_commit.py was deleted as a dead op module and that function had no
-# live counterpart in the single-pass tail, so the contract has no surviving second party.
 # The producer side (STEP_2_7 carrying consumed_handoffs_paths) is covered by
-# test_n_handoffs_both_found_live_and_archived_scalar_is_first above (Review:
-# code-reviewer 2026-07-29 — the original "still covered above" claim here was false;
 # no test asserted the STEP_2_7 node's own evidence dict until this fix).
 
 
-
 def test_c1_divergent_scalar_field_rejected_by_validate():
-    """the Staff Engineer F4: a hand-edited/round-tripped context where consumed_handoff !=
-    consumed_handoffs[0] must FAIL validate() — the derived-scalar contract is
-    enforced, not merely assigned at from_dict() time."""
     ctx = PipelineContext(
         ceremony="wsc",
         scope_mode="",
@@ -1385,8 +827,6 @@ def test_c1_divergent_scalar_field_rejected_by_validate():
 
 
 def test_c1_divergent_predecessor_field_rejected_by_validate():
-    """the Staff Engineer F4 parallel case: predecessor != predecessors[0] must also fail
-    validate()."""
     ctx = PipelineContext(
         ceremony="wsc",
         scope_mode="",
@@ -1403,17 +843,7 @@ def test_c1_divergent_predecessor_field_rejected_by_validate():
     )
 
 
-# ---------------------------------------------------------------------------
-# C1 — scoping-analysis helpers (trailer-reliability, started_at range,
-# foreign-commit + contiguity detection)
-#
-# Spec backlink:
-#   docs/plans/2026-07-12-wsc-concurrent-tree-safety-hardening.md § Tasks C1
-# ---------------------------------------------------------------------------
-
-
 def _commit(repo_root, message, *, date=None, add=("-A",)):
-    """Create a git commit in repo_root with an optional fixed author/commit date."""
     subprocess.run(["git", "add", *add], cwd=str(repo_root), capture_output=True, check=True, **no_console_creationflags())
     env = None
     if date is not None:
@@ -1434,9 +864,6 @@ def _head_sha(repo_root) -> str:
         **no_console_creationflags(),
     )
     return result.stdout.strip()
-
-
-# --- pure-trailer: every session commit carries the trailer ----------------
 
 
 def test_trailer_reliable_when_session_commits_carry_trailer(git_repo):
@@ -1462,9 +889,6 @@ def test_analyze_session_scoping_pure_trailer(git_repo):
     assert verdict.contiguous is True
 
 
-# --- trailerless-clean: no trailer anywhere, but the range is foreign-free -
-
-
 def test_trailer_unreliable_when_head_moved_no_trailer(git_repo):
     sid = "sess-c1-trailerless-001"
     started_at = "2020-01-01T00:00:00Z"
@@ -1476,8 +900,6 @@ def test_trailer_unreliable_when_head_moved_no_trailer(git_repo):
 
 
 def test_trailer_reliable_when_no_work_since_started_at(git_repo):
-    """started_at in the far future ⇒ HEAD has NOT moved since started_at ⇒
-    trailer absence is not distinguishable from "no work happened" ⇒ reliable."""
     sid = "sess-c1-trailerless-future"
     started_at = "2099-01-01T00:00:00Z"
     git_repo.seed_started_at(sid, started_at)
@@ -1498,10 +920,6 @@ def test_analyze_session_scoping_trailerless_clean(git_repo):
 
     verdict = analyze_session_scoping(
         git_repo.root, git_repo.common_dir, sid,
-        # .gitkeep: the git_repo fixture's own init commit falls inside the
-        # started_at range (fixture creation time is always after any fixed
-        # 2020-era started_at) — treat it as known-scope so this test's
-        # signal is the session's own commit, not fixture plumbing.
         known_scope_paths=frozenset({"scoped.txt", ".gitkeep"}),
     )
     assert verdict.method == SCOPING_METHOD_STARTED_AT_RANGE
@@ -1510,15 +928,7 @@ def test_analyze_session_scoping_trailerless_clean(git_repo):
     assert verdict.candidate_range.endswith("^..HEAD")
 
 
-# --- trailerless-interleaved: the b15db349 repro ----------------------------
-# 8 non-contiguous session commits with foreign commits interleaved, HEAD
-# ending on a foreign commit.
-
-
 def test_detect_foreign_commits_interleaved_repro(git_repo):
-    """b15db349 repro shape: alternating session/foreign trailerless commits,
-    HEAD ends on a foreign commit — foreign detection must flag the
-    out-of-scope commits and never silently attribute them to sid."""
     sid = "sess-c1-interleaved-001"
     started_at = "2020-01-01T00:00:00Z"
     git_repo.seed_started_at(sid, started_at)
@@ -1553,9 +963,6 @@ def test_detect_foreign_commits_interleaved_repro(git_repo):
     candidate_range = _started_at_candidate_range(git_repo.root, started_at)
     assert candidate_range.endswith("^..HEAD")
 
-    # .gitkeep: the git_repo fixture's own init commit falls inside the
-    # started_at range — its 5th foreign-shaped commit is fixture plumbing,
-    # not part of the interleaved-repro shape under test; scope it out.
     known_scope = frozenset(session_paths) | frozenset({".gitkeep"})
     foreign_shas = _detect_foreign_commits(git_repo.root, sid, candidate_range, known_scope)
     assert len(foreign_shas) == 4, f"expected 4 foreign commits, got {foreign_shas}"
@@ -1598,9 +1005,6 @@ def test_analyze_session_scoping_trailerless_interleaved_is_ambiguous(git_repo):
     assert verdict.contiguous is False
 
 
-# --- partial-trailer: only some commits carry the trailer ------------------
-
-
 def test_detect_foreign_commits_partial_trailer_different_sid(git_repo):
     """Partial-trailer case: one commit tagged with a DIFFERENT sid's trailer
     must be flagged foreign regardless of touched paths."""
@@ -1618,9 +1022,6 @@ def test_detect_foreign_commits_partial_trailer_different_sid(git_repo):
     )
 
     candidate_range = _started_at_candidate_range(git_repo.root, started_at)
-    # .gitkeep: the git_repo fixture's own init commit falls inside the
-    # started_at range; scope it out so the signal under test (the
-    # other_sid-trailered commit) is isolated.
     foreign_shas = _detect_foreign_commits(
         git_repo.root, sid, candidate_range, frozenset({"own.txt", ".gitkeep"}),
     )
@@ -1628,10 +1029,6 @@ def test_detect_foreign_commits_partial_trailer_different_sid(git_repo):
 
 
 def test_analyze_session_scoping_partial_trailer_is_trailer_method(git_repo):
-    """At least one commit carries THIS sid's trailer ⇒ trailer is reliable,
-    even if a foreign peer's trailer-tagged commit is also present in range —
-    existing grep-based scoping (which only matches this sid's trailer) stays
-    authoritative and is not contaminated by the foreign commit."""
     sid = "sess-c1-partial-002"
     other_sid = "sess-c1-partial-002-OTHER"
     started_at = "2020-01-01T00:00:00Z"
@@ -1647,9 +1044,6 @@ def test_analyze_session_scoping_partial_trailer_is_trailer_method(git_repo):
 
     verdict = analyze_session_scoping(git_repo.root, git_repo.common_dir, sid)
     assert verdict.method == SCOPING_METHOD_TRAILER
-
-
-# --- edge cases --------------------------------------------------------
 
 
 def test_started_at_candidate_range_absent_started_at(git_repo):
@@ -1682,15 +1076,9 @@ def test_range_is_contiguous_suffix_no_foreign_commits(git_repo):
 
 
 def test_range_is_contiguous_suffix_foreign_only_at_leading_edge(git_repo):
-    """A foreign commit at the OLDEST end of the range, followed only by
-    session commits, IS a contiguous suffix (the foreign commit sits before
-    the session's true set, not interleaved within it)."""
     sid = "sess-c1-leading-foreign"
     started_at = "2020-01-01T00:00:00Z"
     git_repo.seed_started_at(sid, started_at)
-    # The git_repo fixture's own init (.gitkeep) commit also falls inside the
-    # started_at range and sits before foreign_sha — treat it as part of the
-    # tolerated leading run for this test.
     init_sha = _head_sha(git_repo.root)
 
     (git_repo.root / "foreign.txt").write_text("foreign\n", encoding="utf-8")
@@ -1719,112 +1107,16 @@ def test_scoping_verdict_is_a_dataclass_with_expected_fields():
     assert verdict.candidate_range == "abc123^..HEAD"
 
 
-# ---------------------------------------------------------------------------
-# C3 — scoping verdict wired into the B-wave scoping site (full-pipeline
-# integration, through resolve_session_branches → _resolve_branches → emit_receipt)
-#
-# Spec backlink:
-#   docs/plans/2026-07-12-wsc-concurrent-tree-safety-hardening.md § Tasks C3
-# ---------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# Unscannable-subtree hardening (silent-enumeration defect fixes)
-#
-# Path.glob/.rglob silently swallow PermissionError while walking (an
-# unreadable dir/subtree yields an empty iterator, no exception) — see
-# coordinator_core/ops/roadmap_dag.py for the reference pattern this mirrors.
-# Each of these guards against a scan failure reading as a clean/empty
-# result, which is the exact silent-success shape that lets a ceremony
-# D-node's verdict come out wrong with no visible signal.
-# ---------------------------------------------------------------------------
-
 _SKIP_CHMOD_UNRELIABLE = pytest.mark.skipif(
     sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
     reason="chmod 0o000 permission denial is not reliable on Windows or as root",
 )
 
 
-
-
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# (T9) detector_b_production_path — Detector B via branch_resolution.resolve_session_branches
-# ---------------------------------------------------------------------------
-# wsc_resolve.py's own
-# Detector-B consolidation branch (~:1769-1805), the actual
-# /workstream-complete production entry point, had zero end-to-end coverage.
-# test_resolver_git_provenance.py exercises detect_git_provenance_consumed
-# directly (a-e) and wsc_tail.py's separate lightweight wiring (f); neither
-# proves resolve_session_branches's own consolidation branch actually calls it.
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
 # STEP_2_65C flip half + STEP_2_65B bulk-eligibility evidence (C2)
-# ---------------------------------------------------------------------------
-# Spec backlink: pln-give-the-memo-disposition-flip-e580c2 § C2
-#
-# Coverage:
-#   (C2-a) step_2_65c_resolving_op_names_resolve — D-node names memo.transition:resolve,
-#                                                   no "Edit" instruction in its evidence
-#   (C2-b) resolve_in_reply_to_target_open        — in_reply_to target still in inbox -> "open"
-#   (C2-c) resolve_in_reply_to_target_closed       — in_reply_to target archived -> "closed"
-#   (C2-d) resolve_in_reply_to_target_unresolvable — no match anywhere -> "unresolvable"
-#   (C2-e) scan_open_memos_attaches_bulk_eligibility — _scan_open_memos composes
-#                                                       classify_bulk_eligibility per memo
-#   (C2-f) resolve_named_memo_dispositions_issues_n_calls — N named memos -> N resolve
-#                                                            calls with the right dispositions;
-#                                                            an unnamed memo stays open
-#   (C2-g) resolve_named_memo_dispositions_unknown_memo_refused — a disposition naming a
-#                                                                  memo outside open_memos
-#                                                                  is refused, no op call issued
-#   (C2-h) resolve_named_memo_dispositions_bulk_ineligible_refused — bulk request against a
-#                                                                     non-eligible memo refused,
-#                                                                     memo stays open on disk
-#   (C2-i) resolve_named_memo_dispositions_bulk_eligible_applies — a bulk request against an
-#                                                                   eligible fyi memo applies
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_resolve_named_memo_dispositions_unknown_memo_refused(git_repo):
-    """A dispositions entry naming a memo NOT in open_memos (stale/hallucinated
-    judgment answer) is refused fail-loud without ever calling memo.transition."""
     dispositions = [{"memo": "cross-repo/inbox/does-not-exist.md", "actioned_note": "x"}]
 
     results = _run(resolve_named_memo_dispositions(
@@ -1835,30 +1127,8 @@ def test_resolve_named_memo_dispositions_unknown_memo_refused(git_repo):
     assert "not one of the open memos" in results[0]["error"]
 
 
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
 # WSC_DISPOSITION / WSC_CONSUMED_HANDOFF escalate-only env override
-#
-# Spec backlink: coordinator_core.ops.ceremony.wsc_disposition.resolve_env_override
-# / normalize_override_handoff, and the resulting Branch 1 override block in
-# branch_resolution._resolve_branches. Extends claude-klabauter commit
-# 1b07cded (coordinator/bin/wsc-session-disposition.py's own resolve_disposition)
-# to this SECOND, independent disposition resolver — the two resolvers must
-# behave identically on override reach, even though this module cannot import
-# the bin script's implementation (see test_env_override_shared_helper_agrees_
-# with_bin_script below for the mechanical drift check).
-#
-# Every test below explicitly monkeypatch.delenv's both env vars first (even
-# though no pre-existing test in this file sets them) so a stray operator
 # WSC_DISPOSITION/WSC_CONSUMED_HANDOFF in the ambient test-runner environment
-# can never leak into an unrelated case, and so cases in this section cannot
-# leak into each other via ambient state.
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
@@ -1870,55 +1140,7 @@ def _clean_wsc_env(monkeypatch):
     monkeypatch.delenv("WSC_CONSUMED_HANDOFF", raising=False)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# Operator-asserted ownership on the override path (coordinator review, this
-# workstream): the override's own WARN strings exist for exactly the cases
-# where consumed_by == sid can never hold on disk -- a dead claiming session
-# (Detector C ambiguous/indeterminate) or a ship-then-archive handoff with no
-# live consume stamp ever written. _sanitize_consumed_handoffs's ownership
-# half is bypassable ONLY on the override path (operator_asserted=True);
-# containment and existence are never bypassable, for anyone.
-# ---------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_env_override_shared_helper_agrees_with_bin_script(monkeypatch, tmp_path):
-    """Mechanical drift check (constraint 2's fallback): coordinator/bin/
-    wsc-session-disposition.py is deliberately self-contained and cannot
-    import coordinator_core (not pip-installed, and the bin script must keep
-    working when percolated somewhere coordinator_core is entirely absent —
-    see that script's own module docstring). Its resolve_disposition therefore
-    keeps its OWN copy of the override-parsing logic (landed by claude-klabauter
-    commit 1b07cded) rather than importing
-    coordinator_core.ops.ceremony.wsc_disposition.resolve_env_override. This
-    test asserts the two independently-maintained implementations agree on
-    the same input matrix, so a future edit to either one that drifts from
-    the other is caught here rather than silently diverging in production."""
     import importlib.util
     import sys as _sys
 

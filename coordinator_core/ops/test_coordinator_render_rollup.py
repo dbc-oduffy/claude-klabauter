@@ -1,14 +1,3 @@
-"""
-Tests for coordinator_core.ops.coordinator_render_rollup — direct-call render
-helper.
-
-Mirrors the five contract cases pinned by the DoE-side bash regression net,
-plus the CLI-usage and handler-exception fail-open paths that only exist once
-the transport hop moves in-process.
-
-Port of: coordinator-render-rollup.sh (DoE b5a4192c, 2026-07-20)
-Oracle: test-render-rollup.sh (DoE 894d4bc6, 2026-07-22)
-"""
 
 from __future__ import annotations
 
@@ -54,7 +43,6 @@ class TestArgParsing:
 
 
 class TestRenderContract:
-    """Mirrors the five cases in the DoE bash regression net (test-render-rollup.sh)."""
 
     def test_empty_advances_initiatives_no_stdout(self, monkeypatch, tmp_path, capsys):
         _patch_common_dir(monkeypatch, tmp_path)
@@ -123,9 +111,6 @@ class TestRenderContract:
         assert "d-001" in out.err
 
     def test_scan_incomplete_absent_unchanged(self, monkeypatch, tmp_path, capsys):
-        """No `scan_incomplete` key on the payload (today's frozen v1.0 wire shape)
-        renders exactly as before the additive widen -- absent == False, no
-        qualifier appended."""
         _patch_common_dir(monkeypatch, tmp_path)
         _patch_handler(
             monkeypatch,
@@ -188,11 +173,6 @@ class TestRenderContract:
     def test_scan_incomplete_truthy_non_bool_does_not_trip_qualifier(
         self, monkeypatch, tmp_path, capsys
     ):
-        """`scan_incomplete` is `is True`-gated,
-        not `bool(...)`-coerced, so a future non-bool truthy sentinel (e.g. a
-        string like "false") fails to trip "(partial scan)" rather than
-        silently rendering it -- `bool("false")` is `True` in Python, which is
-        exactly the footgun this strict check closes."""
         _patch_common_dir(monkeypatch, tmp_path)
         _patch_handler(
             monkeypatch,

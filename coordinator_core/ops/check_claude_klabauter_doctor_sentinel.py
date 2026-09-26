@@ -72,11 +72,10 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
-_DEFAULT_STALE_SEC = 604800  # 7 days
+_DEFAULT_STALE_SEC = 604800
 
 
 def _claude_klabauter_root() -> Path:
-    """This module's own repo root: ops/ -> coordinator_core/ -> <engine-root>."""
     return Path(__file__).resolve().parents[2]
 
 
@@ -142,11 +141,6 @@ def _format_verdict(
 
 
 def main(argv: List[str]) -> int:  # noqa: ARG001 — argv unused (no flags), kept for trampoline contract parity
-    """Read the doctor sentinel and emit zero or one advisory line.
-
-    Exit 0 always — advisory, never gating (matches check-plugin-drift.sh /
-    scan-addon-health.sh convention).
-    """
     claude_klabauter_root = _claude_klabauter_root()
     sentinel = claude_klabauter_root / "state" / "doctor-last-run.json"
 

@@ -58,18 +58,9 @@ pytestmark = [pytest.mark.cadence]
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _PORTABLE_TARGETS_PATH = _REPO_ROOT / "setup" / "publish-targets.portable"
 
-# The three Step Zero scripts this ledger item is about -- all live under
-# coordinator/scripts/, none under top-level scripts/ (scripts/setup.py's
-# own directory, which IS published via the claude-klabauter-scripts row).
 _STEP_ZERO_SCRIPTS = ("chain-walk.py", "normalize-env.py", "install-maximalist.py")
 
 _UNPUBLISHED_SOURCE_SUBDIR = "coordinator/scripts"
-
-# `_parse_portable_rows` moved to `coordinator.lib.percolate.targets ::
-# parse_portable_rows` (Review: overengineering-reviewer -- this module and
-# `test_post_transform_projection_parses.py` each carried their own copy of
-# the same field-indexed parser for one on-disk row format; both now import
-# the shared production-side helper instead).
 
 
 def test_portable_targets_file_exists():
@@ -80,9 +71,6 @@ def test_portable_targets_file_exists():
 
 
 def test_no_row_is_rooted_at_coordinator_scripts():
-    """No row's source_subdir publishes `coordinator/scripts/` (or a subpath of
-    it) wholesale -- the three Step Zero scripts have no mirror row of their
-    own."""
     rows = _parse_portable_rows(_PORTABLE_TARGETS_PATH)
     offending = [
         row["name"]
@@ -98,9 +86,6 @@ def test_no_row_is_rooted_at_coordinator_scripts():
 
 
 def test_no_row_allowlists_a_step_zero_script_by_basename():
-    """No row's allowlist names any of the three scripts by basename, from
-    ANY source_subdir (closes the source_map indirection gap a
-    source_subdir-only check would miss)."""
     rows = _parse_portable_rows(_PORTABLE_TARGETS_PATH)
     for script in _STEP_ZERO_SCRIPTS:
         offending = [

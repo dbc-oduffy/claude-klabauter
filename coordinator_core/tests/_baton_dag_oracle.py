@@ -88,10 +88,6 @@ from typing import Dict, Iterable, List, Set, Tuple
 
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 
-#: Default link fields: predecessor-family + origin_handoff-family, id-suffixed
-#: aliases included. A caller wanting to score one family in isolation (to match
-#: coordinator_core.dag's edge_kinds={'predecessor'} vs {'origin_handoff'} opt-in
-#: split) passes an explicit `fields` tuple instead.
 ALL_LINK_FIELDS: Tuple[str, ...] = (
     "predecessor", "predecessor_id",
     "origin_handoff", "origin_handoff_id",
@@ -133,10 +129,6 @@ def _frontmatter(path: str) -> str:
     """
     text = open(path, encoding="utf-8", errors="replace").read()
 
-    # Skip a leading preamble of blank lines and HTML comments to find the
-    # opening delimiter. Anything else before it means "no frontmatter" —
-    # deliberately narrow, so a stray `---` deeper in a body is never
-    # mistaken for an opening fence.
     body = text
     while True:
         stripped = body.lstrip()
@@ -163,68 +155,17 @@ def _field(fm: str, key: str) -> str:
 
 
 def collect_corpus_paths(root: str) -> List[str]:
-    """Enumerate state/handoffs/*.md + archive/handoffs/**/*.md under root."""
     live = sorted(glob.glob(os.path.join(root, "state/handoffs/*.md")))
     archived = sorted(glob.glob(os.path.join(root, "archive/handoffs/**/*.md"), recursive=True))
     return live + archived
 
 
-#: `deployment_state` values that are terminal — a baton that ever reached one of
-#: these was, at some point, disposed of by design, not merely referenced by a
-#: later file's naming convention.
-#:
-#: DERIVED from the SSOT, not hand-listed. This constant previously read
 #: ("shipped", "continued", "closed") — handoff.schema.json's post-DR-084-P4
-#: enum tail — and so answered False for `abandoned`, which
 #: `lifecycle_constants.HANDOFF_TERMINAL_DEPLOYMENT` has recognized since the
-#: P4 narrow was reverted at 9d00b459 (2026-07-23), five days before this
-#: constant was first written. The schema is the WRITE vocabulary: `abandoned`
-#: can no longer be written. This predicate asks a READ question — was this
-#: record EVER terminally disposed of — over live AND archived corpora,
-#: including the consumer repos whose on-disk frontmatter still carries the old
-#: token, which is exactly the axis the SSOT's dual-vocabulary read tolerance
-#: exists for. Same bug shape, and same fix, as `superseded`'s restoration on
-#: the `status` axis above: without it a legitimate supersede against an
-#: abandoned parent is refused with a message asserting the opposite of the
-#: truth.
-#:
-#: Importing the SSOT does NOT weaken this module's differential independence.
-#: `lifecycle_constants` is a leaf constants module (it imports nothing from
-#: coordinator_core), i.e. shared DATA — not a second copy of the predicate or
-#: parser under test. The independence that matters here, and is preserved, is
-#: that this module derives its own answer with its own frontmatter handling
-#: (see `_frontmatter`'s docstring) rather than delegating to production's.
-#: Retained here (unchanged) even though `claimed_or_shipped` moved out below —
-#: this tuple is SSOT-derived data, not a copy of the predicate, and this
-#: module's own differential-oracle role never depended on it.
 _TERMINAL_DEPLOYMENT_STATES: Tuple[str, ...] = tuple(sorted(HANDOFF_TERMINAL_DEPLOYMENT))
 
 
-# ---------------------------------------------------------------------------
 # DR-242 predicate — RELOCATED (2026-08-06) to coordinator_core.archival
-# ---------------------------------------------------------------------------
-#
-# `claimed_or_shipped` / `claimed_or_shipped_at_path` used to be DEFINED here
-# and imported by six production modules despite living under a `tests`-named
-# package (a bare install-manifest exclusion of `coordinator_core/tests/`
-# would have broken all six at import time). They never participated in this
-# module's actual job — the C6 pointer-resolution differential-oracle
-# comparison against `coordinator_core.dag` (`build_children_index`, exercised
-# by `test_c6_pointer_normalization.py`) — because `claimed_or_shipped` reads
-# only a candidate parent's OWN frontmatter and never a child-referencing
-# field, so it was never compared against a second implementation anywhere.
-# This module's independence claim (see `_frontmatter`'s docstring) is about
-# NOT delegating frontmatter PARSING to production's `split_frontmatter` for
-# that pointer-resolution comparison — a claim this re-export does not touch,
-# since `_frontmatter`/`_field` immediately above stay exactly as they were,
-# still used by `build_children_index` below. `coordinator_core.archival`
-# carries its OWN separate, deliberately-duplicated copy of `_frontmatter`/
-# `_field` for `claimed_or_shipped_at_path`'s use (see that module's DR-242
-# section header) — two independently-maintained copies serving two unrelated
-# consumers, not drift.
-#
-# Re-exported here (not merely deleted) so `test_baton_dag_oracle_claimed_or_
-# shipped.py`'s existing imports keep working unchanged.
 from coordinator_core.archival import (  # noqa: E402  (re-export, not a relocation of use)
     claimed_or_shipped,
     claimed_or_shipped_at_path,
@@ -235,23 +176,6 @@ def build_children_index(
     root: str,
     fields: Iterable[str] = ALL_LINK_FIELDS,
 ) -> Tuple[List[str], Dict[str, Set[str]]]:
-    """Return (live_paths, children) — children[basename] = set of referencing basenames.
-
-    Args:
-        root:   repo root containing state/handoffs/ and archive/handoffs/.
-        fields: frontmatter keys to treat as parent-pointer edges. Values whose
-                basename does not end in '.md' are treated as a handoff_id and
-                resolved via a `handoff_id` -> basename index built from the same
-                corpus scan (mirrors dag.build_handoff_id_index's id_index, but
-                keyed to basename rather than absolute path — sufficient for a
-                same-corpus differential check).
-
-    Returns:
-        live_paths: sorted state/handoffs/*.md paths (the "live" set a caller
-                    iterates to build a report — mirrors the throwaway script's
-                    original `main()` shape).
-        children:   basename -> set of referencing basenames, for the given fields.
-    """
     paths = collect_corpus_paths(root)
     fms = {p: _frontmatter(p) for p in paths}
     by_id = {
@@ -270,19 +194,6 @@ def build_children_index(
             b = os.path.basename(v)
             if not b.endswith(".md"):
                 b = by_id.get(b, b)
-            # A pointer that explicitly names a NON-baton family resolves to that
-            # file, not to a same-basename baton. Collapsing straight to the
-            # basename made `predecessor: docs/problems/<name>.md` on a handoff
-            # of the same `<name>.md` record the handoff as its own child — a
-            # spurious self-edge, and the disagreement that surfaced this. The
-            # module's existing negative-spec anticipated only the
-            # nonexistent-target case, not same-basename-different-family.
-            # Deliberately still basename-keyed for a pointer that names no
-            # directory at all, or names a baton family: that bare-ref
-            # resolution is what this oracle exists to check independently, and
-            # `dag.resolve_target` reaches the same answer by a different route
-            # (explicit path first, basename probing only as stale-path
-            # recovery) rather than by sharing this code.
             pointer_dir = os.path.dirname(str(v).replace("\\", "/")).strip("/")
             if pointer_dir and b in corpus_basenames:
                 names_baton_family = pointer_dir.startswith(

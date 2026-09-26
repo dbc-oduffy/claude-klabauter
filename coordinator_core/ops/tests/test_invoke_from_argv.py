@@ -60,10 +60,6 @@ import pytest
 from coordinator_core.ops import invoke_from_argv
 from coordinator_core.ops.invoke_from_argv import _invoke_from_argv, _run_entrypoint
 
-# Several tests spawn a real `sys.executable -m coordinator_core.invoke`
-# subprocess for the byte-identical CLI comparison (the dispatch brief's
-# acceptance property) — declared + tiered off the per-commit path per the
-# spawn ratchet (coordinator_core/tests/test_no_new_spawning_tests.py Rules 2/4).
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
@@ -97,10 +93,6 @@ def _run_cli(*args: str, cwd: str) -> subprocess.CompletedProcess:
     )
 
 
-# ---------------------------------------------------------------------------
-# (a) params validation
-# ---------------------------------------------------------------------------
-
 def test_argv_must_be_a_list_of_strings():
     with pytest.raises(ValueError, match="params.argv"):
         _invoke_from_argv({"argv": "ping", "cwd": _PROJECT_ROOT})
@@ -121,14 +113,7 @@ def test_cwd_must_be_present():
         _invoke_from_argv({"argv": ["ping"]})
 
 
-# ---------------------------------------------------------------------------
-# (b) byte-identical output against the real CLI
-# ---------------------------------------------------------------------------
-
 def test_dump_op_timeouts_byte_identical_to_cli():
-    """--dump-op-timeouts is fully deterministic (no live clock/UUID in its
-    payload) — an exact byte comparison against the real CLI subprocess is
-    the acceptance property itself, not an approximation of it."""
     served = _invoke_from_argv({"argv": ["--dump-op-timeouts"], "cwd": _PROJECT_ROOT})
     cli = _run_cli("--dump-op-timeouts", cwd=_PROJECT_ROOT)
 
@@ -141,11 +126,6 @@ def test_dump_op_timeouts_byte_identical_to_cli():
 
 
 def test_ping_matches_cli_structurally():
-    """ping's `ts` field is a live monotonic clock read independently by each
-    call, so an exact byte comparison would be flaky by construction — same
-    allowance test_invoke_main.py's test_bare_flag_matches_default_result_payload
-    makes for the identical reason. Compare shape/exit_code/stderr exactly and
-    the `ok` field's value exactly; only `ts` is excluded."""
     served = _invoke_from_argv({"argv": ["ping", "{}"], "cwd": _PROJECT_ROOT})
     cli = _run_cli("ping", "{}", cwd=_PROJECT_ROOT)
 
@@ -172,8 +152,6 @@ def test_bare_ping_matches_cli_structurally():
 
 
 def test_invalid_params_json_byte_identical_to_cli():
-    """A pre-dispatch _fatal_stderr failure (branch 2 of test_invoke_main.py)
-    carries no volatile fields — exact byte comparison, exit 1, stderr-only."""
     served = _invoke_from_argv({"argv": ["ping", "not json"], "cwd": _PROJECT_ROOT})
     cli = _run_cli("ping", "not json", cwd=_PROJECT_ROOT)
 
@@ -214,15 +192,7 @@ def test_dump_op_timeouts_default_matches_live_process_resolution():
     )
 
 
-# ---------------------------------------------------------------------------
-# (c) served path never dials the warm pipe back into itself
-# ---------------------------------------------------------------------------
-
 def test_served_dispatch_never_checks_warm_enabled():
-    """allow_warm=False must skip the warm preamble outright — is_warm_enabled
-    must never even be CALLED, let alone connected to. A regression here would
-    mean a request already being served by the warm server tries to dial its
-    own pipe from inside itself."""
     with mock.patch(
         "coordinator_core.warm.settings.is_warm_enabled",
         side_effect=AssertionError("is_warm_enabled must not be called on the served path"),
@@ -231,10 +201,6 @@ def test_served_dispatch_never_checks_warm_enabled():
     assert result["exit_code"] == 0
     assert json.loads(result["stdout"])["result"]["ok"] is True
 
-
-# ---------------------------------------------------------------------------
-# (d) cwd is threaded through, never this process's own os.getcwd()
-# ---------------------------------------------------------------------------
 
 def test_worktree_scoped_op_resolves_repo_root_from_cwd_param_not_process_cwd():
     """A worktree-scoped op (handoff.blocked_by_dependents — handoff.has_live_children's
@@ -276,17 +242,7 @@ def test_worktree_scoped_op_resolves_repo_root_from_cwd_param_not_process_cwd():
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-# ---------------------------------------------------------------------------
-# (e) served-path loop lifecycle: no per-call leak
-# ---------------------------------------------------------------------------
-
 def _open_event_loop_count() -> int:
-    """Count `asyncio.AbstractEventLoop` instances the collector currently
-    tracks that are NOT closed. Deliberately does not call `gc.collect()` —
-    the point of this helper is to observe accumulation exactly as it stands,
-    not after a sweep that could paper over an unclosed-but-unreferenced loop
-    the leak fix is supposed to prevent from ever existing in the first
-    place."""
     return sum(
         1
         for obj in gc.get_objects()
@@ -295,31 +251,6 @@ def _open_event_loop_count() -> int:
 
 
 def test_repeated_served_dispatch_does_not_leak_event_loops():
-    """`invoke.from_argv` always takes __main__.py's cold-dispatch branch
-    (`allow_warm=False`), which creates a fresh `asyncio.new_event_loop()`
-    per call. Called directly here exactly as the resident warm server would
-    call it (repeatedly, on one thread — ipc.py's `_dispatch_message_impl`
-    offloads this op's sync handler via `asyncio.to_thread`, i.e. the
-    server's own loop's default executor, a persistent pool whose worker
-    threads are REUSED across calls, so one OS thread genuinely does service
-    many `invoke.from_argv` requests back to back over the server's
-    lifetime).
-
-    Before the fix, each call's loop was created and never closed: a `ping`
-    dispatch also exercises a NESTED `asyncio.to_thread` (ping is itself a
-    sync handler `_dispatch_message_impl` offloads), which lazily creates a
-    default ThreadPoolExecutor on the freshly-made loop — so an unclosed loop
-    here is not just an idle object, it is one holding a live executor and
-    selector/IOCP handle. `gc.disable()` for the duration of the 50-call loop
-    is deliberate: asyncio event loops commonly hold internal reference
-    cycles (their own ready/scheduled queues reference back into the loop),
-    so plain refcounting would not free an abandoned-but-never-closed loop
-    promptly — only a cyclic GC pass would, which could otherwise mask
-    exactly the accumulation this test exists to catch. With GC disabled, an
-    unfixed leak accumulates one open loop per call, linearly, for the full
-    50; the fix makes every call close its own loop explicitly, so the open
-    count never exceeds a small constant regardless of how many calls run.
-    """
     gc.disable()
     try:
         counts = []
@@ -334,10 +265,6 @@ def test_repeated_served_dispatch_does_not_leak_event_loops():
         f"open (unclosed) event-loop count must stay flat and small across "
         f"50 served dispatches, not grow with call count; got the sequence: {counts}"
     )
-    # The defining before/after contrast: NOT monotonically growing with
-    # call count (a leak's signature) — the last sample is no larger than
-    # the first, well inside noise, whereas an unfixed leak would show
-    # counts[-1] >= 50 (one abandoned loop per call).
     assert counts[-1] <= counts[0] + 1, (
         f"event-loop count must not grow across repeated calls; "
         f"first={counts[0]!r} last={counts[-1]!r} full sequence={counts!r}"
@@ -345,22 +272,10 @@ def test_repeated_served_dispatch_does_not_leak_event_loops():
 
 
 def test_repeated_served_dispatch_thread_count_stays_bounded():
-    """Companion to the loop-leak test: OS thread count must not grow
-    unboundedly either. `loop.close()`'s `executor.shutdown(wait=False)` is
-    non-blocking BY DESIGN (P1#5) — it signals shutdown, it does not
-    guarantee the pool's worker threads have already exited by the time the
-    next call starts — so this asserts BOUNDED (a small, non-growing
-    ceiling), not that thread count is instantaneously zero-growth after
-    every single call.
-    """
     before = threading.active_count()
     for _ in range(50):
         result = _invoke_from_argv({"argv": ["ping", "{}"], "cwd": _PROJECT_ROOT})
         assert result["exit_code"] == 0
-    # Give any still-shutting-down pool threads a brief window to exit —
-    # bounded, not a leak-detection sleep loop: a real leak would still show
-    # a large, calls-proportional excess after this window; a flat,
-    # non-leaking implementation settles near `before` almost immediately.
     import time
     for _ in range(20):
         if threading.active_count() <= before + 4:
@@ -372,13 +287,6 @@ def test_repeated_served_dispatch_thread_count_stays_bounded():
         f"thread count must settle back near its starting level, not grow "
         f"proportionally with 50 calls; before={before} after={after}"
     )
-
-
-# ---------------------------------------------------------------------------
-# (f) `params.entrypoint` set: the process-global chdir does not race across
-#     two concurrent calls with different `cwd`s (C7 — the entrypoint path
-#     stops chdir-ing a process 50 sessions share).
-# ---------------------------------------------------------------------------
 
 
 def test_concurrent_entrypoint_calls_do_not_race_the_shared_process_cwd(tmp_path):
@@ -445,8 +353,6 @@ def test_concurrent_entrypoint_calls_do_not_race_the_shared_process_cwd(tmp_path
         record = builtins._ENTRYPOINT_CWD_RACE_RECORD
         assert len(record) == 4, record
 
-        # Each call's own exit-time cwd matches its own entry-time cwd —
-        # nothing chdir'd out from under it mid-run.
         for entry in record:
             if entry[0] == "end":
                 _, entry_cwd, exit_cwd = entry
@@ -454,8 +360,6 @@ def test_concurrent_entrypoint_calls_do_not_race_the_shared_process_cwd(tmp_path
                     f"cwd changed mid-call — the lock did not hold: {entry}"
                 )
 
-        # The two calls never interleaved: a ("start", "end") pair is
-        # contiguous, never split by the other call's "start".
         kinds = [entry[0] for entry in record]
         assert kinds == ["start", "end", "start", "end"], (
             f"entrypoint calls interleaved instead of serializing: {kinds}"
@@ -464,30 +368,7 @@ def test_concurrent_entrypoint_calls_do_not_race_the_shared_process_cwd(tmp_path
         del builtins._ENTRYPOINT_CWD_RACE_RECORD
 
 
-# ---------------------------------------------------------------------------
-# (g) `params.entrypoint` set: the served CLI reads the CALLER's session
-#     identity out of `os.environ`, never the warm server owner's.
-#
-#     The defect (cross-repo/inbox/2026-08-30-example-retrieval-repo-em-prepare-commit-
-#     msg-stamps-warm-engine-owner-session-id.md, reproduced in this repo
-#     2026-08-30): every `coordinator/bin/*.py` CLI resolves its session id by
 #     reading `SESSION_ENV_PRECEDENCE` out of `os.environ` — the
-#     `prepare-commit-msg` hook does so in a deliberately hand-mirrored copy of
-#     that ladder. Served in-process here, that environment is the server
-#     owner's, so the door's `_session_id` reached `resolve_session_id()` and
-#     stopped there: same hook, correct cold, a stranger's id warm, on EVERY
-#     hook-path commit on a box carrying the forwarder.
-#
-#     C4: the point fix (`_borrowed_session_identity`, formerly local to this
-#     module) is deleted — `coordinator_core.warm.entry_seam.per_request_state`
-#     (`_environ_identity_borrow`, C3) now makes the caller's identity true in
-#     `os.environ` for the whole isolated dispatch this op runs inside, so
-#     these tests open the SEAM's own scope (`isolated=True`) around
-#     `_run_entrypoint`, instead of binding `session_identity_override`/
-#     `warm_served_request` directly and relying on a borrow local to this
-#     module. They still pin the property (caller's id wins, absent-when-
-#     uncarried, server env restored), not the mechanism.
-# ---------------------------------------------------------------------------
 
 _CALLER_SID = "8b40d62c-55ef-4702-83ce-0cd8dc6513e3"
 _SERVER_OWNER_SID = "b68689fb-a9a5-4f3d-9ca9-f688530ed7c1"
@@ -508,12 +389,6 @@ _SESSION_ENV_PROBE = (
 
 
 def _run_session_env_probe(tmp_path, monkeypatch, *, carried, server_env):
-    """Run a fake CLI through `_run_entrypoint`, inside the seam-level
-    isolated-dispatch scope (`entry_seam.per_request_state(isolated=True)`)
-    that C3 made responsible for mirroring `carried` into `os.environ`, with
-    `server_env` as the server process's own environment; return what the CLI
-    saw, plus this process's env afterwards.
-    """
     import builtins
 
     from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
@@ -551,8 +426,6 @@ def _run_session_env_probe(tmp_path, monkeypatch, *, carried, server_env):
 
 
 def test_served_cli_reads_the_callers_session_id_not_the_servers(tmp_path, monkeypatch):
-    """The defect itself. The server's own environment names the session that
-    spawned it; the CLI must see the one the door carried."""
     seen, _ = _run_session_env_probe(
         tmp_path,
         monkeypatch,
@@ -561,17 +434,12 @@ def test_served_cli_reads_the_callers_session_id_not_the_servers(tmp_path, monke
     )
 
     assert seen["COORDINATOR_SESSION_ID"] == _CALLER_SID
-    # The lower-tier names are popped, not merely outranked: a CLI reading only
     # `CLAUDE_CODE_SESSION_ID` would otherwise still resurface the owner's id.
     assert seen["CLAUDE_SESSION_ID"] is None
     assert seen["CLAUDE_CODE_SESSION_ID"] is None
 
 
 def test_warm_request_carrying_no_identity_shows_the_cli_none(tmp_path, monkeypatch):
-    """The fail-safe direction. A warm request the door sent no `_session_id`
-    for is indistinguishable from a cold one at the ContextVar, and the two
-    need opposite answers: omitting a trailer is coverage-neutral, stamping the
-    server owner's is misattribution (`session.core.carried_session_id`)."""
     seen, _ = _run_session_env_probe(
         tmp_path,
         monkeypatch,
@@ -589,37 +457,9 @@ def test_warm_request_carrying_no_identity_shows_the_cli_none(tmp_path, monkeypa
     }
 
 
-# ---------------------------------------------------------------------------
-# (h) `params.entrypoint` set: `--help`/`-h` renders a target's REAL usage on
-#     the warm door — the third door
-#     (docs/plans/2026-09-02-the-loader-fires-the-assembly-not-the-em.md,
-#     chunk C1 follow-up), corrected after a first pass synthesized a stub
-#     line for EVERY entrypoint and silently replaced 11 targets' real usage
-#     with `usage: <name> [--help]` on the warm door only (never reproduced
-#     cold), hiding a live, published flag (`baton-assemble
-#     --expect-discovery-tier`).
-#
-#     Fixtures rather than the real `coordinator/bin/baton-assemble.py` /
-#     `plan-assemble.py`: those two route through `entry_point_shim`'s
-#     engine-mapped entries, which resolve the claude-klabauter root via a
-#     machine-local registry read this suite's own root `conftest.py`
-#     deliberately quarantines the real HOME directory from — calling their
-#     real `--help` inside THIS test process silently hits that
-#     resolution failure and (correctly, per `_render_usage_text`'s own
-#     fallback chain) falls back to a synthesized line, which would make
-#     these tests pass on a false basis. The fixtures below exercise the
-#     exact same `_run_entrypoint` code path (real `_load_entrypoint_main` +
-#     real `main_fn(["--help"])` call under the real lock/chdir span) against
-#     a target whose own module body has no such external dependency —
 #     `workday-start-inbox-blitz-assemble` (the real ARGV_SHAPE_NONE member)
-#     is used directly below since its short-circuit never loads a module at
-#     all and so carries no such fragility.
-#
-#     `main_fn` IS entered with `["--help"]` standing in for the caller's
 #     real argv for ARGV_SHAPE_FULL/TAIL targets, exactly as the cold door's
-#     `entry_point_shim.run_target` does; it is NEVER entered for
 #     ARGV_SHAPE_NONE, which cannot receive a flag at all.
-# ---------------------------------------------------------------------------
 
 
 def _write_delegating_entrypoint(bin_dir: Path, name: str, *, real_help_branch: bool) -> None:
@@ -672,10 +512,6 @@ def _write_delegating_entrypoint(bin_dir: Path, name: str, *, real_help_branch: 
 
 
 def test_help_delegates_to_a_full_shaped_targets_own_real_usage(tmp_path):
-    """The regression this follow-up exists to close: a delegating target's
-    real, multi-line usage must survive the warm door, not collapse to a
-    one-line stub — proven against a fixture with its own explicit `--help`
-    branch (the shape `baton-assemble` uses)."""
     import builtins
 
     name = "fake-entrypoint-full-shape-help"
@@ -730,8 +566,6 @@ def test_help_delegates_for_a_tail_shaped_target_without_leaking_the_parse_error
 
 
 def _write_subparser_entrypoint(bin_dir: Path, name: str) -> None:
-    """An argparse subcommand CLI in `merge-gate-and-pr`'s shape: `main(argv)`
-    with a `pr-body` subparser whose handler marks the op as entered."""
     body = (
         "import argparse\n"
         "import builtins\n"
@@ -761,11 +595,6 @@ def _write_subparser_entrypoint(bin_dir: Path, name: str) -> None:
 
 
 def test_help_after_a_declared_subcommand_renders_that_subcommands_usage(tmp_path):
-    """`merge-gate-and-pr.exe pr-body -h` printed the top-level usage: the
-    help gesture replaced the whole argv with `["--help"]`, dropping the
-    subcommand. A leading declared subparser name now survives, the flag
-    position after it does not matter, and the subcommand's handler is
-    never entered."""
     import builtins
 
     name = "fake-entrypoint-subparser-help"
@@ -825,11 +654,6 @@ def test_help_synthesizes_only_for_the_argv_shape_none_entrypoint():
 
 
 def test_a_none_shape_that_reads_its_argv_renders_its_own_verbs():
-    """The other half of the NONE shape. `handoff-archive-transition`'s guard
-    is `sys.exit(main())`, but its `main(argv=None)` resolves `sys.argv`
-    itself and parses before doing anything, so a help gesture must reach its
-    real verbs. Synthesizing there left the live baton-close door
-    undiscoverable from any --help (doe-claude-em, F21)."""
     name = "handoff-archive-transition"
     script = Path(invoke_from_argv._ENGINE_ROOT) / "coordinator" / "bin" / f"{name}.py"
     from coordinator_core.warm import serve_classifier
@@ -845,10 +669,6 @@ def test_a_none_shape_that_reads_its_argv_renders_its_own_verbs():
 
 
 def test_an_accepted_then_deleted_argv_is_not_a_readable_one():
-    """`def main(argv=None): del argv  # accepted for the warm-call contract`
-    is the shape that must keep synthesizing: declaring the parameter says
-    nothing about whether the body can be steered by it, and this one fetches
-    a live decision object on every call."""
     bin_dir = Path(invoke_from_argv._ENGINE_ROOT) / "coordinator" / "bin"
     assert (
         invoke_from_argv._none_shape_main_reads_argv(
@@ -859,8 +679,6 @@ def test_an_accepted_then_deleted_argv_is_not_a_readable_one():
 
 
 def test_help_wins_after_a_subcommand_token(tmp_path):
-    """Position is not special-cased — `--help` reached after a real
-    subcommand token still renders the target's real usage."""
     import builtins
 
     name = "fake-entrypoint-help-subcommand"
@@ -899,10 +717,6 @@ def test_short_help_flag_also_delegates(tmp_path):
 
 
 def test_normal_invocation_still_reaches_main_fn(tmp_path):
-    """No-flag invocation is unaffected — `main_fn` is genuinely called,
-    proven by a fake target that mutates a shared record when actually
-    entered (rather than merely asserting exit_code, which a --help
-    short-circuit could also satisfy)."""
     bin_dir = tmp_path / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
     name = "fake-entrypoint-normal-invocation"
@@ -935,9 +749,6 @@ def test_normal_invocation_still_reaches_main_fn(tmp_path):
 
 
 def test_the_servers_own_session_env_is_restored_after_the_call(tmp_path, monkeypatch):
-    """Borrowed, not taken. `os.environ` is process-global in a server ~50
-    sessions share — the same restore discipline the cwd and `sys.argv` borrows
-    beside it already carry."""
     _, after = _run_session_env_probe(
         tmp_path,
         monkeypatch,

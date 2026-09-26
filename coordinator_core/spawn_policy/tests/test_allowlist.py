@@ -160,8 +160,6 @@ def test_is_sanctioned_false_when_site_key_absent(tmp_path: pathlib.Path):
 
 
 def test_is_sanctioned_never_infers_from_rationale_alone(tmp_path: pathlib.Path):
-    # A site that would satisfy the SAME rationale/class but isn't the exact
-    # named entry (different enclosing) must not be sanctioned.
     entries = load_allowlist(_write(tmp_path, _PINNED_BLOCK))
     lookalike = _site(enclosing="_install_something_else")
     assert is_sanctioned(lookalike, entries) is False

@@ -28,10 +28,6 @@ from coordinator_core.ops.detect_existing_claude_home import (
     resolve_target,
 )
 
-# Declared, not excused: the T4/T4b/T7 cases spawn real `git init` because
-# `classify`'s "git-tracked" signal reads real git-tree membership (including the
-# subdir-of-ancestor-repo detection), which no mock stands in for. Each test spawns
-# its own repo under a fresh `tmp_path`.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -40,16 +36,10 @@ def _assert(tmp_path: Path, exp_state: str, exp_track: str) -> None:
     assert (state, track) == (exp_state, exp_track)
 
 
-# ---------------------------------------------------------------------------
-# T1: empty fixture → pristine
-# ---------------------------------------------------------------------------
 def test_t1_empty_fixture_is_pristine(tmp_path):
     _assert(tmp_path, "pristine", "A")
 
 
-# ---------------------------------------------------------------------------
-# T2: real plugin subdir → configured
-# ---------------------------------------------------------------------------
 def test_t2_real_plugin_subdir_is_configured(tmp_path):
     plugin_dir = tmp_path / "plugins" / "my-plugin"
     plugin_dir.mkdir(parents=True)
@@ -57,26 +47,17 @@ def test_t2_real_plugin_subdir_is_configured(tmp_path):
     _assert(tmp_path, "configured", "B")
 
 
-# ---------------------------------------------------------------------------
-# T2b: non-scaffolding file directly under plugins/ → configured
-# ---------------------------------------------------------------------------
 def test_t2b_plugin_file_is_configured(tmp_path):
     (tmp_path / "plugins").mkdir()
     (tmp_path / "plugins" / "some-plugin-file.md").write_text("x\n")
     _assert(tmp_path, "configured", "B")
 
 
-# ---------------------------------------------------------------------------
-# T2c: empty plugins/ subdir → used-vanilla (scaffolding, not real plugin)
-# ---------------------------------------------------------------------------
 def test_t2c_empty_plugins_subdir_is_used_vanilla(tmp_path):
     (tmp_path / "plugins" / "empty-plugin").mkdir(parents=True)
     _assert(tmp_path, "used-vanilla", "A")
 
 
-# ---------------------------------------------------------------------------
-# T2d: fresh Claude Code scaffolding only → used-vanilla (the old false-positive)
-# ---------------------------------------------------------------------------
 def test_t2d_fresh_cc_scaffolding_is_used_vanilla(tmp_path):
     (tmp_path / "plugins" / "cache" / "some-marketplace").mkdir(parents=True)
     (tmp_path / "plugins" / "marketplaces").mkdir()
@@ -91,9 +72,6 @@ def test_t2d_fresh_cc_scaffolding_is_used_vanilla(tmp_path):
     _assert(tmp_path, "used-vanilla", "A")
 
 
-# ---------------------------------------------------------------------------
-# T2e: installed_plugins.json non-empty → configured
-# ---------------------------------------------------------------------------
 def test_t2e_installed_plugins_json_nonempty_is_configured(tmp_path):
     (tmp_path / "plugins").mkdir()
     (tmp_path / "plugins" / "installed_plugins.json").write_text(
@@ -102,9 +80,6 @@ def test_t2e_installed_plugins_json_nonempty_is_configured(tmp_path):
     _assert(tmp_path, "configured", "B")
 
 
-# ---------------------------------------------------------------------------
-# T2f: isolated pretty-printed empty-map installed_plugins.json → used-vanilla
-# ---------------------------------------------------------------------------
 def test_t2f_isolated_pretty_empty_map_is_used_vanilla(tmp_path):
     (tmp_path / "plugins").mkdir()
     (tmp_path / "plugins" / "installed_plugins.json").write_text(
@@ -113,9 +88,6 @@ def test_t2f_isolated_pretty_empty_map_is_used_vanilla(tmp_path):
     _assert(tmp_path, "used-vanilla", "A")
 
 
-# ---------------------------------------------------------------------------
-# T2g: pretty-printed non-empty installed_plugins.json → configured
-# ---------------------------------------------------------------------------
 def test_t2g_pretty_nonempty_map_is_configured(tmp_path):
     (tmp_path / "plugins").mkdir()
     (tmp_path / "plugins" / "installed_plugins.json").write_text(
@@ -125,9 +97,6 @@ def test_t2g_pretty_nonempty_map_is_configured(tmp_path):
     _assert(tmp_path, "configured", "B")
 
 
-# ---------------------------------------------------------------------------
-# T3 / T3b: CLAUDE.md (substantial / stub) → used-vanilla, NOT configured
-# ---------------------------------------------------------------------------
 def test_t3_substantial_claude_md_is_used_vanilla(tmp_path):
     lines = "# My Claude Config\n\n" + "".join(f"Non-blank line {i}\n" for i in range(1, 12))
     (tmp_path / "CLAUDE.md").write_text(lines)
@@ -140,9 +109,7 @@ def test_t3b_stub_claude_md_is_used_vanilla(tmp_path):
     _assert(tmp_path, "used-vanilla", "A")
 
 
-# ---------------------------------------------------------------------------
 # T4 / T4b: git-tracked target → configured; git-tracked ANCESTOR → pristine
-# ---------------------------------------------------------------------------
 def test_t4_git_tracked_target_is_configured(tmp_path):
     subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True, timeout=30, **no_console_passthrough_kwargs())
     _assert(tmp_path, "configured", "B")
@@ -157,18 +124,12 @@ def test_t4b_subdir_of_ancestor_repo_is_pristine(tmp_path):
     _assert(target, "pristine", "A")
 
 
-# ---------------------------------------------------------------------------
-# T5: session/runtime artifacts → used-vanilla
-# ---------------------------------------------------------------------------
 def test_t5_session_artifacts_are_used_vanilla(tmp_path):
     (tmp_path / "projects" / "some-project").mkdir(parents=True)
     (tmp_path / "history.jsonl").write_text("x\n")
     _assert(tmp_path, "used-vanilla", "A")
 
 
-# ---------------------------------------------------------------------------
-# T6 / T6b: coordinator infra → configured
-# ---------------------------------------------------------------------------
 def test_t6_state_dir_is_configured(tmp_path):
     (tmp_path / "state").mkdir()
     _assert(tmp_path, "configured", "B")
@@ -179,9 +140,6 @@ def test_t6b_coordinator_local_md_is_configured(tmp_path):
     _assert(tmp_path, "configured", "B")
 
 
-# ---------------------------------------------------------------------------
-# T7: precedence — configured signal beats used-vanilla signals
-# ---------------------------------------------------------------------------
 def test_t7_configured_beats_used_vanilla(tmp_path):
     (tmp_path / "projects").mkdir()
     (tmp_path / "CLAUDE.md").write_text("# config\n")
@@ -189,23 +147,14 @@ def test_t7_configured_beats_used_vanilla(tmp_path):
     _assert(tmp_path, "configured", "B")
 
 
-# ---------------------------------------------------------------------------
-# Python-port-specific edge cases
-# ---------------------------------------------------------------------------
-
-
 def test_resolve_target_precedence_arg_over_env_over_home(tmp_path, monkeypatch):
-    # arg wins over everything
     assert resolve_target("/explicit/path", env={"CLAUDE_CONFIG_DIR": "/env/path", "HOME": "/home"}) == "/explicit/path"
-    # env wins over HOME
     assert resolve_target(None, env={"CLAUDE_CONFIG_DIR": "/env/path", "HOME": "/home"}) == "/env/path"
-    # HOME is the final fallback
     assert resolve_target(None, env={"HOME": "/home"}) == os.path.join("/home", ".claude")
 
 
 def test_resolve_target_falls_back_to_expanduser_when_home_unset():
     # Windows-shape env: no HOME, no CLAUDE_CONFIG_DIR — must not crash or
-    # resolve to a bogus path; falls back to os.path.expanduser("~").
     result = resolve_target(None, env={})
     assert result == os.path.join(os.path.expanduser("~"), ".claude")
 
@@ -273,7 +222,6 @@ def test_installed_plugins_json_nonempty_swallows_permission_error(tmp_path):
     f.write_text('{"plugins": {"x": []}}\n')
     f.chmod(0o000)
     try:
-        # Root (and some CI containers) bypass permission bits entirely.
         if os.access(str(f), os.R_OK):
             pytest.skip("running as a user that bypasses file permission bits")
         assert _installed_plugins_json_nonempty(str(tmp_path)) is False

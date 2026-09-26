@@ -24,15 +24,7 @@ from coordinator_core.win_portability import (
     no_console_passthrough_kwargs,
 )
 
-# Declared, not excused: `test_main_performs_no_archival_in_a_real_git_worktree`
-# spawns a real git process because it deliberately regression-tests the
-# git-root-resolved path (as opposed to the env-override fixture the rest of
-# this file uses) against a REAL worktree, per its own docstring -- a prior
-# defect only reproduced there. No mock stands in for real git-root
-# resolution. This is the file's only spawn site, so it is left as its own
 # self-isolated test rather than hoisted. The spawn ratchet's `_BASELINE` is
-# shrink-only pre-existing residue and is explicitly not the route for this
-# file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -49,9 +41,6 @@ def _run(env_overrides, monkeypatch):
     return rc, buf.getvalue()
 
 
-# ---------------------------------------------------------------------------
-# Test 1: Empty fixture dir -> silent, exit 0
-# ---------------------------------------------------------------------------
 def test_empty_dir_silent(tmp_path, monkeypatch):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
@@ -60,9 +49,6 @@ def test_empty_dir_silent(tmp_path, monkeypatch):
     assert out == ""
 
 
-# ---------------------------------------------------------------------------
-# Test 2: open memo created today -> "(0 days old)", no stale flag
-# ---------------------------------------------------------------------------
 def test_open_memo_created_today(tmp_path, monkeypatch):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
@@ -81,9 +67,6 @@ def test_open_memo_created_today(tmp_path, monkeypatch):
     assert "[STALE" not in out
 
 
-# ---------------------------------------------------------------------------
-# Test 3/4: open memo 10d / 20d old -> [STALE — awaiting your action]
-# ---------------------------------------------------------------------------
 def test_open_memo_10_days_old_stale(tmp_path, monkeypatch):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
@@ -118,9 +101,6 @@ def test_open_memo_20_days_old_stale(tmp_path, monkeypatch):
     assert "20 days old" in out
 
 
-# ---------------------------------------------------------------------------
-# Test 5: action_taken filtered out, open surfaced
-# ---------------------------------------------------------------------------
 def test_action_taken_filtered_open_surfaced(tmp_path, monkeypatch):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
@@ -143,15 +123,10 @@ def test_action_taken_filtered_open_surfaced(tmp_path, monkeypatch):
     assert rc == 0
     assert "Already Done" not in out
     assert "Still Open" in out
-    # 1 qualifying memo line + 1 close-command footer line (printed once
-    # whenever at least one memo qualifies — see the footer assertion below).
     assert len(out.rstrip("\n").splitlines()) == 2
     assert "archive-stamp-cli resolve-memo" in out
 
 
-# ---------------------------------------------------------------------------
-# Test 6: 10 open memos -> 8 lines + truncation line (9 total)
-# ---------------------------------------------------------------------------
 def test_truncation_at_8_entries(tmp_path, monkeypatch):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
@@ -167,15 +142,11 @@ def test_truncation_at_8_entries(tmp_path, monkeypatch):
     )
     assert rc == 0
     lines = out.rstrip("\n").splitlines()
-    # 8 entries + truncation line + 1 close-command footer line.
     assert len(lines) == 10
     assert "(2 more" in out
     assert "archive-stamp-cli resolve-memo" in out
 
 
-# ---------------------------------------------------------------------------
-# Test 7: pre-cutoff memo (created 2026-05-21) grandfathered -> silent
-# ---------------------------------------------------------------------------
 def test_precutoff_memo_grandfathered_silent(tmp_path, monkeypatch):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
@@ -192,9 +163,6 @@ def test_precutoff_memo_grandfathered_silent(tmp_path, monkeypatch):
     assert out == ""
 
 
-# ---------------------------------------------------------------------------
-# Test 8: mixed kinds -- ask+consult surface above fyi; fyi carries marker
-# ---------------------------------------------------------------------------
 def test_kind_banding_ask_consult_before_fyi(tmp_path, monkeypatch):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
@@ -231,9 +199,6 @@ def test_kind_banding_ask_consult_before_fyi(tmp_path, monkeypatch):
     assert "[fyi]" not in lines[idx_consult]
 
 
-# ---------------------------------------------------------------------------
-# Test 9: missing kind field defaults to ask (urgent band)
-# ---------------------------------------------------------------------------
 def test_missing_kind_defaults_to_ask(tmp_path, monkeypatch):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
@@ -260,9 +225,6 @@ def test_missing_kind_defaults_to_ask(tmp_path, monkeypatch):
     assert "[fyi]" not in lines[idx_nokind]
 
 
-# ---------------------------------------------------------------------------
-# Test 10: pipe character in title sanitized to en-dash, kind still parses
-# ---------------------------------------------------------------------------
 def test_pipe_in_title_sanitized(tmp_path, monkeypatch):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
@@ -279,14 +241,10 @@ def test_pipe_in_title_sanitized(tmp_path, monkeypatch):
     assert "Memo With" in out
     line = next(l for l in out.splitlines() if "Memo With" in l)
     assert "[fyi]" in line
-    # Literal pipe must not survive raw -- it is replaced by an en dash.
     assert "| Pipe" not in line
     assert "–" in line
 
 
-# ---------------------------------------------------------------------------
-# Test 11: proposal kind bands as urgent (before fyi), no [fyi] marker
-# ---------------------------------------------------------------------------
 def test_proposal_kind_bands_urgent(tmp_path, monkeypatch):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
@@ -313,9 +271,6 @@ def test_proposal_kind_bands_urgent(tmp_path, monkeypatch):
     assert "[fyi]" not in lines[idx_proposal]
 
 
-# ---------------------------------------------------------------------------
-# Additional edge/platform cases (this port)
-# ---------------------------------------------------------------------------
 def test_in_progress_surfaced_with_claimed_tag_no_stale_flag(tmp_path, monkeypatch):
     """status: in_progress is surfaced (not hidden) with a [CLAIMED by ...]
     tag, and the stale flag is suppressed even when the memo is >7 days old
@@ -412,14 +367,6 @@ def test_env_override_wins_over_git_root(tmp_path, monkeypatch):
     assert "Explicit Override" in out
 
 
-# ---------------------------------------------------------------------------
-# C14 (docs/plans/2026-07-23-wsc-tail-slim-down.md): the duplicate
-# actioned-memo archival sweep this op used to run before surfacing, plus its
-# `except Exception: return` silent swallow, are deleted outright rather than
-# patched -- session.boot_sweep is the sole memo-archival occasion, and its
-# failures surface via the shared housekeeping-failures log (C17a/C17b), not
-# via a second swallow here.
-# ---------------------------------------------------------------------------
 def test_dead_sweep_helper_and_silent_swallow_are_gone():
     """The module-level symbol and its bare `except Exception` swallow must
     not merely be unreferenced -- they must not exist at all, since a
@@ -459,12 +406,6 @@ def test_main_performs_no_archival_in_a_real_git_worktree(tmp_path, monkeypatch)
         "created: 2026-05-22\nstatus: actioned",
     )
 
-    # Prior to 2026-08-23, this also monkeypatched
-    # `coordinator_core.ops.fleet.archive_actioned_memos.archive_actioned_memos_internal`
-    # to an AssertionError-raising mock — belt-and-braces against the C14 regression.
-    # That module was killed outright 2026-08-23 (PM ruling, no replacement op), so the
-    # patch target no longer exists; the git-log assertion below is now the sole guard
-    # that `main()` performs no archival mutation.
     monkeypatch.delenv("CROSS_REPO_INBOX_DIR", raising=False)
     monkeypatch.chdir(repo)
 

@@ -79,25 +79,16 @@ from coordinator_core.frontmatter.primitives import split_frontmatter
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
-PRIORITY = 130  # deny-offer: runs after the structural block_* guards (≤90)
+PRIORITY = 130
 
-#: Escape-hatch env var, same shape as nudge_improvement_queue_write's
 #: COORDINATOR_QUEUE_PUNT — a typed, non-trivial reason suppresses the offer.
 _ESCAPE_HATCH_ENV_VAR = "COORDINATOR_BATON_BODY_PUNT"
 
-#: Path gate — live batons only, not archived ones. Anchored to a `state/`
-#: path-segment boundary (not a bare substring match) so a path like
-#: `vendor/upstate/handoffs/notes.md` — which contains the literal substring
-#: "state/handoffs/" but is not actually under a `state/handoffs/` directory —
-#: does not false-positive. See `_matches_baton_path`.
 _BATON_PATH_GLOB = "*/state/handoffs/*.md"
 _BATON_PATH_PREFIX = "state/handoffs/"
 
-#: Read cap for Edit/MultiEdit whole-file reconstruction — batons are small
-#: markdown files; anything larger falls back to skipping the advisory.
 _MAX_WHOLE_FILE_BYTES = 256 * 1024
 
-#: Row-like lines: markdown table rows, bullets, or numbered list items.
 _TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
 _TABLE_SEP_RE = re.compile(r"^\s*\|?[\s:|-]+\|?\s*$")
 _BULLET_RE = re.compile(r"^\s*[-*+]\s+\S")
@@ -106,19 +97,12 @@ _HEADING_RE = re.compile(r"^\s*#{1,6}\s")
 
 _MIN_ROW_LINES = 3
 
-# A bullet/numbered line matching
 # _BULLET_RE/_NUMBERED_RE syntactically could be either a terse data row
-# ("2026-07-23 | did thing one") or a full narrative bullet with real
-# reasoning ("Decided to defer X because Y would break Z..."). Only the
-# former is the bare-row-bar shape this guard targets. A coarse length +
-# terminal-punctuation heuristic (no NLP) tells them apart — either signal is
-# enough to call it prose, per false-positive-is-worse-than-a-miss.
 _PROSE_LEN_THRESHOLD = 60
 _TERMINAL_PUNCT_RE = re.compile(r"[.!?]\s*$")
 
 
 def _bullet_or_numbered_is_prose(line: str) -> bool:
-    """True if a bullet/numbered line reads as narrative prose, not a data row."""
     stripped = line.strip()
     if _TERMINAL_PUNCT_RE.search(stripped):
         return True
@@ -139,13 +123,6 @@ _TRIVIAL_HINT = """
 
 
 def _matches_baton_path(file_path_norm: str) -> bool:
-    """True iff `file_path_norm` is actually under a `state/handoffs/` dir.
-
-    Anchored to a path-segment boundary — either an absolute/nested path with
-    `/state/handoffs/` preceded by a separator, or a bare repo-relative path
-    starting with `state/handoffs/` — so a substring coincidence like
-    `vendor/upstate/handoffs/notes.md` does not match.
-    """
     return fnmatch.fnmatchcase(file_path_norm, _BATON_PATH_GLOB) or file_path_norm.startswith(
         _BATON_PATH_PREFIX
     )
@@ -226,8 +203,6 @@ def _reconstruct_whole_file(
 
 
 def _classify_line(line: str) -> str:
-    """Classify one body line as 'blank', 'neutral' (heading/table-separator),
-    'row' (table row/bullet/numbered item), or 'prose' (anything else)."""
     if not line.strip():
         return "blank"
     if _HEADING_RE.match(line):
@@ -294,9 +269,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             trivial_reason = True
 
         # COORDINATOR_BATON_BODY_PUNT is
-        # reason-shaped, not flag-shaped; render VAR="<reason>", not the
-        # default VAR=1 (which this guard's own _is_trivial_reason would
-        # reject).
         _note = operator_override_note(
             _ESCAPE_HATCH_ENV_VAR,
             payload=payload,
@@ -314,6 +286,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         }
     except Exception:
-        # Fail-OPEN on any unexpected error — this guard offers only on a
-        # positive bare-row-list match, never on an error.
         return None

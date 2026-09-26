@@ -109,14 +109,6 @@ def _ok_dispatch(seen: list):
 
 
 def test_mismatched_settings_home_is_refused_at_run_dispatch(monkeypatch):
-    """The defect itself, at its NEW locus. `_run_dispatch` (the callable
-    `_handle_connection`'s own `dispatch: Callable[..., dict] = _run_dispatch`
-    default names) must refuse before it ever opens `per_request_state` or
-    calls a handler -- the refusal's whole value is that it is provably
-    pre-dispatch (that is what `door_core.c :: is_provably_undispatched`
-    relies on). `dispatch_message` is monkeypatched to fail the test if
-    reached at all.
-    """
     from coordinator_core import ipc
 
     monkeypatch.setattr(
@@ -136,12 +128,6 @@ def test_mismatched_settings_home_is_refused_at_run_dispatch(monkeypatch):
 
 
 def test_the_default_dispatch_leg_is_refused_too(monkeypatch):
-    """Finding 1's own hole. `_handle_connection`/`_serve_line`'s default
-    `dispatch=` leg -- the one reached when no explicit `dispatch=self.
-    _pool_dispatch` is bound, exactly the leg the plan's own C3 falsifier
-    drives -- must be refused, not merely a leg a test happens to inject a
-    `dispatch=` override for.
-    """
     from coordinator_core import ipc
 
     monkeypatch.setattr(
@@ -159,8 +145,6 @@ def test_the_default_dispatch_leg_is_refused_too(monkeypatch):
         close_listener=lambda: pytest.fail("must not close the listener"),
         drain=lambda: pytest.fail("must not drain"),
         in_flight=server.InFlightCounter(),
-        # No `dispatch=` override -- exercises `_handle_connection`'s own
-        # `dispatch: Callable[..., dict] = _run_dispatch` default.
     )
 
     response = json.loads(io_obj.written[0])
@@ -168,14 +152,6 @@ def test_the_default_dispatch_leg_is_refused_too(monkeypatch):
 
 
 def test_old_locus_no_longer_refuses_on_its_own():
-    """The move's other half, asserted as an ABSENCE: a `dispatch=` callable
-    that implements no settings-home check of its own (every fake this module
-    uses) now sees a mismatched-claim frame reach it uncontested --
-    `_serve_line` performs no comparison any more, only the pop-and-join onto
-    `caller`. A test that still saw a refusal here would mean the check was
-    duplicated rather than moved, which the chunk's own body forbids ("ONE
-    locus, not a branch re-seat").
-    """
     seen: list = []
     other_home = os.path.join(os.sep, "nowhere", "old-locus-should-not-refuse")
     io_obj = _serve(
@@ -188,10 +164,6 @@ def test_old_locus_no_longer_refuses_on_its_own():
 
 
 def test_refusal_names_both_homes(monkeypatch):
-    """Neither home alone is actionable: the caller knows what it asked for and
-    not what it got, and an operator reading a transcript knows neither. A
-    message carrying only one of them sends the reader to guess the other.
-    """
     from coordinator_core import ipc
 
     monkeypatch.setattr(
@@ -224,10 +196,6 @@ def test_no_claim_is_served_exactly_as_before():
 
 
 def test_matching_claim_is_served_and_the_field_never_reaches_the_op():
-    """A caller whose override names the home this server already serves is
-    served normally -- and the transport field is POPPED, like `_engine_token`
-    and `_session_id`, so no op ever sees it among its params.
-    """
     seen: list = []
     from coordinator_core._settings_home import settings_home
 
@@ -246,12 +214,6 @@ def test_matching_claim_is_served_and_the_field_never_reaches_the_op():
 
 
 def test_mismatch_does_not_evict_the_shared_server():
-    """Distinct from the skew path, and for the same reason a tokenless request
-    is: a caller naming another home is evidence about the CALLER's environment,
-    never about this server's generation. Running `close_listener`/`drain` here
-    would turn one env var into a remote kill switch for every session sharing
-    this pipe. `_serve`'s callbacks fail the test if either is called.
-    """
     other_home = os.path.join(os.sep, "nowhere", "elsewhere")
     io_obj = _serve(
         _frame(id_=4, method="ping", extra={settings_home_claim.SETTINGS_HOME_FIELD: other_home}),
@@ -261,15 +223,9 @@ def test_mismatch_does_not_evict_the_shared_server():
     assert json.loads(io_obj.written[0])["error"]["code"] == server.SETTINGS_HOME_MISMATCH_ERROR
 
 
-# ---------------------------------------------------------------------------
 # THE BROKEN-POOL FALLBACK ORDERING (Finding 2). `_op_may_mutate`'s diversion
-# in `_pool_dispatch`'s own `except BrokenProcessPool` handler runs BEFORE
-# `_run_dispatch(..., isolated=False)` is ever reached on that leg -- so a
 # MUTATING op with a mismatched settings-home claim must come back as
 # `WARM_DISPATCH_INDETERMINATE` (-32004), never `SETTINGS_HOME_MISMATCH_ERROR`
-# (-32008): re-running a mutating op whose outcome is unknown is the hazard
-# that gate exists to prevent, and it fires strictly first.
-# ---------------------------------------------------------------------------
 
 
 def test_broken_pool_fallback_never_lets_a_mutating_op_reach_the_settings_home_gate(monkeypatch):
@@ -314,25 +270,12 @@ def test_broken_pool_fallback_never_lets_a_mutating_op_reach_the_settings_home_g
     assert result["id"] == 5
 
 
-# ---------------------------------------------------------------------------
-# The claim itself: what a caller stamps, and what counts as agreement.
-# ---------------------------------------------------------------------------
-
-
 def test_caller_claims_nothing_without_an_explicit_override(monkeypatch):
-    """No override, no claim. Stamping the default resolution instead would make
-    every home-disagreement between two default-resolving processes (a different
-    `HOME`, a roaming profile, a service account) refuse traffic that works
-    today.
-    """
     monkeypatch.delenv(settings_home_claim.SETTINGS_HOME_ENV, raising=False)
     assert settings_home_claim.caller_claim() is None
 
 
 def test_caller_claim_is_the_resolved_home(monkeypatch, tmp_path):
-    """The claim is what `_settings_home.settings_home()` resolves, not a second
-    derivation of it -- the server compares two values produced by one resolver.
-    """
     monkeypatch.setenv(settings_home_claim.SETTINGS_HOME_ENV, str(tmp_path))
 
     from coordinator_core._settings_home import settings_home
@@ -345,11 +288,6 @@ def test_absent_claim_agrees_with_anything():
 
 
 def test_spelling_differences_are_not_different_homes(tmp_path):
-    """Windows spells the same directory with either slash and either case, and
-    the two sides of this comparison are built by different code (a door's
-    `wide_to_utf8` of `GetCurrentDirectoryW`, and a Python `Path.home()` join).
-    A refusal on spelling would refuse correct traffic.
-    """
     home = str(tmp_path)
     assert settings_home_claim.claims_agree(home + os.sep, home)
     assert settings_home_claim.claims_agree(home.replace("\\", "/"), home)
@@ -361,15 +299,7 @@ def test_a_genuinely_different_home_disagrees(tmp_path):
     assert not settings_home_claim.claims_agree(str(tmp_path / "a"), str(tmp_path / "b"))
 
 
-# ---------------------------------------------------------------------------
-# The client half: the field only ever gets refused if a client stamps it.
-# ---------------------------------------------------------------------------
-
-
 class _FakePipe:
-    """The `open(pipe, "r+b")` handle, reduced to what one request needs --
-    same shape as `test_client_fallback._FakePipe`, redefined rather than
-    imported because that module's own copy is private to its fixture set."""
 
     def __init__(self):
         self.written: list[bytes] = []
@@ -409,20 +339,12 @@ def test_client_stamps_the_home_it_was_told_to_use(monkeypatch, tmp_path):
 
 
 def test_client_stamps_nothing_when_no_home_was_named(monkeypatch):
-    """The ordinary invocation. The field must be ABSENT from the wire, not
-    present-and-empty: the server distinguishes the two, and a `""` claim would
-    refuse every call on the box.
-    """
     monkeypatch.delenv(settings_home_claim.SETTINGS_HOME_ENV, raising=False)
     assert settings_home_claim.SETTINGS_HOME_FIELD not in _sent_request(monkeypatch)
 
 
-# ---------------------------------------------------------------------------
 # EXIT CRITERION 3 -- the no-claim hot path pays no resolution, asserted
 # STRUCTURALLY rather than by timing. A ~50-session box's timing noise cannot
-# discriminate one absent env read, so a stopwatch cannot falsify this
-# regression; a patched-and-asserted-uncalled `settings_home` can.
-# ---------------------------------------------------------------------------
 
 
 def _counting_settings_home(monkeypatch, calls: list):
@@ -438,11 +360,6 @@ def _counting_settings_home(monkeypatch, calls: list):
 
 
 def test_a_no_claim_request_never_resolves_this_servers_home(monkeypatch):
-    """The ordinary invocation -- no override anywhere, no field on the wire --
-    costs one `dict.pop` and NO `settings_home()` resolution. This is the
-    overwhelming majority of traffic and the property a tidying refactor that
-    resolves the served home unconditionally would silently regress.
-    """
     from coordinator_core import ipc
 
     async def _ok(msg, *, caller=None, corr_id=None):
@@ -450,9 +367,6 @@ def test_a_no_claim_request_never_resolves_this_servers_home(monkeypatch):
 
     monkeypatch.setattr(ipc, "dispatch_message", _ok)
 
-    # Build the caller BEFORE arming the probe: `resolve_caller_context` walks
-    # `machine_local_dir()` and legitimately resolves the home once, on the
-    # CLIENT side of the seam. Counting that would measure the fixture.
     caller = caller_context.resolve_caller_context()
     assert caller.settings_home is None, "fixture precondition: no claim carried"
 
@@ -469,11 +383,6 @@ def test_a_no_claim_request_never_resolves_this_servers_home(monkeypatch):
 
 
 def test_the_uncalled_assertion_discriminates(monkeypatch):
-    """The pinned positive control. A guard that only ever observes zero calls,
-    over a path that may simply never have been reached, is indistinguishable
-    from a guard wired to nothing -- so assert the same probe DOES count a
-    resolution when a claim is actually carried.
-    """
     other_home = os.path.join(os.sep, "nowhere", "some-other-settings-home")
     caller = replace(caller_context.resolve_caller_context(), settings_home=other_home)
 

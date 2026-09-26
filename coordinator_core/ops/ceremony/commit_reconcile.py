@@ -1,21 +1,3 @@
-"""
-coordinator_core.ops.ceremony.commit_reconcile -- "did our commit land
-despite a reported failure" reconciliation, extracted from the dying
-`commit_pipeline.py` (C4 of `docs/plans/2026-08-29-the-push-subsystem-leaves-
-and-then-the-pipeline-can-go.md`) into its own module -- the same shape C1
-gave the push subsystem (`ops/ceremony/push.py`) before that predecessor
-module's own delete.
-
-`_reconcile_landed_despite_failure` is a bounded `git log` search that
-answers "did the commit land despite the reported failure", not a committer
-itself -- it spawns git by construction, which is why it does NOT live in
-`commit_v2.py` (the zero-spawn replacement for the op `run_commit_pipeline`
-was killed on process cost) and does NOT live in `commit_gates.py` either
-(pre-commit gating, not post-hoc reconciliation). Its surviving production
-consumer is `coordinator/bin/coordinator-safe-commit.py`.
-
-Spec backlink: docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-pipeline-can-go.md § C4.
-"""
 
 from __future__ import annotations
 
@@ -25,62 +7,14 @@ from typing import Optional, Sequence
 
 from coordinator_core.ops.ceremony import git_native
 
-#: Timeout for the unfiltered `git rev-list` base-resolution spawn on the
-#: no-`pre_sha` fallback path -- mirrors the divergence-check budget this
-#: constant was ported from in `commit_pipeline.py` (a short, bounded probe,
-#: not a full commit-shaped op).
 _DIVERGENCE_CHECK_TIMEOUT_SECS = 5.0
 
-#: Commits searched backwards from HEAD when `commit()` has no `pre_sha` to
-#: bound the range with -- i.e. when the pre-commit `git rev-parse HEAD` itself
-#: failed, which at this repo's load norm (CLAUDE.md, 50-70 concurrent LLM
-#: sessions) is a timeout, not a broken repo. Declining the reconcile there
-#: silences it exactly when the box is loaded enough to need it. The window is
-#: a BOUND, not a correctness input: the `Commit-Token:` search key is
-#: collision-free by construction (see `_reconcile_landed_despite_failure`'s
-#: own SAFETY paragraph), so a match inside the window is ours no matter how
-#: wide the window is, and a peer's commit can never match however many of
-#: theirs it spans. Sized to cover the peer traffic one slow commit can sit
-#: behind on a shared branch, not tuned.
-#:
-#: `git log -n <N> --grep=... HEAD` does NOT actually bound the walk to this
-#: many commits -- `-n`/`--max-count` on `git log` caps the OUTPUT count,
-#: never the commit graph WALK, whenever a filter (`--grep` and/or a
-#: pathspec) is present (measured on this repo: `git log -n 5 --grep=<no-
-#: match> HEAD`, no pathspec at all, took 1.13s and walked the full
 #: ~20,067-commit history). `git rev-list --max-count=<N>`, UNFILTERED, is
-#: the one form where `--max-count` is a true walk bound (measured 0.6s on
-#: the same repo) -- see `_reconcile_landed_despite_failure`'s fallback path,
-#: which uses this constant to size that call, not a `git log -n` call.
 _RECONCILE_FALLBACK_WINDOW_COMMITS = 200
 
 
 @dataclass(frozen=True)
 class ReconcileProbe:
-    """Why `_reconcile_landed_despite_failure` answered as it did.
-
-    Exists because the reconcile's silence is indistinguishable from its
-    absence at the operator's end: both render as `committed: false` over a
-    commit that exists. A live occurrence (2026-08-19, four instances across
-    two sessions in one day) cost a whole session to narrow to "the reconcile
-    did not execute" and still could not say WHY, because the function's
-    `Optional[str]` return threw away every decline reason on the way out.
-    This type is that reason, carried to the response so the NEXT occurrence
-    self-diagnoses instead of costing another investigation.
-
-    Fields:
-        sha -- the reconciled commit sha, or `None` on every decline.
-        decline -- "" when `sha` is set; otherwise a short machine-readable
-            tag naming which precondition answered: `"log-grep-raised"`,
-            `"log-grep-failed"`, `"no-candidate"` (the search ran and matched
-            nothing -- the genuinely-did-not-land shape), or
-            `"ambiguous-candidates:<n>"`.
-        range_spec -- the revision range that produced this answer
-            (`"<pre>..HEAD"` on the `pre_sha`-present path, or `"<base>..HEAD"`
-            / `"HEAD"` on the fallback path -- see
-            `_reconcile_landed_despite_failure`'s own docstring), so a reader
-            can tell which range answered without re-deriving it.
-    """
 
     sha: Optional[str] = None
     decline: str = ""
@@ -198,8 +132,6 @@ def _reconcile_landed_despite_failure(
     notes do, repeatedly) must not be adopted as a match once the search is
     no longer confined to a tight, freshly-opened range."""
     def _search(pattern: str, range_args: Sequence[str], *, literal: bool):
-        """One `git log --grep` pass. Returns `(status, candidates)`, status
-        being "ok", "raised" or "failed"."""
         extra_args = [
             "--fixed-strings" if literal else "--extended-regexp",
             "--format=%H",
@@ -214,8 +146,6 @@ def _reconcile_landed_despite_failure(
         return "ok", [line for line in match_result.stdout.splitlines() if line]
 
     def _resolve(status, candidates, range_spec):
-        """Maps one pass's outcome onto a probe, or `None` for "matched nothing
-        -- the caller may keep looking"."""
         if status == "raised":
             return ReconcileProbe(decline="log-grep-raised", range_spec=range_spec)
         if status == "failed":
@@ -229,19 +159,7 @@ def _reconcile_landed_despite_failure(
         return None
 
     if pre_sha:
-        # A real revision range is a true walk bound (see
         # `_RECONCILE_FALLBACK_WINDOW_COMMITS`'s own comment for why a
-        # filtered `-n`/`--grep` combination is NOT), so this is the whole
-        # search on this path -- exactly one `git log`, never a second,
-        # wider pass. There used to be one (see this function's own
-        # docstring for why: the shape it defended against was this call's
-        # own commit landing OUTSIDE its own `pre_sha..HEAD` range, which
-        # was never an ordering fault in `commit()` -- it was the warm-
-        # engine client re-executing an already-delivered mutation, fixed at
-        # the root in `coordinator_core/warm/client.py` this session). With
-        # one execution per invocation, `pre_sha` is an ancestor of this
-        # call's own commit by construction, so a miss here is a genuine
-        # "nothing of ours landed" -- the ordinary failed-commit case.
         bounded_spec = f"{pre_sha}..HEAD"
         status, candidates = _search(token_trailer, [bounded_spec], literal=True)
         probe = _resolve(status, candidates, bounded_spec)
@@ -250,13 +168,9 @@ def _reconcile_landed_despite_failure(
         return ReconcileProbe(decline="no-candidate", range_spec=bounded_spec)
 
     # FALLBACK: no `pre_sha` to build a real range from (the pre-commit
-    # `git rev-parse HEAD` itself timed out). `-n`/`--max-count` on a
     # FILTERED `git log --grep` call does not bound the walk (see
     # `_RECONCILE_FALLBACK_WINDOW_COMMITS`'s own comment) -- so a real range
     # is resolved first via an UNFILTERED `git rev-list --max-count`, where
-    # `--max-count` genuinely is a walk bound, then the token search runs
-    # over that real range exactly like the `pre_sha`-present path above.
-    # Two spawns, acceptable here because this path is rare by construction.
     rev_list_result = git_native._git(
         ["rev-list", f"--max-count={_RECONCILE_FALLBACK_WINDOW_COMMITS + 1}", "HEAD"],
         cwd=root,
@@ -270,25 +184,12 @@ def _reconcile_landed_despite_failure(
     if len(base_lines) > _RECONCILE_FALLBACK_WINDOW_COMMITS:
         # The (N+1)th-oldest line is an EXCLUSIVE lower bound -- `base..HEAD`
         # then spans exactly `_RECONCILE_FALLBACK_WINDOW_COMMITS` commits,
-        # the same window size the old `-n <N>` call named, just as a real
-        # range instead of an output cap.
         window_spec = f"{base_lines[-1]}..HEAD"
     else:
-        # History shorter than the window, an unborn branch, or the
-        # `rev-list` call itself failed -- decline-safely to the unbounded
         # range rather than refusing outright: the ANCHORED token match
-        # below is what makes even an unbounded search safe, so there is no
-        # correctness reason to refuse just because a bound could not be
-        # established.
         window_spec = "HEAD"
 
-    # The wider (or unbounded) range admits one thing a tight range does
-    # not: a commit whose message QUOTES a token in prose rather than
-    # carrying it as its own trailer (this defect's own investigation notes
-    # do, repeatedly) -- so this pass drops `--fixed-strings` for an
     # ANCHORED trailer match: the token must be the whole line, exactly as
-    # `commit()` appends it. Strictly tighter matching than the bounded
-    # path's plain substring match, not looser.
     status, candidates = _search(f"^{token_trailer}$", [window_spec], literal=False)
     probe = _resolve(status, candidates, window_spec)
     if probe is not None:

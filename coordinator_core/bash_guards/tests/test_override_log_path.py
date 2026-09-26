@@ -60,11 +60,6 @@ def test_no_git_root_resolves_nothing(tmp_path):
 
 
 def test_override_log_bucket_is_denylisted():
-    """The fallback bucket is only safe because `live_session_ids` refuses to
-    read it as a session. This module keeps its own copy of the name to stay
-    off the session package on the commit hot path, so pin the two together —
-    a rename on either side must fail here, not silently start minting
-    phantom sessions again."""
     from coordinator_core.session import liveness
 
     assert NO_SESSION_BUCKET in liveness._NON_SESSION_DIR_NAMES

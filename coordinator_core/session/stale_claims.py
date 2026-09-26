@@ -51,33 +51,12 @@ from coordinator_core.session.liveness import session_live
 
 
 class StaleClaimHandoff(NamedTuple):
-    """One live handoff whose recorded claimer session is confirmed NOT live.
-
-    ``path``: absolute filesystem path to the handoff (as returned by
-    ``collect_live_handoff_paths`` — always under ``<repo_root>/state/handoffs``).
-    ``claimer_sid``: the dead session id the handoff names as its claimer
-    (whichever of ``claimed_by``/``consumed_by`` resolved — see module docstring).
-    """
 
     path: str
     claimer_sid: str
 
 
 def _claimer_sid(handoff_path: str, repo_root: Optional[str] = None) -> str:
-    """Resolve the recorded claimer session id for ``handoff_path``,
-    ledger-first via ``coordinator_core.claim_state.resolve_claim_state``.
-
-    The ledger wins whenever it holds a live claim, regardless of what the
-    tracked-frontmatter mirror (``claimed_by``/DR-084 ``consumed_by``) says —
-    see ``resolve_claim_state``'s own docstring for the desync incident this
-    generalizes a fix for. A handoff claimed on a branch the shared worktree
-    has since left reverts its mirror to ``status: open`` with no claim
-    fields, but the branch-independent ledger still holds the claim; reading
-    the mirror alone (this function's prior behavior) silently dropped such a
-    handoff from the stale-claim listing. Returns ``""`` when neither source
-    has a claim (``ClaimState.source == "none"``) — an unclaimed (open)
-    handoff or an unreadable file, mirroring the prior contract.
-    """
     state = resolve_claim_state(handoff_path, repo_root=repo_root)
     return state.holder or ""
 

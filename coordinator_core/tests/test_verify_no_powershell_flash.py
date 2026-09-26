@@ -61,10 +61,6 @@ def test_missing_canonical_guard_returns_two(tmp_path: Path) -> None:
 
 
 def test_canonical_guard_never_returns_shim_internal_code(tmp_path: Path) -> None:
-    # The canonical guard's own exit-code contract is 0/1 only (never 2) — a
-    # shim-level 2 is therefore unambiguous evidence of a shim failure, not a
-    # guard verdict. Exercise a guard that (mis)behaves and returns 2 anyway;
-    # the shim must still pass it through verbatim (no swallowing/mangling).
     _write_fake_guard(tmp_path, "sys.exit(2)")
     rc = main([str(tmp_path)])
     assert rc == 2

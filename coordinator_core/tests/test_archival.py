@@ -70,7 +70,6 @@ def _write_handoff(
     predecessor: str,
     deployment_state: str | None = None,
 ) -> Path:
-    """Write a minimal handoff file with the given frontmatter status and predecessor edge."""
     path.parent.mkdir(parents=True, exist_ok=True)
     status_line = f"status: {status}" if status is not None else ""
     deployment_state_line = (
@@ -93,7 +92,6 @@ def _write_handoff(
 
 
 def _write_parent(path: Path) -> Path:
-    """Write a minimal parent handoff with no frontmatter status opinion needed."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         textwrap.dedent("""\
@@ -111,9 +109,6 @@ def _write_parent(path: Path) -> Path:
 def _write_handoff_additional_predecessors(
     path: Path, *, status: str | None, additional_predecessors: list[str]
 ) -> Path:
-    """Write a handoff whose ONLY edge to the parent is the list-form
-    additional_predecessors field (no scalar predecessor: line at all).
-    """
     path.parent.mkdir(parents=True, exist_ok=True)
     status_line = f"status: {status}" if status is not None else ""
     inline_list = "[" + ", ".join(additional_predecessors) + "]"
@@ -132,13 +127,7 @@ def _write_handoff_additional_predecessors(
     return path
 
 
-# Flattened from single-method `class Test...:`
-# wrappers to top-level functions, matching the flatter style of the sibling
-# test_archive_handoffs.py.
-
-
 def test_terminal_child_excluded(tmp_path: Path) -> None:
-    """A consumed child resident in state/handoffs/ is excluded from the live set."""
     state_dir = tmp_path / "state" / "handoffs"
     parent = _write_parent(state_dir / "parent.md")
     child = _write_handoff(
@@ -153,11 +142,9 @@ def test_terminal_child_excluded(tmp_path: Path) -> None:
 
 
 def test_archived_child_excluded(tmp_path: Path) -> None:
-    """A child resident under archive/handoffs/YYYY-MM/ is excluded regardless of status."""
     state_dir = tmp_path / "state" / "handoffs"
     archive_dir = tmp_path / "archive" / "handoffs" / "2026-06"
     parent = _write_parent(state_dir / "parent.md")
-    # status:active on purpose — archive-residency alone must be sufficient to exclude.
     child = _write_handoff(
         archive_dir / "child.md", status="active", predecessor=str(parent)
     )
@@ -171,7 +158,6 @@ def test_archived_child_excluded(tmp_path: Path) -> None:
 
 
 def test_live_child_retained(tmp_path: Path) -> None:
-    """A genuinely live (active status, state/-resident) child is still counted."""
     state_dir = tmp_path / "state" / "handoffs"
     parent = _write_parent(state_dir / "parent.md")
     child = _write_handoff(
@@ -180,9 +166,6 @@ def test_live_child_retained(tmp_path: Path) -> None:
 
     result = reverse_membership(str(parent), [str(parent), str(child)])
 
-    # Dropped the `or len(result) > 0` clause, which
-    # made the membership check vestigial (a bug returning the wrong path but
-    # right count would have slipped through). Assert membership directly.
     assert str(Path(child).resolve()) in {str(Path(c).resolve()) for c in result}, (
         f"live child must be retained (referenced=True); got {result}"
     )
@@ -190,10 +173,8 @@ def test_live_child_retained(tmp_path: Path) -> None:
 
 
 def test_indeterminate_child_retained_fail_closed(tmp_path: Path) -> None:
-    """A child with unparseable/absent-status frontmatter is retained (fail-closed)."""
     state_dir = tmp_path / "state" / "handoffs"
     parent = _write_parent(state_dir / "parent.md")
-    # No status: line at all — frontmatter parses but status key is absent.
     child = _write_handoff(
         state_dir / "child.md", status=None, predecessor=str(parent)
     )
@@ -207,11 +188,6 @@ def test_indeterminate_child_retained_fail_closed(tmp_path: Path) -> None:
 
 
 def test_terminal_child_excluded_via_additional_predecessors(tmp_path: Path) -> None:
-    """The terminal/archived exclusion must compose with
-    the multi-valued additional_predecessors edge kind, not just the scalar
-    predecessor field. A consumed child whose ONLY edge to the parent is
-    additional_predecessors: [<parent>] (list form) must still be excluded.
-    """
     state_dir = tmp_path / "state" / "handoffs"
     parent = _write_parent(state_dir / "parent.md")
     child = _write_handoff_additional_predecessors(
@@ -229,14 +205,6 @@ def test_terminal_child_excluded_via_additional_predecessors(tmp_path: Path) -> 
 
 
 def test_consumed_in_flight_child_retained_as_live(tmp_path: Path) -> None:
-    """Regression for the 2026-07-17 P2 false-archive vector: a consumed child
-    with deployment_state:in_flight is still OPEN/unfinished work (the exact
-    archive-complement of ops/fleet/archive_handoffs.py's Check A2 / DR-215
-    lockstep) and MUST NOT be excluded from the live set. Without the fix,
-    a grandparent/parent naming this child's predecessor edge would be
-    incorrectly reported as having zero live children — a false-archive vector
-    for fleet.archive_completed_handoffs' Check 3 consumed-sweep.
-    """
     state_dir = tmp_path / "state" / "handoffs"
     parent = _write_parent(state_dir / "parent.md")
     child = _write_handoff(
@@ -256,11 +224,6 @@ def test_consumed_in_flight_child_retained_as_live(tmp_path: Path) -> None:
 
 
 def test_consumed_not_in_flight_child_still_excluded(tmp_path: Path) -> None:
-    """Sanity companion to test_consumed_in_flight_child_retained_as_live: a
-    consumed child with a non-in_flight deployment_state (e.g. shipped) is
-    still excluded — the fix is scoped to in_flight only, not a blanket
-    consumed-status carve-out.
-    """
     state_dir = tmp_path / "state" / "handoffs"
     parent = _write_parent(state_dir / "parent.md")
     child = _write_handoff(
@@ -279,14 +242,6 @@ def test_consumed_not_in_flight_child_still_excluded(tmp_path: Path) -> None:
 
 
 def test_open_status_closed_deployment_state_child_excluded(tmp_path: Path) -> None:
-    """DR-084 regression: a `status: open` child with a terminal
-    `deployment_state: closed` (the close-handoff verb's shape — status is
-    left `open`, only deployment_state and closed_reason are stamped) must be
-    excluded from the live set. Live reproduction prior to this fix:
-    state/handoffs/2026-07-10_141606_roadmap-qsub-03.md carries exactly this
-    shape and was permanently counted as live because the old predicate never
-    consulted deployment_state as a positive rule.
-    """
     state_dir = tmp_path / "state" / "handoffs"
     parent = _write_parent(state_dir / "parent.md")
     child = _write_handoff(
@@ -305,7 +260,6 @@ def test_open_status_closed_deployment_state_child_excluded(tmp_path: Path) -> N
 
 
 def test_open_status_shipped_deployment_state_child_excluded(tmp_path: Path) -> None:
-    """Same DR-084 shape as above, with deployment_state:shipped."""
     state_dir = tmp_path / "state" / "handoffs"
     parent = _write_parent(state_dir / "parent.md")
     child = _write_handoff(
@@ -324,7 +278,6 @@ def test_open_status_shipped_deployment_state_child_excluded(tmp_path: Path) -> 
 
 
 def test_open_status_continued_deployment_state_child_excluded(tmp_path: Path) -> None:
-    """Same DR-084 shape as above, with deployment_state:continued."""
     state_dir = tmp_path / "state" / "handoffs"
     parent = _write_parent(state_dir / "parent.md")
     child = _write_handoff(
@@ -369,10 +322,6 @@ def test_claimed_in_flight_child_retained_despite_terminal_deployment_rule(
 
 
 def test_absent_deployment_state_still_retained_fail_closed(tmp_path: Path) -> None:
-    """Fail-closed sanity: an absent deployment_state (no key at all) with
-    status:open must not be excluded by the new terminal-deployment-state
-    rule — only a definitive terminal value fires it.
-    """
     state_dir = tmp_path / "state" / "handoffs"
     parent = _write_parent(state_dir / "parent.md")
     child = _write_handoff(
@@ -392,9 +341,6 @@ def test_absent_deployment_state_still_retained_fail_closed(tmp_path: Path) -> N
 
 
 def test_unrecognized_deployment_state_still_retained_fail_closed(tmp_path: Path) -> None:
-    """Fail-closed sanity: an unrecognized deployment_state value must not be
-    excluded by the new terminal-deployment-state rule.
-    """
     state_dir = tmp_path / "state" / "handoffs"
     parent = _write_parent(state_dir / "parent.md")
     child = _write_handoff(
@@ -414,14 +360,6 @@ def test_unrecognized_deployment_state_still_retained_fail_closed(tmp_path: Path
 
 
 def test_claimed_reparked_ready_to_fire_child_retained_as_live(tmp_path: Path) -> None:
-    """Census-row-1 shape (docs/reference/handoff-legal-state-table.md § the
-    Ruling and C3's own body): a reparked baton — a session flips
-    deployment_state back to `ready_to_fire` without dropping `status:
-    claimed` — is NOT terminal. The old carve-out here tested
-    `deployment_state == "in_flight"` as the only non-terminal case, which
-    silently excluded (treated as archive-safe-dead) exactly this shape.
-    `ready_to_fire` is just as non-terminal as `in_flight`.
-    """
     state_dir = tmp_path / "state" / "handoffs"
     parent = _write_parent(state_dir / "parent.md")
     child = _write_handoff(
@@ -441,8 +379,6 @@ def test_claimed_reparked_ready_to_fire_child_retained_as_live(tmp_path: Path) -
 
 
 def test_claimed_reparked_awaiting_gate_child_retained_as_live(tmp_path: Path) -> None:
-    """Same census-row-1 shape, reparked-and-blocked (gate-recheck on a
-    still-claimed baton) rather than reparked-and-unblocked."""
     state_dir = tmp_path / "state" / "handoffs"
     parent = _write_parent(state_dir / "parent.md")
     child = _write_handoff(

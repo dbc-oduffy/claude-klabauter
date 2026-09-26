@@ -125,31 +125,16 @@ from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_nam
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 CLASS = "hard-deny"
-#: Widened 2026-08-07 (C4e) from `["Bash"]` -- see `block_approval_sentinel_
-#: creation.py`'s identical note. A direct reference to the shared universe
-#: (C2 declaration-form conversion) -- never a copy or re-wrap.
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
-#: The exact basename this guard protects -- imported from `_blanket_
-#: disarm.py`, the module that defines what "the disarm marker" means, so
-#: the two can never independently drift on the string. Never relaxed to a
-#: substring/prefix match (see `_sentinel_creation_guard.SentinelCreation
 #: Detector._is_target`): an unrelated file merely CONTAINING this string
-#: in a longer name is a different file, not the marker `_blanket_disarm`
-#: reads.
 _TARGET_BASENAME = MARKER_BASENAME
 
-#: Shared detection engine -- see `_sentinel_creation_guard.py` module
-#: docstring. This module is the third guard built on it, after
-#: `block_approval_sentinel_creation.py` and `block_worktree_sentinel_
-#: creation.py`.
 _detector = SentinelCreationDetector(_TARGET_BASENAME)
 
 
 def _evaluate(cmd: str, dialect: Optional[Dialect] = None):
-    """See `block_approval_sentinel_creation._evaluate`'s identical note --
-    `dialect=None`/`Dialect.BASH` preserves the exact pre-C4e call shape."""
     if dialect is None or dialect is Dialect.BASH:
         return _detector.evaluate(cmd)
     return _detector.evaluate_for_dialect(
@@ -158,20 +143,8 @@ def _evaluate(cmd: str, dialect: Optional[Dialect] = None):
 
 
 def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
-    # Deliberately does NOT echo `cmd` back into the message and does NOT
-    # name the target basename in either branch below -- both would print
-    # the exact bypass an eager agent could copy-paste, which reads as
-    # sanctioning it rather than blocking it (same discipline as both
-    # sibling sentinel guards' own deny messages). `cmd` stays accepted for
-    # call-site symmetry with the sibling guards, but is intentionally
-    # unused here.
     del cmd
     if reason_class == REASON_INDIRECTION:
-        # `reason_kind` names a shell SHAPE, not a bypass -- but a
-        # recursive indirection verdict can still bottom out one level
-        # down in the direct branch's target-naming string (e.g.
-        # `bash -c "touch <marker>"`), so redact the basename out
-        # regardless, rather than trusting the branch alone.
         safe_shape = reason_kind.replace(_TARGET_BASENAME, "<the marker>")
         return (
             "[disarm-marker guard] BLOCKED: this command was denied because "
@@ -206,9 +179,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     identity-gated -- fires for every caller including the main-loop EM
     (see module docstring "NOT IDENTITY-GATED").
     """
-    # Deliberately no try/except here -- fail-CLOSED-on-exception is the
-    # dispatcher's job for hard-deny guards; catching and swallowing an
-    # unexpected error into a silent allow here would defeat that contract.
     tool_name = payload.get("tool_name") or ""
     if tool_name not in MATCHERS:
         return None

@@ -1,12 +1,3 @@
-"""Tests for coordinator_core.ops.dispatch_emit.cross_plan_write_overlap.
-
-Fixture governance: `resolve_git_common_dir` is pure filesystem (no git
-spawn -- see its own module docstring), so a bare `.git` directory under
-`tmp_path` is enough to exercise it for real; no `git init` subprocess.
-Liveness (`session.liveness.claim_holder_live`) is monkeypatched directly
--- this module's own concern is the overlap-detection logic, not liveness
-derivation, which `session/tests/test_liveness.py` already covers.
-"""
 
 from __future__ import annotations
 
@@ -77,7 +68,6 @@ def test_no_overlap_when_no_peer_claims(tmp_path, monkeypatch):
     _init_git_dir(tmp_path)
     plan_path = _write_plan(tmp_path, "plan-a", ["docs/reference/a.md"])
     rows = read_spine(plan_path)
-    # Should not raise -- no plan-claims dir at all.
     check_cross_plan_write_overlap(plan_path, rows, tmp_path)
 
 
@@ -89,7 +79,7 @@ def test_no_overlap_when_peer_writes_a_disjoint_path(tmp_path, monkeypatch):
     monkeypatch.setattr(overlap_mod, "claim_holder_live", lambda *a, **k: True)
 
     rows = read_spine(plan_path)
-    check_cross_plan_write_overlap(plan_path, rows, tmp_path)  # does not raise
+    check_cross_plan_write_overlap(plan_path, rows, tmp_path)
 
 
 def test_refuses_when_a_live_peer_declares_the_same_write_path(tmp_path, monkeypatch):
@@ -115,7 +105,7 @@ def test_dead_peer_claim_is_not_a_collision(tmp_path, monkeypatch):
     monkeypatch.setattr(overlap_mod, "claim_holder_live", lambda *a, **k: False)
 
     rows = read_spine(plan_path)
-    check_cross_plan_write_overlap(plan_path, rows, tmp_path)  # does not raise
+    check_cross_plan_write_overlap(plan_path, rows, tmp_path)
 
 
 def test_a_plans_own_claim_on_itself_is_never_a_collision(tmp_path, monkeypatch):
@@ -125,7 +115,7 @@ def test_a_plans_own_claim_on_itself_is_never_a_collision(tmp_path, monkeypatch)
     monkeypatch.setattr(overlap_mod, "claim_holder_live", lambda *a, **k: True)
 
     rows = read_spine(plan_path)
-    check_cross_plan_write_overlap(plan_path, rows, tmp_path)  # does not raise
+    check_cross_plan_write_overlap(plan_path, rows, tmp_path)
 
 
 def test_undeclared_writes_never_collide_with_anything(tmp_path, monkeypatch):
@@ -166,10 +156,10 @@ Test fixture.
     monkeypatch.setattr(overlap_mod, "claim_holder_live", lambda *a, **k: True)
 
     rows = read_spine(plan_path)
-    check_cross_plan_write_overlap(plan_path, rows, tmp_path)  # does not raise
+    check_cross_plan_write_overlap(plan_path, rows, tmp_path)
 
 
 def test_repo_root_none_is_a_no_op(tmp_path):
     plan_path = _write_plan(tmp_path, "plan-a", ["docs/reference/a.md"])
     rows = read_spine(plan_path)
-    check_cross_plan_write_overlap(plan_path, rows, None)  # does not raise
+    check_cross_plan_write_overlap(plan_path, rows, None)

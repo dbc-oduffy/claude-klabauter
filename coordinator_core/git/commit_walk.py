@@ -76,21 +76,12 @@ from typing import Any, Iterator, Optional
 
 from coordinator_core.git.git_objects import _read_object
 
-#: Out-of-window commits tolerated before a bounded walk gives up. Mirrors
-#: `pickup_assemble`'s own budget; see `walk_since` for why a hard `break`
-#: is wrong here.
 _SINCE_SLOP = 50
 
 _SESSION_ID_TRAILER_RE = re.compile(r"^Session-Id:[ \t]*(\S+)[ \t]*$", re.MULTILINE)
 
 
 def parse_commit(content: bytes) -> dict[str, Any]:
-    """`{tree, parents, committer_epoch, message}` from a raw commit object.
-
-    Carries the full `message` rather than just the subject -- a trailer
-    lives in the body, which is the whole reason this module exists as a
-    sibling of `pickup_assemble._parse_commit` rather than a reuse of it.
-    """
     text = content.decode("utf-8", errors="replace")
     parents: list[str] = []
     tree: Optional[str] = None
@@ -117,17 +108,12 @@ def parse_commit(content: bytes) -> dict[str, Any]:
     }
 
 
-#: Content-addressed, so sound for this process's whole lifetime -- a sha
-#: cannot come to name different bytes. Same reasoning as
 #: `git_objects._OBJECT_CACHE`, and bounded for the same reason: this
-#: module is reachable from a warm long-running engine.
 _COMMIT_CACHE_MAX_ENTRIES = 4096
 _COMMIT_CACHE: "dict[tuple[str, str], Optional[dict[str, Any]]]" = {}
 
 
 def commit_meta(common_dir: Path, sha: str) -> Optional[dict[str, Any]]:
-    """The one read-and-parse entry point for a commit object here, so a
-    given commit costs at most one object read per process."""
     key = (str(common_dir), sha)
     if key in _COMMIT_CACHE:
         return _COMMIT_CACHE[key]
@@ -142,9 +128,6 @@ def commit_meta(common_dir: Path, sha: str) -> Optional[dict[str, Any]]:
 
 
 def walk(common_dir: Path, start_sha: str) -> Iterator[tuple[str, dict[str, Any]]]:
-    """Yields `(sha, commit)` from `start_sha`, max-heap ordered on
-    committer epoch. See this module's negative-spec for the ordering
-    caveat -- it is an approximation, deliberately."""
     seen: set[str] = set()
     heap: list[tuple[int, str, dict[str, Any]]] = []
 
@@ -168,16 +151,6 @@ def walk(common_dir: Path, start_sha: str) -> Iterator[tuple[str, dict[str, Any]
 def walk_since(
     common_dir: Path, head_sha: str, since_epoch: Optional[int]
 ) -> Iterator[tuple[str, dict[str, Any]]]:
-    """`walk`, bounded to a `--since` window with a slop budget.
-
-    Committer dates are not monotonic along parent edges, so a plain
-    `break` on the first out-of-window commit silently truncates: a
-    skewed-newer ancestor may only be reachable by descending THROUGH an
-    out-of-window commit. Such a commit is never yielded, but its parents
-    are still pushed; each in-window commit resets the budget, and the walk
-    gives up only once the budget is exhausted. `since_epoch=None` yields
-    everything.
-    """
     slop = _SINCE_SLOP
     for sha, commit in walk(common_dir, head_sha):
         ts = commit["committer_epoch"] or 0
@@ -185,14 +158,12 @@ def walk_since(
             slop -= 1
             if slop == 0:
                 break
-            continue  # not emitted, but its parents still enter the walk
+            continue
         slop = _SINCE_SLOP
         yield sha, commit
 
 
 def session_id_of(commit: dict[str, Any]) -> Optional[str]:
-    """The `Session-Id:` trailer value, or None. Last occurrence wins,
-    matching `git interpret-trailers`' own precedence for a repeated key."""
     matches = _SESSION_ID_TRAILER_RE.findall(commit.get("message") or "")
     return matches[-1] if matches else None
 
@@ -200,14 +171,6 @@ def session_id_of(commit: dict[str, Any]) -> Optional[str]:
 def session_trailer_map(
     common_dir: Path, head_sha: str, since_epoch: Optional[int] = None
 ) -> dict[str, str]:
-    """`{sha: session_id}` for every trailer-carrying commit in the window.
-
-    Replaces `git log --format=%H%x1f%(trailers:key=Session-Id,valueonly)
-    --since=…`. Commits with no trailer are absent rather than mapped to
-    an empty string -- "no attribution" and "attributed to nothing" are
-    different facts, and a caller keying on membership must be able to
-    tell them apart.
-    """
     result: dict[str, str] = {}
     for sha, commit in walk_since(common_dir, head_sha, since_epoch):
         sid = session_id_of(commit)
@@ -219,14 +182,6 @@ def session_trailer_map(
 def session_owned_shas(
     common_dir: Path, head_sha: str, session_id: str, since_epoch: Optional[int] = None
 ) -> list[str]:
-    """This session's own commits, oldest-first.
-
-    Replaces `git log --reverse --grep=^Session-Id: <sid> --format=%H`.
-    Selection is on the trailer, never on the window -- see this module's
-    negative-spec. `since_epoch` only bounds how far back the walk goes,
-    and a caller that passes one is asserting the session started inside
-    it; `None` walks to the root, which is what an unbounded `--grep` did.
-    """
     owned: list[tuple[int, str]] = []
     for sha, commit in walk_since(common_dir, head_sha, since_epoch):
         if session_id_of(commit) == session_id:

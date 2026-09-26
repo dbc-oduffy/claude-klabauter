@@ -40,9 +40,6 @@ def test_unstamped_integrators_excludes_already_stamped():
 
 
 def test_unstamped_integrators_falls_back_to_session_wide_when_plan_unreadable():
-    """`plan=None` (the reviewer sidecar's own `plan:` field could not be
-    read) must not silently report zero — it falls back to the prior
-    session-wide count rather than hiding the signal."""
     in_scope = [
         ("integrator-a.md", {"integrator_receipt": "1", "plan": "plan-a"}),
         ("integrator-b.md", {"integrator_receipt": "1", "plan": "plan-b"}),

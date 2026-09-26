@@ -129,67 +129,35 @@ __all__ = [
     "op_verdicts",
 ]
 
-#: EXACT: `spawns == 0` -- the sample carries no child-process CPU at all, so
-#: `process_ms` is this op's own cost in full.
 CONFIDENCE_EXACT = "EXACT"
 
-#: FLOOR: `spawns > 0` -- a spawned child's own CPU is excluded from
-#: `process_ms` by construction (the two universal per-process-time lessons
-#: this module trusts and does not re-derive), so the figure is a lower
-#: bound on the op's real cost, never the whole of it.
 CONFIDENCE_FLOOR = "FLOOR"
 
 #: SPAWNS-UNKNOWN: the row carries no `spawns` key -- structurally the case
-#: for the warm route today (see `coordinator_core.ipc.record_op_process_time`
-#: docstring: an absent `spawns` key means "not counted here", never `0`).
 CONFIDENCE_SPAWNS_UNKNOWN = "SPAWNS-UNKNOWN"
 
-#: Minimum row count a bucket must hold before it is offered as a verdict
-#: rather than merely a figure. Mirrors
 #: `coordinator_core.telemetry.op_latency.TREND_MIN_ATTEMPTS_PER_HALF`'s own
-#: under-powered-sample discipline.
 MIN_N = 30
 
-#: Origins excluded unconditionally, in every arm -- see module docstring.
 EXCLUDED_ORIGINS = frozenset({BENCHMARK, TEST})
 
-#: Ops excluded BY NAME -- the `1.0` granularity fixture rows (38 `ping`, 2
-#: `meter.selftest`). Excluded by name, never by value, so a genuine 1.0ms
-#: production sample of a different op is never caught by this filter.
 EXCLUDED_FIXTURE_OPS = frozenset({"ping", "meter.selftest"})
 
-#: Route label for a row whose `route` field is missing or not one of
 #: `EXECUTION_ROUTES` -- kept as its own bucket rather than dropped or
-#: merged into a real route, so an unrouted population is visible rather
-#: than silently absorbed.
 UNROUTED = "unrouted"
 
-#: Measured 2026-08-29, this box, this pass -- see module docstring Budget
-#: section. Recorded, not re-derived at import or call time.
 MEASURED_PROCESS_TIME_MS: float = 343.8
 MEASURED_ROW_COUNT: int = 116_000
 
-#: What the measured figures above imply, stated once so a caller does not
-#: have to redo the division: ~337k rows/sec on this box, this pass.
 _MEASURED_ROWS_PER_SECOND: float = MEASURED_ROW_COUNT / (MEASURED_PROCESS_TIME_MS / 1000.0)
 
-#: DR-344's kill bar, restated here rather than imported, for the same
 #: reason `coordinator_core.op_census.timing.PROCESS_TIME_BAR_MS` mirrors it
-#: rather than importing it: this module must not drag in that module's own
-#: import surface merely to read one float.
 _BRIGHTLINE_MS: float = 500.0
 
-#: Row count at which a LINEAR projection of the measured rate above would
-#: consume the full 500ms brightline -- i.e. the point at which this
-#: module's own read stops fitting inside the bar it exists to police. Not a
-#: live measurement: a projection from the recorded figures above, stated so
-#: a caller can compare it against the sink's current row count without
-#: re-running a timing probe.
 _GATE_BREAK_ROW_COUNT: int = int(MEASURED_ROW_COUNT * (_BRIGHTLINE_MS / MEASURED_PROCESS_TIME_MS))
 
 
 def _confidence(spawns: Optional[int]) -> str:
-    """Confidence label for one row's `spawns` value -- see module docstring."""
     if spawns is None:
         return CONFIDENCE_SPAWNS_UNKNOWN
     if spawns == 0:
@@ -198,13 +166,6 @@ def _confidence(spawns: Optional[int]) -> str:
 
 
 def _percentile(sorted_vals: List[float], fraction: float) -> Optional[float]:
-    """Index-based percentile over a pre-sorted list, no interpolation.
-
-    Same index rule as `coordinator_core.telemetry.op_latency._percentile_idx`
-    -- restated rather than imported, since that name is a private helper of
-    its own module and this module's own contract (one figure, one label)
-    does not depend on sharing its object identity.
-    """
     if not sorted_vals:
         return None
     if len(sorted_vals) == 1:
@@ -242,12 +203,6 @@ def _iter_process_time_rows(
     window_start: Optional[float],
     window_end: Optional[float],
 ):
-    """Yield every in-window, non-excluded `kind: "process_time"` row.
-
-    Never raises: an unreadable shard, a torn line, or a non-dict row is
-    skipped rather than failing the whole read -- this is a reader over a
-    sink several live processes may still be appending to.
-    """
     for path in paths:
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as fh:
@@ -255,22 +210,6 @@ def _iter_process_time_rows(
                     line = raw_line.strip()
                     if not line:
                         continue
-                    # Substring prefilter (module docstring's Budget section):
-                    # every row this module wants carries the literal value
-                    # `"process_time"` somewhere in its `kind` field.
-                    # Deliberately checking the VALUE alone, not
-                    # `"kind":"process_time"` with a fixed separator --
-                    # `_write_entry`'s writer (op_latency.py) uses
-                    # `separators=(",", ":")` with no space today, but a
-                    # prefilter pinned to that exact byte sequence would
-                    # silently stop filtering (falling back to parsing every
-                    # line, correctly but slowly) the moment any writer's
-                    # `json.dumps` spacing differs -- a fixture, a future
-                    # writer, or a hand-written test row among them. Skipping
-                    # `json.loads` for the majority of rows that cannot
-                    # possibly be `process_time` is what the measured 343.8ms
-                    # budget figure (module docstring) assumes; parsing every
-                    # line unconditionally is measurably slower on this box.
                     if '"process_time"' not in line:
                         continue
                     try:
@@ -410,7 +349,6 @@ def adjudicate(
     return figures
 
 
-#: Confidence labels that may CONVICT an op in `op_verdicts` -- deliberately
 #: excludes `CONFIDENCE_SPAWNS_UNKNOWN`, per module docstring's two-route
 #: rule ("a SPAWNS-UNKNOWN figure never convicts on its own").
 _CONVICTING_CONFIDENCES = frozenset({CONFIDENCE_EXACT, CONFIDENCE_FLOOR})

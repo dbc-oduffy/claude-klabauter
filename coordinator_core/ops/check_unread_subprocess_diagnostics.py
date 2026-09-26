@@ -69,14 +69,13 @@ _EMPTY_DEFAULT_LITERALS = (ast.List, ast.Dict, ast.Set, ast.Tuple)
 
 @dataclass
 class Hit:
-    lens: str  # "A" (unread stderr) or "B" (silent returncode branch)
+    lens: str
     path: str
     lineno: int
     detail: str
 
 
 def _is_diagnostic_call(node: ast.AST) -> bool:
-    """True if `node` (an ast.Call) looks like a logging/print/warn call."""
     if not isinstance(node, ast.Call):
         return False
     func = node.func
@@ -100,15 +99,11 @@ def _contains_diagnostic_call(nodes: List[ast.stmt]) -> bool:
 
 
 def _is_capture_call(call: ast.Call) -> bool:
-    """True if `call` is subprocess.run/check_output(...) with capture_output=True
-    or stderr=PIPE (module-qualified or bare-imported PIPE)."""
     func = call.func
     func_name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
     if func_name not in ("run", "check_output"):
         return False
     for kw in call.keywords:
-        # check=True raises CalledProcessError on failure, and that exception
-        # carries .stderr itself -- not a swallow, the diagnostic still surfaces.
         if kw.arg == "check" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
             return False
     for kw in call.keywords:
@@ -124,7 +119,6 @@ def _is_capture_call(call: ast.Call) -> bool:
 
 
 def _name_referenced(nodes: List[ast.stmt], var: str, attr: str) -> bool:
-    """True if any `<var>.<attr>` attribute access appears in `nodes`."""
     for stmt in nodes:
         for sub in ast.walk(stmt):
             if (
@@ -185,7 +179,7 @@ def _is_empty_default_return(stmt: ast.stmt) -> bool:
     elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Yield):
         value = stmt.value.value
     if value is None:
-        return isinstance(stmt, ast.Return)  # bare `return` (implicit None)
+        return isinstance(stmt, ast.Return)
     if isinstance(value, ast.Constant):
         return value.value in (None, "", False, 0)
     return isinstance(value, _EMPTY_DEFAULT_LITERALS) and not getattr(value, "elts", None) and not getattr(

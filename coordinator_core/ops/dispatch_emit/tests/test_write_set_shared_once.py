@@ -21,10 +21,6 @@ from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
 
 def _mega_row(n: int) -> WaveRow:
-    # `.yaml`, not `.py`: `candidate_test_additions` widens a `.py` write
-    # with a stem-derived test-file guess, which would otherwise inflate
-    # the commit/preflight pathspec beyond the raw declared list and muddy
-    # this test's byte-budget assertion.
     writes = [f"state/audits/mega_row_sentinel_{i:04d}.yaml" for i in range(n)]
     return WaveRow(
         id="C1",
@@ -47,17 +43,6 @@ def test_one_mega_row_stays_under_the_runner_byte_cap():
 
 
 def test_one_mega_row_writes_list_is_serialized_once():
-    """A single declared write path -- not the whole list -- names exactly
-    where in the emitted script the write-set is actually spelled out as
-    literal text. Before the dedup fix this sentinel occurred once per
-    call site that inlined the row's `writes:` (preflight prompt, the
-    executor's footprint-constraint clause, its DONE-summary porcelain
-    command, and the commit-phase pathspec sentence) -- four or more times
-    over. After the fix, the SAME list is registered once as a runtime
-    array (`_sharedPaths`) and every one of those sites reads it back via
-    `.join(...)` at runtime, so the sentinel's literal text appears exactly
-    once in the composed script.
-    """
     waves = [[_mega_row(1200)]]
 
     script = compose_script(waves, name="mega", description="one row, ~1200 writes")

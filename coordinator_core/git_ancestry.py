@@ -79,40 +79,9 @@ def is_ancestor(commit: str, ref: str, cwd: Optional[str] = None) -> Tuple[bool,
 
 
 def _is_ancestor(commit: str, ref: str, cwd: Optional[str] = None) -> bool:
-    """True iff `commit` is an ancestor of (or equal to) `ref`.
-
-    Thin wrapper over the tri-state `is_ancestor` — kept for `is_covered` and
-    this module's pre-existing callers. Signature and behaviour are unchanged
-    for the returncode-based paths (collapses the tri-state back to a bare
-    bool: only `(True, True)` is `True`; both `(True, False)` and
-    `(False, None)` are `False`, exactly as the original bare-`returncode ==
-    0` implementation behaved) — but the exception path is NOT
-    behaviourally identical to the pre-promotion implementation: the old
-    code called `subprocess.run` directly with no try/except, so a missing
-    `git` binary (or a timeout) raised an uncaught `OSError` /
-    `subprocess.TimeoutExpired` straight out of this function. `is_ancestor`
-    now catches those and returns `(False, None)`, so this wrapper returns
-    `False` in that case instead of raising — a deliberate fail-closed
-    change (Review: code-reviewer — Finding 3, 2026-07-27), not a bug, but
-    real callers relying on the old crash-on-missing-git behaviour would
-    observe a different outcome."""
     read_ok, observed = is_ancestor(commit, ref, cwd=cwd)
     return read_ok and bool(observed)
 
 
 def is_covered(commit: str, start_sha: str, end_sha: str, cwd: Optional[str] = None) -> bool:
-    """A commit C is covered by the range (start_sha, end_sha] iff BOTH hold:
-
-      (1) C is an ancestor of end_sha (within the reviewed window, at or before B)
-      (2) C is NOT an ancestor of start_sha (not before the window start — after A,
-          exclusive)
-
-    This is the exact two-clause formula plan-delivery-audit's Oracle 3 documents
-    (`git merge-base --is-ancestor C B` succeeds AND `git merge-base --is-ancestor
-    C A` FAILS). The polarity of clause (2) is load-bearing: inverting it (checking
-    is-ancestor-of-start instead of NOT-is-ancestor-of-start) silently widens the
-    covered set to include commits that predate the review window — this is the
-    single source of truth for that polarity; no second copy of the warning belongs
-    in skill prose after this lands.
-    """
     return _is_ancestor(commit, end_sha, cwd=cwd) and not _is_ancestor(commit, start_sha, cwd=cwd)

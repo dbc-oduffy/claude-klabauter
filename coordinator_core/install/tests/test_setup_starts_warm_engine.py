@@ -42,9 +42,6 @@ _SETUP_PY = _REPO_ROOT / "scripts" / "setup.py"
 
 
 def _load_setup():
-    """Load `scripts/setup.py` by path -- it is a script, not an importable
-    package module, and its body is guarded by `if __name__ == "__main__"`,
-    so loading it under a private module name runs no install step."""
     spec = importlib.util.spec_from_file_location("_claude_klabauter_setup_under_test", _SETUP_PY)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -62,9 +59,6 @@ def setup_module_under_test():
 
 
 def _patch_seams(monkeypatch, setup, engine_root, *, run_result=None, spawn_exc=None, spawned=None):
-    """Substitute the three seams `start_warm_engine` resolves lazily: the
-    published-root resolver, the spawn, and the verification child's own
-    `subprocess.run`."""
     from coordinator_core.install import engine_root_for_install
     from coordinator_core.ops.ceremony import detached_spawn
 
@@ -115,8 +109,6 @@ def test_pass_only_when_a_server_actually_served(monkeypatch, capsys, setup_modu
 
 
 def test_unserved_ping_is_an_advisory_not_a_pass(monkeypatch, capsys, setup_module_under_test, tmp_path):
-    """The defect this whole step exists to prevent: reporting success off a
-    spawn rather than off a served response."""
     setup = setup_module_under_test
     engine_root = tmp_path / "engine-root"
     _patch_seams(
@@ -144,7 +136,7 @@ def test_a_failing_spawn_never_fails_the_install(monkeypatch, capsys, setup_modu
         spawn_exc=OSError("no such interpreter"),
     )
 
-    setup.start_warm_engine(tmp_path / "claude-klabauter-checkout")  # must not raise
+    setup.start_warm_engine(tmp_path / "claude-klabauter-checkout")
 
     out = capsys.readouterr()
     assert "[ADVISORY]" in out.err

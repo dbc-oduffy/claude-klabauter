@@ -1,19 +1,3 @@
-"""A `[id]`-shaped Next.js dynamic-route segment must not be read as a git
-glob character class.
-
-`_git_ls_files_pathspec`/`_validate_pathspec`/`_first_invalid_pathspec` used
-to pass raw pathspec strings straight to `git ls-files`, so a path like
-`app/[id]/route.ts` was parsed under git's default pathspec grammar --
-`[id]` matched as a character class rather than a literal directory name --
-and a real tracked file at that path silently failed to match. All three now
-wrap every pathspec as `:(literal)<path>` (see `_literal_pathspec`), so the
-bracket is matched byte-for-byte.
-
-Constituent row: state/bug-backlog/2026-09-22-gh-klabauter-61-safe-commit-
-cant-express-nextjs-param-route.yaml
-
-Run: python -m pytest coordinator/bin/tests/test_safe_commit_pathspec_literal_wrap_bracket_routes.py -q
-"""
 
 from __future__ import annotations
 
@@ -26,9 +10,6 @@ import pytest
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
-# Spawns a real external process (git, in a throwaway repo); runs at cadence
-# gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -54,12 +35,6 @@ def _git(root: Path, *args: str) -> None:
 
 
 def _repo(tmp_path: Path) -> Path:
-    """A throwaway repo with a Next.js dynamic-route file whose directory
-    segment is bracket-shaped (`app/[id]/route.ts`), plus a DECOY file at
-    `app/i/route.ts` -- unwrapped, git's default pathspec grammar reads
-    `[id]` as a one-character class matching either `i` or `d`, so the
-    decoy is the false-positive an unwrapped pathspec silently pulls in
-    alongside (or instead of) the intended literal path."""
     root = tmp_path / "r"
     route_dir = root / "app" / "[id]"
     decoy_dir = root / "app" / "i"

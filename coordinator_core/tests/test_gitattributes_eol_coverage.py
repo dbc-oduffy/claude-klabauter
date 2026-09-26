@@ -74,8 +74,6 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -83,7 +81,6 @@ pytestmark = [
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
-# extension -> the eol attribute every tracked file of that class must resolve.
 CORRECTNESS_PINS: dict[str, str] = {
     ".sha": "text eol=lf",
     ".diff": "text eol=lf",
@@ -93,34 +90,17 @@ CORRECTNESS_PINS: dict[str, str] = {
     ".ps1": "text eol=crlf",
 }
 
-# Tracked extensions deliberately carrying no pin, each because a mangled line
-# ending in that class is cosmetic rather than correctness-affecting: the
-# consumer is a parser (Python, YAML, JSON, Markdown, TOML, JS) or a
-# human, and every one of them reads LF and CRLF identically.
-#
 # `.ps1` used to be listed here as an acknowledged JUDGEMENT call. It has since
 # moved to CORRECTNESS_PINS — the judgement was wrong, because the class's
-# correctness constraint is not PowerShell's parser (which is indeed
-# ending-agnostic) but the launcher-parity byte compare. See the module
-# docstring.
 ACKNOWLEDGED_UNPINNED: frozenset[str] = frozenset(
     {
         "",  # extensionless: hook shims, CLI entrypoints, LICENSE-likes
         ".allow",
         ".archived",
-        # `coordinator_core/**/<module>.py.wip.<pid>.bak` — tool-written WIP
-        # backups of a source file. Inert: nothing reads them, nothing compares
-        # them byte-exactly. Classified unpinned rather than pinned because the
-        # honest answer is that they should not be tracked at all — see the
-        # bug-backlog entry on tracked scratch; pinning would dignify them.
         ".bak",
         ".bats",
         ".body",
-        # `tasks/**/<name>.err` — captured stderr from a scratch run. `tasks/`
-        # is swept ephemera by CLAUDE.md; read by humans, never byte-compared.
         ".err",
-        # `setup/.percolate-identity.example` — a template/comment-only file,
-        # human-read, never byte-compared.
         ".example",
         ".ini",
         ".js",
@@ -131,12 +111,7 @@ ACKNOWLEDGED_UNPINNED: frozenset[str] = frozenset(
         ".log",
         ".md",
         ".mjs",
-        # `.structural-index/symbols.ndjson` — a generated index, parsed
-        # line-wise by a JSON reader that strips trailing whitespace. Regenerated
-        # wholesale, never patched or byte-compared.
         ".ndjson",
-        # `setup/publish-targets.portable` — a `#`-commented config file,
-        # parsed line-by-line and human-read, never byte-compared.
         ".portable",
         ".py",
         ".scm",
@@ -145,33 +120,14 @@ ACKNOWLEDGED_UNPINNED: frozenset[str] = frozenset(
         ".tsv",
         ".txt",
         ".yaml",
-        # Arrived with the mirrored CI harness preserved in 79a16ab05
-        # (state/mirror-native-source/), after this census was taken. Cosmetic
-        # like its `.yaml` sibling — the consumer is a YAML parser.
         ".yml",
     }
 )
 
-# What the `i/` column must read for a file resolving ANY `text` pin.
-#
-# Determined empirically rather than assumed, because the intuitive expectation
-# is wrong: `git ls-files --eol` reports `i/lf` for all 395 tracked `*.cmd`
 # files despite their `text eol=crlf` pin. `eol=` sets the CHECKOUT direction
-# only — `text` normalizes to LF on the way INTO the object store in BOTH
-# directions, so the index expectation is `i/lf` for an `eol=crlf` class just
-# as much as for an `eol=lf` one. Asserting `i/crlf` for the `.cmd` class would
-# have made this guard permanently red against a perfectly correct repo.
-#
-# `i/none` is conformant rather than an exemption: git reports it for a blob
-# carrying no line terminator at all — a single-line `.sha` written without a
-# trailing newline. There is no ending to mangle, so it cannot be the defect
-# this guard exists to catch. The failure states are `i/crlf` (a CRLF blob that
-# predates its pin, never renormalized) and `i/mixed`.
 INDEX_CONFORMANT: frozenset[str] = frozenset({"i/lf", "i/none"})
 
 # The `w/` column a conformant CHECKOUT produces, per pin direction — this is
-# the half `eol=` actually governs. `w/none` joins each set for the same
-# no-line-terminator reason as `i/none` above.
 WORKTREE_CONFORMANT: dict[str, frozenset[str]] = {
     "text eol=lf": frozenset({"w/lf", "w/none"}),
     "text eol=crlf": frozenset({"w/crlf", "w/none"}),
@@ -179,12 +135,6 @@ WORKTREE_CONFORMANT: dict[str, frozenset[str]] = {
 
 
 class EolRow(NamedTuple):
-    """One `git ls-files --eol` row.
-
-    `index` / `worktree` carry git's `i/` and `w/` prefixes verbatim rather
-    than stripped, so a value read out of a failure message can be grepped for
-    in raw `git ls-files --eol` output without translation.
-    """
 
     path: str
     index: str
@@ -193,16 +143,6 @@ class EolRow(NamedTuple):
 
 
 def _ls_files_eol() -> list[EolRow]:
-    """Index EOL, worktree EOL, and resolved eol attribute per tracked file.
-
-    The attribute is git's own resolution, read off `git ls-files --eol`'s
-    `attr/` column, so nested `.gitattributes` overrides are reflected. The
-    column is empty for a path no rule matches.
-
-    Parsed by splitting on the TAB that separates metadata from the path, not
-    by whitespace: the attribute value itself contains spaces ("text eol=lf"),
-    and a tracked path may contain them too.
-    """
     result = subprocess.run(
         ["git", "ls-files", "--eol"],
         cwd=REPO_ROOT,
@@ -230,13 +170,6 @@ def _ext(path: str) -> str:
 
 
 def _pinned(rows: list[EolRow], ext: str, expected_attr: str) -> list[EolRow]:
-    """Rows of `ext` that actually resolve `expected_attr`.
-
-    Conformance is asserted only over files whose pin already resolves
-    correctly. A file with a wrong or missing pin is the OTHER guard's
-    offender; reporting it in both places would double-count one defect and
-    bury the conformance signal in noise.
-    """
     return [r for r in rows if _ext(r.path) == ext and r.attr == expected_attr]
 
 
@@ -287,15 +220,6 @@ def test_correctness_class_carries_its_required_eol_pin(ext, tracked):
 
 @pytest.mark.parametrize("ext", sorted(CORRECTNESS_PINS), ids=sorted(CORRECTNESS_PINS))
 def test_pinned_class_conforms_to_its_pin_in_the_index(ext, tracked):
-    """The pin is obeyed by the stored blobs, not merely declared.
-
-    This is the half the pin-value guard above cannot see. `.gitattributes`
-    normalizes on the way in from here forward; it does not reach back into the
-    object store, so a class pinned today can carry CRLF blobs committed
-    yesterday indefinitely and every clone gets them. The index is what SHIPS —
-    a nonconformant blob is wrong for every consumer on every platform, which
-    is why this one gates rather than reports.
-    """
     expected = CORRECTNESS_PINS[ext]
     offenders = _index_nonconformant(tracked, ext, expected)
     assert not offenders, (
@@ -316,20 +240,6 @@ def test_pinned_class_conforms_to_its_pin_in_the_index(ext, tracked):
 @pytest.mark.designed_red
 @pytest.mark.parametrize("ext", sorted(CORRECTNESS_PINS), ids=sorted(CORRECTNESS_PINS))
 def test_pinned_class_worktree_matches_its_checkout_direction(ext, tracked):
-    """Worktree drift — reported, deliberately not gated.
-
-    Why this is `designed_red` and the index assertion is not. A `w/` column
-    that disagrees with its pin means THIS checkout is stale: the file was
-    written to disk before the pin existed, or by a tool that bypassed the
-    filter. Nothing is wrong with the repo — a fresh clone of the same commit
-    materializes it correctly — so failing here would paint every stale
-    worktree red for a defect that ships to nobody, and train readers to ignore
-    the module. The index assertion above is the one that gates, because the
-    index is what other clones actually receive.
-
-    Its failure output is a per-machine worklist, in the marker's own terms:
-    run this node explicitly to see what your checkout should be refreshed to.
-    """
     expected = CORRECTNESS_PINS[ext]
     divergent = _worktree_divergent(tracked, ext, expected)
     paths = " ".join(r.path for r in divergent[:5]) + (" ..." if len(divergent) > 5 else "")
@@ -351,10 +261,6 @@ def test_pinned_class_worktree_matches_its_checkout_direction(ext, tracked):
 
 
 def test_no_unclassified_extension_joins_the_tracked_corpus(tracked):
-    """A new tracked extension must be classified, not silently unpinned.
-
-    This is the forward half of the guard: it is what stops the next `.sha`.
-    """
     known = set(CORRECTNESS_PINS) | ACKNOWLEDGED_UNPINNED
     unclassified: dict[str, list[str]] = {}
     for row in tracked:
@@ -387,12 +293,6 @@ def test_acknowledged_unpinned_and_correctness_pins_are_disjoint():
 
 
 def test_parser_reads_attribute_values_containing_spaces():
-    """Red-case for the parser itself, not for the repo's current state.
-
-    `attr/text eol=lf` contains a space; a whitespace-split parse would read
-    the attribute as "text" and every correctness assertion above would pass
-    vacuously against a repo pinned to the WRONG ending.
-    """
     row = _parse_eol_line("i/lf    w/crlf   attr/text eol=lf   \tstate/review-trail/diffs/x.diff")
     assert row.attr == "text eol=lf"
     assert row.path.endswith("x.diff")
@@ -400,14 +300,6 @@ def test_parser_reads_attribute_values_containing_spaces():
 
 
 def test_conformance_predicates_bite_on_a_synthetic_nonconformant_row():
-    """Red-case for the conformance predicates themselves.
-
-    A conformance check that silently matches nothing is worse than none — it
-    reads as a passing gate. This pins the two failure shapes the live repo
-    does not currently exhibit (so the assertions above cannot demonstrate
-    them) plus the two near-misses that must NOT be flagged: `i/none`, and an
-    `eol=crlf` class whose index is correctly `i/lf`.
-    """
     rows = [
         EolRow("ok.diff", "i/lf", "w/lf", "text eol=lf"),
         EolRow("no-terminator.sha", "i/none", "w/none", "text eol=lf"),
@@ -422,8 +314,6 @@ def test_conformance_predicates_bite_on_a_synthetic_nonconformant_row():
         "mangled.diff",
         "stale-blob.diff",
     ]
-    # An eol=crlf class is index-conformant at i/lf, and a wrongly-pinned file
-    # belongs to the pin guard, not this one.
     assert _index_nonconformant(rows, ".cmd", "text eol=crlf") == []
 
     assert [r.path for r in _worktree_divergent(rows, ".cmd", "text eol=crlf")] == [

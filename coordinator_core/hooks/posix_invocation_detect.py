@@ -41,58 +41,22 @@ from __future__ import annotations
 import re
 from typing import NamedTuple
 
-#: Opens on a POSIX shell parameter-expansion-with-default: `${VAR:-`. Only
-#: the outer opening is matched here; `_balanced_brace_end` walks forward
-#: from the `{` to find the true close, so a nested `${INNER:-...}` default
-#: value does not prematurely terminate the outer expansion (the shape
-#: `resolve-coordinator-bin.md` itself documents:
 #: `${COORDINATOR_SETTINGS_HOME:-${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings}`).
 _EXPANSION_OPEN_RE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*:-")
 
-#: A forwarder invocation suffix: `/bin/<cli-name>`. Matched in the text
-#: immediately following the expansion's closing brace, within
 #: `_TRAILING_WINDOW` characters -- this is what tells a POSIX-shell default
-#: expansion used for some unrelated purpose apart from a shape that
-#: actually resolves the coordinator settings home down to a CLI forwarder.
 _BIN_CLI_RE = re.compile(r"/bin/([A-Za-z0-9_.-]+)")
 
-#: Generous enough to span the `/.coordinator-claude-settings` suffix
-#: `resolve-coordinator-bin.md`'s own Shape A/B examples carry between the
-#: expansion's close and the `/bin/<cli>` segment, narrow enough that an
-#: unrelated `${...}` expansion elsewhere on a long line/paragraph does not
-#: spuriously pair with an unrelated `/bin/` mention far downstream.
 _TRAILING_WINDOW = 200
 
-#: A Shape W invocation: the PowerShell call operator (`&`) applied to a
-#: quoted path ending `\bin\<cli>.cmd` -- `resolve-coordinator-bin.md` rung
-#: 0's own documented form, e.g.
 #: `& "$env:COORDINATOR_SETTINGS_HOME\bin\coordinator-doc-new.cmd" ...`.
 #: The path prefix before `\bin\` varies (`$env:COORDINATOR_SETTINGS_HOME`,
-#: `$HOME\.coordinator-claude-settings`, ...) so only the `\bin\<cli>.cmd`
-#: suffix inside the quotes is pinned; `<cli>` is captured so a same-CLI
-#: pairing (see `_has_nearby_shape_w_sibling`) can be checked structurally,
-#: never by matching prose like "PowerShell hosts use Shape W".
 _SHAPE_W_RE = re.compile(r'&\s*"[^"\n]*\\bin\\([A-Za-z0-9_.-]+?)\.cmd"')
 
-#: Line-distance window a POSIX invocation is allowed to pair with a
-#: same-CLI Shape W sibling before the POSIX hit is treated as unaccompanied
-#: (a true violation). `coordinator/commands/install.md`'s 21 correctly-
-#: paired invocations sit 5-6 lines from their Shape W sibling (the POSIX
-#: form under a ```bash fence, then a "PowerShell host (rung 0):" line, then
-#: the Shape W form) -- 8 lines clears that with margin. `skills/percolate/
-#: SKILL.md` states Shape W once in prose ("every CLI below takes its `.cmd`
-#: sibling...") 12 lines above its `percolate-round` POSIX invocation, and
-#: relies on a "per the note above" cross-reference rather than a structural
-#: sibling for either of its two POSIX invocations -- 8 lines does not reach
-#: that 12-line gap, so both stay flagged as the true positives they are.
 _SIBLING_LINE_WINDOW = 8
 
 
 class PosixInvocationHit(NamedTuple):
-    """One matched POSIX-only invocation. `start`/`end` are character
-    offsets into the scanned text (half-open range); `text` is the matched
-    substring, `cli` is the forwarder basename `/bin/` resolved to (e.g.
-    `coordinator-doc-new`)."""
 
     start: int
     end: int
@@ -101,10 +65,6 @@ class PosixInvocationHit(NamedTuple):
 
 
 def _balanced_brace_end(text: str, open_idx: int) -> int:
-    """Index of the `}` matching the `{` at `text[open_idx]`, tracking
-    nested-brace depth so an inner `${...}` default value does not
-    prematurely close the outer expansion. Returns -1 if `text[open_idx]`
-    is not `{`, or no matching close is found before the end of `text`."""
     if open_idx < 0 or open_idx >= len(text) or text[open_idx] != "{":
         return -1
     depth = 0
@@ -123,7 +83,6 @@ def _balanced_brace_end(text: str, open_idx: int) -> int:
 
 
 def _line_of(text: str, offset: int) -> int:
-    """1-indexed line number containing character `offset` in `text`."""
     return text.count("\n", 0, offset) + 1
 
 
@@ -185,7 +144,7 @@ def find_posix_forwarder_invocations(text: str) -> "list[PosixInvocationHit]":
     shape_w_lines = _shape_w_lines_by_cli(text)
     raw: "list[PosixInvocationHit]" = []
     for m in _EXPANSION_OPEN_RE.finditer(text):
-        open_idx = m.start() + 1  # index of the '{' immediately after '$'
+        open_idx = m.start() + 1
         close_idx = _balanced_brace_end(text, open_idx)
         if close_idx == -1:
             continue
@@ -215,8 +174,4 @@ def find_posix_forwarder_invocations(text: str) -> "list[PosixInvocationHit]":
 
 
 def has_posix_forwarder_invocation(text: str) -> bool:
-    """True if `text` carries at least one hit of
-    `find_posix_forwarder_invocations` -- the cheap boolean form the
-    write-time advisory op uses (it only needs to know whether to warn,
-    not enumerate every hit)."""
     return bool(find_posix_forwarder_invocations(text))

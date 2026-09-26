@@ -47,11 +47,6 @@ from coordinator_core.ops.session import reap
 
 def _session_dir(sessions_dir: Path, sid: str, *, age_seconds: float,
                  meta: str | None) -> Path:
-    """Build a session dir whose newest file is `age_seconds` old.
-
-    `meta=None` writes no meta.json at all (the absent case); a string writes
-    it verbatim, so a caller can plant unparseable bytes for the corrupt case.
-    """
     sdir = sessions_dir / sid
     sdir.mkdir(parents=True)
     (sdir / "touched.txt").write_text("T x", encoding="utf-8")
@@ -64,16 +59,11 @@ def _session_dir(sessions_dir: Path, sid: str, *, age_seconds: float,
     return sdir
 
 
-# Sub-reap (i) now selects candidates by a positive uuid-shape test
-# (docs/plans/2026-08-26-the-reaper-identifies-sessions-positively.md, C2), so a
-# fixture standing in for a REAL session must be uuid-shaped or the reaper never
-# considers it. The store fixtures below (`decisions`, `_branch-overrides`, and
-# the denylist walk) stay deliberately non-uuid — being rejected is their point.
-_SID_NO_META_OLD = "11111111-aaaa-4aaa-8aaa-000000000001"  # was "no-meta-old"
-_SID_NO_META_FRESH = "22222222-aaaa-4aaa-8aaa-000000000002"  # was "no-meta-fresh"
-_SID_CORRUPT_META_OLD = "33333333-aaaa-4aaa-8aaa-000000000003"  # was "corrupt-meta-old"
-_SID_REAL_STALE = "44444444-aaaa-4aaa-8aaa-000000000004"  # was "real-stale-session"
-_SID_EMPTY = "55555555-aaaa-4aaa-8aaa-000000000005"  # was "empty-dir"
+_SID_NO_META_OLD = "11111111-aaaa-4aaa-8aaa-000000000001"
+_SID_NO_META_FRESH = "22222222-aaaa-4aaa-8aaa-000000000002"
+_SID_CORRUPT_META_OLD = "33333333-aaaa-4aaa-8aaa-000000000003"
+_SID_REAL_STALE = "44444444-aaaa-4aaa-8aaa-000000000004"
+_SID_EMPTY = "55555555-aaaa-4aaa-8aaa-000000000005"
 
 
 def _reap(sessions_dir: Path):
@@ -82,8 +72,6 @@ def _reap(sessions_dir: Path):
 
 class TestAbsentMetaIsReapableCorruptMetaIsNot:
     def test_record_less_dir_past_the_threshold_is_reaped(self, tmp_path):
-        """The defect: before the split this dir deferred forever, because the
-        meta-is-None defer fired before the staleness check could run."""
         sessions_dir = tmp_path / "coordinator-sessions"
         sdir = _session_dir(
             sessions_dir, _SID_NO_META_OLD,
@@ -102,9 +90,6 @@ class TestAbsentMetaIsReapableCorruptMetaIsNot:
         assert (sessions_dir / ".archive").is_dir()
 
     def test_record_less_dir_inside_the_threshold_is_kept(self, tmp_path):
-        """The fallback is held to the SAME 24h threshold, not a looser one.
-        This is the case that matters for a live session editing through
-        Write/Edit before its backfill has fired: recent mtime, so kept."""
         sessions_dir = tmp_path / "coordinator-sessions"
         sdir = _session_dir(
             sessions_dir, _SID_NO_META_FRESH, age_seconds=60, meta=None,
@@ -119,8 +104,6 @@ class TestAbsentMetaIsReapableCorruptMetaIsNot:
         )
 
     def test_corrupt_meta_is_still_deferred_however_cold(self, tmp_path):
-        """The half that must NOT change: present-but-unparseable is ambiguous
-        at any age, and ambiguity keeps."""
         sessions_dir = tmp_path / "coordinator-sessions"
         sdir = _session_dir(
             sessions_dir, _SID_CORRUPT_META_OLD,
@@ -140,9 +123,6 @@ class TestAbsentMetaIsReapableCorruptMetaIsNot:
         assert "unreadable" in deferred[0]["reason"]
 
     def test_empty_record_less_dir_is_deferred_not_reaped(self, tmp_path):
-        """An empty dir has no evidence of age in either direction. `max()`
-        over no entries is not a staleness answer, so it reads as the 0.0
-        unknown-timestamp sentinel and keeps."""
         sessions_dir = tmp_path / "coordinator-sessions"
         sdir = sessions_dir / _SID_EMPTY
         sdir.mkdir(parents=True)
@@ -174,13 +154,6 @@ class TestNonSessionStoresAreNeverReaped:
     passes for the unrelated reason tested above."""
 
     def test_cold_populated_non_session_store_is_not_reaped(self, tmp_path, monkeypatch):
-        # The uuid-shape gate runs
-        # before the denylist check, so "decisions" (non-uuid) is already
-        # rejected by the uuid gate and this test would pass even if the
-        # denylist check were deleted. Bypass the uuid gate so the assertion
-        # actually exercises the denylist/subordinate checks, matching the
-        # idiom in test_reap_positive_session_identification.py ::
-        # test_gate_alone_keeps_non_session_dirs_with_denylist_emptied.
         monkeypatch.setattr(reap, "_SESSION_UUID_RE", re.compile(r".*"))
 
         sessions_dir = tmp_path / "coordinator-sessions"
@@ -226,7 +199,7 @@ class TestNonSessionStoresAreNeverReaped:
         planted = []
         for name in sorted(_NON_SESSION_DIR_NAMES):
             if name.startswith("."):
-                continue  # dot-prefixed names are skipped a line earlier
+                continue
             _session_dir(
                 sessions_dir, name,
                 age_seconds=reap._SESSION_STALE_SECONDS * 30, meta=None,

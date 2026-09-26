@@ -1,20 +1,3 @@
-"""
-coordinator_core.tests.test_pickup_brief_import_closure — pins that
-`coordinator_core.pickup_brief` never pulls the monolith
-`coordinator_core.pickup_assemble` into `sys.modules` for the `brief` verb.
-
-Runs the brief verb in a FRESH interpreter (a real spawn — `cadence` +
-`spawns_process`, per the row body) because an in-process `sys.modules`
-check would be poisoned by whatever a peer test in the same session already
-imported; a fresh interpreter is the only honest way to observe this
-module's own import closure in isolation.
-
-`coordinator_core.ceremony_common.*` is explicitly ALLOWED (the row body:
-"the allowed set explicitly names coordinator_core.ceremony_common.* as
-present-and-permitted"). This test asserts only the monolith's absence.
-
-Spec backlink: docs/plans/2026-09-11-…, chunk C10.
-"""
 from __future__ import annotations
 
 import subprocess
@@ -69,10 +52,6 @@ def test_brief_verb_never_imports_pickup_assemble():
 
 
 def test_ceremony_common_is_allowed_and_present():
-    """The allowed set explicitly permits `coordinator_core.ceremony_common.*`
-    — this module DOES consume it (`detect_conflicting_payload_channels`,
-    `resolve_json_payload_flag`), and that consumption is not a closure
-    violation."""
     proc = subprocess.run(
         [sys.executable, "-c", _PROBE.format(engine_root=str(_ENGINE_ROOT))],
         cwd=str(_ENGINE_ROOT),
@@ -85,9 +64,6 @@ def test_ceremony_common_is_allowed_and_present():
 
 
 def test_module_level_import_does_not_pull_monolith():
-    """The non-brief import path (module import alone, no `main()` call) is
-    an even stricter floor: importing `pickup_brief` at all must not import
-    the monolith module-scope."""
     proc = subprocess.run(
         [
             sys.executable,

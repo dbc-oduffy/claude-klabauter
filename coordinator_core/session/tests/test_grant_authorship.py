@@ -56,9 +56,6 @@ class _FakeError(Exception):
 
 
 class _FakePsutilModule:
-    """Minimal stand-in for the psutil module, exposing the exception
-    classes ``_find_windows_claude_ancestor`` catches and a ``Process``
-    factory the test configures per-case."""
 
     NoSuchProcess = _FakeNoSuchProcess
     AccessDenied = _FakeAccessDenied
@@ -73,26 +70,17 @@ class _FakePsutilModule:
 
 
 def _install_fake_psutil(monkeypatch, process_factory):
-    # ``_find_windows_claude_ancestor`` reads ``_psutil()`` off its OWN
-    # module (core.py), not ga's imported alias — both must be patched so
-    # ga's own psutil-absent guard and the walk it delegates to see the
-    # same fake.
     fake = _FakePsutilModule(process_factory)
     monkeypatch.setattr(ga, "_psutil", lambda: fake)
     monkeypatch.setattr(ga_core, "_psutil", lambda: fake)
 
 
-# ---------------------------------------------------------------------------
 # HUMAN — POSIX only: a climb that COMPLETES (reaches the top of the
-# process tree with no harness ancestor found).
-# ---------------------------------------------------------------------------
 
 
 def test_human_on_completed_posix_chain(monkeypatch):
     monkeypatch.setattr(ga, "_IS_WINDOWS", False)
 
-    # ppid() returns falsy -> the climb reaches the top of the process
-    # tree (no-parent) without ever finding a harness ancestor. This is a
     # COMPLETED climb, the only clean HUMAN answer this mechanism has.
     _install_fake_psutil(
         monkeypatch, lambda pid: _FakeProc(cmdline=["/bin/bash"], name="bash", ppid=0)
@@ -105,19 +93,9 @@ def test_human_on_completed_posix_chain(monkeypatch):
     assert result.refuses is False
 
 
-# ---------------------------------------------------------------------------
-# AGENT — a harness ancestor found anywhere in the climb, either platform.
-# This is the case that was broken before the fix: on POSIX, a harness
-# ancestor beyond the immediate parent used to be invisible to the old
-# single-parent name check, which returned HUMAN for it.
-# ---------------------------------------------------------------------------
-
-
 def test_agent_on_posix_harness_ancestor_beyond_immediate_parent(monkeypatch):
     monkeypatch.setattr(ga, "_IS_WINDOWS", False)
 
-    # Rung 0: a shell (the immediate parent — a name-mismatch under the old
-    # single-parent check). Rung 1: the actual harness ancestor.
     procs = {
         100: _FakeProc(cmdline=["/bin/bash"], name="bash", ppid=101),
         101: _FakeProc(cmdline=["/usr/local/bin/claude", "--flag"], name="claude"),
@@ -147,9 +125,7 @@ def test_agent_on_windows_harness_ancestor(monkeypatch):
     assert result.refuses is True
 
 
-# ---------------------------------------------------------------------------
 # UNRESOLVED — Windows: every walk-miss reason refuses.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -203,9 +179,7 @@ def test_unresolved_windows_walk_raises_unexpected_exception(monkeypatch):
     assert result.refuses is True
 
 
-# ---------------------------------------------------------------------------
 # UNRESOLVED — POSIX: every walk-miss reason EXCEPT no-parent refuses.
-# ---------------------------------------------------------------------------
 
 
 def test_unresolved_posix_rung_unreadable(monkeypatch):
@@ -226,9 +200,6 @@ def test_unresolved_posix_rung_unreadable(monkeypatch):
 def test_unresolved_posix_depth_exhausted(monkeypatch):
     monkeypatch.setattr(ga, "_IS_WINDOWS", False)
 
-    # Every rung is a readable, non-"claude" process whose ppid chains to
-    # the next rung — the climb hits its depth bound WITHOUT completing
-    # (the chain is still going): incomplete, not clean, stays ambiguous.
     def _factory(pid):
         return _FakeProc(cmdline=["/bin/bash"], name="bash", ppid=pid + 1)
 
@@ -266,11 +237,6 @@ def test_unresolved_posix_walk_raises_unexpected_exception(monkeypatch):
     assert result.verdict is ga.Verdict.UNRESOLVED
     assert result.reason == "walk-miss:RuntimeError"
     assert result.refuses is True
-
-
-# ---------------------------------------------------------------------------
-# default start_pid
-# ---------------------------------------------------------------------------
 
 
 def test_default_start_pid_is_os_getppid(monkeypatch):

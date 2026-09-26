@@ -78,22 +78,13 @@ TailResult = Dict[str, Any]
 OP_COMPLETION_SCAFFOLD = "completion_entry:scaffold"
 OP_COMPLETION_RESIDUE_FILL = "completion_entry:residue_fill"
 
-# Mirrors coordinator-doc-new's --nature default (DoE-claude coordinator/bin/coordinator-doc-new.py:2438).
 _COMPLETION_NATURE_DEFAULT = "infra"
 
-# Body-paragraph sentinel comment the scaffold's own body emits verbatim -- matched as a
-# single multi-line block so the fill is robust to the exact wrapped-comment wording.
 _COMPLETION_BODY_SENTINEL_START = "<!-- ONE paragraph"
 
-# Narrow-anchor value check for the chain_terminal fill: read_fm_field returns the
-# trimmed rest-of-line (value + any trailing inline comment); this compares only the
-# FIRST whitespace-delimited token so a reword of the trailing comment never breaks
-# the check (mirrors the OLD code's field-name-prefix anchor discipline).
 _CHAIN_TERMINAL_FALSE_TOKEN = "false"
 
 # The scaffold emits authored_by as a COMMENTED-OUT placeholder line (not a live YAML
-# key) -- primitives.py's key-line helpers do not apply, so this fill matches the full
-# commented line directly, scoped to the parsed frontmatter text only.
 _AUTHORED_BY_PLACEHOLDER_RE = re.compile(r"^# authored_by: PLACEHOLDER.*$", re.MULTILINE)
 
 
@@ -224,8 +215,6 @@ def scaffold_completion_entry(
 
     def _mutate(old_text: str) -> str:
         if old_text:
-            # A concurrent creator won the race between the exists() pre-check
-            # above and this lock-protected write -- never clobber their content.
             raise MutateAbort("completion entry created concurrently")
         return content
 
@@ -336,7 +325,6 @@ def fill_completion_entry_residues(
                 filled["authored_by"] = True
 
         if not any(filled.values()):
-            # No-op -- return text unchanged so locked_rmw skips the write entirely.
             return text
 
         new_split = split._replace(body_with_leading_newline=body)

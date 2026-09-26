@@ -1,18 +1,3 @@
-"""tests/test_repo_census.py — Tests for bin/repo-census.py.
-
-Purpose: exercises the census, per-language import/dependency edge extraction
-(Python + JS/TS; a spot-check of Go), cross-reference resolution, and --json
-output of the repo-census CLI against a synthetic fixture tree built in a
-tempdir — never against a real sibling repo (repo-census's whole point is to
-work on repos it has never seen). Not to be confused with the tree-sitter
-`repomap` tool's own test suite (`coordinator_core/tests/test_generate_repomap.py`)
-— these two are distinct tools, see repo-census.py's module docstring.
-
-Spec backlink: coordinator/pipelines/deep-research/repo-research-internals.md
-    § Phase 1.5 — Repomap Generation (DoE-claude)
-
-Run: python3 -m pytest <settings-home>/coordinator/bin/tests/test_repo_census.py
-"""
 
 import json
 import os
@@ -24,8 +9,6 @@ from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -55,10 +38,6 @@ def _write(root, relpath, content):
 
 
 def _build_fixture(root):
-    """A small polyglot repo: Python (dominant) + JS/TS (second), a vendored
-    dir that must be excluded by the default skip-list, and a .gitignore'd
-    scratch dir that must be excluded via gitignore parsing.
-    """
     _write(root, "pkg/__init__.py", "")
     _write(root, "pkg/util.py", "def helper():\n    return 1\n")
     _write(
@@ -83,9 +62,7 @@ def _build_fixture(root):
         "const widget = require('./widget');\n"
         "import { widget as w2 } from './widget';\n",
     )
-    # Vendored — must be excluded by the fixed skip-list regardless of .gitignore.
     _write(root, "node_modules/leftpad/index.js", "import { widget } from './widget';\n")
-    # .gitignore'd scratch dir — must be excluded by gitignore parsing.
     _write(root, ".gitignore", "scratch/\n*.log\n")
     _write(root, "scratch/notes.py", "import shouldnotcount\n")
     _write(root, "build.log", "not source\n")
@@ -101,7 +78,6 @@ def test_census_excludes_vendor_and_gitignored():
         exts = {row["extension"]: row["count"] for row in data["census"]}
         assert exts.get(".py") == 4, "expected 4 .py files (pkg/*), got {}".format(exts.get(".py"))
         assert ".log" not in exts, "build.log should be gitignored out of the census"
-        # node_modules/leftpad/index.js must not inflate the .js count.
         assert exts.get(".js") == 1, "expected 1 .js file (node_modules excluded), got {}".format(exts.get(".js"))
 
 
@@ -112,11 +88,8 @@ def test_python_edge_extraction():
         assert rc == 0, "exit {}: {}".format(rc, err)
         data = json.loads(out)
         edges = {row["module"]: row["count"] for row in data["edges"]["python"]}
-        # "os" imported in main.py and other.py -> 2 occurrences.
         assert edges.get("os") == 2, "expected os count 2, got {} ({})".format(edges.get("os"), edges)
-        # "pkg.util" imported 3 times across main.py (x2) + other.py.
         assert edges.get("pkg.util") == 3, "expected pkg.util count 3, got {} ({})".format(edges.get("pkg.util"), edges)
-        # scratch/notes.py is gitignored -- its "shouldnotcount" import must not appear.
         assert "shouldnotcount" not in edges, "gitignored file's import leaked into edges"
 
 
@@ -127,8 +100,6 @@ def test_js_ts_edge_extraction():
         assert rc == 0, "exit {}: {}".format(rc, err)
         data = json.loads(out)
         edges = {row["module"]: row["count"] for row in data["edges"]["js_ts"]}
-        # './widget' appears in index.ts (from), app.js (require), app.js (from) = 3.
-        # node_modules/leftpad's occurrence must NOT count (file excluded).
         assert edges.get("./widget") == 3, "expected ./widget count 3, got {} ({})".format(edges.get("./widget"), edges)
 
 
@@ -140,7 +111,6 @@ def test_cross_reference_counts_distinct_files():
         data = json.loads(out)
         xref = {row["module"]: row for row in data["cross_references"]["python"]}
         # pkg.util is referenced from 2 DISTINCT files (main.py, other.py) even
-        # though main.py imports it twice (line-count 3 in the edges table).
         entry = xref.get("pkg.util")
         assert entry is not None, "pkg.util missing from cross-references: {}".format(xref)
         assert entry["referencing_files"] == 2, "expected 2 distinct referencing files, got {}".format(entry["referencing_files"])

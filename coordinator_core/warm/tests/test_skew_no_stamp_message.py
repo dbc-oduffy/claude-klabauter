@@ -53,10 +53,6 @@ def test_present_unstamped_root_names_resolved_path_and_routes_to_setup_py(tmp_p
 
 
 def test_compute_client_token_raises_with_root_and_root_exists_paired(tmp_path, monkeypatch):
-    """`UnstampedEngineRootError`'s `root_exists` is UNKNOWN by default
-    (`None`), never fabricated as present -- `compute_client_token` must
-    pass both `root` and `root_exists` together, never one alone, per this
-    chunk's brief."""
     absent = tmp_path / "does-not-exist"
 
     try:
@@ -69,9 +65,6 @@ def test_compute_client_token_raises_with_root_and_root_exists_paired(tmp_path, 
 
 
 def test_bare_construction_leaves_root_exists_unknown_not_present():
-    """A caller constructing the error with a bare message (a test double,
-    an older call site) must not have presence fabricated on its behalf --
-    `root_exists` defaults to `None` (UNKNOWN), not `True`."""
     exc = skew.UnstampedEngineRootError("some message")
 
     assert exc.root is None

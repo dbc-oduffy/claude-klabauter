@@ -1,9 +1,3 @@
-"""test_sentinel_blocks_cli — pytest for coordinator_core.text.sentinel_blocks_cli.
-
-Byte-parity target: coordinator/bin/lib/sentinel-blocks-cli.js (extract command,
-usage/error contract). See sentinel_blocks_cli.py module docstring for the
-"no DoE-side trampoline" disposition.
-"""
 from __future__ import annotations
 
 from coordinator_core.text.sentinel_blocks_cli import main
@@ -72,11 +66,6 @@ def test_extract_empty_block(tmp_path, capsys):
 
 
 def test_usage_string_pins_retired_js_filename(capsys):
-    # Usage string hardcodes the retired
-    # sentinel-blocks-cli.js filename deliberately, for byte-parity with the
-    # JS CLI's own usage string. Pin the exact text so a future "modernize
-    # away from .js" edit fails loud instead of silently drifting from the
-    # parity contract.
     rc = main([])
     assert rc == 1
     err = capsys.readouterr().err

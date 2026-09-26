@@ -119,13 +119,6 @@ def _run(
     machine_resolver = _StubMachineResolver(tracked=tracked_registry)
     _patch_import_modules(monkeypatch, liveness, peer_roster, machine_resolver)
     if source_tree_path is not None:
-        # C4 (2026-08-18) retired `engine.working_repos.*` as the
-        # affected/unaffected discriminant in favor of a structural
-        # "is this repo the engine's own resolved source tree" check
-        # (`_resolve_claude_klabauter_source_root`, imported by the CLI module under
-        # test). A fixture that wants a repo to read as unaffected must
-        # stand in for that resolver directly rather than populating the
-        # (now inert) `engine.working_repos.*` registry key.
         monkeypatch.setattr(
             _cli, "_resolve_claude_klabauter_source_root", lambda _ml_dir: source_tree_path
         )
@@ -159,8 +152,6 @@ def test_non_working_repo_session_reported_affected_and_counted(tmp_path, monkey
     repo.mkdir()
     registry = {
         "repos.consumer_one": str(repo),
-        # No engine.working_repos.* entry for this repo -- it resolves the
-        # published mirror by construction.
     }
     rc, out = _run(
         monkeypatch,
@@ -223,8 +214,6 @@ def test_two_registry_aliases_of_same_path_censused_once(tmp_path, monkeypatch, 
         source_tree_path=str(repo),
     )
     assert rc == 0
-    # A double-counted census would report this session twice under two
-    # different repo names, and the verdict denominator would read 2.
     assert out.count("sid-aliased") == 1
     assert "verdict: affects 0 of 1 live sessions." in out
 
@@ -249,19 +238,11 @@ def test_two_registry_aliases_with_path_shape_variance_censused_once(tmp_path, m
     trailing = canonical + os.sep
 
     if sys.platform.startswith("win") or sys.platform == "darwin":
-        # Case-insensitive filesystem by default -- an uppercased path
-        # names the SAME on-disk repo, exercising `normcase`.
         cased = canonical.upper()
     else:
-        # POSIX filesystems are case-sensitive by default -- an
         # uppercased path would name a DIFFERENT (nonexistent) directory,
-        # not a variant of this one, so casing isn't portably exercisable
-        # here. Trailing-separator variance still is, below.
         cased = canonical
 
-    # "alias_case" sorts before "alias_trailing" -- it is the preferred
-    # (real, non-"_this_repo") alias name, and its literal path (`cased`)
-    # is what the CLI passes as `cwd` to the liveness stub.
     registry = {
         "repos.alias_case": cased,
         "repos.alias_trailing": trailing,

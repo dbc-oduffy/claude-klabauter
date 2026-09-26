@@ -94,53 +94,20 @@ pytestmark = [
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BIN_DIR = _REPO_ROOT / "coordinator" / "bin"
 
-# ---------------------------------------------------------------------------
-# The hard bar -- DR-344's brightline. A doctrine constant: never set from a
-# measurement, never raised, never softened. Not a high-water (AC3).
-# ---------------------------------------------------------------------------
 GATE_HARD_CEILING_MS: float = 500.0
 
-# ---------------------------------------------------------------------------
-# Per-brief regression high-waters -- REAL FIGURES (C6, replacing C1's
-# placeholder sentinel per this row's own body: "C1's sentinel is replaced,
-# not adjusted"). Quantile: max observed across TWO independent n>=10 cold
-# CLI-boundary campaigns -- C2's own campaign
-# (docs/research/2026-09-06-three-assembler-briefs-cli-boundary-measurement.md)
-# and this row's own re-measurement, same instrument (real cold
 # `subprocess.run` + `resource.getrusage(RUSAGE_CHILDREN)`, since
-# `single_invocation_tree_process_time` raises `NotImplementedError` on this
 # platform -- see this module's own docstring, "PLATFORM BOUNDARY"). Headroom:
-# 1.5x that combined max, never AT a measured p50/p90 (this module's own
-# docstring warns a ceiling there is a flaky refusal). All three sit far
-# under the 500ms hard bar and under C1's 400ms placeholder alike -- this is
-# a real lowering, not a relabelling.
-#   pickup: combined max 144.624ms (C2) -> high-water 220.0ms
-#   baton:  combined max 165.680ms (C2) -> high-water 250.0ms
-#   wsc:    combined max 123.765ms (this row) -> high-water 190.0ms
-# No constant is raised (all three land below C1's 400.0ms placeholder).
-# ---------------------------------------------------------------------------
 HIGH_WATER_PICKUP_MS: float = 220.0
 HIGH_WATER_BATON_MS: float = 250.0
 HIGH_WATER_WSC_MS: float = 190.0
 
-# ---------------------------------------------------------------------------
-# The gate's own budget -- CLAUDE.md § Load norm: a box-occupying mechanism
-# (real cold CLI invocations, each paying real interpreter start) must be
-# budgeted like any other, not exempted for measuring something else.
 # `GATE_SAMPLES_PER_BRIEF` is the gate's own per-run sample count, NOT C2's
-# one-time n>=10 campaign.
-# ---------------------------------------------------------------------------
 GATE_SAMPLES_PER_BRIEF: int = 3
 _BRIEF_COUNT = 3
-# Headroom multiplier over "every sample pays the full hard ceiling" -- a
-# generous but still-budgeted ceiling: this gate must never be the box's own
-# unbounded cost.
 GATE_TOTAL_PROCESS_TIME_CEILING_MS: float = (
     GATE_HARD_CEILING_MS * GATE_SAMPLES_PER_BRIEF * _BRIEF_COUNT * 1.5
 )
-# Each sample's tree is budgeted at up to 8 processes (interpreter + git
-# children) with headroom; the gate's own total stays a stated number, not
-# an implicit one.
 GATE_TOTAL_PROCS_CEILING: int = 8 * GATE_SAMPLES_PER_BRIEF * _BRIEF_COUNT
 
 

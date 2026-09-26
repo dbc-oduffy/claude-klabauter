@@ -53,7 +53,6 @@ def _isolated_git_env(anchor: Path) -> dict[str, str]:
 
 
 def git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    """Run one git command against *repo*, captured and never interactive."""
     return subprocess.run(
         ["git", "-C", str(repo), *args],
         capture_output=True,
@@ -66,24 +65,11 @@ def git(repo: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def init_repo(repo: Path) -> None:
-    """Create *repo* as a git repo on a work-shaped branch, identity configured.
-
-    The branch name matters: several guards under test refuse to act on `main`,
-    so a harness that defaulted to it would exercise the refusal path rather
-    than the behaviour the suite is after.
-    """
     repo.mkdir(parents=True, exist_ok=True)
     git(repo, "init", "-b", "work/test/2026-01-01")
     git(repo, "config", "commit.gpgsign", "false")
     git(repo, "config", "user.email", "test@example.com")
     git(repo, "config", "user.name", "Test")
-    # Every one of the 21 inline
-    # `_init_repo` implementations this harness replaced ended with a real
-    # "init" commit, so `git rev-list --count HEAD` had a born HEAD to count.
-    # Without it, `rev-list --count HEAD` on an unborn branch exits non-zero
-    # with empty stdout, making before/after `_rev_count()` comparisons in
-    # consumers like test_drop_holder_gate.py vacuously equal ("" == "")
-    # instead of proving anything.
     (repo / "README.md").write_text("init\n", encoding="utf-8")
     git(repo, "add", "README.md")
     git(repo, "commit", "-m", "init")

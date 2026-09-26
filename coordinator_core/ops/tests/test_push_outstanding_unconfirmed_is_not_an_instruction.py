@@ -27,7 +27,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(args, cwd) -> None:
-    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # popup-intentional-last-resort
+    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     subprocess.run(
         ["git", *args],
         cwd=str(cwd),

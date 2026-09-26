@@ -1,25 +1,3 @@
-"""coordinator_core.test_learn_lessons_assemble -- co-located pytest for
-coordinator_core.learn_lessons_assemble (the candidate-restatement
-generator; read-only, no mutating half exists).
-
-Mirrors the test_baton_assemble.py / test_sizing_assemble.py idiom: import
-the module directly, exercise it in-process against tmp_path fixtures (no
-subprocess round-trip to a real CLI). Covers:
-
-  (a) the 8-key envelope shape.
-  (b) signal 1 (phrase-overlap) firing on a genuinely shared passage.
-  (c) signal 2 (heading-duplicate) firing on two near-duplicate headings
-      within the SAME target file.
-  (d) the no-candidates case (unrelated incoming text, no duplicate
-      headings).
-  (e) a nonexistent target path -- returns gracefully, not an exception.
-  (f) the generator-not-adjudicator pin: no directives ever, no
-      judgment_points ever, and no field anywhere in the envelope that
-      reads as a verdict rather than a location pointer.
-  (g) a CLI smoke test.
-
-Run: python -m pytest coordinator_core/test_learn_lessons_assemble.py -q
-"""
 from __future__ import annotations
 
 import json
@@ -32,11 +10,6 @@ def _write(path: Path, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return path
-
-
-# ---------------------------------------------------------------------------
-# (a) envelope shape
-# ---------------------------------------------------------------------------
 
 
 class TestEnvelopeShape:
@@ -54,11 +27,6 @@ class TestEnvelopeShape:
             "next_move",
         }
         assert result.exit_code == lla.EXIT_OK
-
-
-# ---------------------------------------------------------------------------
-# (b) phrase-overlap signal
-# ---------------------------------------------------------------------------
 
 
 class TestPhraseOverlapSignal:
@@ -85,22 +53,6 @@ class TestPhraseOverlapSignal:
         # Shares only a 3-token run ("the paths it"), below _PHRASE_NGRAM_SIZE=5.
         candidates, _ = lla.generate_candidates(str(target), "somewhere the paths it elsewhere")
         assert not any(c["signal"] == "phrase-overlap" for c in candidates)
-
-
-# ---------------------------------------------------------------------------
-# (b2) precision regression -- the 2026-07-27 first-dogfood failure.
-#
-# The real incident (against coordinator/docs/wiki/cross-repo-communication.md
-# in DoE-claude): appending a rule about worked N-node propagation examples
-# produced 13 candidates, every one a `shared_ngrams: 1` hit on the single
-# incidental 4-word run "a cross-repo memo" -- generic corpus vocabulary that
-# recurs throughout the file, nowhere near the propagation/inheritance/
-# override subject matter of the incoming text. This fixture reproduces that
-# shape at a representative scale (one generic phrase repeated across many
-# unrelated sections) and pins that it now yields zero phrase-overlap
-# candidates, while a genuinely long shared run elsewhere in the same file
-# still fires -- the fix must not have traded away recall to buy precision.
-# ---------------------------------------------------------------------------
 
 
 class TestPhraseOverlapPrecisionRegression:
@@ -143,12 +95,7 @@ class TestPhraseOverlapPrecisionRegression:
         hit = next(c for c in candidates if c["signal"] == "phrase-overlap")
         assert "propagation ask needs a worked" in hit["excerpt"]
 
-    # The two tests above pin the exact anecdote
-    # ("a cross-repo memo") that motivated the 4->5 n-gram size change. This pair
     # generalizes the assertion to the PROPERTY the fix is meant to hold, using a
-    # different recurring generic phrase built from actual coordinator jargon (not
-    # the anecdote's vocabulary), and a distinct rare long shared run -- so passing
-    # both is evidence the fix generalizes rather than evidence it fits one file.
 
     def test_does_not_fire_on_generic_coordinator_jargon_alone(self, tmp_path):
         target = _write(
@@ -195,11 +142,6 @@ class TestPhraseOverlapPrecisionRegression:
         assert "eviction watermark must be confirmed" in hit["excerpt"]
 
 
-# ---------------------------------------------------------------------------
-# (c) heading-duplicate signal
-# ---------------------------------------------------------------------------
-
-
 class TestHeadingDuplicateSignal:
     def test_fires_on_near_duplicate_headings(self, tmp_path):
         target = _write(
@@ -227,10 +169,6 @@ class TestHeadingDuplicateSignal:
         assert meta["heading_duplicate_count"] == 0
 
     def test_does_not_fire_on_generic_repeated_headings(self, tmp_path):
-        # Two structurally-generic headings
-        # ("## Overview" repeated in unrelated sections) score Jaccard 1.0 with no
-        # genericity weighting, and would otherwise be indistinguishable from a
-        # genuine near-duplicate section.
         target = _write(
             tmp_path / "wiki.md",
             (
@@ -243,8 +181,6 @@ class TestHeadingDuplicateSignal:
         assert meta["heading_duplicate_count"] == 0
 
     def test_still_fires_when_one_heading_has_topical_content(self, tmp_path):
-        # A generic heading paired against a topically-specific near-duplicate
-        # must still fire -- the filter only suppresses purely-generic PAIRS.
         target = _write(
             tmp_path / "wiki.md",
             (
@@ -258,11 +194,6 @@ class TestHeadingDuplicateSignal:
         assert meta["heading_duplicate_count"] == 2
 
 
-# ---------------------------------------------------------------------------
-# (d) no-candidates case
-# ---------------------------------------------------------------------------
-
-
 class TestNoCandidatesCase:
     def test_unrelated_text_and_no_duplicate_headings_yields_empty(self, tmp_path):
         target = _write(
@@ -272,11 +203,6 @@ class TestNoCandidatesCase:
         result = lla.brief(str(target), "zebra giraffe elephant unrelated fauna words")
         assert result.decision_object["gates"]["candidates"] == []
         assert result.decision_object["next_move"] == "Proceed; no adjacent passages were surfaced."
-
-
-# ---------------------------------------------------------------------------
-# (e) nonexistent target path
-# ---------------------------------------------------------------------------
 
 
 class TestNonexistentTargetPath:
@@ -294,10 +220,6 @@ class TestNonexistentTargetPath:
         assert result.decision_object["gates"]["target_exists"] is False
 
 
-# ---------------------------------------------------------------------------
-# (f) generator-never-adjudicator pin
-# ---------------------------------------------------------------------------
-
 _VERDICT_SHAPED_KEYS = {
     "contradicts",
     "is_duplicate",
@@ -309,12 +231,6 @@ _VERDICT_SHAPED_KEYS = {
     "recommendation",
 }
 
-# A denylist of named verdict-shaped strings only
-# catches the specific vocabulary chosen today — a future edit adding e.g. `confidence:
-# "high"` or `flag: True` to a candidate dict would pass the isdisjoint() checks below
-# vacuously. This allowlist is the structural form: it names every key the generator is
-# permitted to emit and fails on ANY addition, verdict-shaped or not, forcing a deliberate
-# look at the negative-spec (`__init__.py` module docstring) the moment someone adds a key.
 _ALLOWED_CANDIDATE_KEYS = {
     "line",
     "excerpt",
@@ -367,18 +283,7 @@ class TestGeneratorNeverAdjudicates:
         assert set(gates.keys()).isdisjoint(_VERDICT_SHAPED_KEYS)
 
 
-# ---------------------------------------------------------------------------
-# (g) CLI smoke
-# ---------------------------------------------------------------------------
-
-
 class TestCliSmoke:
-    """Calls `lla.main([...])` in-process -- mirrors test_baton_assemble.py's
-    own CLI-smoke idiom (`ba.main([...])`), not a subprocess round-trip.
-    `learn_lessons_assemble` is a package (has `__init__.py`, no
-    `__main__.py`), so `python -m coordinator_core.learn_lessons_assemble`
-    is not a valid invocation shape -- the real bin/ trampoline calls
-    `mod.main(argv)` directly, which is what this exercises."""
 
     def test_cli_prints_a_valid_decision_object(self, tmp_path, capsys):
         target = _write(tmp_path / "wiki.md", "# Heading\n\nSome body text.\n")

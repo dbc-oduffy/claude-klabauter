@@ -56,8 +56,6 @@ from ._polyglot_git_scan import blob_first_line, blob_full_text, tracked_bin_dir
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -67,13 +65,6 @@ _RESOLVER_PATH = "coordinator/lib/resolve-claude-klabauter/_resolve_claude_klaba
 
 
 def _has_pre_convergence_body(resolver_text: str) -> bool:
-    """True iff *resolver_text* still carries the pre-convergence POSIX
-    body (bare ``os.execv(target_path, ...)``, no interpreter-targeted
-    ``os.execv(sys.executable, ...)`` present). Requires the interpreter-
-    targeted call to be ABSENT, not just the substring present, because the
-    converged file's own docstring quotes ``os.execv(target_path, ...)`` in
-    prose (a benchmark-timing aside) — a bare substring match would false-
-    positive on that quote forever."""
     return "os.execv(target_path" in resolver_text and "os.execv(sys.executable" not in resolver_text
 
 
@@ -82,24 +73,15 @@ def _shebangless_entrypoints(first_lines_by_path: dict) -> list:
 
 
 def _candidate_shebang_paths(bin_children: list, py_stems: list) -> list:
-    """Combine extensionless direct children of `coordinator/bin/` with
-    `.py`-suffixed entrypoint stems (as already filtered by
-    `coordinator_core/test_bin_launcher_parity.py`'s `_py_entrypoints()`)
-    into the full candidate list for the shebang check. Extracted so the
-    candidate-selection step itself — not just the predicates it feeds —
-    is fixture-testable (see `test_candidate_selection_includes_py_entrypoints`)."""
     extensionless = [f for f in bin_children if "." not in os.path.basename(f)]
     py_paths = [f"coordinator/bin/{stem}.py" for stem in py_stems]
     return extensionless + py_paths
 
 
 def test_ordering_guard_holds() -> None:
-    """FAILS if any tracked coordinator/bin/ entrypoint (extensionless OR
-    `.py`-suffixed, per `_candidate_shebang_paths`) lacks a shebang while
-    _resolve_claude_klabauter.py still has the pre-convergence body."""
     resolver_text = blob_full_text(_RESOLVER_PATH)
     if not _has_pre_convergence_body(resolver_text):
-        return  # converged — guarded condition cannot fire (see module docstring)
+        return
 
     from coordinator_core.test_bin_launcher_parity import _py_entrypoints
 
@@ -115,8 +97,6 @@ def test_ordering_guard_holds() -> None:
 
 
 def test_logic_discriminates_on_fixture() -> None:
-    """Sanity check: proves the check above is not vacuously true. Uses
-    synthetic fixtures only — never edits the real resolver or bin/ tree."""
     pre_convergence_fixture = "os.execv(target_path, [target_path, *argv])"
     converged_fixture = "os.execv(sys.executable, [sys.executable, target_path, *argv])"
     assert _has_pre_convergence_body(pre_convergence_fixture) is True
@@ -137,8 +117,6 @@ def test_candidate_selection_includes_py_entrypoints() -> None:
     candidates = _candidate_shebang_paths(bin_children, py_stems)
     assert "coordinator/bin/doctor.py" in candidates
     assert "coordinator/bin/scoped-git-commit" in candidates
-    # A py_stem NOT present in bin_children still surfaces as a candidate --
-    # proves the .py leg is additive, not merely re-filtering bin_children.
     assert "coordinator/bin/break_glass.py" in _candidate_shebang_paths(
         bin_children, ["doctor", "break_glass"]
     )

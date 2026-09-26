@@ -58,8 +58,6 @@ def _drop_settings_home_override(monkeypatch):
 
 
 def _run(result):
-    """Run async coroutine synchronously, or pass a plain result through
-    unchanged (some handlers this file exercises are now plain `def`)."""
     if asyncio.iscoroutine(result):
         return asyncio.run(result)
     return result
@@ -70,25 +68,6 @@ def _make_claude_home(
     receiver_repos: dict[str, str],
     mirror_tables: dict[str, dict] | None = None,
 ) -> Path:
-    """Minimal machine-local registry fixture (mirrors test_memo_send.py's factory).
-
-    receiver_repos: {registry_key_suffix: repo_path_str} e.g. {"project_rag": "/..."}
-    → writes "repos.project_rag" = <path> in registry.local.toml.
-
-    mirror_tables: {mirror_key: {"owner": str, "path": str (optional),
-    "aliases": list[str] (optional)}} — writes REAL bracket-table TOML syntax
-    (`[publish.mirrors.<key>]` + `owner = "..."` etc.) in registry.toml,
-    exactly as a hand-authored `registry.toml` and `test_memo_draft.py`'s own
-    `_make_claude_home` fixture do (`aliases`, when present, as a genuine TOML
-    list — not a newline-joined string). Review Finding 2
-    (state/review-trail/findings/2026-07-21-codereview-slicememo-clean-split-op-coverage-coordinator-core-ops-fleet-memo-draft-py.md):
-    the PRIOR fixture wrote flat quoted-dotted-key strings
-    (`"publish.mirrors.X.owner" = "..."`), a shape only the old, incorrect
-    `_read_registry_raw()` flat-string merge could parse — it does not match
-    what `tomllib` produces for real `[publish.mirrors.X]` tables (a nested
-    dict), so the old fixture never exercised the real-world shape and papered
-    over the bug this fixture now reproduces.
-    """
     claude_home = tmp_path / "claude-home"
     machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
     machine_local.mkdir(parents=True)
@@ -148,19 +127,12 @@ def _write_doe_manifest(
 
 
 def _receivers(candidates: list) -> list:
-    """Filter an enumeration-mode candidates list down to kind:'receiver' entries."""
     return [c for c in candidates if c.get("kind") == "receiver"]
 
 
 def _snapshot(tmp_path: Path) -> set:
-    """Return the set of all paths (files + dirs) under tmp_path, for a
-    before/after no-write comparison."""
     return {str(p) for p in tmp_path.rglob("*")}
 
-
-# ===========================================================================
-# 1. setup-error envelope on bad params
-# ===========================================================================
 
 class TestSetupErrorEnvelope:
     def test_dry_run_missing(self):
@@ -174,7 +146,6 @@ class TestSetupErrorEnvelope:
         assert result["exit_code"] == 1
 
     def test_dry_run_false_rejected(self):
-        """memo.list has no act mode — dry_run:false is a setup error, not a no-op."""
         result = _validate_list_params({"dry_run": False})
         assert isinstance(result, dict)
         assert result["exit_code"] == 1
@@ -190,7 +161,6 @@ class TestSetupErrorEnvelope:
         assert result["exit_code"] == 1
 
     def test_from_id_absent_is_fine(self):
-        """from_id is entirely optional — its absence validates cleanly."""
         result = _validate_list_params({"dry_run": True})
         assert not isinstance(result, dict)
         dry_run, to, topic, from_id = result
@@ -203,10 +173,6 @@ class TestSetupErrorEnvelope:
         assert result["exit_code"] == 1
         assert result["dry_run"] is False
 
-
-# ===========================================================================
-# 2. Enumeration mode (no `to`)
-# ===========================================================================
 
 class TestEnumerationMode:
     def test_enumerates_all_registered_receivers(self, tmp_path, monkeypatch):
@@ -235,7 +201,6 @@ class TestEnumerationMode:
         for c in receivers:
             assert c["resolved"] is True
             assert c["target_inbox"].endswith(os.path.join("cross-repo", "inbox"))
-            # is_central must be machine-readable, not left for the client to infer.
             assert c["is_central"] is False
             assert c["aliases"] == []
 
@@ -249,15 +214,11 @@ class TestEnumerationMode:
 
         assert result["exit_code"] == 0
         assert _receivers(result["candidates"]) == []
-        # No receivers/mirrors/aliases configured is NOT the same as a
-        # registry-read failure — the positive registry_status entry must
-        # still be present (soft-status signal, not a fallback trigger).
         statuses = [c for c in result["candidates"] if c["kind"] == "registry_status"]
         assert len(statuses) == 1
         assert statuses[0]["ok"] is True
 
     def test_no_registry_configured_yields_no_receivers(self, tmp_path, monkeypatch):
-        """Neither registry.toml nor registry.local.toml present → {} (not an error)."""
         missing_home = tmp_path / "nonexistent-claude-home"
         missing_home.mkdir()
         monkeypatch.setenv("CLAUDE_HOME", str(missing_home))
@@ -270,10 +231,6 @@ class TestEnumerationMode:
         assert len(statuses) == 1
         assert statuses[0]["ok"] is True
 
-
-# ===========================================================================
-# 2b. Enumeration mode — publish_mirrors section (kind: "publish_mirror")
-# ===========================================================================
 
 class TestEnumerationPublishMirrors:
     def test_publish_mirrors_land_in_own_section_not_conflated_with_receivers(
@@ -328,17 +285,10 @@ class TestEnumerationPublishMirrors:
         assert mirrors == []
 
 
-# ===========================================================================
-# 2c. Enumeration mode — canonical_home_alias section + is_central flag
-# ===========================================================================
-
 class TestEnumerationAliasesAndCentral:
     def test_canonical_home_alias_section_present_and_empty_when_field_absent(
         self, tmp_path, monkeypatch
     ):
-        """identity.redirectAliases is not yet promoted on any machine today
-        (per _memo_resolver.read_redirect_aliases()'s own docstring) — absence
-        must yield an empty section, not an error."""
         claude_home = _make_claude_home(tmp_path, {})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
@@ -351,36 +301,16 @@ class TestEnumerationAliasesAndCentral:
     def test_is_central_from_settings_home_sentinel_with_no_legacy_pointer(
         self, tmp_path, monkeypatch
     ):
-        """The DoE receiver is flagged is_central when the ONLY doe-root pointer
-        on the machine is the durable `<settings-home>/machine-local/.doe-root`.
-
-        This is the exact shape of every machine installed since
-        `ops.gen_doe_root_pointer` stopped writing `~/.claude/.doe-root` (that
-        path is inside the git-tracked `~/.claude` meta-repo, so per-machine
-        clone paths fought over one synced file). The three manifest readers in
-        `_memo_resolver` still read only that retired legacy location, so
-        `read_central_receiver_ids()` came back empty and `--list-receivers`
-        rendered "repos.doe_claude not registered on this machine" on a machine
-        where the receiver was registered and delivery to it worked.
-        """
         doe_repo = tmp_path / "doe-claude-repo"
         doe_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"doe_claude": str(doe_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
-        # `doe_root=doe_repo` is required, per _write_doe_manifest's own contract:
-        # this fixture registers `repos.doe_claude`, and the registry rung outranks
-        # the pointer file. Omitting it wrote the manifest under `tmp_path/doe-root`
-        # while the winning rung resolved to `doe_repo` — a mismatch that stayed
-        # latent only while the reader ignored the ladder entirely and consulted
-        # the legacy pointer alone.
         _write_doe_manifest(
             claude_home,
             tmp_path,
             {"identity": {"centralReceiverIds": ["central-em", "doe-claude-em"]}},
             doe_root=doe_repo,
         )
-        # The legacy rungs must be genuinely absent — both the retired location
-        # the readers used to consult and the ladder's own legacy rung.
         assert not (claude_home / ".doe-root").exists()
         assert not (claude_home / ".claude" / ".doe-root").exists()
 
@@ -406,15 +336,8 @@ class TestEnumerationAliasesAndCentral:
         assert isinstance(statuses[0]["note"], str) and statuses[0]["note"]
 
 
-# ===========================================================================
-# 2d. Enumeration mode — redirect-alias precedence over publish_mirror
-#     (defect fix: same id emitted twice with contradictory guidance)
-# ===========================================================================
-
 class TestRedirectPrecedenceOverPublishMirror:
     def test_fully_shadowed_mirror_is_omitted_entirely(self, tmp_path, monkeypatch):
-        """Every alias of a mirror is also a redirect alias -> mirror entry
-        absent, redirect entries present, no id duplicated across kinds."""
         claude_home = _make_claude_home(
             tmp_path,
             {},
@@ -456,9 +379,6 @@ class TestRedirectPrecedenceOverPublishMirror:
             ".claude-em", "claude-home", "coordinator-claude", "coordinator-claude-em",
         }
 
-        # Regression assertion for the invariant itself: no id appears in
-        # both a publish_mirror addressable surface and a
-        # canonical_home_alias entry.
         mirror_surface: set = set()
         for m in mirrors:
             mirror_surface.add(m["id"])
@@ -485,8 +405,6 @@ class TestRedirectPrecedenceOverPublishMirror:
             },
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
-        # Only ONE of deep_research_claude's two mechanically-derived aliases
-        # (deep-research-claude, deep-research-claude-em) collides.
         _write_doe_manifest(
             claude_home,
             tmp_path,
@@ -504,7 +422,6 @@ class TestRedirectPrecedenceOverPublishMirror:
         assert mirror["path"] == "/some/mirror/path"
         assert mirror["aliases"] == ["deep-research-claude"]
         assert "deep-research-claude-em" not in mirror["aliases"]
-        # em_id itself was the colliding id -> must not be advertised.
         assert mirror["em_id"] is None
 
         aliases = [c for c in result["candidates"] if c["kind"] == "canonical_home_alias"]
@@ -517,8 +434,6 @@ class TestRedirectPrecedenceOverPublishMirror:
     def test_degraded_no_redirect_field_matches_pre_fix_behavior(
         self, tmp_path, monkeypatch
     ):
-        """`redirectAliases` absent from the manifest -> mirror enumeration
-        byte-identical to pre-fix behavior (subtraction of set() is a no-op)."""
         claude_home = _make_claude_home(
             tmp_path,
             {},
@@ -530,7 +445,6 @@ class TestRedirectPrecedenceOverPublishMirror:
             },
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
-        # Manifest present but without identity.redirectAliases at all.
         _write_doe_manifest(
             claude_home, tmp_path, {"identity": {"repoAliases": []}}
         )
@@ -552,20 +466,10 @@ class TestRedirectPrecedenceOverPublishMirror:
         assert aliases == []
 
 
-# ===========================================================================
-# 2e. Enumeration mode — repos.* / publish.mirrors.* PATH collision
-#     (defect fix: an id could appear both as a valid `--to` receiver AND
-#     as a publish_mirror, with memo.send refusing the receiver form —
-#     memo_list must agree with memo_send's send-path authority)
-# ===========================================================================
-
 class TestReceiverMirrorPathCollision:
     def test_repo_shadowed_by_mirror_path_excluded_from_receivers(
         self, tmp_path, monkeypatch
     ):
-        """A repos.* entry whose path matches a publish.mirrors.*.path is
-        excluded from the receiver block and surfaces only as a
-        publish_mirror — mirrors memo.send's own refusal of that `to`."""
         shared_repo = tmp_path / "claude-klabauter"
         shared_repo.mkdir()
         claude_home = _make_claude_home(
@@ -597,16 +501,12 @@ class TestReceiverMirrorPathCollision:
         assert mirrors[0]["mirror_key"] == "claude_klabauter"
         assert mirrors[0]["path"] == str(shared_repo)
 
-        # Regression assertion for the invariant: no id's path is ever
-        # addressable as both a receiver and a publish_mirror.
         receiver_paths = {c["repo_path"] for c in receivers}
         assert str(shared_repo) not in receiver_paths
 
     def test_normal_sibling_with_no_mirror_collision_unaffected(
         self, tmp_path, monkeypatch
     ):
-        """A repos.* entry with no path collision against any mirror is
-        entirely unaffected by the new exclusion check."""
         rag_repo = tmp_path / "project-rag"
         mirror_repo = tmp_path / "unrelated-mirror"
         rag_repo.mkdir()
@@ -636,9 +536,6 @@ class TestReceiverMirrorPathCollision:
     def test_redirect_alias_subtraction_still_behaves_alongside_path_collision(
         self, tmp_path, monkeypatch
     ):
-        """The pre-existing per-id redirect-alias subtraction (drop-if-empty)
-        is unaffected by the new path-collision exclusion — both mechanisms
-        coexist without interfering with each other."""
         shared_repo = tmp_path / "claude-klabauter"
         shared_repo.mkdir()
         claude_home = _make_claude_home(
@@ -667,12 +564,9 @@ class TestReceiverMirrorPathCollision:
         assert result["exit_code"] == 0
         candidates = result["candidates"]
 
-        # Path-collision exclusion still applies to claude_klabauter.
         receivers = _receivers(candidates)
         assert receivers == []
 
-        # Redirect-alias subtraction still applies to deep_research_claude,
-        # unrelated to the path-collision mechanism.
         mirrors = [c for c in candidates if c["kind"] == "publish_mirror"]
         mirror_keys = {m["mirror_key"] for m in mirrors}
         assert "claude_klabauter" in mirror_keys
@@ -684,10 +578,6 @@ class TestReceiverMirrorPathCollision:
         aliases = [c for c in candidates if c["kind"] == "canonical_home_alias"]
         assert {a["id"] for a in aliases} == {"deep-research-claude-em"}
 
-
-# ===========================================================================
-# 3. Resolution mode (`to` supplied) — the --dry-run/--check verb
-# ===========================================================================
 
 class TestResolutionMode:
     def test_resolved_to_reports_destination_inbox(self, tmp_path, monkeypatch):
@@ -712,14 +602,13 @@ class TestResolutionMode:
 
         result = _run(_memo_list({"dry_run": True, "to": "unregistered-em"}))
 
-        assert result["exit_code"] == 0  # still a clean preview, not a setup error
+        assert result["exit_code"] == 0
         candidate = result["candidates"][0]
         assert candidate["resolved"] is False
         assert candidate["target_inbox"] is None
         assert "not registered" in candidate["note"]
 
     def test_unresolved_to_suggests_nearest_match(self, tmp_path, monkeypatch):
-        """C4 parity: claude-klabauter-em -> suggests claude-klabauter-em, same as memo.send."""
         claude_klabauter_repo = tmp_path / "claude-klabauter"
         claude_klabauter_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"claude_klabauter": str(claude_klabauter_repo)})
@@ -732,17 +621,10 @@ class TestResolutionMode:
         assert "claude-klabauter-em" in candidate["note"]
 
 
-# ===========================================================================
-# 3b. resolved_filename — DR-026 filename-authority exposure (topic + to)
-# ===========================================================================
-
 class TestResolvedFilename:
     def test_resolved_to_plus_topic_yields_resolved_filename_matching_send(
         self, tmp_path, monkeypatch
     ):
-        """to + topic, to resolves -> resolved_filename equals memo_send's own
-        _memo_filename output for the same sender/topic (locks the two
-        together — any drift between the two ops fails this test)."""
         rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
@@ -767,10 +649,6 @@ class TestResolvedFilename:
     def test_non_claude_klabauter_caller_preview_matches_send_shared_derivation(
         self, tmp_path, monkeypatch
     ):
-        """The defect this closes: a non-claude-klabauter caller's from_id must produce
-        the SAME filename memo.send would actually write for that caller —
-        asserted against the shared `resolve_sender_id` + `_memo_filename`
-        derivation (not a hardcoded string that could drift from either)."""
         rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
@@ -792,16 +670,10 @@ class TestResolvedFilename:
         assert candidate["resolved"] is True
 
         today = datetime.date.today().isoformat()
-        # Shared-authority assertion: what memo.send would actually write for
-        # this exact from_id/topic pair, via the identical two functions
-        # memo_list._resolve_candidate calls internally.
         expected = _memo_filename(
             today, resolve_sender_id("claude-central-em"), "smoke"
         )
         assert candidate["resolved_filename"] == expected
-        # Sanity: this must NOT be the engine-actor-namespaced filename —
-        # that was exactly the defect (preview always showed claude-klabauter-engine
-        # regardless of the caller's actual from_id).
         assert "claude-klabauter-engine" not in candidate["resolved_filename"]
         assert "claude-central-em" in candidate["resolved_filename"]
 
@@ -884,13 +756,6 @@ class TestResolvedFilename:
     def test_unknown_caller_identity_fails_loud_not_engine_fallback(
         self, tmp_path, monkeypatch
     ):
-        """Degraded case: a from_id that sanitizes to an empty sender slug
-        (all-punctuation/non-ASCII) is a caller identity memo.list cannot
-        resolve into a real filename — mirrors memo.send's own posture
-        (_memo_filename raises ValueError there too) via a fail-loud
-        exit_code:1 setup-error envelope, NEVER a silent fallback to the
-        engine actor id (that fallback is exactly the wrong-but-confident
-        shape this whole fix exists to remove)."""
         rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
@@ -910,8 +775,6 @@ class TestResolvedFilename:
         assert "claude-klabauter-engine" not in str(result)
 
     def test_to_only_resolution_has_no_resolved_filename(self, tmp_path, monkeypatch):
-        """to supplied without topic -> unchanged from before this addition:
-        no resolved_filename key at all."""
         rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
@@ -924,8 +787,6 @@ class TestResolvedFilename:
         assert "resolved_filename" not in candidate
 
     def test_topic_only_no_to_has_no_effect(self, tmp_path, monkeypatch):
-        """topic without to -> enumeration mode unaffected (to gates resolution
-        mode entirely; topic alone does nothing)."""
         rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
@@ -940,8 +801,6 @@ class TestResolvedFilename:
     def test_unresolved_to_plus_topic_has_no_resolved_filename(
         self, tmp_path, monkeypatch
     ):
-        """to unresolved + topic supplied -> no resolved_filename (resolution
-        gate requires BOTH to resolve AND topic to be present)."""
         claude_home = _make_claude_home(tmp_path, {})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
@@ -979,8 +838,6 @@ class TestResolvedFilename:
         assert "resolved_filename" not in str(result)
 
     def test_empty_string_topic_fails_loud_not_coerced_to_absent(self, tmp_path, monkeypatch):
-        """An explicitly-passed empty/whitespace-only topic fails loud via the
-        same regex, rather than being silently treated as 'no topic'."""
         rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
@@ -993,8 +850,6 @@ class TestResolvedFilename:
         assert result["exit_code"] == 1
 
     def test_absent_topic_key_still_behaves_as_before(self, tmp_path, monkeypatch):
-        """A genuinely absent topic key (not passed at all) is fine — resolution
-        proceeds with no resolved_filename, no validation error."""
         rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
@@ -1007,10 +862,6 @@ class TestResolvedFilename:
         assert candidate["resolved"] is True
         assert "resolved_filename" not in candidate
 
-
-# ===========================================================================
-# 4. No-write proof (AC2: provably side-effect-free)
-# ===========================================================================
 
 class TestNoWriteProof:
     def test_enumeration_leaves_filesystem_unchanged(self, tmp_path, monkeypatch):
@@ -1057,23 +908,7 @@ class TestNoWriteProof:
         )
 
 
-# ===========================================================================
-# 5. Store-less-ness architecture test (DR-210 Open-Q §2; mirrors memo_send.py
-#    C6/AC8 TestNoMemoIndex, applied here for C2)
-# ===========================================================================
-
 class TestNoMemoIndex:
-    """memo.list must remain a pure read, no retained fleet-wide index.
-
-    Two layers, mirroring test_memo_send.py's TestNoMemoIndex exactly:
-      1. Structural: no module-level mutable collection (dict/list/set) in
-         coordinator_core.ops.fleet.memo_list.
-      2. Runtime: repeated handler calls leave module globals unchanged.
-
-    Spec backlink:
-        docs/plans/2026-07-21-memo-tool-rebuild-full-ownership.md § C2
-        ("a `test_no_memo_index`-shaped store-less-ness architecture test").
-    """
 
     def test_no_memo_index(self):
         import types
@@ -1127,20 +962,8 @@ class TestNoMemoIndex:
         )
 
 
-# ===========================================================================
-# 7. Cross-agreement — memo_list's advertised inbox vs _memo_resolver's
-# delivery target (review coordinator:code-reviewer, slice B, 2026-09-03,
-# Finding 2). Both call `receiver_inbox_root` from `memo_corpus.py`, which
-# makes disagreement structurally impossible today — this pins that
-# agreement so a future edit to either call site cannot silently reintroduce
-# the drift with nothing going red.
-# ===========================================================================
-
 class TestListAndResolverAgreeOnInboxTarget:
     def _both_targets(self, tmp_path, monkeypatch, repo_path, receiver_em_id):
-        """Return (enumeration-mode target_inbox, resolve_receiver_inbox's
-        inbox_dir) for the SAME receiver, from the two independent call
-        surfaces the finding calls out."""
         from coordinator_core.ops.fleet._memo_resolver import resolve_receiver_inbox
 
         enum_result = _run(_memo_list({"dry_run": True}))
@@ -1155,8 +978,6 @@ class TestListAndResolverAgreeOnInboxTarget:
     def test_unmigrated_receiver_list_and_resolver_agree(self, tmp_path, monkeypatch):
         rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
-        # No state/cross-repo/ and no legacy cross-repo/ on disk — the
-        # unmigrated case; receiver_inbox_root falls back to the legacy root.
         claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
@@ -1165,8 +986,6 @@ class TestListAndResolverAgreeOnInboxTarget:
         )
 
         assert list_target == resolver_target
-        # Positive assertion anchored on the resolved (legacy) root itself —
-        # never a vacuous "cross-repo not in x" negative check.
         assert list_target == str(rag_repo / "cross-repo" / "inbox")
 
     def test_migrated_receiver_list_and_resolver_agree(self, tmp_path, monkeypatch):

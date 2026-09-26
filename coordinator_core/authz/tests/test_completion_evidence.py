@@ -27,8 +27,6 @@ def test_every_declared_key_is_classified_mutating() -> None:
 
 
 def test_no_entry_declares_ack() -> None:
-    # `ack` is not even a member of EvidenceClass -- the default is absence,
-    # never a value. This asserts every declared value is a real non-ack class.
     for op, value in OP_COMPLETION_EVIDENCE.items():
         assert value in (EvidenceClass.FIRE_AND_FORGET,), op
 

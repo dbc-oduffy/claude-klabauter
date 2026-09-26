@@ -1,15 +1,3 @@
-"""Behavioral tests for
-coordinator_core.write_guards._sentinel_write_guard.reconstruct_after --
-the consolidated home for an idiom six DoE-claude guards each hand-copied a
-local ``_reconstruct_after`` for (DR-047: claude-klabauter owns guard logic, DoE owns
-plumbing).
-
-Spec backlink: dispatch brief "Add shared reconstruct_after to
-_sentinel_write_guard.py" (2026-08-13), consolidating
-guard-oss-payload-locality.py, guard-prompt-surface-citations.py,
-guard-doctrine-changelog-prose.py, guard-test-tree-git-fixture-spawn.py,
-nudge-plan-test-surface-tier.py, guard-python-syntax-on-write.py.
-"""
 
 from __future__ import annotations
 

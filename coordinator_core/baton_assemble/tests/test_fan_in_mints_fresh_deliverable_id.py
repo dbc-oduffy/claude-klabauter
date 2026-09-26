@@ -1,21 +1,3 @@
-"""coordinator_core.baton_assemble.tests.test_fan_in_mints_fresh_deliverable_id
-
-DR-388 (2026-08-30), authorized by
-`state/sizings/2026-08-30-multi-baton-pickup-mints-a-successor-bat.yaml`
-`pm_resolution.deliverable_id_construction` -- PM verbatim: "This becomes a
-new deliverableID by construction."
-
-Scoped narrowly to N>1 (a genuine fan-in, `additional_predecessors` present):
-the successor mints a FRESH `deliverable_id`, never one carried or reused
-from the primary predecessor, a claimed plan, or any fan-in leg -- a
-deliberate, narrow departure from DR-207 DD#1's carry-verbatim rule. The
-single-predecessor path is unchanged (covered by
-`test_deliverable_ids_union_carry.py::test_single_predecessor_leaves_both_
-keys_none` and the wider `test_j_divergent_deliverable_id.py` suite).
-
-Run: python3 -m pytest
-coordinator_core/baton_assemble/tests/test_fan_in_mints_fresh_deliverable_id.py -q
-"""
 
 from __future__ import annotations
 
@@ -32,8 +14,6 @@ from coordinator_core.test_baton_assemble import (
     _write_artifact,
 )
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -42,8 +22,6 @@ pytestmark = [
 
 @pytest.fixture(autouse=True)
 def _stub_operator_config(monkeypatch):
-    """Restated per-module (autouse fixtures do not cross module boundaries)
-    -- mirrors the sibling `test_deliverable_ids_union_carry.py` fixture."""
     monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
     monkeypatch.setattr(ba_apply, "_resolve_claude_klabauter_bin", lambda: _REPO_CLAUDE_KLABAUTER_BIN)
 
@@ -87,8 +65,6 @@ def test_fan_in_successor_mints_fresh_id_never_carrying_any_rung(tmp_path):
         "never carried verbatim from any rung"
     )
     assert lineage["discovery"] == "fan-in-mint"
-    # The plural union still names every rung's OWN real id -- the fresh
-    # mint is the successor's identity, not a fourth entry in this list.
     assert lineage["deliverable_ids"] == ["DEL-PRIMARY", "DEL-EXTRA-A", "DEL-EXTRA-B"]
 
     directives = ba._build_directives("handoff", lineage, root=tmp_path)
@@ -98,8 +74,6 @@ def test_fan_in_successor_mints_fresh_id_never_carrying_any_rung(tmp_path):
 
 
 def test_single_predecessor_still_carries_verbatim_dr207(tmp_path):
-    """Negative control -- DR-388 is scoped to N>1 only; the ordinary
-    single-predecessor cascade is byte-identical to before this change."""
     primary = _write_predecessor(
         tmp_path,
         "state/handoffs/primary.md",
@@ -115,11 +89,6 @@ def test_single_predecessor_still_carries_verbatim_dr207(tmp_path):
 
 
 def test_fan_in_mint_is_reproducibly_unique_across_two_resolutions(tmp_path):
-    """The fresh mint is genuinely fresh, not a deterministic function of
-    the inputs -- two independent resolutions over the identical fan-in
-    input must not collide (mint_deliverable_id.mint's own random-suffix
-    contract, exercised through resolve_lineage rather than re-asserted
-    against the minting helper directly)."""
     primary = _write_predecessor(
         tmp_path,
         "state/handoffs/primary.md",
@@ -141,14 +110,6 @@ def test_fan_in_mint_is_reproducibly_unique_across_two_resolutions(tmp_path):
     assert first["deliverable_id"] != second["deliverable_id"]
 
 
-# ---------------------------------------------------------------------------
-# The mint has to satisfy the schema its own output is written under.
-# ---------------------------------------------------------------------------
-
-#: `handoff.schema.json`'s `deliverable_id` pattern, mirrored as a literal.
-#: Imported by value rather than read off the schema file: the point of these
-#: tests is that the MINT and the SCHEMA agree, and deriving the assertion
-#: from the schema the mint is checked against would pass while both drifted.
 _DELIVERABLE_ID_RE = re.compile(
     r"^dlv-(?!placeholder-replace-with)[0-9a-zA-Z][0-9a-zA-Z.-]*$"
 )
@@ -167,27 +128,13 @@ _DELIVERABLE_ID_RE = re.compile(
     ],
 )
 def test_sanitized_slug_always_mints_a_schema_valid_id(raw, why):
-    """The live failure: `_fan_in_mint_slug` fed `mint()` an output-path stem
-    whose underscores the schema forbids, so `coordinator-doc-new` refused to
-    write its own generated frontmatter and every fan-in unification raised on
-    d1 — a session holding two batons could not be picked up at all."""
     minted = f"dlv-{ba._sanitize_mint_slug(raw)}-abc123"
     assert _DELIVERABLE_ID_RE.match(minted), f"{why}: {minted!r}"
 
 
 def test_sanitizer_does_not_truncate():
-    """Negative-spec on the helper: a deliverable_id is opaque and never a
-    filename, so the 40-char truncation `_slug_from_title` applies would only
-    make the id harder to trace back to the successor it names."""
     raw = "a" * 120
     assert ba._sanitize_mint_slug(raw) == raw
-
-
-# ---------------------------------------------------------------------------
-# Foreign-repo lineage guard (bug-blitz P1,
-# foreign-repo-lineage-inheritance): an `artifact_path` resolving OUTSIDE the
-# session's own `root` is carried as a citation, never inherited lineage.
-# ---------------------------------------------------------------------------
 
 
 def _mark_repo(root: Path) -> None:
@@ -223,8 +170,6 @@ def test_foreign_repo_artifact_yields_citation_fresh_id_and_no_predecessor(tmp_p
 
 
 def test_local_artifact_still_inherits_lineage_unchanged(tmp_path):
-    """Regression half: same-repo pickup is byte-identical to pre-fix
-    behaviour -- the guard must never fire for a genuinely local artifact."""
     session_root = tmp_path / "repo"
     _mark_repo(session_root)
 
@@ -248,9 +193,6 @@ def test_local_artifact_still_inherits_lineage_unchanged(tmp_path):
 
 
 def test_same_repo_different_spelling_is_not_misread_as_foreign(tmp_path):
-    """A same-repo artifact reached via a `..`-laden relative spelling must
-    normalize to the SAME worktree root as `root` itself -- not be misread
-    as foreign merely because the two path strings differ."""
     session_root = tmp_path / "repo"
     _mark_repo(session_root)
 

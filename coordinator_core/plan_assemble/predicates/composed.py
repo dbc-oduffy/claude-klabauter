@@ -136,17 +136,10 @@ from coordinator_core.contract.decision_object.judgment import (
 )
 from coordinator_core.plan_assemble.predicates import undetermined
 
-#: `:59`'s stable id -- follows the sibling kebab-case `-classification`
-#: convention `workstream_complete/judgments.py` uses throughout
-#: (`lesson-scope-classification`, `enablement-vs-opportunistic-deferral`).
 _ARCHITECTURAL_TIER_JUDGMENT_POINT_ID = "architectural-tier-criterion-classification"
 
-#: `:139`'s review-triggering set — grounded in
-#: `coordinator/skills/plan/SKILL.md:211-214`'s terminal table: only the
-#: `plan` route's full terminal invokes `coordinator:review`.
 _REVIEW_TRIGGERING_ROUTES: frozenset[str] = frozenset({"plan"})
 
-#: `:195-198`'s static route -> terminal lookup, same table.
 _TERMINAL_TABLE: dict[str, str] = {
     "plan": "full_terminal",
     "spec-dispatch": "light_terminal",
@@ -154,19 +147,10 @@ _TERMINAL_TABLE: dict[str, str] = {
 
 
 def _is_undetermined(value: Any) -> bool:
-    """Is *value* the `undetermined` sentinel shape?"""
     return isinstance(value, dict) and value.get("undetermined") is True
 
 
 def _field(value: Any, key: str) -> Any:
-    """Pull *key* out of a Layer 0/1 output *value*.
-
-    An `undetermined` *value* propagates unchanged (never indexed into —
-    `undetermined(...)` carries no *key*). A non-`undetermined` dict is
-    indexed with `.get(key)`. Anything else (a bare scalar row) is
-    returned as-is; callers only pass a *key* when *value* is known to be
-    dict-shaped in its non-`undetermined` case.
-    """
     if _is_undetermined(value):
         return value
     if isinstance(value, dict):
@@ -175,10 +159,6 @@ def _field(value: Any, key: str) -> Any:
 
 
 def _ternary_and(*values: Any) -> Any:
-    """Three-valued AND. A known-`False` arm wins outright regardless of
-    any `undetermined` sibling; absent that, any `undetermined` arm makes
-    the aggregate `undetermined`; only when every arm is a known-truthy
-    value does the aggregate resolve `True`."""
     saw_undetermined = False
     for value in values:
         if _is_undetermined(value):
@@ -192,10 +172,6 @@ def _ternary_and(*values: Any) -> Any:
 
 
 def _ternary_or(*values: Any) -> Any:
-    """Three-valued OR. A known-`True` arm wins outright regardless of any
-    `undetermined` sibling; absent that, any `undetermined` arm makes the
-    aggregate `undetermined`; only when every arm is a known-falsy value
-    does the aggregate resolve `False`."""
     saw_undetermined = False
     for value in values:
         if _is_undetermined(value):
@@ -212,12 +188,6 @@ def trivial_conjunction(
     scope_file_count_row: dict[str, Any],
     no_cross_repo_contract_row: dict[str, Any],
 ) -> Any:
-    """`:44` -> `gates.triage.trivial_conjunction` (bool).
-
-    AND of `:105(3a)`'s `scope_file_count_le_2` and `:105(3d)`'s
-    `no_cross_repo_contract`, both as returned by their own
-    `shared_booleans` producer (either the populated dict, or
-    `undetermined(...)`)."""
     a = _field(scope_file_count_row, "scope_file_count_le_2")
     b = _field(no_cross_repo_contract_row, "no_cross_repo_contract")
     return _ternary_and(a, b)
@@ -230,13 +200,6 @@ def nontrivial_disjunction(
     mutates_shared_symbol_row: dict[str, Any],
     scaffold_checklist_row: dict[str, Any],
 ) -> Any:
-    """`:57` -> `gates.triage.nontrivial_disjunction` (bool).
-
-    OR across `:105(3a)`, `:105(3d)`, `:118`'s `candidate`, `:159`'s
-    `mutates_shared_symbol`, and `:166` (a non-`undetermined`
-    `scaffold_checklist_row` IS the "plan scaffolds a skill/agent" signal
-    — that producer only returns a populated dict when its own
-    `## Scaffold Checklist` section anchor was found)."""
     a = _field(scope_file_count_row, "scope_file_count_le_2")
     b = _field(no_cross_repo_contract_row, "no_cross_repo_contract")
     c = _field(reverses_teardown_row, "candidate")
@@ -249,33 +212,6 @@ def architectural_tier_judgment_point(
     concurrency_shared_state_row: dict[str, Any],
     fix_locus_row: dict[str, Any],
 ) -> dict[str, Any]:
-    """`:59` -> one real, answerable `judgment_points[]` entry, built
-    through `build_judgment_point` (C9, 2026-08-16 -- see this module's
-    docstring for why the previous hand-rolled dict was a defect).
-
-    `candidate_criteria` carries exactly three `{criterion, computed}`
-    pairs — `multi-stakeholder` is the genuine `U`-classified arm and has
-    NO entry at all, per AC4. It is preserved verbatim as an extra
-    top-level key on the returned point (not folded into `evidence`,
-    which stays a human-readable string per the contract's other
-    builders) so no informational content is lost translating the raw
-    payload into the contract shape.
-
-    `recommendation` is `None`: the engine presents three candidate
-    criteria as evidence, it does not compute which one fires -- each
-    `computed` arm is a reused Layer 0/1 boolean/`undetermined` value
-    surfaced as-is (this module's own negative-spec: "presenting
-    candidate evidence, not deciding what it means"), so naming a verdict
-    here would be exactly the invented disposition AC4 forbids.
-    `dispositions` offers one option per presented criterion plus a
-    `none-fire` catch-all -- `multi-stakeholder` is NOT a fourth
-    disposition, since this predicate has no producer for it and offering
-    it as an answerable option would imply evidence that does not exist.
-
-    `reportable=False`: naming which criterion fires is what decides
-    whether the plan gets architectural review, so answering this
-    changes what the EM does next -- action-class, not mere
-    acknowledgement (`_validate_reportable`'s three-way split)."""
     candidate_criteria = [
         {
             "criterion": "cross-system-irreversible",
@@ -326,12 +262,6 @@ def architectural_tier_judgment_point(
 
 
 def seven_dim_fix_locus(fix_locus_row: dict[str, Any]) -> Any:
-    """`:90(7)` -> `gates.substrate.seven_dim.fix_locus`.
-
-    `:111`/`:112` recombined verbatim, no new read. An `undetermined`
-    input propagates whole; otherwise the two named sub-fields are
-    surfaced (each may itself independently be `undetermined`, e.g.
-    `registry_has_gate_type` when no `Gate type:` line was found)."""
     if _is_undetermined(fix_locus_row):
         return fix_locus_row
     return {
@@ -374,10 +304,6 @@ def seven_dim_all_green(seven_dim_row: dict[str, Any]) -> Any:
 
 
 def collapse_seven_dim_green(all_green_value: Any) -> Any:
-    """`:105(1)` -> `gates.substrate.collapse.seven_dim_green`.
-
-    `:91`'s own output, unchanged — no independent read, this row is
-    `:91`'s field consumed under the collapse namespace."""
     return all_green_value
 
 
@@ -393,12 +319,6 @@ def collapse_premise_gate_green(premise_gate_row: dict[str, Any]) -> Any:
     if _is_undetermined(m_band_uncovered):
         return m_band_uncovered
     tshirt = _field(premise_gate_row, "tshirt")
-    # Tshirt could in principle carry the
-    # `undetermined` sentinel independently of m_band_uncovered (a future
-    # producer shape change, not the current substrate_seven_dim.premise_gate
-    # contract); guard explicitly rather than relying on the m_band_uncovered
-    # check above to always catch it, so a genuinely-unevaluated tshirt never
-    # falls through to a computed verdict.
     if _is_undetermined(tshirt):
         return tshirt
     if tshirt == "M":
@@ -411,8 +331,6 @@ def collapse_premise_gate_green(premise_gate_row: dict[str, Any]) -> Any:
 
 
 def scope_mode_declared(scope_mode_row: dict[str, Any]) -> Any:
-    """`:134` -> reuses `gates.substrate.scope_mode` tested for non-null.
-    No new producer."""
     value = _field(scope_mode_row, "value")
     if _is_undetermined(value):
         return value

@@ -29,7 +29,6 @@ from coordinator_core.contract.cockpit_schema.emit_schema import emit_schemas
 
 
 def test_orphaned_schema_file_is_refused(tmp_path):
-    """An emit into a dir holding a retired entity's schema must raise, naming the file."""
     out_dir = tmp_path / "schema"
     emit_schemas(ENTITY_SCHEMAS, out_dir=out_dir)
 
@@ -43,7 +42,6 @@ def test_orphaned_schema_file_is_refused(tmp_path):
 
 
 def test_refusal_does_not_delete_the_orphan(tmp_path):
-    """The guard refuses; removing the file stays a deliberate act by that tree's owner."""
     out_dir = tmp_path / "schema"
     emit_schemas(ENTITY_SCHEMAS, out_dir=out_dir)
 
@@ -57,14 +55,12 @@ def test_refusal_does_not_delete_the_orphan(tmp_path):
 
 
 def test_clean_emit_is_not_refused(tmp_path):
-    """The bundle is not itself an orphan — guards against the check eating its own output."""
     out_dir = tmp_path / "schema"
     emit_schemas(ENTITY_SCHEMAS, out_dir=out_dir)
     emit_schemas(ENTITY_SCHEMAS, out_dir=out_dir)
 
 
 def test_non_schema_files_are_left_alone(tmp_path):
-    """Only `*.schema.json` is in scope — a README or fixture beside them is not an orphan."""
     out_dir = tmp_path / "schema"
     emit_schemas(ENTITY_SCHEMAS, out_dir=out_dir)
     (out_dir / "README.md").write_text("not a schema\n", encoding="utf-8")

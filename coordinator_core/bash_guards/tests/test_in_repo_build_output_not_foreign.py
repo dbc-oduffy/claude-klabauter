@@ -33,11 +33,6 @@ def _measure(text: str):
     return measure_envelope(envelope)
 
 
-# ---------------------------------------------------------------------------
-# `_target_is_contained_in_session` -- the containment predicate itself
-# ---------------------------------------------------------------------------
-
-
 def test_containment_true_when_target_equals_session():
     assert message._target_is_contained_in_session(_SESSION_REPO, _SESSION_REPO) is True
 
@@ -55,9 +50,7 @@ def test_containment_false_when_target_or_session_empty():
     assert message._target_is_contained_in_session(_BUILD_OUTPUT_TARGET, "") is False
 
 
-# ---------------------------------------------------------------------------
 # `render_em_message` -- build output reaching the FOREIGN-class EM renderer
-# ---------------------------------------------------------------------------
 
 
 def test_em_message_names_defect_for_in_repo_build_output():
@@ -67,7 +60,6 @@ def test_em_message_names_defect_for_in_repo_build_output():
     assert _SESSION_REPO in text
     assert _BACKLOG_ENTRY in text
     # Not the ordinary FOREIGN-class contrast form -- the containment case
-    # is a distinct defect-attribution render, same as the exact-equal case.
     assert f"(not `{_SESSION_REPO}`)" not in text
 
 
@@ -83,9 +75,7 @@ def test_em_message_build_output_defect_fits_the_prose_cap():
     assert measurement.over_cap is False
 
 
-# ---------------------------------------------------------------------------
 # `render_subagent_message` -- same for the FOREIGN-class subagent renderer
-# ---------------------------------------------------------------------------
 
 
 def test_subagent_message_names_defect_for_in_repo_build_output():
@@ -107,11 +97,6 @@ def test_subagent_message_build_output_defect_fits_the_prose_cap():
     measurement = _measure(text)
     assert measurement.prose_bytes <= MESSAGE_PROSE_CAP_BYTES
     assert measurement.over_cap is False
-
-
-# ---------------------------------------------------------------------------
-# Genuinely-foreign target -- unaffected by the containment leg
-# ---------------------------------------------------------------------------
 
 
 def test_em_message_genuinely_foreign_target_unaffected():

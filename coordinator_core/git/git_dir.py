@@ -89,49 +89,17 @@ def resolve_git_dir(repo_root: Union[str, Path]) -> Path:
 
     private_gitdir = Path(pointer)
     if not private_gitdir.is_absolute():
-        # A relative `gitdir:` pointer (the submodule form) can itself
-        # contain `..` traversal segments -- `Path.__truediv__` joins
-        # lexically and does NOT collapse them, so a bare join can leave a
-        # dangling `..` in the result. `os.path.normpath` collapses it with
-        # no filesystem I/O, no symlink resolution -- see
-        # `resolve_git_common_dir`'s identical join below, where the same
-        # unresolved-`..` shape was reproduced live (a linked worktree's
-        # `commondir` file content is always relative).
         private_gitdir = Path(os.path.normpath(repo_root / private_gitdir))
 
     return private_gitdir
 
 
 def resolve_git_common_dir(repo_root: Union[str, Path]) -> Path:
-    """Resolve `repo_root`'s git COMMON dir without spawning `git`.
-
-    - `<repo_root>/.git` is a directory -> return it (plain clone; the
-      overwhelmingly common case, byte-for-byte identical to the pre-change
-      literal join).
-    - `<repo_root>/.git` is a file -> resolve the private gitdir via
-      `resolve_git_dir` (same `gitdir:` pointer parse, submodule-relative
-      case included), then:
-        - If that private gitdir contains a `commondir` file (the linked-
-          worktree case), read it and resolve its contents against the
-          private gitdir -> that is the common dir.
-        - Otherwise (submodule, `--separate-git-dir`) the private gitdir IS
-          the common dir.
-    - Anything else -- missing `.git` entirely, an OSError reading it, a
-      pointer file that doesn't start with `gitdir:`, or any other
-      unparseable content -- fails open to the literal `<repo_root>/.git`
-      join, silently (no print; this runs under a hook that must stay
-      quiet). The degraded case is never worse than the pre-change
-      behavior.
-    """
     repo_root = Path(repo_root)
     dot_git = repo_root / ".git"
 
     private_gitdir = resolve_git_dir(repo_root)
     if private_gitdir == dot_git:
-        # `resolve_git_dir` returns the literal `.git` join both for the
-        # plain-directory case (correct: private == common there) and for
-        # every fail-open case (missing/unreadable/unparseable `.git`) --
-        # in both, the common dir is the same literal join.
         return dot_git
 
     return common_dir_from_gitdir(private_gitdir, dot_git)
@@ -177,28 +145,6 @@ def common_dir_from_gitdir(
             if common_pointer:
                 common_dir = Path(common_pointer)
                 if not common_dir.is_absolute():
-                    # A linked worktree's `commondir` file content is
-                    # ALWAYS relative (git's own convention -- typically
-                    # `../..`) and joining it lexically leaves that `..`
-                    # unresolved in the returned path. Downstream callers
-                    # (e.g. `lifecycle.main_worktree_root`'s bare `.parent`,
-                    # which assumes a lexically clean absolute path) then
-                    # silently mis-resolve the main worktree root by one or
-                    # more directory levels. `os.path.normpath` collapses
-                    # the traversal with no filesystem I/O or symlink
-                    # resolution, unlike `Path.resolve()`.
-                    #
-                    # Accepted limitation, stated rather than implied:
-                    # lexical collapse and the kernel disagree whenever ANY
-                    # symlinked path segment is collapsed past — `<x>/link/..`
-                    # normalizes to `<x>`, while the OS would land in the
-                    # link target's parent. That segment need not be `.git`
-                    # itself: a symlinked intermediate directory, or a
-                    # symlinked linked-worktree directory, collapses just as
-                    # wrongly. Taken deliberately: `.resolve()` is forbidden
-                    # here (see this function's rationale), and the
-                    # un-collapsed form was wrong for EVERY `.parent`
-                    # consumer, symlink or not.
                     common_dir = Path(os.path.normpath(private_gitdir / common_dir))
                 return common_dir
     except OSError:

@@ -126,17 +126,10 @@ _HARDCODED_CONSUMERS = (
 _MANIFEST_BASENAME = "doctrine-surfaces.json"
 _MANIFEST_SCHEMA_VERSION = 1
 
-#: A citation line carries `<path>.md` (optionally closed by a quote/backtick)
-#: immediately before a `§`. `§§ A / B` is one citation with two sections, so
-#: a run of markers is tolerated between the path and the section text.
 _CITATION_LINE_RE = re.compile(r"\.md[`'\"]?[\s§]*§")
 
-#: The cited path, anchored to the END of the text preceding a `§`.
 _CITED_PATH_RE = re.compile(r"([~A-Za-z0-9_.][^\s`'\"()\[\]<>]*\.md)[`'\"]?[\s§]*$")
 
-#: `(formerly § Old Heading…)` — a rename-history annotation, not a live
-#: anchor. The old heading is expected to be gone; checking it would report a
-#: DEAD anchor for text that documents the very rename that killed it.
 _HISTORICAL_RE = re.compile(r"formerly[\s§]*$", re.IGNORECASE)
 
 
@@ -144,29 +137,27 @@ class AnchorResult(NamedTuple):
     kind: str  # "OK" | "QUALIFIED" | "DEAD" | "UNRESOLVED"
     consumer_rel: str
     line_no: int
-    value: str  # matched heading (OK), or raw cited snippet
+    value: str
     cited_path: str
 
 
 class ScanReport(NamedTuple):
     results: List[AnchorResult]
     skipped: List[str]
-    error: str  # non-empty ⇒ COULD NOT CHECK ⇒ exit 2
-    notes: List[str]  # informational stderr lines
-    historical: int = 0  # `(formerly § …)` markers deliberately not checked
-    dropped_section_lines: int = 0  # `§` present but no path-shaped citation
+    error: str
+    notes: List[str]
+    historical: int = 0
+    dropped_section_lines: int = 0
     # matched `_CITATION_LINE_RE` — a coarse format-drift visibility signal,
-    # diagnostic only (never affects exit code). Distinct from a line with no
-    # `§` at all, which is not a citation and is correctly never counted.
 
 
 class Manifest(NamedTuple):
     path: str
-    aliases: Dict[str, str]  # citation text → absolute resolved path
+    aliases: Dict[str, str]
 
 
 class ManifestError(Exception):
-    """Manifest present but unusable — always exit 2, never a silent skip."""
+    pass
 
 
 def _plugin_root() -> str:
@@ -209,14 +200,9 @@ def _plugin_root() -> str:
             file=sys.stderr,
         )
         sys.exit(2)
-    # Either content layout — the published flat mirror carries skills/ at its
-    # own root, with no "coordinator" segment to join (data_root.content_root_for
-    # is the one place that join lives; private layout is probed first).
     content = content_root_for(root)
     if content is not None:
         return str(content)
-    # Neither layout present — keep naming the private-shape path so the
-    # downstream skills/ read reports the directory an operator expected.
     return os.path.join(root, "coordinator")
 
 
@@ -241,12 +227,6 @@ def _is_qualified_global(line: str) -> bool:
 
 
 def _candidate_roots(plugin_root: str, citing_file: Optional[str]) -> List[str]:
-    """Resolution roots, in priority order, for a cited relative path.
-
-    repo_root first: DoE citations name repo-relative paths
-    (`coordinator/snippets/...`), which would otherwise collide with
-    plugin-relative ones (`skills/plan/SKILL.md`).
-    """
     roots = [os.path.dirname(plugin_root.rstrip(os.sep)), plugin_root]
     if citing_file:
         roots.append(os.path.dirname(citing_file))
@@ -267,12 +247,6 @@ def _resolve_cited_path(
         return None
     if os.path.isabs(cited):
         return cited if os.path.isfile(cited) else None
-    # `cited` is trusted-content-derived (DoE's own
-    # first-party doctrine prose, not adversarial input) and is joined
-    # against `_candidate_roots` with no post-join containment check. No
-    # guard is added here deliberately; this comment records that the trust
-    # boundary is assumed, not enforced, so a future reader doesn't infer a
-    # containment check exists.
     for root in _candidate_roots(plugin_root, citing_file):
         candidate = os.path.normpath(os.path.join(root, cited))
         if os.path.isfile(candidate):
@@ -286,14 +260,6 @@ def _cited_path_before(line: str, pos: int) -> Optional[str]:
 
 
 def _snippet_after(line: str, end: int) -> str:
-    """The trimmed raw-text snippet following a `§` occurrence at `end`.
-
-    Shared by the true MISS path in `_resolve_anchors` and by callers that
-    need only the snippet (no section list to match against, e.g. an
-    unresolved cited path) — rather than each reimplementing the
-    candidate-zone/trim logic, or a caller faking it via
-    `_resolve_anchors(line, [], ...)` with a sentinel empty section list.
-    """
     tail = line[end:]
     hard_end = len(tail)
     for term in ("_", "\n"):
@@ -306,12 +272,6 @@ def _snippet_after(line: str, end: int) -> str:
 
 
 def _resolve_anchors(line: str, sections: List[str], start: int, end: int) -> Tuple[str, str]:
-    """Match one `§ ` occurrence against `sections`.
-
-    Returns (MATCH, heading) or (MISS, snippet). Longest-valid-heading-as-prefix
-    over a longest-first section list — the bash oracle's `resolve_anchors`
-    semantics, preserved verbatim in behavior.
-    """
     tail = line[end:]
     hard_end = len(tail)
     for term in ("_", "\n"):
@@ -335,12 +295,6 @@ def manifest_path(plugin_root: str) -> str:
 
 
 def load_manifest(plugin_root: str) -> Optional[Manifest]:
-    """Load the optional doctrine-surface manifest.
-
-    Returns None when the manifest is absent — that is the expected steady
-    state, not an error. Raises ManifestError (⇒ exit 2) when a manifest IS
-    present but unusable, naming which of the failure modes it hit.
-    """
     path = manifest_path(plugin_root)
     if not os.path.isfile(path):
         return None
@@ -389,11 +343,6 @@ def load_manifest(plugin_root: str) -> Optional[Manifest]:
                 return candidate
         return None
 
-    # `surfaces` is a disk-existence assertion only
-    # (catches manifest drift promptly), never a resolution input: generic
-    # citation paths already resolve via `_candidate_roots` independent of
-    # whether they're declared here. A future reader should not assume
-    # membership in `surfaces` gates or restricts what this gate checks.
     resolved_aliases: Dict[str, str] = {}
     for entry in surfaces:
         if _locate(entry) is None:
@@ -414,11 +363,6 @@ def load_manifest(plugin_root: str) -> Optional[Manifest]:
 
 
 def scan(plugin_root: str, consumers: Optional[List[str]] = None) -> ScanReport:
-    """Run the path-directed anchor-link verification.
-
-    `error` is non-empty iff the gate COULD NOT CHECK (caller maps that to
-    exit 2): plugin_root missing, or a present-but-broken manifest.
-    """
     notes: List[str] = []
 
     if not os.path.isdir(plugin_root):
@@ -468,11 +412,6 @@ def scan(plugin_root: str, consumers: Optional[List[str]] = None) -> ScanReport:
             for line_no, line in enumerate(f, start=1):
                 line = line.rstrip("\n")
                 if not _CITATION_LINE_RE.search(line):
-                    # A bare `§` with no path-shaped
-                    # citation immediately before it (format drift, e.g. a
-                    # stray comma between path and `§`) is otherwise silently
-                    # never scanned. Count it as a coarse visibility signal,
-                    # distinct from a line with no `§` at all.
                     if "§" in line:
                         dropped_section_lines += 1
                     continue
@@ -510,10 +449,7 @@ def scan(plugin_root: str, consumers: Optional[List[str]] = None) -> ScanReport:
                         kind = "DEAD"
                     results.append(AnchorResult(kind, rel, line_no, value, cited))
 
-    # Every consumer vanishing (all skipped, none
     # read) must COULD-NOT-CHECK, not a clean 0. Without this, "found
-    # nothing" (exit 0, zero coverage) and "looked at nothing" collapse into
-    # the same code — exactly the defect class this rewrite exists to close.
     if consumer_list and len(skipped) == len(consumer_list):
         joined = ", ".join(skipped)
         return ScanReport(
@@ -528,7 +464,6 @@ def scan(plugin_root: str, consumers: Optional[List[str]] = None) -> ScanReport:
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: --list mode or verify mode. Mirrors the bash oracle's MODE dispatch."""
     plugin_root = _plugin_root()
     mode = argv[0] if argv else "verify"
 

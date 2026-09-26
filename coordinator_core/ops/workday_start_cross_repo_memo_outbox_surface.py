@@ -99,15 +99,7 @@ _TITLE_RE = re.compile(r"^title:\s*(.*)$")
 
 
 def _coordinator_state_root(repo_root: str) -> Optional[str]:
-    """Resolve the coordinator state root via the native in-process seam.
-
-    *repo_root* is unused — the native seam always resolves against the
-    caller's own ``os.getcwd()`` (the sole call site below already invokes
-    this with ``os.getcwd()``, so behaviour is unchanged); retained only for
-    call-site compatibility. Silent-degrade on any resolution failure
-    (StateRootError) — returns None, never raises. See module negative-spec.
-    """
-    del repo_root  # unused: native seam resolves against process cwd
+    del repo_root
     try:
         return _native_state_root() or None
     except StateRootError:
@@ -145,7 +137,6 @@ def _resolve_draft_paths(repo_root_arg: str) -> Optional[List[str]]:
         return [str(p) for p in _memo_draft.merged_outbox_drafts(Path(repo_root_arg))]
 
     if not show_toplevel(os.getcwd()):
-        # Not in a git repo — stay silent per spec.
         return None
 
     state_root = _coordinator_state_root(os.getcwd())
@@ -163,15 +154,6 @@ def _get_mtime(path: str) -> int:
 
 
 def _parse_frontmatter_field(text: str, pattern: re.Pattern) -> Optional[str]:
-    """Extract the first line matching `pattern`, key-stripped and quote-stripped.
-
-    Mirrors the oracle's `grep -E '^key:' | head -1 | sed 's/^key:[[:space:]]*//' |
-    tr -d '"'"'" | xargs` chain: strip the key prefix, strip ALL single/double
-    quote characters anywhere in the value (tr -d, not a paired-quote strip),
-    then `xargs`-normalize (collapse all internal whitespace runs to a single
-    space AND trim surrounding whitespace — xargs re-splits and re-joins its
-    argv, it does not merely trim edges).
-    """
     for line in text.splitlines():
         m = pattern.match(line)
         if m:
@@ -183,22 +165,13 @@ def _parse_frontmatter_field(text: str, pattern: re.Pattern) -> Optional[str]:
 
 
 def _resolve_worktree_root(repo_root_arg: str) -> Optional[str]:
-    """The worktree root to sweep the sent-ledger from — repo_root_arg if
-    given, else the git toplevel (zero-spawn, `show_toplevel`). `None` when
-    neither resolves, mirroring `_resolve_draft_paths`'s own "not in a git
-    repo — stay silent" branch."""
     if repo_root_arg and os.path.isdir(repo_root_arg):
         return repo_root_arg
     return show_toplevel(os.getcwd())
 
 
-#: Fixed 1-day threshold before a `restorable` row becomes a nudge — the
-#: plan's own words ("the sender reads restorable, surfaced after 1 day").
 #: Deliberately not env-configurable and deliberately a SEPARATE constant
 #: from `COORDINATOR_OUTBOX_STALE_HOURS` above: that knob governs unsent
-#: draft nudges, this one governs delivered-but-currently-unreadable ones,
-#: and the two landing at the same 24h by no coincidence should not be read
-#: as one knob controlling both.
 _RESTORABLE_SURFACE_AFTER_DAYS = 1
 
 

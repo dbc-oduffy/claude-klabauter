@@ -72,9 +72,7 @@ import re
 import sys
 from typing import Iterator, List, Sequence, Tuple
 
-# ---------------------------------------------------------------------------
 # File discovery — mirrors `grep -r --include=... $COORD_ROOT`
-# ---------------------------------------------------------------------------
 
 _PS_INCLUDE_EXACT = {"coordinator-auto-push"}
 _PS_INCLUDE_GLOBS = ("*.sh", "*.json")
@@ -94,16 +92,6 @@ def _iter_candidate_files(coord_root: str, globs: Sequence[str], exact: set) -> 
 
 
 def _grep_file(path: str, match_res: Sequence["re.Pattern[str]"]) -> List[str]:
-    """Return 'path:lineno:content' for every line matching ANY pattern.
-
-    Mirrors `grep -rEn -e P1 -e P2 ...` (OR of alternatives, unanchored
-    substring search, one output line per matching source line).
-
-    Raises OSError (e.g. PermissionError) on a read failure — a caller MUST
-    NOT treat that as "0 matches"; an unreadable file was never scanned, so
-    reporting it as clean would be a silent false-negative on the gate. See
-    `_scan` for how the caller folds this into the overall gate verdict.
-    """
     hits: List[str] = []
     with open(path, "r", encoding="utf-8", errors="replace") as fh:
         for lineno, raw_line in enumerate(fh, start=1):
@@ -115,9 +103,6 @@ def _grep_file(path: str, match_res: Sequence["re.Pattern[str]"]) -> List[str]:
 
 def _scan(coord_root: str, globs: Sequence[str], exact: set,
           match_res: Sequence["re.Pattern[str]"]) -> Tuple[List[str], List[str]]:
-    """Returns (hits, unreadable_paths). A file that raised on read is NOT
-    silently dropped — its path is collected so the caller can fail the gate
-    rather than report a false-clean result for content it never scanned."""
     hits: List[str] = []
     unreadable: List[str] = []
     for path in _iter_candidate_files(coord_root, globs, exact):
@@ -133,13 +118,8 @@ def _scan(coord_root: str, globs: Sequence[str], exact: set,
 
 
 def _filter_out(hits: List[str], filter_res: Sequence["re.Pattern[str]"]) -> List[str]:
-    """Mirrors a chain of `grep -v PATTERN` — drop any line matching any filter."""
     return [h for h in hits if not any(p.search(h) for p in filter_res)]
 
-
-# ---------------------------------------------------------------------------
-# (6) powershell / pwsh without -WindowStyle Hidden  (legacy shape)
-# ---------------------------------------------------------------------------
 
 _PS_MATCH = [
     re.compile(r"powershell\.exe\s"),
@@ -158,10 +138,6 @@ def _ps_hits(coord_root: str) -> Tuple[List[str], List[str]]:
     hits, unreadable = _scan(coord_root, _PS_INCLUDE_GLOBS, _PS_INCLUDE_EXACT, _PS_MATCH)
     return _filter_out(hits, _PS_FILTERS), unreadable
 
-
-# ---------------------------------------------------------------------------
-# (1-4) python / node spawn shapes in shell scripts and helper bins
-# ---------------------------------------------------------------------------
 
 _PY_NODE_MATCH = [
     re.compile(r"\$\{PYTHON[^}]*\}"),
@@ -208,10 +184,6 @@ def _py_node_hits(coord_root: str) -> Tuple[List[str], List[str]]:
     return _filter_out(hits, _PY_NODE_FILTERS), unreadable
 
 
-# ---------------------------------------------------------------------------
-# Helper: does a matched line carry an explicit suppression or allowlist?
-# ---------------------------------------------------------------------------
-
 _ALLOW_RE = re.compile(r"verify-no-console-flash:\s*allow")
 _FILE_ALLOW_RE = re.compile(r"verify-no-console-flash:\s*file-allow")
 _FALINE_PATH_STRIP_RE = re.compile(r":[0-9]+:.*$")
@@ -220,15 +192,9 @@ _SUPPRESSION_FLAG_RE = re.compile(r"CREATE_NO_WINDOW|windowsHide|WindowStyle\s+H
 
 
 def _is_suppressed(line: str) -> bool:
-    """Mirrors bash `_is_suppressed`: allowlist marker, file-level allow,
-    spawn-hidden routing, or an explicit suppression flag on the line."""
     if _ALLOW_RE.search(line):
         return True
 
-    # File-level allow: a `verify-no-console-flash: file-allow` marker in the
-    # file's first 10 lines suppresses the whole file. Extract the path
-    # drive-letter-safely — strip the `:lineno:content` suffix from the END,
-    # NOT split on the first ':' (which would eat a Windows `C:`).
     faline_path = _FALINE_PATH_STRIP_RE.sub("", line, count=1)
     if os.path.isfile(faline_path):
         try:
@@ -248,11 +214,6 @@ def _is_suppressed(line: str) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
-# Inline-comment context: drop hits where the matched interpreter token only
-# appears after a `#` on the same line (it's prose, not a spawn).
-# ---------------------------------------------------------------------------
-
 _INLINE_STRIP_RE = re.compile(r"^.*?:[0-9][0-9]*:")
 
 _INLINE_SPAWN_RES = [
@@ -268,21 +229,11 @@ _INLINE_SPAWN_RES = [
 
 
 def _in_inline_comment(line: str) -> bool:
-    """Mirrors bash `_in_inline_comment`: True if the matched token only
-    occurs after a `#` (prose), False if a real spawn shape precedes it."""
-    # Strip the file:lineno: prefix so we look at source content only. This
-    # regex is NOT drive-letter safe (see module negative-spec) — faithful
-    # port of the oracle's own asymmetry.
     content = _INLINE_STRIP_RE.sub("", line, count=1)
     code_part = content.split("#", 1)[0]
     if any(p.search(code_part) for p in _INLINE_SPAWN_RES):
         return False
     return True
-
-
-# ---------------------------------------------------------------------------
-# main()
-# ---------------------------------------------------------------------------
 
 
 def main(argv: List[str]) -> int:
@@ -328,18 +279,10 @@ def main(argv: List[str]) -> int:
             print(f"UNSUPPRESSED python/node spawn: {line}")
             fail = 1
 
-    # --- Tier 2 (behaviour change -- PM sign-off required) ---
-    # Previously: _grep_file swallowed OSError (e.g. PermissionError) on a
-    # candidate file and returned [] — indistinguishable from "read fine,
-    # zero matches". A file that could not be opened was silently treated as
-    # scanned-and-clean, when in truth it was never scanned at all. Fail
-    # closed: any unreadable candidate file fails the overall gate, and each
-    # one is named explicitly so the human knows what was never scanned.
     if unreadable_all:
         for path in unreadable_all:
             print(f"UNREADABLE (not scanned -- gate cannot certify clean): {path}", file=sys.stderr)
         fail = 1
-    # --- end Tier 2 ---
 
     if fail == 0:
         print("OK: all console-spawning invocations are suppressed or explicitly allowlisted")

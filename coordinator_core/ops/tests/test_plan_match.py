@@ -36,29 +36,16 @@ from typing import Optional
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Import guard — fires ALL @register_op(...) side-effects, including
-# "plan.match_candidates".  MUST precede all test functions.
-# ---------------------------------------------------------------------------
 import coordinator_core.ops  # noqa: F401 — populates _REGISTRY
 
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.plan_match import _handler
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
-# ---------------------------------------------------------------------------
-# Registry completeness assertion (universal positive floor)
-#
-# Lesson: universal-registry-completeness-tests-ov — import coordinator_core.ops
-# FIRST, then assert non-empty registry BEFORE any per-op assertion.  An empty
-# registry would make all per-op assertions vacuously pass (false-positive).
-# ---------------------------------------------------------------------------
 
 assert len(_REGISTRY) > 0, (
     "registry is empty after 'import coordinator_core.ops' — "
@@ -72,13 +59,7 @@ assert _OP_NAME in _REGISTRY, (
 )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _make_git_repo(root: Path) -> Path:
-    """Create a minimal git repo at ``root`` and return its common_dir (.git path)."""
     root.mkdir(parents=True, exist_ok=True)
     _NO_WIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     subprocess.run(
@@ -113,11 +94,6 @@ def _seed_plan(
     plan_id: Optional[str] = None,
     status: str = "draft",
 ) -> Path:
-    """Write a ``docs/plans/<filename>.md`` fixture file with YAML frontmatter.
-
-    Omitting ``title`` produces a file that should be quarantined.
-    Omitting ``plan_id`` produces a file where the filename stem is used as id.
-    """
     plans_dir.mkdir(parents=True, exist_ok=True)
     lines = ["---"]
     if title is not None:
@@ -134,16 +110,9 @@ def _seed_plan(
     return path
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 class TestRegistryCompleteness:
-    """Positive-floor registry checks (must pass before any per-op test)."""
 
     def test_registry_is_non_empty(self):
-        """Registry populated after coordinator_core.ops import (positive floor)."""
         assert len(_REGISTRY) > 0
 
     def test_op_name_registered(self):
@@ -152,16 +121,13 @@ class TestRegistryCompleteness:
 
 
 class TestPlanMatchCandidates:
-    """Payload and ranking tests for plan.match_candidates."""
 
     def test_empty_store_directory_absent(self, tmp_path):
-        """No docs/plans/ directory → empty candidates list."""
         common_dir = _make_git_repo(tmp_path / "repo")
         result = _handler({"text": "provenance"}, repo_root=common_dir)
         assert result == {"candidates": []}
 
     def test_empty_store_directory_present_but_empty(self, tmp_path):
-        """docs/plans/ exists but has no .md files → empty candidates list."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         (repo_root / "docs" / "plans").mkdir(parents=True)
@@ -169,12 +135,10 @@ class TestPlanMatchCandidates:
         assert result == {"candidates": []}
 
     def test_repo_root_none_returns_empty(self):
-        """repo_root=None → empty candidates without raising."""
         result = _handler({"text": "provenance"}, repo_root=None)
         assert result == {"candidates": []}
 
     def test_missing_text_param_returns_empty(self, tmp_path):
-        """params missing 'text' key → empty candidates list."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         _seed_plan(
@@ -187,7 +151,6 @@ class TestPlanMatchCandidates:
         assert result == {"candidates": []}
 
     def test_empty_text_param_returns_empty(self, tmp_path):
-        """params text='' → empty candidates list."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         _seed_plan(
@@ -200,7 +163,6 @@ class TestPlanMatchCandidates:
         assert result == {"candidates": []}
 
     def test_well_formed_plan_fields(self, tmp_path):
-        """Well-formed plan → candidate carries {plan_id, title, score}."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         _seed_plan(
@@ -218,7 +180,6 @@ class TestPlanMatchCandidates:
         assert 0.0 <= entry["score"] <= 1.0
 
     def test_id_wire_key_is_plan_id_not_id(self, tmp_path):
-        """Candidates carry 'plan_id' wire key, never the generic 'id' key."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         _seed_plan(
@@ -234,7 +195,6 @@ class TestPlanMatchCandidates:
         assert "id" not in entry
 
     def test_best_match_ranked_first(self, tmp_path):
-        """Text closely matching one plan's title ranks it first."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         plans_dir = repo_root / "docs" / "plans"
@@ -254,17 +214,14 @@ class TestPlanMatchCandidates:
         result = _handler({"text": "fork provenance tooling"}, repo_root=common_dir)
 
         assert len(result["candidates"]) == 2
-        # The fork provenance plan must rank first.
         assert result["candidates"][0]["plan_id"] == "pln-fork-provenance-01"
         assert result["candidates"][0]["score"] >= result["candidates"][1]["score"]
 
     def test_malformed_yaml_quarantined_sibling_still_returned(self, tmp_path):
-        """Malformed YAML frontmatter is skipped; well-formed siblings are returned."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         plans_dir = repo_root / "docs" / "plans"
         plans_dir.mkdir(parents=True)
-        # Write a file with invalid YAML frontmatter.
         bad_path = plans_dir / "2026-07-07-bad.md"
         bad_path.write_text("---\ntitle: [unclosed bracket\n---\n", encoding="utf-8")
         _seed_plan(
@@ -281,14 +238,13 @@ class TestPlanMatchCandidates:
         assert len(ids) == 1
 
     def test_missing_title_quarantined_sibling_still_returned(self, tmp_path):
-        """Plan with missing title field is quarantined; valid sibling is returned."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         plans_dir = repo_root / "docs" / "plans"
         _seed_plan(
             plans_dir,
             "2026-07-07-no-title.md",
-            title=None,  # no title — should be quarantined
+            title=None,
             plan_id="pln-no-title-01",
         )
         _seed_plan(
@@ -305,15 +261,10 @@ class TestPlanMatchCandidates:
         assert len(ids) == 1
 
     def test_frontmatterless_markdown_table_skipped_sibling_still_returned(self, tmp_path):
-        """A frontmatter-less .md (e.g. a generated INDEX.md) is skipped cleanly —
-        no exception from feeding a markdown table to the YAML scanner — while a
-        valid sibling plan in the same directory still enumerates."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         plans_dir = repo_root / "docs" / "plans"
         plans_dir.mkdir(parents=True)
-        # Write a frontmatter-less markdown file containing a markdown table —
-        # mirrors renderers.py::render_plans_index_markdown output.
         index_path = plans_dir / "INDEX.md"
         index_path.write_text(
             "# Plans Index\n\n"
@@ -336,18 +287,15 @@ class TestPlanMatchCandidates:
         assert len(ids) == 1
 
     def test_plan_id_frontmatter_preferred_stem_fallback(self, tmp_path):
-        """plan_id frontmatter is used when present; filename stem is the fallback."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         plans_dir = repo_root / "docs" / "plans"
-        # Plan with explicit plan_id frontmatter.
         _seed_plan(
             plans_dir,
             "2026-07-07-with-id.md",
             title="Plan With Explicit ID",
             plan_id="pln-explicit-id-01",
         )
-        # Plan without plan_id frontmatter — stem should be used.
         _seed_plan(
             plans_dir,
             "2026-07-07-no-plan-id.md",

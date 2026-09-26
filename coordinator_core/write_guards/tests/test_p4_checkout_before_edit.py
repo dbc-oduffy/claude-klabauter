@@ -1,16 +1,3 @@
-"""
-test_p4_checkout_before_edit.py — pytest coverage for
-coordinator_core.write_guards.p4_checkout_before_edit.
-
-Spec backlink: docs/plans/2026-09-12-perforce-second-class-commit-and-shelve.md
-§ C5, § D5. The cockpit pvcs-02 acceptance cases (a) and (c) are exercised
-here as the guard's own test cases: (a) a writable/git-only target pays zero
-p4 spawns; (c) a locked/binary/refused target denies, never allow-through.
-
-Spawn budget under test: zero ``runner.run`` calls for a git-only repo or a
-writable target; at most two (fstat, then edit) for a read-only target in a
-marker repo.
-"""
 
 from __future__ import annotations
 
@@ -99,8 +86,6 @@ class TestZeroSpawnAllowPaths:
 
 
 class _ReadOnlyFixture:
-    """Shared setup for the read-only-target arm: a real read-only file plus
-    a registered p4 identity, so only ``runner.run`` needs faking per test."""
 
     def setup(self, monkeypatch, tmp_path, identity):
         target = tmp_path / "locked.txt"
@@ -131,7 +116,7 @@ class TestReadOnlyTargetDenies(_ReadOnlyFixture):
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "binary file" in reason
         assert "checkout" in reason.lower()
-        assert len(calls) == 1  # fstat only, never reaches edit
+        assert len(calls) == 1
 
     def test_exclusive_open_with_other_open_denies_naming_holder(self, monkeypatch, tmp_path, identity):
         target = self.setup(monkeypatch, tmp_path, identity)
@@ -257,8 +242,6 @@ class TestReadOnlyTargetAllows(_ReadOnlyFixture):
 
 
 class TestExplicitTimeout(_ReadOnlyFixture):
-    """Both spawns now pass an
-    explicit `timeout=` rather than relying on the implicit default."""
 
     def test_fstat_and_edit_pass_explicit_timeout(self, monkeypatch, tmp_path, identity):
         target = self.setup(monkeypatch, tmp_path, identity)

@@ -52,23 +52,13 @@ from coordinator_core.subagent_sandbox import engine as _sandbox_engine
 from coordinator_core.testing.home_sandbox import sandbox_home
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
 
-
 def _posix(p) -> str:
-    """POSIX-slash string form of a path for embedding in a bash
-    command-line string -- the tokenizer under test parses commands as
-    real bash/POSIX-sh syntax (backslash is an escape character), so a
-    native Windows ``str(Path)`` (backslash-separated) embedded directly
-    into a ``cmd`` string is not a realistic Bash-tool payload and
-    silently corrupts the path once tokenized. Accepts a ``Path`` or a
-    plain ``str``."""
     return p.as_posix() if hasattr(p, "as_posix") else str(p).replace("\\", "/")
 
 
@@ -90,15 +80,6 @@ def _init_repo(tmp_path: Path, name: str) -> Path:
 
 @pytest.fixture(autouse=True)
 def _reset_git_root_cache():
-    """Resets the process-local `resolve_git_root` memo before AND after every
-    test in this file (AC5, docs/plans/2026-09-07-foreign-write-guard-mixed-
-    separator-and-publish.md, C2). The memo remembers only successful
-    resolutions, so a warm hit left over from a prior test can silently mask
-    the exact unresolved-root path this guard's whole defect family rides on
-    -- the suspected source of a measured ~1-in-6 flake. Matches the pattern
-    already in test_dispatch_latency_bound.py,
-    test_bump_foreign_repo_write_root_spawn_budget.py, and
-    test_confinement_is_cwd_invariant.py."""
     _sandbox_engine.reset_resolve_git_root_cache()
     yield
     _sandbox_engine.reset_resolve_git_root_cache()
@@ -106,10 +87,6 @@ def _reset_git_root_cache():
 
 @pytest.fixture()
 def repos(tmp_path):
-    """Anchor repo (the session's own), a foreign sibling repo, and an
-    unregistered fake HOME (so `~/.claude` never accidentally matches and
-    the applicability hatch never fires) -- the shared setup every test
-    below builds on."""
     anchor = _init_repo(tmp_path, "anchor")
     foreign = _init_repo(tmp_path, "foreign")
     home = tmp_path / "home"
@@ -129,23 +106,11 @@ def _set_anchor(monkeypatch, repos, session_id: str, extra: dict | None = None) 
     the `~/.claude` fleet-recovery hatch (`_anchor_is_under_claude_home`)
     resolves to "not under" rather than fail-opening on an unresolvable
     home."""
-    # `sandbox_home`, not a bare HOME setenv: `_clean_bump_env` deletes HOME
     # *and* USERPROFILE, and on Windows `expanduser` reads USERPROFILE first --
-    # so HOME alone leaves `Path.home()` with nothing to read. `claude_config_dir()`
-    # then raises RuntimeError("Could not determine home directory") inside
-    # `resolve_plugin_root_loud`, and a guard-chain test here fails on a Windows
-    # host while passing on POSIX, where HOME alone IS what expanduser reads.
-    # The docstring above always intended a resolvable home; this delivers one on
-    # both platforms, and names the sandbox rather than inheriting conftest's.
     sandbox_home(monkeypatch, repos["home"])
     for k, v in (extra or {}).items():
         monkeypatch.setenv(k, v)
     session_start.write_session_start_record(session_id, launch_cwd=str(repos["anchor"]))
-
-
-# ---------------------------------------------------------------------------
-# AC1 -- git -C / cd&&git / plain-bash write sinks targeting a foreign repo
-# ---------------------------------------------------------------------------
 
 
 def test_ac1_git_dash_c_write_subcommand_bumps(repos, monkeypatch):
@@ -168,9 +133,6 @@ def test_ac1_cd_and_git_write_subcommand_bumps(repos, monkeypatch):
 
 
 def test_ac1_plain_bash_write_sink_cp_to_new_file_bumps(repos, monkeypatch):
-    """The write-sink TARGET does not exist yet -- the realistic incident
-    shape (`echo x > /repo/new-file.txt`) and the exact case the
-    nearest-existing-ancestor fix covers."""
     _set_anchor(monkeypatch, repos, "sess-3")
     src = repos["anchor"] / "src.txt"
     src.write_text("x\n", encoding="utf-8")
@@ -204,15 +166,6 @@ def test_ac1_mkdir_write_sink_to_not_yet_existing_dir_bumps(repos, monkeypatch):
     assert result is not None
 
 
-# ---------------------------------------------------------------------------
-# `fetch` is a read for this guard's purposes -- false-positive report
-# (2026-09-25, peer session doing ordinary cross-repo verification): `fetch`
-# only writes remote-tracking refs/objects into the TARGET's own gitdir, never
-# a worktree, the index, a local branch, or HEAD, so it carries none of the
-# foreign-mutation risk this guard exists to catch.
-# ---------------------------------------------------------------------------
-
-
 def test_reported_incident_cd_fetch_merge_base_log_show_never_bumps(repos, monkeypatch):
     """The exact command reported blocked: `cd` into a sibling repo, then a
     chain of `fetch`/`merge-base`/`log`/`show` -- pure inspection, per the
@@ -232,9 +185,6 @@ def test_reported_incident_cd_fetch_merge_base_log_show_never_bumps(repos, monke
 
 
 def test_cd_and_git_fetch_then_mutating_verb_still_bumps(repos, monkeypatch):
-    """A mutating verb in the SAME `cd`-anchored chain that reproduced the
-    false positive still bumps -- `fetch` losing its write-membership must
-    not widen to "any verb after a `cd` into a sibling is safe"."""
     _set_anchor(monkeypatch, repos, "sess-fetch-then-write")
     foreign = _posix(repos["foreign"])
     cmd = f"cd {foreign}; git fetch -q origin main; git commit --allow-empty -m x"
@@ -248,9 +198,6 @@ def test_cd_and_git_fetch_then_mutating_verb_still_bumps(repos, monkeypatch):
 
 
 def test_fetch_with_colon_refspec_destination_still_bumps(repos, monkeypatch):
-    """`git fetch <remote> <src>:<dst>` writes the local ref `<dst>` directly
-    -- unlike a bare `git fetch origin main`, this is not read-only and must
-    still bump."""
     _set_anchor(monkeypatch, repos, "sess-fetch-refspec")
     foreign = _posix(repos["foreign"])
     cmd = f"cd {foreign}; git fetch origin feature:main"
@@ -263,13 +210,7 @@ def test_fetch_with_colon_refspec_destination_still_bumps(repos, monkeypatch):
     assert "hookSpecificOutput" in result
 
 
-# ---------------------------------------------------------------------------
 # GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR/--git-dir/--work-tree evasion --
-# 2026-08-06 live incident: a command that never `cd`s and never passes
-# `-C` still reaches a foreign repo's WRITE surface through these, since
-# `git` itself honours them independent of `cwd`. `-C`/`cd` were the only
-# shapes this guard's candidate-target resolution tracked before this fix.
-# ---------------------------------------------------------------------------
 
 
 def test_evasion_env_git_dir_write_subcommand_bumps(repos, monkeypatch):
@@ -322,9 +263,6 @@ def test_evasion_cli_git_dir_flag_separate_token_write_subcommand_bumps(repos, m
 
 
 def test_evasion_env_wrapper_git_dir_write_subcommand_bumps(repos, monkeypatch):
-    """The `env NAME=value cmd` wrapper spelling, not only the bare
-    `NAME=value cmd` prefix form -- both peel through
-    `_command_tokenizer._peel_command_position`'s `env` branch."""
     cmd = f"env GIT_DIR={_posix(repos['foreign'])}/.git git commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-6")
 
@@ -372,18 +310,6 @@ def test_non_regression_git_dir_readonly_allowlisted_subcommand_still_never_bump
 
 
 def test_evasion_env_git_dir_write_subcommand_reproduces_live_incident_bumps(repos, monkeypatch):
-    """The live-incident SHAPE (2026-08-06): a `GIT_DIR=<foreign>/.git git
-    ...` that never `cd`s and never passes `-C`. Before the `GIT_DIR` fix,
-    target resolution used `cwd` alone (the session's own anchor) and
-    silently allowed; after it, resolution runs through `GIT_DIR` to the
-    real (foreign) target and bumps.
-
-    Carried on `commit` rather than the incident's literal `cat-file` since
-    2026-08-12: `cat-file` is a READ, and this test asserting a bump on it
-    was the reads-never-bump contract violation the DoE-claude memo caught
-    (see `test_readonly_git_verb_outside_the_old_eight_never_bumps`). The
-    seam under test here is `GIT_DIR` resolution, not verb classification --
-    a write verb exercises it without enshrining the bug."""
     cmd = f"GIT_DIR={_posix(repos['foreign'])}/.git git commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-10")
 
@@ -432,11 +358,6 @@ def test_readonly_git_verb_outside_the_old_eight_never_bumps(repos, monkeypatch,
 
 
 def test_unknown_git_verb_does_not_bump(repos, monkeypatch):
-    """The fail-open direction, made explicit: an unrecognised verb (a
-    future git subcommand, an alias, a misparsed option value) is not a
-    write. This is the property that stops the next read-only verb git
-    ships from regressing the contract above -- the old inverted test would
-    have bumped on it."""
     cmd = f"git -C {_posix(repos['foreign'])} some-future-readonly-verb"
     _set_anchor(monkeypatch, repos, "sess-unknown-verb")
 
@@ -450,8 +371,6 @@ def test_unknown_git_verb_does_not_bump(repos, monkeypatch):
 @pytest.mark.parametrize(
     "verb",
     [
-        # The command the DoE-claude memo named as still costing them after
-        # the first pass -- the reason this predicate table exists.
         "branch --show-current",
         "branch",
         "branch -a",
@@ -515,7 +434,6 @@ def test_dual_mode_verb_read_spelling_never_bumps(repos, monkeypatch, verb):
         "branch -m old new",
         "branch newtopic",
         "branch --set-upstream-to=origin/main",
-        # A write flag alongside a read flag is still a write.
         "branch -a -d topic",
         "tag v1.0",
         "tag -d v1.0",
@@ -532,8 +450,6 @@ def test_dual_mode_verb_read_spelling_never_bumps(repos, monkeypatch, verb):
         "reflog delete HEAD@{0}",
         "notes add -m note",
         "notes remove",
-        # Bare `git stash` PUSHES -- deliberately not symmetric with the
-        # other bare-verb reads above.
         "stash",
         "stash push -u",
         "stash pop",
@@ -548,8 +464,6 @@ def test_dual_mode_verb_read_spelling_never_bumps(repos, monkeypatch, verb):
     ],
 )
 def test_dual_mode_verb_write_spelling_still_bumps(repos, monkeypatch, verb):
-    """The other half: narrowing the dual-mode verbs must not silence their
-    write spellings. Every entry here mutates the foreign repo."""
     cmd = f"git -C {_posix(repos['foreign'])} {verb}"
     _set_anchor(monkeypatch, repos, "sess-dual-write")
 
@@ -560,20 +474,7 @@ def test_dual_mode_verb_write_spelling_still_bumps(repos, monkeypatch, verb):
     assert result is not None
 
 
-# The original version of this test
-# used `branch -qXz topic` and passed only because of the trailing
-# positional `topic`, which `_branch_is_read`'s flagless fallback would have
-# classified as a write on its own (same as `git branch newtopic`); the
-# unrecognised bundle `-qXz` contributed nothing to the outcome. Rewritten
-# below to isolate the actual property: an unrecognised flag bundle with NO
-# trailing positional must still land on write, per `_unrecognised_flag_
-# present` (see `_branch_is_read`/`_tag_is_read`). A positional-present case
-# is kept too, but named for what it actually tests.
 def test_dual_mode_predicate_unrecognised_bundle_alone_fails_toward_bump(repos, monkeypatch):
-    """`branch -qXz` with NO positional -- isolates the unrecognised-bundle
-    property: without `_unrecognised_flag_present`'s gate, `_branch_is_read`
-    would fall through to `_first_positional(args) is None`, find no
-    positional, and misclassify as read. The gate forces write instead."""
     cmd = f"git -C {_posix(repos['foreign'])} branch -qXz"
     _set_anchor(monkeypatch, repos, "sess-dual-unknown-nopos")
 
@@ -585,7 +486,6 @@ def test_dual_mode_predicate_unrecognised_bundle_alone_fails_toward_bump(repos, 
 
 
 def test_dual_mode_predicate_tag_unrecognised_bundle_alone_fails_toward_bump(repos, monkeypatch):
-    """`tag` equivalent of the above -- `_tag_is_read`'s identical gate."""
     cmd = f"git -C {_posix(repos['foreign'])} tag -qXz"
     _set_anchor(monkeypatch, repos, "sess-dual-unknown-tag-nopos")
 
@@ -599,11 +499,6 @@ def test_dual_mode_predicate_tag_unrecognised_bundle_alone_fails_toward_bump(rep
 def test_dual_mode_predicate_fails_toward_bump_on_unrecognised_spelling_with_positional(
     repos, monkeypatch
 ):
-    """The positional-present variant, kept and renamed for what it
-    actually pins: an unrecognised flag bundle PLUS a trailing positional is
-    a write via the ordinary create-branch path, same as `git branch
-    newtopic` -- not a test of the unrecognised-bundle property alone (see
-    the two tests above for that)."""
     cmd = f"git -C {_posix(repos['foreign'])} branch -qXz topic"
     _set_anchor(monkeypatch, repos, "sess-dual-unknown")
 
@@ -616,9 +511,6 @@ def test_dual_mode_predicate_fails_toward_bump_on_unrecognised_spelling_with_pos
 
 @pytest.mark.parametrize("verb", ["commit -m x", "push origin HEAD", "reset --hard", "stash"])
 def test_write_git_verb_still_bumps(repos, monkeypatch, verb):
-    """The other half of the swap: the verbs that actually mutate a foreign
-    repo must still bump. A membership test that silences reads is only
-    correct if it does not also silence writes."""
     cmd = f"git -C {_posix(repos['foreign'])} {verb}"
     _set_anchor(monkeypatch, repos, "sess-write-verbs")
 
@@ -629,18 +521,7 @@ def test_write_git_verb_still_bumps(repos, monkeypatch, verb):
     assert result is not None
 
 
-# ---------------------------------------------------------------------------
-# Regression coverage
-# for the four production defects fixed since the last two review passes
-# (symbolic-ref/hash-object/pack-refs write-membership, config get/list
-# reads), the `cd <foreign> && git <verb>` candidate-extraction leg, the
-# GIT_DIR/override seam combined with a dual-mode predicate, and the
-# remaining adversarial shapes named by the slice-2 reviewer.
-# ---------------------------------------------------------------------------
-
-
 def test_symbolic_ref_read_spelling_never_bumps(repos, monkeypatch):
-    """`git symbolic-ref HEAD` -- one positional, prints the ref (read)."""
     cmd = f"git -C {_posix(repos['foreign'])} symbolic-ref HEAD"
     _set_anchor(monkeypatch, repos, "sess-symref-read")
 
@@ -650,8 +531,6 @@ def test_symbolic_ref_read_spelling_never_bumps(repos, monkeypatch):
 
 
 def test_symbolic_ref_reassign_write_spelling_bumps(repos, monkeypatch):
-    """`git symbolic-ref HEAD refs/heads/other` -- two positionals,
-    reassigns the ref (write)."""
     cmd = f"git -C {_posix(repos['foreign'])} symbolic-ref HEAD refs/heads/other"
     _set_anchor(monkeypatch, repos, "sess-symref-reassign")
 
@@ -663,7 +542,6 @@ def test_symbolic_ref_reassign_write_spelling_bumps(repos, monkeypatch):
 
 
 def test_symbolic_ref_delete_write_spelling_bumps(repos, monkeypatch):
-    """`git symbolic-ref -d HEAD` -- deletes the named symbolic ref."""
     cmd = f"git -C {_posix(repos['foreign'])} symbolic-ref -d HEAD"
     _set_anchor(monkeypatch, repos, "sess-symref-delete")
 
@@ -675,8 +553,6 @@ def test_symbolic_ref_delete_write_spelling_bumps(repos, monkeypatch):
 
 
 def test_hash_object_read_spelling_never_bumps(repos, monkeypatch):
-    """`git hash-object <file>` without `-w` computes and prints a hash
-    only -- does not touch the target's object database (read)."""
     target_file = repos["foreign"] / "README.md"
     cmd = f"git -C {_posix(repos['foreign'])} hash-object {_posix(target_file)}"
     _set_anchor(monkeypatch, repos, "sess-hashobj-read")
@@ -687,8 +563,6 @@ def test_hash_object_read_spelling_never_bumps(repos, monkeypatch):
 
 
 def test_hash_object_write_spelling_bumps(repos, monkeypatch):
-    """`git hash-object -w <file>` writes the blob into the target's object
-    database (write)."""
     target_file = repos["foreign"] / "README.md"
     cmd = f"git -C {_posix(repos['foreign'])} hash-object -w {_posix(target_file)}"
     _set_anchor(monkeypatch, repos, "sess-hashobj-write")
@@ -699,7 +573,6 @@ def test_hash_object_write_spelling_bumps(repos, monkeypatch):
 
 
 def test_pack_refs_bumps(repos, monkeypatch):
-    """`git pack-refs --all` -- always a write, no read spelling."""
     cmd = f"git -C {_posix(repos['foreign'])} pack-refs --all"
     _set_anchor(monkeypatch, repos, "sess-packrefs")
 
@@ -720,7 +593,6 @@ def test_config_get_subcommand_style_read_never_bumps(repos, monkeypatch):
 
 
 def test_config_list_subcommand_style_read_never_bumps(repos, monkeypatch):
-    """`git config list` (git >= 2.46 subcommand syntax) is a read."""
     cmd = f"git -C {_posix(repos['foreign'])} config list"
     _set_anchor(monkeypatch, repos, "sess-config-list")
 
@@ -730,8 +602,6 @@ def test_config_list_subcommand_style_read_never_bumps(repos, monkeypatch):
 
 
 def test_config_user_name_positional_write_still_bumps(repos, monkeypatch):
-    """`git config user.name bob` -- ordinary two-positional set, still a
-    write; must not be swallowed by the new read-subword table."""
     cmd = f"git -C {_posix(repos['foreign'])} config user.name bob"
     _set_anchor(monkeypatch, repos, "sess-config-username")
 
@@ -743,21 +613,12 @@ def test_config_user_name_positional_write_still_bumps(repos, monkeypatch):
 
 
 def test_config_unset_flag_write_still_bumps(repos, monkeypatch):
-    """`git config --unset x` -- still a write."""
     cmd = f"git -C {_posix(repos['foreign'])} config --unset x"
     _set_anchor(monkeypatch, repos, "sess-config-unset")
 
     result = guard.check_bump_foreign_repo_write(cmd, "sess-config-unset", str(repos["anchor"]), {})
 
     assert result is not None
-
-
-# ---------------------------------------------------------------------------
-# The `cd
-# <foreign> && git <verb>` candidate-extraction leg is the OTHER extractor
-# `_iter_write_sink_candidates` documents and was untested for any of the
-# new verb spellings; every case above uses `git -C` only.
-# ---------------------------------------------------------------------------
 
 
 def test_cd_and_git_dual_mode_read_verb_never_bumps(repos, monkeypatch):
@@ -791,14 +652,6 @@ def test_cd_and_git_plain_read_verb_never_bumps(repos, monkeypatch):
     )
 
     assert result is None
-
-
-# ---------------------------------------------------------------------------
-# Nothing exercised a GIT_DIR/
-# --work-tree/-c core.worktree= override combined with a dual-mode
-# predicate; the env-resolution fix and the dual-mode predicates were each
-# tested in isolation but never at their seam.
-# ---------------------------------------------------------------------------
 
 
 def test_git_dir_override_with_dual_mode_read_verb_does_not_bump(repos, monkeypatch):
@@ -867,13 +720,6 @@ def test_dash_c_core_worktree_override_with_dual_mode_write_verb_bumps(repos, mo
     assert result is not None
 
 
-# ---------------------------------------------------------------------------
-# Adversarial shapes named by the
-# slice-2 reviewer, hand-traced but not previously present in the
-# parametrize lists.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "verb",
     [
@@ -887,9 +733,6 @@ def test_dash_c_core_worktree_override_with_dual_mode_write_verb_bumps(repos, mo
     ],
 )
 def test_adversarial_dual_mode_shapes_still_bump(repos, monkeypatch, verb):
-    """Every one of these mutates the foreign repo (or, for `stash -u`/
-    `stash --keep-index`, is a bare stash PUSH with an extra flag, not a
-    read sub-word) and must still bump."""
     cmd = f"git -C {_posix(repos['foreign'])} {verb}"
     _set_anchor(monkeypatch, repos, "sess-adversarial-write")
 
@@ -909,11 +752,6 @@ def test_adversarial_dual_mode_shapes_still_bump(repos, monkeypatch, verb):
     ],
 )
 def test_adversarial_dual_mode_shapes_never_bump(repos, monkeypatch, verb):
-    """`notes get-ref` (a recognised read sub-word in `_notes_is_read`),
-    `bisect view` (a recognised read sub-word in `_bisect_is_read`), and
-    `config --get x y` (`--get` is a recognised read flag in `_config_is_
-    read`; the trailing `y` is a value-pattern filter on the query, not a
-    second value to set) are all reads."""
     cmd = f"git -C {_posix(repos['foreign'])} {verb}"
     _set_anchor(monkeypatch, repos, "sess-adversarial-read")
 
@@ -942,8 +780,6 @@ def test_evasion_dash_c_core_worktree_write_subcommand_bumps(repos, monkeypatch)
 
 
 def test_evasion_dash_c_core_worktree_separate_token_write_subcommand_bumps(repos, monkeypatch):
-    """Same as above, `-c <name>=<value>` two-token spelling -- the common
-    one, not the attached `-c<name>=<value>` form."""
     cmd = f"git -c core.worktree={_posix(repos['foreign'])} commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-dashc-2")
 
@@ -953,8 +789,6 @@ def test_evasion_dash_c_core_worktree_separate_token_write_subcommand_bumps(repo
 
 
 def test_evasion_dash_c_core_worktree_attached_form_write_subcommand_bumps(repos, monkeypatch):
-    """`-c<name>=<value>`, attached (no space) -- the other spelling real
-    `git` accepts for short options."""
     cmd = f"git -ccore.worktree={_posix(repos['foreign'])} commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-dashc-3")
 
@@ -989,10 +823,6 @@ def test_non_regression_ordinary_dash_c_unrelated_config_key_still_bumps_correct
 
 
 def test_non_regression_ordinary_dash_c_unrelated_config_key_read_still_allowed(repos, monkeypatch):
-    """The over-block half of the same second-order effect: `git -c
-    color.ui=always log` on a foreign repo must stay allowed (a read), not
-    bump because `color.ui=always` was misread as the subcommand and failed
-    to match the readonly allowlist."""
     cmd = f"git -c color.ui=always -C {_posix(repos['foreign'])} log"
     _set_anchor(monkeypatch, repos, "sess-evasion-dashc-6")
 
@@ -1002,9 +832,6 @@ def test_non_regression_ordinary_dash_c_unrelated_config_key_read_still_allowed(
 
 
 def test_non_regression_dash_config_env_flag_does_not_swallow_subcommand(repos, monkeypatch):
-    """`--config-env=<name>=<envvar>` is a mandatory-value global flag with
-    the identical two-token-skip requirement as `-c` -- must not swallow
-    `commit` into the bogus positional read either."""
     cmd = f"git --config-env=core.editor=EDITOR -C {_posix(repos['foreign'])} commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-dashc-7")
 
@@ -1014,8 +841,6 @@ def test_non_regression_dash_config_env_flag_does_not_swallow_subcommand(repos, 
 
 
 def test_non_regression_dash_namespace_separate_token_does_not_swallow_subcommand(repos, monkeypatch):
-    """`--namespace <ns>` (separate-token, mandatory value) -- same
-    two-token-skip requirement."""
     cmd = f"git --namespace foo -C {_posix(repos['foreign'])} commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-dashc-8")
 
@@ -1044,9 +869,6 @@ def test_p3_git_dir_and_git_common_dir_both_set_last_token_order_wins(repos, mon
 
 
 def test_p3_git_dir_last_write_wins_pinned_by_docstring(repos, monkeypatch):
-    """Nit finding: `GIT_DIR=a GIT_DIR=b` -- the module's own docstring
-    claims "last assignment of a given name wins" but no test exercised it
-    before this one."""
     cmd = f"GIT_DIR={_posix(repos['anchor'])}/.git GIT_DIR={_posix(repos['foreign'])}/.git git commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-p3-lastwins-2")
 
@@ -1067,25 +889,10 @@ def test_same_repo_write_does_not_bump(repos, monkeypatch):
     assert result is None
 
 
-# ---------------------------------------------------------------------------
 # AC14 FAIL-OPEN REGRESSION (2026-08-21,
-# state/bug-backlog/2026-08-21-foreign-write-deny-names-the-same-repo-on-
-# both-sides.yaml) -- `_evaluate_foreign_repo_candidate`'s AC14 same-repo
-# comparison used to fall through to the FOREIGN branch whenever EITHER
-# side's `resolve_git_root` spawn transiently failed (returned `None`),
-# reading "could not resolve" as "confirmed different repo". These two
-# tests pin the fix: an unresolvable comparison must ALLOW, and a resolved,
-# genuinely-different comparison must still DENY.
-# ---------------------------------------------------------------------------
 
 
 def test_ac14_transient_target_root_spawn_failure_allows_same_repo_write(repos, monkeypatch):
-    """The target-side `resolve_git_root(probe_dir)` call fails transiently
-    (simulated) even though the write lands inside the session's own
-    repo -- `anchor_common_cf` (resolved earlier, unaffected) is non-`None`
-    but `target_common_cf` comes back `None`. Before the fix this fell
-    through to FOREIGN and denied a same-repo write; after the fix it must
-    allow."""
     _set_anchor(monkeypatch, repos, "sess-ac14-unresolved-same-repo")
     workdir = repos["anchor"] / "workdir"
     workdir.mkdir()
@@ -1100,7 +907,7 @@ def test_ac14_transient_target_root_spawn_failure_allows_same_repo_write(repos, 
         import os as _os
 
         if cwd is not None and _os.path.abspath(str(cwd)) == failing_abs:
-            return None  # simulated transient `git rev-parse --show-toplevel` failure
+            return None
         return real_resolve_git_root(cwd)
 
     monkeypatch.setattr(guard, "resolve_git_root", _flaky_resolve_git_root)
@@ -1113,10 +920,6 @@ def test_ac14_transient_target_root_spawn_failure_allows_same_repo_write(repos, 
 
 
 def test_ac14_resolved_and_different_roots_still_bumps(repos, monkeypatch):
-    """Companion to the transient-failure test above -- when BOTH sides
-    resolve successfully and genuinely name different repos, AC14 must
-    still deny. Guards against the fix over-widening into "always allow
-    once the session has a repo"."""
     _set_anchor(monkeypatch, repos, "sess-ac14-genuinely-foreign")
     dest = repos["foreign"] / "note.txt"
     cmd = f"echo hi > {_posix(dest)}"
@@ -1127,11 +930,6 @@ def test_ac14_resolved_and_different_roots_still_bumps(repos, monkeypatch):
 
     assert result is not None
     assert "hookSpecificOutput" in result
-
-
-# ---------------------------------------------------------------------------
-# Reads never bump.
-# ---------------------------------------------------------------------------
 
 
 def test_read_carve_out_git_log_on_foreign_repo_does_not_bump(repos, monkeypatch):
@@ -1150,11 +948,6 @@ def test_read_carve_out_git_status_on_foreign_repo_does_not_bump(repos, monkeypa
     result = guard.check_bump_foreign_repo_write(cmd, "sess-8", str(repos["anchor"]), {})
 
     assert result is None
-
-
-# ---------------------------------------------------------------------------
-# AC5 -- the cross-repo-memo carve-out is unconditional.
-# ---------------------------------------------------------------------------
 
 
 def _install_fake_cross_repo_memo(home: Path) -> Path:
@@ -1187,16 +980,6 @@ def test_ac5_canonical_path_carrying_cross_repo_memo_invocation_never_bumps(repo
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# C4b (docs/reference/guard-dialect-coverage.md row 11) --
-# `token_matches_binary(head, "cross-repo-memo")` gates on the named CLI
-# script's own argv0, invoked the same way in both dialects. No real
-# PowerShell parse is exercised (this function takes a bare `cmd: str`) --
-# this proves the SAME argv0 identity check reaches the identical carve-out
-# on a PowerShell-spelled invocation as on the bash-spelled one.
-# ---------------------------------------------------------------------------
-
-
 def test_ac5_powershell_call_operator_prefixed_bare_word_never_bumps(repos, monkeypatch):
     _install_fake_cross_repo_memo(repos["home"])
     _set_anchor(monkeypatch, repos, "sess-9b")
@@ -1217,15 +1000,7 @@ def test_ac5_powershell_semicolon_chained_canonical_path_never_bumps(repos, monk
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# Quoted PowerShell write-target reproduction/regression (break-class fix):
-# the PowerShell tokenizer emits a quoted leaf's raw source span (quotes
-# attached, see `_dialect._flatten_powershell_tokens`), which previously
 # defeated `_WINDOWS_DRIVE_ABSOLUTE_RE`/`os.path.isabs` downstream and
-# silently re-rooted the candidate under the session's own anchor repo
-# instead of judging it as foreign -- an affirmative false-clean.
-# `_write_bump_sink_shapes` now strips quotes per-extractor.
-# ---------------------------------------------------------------------------
 
 
 @requires_powershell_grammar
@@ -1256,8 +1031,6 @@ def test_powershell_new_item_single_quoted_foreign_repo_target_bumps(repos, monk
 
 @requires_powershell_grammar
 def test_powershell_new_item_unquoted_foreign_repo_target_still_bumps(repos, monkeypatch):
-    """Non-regression companion: the unquoted spelling must keep bumping
-    exactly as before this fix."""
     _set_anchor(monkeypatch, repos, "sess-ps-unquoted-foreign")
     dest = repos["foreign"] / "newfile.txt"
     cmd = f"New-Item -Path {dest} -ItemType File"
@@ -1271,8 +1044,6 @@ def test_powershell_new_item_unquoted_foreign_repo_target_still_bumps(repos, mon
 
 @requires_powershell_grammar
 def test_powershell_new_item_quoted_own_repo_target_does_not_bump(repos, monkeypatch):
-    """Non-regression companion: a quoted target legitimately resolving
-    inside the session's own anchor repo must still NOT bump."""
     _set_anchor(monkeypatch, repos, "sess-ps-quoted-own")
     dest = repos["anchor"] / "newfile.txt"
     cmd = f'New-Item -Path "{dest}" -ItemType File'
@@ -1285,9 +1056,6 @@ def test_powershell_new_item_quoted_own_repo_target_does_not_bump(repos, monkeyp
 
 
 def test_ac5_carve_out_is_unconditional_even_with_no_marker_and_bump_applying(repos, monkeypatch):
-    """"Unconditional -- it bypasses even the marker" (plan body): no marker
-    is created anywhere in this test, and the session's own repo genuinely
-    differs from the target, yet the carve-out still exempts it."""
     crm = _install_fake_cross_repo_memo(repos["home"])
     _set_anchor(monkeypatch, repos, "sess-11")
     assert not (resolve_gitdir(str(repos["anchor"])) / marker_basename("sess-11")).exists()
@@ -1318,9 +1086,6 @@ def test_ac5_negative_hand_rolled_write_into_a_sibling_cross_repo_directory_stil
 
 
 def test_ac5_same_named_decoy_script_elsewhere_does_not_get_the_carve_out(repos, monkeypatch):
-    """A same-basename script living somewhere OTHER than the canonical
-    settings-home location is not exempted -- only the resolved canonical
-    executable, or a bare (PATH-trusted) invocation, gets AC5's carve-out."""
     _install_fake_cross_repo_memo(repos["home"])
     _set_anchor(monkeypatch, repos, "sess-13")
     decoy_dir = repos["anchor"] / "decoy"
@@ -1338,22 +1103,7 @@ def test_ac5_same_named_decoy_script_elsewhere_does_not_get_the_carve_out(repos,
     assert result is not None
 
 
-# ---------------------------------------------------------------------------
-# Quoted binary-head reproduction/regression (bug backlog row
-# 2026-08-08-quoted-binary-head-defeats-os-path-isabs-5565d6e1563e): a
-# QUOTED, path-carrying `cross-repo-memo` head token must earn the AC5
-# carve-out exactly as its unquoted twin already does, and a same-named
-# DECOY invoked with a quoted head must NOT -- the danger direction named
-# in that row is a careless quote-strip reopening the decoy hole, so both
-# sides are asserted here, plus the unquoted case as a non-regression
-# anchor.
-# ---------------------------------------------------------------------------
-
-
 def test_ac5_double_quoted_canonical_path_carrying_invocation_never_bumps(repos, monkeypatch):
-    """The literal defect: a quoted head token (e.g. a Windows path with a
-    space in it, or any PowerShell-quoted absolute invocation) must resolve
-    correctly and still earn the carve-out."""
     crm = _install_fake_cross_repo_memo(repos["home"])
     _set_anchor(monkeypatch, repos, "sess-14")
     cmd = f'"{_posix(crm)}" --repo foreign'
@@ -1399,8 +1149,6 @@ def test_ac5_quoted_same_named_decoy_script_elsewhere_does_not_get_the_carve_out
 
 
 def test_ac5_unquoted_canonical_path_carrying_invocation_still_never_bumps(repos, monkeypatch):
-    """Non-regression companion: the pre-existing unquoted spelling must
-    keep earning the carve-out exactly as before this fix."""
     crm = _install_fake_cross_repo_memo(repos["home"])
     _set_anchor(monkeypatch, repos, "sess-14c")
     cmd = f"{_posix(crm)} --repo foreign"
@@ -1410,15 +1158,7 @@ def test_ac5_unquoted_canonical_path_carrying_invocation_still_never_bumps(repos
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# The marker clears the bump.
-# ---------------------------------------------------------------------------
-
-
 def test_marker_present_for_session_clears_the_bump(repos, monkeypatch):
-    """C3/AC4 -- the marker now lives at the TARGET's own gitdir, per-
-    (session, target), not the session's anchor gitdir: clearing this exact
-    target with a `touch` there stands the bump down for it."""
     _set_anchor(monkeypatch, repos, "sess-14")
     foreign_gitdir = resolve_gitdir(str(repos["foreign"]))
     assert foreign_gitdir is not None
@@ -1442,22 +1182,8 @@ def test_marker_for_a_different_session_does_not_clear_this_ones_bump(repos, mon
     assert result is not None
 
 
-# ---------------------------------------------------------------------------
-# AC6 -- cross-repo `cwd` drift: the live payload `cwd` has already crossed
-# a repo boundary (simulating an earlier Bash call's `cd <foreign>`, since
-# "Working directory persists between calls" -- harness contract) by the
-# time this guard sees a plain, no-`-C`, no-`cd` write in that SAME foreign
-# repo. This is the plan's own repro-table cell: `cd <foreign> && git
 # commit`, `CLAUDE_PROJECT_DIR` unset -- pre-C1/C2 the guard fired `False`
-# (the headline defect); this test pins the fix on the exact surface the
-# memo reproduced against. Uses a REAL `write_session_start_record` so
-# applicability is genuinely True -- a test that passes only because
-# applicability failed open proves nothing (this is exactly how the
-# original AC12 test slipped through; that one only drifted `cwd` to a
 # SUBDIRECTORY of the anchor repo, where `sessions_dir` resolves
-# identically either way -- this test drifts ACROSS a repo boundary
-# instead, which the subdirectory-only test never covered).
-# ---------------------------------------------------------------------------
 
 
 def test_ac6_cwd_drifted_to_a_foreign_repo_still_bumps_the_commit_there(repos, monkeypatch):
@@ -1484,19 +1210,7 @@ def test_ac6_cwd_drifted_to_a_foreign_repo_still_bumps_the_commit_there(repos, m
     assert result is not None
 
 
-# ---------------------------------------------------------------------------
-# AC3/AC4 -- C1's destination-class axis wired through this guard: a
-# registered publish.mirrors.* target renders publish-class copy naming the
-# owner and never "repos you don't own"; an ordinary foreign source repo
-# keeps today's copy.
-# ---------------------------------------------------------------------------
-
-
 def _write_publish_registry(reg_dir: Path, mirror_path: str, owner: str = "claude-central-em") -> None:
-    """A real `[publish.mirrors.<key>]` nested table -- the shape
-    `target_is_publish_destination`/`_all_publish_destinations` (C1) parse,
-    not the flat-string shape that silently fails to parse as a bracket
-    table."""
     reg_dir.mkdir(parents=True, exist_ok=True)
     escaped = str(mirror_path).replace("\\", "\\\\")
     lines = ["[publish.mirrors.testmirror]", f'path = "{escaped}"', f'owner = "{owner}"']
@@ -1551,8 +1265,6 @@ def test_ac1_ordinary_foreign_repo_keeps_todays_foreign_class_copy(repos, monkey
 
 
 def test_ac9_publish_destination_verdict_asserted_only_after_bump_applies(repos, monkeypatch, tmp_path):
-    """AC9 -- non-negotiable precondition, exercised explicitly for this
-    chunk's own new classification wiring."""
     from coordinator_core.bash_guards import _write_bump_applicability as applicability
 
     reg_dir = tmp_path / "registry"
@@ -1568,25 +1280,9 @@ def test_ac9_publish_destination_verdict_asserted_only_after_bump_applies(repos,
     assert result is not None
 
 
-# ---------------------------------------------------------------------------
-# state/handoffs/2026-08-13-one-command-publish.md AC3 -- the guard still
-# denies an unauthorized agent push into a publish mirror, and clearing that
-# exact target's marker is what stands the bump down (never a standing
-# "publish is fine now" grant). Uses the same synthetic `publish.mirrors.*`
-# registry fixture as the AC3/AC9 block above -- `repos["foreign"]` stands in
-# for the real `claude-klabauter` publish mirror; this test never touches
-# the real one.
-# ---------------------------------------------------------------------------
-
-
 def test_one_command_publish_ac_unauthorized_push_into_publish_mirror_bumps(
     repos, monkeypatch, tmp_path
 ):
-    """The publish-mirror shape from the handoff: an agent session anchored
-    in its own repo issues a real `git push` against a publish-mirror path
-    that is not its own repo. `bump_foreign_repo_write` must still deny it --
-    demonstrated for both the `git -C <mirror> push` and (session already
-    `cd`'d into the mirror) plain `git push` spellings."""
     reg_dir = tmp_path / "registry"
     _write_publish_registry(reg_dir, str(repos["foreign"]), owner="claude-central-em")
     _set_anchor(
@@ -1610,8 +1306,6 @@ def test_one_command_publish_ac_unauthorized_push_into_publish_mirror_bumps(
 def test_one_command_publish_ac_cd_into_publish_mirror_then_push_bumps(
     repos, monkeypatch, tmp_path
 ):
-    """Same shape, `cd <mirror> && git push` spelling -- the guard resolves
-    the target via the tracked `effective_cwd`, not a literal `-C` flag."""
     reg_dir = tmp_path / "registry"
     _write_publish_registry(reg_dir, str(repos["foreign"]), owner="claude-central-em")
     _set_anchor(
@@ -1635,12 +1329,6 @@ def test_one_command_publish_ac_cd_into_publish_mirror_then_push_bumps(
 def test_one_command_publish_ac_marker_clears_the_publish_mirror_push_bump(
     repos, monkeypatch, tmp_path
 ):
-    """The complementary half: once the operator has cleared the bump for
-    THIS target (the per-(session, target) marker exists at the mirror's own
-    gitdir, per C3/AC4), the identical push no longer bumps. This is the
-    guard working as designed -- an unauthorized push still denies (asserted
-    above), and an operator-cleared one does not -- not a defect in either
-    direction."""
     reg_dir = tmp_path / "registry"
     _write_publish_registry(reg_dir, str(repos["foreign"]), owner="claude-central-em")
     _set_anchor(
@@ -1661,15 +1349,7 @@ def test_one_command_publish_ac_marker_clears_the_publish_mirror_push_bump(
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# 2026-08-14 percolate-push memo -- the publish-mirror refusal must name the
-# real alternative for a PUSH (`percolate-push <target>`), while a
-# content-authoring write into the same mirror keeps the doctrine citation
-# unchanged (that copy is correct for THAT shape, see
 # `_write_bump_message._GIT_PUSH_WRITE_VERB_LABEL`'s own docstring). Both
-# halves of this split are asserted here so a future edit cannot silently
-# collapse them back onto a single template.
-# ---------------------------------------------------------------------------
 
 
 def test_percolate_push_memo_git_push_into_publish_mirror_names_percolate_push(
@@ -1693,17 +1373,12 @@ def test_percolate_push_memo_git_push_into_publish_mirror_names_percolate_push(
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "percolate-push <target>" in reason
     assert "is publish mirror" in reason
-    # The content-authoring doctrine citation is the WRONG alternative for a
-    # push -- it must not appear alongside the real one.
     assert "Publish-Repo Content Authoring" not in reason
 
 
 def test_percolate_push_memo_content_authoring_write_still_cites_doctrine(
     repos, monkeypatch, tmp_path
 ):
-    """The complementary half -- a hand-authored commit into the mirror
-    (never a `push`) keeps today's doctrine-citation copy untouched; the
-    percolate-push swap is scoped to the `git push` write-sink shape only."""
     reg_dir = tmp_path / "registry"
     _write_publish_registry(reg_dir, str(repos["foreign"]), owner="claude-central-em")
     _set_anchor(
@@ -1724,29 +1399,19 @@ def test_percolate_push_memo_content_authoring_write_still_cites_doctrine(
     assert "percolate-push" not in reason
 
 
-# ---------------------------------------------------------------------------
-# Fail-open cases -- unresolvable inputs never bump.
-# ---------------------------------------------------------------------------
-
-
 def test_fail_open_when_session_id_empty(repos, monkeypatch):
-    # Guard short-circuits on an empty `session_id` before ever resolving
-    # an anchor -- no applicability setup needed either way.
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
 
     assert guard.check_bump_foreign_repo_write(cmd, "", str(repos["anchor"]), {}) is None
 
 
 def test_fail_open_when_cmd_empty(repos, monkeypatch):
-    # Guard short-circuits on an empty `cmd` before ever resolving an
-    # anchor -- no applicability setup needed either way.
     assert guard.check_bump_foreign_repo_write("", "sess-16", str(repos["anchor"]), {}) is None
 
 
 def test_fail_open_when_anchor_unresolvable(repos, monkeypatch):
     # No CLAUDE_PROJECT_DIR / session-start record at all -- this IS the
     # genuinely-unresolvable-anchor case, not a `CLAUDE_PROJECT_DIR`
-    # fallback test.
     monkeypatch.setenv("HOME", str(repos["home"]))
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
 
@@ -1756,16 +1421,7 @@ def test_fail_open_when_anchor_unresolvable(repos, monkeypatch):
 
 
 def test_fail_open_when_write_sink_target_has_no_existing_ancestor_at_all():
-    """`_nearest_existing_ancestor` -- a bogus path with no real filesystem
-    root resolves to `None` (never raises)."""
     assert guard._nearest_existing_ancestor("") is None
-
-
-# ---------------------------------------------------------------------------
-# Agent memory store -- never a foreign-repo bump, even when `~/.claude`
-# itself IS a real git checkout (as it is on this fleet), which is exactly
-# the shape THIS guard (not C5's outside-repo sibling) would otherwise see.
-# ---------------------------------------------------------------------------
 
 
 def test_agent_memory_store_write_never_bumps_even_when_home_is_a_repo(repos, monkeypatch, tmp_path):
@@ -1799,15 +1455,6 @@ def test_agent_memory_store_index_write_never_bumps_even_when_home_is_a_repo(rep
 
 
 def test_project_dir_write_not_under_memory_now_allowed_by_c1(repos, monkeypatch, tmp_path):
-    """AC1/AC4 (docs/plans/2026-08-10-carve-claude-out-and-close-the-
-    backslash-bypass.md, C1): superseded by C1's unconditional `~/.claude`
-    carve-out, wired into this leg alongside the (narrower, `memory/`-only)
-    agent-memory exemption immediately above -- a write elsewhere under a
-    project's own directory (not `memory/`) no longer bumps, because it is
-    still under `~/.claude` as a whole. Prior to C1 this test asserted the
-    opposite (`test_project_dir_write_not_under_memory_still_bumps_when_
-    home_is_a_repo`), proving only the agent-memory exemption's own,
-    narrower boundary."""
     session_id = "sess-mem-c4-3"
     home = _init_repo(tmp_path, "home-that-is-a-repo-3")
     monkeypatch.setenv("HOME", str(home))
@@ -1820,13 +1467,6 @@ def test_project_dir_write_not_under_memory_now_allowed_by_c1(repos, monkeypatch
     result = guard.check_bump_foreign_repo_write(cmd, session_id, str(repos["anchor"]), {})
 
     assert result is None
-
-
-# ---------------------------------------------------------------------------
-# C1 (docs/plans/2026-08-10-carve-claude-out-and-close-the-backslash-bypass.md)
-# -- `~/.claude` never bumps on this leg either, wholesale, even though it
-# is a real git checkout on this fleet. AC1-AC4.
-# ---------------------------------------------------------------------------
 
 
 def test_ac1_settings_json_write_never_bumps_on_this_leg(repos, monkeypatch, tmp_path):
@@ -1865,31 +1505,13 @@ def test_ac4_unregistered_foreign_repo_still_bumps_alongside_claude_home_carveou
     assert "hookSpecificOutput" in result
 
 
-#: NOTE: this leg's own `check_bump_foreign_repo_write` never consults
-#: `target_is_registered_repo` -- that predicate governs only the
-#: anchor-in-no-repo branch (`bump_outside_repo_write.py` [C5] / the tool
-#: leg), not this leg, which bumps on ANY foreign repo unconditionally. A
-#: distinct "registered foreign repo" regression cell would therefore be
-#: identical in setup and assertion to the unregistered one immediately
-#: above -- not duplicated here for that reason; the spike verdict record's
 #: "(c) REGISTERED repo" row is pinned instead on the tool leg (see
-#: `test_bump_out_of_repo_tool_write.py::test_ac4_registered_repo_
-#: destination_still_bumps`) and on C5 (`bump_outside_repo_write.py`),
-#: where the registry membership actually changes the verdict.
 
 
-# ---------------------------------------------------------------------------
 # ANCHOR-RESOLUTION MISFIRE REGRESSION (bug reproduced live in-session,
 # 2026-08-15) -- see module docstring, "UNRESOLVED IS NOT THE SAME FACT AS
 # REPO-LESS". `resolve_gitdir(anchor)` returning `None` from a transient
-# `git rev-parse --git-dir` spawn failure must not be read as "the anchor
-# has no repo": `_evaluate_foreign_repo_candidate`'s no-repo-anchor branch
 # bumps a REGISTERED target unconditionally, so without the fix, a
-# transient spawn failure could deny a write into the session's OWN repo
-# whenever that repo happens to be registered -- exactly the shape needed
-# to make the defect observable (an unregistered target inside the anchor's
-# own subtree already never bumped, registry membership or not).
-# ---------------------------------------------------------------------------
 
 
 def _write_repos_registry(reg_dir: Path, **repos: str) -> None:
@@ -1909,7 +1531,7 @@ def _patch_resolve_gitdir_to_fail_for(monkeypatch, failing_cwd: str) -> None:
 
     def _flaky_resolve_gitdir(cwd=None):
         if cwd is not None and _os.path.abspath(str(cwd)) == failing_abs:
-            return None  # simulated transient `git rev-parse --git-dir` spawn failure
+            return None
         return real_resolve_gitdir(cwd)
 
     monkeypatch.setattr(guard, "resolve_gitdir", _flaky_resolve_gitdir)
@@ -1918,12 +1540,6 @@ def _patch_resolve_gitdir_to_fail_for(monkeypatch, failing_cwd: str) -> None:
 def test_transient_anchor_gitdir_spawn_failure_does_not_bump_a_write_into_the_anchors_own_registered_repo(
     repos, monkeypatch, tmp_path
 ):
-    """Reproduces the defect directly: the anchor is a REAL repo, registered
-    in the machine registry, and its `.git` entry is present on disk -- so
-    `path_has_git_ancestor` still finds it even while `resolve_gitdir` is
-    patched to simulate the failed spawn. A write squarely inside the
-    session's own (registered) repo must ALLOW, not deny on a mis-read 'no
-    repo here'."""
     reg_dir = tmp_path / "registry"
     _write_repos_registry(reg_dir, some_repo=str(repos["anchor"]))
     _set_anchor(
@@ -2053,12 +1669,6 @@ def test_cloud_repro_bash_leg_does_not_widen_to_a_different_registered_repo(
     assert result is not None
 
 
-# ---------------------------------------------------------------------------
-# AC13 / AC19 -- registered as a GuardEntry, not a call-site patch, with
-# every registration attribute pinned explicitly.
-# ---------------------------------------------------------------------------
-
-
 def test_ac13_registered_as_a_guard_entry_in_dispatch_build_guard_chain():
     from coordinator_core.bash_guards import dispatch
 
@@ -2068,18 +1678,7 @@ def test_ac13_registered_as_a_guard_entry_in_dispatch_build_guard_chain():
     assert len(entries) == 1
 
 
-# ---------------------------------------------------------------------------
-# AC10/AC10b -- `offer-git-c` and this bump were both registered in
 # `GuardBand.ADVISORY_REWRITE`, and the chain returns on the first non-None
-# result: `offer-git-c` sat first, so a bare `git commit` (no pathspec) in a
-# foreign repo never reached this bump at all -- C2's destination-class
-# message axis was built for a verdict nobody ever saw. C8 moved this guard
-# (and its `bump-outside-repo-write` sibling) ahead of `offer-git-c` in
-# `_build_guard_chain`'s own registration order to close that gap. These two
-# tests exercise the REAL chain in registration order (not a single guard's
-# `check_bump_foreign_repo_write` call in isolation, as the rest of this file
-# does) so the fix is asserted at the level it actually broke at.
-# ---------------------------------------------------------------------------
 
 
 def _first_verdict(chain):
@@ -2115,13 +1714,6 @@ def test_ac10_bare_git_commit_no_pathspec_in_foreign_repo_now_reaches_the_bump(r
 
 
 def test_ac10b_offer_git_c_no_longer_rewrites_the_case_it_used_to(repos, monkeypatch):
-    """The coverage change to `offer-git-c` itself: called on its own (as
-    the rest of this file exercises `check_bump_foreign_repo_write` on its
-    own), `offer-git-c` still rewrites this exact command -- its own logic
-    is untouched. What changed is that it never gets the chance to, because
-    the bump now answers first in the real chain (asserted above by AC10).
-    This test pins the BEFORE half of that story so the coverage change is
-    visible, not just the bump's new reachability."""
     from coordinator_core.bash_guards.guard_offer_git_c import check_offer_git_c
 
     session_id = "sess-ac10b-coverage-change"
@@ -2129,7 +1721,6 @@ def test_ac10b_offer_git_c_no_longer_rewrites_the_case_it_used_to(repos, monkeyp
 
     cmd = f"cd {_posix(repos['foreign'])} && git commit --allow-empty -m x"
 
-    # `offer-git-c` in isolation still rewrites this shape -- confirms the
     # guard's own behaviour is unchanged; only its chain POSITION moved.
     solo_result = check_offer_git_c(cmd, session_id, str(repos["anchor"]))
     assert solo_result is not None
@@ -2139,9 +1730,6 @@ def test_ac10b_offer_git_c_no_longer_rewrites_the_case_it_used_to(repos, monkeyp
     chain = dispatch._build_guard_chain(cmd, session_id, str(repos["anchor"]), {}, None, False)
     name, _result = _first_verdict(chain)
 
-    # In the real chain, `offer-git-c` no longer gets to answer this case --
-    # the bump shadows it now. This is the case `offer-git-c` used to cover
-    # (be the first non-None answer for) and now does not.
     assert name != "offer-git-c"
 
 
@@ -2154,27 +1742,16 @@ def test_ac19_registration_attributes_pinned_not_left_to_default():
 
     # `fail_closed=False` -- the OPPOSITE of every neighbouring
     # CONFINEMENT_DENY entry: a crash in this guard must swallow to
-    # "allow", never route through the hard-deny crash path.
     assert entry.fail_closed is False
     # `band=ADVISORY_REWRITE`, NOT `CONFINEMENT_DENY` -- the blanket-disarm
     # marker can suppress every band except CONFINEMENT_DENY; registering
-    # a deliberately passable bump there would make it the LEAST passable
-    # guard in the suite.
     assert entry.band is dispatch.GuardBand.ADVISORY_REWRITE
     # Explicit, never the UNCLASSIFIED default (dispatch.py's own
-    # registry-validation test also fails loud on this).
     assert entry.advisory_value is not AdvisoryValue.UNCLASSIFIED
     assert entry.advisory_value is AdvisoryValue.NOT_COST_ARGUED
 
 
 def test_ac19_guard_band_membership_and_advisory_registry_tests_also_pass():
-    """This guard's registration is additionally pinned by the package's
-    OWN pre-existing structural tests (not reimplemented here) --
-    `test_guard_band_membership.py::test_no_registered_guard_is_
-    unclassified_by_this_test` and `test_advisory_value_registry.py`'s own
-    sweep both exercise `_build_guard_chain` directly and will fail loud if
-    this guard's name is ever registered without being classified in
-    those files' own band lists."""
     from coordinator_core.bash_guards import dispatch
     from coordinator_core.bash_guards._advisory_value import AdvisoryValue
 
@@ -2186,15 +1763,6 @@ def test_ac19_guard_band_membership_and_advisory_registry_tests_also_pass():
 
 
 def test_extended_length_prefix_does_not_desync_same_repo_root(monkeypatch, tmp_path):
-    """`state/handoffs/2026-08-03-windows-extended-length-prefix-desync.md`
-    -- bash surface (C4). Simulates the exact failure shape: `os.path.
-    realpath` returns the Windows extended-length form for one operand and
-    the bare form for the other (the length-triggered asymmetry a real
-    Windows host can produce), injected via monkeypatch since this is a
-    macOS box and `realpath` never produces that form here. Before this
-    fix, `_resolve_and_casefold`'s `casefold_path` call preserved the
-    prefix, so the two operands compared unequal and `_same_repo_root`
-    wrongly reported "different repo" for the identical directory."""
     real_dir = tmp_path / "anchor-repo"
     real_dir.mkdir()
     bare_form = str(real_dir)
@@ -2215,13 +1783,6 @@ def test_extended_length_prefix_does_not_desync_same_repo_root(monkeypatch, tmp_
     root_cf = guard._resolve_and_casefold("root-input")
     assert candidate_cf is not None and root_cf is not None
     assert guard._same_repo_root(candidate_cf, root_cf) is True
-
-
-# ---------------------------------------------------------------------------
-# C2 (docs/plans/2026-08-10-carve-claude-out-and-close-the-backslash-bypass.md)
-# AC5-AC6 -- an unquoted backslash-spelled absolute target must bump exactly
-# like the identical, forward-slash-spelled target, on the Bash surface.
-# ---------------------------------------------------------------------------
 
 
 def test_c2_ac5_backslash_spelled_target_bumps_same_as_forward_slash(monkeypatch, repos):
@@ -2263,27 +1824,14 @@ def test_c2_ac5_backslash_spelled_target_bumps_same_as_forward_slash(monkeypatch
 
 
 def test_c2_ac6_backslash_normalization_removed_would_fail(monkeypatch, repos):
-    """AC6: pins the exact mechanism C2 introduces -- `tokenize_full_
-    command(..., preserve_windows_backslashes=True)` must keep the target's
-    separators intact through tokenization. Directly exercises the
-    tokenizer (not the guard's end-to-end verdict, already covered by
-    AC5's test above) so a revert of `preserve_windows_backslashes` fails
-    HERE even if some other, unrelated change happened to keep the AC5
-    guard-level assertion passing. `shlex`'s escape processing is pure text
-    handling with no platform branch of its own (the platform gate lives
-    ONLY at the two write-bump guards' call sites -- see `_iter_write_sink_
-    candidates`'s own docstring), so this assertion holds on every host,
-    unlike AC5's end-to-end test above."""
-    cmd = r"echo probe > C:\Users\x\out.txt"  # abs-path-ok: illustrative example shape, not a machine-specific citation
+    cmd = r"echo probe > C:\Users\x\out.txt"
 
     tokens_normalized = _command_tokenizer.tokenize_full_command(
         cmd, preserve_windows_backslashes=True
     )
     tokens_default = _command_tokenizer.tokenize_full_command(cmd)
 
-    assert tokens_normalized[-1] == r"C:\Users\x\out.txt"  # abs-path-ok: illustrative example shape, not a machine-specific citation
-    # The pre-C2 default behavior mangles it -- pinned here so a future
-    # reader can see exactly what "removing the normalization" reverts to.
+    assert tokens_normalized[-1] == r"C:\Users\x\out.txt"
     assert tokens_default[-1] == "C:Usersxout.txt"
     assert tokens_normalized[-1] != tokens_default[-1]
 
@@ -2356,20 +1904,6 @@ def test_c2_p0_unquoted_escaped_quote_does_not_swallow_separator():
 
 
 def test_c2_p2_backslash_before_punctuation_pairs_like_backslash_before_quote():
-    """
-    `_mask_unquoted_backslashes` only special-cased an unquoted backslash
-    immediately before a QUOTE (`'`/`"`); one before `;`/`&`/`|` still fell
-    through to plain sentinel-masking, so `a\\;b` tokenized to
-    `['a\\', ';', 'b']` -- a fabricated separator real bash never produces
-    (bash's own escape rule treats `\\;` as a literal `;` inside one word:
-    `echo a\\;b` is a single `a;b` argument, no second command). Fail-closed
-    direction (an inert literal separator character got treated as a real
-    command boundary), but the same root cause as the P0 this module was
-    already fixed for -- generalized here to the other two
-    `punctuation_chars` this tokenizer recognizes.
-
-    Pins that flag on/off tokenize identically for all three punctuation
-    characters, exactly as the existing quote-pair case already pins."""
     for punctuation in (";", "&", "|"):
         cmd = "echo a\\" + punctuation + "b"
         tokens_on = _command_tokenizer.tokenize_full_command(
@@ -2388,30 +1922,6 @@ def test_c2_p2_backslash_before_punctuation_pairs_like_backslash_before_quote():
 
 
 def test_c2_p2_consecutive_backslashes_before_quote_pair_left_to_right():
-    """Pairing
-    an unquoted backslash with a following quote per-character (rather than
-    over the whole RUN of consecutive backslashes) mis-paired `\\\\'` (two
-    backslashes then a quote) as `(\\)(\\')` instead of real bash's own
-    left-to-right `(\\\\)('...)`: the first backslash pairs with the SECOND
-    backslash (one literal backslash, consumed), leaving the quote genuinely
-    unescaped -- a real quote-open that runs uninterrupted to the next bare
-    quote. Before this fix, `_mask_unquoted_backslashes` let the second
-    backslash reach for the quote a character the first backslash had
-    already claimed, fabricating token boundaries real bash does not
-    produce (`rm`/`-rf`/`/important` split out as their own tokens where
-    real bash runs nothing but the surrounding `echo`).
-
-    Pins the structural property that matters for guard classification: an
-    EVEN run of backslashes before a quote leaves the quote free to open a
-    real (uninterrupted) span, so the danger tokens stay swallowed inside
-    one `echo` argument in BOTH the flag-on and flag-off tokenization --
-    same segment count, same absence of the danger tokens as their own
-    segment, in each. (The exact literal backslash count surviving inside
-    that swallowed argument differs cosmetically between flag on/off --
-    flag-on preserves both raw backslashes as literal sentinel-unmasked
-    characters rather than collapsing the pair the way plain `shlex` escape
-    does -- but that difference is inert: it is not a command-position
-    token in either case.)"""
     remove = "r" + "m"
     force_recursive = "-r" + "f"
     danger = "important"
@@ -2434,45 +1944,12 @@ def test_c2_p2_consecutive_backslashes_before_quote_pair_left_to_right():
         )
 
 
-# ---------------------------------------------------------------------------
-# AC7 (docs/plans/2026-08-02-write-confinement-guards.md) -- a dispatched
-# subagent inherits its EM's marker without a second one, on the Bash leg.
-#
-# Regression for bug
-# `2026-08-11-a-dispatched-coordinator-executor-is-den-28df23d727ea`: C3 of
-# docs/plans/2026-08-03-narrow-write-confinement-bump.md sited the marker at
-# the TARGET's own gitdir, and `_evaluate_foreign_repo_candidate` started
-# resolving `marker_probe_root = resolve_git_root(marker_probe)` (the TARGET
-# root) into `bump_is_cleared`'s `git_root=` and both `effective_session_id`
-# calls. `resolve_em_session_id` reads the EM back-pointer from
-# `<git_root>/.git/coordinator-sessions/.agents/<agent_id>/em-session-id.txt`,
-# which only ever exists in the SESSION's own gitdir -- resolved against the
-# target root that lookup silently misses, `effective_session_id` falls back
-# to the subagent's own `session_id`, and a dispatched subagent re-bumps
-# despite its EM having cleared the target. Fixed by threading `anchor_root`
-# (`resolve_git_root(anchor)`, the session's own root) through to
-# `_evaluate_foreign_repo_candidate` and using it for the EM-inheritance
-# lookup, while the marker's own SITING (`marker_probe`/`marker_gitdir`,
-# still the target's gitdir) is untouched.
-#
-# Keeps the same control pair the reproducing probe used: a fixture-validity
-# control (the hand-written back-pointer actually resolves the way the
-# module docstring says it does) and a no-marker non-vacuity control
-# (the identical payload DOES bump absent the EM's marker) alongside the
-# AC7 assertion itself -- a regression test with only the AC7 assertion is
-# how this defect went unnoticed after C3 landed.
-# ---------------------------------------------------------------------------
-
 EM_SID = "11111111-2222-3333-4444-555555555555"
 SUB_SID = "99999999-8888-7777-6666-555555555555"
 AC7_AGENT_ID = "coordinatorexecutor-deadbeef"
 
 
 def _write_em_backpointer(session_root: Path, agent_id: str, em_sid: str) -> None:
-    """The EM back-pointer as `subagent_sandbox.engine` writes it: in the
-    SESSION repo's own gitdir, never the target's -- see
-    `_write_bump_marker.resolve_em_session_id`'s own docstring for the exact
-    path shape this mirrors."""
     d = session_root / ".git" / "coordinator-sessions" / ".agents" / agent_id
     d.mkdir(parents=True, exist_ok=True)
     (d / "em-session-id.txt").write_text(em_sid + "\n", encoding="utf-8")
@@ -2514,9 +1991,6 @@ def test_ac7_subagent_inherits_em_marker_on_bash_leg(repos, monkeypatch):
 
 
 def test_ac7_non_vacuity_same_payload_bumps_without_the_em_marker(repos, monkeypatch):
-    """Control 2 -- non-vacuity: the identical payload, minus the EM's
-    marker, DOES bump -- proving the AC7 assertion above is testing a real
-    clear, not a payload shape this guard never fires on regardless."""
     _set_anchor(monkeypatch, repos, SUB_SID)
     _write_em_backpointer(repos["anchor"], AC7_AGENT_ID, EM_SID)
 
@@ -2528,22 +2002,8 @@ def test_ac7_non_vacuity_same_payload_bumps_without_the_em_marker(repos, monkeyp
     assert result is not None
 
 
-# ---------------------------------------------------------------------------
 # AC14 ANCHOR-SIDE COVERAGE GAP (2026-08-21)
-#
-# The suite could not see this class of defect at all: it went 196-green
-# against a build that ALLOWED a genuinely foreign write. Both AC14 tests
-# above drive the TARGET side, and the target side is only reached after the
-# anchor side has already resolved -- so no amount of target-side patching
-# constructs the dangerous state. "Tests pass" was never evidence of safety
-# for a change to this comparison, which is how a fail-open widening reached
-# the working tree with a green suite behind it.
-#
 # The state that matters: `resolve_gitdir(anchor)` SUCCEEDS (so the
-# missing-gitdir early return in `check_bump_foreign_repo_write` does not
-# fire) while `resolve_git_root(anchor)` transiently MISSES. Control then
-# falls through with `anchor_common_cf is None` and no guard above it.
-# ---------------------------------------------------------------------------
 
 
 def test_ac14_anchor_root_spawn_failure_still_bumps_a_foreign_target(repos, monkeypatch):
@@ -2563,7 +2023,7 @@ def test_ac14_anchor_root_spawn_failure_still_bumps_a_foreign_target(repos, monk
         import os as _os
 
         if cwd is not None and _os.path.abspath(str(cwd)) == anchor_abs:
-            return None  # simulated transient `--show-toplevel` miss, gitdir unaffected
+            return None
         return real_resolve_git_root(cwd)
 
     monkeypatch.setattr(guard, "resolve_git_root", _anchor_root_misses)
@@ -2580,14 +2040,6 @@ def test_ac14_anchor_root_spawn_failure_still_bumps_a_foreign_target(repos, monk
 
 
 def test_ac14_own_repo_write_survives_every_root_resolution_missing(repos, monkeypatch):
-    """The converse, and the original defect: no root resolution succeeding
-    anywhere must still not deny a write to the session's OWN repo.
-
-    Stronger than the target-side test above, which leaves the anchor side
-    resolving. Passes only because neither side derives from a root spawn any
-    more -- a build that still consulted `resolve_git_root` for the comparison
-    cannot satisfy both this and the anchor test above.
-    """
     _set_anchor(monkeypatch, repos, "sess-ac14-all-miss")
     workdir = repos["anchor"] / "inner"
     workdir.mkdir()
@@ -2605,20 +2057,6 @@ def test_ac14_own_repo_write_survives_every_root_resolution_missing(repos, monke
     )
 
 
-# --- Redirection tokens must not reach the dual-mode read predicates -------
-#
-# The dispatcher splits segments on `|`, so a pipe never reaches a git
-# segment's args. `2>&1` is not a separator, so it does. It starts with a
-# digit rather than `-`, so the positional helpers counted it as the
-# subcommand's first positional and every arity- or subword-shaped read
-# predicate flipped to write on it. Reproducer, before the fix:
-#     git -C <repo> remote -v          -> allowed
-#     git -C <repo> remote -v 2>&1     -> DENIED
-# Same command, same repo, two characters apart. Found by doe-claude-em after
-# both of us stopped one variation short all evening — we varied the git verb
-# and never the shell shape.
-
-
 @pytest.mark.parametrize(
     "subcommand,args",
     [
@@ -2629,10 +2067,6 @@ def test_ac14_own_repo_write_survives_every_root_resolution_missing(repos, monke
     ],
 )
 def test_redirect_token_does_not_flip_a_read_to_a_write(subcommand, args):
-    """The read verdict must be identical with and without a trailing
-    redirect. Asserted as an equality against the clean verdict rather than
-    against `False`, so this cannot pass by the predicate becoming
-    permissive in both directions."""
     clean = guard._git_invocation_is_write(subcommand, list(args))
     redirected = guard._git_invocation_is_write(subcommand, list(args) + ["2>&1"])
 
@@ -2654,9 +2088,6 @@ def test_redirect_token_does_not_flip_a_read_to_a_write(subcommand, args):
     ],
 )
 def test_redirect_token_does_not_silence_a_write(subcommand, args):
-    """The other half, and the one that matters: filtering redirects must
-    not make a genuine write look like a read. A guard that stops denying
-    `git remote add` fails in the direction that costs something."""
     assert guard._git_invocation_is_write(subcommand, list(args)) is True
     assert guard._git_invocation_is_write(subcommand, list(args) + ["2>&1"]) is True
 
@@ -2683,13 +2114,6 @@ def test_is_redirect_token_classification(tok, expected):
     """`v2>x` is the negative that matters: the match is anchored, so a token
     merely CONTAINING a redirect operator is still an argument."""
     assert guard._is_redirect_token(tok) is expected
-
-
-# ---------------------------------------------------------------------------
-# Interpreter-payload parity with bump_outside_repo_write (2026-09-19, DoE
-# memo foreign-write-guard-misses-interpreter-payload): a Python write target
-# living only in a `-c` payload or a heredoc body still bumps.
-# ---------------------------------------------------------------------------
 
 
 def test_interpreter_payload_dash_c_open_write_to_foreign_repo_bumps(repos, monkeypatch):
@@ -2724,13 +2148,6 @@ def test_interpreter_payload_write_into_own_repo_does_not_bump(repos, monkeypatc
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# bug-backlog 2026-08-18-powershell-text-reaches-the-posix-tokeni-ea6ff0baddab
-# -- the PowerShell leg's own AC5 carve-out check must not posix-tokenize the
-# raw PowerShell text it was handed.
-# ---------------------------------------------------------------------------
-
-
 def test_ac5_powershell_start_process_cross_repo_memo_invocation_recognized_under_powershell_dialect():
     """`Start-Process -FilePath cross-repo-memo ...` only resolves to a
     `cross-repo-memo` head once `expand_start_process_invocations` has run
@@ -2745,9 +2162,6 @@ def test_ac5_powershell_start_process_cross_repo_memo_invocation_recognized_unde
 
     assert guard._command_invokes_cross_repo_memo(cmd, None, dialect=Dialect.POWERSHELL) is True
     assert guard._command_invokes_cross_repo_memo(cmd, None) is False
-
-
-# --- expansion-valued paths are unknowable, never joined onto a cwd ---
 
 
 @pytest.mark.parametrize(

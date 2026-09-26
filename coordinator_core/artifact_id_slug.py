@@ -33,18 +33,10 @@ from __future__ import annotations
 
 import re
 
-#: Any run of separators is one separator. Idempotent, so a caller that also
-#: collapses loses nothing by calling this too.
 _DASH_RUN = re.compile(r"-{2,}")
 
 
 def id_slug(raw: str, limit: int | None = None) -> str:
-    """The slug as it may appear inside an id: truncated, then made boundary-safe.
-
-    ``limit`` is applied BEFORE the strip, which is the whole point -- stripping
-    first and truncating after is what produces the trailing dash, and is what
-    every site this replaces was doing.
-    """
     out = raw or ""
     if limit is not None:
         out = out[:limit]

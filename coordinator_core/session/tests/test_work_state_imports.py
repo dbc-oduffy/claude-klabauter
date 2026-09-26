@@ -51,10 +51,6 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-#: The subprocess must run with the repo root as cwd so the bare
-#: `coordinator_core` package resolves without an installed distribution.
-#: Derived from this file's own location -- a literal root is one machine's
-#: and fails everywhere else.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -86,11 +82,6 @@ def test_session_work_state_imports_standalone_without_ops():
 
 
 def test_session_holder_evidence_imports_standalone_without_ops():
-    """The same assertion at the module `session.work_state` re-exports
-    through — `holder_evidence.py`'s relocation into `session/` is what
-    introduces the module-level-`ops`-import risk in the first place (its
-    `_resolve_transcript` import must stay function-local; see that
-    module's `holder_evidence()` docstring)."""
     result = _run(
         "import sys\n"
         "assert 'coordinator_core.ops' not in sys.modules\n"

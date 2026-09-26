@@ -242,10 +242,6 @@ def warm_root() -> Iterator[tuple]:
             time.sleep(_POLL_SECS)
         if not (crumb and crumb.get("pid")):
             pytest.skip(f"isolated warm server did not boot within {_BOOT_WAIT_SECS}s")
-        # Captured HERE and yielded, never re-read later -- the breadcrumb is
-        # the server's own liveness record and re-reading it after the fact
-        # can return None while the process is still up and serving (see the
-        # sibling C1 spike's identical note).
         yield root, int(crumb["pid"])
     finally:
         crumb = breadcrumb.read_breadcrumb(engine_root=root)
@@ -265,12 +261,6 @@ def warm_root() -> Iterator[tuple]:
         rmtree_or_raise(tmp_parent, label="commit_v2_process_time_gate", reaped=reaped)
 
 
-# ---------------------------------------------------------------------------
-# Fixture repos -- this repo's real checkin surface (C2's own corpus), never
-# an LF-only stand-in (plan anti-scope).
-# ---------------------------------------------------------------------------
-
-
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", *args],
@@ -283,13 +273,6 @@ def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProc
 
 
 def _build_checkin_repo(tmp_path: Path, name: str) -> Path:
-    """A repo carrying this repo's real `.gitattributes` pins,
-    `core.autocrlf=true`, `core.fileMode=false` -- the identical recipe
-    `coordinator_core/git/tests/test_checkin_surface_fixtures.py
-    ::checkin_repo_factory` uses, duplicated here (that fixture is
-    module-private to its own file, and this file's own docstring already
-    names why fixtures are not imported across pytest's protocol
-    boundary)."""
     repo = tmp_path / name
     repo.mkdir(parents=True, exist_ok=True)
     _git(repo, "init", "-q")
@@ -393,21 +376,6 @@ def test_c6_commit_v2_process_time_gate(warm_root, tmp_path_factory) -> None:
     lf_params_path = lf_repo / ".c6-lf-params.json"
     lf_committed: List[Optional[bool]] = []
     # GLOBALLY UNIQUE CONTENT, NEVER PER-WINDOW `i`. `commit_v2.py` opts
-    # `commit_paths` into `detect_rollback=True` (P2d), which walks HEAD's
-    # first-parent line up to `window=1000` commits looking for an EXACT
-    # blob match to a value the path already held -- that is the real,
-    # intentional anti-clobber guard from `coordinator_core/git/
-    # rollback_check.py`, not a bug to route around. `i` resetting to 0 at
-    # the top of every window rewrites this path back to a blob it held
-    # ~40 first-parent commits ago (byte-identical to an earlier window's
-    # same `i`), which is indistinguishable from a genuine staged rollback
-    # and correctly earns `StagedRollbackRefused` for most of windows 2/3
-    # (depth shrinks from 39 toward 1 as `i` climbs back toward the
-    # previous window's tail, tripping K-016's depth>=2 rule until the
-    # last couple of dispatches). A real caller's successive edits never
-    # repeat a prior blob byte-for-byte, so a monotonic counter --
-    # never revisiting a value across the whole run -- is what makes this
-    # harness reproduce that shape instead of a self-inflicted rollback.
     _lf_seq = itertools.count()
 
     def _dispatch_lf(i: int) -> int:
@@ -437,8 +405,6 @@ def test_c6_commit_v2_process_time_gate(warm_root, tmp_path_factory) -> None:
 
     with LiveTreeAccountant(server_pid) as acct:
         # ATTACH-BEFORE-WARMTH (mandatory correction). This warmth probe is
-        # the FIRST dispatch through this isolated server -- the accountant
-        # is already attached, so the pool workers it spawns land INSIDE the
         # job. See module docstring's ATTACH-BEFORE-WARMTH section.
         procs_before_probe = acct.snapshot()["procs"]
         probe = _dispatch([str(door), "ping", "{}"], env)
@@ -450,8 +416,6 @@ def test_c6_commit_v2_process_time_gate(warm_root, tmp_path_factory) -> None:
             "here, and prints nothing per this module's own DOOR COLD-MISS "
             "TRAP note), never as a diagnosis naming warmth."
         )
-        # Do not trust the ordering above by inspection alone -- assert the
-        # pool workers actually landed inside the job (module docstring).
         procs_after_probe = acct.snapshot()["procs"]
         assert procs_after_probe > procs_before_probe, (
             f"[{AXIS_PROCS}] pool workers were not observed inside the job "
@@ -480,8 +444,6 @@ def test_c6_commit_v2_process_time_gate(warm_root, tmp_path_factory) -> None:
         )
     print("=" * 78)
 
-    # rc sanity, both arms -- a failed dispatch under either shape means the
-    # figures below describe something other than a successful commit.
     for label, windows in (("unpinned-LF", lf_windows), ("eol=crlf", crlf_windows)):
         for w in windows:
             assert w["rc_ok"] == w["n"], (
@@ -493,10 +455,6 @@ def test_c6_commit_v2_process_time_gate(warm_root, tmp_path_factory) -> None:
                 f"is not attached to the work. {w}"
             )
 
-    # The LF shape is GATED, so a call that transports rc==0 but refuses to
-    # commit (committed: false) would silently corrupt the gate below with
-    # cheap-refusal timings wearing a "success" label -- assert the real
-    # commit landed on every sample.
     assert all(lf_committed), (
         f"[gate corruption guard] arm=unpinned-LF: {lf_committed.count(False)} "
         f"of {len(lf_committed)} dispatches transported rc==0 but returned "
@@ -510,8 +468,6 @@ def test_c6_commit_v2_process_time_gate(warm_root, tmp_path_factory) -> None:
         f"committed (committed=true)"
     )
     # Every REPORTED arm, not only the gated one -- an arm that reads fast
-    # and cheap because nothing actually committed is a corrupted gate, not
-    # evidence about a shape's real cost. See module docstring's EOL=CRLF
     # SHAPE, MEASURED section.
     assert crlf_ok == len(crlf_committed), (
         f"[gate corruption guard] arm=eol=crlf: {len(crlf_committed) - crlf_ok} "
@@ -521,7 +477,6 @@ def test_c6_commit_v2_process_time_gate(warm_root, tmp_path_factory) -> None:
         f"committed flags: {crlf_committed}"
     )
 
-    # --- THE GATE: unpinned-LF shape only, prime exit criterion. ---
     lf_ms_values = [w["ms_per_call"] for w in lf_windows]
     lf_procs_values = [w["procs_per_call"] for w in lf_windows]
     lf_ms_mean = _mean(lf_ms_values)

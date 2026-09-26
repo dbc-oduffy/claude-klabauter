@@ -31,8 +31,6 @@ class TestClassifyError:
         assert runner.classify_error("info: //depot/foo#1 - opened for edit\n", "") is None
 
     def test_exit_0_lock_refusal_classifies_as_lock_held(self):
-        # The spike's headline finding: an exclusive-lock refusal exits 0,
-        # so the classifier — never the exit code — is the contract.
         stdout = "error: //depot/foo.uasset - locked by otheruser@otherclient\n"
         result = runner.classify_error(stdout, "")
         assert result is not None
@@ -46,8 +44,6 @@ class TestClassifyError:
         assert result.kind == "ticket_expired"
 
     def test_plain_text_connect_error_no_error_prefix(self):
-        # Connect errors print plain text even under -s / machine-readable
-        # output modes — the classifier's second arm.
         stderr = "Connect to server failed; check $P4PORT.\nTCP connect to ssl:p4.example.com:1666 failed.\n"
         result = runner.classify_error("", stderr)
         assert result is not None
@@ -67,9 +63,6 @@ class TestClassifyError:
 
 
 class _FakePopen:
-    """Stand-in for subprocess.Popen, returning canned communicate()
-    output or raising TimeoutExpired on the first call (mirroring the
-    real Popen.communicate contract used by runner.run)."""
 
     def __init__(self, cmd, **kwargs):
         self.cmd = cmd
@@ -87,7 +80,6 @@ class _FakePopen:
 
 class TestRun:
     def test_passes_explicit_identity_flags_never_ambient_env(self, monkeypatch):
-        # D1/D2: the runner always passes -p/-u/-c explicitly — this is
         # what makes "P4CONFIG-beats-env" a non-issue: the runner never
         # consults P4CONFIG or ambient P4* env at all.
         captured = {}
@@ -129,10 +121,6 @@ class TestRun:
         assert captured["kwargs"]["stdin"] == subprocess.DEVNULL
 
     def test_spec_input_pipes_the_spec_and_leaves_every_other_verb_on_devnull(self, monkeypatch):
-        # D2's one named exception. `p4 change -i` takes its form on stdin and
-        # has no flag carrying a description, so the spec verbs need a pipe;
-        # everything else must keep the DEVNULL guarantee it had before, which
-        # is the half a regression would silently take away.
         seen = {}
 
         def fake_popen(cmd, **kwargs):
@@ -188,7 +176,6 @@ class TestRun:
         assert killed["pid"] == 4242
 
     def test_never_retries_on_timeout(self, monkeypatch):
-        # A timeout returns exactly one classified refusal — no retry spawn.
         spawn_count = {"n": 0}
 
         def fake_popen(cmd, **kwargs):

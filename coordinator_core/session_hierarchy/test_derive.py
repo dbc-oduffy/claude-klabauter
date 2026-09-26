@@ -1,9 +1,3 @@
-"""Tests for coordinator_core.session_hierarchy.derive.
-
-Covers the session_id coalescing pass added to close the duplicate-primary-key
-divergence between downstream consumers (example-cockpit-repo, example-retrieval-repo) — see
-the module negative-spec in ``derive.py`` for merge semantics.
-"""
 from __future__ import annotations
 
 from coordinator_core.session_hierarchy.derive import derive
@@ -61,7 +55,6 @@ def test_winner_null_parent_falls_back_to_earlier_real_parent():
     sid = "bbbb0000-0000-0000-0000-000000000002"
     parent_sid = "bbbb0000-0000-0000-0000-000000000001"
 
-    # Predecessor lookup keyed by basename of the predecessor handoff's path.
     predecessor_handoff = {
         "path": "state/handoffs/2026-06-01_000000_pred.md",
         "frontmatter": {"claimed_by": parent_sid, "workstream": "workstream-a"},
@@ -112,9 +105,6 @@ def test_output_ordering_session_records_precede_workstream_nodes():
 
 
 def test_dual_tolerant_read_falls_back_to_retired_consumed_by():
-    # Exercises derive._claimed_by's dual-tolerant fallback for not-yet-migrated
-    # frontmatter (DR-084 transitional tolerance, restored 2026-07-23) —
-    # deliberately keeps the old vocabulary as input.
     sid = "ffff0000-0000-0000-0000-000000000001"
     handoff = {
         "path": "state/handoffs/2026-06-24_075121_solo.md",

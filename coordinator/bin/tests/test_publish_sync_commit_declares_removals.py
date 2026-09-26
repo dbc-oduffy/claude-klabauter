@@ -1,12 +1,3 @@
-"""A bare `coordinator-publish` round that deletes a file commits.
-
-`publish.py :: _commit_published_dests` hands deleted paths to `commit_paths`,
-which refuses an undeclared staged deletion. Its subject never mentioned one,
-so every deleting round left the mirror dirty and exited 3 (doe-claude-4d,
-2026-09-23: `bin/lib/model-pricing.json` on coordinator-claude).
-
-Run: python -m pytest coordinator/bin/tests/test_publish_sync_commit_declares_removals.py -q
-"""
 
 from __future__ import annotations
 

@@ -1,11 +1,3 @@
-"""Pin that a flag between the two optional positionals does not swallow the second.
-
-`op` and `params_json` are both `nargs="?"`, and argparse's plain parse_args stops
-consuming positionals at the first optional flag. `coordinator_core.invoke <op>
---bare <params_json>` therefore used to die with "unrecognized arguments" before any
-op ran, while the same call with the flag last worked -- a refusal that depended on
-argv order rather than on the request.
-"""
 from coordinator_core.invoke.__main__ import _build_arg_parser
 
 

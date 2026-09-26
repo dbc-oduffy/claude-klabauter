@@ -1,16 +1,3 @@
-"""test_cross_repo_memo_never_inbox_mirror — the `cross-repo-memo send` CLI
-refuses coordinator-claude / claude-klabauter exactly like the engine op it
-forwards onto (PM ruling 2026-09-23).
-
-`_cmd_send` is a bare forwarder onto claude-klabauter's `memo.send` op via
-`cc_invoke.route_mutation` (see its own docstring) — this test exercises that
-forwarding for real: `route_mutation` is monkeypatched to call the REAL
-`coordinator_core.ops.fleet.memo_send._memo_send` in-process (no warm server,
-no subprocess), so the assertion is against the actual chokepoint, not a
-re-statement of it.
-
-Run: python -m pytest coordinator/bin/tests/test_cross_repo_memo_never_inbox_mirror.py -p no:cacheprovider -q
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -26,7 +13,7 @@ import pytest
 
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 
-sys.path.insert(0, str(_BIN_DIR.parent.parent))  # repo root, for coordinator_core
+sys.path.insert(0, str(_BIN_DIR.parent.parent))
 
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 from coordinator_core.ops.fleet.memo_send import _memo_send  # noqa: E402
@@ -70,8 +57,6 @@ def _make_mirror_git_repo(tmp_path: pathlib.Path, name: str) -> pathlib.Path:
 
 
 def _make_claude_home(tmp_path: pathlib.Path, receiver_repos: dict[str, pathlib.Path]) -> pathlib.Path:
-    # No `publish.mirrors.*` declared — the under-registered shape that
-    # produced the live hole.
     claude_home = tmp_path / "claude-home"
     machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
     machine_local.mkdir(parents=True)

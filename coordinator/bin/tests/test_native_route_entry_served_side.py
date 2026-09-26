@@ -1,20 +1,3 @@
-"""coordinator/bin/tests/test_native_route_entry_served_side.py
-
-Subject: `entry_point_shim._native_route_entry`'s served-side short-circuit.
-
-`invoke.from_argv` serves `baton-assemble` / `pickup-assemble` /
-`workstream-complete-assemble` by running that entrypoint's `main` in-process,
-and that `main` is the shim itself. A shim that routes again from inside the
-engine asks the engine to run itself: an unbounded self-recursion through the
-door, which every warm-served call of those three ended in (-32004 at the 30s
-read deadline, for ~0.5s of real work).
-
-Pinned here:
-  - inside a pool worker the implementation runs and nothing is routed;
-  - a cold-served entrypoint (no route declared) runs the implementation too;
-  - outside both the route is exactly today's;
-  - neither env spelling can drift from the engine's own constant.
-"""
 
 from __future__ import annotations
 
@@ -77,8 +60,6 @@ def test_outside_the_engine_the_call_routes_through_invoke_from_argv(entry, monk
 
 
 def test_the_route_spelling_matches_the_engine():
-    """If the engine's spelling moves, the check reads a variable nobody sets
-    and the recursion silently returns."""
     from coordinator_core.telemetry import op_latency
 
     assert op_latency.ROUTE_ENV == _ROUTE_ENV
@@ -86,8 +67,6 @@ def test_the_route_spelling_matches_the_engine():
 
 
 def test_a_cold_served_entrypoint_runs_the_implementation_and_nothing_routes(entry, monkeypatch):
-    """A cold `python -m coordinator_core.invoke invoke.from_argv` declares no
-    route; routing again from there spawned the next cold rung, forever."""
     fn, calls = entry
     monkeypatch.delenv(_ROUTE_ENV, raising=False)
     monkeypatch.setenv(_SERVED_ENV, "workstream-complete-assemble")

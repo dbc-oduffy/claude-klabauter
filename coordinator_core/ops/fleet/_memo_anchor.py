@@ -53,27 +53,10 @@ from coordinator_core.git.git_objects import (
 
 ANCHOR_REF_PREFIX = "refs/coordinator/inbox/"
 
-#: Both corpus roots, legacy first-checked order irrelevant here -- a reader
-#: always unions BOTH (memo_corpus.py's C10a migration window means either
-#: can hold live entries depending on when a repo migrated), never resolves
-#: to "the" canonical one the way a WRITE target does elsewhere in this
-#: family. Shared by every reader of the delivered-memo present-set --
-#: `memo.heal_inbox` (receiver-side, against `repo_root` itself) and
-#: `memo.check_deliveries` (sender-side, against a registry-resolved peer's
-#: tree) -- so the two cannot drift on which roots or which filename-scan
-#: shape counts as "present" (Review: overengineering-reviewer F1: this was
-#: the other join key of the feature, duplicated the way the anchor-ref
-#: shape was not).
 CORPUS_ROOT_RELDIRS = ("state/cross-repo", "cross-repo")
 
 
 def present_filenames(worktree_root: Union[str, Path]) -> Dict[str, Tuple[str, Path]]:
-    """filename -> (status, path) for every file found, at any depth, under
-    either corpus root's `inbox/` or `archive/` in `worktree_root` --
-    `inbox/` entries (across both roots) always shadow an `archive/` hit for
-    the same filename. The one traversal shared by every present-set reader
-    in this feature; callers needing a richer entry shape (e.g. `memo_heal`'s
-    repo-relative path) wrap this, they do not re-walk the tree."""
     worktree_root = Path(worktree_root)
     found: Dict[str, Tuple[str, Path]] = {}
     for corpus in CORPUS_ROOT_RELDIRS:
@@ -96,17 +79,10 @@ def present_filenames(worktree_root: Union[str, Path]) -> Dict[str, Tuple[str, P
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
-# Control characters, space, and the literal characters git's
-# `check-ref-format` refuses inside a single ref-path component.
 _DISALLOWED_CHARS_RE = re.compile(r"[\x00-\x1f\x7f ~^:?*\[\\]")
 
 
 def _valid_ref_component(name: str) -> bool:
-    """True iff `name` is safe as one `/`-delimited ref path component --
-    refused (never normalised) on any of: control characters, space,
-    `~^:?*[\\`, a `..` substring, an `@{` substring, a leading `.`, or a
-    trailing `.lock`. Memo inbox filenames are slugs, so refusal here is
-    always the defect path, never the common case."""
     if not name:
         return False
     if _DISALLOWED_CHARS_RE.search(name):
@@ -125,10 +101,6 @@ def _valid_commit_sha(sha: str) -> bool:
 
 
 def _read_loose_ref_value(common_dir: Path, ref: str) -> Optional[str]:
-    """The literal content of a loose ref file, or `None` when it does not
-    exist or is unreadable -- mirrors `git_objects._read_ref_raw` without
-    reaching past that module's own underscore boundary for a one-line
-    read."""
     try:
         text = (common_dir / ref).read_text(encoding="utf-8", errors="replace").strip()
     except OSError:
@@ -139,17 +111,6 @@ def _read_loose_ref_value(common_dir: Path, ref: str) -> Optional[str]:
 def write_anchor(
     common_dir: Union[str, Path], filename: str, commit_sha: str, data: bytes
 ) -> Optional[str]:
-    """Writes `data` as a blob and points
-    `refs/coordinator/inbox/<filename>/<commit_sha>` at it via a locked CAS.
-
-    Refuses (returns `None`, writes nothing) when `filename` or
-    `commit_sha` fails validation. On a valid ref, the blob is written
-    first (content-addressed, cheap even when the CAS below then loses),
-    the ref's current value is read (loose, then `read_packed_ref`), and
-    the CAS swaps that exact value for the new blob sha. Returns the blob
-    sha on success, `None` on a lost CAS race -- never raises, never
-    retries; the caller decides.
-    """
     if not _valid_ref_component(filename) or not _valid_commit_sha(commit_sha):
         return None
     common_dir = Path(common_dir)
@@ -159,12 +120,6 @@ def write_anchor(
     if current is None:
         current = read_packed_ref(common_dir, ref)
     if not cas_ref(common_dir, ref, current, blob_sha):
-        # Lost the race -- but re-read rather than declare loss outright
-        # (Review: eng-director F7). A peer may have just written this same
-        # anchor (same filename, same commit sha, same bytes -> the same
-        # content-addressed blob sha), in which case the ref is already
-        # exactly where this call wanted it and there is nothing to warn
-        # about.
         after = _read_loose_ref_value(common_dir, ref)
         if after is None:
             after = read_packed_ref(common_dir, ref)
@@ -175,18 +130,9 @@ def write_anchor(
 
 
 def anchor_names(common_dir: Union[str, Path]) -> List[Tuple[str, str, str]]:
-    """`(filename, commit_sha, blob_sha)` triples for every anchor found
-    under `<common_dir>/refs/coordinator/inbox/` -- the union of loose refs
-    (walked two levels: a filename directory, then a commit-sha leaf file)
-    and matching lines in `packed-refs`. Loose shadows packed, matching
-    git's own precedence. A missing anchors directory, or a missing/absent
-    `packed-refs`, contributes no anchors and is never an error.
-    """
     common_dir = Path(common_dir)
     found: "dict[tuple[str, str], str]" = {}
 
-    # Packed first, so a loose entry for the same (filename, commit_sha)
-    # overwrites -- shadows -- it below.
     try:
         packed_text = (common_dir / "packed-refs").read_text(
             encoding="utf-8", errors="replace"
@@ -233,9 +179,6 @@ def anchor_names(common_dir: Union[str, Path]) -> List[Tuple[str, str, str]]:
 
 
 def resolve_anchor(common_dir: Union[str, Path], sha: str) -> Optional[bytes]:
-    """The payload bytes stored at `sha`, only when its object kind is
-    `blob`; `None` for a missing object, a non-blob object, or an invalid
-    sha."""
     if not _valid_commit_sha(sha):
         return None
     common_dir = Path(common_dir)

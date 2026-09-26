@@ -52,9 +52,6 @@ from typing import Optional
 
 _ENGINE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-#: Renders exempt from carrying an age, each with the reason it is exempt.
-#: Keyed `(<path relative to coordinator_core/>, <field name>)`. A new entry
-#: needs a reason of the same kind as these -- "not now" is not one.
 EXEMPT: dict[tuple[str, str], str] = {
     ("claims_emit.py", "ran_at"): (
         "validation error naming a stamp that does not parse -- an age is "
@@ -119,12 +116,6 @@ EXEMPT: dict[tuple[str, str], str] = {
 
 
 def _bare_at_field(node: ast.AST) -> Optional[str]:
-    """The `_at` field name this expression renders bare, or None.
-
-    A `Call` other than `.get("..._at")` returns None on purpose: that is the
-    shape a `timestamps.with_age(...)` wrap takes, and every other helper a
-    site might legitimately route through.
-    """
     if isinstance(node, ast.Name) and node.id.endswith("_at"):
         return node.id
     if isinstance(node, ast.Attribute) and node.attr.endswith("_at"):
@@ -144,7 +135,6 @@ def _bare_at_field(node: ast.AST) -> Optional[str]:
 
 
 def _scan_module(path: str) -> list[tuple[int, str]]:
-    """Every `(lineno, field)` bare timestamp render in one module."""
     with open(path, encoding="utf-8") as handle:
         tree = ast.parse(handle.read(), filename=path)
     found: list[tuple[int, str]] = []
@@ -165,14 +155,7 @@ def _scan_module(path: str) -> list[tuple[int, str]]:
     return found
 
 
-# This walk and `scan_engine`'s were
-# byte-identical in traversal/exclusion rules and parsed every non-test file
-# under coordinator_core/ twice per run. One shared walk, filtered two ways,
-# halves the parse cost and removes the risk of the two rules drifting apart.
 def _engine_renders() -> list[tuple[str, int, str]]:
-    """Every `(rel path, lineno, field)` bare-render candidate under
-    `coordinator_core/`, unfiltered by `EXEMPT` -- callers decide what to do
-    with a candidate that is or isn't in the table."""
     renders: list[tuple[str, int, str]] = []
     for dirpath, dirnames, filenames in os.walk(_ENGINE_ROOT):
         dirnames[:] = [d for d in dirnames if d != "__pycache__"]
@@ -189,7 +172,6 @@ def _engine_renders() -> list[tuple[str, int, str]]:
 
 
 def scan_engine() -> list[tuple[str, int, str]]:
-    """Every unexempted bare timestamp render under `coordinator_core/`."""
     return [
         (rel, lineno, field)
         for rel, lineno, field in _engine_renders()
@@ -212,7 +194,6 @@ def test_no_bare_timestamp_reaches_a_reader():
 
 
 def test_every_exemption_still_names_a_real_render():
-    """A stale exemption is a hole with a reason attached."""
     live = {(rel, field) for rel, _lineno, field in _engine_renders()}
     orphaned = sorted(key for key in EXEMPT if key not in live)
     assert not orphaned, (
@@ -223,7 +204,6 @@ def test_every_exemption_still_names_a_real_render():
 
 
 def test_the_guard_catches_a_bare_render():
-    """The guard's own falsifier -- an unwrapped stamp must trip the walk."""
     tree = ast.parse('msg = f"checked at {results[\'checked_at\']}"')
     joined = next(n for n in ast.walk(tree) if isinstance(n, ast.JoinedStr))
     fields = [

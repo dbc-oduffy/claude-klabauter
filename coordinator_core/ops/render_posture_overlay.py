@@ -100,7 +100,7 @@ Negative-spec (do NOT "fix" while porting):
 
 from __future__ import annotations
 
-GENERATES = []  # merges into a caller-supplied target file (a consumer repo's .claude/em-context.md), never a fixed claude-klabauter artifact
+GENERATES = []
 
 import os
 import re
@@ -220,9 +220,6 @@ def run(anchor: str, target: str, check_only: bool, coordinator_root: str) -> Tu
             _die(f"Template not found: {template_path}")
 
         template_content = template_path.read_text(encoding="utf-8")
-        # Strip a single trailing newline the way `$(cat ...)` command
-        # substitution does (bash strips ALL trailing newlines) — match that
-        # exactly, not just one, for byte parity with the oracle.
         template_content = template_content.rstrip("\n")
 
         for marker, label in ((MARKER_START, "start"), (MARKER_END, "end")):
@@ -233,11 +230,6 @@ def run(anchor: str, target: str, check_only: bool, coordinator_root: str) -> Tu
                     "Rephrase the template to avoid an exact-line match against the marker string."
                 )
 
-        # A consumer repo has no `.claude/em-context.md` before its first
-        # install — absence is the normal first-run case, not an error.
-        # Treat a missing target as virtually empty for merge computation;
-        # its parent directories are created (and the file itself written)
-        # only on the actual write path below, never under --check-only.
         if target_path.is_file():
             original_text = target_path.read_text(encoding="utf-8")
         else:
@@ -304,9 +296,7 @@ def run(anchor: str, target: str, check_only: bool, coordinator_root: str) -> Tu
             with os.fdopen(fd, "wb") as fh:
                 fh.write(new_bytes)
             os.replace(tmp_name, str(target_path))
-            # DR-276: declared AFTER the atomic replace lands, never before —
             # the contract is a report of what was ACTUALLY written, not of
-            # an intended surface.
             declare_write(target_path)
         except OSError as exc:
             try:
@@ -336,10 +326,6 @@ def main(argv: List[str], coordinator_root: Optional[str] = None) -> int:
     """
     args = list(argv)
 
-    # Mirrors the oracle exactly: `-h`/`--help` is only recognized as a flag
-    # AFTER <anchor> <target> have been consumed (i.e. `$# -lt 2`
-    # is checked first) — `script -h` alone (1 arg) hits the usage+exit-1
-    # path below, not usage+exit-0. Only `script <a> <t> -h` exits 0.
     if len(args) < 2:
         print(USAGE, end="")
         return 1

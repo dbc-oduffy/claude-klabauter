@@ -28,9 +28,6 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-# Usage grammar per npm's own --help: a bracketed, non-ellipsised `<package-spec>` means
-# "zero or one", while a trailing `...` (as on `<field>[.subfield]...`) means "any number".
-# The claim under test is exactly the absence of `...` after `<package-spec>`.
 _USAGE_LINE_RE = re.compile(r"^npm view .*$", re.MULTILINE)
 _PACKAGE_SPEC_RE = re.compile(r"<package-spec>(\.\.\.)?")
 
@@ -41,9 +38,6 @@ def test_npm_view_usage_names_exactly_one_package_spec():
         pytest.skip("npm not on PATH -- oracle needs the real binary's --help text")
 
     # Resolved to the PATHEXT-suffixed sibling (npm.cmd on Windows), not the bare "npm" --
-    # a bare name raises FileNotFoundError under CreateProcess without shell=True, which is
-    # exactly the live Windows-portability gap this repo's own cruft_sweep.py and
-    # find_polluter.py document at their own npm call sites.
     proc = subprocess.run(
         [npm_path, "view", "--help"],
         capture_output=True,

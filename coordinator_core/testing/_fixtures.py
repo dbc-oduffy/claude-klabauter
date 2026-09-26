@@ -1,32 +1,3 @@
-"""
-coordinator_core.testing._fixtures — shared synthetic-fixture-tree factory (plain module).
-
-Purpose: one canonical `fixture_tree` pytest factory fixture, consumed by every
-test module under `coordinator_core/testing/` (this chunk's `test_collect.py`,
-and the sibling chunks' `test_run.py` / `test_full_runner.py`) AND, cross-package,
-by the C5 op's tests under `coordinator_core/ops/tests/`.
-
-Lives in a PLAIN module (not a `conftest.py`) so it can be pulled in via
-`pytest_plugins = ("coordinator_core.testing._fixtures",)` from another package's
-tests without pytest double-registering it: a `conftest.py` requested as a
-`pytest_plugins` entry that is ALSO auto-loaded as a local conftest raises
-"Plugin already registered under a different name". `coordinator_core.testing.conftest`
-re-exports `fixture_tree` from here so in-package tests keep the local-conftest path.
-
-Port source: none — net-new (DR-059 harness authoring).
-Spec backlink: pln-claude-klabauter-python-full-test-runner-f8ca5a § C1 (conftest.py)
-
-Negative-spec:
-    - Does NOT write any fixture file under `coordinator_core/` on disk — every
-      fixture file is materialized under pytest's `tmp_path` at RUNTIME only
-      (Finding 9). Do not "helpfully" cache the built tree into the package
-      tree for speed/reuse across runs — a committed `test_*.py` fixture here
-      (especially a failing one) would be auto-collected by claude-klabauter's own
-      pytest config (`testpaths = ["coordinator_core"]`,
-      `python_files = ["test_*.py"]`) and permanently red claude-klabauter's real suite.
-    - Does NOT assert anything itself — this module is fixture infrastructure
-      only; assertions belong in the consuming test modules.
-"""
 
 from __future__ import annotations
 
@@ -65,14 +36,6 @@ FixtureTreeBuilder = Callable[..., FixtureTree]
 
 @pytest.fixture
 def fixture_tree(tmp_path: Path) -> FixtureTreeBuilder:
-    """Factory fixture. Call the returned `build(...)` to materialize a tree.
-
-    build(
-        root: Path | None = None,            # defaults to tmp_path / "repo"
-        venv_dirname: str = ".venv",          # or "site-packages" / ".coordinator-venv"
-        extra_files: tuple[tuple[str, str], ...] = (),  # (relpath, content) pairs
-    ) -> FixtureTree
-    """
 
     def build(
         root: Path | None = None,

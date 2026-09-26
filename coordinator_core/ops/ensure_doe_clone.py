@@ -57,15 +57,6 @@ _PROG = "ensure-doe-clone"
 
 
 def _registry_get(key: str) -> str:
-    """Resolve `key` via the direct-registry reader
-    (`machine_resolver.registry_get`) -- no `machine-local` CLI subprocess.
-    Empty string on any failure (missing key, unreadable/missing registry
-    file), matching the prior best-effort contract.
-
-    Converted 2026-08-16 (C7b): the module's own test suite
-    (`coordinator_core/ops/test_ensure_doe_clone.py`) now seeds the
-    machine-local registry FILE instead of faking the CLI as a real
-    subprocess-invoked stub."""
     value = _machine_resolver.registry_get(key)
     return value or ""
 
@@ -107,10 +98,6 @@ def main(argv: List[str]) -> int:
             print(msg, file=sys.stderr)
             print(msg)
             return 1
-        # Interactive, nothing resolved: this CLI cannot itself drive the
-        # AskUserQuestion prompt (see module negative-spec) — report the same
-        # "skipped" disposition so install.md's interactive prose can prompt
-        # then re-invoke.
         print(
             "doe_clone: skipped (repos.doe_claude not set — run the interactive "
             "DoE-clone prompt, then re-invoke)"
@@ -128,8 +115,6 @@ def main(argv: List[str]) -> int:
 
     if has_git and not has_coordinator:
         # A git clone of SOMETHING, but not coordinator-claude -- not the
-        # clone path and not a silent failure. Do not fall through to
-        # `git clone` over an existing non-empty directory.
         msg = (
             f"doe_clone: failed ({doe_clone} is a git clone but has no coordinator/ "
             f"-- not coordinator-claude; repoint repos.doe_claude at the correct clone "
@@ -167,7 +152,6 @@ def main(argv: List[str]) -> int:
         print(f"doe_clone: failed (git clone exited {rc})")
         return 1
 
-    # DR-276: declared AFTER the clone lands, never before — the contract is
     # a report of what was ACTUALLY written, not of an intended surface.
     declare_write(doe_clone)
 

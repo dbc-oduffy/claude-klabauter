@@ -235,8 +235,6 @@ from coordinator_core.ops.session._path_shape_regexes import WIN_DRIVE_RE
 from coordinator_core.bash_guards.dispatch_checks import _bt_python3_invocation
 
 
-#: The probe session id this module hands guard-message helpers. Named rather
-#: than inlined so the cleanup fixture below removes exactly what it mints.
 _PROBE_SESSION_ID = "test-session-abc123"
 
 
@@ -274,29 +272,11 @@ def _reap_probe_session_dir():
     if probe_dir.is_dir():
         shutil.rmtree(probe_dir, ignore_errors=True)
 
-# ---------------------------------------------------------------------------
-# The predicate -- platform-independent, regex-only (see module docstring).
-#
 # SSOT reuse, not a second definition (module docstring's "RELATIONSHIP TO
 # check_posix_exec_assumptions"): `_TIER_D_CROSS_PATH_PATTERNS` already
-# encodes this project's one definition of "looks like a cross-machine
-# path" for `/Users/<name>/`, `/home/<name>/`, drive-letter, and UNC forms
-# -- including the deliberate single-letter-URL-scheme false-positive fix
-# recorded on that constant's own definition (`s://` must not match). Those
-# patterns are `^`-anchored (correct for matching a WHOLE ast.Constant
-# string); this module instead scans free-form rendered PROSE, where the
-# offending path sits mid-string (e.g. "-- full list: /Users/..."), so each
-# pattern's anchor is stripped and recompiled unanchored below rather than
-# hand-copying new regex bodies that could drift from the shared source.
 def _unanchor(pattern: re.Pattern) -> re.Pattern:
     body = pattern.pattern.lstrip("^")
     if body == r"\\\\":
-        # Stripping the `^` anchor off
-        # the UNC pattern leaves just "two literal backslashes", which then
-        # matches ANY doubled-backslash artifact mid-string, not only a
-        # genuine `\\server\share`-shaped path. Require at least one
-        # non-backslash segment plus a following backslash so the
-        # recompiled predicate still needs a real UNC-shaped tail.
         return re.compile(body + r"[^\s\\]+\\[^\s\"'`]*")
     return re.compile(body + r"[^\s\"'`]*")
 
@@ -304,82 +284,37 @@ def _unanchor(pattern: re.Pattern) -> re.Pattern:
 _ABS_PATH_PATTERNS: Tuple[re.Pattern, ...] = tuple(
     _unanchor(p) for p in _TIER_D_CROSS_PATH_PATTERNS
 ) + (
-    # Additive over Tier D (brief-named classes that constant does not
-    # cover): Tier D deliberately buckets a bare `/tmp/` literal under its
-    # OWN `unclassified` catch-all rather than `unresolved_cross_path` (see
-    # that module's `if s.startswith("/tmp/"): hits["unclassified"]`), and
-    # never covers `/var/` at all. Both are explicitly named in this
-    # dispatch's own predicate requirement ("must catch POSIX (`/Users/...`,
-    # `/home/...`, `/var/...`, `/tmp/...`)"), so they are added here rather
-    # than left uncovered because the sibling module classifies them
-    # differently for its own purposes.
     re.compile(r"/var/[^\s\"'`]+"),
     re.compile(r"/tmp/[^\s\"'`]+"),
-    # The Windows half of this module's stated predicate, which was ABSENT
-    # while the docstring claimed it twice ("drive-letter, and UNC forms";
-    # "Matches ... Windows (`C:\...`, `C:/...`, UNC `\\server\share\...`)
     # forms unconditionally"). `_TIER_D_CROSS_PATH_PATTERNS` carries exactly
-    # two patterns at HEAD -- `^/Users/<x>/` and `^/home/<x>/` -- so a
-    # Windows-shaped leak in a rendered guard message passed this suite in
-    # silence, on every host, which is the precise failure mode the module
-    # exists to make impossible. Sourced from `_path_shape_regexes.
     # WIN_DRIVE_RE` (the same SSOT `guard_foreign_platform_paths` and
-    # `guard_concrete_path_citations` read) rather than a fourth hand-rolled
-    # drive-letter regex: its lookbehind is what keeps `https://` from
-    # matching as drive `s:`, and a copy here would drift off that fix.
-    # Measured before landing: adds zero findings to the current corpus, so
-    # it closes a hole rather than widening a red.
     re.compile(WIN_DRIVE_RE.pattern + r"[^\s\"'`]*"),
     re.compile(r"\\\\[A-Za-z0-9_.-]+\\[^\s\"'`]+"),
 )
 
 
 def _find_absolute_paths(text: str) -> List[str]:
-    """Every machine-absolute-path SPAN in `text`, POSIX or Windows-shaped,
-    independent of the host this test runs on."""
     found: List[str] = []
     for pattern in _ABS_PATH_PATTERNS:
         found.extend(m.group(0) for m in pattern.finditer(text))
     return found
 
 
-# ---------------------------------------------------------------------------
-# Exemption mechanism -- see module docstring's numbered list.
-# ---------------------------------------------------------------------------
-
-#: Exemption 2's fixture-root leg -- see module docstring. Deliberately not
 #: defined here: `FIXTURE_SCRATCH_ROOTS` is declared next to the constant the
-#: corpus actually MINTS under, so relocating the mint root carries this
-#: exemption with it instead of leaving it keyed on a location this module
-#: restated. That desync is the whole defect this leg was fixed for.
 
-#: Exemption 5 -- exact literals only, see module docstring. Sourced from
-#: `guard_message_corpus.py`'s own `_wg_concrete_path_citations_fire`/
-#: `_wg_settings_json_write_fire`, both already marked
-#: `abs-path-ok: synthetic fixture, not a real path` at their definition.
 _WRITE_GUARD_CORPUS_CONTENT_LITERALS: Tuple[str, ...] = (
-    "X:\\some-checkout",  # abs-path-ok: synthetic fixture, not a real path
+    "X:\\some-checkout",
     "C:\\Users\\someone\\x",
 )
 
 
 def _canon_backslashes(s: str) -> str:
-    """Collapse any run of repeated backslash-escaping down to single
-    backslashes -- a guard quoting an offending value back into its own
-    message (observed live: `guard_settings_json_write` renders it through
-    a quoting step that doubles each `\\`) means the SAME literal can
-    appear doubled, quadrupled, or plain depending on how many quoting
-    layers it passed through; comparing on the collapsed form makes the
-    exemption check indifferent to how many layers were applied."""
     while "\\\\" in s:
         s = s.replace("\\\\", "\\")
     return s
 
 
 def _contains_normalized(haystack: str, needle: str) -> bool:
-    """Substring test on the backslash-collapsed form of both sides, so a
-    named exemption literal matches regardless of how many quoting layers
-    re-escaped it in the rendered message (see `_canon_backslashes`)."""
     if not needle:
         return False
     return _canon_backslashes(needle) in _canon_backslashes(haystack)
@@ -388,25 +323,14 @@ def _contains_normalized(haystack: str, needle: str) -> bool:
 def _is_exempt(
     span: str, *, row_input: str, grant_cli_text: str, interpreter_text: str = ""
 ) -> bool:
-    """True if `span` (one `_find_absolute_paths` match) is a named,
-    individually-justified legitimate absolute path rather than a leak."""
-    # 1. grant-CLI-invocation -- exact literal produced by the function
-    #    itself, called fresh per assertion (see caller).
     if grant_cli_text and _contains_normalized(grant_cli_text, span):
         return True
-    # 4. Resolved-interpreter-invocation -- exact literal produced by
-    #    `_bt_python3_invocation()` itself, called fresh per assertion
-    #    (see module docstring item 4 and caller).
     if interpreter_text and _contains_normalized(interpreter_text, span):
         return True
-    # 2. Corpus-fixture echo -- either literally present in the fired
-    #    input text, or rooted under one of the corpus's own mint roots
-    #    (covers setup-synthesized scratch repos `row_input` never names).
     if row_input and _contains_normalized(row_input, span):
         return True
     if is_fixture_scratch_path(span):
         return True
-    # 3. Write-guard corpus content literals -- see module docstring item 3.
     for literal in _WRITE_GUARD_CORPUS_CONTENT_LITERALS:
         if _contains_normalized(span, literal) or _contains_normalized(literal, span):
             return True
@@ -422,9 +346,6 @@ def _collect_violations(
     grant_cli_text: str = "",
     interpreter_text: str = "",
 ) -> List[str]:
-    """Recursively walk `envelope` (the exact hookSpecificOutput-shaped
-    dict/list/str tree a guard/hook renders), returning one formatted
-    violation string per non-exempt absolute-path match."""
     violations: List[str] = []
 
     def walk(node: Any) -> None:
@@ -448,15 +369,6 @@ def _collect_violations(
 
     walk(envelope)
     return violations
-
-
-# ---------------------------------------------------------------------------
-# The ratchet itself -- fires every row in every corpus band, collects EVERY
-# violation across the whole run (not stop-on-first), and reports the full
-# list. Deliberately one assertion, not per-row parametrization: the point
-# of this dispatch's "report the full list" deliverable is a single,
-# complete scope-of-the-class finding, not N independent pass/fail cells.
-# ---------------------------------------------------------------------------
 
 
 def test_no_machine_absolute_path_in_any_corpus_guard_message():
@@ -515,15 +427,6 @@ def test_no_machine_absolute_path_in_any_corpus_guard_message():
         "one of these is a false positive, not a real leak:\n  "
         + "\n  ".join(sorted(set(violations)))
     )
-
-
-# ---------------------------------------------------------------------------
-# Direct tests of the confirmed defect's exact seam (`_resolve_override_
-# keys_doc_display`/`operator_override_note`, and the `annotate_deny`
-# funnel every hard-deny guard passes through) -- independent of the
-# corpus, so a regression here is unambiguous (no exemption applies: these
-# functions carry no legitimate absolute-path leg at all).
-# ---------------------------------------------------------------------------
 
 
 def test_override_keys_doc_display_is_portable():

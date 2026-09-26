@@ -73,26 +73,18 @@ from coordinator_core.ipc import register_op
 
 _COMMAND_TOOL_NAMES = ("Bash", "PowerShell")
 
-#: Identifiers naming the engine-plane scaffold mechanism. A bare substring
 #: test would deny a command that merely MENTIONS one of these strings; see
-#: `_names_scaffold_mechanism` below.
 _SCAFFOLD_MECHANISM_MARKERS = (
     "repo-setup-args-and-register",
     "coordinator_core.install.scaffold_structure",
     "scaffold_structure",
 )
 
-#: ``--root <val>`` / ``--target <val>`` (also ``--root=val``), tolerating a
-#: single- or double-quoted value.
 _ROOT_FLAG_RE = re.compile(r"--(?:root|target)(?:=|\s+)(\"[^\"]*\"|'[^']*'|\S+)")
 
 #: ``--dry-run`` is the scaffold CLI's own no-write mode. NEGATIVE-SPEC:
-#: this is a no-write exemption, never a bypass.
 _DRY_RUN_RE = re.compile(r"(?:^|\s)--dry-run(?:[=\s]|$)")
 
-#: A leading ``cd <path> &&``/``cd <path> ;`` or PowerShell
-#: ``Set-Location``/``sl`` (optionally ``-Path``) prefix. Must anchor the
-#: START of the command; only ONE such prefix is recognized.
 _LEADING_CD_RE = re.compile(
     r"""^\s*(?:cd|Set-Location|sl)\s+(?:-Path\s+)?
         ("[^"]*"|'[^']*'|\S+)
@@ -102,8 +94,6 @@ _LEADING_CD_RE = re.compile(
 
 
 def _resolve_claude_home(env: "dict[str, str]") -> "str | None":
-    """Canonical, resolved path to Claude Home, or ``None`` if
-    unresolvable. Never ``os.path.expanduser``."""
     config_dir = env.get("CLAUDE_CONFIG_DIR")
     if config_dir:
         try:
@@ -117,7 +107,7 @@ def _resolve_claude_home(env: "dict[str, str]") -> "str | None":
         try:
             return _canonical(_join_onto_cwd(".claude", val))
         except OSError:
-            continue  # unresolvable candidate; try the next env var
+            continue
     return None
 
 
@@ -157,8 +147,6 @@ def _names_scaffold_mechanism(cmd: str) -> bool:
 
 
 def _leading_cd_target(cmd: str, cwd: "str | None", env: "dict[str, str]") -> "str | None":
-    """The effective cwd after a leading ``cd``/``Set-Location`` prefix, or
-    ``None`` if ``cmd`` doesn't open with one."""
     match = _LEADING_CD_RE.match(cmd)
     if not match:
         return None
@@ -184,28 +172,24 @@ def _extract_candidate_root(cmd: str, cwd: "str | None", env: "dict[str, str]") 
 def is_denied_repo_setup_claude_home(
     cmd: str, cwd: "str | None", env: "dict[str, str]"
 ) -> bool:
-    """The whole predicate, isolated from payload/envelope plumbing so it
-    is directly unit-testable. Returns True (deny) iff ``cmd`` invokes the
-    scaffold mechanism AND its resolved candidate target root is Claude
-    Home."""
     if not _names_scaffold_mechanism(cmd):
         return False
 
     if _DRY_RUN_RE.search(cmd):
-        return False  # no-write mode -- nothing to refuse
+        return False
 
     claude_home = _resolve_claude_home(env)
     if not claude_home:
-        return False  # cannot resolve what to compare against -- fail open
+        return False
 
     candidate = _extract_candidate_root(cmd, cwd, env)
     if not candidate:
-        return False  # no cwd and no explicit flag -- nothing to compare
+        return False
 
     try:
         resolved_candidate = _canonical(candidate)
     except OSError:
-        return False  # unresolvable candidate path -- fail open
+        return False
 
     return resolved_candidate == claude_home
 
@@ -220,10 +204,6 @@ def _deny_reason() -> str:
 
 @register_op("hooks.guard_repo_setup_claude_home_refusal")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PreToolUse(Bash|PowerShell) op: deny a command that scaffolds
-    repo-setup against ~/.claude."""
-    # Normalize the two params shapes
-    # both engine doors and the cold chain send (see block_worktree_tool).
     params = payload_of(params)
     if params.get("tool_name") not in _COMMAND_TOOL_NAMES:
         return no_advisory()
@@ -238,7 +218,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     try:
         denied = is_denied_repo_setup_claude_home(cmd, cwd, dict(os.environ))
     except Exception:
-        return no_advisory()  # any resolution failure -- fail open
+        return no_advisory()
 
     if not denied:
         return no_advisory()

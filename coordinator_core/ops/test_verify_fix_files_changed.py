@@ -1,13 +1,3 @@
-"""
-Tests for coordinator_core.ops.verify_fix_files_changed — settlement B9
-(bug_sweep.verify_fix_files_changed).
-
-Covers the pure set-difference contract over a real (tmp_path throwaway) git
-repo, the structured-error premises (missing / malformed / shape-invalid
-manifest, not-a-repo git failure), and the CC-4 double-invocation proof.
-Git is exercised ONLY inside tmp_path throwaway repos — never against the
-working repo.
-"""
 
 from __future__ import annotations
 
@@ -19,8 +9,6 @@ import pytest
 from coordinator_core.ipc import get_op_handler
 from coordinator_core.ops import verify_fix_files_changed as mod
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -34,13 +22,11 @@ def _git(repo, *args):
         check=True,
         capture_output=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )  # popup-safe-env-suppressed
+    )
 
 
 @pytest.fixture
 def repo(tmp_path):
-    """Throwaway git repo with two committed files; a.py then gets an
-    uncommitted working-tree edit, b.py stays clean."""
     root = tmp_path / "repo"
     root.mkdir()
     _git(root, "init")
@@ -65,7 +51,6 @@ def test_claimed_no_diff_is_the_zero_diff_cohort(repo, tmp_path):
         tmp_path, [{"file": "a.py"}, {"file": "b.py"}, {"file": "b.py"}]
     )
     result = mod.verify_fix_files_changed(str(manifest), repo_root=repo)
-    # a.py has a working-tree diff; b.py was claimed fixed but is untouched.
     assert result == {"claimed_no_diff": ["b.py"]}
 
 
@@ -82,8 +67,6 @@ def test_empty_manifest_returns_empty(repo, tmp_path):
 
 
 def test_double_invocation_identical_results(repo, tmp_path):
-    """CC-4: pure read — two back-to-back calls with identical inputs against
-    an unchanged working tree return identical results."""
     manifest = _manifest(tmp_path, [{"file": "a.py"}, {"file": "b.py"}])
     first = mod.verify_fix_files_changed(str(manifest), repo_root=repo)
     second = mod.verify_fix_files_changed(str(manifest), repo_root=repo)

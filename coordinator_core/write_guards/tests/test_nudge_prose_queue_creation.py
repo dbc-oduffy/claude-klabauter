@@ -101,8 +101,6 @@ class TestCreationDenyFires:
         ],
     )
     def test_fires_on_generic_family_variant(self, tmp_path, basename):
-        # Generic regex covers the OTHER queue/backlog suffix for each of
-        # the three known families -- not any *-queue.md/*-backlog.md.
         target = tmp_path / "state" / basename
         result = guard.check(
             _payload(
@@ -174,9 +172,6 @@ class TestCreationDenySilent:
         assert result is None
 
     def test_silent_on_unrelated_generic_backlog_name(self, tmp_path):
-        # The false-positive class code-reviewer flagged: an unrelated
-        # -backlog.md/-queue.md file outside the three named families must
-        # stay silent, even with a dated-pipe-row line present.
         target = tmp_path / "state" / "release-backlog.md"
         result = guard.check(
             _payload(

@@ -58,11 +58,6 @@ def test_manifest_file_itself_is_excluded_from_the_sweep(monkeypatch, tmp_path):
 
 
 def test_sweep_removes_manifest_named_orphan_without_reading_it_as_text(monkeypatch, tmp_path):
-    """A native `.exe` image is binary and would raise `UnicodeDecodeError`
-    on `read_text()` -- before this chunk that exception fell through the
-    sweep's own except-continue and left the orphan on disk forever. The
-    manifest match must identify and sweep it WITHOUT ever attempting that
-    read."""
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     monkeypatch.setattr(
         substrate.tempfile, "gettempdir", lambda: str(tmp_path / "_unrelated-temp-root")
@@ -77,9 +72,6 @@ def test_sweep_removes_manifest_named_orphan_without_reading_it_as_text(monkeypa
 
 
 def test_sweep_leaves_binary_file_absent_from_manifest_alone(tmp_path):
-    """A binary file the manifest does not name is not ours -- it must
-    survive, matching the marker branches' "opted out" posture for a
-    hand-authored decoy."""
     decoy = tmp_path / "unrelated-tool.exe"
     decoy.write_bytes(b"\x4d\x5a\x00\x01\xff\xfe\x00not-ours\x80\x81")
 
@@ -89,10 +81,6 @@ def test_sweep_leaves_binary_file_absent_from_manifest_alone(tmp_path):
 
 
 def test_sweep_protects_manifest_named_entry_still_in_this_runs_write_set(tmp_path):
-    """Condition 2 (absence from this run's complete write set) still gates
-    a manifest match -- a currently-valid native forwarder must survive even
-    though its name is manifest-listed, exactly as a marker-carrying
-    currently-valid `.cmd` survives via `protected_names`."""
     name = "current-native.exe"
     kept = tmp_path / name
     kept.write_bytes(b"\x4d\x5a\x00\x01currently-valid\x80\x81")

@@ -1,22 +1,3 @@
-"""coordinator/bin/tests/test_publish_delta_skip_row_summary_honesty.py —
-regression test for state/bug-backlog/2026-08-10-a-delta-skipped-row-reports-
-rows-succeed-8806cf839322.yaml.
-
-Mechanism: a `--delta` row that `delta_row_unchanged()` proves unchanged
-prints an explicit "--delta: ... — skipping." line and `continue`s past
-`process_target` entirely — correct, a skip is not a failure, and the run
-still exits 0. But before this fix, the end-of-run summary line ("Rows
-succeeded: N/M") counted that row in neither `succeeded_row_names` nor
-`failed_row_names`, so the summary block alone ("Rows succeeded: 0/1", exit
-0) was byte-identical to the shape of the exit-code defect
-`test_publish_skipped_row_not_counted_succeeded.py` pins (a gate-declined row
-silently miscounted as neither processed nor flagged). This test drives
-`main()`'s REAL per-row loop — same harness shape as that sibling file — with
-`delta_row_unchanged` faked to model a proven-unchanged row, and asserts the
-summary line now names the skip explicitly and the run still exits 0.
-
-Run: python -m pytest coordinator/bin/tests/test_publish_delta_skip_row_summary_honesty.py -q
-"""
 
 from __future__ import annotations
 
@@ -39,13 +20,6 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 def _init_git_repo(root: Path) -> None:
     # IDEMPOTENT ON PURPOSE. This helper is called from inside the
     # monkeypatched `load_targets` fake, so it runs once per RESOLUTION, not
-    # once per test. `publish.py` resolves targets twice now -- `main()` with
-    # the `--target` filter, and `_declared_repo_roots_carrying_
-    # coordinator_core` unfiltered -- so a second call re-seeded an already
-    # committed repo and `git commit` failed "nothing to commit, working tree
-    # clean". Guarding here rather than counting call sites: a fixture that
-    # cannot be invoked twice encodes a production call count no test should
-    # be asserting by accident.
     if (root / ".git").is_dir():
         return
     def _git(*args: str) -> None:
@@ -65,10 +39,6 @@ def _init_git_repo(root: Path) -> None:
     keeper.write_text("", encoding="utf-8")
     _git("add", ".gitkeep")
     _git("commit", "-m", "chore: init")
-    # A self-origin the dest is level with: `publish.main` refuses a dest whose
-    # branch tracks nothing (§ `percolate.dest_refresh.refresh_dest_from_origin`).
-    # Same shape, and its rationale, as `coordinator/tests/
-    # test_publish_mirror_bare_name_expansion.py :: _init_git_repo`.
     _git("remote", "add", "origin", str(root))
     _git("fetch", "--no-tags", "origin")
     _git("branch", "--set-upstream-to=origin/main", "main")
@@ -88,9 +58,6 @@ def _load_publish_module():
 publish = _load_publish_module()
 
 _ROW_NAMES = ["row-a", "row-b", "row-c"]
-# row-b models a row `delta_row_unchanged` proves unchanged since its last
-# recorded `--delta` publish — the whole-row skip path (main()'s row loop,
-# just above `process_target` dispatch), never reached by `process_target`.
 _SKIPPED_ROW = "row-b"
 
 
@@ -150,7 +117,6 @@ def _wire_common_fakes(monkeypatch, tmp_path, *, rows_reached: list):
 
     def fake_process_target(target, setup_dir, totals, **kwargs):
         # Must never be reached for `_SKIPPED_ROW` — the delta whole-row skip
-        # happens in `main()`'s loop before `process_target` dispatch.
         assert target.name != _SKIPPED_ROW
         rows_reached.append(target.name)
         totals.processed += 1
@@ -159,11 +125,6 @@ def _wire_common_fakes(monkeypatch, tmp_path, *, rows_reached: list):
 
 
 def test_delta_skipped_row_reported_separately_and_not_as_succeeded(monkeypatch, tmp_path, capsys):
-    """The fix this pins: a `--delta` whole-row skip must not collapse the
-    summary block into the same "Rows succeeded: N/M", exit-0 shape the
-    now-fixed `coordinator-publish` exit-code defect had. The skip must be
-    named in the summary line itself, distinct from both succeeded and
-    failed."""
     rows_reached: list = []
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, rows_reached=rows_reached)
@@ -177,7 +138,5 @@ def test_delta_skipped_row_reported_separately_and_not_as_succeeded(monkeypatch,
     summary_line = combined.split("Rows succeeded:")[1].split("\n")[0]
     assert "2/3" in summary_line
     assert "1 skipped, unchanged" in summary_line
-    # The skip must never be counted toward "Rows FAILED" either.
     assert "Rows FAILED" not in combined
-    # A skip is not a failure: the run still exits clean.
     assert rc == 0

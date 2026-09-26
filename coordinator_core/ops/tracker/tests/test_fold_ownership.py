@@ -1,30 +1,3 @@
-"""
-Tests for coordinator_core.ops.tracker.fold_ownership — tracker.fold_ownership.
-
-Coverage:
-  (a) registration — tracker.fold_ownership lands in the live registry on import.
-  (b) handler-level: repo_root=None raises RuntimeError; item_id missing/blank
-      raises ValueError; a genuine D3 params.repo_root mismatch raises
-      ValueError (no honest "skipped" envelope exists for a read).
-  (c) the three behaviours the dispatch brief names: retraction removes the
-      edge (last-write-wins), a person_merged event resolves the losing id to
-      the winner, and no edge means an explicit empty owners answer (never a
-      sentinel).
-  (d) contributor_slug: resolved from a person's github_id alias, null when
-      unresolvable, and the edge is never omitted for a null slug.
-  (e) four-surface wiring + a command-type dispatch_message() smoke.
-
-Import-hygiene note: this file never imports the underlying sovereign-tracker
-event-store module (directly or by dotted name) and never writes its module
-name as a literal anywhere in this file — the op module itself reaches the
-fold only through `tracker_projection`, and this test file follows the same
-discipline so it does not become a third, unaffirmed referencer under
-`coordinator_core/ops/` (see `render_status.py`'s / `test_render_status.py`'s
-own identical "Import-hygiene note").
-
-Harness: asyncio.run() in sync test fns for handler-level tests — no
-pytest-asyncio dependency.
-"""
 
 from __future__ import annotations
 
@@ -34,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-# ---- Import guard: fires @register_op side-effect for tracker.fold_ownership. ----
 import coordinator_core.ops.tracker.fold_ownership  # noqa: F401
 
 from coordinator_core.ipc import _REGISTRY, dispatch_message
@@ -62,7 +34,6 @@ def _run(coro):
 
 
 def _make_git_repo(root: Path) -> Path:
-    """Init a minimal git repository under *root* and return the repo root."""
     root.mkdir(parents=True, exist_ok=True)
 
     def _git(*args: str) -> None:
@@ -96,18 +67,8 @@ def _make_item(repo_root: Path, *, title: str = "Widget", body: str = "Do the th
     return item_id
 
 
-# ---------------------------------------------------------------------------
-# (a) Import-guard floor assertion
-# ---------------------------------------------------------------------------
-
-
 def test_tracker_fold_ownership_registered():
     assert "tracker.fold_ownership" in _REGISTRY
-
-
-# ---------------------------------------------------------------------------
-# (b) handler-level
-# ---------------------------------------------------------------------------
 
 
 def test_handler_repo_root_none_raises_runtime_error():
@@ -143,11 +104,6 @@ def test_handler_derives_worktree_from_common_dir_arg_not_params(tmp_path):
         _handler({"item_id": item_id, "repo_root": str(repo)}, repo_root=repo / ".git")
     )
     assert result == {"item_id": item_id, "owners": []}
-
-
-# ---------------------------------------------------------------------------
-# (c) retraction, merge resolution, unowned
-# ---------------------------------------------------------------------------
 
 
 def test_no_edge_returns_explicit_unowned_empty_answer(tmp_path):
@@ -219,11 +175,6 @@ def test_null_person_id_edge_folds_with_null_slug(tmp_path):
     }
 
 
-# ---------------------------------------------------------------------------
-# (d) contributor_slug resolution
-# ---------------------------------------------------------------------------
-
-
 def test_contributor_slug_resolved_from_github_id_alias(tmp_path):
     repo = _make_git_repo(tmp_path / "repo")
     item_id = _make_item(repo)
@@ -257,11 +208,6 @@ def test_contributor_slug_null_when_no_github_id_alias_edge_still_returned(tmp_p
             {"person_id": person_id, "role": "assignee", "contributor_slug": None},
         ],
     }
-
-
-# ---------------------------------------------------------------------------
-# (e) four-surface wiring + command-type smoke
-# ---------------------------------------------------------------------------
 
 
 def test_registered_in_registry_map():

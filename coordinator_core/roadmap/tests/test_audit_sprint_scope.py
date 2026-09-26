@@ -24,10 +24,6 @@ from coordinator_core.roadmap.audit import (
 
 pytestmark = [pytest.mark.cadence]
 
-# ---------------------------------------------------------------------------
-# Fixture helpers
-# ---------------------------------------------------------------------------
-
 
 def _write_stub(
     path: Path,
@@ -115,11 +111,6 @@ def _init_tree(tmp_path: Path) -> Path:
     return tmp_path
 
 
-# ---------------------------------------------------------------------------
-# read_spine / check_cross_sprint_edge_order — unit level
-# ---------------------------------------------------------------------------
-
-
 def test_read_spine_returns_none_for_missing_file(tmp_path: Path) -> None:
     assert read_spine(tmp_path / "SPINE.md") is None
 
@@ -202,26 +193,18 @@ def test_check_cross_sprint_edge_order_cycle() -> None:
     assert result["cycle"] is not None
 
 
-# ---------------------------------------------------------------------------
-# run_audit(sprint_id=...) end-to-end — sprint-scoped arm
-# ---------------------------------------------------------------------------
-
-
 def test_sprint_scoped_good_roadmap_passes(tmp_path: Path) -> None:
     root = _init_tree(tmp_path)
     run_id = "zzz-sprint-good"
     handoffs = root / "state" / "handoffs"
-    # sprint-1's own cluster: one stub
     _write_stub(handoffs / f"{run_id}-1.md", run_id, f"{run_id}-1", sprint=1, wave=1)
-    # a stub belonging to a LATER, not-yet-planned sprint — must not count
-    # against sprint-1's coverage.
     spine_path = root / "state" / "roadmap" / run_id / "SPINE.md"
     _write_spine(
         spine_path,
         run_id,
         [
             {"id": "sprint-a", "ordinal": 1, "stubs": [f"{run_id}-1"]},
-            {"id": "sprint-b", "ordinal": 2},  # ABSENT stubs — not planned yet
+            {"id": "sprint-b", "ordinal": 2},
         ],
         cross_sprint_edges=[{"from": "sprint-a", "to": "sprint-b"}],
     )
@@ -237,10 +220,6 @@ def test_sprint_scoped_good_roadmap_passes(tmp_path: Path) -> None:
 
 
 def test_sprint_scoped_whole_roadmap_would_have_false_failed(tmp_path: Path) -> None:
-    """The exact false-violation this mode exists to avoid: a whole-roadmap
-    run before the last sprint lands sees sprint-b's absent stubs and a
-    reconciliation.md that only covers sprint-a, and reports a mismatch —
-    while the sprint-scoped run on sprint-a alone is clean."""
     root = _init_tree(tmp_path)
     run_id = "zzz-sprint-contrast"
     handoffs = root / "state" / "handoffs"
@@ -258,7 +237,6 @@ def test_sprint_scoped_whole_roadmap_would_have_false_failed(tmp_path: Path) -> 
     _write_reconciliation(
         root / "state" / "roadmap" / run_id / "sprint-1" / "reconciliation.md", 1
     )
-    # No roadmap-root reconciliation.md at all — the whole-roadmap arm fails loud.
     exit_code_whole, _stdout_whole, stderr_whole = run_audit(run_id, root, root / "state")
     assert exit_code_whole == 1
     assert any("reconciliation.md not found" in line for line in stderr_whole)
@@ -280,7 +258,6 @@ def test_sprint_scoped_coverage_mismatch_fails(tmp_path: Path) -> None:
         run_id,
         [{"id": "sprint-a", "ordinal": 1, "stubs": [f"{run_id}-1"]}],
     )
-    # Reconciliation claims 2 KEEP verdicts but only 1 stub belongs to the sprint.
     _write_reconciliation(
         root / "state" / "roadmap" / run_id / "sprint-1" / "reconciliation.md", 2
     )
@@ -427,11 +404,6 @@ def test_sprint_scoped_cross_sprint_edge_violation_fails(tmp_path: Path) -> None
     assert any("Audit 5 (sprint-scoped" in line and "cross-sprint edge violation" in line for line in stderr_lines)
 
 
-# ---------------------------------------------------------------------------
-# Whole-roadmap arm — unaffected by the sprint_id=None default (byte-parity)
-# ---------------------------------------------------------------------------
-
-
 def test_whole_roadmap_arm_unaffected_by_sprint_scoped_addition(tmp_path: Path) -> None:
     root = _init_tree(tmp_path)
     run_id = "zzz-whole-unaffected"
@@ -444,11 +416,6 @@ def test_whole_roadmap_arm_unaffected_by_sprint_scoped_addition(tmp_path: Path) 
     assert exit_code == 0
     assert stderr_lines == []
     assert any(line == f"Stub-coverage: 1 stubs across 1 record(s) (1 live + 0 archived) match 1 verdicts (KEEP=1, MERGE=0)." or "Stub-coverage:" in line for line in stdout_lines)
-
-
-# ---------------------------------------------------------------------------
-# CLI main() — --sprint flag parsing
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.spawns_process
@@ -464,18 +431,13 @@ def test_main_rejects_unexpected_extra_argument() -> None:
 
 
 def test_absent_stubs_skips_coverage_rather_than_false_failing(tmp_path: Path) -> None:
-    """ABSENT `sprints[].stubs` means sprint-planning has not run: reconciliation.md
-    legitimately does not exist, so Audit 1 must SKIP rather than land the
-    both-sides-zero dead-gate fail. Regression pin — the pre-fix code read
-    `sprint.get("stubs") or []`, which collapsed ABSENT into `[]` and failed here.
-    """
     root = _init_tree(tmp_path)
     run_id = "zzz-stubs-absent"
     spine_path = root / "state" / "roadmap" / run_id / "SPINE.md"
     _write_spine(
         spine_path,
         run_id,
-        [{"id": "sprint-a", "ordinal": 1}],  # no `stubs` key at all
+        [{"id": "sprint-a", "ordinal": 1}],
     )
 
     exit_code, stdout_lines, stderr_lines = run_audit(
@@ -488,10 +450,6 @@ def test_absent_stubs_skips_coverage_rather_than_false_failing(tmp_path: Path) -
 
 
 def test_authored_empty_stubs_is_a_finding_not_a_skip(tmp_path: Path) -> None:
-    """`stubs: []` is the opposite fact: sprint-planning RAN and authored none.
-    That must still reach Audit 1 and fail, or the audit reports clean on exactly
-    the case worth catching.
-    """
     root = _init_tree(tmp_path)
     run_id = "zzz-stubs-empty"
     spine_path = root / "state" / "roadmap" / run_id / "SPINE.md"

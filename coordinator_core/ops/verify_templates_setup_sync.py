@@ -138,17 +138,6 @@ def _tracked_relpaths(claude_klabauter_root: Path) -> List[str]:
 
 
 def _ensure_percolate_on_path() -> None:
-    """Add `coordinator/lib` to `sys.path` so `percolate.*` is importable —
-    the same rung `coordinator_core/percolate/round.py` and
-    `coordinator_core/ops/emit_withheld_knobs.py :: ensure_percolate_on_path`
-    use. Not imported from `emit_withheld_knobs` directly: that module pulls
-    `data_root`, `locked_write` and `declared_writes`, none of which this
-    oracle needs. Resolved from THIS module's own `__file__`, like both of
-    those rungs — not from `coordinator_engine_root_with_class()` — because
-    the running tree (a live claude-klabauter checkout or the published klabauter
-    mirror) always carries its own `coordinator/lib` alongside this file;
-    a second resolution could name a tree that has not yet received this
-    same change."""
     coordinator_lib = Path(__file__).resolve().parents[2] / "coordinator" / "lib"
     if str(coordinator_lib) not in sys.path:
         sys.path.insert(0, str(coordinator_lib))
@@ -199,12 +188,6 @@ def check_pairs(
     tracked_relpaths: List[str],
     source_setup: Optional[Path] = None,
 ) -> Tuple[List[str], int]:
-    """Runs every leg over `tracked_relpaths`. Returns (report_lines, exit_code).
-
-    `source_setup` is the DoE repo-root's `setup/` dir, or `None`/absent
-    when the box has no authoring clone. Explicit arguments throughout —
-    no environment variable is read below `main()` — so a test can inject
-    every tree directly."""
     lines: List[str] = []
     exit_code = 0
     any_checked = False
@@ -260,7 +243,6 @@ def check_pairs(
             source_path = source_setup / relpath
             tmpl_path = templates_setup / relpath
             if not source_path.is_file() or not tmpl_path.is_file():
-                # Template-canonical (no repo-root copy) is not a failure.
                 continue
             if filecmp.cmp(str(source_path), str(tmpl_path), shallow=False):
                 lines.append(f"SOURCE_OK       {relpath}")
@@ -282,7 +264,6 @@ def check_pairs(
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: resolve roots, warn on stray args, run check, print report."""
     if argv and argv[0] != "":
         print(
             "WARNING: verify-templates-setup-sync takes no flags (--fix was "

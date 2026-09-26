@@ -258,25 +258,10 @@ from coordinator_core.wire_paths import rel_id
 
 _LOG = logging.getLogger(__name__)
 
-# Origin-stub kinds this op may close (mirrors the bash's
-# `spinoff|spinoff-roadmap` case match).
 
 # Membership is EXPLICIT, not derived from `baton_class()`, and that is a
-# finding rather than a shortcut. This set's members do not share one
-# `baton_class`: `spinoff` derives `deflection` while `spinoff-roadmap` /
-# `roadmap-baton` derive `intention`. A `baton_class()`-based predicate here
-# would both WIDEN the set (pulling in every other `deflection` kind) and
-# NARROW it (dropping `roadmap-baton`, which is what the migrated live
-# records actually carry) -- so it would silently change behaviour in two
-# directions at once. Preserving the membership beats deriving it.
-#
 # Legacy values are retained PERMANENTLY, not time-boxed: sibling repos still
-# carry pre-rename values on disk after this repo's records have migrated, and
-# a half-migrated fleet is the normal state of a fleet vocabulary change.
-#
 # The retired/successor pair is sourced from the canonical `_PRE_RENAME_ALIASES`
-# table via `kind_values_for_canonical()` instead of being spelled as a literal
-# collection here (AC4 -- see `test_baton_class_is_the_only_membership_set.py`).
 _BATON_KINDS = frozenset(
     {"spinoff"} | set(kind_values_for_canonical("roadmap-baton"))
 )
@@ -299,37 +284,16 @@ def _is_baton_kind(kind: str | None) -> bool:
     return kind in _BATON_KINDS
 
 #: Deployment_state values UNCONDITIONALLY eligible for closure — no
-#: liveness check needed (mirrors the bash's `ready_to_fire|awaiting_gate`
-#: case match). `shipped`/`abandoned` stay unconditionally excluded (absent
 #: from both this set and `_LIVENESS_GATED_DEPLOYMENT_STATE` below).
 _UNCONDITIONAL_NON_TERMINAL_STATES = {"ready_to_fire", "awaiting_gate"}
 
 #: (M1) The one deployment_state value admitted CONDITIONALLY, iff its claim
-#: holder is not live (`_in_flight_eligible`). `/pickup` stamps `in_flight`
-#: the moment a roadmap baton is picked up, so the bare state alone is
-#: overloaded between two populations: "someone is on this right now"
-#: (holder live -> stays excluded) and "someone was on this, and it shipped
-#: without the stub ever transitioning" (holder not live / claim released ->
-#: eligible — the orphaned-after-ship case this op exists to close). See the
-#: module docstring's M1 spec backlink.
 _LIVENESS_GATED_DEPLOYMENT_STATE = "in_flight"
 
-#: Edge kinds followed by the baton-walk leg (§2 of the join-fix proposal).
-#: Deliberately the UNION of predecessor + origin_handoff — unlike
-#: handoff_lineage_ancestry.py's intentional origin_handoff-only isolation,
-#: this op's job is "find the roadmap baton by whichever lineage edge reaches
-#: it," since a stub-routed execution chain may reach the baton via either
-#: edge depending on how the executing session was spawned.
 _BATON_WALK_EDGE_KINDS: Set[str] = {"predecessor", "origin_handoff"}
 
 
-# ---------------------------------------------------------------------------
-# Reply helpers
-# ---------------------------------------------------------------------------
-
-
 def _err(msg: str) -> dict:
-    """Return an exit_code=1 usage-error reply (mirrors the bash's exit 2)."""
     _LOG.warning("handoff.close_origin_stub: %s", msg)
     return {
         "exit_code": 1,
@@ -340,22 +304,7 @@ def _err(msg: str) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# (roadmap_id, stub_id) pair extraction
-# ---------------------------------------------------------------------------
-
-
 def _read_pair(meta: dict) -> Optional[Tuple[str, str]]:
-    """Return (roadmap_id, stub_id) from parsed frontmatter, or None.
-
-    Both fields must be present as non-empty strings — mirrors the bash's
-    `[[ -n "$rid" && -n "$sid" ]]` guard. `_read_meta` (coordinator_core.dag)
-    is used rather than `frontmatter.primitives.read_fm_field` because it is
-    a proper quote-stripping mini-YAML parser (bash's `_extract_fm_field`
-    equivalent) — `read_fm_field` returns the raw (possibly still-quoted)
-    scalar text, which is the wrong tool for a value that may legitimately
-    be YAML-quoted (e.g. a stub_id containing a `#`).
-    """
     rid = meta.get("roadmap_id")
     sid = meta.get("stub_id")
     rid_s = rid.strip() if isinstance(rid, str) else ""
@@ -368,13 +317,6 @@ def _read_pair(meta: dict) -> Optional[Tuple[str, str]]:
 def _resolve_input_path(
     raw_path: str, worktree: Path, allowed_roots: List[Path]
 ) -> Optional[Path]:
-    """Resolve a caller-supplied plan/handoff path, contained under allowed_roots.
-
-    Absolute path used as-is; relative path anchored to worktree. Returns
-    None if the resolved path escapes every allowed root (path-containment,
-    mirrors every other op in this package — docs/problems/2026-07-08-op-family-
-    path-containment-investigation.md § 4).
-    """
     if not raw_path:
         return None
     p = Path(raw_path)
@@ -386,7 +328,6 @@ def _resolve_input_path(
 def _direct_pair(
     raw_path: str, worktree: Path, allowed_roots: List[Path]
 ) -> Optional[Tuple[str, str]]:
-    """Direct-frontmatter join leg: read (roadmap_id, stub_id) off raw_path itself."""
     resolved = _resolve_input_path(raw_path, worktree, allowed_roots)
     if resolved is None or not resolved.is_file():
         return None
@@ -396,18 +337,6 @@ def _direct_pair(
 def _baton_walk_pair(
     handoff_resolved: Path, handoffs_dir: Path
 ) -> Optional[Tuple[str, str]]:
-    """Baton-walk join leg (§2 of the join-fix): walk ancestors to find the baton.
-
-    Composes dag.walk_forward over {predecessor, origin_handoff} starting
-    from handoff_resolved, then scans orderedPaths (first-encounter DFS
-    order — "closest baton wins") for the FIRST ancestor (excluding the
-    start node itself, which the direct leg already covers) whose
-    frontmatter has kind in {spinoff, spinoff-roadmap} AND both
-    roadmap_id/stub_id present. Relies entirely on walk_forward's existing
-    gray/black cycle detection — does not re-implement DFS or re-test cycle
-    handling itself (a cyclic branch simply yields no match past the cycle,
-    per dag.py's terminatedEarly='lineage-cycle' contract).
-    """
     walk = walk_forward(
         str(handoff_resolved),
         edge_kinds=_BATON_WALK_EDGE_KINDS,
@@ -416,7 +345,7 @@ def _baton_walk_pair(
     start_abs = os.path.abspath(str(handoff_resolved))
     for abs_path in walk["orderedPaths"]:
         if abs_path == start_abs:
-            continue  # start node — the direct leg already covers it
+            continue
         meta = walk["nodes"].get(abs_path, {})
         if not _is_baton_kind(meta.get("kind")):
             continue
@@ -426,17 +355,6 @@ def _baton_walk_pair(
     return None
 
 
-# ---------------------------------------------------------------------------
-# deliverable_id fallback join leg (additive; see module docstring)
-# ---------------------------------------------------------------------------
-
-
-#: Close-basis vocabulary emitted on every `closed[]` entry (delivery-proof
-#: threading, see `_is_complete_delivery_proof`/`_try_close`) — auditable
-#: alongside `join_source`, in the spirit of 595a8b3cf977's guard-decline
-#: reason split: a reader must be able to tell "this closed because a
-#: complete delivery proof was supplied" apart from "this closed because the
-#: live-children guard read safe-to-close" without re-deriving it.
 CLOSE_BASIS_DELIVERY_PROOF = "delivery-proof"
 CLOSE_BASIS_GUARD = "guard"
 
@@ -496,10 +414,6 @@ def _is_complete_delivery_proof(proof: Optional[dict]) -> bool:
 
 
 def _read_deliverable_id(meta: dict) -> Optional[str]:
-    """Return the non-empty ``deliverable_id`` scalar from parsed frontmatter, or None.
-
-    Mirrors ``_read_pair``'s strip-and-require-non-empty discipline.
-    """
     val = meta.get("deliverable_id")
     val_s = val.strip() if isinstance(val, str) else ""
     return val_s or None
@@ -508,20 +422,6 @@ def _read_deliverable_id(meta: dict) -> Optional[str]:
 def _deliverable_id_pair(
     deliverable_id: str, handoffs_dir: Path, worktree: Optional[Path] = None
 ) -> Optional[Tuple[str, str]]:
-    """deliverable_id fallback join leg: resolve a (roadmap_id, stub_id) pair
-    indirectly, via the origin stub that shares the caller's deliverable_id.
-
-    Scans ``state/handoffs/`` for the FIRST (sorted-path order) baton-kind
-    stub whose own ``deliverable_id`` matches, then returns THAT stub's own
-    ``(roadmap_id, stub_id)`` pair — a baton-kind stub always carries both,
-    so the returned pair flows through the existing pair-keyed scan/close
-    pipeline (``_scan_matches`` / ``_try_close``) exactly as a directly- or
-    baton-walk-resolved pair does. Does not itself decide eligibility or
-    close anything — purely a pair-resolution leg, symmetric with
-    ``_direct_pair``/``_baton_walk_pair``.
-
-    Join key is raw-string equality.
-    """
     if not handoffs_dir.is_dir():
         return None
     target = deliverable_id
@@ -539,26 +439,7 @@ def _deliverable_id_pair(
     return None
 
 
-# ---------------------------------------------------------------------------
-# closes_stubs merged-plan-authorship join leg (C1b; additive; see module
-# docstring)
-# ---------------------------------------------------------------------------
-
-
 def _read_closes_stubs(meta: dict) -> List[Tuple[str, str]]:
-    """Return the plan's ``closes_stubs: [{roadmap_id, stub_id}, ...]`` list
-    of (roadmap_id, stub_id) pairs, or ``[]`` when the field is absent.
-
-    Absent by default — an absent/non-list field is ``[]``, meaning today's
-    (pre-C1b) behaviour exactly, per this leg's additive-fallback contract.
-    Each list entry is validated independently with ``_read_pair``'s own
-    strip-and-require-non-empty discipline; a malformed entry (not a dict,
-    or missing/empty ``roadmap_id``/``stub_id``) is skipped rather than
-    discarding the whole list — this field is authored, best-effort
-    identification of every origin a merged plan ships, not itself
-    schema-validated (plans are read-only join sources, never validated or
-    mutated by this op).
-    """
     raw = meta.get("closes_stubs")
     if not isinstance(raw, list):
         return []
@@ -572,22 +453,7 @@ def _read_closes_stubs(meta: dict) -> List[Tuple[str, str]]:
     return pairs
 
 
-# ---------------------------------------------------------------------------
-# predecessor_handoff path-keyed leg (C2; additive; see module docstring)
-# ---------------------------------------------------------------------------
-
-
 def _read_predecessor_handoff(meta: dict) -> Optional[str]:
-    """Return the non-empty ``predecessor_handoff`` scalar from parsed plan
-    frontmatter, or None.
-
-    Mirrors ``_read_deliverable_id``'s strip-and-require-non-empty
-    discipline. ``predecessor_handoff`` is plan frontmatter — a path (under
-    ``state/handoffs/``) to the origin stub the plan's own work forked out
-    of, not a ``(roadmap_id, stub_id)`` pair — see
-    ``_predecessor_handoff_stub`` for why that makes it path-keyed rather
-    than a fifth pair-resolution leg.
-    """
     val = meta.get("predecessor_handoff")
     val_s = val.strip() if isinstance(val, str) else ""
     return val_s or None
@@ -655,11 +521,6 @@ async def _predecessor_handoff_stub(
     return None, (resolved, deployment_state, exclusion_reason)
 
 
-# ---------------------------------------------------------------------------
-# in_flight claim-liveness gate (M1, Leg A)
-# ---------------------------------------------------------------------------
-
-
 async def _in_flight_eligible(
     stub_path: Path, common_dir: Path
 ) -> Tuple[bool, Optional[str]]:
@@ -714,33 +575,9 @@ async def _in_flight_eligible(
     return True, None
 
 
-# ---------------------------------------------------------------------------
-# Origin-stub candidate scan (steps 2-5 of the bash)
-# ---------------------------------------------------------------------------
-
-
 async def _stub_state_eligibility(
     stub_path: Path, meta: dict, common_dir: Path
 ) -> Tuple[bool, Optional[str], str]:
-    """Score one already-kind-matched stub's ``deployment_state`` for closure.
-
-    Returns ``(eligible, deployment_state, exclusion_reason)`` —
-    ``exclusion_reason`` is ``""`` exactly when ``eligible`` is True, and a
-    non-empty reason on every exclusion path. Typed ``str`` rather than
-    ``Optional[str]`` so both consumers can feed it straight into their
-    ``(stub_path, deployment_state, exclusion_reason)`` triple, whose third
-    slot is non-optional, without a defensive coalesce that would silently
-    invent a reason if this ladder ever grew a path that forgot one.
-    ``ready_to_fire``/``awaiting_gate`` are unconditionally eligible,
-    ``in_flight`` is liveness-gated via ``_in_flight_eligible``, and every
-    other state (terminal or unrecognized) is excluded as
-    ``"state-not-eligible"``.
-
-    Extracted so the pair-keyed scan (``_scan_matches``) and the path-keyed
-    ``predecessor_handoff`` leg (``_predecessor_handoff_stub``) score
-    eligibility through ONE implementation. A second literal of this ladder
-    would let the two legs drift into closing stubs the other refuses.
-    """
     deployment_state = meta.get("deployment_state")
     if deployment_state in _UNCONDITIONAL_NON_TERMINAL_STATES:
         return True, deployment_state, ""
@@ -800,41 +637,15 @@ async def _scan_matches(
     return matches, filtered
 
 
-# ---------------------------------------------------------------------------
-# session_id-derived sha resolution (C5 continuation; see module docstring)
-# ---------------------------------------------------------------------------
-
-
 def _session_derived_sha(
     session_commits: Optional[List[dict]], stub_rel_path: str
 ) -> str:
-    """Resolve the shipping-commit sha for ``stub_rel_path`` from the
-    session's own commit set, or ``""`` when none touched it.
-
-    Preserves this op's negative-spec verbatim: absence of evidence is not a
-    fallback. Never a branch-tip guess — only a real commit, in
-    ``session_commits``, whose own ``touched_paths`` names this exact stub
-    path. When more than one session commit touched the stub, the MOST
-    RECENT one wins (``session_commits`` is oldest-first per
-    ``resolve_session_commits``'s own contract, so this scans in reverse) —
-    the last commit to touch the stub's path is the one that shipped it.
-
-    ``session_commits`` is ``None`` when no ``session_id`` was supplied, or
-    the primitive could not resolve one (either reads as "nothing to derive
-    from" here, never an error — the caller falls back to today's exact
-    unstamped behaviour).
-    """
     if not session_commits:
         return ""
     for commit in reversed(session_commits):
         if stub_rel_path in commit.get("touched_paths", ()):
             return commit["sha"]
     return ""
-
-
-# ---------------------------------------------------------------------------
-# Stamp-only close (guard + optional shipped_in stamp + ship verb)
-# ---------------------------------------------------------------------------
 
 
 async def _try_close(
@@ -920,23 +731,11 @@ async def _try_close(
     """
     rel = rel_id(stub_path, worktree)
 
-    # Delivery-proof close (PM ruling; see this function's own docstring):
     # a COMPLETE proof, stub-specific via `deliverable_id` equality, closes
-    # on that evidence and skips the live-children guard entirely. Safe
-    # because this close is IN PLACE (deployment_state -> shipped, no
-    # `git mv`) — it cannot strand a dependent the way an archival move
-    # could; archival remains separately gated on liveness in
-    # `archive_handoffs.py`, untouched here.
     close_basis = CLOSE_BASIS_GUARD
     proof_applies = False
     if _is_complete_delivery_proof(delivery_proof):
         stub_deliverable_id = _read_deliverable_id(_read_meta(str(stub_path)))
-        # `_is_complete_delivery_proof`
-        # strips before testing emptiness, so normalize both sides of this
-        # comparison too: `_read_deliverable_id` already returns a stripped
-        # value, but `delivery_proof["deliverable_id"]` is compared here
-        # RAW. A genuinely matching proof with padded whitespace would
-        # otherwise silently fall back to the guard with no diagnostic.
         proof_deliverable_id = delivery_proof.get("deliverable_id")
         proof_deliverable_id_s = (
             proof_deliverable_id.strip()
@@ -951,16 +750,7 @@ async def _try_close(
             close_basis = CLOSE_BASIS_DELIVERY_PROOF
 
     if not proof_applies:
-        # candidate MUST be absolute: handoff_children._handoff_has_live_children
-        # resolves "candidate" via contained_path(Path(candidate), ...), which
-        # calls .resolve() against the PROCESS cwd for a relative string — not
-        # the worktree. stub_path (from handoffs_dir.glob()) is already absolute.
-        # This guard answers a conclusion-shaped question ("may this origin stub
-        # be closed?") -- the close it gates is `deployment_state -> shipped` IN
         # PLACE, no `git mv`, so `CONCLUSION_EDGE_KINDS` (not the archival-shaped
-        # default) is the right predicate — see this function's own docstring
-        # above for the schema-argument specific to this call site (why a fork
-        # child is structurally incapable of being this stub's continuation).
         guard_params: dict = {
             "candidate": str(stub_path),
             "edge_kinds": CONCLUSION_EDGE_KINDS,
@@ -969,16 +759,7 @@ async def _try_close(
             guard_params["exclude"] = guard_exclude
         guard_res = await _live_children_guard(guard_params, repo_root)
         if guard_res.get("exit_code") != 1:
-            # exit_code 0 = has live children; exit_code 2 = indeterminate/fail-closed.
-            # Both are DO-NOT-stamp outcomes — mirrors the bash's tri-state guard
-            # contract: only guard exit 1 (safe-to-archive) proceeds; retention is
             # never an error. The two states demand OPPOSITE operator responses
-            # (wait for the live children to resolve vs. investigate why the scan
-            # could not complete), so the skip payload discriminates them via
-            # `reason` and surfaces the guard's own `children`/`error` fields
-            # instead of collapsing both into one opaque token — see
-            # `handoff_children._handoff_has_live_children`'s docstring for the
-            # authoritative tri-state contract this reads.
             return None, {
                 "roadmap_id": roadmap_id,
                 "stub_id": stub_id,
@@ -987,15 +768,6 @@ async def _try_close(
                     if guard_res.get("exit_code") == 0
                     else "guard-declined-indeterminate"
                 ),
-                # `guard_res.get("children", [])` is read
-                # identically on both the exit_code 0 and exit_code 2 branches;
-                # this is correct today only because `_fail_closed_error_reply`
-                # (handoff_children.py) always sets `children: []` explicitly on
-                # exit_code 2 — a contract-enforced coupling, not one structurally
-                # enforced at this call site. A future guard change that starts
-                # returning partial `children` on an indeterminate reply would
-                # silently populate `blocking_children` on a
-                # `guard-declined-indeterminate` entry.
                 "blocking_children": [
                     rel_id(Path(c), worktree) for c in guard_res.get("children", [])
                 ],
@@ -1003,12 +775,6 @@ async def _try_close(
             }
 
     if sha:
-        # kind="ship-commit" (DR-096, DoE-claude 2026-07-26/27 ruling): `sha`
-        # here is the caller-supplied "shipping-commit SHA" documented on
-        # this op's own `sha` param (see _handler's docstring below) -- it
-        # arrives verbatim from the CLI trampoline's `--sha` flag
-        # (coordinator/bin/close-origin-stub-on-ship.py) or an equivalent
-        # in-process caller, never derived from this stub's own scope paths.
         stamp_res = await _stamp_handler(
             {"handoff_path": rel, "sha": sha, "kind": "ship-commit"}, repo_root
         )
@@ -1039,9 +805,7 @@ async def _try_close(
     )
 
 
-# ---------------------------------------------------------------------------
 # JSON-RPC handler
-# ---------------------------------------------------------------------------
 
 
 @register_op("handoff.close_origin_stub")
@@ -1224,11 +988,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     archive_dir = worktree / "archive" / "handoffs"
     plans_dir = worktree / "docs" / "plans"
 
-    # session_id-derived sha resolution (C5 continuation; see module
-    # docstring and `_session_derived_sha`). Only consulted per-stub when no
-    # explicit `sha` param was supplied — an explicit sha always wins.
-    # Resolved once, lazily, at most one `session.commits` call for this
-    # whole request regardless of how many stubs end up closed.
     session_commits: Optional[List[dict]] = None
     if not sha and session_id:
         try:
@@ -1246,7 +1005,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             return sha
         return _session_derived_sha(session_commits, rel_id(stub_path, worktree))
 
-    pairs: List[Tuple[str, str, str]] = []  # (roadmap_id, stub_id, join_source)
+    pairs: List[Tuple[str, str, str]] = []
     seen: Set[Tuple[str, str]] = set()
 
     def _record(pair: Optional[Tuple[str, str]], join_source: str) -> None:
@@ -1255,19 +1014,13 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         seen.add(pair)
         pairs.append((pair[0], pair[1], join_source))
 
-    # Direct-frontmatter leg — plan (docs/plans/ only; plans are not DAG
-    # nodes, so a plan-only call gets no baton-walk leg — no regression).
     if plan_path:
         _record(_direct_pair(plan_path, worktree, [plans_dir]), "direct")
 
-    # Resolved separately (not reused from the leg above) so the existing
-    # (roadmap_id, stub_id) pair join above stays byte-for-byte unchanged —
-    # only the deliverable_id leg below reads this.
     plan_resolved: Optional[Path] = (
         _resolve_input_path(plan_path, worktree, [plans_dir]) if plan_path else None
     )
 
-    # Direct-frontmatter leg — handoff (state/handoffs/ or archive/handoffs/).
     handoff_resolved: Optional[Path] = None
     if handoff_path:
         handoff_resolved = _resolve_input_path(
@@ -1276,17 +1029,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if handoff_resolved is not None and handoff_resolved.is_file():
             _record(_read_pair(_read_meta(str(handoff_resolved))), "direct")
 
-    # Baton-walk leg (§2 of the join-fix) — handoff only.
     if handoff_resolved is not None and handoff_resolved.is_file():
         _record(_baton_walk_pair(handoff_resolved, handoffs_dir), "baton_walk")
 
-    # deliverable_id fallback leg (additive; see module docstring). Reads
-    # deliverable_id off whichever caller-supplied input(s) resolved above
-    # and, for each, looks up the origin stub sharing that deliverable_id to
-    # recover ITS OWN (roadmap_id, stub_id) pair. `_record`'s pair-value
-    # dedupe means a pair already resolved by the direct/baton-walk legs
-    # above is a no-op here, not a second entry — this leg only ever ADDS a
-    # pair the other two legs could not resolve.
     for resolved in (plan_resolved, handoff_resolved):
         if resolved is None or not resolved.is_file():
             continue
@@ -1295,26 +1040,11 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             continue
         _record(_deliverable_id_pair(deliverable_id, handoffs_dir, worktree), "deliverable_id")
 
-    # closes_stubs merged-plan-authorship leg (C1b; see module docstring).
-    # Plan-only — a merged plan's frontmatter is the one artifact that can
-    # legitimately name more than one origin, so this leg reads directly off
-    # plan_resolved rather than scanning handoffs_dir; each entry is fed
-    # straight into `_record`, which dedupes against any pair the direct/
-    # baton-walk/deliverable_id legs above already resolved.
     if plan_resolved is not None and plan_resolved.is_file():
         for pair in _read_closes_stubs(_read_meta(str(plan_resolved))):
             _record(pair, "closes_stubs")
 
-    # predecessor_handoff path-keyed leg (C2; see module docstring and
-    # `_predecessor_handoff_stub`). Plan-only — the executing plan is the
-    # one legitimate source (only a plan can name the stub it forked out
-    # of); a consumed handoff carries no equivalent field. Path-keyed, not
-    # pair-keyed: `_try_close` is already path-keyed, so this leg feeds it a
-    # resolved stub path directly rather than manufacturing a pair to
-    # rejoin against `_scan_matches` — the exact pipeline this leg exists to
-    # bypass for a non-roadmap `kind: spinoff` stub, which carries no
-    # `roadmap_id`/`stub_id` at all.
-    direct_stubs: List[Tuple[Path, str]] = []  # (stub_path, join_source)
+    direct_stubs: List[Tuple[Path, str]] = []
     filtered_stubs: List[Tuple[Path, Optional[str], str]] = []
     if plan_resolved is not None and plan_resolved.is_file():
         stub_path, filtered_entry = await _predecessor_handoff_stub(
@@ -1325,34 +1055,12 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         elif filtered_entry is not None:
             filtered_stubs.append(filtered_entry)
 
-    # Guard-exclude list (Latent-bug fix — see _try_close docstring): the
-    # caller-supplied handoff_path is excluded from the live-children guard's
-    # scan, mirroring coordinator-handoff-archive.sh's own --exclude
-    # convention. Computed once, reused for every pair this call resolves.
-    # MUST be the absolute (already-.resolve()'d) form: dag.referenced_by's
-    # exclude-set match is os.path.abspath(candidate) against
-    # os.path.abspath(each exclude entry) — os.path.abspath resolves a
-    # relative string against the PROCESS cwd, not the worktree, so a
-    # worktree-relative entry here would silently fail to match and the
-    # exclusion would be a no-op.
     guard_exclude: List[str] = []
     if handoff_resolved is not None and handoff_resolved.is_file():
         guard_exclude = [str(handoff_resolved)]
 
     if not pairs and not direct_stubs and not filtered_stubs:
-        # `pairs_resolved == 0` on its own does NOT discriminate loud vs
-        # quiet (AC2/AC14 correction — see this function's own docstring and
-        # state/audits/2026-08-04-terminal-state-closer-exit-code-caller-
-        # audit.md's corrected per-closer scoring). `post_commit_tail` calls
-        # this op once per (plan, consumed-handoff) a close-out touches
         # REGARDLESS of whether that artifact ever had a roadmap origin, so
-        # a plan/handoff that legitimately carries no origin linkage at all
-        # (e.g. a memo-sourced plan with no roadmap_id anywhere) must stay
-        # quiet, not false-alarm every non-roadmap close-out.
-        #
-        # Unjoinable-inputs check first: a named plan_path/handoff_path that
-        # did not resolve to a readable file is "I could not read your
-        # inputs" — always loud, regardless of what follows.
         unresolved = [
             raw
             for raw, resolved in (
@@ -1362,10 +1070,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             if raw and (resolved is None or not resolved.is_file())
         ]
 
-        # Partial/contradictory linkage check: an artifact that DID resolve
-        # but carries only one of roadmap_id/stub_id, or a closes_stubs list
-        # whose every entry is malformed, is authored linkage that failed to
-        # join — distinct from an artifact that simply carries none at all.
         contradictory: List[str] = []
         for resolved in (plan_resolved, handoff_resolved):
             if resolved is None or not resolved.is_file():
@@ -1415,11 +1119,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 ),
             }
 
-        # Quiet zero-candidates path (AC14): every supplied artifact resolved
-        # cleanly and carries no roadmap-origin linkage at all — a genuine
-        # "nothing to do" negative, not a caller error. `no_candidates: true`
-        # keeps the distinction machine-readable alongside the shared
-        # `pairs_resolved == 0` shape.
         return {
             "exit_code": 0,
             "closed": [],
@@ -1427,11 +1126,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "pairs_resolved": 0,
             "no_candidates": True,
             "message": (
-                # Leads with a distinct
-                # opening clause so this quiet-path string is not byte-
-                # identical to the loud message above through "...closes_stubs
-                # list;" (a reader skimming `message` without checking
-                # `exit_code`/`no_candidates` first could misread it as loud).
                 f"no roadmap-origin linkage present on {artifact_desc} — "
                 "nothing to do (checked: direct (roadmap_id,stub_id) pair, "
                 "deliverable_id-joined origin stub, closes_stubs list, and "
@@ -1442,9 +1136,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     closed: List[dict] = []
     skipped: List[dict] = []
-    # Dedupe across the pairs loop and the predecessor_handoff direct-stubs
-    # loop below — a stub reachable by BOTH a (roadmap_id, stub_id) pair and
-    # `predecessor_handoff` must close exactly once, never twice.
     attempted_stub_paths: Set[Path] = set()
 
     for roadmap_id, stub_id, join_source in pairs:
@@ -1454,10 +1145,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
         if not matches:
             if filtered:
-                # (M1, Leg B) at least one stub matched kind+pair but every
-                # match was excluded by the deployment_state/liveness gate —
-                # distinct from a genuine zero-candidate join (see
-                # `_scan_matches`'s own docstring).
                 skipped.append({
                     "roadmap_id": roadmap_id,
                     "stub_id": stub_id,
@@ -1478,7 +1165,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             continue
 
         if len(matches) > 1:
-            # Ambiguous-match safety invariant — never guess; refuse to stamp any.
             skipped.append(
                 {"roadmap_id": roadmap_id, "stub_id": stub_id, "reason": "ambiguous"}
             )
@@ -1499,14 +1185,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if closed_entry is not None:
             closed.append(closed_entry)
         else:
-            assert skipped_entry is not None  # exactly one of the pair is non-None
+            assert skipped_entry is not None
             skipped.append(skipped_entry)
 
-    # (M1, Leg B analog for the path-keyed leg) a predecessor_handoff-named
-    # stub that resolved to a real, baton-kind record but was excluded by
-    # the state/liveness gate is reported as a skip — not folded into the
-    # zero-candidate bail above (see the `if not pairs and not direct_stubs
-    # and not filtered_stubs:` guard).
     for stub_path, deployment_state, exclusion_reason in filtered_stubs:
         skipped.append({
             "roadmap_id": None,
@@ -1521,10 +1202,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             ],
         })
 
-    # predecessor_handoff direct-stubs leg (C2). Path-keyed — `_try_close` is
-    # called directly per resolved stub, bypassing `_scan_matches` entirely
-    # (see `_predecessor_handoff_stub`'s own docstring for why). Deduped
-    # against every stub path the pairs loop above already attempted.
     stubs_resolved = len(direct_stubs)
     for stub_path, join_source in direct_stubs:
         if stub_path in attempted_stub_paths:
@@ -1549,7 +1226,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if closed_entry is not None:
             closed.append(closed_entry)
         else:
-            assert skipped_entry is not None  # exactly one of the pair is non-None
+            assert skipped_entry is not None
             skipped.append(skipped_entry)
 
     message = (

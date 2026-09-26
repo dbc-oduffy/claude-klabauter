@@ -1,32 +1,3 @@
-"""
-coordinator_core.tests.test_nudge_windows_subprocess_popup_comments — regression net
-for improvement-queue 2026-06-22-subprocess-popup-write-guard-denies-edit.yaml.
-
-Placement note: the dispatch brief for this fix asked for
-coordinator_core/write_guards/tests/test_nudge_windows_subprocess_popup_comments.py,
-but coordinator_core/write_guards has no tests/ subdirectory (all engine-side tests
-live flat under coordinator_core/tests/, per that directory's existing convention —
-see test_hooks_roundtrip.py). Per the brief's own fallback instruction ("if
-write_guards has no tests/ dir, put it in the nearest existing test location and say
-where"), this file lives here instead.
-
-Bug being regression-tested: the nudge_windows_subprocess_popup guard
-(coordinator_core/write_guards/...) previously scanned RAW file content with
-comment-unaware regexes, so a bare-call TOKEN merely mentioned in a `#` comment
-(e.g. an explanatory bash comment quoting `python -c '...'` in backticks) was
-denied even though no real subprocess call exists. The fix adds a quote-aware
-per-line comment stripper (`_strip_line_comments`) that runs AFTER the
-allowlist-marker check but BEFORE the detection regexes.
-
-This suite parametrizes 12 cases against the guard. Cases 1-4 are the false
-positives being fixed (comment-only mentions); cases 5-9 are true positives that
-must still deny (including case 9's quote-awareness proof); cases 10-12 are
-pre-existing escapes (allowlist markers, extension gate) that must keep working.
-
-Spec backlink: state/improvement-queue/2026-06-22-subprocess-popup-write-guard-denies-edit.yaml
-Guards under test:
-    coordinator_core/write_guards/nudge_windows_subprocess_popup.py
-"""
 
 from __future__ import annotations
 
@@ -38,7 +9,6 @@ from coordinator_core.write_guards.nudge_windows_subprocess_popup import (
 
 
 def _wg_denied(file_path: str, content: str, tool_name: str = "Write") -> bool:
-    """Thin wrapper over the write_guards copy's check() envelope-or-None shape."""
     payload = {
         "tool_name": tool_name,
         "tool_input": {
@@ -50,9 +20,6 @@ def _wg_denied(file_path: str, content: str, tool_name: str = "Write") -> bool:
     return _wg_check(payload) is not None
 
 
-# ---------------------------------------------------------------------------
-# The 12 required cases: (case_id, file_path, content, expected_deny)
-# ---------------------------------------------------------------------------
 _CASES = [
     (
         "1-sh-comment-python-c",

@@ -89,12 +89,6 @@ from coordinator_core.tracker_store import shard_path
 _PROJECT_ROOT = str(Path(__file__).parent.parent.parent.resolve())
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-# Declared, not excused: `append_event`'s `locked_rmw` resolves its lock directory via
-# real `git rev-parse --git-common-dir`, so a bare non-git tmp_path fails before this
-# file's own fold logic runs -- a real repo is load-bearing setup, not a choice. AC6
-# additionally spawns a real subprocess holder to model the ccos-4 cross-process
-# lost-update shape, which no mock reproduces. Fixtures are per-test because AC5/AC6
-# each build distinct event histories that would collide if shared.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -162,16 +156,7 @@ def _make_item(repo_root, *, title="Widget", body="Do the thing"):
     return item_id
 
 
-# ---------------------------------------------------------------------------
-# AC3 — fold totality over every item reachable in the stream
-# ---------------------------------------------------------------------------
-
-
 def test_ac3_every_item_reachable_in_the_stream_folds_non_empty(repo_root):
-    # Deliberately a mixed population: a bare item_created with zero
-    # project mutations at all, an item with a real edge, and an item
-    # toggled back to zero edges — every one of them must still be a
-    # member of the fold with a non-empty set.
     bare_item = _make_item(repo_root, title="Bare", body="no project mutation ever")
     emit_project_created("proj-alpha", name="Alpha", repo_root=repo_root)
 
@@ -182,17 +167,11 @@ def test_ac3_every_item_reachable_in_the_stream_folds_non_empty(repo_root):
     emit_item_project_added(toggled_to_empty, "proj-alpha", repo_root=repo_root)
     emit_item_project_retracted(toggled_to_empty, "proj-alpha", repo_root=repo_root)
 
-    # An item known to the stream ONLY
-    # via an item_project_added event, with no item_created at all. This
-    # exercises fold_membership's `elif` branch seeding an item on its own,
-    # independent of the item_created branch (see module docstring).
     only_added = mint_item_id("OnlyAdded", "no item_created ever", "2026-08-05T10:00:00.000000Z")
     _emit_membership_event_for_foreign_item(
         only_added, "proj-alpha", kind="item_project_added", repo_root=repo_root
     )
 
-    # An item known to the stream ONLY
-    # via an item_project_retracted event, no prior add and no item_created.
     only_retracted = mint_item_id(
         "OnlyRetracted", "no prior add, no item_created", "2026-08-05T10:00:00.000000Z"
     )
@@ -205,11 +184,6 @@ def test_ac3_every_item_reachable_in_the_stream_folds_non_empty(repo_root):
     for item_id in (bare_item, with_edge, toggled_to_empty, only_added, only_retracted):
         assert item_id in folded, f"{item_id} vanished from the fold entirely"
         assert folded[item_id], f"{item_id} folded to the empty set — totality violated"
-
-
-# ---------------------------------------------------------------------------
-# C4 — fold_closure_fidelity (DR-closure-fidelity-tier-axis.md D1/D4)
-# ---------------------------------------------------------------------------
 
 
 def test_closure_fidelity_explicit_classification_folds(repo_root):
@@ -232,10 +206,6 @@ def test_closure_fidelity_latest_classification_wins(repo_root):
 
 
 def test_closure_fidelity_item_created_with_no_classification_defaults(repo_root):
-    # An item that HAS an item_created event but never receives an
-    # item_closure_fidelity_set event — this alone is NOT the case D4/C4
-    # brief calls out (that requires an item reached only through a
-    # membership event, below); this covers the item_created-only leg.
     bare_item = _make_item(repo_root, title="Bare", body="no classification ever")
 
     folded = fold_closure_fidelity(repo_root=repo_root)
@@ -244,11 +214,7 @@ def test_closure_fidelity_item_created_with_no_classification_defaults(repo_root
 
 
 def test_closure_fidelity_item_reached_only_via_membership_event_defaults(repo_root):
-    # The load-bearing case: an item with NO item_created event at all,
-    # reachable in the stream ONLY through an item_project_added event, and
-    # never classified. fold_closure_fidelity's totality must still seed it
     # to DEFAULT_CLOSURE_FIDELITY (D4) -- this is distinct from, and does
-    # not degrade to, "an item_created item with the field unset".
     emit_project_created("proj-alpha", name="Alpha", repo_root=repo_root)
     only_added = mint_item_id(
         "OnlyAdded", "no item_created, no classification ever", "2026-08-05T10:00:00.000000Z"
@@ -264,15 +230,8 @@ def test_closure_fidelity_item_reached_only_via_membership_event_defaults(repo_r
 
 
 def test_closure_fidelity_default_value_is_the_conservative_verify_with_effort_tier(repo_root):
-    # D4 names the default explicitly as verify-with-effort, not merely
-    # "some" closed value -- pin it, not just membership in the enum.
     assert DEFAULT_CLOSURE_FIDELITY == "verify-with-effort"
     assert DEFAULT_CLOSURE_FIDELITY in CLOSURE_FIDELITY_VALUES
-
-
-# ---------------------------------------------------------------------------
-# AC4 — zero real edges folds to exactly {unassigned}
-# ---------------------------------------------------------------------------
 
 
 def test_ac4_zero_real_edges_folds_to_exactly_unassigned(repo_root):
@@ -281,12 +240,6 @@ def test_ac4_zero_real_edges_folds_to_exactly_unassigned(repo_root):
     folded = fold_membership(repo_root=repo_root)
 
     assert folded[item_id] == {RESERVED_PROJECT_ID}
-
-
-# ---------------------------------------------------------------------------
-# AC5 — real edges fold exactly, never alongside unassigned; last-retract
-# re-folds to {unassigned} with no extra write
-# ---------------------------------------------------------------------------
 
 
 def test_ac5_one_or_more_real_edges_exclude_unassigned(repo_root):
@@ -298,9 +251,6 @@ def test_ac5_one_or_more_real_edges_exclude_unassigned(repo_root):
 
     folded = fold_membership(repo_root=repo_root)
 
-    # The mutual-exclusivity assert this
-    # test used to carry here is vacuous post-DEC-13/DEC-21 (removed; see
-    # module negative-spec) and is not re-added.
     assert folded[item_id] == {"proj-alpha", "proj-beta"}
 
 
@@ -330,17 +280,11 @@ def test_ac5_retracting_the_last_real_edge_re_folds_to_unassigned(repo_root):
     folded = fold_membership(repo_root=repo_root)
     assert folded[item_id] == {RESERVED_PROJECT_ID}
 
-    # No write beyond the retract event itself: exactly one more event than
-    # before the retract call, and it is never a stored `unassigned` edge.
     events_after_retract = tracker_store.read_events(repo_root=repo_root)
     assert len(events_after_retract) == events_before_retract + 1
     for event in events_after_retract:
         assert event.get("project_id") != RESERVED_PROJECT_ID
 
-
-# ---------------------------------------------------------------------------
-# AC6 — two concurrent cross-process membership mutations on one item
-# ---------------------------------------------------------------------------
 
 _CONCURRENT_MEMBERSHIP_SCRIPT = textwrap.dedent("""\
     \"\"\"Sleep-widened concurrent membership mutator: mirrors
@@ -406,20 +350,10 @@ def test_ac6_two_concurrent_processes_no_lost_update_no_interleaved_artifact(tmp
     assert len(events_after) == events_before + 2, "a concurrent membership mutation was lost"
 
     folded = fold_membership(repo_root=repo)
-    # Deterministic fold of BOTH mutations regardless of interleaving order —
-    # no lost update, no interleaved artifact (e.g. only one edge landing,
-    # or a third phantom edge).
     assert folded[item_id] == {"proj-a", "proj-b"}
 
 
-# ---------------------------------------------------------------------------
-# AC12 — no projection logic lives in tracker_store.read_events
-# ---------------------------------------------------------------------------
-
-
 def test_ac12_read_events_signature_is_unwidened_by_this_chunk():
-    # read_events is frozen (AC10); this chunk must not have added a filter,
-    # projection, or pagination parameter to make its own fold easier.
     signature = inspect.signature(tracker_store.read_events)
     assert list(signature.parameters) == ["repo_root"]
     assert signature.parameters["repo_root"].kind == inspect.Parameter.KEYWORD_ONLY
@@ -434,53 +368,27 @@ def test_ac12_read_events_source_carries_no_projection_vocabulary():
         )
 
 
-# ---------------------------------------------------------------------------
-# AC16 — the reserved unassigned project row is addressable regardless of
-# whether any item currently folds to it
-# ---------------------------------------------------------------------------
-
-
 def test_ac16_reserved_project_id_addressable_with_no_item_folding_to_it(repo_root):
     item_id = _make_item(repo_root)
     emit_project_created("proj-alpha", name="Alpha", repo_root=repo_root)
     emit_item_project_added(item_id, "proj-alpha", repo_root=repo_root)
 
     folded = fold_membership(repo_root=repo_root)
-    # No item currently folds to unassigned in this fixture...
     assert all(RESERVED_PROJECT_ID not in projects for projects in folded.values())
     # `assert RESERVED_PROJECT_ID ==
-    # "unassigned"` was a constant compared to its own literal (tautology,
-    # cannot fail) and did not probe AC16's actual claim. On re-check: a
     # `project_created` event for RESERVED_PROJECT_ID can never exist to be
     # looked up via `tracker_store.read_events` — creating one is REJECTED
-    # at construction time (see `test_tracker_entities.py`'s AC2 coverage,
-    # `reject_reserved_project`). The reserved row's "addressability" is by
-    # construction, not storage: it's a stable identity constant this
-    # module's fold emits directly, never something read back from the
-    # event stream. The assert above is this module's actual AC16-relevant
     # coverage: the fold never confuses RESERVED_PROJECT_ID with a real,
-    # stored edge, regardless of fold state.
 
 
 def test_ac16_reserved_project_id_addressable_when_an_item_does_fold_to_it(repo_root):
     item_id = _make_item(repo_root)
 
     folded = fold_membership(repo_root=repo_root)
-    # Dropped the tautological
     # `assert RESERVED_PROJECT_ID == "unassigned"`. Per the sibling test
     # above: a project_created event for RESERVED_PROJECT_ID can never
-    # exist (rejected at construction — test_tracker_entities.py AC2), so
-    # "addressability" here is by construction (a stable identity constant
-    # this fold emits directly), not a storage lookup this module could
-    # test. This test's actual AC16-relevant coverage: an item with zero
     # real edges folds to exactly {RESERVED_PROJECT_ID}, established below.
     assert folded[item_id] == {RESERVED_PROJECT_ID}
-
-
-# ---------------------------------------------------------------------------
-# AC18 — the wire-shape helper: materialized projects[] with "unassigned"
-# present, never an empty array, never raw events
-# ---------------------------------------------------------------------------
 
 
 def test_ac18_wire_helper_emits_unassigned_for_zero_real_edge_item(repo_root):
@@ -514,15 +422,7 @@ def test_ac18_wire_helper_never_returns_raw_event_shape(repo_root):
 
     assert isinstance(wire[item_id], list)
     assert all(isinstance(entry, str) for entry in wire[item_id])
-    # No event-shaped keys (kind/item_id/applied_at/...) ever appear in the
-    # wire value — it is a plain list of project-id strings only.
     assert not any(isinstance(entry, dict) for entry in wire[item_id])
-
-
-# ---------------------------------------------------------------------------
-# AC9 — item_person: (item, person, assignee) and (item, person,
-# raised_by) admitted simultaneously; an exact duplicate triple is rejected
-# ---------------------------------------------------------------------------
 
 
 def test_ac9_two_distinct_roles_for_same_item_person_admitted_simultaneously(repo_root):
@@ -552,9 +452,7 @@ def test_ac9_retract_then_readd_of_same_triple_is_not_a_duplicate(repo_root):
     emit_item_person_added(item_id, "person-1", "assignee", repo_root=repo_root)
     emit_item_person_retracted(item_id, "person-1", "assignee", repo_root=repo_root)
 
-    # The triple is currently absent (retracted), so re-adding it is not a
     # duplicate — DEC-18's key rejects a CURRENTLY-present duplicate, not a
-    # historical one.
     emit_item_person_added(item_id, "person-1", "assignee", repo_root=repo_root)
 
     folded = fold_person_membership(repo_root=repo_root)
@@ -587,12 +485,6 @@ def test_ac9_null_person_id_is_tolerated(repo_root):
 
     folded = fold_person_membership(repo_root=repo_root)
     assert folded[item_id] == {(None, "mentioned")}
-
-
-# ---------------------------------------------------------------------------
-# C5b — person registry fold, multi-hop resolution, ghost sentinel,
-# item_person resolution (AC6, AC7b, AC8, AC9, AC10)
-# ---------------------------------------------------------------------------
 
 
 def _write_raw_event_line(shard_file, event: dict) -> None:
@@ -744,16 +636,12 @@ def test_cross_shard_merge_cycle_resolves_deterministically_no_raise(repo_root, 
 
     registry = fold_person_registry(repo_root=repo_root)
 
-    # The later-sorting edge (machine-b's B->A) is the one dropped; the
-    # walk from either direction therefore stops at its source node, B.
     result_from_a = resolve_person(a_id, registry=registry)
     result_from_b = resolve_person(b_id, registry=registry)
     assert result_from_a == b_id
     assert result_from_b == b_id
     assert result_from_a == result_from_b, "cross-shard cycle resolution is not deterministic"
 
-    # Second pair: applied_at TIES, observed_at differs — the first
-    # tie-break leg alone must decide which edge is dropped.
     c_id, d_id = mint_person_id(), mint_person_id()
     emit_person_created(c_id, display_name="C", repo_root=repo_root)
     emit_person_created(d_id, display_name="D", repo_root=repo_root)
@@ -778,16 +666,12 @@ def test_cross_shard_merge_cycle_resolves_deterministically_no_raise(repo_root, 
 
     registry = fold_person_registry(repo_root=repo_root)
 
-    # The later-observed edge (machine-b's D->C) is dropped; both walks
-    # stop at its source node, D.
     result_from_c = resolve_person(c_id, registry=registry)
     result_from_d = resolve_person(d_id, registry=registry)
     assert result_from_c == d_id
     assert result_from_d == d_id
     assert result_from_c == result_from_d, "observed_at tie-break is not deterministic"
 
-    # Third pair: applied_at AND observed_at both TIE — `id` alone must
-    # decide which edge is dropped (the lexicographically-later id).
     e_id, f_id = mint_person_id(), mint_person_id()
     emit_person_created(e_id, display_name="E", repo_root=repo_root)
     emit_person_created(f_id, display_name="F", repo_root=repo_root)
@@ -812,8 +696,6 @@ def test_cross_shard_merge_cycle_resolves_deterministically_no_raise(repo_root, 
 
     registry = fold_person_registry(repo_root=repo_root)
 
-    # The higher-id edge (F->E) is dropped; both walks stop at its
-    # source node, F.
     result_from_e = resolve_person(e_id, registry=registry)
     result_from_f = resolve_person(f_id, registry=registry)
     assert result_from_e == f_id
@@ -838,9 +720,6 @@ def test_ghost_sentinel_zero_git_aliases(repo_root):
     folded = fold_person_membership(repo_root=repo_root)
 
     assert (person_id, "assignee") in folded[item_id]
-    # Scope to this person, not the
-    # whole registry, so an unrelated person's git_author alias could not
-    # mask a regression on THIS person acquiring one.
     assert all(
         namespace != "git_author"
         for (namespace, _value), mapped_person_id in registry["aliases"].items()
@@ -900,27 +779,10 @@ def test_alias_retract_then_readd_resolves(repo_root):
     assert resolve_alias("email", "person@example.test", registry=registry) == person_id
 
 
-# ---------------------------------------------------------------------------
-# C9c — chunk C9's projection-suite third: `current_state`/`render_status`
-# truth table (AC6), a `manual_close` null-`from_state` reopen (AC7), the
-# `(applied_at, observed_at, id)` tie-break (AC8), compaction round-trip
-# (AC10), and append-only compaction (AC12).
-#
-# Spec backlink: pln-sat-03-event-sourced-completio-c270a1
-# § Tasks C9.
-# ---------------------------------------------------------------------------
-
 _ISO_FMT = "%Y-%m-%dT%H:%M:%S.%f"
 
 
 def _iso(dt: datetime) -> str:
-    # Full microsecond precision -- production's own `_stamp_applied_at()`
-    # (`tracker_transitions.py`) stamps via `datetime.now(timezone.utc).
-    # isoformat(timespec="microseconds")`, never millisecond-truncated.
-    # Zeroing the last 3 digits here (the pre-fix form) made a
-    # test-fabricated `applied_at` sort ambiguously close to a real,
-    # full-precision production stamp -- see AC10's "strictly between"
-    # regression test, which intermittently failed on exactly this seam.
     return dt.strftime(_ISO_FMT) + "Z"
 
 
@@ -961,11 +823,6 @@ def _raw_transition_event(
         "observed_at": observed_at if observed_at is not None else applied_at,
         "schema_version": 1,
     }
-
-
-# ---------------------------------------------------------------------------
-# AC6 — truth table over all three axes
-# ---------------------------------------------------------------------------
 
 
 def test_ac6_no_events_at_all_reads_open(repo_root):
@@ -1016,14 +873,7 @@ def test_ac6_manual_close_closes_even_when_other_two_axes_are_incomplete(repo_ro
     tt.emit_transition(
         item_id, "code_complete", "asserted", actor="a", tier="direct", repo_root=repo_root
     )
-    # qa_verified never asserted — the manual_close path alone must still
-    # close this item.
     assert render_status(item_id, repo_root=repo_root) == "closed"
-
-
-# ---------------------------------------------------------------------------
-# AC7 — a manual_close reopen with from_state=null folds correctly
-# ---------------------------------------------------------------------------
 
 
 def test_ac7_manual_close_reopen_with_null_from_state_folds_correctly(repo_root):
@@ -1063,11 +913,6 @@ def test_ac7_manual_close_reopen_after_a_prior_close_reopens_the_item(repo_root)
     assert render_status(item_id, repo_root=repo_root) == "open"
 
 
-# ---------------------------------------------------------------------------
-# AC8 — (applied_at, observed_at, id) tie-break, hand-constructed events
-# ---------------------------------------------------------------------------
-
-
 def test_ac8_identical_applied_at_resolves_by_observed_at(repo_root):
     item_id = _make_item(repo_root)
     shard = shard_path(repo_root)
@@ -1089,9 +934,6 @@ def test_ac8_identical_applied_at_resolves_by_observed_at(repo_root):
         applied_at=common_applied_at,
         observed_at="2026-08-11T11:00:00.000000Z",
     )
-    # Written in reverse-of-winning order, to prove the winner is
-    # determined by (applied_at, observed_at) ordering, never by
-    # append/write order.
     _write_raw_event_line(shard, later_observed)
     _write_raw_event_line(shard, earlier_observed)
 
@@ -1119,17 +961,10 @@ def test_ac8_identical_applied_at_and_observed_at_resolves_by_id(repo_root):
         applied_at=common_ts,
         observed_at=common_ts,
     )
-    # Written in reverse-of-winning order, same rationale as above.
     _write_raw_event_line(shard, higher_id)
     _write_raw_event_line(shard, lower_id)
 
     assert current_state(item_id, "qa_verified", repo_root=repo_root) == "retracted"
-
-
-# ---------------------------------------------------------------------------
-# AC10 — compaction round-trip: randomised property (fixed seed, stdlib
-# random, no hypothesis dependency) plus the offline-merge named case
-# ---------------------------------------------------------------------------
 
 
 def _reference_axis_state(events: list[dict], item_id: str, axis: str) -> str | None:
@@ -1197,11 +1032,6 @@ def test_ac10_compaction_round_trip_property_fixed_seed(tmp_path):
             as_of_applied_at=folded[-1]["applied_at"],
             folded_to_state=folded_to_state,
         )
-        # Stamped by hand so the snapshot line sorts strictly between the
-        # folded window and events_after — mirroring the real fold
-        # boundary. `emit_snapshot_event`'s wall-clock "now" stamp would
-        # sort AFTER every fabricated 2020-dated event and swallow
-        # events_after out of the merged order entirely.
         snapshot_applied_at = _iso(
             _parse_iso(folded[-1]["applied_at"]) + timedelta(microseconds=1)
         )
@@ -1246,9 +1076,6 @@ def test_ac10_content_bound_skip_survives_late_earlier_event_across_shards(
     assert snapshot["kind"] == "snapshot"
     as_of_applied_at = snapshot["as_of_applied_at"]
 
-    # Strictly earlier than the snapshot's own as_of_applied_at, minted on
-    # a machine ("machine-b") that never saw the fold — the exact
-    # offline-merge shape this skip mechanism exists to survive.
     earlier_dt = _parse_iso(as_of_applied_at) - timedelta(hours=1)
     late_event = _raw_transition_event(
         item_id,
@@ -1271,11 +1098,6 @@ def test_ac10_content_bound_skip_survives_late_earlier_event_across_shards(
         "content-bound folded_event_ids skip diverged from full replay under "
         "an offline-merge late-earlier event — see AC10 named-case docstring"
     )
-
-
-# ---------------------------------------------------------------------------
-# AC12 — compaction appends, never rewrites
-# ---------------------------------------------------------------------------
 
 
 def test_ac10_late_event_strictly_between_fold_boundary_and_snapshot_stamp(
@@ -1319,9 +1141,6 @@ def test_ac10_late_event_strictly_between_fold_boundary_and_snapshot_stamp(
         "fold boundary) for there to be a gap to inject an event into"
     )
 
-    # Strictly inside (as_of_applied_at, snapshot.applied_at) — never
-    # folded (postdates the fold boundary), never skipped, but sorts
-    # BEFORE the snapshot record itself under read_events' raw order.
     gap_dt = (
         _parse_iso(as_of_applied_at)
         + (_parse_iso(snapshot_applied_at) - _parse_iso(as_of_applied_at)) / 2

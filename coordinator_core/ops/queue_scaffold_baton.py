@@ -182,18 +182,7 @@ CATEGORY_QUEUE_DERIVED_BATON = "queue-derived-baton"
 """Literal frontmatter ``category`` value this op always stamps — never inherited."""
 
 
-# ---------------------------------------------------------------------------
-# Input-shape normalization — solo entry / themed cluster -> one flat item list
-# ---------------------------------------------------------------------------
-
-
 def _normalize_item(raw: dict) -> Dict[str, str]:
-    """Normalize one queue-row item to ``{"id", "path", "title"}`` (all str).
-
-    ``path`` is the only truly required key on a raw item; ``id``/``title`` are
-    derived from ``path`` (stem) when absent — the same read-defensively posture as
-    the rest of this queue-triage surface.
-    """
     path = str(raw.get("path") or "").strip()
     raw_id = str(raw.get("id") or "").strip()
     item_id = raw_id or (Path(path).stem if path else "")
@@ -202,12 +191,6 @@ def _normalize_item(raw: dict) -> Dict[str, str]:
 
 
 def _extract_items(params: dict) -> "tuple[Optional[List[Dict[str, str]]], Optional[str], Optional[dict]]":
-    """Extract a flat, normalized item list plus a default title from ``params``.
-
-    Returns ``(items, default_title, error_dict)`` — exactly one of the first two is
-    non-``None`` when ``error_dict`` is ``None``. ``error_dict`` (an ``_err(...)``
-    shape) is returned when neither ``entry`` nor ``cluster`` is supplied, or both are.
-    """
     entry = params.get("entry")
     cluster = params.get("cluster")
     entry_supplied = "entry" in params
@@ -236,13 +219,7 @@ def _extract_items(params: dict) -> "tuple[Optional[List[Dict[str, str]]], Optio
     return None, None, _err("supply one of 'entry' (solo) or 'cluster' (themed)")
 
 
-# ---------------------------------------------------------------------------
-# Queue-family / class-context resolution — reuses queue_family's ONE family map
-# ---------------------------------------------------------------------------
-
-
 def _family_for_path(path: str) -> str:
-    """Derive the queue-family directory name from a repo-relative queue-row path."""
     return Path(path).parent.name
 
 
@@ -254,15 +231,6 @@ class-context section (the item line already shows id/path/title)."""
 def _class_context_for_items(
     items: List[Dict[str, str]], worktree_root: Path
 ) -> Dict[str, Dict[str, object]]:
-    """Load each item's underlying record and pull its family's optional class fields.
-
-    Groups items by family, loads each family ONCE via
-    ``queue_family.load_family_records``, then looks up each item's record by
-    filename match. Returns ``{path: {field_name: value, ...}}`` for every item whose
-    record was found and carried at least one populated optional field; an item with
-    no match or no populated optional fields is simply absent from the result (normal
-    input, not an error).
-    """
     by_family: Dict[str, List[Dict[str, str]]] = {}
     for item in items:
         family = _family_for_path(item["path"])
@@ -273,7 +241,7 @@ def _class_context_for_items(
         try:
             normalize_family(family)
         except UnknownQueueFamilyError:
-            continue  # per-family loop; an unrecognized queue family is skipped, not fatal to the scan
+            continue
         records = load_family_records(family, worktree_root)
         by_name = {Path(rec["path"]).name: rec.get("frontmatter") or {} for rec in records}
         field_table = fields_for_family(family)
@@ -294,7 +262,6 @@ def _class_context_for_items(
 def _render_source_entries_body(
     items: List[Dict[str, str]], class_context: Dict[str, Dict[str, object]]
 ) -> str:
-    """Render a markdown "## Source entries" section carrying family + class context."""
     lines = ["## Source entries", ""]
     for item in items:
         family = _family_for_path(item["path"])
@@ -306,11 +273,6 @@ def _render_source_entries_body(
     return "\n".join(lines) + "\n"
 
 
-# ---------------------------------------------------------------------------
-# Frontmatter construction
-# ---------------------------------------------------------------------------
-
-
 def _build_baton_frontmatter(
     title: str,
     created_date: str,
@@ -320,15 +282,6 @@ def _build_baton_frontmatter(
     provenance: Dict[str, object],
     body: str,
 ) -> str:
-    """Build the initial frontmatter string for a queue-derived baton.
-
-    Mirrors ``handoff_author_fork._build_fork_frontmatter`` in shape, with two
-    differences: ``category`` is stamped directly as the literal
-    ``queue-derived-baton`` (never left for ``_normalize_one_text`` to backfill —
-    that helper only fills a MISSING category, so writing it up front is what keeps
-    it from ever regressing to the ``infra`` default), and ``origin_goal_id`` uses the
-    same array-serialization convention.
-    """
     fm = f"title: {serialize_yaml_scalar(title)}\n"
     fm += f"created: {created_date}\n"
     fm += f"branch: {serialize_yaml_scalar(branch)}\n"
@@ -342,20 +295,12 @@ def _build_baton_frontmatter(
     for logical_name in ("origin_session", "origin_handoff", "origin_handoff_id", "origin_plan_id"):
         value = provenance.get(logical_name)
         fm = insert_fm_field(fm, logical_name, value)
-    # Reuse handoff_author_fork's array-serialization
-    # helper instead of hand-rolling the null/[]/[a, b] three-way branch, so
-    # the two modules can't silently drift on this convention.
     fm = _append_fm_array_field(fm, "origin_goal_id", provenance.get("origin_goal_id"))
 
     full_text = "---\n" + fm.rstrip("\n") + "\n---\n"
     if body:
         full_text += "\n" + body.lstrip("\n")
     return full_text
-
-
-# ---------------------------------------------------------------------------
-# Op handler
-# ---------------------------------------------------------------------------
 
 
 @register_op("handoff.scaffold_from_queue")
@@ -387,7 +332,7 @@ async def _handler(
     items, default_title, err = _extract_items(params)
     if err is not None:
         return err
-    assert items is not None  # for type-checkers; _extract_items guarantees this on no-error
+    assert items is not None
 
     title: str = (params.get("title") or default_title or "").strip()
     if not title:
@@ -479,15 +424,6 @@ async def _handler(
     class_context = await asyncio.to_thread(_class_context_for_items, items, worktree_root)
     source_body = _render_source_entries_body(items, class_context)
     body = source_body + ("\n" + extra_body.lstrip("\n") if extra_body else "")
-    # C2 (ledger-owing handoff kinds): this op assembles its body from a caller
-    # param rather than through coordinator-doc-new, so it does not inherit
-    # C1's scaffolder-side emission. Append the canonical block when the
-    # composed body doesn't already carry one — never duplicate it.
-    # Was frontmatter.body_blocks._compile_heading_re,
-    # which near-missed the parser's own grammar; now the canonical detector shared
-    # with the parser and every other detection site.
-    # Aligned empty-body handling with
-    # handoff_author_fork.py's shape (no leading blank lines when body is empty).
     if not SESSION_LEDGER_HEADING_RE.search(body):
         ledger_block = "\n".join(SESSION_LEDGER_BLOCK_LINES)
         body = body.rstrip("\n") + "\n\n" + ledger_block if body else ledger_block
@@ -498,18 +434,11 @@ async def _handler(
     handoffs_dir.mkdir(parents=True, exist_ok=True)
     out_path = handoffs_dir / filename
 
-    # Guard: refuse to create a live handoff sharing an already-archived
-    # record's filename (this op does not stamp its own handoff_id at
-    # creation, so only the filename basis applies here — see
-    # handoff_creation_guard's module docstring for the full invariant).
     try:
         assert_no_archived_twin(out_path, worktree_root)
     except HandoffArchivedTwinError as exc:
         return _err(str(exc))
 
-    # Resolved once, in this function's own scope, so
-    # a queue-scaffolded baton authored while a plan is claimed carries that plan's
-    # deliverable_id instead of always minting a fresh one (DR-207 DD#1 second door).
     carried_deliverable_id = _resolve_claimed_plan_deliverable_id(worktree_root)
 
     def _mutate(old_text: str) -> str:
@@ -529,27 +458,15 @@ async def _handler(
         operating_person = resolve_operating_person()
         minted_by = operating_person.get("github")
         human_assignee = operating_person.get("contributor_slug")
-        # producer-axis-claude-klabauter-engine-half: op_identity resolved HERE, at this
-        # creation seam. This door is machine (op-minted by construction);
-        # the finer op-minted-vs-EM-initiated distinction is deliberately
-        # dropped — the closed op_identity axis carries only
-        # machine-minted/hand-authored (see ProducerOpIdentity's docstring
-        # and resolve_producer_for_creation's module docstring). Do not
-        # reinvent a third enum member here.
         producer = resolve_producer_for_creation(op_identity="machine-minted")
         norm = _normalize_one_text(
             content, out_path, carried_deliverable_id, minted_by, producer
         )
         if norm is not None and norm is not _NO_FRONTMATTER:
             rebuilt = norm["rebuilt"]
-            # _normalize_one_text only backfills an ABSENT category — ours is always
-            # present up front, so this is a defense-in-depth assertion, not a fixup.
             final_text = rebuilt
         else:
             final_text = content
-        # human_assignee, same caller-supplied discipline as minted_by: resolved
-        # once at this creation door, never inside handoff_normalize — mirrors
-        # handoff_author_fork.py's two doors (see that module's _stamp_human_assignee).
         return _stamp_human_assignee(final_text, human_assignee)
 
     try:
@@ -577,12 +494,6 @@ async def _handler(
     }
 
 
-# ---------------------------------------------------------------------------
-# Error-shape helper
-# ---------------------------------------------------------------------------
-
-
 def _err(msg: str) -> dict:
-    """Return an exit_code=1 error reply dict."""
     _LOG.warning("handoff.scaffold_from_queue: %s", msg)
     return {"exit_code": 1, "error": msg}

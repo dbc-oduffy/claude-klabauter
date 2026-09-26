@@ -79,9 +79,6 @@ from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.session import touch_record
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Spawns a real external process (git init fixture); runs at cadence gates,
-# not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -109,10 +106,6 @@ def _decoded_paths(sink_path) -> list[str]:
 
 
 class TestHandlerWritesIntoFreshSessionDir:
-    """Drives `_handler` with a session_id whose session dir does not exist
-    beforehand — end-to-end smoke coverage that the whole pipeline (not any
-    one mkdir in isolation — see the isolated classes below for that) still
-    lands the T event."""
 
     def test_t_event_lands_when_session_dir_did_not_exist(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -120,7 +113,7 @@ class TestHandlerWritesIntoFreshSessionDir:
         target = repo / "src" / "new.py"
         target.write_text("y")
 
-        common_dir = git_common_dir(repo)  # production shape: <repo>/.git
+        common_dir = git_common_dir(repo)
         session_id = "freshdirfeed0001"
         session_dir = common_dir / "coordinator-sessions" / session_id
 
@@ -150,12 +143,6 @@ class TestHandlerWritesIntoFreshSessionDir:
 
 
 class TestAppendTouchRecordSelfCreatesItsParentDir:
-    """Isolates `_append_touch_record` from `_ensure_session_record_sync` and
-    the rest of `_handler` entirely — calls it directly against a sink whose
-    entire parent directory chain does not exist. Proves
-    `touch_record.append_event`'s own self-creation (not the hook's
-    `os.makedirs`, which this test never invokes) is what makes a fresh
-    session's first append land."""
 
     def test_append_creates_missing_parent_chain_and_lands_the_event(self, tmp_path):
         sink = tmp_path / "does" / "not" / "exist" / "yet" / "touch-record.jsonl"
@@ -176,11 +163,6 @@ class TestAppendTouchRecordSelfCreatesItsParentDir:
 
 
 class TestSessionRecordSelfCreatesViaCoreInit:
-    """Isolates `_ensure_session_record_sync` with the hook's own
-    `os.makedirs` neutered to a no-op, proving `session.core.init`'s own
-    `sdir.mkdir(parents=True, exist_ok=True)` (not the hook's makedirs,
-    which this test disables) is what creates `meta.json`'s parent
-    directory for a session dir that did not exist beforehand."""
 
     def test_meta_json_lands_via_core_init_mkdir_even_with_hooks_makedirs_disabled(
         self, tmp_path, monkeypatch
@@ -196,9 +178,6 @@ class TestSessionRecordSelfCreatesViaCoreInit:
             "this test is a session whose dir does not exist beforehand"
         )
 
-        # Neuter the hook's own makedirs call to a no-op — session.core's
-        # own `Path.mkdir` (a different call) is left untouched, so this
-        # isolates core.init's self-creation from the hook's own mkdir.
         monkeypatch.setattr(ttf.os, "makedirs", lambda *args, **kwargs: None)
 
         ttf._ensure_session_record_sync(

@@ -61,8 +61,6 @@ _veneer = _load_veneer_module()
 
 @pytest.fixture()
 def stub_cc_invoke_bare():
-    """Stub the veneer's own `cc_invoke_bare` seam for the test body, then
-    restore the original — never spawns the real subprocess transport."""
     orig = _veneer.cc_invoke_bare
 
     def _apply(fn):
@@ -112,10 +110,6 @@ def test_repo_flag_omitted_does_not_refuse(stub_cc_invoke_bare, capsys):
 
 
 def _emit_via_veneer(stub_cc_invoke_bare, capsys, skill_name: str, verbs: list[str]) -> str:
-    """Drives the veneer's `--emit` path with `cc_invoke_bare` stubbed to
-    call the real `compose_producer_module` in-process — the emitted
-    module text under test is genuine emitter output, never a hand-typed
-    fixture, but no op/IPC transport is spawned."""
 
     def _stub(op, params, repo_root):
         return {"module_text": compose_producer_module(params["skill_name"], params["verbs"])}
@@ -148,8 +142,6 @@ def _manifest_and_dispatch_keys(module_text: str) -> tuple[list[str], dict[str, 
 
 
 def test_manifest_and_dispatch_table_are_a_bijection(stub_cc_invoke_bare, capsys):
-    """Every manifest verb has exactly one dispatch entry and vice versa —
-    no unmapped verb, no orphan dispatch handler."""
     verbs = ["handoff.supersede_predecessor", "handoff.retire"]
     module_text = _emit_via_veneer(stub_cc_invoke_bare, capsys, "example_assemble", verbs)
     manifest, dispatch = _manifest_and_dispatch_keys(module_text)
@@ -157,8 +149,6 @@ def test_manifest_and_dispatch_table_are_a_bijection(stub_cc_invoke_bare, capsys
 
 
 def test_manifest_and_dispatch_table_preserve_declared_order(stub_cc_invoke_bare, capsys):
-    """The manifest and the dispatch table are emitted in the same caller-
-    declared verb order — never resorted or reversed."""
     verbs = ["c_verb", "a_verb", "b_verb"]
     module_text = _emit_via_veneer(stub_cc_invoke_bare, capsys, "example_assemble", verbs)
     manifest, dispatch = _manifest_and_dispatch_keys(module_text)
@@ -178,9 +168,6 @@ def test_dispatch_function_names_derive_from_manifest_verbs(stub_cc_invoke_bare,
 
 
 def test_every_manifest_verb_has_a_defined_dispatch_stub_function(stub_cc_invoke_bare, capsys):
-    """Every dispatch-table target names an actually-defined `def` in the
-    emitted module — the manifest never points the directive table at a
-    function that was not also emitted."""
     verbs = ["one_verb", "two_verb"]
     module_text = _emit_via_veneer(stub_cc_invoke_bare, capsys, "example_assemble", verbs)
     _, dispatch = _manifest_and_dispatch_keys(module_text)
@@ -190,7 +177,5 @@ def test_every_manifest_verb_has_a_defined_dispatch_stub_function(stub_cc_invoke
 
 
 def test_emitted_module_carries_the_spec_backlink(stub_cc_invoke_bare, capsys):
-    """The emitted module's own docstring names the generator's spec
-    backlink — findable later, not just present in `emit.py` itself."""
     module_text = _emit_via_veneer(stub_cc_invoke_bare, capsys, "example_assemble", ["do_thing"])
     assert "Spec backlink: pln-the-compute-layer-scaffolder-e-90d036" in module_text

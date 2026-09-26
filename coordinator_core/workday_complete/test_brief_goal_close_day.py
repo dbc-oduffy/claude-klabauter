@@ -29,8 +29,6 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -44,13 +42,6 @@ def _run_git(args: list[str], cwd: Path) -> None:
 
 
 def _init_real_repo(tmp_path: Path) -> Path:
-    """A throwaway real git repo (tmp_path-based), mirroring
-    `test_cockpit_contract_freshness._init_real_repo`'s pattern — used by the
-    Finding-1-regression tests below to exercise the real
-    `_resolve_repo_common_dir_for_ceremony` -> `main_worktree_root` ->
-    `resolve_context` wiring end to end, rather than the
-    `_compute_open_day_goals` monkeypatch every other test in this suite
-    uses (Finding 2)."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _run_git(["init", "-q"], cwd=repo)
@@ -71,13 +62,6 @@ def _row(goal_id: str, text: str = "some priority") -> dict:
 
 
 def _stub_operator_config(monkeypatch) -> None:
-    """`brief()` calls `resolve_operator_config` before anything else — a
-    concern this suite is not exercising (that resolution machinery has its
-    own conformance suite), and the autouse HOME-quarantine fixture
-    (`coordinator_core/conftest.py`) means it fails to resolve a real
-    settings-home/claude-klabauter-live-root/doe-root under a bare `tmp_path`. Stub it to a
-    successful no-op, same posture `test_workstream_complete.py` uses for the
-    unrelated `compute_session_shape_gate` seam."""
     monkeypatch.setattr(
         wc_brief,
         "resolve_operator_config",
@@ -88,11 +72,6 @@ def _stub_operator_config(monkeypatch) -> None:
             "doe_root": "",
         },
     )
-
-
-# ---------------------------------------------------------------------------
-# jp_day_goal_closeout / d_goal_close_day presence — conditional on open rows
-# ---------------------------------------------------------------------------
 
 
 def test_judgment_point_and_directive_absent_when_no_open_day_rows(monkeypatch):
@@ -164,11 +143,6 @@ def test_directive_carries_depends_on_and_decisions_are_threaded_into_args(monke
     assert directive["args"] == ["--decisions", '{"today-1": "done"}']
 
 
-# ---------------------------------------------------------------------------
-# Halt contract — the directive never fires on an unresolved judgment point.
-# ---------------------------------------------------------------------------
-
-
 def test_directive_blocked_when_judgment_point_unresolved():
     jp = wc_brief._build_day_goal_closeout_judgment_point(_rows(today=[_row("today-1")]))
     directive = {
@@ -210,10 +184,7 @@ def test_directive_stays_blocked_when_judgment_point_resolves_to_skip():
     assert wc_apply._directive_gate_open(directive, jp_by_id, decisions) is False
 
 
-# ---------------------------------------------------------------------------
 # AC10 — workday-complete-apply resolves goal-close-day through _CLI_DISPATCH
-# without raising UnrecognizedDirective.
-# ---------------------------------------------------------------------------
 
 
 def test_goal_close_day_is_a_consumes_manifest_member():
@@ -226,15 +197,6 @@ def test_apply_resolves_goal_close_day_cli_without_raising():
     assert resolved.is_file()
 
 
-# ---------------------------------------------------------------------------
-# Finding 1 regression (code-reviewer, P1) — real repo-root resolution must
-# route through main_worktree_root, never the current worktree's own root.
-# Finding 2 (code-reviewer, P2) — every test above monkeypatches
-# _compute_open_day_goals directly, so this wiring was previously
-# unexercised by any test in this suite.
-# ---------------------------------------------------------------------------
-
-
 def test_resolve_repo_common_dir_for_ceremony_returns_git_common_dir(tmp_path):
     repo = _init_real_repo(tmp_path)
     common_dir = wc_brief._resolve_repo_common_dir_for_ceremony(start=repo)
@@ -245,9 +207,6 @@ def test_resolve_repo_common_dir_for_ceremony_returns_git_common_dir(tmp_path):
 def test_compute_open_day_goals_resolves_context_at_main_worktree_root(
     tmp_path, monkeypatch
 ):
-    """Baseline (non-worktree) case: `_compute_open_day_goals()` unmocked
-    resolves `resolve_context` at the repo root derived from the real
-    `git rev-parse --git-common-dir` -> `main_worktree_root` chain."""
     repo = _init_real_repo(tmp_path)
     monkeypatch.chdir(repo)
 
@@ -271,11 +230,6 @@ def test_compute_open_day_goals_resolves_context_at_main_worktree_root(
 def test_compute_open_day_goals_scopes_to_main_worktree_from_linked_worktree(
     tmp_path, monkeypatch
 ):
-    """Finding 1 regression: invoked from a LINKED worktree (a first-class,
-    documented layout per this repo's CLAUDE.md), `_compute_open_day_goals`
-    must still resolve `resolve_context` at the MAIN worktree root — never
-    the linked worktree's own root, which `git rev-parse --show-toplevel`
-    (the pre-fix behavior) would have returned instead."""
     repo = _init_real_repo(tmp_path)
     linked = tmp_path / "linked-worktree"
     _run_git(["worktree", "add", str(linked), "-b", "linked-branch"], cwd=repo)

@@ -1,10 +1,3 @@
-"""Characterization tests for coordinator_core.ops.generate_repomap.
-
-Built from the golden-oracle capture of Port of: generate-repomap.sh
-(DoE b5a4192c, 2026-07-20) run against real corpora — trust-guard fail-loud
-path, generator-not-found 3-tier resolution, default-args and
-passthrough-args invocation shapes.
-"""
 from __future__ import annotations
 
 import os
@@ -17,10 +10,6 @@ import pytest
 from coordinator_core.ops.generate_repomap import _resolve_python_cmd, _trusted_root, main
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-
-# ---------------------------------------------------------------------------
-# _trusted_root — trust-core boundary cases (mirrors the bash trust-core)
-# ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
 def _drop_settings_home_override(monkeypatch):
@@ -78,10 +67,6 @@ def test_trusted_root_rejects_dotdot_traversal(tmp_path, monkeypatch):
     assert _trusted_root(bad) is False
 
 
-# ---------------------------------------------------------------------------
-# main — fail-loud paths
-# ---------------------------------------------------------------------------
-
 def test_main_untrusted_root_exits_1(tmp_path, monkeypatch, capsys):
     home = tmp_path / "home"
     home.mkdir()
@@ -105,10 +90,6 @@ def test_main_generator_not_found_exits_1(tmp_path, monkeypatch, capsys):
     assert "Fallback (tier 2, legacy)" in err
     assert "Fallback  (tier 3)" in err
 
-
-# ---------------------------------------------------------------------------
-# main — happy paths (subprocess mocked, resolution + arg-building verified)
-# ---------------------------------------------------------------------------
 
 def _make_generator(plugin_root: Path) -> Path:
     gen_dir = plugin_root / "bin" / "repomap"
@@ -139,14 +120,6 @@ def test_main_default_args_when_no_argv(tmp_path, monkeypatch):
     assert rc == 0
     cmd = captured["cmd"]
     assert cmd[-7:] == [str(gen), "--project-root", ".", "--budget", "4000", "--profile", "balanced"]
-    # Compared against the helper the code actually calls
-    # (`generate_repomap` uses `no_console_passthrough_kwargs`, because the
-    # generator's output is meant to reach the operator). Asserting
-    # `no_console_creationflags()` here passed only when pytest's capture left
-    # `sys.stdout`/`sys.stderr` without a `fileno()` — under fd-level capture
-    # the passthrough helper contributes real fds and the two stopped matching.
-    # Both sides now evaluate the same helper in this same process, so the
-    # assertion is capture-mode-agnostic.
     assert captured["kwargs"] == no_console_passthrough_kwargs()
 
 
@@ -181,10 +154,6 @@ def test_main_no_interpreter_found(tmp_path, monkeypatch, capsys):
     assert rc == 1
     assert "no python interpreter found" in capsys.readouterr().err
 
-
-# ---------------------------------------------------------------------------
-# _resolve_python_cmd — interpreter probe order + override
-# ---------------------------------------------------------------------------
 
 def test_resolve_python_cmd_override(monkeypatch):
     monkeypatch.setenv("PYTHON", "/usr/bin/python3.11")

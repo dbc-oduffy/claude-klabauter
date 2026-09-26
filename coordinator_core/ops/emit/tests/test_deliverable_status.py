@@ -1,8 +1,3 @@
-"""
-Tests for `coordinator_core.ops.emit.deliverable_status.plan_review_verified`.
-
-Spec backlink: docs/plans/2026-08-20-the-rungs-get-writers.md § C7 (AC15).
-"""
 
 from coordinator_core.ops.emit.deliverable_status import plan_review_verified
 

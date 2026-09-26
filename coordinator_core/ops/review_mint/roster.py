@@ -60,12 +60,6 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 
-# Persona-band (Opus-model) agentTypes, mirrored from DoE's
-# `coordinator/agent-effort-registry.yaml` `band: persona` rows. The fragment
-# itself carries no model-tier field (DoE-owned shape, never authored here),
-# so the tier cap below has no other data-driven source to read this from;
-# this list is the deliberate, narrow exception to "never hardcode agent
-# names" in this module — it classifies cost, not blocking-verdict routing.
 _PERSONA_AGENT_TYPES = frozenset(
     {
         "coordinator:staff-eng",
@@ -78,39 +72,16 @@ _PERSONA_AGENT_TYPES = frozenset(
     }
 )
 
-# PM ruling (state/cross-repo/inbox/2026-09-01-example-game-repo-em-review-roster-
-# signal-selection-uncapped-by-size.md): "three Opus reviewers shouldn't
-# happen on a plan unless it is XL or XXL in size." XL/XXL is the `full`
-# tier (see DoE's review-roster-fragment.md § "Why these names"); every
-# other tier caps below three.
 _PERSONA_CAP_BY_TIER = {"full": 3}
 _DEFAULT_PERSONA_CAP = 2
 
 
 class RosterFragmentError(ValueError):
-    """Raised when a review-roster fragment (or the requested tier within
-    it) lacks the expected shape.
-
-    Always raised loudly, naming what is missing, in preference to a silent
-    empty stage list — an empty stage would compose a review phase that
-    dispatches nobody while the run still reads as reviewed.
-    """
+    pass
 
 
 @dataclass(frozen=True)
 class Stage:
-    """One ordered step of a review phase.
-
-    ``agents`` is a non-empty, ordered list of ``agentType`` strings that
-    run in parallel within this stage (arity 2+) or serially (arity 1) —
-    the composer (C2) decides which, never a flag read off the fragment.
-    ``gate`` is True only for a stage that can abort the run; a gated stage
-    is guaranteed (by ``parse_stages``) to contain at least one agent whose
-    ``blocking_verdicts`` entry is non-null. ``accepts_signals`` (schema_
-    version >= 4) is the stage label (``"preflight"`` or ``"named"``) that
-    signal-selected agents merge into, or ``None`` for a stage that accepts
-    none — see ``parse_stages``'s ``signals`` parameter.
-    """
 
     agents: List[str]
     gate: bool
@@ -199,8 +170,6 @@ def parse_stages(
     if not isinstance(blocking_verdicts, dict):
         blocking_verdicts = {}
 
-    # v1 compatibility: a flat list of agentType strings is one non-gated
-    # stage. Nothing that reads this shape today should observe a change.
     if isinstance(tier_value, list):
         agents = list(tier_value)
         if not agents:
@@ -265,9 +234,6 @@ def _merge_signals(
     tier: str,
     signals: Optional[Dict[str, List[str]]],
 ) -> None:
-    """Merge ``signals`` into ``stages`` in place, honoring the tier's
-    persona (Opus) cap. See ``parse_stages``'s docstring § "Tier cap".
-    """
     if not signals:
         return
 

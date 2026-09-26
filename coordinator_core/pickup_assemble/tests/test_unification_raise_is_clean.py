@@ -62,9 +62,6 @@ from coordinator_core.pickup_assemble.tests._git_harness import (
 
 
 def _seed_unclaimed_handoff(repo: Path, name: str) -> Path:
-    """A held-but-not-ready parent: `baton_role: work`, NOT claimed
-    (no ledger claim dir), NOT shipped (`deployment_state: active`) —
-    `claimed_or_shipped_at_path` reads this `False`, so it is `unready`."""
     path = repo / "state" / "handoffs" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     fm = (
@@ -120,10 +117,6 @@ def test_precondition_raise_leaves_no_commit_and_never_reaches_the_mint(tmp_path
 
 
 def test_empty_parent_list_refused_before_the_mint(tmp_path, monkeypatch):
-    """Defect A: `verdict["held"]` resolves to ZERO parents and this
-    session's own claim ledger (consulted for Defect B parity) also holds
-    zero handoff claims -- the empty-comprehension-is-falsy door must be
-    refused with its own message, never fall through to the mint."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "test-session-empty-parents")
@@ -153,11 +146,6 @@ def test_empty_parent_list_refused_before_the_mint(tmp_path, monkeypatch):
 
 
 def test_apply_derived_parent_absent_from_verdict_is_still_caught(tmp_path, monkeypatch):
-    """Defect B: a leg present in `apply`'s OWN claim-ledger derivation
-    (`_resolve_held_handoff_for_session`, the same resolver `brief()` calls)
-    but ABSENT from `verdict["held"]` must still be checked -- not reaching
-    the mint unchecked just because the verdict's own held-set never named
-    it."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     _seed_unclaimed_handoff(repo, "ledger-only.md")
@@ -175,9 +163,6 @@ def test_apply_derived_parent_absent_from_verdict_is_still_caught(tmp_path, monk
 
     monkeypatch.setattr(ba_apply, "apply", _spy_apply)
 
-    # The verdict's OWN held-set names nothing -- only the claim ledger
-    # (read by `_unify_into_successor` via the same resolver `apply` uses)
-    # knows about `ledger-only.md`.
     verdict = {"held": {"primary": None, "additional": [], "degraded": False}}
 
     before_rev_count = _rev_count(repo)

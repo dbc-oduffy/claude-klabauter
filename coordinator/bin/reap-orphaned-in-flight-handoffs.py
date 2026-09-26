@@ -109,15 +109,6 @@ def __getattr__(name: str):
 
 
 def _bootstrap_imports() -> None:
-    """Import every non-stdlib dependency this module needs and bind it at
-    module scope, called from main() (C6k import-motion: module bodies stay
-    inert on both the warm door and the un-bootstrapped settings-home
-    forwarder load routes). Order is load-bearing — preserved verbatim from
-    the former module-scope sequence. Idempotent by construction: a name
-    already bound at module scope (via a prior call, or a test's own
-    `monkeypatch.setattr(mod, "resolve_checked_repo_root", ...)` ahead of
-    calling `main()`) is left alone rather than clobbered by a real import.
-    """
     if all(n in globals() for n in _BOOTSTRAP_NAMES):
         return
 
@@ -176,8 +167,6 @@ def _usage_error(message: str) -> int:
 
 
 def _parse_args(argv: List[str]) -> "tuple[Optional[dict], Optional[int]]":
-    """Returns (config, None) on success, or (None, exit_code) on a
-    terminal parse outcome (usage error or --help)."""
     cfg = {"dry_run": False, "repo_root": None}
     i = 0
     n = len(argv)
@@ -255,20 +244,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     if cfg["dry_run"]:
         return 0
 
-    # DR-276: `apply_dispositions` calls `archive_stamp`'s `cs_unclaim_handoff`/
-    # `_cs_ship_handoff_core` in-process, neither of which calls `declare_write`
-    # itself, so the handoff paths they mutate carry no session scope-touch claim
-    # unless this call site declares them — the same seam
-    # `workday-complete-step9-append-changelog.py` uses around its own
-    # `changelog_ops.append_day` call, applied here via the returned `applied`
-    # list rather than a callee-side declaration. A reclaim-shipped row the
-    # live-children guard retained comes back in `_retained`, not `_applied` —
-    # nothing was written there, so it must not be declared as a touch.
-    #
-    # 2026-09-11 (plan C6): the memo survey's `apply_dispositions` is applied
-    # inside the SAME `recording_declared_writes` block — one scope-touch
-    # window covering both the handoff releases and the memo releases, never
-    # a second nested window.
     with recording_declared_writes(cwd=repo_root):
         _applied, _retained, failed = apply_dispositions(result.dispositions)
         for _path in _applied:

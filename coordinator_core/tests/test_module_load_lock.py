@@ -56,9 +56,6 @@ class TestHeldDuringLoad:
         for t in threads:
             t.join(timeout=5)
 
-        # Whichever thread goes first, its "-end" must appear before the
-        # other thread's "-start" — no interleaving of the two critical
-        # sections is ever observed.
         assert len(order) == 4
         first_label = order[0].split("-")[0]
         second_label = "b" if first_label == "a" else "a"
@@ -84,8 +81,6 @@ class TestHeldDuringLoad:
         thread_a = threading.Thread(target=_hold_a)
         thread_a.start()
         try:
-            # thread_a is holding "name-a"; a lock on the unrelated "name-b"
-            # must still be acquirable promptly.
             thread_b = threading.Thread(target=_hold_b)
             thread_b.start()
             thread_b.join(timeout=2)
@@ -96,10 +91,6 @@ class TestHeldDuringLoad:
 
 
 class TestClaimsHandoffLifecycleConcurrency:
-    """Integration coverage against `session.claims.handoff_lifecycle` — one
-    of the four sites the bug row names — with a slow, instrumented loader
-    standing in for `exec_module`.
-    """
 
     def test_second_concurrent_caller_never_execs_while_first_is_mid_load(
         self, monkeypatch
@@ -120,13 +111,6 @@ class TestClaimsHandoffLifecycleConcurrency:
                 with events_lock:
                     events.append(("start", threading.current_thread().name))
                 try:
-                    # Force both threads to have had a chance to reach this
-                    # point before either finishes — if a second caller can
-                    # reach exec_module while the first is still here, both
-                    # arrive at the barrier and neither times out; under the
-                    # fix, only one caller is ever inside exec_module, so the
-                    # barrier always times out (caught below) rather than
-                    # completing.
                     entered_barrier.wait(timeout=0.3)
                 except threading.BrokenBarrierError:
                     pass
@@ -165,11 +149,6 @@ class TestClaimsHandoffLifecycleConcurrency:
         assert results[0] is results[1], "both callers must share one loaded module"
         assert getattr(results[0], "LOADED", False) is True
 
-        # The defect this closes: a second caller's exec_module "start"
-        # landing before the first caller's "end". With the fix, the second
-        # caller blocks on module_load_lock until the first is fully done
-        # (and then short-circuits on the now-populated cache), so
-        # exec_module runs exactly once.
         starts = [e for e in events if e[0] == "start"]
         assert len(starts) == 1, (
             f"exec_module ran more than once concurrently for one module_name: {events}"

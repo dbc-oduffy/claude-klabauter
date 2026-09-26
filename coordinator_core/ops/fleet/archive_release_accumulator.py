@@ -86,10 +86,6 @@ _ACCUMULATOR_GLOB = "*-pending-release.md"
 _ACCUMULATOR_SUFFIX = "-pending-release.md"
 
 
-# ---------------------------------------------------------------------------
-# Candidate discovery
-# ---------------------------------------------------------------------------
-
 def _find_accumulator(worktree_root: Path) -> Optional[Path]:
     """Return the most recent state/week-changelog/*-pending-release.md, or None.
 
@@ -107,11 +103,6 @@ def _find_accumulator(worktree_root: Path) -> Optional[Path]:
 
 
 def _dest_for(accumulator: Path, worktree_root: Path, tag: str) -> Path:
-    """Derive the archive/release-notes/ destination for an accumulator file.
-
-    Mirrors the SKILL.md shell step exactly: strip the trailing
-    "-pending-release.md" from the basename, re-append "-<tag>-pending-release.md".
-    """
     stem = accumulator.name
     if stem.endswith(_ACCUMULATOR_SUFFIX):
         stem = stem[: -len(_ACCUMULATOR_SUFFIX)]
@@ -140,24 +131,10 @@ def _result(
 
 
 def _setup_error(reason: str) -> dict:
-    """Log a setup/validation error and return the three-field failure envelope.
-
-    This op's wire contract is {archived, dest, already_archived} only — it does
-    NOT share the batch fleet.* envelope (mode/candidates/acted/skipped/failed),
-    so setup errors here are NOT routed through _common.build_setup_error_result,
-    which would return a shape this op never otherwise emits.  The reason is
-    logged daemon-side and written to stderr (mirrors _common._setup_error's
-    dual-channel rationale: a bare dict has no room for a top-level reason field
-    without expanding the frozen envelope).
-    """
     _LOG.error("fleet.archive_release_accumulator setup error: %s", reason)
     print(f"fleet.archive_release_accumulator setup error: {reason}", file=sys.stderr, flush=True)
     return _result(archived=False, dest=None, already_archived=False)
 
-
-# ---------------------------------------------------------------------------
-# Handler
-# ---------------------------------------------------------------------------
 
 @register_op("fleet.archive_release_accumulator")
 async def _handler(params: dict, repo_root=None) -> dict:
@@ -190,8 +167,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
             return _setup_error(mismatch)
         worktree = main_worktree_root(common_dir)
     else:
-        # repo_root is None only in unit tests that bypass the keying table.
-        # Fail loudly in production; test fixtures supply an explicit value.
         return _setup_error(
             "repo_root is None; cannot derive worktree root (keying-table misconfiguration) — "
             "_OP_KEY_SCOPE='common_dir' should always supply it in production"
@@ -199,7 +174,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
 
     accumulator = _find_accumulator(worktree)
     if accumulator is None or not accumulator.exists():
-        # Vacuous no-op: never existed, or a prior call already moved it.
         return _result(archived=False, dest=None, already_archived=True)
 
     dest = _dest_for(accumulator, worktree, tag)
@@ -215,10 +189,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
     if acted:
         return _result(archived=True, dest=rel_id(dest, worktree), already_archived=False)
 
-    # Best-effort/non-gating per the SKILL.md source step: log and report the
-    # failure shape rather than raising. The reason also reaches the wire —
-    # `_LOG.error` alone left a caller unable to tell a refused move from a
-    # setup error, both of which return the same three booleans.
     if failed:
         _LOG.error(
             "fleet.archive_release_accumulator: git-mv failed for %s -> %s: %s",

@@ -94,18 +94,11 @@ from coordinator_core.write_guards import (
     validate_frontmatter_schema_deny as schema_deny,
 )
 
-#: Synthetic well-formed envelope (both agent legs empty) for the standalone
-#: deny-text-builder assertions below, which have no real payload in scope --
-#: matches the shape D1 resolves as EM audience, same as the `payload` dicts
-#: the check()-entry-point tests in this file already construct.
 _EM_SHAPED_PAYLOAD = {"tool_name": "Write", "tool_input": {}}
 
 
 @pytest.fixture(autouse=True)
 def _no_override_env_leaks(monkeypatch):
-    """Every guard exercised here honors its own escape hatch FIRST -- make
-    sure none of this test process's ambient environment accidentally
-    disarms the guard before its deny text can be rendered."""
     for name in (
         block_completion_monolith_write._OVERRIDE_ENV_VAR,
         block_priority_ledger_edit._OVERRIDE_ENV_VAR,
@@ -119,12 +112,6 @@ def _no_override_env_leaks(monkeypatch):
         nudge_baton_body_bar._ESCAPE_HATCH_ENV_VAR,
     ):
         monkeypatch.delenv(name, raising=False)
-
-
-# ---------------------------------------------------------------------------
-# Standalone deny-text-builder functions -- called directly, no payload
-# plumbing needed.
-# ---------------------------------------------------------------------------
 
 
 def test_block_em_hand_edit_pending_review_integration_deny_reason():
@@ -171,12 +158,6 @@ def test_validate_frontmatter_schema_deny_own_inbox_message():
     assert operator_override_note("COORDINATOR_OVERRIDE_OWN_INBOX", payload=_EM_SHAPED_PAYLOAD) in rendered
 
 
-# ---------------------------------------------------------------------------
-# check() entry points whose deny branch needs only tool_name/tool_input --
-# no disk read, no git-root resolution.
-# ---------------------------------------------------------------------------
-
-
 def test_block_completion_monolith_write_check_deny():
     payload = {
         "tool_name": "Write",
@@ -201,32 +182,12 @@ def test_block_priority_ledger_edit_check_deny():
     assert operator_override_note(block_priority_ledger_edit._OVERRIDE_ENV_VAR, payload=payload) in rendered
 
 
-# ---------------------------------------------------------------------------
-# nudge_improvement_queue_write / nudge_baton_body_bar -- 2026-07-30
 # escape-mechanism rework (COORDINATOR_QUEUE_PUNT is unreachable from inside
-# a session; the deny/advisory text must not instruct the reader to take an
-# action that cannot work from there). These two use the `VAR="<reason>"`
 # shape (not `VAR=1`). `_VIOLATION_RE` in the bash_guards sibling this module
-# mirrors was ITSELF extended (same 2026-07-30 dispatch) to also match that
-# reason-shaped form, so it is no longer true that this shape is outside the
-# regex's scope -- it is asserted directly here anyway, not because the regex
-# can't see it, but because these two tests need one more guarantee the
-# shared `assert_render_carries_reachability_constraint` helper doesn't check:
-# the rendered text must carry `operator_override_note`'s output verbatim,
-# AND must NOT instruct the reader to "re-run the write" with an env var (the
-# exact dead-end shape this whole gate exists to catch, just spelled with a
 # different var shape -- COORDINATOR_QUEUE_PUNT's write already landed by the
-# time this text renders, so "re-run" is doubly wrong here).
-# ---------------------------------------------------------------------------
 
 
 def test_nudge_improvement_queue_write_deny_omits_the_override_note():
-    """Inverted (was: `..._deny_carries_override_note`). This payload has no
-    `agent_id`/`subagent_type` in scope, so `resolves_em_audience` resolves
-    False (2026-08-13 audience-gate default inversion) -- `operator_override_note`
-    now renders `""` for it, and the deny text must carry no trace of an
-    unlock route at all: no env-var name, no "unsettable" doc-pointer
-    sentence, no re-run instruction."""
     payload = {
         "tool_name": "Write",
         "tool_input": {
@@ -263,8 +224,6 @@ def test_nudge_improvement_queue_write_override_note_is_inert_for_this_payload_s
 
 
 def test_nudge_improvement_queue_write_justification_field_allows_write():
-    """The content-based escape must actually WORK -- a deny path with an
-    escape nobody proved works is how the original defect shipped."""
     payload = {
         "tool_name": "Write",
         "tool_input": {
@@ -310,11 +269,6 @@ def test_nudge_improvement_queue_write_legacy_prose_justification_line_allows_ed
 
 
 def test_nudge_baton_body_bar_advisory_omits_the_override_note():
-    """Inverted (was: `..._advisory_does_not_instruct_rerun`, which asserted
-    the note WAS present). Same audience-gate reasoning as the
-    `nudge_improvement_queue_write` sibling above: this payload resolves
-    NOT-EM, so `operator_override_note` renders `""` and the advisory text
-    must carry no trace of an unlock route."""
     payload = {
         "tool_name": "Write",
         "tool_input": {

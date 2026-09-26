@@ -1,8 +1,3 @@
-"""Characterization + parity tests for coordinator_core.ops.blocked.
-
-Port of: blocked.sh (DoE b5a4192c, 2026-07-20)
-Spec backlink: archive/specs/2026-05-05-script-first-deterministic-ops.md §T2
-"""
 from __future__ import annotations
 
 import subprocess
@@ -13,8 +8,6 @@ from coordinator_core.ops.blocked import main
 import pytest
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -106,8 +99,6 @@ def test_non_matching_todo_file_ignored(tmp_path, capsys, monkeypatch):
 
 
 def test_todo_file_depth_is_exactly_two(tmp_path, capsys, monkeypatch):
-    """A todo.md nested deeper than tasks/<name>/todo.md must NOT be picked up
-    (mindepth 2, maxdepth 2 in the bash oracle — this test pins that exact depth)."""
     _init_git_repo(tmp_path)
     nested = tmp_path / "tasks" / "feature" / "sub" / "todo.md"
     nested.parent.mkdir(parents=True)
@@ -121,9 +112,6 @@ def test_todo_file_depth_is_exactly_two(tmp_path, capsys, monkeypatch):
 
 
 def test_blocked_handoff_surfaced_and_marks_found(tmp_path, capsys, monkeypatch):
-    """A `state/handoffs/*.md` record with `status: blocked` is rendered via the
-    native records seam (no node subprocess) and flips found_any (suppressing
-    the trailing 'No blocked items found.' line)."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_git_repo(repo)
@@ -161,8 +149,6 @@ def test_blocked_handoff_deployment_state_preferred_over_status(tmp_path, capsys
 
 
 def test_non_blocked_handoff_not_surfaced(tmp_path, capsys, monkeypatch):
-    """A handoff with a non-matching status is excluded by the `where` clause,
-    leaving the handoffs section a deterministic '(none)'."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_git_repo(repo)

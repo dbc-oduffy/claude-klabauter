@@ -1,14 +1,3 @@
-"""Ordering regression for coordinator/lib/register-coordinator-mirror.py's
-`_claude_home_argv` — the inverted-precedence rungs named in
-state/audits/2026-07-25-claude-bin-mirror-read-rungs.md § 2 (row
-`register-coordinator-mirror.py:80-105`), Windows and POSIX both.
-
-DR-210 Amendment (2026-07-24): claude-klabauter "resolves nothing through" the retired
-`~/.claude/bin` compat mirror. Resolution must be settings-home-first on
-every platform; the mirror is at most a last-resort rung.
-
-Spec backlink: state/audits/2026-07-25-claude-bin-mirror-read-rungs.md § 2/§ 3
-"""
 
 from __future__ import annotations
 
@@ -58,9 +47,9 @@ def test_windows_falls_back_to_path_lookup_when_neither_candidate_present(tmp_pa
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
     monkeypatch.setattr(
         register_coordinator_mirror.shutil, "which", lambda name: "C:\\PATH\\claude-home.cmd"
-    )  # abs-path-ok: synthetic shutil.which() stub return, not a real filesystem path
+    )
     assert register_coordinator_mirror._claude_home_argv("plugins") == [
-        "C:\\PATH\\claude-home.cmd",  # abs-path-ok: mirrors the mocked which() return above
+        "C:\\PATH\\claude-home.cmd",
         "plugins",
     ]
 
@@ -96,12 +85,6 @@ def test_posix_falls_back_to_mirror_explicit_path(tmp_path, monkeypatch):
 
 
 def test_posix_path_lookup_outranks_the_retired_mirror(tmp_path, monkeypatch):
-    """The retired mirror is the LAST explicit rung, behind PATH — not the
-    second. Without this pin, reordering the mirror ahead of `which` would
-    stay green while silently letting a retired directory outrank the
-    operator's own PATH — the precedence the mirror audit exists to remove,
-    not relocate. POSIX counterpart of
-    `maximalist.py`'s `test_claude_home_cli_argv_posix_path_lookup_outranks_the_retired_mirror`."""
     monkeypatch.setattr(register_coordinator_mirror.os, "name", "posix")
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))

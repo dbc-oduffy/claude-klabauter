@@ -41,9 +41,6 @@ from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
 
 @pytest.fixture(autouse=True)
 def _isolated_marker(tmp_path, monkeypatch):
-    """Same isolation discipline as test_blanket_disarm.py's own fixture --
-    redirect the marker's settings-home root and clear the per-process
-    cache between tests."""
     monkeypatch.setattr(bd, "settings_home", lambda: tmp_path)
     bd._cache.clear()
     yield
@@ -80,10 +77,6 @@ def _run(payload):
     return dispatch.evaluate_payload_json(json.dumps(payload))
 
 
-# ---------------------------------------------------------------------------
-# Controlled three-entry chain: one guard per band, each distinguishable.
-# ---------------------------------------------------------------------------
-
 _FAKE_CHAIN = [
     GuardEntry("fake-confinement", lambda: None, True, GuardBand.CONFINEMENT_DENY),
     GuardEntry("fake-advisory", lambda: {"marker": "advisory"}, False, GuardBand.ADVISORY_REWRITE),
@@ -94,13 +87,9 @@ _FAKE_CHAIN = [
 class TestControlledBandSuppression:
     @pytest.fixture(autouse=True)
     def _fake_guard_chain(self, monkeypatch):
-        # Scoped to THIS class only -- TestRealGuardSuppression below needs
-        # the real, unpatched `_build_guard_chain`.
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: list(_FAKE_CHAIN))
 
     def test_no_marker_runs_every_guard_first_non_none_wins(self):
-        # fake-confinement returns None -> falls through to fake-advisory,
-        # which returns non-None and wins (fake-platform never reached).
         assert _run(EM_PAYLOAD) == {"marker": "advisory"}
 
     def test_advisory_rewrite_suppressed_falls_through_to_platform(self, tmp_path):
@@ -129,10 +118,7 @@ class TestControlledBandSuppression:
             f"Since: {_iso(now)}\n"
             "Bands: advisory-rewrite,confinement-deny\nReason: x\n",
         )
-        # The whole marker is malformed (see _blanket_disarm's own "BAND-
         # SCOPED SUPPRESSION" doctring) -- so NEITHER band is suppressed,
-        # not even the otherwise-legitimate advisory-rewrite one. Proves
-        # this at the dispatcher level: fake-advisory still fires.
         assert _run(EM_PAYLOAD) == {"marker": "advisory"}
 
     def test_confinement_deny_never_suppressed_even_if_fake_confinement_denied(self, monkeypatch, tmp_path):
@@ -162,10 +148,7 @@ class TestControlledBandSuppression:
             f"Since: {_iso(now)}\nExpires: {_iso(now + timedelta(hours=1))}\n"
             "Bands: advisory-rewrite,platform-conditioned-deny\nReason: x\n",
         )
-        # EM: both suppressible bands suppressed -> None.
         assert _run(EM_PAYLOAD) is None
-        # Same session_id, but a dispatched subagent -- no-inherit means the
-        # marker does not apply; fake-advisory still fires.
         assert _run(SUBAGENT_PAYLOAD) == {"marker": "advisory"}
 
     def test_machine_total_scope_never_disarms_a_subagent(self, tmp_path):
@@ -197,13 +180,10 @@ class TestControlledBandSuppression:
 
 
 class TestRealGuardSuppression:
-    """Positive control against a REAL registered guard (not the synthetic
-    chain above), proving the wiring holds end to end."""
 
     def test_sed_range_read_advise_suppressed_by_machine_total_marker(self, tmp_path):
         payload = _payload(cmd="sed -n '10,20p' path/to/file.py")
 
-        # Baseline: the real guard fires without a marker.
         baseline = _run(payload)
         assert baseline is not None
         assert "sed" in baseline["hookSpecificOutput"]["additionalContext"]
@@ -213,14 +193,5 @@ class TestRealGuardSuppression:
             tmp_path,
             f"Scope: machine-total\nSince: {_iso(now)}\nBands: advisory-rewrite\nReason: x\n",
         )
-        # `_blanket_disarm`'s own per-process cache is keyed by (session_id,
-        # is_em) and is documented safe ONLY because a real hook process
-        # never outlives one event -- this test calls the dispatcher twice
-        # in the SAME process, so it must clear the cache itself to
-        # simulate "a new event", exactly as this suite's own autouse
-        # fixture does between tests.
         bd._cache.clear()
-        # Marker only covers the EM (payload above carries no agent_id/
-        # agent_type -- resolves as EM) and only suppresses advisory-rewrite,
-        # which is exactly this guard's own band.
         assert _run(payload) is None

@@ -1,11 +1,3 @@
-"""Tests for the row-resolution helper (`coordinator_core/tests/register_rows.py`).
-
-Covers: RegisterId keying (bare-name collisions do not conflate), the
-index-first branch (path classes never touch AST, dotted classes never
-touch the tracked-file spawn beyond the shared index), the two
-separately-assertable readings (`rows_that_do_not_resolve` /
-`assert_canary_present`), and the no-per-row-spawn constraint.
-"""
 
 from __future__ import annotations
 
@@ -166,7 +158,6 @@ def test_resolution_predicates_are_mutually_exclusive() -> None:
 
 
 def test_no_per_row_git_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Resolving many rows against a pre-built index must spawn no subprocess."""
     synthetic_index = TrackedFileIndex(frozenset({"coordinator_core/tests/register_rows.py"}))
 
     def _forbidden_run(*_args: object, **_kwargs: object) -> None:
@@ -199,21 +190,7 @@ def test_tracked_file_index_build_spawns_exactly_one_git_call(monkeypatch: pytes
     assert len(calls) == 1
 
 
-# ---------------------------------------------------------------------------
-# MODULE rows are not SYMBOL rows with a different label.
-#
-# Regression: `resolve_row` originally routed both dotted classes through one
-# helper that always stripped the final segment as a member name. A MODULE row
-# `a.b.c` was therefore looked up as member `c` inside `a/b.py`, reporting
-# ABSENT while `a/b/c.py` sat tracked on disk. That is a false dead-row report
-# -- the sweep accusing a live subject -- and it fired on every MODULE row in
-# the corpus, which would have shipped the gate permanently red on rows that
-# were never stale.
-# ---------------------------------------------------------------------------
-
-
 def test_module_row_resolves_as_a_file_not_as_a_member_of_its_parent() -> None:
-    """A MODULE subject names a file; its last segment is not a member name."""
     index = TrackedFileIndex(frozenset({"pkg/sub/leaf.py", "pkg/sub.py"}))
     row = Row(
         register=RegisterId("probe.py", "_MODULES"),
@@ -255,7 +232,6 @@ def test_module_row_is_absent_only_when_no_file_backs_it() -> None:
 def test_module_row_resolution_never_parses_its_subject(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A MODULE row is a pure index lookup -- no AST parse, so no read either."""
     import ast as ast_module
 
     def _forbidden_parse(*_args: object, **_kwargs: object) -> None:
@@ -274,7 +250,6 @@ def test_module_row_resolution_never_parses_its_subject(
 
 
 def test_symbol_row_still_resolves_its_final_segment_as_a_member(tmp_path: Path) -> None:
-    """The SYMBOL half is unchanged by the MODULE fix -- both directions asserted."""
     module = tmp_path / "holder.py"
     module.write_text("def the_member():\n    pass\n", encoding="utf-8")
     index = TrackedFileIndex(frozenset({"holder.py"}))
@@ -297,12 +272,6 @@ def test_symbol_row_still_resolves_its_final_segment_as_a_member(tmp_path: Path)
 def test_the_two_dotted_classes_take_different_routes_on_the_same_subject(
     tmp_path: Path,
 ) -> None:
-    """The discriminator itself: one subject, two declarations, two verdicts.
-
-    `pkg.sub.leaf` is a real module and NOT a member of `pkg/sub.py`. Declaring
-    it MODULE must resolve; declaring it SYMBOL must not. A helper that ignored
-    the declared class could not produce both.
-    """
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "sub").mkdir()
     (tmp_path / "pkg" / "sub" / "leaf.py").write_text("VALUE = 1\n", encoding="utf-8")
@@ -325,12 +294,6 @@ def test_the_two_dotted_classes_take_different_routes_on_the_same_subject(
 
 
 def test_dotted_rows_locate_their_module_at_any_package_depth() -> None:
-    """Register rows name modules relatively (`ipc`), not repo-rooted.
-
-    Anchoring the dotted module only at the repo root reported live subjects
-    ABSENT for every relatively-named row in the corpus. Both dotted classes
-    match the tail at any depth.
-    """
     index = TrackedFileIndex(frozenset({"deep/pkg/ipc.py", "other/thing.py"}))
 
     as_module = Row(
@@ -410,7 +373,6 @@ def test_op_name_row_is_absent_not_unadjudicable_on_miss(index: TrackedFileIndex
 
 
 def test_op_name_row_raises_loudly_when_oracle_missing(index: TrackedFileIndex) -> None:
-    """A missing oracle is a loud error, never a silent unadjudicable."""
     row = Row(
         register=RegisterId("probe.py", "_OPS"),
         subject="my.op.name",
@@ -426,9 +388,6 @@ def test_subject_class_op_name_round_trips_from_declaration_string() -> None:
 
 
 def test_an_ambiguous_dotted_module_is_unadjudicable_never_resolved() -> None:
-    """Two candidates is not an answer -- picking one would attest a subject
-    the resolver never actually located. Unadjudicable is the honest verdict:
-    it is neither a false clean bill nor a false dead-row accusation."""
     index = TrackedFileIndex(frozenset({"a/ipc.py", "b/ipc.py"}))
 
     as_module = Row(
@@ -452,8 +411,6 @@ def test_an_ambiguous_dotted_module_is_unadjudicable_never_resolved() -> None:
 
 
 def test_a_repo_rooted_dotted_module_still_wins_over_a_deeper_namesake() -> None:
-    """An exact repo-rooted path and a deeper namesake are two candidates, so
-    the verdict is ambiguous rather than a silent preference for either."""
     index = TrackedFileIndex(frozenset({"ipc.py", "deep/ipc.py"}))
     row = Row(
         register=RegisterId("probe.py", "_MODULES"),

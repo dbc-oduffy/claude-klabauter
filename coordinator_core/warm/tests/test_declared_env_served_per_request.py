@@ -46,11 +46,6 @@ _REFUSE_NAME = REFUSE_NAMES[0]  # "COORDINATOR_SETTINGS_HOME"
 _OVERRIDE_TOP = OVERRIDE_NAMES[0]  # "COORDINATOR_SESSION_ID"
 _VALID_UUID = "8b40d62c-55ef-4702-83ce-0cd8dc6513e3"
 
-#: Every name any branch below might write, so a fixture can snapshot/
-#: restore around each test regardless of which branch it exercises --
-#: this file's own safety net, independent of the seam's `finally` under
-#: test, so an assertion failure mid-test cannot leak a borrowed value
-#: into a sibling test on this shared-process test run.
 _ALL_TOUCHED_NAMES = tuple(
     dict.fromkeys(BORROW_NAMES + CALLER_NAMES + REFUSE_NAMES + OVERRIDE_NAMES + ("CLAUDE_PID",))
 )
@@ -58,10 +53,6 @@ _ALL_TOUCHED_NAMES = tuple(
 
 @pytest.fixture(autouse=True)
 def _restore_touched_env_names():
-    """Snapshot every name this file's branches can write, restore after
-    each test -- belt-and-suspenders around the seam's own `finally`
-    restore, which is itself under test here and must not be trusted
-    blindly by the harness proving it."""
     saved = {name: os.environ.get(name) for name in _ALL_TOUCHED_NAMES}
     try:
         yield
@@ -78,7 +69,7 @@ def test_borrow_mode_lands_the_declared_name_for_the_block_only():
     `MACHINE_LOCAL_REGISTRY_DIR`) is mirrored into `os.environ` for the
     life of the block under `isolated=True`, and gone afterward."""
     os.environ.pop(_BORROW_NAME, None)
-    borrowed_value = "some\\registry\\dir"  # abs-path-ok: synthetic fixture value, never resolved
+    borrowed_value = "some\\registry\\dir"
     env = {_BORROW_NAME: borrowed_value}
 
     with _environ_identity_borrow(env, isolated=True, caller_pid=None):
@@ -88,9 +79,6 @@ def test_borrow_mode_lands_the_declared_name_for_the_block_only():
 
 
 def test_borrow_mode_restores_a_prior_ambient_value_not_just_pops():
-    """The restore is a snapshot-and-replay, not a blanket pop: a name that
-    already had an ambient value before the block must have THAT value
-    back, not be left absent."""
     os.environ[_BORROW_NAME] = "prior-ambient-value"
     env = {_BORROW_NAME: "borrowed-value"}
 
@@ -115,9 +103,6 @@ def test_refuse_mode_mirrors_settings_home_for_isolated_dispatch_only():
 
 
 def test_refuse_mode_absent_from_env_inherits_the_ambient_value():
-    """Absence from the resolved `env` mapping is inherit-on-absent for
-    REFUSE/BORROW -- untouched, not popped: a request that carried no claim
-    has no opinion on this name."""
     os.environ[_REFUSE_NAME] = "the-workers-own-value"
 
     with _environ_identity_borrow({}, isolated=True, caller_pid=None):
@@ -127,8 +112,6 @@ def test_refuse_mode_absent_from_env_inherits_the_ambient_value():
 
 
 def test_caller_mode_mirrors_a_carried_value_for_the_block_only():
-    """CALLER branch, carried: mirrored for the block, the prior value back
-    after -- the same borrow shape as BORROW."""
     os.environ[_CALLER_NAME] = "the-spawners-project"
     env = {_CALLER_NAME: "the-callers-project"}
 
@@ -172,9 +155,6 @@ def test_override_mode_binds_the_top_tier_session_id_and_pops_the_rest():
 
 
 def test_override_mode_rejects_a_non_uuid_candidate():
-    """A carried value that fails the UUID shape gate is treated as no
-    carried identity at all -- every override-triple name is popped, never
-    a malformed value trusted onto the wire."""
     for name in OVERRIDE_NAMES:
         os.environ[name] = "stale-ambient-value"
     env = {_OVERRIDE_TOP: "not-a-uuid"}
@@ -200,10 +180,6 @@ def test_caller_pid_is_bound_only_when_isolated():
 
 
 def test_isolated_false_is_a_complete_noop_on_os_environ():
-    """`isolated=False` never reads or writes `os.environ` at all -- not a
-    borrow-then-immediately-restore, a true no-op, which is what keeps an
-    unisolated (`BrokenProcessPool`-degrade) dispatch from mutating state
-    every other in-flight connection in this same process also observes."""
     os.environ.pop(_BORROW_NAME, None)
     os.environ.pop(_REFUSE_NAME, None)
     for name in OVERRIDE_NAMES:
@@ -225,9 +201,6 @@ def test_isolated_false_is_a_complete_noop_on_os_environ():
 
 
 def test_restored_even_when_the_block_raises():
-    """The restore is a `finally`, not a happy-path-only cleanup -- an
-    exception inside the block must not leak a borrowed value into
-    whichever request runs next in this process."""
     os.environ.pop(_BORROW_NAME, None)
     env = {_BORROW_NAME: "borrowed-value"}
 
@@ -240,11 +213,6 @@ def test_restored_even_when_the_block_raises():
 
 
 def test_per_request_state_threads_env_to_the_served_op_and_back():
-    """One level up: `entry_seam.per_request_state`, the actual seam a
-    served op's request runs inside (`warm.server`'s two production call
-    sites), lands the same borrowed value and restores it -- proving the
-    consuming half end-to-end from the seam a served op sees, not merely
-    from the private borrow helper directly."""
     os.environ.pop(_BORROW_NAME, None)
     env = {_BORROW_NAME: "reached-the-served-op"}
 
@@ -255,8 +223,6 @@ def test_per_request_state_threads_env_to_the_served_op_and_back():
 
 
 def test_per_request_state_isolated_false_never_touches_os_environ():
-    """Same seam, `isolated=False`: the served op runs, but `os.environ` is
-    never mutated for it -- the accept-thread / cold-path disposition."""
     os.environ.pop(_BORROW_NAME, None)
     env = {_BORROW_NAME: "should-not-land"}
 

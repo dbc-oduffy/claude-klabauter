@@ -1,9 +1,3 @@
-"""Tests for coordinator_core.ops.push_failure_verdict.
-
-All git exercise runs against throwaway repos created fresh under
-`tmp_path` per test — NEVER against this working repo. See module
-docstring for the op-key/contract: `git.push_failure_verdict`.
-"""
 from __future__ import annotations
 
 import subprocess
@@ -36,8 +30,6 @@ def _git(*args: str, cwd: Path, env: dict | None = None, check: bool = True) -> 
 
 @pytest.fixture(autouse=True)
 def _isolate_global_git_config(tmp_path, monkeypatch):
-    """Isolate from the ambient dev machine's global git config, mirroring
-    the same fixture in test_merge_quiet_activity_gate.py."""
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
@@ -63,7 +55,6 @@ def _commit_file(root: Path, rel_path: str, content: str, msg: str | None = None
 
 
 def _clone_with_upstream(tmp_path: Path) -> tuple[Path, Path]:
-    """Bare origin + a clone with an initial commit pushed, tracking main."""
     origin = tmp_path / "origin.git"
     _init_repo(origin, bare=True)
 
@@ -83,9 +74,6 @@ def _clone_with_upstream(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def _push_extra_commits_and_fetch(origin: Path, clone: Path, files: list[str]) -> None:
-    """Land `files` as new commits on origin (via a throwaway pusher clone),
-    then `git fetch` inside `clone` so `@{u}` reflects them WITHOUT touching
-    clone's own working tree/index (produces a clean 'behind' state)."""
     pusher = origin.parent / "pusher"
     _git("clone", "-q", str(origin), str(pusher), cwd=origin.parent)
     _git("config", "user.email", "test@example.com", cwd=pusher)
@@ -140,7 +128,6 @@ def test_simple_lag_when_behind_and_clean(tmp_path):
 def test_resolved_since_when_log_stale_but_tree_in_sync(tmp_path):
     origin, clone = _clone_with_upstream(tmp_path)
     _push_extra_commits_and_fetch(origin, clone, ["new1.txt"])
-    # Fast-forward clone's local main to match origin -- fully in sync.
     _git("merge", "-q", "--ff-only", "origin/main", cwd=clone)
     _write_push_failures_log(
         clone,
@@ -185,9 +172,6 @@ def test_half_applied_merge_when_staged_mirrors_incoming(tmp_path):
         origin, clone, ["inc1.txt", "inc2.txt", "inc3.txt", "inc4.txt"]
     )
 
-    # Simulate a failed merge's partial index: stage near-copies of the
-    # incoming files, touch nothing else (zero overlap with any unstaged
-    # local modification).
     for rel_path in ["inc1.txt", "inc2.txt", "inc3.txt"]:
         (clone / rel_path).write_text(f"content for {rel_path}\n")
         _git("add", rel_path, cwd=clone)
@@ -208,7 +192,6 @@ def test_half_applied_merge_not_confused_by_unrelated_unstaged_edit(tmp_path):
         (clone / rel_path).write_text(f"content for {rel_path}\n")
         _git("add", rel_path, cwd=clone)
 
-    # An unrelated unstaged edit to a tracked file (README.md, seeded).
     (clone / "README.md").write_text("locally edited, unstaged\n")
 
     result = classify(clone)
@@ -237,7 +220,6 @@ def test_double_invocation_is_idempotent(tmp_path):
 
 
 def _count_git_spawns(monkeypatch, repo: Path) -> tuple[int, dict]:
-    """Run `classify` counting every `_git` spawn it makes."""
     import coordinator_core.ops.push_failure_verdict as pv
 
     spawns: list[list[str]] = []
@@ -253,21 +235,6 @@ def _count_git_spawns(monkeypatch, repo: Path) -> tuple[int, dict]:
 
 
 def test_clean_index_costs_exactly_one_git_spawn(tmp_path, monkeypatch):
-    """A clean index answers from ONE spawn.
-
-    This is the op's contract, not an incidental win. Originally that one
-    spawn was `git status --porcelain=v2` (itself replacing four spawns —
-    two `diff`s, `rev-parse --git-dir`, `rev-list` — measured at 546ms
-    total against a 500ms brightline and a 200ms per-process ceiling). C5
-    (2026-09-01, state/dispatch-briefs/2026-09-01-a-guard-that-cannot-
-    reach-warmth-still-r/C5.md) moved staged/unstaged off that spawn
-    in-process, so the one spawn a clean index now pays is the narrower
-    `git rev-list --left-right --count @{u}...HEAD` (`_ahead_behind_spawn`)
-    — Step 3's own graph question, which genuinely needs git (see that
-    function's docstring). `_incoming_files` must stay behind the
-    `if staged:` guard — with an empty index its result is read by no
-    verdict.
-    """
     _origin, clone = _clone_with_upstream(tmp_path)
 
     count, result = _count_git_spawns(monkeypatch, clone)
@@ -277,17 +244,6 @@ def test_clean_index_costs_exactly_one_git_spawn(tmp_path, monkeypatch):
 
 
 def test_staged_index_costs_exactly_one_git_spawn(tmp_path, monkeypatch):
-    """A non-empty index costs exactly ONE spawn — the incoming-files diff
-    that discriminates `half_applied_merge` from `peer_staged`.
-
-    C5 (2026-09-01, state/dispatch-briefs/2026-09-01-a-guard-that-cannot-
-    reach-warmth-still-r/C5.md): staged/unstaged are now read in-process
-    off `.git/index` (`_inprocess_staged_unstaged`), so the combined
-    `git status --porcelain=v2` spawn this op used to pay even on a staged
-    leg is gone — and ahead/behind (Step 3's own fact) is never consulted
-    by Step 2 at all, so it is never paid for on this leg either. This was
-    2 spawns before C5; asserting the reduction, not merely the count, is
-    the point of this test's rename."""
     origin, clone = _clone_with_upstream(tmp_path)
     _push_extra_commits_and_fetch(origin, clone, ["incoming1.txt"])
 
@@ -301,9 +257,6 @@ def test_staged_index_costs_exactly_one_git_spawn(tmp_path, monkeypatch):
 
 
 def test_untracked_files_are_excluded_from_both_sets(tmp_path):
-    """`--untracked-files=no` suppresses the untracked scan; an untracked
-    file must therefore count as neither staged nor unstaged — the same
-    blindness the `diff` probes this replaced had."""
     _origin, clone = _clone_with_upstream(tmp_path)
     (clone / "untracked.txt").write_text("never added\n")
 
@@ -314,11 +267,6 @@ def test_untracked_files_are_excluded_from_both_sets(tmp_path):
 
 
 def test_staged_path_with_space_is_not_truncated(tmp_path):
-    """Regression for the `_status_probe` field-boundary bug: git does not
-    quote a path merely for containing a space, so an unbounded
-    `rsplit(" ", 1)` silently truncated "my file.txt" to "file.txt". This
-    test failed (`staged_sample == ["file.txt"]`) before the bounded-split
-    fix and passes after it -- verified explicitly, both directions."""
     _origin, clone = _clone_with_upstream(tmp_path)
     (clone / "my file.txt").write_text("space in the name\n")
     _git("add", "my file.txt", cwd=clone)
@@ -359,8 +307,6 @@ def test_unmerged_conflict_counted_as_staged_only(tmp_path):
 
 
 def test_renamed_staged_path_is_counted_once(tmp_path):
-    """A porcelain-v2 `2` rename row carries `<path>\t<origPath>`; only the
-    NEW path is taken, matching `diff --name-only`'s own reporting."""
     _origin, clone = _clone_with_upstream(tmp_path)
     existing = next(p for p in clone.iterdir() if p.is_file() and p.name != ".git")
     _git("mv", existing.name, "renamed.txt", cwd=clone)

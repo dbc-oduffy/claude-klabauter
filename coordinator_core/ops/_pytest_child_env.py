@@ -27,10 +27,6 @@ import os
 
 
 def pytest_child_env(overrides: dict[str, str] | None = None) -> dict[str, str]:
-    """Return an `os.environ` copy safe to hand a spawned pytest run as `env=`.
-
-    `overrides`, if given, is applied on top (last-write-wins).
-    """
     env = dict(os.environ)
     if overrides:
         env.update(overrides)

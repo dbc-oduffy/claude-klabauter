@@ -1,10 +1,3 @@
-"""Coverage for the `coordinator.dayBranch` designation short-circuit
-(PM ruling 2026-09-22) in `coordinator_core.hooks.day_branch_assert`.
-
-Zero-spawn oracle changes get real `git init` fixtures here (not mocked
-subprocess) because `assert_day_branch`'s own git spawn
-(`_current_branch`) is exactly what this module exists to gate on.
-"""
 
 from __future__ import annotations
 

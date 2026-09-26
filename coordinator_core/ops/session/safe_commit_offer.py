@@ -279,7 +279,7 @@ session-stop-events.yaml
 
 from __future__ import annotations
 
-GENERATES = []  # only direct file write is an append to coordinator-sessions/logs/sessionend-auto-commit-diagnostics.log under the git common dir; actual commits delegate to coordinator_core.git.commit.commit_paths, not written here
+GENERATES = []
 
 import asyncio
 import posixpath
@@ -406,26 +406,15 @@ class SafeCommitOffer(TypedDict):
     safe_paths: List[str]
     excluded: List[ExcludedPath]
     orphans: List[str]
-    indeterminate: bool  # staff-eng P3 (2026-08-03, pass 3) — mirrors the
-    # claim index walk's own `complete` bit, surfaced here so a caller
-    # composing ONLY compute_offer can still distinguish "this path is
-    # genuinely unclaimed" from "the walk behind this answer was incomplete,
-    # so it may be short". See `compute_offer`'s own contract.
-    ownership: OwnershipReadout  # C5 (2026-08-05 in-process-writers-declare-
-    # their-writes plan) — the four-bucket ownership readout (mine / named
-    # peer / unattributed / degraded), extending C3's post-commit `residue`
+    indeterminate: bool
+    ownership: OwnershipReadout
     # report rather than replacing it. ADDITIVE ONLY: every pre-existing key
-    # on this TypedDict is unchanged in shape and meaning (two live sibling
-    # plans consume this shape verbatim -- see the plan's § Cross-plan
-    # coordination). See `OwnershipReadout`'s own docstring for the bucket
-    # contract and `compute_offer` for how it is derived from the claim
-    # index.
 
 
 class CommitGroup(TypedDict, total=False):
-    paths: List[str]  # required in practice; total=False only to make `prose` optional
-    message: str  # required in practice; the commit SUBJECT line
-    prose: str  # optional — the commit message BODY (see `_commit_group`)
+    paths: List[str]
+    message: str
+    prose: str
 
 
 class GroupResult(TypedDict):
@@ -435,29 +424,9 @@ class GroupResult(TypedDict):
     sha: Optional[str]
     push_state: Optional[str]
     error: Optional[str]
-    commit_failed: bool  # True iff this group genuinely failed to commit (a
-    # gate or the commit subprocess itself) -- False for both a landed
-    # commit AND a benign no-op (paths already committed / handler not
-    # reached). Distinct from `error`, which is None on the benign no-op
-    # even though `committed` is also False there -- see `_commit_group`.
-    reason: Optional[str]  # The op's own
-    # benign-no-op reason (e.g. "empty-commit-set"), threaded through so
-    # `_render_report`'s benign branch can say WHY, not merely that it was a
-    # no-op. `None` on a landed commit or a genuine `commit_failed`.
+    commit_failed: bool
+    reason: Optional[str]
     declared_absent_from_head: List[str]
-    # 8f787b71-c, re-sourced T3 (docs/plans/2026-09-07-a-confirmed-absent-
-    # caller-path-refuses-the-commit.md) — sourced from `_commit_group`'s OWN
-    # `partition_declared_deletions` pre-filter, not from `outcome` (the
-    # engine's `CommitOutcome.declared_absent_from_head` field is scheduled
-    # for deletion once the engine raises instead of silently tolerating a
-    # phantom deletion). Threaded through so a claimed path this call
-    # classified as HEAD-absent (a claim-recorder defect, not a caller
-    # declaration) is operator-visible here too, not just on the `commit_v2`
-    # ceremony route. `_commit_group` pre-filters these out of the
-    # `deleted_paths` it hands `commit_paths`; this key only carries the
-    # visibility half. `[]` when nothing was classified as absent, including
-    # on a forced-`None` spine (nothing was classified) and on the
-    # `CommitRefused`/`FilterUnsupported` branch reached with a `None` spine.
 
 
 class DroppedGroup(TypedDict):
@@ -625,94 +594,25 @@ class Reconciliation(TypedDict):
     silently trigger that fold on a healthy walk.
     """
 
-    reconciled: bool  # did the check run at all — False when there was no
-    # worktree root to check against, or the call short-circuited before
-    # reaching the check (a degraded/indeterminate skip). NEVER an assertion
-    # that the ledger and the tree agree.
-    claimed_absent: List[str]  # paths this session claims that have no file
-    # on disk. NOT automatically wrong: a deletion this session made is a
-    # legitimate thing to commit, and `run_commit_pipeline` handles deletions
-    # and reports `empty-commit-set` on a no-op. Named, never adjudicated.
-    unclaimed: List[str]  # every dirty path this call saw that NO session
+    reconciled: bool
+    claimed_absent: List[str]
+    unclaimed: List[str]
     # claims — the adoption CANDIDATE set, enumerated in full here while
-    # `_render_report` samples it. Enumeration is the load-bearing property,
     # not the rendering: doe-claude-em's SC-DR-022 half 1 permits an operator
-    # to adopt an unclaimed path with `--include-orphans`, and the verified
-    # property that makes that remedy safe is that "the named paths half 1
-    # permits are named by the ENGINE, not assembled by the adopter". An
-    # aggregate count supplies no candidate list, so the remedy has no input.
-    # NAMED, NEVER ADOPTED: nothing here is committed, and nothing here is
-    # attributed to this session. Most entries on a shared worktree belong to
-    # nobody in particular and some belong to peers who have not claimed
-    # them yet — see this module's own DR-258 note on why chasing this bucket
-    # toward zero is not a goal.
 
 
 class CommitOfferReport(TypedDict):
     session_id: str
     groups: List[GroupResult]
     excluded: List[ExcludedPath]
-    failed_groups: List[GroupResult]  # subset of `groups` with
-    # `commit_failed` True -- surfaced separately (2026-07-31 fix) so a
-    # caller (the SessionEnd hook) can detect and report a genuine
-    # commit/gate failure without re-deriving it from `groups` + `error`,
-    # and without conflating it with the benign already-committed no-op
-    # shape, which must stay quiet (see module docstring's wolf-crying
-    # constraint).
-    dropped_groups: List[DroppedGroup]  # handoff item 1 (2026-08-03,
-    # touched-path-bookkeeping) -- one entry per caller-supplied `groups`
-    # entry that lost some or all of its named paths to the `safe_set`
-    # filter, empty when `groups` is `None` (the computed `_default_groups`
+    failed_groups: List[GroupResult]
+    dropped_groups: List[DroppedGroup]
     # path can never drop a path it did not itself put there). ADVISORY
-    # ONLY, same as `excluded`/DR-227 -- never a gate, never changes
-    # `main`'s exit code, and never widens `resolved_groups`/the commit
-    # boundary; see `DroppedGroup`'s own docstring for the shape.
-    residue: "OrderedDict[str, List[str]]"  # C3 (2026-08-05 engine-ops-
+    residue: "OrderedDict[str, List[str]]"
     # declare-what-they-write plan) -- REPORT-ONLY, never a gate: every dirty
-    # path still present in `git status --porcelain` AFTER the commit groups
-    # above landed, MINUS whatever this call actually committed and MINUS
-    # any path a live peer session already owns (per a FRESH `compute_offer`
-    # re-read taken immediately before residue is computed, post-commit --
-    # see `_compute_residue`, Review: code-reviewer Finding 2), grouped by
-    # top-level
-    # `state/` class. Purely additive: nothing here feeds back into
-    # `safe_set`/`resolved_groups` in `commit_session_offer_async`, so it
-    # cannot widen the commit boundary (AC4, negative-spec: "do not widen
-    # what any ceremony commits"). Empty is the common case and is not an
-    # error -- an empty `residue` after a healthy commit is exactly what a
-    # correctly-scoped ceremony should leave behind.
-    reconciliation: Reconciliation  # 2026-08-29 — what this call checked the
+    reconciliation: Reconciliation
     # write ledger against, and what it found. REPORT-ONLY, never a gate:
-    # nothing here feeds back into `safe_set`/`resolved_groups`, so it cannot
-    # widen the commit boundary, exactly like `residue`/`excluded` above.
-    # See `Reconciliation`'s own docstring for why `reconciled` is a
-    # did-the-check-run flag and NOT a health flag.
-    outcome: CommitOutcome  # C4 (2026-08-20 the-close-ceremony-commits-what-
-    # the-session-wrote plan, AC9) -- the structured, caller-renderable
-    # verdict for this call (committed / degraded-or-indeterminate skip /
-    # dirty-conflict fail-closed / empty). See `CommitOutcome`'s own
-    # docstring for the bucket contract. Additive: every other key on this
-    # TypedDict keeps its pre-existing shape and meaning.
-
-
-# ---------------------------------------------------------------------------
-# Path normalization for the `.agents/*/touched.txt` fan-out
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Sub-agent fan-out candidate resolution -- NO LONGER THIS MODULE'S OWN.
-#
-# The 2026-08-21 rebuild took `compute_offer` off these four helpers entirely
-# (see its docstring for what went and why). They stay here because
-# `coordinator_core.session.scope` imports them BY NAME at three call sites
-# (`compute_scope`'s own Step 3b candidate resolution), and that module -- still
-# reached by `coordinator/bin/coordinator-safe-commit.py` -- is now their ONLY
-# consumer. They were left in place rather than moved: relocating them into
-# `scope.py` means untangling a two-way import, which is its own change and not
-# this one. What must NOT happen is `compute_offer` growing a call back to them
-# -- that is the 73-process shape, reassembled.
-# ---------------------------------------------------------------------------
+    outcome: CommitOutcome
 
 
 def _normalize_agent_touched_entry(entry: str) -> Optional[str]:
@@ -734,9 +634,6 @@ def _normalize_agent_touched_entry(entry: str) -> Optional[str]:
     """
     if not entry:
         return None
-    # Reject absolute-path entries up front — covers all three shapes
-    # multi-OS demands: POSIX-absolute, backslash-absolute (pre-
-    # normalization), and a Windows drive-letter prefix.
     raw_check = entry.strip()
     if (
         raw_check.startswith("/")
@@ -925,11 +822,6 @@ def _resolve_agent_touched_candidates(session_id: str, cwd: Optional[str]) -> Li
     return out
 
 
-# ---------------------------------------------------------------------------
-# Pathspec computation (pure, read-only)
-# ---------------------------------------------------------------------------
-
-
 def _liveness_from_set(owner: str, live) -> str:
     """The verdict itself, against an ALREADY-RESOLVED live set -- so a caller
     with many owners to label resolves that set once instead of once per owner
@@ -979,17 +871,7 @@ def full_ownership_map(session_id: str, cwd: Optional[str] = None):
     if not answer.complete:
         return mine, {}
 
-    # The live set is resolved ONCE, here, and every entry below is answered
-    # from it. Measured 2026-08-21, job object, k=20: calling the per-owner
-    # per entry instead cost 23,910ms of process time on this repo's ~405 peer
-    # claims -- 48x the 500ms brightline, in ZERO subprocesses, because
-    # `live_session_ids` is documented as deliberately un-memoised (a cached
-    # live-set reopens the wrong-attribution race) and re-walks every session
-    # dir on each call. That is per-item amplification of exactly the shape
-    # this whole rebuild exists to remove, reintroduced inside the fix for it.
     # NEGATIVE SPEC: do not move a liveness call back inside this loop, and do
-    # not "fix" the cost by memoising `live_session_ids` -- the hoist is free
-    # and correct; the cache is neither.
     try:
         live = live_session_ids(cwd)
     except Exception:  # noqa: BLE001 - a readout must never raise
@@ -1144,22 +1026,7 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
     excluded: List[ExcludedPath] = []
     peer: List[PeerOwnedPath] = []
     unattributed: List[str] = []
-    # Resolved ONCE for the whole loop, then labelled per owner via
-    # `_liveness_from_set` -- the split that function's own docstring exists
-    # for ("a caller with many owners to label resolves that set once instead
-    # of once per owner", and the 23,910ms it removed from
-    # `full_ownership_map`). This site was still resolving the live set per
-    # contested path: profiled at 90ms over six calls of one `compute_offer`,
-    # on the commit hot path the close ceremony traverses twice per pass. The
-    # empty/raise semantics are unchanged -- "empty or raise reads
-    # undetermined, never dead" is the standing contract, and both halves of
-    # it live in `_liveness_from_set` and the `except` here respectively, so a
-    # failed readout still labels every owner `undetermined` exactly as the
-    # deleted per-path helper did.
     try:
-        # No leading underscore; this is
-        # not a throwaway, it's the resolved value every loop iteration below
-        # depends on.
         live_now = live_session_ids(cwd)
     except Exception:  # noqa: BLE001 - a readout must never raise
         live_now = None
@@ -1176,21 +1043,10 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
                 "path": path,
                 "owner": holders[0],
                 "liveness": _liveness_from_set(holders[0], live_now),
-                # Every claim the index carries is a session claim by the time
-                # it is read: `rebuild` has already resolved an agent's claim
-                # back to the EM session that owns it, so there is no
-                # `"agent"`/`"agent-race"` distinction left to report here and
-                # inventing one would be a wire value nothing measured.
                 "claim_source": "session",
             }
         )
 
-    # C5 (docs/plans/2026-08-27-safe-commit-offer-excludes-a-live-agent.md,
-    # this chunk): C3's `live_session_ids`-based verdict is INERT in
-    # production -- see this function's own docstring for the measured
-    # reason -- so the verdict is resolved on RECENCY instead. One
-    # `claim_index.lookup` over every in-flight-agent-claimed path this call
-    # saw resolves every needed timestamp in one pass (never once per path).
     if answer.in_flight_agent_claims and not degraded:
         try:
             agent_edit_ts = claim_index.lookup(
@@ -1207,9 +1063,6 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
             unattributed.append(path)
             continue
         owner_agent = answer.in_flight_agent_claims[path][0]
-        # `edit_ts` is keyed by claimant_sid, already resolved to this
-        # OWNING SESSION's id (not the raw agent id) -- see `rebuild`'s own
-        # `claimant_sid`/`agent_id` split.
         claim_ts = agent_edit_ts.get(path, {}).get(session_id)
         in_window = (
             claim_ts is not None
@@ -1232,10 +1085,6 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
                 }
             )
         else:
-            # No parseable timestamp, or the touch aged out of the
-            # abandonment window: fold back into `safe_paths` -- see the
-            # docstring's BIAS paragraph for why an unresolvable timestamp
-            # is deliberately NOT treated as still in-flight.
             safe_paths.append(path)
 
     safe_paths.sort()
@@ -1253,12 +1102,6 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
             "degraded": degraded,
         },
     }
-
-
-# ---------------------------------------------------------------------------
-# Grouping (mechanical fallback — an EM/ceremony with real judgment should
-# prefer passing explicit `groups` instead, see `commit_session_offer`)
-# ---------------------------------------------------------------------------
 
 
 def _default_groups(
@@ -1313,14 +1156,6 @@ def _default_groups(
     for p in safe_paths:
         segments = p.split("/")
         # The DIRECTORY prefix only (drop the filename) -- up to two
-        # directory levels deep, e.g. "coordinator/skills" for
-        # "coordinator/skills/handoff/SKILL.md". A bare top-level file (no
-        # directory) never becomes the bucket key itself -- that would put
-        # the exact filename back into the subject line via `key`, the same
-        # unbounded-subject shape this split fixes. Joining a 2-segment path
-        # like "sub/file.py" on segments[:2] would ALSO reproduce the
-        # filename (there IS no directory-only prefix shorter than the
-        # whole path) -- segments[:-1] (directories only) is the fix.
         dir_segments = segments[:-1][:2]
         key = "/".join(dir_segments) if dir_segments else "(repo root)"
         buckets.setdefault(key, []).append(p)
@@ -1342,12 +1177,7 @@ def _default_groups(
     return groups
 
 
-# ---------------------------------------------------------------------------
-# Post-commit residue report (C3, 2026-08-05 engine-ops-declare-what-they-
 # write plan) — REPORT-ONLY, read-only. Never stages, never blocks, never
-# widens the commit pathspec (AC4). Runs AFTER the commit groups already
-# landed, purely to name what git status still shows dirty.
-# ---------------------------------------------------------------------------
 
 
 def _current_dirty_paths(cwd: Optional[str]) -> List[str]:
@@ -1506,29 +1336,8 @@ def _compute_residue(
     }
 
     # PEER-ONLY CLAIMS ARE ATTRIBUTED HERE, NOT VIA `excluded` (fixed
-    # 2026-08-27). `compute_offer`'s `excluded` is built from
-    # `CommitSet.contested` alone -- paths THIS session claims that a peer
-    # claims too. A path only the PEER claims never reaches it, so the
-    # `"owned by session"` filter above missed exactly the case AC5 names and
-    # a live peer's in-flight file rendered as this ceremony's residue: the
-    # harm this function's own docstring calls out, and the shape that nudges
-    # an operator into a bulk sweep over a peer's uncommitted work.
-    #
-    # Attributed at THIS seam rather than by widening `excluded`, deliberately:
-    # `CommitSet.peers` is sized by the claim ledger (~405 entries on this
-    # repo, see its own docstring), not by the dirty tree, so folding it into
-    # `excluded` would bury the handful of genuinely-withheld paths an
-    # operator needs to see under hundreds of irrelevant ones. Here the
-    # question is only ever asked about paths that are actually dirty.
     peer_claimed = claim_index.commit_set(session_id, cwd=worktree_root).peers
 
-    # The ONE dirty read this module is allowed (see `_current_dirty_paths`)
-    # is taken here and reused for BOTH products below -- residue buckets and
-    # the reconciliation answer. Do not add a second read for the second
-    # product: `_compute_residue` returning a pair is deliberately uglier
-    # than two tidy functions, because two tidy functions would each want
-    # their own `git status` and the second spawn is the thing that is
-    # actually forbidden.
     dirty = _current_dirty_paths(worktree_root)
 
     buckets: "OrderedDict[str, List[str]]" = OrderedDict()
@@ -1540,11 +1349,6 @@ def _compute_residue(
         buckets.setdefault(_residue_class(path), []).append(path)
 
     # UNCLAIMED = dirty, and claimed by NO session -- this session included.
-    # `fresh_offer["safe_paths"]` is subtracted because a residue path this
-    # session DOES claim (its commit group failed, or the caller's own
-    # `groups` override dropped it) is this session's own uncommitted work,
-    # not an adoption candidate; folding the two together is what would make
-    # the enumeration unsafe to hand `--include-orphans`.
     reconciliation = _reconciliation_from(
         worktree_root,
         dirty=dirty,
@@ -1711,11 +1515,6 @@ def _drop_junk_from_offer(
     return narrowed
 
 
-# ---------------------------------------------------------------------------
-# Auto-commit + auto-push (mutating — the only part of this module that is)
-# ---------------------------------------------------------------------------
-
-
 async def _commit_group(
     worktree_root: str, group: CommitGroup, session_id: Optional[str] = None
 ) -> GroupResult:
@@ -1756,39 +1555,16 @@ async def _commit_group(
     prose = group.get("prose", "")
     if prose:
         message = f"{message}\n\n{prose}"
-    # `group["paths"]` may legitimately name a claimed-but-deleted path (a
-    # deletion this session made is a real thing to commit -- see this
-    # module's own `Reconciliation.claimed_absent` docstring) -- `commit_
-    # paths` needs those split into its own `deleted_paths` kwarg rather than
-    # `paths`, since a present-path read (`root / p).read_bytes()`) is what
-    # the old `run_commit_pipeline`'s `stage_paths` auto-classification used
-    # to do internally.
     present_paths = [p for p in group["paths"] if (Path(worktree_root) / p).exists()]
     declared_deletions = [p for p in group["paths"] if p not in present_paths]
-    # Pre-filter (T3, docs/plans/2026-09-07-a-confirmed-absent-caller-path-
-    # refuses-the-commit.md § Design item 6). `declared_deletions`' phantoms
-    # come from the claim-recorder defect (state/bug-backlog/2026-09-06-...
-    # -0f8bc9499721.yaml), not from a caller declaration, so this route must
-    # not turn that defect into a close-blocker once the engine refuses a
-    # phantom outright. Zero git spawn, zero index read.
     partition = partition_declared_deletions(worktree_root, declared_deletions)
     if partition is None:
-        # Unreadable spine -- pass the set through unfiltered and let
-        # `commit_paths`' own "could not read HEAD's tree spine" refusal be
-        # the fail-closed abort. Nothing was classified, so nothing is
-        # reported absent.
         deleted_paths = declared_deletions
         absent_from_head: List[str] = []
     else:
         deleted_paths, absent_from_head = partition
 
     if not present_paths and not deleted_paths:
-        # Phantom-deletions-only group: every declared deletion is absent
-        # from HEAD, and there is no present path either. Nothing for
-        # `commit_paths` to do -- return the benign no-op shape with the
-        # skipped set carried for `_render_report`, never "already
-        # committed" (that wording implies a prior commit actually landed
-        # these bytes).
         return {
             "paths": group["paths"],
             "message": group["message"],
@@ -1800,11 +1576,6 @@ async def _commit_group(
             "reason": "phantom-deletions-only",
             "declared_absent_from_head": absent_from_head,
         }
-    # Engine-owned trailers (Session-Id/Deliverable-Id/Co-Authored-By): this
-    # route lands via `commit_paths`' commit-tree plumbing, which fires no
-    # git hooks, so `apply_missing_trailers` is its only attach point. The
-    # caller's own `session_id` (this function's own parameter) is passed as
-    # the override so attribution resolves that SAME session's transcript.
     message = apply_missing_trailers(
         message, worktree_root, group["paths"], session_id_override=session_id
     )
@@ -1830,25 +1601,7 @@ async def _commit_group(
             "reason": None,
             "declared_absent_from_head": absent_from_head,
         }
-    # Release this session's claims over the paths the commit just landed
-    # (`session/scope.py :: release_committed_claims`). This route needs it
-    # more plainly than any other: the group being committed IS this
-    # session's own claimed dirty set (see this function's docstring), so
-    # every auto-commit here left an `R`-less claim over paths it had just
-    # written to history -- the claim outliving the very commit that
-    # discharged it.
-    #
-    # Release set is `group["paths"]`, not `present_paths`: a deleted path
-    # was claimed too, and its deletion is in the commit.
-    #
-    # Only on a landed commit (`outcome.sha is not None`). `commit_paths`
-    # can return a no-delta outcome with no sha, and nothing was written to
-    # history then, so there is nothing to discharge.
-    #
     # NEGATIVE SPEC (mirrors `ceremony/commit_v2.py ::
-    # _release_committed_claims_step`): runs AFTER the commit has landed and
-    # cannot refuse, delay, or fail it -- a bookkeeping append that fails
-    # must not turn a successful auto-commit into a reported failure.
     if session_id and outcome.sha is not None:
         try:
             scope_module.release_committed_claims(
@@ -1899,11 +1652,6 @@ def _empty_commit_offer_report(
             "detail": detail,
             "committed_paths": [],
             "conflicted_paths": [],
-            # Empty on BOTH exits this builder serves, and not an oversight:
-            # each of them commits nothing at all and says so in `status`, so
-            # there is no landed-but-incomplete commit for a dropped path to
-            # be invisible behind. `dropped_paths` exists to qualify a
-            # SUCCESS -- see `CommitOutcome`'s own docstring.
             "dropped_paths": [],
         },
     }
@@ -1966,7 +1714,6 @@ async def commit_session_offer_async(
     offer = compute_offer(session_id, cwd)
     safe_set = set(offer["safe_paths"])
 
-    # (a) — degraded/indeterminate claim read: commit NOTHING this call.
     if offer["indeterminate"] or offer["ownership"]["degraded"]:
         status: Literal["skipped_indeterminate", "skipped_degraded"] = (
             "skipped_indeterminate" if offer["indeterminate"] else "skipped_degraded"
@@ -1989,11 +1736,6 @@ async def commit_session_offer_async(
             "failed_groups": [],
             "dropped_groups": [],
             "residue": OrderedDict(),
-            # This call short-circuited before any commit and before the
-            # residue pass, so no ledger-versus-tree check ran. `reconciled:
-            # False` says exactly that, and is the shape a caller must not
-            # read as "the ledger agrees" -- the whole reason it is a
-            # did-the-check-run flag.
             "reconciliation": {
                 "reconciled": False,
                 "claimed_absent": [],
@@ -2008,10 +1750,6 @@ async def commit_session_offer_async(
             },
         }
 
-    # (c) — defensive fail-closed check: a path this call claims as "mine"
-    # must never also appear in this same call's own `ownership["peer"]`
-    # bucket. Withheld from every group before any commit, not filtered
-    # post-hoc from a landed commit.
     peer_paths = {p["path"] for p in offer["ownership"]["peer"]}
     conflicted_paths = sorted(safe_set & peer_paths)
     conflict_set = set(conflicted_paths)
@@ -2025,12 +1763,6 @@ async def commit_session_offer_async(
             named_paths = g["paths"]
             kept = [p for p in named_paths if p in safe_set]
             if len(kept) < len(named_paths):
-                # Handoff item 1 (2026-08-03, touched-path-bookkeeping) --
-                # record the drop, total or partial, BEFORE the `if kept`
-                # gate below decides whether the group survives at all. A
-                # group that loses every path takes the `if kept` branch's
-                # else (never reached, `resolved_groups.append` skipped) and
-                # would otherwise leave no trace anywhere in this report.
                 dropped_groups.append(
                     {
                         "message": g["message"],
@@ -2040,19 +1772,11 @@ async def commit_session_offer_async(
                     }
                 )
             if kept:
-                # Carry the caller-
-                # supplied `prose` body through; it was previously dropped
-                # here, so only the mechanical `_default_groups` fallback
-                # ever produced a commit body.
                 resolved_groups.append(
                     {"paths": kept, "message": g["message"], "prose": g.get("prose", "")}
                 )
 
     if conflict_set:
-        # (c) — strip conflicted paths out of every group BEFORE any of
-        # them reach `_commit_group`/`run_commit_pipeline`. A group
-        # that loses every one of its paths this way is dropped entirely,
-        # same as an empty-`kept` caller-supplied group above.
         filtered_groups: List[CommitGroup] = []
         for g in resolved_groups:
             kept_paths = [p for p in g["paths"] if p not in conflict_set]
@@ -2063,18 +1787,6 @@ async def commit_session_offer_async(
         resolved_groups = filtered_groups
 
     # FAIL CLOSED ON AN UNRESOLVED ROOT (committer-P0, 2026-08-31).
-    # This was `core.git_root(cwd) or cwd or "."`. That fallback is the
-    # committer-P0 inversion reached by a different origin: `_commit_group`
-    # classifies a path as DELETED whenever `(Path(worktree_root) / p)` does
-    # not exist, so a `worktree_root` that is not the repo root makes EVERY
-    # declared path probe False and turns this close path into a mass
-    # deletion of the session's own claimed work.
-    #
-    # `commit_paths`' phantom-deletion refusal (62fe8736d1) does NOT rescue it
-    # here: that guard is handed this same `worktree_root`, resolves the path
-    # against the same wrong root, finds it equally absent, and never fires. A
-    # guard downstream of a bad root cannot see past it.
-    # See state/audits/2026-08-31-committer-p0-*.
     resolved_root = core.git_root(cwd)
     if not resolved_root:
         detail = (
@@ -2082,12 +1794,6 @@ async def commit_session_offer_async(
             "declared path would classify as deleted against an unresolved "
             "root. Nothing was committed." % (cwd or "<no cwd>")
         )
-        # This fail-closed exit
-        # used to hand-assemble the full report literal a second time,
-        # independently of the normal-exit construction below; the two would
-        # drift the first time a key was added to one and not the other.
-        # `_empty_commit_offer_report` is now the single builder for the
-        # empty shape both this exit and the normal `empty` outcome share.
         return _empty_commit_offer_report(
             session_id,
             offer["excluded"],
@@ -2108,10 +1814,6 @@ async def commit_session_offer_async(
         if g.get("committed"):
             committed_paths.extend(g["paths"])
 
-    # Flattened across groups so `outcome` alone answers "what did this call
-    # not commit that I asked it to" — the caller should not have to walk
-    # `dropped_groups` to learn it lost a file, and until 2026-09-01 that
-    # walk would have told it only how many.
     dropped_paths = sorted({p for dg in dropped_groups for p in dg["dropped"]})
 
     if conflicted_paths:
@@ -2130,11 +1832,6 @@ async def commit_session_offer_async(
     elif committed_paths:
         outcome = {
             "status": "committed",
-            # The drop is named in the SAME sentence as the success, not
-            # left to a field the caller may never read: this status is the
-            # one an operator acts on, and a commit that landed while
-            # quietly leaving a named path behind is the shape that loses a
-            # record (see `DroppedGroup`'s `git mv` case).
             "detail": (
                 "%d path(s) committed across %d group(s)."
                 % (
@@ -2194,11 +1891,6 @@ def commit_session_offer(
     return asyncio.run(commit_session_offer_async(session_id, cwd, groups))
 
 
-# ---------------------------------------------------------------------------
-# Diagnostics sinks
-# ---------------------------------------------------------------------------
-
-
 def _log_failed_groups_diagnostic(
     worktree_root: str, session_id: str, failed_groups: List[GroupResult]
 ) -> None:
@@ -2240,22 +1932,6 @@ def _log_failed_groups_diagnostic(
         return
 
 
-#: Bound on how many withheld paths get named inline in the diagnostics-log
-#: entry. The log line is a breadcrumb pointing at full detail, not the full
-#: detail (DR-227 -- advisory only, see `_log_excluded_diagnostic`); the op's
-#: own bounded `dry_run=true` return is where the whole list lives.
-#:
-#: HISTORY, because the bound's justification changed even though its value
-#: did not. Pre-2026-08-21, `excluded` held roughly every unclaimed dirty path
-#: in the tree on every close (dozens, observed live), and a code-reviewer
-#: finding required the preview to BIAS toward the orphan-derived entries so
-#: a newly-declined orphan could not be pushed into the "and N more" tail by
-#: peer-owned paths that were already visible elsewhere. `compute_offer` no
-#: longer reports orphans at all (see its own contract), so `excluded` is
-#: contested paths only, that bias had exactly one class left to sort, and it
-#: was removed rather than left as a no-op sort a reader would take for a
-#: live invariant. The BOUND stays: a session sharing many paths with a peer
-#: is an ordinary shape, and an unbounded log line is still unbounded.
 _EXCLUDED_LOG_PREVIEW_COUNT = 10
 
 
@@ -2376,45 +2052,17 @@ def _log_dropped_groups_diagnostic(
         return
 
 
-#: How many of a group's own paths get named inline before the rest collapse
-#: into a "... and N more" tail. Bounds the report the same way
 #: `_EXCLUDED_LOG_PREVIEW_COUNT` bounds the diagnostics-log entry; the full
-#: list is always in the op's own structured return, and for a LANDED group
-#: also in the commit
-#: body `_default_groups` composes.
 _REPORT_PATH_PREVIEW_COUNT = 8
 
-#: How many sample paths get named inline per residue class before the rest
-#: collapse into a "... and N more" tail (C3). Mirrors the reasoning behind
 #: `_REPORT_PATH_PREVIEW_COUNT` and `_EXCLUDED_LOG_PREVIEW_COUNT`: a per-class
-#: COUNT is always shown regardless, this only bounds the sample listed next
-#: to it -- a residue class with hundreds of paths (the exact shape the three
-#: hand-typed bulk sweeps left behind) must never turn into a per-path dump.
 _RESIDUE_CLASS_SAMPLE_COUNT = 3
 
-#: How many residue CLASSES (not paths within a class) get their own line
-#: before the rest collapse into a "... and N more class(es)" tail. Review:
 #: code-reviewer (Finding 1) -- `_RESIDUE_CLASS_SAMPLE_COUNT` above only
-#: bounds the sample listed WITHIN one class; it does not bound the number
-#: of classes themselves. `_residue_class` returns the bare top-level
-#: segment for a repo-root file with no directory, so a pile of repo-root
-#: orphan files (e.g. many `orphan_NNN.py` siblings) each become their own
-#: class and the render loop below emitted one line per file -- reproducing
-#: the exact "1938-line stdout for a one-file commit" incident this
-#: module's docstring says the report exists to retire, for the residue
 #: section specifically. Mirrors `_RESIDUE_CLASS_SAMPLE_COUNT`'s reasoning:
-#: the per-class COUNT is still shown in the summary line above regardless,
-#: this only bounds how many per-class detail lines get printed inline.
 _RESIDUE_CLASS_PREVIEW_COUNT = 8
 
-#: How many `dropped_groups` entries (handoff item 1, 2026-08-03
-#: touched-path-bookkeeping) get their own line -- in `_render_report`'s
-#: stdout and in `_log_dropped_groups_diagnostic`'s log sink alike -- before
-#: the rest collapse into a "... and N more group(s)" tail. Same idiom as
 #: `_RESIDUE_CLASS_PREVIEW_COUNT`: one line per GROUP, never one line per
-#: path -- a caller that named hundreds of groups in one call must not
-#: reproduce the 1938-line `excluded` incident this module's docstring
-#: already retired once.
 _DROPPED_GROUPS_PREVIEW_COUNT = 8
 
 
@@ -2437,23 +2085,7 @@ def _commit_changed_count(sha: Optional[str], worktree_root: Optional[str]) -> O
     return None
 
 
-#: Emitted FIRST when `scope.normalize_diagnostic_fired()` is set. First, not
-#: last, because `_render_report`'s outcome-last property is pinned by
-#: `coordinator/tests/test_safe_commit_offer_outcome_signal.py` — and bounded
-#: output means the head of the report is a few lines above the verdict, not
-#: buried.
-#:
-#: The wording tracks EXACTLY what a set latch now implies, no more. Since
-#: `scope._ls_files_failure_is_benign` landed (2026-08-05), the latch no longer
-#: fires for a path outside this repo — the routine case, which the relpath
-#: fallback handles correctly and which used to put this banner at the head of
-#: most reports on a non-condition, a false alarm in the top line of the exact
-#: report the same commit was fixing for being falsely alarming. What remains
 #: is an UNCLASSIFIED normalization failure, whose consequence for this report
-#: is precisely: an entry may have been dropped (a path this session wrote is
-#: absent from the pathspec) or mis-normalized (present but naming the wrong
-#: file) — NOT that anything was mis-committed, and NOT that the entries are
-#: known-bad.
 _DEGRADED_SCOPE_NOTICE = (
     "DEGRADED INPUT — the touch record was written this process after an "
     "unexpected path-normalization failure (see stderr: normalize_touch_path); "
@@ -2512,11 +2144,6 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
     if scope_module.normalize_diagnostic_fired():
         lines.append(_DEGRADED_SCOPE_NOTICE)
 
-    # C4 (AC9) — a short-circuit outcome (degraded/indeterminate skip, or a
-    # dirty-conflict withhold) produced no per-group lines below to carry the
-    # verdict; without this, those calls would otherwise render identically
-    # to a genuinely clean tree. A plain `"committed"`/`"empty"` outcome adds
-    # no line here — the per-group loop below already states that verdict.
     outcome = report.get("outcome")
     if outcome and outcome["status"] in (
         "skipped_indeterminate",
@@ -2536,11 +2163,6 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
 
     dropped_groups = report.get("dropped_groups") or []
     if dropped_groups:
-        # Handoff item 1 (2026-08-03, touched-path-bookkeeping) -- a
-        # caller-supplied group whose named paths fell wholly or partly
-        # outside this session's computed `safe_paths` is advisory-only
-        # (DR-227, same as `excluded` above), never a gate: the group is
-        # simply smaller (or absent) from `groups` below, not a failure.
         lines.append(
             "Dropped %d caller-supplied group(s) — named path(s) outside "
             "this session's computed scope, left uncommitted on purpose "
@@ -2587,12 +2209,6 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
             )
 
     # RECONCILIATION (2026-08-29). Rendered SAMPLE-BOUNDED, exactly like
-    # `residue` and `excluded` above -- the enumeration lives in the report
-    # object's own `reconciliation` key, which is what an adopting caller
-    # reads; this block is the operator's pointer at it, never the list
-    # itself. A 501-path unclaimed set is a real observed size on this
-    # worktree, and one line per path is the unbounded shape this function's
-    # own docstring forbids.
     reconciliation = report.get("reconciliation") or {}
     claimed_absent = reconciliation.get("claimed_absent") or []
     unclaimed = reconciliation.get("unclaimed") or []
@@ -2630,24 +2246,6 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
         )
 
     if not groups:
-        # "I could not look" must never render as "there is nothing". An empty
-        # `groups` has two causes that read identically to an operator: a
-        # genuinely clean tree, and a tree where every dirty path was seen and
-        # declined because nothing carried this session's claim — the shape a
-        # CLI-written file always takes, since only the Edit/Write hot path
-        # writes `touched.txt`. The `excluded` count is already stated above;
-        # this line adds the disposition and the route out, not a second count.
-        #
-        # `excluded` alone did not carry that distinction. A session whose every
-        # write went through the Bash tool -- the channel this harness's own
-        # bypass-permissions instruction directs work through, and the one the
-        # touch-list never sees -- produces `excluded: []` AND a non-empty
-        # `residue`, and fell to the clean-tree line below with its own dirty
-        # files listed in the residue table directly above it. Observed
-        # 2026-08-26 (state/bug-backlog/2026-08-26-safe-commit-offer-attributes-
-        # no-bash-wri-47b599a8460a.yaml): three modified tracked files, exit 0,
-        # "working tree clean". Either signal means dirty paths exist, so the
-        # clean-tree claim requires BOTH to be empty.
         if excluded or residue:
             lines.append(
                 "Nothing to commit for session %s — every dirty path was seen "
@@ -2685,12 +2283,6 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
             )
             absent = g.get("declared_absent_from_head") or []
             if absent:
-                # Mirrors
-                # commit_v2._render_outcome's SKIPPED warning: a phantom
-                # deletion this group named alongside paths that DID commit
-                # is not itself a failure, but silently dropping it here is
-                # the exact class of silent-skip the committer-P0 fix exists
-                # to kill.
                 sample = sorted(absent)[:5]
                 tail_absent = ", ".join(sample)
                 if len(absent) > 5:
@@ -2705,13 +2297,6 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
             lines.append("NOT committed — %s — %s" % (g["message"], detail))
             absent = g.get("declared_absent_from_head") or []
             if absent:
-                # T3 (docs/plans/2026-09-07-a-confirmed-absent-caller-path-
-                # refuses-the-commit.md § Design item 6) — the pre-filter's
-                # absent list survives a refused call too: a clean-touched
-                # path plus a phantom leaves `commit_paths` all-no-delta,
-                # which raises `NothingToCommit` here, and the phantom must
-                # still be reported SKIPPED rather than silently lost with
-                # the refusal.
                 sample = sorted(absent)[:5]
                 tail_absent = ", ".join(sample)
                 if len(absent) > 5:
@@ -2722,19 +2307,8 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
                     % (len(absent), tail_absent)
                 )
         else:
-            # The benign no-op. "NOT committed" is reserved for a genuine
-            # failure and must never appear here: an operator (or an automated
-            # caller) reading it over paths a previous invocation already
-            # landed retries or hand-commits a duplicate — the live incident.
-            # The count here is pathspec breadth and is labelled as such: no
-            # commit happened on this call, so no change count may be attached
-            # to it (example-cockpit-repo-em memo, 2026-08-05).
             absent = g.get("declared_absent_from_head") or []
             if absent:
-                # Phantom-deletions-only group (T3, § Design item 6) — every
-                # declared deletion was absent from HEAD, so nothing landed.
-                # "already committed" is never said here: no prior commit
-                # landed these bytes, so that wording would be false.
                 lines.append(
                     "nothing to commit — %s — %d file(s) in scope, every "
                     "declared deletion was a phantom (%s)"
@@ -2756,11 +2330,6 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
                 )
 
     return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# Op
-# ---------------------------------------------------------------------------
 
 
 @register_op("session.safe_commit_offer")

@@ -40,17 +40,7 @@ class EvidenceClass(enum.Enum):
     UNDECLARED = "undeclared"
 
 
-# ---------------------------------------------------------------------------
-# Sparse registry -- declares ONLY ops whose terminal stamp proves less than
-# complete evidence. Never add an `ack`-equivalent entry here: absence IS the
-# ack declaration, and the guard test refuses a restated default.
-#
-# Populated from the C1 spike's stratified slice plus its all-handler
-# detached-work grep (docs/research/spike-verdicts/
-# 2026-09-23-completion-evidence-shape-under-the-brightline.md): every
 # MUTATING op whose handler either cannot observe a remote outcome, or
-# launches/tears down a detached process without waiting for it.
-# ---------------------------------------------------------------------------
 OP_COMPLETION_EVIDENCE: "types.MappingProxyType[str, EvidenceClass]" = types.MappingProxyType(
     {
         "push.outstanding": EvidenceClass.FIRE_AND_FORGET,

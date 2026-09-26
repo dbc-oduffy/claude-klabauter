@@ -50,10 +50,6 @@ __all__ = [
 
 #: `readers_mise._FOOTPRINT_CONSTRAINT_TEMPLATE` /
 #: `readers_blitz._FOOTPRINT_CONSTRAINT_TEMPLATE`, byte-identical today,
-#: moved verbatim. `[list]` is filled in by whoever renders the final
-#: prompt; a surface whose own report lands outside a row's declared
-#: `writes:` (the emitted path) includes that report path IN the list it
-#: substitutes for `[list]`, rather than this module carrying a carve-out.
 FOOTPRINT_CONSTRAINT_TEMPLATE = (
     "You MUST NOT create or modify any file outside this footprint: "
     "[list]. If you discover you need to, STOP and report back via the "

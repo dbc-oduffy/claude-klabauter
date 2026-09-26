@@ -33,16 +33,8 @@ _M = 4
 
 
 def _write_manifest(tmp_path: Path, exprs: list[str]) -> tuple[Path, Path]:
-    """Synthetic manifest with one `python_import` dep per entry in ``exprs``, each pointing
-    at its own pre-created sibling directory (so dep resolution succeeds without exercising the
-    fallback ladder, which is orthogonal to this oracle's claim)."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
-    # `_sibling_search_root` walks up from `repo_root` for the nearest `.git`
-    # entry (`resolve_git_root_cheap`) before falling back to a manifest-
-    # nesting-depth guess; without a real marker here it takes that fallback
-    # and resolves siblings against the wrong ancestor, and `sibling_path`
-    # never matches the `sib-N` dirs this fixture creates beside `repo_root`.
     (repo_root / ".git").mkdir()
     deps = []
     for i, expr in enumerate(exprs):
@@ -72,9 +64,6 @@ def _patched_run(monkeypatch, calls: list):
 
 
 def test_dep_probe_all_issues_one_spawn_per_python_import_dep(tmp_path, monkeypatch):
-    """M `python_import` deps must cost exactly M spawns -- the register's claim that this
-    site cannot be batched depends on it actually running one subprocess per dep, not on a
-    cached or short-circuited path silently doing fewer."""
     calls: list = []
     _patched_run(monkeypatch, calls)
 
@@ -93,10 +82,6 @@ def test_dep_probe_all_issues_one_spawn_per_python_import_dep(tmp_path, monkeypa
 
 
 def test_dep_probe_all_python_import_spawns_have_distinct_argv(tmp_path, monkeypatch):
-    """The varying-program half of the claim: each spawn's full argv (not merely its dep id)
-    must differ from every other, because the executed `-c` source is the per-dep manifest
-    `expr` -- proof this is not a fixed program invoked M times, which is the shape a static
-    per-item-spawn predicate could otherwise have flagged and batched."""
     calls: list = []
     _patched_run(monkeypatch, calls)
 
@@ -116,10 +101,6 @@ def test_dep_probe_all_python_import_spawns_have_distinct_argv(tmp_path, monkeyp
 
 
 def test_oracle_fails_when_all_deps_share_one_expr(tmp_path, monkeypatch):
-    """Proves the argv-distinctness oracle is not vacuous: a manifest where every dep shares
-    the SAME `expr` must fail the distinctness assertion. Without this, a bug that dropped the
-    per-dep expr substitution (e.g. dep_probe always running the first dep's expr) would pass
-    silently."""
     calls: list = []
     _patched_run(monkeypatch, calls)
 

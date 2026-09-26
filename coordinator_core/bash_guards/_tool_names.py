@@ -23,9 +23,5 @@ from __future__ import annotations
 
 from typing import Tuple
 
-#: The command tool-name universe -- a TUPLE, deliberately, not a list:
 #: every existing ``MATCHERS`` declaration in this package is a list, so
-#: this is a type change on a public-ish attribute, made so identity
-#: (``is``) holds for any guard that references this constant directly and
-#: no caller can mutate the shared object out from under another.
 COMMAND_TOOL_NAMES: Tuple[str, ...] = ("Bash", "PowerShell")

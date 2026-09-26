@@ -29,9 +29,6 @@ Spec backlink: cross-repo/inbox/2026-08-06-doe-claude-em-cartography-chunk-table
 
 from __future__ import annotations
 
-#: Directory basenames pruned during a repo-wide walk — vendor/build/VCS
-#: noise that would otherwise dominate walk time/results without changing
-#: the answer to "what source exists here."
 SKIP_DIR_NAMES = frozenset(
     {
         ".git",

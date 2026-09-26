@@ -32,12 +32,7 @@ from coordinator_core.ipc import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def _run(coro):
-    """Run an async coroutine synchronously — no pytest-asyncio dependency."""
     return asyncio.run(coro)
 
 
@@ -66,23 +61,9 @@ class _RegistryScope:
                 _REGISTRY[name] = old
 
 
-# ---------------------------------------------------------------------------
-# emit ops receive non-None repo_root when _origin_worktree present
-# ---------------------------------------------------------------------------
-
 class TestEmitOpsReceiveRepoRootFromOriginWorktree:
-    """Dispatch layer correctly injects a non-None repo_root into the reclassified emit ops.
-
-    Exercises the "common_dir" keying path in resolve_op_repo_key: when _origin_worktree is
-    present in the message, git_common_dir resolves it, and dispatch_message calls the handler
-    with repo_root = the resolved common_dir path (non-None).
-
-    The real handlers are replaced with spies to isolate the dispatch-layer wiring test from
-    handler internals (the handler-level tests live in test_c4a_handler_wiring.py / test_recorder.py).
-    """
 
     def _dispatch_with_spy(self, method: str, fake_common_dir: Path) -> Path | None:
-        """Dispatch method with mocked git_common_dir; return the repo_root captured by the spy."""
         captured: list[Path | None] = []
 
         async def _spy_handler(params: dict, repo_root=None) -> dict:
@@ -94,7 +75,7 @@ class TestEmitOpsReceiveRepoRootFromOriginWorktree:
             "id": 1,
             "method": method,
             "params": {},
-            _ORIGIN_WORKTREE_FIELD: str(fake_common_dir.parent),  # a valid worktree path
+            _ORIGIN_WORKTREE_FIELD: str(fake_common_dir.parent),
         }
         with patch("coordinator_core.ipc.git_common_dir", return_value=fake_common_dir), \
              _RegistryScope({method: _spy_handler}):
@@ -103,7 +84,6 @@ class TestEmitOpsReceiveRepoRootFromOriginWorktree:
         return captured[0] if captured else None
 
     def test_goal_append_receives_non_none_repo_root(self, tmp_path: Path) -> None:
-        """goal.append handler receives non-None repo_root when _origin_worktree is present."""
         fake_common_dir = tmp_path / ".git"
         received = self._dispatch_with_spy("goal.append", fake_common_dir)
         assert received is not None, (
@@ -112,9 +92,7 @@ class TestEmitOpsReceiveRepoRootFromOriginWorktree:
         assert received == fake_common_dir
 
 
-# ---------------------------------------------------------------------------
 # emit ops return INVALID_PARAMS (-32602) when _origin_worktree absent
-# ---------------------------------------------------------------------------
 
 class TestEmitOpsFailLoudWithoutOriginWorktree:
     """Dispatch layer returns INVALID_PARAMS (-32602) when _origin_worktree is absent.
@@ -135,7 +113,6 @@ class TestEmitOpsFailLoudWithoutOriginWorktree:
             "id": 1,
             "method": method,
             "params": {},
-            # _origin_worktree deliberately absent
         }
 
     def test_goal_append_without_origin_worktree_returns_invalid_params(self) -> None:

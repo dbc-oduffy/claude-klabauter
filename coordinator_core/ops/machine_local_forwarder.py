@@ -45,18 +45,6 @@ from coordinator_core.bare_forwarder import forward
 
 
 def main(argv: list[str]) -> int:
-    """CLI entrypoint: delegates to bare_forwarder.forward("machine-local", argv).
-
-    `forward` execs the resolved binary on success (never returns) or calls
-    `sys.exit(127)` on failure (also never returns to this line) — the trailing
-    `return 0` exists only to satisfy the `main(argv) -> int` entrypoint shape and is
-    unreachable in practice.
-
-    `argv` was previously
-    dead — `forward` read process-global `sys.argv` regardless of what was passed
-    in here. Now threaded through explicitly so a caller-constructed `argv` can't
-    silently diverge from what actually gets forwarded.
-    """
     forward("machine-local", argv)
     return 0
 

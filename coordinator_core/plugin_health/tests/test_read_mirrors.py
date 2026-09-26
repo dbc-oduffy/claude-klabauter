@@ -1,18 +1,3 @@
-"""
-coordinator_core.plugin_health.tests.test_read_mirrors — dedicated coverage for
-read_all_mirrors(), the plugin.mirrors registry-TOML parser folded into
-coordinator_core.plugin_health.drift during the check-plugin-drift.sh port.
-
-The function itself already lives at coordinator_core/plugin_health/drift.py
-(landed as part of the drift-probe port, which absorbed the formerly-standalone
-DoE-claude coordinator/bin/lib/read-mirrors.sh — see that module's docstring).
-This file closes a coverage gap: drift.py's existing test suite (test_drift.py)
-never exercised read_all_mirrors() directly. Parity verified against the live
-bash oracle (_read_all_mirrors in read-mirrors.sh) on matching fixtures during
-this port's parity gate.
-
-Port of: read-mirrors.sh::_read_all_mirrors (DoE 721a71f4, 2026-07-21)
-"""
 
 from __future__ import annotations
 
@@ -67,12 +52,6 @@ def test_flat_dotted_key_form_only(tmp_path: Path) -> None:
 
 
 def test_nested_wins_over_flat_on_conflicting_field(tmp_path: Path) -> None:
-    # example-retrieval-repo has both a [plugin.mirrors.project-rag] table (no track_ref)
-    # AND a flat "plugin.mirrors.project-rag.track_ref" key. The nested-table
-    # entry doesn't define track_ref, so the flat value fills it in — but
-    # live_path is present in neither, so it stays default-empty (nested
-    # table wins on any field it DOES define; this fixture has no direct
-    # collision, matching the bash oracle's own test corpus).
     reg = tmp_path / "registry.local.toml"
     reg.write_text(_NESTED_AND_FLAT_TOML, encoding="utf-8")
     mirrors = read_all_mirrors(reg)
@@ -105,11 +84,6 @@ def test_dist_name_defaults_to_hyphen_to_underscore_of_plugin_name(tmp_path: Pat
 
 
 def test_merged_per_key_precedence(tmp_path: Path) -> None:
-    """read_merged_mirrors: local wins per field, tracked fills gaps -- a
-    plugin registered only in the tracked registry.toml is visible even when a
-    registry.local.toml exists (the first-FILE-wins regression shape), and an
-    explicit tracked field is never clobbered by a local-side synthesized
-    default (defaults apply after the merge)."""
     from coordinator_core.plugin_health.drift import read_merged_mirrors
 
     local = tmp_path / "registry.local.toml"
@@ -130,8 +104,8 @@ def test_merged_per_key_precedence(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     merged = read_merged_mirrors([local, tracked])
-    assert merged["example-game-repo"]["live_path"] == "/local/live"  # local wins per field
-    assert merged["example-game-repo"]["propagation_mode"] == "copy_install"  # tracked fills the gap
-    assert merged["example-game-repo"]["track_ref"] == "origin/dev"  # explicit tracked value survives
+    assert merged["example-game-repo"]["live_path"] == "/local/live"
+    assert merged["example-game-repo"]["propagation_mode"] == "copy_install"
+    assert merged["example-game-repo"]["track_ref"] == "origin/dev"
     assert merged["tracked-only"]["propagation_mode"] == "source_is_live"
-    assert merged["tracked-only"]["dist_name"] == "tracked_only"  # defaults post-merge
+    assert merged["tracked-only"]["dist_name"] == "tracked_only"

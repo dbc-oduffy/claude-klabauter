@@ -175,61 +175,24 @@ from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.git.git_dir import resolve_git_common_dir
 
-#: Review: review-integrator -- Finding 3/4 (nit, mirrors guard_grep_via_
-#: bash.py's own precedent): these three attributes are vestigial in
-#: `bash_guards` -- `dispatch.py` imports `check` explicitly and hardcodes
-#: ordering + `fail_closed` in its `guard_chain` literal rather than doing
-#: attribute-based discovery (only `write_guards/tests/`, a different guard
-#: family, reads `CLASS`). `CLASS = "hard-deny"` here does NOT mean this
-#: guard fails closed -- see the module docstring's own Negative-spec
-#: ("Does NOT fail closed") and this file's `fail_closed=False` registration
 #: in `dispatch.py`. `PRIORITY` governs nothing here either; `41` happening
-#: to sort ahead of `guard_grep_via_bash.py`'s `42` is coincidental, not
-#: enforced -- see `dispatch.py`'s `guard_chain` list for the actual order.
 CLASS = "advisory"
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
-#: Disables answering alone, leaving every other grep-related verdict intact. Named
-#: distinctly from `guard_grep_via_bash`'s own override so an operator can switch off
-#: either seam without ambiguity about which one they turned off. Read inline at call
-#: time, never hoisted -- this package's established `_override` convention.
 _DISABLE_ENV_VAR = "COORDINATOR_DISABLE_INPROCESS_SEARCH"
 
 #: SC-DR-009 (DoE `scoped-safety-commits.md`): the ONLY acceptable session-id source
-#: for session-scoped state. `.current-session-id` is documented last-writer-wins
-#: under concurrent sessions and is never an acceptable fallback for this latch -- see
-#: the module docstring's "Session latch" section.
 _SESSION_ID_ENV_VAR = "CLAUDE_CODE_SESSION_ID"
 
-#: Marker filename under `<git-COMMON-dir>/coordinator-sessions/<sid>/`, mirroring the
-#: existing `bash_guards` convention for session-scoped state under that same subtree
-#: (e.g. `dispatch_checks.py`'s `overrides.log`).
 _LATCH_MARKER_NAME = "inprocess-search-footer-seen"
 
-#: The one-line invariant marker every answered call carries once the explanatory
-#: paragraph has already fired this session -- register contract (docs/wiki/
-#: guard-messaging.md § Register): one fact, stated once, declaratively, no
-#: self-legitimacy ("results below are this engine's own answer" was trimmed
-#: 2026-08-13 -- see the module docstring's "Register" section). Not a substring
-#: of `_footer`'s full paragraph below -- the paragraph adds "recognized as a
-#: search", which this marker omits; that divergence is what
-#: `test_guard_inprocess_search.py::test_first_call_carries_full_paragraph` and
-#: `test_alternative_liveness_gate.py::test_fire_guard_isolates_from_a_pre_
-#: existing_session_latch` key off to assert the marker is absent from a
-#: first-call (full-paragraph) reason.
 _ANSWERED_MARKER = (
     "[Answered in-process: no subprocess spawned.]"
 )
 
 
 def _repo_root_from_cwd(cwd: str) -> Optional[str]:
-    """Walk upward from `cwd` looking for a `.git` entry (directory OR file -- a
-    linked worktree's `.git` is a file, see `resolve_git_common_dir`'s own docstring)
-    without spawning `git`. This module answers searches specifically so a Bash call
-    can be avoided; shelling out to resolve the repo root would undercut its own
-    reason for existing. Returns None (never raises) on any I/O failure or if no
-    `.git` entry is found before the filesystem root."""
     try:
         current = os.path.abspath(cwd)
     except OSError:
@@ -250,10 +213,6 @@ def _repo_root_from_cwd(cwd: str) -> Optional[str]:
 
 
 def _latch_path(cwd: str, sid: str) -> Optional[Path]:
-    """Resolve the session-scoped latch marker's path for `sid`, or None if the repo
-    root can't be found. Routed through `resolve_git_common_dir` (`a6daf112`) rather
-    than a literal `<repo_root>/.git` join, so a linked worktree, `--separate-git-dir`
-    clone, or submodule all land the marker in the one shared location."""
     repo_root = _repo_root_from_cwd(cwd)
     if not repo_root:
         return None
@@ -262,10 +221,6 @@ def _latch_path(cwd: str, sid: str) -> Optional[Path]:
 
 
 def _footer_seen(cwd: str, sid: str) -> bool:
-    """True iff this session's explanatory paragraph has already fired. Any I/O
-    failure (read-only `.git`, MinGit permissions, a mid-resolution race) degrades to
-    False -- fail open toward emitting the full paragraph again, never toward
-    crashing the hook."""
     try:
         path = _latch_path(cwd, sid)
         return bool(path and path.is_file())
@@ -274,10 +229,6 @@ def _footer_seen(cwd: str, sid: str) -> bool:
 
 
 def _mark_footer_seen(cwd: str, sid: str) -> None:
-    """Best-effort write of the session latch marker. Never raises: a write failure
-    (read-only `.git`, MinGit permissions) means the paragraph fires again on the next
-    answered call in this session -- a token-cost regression, not a correctness one,
-    and strictly preferable to crashing the PreToolUse(Bash) hot path."""
     try:
         path = _latch_path(cwd, sid)
         if path is None:
@@ -316,10 +267,6 @@ def _footer(cwd: str) -> str:
             pass
 
     # States the identical fact `_ANSWERED_MARKER` carries standalone (see that
-    # constant's own comment), plus "recognized as a search" -- a PINNED
-    # substring (test_guard_inprocess_search.py, test_alternative_liveness_gate.py)
-    # that discriminates this full paragraph from the latched marker; keep it
-    # verbatim if this paragraph is edited again.
     full = (
         "[Answered in-process: recognized as a search, no subprocess spawned.]"
     )
@@ -334,7 +281,6 @@ def _footer(cwd: str) -> str:
 
 
 def _extract_command(payload: Dict[str, Any]) -> Optional[str]:
-    """Return the CRLF-normalized `command` for a Bash PreToolUse payload, else None."""
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
     tool_input = payload.get("tool_input") or {}
@@ -345,28 +291,6 @@ def _extract_command(payload: Dict[str, Any]) -> Optional[str]:
 def check(
     payload: Dict[str, Any], host_is_windows: Optional[bool] = None
 ) -> Optional[Dict[str, Any]]:
-    """Answer a grep-shaped Bash call in-process, or return None to fall through.
-
-    `host_is_windows` is accepted for chain-signature compatibility and deliberately
-    unused: answering is strictly better than spawning on every platform, so there is no
-    platform split to make here.
-
-    C10c (row 21, `docs/reference/guard-dialect-coverage.md`) disposition: dispatches
-    a PowerShell command through `coordinator_core.search.answer.answer(...,
-    tool_name="PowerShell")`, mirroring the Bash leg below -- `search.answer` (C10b)
-    now carries its own `_plan_for_powershell`/`PowerShellSource` recognition for
-    `Get-Content`/`Get-ChildItem` (and their aliases), so this guard no longer needs
-    -- and must not keep -- a parallel bash-only carve-out. A `Select-String`/`sls`
-    invocation still records SILENT below: `search.answer` has zero `Select-String`
-    vocabulary (its parse delegates through `search.engine.parse_grep_segment`, a
-    hand-rolled GNU-grep flag grammar, and the two flag surfaces do not map 1:1 even
-    semantically -- grep's `-C` is one symmetric count, `Select-String -Context`
-    takes two asymmetric ones), so `answer()` faithfully declines it and this guard
-    surfaces that as a named, shape-scoped SILENT rather than a bare, unexplained
-    fall-through -- mirroring `guard_grep_via_bash._check_powershell`'s own SILENT
-    (row 12). An ordinary, non-search PowerShell command genuinely clean-passes here,
-    same as the Bash leg returns bare `None` for a non-search command.
-    """
     tool_name = payload.get("tool_name") or ""
     dialect = dialect_from_tool_name(tool_name)
     if dialect is Dialect.POWERSHELL:
@@ -401,10 +325,6 @@ def check(
         if os.environ.get(_DISABLE_ENV_VAR, "0") == "1":
             return None
         try:
-            # mirrors the Bash leg's own deferred-import comment
-            # below -- an import-time failure here must degrade to
-            # `return None`, never crash the PreToolUse hook for every
-            # PowerShell call in a session.
             from coordinator_core._hook_envelope import rewrite_input
             from coordinator_core.search.answer import answer
 
@@ -426,14 +346,6 @@ def check(
     if os.environ.get(_DISABLE_ENV_VAR, "0") == "1":
         return None
     try:
-        # Both imports are deferred
-        # into this try, not just `search.answer`: an import-time failure in
-        # this module breaks `dispatch.py`'s own module-scope import of
-        # `guard_inprocess_search.check`, which crashes the PreToolUse(Bash)
-        # hook for EVERY Bash call in a session, not just search-shaped
-        # ones -- so this module must stay import-safe even when
-        # `_hook_envelope` or `search.answer` are mid-refactor. `check()`
-        # degrades to `return None` (never raises) if either import fails.
         from coordinator_core._hook_envelope import rewrite_input
         from coordinator_core.search.answer import answer
 
@@ -443,24 +355,7 @@ def check(
         return None
     if rendered is None:
         return None
-    # footer FIRST, rendered SECOND: the substitution contract must be the
-    # first thing an agent reads, before anything that could otherwise be
-    # misread as a leaked answer beneath a denial -- see the module
-    # docstring's "Composed message leads with the contract, not the output".
-    #
-    # `tool_input` is guaranteed a dict with a non-empty `command` here --
-    # `_extract_command` (above) already returned None otherwise, and this
-    # branch is unreachable without a truthy `command`. `updated_input` is a
-    # SHALLOW COPY of the original `tool_input` with only `command` replaced
-    # by `true` (the coreutils no-op: exits 0, no output, negligible fork
     # cost against the search already computed) -- `rewrite_input` REPLACES
-    # the whole tool input object, so every other key (description, timeout,
-    # run_in_background, ...) must be carried over unchanged. Not the shell
-    # builtin `:` -- `_alternative_liveness.py`'s own guard-message-liveness
-    # gate (`test_alternative_liveness_gate.py`) treats `updatedInput.command`
-    # as a suggested alternative and resolves its argv[0] on PATH; `:` is a
-    # bash builtin with no on-PATH binary and reads DEAD there, while `true`
-    # is a real coreutils binary every supported platform ships.
     tool_input = payload.get("tool_input") or {}
     updated_input = dict(tool_input)
     updated_input["command"] = "true"

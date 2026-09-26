@@ -42,16 +42,10 @@ _IDENT_SANITIZE_RE = re.compile(r"[^0-9A-Za-z_]")
 
 
 class InvalidVerb(ValueError):
-    """Raised when a declared verb cannot be turned into a valid Python
-    identifier suffix for its `_dispatch_<verb>` handler name."""
+    pass
 
 
 def _dispatch_fn_name(verb: str) -> str:
-    """Renders `verb` (e.g. "handoff.supersede_predecessor") into a valid
-    `_dispatch_<...>` function name by replacing every non-identifier
-    character with `_`. Raises `InvalidVerb` if `verb` is empty or the
-    sanitized result collides with the bare `_dispatch_` prefix (i.e. the
-    verb carried no identifier-safe characters at all)."""
     if not verb:
         raise InvalidVerb("a manifest verb must be a non-empty string")
     sanitized = _IDENT_SANITIZE_RE.sub("_", verb)
@@ -61,45 +55,16 @@ def _dispatch_fn_name(verb: str) -> str:
 
 
 def _pascal_case(skill_name: str) -> str:
-    """Renders a skill name (e.g. "pickup_assemble") into PascalCase for
-    the emitted exit-code enum's class name (e.g. "PickupAssembleExitCode")."""
     parts = _IDENT_SANITIZE_RE.sub("_", skill_name).split("_")
     return "".join(part.capitalize() for part in parts if part)
 
 
 def _py_str_literal(value: str) -> str:
-    """Render `value` as a single-quoted Python string literal, escaping
-    backslashes/quotes/newlines so the emitted text stays a PURE LITERAL."""
     escaped = value.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
     return f"'{escaped}'"
 
 
 def _docstring_safe(value: str) -> str:
-    """Escapes `value` for safe interpolation inside a `\"\"\"`-delimited
-    docstring: backslashes first (else a later-inserted backslash could
-    itself be escaped), then breaks up any `\"\"\"` run so it cannot
-    terminate the enclosing docstring early, then neutralizes newlines/
-    line-separator characters so the header always renders as a single
-    visual line. Raises `ValueError` if `value` contains a NUL byte — CPython's
-    `compile()`/`ast.parse()` refuses source text containing an embedded NUL
-    outright, so no escaping strategy can make it safe; reject it fail-loud
-    instead of emitting text guaranteed not to parse.
-
-    caller-supplied `skill_name` reached
-    `compose_producer_module`'s docstring unescaped (every sibling value
-    goes through `_py_str_literal`/`_pascal_case` first), so a value
-    containing `\"\"\"` could break out of the docstring and leave the
-    remainder of the string as live module source — a correctness/
-    robustness defect (the malformed module fails to parse, since the
-    docstring is emitted ahead of the mandatory `from __future__ import
-    annotations`), not a confirmed code-execution path.
-
-    A NUL byte survived all three
-    `.replace()` calls unchanged and the resulting text always fails to
-    parse (`SyntaxError` on this interpreter); and CR / CRLF / U+2028 /
-    U+2029 survived unescaped, each rendering as a line break and violating
-    this function's own single-visual-line contract.
-    """
     if "\x00" in value:
         raise ValueError("_docstring_safe: value must not contain a NUL byte")
     escaped = value.replace("\\", "\\\\")

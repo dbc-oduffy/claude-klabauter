@@ -1,13 +1,3 @@
-"""Unit tests for the ``decision_guides`` section porter's records seam.
-
-Purpose: prove ``_query_decision_guide_records``/``collect`` resolve records via the
-in-process ``ceremony.records_query.query_records`` call (post node-subprocess
-retirement) rather than spawning ``node bin/query-records.js`` — exercised over a real
-``tmp_path`` worktree fixture, not a subprocess mock, since there is no subprocess left
-to mock.
-
-Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P15
-"""
 
 from __future__ import annotations
 

@@ -1,12 +1,3 @@
-"""Tests for `directives_commit_tail.compute_publish_lag_advisory` and its
-`render_final_summary` wiring (DR-335 call site (b)).
-
-Spec backlink: docs/decisions/DR-335-publish-lag-is-surfaced-not-shortened.md
-
-Mirrors `test_directives_commit_tail_push_status.py`'s style: no real git
-subprocess, `skew.publish_lag`/`skew.publish_lag_message` monkeypatched
-directly so this file stays on the fast tier.
-"""
 
 from __future__ import annotations
 

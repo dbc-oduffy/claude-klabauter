@@ -96,8 +96,6 @@ def test_rejects_fleet_authored_carrying_content_hash_instead_of_authority():
 
 
 def test_rejects_per_repo_record_with_extra_content_hash_key():
-    """additionalProperties:false strictness proof — a well-formed envelope
-    plus an extra key from another variant must reject."""
     assert not zod_safe_parse_ok(
         ScopedEmission,
         {

@@ -31,8 +31,6 @@ from coordinator_core.workstream_complete import apply as wsc_apply
 
 
 def test_every_consumes_manifest_member_is_allowlisted() -> None:
-    """The completion-family entry must cover the whole manifest — no
-    dispatchable verb is left un-admitted."""
     allowed = ASSEMBLER_DISPATCHABLE.get("workstream_complete", frozenset())
     for cli_name in wsc_apply._CLI_DISPATCH:
         assert cli_name in allowed, (
@@ -65,10 +63,6 @@ def test_resolve_cli_reaches_nothing_when_control_denies(
 def test_load_cli_module_denial_reaches_no_module_load(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Proves the pre-validation property one level up: `_load_cli_module`
-    (the actual dispatch entry point `_dispatch_directive` calls) refuses
-    via `_resolve_cli`'s admission check before ever caching or executing
-    a module — no partial dispatch side effect."""
     monkeypatch.setattr(apply_base, "ASSEMBLER_DISPATCHABLE", types.MappingProxyType({}))
     with pytest.raises(ApplyBaseUnrecognizedDirective):
         wsc_apply._load_cli_module("wsc-coverage-gate-runner")
@@ -78,12 +72,6 @@ def test_load_cli_module_denial_reaches_no_module_load(
 def test_admission_pre_pass_refuses_whole_run_before_any_directive_dispatches(
     tmp_path,
 ) -> None:
-    """F1 (cold review 2026-08-19): an un-admitted `cli`, sequenced SECOND
-    in a two-directive list, must fail the WHOLE run before any directive
-    dispatches — including the FIRST, individually-resolvable directive.
-    The un-admitted entry sitting second is the point: a first-position
-    variant would prove nothing about whole-run pre-validation, since a
-    per-directive halt would already refuse it."""
     directives = [
         {"id": "d1", "cli": "wsc-coverage-gate-runner", "args": []},
         {"id": "d2", "cli": "not-a-real-cli-name", "args": []},

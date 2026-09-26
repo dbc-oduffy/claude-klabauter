@@ -61,10 +61,6 @@ from coordinator_core.bash_guards._guard_coverage import (
 )
 from coordinator_core.search import answer as _answer
 
-# The C1/C2 vocabulary (docs/plans/2026-08-22-...md rows C1/C2), whatever the
-# flags. Order does not matter -- membership is basename-based via
-# `token_matches_binary`, which already resolves argv[0] the way a real
-# dispatch would (path prefix, .exe suffix, etc).
 READ_BASENAMES: Tuple[str, ...] = ("cat", "head", "tail", "sed", "ls")
 
 _REDIRECT_OR_SUBSTITUTION_TOKENS = {
@@ -80,18 +76,12 @@ _REDIRECT_OR_SUBSTITUTION_TOKENS = {
 
 _GLOB_OR_BRACE_RE = re.compile(r"[*?\[\]{}]")
 
-# `sed -n '<a>,<b>p'` / `sed -n '<a>p'`, 1-indexed inclusive, `$` accepted as
-# the end bound (C1 body). Quotes are already stripped by the tokenizer.
 _SED_RANGE_RE = re.compile(r"^\d+(,(\d+|\$))?p$")
 
 _LS_ALLOWED_FLAG_CHARS = frozenset("a1")
 
 
 def _has_redirect_or_substitution(tokens: Sequence[str]) -> bool:
-    """C1/C2's shared operand fail-closed check: decline, by name, any
-    first-segment token that is a redirection or substitution operator or
-    contains one -- checked before any per-shape parsing, exactly as both
-    chunk bodies require."""
     for tok in tokens:
         if tok in _REDIRECT_OR_SUBSTITUTION_TOKENS:
             return True
@@ -176,7 +166,6 @@ def _parse_ls_args(args: Sequence[str]) -> Tuple[bool, List[str]]:
 
 
 def _parse_sed_args(args: Sequence[str]) -> Tuple[bool, bool, List[str]]:
-    """Returns (has_dash_n, unmodelled_other_flag, non_flag_tokens)."""
     has_n = False
     unmodelled = False
     nonflag: List[str] = []
@@ -192,18 +181,6 @@ def _parse_sed_args(args: Sequence[str]) -> Tuple[bool, bool, List[str]]:
 
 
 def decline_cause(cmd: str, family: str) -> str:
-    """Bucket WHY a read-shaped command that `plan_for` declined is not
-    served, per the C1/C2 vocabulary. Only meaningful for a command that
-    already tested True under `is_read_shaped`; called only on the
-    remainder (see `measure_split`).
-
-    Bucket names, in the order they are checked:
-      unparseable, shell_construct, redirect_or_substitution, glob_or_brace,
-      unmodelled_flag, missing_operand, multiple_operands, sed_program_shape,
-      nonexistent_path, not_a_directory, not_a_regular_file,
-      not_yet_implemented (structurally servable per the C1/C2 model; today's
-      decline is only because that source has not shipped yet).
-    """
     toks = tokenize_full_command(cmd)
     if toks is None:
         return "unparseable"
@@ -252,10 +229,10 @@ def decline_cause(cmd: str, family: str) -> str:
         if len(operands) > 1:
             return "multiple_operands"
         if not operands or operands == ["-"]:
-            return "not_yet_implemented"  # bare `ls` / `ls -a` of cwd
+            return "not_yet_implemented"
         operand_paths = operands
         require_dir = True
-    else:  # cat, head, tail
+    else:
         if not operands or "-" in operands:
             return "missing_operand"
         if family in ("head", "tail") and len(operands) > 1:
@@ -280,8 +257,6 @@ def decline_cause(cmd: str, family: str) -> str:
 
 @dataclass
 class SplitReport:
-    """The whole measurement: corpus size, read-shaped share, answered
-    share, and the remainder's cause buckets."""
 
     corpus_size: int
     read_shaped_count: int
@@ -315,9 +290,6 @@ def _pct(numerator: int, denominator: int) -> float:
 
 
 def measure_split(commands: Sequence[str]) -> SplitReport:
-    """Run the whole measurement over `commands`: which are read-shaped,
-    of those how many the REAL `search.answer.plan_for` answers right now,
-    and -- for the remainder -- the decline-cause bucket distribution."""
     family_counts: Dict[str, int] = {}
     cause_counts: Dict[str, int] = {}
     read_shaped = 0

@@ -1,27 +1,3 @@
-"""
-coordinator_core.ops.tests.test_cutover_gate_schema_resolution
-
-Standalone unit tests for coordinator_core.ops.cutover_gate.resolve_cutover_schema
-— the cross-repo DoE schema resolution seam (C4c). Distinct from
-test_cutover_gate_derivation.py, which covers the C4a derivation function
-only; this file never imports or exercises `derive`.
-
-Every test builds its own throwaway git repo shaped like a DoE-claude clone
-under tmp_path — nothing here touches the real DoE-claude clone or the real
-vendored/authored cutover.schema.json.
-
-Coverage:
-    (a) a resolvable clone + valid ref returns the parsed JSON schema dict
-    (b) an explicit doe_repo_path override bypasses resolve_doe_repo_path()
-    (c) resolve_doe_repo_path() returning None raises
-        CutoverSchemaResolutionError (clone unresolvable)
-    (d) a ref the schema does not exist at (bad ref / schema absent at that
-        commit) raises CutoverSchemaResolutionError
-    (e) a non-git directory raises CutoverSchemaResolutionError
-    (f) malformed JSON at the resolved ref raises CutoverSchemaResolutionError
-
-Spec backlink: DoE-claude:pln-cutover-state-machine-a-phase--96db57 § C4c
-"""
 
 from __future__ import annotations
 
@@ -38,8 +14,6 @@ from coordinator_core.ops.cutover_gate import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -66,7 +40,6 @@ def _git(repo: Path, *args: str) -> None:
 
 @pytest.fixture()
 def fake_doe(tmp_path: Path) -> Path:
-    """A throwaway git repo shaped like a DoE clone: coordinator/schemas/cutover.schema.json at HEAD."""
     if shutil.which("git") is None:
         pytest.skip("git not available")
     repo = tmp_path / "DoE-fake"

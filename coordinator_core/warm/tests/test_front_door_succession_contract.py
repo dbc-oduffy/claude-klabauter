@@ -45,7 +45,6 @@ from coordinator_core.warm.front_door import (
 
 
 class _Resp(io.BytesIO):
-    """Minimal `urlopen`-shaped response: context manager, `.status`, `.read()`."""
 
     def __init__(self, body: bytes, status: int = 200) -> None:
         super().__init__(body)
@@ -59,7 +58,6 @@ class _Resp(io.BytesIO):
 
 
 def _opener(body, status: int = 200, *, raises: Exception | None = None):
-    """Build an opener returning *body* (bytes, or an object JSON-encoded)."""
     if isinstance(body, (dict, list)):
         body = json.dumps(body).encode("utf-8")
 
@@ -72,7 +70,6 @@ def _opener(body, status: int = 200, *, raises: Exception | None = None):
 
 
 def test_the_conforming_holder_body_is_recognized():
-    """The exact shape the contract table names: 2xx, UTF-8 JSON, the marker."""
     got = probe_existing_holder(
         FIXED_PORT, opener=_opener({DOOR_PROTOCOL_VERSION_KEY: DOOR_PROTOCOL_VERSION})
     )
@@ -84,9 +81,6 @@ def test_the_conforming_holder_body_is_recognized():
 
 
 def test_a_holder_may_identify_itself_alongside_the_marker():
-    """Extra keys are ignored, so a non-door holder can say what it is. Pinned
-    because the contract invites it ("a holder may identify itself alongside the
-    marker") and a future strict-schema check here would break DoE silently."""
     body = {
         DOOR_PROTOCOL_VERSION_KEY: DOOR_PROTOCOL_VERSION,
         "holder": "doe-http-hook-forwarder",
@@ -97,9 +91,6 @@ def test_a_holder_may_identify_itself_alongside_the_marker():
 
 @pytest.mark.parametrize("version", [1, 2, 99])
 def test_any_integer_version_is_recognized(version: int):
-    """A bumped successor must still be recognized, never misread as foreign.
-    This is why the contract says do NOT bump the version to force a
-    re-election -- the bump is not a fleet restart lever."""
     got = probe_existing_holder(
         FIXED_PORT, opener=_opener({DOOR_PROTOCOL_VERSION_KEY: version})
     )
@@ -107,17 +98,12 @@ def test_any_integer_version_is_recognized(version: int):
 
 
 def test_the_shipped_payload_helper_satisfies_the_contract():
-    """`door_health_payload()` is what our own endpoint publishes; if it ever
-    stopped satisfying the predicate a foreign implementer would be held to a
-    shape our own door does not meet."""
     assert is_own_door_health_payload(door_health_payload())
 
 
 @pytest.mark.parametrize(
     "name,kwargs",
     [
-        # The exact failure DoE's forwarder produced before this contract was
-        # named: POST-only, no /health, 501 to GET.
         ("501_unsupported_method", {"body": b"Unsupported method ('GET')", "status": 501}),
         ("404_no_health_route", {"body": b"", "status": 404}),
         ("2xx_but_no_marker", {"body": {"ok": True}}),
@@ -128,17 +114,12 @@ def test_the_shipped_payload_helper_satisfies_the_contract():
     ],
 )
 def test_a_non_conforming_holder_is_not_recognized(name: str, kwargs: dict):
-    """Every one of these is a ForeignHolderError upstream, and each must stay
-    that way: a defer to a process that is not serving the transport is the
-    silent misroute the whole discrimination exists to prevent."""
     assert probe_existing_holder(FIXED_PORT, opener=_opener(**kwargs)) is None, (
         f"{name} must NOT be recognized as a conforming holder"
     )
 
 
 def test_an_unreachable_or_hung_holder_is_not_recognized():
-    """Connection refused, timeout, or any other raise -- the probe never raises
-    and never recognizes."""
     assert (
         probe_existing_holder(FIXED_PORT, opener=_opener(b"", raises=OSError("refused")))
         is None
@@ -146,8 +127,6 @@ def test_an_unreachable_or_hung_holder_is_not_recognized():
 
 
 def test_the_probe_targets_the_health_path_on_the_given_port():
-    """The URL is half the contract DoE builds against -- pin it, so a change
-    here cannot silently strand a conforming holder on the old route."""
     from coordinator_core.warm.front_door import bind_host
     from coordinator_core.warm.supervisor import HEALTH_PATH
 

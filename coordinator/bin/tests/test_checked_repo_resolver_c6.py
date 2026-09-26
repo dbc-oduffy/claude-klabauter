@@ -55,8 +55,6 @@ if _LIB_DIR not in sys.path:
 
 
 def _load_module(filename: str, modname: str):
-    """Load one of the hyphenated bin/ scripts as an importable module by
-    file path (hyphens in the filename make a bare `import` impossible)."""
     path = os.path.join(_BIN_DIR, filename)
     spec = importlib.util.spec_from_file_location(modname, path)
     module = importlib.util.module_from_spec(spec)
@@ -76,9 +74,6 @@ def _verdict(verdict: str, resolved_root, sid="sess-x", session_root=None):
 
 
 class TestQueryHandoffColumnsResolver(unittest.TestCase):
-    """query-handoff-columns.py's `_resolve_repo_root` -- an ACTIVE PEER
-    SURFACE re-read at HEAD immediately before this repoint (three commits
-    landed on it the same day)."""
 
     module = _load_module("query-handoff-columns.py", "c6_query_handoff_columns")
 

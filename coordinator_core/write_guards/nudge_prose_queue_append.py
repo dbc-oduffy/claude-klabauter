@@ -105,22 +105,14 @@ from coordinator_core.write_guards.nudge_prose_queue_creation import (
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
-PRIORITY = 170  # deny-offer band; next slot after 160 (see nudge_new_sh_file_naked_python.py)
+PRIORITY = 170
 
-#: Read cap for Edit/MultiEdit whole-file reconstruction, matching the
-#: sibling nudge_baton_body_bar's cap -- these are small text queue files.
 _MAX_WHOLE_FILE_BYTES = 1024 * 1024
 
 #: Reason-shaped punt, following the COORDINATOR_QUEUE_PUNT /
 #: COORDINATOR_BATON_BODY_PUNT convention for advisory/deny-offer guards in
-#: this package -- a non-trivial reason (>= 12 chars) set BEFORE launch
-#: suppresses this advisory on future writes; this guard never blocks
-#: regardless of what this var holds.
 _ESCAPE_HATCH_ENV_VAR = "COORDINATOR_PROSE_QUEUE_APPEND_PUNT"
 
-#: Forthcoming fleet migration op named by DR-115 § PM direction (C) -- not
-#: yet landed as of this module's authoring; verified absent from disk.
-#: Do not invent an invocation syntax for a script that does not exist.
 _TRANSFORMER_PATH = "coordinator_core/ops/fleet/migrate_prose_queue.py"
 
 
@@ -158,8 +150,6 @@ def _apply_one_edit(
 def _reconstruct_pre_and_post(
     tool_name: str, tool_input: Dict[str, Any], resolved_path: str
 ) -> Optional[tuple]:
-    """Return (pre_content, post_content) for the entry-count delta, or
-    ``None`` on any reconstruction failure (skip the advisory)."""
     if tool_name == "Write":
         pre = _read_file_safely(resolved_path)
         if pre is None:
@@ -240,8 +230,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
 
         # --- existence gate: only an ALREADY-EXISTING legacy queue is an
-        #     append target; a nonexistent target is the creation-deny
-        #     sibling's concern, never this one's ---
         resolved = file_path
         if not os.path.isabs(resolved):
             cwd = payload.get("cwd")
@@ -296,6 +284,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         }
     except Exception:
-        # Fail-OPEN on any unexpected error -- this guard advises only on a
-        # positive append match, never on an error.
         return None

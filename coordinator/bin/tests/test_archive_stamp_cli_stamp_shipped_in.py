@@ -41,16 +41,6 @@ _BIN_DIR = Path(__file__).resolve().parent.parent
 
 @dataclass(frozen=True)
 class _StubStampOutcome:
-    """Minimal stand-in shaped like coordinator_core.archive_stamp.StampOutcome
-    (a frozen dataclass, not a bare int) — the real return type since chunk
-    C0. A stub that returned bare `0` here is exactly why the P0
-    (archive-stamp-cli returning the envelope itself as its process exit
-    status) went unnoticed by this suite; this stub must be envelope-shaped
-    so `sys.exit(main(...))` receiving the envelope instead of `.exit_code`
-    would fail these tests.
-
-    Regression test.
-    """
 
     exit_code: int
     applied: bool = False
@@ -76,9 +66,6 @@ _cli = _load_cli_module()
 
 
 class _RecordingStampShippedInMod:
-    """Stand-in for coordinator_core.archive_stamp — records the exact
-    kwargs stamp_shipped_in was called with, so each test can assert the
-    argv -> call-shape translation without a real claude-klabauter checkout."""
 
     def __init__(self):
         self.calls: list[dict] = []
@@ -109,8 +96,6 @@ class StampShippedInArgvParsingTest(unittest.TestCase):
         _cli._import_module = self._orig_import_module
 
     def test_bare_path_no_flags_defaults_to_scope_derived(self):
-        """No --sha, no --kind: must default to kind='scope-derived' and must
-        NOT raise TypeError (the regression that matters)."""
         rc = _cli.main(["stamp-shipped-in", "state/handoffs/h.md"])
         self.assertEqual(rc, 0)
         self.assertEqual(
@@ -139,12 +124,6 @@ class StampShippedInArgvParsingTest(unittest.TestCase):
         )
 
     def test_whitespace_only_sha_defaults_to_scope_derived(self):
-        """A whitespace-only --sha must default the same as an absent --sha
-        (kind='scope-derived'), mirroring stamp_shipped_in's own
-        `override = sha.strip() if sha else None` normalization
-        (coordinator_core/archive_stamp.py:589). Bare `sha` truthiness would
-        pick 'ship-commit' here while the engine strips the sha to '' and
-        rejects the call — this is the desync this test guards against."""
         rc = _cli.main(
             ["stamp-shipped-in", "state/handoffs/h.md", "--sha", "   "]
         )
@@ -228,19 +207,12 @@ class StampShippedInArgvParsingTest(unittest.TestCase):
         self.assertEqual(self.stub.calls, [])
 
     def test_returns_exit_code_int_not_the_stamp_outcome_object(self):
-        """Regression for the P0: main() must return the StampOutcome
-        envelope's `.exit_code` int, never the envelope itself — the CLI is
-        invoked as `sys.exit(main(sys.argv[1:]))`, and sys.exit() on a
-        non-int/non-None object prints its repr() to stderr and always exits
-        1, making success and failure indistinguishable."""
         rc = _cli.main(["stamp-shipped-in", "state/handoffs/h.md"])
         self.assertIsInstance(rc, int)
         self.assertNotIsInstance(rc, _StubStampOutcome)
         self.assertEqual(rc, 0)
 
     def test_nonzero_exit_code_is_propagated(self):
-        """A failing stamp_shipped_in (exit_code=1) must surface as rc == 1,
-        not be masked by an always-1 bug nor silently swallowed to 0."""
 
         class _FailingStub(_RecordingStampShippedInMod):
             def stamp_shipped_in(self, *args, **kwargs):

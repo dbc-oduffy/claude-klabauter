@@ -1,21 +1,3 @@
-"""`check_destructive_rm`'s dirty-work probe costs ONE `git status` per repo root,
-not one per target.
-
-WHY THIS EXISTS. The dirty-work branch issued `git status --porcelain -- <target>`
-once per rm target, so the ordinary `rm a.py b.py c.py` paid three `git status`
-spawns where one answers all three -- `git status` takes many pathspecs. This guard
-runs on EVERY Bash dispatch from every session on a shared box, which is what makes
-a per-target spawn worth removing even though the per-command N is small.
-
-WHAT MUST NOT REGRESS, and why this file pins spawn count AND behaviour together:
-the branch being optimised is the one that stops `rm` from destroying a peer's
-uncommitted work. Batching that probe is only acceptable while every target still
-gets its own correct answer, so `test_each_target_keeps_its_own_status` is not a
-nicety -- a batch that reported one target's dirt for another, or lost a target's
-rows entirely, would let a real deny through. `_attribute_porcelain` returns None
-rather than guess on a shape it cannot parse exactly, and the caller then pays the
-un-batched spawn; that fallback is the reason this is safe to do at all.
-"""
 
 from __future__ import annotations
 
@@ -27,8 +9,6 @@ import pytest
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -68,8 +48,6 @@ def _repo_with_dirty_files(tmp_path, count: int):
 
 
 def _count_status_spawns(monkeypatch, root: str, targets: list[str]):
-    """Run the guard with a counting wrapper around the module's own `_run_git`,
-    so the ladder behaves exactly as in production and the count is of REAL spawns."""
     original = dc._run_git
     status_calls: list[tuple] = []
 
@@ -107,11 +85,7 @@ def test_one_target_and_many_targets_cost_the_same(tmp_path, monkeypatch):
 
 
 def test_each_target_keeps_its_own_status(tmp_path):
-    """THE SAFETY LEG. Batching must not blur one target's dirt into another's.
-    Only the dirty target's rows may be attributed to it, and a clean sibling in
-    the same batch must come back clean."""
     root, targets = _repo_with_dirty_files(tmp_path, 3)
-    # Commit the middle target so it is CLEAN while its siblings stay dirty.
     _git("add", os.path.relpath(targets[1], root).replace("\\", "/"), cwd=root)
     _git("commit", "-qm", "clean-one", cwd=root)
 
@@ -132,8 +106,5 @@ def test_each_target_keeps_its_own_status(tmp_path):
 
 
 def test_unparseable_shapes_decline_rather_than_report_clean():
-    """A rename arrow and a quoted path are the two shapes `_attribute_porcelain`
-    refuses. It must return None -- the caller then re-issues the per-target call --
-    and must never return a table saying the target is clean."""
     assert dc._attribute_porcelain(' M "odd\\303\\251.py"\n', "/repo", ["/repo/odd.py"]) is None
     assert dc._attribute_porcelain("R  old.py -> new.py\n", "/repo", ["/repo/new.py"]) is None

@@ -134,9 +134,6 @@ _CREATIONFLAGS = no_console_creationflags()
 
 _PROG = "normalize-claimed-frontmatter"
 
-# Generator-provenance declaration (C2, generator_provenance.py's AST reader).
-# main() rewrites whichever tracked handoff/plan/decision/review files
-# currently carry a <!-- consumed: --> body marker -- a data-dependent subset
 # of TYPE_TO_GLOB's directories, not a fixed artifact list.
 MUTATES = [
     "state/handoffs/*.md",
@@ -146,22 +143,11 @@ MUTATES = [
     "state/reviews/*.md",
 ]
 
-# DR-054 console-flash guard: suppresses the transient console window Windows
-# spawns for a subprocess.run child when the parent has no console of its
-# own (e.g. this op invoked from a GUI-launched context). No-op on POSIX
-# (getattr falls back to 0). Applied to both `git` subprocess.run calls below.
 
-# shipped_in shape guard: DR-096 (DoE-claude 2026-07-26 ruling) retires this
-# module's own bespoke copy of the value grammar in favor of the single choke
 # point's -- `coordinator_core.shipped_in_tokens._SHA_HEX_RE` /
 # `_NO_COMMIT_TOKEN_RE` (the same shape `stamp_shipped_in` validates a `sha`
-# override against). Accepts a bare hex SHA (7-64 chars) OR the sanctioned
 # substantively-shipped-no-commit:<YYYY-MM-DD> token. Whole-value match via
-# `.fullmatch` below -- no accept-anything-after-the-colon.
 
-# RAG-bait: scan top-level archive/handoffs/ only. tasks/handoffs/archive/ is
-#           a grandfathered example-game-repo-specific path (read-only) -- do NOT add
-#           it here, mirroring the node oracle's own comment verbatim.
 TYPE_TO_GLOB: Dict[str, object] = {
     "handoff": ["state/handoffs", "archive/handoffs"],
     "plan": "docs/plans",
@@ -180,12 +166,6 @@ class _Opts:
 
 
 def parse_args(argv: List[str]) -> _Opts:
-    """Parse argv (post-program-name, i.e. sys.argv[1:] equivalent).
-
-    Mirrors the node oracle's parseArgs(process.argv.slice(2)) contract --
-    this module's main() already receives argv stripped of the
-    interpreter/script-path pair, so no extra slice is needed here.
-    """
     dry_run = False
     root: Optional[str] = None
     types: List[str] = list(TYPE_TO_GLOB.keys())
@@ -208,8 +188,6 @@ def parse_args(argv: List[str]) -> _Opts:
 
 
 def detect_root(specified: Optional[str]) -> str:
-    """Resolve the scan root -- explicit --root, else `git rev-parse --show-toplevel`,
-    else cwd fallback (mirrors the node oracle's detectRoot exactly)."""
     if specified:
         return os.path.abspath(specified)
     toplevel = _show_toplevel()
@@ -217,18 +195,6 @@ def detect_root(specified: Optional[str]) -> str:
 
 
 def normalize_one(file_path: str) -> Optional[Dict[str, object]]:
-    """Flip one file's frontmatter to match its body's consumed-marker, if present.
-
-    Returns None when the file has no parseable frontmatter, no consumed
-    marker, or the marker produces zero field changes. Otherwise returns
-    ``{"rebuilt": <full file text>, "changes": [<human-readable change line>, ...]}``.
-
-    May raise ValueError -- propagated from replace_fm_field/remove_fm_field's
-    block-scalar guard (a `status:`/`deployment_state:`/`gate_dependency:`
-    value that is itself a multi-line YAML block scalar cannot be safely
-    rewritten single-line); callers are responsible for catching this per
-    file so one malformed record doesn't halt the whole scan (see main()).
-    """
     with open(file_path, "r", encoding="utf-8", newline="") as f:
         original = f.read()
 
@@ -245,9 +211,6 @@ def normalize_one(file_path: str) -> Optional[Dict[str, object]]:
 
     current_status = read_fm_field(split.fm_text, "status")
     current_deployment = read_fm_field(split.fm_text, "deployment_state")
-    # Dual-tolerant read (DR-084 P1 migration window): a record may still
-    # carry the legacy `consumed_at` field if it hasn't been touched since
-    # the rename; either presence means the field doesn't need inserting.
     current_claimed_at = read_fm_field(split.fm_text, "claimed_at") or read_fm_field(
         split.fm_text, "consumed_at"
     )
@@ -271,22 +234,12 @@ def normalize_one(file_path: str) -> Optional[Dict[str, object]]:
         fm_text = insert_fm_field(fm_text, "claimed_at", date, "status")
         changes.append(f"claimed_at: + {date}")
 
-    # gate_dependency is only meaningful while deployment_state is
-    # awaiting_gate. Once flipped to shipped, the field is stale noise --
-    # retire it into blocking_notes (C8: _retire_gate_dependency APPENDS the
-    # full value rather than the former truncated-echo-then-drop) and strip
-    # the key itself (schema requires absence outside awaiting_gate).
     current_gate_dep = read_fm_field(fm_text, "gate_dependency")
     if current_gate_dep is not None:
         fm_text = _retire_gate_dependency(fm_text)
         changes.append(f'gate_dependency: retired to blocking_notes (was "{current_gate_dep}")')
 
     if not current_shipped_in and notes:
-        # C4b: gate the write through the same shape guard schema.js
-        # enforces at validate-time -- refuse (do not write) a
-        # non-conforming value instead of inserting free-text notes
-        # straight into a field the rest of the pipeline treats as a
-        # validated SHA/token.
         is_no_commit_token = bool(_NO_COMMIT_TOKEN_RE.fullmatch(notes))
         is_hex = bool(_SHA_HEX_RE.fullmatch(notes))
         if is_no_commit_token or is_hex:
@@ -315,14 +268,6 @@ def normalize_one(file_path: str) -> Optional[Dict[str, object]]:
 
 
 def walk_dir(abs_dir: str) -> List[str]:
-    """List candidate `.md` files under abs_dir: top-level flat files plus one
-    level into month-subdirs (e.g. archive/handoffs/YYYY-MM/*.md, added by the
-    2026-06-18 month-foldering migration). state/handoffs and the
-    plan/decision/review dirs are flat, so the subdir descent is a harmless
-    no-op there. Mirrors the node oracle's walkDir exactly, including its
-    stat-error-skips-the-entry behavior and its lack of a try/except around
-    the inner (one-level-deep) listdir call.
-    """
     if not os.path.exists(abs_dir):
         return []
     if not os.path.isdir(abs_dir):
@@ -345,13 +290,6 @@ def walk_dir(abs_dir: str) -> List[str]:
 
 
 def get_tracked_files(abs_dir: str, root: str) -> Optional[Set[str]]:
-    """Return the set of git-tracked file paths (absolute) in a given
-    directory. Returns None (no filter) when git is unavailable, since
-    detect_root() already fell back to cwd in that case -- mirrors the node
-    oracle's getTrackedFiles exactly, including the Staff Engineer F5 gate this
-    filter enforces (untracked drafts with a consumed-marker stub are not
-    silently rewritten).
-    """
     try:
         rel_dir = os.path.relpath(abs_dir, root).replace("\\", "/")
         result = subprocess.run(
@@ -425,16 +363,11 @@ def get_tracked_files_batch(dirs: List[str], root: str) -> Dict[str, Optional[Se
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: scan configured record-type directories and flip drifted
-    frontmatter. Mirrors the node oracle's main() shape and its
-    process.exitCode convention (see module docstring's exit-code table)."""
     opts = parse_args(argv)
     root = detect_root(opts.root)
     results: List[Dict[str, object]] = []
     exit_code = 0
 
-    # Collect every (type, dir) pair up front so the tracked-files lookup
-    # below can batch across all of them in one `git ls-files` call instead
     # of one call per TYPE_TO_GLOB directory.
     type_dirs: List[Tuple[str, str]] = []
     for type_ in opts.types:
@@ -448,16 +381,11 @@ def main(argv: List[str]) -> int:
     for _type_, dir_ in type_dirs:
         tracked = tracked_by_dir.get(dir_)
         for file in walk_dir(dir_):
-            # the Staff Engineer F5: skip untracked files silently (tracked is None
-            # means git is unavailable, so we process all files as a
-            # fallback).
             if tracked is not None and os.path.abspath(file) not in tracked:
                 continue
             try:
                 out = normalize_one(file)
             except Exception as err:
-                # the Staff Engineer F1: block-scalar field detected; fail loud with
-                # filename, but keep scanning remaining files.
                 rel = os.path.relpath(file, root).replace("\\", "/")
                 sys.stderr.write(f"ERROR {rel}: {err}\n")
                 exit_code = 1
@@ -469,9 +397,7 @@ def main(argv: List[str]) -> int:
             if not opts.dry_run:
                 with open(file, "w", encoding="utf-8", newline="") as f:
                     f.write(out["rebuilt"])  # type: ignore[arg-type]
-                # DR-276: declared AFTER the write lands, never before —
                 # the contract is a report of what was ACTUALLY written,
-                # not of an intended surface.
                 declare_write(file)
 
     if not results:

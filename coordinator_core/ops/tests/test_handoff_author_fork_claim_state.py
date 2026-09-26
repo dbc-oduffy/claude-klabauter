@@ -68,10 +68,6 @@ def _seed_handoff(
     claimed_at: Optional[str] = None,
     handoff_id: Optional[str] = None,
 ) -> None:
-    """Write a minimal state/handoffs/*.md fixture with optional
-    claimed_by / claimed_at / handoff_id -- adds claimed_at on top of the
-    sibling module's own ``_seed_handoff`` (needed here for recency-based
-    disambiguation)."""
     handoffs_dir.mkdir(parents=True, exist_ok=True)
     lines = ["---", 'title: "Test Handoff"', "status: open"]
     if claimed_by is not None:
@@ -85,7 +81,6 @@ def _seed_handoff(
 
 
 class TestSingleMatchUnchanged:
-    """Exactly one live-claim candidate -> unchanged behaviour (regression floor)."""
 
     def test_single_match_returns_that_candidate(self, tmp_path):
         repo_root = tmp_path / "repo"
@@ -113,23 +108,13 @@ class TestSingleMatchUnchanged:
 
 
 class TestMultiMatchDefectBReproduction:
-    """Reproduces defect B: two live claims for the same session, filename
-    sort order would previously pick the WRONG one (the orphan, whose
-    lexicographically-earlier filename sorted first). Recency now picks the
-    correct (most-recently-claimed) baton instead."""
 
     def test_lexicographic_first_is_the_wrong_orphan_pre_fix_shape(self, tmp_path):
-        """The orphan (older claim, earlier filename) must NOT win merely by
-        sorting first -- this is the exact defect-B shape: an orphan scaffold
-        claimed BEFORE the session's real held baton, whose filename still
-        sorts first."""
         repo_root = tmp_path / "repo"
         _make_git_repo(repo_root)
         handoffs_dir = repo_root / "state" / "handoffs"
         session_id = "sess-orphan-then-real"
 
-        # The orphan: claimed earlier, filename sorts FIRST (old first-match
-        # behaviour would have picked this one).
         _seed_handoff(
             handoffs_dir,
             "2026-08-19_080000_orphan01.md",
@@ -137,7 +122,6 @@ class TestMultiMatchDefectBReproduction:
             claimed_at="2026-08-19T08:00:00Z",
             handoff_id="hnd-orphan-000001",
         )
-        # The real held baton: claimed LATER, filename sorts second.
         _seed_handoff(
             handoffs_dir,
             "2026-08-21_103000_real0001.md",
@@ -153,8 +137,6 @@ class TestMultiMatchDefectBReproduction:
         assert origin_handoff_id == "hnd-real-0000001"
 
     def test_missing_claimed_at_on_either_candidate_raises(self, tmp_path):
-        """Recency cannot decide when a candidate carries no parseable
-        claimed_at -- fails loud rather than silently picking one."""
         repo_root = tmp_path / "repo"
         _make_git_repo(repo_root)
         handoffs_dir = repo_root / "state" / "handoffs"
@@ -169,14 +151,12 @@ class TestMultiMatchDefectBReproduction:
             handoffs_dir,
             "2026-08-20_080000_b.md",
             claimed_by=session_id,
-            claimed_at=None,  # unparseable/absent
+            claimed_at=None,
         )
         with pytest.raises(AmbiguousOriginHandoffError):
             _resolve_origin_handoff(handoffs_dir, session_id, repo_root=repo_root)
 
     def test_tied_claimed_at_raises(self, tmp_path):
-        """Two candidates claimed at the EXACT same instant -- recency ties,
-        fails loud rather than silently picking one."""
         repo_root = tmp_path / "repo"
         _make_git_repo(repo_root)
         handoffs_dir = repo_root / "state" / "handoffs"
@@ -188,15 +168,6 @@ class TestMultiMatchDefectBReproduction:
             _resolve_origin_handoff(handoffs_dir, session_id, repo_root=repo_root)
 
     def test_naive_and_aware_claimed_at_mix_does_not_raise_type_error(self, tmp_path):
-        """code-reviewer (Finding 1). A bare-date claimed_at (e.g.
-        ``2026-06-14``, a real seeded shape -- see
-        test_normalize_claimed_frontmatter.py) parses NAIVE via
-        datetime.fromisoformat, while a ledger-shaped Z-suffixed timestamp
-        parses AWARE. Before the fix, sorting a candidate list mixing the two
-        raised an unhandled TypeError instead of the intended graceful
-        AmbiguousOriginHandoffError/winner resolution. The bare-date
-        candidate here is the older claim, so recency must pick the
-        Z-suffixed (newer) candidate with no raise."""
         repo_root = tmp_path / "repo"
         _make_git_repo(repo_root)
         handoffs_dir = repo_root / "state" / "handoffs"
@@ -223,16 +194,6 @@ class TestMultiMatchDefectBReproduction:
 
 
 class TestMultiMatchSurfacesAsErrReply:
-    """The op boundary (_handler / _handle_stamp) never lets
-    AmbiguousOriginHandoffError escape uncaught.  The two doors diverge on
-    purpose (review: code-reviewer, Finding 2): ``_handler`` has written
-    nothing yet, so it aborts loud with the same {"exit_code": 1, "error":
-    ...} reply shape every other op-level failure in this module uses.
-    ``_handle_stamp``'s target file already exists on disk, so an abort
-    there would leave it permanently unstamped with no signal -- it instead
-    degrades origin_handoff/origin_handoff_id to null and records a
-    "degraded" entry, exactly like its existing origin_plan_id/
-    origin_goal_id ambiguity handling."""
 
     def test_author_mode_returns_err_reply_not_raise(self, tmp_path, monkeypatch):
         repo_root = tmp_path / "repo"
@@ -284,8 +245,6 @@ class TestMultiMatchSurfacesAsErrReply:
                 common_dir,
             )
         )
-        # No abort -- the target file already existed on disk; a hard error
-        # here would have left it permanently unstamped with no signal.
         assert result.get("exit_code") is None
         assert result.get("status") == "ok"
         assert result.get("origin_handoff") is None

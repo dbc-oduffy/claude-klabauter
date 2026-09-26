@@ -216,14 +216,7 @@
 #define BUILD_ENGINE_ROOT_W L"__BUILD_ENGINE_ROOT_W__"
 #endif
 
-/* Sidecar file this door reads its engine root from, in the SAME
- * directory as the running executable (`get_own_directory()` locates it
- * via `GetModuleFileNameW`, never `argv[0]` or the process cwd -- both
- * are caller-controlled and would let an unrelated cwd silently redirect
- * which engine this door talks to). Format, and the ONLY format this
- * reader accepts: exactly one line, the engine root as `build.py` wrote
- * it -- `str(Path(engine_root).resolve())` -- UTF-8, no BOM. A trailing
- * `\r\n`/`\n` is trimmed; anything else on the line is not. */
+
 #define ENGINE_ROOT_SIDECAR_FILENAME L"door.engine-root.txt"
 
 /* Debug/advanced override, checked before the sidecar. Documented in
@@ -276,16 +269,6 @@
 #define DOOR_WIDEN2(x) L##x
 #define DOOR_WIDEN(x) DOOR_WIDEN2(x)
 
-/* SHA-1 (`sha1_hex16`) and the growable byte buffer (`buf_t`,
- * `buf_append*`) now live in `door_core.c`, shared verbatim with the
- * POSIX door. `sha1_hex16` is still byte-identical to Python's
- * `hashlib.sha1(...).hexdigest()[:16]`; that property is now asserted by
- * `door_core_selftest.c` against the published SHA-1 vectors rather than
- * only argued in a comment. */
-
-/* =========================================================================
- * Wide <-> UTF-8, matching Python's own `str.encode("utf-8")`.
- * ========================================================================= */
 
 static char *wide_to_utf8(const wchar_t *w, int *out_len) {
     int needed = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
@@ -293,12 +276,11 @@ static char *wide_to_utf8(const wchar_t *w, int *out_len) {
     char *out = (char *)malloc((size_t)needed);
     if (!out) return NULL;
     WideCharToMultiByte(CP_UTF8, 0, w, -1, out, needed, NULL, NULL);
-    if (out_len) *out_len = needed - 1; /* exclude the NUL WideCharToMultiByte counted */
+    if (out_len) *out_len = needed - 1; 
     return out;
 }
 
-/* One `"NAME":"VALUE"` member of the envelope's `_env` object, comma-led
- * after the first, both halves converted to UTF-8. */
+
 static int env_pair_append_w(buf_t *pairs, const wchar_t *name, const wchar_t *value) {
     int name_len, val_len;
     char *name_u8 = wide_to_utf8(name, &name_len);
@@ -325,13 +307,6 @@ static wchar_t *utf8_to_wide(const char *u8) {
     return out;
 }
 
-/* =========================================================================
- * current_user_sid() -- ports election.py::current_user_sid() verbatim:
- * OpenProcessToken -> GetTokenInformation(TokenUser) -> ConvertSidToStringSidW.
- * Returns a heap wide string (LocalFree'd internally, re-copied to the
- * process heap) or NULL on any failure -- a failure here is a fall-through
- * trigger, never a fatal error.
- * ========================================================================= */
 
 static wchar_t *current_user_sid_w(void) {
     HANDLE token = NULL;
@@ -387,18 +362,14 @@ static wchar_t *current_user_sid_w(void) {
  * docstring's "WHY THE ENGINE ROOT IS RESOLVED AT RUNTIME" note.
  * ========================================================================= */
 
-/* Directory containing THIS running executable (never `argv[0]`, which a
- * caller can spell however it likes via PATH/relative lookup, and never
- * the process cwd, which is the caller's directory, not this binary's
- * install location). Returns 1 and fills `out` (trailing backslash kept)
- * on success. */
+
 static int get_own_directory(wchar_t *out, DWORD out_chars) {
     wchar_t full_path[MAX_PATH * 2];
     DWORD len = GetModuleFileNameW(NULL, full_path, MAX_PATH * 2);
     if (len == 0 || len >= MAX_PATH * 2) return 0;
     wchar_t *last_sep = wcsrchr(full_path, L'\\');
     if (!last_sep) return 0;
-    size_t dir_len = (size_t)(last_sep - full_path) + 1; /* keep the '\\' */
+    size_t dir_len = (size_t)(last_sep - full_path) + 1; 
     if (dir_len >= out_chars) return 0;
     memcpy(out, full_path, dir_len * sizeof(wchar_t));
     out[dir_len] = L'\0';
@@ -424,12 +395,7 @@ static int get_own_directory(wchar_t *out, DWORD out_chars) {
 static wchar_t g_own_basename_w[MAX_PATH];
 static int g_own_basename_ok = 0;
 
-/* Fills `g_own_basename_w` with this running image's own basename, WITHOUT
- * its extension (`cross-repo-memo.exe` -> `cross-repo-memo`), from
- * `GetModuleFileNameW` -- never `argv[0]` (see `get_own_directory`'s own
- * comment for why that distinction is a security requirement, not a style
- * preference, here inherited verbatim). Idempotent; safe to call more than
- * once, though `main` calls it exactly once. */
+
 static void resolve_own_basename(void) {
     wchar_t full_path[MAX_PATH * 2];
     DWORD len = GetModuleFileNameW(NULL, full_path, MAX_PATH * 2);
@@ -447,23 +413,12 @@ static void resolve_own_basename(void) {
     g_own_basename_ok = 1;
 }
 
-/* The basename `fall_through`'s cold script path and the warm request's
- * `entrypoint` field both resolve against -- `g_own_basename_w` when
- * `resolve_own_basename()` succeeded, else the pre-C0 default (see
- * `g_own_basename_ok`'s own comment). Never NULL. */
+
 static const wchar_t *door_entrypoint_basename(void) {
     return g_own_basename_ok ? g_own_basename_w : DOOR_DEFAULT_ENTRYPOINT_W;
 }
 
-/* Reads the sidecar file's single line and trims a trailing `\r`/`\n`
- * (and any other trailing whitespace, defensively -- an editor-saved
- * sidecar with a stray trailing blank line is a plausible operator
- * mistake, not a reason to mismatch every pipe name). Returns a malloc'd,
- * NUL-terminated UTF-8 byte buffer (NOT wide -- the sidecar is written as
- * UTF-8, so this is its content verbatim, no conversion needed for the
- * clone-hash input) and its length, or NULL on any failure -- missing
- * file, empty file, oversized file (sanity ceiling, real engine-root
- * paths are nowhere near this long), or a read error. */
+
 static char *read_sidecar_utf8(const wchar_t *own_dir, size_t *out_len) {
     wchar_t sidecar_path[MAX_PATH * 2];
     if (swprintf(sidecar_path, MAX_PATH * 2, L"%s%s", own_dir,
@@ -581,16 +536,9 @@ static int resolve_engine_root(wchar_t **out_w, char **out_u8, size_t *out_u8_le
     return 1;
 }
 
-/* =========================================================================
- * Windows argv quoting -- the standard algorithm (as used by MSVCRT's own
- * argv parser and Python's `subprocess.list2cmdline`), needed to rebuild a
- * faithful command line for the fallback CreateProcessW call.
- * ========================================================================= */
 
 static int quote_arg_w(buf_t *out_u8, const wchar_t *arg) {
-    /* Builds into out_u8 as UTF-8 -- CreateProcessW's command line is
-     * built as wide text at the call site by converting this buffer back,
-     * which keeps exactly one quoting implementation instead of two. */
+    
     int arg_len_bytes;
     char *arg_u8 = wide_to_utf8(arg, &arg_len_bytes);
     if (!arg_u8) return 0;
@@ -637,12 +585,6 @@ static int quote_arg_w(buf_t *out_u8, const wchar_t *arg) {
     return ok;
 }
 
-/* =========================================================================
- * Caller-declared stdin payload -- mode gate, the platform read primitive,
- * and the hook-mode fail-closed disposition. Full contract in door_core.h;
- * this section is only the Windows-specific half (env-var idiom, the
- * `ReadFile` reader callback, and the write of the shared envelope bytes).
- * ========================================================================= */
 
 /* Set once, at the very top of `main`, from the caller's own declaration
  * (`DOOR_STDIN_MODE_ENV_NAME`) -- never sniffed from the pipe handle (see
@@ -686,26 +628,7 @@ static long door_stdin_read_chunk(void *reader_ctx, char *buf, size_t cap) {
     return (long)got;
 }
 
-/* The wide-argv adapter over `door_argv_declares_params_stdin`
- * (door_core.h) -- the predicate itself is shared with the POSIX door so
- * the two cannot disagree about which argv shapes name this route. Each
- * argument is converted with the same `wide_to_utf8` the request builder
- * uses, rather than a second `wcscmp` spelling of the flag text. A
- * conversion failure is treated as "not declared": this gate only ever
- * chooses the cold leg, so failing it open costs nothing the door was not
- * already going to attempt, and the `-32004` it exists to prevent is
- * unreachable for an argv this door could not even render.
- *
- * Review: overengineering-reviewer -- this converts argv to UTF-8 and
- * discards the result; the request builder in `main()`'s step 6 converts
- * the same argv again, per warm request, on the 105ms hot path. Accepted
- * explicitly rather than threading one shared converted-argv array
- * through the ~20 fall-through exit points between this gate and that
- * builder: that span already frees several other resources (SID, stamp
- * bytes, pipe handles) per exit, and adding a shared array's lifetime
- * across all of them is a `main()`-wide restructuring, not a local edit,
- * for a duplicate conversion of an argv list that is typically a handful
- * of short strings. */
+
 static int door_argv_declares_params_stdin_w(int argc, wchar_t **wargv) {
     if (argc <= 1 || wargv == NULL) return 0;
     const char **argv_u8 = (const char **)calloc((size_t)argc, sizeof(char *));
@@ -725,8 +648,7 @@ static int door_argv_declares_params_stdin_w(int argc, wchar_t **wargv) {
     return declared;
 }
 
-/* Wide-argv adapter over `door_argv_declares_advisory`; fails closed to 0
- * on a conversion failure. */
+
 static int door_argv_declares_advisory_w(int argc, wchar_t **wargv) {
     if (argc <= 1 || wargv == NULL) return 0;
     const char **argv_u8 = (const char **)calloc((size_t)argc, sizeof(char *));
@@ -772,11 +694,7 @@ static int door_basename_declares_stdin_read_w(const wchar_t *basename) {
     return declared;
 }
 
-/* Wide-basename adapter over `door_basename_is_install_class` (door_core.c)
- * -- same shape and the same fail-closed direction as
- * `door_basename_declares_stdin_read_w` immediately above, for the same
- * reason: a name this door cannot even render cannot be proven safe to
- * dial the engine for. */
+
 static int door_basename_is_install_class_w(const wchar_t *basename) {
     int len = 0;
     char *basename_u8 = wide_to_utf8(basename, &len);
@@ -786,19 +704,14 @@ static int door_basename_is_install_class_w(const wchar_t *basename) {
     return is_install_class;
 }
 
-/* Forward declaration -- `write_all` is defined below (used by
- * `emit_indeterminate`, further down still), needed here one section
- * earlier by `emit_hook_deny` immediately below. */
+
 static int write_all(HANDLE h, const char *data, size_t len);
 
-/* The caller's hook payload, kept for `hook_fall_through` -- see the POSIX
- * leg's identical pair for why. */
+
 static const char *g_hook_payload = NULL;
 static size_t g_hook_payload_len = 0;
 
-/* Engine down: pass loudly, never deny -- see `build_hook_pass_loudly_envelope`.
- * Exit 0 either way; if the envelope cannot be built, an empty stdout is a
- * pass, and the stderr line keeps it from being a silent one. */
+
 static int emit_hook_pass_loudly(const char *reason) {
     buf_t event, out;
     const char *event_name = NULL;
@@ -819,16 +732,7 @@ static int emit_hook_pass_loudly(const char *reason) {
     return 0;
 }
 
-/* Same split as `emit_indeterminate` below: the envelope's bytes are built
- * in `door_core.c` (shared, so the two doors cannot drift in what they
- * tell an operator), only the write is Windows-specific. Exit 0, matching
- * the shape every Bash guard in this repo already returns for a decided
- * `deny` verdict -- a nonzero exit here would tell the hook runner THIS
- * PROCESS failed, not that the tool call was denied. On the one failure
- * this cannot recover from (no memory to build 512 bytes), it falls back
- * to the hook contract's OTHER deny signal -- a diagnostic on stderr plus
- * a nonzero exit -- rather than risk an empty stdout reading as "no
- * opinion" (silently allow) on a guard's hot path. */
+
 static int emit_hook_deny(const char *reason) {
     buf_t out;
     if (!buf_init(&out, 512) || !build_hook_deny_envelope(&out, reason)) {
@@ -1020,8 +924,7 @@ static int write_all(HANDLE h, const char *data, size_t len);
  * stdout still denies, because a hook that did not answer must never read as
  * one that allowed. */
 static int hook_fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w) {
-    /* An advisory row stays silent on every failure below, as hook-run.py
-     * does; a guard row keeps the loud envelope. */
+    
     int advisory = door_argv_declares_advisory_w(argc, wargv);
 
     wchar_t script_path_w[MAX_PATH * 2];
@@ -1043,8 +946,7 @@ static int hook_fall_through(int argc, wchar_t **wargv, const wchar_t *engine_ro
         if (advisory) return 0;
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
     }
-    /* The parent's ends must not leak into the child, or the child never sees
-     * EOF on stdin and the parent never sees EOF on stdout. */
+    
     SetHandleInformation(in_w, HANDLE_FLAG_INHERIT, 0);
     SetHandleInformation(out_r, HANDLE_FLAG_INHERIT, 0);
 
@@ -1070,8 +972,7 @@ static int hook_fall_through(int argc, wchar_t **wargv, const wchar_t *engine_ro
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
     }
 
-    /* hook-run reads all of stdin before it writes anything, so writing the
-     * whole payload before reading cannot deadlock on a full pipe. */
+    
     if (g_hook_payload_len > 0) write_all(in_w, g_hook_payload, g_hook_payload_len);
     CloseHandle(in_w);
 
@@ -1145,9 +1046,7 @@ static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w)
     free(cmdline_w);
 
     if (!spawned) {
-        /* Genuinely fatal: not "fast path missed", but "no way at all to
-         * reach the engine". This is the one case the ordinary "no
-         * diagnostic on fallback" rule does not cover. */
+        
         fwprintf(stderr, L"door: could not launch the fallback "
                           L"(python=%s, script=%s) -- cannot fall through\n",
                           PYTHON_BIN_W, script_path_w);
@@ -1162,13 +1061,7 @@ static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w)
     return (int)exit_code;
 }
 
-/* `fall_through` reads `wargv[1..argc-1]` while building the fallback
- * command line -- `wargv` must stay ALIVE for the whole call, and this
- * wrapper is the only place in the file allowed to `LocalFree` it,
- * strictly AFTER `fall_through` returns (see `fall_through`'s own comment
- * for the use-after-free incident that shape fixes). Also frees
- * `engine_root_w` if non-NULL -- `free(NULL)` is a documented no-op, so
- * this is safe to call whether or not `resolve_engine_root()` succeeded. */
+
 static int fall_through_and_free(int argc, wchar_t **wargv, wchar_t *engine_root_w) {
     int rc = fall_through(argc, wargv, engine_root_w);
     LocalFree(wargv);
@@ -1176,15 +1069,6 @@ static int fall_through_and_free(int argc, wchar_t **wargv, wchar_t *engine_root
     return rc;
 }
 
-/* The envelope reader (`parse_response_envelope` and its private
- * helpers) now lives in `door_core.c`, shared verbatim with the POSIX
- * door. It is depth-aware, so stdout CONTENT containing the text
- * `"error"` is never mistaken for a top-level error key -- a case
- * `door_core_selftest.c` covers explicitly. */
-
-/* =========================================================================
- * main
- * ========================================================================= */
 
 /* =========================================================================
  * BOUNDED PIPE I/O
@@ -1261,9 +1145,7 @@ static int fall_through_and_free(int argc, wchar_t **wargv, wchar_t *engine_root
  * never a fall-through. */
 #define DOOR_READ_DEADLINE_MS 40000
 
-/* Milliseconds left of `total_ms` since `started_ticks`, floored at 0.
- * `GetTickCount64` (not `GetTickCount`) so no 49-day wrap arithmetic
- * exists here to get wrong. */
+
 static DWORD remaining_ms(ULONGLONG started_ticks, DWORD total_ms) {
     ULONGLONG elapsed = GetTickCount64() - started_ticks;
     if (elapsed >= (ULONGLONG)total_ms) return 0;
@@ -1341,13 +1223,7 @@ static int write_frame_bounded(HANDLE h, HANDLE ev, const char *data, size_t len
     return 1;
 }
 
-/* Returns 1 iff every byte of `data` was written. Used for the STDOUT and
- * STDERR handles, which are synchronous and are never the pipe -- the
- * pipe's own write goes through `write_frame_bounded` above. On a partial
- * or failed write the caller has NOT delivered a parseable frame -- the
- * server's own `_parse_frame` cannot dispatch a truncated JSON line, so a
- * partial write is safe to treat the same as never having connected at
- * all. */
+
 static int write_all(HANDLE h, const char *data, size_t len) {
     size_t off = 0;
     while (off < len) {
@@ -1387,10 +1263,7 @@ static int write_all(HANDLE h, const char *data, size_t len) {
 static int emit_indeterminate(const char *detail) {
     buf_t out;
     if (!buf_init(&out, 512)) return 1;
-    /* The envelope's BYTES are built in `door_core.c`; only the write of
-     * them is Windows-specific. That split is what keeps the two doors from
-     * drifting in what they tell an operator -- the message an operator has
-     * to act on should not depend on which platform refused. */
+    
     if (build_indeterminate_envelope(&out, detail)) {
         HANDLE hout = GetStdHandle(STD_OUTPUT_HANDLE);
         write_all(hout, out.data, out.len);
@@ -1455,7 +1328,7 @@ static void door_maybe_spawn_server(const wchar_t *engine_root_w, const char *cl
     DWORD n = GetEnvironmentVariableW(L"COORDINATOR_WARM_RUNTIME_BASE", base, MAX_PATH);
     if (n == 0 || n >= MAX_PATH) {
         n = GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH);
-        if (n == 0 || n >= MAX_PATH) return; /* fail open: no base, no spawn */
+        if (n == 0 || n >= MAX_PATH) return; 
     }
 
     wchar_t clone_hash_w[17];
@@ -1490,7 +1363,7 @@ static void door_maybe_spawn_server(const wchar_t *engine_root_w, const char *cl
     if (got > 0) stamp = strtod(stamp_buf, NULL);
     double age = now - stamp;
     if (stamp > 0.0 && age > -DOOR_SPAWN_DEBOUNCE_SECS && age < DOOR_SPAWN_DEBOUNCE_SECS) {
-        /* A recent stamp vouches for an in-flight spawn -- debounced. */
+        
         CloseHandle(h);
         return;
     }
@@ -1530,14 +1403,14 @@ static void door_maybe_spawn_server(const wchar_t *engine_root_w, const char *cl
     LPWCH env_block = GetEnvironmentStringsW();
     wchar_t *new_env = NULL;
     if (env_block) {
-        size_t prefix_len = wcslen(L"PYTHONPATH=") + wcslen(engine_root_w) + 1; /* +1 NUL */
+        size_t prefix_len = wcslen(L"PYTHONPATH=") + wcslen(engine_root_w) + 1; 
         size_t total = prefix_len;
         for (LPWCH p = env_block; *p; ) {
             size_t seg_len = wcslen(p);
             total += seg_len + 1;
             p += seg_len + 1;
         }
-        total += 1; /* final double-NUL terminator */
+        total += 1; 
         new_env = (wchar_t *)malloc(total * sizeof(wchar_t));
         if (new_env) {
             wchar_t *w = new_env;
@@ -1565,36 +1438,20 @@ static void door_maybe_spawn_server(const wchar_t *engine_root_w, const char *cl
         NULL, cmdline, NULL, NULL, FALSE, flags, new_env, engine_root_w, &si, &pi);
     free(new_env);
     if (!spawned) return;
-    /* Fire-and-forget: never wait on the child, never observe its exit. */
+    
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 }
 
 int main(void) {
-    /* argv[0] is not forwarded -- only argv[1:] crosses the wire, per the
-     * protocol this door speaks (module docstring). GetCommandLineW +
-     * CommandLineToArgvW is used instead of the CRT-provided narrow argv
-     * so non-ASCII arguments survive intact regardless of which CRT
-     * startup this build ends up linked against. */
+    
     int argc = 0;
     wchar_t **wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
 
-    /* THE MODE GATE (door_core.h), read once, before anything else in this
-     * function -- including before the `!wargv` check right below, since
-     * `fall_through` itself now reads this flag as its first statement and
-     * must see the caller's declaration regardless of which exit this
-     * function ultimately takes. */
+    
     g_door_hook_mode = door_stdin_mode_is_hook();
 
-    /* THE READ ITSELF, gated on the flag above and nowhere else -- an
-     * ordinary caller (mode not declared) never reaches this block, so its
-     * cost and its blocking hazard are both zero for every existing
-     * invocation (door_core.h's own docs on why this must be a caller
-     * declaration, never a peek). Read BEFORE engine-root resolution
-     * because it depends on none of it, and so that a caller who declared
-     * hook mode gets a decided verdict even when the engine root itself
-     * cannot be resolved -- that failure now denies too, via
-     * `fall_through`'s own hook-mode check. */
+    
     buf_t stdin_payload;
     int have_stdin_payload = 0;
     if (g_door_hook_mode) {
@@ -1720,14 +1577,14 @@ int main(void) {
         return fall_through_and_free(argc, wargv, engine_root_w);
     }
 
-    /* ---- 1. SID ---- */
+    
     wchar_t *sid_w = current_user_sid_w();
     if (!sid_w) {
         free(engine_root_u8);
         return fall_through_and_free(argc, wargv, engine_root_w);
     }
 
-    /* ---- 2. engine token: sha1("engine-stamp:" + stamp bytes)[:16] ---- */
+    
     wchar_t stamp_path[MAX_PATH * 2];
     if (swprintf(stamp_path, MAX_PATH * 2, L"%s\\coordinator_core\\_engine_stamp",
                  engine_root_w) < 0) {
@@ -1773,17 +1630,13 @@ int main(void) {
     sha1_hex16((const unsigned char *)token_input.data, token_input.len, engine_token);
     free(token_input.data);
 
-    /* ---- 3. clone hash: sha1(str(Path(engine_root).resolve()))[:16] ----
-     * `engine_root_u8` IS that resolved string, verbatim -- `build.py`
-     * resolved it once, in Python, when it wrote the sidecar (or the
-     * env-var override supplied it pre-resolved); this file performs no
-     * path canonicalisation of its own. */
+    
     char clone_hash[17];
     sha1_hex16((const unsigned char *)engine_root_u8, engine_root_u8_len, clone_hash);
     free(engine_root_u8);
     engine_root_u8 = NULL;
 
-    /* ---- 4. pipe name ---- */
+    
     wchar_t pipe_name[512];
     int pn_len = swprintf(pipe_name, 512, L"\\\\.\\pipe\\coordinator-core.%s.%hs.%hs",
                            sid_w, clone_hash, engine_token);
@@ -1817,17 +1670,14 @@ int main(void) {
         return fall_through_and_free(argc, wargv, engine_root_w);
     }
 
-    /* One manual-reset event, reused by both the write and the read. Its
-     * creation failing is pre-delivery doubt like any other. */
+    
     HANDLE pipe_event = CreateEventW(NULL, TRUE, FALSE, NULL);
     if (pipe_event == NULL) {
         CloseHandle(pipe);
         return fall_through_and_free(argc, wargv, engine_root_w);
     }
 
-    /* ---- 6. build the request ----
-     * {"jsonrpc":"2.0","id":1,"method":"invoke.from_argv",
-     *  "params":{"argv":[...],"cwd":"..."},"_engine_token":"..."} */
+    
     buf_t req;
     if (!buf_init(&req, 4096)) {
         CloseHandle(pipe_event);
@@ -1921,7 +1771,7 @@ int main(void) {
         }
     }
 
-    /* Closes `params`, then the envelope-level `_engine_token`. */
+    
     req_ok &= buf_append_cstr(&req, "},\"_engine_token\":\"");
     req_ok &= buf_append_cstr(&req, engine_token);
     req_ok &= buf_append_cstr(&req, "\"");
@@ -1964,10 +1814,7 @@ int main(void) {
      * one; a truncated path is the worst possible value to stamp (the
      * `_settings_home` block's own prior rationale, unchanged here). */
     if (req_ok) {
-        /* Pairs are collected into `env_pairs` first and the `_env` object is
-         * opened in exactly one place below, so "no name resolved" still omits
-         * `_env` entirely without either source of names tracking whether the
-         * other already opened it. */
+        
         buf_t env_pairs;
         req_ok &= buf_init(&env_pairs, 256);
 
@@ -1978,7 +1825,7 @@ int main(void) {
         for (size_t i = 0; i < kDoorEnvCount && req_ok; i++) {
             DWORD val_len = GetEnvironmentVariableW(kDoorEnvNames[i], NULL, 0);
             if (val_len <= 1) {
-                continue; /* unset or empty -- omit, never an empty string */
+                continue; 
             }
             wchar_t *val_w = (wchar_t *)malloc((size_t)val_len * sizeof(wchar_t));
             if (val_w == NULL) {
@@ -1987,8 +1834,7 @@ int main(void) {
             }
             DWORD got = GetEnvironmentVariableW(kDoorEnvNames[i], val_w, val_len);
             if (got == 0 || got >= val_len || val_w[0] == L'\0') {
-                /* Did not fit the probed buffer, or raced to empty --
-                 * omit rather than stamp a truncated value. */
+                
                 free(val_w);
                 continue;
             }
@@ -2075,11 +1921,7 @@ int main(void) {
     LocalFree(wargv);
 
     if (!req_ok) {
-        /* Pre-delivery: nothing has been written yet, so falling through
-         * is unconditionally safe. `wargv` was already freed above (its
-         * lifetime ends at request-build time regardless of outcome), so
-         * this re-parses argv fresh via `do_fallback` rather than passing
-         * a stale/NULL pointer `fall_through` would dereference. */
+        
         CloseHandle(pipe_event);
         CloseHandle(pipe);
         free(req.data);
@@ -2148,10 +1990,7 @@ int main(void) {
                 return emit_indeterminate(
                     "connection closed or read failed after delivery");
             }
-            /* The deadline, not the peer: the server accepted this request
-             * and has said nothing since. It is very likely still running
-             * it, which is the whole reason this is a refusal and not a
-             * retry. */
+            
             char detail[160];
             snprintf(detail, sizeof(detail),
                      "no response within %us of delivery -- the door stopped "
@@ -2160,7 +1999,7 @@ int main(void) {
             return emit_indeterminate(detail);
         }
 
-        if (resp.len > (16u << 20)) { /* 16MB sanity ceiling -- malformed */
+        if (resp.len > (16u << 20)) { 
             free(resp.data); CloseHandle(pipe_event); CloseHandle(pipe);
             return emit_indeterminate("response exceeded the sanity size ceiling");
         }
@@ -2180,9 +2019,7 @@ int main(void) {
         free(resp.data);
 
         if (success) {
-            /* Fast path succeeded -- `engine_root_w` was only ever needed
-             * for a fallback that is not happening; free it here (this
-             * process is about to exit regardless, but tidy is cheap). */
+            
             free(engine_root_w);
             HANDLE hout = GetStdHandle(STD_OUTPUT_HANDLE);
             HANDLE herr = GetStdHandle(STD_ERROR_HANDLE);
@@ -2196,13 +2033,10 @@ int main(void) {
         free(rf.stderr_buf.data);
 
         if (have_error && is_provably_undispatched(error_code)) {
-            /* This specific code proves the server never invoked a
-             * handler for the delivered request -- safe to fall through,
-             * same as a pre-delivery failure. `engine_root_w` stays alive
-             * for `do_fallback` below -- do not free it on this path. */
+            
             goto do_fallback;
         }
-        free(engine_root_w); /* refusing, not falling through -- no further use */
+        free(engine_root_w); 
         return emit_indeterminate(
             have_error
                 ? "server returned an error that does not prove the op was never dispatched"
@@ -2211,12 +2045,7 @@ int main(void) {
     }
 
 do_fallback: {
-        /* `wargv` was already `LocalFree`d above (its lifetime ends at
-         * request-build time regardless of outcome) -- re-parsed fresh
-         * here rather than reusing a stale pointer. `engine_root_w`, by
-         * contrast, was deliberately kept alive this whole function (see
-         * its declaration comment) and is still valid here -- this is
-         * its last use, freed below. */
+        
         int fb_argc = 0;
         wchar_t **fb_argv = CommandLineToArgvW(GetCommandLineW(), &fb_argc);
         if (!fb_argv) { free(engine_root_w); return 1; }

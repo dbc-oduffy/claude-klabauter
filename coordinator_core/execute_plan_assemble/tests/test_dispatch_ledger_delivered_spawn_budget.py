@@ -1,23 +1,3 @@
-"""coordinator_core/execute_plan_assemble/tests/test_dispatch_ledger_delivered_spawn_budget.py
-
-Spawn-count regression for `close_out_and_stamp.py::_dispatch_ledger_delivered`
-(legacy Dispatch Ledger fallback oracle), following the exact-equality
-`spawn_count_budget` convention every row in
-`coordinator_core/benchmarks/budget-manifest.json` carries -- an exact-count
-ceiling per call shape, not a latency figure (see `ceremony.wsc_tail`'s row
-for a live worked example; the row this docstring used to cite,
-`overrides["ceremony.scoped_git_commit"]`, was deleted at K-045).
-
-WHY A SPAWN COUNT, NOT A LATENCY FIGURE: this repo runs 50-70 concurrent LLM
-sessions at any given moment (CLAUDE.md's "Load norm" section) -- a wall-clock
-assertion would be noise. Spawn count is deterministic under load and only
-moves when the code changes how many `git` subprocesses it issues per call
-shape.
-
-Found via: state/audits/2026-08-15-fleet-composed-op-spawn-census.md row 18,
-reverified in state/audits/2026-08-15-fleet-census-reverification-at-head.md
-"Rows surviving intact and unguarded".
-"""
 from __future__ import annotations
 
 import subprocess
@@ -58,23 +38,6 @@ def _manifest_spawn_budget() -> dict:
 
 
 def _count_git_calls(fn):
-    """Patches the real `subprocess` module's own `Popen` attribute -- not a
-    per-module copy, and not `run` -- so this sees every spawn regardless of
-    which module or which API reaches it: `_dispatch_ledger_delivered`'s two
-    sites route through `coordinator_core.git.run.run_git`, which does its own
-    function-local `import subprocess` (G7's shared-runner migration), so a
-    patch scoped to `coas.subprocess` would miss both calls entirely.
-
-    WHY `Popen` AND NOT `run`. This counter watched `subprocess.run` until
-    2026-09-03. `56250c56e0` hand-rolled `run_git` over `Popen` so the timeout
-    actually bounds the call on Windows -- a correct change that this counter
-    could not see, so it counted ZERO where it budgets two. The half that
-    budgets zero kept PASSING: an assertion of `spawns == 0` against a counter
-    watching nothing is true no matter how many processes start. Every
-    `subprocess.run`/`.call`/`.check_call`/`.check_output`/`Popen(...)` in the
-    engine constructs a `Popen`, so this is the one chokepoint that cannot be
-    stepped around by an API change -- the same reason
-    `telemetry/spawn_counter.py` counts `subprocess.Popen` rather than `run`."""
     calls = {"n": 0}
     orig = subprocess.Popen
 
@@ -92,8 +55,6 @@ def _count_git_calls(fn):
 
 
 def test_no_committed_rows_spawns_zero_git(tmp_path) -> None:
-    """A Dispatch Ledger table whose rows are all non-`committed <sha>`-
-    shaped never has a sha to check at all -- must spawn zero git."""
     root = tmp_path
     _init_repo(root)
     plan_text = (
@@ -125,11 +86,6 @@ def test_no_committed_rows_spawns_zero_git(tmp_path) -> None:
 
 
 def test_multiple_committed_rows_spawn_exactly_two_git_calls(tmp_path) -> None:
-    """Several rows each citing a `committed <sha>` status must still cost
-    exactly the manifest's `spawn_count_budget.n_committed_rows` subprocess
-    invocations -- ONE batched `git cat-file --batch-check` plus ONE
-    `git rev-list HEAD`, not two spawns per row (pre-fix: 2N spawns for N
-    rows)."""
     root = tmp_path
     _init_repo(root)
 

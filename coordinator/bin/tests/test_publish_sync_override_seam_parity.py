@@ -1,37 +1,3 @@
-"""coordinator/bin/tests/test_publish_sync_override_seam_parity.py — report
-which percolate roots on THIS machine carry a `publish_sync.py` override that
-Claude-klabauter's own dispatch contract would refuse.
-
-WHY THIS EXISTS AT ALL, given `check_publish_sync_contract` already refuses
-fail-closed at round time: that guard fires at the wrong MOMENT, not the wrong
-depth. The drift is introduced here — claude-klabauter adds a keyword-only parameter to
-`coordinator/lib/percolate/publish_sync.py` — and is not detectable until some
-other repo, hours later, runs a round and takes a FATAL. Observed 2026-08-26:
-Claude-klabauter's `sweep_top_level_orphans`/`copy_file`/`renamed_dir_names`/
-`renamed_file_names` additions left BOTH of DoE-claude's copies (`setup/` and
-`coordinator/templates/setup/`, each a contract-only row keeping its own
-resolver ladder) two parameters behind. Their own parity oracle was red on
-precisely this and nobody had run it, because the person who needs it is
-whoever runs the next round in a different repo. A guard that has to be
-remembered is the guard that gets forgotten; this one fires in the tree whose
-change causes the break.
-
-WHAT IT ASSERTS, and the word matters: that every resolvable override WOULD
-NOT REFUSE — never that it is "in sync". A signature-shaped patch satisfies a
-signature oracle while silently not sweeping, which is exactly the trap
-doe-claude-em avoided by porting bodies rather than parameters when they
-unblocked their round. Bodies are out of scope here and must stay out; this
-answers only "would `dispatch_mirror_like` be able to call it".
-
-AST READS ONLY — never imports the override. A percolate root's
-`publish_sync.py` is another repo's file; importing it to read a signature
-executes it, in a test, on a box running 50-70 peer sessions. `ast.parse` over
-a handful of small files costs no process and no import side effect, and is
-strictly cheaper than the `inspect.signature` path the round-time guard takes
-(which is correct THERE — it has already imported the module to call it).
-
-Run: python -m pytest coordinator/bin/tests/test_publish_sync_override_seam_parity.py -q
-"""
 
 from __future__ import annotations
 
@@ -53,9 +19,6 @@ from percolate.publish_sync_contract import (  # noqa: E402
 
 
 def _load_publish_module():
-    """Load `publish.py` for its `_read_doe_root_pointer` rung ladder rather
-    than re-deriving the pointer read here — a second copy of that ladder is
-    the drift this file exists to catch, one layer up."""
     spec = importlib.util.spec_from_file_location(
         "publish_override_seam_parity_under_test", _BIN_DIR / "publish.py"
     )
@@ -68,11 +31,6 @@ def _load_publish_module():
 
 publish = _load_publish_module()
 
-#: Where a percolate root keeps its own copy, relative to the root. Both are
-#: real: `setup/` is the one a round resolves through
-#: `_resolve_publish_sync_module_path`, and `coordinator/templates/setup/` is
-#: the template that seeds the next installed root — a stale template hands the
-#: same refusal to every future consumer, so it is checked identically.
 _OVERRIDE_RELATIVE_PATHS = (
     Path("setup") / "publish_sync.py",
     Path("coordinator") / "templates" / "setup" / "publish_sync.py",
@@ -80,9 +38,6 @@ _OVERRIDE_RELATIVE_PATHS = (
 
 
 def _declared_roots() -> "list[Path]":
-    """Percolate roots resolvable on this box. Today that is the `.doe-root`
-    pointer; the list is a function rather than a constant so a second root
-    joins by being resolvable, not by editing an assertion."""
     roots: "list[Path]" = []
     pointer = publish._read_doe_root_pointer()
     if pointer:
@@ -100,10 +55,6 @@ def _resolvable_overrides() -> "list[Path]":
 
 
 def test_no_resolvable_override_would_refuse_a_round():
-    """The load-bearing assertion. Fails in the tree whose seam change breaks
-    a downstream root, naming the root and the missing parameters — the two
-    facts that made the 2026-08-26 diagnosis a five-minute job once someone
-    finally saw the FATAL."""
     overrides = _resolvable_overrides()
     if not overrides:
         pytest.skip(
@@ -125,17 +76,10 @@ def test_no_resolvable_override_would_refuse_a_round():
 
 
 def test_the_engine_module_satisfies_its_own_contract():
-    """Pins the checker against the module it is checking others by. If this
-    fails, `_accepted_keywords` has drifted from the real signatures and every
-    other verdict in this file is worthless — a green suite that proves
-    nothing is the failure mode a parity oracle is most prone to."""
     assert _would_refuse(publish._ENGINE_PUBLISH_SYNC_PATH) == []
 
 
 def test_a_stale_override_is_caught(tmp_path):
-    """The oracle's own teeth, independent of what happens to be on this box:
-    the exact 2026-08-26 shape — `sync_mirror` two keyword-only parameters
-    behind — must read as would-refuse."""
     stale = tmp_path / "publish_sync.py"
     stale.write_text(
         "def sync_mirror(src, dest, *, copy_file=None, renamed_dir_names=None):\n"
@@ -155,8 +99,6 @@ def test_a_stale_override_is_caught(tmp_path):
 
 
 def test_a_bare_wrapper_does_not_pass_as_acceptance(tmp_path):
-    """`(*args, **kwargs)` binds anything and does nothing — the fail-open the
-    round-time guard names explicitly. It must not read as parity here."""
     wrapper = tmp_path / "publish_sync.py"
     wrapper.write_text(
         "def sync_mirror(*args, **kwargs):\n    pass\n"

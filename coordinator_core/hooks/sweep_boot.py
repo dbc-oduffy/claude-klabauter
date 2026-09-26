@@ -78,12 +78,8 @@ from coordinator_core.win_portability import no_console_creationflags
 
 _FRONTMATTER_KV_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*?)\s*$")
 
-#: Same numbers `session.reap`'s own `.last-reap` cadence marker uses;
-#: deliberately SHORTER than the op's own 12h gate so the op, never this
-#: op, stays authoritative on whether a reap runs.
 _SESSION_REAP_PREGATE_SECONDS = 11 * 3600
 
-#: Env opt-outs, mirrored from the source script.
 _ORIENTATION_SELFHEAL_OFF = "COORDINATOR_ORIENTATION_SELFHEAL_OFF"
 _SESSION_REAP_OFF = "COORDINATOR_SESSION_REAP_OFF"
 
@@ -103,7 +99,7 @@ def _selfheal_forwarders() -> None:
 
         self_heal_forwarders()
     except Exception:
-        pass  # self-heal is best-effort background maintenance; boot must never block on it
+        pass
 
 
 def _read_cache_head(repo_root: str) -> "Optional[str]":
@@ -173,7 +169,7 @@ def _selfheal_orientation_cache(repo_root: "Optional[str]") -> None:
             return
         write_cache(Path(output["cache_file"]), output["output"])
     except Exception:
-        pass  # self-heal is best-effort background maintenance; boot must never block on it
+        pass
 
 
 def _session_reap_due(repo_root: "Optional[str]") -> bool:
@@ -205,13 +201,13 @@ async def _reap_sessions(repo_root: "Optional[str]") -> None:
             common_dir = resolve_git_common_dir(repo_root)
         await _reap_handler({}, repo_root=common_dir)
     except Exception:
-        pass  # self-heal is best-effort background maintenance; boot must never block on it
+        pass
 
 
 @register_op("hooks.sweep_boot")
 async def _handler(params: dict, repo_root=None) -> dict:
     params = payload_of(params)
-    del params  # unused -- see module docstring
+    del params
 
     _selfheal_forwarders()
 

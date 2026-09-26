@@ -46,24 +46,11 @@ from typing import Optional, Sequence
 
 from coordinator_core.diff_scoped_tests import _read_testpaths
 
-#: This repo's test-file convention (basename only), matching
 #: `diff_scoped_tests._TEST_FILE_RE`.
 _TEST_FILE_RE = re.compile(r"^test_(.+)\.py$")
 
 
 def _basename_index(repo_root: str) -> dict:
-    """Build a ``{source_stem: sorted [test file paths]}`` index by walking
-    every configured testpaths root and recording each ``test_*.py`` file
-    found under it, keyed by the stem AFTER the ``test_`` prefix (e.g.
-    ``test_foo.py`` -> key ``foo``).
-
-    Re-derived on every call rather than cached at module scope -- the
-    working tree can change between calls within one process (a repo-root
-    argument makes this testable across many `tmp_path` fixtures in the
-    same test run), and this module's own anti-scope (no I/O beyond
-    filesystem checks) makes a fresh, cheap directory walk the honest
-    choice over a staleness-prone cache.
-    """
     index: dict = {}
     root_path = Path(repo_root)
     for testpath in _read_testpaths(repo_root):
@@ -85,36 +72,11 @@ def _basename_index(repo_root: str) -> dict:
 
 
 def _source_stem(source_path: str) -> str:
-    """The basename convention's lookup key for a changed SOURCE file.
-
-    Strips the ``.py`` extension and applies dash->underscore normalization
-    -- ``coordinator/bin`` CLIs are hyphenated on disk (``some-cli.py``) but
-    their test files follow Python's underscore convention
-    (``test_some_cli.py``), so the raw stem never matches without this
-    normalization.
-    """
     stem = Path(source_path).stem
     return stem.replace("-", "_")
 
 
 def map_source_to_tests(source_path: str, repo_root: Optional[str] = None) -> list:
-    """Every test file this repo's basename convention says covers
-    ``source_path``, sorted, repo-root-relative, POSIX-separated.
-
-    Returns ``[]`` for an unknown/unmappable source file -- a source stem
-    with no ``test_<stem>.py`` anywhere under the configured testpaths is
-    not evidence of "no coverage exists" vs. "coverage exists under a name
-    this convention cannot derive" (Design decision 3); this function makes
-    no claim either way, it only reports what the convention found. Callers
-    combining this across many files (`map_changed_sources`) are the ones
-    that must treat an empty result as the dangerous case.
-
-    Returns EVERY candidate across every testpaths root, never a single
-    "best" pick -- a source file's tests can legitimately live in more than
-    one root (the canonical `workday-complete-step1-validate.py` case: it
-    has covering tests in both `coordinator/tests/` and `coordinator/bin/
-    tests/`), and a map that silently drops one under-runs the gate.
-    """
     root = repo_root if repo_root is not None else "."
     if not source_path or not source_path.strip():
         return []
@@ -126,26 +88,6 @@ def map_source_to_tests(source_path: str, repo_root: Optional[str] = None) -> li
 
 
 def map_changed_sources(paths: Sequence[str], repo_root: Optional[str] = None):
-    """Map every changed SOURCE file in ``paths`` to its covering tests, and
-    report whether the whole set was fully mapped.
-
-    Returns ``(candidates, fully_mapped)``:
-      - ``candidates`` — the sorted UNION of every test file
-        `map_source_to_tests` found for any path in ``paths`` (additive
-        over the whole set, never per-file).
-      - ``fully_mapped`` — ``False`` the moment ANY path in ``paths`` maps
-        to zero candidates (conjunctive fail-safe, AC9): the rule cannot
-        distinguish "no coverage exists" from "coverage exists under a name
-        it cannot derive", and those demand opposite behaviours, so one
-        un-mappable file forces the caller toward the safe (run-more)
-        direction for the WHOLE set, not just that one file.
-
-    ``([], True)`` for an EMPTY ``paths`` is NOT a narrowing licence on its
-    own -- it means "nothing to map", and callers MUST treat "no source
-    files changed" as a distinct case from "source files changed and none
-    mapped" (the latter is `([], False)` whenever ``paths`` is non-empty and
-    the first entry is unmappable, never silently coerced to the former).
-    """
     root = repo_root if repo_root is not None else "."
     if not paths:
         return ([], True)

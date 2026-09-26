@@ -1,7 +1,3 @@
-"""Tests for coordinator_core.ops.session_hierarchy_query.
-
-Port of: query-session-hierarchy.sh (DoE b5a4192c, 2026-07-20).
-"""
 from __future__ import annotations
 
 import json
@@ -11,8 +7,6 @@ import pytest
 
 from coordinator_core.ops.session_hierarchy_query import main
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -34,7 +28,6 @@ RECORDS = [
         "parent_session_id": "aaaa0000-0000-0000-0000-000000000001",
     },
     {
-        # Synthetic workstream-container node — must be excluded from --workstream results.
         "session_id": "workstream:test-ws-a",
         "session_type": "workstream",
         "workstream": "test-ws-a",
@@ -149,9 +142,6 @@ def test_union_across_multiple_shards(tmp_path, monkeypatch, capsys):
 
 
 def test_argv_beyond_first_two_ignored(shard_dir, capsys):
-    """Faithful reproduction of the bash oracle's arg-parsing quirk: only
-    argv[0]/argv[1] are consulted (a `case "${1:-}"` switch) — trailing
-    extras are silently ignored, not rejected."""
     rc = main(["--workstream", "test-ws-a", "extra", "args", "ignored"])
     assert rc == 0
     out = capsys.readouterr().out.strip().splitlines()

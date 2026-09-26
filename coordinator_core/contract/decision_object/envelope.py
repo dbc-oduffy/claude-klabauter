@@ -20,12 +20,6 @@ from __future__ import annotations
 import enum
 from typing import Any, Mapping, Type
 
-# Module-level: `_emit` runs on every envelope build (it IS the brief path),
-# unlike `partition_reportable`'s function-local import of `apply_base`,
-# which exists specifically to keep `apply_base` off that path. No cycle:
-# `judgment.py` has no module-level imports of its own besides `typing`, and
-# `apply_base.py` imports neither `envelope` nor `judgment` (Review:
-# code-reviewer -- hoisted from a cargo-culted function-local import).
 from coordinator_core.contract.decision_object.judgment import (
     find_unclassified_gate_nothing_points,
 )
@@ -43,7 +37,7 @@ ENVELOPE_KEYS: tuple[str, ...] = (
 
 
 class DecisionObjectError(ValueError):
-    """Raised by `_emit` when a decision-object envelope is malformed."""
+    pass
 
 
 def build_envelope(
@@ -57,13 +51,6 @@ def build_envelope(
     narration: str = "",
     next_move: str = "",
 ) -> dict[str, Any]:
-    """Construct a decision-object envelope with exactly the 8 canonical keys.
-
-    Every keyword is optional and defaults to an empty/neutral value so
-    partial computations (e.g. a preflight-only pass) can still emit a
-    structurally valid envelope. Validate the result with `_emit` before
-    returning it across a process boundary.
-    """
     envelope = {
         "artifact": artifact if artifact is not None else {},
         "preflight": preflight if preflight is not None else {},
@@ -78,13 +65,6 @@ def build_envelope(
 
 
 def _emit(obj: Mapping[str, Any]) -> Mapping[str, Any]:
-    """The single fail-loud chokepoint every decision-object producer routes through.
-
-    Validates the 8-key envelope shape before any serialization/return.
-    Raises `DecisionObjectError` on a malformed envelope -- callers must not
-    catch-and-continue past this; a malformed envelope is a producer bug, not
-    a recoverable runtime condition.
-    """
     if not isinstance(obj, Mapping):
         raise DecisionObjectError(
             f"decision-object envelope must be a mapping, got {type(obj).__name__}"
@@ -117,32 +97,11 @@ def _emit(obj: Mapping[str, Any]) -> Mapping[str, Any]:
     return obj
 
 
-# Public alias -- the conformance suite and external callers import `emit`;
-# `_emit` is the internal chokepoint name called out in the spec.
 emit = _emit
 
 
-# ---------------------------------------------------------------------------
 # Reader of a PERSISTED envelope's judgment-point shape.
-#
-# `apply_base.judgment_points_by_id` is the in-process sibling: it takes the
-# `judgment_points` list this process just built and indexes it without shape
-# checks, because a producer bug there should raise. This one takes an object
-# re-read from `.git/coordinator-sessions/decisions/*.json`, where a malformed
-# entry is a data state rather than a producer bug, and it lives beside the
-# writer so a rename of `judgment_points` or a point's `id` moves the site
-# `pickup_assemble.apply` depends on rather than silently starving it.
-#
 # GRAVESTONE (`decision_object/resume.py`, `resume_decisions`/`ResumeRefused`/
-# `_legal_disposition_values`): the resume-from-persisted-decision-object read
-# path for `--decisions` payloads (docs/plans/2026-09-02-the-loader-fires-the-
-# assembly-not-the-em.md, chunk C3). The free-prose judgment-point leg it
-# depended on never shipped, so it had zero non-test production callers at
-# removal (Item 67, docs/plans/2026-09-22-inbox-blitz-bundled-xs-s-fixes-
-# 2026-09-11.md); deleted whole rather than DR'd, matching Item 34's
-# precedent -- a DR for removing zero-caller dead code is ceremony out of
-# proportion to the cut.
-# ---------------------------------------------------------------------------
 
 def judgment_points_by_id(
     decision_object: Mapping[str, Any],
@@ -175,12 +134,6 @@ def judgment_points_by_id(
 
 
 class ExitCodeBase(enum.IntEnum):
-    """Base exit-code enumeration pattern shared by every skill's CLI.
-
-    `SUCCESS = 0` is the only fixed member. A skill defines its own,
-    specific exit codes via `extend_exit_codes` rather than this module
-    hardcoding any one skill's (e.g. pickup's) exit-code set.
-    """
 
     SUCCESS = 0
 

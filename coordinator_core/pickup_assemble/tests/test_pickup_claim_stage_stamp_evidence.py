@@ -1,29 +1,3 @@
-"""
-coordinator_core.pickup_assemble.tests.test_pickup_claim_stage_stamp_evidence
-
-Purpose: proves `d2` (`archive-stamp-cli claim-handoff`, the durable
-frontmatter mutation) is only marked `already_satisfied` when there is real
-evidence the stamp landed — a mirror-sourced holder, or a ledger-sourced
-holder whose claim is at `apply` stage. A `brief`-stage ledger reservation
-(what `acquire_brief_claim` takes a few lines above the read in
-`pickup_assemble.brief`'s handoff branch, in the SAME claim dir
-`claim_state.resolve_claim_state` reads) is a pre-work lock, not evidence of
-a landed write, and must never satisfy `d2`.
-
-The incident (cross-repo/inbox/2026-08-11-doe-claude-em-pickup-claim-never-
-reaches-frontmatter.md): a first-ever pickup of an unclaimed handoff took a
-`brief`-stage claim, then read that same claim back as "already landed",
-skipped `d2`, and left the claim stranded in the ledger with the frontmatter
-mirror still `status: open` / `pickup_ready: true`.
-
-Negative-spec preserved (C11 row 35, ledger-first): an `apply`-stage
-self-held ledger claim with an empty/reverted mirror must still satisfy
-`d2` — the branch-switch-revert desync fix this module's docstring credits
-must not regress.
-
-Run from the repo root: python -m pytest
-coordinator_core/pickup_assemble/tests/test_pickup_claim_stage_stamp_evidence.py -q
-"""
 from __future__ import annotations
 
 import os
@@ -41,8 +15,6 @@ from coordinator_core.session import claims as claims_mod
 from coordinator_core.session import core as session_core
 from coordinator_core.session import liveness as liveness_mod
 
-# Declared, not excused: this file spawns a real git process, the same
-# convention as test_brief_claim_lease.py in this package.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -51,16 +23,7 @@ pytestmark = [
 
 @pytest.fixture(autouse=True)
 def _reset_registry_snapshot_cache():
-    # This file exercises
-    # session_live/claim_holder_live, which route through liveness's
-    # per-process registry-snapshot memoization
-    # (liveness_mod._cached_registry_lookup). Only
-    # coordinator_core/session/tests/test_liveness.py reset that cache;
-    # left unreset here, whichever test in a shared pytest worker process
     # first populates it (including one in a DIFFERENT file) leaks its
-    # snapshot into every later session_live/claim_holder_live call in this
-    # file, silently masking a monkeypatched registry_dir(). Reset before
-    # AND after each test so cross-file ordering never matters.
     liveness_mod._registry_snapshot_cache = None
     yield
     liveness_mod._registry_snapshot_cache = None
@@ -140,14 +103,6 @@ def _d2(result) -> dict:
 def test_reclaim_basis_downgrades_recency_only_evidence_to_liveness_unknown(
     tmp_path, as_session, holder_reads_live, monkeypatch
 ):
-    """Root-cause regression for cross-repo/inbox/2026-08-11-market-
-    intelligence-em-reclaim-labels-a-live-session-dead-without-checking.md:
-    the takeover fired (claim_holder_live -> False, the same boolean
-    `claim_artifact` itself acts on), but the ONLY liveness evidence behind
-    that False was Layer 2 recency inference (`session_verdict` basis
-    `"recency-window"`), never a confirmed-dead process check. The reclaim
-    record must say `"holder-liveness-unknown"`, not assert `"dead-holder"`
-    on evidence it never had."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     _seed_handoff(repo, "h1.md")
@@ -169,9 +124,6 @@ def test_reclaim_basis_downgrades_recency_only_evidence_to_liveness_unknown(
 def test_reclaim_basis_stays_dead_holder_for_confirmed_dead_process(
     tmp_path, as_session, holder_reads_live, monkeypatch
 ):
-    """The one case `"dead-holder"` is still evidence-backed: `session_verdict`
-    ran the process-identity (Layer 1) check and it confirmed the holder's
-    process gone (`basis == "stable-pid"`, `live is False`)."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     _seed_handoff(repo, "h1.md")
@@ -222,12 +174,6 @@ def test_reclaim_basis_downgrades_confirmed_live_verdict_to_liveness_unknown(
 def test_reclaim_basis_holder_absent_for_no_evidence_at_all(
     tmp_path, as_session, holder_reads_live
 ):
-    """`session_verdict` returning `None` (no local
-    session dir AND no harness-registry record for the holder anywhere) used
-    to map to `"dead-holder"`, asserting a process confirmation that never
-    ran on the dominant takeover path. Real wiring here (no `session_verdict`
-    stub — Review: F3 gap), so the module's real no-local-dir/no-registry
-    arm is what produces the `None` this exercises."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     _seed_handoff(repo, "h1.md")
@@ -244,9 +190,6 @@ def test_reclaim_basis_holder_absent_for_no_evidence_at_all(
 
 
 def test_fresh_pickup_brief_stage_claim_does_not_satisfy_d2(tmp_path, as_session):
-    """The memo's exact incident: a first-ever pickup of an unclaimed handoff
-    takes only a `brief`-stage reservation. That reservation must not read as
-    stamp evidence — `d2` must still be dispatched."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     _seed_handoff(repo, "h1.md")
@@ -262,11 +205,6 @@ def test_fresh_pickup_brief_stage_claim_does_not_satisfy_d2(tmp_path, as_session
 def test_self_held_apply_stage_ledger_claim_with_empty_mirror_satisfies_d2(
     tmp_path, as_session, holder_reads_live
 ):
-    """C11 row 35 preservation: a session that already stamped the claim on a
-    different branch reads as ledger-`apply`-stage held-by-self with a
-    reverted (empty) mirror. The claim dir carries the `stamped` marker
-    (the stamp genuinely landed on the other branch) — that must still
-    satisfy `d2`."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     _seed_handoff(repo, "h1.md")
@@ -319,23 +257,12 @@ def test_mirror_only_evidence_satisfies_d2(tmp_path, as_session, monkeypatch):
     _seed_handoff(repo, "h1.md", claimed_by="sid-a")
     as_session("sid-a")
     _write_claim(repo, "h1.md", "sid-a", stage="apply")
-    # Dead per resolve_claim_state's liveness gate
-    # (coordinator_core.claim_state's imported cs_claim_holder_live, distinct
-    # from session.liveness.claim_holder_live which held_by_self's own row 2
-    # does not gate on) -> ledger degrades to "no ledger claim", so the
-    # mirror's claimed_by is the only stamp evidence.
     monkeypatch.setattr(claim_state_mod, "cs_claim_holder_live", lambda *a, **k: False)
 
     result = pa.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=False)
 
     assert _d2(result)["already_satisfied"] is True
 
-
-# ---------------------------------------------------------------------------
-# P026-C7 (AC8) — the comparator is called on apply()'s single post-directive
-# return, on every claim-banking exit. Read-only: it must never change the
-# exit code or `report`, only print a qualifying line to stderr.
-# ---------------------------------------------------------------------------
 
 import coordinator_core.pickup_assemble.apply as apply_mod
 from coordinator_core.claim_state import ClaimComparisonReport
@@ -368,10 +295,6 @@ def test_apply_ok_exit_prints_an_unqualified_agree_verdict(
 def test_apply_never_changes_exit_code_or_report_on_a_disagreeing_verdict(
     tmp_path, as_session, holder_reads_live, capsys, monkeypatch
 ):
-    """AC8's "changes no gate outcome" guarantee: force the comparator to
-    report a loudly non-agreeing verdict (a mismatched mirror holder) and
-    confirm `exit_code`/`report` are unaffected — the comparator call this
-    row adds is read-only regardless of what it finds."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     _seed_handoff(repo, "h1.md")
@@ -407,10 +330,6 @@ def test_apply_never_changes_exit_code_or_report_on_a_disagreeing_verdict(
 def test_apply_qualified_agree_is_silent(
     tmp_path, as_session, holder_reads_live, capsys, monkeypatch
 ):
-    """The negative case for AC6/AC8's qualification: an `agree` verdict
-    whose `ledger_resolver_source` names the hardened
-    `attributable_session_id` resolution prints nothing — "a fully-qualified
-    `agree` stays silent"."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     _seed_handoff(repo, "h1.md")

@@ -39,8 +39,6 @@ from coordinator_core.ops.crossrepo_closure_status import (
 import pytest
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -123,11 +121,8 @@ def test_closed_open_literal_vocabulary(tmp_path: Path) -> None:
 
     by_id = {m["memo_id"]: m for m in outcome["memos"]}
     assert by_id["memo-closed"]["closure"] == "closed"
-    # "fulfilled" is NOT the literal "closed" string -> counts as open (inherited
-    # check_commitment_closure quirk, deliberately not patched by this op).
     assert by_id["memo-fulfilled"]["closure"] == "open"
     assert by_id["memo-open"]["closure"] == "open"
-    # One closed + one open commitment on the same memo -> overall open (any-open wins).
     assert by_id["memo-mixed"]["closure"] == "open"
     assert len(by_id["memo-mixed"]["commitments"]) == 2
 
@@ -194,7 +189,7 @@ def test_handler_smoke_no_disk_write(tmp_path: Path, monkeypatch) -> None:
     before = {p for p in tmp_path.rglob("*") if p.is_file()}
     result = _handler({}, repo_root=tmp_path / ".git")
     after = {p for p in tmp_path.rglob("*") if p.is_file()}
-    assert before == after  # pure read + compute; no artifact written
+    assert before == after
 
     assert result["counts"]["total_memos"] == 1
     assert result["memos"][0]["memo_id"] == "memo-1"

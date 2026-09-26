@@ -70,9 +70,6 @@ _KNOWN_FIELDS = (
 
 
 def _find_git_common_dir(start: Path) -> Optional[Path]:
-    """Walk up from `start` to the nearest `.git`, then resolve its common
-    dir via the shared support helper. Returns None on any failure — never
-    raises."""
     try:
         probe = start.resolve()
     except Exception:
@@ -105,8 +102,6 @@ def _append_record(git_common_dir: Path, record: dict) -> None:
 
 
 def run(payload: Optional[dict]) -> None:
-    """Core logic — takes an already-parsed payload dict (or None on parse
-    failure). Never raises."""
     observed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     if not isinstance(payload, dict):
@@ -129,28 +124,16 @@ def run(payload: Optional[dict]) -> None:
 
     git_common_dir = _find_git_common_dir(cwd_hint)
     if git_common_dir is None:
-        return  # fail-open — no resolvable git tree, nothing to write into
+        return
 
     _append_record(git_common_dir, record)
 
 
 @register_op("hooks.observe_config_change")
 def _handler(params: dict, repo_root=None) -> dict:
-    """IPC/dispatch_message adapter over `run()`. `params` IS the raw
-    ConfigChange payload dict (hook-run's own JSON parse, not the
-    mcp_tool flat-scalar-field contract `_payload.field()` guards) — this
-    handler records the whole thing, matching the DoE source's own
-    known-field allowlist, never a per-field forward.
-
-    Always returns `no_advisory()` — the product is the on-disk write
-    side-effect; this event's output is not surfaced to the model.
-    """
     params = payload_of(params)
     try:
         run(params)
     except Exception:
-        # Defense-in-depth — must never raise; run() already contains its
-        # own errors, this is a final backstop matching the fail-open
-        # contract of the DoE source.
         pass
     return no_advisory()

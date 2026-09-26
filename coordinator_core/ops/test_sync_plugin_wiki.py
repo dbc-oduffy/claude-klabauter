@@ -1,8 +1,3 @@
-"""Characterization + parity tests for coordinator_core.ops.sync_plugin_wiki.
-
-Port of: sync-plugin-wiki.sh (DoE b5a4192c, 2026-07-20), 162 lines.
-Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
-"""
 
 from __future__ import annotations
 
@@ -15,11 +10,6 @@ import pytest
 
 from coordinator_core.ops.sync_plugin_wiki import main
 
-# `main()` -> `resolve_coordinator_clone.resolve_content_root`'s registry-
-# fallback rung, which now resolves through the shared, memoized
-# `_claude_klabauter_root._machine_local_get` (`sys.executable <impl> get <key>` -- a
-# statically-detectable real spawn, P153-C4). Whole file tiered: every test
-# here calls `main()`.
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
@@ -78,7 +68,6 @@ class TestPositive:
         assert rc == 0
         assert "beta.md referenced by plugin file but absent from bundled wiki" in out
         assert "Plugin-bundled wiki: clean (2 validated, 1 missing-bundled warnings)." in out
-        # placeholder-filtered name never surfaces
         assert "foo.md" not in out
 
     def test_quiet_suppresses_output(self, tmp_path: Path):
@@ -157,23 +146,12 @@ class TestNegative:
     def test_unresolvable_plugin_root_exits_1(self, tmp_path: Path):
         env = dict(os.environ)
         # COORDINATOR_SETTINGS_HOME is the same defect as the USERPROFILE rung
-        # documented below, one rung further along: `settings_home()` prefers
         # that override over CLAUDE_HOME/HOME/USERPROFILE entirely, so on a box
-        # where an operator exports it the DURABLE `.doe-root` rung
-        # (`<settings-home>/machine-local/.doe-root`) reads the operator's real
-        # settings home and resolution succeeds -- this test then never reaches
-        # the unresolvable path it names.
         for key in ("CLAUDE_PLUGIN_ROOT", "COORDINATOR_ROOT", "COORDINATOR_SETTINGS_HOME"):
             env.pop(key, None)
         env["HOME"] = str(tmp_path / "no-doe-root-home")
-        # `Path.home()` (the fallback every rung in this resolution chain
-        # ultimately bottoms out at via `_home_dir`/`settings_home`) reads
         # USERPROFILE on Windows and ignores HOME entirely -- without this,
         # the real dev box's own USERPROFILE survives `os.environ.clear()`+
-        # `update(env)` in `_run_main` and rung 3 (registry live_path) or the
-        # legacy `.doe-root` rung resolves against the REAL machine's home,
-        # letting resolution silently succeed instead of exercising the
-        # unresolvable path this test targets.
         env["USERPROFILE"] = str(tmp_path / "no-doe-root-home")
         (tmp_path / "no-doe-root-home" / ".claude").mkdir(parents=True)
 
@@ -188,12 +166,6 @@ class TestNegative:
         unreadable = plugin_root / "agents" / "locked.md"
         unreadable.write_text("docs/wiki/delta.md\n")
 
-        # `os.chmod(0o000)` is a no-op for the owning process on Windows (POSIX
-        # mode bits aren't enforced there -- the file stays readable), so it
-        # never exercises the OSError-on-open path this test verifies. Simulate
-        # a genuinely-unreadable file cross-platform by making `open()` raise
-        # for this one path, in-process (main() runs in-process here, not a
-        # subprocess -- see `_run_main`).
         import coordinator_core.ops.sync_plugin_wiki as sync_plugin_wiki_module
         real_open = open
 

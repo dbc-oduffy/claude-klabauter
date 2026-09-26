@@ -57,8 +57,6 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    # popup-intentional-last-resort — test-only real-git spawn, mirrors the
-    # governed real_git.py fixture's own unguarded pattern.
     return subprocess.run(
         ["git", *args],
         cwd=str(cwd),
@@ -84,9 +82,6 @@ def _seed_repo(root: Path) -> Path:
     src = inbox / "2026-08-18-peer-memo.md"
     src.write_text("---\nstatus: actioned\n---\n\nBody.\n", encoding="utf-8")
 
-    # Bystander files: these are what an empty-tree commit would delete. The
-    # incident's severity was entirely in this population, not in the one
-    # path the op meant to touch.
     for i in range(5):
         (root / f"bystander-{i}.txt").write_text(f"content {i}\n", encoding="utf-8")
 
@@ -96,10 +91,6 @@ def _seed_repo(root: Path) -> Path:
 
 
 def test_missing_index_reports_empty_tree_and_names_the_sha(tmp_path: Path):
-    """A MISSING index file is the silent case -- write-tree returns the empty
-    tree with rc=0 -- so the refusal must fire on the sha equality, and its
-    message must name `4b825dc…` rather than leaving a future reader to
-    rediscover what that constant means."""
     root = tmp_path / "repo"
     _seed_repo(root)
 
@@ -114,9 +105,6 @@ def test_missing_index_reports_empty_tree_and_names_the_sha(tmp_path: Path):
 
 
 def test_zero_byte_index_reports_unreadable_not_empty(tmp_path: Path):
-    """The loud case must stay distinguishable from the silent one: a
-    truncated index is a different fault from a vanished one, and collapsing
-    them would misdirect whoever reads the failure."""
     root = tmp_path / "repo"
     _seed_repo(root)
 
@@ -133,16 +121,13 @@ def test_zero_byte_index_reports_unreadable_not_empty(tmp_path: Path):
 
 
 def test_seeded_index_is_permitted(tmp_path: Path):
-    """The guard must not fire on the ordinary path -- a HEAD-seeded index
-    commits normally. Without this, a refusal that always fired would 'pass'
-    the two tests above while breaking every fleet archival."""
     root = tmp_path / "repo"
     _seed_repo(root)
 
     private_index = tmp_path / "index-seeded"
     env = dict(os.environ)
     env["GIT_INDEX_FILE"] = str(private_index)
-    _git(["read-tree", "HEAD"], root)  # sanity: HEAD is readable
+    _git(["read-tree", "HEAD"], root)
     subprocess.run(
         ["git", "read-tree", "HEAD"],
         cwd=str(root), env=env, capture_output=True, text=True, check=True,
@@ -151,8 +136,6 @@ def test_seeded_index_is_permitted(tmp_path: Path):
 
     reason, tree_sha = _run(_empty_private_index_breach(root, env, "archive_and_commit"))
     assert reason is None
-    # The guard hands its tree sha back so the caller commits THAT tree instead
-    # of re-spawning an identical `git write-tree` (2026-08-25 de-duplication).
     assert tree_sha and tree_sha != EMPTY_TREE_SHA
 
 
@@ -225,12 +208,8 @@ def test_archive_and_commit_refuses_rather_than_emptying_the_repo(tmp_path: Path
 
     src = root / "cross-repo" / "inbox" / "already-archived.md"
     src.parent.mkdir(parents=True, exist_ok=True)
-    src.write_text(identical_bytes, encoding="utf-8")  # untracked in HEAD
+    src.write_text(identical_bytes, encoding="utf-8")
 
-    # force=True: a byte-identical duplicate delivery, per `Move.force`'s own
-    # docstring -- os.replace always clobbers, and dst already existing is
-    # exactly the shape this fixture needs to reach the noop-commit guard
-    # rather than the earlier dst-exists refusal.
     move = Move(
         src=src, dst=dst, candidate_id="cross-repo/inbox/already-archived.md",
         force=True,
@@ -252,14 +231,9 @@ def test_archive_and_commit_refuses_rather_than_emptying_the_repo(tmp_path: Path
     assert "empty-spine-commit" in failed[0]["reason"]
     assert "computed tree equals HEAD's tree" in failed[0]["reason"]
 
-    # The load-bearing assertions: HEAD did not move, and no tracked file was
-    # touched.
     assert _git(["rev-parse", "HEAD"], root).stdout.strip() == head_before
     tracked_after = _git(["ls-tree", "-r", "--name-only", "HEAD"], root).stdout.split()
     assert tracked_after == tracked_before
 
-    # The rename was reversed on disk — a refused commit leaves no half-move.
-    # (os.replace moved src's bytes onto dst; the commit-failure reversal
-    # renames dst back to src, since src no longer exists post-replace.)
     assert src.exists()
     assert not dst.exists()

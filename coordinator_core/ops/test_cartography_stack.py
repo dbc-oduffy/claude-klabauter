@@ -29,9 +29,6 @@ from __future__ import annotations
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Import guard — MUST precede any test so @register_op fires first.
-# ---------------------------------------------------------------------------
 import coordinator_core.ops.cartography_stack  # noqa: F401 — fires @register_op
 
 from coordinator_core.ipc import _REGISTRY
@@ -73,7 +70,6 @@ def test_detect_languages_present_only_and_fence_order(tmp_path):
     (root / "app.tsx").write_text("", encoding="utf-8")
     (root / "script.py").write_text("", encoding="utf-8")
     result = detect_project_stack(root)
-    # Python, TypeScript, C++ present; JavaScript absent — fence order preserved.
     assert result["languages"] == ["Python", "TypeScript", "C++"]
 
 
@@ -132,9 +128,6 @@ def test_jest_config_glob_inserted_in_fence_order(tmp_path):
 
 
 def test_jest_config_glob_inserted_before_cmakelists_when_tsconfig_absent(tmp_path):
-    # tsconfig.json absent, CMakeLists.txt
-    # present: jest.config.* must still land BEFORE CMakeLists.txt (fence
-    # order), not appended after it.
     root = tmp_path / "repo"
     root.mkdir()
     (root / "pyproject.toml").write_text("", encoding="utf-8")

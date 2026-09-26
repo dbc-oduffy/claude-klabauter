@@ -76,23 +76,11 @@ under here is one machine's unbounded append log -- see `runs_path()`."""
 
 
 def runs_path(machine: Optional[str] = None) -> Path:
-    """Return the per-machine run-history JSONL path: `baselines/runs/<machine>.jsonl`.
-
-    Purpose: `append()`'s default target. `machine` defaults to this box's
-    own identity (`compose_machine_id()`) so a bare call always appends to
-    THIS box's own run history, never another box's file."""
     resolved_machine = machine if machine is not None else compose_machine_id()
     return RUNS_DIR / f"{resolved_machine}.jsonl"
 
 
 def tracked_baseline_path(machine: Optional[str] = None) -> Path:
-    """Return the per-machine curated, tracked baseline JSONL path:
-    `baselines/tracked-<machine>.jsonl` -- a file directly under
-    `baselines/`, never `baselines/<machine>/...` (git does not descend
-    into the excluded `baselines/` directory, so a negation can only ever
-    re-include a file living directly inside it -- see module docstring
-    and `coordinator_core/.gitignore`). `machine` defaults to this box's
-    own identity."""
     resolved_machine = machine if machine is not None else compose_machine_id()
     return BASELINES_DIR / f"tracked-{resolved_machine}.jsonl"
 
@@ -144,12 +132,6 @@ def _resolve_path(path: Optional[Path]) -> Path:
 
 
 def append(record: ConformanceRecord, path: Optional[Path] = None) -> Path:
-    """Append one ConformanceRecord as a single JSONL line to the store.
-
-    Purpose: the store's sole write path. Never truncates, never rewrites
-    existing lines -- opens in append mode and creates parent directories
-    on first use. Returns the resolved store path actually written to.
-    """
     store_path = _resolve_path(path)
     store_path.parent.mkdir(parents=True, exist_ok=True)
     with store_path.open("a", encoding="utf-8") as f:
@@ -159,12 +141,6 @@ def append(record: ConformanceRecord, path: Optional[Path] = None) -> Path:
 
 
 def read_all(path: Optional[Path] = None) -> List[ConformanceRecord]:
-    """Read every record in the store, in append order.
-
-    Purpose: the store's full-history read path. Returns an empty list if
-    the store file does not exist yet (a fresh store has no history, not
-    an error). Blank lines are skipped defensively.
-    """
     store_path = _resolve_path(path)
     if not store_path.exists():
         return []
@@ -184,27 +160,6 @@ def query(
     machine: Optional[str] = None,
     path: Optional[Path] = None,
 ) -> Iterator[ConformanceRecord]:
-    """Yield records from the store filtered by op, code_sha, and/or machine.
-
-    Purpose: the store's scoped-read path -- lets a consumer (e.g. a future
-    qsub-03 gate) ask "every record for op X" or "every record at sha Y"
-    without reading history it doesn't need. All filters are optional and
-    compose as AND; omitting all of them is equivalent to read_all() as an
-    iterator, MINUS the machine partition dropped below. Does not collapse
-    duplicates -- a caller wanting the latest entry for (op, code_sha) must
-    select the last yielded match itself, matching the module's
-    append-only, no-collapse-on-write contract.
-
-    Machine partition (C3): a record with `machine is None` (a pre-C2, v1
-    record) is NEVER yielded, regardless of whether `machine` is passed --
-    a record with no machine identity names no box its timings are valid
-    under, so it can never be served as anyone's baseline. When `machine`
-    IS passed, only records whose `record.machine == machine` are yielded
-    -- a record measured on one box can never silently become another
-    box's baseline. `machine=None` (the default) yields every
-    machine-tagged record across every box; pass an explicit `machine` to
-    scope to one box's history.
-    """
     for record in read_all(path):
         if record.machine is None:
             continue
@@ -255,11 +210,5 @@ def write_tracked_baseline(
 def read_tracked_baseline(
     machine: Optional[str] = None, path: Optional[Path] = None
 ) -> List[ConformanceRecord]:
-    """Read the curated, tracked baseline partition in full.
-
-    Purpose: the tracked partition's read counterpart to
-    `write_tracked_baseline()` -- returns an empty list if the tracked
-    file does not exist yet (before C8's first refresh has ever run, not
-    an error)."""
     store_path = path if path is not None else tracked_baseline_path(machine)
     return read_all(store_path)

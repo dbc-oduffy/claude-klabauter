@@ -104,10 +104,6 @@ ALLOW_CASES = [
         ),
     ),
     (
-        # Denied before this narrowing, on the bare word "python" beside an
-        # inert mention. There is no write anywhere in it -- the eval's own
-        # payload is a printf -- so nothing here can reach a governed sink,
-        # and the old verdict was the false positive, not the protection.
         "a live marker elsewhere, an inert mention, and no write at all",
         f"eval \"$(printf %s x)\" && python - <<'PY'\nnote = 'see {GOV}'\nPY",
     ),
@@ -177,8 +173,6 @@ def test_the_deny_corpus_still_refuses(label, cmd):
 
 
 def test_containment_is_whole_segment_not_overlap():
-    """A segment straddling the introducing line and the body is not contained
-    in any body, so the introducing line's own markers keep their force."""
     bodies = ["note = 'see the rule'"]
     assert guard._lies_in_a_quoted_heredoc_body("note = 'see the rule'", bodies) is True
     assert guard._lies_in_a_quoted_heredoc_body("python - <<'PY'\nnote = 'see the rule'", bodies) is False
@@ -187,7 +181,5 @@ def test_containment_is_whole_segment_not_overlap():
 
 
 def test_unterminated_quoted_heredoc_yields_no_inert_body():
-    """No terminator line means no body is established, so nothing is treated
-    as inert -- the fail-closed direction."""
     assert guard._quoted_heredoc_bodies("python - <<'PY'\nnote = 'x'") == []
     assert guard._quoted_heredoc_bodies("python - <<'PY'\nnote = 'x'\nPY") == ["note = 'x'"]

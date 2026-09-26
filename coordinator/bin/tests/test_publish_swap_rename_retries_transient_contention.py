@@ -19,10 +19,6 @@ _SPEC = importlib.util.spec_from_file_location(
 )
 assert _SPEC is not None and _SPEC.loader is not None
 publish = importlib.util.module_from_spec(_SPEC)
-# Registered before exec: `publish.py` defines dataclasses, and `dataclasses` resolves a
-# class's own module out of `sys.modules` while processing it. Loading it unregistered
-# raises `AttributeError: 'NoneType' object has no attribute '__dict__'` at import time --
-# the same shape `test_publish_refusal_record.py`'s own loader avoids this way.
 sys.modules[_SPEC.name] = publish
 _SPEC.loader.exec_module(publish)
 
@@ -114,9 +110,6 @@ def test_every_swap_publish_function_routes_its_renames_through_the_retry():
     ]
     assert swap_fns, "no _swap_publish_* functions found -- module shape changed"
 
-    # AST, not a substring scan: docstrings QUOTE `os.rename(...)` while explaining the
-    # swap, so a text match reports the prose and passes only if the explanation is
-    # deleted. Call sites are the thing under test.
     for fn in swap_fns:
         tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
         direct = [
@@ -154,10 +147,6 @@ def test_a_permission_error_is_required_not_merely_an_oserror_with_the_winerror(
 
     def not_a_permission_error(_src, _dst):
         calls["n"] += 1
-        # errno 9 (EBADF), NOT 13: `OSError.__new__` maps errno 13 to PermissionError
-        # automatically, so `OSError(13, ...)` IS a PermissionError and cannot express
-        # "an OSError that merely looks transient". Getting this wrong makes the test
-        # assert the opposite of what it reads as.
         exc = OSError(9, "Bad file descriptor")
         exc.winerror = 32
         raise exc
@@ -192,24 +181,19 @@ def test_a_failing_restore_chains_from_the_original_and_does_not_replace_it(tmp_
     )
 
     dest, staging, prior = tmp_path / "d", tmp_path / "s", tmp_path / "d.prior"
-    # `prior` must NOT pre-exist: the aside rename creates it, and a Windows rename
-    # onto an existing directory raises FileExistsError before any leg under test runs.
     dest.mkdir(); staging.mkdir()
     original = _oserror(32)
     restore = _oserror(5)
 
     real = os.rename
 
-    # Three legs, three outcomes, keyed on source — the aside must SUCCEED or the content
-    # rename is never reached and the test silently exercises the wrong branch (it did,
-    # first time round).
     def renames(src, dst):
         src = Path(src)
-        if src == dest:      # aside: dest -> prior
+        if src == dest:
             return real(src, dst)
-        if src == staging:   # content: staging -> dest, the original failure
+        if src == staging:
             raise original
-        raise restore        # restore: prior -> dest, fails on its own
+        raise restore
 
     monkeypatch.setattr(publish, "_SWAP_RENAME_DEADLINE_SECS", 0.05)
     monkeypatch.setattr(publish.os, "rename", renames)

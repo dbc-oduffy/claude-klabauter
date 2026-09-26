@@ -60,16 +60,8 @@ pytestmark = [
     pytest.mark.warm_tier,
 ]
 
-#: A name C2's table declares as stdin-reading -- picked arbitrarily from
-#: `door_stdin_reading_basenames`, not the one this repo happens to test
-#: elsewhere, so this file does not silently depend on that other test's
-#: choice staying the same.
 _DECLARED_BASENAME = "claims-emit"
 
-#: The door's own pre-C0 default -- deliberately NOT a member of C2's
-#: table (`door_core_selftest.c` pins this exact fact for
-#: `"coordinator-invoke"`), so installing the door under this name is a
-#: true undeclared-leg control, not an accident of table membership.
 _UNDECLARED_BASENAME = "coordinator-invoke"
 
 _WARM_REPLY = (
@@ -82,22 +74,6 @@ _BUILT_DOOR: list = []
 
 
 def _locally_built_door() -> Path:
-    """A door image built from THIS tree's `door.c`, not the committed
-    prebuilt.
-
-    The committed `door.exe` is refreshed by C6, which `depends_on` C3 --
-    so during C3's own wave the prebuilt still carries the pre-gate build,
-    and provisioning these fixtures from it measured the OLD binary. That
-    is the stale-artifact polarity the plan's C6 body already names for the
-    installed image (`install_door` prefers the committed prebuilt, so an
-    un-rebuilt one silently ships the old gate): the same trap reaches the
-    tests, where it reads as "the basename gate did not fire".
-
-    Built once per module via `door.build.build`, against the stamped source
-    root `test_warm_door_process_time_gate :: _resolve_stamped_source_root`
-    resolves -- reused, not re-derived. `build()` refuses a root with no
-    `coordinator_core/_engine_stamp` (DR-315 SS2); that refusal is
-    inherited here as a NAMED skip, never relaxed."""
     if not _BUILT_DOOR:
         source_root = _resolve_stamped_source_root()
         if source_root is None:
@@ -188,14 +164,7 @@ def _run(door: Path, root: Path) -> subprocess.CompletedProcess:
     )
 
 
-# =============================================================================
-# Source legs -- cheap, no binary needed.
-# =============================================================================
-
-
 def test_the_wide_predicate_reuses_c2s_shared_table():
-    """The wide gate must call C2's `door_basename_declares_stdin_read`, not
-    hand-roll a second wcscmp table that could silently diverge from it."""
     source = _read(_DOOR_WINDOWS_C)
     assert "door_basename_declares_stdin_read(" in source, (
         "door.c does not call door_basename_declares_stdin_read -- it has "
@@ -209,10 +178,6 @@ def test_the_wide_predicate_reuses_c2s_shared_table():
 
 
 def test_the_basename_gate_follows_resolve_own_basename_and_precedes_the_transport():
-    """`door_entrypoint_basename()` is only valid once `resolve_own_basename()`
-    has run (door.c's own ordering comment) -- and, like C1's argv gate, this
-    one must fire before the pipe is ever dialled, or a gate placed after the
-    dial can still produce the indeterminate verdict it exists to prevent."""
     source = _read(_DOOR_WINDOWS_C)
     main_at = source.index("int main")
     resolve_at = source.index("resolve_own_basename();", main_at)
@@ -229,9 +194,6 @@ def test_the_basename_gate_follows_resolve_own_basename_and_precedes_the_transpo
 
 
 def test_the_gate_is_excluded_from_hook_mode():
-    """Hook mode's own stdin is already drained above this gate, and its
-    disposition on fall-through is a deny envelope, not a cold spawn --
-    the same exclusion C1's argv gate makes, for the same reason."""
     source = _read(_DOOR_WINDOWS_C)
     match = re.search(
         r"door_basename_declares_stdin_read_w\(door_entrypoint_basename\(\)\)",
@@ -247,11 +209,6 @@ def test_the_gate_is_excluded_from_hook_mode():
 
 
 def test_an_unresolved_basename_takes_the_cold_leg_unconditionally():
-    """staff-eng finding 4: when `g_own_basename_ok == 0`,
-    `door_entrypoint_basename()` hands back the pre-C0 default rather than
-    the invoked name -- so the call site itself, not the predicate, must
-    force the cold leg rather than asking the predicate about the wrong
-    name."""
     source = _read(_DOOR_WINDOWS_C)
     match = re.search(
         r"if\s*\(\s*!g_door_hook_mode\s*&&\s*\(\s*!g_own_basename_ok\s*\|\|"
@@ -266,19 +223,11 @@ def test_an_unresolved_basename_takes_the_cold_leg_unconditionally():
 
 
 def test_module_docstring_names_the_new_route():
-    """The plan body requires the module docstring's own account of routes
-    that never go warm to be extended, not left describing only C1's."""
     header = _read(_DOOR_WINDOWS_C)[:6000]
     assert "door_basename_declares_stdin_read_w" in header, (
         "the module docstring was not extended to mention the new "
         "basename-declared stdin gate"
     )
-
-
-# =============================================================================
-# Behavioural legs -- require a compiled door.exe. Windows-only, matching
-# this suite's own existing gating.
-# =============================================================================
 
 
 @_WINDOWS_ONLY
@@ -292,9 +241,6 @@ def test_a_declared_basename_takes_the_cold_leg_and_never_reaches_the_server(
     try:
         proc = _run(door, root)
     finally:
-        # The gate firing means nothing dialled this pipe, which is what
-        # `server.close()` cannot survive on its own -- see
-        # `_release_unconnected_server`.
         _release_unconnected_server(root)
         server.close()
 
@@ -308,9 +254,6 @@ def test_a_declared_basename_takes_the_cold_leg_and_never_reaches_the_server(
 
 @_WINDOWS_ONLY
 def test_an_undeclared_basename_is_still_served_warm(tmp_path: Path) -> None:
-    """The control leg: a gate that always falls through cold is not a
-    gate. `coordinator-invoke` -- the door's own pre-C0 default and NOT a
-    member of C2's table -- must still reach the server."""
     root = _make_stub_engine_root(tmp_path)
     door = _install_door_as(root, _UNDECLARED_BASENAME)
 

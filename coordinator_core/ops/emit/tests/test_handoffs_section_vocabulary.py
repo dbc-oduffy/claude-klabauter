@@ -33,15 +33,7 @@ from coordinator_core.ops.emit.sections import handoffs as handoffs_section
 from coordinator_core.ops.emit.sections import handoff_columns
 from coordinator_core.win_portability import no_console_creationflags
 
-# The tail of this file (`test_compute_handoff_columns_resolves_shipped_in_
-# via_git` and its sibling) resolves `shipped_in` via a real `git log`
-# lookup against a throwaway repo -- the production behaviour under test is
-# that real git resolution, not a mocked stand-in for it. Most tests above
-# it mock `_query_records` only, not git, but the module-level marker covers
-# the file uniformly per Rule 2(b).
 # The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
-# explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -83,10 +75,6 @@ def _collect_with_records(mock_qr, tmp_path: Path, records: list[dict]):
     mock_qr.side_effect = query_records
     return handoffs_section.collect(ctx)
 
-
-# ---------------------------------------------------------------------------
-# status axis: new vocabulary passes through; superseded is grandfathered
-# ---------------------------------------------------------------------------
 
 @patch("coordinator_core.ops.emit.sections.handoffs._query_records")
 def test_status_open_passes_through_unchanged(mock_qr, tmp_path: Path) -> None:
@@ -130,10 +118,7 @@ def test_status_superseded_still_coerces_to_claimed_grandfathered(mock_qr, tmp_p
     assert records[0]["status"] == "claimed"
 
 
-# ---------------------------------------------------------------------------
 # status axis: old DR-084 vocabulary is TOLERATED (coerced up to the new wire
-# vocabulary at ingest) — transitional shim, restored 2026-07-23
-# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("old_status,expected", [("active", "open"), ("consumed", "claimed")])
 @patch("coordinator_core.ops.emit.sections.handoffs._query_records")
@@ -153,9 +138,6 @@ def test_old_status_vocabulary_coerces_to_new(
 def test_consumed_at_and_consumed_by_fall_back_when_new_names_absent(
     mock_qr, tmp_path: Path,
 ) -> None:
-    """The retired ``consumed_at``/``consumed_by`` field names are read as a
-    fallback when the new-named field is absent — a record still carrying
-    ONLY the old names still projects onto the NEW wire field names."""
     records, malformed = _collect_with_records(
         mock_qr, tmp_path,
         [{
@@ -177,7 +159,6 @@ def test_consumed_at_and_consumed_by_fall_back_when_new_names_absent(
 def test_claimed_at_and_claimed_by_preferred_over_consumed_fallback(
     mock_qr, tmp_path: Path,
 ) -> None:
-    """When both old and new field names are present, the new name wins."""
     records, malformed = _collect_with_records(
         mock_qr, tmp_path,
         [{
@@ -196,10 +177,6 @@ def test_claimed_at_and_claimed_by_preferred_over_consumed_fallback(
     assert records[0]["claimed_at"] == "2026-07-22T09:00:00Z"
     assert records[0]["claimed_by"] == "agent-new"
 
-
-# ---------------------------------------------------------------------------
-# deployment_state axis: new vocabulary passes through
-# ---------------------------------------------------------------------------
 
 @patch("coordinator_core.ops.emit.sections.handoffs._query_records")
 def test_deployment_state_continued_passes_through_with_continued_into(
@@ -258,10 +235,7 @@ def test_deployment_state_shared_vocabulary_passes_through_unchanged(
     assert records[0]["deployment_state"] == deployment_state
 
 
-# ---------------------------------------------------------------------------
 # deployment_state axis: old DR-084 vocabulary is TOLERATED — abandoned splits
-# into continued/closed via _coerce_legacy_abandoned, restored 2026-07-23
-# ---------------------------------------------------------------------------
 
 @patch("coordinator_core.ops.emit.sections.handoffs._query_records")
 def test_deployment_state_abandoned_without_successor_coerces_to_closed_stale(
@@ -297,10 +271,6 @@ def test_deployment_state_abandoned_with_successor_coerces_to_continued(
     assert records[0]["continued_into"] == "state/handoffs/successor.md"
     assert records[0]["closed_reason"] is None
 
-
-# ---------------------------------------------------------------------------
-# unrecognized values are per-record quarantined (not a whole-emit hard-abort)
-# ---------------------------------------------------------------------------
 
 @patch("coordinator_core.ops.emit.sections.handoffs._query_records")
 def test_unrecognized_status_value_quarantines_record(mock_qr, tmp_path: Path) -> None:
@@ -348,8 +318,6 @@ def test_unrecognized_deployment_state_value_quarantines_record(mock_qr, tmp_pat
 
 @patch("coordinator_core.ops.emit.sections.handoffs._query_records")
 def test_unrecognized_value_quarantines_only_the_bad_record(mock_qr, tmp_path: Path) -> None:
-    """One record with an unrecognized deployment_state must not take out the rest of
-    the corpus — the good record is still emitted, the bad one is quarantined."""
     ctx = _make_ctx(tmp_path)
 
     def query_records(ctx_arg, record_type):
@@ -377,11 +345,6 @@ def test_unrecognized_value_quarantines_only_the_bad_record(mock_qr, tmp_path: P
     assert "record" in malformed[0]["reason"]
 
 
-# ---------------------------------------------------------------------------
-# C1: the four-column computation, extracted to handoff_columns.py, is
-# callable directly on frontmatter — no EmitContext, no envelope required.
-# ---------------------------------------------------------------------------
-
 def _run_git_or_raise(repo_root: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", "-C", str(repo_root), *args],
@@ -393,7 +356,6 @@ def _run_git_or_raise(repo_root: Path, *args: str) -> str:
 
 
 def _init_columns_test_repo(repo_root: Path) -> None:
-    """Init a throwaway git repo with a local identity (no reliance on global git config)."""
     _run_git_or_raise(repo_root, "init", "-q")
     _run_git_or_raise(repo_root, "config", "user.email", "test@example.com")
     _run_git_or_raise(repo_root, "config", "user.name", "Test User")
@@ -401,8 +363,6 @@ def _init_columns_test_repo(repo_root: Path) -> None:
 
 
 def test_compute_handoff_columns_takes_bare_frontmatter_and_repo_root(tmp_path: Path) -> None:
-    """Direct call — no EmitContext, no envelope. Proves AC1's decoupling: the helper
-    only ever needed a repo-root path, not the whole EmitContext/envelope machinery."""
     columns = handoff_columns.compute_handoff_columns(
         {"status": "open", "deployment_state": "ready_to_fire"}, tmp_path,
     )
@@ -446,8 +406,6 @@ def test_compute_handoff_columns_coerces_legacy_abandoned_with_successor(tmp_pat
 
 
 def test_compute_handoff_columns_resolves_shipped_in_via_git(tmp_path: Path) -> None:
-    """``shipped_in`` resolution is a real ``git log`` call against the repo-root path — no
-    EmitContext needed to drive it, only the raw path this test passes directly."""
     _init_columns_test_repo(tmp_path)
     (tmp_path / "file.txt").write_text("v1")
     _run_git_or_raise(tmp_path, "add", "-A")

@@ -66,7 +66,6 @@ def test_decoy_venv_test_file_is_excluded(fixture_tree) -> None:
 
     discovered_paths = {s.path for s in suites}
     assert tree.decoy_venv_test not in discovered_paths
-    # The real py-native fixture (outside the venv) must still be present.
     assert tree.family_files["py-native"] in discovered_paths
 
 
@@ -79,9 +78,6 @@ def test_decoy_site_packages_and_coordinator_venv_excluded(fixture_tree) -> None
 
 
 def test_no_stray_test_py_files_committed_under_testing_package() -> None:
-    # Finding 9 belt check: nothing under coordinator_core/testing/ matches
-    # pytest's own collection glob (test_*.py) beyond the real, intentionally
-    # committed test modules for this package.
     stray = []
     for path_str in glob.glob(str(_TESTING_PKG_DIR / "**" / "test_*.py"), recursive=True):
         path = Path(path_str)
@@ -95,24 +91,6 @@ _DOE_ROOT, _DOE_PRESENT = doe_root_and_present()
 
 @pytest.mark.skipif(not _DOE_PRESENT, reason="DoE repo root not resolvable on this machine")
 def test_doe_integration_discovers_and_classifies_real_tree() -> None:
-    # Negative-spec (2026-07-25): this test formerly asserted lower-bound
-    # COUNTS per family (js-prefix >= 13, js-suffix >= 30, py-native >= 40,
-    # py-nonnative >= 15) against the sibling DoE-claude clone. Those floors
-    # asserted the SIBLING REPO'S CONTENT — a tree this repo neither owns nor
-    # controls — not this repo's own logic, and drifted twice as DoE mutated
-    # its own suite mix (most recently DoE deliberately retiring its JS/TS
-    # corpus in commits 1750bb79 / b069e8f2, driving js-prefix to 0 here). A
-    # same-day guard (commit 0a940fce) papered over the js-prefix collapse
-    # with a `pytest.skip()`, which also silently hid that js-suffix (17/30)
-    # and py-nonnative (1/15) were already under floor — the test was
-    # skipping on this machine and telling nobody anything. The classification
-    # contract this test exists to protect — every family found, every suite
-    # tagged with the right runner_kind — is already covered hermetically by
-    # `test_all_four_families_discovered_and_classified` above against a
-    # `fixture_tree`, which is unaffected by what DoE's tree happens to
-    # contain on any given day. This test now asserts only that `discover()`
-    # runs cleanly against a REAL tree and classifies whatever it finds
-    # correctly — not what that tree's suite mix happens to be.
     suites = discover(_DOE_ROOT)
 
     assert suites, f"discover() found no suites at all under {_DOE_ROOT}"

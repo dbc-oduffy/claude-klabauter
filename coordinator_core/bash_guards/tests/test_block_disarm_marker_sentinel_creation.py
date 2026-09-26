@@ -87,8 +87,6 @@ class TestRedirectionDenies:
         _reason(guard.check(_payload("echo ok >> %s" % SENTINEL)))
 
     def test_redirect_into_settings_home_denies(self):
-        # The real marker path is settings-home-scoped, not repo-root --
-        # basename matching must still catch it under an arbitrary prefix.
         _reason(guard.check(_payload("echo ok > /home/op/.coordinator-claude-settings/%s" % SENTINEL)))
 
 
@@ -202,9 +200,6 @@ class TestAllowReadsAndRemoval:
 
 
 class TestDoesNotCatchTheOtherSentinels:
-    """This guard protects a THIRD, different sentinel than the two prior
-    sentinel-creation guards -- confirm none of the three cross-catches
-    another's target basename."""
 
     def test_disarm_guard_does_not_catch_worktree_sentinel(self):
         assert guard.check(_payload("touch %s" % WORKTREE_SENTINEL)) is None
@@ -293,10 +288,6 @@ class TestIndirectionWrapperShapesDeny:
 
 
 class TestReachableThroughTheDispatchChain:
-    """Guard-level tests are not sufficient -- this guard must sit ahead of
-    `offer-git-c` in the real registered chain, same regression class as
-    the two sibling sentinel guards (see `block_worktree_sentinel_
-    creation.py`'s own test module docstring)."""
 
     @staticmethod
     def _decision(command):
@@ -364,8 +355,6 @@ class TestMarkerCannotSuppressThisGuard:
             f"Scope: machine-total\nSince: {now.isoformat()}\n"
             "Bands: advisory-rewrite,platform-conditioned-deny\nReason: dev box\n",
         )
-        # Sanity: the marker really is active (otherwise this test would
-        # pass vacuously).
         assert bd.disarm_status({"session_id": "sess-em-marker"}).active is True
         assert self._decision("touch %s" % SENTINEL) == "deny"
 
@@ -376,15 +365,10 @@ class TestMarkerCannotSuppressThisGuard:
             f"Scope: machine-total\nSince: {now.isoformat()}\n"
             "Bands: advisory-rewrite,confinement-deny\nReason: dev box\n",
         )
-        # The whole marker is rejected for naming confinement-deny -- it is
-        # not even "active" in the band-blind sense any more (M18).
         assert bd.disarm_status({"session_id": "sess-em-marker"}).active is False
         assert self._decision("touch %s" % SENTINEL) == "deny"
 
     def test_creating_the_marker_itself_is_the_denied_action(self, tmp_path):
-        """The sharpest form of the loop-closure property: even the Bash
-        command that would WRITE a fresh, more permissive disarm marker is
-        itself denied by this guard before it ever reaches disk."""
         assert self._decision("touch %s" % SENTINEL) == "deny"
         assert not (tmp_path / bd.MARKER_BASENAME).exists()
 

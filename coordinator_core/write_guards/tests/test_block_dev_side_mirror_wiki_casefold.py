@@ -36,9 +36,6 @@ from coordinator_core.write_guards import block_dev_side_mirror_wiki as guard
 
 @pytest.fixture
 def _wiki_fixture(tmp_path, monkeypatch):
-    """A fake $HOME with a dev-side wiki dir, plus a trusted plugin root
-    with a same-named bundled copy -- the exact "mirror" shape the guard
-    exists to deny."""
     home = tmp_path / "home"
     (home / ".claude" / "docs" / "wiki").mkdir(parents=True)
 
@@ -61,11 +58,6 @@ def _payload(file_path: str) -> dict:
 
 
 def test_same_case_dev_wiki_write_denied(_wiki_fixture):
-    """Control: the exact-case path was already caught before this fix.
-
-    Reclassified 2026-08-06 (B5 write-guard classification pass) from
-    hard-deny to advisory -- "caught" now means an ``additionalContext``
-    flag, not a blocked write (see this guard's own module docstring)."""
     home = _wiki_fixture
     result = guard.check(_payload(str(home / ".claude" / "docs" / "wiki" / "example.md")))
     assert result is not None
@@ -73,13 +65,6 @@ def test_same_case_dev_wiki_write_denied(_wiki_fixture):
 
 
 def test_differently_cased_dev_wiki_write_now_denied(_wiki_fixture):
-    """The bypass: before the casefold fix, a `.Claude` (capital C) segment
-    failed the plain `.startswith()` prefix check and the guard silently
-    returned None (ALLOW) -- even though this path lands in the identical
-    real directory as the control case on any case-insensitive-but-case-
-    preserving filesystem. After the fix, the comparison is casefolded and
-    the write is flagged exactly like the control case (advisory, per the
-    2026-08-06 reclassification -- the write itself is never blocked)."""
     home = _wiki_fixture
     differently_cased = str(home / ".Claude" / "Docs" / "WIKI" / "example.md")
     result = guard.check(_payload(differently_cased))
@@ -91,8 +76,6 @@ def test_differently_cased_dev_wiki_write_now_denied(_wiki_fixture):
 
 
 def test_unrelated_path_outside_dev_wiki_still_allowed(_wiki_fixture):
-    """Casefolding the comparison must not widen the guard to unrelated
-    paths that merely share a casefolded substring accidentally."""
     home = _wiki_fixture
     unrelated = str(home / "not-the-wiki" / "example.md")
     assert guard.check(_payload(unrelated)) is None

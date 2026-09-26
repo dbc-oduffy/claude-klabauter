@@ -64,8 +64,6 @@ from coordinator_core.roadmap.prep_gate import (
 )
 
 #: Exit codes, one per verdict plus usage. ``EXIT_REFUSED`` is reserved and
-#: currently unreachable (nothing in ``prep_gate.py`` produces ``REFUSED`` — see
-#: that module's own docstring), kept named so no future producer's mapping shifts.
 EXIT_PREPPED = 0
 EXIT_NOT_PREPPED = 1
 EXIT_REFUSED = 2
@@ -96,14 +94,6 @@ def _is_plan_sidecar(path: Path) -> bool:
 
 
 def _targets(args: List[str], repo_root: Path) -> List[Path]:
-    """Resolve positional targets to a flat list of plan files.
-
-    A directory expands to its immediate ``*.md`` children, sorted, with every
-    review/coverage sidecar pruned (``_is_plan_sidecar``); a file named
-    explicitly is taken as-is, sidecar or not. Every relative argument
-    resolves against ``repo_root``, so a caller running from a subdirectory
-    still names the same file the door names.
-    """
     out: List[Path] = []
     for arg in args:
         path = Path(arg)
@@ -121,7 +111,6 @@ def _targets(args: List[str], repo_root: Path) -> List[Path]:
 
 
 def _tally(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Aggregate a report batch into verdict counts and defect-kind counts."""
     counts: Dict[str, int] = {PREPPED: 0, NOT_PREPPED: 0, REFUSED: 0}
     kinds: Dict[str, int] = {}
     for report in reports:

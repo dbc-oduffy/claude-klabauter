@@ -69,7 +69,7 @@ from typing import List, Optional, Tuple
 
 from coordinator_core.session.declared_writes import declare_write
 
-_PROG = "gen-claude-doe-launcher.sh"  # literal program-name prefix, matches the DoE filename
+_PROG = "gen-claude-doe-launcher.sh"
 
 _USAGE = """\
 Usage: gen-claude-doe-launcher.sh [OPTIONS]
@@ -96,13 +96,6 @@ Environment:
 
 
 def is_windows() -> bool:
-    """Windows-signal detection, mirrored from the bash oracle's is_windows().
-
-    MSYSTEM is set by Git-Bash/MSYS2 shells (MINGW64/MINGW32/MSYS). OS=Windows_NT
-    is set natively by cmd.exe/PowerShell-spawned environments. `uname -s` (when
-    available) reports MINGW*/MSYS*/CYGWIN* on Windows POSIX layers. Any one signal
-    is sufficient.
-    """
     if os.environ.get("MSYSTEM"):
         return True
     if os.environ.get("OS") == "Windows_NT":
@@ -131,20 +124,6 @@ def is_windows() -> bool:
 
 
 def smoke_launcher(dest: str) -> Tuple[int, str]:
-    """Execute the rendered launcher once and return (returncode, combined_output).
-
-    Runs `dest` with a single benign argument list ["--version"], capturing
-    stdout+stderr combined. A `.ps1` destination is invoked via the `powershell`
-    interpreter (`-NoProfile -ExecutionPolicy Bypass -File <dest> --version`);
-    any other destination (i.e. `.cmd`) is invoked directly. Kept as a thin,
-    separately-testable seam so callers/tests can monkeypatch it without ever
-    really executing a launcher.
-
-    Deliberate isolation boundary — do not convert to an in-process call.
-    Mechanism: crash containment — smoke-executes a just-generated launcher,
-    which may be malformed. See
-    state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md.
-    """
     if dest.lower().endswith(".ps1"):
         powershell = shutil.which("powershell")
         if powershell is None:
@@ -176,7 +155,6 @@ def smoke_launcher(dest: str) -> Tuple[int, str]:
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: arg parse, Windows gate, render (or --check-only dry-run)."""
     check_only = False
     template_dir_override: Optional[str] = None
     smoke = True
@@ -233,12 +211,6 @@ def main(argv: List[str]) -> int:
     if template_dir_override:
         tmpl_dir = template_dir_override
     else:
-        # This module has no co-located DoE-side script path to derive the oracle's
-        # `${_script_dir}/../templates/bin` default from — the DoE trampoline resolves
-        # that default itself (relative to its own on-disk location) and always passes
-        # `--template-dir` explicitly, so this branch is reached only when a caller
-        # invokes main() directly without one. Fail loud rather than guess a cwd-relative
-        # path that would silently pick up the wrong templates in the wrong directory.
         print(
             f"{_PROG}: --template-dir not supplied and no default resolvable "
             "(the DoE trampoline should always pass one explicitly).",
@@ -265,9 +237,6 @@ def main(argv: List[str]) -> int:
         for kind, tmpl, dest in (("cmd", cmd_tmpl, cmd_dest), ("ps1", ps1_tmpl, ps1_dest)):
             with open(tmpl, "rb") as fh:
                 lines = fh.read().count(b"\n")
-            # Hardcoded POSIX "/tmp"
-            # fallback crashed --check-only on real Windows (no TMPDIR there).
-            # tempfile.gettempdir() resolves TMPDIR/TEMP/TMP per-platform.
             tmp_fd, tmp_out = tempfile.mkstemp(
                 prefix=f"claude-doe-launcher-check-{kind}.",
                 dir=tempfile.gettempdir(),
@@ -302,9 +271,7 @@ def main(argv: List[str]) -> int:
         try:
             shutil.copyfile(tmpl, tmp_dest)
             os.replace(tmp_dest, dest)
-            # DR-276: declared AFTER the write lands, never before — the
             # contract is a report of what was ACTUALLY written, not of an
-            # intended surface.
             declare_write(dest)
         except OSError:
             try:

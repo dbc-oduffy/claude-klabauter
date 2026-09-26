@@ -154,9 +154,6 @@ def test_read_door_route_door_not_installed_is_unresolved_not_raising(monkeypatc
 
 
 def test_read_door_route_ignores_stale_rows_before_since(monkeypatch, tmp_path):
-    """Only a row written AT OR AFTER the invocation's own start counts --
-    an older warm_server row from a previous, unrelated call must not
-    manufacture a false PASS for this invocation."""
     common_dir = _patch_repo(monkeypatch, tmp_path)
     sink = _sink_path(common_dir)
     stale_now = time.time() - 1000
@@ -238,8 +235,6 @@ def test_run_cold_control_invocation_unresolved_when_sink_inert(monkeypatch, tmp
 
 
 def test_repo_root_is_required_keyword(tmp_path):
-    """F5: repo_root must be an explicit, required argument -- no default
-    that could silently fall back to an ambient sink."""
     with pytest.raises(TypeError):
         door_route_signal.read_door_route(Path("/fake/door"), "ping")  # type: ignore[call-arg]
     with pytest.raises(TypeError):

@@ -172,15 +172,6 @@ class TestHookEntryPointStdinOnlyNoShellExec:
     permanent skip. Nothing in this class writes."""
 
     def _source(self) -> str:
-        # Two-repo layout: hook script lives in DoE-claude, engine in
-        # claude-klabauter (this repo). The sibling checkout is resolved
-        # through the canonical registry-first ladder
-        # (``doe_root_pointer.read_doe_root_pointer``, DR-071), never by
-        # climbing out of this repo and guessing a flat-sibling directory
-        # name -- that guess is the exact shape
-        # ``coordinator_core/tests/test_no_hardcoded_paths.py``'s Tooth 2
-        # exists to deny, and it degrades a test into silently asserting
-        # nothing when the layout differs.
         doe_root = read_doe_root_pointer()
         candidate = (
             os.path.join(doe_root, "coordinator", "hooks", "scripts", "preuse-bash-dispatch.py")

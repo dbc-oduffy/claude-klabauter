@@ -64,11 +64,6 @@ _SKIP_REASON = (
 
 
 def _load_cold_message_envelope() -> Any:
-    """Import DoE-claude's `_message_envelope.py` directly (a non-package
-    module, not importable by dotted path) via `importlib.util`, never a
-    `sys.path.insert` left dangling for later tests -- loaded fresh under a
-    private module name each call so this file never pollutes `sys.modules`
-    for anything else importing a same-named module."""
     assert _DOE_HOOKS_DIR is not None
     module_path = _DOE_HOOKS_DIR / "_message_envelope.py"
     spec = importlib.util.spec_from_file_location(
@@ -76,12 +71,6 @@ def _load_cold_message_envelope() -> Any:
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    # Registered in `sys.modules` BEFORE `exec_module`: the cold module's
-    # `@dataclass`-decorated classes carry string annotations, and
-    # `dataclasses._is_type` resolves those via `sys.modules.get(cls.
-    # __module__)` -- an unregistered module makes that lookup `None` and
-    # crashes with an unrelated `AttributeError` deep inside `dataclasses`,
-    # not the module's own code.
     sys.modules[spec.name] = module
     try:
         spec.loader.exec_module(module)
@@ -94,9 +83,6 @@ def _load_cold_message_envelope() -> Any:
 #: `guard_doctrine_surface_bash_write._WIKI_ANCHOR`'s own flat literal.
 _FLAT_ANCHOR = _guard._WIKI_ANCHOR
 
-#: A nested anchor shaped like `guard-host-subagent-bash-ban`'s own literal
-#: -- used ONLY to exercise the nested-segment regex branch, not that
-#: guard's real literal (this file has no business reading that module).
 _NESTED_ANCHOR = "coordinator/docs/wiki/coordinator-tripwires/some-page.md#slug"
 
 
@@ -105,18 +91,12 @@ class TestParityWithCold:
     def test_flat_anchor_resolves_to_cold_absolute_path(self) -> None:
         cold = _load_cold_message_envelope()
         expected = cold.resolve_wiki_citation(_FLAT_ANCHOR)
-        # Cold must actually have resolved something (not a same-string
-        # no-op) for this assertion to be meaningful.
         assert expected != _FLAT_ANCHOR
 
         actual = dispatch.resolve_wiki_citation(_FLAT_ANCHOR, str(Path(_DOE_ROOT) / "coordinator"))
         assert actual == expected
 
     def test_nested_anchor_matches_colds_own_resolution(self) -> None:
-        """LIVE comparison against cold's own resolver, never a hand-written
-        expected string -- this property (not any particular regex text) is
-        what let the parity oracle catch DoE's same-day regex widening; see
-        module docstring."""
         cold = _load_cold_message_envelope()
         expected = cold.resolve_wiki_citation(_NESTED_ANCHOR)
 
@@ -125,8 +105,6 @@ class TestParityWithCold:
 
 
 class TestFailOpen:
-    """No sibling-checkout dependency: these pin the resolver's own
-    unconditional fail-open contract, never cold-compared."""
 
     def test_unresolvable_plugin_root_returns_literal_unchanged(self) -> None:
         assert dispatch.resolve_wiki_citation(_FLAT_ANCHOR, None) == _FLAT_ANCHOR
@@ -150,9 +128,6 @@ class TestFailOpen:
 
 
 class TestCheckThreadsResolverOnDenyPathOnly:
-    """Pins `check()`'s own `resolve_wiki_citation` parameter contract: the
-    guard module never resolves anything itself, only invokes what it is
-    handed, and only from its own deny path."""
 
     _PAYLOAD = {
         "tool_name": "Bash",

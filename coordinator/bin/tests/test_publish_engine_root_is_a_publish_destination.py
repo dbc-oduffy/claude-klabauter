@@ -61,9 +61,6 @@ class TestDescribeEngineImportFailure:
         assert str(root) in message
 
     def test_the_message_names_an_alternative(self, tmp_path):
-        """WHAT TO DO INSTEAD, per the agent-facing message register
-        (docs/wiki/guard-messaging.md § Register): a refusal with no alternative
-        leaves the reader exactly where the 9-day misdiagnosis left them."""
         root = _make_engine_root(tmp_path, with_percolate=False)
 
         message = publish._describe_engine_import_failure(str(root), ImportError("boom"))
@@ -71,12 +68,6 @@ class TestDescribeEngineImportFailure:
         assert "COORDINATOR_ENGINE_ROOT" in message
 
     def test_the_named_lever_survives_the_publish_transform(self, tmp_path):
-        """The only copy of this string that ever reaches this branch is the
-        MIRROR's, and publish rewrites every repo-token identifier including
-        env-var names -- so a message naming the repo-token lever would advise
-        the mirror's reader to set the MIRROR's own root variable. Rung 1 of
-        `cc_invoke.resolve_engine_root` reads the repo-neutral name first in
-        both trees; it is the only lever that reads the same wherever printed."""
         root = _make_engine_root(tmp_path, with_percolate=False)
 
         message = publish._describe_engine_import_failure(str(root), ImportError("boom"))
@@ -84,8 +75,6 @@ class TestDescribeEngineImportFailure:
         assert "CLAUDE_KLABAUTER_ROOT" not in message
 
     def test_root_with_percolate_engine_keeps_the_generic_cause(self, tmp_path):
-        """A root that DOES carry the engine failed for some other reason — the real
-        exception must survive rather than be overwritten by the mirror explanation."""
         root = _make_engine_root(tmp_path, with_percolate=True)
 
         message = publish._describe_engine_import_failure(str(root), ImportError("boom"))
@@ -94,8 +83,6 @@ class TestDescribeEngineImportFailure:
         assert "boom" in message
 
     def test_unresolved_root_keeps_the_generic_cause(self):
-        """`engine_root is None` means the failure happened at or before
-        `require_engine_on_path` — there is no root to characterise."""
         message = publish._describe_engine_import_failure(None, ImportError("boom"))
 
         assert "publish destination" not in message

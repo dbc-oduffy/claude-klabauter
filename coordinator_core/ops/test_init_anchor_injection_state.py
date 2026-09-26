@@ -1,13 +1,3 @@
-"""
-Tests for coordinator_core.ops.init_anchor_injection_state.
-
-Coverage:
-    (a) Happy path — resolved doe_root, ISO today, empty accumulator lists.
-    (b) Idempotency (AC7) — two back-to-back invocations with identical
-        params ({}) return equivalent output.
-    (c) Unresolvable doe_root fails loud (RuntimeError), never a silent
-        empty-string placeholder.
-"""
 
 from __future__ import annotations
 
@@ -36,7 +26,6 @@ def test_double_invocation_is_idempotent(monkeypatch):
     second = mod._handler({})
 
     assert first == second
-    # Distinct list objects, no shared/mutated accumulator between calls.
     assert first["injected_dates"] is not second["injected_dates"]
     assert first["content_gap_dates"] is not second["content_gap_dates"]
 

@@ -34,9 +34,6 @@ from coordinator_core.bash_guards import (
     guard_host_subagent_bash_spawn_shapes as _shapes_mod,
 )
 
-# Measured (state/audits/2026-08-29-unverified-parity-findings-measured.md
-# FINDING A) cold-DENY / warm-allow shapes, plus the bare-hex control both
-# sides already agreed on.
 _DENY_SHAPES = [
     pytest.param("aexecutor-0123456789abcdef", "short12", id="named_teammate_short_session"),
     pytest.param("ABCDEF0123456789", "sess12345678", id="uppercase_hex"),

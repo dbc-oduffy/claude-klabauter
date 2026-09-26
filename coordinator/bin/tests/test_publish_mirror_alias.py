@@ -1,17 +1,3 @@
-"""coordinator/bin/tests/test_publish_mirror_alias.py — pins
-`publish.py::_mirror_sigil_for_alias`, which lets the word an operator types
-for a mirror (`klabauter`) resolve to that mirror's `publish-mirror:` sigil.
-
-`percolate-gate branch0-gate klabauter` routes to `coordinator-publish
-klabauter`; before this helper `publish.py` refused that same word as an
-unknown target, so the gate's own instruction failed when run verbatim.
-
-Negative spec: an alias never chooses between destinations. A match spanning
-two mirrors, reaching a non-mirror row, or matching nothing returns None and
-falls through to the unknown-target FATAL.
-
-Run: python -m pytest coordinator/bin/tests/test_publish_mirror_alias.py -q
-"""
 
 from __future__ import annotations
 

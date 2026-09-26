@@ -91,35 +91,17 @@ def _assert_not_denied(out: Any) -> None:
     )
 
 
-#: (probe command, kwargs merged into the payload, one-line inertness note)
-#: per guard. Every command is chosen so that, if the guard fails to fire,
-#: running it for real on a shared tree is a no-op (git refuses before any
-#: mutation) -- never a bare `git stash clear`/`git worktree add <fresh
-#: path>`, per the dispatching brief's own SAFETY mandate.
 _PROBES: Dict[str, Callable[[], Dict[str, Any]]] = {
-    # `stash@{999}` does not exist on any real stack -- `git stash drop`
-    # errors ("no stash entries found"/"not a valid reference") before
-    # touching anything. No identity gate on this guard (fires for the EM
-    # too), so no agent_id needed.
     "block_stash_destruction": lambda: _payload_dict(
         "git stash drop 'stash@{999}'"
     ),
-    # A pathspec that matches no tracked/untracked file makes `git stash
-    # push -- <pathspec>` fail with "did not match any files" and creates
-    # NO stash entry. Identity-gated to subagents -- needs agent_id.
     "block_subagent_stash_creation": lambda: _payload_dict(
         "git stash push -- nonexistent-inert-probe-path-xyz",
         agent_id="deadbeef0123",
     ),
-    # `docs` already exists and is non-empty in this repo -- `git worktree
-    # add docs <branch>` errors ("already exists") before creating
-    # anything. No identity gate on this guard.
     "block_worktree_creation": lambda: _payload_dict(
         "git worktree add docs some-branch"
     ),
-    # No branch named this exists -- `git branch -D` errors ("branch not
-    # found") before deleting anything. Identity-gated; agent_type given
-    # directly (PRIMARY leg) needs no git_root/back-pointer resolution.
     "block_subagent_destructive_action": lambda: _payload_dict(
         "git branch -D nonexistent-branch-inert-probe-xyz",
         agent_id="deadbeef0123",
@@ -127,26 +109,14 @@ _PROBES: Dict[str, Callable[[], Dict[str, Any]]] = {
     ),
 }
 
-#: Benign command per guard for AC9: mentions the guard's own trigger word
-#: but resolves to an explicitly-allowed (or off-domain) subcommand, so a
-#: correct guard allows it even when parsed CLEANLY -- the disarmed-parser
-#: run below proves the SAME allow survives when the parser cannot run at
-#: all and the command instead routes through C2's legacy PowerShell scanner.
 _BENIGN: Dict[str, Callable[[], Dict[str, Any]]] = {
     # "list" is not in `_DENY_SUBCOMMANDS` -- allowed under both the
-    # tokenized pass and the legacy scanner.
     "block_stash_destruction": lambda: _payload_dict("git stash list"),
     "block_subagent_stash_creation": lambda: _payload_dict(
         "git stash list", agent_id="deadbeef0123"
     ),
     # "list" is in `_ALLOW_SUBCOMMANDS` explicitly (the cleanup-reachability
-    # carve-out the module docstring names) -- allowed under both paths.
     "block_worktree_creation": lambda: _payload_dict("git worktree list"),
-    # `resolve_segments_for_dialect` returning `None` (disarmed) short-
-    # circuits both `_evaluate_powershell_git_destructive` and
-    # `_evaluate_powershell_destructive` to a bare `None` regardless of
-    # command content -- `git status` is a genuinely safe forward command
-    # either way.
     "block_subagent_destructive_action": lambda: _payload_dict(
         "git status", agent_id="deadbeef0123", agent_type="coordinator:executor"
     ),
@@ -154,8 +124,6 @@ _BENIGN: Dict[str, Callable[[], Dict[str, Any]]] = {
 
 
 class TestObservedBlocksAC7:
-    """AC7: a real PowerShell-tool payload, through the real dispatch
-    entrypoint, observed to deny -- for each of the four converted guards."""
 
     @pytest.mark.parametrize("guard_name", sorted(_PROBES))
     def test_powershell_probe_denies_through_dispatch(self, guard_name: str) -> None:
@@ -165,9 +133,6 @@ class TestObservedBlocksAC7:
 
 
 class TestDisarmedLegDoesNotDenyBenignAC9:
-    """AC9: with `tree_sitter_pwsh` unimportable (`_powershell_tokens`
-    routing every call through its ImportError -> SILENT leg), a benign
-    command that merely mentions the guard's trigger word must not deny."""
 
     @pytest.fixture(autouse=True)
     def _disarm_parser(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -185,11 +150,6 @@ class TestDisarmedLegDoesNotDenyBenignAC9:
 
 
 class TestProbeArmedReportsArmedUnderThisInterpreter:
-    """Pins the assumption `TestDisarmedLegDoesNotDenyBenignAC9` stands in
-    for: under the CURRENT interpreter (this repo ships `tree_sitter_pwsh`
-    as a real dependency), `_dialect.probe_armed` reports ARMED -- so the
-    in-process `_parser` monkeypatch above is simulating a genuine disarmed
-    state, not a no-op against an already-broken install."""
 
     def test_probe_armed_under_current_interpreter(self) -> None:
         armed, detail = _dialect.probe_armed(sys.executable, os.getcwd())

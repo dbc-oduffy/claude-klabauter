@@ -89,15 +89,10 @@ def test_posix_breadcrumb_vocabulary_unchanged():
     assert "posix-parent-miss:{type(posix_capture_exc).__name__}" in source
 
 
-# ---------------------------------------------------------------------------
-# C3 — argv0-basename derivation fix
-# ---------------------------------------------------------------------------
-
-
 def test_version_string_name_but_claude_argv0_is_accepted():
     """The exact live-measured shape this chunk fixes: name() reports a
     version string, but argv0's basename is "claude"."""
-    proc = _FakeProcess(cmdline=["/home/example-user/.local/bin/claude", "--flag"], name="2.1.231")  # abs-path-ok: fixture argv0, not a real host path
+    proc = _FakeProcess(cmdline=["/home/example-user/.local/bin/claude", "--flag"], name="2.1.231")
     comm = core._harness_process_comm(proc)
     assert comm == "claude"
     assert core._is_harness_process(comm) is True

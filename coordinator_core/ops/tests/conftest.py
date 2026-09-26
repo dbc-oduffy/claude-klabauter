@@ -1,16 +1,3 @@
-"""
-coordinator_core.ops.tests.conftest
-
-Shared fixture for the C1 (spec_backlink_resolve)/C2 (backfill_deliverable_spine)/
-C3 (rewrite_spec_backlinks) chunk trio of
-pln-spec-backlinks-cite-a-stable-d-451b3e — one
-on-disk corpus fixture, authored once here rather than re-derived three times.
-
-Mirrors real corpus shape verified against this repo's own
-docs/plans/2026-08-10-chunk-commit-liveness-becomes-a-nameable.md (plan
-frontmatter: `plan_id`, `deliverable_id`, both `pln-<slug>-<6hex>` /
-`dlv-<slug>-<6hex>`) and state/sizings/*.yaml (plain YAML, no markdown fence).
-"""
 
 from __future__ import annotations
 
@@ -20,33 +7,6 @@ import pytest
 
 
 def build_spec_backlink_corpus(root: Path) -> dict[str, Path]:
-    """Populate `root` with a small corpus resembling this repo's real one.
-
-    Layout built under `root`:
-      - docs/plans/<dated-slug>.md        — plan records, frontmatter variants
-      - archive/specs/YYYY-MM/<dated-slug>.md — archived spec records, same variants
-      - state/sizings/<dated-slug>.yaml   — plain-YAML sizing records
-      - a citing file with a path-form spec-backlink citation (in-line, with a
-        `§ <anchor>` suffix) plus a decoy prose mention of a docs/plans/ path
-        outside any backlink line
-
-    Frontmatter variants covered, per the C1/C2/C3 stub bodies:
-      - a real `plan_id` only
-      - a real `deliverable_id` only
-      - both `plan_id` and `deliverable_id`
-      - a literal `null` value for one or both keys
-      - no key at all
-      - one `dlv-` id deliberately shared by two plan records (the ambiguity
-        case), each of those two also carrying a distinct `plan_id`
-
-    Returns a dict of named paths callers commonly need:
-      "root", "docs_plans", "archive_specs_dir", "state_sizings",
-      "plan_full", "plan_dlv_only", "plan_pln_only", "plan_null_ids",
-      "plan_no_ids", "plan_ambiguous_a", "plan_ambiguous_b",
-      "archived_full", "archived_no_ids",
-      "sizing_with_dlv", "sizing_without_dlv",
-      "citing_file".
-    """
     docs_plans = root / "docs" / "plans"
     archive_specs_dir = root / "archive" / "specs" / "2026-08"
     state_sizings = root / "state" / "sizings"
@@ -82,7 +42,6 @@ def build_spec_backlink_corpus(root: Path) -> dict[str, Path]:
         lines.append("")
         return "\n".join(lines)
 
-    # -- docs/plans/ variants -------------------------------------------------
 
     plan_full = docs_plans / "2026-08-13-fixture-plan-full.md"
     plan_full.write_text(
@@ -134,9 +93,6 @@ def build_spec_backlink_corpus(root: Path) -> dict[str, Path]:
         encoding="utf-8",
     )
 
-    # Ambiguity case: two plan records sharing one dlv- id, each also
-    # carrying a distinct plan_id (per C1's stub body: "duplicate-id
-    # conflict ... resolves via pln- instead").
     shared_dlv = "dlv-fixture-shared-eeeeee"
     plan_ambiguous_a = docs_plans / "2026-08-13-fixture-plan-ambiguous-a.md"
     plan_ambiguous_a.write_text(
@@ -157,7 +113,6 @@ def build_spec_backlink_corpus(root: Path) -> dict[str, Path]:
         encoding="utf-8",
     )
 
-    # -- archive/specs/YYYY-MM/ variants --------------------------------------
 
     archived_full = archive_specs_dir / "2026-08-01-fixture-archived-full.md"
     archived_full.write_text(
@@ -181,7 +136,6 @@ def build_spec_backlink_corpus(root: Path) -> dict[str, Path]:
         encoding="utf-8",
     )
 
-    # -- state/sizings/*.yaml (plain YAML, no markdown fence) -----------------
 
     sizing_with_dlv = state_sizings / "2026-08-13-fixture-sizing-with-dlv.yaml"
     sizing_with_dlv.write_text(
@@ -218,7 +172,6 @@ def build_spec_backlink_corpus(root: Path) -> dict[str, Path]:
         encoding="utf-8",
     )
 
-    # -- a citing file with a real backlink line + a decoy prose mention -----
 
     citing_file = root / "coordinator_core" / "fixture_citer.py"
     citing_file.parent.mkdir(parents=True, exist_ok=True)
@@ -265,5 +218,4 @@ def build_spec_backlink_corpus(root: Path) -> dict[str, Path]:
 
 @pytest.fixture
 def spec_backlink_corpus(tmp_path: Path) -> dict[str, Path]:
-    """pytest fixture wrapping `build_spec_backlink_corpus` over a fresh tmp_path."""
     return build_spec_backlink_corpus(tmp_path)

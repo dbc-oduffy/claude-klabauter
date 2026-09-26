@@ -53,12 +53,6 @@ def _git(repo: Path, *args: str) -> None:
 
 
 def _seed_repo(repo: Path) -> None:
-    """A dest carrying a nested path under `bin/` -- the shape that failed.
-
-    Nested, not top-level: a single-segment path cannot distinguish a POSIX
-    key from a native-separator one, so a top-level fixture would pass against
-    the very bug this file exists to catch.
-    """
     repo.mkdir(parents=True, exist_ok=True)
     _git(repo, "init", "-q")
     nested = repo / "bin" / "coordinator-auto-push.cmd"
@@ -70,12 +64,6 @@ def _seed_repo(repo: Path) -> None:
 
 
 def test_head_tree_keys_are_dest_relative_posix(tmp_path):
-    """`_dest_head_tree` emits dest-relative POSIX, on every host.
-
-    Pinned directly rather than assumed, because every comparison against this
-    set is only as correct as its key form -- and on Windows a native-separator
-    key would still LOOK like a path in a debugger while matching nothing.
-    """
     repo = tmp_path / "dest"
     _seed_repo(repo)
 
@@ -86,14 +74,6 @@ def test_head_tree_keys_are_dest_relative_posix(tmp_path):
 
 
 def test_a_tracked_deletion_is_a_head_tree_member_by_its_pathspec_string(tmp_path):
-    """The contract itself: the string the commit leg carries for a deleted
-    path IS a key into `_dest_head_tree`, with no normalisation in between.
-
-    This is the assertion whose absence let the `resolve()` defect ship. It
-    deliberately compares the two producers' outputs against each other rather
-    than either against a literal, so a future change to EITHER form fails here
-    instead of silently declining every deletion at a public mirror.
-    """
     repo = tmp_path / "dest"
     _seed_repo(repo)
     deleted = repo / "bin" / "coordinator-auto-push.cmd"
@@ -119,14 +99,6 @@ def test_a_tracked_deletion_is_a_head_tree_member_by_its_pathspec_string(tmp_pat
 
 
 def test_tracked_deletion_is_routed_to_deletions_not_declined(tmp_path):
-    """THE regression test: the classifier must route a tracked-but-deleted
-    path to the deletion channel, not the decline channel.
-
-    This is the assertion the first fix shipped without. It fails against the
-    `Path(entry).resolve()` version -- the entry resolves against the process
-    CWD, lands outside `repo_root`, and drops into `declined` -- and passes
-    once the relative entry is used as the key it already is.
-    """
     repo = tmp_path / "dest"
     _seed_repo(repo)
     (repo / "bin" / "coordinator-auto-push.cmd").unlink()
@@ -142,13 +114,6 @@ def test_tracked_deletion_is_routed_to_deletions_not_declined(tmp_path):
 
 
 def test_absent_and_untracked_still_declines_with_an_accurate_reason(tmp_path):
-    """The other arm must keep declining -- the fix widens what commits, and
-    a path that is neither on disk nor at HEAD has no deletion to carry.
-
-    The reason string is asserted for its CLAIM, not its wording: the previous
-    message asserted the index had been consulted when no such check existed,
-    and a confident false reason is what cost two round trips to disprove.
-    """
     repo = tmp_path / "dest"
     _seed_repo(repo)
 
@@ -164,12 +129,6 @@ def test_absent_and_untracked_still_declines_with_an_accurate_reason(tmp_path):
 
 
 def test_absolute_entry_outside_the_dest_is_declined_not_crashed(tmp_path):
-    """An absolute entry from some other tree must decline, never raise.
-
-    `relative_to` raises on a path outside `repo_root`, and this classifier
-    sits on the commit leg of a publish round -- a raise here is a crash mid-
-    round, not a refusal.
-    """
     repo = tmp_path / "dest"
     _seed_repo(repo)
     foreign = tmp_path / "elsewhere" / "bin" / "coordinator-auto-push.cmd"
@@ -185,14 +144,6 @@ def test_absolute_entry_outside_the_dest_is_declined_not_crashed(tmp_path):
 
 
 def test_resolving_a_relative_entry_is_what_broke_it(tmp_path):
-    """Negative control, pinning the specific wrong move rather than a mood.
-
-    `Path(entry).resolve()` on a dest-relative pathspec entry resolves against
-    the PROCESS CWD, not the destination -- so the resolved path lies outside
-    `repo_root` and `relative_to` raises. Asserting the raise keeps the reason
-    the first fix failed legible to the next reader, who will otherwise see a
-    plausible-looking `resolve()` and reintroduce it.
-    """
     repo = tmp_path / "dest"
     _seed_repo(repo)
     entry = "bin/coordinator-auto-push.cmd"
@@ -212,16 +163,6 @@ def test_resolving_a_relative_entry_is_what_broke_it(tmp_path):
 
 
 def test_commit_subject_counts_deletions_it_actually_carries():
-    """The subject's removed-count must include the deletion channel.
-
-    A removal reaches the pathspec from the dest-HEAD comparison, not from
-    this run's change lines, so a triple summarised from `real_changes` alone
-    reports zero however many files the commit deletes. Measured on
-    coordinator-claude 2026-09-01: a commit carrying eight file deletions and
-    1,217 deleted lines announced "0 removed" in its own subject -- and a
-    commit subject is the one report that outlives the round, so the OSS
-    mirror's permanent history now carries that claim.
-    """
     subject = _mod._build_commit_subject(
         "coordinator-claude",
         [("NEW", "bin/added.py")],
@@ -233,11 +174,6 @@ def test_commit_subject_counts_deletions_it_actually_carries():
 
 
 def test_a_deletion_with_its_own_change_line_is_not_counted_twice():
-    """Set difference, not addition: a path already tagged DELETE/REMOVE in
-    the carried change lines must not also be counted through the deletion
-    channel. Overcounting a removal is the same class of false claim as
-    undercounting one, in the same permanent record.
-    """
     subject = _mod._build_commit_subject(
         "coordinator-claude",
         [("REMOVE", "bin/gone.cmd")],
@@ -249,10 +185,6 @@ def test_a_deletion_with_its_own_change_line_is_not_counted_twice():
 
 
 def test_subject_is_unchanged_when_no_deletions_are_carried():
-    """Negative control: the argument is optional and additive, so a round
-    carrying no removals must produce exactly the subject it produced before
-    the deletion channel existed.
-    """
     without = _mod._build_commit_subject(
         "coordinator-claude", [("NEW", "bin/added.py")], ["bin/added.py"]
     )
@@ -266,16 +198,6 @@ def test_subject_is_unchanged_when_no_deletions_are_carried():
 
 
 def test_a_round_that_carries_removals_is_not_a_warning(capsys):
-    """A pathspec larger than this run's change lines, with nothing dropped,
-    must not count as a warning.
-
-    `real_changes` is the worktree comparison; a removal reaches the pathspec
-    from the dest-HEAD comparison instead, so ANY round that deletes something
-    has a bigger pathspec by construction. That used to return a counted
-    warning, so a healthy round announced its own success in the register of a
-    warning -- reported by DoE on the first round that could carry deletions
-    at all. The informational line must still print: uncounted, not silent.
-    """
     warning = _mod._report_commit_residual(
         "coordinator-claude",
         [("NEW", "bin/added.py")],
@@ -291,10 +213,6 @@ def test_a_round_that_carries_removals_is_not_a_warning(capsys):
 
 
 def test_surplus_separates_removals_from_unexplained_residue(capsys):
-    """Removals and stranded residue used to render identically. They are not
-    the same fact: one is the round working, the other is a path nothing in
-    this run explains and is still worth an eye.
-    """
     _mod._report_commit_residual(
         "coordinator-claude",
         [("NEW", "bin/added.py")],
@@ -308,10 +226,6 @@ def test_surplus_separates_removals_from_unexplained_residue(capsys):
 
 
 def test_a_dropped_change_is_still_a_counted_warning():
-    """The direction that matters must keep warning: an intended change that
-    did NOT reach the pathspec is the defect this function exists for, and a
-    round once printed a bare PASS while dropping 57 of them.
-    """
     warning = _mod._report_commit_residual(
         "coordinator-claude",
         [("NEW", "bin/added.py"), ("UPDATE", "bin/dropped.py")],
@@ -323,13 +237,6 @@ def test_a_dropped_change_is_still_a_counted_warning():
 
 
 def test_the_dropped_warning_does_not_call_the_pathspec_committed():
-    """Vocabulary: the pathspec is what is NAMED to the commit leg, not what
-    committed -- entries can still decline there. The refusal line called the
-    same paths "declined" while this report called them "committed": one fact,
-    two words, opposite meanings, which cost a round trip to reconcile. The
-    surviving warning speaks about reported changes, never about paths having
-    committed.
-    """
     warning = _mod._report_commit_residual(
         "coordinator-claude",
         [("NEW", "a.py"), ("NEW", "b.py"), ("NEW", "c.py")],

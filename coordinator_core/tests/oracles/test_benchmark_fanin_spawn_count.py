@@ -25,10 +25,6 @@ from unittest.mock import patch
 
 import coordinator_core.benchmarks.shim_fanin_measure as shim_fanin_measure
 
-#: Declaration for the register-aging sweep (C5,
-#: `docs/plans/2026-08-26-every-register-either-derives-or-fails-on-its-dead-rows.md`):
-#: every row of `_MODULES` names a whole importable module, never a symbol living inside a
-#: parent module.
 _MODULES__SUBJECT_CLASS = "module"
 
 _MODULES = (
@@ -47,9 +43,6 @@ def _fake_run(calls: list) -> "callable":
 
 
 def test_spawn_n_processes_issues_one_spawn_per_module():
-    """The control arm: N modules must cost exactly N spawns, one `python -c "import <mod>"`
-    child per module -- collapsing this into fewer spawns would measure warm-vs-cold-cache
-    instead of N-processes-vs-one-process (see the module's own docstring)."""
     calls: list = []
     with patch.object(shim_fanin_measure.subprocess, "run", new=_fake_run(calls)):
         shim_fanin_measure._spawn_n_processes(_MODULES)
@@ -68,9 +61,6 @@ def test_spawn_n_processes_issues_one_spawn_per_module():
 
 
 def test_spawn_one_process_importing_all_issues_exactly_one_spawn():
-    """The opposing (already-batched) arm: same module set, exactly one spawn, all imports in
-    one `-c` script. This is the batched form the register points to as proof that batching
-    `_spawn_n_processes` is possible in principle but wrong for this benchmark's purpose."""
     calls: list = []
     with patch.object(shim_fanin_measure.subprocess, "run", new=_fake_run(calls)):
         shim_fanin_measure._spawn_one_process_importing_all(_MODULES)
@@ -90,10 +80,6 @@ def test_spawn_one_process_importing_all_issues_exactly_one_spawn():
 
 
 def test_oracle_fails_when_the_control_arm_is_collapsed():
-    """Proves the oracle above is not vacuous: a deliberately-batched stand-in for
-    `_spawn_n_processes` (one spawn instead of N) must FAIL the per-module spawn-count
-    assertion. Without this, a future edit that quietly collapses the loop would pass this
-    file's other test for the wrong reason -- an oracle that cannot fail is worthless."""
     calls: list = []
 
     def collapsed(modules):

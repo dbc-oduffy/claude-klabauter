@@ -1,12 +1,3 @@
-"""An unimportable engine makes coordinator/bin/hook-run.py pass loudly, never deny.
-
-Exit 2 on a PreToolUse hook blocks the tool, so the old `return 2` walled off
-every tool call on the box whenever the engine could not be imported. These
-guards are ergonomics, not security: an unrun guard now exits 0 with a
-`systemMessage` for the operator and `additionalContext` for the model, and
-carries no `permissionDecision` (DoE-claude coordinator/docs/wiki/
-coordinator-tripwires/an-unreachable-engine-passes-loudly-never-denies.md).
-"""
 
 from __future__ import annotations
 

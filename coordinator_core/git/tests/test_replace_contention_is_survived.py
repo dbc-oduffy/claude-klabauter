@@ -32,13 +32,6 @@ from coordinator_core.git.git_objects import _replace_with_retry, cas_ref, write
 
 
 def _gitdir(tmp_path: pathlib.Path) -> pathlib.Path:
-    """Plain directories, no `git init` spawn.
-
-    `cas_ref` only needs the ref's parent to exist, and the assertion here is
-    about OUR refusal path, never about real git's behaviour -- so a spawn
-    would buy nothing and cost a process on a box where process creation IS
-    the cost.
-    """
     gitdir = tmp_path / ".git"
     (gitdir / "refs" / "heads").mkdir(parents=True)
     return gitdir
@@ -62,10 +55,6 @@ class TestReplaceHelper:
         assert calls["n"] == 3
 
     def test_gives_up_rather_than_forcing(self, tmp_path, monkeypatch):
-        """A destination that never frees is reported, never forced.
-
-        Forcing would convert a refused commit into a silently orphaned one.
-        """
         src, dst = tmp_path / "s", tmp_path / "d"
         src.write_bytes(b"x")
         monkeypatch.setattr(
@@ -77,7 +66,6 @@ class TestReplaceHelper:
         assert not dst.exists()
 
     def test_a_non_transient_oserror_is_not_retried(self, tmp_path, monkeypatch):
-        """Retrying a missing source or a read-only tree only delays the report."""
         src, dst = tmp_path / "s", tmp_path / "d"
         src.write_bytes(b"x")
         calls = {"n": 0}
@@ -91,8 +79,6 @@ class TestReplaceHelper:
         assert calls["n"] == 1, "a non-transient must not walk the ladder"
 
     def test_still_valid_is_rechecked_before_each_retry(self, tmp_path, monkeypatch):
-        """The premise can expire DURING the wait -- that is the whole reason a
-        retry can be wrong, so one up-front check would not be enough."""
         src, dst = tmp_path / "s", tmp_path / "d"
         src.write_bytes(b"x")
         monkeypatch.setattr(
@@ -132,8 +118,6 @@ class TestWriteObjectIsContentAddressed:
         assert (gitdir / "objects" / sha[:2] / sha[2:]).exists()
 
     def test_a_destination_that_never_appears_is_raised(self, tmp_path, monkeypatch):
-        """The content-addressed escape is not a blanket swallow: with no peer
-        write, the failure must surface rather than report a phantom sha."""
         gitdir = tmp_path / ".git"
         (gitdir / "objects").mkdir(parents=True)
         monkeypatch.setattr(
@@ -147,12 +131,6 @@ class TestWriteObjectIsContentAddressed:
 
 class TestCasRefRefusesRatherThanCrashes:
     def test_permissionerror_taking_the_lock_is_a_refusal(self, tmp_path, monkeypatch):
-        """Windows spells a lost lock `PermissionError`, not `FileExistsError`.
-
-        Only the latter was caught, so the raise escaped `cas_ref`'s documented
-        bool contract and reached callers as a crash. Failing to TAKE the lock
-        is a refusal: nothing written, no ref moved.
-        """
         gitdir = _gitdir(tmp_path)
         real_open = os.open
 

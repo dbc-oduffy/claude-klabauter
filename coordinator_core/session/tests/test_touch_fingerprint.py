@@ -1,16 +1,3 @@
-"""
-C10 (plan ``2026-08-27-a-pathspec-is-not-a-scope``): tests for the
-whole-file content-hash fingerprint recorded alongside a TOUCH --
-``touch_record.py::compute_content_hash``, ``TouchEvent.content_hash``, and
-the encode/decode round trip that carries it. See
-``docs/research/2026-08-27-hunk-level-ownership-spike.md`` for why a content
-hash (not ``size+mtime``) is the mechanism.
-
-This chunk records only -- no commit-time consumer here (C11's job); these
-tests cover the recording mechanism itself: computing the hash, carrying it
-through encode/decode, folding it through last-verb-wins, and degrading
-(never silently) when it cannot be computed or is absent.
-"""
 
 from __future__ import annotations
 
@@ -101,10 +88,6 @@ def test_decode_line_rejects_non_string_hash():
 
 
 def test_last_verb_wins_supersedes_earlier_hash_for_same_path():
-    """A later own-write's hash supersedes an earlier one for the same
-    path -- the fold C11 will read from, per the brief's instruction to
-    reuse the existing last-verb-wins projection rather than invent a
-    second one."""
     h1 = hashlib.sha256(b"v1").hexdigest()
     h3 = hashlib.sha256(b"v3").hexdigest()
     event_v1 = decode_line(

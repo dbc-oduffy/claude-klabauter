@@ -1,17 +1,3 @@
-"""
-Deliverable-spine shared enums — used by HandoffSummary, PlanSummary, and
-RoadmapSummary. Pydantic port of DoE
-`coordinator/cockpit-contract/src/entities/deliverable-spine.ts` (Zod source).
-
-Extracted into a standalone module to avoid circular imports in the TS
-source: summaries.ts re-exports RoadmapSummary (from roadmap-summary.ts), and
-roadmap-summary.ts needs these enums — a direct import from summaries.ts
-would create a circular reference. Preserved as a standalone module here for
-parity, though Python's import model does not force the same split.
-
-Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § D4, D5.
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
-"""
 from __future__ import annotations
 
 from typing import Literal

@@ -62,24 +62,15 @@ def _make_bug(worktree: Path, name: str, body: str) -> Path:
     return path
 
 
-# ---------------------------------------------------------------------------
-# Discovery correctness — stage-1 substring set is a superset of stage-2.
-# ---------------------------------------------------------------------------
-
 def test_stage1_candidate_set_is_superset_of_stage2_confirmed(tmp_path: Path) -> None:
     worktree = tmp_path / "repo"
 
-    # Genuinely terminal — confirmed by both stages.
     _make_bug(worktree, "2026-01-01-closed.yaml", "status: closed\ntitle: closed one\n")
-    # Stage-1 false positive: the needle text appears, but NOT as the parsed
-    # status (embedded inside another field) — stage-1 flags it, stage-2 must
-    # not confirm it as terminal.
     _make_bug(
         worktree,
         "2026-01-02-mentions-only.yaml",
         "status: open\nnote: \"history: status: closed last month\"\n",
     )
-    # Not a stage-1 candidate at all — no needle text anywhere.
     _make_bug(worktree, "2026-01-03-open.yaml", "status: open\ntitle: still going\n")
 
     stage1 = {p.name for p in m._enumerate_bugs(worktree) if m._stage1_frontmatter_bounded_scan(p)}
@@ -93,15 +84,9 @@ def test_stage1_candidate_set_is_superset_of_stage2_confirmed(tmp_path: Path) ->
     assert "2026-01-03-open.yaml" not in stage2
 
 
-# ---------------------------------------------------------------------------
-# Fail-closed refusals.
-# ---------------------------------------------------------------------------
-
 def test_unparseable_yaml_candidate_is_refused_not_archived(tmp_path: Path) -> None:
     worktree = tmp_path / "repo"
     cid = "state/bug-backlog/2026-02-01-broken.yaml"
-    # Contains the stage-1 needle but is not valid YAML (unterminated flow
-    # mapping) so yaml.safe_load raises and _read_plain_yaml returns {}.
     _make_bug(worktree, "2026-02-01-broken.yaml", "status: closed\nnote: [unterminated\n")
 
     discovered = {p.name for p in m._discover_candidates(worktree)}
@@ -123,8 +108,6 @@ def test_unparseable_yaml_candidate_is_refused_not_archived(tmp_path: Path) -> N
 def test_no_status_key_candidate_is_refused_not_archived(tmp_path: Path) -> None:
     worktree = tmp_path / "repo"
     cid = "state/bug-backlog/2026-02-02-no-status.yaml"
-    # Valid YAML, needle string present as a comment/prose field, but the
-    # parsed mapping carries no `status` key at all.
     _make_bug(
         worktree,
         "2026-02-02-no-status.yaml",
@@ -146,10 +129,6 @@ def test_no_status_key_candidate_is_refused_not_archived(tmp_path: Path) -> None
     assert result["skipped"] == [{"id": cid, "reason": "drifted-open: status=None"}]
     assert mover.captured is None
 
-
-# ---------------------------------------------------------------------------
-# Three-way dest disposition.
-# ---------------------------------------------------------------------------
 
 def test_dest_disposition_differing_file_refuses(tmp_path: Path) -> None:
     worktree = tmp_path / "repo"
@@ -221,10 +200,6 @@ def test_dest_disposition_absent_destination_moves_normally(tmp_path: Path) -> N
     assert mover.captured[0].dst == worktree / "archive" / "bug-backlog" / "2026-03" / "2026-03-03-fresh.yaml"
 
 
-# ---------------------------------------------------------------------------
-# dry_run -> act envelope shape.
-# ---------------------------------------------------------------------------
-
 def test_dry_run_true_returns_candidates_envelope_and_mutates_nothing(tmp_path: Path) -> None:
     worktree = tmp_path / "repo"
     src = _make_bug(worktree, "2026-04-01-closed.yaml", "status: closed\ntitle: envelope check\n")
@@ -245,7 +220,7 @@ def test_dry_run_true_returns_candidates_envelope_and_mutates_nothing(tmp_path: 
     assert cand["status"] == "closed"
     assert cand["family"] == "bug"
     assert mover.captured is None
-    assert src.exists()  # dry_run mutates nothing
+    assert src.exists()
 
 
 def test_act_round_trip_uses_dry_run_candidate_ids_and_returns_act_envelope(tmp_path: Path) -> None:
@@ -286,10 +261,6 @@ def test_setup_error_on_bad_mode_returns_exit_code_1_envelope(tmp_path: Path) ->
     assert result["failed"] == []
 
 
-# ---------------------------------------------------------------------------
-# Structural spawn-zero assertion.
-# ---------------------------------------------------------------------------
-
 def test_handler_module_has_no_subprocess_call_site() -> None:
     """Structural, not observed: assert no subprocess/git-process call site
     exists anywhere in the handler's own source, so a future edit that adds
@@ -312,5 +283,4 @@ def test_handler_module_has_no_subprocess_call_site() -> None:
     assert "git mv" not in code_only
     assert "git add" not in code_only
 
-    # Exactly one call to the shared mover — no private/second mover.
     assert code_only.count("archive_and_commit(") == 1

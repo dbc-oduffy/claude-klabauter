@@ -119,13 +119,6 @@ from coordinator_core.contract.decision_object.judgment import (
     build_untrusted_gate_judgment_point as _build_untrusted_gate_judgment_point,
 )
 
-# Sprint/both-seam census rows this assembler reaches, mapped to the
-# corrected 13-op consumes manifest's candidate_op binding (census
-# "Consumes-manifest correction" section, 2026-08-21). Spine-only rows
-# (every entryB/entryC/entryD row, p2.1.5-number-stubs, p2.3-stub-index,
-# p2.4-disjointness-audit, p2.6-2.7-audit-roadmap-close,
-# residue-stub-dedup-canonicalization) are roadmap_planning_assemble's
-# (C10), never this module's.
 _SPRINT_CANDIDATE_OPS: dict[str, str] = {
     "p1.5.1-dispatch-scouts": "dispatch-cluster-scout",
     "p2.1-scaffold-stub": "coordinator-doc-new",
@@ -137,10 +130,7 @@ _SPRINT_CANDIDATE_OPS: dict[str, str] = {
 
 
 class SprintPlanningAssembleError(ValueError):
-    """Raised for a malformed input to brief() — a usage error, never a
-    business-logic divergence (mirrors sizing_assemble.SizingAssembleError
-    and roadmap_planning_assemble.RoadmapPlanningAssembleError: divergence
-    is expressed via the decision object, never an exception)."""
+    pass
 
 
 def _directive(id_: str, cli: Optional[str], args: list[str], depends_on, already_satisfied: bool) -> dict[str, Any]:
@@ -163,13 +153,6 @@ def _judgment_point(
     recommendation: Optional[dict[str, str]] = None,
     reason: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Tier 2 (`recommendation` an object) or tier 3 (`recommendation: null`,
-    `reason` required) constructor. Never used for a recommendation-
-    forbidden PM gate — see `_pm_gate_judgment_point`.
-
-    Thin call-shape wrapper over the shared
-    `coordinator_core.contract.decision_object.judgment.build_judgment_point`,
-    mirroring `roadmap_planning_assemble._judgment_point`'s call shape."""
     return _build_judgment_point(
         recommendation,
         id=id_,
@@ -189,15 +172,6 @@ def _pm_gate_judgment_point(
     dispositions: list[dict[str, Any]],
     round_trip: str,
 ) -> dict[str, Any]:
-    """Recommendation-forbidden security-class constructor (computed-skills.md
-    § The three-tier model). Hardcodes `recommendation: null,
-    reason: "recommendation-forbidden"` — structurally unreachable for a
-    caller to fill, unlike the ordinary tier-3 `_judgment_point` path.
-
-    Mirrors `roadmap_planning_assemble._pm_gate_judgment_point`'s call
-    shape over the same shared
-    `coordinator_core.contract.decision_object.judgment.
-    build_untrusted_gate_judgment_point`."""
     return _build_untrusted_gate_judgment_point(
         id=id_,
         question=question,
@@ -579,9 +553,6 @@ def main(argv: list[str]) -> int:
         print(f"{prog}: {exc}", file=sys.stderr)
         return EXIT_USAGE
     except Exception as exc:  # noqa: BLE001 - structural backstop, mirrors sizing_assemble
-        # Transport failure: compute never ran, so nothing goes on stdout —
-        # the exit code is the only evidence (completion-evidence contract,
-        # DR-442). Matches `backlog_grind_assemble.main`'s shape.
         print(f"{prog}: unexpected failure: {exc}", file=sys.stderr)
         return EXIT_TRANSPORT_FAIL
 

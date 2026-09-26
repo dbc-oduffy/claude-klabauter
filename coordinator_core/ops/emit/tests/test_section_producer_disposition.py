@@ -23,10 +23,6 @@ _SECTIONS_DIR = Path(__file__).resolve().parent.parent / "sections"
 
 _NON_PRODUCER_STEMS = frozenset({"__init__", "_shared"})
 
-# The 21 producer modules remaining after the 2026-08-23 file_attribution retirement. Eight
-# have a non-test consumer (commit_closures, goals, handoff_columns, initiatives, review_trail,
-# rollups, routine_signals, trackers); thirteen do not yet — see emit-engine.md § 1 for the
-# full list and the disposition rule this guard enforces.
 _KNOWN_PRODUCERS: frozenset[str] = frozenset(
     {
         "backlogs",
@@ -53,8 +49,6 @@ _KNOWN_PRODUCERS: frozenset[str] = frozenset(
     }
 )
 
-# name -> one-line disposition ("where it went"), filled in by the commit that deletes the
-# module.
 _RETIRED_PRODUCERS: dict[str, str] = {
     "file_attribution": (
         "retired outright, no successor — cockpit's DROP (2026-08-22, superseding DR-021) "
@@ -74,7 +68,6 @@ def _disk_producer_stems(sections_dir: Path) -> frozenset[str]:
 def _undisposed_removals(
     known: frozenset[str], retired: dict[str, str], disk: frozenset[str]
 ) -> list[str]:
-    """Names in `known` that are neither on disk nor accounted for in `retired`."""
     return sorted(name for name in known if name not in disk and name not in retired)
 
 
@@ -100,26 +93,21 @@ def test_disk_producers_match_known_roster() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Pure-function coverage for the check itself — synthetic input only, never the real tree.
-# ---------------------------------------------------------------------------
-
-
 def test_check_fires_red_when_a_known_producer_vanishes_without_disposition() -> None:
     known = frozenset({"alpha", "beta"})
-    disk = frozenset({"alpha"})  # "beta" deleted, no disposition entry
+    disk = frozenset({"alpha"})
     assert _undisposed_removals(known, {}, disk) == ["beta"]
 
 
 def test_check_goes_green_once_the_disposition_is_recorded() -> None:
     known = frozenset({"alpha", "beta"})
-    disk = frozenset({"alpha"})  # "beta" still gone
+    disk = frozenset({"alpha"})
     retired = {"beta": "folded into alpha.py's collect() — 2026-08-23"}
     assert _undisposed_removals(known, retired, disk) == []
 
 
 def test_check_ignores_untracked_additions_for_the_removal_leg() -> None:
     known = frozenset({"alpha"})
-    disk = frozenset({"alpha", "gamma"})  # new module, not yet in the roster
+    disk = frozenset({"alpha", "gamma"})
     assert _undisposed_removals(known, {}, disk) == []
     assert _untracked_additions(known, disk) == ["gamma"]

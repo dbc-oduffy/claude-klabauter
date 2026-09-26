@@ -51,8 +51,6 @@ def test_an_archived_baton_this_wave_names_is_resolved(tmp_path):
 
 
 def test_nothing_is_read_when_every_id_already_resolved(tmp_path):
-    """Lazy for the reason plan_gate's own archive leg is: the archive is ~3x the
-    live tree, and the normal answer is that nothing was missing."""
     _record(
         tmp_path / "archive" / "handoffs" / "2026-08" / "closed.md",
         deliverable_id="dlv-archived-me",
@@ -63,15 +61,12 @@ def test_nothing_is_read_when_every_id_already_resolved(tmp_path):
 
 
 def test_an_id_in_no_tree_at_all_still_resolves_to_nothing(tmp_path):
-    """Absent stays absent — this widens resolution, it does not invent a record."""
     (tmp_path / "archive" / "handoffs").mkdir(parents=True)
     assert blitz_land._archived_records_this_wave_names(tmp_path, _wave("dlv-nowhere"), []) == []
 
 
 @pytest.mark.parametrize("key", ["ready", "pulled", "replan", "surfacedToPm"])
 def test_every_verdict_lane_is_searched(tmp_path, key):
-    """A pulled or replanned baton can be archived too; resolution is not the
-    ready lane's private affordance."""
     _record(
         tmp_path / "archive" / "handoffs" / "2026-08" / "closed.md",
         deliverable_id="dlv-archived-me",
@@ -83,12 +78,6 @@ def test_every_verdict_lane_is_searched(tmp_path, key):
 
 
 def test_an_in_place_archive_is_resolved_too(tmp_path):
-    """Not every repo archives to a dated `archive/handoffs/`. Example-game-workbench-repo
-    archives in place, under `state/handoffs/archive/`, and an XS baton whose own
-    remit WAS that move came back from the landing as "no baton on disk carries id"
-    — a record-missing refusal for a record one directory away, at the end of a wave
-    that had done exactly what the repo's closure convention asks (measured
-    2026-09-11, blitz-2026-09-11 wave 0)."""
     _record(
         tmp_path / "state" / "handoffs" / "archive" / "closed.md",
         deliverable_id="dlv-archived-in-place",
@@ -101,7 +90,6 @@ def test_an_in_place_archive_is_resolved_too(tmp_path):
 
 
 def test_both_archive_shapes_resolve_in_one_wave(tmp_path):
-    """A fleet-wide landing meets both conventions, and neither may shadow the other."""
     _record(
         tmp_path / "archive" / "handoffs" / "2026-08" / "dated.md",
         deliverable_id="dlv-dated",

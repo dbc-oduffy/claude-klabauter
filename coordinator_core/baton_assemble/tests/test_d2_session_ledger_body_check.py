@@ -35,16 +35,9 @@ class _FakeCompletedProcess:
 
 @pytest.fixture(autouse=True)
 def _stub_lint_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
-    # d2's own subprocess call (lint-frontmatter.py) is not under test here --
-    # stub it to a clean pass so only the body-check addition is exercised.
     monkeypatch.setattr(
         ba_apply.subprocess, "run", lambda *a, **k: _FakeCompletedProcess(returncode=0)
     )
-    # `_dispatch_lint_frontmatter` resolves `claude_klabauter_bin` to build the
-    # subprocess argv before running it -- irrelevant to the body check
-    # under test (the subprocess itself is stubbed above), but the real
-    # resolver raises on this machine's un-configured `claude_klabauter_root`. Stub it
-    # rather than depending on operator-local machine config.
     import coordinator_core.resolution.facade as facade
 
     monkeypatch.setattr(facade, "resolve_operator_config", lambda: {"claude_klabauter_bin": "unused"})
@@ -72,7 +65,6 @@ class TestMissingBlockIsReported:
 
     def test_reported_not_refused_no_exception_raised(self, tmp_path) -> None:
         rel = _write(tmp_path, "state/handoffs/2026-08-20-y.md", "no heading at all")
-        # Would raise if this were a refusal instead of a report.
         ba_apply._dispatch_lint_frontmatter(["--file", rel], tmp_path)
 
     def test_warning_printed_to_stderr(self, tmp_path, capsys) -> None:
@@ -99,12 +91,6 @@ class TestPresentBlockPassesUnchanged:
 
 
 class TestNotCheckedDegradeIsNotSilent:
-    # C1 review finding 1: the `session_ledger_checked: False` degrade paths
-    # (no --file in args; read/parse failure) used to print nothing, making
-    # them indistinguishable from a silent pass on stderr. Each must now
-    # print its own note, distinct from both the pass case (no print) and
-    # the missing-block warning (a different fact: "not checked" vs
-    # "checked, heading absent").
 
     def test_missing_file_arg_prints_distinct_note(self, tmp_path, capsys) -> None:
         detail = ba_apply._dispatch_lint_frontmatter(["--other-flag", "x"], tmp_path)
@@ -114,7 +100,7 @@ class TestNotCheckedDegradeIsNotSilent:
         assert "has no '## Session Ledger' heading" not in captured.err
 
     def test_unreadable_file_prints_distinct_note(self, tmp_path, capsys) -> None:
-        rel = "state/handoffs/2026-08-20-missing.md"  # never written
+        rel = "state/handoffs/2026-08-20-missing.md"
         detail = ba_apply._dispatch_lint_frontmatter(["--file", rel], tmp_path)
         assert detail["session_ledger_checked"] is False
         captured = capsys.readouterr()
@@ -126,7 +112,6 @@ class TestNotCheckedDegradeIsNotSilent:
         body = "## Session Ledger\n"
         rel = _write(tmp_path, "state/handoffs/2026-08-20-present.md", body)
         ba_apply._dispatch_lint_frontmatter(["--file", rel], tmp_path)
-        # Pass case: nothing printed at all.
         assert capsys.readouterr().err == ""
 
 
@@ -139,10 +124,6 @@ class TestSharesTheCanonicalRegexNotASecondGrammar:
             calls.append(body)
             return real(body)
 
-        # apply.py imports the predicate locally, inside the function body,
-        # so the import rebinds from the SOURCE module at call time -- patch
-        # it there to prove the shared function is what actually gets
-        # called, not a second, independently-defined check.
         import coordinator_core.session_ledger as session_ledger_mod
 
         monkeypatch.setattr(session_ledger_mod, "body_has_session_ledger_heading", _tracking)
@@ -156,7 +137,6 @@ class TestSharesTheCanonicalRegexNotASecondGrammar:
         source = inspect.getsource(ba_apply)
         assert "from coordinator_core.session_ledger import" in source
         assert "body_has_session_ledger_heading" in source
-        # No independently-compiled heading pattern anywhere in this module.
         assert "re.compile(" not in inspect.getsource(ba_apply._check_session_ledger_body)
 
     def test_predicate_matches_the_canonical_regex_directly(self) -> None:
@@ -167,12 +147,6 @@ class TestSharesTheCanonicalRegexNotASecondGrammar:
 
 
 def test_schema_validate_module_is_untouched() -> None:
-    # AC2 negative assertion: this chunk must not have edited
-    # frontmatter/schema_validate.py -- proven at the repo/git level, not
-    # importable from a unit test in isolation, so this asserts the weaker
-    # but still load-bearing fact that the module still imports and still
-    # exposes `parse_frontmatter` (the only symbol d2's body check borrows
-    # from it) with its existing signature.
     from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 
     result = parse_frontmatter("---\nkind: x\n---\nbody text")

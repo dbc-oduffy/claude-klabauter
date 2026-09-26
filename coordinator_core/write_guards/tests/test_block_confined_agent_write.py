@@ -1,18 +1,3 @@
-"""Behavioral tests for coordinator_core.write_guards.block_confined_agent_write
--- the confined-findings-agent sandbox-containment guard (see the module's
-own docstring for the probe this discharges:
-cross-repo/inbox/2026-08-17-example-cockpit-repo-em-agent-tools-declaration-not-
-enforced.md, and the shape defect the rewrite closes:
-docs/plans/2026-08-17-confined-findings-agents-cannot-write.md).
-
-Mirrors the fixture and payload-building style of
-test_block_subagent_plan_body_write.py: the back-pointer subagent_type
-lookup and git-root resolution are monkeypatched directly rather than
-exercised via real ``.git/coordinator-sessions/`` fixtures -- these tests
-are about this guard's own matcher scope, identity-gate, containment, and
-fail-open discipline, not the shared identity-resolution chain (already
-covered by its own module's tests).
-"""
 
 from __future__ import annotations
 
@@ -93,8 +78,6 @@ class TestAC1Discovery:
 
 
 class TestInSandboxAllowed:
-    """A confined agent's write-shaped call INSIDE its own sandbox
-    (state/subagent-share/<session_id>/) is allowed, on every matcher."""
 
     @pytest.mark.parametrize("tool_name", ["Write", "Edit", "MultiEdit", "NotebookEdit"])
     def test_in_sandbox_allowed(self, tmp_path, monkeypatch, tool_name):
@@ -122,25 +105,6 @@ class TestInSandboxAllowed:
         assert result is None
 
     def test_case_varied_sandbox_path_allowed(self, tmp_path, monkeypatch):
-        """A write whose target differs from the sandbox root only in the
-        case of the ``state``/``subagent-share`` segments is still allowed --
-        pins ``casefold_path`` wiring behaviorally (both operands routed
-        through it, per the guard's own module docstring), not merely by
-        import presence. ``casefold_path`` itself is unit-tested elsewhere;
-        this is defense-in-depth at the call site.
-
-        Platform-honest on BOTH case-sensitive and case-insensitive
-        filesystems: the guard casefolds ``sandbox_root`` and
-        ``candidate_raw`` to plain lowercase STRINGS before either is ever
-        wrapped in ``Path(...)`` (see ``block_confined_agent_write.py``
-        lines computing ``sandbox_root``/``candidate``). Neither of these
-        case-varied path segments is created on disk by this test, so
-        ``contained_path``'s internal ``.resolve()`` has nothing to
-        case-correct against a real directory entry -- it only normalizes
-        the already-casefolded strings syntactically. The outcome therefore
-        does not depend on the host filesystem's own case-sensitivity, only
-        on the guard's own pre-processing step actually running.
-        """
         monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))
         monkeypatch.setattr(
             guard,
@@ -156,8 +120,6 @@ class TestInSandboxAllowed:
 
 
 class TestOutOfSandboxDenied:
-    """A confined agent's write-shaped call OUTSIDE its own sandbox is
-    denied, on every matcher -- including Edit, the hole the rewrite closes."""
 
     @pytest.mark.parametrize("tool_name", ["Write", "Edit", "MultiEdit", "NotebookEdit"])
     def test_out_of_sandbox_denied(self, tmp_path, monkeypatch, tool_name):
@@ -176,8 +138,6 @@ class TestOutOfSandboxDenied:
         assert target in hso["permissionDecisionReason"]
 
     def test_edit_the_confining_bash_guard_itself_denied(self, tmp_path, monkeypatch):
-        """The concrete probe from the dispatch brief: an unconfined Edit
-        could modify the guard that confines this agent's OWN Bash surface."""
         monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))
         monkeypatch.setattr(
             guard,
@@ -195,8 +155,6 @@ class TestOutOfSandboxDenied:
         assert result is not None
 
     def test_another_sessions_sandbox_denied(self, tmp_path, monkeypatch):
-        """A different EM session's sandbox directory is not this agent's
-        own sandbox, even though it lives under the same sandbox parent."""
         monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))
         monkeypatch.setattr(
             guard,
@@ -209,9 +167,6 @@ class TestOutOfSandboxDenied:
         assert result is not None
 
     def test_outside_repo_path_denied(self, tmp_path, monkeypatch, tmp_path_factory):
-        """A path outside the git tree entirely (e.g. a scratchpad sibling)
-        is denied -- the original probe wrote to exactly this shape and
-        succeeded; that hole must now be closed."""
         monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))
         monkeypatch.setattr(
             guard,
@@ -225,21 +180,6 @@ class TestOutOfSandboxDenied:
         assert result is not None
 
     def test_sid_prefix_collision_denied(self, tmp_path, monkeypatch):
-        """Regression pin for the prefix-collision class: a sandbox segment
-        named ``<sid>-evil`` -- which has the real session id as a literal
-        string prefix -- is NOT this agent's own sandbox and must be denied.
-
-        Containment here is structurally immune to this class today: it
-        routes through ``contained_path``'s ``Path.relative_to()``
-        (segment-aware), never a ``str.startswith()`` comparison, so
-        ``.../sess-12345678-evil/...`` cannot satisfy containment under
-        ``.../sess-12345678/`` regardless of the specific id string. This
-        test exists so a FUTURE refactor that reintroduced a string-prefix
-        check would fail a colocated test instead of failing silently --
-        do not delete it as redundant with ``test_another_sessions_sandbox_
-        denied`` above; that test covers an unrelated sandbox id, this one
-        specifically pins the prefix-superset shape.
-        """
         monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))
         monkeypatch.setattr(
             guard,
@@ -254,8 +194,6 @@ class TestOutOfSandboxDenied:
 
 
 class TestNonConfinedAndFailOpen:
-    """EM main-loop writes, non-confined subagent types, and every
-    lookup-fail leg are ALLOWED regardless of target path."""
 
     def test_no_agent_id_allowed(self, tmp_path, monkeypatch):
         monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))
@@ -305,8 +243,6 @@ class TestNonConfinedAndFailOpen:
             "_read_backpointer_subagent_type",
             _stub_subagent_type("coordinator:code-reviewer"),
         )
-        # An agent_id shape _resolve_subagent_identity() cannot canonicalize
-        # (neither bare-hex nor named-teammate) resolves to "" -- fail-open.
         target = str(tmp_path / "anywhere.md")
         payload = _payload(tmp_path, target, tool_name="Write", agent_id="not-a-valid-shape")
         result = guard.check(payload)
@@ -322,9 +258,6 @@ class TestNonConfinedAndFailOpen:
 
 
 class TestDenyMessageRegister:
-    """The deny message states the one fact and the one alternative (fill
-    the provisioned sidecar), names no override key, and carries no apology
-    or self-justification."""
 
     def test_deny_message_shape(self, tmp_path, monkeypatch):
         monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))
@@ -343,19 +276,12 @@ class TestDenyMessageRegister:
         assert target in reason
         assert "sidecar" in reason.lower()
 
-        # No override key named -- this guard's own env var must never
-        # appear in the rendered text (operator_override_note is
-        # audience-gated and this payload carries no positively-resolved
-        # EM audience, so it renders nothing at all).
         assert "COORDINATOR_OVERRIDE_CONFINED_AGENT_WRITE" not in reason
 
-        # No apology / self-justification banned moves (B1, B4).
         for banned in ("sorry", "apolog", "real system", "not a refusal"):
             assert banned not in reason.lower()
 
     def test_deny_message_no_agent_type_leak(self, tmp_path, monkeypatch):
-        """The message names the target and the alternative, not internal
-        identity-resolution plumbing (subagent_type, agent_id shape)."""
         monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))
         monkeypatch.setattr(
             guard,
@@ -398,16 +324,6 @@ class TestToolNameDefenseInDepth:
 
 
 class TestBothSandboxRootsAreHonoured:
-    """Provisioning resolves the machinery root; a session whose hooks were
-    read at boot before the engine republished is still provisioned under the
-    legacy root. Both are live at once and the guard cannot tell which one
-    handed the agent its path.
-
-    Measured 2026-09-02: a dispatched code-reviewer was told its sidecar was
-    at `.coordinator-local/subagent-share/<sid>/`, tried twice to Edit it, and
-    was denied -- leaving its findings with no artifact at all, and a receipt
-    gate that would count a spliced receipt over a blank body, which is
-    exactly what AC5 exists to catch."""
 
     SID = "sess-12345678"
 
@@ -430,9 +346,6 @@ class TestBothSandboxRootsAreHonoured:
         assert guard.check(payload) is None
 
     def test_legacy_root_sidecar_is_still_allowed(self, tmp_path, monkeypatch):
-        """The boot-snapshot half. Swapping one root for the other would have
-        fixed the new sessions and broken every session provisioned before the
-        engine republished."""
         monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))
         monkeypatch.setattr(
             guard,
@@ -443,8 +356,6 @@ class TestBothSandboxRootsAreHonoured:
         assert guard.check(payload) is None
 
     def test_a_path_outside_both_roots_is_still_denied(self, tmp_path, monkeypatch):
-        """The containment guarantee itself. Widening to a second root must
-        admit the same bucket at its new address and nothing else."""
         monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))
         monkeypatch.setattr(
             guard,
@@ -459,8 +370,6 @@ class TestBothSandboxRootsAreHonoured:
     def test_a_sibling_sessions_sandbox_is_denied_under_the_new_root_too(
         self, tmp_path, monkeypatch
     ):
-        """Per-session confinement must survive the widening -- the new root
-        is one directory, and every session's sidecars sit side by side in it."""
         from coordinator_core.session import machinery_paths
 
         monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))

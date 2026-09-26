@@ -36,19 +36,6 @@ _TRACKER_STATUS_ENUM = frozenset({"active", "archived"})
 
 
 def _query_tracker_records(ctx: EmitContext) -> list[dict]:
-    """Call the ceremony records-query seam for ``type=tracker`` and return the record list.
-
-    Root resolution mirrors the retired subprocess's ``cwd``/``--root`` pair: ``ctx.subprocess_root``
-    (frozen-fixture test isolation) takes precedence over ``ctx.repo_root`` — the same
-    directory the spawn's cwd (and, when set, its ``--root`` override) resolved to.
-
-    Fail-open: this call raises only on programmer error (an unknown ``record_type``,
-    which never applies — ``"tracker"`` is a fixed literal) or a ``SystemExit`` from an
-    unsupported ``where``/``since`` grammar, neither of which this call site ever passes.
-    The broad except below is defensive parity with the retired spawn's ``[]``-on-any-
-    failure posture (bash-oracle-derived: ``… 2>/dev/null || echo "[]"``) rather than an
-    expectation that these paths are reachable today.
-    """
     root = ctx.subprocess_root if ctx.subprocess_root is not None else ctx.repo_root
     try:
         parsed = _ceremony_query_records("tracker", root, limit=0)
@@ -58,12 +45,10 @@ def _query_tracker_records(ctx: EmitContext) -> list[dict]:
 
 
 def _jq_alternative(value):
-    """Mirror jq // operator — return value unless null/false."""
     return value if value not in (None, False) else None
 
 
 def _is_valid(fm: dict) -> bool:
-    """Required fields present + status within the 2-value TrackerStatus enum (bash:1887-1892)."""
     return (
         isinstance(fm.get("title"), str)
         and isinstance(fm.get("created"), str)
@@ -73,15 +58,11 @@ def _is_valid(fm: dict) -> bool:
 
 
 def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
-    """Build (records, malformed) for TrackerSummary rows."""
     raw = _query_tracker_records(ctx)
 
     records: list[dict] = []
     malformed: list[dict] = []
 
-    # C9 activation switch (see _shared.human_axis_vendored's own docstring): resolved
-    # once per collect() call. While False, `human_owner` never reaches a record's dict
-    # at all — no new key on the wire until cockpit has vendored a contract naming it.
     _human_axis_on = human_axis_vendored()
 
     for rec in raw:
@@ -103,10 +84,6 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
                 "provenance": ctx.provenance("local_fs", path=path, derivation="parsed"),
             }
             # Human axis (C9), activation-gated: `human_owner` is an OPTIONAL nullable
-            # TrackerSummary field (entities/tracker_summary.py). See handoffs.py's
-            # matching block for the full rationale — same switch, same omission
-            # discipline, no post-dump pop needed here because this section builds
-            # plain dicts directly rather than routing through a pydantic model.
             if _human_axis_on:
                 record["human_owner"] = _jq_alternative(fm.get("human_owner"))
             records.append(record)

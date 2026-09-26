@@ -74,58 +74,17 @@ from coordinator_core.tests._home_resolution_lint_baseline import (
     X_OK_BASELINE,
 )
 
-# Rule 5 (`rung_order`, C5) baseline lives HERE rather than in
-# `_home_resolution_lint_baseline.py` -- that module is owned by C8's
-# re-seed pass.
-#
-# 2026-08-08 (C8 re-seed, discovery widened per C1/C4): C8 identified 7
-# genuine false positives, 6 of one shape -- a default-arg ladder rung whose
 # FALLBACK is `Path.home()` itself (`os.environ.get(KEY, str(Path.home()))`),
 # which already resolves USERPROFILE correctly on Windows -- plus 1 of a
-# different shape (`check-machine-path-leak.py:327`).
-#
-# 2026-08-08 (C8b re-seed, post-C5b/`1e2f3e11`): C5b fixed the underlying
-# `_classify_rung` defect that made the 6 default-arg sites above
-# double-count a nested `Path.home()` call as a same-order self-
-# transposition. Verified live (`test_rung_order_baseline_has_no_stale_
-# entries` before this edit named exactly these 6 rows -- the 5 unique
-# `(path, text)` keys below plus the duplicate-text sandbox_check.py:919
-# row -- as no-longer-matching a live finding): all 6 now go clean and are
-# removed rather than re-baselined.
-#
-# `coordinator/bin/check-machine-path-leak.py:327` -- `os.environ.get("HOME")
 # or os.path.expanduser("~")` -- was baselined here as a DIFFERENT shape
-# (not a default-arg ladder rung; C5b's fix does not touch it) at the prior
-# re-seed. As of the C8 re-seed (2026-08-08), it no longer matches a live
-# `find_rung_order_violations()` finding at all: an unguarded `expanduser`
-# terminal is scored as a WARNING by `find_rung_order_warnings()`, not a
-# hard violation, per this file's own `test_no_rung_order_violation`
-# docstring and the C5d fix (`e2ff100e`) that introduced that split. Removed
-# per `test_rung_order_baseline_has_no_stale_entries`, which named this
-# exact row as stale (verified: `find_rung_order_violations()` total=0
-# corpus-wide this run). The line still carries its own prior code-review
 # note (F4: falls back to `os.path.expanduser`, which honors `USERPROFILE`
-# on Windows) -- that reasoning is preserved in the rule-4 (`bare_or`)
-# adjudication instead, where the same line is evaluated under a different,
-# stricter rule that does NOT exempt an unguarded `expanduser` rung (see
-# `find_bare_home_or_chains`'s own docstring: "`expanduser` is not exempting
-# either way ... the vulnerable site itself, not evidence the chain already
-# guards against it") -- that rule's finding for this same line is a
-# genuine, unbaselined, reportable defect, not folded into this ledger.
-#
-# An empty tuple is the correct terminal state for this ledger the same way
 # X_OK_BASELINE going to zero was: rung_order violations are 0 corpus-wide
-# as of this run, and a NEW rung-order violation now fails
-# `test_no_rung_order_violation` outright, which is the whole point.
 RUNG_ORDER_BASELINE: tuple[tuple[str, int, str], ...] = ()
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _SCAN_ROOTS = ("coordinator_core", "coordinator", "bin", "scripts")
 
-# The forward-slash-only-split rule is scoped to the resolution family named
-# in the design blueprint (Component Design § 2, rule 4) rather than
-# repo-wide -- narrow on purpose, see engine module docstring.
 _FORWARD_SLASH_SCOPE = (
     "coordinator_core/install",
     "coordinator_core/trusted_root_guard.py",
@@ -145,17 +104,7 @@ def _engine() -> HomeResolutionLintEngine:
     )
 
 
-# ---------------------------------------------------------------------------
-# Rule 1: os.access(path, os.X_OK) -- meaningless on Windows (F13).
-# ---------------------------------------------------------------------------
-
-
 def test_no_x_ok_access_check():
-    """`os.access(path, os.X_OK)` degrades to `F_OK` on Windows -- F13's
-    `[WinError 193]` root cause. Correct form: check the file exists and,
-    where executability genuinely matters, dispatch on `os.name == "nt"`
-    rather than asking a POSIX-only predicate to answer a Windows question.
-    """
     findings = _engine().find_x_ok_checks()
     baseline_keys = {(p, t) for p, _n, t in X_OK_BASELINE}
     new = [f for f in findings if f.key() not in baseline_keys]
@@ -178,10 +127,6 @@ def test_no_x_ok_access_check():
 
 
 def test_x_ok_baseline_has_no_stale_entries():
-    """The X_OK baseline must shrink, never rot -- see module docstring
-    property (2). A stale entry (fixed, moved, or reworded) is named here
-    for deletion so the ledger cannot silently mute a NEW violation at the
-    same coordinates."""
     live = {f.key() for f in _engine().find_x_ok_checks()}
     stale = sorted(entry for entry in {(p, t) for p, _n, t in X_OK_BASELINE} if entry not in live)
     rendered = "\n".join(f"  {p}\n    {t}" for p, t in stale)
@@ -192,16 +137,7 @@ def test_x_ok_baseline_has_no_stale_entries():
     )
 
 
-# ---------------------------------------------------------------------------
-# Rule 2: a literal ":" used to split/join a path-shaped variable.
-# ---------------------------------------------------------------------------
-
-
 def test_no_literal_colon_path_list_join():
-    """A literal `":"` PATH-list join/split fails open on Windows -- a
-    strangler facade reading "seam absent" and silently running the legacy
-    path is the exact failure this catches. Correct form: `os.pathsep`.
-    """
     findings = _engine().find_colon_path_joins()
     baseline_keys = {(p, t) for p, _n, t in COLON_JOIN_BASELINE}
     new = [f for f in findings if f.key() not in baseline_keys]
@@ -228,18 +164,7 @@ def test_colon_join_baseline_has_no_stale_entries():
     )
 
 
-# ---------------------------------------------------------------------------
-# Rule 3: forward-slash-only path splitting, in the resolution-code family.
-# ---------------------------------------------------------------------------
-
-
 def test_no_forward_slash_only_path_split():
-    """A forward-slash-only path split (`p.rsplit("/", 1)`) is invisible to
-    any test built only from POSIX-form fixtures and silently mishandles a
-    real Windows path (`X:\\DoE-claude\\coordinator`) -- F8's root cause.
-    Correct form: fold the backslash first (`.replace("\\\\", "/")`) before
-    splitting, or split on `os.sep`.
-    """
     findings = _engine().find_forward_slash_only_splits()
     baseline_keys = {(p, t) for p, _n, t in FORWARD_SLASH_BASELINE}
     new = [f for f in findings if f.key() not in baseline_keys]
@@ -269,9 +194,7 @@ def test_forward_slash_baseline_has_no_stale_entries():
     )
 
 
-# ---------------------------------------------------------------------------
 # Rule 4 (highest value): CLAUDE_HOME/HOME `or`-chain with no USERPROFILE rung.
-# ---------------------------------------------------------------------------
 
 
 def test_home_or_userprofile_present_at_every_claude_home_site():
@@ -308,11 +231,8 @@ def test_bare_or_baseline_has_no_stale_entries():
     )
 
 
-# ---------------------------------------------------------------------------
-# Rule 5 (C5): a home-resolution ladder rung out of the master order
 # CLAUDE_HOME -> HOME -> USERPROFILE -> Path.home(). Baseline is local to
 # this file -- see `RUNG_ORDER_BASELINE`'s own comment above.
-# ---------------------------------------------------------------------------
 
 
 def test_no_rung_order_violation():
@@ -349,19 +269,7 @@ def test_rung_order_baseline_has_no_stale_entries():
     )
 
 
-# ---------------------------------------------------------------------------
-# AC-6 positive control + AC-1 shape-5 coverage cross-reference.
-# ---------------------------------------------------------------------------
-
-
 def test_settings_home_module_is_clean():
-    """`coordinator_core/_settings_home.py` is the CORRECT implementation
-    (delegates to `Path.home()`, has no `os.access(X_OK)`, no literal ':'
-    PATH join, no forward-slash-only split, no bare `or`-chain) and must
-    pass every rule in this file with zero findings -- the direct AC-6
-    check that this lint does not cry wolf on the one file that already
-    does everything right.
-    """
     target = _REPO_ROOT / "coordinator_core" / "_settings_home.py"
     assert target.is_file(), f"expected {target} to exist"
     relpath = "coordinator_core/_settings_home.py"

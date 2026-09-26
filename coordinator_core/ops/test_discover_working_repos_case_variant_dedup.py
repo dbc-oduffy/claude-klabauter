@@ -33,25 +33,15 @@ from coordinator_core.path_identity import dir_identity, same_dir
 
 
 def _make_repo(path: str) -> None:
-    """A directory `_is_git_root` accepts, built without spawning `git init`.
-
-    `_is_git_root` delegates to `repo_root.show_toplevel`, which walks up
-    for a `.git` entry and only spawns when the walk finds nothing. A bare
-    `.git` directory satisfies the walk, so these tests stay in the fast
-    tier and out of the spawn-budget accounting.
-    """
     os.makedirs(os.path.join(path, ".git"), exist_ok=True)
 
 
 def _case_variant(path: str) -> str:
-    """`path` with its LAST component's case flipped."""
     head, tail = os.path.split(path)
     return os.path.join(head, tail.upper() if tail.islower() else tail.lower())
 
 
 def _fs_is_case_insensitive(variant: str) -> bool:
-    """Whether `variant` -- a case-flipped spelling of a directory that
-    exists -- reaches that same directory on this filesystem."""
     return os.path.isdir(variant)
 
 
@@ -77,12 +67,6 @@ def test_two_spellings_of_one_directory_yield_one_repo(repo_and_variant):
 
 
 def test_two_genuinely_distinct_directories_both_survive(repo_and_variant):
-    """The other half of the contract: dedup must not fold case ITSELF.
-
-    On a case-sensitive filesystem the case-variant spelling is a second,
-    real repo, and collapsing it would be the mirror-image defect -- one
-    that a `casefold()`-shaped fix would have shipped.
-    """
     repo, variant = repo_and_variant
     if _fs_is_case_insensitive(variant):
         pytest.skip("case-insensitive filesystem: the variant is not a distinct directory")
@@ -96,10 +80,6 @@ def test_two_genuinely_distinct_directories_both_survive(repo_and_variant):
 
 
 def test_publish_mirror_is_excluded_under_a_second_spelling(repo_and_variant):
-    """A mirror named in the registry under one spelling is still the mirror
-    when discovery reaches it under another. Registering a publish target as
-    a working repo is the failure the exclusion exists to prevent.
-    """
     repo, variant = repo_and_variant
     if not _fs_is_case_insensitive(variant):
         pytest.skip("case-sensitive filesystem: the two spellings are two directories")
@@ -112,8 +92,6 @@ def test_publish_mirror_is_excluded_under_a_second_spelling(repo_and_variant):
 
 
 def test_dir_identity_collapses_spellings_and_separates_directories(tmp_path):
-    """`dir_identity` asks the filesystem rather than folding case, so it is
-    correct on both kinds of volume without consulting `os.name`."""
     a = str(tmp_path / "one")
     b = str(tmp_path / "two")
     os.makedirs(a)
@@ -129,8 +107,6 @@ def test_dir_identity_collapses_spellings_and_separates_directories(tmp_path):
 
 
 def test_dir_identity_falls_back_for_a_path_that_cannot_be_stat(tmp_path):
-    """An absent path degrades to the caller's own key rather than raising
-    or inventing an identity that could merge unrelated directories."""
     missing = str(tmp_path / "not-here")
 
     assert dir_identity(missing, fallback="sentinel-key") == "sentinel-key"

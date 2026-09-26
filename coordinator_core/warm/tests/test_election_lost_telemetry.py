@@ -1,16 +1,3 @@
-"""A lost election leaves a row on disk.
-
-`server._run_guarded`'s `ElectionLost` arm reported the failure ONLY by
-printing to `sys.stderr`, which `ops.ceremony.detached_spawn.spawn_detached`
-opens as `subprocess.DEVNULL` for every detached child -- so a failed
-succession attempt reached no file anywhere. Every exit-reason census in the
-2026-08-26 succession investigation is therefore over surviving rows only,
-censored upward (`docs/research/2026-08-26-repo-warm-succession.md` § 5.1).
-
-These tests hold the instrument to the three properties that make it usable
-for that: it records, it omits rather than fabricates, and it never becomes
-the reason a losing process fails to exit cleanly.
-"""
 
 from __future__ import annotations
 
@@ -37,9 +24,6 @@ def test_row_carries_endpoint_token_pid_and_interval(tmp_path):
 
 
 def test_unmeasurable_interval_is_omitted_not_zeroed(tmp_path):
-    """An unstamped spawn cannot measure spawn -> loss. A fabricated 0.0 would
-    be indistinguishable from an instant loss, which is the one shape this
-    file exists to detect."""
     telemetry.record_election_lost(endpoint="sock", engine_root=tmp_path)
 
     row = telemetry.election_lost_samples(tmp_path)[0]
@@ -53,18 +37,14 @@ def test_absent_file_reads_as_no_losses(tmp_path):
 
 
 def test_recorder_never_raises(tmp_path, monkeypatch):
-    """Best-effort, like every other writer here: a losing process still exits
-    0 when its own instrument cannot write."""
     def _boom(*args, **kwargs):
         raise OSError("disk full")
 
     monkeypatch.setattr(telemetry.locked_write, "held_lock", _boom)
-    telemetry.record_election_lost(endpoint="sock", engine_root=tmp_path)  # must not raise
+    telemetry.record_election_lost(endpoint="sock", engine_root=tmp_path)
 
 
 def test_run_guarded_records_the_loss_and_still_exits_zero(tmp_path, monkeypatch):
-    """The wiring, not just the recorder. Losing is not an error -- the exit
-    code stays 0 -- but it stops being invisible."""
     recorded: list = []
 
     monkeypatch.setattr(server, "_engine_clone_root", lambda: tmp_path)
@@ -88,9 +68,6 @@ def test_run_guarded_records_the_loss_and_still_exits_zero(tmp_path, monkeypatch
 
 
 def test_a_failing_instrument_never_stops_a_clean_loss(tmp_path, monkeypatch):
-    """The losing process's exit must not depend on its own telemetry, and it
-    must not touch the winner's artifacts on the way out -- the row it writes
-    is its own file, so a failure here is contained to that file."""
     monkeypatch.setattr(server, "_engine_clone_root", lambda: tmp_path)
     monkeypatch.setattr(server.skew, "compute_client_token", lambda root: "tok-1")
     monkeypatch.setattr(server, "_spawn_epoch_from_env", lambda: None)

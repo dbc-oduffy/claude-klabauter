@@ -92,20 +92,11 @@ from coordinator_core.git.commit_walk import commit_meta
 from coordinator_core.git.git_objects import read_object
 from coordinator_core.git.git_state import _parse_tree_entries
 
-#: Sentinel marking a candidate as a deletion -- the path is not being
-#: committed with any content. Distinct object identity, never a string, so
-#: it can never collide with a real blob sha. Matches `tree_spine._ABSENT`'s
-#: role but is its own sentinel: this module takes `candidates` from
-#: whichever caller resolved them and must not require that caller to import
-#: `tree_spine` just to spell "deleted".
 ABSENT = object()
 
 _TREE_MODE = 0o40000
 
-#: Tree-sha-keyed, content-addressed, bounded the same way
 #: `commit_walk._COMMIT_CACHE` and `git_objects._OBJECT_CACHE` are -- see
-#: those modules' own comments for why bounding a content-addressed cache is
-#: still worth doing on a warm long-running engine.
 _TREE_CACHE_MAX_ENTRIES = 4096
 _TREE_CACHE: "Dict[Tuple[str, str], Optional[Dict[str, Tuple[int, str]]]]" = {}
 
@@ -133,9 +124,6 @@ def _tree_entries(
 
 
 def _blob_at_commit(common_dir: Path, commit_sha: str, path: str):
-    """The path's blob sha inside `commit_sha`'s tree, or `ABSENT` if the
-    path does not exist there, or `None` if `commit_sha` or a tree along the
-    spine is unreadable (take the ladder -- never a false "absent")."""
     meta = commit_meta(common_dir, commit_sha)
     if meta is None:
         return None
@@ -151,9 +139,6 @@ def _blob_at_commit(common_dir: Path, commit_sha: str, path: str):
         if entry is None:
             return ABSENT
         if entry[0] != _TREE_MODE:
-            # A path component that should be a directory is a leaf here
-            # (e.g. a gitlink or file shadowing what the candidate path
-            # expects to be a directory) -- the path cannot exist as named.
             return ABSENT
         cur = entry[1]
     entries = _tree_entries(common_dir, cur)
@@ -168,9 +153,6 @@ def _blob_at_commit(common_dir: Path, commit_sha: str, path: str):
 def _first_parent_ancestors(
     common_dir: Path, head_sha: str, window: int
 ) -> List[Tuple[int, str]]:
-    """`[(depth, sha), ...]`, `depth` 1-based, `head_sha` itself at depth 1,
-    following `parents[0]` up to `window` entries. Stops early (never
-    raises) once a commit is unreadable or the root is reached."""
     out: List[Tuple[int, str]] = []
     sha: Optional[str] = head_sha
     depth = 0
@@ -191,13 +173,6 @@ def find_exact_blob_rollbacks(
     candidates: Mapping[str, Union[str, object]],
     window: int = 1000,
 ) -> List[RollbackFinding]:
-    """For each `candidates` path -> new value (`blob sha` or `ABSENT`),
-    the version depth `d >= 1` (module docstring) at which `head_sha`'s
-    first-parent line last held that exact value, as a
-    `RollbackFinding(path, depth, restores_commit)`. A path with no match
-    within `window` first-parent steps, or equal to head's own value,
-    contributes no finding. Pure read;
-    see the module docstring's negative spec for what it never does."""
     common_dir = Path(common_dir)
     if not candidates:
         return []
@@ -205,9 +180,6 @@ def find_exact_blob_rollbacks(
     findings: List[RollbackFinding] = []
     for path, new_value in candidates.items():
         # Depth counts VERSIONS of the path, not commits: a commit that did
-        # not touch `path` adds no version. V(1) is head's own value -- equal
-        # to it is no change, never a finding (counting it made every
-        # unchanged claimed path a depth-1 hit, and three tripped breadth-3).
         version = 0
         previous: object = _NO_VERSION
         for _step, sha in ancestors:
@@ -223,15 +195,10 @@ def find_exact_blob_rollbacks(
     return findings
 
 
-#: `find_exact_blob_rollbacks`' "no version seen yet" marker -- distinct from
-#: `ABSENT`, which is itself a version.
 _NO_VERSION = object()
 
 
 def refusal(findings: List[RollbackFinding]) -> bool:
-    """K-016's rule, as a measurement: refuse if any single finding has
-    `depth >= 2` (an OLDER version came back on one path alone), or three or
-    more distinct paths each have a finding at any depth ("breadth-3")."""
     if any(f.depth >= 2 for f in findings):
         return True
     paths = {f.path for f in findings}

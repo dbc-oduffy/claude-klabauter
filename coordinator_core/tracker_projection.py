@@ -172,21 +172,6 @@ def fold_membership(*, repo_root: Path) -> dict[str, set[str]]:
 
 
 def fold_membership_wire(*, repo_root: Path) -> dict[str, list[str]]:
-    """Materialize `fold_membership`'s output as cockpit's pinned wire shape
-    (DEC-23, AC18): `projects: string[]`, sorted for determinism, with
-    `"unassigned"` present in the array for a zero-real-edge item.
-
-    Never emits an empty array — `fold_membership`'s own totality guarantee
-    (AC3/AC4) is what makes that true here, not a separate check in this
-    function. Never emits raw `item_project_added`/`item_project_retracted`
-    events; this is the one function that turns our storage shape into
-    their wire shape, and nothing else in this module or `tracker_entities`
-    does so (DEC-23).
-
-    Stops at ONE item's `projects: string[]`. Assembling the multi-item
-    `ingest_emission` envelope (which top-level JSON keys the wire payload
-    carries) is sat-07 scope, not this module's (see the plan's D1).
-    """
     folded = fold_membership(repo_root=repo_root)
     return {item_id: sorted(projects) for item_id, projects in folded.items()}
 
@@ -291,10 +276,6 @@ def fold_person_membership(*, repo_root: Path) -> dict[str, set[tuple[str | None
 
 
 class PersonRegistry(TypedDict):
-    """The shape `fold_person_registry` returns and `resolve_person`/
-    `resolve_alias` consume — precise enough to give `registry["merges"]`
-    and `registry["aliases"]` access sites real static-checking value, in
-    place of the module's previous bare `dict` at those sites."""
 
     persons: dict[str, dict[str, str | None]]
     aliases: dict[tuple[str, str], str]
@@ -369,11 +350,6 @@ def _fold_axis_states(item_id: str, *, repo_root: Path) -> dict[str, str | None]
 
     def _sort_key(event: dict) -> tuple:
         if event.get("kind") == "snapshot":
-            # Virtual position: the fold boundary, not the record's own
-            # (later) applied_at. Tie-break components sort a snapshot
-            # BEFORE a real event stamped at the same applied_at — the
-            # seed represents everything already folded through that
-            # instant.
             return (event.get("as_of_applied_at"), "", "", 0)
         return (
             event.get("applied_at"),
@@ -409,27 +385,10 @@ def _fold_axis_states(item_id: str, *, repo_root: Path) -> dict[str, str | None]
 
 
 def current_state(item_id: str, axis: str, *, repo_root: Path) -> str | None:
-    """Return `axis`'s current `to_state` for `item_id` (C6): the last
-    event for that `(item_id, axis)` pair in `read_events` order, seeded by
-    a snapshot event when one is present. See `_fold_axis_states` for the
-    content-bound snapshot-seeding contract. Returns `None` when the item
-    has no event on `axis` and no snapshot seeds it.
-    """
     return _fold_axis_states(item_id, repo_root=repo_root).get(axis)
 
 
 def render_status(item_id: str, *, repo_root: Path) -> str:
-    """Render `item_id`'s computed open/closed status (C6, AC6).
-
-    Closed iff:
-
-        manual_close.current == "closed"
-        OR (code_complete.current == "asserted" AND qa_verified.current == "verified")
-
-    Open otherwise. This is computed fresh from the fold on every call —
-    never a stored lifecycle enum (F3) — via one `_fold_axis_states` pass
-    covering all three axes, not three separate `current_state` folds.
-    """
     states = _fold_axis_states(item_id, repo_root=repo_root)
     closed = states["manual_close"] == "closed" or (
         states["code_complete"] == "asserted" and states["qa_verified"] == "verified"
@@ -440,43 +399,6 @@ def render_status(item_id: str, *, repo_root: Path) -> str:
 def fold_person_registry(
     *, repo_root: Path, events: list[dict] | None = None
 ) -> PersonRegistry:
-    """Fold the sat-05 person registry — canonical persons, the alias map,
-    and the merge chain — in ONE pass over `tracker_store.read_events`
-    (C3).
-
-    Consumes `read_events`' own ratified `(applied_at, observed_at, id)`
-    order without re-deriving it, exactly as `fold_membership` applies its
-    add/discard pass in that order. Latest-wins by construction: a later
-    `person_alias_added`/`person_alias_retracted` on the same `(namespace,
-    normalized_value)` pair overwrites an earlier one, mirroring
-    `tracker_entities._alias_owner`'s own fold shape.
-
-    *events*, if given, MUST already be `read_events(repo_root=repo_root)`'s
-    own full output in its own ratified order — passing it in only lets a
-    caller that has already paid for one on-disk read (e.g.
-    `fold_person_membership`) avoid paying for a second. This never adds a
-    filter, projection, or pagination parameter to `read_events` itself
-    (DEC-12) — the store still owns ordering only, and this function still
-    owns the fold. When omitted, this function reads the full stream itself
-    exactly as before.
-
-    Returns a dict with exactly three keys:
-
-    - ``"persons"``: `person_id -> {"display_name": str}`, latest-wins on
-      `person_created` (a person id is minted once by `mint_person_id`, but
-      this fold does not assume single-write and simply lets a later event
-      for the same id win, matching every other fold in this module).
-    - ``"aliases"``: `(namespace, normalized_value) -> person_id`, present
-      only while currently claimed — a `person_alias_retracted` removes the
-      entry rather than leaving a stale mapping.
-    - ``"merges"``: `from_id -> (into_id, sort_key)`, where `sort_key` is
-      the winning `person_merged` event's own `(applied_at, observed_at,
-      id)` triple. This sort_key is retained (not discarded) specifically
-      so `resolve_person` can identify, deterministically, which edge in a
-      cross-shard merge cycle sorts LAST under `read_events`' own ratified
-      order — see `resolve_person`'s docstring for why that edge is the one
-      dropped.
-    """
     if events is None:
         events = tracker_store.read_events(repo_root=repo_root)
 
@@ -575,14 +497,6 @@ def resolve_person(person_id: str, *, registry: PersonRegistry) -> str:
 
 
 def resolve_alias(namespace: str, raw_value: str, *, registry: PersonRegistry) -> str | None:
-    """Resolve an alias to its currently-surviving person id (C3).
-
-    Normalizes *raw_value* via `tracker_entities.normalize_alias` (the same
-    DEC-44 rule used at write time), looks the `(namespace,
-    normalized_value)` pair up in `registry["aliases"]`, and — if claimed —
-    resolves the owning person id through `resolve_person`'s merge-chain
-    walk. Returns `None` for an unregistered alias; does not raise.
-    """
     normalized_value = normalize_alias(namespace, raw_value)
     person_id = registry["aliases"].get((namespace, normalized_value))
     if person_id is None:

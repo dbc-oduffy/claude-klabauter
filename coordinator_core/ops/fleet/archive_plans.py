@@ -202,20 +202,8 @@ _FIRE_SCRIPT_SUFFIXES = (".workflow.mjs", ".workflow.mjs.emitted.json")
 
 _DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2})-\d{2}-")
 
-# Single-flight lock — same stale-lock tolerance rationale as
 # archive_terminal_handoffs._SWEEP_LOCK_STALE_S: sized generously above this
-# op's own <500ms budget so a live, merely-slow invocation is never mistaken
-# for stale, while a crashed holder self-heals rather than wedging every
-# future sweep.
 _SWEEP_LOCK_STALE_S = 120.0
-
-
-# ---------------------------------------------------------------------------
-# Single-flight rail — copied shape from archive_terminal_handoffs (that
-# module's own lock path is private/hardcoded to the handoff family; the
-# logic itself is small enough to duplicate rather than reach into a
-# sibling's private constant).
-# ---------------------------------------------------------------------------
 
 
 def _sweep_lock_path(common_dir: Path) -> Path:
@@ -223,10 +211,6 @@ def _sweep_lock_path(common_dir: Path) -> Path:
 
 
 def _acquire_sweep_lock(common_dir: Path) -> Optional[Path]:
-    """Best-effort O_EXCL acquire — see archive_terminal_handoffs._acquire_sweep_lock
-    for the full contract this mirrors (stale-lock break-and-retry-once,
-    fail-closed-to-contended on any other OSError).
-    """
     lock_path = _sweep_lock_path(common_dir)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -259,18 +243,12 @@ def _acquire_sweep_lock(common_dir: Path) -> Optional[Path]:
 
 
 def _release_sweep_lock(lock_path: Optional[Path]) -> None:
-    """Best-effort release — never raises."""
     if lock_path is None:
         return
     try:
         lock_path.unlink()
     except OSError:
         pass
-
-
-# ---------------------------------------------------------------------------
-# Corpus scan + terminality
-# ---------------------------------------------------------------------------
 
 
 def _is_sidecar(path: Path) -> bool:
@@ -288,12 +266,6 @@ def _is_sidecar(path: Path) -> bool:
 
 
 def _primary_for_sidecar(path: Path) -> Path:
-    """Derive a sidecar's primary plan path: same directory, filename is the
-    name up to (not including) its first dot, plus `.md`.
-
-    e.g. "2026-08-01-foo.prior-art-check.md" -> "2026-08-01-foo.md";
-         "2026-08-01-foo.workflow.mjs.emitted.json" -> "2026-08-01-foo.md".
-    """
     primary_stem = path.name.split(".", 1)[0]
     return path.with_name(f"{primary_stem}.md")
 
@@ -348,10 +320,6 @@ def plan_archive_dest(worktree_root: Path, plan_path: Path) -> Optional[Path]:
 
 
 def _terminal_since(meta_updated: Optional[str], meta_created: Optional[str], plan_path: Path) -> Optional[str]:
-    """Best-effort RFC3339 terminal_since — 'updated' then 'created'
-    frontmatter, falling back to the file's mtime. Returns None on total
-    failure (nullable per contract §2.1).
-    """
     for val in (meta_updated, meta_created):
         if val:
             return str(val)
@@ -405,7 +373,6 @@ def _is_claim_live(
             if claim_held_by_me(str(claim_dir), exempt_session_id):
                 return False
         except Exception as exc:  # noqa: BLE001 — fail-closed-to-retain: an
-            # identity-check failure must not silently widen who is exempt.
             _LOG.warning(
                 "archive_plans: claim_held_by_me raised for %s — treating as "
                 "foreign (fail-closed-to-keep): %s", claim_dir, exc,
@@ -453,11 +420,6 @@ def _scan_terminal(
     for p in live_paths:
         rel = rel_id(p, worktree_root)
 
-        # A sidecar carries no independent terminal status of its own — it is
-        # evidence attached to a primary plan, not a plan. Its archivability
-        # follows the primary's: refuse (never orphan-split) if the primary
-        # is missing or not itself terminal/unclaimed. See module docstring
-        # negative-spec for the full rationale.
         if _is_sidecar(p):
             primary = _primary_for_sidecar(p)
             if not primary.is_file():
@@ -520,13 +482,6 @@ def _scan_terminal(
     return results
 
 
-# ---------------------------------------------------------------------------
-# Two-phase plan_sweep / apply_sweep — the in-plane-reusable shape.
-# apply_sweep itself is imported unchanged from archive_terminal_handoffs
-# (see module docstring: it is already Move-generic, not handoff-specific).
-# ---------------------------------------------------------------------------
-
-
 def plan_sweep(
     worktree_root: Path,
     common_dir: Path,
@@ -536,23 +491,6 @@ def plan_sweep(
     scan_skipped: Optional[List[dict]] = None,
     exempt_session_id: Optional[str] = None,
 ) -> Tuple[List[Move], List[dict]]:
-    """Classification-only planning: scan, cap-slot, and every exclusion
-    rail. Mutates nothing, commits nothing, spawns nothing.
-
-    `candidate_ids=None` — in-plane path: every terminal candidate,
-    cap-slotted oldest-first straight off `_scan_terminal`'s own ordering.
-
-    `candidate_ids=<sequence>` — op/act path: re-verify/defer/duplicate
-    semantics, identical shape to
-    `archive_terminal_handoffs.plan_sweep`'s own act-path branch.
-
-    `exempt_session_id` — passed straight through to `_scan_terminal`
-    (see `_is_claim_live`'s own docstring); `None` preserves prior
-    behaviour byte-for-byte for every existing caller.
-
-    Returns (moves, skipped) — `moves` are `Move` objects ready for
-    `apply_sweep` or `archive_and_commit`.
-    """
     terminal = _scan_terminal(
         worktree_root, common_dir, skipped=scan_skipped, exempt_session_id=exempt_session_id,
     )
@@ -615,44 +553,13 @@ def plan_sweep(
     return moves, skipped
 
 
-# apply_sweep is re-exported so a future in-plane caller can import both
-# halves of this family's two-phase shape from this one module.
 __all__ = ["plan_sweep", "apply_sweep", "collect_live_plan_paths", "plan_archive_dest"]
-
-
-# ---------------------------------------------------------------------------
-# Standalone op handler — dry_run:true preview / dry_run:false act
-# ---------------------------------------------------------------------------
 
 
 def _partition_untracked_sidecars(
     worktree_root: Path,
     moves: List[Move],
 ) -> Tuple[List[Move], List[Move]]:
-    """Split `moves` into (commit_moves, fs_sidecar_moves).
-
-    Purpose: `archive_and_commit`'s `untracked-at-head` refusal is a
-    deliberate integrity refusal for a TRACKED primary plan (see this
-    module's own docstring) and must stay exactly that strict — this
-    function never touches a primary's path through that refusal. What it
-    DOES fix (defect 9cd2fc40cf, example-store-repo-fb): a fire-script sidecar
-    (`<stem>.workflow.mjs[.emitted.json]`) is written beside its plan by
-    `emit-dispatch-workflow` but the emitter never commits it, so it is
-    untracked at HEAD by construction and was hitting the SAME refusal —
-    stranding it behind while its primary moved on alone, exactly what
-    9cd2fc40cf was meant to stop. A sidecar that WAS committed (e.g. a
-    `.review.md` evidence file) is untouched by this split and still rides
-    through the ordinary commit path below, unchanged.
-
-    ONE batched, spawn-free `read_tree_spine` read over every sidecar
-    candidate's src decides tracked-vs-untracked — never a per-sidecar git
-    spawn (amplification gate:
-    coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py).
-    `read_tree_spine` returning `None` (unresolvable HEAD) fails CLOSED to
-    the pre-existing behaviour (routed through the commit, so
-    `archive_and_commit`'s own refusal fires) rather than guessing a
-    sidecar is untracked.
-    """
     sidecar_moves = [m for m in moves if _is_sidecar(m.src)]
     if not sidecar_moves:
         return moves, []
@@ -767,16 +674,6 @@ def _apply_untracked_sidecar_moves(moves: List[Move]) -> Tuple[List[dict], List[
 
 
 def _caller_session_id() -> Optional[str]:
-    """The archiving caller's own session id, normalized for `exempt_session_id`.
-
-    `resolve_session_id` returns `""` for an unresolvable caller and never
-    raises (see that function's own docstring); normalized here to `None` so
-    the self-claim exemption is simply absent rather than an empty-string id
-    `claim_held_by_me` would otherwise have to special-case. Under the warm
-    server this reads the per-request identity the caller carried in
-    (`session_identity_override`'s bound ContextVar — tier 0 of
-    `resolve_session_id`'s resolution order), not the server process's own.
-    """
     return resolve_session_id() or None
 
 
@@ -825,10 +722,6 @@ def _handle_act(
         except Exception as exc:  # noqa: BLE001 — always report a receipt, never raise past this seam
             _LOG.warning("archive_plans: archive_and_commit raised — %s", exc)
             record_sweep_outcome(common_dir, _OP_KEY, "failed", count=len(moves), detail=str(exc))
-            # The commit call never returned cleanly — the "after the commit
-            # succeeds" ordering for untracked sidecars means none of them
-            # ran either; report them failed alongside the aborted batch
-            # rather than silently proceeding to move them anyway.
             return build_act_result(mode, [], skipped, [
                 {"id": m.candidate_id, "reason": f"commit-failed: {exc}"} for m in commit_moves
             ] + [
@@ -851,15 +744,6 @@ def _handle_act(
         record_sweep_outcome(common_dir, _OP_KEY, "nothing-to-do", count=0)
 
     return build_act_result(mode, acted, skipped, failed)
-
-
-# ---------------------------------------------------------------------------
-# Op handler — registers this chunk's own op (the "separate chunk" the module
-# docstring's history section describes is this one; see that docstring's
-# "A future in-plane caller... composes plan_sweep + apply_sweep + its own
-# single batched commit" paragraph for the OTHER, still-unbuilt caller this
-# registration does not attempt to be).
-# ---------------------------------------------------------------------------
 
 
 @register_op("fleet.archive_completed_plans")
@@ -887,12 +771,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     path's own asyncio.run(...) boundary is _handle_act's, not this
     handler's.
     """
-    # Bound early (before validate_params) so every setup-error branch below
-    # can record a receipt row when a common_dir is actually resolvable —
-    # mirrors the module docstring's "called on every exit path" observability
-    # claim: a setup error is still an exit path, and the operator's own
-    # "did it happen" question (see module docstring "Requirement discharged")
-    # deserves an answer even when the op never reached _scan_terminal.
     common_dir = Path(repo_root) if repo_root is not None else None
 
     def _setup_error(mode, dry_run, reason: str) -> dict:
@@ -907,13 +785,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 common_dir, _OP_KEY, "failed", count=0,
                 detail=f"validate_params rejected params: {params!r}",
             )
-        return parsed  # exit_code:1 setup-error envelope already built
+        return parsed
 
     mode, dry_run, candidate_ids = parsed
 
-    # `cap` is required — absent/invalid is a setup error, never an
-    # unbounded default (mirrors archive_terminal_handoffs's own C0 decision;
-    # see this module's own negative-spec "Does NOT accept an absent cap").
     cap = params.get("cap")
     if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
         return _setup_error(
@@ -934,9 +809,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     lock_path = _acquire_sweep_lock(common_dir)
     if lock_path is None:
-        # First-class non-error result — a concurrent sweep already running
-        # is the design condition, not an edge case (mirrors
-        # archive_terminal_handoffs._handler's identical contended branch).
         if dry_run:
             result = build_dry_run_result(mode, [])
         else:
@@ -969,9 +841,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 }
             return result
 
-        # `validate_params` already refuses an absent/empty `candidate_ids` on
-        # the act path, so this narrows a type the contract has already made
-        # non-optional rather than adding a second gate.
         if candidate_ids is None:
             return build_setup_error_result(
                 mode, dry_run,
@@ -982,5 +851,4 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _handle_act(mode, worktree, common_dir, candidate_ids, cap)
     finally:
         _release_sweep_lock(lock_path)
-
 

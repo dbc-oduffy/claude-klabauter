@@ -61,9 +61,6 @@ def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def _init_repo_with_origin(tmp_path: Path) -> Path:
-    """A git repo with an `origin` remote pointing at a local bare repo, so
-    `git merge-base origin/main HEAD` resolves for Detector B (mirrors
-    `test_resolver_git_provenance.py`'s fixture shape)."""
     root = tmp_path / "repo"
     root.mkdir()
     _git(root, "init", "-b", "main")
@@ -88,9 +85,6 @@ def _init_repo_with_origin(tmp_path: Path) -> Path:
 
 
 def _commit_unpushed(root: Path, message: str) -> None:
-    """Commit locally WITHOUT pushing -- `origin/main` stays at the fixture's
-    initial skeleton commit, so the new commit is genuinely ahead of it for
-    Detector B's merge-base..HEAD scan."""
     _git(root, "add", "-A")
     result = _git(root, "commit", "-m", message)
     assert result.returncode == 0, result.stderr
@@ -113,11 +107,9 @@ class TestDeletedPeerHandoffNeverAttributedToADifferentSid:
         sid_a = "sess-phantom-a"
         sid_b = "sess-phantom-b"
 
-        # B ships/consumes a handoff under B's own Session-Id trailer.
         shipped = _write_archived_handoff(repo, "shipped-by-b.md", claimed_by=sid_b)
         _commit_unpushed(repo, f"archive: ship handoff\n\nSession-Id: {sid_b}")
 
-        # That handoff file is then deleted from the tree entirely.
         shipped.unlink()
         _commit_unpushed(repo, "chore: drop shipped handoff")
 
@@ -128,10 +120,6 @@ class TestDeletedPeerHandoffNeverAttributedToADifferentSid:
         assert result["evidence"]["consumed_handoff"] is None
 
     def test_deleted_peer_handoff_leaves_no_trace_in_notes_or_warnings(self, tmp_path):
-        """Regression guard: B's trailer must never even be considered a
-        candidate for A -- Detector B only matches commits whose trailer
-        EQUALS the sid being classified, so a deleted-file phantom read must
-        not silently sneak a mismatched note in either."""
         repo = _init_repo_with_origin(tmp_path)
         sid_a = "sess-phantom-a2"
         sid_b = "sess-phantom-b2"
@@ -153,9 +141,7 @@ class TestRestorationCommitSpoofIsRejected:
         sid_a = "sess-phantom-restore-a"
         sid_b = "sess-phantom-restore-b"
 
-        # The handoff's OWN frontmatter names B as claim holder.
         _write_archived_handoff(repo, "restored-by-a.md", claimed_by=sid_b)
-        # A commit carrying A's trailer restores/re-adds it.
         _commit_unpushed(repo, f"restore: recover archived handoff\n\nSession-Id: {sid_a}")
 
         result = rctd._classify_sync(repo, sid_a, {})

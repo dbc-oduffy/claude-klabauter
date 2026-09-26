@@ -39,17 +39,6 @@ docstring's own note on `_co_pp_emit`).
 """
 from __future__ import annotations
 
-# Five escapes, applied in this exact order (order is normative -- backslash
-# MUST be first to avoid double-escaping the substitutions that follow).
-# Mirrors _co_pp_json_escape in the bash original byte-for-byte:
-#   1. \  backslash       -> \\
-#   2. "  double-quote    -> \"
-#   3. \r carriage-return -> \r
-#   4. \n line-feed       -> \n
-#   5. \t tab             -> \t
-# NOT escaped (intentional boundary, matches bash): other C0 control chars,
-# NUL, and non-ASCII pass through raw. clone_auth captures multiline git
-# stderr, so \r/\n/\t are load-bearing (real Windows git stderr carries CRLF).
 _ESCAPES = (
     ("\\", "\\\\"),
     ('"', '\\"'),
@@ -60,14 +49,6 @@ _ESCAPES = (
 
 
 def json_escape(value: str) -> str:
-    """Escape a string for safe embedding in a hand-rolled JSON value.
-
-    Byte-parity port of _co_pp_json_escape() -- applies the five escapes
-    above IN ORDER. No json.dumps() shortcut: json.dumps would also escape
-    other control chars and non-ASCII (via \\uXXXX), which the bash original
-    deliberately does not -- using it here would silently widen the escape
-    set and break byte-parity with the conformance fixture.
-    """
     result = value
     for target, replacement in _ESCAPES:
         result = result.replace(target, replacement)
@@ -75,12 +56,6 @@ def json_escape(value: str) -> str:
 
 
 def emit_line(name: str, status: str, severity: str, detail: str, remediation: str) -> str:
-    """Build one compact NDJSON line for a probe result (byte-parity port of _co_pp_emit).
-
-    All string fields are escaped via json_escape() before embedding. Returns
-    the line WITH its trailing newline (matches the bash `printf '...\\n'`
-    original) so callers can write it directly to a stream.
-    """
     return (
         '{"name":"%s","status":"%s","severity":"%s","detail":"%s","remediation":"%s"}\n'
         % (
@@ -94,11 +69,6 @@ def emit_line(name: str, status: str, severity: str, detail: str, remediation: s
 
 
 def emit(name: str, status: str, severity: str, detail: str, remediation: str, *, stream=None) -> None:
-    """Emit one NDJSON probe-result line to a stream (default: stdout).
-
-    Thin wrapper over emit_line() for callers that want the bash-sourced
-    _co_pp_emit's side-effecting-print behavior rather than a returned string.
-    """
     import sys
 
     target = stream if stream is not None else sys.stdout

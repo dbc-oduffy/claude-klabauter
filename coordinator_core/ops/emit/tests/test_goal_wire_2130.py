@@ -53,10 +53,6 @@ from coordinator_core.ops.emit.validate import ValidationError, validate_array
 _ENTITY = "goal"
 
 
-# ---------------------------------------------------------------------------
-# Shared factory (mirrors test_per_repo_emission_integration._make_ctx)
-# ---------------------------------------------------------------------------
-
 def _make_ctx(tmp_path: Path, repo_name: str = "test-org/test-repo") -> EmitContext:
     central = tmp_path / "state"
     central.mkdir(parents=True, exist_ok=True)
@@ -95,22 +91,12 @@ def _base_goal_record(**overrides) -> dict:
 
 
 def _emitted_goal(ctx: EmitContext, machine: str, raw_record: dict) -> dict:
-    """Write one JSONL record and return the single emitted goal dict from collect()."""
     _write_goal_log(ctx, machine, [raw_record])
     records, malformed = goals_section.collect(ctx)
     assert malformed == []
     assert len(records) == 1, f"expected exactly 1 emitted record, got {len(records)}"
     return records[0]
 
-
-# ---------------------------------------------------------------------------
-# Direct parser unit tests for _parse_goal_ids/_unquote (DR-207 `goals:` array field).
-#
-# The join-mechanics
-# tests below (TestInitiativeGoalsJoin) synthesize `_goal_ids` directly as a Python list
-# literal, bypassing the parser entirely. These tests exercise the parser itself against
-# on-disk-shaped YAML text.
-# ---------------------------------------------------------------------------
 
 def _lines_and_idx(yaml_text: str, key_line_prefix: str = "goals:") -> tuple[list[str], int]:
     lines = yaml_text.splitlines()
@@ -155,15 +141,8 @@ class TestParseGoalIds:
         assert _parse_goal_ids("", lines, idx) == []
 
     def test_indentation_boundary_sibling_field_not_slurped(self) -> None:
-        """A `- x` line at <= the `goals:` key's own indentation is NOT consumed —
-        proves the Finding-1 (initiativesummary-goals-join) indentation-boundary fix.
-        Simulates a nested-under-a-different-key block list positioned right after a
-        bare `goals:` key, at the SAME indentation as `goals:` itself (i.e. it is a
-        sibling top-level scalar/list marker, not a child of `goals:`)."""
         text = "id: x\ngoals:\n- not-a-goal-id\nstatus: active\n"
         lines, idx = _lines_and_idx(text)
-        # `goals:` is at column 0; the `- not-a-goal-id` line is also at column 0
-        # (<=  goals_indent), so it must NOT be slurped.
         assert _parse_goal_ids("", lines, idx) == []
 
 
@@ -181,13 +160,8 @@ class TestUnquote:
         assert _unquote("  goal-a  ") == "goal-a"
 
 
-# ---------------------------------------------------------------------------
-# (a) new-field round-trip against the vendored 2.13.0 schema
-# ---------------------------------------------------------------------------
-
 @pytest.mark.usefixtures("requires_vendor_pin")
 def test_new_fields_round_trip_validates(tmp_path: Path) -> None:
-    """A goal record carrying all 3 new 2.13.0 fields validates against the vendored pin."""
     ctx = _make_ctx(tmp_path)
     raw = _base_goal_record(
         weekly_perceptible=True,
@@ -213,9 +187,7 @@ def test_new_fields_round_trip_validates(tmp_path: Path) -> None:
     validate_array([emitted], _ENTITY)
 
 
-# ---------------------------------------------------------------------------
 # (b) version-neutrality: old record with none of the new OPTIONAL keys still validates
-# ---------------------------------------------------------------------------
 
 @pytest.mark.usefixtures("requires_vendor_pin")
 def test_old_record_without_new_optional_keys_still_validates(tmp_path: Path) -> None:
@@ -226,7 +198,7 @@ def test_old_record_without_new_optional_keys_still_validates(tmp_path: Path) ->
     present-as-null form is asserted to validate here (schema requires the key).
     """
     ctx = _make_ctx(tmp_path)
-    raw = _base_goal_record()  # no weekly_perceptible, no key_results_status, no parent_goal_id
+    raw = _base_goal_record()
     emitted = _emitted_goal(ctx, "test-host", raw)
 
     assert "weekly_perceptible" not in emitted
@@ -236,14 +208,9 @@ def test_old_record_without_new_optional_keys_still_validates(tmp_path: Path) ->
     validate_array([emitted], _ENTITY)
 
 
-# ---------------------------------------------------------------------------
-# (c) parent_goal_id always-present + present-as-null; omitted key rejects
-# ---------------------------------------------------------------------------
-
 @pytest.mark.usefixtures("requires_vendor_pin")
 class TestParentGoalIdAlwaysPresent:
     def test_parent_goal_id_key_always_present_on_emit(self, tmp_path: Path) -> None:
-        """Even with no parent_goal_id in the raw JSONL, the emitted key IS present (as null)."""
         ctx = _make_ctx(tmp_path)
         raw = _base_goal_record()
         emitted = _emitted_goal(ctx, "test-host", raw)
@@ -280,9 +247,7 @@ class TestParentGoalIdAlwaysPresent:
             validate_array([bad_record], _ENTITY)
 
 
-# ---------------------------------------------------------------------------
 # Provenance names the SURVIVING record's OWN shard, not the glob pattern
-# ---------------------------------------------------------------------------
 
 def test_provenance_path_names_each_records_own_shard_across_two_machines(
     tmp_path: Path,
@@ -313,10 +278,6 @@ def test_provenance_path_names_each_records_own_shard_across_two_machines(
     )
 
 
-# ---------------------------------------------------------------------------
-# (d) weekly_perceptible + key_results_status absent-when-absent
-# ---------------------------------------------------------------------------
-
 @pytest.mark.usefixtures("requires_vendor_pin")
 def test_weekly_perceptible_and_key_results_status_absent_when_absent(tmp_path: Path) -> None:
     ctx = _make_ctx(tmp_path)
@@ -337,18 +298,12 @@ def test_weekly_perceptible_present_when_present(tmp_path: Path) -> None:
 
 
 def test_empty_key_results_list_omits_key_results_status(tmp_path: Path) -> None:
-    """An empty key_results_status list on disk is falsy -> key_results_status omitted."""
     ctx = _make_ctx(tmp_path)
     raw = _base_goal_record(key_results_status=[])
     emitted = _emitted_goal(ctx, "test-host", raw)
 
     assert "key_results_status" not in emitted
 
-
-# ---------------------------------------------------------------------------
-# (e) key_results_status re-projection drops any stray evidence_source + per-KR
-#     weekly_perceptible keys, keeping only {id, text, kind, status}
-# ---------------------------------------------------------------------------
 
 def test_key_results_projection_drops_evidence_source_and_weekly_perceptible(
     tmp_path: Path,
@@ -425,7 +380,7 @@ def test_key_results_status_item_missing_subfield_defaults_to_empty_string(
     masking the real (validates-successfully) behavior."""
     ctx = _make_ctx(tmp_path)
     raw = _base_goal_record(
-        key_results_status=[{"id": "kr-a", "text": "First KR", "status": "at_risk"}]  # kind omitted
+        key_results_status=[{"id": "kr-a", "text": "First KR", "status": "at_risk"}]
     )
     emitted = _emitted_goal(ctx, "test-host", raw)
     assert emitted["key_results_status"] == [
@@ -433,10 +388,6 @@ def test_key_results_status_item_missing_subfield_defaults_to_empty_string(
     ]
     validate_array([emitted], _ENTITY)
 
-
-# ---------------------------------------------------------------------------
-# (f) InitiativeSummary.goals[] cross-join (_stamp_initiative_goals)
-# ---------------------------------------------------------------------------
 
 def _base_initiative_record(**overrides) -> dict:
     record = {
@@ -458,13 +409,4 @@ def _base_initiative_record(**overrides) -> dict:
     }
     record.update(overrides)
     return record
-
-
-
-
-# ---------------------------------------------------------------------------
-# (g) per-repo keying (FOLDS C4, plan AC6) — DR-025: a non-meta consumer repo emits its
-#     OWN goals_current + initiatives records keyed on its own owner-qualified repo +
-#     declared_by_machine anchor, with NO meta-repo-only gating.
-# ---------------------------------------------------------------------------
 

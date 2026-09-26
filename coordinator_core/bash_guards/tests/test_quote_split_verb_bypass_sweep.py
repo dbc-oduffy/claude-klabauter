@@ -52,10 +52,6 @@ def _no_touch_claim_recording(monkeypatch):
     monkeypatch.setattr(touch_record, "append_touch_claims", lambda *a, **k: None)
 
 
-#: Commands whose first word is a verb a guard is expected to reason about.
-#: The governed-surface spellings are literal on purpose: they are what the
-#: doctrine-surface guard keys on, and a fixture indirection would hide which
-#: surface is under test.
 CASES = [
     "rm -rf state/handoffs",
     "git stash",
@@ -70,14 +66,10 @@ CASES = [
     "curl -o /tmp/x https://example.com",
 ]
 
-#: Host session, a dispatched executor, and a reviewer: the guard chain differs
-#: by audience, and a bypass that only opens for one of them is still a bypass.
 AGENTS = [None, "coordinator:executor", "coordinator:code-reviewer"]
 
 
 def _split_first_verb(cmd: str) -> str:
-    """`git stash` -> `'g''it' stash`. Zero-width adjacency, which the shell
-    concatenates back into the original word."""
     head, _, rest = cmd.partition(" ")
     mid = len(head) // 2
     return f"'{head[:mid]}''{head[mid:]}' {rest}"
@@ -100,9 +92,6 @@ def _decision(cmd: str, agent: str | None) -> str:
 @pytest.mark.parametrize("agent", AGENTS, ids=[a or "host" for a in AGENTS])
 @pytest.mark.parametrize("cmd", CASES, ids=[c.split()[0] + "-" + c.split()[1] for c in CASES])
 def test_splitting_the_verb_never_relaxes_the_verdict(cmd: str, agent: str | None) -> None:
-    """If the plain spelling is refused, the split spelling must be refused
-    too. Calibrated against the plain verdict rather than asserting one, so
-    this stays honest on a clean tree where some of these do not deny at all."""
     plain = _decision(cmd, agent)
     if plain == "allow":
         pytest.skip(f"{cmd!r} is not refused in this tree, so there is nothing to relax")
@@ -115,7 +104,5 @@ def test_splitting_the_verb_never_relaxes_the_verdict(cmd: str, agent: str | Non
 
 
 def test_the_splitter_produces_something_the_shell_would_rejoin() -> None:
-    """Guards the harness itself: if `_split_first_verb` ever stopped producing
-    a zero-width join, every case above would pass by testing nothing."""
     assert _split_first_verb("git stash") == "'g''it' stash"
     assert _split_first_verb("rm -rf x") == "'r''m' -rf x"

@@ -1,19 +1,3 @@
-"""tests/test_coordinator_currency.py
-T1-T5 (stamp write/read). T6-T10 dropped on port:
-
-  - T6-T9 (probe classifications) are covered by claude-klabauter's native
-    coordinator_core/ops/test_probe_onboarding_currency.py — the bash oracle's
-    `coordinator_currency_probe` is NOT reproduced here (DR-059 fix-in-port:
-    already exists and passes tests). See lib/coordinator_currency.py's module
-    docstring.
-  - T10 (check-schema-version-bump.sh tripwire) tested a sibling script that
-    never depended on coordinator-currency.sh's functions — split out to
-    bin/tests/test-check-schema-version-bump.sh (untouched port boundary).
-
-Port of: test-coordinator-currency.sh (DoE 9cc1d315, 2026-07-21).
-Port: docs/plans/2026-07-19-debash-coordinator-windows.md (chunk E3-f).
-Spec backlink: docs/plans/2026-05-29-it-just-works-agentic-install-currency.md § Chunk 1
-"""
 from __future__ import annotations
 
 import os
@@ -56,7 +40,7 @@ def test_t2_second_write_same_version_is_byte_identical_noop(tmp_path):
     content_before = open(stamp, encoding="utf-8").read()
     mtime_before = os.path.getmtime(stamp)
 
-    time.sleep(1.1)  # ensure mtime would differ if the file were rewritten
+    time.sleep(1.1)
     cc.coordinator_currency_write(repo, plugin)
 
     content_after = open(stamp, encoding="utf-8").read()
@@ -97,7 +81,7 @@ def test_t5_read_returns_none_on_absent_stamp(tmp_path):
 def test_write_raises_currency_error_on_unreadable_schema_constant(tmp_path):
     repo = _make_repo_root(tmp_path)
     plugin_no_version = tmp_path / "plugin_no_version"
-    plugin_no_version.mkdir()  # deliberately no coordinator-schema-version file
+    plugin_no_version.mkdir()
 
     import pytest
 

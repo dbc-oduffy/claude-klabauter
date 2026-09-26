@@ -88,21 +88,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.session.fleet_mode import read_fleet_mode, write_fleet_mode
 
 # CLI-validation registry -- see module docstring "WHY THE KEY REGISTRY IS
-# DEFINED HERE, LOCALLY" for why this mirrors, rather than imports, C2's
 # planned MODE_KEYS shape. Each entry:
-#   value_type   -- "bool" or "enum"
-#   enum_values  -- tuple of accepted string tokens, only for "enum"
-#   precedence   -- "fleet-wins" or "session-wins"
-#   session_pair -- True if a session-scoped sentinel exists to pair with
-#                   (precedence is meaningful as a contest); None if this
-#                   key is fleet-only (no session-scoped counterpart exists
-#                   at all, so "fleet-wins" is the only coherent value --
-#                   see C2's registry invariant this mirrors).
-#   is_variant_selector -- True for a key that selects which advisory
-#                   variant fires rather than an on/off toggle; `show`
-#                   states explicitly that no value of such a key
-#                   suppresses the advisory (see module docstring).
-#   description  -- one line, surfaced verbatim by `show`.
 _KNOWN_KEYS: dict = {
     "autonomous": {
         "value_type": "bool",
@@ -255,14 +241,6 @@ def _unset_variant(key: str, enum_values: tuple) -> tuple:
         env_default = MODE_KEYS[key].environment_default
         if env_default is not None:
             # `environment_default` takes the caller's env as a POSITIONAL
-            # parameter (`ModeKey.environment_default`'s own contract). `show`
-            # has no caller env to carry -- it runs in the reader's own
-            # process -- so it passes `None` explicitly, which is the ambient
-            # rung. Calling it with no argument raised `TypeError` into the
-            # fail-open `except` below, so every `show` rendered the STATIC
-            # default and the environment rung could never be reported at all:
-            # the silent misreport this function's docstring calls worse than
-            # no `show`.
             value = env_default(None)
             if value in enum_values:
                 return value, "environment (no fleet value set)"

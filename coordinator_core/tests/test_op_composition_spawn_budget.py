@@ -65,20 +65,13 @@ from coordinator_core.tests.test_no_unbatched_per_item_git_spawn import (
     find_unbatched_per_item_spawns,
 )
 
-#: Sized only to separate this module's own two planted fixtures (six unrolled spawns vs. one
 #: batched spawn) -- see module docstring's "NON-GATING, PENDING AC11" section. Never AC11's
-#: ratified process-time threshold.
 _FIXTURE_SPAWN_BUDGET = 2
 
 pytestmark = pytest.mark.pending_fix
 
 
 def _composition_spawn_count(tmp_path: pathlib.Path, entry_relpath: str, entry_func: str) -> int:
-    """Total spawn sites reachable from `(entry_relpath, entry_func)`'s call-graph closure,
-    computed over the planted fixture rooted at `tmp_path` -- the same corpus-build steps
-    `test_no_uncounted_spawn_on_budgeted_path.py`'s own planted self-tests use
-    (`test_plant_multi_hop_spawn_is_flagged_red_then_removed_is_green`), reused rather than
-    re-derived (plan anti-scope: "do not rebuild what op_census/ already has")."""
     files = _reachability_discover_scope_files((tmp_path,))
     records: list[_FileRecord] = _load_file_records(files)
     index = _build_func_index(records)
@@ -105,9 +98,6 @@ def _composition_spawn_count(tmp_path: pathlib.Path, entry_relpath: str, entry_f
 
 
 def _plant_loop_free_amplification(tmp_path: pathlib.Path) -> None:
-    """RED fixture: six sequential, unrolled `subprocess.run` call sites in one function, doing
-    the same per-item work `memo.send`'s six-spawn composition does (plan Measurement 1) --
-    with NO loop anywhere in the file. AC7's premise."""
     entry_mod = tmp_path / "entry.py"
     entry_mod.write_text(
         "import subprocess\n"
@@ -125,8 +115,6 @@ def _plant_loop_free_amplification(tmp_path: pathlib.Path) -> None:
 
 
 def _plant_batched_form(tmp_path: pathlib.Path) -> None:
-    """GREEN fixture: AC8's negative control -- identical work, one batched invocation instead
-    of six unrolled ones."""
     entry_mod = tmp_path / "entry.py"
     entry_mod.write_text(
         "import subprocess\n"

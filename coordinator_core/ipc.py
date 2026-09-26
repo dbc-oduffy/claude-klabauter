@@ -426,8 +426,6 @@ Negative-spec (hard-won):
       (invoke/__main__.py, test fixtures, ceremony scripts) — no socket, no service loop.
       Backlink: docs/decisions/DR-215-coordinator-core-command-type-execution-model.md
 """
-# Added DR-211 to Backlinks so the governing
-# authority for the FLEET archival block is visible when scanning the Backlinks section.
 
 from __future__ import annotations
 
@@ -445,13 +443,6 @@ from coordinator_core.lifecycle import (
 )
 
 
-# Deferred-import accessor (Windows hot-path import diet — docs/plans/
-# 2026-08-06-windows-hot-path-less-work-per-interpreter.md § C9c).
-#
-# See coordinator_core.lifecycle's `_log()` for the full rationale (same
-# ~8.1ms cold `logging` import cost, same "only getLogger + level calls used"
-# shape, same identity-preservation argument for why deferring the *import*
-# itself — not just the getLogger call — is safe here).
 _logger = None
 
 
@@ -462,19 +453,14 @@ def _log():
         _logger = logging.getLogger(__name__)
     return _logger
 
-# ---------------------------------------------------------------------------
 # JSON-RPC 2.0 standard error codes (spec §5.1)
-# ---------------------------------------------------------------------------
-PARSE_ERROR = -32700       # Malformed JSON — not a valid JSON value
-INVALID_REQUEST = -32600   # Valid JSON but not a valid Request object
-METHOD_NOT_FOUND = -32601  # The method does not exist / is not available
-INVALID_PARAMS = -32602    # Invalid method parameter(s)
+PARSE_ERROR = -32700
+INVALID_REQUEST = -32600
+METHOD_NOT_FOUND = -32601
+INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603    # Internal JSON-RPC error
 
-# ---------------------------------------------------------------------------
 # App-defined error code — JSON-RPC 2.0 §5.1 reserves -32000..-32099 for
-# implementation-defined "Server error" codes.
-# ---------------------------------------------------------------------------
 STRUCTURAL_PIN_ERROR = -32001
 """An op handler raised an exception carrying ``structurally_wedged = True`` (e.g.
 coordinator_core.ops.emit.validate.ContractPinError). Distinct from INTERNAL_ERROR: a
@@ -528,73 +514,13 @@ request is well-formed and correct -- a door image legitimately named itself, an
 outcome is a cold run, not a caller-side fix."""
 
 
-# ---------------------------------------------------------------------------
-# Dispatch-axis stamp gate (state/handoffs/2026-08-21_103635_reaching-the-
-# warm-engine.md; PM ruling verbatim: "for any live ops there should be no
-# fallback to claude-klabauter. none whatsoever ... I want that shit to fail hard every
-# time if it can't go via Klabauter").
-#
-# Four caller-side resolvers already existed on this box before this row
-# (coordinator-invoke.py's require_dispatch_engine_on_path, cc_invoke's
-# delegation to coordinator_engine_root_with_class, the 745 settings-home
-# forwarders' exec_cli, and the warm axis's own UnstampedEngineRootError) --
 # each correctly refuses an unstamped published root WHEN CONSULTED. None of
-# them is consulted by a caller that skips straight to `import coordinator_core`
-# or `python -m coordinator_core.invoke`, which is served instead by this
-# box's machine-wide editable install (unconditionally pointing at the live,
-# unstamped claude-klabauter tree). This gate closes that gap at the one seam
-# every dispatch -- cold or warm, CLI or hook, however it got here -- actually
-# passes through: `dispatch_message` itself, "the SOLE process-level dispatch
-# chokepoint" per its own docstring above.
-# ---------------------------------------------------------------------------
 
-#: Process-local, explicit opt-in -- NEVER an environment variable (PM
-#: constraint: "explicit, deliberate, never ambient, never inherited
-#: silently from a parent process"; an env var is inherited by every child,
-#: grandchild, and detached spawn this box runs, which is exactly the
-#: silent-off-in-processes-nobody-intended failure mode this gate exists to
-#: remove). A plain module-global bool cannot cross a `Popen`/`subprocess`
-#: boundary at all -- a child process that itself dispatches gets the
-#: enforced behaviour regardless of what its parent set, which is correct:
-#: that child IS a live dispatch.
 _unstamped_dispatch_allowed = False
 
-#: ARMED. PM ruling, verbatim: "for any live ops there should be no fallback to
-#: claude-klabauter. none whatsoever ... I want that shit to fail hard every time if it
-#: can't go via Klabauter." This flag is the single seam that decides whether
-#: the gate below REFUSES or merely stands ready, and it refuses.
-#:
-#: History, so nobody re-derives it. The gate first landed in `30ac82322260`
-#: and was reverted by `d179bfb39` on the reading that the 233 recorded
-#: live-tree cold dispatches were `hooks.postuse_advisory_dispatch` and
-#: `hooks.track_touched_files`, which would make an armed gate refuse every
-#: tool call fleet-wide. That reading does not reproduce: both of those ops go
-#: through `DoE-claude/coordinator/hooks/scripts/postuse-advisory-dispatch.py`,
-#: which resolves via `_engine_root.resolve_claude_klabauter_root()` to the STAMPED
-#: klabauter mirror, and setuptools' `_EditableFinder` sits after `PathFinder`
-#: in `sys.meta_path`, so that script's `sys.path.insert(0, root)` wins over the
-#: machine-wide editable pin rather than losing to it.
-#:
-#: The population that DOES resolve unstamped is a different family: the git
-#: hooks (`prepare-commit-msg`, `post-commit`, `pre-commit`, `pre-push`,
-#: `post-checkout`) exec through the settings-home forwarder, whose
-#: `_resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()` returns
 #: `(<live tree>, RESOLUTION_LIVE_WORKING_TREE)` by design. Those import the
-#: engine unstamped -- which is why they contribute `client-cold.jsonl` rows,
-#: `record_client_cold_fallback` keying `svc_dir` on `_engine_clone_root()` --
-#: but they do not dispatch ops: none of the CLIs they exec references
-#: `dispatch_ops_from_hook` or `ipc.dispatch`. A row in that file is evidence of
 #: an unstamped IMPORT, never of a gated DISPATCH, and conflating the two is
-#: what produced the original count.
-#:
-#: The remaining sanctioned unstamped dispatcher is this repo's own test suite,
-#: which imports and dispatches against the live tree by construction and opts
-#: out explicitly in `conftest.py::pytest_configure` -- see
-#: `allow_unstamped_dispatch` for that carve-out and the CLI flag beside it.
-#:
 #: DISARMING IT: flip to False. Do that only to stop an actual observed
-#: fleet-wide refusal, and say so in the commit -- not to quiet a single
-#: caller, which should instead route through `coordinator-invoke`.
 _STAMP_GATE_ARMED = True
 
 
@@ -634,31 +560,13 @@ def is_unstamped_dispatch_allowed() -> bool:
     return _unstamped_dispatch_allowed
 
 
-#: This process's own resolved engine clone root, `ipc.py`-anchored:
-#: `coordinator_core/ipc.py`'s parent is `coordinator_core/`, whose parent is
-#: the repo root -- byte-identical derivation to
-#: `warm.engine_root.current_engine_clone()` (`Path(__file__).resolve().
-#: parents[2]` from `coordinator_core/warm/engine_root.py`, two directories
-#: deeper), NOT imported from there (see `_is_dispatch_engine_stamped`'s own
-#: docstring for why). Computed once at import time -- this process's own
-#: `coordinator_core` cannot be re-rooted after the fact.
 _DISPATCH_ENGINE_ROOT = Path(__file__).resolve().parent.parent
 
-#: Repo-relative parts to this process's own engine build stamp -- mirrors
 #: `warm.skew.ENGINE_STAMP_FILENAME` / `_engine_stamp_path` byte-for-byte in
-#: shape. This is one of SIX independent copies of this value on this box
-#: (see `coordinator_core/tests/test_engine_stamp_predicate_pin.py`'s module
-#: docstring for the full list and why each cannot simply import the
-#: canonical one) -- keep all six in sync by hand if the stamp filename or
-#: location ever changes; that test is the drift guard.
 _ENGINE_STAMP_RELATIVE_PARTS = ("coordinator_core", "_engine_stamp")
 
 #: Cached verdict: is `_DISPATCH_ENGINE_ROOT` a stamped engine build? `None`
-#: means "not yet computed". Memoized, not re-stat'd per dispatch (staff EM
 #: review, this row): the root of an ALREADY-IMPORTED package cannot change
-#: for the life of the process, so the cost of proving it is paid once, not
-#: per request on a warm server serving many dispatches/sec (the brightline
-#: is measured in process time -- see CLAUDE.md § brightline).
 _engine_stamped_verdict: Optional[bool] = None
 
 
@@ -765,113 +673,22 @@ class CallerFacingValidationError(ValueError):
     caller_facing_validation = True
 
 
-#: Bound on the preserved message length for a `CallerFacingValidationError` — long enough for
-#: every enum-rejection message this module composes today (the longest, an ALL-invalid-enum-
-#: fields aggregate from `review_trail_write._validate`, runs well under 1000 chars), short
 #: enough to cap a pathological caller-constructed message from ballooning the JSON-RPC error
 #: payload. Never applies to the STRUCTURAL_PIN_ERROR branch above, which has its own message
-#: shape and is not subject to this bound.
 _CALLER_FACING_MESSAGE_MAX_LEN = 2000
 
-# ---------------------------------------------------------------------------
-# Per-invocation dispatch timeout (C3 / AC-3 / Gap-1)
-#
-# Per-invocation hung-op guard: cancels a runaway or hanging op handler after
 # DISPATCH_TIMEOUT_SECS, preventing the caller from blocking indefinitely.
-# (In the command-type model, one op runs per process — the "other partitions"
-# framing of the multiplex era no longer applies; the guard is now a simple
-# per-invocation safety net.)
-#
 # Overridable via env var, resolved PER-REQUEST by `_resolve_dispatch_timeout_secs()`
-# below (C11) rather than once at import — a warm, long-lived engine process would
 # otherwise have this knob permanently pinned to whatever `COORDINATOR_
 # DISPATCH_TIMEOUT_SECS` happened to read at process start, with no way to retune
 # it without a restart. `DISPATCH_TIMEOUT_SECS` below remains a real module
-# attribute (computed once, at import, from the env as seen then) and is still
-# the value `_resolve_dispatch_timeout_secs()` falls back to when the env var is
-# absent at request time — this is deliberate, not a residual of the old
-# import-time-only design: it lets a caller (production or test) set the knob
-# either way — via the env var (picked up live, per request) or by assigning
 # `ipc.DISPATCH_TIMEOUT_SECS` directly (the fallback default) — and both take
-# effect on the very next dispatch, never requiring a fresh process. Integration
-# tests use either form to exercise the timeout path without slowing the suite.
-#
-# Note: the timeout is only effective if the handler is either:
-#   (a) an async handler that yields control (e.g. awaits I/O or asyncio.sleep), OR
-#   (b) a sync handler offloaded via asyncio.to_thread — asyncio.wait_for cancels the
-#       AWAIT, not the thread. Python has no thread-cancellation primitive: the worker
-#       thread keeps running inside the handler after the timeout fires and the caller
-#       unblocks. (2026-08-07 ceremony-lock-leak audit,
-#       state/audits/2026-08-07-ceremony-lock-leak-root-cause.md — this comment
-#       previously claimed the thread WAS cancelled, which is false and was directly
-#       contradicted by invoke/__main__.py's own comments on the same path.)
-#
-#       The cross-process lock this paragraph used to name was ceremony_lock, deleted
-#       2026-08-08 by fa88f327b (docs/plans/2026-08-07-excise-the-ceremony-lock.md).
-#       The surviving lock surface is coordinator_core/locked_write, which is
-#       kernel-backed (fcntl.flock / msvcrt.locking) and therefore released by the OS
-#       on process death by ANY means — os._exit included. os._exit is load-bearing
-#       for termination LATENCY, not for lock reclaim: measured 1.22s vs 20.1s for
-#       sys.exit, which blocks joining the executor thread.
-#       Negative spec: do NOT infer from this that an abandoned handler thread is
-#       harmless in a long-lived process. It is harmless only because the process
-#       exits. Verified 2026-08-15:
-#       docs/research/spike-verdicts/2026-08-15-warm-engine-os-exit-and-lock-reclaim.md
-# Blocking-sync handlers NOT wrapped in asyncio.to_thread cannot be interrupted by
-# asyncio.wait_for — the event loop stalls for the full blocking duration.
-# C3 wraps all sync handlers via asyncio.to_thread to ensure the AWAIT (not the
-# thread) can time out, so the caller unblocks even though the thread runs on.
-#
-# DEC-2 (docs/plans/2026-07-22-wsc-tail-sub-2s-invoke-budget.md): this guard is a
-# RUNAWAY guard, not a performance budget — it exists to unblock a caller stuck
-# behind a genuinely hung op, not to enforce a target latency. The <2s figure for
-# ceremony.wsc_tail (and its wsc_commit/wsc_resolve predecessors) is enforced as a
-# regression-tested performance property by KPI test
-# (test_wsc_tail_parity.py::test_kpi_wsc_tail_blocking_path_under_2s), not by
-# tightening this timeout — collapsing the guard down toward the target would
-# convert every transient disk stall into an abandoned-mid-mutation event (see the
-# negative-spec below). This guard now applies uniformly to every op, including the
-# three ceremony.* ops that formerly carried a widened 120s per-op override — see
-# `_timeout_for` below; the override table that used to hold those rows is retired.
-#
-# Negative-spec (hard-won, relocated verbatim from the retired per-op override
-# table's comment block — the Staff Engineer F11: this is MORE true after the override retirement,
-# not less, so it must survive the table edit rather than vanish with it): a
-# CLIENT-side transport timeout does NOT abort server-side op execution. The engine
-# keeps running to completion after the caller has given up — mutating ops (e.g.
-# ceremony.wsc_tail, ceremony.wsc_commit) actually commit, so their mutations
-# (including git commits) can and do land AFTER the client already treated the call
-# as failed. Observed, not theoretical: in the 2026-07-22 sibling dogfood run, two
-# commits (fleet.archive_completed_plans, fleet.archive_completed_handoffs) landed
-# after the caller's client timed out at its floor. A caller that times out MUST
-# reconcile against actual repo state before retrying — never assume a transport
-# timeout means "nothing happened" and blind-retry, which re-runs the mutation. Any
-# op that also commits inherits this hazard by construction — say so if it does.
-#
-# Spec backlink: docs/decisions/DR-215-coordinator-core-command-type-execution-model.md
-# ---------------------------------------------------------------------------
 # NARROW-ONLY ENV KNOB (2026-08-21, PM ruling). This constant is the built-in
 # default AND the ceiling `COORDINATOR_DISPATCH_TIMEOUT_SECS` is clamped against
-# in `_resolve_dispatch_timeout_secs()`. It is a bare literal on purpose: it used
 # to be `float(os.environ.get("COORDINATOR_DISPATCH_TIMEOUT_SECS", "30"))`, which
 # made the env var its own ceiling — `COORDINATOR_DISPATCH_TIMEOUT_SECS=420` set
-# the module constant to 420 at import, and a clamp against it would have been a
-# clamp against nothing. Reading the env here is therefore the bypass, not a
-# convenience, and the read is gone.
-#
-# What the knob can still do: LOWER the guard, live, per request, with no restart
 # (`COORDINATOR_DISPATCH_TIMEOUT_SECS=0.5` for a fast-fail run resolves to 0.5).
-# What it can no longer do: raise it. An op that does not fit inside its guard is
-# an op with a defect; the remedy is to make the op cheaper — fewer spawns,
-# batched git, a warm path — never a larger number here or in the environment.
-# Re-running a failing op with more time is the behaviour this clamp exists to
-# make impossible, and it is impossible from any sibling repo too: the env is the
-# only surface a caller outside this process has.
-#
 # Assigning `ipc.DISPATCH_TIMEOUT_SECS` directly still moves both the default and
-# the ceiling together — that is the in-process test seam (several suites raise it
-# to exercise the timeout path), and it is not reachable by an operator, who has
-# the environment and nothing else.
 DISPATCH_TIMEOUT_SECS: float = 30.0
 
 
@@ -915,145 +732,30 @@ def _warn_on_near_miss_timeout_env(environ: Optional[Dict[str, str]] = None) -> 
             )
 
 
-# import-time side effect must never break
-# `import coordinator_core.ipc` for production dispatch, even if a future
-# refactor makes the scan capable of raising.
 try:
     _warn_on_near_miss_timeout_env()
 except Exception:
     _log().debug("coordinator_core.ipc: near-miss timeout env scan failed at import", exc_info=True)
 
-# ---------------------------------------------------------------------------
-# Per-op dispatch timeout overrides — RETIRED (DEC-2, docs/plans/
-# 2026-07-22-wsc-tail-sub-2s-invoke-budget.md)
-#
-# This table formerly widened the dispatch cap to 120s for ceremony.wsc_commit,
-# ceremony.wsc_resolve, and ceremony.wsc_tail, on the premise that their cold-run
-# tail genuinely exceeded the global 30s default. DEC-2 retires all three rows: a
-# dispatch timeout is a runaway guard, not a performance budget, and a widened
-# per-op cap only masked what should instead be a measured, regression-tested
-# latency property. All ops — including these three — now fall to the single
 # global DISPATCH_TIMEOUT_SECS runaway guard above, whose comment block carries
-# the relocated reconcile-before-retry negative-spec (the Staff Engineer F11) and the DEC-2
-# rationale in full. The sub-2s performance target for ceremony.wsc_tail is
-# enforced by KPI test (test_wsc_tail_parity.py::test_kpi_wsc_tail_blocking_path_under_2s),
-# not by any per-op timeout knob.
-#
-# Historical spec backlink (why these three ops were widened in the first place):
-# state/improvement-queue/2026-07-13-ceremony-wsc-commit-reliably-times-out-o-62330efd3dd4.yaml
-# cross-repo/archive/2026-07-13-example-retrieval-repo-ue-addon-em-wsc-commit-30s-timeout-friction.md
-#
-# Kept as an empty table (not deleted outright) so `_timeout_for`, `--dump-op-timeouts`,
 # and the `OP_TIMEOUT_OVERRIDES` cross-repo parity re-export keep their existing shape —
-# a future op with a genuinely justified widened cap has a table to land in without
-# reintroducing this one's now-retired rationale.
-#
-# coverage.gate's row was removed here (K-001, state/kill-ledger.md, 2026-08-16): the
-# close path no longer invokes the op that needed this widened cap — see the kill
-# ledger for the measured cost and disposition. `coverage.gate` may still be reached
-# off the close path (mint-only plumbing behind `cmd_brightline_gate`, itself
-# removed 2026-08-19 per state/kill-ledger.md K-007); that caller
-# now resolves via the ordinary global runaway-guard timeout like any unlisted op.
-#
-# ceremony.scoped_git_commit carried a 150.0s row here from 2026-08-15, sized at ~3.7x
-# headroom over a measured 40.9s worst sample for a ~2100-path publish commit. REVOKED
-# 2026-08-21 by the ceremony budget below. The measurement was honest; the conclusion
-# was not. That trial recorded 53 `git` subprocess spawns for one commit -- the spawn
-# count WAS the defect, and a cap sized to accommodate it is how the cost stayed
-# unexamined for six days. A budget is a choice, not a measurement: read against its
-# caller's end-to-end target (the close ceremony's 500ms, DR-344), a 150s per-op cap is
-# 300x the ceremony that invokes it, which makes the cap itself the finding. Sizing a
-# number against the load norm is what `docs/wiki/machine-load-norm.md` forbids outright
-# -- a loaded box raises the bar and never relaxes one.
-#
 # The reconcile-before-retry negative-spec above is UNAFFECTED and more load-bearing
-# now, not less: a tighter budget means callers reach it more often, and a client-side
-# timeout still never aborts server-side execution. Never blind-retry a timed-out
-# ceremony; reconcile against real repo state first.
-# ---------------------------------------------------------------------------
-#
-# percolate.build_token_index (2026-08-26, docs/plans/2026-08-26-payload-parity-asks-
-# an-index-not-the-payload.md chunk C3) resolves via the global runaway-guard default
-# below rather than a row here, deliberately: it already bounds its own process time
-# internally at DR-344's 500ms brightline
 # (`coordinator_core.ops.percolate_build_token_index :: _BUDGET_SECS`, derived from
 # `coordinator_core.op_census.timing.PROCESS_TIME_BAR_MS`, not a private literal) via
-# a deadline stamped at entry with each slice sized from the remainder (DR-349 §
-# "Decision" point 4). A per-op row here would only widen its ceiling, which nothing
-# about this op needs — the internal deadline is what makes a breach here evidence of
-# a real defect (a hung stat/read on a bad filesystem) rather than a tight-cap
-# artifact, and a table row would just be a second, looser number to keep in sync
-# with the first.
 _OP_TIMEOUT_OVERRIDES: Dict[str, float] = {}
 
 
-# ---------------------------------------------------------------------------
-# The ceremony budget -- a ratchet, not a tunable (2026-08-21, PM ruling)
-#
 # EVERY `ceremony.*` op is bounded at CEREMONY_BUDGET_SECS end-to-end. No per-op
-# exception, no env override, no future widening. The number may be LOWERED, never
-# raised: `coordinator_core/tests/test_ceremony_budget_ratchet.py` is the enforcement
-# and fails on any edit that lifts the constant, admits a widening override row for a
-# ceremony op, or lets the env knob out-resolve the ceiling.
-#
-# Why a ceiling rather than a table of per-op rows: a new ceremony op must be BORN
-# inside the budget, not admitted to it. A table binds only the ops someone remembered
-# to list, and "the next EM remembers to add a row" is not an artifact (CLAUDE.md
-# § North star). Prefix matching makes the correct path the default and leaves no shape
-# for an exception to take -- there is no row to add, so there is nothing to negotiate.
-#
-# Why 2s when the brightline is 500ms: 500ms is the end-to-end target the close ceremony
-# is held to (DR-344). This is the RUNAWAY guard around a single op -- already 4x that
-# target, deliberately generous so a breach is unambiguous evidence of a real defect
-# rather than a tight-cap artifact. It is a ceiling, never a target. An op that needs
-# all of it is an op with a problem.
-#
-# What this breaks, on purpose: a ceremony op whose real cost exceeds 2s now FAILS
-# instead of quietly occupying the box for the ~50 peers queued behind it. That failure
-# is the signal, and the remedy is always to make the op cheaper -- fewer spawns,
-# batched git, a warm path -- never to come back here and raise the number. A request
-# to widen it is denied by construction, not by review.
-#
-# Read docs/decisions/DR-348-the-ceremony-budget-is-a-ratchet.md before touching this
-# number.
-# ---------------------------------------------------------------------------
 CEREMONY_BUDGET_SECS: float = 2.0
 
-#: Method-name prefix every ceremony op shares. Naming is the FIRST membership
-#: signal, deliberately: an allow-list would let an op dodge the budget by omission,
-#: and there is no row to forget to add. If it is called ceremony, it is budgeted as
-#: ceremony, registered or not.
 _CEREMONY_METHOD_PREFIX = "ceremony."
 
-#: Package path every ceremony op's implementation lives under. The SECOND membership
-#: signal, and the one that closes the rename bypass: the prefix test alone is dodged
-#: by `git mv`-free renaming — call `ceremony.scoped_git_commit` something else and the
-#: 2s ceiling silently becomes 30s, with no diff a reviewer would read as a budget
-#: change. Moving the implementation OUT of the ceremony package is a diff nobody
-#: mistakes for a rename.
-#:
-#: Not hypothetical: `review.snapshot_diff_and_head` and `commit.exec_bit_change`
-#: already live in this package under non-ceremony names and escaped the budget on
-#: name alone until this signal landed.
 _CEREMONY_PACKAGE_PREFIX = "coordinator_core.ops.ceremony."
 
 
-#: Ops implemented in the ceremony package but NAMED outside the `ceremony.` namespace.
-#: Each row exists because the op's name disagrees with where it lives, and the budget
-#: follows the implementation rather than the label — otherwise renaming an op is a
-#: working bypass of a rule whose whole premise is that it has none.
-#:
-#: This is a table, not a policy: the honest long-term fix is to rename these ops into
-#: the namespace they belong to, which nobody has done because an op name is a wire
-#: contract with every caller. Until then the row carries the budget.
-#:
-#: `test_ops_implemented_in_the_ceremony_package_are_ceremony_ops` is the drift guard —
-#: it walks the ops package live and fails when a ceremony-package op appears with
-#: neither a `ceremony.` name nor a row here. Adding the op to the package and
-#: forgetting this table is a red suite, not a silent escape.
 _CEREMONY_PACKAGE_ALIASES = frozenset({
-    "commit.exec_bit_change",          # coordinator_core.ops.ceremony.commit_exec_bit
-    "review.snapshot_diff_and_head",   # coordinator_core.ops.ceremony.snapshot_diff_and_head
+    "commit.exec_bit_change",
+    "review.snapshot_diff_and_head",
 })
 
 
@@ -1242,72 +944,27 @@ def mutation_read_deadline_for(method: str, msg: Any = None) -> float:
     return _dispatch_timeout_unclamped(method, msg)
 
 
-
-# ---------------------------------------------------------------------------
-# Repo-key transport field (C1a seam — AC-1 / AC-1c)
-#
 # Mandatory JSON-RPC envelope field for all working-tree-scoped ops.
-# Missing or empty on a working-tree-scoped op → structured fail-loud error (C1c).
-# Emit ops (goal.append) are common_dir-scoped
-# (per-repo emission, 2026-07-07) and REQUIRE this field — no longer central.
-# Reading and routing this field into per-request partition resolution lands in C1b/C1c.
-#
-# Wire shape:  { "_origin_worktree": "/abs/path/to/worktree", ... }
-#
-# Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C1a
-# ---------------------------------------------------------------------------
 _ORIGIN_WORKTREE_FIELD = "_origin_worktree"
 
 # Telemetry-only companion field to _ORIGIN_WORKTREE_FIELD (C7,
-# 2026-08-20-a-refusal-cannot-exit-zero) — the CALLER's actual process cwd,
-# stamped unconditionally by coordinator_core.invoke.__main__.main for every
-# op, including "none"-scoped ops that never get _origin_worktree. Read ONLY
-# by op-latency telemetry recording below, as a fallback when
-# resolve_request_repo(msg) is None, so a warm-served none-scoped op still
-# attributes its row to the caller's repo instead of the server's own cwd
-# (coordinator_core.telemetry.op_latency._write_entry's Path.cwd() fallback,
-# which in a warm pool worker is the SERVER's cwd). Never used for authz or
 # repo-scope resolution — that stays _ORIGIN_WORKTREE_FIELD's job.
 _CALLER_CWD_FIELD = "_caller_cwd"
 
-# ---------------------------------------------------------------------------
-# AC-1b op-keying table (C1c) — moved to coordinator_core.op_scopes (2026-07-21)
-# to break the asyncio-on-import chain: `import coordinator_core` re-exports
 # OP_KEY_SCOPE / WORKTREE_SCOPED_OPS as a cross-repo parity surface, and this
-# module (ipc.py) does `import asyncio` at top level — so the old inline
-# definition here dragged asyncio into every stdlib-only op's import path.
-# Re-exported below for backward compatibility: existing callers using
 # `from coordinator_core.ipc import OP_KEY_SCOPE, WORKTREE_SCOPED_OPS,
 # _OP_KEY_SCOPE` (including test fixtures that mutate `ipc._OP_KEY_SCOPE` in
-# place) keep working unchanged — same dict/frozenset objects, just defined
-# in op_scopes.py now.
-#
-# Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C1c
-# DR:            docs/decisions/2026-07-04-coordinator-core-global-multiplex-topology.md § AC-1b
-# Amendment:     docs/plans/2026-07-07-per-repo-emission-cutover.md § C3
-# Split:         cross-repo/inbox/2026-07-21-claude-central-em-python-bin-cold-invocation-minutes-per-call.md
-# ---------------------------------------------------------------------------
 from coordinator_core.op_scopes import (  # noqa: E402,F401
     OP_KEY_SCOPE,
     WORKTREE_SCOPED_OPS,
     _OP_KEY_SCOPE,
 )
 
-# Module-scope rather than deferred into the dispatch hot path: this module imports
-# nothing but `typing`, so it costs no measurable import time, and the suspension
-# check runs on EVERY dispatch — a per-call import lookup would be the more expensive
-# of the two shapes.
 from coordinator_core import op_budget_suspension  # noqa: E402
 
 OP_TIMEOUT_OVERRIDES = _types.MappingProxyType(dict(_OP_TIMEOUT_OVERRIDES))
 
 
-#: DoE-claude#85 row 8: ops that never deny for a missing/unresolvable routing
-#: key, degrading to repo_root=None instead. Named narrowly (not "every hooks.*
-#: op") -- `repo_root` for these two is used only to scope the composed guard
-#: chain it dispatches into, never to attribute a write to a repo, unlike
-#: `hooks.track_touched_files` and its siblings which must stay fail-loud
-#: (AC-1c, pinned by test_dispatch_message.py).
 _NEVER_DENY_ON_MISSING_KEY_OPS = frozenset({
     "hooks.preuse_bash_dispatch",
     "hooks.postuse_stop_family_dispatch",
@@ -1347,8 +1004,8 @@ def resolve_op_repo_key(method: str, request_repo: Optional[Path]) -> Optional[P
     Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C1c
     Amendment:     docs/plans/2026-07-07-per-repo-emission-cutover.md § C3
     """
-    scope = _OP_KEY_SCOPE.get(method, "none")  # unclassified ops → no key (see table note)
-    if scope in ("none", "central"):  # "central" retired 2026-07-07; treated as "none" if seen
+    scope = _OP_KEY_SCOPE.get(method, "none")
+    if scope in ("none", "central"):
         return None
     if request_repo is None:
         raise ValueError(
@@ -1364,7 +1021,6 @@ def resolve_op_repo_key(method: str, request_repo: Optional[Path]) -> Optional[P
                 f"op {method!r} routing key unresolvable: {exc}.  "
                 f"Ensure _origin_worktree ({request_repo}) is a valid path inside a git repository."
             ) from exc
-    # scope == "show_top": use the resolved worktree path directly
     return request_repo
 
 
@@ -1414,10 +1070,6 @@ def resolve_op_repo_key_with_file_path_fallback(
         except (RuntimeError, OSError):
             raise exc from None
 
-
-# ---------------------------------------------------------------------------
-# Per-request repo resolution (C1b-ii seam)
-# ---------------------------------------------------------------------------
 
 def resolve_request_repo(msg: dict) -> Optional[Path]:
     """Extract and resolve the _origin_worktree from a JSON-RPC message envelope.
@@ -1481,159 +1133,25 @@ def resolve_caller_cwd(msg: dict) -> Optional[Path]:
     return Path(raw)
 
 
-# ---------------------------------------------------------------------------
-# Self-report scope-touch contract (design (b) — EM ruling, 2026-08-04)
-#
-# Purpose: a sanctioned-mutating handler (e.g. an engine op invoked via a
-# `coordinator/bin/` CLI, never routed through the PreToolUse Edit/Write hot
-# path that fires `track_touched_files`) writes files that otherwise carry
-# NO session claim — `session.scope.compute_scope` sees them only via the
-# `mtime_dirty_since_started_at` fallback, with no `touched.txt` entry to
-# attribute them to a session, so they land in `orphans` and
-# `scoped_git_commit` refuses them. Known defect:
-# state/improvement-queue/2026-08-03-sanctioned-mutating-clis-record-no-sessi-dedd1f017d02.yaml.
-#
 # Contract: a handler MAY set `result[_SCOPE_TOUCH_PATHS_KEY]` to a list of
 # repo-relative or absolute paths it ACTUALLY WROTE this call — never an
-# intended/declared surface. This is a hard requirement, not a style
-# preference: state/lessons/2026-08-03-a-commit-pathspec-must-come-from-the-exe-a035adecbc88.yaml
-# is a landed lesson that a commit pathspec must come from the REAL write
-# set, never a `surface:`-shaped declaration, because the two legitimately
-# diverge (a handler that intended to write N paths but only wrote M of them,
-# or wrote a different path than planned on a fallback branch). A handler
-# that declares nothing behaves exactly as before this contract existed — no
-# claim, no change (safe failure direction: under-coverage, never a false
 # claim; a rushed/incorrect declaration can only WITHHOLD a path from other
-# live sessions — see `session.scope.compute_scope` Step 3 — never falsely
-# grant one, since `_record_self_reported_touches` below writes ONLY into
-# the resolved session's OWN `touched.txt`, and every downstream reader of
-# that file already treats an entry there as a claim to be weighed against
-# peer liveness, not as ground truth).
-#
-# `dispatch_message` (the sole process-level dispatch chokepoint every
-# CLI-routed and hook-routed op passes through — see that function's own
-# docstring) reads and STRIPS this key BEFORE building the wire envelope —
-# the key must NEVER reach a caller. The FLEET envelope shape is documented
-# elsewhere as frozen/non-extensible without a bilateral cross-repo memo;
-# this key is engine-internal plumbing, not a new envelope field.
-#
-# Recording reuses `session.scope.touch(sid, path, cwd)` verbatim — the
-# existing, already-tested, already-fail-open, already-mtime-disciplined
-# primitive every other writer of `touched.txt` shares (see that function's
-# own docstring for why a second dialect must never be inlined at a new call
-# site). This module adds NO second recorder — only identity resolution
-# (`session.core.resolve_session_id`, the substrate's canonical 4-tier
-# resolver — no new identity source) and pre-touch validation of the
-# declared paths (containment + on-disk existence), since a self-reported
-# path is untrusted handler input, not a hook-verified tool-call path.
-#
-# Fail-open, unconditionally: a failure anywhere in this recording path
-# (unresolvable identity, an unreadable/unwritable session dir, a malformed
-# declared path) must never fail the op that already succeeded — see
-# `_record_self_reported_touches`'s own try/except shape.
-#
 # Cross-repo containment (2026-08-04 F1 fix, staff-eng REQUIRES_CHANGES):
-# a declared path is recorded ONLY when it resolves inside the CALLER's own
-# `_origin_worktree` repo — never the declared path's own containing repo.
-# An earlier version anchored containment on the declared path itself so
-# that `queue.append`'s central `queue_scope` and `queue.promote`'s
-# DoE-claude central-root writes (genuinely outside the caller's own
-# worktree) could still be recorded. That was unsound and was reproduced
 # live: a session id is a REPO-LOCAL namespace key, not a portable identity,
-# and `session.scope.touch()` lazily calls `session.core.init()`, so
 # recording into a foreign repo MATERIALIZES a real session dir there under
-# the caller's sid, with a fresh `last_activity` that reads as a live peer
-# for the next 30 minutes (Layer-2 liveness). That phantom peer then
-# subtracts against the TARGET repo's own sessions in `compute_scope` Step
-# 3 — reproduced stealing a live native session's own claimed file — and
-# independently perturbs the target repo's tier-4 sentinel resolution
-# (`live_count >= 2` -> ambiguous), which can leave a sibling repo's own
-# session unable to resolve its own id.
-# shell-doc-ok: the backticked comparison above is a Python boolean
-# expression quoted from this module's own sentinel logic, not a shell
-# version constraint.
-# See
-# `_resolve_declared_touch_root_and_path`'s docstring for the containment
-# check itself.
-#
-# Consequence, deliberate: a declared path outside the caller's own repo is
-# SKIPPED — never recorded, never written cross-repo. `queue.promote`'s
-# writes into the DoE-claude central root therefore stay unclaimed orphans
-# at that sink. This is the CORRECT outcome, not a regression — no claim is
-# always safer than a WRONG claim, and a wrong claim here actively harms a
-# sibling repo claude-klabauter does not own. Do not "fix" this back to declared-path
-# anchoring; the DoE-claude side has its own adoption path
-# (`--include-orphans`) for exactly this residual.
-#
-# Every skip is logged (never silent — see `_record_self_reported_touches`),
-# since a silently-dropped declaration is indistinguishable from "nothing
-# was ever wrong" to an operator debugging a missing claim.
-#
-# Known residual — linked-worktree containment mismatch (2026-08-05 review,
-# not yet fixed): `caller_repo_root` above is derived from `git_root(sid_cwd)`
-# — the caller's OWN worktree root, whichever worktree that is. But
-# `common_dir`-scoped handlers (`memo.send`/`memo.compose`/`memo.draft`, and
-# any sibling following the same precedent) derive the paths they declare
-# via `main_worktree_root(git_common_dir(...))` — the repo's MAIN worktree
-# root, per Key Decision 5. In a linked-worktree setup where the dispatching
-# `_origin_worktree` is a linked worktree (not the main worktree root), these
-# two roots differ, so every path such a handler declares fails containment
-# here and is silently skipped (logged, not recorded) — the declaration is
-# dead on arrival. Fails safe (under-declaration, this contract's designed
-# direction), not a correctness bug, but if you're debugging "why wasn't my
-# memo-outbox write claimed?" from a linked-worktree checkout, this is why.
 _SCOPE_TOUCH_PATHS_KEY = "_scope_touch_paths"
 
-# DR-276: the same declaration expressed as a call rather than a result key, so
-# one handler-side API serves both invocation paths. `declared_writes` owns only
-# the context-local list; this module remains the sole recorder. See
-# coordinator_core/session/declared_writes.py and coordinator_core/cli_entry.py.
 from coordinator_core.session.declared_writes import (  # noqa: E402
     _ACTIVE as _declared_writes_var,
 )
 from coordinator_core.locked_write import LockTimeout, held_lock  # noqa: E402
 
-# Cap on the number of paths a single declaration may carry (2026-08-04 F4
-# fix). Re-measured 2026-08-14 (C4, docs/plans/2026-08-14-cli-authored-writes-
-# get-claimed.md), AFTER C1 (touch() forwards `root`, engaging
-# normalize_touch_path's zero-spawn arm) and C2 (one held_lock acquire per
-# batch, not per path) landed — both prior figures in this comment's history
-# (a ~9-10ms/24ms warm/cold estimate, and a since-superseded ~402ms/path
-# pre-C1 measurement) were wrong at the time they were written and are
-# superseded by this one; do not average across them.
-#
-# Method: 20 end-to-end trials of `_record_self_reported_touches` (this
-# module's own recorder — includes the one `held_lock` batch acquire, NOT
-# just `normalize_touch_path` in isolation) against 16 real tracked files in
-# this repo. Measured on this machine with ~130-135 concurrent
-# claude.exe/node.exe processes live (`tasklist`-counted immediately before
-# and after the run) — consistent with the documented load norm
-# (docs/wiki/machine-load-norm.md: 50-70 concurrent LLMs average, floor two
-# dozen), not an idle-box number.
-#
-# Result: mean 56.8ms, median 49.9ms, p90 73.2ms, max 148.9ms for the full
 # 16-path batch (per-path mean ~3.6ms). Against the 300ms MUTATING target
-# (`coordinator_core/benchmarks/budget-manifest.json`,
 # `defaults.MUTATING.target_ms` — marked `_provisional`, DR-276: the manifest
-# is not a runtime ceiling, so treat 300ms itself as not yet settled), even
-# the observed max leaves ~150ms of headroom for the handler's own work and
-# a colder start than any of these 20 trials hit. 16 stays: it costs well
-# under half the (provisional) budget at the measured tail, and a handler
-# legitimately writing more than 16 files in one call is off the shape this
-# contract was designed for (a single-write-primitive self-report, per the
-# module contract above) and should be revisited rather than raising the
-# cap. Excess entries are dropped (log-and-truncate), never silently.
 _MAX_DECLARED_TOUCH_PATHS = 16
 
-#: Sub-second, bounded acquire timeout for the ONE `touched.txt` batch lock
-#: `_record_self_reported_touches` takes per dispatch (C2,
-#: docs/plans/2026-08-14-cli-authored-writes-get-claimed.md) — see that
-#: function's own comment for why one acquire covers the whole
 #: `_MAX_DECLARED_TOUCH_PATHS`-bounded batch rather than one per path.
 #: Matches `session.scope._ATOMIC_APPEND_LOCK_TIMEOUT_SECS`'s per-call default; kept
-#: as a separate constant because the two call sites (batch vs. single-path)
-#: are independent tuning knobs even though they share a starting value
-#: today.
 _TOUCH_BATCH_LOCK_TIMEOUT_SECS = 0.2
 
 
@@ -1751,28 +1269,10 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
         from coordinator_core.session import scope as _scope
         from coordinator_core.session import touch_record as _touch_record
 
-        # AC8 (docs/plans/2026-08-30-the-c-door-sends-the-callers-session-
-        # identity.md) - this resolution MINTS: the id chosen here names the
-        # session dir a touch record is written into, so a wrong id does not
-        # merely mislabel a read, it creates an entry under a session that did
-        # not do the work and leaves the session that did with none. Inside a
-        # warm dispatch `os.environ` belongs to whoever spawned the server, so
-        # degrading to it files every served session's touches under one
-        # stranger - self-consistently, which is why nothing downstream can
-        # spot it.
-        #
-        # Warm therefore takes tier 0 alone and, carrying nothing, declines to
-        # mint. That lands on the SAME arm the unresolvable case already used
-        # ("no claim, op still succeeds"), so the failure direction is the one
-        # this seam already chose deliberately: under-declaration, never a
         # false claim (see the `_SCOPE_TOUCH_PATHS_KEY` contract comment).
-        # Cold is untouched - `os.environ` there is the caller's own.
-        # Routed through the
-        # one shared accessor (session.core.attributable_session_id) rather
-        # than re-deriving the warm/cold branch here.
         sid = _session_core.attributable_session_id(sid_cwd)
         if not sid:
-            return result  # no resolvable session -> no claim, op still succeeds
+            return result
 
         if len(declared) > _MAX_DECLARED_TOUCH_PATHS:
             _log().warning(
@@ -1790,9 +1290,6 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
             if root:
                 caller_repo_root = os.path.realpath(root)
 
-        # Resolve every declared path FIRST (unchanged per-path fail-open
-        # try/except), before any locking decision — a resolution failure
-        # for one path must never affect the lock scope covering the rest.
         resolved_paths = []
         for raw_path in declared:
             try:
@@ -1807,7 +1304,7 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
                     )
                     continue
                 resolved_paths.append(resolved)
-            except Exception as exc:  # fail-open — never let one bad path abort the rest
+            except Exception as exc:
                 _log().debug(
                     "coordinator_core.ipc: self-reported touch failed to "
                     "resolve %r: %s",
@@ -1821,7 +1318,7 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
                         sid, abs_path, path_repo_root, root=path_repo_root,
                         kind=_touch_record.KIND_WRITE,
                     )
-                except Exception as exc:  # fail-open — one bad path must not abort the rest
+                except Exception as exc:
                     _log().debug(
                         "coordinator_core.ipc: self-reported touch failed for "
                         "%r: %s",
@@ -1831,23 +1328,7 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
         if not resolved_paths:
             return result
 
-        # C2 (docs/plans/2026-08-14-cli-authored-writes-get-claimed.md):
-        # acquire the batch lock ONCE for the whole declared-path batch,
-        # here at the recorder, rather than once per path inside
-        # `session.scope.touch()` — to bound worst-case latency (one
         # acquire instead of up to `_MAX_DECLARED_TOUCH_PATHS`). This lock
-        # exists ONLY to bound that latency, never to avoid a nested
-        # acquire: `scope.touch` takes no lock of its own to re-enter (its
-        # vestigial `lock=` parameter was traced by AC11 and deleted
-        # 2026-08-27 — C4/AC17 had already removed the dedup-scan region it
-        # once serialized, and `touch_record.append_event`'s single atomic
-        # append needs no app-level lock). Every resolved path in
-        # one call shares the same `caller_repo_root`
-        # (`_resolve_declared_touch_root_and_path` enforces single-repo
-        # containment against the caller's own repo — see its docstring),
-        # so they also share one record-sink target and one lock, keyed on
-        # the SAME `touch-record.jsonl` seam `scope.touch`/`touch_record`
-        # use, not the retired `touched.txt` dialect.
         locked = False
         touched_path: Optional[Path] = None
         anchor_repo_root = resolved_paths[0][0]
@@ -1868,53 +1349,21 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
                     timeout=_TOUCH_BATCH_LOCK_TIMEOUT_SECS,
                 ):
                     _record_touches()
-                    # Mark the batch done as soon as the body completes, not
-                    # after the `with` statement exits — `held_lock`'s
-                    # `finally` (`_plat_unlock`/`os.close`) can raise
-                    # `OSError` at RELEASE time, AFTER `_record_touches`
-                    # already ran the whole batch. Setting `locked = True`
-                    # here (inside the `with`) means a release-time OSError
-                    # is still caught below, but `locked` is already `True`
-                    # by then, so `if not locked:` does NOT re-run
-                    # `_record_touches` — over EVERY resolved path — a
-                    # second time. Mirrors `scope.py::touch()`'s equivalent
-                    # fix. Review: EM addendum (2026-08-15) to code-reviewer
-                    # P1/P2.
                     locked = True
             except (LockTimeout, RuntimeError, ValueError, OSError) as exc:
-                # LockTimeout: contended past the bound. RuntimeError: no
-                # lock backend on this platform. ValueError: held_lock's own
-                # absolute-path precondition (defensive; both paths above
-                # are realpath'd/abspath'd). OSError: held_lock's acquire
-                # path (lock_dir.mkdir, os.open of the sidecar fd) or its
-                # release path (_plat_unlock, os.close in the `finally`) can
-                # both raise a plain OSError — this site's own outer
-                # `except Exception` (below) would also catch it, but this
-                # tuple is the one asserting the intended degrade-not-abort
-                # contract explicitly, same as `scope.py::touch()`'s
-                # matching tuple. Review: code-reviewer P1/P2 (2026-08-14).
-                # All four fail open: degrade to recording the batch
-                # WITHOUT the latency bound this lock buys — the appends
-                # themselves are atomic either way — never abort the whole
-                # batch.
                 _log().debug(
                     "coordinator_core.ipc: batch touch lock unavailable, "
                     "degrading to per-path locking: %s", exc,
                 )
         if not locked:
             _record_touches()
-    except Exception as exc:  # fail-open — recording must never fail the op
+    except Exception as exc:
         _log().debug(
             "coordinator_core.ipc: self-reported touch recording failed: %s", exc
         )
     return result
 
 
-# ---------------------------------------------------------------------------
-# Op-registry — method-name → callable[(params: dict, repo_root: Optional[Path]) -> Any]
-#
-# Populated by register_op() at import time (op modules call it as a decorator).
-# ---------------------------------------------------------------------------
 _REGISTRY: Dict[str, Callable] = {}
 
 
@@ -2014,9 +1463,7 @@ def register_op(name: str, handler: Optional[Callable] = None) -> Callable:
         return fn
 
     if handler is not None:
-        # Direct call: register_op("ping", _ping)
         return _decorator(handler)
-    # Decorator factory: @register_op("ping")
     return _decorator
 
 
@@ -2119,18 +1566,10 @@ def _lazy_import_and_lookup(method: str, msg: Any = None) -> Optional[Callable]:
 
     # HOOKS-SCOPED FALLBACK (C2): a hooks.* miss escalates to the hooks
     # package's own full-load routine BEFORE the ops-wide SAFE FALLBACK below,
-    # so it never pays for a 562-module ops import to serve one hook.
     if method.startswith("hooks."):
         from coordinator_core.hooks import _eager_import_all as _hooks_eager_import_all
 
         # DELIBERATELY NOT COUNTED HERE. Every `hooks.*` key in OP_MODULE_MAP
-        # maps to the shared "coordinator_core.hooks" package value, so step 1
-        # is ALWAYS a no-op for them and this stage is the designed resolution
-        # path, not a miss — measured firing on 100% of hooks.* dispatches.
-        # Counting it would put a record on every tool call and bury the
-        # ops-wide cliff this telemetry exists to surface. A hooks.* op that
-        # this stage fails to resolve still falls through to the safe fallback
-        # below, which does count it.
         _hooks_eager_import_all()
         handler = _REGISTRY.get(method)
         if handler is not None:
@@ -2142,8 +1581,6 @@ def _lazy_import_and_lookup(method: str, msg: Any = None) -> Optional[Callable]:
         )
 
     # SAFE FALLBACK: unmapped op or a map entry that didn't pan out — force a
-    # full import of every op module (bypasses the lazy-skip, see docstring
-    # above) and retry. Never-worse invariant.
     from coordinator_core.ops import _eager_import_all
 
     _caller_cwd = resolve_caller_cwd(msg) if isinstance(msg, dict) else None
@@ -2156,10 +1593,6 @@ def _lazy_import_and_lookup(method: str, msg: Any = None) -> Optional[Callable]:
     _eager_import_all()
     return _REGISTRY.get(method)
 
-
-# ---------------------------------------------------------------------------
-# Shared dispatch core — steps 2-7 on a pre-parsed message dict
-# ---------------------------------------------------------------------------
 
 class _EscapedBaseException(Exception):
     """Carrier for a non-``Exception`` ``BaseException`` raised by an op handler.
@@ -2258,14 +1691,9 @@ async def _dispatch_message_impl(msg: dict) -> dict:
         On success: {"jsonrpc": "2.0", "id": id_, "result": <handler return value>}
         On error:   {"jsonrpc": "2.0", "id": id_, "error": {"code": <int>, "message": <str>}}
     """
-    # asyncio deferred to first use here (not module scope) — this is the only function
-    # in the module that touches the asyncio namespace at runtime (the `async def` keyword
-    # itself needs no import); a module-scope `import asyncio` dragged asyncio.base_events
-    # (~9ms) into every stdlib-only op's import path, including the read-only /pickup brief
-    # path that never calls dispatch_message. Spec: docs/plans/2026-07-24-canonical-resolution-engine.md task W0-1.
     import asyncio
 
-    id_ = msg.get("id")          # echoed on both result and error (AC12)
+    id_ = msg.get("id")
 
     # Step 2: Validate jsonrpc version field (JSON-RPC 2.0 §4).
     jsonrpc = msg.get("jsonrpc")
@@ -2282,7 +1710,6 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     method = msg.get("method")
 
     # Step 3: Validate params type (JSON-RPC 2.0 §4: params MUST be Object when present).
-    # Array (positional) params are not supported — reject with -32602.
     params_raw = msg.get("params")
     if params_raw is None:
         params = {}
@@ -2301,7 +1728,6 @@ async def _dispatch_message_impl(msg: dict) -> dict:
             },
         }
 
-    # Step 4: Validate method field
     if not isinstance(method, str) or not method:
         return {
             "jsonrpc": "2.0",
@@ -2313,16 +1739,6 @@ async def _dispatch_message_impl(msg: dict) -> dict:
         }
 
     # Step 4b: Refuse a SUSPENDED op (PM ruling 2026-08-21 — over 2s max is off).
-    #
-    # Positioned deliberately BEFORE the registry lookup below, not after: the lookup
-    # lazily imports the op's owning module, and for a suspended op that import buys
-    # nothing — the call is going to be refused either way. Refusing here makes a
-    # breach cost one dict lookup instead of a module import on a box running ~50
-    # concurrent sessions.
-    #
-    # Consequence, stated rather than discovered: this fires for EVERY caller,
-    # including the CLIs and hooks that wrap these ops. That is the ruling's intent —
-    # the op stops firing, and the failure is what surfaces who actually needed it.
     if op_budget_suspension.is_suspended(method):
         _log().debug("coordinator_core.ipc: refusing suspended op %r", method)
         return {
@@ -2334,32 +1750,13 @@ async def _dispatch_message_impl(msg: dict) -> dict:
             },
         }
 
-    # Step 5: Look up handler (AC12: unknown method → -32601)
-    #
-    # Lazy op registration (F6 / claude-klabauter-windows-portability § C4): the op-registry
-    # is populated by each op module's register_op(...) side-effect at IMPORT time.
-    # Rather than eagerly importing all ~55 op modules at process startup (Windows
-    # cold-compile tax, no __pycache__ warm-up), a registry MISS here triggers a
     # targeted import of ONLY the missing op's owning module (via OP_MODULE_MAP),
-    # then retries the lookup once. If the map has no entry for this op, or the
-    # targeted import still didn't register it (map drift), fall back to importing
-    # the whole coordinator_core.ops package — today's eager behavior — and retry
-    # once more. This makes the map a pure performance optimization: a stale or
-    # incomplete map degrades to today's correctness, never to a broken dispatch.
     handler = get_op_handler(method, msg)
     if handler is None:
-        # 2026-07-21 break-class fix: a registry MISS that survives both the
         # targeted lazy import AND the SAFE FALLBACK full eager import (see
-        # _lazy_import_and_lookup) is ambiguous on its face — it could mean
-        # "no such op" OR "the op's owning module failed to import". Those
-        # are very different failures and must not look the same to a
         # caller. Disambiguate via coordinator_core.ops._POISONED_MODULES
         # (populated by _eager_import_all(), which the SAFE FALLBACK above
         # just ran): if *method*'s owning module (per OP_MODULE_MAP) is
-        # recorded there, surface the REAL import exception instead of a
-        # generic "Method not found" — see coordinator_core/ops/__init__.py's
-        # module docstring "Negative-spec" for why silently reporting
-        # "unknown op" here would be strictly worse than today's collapse.
         from coordinator_core.ops import get_poisoned_modules
         from coordinator_core.ops._registry_map import OP_MODULE_MAP
 
@@ -2394,27 +1791,12 @@ async def _dispatch_message_impl(msg: dict) -> dict:
             },
         }
 
-    # C1b-ii: extract the per-request repo_root from the _origin_worktree envelope field.
     request_repo = resolve_request_repo(msg)
 
-    # C1c / AC-1b: resolve the effective repo key for this op per the keying table.
-    # Fail-loud (AC-1c) if the op requires a key but _origin_worktree was absent or
-    # unresolvable — never fall back to a silent default repo.
     try:
         op_repo_key = resolve_op_repo_key_with_file_path_fallback(method, request_repo, params)
     except ValueError as exc:
-        # PM ruling (DoE-claude#85 row 8): "a hook never denies because
-        # routing/engine context is missing -- it passes with a loud stderr
         # note, never a refusal." Scoped to _NEVER_DENY_ON_MISSING_KEY_OPS
-        # NOT every "hooks.*" op: several hook ops (e.g.
-        # hooks.track_touched_files) genuinely need the repo key for
-        # correctness -- misattributing a touched-file write to the wrong
-        # repo is worse than the refusal AC-1c already gives them, and
-        # test_dispatch_message.py pins that fail-loud contract for those.
-        # This degrade applies only to the PreToolUse/PostToolUse guard-
-        # chain composition ops named in the issue, where `repo_root` is
-        # used only to scope the composed guard chain, not to attribute a
-        # write.
         if method in _NEVER_DENY_ON_MISSING_KEY_OPS:
             _sys.stderr.write(
                 f"coordinator_core.ipc: routing key unresolvable for {method!r} "
@@ -2432,78 +1814,16 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                 },
             }
 
-    # Step 6: Invoke handler — pass (params, repo_root=op_repo_key) so handlers receive the
-    # canonical per-request repo key (git_common_dir or show-toplevel per AC-1b table).
-    # For central/"none"-scoped ops op_repo_key is None.
-    #
-    # C3 / AC-3 fault containment:
     #   - asyncio.wait_for provides a per-request timeout (DISPATCH_TIMEOUT_SECS) that
-    #     bounds the poison-request class for BOTH async and sync handlers.
-    #   - Async handlers: wait_for can cancel the coroutine if it yields (e.g. awaits I/O).
-    #     Blocking I/O inside async handlers MUST be wrapped in asyncio.to_thread at the
-    #     call site (see AC-3 Gap-3 / async-handler-discipline grep gate).
-    #   - Sync handlers: offloaded via asyncio.to_thread so the event loop is not stalled
-    #     while sync work runs in a thread-pool executor.  This makes the per-invocation
-    #     timeout effective: abandoning the thread future unblocks the caller.
-    #   - CancelledError from asyncio shutdown MUST propagate (re-raised, never swallowed).
-    #   - BaseException subclasses (SystemExit, KeyboardInterrupt, MemoryError) that escape
     #     an op handler are logged and converted to INTERNAL_ERROR, preventing unexpected
-    #     process-level side-effects from propagating to the caller.
-    #
-    # inspect.iscoroutinefunction preferred over
-    # asyncio.iscoroutinefunction (deprecated Python 3.12+); no behavior change.
-    #
-    # Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C3
-    #
-    # DR-215 command-type retirement: drain/in-flight machinery removed — no concurrent
-    # requests in the command-type model (one op per process). _handle_connection and
-    # start_server_async removed by C5. is_draining/in_flight_increment/in_flight_decrement
-    # no longer called from dispatch_message.
-    # Backlink: docs/decisions/DR-215-coordinator-core-command-type-execution-model.md
     op_timeout = _timeout_for(method, msg)
-    # DR-276: open a declare-write collection around the handler so an op may use
-    # `session.declared_writes.declare_write()` and have it work identically here
-    # and on the in-process path (`coordinator_core.cli_entry.run_op_main`). The
-    # list object is bound BEFORE `asyncio.to_thread` copies the context — that
-    # copy makes a rebind invisible to us, but appends to the same list are not.
     # Setting `result[_SCOPE_TOUCH_PATHS_KEY]` directly remains fully supported;
-    # the two are merged below, so an op may use either or both.
-    #
-    # Deliberate: a declaration made before the handler RAISES or TIMES OUT is
-    # dropped, because those branches return an error envelope without reaching
-    # the merge. That is this contract's designed direction (under-declaration,
-    # never a false claim) and matches the pre-DR-276 behaviour exactly.
-    #
-    # C11: bound via `ContextVar.set()`'s returned Token, reset in `finally` below
-    # (mirroring `session.declared_writes.collecting()`'s own shape, and the
-    # Token/reset pattern `contract.apply_base.session_identity()` uses for the
-    # same overlapping-dispatch problem). The prior comment here argued nothing
-    # leaks because "every dispatch REBINDS the var as its first act" — TRUE
-    # serially, FALSE under overlapping requests: two interleaved `to_thread`-
-    # offloaded dispatches share the same `ContextVar` slot in the absence of a
-    # per-dispatch Token/reset pair, so a later dispatch's bare `set()` can stomp
-    # a still-in-flight sibling's list, and unwinding via `reset()` is the only
-    # way to hand the slot back to whatever the caller's context held before this
-    # dispatch (default `None`, or an outer `collecting()` block) rather than
-    # leaving this dispatch's list bound after it returns. The failure direction
     # is a MISATTRIBUTED write claim — exactly the direction the prior comment
-    # said could not happen.
     _declared_writes: list = []
     _declared_writes_token = _declared_writes_var.set(_declared_writes)
-    # `inspect` is imported HERE, not at module scope: it costs 13 modules on the
-    # engine's cold-start path (ast/dis/tokenize/opcode/annotationlib/weakref and
-    # friends) for one predicate call. This module is measured against a
-    # module-count ceiling — `coordinator_core/benchmarks/import-budget-manifest.json`
-    # `/entrypoints/coordinator_core.ipc`. After the first dispatch it is a
-    # `sys.modules` hit, so the per-call cost is a dict lookup. Do NOT hoist it
-    # back to module scope to tidy the import block.
     import inspect
     try:
         if inspect.iscoroutinefunction(handler):
-            # Async handler: wrap with per-request timeout.
-            # The timeout is only interruptible if the handler actually yields (await).
-            # Blocking I/O inside the handler must be wrapped in asyncio.to_thread
-            # at the handler's call site (AC-3 Gap-3 — enforced by CI grep gate).
             try:
                 result = await asyncio.wait_for(
                     _await_handler_absorbing_base(
@@ -2520,11 +1840,6 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                 raise
             except BaseException as exc:
                 _log().error(
-                    # %s, not %r, on exc: repr() re-escapes an already-quoted
-                    # message, so a Windows path in an op's own error text reaches
-                    # the operator with doubled separators
-                    # ("X:\\repo\\docs\\..."). The exception TYPE is already
-                    # carried by the preceding %s, so nothing is lost.
                     "coordinator_core.ipc: op %r raised %s: %s", method, type(exc).__name__, exc,
                     exc_info=True,
                 )
@@ -2536,8 +1851,6 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                     "error": _handler_exception_error(exc),
                 }
         else:
-            # Sync handler: offload to thread-pool executor so the event loop is not
-            # stalled while the sync work runs; makes the per-invocation timeout effective.
             try:
                 result = await asyncio.wait_for(
                     asyncio.to_thread(
@@ -2554,11 +1867,6 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                 raise
             except BaseException as exc:
                 _log().error(
-                    # %s, not %r, on exc: repr() re-escapes an already-quoted
-                    # message, so a Windows path in an op's own error text reaches
-                    # the operator with doubled separators
-                    # ("X:\\repo\\docs\\..."). The exception TYPE is already
-                    # carried by the preceding %s, so nothing is lost.
                     "coordinator_core.ipc: op %r raised %s: %s", method, type(exc).__name__, exc,
                     exc_info=True,
                 )
@@ -2569,19 +1877,8 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                     "id": id_,
                     "error": _handler_exception_error(exc),
                 }
-        # _mark_partition_active removed by DR-215 strip (2026-07-06) — no-op call retired.
-        #
-        # Self-report scope-touch contract (design (b) — see the module-level comment
         # above _SCOPE_TOUCH_PATHS_KEY): strip + record BEFORE the wire envelope is
-        # built, on every dispatch path (both the async and sync handler branches
-        # above converge into this one `result` var). Fail-open by construction —
-        # never raises, never mutates `result`'s shape beyond popping the key.
-        #
-        # DR-276: fold anything the handler declared via `declare_write()` into the
-        # same key, so the two declaration styles converge before the single
-        # recorder runs. Order is preserved and duplicates are dropped here rather
         # than in the recorder, which caps at _MAX_DECLARED_TOUCH_PATHS and would
-        # otherwise spend cap budget on repeats.
         if _declared_writes and isinstance(result, dict):
             merged = list(result.get(_SCOPE_TOUCH_PATHS_KEY) or []) + list(_declared_writes)
             deduped = list(dict.fromkeys(merged))
@@ -2676,7 +1973,6 @@ def _timeout_error_envelope(method: str, op_timeout: float, id_: Any) -> dict:
     }
 
 
-
 async def dispatch_message(
     msg: dict, *, caller: Optional[str] = None, corr_id: Optional[str] = None
 ) -> dict:
@@ -2767,54 +2063,24 @@ async def dispatch_message(
 
     method = msg.get("method") if isinstance(msg, dict) else None
     request_repo = resolve_request_repo(msg) if isinstance(msg, dict) else None
-    # C7 fallback: a "none"-scoped op never carries _origin_worktree (see
     # WORKTREE_SCOPED_OPS gating in invoke.__main__.main), so request_repo is
-    # routinely None for it even on a live client. Prefer the caller's
-    # stamped process cwd over letting op_latency._write_entry fall back to
-    # THIS process's own cwd — which, warm-served, is the server's, not the
-    # caller's.
     telemetry_repo_root = request_repo
     if telemetry_repo_root is None and isinstance(msg, dict):
         telemetry_repo_root = resolve_caller_cwd(msg)
 
     t_start = _time.time()
     perf_start = _time.perf_counter()
-    # The brightline's own unit, taken at the same seam as the wall-clock pair
-    # above so process-time coverage equals `started` coverage by construction
-    # rather than by remembering to wire up each new entry point
     # (MEASUREMENT_SCOPE_PER_OP_HANDLER's comment has the population this fixed).
     process_start = _time.process_time()
     spawn_start = _spawn_count_or_none()
     _ancestors = _ANCESTOR_RECORDS.get()
     _record = _enter_dispatch(_ancestors)
     _ancestor_token = _ANCESTOR_RECORDS.set(_ancestors + (_record,))
-    # Push this frame's child-CPU accumulator; the parent's, if any, is restored
-    # in `finally` via the token so a raise cannot strand a frame on the stack.
     _nested_parent = _NESTED_DISPATCH_CPU_MS.get()
     _nested_token = _NESTED_DISPATCH_CPU_MS.set([])
     outcome = "ok"
 
-    # the Game Dev Reviewer is resolved once here, in the
-    # entry block, not independently re-resolved in the `finally` block below.
-    # If the entry block raises after this point but before `sid` is assigned
-    # (or `record_op_started` itself raises), the completion row inherits
-    # whatever `sid` value survived rather than getting its own resolve-at-exit
-    # attempt — deliberate coupling, safe today only because
-    # `resolve_session_id()` never raises (coordinator_core/session/core.py,
-    # no exception paths per its own docstring). If `resolve_session_id` ever
-    # grows a raising branch, the completion row's `sid` degrades silently
-    # wherever that raise wasn't already caught upstream of this function.
     sid = None
-    # C1 (2026-08-25-reconcile-open-comes-back-under-the-bar), superseded by
-    # C15 (same plan): `caller` is now the function's own explicit parameter
-    # (declared by the caller at the seam), not a stack walk resolved here.
-    # Still resolved once, in the entry block, and reused for both the
-    # started and complete rows -- same coupling as `sid` above and for the
-    # same reason: the caller of THIS dispatch does not change between the
-    # started and complete rows of the same corr_id. A caller that passed no
-    # `caller` argument falls back to `caller_module()`'s best-effort walk
-    # (kept for a caller that genuinely cannot declare itself -- see this
-    # function's own docstring).
     if caller is None:
         try:
             from coordinator_core.telemetry.op_latency import caller_module
@@ -2824,12 +2090,7 @@ async def dispatch_message(
             caller = None
     # The JSON-RPC `error.code` off the response, so the `outcome == "error"`
     # population on disk is READABLE without probing a live registry. See
-    # `record_op_latency`'s own `error_code` note for the incident.
     error_code = None
-    # The failure's identity. `error_code` alone is not readable: `-32603
-    # Internal error` is the modal value and names nothing, so a population
-    # thousands of rows deep still has to be reproduced by hand against a live
-    # engine to learn what it is. See `record_op_latency`'s `error_kind` note.
     error_kind = None
     try:
         from coordinator_core.telemetry.op_latency import (
@@ -2867,9 +2128,6 @@ async def dispatch_message(
         return response
     except BaseException as exc:
         # An exception that escapes dispatch is not converted to a JSON-RPC
-        # error response, so `error_code` stays None and the row on disk used
-        # to carry no identity at all -- the single largest un-diagnosable
-        # failure population on the box entered it through here.
         outcome = "error"
         error_kind = f"{type(exc).__name__}: {exc}"
         raise
@@ -2884,26 +2142,16 @@ async def dispatch_message(
             children_ms = 0.0
         finally:
             _NESTED_DISPATCH_CPU_MS.reset(_nested_token)
-        # This op's own handler CPU: the span minus what nested dispatches
-        # inside it consumed. Clamped at zero -- `process_time()` is monotonic
-        # so the subtraction cannot legitimately go negative, and a negative
-        # figure on disk would read as a measurement nobody can interpret.
         own_ms = span_ms - children_ms
-        # A negative delta is not always clock noise. Children dispatched
         # CONCURRENTLY each charge their whole span to this frame, and their
-        # spans overlap on one process-wide clock, so the sum can legitimately
-        # exceed it. Review (slice-a Finding 3): clamping in silence discards
-        # that signal. Clamp, and say the figure is no longer this op's own.
         clamped = own_ms < 0.0
         if clamped:
             own_ms = 0.0
-        # Charge the WHOLE span to the parent, not `own_ms`: the parent must
-        # exclude everything its child's span consumed, children included.
         if _nested_parent is not None:
             try:
                 _nested_parent.append(span_ms)
             except Exception:
-                pass  # parent accumulator append is best-effort; timing charge is non-critical
+                pass
         _spawn_end = _spawn_count_or_none()
         _spawns = (
             _spawn_end - spawn_start
@@ -2914,9 +2162,6 @@ async def dispatch_message(
             record_op_process_time(
                 op=method if isinstance(method, str) else "<unknown>",
                 process_ms=own_ms,
-                # Derived from what was observed across the WHOLE span, never
-                # from two snapshots of it -- see `_enter_dispatch`'s own
-                # comment for the sibling this used to miss.
                 measurement_scope=(
                     MEASUREMENT_SCOPE_PER_OP_HANDLER
                     if (uncontaminated and not clamped)
@@ -2957,65 +2202,19 @@ async def dispatch_message(
             )
 
 
-#: Discriminator values for `record_op_process_time`'s `measurement_scope` field
-#: (C9, state/dispatch-briefs/2026-08-21-the-cli-bootstrap-tax-dies-at-the-
-#: interpreter-floor/C9.md). `elapsed_ms` (op_latency.record_op_latency) stays
-#: wall clock, unchanged unit, unchanged consumers -- see that field's own
 #: module docstring. This is a SEPARATE key ("process_ms", row `kind`
-#: "process_time") for CPU time, never a redefinition of `elapsed_ms` in place:
-#: 187,074 existing wall-clock rows carry no schema version and no
-#: discriminator, and `telemetry/cost_census.py` + `telemetry/engine_report.py`
-#: (two sites) aggregate them as homogeneous -- silently mixing units under one
-#: name is the exact defect this row exists to remove, not reintroduce one
-#: level down.
-#:
 #: PER_OP_PROCESS: `time.process_time()` delta taken entirely inside a single
-#: process running exactly one op at a time for the delta's duration --
-#: uncontaminated by any peer op. True of the pool-worker path
-#: (`warm.server._pool_dispatch_worker`, one `ProcessPoolExecutor` task at a
-#: time per worker process, source_path "pool_worker"), the one-shot CLI path
-#: (`dispatch_from_hook`, source_path "one_shot_cli"), and the hook-batch path
-#: (`dispatch_ops_from_hook`, source_path "hook_batch"). All three writers take
-#: `process_start = time.process_time()` AFTER the interpreter has booted and
-#: this module has been imported, so this scope does NOT carry interpreter start
-#: -- a reader quoting this scope as a cold-start figure holds a number it does not hold
-#: (docs/research/spike-verdicts/2026-08-27-seam-process-time-excludes-interpreter-startup.md).
-#:
 #: PROCESS_WIDE: `time.process_time()` delta taken on an accept-process
 #: connection thread (`warm.server._run_dispatch`), where `WORKER_POOL_SIZE`
-#: threads share ONE interpreter and ONE `process_time()` clock -- the delta
-#: can include CPU spent on OTHER concurrently-dispatched ops on sibling
-#: threads during the same wall-clock span, so it is process-wide, not this
 #: op's own CPU. Recording it under the same name as PER_OP_PROCESS would be
-#: the identical unit-mixing hazard the wall-clock/process-time split exists
-#: to stop, one level down -- so the two never share a value under one
-#: unlabelled key; `measurement_scope` is the required discriminator.
 #: PER_OP_HANDLER: `time.process_time()` delta taken at the `dispatch_message`
-#: chokepoint, with the CPU of any NESTED dispatch subtracted out, while this
-#: dispatch was the only one in flight in the process. It is this op's own
 #: handler CPU and nothing else -- narrower than PER_OP_PROCESS, which also
 #: carries envelope parse and response serialization (but, like PER_OP_HANDLER,
 #: not interpreter start -- see PER_OP_PROCESS above).
-#:
-#: Why it exists (the-meter-02 AC-6, 2026-08-27): the other two scopes are
-#: recorded at three OUTER entry points (`dispatch_from_hook`,
-#: `dispatch_ops_from_hook`, `warm.server` -- `coordinator_core.invoke.__main__`'s
 #: cold path records PROCESS_WIDE via `_record_dispatch_process_time`, not
 #: PER_OP_PROCESS), so an op reaching `dispatch_message`
-#: by any other path -- one op composing another, a module `_main`, an in-process
-#: caller -- recorded `started`/`complete` and NO process time at all. Measured
-#: 2026-08-27: 17 of 64 observed ops had zero `process_time` rows, among them
 #: eight live kill-ledger CANDIDATES (K-018/019/020/029/030/042/043), which is
-#: precisely the population the brightline must be able to convict on. Recording
-#: at the chokepoint closes that by construction: coverage now equals `started`
-#: coverage, because it is the same seam.
-#:
 #: This NEVER replaces a PER_OP_PROCESS row and never shares its name. A
-#: CLI-routed op now writes two process-time rows -- the outer whole-process one
-#: and this inner handler one -- which is two honest measurements of different
-#: spans, not a double count. A reader that averages them together commits the
-#: unit-mixing this discriminator exists to prevent: select ONE scope, state
-#: which (`op_census.meter` does, in its Population).
 MEASUREMENT_SCOPE_PER_OP_HANDLER = "per_op_handler"
 MEASUREMENT_SCOPE_PER_OP_PROCESS = "per_op_process"
 MEASUREMENT_SCOPE_PROCESS_WIDE = "process_wide"
@@ -3025,38 +2224,13 @@ _MEASUREMENT_SCOPES = frozenset({
     MEASUREMENT_SCOPE_PROCESS_WIDE,
 })
 
-#: CPU consumed by dispatches nested inside the currently-running one, so a
-#: parent reports its OWN handler CPU rather than its children's as well.
-#: `process_time()` is process-wide and monotonic, so a naive parent delta
-#: contains every child's CPU -- an op that composes three others would read as
-#: the cost of all four, and the brightline would convict the wrong one.
-#: A ContextVar, not a plain global: each asyncio task gets its own copy, so
-#: sibling tasks cannot pop each other's frames.
 _NESTED_DISPATCH_CPU_MS: "contextvars.ContextVar[Optional[List[float]]]" = (
     contextvars.ContextVar("coordinator_core.ipc.nested_dispatch_cpu_ms", default=None)
 )
 
 #: Contamination is observed CONTINUOUSLY, not sampled at two instants.
-#:
-#: The first cut of this compared a global in-flight count against this
-#: dispatch's nesting depth at entry and at exit. Review (2026-08-27, slice-a
-#: Finding 1) showed that misses a sibling that both starts and finishes
-#: strictly INSIDE this dispatch's span: neither sample point sees it, yet its
-#: CPU is in this span's `process_time()` delta. The row would then claim
-#: `per_op_handler` -- the narrowest, most-trusted scope, the one the brightline
-#: is read in -- while carrying another op's CPU. A discriminator that is wrong
-#: in the direction of overclaiming precision is worse than no discriminator.
-#:
-#: So each dispatch owns a record, and an entering dispatch marks every active
-#: record that is not one of its own ancestors -- and is marked by them in turn.
-#: Contamination is therefore recorded the moment the overlap exists, whenever
-#: within the span it happens, rather than inferred from two snapshots.
-#:
-#: An ancestor is never contamination: a parent awaiting its child burns no CPU
-#: during the child's span, and treating it as a sibling would label every
 #: composed op PROCESS_WIDE -- pessimising exactly the ops most worth measuring.
 #: Ancestry is carried explicitly on `_ANCESTOR_RECORDS` rather than inferred
-#: from a count, because a count cannot tell an ancestor from a stranger.
 
 
 class _DispatchRecord:
@@ -3071,8 +2245,6 @@ class _DispatchRecord:
 _ACTIVE_DISPATCHES: "List[_DispatchRecord]" = []
 _ACTIVE_DISPATCH_LOCK = threading.Lock()
 
-#: This dispatch's ancestor records, innermost last. A ContextVar so each
-#: asyncio task carries its own chain rather than reading a sibling's.
 _ANCESTOR_RECORDS: "contextvars.ContextVar[tuple]" = contextvars.ContextVar(
     "coordinator_core.ipc.ancestor_dispatch_records", default=()
 )
@@ -3264,12 +2436,6 @@ def record_op_process_time(
             "caller": caller,
             "clock_resolution_ms": _clock_resolution_ms_or_none(process_ms),
         }
-        # The brightline's second axis, omitted rather than zero-filled when the
-        # caller did not measure it: a missing `spawns` key means "not counted
-        # here", while `0` is the substantive claim that this op spawned nothing.
-        # A reader that cannot tell those apart re-runs the 2026-08-23 sweep's
-        # own mistake of reading an absent figure as a measured one. Key
-        # absence IS the signal -- it needs no companion flag restating it.
         if spawns is not None:
             entry["spawns"] = spawns
         _write_entry(entry, repo_root)
@@ -3351,39 +2517,19 @@ def dispatch_from_hook(
           (STRUCTURAL_PIN_ERROR / INTERNAL_ERROR) — an error response always surfaces as
           HookDispatchError, never as a bare traceback escaping this function un-wrapped.
     """
-    # asyncio import deferred to first use (not module scope) for the same ~9ms
-    # import-cost reason documented in dispatch_message's own deferred import above.
     import asyncio
     import time as _time
 
     envelope = _hook_envelope(op_name, params, origin_worktree)
 
-    # Per-op process time (C9): this function is a whole process per op (a
-    # DoE hook shim's one-shot cold spawn) -- the same uncontaminated-CPU
-    # argument as the pool-worker path applies trivially here. Measured
-    # around the SAME asyncio.run(dispatch_message(...)) call the docstring
-    # above already describes as this function's dispatch body, never inside
-    # dispatch_message itself (the async wrapper the C9 row's own dispatch
-    # site is deliberately NOT).
     t_start = _time.time()
     process_start = _time.process_time()
     spawn_start = _spawn_count_or_none()
     _caller = "coordinator_core.ipc.dispatch_from_hook"
-    # Minted here, not inside dispatch_message, so THIS function's own
-    # process-time row below can carry the SAME corr_id as the
-    # started/complete rows dispatch_message records for this call --
-    # 2026-08-25-a-process-time-row-cannot-be-joined-to-its-own.
     from coordinator_core.telemetry.op_latency import new_correlation_id
 
     _corr_id = new_correlation_id()
     try:
-        # C16 (following up C15's honest PARTIAL): this function IS one of
-        # `dispatch_message`'s own call sites, and now declares itself
-        # explicitly rather than relying on the stack-walk fallback -- the
-        # out-of-scope test doubles that previously pinned a fixed `(msg)`
-        # signature (`coordinator_core.ops.tests.test_ipc_dispatch_from_hook`)
-        # are in THIS row's `writes:` and have been widened to accept
-        # `caller=`.
         response = asyncio.run(
             dispatch_message(envelope, caller=_caller, corr_id=_corr_id)
         )
@@ -3495,29 +2641,16 @@ def dispatch_ops_from_hook(
         results: list = []
         for op_name, params in op_list:
             envelope = _hook_envelope(op_name, params, origin_worktree)
-            # Per-op process time, same contract as dispatch_from_hook's own
-            # sample. This loop is sequential and single-threaded inside one
-            # process -- it awaits each dispatch to completion before starting
-            # the next and never schedules concurrently (see this function's
-            # negative spec) -- so a `process_time()` delta taken around one
-            # iteration contains that op's CPU and no sibling's. That is the
             # PER_OP_PROCESS case, not the accept-thread PROCESS_WIDE one,
             # where `WORKER_POOL_SIZE` threads share a clock.
             t_start = _time.time()
             process_start = _time.process_time()
             spawn_start = _spawn_count_or_none()
             _caller = "coordinator_core.ipc.dispatch_ops_from_hook"
-            # Same join fix as dispatch_from_hook: mint here and hand it in,
-            # so this op's process-time row shares its corr_id with the
-            # started/complete rows dispatch_message records for it --
-            # 2026-08-25-a-process-time-row-cannot-be-joined-to-its-own.
             from coordinator_core.telemetry.op_latency import new_correlation_id
 
             _corr_id = new_correlation_id()
             try:
-                # C16 (following up C15's honest PARTIAL): declares itself
-                # explicitly now that this function's own test doubles
-                # (in this row's `writes:`) accept `caller=`.
                 response = await dispatch_message(
                     envelope, caller=_caller, corr_id=_corr_id
                 )
@@ -3544,13 +2677,3 @@ def dispatch_ops_from_hook(
 
     return asyncio.run(_run_all())
 
-
-# _handle_connection removed by C5 (DR-215): UDS server transport retired.
-# coordinator_core is now a command-type engine; dispatch_message is called directly.
-# Backlink: docs/decisions/DR-215-coordinator-core-command-type-execution-model.md
-
-# UDS socket_path() removed by C5 (DR-215): coordinator_core is now command-type; no socket.
-
-# _guard_socket_stomp() removed by C5 (DR-215): UDS transport retired.
-
-# start_server_async removed by C5 (DR-215): UDS server transport retired.

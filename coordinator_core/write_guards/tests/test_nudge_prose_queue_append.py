@@ -1,14 +1,3 @@
-"""Behavioral tests for coordinator_core.write_guards.nudge_prose_queue_append
--- the DR-115 § PM direction (A) append-advisory guard.
-
-Covers: fires when a dated row is genuinely added to an existing prose
-queue (Write/Edit/MultiEdit); stays silent on a prune, a pure reformat, a
-closure deletion, an Edit touching non-row prose, any YAML-directory write,
-and a nonexistent target (the creation-deny sibling's job); the punt
-override.
-
-Spec: DoE-claude docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
-"""
 
 from __future__ import annotations
 

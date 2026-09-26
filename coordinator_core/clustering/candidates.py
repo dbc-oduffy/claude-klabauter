@@ -23,13 +23,8 @@ from __future__ import annotations
 import os
 import re
 
-# DR-209 floor: clusters with fewer than this many items are not surfaced.
-#
-# Spec backlink: DoE-claude:pln-initiative-govern-sweep-priori-6cf808 § C4
 MIN_CLUSTER_SIZE = 3
 
-# Stop words for title-keyword clustering — common English function words plus
-# coordinator-domain verbs that are too ubiquitous to be meaningful cluster signals.
 STOP_WORDS = {
     "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
     "of", "with", "by", "from", "as", "is", "was", "are", "were", "be",
@@ -41,10 +36,6 @@ STOP_WORDS = {
     "between", "through", "during", "without", "within", "also", "this",
     "that", "these", "those", "then", "when", "where", "which", "while",
 }
-
-# ---------------------------------------------------------------------------
-# Core clustering logic
-# ---------------------------------------------------------------------------
 
 
 def detect_candidates(records: list[dict]) -> list[dict]:
@@ -69,8 +60,6 @@ def detect_candidates(records: list[dict]) -> list[dict]:
     """
     clusters: list[dict] = []
 
-    # --- Signal 1: shared tag ---
-    # Records sharing a tag value in frontmatter.tags / .topic / .areas (string or array).
     tag_map: dict[str, list[dict]] = {}
     for rec in records:
         for tag in _normalize_tags(rec.get("frontmatter")):
@@ -84,8 +73,6 @@ def detect_candidates(records: list[dict]) -> list[dict]:
                 "items": [_item(r) for r in recs],
             })
 
-    # --- Signal 2: directory ---
-    # Records sharing the same parent directory (e.g., all state/bug-backlog/ items).
     dir_map: dict[str, list[dict]] = {}
     for rec in records:
         dir_ = _parent_dir(rec.get("path", ""))
@@ -99,8 +86,6 @@ def detect_candidates(records: list[dict]) -> list[dict]:
                 "items": [_item(r) for r in recs],
             })
 
-    # --- Signal 3: title keyword ---
-    # Records sharing a significant word (length >=4, not a stop word) from frontmatter.title.
     kw_map: dict[str, list[dict]] = {}
     for rec in records:
         fm = rec.get("frontmatter") or {}
@@ -124,21 +109,7 @@ def _item(rec: dict) -> dict:
     return {"path": rec.get("path", ""), "title": fm.get("title") or ""}
 
 
-# ---------------------------------------------------------------------------
-# Helpers (prefixed _ to distinguish from exported API)
-# ---------------------------------------------------------------------------
-
-
 def _normalize_tags(fm: dict | None) -> list[str]:
-    """Extract a flat list of lowercase tag strings from a frontmatter object.
-    Reads .tags, .topic, or .areas; each may be a string (comma-separated) or list.
-
-    Design: exclusive-alternatives — the three fields are checked in priority order
-    (.tags first, then .topic, then .areas) and only the first truthy field contributes.
-    A record with both .tags and .areas contributes only the .tags signal. This is
-    intentional: mixing multiple tag-style fields from a single record would allow
-    loosely-related records to cluster on spurious multi-field coincidences.
-    """
     if not fm:
         return []
     raw = fm.get("tags") or fm.get("topic") or fm.get("areas")
@@ -154,17 +125,6 @@ def _normalize_tags(fm: dict | None) -> list[str]:
 
 
 def _parent_dir(file_path: str) -> str:
-    """Return the parent directory of a path, normalized to forward slashes.
-    Used as the directory-cluster key.
-
-    `file_path` is a recorded frontmatter field, not a live filesystem path
-    on this host -- it may have been authored on either platform. Normalize
-    to forward-slash form FIRST, then split off the last segment, rather
-    than calling `os.path.dirname()` (host-native separator semantics) on
-    the raw string: on a POSIX host, `os.path.dirname()` does not recognize
-    a backslash-separated value, so a Windows-authored path with no `/`
-    would silently resolve to an empty parent dir instead of the real one.
-    """
     normalized = file_path.replace("\\", "/")
     return normalized.rsplit("/", 1)[0] if "/" in normalized else ""
 
@@ -189,12 +149,6 @@ def _extract_keywords(title: str) -> list[str]:
 
 
 def _dedupe_preserve_order(items: list[str]) -> list[str]:
-    """Return items with duplicates removed, preserving first-seen order.
-
-    Used wherever a list is conceptually a set of signals rather than a bag
-    of occurrences (keyword extraction, tag normalization) — a bare `set()`
-    would discard the deterministic ordering downstream code relies on.
-    """
     seen: set[str] = set()
     out: list[str] = []
     for item in items:
@@ -205,9 +159,6 @@ def _dedupe_preserve_order(items: list[str]) -> list[str]:
 
 
 def _humanize(s: str) -> str:
-    """Convert a snake_case, kebab-case, or slash-separated identifier to Title Case.
-    Used to produce the suggestedLabel for each cluster.
-    """
     spaced = re.sub(r"[-_/]", " ", s)
     titled = re.sub(r"\b\w", lambda m: m.group(0).upper(), spaced)
     return titled.strip()

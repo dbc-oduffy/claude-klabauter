@@ -59,9 +59,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _PY_CLI = _REPO_ROOT / "coordinator" / "bin" / "cross-repo-memo.py"
 
 _STUB_KEYS = {
-    # Opaque marker values, never real paths: this stub answers a spawn-count
-    # question, and a drive-lettered literal here would be host-specific for
-    # no gain.
     f"repos.stub_repo_{i}": f"/stub/repo{i}" for i in range(20)
 }
 _STUB_KEYS["publish.mirrors.stub_mirror.owner"] = "stub-em"
@@ -86,11 +83,6 @@ else:
 
 
 def _load_cli_module(name: str):
-    """Import `cross-repo-memo.py` under a private module name.
-
-    Its hyphenated filename is not importable, and each test needs its own
-    module object so one test's process-lifetime caches cannot answer another's.
-    """
     bin_dir = str(_PY_CLI.parent)
     lib_dir = str(_PY_CLI.parent / "lib")
     for path in (bin_dir, lib_dir):
@@ -103,13 +95,6 @@ def _load_cli_module(name: str):
 
 
 def test_registry_reads_cost_one_process(tmp_path, monkeypatch):
-    """Every registry read in one run resolves through a single batch process.
-
-    Reads 20 distinct keys twice each, plus the repos key enumeration —
-    the shape a `draft` actually issues. The pre-fix CLI spawned 40 `get`
-    processes, 2 `keys` processes, and a `python --version` probe ahead of each
-    of them; the post-fix CLI spawns one `dump`.
-    """
     stub = tmp_path / "_ml_stub.py"
     stub.write_text(_STUB_IMPL.format(keys=_STUB_KEYS), encoding="utf-8")
     monkeypatch.setenv("MACHINE_LOCAL_IMPL", str(stub))
@@ -142,14 +127,6 @@ def test_registry_reads_cost_one_process(tmp_path, monkeypatch):
 
 
 def test_batch_read_failure_falls_back_to_per_key_get(tmp_path, monkeypatch):
-    """A batch read that is not fully answerable must not become a silent absence.
-
-    `dump` exits non-zero on a per-key operational failure (an ambiguous
-    autodiscovery match). The fallback to the real `get` spawn is what keeps
-    machine-local's own remediation reaching `_machine_local_get_detail`'s
-    stderr element and the diagnostics that match on it — the batch read is a
-    cost fix and must never widen into a correctness change.
-    """
     stub = tmp_path / "_ml_stub_nodump.py"
     stub.write_text(
         _STUB_IMPL.format(keys=_STUB_KEYS).replace(

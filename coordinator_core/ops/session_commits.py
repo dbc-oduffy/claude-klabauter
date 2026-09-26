@@ -113,17 +113,8 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.git_native import _git
 from coordinator_core.ops.fleet._common import main_worktree_root
 
-#: Field separator between the per-commit header's sha and subject in the
-#: `--format=` string below. A control byte that cannot appear in a commit
-#: subject line (`%s` is single-line by definition), so a naive
-#: `str.partition` split on this byte is unambiguous.
 _FIELD_SEP = "\x1f"
 
-#: Line-prefix marker distinguishing a per-commit header line (sha+subject)
-#: from a `--numstat` data row in the same concatenated output stream. A
-#: control byte that cannot appear at the start of a `--numstat` row (those
-#: always start with a digit or `-`), so a plain `startswith` test is
-#: unambiguous.
 _HEADER_SENTINEL = "\x02"
 
 
@@ -273,8 +264,6 @@ def resolve_session_commits(
             sha, sep, rest = line[len(_HEADER_SENTINEL):].partition(_FIELD_SEP)
             ct_raw, sep2, subject = rest.partition(_FIELD_SEP)
             if not sep or not sep2:
-                # Malformed/unsplit header (should not happen with a
-                # well-formed --format) — skip rather than guess.
                 current = None
                 seen_paths = None
                 continue
@@ -300,15 +289,6 @@ def resolve_session_commits(
             continue
 
         if line.startswith(":"):
-            # --raw row: ":<old-mode> <new-mode> <old-sha> <new-sha> "
-            # "<status>[<score>]\t<path>[\t<path2>]" — <status> is the
-            # single-letter change-type code this function surfaces as
-            # files[i].status. Collected here, oldest-first per commit,
-            # then paired positionally with the --numstat rows below (git
-            # emits both diff formats in the same per-file order for one
-            # walk, so positional pairing needs no path-matching — load-
-            # bearing for a rename, whose --raw path and --numstat "old =>
-            # new" path text do not match verbatim).
             meta = line[1:].split(None, 4)
             if len(meta) == 5:
                 status_field = meta[4].split("\t", 1)[0]
@@ -319,7 +299,6 @@ def resolve_session_commits(
         if not line.strip():
             continue
 
-        # --numstat row: "<added>\t<deleted>\t<path>" (binary: "-\t-\t<path>")
         parts = line.split("\t", 2)
         if len(parts) != 3:
             continue

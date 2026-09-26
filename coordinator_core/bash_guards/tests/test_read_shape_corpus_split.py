@@ -29,8 +29,6 @@ class TestIsReadShaped:
         assert split.is_read_shaped("git status") is None
 
     def test_false_when_read_command_is_receiving_end_of_pipe(self):
-        # "cat" here is fed by the upstream command's stdout, not a file
-        # operand -- its "input" does not exist independent of `echo hi`.
         assert split.is_read_shaped("echo hi | cat") is None
 
     def test_true_when_read_command_is_first_and_pipes_out(self):
@@ -40,8 +38,6 @@ class TestIsReadShaped:
         assert split.is_read_shaped("cat 'unterminated") is None
 
     def test_not_first_command_after_semicolon_is_not_recognized(self):
-        # `is_read_shaped` only looks at the FIRST segment, mirroring
-        # plan_for's own precondition.
         assert split.is_read_shaped("echo hi; cat f.txt") is None
 
 
@@ -68,7 +64,6 @@ class TestDeclineCauseStructuralBuckets:
         assert split.decline_cause("ls -l", "ls") == "unmodelled_flag"
 
     def test_ls_allows_combined_a1_flags(self):
-        # -1a / -a1 explicitly modelled -- must not bucket as unmodelled.
         assert split.decline_cause("ls -1a /does/not/exist", "ls") == "nonexistent_path"
 
     def test_head_tail_multiple_operands(self):
@@ -107,9 +102,6 @@ class TestDeclineCausePathChecks:
         assert split.decline_cause("ls a.txt", "ls") == "not_a_directory"
 
     def test_valid_existing_file_is_not_yet_implemented(self, tmp_path, monkeypatch):
-        """A structurally well-formed, existing-file `cat` call is not
-        answered today only because the read source (C1) has not landed --
-        the bucket names that distinctly from every other decline cause."""
         monkeypatch.chdir(tmp_path)
         f = tmp_path / "a.txt"
         f.write_text("hi")
@@ -126,32 +118,23 @@ class TestMeasureSplit:
         existing.write_text("hi")
 
         commands = [
-            "cat a.txt",                        # read-shaped AND answered, once C3 wired recognition
-            "cat -n a.txt",                     # read-shaped, unmodelled_flag
-            "ls -l",                            # read-shaped, unmodelled_flag
-            "grep -n foo a.txt",                # answered by plan_for's grep path, not read-shaped
-            "git status",                       # not read-shaped at all
+            "cat a.txt",
+            "cat -n a.txt",
+            "ls -l",
+            "grep -n foo a.txt",
+            "git status",
         ]
         report = split.measure_split(commands)
 
         assert report.corpus_size == 5
         assert report.read_shaped_count == 3
         # `cat a.txt` counts as ANSWERED here, and that is the point of AC7 rather than an
-        # accident of ordering. C5 landed in the same wave as C1 but ahead of C3, so when
-        # this case was written no read shape was wired into `plan_for` yet and every one
-        # of them bucketed as `not_yet_implemented`. Once C3 wired recognition, the split
-        # started reporting what is actually served -- which is the measurement AC7 asks
-        # for. Pinning the pre-C3 numbers here would have made this test assert the
-        # absence of the feature the plan exists to add.
         assert report.answered_count == 1
         assert report.remainder_count == 2
         assert report.cause_counts.get("not_yet_implemented", 0) == 0
         assert report.cause_counts["unmodelled_flag"] == 2
 
     def test_answered_count_reflects_real_plan_for_not_a_reimplementation(self, tmp_path, monkeypatch):
-        """`measure_split` must call the SHIPPED `search.answer.plan_for`,
-        not a re-derivation of its predicate -- proven here by monkeypatching
-        the real function and observing the count move."""
         monkeypatch.chdir(tmp_path)
         f = tmp_path / "a.txt"
         f.write_text("hi")

@@ -23,8 +23,6 @@ from __future__ import annotations
 from coordinator_core.ops.fleet.memo_send import _SENT_BY_UNRESOLVED, _resolve_sent_by
 from coordinator_core.session import core as session_core
 
-# UUID-shaped: `session_identity_override` silently no-ops on anything that
-# does not match `_UUID_RE`.
 _CARRIED_SID = "cccccccc-3333-4333-8333-cccccccccccc"
 _SERVER_OWNER_SID = "dddddddd-4444-4444-8444-dddddddddddd"
 
@@ -42,17 +40,11 @@ def test_warm_with_carried_id_stamps_it(monkeypatch):
 
 
 def test_warm_with_no_carried_id_stamps_unresolved_not_ambient_env(monkeypatch):
-    """The anti-forgery case: the ambient env holds the SERVER's id (as it
-    would inside a resident warm process), and no id was carried -- the
-    result must be the sentinel, never the server owner's id."""
     _ambient_env_holds(monkeypatch, _SERVER_OWNER_SID)
     with session_core.warm_served_request():
         assert _resolve_sent_by({}) == _SENT_BY_UNRESOLVED
 
 
 def test_cold_with_only_env_var_set_still_stamps_it(monkeypatch):
-    """The ~49-memo regression pin: cold callers still resolve from the
-    ambient env when nothing else names the session -- this row does not
-    reopen that gap."""
     _ambient_env_holds(monkeypatch, _CARRIED_SID)
     assert _resolve_sent_by({}) == _CARRIED_SID

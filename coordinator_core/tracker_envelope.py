@@ -55,8 +55,6 @@ from coordinator_core import tracker_store
 from coordinator_core.tracker_projection import fold_membership_wire
 
 # STATED ASSUMPTION — see module docstring. Not cockpit-ratified; correct in
-# place if example-cockpit-repo-em's answer to the open cross-repo question names
-# different top-level keys.
 TRACKER_ITEMS_KEY = "tracker_items"
 TRACKER_EVENTS_KEY = "tracker_events"
 

@@ -1,13 +1,3 @@
-"""Behavioral tests for `nudge_unattributed_process_time_figure.py`
-(docs/plans/2026-09-22-spawn-budget-and-census.md, row C7).
-
-Covers: fires on an unattributed process-time figure inside one of the six
-scoped prefixes; an attributed figure (names a sanctioned primitive) passes
-silently; a bar citation ("the 500ms bar") does not fire; a path outside
-the six prefixes does not fire; a subagent payload behaves identically;
-Edit/MultiEdit reconstruct the resulting text from the on-disk pre-image;
-fail-open on an unresolvable repo root / malformed payload.
-"""
 
 from __future__ import annotations
 

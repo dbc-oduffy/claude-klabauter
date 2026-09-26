@@ -1,7 +1,3 @@
-"""Tests for coordinator_core.warm.skew.
-
-Spec backlink: docs/plans/2026-08-16-one-engine-for-the-whole-box.md § C16
-"""
 
 from __future__ import annotations
 
@@ -30,16 +26,7 @@ def _write_head_and_ref(git_dir: Path, ref_rel: str, sha: str) -> None:
     ref_path.write_text(sha + "\n", encoding="utf-8")
 
 
-# ---------------------------------------------------------------------------
-# compute_client_token -- axis 1
-# ---------------------------------------------------------------------------
-
-
 def test_client_token_raises_for_unstamped_clone_even_when_git_state_is_stable(tmp_path):
-    """docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C4: the
-    ref-based fallback for an unstamped tree is deleted, not merely
-    de-prioritized. A well-formed but unstamped clone must still fail
-    closed -- git state being unremarkable is not an exemption."""
     root = tmp_path / "clone"
     _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
 
@@ -95,9 +82,6 @@ def test_client_token_ignores_a_detached_head_when_the_tree_is_stamped(tmp_path)
 
 
 def test_client_token_ignores_a_missing_git_dir_when_the_tree_is_stamped(tmp_path):
-    """Sibling of the detached-HEAD test above, same rationale: a stamped
-    tree's token never reads `.git/`, so a wholly absent `.git` directory
-    must not matter either."""
     root = tmp_path / "no-git-here"
     root.mkdir(parents=True)
     skew.write_engine_stamp(root, "sha:" + "1" * 40)
@@ -114,12 +98,6 @@ def test_client_token_ignores_a_missing_git_dir_when_the_tree_is_stamped(tmp_pat
     reason="git not on PATH",
 )
 def test_client_token_raises_for_unstamped_clone_across_a_real_git_checkout(tmp_path):
-    """Sibling of the C16 negative-spec finding this test used to pin
-    (klabauter-channel.py's `_set` path runs
-    `git checkout -B <target> --track origin/<target>`, which rewrites
-    `.git/HEAD`): with the ref-based fallback deleted (§ C4), an unstamped
-    clone raises regardless of what a real `git checkout -B` does to
-    `.git/HEAD` -- there is no live ref signal left to observe."""
     origin = tmp_path / "origin.git"
     work = tmp_path / "work"
     subprocess.run(["git", "init", "--quiet", "--bare", str(origin)], **_GIT_SUBPROCESS_KWARGS, **no_console_passthrough_kwargs())
@@ -170,11 +148,6 @@ def test_client_token_raises_for_unstamped_clone_across_a_real_git_checkout(tmp_
         skew.compute_client_token(work)
 
 
-# ---------------------------------------------------------------------------
-# ServerVersionState -- axis 1 (live comparison) and axis 2 (throttled)
-# ---------------------------------------------------------------------------
-
-
 def test_server_boots_with_sha_and_hash(monkeypatch, tmp_path):
     monkeypatch.setattr(skew.engine_version, "resolve_engine_sha", lambda: "deadbeef")
     monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: "hash-0")
@@ -223,16 +196,13 @@ def test_axis_attribution_records_both_axes_when_both_hold(monkeypatch, tmp_path
     monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: "hash-0")
 
     state = skew.ServerVersionState(root)
-    state._source_stale = True  # axis 2 already flagged
+    state._source_stale = True
 
-    # ...and a client token from a different generation: axis 1 too.
     assert state.is_skewed("a-stale-client-token") is True
     assert state.last_skew_axes == (skew.SKEW_AXIS_SOURCE, skew.SKEW_AXIS_TOKEN)
 
 
 def test_axis_attribution_names_the_single_axis_that_fired(monkeypatch, tmp_path):
-    """Each axis alone is reported alone -- the discrimination the exit row
-    exists for, since the two have opposite remediations."""
     root = tmp_path / "clone"
     _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
     skew.write_engine_stamp(root, "sha:" + "1" * 40)
@@ -251,8 +221,6 @@ def test_axis_attribution_names_the_single_axis_that_fired(monkeypatch, tmp_path
 
 
 def test_axis_attribution_is_empty_when_not_skewed(monkeypatch, tmp_path):
-    """An unskewed request leaves nothing behind -- `last_skew_axes` describes
-    the call that set it and must not read as a stale verdict."""
     root = tmp_path / "clone"
     _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
     skew.write_engine_stamp(root, "sha:" + "1" * 40)
@@ -272,15 +240,13 @@ def test_is_skewed_true_on_axis2_secondary_staleness_via_dirty(monkeypatch, tmp_
 
     hashes = iter(["hash-0", "hash-1"])
     monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: next(hashes))
-    # Prefilter reports no mtime change (a bare edit to an already-touched
-    # file, or clock-resolution coincidence) -- dirty is the discriminator.
     monkeypatch.setattr(skew, "_max_source_mtime", lambda pkg_dir: 123.0)
     monkeypatch.setattr(skew.engine_version, "resolve_engine_dirty", lambda: True)
 
     fake_now = [0.0]
     state = skew.ServerVersionState(root, clock=lambda: fake_now[0])
     client_token = skew.compute_client_token(root)
-    assert state.is_skewed(client_token) is False  # not yet due (interval hasn't elapsed)
+    assert state.is_skewed(client_token) is False
 
     fake_now[0] = skew._REFRESH_INTERVAL_SECS + 1.0
     assert state.is_skewed(client_token) is True
@@ -322,13 +288,13 @@ def test_axis2_refresh_throttled_to_interval(monkeypatch, tmp_path):
 
     fake_now = [0.0]
     state = skew.ServerVersionState(root, clock=lambda: fake_now[0])
-    calls["n"] = 0  # reset past the constructor's own prefilter call
+    calls["n"] = 0
 
     client_token = skew.compute_client_token(root)
     state.is_skewed(client_token)
     state.is_skewed(client_token)
     state.is_skewed(client_token)
-    assert calls["n"] == 0  # interval hasn't elapsed; refresh is a no-op
+    assert calls["n"] == 0
 
     fake_now[0] = skew._REFRESH_INTERVAL_SECS + 1.0
     state.is_skewed(client_token)
@@ -354,12 +320,10 @@ def test_source_stale_is_sticky(monkeypatch, tmp_path):
     assert state.is_skewed(client_token) is True
 
     fake_now[0] += skew._REFRESH_INTERVAL_SECS + 1.0
-    assert state.is_skewed(client_token) is True  # reverted hash does not un-stale
+    assert state.is_skewed(client_token) is True
 
 
-# ---------------------------------------------------------------------------
 # evict_on_skew -- THE INVERSION: close precedes drain, no idleness input
-# ---------------------------------------------------------------------------
 
 
 def test_evict_on_skew_orders_respond_close_drain():
@@ -400,8 +364,6 @@ def test_evict_on_skew_close_precedes_drain_even_if_drain_raises():
             client_token="tok",
         )
 
-    # The listener must already be closed by the time drain ran (and blew
-    # up) -- a drain failure must never leave the stale listener open.
     assert [step for step, _ in order] == ["respond", "close", "drain"]
 
 

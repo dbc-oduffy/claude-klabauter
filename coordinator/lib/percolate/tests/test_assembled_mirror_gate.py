@@ -26,9 +26,6 @@ from unittest import mock
 
 import pytest
 
-# `coordinator/` and `coordinator/lib/` carry no `__init__.py`; `coordinator/
-# lib/percolate/` does. Same sys.path convention the sibling tests in this
-# directory already use (see test_import_closure_depth.py).
 _COORDINATOR_LIB = Path(__file__).resolve().parents[2]
 if str(_COORDINATOR_LIB) not in sys.path:
     sys.path.insert(0, str(_COORDINATOR_LIB))
@@ -58,16 +55,10 @@ def _write_tree(tmp_path: Path, test_source: "str | None") -> Path:
     tree = tmp_path / "assembled_mirror"
     tree.mkdir()
     (tree / "pyproject.toml").write_text(_PYPROJECT, encoding="utf-8")
-    # Every real assembled mirror ships coordinator_core/ at its root; the
-    # isolation precondition (_verify_isolation_precondition) requires it,
-    # so test trees standing in for a real mirror must carry it too.
     (tree / "coordinator_core").mkdir()
     if test_source is not None:
         (tree / "test_probe.py").write_text(test_source, encoding="utf-8")
     return tree
-
-
-# --- real subprocess runs: the three shapes -------------------------------
 
 
 def test_healthy_tree_passes_and_reports_the_real_count(tmp_path):
@@ -83,9 +74,6 @@ def test_healthy_tree_passes_and_reports_the_real_count(tmp_path):
 
 
 def test_dropped_module_orphan_import_errors_collection_and_refuses(tmp_path):
-    """THE plan's own shape: a test reaches for a module the tree never
-    shipped, unguarded, at module scope — collection is interrupted, not
-    merely one red test."""
     tree = _write_tree(
         tmp_path,
         "from coordinator_core.benchmarks.this_module_was_dropped import thing\n\n\n"
@@ -98,9 +86,6 @@ def test_dropped_module_orphan_import_errors_collection_and_refuses(tmp_path):
 
 
 def test_zero_collected_reads_differently_from_an_error(tmp_path):
-    """Marker deselection to zero (or a genuinely empty tree) refuses like
-    an error does (any non-zero exit refuses — parent plan body), but MUST
-    be reported as a distinct shape: `errored=False`, not `errored=True`."""
     tree = _write_tree(
         tmp_path,
         "import pytest\n\n\n@pytest.mark.cadence\n"
@@ -136,9 +121,6 @@ def test_the_two_zero_shapes_are_never_conflated(tmp_path):
     assert errored_result.errored != clean_zero_result.errored
 
 
-# --- refusal message reports the denominator -------------------------------
-
-
 def test_format_refusal_names_the_collected_count_and_shape():
     tree = str(Path("dummy") / "tree")
     from percolate.assembled_mirror_gate import MirrorCollectionResult
@@ -154,9 +136,6 @@ def test_format_refusal_names_the_collected_count_and_shape():
         tree_root=tree,
         stdout_tail="",
         stderr_tail="",
-        # Both fixtures assert a CONTENT rendering, so they must say a
-        # verdict was obtained -- `verdict_obtained` defaults False, and
-        # that direction is deliberate (see its own docstring).
         verdict_obtained=True,
     )
     msg = format_refusal(errored)
@@ -175,17 +154,11 @@ def test_format_refusal_names_the_collected_count_and_shape():
         tree_root=tree,
         stdout_tail="",
         stderr_tail="",
-        # Both fixtures assert a CONTENT rendering, so they must say a
-        # verdict was obtained -- `verdict_obtained` defaults False, and
-        # that direction is deliberate (see its own docstring).
         verdict_obtained=True,
     )
     msg2 = format_refusal(clean_zero)
     assert "found 0 test(s)" in msg2
     assert msg != msg2
-
-
-# --- sys.path isolation: cannot reach claude-klabauter --------------------------------
 
 
 def test_subprocess_isolated_from_claude_klabauter_via_cwd_and_stripped_pythonpath(tmp_path, monkeypatch):
@@ -225,11 +198,6 @@ def test_command_uses_the_trees_own_documented_marker_expression():
 
 
 def test_tree_missing_coordinator_core_refuses_before_running_a_subprocess(tmp_path):
-    """The isolation reliance (cwd shadowing an ambient editable install) is
-    only real when `tree_root` carries `coordinator_core/` for cwd to
-    shadow with. A tree that doesn't must refuse -- never silently run a
-    subprocess whose isolation cannot be trusted, and never call
-    `subprocess.run` at all for this shape."""
     tree = tmp_path / "no_coordinator_core"
     tree.mkdir()
     (tree / "pyproject.toml").write_text(_PYPROJECT, encoding="utf-8")
@@ -246,9 +214,6 @@ def test_tree_missing_coordinator_core_refuses_before_running_a_subprocess(tmp_p
 
 
 def test_tree_missing_coordinator_core_and_not_in_declared_scope_is_not_applicable(tmp_path):
-    """Both facts agree: the tree lacks coordinator_core/ AND the caller
-    declares it was never part of this destination's scope. Never runs a
-    subprocess; never reads as a refusal."""
     tree = tmp_path / "no_coordinator_core_declared_absent"
     tree.mkdir()
     (tree / "pyproject.toml").write_text(_PYPROJECT, encoding="utf-8")
@@ -267,10 +232,6 @@ def test_tree_missing_coordinator_core_and_not_in_declared_scope_is_not_applicab
 
 
 def test_tree_missing_coordinator_core_but_declared_in_scope_still_refuses(tmp_path):
-    """The narrow-door regression the whole change exists to close: a
-    destination whose declared scope DOES include coordinator_core must
-    keep refusing via isolation_unverified when the tree lacks it,
-    regardless of the caller passing the flag explicitly."""
     tree = tmp_path / "no_coordinator_core_declared_present"
     tree.mkdir()
     (tree / "pyproject.toml").write_text(_PYPROJECT, encoding="utf-8")
@@ -287,9 +248,6 @@ def test_tree_missing_coordinator_core_but_declared_in_scope_still_refuses(tmp_p
 
 
 def test_coordinator_core_in_declared_scope_defaults_true_never_silently_not_applicable(tmp_path):
-    """A caller that omits the new keyword entirely gets EXACTLY the
-    pre-existing behaviour -- a missing coordinator_core/ directory always
-    refuses, never reads as not-applicable by omission."""
     tree = tmp_path / "no_coordinator_core_default"
     tree.mkdir()
     (tree / "pyproject.toml").write_text(_PYPROJECT, encoding="utf-8")
@@ -303,10 +261,6 @@ def test_coordinator_core_in_declared_scope_defaults_true_never_silently_not_app
 
 
 def test_tree_carrying_coordinator_core_ignores_declared_scope_flag(tmp_path):
-    """A tree that DOES carry coordinator_core/ runs normally regardless of
-    what the caller passes for `coordinator_core_in_declared_scope` --
-    the flag is only consulted when `_verify_isolation_precondition`
-    already failed."""
     tree = _write_tree(
         tmp_path,
         "def test_one():\n    assert True\n",
@@ -353,8 +307,6 @@ def test_completed_run_carries_a_content_verdict_never_the_incomplete_one(tmp_pa
 
 
 def test_errored_completed_collection_is_a_content_verdict_not_incomplete(tmp_path):
-    """A collection that ran to completion and errored still reached a
-    verdict ABOUT the tree (a bad one) — it must not read as incomplete."""
     tree = _write_tree(
         tmp_path,
         "from coordinator_core.benchmarks.this_module_was_dropped import thing\n\n\n"
@@ -431,9 +383,6 @@ def test_non_default_timeout_s_is_reported_in_both_timed_out_and_incomplete_rend
     assert "budget 8s" in isolation_msg
 
 
-# --- summary-parsing unit pins ----------------------------------------------
-
-
 @pytest.mark.parametrize(
     "stdout,expected_count,expected_errored,expected_recognized",
     [
@@ -444,11 +393,6 @@ def test_non_default_timeout_s_is_reported_in_both_timed_out_and_incomplete_rend
             True,
         ),
         ("3/12 tests collected (9 deselected) in 0.04s\n", 3, False, True),
-        # A partial collection: pytest reports the count it DID reach and its
-        # own error tally on the same line. The count is the denominator for
-        # those errors, never evidence against them -- read as a clean
-        # collection, this shape made the gate refuse a publish in the same
-        # sentence that called the tree clean.
         (
             "22938/39613 tests collected (16675 deselected), 5 errors in 11.20s\n",
             22938,
@@ -456,7 +400,6 @@ def test_non_default_timeout_s_is_reported_in_both_timed_out_and_incomplete_rend
             True,
         ),
         ("7 tests collected, 1 error in 0.30s\n", 7, True, True),
-        # "error" inside a collected test id is prose, not a tally.
         (
             "test_a.py::test_error_handling\n\n1 test collected in 0.02s\n",
             1,
@@ -472,11 +415,6 @@ def test_non_default_timeout_s_is_reported_in_both_timed_out_and_incomplete_rend
             True,
             True,
         ),
-        # Empty stdout and a genuinely unrecognised shape are NOT the same
-        # claim as a recognised interrupted/errored collection: both fail
-        # closed into errored=True (the dangerous direction if misread),
-        # but recognized=False so the caller reads NO verdict was reached,
-        # never a content claim about the tree.
         ("", 0, True, False),
         ("some totally unrecognised summary shape\n", 0, True, False),
     ],
@@ -486,9 +424,6 @@ def test_parse_collection_summary_shapes(stdout, expected_count, expected_errore
     assert count == expected_count
     assert errored == expected_errored
     assert recognized == expected_recognized
-
-
-# --- is_incomplete answers "was a verdict obtained", not an enumeration ----
 
 
 def test_empty_stdout_is_incomplete_with_no_content_claim(tmp_path):
@@ -541,9 +476,6 @@ def test_unrecognised_summary_is_incomplete_with_no_content_claim(tmp_path):
 
 
 def test_negative_returncode_signal_death_is_incomplete_even_with_a_parseable_tail(tmp_path):
-    """`returncode < 0` is signal death -- the child never got to finish on
-    its own, so even stdout that happens to match a recognised summary
-    shape must not be trusted as a completed verdict."""
     tree = tmp_path / "signal_killed_tree"
     tree.mkdir()
     (tree / "pyproject.toml").write_text(_PYPROJECT, encoding="utf-8")
@@ -565,9 +497,6 @@ def test_negative_returncode_signal_death_is_incomplete_even_with_a_parseable_ta
 
 
 def test_spawn_oserror_returns_incomplete_rather_than_raising(tmp_path):
-    """This module's own docstring promises `run_assembled_mirror_gate`
-    Never Raises. A `subprocess.OSError` from process creation on a
-    saturated box must be caught and reported, not propagated."""
     tree = tmp_path / "oserror_tree"
     tree.mkdir()
     (tree / "pyproject.toml").write_text(_PYPROJECT, encoding="utf-8")

@@ -28,7 +28,6 @@ def test_hhmmss_disambiguated_stem_gets_exactly_one_date_prefix() -> None:
     today = _today()
     expected = f"state/handoffs/{today}-retire-host-resource-watchdog.md"
     assert result == expected, result
-    # Exactly one date prefix -- not doubled.
     assert result.count(today) == 1, result
 
 

@@ -67,16 +67,12 @@ def test_row_shape(monkeypatch):
         "messaging_available",
     }
     assert row["is_self"] is True
-    # Ref-qualified unconditionally -- see reachability's module docstring;
-    # a bare name is not a sendable address even without a collision.
     assert re.fullmatch(r"claude-klabauter-57 \[[0-9a-f]{6,12}\]", row["address"])
     assert row["self_determination"] == "resolved"
     assert row["messaging_available"] is True
 
 
 def test_null_address_rows_say_the_harness_inbox_is_unbound(monkeypatch):
-    """The 17-null-address roster case: every row's `address` is `None`
-    for one harness-wide reason, and the row itself now carries it."""
     snap = {
         "sid-a": _record("claude-klabauter-57", None, cwd="/repo/claude-klabauter"),
         "sid-b": _record("claude-klabauter-58", None, cwd="/repo/claude-klabauter"),

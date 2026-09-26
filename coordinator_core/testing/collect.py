@@ -29,8 +29,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-# DEC-3/4/5/6: exact-basename glob per family. Two JS conventions (prefix +
-# suffix) and two Python conventions (pytest-native + per-file-run).
 FAMILY_GLOBS: dict[str, str] = {
     "js-prefix": "test-*.js",
     "js-suffix": "*.test.js",
@@ -38,7 +36,6 @@ FAMILY_GLOBS: dict[str, str] = {
     "py-nonnative": "*.test.py",
 }
 
-# Maps each family to the interpreter/runner C2 (run.py) will invoke it with.
 FAMILY_RUNNER_KIND: dict[str, str] = {
     "js-prefix": "node",
     "js-suffix": "node",
@@ -49,9 +46,6 @@ FAMILY_RUNNER_KIND: dict[str, str] = {
 ALL_FAMILIES: frozenset[str] = frozenset(FAMILY_GLOBS)
 
 # DEC-2: exact-basename frozenset, matched against directory BASENAMES only
-# (never a path glob), pruned in-place during os.walk so excluded subtrees are
-# never descended. Forward-safe against a newly-added venv and portable to
-# other repos (not a DoE-specific two-path hardcode).
 EXCLUDED_DIRNAMES: frozenset[str] = frozenset(
     {".git", "node_modules", ".venv", "site-packages", ".coordinator-venv"}
 )
@@ -59,11 +53,6 @@ EXCLUDED_DIRNAMES: frozenset[str] = frozenset(
 
 @dataclass(frozen=True)
 class Suite:
-    """One discovered test suite: a single file matched to exactly one family.
-
-    `runner_kind` carries enough for C2 (run.py) to pick the invocation without
-    re-deriving it from `family`.
-    """
 
     family: str
     path: Path
@@ -71,16 +60,6 @@ class Suite:
 
 
 def _classify(filename: str, families: frozenset[str]) -> str | None:
-    """Return the first family in `families` whose glob matches `filename`.
-
-    The four family globs are mutually exclusive for filenames following a
-    single convention, so match order does not usually affect the result —
-    this is a plain first-match scan, not a priority ladder. A pathological
-    filename combining two conventions at once (e.g. `test_x.test.py`, which
-    satisfies both `test_*.py` and `*.test.py`) is an unspecified edge case:
-    classification falls back to `frozenset` iteration order, which is not
-    guaranteed deterministic.
-    """
     for family in families:
         if fnmatch.fnmatch(filename, FAMILY_GLOBS[family]):
             return family
@@ -88,15 +67,6 @@ def _classify(filename: str, families: frozenset[str]) -> str | None:
 
 
 def discover(repo_root: str | Path, families: Iterable[str] = ALL_FAMILIES) -> list[Suite]:
-    """Walk `repo_root` and return every classified `Suite`, venv-excluded.
-
-    `families` restricts classification to a subset (defaults to all four).
-    Directory pruning (DEC-2) happens in-place on `os.walk`'s `dirs` list
-    before it descends, so an excluded subtree's contents are never even
-    listed — not a post-hoc filter applied to already-discovered paths.
-
-    Results are sorted by (family, path) for deterministic output ordering.
-    """
     root = Path(repo_root)
     wanted = frozenset(families)
     suites: list[Suite] = []

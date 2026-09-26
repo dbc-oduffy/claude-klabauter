@@ -1,15 +1,3 @@
-"""
-Tests for coordinator_core.resolve_coordinator_clone — native CLI-mode peer.
-
-Port of: resolve-coordinator-clone.sh (DoE 290997c7, 2026-07-22)
-
-Covers: the dev-vs-oss mode selector (passthrough / explicit / marker
-auto-discovery / ambiguity), the 5-rung clone-root ladder, the 7-rung
-content-root ladder, the durable-then-legacy .doe-root pointer read, the
-numeric-compare versioned-cache picker, and the CLI wrapper's exit codes.
-
-Spec backlink: pln-claude-klabauter-pure-python-shop-retire-0f8aee § C11/C2
-"""
 
 from __future__ import annotations
 
@@ -35,8 +23,6 @@ def _clear_env(monkeypatch):
 
 @pytest.fixture
 def isolated_home(monkeypatch, tmp_path):
-    """No pointer file, no registry, no OSS install, no dev marker anywhere --
-    the "nothing resolvable" baseline each test builds on top of."""
     _clear_env(monkeypatch)
     home = tmp_path / "home"
     home.mkdir()
@@ -44,9 +30,6 @@ def isolated_home(monkeypatch, tmp_path):
     monkeypatch.setattr(rcc, "_registry_doe_claude", lambda: None)
     monkeypatch.setattr(rcc, "_registry_live_path", lambda: None)
     return home
-
-
-# --- _resolve_source_mode ---------------------------------------------------
 
 
 def test_mode_passthrough_git_ops_on_coordinator_clone(isolated_home, monkeypatch):
@@ -81,10 +64,6 @@ def test_mode_no_source_found_fails_loud(isolated_home):
 
 
 def test_mode_no_source_found_carries_no_source_found_flag(isolated_home):
-    """Bug row 2b3bb4f1938a: this is the ONE terminal case a caller
-    (`coordinator_core.ops.coordinator_doe_root._resolve_via_clone_root_script`)
-    must be able to tell apart from a genuinely actionable failure -- see
-    `ResolveCoordinatorCloneError.__init__`'s own docstring."""
     with pytest.raises(rcc.ResolveCoordinatorCloneError) as exc_info:
         rcc._resolve_source_mode("git-ops")
     assert exc_info.value.no_source_found is True
@@ -126,18 +105,6 @@ def test_mode_dev_marker_present_resolves_dev_even_with_oss(isolated_home, monke
 
 
 def test_mode_flat_layout_unmarked_no_manifest_resolves_dev(isolated_home):
-    """Falsifying case for the codename-free defect: registry unreachable,
-    pointer empty, and the flat `~/.claude/plugins/coordinator-claude`
-    layout present WITHOUT a `.claude-plugin/plugin.json` marketplace
-    manifest (e.g. a raw git checkout dropped at the flat path) and WITHOUT
-    a `.coordinator-dev-repo` dev marker, but WITH the published manifest
-    relpath present (B6 review fix, 2026-08-08 -- the rung now requires
-    `.git/` or the manifest as evidence of an actual coordinator tree, not
-    mere directory existence; see `test_mode_flat_layout_bare_empty_dir_...`
-    for the negative case this test previously conflated with). Previously
-    this fell through every rung and raised "no coordinator source found"
-    even though a perfectly good coordinator root sat right there. Must
-    still resolve instead of raising."""
     flat = isolated_home / ".claude" / "plugins" / "coordinator-claude"
     (flat / "schemas").mkdir(parents=True)
     (flat / "schemas" / "coordinator-registry.manifest.json").write_text("{}")
@@ -145,12 +112,6 @@ def test_mode_flat_layout_unmarked_no_manifest_resolves_dev(isolated_home):
 
 
 def test_mode_flat_layout_bare_empty_dir_fails_loud(isolated_home):
-    """B6 review fix (2026-08-08): mere directory existence at the flat path
-    -- no `.git/`, no manifest, no marketplace marker, no dev marker -- is
-    NOT evidence of a coordinator tree (an interrupted install, a
-    `rm -rf <dir>/*` leftover, or a user-created placeholder all produce
-    this shape). Must fail loud with the actionable "no coordinator source
-    found ... run coordinator:install" message, not silently resolve "dev"."""
     flat = isolated_home / ".claude" / "plugins" / "coordinator-claude"
     flat.mkdir(parents=True)
     with pytest.raises(rcc.ResolveCoordinatorCloneError, match="no coordinator source found"):
@@ -158,23 +119,12 @@ def test_mode_flat_layout_bare_empty_dir_fails_loud(isolated_home):
 
 
 def test_clone_root_flat_unmarked_no_manifest_resolves(isolated_home):
-    """Same defect, exercised end-to-end through resolve_clone_root(): an
-    OSS box with no registry, no pointer, no dev marker, and a flat clone
-    with `.git` but no marketplace manifest now resolves the flat clone
-    instead of raising "no coordinator source found"."""
     flat = isolated_home / ".claude" / "plugins" / "coordinator-claude"
     (flat / ".git").mkdir(parents=True)
     assert rcc.resolve_clone_root() == str(flat)
 
 
 def test_mode_registry_ranks_above_pointer_file(isolated_home, monkeypatch, tmp_path):
-    """DR-071: registry `repos.doe_claude` must be tried BEFORE the `.doe-root`
-    pointer file in the marker auto-discovery candidate ladder (inverted
-    2026-07-22 from the prior pointer-first order). The registry candidate
-    here does not exist on disk (unresolvable), while the pointer candidate
-    would resolve cleanly with a dev marker IF it were consulted — proving
-    the registry rung wins the race, not merely that "a" candidate resolves.
-    """
     monkeypatch.setattr(rcc, "_registry_doe_claude", lambda: str(tmp_path / "registry-nonexistent"))
     monkeypatch.setattr(rcc, "_registry_live_path", lambda: None)
     pointer_candidate = tmp_path / "pointer-candidate"
@@ -210,9 +160,6 @@ def test_mode_ambiguous_does_not_carry_no_source_found_flag(isolated_home, monke
     with pytest.raises(rcc.ResolveCoordinatorCloneError) as exc_info:
         rcc._resolve_source_mode("git-ops")
     assert exc_info.value.no_source_found is False
-
-
-# --- resolve_clone_root ------------------------------------------------------
 
 
 def test_clone_root_dev_env_var_must_have_git(isolated_home, monkeypatch, tmp_path):
@@ -254,9 +201,6 @@ def test_clone_root_fail_loud_when_nothing_resolves(isolated_home, monkeypatch):
     monkeypatch.setattr(rcc, "_read_doe_root_pointer", lambda: "")
     with pytest.raises(rcc.ResolveCoordinatorCloneError, match="no git-backed coordinator clone found"):
         rcc.resolve_clone_root()
-
-
-# --- resolve_content_root ----------------------------------------------------
 
 
 def test_content_root_passthrough_plugin_root(isolated_home, monkeypatch, tmp_path):
@@ -304,9 +248,6 @@ def test_content_root_fail_loud_when_nothing_resolves(isolated_home, monkeypatch
         rcc.resolve_content_root()
 
 
-# --- _newest_cache_dir numeric-compare ---------------------------------------
-
-
 def test_newest_cache_numeric_not_lexicographic(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
     cache_parent = tmp_path / ".claude" / "plugins" / "cache" / "coordinator-claude" / "coordinator"
@@ -318,9 +259,6 @@ def test_newest_cache_numeric_not_lexicographic(monkeypatch, tmp_path):
 def test_newest_cache_none_when_absent(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
     assert rcc._newest_cache_dir() is None
-
-
-# --- _read_doe_root_pointer: durable-first, legacy-fallback ------------------
 
 
 def test_pointer_durable_wins_over_legacy(monkeypatch, tmp_path):
@@ -351,21 +289,10 @@ def test_pointer_empty_when_neither_present(isolated_home):
     assert rcc._read_doe_root_pointer() == ""
 
 
-# --- _registry_live_path: no-subprocess common path (2026-07-28 fix) ---------
-#
-# Spec backlink: hot-path-spawn defect — `_registry_live_path` was CLI-only
-# (`machine-local get plugin.mirrors.coordinator-claude.live_path`), so every
-# `resolve_content_root()` call on a machine with `machine-local` on PATH
-# spawned a subprocess (~80ms warm) on this rung even though it sits on the
-# COMMON path (rung 3 of 7 in `resolve_content_root`), not a last resort. See
-# `_registry_live_path`'s own docstring for the narrative; these tests assert
 # the fix by BEHAVIOUR (spawn count), not timing, since timing is flaky.
 
 
 def test_registry_live_path_resolves_without_subprocess(monkeypatch):
-    """The common case: `registry_get` resolves the key directly (tomllib,
-    no subprocess) -- `_machine_local_get`/`subprocess.run` must never be
-    reached."""
     monkeypatch.setattr(
         rcc, "registry_get", lambda key: "/from-registry-toml" if key == "plugin.mirrors.coordinator-claude.live_path" else None
     )
@@ -373,20 +300,12 @@ def test_registry_live_path_resolves_without_subprocess(monkeypatch):
     def _fail_if_called(*args, **kwargs):  # pragma: no cover - only reached on regression
         raise AssertionError("subprocess.run must not be called when registry_get resolves the key")
 
-    # `_machine_local_get` (the CLI-fallback rung) is now the shared,
-    # R4-repointed helper in coordinator_core._claude_klabauter_root, not a local copy
-    # -- patch ITS subprocess reference, not rcc's (rcc no longer imports
-    # subprocess at all after the repoint).
     monkeypatch.setattr(_claude_klabauter_root_mod.subprocess, "run", _fail_if_called)
 
     assert rcc._registry_live_path() == "/from-registry-toml"
 
 
 def test_registry_live_path_falls_back_to_cli_when_registry_get_empty(monkeypatch):
-    """Genuine fallback: `registry_get` can't resolve the key (e.g. present
-    under `machine-local`'s CLI-managed state but not yet mirrored into the
-    TOML files) -- the CLI subprocess rung still fires and its result is
-    used."""
     monkeypatch.setattr(rcc, "registry_get", lambda key: None)
     monkeypatch.setattr(rcc, "_machine_local_get", lambda key: "/from-cli-fallback")
 
@@ -394,13 +313,6 @@ def test_registry_live_path_falls_back_to_cli_when_registry_get_empty(monkeypatc
 
 
 def test_resolve_content_root_common_path_spawns_no_subprocess(monkeypatch, tmp_path):
-    """End-to-end: a dev-mode `resolve_content_root()` resolution that lands
-    on the registry-live-path rung must not spawn any subprocess. Monkeypatch
-    the spawn primitive `subprocess.run` itself (not timing) -- this is the
-    behavioural assertion the workstream asked for. Deliberately does NOT use
-    the `isolated_home` fixture, which stubs `_registry_live_path` to a
-    constant `None` -- this test needs the REAL `_registry_live_path` (and
-    its now-cheap `registry_get` rung) exercised end to end."""
     _clear_env(monkeypatch)
     home = tmp_path / "home"
     home.mkdir()
@@ -415,14 +327,9 @@ def test_resolve_content_root_common_path_spawns_no_subprocess(monkeypatch, tmp_
     def _fail_if_called(*args, **kwargs):  # pragma: no cover - only reached on regression
         raise AssertionError("resolve_content_root must not spawn a subprocess on the common path")
 
-    # See test_registry_live_path_resolves_without_subprocess above: the
-    # fallback subprocess now lives in the shared _claude_klabauter_root helper.
     monkeypatch.setattr(_claude_klabauter_root_mod.subprocess, "run", _fail_if_called)
 
     assert rcc.resolve_content_root() == str(live)
-
-
-# --- CLI wrapper --------------------------------------------------------------
 
 
 def test_main_usage_error_wrong_arg_count(capsys):

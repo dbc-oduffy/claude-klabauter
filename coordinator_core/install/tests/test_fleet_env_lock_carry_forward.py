@@ -40,9 +40,6 @@ def _write_sources(tmp_path, rows):
 
 
 def test_strict_mode_still_fails_on_a_missing_source(tmp_path, monkeypatch):
-    """Default (``carry_forward_unresolvable=False``) behavior must be
-    byte-for-byte unchanged: an unresolvable source row raises, exactly as
-    it did before this parameter existed."""
     sources = _write_sources(tmp_path, [{"repo": "ghost_repo", "manifest": "pyproject.toml"}])
     monkeypatch.setattr(fleet_env_lock, "registry_get", lambda key: None)
 
@@ -51,8 +48,6 @@ def test_strict_mode_still_fails_on_a_missing_source(tmp_path, monkeypatch):
 
 
 def test_run_strict_mode_still_fails_on_a_missing_source(tmp_path, monkeypatch):
-    """Same guarantee through the public ``run()`` entry point (the one the
-    CLI calls without the flag)."""
     sources = _write_sources(tmp_path, [{"repo": "ghost_repo", "manifest": "pyproject.toml"}])
     out = tmp_path / "fleet-env-requirements.in"
     monkeypatch.setattr(fleet_env_lock, "registry_get", lambda key: None)
@@ -63,9 +58,6 @@ def test_run_strict_mode_still_fails_on_a_missing_source(tmp_path, monkeypatch):
 
 
 def test_carry_forward_reuses_exactly_the_tagged_lines(tmp_path, monkeypatch):
-    """A source whose repo is unresolvable gets its lines reused verbatim
-    from the existing committed .in — not re-parsed from any manifest, and
-    not altered in any way (same spec string, same provenance)."""
     sources = _write_sources(
         tmp_path,
         [
@@ -110,14 +102,10 @@ def test_carry_forward_reuses_exactly_the_tagged_lines(tmp_path, monkeypatch):
     assert ("requests>=2.31", "resolvable_repo:pyproject.toml") in pairs
     assert ("pandas>=2.2", "ghost_repo:engine/pyproject.toml") in pairs
     assert ("transformers>=4.41", "ghost_repo:engine/pyproject.toml") in pairs
-    # The unrelated source's line must not leak in under the wrong provenance.
     assert not any(spec.startswith("unrelated") for spec, _ in pairs)
 
 
 def test_carry_forward_notice_names_each_carried_source(tmp_path, monkeypatch, capsys):
-    """The notice is loud (printed, not just logged internally) and names
-    every carried source individually — never a silent drop, never a silent
-    carry."""
     sources = _write_sources(
         tmp_path,
         [
@@ -153,9 +141,6 @@ def test_carry_forward_notice_names_each_carried_source(tmp_path, monkeypatch, c
 
 
 def test_carry_forward_without_an_existing_in_file_fails_loud(tmp_path, monkeypatch):
-    """Carry-forward has nothing to carry from on a fresh checkout with no
-    committed .in yet — that must fail loud, not silently emit zero specs
-    for the unresolvable source."""
     sources = _write_sources(tmp_path, [{"repo": "ghost_repo", "manifest": "pyproject.toml"}])
     missing_in = tmp_path / "does-not-exist.in"
     monkeypatch.setattr(fleet_env_lock, "registry_get", lambda key: None)
@@ -169,8 +154,6 @@ def test_carry_forward_without_an_existing_in_file_fails_loud(tmp_path, monkeypa
 
 
 def test_banned_package_blocks_requirements_in_generation(tmp_path, monkeypatch):
-    """A source still declaring a banned package must fail ``run()`` before
-    any file is written — the ban holds regardless of carry-forward mode."""
     sources = _write_sources(tmp_path, [{"repo": "bad_repo", "manifest": "pyproject.toml"}])
     repo_root = tmp_path / "bad_repo"
     repo_root.mkdir()
@@ -188,9 +171,6 @@ def test_banned_package_blocks_requirements_in_generation(tmp_path, monkeypatch)
 
 
 def test_banned_package_blocks_lock_generation_even_if_not_in_requirements_in(tmp_path, monkeypatch):
-    """The ban also fires against the resolved lock's package list, not just
-    the requirements input — catching a banned package pulled in transitively
-    by something that isn't itself banned."""
     req_in = tmp_path / "fleet-env-requirements.in"
     req_in.write_text("foo>=1  # some_repo:pyproject.toml\n", encoding="utf-8")
     overrides = tmp_path / "fleet-env-overrides.toml"

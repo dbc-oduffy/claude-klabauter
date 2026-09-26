@@ -78,17 +78,7 @@ CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "NotebookEdit"]
 PRIORITY = 20
 
-#: Escape hatch.
 _OVERRIDE_ENV = "COORDINATOR_OVERRIDE_ILLEGAL_FILENAME"
-
-# NOTE: the basename-legality predicate (formerly a private inline
-# ``_csn_check`` port here) now lives in
-# ``coordinator_core.bash_guards._helpers.csn_check`` -- the shared port both
-# this Write/Edit leg and the (W3b) Bash leg of block-illegal-filename.sh
-# consume, closing the "one shared helper, not two" gap flagged by the W3a
-# recipe (bash-to-python-migration/W3a-preuse-bash-recipe.md, Summary item 2).
-# Imported above under its original local name (``_csn_check``) so every call
-# site below is unchanged.
 
 
 def _basename(path: str) -> str:
@@ -102,9 +92,6 @@ def _basename(path: str) -> str:
 
 
 def _safe_suggestion(raw_name: str) -> str:
-    """Port of ``make_deny_msg``'s safe-suggestion pipeline:
-    ``tr ':?*<>|"\\/' '-' | tr -s '-' | sed 's/^-//; s/-$//' | sed 's/[. ]*$//'``
-    """
     illegal = ':?*<>|"\\/'
     translated = "".join("-" if c in illegal else c for c in raw_name)
     squeezed = re.sub(r"-+", "-", translated)
@@ -117,9 +104,6 @@ def _safe_suggestion(raw_name: str) -> str:
 def _make_deny_msg(
     raw_name: str, illegal_char_hint: str, payload: Optional[Dict[str, Any]] = None
 ) -> str:
-    """Port of ``make_deny_msg``, byte-for-byte reason text (design-as-offers:
-    leads with the safe alternative).
-    """
     safe_suggestion = _safe_suggestion(raw_name)
     _note = operator_override_note(_OVERRIDE_ENV, payload=payload)
     return (
@@ -142,9 +126,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not isinstance(tool_input, dict):
             return None
 
-        # Reliable arm reads ONLY tool_input.file_path for all three matched
-        # tool names — including NotebookEdit, whose real field is
-        # notebook_path (see module negative-spec).
         file_path = tool_input.get("file_path") or ""
         if not file_path:
             return None
@@ -167,8 +148,5 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         }
     except Exception:
-        # Unexpected processing error (malformed payload/missing field) fails
-        # open — NOT a directory/path-shape exemption (this guard is
         # Class-3 fail-closed for genuinely-illegal basenames; INTERFACE.md
-        # fidelity rule 6 covers guard-crash isolation only).
         return None

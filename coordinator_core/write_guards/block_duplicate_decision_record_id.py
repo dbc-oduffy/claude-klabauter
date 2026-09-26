@@ -68,14 +68,13 @@ from coordinator_core.write_guards._case_fold_path import casefold_path
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
-PRIORITY = 137  # hard-deny band; next free slot after guard_memory_store_cap (136)
+PRIORITY = 137
 
 _DECISIONS_PATH_RE = re.compile(r"(?:^|[/\\])docs[/\\]decisions[/\\][^/\\]+\.md$", re.IGNORECASE)
 _ID_LINE_RE = re.compile(r"^id:\s*(.+?)\s*$")
 
 
 def _extract_frontmatter_id(content: str) -> Optional[str]:
-    """Return the `id:` value from `content`'s leading `---` frontmatter block, or None."""
     lines = content.split("\n")
     if not lines or lines[0].strip() != "---":
         return None
@@ -96,13 +95,6 @@ def _apply_edit(content: str, old_string: str, new_string: str) -> Tuple[str, bo
 
 
 def _prospective_id(tool_name: str, tool_input: dict, abs_file_path: str) -> Optional[str]:
-    """Return the `id:` the write would leave on disk, or None if undeterminable.
-
-    Mirrors `validate_frontmatter_schema_deny._compute_content_to_probe`'s
-    per-tool reconstruction (Write: raw content; Edit/MultiEdit: apply the
-    edit(s) onto the file's current on-disk text) — see module docstring for
-    why this is a narrow local copy rather than a shared import.
-    """
     if tool_name == "Write":
         return _extract_frontmatter_id(tool_input.get("content") or "")
 
@@ -134,11 +126,6 @@ def _prospective_id(tool_name: str, tool_input: dict, abs_file_path: str) -> Opt
 
 
 def _sibling_holding_id(directory: Path, target_id: str, exclude: Path) -> Optional[Path]:
-    """Return the path of a sibling `.md` file already claiming `target_id`, or None.
-
-    `exclude` is never scanned (the file this write itself targets) — an
-    Edit that leaves its own id untouched must never collide with itself.
-    """
     try:
         entries = list(directory.iterdir())
     except OSError:
@@ -147,12 +134,6 @@ def _sibling_holding_id(directory: Path, target_id: str, exclude: Path) -> Optio
         try:
             if not entry.is_file() or entry.suffix.lower() != ".md":
                 continue
-            # Casefolded on BOTH sides: this is the self-exclusion check, and
-            # on a case-insensitive-but-case-preserving filesystem (macOS APFS,
-            # Windows) `docs/Decisions/DR-1.md` and `docs/decisions/DR-1.md`
-            # resolve to two unequal strings naming ONE file. Unfolded, the file
-            # being edited fails to exclude itself and the guard reports the
-            # record as a duplicate of itself — a false block on a legal edit.
             if casefold_path(str(entry.resolve())) == casefold_path(str(exclude.resolve())):
                 continue
         except OSError:
@@ -202,7 +183,5 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         }
     except Exception:
-        # Unexpected processing error fails open — this guard denies only on a
         # POSITIVELY OBSERVED sibling collision, never on its own inability to
-        # read/parse something (see module docstring's negative-spec).
         return None

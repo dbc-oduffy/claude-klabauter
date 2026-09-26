@@ -33,9 +33,6 @@ def _stamp_engine_root(root):
     (stamp_dir / "_engine_stamp").write_text("sha:deadbeef\n", encoding="utf-8")
 
 
-# --- (a) route -------------------------------------------------------------
-
-
 def test_install_door_off_windows_never_calls_windows_build(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
 
@@ -84,7 +81,6 @@ def test_install_door_off_windows_raises_doorinstallerror_on_missing_toolchain(t
     with pytest.raises(door_install.DoorInstallError, match="no C compiler"):
         door_install.install_door(bin_dst, engine_root)
 
-    # A failed door_install() must not have created the destination file.
     assert not (bin_dst / door_install.DOOR_INSTALLED_NAME).exists()
 
 
@@ -123,9 +119,6 @@ def test_install_door_on_windows_route_unchanged(tmp_path, monkeypatch):
     assert dest == bin_dst / door_install.DOOR_INSTALLED_NAME
 
 
-# --- (b) blast radius --------------------------------------------------------
-
-
 def test_write_native_door_forwarder_degrades_on_doorinstallerror(tmp_path, monkeypatch):
     engine_root = tmp_path / "engine"
     _stamp_engine_root(engine_root)
@@ -147,7 +140,7 @@ def test_write_native_door_forwarder_degrades_on_doorinstallerror(tmp_path, monk
         "some-tool", bin_dst, check_only=False, engine_root=engine_root
     )
 
-    assert result is None  # degraded, not raised -- caller falls back to the Python pair
+    assert result is None
 
 
 def test_write_native_door_forwarder_degrades_on_systemexit(tmp_path, monkeypatch):
@@ -218,31 +211,15 @@ def test_write_agent_helper_forwarders_continues_past_a_build_failure(tmp_path, 
 
     agent_helper_target_map = {"alpha": "alpha_target", "beta": "beta_target"}
 
-    # Every name's cutover raises, so every name is recorded as `failed` and
-    # the run must still raise (non-zero exit contract) -- but it must not
-    # abort mid-loop: both names are attempted.
     with pytest.raises(substrate.SubstrateFatalError):
         substrate._write_agent_helper_forwarders(
             agent_helper_target_map, bin_dst, check_only=False, engine_root=tmp_path / "engine",
         )
 
-    # `_cut_over_to_native_door`
-    # raises before `_write_agent_forwarder` is ever called here, so
-    # `_write_agent_forwarder` must NOT have been reached for either name;
-    # this pins what this test actually proves (loop continuation), not the
-    # fallback write itself.
     assert written_py == []
 
 
 def test_write_agent_helper_forwarders_writes_python_fallback_on_real_build_failure(tmp_path, monkeypatch):
-    """Integration companion
-    to the test above, exercising the REAL `_cut_over_to_native_door` ->
-    `_write_native_door_forwarder` call chain (only
-    `door_install.install_named_forwarder` is mocked, to raise
-    `DoorInstallError` the way a missing POSIX toolchain does) and asserting
-    the degraded name's Python forwarder pair actually lands on disk --
-    the claim the docstring above makes but its own monkeypatching of
-    `_cut_over_to_native_door` never exercised."""
     engine_root = tmp_path / "engine"
     _stamp_engine_root(engine_root)
     bin_dst = tmp_path / "bin"

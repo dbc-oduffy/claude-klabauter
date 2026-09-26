@@ -47,27 +47,11 @@ from coordinator_core.session import liveness
 pytestmark = pytest.mark.cadence
 
 
-# ---------------------------------------------------------------------------
-# Site 1: coordinator_core/bash_guards/_blanket_disarm.py -- `_cache`
-# ---------------------------------------------------------------------------
-
-
 def test_blanket_disarm_cache_does_not_fail_open_past_expiry():
-    """C4 -- `_cache` is now keyed `(settings_home, marker stat_key, session_id,
-    is_em)`, and `disarm_status()` re-checks a cache HIT's own `expires_at`
-    against the live wall clock before trusting it. A verdict cached before
-    expiry, whose own `expires_at` has since passed, is re-evaluated rather
-    than replayed -- even though the marker's on-disk stat is unchanged (so
-    the stat-key half of the cache key alone would still have hit). Pinned
-    directly against the module's `_cache` dict (not through the marker-file
-    parsing path) so this test does not depend on
-    `bash_guards/tests/test_blanket_disarm.py`'s autouse fixture that clears
-    `_cache`.
-    """
     _blanket_disarm._cache.clear()
     try:
         session_id = "warm-c2-session-a"
-        is_em = True  # payload with no agent_id/type resolves is_em=True
+        is_em = True
         home = _blanket_disarm.settings_home()
         stat_key = _blanket_disarm._marker_stat_key(home / _blanket_disarm.MARKER_BASENAME)
         cache_key = (str(home), stat_key, session_id, is_em)
@@ -82,17 +66,10 @@ def test_blanket_disarm_cache_does_not_fail_open_past_expiry():
         result = _blanket_disarm.disarm_status({"session_id": session_id})
 
         # FIXED BEHAVIOUR (C4): a cache hit whose own expires_at has passed
-        # is re-evaluated live, not replayed -- the fail-open defect this
-        # test used to pin is closed.
         assert result.active is False
         assert result is not already_expired
     finally:
         _blanket_disarm._cache.clear()
-
-
-# ---------------------------------------------------------------------------
-# Site 2: coordinator_core/ops/deliverable_equivalence.py -- the four memos
-# ---------------------------------------------------------------------------
 
 
 def _write_ledger_artifact(root: Path, rows: list[dict]) -> None:
@@ -111,9 +88,6 @@ def _write_ledger_artifact(root: Path, rows: list[dict]) -> None:
 
 
 def test_load_deliverable_ledger_serves_each_roots_own_ledger(tmp_path):
-    """C5 -- same `(worktree_root, artifact mtime)` memo shape as
-    `load_equivalence_map`, one level down: `load_deliverable_ledger` now
-    keeps each root's own rows, not the first root's for every later root."""
     deliverable_equivalence._reset_deliverable_ledger_cache()
     try:
         root_a = tmp_path / "root_a"
@@ -139,18 +113,12 @@ def test_load_deliverable_ledger_serves_each_roots_own_ledger(tmp_path):
 
 
 def test_ledger_artifact_readable_serves_each_roots_own_verdict(tmp_path):
-    """C5 -- `_ledger_artifact_readable` now memoizes its True/False verdict
-    per `(worktree_root, artifact mtime)`: a second root whose artifact is
-    BROKEN gets its own False, independent of an earlier root's True."""
     deliverable_equivalence._reset_deliverable_ledger_cache()
     try:
         root_a = tmp_path / "root_a"
         root_b = tmp_path / "root_b"
         root_a.mkdir()
         root_b.mkdir()
-        # root_a: no artifact at all -> readable (True is the documented
-        # "steady state before the ledger exists" answer).
-        # root_b: present but unparsable -> should be False on its own.
         state_dir_b = root_b / "state"
         state_dir_b.mkdir(parents=True)
         (state_dir_b / "deliverable-equivalence.yaml").write_text(
@@ -162,7 +130,6 @@ def test_ledger_artifact_readable_serves_each_roots_own_verdict(tmp_path):
 
         assert readable_a is True
         # FIXED BEHAVIOUR (C5): root_b's broken artifact reads False on its
-        # own merits, unaffected by root_a's True.
         assert readable_b is False
     finally:
         deliverable_equivalence._reset_deliverable_ledger_cache()
@@ -201,8 +168,6 @@ def test_ledger_validated_flag_still_validates_a_second_roots_ledger(tmp_path):
         )
         assert len(deliverable_equivalence._DELIVERABLE_LEDGER_VALIDATED) == 1
 
-        # root_b's ledger row is malformed (non-string deliverable_id) --
-        # validate_deliverable_ledger_rows raises on it.
         state_dir_b = root_b / "state"
         state_dir_b.mkdir(parents=True)
         (state_dir_b / "deliverable-equivalence.yaml").write_text(
@@ -211,19 +176,12 @@ def test_ledger_validated_flag_still_validates_a_second_roots_ledger(tmp_path):
         )
 
         # FIXED BEHAVIOUR (C5): root_b's own key is not yet in the VALIDATED
-        # set, so validation runs and raises loudly rather than being
-        # silently skipped because root_a already validated once.
         with pytest.raises(deliverable_equivalence.DeliverableLedgerValidationError):
             deliverable_equivalence.dual_read_deliverable_id(
                 root_b, str(root_b / "b.md"), {}, read_frontmatter_field=_no_frontmatter
             )
     finally:
         deliverable_equivalence._reset_deliverable_ledger_cache()
-
-
-# ---------------------------------------------------------------------------
-# Site 3: coordinator_core/contract/apply_base.py -- session_identity()
-# ---------------------------------------------------------------------------
 
 
 def test_session_identity_does_not_cross_contaminate_under_interleave():
@@ -250,9 +208,6 @@ def test_session_identity_does_not_cross_contaminate_under_interleave():
     def _session_a():
         with apply_base.session_identity("session-A"):
             entered_a.set()
-            # Give session B a chance to overlap and (if the old
-            # os.environ-writing behaviour still existed) overwrite the
-            # ambient environment before A reads its own identity back.
             b_done.wait(timeout=5)
             observed_inside_a["COORDINATOR_SESSION_ID"] = apply_base.current_session_env().get(
                 "COORDINATOR_SESSION_ID"
@@ -274,12 +229,7 @@ def test_session_identity_does_not_cross_contaminate_under_interleave():
         thread_b.join(timeout=5)
 
         # FIXED BEHAVIOUR (C6): session A's own contextvar-scoped identity is
-        # unaffected by session B's overlapping block -- no cross-context
-        # contamination.
         assert observed_inside_a["COORDINATOR_SESSION_ID"] == "session-A"
-        # And the ambient os.environ was never written at all -- neither
-        # session crossed the one seam (`_mirror_session_env_for_subprocess`)
-        # that legitimately mirrors into it.
         for var in apply_base.SESSION_ENV_VARS:
             assert os.environ.get(var) is None
     finally:
@@ -291,9 +241,6 @@ def test_session_identity_does_not_cross_contaminate_under_interleave():
 
 
 def test_mirror_session_env_for_subprocess_scoped_to_one_call(monkeypatch):
-    """C6 -- `_mirror_session_env_for_subprocess` is the ONE seam that still
-    touches `os.environ`, and only for the duration of the `with` block it
-    wraps, restoring (or deleting) the prior value immediately after."""
     import os
 
     monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
@@ -303,14 +250,8 @@ def test_mirror_session_env_for_subprocess_scoped_to_one_call(monkeypatch):
         assert os.environ.get("COORDINATOR_SESSION_ID") is None
         with apply_base._mirror_session_env_for_subprocess():
             assert os.environ.get("COORDINATOR_SESSION_ID") == "session-mirror-test"
-        # Restored immediately after the one call the mirror wraps.
         assert os.environ.get("COORDINATOR_SESSION_ID") is None
     assert os.environ.get("COORDINATOR_SESSION_ID") is None
-
-
-# ---------------------------------------------------------------------------
-# Site 4: coordinator_core/session/liveness.py -- `_registry_snapshot_cache`
-# ---------------------------------------------------------------------------
 
 
 def test_registry_snapshot_cache_serves_within_ttl_not_for_process_lifetime(monkeypatch):
@@ -339,9 +280,6 @@ def test_registry_snapshot_cache_serves_within_ttl_not_for_process_lifetime(monk
         second_lookup_of_new_sid = liveness._cached_registry_lookup("sid-second")
 
         assert first == {"pid": 111}
-        # Within the same TTL window, a session that registered after the
-        # first snapshot was cached is still not yet visible -- this is the
-        # documented "at most TTL seconds stale" behaviour, not a defect.
         assert calls["n"] == 1
         assert second_lookup_of_new_sid is None
     finally:
@@ -372,7 +310,6 @@ def test_registry_snapshot_cache_re_fetches_after_ttl_expiry(monkeypatch):
         assert first == {"pid": 111}
         assert calls["n"] == 1
 
-        # Simulate the TTL having elapsed without sleeping in the test.
         liveness._registry_snapshot_cache_at -= liveness._REGISTRY_SNAPSHOT_TTL_SEC + 0.01
 
         second_lookup_of_new_sid = liveness._cached_registry_lookup("sid-second")
@@ -384,9 +321,7 @@ def test_registry_snapshot_cache_re_fetches_after_ttl_expiry(monkeypatch):
         liveness._registry_snapshot_cache_at = None
 
 
-# ---------------------------------------------------------------------------
 # Site 5: coordinator_core/ops/gate_dimension_latency.py -- `_REENTRANCY_GUARD`
-# ---------------------------------------------------------------------------
 
 
 def test_reentrancy_guard_isolates_unrelated_concurrent_dispatches(monkeypatch):
@@ -419,9 +354,6 @@ def test_reentrancy_guard_isolates_unrelated_concurrent_dispatches(monkeypatch):
     thread_a.start()
     entered.wait(timeout=5)
 
-    # A genuinely unrelated, concurrent dispatch (a different thread, so a
-    # different Context) arrives on the main thread while A is still
-    # mid-flight holding its own guard. It must NOT be treated as re-entrant.
     monkeypatch.setattr(gate_dimension_latency, "_load_op_inventory", lambda: [])
     result_b = gate_dimension_latency._check_latency([], None, None)
     assert result_b.verdict == gate_dimension_latency.Verdict.UNAVAILABLE
@@ -433,12 +365,6 @@ def test_reentrancy_guard_isolates_unrelated_concurrent_dispatches(monkeypatch):
 
 
 def test_reentrancy_guard_still_detects_genuine_same_context_nesting(monkeypatch):
-    """C8 companion -- the property C8 had to preserve: a GENUINE re-entrant
-    call (the latency check calling back into itself from within the SAME
-    Context, e.g. a bug in `_load_op_inventory`) must still raise. A
-    ContextVar read/write is scoped to the current Context, and a
-    synchronous nested call runs in that same Context, so within-context
-    re-entry detection is unaffected by the C8 fix."""
     gate_dimension_latency._REENTRANCY_GUARD.set(False)
     try:
 
@@ -455,17 +381,7 @@ def test_reentrancy_guard_still_detects_genuine_same_context_nesting(monkeypatch
         gate_dimension_latency._REENTRANCY_GUARD.set(False)
 
 
-# ---------------------------------------------------------------------------
-# Site 6: coordinator_core/bash_guards/dispatch_checks.py -- `_git_probe_deadline`
-# ---------------------------------------------------------------------------
-
-
 def test_git_probe_deadline_not_shared_across_interleaved_dispatches():
-    """C8 -- `_git_probe_deadline` is now a `contextvars.ContextVar`, armed/
-    disarmed by `_arm_git_probe_deadline`/`_disarm_git_probe_deadline` per
-    Context. A second, interleaved dispatch (a different thread here) arming
-    its own generous budget does NOT resurrect a first dispatch's exhausted
-    probe budget, because each dispatch's Context holds its own deadline."""
     dispatch_checks._git_probe_deadline.set(None)
     try:
         dispatch_checks._arm_git_probe_deadline(budget=0.001)
@@ -473,8 +389,6 @@ def test_git_probe_deadline_not_shared_across_interleaved_dispatches():
         assert dispatch_checks._git_probe_budget_spent() is True
 
         # A second, interleaved dispatch, in a DIFFERENT Context (thread),
-        # arms its own generous budget while the first dispatch's exhausted
-        # budget is still logically live in its own Context.
         second_dispatch_result: dict[str, object] = {}
 
         def _second_dispatch():
@@ -487,27 +401,13 @@ def test_git_probe_deadline_not_shared_across_interleaved_dispatches():
         thread.join(timeout=5)
 
         # FIXED BEHAVIOUR (C8): the second dispatch's own generous budget is
-        # not spent in its own Context...
         assert second_dispatch_result["spent"] is False
-        # ...and the first dispatch's already-exhausted budget in ITS OWN
-        # Context is unaffected by the second dispatch's arm.
         assert dispatch_checks._git_probe_budget_spent() is True
     finally:
         dispatch_checks._disarm_git_probe_deadline()
 
 
-# ---------------------------------------------------------------------------
-# Site 7: coordinator_core/_hook_envelope.py -- `_capture_sink`
-# ---------------------------------------------------------------------------
-
-
 def test_capture_session_does_not_cross_contaminate_under_interleave():
-    """C8 -- `capture_session()` now scopes `_capture_sink` in a
-    `contextvars.ContextVar` (default `None`), not a plain module-level list
-    swap. Two overlapping `capture_session()` blocks (two interleaved
-    measurement passes, here two threads -- each its own default Context)
-    each keep their own sink; a record `_record`-ed from within session A's
-    block lands in session A's sink, never session B's."""
     _hook_envelope._capture_sink.set(None)
 
     a_entered = threading.Event()
@@ -524,8 +424,6 @@ def test_capture_session_does_not_cross_contaminate_under_interleave():
             a_entered.set()
             b_entered.wait(timeout=5)
             a_may_record.wait(timeout=5)
-            # Session A records AFTER session B has already entered (and
-            # overwritten the shared global) but before B has exited.
             _hook_envelope._record("builder_a", {"from": "session_a"})
         a_done.set()
 
@@ -545,34 +443,24 @@ def test_capture_session_does_not_cross_contaminate_under_interleave():
     thread_b.join(timeout=5)
 
     # FIXED BEHAVIOUR (C8): session A's record lands in its OWN sink, not
-    # session B's -- each Context's ContextVar is independent.
     assert ("builder_a", {"from": "session_a"}) in sink_a_holder["sink"]
     assert sink_b_holder["sink"] == []
 
 
-# ---------------------------------------------------------------------------
 # Site 8: coordinator_core/hooks/track_touched_files.py -- `_MAX_FILE_LOCKS`
-# ---------------------------------------------------------------------------
 
 
 def test_file_lock_eviction_is_held_aware(monkeypatch, tmp_path):
-    """C9 -- `_get_lock`'s cap eviction now consults `lock.locked()` and
-    never evicts a currently-HELD entry, regardless of table size. Under a
-    warm process this means a lock a peer dispatch is actively holding
-    survives past the cap, so two dispatches for the SAME path still
-    serialize on the SAME `asyncio.Lock` object."""
     track_touched_files._FILE_LOCKS.clear()
     original_max = track_touched_files._MAX_FILE_LOCKS
     track_touched_files._MAX_FILE_LOCKS = 4
-    # Stale-sweep never fires: every path's directory "exists".
     monkeypatch.setattr(track_touched_files.os.path, "isdir", lambda _p: True)
     try:
         held_path = str(tmp_path / "touched-oldest.txt")
         lock_first_seen = track_touched_files._get_lock(held_path)
         assert lock_first_seen.locked() is False
-        lock_first_seen._warm_c2_marker = True  # identity tag for the assertion below
+        lock_first_seen._warm_c2_marker = True
 
-        # Simulate a second dispatch actively holding that lock right now.
         async def _acquire():
             await lock_first_seen.acquire()
 
@@ -581,19 +469,13 @@ def test_file_lock_eviction_is_held_aware(monkeypatch, tmp_path):
         asyncio.run(_acquire())
         assert lock_first_seen.locked() is True
 
-        # Fill the table past its cap with unrelated paths from OTHER
-        # interleaved dispatches -- the held path must survive eviction.
         for i in range(track_touched_files._MAX_FILE_LOCKS + 1):
             track_touched_files._get_lock(str(tmp_path / f"other-{i}.txt"))
 
         # FIXED BEHAVIOUR (C9): the held entry survives -- unrelated UNHELD
-        # entries are evicted to make room instead, keeping the table at
-        # (not past) the cap since unheld candidates were available.
         assert held_path in track_touched_files._FILE_LOCKS
         assert len(track_touched_files._FILE_LOCKS) == track_touched_files._MAX_FILE_LOCKS
 
-        # A later dispatch asking for the SAME path gets the SAME, still-held
-        # Lock object -- serialization is preserved.
         lock_second_request = track_touched_files._get_lock(held_path)
 
         assert lock_second_request is lock_first_seen
@@ -604,11 +486,7 @@ def test_file_lock_eviction_is_held_aware(monkeypatch, tmp_path):
         track_touched_files._MAX_FILE_LOCKS = original_max
 
 
-# ---------------------------------------------------------------------------
 # Site 9: coordinator_core/engine_root.py -- CLAUDE_KLABAUTER_ROOT process-memoization
-# (staff-eng review finding 8; state/lessons/2026-07-06-tri-plane-read-ops-
-# must-process-memoize.yaml)
-# ---------------------------------------------------------------------------
 
 
 def test_engine_root_gate_memo_keys_per_interleaved_session_root(
@@ -635,7 +513,7 @@ def test_engine_root_gate_memo_keys_per_interleaved_session_root(
             return tmp_path
 
         def _registry_value(self, _ml_dir, _key):
-            return "some/published/mirror"  # truthy -> full-gate branch
+            return "some/published/mirror"
 
         def _session_repo_root(self):
             return current_session_root["root"]
@@ -658,12 +536,10 @@ def test_engine_root_gate_memo_keys_per_interleaved_session_root(
     assert calls["n"] == 2
     assert result_b1[0] == "/repo/session-b"
 
-    # Back to session A's root -- the per-root-keyed memo hits.
     current_session_root["root"] = "/repo/session-a"
     result_a2 = engine_root.coordinator_engine_root_with_class()
 
     # FIXED BEHAVIOUR (C10): session A's second call hits its own still-valid
-    # memo entry rather than recomputing -- no third gate walk.
     assert calls["n"] == 2
     assert result_a2[0] == "/repo/session-a"
 

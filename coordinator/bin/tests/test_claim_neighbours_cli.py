@@ -1,25 +1,3 @@
-"""Tests for coordinator/bin/claim-neighbours.
-
-Plan: docs/plans/2026-08-16-trace-a-claim-back-to-its-session.md, chunk C4.
-
-Loads the extensionless CLI via SourceFileLoader (same convention as
-test_chunk_commits_forwarder_cwd.py) and drives its real `main()` in
-process — never a spawned interpreter (CLAUDE.md's machine-load-norm
-note). Each test builds a REAL git repo under `tmp_path` and writes
-`touched.txt`/claim-marker files under that repo's own
-`.git/coordinator-sessions/` (what `core.sessions_dir()` resolves to for a
-non-worktree repo) rather than passing a synthetic `sessions_dir=` override
-— this CLI's `main()` takes no such override (bare paths + the caller's
-real cwd is its whole contract), so the fixture must be a real repo for
-`core.sessions_dir(cwd)` to resolve at all.
-
-Liveness and (for the raising-lookup case) `claim_index.lookup` are
-monkeypatched on the REAL `coordinator_core.session.liveness` /
-`coordinator_core.session.claim_index` module objects — the CLI re-imports
-them by name on every `main()` call, from the same `sys.modules` cache, so
-patching the real module object is what the CLI's own local import picks
-up.
-"""
 
 from __future__ import annotations
 
@@ -125,7 +103,6 @@ def test_path_with_no_claimant_is_printed_distinctly(cli_module, tmp_path, monke
     out = capsys.readouterr().out
     assert "no claimant" in out
     assert "some/untouched/path.py" in out
-    # "checked, nobody" must never render identically to "could not answer".
     assert "cannot determine" not in out
 
 
@@ -228,5 +205,4 @@ def test_multiple_paths_dedupe_across_separator_dialects(cli_module, tmp_path, m
 
     assert exit_code == cli_module._EXIT_OK
     out = capsys.readouterr().out
-    # The overlap for peer-sid must be reported once, not twice.
     assert out.count("peer-sid") == 1

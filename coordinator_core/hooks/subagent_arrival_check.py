@@ -126,29 +126,16 @@ from coordinator_core.hooks._payload import field
 
 _ARRIVAL_STOP_REASONS = frozenset({"end_turn", "stop_sequence"})
 
-# Fixed module constant, not a per-call parameter — see the calibration basis in
-# the module docstring above and "Moving it is a measurement change" there. No
-# caller may override this; the 0.31% false-arrival residual at 120s is a
-# property of THIS default, not of the op, and a caller-supplied override would
-# hand any single caller a way to defeat the streaming-race protection.
 _DEBOUNCE_SECONDS = 120
 
-# EM-side canonical dispatch id: "<name>@session-<short8>". The name charset is
-# the intersection of what the harness puts in an agent name and what the caller's
-# own id guard admits before a row ever reaches this op.
 _EM_CANONICAL_ID_RE = re.compile(r"^(?P<name>[A-Za-z0-9._-]+)@session-(?P<short>[0-9a-fA-F]{8})$")
 
 _TAIL_CHUNK_BYTES = 8192
-_TAIL_MAX_CHUNKS = 32  # bounds the tail read at ~256KB from EOF
+_TAIL_MAX_CHUNKS = 32
 _TAIL_CAP_BYTES = _TAIL_MAX_CHUNKS * _TAIL_CHUNK_BYTES
 
 
 def _derive_subagent_transcript_path(transcript_path: str, agent_id: str) -> str:
-    """dirname(transcript_path)/stem(transcript_path)/subagents/agent-<agent_id>.jsonl
-
-    Pure string/path derivation — this is the ONE place path shape lives; callers
-    (DoE) must not derive or open this path themselves.
-    """
     directory = os.path.dirname(transcript_path)
     basename = os.path.basename(transcript_path)
     stem, _, _ext = basename.rpartition(".")
@@ -157,15 +144,6 @@ def _derive_subagent_transcript_path(transcript_path: str, agent_id: str) -> str
 
 
 def _is_path_safe_agent_id(agent_id: str) -> bool:
-    """False for any id that would steer the direct derivation out of the subagents dir.
-
-    The direct derivation drops `agent_id` into a filename component verbatim, so a
-    separator or a `..` segment inside it escapes the directory — `../../x` derives
-    `subagents/agent-../../x.jsonl`, which normalizes outside. The caller's own id
-    guard already rejects those bytes, but this op must not inherit its safety from a
-    caller it does not control: an id like this resolves to "unknown", never to a read
-    of whatever the traversal landed on.
-    """
     if not agent_id or "\x00" in agent_id:
         return False
     if "/" in agent_id or "\\" in agent_id or os.sep in agent_id:
@@ -174,23 +152,6 @@ def _is_path_safe_agent_id(agent_id: str) -> bool:
 
 
 def _resolve_subagent_transcript_path(transcript_path: str, agent_id: str) -> str:
-    """Resolve `agent_id` to a real subagent transcript path, across both id namespaces.
-
-    Order:
-        1. The direct derivation (`_derive_subagent_transcript_path`). If that file
-           exists, use it — the bare-hex / already-subagent-side case, unchanged.
-        2. If `agent_id` is the EM-side canonical form `<name>@session-<short8>`,
-           probe the subagents directory for `agent-a<name>-<16 hex>.jsonl`.
-        3. Otherwise (and on any probe failure) return the direct derivation, so the
-           caller's "absent, unreadable, or empty" reason names a concrete path and
-           the state stays "unknown" — no-information, never inferred arrival; what
-           the caller does with that is caller policy.
-
-    Never raises. Never builds a path out of `agent_id`'s own bytes beyond step 1's
-    single filename component: the probe filters `os.listdir` results against a
-    regex, so a traversal-shaped name matches nothing rather than escaping the
-    directory.
-    """
     direct = _derive_subagent_transcript_path(transcript_path, agent_id)
     if os.path.isfile(direct):
         return direct
@@ -220,10 +181,6 @@ def _resolve_subagent_transcript_path(transcript_path: str, agent_id: str) -> st
         else:
             filename_only.append(candidate)
 
-    # A sidecar-confirmed match beats a filename-only one; within either tier the
-    # newest file wins, because a name re-dispatched inside one session yields two
-    # files whose canonical ids are byte-identical — the EM-side form carries
-    # nothing to tell them apart, and the newest is the dispatch being nudged.
     pool = sidecar_confirmed or filename_only
     if not pool:
         return direct
@@ -238,14 +195,6 @@ def _mtime_or_zero(path: str) -> float:
 
 
 def _sidecar_identifies(transcript_candidate: str, name: str, team_name: str) -> bool:
-    """True when `<candidate>.meta.json` names this teammate AND this session team.
-
-    The sidecar is written next to every subagent transcript and carries the two
-    fields that reconstruct the canonical id exactly (`name`, `teamName`), so a
-    confirmed sidecar removes the guesswork a bare filename match leaves. Absent,
-    unreadable, or non-conforming sidecar -> False (candidate demoted to the
-    filename-only tier, never discarded).
-    """
     sidecar = transcript_candidate[: -len(".jsonl")] + ".meta.json"
     try:
         with open(sidecar, "r", encoding="utf-8", errors="replace") as fh:
@@ -302,13 +251,6 @@ def _read_last_nonempty_line(path: str) -> tuple[str | None, bool]:
                 fh.seek(pos)
                 buf = fh.read(read_size) + buf
                 chunks_read += 1
-                # b"\n".rstrip(b"\n") only strips a
-                # trailing run of pure newline bytes; a trailing blank line carrying any
-                # other whitespace (e.g. "...}\n   \n") left an embedded \n from the
-                # record/blank-line delimiter, which falsely satisfied this check and
-                # truncated the real last record mid-read. Stripping trailing whitespace
-                # generally (not just b"\n") before checking for an embedded newline
-                # closes that gap without changing behavior for the pure-newline case.
                 if b"\n" in buf.rstrip():
                     found_newline = True
                     break

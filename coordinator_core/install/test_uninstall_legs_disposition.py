@@ -1,11 +1,3 @@
-"""
-coordinator_core.install.test_uninstall_legs_disposition — tests for the
-honest uninstall disposition report (Rule 1 / Rule 2 total-function
-coverage).
-
-Spec backlink: pln-writer-declared-write-surface-49d3bd,
-    chunk C8
-"""
 
 from __future__ import annotations
 
@@ -105,14 +97,8 @@ class TestClassifyEntryDisposition:
         assert record.disposition == DISPOSITION_REVERSED
 
     def test_none_end_marker_on_rc_block_is_not_forced_either(self):
-        # The prior version passed
         # attempted_ok=False and asserted DISPOSITION_CANNOT_SAFELY, which
-        # is exactly what the ordinary (unforced) path already produces for
-        # attempted_ok=False -- it could not distinguish "not forced by
-        # Rule 2" from "would have landed there anyway." Using
-        # attempted_ok=True (matching the sibling hook-gate-region test)
         # actually proves non-forcing: DISPOSITION_REVERSED would be
-        # impossible here if Rule 2 accidentally forced rc-block+None too.
         entry = _entry(kind="rc-block", path="~/.bashrc", begin_marker="# begin", end_marker=None)
         record = classify_entry_disposition(entry, attempted_ok=True, reason="stripped")
         assert record.disposition == DISPOSITION_REVERSED
@@ -173,11 +159,6 @@ class TestBuildDispositionReportTotalCoverage:
         report.assert_total_coverage()
 
     def test_manually_constructed_bad_disposition_fails_total_coverage(self):
-        """A DispositionRecord's own __post_init__ rejects a bad disposition
-        value outright, so total-coverage failure is mechanically
-        unreachable via this constructor — assert that guard fires instead,
-        which is the same "no entry silently dropped" property enforced one
-        layer earlier."""
         from coordinator_core.install.uninstall_legs import DispositionRecord
 
         with pytest.raises(ValueError):
@@ -204,8 +185,6 @@ class TestRenderDispositionReport:
         assert "reversed" in text
 
     def test_entry_label_falls_back_to_begin_marker(self):
-        """Finding 5, P3: an entry with no key/path but a begin_marker must
-        not degrade into an unidentifiable `<kind entry>` line."""
         entry = _entry(
             kind="hook-gate-region",
             path=None,
@@ -244,11 +223,6 @@ class TestRenderUninstallDryRunReport:
         assert "no install receipt found" in text
 
     def test_populated_receipt_renders_dispositions_without_attempting(self):
-        # A plain git-config-key
-        # entry is exactly what a real run WOULD reverse, so it must land
-        # in the "reversed" bucket (with "would reverse" reason text), not
-        # "deliberately-not-reversed" — the prior assertion proved the bug
-        # this fix corrects.
         receipt = InstallReceipt(
             entries=(
                 ReceiptEntry(writer_id="w", kind="git-config-key", key="gc.autoDetach"),
@@ -262,11 +236,6 @@ class TestRenderUninstallDryRunReport:
         assert "deliberately-not-reversed (0):" in text
 
     def test_would_reverse_and_genuinely_deliberate_render_distinguishably(self):
-        """render_disposition_report(dry_run=True) must render a
-        would-reverse entry (attempted_ok=True, the dry-run-preview
-        proposal) and a genuinely-deliberate entry (attempted_ok=None, a
-        named policy decision) into visibly different buckets/reasons —
-        the exact distinction Finding 1 says the prior code collapsed."""
         would_reverse = classify_entry_disposition(
             _entry(kind="git-config-key", key="gc.autoDetach"),
             attempted_ok=True,
@@ -284,7 +253,6 @@ class TestRenderUninstallDryRunReport:
         assert "deliberately-not-reversed (1):" in text
         assert "gc.autoDetach" in text
         assert "/some/doe-claude/checkout" in text
-        # the two entries land in different buckets, not the same one
         assert would_reverse.disposition != genuinely_deliberate.disposition
 
     def test_marker_rule_2_override_still_fires_in_preview(self):
@@ -358,8 +326,6 @@ class TestOrchestrateUninstallDryRunWiring:
 
 
 class TestLoadInstallReceiptReadSide:
-    """C3 (docs/research/2026-08-06-install-receipt-persistence-design.md)
-    — `_load_install_receipt` wired to `receipt.load_receipt` for real."""
 
     def _isolate_settings_home(self, monkeypatch, tmp_path):
         for var in ("CLAUDE_HOME", "HOME", "USERPROFILE"):
@@ -369,7 +335,6 @@ class TestLoadInstallReceiptReadSide:
         monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
 
     def test_absent_receipt_preserves_honest_unknown(self, monkeypatch, tmp_path):
-        # A machine that has never installed: no receipt file on disk at all.
         self._isolate_settings_home(monkeypatch, tmp_path)
         assert uninstall_legs._load_install_receipt() is None
         text = render_uninstall_dry_run_report(uninstall_legs._load_install_receipt())
@@ -400,10 +365,6 @@ class TestLoadInstallReceiptReadSide:
 
 
 class TestUnreportedWriterRendersAsCoverageUnknown:
-    """C3 negative spec: an unreported writer must render distinguishably
-    from a writer that reported and wrote nothing — it belongs alongside
-    'would reverse' and 'deliberately-not-reversed' as a third
-    distinguishable outcome, never collapsing into either."""
 
     def test_unreported_writer_is_not_rendered_as_empty_or_nothing_to_remove(self):
         receipt = InstallReceipt(
@@ -427,9 +388,6 @@ class TestUnreportedWriterRendersAsCoverageUnknown:
         assert "cannot-reverse-safely (1):" in text
 
     def test_three_way_distinguishability_would_reverse_deliberate_unknown(self):
-        """The three real outcomes -- would reverse, deliberately not
-        reversed, coverage unknown for this writer -- must each render
-        distinguishably in one report."""
         would_reverse = classify_entry_disposition(
             _entry(kind="git-config-key", key="gc.autoDetach"),
             attempted_ok=True,
@@ -454,7 +412,6 @@ class TestUnreportedWriterRendersAsCoverageUnknown:
         assert "gc.autoDetach" in text
         assert "/some/doe-claude/checkout" in text
         assert "configure_git" in text
-        # all three land in genuinely different buckets
         dispositions = {
             would_reverse.disposition,
             genuinely_deliberate.disposition,
@@ -463,12 +420,6 @@ class TestUnreportedWriterRendersAsCoverageUnknown:
         assert len(dispositions) == 3
 
     def test_unreported_writer_placeholder_carries_synthetic_marker(self, monkeypatch):
-        """A consumer of
-        `report.records` that inspects `.entry` directly (bypassing reason
-        text) needs a structural signal this record is a fabricated
-        stand-in, not a genuine declared surface. A hand-built real entry
-        (same kind/path shape) must NOT set the marker -- only
-        `render_uninstall_dry_run_report`'s own placeholder does."""
         assert _entry(kind="file-path", path="<writer:configure_git>").synthetic is False
 
         seen_entries = []
@@ -506,21 +457,7 @@ class TestUnreportedWriterRendersAsCoverageUnknown:
         assert "did not report" in text
 
 
-# ---------------------------------------------------------------------------
-# C6 — `uninstall_reverse_git_config_group`: net-new git-config reversal
-# leg, honouring unset-as-a-unit. Spec backlink:
-# docs/plans/2026-08-07-git-help-browser-settings-shape.md § C6
-#
-# Every test stubs the git subprocess seam (`config_get`/`config_unset`
-# injected callables) -- none touches this machine's real git config, and
-# no test runs `git config --global`/`--unset` against the real
-# environment.
-# ---------------------------------------------------------------------------
-
-# Derived from the production declaration, never restated. A local copy would
 # let a reorder of configure_git._SETTINGS silently change the leg's unset
-# order while every test below stayed green -- and that order is the whole
-# safety property (see test_declaration_order_is_the_safe_unset_order).
 HELP_BROWSER_SETTINGS = tuple(
     s for s in configure_git._SETTINGS if s.unset_group == "help-browser"
 )
@@ -540,7 +477,6 @@ def test_declaration_order_is_the_safe_unset_order():
 
 
 class _FakeGitStore:
-    """An in-memory stand-in for a git config store, keyed on (scope, key)."""
 
     def __init__(self, initial):
         self._store = dict(initial)
@@ -557,9 +493,9 @@ class _FakeGitStore:
         scope = tuple(scope)
         self.unset_calls.append((scope, key))
         if self.fail_on_key == key:
-            return 1  # generic non-recoverable failure
+            return 1
         if (scope, key) not in self._store:
-            return 5  # already absent in this scope -- success
+            return 5
         del self._store[(scope, key)]
         return 0
 
@@ -596,20 +532,11 @@ class TestUninstallReverseGitConfigGroup:
         ]
 
     def test_scope_flag_omitted_run_never_classifies_as_reversed(self):
-        """Constraint 1 (SCOPE) — the leg must always thread the record's
-        own declared scope through to both `config_get`/`config_unset`,
-        never omit it: `git config --unset` with no scope flag defaults to
-        LOCAL, which is not the scope the help-browser triple was written
-        to, so a missing scope flag combined with the exit-5-is-success
-        rule could otherwise misreport a still-stranded global key as
-        `reversed`. Assert every call this leg makes carries the declared
-        `"--global"` scope -- the structural guarantee that makes the
-        false-positive combination unreachable."""
         calls = []
 
         def spy_unset(scope, key):
             calls.append(tuple(scope))
-            return 5  # already absent -- success, IF the scope was declared
+            return 5
 
         def matching_get(scope, key):
             setting = next(s for s in HELP_BROWSER_SETTINGS if s.key == key)
@@ -631,12 +558,6 @@ class TestUninstallReverseGitConfigGroup:
         assert all(r.disposition == DISPOSITION_REVERSED for r in records)
 
     def test_no_prefix_strands_web_browser_without_noop_cmd(self):
-        """DoE ruling (Ask 2, cross-repo/inbox/2026-08-07-doe-claude-em-
-        configure-git-per-key-scope-ruled-a.md): no prefix of the reversal
-        sequence may leave `web.browser=noop` set without
-        `browser.noop.cmd` also set -- that combination makes git print
-        "unknown browser" and fall through to the operator's real default
-        browser, worse than either end state."""
         for prefix_len in range(0, len(HELP_BROWSER_SETTINGS) + 1):
             store = _fully_configured_store()
             for setting in HELP_BROWSER_SETTINGS[:prefix_len]:
@@ -654,14 +575,13 @@ class TestUninstallReverseGitConfigGroup:
     def test_exit_5_in_declared_scope_is_success(self):
         store = _FakeGitStore(
             {
-                # web.browser already absent -- simulates exit 5.
                 (("--global",), "browser.noop.cmd"): "echo not-opening-browser-for:",
             }
         )
         records = uninstall_reverse_git_config_group(
             "help-browser",
-            settings=(HELP_BROWSER_SETTINGS[1],),  # web.browser only
-            config_get=lambda scope, key: "noop",  # value-match gate passes
+            settings=(HELP_BROWSER_SETTINGS[1],),
+            config_get=lambda scope, key: "noop",
             config_unset=store.unset,
         )
         assert len(records) == 1
@@ -677,16 +597,14 @@ class TestUninstallReverseGitConfigGroup:
             config_get=store.get,
             config_unset=store.unset,
         )
-        assert records[0].disposition == DISPOSITION_REVERSED  # help.format
-        assert records[1].disposition == DISPOSITION_CANNOT_SAFELY  # web.browser (failed)
-        assert records[2].disposition == DISPOSITION_CANNOT_SAFELY  # browser.noop.cmd (aborted)
+        assert records[0].disposition == DISPOSITION_REVERSED
+        assert records[1].disposition == DISPOSITION_CANNOT_SAFELY
+        assert records[2].disposition == DISPOSITION_CANNOT_SAFELY
         assert records[2].manual_command is not None
-        # the aborted member was never even attempted.
         assert (("--global",), "browser.noop.cmd") not in store.unset_calls
 
     def test_value_match_skip_does_not_abort_group(self):
         store = _fully_configured_store()
-        # Operator hand-modified web.browser -- value-match SKIP, not a failure.
         store._store[(("--global",), "web.browser")] = "firefox"
         records = uninstall_reverse_git_config_group(
             "help-browser",
@@ -694,9 +612,9 @@ class TestUninstallReverseGitConfigGroup:
             config_get=store.get,
             config_unset=store.unset,
         )
-        assert records[0].disposition == DISPOSITION_REVERSED  # help.format
-        assert records[1].disposition == DISPOSITION_DELIBERATE  # web.browser SKIP
-        assert records[2].disposition == DISPOSITION_REVERSED  # browser.noop.cmd -- group continues
+        assert records[0].disposition == DISPOSITION_REVERSED
+        assert records[1].disposition == DISPOSITION_DELIBERATE
+        assert records[2].disposition == DISPOSITION_REVERSED
         assert (("--global",), "browser.noop.cmd") in store.unset_calls
 
     def test_assert_total_coverage_holds_with_group_bearing_entries(self):
@@ -708,17 +626,12 @@ class TestUninstallReverseGitConfigGroup:
             config_get=store.get,
             config_unset=store.unset,
         )
-        report = build_disposition_report(records)  # raises on non-total coverage
+        report = build_disposition_report(records)
         assert len(report.records) == 3
         report.assert_total_coverage()
 
 
 class TestUninstallStripCmdAutorunLeg:
-    """C-gap-close: composes `strip_cmd_autorun_guard` into
-    `uninstall_strip_cmd_autorun`/`orchestrate_uninstall`. Never touches a
-    real HKCU hive — monkeypatches `strip_cmd_autorun_guard` itself, the
-    same mocked seam `test_cmd_autorun_guard.py` establishes one layer
-    down."""
 
     def test_success_returns_true(self, monkeypatch):
         import coordinator_core.ops.cmd_autorun_guard as cmd_autorun_guard
@@ -775,9 +688,6 @@ class TestUninstallStripCmdAutorunLeg:
 
 
 class TestOrchestrateUninstallCmdAutorunComposition:
-    """Verifies the AutoRun leg is actually composed into
-    `orchestrate_uninstall`'s ordered sequence with fail-loud semantics,
-    and is skipped entirely (never called) on the `--dry-run` path."""
 
     def _stub_other_legs_ok(self, monkeypatch):
         monkeypatch.setattr(uninstall_legs, "uninstall_strip_settings_hooks", lambda *a, **kw: True)

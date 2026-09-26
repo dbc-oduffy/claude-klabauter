@@ -34,20 +34,6 @@ from coordinator_core.review_trail.records import (
 
 @functools.lru_cache(maxsize=None)
 def _resolved_root(root_str: str) -> Path:
-    """Cache ``Path(root_str).resolve()`` — the Win32 ``_getfinalpathname`` cost.
-
-    2026-08-08 load-norm C3/lever-2: ``_relativize_path`` used to re-resolve the
-    (invariant, per-emission) root on every call — once per review-trail record,
-    ~3,000 redundant ``nt._getfinalpathname`` syscalls that bought nothing, since
-    the root never changes within a single ``collect()`` walk (or across the whole
-    process, which is spawn-per-call, not resident). Caching by the *unresolved*
-    root string is semantically identical to always resolving fresh: symlinks,
-    junctions, UNC paths and case-insensitive comparison are all still honoured —
-    ``Path.resolve()`` still runs, exactly once per distinct root string, and its
-    result is reused rather than its syscalls repeated. The per-*filepath* resolve
-    below is untouched (each file is a distinct real path and must still be
-    resolved individually for the same symlink/junction correctness reasons).
-    """
     return Path(root_str).resolve()
 
 
@@ -106,12 +92,6 @@ def _list_review_trail_paths(ctx: EmitContext) -> list[str]:
 
 
 def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
-    """Build ReviewTrail records + quarantine list (parity: bash SECTION 3 heredoc).
-
-    Delegates per-file validation to ``_validate_review_trail_file`` from ``_shared`` so
-    the quarantine rules (verdict set, timestamp format, required fields) stay in sync with
-    ``rollups._review_trail_facts``.
-    """
     paths = _list_review_trail_paths(ctx)
 
     valid_records: list[dict] = []

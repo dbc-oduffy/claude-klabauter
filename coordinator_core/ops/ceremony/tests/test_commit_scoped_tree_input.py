@@ -45,8 +45,6 @@ def test_staged_path_resolves_verbatim_from_index_snapshot():
 
 def test_staged_deletion_lands_in_absent_set_not_tree_input():
     # Path resolves _SOURCE_STAGED (diverged) but has no index entry --
-    # staged for deletion. Must be explicit ABSENT, never silently dropped
-    # and never resurrected via a HEAD spine fallback.
     resolution = {"gone.txt": _SOURCE_STAGED}
     index_snapshot: dict = {}
     head_spine = {"": {"gone.txt": (0o100644, _SHA_A)}}
@@ -60,11 +58,6 @@ def test_staged_deletion_lands_in_absent_set_not_tree_input():
 
 
 def test_worktree_deleted_path_is_absent_even_with_a_live_index_entry():
-    # The sibling above infers the deletion from a MISSING index entry, which
-    # is right when the index is the authority. It is wrong for a path deleted
-    # on disk whose index entry still stands: that entry gets written back and
-    # the caller's requested removal silently does not happen. `worktree_deleted`
-    # is the caller stating the deletion rather than leaving it to be inferred.
     resolution = {"gone.txt": _SOURCE_STAGED}
     index_snapshot = {"gone.txt": IndexEntry(mode=0o100644, sha=_SHA_A, stage=0)}
     head_spine = {"": {"gone.txt": (0o100644, _SHA_A)}}
@@ -81,8 +74,6 @@ def test_worktree_deleted_path_is_absent_even_with_a_live_index_entry():
 
 
 def test_worktree_deleted_default_leaves_the_index_entry_authoritative():
-    # Same inputs, no `worktree_deleted` -- prior behaviour exactly, so the
-    # parameter is additive and no existing caller changes shape.
     resolution = {"gone.txt": _SOURCE_STAGED}
     index_snapshot = {"gone.txt": IndexEntry(mode=0o100644, sha=_SHA_A, stage=0)}
 
@@ -106,8 +97,6 @@ def test_worktree_path_mode_prefers_index_over_head_spine():
         worktree_blobs={"foo.txt": _SHA_C},
     )
 
-    # sha comes from the caller-supplied worktree blob, mode from the index
-    # entry (higher precedence than the HEAD spine).
     assert tree_input == {"foo.txt": ("100755", _SHA_C)}
     assert absent == set()
 

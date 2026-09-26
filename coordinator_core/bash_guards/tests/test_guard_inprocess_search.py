@@ -67,8 +67,6 @@ def _payload(command: str, cwd: str, **extra_tool_input) -> dict:
 
 @pytest.fixture(autouse=True)
 def _fixed_answer(monkeypatch):
-    """Every command in this module reaches `_footer()` unconditionally --
-    the search engine's own answer text is not under test here."""
     monkeypatch.setattr(
         "coordinator_core.search.answer.answer",
         lambda command, cwd=".": "ANSWERED-TEXT",
@@ -77,16 +75,11 @@ def _fixed_answer(monkeypatch):
 
 @pytest.fixture
 def repo(tmp_path):
-    """A plain-clone `.git` directory (the ordinary-clone leg of
-    `resolve_git_common_dir`) so the latch has somewhere real to land."""
     (tmp_path / ".git").mkdir()
     return tmp_path
 
 
 def _answered_context(result: dict) -> str:
-    """Return the composed answer text from a successfully-answered `check()`
-    result. Reads `additionalContext` off the `rewrite_input` shape -- the
-    2026-08-13 success channel -- never `permissionDecisionReason`."""
     return result["hookSpecificOutput"]["additionalContext"]
 
 
@@ -107,10 +100,6 @@ class TestSessionLatchDedupesTheParagraph:
         assert guard._ANSWERED_MARKER in reason
 
     def test_every_answered_call_carries_an_already_handled_signal(self, repo, monkeypatch):
-        """First, second, and Nth calls all carry SOME unambiguous
-        already-handled signal -- never a bare rewrite with no framing at all
-        (the module docstring's "deny here means ALREADY HANDLED, not
-        refused" contract)."""
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-latch-3")
         reasons = [
             _answered_context(guard.check(_payload("grep %d foo.py" % i, str(repo))))
@@ -130,9 +119,6 @@ class TestSessionLatchDedupesTheParagraph:
         assert "recognized as a search" in _answered_context(result)
 
     def test_marker_survives_spawn_per_call_reinvocation(self, repo, monkeypatch):
-        """The latch is disk state, not an in-process cache -- calling
-        `_footer` directly (simulating a fresh process reading the same
-        marker `check()` wrote) still sees it latched."""
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-latch-spawn")
         guard.check(_payload("grep foo bar.py", str(repo)))
         assert guard._footer(str(repo)) == guard._ANSWERED_MARKER
@@ -165,8 +151,6 @@ class TestFailsOpenTowardTheFullParagraph:
         assert "recognized as a search" in _answered_context(result)
 
     def test_unwritable_marker_parent_fails_open_never_raises(self, repo, monkeypatch):
-        """A latch WRITE failure (read-only `.git`, MinGit permissions) must
-        never crash the hook -- `_footer` degrades to the full paragraph."""
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-latch-unwritable")
         monkeypatch.setattr(
             guard,
@@ -206,9 +190,6 @@ class TestHelpers:
 
 
 class TestPowerShellDialectStaysBashOnly:
-    """Row 21, `docs/reference/guard-dialect-coverage.md` -- disposition is
-    "stay bash-only (c), declare SILENT", by design, not bigger-than-sized
-    fixed. Never delegates to `search.answer` for a PowerShell command."""
 
     def test_powershell_command_returns_none_and_records_silent(self, repo):
         payload = {
@@ -261,22 +242,12 @@ class TestDenyVersusSubstitutionContract:
         assert not reason.startswith("[Denied")
 
     def test_latched_marker_states_the_contract_independently(self):
-        """The short latched form, taken alone (never composed with
-        `check()`), must carry the same distinction as the full paragraph --
-        this is the framing an agent gets on every call after the first in a
-        session. Fails against the old bare `"[answered in-process]"` marker,
-        which named the mechanism but not the deny-versus-substitution
-        contract at all."""
         assert "Answered in-process" in guard._ANSWERED_MARKER
         assert "no subprocess spawned" in guard._ANSWERED_MARKER
         assert guard._ANSWERED_MARKER != "[answered in-process]"
         assert not guard._ANSWERED_MARKER.startswith("[Denied")
 
     def test_latched_marker_contract_precedes_rendered_results(self, repo, monkeypatch):
-        """Second-call (latched) composed payload: the marker's contract
-        statement must precede the rendered results, mirroring the
-        first-call ordering requirement above. Fails against the old
-        `rendered + footer` composition regardless of marker wording."""
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-contract-latched")
         guard.check(_payload("grep foo bar.py", str(repo)))
         second = guard.check(_payload("grep baz qux.py", str(repo)))
@@ -311,11 +282,6 @@ class TestSuccessNeverShipsAsError:
         assert "additionalContext" in hso
 
     def test_successful_answer_rewrites_command_to_a_no_op(self, repo, monkeypatch):
-        """The real command never runs -- `updatedInput.command` is replaced
-        with `true` (a real, PATH-resolvable coreutils no-op -- not the shell
-        builtin `:`, which `_alternative_liveness.py`'s guard-message-liveness
-        gate flags DEAD since it has no on-PATH binary), preserving the
-        "no subprocess spawned" claim under the new envelope."""
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-success-noop")
         result = guard.check(_payload("grep foo bar.py", str(repo)))
         updated_input = result["hookSpecificOutput"]["updatedInput"]
@@ -333,8 +299,6 @@ class TestSuccessNeverShipsAsError:
         assert updated_input["description"] == "find foo in bar.py"
 
     def test_multiple_answered_calls_in_a_session_never_use_deny(self, repo, monkeypatch):
-        """Not just the first call -- every answered call in a session,
-        latched marker or full paragraph, stays off the deny channel."""
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-success-multi")
         for i in range(3):
             result = guard.check(_payload("grep %d foo.py" % i, str(repo)))

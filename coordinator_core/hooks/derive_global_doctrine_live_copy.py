@@ -75,12 +75,6 @@ def _artifact_at(root: Path) -> Optional[Path]:
 
 
 def _resolve_doctrine_repo_root() -> Optional[Path]:
-    """Locate the coordinator-claude doctrine-plane repo ROOT -- one level
-    up from the CONTENT root every other ported hook's plugin-root probe
-    resolves -- by probing for `.coordinator-dev-repo` at each rung. Returns
-    `None` on a miss at every rung; the caller's `_is_dev_repo()` then
-    returns False and every derivation no-ops. See module docstring's
-    "Repo-root resolution" section."""
     import os
 
     env_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
@@ -119,13 +113,6 @@ def _live_path() -> Path:
 
 
 def _display_path(path: Path, repo_root: Optional[Path] = None) -> str:
-    """Render `path` for a note/advisory reader without leaking the
-    operator's absolute home directory or checkout location -- collapses to
-    `~/...` when `path` sits under `Path.home()`, to a repo-relative form
-    when `repo_root` is given and `path` sits under it, native absolute
-    otherwise. Mirrors `hooks/support/message_envelope.py::_render_resolved`'s
-    same home-collapse convention (that helper is private to its own module,
-    so this is a small local equivalent, not a cross-module import)."""
     try:
         relative = path.relative_to(Path.home())
         return f"~/{relative.as_posix()}" if relative.parts else "~"
@@ -175,10 +162,6 @@ def _is_dev_repo(repo_root: Optional[Path]) -> bool:
 
 
 def _derive_live_copy(tracked: Path, live: Path, notes: "list[str]", repo_root: Optional[Path] = None) -> bool:
-    """Read/compare/write for one mirrored pair. Appends a note to `notes`
-    only when a real derivation happened or a failure occurred (matches the
-    source's silent-when-synced contract); returns True on any failure
-    (fail-loud signal for the caller's overall advisory)."""
     display = _display_path(live) if repo_root is None else _display_path(live, repo_root)
     try:
         source_bytes = tracked.read_bytes()
@@ -206,17 +189,13 @@ def _derive_live_copy(tracked: Path, live: Path, notes: "list[str]", repo_root: 
 
 
 def evaluate(payload: dict):
-    """Pure core: given a parsed PostToolUse(Write|Edit|MultiEdit) OR
-    SessionStart payload, performs whichever derivations the event/path
-    imply and returns the joined advisory `Message`, or `None` for a silent
-    no-op (gate failed, already in sync, or unrecognized payload shape)."""
     if not isinstance(payload, dict):
         return None
 
     repo_root = _resolve_doctrine_repo_root()
     if not _is_dev_repo(repo_root):
         return None
-    assert repo_root is not None  # _is_dev_repo(None) is False, above
+    assert repo_root is not None
 
     hook_event_name = payload.get("hook_event_name")
     if not isinstance(hook_event_name, str):
@@ -290,10 +269,6 @@ def evaluate(payload: dict):
 
 @register_op("hooks.derive_global_doctrine_live_copy")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PostToolUse(Write|Edit|MultiEdit) AND SessionStart op: re-derive the
-    live global CLAUDE.md/rules mirror and the in-plugin published copy from
-    their tracked coordinator-claude-repo sources, when drifted and this
-    process resolves a dev checkout (OSS-clobber gate, fail-closed)."""
     params = payload_of(params)
     message = evaluate(params)
     if message is None:

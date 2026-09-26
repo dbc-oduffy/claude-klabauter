@@ -1,40 +1,3 @@
-"""
-coordinator_core.ops.check_rag_state — detect example-retrieval-repo freshness, print one token.
-
-Purpose: centralises the RAG-state detection logic shared by update-docs,
-enrich-and-review, and the project-orientation hook — each caller invokes this
-op and gates repomap generation on the result. Full gating doctrine:
-coordinator/docs/wiki/repomap-rag-gating.md (DoE-claude).
-
-Output (stdout, one token):
-    absent   — no example-retrieval-repo MCP tool is registered in this session
-    stale    — RAG present but staleness banner was emitted at session start
-    fresh    — RAG present and freshness marker is current
-    unknown  — could not determine state from the readable signals
-
-Exit codes:
-    0 — state is one of: absent, stale, fresh
-    1 — state is unknown (callers should treat as stale), OR the DoE root /
-        plugin-root trust preconditions could not be satisfied
-
-Port of: check-rag-state.sh (DoE b5a4192c, 2026-07-20)
-Spec backlink: coordinator/DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
-
-Negative-spec:
-    - Does NOT perform any MCP tool calls; it only reads the marker file and
-      environment variables the bash oracle read — MCP availability cannot be
-      probed from here either.
-    - Trust-checks plugin_root via the canonical
-      `coordinator_core.trusted_root_guard.is_trusted` — see that module for
-      the full anchor list.
-    - The fail-loud trust-violation stderr message hardcodes the site label
-      as `"coordinator/bin/check-rag-state.sh"` rather than reproducing the
-      bash oracle's `--site="$0"` (the invoking script path) — the polyglot
-      trampoline's `main(argv)` never receives argv[0], and this corner case
-      (an untrusted resolved plugin root) is not asserted by any known
-      caller/test; the message shape and remediation text are preserved
-      verbatim, only the site token is a fixed string instead of dynamic.
-"""
 
 from __future__ import annotations
 
@@ -61,7 +24,6 @@ def _claude_home() -> str:
 
 
 def _read_doe_root(claude_home: str) -> str:
-    """Read `<claude_home>/.doe-root`, stripped. Empty string on any read failure."""
     doe_root_file = os.path.join(claude_home, ".doe-root")
     try:
         with open(doe_root_file, encoding="utf-8") as fh:
@@ -72,19 +34,8 @@ def _read_doe_root(claude_home: str) -> str:
 
 
 def check_rag_state() -> Tuple[str, int]:
-    """Faithful port of check-rag-state.sh's full body.
-
-    Returns (stdout_text, exit_code). stdout_text is the single token to
-    print on stdout ("" when the caller should instead print to stderr, i.e.
-    the DoE-root/trust preconditions failed — that stderr text is the second
-    element of the tuple returned by main()'s caller path, not this
-    function's return; see main()).
-    """
     claude_home = _claude_home()
     doe_root = _read_doe_root(claude_home)
-    # Either content layout counts: a flat published mirror holds the same
-    # content at its own root, and hardcoding the `coordinator/` join made this
-    # precondition unsatisfiable there.
     content_root = content_root_for(doe_root)
     if content_root is None:
         return ("", 1)
@@ -105,9 +56,6 @@ def check_rag_state() -> Tuple[str, int]:
     if rag_state == "unknown":
         return ("unknown", 1)
 
-    # 2. marker file written by the W1 hook (example-retrieval-repo-detect.*) at session
-    # boot — only the first line is read (mirrors `head -1`), and all
-    # whitespace is stripped (mirrors `tr -d '[:space:]'`).
     if os.path.isfile(marker_path):
         try:
             with open(marker_path, encoding="utf-8") as fh:
@@ -119,15 +67,11 @@ def check_rag_state() -> Tuple[str, int]:
             return (state, 0)
         if state == "unknown":
             return ("unknown", 1)
-        # unrecognised marker content — fall through to unknown, same as bash.
 
-    # 3. fallback: no signal resolved state — conservative "unknown"; callers
-    # treat unknown == stale.
     return ("unknown", 1)
 
 
 def _doe_root_error(doe_root: str) -> Optional[str]:
-    """Return the ERROR line for a missing/invalid DoE root, else None."""
     if content_root_for(doe_root) is not None:
         return None
     return (
@@ -145,7 +89,6 @@ def _trust_error(plugin_root: str) -> str:
 
 
 def main(argv) -> int:  # noqa: ARG001 — takes no arguments, mirrors bash oracle
-    """CLI entry — check-rag-state takes no arguments."""
     claude_home = _claude_home()
     doe_root = _read_doe_root(claude_home)
 

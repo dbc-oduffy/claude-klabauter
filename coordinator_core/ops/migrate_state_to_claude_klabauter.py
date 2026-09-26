@@ -74,7 +74,6 @@ from coordinator_core.engine_root import coordinator_engine_source_root_env
 from coordinator_core.session.declared_writes import declare_write
 
 # Relative-to-CLAUDE_HOME / engine-root tree pairs mirrored (source, dest) —
-# see Negative-spec above re: archive/ inclusion.
 TREE_PAIRS: List[Tuple[str, str]] = [
     ("state", "state"),
     ("archive", "archive"),
@@ -85,10 +84,6 @@ TREE_PAIRS: List[Tuple[str, str]] = [
 
 
 def _walk_files(root: str) -> List[str]:
-    """Enumerate all files under `root`, mirroring the bash oracle's
-    `find <root> -type f` (does not follow symlinked directories, matching
-    `os.walk`'s default `followlinks=False`).
-    """
     out: List[str] = []
     for dirpath, _dirnames, filenames in os.walk(root):
         for name in filenames:
@@ -97,10 +92,6 @@ def _walk_files(root: str) -> List[str]:
 
 
 def copy_tree(src: str, dst: str, out: TextIO) -> None:
-    """Copy every file under `src` into the matching relative path under
-    `dst`, preserving mode + mtime (`shutil.copy2`, the `cp -p` analogue).
-    Idempotent: existing destination files are simply overwritten.
-    """
     if not os.path.isdir(src):
         print(f"  SKIP (source absent): {src}", file=out)
         return
@@ -120,7 +111,6 @@ def copy_tree(src: str, dst: str, out: TextIO) -> None:
         try:
             shutil.copy2(src_file, dst_file)
             file_count += 1
-            # DR-276: declared AFTER the copy lands, never before — the
             # contract is a report of what was ACTUALLY written.
             declare_write(dst_file)
         except OSError:
@@ -131,7 +121,6 @@ def copy_tree(src: str, dst: str, out: TextIO) -> None:
 
 
 def cmd_populate(claude_home: str, claude_klabauter_root: str, out: TextIO) -> int:
-    """--populate (C6a): copy source trees to claude-klabauter; originals untouched."""
     print("=== migrate-state-to-claude-klabauter --populate (C6a) ===", file=out)
     print(f"  Source (CLAUDE_HOME): {claude_home}", file=out)
     print(f"  Destination (COORDINATOR_ENGINE_SOURCE_ROOT): {claude_klabauter_root}", file=out)
@@ -151,20 +140,11 @@ def cmd_populate(claude_home: str, claude_klabauter_root: str, out: TextIO) -> i
 
 
 def cmd_finalize(claude_home: str, claude_klabauter_root: str, out: TextIO) -> int:
-    """--finalize (C6b): delta re-sync, verify, then remove source originals.
-
-    Two-phase cross-repo excision per cleanup-sweep-hazards.md §10: Phase 1
-    (--populate) already ran and populated the destination. Phase 2 (this
-    step): verify destination, then remove source.
-    """
     print("=== migrate-state-to-claude-klabauter --finalize (C6b) ===", file=out)
     print(f"  Source (CLAUDE_HOME): {claude_home}", file=out)
     print(f"  Destination (COORDINATOR_ENGINE_SOURCE_ROOT): {claude_klabauter_root}", file=out)
     print("", file=out)
 
-    # --- Step 1: Delta re-sync — copy any source file NEWER than its claude-klabauter
-    # copy (or whose claude-klabauter copy is missing). Captures writes that happened
-    # between --populate and now.
     print("--- Step 1: Delta re-sync ---", file=out)
 
     for src_rel, dst_rel in TREE_PAIRS:
@@ -192,7 +172,6 @@ def cmd_finalize(claude_home: str, claude_klabauter_root: str, out: TextIO) -> i
                 try:
                     shutil.copy2(src_file, dst_file)
                     delta_count += 1
-                    # DR-276: declared AFTER the copy lands, never before.
                     declare_write(dst_file)
                 except OSError:
                     print(f"  WARN: delta copy failed: {src_file}", file=sys.stderr)
@@ -200,9 +179,7 @@ def cmd_finalize(claude_home: str, claude_klabauter_root: str, out: TextIO) -> i
         print(f"  Delta-synced {delta_count} files from {src}", file=out)
         print("", file=out)
 
-    # --- Step 2: Pre-removal verification guard — verify EVERY source file
     # is confirmed in claude-klabauter before removing ANYTHING. Fail loud on any
-    # missing destination (cleanup-sweep-hazards.md §10).
     print("--- Step 2: Pre-removal verification guard ---", file=out)
 
     missing_count = 0
@@ -233,7 +210,6 @@ def cmd_finalize(claude_home: str, claude_klabauter_root: str, out: TextIO) -> i
     print("", file=out)
 
     # --- Step 3: Remove source originals from CLAUDE_HOME. Removes files
-    # first, then cleans up empty directories left behind.
     print("--- Step 3: Remove source originals ---", file=out)
 
     for src_rel, _dst_rel in TREE_PAIRS:
@@ -255,8 +231,6 @@ def cmd_finalize(claude_home: str, claude_klabauter_root: str, out: TextIO) -> i
 
         print(f"  Removed {remove_count} files from {src}", file=out)
 
-        # Clean up empty directories left behind (depth-first, mirroring the
-        # bash oracle's `find -type d -empty -delete`).
         for dirpath, _dirnames, _filenames in os.walk(src, topdown=False):
             try:
                 if not os.listdir(dirpath):
@@ -311,17 +285,11 @@ def main(argv: List[str]) -> int:
 
     subcommand = argv[0]
     if subcommand not in ("--populate", "--finalize"):
-        # Bash oracle prints only the short one-line usage here (NOT the full
-        # --populate/--finalize help block, which is reserved for the
-        # no-args case above) — reproduced faithfully, not "fixed" to match.
         print(f"ERROR: unknown subcommand: {subcommand}", file=sys.stderr)
         print("Usage: migrate-state-to-claude-klabauter.sh --populate | --finalize", file=sys.stderr)
         return 1
 
-    # Negative-spec: the HOME rung is load-bearing, not redundant with the
-    # expanduser terminal. Drop it and a harness that overrides HOME without
     # also setting USERPROFILE falls through to the real machine home, with
-    # no error -- the isolated-env test shape this repo uses everywhere.
     claude_home = os.environ.get("CLAUDE_HOME") or os.path.join(
         os.environ.get("HOME") or os.environ.get("USERPROFILE") or os.path.expanduser("~"),
         ".claude",
@@ -331,7 +299,6 @@ def main(argv: List[str]) -> int:
         return 1
 
     # C11: this override names the SOURCE CHECKOUT being migrated into (locator
-    # axis), not which engine dispatches — routed through the C18 locator
     # accessor rather than a bare CLAUDE_KLABAUTER_ROOT read.
     claude_klabauter_root = coordinator_engine_source_root_env("migrate_state_to_claude_klabauter") or _default_claude_klabauter_root()
     claude_klabauter_root = claude_klabauter_root.rstrip("/")

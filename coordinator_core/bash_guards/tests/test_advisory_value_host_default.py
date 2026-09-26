@@ -81,35 +81,14 @@ def _run_isolated(name, cmd, host_is_windows, session_id, monkeypatch, cwd="/tmp
 
 
 def _cwd_for(name, tmp_path, monkeypatch):
-    """Per-guard `cwd` for the matrix tests below. `branch-set-precedence`
-    and `longlived-branch-naming` (docs/plans/2026-08-01-branch-creation-
-    seam-guards.md, chunk C2) were the only hazard-repo-scoped rows this
-    seam existed for; both were deleted (docs/plans/2026-08-21-the-
-    advisory-band-gets-smaller-cheaper-and-honest.md, C6). Every remaining
-    row keeps the shared `"/tmp"` default -- kept as a function (not
-    inlined) so a future hazard-repo-scoped guard has a seam to extend
-    rather than reintroducing one."""
     return "/tmp"
 
 
-# ---------------------------------------------------------------------------
-# Per-guard triggers -- one real, verified-firing command per advisory-
-# emitting guard (15 of them), keyed by name. `None` marks the one guard
-# with no cheap deterministic single-call trigger (see module docstring).
-# ---------------------------------------------------------------------------
-
 _TRIGGERS = {
-    # windows_cost_only (3)
     "find-exec-rewrite": "find . -exec rm {} \\;",
     "head-tail-plumbing-rewrite": "find . -type f | head -n 5",
     "plumbing-and-loops": "find . -type f | head -n 5",
-    # host_independent (8)
     # A DEDICATED dir, never a bare `/tmp`: this box keeps live sockets and
-    # ~50 peers' scratch under the shared tempdir, so `grep -rn TODO /tmp`
-    # walked an unbounded, foreign tree and declined on the process-time
-    # budget (or, before the `_is_regular_file` walk-skip in
-    # `search/engine.py`, on the first socket it met). Still `-r` over a
-    # real directory, so the tree-walk leg stays exercised.
     "inprocess-search": "grep -rn TODO /tmp/h6-search",
     "sed-range-read-advise": "sed -n '5,10p' /tmp/h6-somefile.txt",
     "cat-heredoc-write-advise": "cat > /tmp/h6-probe.txt <<'EOF'\nhello\nEOF",
@@ -117,20 +96,12 @@ _TRIGGERS = {
     "multiprobe-banner": 'echo "=== SESSION FACTS ==="; pwd; whoami; date',
     "multiprobe-banner-rewrite": 'echo "=== SESSION FACTS ==="; pwd; whoami; date',
     "grep-via-bash-rewrite": "grep -E '^status:|^deployment_state:|^closed_reason:' /tmp/h6-somefile.txt",
-    # `grep -rn` is substitutable residue that `grep-via-bash-rewrite`
-    # already claims (H11, 2026-07-30) -- this guard now returns None for
-    # it. `-P` is a genuinely GNU-only construct this guard still advises
-    # on (`_has_gnu_only_construct`); single segment, so it is not
     # shadowed by the CHAINED-only partial-pipe path either. Reclassified
     # WINDOWS_COST_ONLY -> HOST_INDEPENDENT in the same H11 dispatch: its
-    # surviving message is a BSD-vs-GNU (macOS) portability warning, not a
-    # Windows spawn-cost argument -- see dispatch.py's own registration
     # comment on this guard's entry for why WINDOWS_COST_ONLY would have
-    # silenced it on exactly the host it targets.
     "grep-via-bash-guard": "grep -Pn TODO src/",
-    # not_cost_argued (4)
     "offer-git-c": "cd /tmp && git status",
-    "validate-commit": None,  # no cheap trigger -- see module docstring
+    "validate-commit": None,
     "git-commit-safe-commit-advise": "git commit -m 'h6 probe'",
     "offer-invoke-params-stdin": (
         "PYTHONPATH=/r python3 -m coordinator_core.invoke ceremony.scoped_git_commit '%s' --repo /r --bare"
@@ -172,45 +143,22 @@ def _isolated_tempdir(tmp_path, monkeypatch):
     already uses)."""
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     (tmp_path / "h6-somefile.txt").write_text("one\ntwo\nTODO: probe\nfour\nfive\n", encoding="utf-8")
-    # sed/grep triggers above reference /tmp/h6-somefile.txt directly (not
-    # tmp_path) since the guards under test are static string parsers that
-    # never execute the command -- write the same content there too so a
-    # guard that DOES stat the path (inprocess-search) finds it.
     # negative-spec: this leg is BEST-EFFORT and must stay so. `/tmp` does not
-    # exist on Windows, where the path resolves drive-relative to `<cwd-drive>:\tmp`
-    # and may be uncreatable. An unguarded write here raises inside the fixture,
-    # which is a SETUP error, not a test failure -- it took out all 43 cells in this
-    # module at once while reporting nothing about the guards under test. Every
-    # guard exercised here is a static string parser that never opens the path; only
-    # an inprocess-search guard would stat it, so a platform where this write cannot
-    # land should surface as that one cell failing, never as the module erroring out.
     with contextlib.suppress(OSError):
-        # The makedirs is load-bearing on Windows, not defensive padding: without
-        # it `inprocess-search` -- the one guard here that really does stat the
-        # path -- loses its file and 2 further cells go red. Verified by running
-        # both variants: suppress-only gives 3 failed/40 passed, this gives 1/42.
         os.makedirs(os.path.dirname("/tmp/h6-somefile.txt"), exist_ok=True)
         with open("/tmp/h6-somefile.txt", "w", encoding="utf-8") as fh:
             fh.write("one\ntwo\nTODO: probe\nfour\nfive\n")
-        # `inprocess-search`'s own trigger walks THIS dir, not the shared `/tmp`.
         os.makedirs("/tmp/h6-search", exist_ok=True)
         with open("/tmp/h6-search/probe.txt", "w", encoding="utf-8") as fh:
             fh.write("one\ntwo\nTODO: probe\nfour\nfive\n")
     yield
 
 
-# ---------------------------------------------------------------------------
-# The 15-guard x {True, False} matrix (AC-3's core requirement).
-# ---------------------------------------------------------------------------
-
 _MATRIX_NAMES = [name for name, cmd in _TRIGGERS.items() if cmd is not None]
 
 
 @pytest.mark.parametrize("name", _MATRIX_NAMES)
 def test_windows_true_always_shows(name, monkeypatch, capsys, tmp_path):
-    """Every advisory-emitting guard, on Windows, fires its full envelope
-    unsuppressed -- this is the identity-bound anti-fail-open control cell
-    for every row: it proves the guard demonstrably still detects."""
     cmd = _TRIGGERS[name]
     cwd = _cwd_for(name, tmp_path, monkeypatch)
     out = _run_isolated(name, cmd, True, "h6-%s-true" % name, monkeypatch, cwd=cwd)
@@ -248,13 +196,6 @@ def test_non_windows_host_default(name, monkeypatch, capsys, tmp_path):
         )
 
 
-# ---------------------------------------------------------------------------
-# One guard with no cheap live trigger: validate-commit. Exercised via the
-# REAL suppression predicate against a representative envelope shaped
-# exactly like its own return constructor.
-# ---------------------------------------------------------------------------
-
-
 def test_validate_commit_predicate_never_suppresses_not_cost_argued():
     envelope = {
         "hookSpecificOutput": {
@@ -274,68 +215,24 @@ def test_validate_commit_predicate_never_suppresses_not_cost_argued():
     )
 
 
-# ---------------------------------------------------------------------------
-# THE THIRD MATRIX COLUMN (finding 1): host_is_windows OMITTED entirely --
-# the production call shape -- with the real-host read faked both ways. The
-# True/False columns above cannot see the None-path inversion; this proves
-# `None` resolves to the REAL host, not to "not Windows".
-#
-# The fake is installed on `_platform_verdict`'s own module-global `os`, not on
-# the `os` module itself. Patching `os.name` globally is what a reader reaches
-# for first and it does not work here: `pathlib` branches on `os.name` at
-# construction time, so faking a Windows host that way makes every `Path()`
-# built anywhere downstream -- including the disarm-marker lookup this call
-# reaches -- raise `UnsupportedOperation` on a POSIX machine. Scoping the fake
-# to the one module that performs the real-host read keeps the seam under test
-# and leaves the rest of the process on its actual platform.
-# ---------------------------------------------------------------------------
-
-
 class _FakeOs:
-    """Stands in for `_platform_verdict`'s `os` global, exposing only the one
-    attribute the real-host read consults."""
 
     def __init__(self, name):
         self.name = name
 
 
 class _FakeSys:
-    """Stands in for `_platform_verdict`'s `sys` global, exposing only the
-    one attribute `_sniff_host_is_windows` consults. Faking `os.name` alone
-    (the original, incomplete fake -- state/audits/2026-08-07-advisory-host-
-    default-posix-true-diagnosis.md) leaves this module's OWN real
-    `sys.platform` read live: on an actual Windows-hosted run,
-    `sys.platform == "win32"` overrides the faked `os.name == "posix"` in
-    `_sniff_host_is_windows`'s `or` chain, so `_resolve_host_is_windows`
-    resolves True regardless of the fake and the "expect suppressed" cell
-    fails -- not a product defect, an incomplete test isolation. Faking
-    `os.name` to `"nt"` implies a Windows host, so its paired `sys.platform`
-    fake is `"win32"`; faking `os.name` to `"posix"` implies a non-Windows,
-    non-Cygwin/MSYS2 host, so its paired `sys.platform` fake is a
-    plain-POSIX value (`"linux"`) that `_sniff_host_is_windows`'s
-    `("win32", "cygwin", "msys")` membership check correctly rejects."""
 
     def __init__(self, platform):
         self.platform = platform
 
 
-#: One `(os.name, sys.platform)` pair per `os_name` parametrisation value,
-#: keeping the fake for BOTH host signals `_resolve_host_is_windows`
-#: consults total rather than partial -- see `_FakeSys`'s docstring.
 _PAIRED_SYS_PLATFORM = {"nt": "win32", "posix": "linux"}
 
 
 @pytest.mark.parametrize("os_name,expect_suppressed", [("nt", False), ("posix", True)])
 def test_none_path_resolves_to_real_host_not_falsy(os_name, expect_suppressed, monkeypatch, capsys):
-    # EM-found defect (2026-08-07) -- `_resolve_host_is_windows` resolves
-    # in THREE steps: (1) the `host_is_windows` kwarg (omitted here, the point of
-    # this test), (2) a declared value in the machine-local registry
     # (`_declared_host_is_windows`, `_REGISTRY_KEY = "coordinator.host_is_windows"`),
-    # (3) `_sniff_host_is_windows()`. The `_FakeOs`/`_FakeSys` monkeypatches below
-    # neutralise step (3) only -- on any machine where an operator has declared the
-    # registry escape hatch, step (2) resolves first and bypasses the fake entirely,
-    # making this a host-dependent test (the exact defect class this file exists to
-    # fix). Neutralise step (2) too so the fake is total across all three steps.
     monkeypatch.setattr(_platform_verdict, "_declared_host_is_windows", lambda: None)
     monkeypatch.setattr(_platform_verdict, "os", _FakeOs(os_name))
     monkeypatch.setattr(_platform_verdict, "sys", _FakeSys(_PAIRED_SYS_PLATFORM[os_name]))
@@ -345,7 +242,7 @@ def test_none_path_resolves_to_real_host_not_falsy(os_name, expect_suppressed, m
     chain = dispatch._build_guard_chain(cmd, session_id, "/tmp", payload, None, None, None)
     entry = next(e for e in chain if e.name == "find-exec-rewrite")
     monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: [entry])
-    out = dispatch.evaluate_payload_json(json.dumps(payload))  # host_is_windows OMITTED
+    out = dispatch.evaluate_payload_json(json.dumps(payload))
     stderr = capsys.readouterr().err
     assert out is not None, "expected the rewrite leg to survive regardless of suppression"
     if expect_suppressed:
@@ -361,11 +258,7 @@ def test_none_path_resolves_to_real_host_not_falsy(os_name, expect_suppressed, m
     )
 
 
-# ---------------------------------------------------------------------------
 # THE LEG-SCOPED CELL (finding 4): a suppressed find-exec command still gets
-# its auto-rewrite applied on a non-Windows host, even though the advisory
-# `additionalContext` is stripped.
-# ---------------------------------------------------------------------------
 
 
 def test_leg_scoped_suppression_preserves_rewrite_drops_advisory(monkeypatch):
@@ -390,24 +283,10 @@ def test_leg_scoped_suppression_preserves_rewrite_drops_advisory(monkeypatch):
     ), "the rewrite itself must be byte-identical on both hosts"
 
 
-# ---------------------------------------------------------------------------
 # THE TWO-GUARD-OVERLAP CELL (finding 5): shadowing. A command tripping both
-# a windows_cost_only guard and a later-registered host_independent guard --
-# driven through the FULL, unmodified chain (no isolation) -- documents that
-# a previously-shadowed advisory may now surface where the suppressed guard
-# used to win.
-# ---------------------------------------------------------------------------
 
 
 def test_shadowing_previously_shadowed_guard_may_now_surface(monkeypatch, capsys):
-    # `find . -exec rm {} \;` trips find-exec-rewrite (windows_cost_only,
-    # earlier-registered) first in the real chain; it never reaches any
-    # later host_independent guard on either host, because find-exec-
-    # rewrite ALWAYS returns non-None for this shape (rewrite leg survives
-    # suppression) -- so the winner is identical on both hosts for this
-    # exact shape, which is itself worth asserting: a rewrite-leg-bearing
-    # windows_cost_only guard never un-shadows a later guard, because it
-    # never returns None even when suppressed.
     cmd = "find . -exec rm {} \\;"
     out_true = dispatch.evaluate_payload_json(
         json.dumps(_payload(cmd, session_id="h6-shadow-true")), host_is_windows=True
@@ -418,13 +297,6 @@ def test_shadowing_previously_shadowed_guard_may_now_surface(monkeypatch, capsys
     assert out_true["hookSpecificOutput"]["updatedInput"] == out_false["hookSpecificOutput"]["updatedInput"]
     assert "additionalContext" in out_true["hookSpecificOutput"]
     assert "additionalContext" not in out_false["hookSpecificOutput"]
-
-
-# ---------------------------------------------------------------------------
-# THE OVERLAP LEG (AC-5), written to hold the confinement/deny invariant.
-# (a) UNIT-exercise the predicate directly against a deny envelope tagged
-#     with each of the four AdvisoryValue members -- False in all four.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("advisory_value", list(AdvisoryValue))
@@ -447,13 +319,8 @@ def test_deny_envelope_never_suppressed_for_any_advisory_value(advisory_value):
     )
 
 
-# ---------------------------------------------------------------------------
 # (b) A CHAIN-LEVEL case: a deny-capable guard registered AFTER a suppressed
-# one must still fire -- exercised via a controlled two-entry fake chain
-# (same monkeypatch technique test_dispatch_blanket_disarm_wiring.py uses
 # for `_FAKE_CHAIN`), so the case is not already answered by chain ordering
-# the way "no-verify precedes find-exec" trivially is.
-# ---------------------------------------------------------------------------
 
 
 def test_suppressed_advisory_then_later_deny_still_fires(monkeypatch):

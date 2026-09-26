@@ -1,10 +1,3 @@
-"""Tests for coordinator_core.ceremony_common.json_payload_flag — the shared
-`resolve_json_payload_flag` / `detect_conflicting_payload_channels` pair all
-eleven `--decisions` parse sites route through.
-
-Spec backlink:
-docs/plans/2026-08-18-quote-safe-payloads-through-the-cmd-forw.md, chunk C1
-"""
 
 from __future__ import annotations
 
@@ -119,11 +112,6 @@ def test_hostile_payload_round_trips_byte_identically_through_file_form(tmp_path
 
 
 def test_file_channel_accepts_a_bom_prefixed_payload(tmp_path):
-    """Windows PowerShell 5.1's `Set-Content -Encoding utf8` emits a BOM, so
-    the most obvious way to author a payload file on the platform this
-    channel exists for produces one. Reading as plain utf-8 rejected it as
-    `malformed --decisions JSON`, blaming the operator's payload -- exactly
-    the misdirection the file channel exists to end."""
     payload = '{"j-kind": {"disposition": "ack-nil"}}'
     payload_path = tmp_path / "bom.json"
     payload_path.write_text(payload, encoding="utf-8-sig")
@@ -137,10 +125,6 @@ def test_file_channel_accepts_a_bom_prefixed_payload(tmp_path):
 
 
 def test_inline_quote_stripped_payload_names_the_transport():
-    """A `.cmd` forwarder's `%*` strips the double quotes from a JSON
-    payload on Windows, so the parser sees a quote-free object and the bare
-    diagnostic blames a payload that was well-formed when sent. The hint
-    names the vehicle and the file channel instead."""
     stripped = "{lesson-worth-capturing:{disposition:skip},j-kind:{disposition:ack-nil}}"
     result = resolve_json_payload_flag(["apply", "--decisions", stripped], 1)
 
@@ -153,8 +137,6 @@ def test_inline_quote_stripped_payload_names_the_transport():
 
 
 def test_inline_malformed_but_quoted_payload_gets_no_transport_hint():
-    """A payload that reached the parser WITH its quotes intact did not lose
-    them in transit, so naming the forwarder would be a guess."""
     result = resolve_json_payload_flag(["apply", "--decisions", '{"a": }'], 1)
 
     assert result.error is not None
@@ -170,7 +152,6 @@ def test_non_container_malformed_payload_gets_no_transport_hint():
 
 
 def test_file_channel_malformed_payload_gets_no_transport_hint(tmp_path):
-    """The file channel never crossed a forwarder — the hint would be noise."""
     payload_path = tmp_path / "decisions.json"
     payload_path.write_text("{lesson:{disposition:skip}}", encoding="utf-8")
     result = resolve_json_payload_flag(["apply", "--decisions-file", str(payload_path)], 1)

@@ -82,8 +82,6 @@ def _git_rev_parse(parent: Path, flag: str):
     if not result.ok:
         stderr = (result.stderr or "").strip()
         return None, stderr or f"git rev-parse {flag} failed (exit {result.returncode})"
-    # --show-prefix legitimately yields an empty string at the repo root, so
-    # strip only the trailing newline, never treat empty stdout as failure.
     return result.stdout.rstrip("\n"), None
 
 
@@ -122,8 +120,6 @@ def _resolve_baton_path_and_repo(params: dict, repo_root: Optional[Path] = None)
             )
         }
 
-    # git emits the prefix with a trailing "/" (empty at the repo root) and
-    # forward slashes on every platform — append the basename, no manual strip.
     git_relative_path = prefix + resolved.name
 
     return {

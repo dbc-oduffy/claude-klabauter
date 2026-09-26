@@ -123,32 +123,10 @@ class PeerRow:
 
 
 def _normalize_path(path: str) -> str:
-    """Resolve symlinks, absolutize, and normalize-case a path for
-    containment comparison.
-
-    `os.path.realpath` resolves symlinks on BOTH sides before comparison —
-    a harness-reported `cwd` and a caller-supplied `repo_root` may be
-    normalized differently upstream (e.g. macOS `/tmp` is itself a symlink
-    to `/private/tmp`), and comparing an unresolved path against a resolved
-    one silently drops a live peer from the roster (Review: code-reviewer —
-    P2). `realpath` already implies `abspath`; `normpath` is kept for
-    belt-and-braces on any residual `..`/`.` segments it leaves. Finally,
-    `os.path.normcase` is a no-op on POSIX and lowercases on Windows — the
-    one cross-platform-correct way to compare two `cwd`-shaped strings for
-    containment without assuming either side's platform (Windows is
-    first-class here, per CLAUDE.md).
-    """
     return os.path.normcase(os.path.normpath(os.path.realpath(path)))
 
 
 def _cwd_within_repo(cwd: Optional[str], repo_root: str) -> bool:
-    """True if `cwd` IS `repo_root`, or a subdirectory of it.
-
-    A session's harness-reported `cwd` may be a subdirectory of the repo
-    root (a session that `/cd`'d into a subdir), so this is path
-    containment, not string equality — both sides normalized first (§ 6 of
-    the spec handoff).
-    """
     if not cwd:
         return False
     norm_cwd = _normalize_path(cwd)
@@ -339,11 +317,6 @@ def build_roster(
 
         candidate = candidates_by_sid.get(sid)
         address = candidate.address if candidate is not None else None
-        # `record.name` fallback here is a no-op, not a looser degrade rule
-        # than `address`/`ref`: `_resolve_one` only ever returns `None` for
-        # `candidate` when `record.name` is itself falsy, so this branch
-        # can't surface a name that `candidate.name` would have withheld
-        # (Review: code-reviewer — P3).
         name = candidate.name if candidate is not None else record.name
         ref = candidate.ref if candidate is not None else None
         running_seconds = max(0.0, now - record.start_epoch)

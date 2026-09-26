@@ -93,16 +93,6 @@ target) — the only clause `clone_idempotent` journals against."""
 
 
 def _record_resolution(clause_index: int, entries) -> None:
-    """Deferred-import wrapper over `resolution_journal.record_resolution`.
-
-    Deferred (not module-level) because this module is transitively
-    imported during `coordinator_core.ops`'s eager op-registration walk
-    (via `ops.repo_bootstrap`), and `resolution_journal` back-imports
-    `uninstall_legs`, which imports `substrate`, whose own import graph can
-    reach back into `coordinator_core.ops` before this module has finished
-    executing — a module-level import here risks exactly that kind of
-    load-order-dependent cycle. Same reasoning as `substrate_migrate.py`'s
-    and `shell_rc_guard.py`'s deferred back-imports of `substrate.py`."""
     from coordinator_core.install import resolution_journal
 
     resolution_journal.record_resolution("clone-sibling-repo", clause_index, entries)
@@ -111,19 +101,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
     writer_id="clone-sibling-repo",
     source_module="coordinator_core.install.clone_sibling_repo",
     clauses=(
-        # Clause 1 — `clone_idempotent`'s sole write: `target.parent.mkdir
-        # (parents=True, exist_ok=True)` followed by `git clone repo_url
-        # target` land a fresh sibling-repo tree at `target_dir`, an
-        # explicit caller-supplied param (op contract: {repo_url, target_dir}
-        # — see module docstring's op-key/contract block), not a literal
-        # path this module owns. SHAPED, not STATIC: the destination is
-        # whatever the caller passes, and lands outside this repo's own
-        # checkout (a sibling-repo clone location on the operator's
-        # machine) — the same "shaped, caller-supplied destination" pattern
-        # as install-substrate's own agent-helper forwarder clause. The
-        # already-present short-circuit (`(target / ".git").is_dir()`)
-        # performs no write at all, so this clause covers only the
-        # fresh-clone path.
         ShapedClause(
             discovered_by="clone_idempotent (target_dir param)",
             entry_template=WriteSurfaceEntry(
@@ -142,24 +119,10 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
 
 
 class CloneSiblingRepoError(RuntimeError):
-    """Raised when `git clone` itself fails (non-zero exit, or the `git`
-    executable is not resolvable on PATH), or when an already-present
-    target's `origin` remote does not match the caller-supplied `repo_url`
-    (adopted-clone identity check, see module docstring)."""
+    pass
 
 
 def _normalize_repo_url(url: str) -> str:
-    """Strip a trailing `/` and `.git` suffix so equivalent spellings of the
-    same remote (`.../repo`, `.../repo/`, `.../repo.git`) compare equal.
-
-    Exact-match only beyond that: scheme/host casing and `git@host:` vs
-    `https://host/` spelling are NOT normalized, so two URLs that resolve to
-    the same remote but differ in those respects compare unequal and trip
-    the adopted-clone identity guard. Deliberate — a false-positive refusal
-    is the safer failure direction for a check whose whole point is "don't
-    silently adopt the wrong repo." (Review: code-reviewer -- Finding 5,
-    undocumented exact-match scope.)
-    """
     normalized = url.strip().rstrip("/")
     if normalized.endswith(".git"):
         normalized = normalized[: -len(".git")]
@@ -209,31 +172,9 @@ def _existing_origin_url(target: Path) -> Optional[str]:
 
 
 def clone_idempotent(repo_url: str, target_dir: str) -> dict:
-    """Clone `repo_url` into `target_dir` unless a `.git` directory already
-    exists there.
-
-    Returns ``{"cloned": bool, "already_present": bool, "path": str}``:
-      - already-present: {"cloned": False, "already_present": True, ...} —
-        no subprocess is spawned at all.
-      - fresh clone succeeds: {"cloned": True, "already_present": False, ...}
-      - `git clone` fails (non-zero exit / `git` missing): raises
-        CloneSiblingRepoError — this op does not silently swallow a real
-        clone failure, only the already-present short-circuit is silent.
-
-    `target_dir` is normalized via `normalize_native_path()` before either
-    the existence check or the clone invocation, so an MSYS/cygdrive-form
-    path handed in on Windows resolves the same directory a native
-    `git.exe` subprocess would resolve, rather than doubling the drive
-    letter.
-    """
     target = normalize_native_path(target_dir)
 
     if (target / ".git").is_dir():
-        # Already present is only a genuine, confirmed on-disk fact once its
-        # `origin` remote is verified to be `repo_url` — a bare `.git`
-        # directory is not proof of which repo it is (see module docstring's
-        # "Adopted-clone identity check" note). Refuse loudly rather than
-        # silently adopting an unrelated sibling checkout.
         actual_url = _existing_origin_url(target)
         if actual_url is None:
             raise CloneSiblingRepoError(
@@ -264,23 +205,6 @@ def clone_idempotent(repo_url: str, target_dir: str) -> dict:
             **no_console_creationflags(),
         )
     except OSError as exc:
-        # No `_record_resolution` call on any of these three failure paths —
-        # deliberately, not an oversight. Review: coordinator:code-reviewer
-        # (2026-08-06, rcpt-R3-writer-wiring) flagged this against
-        # `ensure_venv.py`'s opposite convention (journals an empty tuple on
-        # its own failed-rebuild path) as two nearest-analogous sites
-        # choosing opposite defaults. They are not actually analogous:
-        # `ensure_venv.py` `shutil.rmtree`s the partial tree BEFORE
-        # journaling `()`, so "resolved to nothing" is a confirmed fact at
-        # journal time. This module makes no attempt to remove or even
-        # inspect whatever `git clone` may have left at `target` on failure
-        # — `git clone` itself can leave a partial working tree on a failed
-        # clone (network drop mid-clone, disk full, etc.), and without a
-        # cleanup step of our own, on-disk state here is genuinely unknown,
-        # not confirmed-empty. Journaling `()` would assert "nothing here"
-        # when a partial `.git` directory may well exist; leaving the clause
-        # unreported instead maps it to the receipt's cannot-safely-
-        # determine class, which is the honest answer for this failure mode.
         raise CloneSiblingRepoError(
             f"install.clone_idempotent: could not invoke git (is it on PATH?): {exc}"
         ) from exc
@@ -296,7 +220,6 @@ def clone_idempotent(repo_url: str, target_dir: str) -> dict:
             f"failed (exit {result.returncode}): {result.stderr.strip()}"
         )
 
-    # `git clone` exited 0 — a genuine fresh clone landed at `target`.
     _record_resolution(
         _TARGET_CLAUSE_INDEX, (WriteSurfaceEntry(kind="file-path", path=str(target)),)
     )

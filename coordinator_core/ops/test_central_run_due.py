@@ -1,8 +1,3 @@
-"""Characterization + parity tests for coordinator_core.ops.central_run_due.
-
-Port of: central-run-due.sh (DoE b5a4192c, 2026-07-20)
-Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
-"""
 
 from __future__ import annotations
 
@@ -20,8 +15,6 @@ from coordinator_core.ops.central_run_due import (
     main,
 )
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -29,13 +22,6 @@ pytestmark = [
 
 
 def _make_doe_content_root(tmp_path: Path) -> Path:
-    """Build a minimal DoE-shaped coordinator/ tree with the one remaining
-    subprocess-boundary sibling this module shells out to (extract-lessons.py,
-    already-Python — see module docstring), so main() can run end-to-end without
-    the real DoE repo. `coordinator-state-root.sh` and `learn-lessons-roots.sh`
-    are retired bash bridges as of C11 (2026-07-21) — their native peers are
-    exercised via monkeypatch in `_run_main`, not via on-disk fake scripts.
-    """
     root = tmp_path / "coordinator"
     (root / "bin").mkdir(parents=True)
 
@@ -59,8 +45,6 @@ def _env_for(tmp_path: Path, doe_root: Path, central_state_root: Path, roots_fil
     env = dict(os.environ)
     env["CLAUDE_HOME"] = str(tmp_path)  # CLAUDE_HOME env var overrides $HOME, per oracle
     env["COORDINATOR_ROOT"] = str(doe_root)
-    # Consumed by the monkeypatched native-resolver stand-ins in _run_main below,
-    # not by any on-disk fake script (those two bash bridges are retired, C11).
     env["CENTRAL_STATE_ROOT"] = str(central_state_root)
     env["LL_ROOTS_FILE"] = str(roots_file)
     return env
@@ -155,13 +139,12 @@ class TestPositive:
 
         source_repo = tmp_path / "repo-a"
         (source_repo / "state").mkdir(parents=True)
-        # 2 non-blank lines -> the fake extractor reports record_count=2
         (source_repo / "state" / "lessons.md").write_text("line1\nline2\n")
         roots_file = tmp_path / "roots.txt"
         roots_file.write_text(f"{claude_home}\n{source_repo}\n")
 
         env = _env_for(tmp_path, doe_root, central_state_root, roots_file)
-        rc, out, err = _run_main(["1"], env)  # arg threshold overrides config
+        rc, out, err = _run_main(["1"], env)
 
         assert rc == 0
         assert "CENTRAL_RUN_DUE volume: 2" in out
@@ -183,7 +166,7 @@ class TestPositive:
         rc, out, err = _run_main([], env)
 
         assert rc == 0
-        assert out == ""  # self-excluded -> total stays 0, below threshold 1
+        assert out == ""
 
 
 class TestNegative:
@@ -233,13 +216,6 @@ class TestNegative:
         assert "no COMPLETE central-run sentinel found" in err
 
     def test_empty_roots_list_stays_below_threshold(self, tmp_path: Path):
-        """C11 (2026-07-21): the bash-executable-presence skip-gate this test used
-        to exercise ("roots helper not executable — skipping") no longer exists —
-        `_learn_lessons_roots` is now a native in-process call to
-        `coordinator_core.ops.learn_lessons_roots.resolve_roots()`, which cannot be
-        "missing" the way an on-disk bash script could. An empty roots list simply
-        contributes zero universals and reports below-threshold, same as any other
-        zero-total run."""
         doe_root = _make_doe_content_root(tmp_path)
         claude_home = _claude_home_dir(tmp_path)
         central_state_root = tmp_path / "central-state"
@@ -278,14 +254,6 @@ class TestUnitHelpers:
     def test_resolve_threshold_invalid_arg_returns_none(self, tmp_path: Path):
         cfg = tmp_path / "does-not-exist.md"
         assert _resolve_threshold(["abc"], str(cfg)) is None
-
-
-# ---------------------------------------------------------------------------
-# `.doe-root` pointer rung: both content layouts. A container registers the
-# published FLAT mirror as its DoE root, where `<root>/coordinator` cannot
-# exist -- the private-only join skipped the rung and the extractor lookup
-# then anchored on a marketplace path that was not there either.
-# ---------------------------------------------------------------------------
 
 
 def _pointer_home(tmp_path: Path, monkeypatch, doe_root: Path) -> str:

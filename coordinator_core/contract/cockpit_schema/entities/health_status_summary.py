@@ -41,7 +41,6 @@ Ordered from most-healthy to most-critical: HEALTHY -> WATCH -> ACTION -> CRITIC
 class HealthStatusSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    # Connector-injected registry shortname.
     repo: str = Field(
         description=(
             "Owner-qualified repo identity: '<owner>/<repo>'. Owner carries the "
@@ -52,30 +51,17 @@ class HealthStatusSummary(BaseModel):
             "owner-qualified string is the canonical cross-entity join anchor."
         )
     )
-    # Connector-injected — matches other summary entities.
     coordinator_root_path: str
-    # Relative path within the repo (e.g. "state/health/2026-06-27-weekly.md").
-    # Composite key with repo + coordinator_root_path.
     path: str
-    # First H1 or frontmatter title of the health-status document.
     title: str
     # ISO calendar date (YYYY-MM-DD) from health-status frontmatter.
     created: IsoDate
-    # Lifecycle state — whether this record is still active (NOT the posture).
     status: HealthStatusLifecycle
-    # Health posture signal — the reported condition, orthogonal to `status`.
     health: HealthPosture
     provenance: ProvenanceEnvelope
 
-    # Nullable fields (D9 present-as-null).
 
-    # Owning team or person; null if not declared in frontmatter.
     owner: str | None
-    # Free-text summary of the health report; null if absent.
     summary: str | None
 
-    # R5 content-hash change-signal (optional; sibling of provenance). Omitted
-    # by claude-klabauter for records with no resolvable single source file (rolled-up
-    # aggregates, empty-path computed records). Version-neutral optional —
-    # absent on all existing records. Spec: producer-contract § 3.3.
     content_hash: ContentHash | None = None

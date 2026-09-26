@@ -165,9 +165,6 @@ TELEMETRY_FILENAME = "telemetry.jsonl"
 
 
 def telemetry_path(engine_root: Optional[Path] = None) -> Path:
-    """`<svc dir>/telemetry.jsonl` for `engine_root` -- the same
-    directory `warm.breadcrumb.svc_dir` resolves, see module docstring's
-    "ON-DISK SHAPE"."""
     return svc_dir(engine_root) / TELEMETRY_FILENAME
 
 
@@ -222,14 +219,6 @@ def record_client_cold_fallback(
     """
     record: dict = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     # WHAT A BARE TIMESTAMP COULD NOT ANSWER. This file recorded 1600 rows in
-    # 13 seconds on 2026-08-25 (~123/s) -- a burst that is, by the shape of
-    # this instrument, many short-lived processes each taking one miss rather
-    # than one process retrying. Which processes, and running which op, was
-    # unanswerable from the rows, so the defect could not be chased at all
-    # (state/bug-backlog/2026-08-26-sixteen-hundred-warm-misses-in-thirteen-
-    # seconds.yaml). Both keys are OMITTED when unknown, so the six days of
-    # rows already on disk keep their exact shape and a caller that cannot
-    # name its op is not made to invent one.
     if op is not None:
         record["op"] = op
     if pid is not None:
@@ -246,18 +235,12 @@ def record_client_cold_fallback(
         return
 
 
-#: Env var carrying the spawner's `time.time()` at the moment it launched a
-#: warm server, read by that server to measure its OWN boot. Set by
-#: `warm.client._spawn_once`; absent for any other spawn route, which is why
-#: `record_server_boot` omits the row entirely rather than guessing a start.
 SPAWN_EPOCH_ENV = "COORDINATOR_WARM_SPAWN_EPOCH"
 
 SERVER_BOOT_FILENAME = "server-boot.jsonl"
 
 
 def server_boot_path(engine_root: Optional[Path] = None) -> Path:
-    """`<svc dir>/server-boot.jsonl` -- one row per server that booted from a
-    stamped spawn."""
     return svc_dir(engine_root) / SERVER_BOOT_FILENAME
 
 
@@ -308,8 +291,6 @@ def record_server_boot(
 
 
 def server_boot_samples(engine_root: Optional[Path] = None) -> list:
-    """Every recorded server-boot row, oldest first. Absent file reads as an
-    empty list; an unparseable row is skipped, not fatal."""
     path = server_boot_path(engine_root)
     rows: list = []
     try:
@@ -331,8 +312,6 @@ ELECTION_LOST_FILENAME = "election-lost.jsonl"
 
 
 def election_lost_path(engine_root: Optional[Path] = None) -> Path:
-    """`<svc dir>/election-lost.jsonl` -- one row per spawned server that
-    lost its generation's election and exited without ever serving."""
     return svc_dir(engine_root) / ELECTION_LOST_FILENAME
 
 
@@ -396,8 +375,6 @@ def record_election_lost(
 
 
 def election_lost_samples(engine_root: Optional[Path] = None) -> list:
-    """Every recorded election-lost row, oldest first. Absent file reads as
-    an empty list; an unparseable row is skipped, not fatal."""
     path = election_lost_path(engine_root)
     rows: list = []
     try:
@@ -460,8 +437,6 @@ def record_worker_pool_depth(
 
 
 def worker_pool_depth_samples(engine_root: Optional[Path] = None) -> list:
-    """Every recorded worker-pool-depth row, oldest first. Absent file
-    reads as an empty list; an unparseable row is skipped, not fatal."""
     path = worker_pool_depth_path(engine_root)
     rows: list = []
     try:
@@ -483,11 +458,6 @@ BOOT_WAIT_FILENAME = "client-boot-wait.jsonl"
 
 
 def boot_wait_path(engine_root: Optional[Path] = None) -> Path:
-    """`<svc dir>/client-boot-wait.jsonl` -- one row per bounded wait a
-    client actually entered, alongside `client_cold_path()` and for the
-    same reason it is separate from the server's own file: only the
-    CLIENT can observe how long it waited for a server to start
-    answering."""
     return svc_dir(engine_root) / BOOT_WAIT_FILENAME
 
 
@@ -532,11 +502,6 @@ def record_client_boot_wait(
 
 
 def boot_wait_samples(engine_root: Optional[Path] = None) -> list:
-    """Every recorded boot-wait row, oldest first -- a plain file read, no
-    running server required. Absent file reads as an empty list, and an
-    unparseable row is skipped rather than failing the read (the file is
-    append-only from many processes; a torn line is a lost sample, not a
-    corrupt instrument)."""
     path = boot_wait_path(engine_root)
     rows: list = []
     try:
@@ -555,13 +520,6 @@ def boot_wait_samples(engine_root: Optional[Path] = None) -> list:
 
 
 def client_cold_count(engine_root: Optional[Path] = None) -> int:
-    """The number of client-side cold fallbacks recorded by
-    `record_client_cold_fallback` -- reachable by a plain file read, with
-    NO warm-pipe round trip and no running server required (the counter
-    this chunk exists to make reachable: AC4's first half). Absent file
-    (no cold fallback has ever been recorded, or `svc_dir` has never been
-    created) reads as zero, not an error.
-    """
     path = client_cold_path(engine_root)
     try:
         with path.open("r", encoding="utf-8") as fh:
@@ -571,26 +529,6 @@ def client_cold_count(engine_root: Optional[Path] = None) -> int:
 
 
 def warm_rate(engine_root: Optional[Path] = None) -> dict:
-    """The one-command answer to "is warmth serving on this box right
-    now" -- AC4's second half. Deliberately not an alerting system: this
-    is a plain read-and-compute over the two on-disk logs this module
-    already owns, not a new push/pull signal or a new file.
-
-    Server-side `ServerTelemetry.flush()` rows only ever carry `warm_count`
-    (each recorded invocation reached a running server, so it is warm by
-    construction -- `_serve_line` has no cold path to record, see
-    `warm/client.py`'s C1 fix for why cold can only be observed
-    client-side) plus whatever `cold_count` any given row happens to
-    carry. `client_cold_count()` (C1) is the population no server row can
-    ever see: a client that fell cold never contacted a server at all.
-    Both are summed here so the reported rate reflects every observed
-    outcome across BOTH populations, not just the server's partial view.
-
-    Returns a dict with `warm_count`, `cold_count`, `total`, and
-    `warm_rate` (a 0..1 float, or `None` when `total` is zero -- no
-    outcomes recorded yet is a distinct answer from "0% warm", not an
-    error).
-    """
     warm_count = 0
     cold_count = 0
 
@@ -623,32 +561,11 @@ def warm_rate(engine_root: Optional[Path] = None) -> dict:
 
 DEGRADE_FILENAME = "degrade.jsonl"
 
-#: A request WAS delivered to a transport handler and this process chose
-#: (or was forced) to answer without the served warm response -- the
 #: distinction PM ruling 2 draws against the HARNESS-side silent fail-open
-#: `http-hook-loopback`/`http-front-door`'s own `cannot_observe_reason`
-#: already names: that reason is honest about the caller never reaching us
-#: at all, and silent about what happens once one does. `kind="cold_run"`
-#: is this module's answer for the latter.
 KIND_COLD_RUN = "cold_run"
 
-#: A request WAS served, but the serving took long enough to be
-#: indistinguishable, from the operator's chair, from the box being
-#: unreachable -- the "UserPromptSubmit hook timed out after 5s" case the
-#: PM named. Recorded from inside the handler that measured its own
-#: elapsed time, not inferred from a caller-side timeout.
 KIND_HOOK_TIMEOUT = "hook_timeout"
 
-#: The cold rung ITSELF failed -- a caller that had already exhausted the
-#: warm listener asked for a verdict in process and the guard chain could
-#: not produce one either. DR-402's rung 3: the act proceeds, and this row
-#: is the whole of what makes that proceed accountable afterwards.
-#: Distinct from `cold_run` on purpose. A cold run that answered and a cold
-#: run that collapsed are the same event up to the moment the chain is
-#: entered, so recording both under one kind would make the box report its
-#: guards as running cold when they are not running at all -- precisely the
-#: "running cold for weeks" blindness PM ruling 2 named, one rung lower
-#: down and correspondingly worse.
 KIND_COLD_FAILED = "cold_failed"
 
 DEGRADE_KINDS = frozenset({KIND_COLD_RUN, KIND_HOOK_TIMEOUT, KIND_COLD_FAILED})
@@ -708,9 +625,6 @@ def record_degrade(
 
 
 def degrade_samples(engine_root: Optional[Path] = None) -> list:
-    """Every recorded degrade row, oldest first. Absent file reads as an
-    empty list; an unparseable row is skipped, not fatal -- matches every
-    other `*_samples` reader in this module."""
     path = degrade_path(engine_root)
     rows: list = []
     try:
@@ -791,9 +705,6 @@ def record_publish_warm_attempt(
 
 
 def publish_warm_samples(engine_root: Optional[Path] = None) -> list:
-    """Every recorded publish-warm row, oldest first. Absent file reads as
-    an empty list; an unparseable row is skipped, not fatal -- matches
-    every other `*_samples` reader in this module."""
     path = publish_warm_path(engine_root)
     rows: list = []
     try:
@@ -812,11 +723,6 @@ def publish_warm_samples(engine_root: Optional[Path] = None) -> list:
 
 
 class ServerTelemetry:
-    """One instance per server life. Thread-safe counters on an
-    already-open structure -- every connection thread in `warm.server`
-    may call `record_invocation` concurrently, so all mutation is behind
-    a single lock, mirroring `warm.server.InFlightCounter`'s own shape.
-    """
 
     def __init__(
         self,
@@ -825,30 +731,9 @@ class ServerTelemetry:
         transport: Optional[str] = None,
         engine_token: Optional[str] = None,
     ):
-        # `transport` names which transport's life this row describes, and is
-        # OMITTED from `snapshot()` when None. That default is what keeps the
-        # pipe server's rows byte-identical to the ~seven days already on disk.
-        # It exists because the HTTP transport was untelemetered until
-        # 2026-08-26 and, once it is not, both transports append to the SAME
-        # `telemetry.jsonl` -- an undifferentiated file would silently change
-        # the denominator under every existing census. Absence therefore means
-        # "the pipe server, or a row written before this field", and a reader
-        # separating the two populations filters on the presence of this key
-        # rather than inferring one.
         # `engine_token` names WHICH ENGINE GENERATION this life served, and
-        # is OMITTED from `snapshot()` when None, on the identical contract as
-        # `transport` above -- absence means "a row written before this field",
-        # never "no token".
-        #
         # WHY IT IS LOAD-BEARING RATHER THAN DECORATIVE: `supervisor_pipe_name`
-        # embeds `skew.compute_client_token(root)`, so an old-token and a
         # new-token generation elect on DISTINCT pipe names and legitimately
-        # coexist during a stamp rotation's drain window. A concurrent-listener
-        # high-water taken across the whole file therefore counts that designed
-        # overlap as if it were orphaning, and can never fall to 1 no matter how
-        # correct the election is. Keying lifetimes by this field is what turns
-        # that census from an unfalsifiable global number into the per-generation
-        # one the single-instance property is actually about.
         self._lock = threading.Lock()
         self._clock = clock
         self._transport = transport
@@ -861,11 +746,6 @@ class ServerTelemetry:
         self._exit_detail: Optional[str] = None
 
     def record_invocation(self, *, warm: bool) -> int:
-        """Record one served invocation as warm or cold. Returns the
-        running served-invocation count (post-increment) -- the module
-        docstring's point 3, and the exact value `served_count()` (below)
-        also returns, kept in sync under the same lock.
-        """
         with self._lock:
             self._served_count += 1
             if warm:
@@ -875,12 +755,6 @@ class ServerTelemetry:
             return self._served_count
 
     def served_count(self) -> int:
-        """Zero-arg served-invocation count -- the exact shape C24's
-        `idle.ServedCountFn` expects, so this method binds directly into
-        `idle.should_demote(served_count=telemetry.served_count, ...)`
-        with no adapter (module docstring's "WHAT THIS MODULE RECORDS",
-        point 3).
-        """
         with self._lock:
             return self._served_count
 
@@ -913,10 +787,6 @@ class ServerTelemetry:
                 self._exit_detail = detail
 
     def snapshot(self) -> dict:
-        """A point-in-time dict of this server life's counters -- the
-        record shape `flush()` appends, also useful directly in tests
-        without touching disk.
-        """
         with self._lock:
             record = {
                 "served_count": self._served_count,
@@ -925,20 +795,6 @@ class ServerTelemetry:
                 "exit_reason": self._exit_reason,
                 "life_seconds": self._clock() - self._started_monotonic,
             }
-            # Present only when a detail was actually recorded, which keeps
-            # every row written before this field, and every reader of them,
-            # working unchanged.
-            #
-            # THE COST OF THAT, NAMED SO NOBODY READS IT AS A RESULT: absence
-            # is ambiguous. A `skew` row with no `exit_detail` is either a
-            # pre-2026-08-26 row that could not carry one or a server that
-            # recorded none, and nothing in the file tells them apart. The 112
-            # historical skews in this box's seven-day file therefore cannot be
-            # attributed to an axis, ever -- an axis split is a FORWARD
-            # measurement over rows written after `584c452b5`, not a re-read of
-            # what is already on disk. Anyone who goes back to the old rows
-            # will find no axes and must not conclude the axes were absent
-            # (claude-klabauter-22, 2026-08-26).
             if self._exit_detail is not None:
                 record["exit_detail"] = self._exit_detail
             if self._transport is not None:
@@ -948,15 +804,6 @@ class ServerTelemetry:
             return record
 
     def flush(self, *, engine_root: Optional[Path] = None) -> None:
-        """Append this server life's `snapshot()` (plus a wall-clock
-        `flushed_at`) as one JSON line to `telemetry_path()`. Best-effort:
-        never raises past a lock timeout or `OSError`, mirroring
-        `warm.breadcrumb.unlink_breadcrumb`'s "never raises" contract --
-        this is meant to be called from C17's `ctx_shutdown` step, which
-        must complete before `os._exit(0)` regardless of whether the
-        telemetry write itself succeeded (module docstring's
-        negative-spec).
-        """
         record = self.snapshot()
         record["flushed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 

@@ -79,12 +79,6 @@ def test_memo_corpus_root_re_resolves_when_this_repo_migrates_mid_process(tmp_pa
 
 
 def test_memo_corpus_root_carries_no_cache_attribute(tmp_path):
-    """Grep-proof against the cache coming back by accident.
-
-    `functools.lru_cache` attaches `cache_clear`/`cache_info` to the wrapped
-    function, so their ABSENCE is the cheapest positive assertion that this
-    resolver is still a plain function.
-    """
     assert not hasattr(memo_corpus.memo_corpus_root, "cache_clear")
     assert not hasattr(memo_corpus.memo_corpus_root, "cache_info")
 

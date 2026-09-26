@@ -53,21 +53,9 @@ pytestmark = [
     pytest.mark.skipif(os.name != "nt", reason="door.exe is a Windows binary"),
 ]
 
-#: C1b (docs/plans/2026-08-30-every-op-runs-in-the-callers-environment.md)
-#: retired the bare envelope-level `_session_id` string in favour of ONE
-#: `_caller` object whose fields are `warm.caller_context.CallerContext`
-#: serialised -- with NO deprecated alias, `_serve_line` reading `_caller`
-#: only (door.c's own C1b note). This module kept asserting the retired key
-#: and went red the moment the rename landed; two of its assertions
 #: (`_session_id not in ...`) went FALSE-GREEN instead, which is the worse
-#: half. Asserted here through the object, one accessor, so a future rename
-#: breaks in one place.
-#: C2 folded the legacy `_caller.session_id` field into the envelope-level
 #: `_env` object, keyed by whichever `SESSION_ENV_PRECEDENCE` name resolved
-#: (see `test_door_stamps_declared_env_set.py`'s negative-spec block). The
-#: subject this file pins -- the door stamps the session id its caller is,
 #: first-non-empty-wins over `SESSION_ENV_PRECEDENCE` -- is unchanged; only
-#: the field it looks in moves.
 _CALLER_FIELD = "_caller"
 _SESSION_ID_KEY = "session_id"
 _ENV_FIELD = "_env"
@@ -90,10 +78,6 @@ def _stamped_session_id(request: dict):
             return value
     return None
 
-#: Shaped like a real session id because `session.core.session_identity_override`
-#: gates on UUID shape and binds nothing for a value that fails it -- a test
-#: fixture that could not survive that gate would pass here and prove nothing
-#: about the path the defect ran down.
 _CALLER_SID = "8b40d62c-55ef-4702-83ce-0cd8dc6513e3"
 _OTHER_SID = "c131691f-c58d-46f9-80c6-4b6d5e670485"
 
@@ -136,9 +120,6 @@ def _exchange(root: Path, session_env: "dict[str, str] | None"):
 
 
 def test_the_door_stamps_the_session_its_caller_is(tmp_path: Path) -> None:
-    """The defect itself. Without this field the server has no way to know who
-    called, falls back to its own environment, and attributes the caller's write
-    to whichever session spawned the engine."""
     root = _make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(root, {"CLAUDE_CODE_SESSION_ID": _CALLER_SID})
@@ -147,10 +128,6 @@ def test_the_door_stamps_the_session_its_caller_is(tmp_path: Path) -> None:
 
 
 def test_the_stamp_is_the_callers_id_and_never_the_servers(tmp_path: Path) -> None:
-    """The reported symptom stated as a property: the id on the wire is the one
-    in the DOOR's environment, and a different id reachable elsewhere on the box
-    is not it. This is the leg that fails against a silent door -- which stamps
-    nothing, so neither id appears at all."""
     root = _make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(root, {"CLAUDE_CODE_SESSION_ID": _CALLER_SID})
@@ -191,9 +168,6 @@ def test_a_lower_rung_is_read_when_the_higher_ones_are_unset(tmp_path: Path) -> 
 
 
 def test_an_empty_value_falls_through_to_the_next_rung(tmp_path: Path) -> None:
-    """Empty is not an identity. `resolve_session_id` skips an empty variable and
-    keeps walking; a door that treated "set but empty" as an answer would stamp
-    nothing while a real id sat on the rung below it."""
     root = _make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(
@@ -205,10 +179,6 @@ def test_an_empty_value_falls_through_to_the_next_rung(tmp_path: Path) -> None:
 
 
 def test_the_stamp_is_envelope_level_not_an_op_param(tmp_path: Path) -> None:
-    """Sibling of `_engine_token`, never inside `params` -- transport metadata the
-    server pops before it dispatches, not an argument any op reads. `entrypoint`
-    shipped in the wrong half of this same envelope once already (door.c's own
-    note, 2026-08-27), and `_settings_home` carries the identical assertion."""
     root = _make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(root, {"CLAUDE_CODE_SESSION_ID": _CALLER_SID})
@@ -217,12 +187,6 @@ def test_the_stamp_is_envelope_level_not_an_op_param(tmp_path: Path) -> None:
 
 
 def test_no_resolvable_identity_stamps_nothing_and_still_serves(tmp_path: Path) -> None:
-    """The field must be ABSENT, not present-and-empty. `_serve_line` reads
-    absence as "this caller could not identify itself" and binds nothing, which
-    is a no-op rather than a fabricated identity -- and an empty string would
-    reach `session_identity_override`'s shape gate as a value, not as silence.
-    Backward compatibility is an AC here for the same reason it is for
-    `_settings_home`: the no-identity path must serve byte-identically."""
     root = _make_stub_engine_root(tmp_path)
 
     request, proc = _exchange(root, None)

@@ -1,9 +1,3 @@
-"""
-Tests for coordinator_core.ops.dispatch_emit.queue_select.
-
-Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § Design
-§ Selector, Tasks § C2.
-"""
 
 from __future__ import annotations
 
@@ -61,11 +55,6 @@ def _select(**kwargs):
     kwargs.setdefault("row_id_key", "@stem")
     kwargs.setdefault("profile", "fixture")
     return select_rows(**kwargs)
-
-
-# ---------------------------------------------------------------------------
-# Operators
-# ---------------------------------------------------------------------------
 
 
 def test_operator_eq(tmp_path):
@@ -126,11 +115,6 @@ def test_operator_contains_refuses_non_list_field(tmp_path):
     _write_row(queue_dir / "a.yaml", **_base_row())
     with pytest.raises(WhereTermError):
         _select(queue=[queue_dir], repo_root=tmp_path, where=[[["severity", "contains", "P0"]]])
-
-
-# ---------------------------------------------------------------------------
-# Refusals
-# ---------------------------------------------------------------------------
 
 
 def test_unsupported_operator_refused(tmp_path):
@@ -270,11 +254,6 @@ def test_unparseable_row_raises_named_error(tmp_path):
         _select(queue=[queue_dir], repo_root=tmp_path)
 
 
-# ---------------------------------------------------------------------------
-# Absent sentinels feeding both where and batch key
-# ---------------------------------------------------------------------------
-
-
 def test_sentinel_normalisation_feeds_where_and_batch_key(tmp_path):
     queue_dir = tmp_path / "state" / "bug-backlog"
     queue_dir.mkdir(parents=True)
@@ -289,11 +268,6 @@ def test_sentinel_normalisation_feeds_where_and_batch_key(tmp_path):
     assert manifest.entries[0].batch_key == "@unkeyed"
 
 
-# ---------------------------------------------------------------------------
-# @unkeyed
-# ---------------------------------------------------------------------------
-
-
 def test_unkeyed_batch_for_missing_every_key(tmp_path):
     queue_dir = tmp_path / "state" / "bug-backlog"
     queue_dir.mkdir(parents=True)
@@ -302,11 +276,6 @@ def test_unkeyed_batch_for_missing_every_key(tmp_path):
     _write_row(queue_dir / "a.yaml", **row)
     manifest = _select(queue=[queue_dir], repo_root=tmp_path)
     assert manifest.entries[0].batch_key == "@unkeyed"
-
-
-# ---------------------------------------------------------------------------
-# Ordering, limit
-# ---------------------------------------------------------------------------
 
 
 def test_ordering_by_priority_field(tmp_path):
@@ -330,11 +299,6 @@ def test_limit(tmp_path):
     assert len(manifest.entries) == 2
 
 
-# ---------------------------------------------------------------------------
-# Zero-spawn
-# ---------------------------------------------------------------------------
-
-
 def test_zero_spawn(tmp_path, monkeypatch):
     queue_dir = tmp_path / "state" / "bug-backlog"
     queue_dir.mkdir(parents=True)
@@ -353,11 +317,6 @@ def test_zero_spawn(tmp_path, monkeypatch):
     assert calls == []
 
 
-# ---------------------------------------------------------------------------
-# Parity with queue_family.load_family_records
-# ---------------------------------------------------------------------------
-
-
 def test_open_row_set_matches_load_family_records(tmp_path):
     queue_dir = tmp_path / "state" / "bug-backlog"
     queue_dir.mkdir(parents=True)
@@ -374,11 +333,6 @@ def test_open_row_set_matches_load_family_records(tmp_path):
     family_ids = {Path(r["path"]).stem for r in family_records}
 
     assert selector_ids == family_ids == {"open-1", "open-2"}
-
-
-# ---------------------------------------------------------------------------
-# Ledger fold-in
-# ---------------------------------------------------------------------------
 
 
 def _append_ledger(repo_root: Path, profile: str, row_id: str, **fields) -> None:
@@ -449,11 +403,6 @@ def test_ledger_route_to_re_emit_is_idempotent(tmp_path):
     second = _select(queue=[queue_dir], repo_root=tmp_path)
     assert first.digest == second.digest
     assert first.declined == second.declined
-
-
-# ---------------------------------------------------------------------------
-# Manifest digest determinism
-# ---------------------------------------------------------------------------
 
 
 def test_manifest_digest_is_deterministic(tmp_path):

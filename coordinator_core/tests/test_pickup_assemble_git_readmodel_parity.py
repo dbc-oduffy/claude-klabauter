@@ -46,26 +46,12 @@ sys.path.insert(0, str(REPO_ROOT))
 from coordinator_core import pickup_assemble as pa  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags
 
-# Declared, not excused: the point of this file IS the parity comparison between
-# `pickup_assemble._run_git`'s in-process read-model and the real `git` CLI it
-# replaced -- a mock of either side would make the parity assertion vacuous. Fixtures
-# are already module-scoped (`claude_klabauter_root`) since every test only READS this repo's
-# own git state.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _NO_CONSOLE = {"creationflags": __import__("subprocess").__dict__.get("CREATE_NO_WINDOW", 0)}
 
 
 def _same_path(mine: Path | None, real_toplevel: str) -> bool:
-    """Compare a read-model repo root against `git rev-parse --show-toplevel`.
-
-    Path-level, never string-level: on Windows git ALWAYS emits forward slashes
-    (forward-slashed, drive-lettered) while `str(Path(...))` renders native
-    backslash separators. Both name the same directory, and every production
-    consumer of `resolve_repo_root` takes the `Path`, not its rendering — so a
-    raw `str(...) == stdout` comparison here was asserting a POSIX-only
-    accident of separator style, not parity.
-    """
     assert mine is not None
     return mine == Path(real_toplevel)
 
@@ -113,12 +99,6 @@ def test_branch_age_matches_spawn(claude_klabauter_root):
 
 
 def test_log_oneline_path_filter_is_a_safe_superset_of_spawn(claude_klabauter_root):
-    """Real `git log -- path` applies merge-history simplification
-    (a merge commit is hidden unless it's the *only* path to some path-
-    touching change); the read-model's `_commit_touches_path` (negative-
-    spec, module docstring) does not replicate that algorithm and instead
-    includes every commit where the blob differs from ANY parent — a
-    strict superset, never missing a real hit."""
     path = "CLAUDE.md"
     mine = pa._git_log_oneline(claude_klabauter_root, ["--", path])
     real = _real_git(["log", "--format=%H", "--", path], claude_klabauter_root)
@@ -135,16 +115,6 @@ def test_since_date_is_a_safe_superset_of_spawn(claude_klabauter_root):
     real_shas = {line.strip() for line in real.stdout.splitlines() if line.strip()}
     mine_shas = {sha for sha, _subject in mine}
     assert real_shas <= mine_shas
-
-
-# `test_commit_recency_signal_matches_spawn` REMOVED (post-W0-2): the
-# commit-recency liveness signal it parity-checked (`_commit_recency_signal`)
-# was itself deleted later the same day by C7 (commit `68796c55`,
-# `compute_liveness_signal`'s "DELETED (this amendment): signal (b)
-# commit-recency" note) — it was a false-positive-prone proxy that fired on
-# the plan's own execution-authorization commit. The capability is
-# deliberately retired, not renamed; there is no successor symbol to parity-
-# check against.
 
 
 def test_cat_file_exists_matches_spawn(claude_klabauter_root):
@@ -182,26 +152,7 @@ def test_hash_object_stdin_matches_known_git_value(claude_klabauter_root):
     assert pa._git_hash_object_stdin("hello world\n", claude_klabauter_root) == "3b18e512dba79e4c8300dd08aeb37f8e728b8dad"
 
 
-# ---------------------------------------------------------------------------
-# `_find_stamp_commit` (`gates.execution_stamp_match` history-walk) — pins
-# it against real `git log -1 --follow -S<needle>`, NOT the in-process
-# `_in_process_pickaxe` read-model it used to route through. That
-# reimplementation's own negative-spec comment (module docstring) used to
-# call the gap "narrow... a renamed-then-edited file's pre-rename history
-# is invisible" — this fixture has NO rename at all and still diverges: a
-# merge commit `M` that resolves to (is tree-identical to) its first
 # parent `C1` on the needle's path is real git's TREESAME-to-a-parent case
-# under default merge simplification, so `git log -S` walks straight past
-# `M` into `C1` (where the needle was actually introduced). The read-
-# model's `_in_process_pickaxe` has no such simplification — it loops over
-# `M`'s parents in order and returns `M` itself the moment ANY parent's
-# needle count differs (here, the second parent `B1`, which never carried
-# the needle), even though the FIRST parent already accounts for `M`'s own
-# content. Reproduces the stamp-integrity investigation's Root cause B,
-# Case 2 (`tasks/mise-findings/stamp-integrity.md`, DoE-claude) end to end
-# through the real `_find_stamp_commit` entry point, not just the inner
-# walk.
-# ---------------------------------------------------------------------------
 
 
 def _merge_treesame_to_first_parent_fixture(root: Path) -> tuple[str, str, str]:
@@ -264,9 +215,6 @@ def test_find_stamp_commit_disagrees_with_read_model_on_treesame_merge_no_rename
         real_answer = real.stdout.strip()
         assert real_answer == c1_sha, "fixture sanity check: real git must name C1, not the merge commit"
 
-        # The OLD in-process read-model disagrees with real git here — pin
-        # this as the documented divergence, not merely assert the fixed
-        # behavior in isolation.
         dirs = pa._discover_git_dirs(root)[1]
         head_sha = pa._resolve_revision(dirs, "HEAD")
         readmodel_answer = pa._in_process_pickaxe(dirs.common_dir, head_sha, "NEEDLE", "file.txt")
@@ -276,16 +224,8 @@ def test_find_stamp_commit_disagrees_with_read_model_on_treesame_merge_no_rename
         )
         assert readmodel_answer != real_answer
 
-        # `_find_stamp_commit` — the actual `compute_execution_stamp_match`
-        # entry point — must agree with real git, not the read-model.
         found = pa._find_stamp_commit(root, "file.txt", "NEEDLE")
         assert found == real_answer == c1_sha
-
-
-# ---------------------------------------------------------------------------
-# Detached HEAD + linked-worktree fixtures — built with real `git` (test
-# setup only, not the hot path this task removes spawns from).
-# ---------------------------------------------------------------------------
 
 
 def _init_fixture_repo(root: Path) -> None:
@@ -331,21 +271,6 @@ def test_detached_head_fixture():
         assert _same_path(mine_toplevel, real_toplevel)
 
 
-# ---------------------------------------------------------------------------
-# Pack-read perf regression (2026-07-24 W0-2 -> 2026-07-26 hotfix). `brief()`
-# measured 9053 ms against a <=60 ms budget: `_read_pack_object_at` handed
-# `zlib.decompressobj().decompress(memoryview(pack_bytes)[pos:])` the ENTIRE
-# remainder of the pack file per object read. Decompression itself stops at
-# the real stream end, but CPython still copies everything past that point
-# into `decompressobj.unused_data` — a full pack-tail copy per object, so
-# cost scaled with PACK size, not OBJECT size. Fixed by
-# `_zlib_decompress_bounded` feeding small growing input windows instead.
-# This test pins that fix: reading an object near the START of a large pack
-# (worst case for the old code — longest possible tail) must not touch a
-# byte count proportional to the pack's size.
-# ---------------------------------------------------------------------------
-
-
 def test_read_pack_object_at_does_not_scale_with_pack_size(claude_klabauter_root):
     common_dir = pa._discover_git_dirs(claude_klabauter_root)[1].common_dir
     packs = pa._iter_pack_files(common_dir)
@@ -356,16 +281,8 @@ def test_read_pack_object_at_does_not_scale_with_pack_size(claude_klabauter_root
     assert pidx is not None
     assert len(pack_bytes) > 1_000_000, "fixture pack too small to make the regression observable"
 
-    # Object nearest the FRONT of the pack file — the old whole-tail-decompress
-    # code's worst case, since everything after it is the longest possible tail.
     offset = min(pidx.offsets)
-    # No eviction needed: `_read_pack_object_at` is called here directly and
-    # is itself uncached, so this always exercises a real decompress. The
     # by-sha cache (`git_objects._OBJECT_CACHE`) sits a layer above and is
-    # not on this call path. This used to evict a per-(pack, offset) cache
-    # that no longer exists; the stale reference made the whole test error
-    # out rather than run, which is how the pack-read cost below went
-    # unguarded long enough to be rediscovered on 2026-08-26.
 
     max_slice_len = 0
     real_memoryview = memoryview
@@ -391,32 +308,10 @@ def test_read_pack_object_at_does_not_scale_with_pack_size(claude_klabauter_root
 
     assert isinstance(type_num, int)
     assert isinstance(content, bytes)
-    # Bounded input windows: even with doubling retries, this must stay a
-    # small multiple of the object's own content size — never anywhere near
-    # the multi-MB pack. 1 MiB is generous headroom over any single object
-    # in this repo's real packs while still being orders of magnitude below
-    # a 30+ MB pack tail.
     assert max_slice_len < 1_000_000, (
         f"_read_pack_object_at fed a {max_slice_len}-byte slice into zlib — "
         "input is scaling with pack size again, not object size"
     )
-
-
-# ---------------------------------------------------------------------------
-# Pack-lookup filesystem-call regression (2026-08-26). `pickup-assemble brief`
-# did not complete in 13 minutes against this repo. The cost was not git, not
-# zlib and not the DAG: `_iter_pack_files` re-listed `objects/pack/` on every
-# object lookup and `_parse_pack_index` re-stat'd every `.idx` on every call,
-# so a lookup cost one `glob` plus ~2 `stat`s PER PACK. Profiled: 2,937
-# `nt.stat` calls and 32s of a 40s window, on a volume where a single `stat`
-# measures ~15ms. Fixed by caching the listing and the parsed indexes against
-# the pack directory's own mtime, revalidated on a MISS only (a hit is
-# content-addressed and no newly-arrived pack can change it).
-#
-# This test pins the shape, not a millisecond figure: repeated lookups must
-# not issue filesystem calls proportional to lookups x packs. A per-lookup
-# re-list reappearing would put this back over a hundred stats immediately.
-# ---------------------------------------------------------------------------
 
 
 def test_repeated_object_lookups_do_not_restat_the_pack_directory(claude_klabauter_root, monkeypatch):
@@ -432,7 +327,6 @@ def test_repeated_object_lookups_do_not_restat_the_pack_directory(claude_klabaut
     shas = [pidx.shas[i * 20:i * 20 + 20].hex() for i in range(0, min(40, len(pidx.offsets)))]
     assert len(shas) >= 20
 
-    # Warm the caches the way any real caller does, then count from cold-of-stats.
     for sha in shas:
         go._read_object(common_dir, sha)
 
@@ -444,7 +338,6 @@ def test_repeated_object_lookups_do_not_restat_the_pack_directory(claude_klabaut
         return real_stat(*args, **kwargs)
 
     monkeypatch.setattr("os.stat", counting_stat)
-    # Bypass the object cache so each lookup really re-enters the pack search.
     go._OBJECT_CACHE.clear()
     for sha in shas:
         go._read_object(common_dir, sha)

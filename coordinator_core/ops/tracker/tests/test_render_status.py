@@ -41,7 +41,6 @@ from pathlib import Path
 
 import pytest
 
-# ---- Import guard: fires @register_op side-effect for tracker.render_status. ----
 import coordinator_core.ops.tracker.render_status  # noqa: F401
 
 from coordinator_core.ipc import _REGISTRY, dispatch_message
@@ -62,7 +61,6 @@ def _run(coro):
 
 
 def _make_git_repo(root: Path) -> Path:
-    """Init a minimal git repository under *root* and return the repo root."""
     root.mkdir(parents=True, exist_ok=True)
 
     def _git(*args: str) -> None:
@@ -96,18 +94,8 @@ def _make_item(repo_root: Path, *, title: str = "Widget", body: str = "Do the th
     return item_id
 
 
-# ---------------------------------------------------------------------------
-# (a) Import-guard floor assertion
-# ---------------------------------------------------------------------------
-
-
 def test_tracker_render_status_registered():
     assert "tracker.render_status" in _REGISTRY
-
-
-# ---------------------------------------------------------------------------
-# (b) handler-level
-# ---------------------------------------------------------------------------
 
 
 def test_handler_repo_root_none_raises_runtime_error():
@@ -155,12 +143,6 @@ def test_handler_derives_worktree_from_common_dir_arg_not_params(tmp_path):
     assert result == {"item_id": item_id, "status": "open"}
 
 
-# ---------------------------------------------------------------------------
-# (c) open/closed thin smoke — full truth table lives in
-#     coordinator_core/tests/test_tracker_projection.py
-# ---------------------------------------------------------------------------
-
-
 def test_handler_no_events_reads_open(tmp_path):
     repo = _make_git_repo(tmp_path / "repo")
     item_id = _make_item(repo)
@@ -180,10 +162,7 @@ def test_handler_manual_close_reads_closed(tmp_path):
     assert result == {"item_id": item_id, "status": "closed"}
 
 
-# ---------------------------------------------------------------------------
-# (d) five-surface wiring + command-type smoke (C3's own body: registry,
 #     classification, scope, module_map, _EAGER_OP_MODULES)
-# ---------------------------------------------------------------------------
 
 
 def test_registered_in_registry_map():

@@ -77,9 +77,6 @@ from coordinator_core.ops.fleet._common import check_repo_root, main_worktree_ro
 
 _LOG = logging.getLogger(__name__)
 
-# The boot_sweep-authored header is exactly 4 lines (title, blank, purpose,
-# blank — see boot_sweep._append_warn_marker's create-with-header branch).
-# Everything past line 4 is appended WARN markers, i.e. the rotatable tail.
 _HEADER_LINE_COUNT: int = 4
 
 _MARKER_RELPATH: Tuple[str, str] = ("tasks", "orphan-sweep-notes.md")
@@ -103,14 +100,6 @@ def _rotate_text(old_text: str) -> Tuple[str, List[str]]:
 
 
 def _rotate_marker_file(worktree: Path) -> dict:
-    """Sync: rotate <worktree>/tasks/orphan-sweep-notes.md under locked_rmw.
-
-    Runs the full read-decide-write inside the cross-process lock so a
-    concurrent boot_sweep append serialises against the rotation (never
-    interleaved with the truncate-to-header swap).  missing_ok=True maps an
-    absent file to the "" snapshot, which the ≤4-line predicate turns into the
-    healthy-absence no-op.
-    """
     target = worktree.joinpath(*_MARKER_RELPATH)
     captured: dict = {"tail": [], "kept": 0}
 
@@ -132,7 +121,6 @@ def _rotate_marker_file(worktree: Path) -> dict:
 
 
 def _build_error_result(reason: str) -> dict:
-    """Build a setup/lock-error result (exit_code:1) — nothing was rotated."""
     _LOG.error("session.rotate_orphan_sweep_log: %s", reason)
     return {
         "exit_code": 1,
@@ -179,19 +167,15 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     common_dir = Path(repo_root) if not isinstance(repo_root, Path) else repo_root
 
-    # D3: optional repo_root consistency check (check only, never the path source).
     mismatch = check_repo_root(params.get("repo_root"), common_dir)
     if mismatch:
         return _build_error_result(mismatch)
 
     worktree = main_worktree_root(common_dir)
 
-    # locked_rmw is a blocking lock-poll + file I/O — off the event loop (D4).
     try:
         return await asyncio.to_thread(_rotate_marker_file, worktree)
     except LockTimeout as exc:
-        # Fail-closed: nothing was read or written; surface loudly (CC-7 —
-        # never silently skip a rotation the caller believes happened).
         return _build_error_result(f"lock acquisition timed out: {exc}")
     except OSError as exc:
         return _build_error_result(f"rotation I/O failed: {exc}")

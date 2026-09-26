@@ -34,22 +34,7 @@ import os
 import re
 from typing import Sequence
 
-# ---------------------------------------------------------------------------
-# Nature classification — ordered heuristic priority
-# ---------------------------------------------------------------------------
-# Priority: bugfix > roadmap > tech-debt > infra
-# Rationale:
-#   - bugfix signals ("fix", "revert", "regression") are the most
-#     disambiguating and should win over everything else when present.
-#   - roadmap signals indicate new capability delivery — prominent in commit
-#     subjects (feat/feature/add/implement) and plan-doc paths.
-#   - tech-debt signals cover refactor/cleanup, which often appear in commit
-#     subjects alongside other terms; rank below roadmap to avoid shadowing
-#     deliberate feature work flagged as "add + cleanup".
-#   - infra is the catch-all for tooling/CI/config work and wins only when
-#     nothing more specific fires.
 
-# Path patterns — applied as substring or regex against PurePosixPath strings.
 _PATH_PATTERNS: dict[str, list[str]] = {
     "roadmap": [
         r"docs/plans/",
@@ -86,8 +71,6 @@ _PATH_PATTERNS: dict[str, list[str]] = {
     ],
 }
 
-# Commit-message keyword patterns — matched case-insensitively against
-# individual commit message strings.
 _COMMIT_PATTERNS: dict[str, list[str]] = {
     "bugfix": [
         r"\bfix\b",
@@ -128,25 +111,25 @@ _COMMIT_PATTERNS: dict[str, list[str]] = {
         r"\bcleanup\b",
         r"\bclean[ -]?up\b",
         r"\bdebt\b",
-        r"\bconsolidat",  # consolidate / consolidation (prefix — no trailing \b)
-        r"\bsimplif",     # simplify / simplification (prefix)
-        r"\bremov",       # remove / removal (prefix)
+        r"\bconsolidat",
+        r"\bsimplif",
+        r"\bremov",
         r"\bdedup\b",
         r"\bextract\b",
         r"\bmove\b",
         r"\brename\b",
-        r"\bdeprec",      # deprecate / deprecated (prefix)
-        r"\bstrangl",     # strangle / strangler (prefix)
+        r"\bdeprec",
+        r"\bstrangl",
     ],
     "infra": [
         r"\bci\b",
         r"\bcd\b",
         r"\bbuild\b",
-        r"\bdeploy",      # deploy / deployment (prefix)
-        r"\binstall",     # install / installation (prefix)
+        r"\bdeploy",
+        r"\binstall",
         r"\bconfig\b",
         r"\bscaffold\b",
-        r"\bdependenc",   # dependency / dependencies (prefix)
+        r"\bdependenc",
         r"\bupgrade\b",
         r"\bbump\b",
         r"\bvendor\b",
@@ -159,31 +142,28 @@ _COMMIT_PATTERNS: dict[str, list[str]] = {
     ],
 }
 
-# Evaluation order — earlier = higher priority.
 _PRIORITY: tuple[str, ...] = ("bugfix", "roadmap", "tech-debt", "infra")
 
 
 def _score_paths(paths: Sequence[str]) -> dict[str, int]:
-    """Count path-pattern hits per nature label."""
     scores: dict[str, int] = {n: 0 for n in _PRIORITY}
     for path in paths:
         for nature, patterns in _PATH_PATTERNS.items():
             for pat in patterns:
                 if re.search(pat, path):
                     scores[nature] += 1
-                    break  # one hit per path per nature is enough
+                    break
     return scores
 
 
 def _score_commits(commit_msgs: Sequence[str]) -> dict[str, int]:
-    """Count commit-keyword hits per nature label."""
     scores: dict[str, int] = {n: 0 for n in _PRIORITY}
     for msg in commit_msgs:
         for nature, patterns in _COMMIT_PATTERNS.items():
             for pat in patterns:
                 if re.search(pat, msg, re.IGNORECASE):
                     scores[nature] += 1
-                    break  # one hit per commit per nature is enough
+                    break
     return scores
 
 
@@ -211,7 +191,6 @@ def classify_nature(
     Returns:
         Nature string: "roadmap" | "bugfix" | "tech-debt" | "infra".
     """
-    # Honor the env override — return verbatim, no heuristic.
     override = os.environ.get("COMPLETION_NATURE", "").strip()
     if override:
         return override
@@ -219,20 +198,12 @@ def classify_nature(
     path_scores = _score_paths(paths)
     commit_scores = _score_commits(commit_msgs)
 
-    # Aggregate: sum path and commit scores per nature.
     combined: dict[str, int] = {
         n: path_scores[n] + commit_scores[n] for n in _PRIORITY
     }
 
-    # Strict-priority selection: return the FIRST nature (in priority order)
-    # that has at least one signal hit.  Ties are broken purely by priority —
-    # bugfix wins over roadmap even if roadmap has more cumulative hits, because
-    # the presence of ANY fix/revert/regression signal is disambiguating enough
-    # to outweigh a higher keyword density in a lower-priority category.
-    # When no nature has any signal, fall through to the default "infra".
     for nature in _PRIORITY:
         if combined[nature] > 0:
             return nature
 
-    # No signals at all → safe default.
     return "infra"

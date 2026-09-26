@@ -1,10 +1,3 @@
-"""The commit-phase brief tells the committer to confirm an unaccounted path
-is actually inside its pathspec before halting on it.
-
-Negative spec: the check is that the confirmation clause exists and precedes
-the STOP instruction in the pathspec-reconciliation step, not a prose-quality
-lint on the surrounding sentence.
-"""
 
 from __future__ import annotations
 

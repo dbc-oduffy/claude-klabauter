@@ -94,35 +94,16 @@ from coordinator_core.hooks._payload import field
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
 
 
-#: Generator-provenance declaration: _append_record_sync writes to
-#: <git_common_dir>/coordinator-sessions/<session_id>/
-#: subagent-zero-tool-use.jsonl — inside .git/, never a tracked artifact.
 GENERATES: list = []
 
 
 def _last_assistant_text(transcript_path: str) -> str:
-    """Return the text of the finishing agent's LAST assistant message, or "".
-
-    Companion read to `_count_tool_use_blocks`, kept a separate pass rather than
-    folded into it: the two want opposite scan directions (forward count vs.
-    reverse "last one wins"), and a shared single-pass implementation would
-    have to buffer the whole file to find the tail regardless. Tail-reads only
-    the last 512KB — the tail-seek discipline of
-    `hooks.nudge_harness_directive_dispatch.last_assistant_text`, not re-
-    derived: this hook is on the same hot Stop-adjacent path, and a
-    megabyte-scale transcript must not be read in full just to find its last
-    line.
-
-    Failure modes all resolve to "": absent/unreadable file, no assistant
-    entry at all, or an assistant entry whose content is neither a string nor
-    a list of text blocks. Never raises.
-    """
     try:
         size = os.path.getsize(transcript_path)
         with open(transcript_path, "rb") as fh:
             if size > 512_000:
                 fh.seek(size - 512_000)
-                fh.readline()  # discard the partial line the seek landed inside
+                fh.readline()
             raw = fh.read()
         text = raw.decode("utf-8", errors="replace")
         lines = text.splitlines()
@@ -136,7 +117,7 @@ def _last_assistant_text(transcript_path: str) -> str:
         try:
             entry = json.loads(line)
         except (json.JSONDecodeError, ValueError):
-            continue  # per-line transcript parse; one malformed JSONL line must not abort the scan
+            continue
         if not isinstance(entry, dict) or entry.get("type") != "assistant":
             continue
         msg = entry.get("message")
@@ -154,15 +135,10 @@ def _last_assistant_text(transcript_path: str) -> str:
             joined = "\n".join(t for t in texts if t)
             if joined:
                 return joined
-        # This assistant entry carried no usable text (tool_use-only turn) —
-        # keep walking backward for an earlier one that did.
         continue
     return ""
 
 
-#: Heading this op splices into the finishing agent's own report sidecar.
-#: Presence of this exact literal is also this op's own idempotency guard
-#: (see `_persist_final_report_sync`) — do not reword without updating both.
 _PERSISTED_REPORT_HEADING = "## Persisted final report (SubagentStop)\n\n"
 
 
@@ -238,7 +214,7 @@ def _count_tool_use_blocks(transcript_path: str) -> int | None:
         try:
             record = json.loads(line)
         except (json.JSONDecodeError, ValueError):
-            continue  # per-line transcript parse; one malformed JSONL line must not abort the count
+            continue
         if not isinstance(record, dict):
             continue
         message = record.get("message")
@@ -312,25 +288,6 @@ def _append_record_sync(
 
 @register_op("hooks.subagent_zero_tool_use")
 async def _handler(params: dict, repo_root=None) -> dict:
-    """SubagentStop write op: count tool_use blocks, durable-write ONLY on a verified count.
-
-    Side-effect (verified count only): appends one line to
-    .git/coordinator-sessions/<session_id>/subagent-zero-tool-use.jsonl.
-
-    On UNKNOWN (absent/unreadable transcript, or absent repo_root/session_id):
-    writes nothing, returns no_advisory() — never a count, never confusable with a
-    verified zero.
-
-    Second, independent side-effect: persists the finishing agent's last
-    assistant-message text into its own already-provisioned report sidecar
-    (see `_persist_final_report_sync`) — closes the gap where a dispatched
-    agent's final report is lost in transit and the parent silently defaults
-    instead of seeing a visible gap. This leg is a pure best-effort append
-    and never influences this op's return value or the tool_use-count write.
-
-    Inputs (flat scalar, extracted via _payload.field(); "" treated as absent):
-        session_id, agent_id, agent_type, agent_transcript_path, hook_event_name.
-    """
     params = payload_of(params)
     import asyncio
 
@@ -339,15 +296,11 @@ async def _handler(params: dict, repo_root=None) -> dict:
     agent_type = field(params, "agent_type")
     transcript_path = field(params, "agent_transcript_path")
 
-    # No repo to write into, or no session to key the store by — UNKNOWN, no write.
     if not repo_root or not session_id or not transcript_path:
         return no_advisory()
 
     tool_use_count = await asyncio.to_thread(_count_tool_use_blocks, transcript_path)
 
-    # THE load-bearing branch: absent/unreadable transcript is UNKNOWN, never zero.
-    # Write nothing; return the same clean no-op envelope used on every other
-    # UNKNOWN path so this case is never confusable with a verified count.
     if tool_use_count is None:
         return no_advisory()
 
@@ -356,17 +309,11 @@ async def _handler(params: dict, repo_root=None) -> dict:
     except RuntimeError:
         _sessions_base = Path(str(repo_root)) / "coordinator-sessions"
     store_path = str(_sessions_base / session_id / "subagent-zero-tool-use.jsonl")
-    # Pure path logic off the hub this handler already resolved — no spawn.
     try:
         _worktree_root = str(main_worktree_root(_sessions_base.parent))
     except Exception:  # noqa: BLE001 -- init resolves it itself on this arm
         _worktree_root = ""
 
-    # Independent leg (AC: robustness) — persists the finishing agent's last
-    # assistant text into its own report sidecar, if one was provisioned, so a
-    # lost final-report message is not a silent gap. Never affects the
-    # tool_use-count durable write above or below: failure here is swallowed
-    # entirely inside _persist_final_report_sync.
     if _worktree_root:
         _final_text = await asyncio.to_thread(_last_assistant_text, transcript_path)
         if _final_text:

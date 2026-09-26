@@ -109,11 +109,6 @@ def _ctx(**kwargs):
     return server._ServerContext(**kwargs)
 
 
-# ---------------------------------------------------------------------------
-# Tier 1 -- runs on every platform, Windows included.
-# ---------------------------------------------------------------------------
-
-
 def test_acceptor_enqueues_every_accepted_connection(monkeypatch) -> None:
     """The acceptor's whole job: take the connection off the kernel and put
     it on the shared queue. Dispatch happens on a bounded worker, never
@@ -126,7 +121,7 @@ def test_acceptor_enqueues_every_accepted_connection(monkeypatch) -> None:
     ctx._acceptor_loop(_FakeListener(conns))
 
     assert ctx._queue.qsize() == 2
-    assert ctx.in_flight() == 2  # every enqueue claims its slot at the enqueue point
+    assert ctx.in_flight() == 2
 
 
 def test_acceptor_ends_when_the_listening_socket_closes(monkeypatch) -> None:
@@ -162,7 +157,7 @@ def test_acceptor_survives_a_wrap_failure_and_keeps_accepting(monkeypatch) -> No
     ctx._acceptor_loop(_FakeListener([bad, good]))
 
     assert bad.closed is True
-    assert ctx._queue.qsize() == 1  # the good one still got through
+    assert ctx._queue.qsize() == 1
 
 
 def test_wrap_socket_keeps_the_connection_open_until_the_file_object_closes() -> None:
@@ -211,7 +206,6 @@ def test_ctx_shutdown_removes_only_its_own_socket_file(tmp_path, monkeypatch) ->
 
     ctx = _ctx(engine_root=tmp_path, endpoint_path=endpoint)
 
-    # A successor replaced the file between this server's bind and its exit.
     endpoint.unlink()
     endpoint.write_bytes(b"successor")
 
@@ -241,7 +235,7 @@ def test_ctx_shutdown_on_the_windows_shape_touches_no_socket(tmp_path, monkeypat
     assert ctx.listen_socket is None
     assert ctx.endpoint_path is None
     assert ctx._endpoint_identity is None
-    ctx._ctx_shutdown()  # must not raise
+    ctx._ctx_shutdown()
 
 
 def test_boot_routes_to_exactly_one_election_per_platform() -> None:
@@ -272,15 +266,10 @@ def test_the_socket_path_helper_is_the_one_production_derivation(monkeypatch) ->
     """
     boot = inspect.getsource(server._elect_unix_socket_endpoint)
     assert "election.socket_path(token, engine_clone=repo_root)" in boot
-    # No hand-spelled suffix LITERAL (the `election.socket_path` call itself
-    # contains the substring, so the check is for a quoted one).
     assert '".sock"' not in boot and "'.sock'" not in boot
 
     from coordinator_core.warm import breadcrumb, election
 
-    # A short notional base: the conftest home-quarantine sets a ~90-char
-    # real one, which trips the sun_path budget and turns this derivation
-    # check into a failure about the fixture. Nothing is touched on disk.
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, "/run/u")
     derived = election.socket_path("tok1", engine_clone=Path.cwd())
     assert derived.parent == breadcrumb.svc_dir(Path.cwd())
@@ -322,7 +311,7 @@ def test_each_election_arm_fills_exactly_one_transport_slot() -> None:
             import _winapi
 
             _winapi.CloseHandle(elected.first_handle)
-        assert skew is not None  # import pinned: the arms share one token source
+        assert skew is not None
 
 
 def test_the_serve_dispatch_narrows_on_the_endpoint_not_the_platform() -> None:
@@ -336,7 +325,6 @@ def test_the_serve_dispatch_narrows_on_the_endpoint_not_the_platform() -> None:
     boot = inspect.getsource(server._run_guarded)
     assert "if elected.first_handle is not None:" in boot
     assert "elif elected.listen_socket is not None:" in boot
-    # An election that won neither must die audibly, not serve nothing.
     assert "raise election.ElectionError(" in boot
 
 
@@ -365,8 +353,6 @@ def test_the_dispatch_runaway_guard_is_not_transport_owned() -> None:
 
     assert ipc.DISPATCH_TIMEOUT_SECS == 30.0
 
-    # Neither the shared dispatch seam nor either accept layer may own a
-    # timeout of its own.
     for fn in (server._run_dispatch, server._ServerContext._acceptor_loop):
         assert "wait_for" not in inspect.getsource(fn)
         assert "settimeout" not in inspect.getsource(fn)
@@ -379,11 +365,6 @@ def test_the_posix_accept_layer_reuses_the_shared_worker_pool() -> None:
     assert "self._start_worker_pool()" in source
     assert "self._idle_watchdog_loop" in source
     assert "self._stopped.wait()" in source
-
-
-# ---------------------------------------------------------------------------
-# Tier 2 -- real POSIX syscalls. Skipped, with a reason, off a POSIX kernel.
-# ---------------------------------------------------------------------------
 
 
 def _serve_in_background(ctx, listen_socket):
@@ -413,7 +394,6 @@ def short_tmp_path():
     stamp.parent.mkdir(parents=True, exist_ok=True)
     stamp.write_text("test-engine-stamp\n", encoding="utf-8")
     return base
-
 
 
 @posix_only
@@ -448,11 +428,6 @@ def test_a_real_unix_socket_server_answers_a_real_client(short_tmp_path, monkeyp
     client.settimeout(5)
     try:
         client.connect(str(path))
-        # STAMPED, because the server refuses an unstamped request before it
-        # ever reaches dispatch (-32003, "carried no _engine_token"). This
-        # test could not have known that: it has never executed, so it still
-        # carried the pre-guard request shape. `skew.compute_client_token` is
-        # what `warm.client` stamps, named by the refusal message itself.
         request = {
             "jsonrpc": "2.0",
             "id": "req-1",
@@ -503,7 +478,7 @@ def test_an_abandoned_client_does_not_kill_a_worker(short_tmp_path, monkeypatch)
     quitter.connect(str(path))
     quitter.sendall(b'{"jsonrpc":"2.0","id":"abandoned","method":"ping","params":{}}\n')
     time.sleep(0.1)
-    quitter.close()  # the client is gone before the server can answer
+    quitter.close()
     release.set()
 
     survivor = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -553,6 +528,4 @@ def test_breadcrumb_liveness_reads_a_real_unix_endpoint(short_tmp_path, monkeypa
     finally:
         listen_socket.close()
 
-    # Closed without unlinking -- the hard-kill shape. The file is still
-    # there and must NOT read as alive.
     assert breadcrumb._pipe_is_alive(str(path)) is False

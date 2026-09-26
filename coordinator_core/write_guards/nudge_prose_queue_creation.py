@@ -119,28 +119,15 @@ from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.write_guards.nudge_improvement_queue_write import _ENTRY_LINE_RE
 
 CLASS = "advisory"  # DR-277 -- was "hard-deny" at PRIORITY 119; slot unchanged, not re-slotted.
-# Historical record of this flip -- future CLASS flips relay via
-# docs/reference/guard-class-relay.md, not a hand-written comment.
 MATCHERS = ["Write"]
-PRIORITY = 119  # one slot below nudge_improvement_queue_write (120) -- see module docstring
+PRIORITY = 119
 
-#: Operator-only escape hatch, following the block_* flag-shaped convention
-#: (this guard has no content-based escape by design -- see module
-#: docstring; the only override is a human launching the harness).
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_PROSE_QUEUE_CREATION"
 
-#: Named legacy queue basenames, case-folded.
 _NAMED_QUEUE_BASENAMES = frozenset(
     {"improvement-queue.md", "bug-backlog.md", "debt-backlog.md"}
 )
 
-#: Generic sibling shape: catches the OTHER queue/backlog suffix for each of
-#: the three known families (e.g. `bug-queue.md`, `improvement-backlog.md`)
-#: that the three named basenames above don't already cover. Deliberately
-#: scoped to the three family stems, NOT an open `[\w.-]*` wildcard --
-#: review found the open form hard-denies unrelated files like
-#: `state/release-backlog.md` that have nothing to do with DR-115's legacy
-#: bug/debt/improvement shape (code-reviewer finding, 2026-07-31).
 _GENERIC_QUEUE_RE = re.compile(
     r"^(?:bug|debt|improvement)-(?:queue|backlog)\.md$", re.IGNORECASE
 )
@@ -154,9 +141,6 @@ def _is_queue_shaped_basename(basename: str) -> bool:
 
 
 def _family_from_basename(basename: str) -> str:
-    """Derive the ``--schema`` name ``coordinator-queue-append`` expects
-    from a legacy queue basename (e.g. ``bug-backlog.md`` -> ``bug-backlog``,
-    ``improvement-queue.md`` -> ``improvement-queue``)."""
     stem = basename[:-3] if basename.lower().endswith(".md") else basename
     return stem
 
@@ -201,8 +185,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not _is_queue_shaped_basename(basename):
             return None
 
-        # --- existence gate: target absent -> creation; target present ->
-        #     an existing legacy repo maintaining its own queue, silent ---
         resolved = file_path
         if not os.path.isabs(resolved) and not re.match(r"^[A-Za-z]:[\\/]", resolved):
             cwd = payload.get("cwd")
@@ -238,6 +220,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         }
     except Exception:
-        # Fail-OPEN on any unexpected error -- this guard advises ONLY on a
-        # positive creation match, never on an error.
         return None

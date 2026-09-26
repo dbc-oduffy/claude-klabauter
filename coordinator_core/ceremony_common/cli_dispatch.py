@@ -236,19 +236,10 @@ from coordinator_core.ceremony_common.cli_rejection import (
 )
 from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root_in_process
 
-#: A literal `Path` ending in a `bin` segment, at a location guaranteed absent
 #: on any real box -- see module docstring, "THE SENTINEL'S CONTRACT". Exists
-#: so a `dict[str, Path]`-typed dispatch table can carry a plugin-local
-#: member whose root failed to resolve without widening the table's value
-#: type to `Optional[Path]`.
 UNRESOLVED_PLUGIN_CLI_ROOT = Path("/__coordinator_unresolved_plugin_cli_root__/coordinator/bin")
 
-#: Guards `_exec_with_own_dir_on_path`'s insert/remove pair against a
-#: concurrent caller's own insert landing between this one's insert and its
-#: restore (see that function's docstring) -- mirrors `baton_assemble.
 #: apply._BY_PATH_LOAD_LOCK`'s discipline, kept as a private module-level
-#: lock here rather than imported from that module so this module's own
-#: dependency surface (module docstring's negative-spec) is unchanged.
 _BY_PATH_LOAD_LOCK = threading.Lock()
 
 
@@ -284,17 +275,6 @@ def _exec_with_own_dir_on_path(loader: Any, module: ModuleType, script_dir: str)
 
 #: Per-process cache of already-loaded CLI modules, keyed by the RESOLVED
 #: ABSOLUTE `script_path` (`str(Path.resolve())`) — never by the caller-
-#: chosen `module_name`, which is passed only into
-#: `spec_from_file_location`/`SourceFileLoader` and plays no part in the
-#: cache key. This is defence-in-depth, not a fix for a live defect: today
-#: every trio caller resolves scripts from this module's own
-#: `resolve_cli_script_root` (a fixed `coordinator/bin` under the engine
-#: root), so two different on-disk scripts never collide under one
-#: `module_name` in practice. Keying by path anyway means a future change
-#: to how callers resolve scripts can't silently reintroduce a stale-cache
-#: hit. Neither mtime nor file content participates in the key — a script
-#: edited on disk between two calls with the same resolved path still
-#: returns the first call's already-executed module.
 _LOADED_MODULES: dict[str, ModuleType] = {}
 
 

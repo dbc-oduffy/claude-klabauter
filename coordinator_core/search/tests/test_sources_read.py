@@ -1,10 +1,3 @@
-"""Unit tests for coordinator_core.search.sources_read.
-
-Covers parse-and-produce for the three accepted shapes (cat, head/tail,
-sed -n range) and, more importantly, the decline set: everything this module
-must refuse rather than approximate. No subprocess -- the differential oracle
-against real cat/head/tail/sed lives in C4.
-"""
 
 from __future__ import annotations
 
@@ -19,7 +12,7 @@ from coordinator_core.search.engine import MAX_RENDER_BYTES, Unanswerable
 @pytest.fixture()
 def workdir(tmp_path):
     (tmp_path / "a.txt").write_text("one\ntwo\nthree\n", newline="")
-    (tmp_path / "b.txt").write_text("four\nfive", newline="")  # no trailing newline
+    (tmp_path / "b.txt").write_text("four\nfive", newline="")
     (tmp_path / "empty.txt").write_text("", newline="")
     return str(tmp_path)
 
@@ -28,15 +21,11 @@ def _produce(tokens, cwd):
     return sr.parse_read_segment(tokens).produce(cwd)
 
 
-# --------------------------------------------------------------------------- cat
-
-
 def test_cat_single_file(workdir):
     assert _produce(["cat", "a.txt"], workdir) == "one\ntwo\nthree\n"
 
 
 def test_cat_concatenation_no_headers(workdir):
-    # Real `cat` prints no separator/header between files -- that's head/tail.
     assert _produce(["cat", "a.txt", "b.txt"], workdir) == "one\ntwo\nthree\nfour\nfive"
 
 
@@ -69,9 +58,6 @@ def test_cat_declines_stdin_dash(workdir):
 def test_cat_declines_absent_operand():
     with pytest.raises(Unanswerable):
         sr.parse_read_segment(["cat"])
-
-
-# --------------------------------------------------------------------------- head/tail
 
 
 def test_head_default_n10(workdir):
@@ -118,9 +104,6 @@ def test_head_declines_non_numeric_n(workdir):
         sr.parse_read_segment(["head", "-n", "x", "a.txt"])
 
 
-# --------------------------------------------------------------------------- sed
-
-
 def test_sed_range(workdir):
     assert _produce(["sed", "-n", "2,3p", "a.txt"], workdir) == "two\nthree\n"
 
@@ -155,9 +138,6 @@ def test_sed_trailing_q_optimisation_declines(workdir):
 def test_sed_out_of_bounds_range_declines(workdir):
     with pytest.raises(Unanswerable):
         _produce(["sed", "-n", "5,10p", "a.txt"], workdir)
-
-
-# --------------------------------------------------------------------------- decline: operand set
 
 
 def test_declines_redirection_gt(workdir):
@@ -196,13 +176,7 @@ def test_declines_variable_expansion_operand(workdir):
 
 
 def test_sed_dollar_end_bound_survives_substitution_check(workdir):
-    # `$` as sed's last-line bound is legitimate and must NOT be caught by the
-    # same operand-position substitution check that rejects `$(...)`/`$VAR` in
-    # a file operand -- it never reaches the operand position.
     assert _produce(["sed", "-n", "1,$p", "a.txt"], workdir) == "one\ntwo\nthree\n"
-
-
-# --------------------------------------------------------------------------- decline: unsupported verb
 
 
 def test_declines_unsupported_verb():
@@ -213,9 +187,6 @@ def test_declines_unsupported_verb():
 def test_declines_empty_segment():
     with pytest.raises(Unanswerable):
         sr.parse_read_segment([])
-
-
-# --------------------------------------------------------------------------- decline: path resolution
 
 
 def test_declines_glob_operand(workdir):
@@ -240,13 +211,8 @@ def test_declines_directory(workdir):
         _produce(["cat", "sub"], workdir)
 
 
-# --------------------------------------------------------------------------- decline: decoding
-
-
 def test_declines_nul_byte_anywhere_in_file(workdir):
     path = os.path.join(workdir, "mostly-text.dat")
-    # Text for well over the old 8192-byte NUL-scan window, binary after --
-    # engine._read_text's window would miss this; this module must not.
     with open(path, "wb") as fh:
         fh.write(b"line\n" * 4000)
         fh.write(b"\x00")
@@ -260,9 +226,6 @@ def test_declines_non_utf8_bytes(workdir):
         fh.write("café".encode("latin-1"))
     with pytest.raises(Unanswerable):
         _produce(["cat", "latin1.txt"], workdir)
-
-
-# --------------------------------------------------------------------------- decline: read-size guard
 
 
 def test_declines_oversized_file_without_reading(workdir):

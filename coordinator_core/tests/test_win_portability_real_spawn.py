@@ -38,10 +38,6 @@ def _write_child_script(tmp_path, stdout_text="out-line\n", stderr_text="err-lin
 
 
 def test_bare_subprocess_run_reproduces_the_original_break(tmp_path):
-    """Proves the defect exists before asserting the fix: a bare
-    subprocess.run call against a fileno-less StringIO target raises
-    io.UnsupportedOperation -- the exact exception whose bare str() collapses
-    to the single word "fileno" in workday_complete.apply's failed[] entries."""
     child = _write_child_script(tmp_path)
     buf = io.StringIO()
     with pytest.raises(io.UnsupportedOperation):

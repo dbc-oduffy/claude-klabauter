@@ -1,11 +1,3 @@
-"""
-coordinator_core.session.tests.test_harness_registry — C1 scoped test suite.
-
-Spec backlink: pln-the-harness-already-knows-whic-096836 § C1
-
-All fixtures are fabricated on `tmp_path` — this suite never reads the
-operator's real `~/.claude/sessions`.
-"""
 
 from __future__ import annotations
 
@@ -19,12 +11,6 @@ import pytest
 
 from coordinator_core.session import harness_registry as hr
 
-# The UTC-vs-local distinction on the ctime leg is invisible on a
-# UTC-offset-0 runner (mktime == timegm there) — pin a non-UTC zone for
-# every test in this module so a regression to `time.mktime` fails loudly
-# regardless of the CI box's own zone. `time.tzset()` is POSIX-only (absent
-# on Windows); tests using it are skipped there rather than silently
-# passing on a zone they didn't actually pin.
 _HAS_TZSET = hasattr(time, "tzset")
 
 
@@ -59,7 +45,6 @@ def _epoch_to_filetime_ticks(epoch: float) -> int:
 class TestFiletimeConversion:
     def test_known_good_pair(self):
         # 2026-08-08T00:00:00Z, verified independently: FILETIME ticks for
-        # this instant computed via (epoch + 11644473600) * 1e7.
         epoch = 1783929600.0
         ticks = _epoch_to_filetime_ticks(epoch)
         assert hr._proc_start_to_epoch(ticks) == pytest.approx(epoch, abs=1e-3)
@@ -79,18 +64,11 @@ class TestFiletimeConversion:
         assert hr._proc_start_to_epoch(None) is None
 
     def test_ctime_string_in_band_parses(self):
-        # procStart's ctime string is UTC (memo-confirmed, 37/37 live
-        # records) — build the fixture from gmtime, expect it to round-trip
-        # via timegm exactly. TZ is pinned non-UTC by the module fixture, so
-        # this fails if the implementation regresses to `time.mktime`.
         epoch = int(time.time()) - 60
         ctime_str = time.strftime("%a %b %d %H:%M:%S %Y", time.gmtime(epoch))
         result = hr._proc_start_to_epoch(ctime_str)
         assert result is not None
         assert result == pytest.approx(epoch, abs=1e-6)
-        # The buggy local-time interpretation of the identical clock-face
-        # reading: on a non-UTC runner (pinned above) this must diverge from
-        # `result`, or this test isn't exercising the UTC-vs-local defect.
         buggy = time.mktime(time.strptime(ctime_str, "%a %b %d %H:%M:%S %Y"))
         assert result != pytest.approx(buggy, abs=1.0)
 
@@ -101,7 +79,6 @@ class TestFiletimeConversion:
         result = hr._proc_start_to_epoch(iso_str)
         assert result is not None
         assert result == pytest.approx(epoch, abs=1e-6)
-        # Buggy local-time interpretation of the same naive clock-face value.
         naive = datetime.fromisoformat(iso_str)
         buggy = time.mktime(naive.timetuple())
         assert result != pytest.approx(buggy, abs=1.0)
@@ -123,22 +100,15 @@ class TestFiletimeConversion:
         assert hr._proc_start_to_epoch("") is None
 
     def test_float_procstart_falls_through_not_truncated_into_filetime(self):
-        # A JSON float must never silently truncate via int() into the
         # FILETIME leg (Defect 1) -- it is neither a genuine int nor a
         # ctime/ISO-8601 string, so it must yield None, not a coincidentally
-        # "valid" epoch from truncated ticks.
         epoch = time.time() - 60
         ticks_float = float(_epoch_to_filetime_ticks(epoch))
         assert hr._proc_start_to_epoch(ticks_float) is None
 
     def test_numeric_string_tries_ctime_and_iso_before_filetime(self):
-        # A numeric-looking string (e.g. "133...") must not be swallowed
         # into the FILETIME leg via a bare int(raw) ahead of the ctime/
         # ISO-8601 string branches -- but as of the digits-string FILETIME
-        # leg it IS a legitimate last-resort shape once those two both
-        # fail, matching the 54/54 live Windows records measured
-        # 2026-08-14 (procStart rendered as a digits string, not a bare
-        # int).
         epoch = time.time() - 60
         in_band_ticks = _epoch_to_filetime_ticks(epoch)
         result = hr._proc_start_to_epoch(str(in_band_ticks))
@@ -151,24 +121,16 @@ class TestFiletimeConversion:
         assert hr._proc_start_to_epoch(str(out_of_band_ticks)) is None
 
     def test_signed_digits_string_not_admitted_as_filetime(self):
-        # No sign handling on the digits-string leg -- str.isdigit() rejects
-        # a leading '-', so a negative numeric string must still fall
         # through to None rather than being admitted as a FILETIME.
         in_band_ticks = _epoch_to_filetime_ticks(time.time() - 60)
         assert hr._proc_start_to_epoch("-" + str(in_band_ticks)) is None
 
     def test_bool_procstart_rejected(self):
-        # bool is an int subclass in Python -- must not be admitted to the
         # FILETIME leg (mirrors _parse_one's own pid bool-rejection).
         assert hr._proc_start_to_epoch(True) is None
         assert hr._proc_start_to_epoch(False) is None
 
     def test_unicode_digit_string_rejected_not_raised(self):
-        # str.isdigit() returns True for non-decimal Unicode digit
-        # characters (category No, e.g. superscript U+00B2) that int()
-        # rejects with ValueError -- the digits-string leg must return
-        # None for this shape rather than letting the ValueError escape,
-        # per the function's own "Raises nothing" contract.
         assert hr._proc_start_to_epoch("²²²") is None
 
 
@@ -310,10 +272,6 @@ class TestCtimeShapedRegistry:
         assert result["sess-b"].start_epoch == pytest.approx(epoch_b, abs=1.0)
 
     def test_unicode_digit_procstart_skips_record_not_whole_scan(self, tmp_path, monkeypatch):
-        # A single malformed procStart of this shape must not abort
-        # snapshot()'s scan loop and return an empty registry -- that is
-        # the exact zero-parse outage e3d681a65 fixed. It must only skip
-        # the one bad record while a valid sibling record still resolves.
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
         good_ticks = _epoch_to_filetime_ticks(time.time() - 60)
@@ -358,8 +316,6 @@ class TestExceptionBoundary:
 
 
 class TestSelfRecord:
-    """C1 (`docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md`)
-    — the O(1) pid-keyed leg."""
 
     def test_self_record_hit(self, tmp_path, monkeypatch):
         sessions_dir = tmp_path / "sessions"
@@ -388,9 +344,6 @@ class TestSelfRecord:
         assert record.stable_pid_capture == "env-hit"
 
     def test_self_record_threads_reason_onto_record(self, tmp_path, monkeypatch):
-        """C2b — the discarded `reason` leg of `_resolve_claude_pid_from_env()`
-        lands on the returned record's `stable_pid_capture` field, reusing
-        the same vocabulary the other three call sites already write."""
         sessions_dir = tmp_path / "sessions"
         epoch = time.time() - 60
         ticks = _epoch_to_filetime_ticks(epoch)
@@ -471,9 +424,6 @@ class TestCwdField:
 
 
 class TestNameAndSocketFields:
-    """2026-08-13 session-owner-reachability-registry § 1: `name` and
-    `messagingSocketPath` parse the same optional-string-or-None way `cwd`
-    already does -- required by `coordinator_core.session.reachability`."""
 
     def test_name_and_socket_parsed(self, tmp_path, monkeypatch):
         sessions_dir = tmp_path / "sessions"
@@ -526,10 +476,6 @@ class TestNameAndSocketFields:
 
 
 class TestStatusField:
-    """2026-08-13 live-peer-roster § 3 amendment: `status` parses the same
-    optional-string-or-None way `cwd`/`name` already do -- display-only, no
-    verdict attached, and NEVER a liveness input (this module's own
-    negative-spec, amended not deleted)."""
 
     def test_status_parsed(self, tmp_path, monkeypatch):
         sessions_dir = tmp_path / "sessions"
@@ -576,10 +522,6 @@ class TestStatusField:
         assert record.status is None
 
     def test_status_never_attaches_a_verdict(self, tmp_path, monkeypatch):
-        # A record's `status` field carries no liveness/reachability meaning
-        # of its own -- parsing it must not change what `lookup`/`snapshot`
-        # otherwise return for an out-of-band procStart, mirroring `cwd`'s
-        # own no-verdict contract.
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
         out_of_band_ticks = _epoch_to_filetime_ticks(time.time() - hr._SANITY_BAND_PAST_SEC - 3600)
@@ -592,8 +534,6 @@ class TestStatusField:
         (sessions_dir / "1.json").write_text(json.dumps(payload), encoding="utf-8")
         monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
 
-        # An out-of-band procStart still yields None for the whole record,
-        # regardless of what `status` says -- status is never consulted.
         assert hr.lookup("sess-dead-but-labeled-busy") is None
 
 
@@ -624,10 +564,6 @@ class TestSingleScanInvariant:
 
 
 class TestRegistryRecordFieldContract:
-    """Pins `RegistryRecord`'s full field set against the module docstring's
-    documented list, so a future field addition cannot drift the docstring
-    silently (the exact defect class this module has already been bitten
-    by — added chunk C2b alongside `stable_pid_capture`)."""
 
     def test_field_set_matches_documented_contract(self):
         import dataclasses

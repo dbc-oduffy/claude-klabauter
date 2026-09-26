@@ -81,18 +81,6 @@ def declare_write(path: object) -> None:
 
 @contextlib.contextmanager
 def collecting(into: Optional[List[str]] = None) -> Iterator[List[str]]:
-    """Open a declaration collection for the duration of the block.
-
-    Yields the list that `declare_write` appends to. Nesting is supported: an
-    inner collection shadows the outer one and the outer list is restored on
-    exit, so a handler that itself invokes another handler cannot leak
-    declarations upward.
-
-    The yielded list object is stable for the life of the block, which is what
-    makes this work across ``asyncio.to_thread`` — that call copies the context,
-    so a rebind would be invisible to the caller, but appends to the same list
-    object are not.
-    """
     collected: List[str] = into if into is not None else []
     token = _ACTIVE.set(collected)
     try:
@@ -102,9 +90,4 @@ def collecting(into: Optional[List[str]] = None) -> Iterator[List[str]]:
 
 
 def active_declarations() -> Optional[List[str]]:
-    """Return the open collection, or None when no collection is open.
-
-    Exposed for the dispatch seam and for tests; handlers should call
-    `declare_write` rather than reaching for the list.
-    """
     return _ACTIVE.get()

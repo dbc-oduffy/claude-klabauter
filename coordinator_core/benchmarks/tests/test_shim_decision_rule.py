@@ -1,14 +1,3 @@
-"""Unit tests for coordinator_core.benchmarks.shim_decision_rule.
-
-Covers evaluate()'s verdict boundaries (pass/wash/fail, including the
-statistic-ambiguous and zero-baseline wash triggers) and
-calibrate_aa_noise_floor()'s pure-computation contract (via a fake
-interleaved-stats stand-in, no real subprocess spawns -- this module must
-stay fast and must NOT measure any shim, see shim_decision_rule.py's
-module docstring).
-
-Spec backlink: docs/plans/2026-08-16-a-process-per-predicate.md, chunk C7.
-"""
 
 from __future__ import annotations
 
@@ -49,7 +38,6 @@ def test_pass_when_reduction_clears_margin_and_sample_counts_match():
 
 def test_wash_when_reduction_is_positive_but_below_margin():
     baseline = _stats(median_ms=90.0, p90_ms=100.0, sample_count=30)
-    # Improvement exists but does not clear the margin.
     shim_p90 = 100.0 * (1.0 - (CHEAPER_THAN_MARGIN / 2.0))
     shim = _stats(median_ms=shim_p90 * 0.9, p90_ms=shim_p90, sample_count=30)
     record = evaluate(
@@ -118,16 +106,10 @@ def test_record_round_trips_through_json():
 
 
 def test_calibrate_aa_noise_floor_returns_one_reduction_per_repeat():
-    """calibrate_aa_noise_floor() is a pure driver over run_interleaved --
-    verified here with a cheap in-process callable (never a subprocess
-    spawn) so this test stays fast and, per this module's own stage-1
-    scope, never measures a shim."""
     counter = {"n": 0}
 
     def cheap_invoke() -> float:
         counter["n"] += 1
-        # Deterministic-ish tiny varying "duration" in ms, purely to give
-        # run_interleaved something non-degenerate to reduce.
         return float((counter["n"] % 5) + 1)
 
     reductions = calibrate_aa_noise_floor(cheap_invoke, n_rounds=5, r_repeats=3)
@@ -136,8 +118,6 @@ def test_calibrate_aa_noise_floor_returns_one_reduction_per_repeat():
 
 
 def test_calibrate_aa_noise_floor_skips_repeats_with_zero_baseline_stat():
-    """A repeat whose A arm produces an all-zero baseline stat is skipped
-    (reduction_fraction undefined) rather than raising."""
 
     def zero_invoke() -> float:
         return 0.0

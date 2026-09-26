@@ -1,8 +1,3 @@
-"""Tests for `coordinator_core.op_census.cross_repo_consumers` — AC1-AC3.
-
-Runs against a temp-dir memo corpus, never the live `cross-repo/` tree, so
-this suite does not move when a memo is filed or archived.
-"""
 
 from __future__ import annotations
 
@@ -48,9 +43,6 @@ def test_matches_module_path_shape(tmp_path: Path) -> None:
 def test_op_module_map_none_value_contributes_only_dotted_shape(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC2's None arm is a test case, not a defensive branch: a fake op name
-    mapped to `None` must still match on its dotted name and must not raise
-    while deriving the (absent) module-path shape."""
     monkeypatch.setitem(_registry_map.OP_MODULE_MAP, "fake.none_mapped_op", None)
     _write(tmp_path, "inbox", "three.md", "This memo names `fake.none_mapped_op`.")
 
@@ -94,8 +86,6 @@ def test_no_match_yields_empty_list(tmp_path: Path) -> None:
 
 
 def test_one_pass_tests_every_name_against_each_memo(tmp_path: Path) -> None:
-    """A single memo naming two of three requested ops must be read once and
-    still contribute a hit to each name it names."""
     _write(
         tmp_path,
         "inbox",
@@ -115,14 +105,6 @@ def test_one_pass_tests_every_name_against_each_memo(tmp_path: Path) -> None:
 def test_read_count_equals_memo_count_not_memo_times_name_count(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Regression guard for the one-pass shape itself, not just its outcome:
-    `test_one_pass_tests_every_name_against_each_memo` verifies correct hits,
-    but a per-name-outer loop that reads each memo once per requested name
-    (O(memos x names) reads) would produce the same hits and still pass it.
-    This test counts actual `Path.read_text` calls against the corpus and
-    asserts that count equals the number of memos, independent of how many
-    op names are requested — it goes red the moment the loop nesting is
-    inverted, even though the hit outcome would stay correct."""
     _write(tmp_path, "inbox", "one.md", "This memo names `records.history`.")
     _write(tmp_path, "inbox", "two.md", "This memo names `ping` and `records.history`.")
     _write(tmp_path, "inbox", "three.md", "Nothing here names any op.")

@@ -42,9 +42,6 @@ def _judgment_point(point_id: str, resolves: list[str]) -> dict[str, Any]:
 
 
 def _recorder() -> tuple[list[str], dict[str, Any]]:
-    """A dispatch table whose every handler appends its own cli name to a
-    shared list — the ONLY evidence of what actually dispatched, independent
-    of what the report claims."""
     dispatched: list[str] = []
 
     def make(name: str):
@@ -92,13 +89,9 @@ def test_dependent_of_a_judgment_blocked_directive_does_not_dispatch(tmp_path: P
     )
 
     assert exit_code == apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT
-    # The upstream is blocked at its judgment point; the dependent inherits
-    # that block; the independent directive is untouched by either.
     assert dispatched == ["unrelated"]
     assert report["landed"] == ["d_free"]
     assert {r["id"] for r in report["results"]} == {"d_free"}
-    # Only the originating judgment point is reported — `d_up` is not
-    # something `--decisions` can resolve.
     assert report["unresolved_judgment_points"] == ["j_gate"]
 
 
@@ -172,9 +165,6 @@ def test_dependent_fires_once_its_judgment_point_is_resolved(tmp_path: Path) -> 
 
 
 def test_dependent_of_an_already_satisfied_directive_still_fires(tmp_path: Path) -> None:
-    """`already_satisfied` is a LANDING, not a block — a narrated no-op
-    (an absent producer, a `--force` bypass, a deferred post-merge step)
-    must not take its dependents down with it."""
     dispatched, table = _recorder()
     directives = [
         {

@@ -1,17 +1,3 @@
-"""An emitted script says which repo its relative paths resolve against.
-
-Every path in an emitted prompt is repo-relative on purpose — a drive-lettered
-citation does not survive being re-run on another box (`_spec_path_for_prompt`).
-That rests on one premise: the executor is already standing in the repo the
-script was emitted for. On a fleet box it is false. A Workflow inherits the
-DRIVER SESSION's cwd, and on a multi-repo box that is routinely a sibling.
-
-Measured 2026-09-10: a 23-row mise run emitted for claude-klabauter and fired from
-a session standing in DoE-claude returned BLOCKED from eight of ten executors
-against a spine that existed — in the repo they were not in — and its commit
-agent read the same-named file in the sibling as a cross-repo divergence and
-halted the run. One declared anchor, not a per-citation absolutisation.
-"""
 
 from __future__ import annotations
 
@@ -50,7 +36,6 @@ def test_the_executor_prompt_names_the_repo_root():
 
 
 def test_the_anchor_leads_the_preamble():
-    """An executor that reads only the first line should already know where it is."""
     preamble = _plan_context_preamble(_context("/repo"))
     assert preamble.splitlines()[0].startswith("Repo root: /repo")
 
@@ -62,8 +47,6 @@ def test_no_repo_root_declares_no_anchor_rather_than_inventing_one():
 
 
 def test_the_commit_agent_gets_the_same_anchor():
-    """It halted the run over a same-named file in a sibling repo; it needs to
-    know which repo its pathspec is relative to before calling that a divergence."""
     call = _commit_agent_call(
         ["docs/plans/p.md"], "Commit wave 1", 0, ["C1"], repo_root="/home/user/claude-klabauter"
     )

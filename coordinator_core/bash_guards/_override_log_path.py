@@ -37,25 +37,10 @@ import os
 from typing import Optional
 
 #: Mirrors the one entry of `liveness._NON_SESSION_DIR_NAMES` this module
-#: needs. Deliberately NOT an import: these guards run in a PreToolUse hook
-#: on the commit hot path, where pulling in the session package for one
-#: string is cost the hook cannot justify. If the name ever changes,
-#: `test_override_log_bucket_is_denylisted` fails — it imports the real set
-#: and compares.
 NO_SESSION_BUCKET = "no-session"
 
 
 def session_audit_log_dir(git_root: str, session_id: Optional[str]) -> Optional[str]:
-    """Return the directory a per-session audit line may be appended to —
-    the session's OWN directory when it already exists, otherwise the
-    denylisted `no-session` bucket — creating only a directory that is safe
-    to create; `None` if no path resolves.
-
-    Never mints `<hub>/<sid>`. `session/core.py::ensure_session` is the only
-    constructor of a session directory, and an audit writer is not it: a
-    directory minted here is enumerated as a SESSION by
-    `liveness.live_session_ids`, with no `meta.json` for any peer to read.
-    """
     if not git_root:
         return None
     sessions_root = os.path.join(git_root, ".git", "coordinator-sessions")
@@ -63,19 +48,11 @@ def session_audit_log_dir(git_root: str, session_id: Optional[str]) -> Optional[
     sid_dir = os.path.join(sessions_root, sid)
     if sid != NO_SESSION_BUCKET and not os.path.isdir(sid_dir):
         sid_dir = os.path.join(sessions_root, NO_SESSION_BUCKET)
-    # Only ever the `no-session` bucket or a directory that already exists.
     os.makedirs(sid_dir, exist_ok=True)
     return sid_dir
 
 
 def _override_log_path(git_root: str, session_id: Optional[str]) -> Optional[str]:
-    """Return the `overrides.log` path to append to, creating only a
-    directory that is safe to create; `None` if no path resolves.
-
-    A session's OWN directory is used when it already exists (created by
-    `core.init`). Otherwise the line goes to the `no-session` bucket rather
-    than minting `<sid>/`.
-    """
     sid_dir = session_audit_log_dir(git_root, session_id)
     if sid_dir is None:
         return None

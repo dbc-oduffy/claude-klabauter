@@ -1218,23 +1218,6 @@ from coordinator_core.write_guards.block_subagent_plan_body_write import (
 )
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
-# C3 (2026-08-03-narrow-subagent-commit-confinement-two-classes.md) landing-
-# order safety: C4's ownership-scope check (`assert_paths_in_session_scope`)
-# is authored (C4a) but its own wiring chunk lands in a LATER commit than
-# this one. `coordinator_core.ops.session.scope_report` transitively imports
-# the `coordinator_core.ops` package (and, through it,
-# `coordinator_core.hooks` -- see `test_bash_guards_avoid_hooks_package.py`),
-# so it is deliberately NOT imported at module scope: this guard runs on
-# EVERY Bash call, and the predicate below only matters for the rare
-# `coordinator:git-commit-agent` commit-shaped command, so a module-level
-# import would put a ~19-module hot-path cost on every other Bash
-# invocation. `_import_assert_paths_in_session_scope` below performs the
-# SAME import, lazily, at call time inside `_git_commit_agent_may_commit`,
-# wrapped so an ImportError (or any other import-time exception) resolves to
-# `None` rather than propagating -- a partial/out-of-order landing of this
-# multi-chunk plan stays DENY-biased, not allow-biased. Never shell this out
-# as the `session.scope_report` op -- see that module's own docstring for
-# why an in-process import is required on a guard's fail-closed seam.
 def _import_assert_paths_in_session_scope():
     try:
         from coordinator_core.ops.session.scope_report import (
@@ -1245,14 +1228,6 @@ def _import_assert_paths_in_session_scope():
     return assert_paths_in_session_scope
 
 
-# Companion importer for the SAME module, kept separate from the one above
-# because the two answer different questions and one of them is censused.
-# `denial_is_wholly_indeterminate` is `scope_report`'s own predicate for "did
-# this refusal rest on evidence?" -- its docstring names THIS module as the
-# consumer, and for the whole window between that predicate landing and this
-# importer existing it had none, so the contract it declares was unenforced.
-# Fails to `None` on any import error, and the caller then keeps the deny it
-# already computed: an absent predicate must not become an implicit allow.
 def _import_denial_is_wholly_indeterminate():
     try:
         from coordinator_core.ops.session.scope_report import (
@@ -1264,50 +1239,16 @@ def _import_denial_is_wholly_indeterminate():
 
 CLASS = "hard-deny"
 # Widened 2026-08-19 (subagent-boundary MATCHERS parity): a dispatched
-# subagent choosing the PowerShell tool instead of Bash previously bypassed
-# this guard entirely (see docs/reference/guard-tool-name-membership.md).
-# Several internal helpers (`_has_git_commit`, `_has_coordinator_safe_
-# commit`, `_has_committing_op_invoke`) fail CLOSED on unparseable input --
-# a documented, intentional DENY-biased posture for this guard specifically
-# (see `_import_assert_paths_in_session_scope`'s comment above), unlike the
-# held stash/worktree cohort where a fail-closed fallback was ruled a
-# defect. Widening here is therefore not the same risk class.
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 40
 
-#: The one narrow, route-keyed commit exemption this module grants (DR-125
 #: Ruling 3, C3 of the plan named above) -- resolved STRICTLY from the
-#: harness-supplied `payload["agent_type"]` leg, never the disk-read
-#: `_read_backpointer_subagent_type` leg (see `_git_commit_agent_may_commit`'s
-#: docstring and the module docstring's C3 entry for why). Deliberately NOT
 #: added to `_ALLOWED_SUBAGENT_TYPES` below -- that set exempts a type on
-#: EVERY command shape (including a bare `git add -A`), which DR-125 Ruling 3
-#: never authorized; this constant instead keys a narrow, command-shape-aware
-#: predicate applied only inside the already-resolved-and-matched branch.
 _GIT_COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
 
-#: Named-persona commit grant (PM ruling 2026-08-27): the Opus-tier reviewer/
-#: synthesizer personas carry the EM's permission set with respect to THIS
-#: module -- a member never trips the subagent-commit deny. Every other guard
-#: in the chain (`blanket-git-add`, the `destructive-git-*` cohort, Check 5's
-#: scoped-staging deny) still applies to them exactly as it applies to the EM,
-#: which is what "the EM's permission set" means here: not an exemption from
-#: git hygiene, only from the no-self-commit rule.
-#:
 #: Resolved from the HARNESS-SUPPLIED `payload["agent_type"]` ONLY, never
 #: `effective_type` -- the same discipline `_GIT_COMMIT_AGENT_TYPE` is held to
-#: and for the same reason. `effective_type` ORs in `_read_backpointer_
-#: subagent_type`, a disk read a subagent can write to itself; keying an
-#: unconditional commit grant off that leg would let any subagent forge
-#: membership by naming itself `coordinator:staff-eng` in its own backpointer.
 #: Deliberately NOT folded into `_ALLOWED_SUBAGENT_TYPES` below, which is
-#: checked against `effective_type` and therefore carries exactly that
-#: forgery exposure.
-#:
-#: Known, accepted boundary, unchanged from this module's header: model tier
-#: is not observable at this PreToolUse seam, so "Opus-tier" is enforced by
-#: the model-guard hook on dispatch, not here -- a persona dispatched with a
-#: `model:` override is admitted by type alone.
 _NAMED_PERSONA_COMMIT_TYPES: frozenset = frozenset({
     "coordinator:eng-director",
     "coordinator:staff-eng",
@@ -1317,116 +1258,33 @@ _NAMED_PERSONA_COMMIT_TYPES: frozenset = frozenset({
     "coordinator:vp-product",
 })
 
-#: Forward-compatibility hook (the Director of Engineering Finding D6) -- still empty. Its original
-#: docstring described it as reserved for "a future named-Opus member";
-#: `coordinator:git-commit-agent` (C3 above) is the first live subagent
-#: commit route this module grants, and it is Sonnet, not Opus, and is NOT a
 #: member of this set (see `_GIT_COMMIT_AGENT_TYPE`'s own docstring for why
-#: type-membership alone is the wrong shape for it). Model tier is
-#: unobservable at this PreToolUse seam regardless (only agent_id/agent_type/
-#: subagent_type are visible), so the Opus framing was never mechanically
-#: enforced -- reaffirmed here, not retracted: this set remains reserved for
 #: a future type that legitimately needs an UNCONDITIONAL exemption (every
-#: command shape, not just a scoped commit route), which is a materially
-#: different and stronger grant than C3's, and none exists today.
 _ALLOWED_SUBAGENT_TYPES: frozenset = frozenset()
 
-# --- Detection: git-commit invocation (with or without arbitrary global
-#     options) plus the `coordinator-safe-commit` helper. Conceptually
 #     descended from nudge_subagent_scoped_commit.py's `_GIT_COMMIT_RE` (the
 #     scoped-pathspec `_SCOPED_RE` exemption is deliberately NOT ported --
 #     M4 denies every subagent git commit, scoped or not), then HARDENED
-#     2026-07-25 from a fixed-shape regex to a token walk after a confirmed
-#     bypass report (see the module docstring's "Bypass fix" paragraph). ---
 
 #: git global options that consume a SEPARATE following token as their
-#: argument (``-C <path>``, ``-c <name>=<value>``). ``-C`` and ``-c`` are
 #: DIFFERENT git options (repo-root override vs. config override) -- this
-#: set is intentionally case-sensitive; lowercasing to "simplify" the check
-#: would silently conflate them, which is exactly the kind of shortcut this
-#: module's docstring now warns against.
 _GIT_GLOBAL_OPTS_WITH_SEP_ARG = frozenset({"-C", "-c"})
 
 _COORDINATOR_SAFE_COMMIT_BINARY = "coordinator-safe-commit"
 _GIT_BINARY = "git"
 
-#: ``coordinator/bin/scoped-git-commit`` (2026-08-01, C5): a second helper
-#: that shells out to the SAME ``ceremony.scoped_git_commit`` op
-#: ``coordinator-safe-commit`` itself dispatches -- see this module's
-#: docstring entry of the same name (part 7) for the confirmed hole this
-#: closes.
 _SCOPED_GIT_COMMIT_BINARY = "scoped-git-commit"
 
-#: Every helper binary that shells out to ``git commit`` under the hood and
-#: is therefore in scope for ``_has_coordinator_safe_commit`` exactly like a
-#: direct ``git commit`` invocation. A single named set so the identity
-#: check, the argv0-head normalization passes, and the Windows spaced-path
-#: regex below all consult the SAME membership rather than three
-#: independently-hand-maintained name lists that could drift apart --
 #: exactly the failure class ``_COMMITTING_OP_NAMES`` already exists to
-#: prevent for the invoke-matcher/prefilter pair (see the module docstring's
-#: part-6 entry).
 _COMMIT_HELPER_BINARY_NAMES = frozenset(
     {_COORDINATOR_SAFE_COMMIT_BINARY, _SCOPED_GIT_COMMIT_BINARY}
 )
 
-#: The binary identities this module's argv0-head normalization passes
-#: (``_normalize_windows_git_argv0`` and
-#: ``_normalize_windows_argv0_head_path_with_spaces``) recognize at ARGV0
 #: POSITION -- both matchers below (``_has_git_commit`` and
-#: ``_has_coordinator_safe_commit``) need a Windows backslash-path argv0 to
-#: be rewritten to a shlex-safe form before tokenizing, not just ``git``
-#: (2026-07-29 part 4 -- see this module's docstring entry of the same
-#: name for the confirmed bypass this closes; widened 2026-08-01 part 7 to
-#: also cover ``scoped-git-commit``).
 _ARGV0_HEAD_NORMALIZE_NAMES = frozenset({_GIT_BINARY}) | _COMMIT_HELPER_BINARY_NAMES
 
-# --- Payload/quoting hardening (2026-07-26, prose false-positive report):
-#     `_has_git_commit` used to segment `cmd` with a quote-BLIND
-#     `re.split(r"[;&|]", cmd)` and then tokenize each fragment with a bare
-#     `frag_norm.split(" ")` -- neither step knew a heredoc BODY is stdin
-#     DATA (never executed as shell command tokens) nor that a quoted
-#     argument is ONE word, not several. A staff-eng reviewer persisting its
-#     findings sidecar via a heredoc (`cat <<'EOF' > review.md ... EOF`)
-#     whose PROSE discussed this very guard's "git commit" enforcement was
-#     denied: the heredoc BODY text supplied the literal adjacent tokens
-#     ``git`` and ``commit`` to the naive per-fragment scan, even though the
-#     executed command was `cat <<'EOF' > review.md` -- no git invocation at
-#     all. The same quote-blindness independently false-positives on
-#     `echo "reviewing git commit conventions"`: the naive splitter breaks
-#     the quoted argument into separate ``git``/``commit`` tokens instead of
-#     the one quoted word bash's own lexer sees.
-#
-#     Fixed by porting the SAME two-part machinery
-#     `block_subagent_destructive_action.py` already uses for this exact
-#     problem class (own-module copy, per this file's established pattern --
-#     at the time, the retired `_extract_first_token`'s own docstring
-#     explained why cross-module import was deliberately avoided; that
-#     function no longer exists as of the 2026-07-29 part 4 entry, but the
-#     tokenizer-trio own-module-copy choice this paragraph describes is
-#     unaffected): heredoc-BODY stripping
-#     (`_strip_heredoc_bodies`, ported verbatim) run BEFORE tokenization, and
-#     a `shlex`-based quote-aware tokenizer (`_tokenize_full_command`/
-#     `_segments_from_tokens`) in place of the naive regex split. `shlex` in
-#     POSIX mode treats a bare backslash as an escape character, which would
-#     silently mangle a Windows `C:\Git\bin\git` argv0 token into
-#     `C:Gitbingit` BEFORE the git-binary boundary check ever runs --
-#     `_normalize_windows_git_argv0` (also ported) rewrites a `git`-basename
 #     Windows-path token to its forward-slash equivalent, AT ARGV0 POSITION
-#     ONLY, before shlex ever sees it, so the existing Windows-path git
-#     detection tests keep passing unaffected. `_has_coordinator_safe_commit`
-#     is NOT touched by THIS fix -- it has no reported bug through a heredoc
-#     or a quoted multi-word argument here, and none of the required
-#     regression tests exercise it through this shape; rewriting working,
-#     untested-as-broken code in the same change as a targeted bug fix is
-#     unneeded regression surface on a
-#     shared branch.
-#
 #     NEGATIVE SPEC: do not "simplify" this back to a bare `cmd.split(";")`
-#     or a per-fragment `.split(" ")` on the theory that real git invocations
-#     never need quote-awareness -- that theory is exactly what shipped the
-#     bug this section fixes. Prose almost always needs quote-awareness;
-#     git commands almost never do; the guard must handle both. ---
 
 _QUOTE_OPEN_CHARS = "'\"`("
 _ARGV0_HEAD_BOUNDARY_PRE = (
@@ -1434,31 +1292,11 @@ _ARGV0_HEAD_BOUNDARY_PRE = (
 )
 _RAW_HEAD_TOKEN_RE = re.compile(r"(" + _ARGV0_HEAD_BOUNDARY_PRE + r")([^\s;&|]+)")
 
-#: Heredoc operator + delimiter word (``<<EOF``, ``<< EOF``, ``<<-EOF``,
-#: ``<<'EOF'``, ``<<"EOF"``). Ported verbatim from
 #: ``block_subagent_destructive_action.py``'s ``_HEREDOC_OP_RE`` -- same
-#: false-positive class, same fix. Herestrings (``<<<``) have no body and
-#: are intentionally NOT matched.
 _HEREDOC_OP_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
 
 def _strip_heredoc_bodies(cmd: str) -> str:
-    """Remove heredoc BODY lines (stdin data) from ``cmd``, keeping the
-    command line that introduces each heredoc and dropping everything from
-    the next line through the closing delimiter line (inclusive).
-
-    Ported verbatim from ``block_subagent_destructive_action.py``'s
-    function of the same name (own-module copy, not a cross-module import --
-    see the section comment above this function's siblings). A heredoc
-    feeds literal data to a command's stdin; its content is never executed
-    as shell commands, so the git-commit detectors below must not treat
-    words appearing inside it as command tokens. Anti-bypass: this does NOT
-    reduce protection against an interpreter fed BY a heredoc (``bash
-    <<EOF ... EOF``) -- after the body is stripped, the residual
-    ``bash <<'EOF'`` is untouched by THIS module (out of scope for a commit
-    gate; that shape is `block_subagent_destructive_action.py`'s concern).
-    Multiple heredocs queued on one line are consumed in order.
-    """
     lines = cmd.split("\n")
     out: List[str] = []
     i = 0
@@ -1470,7 +1308,7 @@ def _strip_heredoc_bodies(cmd: str) -> str:
         for delim in [m.group(2) for m in _HEREDOC_OP_RE.finditer(line)]:
             while i < n and lines[i].strip() != delim:
                 i += 1
-            if i < n:  # consume the closing delimiter line too
+            if i < n:
                 i += 1
     return "\n".join(out)
 
@@ -1512,26 +1350,7 @@ def _normalize_windows_git_argv0(cmd: str) -> str:
     return _RAW_HEAD_TOKEN_RE.sub(_rewrite, cmd)
 
 
-#: Mirrors ``block_subagent_destructive_action.py``'s
 #: ``_WINDOWS_ARGV0_HEAD_PATH_RE`` (own-module copy, not a cross-module
-#: import -- see this module's established pattern). Originally narrowed to
-#: ``git`` only; generalized 2026-07-29 part 4 to also recognize a
-#: ``coordinator-safe-commit(.cmd)?`` terminal component -- the prior
-#: narrowing (justified at the time by ``_has_coordinator_safe_commit``
-#: being a separate, non-shlex, frag-based extractor that would mis-split
-#: an already-quoted spaced path even if this regex quoted it first) no
-#: longer holds: that extractor is retired below in favor of the same
-#: canonical tokenizer ``_has_git_commit`` uses, so a normalized/quoted path
-#: now tokenizes correctly for either binary. The alternation is still a
-#: literal-name match at a path-separator boundary, same as
-#: ``token_matches_binary`` -- ``evil-coordinator-safe-commit`` does not
-#: match (nothing precedes ``evil-`` to anchor the boundary before the
-#: literal ``coordinator-safe-commit`` alternative). ``[\\/]{1,2}`` (not a
-#: single separator) admits a UNC path opening with two backslashes, same
-#: reasoning as the sibling's own comment on that point. Widened 2026-08-01
-#: part 7 to also recognize a ``scoped-git-commit(.cmd)?`` terminal
-#: component, same boundary rule (``evil-scoped-git-commit`` does not
-#: match).
 _WINDOWS_ARGV0_HEAD_PATH_RE = re.compile(
     r"(?P<sep>\A|[;&|\n])(?P<ws>\s*)(?P<q>[\"']?)"
     r"(?P<path>(?:[A-Za-z]:)?[\\/]{1,2}(?:[^\\/\r\n]+?[\\/])*"
@@ -1542,27 +1361,6 @@ _WINDOWS_ARGV0_HEAD_PATH_RE = re.compile(
 
 
 def _normalize_windows_argv0_head_path_with_spaces(cmd: str) -> str:
-    """Rewrite a Windows absolute (drive-letter- or root-rooted) argv0-head
-    path -- possibly containing embedded-space components
-    (``C:\\Program Files\\Git\\bin\\git.exe``) -- whose basename normalizes
-    to ``git``, into its forward-slash equivalent, additionally
-    single-quoting it when unquoted AND whitespace-containing, so the whole
-    path lands as ONE ``shlex`` token at argv0 position instead of
-    splitting on the embedded space.
-
-    Mirrors ``block_subagent_destructive_action.py``'s function of the same
-    name (own-module copy; see this module's 2026-07-29-part-3 docstring
-    entry for why the ``git`` handling was originally ported as consistency/
-    defense-in-depth rather than as a fix for a demonstrated bypass in THIS
-    module's own execution model). 2026-07-29 part 4 generalized the
-    underlying regex to also recognize ``coordinator-safe-commit`` -- see
-    the regex's own comment for why the earlier "deliberately NOT included"
-    exclusion no longer holds. Runs BEFORE ``_normalize_windows_git_argv0``:
-    once a matched path is quoted here, it no longer contains a bare ``\\``
-    outside the quotes, so the older pass's ``if "\\" in token`` gate finds
-    nothing left to do for it -- a strict widening, not a replacement, of
-    the older pass's coverage.
-    """
 
     def _rewrite(m: "re.Match[str]") -> str:
         sep, ws, q, path = m.group("sep"), m.group("ws"), m.group("q"), m.group("path")
@@ -1576,39 +1374,10 @@ def _normalize_windows_argv0_head_path_with_spaces(cmd: str) -> str:
 
 
 def _tokens_reach_commit_after_git(tokens: list) -> bool:
-    """Token walk: for every token in ``tokens`` that boundary-matches the
-    ``git`` binary (see ``_token_matches_binary`` -- bare ``git``,
-    ``bin/git``, an absolute POSIX path ending ``/git``, or an absolute
-    Windows path ending ``\\git``; ``.exe``-suffixed forms are folded in via
-    the canonical tokenizer (2026-07-29 part 2) and embedded-space Windows
-    paths are folded in via ``_normalize_windows_argv0_head_path_with_spaces``
-    (2026-07-29 part 3) -- both run in ``check()`` before this walk ever
-    sees the tokens, so neither is out-of-scope any longer), walk forward past a
-    run of git GLOBAL options -- separate-arg forms (``-C <path>``,
-    ``-c <name>=<value>``, skipped two tokens at a time), attached long
-    forms (``--git-dir=...``, ``--work-tree=...``, skipped one token), and
-    no-argument boolean flags (``--no-pager``, skipped one token), in any
-    combination and count -- looking for the ``commit`` subcommand token.
-    Returns True on the first ``git ... commit`` chain found anywhere in
-    ``tokens``.
-
-    This is a walk, not a regex, because ``git -c user.name=x commit`` is
-    not expressible as a fixed two-word sequence: the ``-c`` option's VALUE
-    (``user.name=x``) is a separate token that is neither a flag (no
-    leading ``-``) nor the ``commit`` subcommand, so a regex anchored on a
-    literal ``"git commit"`` or ``"git -C ... commit"`` shape misses it
-    entirely -- this was one of the three confirmed 2026-07-25 bypasses.
-    """
     return _git_commit_chain_scan(tokens)[0]
 
 
 def _git_commit_chain_scan(tokens: "Sequence[str]") -> "Tuple[bool, Optional[str]]":
-    """The single walk `_tokens_reach_commit_after_git` and
-    `_explicit_git_dash_c_value` both need: whether some `git ... commit`
-    chain exists in `tokens`, and the last `-C <path>` seen inside that
-    same chain. One function so the two questions can't silently diverge
-    on what counts as a commit chain -- see `_tokens_reach_commit_after_git`
-    for the walk's own reasoning (global-option skip, break-on-non-flag)."""
     n = len(tokens)
     for start in range(n):
         if not _token_matches_binary(tokens[start], _GIT_BINARY):
@@ -1630,45 +1399,14 @@ def _git_commit_chain_scan(tokens: "Sequence[str]") -> "Tuple[bool, Optional[str
     return False, None
 
 
-#: Shell interpreters whose ``-c <string>`` argument is itself a shell
 #: command line that will actually be EXECUTED -- ``env``/``nice``/``time``
-#: prefix the invocation without changing what runs. BX-13 confirmed-live
-#: bypass (2026-07-29, real-dispatcher attempt, not guard-in-isolation): a
-#: git-commit invocation quoted as the single ``-c`` argument to one of
-#: these interpreters (``sh -c "git commit -m x"``) was previously ALLOWED
-#: outright, even under a resolved subagent identity -- the quoted string
-#: tokenizes as ONE shlex word (the same "quoted argument is not executable
-#: command text" property this module's own heredoc/quoting fix relies on
-#: to correctly ALLOW `echo "reviewing git commit conventions"`), so
-#: neither ``_has_git_commit`` nor ``_has_coordinator_safe_commit`` ever
-#: examined its contents. Unlike ``echo``'s argument, a shell interpreter's
-#: ``-c`` argument is not inert text -- it is the command the interpreter
-#: executes -- so it must be unwrapped and re-scanned, not skipped.
 _C_FLAG_SHELL_INTERPRETERS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 
-#: C1 (2026-08-03) -- a Python interpreter's ``-c <string>`` argument is
-#: EQUALLY the actual command executed, not inert prose, for exactly the
-#: reason documented above for a shell's ``-c``. Deliberately kept as a
 #: SEPARATE set from ``_C_FLAG_SHELL_INTERPRETERS`` rather than folded into
 #: it -- see the module docstring's NEGATIVE SPEC amendment (2026-08-03) for
-#: why widening THAT set stays forbidden while this parallel set does not
 #: violate the same rule. Reuses ``_PYTHON_INTERPRETER_NAMES`` (defined
-#: below, already consulted by ``_tokens_reach_committing_op_after_python``
-#: for the unrelated ``-m coordinator_core.invoke`` shape) rather than a
-#: second, independently-hand-maintained name list -- module-level name
-#: lookup happens at call time, so the forward reference is safe.
-#: ``_normalized_interpreter_head`` (below) additionally strips a dotted
-#: Python version suffix so ``python3.11``/``python3.12.1`` match too.
 
-#: Trailing dotted Python version suffix (``python3.11`` -> ``python3``,
-#: ``python3.12.1`` -> ``python3``), stripped by ``_normalized_interpreter_
-#: head`` below so a versioned interpreter binary is recognized identically
-#: to its bare form. Own-module copy of ``block_subagent_destructive_
 #: action.py``'s ``_PYTHON_VERSION_SUFFIX_RE`` / ``_normalize_interpreter_
-#: basename``, per this file's established no-cross-module-coupling pattern
-#: for small tokenizer-adjacent helpers (see ``_strip_env_prefix_for_
-#: commit_unwrap``'s own docstring for the same pattern already in use
-#: here).
 _PYTHON_VERSION_SUFFIX_RE = re.compile(r"^(python3?)(?:\.\d+)+$")
 
 
@@ -1688,31 +1426,7 @@ def _normalized_interpreter_head(token: str) -> str:
     return match.group(1) if match else base
 
 
-#: A Python interpreter's ``-c`` argument is Python SOURCE text, not shell
-#: syntax -- unlike a shell's ``-c`` payload, re-tokenizing it with the
-#: shlex-based ``_tokenize_full_command`` does NOT reliably isolate the
-#: argv-shaped words a caller passes to ``subprocess``/``os.system`` (e.g.
-#: ``subprocess.run(['scoped-git-commit','-m','x'])`` tokenizes as ONE
-#: opaque token -- ``subprocess.run([scoped-git-commit,-m,x])`` -- since
 #: shlex only splits on WHITESPACE, and there is none between the call
-#: syntax and the quoted list elements; confirmed empirically this session,
-#: the exact reason the naive "just re-scan the raw -c payload" approach
-#: alone does not catch the repro this fix exists for). This regex instead
-#: extracts every single- or double-quoted Python string LITERAL from the
-#: payload, in appearance order, so they can be rejoined into a synthetic,
-#: space-separated argv-shaped line and fed back through the SAME shared
-#: unwrap/re-scan machinery -- see ``_python_c_payload_argv_text`` below.
-#: Deliberately approximate, not a Python parser: it does not decode
-#: backslash escapes inside a literal, does not evaluate string
-#: concatenation/f-strings/``+``, and a literal that itself contains the
-#: OTHER quote character unescaped is still matched correctly (the
-#: negative-lookalike class in each alternative excludes only the quote
-#: character terminating THAT alternative). This is sufficient for the
-#: argv-shaped literals a subprocess/os.system call embeds -- a string-
-#: built payload (``'g'+'it'``) reconstructs to ``"g it"``, two separate
-#: words, NOT ``"git"`` -- so it correctly stays undetected, matching
-#: AC13's documented, structurally-permanent residual rather than
-#: accidentally over-fixing it.
 _PYTHON_STRING_LITERAL_RE = re.compile(
     r"'(?:[^'\\]|\\.)*'" r'|"(?:[^"\\]|\\.)*"',
     re.DOTALL,
@@ -1735,43 +1449,11 @@ def _python_c_payload_argv_text(payload: str) -> str:
     return " ".join(literals)
 
 
-#: Module roots a provably-inert Python ``-c`` payload may import (part 14,
 #: 2026-08-04; NARROWED part 17, 2026-08-05). Pure data/text/format modules
 #: with no process-spawn, no filesystem-mutation, no ANNOTATION-EVALUATION,
-#: and no dynamic-import surface of their own. Anything absent from this set
-#: -- including a module that merely LOOKS harmless -- makes the payload NOT
-#: provably inert, which restores the pre-part-14 behaviour (run the
-#: reconstruction leg, deny on a helper-name match). Submodule imports
-#: (``a.b``) are checked on the ROOT package only, so an unlisted root can
-#: never be reached through a listed one.
-#:
-#: FOUR ROOTS WERE DROPPED IN PART 17, and the reasons are recorded here
-#: because "this module looks like data handling" is exactly the reasoning
-#: that admitted the first two and produced a live bypass:
-#:
 #: * ``typing`` -- ``get_type_hints`` EVALUATES string annotations through
-#:   ``eval``, and ``ForwardRef._evaluate`` compiles and evaluates its own
-#:   string. Annotation evaluation is a documented, first-class eval path,
-#:   not an obscure corner.
-#: * ``dataclasses`` -- ``make_dataclass`` accepts an annotation as a plain
-#:   string and routes it to the same evaluator; it was the other half of
-#:   the confirmed weaponized payload.
-#: * ``string`` -- ``string.Formatter`` walks arbitrary attribute chains off
-#:   its format arguments (``'{0.__class__}'``), i.e. a reflection surface
-#:   reached without naming a single dunder in the payload text.
-#: * ``functools`` -- ``reduce``/``partial`` APPLY a caller-supplied
-#:   callable, which turns "can this payload name a dangerous function" into
-#:   a second, harder question this walk should not have to answer.
-#:
-#: The roots that remain are audited to expose no eval, exec, spawn, import,
-#: or callable-application primitive: ``ast`` (parse/dump/walk build and read
-#: trees; ``literal_eval``/``compile`` are refused at CALL position by
 #: `_INERT_SAFE_CALLABLE_NAMES`), ``json``, ``re`` (``re.compile`` is refused
 #: by the same callable allowlist and by `_NON_INERT_BUILTIN_NAMES`),
-#: ``textwrap``, ``difflib``, ``collections``, ``unicodedata``, ``hashlib``,
-#: ``base64``, ``math``, ``itertools``, ``decimal``, ``datetime``. Every one
-#: of them is now doubly gated: importing a root buys nothing on its own,
-#: because each individual call and attribute must ALSO clear
 #: `_INERT_SAFE_CALLABLE_NAMES`.
 _INERT_PAYLOAD_IMPORT_ROOTS = frozenset(
     {
@@ -1791,11 +1473,6 @@ _INERT_PAYLOAD_IMPORT_ROOTS = frozenset(
     }
 )
 
-#: Module identities that make a payload NOT provably inert even when they
-#: are never imported in that payload (a bare ``importlib.import_module(...)``
-#: reference relies on an ambient binding this checker cannot see). Checked
-#: against every ``Name`` in the payload, so the spawn/dynamic-import families
-#: are refused by identity as well as by import statement.
 _NON_INERT_MODULE_NAMES = frozenset(
     {
         "os",
@@ -1831,14 +1508,6 @@ _NON_INERT_MODULE_NAMES = frozenset(
     }
 )
 
-#: Builtin identities that can reach an execution sink, a dynamic import, or
-#: an attribute the static walk below would otherwise never see. A payload
-#: referencing any of these -- called or bare -- is not provably inert.
-#: ``open`` is handled separately (``_open_call_is_read_only``): reading a
-#: file is the entire legitimate case this exemption exists for, so ``open``
-#: is inert at CALL position with an absent or literal read-only mode, and
-#: non-inert everywhere else (a bare ``open`` reference carries no mode to
-#: check).
 _NON_INERT_BUILTIN_NAMES = frozenset(
     {
         "eval",
@@ -1859,49 +1528,16 @@ _NON_INERT_BUILTIN_NAMES = frozenset(
     }
 )
 
-#: ``help`` is in the set above for a non-obvious reason worth stating: it
-#: routes through ``pydoc``, which pages output through a SPAWNED pager and
-#: imports arbitrary modules on ``help('modules')``. It is a sink wearing
-#: documentation's clothes, and this checker's whole job is to refuse
-#: anything it cannot prove is not one.
 
 _OPEN_BUILTIN_NAME = "open"
 
-#: Attribute names that reach a process spawn, a filesystem mutation, a
-#: deserialization sink, or the reflection chain that walks from any object
-#: back to ``Popen`` (``().__class__.__bases__[0].__subclasses__()``).
 #: Matched on the ATTRIBUTE name alone, never on the object it hangs off --
-#: the object's identity is exactly what a static walk cannot resolve.
-#:
-#: ``load``/``loads`` are deliberately ABSENT (the one omission from the
-#: deserialization family): every module that could supply a dangerous one
-#: (``pickle``, ``marshal``, ``shelve``, and any third-party equivalent) is
 #: already outside `_INERT_PAYLOAD_IMPORT_ROOTS` AND, for the spawn family,
 #: inside `_NON_INERT_MODULE_NAMES` as a bare name -- so no binding a
-#: provably-inert payload can construct ever resolves ``loads`` to a
-#: deserialization sink, while ``json.loads(open(p).read())`` is a first-
-#: class read-only shape this exemption exists to permit. This is an
-#: unreachable-sink argument about the allowlist, not a judgment that
 #: ``loads`` is safe: if `_INERT_PAYLOAD_IMPORT_ROOTS` ever gains a module
-#: with an executing deserializer, these two names come back.
-#:
 #: ANNOTATION-EVALUATION FAMILY (part 17, 2026-08-05) -- the names below are
-#: execution sinks in the strict sense that they hand a STRING to ``eval``
-#: at runtime, and they were invisible to every leg of this module until a
-#: confirmed bypass used two of them together:
-#:
-#:     import typing, dataclasses
-#:     s = ''.join([chr(c) for c in [...]])       # ord-encoded program
-#:     C = dataclasses.make_dataclass('C', [('a', s)])
-#:     typing.get_type_hints(C)                   # evaluates s as code
-#:
 #: They are folded into `_NON_INERT_ATTRIBUTE_NAMES` rather than kept in a
-#: parallel list SO THAT part 16's sink sets pick them up by the subtraction
 #: they are already derived through (`_EXECUTION_SINK_ATTRIBUTE_NAMES`),
-#: which is what makes the opaque-argument refusal fire on them. Adding a
-#: sibling name here is therefore the single edit that teaches both parts.
-#: ``_evaluate`` is not a dunder (single leading underscore), so
-#: `_identifier_is_dunder` never covered it.
 _ANNOTATION_EVAL_ATTRIBUTE_NAMES = frozenset(
     {
         "get_type_hints",
@@ -1918,15 +1554,8 @@ _ANNOTATION_EVAL_ATTRIBUTE_NAMES = frozenset(
     }
 )
 
-#: THE ``os.exec*`` FAMILY (part 21, 2026-08-05) -- enumerated because the
-#: ``exec`` PREFIX could not be, and the reasoning lives at
 #: `_NON_INERT_ATTRIBUTE_PREFIXES`. Every ``exec``-named process-creation
-#: callable the ``os`` module exports (3.11-3.14): ``execl``/``execv`` crossed
-#: with the ``e``/``p``/``pe`` variants. ``posix_spawn``/``posix_spawnp`` are
-#: NOT here -- they stay with the ``spawn`` family root, which does bound its
 #: family. Folded into `_NON_INERT_ATTRIBUTE_NAMES` below rather than kept
-#: parallel, so part 16's sink sets pick them up through the subtraction they
-#: are already derived through and one edit teaches every leg.
 _OS_EXEC_FAMILY_NAMES = frozenset(
     {
         "execl",
@@ -1973,42 +1602,13 @@ _NON_INERT_ATTRIBUTE_NAMES = _ANNOTATION_EVAL_ATTRIBUTE_NAMES | _OS_EXEC_FAMILY_
     }
 )
 
-#: Attribute-name FAMILY ROOTS in the same family as the set above, covering
-#: the whole ``os.spawn*`` family without enumerating each arity and
-#: environment variant.
-#:
-#: PART 19 (2026-08-05) -- these are matched by `_name_is_process_creation`,
-#: NOT by ``startswith``, and the difference was a confirmed live ALLOW:
-#: ``os.posix_spawn(os.environ['X'], [], {})`` starts a program and does not
-#: START WITH either root, so no leg of this module saw a sink at all. Adding
-#: the two ``posix_*`` names to a list would have fixed that one spelling and
-#: left the CLASS open, because the same shape recurs for any future
-#: ``<prefix>_spawn``. The regex below therefore anchors each root at a word
-#: start -- string start or after an underscore -- which is what "the
-#: ``spawn`` family" always meant.
-#:
-#: PART 21 (2026-08-05) -- ``exec`` IS NO LONGER A ROOT, and the ``os.exec*``
 #: members are enumerated in `_OS_EXEC_FAMILY_NAMES` instead, exactly as
-#: ``system``/``popen``/``fork`` already were. A root only pays for itself
-#: when it bounds a family it can name: ``spawn`` does (every member is
-#: ``spawn``+arity, and ``<prefix>_spawn`` recurs), ``exec`` does not -- it
-#: also claimed ``execute``, ``executemany``, ``exec_driver_sql``,
-#: ``db_exec`` and ``sql_execute``, and ``cursor.execute(sql)`` is the
-#: universal DB idiom, not a process spawn. That collateral routed the
-#: harshest door (`_sink_takes_opaque_program_text` denies on ANY unresolved
-#: argument) at a measured DENY. The ``os`` exec surface is closed and short,
-#: so enumerating it costs one list and removes a regex claiming a family it
-#: could not bound.
 _NON_INERT_ATTRIBUTE_PREFIXES = ("spawn",)
 
 #: The members are `_OS_EXEC_FAMILY_NAMES`, defined with the attribute set
-#: above because that is where they are consumed.
 
 #: The family roots above, anchored at a NAME-SEGMENT boundary. Built from
 #: `_NON_INERT_ATTRIBUTE_PREFIXES` rather than hand-spelled so a new root is
-#: still exactly one edit, and consumed by every leg that used to spell its
-#: own ``startswith`` loop (the inertness check, mechanism 2's sink identity,
-#: and its opaque-program-text narrowing).
 _PROCESS_CREATION_NAME_RE = re.compile(
     r"(?:^|_)(?:%s)" % "|".join(_NON_INERT_ATTRIBUTE_PREFIXES)
 )
@@ -2038,79 +1638,12 @@ def _name_is_process_creation(name: str) -> bool:
     return _PROCESS_CREATION_NAME_RE.search(name) is not None
 
 #: THE CALLABLE ALLOWLIST (part 17, 2026-08-05) -- the ONLY functions and
-#: methods a provably-inert payload may invoke, and the only attribute names
-#: it may even mention. Matched on the NAME alone at ``Name`` and
-#: ``Attribute`` position both, identity-blind about the receiver exactly as
-#: the rest of this checker is.
-#:
-#: WHY IT EXISTS, stated plainly because the shape it replaces read as an
-#: allowlist and behaved as a denylist: before part 17 an attribute was inert
 #: unless it appeared in `_NON_INERT_ATTRIBUTE_NAMES`, so EVERY unlisted
-#: callable -- including ``typing.get_type_hints``, which evaluates strings
-#: as code -- was cleared by default. That is the inversion this module's own
 #: NEGATIVE SPEC forbids, and it produced a confirmed live bypass. The
-#: direction is now: unrecognised means NOT inert, full stop.
-#:
 #: SOUNDNESS ARGUMENT, which is what keeps this list addable-to safely: every
-#: entry denotes a PURE operation -- it reads bytes, parses or formats data,
-#: or computes over values already in hand -- and none of them starts a
-#: process, imports a module, deserialises executable state, evaluates a
-#: string, or applies a callable this checker did not itself clear. That last
-#: clause is why the callback-taking entries (``sorted``'s ``key``,
-#: ``re.sub``'s callable ``repl``) are safe: a callable can only reach a
-#: call or callback slot under a name this list clears.
-#:
 #: THAT CLAUSE IS ENFORCED, NOT ASSUMED, AS OF PART 21 (2026-08-05), and it
-#: was false when first written -- the wording claimed "a bare reference to
-#: anything else is refused at ``Name``/``Attribute`` position" while the walk
-#: refused only dunders and the two forbidden name sets, so ``sorted = type``
-#: and ``from ast import literal_eval as z; get = z; get('1+1')`` both
-#: certified inert. Three legs now carry it, each with its own predicate:
-#: `_inert_load_name_is_cleared` (a Name READ must be allowlisted, payload-
-#: bound, or an ``except`` type), `_import_binding_launders_a_cleared_name`
-#: (an import may not RENAME something into an allowlisted spelling), and the
-#: import-position rule inside `_inert_load_name_is_cleared` (an import-bound
-#: name may appear only as an attribute receiver or a call target, never as a
-#: value handed to a callback). The residual is stated where it belongs, on
-#: `_python_c_payload_is_provably_inert`.
-#:
-#: Entries, with the justification each was admitted on:
-#:
-#: * File inspection -- ``open`` (read mode only, enforced separately by
-#:   `_open_call_is_read_only`), ``read``, ``readlines``. The entire
-#:   legitimate use case this exemption exists for.
-#: * Text/data slicing -- ``splitlines``, ``split``, ``rsplit``, ``join``,
-#:   ``strip``, ``lstrip``, ``rstrip``, ``lower``, ``upper``, ``startswith``,
-#:   ``endswith``, ``count``, ``find``, ``format``, ``encode``, ``decode``.
-#:   Pure ``str``/``bytes`` methods. (``replace`` is deliberately ABSENT: it
 #:   is refused by `_NON_INERT_ATTRIBUTE_NAMES` as ``os.replace``, and this
-#:   list may never contradict that set -- pinned by a test.)
-#: * Output/inspection builtins -- ``print``, ``len``, ``repr``, ``str``,
-#:   ``int``, ``float``, ``bool``, ``bytes``, ``list``, ``tuple``, ``dict``,
-#:   ``set``, ``sorted``, ``reversed``, ``enumerate``, ``zip``, ``range``,
-#:   ``sum``, ``min``, ``max``, ``abs``, ``any``, ``all``, ``format``.
-#:   Value construction and reduction; none reaches an interpreter.
-#: * Container reads -- ``items``, ``keys``, ``values``, ``get``, ``append``.
-#:   Needed by any payload that reads JSON and reports part of it.
-#: * ``ast`` -- ``parse``, ``dump``, ``walk``. Building and printing a syntax
-#:   tree is not running one; ``literal_eval`` and ``compile`` are NOT here.
-#: * ``json`` -- ``load``, ``loads``, ``dumps``, ``dump``. See the
 #:   unreachable-sink argument on `_NON_INERT_ATTRIBUTE_NAMES` for why
-#:   ``load``/``loads`` cannot resolve to ``pickle``'s.
-#: * ``re`` -- ``search``, ``findall``, ``match``, ``sub``, ``fullmatch``,
-#:   ``group``, ``groups``. Pattern matching over text already read.
-#:   ``re.compile`` is absent by design.
-#: * ``hashlib`` -- ``sha256``, ``sha1``, ``sha512``, ``md5``, ``hexdigest``,
-#:   ``digest``. Digesting a file that was read is arithmetic; the shape
-#:   ``print(hashlib.sha256(open(p,'rb').read()).hexdigest())`` is a
-#:   first-class read this exemption already permitted.
-#: * ``difflib`` -- ``unified_diff``, ``ndiff``. Comparing two texts the
-#:   payload already holds; the ``difflib`` read shape is pinned in the
-#:   part-14 corpus.
-#:
-#: Add to this list ONLY with a justification of the same shape, and never in
-#: response to a bypass report -- a bypass here means something unrecognised
-#: was cleared, and the answer to that is always to narrow.
 _INERT_SAFE_CALLABLE_NAMES = frozenset(
     {
         _OPEN_BUILTIN_NAME,
@@ -2184,19 +1717,8 @@ _INERT_SAFE_CALLABLE_NAMES = frozenset(
     }
 )
 
-#: Any of these characters in an ``open`` mode string means the call can
-#: WRITE (``w``/``a``/``x`` outright, ``+`` upgrading a read mode to
-#: read-write), so the payload is not provably inert. A mode argument that is
-#: not a literal string is likewise not provably inert -- unknown is never
-#: treated as read-only.
 _OPEN_WRITE_MODE_CHARS = frozenset("wax+")
 
-#: The AST node types a provably-inert payload may contain. Marker nodes
-#: (operators, comparison ops, expression contexts) are cleared by base class
-#: below rather than enumerated. Anything absent -- a lambda, a def, a
-#: decorator, a walrus, an ``async`` construct, a ``del``, a ``global``
-#: statement, or a node type added by a future Python release -- makes the
-#: payload NOT provably inert.
 _INERT_PAYLOAD_NODE_TYPES: Tuple[type, ...] = (
     ast.Module,
     ast.Expr,
@@ -2243,8 +1765,6 @@ _INERT_PAYLOAD_NODE_TYPES: Tuple[type, ...] = (
     ast.FormattedValue,
 )
 
-#: Marker node families cleared wholesale: they carry no callable surface of
-#: their own, only which operator/context an already-checked node uses.
 _INERT_PAYLOAD_MARKER_TYPES: Tuple[type, ...] = (
     ast.operator,
     ast.unaryop,
@@ -2324,22 +1844,12 @@ def _open_call_is_read_only(node: "ast.Call") -> bool:
 
 
 #: The name `_INERT_SAFE_CALLABLE_NAMES` admits for ``str.format``/``format``,
-#: singled out because its template argument carries a field grammar the AST
-#: walk cannot see (see `_format_template_names_a_dunder`).
 _FORMAT_CALLABLE_NAME = "format"
 
-#: CPython's own format-template reader, used as the grammar of record rather
-#: than a hand-rolled brace scanner -- the field syntax this must agree with
-#: is defined by the very object that will interpret the template at runtime.
 _FORMAT_FIELD_PARSER = string.Formatter()
 
-#: Splits a field name into its ``arg_name``/attribute/index components:
-#: ``0.__class__.__bases__[0]`` -> ``0``, ``__class__``, ``__bases__``, ``0``.
 _FORMAT_FIELD_COMPONENT_SPLIT = re.compile(r"[.\[\]]+")
 
-#: Bound on how deep a nested format spec (``'{0:{1:{2}}}'``) is followed
-#: when harvesting field names. Fails CLOSED: a template nested past the cap
-#: is treated as unreadable, and an unreadable template is never cleared.
 _MAX_FORMAT_FIELD_DEPTH = 8
 
 
@@ -2611,9 +2121,6 @@ def _python_c_payload_is_provably_inert(payload: str) -> bool:
                     return False
                 read_only_open_func_ids.add(id(func))
         else:
-            # A computed call target (``('a'+'b')()``, ``f()()``, ``d['k']()``)
-            # resolves to no name at all, so it can never be shown to be on
-            # the allowlist.
             return False
 
     for node in nodes:
@@ -2683,24 +2190,11 @@ def _python_c_payload_is_provably_inert(payload: str) -> bool:
     return True
 
 
-#: Bound on ``sh -c 'sh -c "..."'``-style nesting depth, mirroring the
-#: sibling indirection-wrapper engine in
 #: ``block_subagent_destructive_action.py`` (``_MAX_INDIRECTION_DEPTH``).
-#: Fails CLOSED implicitly: once the cap is hit, unwrapping simply stops and
-#: the innermost un-inspected payload is never cleared, so a command that
-#: nests past the cap does not thereby escape scanning of the shallower
-#: levels already found commit-bearing.
 _MAX_COMMIT_UNWRAP_DEPTH = 4
 
 
 def _strip_env_prefix_for_commit_unwrap(tokens: list) -> list:
-    """Strip a leading ``env [-i] [NAME=value ...]`` and/or bare
-    ``NAME=value`` prefix so ``env sh -c '...'`` and ``FOO=1 sh -c '...'``
-    still resolve to the wrapped interpreter head. Mirrors
-    ``block_subagent_destructive_action.py``'s ``_strip_env_prefix`` (own-
-    module copy, per this file's established no-cross-module-coupling
-    pattern for small tokenizer-adjacent helpers).
-    """
     i = 0
     while i < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[i]):
         i += 1
@@ -2756,34 +2250,12 @@ def _protect_interpreter_argv0_backslash_path(cmd: str) -> str:
     return _RAW_HEAD_TOKEN_RE.sub(_rewrite, cmd)
 
 
-#: The leg tag `_wrapped_shell_c_payload_legs` attaches to a payload it
 #: SYNTHESIZED from a Python `-c` payload's own quoted string literals
-#: (`_python_c_payload_argv_text`), as opposed to a payload a shell or
-#: Python interpreter genuinely received as executed text. Threaded through
-#: the three matchers into `check()` and on to `_deny_reason` purely so the
-#: deny message can NAME this leg -- it never participates in the verdict.
-#:
-#: Why it needs naming (2026-08-04, dispatched-executor report): the
-#: reconstruction leg cannot tell a Python string literal that merely NAMES
-#: a commit helper from a `subprocess.run([...])` call that INVOKES it --
-#: by construction, since it discards all Python syntax between the
-#: literals. So `python3 -c "import ast; ast.parse(open('coordinator/bin/
-#: scoped-git-commit').read())"` -- a pure read -- denies identically to a
-#: real commit, and the generic "finish your edits and report to the EM"
-#: message names an action that resolves nothing: NO re-spelling of a
-#: read-only command that contains that path will ever pass. Same defect
-#: shape, and same fix shape, as the 2026-08-03 correction above
 #: `_GIT_COMMIT_AGENT_DENY_REASON` (an agent re-trying argv variants
-#: against a leg no argv change can fix).
 _PAYLOAD_LEG_PYTHON_STRING_LITERALS = "payload-leg:python-string-literals"
 
-#: The leg tag for part 16's mechanism 2 -- a Python ``-c`` payload whose
-#: execution sink takes an argument the constant folder could not resolve.
 #: Its own tag rather than a reuse of the one above, for MESSAGE ACCURACY:
 #: `_PYTHON_C_PAYLOAD_DENY_REASON` tells the caller "no re-spelling passes",
-#: which is true of a helper path named in a literal and FALSE here -- an
-#: opaque argument spelled as a literal argv passes on the next attempt.
-#: This module has already shipped one incident where a correct verdict came
 #: with a message naming the wrong cause; see `_GIT_COMMIT_AGENT_LEG_
 #: MESSAGES`' own note.
 _PAYLOAD_LEG_PYTHON_OPAQUE_SINK = "payload-leg:python-opaque-sink"
@@ -2814,10 +2286,6 @@ def _wrapped_shell_c_payload_legs(
         yield payload, payload_leg
 
 
-#: How many distinct ``(cmd, depth, leg)`` unwraps
-#: `_wrapped_shell_c_payload_legs_with_head` remembers. Small on purpose:
-#: one `check()` call re-unwraps the SAME command once per matcher (six, as
-#: of part 16), and nothing needs a seventh command's history.
 _MAX_UNWRAP_CACHE_ENTRIES = 32
 
 
@@ -2860,11 +2328,6 @@ def _wrapped_shell_c_payload_legs_with_head(
 
 
 def _unwrap_payload_legs(cmd: str, depth: int, leg: str) -> Iterator[Tuple[str, str, str]]:
-    """The uncached body of `_wrapped_shell_c_payload_legs_with_head` above
-    -- see that function for the contract. Recursion deliberately goes back
-    through the CACHED entrypoint, so a payload reached at two depths is
-    tokenized once.
-    """
     if depth > _MAX_COMMIT_UNWRAP_DEPTH:
         return
     cmd = _protect_interpreter_argv0_backslash_path(cmd)
@@ -2880,11 +2343,6 @@ def _unwrap_payload_legs(cmd: str, depth: int, leg: str) -> Iterator[Tuple[str, 
         head = _normalized_interpreter_head(stripped[0])
         if head not in _C_FLAG_SHELL_INTERPRETERS and head not in _PYTHON_INTERPRETER_NAMES:
             continue
-        # Finding 2 fix (2026-07-29, confirmed live): a bundled `-c` flag
-        # (`sh -ic '...'`, `bash -ci "..."`) defeated the exact-token
-        # `"-c" not in stripped[1:]` test -- the token is the literal string
-        # `-ic`/`-ci`, never exactly `"-c"`, so the unwrap never fired and a
-        # commit quoted as the bundled-flag payload was never re-scanned.
         c_flag_positions = [
             i for i in range(1, len(stripped)) if _BUNDLED_C_FLAG_RE.match(stripped[i])
         ]
@@ -2899,27 +2357,9 @@ def _unwrap_payload_legs(cmd: str, depth: int, leg: str) -> Iterator[Tuple[str, 
         if head in _PYTHON_INTERPRETER_NAMES and not _python_c_payload_is_provably_inert(
             payload
         ):
-            # C1 (2026-08-03): a Python `-c` payload is SOURCE TEXT, not
-            # shell syntax -- re-tokenizing it above the way a shell `-c`
-            # payload already tokenizes correctly does not reliably isolate
-            # the argv-shaped words a `subprocess`/`os.system` call embeds
             # (see `_PYTHON_STRING_LITERAL_RE`'s docstring for the confirmed
-            # empirical reason). Reconstruct a synthetic argv-shaped line
-            # from the payload's own quoted string literals and feed THAT
-            # back through this same generator too -- tagged, since a match
-            # found only HERE is a match the reconstruction cannot tell
-            # apart from a string literal that merely names the helper.
-            #
-            # Part 14 (2026-08-04): skipped entirely when the payload is
             # PROVABLY INERT (`_python_c_payload_is_provably_inert` -- an
-            # allowlist walk that fails closed on anything it does not
-            # recognize). A payload with no execution sink cannot spawn a
-            # commit however its literals read, so reconstructing an argv
-            # line from them can only produce a false positive there. Every
-            # other leg -- the raw payload yield above, its own recursive
-            # unwrap, and every matcher run against both -- is unchanged for
             # an inert payload, and a payload that is not PROVABLY inert
-            # reaches this reconstruction exactly as it did before.
             argv_text = _python_c_payload_argv_text(payload)
             if argv_text:
                 yield argv_text, _PAYLOAD_LEG_PYTHON_STRING_LITERALS, head
@@ -2954,18 +2394,6 @@ def _wrapped_shell_c_payloads(cmd: str, depth: int = 0):
 
 
 def _python_c_source_payloads(cmd: str) -> Iterator[str]:
-    """Yield, in order and without repeats, every payload in ``cmd`` that a
-    PYTHON interpreter received through ``-c`` -- i.e. genuine Python source
-    text, never a shell payload and never the synthetic argv line
-    `_python_c_payload_argv_text` rebuilds.
-
-    The two exclusions are the point (part 16, 2026-08-05). The constant
-    folder below parses what it is handed as Python; handing it shell text
-    that happens to parse, or a reconstruction whose word order is an
-    artifact of where quotes fell, would have it fold expressions no
-    interpreter will ever evaluate. Both are filtered HERE, at the source,
-    rather than by each consumer.
-    """
     seen: Set[str] = set()
     for payload, leg, head in _wrapped_shell_c_payload_legs_with_head(cmd):
         if leg or head not in _PYTHON_INTERPRETER_NAMES:
@@ -3023,7 +2451,6 @@ def _has_git_commit(cmd: str, *, legs: Optional[Set[str]] = None) -> bool:
             found = True
     if found:
         return True
-    # BX-13: unwrap `sh -c '...'`/`bash -c "..."`/etc. and re-scan the
     # ACTUAL executed payload -- see `_C_FLAG_SHELL_INTERPRETERS` docstring.
     for payload, leg in _wrapped_shell_c_payload_legs(normalized):
         if _has_git_commit(payload, legs=legs):
@@ -3032,35 +2459,7 @@ def _has_git_commit(cmd: str, *, legs: Optional[Set[str]] = None) -> bool:
     return False
 
 
-# ``_token_matches_binary`` (2026-07-29, part 2): no longer an own-module
-# copy. It is now ``_command_tokenizer.token_matches_binary``, imported
-# above alongside the tokenizer trio -- see that function's docstring for
-# the ``.exe``-blindness bypass this consolidation closes (this module's
-# own git-commit detection previously did NOT recognize a
-# ``git.exe``/``GIT.EXE``-spelled commit at all; see the module docstring's
-# 2026-07-25-part-2 entry, which flagged this as out-of-scope-by-design at
-# the time -- that follow-up is this change). This helper carries no
-# per-caller behavioral divergence from its sibling in
-# ``block_reviewer_bash_outside_allowlist.py`` -- both were byte-for-byte
-# identical modulo the shared ``.exe`` gap, so unifying them is a pure
-# consolidation, not a behavior choice made for one caller over another.
-#
-# ``_extract_first_token`` (this module's OWN prior copy, quote/space-BLIND
-# by construction -- split on the first raw space, quote-strip only a
-# single token matched start-to-end) is RETIRED as of 2026-07-29 part 4: it
-# is no longer imported or called anywhere in this module. See
-# ``_has_coordinator_safe_commit`` below, which now shares
-# ``_tokenize_full_command`` / ``_segments_from_tokens`` with
-# ``_has_git_commit`` instead of hand-splitting.
-
-
-#: Passthrough wrapper binaries that run their remaining argv unchanged --
-#: see `_first_effective_token`'s BX-13 fix comment. Same set
 #: `dispatch_checks.py`'s `_BYPASS_PREFIX` already tolerates.
-#: Widened (2026-07-29, code-reviewer Finding 3) -- see
-#: `block_subagent_destructive_action.py`'s sibling copy for the full
-#: rationale: `setsid`/`strace`/`doas`/`busybox` were unrecognized
-#: passthrough wrappers.
 _PASSTHROUGH_WRAPPERS_FOR_COMMIT = frozenset(
     {
         "sudo", "command", "time", "exec", "nice", "nohup", "ionice", "timeout",
@@ -3068,28 +2467,10 @@ _PASSTHROUGH_WRAPPERS_FOR_COMMIT = frozenset(
     }
 )
 
-#: Bundled-or-standalone `-c` short flag, e.g. `-c`, `-ic`, `-ci` (Finding 2,
-#: 2026-07-29 code review): a shell's CLI parser accepts bundled short
-#: flags, so `sh -ic '<payload>'` behaves as `sh -i -c '<payload>'` -- an
-#: exact `"-c" in tokens` check misses this entirely. Own-module copy of
 #: `block_subagent_destructive_action.py`'s `_BUNDLED_C_FLAG_RE` (no-cross-
-#: module-coupling convention).
 _BUNDLED_C_FLAG_RE = re.compile(r"^-[a-zA-Z]*c[a-zA-Z]*$")
 
-#: BX-14 fix (2026-07-29, confirmed live via the real dispatcher): the peel
-#: below tolerated the wrapper BINARY token but never the wrapper's OWN
-#: argument(s) -- `timeout 30 coordinator-safe-commit -m x`, `ionice -c2
-#: coordinator-safe-commit -m x`, `stdbuf -oL coordinator-safe-commit -m x`
-#: all resolved the "first effective token" to `30`/`-c2`/`-oL` (never the
-#: real binary), so `_has_coordinator_safe_commit` never recognized the
-#: invocation while it still ran for real. Own-module copy of
 #: `dispatch_checks.py`'s `_BYPASS_WRAPPER_ARG_FLAGS` (no-cross-module-
-#: coupling convention).
-#: `_skip_wrapper_own_argv_for_commit` itself now lives in
-#: `_command_tokenizer.py` as `_skip_wrapper_own_argv` (2026-07-30, M8
-#: consolidation) -- imported above under this file's own prior name rather
-#: than hand-maintained here; see that module's own docstring for the
-#: five-copy history this closes.
 
 
 def _peeled_effective_tokens(seg_tokens: list) -> list:
@@ -3113,51 +2494,13 @@ def _peeled_effective_tokens(seg_tokens: list) -> list:
     tokens = list(seg_tokens)
     # UNIFIED-LOOP FIX (2026-07-29, code-reviewer Finding 1, confirmed live):
     # the four peel stages below used to run as four SEQUENTIAL blocks, each
-    # exactly once, in a fixed order -- unlike this same module's sibling
-    # unified peels (`block_subagent_destructive_action.py`'s
-    # `_strip_leading_subshell_and_env`, `_sentinel_creation_guard.py`'s
-    # `_env_skip_index`), which re-check every stage each iteration. Because
-    # the one-shot `env` check ran BEFORE the wrapper-peel loop and was never
-    # revisited, a wrapper-THEN-env stacking (`nice env FOO=1
-    # coordinator-safe-commit -m x`) was never fully peeled: once `nice` was
-    # consumed by the wrapper loop, the loop never went back to re-check for
-    # `env`, so this function returned `"env"`, not `"coordinator-safe-
-    # commit"`, and `_has_coordinator_safe_commit` missed the invocation. The
-    # reverse order (`env nice cmd`) resolved correctly, because the one-shot
-    # `env` check happened first -- that asymmetry was the tell. Wrapping all
-    # four stages in an outer loop that re-runs until a full pass makes no
-    # further progress closes the gap for any stacking order/depth, mirroring
-    # the sibling modules' unified-loop shape without importing across
-    # modules (this file's established no-cross-module-coupling convention
-    # for small tokenizer-adjacent helpers -- see
-    # `_strip_env_prefix_for_commit_unwrap`'s docstring).
     while True:
         before = len(tokens)
         # BRACE-GROUPING FIX (2026-07-29, code-reviewer Finding 1, confirmed
-        # live): `{ coordinator-safe-commit -m x; }` was never peeled here --
-        # the leading `{` token was left in place, so the "first effective
-        # token" resolved to `{` itself, never the invoked binary. Bash
-        # requires a space after `{` (a reserved word, not an operator like
-        # `(`), so `shlex.split` always yields it as its own token. The plain
-        # `git commit` path (`_tokens_reach_commit_after_git`) is unaffected
-        # by this same shape -- it scans every token in the segment for a
-        # `git` match rather than requiring one at position 0.
         while tokens and tokens[0] == "{":
             tokens = tokens[1:]
-        # BX-13 fix (2026-07-29, confirmed live): a leading `VAR=value`
-        # assignment (`FOO=1 coordinator-safe-commit -m x`) was never skipped
-        # here, so the "first effective token" was the assignment itself,
-        # never the invoked binary -- unlike `_tokens_reach_commit_after_git`
-        # (the sibling `git`-commit matcher), which scans the WHOLE segment
-        # for a `git` token rather than requiring it at position 0, so it was
-        # never affected by this same gap.
         while tokens and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[0]):
             tokens = tokens[1:]
-        # Same fix, `env` form: `env coordinator-safe-commit -m x` -- an
-        # `env` invocation (optionally with its OWN assignments/`-i`) is a
-        # no-op passthrough, so peel it the same way
-        # `_strip_env_prefix_for_commit_unwrap` already does for the `sh -c`
-        # unwrap path above.
         if tokens and _normalize_executable_basename(tokens[0]) == "env":
             tokens = tokens[1:]
             while tokens and (
@@ -3165,8 +2508,6 @@ def _peeled_effective_tokens(seg_tokens: list) -> list:
                 or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[0])
             ):
                 tokens = tokens[1:]
-        # Same fix, no-op passthrough-wrapper form (`nice coordinator-safe-
-        # commit -m x`, `time ...`, etc.) -- peel a run of these too, same
         # set `dispatch_checks.py`'s `_BYPASS_PREFIX` already tolerates.
         while tokens and _normalize_executable_basename(tokens[0]) in _PASSTHROUGH_WRAPPERS_FOR_COMMIT:
             base = _normalize_executable_basename(tokens[0])
@@ -3179,19 +2520,6 @@ def _peeled_effective_tokens(seg_tokens: list) -> list:
 
 
 def _first_effective_token(seg_tokens: list) -> str:
-    """Return the token that identifies the invoked binary at the head of
-    ``seg_tokens`` -- the first token, or the SECOND token if the first is
-    the literal ``python3`` (the ``python3 <path>`` invocation form; see
-    ``_has_coordinator_safe_commit``'s docstring). Returns ``""`` for an
-    empty segment.
-
-    This is the shlex-tokenized replacement for the retired
-    ``_extract_first_token``'s ``python3 ``-prefix-stripping step -- with
-    real tokens (not a raw string), the prefix is just "is the first token
-    exactly ``python3``", no string slicing or re-joining involved. Thin
-    wrapper over ``_peeled_effective_tokens`` (2026-08-03 split) -- see that
-    function's docstring for the full peel-stage history.
-    """
     tokens = _peeled_effective_tokens(seg_tokens)
     if not tokens:
         return ""
@@ -3254,15 +2582,8 @@ def _has_coordinator_safe_commit(cmd: str, *, legs: Optional[Set[str]] = None) -
     match (nothing precedes ``evil-`` to anchor a path-separator boundary
     before the literal name).
     """
-    # this call is NOT confirmed redundant despite check()'s outer
-    # `_normalize_windows_argv0_head_path_with_spaces` pass: that outer pass
     # runs once, on the TOP-LEVEL `cmd_for_scan`, but `_wrapped_shell_c_
     # payloads` recursion below calls this function again on an UNWRAPPED
-    # `sh -c`/`bash -c` payload that never went through the outer pass --
-    # for that recursive path, this is the only normalization applied
-    # (backslash-only Windows argv0 case; the embedded-space case is a
-    # separate, out-of-scope gap at nesting depth, same as `_has_git_
-    # commit`'s equivalent recursive call). Left in place; not dropped.
     normalized = _normalize_windows_git_argv0(cmd)
     tokens = _tokenize_full_command(normalized)
     if tokens is None:
@@ -3279,9 +2600,6 @@ def _has_coordinator_safe_commit(cmd: str, *, legs: Optional[Set[str]] = None) -
             found = True
     if found:
         return True
-    # BX-13: same unwrap as `_has_git_commit` -- a `coordinator-safe-commit`
-    # invocation quoted as a shell interpreter's `-c` argument is executed,
-    # not inert text.
     for payload, leg in _wrapped_shell_c_payload_legs(normalized):
         if _has_coordinator_safe_commit(payload, legs=legs):
             _record_payload_leg(legs, leg)
@@ -3289,252 +2607,48 @@ def _has_coordinator_safe_commit(cmd: str, *, legs: Optional[Set[str]] = None) -
     return False
 
 
-#: The op names this gate treats as committing ops -- each one, invoked via
-#: ``python3 -m coordinator_core.invoke <op> ...``, lands a real ``git
-#: commit`` on the shared worktree just like a plain ``git commit`` or
-#: ``coordinator-safe-commit`` does. ``ceremony.scoped_git_commit`` is the
-#: claude-klabauter-native op ``coordinator-safe-commit`` itself shells out to (see
-#: the module docstring's "2026-07-29 update, part 5" entry). The other four
-#: -- ``session.boot_sweep`` (3 ``git commit`` sites), ``distill.apply_
-#: disposal``, ``memo.send``, and ``ceremony.wsc_tail`` (which goes straight
-#: to ``run_commit_pipeline``) -- were added 2026-08-01 (hole (a) fix, see
-#: the module docstring's part-6 entry): none of their names contain the
-#: substring ``commit``, so the OLD ``"commit" in cmd`` pre-filter
-#: short-circuited to ALLOW before identity resolution ever ran for any of
-#: them, with no obfuscation required. This is a single named set both
-#: ``_prefilter_mentions_commit`` and the invoke-matcher below consult, so
-#: the two cannot independently drift the way the pre-filter/full-matcher
-#: pair already drifted once before (see the module docstring's 2026-07-25
-#: "LESSON" entry).
 _COMMITTING_OP_NAMES = frozenset(
     {
         # "ceremony.scoped_git_commit" RETAINED DELIBERATELY, not an
-        # oversight (coordinator:code-reviewer, 2026-08-27, Finding 4 on the
-        # `ceremony.commit` sixth-pass diff): the op was KILLED (K-045) and
-        # its module deleted -- nothing can invoke this name any more. It
-        # cannot desync from the census the way the removed dead entries
-        # below could: `test_committing_op_names_covers_registry_sink_scan`
         # derives its "true" set from `OP_MODULE_MAP`, which a killed,
-        # unregistered op is invisible to by construction, so this entry can
-        # only ever be a no-op member of the hand-maintained set, never a
-        # stale one the ratchet would catch or miss. Left in place because
-        # the whole test corpus uses this literal name as its canonical
-        # denial fixture -- removing it is pure churn, not a correctness fix.
         "ceremony.scoped_git_commit",
         "session.boot_sweep",
         "distill.apply_disposal",
         "memo.send",
-        # "ceremony.wsc_tail" REMOVED (ceremony.wsc_tail kill, 2026-08-23) --
-        # the op is deleted and no longer registered.
-        # confirmed live by fleet.archive_shipped_handoffs landing commit
-        # d9282543f this session) -- six more registered, directly-invocable
-        # committing ops verified against source, none containing the
-        # substring "commit" in their op name:
-        "commit.exec_bit_change",           # ceremony/commit_exec_bit.py -- _git(["commit", ...])
-        "ceremony.post_commit_tail",        # ceremony/post_commit_tail.py -- commit_scoped(...)
+        "commit.exec_bit_change",
+        "ceremony.post_commit_tail",
         # "fleet.archive_shipped_handoffs" REMOVED (op key SUBSUMED, not
-        # renamed -- PM ruling, docs/plans/2026-08-25-the-handoff-auto-
-        # archive-comes-back-capped.md § C1b) -- the op no longer exists,
-        # nothing registers it, and the module it named is deleted.
-        "fleet.archive_release_accumulator",  # fleet/archive_release_accumulator.py -- archive_and_commit(...)
-        "fleet.reap_unintegrated_findings",  # fleet/reap_unintegrated_findings.py -- rm_and_commit(...)
-        "fleet.reap_integrated_findings",   # fleet/reap_integrated_findings.py -- rm_and_commit(...)
-        # same session) -- the reviewer's own six did not exhaust the ops
-        # tree; a fresh grep for every registered op whose handler calls
-        # archive_and_commit(/rm_and_commit(/commit_scoped( (or delegates to
-        # one, as handoff.ship_and_archive does via archive_shipped_handoffs'
-        # own _handle_act) turned up eight more:
-        # "fleet.archive_actioned_memos" was REMOVED here for a period (op
-        # KILLED outright by PM ruling -- see ops/ceremony/tail_ops.py's own
-        # note: "killed outright the same day", along with its
-        # sweep-actioned-memos.py CLI fire), between its 2026-08-23 kill and
-        # its b8795931a rebuild. During that window fleet/archive_
-        # actioned_memos.py did not exist and nothing registered the name; it
-        # survived here as a dead allowlist entry, and because this list is
-        # the cheapest caller census available, it made the archival caller
-        # set read as NINE when it was EIGHT -- a spinoff was scoped against
-        # the wrong number on the strength of it (2026-08-25). Same removal
-        # shape as fleet.archive_shipped_handoffs above. It is a RETURN now
-        # -- see the "Seventh pass" note below at its live entry, which
-        # states the current truth: the module and op are registered again,
-        # live.
-        "fleet.archive_completed_handoffs",  # fleet/archive_terminal_handoffs.py -- archive_and_commit(...)
-        "fleet.archive_paper_trail",        # fleet/archive_paper_trail.py -- archive_and_commit(...)
-        "fleet.archive_queue_entry",        # fleet/archive_queue_entry.py -- archive_and_commit(...)
-        # "fleet.prune_closed_bugs" and "handoff.archive_transition" REMOVED
-        # (C3, docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-
-        # pipeline-can-go.md): both dead since the `d20d56893` 200ms sweep
-        # stripped their `@register_op` decorator (their modules still exist
-        # as in-process libraries -- see fleet/prune_bugs.py's and
-        # handoff_archive_transition.py's own gravestones -- but the NAME is
-        # unregistered, which is what this set gates on). One of six dead
-        # entries this same pass removes; see claude-klabauter-59's row
-        # state/bug-backlog/2026-08-29-six-dead-ops-from-the-200ms-sweep-are-
-        # st-bf460ad64e85.yaml.
-        "handoff.ship_and_archive",         # handoff_ship_archive.py -- delegates to archive_shipped_handoffs._handle_act (archive_and_commit)
-        # Fourth pass (2026-08-17), found by this file's own
-        # test_committing_op_names_covers_registry_sink_scan rather than by a
-        # human grep -- the mechanical enforcement of the BINDING RULE above
-        # working as designed. Each verified against its handler's source
-        # before being added, not taken from the failure message:
-        # "deliverable.cascade_terminal" REMOVED (C3, same six-dead-ops pass
-        # as above) -- dead since the `d20d56893` sweep unregistered it.
-        "fleet.archive_terminal_sizings",    # ops/fleet/archive_sizings.py -- archive_and_commit(...)
-        # NOTE: "repo_setup.validate_target_root" was added here in the
-        # fourth pass above and then removed (coordinator:code-reviewer,
-        # 2026-08-17): its handler (`bootstrap_repo._validate_target_root_op`)
-        # is purely read-only -- no commit-sink call anywhere in that
-        # function or module. The scan's `"commit_scoped(" in source` hit was
-        # a false positive: that literal string appears only inside a
-        # COMMENT (bootstrap_repo.py's module-level rationale for why this
-        # file does NOT route through `commit_scoped`), not a real call. See
+        "fleet.archive_release_accumulator",
+        "fleet.reap_unintegrated_findings",
+        "fleet.reap_integrated_findings",
+        "fleet.archive_completed_handoffs",
+        "fleet.archive_paper_trail",
+        "fleet.archive_queue_entry",
+        "handoff.ship_and_archive",
+        "fleet.archive_terminal_sizings",
         # `_COMMIT_SINK_CALL_MARKERS`'s substring-scan limit below, now fixed
-        # to require an actual `ast.Call` site.
-        #
-        # Fifth pass (2026-08-25), same mechanical enforcement
-        # (test_committing_op_names_covers_registry_sink_scan), two more
-        # verified against handler source:
-        "handoff.transition",               # ops/handoff_transition.py -- archive_and_commit(...)
-        "fleet.migrate_handoff_vocabulary",  # ops/fleet/migrate_handoff_vocabulary.py -- archive_and_commit(...)
-        # Sixth pass (2026-08-27) -- and this one is the entry whose absence
-        # mattered most, because `ceremony.commit` is not one more committing
-        # op among many: it is THE dispatchable committer, the op the guard's
-        # own denial message points a blocked subagent at. It was registered
-        # 2026-08-26 (`ec503138c`) and sat outside this set for a day, so
-        # `_has_committing_op_invoke` returned False for the single invoke
-        # spelling most likely to be tried. The `commit` substring in its name
-        # gets it past `_prefilter_mentions_commit`, which is what made the
-        # gap quiet: the cheap filter admits it, then the full matcher waves
-        # it through, so nothing anywhere reported a miss.
-        #
-        # The registry ratchet did not catch it either: its handler reaches
-        # git via `run_commit_pipeline(...)`, a sink name the scan's marker
-        # tuple did not carry. Both legs fixed together -- adding the name
-        # here without adding the marker there would leave the next such op
-        # to be found by hand as well. See the sixth-pass note on
+        "handoff.transition",
+        "fleet.migrate_handoff_vocabulary",
         # `_COMMIT_SINK_CALL_MARKERS` in
-        # tests/test_subagent_commit_prefilter_and_flags.py.
-        #
-        # "ceremony.commit" REMOVED (C3, docs/plans/2026-08-29-the-push-
-        # subsystem-leaves-and-then-the-pipeline-can-go.md): `ceremony.commit`
-        # itself was separately KILLED at the 200ms process-time bar
-        # (p50 421.9ms, n=241; `op_budget_suspension.py`) and replaced by
-        # `ceremony.commit_v2` below -- this sixth-pass entry is dead twice
-        # over now (both the `d20d56893` sweep's unregistration AND the
-        # dedicated kill verdict apply to the same name). The paragraph
-        # above is preserved as the record of why the entry and its sink
-        # marker were added in the first place, not as a live description.
-        # Seventh pass (2026-08-27), and this one is the ratchet earning its
-        # keep in real time: these three registered DURING the session that
-        # added `ceremony.commit` above -- the scan passed at the start of it
-        # and failed thirty minutes later, naming exactly the three new
-        # arrivals. Each verified against its handler's source before being
-        # added here, per the fourth-pass rule, not taken from the failure
-        # message. Note `fleet.archive_actioned_memos` is a RETURN: it was
-        # removed from this set as a dead allowlist entry (see the comment
-        # above) after a PM ruling killed the op and its module; the module
-        # exists and is registered again, so the name is live once more and
-        # its removal comment above now describes only that earlier era.
-        # "fleet.archive_completed_plans" and "session.sweep_consumed_
-        # handoffs" REMOVED (C3, docs/plans/2026-08-29-the-push-subsystem-
-        # leaves-and-then-the-pipeline-can-go.md) -- the remaining two of the
-        # six dead entries the `d20d56893` sweep left in this set;
-        # `session.sweep_consumed_handoffs` additionally cites kill ledger
-        # K-110 on its own module's gravestone. `fleet.archive_actioned_
-        # memos` below is NOT one of the six -- it is the earlier RETURN
-        # (see the "Seventh pass" note above): registered again, still live.
-        # Ninth pass (2026-09-12): `fleet.archive_completed_plans` is now a
-        # RETURN too -- the same shape as `fleet.archive_actioned_memos`, and
-        # the C3 removal above describes only the era when the op was dead.
-        # The op was rebuilt from its requirement (b8795931a) and now lands at
-        # ops/fleet/archive_plans.py -- NOT the archive_completed_plans.py the
-        # removal comment implies, which is why a path-shaped search for it
-        # comes back empty and reads as "still dead". Verified against the
-        # handler's source per the fourth-pass rule, not taken from the
-        # failure message: `@register_op("fleet.archive_completed_plans")` at
-        # archive_plans.py:865, `archive_and_commit(...)` at :819. Found by
-        # test_committing_op_names_covers_registry_sink_scan, which had been
-        # red; a /workstream-complete close-out drives this exact sink
-        # ("plan-status-transition: archive N plan document(s)"), so the gap
-        # was live on the ceremony path, not theoretical.
-        "fleet.archive_completed_plans",     # ops/fleet/archive_plans.py -- archive_and_commit(...)
-        "fleet.archive_actioned_memos",      # ops/fleet/archive_actioned_memos.py -- archive_and_commit(...)
-        "fleet.delete_superseded_decisions",  # ops/fleet/delete_superseded_decisions.py -- rm_and_commit(...)
-        # C3 (docs/plans/2026-08-27-something-must-commit-ceremony-commit-v2.md):
-        # `ceremony.commit_v2` (ops/ceremony/commit_v2.py :: _handler) is the
-        # fresh dispatchable identity over `commit.commit_paths`
-        # (coordinator_core/git/commit.py) -- it lands a git commit directly,
-        # NOT via `run_commit_pipeline`, so it needs its own name here AND its
+        "fleet.archive_completed_plans",
+        "fleet.archive_actioned_memos",
+        "fleet.delete_superseded_decisions",
         # own sink marker (see `_COMMIT_SINK_CALL_MARKERS`'s sixth-pass note:
-        # adding the name without the marker leaves the next such op to be
-        # found by hand).
-        "ceremony.commit_v2",                # ops/ceremony/commit_v2.py -- commit_paths(...)
-        # Eighth pass (2026-08-29), found by the same registry sink scan
-        # that earned the seventh: both land a real commit and neither
-        # routes through a name already in this set. Verified against each
-        # handler's own source before being added, per the fourth-pass
-        # rule -- `session.safe_commit_offer` was repointed off the killed
-        # `run_commit_pipeline` onto `git.commit.commit_paths` directly (C3,
-        # docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-
-        # pipeline-can-go.md), which is exactly the repoint that dropped it
-        # out of this set's coverage; `housekeeping.cycle` commits the
-        # whole archived set in one `fleet._common.archive_and_commit`. It
-        # replaced `handoff.housekeeping`, which was deleted with its module.
-        "session.safe_commit_offer",         # ops/session/safe_commit_offer.py -- commit_paths(...)
-        "housekeeping.cycle",                # housekeeping/cycle.py -- archive_and_commit(...)
-        # memo.heal_inbox (C5, docs/plans/2026-09-11-memo-deliveries-survive-
-        # the-receiver-s-o.md) -- fleet/memo_heal.py's own restore path calls
-        # `git_native.commit_authored_new_file(...)` directly, landing a real
-        # commit into the CALLING repo's own tree (no substring "commit" in
-        # the op name, same hole-(a) shape as memo.send).
-        "memo.heal_inbox",                   # fleet/memo_heal.py -- commit_authored_new_file(...)
+        "ceremony.commit_v2",
+        "session.safe_commit_offer",
+        "housekeeping.cycle",
+        "memo.heal_inbox",
     }
 )
 _CEREMONY_INVOKE_MODULE = "coordinator_core.invoke"
 _PYTHON_INTERPRETER_NAMES = ("python3", "python")
 
 #: The INSTALLED, on-PATH door to the same `coordinator_core.invoke.__main__.
-#: main` entrypoint the `-m` module spelling reaches -- `coordinator/bin/
-#: coordinator-invoke.py`, forwarded into the settings-home `bin/` by
-#: substrate's agent-helper forwarder derivation. It parses `sys.argv`
-#: identically (that trampoline hands off without touching argv), so
-#: `coordinator-invoke <op> '<json>'` and `python3 -m coordinator_core.invoke
-#: <op> '<json>'` are the SAME invocation in two spellings.
-#:
-#: Added 2026-08-30, and this was a live BYPASS on the deny side, not a
-#: tidy-up: `_tokens_reach_committing_op_after_python` recognized only the
-#: `-m` spelling, so any subagent could reach every op in
 #: `_COMMITTING_OP_NAMES` -- `ceremony.commit_v2` included -- through the
-#: door that is actually on PATH, and this guard would never fire. The `-m`
-#: spelling is additionally the one an agent CANNOT use without a sys.path
-#: prologue (`coordinator_core` lives in the engine clone, off a bare
-#: interpreter's path), so the guard recognized only the spelling that does
-#: not work and missed the one that does. Both matchers walk the same
-#: `_invoke_op_token_indices` now, so a future head spelling cannot land on
-#: one side only.
 _COORDINATOR_INVOKE_BINARY = "coordinator-invoke"
 
 
 def _invoke_op_token_indices(tokens: list) -> "Iterator[int]":
-    """Yield the index of the ``<op>`` positional for every
-    ``coordinator_core.invoke`` invocation in ``tokens``, in BOTH spellings:
-
-      - ``[wrapper/env...] python[3] [-flags] -m coordinator_core.invoke <op>``
-      - ``[wrapper/env...] coordinator-invoke <op>``
-
-    Shared by the deny matcher (``_tokens_reach_committing_op_after_python``)
-    and the allow-side extractor (``_extract_invoke_commit_v2_paths``) so the
-    two can never disagree about what an invocation IS -- they differ only in
-    what they do with the op name they find.
-
-    The python-token scan is a full-array walk rather than a position-0 check
-    (mirroring ``_tokens_reach_commit_after_git``), so a wrapper or
-    env-assignment prefix needs no separate peeling step. The
-    ``coordinator-invoke`` head, by contrast, IS peeled
-    (``_peeled_effective_tokens``) and then boundary-matched at the head only:
-    that binary is not a token that can legitimately appear mid-command the
-    way an interpreter can.
-    """
     peeled = _peeled_effective_tokens(tokens)
     if peeled and _token_matches_binary(peeled[0], _COORDINATOR_INVOKE_BINARY):
         op_idx = _first_positional_after_invoke_module(peeled, 1)
@@ -3559,12 +2673,7 @@ def _invoke_op_token_indices(tokens: list) -> "Iterator[int]":
         if op_idx is not None:
             yield op_idx, tokens
 
-#: ``coordinator_core.invoke``'s own optional flags that may precede the
-#: ``<op>`` positional (see ``coordinator_core/invoke/__main__.py::
-#: _build_arg_parser`` for the authoritative flag surface this set is
 #: derived from) -- split by whether the flag consumes a SEPARATE following
-#: token as its value. ``--repo`` and ``--params-file`` do; ``--dump-op-
-#: timeouts``, ``--bare``, and argparse's own ``-h``/``--help`` do not.
 _INVOKE_FLAGS_WITH_VALUE = frozenset({"--repo", "--params-file"})
 _INVOKE_FLAGS_NO_VALUE = frozenset(
     {"--dump-op-timeouts", "--bare", "-h", "--help", "--allow-unstamped-dispatch"}
@@ -3787,46 +2896,14 @@ def _has_reconstructed_commit_identity(
 
 
 # --- Part 16 (2026-08-05): the STRING-ASSEMBLY residual parts 13-15 all
-#     documented and none could reach -- a name that was never contiguous
-#     text (`'scoped-git'+'-commit'`, `''.join(map(chr,[...]))`, a base64
-#     blob handed to `exec`, `os.environ['X']`). Two mechanisms, ordered:
-#     (1) fold the compile-time-constant expressions and feed the folded
-#     values into the same identity matching part 15 built; (2) refuse a
-#     non-inert payload whose execution sink takes an argument the fold
-#     could NOT resolve, because "we cannot know what it runs" is not a
-#     reason to let it run in this seam. ---
 
 #: Hard bounds on the constant folder below. LOAD-BEARING SECURITY
 #: PROPERTIES, NOT TUNING KNOBS: this folder runs on attacker-authored text
-#: inside a PreToolUse hook on every Bash call, so an unbounded folder is a
-#: denial-of-service on the hot path (``'a' * 10**9``, a 50k-term
-#: concatenation) and a memory bomb in a process the caller cannot restart.
-#:
-#: SCOPE, STATED EXACTLY (part 22, 2026-08-05, after a review found the
-#: framing below overstated): every bound here is PER ``python3 -c`` PAYLOAD,
-#: not per Bash call. `_fold_python_c_payload` builds a fresh `_FoldBudget`
-#: for each payload `_python_c_source_payloads` yields, so a command chaining
-#: N distinct ``python3 -c`` segments gets N independent budgets and total
 #: fold work for one `check()` scales linearly in N. What bounds the PER-CALL
-#: cost is therefore not these constants but the tokenizer's command-length
 #: ceiling (``_MAX_TOKENIZABLE_COMMAND_CHARS``, 64 KiB): spelling a segment
-#: costs characters, so the ceiling caps how many segments one command can
-#: carry. Measured worst case at that ceiling (2026-08-05): 329 chained
-#: segments in 64,810 chars -> 86 ms in the matcher, 1,578 ms for a full
-#: dispatch. Bounded, and the outer bound is the ceiling doing the work.
-#:
-#: Every bound below FAILS CLOSED -- exceeding one makes the value
 #: UNRESOLVABLE, which mechanism 2 then treats exactly as it treats
-#: ``os.environ['X']`` (deny), never as "small enough to be safe". Raising
-#: any of them buys a marginally deeper fold at the cost of a wider DoS
-#: window; do not raise them to make one corpus row fold.
 _MAX_FOLDED_VALUE_LEN = 4096
 #: The AGGREGATE bound, and it is not implied by the per-value one: a
-#: payload whose outer expression does not fold still contributes every
-#: INNER value that does (``('a'*4000)*4000`` folds the inner half), so the
-#: collected line is bounded by per-value length TIMES node count -- 8MB of
-#: transient string in a hook process without this cap. Found by a corpus
-#: row, not by inspection, which is the argument for keeping that row.
 _MAX_FOLDED_TOTAL_LEN = 65536
 _MAX_FOLD_NODES = 2000
 _MAX_FOLD_DEPTH = 12
@@ -3835,11 +2912,6 @@ _MAX_FOLD_CACHE_ENTRIES = 32
 
 
 class _UnresolvedValue:
-    """The folder's "I could not compute this" sentinel -- distinct from
-    every legitimate Python value a fold can produce (``None``, ``0``,
-    ``""`` and ``False`` are all resolvable RESULTS and must never be
-    confused with a failure to resolve).
-    """
 
     __slots__ = ()
 
@@ -3851,13 +2923,6 @@ _FOLD_UNRESOLVED = _UnresolvedValue()
 
 
 class _FoldBudget:
-    """Mutable node-visit budget threaded through one payload's fold.
-
-    ``exceeded`` latches True the moment any bound in this part's constant
-    block is hit, and is never reset -- a payload that blew a bound is
-    reported as such for the whole fold, so no caller can read a partial
-    result as a complete one.
-    """
 
     __slots__ = ("nodes", "exceeded")
 
@@ -3874,12 +2939,6 @@ class _FoldBudget:
 
 
 class _FoldedPayload(NamedTuple):
-    """One payload's fold result. ``text`` is the space-joined line of every
-    statically-resolved string the payload builds (mechanism 1's input);
-    ``opaque_sink_call`` is mechanism 2's trigger; ``bounds_exceeded`` and
-    ``parsed`` record WHY a fold came back thin, so a caller can tell "no
-    strings" from "gave up".
-    """
 
     text: str
     opaque_sink_call: bool
@@ -3889,38 +2948,16 @@ class _FoldedPayload(NamedTuple):
 
 _FOLD_EMPTY = _FoldedPayload(text="", opaque_sink_call=False, bounds_exceeded=False, parsed=False)
 
-#: The DEPTH bound the folder does not own: `ast.parse` exhausts CPython's
-#: recursion limit on a deeply nested payload (a 4000-term chained ``+``)
-#: and raises before any `_FoldBudget` exists to latch it. That is a bound
-#: being hit, not source the folder failed to understand, so it reports
-#: itself as one -- ``bounds_exceeded`` for the reason, ``opaque_sink_call``
 #: so mechanism 2 denies. Routing it to `_FOLD_EMPTY` instead made the
-#: guard weakest exactly where the input is most adversarial: unparseable
-#: defers to the parts 13-15 text match, which cannot see a commit identity
-#: the payload never spells contiguously, and the assembled command was
-#: ALLOWED (state/bug-backlog/2026-08-07-fold-bomb-payload-bypasses-block-
-#: subagen-7aa44b2ef0a0.yaml, P1).
 _FOLD_RECURSION_BOMB = _FoldedPayload(
     text="", opaque_sink_call=True, bounds_exceeded=True, parsed=False
 )
 
-#: Builtins the folder evaluates itself, by reimplementing their result for
-#: constant inputs. Never resolved by calling an arbitrary object: the name
-#: must be one of these AND every argument must already have folded.
 _FOLDABLE_BUILTIN_NAMES = frozenset({"chr", "ord", "str", "int", "bytes", "bytearray", "list", "tuple"})
 
-#: The ``map(<f>, <constants>)`` shapes the folder unrolls -- exactly the
-#: element-wise builtins an obfuscator uses to spell a name out of code
-#: points (``''.join(map(chr,[115,99,...]))``).
 _FOLDABLE_MAP_FUNCTIONS = frozenset({"chr", "ord", "str", "int"})
 
 #: ``base64`` decoder/encoder names, matched on the ATTRIBUTE/NAME alone so
-#: ``base64.b64decode(x)``, ``__import__('base64').b64decode(x)`` and a
-#: ``from base64 import b64decode`` binding all fold identically. The object
-#: they hang off is exactly what a static walk cannot resolve, and it does
-#: not need to: these names are distinctive enough that treating them as the
-#: stdlib functions can only ever make the folder resolve MORE text, which
-#: is deny-side.
 _BASE64_CODEC_NAMES = frozenset(
     {
         "b64decode",
@@ -3938,11 +2975,6 @@ _BASE64_CODEC_NAMES = frozenset(
     }
 )
 
-#: ``str``/``bytes`` methods the folder applies to an already-folded
-#: constant receiver. Pure, allocation-bounded (every result goes back
-#: through `_fold_bounded`), and deliberately NOT extensible by pattern:
-#: ``zfill``/``ljust``/``center``/``expandtabs`` are absent because their
-#: argument is an unbounded repetition count -- the same bomb class
 #: `_MAX_FOLDED_VALUE_LEN` exists to stop.
 _FOLDABLE_TEXT_METHODS = frozenset(
     {
@@ -3966,18 +2998,8 @@ _FOLDABLE_TEXT_METHODS = frozenset(
 )
 
 #: Mechanism 2's sink sets, DERIVED BY SUBTRACTION from part 14's sets
-#: rather than re-enumerated. This is the whole drift argument: a name added
 #: to `_NON_INERT_ATTRIBUTE_NAMES`/`_NON_INERT_BUILTIN_NAMES`/
 #: `_NON_INERT_MODULE_NAMES` because it reaches an execution sink appears
-#: here automatically, and the only way to keep it OUT is to name it in one
-#: of the subtracted sets below, in the open, with a reason.
-#:
-#: The subtractions are the filesystem-mutation family (part 14 refuses
-#: those to prove a payload INERT, a strictly wider question than "does this
-#: run a program"), plus three builtins that reach no execution at all.
-#: ``replace`` in particular MUST be subtracted: it is ``str.replace`` far
-#: more often than ``os.replace``, and mechanism 2 keying on it would deny
-#: ordinary text munging.
 _NON_EXECUTION_MUTATION_ATTRIBUTES = frozenset(
     {"write_text", "write_bytes", "unlink", "rmtree", "chmod", "rename", "replace", "dup2"}
 )
@@ -4008,76 +3030,17 @@ _EXECUTION_SINK_MODULE_NAMES = _NON_INERT_MODULE_NAMES - _NON_EXECUTION_MODULES
 
 #: MECHANISM 2's NARROWING, and the one place this part departs from its
 #: brief -- ON MEASURED EVIDENCE, recorded here so the choice is auditable
-#: rather than discovered later as an unexplained subset.
-#:
-#: The brief specified mechanism 2 over EVERY execution sink. Measured
-#: against a 24-command realistic-usage corpus (dispatched-agent commands
-#: that mention commit-ish text), that shape moved FOUR commands ALLOW ->
-#: DENY, three of them unambiguously reasonable:
-#: ``subprocess.run([sys.executable,'-m','pytest',sys.argv[1]])``,
-#: ``subprocess.run([...], cwd=os.getcwd())``, ``subprocess.run([...],
 #: env=os.environ)``. All four share a shape: an ARGV-VECTOR sink, where an
-#: unresolved element is ordinary honest usage rather than obfuscation.
-#:
-#: Narrowed to sinks that take a whole PROGRAM or COMMAND LINE as one
-#: argument -- ``os.system``/``os.popen``, ``eval``/``exec``/``compile``/
-#: ``__import__``, ``importlib.import_module``, ``runpy.run_*``, the
-#: ``exec*``/``spawn*`` families, the reflection dunders -- plus any
-#: argv-vector sink invoked with ``shell=True``, which converts its first
-#: argument back into a command line. On the same two corpora that shape
-#: keeps every adversarial denial mechanism 2 was there for (including
-#: ``os.system(os.environ['X'])``, the brief's own row) and moves ZERO
-#: realistic commands.
-#:
-#: Residual as this constant shipped, CLOSED by part 18 below:
-#: ``subprocess.run([<unresolved>, 'commit'])`` -- an argv vector whose
-#: PROGRAM SLOT does not resolve -- allowed. It is now refused by
-#: `_argv_vector_program_slot_is_unknown` without re-widening this set, so
-#: the four measured false positives that re-widening would have cost stay
-#: allowed and only the two priced rows move.
 _ARGV_VECTOR_SINK_ATTRIBUTES = frozenset(
     {"run", "call", "check_call", "check_output", "communicate", "Popen"}
 )
 
-#: PART 18 (2026-08-05) -- SLOT 0 OF AN ARGV VECTOR IS THE PROGRAM SLOT, AND
 #: THE EXEMPTION ABOVE MUST NOT COVER IT.
-#:
-#: Part 16 exempted the whole argv-vector family from mechanism 2 because an
-#: unresolved ELEMENT of an argv vector is ordinary honest usage
-#: (``subprocess.run(['pytest', sys.argv[1]])`` names its program perfectly
-#: well). Slot 0 is not an element in that sense: it IS the program. An
-#: unresolved slot 0 is precisely the condition mechanism 2 exists for -- we
-#: cannot say what binary starts -- and it was reachable, confirmed live:
-#:
-#:     python3 -c "import subprocess; subprocess.run(
-#:         [''.join([chr(c) for c in [<ords of helper>]]), '-m', 'x'])"
-#:
-#: So slot 0 must resolve to a constant; slots 1..n keep part 16's exemption
-#: and may stay unresolved.
-#:
 #: THE PRICE, MEASURED RATHER THAN ARGUED, and priced deliberately rather
-#: than overlooked: exactly TWO rows of the realistic-usage corpus move
-#: ALLOW -> DENY -- ``pytest-argv-file`` and ``py-compile-guard``, both
-#: ``subprocess.run([sys.executable, ...])``. Both bite only a command that
-#: BOTH routes through ``python3 -c`` AND mentions commit-ish text, and the
-#: workaround is trivial (invoke pytest directly rather than through an
-#: interpreter payload, or spell the program as ``'python3'``). That trade
-#: was accepted at a cost of two; a future edit that grows it is a different
-#: trade and needs re-measuring against the corpus, not reasoning about.
-#:
-#: ``communicate`` is subtracted: it is the one member of the family above
-#: whose first argument is stdin DATA rather than argv, so a slot-0 rule
-#: there would refuse unresolved input bytes handed to an already-started
-#: process -- a program this leg has, by then, already judged.
 _ARGV_PROGRAM_SLOT_SINK_ATTRIBUTES = _ARGV_VECTOR_SINK_ATTRIBUTES - frozenset({"communicate"})
 _OPAQUE_PROGRAM_SINK_ATTRIBUTE_NAMES = (
     _EXECUTION_SINK_ATTRIBUTE_NAMES - _ARGV_VECTOR_SINK_ATTRIBUTES
 )
-#: ``os`` and ``builtins`` drop out of the MODULE leg here (their
-#: program-starting members are already named in the attribute set above),
-#: so ``os.makedirs(sys.argv[1])`` is not a mechanism-2 deny; ``subprocess``
-#: drops out because its whole surface is the argv-vector family, re-admitted
-#: by ``shell=True``.
 _OPAQUE_PROGRAM_SINK_MODULE_NAMES = _EXECUTION_SINK_MODULE_NAMES - frozenset(
     {"os", "builtins", "subprocess"}
 )
@@ -4085,40 +3048,12 @@ _SHELL_KEYWORD = "shell"
 
 #: PART 20 (2026-08-05) -- THE WHOLE-COMMAND-TEXT SINKS THAT COULD ONLY BE
 #: ADMITTED BY RECEIVER, closing part 19's stated residual.
-#:
-#: ``subprocess.getoutput(cmd)`` / ``getstatusoutput(cmd)`` run ``cmd``
-#: through a shell. They are whole-command-text sinks in exactly the sense
-#: ``os.system`` is -- one argument, and it is a command line -- yet both
-#: ALLOWED at part 19's HEAD, confirmed live:
-#:
-#:     python3 -c "import subprocess,os; print(subprocess.getoutput(os.environ['X']))"
-#:
-#: They are not reachable by the sets above by construction: ``subprocess``
 #: is subtracted from `_OPAQUE_PROGRAM_SINK_MODULE_NAMES` (its whole surface
-#: is the argv-vector family, which is deliberately narrowed out of
-#: mechanism 2), and these two are not in that family, so they fell between
-#: the two doors.
-#:
 #: NEGATIVE SPEC -- WHY THIS IS A DOTTED TARGET SET AND NOT TWO MORE NAMES IN
 #: `_OPAQUE_PROGRAM_SINK_ATTRIBUTE_NAMES`: every other sink leg here is
 #: identity-blind about the RECEIVER (part 14's reasoning: the object an
-#: attribute hangs off is what a static walk cannot resolve, so the attribute
-#: name carries the decision). That is affordable for ``system``/``popen``/
-#: ``execv``, which are not words honest code hangs off arbitrary objects.
-#: ``getoutput`` is: a logger, a test helper, a CLI wrapper may all define
-#: one, and denying ``harness.getoutput(sys.argv[1])`` on the name alone
-#: would be a false positive bought for nothing. So membership is keyed on
 #: the CANONICAL DOTTED TARGET resolved through the payload's own import
-#: bindings (`_call_is_receiver_qualified_shell_sink`) -- part 19's
-#: `_payload_bindings` is what made that available. A receiver that does not
-#: resolve to ``subprocess`` is NOT a sink on the strength of the name.
-#:
 #: THE SUBPROCESS SURFACE, AUDITED RATHER THAN SAMPLED: the module's callable
-#: exports are ``Popen``/``call``/``check_call``/``check_output``/``run``
-#: (the argv-vector family, covered by parts 16/18), ``getoutput``/
-#: ``getstatusoutput`` (here), ``list2cmdline`` (formats a command line and
-#: executes nothing) and the exception classes. There is no third shell-out
-#: sibling left uncovered.
 _RECEIVER_QUALIFIED_SHELL_SINK_TARGETS = frozenset(
     {"subprocess.getoutput", "subprocess.getstatusoutput"}
 )
@@ -4158,19 +3093,6 @@ def _fold_template_is_bounded(template: Any) -> bool:
 
 
 def _fold_environment(tree: "ast.Module", budget: _FoldBudget, memo: Dict[int, Any]) -> Dict[str, Any]:
-    """Resolve module-level ``name = <constant expression>`` bindings, so
-    ``h = 'scoped-git' + '-commit'; os.system(h)`` folds as well as the
-    inlined spelling does.
-
-    Conservative to the point of bluntness, because an over-eager
-    environment would make the folder claim a value the interpreter will not
-    see: a name bound more than ONCE anywhere in the payload (a second
-    assignment, an augmented assignment, a ``for`` target, a ``with ... as``,
-    an ``except ... as``, an import alias) is not bound here at all, and any
-    payload containing a ``def``/``class``/``lambda`` gets an EMPTY
-    environment, since those defer execution to a point this walk does not
-    model.
-    """
     binds: Dict[str, int] = {}
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
@@ -4260,29 +3182,13 @@ def _fold_expr_uncached(node: Any, env: Dict[str, Any], budget: _FoldBudget, mem
         return _fold_call(node, env, budget, memo, depth)
     if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
         # EXPLICIT, NOT A FALLTHROUGH (part 17, 2026-08-05). A comprehension
-        # is a loop with its own scope, and modelling one here would mean
-        # evaluating attacker-authored iteration inside a PreToolUse hook --
-        # exactly what `_fold_expr`'s negative spec forbids. So it resolves
         # to UNRESOLVED, which mechanism 2 reads as "we cannot know what this
-        # runs" and DENIES.
-        #
-        # Why it is called out rather than left to the final ``return``: the
         # inert leg PERMITS comprehensions (`_INERT_PAYLOAD_NODE_TYPES`),
-        # which made an un-modelled comprehension a silent string channel
-        # into any callable -- ``''.join([chr(c) for c in [<ints>]])``
-        # resolved to nothing, so neither the literal reconstruction nor the
-        # fold ever saw the assembled name. The fail-closed direction is the
-        # fix and it must stay legible as a decision, so that a future editor
-        # adding comprehension folding has to delete this comment to do it.
         return _FOLD_UNRESOLVED
     return _FOLD_UNRESOLVED
 
 
 def _fold_formatted_value(node: Any, env: Dict[str, Any], budget: _FoldBudget, memo: Dict[int, Any], depth: int) -> Any:
-    """Fold one f-string replacement field: ``f'{h}'``, ``f'{h!r}'``, and a
-    constant format spec (``f'{h:>8}'``). A computed spec, or a value that
-    does not fold, leaves the whole f-string unresolved.
-    """
     value = _fold_expr(node.value, env, budget, memo, depth + 1)
     if value is _FOLD_UNRESOLVED:
         return _FOLD_UNRESOLVED
@@ -4306,14 +3212,6 @@ def _fold_formatted_value(node: Any, env: Dict[str, Any], budget: _FoldBudget, m
 
 
 def _fold_binop(node: Any, env: Dict[str, Any], budget: _FoldBudget, memo: Dict[int, Any], depth: int) -> Any:
-    """Fold ``+`` (sequence concatenation), ``*`` (sequence repetition) and
-    ``%`` (percent formatting) over already-folded operands.
-
-    ``**`` is deliberately absent: ``10**9**9`` is a cheap parse and a
-    multi-second, multi-gigabyte integer, and no obfuscation needs it -- a
-    repetition count that does not fold simply leaves the repetition
-    unresolved, which is the correct answer anyway.
-    """
     left = _fold_expr(node.left, env, budget, memo, depth + 1)
     if left is _FOLD_UNRESOLVED:
         return _FOLD_UNRESOLVED
@@ -4343,7 +3241,6 @@ def _fold_binop(node: Any, env: Dict[str, Any], budget: _FoldBudget, memo: Dict[
             return _FOLD_UNRESOLVED
         if not isinstance(count, int) or isinstance(count, bool):
             return _FOLD_UNRESOLVED
-        # Bound BEFORE allocating -- the entire point of this branch.
         if count > 0 and len(sequence) * count > _MAX_FOLDED_VALUE_LEN:
             budget.exceeded = True
             return _FOLD_UNRESOLVED
@@ -4359,10 +3256,6 @@ def _fold_binop(node: Any, env: Dict[str, Any], budget: _FoldBudget, memo: Dict[
 
 
 def _fold_subscript(node: Any, env: Dict[str, Any], budget: _FoldBudget, memo: Dict[int, Any], depth: int) -> Any:
-    """Fold indexing and slicing of an already-folded sequence
-    (``'Xscoped-git-commit'[1:]``). Bounded for free: a slice of a bounded
-    sequence is bounded.
-    """
     value = _fold_expr(node.value, env, budget, memo, depth + 1)
     if not isinstance(value, (str, bytes, bytearray, list, tuple)):
         return _FOLD_UNRESOLVED
@@ -4472,10 +3365,6 @@ def _fold_map_call(node: Any, env: Dict[str, Any], budget: _FoldBudget, memo: Di
 
 
 def _fold_builtin_call(name: str, args: List[Any], budget: _FoldBudget) -> Any:
-    """Compute the result of one element-wise builtin over folded
-    arguments. Every branch is this module's own arithmetic over values it
-    already holds -- no dispatch through a payload-controlled object.
-    """
     try:
         if name == "chr":
             if len(args) != 1 or not isinstance(args[0], int) or isinstance(args[0], bool):
@@ -4512,11 +3401,6 @@ def _fold_builtin_call(name: str, args: List[Any], budget: _FoldBudget) -> Any:
 
 
 def _fold_base64_call(name: str, args: List[Any], budget: _FoldBudget) -> Any:
-    """Decode/encode a constant through the ``base64`` codec named by
-    ``name``. Imported lazily -- this guard runs on every Bash call, and a
-    payload that mentions no codec must not pay for one (the same hot-path
-    reasoning `_import_assert_paths_in_session_scope` records).
-    """
     if not args or not isinstance(args[0], (str, bytes, bytearray)):
         return _FOLD_UNRESOLVED
     if len(args[0]) > _MAX_FOLDED_VALUE_LEN:
@@ -4534,11 +3418,6 @@ def _fold_base64_call(name: str, args: List[Any], budget: _FoldBudget) -> Any:
 
 
 def _fold_text_method(receiver: Any, name: str, args: List[Any], kwargs: Dict[str, Any], budget: _FoldBudget) -> Any:
-    """Apply a whitelisted ``str``/``bytes`` method to an already-folded
-    receiver. ``join`` and ``format`` are pre-bounded (a join's total length
-    and a template's width fields) because both can expand far past their
-    source length; every other result is bounded on the way out.
-    """
     if not isinstance(receiver, (str, bytes, bytearray)) or name not in _FOLDABLE_TEXT_METHODS:
         return _FOLD_UNRESOLVED
     if name == "join":
@@ -4559,10 +3438,6 @@ def _fold_text_method(receiver: Any, name: str, args: List[Any], kwargs: Dict[st
 
 
 def _fold_text_values(value: Any, out: List[str], seen: int = 0) -> None:
-    """Flatten one folded value into the strings mechanism 1 will match on.
-    ``bytes`` count as text: a base64 blob decodes to bytes, and the
-    invocation it spells is exactly what this part exists to see.
-    """
     if isinstance(value, str):
         out.append(value)
     elif isinstance(value, (bytes, bytearray)):
@@ -4576,12 +3451,6 @@ def _fold_text_values(value: Any, out: List[str], seen: int = 0) -> None:
 
 
 def _fold_collect_text(tree: Any, env: Dict[str, Any], budget: _FoldBudget, memo: Dict[int, Any]) -> List[str]:
-    """Walk ``tree`` in source order, collecting the MAXIMAL folded strings:
-    when a node folds, its text is taken and its children are not descended
-    into (their values are already inside the parent's result). Source order
-    is preserved because the reconstructed line is fed to matchers that read
-    adjacency (``git`` then ``commit``).
-    """
     out: List[str] = []
     total = 0
     stack: List[Any] = [tree]
@@ -4602,24 +3471,6 @@ def _fold_collect_text(tree: Any, env: Dict[str, Any], budget: _FoldBudget, memo
 
 
 class _PayloadBindings(NamedTuple):
-    """PART 19 (2026-08-05) -- what the payload's own ``import``/assignment
-    statements say about the NAME a call is spelled with.
-
-    ``imports`` maps a local name to the SET of canonical dotted targets it
-    was bound to (``r`` -> ``{'subprocess.run'}``, ``sp`` ->
-    ``{'subprocess'}``); ``opaque`` holds names rebound by a statement this
-    walk cannot resolve, which are fail-closed rather than assumed harmless.
-
-    A SET, not a string, and part 21 (2026-08-05) is why: one name can carry
-    several import identities (``try: from subprocess import run as r /
-    except ImportError: from json import loads as r``, an ``if``-guarded
-    fallback, a same-named import inside a ``def`` body). The map was
-    ``Dict[str, str]`` with last-visit-wins, so the SECOND spelling silently
-    replaced the first and an aliased sink resolved to a benign target --
-    a confirmed mis-resolve TOWARD SAFE that defeated every part-19/20 leg.
-    Every consumer below reads this as "any of these identities", so a name
-    with one sink identity among several IS a sink.
-    """
 
     imports: Dict[str, Set[str]]
     opaque: Set[str]
@@ -4731,17 +3582,6 @@ def _payload_bindings(tree: Any) -> _PayloadBindings:
 
 
 def _dotted_import_targets(node: Any, imports: Dict[str, Set[str]]) -> Set[str]:
-    """Return EVERY canonical dotted target a ``Name``/``Attribute`` chain may
-    resolve to through ``imports`` (``subprocess.run`` ->
-    ``{'subprocess.run'}``), or an empty set when it resolves to none -- a
-    call result, a subscript, a literal, or a chain rooted in an unimported
-    name.
-
-    A SET because the root name may carry several import identities (see
-    `_PayloadBindings`): a chain rooted in a name bound twice resolves to one
-    dotted target per root binding, and every consumer treats the payload as
-    reaching ANY of them.
-    """
     parts: List[str] = []
     while isinstance(node, ast.Attribute):
         parts.append(node.attr)
@@ -4790,10 +3630,6 @@ def _resolved_call_identity(func: Any, bindings: _PayloadBindings) -> Tuple[Set[
 
 
 def _call_target_is_opaque_rebinding(func: Any, bindings: _PayloadBindings) -> bool:
-    """True when the call target is a bare local name the payload REBOUND to
-    something this walk could not resolve (part 19) -- see
-    `_payload_bindings` for why that fails closed rather than open.
-    """
     return isinstance(func, ast.Name) and func.id in bindings.opaque
 
 
@@ -4855,10 +3691,7 @@ def _call_is_execution_sink(node: Any, bindings: _PayloadBindings = _EMPTY_BINDI
     if _call_is_receiver_qualified_shell_sink(func, bindings):
         return True
     names, modules = _resolved_call_identity(func, bindings)
-    #: A BARE name keeps its pre-part-19 treatment for the process-creation
-    #: families (``execv('x')`` as an unimported local name is not evidence of
     #: anything); an IMPORT-RESOLVED one does not, because ``from os import
-    #: posix_spawn`` says exactly which primitive it named.
     process_creation_applies = isinstance(func, ast.Attribute) or (
         isinstance(func, ast.Name) and func.id in bindings.imports
     )
@@ -5001,25 +3834,12 @@ def _argv_program_slot(node: Any, env: Dict[str, Any], budget: _FoldBudget, memo
     return value
 
 
-#: PART 19 (2026-08-05) -- the keyword ``subprocess.run``/``Popen`` accept
-#: the argv vector under. Part 18 read the program slot out of the FIRST
 #: POSITIONAL argument only, so ``subprocess.run(args=sys.argv[1:])`` -- the
-#: same call, spelled with a keyword -- was exempt from the program-slot rule
 #: entirely and ALLOWED at HEAD. The slot is a property of the ARGUMENT, not
-#: of how it was passed.
 _ARGV_PROGRAM_KEYWORD = "args"
 
-#: PART 19 -- the interpreter flags whose argument is another PROGRAM: a
-#: ``-c`` payload is source text the nested interpreter executes, a ``-m``
-#: argument is a module it runs. Both are consumed by
-#: `_argv_nested_interpreter_payload_is_unknown`.
 _NESTED_INTERPRETER_CODE_FLAGS = ("-c", "-m")
 
-#: How deep the nested-interpreter recursion may go before it fails CLOSED.
-#: ``python3 -c`` inside ``python3 -c`` inside ``python3 -c`` is already well
-#: past any honest usage, and the bound keeps a hand-nested payload from
-#: turning a PreToolUse hook into a parser bomb -- same rule as every other
-#: bound in this part: exceeding it is UNKNOWN, never "fine".
 _MAX_NESTED_INTERPRETER_DEPTH = 3
 
 
@@ -5277,13 +4097,6 @@ def _fold_python_c_payload(payload: str) -> _FoldedPayload:
     try:
         tree = ast.parse(payload)
     except (RecursionError, MemoryError):
-        # CPython 3.14's PEG parser replaced its pure recursion-limit trip
-        # with a growable, bounded stack that raises `MemoryError` (not
-        # `RecursionError`) for the same "too deep to parse safely" shape
-        # this bound exists to catch -- same bound, different exception
-        # type depending on interpreter version. Both are reported
-        # identically: a bound hit, not unparseable source (see the
-        # constant's own docstring below for why that distinction matters).
         return _FOLD_RECURSION_BOMB
     except Exception:
         return _FOLD_EMPTY
@@ -5364,11 +4177,7 @@ def _has_opaque_execution_sink(cmd: str, *, legs: Optional[Set[str]] = None) -> 
 
 
 #: A ``-c``-shaped flag run, ANYWHERE a shell token could start it. Anchored
-#: only on "not preceded by a word character", so it covers the bundled
 #: spellings `_BUNDLED_C_FLAG_RE` accepts (``-ic``, ``-cO``) and the quoted
-#: one (``python3 "-c" '...'``, where the preceding character is a quote
-#: rather than whitespace). Over-matching (``--capture``) is deliberate and
-#: harmless: this only decides whether the full matchers RUN.
 _C_FLAGISH_RUN_RE = re.compile(r"(?<![\w])-[A-Za-z]*c", re.IGNORECASE)
 
 
@@ -5544,28 +4353,8 @@ def _prefilter_mentions_commit(cmd: str) -> bool:
     )
 
 
-# --- C3 (2026-08-03-narrow-subagent-commit-confinement-two-classes.md):
-#     the ONE deliberate allow-path widening in this module -- a narrow,
-#     route-keyed exemption for `coordinator:git-commit-agent`, DR-125
-#     Ruling 3. Prior art: `nudge_subagent_scoped_commit.py`'s retired
 #     `_SCOPED_RE` scoped-pathspec exemption was deliberately NOT ported when
-#     that module was retired (see this module's docstring, part 6's
-#     preceding section comment, and the 2026-07-25 entry it references) --
-#     the stated reason was "M4 denies every subagent git commit, scoped or
 #     not". That reason is SUPERSEDED BY A CHANGED PRECONDITION here, not
-#     overruled: at the time, no subagent had a legitimate commit route at
-#     all, so a scoped-pathspec exemption had nothing to be an exemption FOR.
-#     DR-125 Ruling 3 creates that route for the first time
-#     (`coordinator:git-commit-agent`), so reviving a scoped-pathspec-gated
-#     exemption -- narrowed to exactly one `subagent_type` and one op, unlike
-#     the retired module's blanket form -- is not a regression of the
-#     2026-07-25 retirement; it answers a precondition that no longer holds.
-#
-#     All three legs below are AND-ed together in `_git_commit_agent_may_
-#     commit`; `check()` additionally requires LEG 1 (the strict
-#     `payload["agent_type"]` check) before ever calling it -- see that
-#     function's own docstring for why LEG 1 lives in `check()` rather than
-#     here. ---
 
 
 def _extract_invoke_commit_v2_paths(
@@ -5621,8 +4410,6 @@ def _extract_invoke_commit_v2_paths(
             if tok.startswith("-"):
                 flag_name = tok.split("=", 1)[0]
                 if flag_name == "--params-file":
-                    # Paths live in a file/stdin this guard cannot read --
-                    # not determinable from argv text (see docstring above).
                     return None
                 if flag_name in _INVOKE_FLAGS_WITH_VALUE:
                     j += 1 if "=" in tok else 2
@@ -5645,63 +4432,17 @@ def _extract_invoke_commit_v2_paths(
 
 
 #: GRAVESTONE -- `_extract_trampoline_scoped_git_commit_paths` (deleted
-#: 2026-08-30). It was the allow-side leg for the `scoped-git-commit(.cmd)?`
 #: trampoline: peel wrapper noise, match `_SCOPED_GIT_COMMIT_BINARY`, read
-#: everything after the CLI's own `--` as the pathspec. The binary it
-#: recognized no longer exists anywhere on the install chain --
-#: `coordinator/bin/scoped-git-commit` is gone with the op it fronted, and
-#: the settings-home launchers `test_deny_prose_never_routes_to_the_retired_
-#: scoped_git_commit_launcher` was written against fail helper-missing
-#: (exit 127). An allow leg that can only match an uninvocable binary grants
-#: nothing; it survived because it existed, and it made the allow surface
-#: read as three routes when only one was live.
-#:
 #: The DENY side is untouched and stays that way: `_SCOPED_GIT_COMMIT_
 #: BINARY` remains in `_COMMIT_HELPER_BINARY_NAMES`, so an invocation of
-#: that name is still detected and still denied. Deleting detection of a
-#: retired binary is a different (and wrong) change from deleting the
-#: allowance for it.
 
-#: 2026-08-22 PM ruling (`op_budget_suspension.py`'s `ceremony.scoped_git_
 #: commit` row, REINSTATEMENT + Negative-spec passages): while that op was
-#: suspended, "plain `git commit`; the prepare-commit-msg hook attaches
 #: Deliverable-Id" was the row's own named ``fallback`` -- "A SANCTIONED
 #: FALLBACK IS NOT A BYPASS". Before this leg existed, `coordinator:git-
-#: commit-agent`'s ONLY recognized shapes were the `ceremony.scoped_git_
-#: commit` invoke-module spelling and the `scoped-git-commit` trampoline
-#: (LEG 2/3 above) -- so a dispatched agent following the ruling's own
-#: prescribed fallback (`git commit -- <path>...`) fell through to `_LEG_NO_
 #: PATHSPEC` every time, deadlocked between a suspended op and a guard that
-#: could not recognise its own sanctioned escape.
-#:
 #: 2026-08-30: THE WORD "FALLBACK" NO LONGER DESCRIBES THIS LEG, and reading
-#: it as a fallback is what kept the real defect invisible for a week. The
-#: op it was a fallback FOR is deleted, not suspended, and the trampoline
-#: leg beside it is deleted too -- so between 2026-08-25 and this change,
-#: this "fallback" was the only leg in the module that could clear anything
-#: at all, while every agent-facing message named one of the two dead
-#: routes. It is now one of exactly TWO co-equal first-class legs, beside
-#: `_extract_invoke_commit_v2_paths`. Keep both named, together, in every
-#: message: a single-route allow surface with a multi-route message set is
-#: the shape that produced the field denial.
-#:
-#: This leg teaches the guard
-#: that ONE additional shape, scoped exactly as narrowly as the trampoline
-#: leg already is: a bare ``git ... commit`` chain (walked the same way
-#: `_tokens_reach_commit_after_git` walks git global options, so `git -C x
-#: commit` is still recognised) requiring its own literal ``--`` separator
-#: before ANY pathspec is read -- never widened to accept a bare `git commit`
-#: with no separator, exactly like the trampoline leg it mirrors. A `-a`/
-#: `-A`/`--all` token appearing BEFORE that separator (a modifier on `commit`
-#: itself, never a pathspec element `_pathspec_element_is_sweeping` would
-#: ever see) is rejected outright here -- the row's fallback text says
-#: "plain `git commit`" with an explicit pathspec, not `git commit -a`, and
-#: `_pathspec_element_is_sweeping`'s own post-``--`` scan has no way to see a
-#: pre-``--`` flag. This is row-specific and does NOT widen what any OTHER
 #: commit-helper binary is allowed to do -- `_COMMIT_HELPER_BINARY_NAMES`
-#: (`coordinator-safe-commit`/`scoped-git-commit`) are untouched, and this
 #: leg only ever fires for `agent_type == _GIT_COMMIT_AGENT_TYPE` (LEG 1,
-#: `check()`'s own gate, unchanged).
 def _extract_plain_git_commit_paths(seg_tokens: list) -> Optional[Tuple[List[str], bool]]:
     """LEG 4 (the sanctioned plain-``git commit`` shape -- once a fallback
     for a suspended ``ceremony.scoped_git_commit``, now one of the two
@@ -5756,10 +4497,6 @@ def _extract_plain_git_commit_paths(seg_tokens: list) -> Optional[Tuple[List[str
 
 
 #: A shell REDIRECTION token as `_command_tokenizer.tokenize_full_command`
-#: emits it -- `>file`, `>>file`, `2>file`, `<file`, and (post-
-#: `join_redirection_operator_tokens`) the fd-duplication spellings `2>&1`,
-#: `>&2`, `&>file`. A redirection and its target are shell syntax, not argv,
-#: so they are never part of the pathspec the CLI itself receives.
 _REDIRECTION_TOKEN_RE = re.compile(r"^(?:&?\d*(?:>>?|<)|\d+<)")
 
 
@@ -5799,9 +4536,6 @@ def _pathspec_tokens_before_redirection(tokens: List[str]) -> List[str]:
         if _REDIRECTION_TOKEN_RE.match(token):
             i += 1
             if "&" not in token and i < total:
-                # Bare operator (`>`, `>>`, `<`, `2>`, ...) -- its target is
-                # a separate following token, never itself a real pathspec
-                # entry (the shell consumes it), so skip that too.
                 i += 1
             continue
         kept.append(token)
@@ -5925,47 +4659,15 @@ def _resolve_git_commit_agent_pathspec(cmd: str) -> Optional[Tuple[List[str], bo
     return None
 
 
-#: Git pathspec magic signature -- `man gitglossary` § pathspec -- is spelled
-#: EVERY way as a leading `:` (long form `:(...)`, top-magic shorthand `:/`,
-#: and the shorthand negative/exclude form `:!<pattern>`, equivalent to
 #: `:(exclude)<pattern>`). AC14 named `:/` and `:(top)` as EXAMPLES of this
-#: class, not an exhaustive enumeration -- Finding 4 (2026-08-03 security
-#: review) confirmed enumerating spellings one at a time (as the prior
 #: `_PATHSPEC_MAGIC_PREFIX`/`_PATHSPEC_TOP_MAGIC` pair did, catching `:(` and
-#: `:/` but missing `:!`) is exactly the gap-reopens-on-a-different-spelling
-#: shape this file's history keeps producing. Generalized instead to: any
-#: pathspec element beginning with `:` is treated as (potentially) magic and
-#: rejected wholesale, rather than allow-listing named forms one by one. A
-#: plain Windows drive-letter path (`C:\...`, `C:/...`) is NOT a false
-#: positive here -- its colon is never the FIRST character (the drive letter
-#: precedes it), so `candidate.startswith(":")` never fires for one.
 
-#: `-A`/`-a`/`--all` are `git commit`/`git add` FLAGS, not paths -- AC14
-#: requires rejecting them if they appear as a pathspec element (a caller
-#: could smuggle one into a `ceremony.scoped_git_commit` JSON `paths` array
-#: the same way any other string element arrives).
 _SWEEPING_FLAG_TOKENS = frozenset({"-A", "-a", "--all"})
 
-#: Characters that make a pathspec element a glob rather than a literal
-#: path -- AC14 rejects "any glob pattern". ``[`` alone is special-cased in
-#: `_pathspec_element_is_sweeping` via `_bracket_candidate_exists_literally`:
-#: a literal on-disk name containing `[` (e.g. Next.js `[slug]`) is a path,
-#: not a glob, when the filesystem confirms it.
 _GLOB_CHARS = frozenset("*?[")
 
 
 def _bracket_candidate_exists_literally(candidate: str, git_root: str) -> bool:
-    """True if ``candidate`` (containing a literal ``[``, e.g. a Next.js
-    ``[slug]`` path segment) names a real, existing filesystem entry when
-    resolved against ``git_root``. Checked with ``os.path.exists`` -- a
-    literal existence probe, never ``glob()`` -- so ``[`` in a real file or
-    directory name is not misread as bracket-expression glob syntax.
-
-    Existence-only, not a resolution authority: this does not replace
-    ``_pathspec_element_is_sweeping``'s own lexical resolution below, and a
-    literal path that passes this check still goes through every other AC14
-    leg (root/ancestor, ownership-scope) unchanged.
-    """
     if not git_root:
         return False
     candidate_posix = candidate.replace("\\", "/")
@@ -6075,14 +4777,6 @@ def _pathspec_element_is_sweeping(path: Any, git_root: str) -> bool:
     resolved = posixpath.normpath(resolved)
     if resolved == root:
         return True
-    # Ancestor-of-repo-root check: walk UP from `root` (never an unbounded
-    # walk -- `posixpath.dirname` reaches a fixed point, `/`, in a bounded
-    # number of steps for any real path) looking for `resolved` among the
-    # ancestors. A path elsewhere entirely (neither the root, an ancestor of
-    # it, nor inside it) is NOT flagged here -- AC14 names only the repo
-    # root and its ancestors, not an arbitrary out-of-repo path; the
-    # ownership-scope check (`assert_paths_in_session_scope`) is this
-    # predicate's separate, independent defense against that case.
     parent = root
     while True:
         next_parent = posixpath.dirname(parent)
@@ -6093,23 +4787,10 @@ def _pathspec_element_is_sweeping(path: Any, git_root: str) -> bool:
         parent = next_parent
 
 
-#: A Windows drive-absolute pathspec element, in the forward-slash form
-#: every caller here has already normalized to (`X:/...`; the `X:\...`
-#: spelling reaches this pattern only after that normalization, never
-#: before). `posixpath.isabs` answers False for a drive path -- it tests a
-#: leading `/` only -- so without this the element reaches the ownership leg
-#: looking like an ordinary repo-relative one that simply never matches
-#: anything. Windows is first-class here, so absoluteness is decided by both
-#: forms rather than the POSIX one alone.
 _DRIVE_ABSOLUTE_PATHSPEC_RE = re.compile(r"^[A-Za-z]:/")
 
 
 def _pathspec_element_is_absolute(candidate_posix: str) -> bool:
-    """True if ``candidate_posix`` (already forward-slash-normalized) is an
-    absolute path in either the POSIX (`/repo/...`) or the Windows
-    drive-letter (`X:/...`) sense. UNC (`//host/share/...`) satisfies the
-    POSIX leg.
-    """
     return bool(
         posixpath.isabs(candidate_posix)
         or _DRIVE_ABSOLUTE_PATHSPEC_RE.match(candidate_posix)
@@ -6190,7 +4871,6 @@ def _repo_relativize_pathspec(
 
 
 def _explicit_invoke_repo_flag_value(op_idx: int, seq: "Sequence[str]") -> Optional[str]:
-    """The invoke-level ``--repo <value>``/``--repo=value`` before ``op_idx``."""
     i = 0
     while i < op_idx:
         tok = seq[i]
@@ -6203,10 +4883,6 @@ def _explicit_invoke_repo_flag_value(op_idx: int, seq: "Sequence[str]") -> Optio
 
 
 def _explicit_git_dash_c_value(seg_tokens: "Sequence[str]") -> Optional[str]:
-    """The last ``-C <path>`` in a git chain that reaches ``commit``. Same
-    walk as ``_tokens_reach_commit_after_git`` -- both delegate to
-    ``_git_commit_chain_scan``, so the two agree on what a commit chain
-    is."""
     tokens = _peeled_effective_tokens(seg_tokens)
     if not tokens:
         return None
@@ -6362,34 +5038,10 @@ def _pathspec_shape_permitted(
         return False, _LEG_SWEEPING_PATHSPEC
     if include_orphans:
         # SC-DR-022 (claude-central-em, 2026-08-04), the structural half of a
-        # ruling that was prose-only when it landed: adoption is safe because
-        # the adopter WAS THERE and knows what it just wrote -- provenance,
-        # not timing. A dispatched committer holds no such provenance by
-        # construction; it did not author the files, and its whole design
-        # rests on provenance arriving WITH THE BRIEF. An agent adopting an
-        # orphan is deriving scope from a denial, which is the sweeping
-        # defect one level removed, laundered through a compliant committer.
-        #
         # This supersedes part 11's MIRRORING rationale for the dispatched-
-        # agent path ONLY, and does not revive the hard-coded `True` that
-        # mirroring replaced -- the correction runs the other way. Mirroring
-        # remains correct for what it was defending against (a guard granting
-        # unilaterally what the sink still refused); it was simply never a
-        # judgment about WHO was asking, and this function only ever runs
-        # when the answer is "a dispatched subagent" (LEG 1 gates on
         # `effective_type == _GIT_COMMIT_AGENT_TYPE`, resolved from the
-        # harness-supplied, non-cooperative `agent_id`).
-        #
-        # Denied loudly rather than silently downgraded to `False`: an agent
-        # that asked for adoption and got a quiet strict-mode refusal would
-        # read the stock orphan message, which advertises the very
-        # re-invocation this forbids, and loop on it.
         return False, _LEG_AGENT_ORPHAN_ADOPTION
     # An in-repo ABSOLUTE element is rewritten to the repo-relative form the
-    # ownership leg's literal membership test is built from -- see
-    # `_repo_relativize_pathspec` for why this grants nothing new and why an
-    # out-of-repo absolute denies here instead of falling through to a
-    # message that would name the wrong cause.
     _, absolute_out_of_repo = _repo_relativize_pathspec(list(paths), git_root)
     if absolute_out_of_repo:
         return False, _LEG_ABSOLUTE_OUT_OF_REPO
@@ -6444,12 +5096,7 @@ def _git_commit_agent_pathspec_permitted(
     paths, _ = _repo_relativize_pathspec(list(paths), git_root)
     try:
         # `allow_orphans=False`, KEYWORD-form (keyword-only on
-        # `assert_paths_in_session_scope`'s own signature, so a future
-        # positional-style call here cannot silently regress without a
-        # `TypeError`) -- and now unconditionally strict, because the only
-        # invocation that could have made it `True` is refused above by
         # SC-DR-022. Kept explicit rather than dropped so the strictness is
-        # a stated property at the call site, not an inherited default.
         allowed, reason = assert_paths_in_session_scope(
             session_id, paths, cwd, allow_orphans=False
         )
@@ -6460,11 +5107,6 @@ def _git_commit_agent_pathspec_permitted(
         return True, ""
     reason = reason or ""
     # The ownership leg refused. Whether that refusal rested on EVIDENCE is a
-    # separate question from whether it refused, and it is the question
-    # `_ownership_leg_stand_down` answers -- see that module for the two
-    # absences it stands down on, the holder check that wins over both, and
-    # why `include_orphans`/shape sentinels cannot reach it. Fail-closed by
-    # construction: an unimportable stand-down keeps this deny.
     if _ownership_denial_stands_down(reason, git_root, session_id):
         return True, ""
     return False, reason
@@ -6473,15 +5115,6 @@ def _git_commit_agent_pathspec_permitted(
 def _ownership_denial_stands_down(
     reason: str, git_root: str, session_id: str
 ) -> bool:
-    """Lazy seam onto `_ownership_leg_stand_down.ownership_denial_stands_down`,
-    for the reason `_import_assert_paths_in_session_scope` is lazy: the
-    stand-down reads `coordinator_core.ops` vocabulary and the capability
-    layer, neither of which belongs in this guard's import closure.
-
-    Returns False on ANY import or runtime failure -- a stand-down that could
-    not be evaluated is not a stand-down, and this module's `CLASS =
-    "hard-deny"` posture keeps the denial the caller already computed.
-    """
     try:
         from coordinator_core.bash_guards._ownership_leg_stand_down import (
             ownership_denial_stands_down,
@@ -6492,28 +5125,7 @@ def _ownership_denial_stands_down(
         return False
 
 
-#: AC16's specialized deny message, for `effective_type ==
 #: _GIT_COMMIT_AGENT_TYPE` only -- the generic message below asserts
-#: "subagents may not commit" / "Only the EM ... may commit" / "There is NO
-#: subagent-honored override", all now FALSE for this one type, and its
-#: "Safe forward path" names the wrong action (report to the EM) instead of
-#: the actual one (re-issue via the sanctioned route with a fixed pathspec).
-#: Every OTHER type's message is untouched -- see `_deny_reason` below.
-#:
-#: 2026-08-03 correction (spike-verdict `2026-08-03-git-commit-agent-leg3-
-#: payload-triple.md`, two wrong-leg investigations across two sessions):
-#: the wording previously named ONLY the argv-shape leg (LEG 3's `_pathspec_
-#: element_is_sweeping` reject-list). `_git_commit_agent_may_commit` also
-#: fails closed on the ownership-scope leg (`_assert_paths_in_session_scope`
-#: -- every pathspec element must resolve inside THIS session's own scope),
-#: and that is the leg observed failing in the field: an agent invokes the
-#: exact prescribed form, is denied identically, and (per the message as it
-#: read then) has no way to tell the two legs apart -- it re-tries argv
-#: variants against a scope failure that no argv change can fix. The message
-#: now names both legs and orders the check: if the prescribed form was
-#: already used verbatim, the argv leg is presumptively fine and the next
-#: thing to check is whether the pathspec is in-scope, not the argv shape
-#: again. Verdict logic (`_git_commit_agent_may_commit`, `check()`) is
 #: UNCHANGED by this correction -- text only.
 _GIT_COMMIT_AGENT_DENY_REASON = (
     "BLOCKED: git-commit-agent commits in two shapes only, each with a "
@@ -6525,54 +5137,12 @@ _GIT_COMMIT_AGENT_DENY_REASON = (
     "is. Nothing is counted."
 )
 
-#: 2026-08-30: this message used to name `ceremony.commit_v2` as the route to
-#: use. `_resolve_git_commit_agent_pathspec` -- the allow-side recognizer this
-#: same message steers the reader toward -- cannot read that route: it matches
-#: `ceremony.scoped_git_commit` (both spellings) and the plain-`git commit`
-#: leg, and NOTHING else, and it deliberately does not unwrap `python -c`
-#: payloads on the allow side. So an agent that obeyed this message verbatim
 #: was denied again, at `_LEG_NO_PATHSPEC`, and the leg message then sent it to
-#: a THIRD route. Observed in the field the same day: a dispatched
-#: `coordinator:git-commit-agent` invoked `coordinator_core.git.commit.
-#: commit_paths` (the route its own brief mandates), was denied here, read
-#: "use `git commit ... -- <paths>`", and correctly refused to re-spell a
-#: denied call -- so a green chunk went uncommitted. A guard that names a
-#: route it will itself deny is a defect independent of whether the verdict is
-#: right (same principle as the 2026-08-04 incident recorded below).
-#:
-#: `ceremony.scoped_git_commit` is not merely suspended, it is DELETED (over
-#: the brightline; `coordinator_core/ops/ceremony/scoped_git_commit.py` does
-#: not exist at HEAD), which left `_extract_plain_git_commit_paths` as the
-#: only extractor that could still match a live route -- so the first pass at
-#: this correction (text-only, same day) pointed every message at that one
-#: shape. That was the right message for the recognizer AS IT STOOD and the
-#: wrong end state: it converged the guard on plain `git commit` while
-#: `coordinator/agents/git-commit-agent.md` § Leg 1 mandates the op, leaving
-#: doctrine and enforcement pointing opposite ways with the agent in between.
 #: The second pass fixed the RECOGNIZER instead -- `_extract_invoke_commit_
-#: v2_paths` repointed off the deleted op onto `ceremony.commit_v2`, the dead
-#: trampoline leg deleted -- so the messages now name TWO shapes, both of
-#: which the allow side can actually read. The verdict-logic change is that
-#: repoint; these message constants stay in lockstep with it BY RULE, pinned
-#: by `test_deny_message_names_only_recognizable_routes`.
 
 #: The deny message for `_PAYLOAD_LEG_PYTHON_STRING_LITERALS` -- reached
-#: when the ONLY text that matched a commit shape was the synthetic argv
-#: line rebuilt from a Python `-c` payload's own string literals.
-#:
-#: The generic message below is wrong for this leg in the way that matters:
-#: the caller may not have tried to commit at all (a read-only
-#: `ast.parse(open('coordinator/bin/scoped-git-commit').read())` denies
-#: identically to `subprocess.run(['coordinator/bin/scoped-git-commit', ...])`
 #: -- see `_PAYLOAD_LEG_PYTHON_STRING_LITERALS`), so "finish your edits and
-#: report to the EM" names an action that resolves nothing, and no argv
-#: variant of a read-only command that spells that path can ever pass. This
-#: message therefore states the leg, states that the ambiguity is structural
-#: rather than a detection bug to argue with, and names the two commands
-#: that DO resolve it. Verdict is unchanged either way -- message selection
 #: only. Prose stays inside `_message_size.MESSAGE_PROSE_CAP_BYTES`
-#: (backtick spans in the `Use instead:` cue window exempt) -- pinned by
-#: `test_python_c_payload_leg_message_fits_prose_cap`.
 _PYTHON_C_PAYLOAD_DENY_REASON = (
     "BLOCKED: commit-helper path inside an interpreter `-c` payload -- the "
     "guard cannot tell a literal naming it from a subprocess call running it. "
@@ -6581,43 +5151,17 @@ _PYTHON_C_PAYLOAD_DENY_REASON = (
 )
 
 #: The deny message for `_PAYLOAD_LEG_PYTHON_OPAQUE_SINK` (part 16,
-#: mechanism 2). Unlike the leg above, this one IS resolvable by
-#: re-spelling, and the message must say so: the guard denied because it
-#: could not read the argument, so writing the argv out as literals -- or
-#: running the command as a plain Bash call, where the guard can read it --
-#: is a genuine next action rather than advice that resolves nothing. Prose
 #: stays inside `_message_size.MESSAGE_PROSE_CAP_BYTES`, pinned by
-#: ``test_opaque_sink_message_fits_prose_cap``.
 _PYTHON_C_OPAQUE_SINK_DENY_REASON = (
     "BLOCKED: interpreter `-c` payload starts a program built at runtime -- "
     "the guard cannot read what it runs, so it cannot clear it. Use instead: "
     "spell the argv as literals, or run the command directly as Bash."
 )
 
-#: Sentinels `_git_commit_agent_may_commit` returns in its ``deny_reason``
-#: slot for the early legs -- the ones that deny BEFORE the ownership-scope
 #: check runs, and which `_GIT_COMMIT_AGENT_DENY_REASON`'s "check path
-#: scope, not argv shape" prose therefore describes wrongly. Deliberately
-#: not free prose: `_deny_reason` maps them through
 #: `_GIT_COMMIT_AGENT_LEG_MESSAGES` below, so an unrecognized value can only
-#: ever fall back to the static message, never splice caller text into a
-#: capped envelope.
-#:
-#: 2026-08-04 incident (four `coordinator:git-commit-agent` dispatches, two
-#: denied): a trailing `2>&1` made an ordinary single-command invocation
-#: read as compound (fixed at the tokenizer -- see `join_redirection_
 #: operator_tokens`), and the denial then told the agent its PATHSPEC was
-#: out of scope. Both agents had already verified the pathspec with
-#: `git status --porcelain -- <paths>`, so the message sent them to re-verify
-#: the one thing that was correct. A guard whose message names the wrong
-#: cause is a defect independent of whether the verdict is right.
-#: Namespace prefix every `_LEG_*` sentinel carries. `assert_paths_in_
-#: session_scope`'s own reasons never start with it (they open with `"path
-#: outside session ..."`), so `_deny_reason` can tell a sentinel from a real
-#: ownership reason without a second parameter -- and a sentinel added later
 #: but not registered in `_GIT_COMMIT_AGENT_LEG_MESSAGES` falls back to the
-#: static message rather than leaking a raw identifier into agent-facing
-#: prose.
 _LEG_SENTINEL_PREFIX = "leg:"
 
 _LEG_COMPOUND_COMMAND = "leg:compound-command"
@@ -6626,32 +5170,11 @@ _LEG_SWEEPING_PATHSPEC = "leg:sweeping-pathspec"
 _LEG_AGENT_ORPHAN_ADOPTION = "leg:agent-orphan-adoption"
 _LEG_ABSOLUTE_OUT_OF_REPO = "leg:absolute-out-of-repo"
 
-#: The leg that denies when `resolve_git_root(payload["cwd"])` answers
-#: nothing. It carried `""` -- the "nothing agent-actionable to say" slot --
-#: until the same-cause correction the 2026-08-04 incident note above
 #: records: an empty reason selects `_GIT_COMMIT_AGENT_DENY_REASON`, whose
-#: whole body re-spells the two sanctioned commit shapes and closes with
-#: "Check scope, not argv". Neither half is reachable advice here. The
-#: pathspec was never read, the scope check never ran, and the agent cannot
-#: relocate the cwd its own Bash call was handed -- so the message described
-#: a fix the reader could not perform and the dispatch re-issued the same
-#: correct command until the wave died.
-#:
-#: This is the shape a rootless session produces: on a managed remote
-#: container a session anchored outside every repo it holds (no launch
-#: anchor, cwd a plain parent directory) resolves NO toplevel from `cwd`
 #: alone. A command naming its own ABSOLUTE root (`git -C <abs>`, invoke
-#: `--repo <abs>`) is resolved against that root instead, once it validates
-#: as a git toplevel. This leg still denies, fail-closed, when no absolute
-#: root is named or it fails validation: `_pathspec_element_is_sweeping`
-#: has nothing to resolve candidates against without one.
 _LEG_UNRESOLVABLE_GIT_ROOT = "leg:unresolvable-git-root"
 
-#: Per-leg deny prose. Each names its OWN cause and the single edit that
-#: fixes it; none sends the reader to the pathspec-scope check unless the
-#: pathspec-scope check is what denied. Prose stays inside
 #: `_message_size.MESSAGE_PROSE_CAP_BYTES` (backtick spans exempt) -- pinned
-#: by `test_git_commit_agent_leg_messages_fit_prose_cap`.
 _GIT_COMMIT_AGENT_LEG_MESSAGES = {
     _LEG_COMPOUND_COMMAND: (
         "BLOCKED: git-commit-agent commits via ONE uncompounded command -- "
@@ -6691,42 +5214,16 @@ _GIT_COMMIT_AGENT_LEG_MESSAGES = {
     ),
 }
 
-#: The stable prefix `assert_paths_in_session_scope`'s deny ``reason``
-#: always opens with (its own docstring: `"path outside session %s scope:
-#: %r (%s)"` for the FIRST denied path) -- `_ownership_leg_summary` below
-#: strips everything up to and including this marker so the summary starts
-#: at the `%r (%s)` fragment (the path + its classification) rather than
-#: repeating the session id.
 _OWNERSHIP_LEG_REASON_SCOPE_MARKER = "scope: "
 
-#: `assert_paths_in_session_scope`'s reason additionally appends a
 #: per-denied-path breakdown and a committable-remainder note (SC-DR-019) --
-#: both useful for a human reading the raw op result, but far past this
 #: module's `MESSAGE_PROSE_CAP_BYTES` budget once threaded into a guard
-#: deny message. `_ownership_leg_summary` keeps only the FIRST-denied-path
-#: fragment (everything before this marker), which already names the one
-#: path and classification that matters for an agent that only sent one
-#: bad path in an otherwise-fine pathspec.
 _OWNERSHIP_LEG_REASON_ENUMERATION_MARKER = "; denied paths"
 
-#: Bound on the (already backtick-exempted, per `_message_size`'s cue-window
-#: rules) dynamic fragment `_deny_reason` splices into its ownership-leg
-#: branch -- generous enough for a real path + classification pair, still
-#: bounded so a pathological path/classification cannot blow the prose
-#: budget by growing the backtick-delimiter overhead alone.
 _OWNERSHIP_LEG_SUMMARY_MAX_BYTES = 70
 
 
 def _ownership_leg_summary(reason: str, *, max_bytes: int = _OWNERSHIP_LEG_SUMMARY_MAX_BYTES) -> str:
-    """Extract a short, operator-facing "which path, why" fragment from an
-    `assert_paths_in_session_scope` deny ``reason`` string, bounded to
-    ``max_bytes`` UTF-8 bytes (ellipsised, never mid-codepoint).
-
-    Returns ``""`` for an empty/falsy ``reason`` -- the caller (`_deny_
-    reason`) reads that as "the ownership leg was never reached", never as
-    "it ran and said nothing" (that shape cannot occur: `assert_paths_in_
-    session_scope` never returns `(False, "")`).
-    """
     if not reason:
         return ""
     head = reason.split(_OWNERSHIP_LEG_REASON_ENUMERATION_MARKER, 1)[0]
@@ -6847,10 +5344,6 @@ def _deny_reason(
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the subagent-commit gate against a PreToolUse payload.
-
-    Returns ``None`` (allow) or the nested hard-deny envelope.
-    """
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
 
@@ -6860,41 +5353,13 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     cmd = cmd.replace("\r", "")
 
-    # Heredoc BODY lines are stdin data, never executed shell tokens (2026-07-26
     # fix -- see the ``_QUOTE_OPEN_CHARS`` section comment above). Scan the
-    # heredoc-stripped form for both the pre-filter and the full matchers;
-    # ``cmd`` itself (unstripped) is kept only for the human-facing deny
-    # message below, where showing the full original invocation is more
-    # useful context and no scanning is performed on it.
     cmd_for_scan = _strip_heredoc_bodies(cmd)
 
     # 2026-07-29 fix, part 3 (SPACED-WINDOWS-PATH ARGV0, ported for
-    # consistency/defense-in-depth -- see this module's docstring entry of
-    # the same name for why): quote-and-normalize an unquoted Windows
-    # argv0-head path with an embedded-space component
-    # (``C:\Program Files\Git\bin\git.exe``) BEFORE either full matcher
-    # below runs, so the whole path lands as one token instead of splitting
-    # on the space and evading both matchers' argv0-position checks.
     cmd_for_scan = _normalize_windows_argv0_head_path_with_spaces(cmd_for_scan)
 
-    # Dialect-aware Start-Process expansion (C8,
-    # pln-the-destructive-core-learns-the-she): this entry's `matchers`
     # already declares `COMMAND_TOOL_NAMES` but every matcher below
-    # (`_has_git_commit` and siblings) is built over `_tokenize_full_
-    # command`, a Bash-shaped tokenizer with no PowerShell awareness, so a
-    # `Start-Process git -ArgumentList 'commit','-am','wip'` invocation
-    # evades every one of them even though the base `git commit` argv is
-    # byte-identical across dialects -- the anti-bypass surface, not the
-    # base match, is what a PowerShell `Start-Process` wrapper defeats.
-    # Same narrow fix as `_check_destructive_git_revert_full`/
-    # `block_subagent_grant_acquisition.check`: for a PowerShell payload
-    # only, tokenize via `_dialect.tokenize_command` and run the SAME
-    # `expand_start_process_invocations` pass, then rejoin the expanded
-    # tokens back into text so the matchers below (unchanged, still
-    # exercised byte-for-byte on the BASH leg) see the target's real argv
-    # in command position. A PowerShell parse failure leaves `cmd_for_scan`
-    # untouched, matching this function's long-standing behavior for every
-    # dialect before this change.
     _bsc_dialect = dialect_from_tool_name(payload.get("tool_name"))
     if _bsc_dialect is Dialect.POWERSHELL:
         _bsc_ps_tokens = tokenize_command(
@@ -6903,45 +5368,25 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if _bsc_ps_tokens is not None:
             cmd_for_scan = " ".join(expand_start_process_invocations(_bsc_ps_tokens))
 
-    # Cheap pre-filter BEFORE any identity-resolution cost -- the
-    # overwhelming majority of subagent Bash calls are not commits at all.
     if not _prefilter_mentions_commit(cmd_for_scan):
         return None
 
     # The two memos below are WITHIN-ONE-CHECK caches, not cross-call ones,
-    # and clearing them here is what makes that true. Six matchers unwrap
-    # (and fold) the same command, so the memo is worth having; but a memo
     # that SURVIVES a call would let a test -- or any future monkeypatch of
-    # a predicate these functions consult, e.g. the part-14 inertness check
-    # the unwrap gates a leg on -- read a stale result computed under the
-    # unpatched predicate. Verdict correctness must not depend on cache
-    # state, so the cache never outlives the verdict it served.
     _wrapped_shell_c_payload_legs_with_head.cache_clear()
     _fold_python_c_payload.cache_clear()
-    # `payload_legs` collects WHICH unwrap leg the matching text came
-    # through, for message selection only (`_record_payload_leg`'s own
     # NEGATIVE SPEC) -- the `or` short-circuit, and therefore the verdict,
-    # is byte-identical to the collector-free form.
     payload_legs: Set[str] = set()
     if not (
         _has_git_commit(cmd_for_scan, legs=payload_legs)
         or _has_coordinator_safe_commit(cmd_for_scan, legs=payload_legs)
         or _has_committing_op_invoke(cmd_for_scan, legs=payload_legs)
         or _has_reconstructed_commit_identity(cmd_for_scan, legs=payload_legs)
-        # Part 16, in the order the two mechanisms are specified: identity
-        # over FOLDED text first (a resolved name is a better answer than
-        # "unknown"), then the opaque-sink refusal for what did not resolve.
         or _has_folded_commit_identity(cmd_for_scan, legs=payload_legs)
         or _has_opaque_execution_sink(cmd_for_scan, legs=payload_legs)
     ):
         return None
 
-    # No agent_id in payload -> top-level EM Bash call -> allow. This is
-    # the ONE non-cooperative signal that grants the allow -- it is
-    # harness-supplied, not settable by a subagent. Presence of the RAW
-    # field (not whether it canonicalizes) is the EM/subagent
-    # discriminator: "is this a subagent at all" cannot fail the way "what
-    # KIND of subagent" can, so it is the boolean this guard gates on.
     raw_agent_id = payload.get("agent_id")
     if not raw_agent_id:
         return None
@@ -6949,8 +5394,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     cwd = payload.get("cwd")
     git_root = resolve_git_root(cwd)
     if git_root is None:
-        # A session anchored above its repos resolves no root from cwd; a
-        # command that names its own absolute root is validated against it.
         explicit_root = _explicit_absolute_root_from_cmd(cmd_for_scan)
         if explicit_root is not None:
             validated_root = resolve_git_root(explicit_root)
@@ -6970,22 +5413,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if effective_type and effective_type in _ALLOWED_SUBAGENT_TYPES:
         return None
 
-    # Named-persona grant (PM ruling 2026-08-27) -- `agent_type` alone, never
     # `effective_type`; see `_NAMED_PERSONA_COMMIT_TYPES` for why the
-    # backpointer leg is excluded from an unconditional commit grant.
     if agent_type and agent_type in _NAMED_PERSONA_COMMIT_TYPES:
         return None
 
-    # C3 (2026-08-03-narrow-subagent-commit-confinement-two-classes.md): the
-    # one deliberate allow-path widening in this module. LEG 1 is checked
-    # HERE, against `agent_type` alone -- deliberately NOT `effective_type`
-    # (which ORs in the disk-read `subagent_type` backpointer leg a subagent
-    # can write to itself). See `_git_commit_agent_may_commit`'s docstring
-    # for legs 2/3 and the fail-closed landing-order safety net; this branch
-    # only ever calls it once LEG 1 already holds, so a NAMED (teammate)
-    # dispatch -- where `agent_type` carries the teammate's NAME and the
-    # real type resolves only via the forgeable backpointer leg into
-    # `subagent_type` -- never reaches it at all (AC19).
     ownership_reason = ""
     if agent_type == _GIT_COMMIT_AGENT_TYPE:
         may_commit, ownership_reason = _git_commit_agent_may_commit(
@@ -6994,18 +5425,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if may_commit:
             return None
 
-    # Everything below this line -- including an unresolvable canonical
-    # agent_id (unrecognised shape) or an unresolved effective_type (empty
-    # git_root, or a missing/unreadable/malformed backpointer chain) --
-    # DENIES rather than fail-open-allows (fixed 2026-07-30). A subagent
-    # whose kind we could not determine is still a subagent, and confining
-    # it as one is the fail-CLOSED default this CLASS = "hard-deny" guard
-    # is supposed to have.
     kind_unresolved = not effective_type
 
     # Leg precedence, message-selection only: a RESOLVED commit identity is
-    # the more specific cause and wins over "an argument did not resolve",
-    # whichever collector filled first.
     command_leg = ""
     if _PAYLOAD_LEG_PYTHON_STRING_LITERALS in payload_legs:
         command_leg = _PAYLOAD_LEG_PYTHON_STRING_LITERALS
@@ -7026,9 +5448,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "permissionDecisionReason": reason,
         }
     }
-    # Measurement only -- emitted AFTER the verdict above is fully computed,
-    # and passed that exact value, so the reported disposition is read off
-    # what this guard actually returns rather than asserted separately.
     if kind_unresolved:
         emit_kind_resolution_failure_signal("block_subagent_commit", agent_id, git_root, verdict)
     return verdict

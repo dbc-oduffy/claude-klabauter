@@ -64,31 +64,13 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-#: This engine's own `coordinator/bin`, derived once from THIS module's own
-#: `__file__` — never a literal path, never `Path.cwd()`. This file lives at
-#: `coordinator_core/bin_lib_binding.py`, so `parents[1]` is the repo root.
 _ENGINE_BIN_DIR = str(Path(__file__).resolve().parents[1] / "coordinator" / "bin")
 _ENGINE_BIN_DIR_NORMCASED = os.path.normcase(os.path.realpath(_ENGINE_BIN_DIR))
 
-#: Guards `exec_module_bin_bound`'s transient insert/remove pair against a
-#: concurrent caller's own insert landing between this one's insert and its
-#: restore — mirrors `ceremony_common.cli_dispatch._exec_with_own_dir_on_path`'s
-#: discipline.
 _TRANSIENT_LOAD_LOCK = threading.Lock()
 
 
 def ensure_bin_lib_bound(bin_dir: str) -> bool:
-    """Binds `bin_dir` durably on `sys.path` and evicts a foreign
-    `sys.modules["lib"]`, but ONLY when `bin_dir` is this engine's own
-    `coordinator/bin` (compared by `normcase(realpath(...))`, so Windows
-    case/separator differences and a symlinked clone cannot make "ours"
-    look foreign or make the engine bin look like another root). For any
-    other directory this is a no-op: returns `False` and touches neither
-    `sys.path` nor `sys.modules`.
-
-    Returns `True` when `bin_dir` is the engine's own bin (whether or not
-    anything actually changed — the bind is idempotent), `False` otherwise.
-    """
     if os.path.normcase(os.path.realpath(bin_dir)) != _ENGINE_BIN_DIR_NORMCASED:
         return False
 

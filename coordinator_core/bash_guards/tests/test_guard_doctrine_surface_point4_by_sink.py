@@ -43,10 +43,6 @@ from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import guard_doctrine_surface_bash_write as guard
 from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
 
-#: The governed surfaces this corpus runs against. Held here rather than read
-#: from disk so the DENY half never skips: an install with no sibling checkout
-#: still gets the full regression cover. `test_the_corpus_surface_is_live`
-#: below is what stops this list rotting silently.
 SURFACES = [
     "global-doctrine/CLAUDE.md",
     "CLAUDE.md",
@@ -77,12 +73,6 @@ DENY_CASES = [
 ]
 
 #: EXACTLY ONE of these is regression cover; the other three are CONTROLS that
-#: were already allowed before the narrowing. Measured against a reconstruction
-#: of the old predicate, not assumed -- the claim this corpus arrived with was
-#: that all four flipped, which was a generalization from the two
-#: assignment-bearing shapes and was wrong. The controls still earn their place:
-#: they pin that the narrowing did not disturb the shapes point 4 never engaged
-#: on. But do not read four green ticks as four regressions caught.
 ALLOW_CASES = [
     ("read through a variable, write to scratch", f"p={GOV} ; cat $p ; echo x > /tmp/probe.txt"),
     ("read directly, write to scratch", f"cat {GOV} ; echo x > /tmp/probe.txt"),
@@ -90,15 +80,11 @@ ALLOW_CASES = [
     ("governed name as quoted prose, scratch redirect", f'printf "%s" "{GOV} holds the budget" > /tmp/msg.txt'),
 ]
 
-#: The subset point 4 actually engaged on before the fix -- the only entries whose
-#: green proves the narrowing did something.
 REGRESSION_COVER = {"read through a variable, write to scratch"}
 
 
 @pytest.mark.parametrize("label,cmd", DENY_CASES, ids=[c[0] for c in DENY_CASES])
 def test_real_governed_writes_still_deny(label: str, cmd: str) -> None:
-    """The regression half. Every one of these writes a governed surface, and
-    the by-sink narrowing must not have opened any of them."""
     assert guard.is_denied_bash_write(cmd, IDENTIFIERS) is True, (
         f"{label}: the by-sink narrowing opened a real governed write -- {cmd!r}"
     )
@@ -106,17 +92,12 @@ def test_real_governed_writes_still_deny(label: str, cmd: str) -> None:
 
 @pytest.mark.parametrize("label,cmd", ALLOW_CASES, ids=[c[0] for c in ALLOW_CASES])
 def test_reads_whose_write_lands_elsewhere_are_allowed(label: str, cmd: str) -> None:
-    """The fix half. The governed surface is only READ; the sole write targets
-    an unrelated path."""
     assert guard.is_denied_bash_write(cmd, IDENTIFIERS) is False, (
         f"{label}: denied a read whose write target is not governed -- {cmd!r}"
     )
 
 
 def test_the_minimal_pair_differs_only_by_the_assignment() -> None:
-    """The discriminator that isolated the defect: identical governed mention,
-    identical unrelated write, differing only in whether the path passes through
-    a variable. Before the fix these disagreed; they must now agree."""
     through_var = f"p={GOV} ; cat $p ; echo x > /tmp/probe.txt"
     direct = f"cat {GOV} ; echo x > /tmp/probe.txt"
     assert guard.is_denied_bash_write(through_var, IDENTIFIERS) == guard.is_denied_bash_write(
@@ -125,10 +106,6 @@ def test_the_minimal_pair_differs_only_by_the_assignment() -> None:
 
 
 def test_alias_chain_is_followed_not_ignored() -> None:
-    """`_governed_bound_variables` must reach `q` through `p`. If it stopped at
-    direct assignments, the alias-chain DENY case above would pass for the wrong
-    reason -- fail-closed on an unresolved name rather than resolution -- so this
-    asserts the binding set directly."""
     segments = guard._split_top_level_segments(f"p={GOV} ; q=$p ; echo x > $q")
     assert guard._governed_bound_variables(segments, IDENTIFIERS) == {"p", "q"}
 
@@ -155,9 +132,6 @@ def test_the_regression_cover_is_labelled_honestly() -> None:
 
 
 def test_unanalysable_write_families_stay_fail_closed() -> None:
-    """The narrowing covers the plain-redirect shape only. A `tee`/`cp`/`sed -i`
-    segment cannot be told from its target cheaply, so point 4 keeps its original
-    broad behaviour there -- pinned so a later widening is a deliberate act."""
     segments = guard._split_top_level_segments(f"p={GOV} ; cat $p ; echo x | tee /tmp/other.txt")
     assert guard._assignment_indirection_reaches_a_write(segments, IDENTIFIERS) is True
 

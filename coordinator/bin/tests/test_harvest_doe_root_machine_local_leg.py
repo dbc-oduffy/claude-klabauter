@@ -96,18 +96,15 @@ from engine_stamp_probe import _ENGINE_ROOT_VAR
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_BIN_DIR = os.path.dirname(_THIS_DIR)  # coordinator/bin
-_COORDINATOR_DIR = os.path.dirname(_BIN_DIR)  # coordinator/
-_REPO_ROOT = os.path.dirname(_COORDINATOR_DIR)  # repo root (this checkout)
+_BIN_DIR = os.path.dirname(_THIS_DIR)
+_COORDINATOR_DIR = os.path.dirname(_BIN_DIR)
+_REPO_ROOT = os.path.dirname(_COORDINATOR_DIR)
 
 _HARVEST_CLI = os.path.join(_BIN_DIR, "coordinator-harvest-deferrals.py")
 _FIXTURES_DIR = os.path.join(_THIS_DIR, "fixtures", "plan-tasks-spine")
 
 _SUBPROCESS_TIMEOUT_SECS = 30
 
-# Env var names the machine-local reader (both coordinator_registry.py's and
-# cli_shared.py's copies) and doe_root()/claude_klabauter_root() honour — stripped
-# together everywhere this suite needs a genuinely-unresolved-except-via-stub
 # baseline. See module docstring finding (2) re: REPO_DOE_CLAUDE.
 _ENV_VARS_TO_STRIP_FOR_MACHINE_LOCAL_ISOLATION = (
     "DOE_ROOT",
@@ -179,11 +176,6 @@ def _write_stub(stub_dir: str, fake_doe_root: str, fake_claude_klabauter_root: s
 
 
 def _load_harvest_module():
-    """Import coordinator-harvest-deferrals (extensionless) as a module, in-process.
-
-    Used only by the no-subprocess candidate-search-dirs test below — never by
-    the end-to-end test, which deliberately runs the real CLI as a subprocess.
-    """
     if _BIN_DIR not in sys.path:
         sys.path.insert(0, _BIN_DIR)
     loader = SourceFileLoader("coordinator_harvest_deferrals_module", _HARVEST_CLI)
@@ -197,14 +189,6 @@ def _load_harvest_module():
 
 
 def test_candidate_search_dirs_resolves_machine_local_leg_for_both_scopes() -> None:
-    """_candidate_search_dirs() must resolve BOTH the central-scope
-    improvement-queue leg (via cli_shared.claude_klabauter_root(), repos.claude_klabauter)
-    and the lessons-outbox leg (via coordinator_registry.doe_root(),
-    repos.doe_claude) through the machine-local registry rung when no env
-    override is set for either — the exact regression this whole file exists
-    to catch, exercised here in-process (no subprocess spawn of either write
-    seam, so this cannot leak into any real sibling repo).
-    """
     name = "test_candidate_search_dirs_resolves_machine_local_leg_for_both_scopes"
 
     fake_doe_root = tempfile.mkdtemp(prefix="harvest-fake-doe-root-")
@@ -254,10 +238,6 @@ def test_candidate_search_dirs_resolves_machine_local_leg_for_both_scopes() -> N
 
 
 def _write_plan_with_central_and_doctrine_rows(plan_path: str) -> None:
-    """Write a minimal plan with a queue_scope:central row and a doctrine-edit
-    row, both deferred+pm_approved — exercising both write seams
-    (coordinator-queue-append's central branch and coordinator-lesson-promote)
-    in one harvest run."""
     content = """---
 plan_id: "pln-doe-root-machine-local-leg-test"
 ---
@@ -314,34 +294,16 @@ def test_second_run_idempotent_end_to_end(stamped_engine_env: str) -> None:
         for var in _ENV_VARS_TO_STRIP_FOR_MACHINE_LOCAL_ISOLATION:
             env.pop(var, None)
         env.pop("MACHINE_LOCAL_IMPL", None)
-        # Force BOTH write seams onto their legacy path, regardless of
-        # native-seam state — see module docstring finding (2).
         env["QUEUE_APPEND_OUTPUT_ROOT"] = fake_doe_root
         outbox_dir = os.path.join(fake_doe_root, "state", "lessons-outbox")
-        # Must EXIST before the spawn. coordinator-lesson-promote refuses a
         # LESSON_PROMOTE_OUTBOX_ROOT that resolves under the system temp dir and
-        # is absent — it cannot tell a never-created fixture dir from a swept
-        # tmp_path inherited by a long-lived process, and recreating it would
-        # silently file the entry where nobody looks. Never surfaced before
-        # because the child resolved to the published launcher, which ignored
-        # this var outright and wrote to the live sibling repo instead.
         os.makedirs(outbox_dir, exist_ok=True)
         env["LESSON_PROMOTE_OUTBOX_ROOT"] = outbox_dir
-        # The BOX's stamped engine, handed over by `stamped_engine_env` — required
-        # so schema.validate/schema.describe (no legacy fallback) can dispatch at
         # all. This previously named `_REPO_ROOT`, which the dispatch-axis stamp
-        # gate refuses ("engine root ... has no build stamp"): the source checkout
-        # carries no build stamp, so every dispatch from the spawned harvest died
-        # before any dedup logic ran. Taking the fixture and then overwriting its
-        # value with the unstamped root is the whole defect — do not reintroduce a
-        # literal here.
         env[_ENGINE_ROOT_VAR] = stamped_engine_env
 
         cmd = ["python3", os.path.abspath(_HARVEST_CLI), "--plan", plan_path]
 
-        # Deliberately un-related cwd (this repo's tests dir) — the harvest
-        # must resolve write targets via the env overrides above, not via
-        # any git-root proxy.
         invocation_cwd = _THIS_DIR
 
         r1 = subprocess.run(
@@ -386,23 +348,6 @@ def test_second_run_idempotent_end_to_end(stamped_engine_env: str) -> None:
 
 
 def test_real_state_dir_guard_fires_under_pytest() -> None:
-    """Regression test for the containment guard actually firing under
-    pytest -- not just under `python3 test_harvest_doe_root_machine_local_leg.py`.
-
-    `main()` below has its own copy of this containment check, but `main()`
-    is only reached via `if __name__ == "__main__":`, which pytest never
-    calls (see
-    state/bug-backlog/2026-09-01-the-harvest-suites-containment-guard-never-runs-under-pytest.yaml).
-    The fix moved the check into an autouse `conftest.py` fixture, now
-    `coordinator_core.conftest._no_live_state_corpus_writes` (renamed and
-    widened 2026-09-20 when it moved suite-wide and gained the live
-    DoE-claude outbox). This test proves that fixture is live: it spawns a nested pytest run, inside THIS directory (so the real
-    `conftest.py` is picked up), against a throwaway probe test module that
-    deliberately drops a stray file into the real
-    `state/improvement-queue/`, and asserts the nested run FAILS on the
-    guard's own message. Without the autouse fixture, the probe's stray
-    write is invisible to pytest and the nested run would exit 0.
-    """
     real_queue_dir = os.path.join(_REPO_ROOT, "state", "improvement-queue")
     os.makedirs(real_queue_dir, exist_ok=True)
     before = set(os.listdir(real_queue_dir))
@@ -462,12 +407,6 @@ def main() -> int:
         print(f"ERROR: harvest CLI not found at {_HARVEST_CLI}", file=sys.stderr)
         return 1
 
-    # Guard: never allow this suite to touch the real state dirs — in THIS
-    # repo (state/improvement-queue, state/lessons-outbox don't exist here)
-    # and in the real repos.doe_claude sibling repo's state/lessons-outbox,
-    # which a prior diagnostic session accidentally leaked into (see module
-    # docstring finding (2)) — even if a future edit accidentally drops an
-    # env override or the machine-local stub isn't honoured.
     real_queue_dir = os.path.normpath(os.path.join(_REPO_ROOT, "state", "improvement-queue"))
     real_lessons_dir = os.path.normpath(os.path.join(_REPO_ROOT, "state", "lessons-outbox"))
     before_q = set(os.listdir(real_queue_dir)) if os.path.isdir(real_queue_dir) else set()

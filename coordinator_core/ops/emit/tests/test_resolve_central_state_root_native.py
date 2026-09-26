@@ -1,15 +1,3 @@
-"""Parity net for C9's ``envelope._resolve_central_state_root`` native port.
-
-Port of: coordinator-state-root.sh (DoE 6fb5fb37, 2026-07-22)'s
-``coordinator_state_root --central`` (Rule 4,
-the backward-compat default: no ``--subject``/``--artifact``) — resolves to
-``$(_csr_claude_klabauter_root)/state``. The bash lib's own docstring documents ``_csr_claude_klabauter_root``
-as ITSELF a native bridge onto ``coordinator_core.engine_root.coordinator_engine_root``, so
-this port calls that same native resolver in-process instead of spawning
-``bash -c "source ... && coordinator_state_root --central"``.
-
-Spec backlink: pln-claude-klabauter-pure-python-shop-retire-0f8aee § C9
-"""
 
 from __future__ import annotations
 
@@ -21,7 +9,6 @@ from coordinator_core.ops.emit.resolvers import _resolve_central_state_root
 
 class TestResolveCentralStateRootNative:
     def test_resolves_to_claude_klabauter_root_slash_state(self, tmp_path: Path) -> None:
-        """Success path: claude_klabauter_root/state, exactly Rule 4's contract."""
         claude_klabauter_root = tmp_path / "claude-klabauter"
         with patch(
             "coordinator_core.engine_root.coordinator_engine_root",
@@ -47,12 +34,6 @@ class TestResolveCentralStateRootNative:
     def test_falls_back_to_claude_home_state_on_falsy_return(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        """Defensive: ``coordinator_claude_klabauter_root()`` returning a falsy value without raising
-        (unreachable today per that function's own documented contract — every rung either
-        returns a truthy string or raises ``RuntimeError`` — but the ``if claude_klabauter_root:`` guard
-        exists in the code specifically to handle it) falls back the same as the exception
-        path. Review: code-reviewer (F7) — pins the guard's own behavior for symmetry with
-        the exception-path test above, since nothing else in this file exercised it."""
         monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
         with patch(
             "coordinator_core.engine_root.coordinator_engine_root",
@@ -62,7 +43,6 @@ class TestResolveCentralStateRootNative:
         assert result == tmp_path / ".claude" / "state"
 
     def test_no_bash_subprocess_spawned(self, tmp_path: Path) -> None:
-        """Regression guard: this port must never spawn a subprocess at all."""
         claude_klabauter_root = tmp_path / "claude-klabauter"
         with patch(
             "coordinator_core.engine_root.coordinator_engine_root",

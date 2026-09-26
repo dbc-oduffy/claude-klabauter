@@ -38,34 +38,15 @@ from __future__ import annotations
 
 import re
 
-# YAML summary max length — shared cap for both memo.compose and memo.send.
 _SUMMARY_MAX_CHARS = 120
 
-# Self-measuring ruler written into a fresh memo.draft's `summary:` field when
-# no usable summary resolves (docs/plans/2026-08-07-memo-summary-cap-warn-at-
-# draft.md § C1/AC3). A PM-authored placeholder VALUE, not a comment — the
-# trailing-YAML-comment route for surfacing the cap on the `summary:` line
-# was tried and rejected (both `read_fm_field` and DoE's `_parse_outbox_file`
 # are line-oriented, comment-unaware parsers; see memo_draft._BODY_PLACEHOLDER's
-# comment block for the verified failure). The double space after the first
-# sentence is deliberate — it is what makes the stated count come out — so it
-# must NOT be normalized. Its length is asserted in
-# tests/test_memo_summary_placeholder.py rather than trusted from the prose.
 SUMMARY_PLACEHOLDER = (
     "[Replace me as a summary, no more than 100 characters.  this is 99 "
     "characters, it just so happens!]"
 )
 
-# validate_explicit_summary's per-caller message shape. Each entry is
 # (op_prefix, suffix) reproducing an EXISTING caller's wording verbatim —
-# these strings predate this module (memo_draft._validate_draft_params,
-# memo_compose._validate_compose_params, memo_send._validate_send_params,
-# and memo_send._compose_memo's ValueError backstop) and must not drift, so
-# no caller's error text changes shape by moving the check here (AC8).
-# "send" is _validate_send_params' message; "send_backstop" is
-# _compose_memo's defense-in-depth raise — same cap, same op prefix, but it
-# reuses "compose"'s longer suffix rather than "send"'s terse one, an
-# existing discrepancy this module preserves rather than resolves.
 _VALIDATION_MESSAGES = {
     "draft": (
         "memo.draft",
@@ -83,30 +64,14 @@ _VALIDATION_MESSAGES = {
     ),
 }
 
-# Heading lines (ATX-style Markdown, 1-6 '#'s) are structural, not prose — skip them
-# when deriving a summary (footgun #4: the prior rule took the first non-empty line
-# unconditionally, so a body opening with a heading emitted the heading as the summary).
 _HEADING_RE = re.compile(r"^#{1,6}(\s|$)")
 
-# HTML comments (memo.draft's own placeholder body is nothing but these) are not
-# prose — dropped for the same reason as headings.
-#
 # Matched SPANNING lines, deliberately. The predicate this replaced was anchored
-# per-line (`^<!--.*-->$`), so it only ever recognized a comment opened and closed
 # on one line — and every block in `memo_draft._BODY_PLACEHOLDER` past the first
-# spans several. Their interior lines therefore survived as "prose": that is how a
-# memo delivered to DoE-claude on 2026-08-19 carried a truncated draft warning in
-# `summary:` over a body with no prose in it at all. Comments are stripped whole,
-# before the line walk, so an unterminated `<!--` swallows the rest of the body
-# rather than leaking its tail.
 _HTML_COMMENT_BLOCK_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
 
 
 def _prose_lines(body: str) -> list[str]:
-    """`body`'s prose lines — comments stripped whole, blanks and ATX headings
-    dropped. The shared basis of `derive_prose_summary` and `has_prose_body`,
-    so "what a summary may be derived from" and "what counts as a written
-    memo" can never answer this question differently."""
     decommented = _HTML_COMMENT_BLOCK_RE.sub("", body)
     return [
         stripped
@@ -117,14 +82,8 @@ def _prose_lines(body: str) -> list[str]:
 
 
 def has_prose_body(body: str) -> bool:
-    """True iff ``body`` carries at least one line of actual prose.
-
-    False for an empty body, and for one that is nothing but `memo.draft`'s
-    placeholder comment blocks — the shape that must never reach a receiver.
-    """
     return bool(_prose_lines(body))
 
-# First-sentence boundary: '.', '!', or '?' followed by whitespace or end-of-string.
 _SENTENCE_END_RE = re.compile(r"^(.*?[.!?])(\s|$)")
 
 

@@ -104,12 +104,6 @@ _ARCHIVE_SUBDIR = ("docs", "research", "archive")
 
 
 def _validate_component(value: object, field_name: str) -> str:
-    """Validate a run_id/topic_slug path component.
-
-    Raises ValueError if value is not a non-empty string, or if it contains a
-    path separator or '..' — both of which would let a caller escape the
-    docs/research/ tree this op is scoped to build paths under.
-    """
     if not isinstance(value, str) or not value:
         raise ValueError(f"{field_name} must be a non-empty string, got {value!r}")
     if "/" in value or "\\" in value or ".." in value:
@@ -121,13 +115,6 @@ def _validate_component(value: object, field_name: str) -> str:
 
 
 def _find_existing_archive(archive_dir: Path, topic_slug: str) -> Optional[Path]:
-    """Return the most recent existing archive dir for topic_slug, if any.
-
-    Globs docs/research/archive/*-{topic_slug} rather than assuming the
-    dest name this call would compute (today's date) — a prior archive of
-    the same topic on an earlier calendar day is still a valid
-    already-archived signal (see module docstring DEC-7 note).
-    """
     if not archive_dir.is_dir():
         return None
     matches = sorted(archive_dir.glob(f"*-{topic_slug}"))
@@ -197,9 +184,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
     dest = _compute_dest(archive_dir, topic_slug)
 
     if not src.exists():
-        # Vacuous no-op: the source is already gone (either archived by a
-        # prior call, or never existed). Surface the most recent matching
-        # archive dir if one is found; else the dest we would have used.
         existing = _find_existing_archive(archive_dir, topic_slug)
         resolved_dest = existing if existing is not None else dest
         return {
@@ -209,8 +193,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
         }
 
     if dest.exists():
-        # Genuine same-day collision (src still present, dest already taken)
-        # — left untouched rather than force-merged (see module negative-spec).
         _LOG.error(
             "fleet.archive_paper_trail: dest %s already exists while src %s "
             "still exists — refusing to overwrite; leaving both untouched",
@@ -231,14 +213,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
 
     files = sorted(p for p in src.rglob("*") if p.is_file())
     if not files:
-        # Nothing git-tracks in an empty workdir tree — remove the leftover
-        # dir tree (if any) so a later call sees src as genuinely gone, and
-        # report a non-mutating no-op (there was nothing to archive).
-        # A single flat src.rmdir() fails with
-        # OSError whenever src contains empty nested subdirectories (dir not
-        # empty), silently stranding src forever across every subsequent
-        # call. Mirror the success-path cleanup below: remove nested empty
-        # dirs deepest-first before the flat top-level rmdir.
         for leftover_dir in sorted(
             (p for p in src.rglob("*") if p.is_dir()),
             key=lambda p: len(p.parts),
@@ -281,9 +255,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
             "failed": failed,
         }
 
-    # Every file moved successfully — clean up the now-empty leftover source
-    # directories (git never tracked them; plain rmdir refuses if anything
-    # unexpected remains, so a partial-success remainder is never deleted).
     for leftover_dir in sorted(
         (p for p in src.rglob("*") if p.is_dir()),
         key=lambda p: len(p.parts),

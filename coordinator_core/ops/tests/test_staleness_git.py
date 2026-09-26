@@ -1,12 +1,3 @@
-"""
-Tests for coordinator_core.ops.staleness_git.
-
-Uses real throwaway git fixture repos (tmp_path + `git init`/`git commit`) —
-this module is git plumbing, and mocking `git` would test the mock rather
-than the plumbing.
-
-Spec backlink: docs/plans/2026-08-13-generator-output-staleness-detector.md § C0
-"""
 from __future__ import annotations
 
 import subprocess
@@ -24,8 +15,6 @@ from coordinator_core.ops.staleness_git import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
-# cadence suite is the separate threshold ruling, not this declaration.
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -84,12 +73,6 @@ def _commit(repo: Path, message: str, files: dict[str, str], *, when: str | None
 
 
 def _one_second_after(iso_timestamp: str) -> str:
-    """`git log --since=<T>` is inclusive of a commit dated exactly T, while
-    `<sha>..HEAD` strictly excludes that commit's own SHA — the two forms
-    are only equivalent starting one second after a boundary commit's own
-    timestamp. Used to translate a commit-ish's timestamp into the
-    "immediately after this commit" instant a caller migrating between
-    forms would supply."""
     return (datetime.fromisoformat(iso_timestamp) + timedelta(seconds=1)).isoformat()
 
 
@@ -133,10 +116,7 @@ def test_unresolvable_since_point_is_indeterminate_never_fresh(tmp_path):
 
     rng = commits_touching_since(repo, ["src.py"], "not-a-timestamp-or-sha")
 
-    # Plain `git log --since=<garbage>` would silently ignore an
-    # unparseable date and match every commit (a masked false-STALE, the
     # ALWAYS-0-adjacent failure mode this module exists to close) — the
-    # module must reject the shape itself rather than trust git's leniency.
     assert rng.indeterminate is True
     assert verdict_from_range(rng) == Verdict.INDETERMINATE
 
@@ -152,7 +132,7 @@ def test_empty_since_range_distinguishable_from_failed_range(tmp_path):
     assert empty_rng.indeterminate is False
     assert verdict_from_range(empty_rng) == Verdict.FRESH
 
-    non_repo = repo / "src.py"  # not a directory -> forces failure path
+    non_repo = repo / "src.py"
     failed_rng = commits_touching_since(non_repo, ["src.py"], far_future)
     assert failed_rng.commits == ()
     assert failed_rng.indeterminate is True
@@ -166,7 +146,6 @@ def test_timestamp_and_commit_ish_since_point_agree(tmp_path):
     _init_repo(repo)
     base_sha = _commit(repo, "initial", {"src.py": "1"}, when="2020-01-01T00:00:00")
 
-    # capture the ISO timestamp of the base commit
     show = _run(repo, "show", "-s", "--format=%cI", base_sha)
     base_timestamp = show.stdout.strip()
 
@@ -187,7 +166,6 @@ def test_timestamp_and_commit_ish_agree_on_fresh(tmp_path):
     show = _run(repo, "show", "-s", "--format=%cI", base_sha)
     base_timestamp = show.stdout.strip()
 
-    # subsequent commit touches an unrelated file only
     _commit(repo, "touch other", {"other.py": "2"}, when="2020-01-01T00:00:05")
 
     rng_by_sha = commits_touching_since(repo, ["src.py"], base_sha)
@@ -202,8 +180,6 @@ def test_artifact_path_excludes_regeneration_commit_sha_form(tmp_path):
     _init_repo(repo)
     base_sha = _commit(repo, "initial", {"src.py": "1", "artifact.json": "1"})
 
-    # single commit that touches BOTH sources and the artifact -- a
-    # regeneration, must be excluded from the since-range
     _commit(repo, "fix and regen", {"src.py": "2", "artifact.json": "2"})
 
     rng = commits_touching_since(
@@ -234,11 +210,6 @@ def test_artifact_path_excludes_regeneration_commit_timestamp_form(tmp_path):
 
 
 def test_artifact_path_excludes_root_commit_regeneration_timestamp_form(tmp_path):
-    # `git diff-tree <commit>` without
-    # `--root` never reports a parentless commit as touching anything (it
-    # diffs against nothing rather than the empty tree), so a root commit
-    # that touches BOTH sources and the artifact must still be excluded by
-    # the regeneration filter once `--root` is present.
     repo = tmp_path / "repo"
     _init_repo(repo)
     root_sha = _commit(
@@ -256,10 +227,6 @@ def test_artifact_path_excludes_root_commit_regeneration_timestamp_form(tmp_path
 
 
 def test_artifact_path_excludes_root_commit_regeneration_commit_ish_form(tmp_path):
-    # Same as above but with a commit-ish `since_point` that is not an
-    # ancestor of the root commit under test -- forces `<since>..HEAD` to
-    # include the root commit itself in the query, exercising `--root` via
-    # the SHA-form comparison path rather than `--since=`.
     repo = tmp_path / "repo"
     _init_repo(repo)
     default_branch = _run(repo, "branch", "--show-current").stdout.strip()
@@ -282,15 +249,6 @@ def test_artifact_path_excludes_root_commit_regeneration_commit_ish_form(tmp_pat
 
 
 def test_artifact_path_batch_handles_mixed_multi_commit_range(tmp_path):
-    # Multi-item angle on the batched `_commits_touching_path` replacement
-    # for the old per-commit `git diff-tree` loop -- a single-commit fixture
-    # would pass identically whether or not the batch call correctly
-    # attributes each SHA to its own touch result (the same gap that shipped
-    # a wrong batched `_own_frozen_diff_shas` on 2026-08-19). Three commits:
-    # one drift-only (must stay), one regeneration touching both (must be
-    # excluded), one drift-only again (must stay) -- exercises correct
-    # per-commit attribution across a batch, not just "some filtering
-    # happened".
     repo = tmp_path / "repo"
     _init_repo(repo)
     base_sha = _commit(repo, "initial", {"src.py": "1", "artifact.json": "1"})
@@ -312,7 +270,6 @@ def test_artifact_path_does_not_exclude_source_only_commit(tmp_path):
     _init_repo(repo)
     base_sha = _commit(repo, "initial", {"src.py": "1", "artifact.json": "1"})
 
-    # commit touches sources but NOT the artifact -- genuine drift, must stay
     drift_sha = _commit(repo, "drift only", {"src.py": "2"})
 
     rng = commits_touching_since(

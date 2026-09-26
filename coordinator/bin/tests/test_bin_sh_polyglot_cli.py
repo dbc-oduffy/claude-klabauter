@@ -47,8 +47,6 @@ PYTHON = sys.executable
 
 
 def _load_guard_module():
-    """Import the hyphen-named CLI by path — not importable by dotted name, and
-    side-effect-free at import (`main()` is `__main__`-guarded)."""
     spec = importlib.util.spec_from_file_location("_cli_check_bin_sh_polyglot", GUARD)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -56,17 +54,10 @@ def _load_guard_module():
 
 
 def _scratch_bin(tmp_path):
-    """A scratch `bin/` holding copies of both real guards — the exact pairing
-    that triggered the original false positive."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     shutil.copy(GUARD, str(bin_dir / "check-bin-sh-polyglot.py"))
     shutil.copy(SIBLING_GUARD, str(bin_dir / "check-sh-suffix-polyglot.py"))
-    # The guards bootstrap `cc_invoke` off their OWN `<bin>/lib`, so a scratch
-    # bin without one dies on ModuleNotFoundError before it can classify
-    # anything — a green that never ran. Copied, not symlinked: the guard
-    # scans `bin/` itself, and `lib/` being a real subdirectory is what its
-    # "does NOT scan subdirectories" negative-spec is stated against.
     shutil.copytree(os.path.join(_BIN_DIR, "lib"), str(bin_dir / "lib"),
                     ignore=shutil.ignore_patterns("__pycache__"))
     return bin_dir
@@ -95,8 +86,6 @@ def test_guard_pair_alone_is_clean(tmp_path):
 
 
 def test_real_offender_still_fires(tmp_path):
-    """Companion to the test above: proves its green is a real pass and not a
-    scan that silently found nothing to classify."""
     guard = _load_guard_module()
     bin_dir = _scratch_bin(tmp_path)
     (bin_dir / "some-tool").write_text(

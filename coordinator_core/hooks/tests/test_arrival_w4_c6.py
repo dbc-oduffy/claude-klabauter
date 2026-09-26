@@ -33,16 +33,7 @@ import pytest
 from coordinator_core.hooks import oss_operative_strings as ops
 
 
-# ---------------------------------------------------------------------------
-# Not a hook op — plain support library, same shape as _payload.py/_envelope.py
-# ---------------------------------------------------------------------------
-
-
 def test_module_registers_no_op():
-    """No `register_op` call at import time — this module has no
-    payload-dict-in/response-out contract, per its own arrival-note
-    docstring. A stray `register_op` here would silently create a
-    `hooks.oss_operative_strings` op nothing calls."""
     assert not hasattr(ops, "register_op")
 
 
@@ -53,11 +44,6 @@ def test_module_is_not_in_eager_hook_modules():
 
 
 def test_import_is_fast():
-    """Cold-import budget: this module does no I/O at import time beyond the
-    fail-open `_sibling_repo_record()`/`mcp_tool_prefixes()` module-level
-    calls, each of which degrades on any miss rather than raising or
-    blocking. Well under the plan's 500ms brightline for a single op fire,
-    let alone a bare import."""
     mod_name = "coordinator_core.hooks.oss_operative_strings"
     sys.modules.pop(mod_name, None)
     start = time.perf_counter()
@@ -65,11 +51,6 @@ def test_import_is_fast():
 
     elapsed = time.perf_counter() - start
     assert elapsed < 0.5, f"import took {elapsed:.3f}s, over the 500ms brightline"
-
-
-# ---------------------------------------------------------------------------
-# is_identifier_shape_operative / is_stable_artifact_id
-# ---------------------------------------------------------------------------
 
 
 def test_env_var_shape_is_operative():
@@ -83,16 +64,10 @@ def test_dotted_registry_key_shape_is_operative():
 
 
 def test_bare_sibling_name_is_not_shape_operative():
-    """Negative spec: a bare hyphenated-or-plain sibling name with no `_`/`.`
-    at all is not env-var/registry-key SHAPED — it is either the irreducible
-    literal or attribution prose, and returning True here would silently
-    exempt every prose mention."""
     assert not ops.is_identifier_shape_operative("DoE-claude", sibling_names=("DoE-claude",))
 
 
 def test_trailing_sentence_period_is_stripped():
-    """A sibling name that merely ends a prose sentence must not read as
-    dotted SHAPE from the sentence's own period."""
     assert not ops.is_identifier_shape_operative("DoE.", sibling_names=("DoE",))
     assert ops.is_identifier_shape_operative("REPO_DOE.", sibling_names=("DoE",))
 
@@ -104,8 +79,6 @@ def test_stable_artifact_id_component_matches_sibling():
 
 
 def test_bare_sibling_name_is_not_a_stable_artifact_id():
-    """Negative spec: fails the prefix anchor and the required 6-hex suffix
-    both — the strictness that keeps this rule from swallowing prose."""
     assert not ops.is_stable_artifact_id("DoE-claude", sibling_names=("DoE-claude",))
 
 
@@ -115,9 +88,7 @@ def test_unrelated_hyphenated_word_does_not_false_positive():
     )
 
 
-# ---------------------------------------------------------------------------
 # SIBLING_REPO_RECORD / SIBLING_REPO_NAMES / IRREDUCIBLE_LITERALS
-# ---------------------------------------------------------------------------
 
 
 def test_pinned_unreachable_names_always_present():
@@ -128,19 +99,12 @@ def test_pinned_unreachable_names_always_present():
 
 
 def test_engine_sibling_arm_fails_open_without_oss_payload():
-    """In claude-klabauter's own process — no `_oss_payload` module on `sys.path` —
-    the engine-sibling arm degrades to empty, leaving only the pinned
-    literals. This is the documented fail-open contract, not a defect."""
     record = ops._sibling_repo_record()
     assert "claude-klabauter" not in record
     assert set(record) == {"DoE-claude", "DoE"}
 
 
 def test_engine_sibling_arm_resolves_when_oss_payload_importable(monkeypatch):
-    """A DoE-resident caller — one with `_oss_payload` on its own
-    `sys.path` — sees the engine-sibling arm populated, because the import
-    inside `_engine_sibling_record` is a runtime `sys.path` lookup, never a
-    `Path(__file__)`-relative one."""
     import types
 
     fake_oss_payload = types.ModuleType("_oss_payload")
@@ -160,11 +124,6 @@ def test_irreducible_literals_nonempty_and_scoped():
     assert file_.endswith("_engine_root.py")
     assert isinstance(line, int) and line > 0
     assert reason
-
-
-# ---------------------------------------------------------------------------
-# mcp_tool_prefixes / _resolve_mcp_topology_path — fail-open doctrine-asset lookup
-# ---------------------------------------------------------------------------
 
 
 def test_mcp_tool_prefixes_fails_open_when_topology_unresolvable(monkeypatch):
@@ -202,9 +161,6 @@ def test_resolve_mcp_topology_path_returns_path_or_none():
 
 
 def test_resolve_mcp_topology_path_fails_open_on_import_error(monkeypatch):
-    """A settings-home/data-root import failure degrades to `None`, not a
-    raised exception — the same fail-open contract every other loader in
-    this module carries."""
     import builtins
 
     real_import = builtins.__import__

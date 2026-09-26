@@ -1,12 +1,3 @@
-"""`install_door` must move every hard-linked door name onto the image it installs.
-
-The per-name forwarders in a bin dir are hard links to `coordinator-invoke`. A
-POSIX build writes the door as a NEW file, so without a re-link every other
-name keeps running the replaced image while the install reports success --
-measured 2026-09-22 as 443 of 444 names stranded by one `door_install --bin-dst`.
-
-Spec backlink: state/bug-backlog/2026-09-22-door-install-on-posix-strands-every-hard-98dbac369574.yaml
-"""
 
 from __future__ import annotations
 
@@ -31,7 +22,7 @@ def _stamp_engine_root(root):
 def _fake_build(*, in_place: bool, payload: bytes):
     def _build_or_advise(engine_root, *, python_bin=None, compiler=None, output=None):
         if not in_place and output.exists():
-            output.unlink()  # a real compile writes a new file, i.e. a new inode
+            output.unlink()
         output.write_bytes(payload)
         door_build.write_sidecar(output, engine_root)
         return door_install_posix_build.PosixDoorBuildResult(built=True, output=output, advisory=None)
@@ -42,7 +33,6 @@ def _fake_build(*, in_place: bool, payload: bytes):
 @pytest.fixture
 def linked_bin(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
-    # Force the build branch: the currency skip is not what these tests exercise.
     monkeypatch.setattr(
         door_install, "verify_installed_provenance", lambda bin_dst: type("V", (), {"status": "stale"})()
     )
@@ -54,7 +44,7 @@ def linked_bin(tmp_path, monkeypatch):
     door.write_bytes(b"old-door")
     for name in NAMES:
         os.link(door, bin_dst / name)
-    (bin_dst / "unrelated-tool").write_bytes(b"old-door")  # same bytes, different file
+    (bin_dst / "unrelated-tool").write_bytes(b"old-door")
     return engine_root, bin_dst
 
 

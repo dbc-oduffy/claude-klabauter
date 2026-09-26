@@ -1,37 +1,3 @@
-"""
-coordinator_core.cartography.symbols — per-file AST symbol table extraction.
-
-Purpose: pure-function producer of a per-Python-file symbol table (module
-docstring, module-level constants with their literal values, top-level
-classes with their methods, and top-level functions — each carrying its
-signature and docstring) via the stdlib ``ast`` module. Replaces an agentic
-full-file-read inventory pass with a cheap, deterministic static walk.
-
-Emission shape mirrors ``coordinator_core/ops/roadmap_dag.py``'s
-``{nodes, edges}`` convention loosely: this module emits ``{"files": [...]}``
-where each file entry is a self-contained symbol table for one ``*.py`` file.
-
-Negative-spec:
-  - Does NOT execute or import any target file — pure ``ast.parse`` static
-    analysis. A file that fails to parse (``SyntaxError``) is recorded with
-    an ``"error"`` field, not raised out of the walk.
-  - Does NOT resolve dynamic dispatch, decorators' runtime effects, or
-    cross-file symbol references — see ``cartography.edges`` for the
-    (also static-only) import/call graph, which shares this same limitation.
-  - Does NOT record local (function-nested) symbols — only module-level
-    constants/classes/functions and class-level methods.
-  - Only module-level constants whose value is a literal (``ast.literal_eval``-
-    safe) are recorded with a ``value`` field; non-literal assignments (e.g.
-    ``X = some_call()``) are recorded with ``value: null`` — never partially
-    evaluated or executed.
-  - Does NOT let one file's data fail the batch: a constant NAME is always kept,
-    and a value that cannot survive JSON encoding is normalized (``_json_safe``)
-    or, failing that, elided with ``value_elided: true`` plus a per-file
-    ``"error"`` naming the path (``_serializable_entry``).
-
-Spec backlink: pln-claude-klabauter-cartography-substrate-a-26eb2e
-§ chunk C4 (cartography.symbols).
-"""
 
 from __future__ import annotations
 
@@ -44,12 +10,6 @@ from coordinator_core.cartography._guard import PathEscapeError, path_guard
 
 
 def _signature(node: ast.AST) -> str:
-    """Render a function/method signature as source-like text.
-
-    Uses ``ast.unparse`` (stdlib, Python 3.9+) against a copy of the node
-    with its body stripped to a single ``pass``, so only the ``def name(...)
-    -> ret:`` header is rendered — never the body.
-    """
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
         args = ast.unparse(node.args)
         prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
@@ -87,7 +47,6 @@ def _json_safe(value: Any) -> Any:
 
 
 def _json_safe_key(key: Any) -> Any:
-    """Normalize one mapping key into a type ``json.dumps`` accepts as an object key."""
     if key is None or isinstance(key, (str, int, float, bool)):
         return key
     return repr(key)
@@ -135,12 +94,6 @@ def _class_entry(node: ast.ClassDef) -> Dict[str, Any]:
 
 
 def _module_constants(tree: ast.Module) -> List[Dict[str, Any]]:
-    """Extract module-level simple-name assignments (``NAME = <expr>``).
-
-    Only top-level ``ast.Assign``/``ast.AnnAssign`` statements are recorded
-    (function/class bodies are excluded — those are handled by
-    ``_class_entry``/``_function_entry`` or skipped as local state).
-    """
     constants: List[Dict[str, Any]] = []
     for stmt in tree.body:
         if isinstance(stmt, ast.Assign):
@@ -165,30 +118,6 @@ def _module_constants(tree: ast.Module) -> List[Dict[str, Any]]:
 
 
 def symbol_table_for_file(target_root: str | Path, file_path: str | Path) -> Dict[str, Any]:
-    """Return the symbol table for a single Python file.
-
-    Args:
-        target_root: containment root — ``file_path`` must resolve under it
-            (see ``cartography._guard.path_guard``).
-        file_path: absolute or ``target_root``-relative path to a ``*.py`` file.
-
-    Returns:
-        {
-            "path": <str, target_root-relative POSIX path>,
-            "module_docstring": <str | None>,
-            "constants": [{"name", "value", "lineno"}, ...],
-            "classes": [{"name", "bases", "docstring", "methods", "lineno"}, ...],
-            "functions": [{"name", "signature", "docstring", "is_async", "lineno"}, ...],
-        }
-        or, on a parse failure:
-        {"path": <str>, "error": <str>}
-
-    Never raises for a malformed target file — a ``SyntaxError`` (or any
-    ``OSError`` reading the file) is captured into the ``"error"`` field.
-    Raises ``PathEscapeError`` (propagated from ``path_guard``) if
-    ``file_path`` escapes ``target_root`` — that is a containment violation,
-    not a per-file data condition, and is never swallowed.
-    """
     resolved = path_guard(target_root, file_path)
     rel_path = resolved.relative_to(Path(target_root).resolve()).as_posix()
 
@@ -220,21 +149,6 @@ def symbol_table_for_file(target_root: str | Path, file_path: str | Path) -> Dic
 
 
 def build_symbols(target_root: str | Path, files: List[str | Path]) -> Dict[str, Any]:
-    """Build the aggregate symbol-table payload for a list of Python files.
-
-    Args:
-        target_root: containment root (see ``symbol_table_for_file``).
-        files: list of absolute or ``target_root``-relative ``*.py`` paths.
-
-    Returns:
-        {"files": [<symbol_table_for_file(...) entry>, ...]}
-
-    Each file is processed independently — a parse error on one file never
-    aborts the batch (recorded per-file via the ``"error"`` field), and neither
-    does an entry that turns out not to be JSON-encodable (see
-    ``_serializable_entry``). A containment violation is the one exception: it
-    propagates, because it is a caller error about the batch, not file data.
-    """
     return {"files": [_serializable_entry(target_root, f) for f in files]}
 
 

@@ -1,13 +1,3 @@
-"""
-coordinator_core.plugin_health.tests.test_oracle_surface
-
-Coverage for the single shared definition of claude-klabauter's fleet-invocable
-oracle surface (see oracle_surface.py's own module docstring for the
-`fleet_reachability`/`bin_inventory_gate` shared-blind-spot incident this
-module exists to close).
-
-Spec backlink: commit f622297b90d98f7ccd8f5796b53fe034ab4b190d.
-"""
 
 from __future__ import annotations
 
@@ -36,10 +26,6 @@ def test_live_oracle_names_unions_across_all_given_dirs(tmp_path: Path):
 
 
 def test_generated_windows_siblings_excluded_across_all_three_dirs(tmp_path: Path):
-    """A `.cmd`/`.ps1` Windows-launcher twin must never surface as an
-    independent oracle name in ANY of the three directories -- the widened
-    surface must not regress the exclusion `_derive_agent_helper_target_map`
-    already enforces per-directory."""
     agent_bin = tmp_path / "coordinator" / "bin"
     repo_root_bin = tmp_path / "bin"
     coordinator_lib = tmp_path / "coordinator" / "lib"

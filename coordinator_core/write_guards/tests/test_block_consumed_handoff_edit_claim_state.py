@@ -40,9 +40,6 @@ from coordinator_core.write_guards import block_consumed_handoff_edit as guard
 
 _OVERRIDE_ENV = "COORDINATOR_OVERRIDE_CONSUMED_HANDOFF_EDIT"
 
-# Mirror reverted to `open`-shaped claimed handoff with NO claimed_by --
-# the exact branch-switch desync shape (mirror carries `status: claimed` but
-# no claimed_by; ledger still holds a live claim elsewhere).
 _DESYNCED_BODY = """---
 status: claimed
 title: "Ship the thing"
@@ -116,12 +113,6 @@ def test_desynced_baton_blocks_non_holder(tmp_path, monkeypatch):
 
 
 def test_desynced_baton_permits_true_ledger_holder(tmp_path, monkeypatch):
-    """The true holder (session A, the live ledger claimant) must NOT be
-    hard-denied even though the tracked-frontmatter mirror is desynced
-    (no claimed_by) -- this is the actual fix: `is_holder` now resolves
-    ledger-first via `resolve_claim_state`, so a desynced mirror no longer
-    misclassifies the genuine holder as a non-holder.
-    """
     repo_root, handoff_path = _make_repo(tmp_path)
     common_dir = tmp_path / ".git"
     common_dir.mkdir()
@@ -137,17 +128,10 @@ def test_desynced_baton_permits_true_ledger_holder(tmp_path, monkeypatch):
     ):
         result = guard.check(_payload(repo_root, "state/handoffs/2026-07-20_120000_abc.md"))
 
-    # Holder leg is silent (2026-08-20 PM ruling): no envelope at all. A
-    # ledger-first regression would misclassify this holder a non-holder and
-    # surface a deny here.
     assert result is None
 
 
 def test_resolve_claim_state_failure_falls_back_to_mirror_read(tmp_path, monkeypatch):
-    """If `resolve_claim_state` itself raises, the guard must degrade to its
-    pre-migration mirror-only `claimed_by` read rather than crash or
-    silently allow -- never regress below what the guard already had.
-    """
     repo_root, handoff_path = _make_repo(
         tmp_path,
         body=(

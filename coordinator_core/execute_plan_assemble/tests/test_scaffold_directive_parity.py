@@ -1,53 +1,3 @@
-"""coordinator_core.execute_plan_assemble.tests.test_scaffold_directive_parity
--- C6's parity pin for this host.
-
-Purpose: `execute_plan_assemble` emits `run-report` through the shared
-`coordinator-doc-new` directive constructor
-(`scaffold_directive.build_scaffold_directive`, C1), for the one row
-C0's checked-in table (`coordinator_core/ops/doctype_hosts.py`) marks
-`emitted` against this module (keyed `ceremony="execute-plan-assemble"`).
-This pin is the module's own instance of the plan's § Test surface
-"Parity/pin per emitted type" shape (`coordinator_core/frontmatter/tests/
-test_plan_scaffold_census_parity.py`'s precedent, same idiom
-`roadmap_planning_assemble`'s C3 pin already ships): it calls
-`execute_plan_assemble.brief()` -- never hand-assembles a directive --
-and checks the resulting `args` against `coordinator-doc-new`'s OWN real
-argument parser, so a future required-flag addition on that CLI fails
-this test rather than silently authoring an invalid scaffold.
-
-Loaded by file path (`importlib.machinery.SourceFileLoader`), same idiom
-as `roadmap_planning_assemble/tests/test_scaffold_directive_parity.py`:
-`coordinator-doc-new.py` is an extensionless-polyglot-style entry point,
-imported for its `_build_parser` alone -- `main()` is never invoked, so
-this test writes nothing to disk and spawns no subprocess.
-
-Covers (AC2/AC3/AC4, this module's slice):
-  - `brief(plan_path=..., chunk_id=...)` emits a `run-report` directive
-    whose `cli == "coordinator-doc-new"` and whose `args` parse clean
-    under the real parser, with both `--plan` and `--chunk` present and
-    `--out` resolving inside the repo root (this type has NO CLI default
-    out path -- the constructor's own computed value is what makes the
-    directive parseable at all).
-  - `session_id` (explicit override) lands in the computed `--out`.
-  - `agent_type`, when supplied, is present in `args`; omitted otherwise.
-  - Omitting either `plan_path` or `chunk_id` emits no directive at all
-    -- the additive-only, backward-compatible shape this module's `brief`
-    docstring promises every pre-C6 caller.
-
-Negative-spec: does NOT re-assert the constructor's own unit-level
-behaviour (omit-when-None, `--out` escape rejection, the falsifier reds)
--- that is C2's `roadmap_planning_assemble/tests/test_scaffold_directive.py`,
-a sibling test module this one does not duplicate. Does NOT exercise
-`close_out_and_stamp.py`'s write surface -- untouched by C6. Zero
-subprocess: `coordinator-doc-new.py` is exec'd in-process via
-`SourceFileLoader`, never invoked as a CLI. No `pytest.mark.spawns_process`.
-
-Spec backlink: docs/plans/2026-09-11-document-scaffolding-is-emitted-not-
-remembered.md, chunk C6.
-
-Run:
-    pytest coordinator_core/execute_plan_assemble/tests/test_scaffold_directive_parity.py -v
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -137,9 +87,6 @@ class RunReportScaffoldParityTest(unittest.TestCase):
 
 
 class NeitherEmittedWithoutBothInputsTest(unittest.TestCase):
-    """Additive-only: a pre-C6-shaped caller (missing `plan_path` or
-    `chunk_id`) gets no `run-report` directive -- the module docstring's
-    backward-compatibility claim, pinned."""
 
     def test_missing_chunk_id_emits_no_directive(self):
         result = execute_plan_assemble.brief(plan_path="docs/plans/x.md")

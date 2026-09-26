@@ -1,13 +1,3 @@
-"""
-Tests for coordinator_core.ops.audience_mismatch_scan.
-
-Fixture shape mirrors test_check_harvest_debt.py (same argv-driven,
---root-explicit probe family) -- these tests write hand-crafted run-report
-sidecars directly under a tmp_path `state/subagent-share/` tree and assert
-on the probe's stdout nudge.
-
-Spec backlink: DoE-claude:pln-claude-md-altitude-triage-earn-31f32e, C14.
-"""
 
 from __future__ import annotations
 
@@ -20,8 +10,6 @@ from coordinator_core.ops.audience_mismatch_scan import main
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -122,13 +110,6 @@ def test_null_answers_excluded_from_clustering(tmp_path: Path) -> None:
 
 
 def test_elaborated_null_answers_excluded_from_clustering(tmp_path: Path) -> None:
-    """state/bug-backlog/2026-09-06-audience-mismatch-scan-clusters-nothing-
-    5535e3ca6a65.yaml -- an elaborated negative answer ("Nothing
-    significant; brief was self-contained.") must not cluster as a
-    doctrine-shaped gap merely because three independent agents phrased
-    their affirmation similarly. Three near-duplicate elaborated-null
-    answers, sharing enough tokens to cluster under the old bare-phrase-only
-    rule, must still print nothing."""
     _write_sidecar(tmp_path, "n0.md", "Nothing significant; brief was self-contained.")
     _write_sidecar(
         tmp_path, "n1.md", "Nothing significant, the brief was entirely self-contained.",
@@ -142,9 +123,6 @@ def test_elaborated_null_answers_excluded_from_clustering(tmp_path: Path) -> Non
 
 
 def test_null_lead_with_a_named_gap_still_clusters(tmp_path: Path) -> None:
-    """The widened null-lead match must not swallow a genuine gap phrased
-    as "Nothing ... , so I had to ..." -- the gap-indicator rail keeps this
-    one clustering normally."""
     gap = (
         "Nothing in the brief mentioned the settings-home forwarder path "
         "for cross-repo-memo, so I had to grep CLAUDE.md to find it."
@@ -175,7 +153,7 @@ def test_unrelated_answers_do_not_cluster_together(tmp_path: Path) -> None:
 def test_stale_sidecars_excluded_by_recency_window(tmp_path: Path) -> None:
     _write_sidecar(tmp_path, "a1.md", _GAP, days_ago=1)
     _write_sidecar(tmp_path, "a2.md", _GAP_PARAPHRASE, days_ago=2)
-    _write_sidecar(tmp_path, "a3.md", _GAP, days_ago=40)  # outside default 14-day window
+    _write_sidecar(tmp_path, "a3.md", _GAP, days_ago=40)
     exit_code, out, _ = _run(tmp_path)
     assert exit_code == 0
     assert out == ""
@@ -215,12 +193,6 @@ def test_missing_exit_interview_section_ignored(tmp_path: Path) -> None:
 def test_no_explicit_root_and_no_git_returns_zero_silently(
     tmp_path: Path, monkeypatch
 ) -> None:
-    # Root resolution went through shutil.which("git") + a subprocess at the
-    # time this test was written; it is now coordinator_core.git.repo_root.
-    # show_toplevel(), a walk-only seam with no `which` symbol at all (see
-    # that module's docstring: "WALKS ONLY -- never spawns, on any path").
-    # Simulating "no git repo" now means the walk itself finding nothing,
-    # not an absent `git` binary.
     monkeypatch.setattr(
         "coordinator_core.ops.audience_mismatch_scan.show_toplevel", lambda: None
     )
@@ -232,9 +204,6 @@ def test_no_explicit_root_and_no_git_returns_zero_silently(
 
 
 def test_empty_answer_does_not_bleed_into_next_question(tmp_path: Path) -> None:
-    """Regression: an answer left blank before the next bullet must not be
-    captured as the literal text of the following question (see module
-    docstring Negative-spec)."""
     spawned_at = (_NOW - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
     for i in range(3):
         path = tmp_path / "state" / "subagent-share" / f"empty{i}.md"
@@ -279,7 +248,6 @@ def test_mtime_fallback_when_frontmatter_absent(tmp_path: Path) -> None:
         f"- What did you have to work out that the brief could have told you? {_GAP}\n",
         encoding="utf-8",
     )
-    # mtime defaults to "now" at write time, well inside the recency window.
     exit_code, out, _ = _run(tmp_path)
     assert exit_code == 0
     assert "[audience-mismatch]" in out

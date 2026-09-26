@@ -1,14 +1,3 @@
-"""Tests for coordinator_core.roadmap_planning_assemble.
-
-Spec backlink: docs/plans/2026-08-21-engine-half-of-the-roadmap-sprint-spine-split.md,
-chunk C10.
-
-Covers: brief() shape conformance to the DR-047 decision-object schema,
-entry-point resolution (A/B/C/D + ambiguity), Class A's eight expressed as
-glue (never a directives[].cli binding), the recommendation-forbidden PM
-gates, main() CLI parsing, and the HARD structural/perf constraints (AC2/
-AC3/AC4) via the real CLI subprocess.
-"""
 from __future__ import annotations
 
 import json
@@ -198,20 +187,11 @@ class TestMainCli(unittest.TestCase):
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 class TestRealCliStructuralAndPerf(unittest.TestCase):
-    """AC1-AC4 (this chunk's own HARD non-negotiable): no module-scope
-    `coordinator_core.ops` import, ≤200ms end-to-end, ≤2.0 procs/call —
-    asserted structurally against the real CLI, never a stopwatch alone."""
 
     @staticmethod
     def _child_env():
         # `COORDINATOR_ENGINE_ROOT` is rung 1 of cc_invoke._resolve_claude_klabauter_root()'s
         # ladder (its predecessor `CLAUDE_KLABAUTER_ROOT` is retired — the dual-read
-        # window closed) — pinning it to THIS tree makes the real-CLI
-        # subprocess tests exercise the module under test rather than
-        # whatever engine root is published to the machine-local registry
-        # (this chunk's delivery is deliberately inert/unpublished on
-        # landing — see the module docstring and C12's own publish-
-        # allowlist job).
         env = dict(os.environ)
         env["COORDINATOR_ENGINE_ROOT"] = _ENGINE_ROOT
         return env
@@ -252,11 +232,6 @@ class TestRealCliStructuralAndPerf(unittest.TestCase):
 
     def test_process_time_under_budget(self):
         stats = self._batched_stats()
-        # `rc` is only the LAST invocation's exit code (the primitive's own
-        # documented limitation) — every earlier sample is unverified by
-        # this call alone, so this assertion is necessary but not
-        # sufficient; a direct `subprocess.run` smoke assertion covers the
-        # single-call exit-code contract elsewhere in this module.
         self.assertEqual(stats["rc"], 0)
         self.assertLessEqual(stats["process_time_ms"], 200.0)
 

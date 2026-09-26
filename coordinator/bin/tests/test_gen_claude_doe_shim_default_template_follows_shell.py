@@ -1,19 +1,3 @@
-"""test_gen_claude_doe_shim_default_template_follows_shell.py — the default
-`--template` the trampoline injects must follow `--shell`.
-
-Regression origin: the DoE-claude memo of 2026-08-13 (PowerShell shim landed).
-`_default_template_path()` hardcoded `claude-doe-shim.sh.tmpl` and never
-branched on `--shell`, so `gen-claude-doe-shim --shell powershell` with no
-explicit `--template` rendered the bash oracle's bytes into a file named
-`claude-doe-shim.ps1`. That failure is silent by construction: the render
-succeeds, `--check-only` reports "Template valid", and the breakage only
-surfaces as a PowerShell profile that throws at every subsequent shell start.
-
-Loaded by file path (`importlib.machinery.SourceFileLoader`) since the CLI's
-filename is hyphenated and not importable as a module.
-
-Run: pytest coordinator/bin/tests/test_gen_claude_doe_shim_default_template_follows_shell.py -v
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -58,8 +42,6 @@ class TestDefaultTemplateFollowsShell(unittest.TestCase):
         )
 
     def test_unrecognized_family_falls_through_to_bash(self):
-        """The trampoline does not validate — the engine's own `--shell` check
-        rejects the value before the template is ever read."""
         self.assertEqual(
             os.path.basename(self.cli._default_template_path("fish")),
             "claude-doe-shim.sh.tmpl",
@@ -77,11 +59,6 @@ class TestShellFamilyFromArgv(unittest.TestCase):
         )
 
     def test_defaults_to_the_engines_family_when_absent(self):
-        """NOT a literal. Both sides of this decision must read the SAME default:
-        the trampoline picks the template while the engine independently picks the
-        shim filename and rc target. A local `"bash"` fallback here — which is what
-        this test used to assert — made them disagree on Windows, writing a POSIX
-        shim body to the `.ps1` shim path the engine had selected."""
         from coordinator_core.ops.gen_claude_doe_shim import _default_shell_family
 
         self.assertEqual(
@@ -90,7 +67,6 @@ class TestShellFamilyFromArgv(unittest.TestCase):
         )
 
     def test_trailing_flag_without_a_value_defaults_to_the_engines_family(self):
-        """A dangling `--shell` is the engine's error to report, not a crash here."""
         from coordinator_core.ops.gen_claude_doe_shim import _default_shell_family
 
         self.assertEqual(
@@ -100,9 +76,6 @@ class TestShellFamilyFromArgv(unittest.TestCase):
 
 
 class TestBothTemplatesExistOnDisk(unittest.TestCase):
-    """The `.ps1.tmpl` default is only correct because DoE-claude ships the
-    template at the mirrored name; if that ever drifts, the short form silently
-    regresses to a template-not-found instead of a wrong-language render."""
 
     def setUp(self):
         self.cli = _load_cli()

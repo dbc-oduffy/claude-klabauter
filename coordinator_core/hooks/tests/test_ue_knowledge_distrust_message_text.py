@@ -57,10 +57,6 @@ def test_banner_names_no_repo(tmp_path):
 
 
 def test_banner_drops_named_adjacency_hazard_string(tmp_path):
-    """The specific hazard string named in the dispatch brief -- "...via
-    example-game-repo-docs MCP." -- must not appear at all: the fix drops the
-    MCP-server-name prose rather than leaving a string the scrub could still
-    mangle into "example-game-repo-docs" (measured, see run-report sidecar)."""
     (tmp_path / "MyGame.uproject").write_text("{}")
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".claude" / "settings.json").write_text("{}")

@@ -38,15 +38,7 @@ from coordinator_core.ops.changelog_ops import (
 )
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
-# Declared, not excused: this file spawns a real git process because
-# `_collect_commits`/`_commit_range` under test read real commit-window
-# history (date-window and commit-span paths, self-commit exclusion) that no
-# mock stands in for. Tests each build their own commit sequence via
-# `_commit`, so `_init_repo` is not hoisted to module scope -- per-test
-# isolation across distinct commit-history scenarios. The spawn ratchet's
 # `_BASELINE` is shrink-only pre-existing residue and is explicitly not the
-# route for this file -- coordinator_core/tests/test_no_new_spawning_tests.py
-# Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -84,11 +76,6 @@ def _env_for_commit() -> dict:
     return env
 
 
-# ---------------------------------------------------------------------------
-# _collect_commits / _commit_range / has_non_trivial
-# ---------------------------------------------------------------------------
-
-
 def test_collect_commits_date_window_excludes_self_commit(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _commit(repo, "feat: real work")
@@ -110,7 +97,7 @@ def test_collect_commits_commit_span_path(tmp_path: Path) -> None:
 
     hashes = [h for h, _s in commits]
     assert tip in hashes
-    assert base not in hashes  # 2-dot range excludes the base itself
+    assert base not in hashes
 
 
 def test_commit_range_zero_and_one() -> None:
@@ -119,16 +106,11 @@ def test_commit_range_zero_and_one() -> None:
 
 
 def test_commit_range_multiple() -> None:
-    hashes = ["newestsha0000000", "oldestsha0000000"]  # newest-first, per git log order
+    hashes = ["newestsha0000000", "oldestsha0000000"]
     oldest, newest, rng = _commit_range(hashes)
     assert newest == "newestsh"
     assert oldest == "oldestsh"
     assert rng == "oldestsh..newestsh"
-
-
-# ---------------------------------------------------------------------------
-# plans_touched
-# ---------------------------------------------------------------------------
 
 
 def test_plans_touched_none_when_no_plan_files(tmp_path: Path) -> None:
@@ -138,13 +120,6 @@ def test_plans_touched_none_when_no_plan_files(tmp_path: Path) -> None:
 
 
 def test_plans_touched_lists_docs_plans_files(tmp_path: Path) -> None:
-    """Status token is read from the plan's own frontmatter.
-
-    Previously pinned the hardcoded `(status: in-progress)` literal — the very
-    assertion that let the bash hardcode survive the Python port (example-retrieval-repo-em
-    memo 2026-07-20). A plan with no frontmatter renders `unknown`, never a
-    fabricated status.
-    """
     repo = _init_repo(tmp_path)
     (repo / "docs" / "plans").mkdir(parents=True)
     (repo / "docs" / "plans" / "2026-07-15-thing.md").write_text("# plan\n")
@@ -159,11 +134,6 @@ def test_plans_touched_lists_docs_plans_files(tmp_path: Path) -> None:
     assert result == "docs/plans/2026-07-15-thing.md (status: unknown)"
 
 
-# ---------------------------------------------------------------------------
-# handoffs
-# ---------------------------------------------------------------------------
-
-
 def test_handoffs_for_date_none_when_dir_absent(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     handoffs_list, paths = _handoffs_for_date(repo, "2026-07-15")
@@ -172,10 +142,6 @@ def test_handoffs_for_date_none_when_dir_absent(tmp_path: Path) -> None:
 
 
 def test_handoffs_for_date_matches_glob(tmp_path: Path) -> None:
-    """Glob is `{date}-*.md` (dash), faithfully mirroring the oracle's
-    `find ... -name "${TODAY}-*.md"` — reproduced verbatim, not "fixed" against
-    the underscore-separated `{date}_HHMMSS_slug.md` convention seen elsewhere
-    on disk (that mismatch is a pre-existing oracle quirk, out of scope here)."""
     repo = _init_repo(tmp_path)
     hdir = repo / "state" / "handoffs"
     hdir.mkdir(parents=True)
@@ -187,11 +153,6 @@ def test_handoffs_for_date_matches_glob(tmp_path: Path) -> None:
 
     assert handoffs_list == "state/handoffs/2026-07-15-100000-thing.md"
     assert paths == [f1]
-
-
-# ---------------------------------------------------------------------------
-# decisions/blockers — BOTH extraction paths
-# ---------------------------------------------------------------------------
 
 
 def test_extract_field_primary_frontmatter(tmp_path: Path) -> None:
@@ -230,7 +191,6 @@ def test_extract_field_none_when_absent(tmp_path: Path) -> None:
 
 
 def test_extract_field_fallback_frontmatter(tmp_path: Path) -> None:
-    """force_fallback=True exercises the grep-style fallback path directly."""
     repo = _init_repo(tmp_path)
     hdir = repo / "state" / "handoffs"
     hdir.mkdir(parents=True)
@@ -243,8 +203,6 @@ def test_extract_field_fallback_frontmatter(tmp_path: Path) -> None:
 
 
 def test_extract_field_fallback_ignores_markdown_heading(tmp_path: Path) -> None:
-    """Fallback path has narrower coverage than primary — no markdown-heading scan
-    (mirrors the oracle's grep -E fallback, F6 generic-strip semantics)."""
     repo = _init_repo(tmp_path)
     hdir = repo / "state" / "handoffs"
     hdir.mkdir(parents=True)
@@ -257,8 +215,6 @@ def test_extract_field_fallback_ignores_markdown_heading(tmp_path: Path) -> None
 
 
 def test_extract_field_falls_back_when_primary_raises(tmp_path: Path, monkeypatch) -> None:
-    """Any primary-path exception degrades to the fallback (mirrors the oracle's
-    'python3 available but result empty' -> grep chain)."""
     import coordinator_core.ops.changelog_ops as mod
 
     repo = _init_repo(tmp_path)
@@ -277,13 +233,7 @@ def test_extract_field_falls_back_when_primary_raises(tmp_path: Path, monkeypatc
     assert result == "use approach Z"
 
 
-# ---------------------------------------------------------------------------
-# Regression: canonical handoff headings never matched (break-class, 2026-08-06).
-# `## Decisions` / `## Blockers` are not headings any handoff template writes —
-# the canonical census on disk is `## Key Decisions Made` / `## Blockers or
-# Issues`, so the bare-name-only markdown leg returned "none" in 100% of real
 # handoffs. See `_HEADING_ALIASES`.
-# ---------------------------------------------------------------------------
 
 
 def test_extract_field_primary_matches_key_decisions_made_heading(tmp_path: Path) -> None:
@@ -313,9 +263,6 @@ def test_extract_field_primary_matches_blockers_or_issues_heading(tmp_path: Path
 
 
 def test_extract_field_primary_bare_decisions_heading_still_matches(tmp_path: Path) -> None:
-    """No regression: the bare `## Decisions` heading (already covered by
-    test_extract_field_primary_markdown_heading for Blockers) must still match
-    once aliases are introduced."""
     repo = _init_repo(tmp_path)
     hdir = repo / "state" / "handoffs"
     hdir.mkdir(parents=True)
@@ -342,9 +289,6 @@ def test_extract_field_primary_caps_long_section(tmp_path: Path) -> None:
 
 
 def test_extract_field_no_double_collection_for_single_heading(tmp_path: Path) -> None:
-    """A body containing `## Key Decisions Made` exactly once must not be
-    collected twice via both the "Key Decisions Made" and "Decisions"
-    aliases matching the same occurrence."""
     repo = _init_repo(tmp_path)
     hdir = repo / "state" / "handoffs"
     hdir.mkdir(parents=True)
@@ -368,23 +312,13 @@ def test_extract_field_neither_heading_nor_frontmatter_is_none(tmp_path: Path) -
     assert extract_field_from_handoffs("Blockers", [f]) == "none"
 
 
-# ---------------------------------------------------------------------------
-# Regression: present-but-empty `field:` must not harvest the NEXT line
 # (break-class, 2026-07-28). `_FM_FIELD_RE_TMPL` padded the value with `\s*`,
 # and `\s` matches a newline, so the fallback's whole-file MULTILINE search
-# walked past the line break of a bare `Decisions:` and `(.+)` took the
-# following `Blockers:` line into the changelog. Parametrized over BOTH line
-# endings: an LF-only test passes against the unfixed code for the CRLF half
-# and would prove nothing about Windows-authored handoffs.
-# ---------------------------------------------------------------------------
 
 _EOLS = pytest.mark.parametrize("eol", ["\n", "\r\n"], ids=["lf", "crlf"])
 
 
 def _write_handoff(tmp_path: Path, lines: list[str], eol: str) -> Path:
-    """Write a handoff with an explicit line ending, bypassing Path.write_text's
-    universal-newline translation (newline="" keeps `\\r\\n` intact on every
-    platform, and stops `\\n` being rewritten to `\\r\\n` on Windows)."""
     repo = _init_repo(tmp_path)
     hdir = repo / "state" / "handoffs"
     hdir.mkdir(parents=True, exist_ok=True)
@@ -431,8 +365,6 @@ def test_extract_field_primary_empty_key_does_not_harvest_next_line(
 def test_extract_field_fallback_skips_empty_key_for_a_later_real_value(
     tmp_path: Path, eol: str
 ) -> None:
-    """`(.+)` declines to match the empty occurrence, so the whole-file search
-    continues to the next `Decisions:` line rather than stopping at the first."""
     f = _write_handoff(
         tmp_path,
         ["---", "Decisions:", "---", "body", "Decisions: the real one", ""],
@@ -448,8 +380,6 @@ def test_extract_field_fallback_skips_empty_key_for_a_later_real_value(
 def test_extract_field_fallback_reads_populated_key_unchanged(
     tmp_path: Path, eol: str
 ) -> None:
-    """Positive control for the CRLF half: the value must come back without the
-    line's trailing carriage return glued onto it."""
     f = _write_handoff(
         tmp_path,
         ["---", "Decisions: use approach W", "Blockers: none", "---", "body", ""],
@@ -459,11 +389,6 @@ def test_extract_field_fallback_reads_populated_key_unchanged(
     result = extract_field_from_handoffs("Decisions", [f], force_fallback=True)
 
     assert result == "use approach W"
-
-
-# ---------------------------------------------------------------------------
-# HEADER staleness (report-only)
-# ---------------------------------------------------------------------------
 
 
 def test_header_staleness_absent_file(tmp_path: Path) -> None:
@@ -493,11 +418,6 @@ def test_header_staleness_stale(tmp_path: Path) -> None:
 
     assert result["stale"] is True
     assert result["days_ago"] == 44
-
-
-# ---------------------------------------------------------------------------
-# Orchestrator
-# ---------------------------------------------------------------------------
 
 
 def test_compute_day_fields_end_to_end(tmp_path: Path) -> None:
@@ -534,11 +454,6 @@ def test_compute_day_fields_all_trivial_has_non_trivial_false(tmp_path: Path) ->
     _commit(repo, "chore: bump deps")
     result = compute_day_fields(worktree=repo, date="2026-07-15")
     assert result["has_non_trivial"] is False
-
-
-# ---------------------------------------------------------------------------
-# IPC handler
-# ---------------------------------------------------------------------------
 
 
 def test_handler_requires_repo_root() -> None:

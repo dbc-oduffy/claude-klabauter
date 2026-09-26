@@ -38,9 +38,6 @@ from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
 )
 
 
-# --- build_args: per-type required-flag computation -----------------------
-
-
 def test_required_flag_is_emitted_when_resolved():
     args = build_args(
         "roadmap-baton",
@@ -73,9 +70,6 @@ def test_list_valued_field_repeats_flag_once_per_item():
     ]
 
 
-# --- build_args: omit-when-None for an optional flag -----------------------
-
-
 def test_optional_flag_omitted_when_none():
     args = build_args(
         "sizing-object",
@@ -101,9 +95,6 @@ def test_optional_flag_included_when_resolved():
         [Flag(name="--sizing-object", key="sizing_object", required=False)],
     )
     assert args == ["--type=sizing-object", "--sizing-object=yes"]
-
-
-# --- build_args: MutexFlagPair pair-gating ---------------------------------
 
 
 def test_mutex_pair_exactly_one_resolved_a():
@@ -177,9 +168,6 @@ def test_mutex_pair_not_required_allows_neither():
     assert args == ["--type=handoff"]
 
 
-# --- build_scaffold_directive: already_satisfied predicate -----------------
-
-
 def test_already_satisfied_false_when_out_missing(tmp_path: Path):
     directive = build_scaffold_directive(
         id_="d1",
@@ -233,9 +221,6 @@ def test_missing_out_key_raises():
             flag_spec=[],
             root=Path("/tmp"),
         )
-
-
-# --- build_scaffold_directive: --out containment rejection -----------------
 
 
 def test_out_containment_rejects_escaping_relative_path(tmp_path: Path):

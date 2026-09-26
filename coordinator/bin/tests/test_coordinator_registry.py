@@ -1,24 +1,8 @@
-"""test_coordinator_registry.py — golden tests for bin/lib/coordinator_registry.py.
-
-Asserts that the shared registry loader derives the expected frozensets and dicts
-from schemas/coordinator-registry.manifest.json, byte-equal to the pre-refactor
-literal tuples in coordinator-doc-new.
-
-Converted from a hand-rolled runner (module-level assertion list + sys.exit)
-to collectable pytest functions with plain `assert`.
-
-Run: python3 -m pytest coordinator/bin/tests/test_coordinator_registry.py
-
-Spec backlink: DoE-claude:pln-complete-the-claude-central-em-e9000c § C1/C2
-"""
 from __future__ import annotations
 
 import os
 import sys
 
-# ---------------------------------------------------------------------------
-# Bootstrap sys.path so coordinator_registry is importable from bin/lib/.
-# ---------------------------------------------------------------------------
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 _BIN_DIR = os.path.dirname(_TESTS_DIR)
 _LIB_DIR = os.path.join(_BIN_DIR, "lib")
@@ -31,44 +15,7 @@ import pytest  # noqa: E402
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-# ---------------------------------------------------------------------------
 # AC-1: KNOWN_TYPES — exact 31-type set
-#
-# Golden pin derived from schemas/coordinator-registry.manifest.json (source
-# of truth). Reconciled 2026-07-25: this pin had drifted silently because the
-# hand-rolled fail_test() helper (fixed in 23f65fce) let these assertions run
-# to completion without ever raising, so three real upstream manifest edits
-# in DoE-claude never got mirrored here:
-#   - "flight-recorder" REMOVED — DoE commit 3aa9a79f ("C8(subsume): retire
-#     flight-recorder — rm schema, repoint registry+artifact-shape to
-#     run-report") deleted the flight-recorder schema and repointed the
-#     registry to run-report; the type was subsumed, not merely renamed.
-#   - "run-report" ADDED — the same 3aa9a79f repoint.
-#   - "tier-u-grant" ADDED — DoE commit 58cdc600 ("Tier-U grant token schema +
-#     manifest registration").
-#   - "sizing-object" ADDED — DoE commit adf618d5 ("register sizing-object
-#     doc-type — manifest row + drift-guard fixture").
-#   - "subagent-sidecar" ADDED — manifest registration closing AC-10's unmet
-#     half (agent-side decision-object container scaffolder, schemaName null
-#     — schema-of-record is schemas/decision-object.schema.json $defs/
-#     subagent_sidecar, not a standalone file); retires the coordinator-doc-
-#     new / type_enum.py local shims that pre-dated this manifest row.
-# Reconciled 2026-08-02 (stale-test cleanup, triage-F): DoE commit 410eae0d1
-# ("manifest + skills: --type and kind now agree", deliverable
-# dlv-baton-kind-vocabulary-one-axis-per-field-1be219) renamed the docTypes
-# entries so the --type flag agrees with the kind value each scaffolds:
-#   - "spinoff-roadmap" RENAMED to "roadmap-baton" (legacy spelling remains a
-#     permanent CLI-side alias in coordinator-doc-new, not a second manifest
-#     row).
-#   - "spinoff-goal" RENAMED to "goal-seed" (same alias treatment).
-#   - "spinoff-roadmap-creator" RENAMED to "roadmap-seed" (same alias
-#     treatment).
-# Prior reconciliation history (2026-07-12: spike-result, strategic-self-
-# description, workflow; 2026-07-11: spinoff-goal, spinoff-roadmap-creator,
-# goal, recovery) retained below for context. Do NOT weaken this to a
-# subset/superset check — it is an exact-set pin; add new entries here in the
-# same commit that adds a type to the manifest.
-# ---------------------------------------------------------------------------
 _EXPECTED_KNOWN_TYPES: frozenset[str] = frozenset({
     "handoff",
     "spinoff",
@@ -109,8 +56,6 @@ def test_known_types():
 
 
 def test_known_types_count():
-    # Sanity: explicit count check surfaces the delta more quickly when a new
-    # type is added without updating the expected set above.
     assert len(reg.KNOWN_TYPES) == 31
 
 
@@ -136,38 +81,10 @@ def test_receiver_em_aliases():
 
 
 def test_central_receiver_ids():
-    """One canonical central receiver id, no legacy aliases.
-
-    `claude-central-em`, `central-em`, and `central` were retired from
-    `identity.centralReceiverIds` on 2026-08-26 (claude-central-em's PM
-    ruling, sequenced with this assertion — that manifest is read LIVE out
-    of the DoE tree, so their edit lands in every session on the box the
-    instant it saves, and this test would go red across the fleet if it
-    still pinned the old set). They are detritus from the era when
-    `~/.claude` was the DoE tree; `doe-claude-em` was already
-    `centralReceiverIds[0]`, so nothing this repo EMITS changes — the three
-    aliases simply stop resolving.
-
-    The one functional consumer is addressability:
-    `cross-repo-memo.py::_is_central_receiver`, which reads this frozenset.
-    After the shrink, `--to doe-claude-em` still resolves and
-    `--to claude-central-em` fails loudly at send rather than misrouting,
-    which is the intended effect. Archived memos are unaffected: the
-    frontmatter routing path fails open on an unknown `to:`.
-
-    Verified before assenting: nothing in this repo emits a legacy alias
-    programmatically. Every remaining occurrence is prose — docstrings in
-    `coordinator-lesson-promote.py`, `coordinator-queue-append.py`,
-    `coordinator-doc-new.py`, `publish-allowlist-generate.py`, and
-    `cross-repo-memo.py`'s own comments — stale documentation once the
-    alias is gone, and safe to follow later rather than in step.
-    """
     assert reg.CENTRAL_RECEIVER_IDS == frozenset({"doe-claude-em"})
 
 
 # AC-7: CENTRAL_REPO_BASENAMES retired (C1 — basename anchor abandoned; the
-# manifest key was removed; the Python constant is gone). No assertion here.
-# The validate-frontmatter-schema.js consumer must be updated separately.
 
 
 def test_sidecar_suffixes():
@@ -180,15 +97,7 @@ def test_sidecar_suffixes():
     }
 
 
-# ---------------------------------------------------------------------------
-# AC-9: repo_key_to_em_id — central anchor and normal cases (C1)
-#
-# repos.doe_claude resolves to the manifest-derived canonical central identity
-# (identity.centralReceiverIds[0] == "doe-claude-em"), NOT the retired
-# "claude-central-em" literal — see _central_canonical_id() in
-# coordinator_registry.py. "claude-central-em" remains a valid receiver alias
 # (see CENTRAL_RECEIVER_IDS) but is no longer the canonical return here.
-# ---------------------------------------------------------------------------
 
 
 def test_repo_key_to_em_id_doe_claude_canonical():
@@ -207,11 +116,6 @@ def test_repo_key_to_em_id_example_game_repo_alias():
     assert reg.repo_key_to_em_id("repos.example_game_workbench_repo") == "example-game-repo-em"
 
 
-# ---------------------------------------------------------------------------
-# AC-10: em_id_for_root — central, unregistered, None cases (C1)
-#
-# Uses the actual DoE-claude repo root derived from __file__ as the repos.doe_claude path.
-# ---------------------------------------------------------------------------
 _DOE_CLAUDE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -228,15 +132,11 @@ def test_em_id_for_root_none():
 
 
 def test_em_id_for_root_basename_fallback():
-    # ~/.claude is NOT special-cased; resolves via basename fallback.
     fake_claude_home = os.path.expanduser("~/.claude")
     assert reg.em_id_for_root(fake_claude_home, {}) == ".claude-em"
 
 
 def test_em_id_for_root_registered_non_central_loop_step_3():
-    # Step 3 — registered non-central repo via the loop (F2: previously untested).
-    # Uses a non-existent fake path; _same_path falls back to normcase+realpath
-    # string comparison, which matches when root == registered path.
     fake_example_game_repo_root = "/nonexistent/fake-example-game-repo-for-test"
     assert reg.em_id_for_root(
         fake_example_game_repo_root, {"repos.example_game_workbench_repo": fake_example_game_repo_root}
@@ -247,19 +147,9 @@ def test_doe_claude_em_alias_in_central_receiver_ids():
     assert "doe-claude-em" in reg.CENTRAL_RECEIVER_IDS
 
 
-# ---------------------------------------------------------------------------
-# C1: codename-free manifest-bootstrap rung ladder — by import, not by reading.
-#
 # The OSS depersonalize scrub rewrites WIRE IDENTIFIERS (DOE_ROOT,
 # REPO_DOE_CLAUDE, repos.doe_claude) into names no machine has ever set,
-# leaving the split-repo layout's manifest bootstrap with zero live rungs and
-# an import-time FileNotFoundError. These tests exercise the module in a
-# fresh subprocess (import-time behavior can't be observed by re-importing an
 # already-imported module) with DOE_ROOT/REPO_DOE_CLAUDE unset, covering both
-# the pointer-present and pointer-unreachable cases.
-#
-# Spec backlink: pln-the-published-engine-resolves-ae0bf7 § C1
-# ---------------------------------------------------------------------------
 import subprocess  # noqa: E402
 import sys as _sys  # noqa: E402
 import tempfile  # noqa: E402
@@ -321,21 +211,12 @@ def test_bootstrap_import_fails_loud_with_pointer_unreachable():
         assert "install-integrity" in result.stderr
 
 
-# ---------------------------------------------------------------------------
-# The two tests above assert the ladder's
 # PRESENCE (case a passes via whatever ambient rung this dev box happens to
-# carry; case b asserts a negative and can't witness a working rung). Four
 # prior reviews shipped BLOCKER-1 (a present-but-INERT ladder on a real OSS
-# box) through exactly that gap. This test closes it: a payload-shaped
-# fixture tree (coordinator/bin/lib/ not flattened + lib/ flattened, per
-# setup/publish-targets.portable) imported under a genuinely OSS-shaped
 # environment (empty HOME/USERPROFILE/COORDINATOR_SETTINGS_HOME, no
 # CLAUDE_PLUGIN_ROOT, no .doe-root pointer reachable), with the manifest
-# reachable ONLY via the new marketplace-cache rung
 # (_mp_marketplace_cache_rung(), BLOCKER-1a) under a synthetic CLAUDE_HOME —
 # asserting import SUCCEEDS and _MANIFEST_PATH resolves inside that rung's
-# fixture, not merely that some path got printed.
-# ---------------------------------------------------------------------------
 import shutil  # noqa: E402
 
 _COORDINATOR_DIR = os.path.dirname(_BIN_DIR)
@@ -392,9 +273,6 @@ def _build_payload_shaped_fixture(root: str) -> tuple[str, str]:
 
 
 def test_bootstrap_import_succeeds_on_payload_shaped_tree_under_oss_environment():
-    """The acceptance test the
-    findings said was missing. Fails pre-fix (no marketplace-cache rung to
-    reach the manifest); passes post-fix."""
     with tempfile.TemporaryDirectory() as _tmp:
         _payload_lib_dir, _claude_home_dir = _build_payload_shaped_fixture(_tmp)
         _empty_home = os.path.join(_tmp, "empty-home")
@@ -435,15 +313,7 @@ def test_bootstrap_import_succeeds_on_payload_shaped_tree_under_oss_environment(
         )
 
 
-# ---------------------------------------------------------------------------
-# C1D: doe_root() gets the same codename-free rung ladder, in-process via
-# monkeypatch (not a subprocess — doe_root() runs at CALL time, not import
-# time, so isolating just its own rungs from the ambient machine's real
 # DOE_ROOT/REPO_DOE_CLAUDE/registry state is enough; the module import at the
-# top of this file already proved import-time behavior above).
-#
-# Spec backlink: pln-the-published-engine-resolves-ae0bf7 § C1D
-# ---------------------------------------------------------------------------
 import tempfile as _tempfile  # noqa: E402
 
 import pytest  # noqa: E402
@@ -474,9 +344,6 @@ def _clear_doe_root_env(monkeypatch):
 
 
 def test_doe_root_resolves_via_doe_root_pointer_rung(monkeypatch):
-    """Pointer rung: coordinator_read_doe_root_pointer() already returns the
-    DoE REPO root directly — used as-is, no conversion, no state/ gate (the
-    pointer file's own contract already promises a repo root)."""
     with _tempfile.TemporaryDirectory() as _fake_root:
         _clear_doe_root_env(monkeypatch)
         monkeypatch.setattr(reg, "_mp_doe_root_pointer_rung", lambda: _fake_root)
@@ -495,12 +362,6 @@ def test_doe_root_resolves_via_marketplace_cache_rung(monkeypatch):
 
 
 def test_mp_marketplace_cache_rung_excludes_unparseable_version_dirs(monkeypatch):
-    """Opaque hash-named cache dirs (e.g. a github-sourced install's commit
-    SHAs) must not out-rank a real semver dir via leading-digit coercion —
-    only strictly numeric, <=3-segment dot-versions are ranking candidates.
-    Pre-fix, `021d0d725330` parsed as (21, 0, 0) and `0371a29ed35d` as
-    (371, 0, 0), so the hash with the longer leading-digit run won on an
-    ordering that reflects nothing about install recency."""
     with _tempfile.TemporaryDirectory() as _home:
         _cache_parent = os.path.join(_home, "plugins", "cache", "coordinator-claude", "coordinator")
         os.makedirs(os.path.join(_cache_parent, "0371a29ed35d"))
@@ -523,9 +384,6 @@ def test_doe_root_resolves_via_flat_layout_probe_rung(monkeypatch):
 
 
 def test_doe_root_flat_layout_rejected_without_state_dir(monkeypatch):
-    """A resolved-but-
-    unrelated directory (isdir() true, no state/ under it) must NOT win;
-    the ladder must fall through to fail loud rather than accept it."""
     with _tempfile.TemporaryDirectory() as _fake_root:
         _clear_doe_root_env(monkeypatch)
         monkeypatch.setattr(reg, "_mp_flat_layout_probe_rung", lambda: _fake_root)
@@ -601,12 +459,6 @@ def test_doe_root_resolves_via_registry_live_path_rung(monkeypatch):
 
 
 def test_doe_root_rejects_live_path_content_root_without_git(monkeypatch):
-    """
-    live_path pointing at a CONTENT root (`<repo>/coordinator`, no
-    `.claude-plugin/plugin.json` beside it in this fixture, i.e.
-    unrecognizable to the normalizer) must NOT be accepted as the repo root
-    unconverted; it must fall through to fail loud rather than the caller
-    double-nesting `coordinator/coordinator/...` beneath it."""
     with _tempfile.TemporaryDirectory() as _content_root:
         _clear_doe_root_env(monkeypatch)
         monkeypatch.setattr(
@@ -619,8 +471,6 @@ def test_doe_root_rejects_live_path_content_root_without_git(monkeypatch):
 
 
 def test_doe_root_falls_back_to_legacy_env_chain_when_codename_rungs_unreachable(monkeypatch):
-    """The private-tree chain survives untouched when none of the
-    codename-free rungs resolve."""
     _clear_doe_root_env(monkeypatch)
     monkeypatch.setenv("REPO_DOE_CLAUDE", "/fake/doe-claude")
     assert reg.doe_root() == "/fake/doe-claude"
@@ -641,27 +491,12 @@ def test_doe_root_env_override_wins_over_live_pointer_when_both_set(monkeypatch)
 
 
 def test_doe_root_raises_unresolvable_when_every_rung_including_codename_rungs_fails(monkeypatch):
-    """With every codename-free rung AND the legacy env/registry chain
-    unreachable, doe_root() still fails loud with _DoeUnresolvable — the
-    existing failure semantics callers rely on (WARN + skip, exit 0) are
-    preserved, not silently swallowed by the new rungs."""
     _clear_doe_root_env(monkeypatch)
     with pytest.raises(reg._DoeUnresolvable):
         reg.doe_root()
 
 
-# ---------------------------------------------------------------------------
-# Characterisation tests for _mp_repo_root_from_plugin_root_candidate(),
-# pinning this call site's historical behaviour ahead of single-sourcing onto
-# coordinator_core.ops.coordinator_doe_root.repo_root_from_plugin_root_candidate()
-# (state/debt-backlog/2026-08-08-three-divergent-copies-of-the-plugin-roo-
-# 8d584d3b90d3.yaml). Do not "fix" any of these under cover of a future edit
-# without a separate, deliberate decision.
-# ---------------------------------------------------------------------------
-
-
 def test_plugin_root_candidate_climbs_content_root_to_repo_root(tmp_path):
-    """OSS-flat-vs-private disambiguation still works after delegation."""
     repo_root = tmp_path / "doe-repo"
     content_root = repo_root / "coordinator"
     content_root.mkdir(parents=True)
@@ -714,10 +549,6 @@ def test_plugin_root_candidate_basename_casefold_case_insensitive_on_any_platfor
 
 
 def test_plugin_root_candidate_no_manifest_relpath_fallback(tmp_path):
-    """This call site does NOT carry the engine copy's B5 manifest-relpath
-    fallback: a private DoE repo root with no marketplace marker anywhere
-    must fall through unnormalized, unlike
-    coordinator_core.ops.coordinator_doe_root's B5-fixed copy."""
     repo_root = tmp_path / "doe-repo"
     content_root = repo_root / "coordinator"
     (content_root / "schemas").mkdir(parents=True)

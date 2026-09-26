@@ -1,36 +1,8 @@
-"""
-coordinator_core.ops.scope_warning_resolve — mark a scope-warning log entry's resolution.
-
-Edits `.git/coordinator-sessions/<session_id>/scope-warnings.log` in-place,
-replacing the last pipe-delimited field ("pending-resolution" or a prior
-resolution value) on the given 1-indexed line with a new resolution code.
-
-Log format (written by the scope-guard commit hook):
-    <ISO-ts> | <session_id> | foreign-staged | <file> | owner:<owner> | pending-resolution
-
-After resolution:
-    <ISO-ts> | <session_id> | foreign-staged | <file> | owner:<owner> | legitimate-mine
-
-Port source: coordinator/bin/scope-warning-resolve (DoE-claude)
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292, chunk B3
-See also: docs/pretooluse-deny-contract.md, docs/wiki/scoped-safety-commits.md § Phase 5
-
-Negative-spec:
-    - Validation order is fixed and parity-critical: argc (main() only) ->
-      line_number format -> resolution allowlist -> git-root -> file-exists ->
-      line-bounds -> line-non-empty -> pending-check. A caller passing multiple
-      bad args must get the SAME first-error message the bash oracle gave.
-    - The "does not contain 'pending-resolution'" case is a WARNING, not an
-      error — it does not exit; the overwrite proceeds.
-    - No-op detection (new content byte-identical to old) is NOT an error —
-      exits 0 with a stderr warning, writes nothing.
-    - Edit is via write-then-os.replace (atomic), never in-place seek/truncate.
-"""
 
 
 from __future__ import annotations
 
-GENERATES = []  # writes only .git/coordinator-sessions/<session_id>/scope-warnings.log inside the worktree's own .git directory
+GENERATES = []
 
 import os
 import re
@@ -71,18 +43,6 @@ def resolve(
     resolution: str,
     git_root: Optional[str] = None,
 ) -> Tuple[str, int]:
-    """Validate args, locate the log file, edit the target line's last field.
-
-    line_number_raw is the RAW string argv value (not pre-parsed) so this
-    function owns the positive-integer format check itself, preserving the
-    bash oracle's validation order (format check happens before any other
-    validation, including the resolution allowlist).
-
-    Returns (stdout_text, rc). rc is 0 on success AND on the no-op-detected
-    path; 1 on all validation/IO errors. Error/warning diagnostics are
-    printed to stderr as a side effect (mirroring the bash script's direct
-    `>&2` writes), independent of the returned stdout_text.
-    """
     if not _LINE_NUM_RE.match(line_number_raw):
         print(
             f"Error: line_number must be a positive integer, got: '{line_number_raw}'",
@@ -119,7 +79,6 @@ def resolve(
     with open(log_file, encoding="utf-8") as fh:
         content = fh.read()
 
-    # wc -l semantics: count newline characters, not "lines" in the Pythonic
     # sense — a file with N newline-terminated lines has TOTAL_LINES == N.
     total_lines = content.count("\n")
     if line_number > total_lines:
@@ -130,7 +89,6 @@ def resolve(
         )
         return ("", 1)
 
-    # sed -n Np semantics: 1-indexed access into \n-delimited records.
     lines = content.split("\n")
     target_line = lines[line_number - 1]
 
@@ -139,7 +97,6 @@ def resolve(
         return ("", 1)
 
     if "pending-resolution" not in target_line:
-        # Already resolved — WARNING (not an error), overwrite proceeds anyway.
         m = _TRAILING_RESOLUTION_RE.search(target_line)
         current_res = m.group(0) if m else "unknown"
         print(
@@ -150,11 +107,6 @@ def resolve(
         print(f"  Current resolution appears to be: {current_res}", file=sys.stderr)
         print(f"  Overwriting anyway with: {resolution}", file=sys.stderr)
 
-    # Replace the LAST pipe-delimited field. Splitting on '|' preserves the
-    # log's " | " spacing convention in every OTHER field (the separator
-    # itself, not surrounding whitespace, is what's split on) — rejoining
-    # with '|' reproduces the original spacing exactly except for the
-    # rewritten last field, which gets exactly one leading space.
     fields = target_line.split("|")
     fields[-1] = " " + resolution
     new_target_line = "|".join(fields)
@@ -196,9 +148,6 @@ def resolve(
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry — argc validation happens here (owns the "$#" count in the
-    error message), then delegates to resolve() for the rest of the sequence.
-    """
     if len(argv) != 3:
         print(f"Error: expected 3 arguments, got {len(argv)}", file=sys.stderr)
         sys.stderr.write(USAGE)

@@ -170,94 +170,31 @@ from coordinator_core.bash_guards import _dialect
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.bash_guards._verdict import record_silent
 
-#: Review: code-reviewer -- Finding 5 (nit): vestigial in `bash_guards` --
-#: see `guard_grep_via_bash.py`'s identical comment above `CLASS`/
 #: `MATCHERS`/`PRIORITY` for the full explanation. `dispatch.py` hardcodes
 #: ordering explicitly; this `PRIORITY` governs nothing here.
 CLASS = "hard-deny"
-#: WIDENED (C6, pln-the-shape-classifier-reaches-a-e743e5 § D6, PM ruling
-#: 2026-08-18). The prior hold here named two conditions: DR-280's rewrite
-#: landing, and `state/bash-guards/known-red.json`'s three
-#: `TestVerbatimHeadTailAlternativeIsRealAndEquivalent` `pending_fix` cells
-#: clearing. DR-280 landed (`b1e2bc932` / `62f66c01a`); the red cells have
-#: NOT cleared -- the PM ruled to widen ahead of that second precondition
-#: anyway, accepting the five-cell debt (across this file and
-#: `guard_multiprobe_banner.py`) explicitly (AC17) rather than leave this
 #: guard -- the only in-repo consumer of `FOR_LOOP`/`WHILE_READ_LOOP`/
 #: `HEAD_TAIL_PLUMBING`/`FIND_EXEC_XARGS` -- unreachable on a PowerShell
 #: payload. Reference by DIRECT IDENTITY, never a copy or re-wrap --
-#: `test_tool_name_membership.py` asserts `is`.
 _GUARD_NAME = "guard_plumbing_and_loops"
 
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 100
 
-#: This guard's OWN escape hatch -- suppresses BOTH shapes' policy outright,
-#: read inline at `check()` call time only (F2 discipline -- never hoisted
-#: to module scope). Distinct from the underlying seam checks' own
 #: `COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING` / `COORDINATOR_ALLOW_FIND_EXEC`
-#: (which this module also implicitly honors -- see module docstring).
 _OVERRIDE_ENV = "COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS"
 
 _EVENT_NAME = "PreToolUse"
 
 #: FOR-LOOP GENERIC FALLBACK -- DECIDED EXPLICITLY, NOT AN OMISSION
-#: (worklist Row P4, `state/audits/2026-07-29-guard-module-ladder-
-#: worklist.md`, DoE-claude repo; `docs/plans/2026-07-29-bash-guard-
-#: consolidated-execution.md` row M10 item 2). This bare-glob for-loop
 #: branch is ARCHITECTURALLY CAPPED at an every-platform advisory carrying
-#: a generic (non-command-specific) skeleton -- a recorded stop, not a
-#: promotable rung-C-to-B gap left unaddressed by accident:
-#:
-#:   1. `check_find_exec_rewrite`'s only confirmed-outlet path
-#:      (`_seam_confirmed_rewrite`) requires the WHOLE command to be exactly
-#:      one segment whose first token is literally `find` (see this
 #:      module's own docstring, "FOR_LOOP's leg of AC-5 is, ARCHITECTURALLY,
-#:      advisory-only on every platform"). A for-loop's own first token is
-#:      always `for`, never `find`, and a genuine `for ... do ... done` body
-#:      is inherently multi-segment from its own internal `;`s/newlines --
-#:      so NO for-loop, translatable exec verb or not, can ever reach that
-#:      seam's confirmed-rewrite branch. This is a structural fact about the
-#:      seam this guard consumes, not something this guard's own message
-#:      wording could fix.
-#:   2. Promoting this branch to a genuine per-command rewrite (rather than
-#:      a fixed skeleton) needs a NEW `_shape_classifier` capability this
-#:      package does not have today: structurally extracting the loop
-#:      variable, the item list, and the body from a `for ... do ... done`
-#:      construct -- `_detect_for_loop` only detects that one is PRESENT
-#:      (`do`/`done` tokens exist), it does not parse its parts. Building
-#:      that classifier is real, separate work, not a message-text fix, and
-#:      is out of this row's scope.
-#:   3. Even with that classifier in hand, a GENERIC body's per-item work is
-#:      arbitrary shell (unknown variable expansions, quoting, exit-status
 #:      handling) -- unlike `check_find_exec_rewrite`'s narrow, ENUMERATED
-#:      verb translation (rm/cat/wc -l only), there is no safe, general
-#:      translation of "whatever the body does" into Python without
-#:      re-implementing a shell interpreter. A "run the body verbatim per
-#:      item via a subprocess" alternative (the same verbatim-reuse pattern
-#:      `_verbatim_head_tail_alternative` uses for the head/tail branch)
-#:      would still fork once per iteration -- exactly the cost this guard
-#:      exists to remove -- so it would not be a real improvement over the
-#:      status quo, only a different-looking non-improvement; it is
-#:      deliberately NOT implemented here for that reason.
-#:
 #: DECISION: stays at rung C -- a generic, every-platform-advisory
-#: skeleton -- until a `_shape_classifier` for-loop-structure capability
-#: exists AND a translator for at least a small enumerated set of common
-#: per-item verbs is built on top of it (the same shape
-#: `check_find_exec_rewrite`'s own enumerated rm/cat/wc -l translation
-#: already takes for its narrower shape). No such capability exists in this
-#: package as of this decision, so no attempt is made to fake one here.
 _FOR_LOOP_GENERIC_SUMMARY = "a single in-process python3 loop, zero per-item forks"
 
 
 def _for_loop_generic_example() -> str:
-    """Built at call time via `_pl_python3_invocation()` -- see the sibling
-    grep-via-bash path (`guard_grep_via_bash.py`), which resolves the real
-    interpreter rather than a literal `python3 -c` an operator on a stock
-    Windows box (where `python3` is frequently absent from PATH) cannot
-    run. Resolution is fail-open to `"python3"`, so this degrades to the
-    prior literal wherever it cannot do better."""
     return (
         "%s -c 'import glob\\nfor f in glob.glob(\"*.txt\"):\\n    ...'  "
         "# do the per-item work in-process, zero per-iteration forks" % _pl_python3_invocation()
@@ -266,14 +203,10 @@ def _for_loop_generic_example() -> str:
 
 #: WHILE-READ LOOP -- always a `_generic_advisory` (no seam to consult, see
 #: module docstring's WHILE_READ_LOOP paragraph). The example reads the item
-#: list in-process instead of spawning a shell `while read` loop, the same
-#: honest outlet `_for_loop_generic_example` offers for its own shape --
-#: no auto-rewrite outlet is synthesized here either (plan Out of scope).
 _WHILE_READ_GENERIC_SUMMARY = "a single in-process python3 loop, zero per-item forks"
 
 
 def _while_read_generic_example() -> str:
-    """See `_for_loop_generic_example` -- same real-interpreter resolution."""
     return (
         "<generator> | %s -c 'import sys\\nfor line in sys.stdin:\\n"
         "    f = line.strip()\\n    ...'  "
@@ -282,21 +215,13 @@ def _while_read_generic_example() -> str:
 
 
 #: PIPELINE_FOREACH_OBJECT -- PowerShell-only, no bash analogue (D2, C3 of
-#: pln-the-shape-classifier-reaches-a-e743e5). A `ForEach-Object`/`%` block
 #: spawns once PER PIPELINE OBJECT when its body calls a native executable
-#: -- the same fork-per-iteration cost `_for_loop_generic_example` addresses
-#: for a bash/pwsh `for`/`foreach` loop, so it gets the identical remedy
-#: shape: collapse the per-item spawn into one in-process python3 call over
-#: the whole collection, rather than one call per object flowing through
-#: the pipeline. No seam exists to consult here (no bash rewrite to reuse,
-#: no sibling BX-16 check) -- always the generic, every-platform advisory.
 _PIPELINE_FOREACH_OBJECT_SUMMARY = (
     "a single in-process python3 call over the whole collection, zero per-item forks"
 )
 
 
 def _pipeline_foreach_object_example() -> str:
-    """See `_for_loop_generic_example` -- same real-interpreter resolution."""
     return (
         "%s -c 'import glob\\nfor f in glob.glob(\"*.py\"):\\n    ...'  "
         "# do the per-item work in-process instead of forking once per "
@@ -305,29 +230,6 @@ def _pipeline_foreach_object_example() -> str:
 
 
 def _seam_confirmed_rewrite(result: Optional[Dict[str, Any]]) -> bool:
-    """``True`` only when a BX-16 seam check's return is an ``_allow_rewrite``
-    (a genuine ``updatedInput.command`` -- a concrete, executable single-
-    process replacement for this exact command), never merely an
-    ``_advisory``.
-
-    This is the actual sequencing gate: both `check_head_tail_plumbing_
-    rewrite` and `check_find_exec_rewrite` return NON-``None`` far more
-    often than they return an actual rewrite -- an upstream stage the seam
-    doesn't recognize (``docker ps | head``, ``git log --oneline | head``),
-    a pipeline longer than two segments, an unrecognized head/tail count
-    form, or a `find -exec` verb outside rm/cat/wc -l all come back as a
-    bare seam ``_advisory`` (``additionalContext``, no ``updatedInput``)
-    whose own text says the rewrite is "not offered automatically" / "has
-    no known translation on file". Treating THAT as a confirmed outlet --
-    as an earlier revision of this module did, before this check existed --
-    denies common, benign commands on Windows (``docker ps | head -n 20``)
-    toward an "Example" that is just the seam's own disclaimer prose, which
-    is exactly the deny-toward-a-target-that-does-not-exist hazard the
-    plan's sequencing rule exists to prevent. Only a real ``updatedInput``
-    licenses a deny; everything else must fall back to this guard's own
-    `_generic_advisory` (advisory-only on every platform), identically to
-    a seam result of ``None``.
-    """
     if not isinstance(result, dict):
         return False
     hso = result.get("hookSpecificOutput", {})
@@ -340,41 +242,8 @@ def _seam_confirmed_rewrite(result: Optional[Dict[str, Any]]) -> bool:
 def _outlet_from_seam_result(
     result: Dict[str, Any], payload: Optional[Dict[str, Any]]
 ) -> Tuple[str, str]:
-    """Render `(outlet_summary, outlet_example)` from a BX-16 seam check's
-    return, for a caller that has ALREADY confirmed (via
-    `_seam_confirmed_rewrite`) that this is a genuine `_allow_rewrite`
-    (allow + `updatedInput.command`) -- the only outcome this module treats
-    as "the seam confirmed a concrete outlet for this exact command", per
-    the module docstring's sequencing discipline. A bare seam `_advisory`
-    (allow + `additionalContext`, no `updatedInput`) is NOT a confirmed
-    outlet -- see `_seam_confirmed_rewrite`'s docstring -- and callers must
-    route that case to `_generic_advisory` instead of calling this
-    function. The ``additionalContext``-only fallback below is defensive
-    only (unreachable in the normal `check()` flow, kept in case a future
-    seam-result shape gap slips past `_seam_confirmed_rewrite`).
-
-    `outlet_summary` is a self-contained phrase, never a placeholder like
-    the prior "below." -- `_platform_verdict.platform_verdict_for_shape`
-    splices this summary into its one live sentence shape ("consider %s
-    here too so behavior stays consistent across the fleet"; the deny-path
-    "Use instead: %s" phrasing this docstring used to describe was retired
-    under DR-280, 2026-08-07 -- `platform_verdict_for_shape` never renders
-    a deny envelope now). A bare "below." would misdescribe the outlet
-    ("consider below. here too") and (Review: guard-class census) drag the
-    override note (below) out of the advisory template's "Example:" cue
-    window and into counted prose.
-    """
     hso = result.get("hookSpecificOutput", {}) if isinstance(result, dict) else {}
     updated = hso.get("updatedInput")
-    # This guard's OWN escape hatch is appended to the EXAMPLE, not the
-    # summary -- both the deny and advisory templates in
-    # `_platform_verdict.platform_verdict_for_shape` open an "Example:"
-    # cue window for `outlet_example` with no blank line before it, so an
-    # indented line placed immediately after the example text lands inside
-    # that window in EITHER verdict shape (mirrors `_generic_advisory`'s
-    # own "  Example:  %s\n  %s\n" convention below in this same module) --
-    # an indented line inside a cue window is a counted offer, not counted
-    # prose.
     bypass_note = operator_override_note(_OVERRIDE_ENV, payload=payload)
     summary = "the seam-confirmed single-process rewrite"
     if isinstance(updated, dict) and updated.get("command"):
@@ -386,20 +255,7 @@ def _outlet_from_seam_result(
 def _generic_advisory(
     shape_label: str, cmd: str, summary: str, example: str, payload: Optional[Dict[str, Any]]
 ) -> Dict[str, Any]:
-    """Advisory-only-on-every-platform envelope for a command whose shape
-    matched but for which the relevant BX-16 seam check returned ``None``
-    (no confirmed outlet -- a bare glob for-loop, or an underlying seam
-    override suppressing that check). Never a deny -- see module docstring.
-    """
     cmd_safe = cmd if len(cmd) <= 200 else cmd[:200] + "..."
-    # `%s`'s own indented, no-blank-line-before-it placement mirrors
-    # `_outlet_from_seam_result`'s cue-window trick -- see that function's
-    # comment.
-    #
-    # discipline) -- the override note now trails the Example line (the
-    # concrete command a reader would copy) rather than sitting between the
-    # alternative summary and the Example, matching every other guard's
-    # message shape in this diff.
     context = (
         "BASH-SPAWN ADVISORY (non-blocking): `%s`-shaped command spawns a "
         "subprocess per iteration/pipe stage.\n\n"
@@ -477,18 +333,9 @@ def _verbatim_head_tail_alternative(cmd: str) -> Optional[str]:
     if n is None:
         return None
 
-    # Re-quote the upstream segment's OWN tokens into a fresh, valid shell
-    # command line -- this is what makes the replacement "verbatim": the
-    # upstream runs exactly as it would have, as the ONE subprocess this
-    # rewrite still needs (the thing being asked, not the fork being taxed),
-    # with no re-derivation of what it produces.
     upstream_cmd = " ".join(shlex.quote(tok) for tok in up_tokens)
 
     if is_head:
-        # `itertools.islice(p.stdout, n)` reads (and the walk deque below
-        # buffers) at most `n` lines regardless of `n <= 0` -- no separate
-        # zero-case branch needed, unlike the seam's own generator-specific
-        # rewrite, because there is no generator body here to skip running.
         slicer_lines = [
             "import itertools",
             "for _l in itertools.islice(p.stdout, %d):" % n,
@@ -547,9 +394,6 @@ def _verdict_head_tail(
             payload,
         )
     summary, example = _outlet_from_seam_result(seam_result, payload)
-    # DR-280 (2026-08-07): the deny leg is retired -- always render the
-    # advisory envelope, regardless of `host_is_windows`. See `check()`'s
-    # own docstring for why.
     return platform_verdict_for_shape(
         "head-tail-plumbing", cmd, summary, example, host_is_windows=False
     )
@@ -575,13 +419,8 @@ def _verdict_for_loop(
             "for-loop", cmd, _FOR_LOOP_GENERIC_SUMMARY, _for_loop_generic_example(), payload
         )
     summary, example = _outlet_from_seam_result(seam_result, payload)
-    # DR-280 (2026-08-07): the deny leg is retired -- always render the
-    # advisory envelope, regardless of `host_is_windows`. See `check()`'s
-    # own docstring for why. (In practice this branch is also unreachable
     # per this module's own "FOR_LOOP's leg of AC-5" note above -- no
     # FOR_LOOP-classified command can ever produce a seam-confirmed
-    # rewrite -- but the fixed argument stays as defense-in-depth against
-    # that structural fact changing.)
     return platform_verdict_for_shape(
         "for-loop-wrapping-find-exec",
         cmd,
@@ -691,17 +530,12 @@ def _verdict_powershell(
                 payload,
             )
         summary, example = _outlet_from_seam_result(seam_result, payload)
-        # DR-280 (2026-08-07): the deny leg is retired -- always render the
-        # advisory envelope, regardless of `host_is_windows`.
         return platform_verdict_for_shape(
             "head-tail-plumbing", cmd, summary, example, host_is_windows=False
         )
 
     classification = classify_command(cmd, dialect=_dialect.Dialect.POWERSHELL)
     if classification.tokens is None:
-        # `_dialect.py` already recorded SILENT for the parse failure itself;
-        # this guard records its own non-verdict so the PowerShell leg is
-        # never a bare clean (see `_record_powershell_non_verdict`).
         _record_powershell_non_verdict("unparseable command text")
         return None
     primary = classification.primary
@@ -710,18 +544,11 @@ def _verdict_powershell(
         return None
 
     if primary.shape is Shape.FOR_LOOP:
-        # D2 reversal: same generic, every-platform advisory the BASH leg's
-        # bare-glob for-loop fallback already renders -- the alternative
-        # text (a `python3 -c` loop) is a subprocess invocation, not shell
-        # syntax, so it is equally valid run from a PowerShell prompt.
         return _generic_advisory(
             "for-loop", cmd, _FOR_LOOP_GENERIC_SUMMARY, _for_loop_generic_example(), payload
         )
     if primary.shape is Shape.PIPELINE_FOREACH_OBJECT:
-        # New member (D2) -- no bash analogue, no seam to consult. Same
         # remedy shape as FOR_LOOP: the per-item spawn inside the
-        # `ForEach-Object`/`%` block collapses into one in-process call over
-        # the whole collection.
         return _generic_advisory(
             "pipeline-foreach-object",
             cmd,
@@ -730,7 +557,6 @@ def _verdict_powershell(
             payload,
         )
     # WHILE_READ_LOOP is deliberately absent from the classifier's POWERSHELL
-    # table (AC8) -- no PowerShell idiom exists, so `primary.shape` can never
     # be WHILE_READ_LOOP here; no branch is needed or possible for it.
     _record_powershell_non_verdict(
         "matched a shape with no PowerShell-leg advisory of its own"
@@ -773,7 +599,7 @@ def check(
     tool_name = payload.get("tool_name") or ""
     dialect = _dialect.dialect_from_tool_name(tool_name)
     if dialect is None:
-        return None  # unrecognized/absent tool_name -- unchanged prior behavior
+        return None
 
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):

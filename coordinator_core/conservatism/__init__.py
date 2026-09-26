@@ -100,14 +100,6 @@ from __future__ import annotations
 
 from enum import Enum
 
-# Deliberately NOT `dataclasses` and NOT `typing`. Measured on this box:
-# importing `dataclasses` costs 9.3ms (it pulls `inspect`) and `typing` 2.4ms,
-# against 1.1ms for this module's own body -- a 12x tax for one frozen record
-# and three annotations. `enum` is already resolved by interpreter start and is
-# free. A primitive meant to be cheap enough for a guard hot path (DR-344:
-# 500ms end-to-end, <50ms to reach a warm engine) does not get to spend 12ms on
-# ergonomics. Annotations below are strings by `from __future__ import
-# annotations`, so no runtime typing import is needed to carry them.
 
 __all__ = [
     "SafeDirection",
@@ -120,9 +112,6 @@ __all__ = [
 _ATTR = "__safe_direction__"
 
 class SafeDirection(Enum):
-    """The two directions a site can resolve toward when it cannot determine
-    its precondition. See the module docstring for why there is no third
-    value and no default."""
 
     RAISE = "raise"
     """Refuse to return a value at all. Correct where a wrong answer has
@@ -181,10 +170,6 @@ def declares_safe_direction(
     if direction is SafeDirection.FALL_BACK and anchor is None:
         raise ValueError("declares_safe_direction: FALL_BACK must declare the anchor it degrades to")
     if direction is SafeDirection.FALL_BACK and not callable(anchor):
-        # A non-callable, non-None anchor passed the
-        # `is None` check above and then raised a bare TypeError at first
-        # assertion, not at import, contradicting this function's own
-        # docstring claim that malformed declarations are enforced here.
         raise ValueError("declares_safe_direction: FALL_BACK anchor must be callable")
     if direction is SafeDirection.RAISE and anchor is not None:
         raise ValueError("declares_safe_direction: RAISE has no anchor -- it returns no value")
@@ -199,7 +184,6 @@ def declares_safe_direction(
 
 
 def declaration_of(fn) -> "SafeDirectionDeclaration | None":
-    """The declaration on `fn`, or None if it declares nothing."""
     return getattr(fn, _ATTR, None)
 
 

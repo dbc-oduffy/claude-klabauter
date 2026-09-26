@@ -122,40 +122,26 @@ GRANULARITY_PER_ITEM = "per-item"
 GRANULARITY_PER_WAVE = "per-wave"
 _VALID_GRANULARITIES = (GRANULARITY_PER_ITEM, GRANULARITY_PER_WAVE)
 
-#: cli verb selected by granularity — both names are C4's own
 #: `apply.py::_CLI_DISPATCH` entries (mirroring `consolidate_assemble`'s
-#: `delete-only`/`cherry-pick-and-delete`/`merge-and-delete` precedent),
-#: never a call made from this module.
 _CLI_BY_GRANULARITY = {
     GRANULARITY_PER_ITEM: "commit-per-item",
     GRANULARITY_PER_WAVE: "commit-per-wave",
 }
 
-#: branch-recheck cadence matched 1:1 to granularity — D-3(b).
 _BRANCH_RECHECK_CADENCE_BY_GRANULARITY = {
     GRANULARITY_PER_ITEM: "per-commit",
     GRANULARITY_PER_WAVE: "per-wave",
 }
 
-#: the non-PASS failure-path verb nested under `on_non_pass` for
-#: `per-item` directives only — C4's own dispatch-table entry, never
-#: invoked here.
 _ON_NON_PASS_CLI = "checkout-and-backlog-note"
 
-#: the existing, already-live CLI this module's Tier-U grant directive
-#: targets — claude-klabauter `coordinator/bin/tier-u-grant-cli`. Consumed
-#: by name only; this module never imports or shells out to it.
 _TIER_U_GRANT_CLI = "tier-u-grant-cli"
 
 _SPINOFF_HANDOFF_TEMPLATE_CLI = "spinoff-handoff-template"
 _EXECUTOR_DISPATCH_PROMPT_TEMPLATE_CLI = "executor-dispatch-prompt-template"
 
-#: P071-C7 — bug-blitz's `commands/bug-blitz.md:60` (at DoE 57e11749)
-#: mandates `coordinator-resolve-validation-cmd --full`; this cli names
 #: C7's own `apply.py::_CLI_DISPATCH` entry, which resolves the FULL test
 #: command IN-PROCESS (`coordinator_core.resolve_validation_cmd.
-#: cs_resolve_full_test_cmd`) rather than shelling out to the bin
-#: trampoline — never invoked from this module.
 _RESOLVE_VALIDATION_CMD_CLI = "coordinator-resolve-validation-cmd"
 
 
@@ -170,28 +156,6 @@ def build_stage_and_commit(
     depends_on: Optional[str] = None,
     backlog_note: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Build ONE `directives[]` entry encoding D-3's granularity policy in
-    full — commit cardinality (`cli`), branch-recheck cadence
-    (`branch_recheck_cadence`), and, for `per-item` only, the non-PASS
-    failure path as a nested `on_non_pass` sub-directive. See the module
-    docstring's "D-3 policy encoded" section for the field-by-field
-    rationale.
-
-    `depends_on` is optional and, when supplied, is always a single
-    judgment-point id (a bare `str`) — see AC28 in the module docstring.
-    Bug-blitz's own commit directives pass this: per the plan's
-    review-gate risk constraint, bug-blitz's `commit-per-item`/
-    `commit-per-wave` directives are never execution-ready unconditionally
-    — the caller (a `readers_blitz.py` builder, C3a) wires `depends_on` to
-    an EM judgment point gating autonomous-fix commits, so C4's `apply()`
-    halts before committing until that gate resolves.
-
-    `backlog_note` is only meaningful (and only emitted, nested under
-    `on_non_pass`) when `granularity == "per-item"`; it is silently
-    ignored for `per-wave` — passing one is not an error, since a caller
-    may share a note-formatting helper across both granularities and only
-    have it consumed here for the one that uses it.
-    """
     if granularity not in _VALID_GRANULARITIES:
         raise ValueError(
             f"build_stage_and_commit: granularity must be one of "
@@ -237,25 +201,6 @@ def build_commit_readiness_gate(
     recommendation: Optional[Mapping[str, str]] = None,
     round_trip: str = "terminal",
 ) -> dict[str, Any]:
-    """Build the trusted EM judgment point that gates a commit directive
-    per the plan's Hard-constraints review-gate risk constraint: **bug-
-    blitz's commit directives specifically carry a `depends_on` gate on an
-    EM judgment point** rather than being emitted execution-ready — C4's
-    `apply()` halts before committing autonomous bug-blitz fixes until
-    this gate resolves. `resolves` is normally the single directive id
-    `build_stage_and_commit` was (or will be) called with for `id`, wired
-    together by the caller (a `readers_blitz.py` builder, C3a).
-
-    Built with `build_judgment_point` — never
-    `build_untrusted_gate_judgment_point` — because this is the EM's own
-    judgment about commit-readiness, and the EM is a trusted caller
-    allowed to attach a `recommendation` (may stay `None` for "no
-    opinion"). This is the deliberate counterpoint to
-    `build_tier_u_grant_flow` below, whose PM-authorization ask IS the
-    untrusted-gate case: two judgment points in this same module, built
-    from the two different contract constructors on purpose, not by
-    oversight.
-    """
     return build_judgment_point(
         recommendation,
         id=id,
@@ -367,18 +312,6 @@ def build_spinoff_handoff_template_emission(
     fields: Mapping[str, Any],
     depends_on: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Build the directive that emits the ~40-line spinoff-handoff
-    authoring template (bug-blitz item #32, "the single largest Axis-1
-    target") — a pure function of computed fields the assembler already
-    holds (AC26), never new judgment. The caller (a compute-side reader,
-    e.g. `readers_blitz.py`) is responsible for rendering the FULL template
-    body into `fields` before calling this builder — `fields` is handed
-    through verbatim as the directive's own `fields` payload, unvalidated
-    and unreshaped. C4's dispatch-table handler for
-    `spinoff-handoff-template` (`apply.py`) is a pure pass-through: it does
-    NOT render anything, it only surfaces the already-rendered `fields` in
-    its own report. Rendering lives entirely on the compute side.
-    """
     return {
         "id": id,
         "cli": _SPINOFF_HANDOFF_TEMPLATE_CLI,
@@ -394,16 +327,6 @@ def build_executor_dispatch_prompt_template_emission(
     fields: Mapping[str, Any],
     depends_on: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Build the directive that emits the fixed multi-part executor
-    dispatch-prompt template (bug-blitz item #43; mise-en-place item #19
-    is the same shape) — a pure function of computed fields (AC26), never
-    new judgment. Same contract as
-    `build_spinoff_handoff_template_emission`: the caller renders the FULL
-    template body into `fields` before calling this builder; `fields` is
-    passed through verbatim. C4's dispatch-table handler
-    (`executor-dispatch-prompt-template` in `apply.py`) is a pure
-    pass-through — rendering is never its job.
-    """
     return {
         "id": id,
         "cli": _EXECUTOR_DISPATCH_PROMPT_TEMPLATE_CLI,
@@ -413,23 +336,6 @@ def build_executor_dispatch_prompt_template_emission(
     }
 
 
-# C6 (docs/plans/2026-09-11-document-scaffolding-is-emitted-not-remembered.md)
-# -- the shared constructor's (C1) per-type required-flag computation for
-# this host's one emitted row (coordinator_core/ops/doctype_hosts.py --
-# keyed (type="decision", ceremony="backlog-grind-assemble"),
-# module=this package). `--dr-prefix` is optional on the real parser (the
-# DR-number namespace defaults when omitted); `--title` is the one value
-# this builder always computes from the caller's own already-resolved
-# ratified-decision state -- never a placeholder, unlike an unauthored
-# `coordinator-doc-new --type decision` invocation, which title-defaults to
-# a placeholder string (main()'s own title-default ladder). `dr_id`
-# allocation (`_allocate_dr_number`) and the resulting `docs/decisions/
-# <dr_id>-<slug>.md` path shape happen inside `coordinator-doc-new` itself,
-# not here -- this builder's own `--out` mirrors ONLY the slug half of that
-# path, using the caller-supplied `dr_prefix` (or the CLI's own default
-# namespace, left unspecified when `dr_prefix` is omitted) as a best-effort
-# `already_satisfied` replay guard; the DR-number collision check itself
-# stays `coordinator-doc-new`'s own job at execution time.
 _DECISION_FLAG_SPEC: tuple[Flag, ...] = (
     Flag("--title", "title", required=True),
     Flag("--dr-prefix", "dr_prefix", required=False),
@@ -442,21 +348,6 @@ def build_decision_scaffold_directive(
     title: str,
     dr_prefix: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Computes the `decision` scaffold directive through the shared
-    constructor (`coordinator_core.roadmap_planning_assemble.
-    scaffold_directive.build_scaffold_directive`, C1) from a backlog-grind
-    ceremony's own already-ratified decision title -- never a
-    caller-supplied free-text argument threaded straight through this
-    package's `apply.py` dispatch loop (this builder does NOT call
-    `coordinator-doc-new` or any other CLI itself -- a compute-half
-    constructor only, same as every other host in this plan's scope; § Which
-    discriminator this plan uses).
-
-    `id` is the caller's own directive id (this module's other builders
-    all take an explicit `id` keyword rather than minting one -- same
-    convention here, not a hard-coded `d-scaffold-decision` singleton,
-    since a single backlog-grind run may ratify more than one decision).
-    """
     root = Path.cwd()
     slug = _decision_slug(title)
     prefix = dr_prefix or "DR-XXX"
@@ -478,18 +369,6 @@ def build_resolve_validation_cmd(
     id: str,
     depends_on: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Build the bare directive that resolves bug-blitz's FULL test
-    command (P071-C7) — `commands/bug-blitz.md:60`'s
-    `coordinator-resolve-validation-cmd --full` citation, discharged by
-    C4's `apply.py` dispatch handler calling
-    `coordinator_core.resolve_validation_cmd.cs_resolve_full_test_cmd`
-    in-process. This builder carries no argv payload (`args` stays
-    empty) — the handler resolves purely from `repo_root`, the same
-    single input the native module itself takes. No judgment point gates
-    this directive: resolving which command to run is not an
-    authorization ask (contrast `build_tier_u_grant_flow`), so this is a
-    single dict, not a (judgment_point, directive) pair.
-    """
     return {
         "id": id,
         "cli": _RESOLVE_VALIDATION_CMD_CLI,
@@ -499,13 +378,6 @@ def build_resolve_validation_cmd(
 
 
 def _decision_slug(text: str) -> str:
-    """Lowercase-dash slug, mirroring `coordinator-doc-new`'s own
-    `_slug_from_title` closely enough for a computed (never free-text)
-    `--out` default -- collapses any run of non-alphanumeric characters to
-    a single dash and strips leading/trailing dashes. `today` is unused in
-    the resulting slug on purpose -- the real `--out` default for `decision`
-    is keyed on the allocated `dr_id`, never a date, per `_default_out_path`.
-    """
     out = []
     prev_dash = False
     for ch in text.lower():

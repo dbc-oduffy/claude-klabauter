@@ -24,8 +24,6 @@ from coordinator_core.benchmarks import catering_path_bench as bench
 
 @pytest.fixture(autouse=True)
 def _reset_floor_memo():
-    """The floor is memoized per process; a test that sets it must not leak
-    into the next one, nor into a real bench run in the same session."""
     original = bench._PROCS_FLOOR
     bench._PROCS_FLOOR = None
     yield
@@ -37,16 +35,6 @@ def _pin_floor(monkeypatch, floor: int) -> None:
 
 
 def test_the_same_reading_derives_differently_under_a_different_floor(monkeypatch):
-    """The portability claim, which is the entire point of measuring the floor
-    rather than writing a literal: a `procs_per_call` of 2.0 is ONE child where
-    the bench was written (floor 1) and ZERO children on this box (floor 2).
-    A per-environment constant cannot express that, and the literal `1` that
-    was here read correctly in the first environment and silently wrong in the
-    second.
-
-    One test, three assertions, because the three readings are one claim --
-    asserting each separately would be asserting that Python subtracts.
-    """
     _pin_floor(monkeypatch, 1)
     assert bench._derive_spawn_count(2.0) == 1
 
@@ -58,17 +46,12 @@ def test_the_same_reading_derives_differently_under_a_different_floor(monkeypatc
 def test_a_reading_below_the_floor_floors_at_zero_rather_than_going_negative(
     monkeypatch,
 ):
-    """Below-floor means the instrument saw less than a bare interpreter --
-    an instrument fault, never negative spawning. `_measure_one_sample` records
-    the raw `procs_per_call` alongside so the two stay distinguishable."""
     _pin_floor(monkeypatch, 2)
     assert bench._derive_spawn_count(1.0) == 0
     assert bench._derive_spawn_count(0.0) == 0
 
 
 def test_the_floor_is_measured_once_and_memoized(monkeypatch):
-    """This bench runs on a box ~50 peers are also spawning on. A floor
-    measured per sample would add a process to every sample."""
     calls = []
 
     def _fake_batched(cmd, k, cwd):
@@ -82,8 +65,6 @@ def test_the_floor_is_measured_once_and_memoized(monkeypatch):
 
 
 def test_an_unmeasurable_floor_raises_rather_than_assuming_one(monkeypatch):
-    """Guessing a floor is how the original defect got in. A floor that cannot
-    be measured must stop the bench, not default."""
     monkeypatch.setattr(
         bench, "batched_process_time_ms", lambda cmd, k, cwd: {"rc": 9, "procs_per_call": 0.0}
     )
@@ -92,9 +73,6 @@ def test_an_unmeasurable_floor_raises_rather_than_assuming_one(monkeypatch):
 
 
 def test_the_guard_fires_when_floor_and_fixture_disagree(monkeypatch):
-    """A stale floor against a live fixture is exactly the state the guard
-    exists to refuse -- it must not pass silently just because both are
-    measured."""
     _pin_floor(monkeypatch, 1)
     monkeypatch.setattr(
         bench, "batched_process_time_ms", lambda cmd, k, cwd: {"rc": 0, "procs_per_call": 3.0}

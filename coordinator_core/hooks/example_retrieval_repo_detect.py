@@ -46,12 +46,6 @@ _MAX_LEVELS = 6
 
 
 def _find_marker_upward(start_dir: str, marker: str, max_levels: int = _MAX_LEVELS) -> str | None:
-    """Walk up from start_dir looking for <dir>/<marker> (file or dir).
-
-    Mirrors find_marker_upward() (bash) / Find-MarkerUpward (ps1): checks the
-    starting dir itself first (i=0), then up to max_levels-1 additional
-    parents, stopping early if the filesystem root is reached (parent == dir).
-    """
     d = start_dir
     for _ in range(max_levels):
         candidate = os.path.join(d, marker)
@@ -68,9 +62,6 @@ _INDEX_MARKERS = ("graph.db", "state.json")
 
 
 def find_example_retrieval_repo_dir(start_dir: str, max_levels: int = _MAX_LEVELS) -> str | None:
-    """Walk up from start_dir for a `.project-rag/` dir holding an indexer
-    artifact. Trap: the bare dir name is not a marker — `~/.project-rag/` is
-    the server's global config home and would claim every repo beneath it."""
     d = start_dir
     for _ in range(max_levels):
         rag_dir = os.path.join(d, ".project-rag")
@@ -84,7 +75,6 @@ def find_example_retrieval_repo_dir(start_dir: str, max_levels: int = _MAX_LEVEL
 
 
 def _git(repo_root: str, *args: str) -> str | None:
-    """Run `git -C repo_root <args>`, return stripped stdout or None on any failure."""
     import subprocess
 
     from coordinator_core.win_portability import no_console_creationflags
@@ -94,11 +84,6 @@ def _git(repo_root: str, *args: str) -> str | None:
             ["git", "-C", repo_root, *args],
             capture_output=True,
             text=True,
-            # House value (`bash_guards.dispatch_checks._run_git`), not a local
-            # choice -- see the same note in `context_pressure_precompact._git`.
-            # This is a session-start detection read: a 10s bound here buys nothing
-            # a 2s bound does not, and costs eight extra seconds of a degraded box
-            # per session start. Expiry already degrades to None by design.
             timeout=2.0,
             **no_console_creationflags(),
         )
@@ -110,17 +95,14 @@ def _git(repo_root: str, *args: str) -> str | None:
 
 
 def detect_banner(cwd: str) -> str:
-    """Compute the example-retrieval-repo freshness banner for cwd. "" means silent exit."""
     if os.environ.get("COORDINATOR_HOOK_EXAMPLE_RETRIEVAL_REPO_DETECT_DISABLED") == "1":
         return ""
 
-    # --- Example-Game-Repo dedupe: positive context detection ---
     if _find_marker_upward(cwd, ".example-game-repo") is not None:
         return ""
     if _find_marker_upward(cwd, os.path.join("Saved", "ExampleGameRepoProjectRag")) is not None:
         return ""
 
-    # --- Generic example-retrieval-repo detection via marker file ---
     example_retrieval_repo_dir = find_example_retrieval_repo_dir(cwd)
     if not example_retrieval_repo_dir:
         return ""

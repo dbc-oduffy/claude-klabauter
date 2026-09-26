@@ -24,8 +24,6 @@ import sys
 import pytest
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -110,18 +108,12 @@ def _load_subject_module():
     return mod
 
 
-# --- _ram_from_windows: mock-only, this box is not Windows -----------------
-# No real psutil-on-Windows path is exercised here; these tests mock a fake
-# psutil module and prove the function's own contract (shape, MB conversion,
-# never-raises). Genuinely live behavior on a Windows box is unverified.
-
-
 def test_ram_from_windows_uses_psutil(monkeypatch) -> None:
     mod = _load_subject_module()
 
     class _FakeVirtualMemory:
-        available = 4 * 1024 * 1024 * 1024  # 4 GiB
-        total = 16 * 1024 * 1024 * 1024  # 16 GiB
+        available = 4 * 1024 * 1024 * 1024
+        total = 16 * 1024 * 1024 * 1024
 
     class _FakePsutil:
         @staticmethod

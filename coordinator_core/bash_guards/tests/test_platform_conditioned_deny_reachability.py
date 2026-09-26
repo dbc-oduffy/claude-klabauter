@@ -49,46 +49,22 @@ import pytest
 
 from coordinator_core.bash_guards.dispatch import evaluate_payload_json
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
-#: Every segment is a recognized probe form for
-#: `check_multiprobe_banner_rewrite` (echo banner, `pwd`, `whoami`, bare
-#: `git status`, `git rev-parse` HEAD-form) -- the sibling rewrite chain
-#: entry genuinely confirms an outlet for this exact command. Built ONLY
-#: from recognized forms per this file's own dispatch brief: `git status`/
-#: `git branch`/`git config --get` alone do NOT reach the gate (the seam
-#: returns `None` for them), so a fixture built on those would not exercise
-#: this case at all.
 _MULTIPROBE_CONFIRMED_CMD = (
     'echo "=== SESSION FACTS ==="; git rev-parse --abbrev-ref HEAD; pwd; whoami'
 )
 
-#: Carries an unrecognized probe segment (`curl` is not one of
-#: `check_multiprobe_banner_rewrite`'s recognized session-fact forms), so
-#: the sibling rewrite seam does NOT confirm an outlet for this exact
-#: command -- exercises the "unrecognized shape" case. Deliberately NOT a
-#: `git` subcommand: an earlier-registered, unrelated advisory-rewrite
-#: guard (`git-no-optional-locks`) fires on any `git` invocation ahead of
-#: this guard's own chain entries, which would make this fixture exercise
-#: THAT guard's chain position instead of the one under test here.
 _MULTIPROBE_UNRECOGNIZED_CMD = (
     'echo "=== facts ==="; pwd; whoami; curl -s http://example.com'
 )
 
-#: `find . -type f | head -n 5` -- a two-stage `find | head` pipeline
-#: `check_head_tail_plumbing_rewrite` translates outright (both the `find`
-#: census and the `head` line-count form are recognized).
 _PLUMBING_CONFIRMED_CMD = "find . -type f | head -n 5"
 
 #: `docker ps | head -n 20` -- genuinely HEAD_TAIL_PLUMBING-shaped, but
-#: `docker` is not a recognized upstream generator for
-#: `check_head_tail_plumbing_rewrite`, so that seam returns a bare
-#: advisory (no `updatedInput`) -- exercises the "unrecognized shape" case.
 _PLUMBING_UNRECOGNIZED_CMD = "docker ps | head -n 20"
 
 
@@ -107,14 +83,6 @@ def _decision(out):
     assert out is not None
     hso = out["hookSpecificOutput"]
     if "permissionDecision" not in hso:
-        # `coordinator_core._hook_envelope.rewrite_input` (shape (f), e.g. the
-        # in-process find-census answer `_bt_serve_find_census` returns)
-        # legitimately omits `permissionDecision` -- that builder's own
-        # docstring: "the rewrite is orthogonal to the allow/deny question,
-        # and omitting it leaves the normal permission flow intact", i.e. an
-        # implicit allow. Only an `updatedInput` rewrite is entitled to that
-        # reading; anything else missing the key is a genuine envelope-shape
-        # defect this helper must still catch.
         assert "updatedInput" in hso
         return "allow"
     return hso["permissionDecision"]
@@ -123,10 +91,7 @@ def _decision(out):
 class TestMultiprobeBannerChainReachability:
     def test_fully_recognized_shape_windows_auto_rewrite_wins(self):
         # The rewrite entry (`multiprobe-banner-rewrite`, ADVISORY_REWRITE)
-        # is registered ahead of `multiprobe-banner`
         # (PLATFORM_CONDITIONED_DENY) in `_build_guard_chain`. On Windows,
-        # with no override, the auto-rewrite wins: allow + updatedInput,
-        # and the platform-conditioned deny leg is never reached.
         out = evaluate_payload_json(
             _payload(_MULTIPROBE_CONFIRMED_CMD), host_is_windows=True
         )
@@ -135,15 +100,9 @@ class TestMultiprobeBannerChainReachability:
 
     def test_fully_recognized_shape_override_set_no_deny(self):
         # With the seam's own COORDINATOR_ALLOW_MULTIPROBE_BANNER override
-        # set, the published bypass key must keep meaning bypass -- this is
-        # the case that would have caught the abandoned repair (repairing
-        # the deny leg by reaching it through this exact override would
-        # have inverted "operator switched this guard off" into "operator
-        # gets a hard deny on Windows").
         out = evaluate_payload_json(
             _payload(_MULTIPROBE_CONFIRMED_CMD), host_is_windows=True
         )
-        # Baseline sanity: without the override this shape auto-rewrites.
         assert _decision(out) == "allow"
 
         import os
@@ -162,9 +121,6 @@ class TestMultiprobeBannerChainReachability:
         assert out is None or _decision(out) != "deny"
 
     def test_unrecognized_shape_stays_silent(self):
-        # Neither the rewrite entry nor the platform-conditioned guard's
-        # own gate confirms an outlet -- both allow silently. Locks in the
-        # deliberate 2026-08-06 behaviour (guard_multiprobe_banner module
         # docstring, "SUBAGENT-AWARE OUTLET ... DROPPING THE UNDISCHARGEABLE
         # GENERIC ADVISORY").
         out = evaluate_payload_json(
@@ -181,8 +137,6 @@ class TestMultiprobeBannerChainReachability:
 
 class TestPlumbingAndLoopsChainReachability:
     def test_fully_recognized_shape_windows_auto_rewrite_wins(self):
-        # `head-tail-plumbing-rewrite` is registered ahead of
-        # `plumbing-and-loops` -- same first-non-None-wins contract.
         out = evaluate_payload_json(
             _payload(_PLUMBING_CONFIRMED_CMD), host_is_windows=True
         )
@@ -206,12 +160,6 @@ class TestPlumbingAndLoopsChainReachability:
         assert out is None or _decision(out) != "deny"
 
     def test_unrecognized_shape_emits_generic_advisory_never_deny(self):
-        # `docker` is not a recognized upstream generator, so the seam
-        # returns a bare advisory (no updatedInput) -- `guard_plumbing_
-        # and_loops`'s own gate treats that identically to `None` and
-        # falls back to its generic advisory (`allow_advisory`), on every
-        # platform. Locks in the "plumbing-and-loops emits its generic
-        # advisory" half of the dispatch brief's stated case.
         out = evaluate_payload_json(
             _payload(_PLUMBING_UNRECOGNIZED_CMD), host_is_windows=True
         )

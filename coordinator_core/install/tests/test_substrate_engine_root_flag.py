@@ -43,9 +43,6 @@ def test_engine_root_flag_sets_env_var_before_run(monkeypatch, tmp_path):
 
 
 def test_engine_root_flag_empty_string_errors_loudly(monkeypatch, capsys):
-    """`--engine-root ""` must not
-    silently degrade to whatever rung would otherwise fire; it is an
-    explicit, obviously-wrong value and should fail loudly instead."""
     monkeypatch.setattr(
         substrate, "run", lambda **_: pytest.fail("run() must not be reached")
     )
@@ -57,9 +54,6 @@ def test_engine_root_flag_empty_string_errors_loudly(monkeypatch, capsys):
 
 
 def test_engine_root_flag_nonexistent_path_errors_loudly(monkeypatch, tmp_path, capsys):
-    """A typo'd/nonexistent path is
-    rejected at parse time, at the flag that caused it, rather than
-    degrading into a less legible failure downstream in run()."""
     monkeypatch.setattr(
         substrate, "run", lambda **_: pytest.fail("run() must not be reached")
     )
@@ -117,8 +111,6 @@ def test_resolution_error_leads_with_bootstrap_remedies(tmp_path):
     bootstrap_sentinel_idx = message.index(".claude-klabauter-live-root")
     post_bootstrap_idx = message.index("machine-local set")
 
-    # Bootstrap remedies (reachable before machine-local is configured) all
-    # precede the post-bootstrap `machine-local set` remedies.
     assert bootstrap_flag_idx < post_bootstrap_idx
     assert bootstrap_env_idx < post_bootstrap_idx
     assert bootstrap_sentinel_idx < post_bootstrap_idx
@@ -147,9 +139,6 @@ def test_env_var_bootstrap_remedy_actually_resolves(monkeypatch, tmp_path):
 def test_engine_root_flag_bootstrap_remedy_resolves_via_substrate(
     monkeypatch, tmp_path
 ):
-    """Same round-trip, driven through the actual bootstrap surface
-    (`install-substrate --engine-root`) rather than setting the env var by
-    hand — confirms the flag's own overlay satisfies the shim's ladder."""
     shim = _load_shim()
     ml_dir = tmp_path / "machine-local"
     ml_dir.mkdir()

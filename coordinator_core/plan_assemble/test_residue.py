@@ -1,19 +1,3 @@
-"""
-coordinator_core.plan_assemble.test_residue — co-located pytest for
-coordinator_core.plan_assemble.residue.brief.
-
-Per-AC conformance test, mirroring
-`coordinator_core.review_assemble.test_residue`'s shape: build segment
-corpora as fixture directories under `tmp_path`, monkeypatch content-root
-resolution — never read the live DoE-claude tree, which does not carry
-`skills/plan/residue` at all (see this chunk's plan, substrate finding).
-
-Run: python -m pytest coordinator_core/plan_assemble/test_residue.py -q
-
-Spec backlink: pln-plan-assemble-brief-route-the-2d016a, chunk C1
-Spec backlink: pln-plan-assemble-admits-instead-o-e441e3, chunk C1
-Spec backlink: pln-plan-assemble-admits-instead-o-e441e3, chunk C2
-"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -31,8 +15,6 @@ from coordinator_core.plan_assemble.residue import (
     brief,
 )
 
-# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
-# cadence suite is the separate threshold ruling, not this declaration.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -86,13 +68,6 @@ def _patch_content_root(monkeypatch: pytest.MonkeyPatch, content_root: Path) -> 
     monkeypatch.setattr(residue_mod, "resolve_content_root", lambda: str(content_root))
 
 
-# ---------------------------------------------------------------------------
-# AC-1 — explicit --route plan / --route spec-dispatch each return an
-# envelope, exit 0 (checked at the compute layer: no exception, correct
-# key-set).
-# ---------------------------------------------------------------------------
-
-
 def test_envelope_key_set_is_exactly_the_eight_canonical_keys_plus_segments(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -132,12 +107,6 @@ def test_explicit_route_plan_selects_plan_and_shared_only(
     assert result["artifact"]["route"] == "plan"
 
 
-# ---------------------------------------------------------------------------
-# AC-2 — absent --route resolves to `plan`, not an error, not a judgment
-# point, not an inference.
-# ---------------------------------------------------------------------------
-
-
 def test_absent_route_resolves_to_default_route_plan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -156,10 +125,7 @@ def test_absent_route_resolves_to_default_route_plan(
     }
 
 
-# ---------------------------------------------------------------------------
 # 2026-08-30 — a sizing object's own `route:` outranks DEFAULT_ROUTE, and an
-# explicit flag that disagrees with it is loud rather than silent.
-# ---------------------------------------------------------------------------
 
 
 def _write_sizing_object(tmp_path: Path, route: str, name: str = "sizing.yaml") -> Path:
@@ -177,10 +143,6 @@ def _write_sizing_object(tmp_path: Path, route: str, name: str = "sizing.yaml") 
 def test_absent_route_reads_the_sizing_objects_own_route(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The defect DoE measured 2026-08-30: an object that had already resolved
-    itself to `spec-dispatch` was silently re-resolved to `plan`, which runs
-    the full terminal (and its Opus plan review) that the S lane exists to
-    skip. No `--route` is passed here — the object's own field must win."""
     content_root = _make_residue_dir(tmp_path)
     _patch_content_root(monkeypatch, content_root)
     sizing = _write_sizing_object(tmp_path, "spec-dispatch")
@@ -217,8 +179,6 @@ def test_absent_route_still_defaults_when_object_states_no_usable_route(
 def test_explicit_route_wins_over_the_object_but_records_the_mismatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
-    """Contract step 2 is untouched — an explicit flag still wins. What it may
-    no longer do is disagree silently."""
     content_root = _make_residue_dir(tmp_path)
     _patch_content_root(monkeypatch, content_root)
     sizing = _write_sizing_object(tmp_path, "spec-dispatch")
@@ -247,32 +207,16 @@ def test_explicit_route_agreeing_with_the_object_records_no_mismatch(
     assert "route_mismatch" not in result["decisions"]
 
 
-# ---------------------------------------------------------------------------
-# AC-3 — illegal --route values raise RouteUsageError before any disk
-# access, never a silent fallthrough or inference.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "illegal_route", ["dispatch", "shape", "roadmap", "pm-decision", "bogus"]
 )
 def test_illegal_route_raises_usage_error_before_disk_access(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, illegal_route: str
 ) -> None:
-    # Deliberately do NOT create a content root or patch resolve_content_root
-    # — a disk-touching resolution attempt would raise something other than
-    # RouteUsageError (e.g. ResolveCoordinatorCloneError), proving the usage
-    # check happens first.
     with pytest.raises(RouteUsageError) as excinfo:
         brief(explicit_route=illegal_route)
 
     assert illegal_route in str(excinfo.value)
-
-
-# ---------------------------------------------------------------------------
-# AC-4 — a `route: shared` segment appears in both lanes; a `route: plan`
-# segment appears only in the `plan` lane.
-# ---------------------------------------------------------------------------
 
 
 def test_shared_segment_appears_in_both_lanes_route_specific_segment_in_one(
@@ -307,12 +251,6 @@ def test_segments_are_ordered_ascending_by_order(
     assert orders == sorted(orders)
 
 
-# ---------------------------------------------------------------------------
-# AC-5 — zero applicable segments after filtering is fail-loud; a missing
-# segment directory propagates the loader's own SegmentLoadError.
-# ---------------------------------------------------------------------------
-
-
 def test_resolved_route_with_zero_applicable_segments_is_fail_loud(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -332,7 +270,7 @@ def test_empty_residue_directory_raises_fail_loud_not_empty_envelope(
 ) -> None:
     content_root = tmp_path / "content-root"
     residue_dir = content_root / "skills" / "plan" / "residue"
-    residue_dir.mkdir(parents=True)  # exists, but carries zero segment files
+    residue_dir.mkdir(parents=True)
     _patch_content_root(monkeypatch, content_root)
 
     with pytest.raises(ResidueAssembleError) as excinfo:
@@ -344,19 +282,13 @@ def test_empty_residue_directory_raises_fail_loud_not_empty_envelope(
 def test_absent_residue_directory_raises_segment_load_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    content_root = tmp_path / "content-root"  # never created at all
+    content_root = tmp_path / "content-root"
     _patch_content_root(monkeypatch, content_root)
 
     with pytest.raises(ResidueAssembleError) as excinfo:
         brief(explicit_route="plan")
 
     assert "residue directory not found" in str(excinfo.value)
-
-
-# ---------------------------------------------------------------------------
-# AC-6 — the segment directory resolves in exactly ONE step: no fallback
-# probing of alternate locations.
-# ---------------------------------------------------------------------------
 
 
 def test_residue_dir_is_content_root_skills_plan_residue_relative_path(
@@ -368,12 +300,6 @@ def test_residue_dir_is_content_root_skills_plan_residue_relative_path(
     result = brief(explicit_route="plan")
 
     assert result["decisions"]["residue_dir"] == "skills/plan/residue"
-
-
-# ---------------------------------------------------------------------------
-# AC-8 — an unresolvable content root exits transport (propagated
-# ResolveCoordinatorCloneError, distinct from AC-5's business failure).
-# ---------------------------------------------------------------------------
 
 
 def test_unresolvable_content_root_propagates_resolve_error(
@@ -391,12 +317,6 @@ def test_unresolvable_content_root_propagates_resolve_error(
         brief(explicit_route="plan")
 
     assert "coordinator:install" in str(excinfo.value)
-
-
-# ---------------------------------------------------------------------------
-# AC-9 — segment frontmatter is segment_id/route/class/order; `surface`
-# appears nowhere in this module's own vocabulary.
-# ---------------------------------------------------------------------------
 
 
 def test_selected_segments_carry_route_key_not_surface_key(
@@ -431,33 +351,10 @@ def test_segment_source_path_is_relative_not_absolute(
         assert source_path.startswith("skills/plan/residue/"), source_path
 
 
-# ---------------------------------------------------------------------------
-# Chunk C13 — `gates` assembly coverage. Every wave-2 predicate producer's
-# contract row must resolve to either a populated field or the
-# `undetermined` sentinel, at the `gates.<namespace>.*` path each producer
-# module's own docstring documents (this is AC2's oracle: it is what stops
-# a row going silently missing from the assembled envelope). `plan_path`/
-# `sizing_object_path` are both left absent here deliberately — every row
-# then resolves through its own `undetermined(...)` branch, which is
-# itself a legal, populated `gates.*` leaf per this package's one sentinel
-# contract; a row a caller DOES supply inputs for is exercised by each
-# producer module's own co-located test suite, not re-tested here.
-#
-# Spec backlink: pln-plan-assemble-wave-2-the-predi-fad89b, chunk C13
-# ---------------------------------------------------------------------------
-
 _MISSING = object()
 
 
 def _navigate(node: Any, path: tuple[str, ...]) -> Any:
-    """Walk *node* through *path*, one dict key at a time.
-
-    An `undetermined` sentinel encountered before *path* is exhausted
-    propagates as the terminal value (per `predicates.composed._field`'s
-    own convention — an undetermined row never gets indexed into further).
-    Returns the sentinel object `_MISSING` if a key is absent at any point
-    (a silently-missing row — the failure mode this test exists to catch).
-    """
     current = node
     for key in path:
         if isinstance(current, dict) and current.get("undetermined") is True:
@@ -468,14 +365,7 @@ def _navigate(node: Any, path: tuple[str, ...]) -> Any:
     return current
 
 
-#: Every wave-2 contract row this package's producers compute, paired with
-#: the `gates.<namespace>.*` path `residue.brief`'s `_assemble_gates`
-#: assembles it to. `("triage", ...)` navigates `gates["triage"][...]`,
-#: and so on. Grouped by the plan's own Layer partition (Branch A / Branch
-#: B / Branch C / Exit / Layer 1 / Layer 2) for cross-reference against
-#: `## Layer partition — the row ledger` in the wave-2 plan.
 _ROW_PATHS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    # --- Layer 0, Branch A (triage.py) ---------------------------------
     (":30 sizing_object.present", ("triage", "sizing_object", "present")),
     (":30 sizing_object.path", ("triage", "sizing_object", "path")),
     (":32a sizing_object.arrival", ("triage", "sizing_object", "arrival")),
@@ -490,8 +380,6 @@ _ROW_PATHS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (":40 sizing_wall.source_memo", ("triage", "sizing_wall", "source_memo")),
     (":42 sizing_wall.carveout", ("triage", "sizing_wall", "carveout")),
     (":50 handoff_prescribes_plan", ("triage", "handoff_prescribes_plan", "handoff_prescribes_plan")),
-    # --- Layer 0, Branch B (substrate_seven_dim.py / substrate_scans.py /
-    #     citation_staleness.py / concurrent_preflight.py) ---------------
     (":72 problem_set.present", ("substrate", "problem_set", "present")),
     (":72 problem_set.path", ("substrate", "problem_set", "path")),
     (":73 scope_mode.value", ("substrate", "scope_mode", "value")),
@@ -526,13 +414,10 @@ _ROW_PATHS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (":159 mutates_shared_symbol.consumer_count", ("substrate", "mutates_shared_symbol", "consumer_count")),
     (":166 scaffold_checklist.items_1_5", ("substrate", "scaffold_checklist", "items_1_5")),
     (":166 scaffold_checklist.item_6_grep_present", ("substrate", "scaffold_checklist", "item_6_grep_present")),
-    # --- Layer 1 (shared_booleans.py, no DoE row) -----------------------
     (":105(3a) collapse.scope_file_count_le_2", ("substrate", "collapse", "scope_file_count_le_2")),
     (":105(3a) collapse.scope_file_count", ("substrate", "collapse", "scope_file_count")),
     (":105(3d) collapse.no_cross_repo_contract", ("substrate", "collapse", "no_cross_repo_contract")),
     (":105(3d) collapse.crossing_paths", ("substrate", "collapse", "crossing_paths")),
-    # --- Layer 0, Branch C (composition_lints.py / composition_graph.py /
-    #     supersedes_index.py) --------------------------------------------
     (":136 spine_row_shape.valid", ("composition", "spine_row_shape", "valid")),
     (":137 ac_reject_list.hits", ("composition", "ac_reject_list", "hits")),
     (":143 deferral_case_against.entries", ("composition", "deferral_case_against", "entries")),
@@ -550,9 +435,7 @@ _ROW_PATHS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (":164 supersedes_plan.target", ("composition", "supersedes_plan", "target")),
     (":172 chunk_index_sidecar.exists", ("composition", "chunk_index_sidecar", "exists")),
     (":172 chunk_index_sidecar.path", ("composition", "chunk_index_sidecar", "path")),
-    # --- Exit (exit_gates.py) -------------------------------------------
     (":189 sizing_object_flag.passed", ("exit", "sizing_object_flag", "passed")),
-    # --- Layer 2 (composed.py) — pure composition over the above --------
     (":44 trivial_conjunction", ("triage", "trivial_conjunction")),
     (":57 nontrivial_disjunction", ("triage", "nontrivial_disjunction")),
     (":90(7) seven_dim.fix_locus", ("substrate", "seven_dim", "fix_locus")),
@@ -593,16 +476,6 @@ def test_every_contract_row_resolves_to_populated_field_or_undetermined_sentinel
 
     assert not missing_rows, f"rows silently missing from gates: {missing_rows}"
 
-    # Not every row goes `undetermined` without a plan, and asserting so
-    # would be false: a row's disposition here follows its SOURCE, not the
-    # absent flag. Rows sourced from the already-resolved route (`:33`,
-    # `:34`, `:139`, `:195-198`), from a static table (`:38`), or from the
-    # repo tree rather than the plan (`:37`/`:39`, `:83`) all resolve
-    # legitimately. What must hold is the converse: a row whose ONLY source
-    # is the plan body or its frontmatter cannot invent an answer without
-    # one, and must reach for the sentinel rather than a guessed `False`.
-    # That is the branch this test exercises, and it is the assertion worth
-    # making.
     plan_sourced_primaries = {
         ":85-87 staleness.scope_paths_stale",
         ":85-87 staleness.cited_lines_stale",
@@ -642,15 +515,6 @@ def test_every_contract_row_resolves_to_populated_field_or_undetermined_sentinel
 def test_judgment_points_carries_architectural_tier_candidate_evidence_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`:59` -> exactly one `judgment_points[]` entry, three named
-    candidate criteria (never a `multi-stakeholder` entry, per AC4), and a
-    `None` disposition — this engine presents evidence, it never resolves
-    the `U`-classified verdict itself.
-
-    Requires `--plan`: the entry is deliberately suppressed without one, so
-    that a wave-1 caller's `judgment_points` stays `[]` and the EM is never
-    handed a judgment point whose every candidate reads "could not look."
-    """
     content_root = _make_residue_dir(tmp_path)
     _patch_content_root(monkeypatch, content_root)
 
@@ -672,11 +536,6 @@ def test_judgment_points_carries_architectural_tier_candidate_evidence_only(
     }
     assert "multi-stakeholder" not in criteria_names
 
-    # The bare `disposition: None` key this used to assert is gone: the entry
-    # is now built through the shared constructor, so "the engine presents
-    # evidence, the EM names the criterion" is expressed as a real
-    # `recommendation=None` on an addressable point rather than a key no
-    # consumer could act on. `candidate_criteria` above is unchanged.
     assert "disposition" not in entry
     assert entry["recommendation"] is None
     assert entry["id"]
@@ -686,18 +545,12 @@ def test_judgment_points_carries_architectural_tier_candidate_evidence_only(
 def test_withdrawn_and_vacuous_rows_emit_no_field_at_all(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`:43` (vacuous by construction), `:34`'s XL-exit arm (withdrawn),
-    and `:121` (withdrawn) are asserted ABSENT — no field, no
-    `undetermined` entry, nothing to accidentally resurrect. Also covers
-    AC7's `xl_exit` namespace ban at the assembled-envelope level."""
     content_root = _make_residue_dir(tmp_path)
     _patch_content_root(monkeypatch, content_root)
 
     result = brief(explicit_route="plan")
     gates = result["gates"]
 
-    # :34's XL-exit arm — no `workstream_count`/`goal_fk_present` field,
-    # and no `xl_exit` namespace anywhere in the assembled gates dict.
     roadmap_precondition = gates["triage"]["roadmap_precondition"]
     assert "workstream_count" not in roadmap_precondition
     assert "goal_fk_present" not in roadmap_precondition
@@ -715,30 +568,16 @@ def test_withdrawn_and_vacuous_rows_emit_no_field_at_all(
     all_keys = set(_walk_keys(gates))
     assert "xl_exit" not in all_keys
 
-    # :43 — the express-lane carve-out is vacuous by construction; no
-    # field name exists anywhere in this package for it.
     assert "express_lane" not in all_keys
     assert "expedite" not in all_keys
 
-    # :121 — API-rekey, withdrawn in full; no narrower variant either.
     assert "api_rekey" not in all_keys
-
-
-# ---------------------------------------------------------------------------
-# Chunk C13 defect fix — the residue/predicate SPLIT: a bare wave-1 call
-# still fail-louds on zero/missing residue exactly as before; a
-# predicates-requested call does NOT abort and still returns a well-formed
-# envelope with `gates` populated.
-# ---------------------------------------------------------------------------
 
 
 def test_bare_call_still_fail_louds_on_missing_residue_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Wave-1 shape unchanged: no `plan_path`, no `sizing_object_path` — a
-    missing residue directory still raises `ResidueAssembleError`, same
-    type, same message, exactly as before this chunk's split."""
-    content_root = tmp_path / "content-root"  # never created at all
+    content_root = tmp_path / "content-root"
     _patch_content_root(monkeypatch, content_root)
 
     with pytest.raises(ResidueAssembleError) as excinfo:
@@ -750,13 +589,7 @@ def test_bare_call_still_fail_louds_on_missing_residue_directory(
 def test_predicates_requested_with_missing_residue_directory_returns_envelope(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Predicates requested (`plan_path` supplied) + residue directory
-    absent: `brief()` does NOT raise. It returns a well-formed envelope —
-    `segments` is `[]`, the absence is reported in-band via `narration`/
-    `decisions["residue_unavailable"]`, and `gates` still carries all four
-    namespaces (this caller's actual ask, which does not depend on the
-    residue corpus at all)."""
-    content_root = tmp_path / "content-root"  # never created at all
+    content_root = tmp_path / "content-root"
     _patch_content_root(monkeypatch, content_root)
 
     plan_file = tmp_path / "plan.md"
@@ -779,10 +612,6 @@ def test_predicates_requested_with_missing_residue_directory_returns_envelope(
 def test_predicates_requested_with_zero_applicable_segments_returns_envelope(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Predicates requested (`sizing_object_path` supplied) + residue
-    directory present but zero segments applicable to the resolved route:
-    `brief()` does NOT raise, same in-band-reporting contract as the
-    missing-directory case above."""
     content_root = _make_residue_dir(
         tmp_path, include_plan=False, include_spec_dispatch=True, include_shared=False
     )
@@ -799,16 +628,4 @@ def test_predicates_requested_with_zero_applicable_segments_returns_envelope(
     assert result["gates"]["substrate"]
     assert result["gates"]["composition"]
     assert result["gates"]["exit"]
-
-
-# ---------------------------------------------------------------------------
-# pln-plan-assemble-admits-instead-o-e441e3 chunks C1/C2 — `gates.triage.
-# admission` (the SIZING-axis FK resolution) and the `next_move` it drives.
-# ---------------------------------------------------------------------------
-
-
-
-
-
-
 

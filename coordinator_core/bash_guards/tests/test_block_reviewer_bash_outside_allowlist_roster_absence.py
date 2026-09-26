@@ -56,16 +56,9 @@ def _wire_identity(monkeypatch, subagent_type=""):
     )
 
 
-# ---------------------------------------------------------------------------
-# _helpers.is_confined_by_roster_absence -- unit-level
-# ---------------------------------------------------------------------------
-
-
 def test_roster_absence_empty_type_never_confines(monkeypatch):
     from coordinator_core.bash_guards import _helpers
 
-    # No resolve_roster call should even be attempted for a falsy leg --
-    # patch it to raise if reached, proving the empty-string short-circuit.
     def _boom():
         raise AssertionError("resolve_roster() must not be called for an empty leg")
 
@@ -101,11 +94,6 @@ def test_roster_absence_fails_closed_on_roster_load_failure(monkeypatch):
     assert _helpers.is_confined_by_roster_absence(_INVENTED_TYPE) is True
 
 
-# ---------------------------------------------------------------------------
-# check() -- full-guard integration: an invented type is now confined
-# ---------------------------------------------------------------------------
-
-
 def test_unenumerated_type_denies_arbitrary_command(monkeypatch):
     _wire_identity(monkeypatch, subagent_type=_INVENTED_TYPE)
     monkeypatch.setattr(guard, "is_confined_by_roster_absence", lambda t: t == _INVENTED_TYPE)
@@ -123,10 +111,6 @@ def test_unenumerated_type_allows_readonly_tier_a_command(monkeypatch):
 
 
 def test_enumerated_non_confined_type_still_allows(monkeypatch):
-    """AC5's negative spec: a type ON the roster but not in the confined
-    set (``coordinator:enricher``) must keep its pre-C2 unrestricted Bash
-    surface -- the new leg must never widen confinement to every enumerated
-    type, only to unenumerated ones."""
     _wire_identity(monkeypatch, subagent_type="")
     monkeypatch.setattr(guard, "is_confined_by_roster_absence", lambda t: False)
     payload = _payload("rm -rf /", agent_type=_ENUMERATED_NON_CONFINED_TYPE)
@@ -134,10 +118,6 @@ def test_enumerated_non_confined_type_still_allows(monkeypatch):
 
 
 def test_already_confined_type_unaffected_by_roster_leg(monkeypatch):
-    """The pre-existing confined type must still be confined even when the
-    roster-absence leg says "not confined" for every leg it is asked about
-    -- proves the OR composition: the cheaper ``is_confined_findings_agent``
-    leg alone is sufficient and the new leg never NARROWS confinement."""
     _wire_identity(monkeypatch, subagent_type=_CONFINED_TYPE)
     monkeypatch.setattr(guard, "is_confined_by_roster_absence", lambda t: False)
     payload = _payload("rm -rf /", agent_type=None)
@@ -146,17 +126,7 @@ def test_already_confined_type_unaffected_by_roster_leg(monkeypatch):
     assert verdict["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-# ---------------------------------------------------------------------------
-# Harness built-ins -- rostered by construction, never confined by this leg
-# ---------------------------------------------------------------------------
-
-
 def test_workflow_subagent_can_run_verification(monkeypatch):
-    """An agent a Workflow script spawns without an ``agentType`` reaches this
-    guard as ``workflow-subagent``. It is a harness built-in, so it must not
-    be confined by roster absence: a workflow executor has to be able to run
-    the tests and typecheck that verify its own edits. Roster is the real
-    built-in constant alone -- no policy or plugin leg props it up."""
     from coordinator_core.bash_guards import _helpers
     from coordinator_core.hooks import block_unenumerated_agent_type as roster_mod
 

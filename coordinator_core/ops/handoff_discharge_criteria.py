@@ -113,30 +113,14 @@ from coordinator_core.ops.fleet._common import handoff_archive_dest, main_worktr
 from coordinator_core.ops.handoff_correct_body import _MAX_OLD_STRING_LEN
 from coordinator_core.ops.handoff_correct_body import _handler as _correct_body_handler
 
-# ---------------------------------------------------------------------------
-# Body parsing — locate the "## Acceptance criteria" section and its
-# checkboxes, resolving each by criterion identity or structural position
-# (AC17). Never by raw line-text match.
-# ---------------------------------------------------------------------------
 
 _ANY_HEADING_LINE_RE = re.compile(r"^(#{1,6})[ \t]")
 _ACC_CRITERIA_HEADING_RE = re.compile(
     r"^#{1,6}[ \t]+acceptance criteria\b", re.IGNORECASE
 )
-# A checkbox list item — captures indent, the marker character (' '/'x'/'X'),
-# the trailing text, and the line's own ending (so reconstruction preserves
-# the file's exact newline convention rather than assuming "\n").
 _CHECKBOX_LINE_RE = re.compile(r"^([ \t]*)-[ \t]*\[([ xX])\][ \t]*(.*?)([\r\n]*)$")
-# Criterion-identity token — "AC-1", "AC1", "AC-2b", case-insensitive. Used
-# only to find the identity tag associated with a checkbox, never to match
-# the checkbox line itself.
 _CRITERION_ID_RE = re.compile(r"\bAC-?\d+[A-Za-z]?\b", re.IGNORECASE)
 
-# Cap on how far back this module will expand context lines to build a
-# body-unique old_string for a resolved checkbox (mirrors the C3 duplicate-
-# checkbox-line test's own "just enough context" shape, generalized with a
-# bound rather than unbounded expansion). A body this repetitive within this
-# many lines is a distinct, reported refusal rather than silent overreach.
 _MAX_CONTEXT_EXPANSION_LINES = 30
 
 
@@ -145,13 +129,6 @@ def _normalize_criterion_id(value: str) -> str:
 
 
 def _parse_checkboxes(body: str) -> "list[dict]":
-    """Return every checkbox item within the body's `## Acceptance criteria`
-    section (or the first heading matching that text, case-insensitive, at
-    any level 1-6), in document order. Each item carries its 1-indexed
-    structural `position` and, when a nearby `AC-N`-shaped token is found in
-    the contiguous non-blank text immediately above it, its `criterion_id`.
-    Empty list when no such section exists.
-    """
     lines = body.splitlines(keepends=True)
 
     section_start = None
@@ -171,21 +148,11 @@ def _parse_checkboxes(body: str) -> "list[dict]":
             section_end = i
             break
 
-    # Line indices (within `lines`) of every checkbox in this section, in
-    # document order — used below to bound the backward-context scan so it
-    # can never cross into a previous list item's continuation lines.
     checkbox_line_idxs = [
         i for i in range(section_start, section_end)
         if _CHECKBOX_LINE_RE.match(lines[i])
     ]
 
-    # First pass: for every checkbox, find the extent of its OWN text —
-    # its own line plus any wrapped continuation lines (contiguous
-    # non-blank lines below it, up to the next checkbox or section end).
-    # `own_text_end[pos]` is the line index one PAST the last line that
-    # belongs to that item's own text — the true boundary a previous
-    # item's continuation occupies, which is NOT simply its checkbox line
-    # (a wrapped continuation can span several lines past it).
     own_text_end: "list[int]" = []
     own_texts: "list[str]" = []
     for pos, i in enumerate(checkbox_line_idxs):
@@ -212,14 +179,7 @@ def _parse_checkboxes(body: str) -> "list[dict]":
         cm = _CHECKBOX_LINE_RE.match(lines[i])
         ordinal += 1
         criterion_id = None
-        # F1 (chain-review Slice B): resolve identity from the checkbox
-        # item's OWN text first (including wrapped continuation lines) —
-        # real handoff bodies wrap acceptance criteria across multiple
-        # lines, so the line immediately above a checkbox is usually the
         # PREVIOUS item's continuation, not this item's identity tag. Only
-        # fall back to preceding context — bounded at the END of the
-        # previous item's own text, never crossing into its continuation
-        # lines — when this item's own text carries no AC token.
         idm = _CRITERION_ID_RE.search(own_texts[pos])
         if idm:
             criterion_id = idm.group(0)
@@ -262,11 +222,6 @@ def _build_unique_replacement(
         if start < 0:
             break
         old_candidate = "".join(lines[start:line_idx + 1])
-        # F5 (chain-review Slice B): bound the expansion by the same
-        # character cap `handoff_correct_body` enforces on old_string, so a
-        # too-large candidate is reported in this module's own terms rather
-        # than surfacing as an opaque `correct_body` refusal naming a param
-        # this caller never supplied.
         if len(old_candidate) > _MAX_OLD_STRING_LEN:
             return None, (
                 "cannot construct a body-unique replacement target for the "
@@ -288,13 +243,6 @@ def _build_unique_replacement(
 def _resolve_read_path(
     handoff_path_raw: str, repo_root: Path
 ) -> "tuple[Optional[Path], Optional[str]]":
-    """Read-only path resolution mirroring `handoff_correct_body._handler`'s
-    own live-then-archive resolution (AC12), duplicated here SOLELY so this
-    wrapper can read the target's current body to resolve a checkbox by
-    identity/position before delegating the write. Never used for, and
-    never a substitute for, `handoff_correct_body._handler`'s own
-    authoritative re-resolution under lock.
-    """
     worktree = main_worktree_root(repo_root)
     p = Path(handoff_path_raw)
     if not p.is_absolute():
@@ -419,10 +367,6 @@ async def _handler(
     try:
         text = p.read_bytes().decode("utf-8")
     except (OSError, UnicodeDecodeError) as exc:
-        # F6 (chain-review Slice B): UnicodeDecodeError is a ValueError, not
-        # an OSError — uncaught it escaped the {exit_code: 1} envelope
-        # contract, reintroducing the defect class handoff_correct_body
-        # already fixed for embedded NULs.
         return _err(f"cannot read handoff file: {exc}")
 
     split = split_frontmatter(text)
@@ -478,16 +422,7 @@ async def _handler(
     ending = target["ending"]
 
     if is_split:
-        # F4 (chain-review): after a split, the still-unmet line MUST remain
-        # the one addressable by criterion_id — identity is owned by the
-        # checkbox's OWN text (F1's governing principle), so the caller's
         # unmet_text is REQUIRED to carry it, rather than this op injecting
-        # it (mutating human-authored text) or accepting a new out-of-band
-        # identity parameter (reintroducing the shape F1 removed). Only
-        # enforced when the criterion being split actually carries a
-        # resolvable identity — a checkbox with none was never addressable
-        # by criterion_id before the split either, so there is nothing to
-        # preserve.
         if target["criterion_id"] is not None:
             wanted_id = _normalize_criterion_id(target["criterion_id"])
             found_ids = {

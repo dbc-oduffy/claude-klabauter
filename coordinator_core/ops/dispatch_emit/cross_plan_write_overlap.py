@@ -1,14 +1,3 @@
-"""Refuse to emit a plan whose declared ``writes:`` overlap another LIVE
-plan's in this shared tree.
-
-Checked at emit, not at ``claim-plan``: a claimed plan's spine can change
-before it runs, and emit is where dispatchable work is produced. Refuses
-rather than warns, because a warning does not stop one plan's wave landing
-over another's.
-
-No git spawn: the common dir is resolved from path reads, and each live peer
-claim costs one ``read_spine``.
-"""
 
 from __future__ import annotations
 
@@ -23,13 +12,11 @@ from coordinator_core.session.claimed_plan import _resolve_plan_slug_path
 from coordinator_core.session.liveness import claim_holder_live
 
 #: Mirrors `ops.fleet._common._CLAIM_SUBDIRS[2]`; importing `_common` pulls
-#: `coordinator_core.ops`'s eager import sweep.
 _PLAN_CLAIMS_SUBDIR = "plan-claims"
 
 
 class CrossPlanWriteOverlap(ValueError):
-    """Raised when this plan's declared ``writes:`` overlap a LIVE peer
-    plan's -- both would-be dispatchable at once in the same shared tree."""
+    pass
 
 
 def _write_paths_from_rows(rows) -> set:
@@ -46,19 +33,14 @@ def _write_paths_from_rows(rows) -> set:
 
 
 def _declared_write_paths(plan_path: Path) -> set:
-    """A peer plan's writes, read fresh."""
     try:
         rows = read_spine(plan_path)
     except Exception:
-        # An unparseable peer (mid-edit, moved) is not evidence of a
-        # collision: fail open on that peer only.
         return set()
     return _write_paths_from_rows(rows)
 
 
 def _live_peer_plan_claims(common_dir: Path, exclude_slug: str, cwd: str) -> list:
-    """Live plan-claim dirs other than ``exclude_slug``. Liveness is the
-    reaper's own key, so a dead holder's stale claim never blocks."""
     base = _sessions_dir(common_dir) / _PLAN_CLAIMS_SUBDIR
     if not base.is_dir():
         return []
@@ -81,9 +63,6 @@ def _live_peer_plan_claims(common_dir: Path, exclude_slug: str, cwd: str) -> lis
 def check_cross_plan_write_overlap(
     plan_path, rows, repo_root: Optional[Path]
 ) -> None:
-    """Raise ``CrossPlanWriteOverlap`` if ``rows``' writes overlap a live
-    peer plan's. ``rows`` is the caller's parsed spine; ``plan_path`` is
-    never re-read."""
     if repo_root is None:
         return
     this_writes = _write_paths_from_rows(rows)

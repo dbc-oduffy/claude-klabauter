@@ -46,19 +46,10 @@ import coordinator_core.ops.deliverable_rollup as _rollup_mod
 from coordinator_core.ops.deliverable_rollup import _handler, _scan_artifacts_by_deliverable_id
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
-
-
-# ---------------------------------------------------------------------------
-# RollupRepo — lightweight fixture class (no git ops needed by the handler,
-# but git init is provided so common_dir matches the standard-layout convention
-# used by main_worktree_root: common_dir.parent == worktree root).
-# ---------------------------------------------------------------------------
 
 
 class RollupRepo:
@@ -83,16 +74,8 @@ class RollupRepo:
 
     @property
     def common_dir(self) -> Path:
-        """Absolute path to the git common dir (.git for a non-worktree repo).
-
-        Handlers receive this as their repo_root arg; main_worktree_root(repo_root)
-        returns common_dir.parent == self.root (the actual worktree).
-        """
         return (self.root / ".git").resolve()
 
-    # ------------------------------------------------------------------
-    # Helpers for writing fixture content
-    # ------------------------------------------------------------------
 
     def write_plan(
         self,
@@ -102,10 +85,6 @@ class RollupRepo:
         initiative: Optional[str] = None,
         title: str = "Test Plan",
     ) -> Path:
-        """Write a production-shaped plan file to docs/plans/<name>.
-
-        Returns the absolute path to the created file.
-        """
         path = self.root / "docs" / "plans" / name
         path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -117,7 +96,6 @@ class RollupRepo:
         if deliverable_id is not None:
             lines.append(f"deliverable_id: {deliverable_id}")
         if initiative is not None:
-            # YAML null for Python None — emit bare null; emit the id as a bare scalar otherwise.
             if initiative == "null":
                 lines.append("initiative: null")
             else:
@@ -138,7 +116,6 @@ class RollupRepo:
         initiative: Optional[str] = None,
         title: str = "Test Handoff",
     ) -> Path:
-        """Write a stub handoff file to state/handoffs/<name>."""
         path = self.root / "state" / "handoffs" / name
         path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -172,12 +149,6 @@ class RollupRepo:
         initiative: Optional[str] = None,
         title: str = "Test Archive Handoff",
     ) -> Path:
-        """Write a stub handoff file to archive/handoffs/<subdir>/<name>.
-
-        Purpose: exercises the recursive archive/handoffs/**/*.md scan path.
-        """
-        # Add archive-handoff writer to exercise archive/handoffs/**/*.md
-        # scan glob (F4); the recursive pattern differs structurally from the flat *.md paths.
         path = self.root / "archive" / "handoffs" / subdir / name
         path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -211,12 +182,6 @@ class RollupRepo:
         initiative: Optional[str] = None,
         title: str = "Test Archive Spec",
     ) -> Path:
-        """Write a plan-shaped file to archive/specs/<subdir>/<name>.
-
-        Purpose: exercises the recursive archive/specs/**/*.md scan path (C1).
-        `fleet.archive_completed_plans` moves a plan here from docs/plans/ the
-        instant its status flips terminal.
-        """
         path = self.root / "archive" / "specs" / subdir / name
         path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -247,7 +212,6 @@ class RollupRepo:
         label: str = "Test Initiative",
         status: str = "active",
     ) -> Path:
-        """Write a minimal state/initiatives/<initiative_id>.yaml."""
         path = self.root / "state" / "initiatives" / f"{initiative_id}.yaml"
         path.parent.mkdir(parents=True, exist_ok=True)
         content = f"label: {label!r}\nstatus: {status!r}\n"
@@ -262,12 +226,6 @@ class RollupRepo:
         plan_id: Optional[str] = None,
         intent: str = "Test sizing intent.",
     ) -> Path:
-        """Write a whole-document YAML sizing object to state/sizings/<name>.
-
-        Purpose: exercises the flat state/sizings/*.yaml scan path (C10 leg
-        (a)). Sizings have NO `---` frontmatter fence — unlike every other
-        write_* helper on this fixture, this is a bare YAML document.
-        """
         path = self.root / "state" / "sizings" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         lines = [f'intent: "{intent}"', "schema: sizing-object"]
@@ -287,28 +245,8 @@ class RollupRepo:
         return {str(p) for p in self.root.rglob("*") if p.is_file()}
 
 
-# ---------------------------------------------------------------------------
-# Fixture
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture
 def rollup_repo(tmp_path) -> RollupRepo:
-    """Provide a temporary git-init'd repository for deliverable.rollup op tests.
-
-    The repo has:
-      - git config user.email / user.name / commit.gpgsign=false set
-      - A .git directory (standard layout) so common_dir.parent == worktree root
-      - No initial commit required (handler performs zero git operations)
-
-    Usage::
-
-        def test_something(rollup_repo):
-            rollup_repo.write_plan("p.md", deliverable_id="dlv-x", initiative="init-y")
-            rollup_repo.write_initiative("init-y", label="Y", status="active")
-            result = _handler({"deliverable_id": "dlv-x"}, repo_root=rollup_repo.common_dir)
-            assert result["artifacts_matched"] == 1
-    """
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
 
@@ -327,11 +265,6 @@ def rollup_repo(tmp_path) -> RollupRepo:
     _git("config", "commit.gpgsign", "false")
 
     return RollupRepo(repo_root)
-
-
-# ---------------------------------------------------------------------------
-# Autouse reset — prevent module-scope memo state leaking between tests
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
@@ -354,26 +287,17 @@ def _reset_central_root_memo(monkeypatch: pytest.MonkeyPatch) -> None:
     _rollup_mod._reset_central_root_cache()
 
     # COORDINATOR_ENGINE_ROOT is the live var name (the CLAUDE_KLABAUTER_ROOT -> COORDINATOR_ENGINE_ROOT
-    # dual-read window is closed; coordinator_engine_root_env() answers from the new name only).
     # Both are cleared so a process-level COORDINATOR_ENGINE_ROOT (e.g. set by this host's own
-    # install/session environment) cannot leak into a test expecting worktree-local fallback.
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
     monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     monkeypatch.setattr(_rollup_mod, "_machine_local_get", lambda key: None)
 
     yield
 
-    # Post-test cleanup (safety net for tests that mutate globals without monkeypatch).
     _rollup_mod._reset_central_root_cache()
 
 
-# ---------------------------------------------------------------------------
-# Helper — assert the payload schema is well-formed
-# ---------------------------------------------------------------------------
-
-
 def _assert_schema(result: dict, deliverable_id: str) -> None:
-    """Assert the result satisfies the pinned return-field schema (C0 findings)."""
     assert result["deliverable_id"] == deliverable_id
     assert result["resolution_mode"] == "direct"
     assert isinstance(result["artifacts_matched"], int)
@@ -385,14 +309,7 @@ def _assert_schema(result: dict, deliverable_id: str) -> None:
     assert isinstance(result["scan_incomplete"], bool)
 
 
-# ---------------------------------------------------------------------------
-# (i) resolvable single artifact
-# ---------------------------------------------------------------------------
-
-
 def test_resolvable_single_artifact(rollup_repo: RollupRepo) -> None:
-    """A plan carrying deliverable_id + a non-null initiative FK resolves to a real
-    initiatives file → advances_initiatives contains that initiative."""
     rollup_repo.write_plan(
         "2026-07-06-my-feature.md",
         deliverable_id="dlv-single-a",
@@ -418,14 +335,7 @@ def test_resolvable_single_artifact(rollup_repo: RollupRepo) -> None:
     assert entry["status"] == "active"
 
 
-# ---------------------------------------------------------------------------
-# (ii) multi-artifact-per-deliverable → UNION/aggregate, deduped by id
-# ---------------------------------------------------------------------------
-
-
 def test_multi_artifact_aggregate_union(rollup_repo: RollupRepo) -> None:
-    """Two plans share the same deliverable_id; each carries a different initiative FK.
-    advances_initiatives is the UNION of both, deduped by id.  AC3: aggregate, NOT omit."""
     rollup_repo.write_plan(
         "2026-07-06-feature-plan.md",
         deliverable_id="dlv-multi-b",
@@ -451,8 +361,6 @@ def test_multi_artifact_aggregate_union(rollup_repo: RollupRepo) -> None:
 
 
 def test_multi_artifact_deduplication(rollup_repo: RollupRepo) -> None:
-    """Three plans share a deliverable_id; two carry the same initiative FK.
-    advances_initiatives deduplicates by id — the repeated FK appears once only."""
     for suffix in ("a", "b", "c"):
         rollup_repo.write_plan(
             f"2026-07-06-plan-{suffix}.md",
@@ -468,23 +376,15 @@ def test_multi_artifact_deduplication(rollup_repo: RollupRepo) -> None:
 
     _assert_schema(result, "dlv-dedup-c")
     assert result["artifacts_matched"] == 3
-    # Three artifacts, same FK — deduped to one entry.
     assert len(result["advances_initiatives"]) == 1
     assert result["advances_initiatives"][0]["id"] == "shared-init"
 
 
-# ---------------------------------------------------------------------------
-# (iii) null/absent initiative FK → that edge omitted, safe-empty for that artifact
-# ---------------------------------------------------------------------------
-
-
 def test_null_initiative_fk_omitted(rollup_repo: RollupRepo) -> None:
-    """An artifact with a null initiative FK contributes to artifacts_matched but
-    produces no entry in advances_initiatives.  Empty list is the safe null."""
     rollup_repo.write_plan(
         "2026-07-06-no-initiative.md",
         deliverable_id="dlv-null-fk-d",
-        initiative="null",  # explicit null in YAML
+        initiative="null",
     )
 
     result = _handler(
@@ -498,14 +398,11 @@ def test_null_initiative_fk_omitted(rollup_repo: RollupRepo) -> None:
 
 
 def test_unresolvable_fk_omitted(rollup_repo: RollupRepo) -> None:
-    """An artifact carries a non-null initiative FK, but no state/initiatives/<id>.yaml
-    exists.  Precision-over-recall: that edge is omitted, advances_initiatives is empty."""
     rollup_repo.write_plan(
         "2026-07-06-dangling-init.md",
         deliverable_id="dlv-dangling-e",
         initiative="nonexistent-init",
     )
-    # Intentionally do NOT write a state/initiatives/nonexistent-init.yaml file.
 
     result = _handler(
         {"deliverable_id": "dlv-dangling-e"},
@@ -518,8 +415,6 @@ def test_unresolvable_fk_omitted(rollup_repo: RollupRepo) -> None:
 
 
 def test_mixed_null_and_resolvable_fks(rollup_repo: RollupRepo) -> None:
-    """Two artifacts: one null FK (omitted), one resolvable FK (included).
-    Precision-over-recall governs at the edge level, not the deliverable level."""
     rollup_repo.write_plan(
         "2026-07-06-plan-null.md",
         deliverable_id="dlv-mixed-f",
@@ -543,15 +438,7 @@ def test_mixed_null_and_resolvable_fks(rollup_repo: RollupRepo) -> None:
     assert result["advances_initiatives"][0]["id"] == "real-init"
 
 
-# ---------------------------------------------------------------------------
-# (iv) unknown / absent deliverable_id → safe-empty, no error
-# ---------------------------------------------------------------------------
-
-
 def test_unknown_deliverable_id(rollup_repo: RollupRepo) -> None:
-    """A deliverable_id that no artifact carries returns artifacts_matched=0 and
-    an empty advances_initiatives.  No exception is raised."""
-    # Write a plan with a different deliverable_id to confirm the scan is running.
     rollup_repo.write_plan(
         "2026-07-06-other.md",
         deliverable_id="dlv-other",
@@ -570,12 +457,8 @@ def test_unknown_deliverable_id(rollup_repo: RollupRepo) -> None:
 
 
 def test_absent_deliverable_id_param(rollup_repo: RollupRepo) -> None:
-    """deliverable_id param absent from the wire dict → empty payload, no error."""
     result = _handler({}, repo_root=rollup_repo.common_dir)
 
-    # When deliverable_id is absent/empty the handler returns an empty payload.
-    # Pin echoed deliverable_id="" to confirm the producer contract
-    # guarantees deliverable_id is present in every response, including the absent-param path.
     assert result["deliverable_id"] == ""
     assert result["resolution_mode"] == "direct"
     assert result["artifacts_matched"] == 0
@@ -583,18 +466,11 @@ def test_absent_deliverable_id_param(rollup_repo: RollupRepo) -> None:
 
 
 def test_none_repo_root_returns_safe_empty() -> None:
-    """repo_root=None → safe-empty payload; no filesystem access attempted."""
     result = _handler({"deliverable_id": "dlv-no-repo"}, repo_root=None)
 
     _assert_schema(result, "dlv-no-repo")
     assert result["artifacts_matched"] == 0
     assert result["advances_initiatives"] == []
-
-
-# ---------------------------------------------------------------------------
-# (v) malformed / injected deliverable_id → safe-empty, NOT an error
-#     The wire token is NEVER used as a filesystem path component.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -605,11 +481,8 @@ def test_none_repo_root_returns_safe_empty() -> None:
         "/etc/passwd",
         "/absolute/path/attempt",
         "../",
-        # embedded null byte — cannot appear in a real frontmatter value
         "dlv-null\x00byte",
-        # path traversal mixed with a plausible deliverable fragment
         "../dlv-real",
-        # blank / whitespace-only (treated as absent)
         "",
         "   ",
     ],
@@ -617,33 +490,21 @@ def test_none_repo_root_returns_safe_empty() -> None:
 def test_malformed_deliverable_id_safe_empty(
     rollup_repo: RollupRepo, malformed_id: str
 ) -> None:
-    """Malformed or injected deliverable_id values never produce a filesystem path.
-    The token is used only as a frontmatter filter VALUE (string equality).
-    All malformed inputs return safe-empty; no exception is raised."""
     result = _handler(
         {"deliverable_id": malformed_id},
         repo_root=rollup_repo.common_dir,
     )
 
-    # Schema keys must be present.
     assert result["resolution_mode"] == "direct"
-    # Assert value, not just type; a bug matching traversal tokens
-    # would still pass advances_initiatives==[] but produce non-zero artifacts_matched.
     assert result["artifacts_matched"] == 0
     assert isinstance(result["advances_initiatives"], list)
-    # No artifacts should ever match a path-traversal token.
     assert result["advances_initiatives"] == []
-    # No error propagated — safe-empty is the response.
 
 
-# ---------------------------------------------------------------------------
 # (vi) COMPUTE_ONLY no-write assertion
-# ---------------------------------------------------------------------------
 
 
 def test_compute_only_no_write(rollup_repo: RollupRepo) -> None:
-    """Invoking the handler writes no file anywhere under the worktree.
-    The set of files before and after the call must be identical."""
     rollup_repo.write_plan(
         "2026-07-06-compute-only.md",
         deliverable_id="dlv-compute-g",
@@ -660,11 +521,9 @@ def test_compute_only_no_write(rollup_repo: RollupRepo) -> None:
 
     after = rollup_repo.snapshot_paths()
 
-    # Handler must have returned a valid result (not failed silently).
     assert result["artifacts_matched"] == 1
     assert len(result["advances_initiatives"]) == 1
 
-    # No new files written, no existing files deleted.
     assert after == before, (
         f"Handler wrote unexpected files: {after - before}; "
         f"missing files: {before - after}"
@@ -672,8 +531,6 @@ def test_compute_only_no_write(rollup_repo: RollupRepo) -> None:
 
 
 def test_compute_only_no_write_empty_result(rollup_repo: RollupRepo) -> None:
-    """Even when the deliverable_id is unknown (safe-empty path), no file is written."""
-    # Write something so the worktree is not completely empty.
     rollup_repo.write_plan("2026-07-06-background.md", deliverable_id="dlv-bg")
 
     before = rollup_repo.snapshot_paths()
@@ -687,18 +544,7 @@ def test_compute_only_no_write_empty_result(rollup_repo: RollupRepo) -> None:
     assert after == before
 
 
-# ---------------------------------------------------------------------------
-# (vii) state/handoffs scan path — exercises secondary scan surface
-# ---------------------------------------------------------------------------
-
-
 def test_handoff_scan_path(rollup_repo: RollupRepo) -> None:
-    """A stub handoff carrying deliverable_id + non-null initiative FK is found via
-    the state/handoffs/*.md scan glob.
-
-    state/handoffs/*.md scan path was untested;
-    write_handoff() existed but was never called. Confirms multi-surface scan, not just docs/plans.
-    """
     rollup_repo.write_handoff(
         "2026-07-06-handoff-scan-test.md",
         deliverable_id="dlv-handoff-scan",
@@ -712,24 +558,12 @@ def test_handoff_scan_path(rollup_repo: RollupRepo) -> None:
     )
 
     _assert_schema(result, "dlv-handoff-scan")
-    assert result["artifacts_matched"] == 1  # Each test writes exactly one artifact; >= 1 would miss inflation bugs
+    assert result["artifacts_matched"] == 1
     initiative_ids = {e["id"] for e in result["advances_initiatives"]}
     assert "init-handoff-h" in initiative_ids
 
 
-# ---------------------------------------------------------------------------
-# (viii) archive/handoffs scan path — exercises tertiary recursive scan surface
-# ---------------------------------------------------------------------------
-
-
 def test_archive_handoff_scan_path(rollup_repo: RollupRepo) -> None:
-    """A stub handoff in archive/handoffs/<subdir>/ is found via the recursive
-    archive/handoffs/**/*.md scan glob.
-
-    archive/handoffs/**/*.md scan path was untested;
-    no archive fixture existed. The recursive **/*.md pattern differs structurally
-    from the flat *.md patterns for the other two surfaces and was completely dark.
-    """
     rollup_repo.write_archive_handoff(
         "2026-07/",
         "2026-07-01-archived-handoff.md",
@@ -744,24 +578,14 @@ def test_archive_handoff_scan_path(rollup_repo: RollupRepo) -> None:
     )
 
     _assert_schema(result, "dlv-archive-scan")
-    assert result["artifacts_matched"] == 1  # Each test writes exactly one artifact; >= 1 would miss inflation bugs
+    assert result["artifacts_matched"] == 1
     initiative_ids = {e["id"] for e in result["advances_initiatives"]}
     assert "init-archive-i" in initiative_ids
-
-
-# ---------------------------------------------------------------------------
-# (viii-b) C1/AC4 — archive/specs scan path — fourth recursive scan root
-# ---------------------------------------------------------------------------
 
 
 def test_archive_specs_scan_path_deliverable_id_only_under_archive_specs(
     rollup_repo: RollupRepo,
 ) -> None:
-    """AC4: a deliverable_id carried ONLY by a file under
-    archive/specs/<YYYY-MM>/ resolves — the post-archival commit that, before
-    C1, was refused now succeeds. No file with this deliverable_id exists
-    under docs/plans (or any other root), so this proves the new root itself
-    is scanned, not that some other root already covered it."""
     rollup_repo.write_archive_spec(
         "2026-08",
         "2026-08-01-archived-plan.md",
@@ -783,21 +607,7 @@ def test_archive_specs_scan_path_deliverable_id_only_under_archive_specs(
     assert "init-archived-spec" in initiative_ids
 
 
-# ---------------------------------------------------------------------------
-# (ix) traversal guard in initiative_id — malformed frontmatter initiative FK
-# ---------------------------------------------------------------------------
-
-
 def test_traversal_guard_in_initiative_id(rollup_repo: RollupRepo) -> None:
-    """An artifact whose frontmatter contains a path-traversal initiative FK
-    (e.g. '../../evil') resolves to no initiative entry — the traversal guard in
-    _resolve_initiative rejects it before any path construction.
-
-    initiative_id from artifact frontmatter was used
-    in path construction without a traversal guard; an accidental '../../other' value
-    could silently read the wrong YAML. The guard now rejects such ids pre-path-join.
-    """
-    # Write a plan whose initiative FK contains a traversal sequence.
     plan_path = rollup_repo.root / "docs" / "plans" / "2026-07-06-traversal-test.md"
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     content = (
@@ -811,7 +621,6 @@ def test_traversal_guard_in_initiative_id(rollup_repo: RollupRepo) -> None:
     )
     plan_path.write_text(content, encoding="utf-8")
 
-    # Do NOT write any evil.yaml file — if traversal succeeded it would escape state/initiatives/.
 
     result = _handler(
         {"deliverable_id": "dlv-traversal-guard"},
@@ -819,14 +628,11 @@ def test_traversal_guard_in_initiative_id(rollup_repo: RollupRepo) -> None:
     )
 
     _assert_schema(result, "dlv-traversal-guard")
-    # Artifact is found (deliverable_id matched), but the traversal initiative FK is rejected.
     assert result["artifacts_matched"] == 1
     assert result["advances_initiatives"] == []
 
 
-# ---------------------------------------------------------------------------
 # (x) AC1 — central resolution via CLAUDE_KLABAUTER_ROOT env
-# ---------------------------------------------------------------------------
 
 
 def test_ac1_central_resolve_via_claude_klabauter_root_env(
@@ -839,7 +645,6 @@ def test_ac1_central_resolve_via_claude_klabauter_root_env(
     This is the primary failure mode fixed by C1: DoE deliverables with a complete FK
     population return advances_initiatives=[] when the entity lives only centrally.
     """
-    # --- Central (claude-klabauter) tree: holds the initiative entity ---
     central_root = tmp_path / "claude-klabauter-central"
     central_initiatives = central_root / "state" / "initiatives"
     central_initiatives.mkdir(parents=True)
@@ -850,13 +655,11 @@ def test_ac1_central_resolve_via_claude_klabauter_root_env(
 
     monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(central_root))
 
-    # --- DoE-style scan worktree: plan carries FK, NO local state/initiatives/ ---
     rollup_repo.write_plan(
         "2026-07-06-doe-deliverable.md",
         deliverable_id="dlv-doe-central-ac1",
         initiative="fleet-deliverable-spine",
     )
-    # Intentionally do NOT call rollup_repo.write_initiative(...) —
     # the initiative entity lives only in the central (CLAUDE_KLABAUTER_ROOT) tree.
 
     result = _handler(
@@ -873,9 +676,7 @@ def test_ac1_central_resolve_via_claude_klabauter_root_env(
     assert entry["status"] == "active"
 
 
-# ---------------------------------------------------------------------------
 # (xi) AC2 — dual-gate fallback: CLAUDE_KLABAUTER_ROOT unset AND registry returns None
-# ---------------------------------------------------------------------------
 
 
 def test_ac2_fallback_to_worktree_local_dual_gate(
@@ -891,7 +692,6 @@ def test_ac2_fallback_to_worktree_local_dual_gate(
     the correct seam; patching queue_append's copy is a no-op for this op.
     """
     # autouse fixture already: unsets CLAUDE_KLABAUTER_ROOT, patches _machine_local_get → None.
-    # Explicitly patch again to assert the exact target and make the test self-documenting.
     with patch("coordinator_core.ops.deliverable_rollup._machine_local_get", return_value=None):
         rollup_repo.write_plan(
             "2026-07-06-local-fallback.md",
@@ -915,9 +715,7 @@ def test_ac2_fallback_to_worktree_local_dual_gate(
     assert result["advances_initiatives"][0]["id"] == "local-fallback-init"
 
 
-# ---------------------------------------------------------------------------
 # (xii) AC3 — coincident-dir case: CLAUDE_KLABAUTER_ROOT == scan worktree root
-# ---------------------------------------------------------------------------
 
 
 def test_ac3_coincident_dir_realpath_equivalence(
@@ -938,7 +736,6 @@ def test_ac3_coincident_dir_realpath_equivalence(
 
     worktree_root = main_worktree_root(rollup_repo.common_dir)
 
-    # Call _central_initiatives_dir directly to inspect the resolved path.
     resolved_dir = _central_initiatives_dir(worktree_root)
     expected_dir = worktree_root / "state" / "initiatives"
 
@@ -947,7 +744,6 @@ def test_ac3_coincident_dir_realpath_equivalence(
         f"expected={expected_dir!r} (under Path.resolve())"
     )
 
-    # Also confirm an FK resolves end-to-end via the handler.
     rollup_repo.write_plan(
         "2026-07-06-own-worktree.md",
         deliverable_id="dlv-own-worktree-ac3",
@@ -970,28 +766,9 @@ def test_ac3_coincident_dir_realpath_equivalence(
     assert result["advances_initiatives"][0]["id"] == "own-initiative-ac3"
 
 
-# ---------------------------------------------------------------------------
-# Published-mirror refusal (mirrors queue_append's sibling guard, 2026-08-28)
-#
-# `deliverable.rollup`'s `_claude_klabauter_root` previously had no `_refuse_published_mirror`
-# rung at all: under the publish identifier transform, the machine-local registry
-# key it reads is rewritten to name the published mirror, so a published engine
-# would resolve "the central repo" to itself and hand `_central_initiatives_dir`
-# a write-target path inside the gitignored build artifact.
-#
-# Backlink: state/bug-backlog/2026-08-28-deliverable-rollup-writes-initiatives-into-the-published-mirror.yaml
-# ---------------------------------------------------------------------------
-
-
 def test_claude_klabauter_root_refuses_a_root_that_is_the_published_mirror(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A machine-local registry hit that names the published mirror must NOT be
-    returned as the resolved root — this op has no dedicated unresolvable
-    exception (unlike queue_append), so refusal degrades to None, same as any
-    other unresolvable root."""
-    # Rung 1.5 (`engine.source_root`) stubbed absent so this exercises the
-    # repo-named registry rung under test, not whichever key this box has.
     monkeypatch.setattr(_rollup_mod, "_engine_source_root", lambda: None)
     monkeypatch.setattr(_rollup_mod, "_machine_local_get", lambda key: "/repos/publish-mirror")
     monkeypatch.setattr(_rollup_mod, "_is_published_engine_mirror", lambda root: True)
@@ -1003,8 +780,6 @@ def test_claude_klabauter_root_refuses_a_root_that_is_the_published_mirror(
 def test_claude_klabauter_root_returns_a_live_working_tree_unchanged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The negative case: a registry hit that is NOT the published mirror is
-    returned unchanged."""
     monkeypatch.setattr(_rollup_mod, "_engine_source_root", lambda: None)
     monkeypatch.setattr(_rollup_mod, "_machine_local_get", lambda key: "/repos/claude-klabauter")
     monkeypatch.setattr(_rollup_mod, "_is_published_engine_mirror", lambda root: False)
@@ -1014,7 +789,6 @@ def test_claude_klabauter_root_returns_a_live_working_tree_unchanged(
 
 
 def test_env_override_route_is_also_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The env rung is guarded too — it is the rung the warm server poisons."""
     from coordinator_core.telemetry import op_latency
 
     monkeypatch.setattr(_rollup_mod, "coordinator_engine_root_env", lambda _name: "/repos/publish-mirror")
@@ -1027,11 +801,6 @@ def test_env_override_route_is_also_refused(monkeypatch: pytest.MonkeyPatch) -> 
 def test_transform_proof_key_wins_over_a_mirror_naming_registry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The published engine's own Rung 2 names the mirror; Rung 1.5 must win.
-
-    Simulating the mirror-run engine means making the repo-named lookup return
-    the mirror, which is what the publish transform does to that key.
-    """
     monkeypatch.setattr(_rollup_mod, "coordinator_engine_root_env", lambda _name: "")
     monkeypatch.setattr(_rollup_mod, "_engine_source_root", lambda: "/repos/claude-klabauter")
     monkeypatch.setattr(_rollup_mod, "_machine_local_get", lambda key: "/repos/publish-mirror")
@@ -1042,10 +811,6 @@ def test_transform_proof_key_wins_over_a_mirror_naming_registry(
 def test_central_initiatives_dir_falls_back_when_root_is_the_mirror(
     rollup_repo: RollupRepo, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """End-to-end: a central root that resolves to the published mirror does
-    NOT become the initiatives write-target — `_central_initiatives_dir` falls
-    back to worktree-local `state/initiatives/`, exactly like an unresolvable
-    root, and an FK that only exists locally still resolves."""
     from coordinator_core.ops.deliverable_rollup import _central_initiatives_dir
     from coordinator_core.ops.fleet._common import main_worktree_root
 
@@ -1060,21 +825,9 @@ def test_central_initiatives_dir_falls_back_when_root_is_the_mirror(
     assert resolved_dir.resolve() == expected_dir.resolve()
 
 
-# ---------------------------------------------------------------------------
-# (xiii) AC4 — resolve-once: _central_initiatives_dir called once per handler call
-# ---------------------------------------------------------------------------
-
-
 def test_ac4_initiatives_dir_resolved_once_per_handler_call(
     rollup_repo: RollupRepo,
 ) -> None:
-    """AC4: With N>1 matching artifacts, _central_initiatives_dir is invoked exactly
-    once per handler call — NOT once per artifact (not inside the FK loop).
-
-    The handler computes initiatives_dir = _central_initiatives_dir(worktree_root) once
-    before the loop and passes the cached Path into _resolve_initiative per-edge.
-    """
-    # Write 4 artifacts sharing the same deliverable_id, each with a distinct initiative FK.
     for i in range(4):
         rollup_repo.write_plan(
             f"2026-07-06-ac4-plan-{i}.md",
@@ -1101,11 +854,6 @@ def test_ac4_initiatives_dir_resolved_once_per_handler_call(
         f"_central_initiatives_dir was called {spy.call_count} times for 4 artifacts; "
         "expected exactly 1 call per handler invocation (resolve-once invariant)"
     )
-
-
-# ---------------------------------------------------------------------------
-# (xiv) AC9 — WARN emitted on unresolvable fallback; silent on coincident case
-# ---------------------------------------------------------------------------
 
 
 def test_ac9_warn_emitted_on_unresolvable_fallback(
@@ -1170,11 +918,6 @@ def test_ac9_no_warn_on_coincident_case(
     )
 
 
-# ---------------------------------------------------------------------------
-# (xv) AC10 — memoization: _machine_local_get fires at most once across calls
-# ---------------------------------------------------------------------------
-
-
 def test_ac10_machine_local_get_memoized_across_handler_calls(
     rollup_repo: RollupRepo, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1186,8 +929,6 @@ def test_ac10_machine_local_get_memoized_across_handler_calls(
     on the first call; the second call must return the cached result without re-invoking
     the registry subprocess.
     """
-    # Override the autouse lambda with a MagicMock so we can count calls.
-    # Returns the rollup_repo root so central resolution succeeds (no fallback, no WARN).
     mock_get = MagicMock(return_value=str(rollup_repo.root))
     monkeypatch.setattr(_rollup_mod, "_machine_local_get", mock_get)
 
@@ -1202,25 +943,16 @@ def test_ac10_machine_local_get_memoized_across_handler_calls(
         status="active",
     )
 
-    # First call — resolves centrally, populates the memo.
     result1 = _handler({"deliverable_id": "dlv-ac10-memo"}, repo_root=rollup_repo.common_dir)
-    # Second call — must use the memoized value without re-invoking _machine_local_get.
     result2 = _handler({"deliverable_id": "dlv-ac10-memo"}, repo_root=rollup_repo.common_dir)
 
     assert result1["advances_initiatives"][0]["id"] == "memo-initiative"
     assert result2["advances_initiatives"][0]["id"] == "memo-initiative"
 
-    # == 1 not <= 1: call_count==0 would mean memoization skipped
-    # resolution entirely (incorrect pass — AC10 would be unverified).
     assert mock_get.call_count == 1, (
         f"_machine_local_get was called {mock_get.call_count} times across two handler "
         "invocations; expected exactly 1 (first call resolves; second call uses memo — AC10)"
     )
-
-
-# ---------------------------------------------------------------------------
-# (xvi) AC9 WARN-once — sentinel fires exactly once across sequential handler calls
-# ---------------------------------------------------------------------------
 
 
 def test_ac9_warn_fires_exactly_once_across_sequential_calls(
@@ -1268,31 +1000,6 @@ def test_ac9_warn_fires_exactly_once_across_sequential_calls(
     )
 
 
-# ---------------------------------------------------------------------------
-# _machine_local_impl settings-home repoint is now owned by the shared helper
-# (coordinator_core._claude_klabauter_root); see
-# coordinator_core/tests/test_claude_klabauter_root_shared_helper.py (R4, C2/C3,
-# docs/plans/2026-09-22-spawn-budget-and-census.md). deliverable_rollup no
-# longer defines a local _machine_local_impl to test here.
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# _scan_artifacts_by_deliverable_id — blocked scan root vs genuinely-empty deliverable
-#
-# A blocked scan root must never roll up to "deliverable has no artifacts" — that is
-# indistinguishable from the genuinely-empty case unless the scan itself signals
-# partial/failed coverage. Mirrors roadmap_dag.py's scan_incomplete idiom.
-#
-# scan_incomplete is on the emitted payload as of DoE's be8b5d88 reader-widen
-# (coordinator_core/contract/deliverable-rollup-producer-contract.md § 5.2
-# reader-widen-before-writer-flips protocol — DoE's render layer now reads the
-# field and appends " (partial scan)" per rendered line when it is set). These
-# tests assert the internal signal + the logged WARNING, and separately pin that
-# the wire shape carries the field through to the handler payload.
-# ---------------------------------------------------------------------------
-
-
 _SKIP_CHMOD_UNRELIABLE = pytest.mark.skipif(
     sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
     reason="chmod 0o000 permission denial is not reliable on Windows or as root",
@@ -1302,19 +1009,6 @@ _SKIP_CHMOD_UNRELIABLE = pytest.mark.skipif(
 def test_unreadable_flat_scan_root_sets_internal_scan_incomplete_signal(
     rollup_repo: RollupRepo, caplog, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An unreadable state/handoffs/ dir (a flat scan root) logs a WARNING and sets
-    the internal scan_incomplete signal — a blocked scan root must not silently
-    roll up to 'deliverable has no artifacts', which is exactly what glob("*.md")'s
-    PermissionError-swallowing selector would otherwise produce. Asserted directly
-    against _scan_artifacts_by_deliverable_id — the wire shape is checked separately
-    (test_handler_payload_wire_shape_includes_scan_incomplete_true below).
-
-    Exercises the production contract directly (Path.iterdir() raising OSError,
-    caught by the try/except around base_dir.iterdir() in the flat-root loop) rather
-    than provoking it via chmod 0o000, which is unreliable on Windows/as root. This
-    runs on every platform."""
-    # A plan under docs/plans/ (unaffected scan root) so the result would otherwise
-    # look non-trivially resolved — this is NOT vacuously empty for an unrelated reason.
     rollup_repo.write_plan(
         "2026-07-06-unaffected.md", deliverable_id="dlv-blocked", initiative="init-unaffected"
     )
@@ -1347,8 +1041,6 @@ def test_unreadable_flat_scan_root_sets_internal_scan_incomplete_signal(
         "internal scan_incomplete signal must be True when a flat scan root "
         f"cannot be enumerated — got {scan_incomplete!r}"
     )
-    # The unaffected docs/plans/ artifact is still visible — failure is scoped to
-    # the blocked subtree, not fatal to the whole scan.
     assert len(matches) == 1
 
     dir_warnings = [
@@ -1365,12 +1057,6 @@ def test_unreadable_flat_scan_root_sets_internal_scan_incomplete_signal(
 def test_unreadable_recursive_scan_root_sets_internal_scan_incomplete_signal(
     rollup_repo: RollupRepo, caplog, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An unreadable archive/handoffs/ dir (the recursive scan root) logs a WARNING
-    and sets the internal scan_incomplete signal, mirroring the flat-root case above.
-
-    Exercises the production contract directly (os.walk(onerror=...) invoking its
-    error callback with an OSError) rather than provoking it via chmod 0o000, which
-    is unreliable on Windows/as root. This runs on every platform."""
     archive_dir = rollup_repo.root / "archive" / "handoffs"
     archive_dir.mkdir(parents=True, exist_ok=True)
     (archive_dir / "2026-07-01-unreachable.md").write_text(
@@ -1418,17 +1104,6 @@ def test_unreadable_recursive_scan_root_sets_internal_scan_incomplete_signal(
 def test_unreadable_archive_specs_scan_root_sets_internal_scan_incomplete_signal(
     rollup_repo: RollupRepo, caplog, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC5 (C1): an unreadable archive/specs/ dir (the fourth, recursive scan
-    root) logs a WARNING and sets the internal scan_incomplete signal,
-    mirroring the archive/handoffs case above — a blocked archive/specs
-    subtree must never silently roll up to 'deliverable has no artifacts'.
-
-    Exercises the production contract directly (os.walk(onerror=...) invoking its
-    error callback with an OSError) rather than provoking it via chmod 0o000, which
-    is unreliable on Windows/as root. This runs on every platform. Together with
-    the archive/handoffs case above, this pins that EITHER of the two recursive
-    roots — walked in the same per-root loop, each re-initialising walk_errors and
-    setting scan_incomplete independently — propagates the blocked signal."""
     specs_dir = rollup_repo.root / "archive" / "specs"
     specs_dir.mkdir(parents=True, exist_ok=True)
     (specs_dir / "2026-08-01-unreachable.md").write_text(
@@ -1474,8 +1149,6 @@ def test_unreadable_archive_specs_scan_root_sets_internal_scan_incomplete_signal
 
 
 def test_scan_incomplete_false_on_clean_scan(rollup_repo: RollupRepo) -> None:
-    """The common case: a fully-readable tree yields the internal
-    scan_incomplete=False signal."""
     rollup_repo.write_plan(
         "2026-07-06-clean.md", deliverable_id="dlv-clean", initiative="init-clean"
     )
@@ -1490,10 +1163,6 @@ def test_scan_incomplete_false_on_clean_scan(rollup_repo: RollupRepo) -> None:
 def test_handler_payload_wire_shape_includes_scan_incomplete_true(
     rollup_repo: RollupRepo, caplog
 ) -> None:
-    """Contract compliance pin: when a scan root is blocked and the internal
-    scan_incomplete signal is True, the emitted payload carries
-    'scan_incomplete': True — on the wire as of DoE's be8b5d88 reader-widen
-    (contract § 5.2)."""
     handoffs_dir = rollup_repo.root / "state" / "handoffs"
     handoffs_dir.mkdir(parents=True, exist_ok=True)
     (handoffs_dir / "2026-07-01-unreachable.md").write_text(
@@ -1519,9 +1188,6 @@ def test_handler_payload_wire_shape_includes_scan_incomplete_true(
     )
     _assert_schema(result, "dlv-wire-shape")
 
-    # The deliverable_id-keyed WARNING logged by the handler itself (in addition to
-    # the per-scan-root WARNING) is still observable operationally, alongside the
-    # wire signal.
     id_warnings = [
         r
         for r in caplog.records
@@ -1536,9 +1202,6 @@ def test_handler_payload_wire_shape_includes_scan_incomplete_true(
 def test_handler_payload_wire_shape_includes_scan_incomplete_false(
     rollup_repo: RollupRepo,
 ) -> None:
-    """Companion to the True case: a fully-readable tree yields
-    'scan_incomplete': False on the wire — pins that the flip is meaningful in
-    both directions, not just the incomplete-scan branch."""
     rollup_repo.write_plan(
         "2026-07-06-clean-wire.md", deliverable_id="dlv-clean-wire", initiative="init-clean-wire"
     )
@@ -1552,14 +1215,7 @@ def test_handler_payload_wire_shape_includes_scan_incomplete_false(
     _assert_schema(result, "dlv-clean-wire")
 
 
-# ---------------------------------------------------------------------------
-# (vii) no fork-equivalence join — F-1 collapse: raw ids never merge
-# ---------------------------------------------------------------------------
-
-
 def test_fork_equivalence_absent_entry_does_not_silently_merge(rollup_repo: RollupRepo) -> None:
-    """Two genuinely-unrelated ids must never be merged — there is no
-    equivalence-map mechanism left to consult (F-1 collapse)."""
     rollup_repo.write_plan("2026-07-06-a.md", deliverable_id="dlv-alpha", initiative=None)
     rollup_repo.write_plan("2026-07-06-b.md", deliverable_id="dlv-beta", initiative=None)
 
@@ -1567,24 +1223,11 @@ def test_fork_equivalence_absent_entry_does_not_silently_merge(rollup_repo: Roll
 
     assert result["artifacts_matched"] == 1
 
-    # The duplicate line above was
-    # a copy-paste slip; strengthened to assert both legs independently, matching the
-    # rest of the suite's evidence-of-both-directions style.
     beta_result = _handler({"deliverable_id": "dlv-beta"}, repo_root=rollup_repo.common_dir)
     assert beta_result["artifacts_matched"] == 1
 
 
-# ---------------------------------------------------------------------------
-# C10b (docs/plans/2026-08-13-spec-backlinks-cite-a-stable-deliverable-id.md):
-# plan_id match arm + the shared resolvable-root surface with
-# spec_backlink_resolve.
-# ---------------------------------------------------------------------------
-
-
 def test_scan_plan_id_match_arm(rollup_repo: RollupRepo) -> None:
-    """The scanner's plan_id match arm (leg (c)): a query id that itself
-    carries the `pln-` shape resolves against an artifact's own `plan_id`
-    frontmatter field, not just `deliverable_id`."""
     path = rollup_repo.root / "docs" / "plans" / "2026-08-13-a.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -1619,7 +1262,6 @@ def test_dlv_query_artifacts_matched_invariant_under_plan_id_carrying_records(
     )
     assert baseline["artifacts_matched"] == 1
 
-    # Add plan_id-carrying records (none of which carry this deliverable_id).
     plan_id_path = rollup_repo.root / "docs" / "plans" / "2026-08-13-pln.md"
     plan_id_path.write_text(
         "---\nplan_id: pln-widget-xyz789\ntitle: \"Pln\"\ncreated: 2026-08-13\n"
@@ -1685,14 +1327,10 @@ def test_ac10_resolvable_root_sets_are_equal() -> None:
     is structured to catch that instead (Review: code-reviewer P2)."""
     import coordinator_core.ops.spec_backlink_resolve as _resolver_mod
 
-    # Both modules must be looking at the literal same tuple object (or an
-    # equal one) — not two independently-maintained root lists.
     assert _resolver_mod.RESOLVABLE_ARTIFACT_ROOTS == _rollup_mod.RESOLVABLE_ARTIFACT_ROOTS
     assert _resolver_mod.SIZINGS_ONLY_ROOT == _rollup_mod.SIZINGS_ONLY_ROOT
 
     # SIZINGS_ONLY_ROOT must occur exactly once in the shared tuple — a
-    # duplicate (the double-scan bug) would inflate this count to 2 without
-    # `frozenset` masking it away.
     assert _rollup_mod.RESOLVABLE_ARTIFACT_ROOTS.count(_rollup_mod.SIZINGS_ONLY_ROOT) == 1
 
     rollup_roots = frozenset(_rollup_mod.RESOLVABLE_ARTIFACT_ROOTS)
@@ -1701,17 +1339,7 @@ def test_ac10_resolvable_root_sets_are_equal() -> None:
     assert rollup_roots == resolver_roots
 
 
-# ---------------------------------------------------------------------------
-# C10 leg (a) — sizings root evidence (P2 scenario, 61750c0fec61)
-# ---------------------------------------------------------------------------
-
-
 def test_dlv_query_resolves_via_sizing_object_only(rollup_repo: RollupRepo) -> None:
-    """P2 scenario (61750c0fec61): a commit staging ONLY a state/sizings/*.yaml
-    file resolves via `--deliverable-id` — no docs/plans, no handoff, no
-    archive artifact carries the id at all. This is the acceptance evidence
-    for the whole C10 fold: the sizings root was previously invisible to
-    `deliverable.rollup` even when it was the ONLY artifact carrying the id."""
     rollup_repo.write_sizing(
         "2026-08-13-only-a-sizing.yaml", deliverable_id="dlv-sizing-only-abc123"
     )
@@ -1725,9 +1353,6 @@ def test_dlv_query_resolves_via_sizing_object_only(rollup_repo: RollupRepo) -> N
 
 
 def test_scanner_finds_sizing_deliverable_id_directly(rollup_repo: RollupRepo) -> None:
-    """A sizing's `deliverable_id` is found by
-    `_scan_artifacts_by_deliverable_id` — the matched dict is the parsed
-    whole-document YAML (not a frontmatter dict, since sizings have none)."""
     rollup_repo.write_sizing(
         "2026-08-13-sizing-two.yaml", deliverable_id="dlv-sizing-two-def456"
     )
@@ -1743,9 +1368,6 @@ def test_scanner_finds_sizing_deliverable_id_directly(rollup_repo: RollupRepo) -
 
 
 def test_sizing_bogus_prefix_id_is_still_rejected(rollup_repo: RollupRepo) -> None:
-    """A queried id that does not match the sizing's own `deliverable_id`
-    (a bogus/unrelated prefix or value) is still rejected — the widened scan
-    does not loosen the equality match into a prefix or substring check."""
     rollup_repo.write_sizing(
         "2026-08-13-sizing-three.yaml", deliverable_id="dlv-sizing-three-ghi789"
     )
@@ -1758,14 +1380,7 @@ def test_sizing_bogus_prefix_id_is_still_rejected(rollup_repo: RollupRepo) -> No
 
 
 def test_read_sizing_yaml_malformed_degrades_to_empty(tmp_path: Path) -> None:
-    """`_read_sizing_yaml`'s bare `except Exception` (matching the existing
-    `_resolve_initiative` convention in this file) degrades malformed YAML
-    to `{}` rather than raising. The OSError and PyYAML-ImportError branches
-    are already exercised elsewhere; this pins the parse-error branch, which
-    this diff's sizing reader introduced without test coverage."""
     path = tmp_path / "malformed.yaml"
-    # Unbalanced flow-mapping brace — a YAML scanner/parser error, not merely
-    # an OSError or an ImportError.
     path.write_text("deliverable_id: dlv-x\nbad: [unterminated\n", encoding="utf-8")
 
     result = _rollup_mod._read_sizing_yaml(path)
@@ -1774,9 +1389,6 @@ def test_read_sizing_yaml_malformed_degrades_to_empty(tmp_path: Path) -> None:
 
 
 def test_scan_ignores_sizing_file_with_malformed_yaml(rollup_repo: RollupRepo) -> None:
-    """A malformed `state/sizings/*.yaml` file is silently skipped by the
-    scanner (via `_read_sizing_yaml`'s degrade-to-empty), not raised — a
-    sibling well-formed sizing in the same directory still resolves."""
     bad_path = rollup_repo.root / "state" / "sizings" / "2026-08-13-broken.yaml"
     bad_path.parent.mkdir(parents=True, exist_ok=True)
     bad_path.write_text("deliverable_id: dlv-broken\nbad: [unterminated\n", encoding="utf-8")

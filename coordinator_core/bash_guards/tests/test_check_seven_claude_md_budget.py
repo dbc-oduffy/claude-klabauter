@@ -32,8 +32,6 @@ from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -69,9 +67,6 @@ class TestCheckSevenThresholdsAreTheSSOT:
 
 
 class TestCheckSevenGovernedGlobalSurfaceBoundaries:
-    """A `coordinator/CLAUDE.md` under a repo carrying the dev-repo sentinel
-    is a governed surface -- Check 7 must gate it exactly like a real
-    DoE-claude checkout would."""
 
     def _init_dev_repo(self, tmp_path: Path) -> str:
         root = _init_repo(tmp_path)
@@ -150,9 +145,6 @@ class TestCheckSevenGovernedGlobalSurfaceBoundaries:
 
 
 class TestCheckSevenRepoScopedSurfaceNeverGated:
-    """A repo-root CLAUDE.md (this test repo's own project file) is NEVER a
-    governed surface, regardless of the dev-repo sentinel's presence
-    elsewhere in the tree -- must not be gated no matter how large."""
 
     def test_repo_root_claude_md_ungated_even_huge(self, tmp_path):
         root = _init_repo(tmp_path)
@@ -166,9 +158,6 @@ class TestCheckSevenRepoScopedSurfaceNeverGated:
         ) and result["hookSpecificOutput"]["permissionDecision"] != "deny"
 
     def test_coordinator_claude_md_without_sentinel_ungated_even_huge(self, tmp_path):
-        """`coordinator/CLAUDE.md`-shaped path in a repo WITHOUT the
-        dev-repo sentinel (a sibling repo, an OSS install, a percolated
-        mirror) is not governed."""
         root = _init_repo(tmp_path)
         _stage_claude_md(root, "coordinator/CLAUDE.md", HARD_LIMIT_BYTES + 50000)
 
@@ -182,8 +171,6 @@ class TestCheckSevenRepoScopedSurfaceNeverGated:
 
 
 class TestCheckSevenAudienceManifestWidening:
-    """C7b AC3: governance is by audience (a repo's own
-    coordinator/audience-manifest.txt), not only the CLAUDE.md basename."""
 
     def _init_manifested_repo(self, tmp_path: Path) -> str:
         root = _init_repo(tmp_path)
@@ -232,15 +219,11 @@ class TestCheckSevenAudienceManifestWidening:
 
 
 class TestCheckSevenRatchetWatermark:
-    """C7b AC4: a governed surface may shrink or hold, never grow past its
-    recorded ledger watermark, without an explicit reasoned bump."""
 
     def _init_watermarked_repo(self, tmp_path: Path, bytes_val: int, reason: str) -> str:
         root = _init_repo(tmp_path)
         (Path(root) / DEV_REPO_SENTINEL).write_text("sentinel\n", encoding="utf-8")
         # "coordinator/CLAUDE.md" has no `_LEDGER_PATH_OVERRIDES` entry (that
-        # override is `global-doctrine/CLAUDE.md`-only) -- its ledger
-        # resolves purely by the `surface_slug` convention.
         ledger_dir = Path(root) / "state" / "audits"
         ledger_dir.mkdir(parents=True, exist_ok=True)
         ledger_path = ledger_dir / "coordinator-claude-classification.md"
@@ -287,18 +270,14 @@ class TestCheckSevenRatchetWatermark:
 
     def _commit_over_watermark_surface(self, tmp_path: Path, bytes_val: int, size: int) -> str:
         # C7c: seed a surface whose LAST-COMMITTED (HEAD) size is already
-        # over the armed watermark -- grown by a route this edit-time check
-        # never saw (a merge, a Bash write, an unhooked session).
         root = self._init_watermarked_repo(tmp_path, bytes_val=bytes_val, reason="post-cut arming")
         _stage_claude_md(root, "coordinator/CLAUDE.md", size)
         _git(root, "commit", "-q", "-m", "land an over-watermark surface")
         return root
 
     def test_over_watermark_shrink_admitted(self, tmp_path):
-        # Refusing this would freeze the file and leave "raise the
-        # watermark" as the only way out -- the trap the PM named.
         root = self._commit_over_watermark_surface(tmp_path, bytes_val=6000, size=8000)
-        _stage_claude_md(root, "coordinator/CLAUDE.md", 7000)  # smaller, still over 6000
+        _stage_claude_md(root, "coordinator/CLAUDE.md", 7000)
 
         result = dispatch_checks.check_validate_commit(
             'git commit -m "shrink doctrine"', "no-session", cwd=root
@@ -307,7 +286,7 @@ class TestCheckSevenRatchetWatermark:
 
     def test_over_watermark_growth_still_denied(self, tmp_path):
         root = self._commit_over_watermark_surface(tmp_path, bytes_val=6000, size=8000)
-        _stage_claude_md(root, "coordinator/CLAUDE.md", 8001)  # grows further
+        _stage_claude_md(root, "coordinator/CLAUDE.md", 8001)
 
         result = dispatch_checks.check_validate_commit(
             'git commit -m "grow doctrine"', "no-session", cwd=root
@@ -319,8 +298,6 @@ class TestCheckSevenRatchetWatermark:
 
     def test_over_watermark_same_size_still_denied(self, tmp_path):
         root = self._commit_over_watermark_surface(tmp_path, bytes_val=6000, size=8000)
-        # Same SIZE as HEAD but different bytes, so git sees a real staged
-        # change (identical bytes would leave nothing staged to check).
         target = Path(root) / "coordinator/CLAUDE.md"
         target.write_text("y" * 8000, encoding="utf-8")
         _git(root, "add", "coordinator/CLAUDE.md")

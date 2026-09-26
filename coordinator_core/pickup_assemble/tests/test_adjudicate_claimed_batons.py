@@ -71,10 +71,6 @@ def test_no_claimed_batons_is_exit_ok_with_honest_zero(tmp_path):
 
 
 def test_four_way_split(tmp_path, monkeypatch):
-    """One row per bucket: a live holder, an archived-dead holder, a
-    holder with unresolvable evidence, and a claim with no holder at all —
-    every row resolves into exactly one named bucket, and the report's
-    `deployment_state` column is carried through verbatim as display."""
     repo = tmp_path / "repo"
     (repo / "state" / "handoffs").mkdir(parents=True)
     _seed_handoff(repo, "h-live.md", holder="sid-live", deployment_state="in_flight")
@@ -110,16 +106,10 @@ def test_four_way_split(tmp_path, monkeypatch):
     assert by_path["state/handoffs/h-archived.md"]["deployment_state"] == "shipped"
     assert by_path["state/handoffs/h-unknown.md"]["raw_basis"] == "unknown"
     assert by_path["state/handoffs/h-no-sid.md"]["raw_basis"] == "no-sid"
-    # The `open` row is never adjudicated -- the sweep selects on `status:
-    # claimed` only.
     assert "state/handoffs/h-open.md" not in by_path
 
 
 def test_live_dir_signals_reads_as_its_own_raw_basis(tmp_path, monkeypatch):
-    """`abandonment_basis`'s OTHER positive leg (`live-dir-signals`) must
-    not read as `archive-record` -- `raw_basis` is `liveness`'s own
-    vocabulary verbatim, so only a genuine archive record reports
-    `archive-record`."""
     repo = tmp_path / "repo"
     (repo / "state" / "handoffs").mkdir(parents=True)
     _seed_handoff(repo, "h-stale.md", holder="sid-stale")
@@ -146,9 +136,6 @@ def test_missing_repo_root_is_transport_fail(tmp_path, monkeypatch):
 
 
 def test_process_time_budget_under_200ms(tmp_path, monkeypatch):
-    """Budget (C4 body): ONE archive listing and one pass over the batons for
-    the whole sweep -- assert process time under 200ms over a representative
-    corpus, measured with `time.process_time()`, never wall clock."""
     repo = tmp_path / "repo"
     (repo / "state" / "handoffs").mkdir(parents=True)
     for i in range(50):

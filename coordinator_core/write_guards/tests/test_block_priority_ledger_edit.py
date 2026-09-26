@@ -1,13 +1,3 @@
-"""Behavioral tests for coordinator_core.write_guards.block_priority_ledger_edit
--- the priority-ledger directory advisory guard (see the module's own
-docstring for the design decision this is the discharge of).
-
-Mirrors the structure of a `block_tracker_edit.py`-shaped guard: no repo
-fixture is needed since the match is a pure path-tail regex, independent of
-cwd/git-root resolution.
-
-Spec backlink: DoE-claude:pln-priority-ledger-durable-pm-pri-817d40 (chunk C9a)
-"""
 
 from __future__ import annotations
 
@@ -43,11 +33,6 @@ class TestAdvisesLedgerEdit:
         assert "priority.set" in reason
 
     def test_advisory_reason_leads_with_route_and_names_no_override(self):
-        """Inverted (was: `..._leads_with_route_before_the_downside`, which
-        asserted "override" WAS present). Current text ("Use instead:\n
-        ...: run `priority-set`...") has no override mention at all --
-        positively asserts both the route-first ordering AND the absence
-        of "override" anywhere in the reason."""
         payload = {
             "tool_name": "Write",
             "tool_input": {
@@ -109,8 +94,6 @@ class TestAdvisesLedgerEdit:
         assert "permissionDecision" not in result["hookSpecificOutput"]
 
     def test_backslash_path_advised(self):
-        """Windows-style separators normalize before the tail match, parity
-        with block_tracker_edit.py's F5 normalizer fix."""
         payload = {
             "tool_name": "Write",
             "tool_input": {
@@ -127,8 +110,6 @@ class TestAdvisesLedgerEdit:
 
 class TestPassThrough:
     def test_intent_inbox_sibling_dir_passes_through(self):
-        """Scope is exactly priority-ledger/ — an adjacent directory under
-        the same central root (e.g. the intent inbox) is out of scope."""
         payload = {
             "tool_name": "Write",
             "tool_input": {
@@ -140,8 +121,6 @@ class TestPassThrough:
         assert guard.check(payload) is None
 
     def test_ledger_directory_itself_passes_through(self):
-        """Matches an entry directly under the directory, not the directory
-        node itself (no filename component)."""
         payload = {
             "tool_name": "Write",
             "tool_input": {

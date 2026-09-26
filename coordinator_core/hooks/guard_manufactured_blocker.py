@@ -58,9 +58,6 @@ from coordinator_core.hooks.support.posture import resolve_posture
 from coordinator_core.hooks.support.touch_record import _touch_lines
 from coordinator_core.ipc import register_op
 
-# ---------------------------------------------------------------------------
-# Trigger patterns — verbatim from the DoE source (module-level DATA).
-# ---------------------------------------------------------------------------
 
 _HANDOFF_PATTERNS = [
     re.compile(r"\bwait(?:s|ing)?\s+on\s+you\b", re.IGNORECASE),
@@ -230,7 +227,7 @@ def _final_assistant_text(transcript_path: str) -> str:
         try:
             entry = json.loads(line)
         except ValueError:
-            continue  # malformed transcript line; skip it
+            continue
         if not isinstance(entry, dict) or entry.get("type") != "assistant":
             continue
         msg = entry.get("message")
@@ -493,12 +490,6 @@ def _emit_decidability_verdict(candidate: str, text: str) -> dict:
 
 @register_op("hooks.guard_manufactured_blocker")
 def _handler(params: dict, repo_root=None) -> dict:
-    """Stop: the manufactured-blocker altitude/decidability/stall check.
-
-    `repo_root` (the framework-supplied handler argument) is unused — this
-    op resolves its own repo root from `params["payload"]["cwd"]`, matching
-    every other payload-cwd-resolving `hooks.*` op in this family.
-    """
     payload = payload_of(params)
 
     if payload.get("agent_id"):

@@ -61,9 +61,6 @@ def _payload(
 
 
 def _seed_executing_sidecar(repo_root: Path, session_id: str, plan_rel_path: str) -> None:
-    """Write a run-report sidecar declaring ``plan_rel_path`` as the plan
-    this session's dispatch is executing -- C16's "executing body" signal.
-    """
     sidecar_dir = repo_root / "state" / "subagent-share" / session_id
     sidecar_dir.mkdir(parents=True, exist_ok=True)
     (sidecar_dir / "C1.md").write_text(
@@ -92,9 +89,6 @@ def _stub_subagent_type(subagent_type: str):
 
 
 class TestExecutorRegexWidening:
-    """AC1/AC4 — executor writes to docs/problems/** are now blocked;
-    docs/wiki/** and docs/decisions/** remain excluded.
-    """
 
     def test_executor_write_to_problems_blocked(self, tmp_path, monkeypatch):
         monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
@@ -129,9 +123,6 @@ class TestExecutorRegexWidening:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_executor_write_to_problems_not_executing_advises(self, tmp_path, monkeypatch):
-        """C16 -- a plan/problem-set write that is NOT the sidecar-declared
-        executing body is advisory-only, not blocked.
-        """
         monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
         monkeypatch.setattr(
             guard, "_read_backpointer_subagent_type", _stub_subagent_type("coordinator:executor")
@@ -145,10 +136,6 @@ class TestExecutorRegexWidening:
         hso = result["hookSpecificOutput"]
         assert "permissionDecision" not in hso
         assert "docs/problems/2026-07-24-x.md" in hso["additionalContext"]
-        # Regression pin -- state/bug-backlog/2026-08-06-c16-s-advisory-
-        # reason-never-names-the-pl-b38e24982c9f.yaml: the advisory must
-        # name the plan the guard actually resolved as currently executing,
-        # not just the violating write target.
         assert "docs/plans/some-other-plan.md" in hso["additionalContext"]
 
     def test_executor_write_to_wiki_allowed(self, tmp_path, monkeypatch):
@@ -189,14 +176,6 @@ class TestExecutorRegexWidening:
         assert guard.check(payload) is None
 
     def test_executor_write_to_plans_under_bare_tests_still_blocked(self, tmp_path, monkeypatch):
-        """Negative-spec -- the exemption needs `tests/fixtures/`, not `tests/`.
-
-        A bare ``tests/`` segment must not open the exemption, or any executor
-        could reach a real plan body by routing through a `tests/` directory.
-        Still routes through the guard (fast-exit regex fires); C16 narrows
-        WHICH plan is a hard deny, not whether this path reaches that gate,
-        so seed the sidecar with the same key the write targets.
-        """
         monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
         monkeypatch.setattr(
             guard, "_read_backpointer_subagent_type", _stub_subagent_type("coordinator:executor")
@@ -211,12 +190,6 @@ class TestExecutorRegexWidening:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_executor_write_to_plans_still_blocked(self, tmp_path, monkeypatch):
-        """Regression -- pre-existing docs/plans/** executor-block case,
-        now gated on the write matching the sidecar-declared executing plan
-        (C16). This is THE verification the reshape lives or dies on: if
-        the narrowed condition stops firing here, the guard has been
-        removed, not reshaped.
-        """
         monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
         monkeypatch.setattr(
             guard, "_read_backpointer_subagent_type", _stub_subagent_type("coordinator:executor")
@@ -250,10 +223,6 @@ class TestExecutorRegexWidening:
         assert "some-unrelated-plan.md" in hso["additionalContext"]
 
     def test_executor_no_sidecar_at_all_advises(self, tmp_path, monkeypatch):
-        """No run-report sidecar exists for this session at all (e.g. a
-        genuinely ad-hoc executor dispatch) -- the guard cannot prove this
-        write hits an executing body, so it must not hard-deny.
-        """
         monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
         monkeypatch.setattr(
             guard, "_read_backpointer_subagent_type", _stub_subagent_type("coordinator:executor")
@@ -265,16 +234,10 @@ class TestExecutorRegexWidening:
         assert result is not None
         hso = result["hookSpecificOutput"]
         assert "permissionDecision" not in hso
-        # Regression pin -- b38e24982c9f: with no resolvable sidecar, the
-        # advisory must say so explicitly rather than omitting the clause.
         assert "none" in hso["additionalContext"]
 
 
 class TestNonExecutorPassThrough:
-    """AC2 — the fast-exit regex widening must not change the downstream
-    subagent_type gate: a non-executor subagent writing to docs/problems/**
-    still allows through.
-    """
 
     def test_general_purpose_write_to_problems_allowed(self, tmp_path, monkeypatch):
         monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
@@ -311,12 +274,10 @@ class TestKindResolutionFailureIsMeasuredNotConfined:
 
     def test_unresolvable_kind_still_allows(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
-        # Lookup-miss: backpointer chain returns "" (missing/unreadable).
         monkeypatch.setattr(guard, "_read_backpointer_subagent_type", _stub_subagent_type(""))
 
         payload = _payload(tmp_path, "docs/plans/2026-07-30-x.md")
         assert guard.check(payload) is None
-        # Measurement-only signal still fires even though the verdict allows.
         assert "kind-resolution-failed" in capsys.readouterr().err
 
     def test_em_caller_no_agent_id_allowed_and_silent(self, tmp_path, monkeypatch, capsys):
@@ -354,9 +315,6 @@ class TestKindResolutionFailureIsMeasuredNotConfined:
         assert capsys.readouterr().err == ""
 
     def test_resolvable_executor_kind_still_denied_and_silent(self, tmp_path, monkeypatch, capsys):
-        """A resolvable coordinator:executor kind denies exactly as before,
-        when the write targets the sidecar-declared executing plan (C16).
-        """
         monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
         monkeypatch.setattr(
             guard, "_read_backpointer_subagent_type", _stub_subagent_type("coordinator:executor")
@@ -373,16 +331,6 @@ class TestKindResolutionFailureIsMeasuredNotConfined:
 
 
 class TestUnenumeratedTypeNarrowing:
-    """AC6/C3 -- the SAME gate's Case 2 (kind resolves CLEANLY to something
-    absent from C1's roster) is narrowed: it no longer exits the gate as
-    "allow", it falls through to the SAME executor-scoped logic below,
-    getting no more trust than coordinator:executor. Case 1 (kind_unresolved
-    -- the 2026-06-09 lookup-failure allow) is unaffected and is re-verified
-    as still-allow in ``TestKindResolutionFailureIsMeasuredNotConfined``
-    above, unchanged by this class.
-
-    Spec backlink: pln-deny-unenumerated-agent-types-e56d1b § C3 / AC6
-    """
 
     def test_unenumerated_type_falls_through_and_denies_executing_body(
         self, tmp_path, monkeypatch
@@ -417,10 +365,6 @@ class TestUnenumeratedTypeNarrowing:
         assert guard.check(payload) is None
 
     def test_roster_load_error_falls_back_to_allow(self, tmp_path, monkeypatch):
-        """A roster-load failure is a peer-repo hiccup, not this guard's
-        problem to newly deny on (C1's PreToolUse(Agent) deny is the
-        primary fix) -- falls back to today's allow rather than denying.
-        """
         monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
         monkeypatch.setattr(
             guard, "_read_backpointer_subagent_type", _stub_subagent_type("hookprobe-named")
@@ -453,8 +397,6 @@ class TestInventedKindDenyReachableWithoutSidecar:
         )
         monkeypatch.setattr(guard, "_write_block_log", lambda *a, **kw: None)
         monkeypatch.setattr(guard, "_write_hook_emit_log", lambda *a, **kw: None)
-        # Deliberately NO sidecar seeded -- prior shape would have advised
-        # only, never denied, in this exact configuration.
 
         payload = _payload(tmp_path, "docs/plans/2026-08-18-x.md")
         result = guard.check(payload)
@@ -463,10 +405,6 @@ class TestInventedKindDenyReachableWithoutSidecar:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_invented_kind_denies_on_a_wholly_unrelated_plan_body(self, tmp_path, monkeypatch):
-        """A different plan than any sidecar names still hard-denies for an
-        invented kind -- unlike coordinator:executor's C16 scoping, an
-        invented kind's deny is NOT scoped to a single "executing" body.
-        """
         monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
         monkeypatch.setattr(
             guard, "_read_backpointer_subagent_type", _stub_subagent_type("hookprobe-named")

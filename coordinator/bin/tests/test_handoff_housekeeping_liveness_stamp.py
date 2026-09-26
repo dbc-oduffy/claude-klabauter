@@ -1,19 +1,3 @@
-"""test_handoff_housekeeping_liveness_stamp.py — the ceremony archival path
-stamps the `archive_sweeps` housekeeping-liveness key.
-
-`archive_sweeps` names the archival JOB, and `sweep-terminal-handoffs.py` was
-its only writer while `handoff-housekeeping` (the `/workday-complete` spine's
-`d_step2_67_handoff_housekeeping` directive, over `housekeeping.cycle`) does
-the same work on a real cadence and stamped nothing. A monitor reading the key
-therefore reported the manual drain's cadence, never the ceremony path's: a
-repo archiving healthily through the spine read as hours stale, and a repo
-whose spine never ran read as fresh after one manual invocation. Reported by
-doe-claude-em, `cross-repo/inbox/2026-08-30-doe-claude-em-boot-sweep-kill-left-
-abandoned-session-unowned.md`.
-
-The dry-run half mirrors the sibling CLI's own census rule: a plan is not a
-sweep, so it must not stamp.
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -84,12 +68,6 @@ class TestArchiveSweepsLivenessStamp:
 
 
 class TestHealInboxOnTheHousekeepingDoor:
-    """C6: the door runs `memo.heal_inbox` before the handoff cycle.
-
-    Lives here rather than beside the warm-serve test because that module's
-    negative-spec forbids importing `handoff-housekeeping.py` at all — and
-    these two assertions are precisely about what `main()` does when it runs.
-    """
 
     def test_main_reports_a_restored_memo(self, tmp_path, monkeypatch, capsys):
         mod = _load_module()
@@ -194,8 +172,6 @@ class TestHealInboxOnTheHousekeepingDoor:
 
     @staticmethod
     def _stub_cycle(mod, monkeypatch, tmp_path):
-        """Stubs everything the cycle half of `main()` needs, and returns a
-        one-element list that becomes truthy once the cycle actually ran."""
         ran: list[bool] = []
         monkeypatch.setattr(mod, "_ensure_claude_klabauter_on_path", lambda: str(tmp_path))
         monkeypatch.setattr(mod, "_stamp_archive_sweeps_liveness", lambda _root: None)

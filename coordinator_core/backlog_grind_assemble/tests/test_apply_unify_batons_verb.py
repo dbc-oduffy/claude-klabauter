@@ -52,7 +52,6 @@ def _reader_directive(legs: list[str], *, fallback: int = 0) -> dict:
 def test_the_readers_verb_resolves_through_the_closed_dispatch_table():
     directive = _reader_directive(["state/handoffs/a.md"])
     assert directive["cli"] in bga_apply._CLI_DISPATCH
-    # The pre-validation pass the whole run dies on — exercised directly.
     assert (
         apply_base.resolve_cli(bga_apply._CLI_DISPATCH, directive["cli"])
         is bga_apply._dispatch_unify_batons
@@ -97,17 +96,11 @@ def test_handler_delegates_to_the_routed_path_and_reports_its_result(monkeypatch
     assert seen == [(repo_root, ["state/handoffs/a.md"])]
     assert report["unified"] is True
     assert report["successor"] == "state/handoffs/successor.md"
-    # The reader's own counted fallback survives the round trip — AC10 gates
-    # retirement of the path-shape heuristic on it reaching zero, which is
-    # unreadable if the verb drops it.
     assert report["role_axis_fallback_count"] == 2
     assert report["inventory_record"] == "state/mise-inventory/run-1.md"
 
 
 def test_handler_does_not_swallow_a_half_moved_tree(monkeypatch):
-    """A raise out of the routed path means a mint or a parent stamp failed
-    with the tree half-moved. The run must see it — the same reason C5
-    refuses to wrap `_unify_into_successor` in a blanket `except`."""
 
     def _boom(_root, _legs):
         raise RuntimeError("mint failed after parents stamped")
@@ -127,9 +120,6 @@ def test_handler_does_not_swallow_a_half_moved_tree(monkeypatch):
 
 
 def test_predicate_off_keeps_the_verb_a_reporting_no_op(monkeypatch):
-    """End to end through the real routed path, predicate at its shipped
-    default: the verb resolves, dispatches, and mutates nothing — the
-    property that lets this land before the flip commit."""
     monkeypatch.setattr(pa, "_baton_unification_routing_enabled", lambda: False)
 
     prepared = bga_apply._prepare_directives_for_dispatch(

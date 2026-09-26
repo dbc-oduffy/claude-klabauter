@@ -55,7 +55,6 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.roadmap.blitz_land import land_wave
 
-# Generator-provenance: writes only the records the caller's wave result names.
 GENERATES: list = []
 
 
@@ -77,12 +76,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not isinstance(limit, int) or limit < 1:
         raise ValueError("limit must be a positive integer")
 
-    # `shipped_in` was accepted by `land_wave` and never forwarded from here, so every XS
-    # baton landed through this op was refused for want of the SHA its caller had supplied.
-    # That is the recycling defect the skill names: the baton stays open, returns as a
-    # candidate in every later wave, and the wave still reports the work as done. Not
-    # defaulted to a placeholder — `close_dispatched` validates the shape, and inventing a
-    # value here would stamp `shipped` against a commit nobody made.
     shipped_in = params.get("shipped_in")
     if shipped_in is not None and (not isinstance(shipped_in, str) or not shipped_in.strip()):
         raise ValueError("shipped_in must be a non-empty string when supplied")

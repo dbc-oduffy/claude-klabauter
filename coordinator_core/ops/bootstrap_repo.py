@@ -118,24 +118,10 @@ _CREATIONFLAGS = no_console_creationflags()
 
 _GIT_TIMEOUT_SECS = 30
 _DIVERGENCE_TIMEOUT_SECS = 120
-_COMMIT_TIMEOUT_SECS = 300  # a pre-commit hook may run linters/tests; generous but bounded
+_COMMIT_TIMEOUT_SECS = 300
 _MACHINE_LOCAL_TIMEOUT_SECS = 15
 
-#: Safety margin under Windows `CreateProcess`'s ~32767-char command-line
-#: ceiling (AC-7; Review: code-reviewer P2 -- a flat path-count bound like
 #: the prior `_STAGE_BATCH_SIZE = 500` is wrong because path length varies
-#: wildly across a real scaffold: this tree's own paths run from ~55 chars
-#: (`state/subagent-share/<uuid>/coordinator<role>-<hash>.md`) to 80+
-#: (`state/bug-backlog/<date>-<slug>-<hash>.yaml`-shaped names), so a
-#: count-based bound can pack far more bytes onto the command line than a
-#: shorter-path scaffold would, silently approaching the ceiling on a
-#: deep/large scaffold -- the worst time to discover it. Batches are now
-#: built by cumulative argv bytes instead (`_batch_paths_by_byte_budget`).
-#: NOT sized flush to 32767: this margin (~4700 bytes) is headroom for
-#: quoting/escaping overhead `CreateProcess` may add per-arg beyond a raw
-#: UTF-8 byte count, for `git`'s own resolved absolute path length varying
-#: by install location, and for `_argv_bytes` being a best-effort
-#: approximation of the composed command line, not an exact accounting.
 _STAGE_BATCH_MAX_ARGV_BYTES = 28000
 
 
@@ -189,12 +175,6 @@ Exit codes:
 )
 
 
-# ---------------------------------------------------------------------------
-# DoE sibling-root resolution (rung ladder mirrored from
-# coordinator_core.ops.learn_lessons_roots._resolve_doe_content_root)
-# ---------------------------------------------------------------------------
-
-
 def _claude_home() -> str:
     """Mirror `CLAUDE_HOME="${CLAUDE_HOME:-$HOME}/.claude"` — the env var, when
     set, overrides $HOME (not the full .claude path). Matches the identically-
@@ -210,22 +190,12 @@ def _claude_home() -> str:
 
 
 def _content_root_rungs_2_to_4(claude_home: str) -> str:
-    """Rungs 2-4 of the DoE coordinator content root ladder, factored out so
-    `_resolve_scaffold_manifest_root` can re-run them without rung 1 (see
-    that function's docstring for why rung 1 alone is unsound for the
-    manifest lookup)."""
     doe_root = read_doe_root_pointer_file(os.path.expanduser("~"))
     if doe_root:
         content_root = content_root_for(doe_root)
         if content_root is not None:
             return str(content_root)
 
-    # Zero-spawn: `registry_get` reads the same registry.local.toml over
-    # registry.toml chain the `machine-local get` CLI would, in-process --
-    # no `machine-local` binary presence check needed first (see
-    # `coordinator_core.machine_resolver.registry_get` docstring, DR-071:
-    # this is the reset-survival-safe reader, the CLI's exec bits live under
-    # the resettable `~/.claude/bin/`).
     candidate = _registry_get("plugin.mirrors.coordinator-claude.live_path")
     if candidate and os.path.isdir(candidate):
         return candidate
@@ -275,18 +245,11 @@ def _resolve_scaffold_manifest_root(claude_home: str, coordinator_root: str) -> 
     try:
         locate_manifest(Path(coordinator_root))
     except ScaffoldError:
-        # rung 1 missed; fall through to rungs 2-4 below
         pass
     else:
         return coordinator_root
 
     return _content_root_rungs_2_to_4(claude_home)
-
-
-# ---------------------------------------------------------------------------
-# Small git/subprocess helpers — every call carries a bounded timeout and a
-# DEVNULL stdin guard (nothing here should ever be able to block on stdin).
-# ---------------------------------------------------------------------------
 
 
 def _git(
@@ -362,12 +325,6 @@ def _git(
 
 
 def _argv_bytes(args: List[str]) -> int:
-    """Approximate the composed command-line byte length for `args`: each
-    arg's UTF-8 encoding (non-ASCII paths encode wider than their character
-    count) plus one byte for the separator/quoting overhead between args --
-    mirroring how a platform's process-creation call concatenates argv into
-    one command-line string, which is what the Windows ~32767-char ceiling
-    actually bounds."""
     return sum(len(a.encode("utf-8")) + 1 for a in args)
 
 
@@ -404,20 +361,8 @@ def _batch_paths_by_byte_budget(
     return batches
 
 
-#: Environment forced onto the `git add` batching subprocess ONLY (Review:
-#: code-reviewer P3 follow-up — `_extract_failed_path_from_git_stderr`
-#: previously matched ANY quoted substring anywhere in stderr, which can
-#: misattribute an unrelated quoted fragment -- a hint/advice line, or a
 #: quoted token inside a DIFFERENT path -- as the failing path. Anchoring
-#: the parse to git's own known message templates (below) only makes the
-#: parse SAFE if git's wording is deterministic; git's stderr is a gettext
 #: string that translates under `LC_ALL`/`LANG`/`LANGUAGE`, so without this
-#: the anchored English patterns would silently stop matching under a
-#: non-English locale (fails safe -- degrades to the honest batch-scoped
-#: message) but a caller relying on THIS message being English could not
-#: prove that. Pinning explicitly removes the ambiguity: the `add` call
-#: this dict is applied to always produces English git messages, so a
-#: pattern match here is a real match, never a locale-dependent guess.
 _GIT_ADD_LOCALE_ENV_OVERRIDES = {"LC_ALL": "C", "LANG": "C", "LANGUAGE": "C"}
 
 
@@ -431,14 +376,7 @@ def _git_add_batch_env() -> dict:
     return env
 
 
-#: Git's own KNOWN, C-locale `add`-failure message shapes only -- never a
-#: bare "any quoted substring" scan (the misattribution this replaces).
 #: Anchored at the start of a line (`re.MULTILINE`) so a quoted fragment
-#: embedded mid-sentence in an unrelated advice/hint line cannot match.
-#: Deliberately narrow: a git version/message this list doesn't cover
-#: degrades to `None` (the honest batch-scoped fallback), which is the
-#: correct outcome for an unrecognized shape -- see the module's own
-#: fail-safe contract below.
 _GIT_ADD_STDERR_PATTERNS = [
     re.compile(r"^fatal: pathspec '([^']+)' did not match any files", re.MULTILINE),
     re.compile(r'^error: open\("([^"]+)"\)', re.MULTILINE),
@@ -474,13 +412,6 @@ def _extract_failed_path_from_git_stderr(stderr: Optional[str]) -> Optional[str]
 
 
 def _prompt(text: str, default_yes: bool) -> bool:
-    """Read a Y/n-shaped reply from stdin; EOF degrades to the oracle's default.
-
-    Mirrors bash `read -r -p "$text" reply; reply="${reply:-DEFAULT}"` followed
-    by a `case` match against `[Yy]|[Yy][Ee][Ss]` (accept) vs anything else
-    (decline) -- reproduced here as a case-insensitive exact match against
-    "y"/"yes", not a startswith/prefix check.
-    """
     try:
         reply = input(text)
     except EOFError:
@@ -495,13 +426,7 @@ def _print(*args, **kwargs) -> None:
     print(*args, **kwargs)
 
 
-# ---------------------------------------------------------------------------
-# main
-# ---------------------------------------------------------------------------
-
-
 def main(argv: List[str]) -> int:
-    # ---- arg parsing -------------------------------------------------
     root_path = ""
     non_interactive = False
     dry_run = False
@@ -535,7 +460,6 @@ def main(argv: List[str]) -> int:
             return 1
         i += 1
 
-    # ---- prerequisite checks ------------------------------------------
     if _which_git() is None:
         _print("bootstrap-repo.sh: git is not available on PATH", file=sys.stderr)
         return 1
@@ -553,7 +477,6 @@ def main(argv: List[str]) -> int:
         )
         return 1
 
-    # ---- resolve target root -------------------------------------------
     if not root_path:
         try:
             proc = _git(["rev-parse", "--show-toplevel"])
@@ -567,17 +490,12 @@ def main(argv: List[str]) -> int:
             return 1
         root_path = (proc.stdout or "").strip()
 
-    # Normalise path separators on Windows (Git-Bash/MSYS)
     root_path = root_path.replace("\\", "/")
 
     if not os.path.isdir(root_path):
         _print(f"bootstrap-repo.sh: target root does not exist: {root_path}", file=sys.stderr)
         return 1
 
-    # Claude Home is not a working tree. `guard_repo_setup_claude_home_refusal`
-    # denies this for a Bash-invoked repo-setup, but this op runs in-process
-    # (bootstrap_orchestrate imports it directly), so that guard never sees it.
-    # Refused before stage 1: every stage below writes into `root_path`.
     from coordinator_core.bash_guards.guard_repo_setup_claude_home_refusal import (
         resolves_to_claude_home,
     )
@@ -591,12 +509,10 @@ def main(argv: List[str]) -> int:
         )
         return 1
 
-    # ---- dry-run header --------------------------------------------------
     if dry_run:
         _print(f"[bootstrap-repo dry-run] target: {root_path}")
         _print(f"[bootstrap-repo dry-run] non-interactive: {1 if non_interactive else 0}")
 
-    # ---- Stage 1 — ensure-git --------------------------------------------
     is_git_repo = _is_git_repo(root_path)
 
     if not is_git_repo:
@@ -604,7 +520,6 @@ def main(argv: List[str]) -> int:
             _print("[bootstrap-repo dry-run] stage 1 (ensure-git): NOT a git repo")
             _print(f"[bootstrap-repo dry-run]   would offer: git init {root_path}")
             _print("[bootstrap-repo dry-run]   (--non-interactive would decline and exit 2)")
-            # For dry-run purposes, treat as if we would init and continue
         elif non_interactive:
             _print(f"bootstrap-repo: {root_path} is not a git repository.", file=sys.stderr)
             _print(
@@ -643,12 +558,9 @@ def main(argv: List[str]) -> int:
         if dry_run:
             _print("[bootstrap-repo dry-run] stage 1 (ensure-git): already a git repo")
 
-    # ---- Stage 2 — assert clean baseline ----------------------------------
     if not dry_run:
         dirty = _git_status_porcelain(root_path)
         # BEHAVIOUR CHANGE (2026-07-22, break-class fix): an unverifiable
-        # working tree is UNKNOWN, not clean — abort rather than mutate a
-        # repo whose 'git status' we could not confirm is clean.
         if dirty is None:
             _print("")
             _print(f"bootstrap-repo: unable to verify {root_path} has a clean working tree (git status check failed).")
@@ -696,12 +608,6 @@ def main(argv: List[str]) -> int:
         else:
             _print("[bootstrap-repo dry-run] stage 2 (assert-clean): working tree is clean")
 
-    # ---- Stage 3 — scaffold ------------------------------------------------
-    # Native call (C4 ported scaffold-canonical-structure.sh to
-    # coordinator_core.install.scaffold_structure; this stage no longer
-    # spawns bash). Advisory per setup.md Phase 3 -- any failure is caught
-    # and logged, never halts the bootstrap chain, mirroring maximalist.py's
-    # Step 7 `except Exception` treatment of the same call.
     if dry_run:
         _print(f"[bootstrap-repo dry-run] stage 3 (scaffold): would scaffold {root_path}")
         try:
@@ -719,7 +625,6 @@ def main(argv: List[str]) -> int:
                 f"bootstrap-repo: scaffold-canonical-structure failed: {exc}",
                 file=sys.stderr,
             )
-            # Scaffold failure is advisory per setup.md Phase 3 — do NOT halt the chain.
             _print(
                 "  Warning: scaffold failed; continuing bootstrap (scaffold is advisory)."
             )
@@ -727,7 +632,6 @@ def main(argv: List[str]) -> int:
             for line in _scaffold_result.lines:
                 _print(line)
 
-    # ---- Stage 4 — conflict-warn --------------------------------------------
     has_baseline = os.path.isfile(os.path.join(root_path, "version.txt"))
 
     if dry_run:
@@ -765,10 +669,6 @@ def main(argv: List[str]) -> int:
             )
             return 1
 
-        # Exit codes per check-install-divergence.py contract:
-        #   0 — unchanged + forward-safe only; safe to proceed
-        #   2 — no/malformed baseline; two-way clean; safe to proceed
-        #   3 — consumer-modified or consumer-added files detected
         if conflict_exit == 3:
             _print("")
             _print(
@@ -793,7 +693,6 @@ def main(argv: List[str]) -> int:
             "[bootstrap-repo] stage 4 (conflict-warn): first-time bootstrap (no version.txt) — skipping classifier"
         )
 
-    # ---- Stage 5 — commit ----------------------------------------------------
     if dry_run:
         _print("[bootstrap-repo dry-run] stage 5 (commit): would commit staged scaffold files")
         _print("  message: chore(coordinator): bootstrap")
@@ -803,25 +702,12 @@ def main(argv: List[str]) -> int:
     untracked = _git_lines(["ls-files", "--others", "--exclude-standard"], root_path)
     modified = _git_lines(["diff", "--name-only"], root_path)
 
-    # COUNT (AC-7): every untracked/modified path is staged for the SAME
-    # single "chore(coordinator): bootstrap" commit below, so a per-file
-    # `git add` loop (N+1 `.git/index.lock` acquisitions for N files) is
-    # behaviour-preserving to collapse into one `add` per batch. Batched
-    # (never a single unbounded pathspec) to stay clear of a platform
-    # argument-length ceiling on a very large scaffold -- see
     # `_batch_paths_by_byte_budget` / `_STAGE_BATCH_MAX_ARGV_BYTES`.
     stage_targets = untracked + modified
     for batch in _batch_paths_by_byte_budget(stage_targets, root_path):
         try:
             proc = _git(["add", "--", *batch], root=root_path, env=_git_add_batch_env())
             if proc.returncode != 0:
-                # Scope-honest (Review: code-reviewer P3): a nonzero rc means
-                # AT LEAST ONE of `batch` failed to stage, not necessarily
-                # all of them -- git continues staging valid pathspecs and
-                # only errors on the bad one. This warning is advisory only;
-                # `staged_files` below re-derives what's actually staged from
-                # `git diff --cached` before the commit, so this message
-                # never affects correctness, only operator diagnosis.
                 failed_path = _extract_failed_path_from_git_stderr(
                     getattr(proc, "stderr", None)
                 )
@@ -847,13 +733,6 @@ def main(argv: List[str]) -> int:
             )
 
     # AMBIENT-REPO fix (bug-backlog 2026-08-28-two-bootstrap-ops-bare-commit-
-    # into-an-operator-selected-repo): `git diff --cached --name-only` reports
-    # EVERY staged path, including one an operator (or a peer) staged into
-    # this ambient repo before bootstrap ever ran -- it is not scoped to what
-    # THIS run added. `stage_targets` (this run's own untracked+modified list,
-    # captured before staging) is the honest scope; intersecting it against
-    # what actually landed in the index (`staged_files`) drops any path this
-    # run's own `git add` batch failed to stage.
     staged_files = _git_lines(["diff", "--cached", "--name-only"], root_path)
     staged_set = set(staged_files)
     scoped_commit_paths = [p for p in stage_targets if p in staged_set]
@@ -894,8 +773,6 @@ def main(argv: List[str]) -> int:
         return 1
 
     if proc.returncode != 0:
-        # Faithful oracle repro: the commit is NOT advisory-wrapped like scaffold —
-        # a rejecting pre-commit hook propagates straight through, skipping the
         # "bootstrap complete" trailer below (AC-HOOK-FAIL).
         return proc.returncode
 
@@ -904,11 +781,6 @@ def main(argv: List[str]) -> int:
     _print("  Commit: chore(coordinator): bootstrap")
     _print(f"  Revert: git -C '{root_path}' revert HEAD   (restores pre-bootstrap state)")
     return 0
-
-
-# ---------------------------------------------------------------------------
-# small internal helpers
-# ---------------------------------------------------------------------------
 
 
 def _which_git() -> Optional[str]:
@@ -979,16 +851,6 @@ def _git_config(root: str, key: str) -> Optional[str]:
         return None
     val = (proc.stdout or "").strip()
     return val or None
-
-
-# ---------------------------------------------------------------------------
-# op registration — validate-target-root-is-git-repo (repo-setup fail-loud
-# guard). Small reusable validator near this module's other fail-loud guards
-# (stage 1 "ensure-git" above performs the same _is_git_repo check inline,
-# with an interactive git-init offer attached); this is the read-only,
-# no-prompt sibling repo-setup calls standalone before deciding whether to
-# hand a target root to the full bootstrap pipeline.
-# ---------------------------------------------------------------------------
 
 
 def _validate_target_root_is_git_repo(target_root: str) -> dict:

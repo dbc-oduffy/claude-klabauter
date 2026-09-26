@@ -47,23 +47,12 @@ def _load_module(filename: str, alias: str):
 
 
 def _install_route(testcase, mod, stub):
-    """Point the subject's `cc_invoke.route` at `stub` for one test only.
-
-    `mod.cc_invoke` is the process-wide `cc_invoke` module every
-    coordinator/bin script imports by bare name — a bare assignment here
-    outlives the test and poisons every later one in the same pytest worker
-    (the subject module object is fresh per test; the library it imported is
-    not). Restore is registered as a cleanup, never left to the test body.
-    """
     patcher = unittest.mock.patch.object(mod.cc_invoke, "route", stub)
     patcher.start()
     testcase.addCleanup(patcher.stop)
 
 
 class _RouteStub:
-    """Stand-in for cc_invoke.route: first call is the dry-run preview
-    (one candidate, exit_code 0), second call is the ACT call whose
-    exit_code is under test."""
 
     def __init__(self, act_exit_code):
         self._act_exit_code = act_exit_code
@@ -74,18 +63,6 @@ class _RouteStub:
         if params.get("dry_run"):
             return {"candidates": [{"id": "state/x.md"}], "exit_code": 0}
         return {"acted": [], "exit_code": self._act_exit_code}
-
-
-# SweepActionedMemosExitLadderTest retired 2026-08-25: sweep-actioned-memos.py
-# (and fleet.archive_actioned_memos, the op it fired) was killed outright the
-# same day this file's own docstring was last touched -- K-052,
-# state/kill-ledger.md, landed c07062c99, no replacement op. Kill means kill
-# forever here; do not resurrect the subject to make this class importable
-# again. Recover the retired class body with
-# `git show c07062c99^:coordinator/bin/tests/test_archive_sweep_exit_ladder.py`
-# if the exit-ladder shape it covered ever needs re-reading. Row retired, not
-# dropped silently. PruneClosedBugsExitLadderTest below is the surviving,
-# still-live coverage.
 
 
 class PruneClosedBugsExitLadderTest(unittest.TestCase):

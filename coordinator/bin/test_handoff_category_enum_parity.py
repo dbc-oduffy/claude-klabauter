@@ -36,7 +36,6 @@ import sys
 
 
 def _repo_bin_dir() -> str:
-    """Absolute path to the coordinator/bin directory this test lives in."""
     return os.path.dirname(os.path.abspath(__file__))
 
 
@@ -81,9 +80,6 @@ def _parse_category_enum_from_cli(path: str) -> set[str]:
 
 
 def _parse_category_enum_from_schema(path: str) -> set[str]:
-    """Extract the `category.enum` array from handoff.schema.json via a real JSON load
-    (the schema is well-formed JSON, unlike the two polyglot/prose sources this test's
-    sibling test_pickup_kind_enum_parity.py must regex-parse)."""
     with open(path, "r", encoding="utf-8") as f:
         schema = json.load(f)
     try:

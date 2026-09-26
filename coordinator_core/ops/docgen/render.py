@@ -77,20 +77,10 @@ __all__ = ["RenderError", "render_document"]
 
 
 class RenderError(ValueError):
-    """Raised when a render cannot proceed: unknown doc_type, or a required
-    ``value``-kind field missing from ``resolved_field_values``, or a
-    ``literal``/``raw`` placeholder with no matching resolved value.
-    """
+    pass
 
 
 def _yaml_quote(value: Any) -> str:
-    """Double-quote a value for YAML, escaping backslashes/quotes/whitespace.
-
-    Byte-for-byte mirror of the oracle's ``bin/lib/memo_compose._yaml_quote`` —
-    always double-quotes, never bare. Kept local (not imported cross-repo) since
-    this module must not depend on the DoE clone at render time; C6's harness is
-    the only surface permitted to resolve into the DoE tree.
-    """
     s = str(value)
     escaped = (
         s.replace("\\", "\\\\")
@@ -122,13 +112,6 @@ def _render_value(spec: dict, values: Mapping[str, Any]) -> str:
 
 
 def _render_keyed_value(spec: dict, value: Any) -> str:
-    """Shared truthy-branch shape: quote-or-str, then ``key: rendered+suffix``.
-
-    This line was byte-identical across
-    ``_render_present_as_null``, ``_render_optional_omit``, and
-    ``_render_value_or_literal_fallback``; each idiom's distinct behavior lives
-    entirely in its ABSENT branch, which stays separate per caller below.
-    """
     rendered = _yaml_quote(value) if spec["quote"] else str(value)
     return f"{spec['key']}: {rendered}{spec.get('suffix', '')}"
 
@@ -165,10 +148,6 @@ def _render_list_emit_if_present(spec: dict, values: Mapping[str, Any]) -> list[
     return lines
 
 
-# Uniform dispatch over all 6 sanctioned field kinds (Review: code-reviewer —
-# was a 2-kind lookup table plus 3 inline elif branches with no functional
-# reason for the split; every kind now returns list[str] via one of these
-# small wrappers, so the table is a complete, symmetric map).
 def _dispatch_literal(spec: dict, values: Mapping[str, Any]) -> list[str]:
     return [_format_line(spec["line"], values)]
 
@@ -223,11 +202,6 @@ def _render_body(body: list[dict], values: Mapping[str, Any]) -> list[str]:
 
 
 def render_template(template: dict, resolved_field_values: Mapping[str, Any]) -> str:
-    """Render an already-loaded (and thus already-validated) template dict.
-
-    Split out from ``render_document`` so C6's conformance harness (and tests)
-    can render against an in-memory template without a disk round-trip.
-    """
     values = dict(resolved_field_values)
     lines: list[str] = []
     frontmatter = template.get("frontmatter")
@@ -255,10 +229,6 @@ def _template_index(directory: str | Path | None) -> dict[str, dict]:
         data = template_format.load_template(f)
         doc_type = data["doc_type"]
         if doc_type in index:
-            # Was silent last-wins (whichever file sorts
-            # last alphabetically won with zero signal); fail loud instead, since
-            # this is the render path's own runtime surface, not just a
-            # test-module cross-check.
             raise RenderError(
                 f"duplicate doc_type {doc_type!r} declared by both "
                 f"{sources[doc_type]!r} and {f!r}"
@@ -274,13 +244,6 @@ def render_document(
     *,
     templates_directory: str | Path | None = None,
 ) -> str:
-    """Render ``doc_type`` against ``resolved_field_values``. Pure; no I/O beyond
-    reading the template JSON (no write, no subprocess — AC6).
-
-    ``resolved_field_values`` is the SAME flat mapping of already-computed
-    strings/lists a caller would hand a ``coordinator-doc-new`` builder — this
-    function does no minting, no git, no env reads, no path resolution.
-    """
     index = _template_index(templates_directory)
     template = index.get(doc_type)
     if template is None:

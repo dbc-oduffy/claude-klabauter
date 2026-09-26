@@ -1,29 +1,3 @@
-"""test_query_commit_closures.py -- C4's own test surface for `coordinator/bin/
-query-commit-closures.py`.
-
-Spec backlink: plan `2026-08-22-the-commit-closure-pipe-carries-rows.md`
-§ C4.
-
-Pins, per C4's body: `--help`/`-h` exits 0 and states the three honesty
-disclosures (landing-forward-only coverage, the 33.5%/931/2,779
-going-forward figure, and the hand-authored-revert coverage limit); an
-unrecognized argument exits 2; a successful run prints
-`commit_closures.collect(ctx)`'s records list as parseable JSON on stdout
-at exit 0; and a collect-side exception exits 1 with the
-`query-commit-closures: ` stderr prefix, never a silent zero-rows exit 0.
-`--help`/`-h` and an unrecognized argument both go through `argparse`,
-which raises `SystemExit` (0 and 2 respectively) rather than returning --
-matching `test_query_goals.py`'s convention.
-
-AC10: a revert row (non-null `reverts_sha`) survives to stdout verbatim --
-asserted explicitly here, not merely a close row, since a test covering
-only close rows would pass while missing half the deliverable (cockpit's
-assert-AND-retract framing).
-
-`collect()` itself is stubbed throughout -- this suite never touches a
-real commit ledger or spawns `git` (see `test_query_goals.py`'s own
-stubbing pattern, mirrored here).
-"""
 from __future__ import annotations
 
 import io
@@ -108,9 +82,6 @@ class TestMain(unittest.TestCase):
         self.assertEqual(printed, _SAMPLE_RECORDS)
 
     def test_revert_row_survives_to_stdout(self):
-        """AC10 -- a revert row (non-null reverts_sha) is not dropped or
-        reshaped; a test asserting only close rows would pass while
-        missing half the deliverable."""
         with mock.patch.object(
             query_commit_closures, "resolve_repo_root_or_exit", return_value="/repo/match"
         ), mock.patch.object(

@@ -78,11 +78,6 @@ from coordinator_core.ops.fleet._findings_reap import (
 _LOG = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Predicate — marker presence alone, no age gate
-# ---------------------------------------------------------------------------
-
-
 def classify_integrated(path: Path) -> Optional[str]:
     """Leg (a) reap predicate: marker-present, no age gate.
 
@@ -94,7 +89,7 @@ def classify_integrated(path: Path) -> Optional[str]:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return None  # unreadable — fail-closed-to-keep
+        return None
 
     if _MARKER_RE.search(text):
         return "marker-present (integrated); reapable regardless of age"
@@ -104,11 +99,6 @@ def classify_integrated(path: Path) -> Optional[str]:
 
 def _reap_subject_builder(n: int) -> str:
     return f"fleet: reap {n} integrated (marker-present) review-findings sidecar(s)"
-
-
-# ---------------------------------------------------------------------------
-# Op handler
-# ---------------------------------------------------------------------------
 
 
 @register_op("fleet.reap_integrated_findings")
@@ -145,9 +135,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     dir, so both dry_run:true and dry_run:false return clean empty-list results
     with exit_code:0.
     """
-    # dry_run must be an explicit bool; omission or a wrong type must NOT
-    # silently default to False (the destructive ACT/git-rm path) — mirrors
-    # reap_unintegrated_findings' fail-closed dry_run validation.
     dry_run_raw = params.get("dry_run")
     if not isinstance(dry_run_raw, bool):
         _LOG.error(
@@ -208,14 +195,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         }
     subject_prefix = subject_prefix_raw
 
-    # Optional result-shaping (F8): a caller (e.g. the CLI facade's --summary
-    # mode) may ask for a capped sample rather than the full per-file list —
-    # a real dry-run over a large findings/ tree emitted 64KB of single-line
-    # JSON. Omitted -> None -> every list returned in full (byte-identical to
-    # pre-F8 behavior). When honored, the *_total count fields carry the true
-    # (pre-truncation) size so a truncated response is never mistaken for a
-    # complete one; op-level exit_code is always computed from the untruncated
-    # failed count, never the (possibly capped) failed list.
     summary_limit_raw = params.get("summary_limit")
     summary_limit: Optional[int] = None
     if summary_limit_raw is not None:
@@ -256,9 +235,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             result["candidates_total"] = candidates_total
         return result
 
-    # dry_run:false re-scans rather than accepting a candidate_ids allowlist —
-    # intentional per DEC-1 (this op does not use the cockpit mode/candidate_ids
-    # envelope; see module docstring), not an omission.
     current = [p for p, _ in scan_findings(worktree, classify_integrated)]
     reaped, skipped, failed = await reap_findings(
         worktree,

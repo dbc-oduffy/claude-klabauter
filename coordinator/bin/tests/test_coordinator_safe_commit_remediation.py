@@ -73,9 +73,6 @@ def test_remediation_no_longer_imports_locator_axis_resolver():
 
 
 def test_retry_command_never_names_the_killed_op(monkeypatch):
-    """Break-class regression pin: `ceremony.scoped_git_commit` was killed
-    2026-08-23 (DR-344) -- a remediation that still names it hands the
-    caller a command the engine's op registry no longer has."""
     mod = _load_cli_module()
     monkeypatch.setattr(mod, "_current_dirty_files", lambda: ["a/b.py", "c/d.py"])
 
@@ -86,19 +83,11 @@ def test_retry_command_never_names_the_killed_op(monkeypatch):
 
 
 def test_retry_command_reproduces_this_same_script_not_a_generated_artifact(monkeypatch):
-    """C5's shape: the suggestion is the caller's own invocation, corrected.
-    A generated tempfile script is the thing that went stale unnoticed for
-    eleven days, so its absence is the property worth pinning -- no `.py`
-    artifact path, no params JSON, and the placeholder that keeps the line
-    non-executable verbatim."""
     mod = _load_cli_module()
     monkeypatch.setattr(mod, "_current_dirty_files", lambda: ["a/b.py", "c/d.py"])
 
     suggestion = mod._scoped_commit_suggestion("test subject")
 
-    # Only the FIRST line is the command; the lines beneath it are the
-    # attribution banner, whose entries are dirty paths and may legitimately
-    # end in `.py`.
     command_line = suggestion.splitlines()[0]
 
     assert command_line.strip().startswith("coordinator-safe-commit ")
@@ -121,9 +110,6 @@ def test_retry_command_resolves_no_engine_root_on_any_axis():
 
 
 def test_absent_attribution_signal_renders_as_unattributed_not_as_zero_foreign(monkeypatch):
-    """A missing `touched.txt` signal must never render as "0 of N are
-    foreign" -- a false all-clear manufactured from absent data is the
-    failure this banner exists to prevent."""
     mod = _load_cli_module()
     monkeypatch.setattr(mod, "_current_dirty_files", lambda: ["a/b.py", "c/d.py"])
     monkeypatch.setattr(mod, "_own_touched_paths_for_banner", lambda: (None, "no session id"))

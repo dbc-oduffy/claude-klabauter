@@ -1,18 +1,3 @@
-"""
-coordinator_core.cartography.tests.test_atlas_coverage_guard — standing
-coverage invariant for the recorded architecture atlas.
-
-Purpose: `docs/architecture/file-index.md` has no cheap regenerator — its
-mapping rule and package table are hand-maintained prose, expanded over the
-live tree by `atlas_record.expand_recorded_mapping`. Nothing previously
-asserted on that expansion, so the document could silently rot (fall behind
-new packages/files) while still reading as valid, parseable prose. This test
-is that assertion: it is the thing standing between the atlas and silent
-rot, not a fixture exercise of the parser.
-
-Spec backlink: docs/architecture/file-index.md (the recorded mapping rule
-and `## Directory → system` package table this test holds to account).
-"""
 
 from __future__ import annotations
 
@@ -29,8 +14,6 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_recorded_atlas_classifies_every_tracked_source_file() -> None:
-    """The recorded atlas must catalogue every tracked source file — zero
-    uncatalogued paths under the live tree."""
     atlas: RecordedAtlas = load_recorded_atlas(REPO_ROOT)
     assert atlas.error is None, atlas.error_detail
 

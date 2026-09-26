@@ -1,6 +1,3 @@
-"""Spawn-free unit tests for `coordinator_core.git.published_tree_
-classification`, plus the parity test pinning its duplicated constants
-against the generator's own (AC10)."""
 
 from __future__ import annotations
 
@@ -47,7 +44,6 @@ def test_touched_published_names_finds_top_level_name_under_each_subdir():
 
 
 def test_touched_published_names_ignores_bare_subdir_entry():
-    # a path exactly equal to the subdir itself carries no top-level name
     assert ptc.touched_published_names(["coordinator_core"]) == {}
 
 

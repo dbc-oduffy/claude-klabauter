@@ -35,8 +35,6 @@ from coordinator_core.contract.decision_object import (
 )
 from coordinator_core.contract.decision_object.envelope import extend_exit_codes
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -113,10 +111,6 @@ def test_build_judgment_point_requires_recommendation_positional():
 
 
 def test_build_judgment_point_carries_the_given_recommendation():
-    # cross-slice correction (AC-13). The canonical
-    # `recommendation` shape is an object `{disposition, rationale}` | None,
-    # not a bare string -- see `pickup_assemble.__init__`'s
-    # `Optional[dict[str, str]]` signature and the DoE schema-of-record.
     point = build_judgment_point(
         {"disposition": "proceed", "rationale": "no competing claim found"},
         id="jcc",
@@ -216,20 +210,6 @@ def test_build_untrusted_gate_judgment_point_always_emits_recommendation_none():
 
 
 def test_decision_object_subpackage_import_does_not_pull_in_forbidden_modules():
-    """Import the package fresh in a subprocess and assert no forbidden
-    module (`pydantic`, `coordinator_core.contract.cockpit_schema`) ever
-    lands in that subprocess's `sys.modules`.
-
-    The prior in-process `sys.modules`
-    loop asserted `not A or not B` where A ("name starts with a forbidden
-    prefix") and B ("name starts with `coordinator_core.contract.
-    decision_object`") describe two disjoint prefixes -- no module's dotted
-    name can start with both, so the assertion could never fail regardless
-    of what actually got imported. A subprocess is used (not just a fresh
-    loop in this process) because modules already imported by earlier tests
-    in this same process would pollute `sys.modules` regardless of what
-    this package itself imports.
-    """
     script = (
         "import sys\n"
         "import coordinator_core.contract.decision_object\n"
@@ -242,7 +222,7 @@ def test_decision_object_subpackage_import_does_not_pull_in_forbidden_modules():
         cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # popup-safe-env-suppressed
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     assert result.returncode == 0, (
         f"stdout={result.stdout!r} stderr={result.stderr!r}"

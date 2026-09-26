@@ -1,10 +1,3 @@
-"""
-Tests for ``writes_under:`` -- run-time-named write prefixes, end to end
-across the dispatch-emit pipeline (spine_read -> wave_map -> pathspec ->
-emit).
-
-Source: state/improvement-queue/2026-09-11-dispatch-emit-takes-a-writes-under-prefi-309100e2b36b.yaml.
-"""
 
 from __future__ import annotations
 
@@ -63,11 +56,6 @@ def _wave_row(id_, writes, writes_under=()):
         depends_on=[],
         writes_under=tuple(writes_under),
     )
-
-
-# ---------------------------------------------------------------------------
-# spine_read
-# ---------------------------------------------------------------------------
 
 
 def test_a_prefix_only_row_reads_as_declared_empty_writes(tmp_path):
@@ -133,7 +121,6 @@ def test_a_scalar_prefix_is_refused(tmp_path):
 
 def test_an_epistemic_premise_gated_prefix_row_is_not_held_out(tmp_path):
     # The holdout keys on UNDECLARED writes. A prefix row has declared where
-    # it writes, so it must be scheduled after its gate, not held.
     body = """\
 - id: C1
   title: decides
@@ -152,11 +139,6 @@ def test_an_epistemic_premise_gated_prefix_row_is_not_held_out(tmp_path):
     waves = build_waves(read_spine(_write_plan(tmp_path, body)))
     assert [[row.id for row in wave] for wave in waves] == [["C1"], ["C2"]]
     assert waves[1][0].writes_under == (_AUDITS,)
-
-
-# ---------------------------------------------------------------------------
-# wave_map
-# ---------------------------------------------------------------------------
 
 
 def test_two_rows_under_one_prefix_cannot_share_a_wave():
@@ -186,9 +168,6 @@ def test_a_reader_under_a_prefix_lands_after_its_writer():
 
 
 def test_a_reader_of_the_prefixs_own_ancestor_lands_after_its_writer():
-    # Reverse containment: the reader's declared path (`state/`) is itself
-    # an ancestor of the writer's prefix (`state/audits/`), not a descendant
-    # of it -- the ordinary direction `_predecessors` already checked.
     rows = [
         _row("C2", ["b.py"], reads=["state/"]),
         _row("C1", [], [_AUDITS]),
@@ -214,11 +193,6 @@ def test_two_rows_sharing_a_backslash_spelled_prefix_from_a_spine_cannot_share_a
 """
     waves = build_waves(read_spine(_write_plan(tmp_path, body)))
     assert len(waves) == 2
-
-
-# ---------------------------------------------------------------------------
-# pathspec
-# ---------------------------------------------------------------------------
 
 
 def test_a_prefix_only_wave_returns_an_empty_static_pathspec_without_refusing(caplog):
@@ -252,11 +226,6 @@ def test_the_directory_shaped_refusal_names_the_prefix_spelling():
 
 def test_a_prefix_only_spine_has_a_legitimately_empty_test_scope():
     assert terminal_test_scope([[_wave_row("C1", [], [_AUDITS])]]) == []
-
-
-# ---------------------------------------------------------------------------
-# emit
-# ---------------------------------------------------------------------------
 
 
 def test_a_prefix_only_wave_keeps_its_commit_phase_with_the_widening_rule():
@@ -303,8 +272,6 @@ def test_the_executor_names_its_own_prefix_files_and_never_runs_porcelain_over_t
     assert "created-under-prefix:" in contract
     footprint = re.search(r"outside this footprint: (.*?)\. If", contract).group(1)
     assert _AUDITS in footprint
-    # The self-verify step carries a `<footprint paths>` placeholder; the
-    # DONE-summary clause is the one rendered with this row's real paths.
     (porcelain,) = [
         paths
         for paths in re.findall(r"git status --porcelain -- (.*?) \| cut", contract)
@@ -316,15 +283,6 @@ def test_the_executor_names_its_own_prefix_files_and_never_runs_porcelain_over_t
 
 @pytest.mark.spawns_process
 def test_a_gitignored_batch_with_a_prefix_still_keeps_its_commit_phase(tmp_path):
-    """The gitignore-empty-batch skip (`compose_script`'s `not batch_pathspec
-    and not any(row.writes_under for row in batch)` guard) must not fire on a
-    batch that ALSO carries a `writes_under:` prefix -- the prefix names no
-    concrete file at emit time, so it never appears in `batch_pathspec` and
-    can never itself be gitignored, but it still needs a commit agent for
-    whatever it writes at run time. Only the pure all-gitignored shape (no
-    prefix at all) is covered by
-    `test_a_wave_whose_only_write_is_gitignored_gets_no_commit_phase`
-    (Review: coordinator:code-reviewer, dispatch-emit slice, Finding 4)."""
     import subprocess as _subprocess
 
     repo = tmp_path / "r"

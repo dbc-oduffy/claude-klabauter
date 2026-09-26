@@ -1,10 +1,3 @@
-"""Tests for coordinator_core.ops.merge_quiet_activity_gate.
-
-All git exercise runs against a throwaway repo created fresh under
-`tmp_path` per test — NEVER against this working repo. See module
-docstring for the op-key/contract this covers:
-`merge.quiet_activity_gate`.
-"""
 from __future__ import annotations
 
 import os
@@ -22,8 +15,6 @@ from coordinator_core.ops.merge_quiet_activity_gate import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -46,11 +37,6 @@ def _git(*args: str, cwd: Path, env: dict | None = None) -> subprocess.Completed
 
 @pytest.fixture(autouse=True)
 def _isolate_global_git_config(tmp_path, monkeypatch):
-    """Isolate from the ambient dev machine's global git config, mirroring
-    the same fixture in test_detect_changed_dependency_manifests.py — this
-    module's own subprocess calls inherit os.environ, so the override must
-    be process-wide, not a one-off subprocess env=.
-    """
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
@@ -135,14 +121,6 @@ def test_future_commit_timestamp_clamps_to_zero_and_blocks(tmp_path):
 
 
 def test_double_invocation_is_idempotent(tmp_path):
-    """AC7: a second invocation with identical inputs is a safe no-op —
-    identical git state on rerun yields the identical `ok`/`message`
-    verdict, no mutation performed. `seconds_since_last_commit` is a
-    wall-clock-derived reading (not a stored value) so it legitimately
-    ticks forward between the two calls; idempotency is about the VERDICT
-    being stable given the same underlying git state, not the reading
-    being frozen.
-    """
     root = tmp_path / "repo"
     _init_repo(root)
     old_epoch = int(time.time()) - 3600

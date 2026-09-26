@@ -1,26 +1,3 @@
-"""
-coordinator_core.pickup_assemble.tests.test_unification_predicate_default
-
-Purpose: reads the SHIPPED value of `_baton_unification_routing_enabled`
-(D-I, docs/plans/2026-08-19-batons-unify-into-one-successor.md § C5) on the
-FAST tier.
-
-Why this is its own file rather than a case in
-`test_baton_unification.py`: that suite is marked `spawns_process` +
-`cadence` as a whole, because its fixtures drive a real git harness. A
-one-line default that changes behaviour for every pickup on this box should
-not be guarded only at cadence gates — a silent revert would sit green on
-every commit-time run in between. This predicate needs no fixture at all, so
-the check costs nothing here.
-
-Every other test of this seam monkeypatches the predicate in both
-directions, deliberately: they pin the routing's behaviour under each arm.
-None of them would notice the shipped literal changing. This one does, and
-does nothing else.
-
-Run from the repo root: python -m pytest
-coordinator_core/pickup_assemble/tests/test_unification_predicate_default.py -q
-"""
 from __future__ import annotations
 
 import coordinator_core.pickup_assemble as pa

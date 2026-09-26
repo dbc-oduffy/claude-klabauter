@@ -56,9 +56,6 @@ pytestmark = [
 
 
 class _FakeVersionState:
-    """Never skewed -- skew is `test_server_loop.py`'s subject, and a skewed
-    verdict short-circuits before the frame is dispatched, which would make
-    this file pass without ever reading a large request."""
 
     server_sha = "deadbeef"
 
@@ -81,7 +78,7 @@ def _frame(payload_bytes: int) -> bytes:
         "params": {"pad": ""},
         "_engine_token": "client-token",
     }
-    base = len(json.dumps(msg).encode("utf-8")) + 1  # +1 for the newline
+    base = len(json.dumps(msg).encode("utf-8")) + 1
     msg["params"]["pad"] = "x" * max(0, payload_bytes - base)
     return (json.dumps(msg) + "\n").encode("utf-8")
 
@@ -103,9 +100,6 @@ def _serve_one(handle: int, seen: list, written: list) -> None:
     conn = server._wrap_handle(handle)
 
     class _Tee:
-        """Records what the server writes without changing what it writes to
-        -- the response has to land on the real pipe, because a client
-        blocked on reading it is what keeps the write from being a no-op."""
 
         def readline(self) -> bytes:
             return conn.readline()
@@ -136,7 +130,6 @@ def _serve_one(handle: int, seen: list, written: list) -> None:
 
 
 def _sizes() -> list:
-    """Derived, never pinned -- see the module docstring."""
     from coordinator_core.warm import server
 
     buf = _io.DEFAULT_BUFFER_SIZE
@@ -195,10 +188,6 @@ def test_a_request_frame_larger_than_the_read_buffer_is_still_served(create, siz
     try:
         frame = _frame(size)
         assert len(frame) == size
-        # ONE `WriteFile` for the whole frame, which is what `door.c`'s
-        # `write_frame_bounded` does -- the single-message shape is the input
-        # that message read mode choked on, so chunking it here would test a
-        # case the real caller never produces.
         _winapi.WriteFile(client, frame)
         accept_thread.join(30)
         assert not accept_thread.is_alive(), (

@@ -1,19 +1,3 @@
-"""
-test_emit_conformance_fixture — the generator's negative spec, pinned.
-
-The load-bearing test here is `test_min_supported_is_preserved_never_derived`.
-`min_supported_contract_version` is DoE-owned and hand-maintained; a generator that
-emitted `min_supported == contract_version` would trip claude-klabauter's own `doe_drift`
-version-band gate on every still-current consumer pin, which is exactly what DoE's
-CD-2 re-vendor-window discipline exists to prevent. The failure would be silent at
-generation time and loud in every consumer, so it is asserted here rather than
-trusted to the docstring.
-
-These tests build their own committed-fixture and schema inputs rather than reading
-the DoE clone: the generator's contract is "preserve what the committed fixture
-said", and a test that reads the real fixture would pass for whatever that file
-happens to hold today.
-"""
 from __future__ import annotations
 
 import json
@@ -60,7 +44,6 @@ def _committed(**overrides):
 
 
 def test_min_supported_is_preserved_never_derived():
-    """The negative spec. Deriving it would break every current consumer pin."""
     body = gen.build_fixture(_committed(), _ENVELOPE_SCHEMA)
 
     assert body["contract_version"] == "9.9.9", "contract_version must track the schema"
@@ -74,7 +57,6 @@ def test_min_supported_is_preserved_never_derived():
 
 
 def test_an_unusual_min_supported_is_still_carried_verbatim():
-    """Preservation must not be a coincidence of the two values matching today."""
     body = gen.build_fixture(
         _committed(min_supported_contract_version="1.2.3"), _ENVELOPE_SCHEMA
     )
@@ -97,7 +79,6 @@ def test_a_schema_without_a_version_is_refused():
 
 
 def test_missing_required_fields_are_added_and_existing_values_kept():
-    """A field the contract has since added is synthesized; real data is not rewritten."""
     body = gen.build_fixture(_committed(), _ENVELOPE_SCHEMA)
     handoff = body["handoffs"][0]
 
@@ -106,7 +87,6 @@ def test_missing_required_fields_are_added_and_existing_values_kept():
 
 
 def test_fields_the_contract_removed_are_dropped():
-    """`additionalProperties: false` means a retired field must not survive a regen."""
     committed = _committed()
     committed["handoffs"][0]["file_attribution_id"] = "retired-field"
     body = gen.build_fixture(committed, _ENVELOPE_SCHEMA)
@@ -115,7 +95,6 @@ def test_fields_the_contract_removed_are_dropped():
 
 
 def test_generated_envelope_validates_and_metadata_is_held_out():
-    """The two metadata keys are not envelope fields and must not be validated as such."""
     jsonschema = pytest.importorskip("jsonschema")
     body = gen.build_fixture(_committed(), _ENVELOPE_SCHEMA)
 
@@ -125,7 +104,6 @@ def test_generated_envelope_validates_and_metadata_is_held_out():
 
 
 def test_regeneration_is_idempotent():
-    """A second run over its own output must be a no-op, or every regen is a full diff."""
     once = gen.build_fixture(_committed(), _ENVELOPE_SCHEMA)
     twice = gen.build_fixture(json.loads(json.dumps(once)), _ENVELOPE_SCHEMA)
     assert gen.render(twice) == gen.render(once)
@@ -139,7 +117,6 @@ def test_render_matches_the_committed_byte_conventions():
 
 
 def test_key_order_follows_the_schema_not_sorted():
-    """Sorted output would rewrite the whole file on first run and bury the real change."""
     body = gen.build_fixture(_committed(), _ENVELOPE_SCHEMA)
     envelope_keys = [k for k in body if k not in gen._FIXTURE_METADATA_KEYS]
     assert envelope_keys == ["schema_version", "handoffs", "plans"]

@@ -149,14 +149,6 @@ class TestResolveRecordFiles:
         }
 
     def test_ac5a_nested_path_excluded(self, tmp_path: Path):
-        """Git pathspec `*` crosses `/`; Python `glob` `*` does not (AC5a).
-
-        A file one directory level deeper than `decision`'s glob
-        (`docs/decisions/*.md`) would be matched by a naive `git log --
-        docs/decisions/*.md` pathspec but must NOT appear in the resolved
-        set, since the set is derived through the same walker
-        `records_query` uses, not through git pathspec semantics.
-        """
         worktree = tmp_path
         _write(worktree / "docs" / "decisions" / "dr-1.md")
         _write(worktree / "docs" / "decisions" / "nested" / "dr-2.md")
@@ -201,10 +193,6 @@ class TestPostFilter:
         assert unknown == ["docs/decisions/nested/dr-2.md"]
 
     def test_untracked_record_paths(self):
-        """AC5b: an on-disk record git has never tracked reports as an
-        explicit untracked marker set, distinct from a tracked-but-eventless
-        record — this function supplies the set; the marker text itself is
-        applied by the C1b history-assembly caller."""
         known = frozenset({"docs/decisions/dr-1.md", "docs/decisions/dr-untracked.md"})
         tracked = frozenset({"docs/decisions/dr-1.md"})
 
@@ -220,10 +208,6 @@ class TestPostFilter:
 
 
 def _decision_body(status: str, extra_lines: int = 0, decoy_status: str | None = None) -> str:
-    """A minimal decision-record body: short frontmatter (`status:` inside
-    the ≤60-line bound) plus optional padding and a decoy body-level
-    `status:` line placed well past line 60 — used by the hunk-position
-    fixture (F4)."""
     lines = [
         "---",
         f"status: {status}",
@@ -240,9 +224,6 @@ def _decision_body(status: str, extra_lines: int = 0, decoy_status: str | None =
 
 
 class TestDeriveTypeHistoryWipeRestore:
-    """F2: a whole-tree wipe/restore pair must not read as a phantom
-    transition, and `created_at` must pin the original add, not the
-    restore."""
 
     def test_wipe_restore_pair_yields_no_phantom_transition(self, tmp_path: Path):
         repo = tmp_path / "repo"
@@ -267,9 +248,6 @@ class TestDeriveTypeHistoryWipeRestore:
 
 
 class TestDeriveTypeHistoryRename:
-    """F6: a rename mid-history keeps the file's history keyed on the
-    current path, carrying the pre-rename `created_at` and any transition
-    made in the same commit as the rename."""
 
     def test_rename_keeps_created_at_and_records_same_commit_transition(self, tmp_path: Path):
         repo = tmp_path / "repo"
@@ -294,8 +272,6 @@ class TestDeriveTypeHistoryRename:
 
 
 class TestDeriveTypeHistoryHunkPosition:
-    """F4: a `status:` line below the frontmatter bound (measured: some land
-    below file line 30 in this corpus) must not read as a transition."""
 
     def test_body_level_status_line_excluded(self, tmp_path: Path):
         repo = tmp_path / "repo"
@@ -320,8 +296,6 @@ class TestDeriveTypeHistoryHunkPosition:
 
 
 class TestDeriveTypeHistoryCommentOnlyEdit:
-    """F5: a trailing-comment-only edit compares equal after stripping and
-    must not read as a transition."""
 
     def test_comment_only_edit_dropped(self, tmp_path: Path):
         repo = tmp_path / "repo"
@@ -368,8 +342,6 @@ class TestDeriveTypeHistoryCommentOnlyEdit:
 
 
 class TestDeriveTypeHistorySpawnCount:
-    """A single git invocation per call (AC2's per-call half; C4 owns the
-    O(pathspecs)-not-O(records) cross-corpus proof)."""
 
     def test_single_git_spawn(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         repo = tmp_path / "repo"
@@ -395,9 +367,6 @@ class TestDeriveTypeHistorySpawnCount:
 
 
 def _build_decision_corpus(repo: Path, n_files: int) -> None:
-    """A throwaway repo with `n_files` committed `decision` records, one
-    commit per file so the git history isn't trivially collapsed to a
-    single commit regardless of corpus size."""
     _init_repo(repo)
     for i in range(n_files):
         record = repo / "docs" / "decisions" / f"dr-{i}.md"
@@ -407,22 +376,6 @@ def _build_decision_corpus(repo: Path, n_files: int) -> None:
 
 
 class TestDeriveTypeHistorySpawnCountIsCorpusInvariant:
-    """C4 leg (b): the actual O(1)-spawn proof (AC2 as restated by F8).
-
-    A constant bound alone ("spawn count is small") does not prove O(1) --
-    only an EQUAL spawn count across two materially different corpus sizes
-    does, since a bound could still scale sub-linearly-but-not-constant and
-    still look small on both ends. `subprocess.Popen` is wrapped in the
-    `subprocess` module itself (not a `record_history`-local attribute), so
-    a spawn routed through `os.popen`/`os.system`/a re-import would still be
-    caught rather than silently missed by a narrower stub.
-
-    Budget: 1 spawn per pathspec (`derive_type_history` issues exactly one
-    `git log` pass per call, per AC2) -- no unexplained slack. No
-    `rev-parse`/`show-toplevel` preamble exists in this call path today; if
-    one is ever added, the budget below must be named explicitly rather
-    than grown silently.
-    """
 
     def _spawn_count_for_corpus(
         self,
@@ -452,9 +405,6 @@ class TestDeriveTypeHistorySpawnCountIsCorpusInvariant:
     def test_spawn_count_equal_across_differently_sized_corpora(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ):
-        # Captured once, ahead of either patch, so the second call's
-        # "original" is the real `Popen.__init__` -- never the first call's
-        # already-wrapped counting shim (which would double-count).
         real_popen_init = subprocess.Popen.__init__
 
         small_count = self._spawn_count_for_corpus(tmp_path, 2, monkeypatch, real_popen_init)
@@ -466,10 +416,6 @@ class TestDeriveTypeHistorySpawnCountIsCorpusInvariant:
 
 
 class TestDeriveAcrossRoots:
-    """C5 (AC9/AC10): multi-root labelling, and the non-worktree-root SKIP
-    path staff-eng F11 named -- a registered root that IS a directory but is
-    NOT a git worktree must be counted SKIPPED, never as an empty walked
-    repo (which would make `queried_root_count` over-report)."""
 
     def test_queried_root_count_equals_roots_actually_walked(self, tmp_path: Path):
         repo_a = tmp_path / "repo-a"
@@ -510,8 +456,6 @@ class TestDeriveAcrossRoots:
 
 
 def _build_two_type_corpus(repo: Path) -> None:
-    """One `decision` and one `sizing-object` record, each with a real
-    `status` transition, for the multi-type widening tests (P083-C4)."""
     _init_repo(repo)
     decision = repo / "docs" / "decisions" / "dr-1.md"
     decision.parent.mkdir(parents=True)
@@ -527,11 +471,8 @@ def _build_two_type_corpus(repo: Path) -> None:
 
 
 class TestDeriveTypeHistoryMultiType:
-    """P083-C4: one `records.history`-shaped call for several types."""
 
     def test_single_type_call_keeps_existing_shape_byte_for_byte(self, tmp_path: Path):
-        """R3 backward compatibility: a bare string keeps the singular shape
-        -- no `record_type` key on each record."""
         repo = tmp_path / "repo"
         _build_two_type_corpus(repo)
 
@@ -582,9 +523,6 @@ class TestDeriveTypeHistoryMultiType:
         assert "decision" in exc_info.value.supported
 
     def test_single_git_spawn_for_two_types(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        """The point of the ask (C4 body): a two-type call costs ONE walk,
-        not one per type -- measured, not asserted, against the baseline of
-        two single-type calls."""
         repo = tmp_path / "repo"
         _build_two_type_corpus(repo)
 
@@ -602,8 +540,6 @@ class TestDeriveTypeHistoryMultiType:
 
         assert spawn_count == 1
 
-        # Baseline: two single-type calls cost two spawns -- the widened
-        # call must be strictly cheaper, never merely "also small".
         spawn_count = 0
         derive_type_history(repo, "decision")
         derive_type_history(repo, "sizing-object")
@@ -611,8 +547,6 @@ class TestDeriveTypeHistoryMultiType:
 
 
 class TestDeriveTypeHistorySince:
-    """P083-C4 R2: `since` bounds EVENTS only, never the walk or
-    `created_at`/`untracked` classification."""
 
     def test_since_excludes_pre_window_event_but_keeps_created_at(self, tmp_path: Path):
         repo = tmp_path / "repo"
@@ -629,10 +563,7 @@ class TestDeriveTypeHistorySince:
         history = derive_type_history(repo, "decision", since="2026-01-05")
         entry = next(e for e in history if e["path"] == "docs/decisions/dr-1.md")
 
-        # The event predates the window -- excluded.
         assert entry["events"] == []
-        # But created_at is a whole-history fact -- NOT bounded by `since`,
-        # and NOT nulled the way a truncated walk would null it.
         assert entry["created_at"].startswith("2026-01-01")
 
     def test_since_keeps_in_window_event(self, tmp_path: Path):
@@ -655,7 +586,6 @@ class TestDeriveTypeHistorySince:
 
 
 class TestRecordsHistoryOp:
-    """`records.history`'s envelope shape, both arms (P083-C4)."""
 
     def test_single_type_envelope_unchanged(self, tmp_path: Path):
         repo = tmp_path / "repo"
@@ -670,7 +600,6 @@ class TestRecordsHistoryOp:
     def test_multi_type_envelope_groups_untracked_per_type(self, tmp_path: Path):
         repo = tmp_path / "repo"
         _build_two_type_corpus(repo)
-        # An untracked (uncommitted) sizing-object record.
         untracked_file = repo / "state" / "sizings" / "sz-untracked.yaml"
         untracked_file.write_text("status: draft\n", encoding="utf-8")
 

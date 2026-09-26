@@ -1,21 +1,3 @@
-"""C9 (2026-08-27, docs/plans/2026-08-27-a-pathspec-is-not-a-scope.md):
-`check_destructive_rm` records a TOUCH for every path THIS session's own
-`rm`/`git rm` actually removes, closing the residue filed at
-`state/bug-backlog/2026-08-27-git-rm-through-bash-leaves-no-touch-clai-
-d0a400871a9f.yaml` -- a Bash `rm`/`git rm` fires no Write/Edit hook, so the
-deleting session left no claim behind and its own legitimate deletion
-rendered `owner:orphan` at `compute_scope`.
-
-WHAT MUST NOT REGRESS. `compute_scope` Step 1 already admits a
-touched-then-deleted path to `my_scope` with NO existence check (ratified
-AC10, `test_tracked_then_deleted_file_hits_mtime_epoch_zero_in_
-forgiveness_loop`) -- so a plain TOUCH (not a new verb) is sufficient, and
-this file does not touch `compute_scope` at all. The negative-space
-half -- a DENIED `rm` must record nothing, and a path this session did not
-itself remove must never get a claim it did not earn -- is exactly what
-`test_denied_rm_records_no_touch` and
-`test_rm_does_not_touch_paths_it_did_not_target` pin.
-"""
 
 from __future__ import annotations
 
@@ -33,8 +15,6 @@ from coordinator_core.session.touch_record import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -115,9 +95,6 @@ def test_git_rm_of_clean_tracked_file_records_a_touch(tmp_path, monkeypatch):
 
 
 def test_git_rm_cached_does_not_touch_the_working_tree_copy(tmp_path, monkeypatch):
-    """`git rm --cached` unstages but never removes the working-tree file --
-    recording a TOUCH here would misrepresent a file this command never
-    actually deletes."""
     root = _init_repo(tmp_path)
     target = os.path.join(root, "cached.txt")
     with open(target, "w", encoding="utf-8") as fh:
@@ -137,10 +114,6 @@ def test_git_rm_cached_does_not_touch_the_working_tree_copy(tmp_path, monkeypatc
 
 
 def test_denied_rm_records_no_touch(tmp_path, monkeypatch):
-    """The DENY leg (uncommitted/untracked work a recursive rm would
-    destroy) must never let a touch record land for a deletion that never
-    actually happens -- the whole point of flushing only at the function's
-    final `return None`."""
     root = _init_repo(tmp_path)
     seed = os.path.join(root, "seed.txt")
     with open(seed, "w", encoding="utf-8") as fh:

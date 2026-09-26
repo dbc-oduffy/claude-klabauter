@@ -38,7 +38,6 @@ from coordinator_core.ops import freshness_commit_delta as fcd
 from coordinator_core.win_portability import no_console_creationflags
 import coordinator_core.ipc as ipc
 
-# Real git spawns to build fixture repos; the whole file lives at cadence, not fast.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -68,11 +67,6 @@ def _commit(root: Path, relpath: str, message: str, content: str = "x") -> None:
     _git(root, "commit", "-q", "-m", message)
 
 
-# ---------------------------------------------------------------------------
-# (a) three-field payload shape
-# ---------------------------------------------------------------------------
-
-
 def test_commit_delta_returns_three_int_fields_all_stale_on_fresh_repo(tmp_path):
     """A brand-new repo with one unrelated commit qualifies for none of the three
     signals -- all three fields read the `_VERY_STALE` sentinel."""
@@ -92,25 +86,17 @@ def test_commit_delta_returns_three_int_fields_all_stale_on_fresh_repo(tmp_path)
 
 
 def test_commit_delta_positions_each_field_independently(tmp_path):
-    """Newest-first ancestry position, per field, matching the module's own "Field
-    semantics" contract -- position 0 means the newest commit on HEAD fired the
-    signal. Commits land oldest-first here so HEAD is the doc-marked one."""
     repo = tmp_path / "repo"
     _init_repo(repo)
-    _commit(repo, "src/a.py", "bug-sweep pass over src/a.py")  # position 2 at HEAD
-    _commit(repo, "coordinator_core/ops/tests/test_thing.py", "add a test")  # position 1
-    _commit(repo, "docs/readme.md", "update-docs: refresh readme")  # position 0 (HEAD)
+    _commit(repo, "src/a.py", "bug-sweep pass over src/a.py")
+    _commit(repo, "coordinator_core/ops/tests/test_thing.py", "add a test")
+    _commit(repo, "docs/readme.md", "update-docs: refresh readme")
 
     result = fcd.commit_delta(repo)
 
     assert result["doc_commit_delta"] == 0
     assert result["test_commit_delta"] == 1
     assert result["bug_sweep_commit_delta"] == 2
-
-
-# ---------------------------------------------------------------------------
-# (b) non-degenerate fixture -- staff-eng F1 falsification
-# ---------------------------------------------------------------------------
 
 
 def test_test_commit_delta_is_non_degenerate_for_a_real_test_touching_commit(tmp_path):
@@ -163,8 +149,6 @@ def test_test_path_pattern_fires_on_every_documented_naming_convention(tmp_path,
 
 
 def test_test_path_pattern_does_not_fire_on_a_non_test_path(tmp_path):
-    """Negative control for (b): a changed path with no test-shaped component must
-    NOT fire, or the falsification above would be meaningless (any path would pass)."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     _commit(repo, "README.md", "seed")
@@ -174,16 +158,7 @@ def test_test_path_pattern_does_not_fire_on_a_non_test_path(tmp_path):
     assert result["test_commit_delta"] == _VERY_STALE
 
 
-# ---------------------------------------------------------------------------
-# (c) single-spawn budget
-# ---------------------------------------------------------------------------
-
-
 def test_commit_delta_issues_exactly_one_run_git_call(tmp_path, monkeypatch):
-    """Negative-spec: 'Does NOT spawn per field. All three fields are produced from
-    ONE `git log` invocation.' Seam-substitutes `run_git` in the op module (not the
-    global `subprocess.run`) so this counts the exact call this op's own module makes,
-    independent of any other legitimized site sharing the same git binary."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     _commit(repo, "docs/readme.md", "update-docs: refresh")
@@ -212,8 +187,6 @@ def test_commit_delta_issues_exactly_one_run_git_call(tmp_path, monkeypatch):
 
 
 def test_commit_delta_never_raises_on_run_git_failure(tmp_path, monkeypatch):
-    """Module docstring: 'Never raises -- a missing/unreadable repo, or a run_git
-    failure, reads as "very stale" on all three fields.'"""
     failure = MagicMock()
     failure.ok = False
     failure.stdout = ""
@@ -241,11 +214,6 @@ def test_scan_depth_window_caps_the_read(tmp_path):
     assert result["test_commit_delta"] == _VERY_STALE
 
 
-# ---------------------------------------------------------------------------
-# (d) registration-quad parity
-# ---------------------------------------------------------------------------
-
-
 def test_op_resolves_through_the_real_dispatch_path():
     """Mirrors test_op_registration.py's (a): resolve through ipc's real dispatch
     path (registry hit, else the lazy-import fallback), never raw _REGISTRY
@@ -267,9 +235,6 @@ def test_op_has_show_top_scope():
 
 
 def test_freshness_commit_delta_handler_dispatches_with_no_params(tmp_path):
-    """Negative-spec: 'Does NOT accept caller params.' The registered handler takes
-    an empty params dict and a repo_root, and returns the same three-field shape
-    `commit_delta()` does."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     _commit(repo, "README.md", "seed")

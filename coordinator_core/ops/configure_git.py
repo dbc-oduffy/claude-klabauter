@@ -79,85 +79,22 @@ from coordinator_core.install.write_surface import (
 
 @dataclass(frozen=True)
 class GitSetting:
-    """One git-config key this writer applies.
-
-    `platforms=None` is the sentinel meaning "all platforms". Windows
-    membership is tested against `sys.platform == "win32"`, so a
-    Windows-only setting carries `platforms=frozenset({"win32"})`.
-    """
 
     key: str
     value: str
-    scope: str = "repo"  # "repo" | "global"
+    scope: str = "repo"
     platforms: frozenset[str] | None = None
     group: str | None = None
     unset_group: str | None = None
 
 
-# Dropped typing.List/
-# Tuple/Optional/Sequence in favor of builtin generics for consistency with
-# machine_local_forwarder.py, landed in the same port wave and already using
-# builtin-generic form — both files carry `from __future__ import annotations`,
-# which makes this legal.
 _SETTINGS: tuple[GitSetting, ...] = (
     # PER-REPO, no scope= — the 2026-08-07 per-key scope ruling recorded in the
-    # core.checkStat block directly below is what makes per-repo the default
-    # here, and this key inherits it rather than re-arguing it.
-    #
-    # gc.auto=0 turns auto-gc OFF outright. It replaces gc.autoDetach=false,
-    # which only moved auto-gc into the foreground: on a box sharing one
-    # worktree across ~50 sessions that meant RACING foreground repacks, the
-    # mechanism that left 1.1 GB of orphan .tmp-*-pack-* bodies here. Removing
-    # the producer is the fix; coordinator_core.ops.git_maintenance is the
-    # replacement leg that keeps the repo maintained from a ceremony instead.
-    #
     # WHAT REMOVING gc.autoDetach ALSO TURNS OFF, stated because nothing else
-    # says it: maintenance.autoDetach FALLS BACK to gc.autoDetach when unset
-    # (git-maintenance(1)), so this key was silently governing auto-*maintenance*
-    # detachment too, not only auto-gc. That coupling is why removing it is safe
-    # ONLY alongside git_perf_config.apply()'s maintenance.auto=false — without
-    # that key, dropping this one hands auto-maintenance back its git default.
-    #
     # THE TWO-WRITER ROLLOUT WINDOW, named rather than left implicit: this op
-    # (`configure_git`) and `git_perf_config.apply()`/`apply_fleet()` are separate
-    # ops on separate invocation paths — nothing here makes them transactional or
-    # co-invoked. A repo can therefore sit with `gc.auto=0` written and
-    # `maintenance.auto`/`maintenance.prefetch.enabled` still at git's defaults
-    # (true/enabled): an already-registered worktree that ran this op via
-    # `repo-setup` but has not yet had a `git_perf_config` sweep land, or an
-    # installer ordering where this op's Phase 1 write precedes the later
-    # fleet-sweep phase in `maximalist.py`. In that window `git maintenance
-    # run --auto`-triggered tasks, including network-touching `prefetch`, keep
-    # firing unconstrained — the exact state this key's own coupling comment
-    # calls unsafe. WHAT CLOSES IT: `orient_assemble.readers_health_reaper
-    # :: _read_git_perf_currency`, wired into the daily workday-start ceremony,
-    # detects fleet drift on `core.untrackedCache` currency and its `--fix` path
-    # runs `git_perf_config.apply_fleet` in-process, which also carries the three
-    # maintenance keys (`_apply_maintenance_keys`) — so the window is bounded to
-    # "until the next workday-start ceremony run on this machine," not
-    # indefinite drift. It is not zero, and it is not transactional; it is a
-    # same-day bound, which is why this is documented rather than fixed here —
-    # co-locating the two writers is a design change beyond this key's scope.
     GitSetting(key="gc.auto", value="0"),
-    # scope="global" per doe-claude-em's ruling (Ask 1, ruled (a)) in
-    # cross-repo/inbox/2026-08-07-doe-claude-em-configure-git-per-key-scope-ruled-a.md,
-    # citing coordinator/commands/uninstall.md item 14 which asserts
-    # core.checkStat machine-wide.
     GitSetting(key="core.checkStat", value="minimal", scope="global"),
-    # Windows-only help-browser triple, C3 of
-    # docs/plans/2026-08-07-git-help-browser-settings-shape.md. `git help --web`
-    # defaults to launching the operator's OS browser on every doc lookup; this
-    # triple redirects `web.browser` to a no-op printer instead, machine-wide
-    # (scope="global") even when this writer runs per-repo — DoE's
-    # coordinator/commands/install.md §1a.1 invokes it bare (no --global), and
-    # its own doctrine requires the triple land machine-wide regardless. Skipped
-    # whole-group when `web.browser` is already set (see _help_browser_group_precondition)
-    # — an operator who named their own browser meant it. `browser.noop.cmd`,
-    # never `.path` (an unrecognised `.path` value falls through to git's
-    # default-browser fallback — precisely the behavior being suppressed), and
-    # its value must stay free of shell metacharacters (eval'd by
     # git-web--browse). Verified working under GIT_CONFIG_* injection ahead of
-    # `git branch --help`: exit 0, printer output, no browser launched.
     GitSetting(
         key="help.format",
         value="web",
@@ -227,7 +164,6 @@ chunk C2."""
 
 
 def _git_config_get(scope: Sequence[str], key: str) -> str | None:
-    """Return the current value of `key` in the given scope, or None if unset/failed."""
     try:
         res = subprocess.run(
             ["git", "config", *scope, "--get", key],
@@ -244,7 +180,6 @@ def _git_config_get(scope: Sequence[str], key: str) -> str | None:
 
 
 def _git_config_set(scope: Sequence[str], key: str, value: str) -> bool:
-    """Set `key` to `value` in the given scope. Returns True on success."""
     try:
         res = subprocess.run(
             ["git", "config", *scope, key, value],
@@ -262,21 +197,9 @@ def _is_git_repo() -> bool:
     return git_dir() is not None
 
 
-# Group-precondition registry: maps a `GitSetting.group` name to a predicate
-# `(resolve_scope) -> tuple[bool, str]`, evaluated ONCE per group before writing
-# any of its member settings. `resolve_scope` is a callable
-# `(setting: GitSetting) -> tuple[str, ...]` that resolves a setting's own
-# CLI-scope tuple, so a predicate can inspect prior state in the same scope a
-# member setting would be written to. Returns (should_write, reason-if-skipped);
-# a False verdict skips every setting sharing that `group` WHOLE, with one
-# stderr line naming the group and the reason. Left empty here — C3 supplies
-# the concrete `web.browser`-unset precondition; this chunk builds the
-# machinery only.
 def _help_browser_group_precondition(
     resolve_scope: Callable[[GitSetting], tuple[str, ...]],
 ) -> tuple[bool, str]:
-    """Write the help-browser triple only when `web.browser` is unset in the
-    target scope — an operator who already named their own browser meant it."""
     probe = GitSetting(key="web.browser", value="noop", scope="global")
     scope = resolve_scope(probe)
     current = _git_config_get(scope, "web.browser")
@@ -293,20 +216,12 @@ _GROUP_PRECONDITIONS: dict[
 
 
 def _resolve_scope(setting: GitSetting, is_global: bool) -> tuple[tuple[str, ...], str]:
-    """Resolve a setting's own git-config scope tuple and label.
-
-    `scope="global"` settings are always written machine-wide, regardless of
-    how the CLI was invoked. `scope="repo"` settings follow the invocation
-    (`--global` when the CLI got `--global`, local otherwise) — today's
-    unchanged behavior.
-    """
     if setting.scope == "global" or is_global:
         return ("--global",), "global"
     return (), "repo"
 
 
 def main(argv: list[str]) -> int:
-    """CLI entrypoint: coordinator-configure-git [--global]."""
     is_global = bool(argv) and argv[0] == "--global"
 
     if not is_global:
@@ -314,12 +229,6 @@ def main(argv: list[str]) -> int:
             print("coordinator-configure-git: not a git repository", file=sys.stderr)
             return 1
 
-    # Both verdicts are memoized, not just the False one. A group precondition
-    # asks about state the group itself goes on to write ("is `web.browser`
-    # unset"), so re-asking it between members inverts partway through and
-    # abandons the group half-written — for the help-browser triple that is
-    # precisely the `web.browser=noop` without `browser.noop.cmd` state the
-    # whole group exists to avoid.
     group_verdicts: dict[str, bool] = {}
     changed = False
     for setting in _SETTINGS:

@@ -90,34 +90,12 @@ _CREATIONFLAGS = no_console_creationflags()
 
 
 def _python_changed_files(changed_files: List[str]) -> List[str]:
-    """Filter `changed_files` down to `.py` paths only -- mirrors the other
-    dimension modules' path-scoped convention (see module docstring
-    "SCOPE")."""
     return [f for f in changed_files if f.endswith(".py")]
 
 
 def _run_mypy(
     mypy_path: str, py_files: List[str], repo_root: Optional[str]
 ) -> "tuple[int, str, str]":
-    """Run `mypy <py_files>` in `repo_root`; never raises -- a spawn failure
-    or timeout degrades to a non-zero rc + diagnostic stderr, same shape
-    `gate_dimension_review._run_git` uses for its own subprocess call.
-
-    `repo_root` is `Optional[str]`, not `str`: the op handler's own
-    `repo_root: Optional[Path]` param is optional (see `gate_validate_
-    invocable._gate_validate_invocable`), and `_check_types` passes it
-    through unresolved rather than defaulting it -- there is no "current
-    repo root" this module should guess at. `subprocess.run(..., cwd=None)`
-    is `subprocess`'s own documented "inherit the caller's cwd" behavior, so
-    a `None` here is a legal, intentional cwd, not a missing value that
-    needs coercing to a default.
-
-    No shell flag anywhere in this call (`shell=False` is subprocess's own
-    default) -- argv is a Python list, portable on Windows and POSIX alike
-    (CLAUDE.md "Windows is first-class"); `mypy_path` is the resolved
-    executable from `gate_tool_resolve.resolve_tool`, never a bare `"mypy"`
-    string re-triggering PATH resolution.
-    """
     try:
         result = subprocess.run(
             [mypy_path, *py_files],
@@ -130,9 +108,6 @@ def _run_mypy(
         )
         return result.returncode, result.stdout.strip(), result.stderr.strip()
     except subprocess.TimeoutExpired:
-        # Sentinel rc (never a real mypy exit code) so the caller's rc==1
-        # branch -- reserved for mypy's own "ran, found errors" contract --
-        # never misreads a timeout as a type-error FAIL.
         return (
             -1,
             "",
@@ -146,8 +121,6 @@ def _run_mypy(
 def _check_types(
     changed_files: List[str], diff_base: Optional[str], repo_root: Optional[Path]
 ) -> DimensionResult:
-    """The registered `types` `DimensionCheck` (C2). See module docstring
-    for tool resolution, scope, and the pyright reconciliation."""
     py_files = _python_changed_files(changed_files)
     if not py_files:
         return DimensionResult(
@@ -174,24 +147,13 @@ def _check_types(
             detail=f"mypy clean over {len(py_files)} changed file(s)",
         )
     if rc == 1:
-        # mypy's own exit-code contract: 1 == "ran successfully, found type
-        # errors" -- a real FAIL, not a tool malfunction.
         detail_body = out or err or "mypy reported errors (no output captured)"
         return DimensionResult(
             dimension="types",
             verdict=Verdict.FAIL,
             detail=detail_body,
         )
-    # rc == 2 (mypy's own "fatal error" exit code) or any other non-0/1 value
-    # -- the tool itself did not complete a real run (bad config, internal
-    # crash, or our own subprocess-layer failure, which `_run_mypy` surfaces
-    # as rc=-1, not rc=1 -- a timeout/OSError never lands in the rc==1
-    # branch above). This branch is the tool-broke case, reported as
     # UNAVAILABLE, never FAIL -- a broken tool run must never masquerade as
-    # "found type errors").
-    # Comment described
-    # a rc==1 subprocess-layer-failure path that cannot occur as written
-    # (_run_mypy returns -1, not 1, on timeout/OSError).
     last_err = err or out or f"mypy exited {rc} with no output"
     return DimensionResult(
         dimension="types",

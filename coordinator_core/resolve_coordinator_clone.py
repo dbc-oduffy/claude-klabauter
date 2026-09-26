@@ -105,12 +105,6 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-# Module-level, not function-local: `_content_root_primitive` is a leaf whose
-# only imports are `os` and `pathlib`, so it cannot participate in a
-# `coordinator_core` cycle. The deferral this replaces was the workaround that
-# leaf module exists to retire.
-# The workaround survived at the one site
-# that motivated the fix.
 from coordinator_core._content_root_primitive import content_root_for as _content_root_for
 from coordinator_core._claude_klabauter_root import _machine_local_get
 from coordinator_core.doe_root_pointer import read_doe_root_pointer as _read_doe_root_pointer
@@ -141,11 +135,6 @@ class ResolveCoordinatorCloneError(RuntimeError):
         self.no_source_found = no_source_found
 
 
-# ---------------------------------------------------------------------------
-# Shared primitives
-# ---------------------------------------------------------------------------
-
-
 def _claude_home_dir() -> Optional[str]:
     """``${CLAUDE_HOME:-$HOME}/.claude`` — mirrors `_rcc_claude_home_dir`."""
     home = os.environ.get("CLAUDE_HOME") or os.environ.get("HOME") or os.environ.get("USERPROFILE")
@@ -153,15 +142,6 @@ def _claude_home_dir() -> Optional[str]:
 
 
 def _registry_doe_claude() -> Optional[str]:
-    """Canonical registry key (DR-071) — mirrors `_rcc_registry_doe_claude`.
-
-    Reads via ``machine_resolver.registry_get`` (direct tomllib) first, for
-    the reset-safety reason documented on that function and on this module's
-    negative-spec: the ``machine-local`` CLI's reader/exec bits live under
-    the resettable ``~/.claude/bin/``, so its failure doesn't mean the
-    registry itself is unresolvable. The CLI subprocess is retained as a
-    fallback rung only.
-    """
     value = registry_get("repos.doe_claude")
     if value:
         return value
@@ -169,19 +149,6 @@ def _registry_doe_claude() -> Optional[str]:
 
 
 def _registry_live_path() -> Optional[str]:
-    """Fallback registry key — mirrors `_rcc_registry_live_path` (see module
-    negative-spec for the direct-CLI-read simplification).
-
-    Reads via ``machine_resolver.registry_get`` (direct tomllib) first, same
-    reset-safety + no-subprocess reasoning as `_registry_doe_claude` above —
-    this key was previously CLI-only, which meant every `resolve_content_root`
-    call on a machine with `machine-local` on PATH spawned a ~80ms subprocess
-    on this rung even though it sits on the COMMON path (rung 3 of 7, not a
-    last-resort), because the direct-tomllib read was never tried first. Fixed
-    2026-07-28 (spawn-on-hot-path defect). The CLI subprocess is retained as a
-    genuine fallback rung — it still fires when `registry_get` can't resolve
-    the key (e.g. this key present under `machine-local`'s CLI-managed state
-    but not yet mirrored into `registry.local.toml`/`registry.toml`)."""
     value = registry_get("plugin.mirrors.coordinator-claude.live_path")
     if value:
         return value
@@ -189,10 +156,6 @@ def _registry_live_path() -> Optional[str]:
 
 
 def _newest_cache_dir() -> Optional[str]:
-    """Newest ``major.minor.patch`` dir under
-    ``<claude_home>/plugins/cache/coordinator-claude/coordinator/*/`` —
-    numeric compare (DR-148-safe), mirrors `_rcc_newest_cache`. Returns None
-    if the cache parent is absent or has no version-shaped children."""
     claude_home = _claude_home_dir()
     if not claude_home:
         return None
@@ -223,22 +186,11 @@ def _newest_cache_dir() -> Optional[str]:
 
 
 def _flat_evidences_coordinator_tree(flat: Optional[str]) -> bool:
-    """True if `flat` is a directory carrying actual evidence of a
-    coordinator tree — `.git/` (a raw git checkout, the B6 motivating
-    scenario) or the published manifest relpath. Mere directory existence is
-    NOT evidence (see B6 review finding on `_resolve_source_mode`'s flat
-    rung): an interrupted install, a `rm -rf <dir>/*` leftover, or a
-    user-created placeholder directory must not classify the box as "dev"."""
     if not flat or not os.path.isdir(flat):
         return False
     if os.path.isdir(os.path.join(flat, ".git")):
         return True
     return os.path.isfile(os.path.join(flat, "schemas", "coordinator-registry.manifest.json"))
-
-
-# ---------------------------------------------------------------------------
-# Rung-0: dev-vs-oss source-mode selector, shared by both verbs.
-# ---------------------------------------------------------------------------
 
 
 def _resolve_source_mode(verb: str) -> str:
@@ -283,29 +235,6 @@ def _resolve_source_mode(verb: str) -> str:
     flat = os.path.join(claude_home, "plugins", "coordinator-claude") if claude_home else None
     oss_present = bool(flat) and os.path.isfile(os.path.join(flat, ".claude-plugin", "plugin.json"))
 
-    # DR-071: registry `repos.doe_claude` (canonical) ranks above the
-    # `.doe-root` pointer file mirror — inverted 2026-07-22 from the prior
-    # pointer-first order. The flat marketplace-clone layout is added as a
-    # last-resort candidate rung (not just consulted via `oss_present` below)
-    # so an unmarked flat clone with no `.claude-plugin/plugin.json` manifest
-    # (e.g. a raw git checkout dropped at the flat path, no marketplace
-    # manifest, no .coordinator-dev-repo marker) is still a resolvable
-    # candidate instead of silently falling through to "no source found" —
-    # gated on `not oss_present` so a genuine marketplace install (which DOES
-    # carry the manifest) is never double-counted as both the OSS install AND
-    # the "unmarked candidate" in the ambiguity check below.
-    #
-    # B6 (MAJOR, 2026-08-08) -- this rung was previously gated on
-    # `os.path.isdir(flat)` alone: mere directory existence (an interrupted
-    # install, a `rm -rf <dir>/*` leftover, a user-created placeholder)
-    # classified the box as "dev", silently trading an accurate "no
-    # coordinator source found ... run coordinator:install" error for a
-    # downstream git-ladder failure that doesn't mention install. Now
-    # requires actual evidence of a coordinator tree, matching the same
-    # `.git`-or-manifest evidence `coordinator_doe_root._cf_flat_layout_probe`
-    # already requires for the identical path (that probe uses the
-    # marketplace marker; this rung uses `.git`/manifest since the
-    # motivating scenario is a raw git checkout with no marketplace marker).
     candidate = (
         _registry_doe_claude()
         or _registry_live_path()
@@ -344,11 +273,6 @@ def _resolve_source_mode(verb: str) -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# --clone-root (alias --for-git-ops)
-# ---------------------------------------------------------------------------
-
-
 def resolve_clone_root() -> str:
     """The .git-backed clone directory. Mirrors `_rcc_resolve_git_ops`:
 
@@ -381,7 +305,6 @@ def resolve_clone_root() -> str:
             "  Run: coordinator:install OR set COORDINATOR_CLONE to a git-backed clone path."
         )
 
-    # dev / passthrough — unchanged ladder.
     clone_env = os.environ.get("COORDINATOR_CLONE")
     if clone_env:
         if os.path.isdir(os.path.join(clone_env, ".git")):
@@ -410,11 +333,6 @@ def resolve_clone_root() -> str:
         "  (no .git in any tried location)\n"
         "  Run: coordinator:install OR set COORDINATOR_CLONE to the clone path."
     )
-
-
-# ---------------------------------------------------------------------------
-# --content-root (alias --for-content)
-# ---------------------------------------------------------------------------
 
 
 def resolve_content_root() -> str:
@@ -452,7 +370,6 @@ def resolve_content_root() -> str:
             "  Run: coordinator:install OR set COORDINATOR_ROOT to the coordinator directory."
         )
 
-    # dev / passthrough — unchanged ladder.
     plugin_root_env = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if plugin_root_env:
         if os.path.isdir(plugin_root_env):
@@ -481,13 +398,6 @@ def resolve_content_root() -> str:
 
     doe_root = _read_doe_root_pointer()
     if doe_root:
-        # A container that registers the published FLAT mirror as its DoE root
-        # has its content at the root itself; without this arm the pointer rung
-        # produced `<mirror>/coordinator`, which cannot exist, and content
-        # resolution fell through to a marketplace path that was not there
-        # either. Same marker _content_root_for gates on — this module IS the
-        # marker's stated owner (overengineering-reviewer finding 4), so it
-        # calls the primitive rather than hand-expanding it a second time.
         found = _content_root_for(doe_root)
         if found is not None:
             return str(found)
@@ -504,11 +414,6 @@ def resolve_content_root() -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# CLI-shaped wrapper (parity testing / non-Python callers only — Python
-# callers should import resolve_clone_root()/resolve_content_root() directly)
-# ---------------------------------------------------------------------------
-
 _FLAG_TO_VERB = {
     "--clone-root": "clone-root",
     "--for-git-ops": "clone-root",
@@ -518,10 +423,6 @@ _FLAG_TO_VERB = {
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """Prints the resolved path to stdout (no trailing newline) and returns 0;
-    or writes remediation to stderr and returns 1 (resolution failure) / 2
-    (usage error — wrong arg count or unknown flag), mirroring the bash
-    oracle's standalone-CLI exit codes."""
     args = list(sys.argv[1:] if argv is None else argv)
 
     if len(args) != 1 or args[0] not in _FLAG_TO_VERB:

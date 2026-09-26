@@ -1,12 +1,4 @@
-# test_coordinator_gate_dispatcher.py — verifies coordinator-gate.py (the
-# C10 fan-in dispatcher for the check-*/verify-*/assert- family) and its
-# additions to coordinator/bin/lib/entry_point_shim.py.
-#
-# Spec backlink: docs/plans/2026-08-16-a-process-per-predicate.md, chunk C10
 # What this pins: (1) the dispatcher batches MULTIPLE subcommands into ONE
-# process — the whole point of C10 per C7's 7.17x measurement, now applied
-# to the 60-entry-point family the plan's § Problem opening figure names —
-# and (2) no subprocess is ever spawned by the in-process shim path (the
 # REJECTED shape from C7, -0.5123, was exactly a subprocess-spawning
 # forwarder) for the converted (GATE_ENGINE_ENTRIES) subset.
 from __future__ import annotations
@@ -50,7 +42,6 @@ def test_gate_targets_partition_engine_vs_by_path():
     by_path = set(entry_point_shim.GATE_BY_PATH_TARGETS)
     assert engine | by_path == set(entry_point_shim.GATE_TARGETS)
     assert engine & by_path == set()
-    # Converted subset, per this dispatch's own read-in-full bar.
     assert engine == {
         "assert-no-dangling-plan-backlinks",
         "assert-plan-sizing-citation",
@@ -78,10 +69,8 @@ def test_run_gate_target_engine_entry_no_subprocess_spawned(monkeypatch):
 
 
 def test_run_gate_target_by_path_catches_internal_sys_exit():
-    # assert-cwd.py's own main(argv) RETURNS an int (does not sys.exit
-    # internally) -- exercise the plain-return probe on a BY_PATH target.
     rc = entry_point_shim.run_gate_target("assert-cwd", [])
-    assert rc == 2  # usage error: no argv
+    assert rc == 2
 
 
 def test_dispatcher_batches_multiple_subcommands_in_one_process(monkeypatch):
@@ -94,10 +83,6 @@ def test_dispatcher_batches_multiple_subcommands_in_one_process(monkeypatch):
         calls.append((name, args, os.getpid()))
         return 0
 
-    # Patch the SOURCE module, not the dispatcher. `main()` does
-    # `from entry_point_shim import ... run_gate_target` at call time (moved
-    # there from module scope by c992b99f73), so the dispatcher module has
-    # no `run_gate_target` attribute to replace and setattr raised AttributeError.
     monkeypatch.setattr(entry_point_shim, "run_gate_target", _fake_run_gate_target)
 
     def _forbidden(*a, **kw):
@@ -131,10 +116,6 @@ def test_dispatcher_first_nonzero_exit_wins(monkeypatch):
     def _fake_run_gate_target(name, args):
         return {"check-em-environment": 0, "assert-cwd": 5, "check-rag-state": 9}[name]
 
-    # Patch the SOURCE module, not the dispatcher. `main()` does
-    # `from entry_point_shim import ... run_gate_target` at call time (moved
-    # there from module scope by c992b99f73), so the dispatcher module has
-    # no `run_gate_target` attribute to replace and setattr raised AttributeError.
     monkeypatch.setattr(entry_point_shim, "run_gate_target", _fake_run_gate_target)
     rc = dispatcher.main(["check-em-environment", "assert-cwd", "check-rag-state"])
     assert rc == 5

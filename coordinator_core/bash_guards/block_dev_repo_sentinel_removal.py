@@ -92,40 +92,20 @@ from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 # `_evaluate()` never returns VERDICT_ALLOW alongside content, so anything
 # other than VERDICT_ALLOW is advisory-worthy on the now-single (advisory)
-# leg -- see this module's own updated "TWO-LEG SPLIT" docstring section.
 _ADVISORY_VERDICTS = (VERDICT_ADVISORY, VERDICT_DENY)
 
 CLASS = "advisory"
-#: Widened 2026-08-07 (C4f, `docs/plans/2026-08-07-guards-reach-a-verdict-
-#: on-powershell-or-stay-silent.md`) -- this guard's own dialect-carry
-#: (`dialect_from_tool_name(payload["tool_name"])` in `check`/
-#: `check_advisory` below) now handles a PowerShell command correctly for
-#: its converted legs and declines to rule (records SILENT) rather than
-#: guessing where it cannot -- see `_sentinel_removal_guard.evaluate`'s own
-#: docstring. Same precedent as `block_reviewer_bash_outside_allowlist.py`'s
 #: own MATCHERS widening (C6). A direct reference to the shared universe
-#: (C2 declaration-form conversion) -- never a copy or re-wrap.
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 42
 
-#: The exact basename this guard protects. Never relaxed to a substring/
-#: prefix match.
 _TARGET_BASENAME = ".coordinator-dev-repo"
 
-#: Escape hatch, advertised in the deny/advisory text itself (offer-shaped
-#: -- names what to do instead, not a bare block).
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL"
 
-#: Shared detection engine -- see `_sentinel_removal_guard.py` module
-#: docstring.
 _detector = SentinelRemovalDetector(_TARGET_BASENAME)
 
-#: Guard identity threaded into `_verdict.record_silent` for the
-#: absent/unrecognized-dialect leg below -- matches this guard's own
-#: registered name (`check_advisory`'s dispatch entry) and
 #: `_sentinel_removal_guard._GUARD_NAME`, so a SILENT declaration recorded
-#: from either this module or the shared engine reads as the same guard to
-#: a caller collecting declarations (`_verdict.collecting`).
 _GUARD_NAME = "block-dev-repo-sentinel-removal-advisory"
 
 
@@ -139,10 +119,6 @@ def _deny_reason(
     payload: Optional[Dict[str, Any]] = None,
     git_root: Optional[str] = None,
 ) -> str:
-    # Deliberately does NOT echo `cmd` and does NOT name the target
-    # basename -- same message-safety discipline as the sibling sentinel
-    # guards (an eager agent reading its own bypass in a deny message
-    # treats it as sanctioned).
     _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload, git_root=git_root)
     if reason_class == REASON_INDIRECTION:
         safe_shape = reason_kind.replace(_TARGET_BASENAME, "<the sentinel>")
@@ -169,10 +145,6 @@ def _advisory_reason(
     payload: Optional[Dict[str, Any]] = None,
     git_root: Optional[str] = None,
 ) -> str:
-    # Deliberately short (Axis-A/prose-cap discipline) and never names the
-    # target basename (message-safety discipline, same as `_deny_reason`)
-    # -- covers both a direct-match input (formerly this guard's deny leg,
-    # widened here into the sole advisory leg) and genuine indirection.
     _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload, git_root=git_root)
     return (
         "[dev-repo guard] ADVISORY: not blocked. This command may remove "
@@ -182,15 +154,6 @@ def _advisory_reason(
 
 
 def _cmd_from_payload(payload: Dict[str, Any]) -> str:
-    """Extract the raw command text, no longer gated on `tool_name ==
-    "Bash"` (AC2/C4): dialect resolution now happens separately, in
-    `check`/`check_advisory` below, via `_dialect.dialect_from_tool_name` --
-    an unrecognized `tool_name` still ends up as an allow, just via the
-    SILENT/declined-to-rule path rather than a bare empty-command short
-    circuit here. A payload with no `tool_input.command` at all (any
-    `tool_name`, e.g. a non-Bash/non-PowerShell tool like `Edit`) still
-    returns `""` and neither `check` nor `check_advisory` reaches the
-    dialect check for it."""
     tool_input = payload.get("tool_input") or {}
     cmd = (tool_input.get("command") if isinstance(tool_input, dict) else None) or ""
     if not cmd:

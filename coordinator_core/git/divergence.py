@@ -114,19 +114,6 @@ def _run_git(args: List[str], cwd: Optional[str] = None, timeout: float = 2.0) -
 
 
 class V2Record(NamedTuple):
-    """One `git status --porcelain=v2` `1` record, field-named.
-
-    `x`/`y`  -- index-vs-HEAD and worktree-vs-index status characters.
-    `m_head`/`m_index` -- the path's mode in HEAD and in the index. A pure
-        mode toggle (`git update-index --chmod=+x` under `core.fileMode=
-        false`) is `m_head != m_index` with `sha_head == sha_index`.
-    `sha_head`/`sha_index` -- the path's blob OID in HEAD and in the index.
-
-    Deliberately carries every field of the record rather than the two the
-    first caller needed: one `git status` spawn already paid for all of them,
-    and a second caller re-spawning `git` to read a field this one discarded
-    is the exact cost this module exists to stop paying.
-    """
 
     x: str
     y: str
@@ -137,28 +124,6 @@ class V2Record(NamedTuple):
 
 
 def parse_v2_records(out: str) -> "dict[str, V2Record]":
-    """Parse `git status --porcelain=v2 -z --no-renames` into `{path: V2Record}`.
-
-    A `1` record is `1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>` -- eight
-    space-delimited fields ahead of the path, which is taken as the remainder
-    so an embedded space survives. `X` is the index-vs-HEAD status (what `git
-    diff --cached` reports) and `Y` the worktree-vs-index status (what a bare
-    `git diff` reports); `.` in either position means "unchanged on that
-    axis".
-
-    `--no-renames` is load-bearing, not cosmetic: it suppresses the `2`
-    record, whose original path is a SECOND NUL-separated field rather than
-    part of the same record. Every other record type (`u` unmerged, `?`
-    untracked, `!` ignored) is skipped -- none of them carries an XY pair,
-    and the two `git diff` invocations this parser replaces reported nothing
-    for those paths either.
-
-    Negative-spec: do NOT switch this to `splitlines()`. `-z` is what makes a
-    path containing a newline parseable at all, and it is also what keeps
-    paths RAW -- the `git diff --name-only` pair this replaced returned
-    non-ASCII paths C-quoted, which never matched the caller's own key
-    strings (`git_native.commit_scoped`'s `known_diverged & set(path_list)`).
-    """
     recs: "dict[str, V2Record]" = {}
     for field in out.split("\0"):
         if not field or field[0] != "1":
@@ -216,17 +181,7 @@ def _spawn_diverging_subset(
     timeout: float,
     fail_loud: bool,
 ) -> List[str]:
-    """The original `git status --porcelain=v2` spawn, restricted to the
-    subset of paths C3e's in-process settling could not determine. Same
-    contract `diverging_paths` always had for its whole batch -- kept
-    verbatim, not re-derived, as the escape hatch every DECLINE above
-    falls through to."""
     rc, out = _run_git(
-        # `--no-optional-locks` is not optional here: the `git diff` pair this
-        # replaced never touched `.git/index.lock`, but `git status` takes it
-        # opportunistically to write back its stat cache -- on this shared
-        # worktree that is contention the predicate did not previously add.
-        # Same reason `git_native.status_porcelain` carries it.
         ["--no-optional-locks", "status", "--porcelain=v2", "-z", "--no-renames", "--", *undetermined],
         cwd,
         timeout=timeout,
@@ -324,11 +279,6 @@ def diverging_paths(
 
     root = Path(cwd) if cwd is not None else Path(".")
 
-    # Repo-relative, forward-slashed keys -- `read_index`/`scoped_status`/
-    # `head_blobs`/`CommitContext.paths` key everything this way, and
-    # (unlike the spawn this replaces) there is no `git` process here to
-    # resolve an absolute-path input on this function's behalf. See
-    # `_repo_relative_key`.
     relative = {p: _repo_relative_key(root, p) for p in paths}
 
     if context is not None:
@@ -349,10 +299,6 @@ def diverging_paths(
             ) from exc
         return []
 
-    # Only a STAGED path can diverge at all (a `1` porcelain record needs an
-    # index entry to exist in the first place) -- an unstaged path is
-    # excluded here exactly as it would never appear in the old spawn's
-    # output.
     staged = [p for p in paths if relative[p] in index_snapshot]
     if not staged:
         return []
@@ -378,11 +324,11 @@ def diverging_paths(
         head_entry = head.get(rel)
         x_diverged = head_entry is None or (idx_entry.mode, idx_entry.sha) != head_entry
         if not x_diverged:
-            continue  # X == "." -- cannot diverge regardless of Y
+            continue
 
         verdict = worktree_verdicts.get(rel, "untracked")
         if verdict == "clean":
-            continue  # Y == "."
+            continue
         if verdict == "deleted":
             settled.add(rel)
             continue
@@ -395,8 +341,6 @@ def diverging_paths(
                 continue
             undetermined.append(p)
             continue
-        # "untracked" here means the index changed under us between the
-        # snapshot above and this read -- indeterminate, not "clean".
         undetermined.append(p)
 
     if undetermined:
@@ -411,22 +355,6 @@ def _settle_from_context(
     relative: "dict[str, str]",
     root: Path,
 ) -> Tuple["set[str]", List[str]]:
-    """The context-scoped equivalent of `diverging_paths`'s own read+settle
-    block above, folding R4 (`read_index`) and R5 (`scoped_status` ->
-    `parse_index_identity`) into ZERO index walks -- `context.paths[rel]`
-    already carries `index` (mode, sha), `index_stat` (size, mtime,
-    mtime_nsec), `head` (mode, sha), `on_disk`, and `worktree_stat`, the
-    exact union both walks existed to answer. The stat-match arithmetic
-    mirrors `git_index.scoped_status` verbatim (guarded `mtime_nsec`
-    comparison and all) -- see that function's own docstring for why the
-    comparison is nanosecond- rather than second-granular.
-
-    A path absent from `context.paths` (outside the generation-A context's
-    own scope) is treated as undetermined -- see this module's own
-    docstring "Negative-spec" for why: it falls through to the same
-    `_spawn_diverging_subset` fallback every other undetermined case does,
-    never silently read as "not staged".
-    """
     settled: "set[str]" = set()
     undetermined: List[str] = []
 
@@ -437,14 +365,14 @@ def _settle_from_context(
             undetermined.append(p)
             continue
         if path_ctx.index is None:
-            continue  # not staged -- cannot diverge at all
+            continue
 
         x_diverged = path_ctx.head is None or path_ctx.index != path_ctx.head
         if not x_diverged:
-            continue  # X == "." -- cannot diverge regardless of Y
+            continue
 
         if not path_ctx.on_disk:
-            settled.add(rel)  # Y: deleted
+            settled.add(rel)
             continue
 
         cached_stat = path_ctx.index_stat
@@ -458,7 +386,7 @@ def _settle_from_context(
         if stat_matches and cached_stat[2]:
             stat_matches = cached_stat[2] == wstat.st_mtime_ns % 1_000_000_000
         if stat_matches:
-            continue  # Y == "." (clean)
+            continue
 
         match = content_matches_index_sha(root, rel, path_ctx.index[1])
         if match is True:

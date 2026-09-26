@@ -47,7 +47,7 @@ from coordinator_core.ops.session import reap
 
 pytestmark = [pytest.mark.cadence]
 
-_COLD_AGE = reap._SESSION_STALE_SECONDS + 3600  # > 24h, well past the threshold
+_COLD_AGE = reap._SESSION_STALE_SECONDS + 3600
 
 
 def _cold_epoch() -> float:
@@ -55,13 +55,6 @@ def _cold_epoch() -> float:
 
 
 def _plant_no_meta_dir(sessions_dir: Path, name: str, filename: str = "x.txt") -> Path:
-    """Plant a cold dir with one ordinary file and NO meta.json.
-
-    Ages the file's mtime so ``_staleness_basis_mtime`` reads it as cold —
-    this is the "real session dir, no meta.json" shape that is the 30/53
-    majority case per the plan, and also the shape any accidentally-reaped
-    co-located store takes.
-    """
     d = sessions_dir / name
     d.mkdir(parents=True, exist_ok=True)
     f = d / filename
@@ -72,7 +65,6 @@ def _plant_no_meta_dir(sessions_dir: Path, name: str, filename: str = "x.txt") -
 
 
 def _plant_meta_dir(sessions_dir: Path, name: str) -> Path:
-    """Plant a cold real session dir WITH meta.json (cold last_activity)."""
     d = sessions_dir / name
     d.mkdir(parents=True, exist_ok=True)
     cold_iso = (
@@ -116,14 +108,9 @@ def test_hub_four_populations_positively_identified(tmp_path):
 
     assert failed == [], (reaped, deferred, failed)
 
-    # Red against HEAD: HEAD reaps this harness fixture (name is neither
-    # dot-prefixed, `_`-prefixed, nor denylisted). After C2 it is kept
-    # because it is not uuid-shaped.
     assert _HARNESS_FIXTURE not in reaped, (reaped, deferred, failed)
     assert harness_fixture.exists()
 
-    # True in both worlds: the store survives (denylist today, positive
-    # gate after C2), and both uuid-shaped real session dirs are reaped.
     assert store.exists()
     assert _UUID_1 in reaped, (reaped, deferred, failed)
     assert _UUID_2 in reaped, (reaped, deferred, failed)

@@ -1,19 +1,3 @@
-"""
-Black-box CLI tests for coordinator/lib/check-install-singularity.py.
-
-Port of: coordinator/lib/tests/test-check-install-singularity.sh (T1-T12).
-Exercises the SUT as a subprocess (python3 check-install-singularity.py),
-asserting stdout/exit-code contract — complementary to
-coordinator_core/install/test_check_install_singularity.py, which calls the
-underlying coordinator_core.install.check_install_singularity module directly
-(white-box) and does not invoke this CLI at all. Named distinctly from that
-module to avoid a pytest module-name collision under prepend import mode.
-
-Spec backlink:
-  docs/plans/2026-06-26-coordinator-install-update-friction-fix-slate.md § C-R1b
-  AC4, AC5, AC5b
-Port backlink: docs/plans/2026-08-13-grind-the-posix-exec-baseline-to-zero.md
-"""
 
 from __future__ import annotations
 
@@ -25,8 +9,6 @@ from pathlib import Path
 
 import pytest
 
-# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
-# cadence suite is the separate threshold ruling, not this declaration.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,

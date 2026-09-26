@@ -218,9 +218,6 @@ if IS_WINDOWS:
 
     _JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
     _CREATE_SUSPENDED = 0x00000004
-    # Without this every measured child allocates a conhost window. This module
-    # measures git, and a k-batched call spawns k of them, so the omission cost
-    # a window per sample on every budget measurement in the repo.
     _CREATE_NO_WINDOW = 0x08000000
     _PROCESS_SET_QUOTA = 0x0100
     _PROCESS_TERMINATE = 0x0001
@@ -231,12 +228,7 @@ if IS_WINDOWS:
 if IS_DARWIN:
     _libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
 
-    # -- posix_spawn / posix_spawnattr -----------------------------------
-    # os.posix_spawn exposes no raw attr-flag argument (its signature is
-    # file_actions/setpgroup/resetids/setsid/setsigmask/setsigdef/scheduler
     # only), so POSIX_SPAWN_START_SUSPENDED genuinely requires this ctypes
-    # route -- the real justification for ctypes here, alongside the
-    # module's existing Windows ctypes usage (dispatch brief).
     _POSIX_SPAWN_START_SUSPENDED = 0x0080
 
     _libc.posix_spawnattr_init.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
@@ -260,7 +252,6 @@ if IS_DARWIN:
     _NOTE_EXIT = 0x80000000
     _NOTE_FORK = 0x40000000
     # NOTE_TRACK (0x1) is ENOTSUP on this kernel -- verified, EV_ERROR
-    # data=45. Not used, and not attempted-then-fallen-back-from: the
     # NOTE_FORK enumeration path below is the only path (dispatch brief).
     _EV_ADD = 0x0001
     _EV_ENABLE = 0x0004
@@ -297,7 +288,6 @@ if IS_DARWIN:
     ]
     _libc.kevent.restype = ctypes.c_int
 
-    # -- libproc -----------------------------------------------------------
     _libc.proc_listchildpids.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
     _libc.proc_listchildpids.restype = ctypes.c_int
 
@@ -474,13 +464,6 @@ class LiveTreeAccountant:
             _k32.CloseHandle(wintypes.HANDLE(handle))
 
     def snapshot(self) -> dict:
-        """Cumulative job accounting since attachment.
-
-        Returns `{"process_time_ms": float, "procs": int}` -- user+kernel CPU
-        across every process in the job (terminated ones included; the job
-        keeps charging them), and the job's `TotalProcesses`, which counts
-        the attached root itself.
-        """
         info = _windows_query_job_accounting(self._job)
         return {
             "process_time_ms": (info.TotalUserTime + info.TotalKernelTime) / 10000.0,
@@ -621,9 +604,7 @@ def _kevent_register(kq: int, pid: int) -> bool:
     change.data = 0
     change.udata = None
     out = _Kevent()
-    # A zero timespec (poll, don't block) is still passed for symmetry with
     # the rest of this module's kevent calls, though EV_RECEIPT makes the
-    # result synchronous regardless of timeout.
     zero_timeout = _Timespec(0, 0)
     n = _libc.kevent(kq, ctypes.byref(change), 1, ctypes.byref(out), 1, ctypes.byref(zero_timeout))
     if n < 0:
@@ -633,9 +614,7 @@ def _kevent_register(kq: int, pid: int) -> bool:
         raise OSError(errno_val, f"kevent registration syscall failed for pid {pid}")
     if n == 0 or not (out.flags & _EV_ERROR):
         # EV_RECEIPT guarantees a synchronous EV_ERROR-flagged result for
-        # this exact changelist entry -- anything else means the kernel
         # did not honor EV_RECEIPT the way this module relies on, and
-        # AC6's guarantee (no silent inert kqueue) no longer holds.
         raise OSError(
             0,
             f"kevent EV_RECEIPT registration for pid {pid} returned no result "
@@ -649,13 +628,6 @@ def _kevent_register(kq: int, pid: int) -> bool:
 
 
 def _kevent_register_with_retry(kq: int, pid: int, max_retries: int = 5) -> bool:
-    """AC7 disposition: bounded retry on ESRCH. Attach failure at this rate
-    (~33% observed on the highest-fan-out `burst` fixture during
-    verification) is a real undercount channel if left as a bare
-    fail-loud per pid, so callers get a bounded number of chances here
-    before an unresolved residual is rolled up and RAISED by the batched
-    primitive (`_darwin_batched_process_time_ms`), never returned as a
-    silent lower bound."""
     ok = _kevent_register(kq, pid)
     retries = 0
     while not ok and retries < max_retries:
@@ -665,10 +637,6 @@ def _kevent_register_with_retry(kq: int, pid: int, max_retries: int = 5) -> bool
 
 
 def _darwin_one_invocation(cmd: Sequence[str], env: Optional[dict], cwd: Optional[str]):
-    """Runs `cmd` once, scoped to exactly the process tree it spawns.
-
-    Returns (process_time_ms, procs_seen, attach_failed, rc).
-    """
     pre_children = _proc_listchildpids(os.getpid())
     if pre_children:
         raise RuntimeError(
@@ -691,20 +659,9 @@ def _darwin_one_invocation(cmd: Sequence[str], env: Optional[dict], cwd: Optiona
             if old_cwd is not None:
                 os.chdir(old_cwd)
 
-        # F2 (EM-confirmed): every path from here to the wait4() reap below
-        # must not leak a live or suspended root/subtree on error -- the
         # root is spawned POSIX_SPAWN_START_SUSPENDED and only SIGCONT'd a
-        # few lines down, so an exception before that leaves it suspended
-        # forever, and an exception after SIGCONT leaves a live tree
-        # running, unreaped, contaminating the next invocation's
-        # window-open assertion. `reaped` tracks whether wait4()/waitpid()
-        # already ran normally so this finally never double-reaps.
         reaped = False
         try:
-            # AC7: attach the kevent, THEN record the pid -- inverted from
-            # the naive order, so an attach failure on the root is a hard
-            # retryable error rather than a silent subtree loss (dispatch
-            # brief).
             if not _kevent_register_with_retry(kq, root_pid):
                 os.kill(root_pid, signal.SIGKILL)
                 os.waitpid(root_pid, 0)
@@ -730,17 +687,8 @@ def _darwin_one_invocation(cmd: Sequence[str], env: Optional[dict], cwd: Optiona
                     pid = ev.ident
                     if ev.flags & _EV_ERROR:
                         # F3: defensive only. EV_ERROR on this eventlist is
-                        # documented as arising from changelist processing
-                        # during registration (a submitted nchanges entry),
-                        # never from this pure nchanges=0 data-retrieval
-                        # call -- kept as a guard, not a steady-state path.
                         continue
                     if ev.fflags & _NOTE_FORK:
-                        # Dedupe by pid: this is what makes the count
-                        # structurally immune to the double-count defect in
-                        # state/lessons/2026-08-19-a-spawn-counting-instrument-
-                        # lies-twice-before-it-tells-the-truth.md (which bit an
-                        # instrument wrapping both subprocess.run and Popen).
                         for child in _proc_listchildpids(pid):
                             if child in seen:
                                 continue
@@ -754,8 +702,6 @@ def _darwin_one_invocation(cmd: Sequence[str], env: Optional[dict], cwd: Optiona
             _reaped_pid, status, rusage = os.wait4(root_pid, 0)
             reaped = True
             # PROCESS-TIME SCOPING (AC4): this rusage is keyed to root_pid --
-            # self plus whatever root_pid itself reaped -- so it cannot be
-            # contaminated by another thread's unrelated child exiting in the
             # same window, unlike getrusage(RUSAGE_CHILDREN) (module docstring).
             process_time_ms = (rusage.ru_utime + rusage.ru_stime) * 1000.0
             if hasattr(os, "waitstatus_to_exitcode"):
@@ -812,9 +758,6 @@ def _darwin_batched_process_time_ms(
     wall_ms = (time.perf_counter() - t0) * 1000.0 / k
 
     if total_attach_failed:
-        # AC7: the primitive raises on an unresolved non-zero residual --
-        # never a per-call-site obligation. total_procs is a LOWER BOUND
-        # here, not the real count: some subtree exited unobserved.
         raise RuntimeError(
             f"process_time: attach_failed={total_attach_failed} after bounded "
             f"retry -- procs_per_call would be {round(total_procs / k, 3)} "
@@ -863,18 +806,6 @@ an arbitrary caller-supplied `cmd`, not just brightline-scoped ops."""
 
 
 def _write_report_and_exit(write_fd: int, rc: int, spawn_count: int, real_os_exit) -> None:
-    """Writes the `{process_time_ms, procs, rc}` payload for this measured
-    child and terminates it via `real_os_exit` -- the single place both the
-    normal fall-through path and the `os._exit`-interception path
-    (`_linux_run_measured_child`'s `_report_and_real_exit`) land, so there is
-    exactly one payload-write/exit sequence to reason about rather than two
-    that could drift apart. Never returns.
-
-    Review: reviewer (F5) -- os.write can itself raise (e.g. BrokenPipeError
-    if the parent's read end is already gone), and that exception must not
-    skip the real exit -- guarded so this child always terminates no matter
-    what the payload write does.
-    """
     try:
         import resource
 
@@ -935,26 +866,8 @@ def _linux_run_measured_child(
             spawn_count += 1
 
     def _report_and_real_exit(code) -> None:
-        # Some measured Python roots (e.g. `python -m coordinator_core.invoke`,
-        # whose own `main()` ends in a bare `os._exit(exit_code)` by design --
-        # the real subprocess contract every non-measured invocation relies
-        # on) terminate via `os._exit` directly, which bypasses Python-level
-        # exception handling (SystemExit) entirely -- the `except SystemExit`
-        # branches above never run, and this child would vanish without ever
-        # reaching its own reporting `finally` block below, indistinguishable
-        # from a crash (`_linux_one_invocation`'s "exited without reporting a
-        # result" RuntimeError). `os._exit` is patched to THIS function for
-        # the duration of running the measured code, so the exit is caught
-        # here, the payload is written exactly as the normal path below would,
-        # and only THEN does the real os._exit actually terminate the child.
         nonlocal reported
         if reported or os.getpid() != root_pid:
-            # A descendant this root itself forked/spawned (e.g. a raw
-            # os.fork() grandchild) inherits this patched os._exit by COW
-            # memory copy, not by choice -- it must exit through the REAL
-            # os._exit untouched, or its own call here would write a second,
-            # corrupting payload onto the one pipe this root owns (reproduced:
-            # concatenated JSON, "Extra data" on decode).
             real_os_exit(code if isinstance(code, int) else 1)
             return
         reported = True
@@ -983,12 +896,6 @@ def _linux_run_measured_child(
             except SystemExit as exc:
                 rc = exc.code if isinstance(exc.code, int) else (1 if exc.code else 0)
         elif is_python_root and len(cmd) >= 2 and cmd[1] == "-m":
-            # `python -m <module> ...` (the shape `timer._build_argv` builds
-            # for `coordinator_core.invoke`) previously fell through to the
-            # runpy.run_path(cmd[1], ...) branch below, which treats "-m"
-            # itself as a file path and raises FileNotFoundError inside this
-            # child every time -- silently reported as a timing figure by
-            # `batched_process_time_ms` before its rc check was added.
             import runpy
 
             if len(cmd) < 3:
@@ -1010,25 +917,12 @@ def _linux_run_measured_child(
             except SystemExit as exc:
                 rc = exc.code if isinstance(exc.code, int) else (1 if exc.code else 0)
         elif is_python_root:
-            # Review: reviewer (F6) -- `cmd == [sys.executable]` (len 1) matched
-            # neither branch above (both require len(cmd) >= 2) and fell through
-            # to the non-Python-root `subprocess.run` branch, launching a bare
-            # interactive REPL that can hang waiting on stdin. Fail loud instead.
             raise ValueError(
                 f"process_time: malformed cmd {cmd!r} -- a sys.executable-rooted "
                 "cmd must be either ['python', '-c', code, ...] or "
                 "['python', script_path, ...], never sys.executable alone"
             )
         else:
-            # Non-Python root: this process's own act of launching `cmd` is
-            # itself one spawn (counted via the `subprocess.Popen` audit
-            # event above). NOTE (Review: reviewer F4): this is NOT the same
-            # figure Darwin reports for the identical invocation -- Darwin's
-            # `_darwin_one_invocation` execs the forked root directly into
-            # `cmd`, so `root_pid` IS the command process and `len(seen) ==
-            # 1`; here this process stays alive as a wrapper around
-            # `subprocess.run`, so the total is 2 (wrapper + command), one
-            # higher than Darwin's for the same invocation. Not "matching."
             completed = subprocess.run(list(cmd))
             rc = completed.returncode
     except BaseException:
@@ -1039,9 +933,6 @@ def _linux_run_measured_child(
         if not reported:
             reported = True
             _write_report_and_exit(write_fd, rc, spawn_count, real_os_exit)
-        # Unreachable: _write_report_and_exit always terminates via
-        # real_os_exit. No further code runs past this point in either
-        # branch (patched-exit or normal fall-through).
 
 
 def _linux_one_invocation(cmd: Sequence[str], env: Optional[dict], cwd: Optional[str]) -> dict:
@@ -1058,11 +949,7 @@ def _linux_one_invocation(cmd: Sequence[str], env: Optional[dict], cwd: Optional
     "elsewhere" in a process that only ever does this one thing.
     """
     read_fd, write_fd = os.pipe()
-    # Review: reviewer (F3) -- os.fork() itself can raise (EAGAIN under
     # RLIMIT_NPROC/memory pressure, exactly the condition most likely to make
-    # fork fail, since this runs in a k-iteration loop). Previously both fds
-    # leaked on that path since neither the child branch nor the parent's
-    # os.close(write_fd) below ever ran. Close both before propagating.
     try:
         pid = os.fork()
     except OSError:
@@ -1076,14 +963,6 @@ def _linux_one_invocation(cmd: Sequence[str], env: Optional[dict], cwd: Optional
 
     os.close(write_fd)
     chunks = []
-    # Review: reviewer (F1, P1 -- demonstrated hang) -- relying on EOF alone
-    # hangs indefinitely if the measured child forks a raw (non-exec)
-    # descendant that outlives it: CLOEXEC only trips at execve(), never at
-    # fork(), so the descendant inherits write_fd and keeps the pipe open
-    # long after the root child (and its payload write) is done. Reproduced:
-    # a 3s grandchild sleep hung this loop for the full 3s with no bound.
-    # There is no fd-level fix for a fork-without-exec descendant, so this
-    # bounds the read loop itself rather than trusting EOF unconditionally.
     deadline = time.monotonic() + _LINUX_READ_LOOP_TIMEOUT_S
     while True:
         remaining = deadline - time.monotonic()
@@ -1147,10 +1026,6 @@ def _linux_batched_process_time_ms(
         result = _linux_one_invocation(cmd, env, cwd)
         rc = result["rc"]
         if rc != 0:
-            # A failed invocation's fork/unwind cost is not the op's process
-            # time -- reporting it as one is the exact defect this instrument
-            # exists to avoid (module docstring). Fail loud, never average it
-            # into a figure the caller has no reason to distrust.
             raise RuntimeError(
                 f"process_time: measured child exited rc={rc} on invocation "
                 f"{i + 1}/{k} for cmd={cmd!r} -- refusing to report a process "
@@ -1429,10 +1304,6 @@ def single_invocation_tree_process_time(
                 "under that disposition (module docstring); refusing to "
                 "silently under-report rather than measuring through it"
             )
-        # `_posix_spawnp_suspended` passes NULL file_actions, so the child
-        # inherits this process's descriptors. Redirecting OUR OWN fds 1/2
-        # around the spawn is therefore the redirection mechanism -- not a
-        # workaround for a missing feature, but the same thing a shell does.
         saved = []
         out_f = open(stdout_path, "wb") if stdout_path else None
         err_f = open(stderr_path, "wb") if stderr_path else None
@@ -1456,8 +1327,6 @@ def single_invocation_tree_process_time(
                 err_f.close()
 
         if attach_failed:
-            # Same refusal as the batched path: an unresolved residual means
-            # some subtree exited unobserved, so `procs` is a lower bound.
             raise RuntimeError(
                 f"process_time: attach_failed={attach_failed} after bounded "
                 f"retry -- procs would be {procs} (LOWER BOUND, not exact). "
@@ -1484,34 +1353,15 @@ def single_invocation_tree_process_time(
 
 
 # Quantisation is +/-1 tick per window, so MIN_WINDOW_TICKS=10 bounds the
-# per-call error at 10%, where a 1-tick window can be off by up to 100%.
 MIN_WINDOW_TICKS = 10
 
-# The adaptive ramp in `in_process_time_ms` doubles k until the window spans
 # MIN_WINDOW_TICKS -- a callable that genuinely never advances the process
-# clock (it is waiting on I/O or a lock, not doing CPU work) would otherwise
-# double forever. 1 << 20 (1,048,576) is far past any k a real CPU-bearing
-# in-process callable should need to clear a 10-tick window, so hitting this
-# cap is itself the signal: the callable belongs on
-# `pytest.mark.deliberate_wall_clock`, not this primitive.
 MAX_K = 1 << 20
 
 _observed_tick_cache_s: Optional[float] = None
 
 
 def _real_observed_process_time_tick(clock) -> float:
-    """Measures the real process-time clock granularity by spinning `clock()`
-    until it advances, rather than trusting
-    `time.get_clock_info('process_time').resolution` -- that reports `1e-07`
-    on Windows against a real ~15.6ms `GetProcessTimes()` tick (module
-    docstring, trap 2), so a caller using the reported resolution as the real
-    tick would under-estimate it by five orders of magnitude.
-
-    Cached module-globally, but ONLY for the real stdlib clock
-    (`time.process_time`) -- a caller-supplied clock (the keyword-only test
-    hook on `in_process_time_ms`) is a fresh fake per test and must never
-    read a tick cached from a previous test's fake, or from the real clock.
-    """
     global _observed_tick_cache_s
     if clock is time.process_time and _observed_tick_cache_s is not None:
         return _observed_tick_cache_s
@@ -1528,10 +1378,6 @@ def _real_observed_process_time_tick(clock) -> float:
     return tick_s
 
 
-# Indirected through a module-level name (rather than calling
-# `_real_observed_process_time_tick` directly from `in_process_time_ms`) so a
-# test can monkeypatch this one name to pin the tick for a fake, non-spinnable
-# clock without touching the real detection loop above.
 _observed_process_time_tick = _real_observed_process_time_tick
 
 

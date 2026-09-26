@@ -35,12 +35,6 @@ def _gate(params: dict, repo_root: Path) -> dict:
 
 
 def _repo(tmp_path: Path) -> Path:
-    """A worktree whose git COMMON DIR is `<root>/.git`, with no `git init`.
-
-    `main_worktree_root` resolves a common dir to its parent, and this op takes no
-    lock, so a bare directory named `.git` is the whole requirement. Mirrors
-    `test_cutover_gate_handler.py`'s fixture shape.
-    """
     (tmp_path / ".git").mkdir()
     (tmp_path / "coordinator_core").mkdir()
     return tmp_path / ".git"
@@ -79,11 +73,6 @@ def _plan(root: Path, *, frontmatter: str = _FM, spine: str | None = _SPINE) -> 
     return "docs/plans/2026-09-07-fixture.md"
 
 
-# ---------------------------------------------------------------------------
-# Wire registration — the eight surfaces, minus the two generated artifacts
-# ---------------------------------------------------------------------------
-
-
 def test_op_resolves_through_the_real_dispatch_path():
     """`_lazy_import_and_lookup` is the path `coordinator-invoke` actually takes
     on a registry miss (OP_MODULE_MAP targeted import, then the `_eager_import_all`
@@ -94,8 +83,6 @@ def test_op_resolves_through_the_real_dispatch_path():
 
 
 def test_op_is_classified_compute_only():
-    """`classify()` RAISES KeyError for an unlisted op and the caller treats that
-    as DENY. There is no `default=`."""
     assert classify(OP_KEY) is OpClass.COMPUTE_ONLY
 
 
@@ -114,14 +101,7 @@ def test_the_op_declares_it_generates_nothing():
     assert not hasattr(mod, "MUTATES")
 
 
-# ---------------------------------------------------------------------------
-# Params and roots
-# ---------------------------------------------------------------------------
-
-
 def test_absent_repo_root_refuses_rather_than_falling_back_to_cwd(tmp_path):
-    """Deriving a root from the process cwd would make the answer depend on where
-    the caller happened to stand."""
     with pytest.raises(ValueError, match="requires a resolved repo_root"):
         mod._handler({"plan": "docs/plans/x.md"}, None)
 
@@ -147,11 +127,6 @@ def test_a_missing_plan_is_refused_by_name(tmp_path):
         _gate({"plan": "docs/plans/nope.md"}, common)
 
 
-# ---------------------------------------------------------------------------
-# The report
-# ---------------------------------------------------------------------------
-
-
 def test_a_clean_plan_reports_prepped_with_every_class(tmp_path):
     common = _repo(tmp_path)
     rel = _plan(tmp_path)
@@ -163,8 +138,6 @@ def test_a_clean_plan_reports_prepped_with_every_class(tmp_path):
 
 
 def test_the_report_is_per_class_not_a_boolean(tmp_path):
-    """A boolean throws away the breakdown that is the whole product: the four
-    classes are fixed in four different places."""
     common = _repo(tmp_path)
     rel = _plan(tmp_path, frontmatter="", spine=None)
     result = _gate({"plan": rel}, common)
@@ -175,8 +148,6 @@ def test_the_report_is_per_class_not_a_boolean(tmp_path):
 
 
 def test_the_report_carries_the_stamp_state(tmp_path):
-    """The second question a fire-time caller has — is the certification on disk
-    still about this document? — answered by the recomputed sha, never presence."""
     common = _repo(tmp_path)
     rel = _plan(tmp_path)
     result = _gate({"plan": rel}, common)
@@ -205,11 +176,7 @@ def test_the_op_never_spawns_a_subprocess(tmp_path, monkeypatch):
 
     common = _repo(tmp_path)
     rel = _plan(tmp_path)
-    _gate({"plan": rel}, common)  # warm the deferred imports
-    # The `engine_build` memo is what the warm-up above also fills, so clear it:
-    # the FIRST call in a process is the only one that reads anything, and a pin
-    # that only ever exercised the memoized path would not notice a provenance
-    # field that resolved itself with `git rev-parse`.
+    _gate({"plan": rel}, common)
     engine_version._BUILD_MEMO = None
 
     def _boom(*args, **kwargs):
@@ -221,13 +188,6 @@ def test_the_op_never_spawns_a_subprocess(tmp_path, monkeypatch):
 
 
 def test_the_report_names_the_build_that_computed_it(tmp_path):
-    """Every verdict carries `engine_build`, PREPPED included.
-
-    Without it a DEFECT reads the same whether the plan under-declares or the
-    engine predates the leg that exempts it, and only one of those is repaired by
-    editing the plan — the misread that sent 7 example-game-repo plans toward a fabricated
-    `external_gate` (example-game-workbench-repo-00, 2026-09-11).
-    """
     common = _repo(tmp_path)
     rel = _plan(tmp_path)
     report = _gate({"plan": rel}, common)
@@ -236,13 +196,6 @@ def test_the_report_names_the_build_that_computed_it(tmp_path):
 
 
 def test_the_build_is_the_engines_own_not_the_gated_repos(tmp_path):
-    """`engine_build` answers "which engine ran", never "which repo was gated".
-
-    The fixture worktree is a bare `.git` directory with no HEAD at all; a field
-    derived from the CALLER's root would report None here and would silently
-    become the gated repo's sha on a real consumer — the one reading that cannot
-    ancestry-check an engine leg against it.
-    """
     from coordinator_core import engine_version
 
     common = _repo(tmp_path)
@@ -253,7 +206,6 @@ def test_the_build_is_the_engines_own_not_the_gated_repos(tmp_path):
 
 
 def test_plan_path_is_accepted_as_the_plan_spelling(tmp_path):
-    """`dispatch.emit`, the next op in the chain, spells it `plan_path`."""
     common = _repo(tmp_path)
     rel = _plan(tmp_path)
     assert _gate({"plan_path": rel}, common)["plan"] == rel

@@ -264,8 +264,7 @@ extern char **environ;
 #define DOOR_WRITE_DEADLINE_MS 2000
 #define DOOR_READ_DEADLINE_MS 40000
 
-/* Sanity ceiling on the response line -- a larger one is malformed, not
- * large. Same value door.c uses. */
+
 #define DOOR_RESPONSE_CEILING (16u << 20)
 
 static long long monotonic_ms(void) {
@@ -274,21 +273,14 @@ static long long monotonic_ms(void) {
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-/* Milliseconds left of `total_ms` since `started`, floored at 0. */
+
 static int remaining_ms(long long started, int total_ms) {
     long long elapsed = monotonic_ms() - started;
     if (elapsed >= (long long)total_ms) return 0;
     return (int)((long long)total_ms - elapsed);
 }
 
-/* =========================================================================
- * Small fd helpers
- * ========================================================================= */
 
-/* Returns 1 iff every byte of `data` was written to `fd`. Used for STDOUT
- * and STDERR, never for the socket -- the socket's write goes through
- * `write_frame_bounded`, which is the only function allowed to report
- * delivery. */
 static int write_all_fd(int fd, const char *data, size_t len) {
     size_t off = 0;
     while (off < len) {
@@ -303,9 +295,7 @@ static int write_all_fd(int fd, const char *data, size_t len) {
     return 1;
 }
 
-/* Reads a whole file into a malloc'd, NUL-terminated buffer, refusing
- * anything larger than `max_bytes` (a sanity ceiling, not a policy). Returns
- * NULL on any failure -- every failure here is pre-delivery doubt. */
+
 static char *read_whole_file(const char *path, size_t *out_len, size_t max_bytes) {
     int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) return NULL;
@@ -342,14 +332,7 @@ static char *read_whole_file(const char *path, size_t *out_len, size_t max_bytes
  * last-resort fallback, see `BUILD_ENGINE_ROOT`).
  * ========================================================================= */
 
-/* Directory containing THIS running executable, with a trailing '/'. Never
- * `argv[0]` (a caller can spell it however it likes via PATH or a relative
- * lookup) and never the process cwd (the caller's directory, not this
- * binary's install location) -- either would let an unrelated cwd silently
- * redirect which engine this door talks to.
- *
- * macOS: `_NSGetExecutablePath` + `realpath`. `/proc/self/exe` does NOT
- * exist on macOS; it is the Linux branch only. */
+
 static int get_own_directory(char *out, size_t out_size) {
     char exe_path[PATH_MAX];
 
@@ -357,8 +340,7 @@ static int get_own_directory(char *out, size_t out_size) {
     char raw[PATH_MAX];
     uint32_t raw_size = (uint32_t)sizeof(raw);
     if (_NSGetExecutablePath(raw, &raw_size) != 0) return 0;
-    /* `_NSGetExecutablePath` may hand back a path containing `..` or a
-     * symlink; `realpath` is what makes it the actual install location. */
+    
     if (realpath(raw, exe_path) == NULL) return 0;
 #else
     ssize_t n = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
@@ -368,7 +350,7 @@ static int get_own_directory(char *out, size_t out_size) {
 
     char *last_sep = strrchr(exe_path, '/');
     if (!last_sep) return 0;
-    size_t dir_len = (size_t)(last_sep - exe_path) + 1; /* keep the '/' */
+    size_t dir_len = (size_t)(last_sep - exe_path) + 1; 
     if (dir_len >= out_size) return 0;
     memcpy(out, exe_path, dir_len);
     out[dir_len] = '\0';
@@ -388,12 +370,7 @@ static int get_own_directory(char *out, size_t out_size) {
 static char g_own_basename[PATH_MAX];
 static int g_own_basename_ok = 0;
 
-/* Fills `g_own_basename` with this running image's own basename, WITHOUT any
- * extension stripped (POSIX binaries installed under these names carry no
- * `.exe` suffix to strip, unlike door.c's Windows twin). Called once from
- * `main()`, before the warm/cold branch splits, so every fallback in this
- * file resolves against the SAME basename regardless of which branch reaches
- * it. */
+
 static void resolve_own_basename(void) {
     char exe_path[PATH_MAX];
 
@@ -418,19 +395,12 @@ static void resolve_own_basename(void) {
     g_own_basename_ok = 1;
 }
 
-/* The basename `fall_through`'s cold script path resolves against -- SAME
- * single resolution door.c's `door_entrypoint_basename()` performs, ported
- * here to close finding 3 (`door_posix.c :: fall_through` previously
- * formatted `coordinator-invoke.py` as a literal, not basename-aware at
- * all). Never NULL. */
+
 static const char *door_entrypoint_basename(void) {
     return g_own_basename_ok ? g_own_basename : DOOR_DEFAULT_ENTRYPOINT;
 }
 
-/* Reads the sidecar's single line and trims trailing whitespace (an
- * editor-saved sidecar with a stray blank line is a plausible operator
- * mistake, not a reason to mismatch every socket name). Returns malloc'd
- * UTF-8 bytes plus their length, or NULL. */
+
 static char *read_sidecar(const char *own_dir, size_t *out_len) {
     char sidecar_path[PATH_MAX];
     int n = snprintf(sidecar_path, sizeof(sidecar_path), "%s%s",
@@ -475,15 +445,7 @@ static int door_env_warm_is_falsy(void) {
     return value != NULL && door_env_value_is_falsy(value);
 }
 
-/* Resolves the engine root this invocation should target: the env-var
- * override if set and non-empty, else the sidecar next to this executable.
- * Validates the result -- a sidecar pointing at a non-engine directory is
- * exactly the kind of doubt the safety property exists for.
- *
- * On success fills `*out` (malloc'd, NUL-terminated) and `*out_len` (the
- * authoritative length, since it is also the SHA-1 input) and returns 1.
- * Returns 0 on ANY failure, at which point neither output is written.
- * Every failure here is silent by design. */
+
 static int resolve_engine_root(char **out, size_t *out_len) {
     char *root = NULL;
     size_t root_len = 0;
@@ -510,9 +472,6 @@ static int resolve_engine_root(char **out, size_t *out_len) {
     return 1;
 }
 
-/* =========================================================================
- * Socket path derivation + the directory privacy boundary
- * ========================================================================= */
 
 /* Trims leading and trailing ASCII whitespace (space, \t, \n, \r, \f, \v)
  * from `s` in place and returns it -- the same set Python's `str.strip()`
@@ -549,9 +508,7 @@ static char *strip_ascii_whitespace(char *s) {
 static int runtime_base_candidates(char out[][PATH_MAX], int max) {
     int count = 0;
 
-    /* A base that did not FIT is dropped rather than truncated, for the
-     * same reason `socket_path_for` refuses a long `sun_path`: a truncated
-     * path can still name a real directory, just not the intended one. */
+    
     #define ADD_BASE(fmt, arg)                                            \
         do {                                                              \
             if (count < max) {                                            \
@@ -567,15 +524,12 @@ static int runtime_base_candidates(char out[][PATH_MAX], int max) {
         if (n > 0 && (size_t)n < sizeof(override_buf)) {
             char *stripped = strip_ascii_whitespace(override_buf);
             if (stripped[0] != '\0') {
-                /* An explicit override is exactly that -- one candidate,
-                 * no probing. `_runtime_base()` returns early on it too. */
+                
                 ADD_BASE("%s", stripped);
                 return count;
             }
         }
-        /* An all-whitespace (or unfit) override is "unset" to Python's
-         * `.strip()` check, so it must be "unset" here too rather than
-         * falling through to a raw, unstripped `getenv` read below. */
+        
     }
 
     const char *local = getenv("LOCALAPPDATA");
@@ -634,20 +588,7 @@ static int dir_is_private(const char *path) {
     return 1;
 }
 
-/* True iff nobody but the owner can REPLACE entries in `path` -- owned by
- * the calling uid, no group/other write bit.
- *
- * Why a second, weaker check on the parent: `dir_is_private()` proves
- * nothing about a directory that someone else can rename out from under it.
- * If `<base>/coordinator/warm` were group-writable, another local account
- * could move the real `<clone-hash>` directory aside and substitute a 0700
- * one of its own -- which would pass `dir_is_private()` while holding a
- * socket it controls. Both levels are created by the warm server, so
- * requiring both to be ours is fair; the check deliberately stops there and
- * does NOT walk up into `~/.cache` or `$HOME`, which are the user's own
- * business and carry the same trust the Windows door extends to a user
- * profile. Group/other READ and EXECUTE are tolerated (a 0755 `~/.cache` is
- * normal and harmless -- traversal alone substitutes nothing). */
+
 static int dir_not_substitutable(const char *path) {
     struct stat st;
     if (stat(path, &st) != 0) return 0;
@@ -657,8 +598,7 @@ static int dir_not_substitutable(const char *path) {
     return 1;
 }
 
-/* Writes `path`'s parent directory into `out`. Returns 0 if `path` has no
- * '/' or the parent would not fit. */
+
 static int path_parent(const char *path, char *out, size_t out_size) {
     const char *last_sep = strrchr(path, '/');
     if (!last_sep || last_sep == path) return 0;
@@ -713,10 +653,7 @@ static int connect_socket(const char *path) {
     (void)fcntl(fd, F_SETFD, FD_CLOEXEC);
 
 #if defined(SO_NOSIGPIPE)
-    /* macOS/BSD: belt to the SIGPIPE braces `main()` already sets. A write
-     * to a socket whose peer vanished must return EPIPE, never kill this
-     * process -- a signal death would exit without falling through AND
-     * without emitting an envelope, the one outcome no caller can read. */
+    
     int on = 1;
     setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
 #endif
@@ -727,13 +664,7 @@ static int connect_socket(const char *path) {
             return fd;
         }
         if (errno == EINTR) continue;
-        /* EAGAIN is deliberately NOT waited on. On an AF_UNIX socket it
-         * means the listener's backlog is full -- the connection was
-         * REFUSED, not started, so there is nothing for `poll(POLLOUT)` to
-         * report; the fd would come back "writable" and `getsockopt`
-         * clean while still unconnected, and this function would hand back
-         * a socket the first `send()` fails on. Treat it as the refusal it
-         * is: fall through, which is what a busy server should produce. */
+        
         if (errno != EINPROGRESS && errno != EALREADY) {
             if (errno == ENOENT || errno == ECONNREFUSED) {
                 g_connect_no_server = 1;
@@ -766,9 +697,6 @@ static int connect_socket(const char *path) {
     }
 }
 
-/* =========================================================================
- * Bounded frame I/O
- * ========================================================================= */
 
 /* Sends the request frame under `DOOR_WRITE_DEADLINE_MS`. Returns 1 iff
  * EVERY byte was written -- which is what "delivered" means, and the only
@@ -811,8 +739,7 @@ static int write_frame_bounded(int fd, const char *data, size_t len) {
     return off == len;
 }
 
-/* Read outcome, mirroring door.c's `await_overlapped` tri-state so the
- * caller's post-delivery branching reads the same on both platforms. */
+
 #define READ_GOT_LINE 1
 #define READ_DEADLINE 0
 #define READ_FAILED (-1)
@@ -844,7 +771,7 @@ static int read_line_bounded(int fd, buf_t *resp) {
             if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) continue;
             return READ_FAILED;
         }
-        if (n == 0) return READ_FAILED; /* peer closed before a full line */
+        if (n == 0) return READ_FAILED; 
 
         if (!buf_append(resp, chunk, (size_t)n)) return READ_FAILED;
         if (memchr(chunk, '\n', (size_t)n) != NULL) return READ_GOT_LINE;
@@ -852,24 +779,7 @@ static int read_line_bounded(int fd, buf_t *resp) {
     }
 }
 
-/* =========================================================================
- * Caller-declared stdin payload -- mode gate, the platform read primitive,
- * and the hook-mode fail-closed disposition. Full contract in door_core.h;
- * this section is only the POSIX-specific half (getenv, the `read(0, ...)`
- * reader callback, and the write of the shared envelope bytes) -- door.c
- * carries door.c's own, sharing every constant and the drain loop through
- * `door_core.h`/`door_core.c` so the two legs cannot recognise a different
- * declaration or drift in what a too-large payload does.
- * ========================================================================= */
 
-/* Set once, at the very top of `main`, from the caller's own declaration --
- * never sniffed from the socket fd. `fall_through`, below, reads this flag
- * as its FIRST statement, the single choke point every fall-through in
- * this file already reaches, so gating there covers every existing call
- * site (and any added later) without a second edit. */
-/* One `"NAME":"VALUE"` member of the envelope's `_env` object, comma-led
- * after the first. `name` is not NUL-terminated at `name_len` when it points
- * into an `environ` entry. */
 static int env_pair_append(buf_t *pairs, const char *name, size_t name_len,
                            const char *value) {
     int ok = 1;
@@ -910,15 +820,11 @@ static long door_stdin_read_chunk(void *reader_ctx, char *buf, size_t cap) {
     }
 }
 
-/* The caller's hook payload, kept for `hook_fall_through`: every
- * fall-through is pre-delivery or provably undispatched, so the cold leg
- * must be handed the same bytes the warm request would have carried. */
+
 static const char *g_hook_payload = NULL;
 static size_t g_hook_payload_len = 0;
 
-/* Engine down: pass loudly, never deny -- see `build_hook_pass_loudly_envelope`.
- * Exit 0 either way; if the envelope cannot be built, an empty stdout is a
- * pass, and the stderr line keeps it from being a silent one. */
+
 static int emit_hook_pass_loudly(const char *reason) {
     buf_t event, out;
     const char *event_name = NULL;
@@ -939,16 +845,7 @@ static int emit_hook_pass_loudly(const char *reason) {
     return 0;
 }
 
-/* Same split as `emit_indeterminate` below: the envelope's bytes are built
- * in `door_core.c` (shared, so the two doors cannot drift in what they
- * tell an operator), only the write is POSIX-specific. Exit 0, matching
- * the shape every Bash guard in this repo already returns for a decided
- * `deny` verdict -- a nonzero exit here would tell the hook runner THIS
- * PROCESS failed, not that the tool call was denied. On the one failure
- * this cannot recover from (no memory to build 512 bytes), it falls back
- * to the hook contract's OTHER deny signal -- a diagnostic on stderr plus
- * a nonzero exit -- rather than risk an empty stdout reading as "no
- * opinion" (silently allow) on a guard's hot path. */
+
 static int emit_hook_deny(const char *reason) {
     buf_t out;
     if (!buf_init(&out, 512) || !build_hook_deny_envelope(&out, reason)) {
@@ -961,15 +858,7 @@ static int emit_hook_deny(const char *reason) {
     return 0;
 }
 
-/* =========================================================================
- * Post-delivery refusal
- * ========================================================================= */
 
-/* Emits the `-32004` envelope on stdout and returns a nonzero exit code,
- * instead of falling through. Called for every post-write failure this door
- * cannot prove was undispatched -- see `is_provably_undispatched`. The
- * envelope text is built in door_core.c so the two doors cannot drift in
- * what they tell an operator. */
 static int emit_indeterminate(const char *detail) {
     buf_t out;
     if (!buf_init(&out, 512)) return 1;
@@ -980,9 +869,6 @@ static int emit_indeterminate(const char *detail) {
     return 1;
 }
 
-/* =========================================================================
- * Fallback -- the one path that must never fail to at least try.
- * ========================================================================= */
 
 /* Spawns `{PYTHON_BIN} {engine_root}/coordinator/bin/coordinator-invoke.py
  * <argv[1:]>` and propagates its exit code. A SCRIPT PATH, deliberately
@@ -1095,18 +981,7 @@ static int resolve_fallback_script(const char *engine_root, char *script_path) {
  * did not answer, which gets `emit_hook_pass_loudly` -- never a deny (the
  * engine being down is no reason to wall off Bash) and never a silent pass
  * (an unrun guard must not read as one that allowed). */
-/* =========================================================================
- * RESPAWN ON MISS -- the no-server branch only, never on busy/timeout.
- *
- * POSIX twin of `door.c :: door_maybe_spawn_server` -- see that function's
- * own docstring for the full rationale (mirrors `warm/client.py ::
- * _spawn_once`, shares rather than invents the rate-limit file, never
- * blocks, never waits on the child). `svc_dir` is the caller's already-
- * resolved `<base>/coordinator/warm/<clone_hash>` (the directory the
- * connect loop just proved private and non-substitutable), so this
- * function does no path derivation of its own beyond appending the lock
- * file's name -- byte-identical to `breadcrumb.boot_lock_path` by
- * construction. */
+
 #define DOOR_SPAWN_DEBOUNCE_SECS 2.0
 
 static void door_maybe_spawn_server(const char *engine_root, const char *svc_dir) {
@@ -1116,7 +991,7 @@ static void door_maybe_spawn_server(const char *engine_root, const char *svc_dir
     }
 
     int fd = open(lock_path, O_CREAT | O_RDWR, 0600);
-    if (fd < 0) return; /* fail open: no debounce state reachable, no spawn */
+    if (fd < 0) return; 
 
     /* Stamp lives at byte offset 1, matching `breadcrumb.py ::
      * _CLAIM_STAMP_OFFSET` (byte 0 is a lock byte this door never takes) --
@@ -1139,7 +1014,7 @@ static void door_maybe_spawn_server(const char *engine_root, const char *svc_dir
     if (got > 0) stamp = strtod(stamp_buf, NULL);
     double age = now - stamp;
     if (stamp > 0.0 && age > -DOOR_SPAWN_DEBOUNCE_SECS && age < DOOR_SPAWN_DEBOUNCE_SECS) {
-        /* A recent stamp vouches for an in-flight spawn -- debounced. */
+        
         close(fd);
         return;
     }
@@ -1197,9 +1072,7 @@ static void door_maybe_spawn_server(const char *engine_root, const char *svc_dir
             posix_spawn_file_actions_adddup2(&actions, devnull, STDIN_FILENO);
             posix_spawn_file_actions_adddup2(&actions, devnull, STDOUT_FILENO);
             posix_spawn_file_actions_adddup2(&actions, devnull, STDERR_FILENO);
-            /* `devnull` itself must not leak into the child past the dup2s
-             * above -- best-effort close, matching this function's whole
-             * "never let a failure here block the spawn attempt" posture. */
+            
             posix_spawn_file_actions_addclose(&actions, devnull);
         }
     }
@@ -1208,18 +1081,13 @@ static void door_maybe_spawn_server(const char *engine_root, const char *svc_dir
     posix_spawnp(&pid, PYTHON_BIN, actions_ok ? &actions : NULL, NULL,
                  spawn_argv, child_env ? child_env : environ);
     if (actions_ok) posix_spawn_file_actions_destroy(&actions);
-    /* Fire-and-forget: never wait on the child (no `waitpid`), never
-     * observe its exit. A detached grandchild that outlives this
-     * short-lived door process is reaped by init/launchd on exit, not by
-     * this process, exactly like every other `spawn_detached` caller in
-     * this package. */
+    
     free(pythonpath_entry);
     free(child_env);
 }
 
 static int hook_fall_through(int argc, char **argv, const char *engine_root) {
-    /* An advisory row stays silent on every failure below, as hook-run.py
-     * does; a guard row keeps the loud envelope. */
+    
     int advisory = door_argv_declares_advisory(argc, (const char *const *)argv);
 
     char script_path[PATH_MAX];
@@ -1268,8 +1136,7 @@ static int hook_fall_through(int argc, char **argv, const char *engine_root) {
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
     }
 
-    /* hook-run reads all of stdin before it writes anything, so writing the
-     * whole payload before reading cannot deadlock on a full pipe. */
+    
     if (g_hook_payload_len > 0) {
         write_all_fd(in_pipe[1], g_hook_payload, g_hook_payload_len);
     }
@@ -1318,9 +1185,7 @@ static int fall_through(int argc, char **argv, const char *engine_root) {
     char script_path[PATH_MAX];
     if (resolve_fallback_script(engine_root, script_path) != 0) return 1;
 
-    /* argv[0] is replaced by the interpreter, argv[1] by the script, and
-     * the caller's argv[1:] follows -- exactly what door.c's command line
-     * spells out, minus the quoting layer POSIX does not need. */
+    
     int spawn_argc = 2 + (argc > 1 ? argc - 1 : 0);
     char **spawn_argv = (char **)calloc((size_t)spawn_argc + 1, sizeof(char *));
     if (!spawn_argv) return 1;
@@ -1374,9 +1239,7 @@ static int fall_through(int argc, char **argv, const char *engine_root) {
     if (attr_inited) posix_spawnattr_destroy(&attr);
     free(spawn_argv);
     if (rc != 0) {
-        /* Genuinely fatal: not "fast path missed", but "no way at all to
-         * reach the engine". The one case the ordinary no-diagnostic rule
-         * does not cover. */
+        
         fprintf(stderr,
                 "door: could not launch the fallback (python=%s, script=%s): "
                 "%s -- cannot fall through\n",
@@ -1393,22 +1256,12 @@ static int fall_through(int argc, char **argv, const char *engine_root) {
     return 1;
 }
 
-/* =========================================================================
- * main -- same orchestration sequence as door.c's: resolve engine root ->
- * identity -> engine token -> socket path -> connect -> build request ->
- * write -> read -> parse -> decide.
- * ========================================================================= */
 
 int main(int argc, char **argv) {
-    /* A write to a vanished peer must return EPIPE, not kill this process:
-     * a signal death exits without falling through AND without emitting an
-     * envelope, which is the one outcome no caller can interpret. */
+    
     signal(SIGPIPE, SIG_IGN);
 
-    /* THE MODE GATE (door_core.h), read once, before anything else in this
-     * function, mirroring door.c's own ordering -- `fall_through` reads this
-     * flag as its first statement and must see the caller's declaration
-     * regardless of which exit this function ultimately takes. */
+    
     g_door_hook_mode = door_stdin_mode_is_hook();
 
     /* THE READ ITSELF, gated on the flag above and nowhere else -- an
@@ -1445,11 +1298,7 @@ int main(int argc, char **argv) {
         g_hook_payload_len = stdin_payload.len;
     }
 
-    /* Resolved once, unconditionally, before any branch splits -- see
-     * `resolve_own_basename`'s own comment. Every `fall_through` call in
-     * this file reads `door_entrypoint_basename()`, so it must be populated
-     * regardless of which branch below is the one that ultimately falls
-     * through. */
+    
     resolve_own_basename();
 
     /* ---- -2. THE INSTALL-CLASS GATE (door_core.h ::
@@ -1544,11 +1393,7 @@ int main(int argc, char **argv) {
      * `dir_is_private`), which is why nothing uid-shaped goes into the path
      * built below. `getuid()` cannot fail. */
 
-    /* ---- 2. engine token: sha1("engine-stamp:" + stamp bytes)[:16],
-     * byte-identical to `warm/skew.py :: compute_client_token`. Deliberately
-     * NOT cached anywhere: it is a generation stamp that rotates on every
-     * publish round, and caching it would let this binary silently address a
-     * stale generation's socket forever. */
+    
     char stamp_path[PATH_MAX];
     int n = snprintf(stamp_path, sizeof(stamp_path),
                      "%s/coordinator_core/_engine_stamp", engine_root);
@@ -1569,10 +1414,7 @@ int main(int argc, char **argv) {
     if (!buf_init(&token_input, stamp_len + 16) ||
         !buf_append_cstr(&token_input, "engine-stamp:") ||
         !buf_append(&token_input, stamp_bytes, stamp_len)) {
-        /* `token_input.data` is NULL if `buf_init` itself is what failed
-         * (short-circuited before allocating) and a live buffer otherwise
-         * (a later `buf_append*` failing leaves what was already grown
-         * intact) -- freeing it here is correct in both cases. */
+        
         free(token_input.data);
         free(stamp_bytes);
         int rc = fall_through(argc, argv, engine_root);
@@ -1584,13 +1426,7 @@ int main(int argc, char **argv) {
     sha1_hex16((const unsigned char *)token_input.data, token_input.len, engine_token);
     free(token_input.data);
 
-    /* ---- 3. clone hash: sha1(str(Path(engine_root).resolve()))[:16].
-     * `engine_root` IS that resolved string, verbatim -- build_posix.py
-     * resolved it once, in Python, when it wrote the sidecar (or the env
-     * override supplied it pre-resolved); this file performs no path
-     * canonicalisation of its own, which is what keeps this hash
-     * byte-identical to `breadcrumb.svc_dir`'s by construction rather than
-     * by reimplementing `Path.resolve()` in C. */
+    
     char clone_hash[17];
     sha1_hex16((const unsigned char *)engine_root, engine_root_len, clone_hash);
 
@@ -1637,12 +1473,7 @@ int main(int argc, char **argv) {
         return rc;
     }
 
-    /* ---- 6. build the request ----
-     * {"jsonrpc":"2.0","id":1,"method":"invoke.from_argv",
-     *  "params":{"argv":[...],"cwd":"..."},"_engine_token":"..."}
-     * argv[0] is not forwarded -- only argv[1:] crosses the wire, per the
-     * protocol this door speaks. POSIX argv is already UTF-8 bytes, so it
-     * goes across verbatim with only JSON escaping applied. */
+    
     buf_t req;
     if (!buf_init(&req, 4096)) {
         close(fd);
@@ -1751,10 +1582,7 @@ int main(int argc, char **argv) {
      * second resolver -- see `warm/entry_seam.py` for the one place that
      * validation belongs. */
     if (req_ok) {
-        /* Pairs are collected into `env_pairs` first and the `_env` object is
-         * opened in exactly one place below, so "no name resolved" still omits
-         * `_env` entirely without either source of names tracking whether the
-         * other already opened it. */
+        
         buf_t env_pairs;
         req_ok &= buf_init(&env_pairs, 256);
 
@@ -1829,8 +1657,7 @@ int main(int argc, char **argv) {
     req_ok &= buf_append_cstr(&req, "}\n");
 
     if (!req_ok) {
-        /* Pre-delivery: nothing has been written yet, so falling through is
-         * unconditionally safe. */
+        
         free(req.data);
         close(fd);
         int rc = fall_through(argc, argv, engine_root);
@@ -1875,9 +1702,7 @@ int main(int argc, char **argv) {
             return emit_indeterminate(
                 "connection closed or read failed after delivery");
         }
-        /* The deadline, not the peer: the server accepted this request and
-         * has said nothing since. It is very likely still running it, which
-         * is the whole reason this is a refusal and not a retry. */
+        
         char detail[160];
         snprintf(detail, sizeof(detail),
                  "no response within %us of delivery -- the door stopped "
@@ -1910,14 +1735,12 @@ int main(int argc, char **argv) {
         free(rf.stderr_buf.data);
 
         if (have_error && is_provably_undispatched(error_code)) {
-            /* This specific code proves the server never invoked a handler
-             * for the delivered request -- safe to fall through, same as a
-             * pre-delivery failure. */
+            
             int rc = fall_through(argc, argv, engine_root);
             free(engine_root);
             return rc;
         }
-        free(engine_root); /* refusing, not falling through -- no further use */
+        free(engine_root); 
         return emit_indeterminate(
             have_error
                 ? "server returned an error that does not prove the op was never dispatched"

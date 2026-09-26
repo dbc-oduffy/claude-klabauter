@@ -51,7 +51,7 @@ from coordinator_core.win_portability import (
 import sys
 from typing import List
 
-_PROG = "parse-resolves-trailer.sh"  # literal program-name prefix — matches oracle stderr
+_PROG = "parse-resolves-trailer.sh"
 
 
 def _run_git(args: List[str], cwd: str | None = None) -> subprocess.CompletedProcess:
@@ -116,7 +116,6 @@ def _fallback_trailers(commit: str) -> List[str]:
 
 
 def run(commit: str) -> tuple[List[str], int]:
-    """Core extraction: returns (artifact_id_lines, exit_code)."""
     if not _is_inside_git_repo():
         print(f"{_PROG}: not inside a git repository", file=sys.stderr)
         return [], 2
@@ -147,7 +146,6 @@ Options:
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: arg validation, extraction, print, return rc."""
     if not argv:
         print(_USAGE, file=sys.stderr)
         return 1

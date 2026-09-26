@@ -103,9 +103,6 @@ from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Set, Tuple
 from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 _USAGE = (
     "Usage: verify-coverage [--root <path>] [--sweep-root <path>] "
@@ -114,15 +111,6 @@ _USAGE = (
 
 
 def parse_args(argv: List[str]) -> dict:
-    """Parse CLI flags. Mirrors the JS `parseArgs` loop shape (1:1 flag set).
-
-    Returns a dict with keys root/sweep_root/json/report_only, or a dict
-    carrying {"_exit": <code>} when --help was requested (exit 0) or an
-    unknown argument was seen (exit 2) -- main() checks `_exit` before
-    proceeding, replicating the oracle's immediate process.exit() calls
-    without exiting the whole interpreter mid-parse (this module is
-    direct-imported, not subprocess-invoked).
-    """
     args = {"root": None, "sweep_root": None, "json": False, "report_only": False}
     i = 0
     while i < len(argv):
@@ -149,33 +137,9 @@ def parse_args(argv: List[str]) -> dict:
     return args
 
 
-# ---------------------------------------------------------------------------
-# Plugin tree discovery
-# ---------------------------------------------------------------------------
-
-
 def default_root(home_dir: Optional[str] = None) -> str:
-    """Resolve the plugin tree root.
-
-    DoE authoring machines: `~/.claude/.doe-root` contains the absolute path to
-    the DoE-claude clone root. The plugin tree lives directly there (DoE-claude/
-    contains coordinator/, deep-research/, etc. as siblings -- the same shape as
-    the published coordinator-claude/ mirror). Reading the sentinel lets this
-    module operate against the live authoring tree instead of the publish
-    mirror.
-
-    OSS / marketplace installs: sentinel absent -> fall back to the published
-    mirror at ~/.claude/plugins/coordinator-claude/.
-
-    `home_dir` is injectable so callers/tests can probe the sentinel logic
-    without mutating the real HOME env var (mirrors the JS `defaultRoot`'s
-    optional `homeDir` parameter).
-    """
     if home_dir is None:
         home_dir = os.path.expanduser("~")
-    # `read_doe_root_pointer_file` swallows an unreadable sentinel the same way
-    # the prior inline read did (absent sentinel is the expected OSS path), so
-    # both the missing and the unreadable case land on the mirror fallback below.
     doe_root = read_doe_root_pointer_file(home_dir)
     if doe_root:
         return doe_root
@@ -183,28 +147,10 @@ def default_root(home_dir: Optional[str] = None) -> str:
 
 
 def default_sweep_root() -> str:
-    """Resolve the doc-sweep root (which .md tree gets scanned for references).
-
-    Deliberately distinct from the artifact-discovery root: `discover_artifacts`
-    must always resolve the real plugin tree (that's where skills/agents/
-    commands live), but the SWEEP -- which files get scanned FOR references --
-    must be scoped to whichever repo invoked the module. Defaulting to cwd
-    keeps a consumer run scoped to its own doc surface; a DoE-claude-authoring
-    invocation (cwd already inside the resolved plugin root) naturally sweeps
-    the plugin tree since cwd IS that tree.
-    """
     return os.getcwd()
 
 
 def discover_artifacts(root: str) -> dict:
-    """Walk the plugin tree and discover artifacts.
-
-    The tree shape is: <root>/<plugin>/{skills,agents,commands}/*
-    Plus the deep-research subplugin: <root>/deep-research/notebooklm/{skills,agents,commands}/*
-
-    Returns {"skills": {...}, "agents": {...}, "commands": {...}, "plugins": [...]}
-    -- skills/agents/commands map "<plugin>:<name>" -> absolute path.
-    """
     skills: Dict[str, str] = {}
     agents: Dict[str, str] = {}
     commands: Dict[str, str] = {}
@@ -254,28 +200,7 @@ def discover_artifacts(root: str) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Reference extraction
-# ---------------------------------------------------------------------------
-
-
 def strip_code_fences(content: str) -> str:
-    """Strip fenced code blocks (```...```) and YAML frontmatter from a markdown body.
-
-    Inline backticks (`...`) are KEPT -- many references live in them (e.g.,
-    `coordinator:plan`).
-
-    Stripped regions are replaced with an equal count of blank lines (never
-    deleted outright) so the transformed body's line count -- and every
-    downstream `body.count("\\n", 0, pos)` line-number computation in
-    `extract_references` -- stays in parity with `content`'s real line
-    numbers. Deleting the matched text outright (the prior behavior) shifted
-    every reported violation line number by the removed frontmatter/fence
-    line count, which is itself one of this module's false-orphan legs (a
-    correct ref reported at the wrong line reads as unresolvable to a human
-    checking that line -- see docs/plans/2026-09-22-inbox-blitz-bundled-xs-s-
-    fixes-2026-09-11.md T37).
-    """
     out = content
     if out.startswith("---"):
         second_dash = out.find("\n---", 3)
@@ -319,11 +244,6 @@ def walk_markdown(
             if entry.is_dir():
                 if entry.name in ("node_modules", ".git") or entry.name in exclude:
                     continue
-                # Path-scoped, not basename-scoped: only .claude/worktrees/* is
-                # excluded (untracked worktree checkouts that duplicate every
-                # file in the tree). A basename match on ".claude" alone would
-                # also exclude tracked .claude fixture dirs under install/
-                # sandbox-test surfaces, which are real sweep content.
                 if entry.name == "worktrees" and os.path.basename(d) == ".claude":
                     continue
                 stack.append(full)
@@ -331,29 +251,14 @@ def walk_markdown(
                 yield full
 
 
-# Pattern 2 -- subagent_type assignments: subagent_type: "name", subagent_type=name.
-# Require alphanumeric terminal char so docs templates like "example-game-repo-control:ue-{domain}"
-# don't capture the trailing dash before the placeholder brace.
 _SUBAGENT_RE = re.compile(r"subagent_type\s*[:=]\s*['\"]?([a-z][a-z0-9_:\-]*[a-z0-9])['\"]?")
 
-# Marker-vocabulary discriminator: a `coordinator:<token>` ref sharing its line
 # with one of these nouns is prose DOCUMENTING a fence/sentinel/marker/block
-# token, not dispatching it -- see extract_references docstring.
 _MARKER_NOUN_RE = re.compile(r"\b(fence|sentinel|marker|block)s?\b", re.IGNORECASE)
 
-# Shape-based proximity bound for the marker-noun discriminator: both of the
-# real marker-documentation examples this discriminator was built for put the
 # noun IMMEDIATELY after the closing backtick ("`coordinator:fleet-only`
-# fence", "`coordinator:percolate-only` sentinel block") -- a genuine
-# dispatch reference sharing its line with a marker noun elsewhere in the
-# prose ("dispatch `coordinator:foo-worker` to check the marker file") does
-# not have that adjacency. Bounding the search window to the text
-# immediately trailing the ref (not the whole line) keeps the discriminator a
-# shape rule, not a token list, while closing the false-negative the token-
-# adjacent shape doesn't share.
 _MARKER_NOUN_WINDOW_CHARS = 12
 
-# Worker bullet line, scoped to "## Worker Dispatch Recommendations" blocks.
 _WORKER_HEADER_RE = re.compile(r"^##+\s+Worker Dispatch Recommendations", re.IGNORECASE)
 _HEADING_RE = re.compile(r"^##+\s")
 _WORKER_BULLET_RE = re.compile(r"^\s*[-*]\s+`?([a-z][a-z0-9_\-]+)`?")
@@ -398,28 +303,11 @@ def extract_references(content: str, valid_plugin_prefixes: List[str]) -> List[d
 
     prefix_pattern = "|".join(p.replace("-", "\\-") for p in valid_plugin_prefixes)
 
-    # Pattern 1 -- Qualified refs: `<plugin>:<name>`. Boundary-strict so URLs and
-    # time strings ("12:30") don't match. Allow optional leading slash for command form.
-    # Faithful to the JS oracle: an empty prefix_pattern (no plugins discovered)
-    # still compiles -- `(...)` with an empty alternation matches an empty string,
-    # same behavior new RegExp('()') exhibits in JS.
-    # Name-portion char group allows a hard-wrap: a hyphen immediately
-    # followed by a newline, itself immediately followed by another alnum
-    # char, is consumed as a single unit ("-\n") rather than terminating the
-    # match -- a markdown doc hard-wrapped at the column limit splits a
-    # hyphenated name across two lines ("coordinator:multi-\nline-skill"),
-    # and without this the regex stopped at the newline (not in the old
-    # `[a-z0-9\-]` class), yielding a truncated ref ("coordinator:multi-")
-    # that never resolves -- a false orphan, not a real one. A plain
-    # trailing hyphen with no following newline+alnum (e.g. the documented
-    # truncated-glob allowlist entry "coordinator:research-") still matches
-    # via the plain `[a-z0-9\-]` alternative, unchanged from before.
     qualified_re = re.compile(
         r"(?<![\w\-/:.])/?(" + prefix_pattern + r"):"
         r"([a-z](?:-\n(?=[a-z0-9])|[a-z0-9\-])*)(?![\w\-:])"
     )
 
-    # Pattern 3 -- worker bullets inside "## Worker Dispatch Recommendations" blocks.
     in_worker_block = False
     for i, line in enumerate(lines):
         if _WORKER_HEADER_RE.match(line):
@@ -432,26 +320,12 @@ def extract_references(content: str, valid_plugin_prefixes: List[str]) -> List[d
             if m:
                 refs.append({"kind": "worker", "ref": m.group(1), "line": i + 1})
 
-    # Apply patterns 1 & 2 over the full body.
     for m in qualified_re.finditer(body):
         line_num = body.count("\n", 0, m.start()) + 1
         leading_slash = m.group(0).startswith("/")
-        # The name group may embed a literal "\n" when the ref was
-        # hard-wrapped across two lines (see qualified_re above) -- strip it
-        # before building the ref string so a wrapped
-        # "coordinator:multi-\nline-skill" resolves as "coordinator:multi-
-        # line-skill", matching the artifact name the file actually has.
         ref_name = m.group(2).replace("\n", "")
         if not leading_slash:
             # Only inspect the window immediately TRAILING the matched ref
-            # (not the whole line) -- both real marker-documentation
-            # examples put the noun right after the closing backtick, and
-            # bounding the window avoids dropping a genuine dispatch
-            # reference whose surrounding prose happens to mention a marker
-            # noun elsewhere on the same line (see extract_references
-            # docstring). Sliced directly off `body` at the match end (not
-            # re-located inside a single line's text) so this still works
-            # correctly when the match itself spans a hard-wrap newline.
             trailing_window = body[m.end():m.end() + _MARKER_NOUN_WINDOW_CHARS]
             if _MARKER_NOUN_RE.search(trailing_window):
                 continue
@@ -467,19 +341,7 @@ def extract_references(content: str, valid_plugin_prefixes: List[str]) -> List[d
     return refs
 
 
-# ---------------------------------------------------------------------------
-# Resolution
-# ---------------------------------------------------------------------------
-
-
 BUILTIN_AGENT_TYPES: Set[str] = {
-    # Harness-provided agent types that exist by virtue of the Claude Code
-    # runtime itself, not a <plugin>/agents/<name>.md file in any plugin tree.
-    # No amount of walking the plugin tree will ever produce a backing file
-    # for these -- enumeration is the only option, not a stopgap pending a
-    # derivation. Halted /update-docs in every consumer repo (not just this
-    # one) until allowlisted -- see cross-repo/inbox/2026-08-06-example-retrieval-repo-em-
-    # verify-coverage-false-positive-orphans.md item 2.
     "general-purpose",
     "Explore",
     "Plan",
@@ -491,18 +353,6 @@ ahead of the agents-map lookup in `resolve()` for subagent/worker refs."""
 
 
 def resolve(ref: str, kind: str, artifacts: dict) -> bool:
-    """Check whether a reference resolves to a registered artifact.
-
-    For qualified refs ("<plugin>:<name>"), check across all three maps
-    (skill / agent / command) since the prefix:name namespace is shared at
-    the reference site.
-
-    For subagent and worker refs (bare names), check across agents in any
-    plugin.
-
-    For command refs ("/<plugin>:<name>" or "/<name>"), check commands first,
-    then fall back to skills (since /<name> can invoke a skill).
-    """
     skills = artifacts["skills"]
     agents = artifacts["agents"]
     commands = artifacts["commands"]
@@ -529,7 +379,6 @@ def resolve(ref: str, kind: str, artifacts: dict) -> bool:
             prefix = ref.split(":")[0]
             known_plugins = {k.split(":")[0] for k in agents.keys()}
             if prefix not in known_plugins:
-                # Out-of-tree plugin (e.g. Example-game-repo-control) -- skip silently.
                 return True
             return ref in agents
         return any(key.endswith(f":{ref}") for key in agents)
@@ -537,61 +386,30 @@ def resolve(ref: str, kind: str, artifacts: dict) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
-# Allowlist for known false positives
-# ---------------------------------------------------------------------------
-
 REF_ALLOWLIST: Set[str] = {
-    # Historical rename mentions -- skill no longer exists but the documented
-    # rename note is the load-bearing artifact (tells future readers where
-    # the capability went). Body always reads "Replaces/Supersedes/absorbed".
-    "coordinator:artifact-consolidation",  # absorbed into /update-docs Phase 8b 2026-05-06
-    "coordinator:lesson-triage",           # renamed to coordinator:learn-lessons 2026-05-06
-    # Version-history documentation of renamed skills in super-skill-architecture.md
-    # § Version History -- v2.0.0 Breaking Changes (2026-05-07). Not live dispatch refs.
-    "coordinator:writing-plans",           # renamed to coordinator:plan 2026-05-07
-    "coordinator:requesting-code-review",  # renamed to coordinator:review-code 2026-05-07
-    "coordinator:using-git-worktrees",     # removed 2026-05-07 (rule lives in CLAUDE.md)
-    # By-design non-command: the coordinator doctor is a wiki + sentinel script,
-    # NOT a slash skill.
-    "coordinator:doctor",                  # doctor is docs/wiki + sentinel, not a skill (2026-05-20)
-    # Documented never-existent artifact: negative example in a schema-required lesson.
-    "deep-research:doctor",                # never-existent artifact, cited as negative example (2026-06-17)
-    # Project-specific agent in example-game-repo consumer repo, not the global game-dev plugin.
-    "game-dev:schema-migration-auditor",   # example-game-repo project-local agent; coordinator wiki cross-ref only
-    # Skill demoted to a methodology 2026-05-30 -- collided with native Claude Code vocabulary.
-    "coordinator:fan-out",                 # demoted to methodology 2026-05-30
+    "coordinator:artifact-consolidation",
+    "coordinator:lesson-triage",
+    "coordinator:writing-plans",
+    "coordinator:requesting-code-review",
+    "coordinator:using-git-worktrees",
+    "coordinator:doctor",
+    "deep-research:doctor",
+    "game-dev:schema-migration-auditor",
+    "coordinator:fan-out",
     # FORWARD-reference: an unimplemented rename plan proposes this target skill.
-    "coordinator:session-complete",        # forward-ref in unimplemented rename plan (2026-06-01)
+    "coordinator:session-complete",
     # FORWARD-reference: draft merge-gate-DoD plans propose this engine op name.
-    "coordinator:validate-invocable",      # forward-ref, to-be-built op in draft plans (2026-07-22)
-    # Renamed to coordinator:workstream-{start,complete}; deprecation-alias stubs deleted 2026-06-01.
-    "coordinator:session-start",           # renamed->workstream-start; stub deleted 2026-06-01
-    "coordinator:session-end",             # renamed->workstream-complete; stub deleted 2026-06-01
-    # historical reference; command retired 2026-06-08.
-    "coordinator:bootstrap-repos",         # retired 2026-06-08
-    # External installed plugin, NOT part of the coordinator-claude tree; bare-prefix
-    # so it bypasses the colon-prefix external-skip path in resolve().
-    "feature-dev",                         # external plugin; capability-catalog dispatch-shape doc (2026-06-27)
+    "coordinator:validate-invocable",
+    "coordinator:session-start",
+    "coordinator:session-end",
+    "coordinator:bootstrap-repos",
+    "feature-dev",
     # FORWARD-reference: DoE is authoring this M-tier reviewer (DR-133); claude-klabauter
     # pre-registered its lens in _PLAN_DERIVABLE_LENS so the sidecar files to
-    # state/plan-sidecars/ the day it ships. Landing the entry BEFORE the agent
-    # exists is the point -- see cross-repo/archive/2026-08-05-doe-claude-em-plan-
-    # reviewer-lens-registration.md (decision: partial). Drop when DR-133 ships.
-    "coordinator:plan-reviewer",           # forward-ref, unshipped DoE agent DR-133 (2026-08-06)
-    # NOT a dispatch target: a publish-boundary fence identifier in DR-248's prose
-    # ("`coordinator:fleet-only` fences"). Shares the <plugin>:<name> shape by
-    # coincidence of naming, not because anything dispatches it.
-    "coordinator:fleet-only",              # publish-boundary fence name, not an agent (2026-08-06)
-    # Documented glob PATTERN, not a concrete reference -- trailing `*` gets stripped
-    # by the reference parser, yielding this truncated token.
-    "coordinator:research-",               # glob pattern for research-* family (2026-07-08)
-    # Speculative future-skill name in inspiration-recheck marker prose ("consider
-    # extracting ... on the fourth instance"), not a live dispatch reference.
-    "coordinator:inspiration-audit",       # proposed-future name in recheck-marker prose (2026-07-19)
-    # Historical-record citations of retired/never-built artifacts (DoE-claude
-    # dated 2026-04/2026-05 research docs & plan reviews) -- 2026-07-22, per
-    # claude-central-em memo.
+    "coordinator:plan-reviewer",
+    "coordinator:fleet-only",
+    "coordinator:research-",
+    "coordinator:inspiration-audit",
     "coordinator:test-driven-development",
     "coordinator:writing-skills",
     "coordinator:verification-before-completion",
@@ -603,24 +421,10 @@ REF_ALLOWLIST: Set[str] = {
     "coordinator:reviewer",
     "schema-migration-auditor",
     "coordinator:hook-doctor",
-    # Real artifact (example-retrieval-repo:example-retrieval-repo-context-builder exists), but the
     # bare-name occurrence flagged here is inside prose DOCUMENTING a failure
-    # mode ("subagent_type: example-retrieval-repo-context-builder errors with `Agent
-    # type not found`" -- docs/wiki/example-retrieval-repo.md), not a dispatch site.
-    # Qualifying it there would falsify the quoted error text. Allowlisted
-    # rather than teaching the sweep to recognize an inline-code-span-in-prose
-    # context (broader parser change, not worth it for one project-local ref).
-    "example-retrieval-repo-context-builder",  # documented failure-mode text, not a dispatch site (2026-08-06)
-    # Python type token, not an agent: the generated .claude/repomap.md renders
-    # signatures such as `agent_type: str`, which the subagent regex reads as a
-    # dispatch of an agent named `str`.
-    "str",  # type annotation in generated repomap signatures, not a dispatch site (2026-09-13)
+    "example-retrieval-repo-context-builder",
+    "str",
 }
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 
 def main(argv: List[str]) -> int:
@@ -643,67 +447,11 @@ def main(argv: List[str]) -> int:
     violations: List[dict] = []
     scan_errors: List[str] = []
     files_scanned = 0
-    # Exclude dist/ (generated publish-repo snapshots), review-trail/ (immutable
-    # historical code-review findings that deliberately quote wrong refs),
-    # archive/ (historical records -- a period-correct ref is not an orphan), and
-    # vendor/ (vendored third-party content -- e.g. corpus/vendor/ docs whose
-    # type/struct tokens like `state:int32` are not dispatch references).
-    #
-    # audits/, subagent-share/ and tasks/ carry archive/'s rationale verbatim, not
-    # a looser one: an audit record dated 2026-08-01 naming the agent that session
-    # actually dispatched stays TRUE when the agent is later retired, and rewriting
-    # it to name a live agent would make the record false. Same for a completed
-    # dispatch's sidecar and for tasks/ ephemera. Scoping archive/ alone fixed one
-    # directory rather than the class, so the gate HALTed /update-docs on 19
-    # period-correct references (claude-klabauter, 2026-08-06).
-    #
-    # recovered/ is the same class a third time, asked for BY NAME rather than
-    # found by a halt: example-retrieval-repo-em (cross-repo/archive/2026-08-16-example-retrieval-repo-
-    # em-ceremony-cli-defects-found-running-workweek-complete.md, section 2)
-    # carries a verbatim port under docs/recovered/ banner-marked "Historical
-    # record -- paths and tool names are example-game-repo-era and may be stale", and it
-    # contributed 8 of their 9 remaining orphans, all commands that genuinely
-    # existed when the document was written. /update-docs Phase 11h2 HALTS on a
-    # non-zero verify-coverage, so a correctly-preserved historical document
-    # blocked their docs pipeline outright.
-    #
-    # They asked which of two shapes we wanted, and the exclusion set is the
     # right one: REF_ALLOWLIST needs a new entry per orphaned REF, so it grows
-    # with every recovered document and encodes nothing about WHY those refs are
-    # exempt, while the exclusion set encodes exactly the rationale that applies
-    # -- a period-correct ref is not an orphan. Their own read, and it is the
-    # consistent one.
-    #
-    # Basename-scoped like every other member here, so a `recovered/` anywhere in
-    # the tree is excluded, not only `docs/recovered/`. Deliberate and consistent
-    # with `archive`/`audits`/`tasks`, which over-match the same way: the name is
-    # the claim. A directory called `recovered` holding live surfaces someone
-    # will act on would be misnamed, and no such directory exists in this repo
-    # today.
-    #
-    # inbox/, sent/ and dispatch-briefs/ are the same class again, found the same
-    # way (the gate HALTed /update-docs on 11 of them, claude-klabauter 2026-08-27).
     # A DELIVERED memo -- inbound under cross-repo/inbox/ or outbound under
-    # state/memo-outbox/sent/ -- is a transmission record: its text is what the
-    # peer repo actually wrote, frequently naming that repo's own artifacts or
-    # quoting a defect report about a name that never resolved here. Editing one
-    # to satisfy this gate falsifies the record. A dispatch brief carries a
-    # dispatched agent's frozen instructions, which is subagent-share/'s rationale
-    # on the brief side of the same handoff.
-    #
-    # Deliberately NOT excluded: the rest of state/ (handoffs, roadmap stubs,
-    # improvement-queue) and docs/. Those are live surfaces someone will ACT on --
-    # a handoff citing a retired agent is a real orphan, and that is the whole
-    # signal this gate exists to produce.
     walk_dir_errors: List[str] = []
     for file in walk_markdown(
         sweep_root,
-        # .claude/worktrees/agent-* (untracked worktree checkouts, each
-        # duplicating every file in the tree -- 45 found in DoE-claude, 21
-        # were worktree duplicates) is excluded by walk_markdown itself via a
-        # path-scoped check, not via this basename exclude set -- a basename
-        # exclude on ".claude" would also drop tracked .claude fixture dirs
-        # under install/sandbox-test surfaces.
         {
             "dist",
             "review-trail",
@@ -723,9 +471,7 @@ def main(argv: List[str]) -> int:
             with open(file, "r", encoding="utf-8") as fh:
                 content = fh.read()
         except (OSError, UnicodeDecodeError) as exc:
-            # --- Tier 2 (behaviour change -- PM sign-off required) ---
             scan_errors.append(f"{file}: {exc}")
-            # --- end Tier 2 ---
             continue
         files_scanned += 1
         refs = extract_references(content, plugins)
@@ -735,23 +481,15 @@ def main(argv: List[str]) -> int:
             if not resolve(r["ref"], r["kind"], artifacts):
                 violations.append({"file": os.path.relpath(file, sweep_root), **r})
 
-    # --- Tier 2 (behaviour change -- PM sign-off required) ---
-    # A directory or file that could not be scanned means the sweep is
     # INCOMPLETE, not clean -- "ok": true previously meant "no orphans found
-    # among whatever happened to be readable," indistinguishable from a real
-    # clean result. Fold unscannable-dir errors in here too so they gate the
-    # same way as unscannable files.
     scan_errors = walk_dir_errors + scan_errors
     scan_incomplete = len(scan_errors) > 0
-    # --- end Tier 2 ---
 
     if args["json"]:
         sys.stdout.write(json.dumps({
-            # --- Tier 2 (behaviour change -- PM sign-off required) ---
             "ok": len(violations) == 0 and not scan_incomplete,
             "scanIncomplete": scan_incomplete,
             "scanErrors": scan_errors,
-            # --- end Tier 2 ---
             "root": root,
             "sweepRoot": sweep_root,
             "summary": {
@@ -776,14 +514,12 @@ def main(argv: List[str]) -> int:
         )
         print(f"Files scanned: {files_scanned}")
         print()
-        # --- Tier 2 (behaviour change -- PM sign-off required) ---
         if scan_incomplete:
             print(f"INCOMPLETE SCAN — {len(scan_errors)} path(s) could not be read:")
             print()
             for e in scan_errors:
                 print(f"- {e}")
             print()
-        # --- end Tier 2 ---
         if not violations:
             print("OK — every reference resolves." if not scan_incomplete else "No orphans found among readable files, but the scan was incomplete (see above).")
         else:
@@ -802,10 +538,8 @@ def main(argv: List[str]) -> int:
             print("a known false positive, add it to REF_ALLOWLIST in coordinator_core/ops/verify_coverage.py with a")
             print("one-line rationale.")
 
-    # --- Tier 2 (behaviour change -- PM sign-off required) ---
     if (violations or scan_incomplete) and not args["report_only"]:
         return 1
-    # --- end Tier 2 ---
     return 0
 
 

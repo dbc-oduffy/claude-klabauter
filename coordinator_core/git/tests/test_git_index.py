@@ -45,13 +45,13 @@ def _entry_fixed(
 ) -> bytes:
     fixed = struct.pack(
         ">IIIIIIIIII",
-        0, 0,               # ctime s/ns
-        mtime, mtime_nsec,  # mtime s/ns
-        0,          # dev
-        0,          # ino
+        0, 0,
+        mtime, mtime_nsec,
+        0,
+        0,
         mode,
-        0,          # uid
-        0,          # gid
+        0,
+        0,
         size,
     )
     fixed += _ZERO_SHA
@@ -66,8 +66,6 @@ def _entry_fixed(
 
 
 def _build_index(entries, *, version=2):
-    """`entries`: list of dicts with keys mode(int), size(int), mtime(int),
-    name(str), extended(bool, default False), mtime_nsec(int, default 0)."""
     out = _SIGNATURE + struct.pack(">II", version, len(entries))
     for e in entries:
         name = e["name"].encode("utf-8")
@@ -83,15 +81,11 @@ def _build_index(entries, *, version=2):
         entry_len = len(fixed) + len(name) + 1
         padding = (8 - (entry_len % 8)) % 8
         out += fixed + name + b"\x00" + (b"\x00" * padding)
-    out += b"\x00" * 20  # fake trailing checksum, never verified
+    out += b"\x00" * 20
     return out
 
 
 def _build_v4_index(entries):
-    """A minimal, structurally-plausible v4 index -- this module must
-    refuse it on the version field alone, before ever reaching a
-    prefix-compressed name, so the entry bytes here need not be valid v4
-    encoding."""
     out = _SIGNATURE + struct.pack(">II", 4, len(entries))
     for e in entries:
         name = e["name"].encode("utf-8")
@@ -113,8 +107,6 @@ def _plain_repo(tmp_path: Path) -> Path:
     return tmp_path
 
 
-
-
 def test_v4_index_refuses(tmp_path):
     repo = _plain_repo(tmp_path)
     raw = _build_v4_index([{"name": "a.txt", "mode": 0o100644, "size": 3, "mtime": 100}])
@@ -134,9 +126,6 @@ def test_stat_matching_file_reads_clean_without_reading_bytes(tmp_path):
     )
     _write_index(repo / ".git", raw)
 
-    # Verify the module never opens the file for reading: monkeypatch
-    # read_bytes on Path to explode, then confirm the verdict still comes
-    # back clean (only the index and os.stat were touched).
     orig_read_bytes = Path.read_bytes
 
     def _guard(self, *a, **kw):
@@ -208,11 +197,6 @@ def test_untracked_path_reads_untracked(tmp_path):
 
 
 def test_same_size_rewrite_inside_the_same_mtime_second_reads_candidate(tmp_path):
-    """The racily-clean hole, in the exact shape the archival path hits it:
-    a same-size rewrite landing inside the index entry's own mtime-second.
-    `(size, mtime_sec)` still matches -- only the sub-second half of the
-    index's mtime field separates the two.
-    """
     repo = _plain_repo(tmp_path)
     f = repo / "racy.txt"
     f.write_bytes(b"abc")
@@ -226,7 +210,6 @@ def test_same_size_rewrite_inside_the_same_mtime_second_reads_candidate(tmp_path
     }])
     _write_index(repo / ".git", raw)
 
-    # Same second, same size, different bytes and a moved sub-second mtime.
     f.write_bytes(b"xyz")
     os.utime(f, ns=(st.st_atime_ns, (int(st.st_mtime) * 1_000_000_000) + 123_456_789))
 
@@ -234,9 +217,6 @@ def test_same_size_rewrite_inside_the_same_mtime_second_reads_candidate(tmp_path
 
 
 def test_matching_sub_second_mtime_still_reads_clean(tmp_path):
-    """The nanosecond compare must not swallow the fast path whole: an
-    untouched file whose stored `mtime_nsec` still matches reads clean.
-    """
     repo = _plain_repo(tmp_path)
     f = repo / "settled.txt"
     f.write_bytes(b"abc")
@@ -254,11 +234,6 @@ def test_matching_sub_second_mtime_still_reads_clean(tmp_path):
 
 
 def test_zero_stored_nsec_falls_back_to_the_second_compare(tmp_path):
-    """A git that recorded no sub-second stat writes `0`. Comparing that
-    against a real worktree nanosecond would read every clean path as
-    `candidate`, which `git_native` maps to worktree divergence and fails
-    the commit loud -- so a zero must fall back, not tighten.
-    """
     repo = _plain_repo(tmp_path)
     f = repo / "nonsec.txt"
     f.write_bytes(b"abc")
@@ -277,10 +252,6 @@ def test_zero_stored_nsec_falls_back_to_the_second_compare(tmp_path):
 
 
 def test_scoped_walk_returns_only_wanted_and_matches_the_full_walk(tmp_path):
-    """`wanted` narrows the RESULT without changing any entry's value, and
-    a wanted path absent from the index is absent from the result -- the
-    caller reads that as untracked exactly as it would from a full walk.
-    """
     repo = _plain_repo(tmp_path)
     raw = _build_index([
         {"name": f"f{i}.txt", "mode": 0o100644, "size": i, "mtime": 100 + i}
@@ -296,18 +267,11 @@ def test_scoped_walk_returns_only_wanted_and_matches_the_full_walk(tmp_path):
 
 
 def test_scoped_walk_stops_once_every_wanted_path_is_found(tmp_path):
-    """Early exit is the whole point: a truncation AFTER the last wanted
-    entry is never reached, so it cannot raise. This pins the documented
-    trade (`wanted=None` validates the file end to end; a scoped walk does
-    not) rather than leaving it to be rediscovered as a bug.
-    """
     repo = _plain_repo(tmp_path)
     raw = _build_index([
         {"name": f"f{i}.txt", "mode": 0o100644, "size": i, "mtime": 100 + i}
         for i in range(6)
     ])
-    # Claim more entries than the bytes actually carry: a full walk must
-    # raise on the missing tail, a walk satisfied by f0 must not.
     corrupt = _SIGNATURE + struct.pack(">II", 2, 99) + raw[12:]
     _write_index(repo / ".git", corrupt)
 
@@ -318,10 +282,6 @@ def test_scoped_walk_stops_once_every_wanted_path_is_found(tmp_path):
 
 
 def test_scoped_walk_sha_is_the_entry_sha(tmp_path):
-    """The sha is the reason this parser exists -- `parse_index_stat` never
-    carried one, so a caller needing it paid a second full walk through
-    `git_state.read_index`.
-    """
     repo = _plain_repo(tmp_path)
     raw = _build_index([{"name": "a.txt", "mode": 0o100644, "size": 3, "mtime": 100}])
     _write_index(repo / ".git", raw)
@@ -343,12 +303,6 @@ def test_bad_signature_raises(tmp_path):
 
 
 def test_unmerged_entry_never_reads_as_staged(tmp_path):
-    """A conflicted path (stage != 0) must never come back as an ordinary
-    `IndexIdentity` -- `commit.py::commit_paths` calls `parse_index_identity`
-    directly with its own pathspec and treats every returned entry as staged
-    content, so a silent pass-through here would let a commit land
-    mid-conflict. Mirrors `git_state._parse_index_bytes`'s identical rule.
-    """
     repo = _plain_repo(tmp_path)
     raw = _build_index(
         [{"name": "conflicted.txt", "mode": 0o100644, "size": 3, "mtime": 100, "stage": 2}]

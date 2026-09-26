@@ -47,23 +47,11 @@ from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
 
-#: Sentinel sort key for a missing/malformed ``created_at`` -- sorts before
-#: every real timestamp (oldest), so such a record still surfaces rather than
 #: being silently starved to the tail by a ``_MAX_NOTICES``-bounded caller.
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 
 def _sort_key(record: dict) -> datetime:
-    """Parse ``record["created_at"]`` to an aware ``datetime`` for sorting.
-
-    Sorts on the parsed INSTANT, not the raw string -- a lexicographic string
-    sort is only correct when every writer uses one fixed offset (Review:
-    code-reviewer, P3 UTC-dependency finding). A naive result is normalized
-    to UTC so a future non-UTC writer still orders correctly instead of
-    silently misordering; anything that fails to parse (missing, non-string,
-    malformed) falls back to ``_EPOCH`` rather than raising -- one bad record
-    must not take out the whole read path.
-    """
     raw = record.get("created_at")
     if isinstance(raw, str) and raw:
         try:
@@ -124,7 +112,7 @@ def list_unread_notices(worktree_root: Path, session_id: str) -> List[dict]:
             text = entry.read_text(encoding="utf-8")
             record = json.loads(text)
         except (OSError, json.JSONDecodeError):
-            continue  # per-notice loop; one unreadable/malformed notice file is skipped, not fatal to the scan
+            continue
         if not isinstance(record, dict):
             continue
         record = dict(record)
@@ -162,10 +150,6 @@ def _peer_notice_check(params: Dict[str, Any], repo_root: Optional[Path] = None)
 
     session_id = (params.get("session_id") or "").strip() or None
     if session_id is not None and not safe_id(session_id):
-        # Validated at param-parsing, before interpolation into a directory
-        # name -- see peer_notice_send's identical rationale (Review:
-        # code-reviewer, P1 path-traversal finding). Fail loud: this repo's
-        # op convention is never a silent no-op write/read.
         raise ValueError(
             f"peer_notice.check: session_id {session_id!r} is not a safe id "
             "(alphanumerics, '.', '_', '-' only; no path separators)"

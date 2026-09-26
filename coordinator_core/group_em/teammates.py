@@ -79,9 +79,6 @@ from typing import Any, Optional
 from coordinator_core.group_em.read_pass import _transcript_path_for
 from coordinator_core.session import machinery_paths
 
-#: Ordered worst-first -- see "THE WATCHER IS THE WORSE ABSENCE" above. Each
-#: entry is `(key, accepted agentType values, accepted name values)`; a
-#: sidecar matches on EITHER namespace.
 _TEAMMATES: tuple[tuple[str, frozenset, frozenset], ...] = (
     (
         "fleet_watch",
@@ -95,37 +92,19 @@ _TEAMMATES: tuple[tuple[str, frozenset, frozenset], ...] = (
     ),
 )
 
-#: Hard ceiling on sidecars read in one probe. A steady session accumulates
-#: tens; this bounds the pathological case so the probe stays single-digit
-#: milliseconds on a tick that runs forever.
 _MAX_META_FILES = 512
 
 _META_SUFFIX = ".meta.json"
 
-#: The one word this module uses for how it knows. Emitted verbatim so a
-#: consumer can assert on the evidence CLASS, not just the verdict.
 PROBE = "subagent-dispatch-record"
 
 
 def subagents_dir(repo_root: str, session_id: str) -> str:
-    """The Group-EM session's own subagents directory.
-
-    Derived from `read_pass._transcript_path_for` rather than re-encoding the
-    projects slug here -- one encoder for the whole package, so a drift in
-    the harness's `<projects>/<slug>/` naming is fixed in one place. The
-    harness's own layout is `dirname(transcript)/stem(transcript)/subagents/`.
-    """
     transcript = _transcript_path_for(session_id, repo_root)
     return os.path.join(os.path.splitext(transcript)[0], "subagents")
 
 
 def _sidecar_identity(path: str) -> tuple[Optional[str], Optional[str]]:
-    """`(agentType, name)` from one `.meta.json`, or `(None, None)`.
-
-    Any failure -- unreadable, truncated, not an object -- yields
-    `(None, None)` and the sidecar simply matches nothing. A malformed
-    sidecar must never satisfy an obligation.
-    """
     try:
         with open(path, "r", encoding="utf-8") as handle:
             meta = json.load(handle)
@@ -142,26 +121,6 @@ def _sidecar_identity(path: str) -> tuple[Optional[str], Optional[str]]:
 
 
 def presence(repo_root: str, session_id: Optional[str]) -> dict[str, Any]:
-    """Whether this Group-EM session holds each standing teammate.
-
-    Returns:
-        {
-          "probe": "subagent-dispatch-record",
-          "subagents_dir": str | None,
-          "unreadable": bool,
-          "agents": {
-             "<key>": {"present": bool, "dispatch_records": [str, ...]},
-             ...
-          },
-          "missing": [str, ...],        # worst-first: fleet_watch, then assistant
-          "dispatch_required": bool,    # True iff `missing` is non-empty
-        }
-
-    `dispatch_required` is the `gate_declaration_required` analogue: a
-    standing, per-tick obligation flag the EM cannot discharge by ignoring.
-    Unlike that field it is DERIVED (`missing != []`), never asserted
-    independently, so the flag and the evidence can never disagree.
-    """
     found: dict[str, list[str]] = {key: [] for key, _types, _names in _TEAMMATES}
     unreadable = False
     directory: Optional[str] = None
@@ -175,8 +134,6 @@ def presence(repo_root: str, session_id: Optional[str]) -> dict[str, Any]:
                 if entry.name.endswith(_META_SUFFIX)
             )
         except OSError:
-            # Absent or unlistable: the probe never LOOKED. Distinguished
-            # from "looked, found nothing" -- see the module negative-spec.
             entries = []
             unreadable = True
         for filename in entries[:_MAX_META_FILES]:

@@ -41,29 +41,16 @@ from typing import List, Optional
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Import guard — fires ALL @register_op(...) side-effects, including
-# "goal.match_candidates".  MUST precede all test functions.
-# ---------------------------------------------------------------------------
 import coordinator_core.ops  # noqa: F401 — populates _REGISTRY
 
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.goals_match import _handler
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
-# ---------------------------------------------------------------------------
-# Registry completeness assertion (universal positive floor)
-#
-# Lesson: universal-registry-completeness-tests-ov — import coordinator_core.ops
-# FIRST, then assert non-empty registry BEFORE any per-op assertion.  An empty
-# registry would make all per-op assertions vacuously pass (false-positive).
-# ---------------------------------------------------------------------------
 
 assert len(_REGISTRY) > 0, (
     "registry is empty after 'import coordinator_core.ops' — "
@@ -77,13 +64,7 @@ assert _OP_NAME in _REGISTRY, (
 )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _make_git_repo(root: Path) -> Path:
-    """Create a minimal git repo at ``root`` and return its common_dir (.git path)."""
     root.mkdir(parents=True, exist_ok=True)
     _NO_WIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     subprocess.run(
@@ -120,12 +101,6 @@ def _seed_goal(
     objective: str = "",
     key_results: Optional[List[dict]] = None,
 ) -> Path:
-    """Write a ``state/goals/<filename>.yaml`` fixture file.
-
-    ``key_results`` is written as a proper YAML list-of-mappings block so the
-    yaml.safe_load parse path is exercised.  Omitting ``id_val`` or ``title``
-    produces a file that should be quarantined (used by malformed-file tests).
-    """
     goals_dir.mkdir(parents=True, exist_ok=True)
     lines = ["---"]
     if id_val is not None:
@@ -138,7 +113,6 @@ def _seed_goal(
     if key_results is not None:
         lines.append("key_results:")
         for kr in key_results:
-            # Each kr is a dict — write as a YAML list-of-mappings entry.
             lines.append(f"  - id: {kr.get('id', 'kr-unknown')}")
             lines.append(f"    text: {kr.get('text', '')}")
             lines.append(f"    kind: {kr.get('kind', 'outcome')}")
@@ -146,23 +120,16 @@ def _seed_goal(
     else:
         lines.append("key_results: []")
     lines.append("---")
-    lines.append("")  # prose body separator
+    lines.append("")
     content = "\n".join(lines) + "\n"
     path = goals_dir / filename
     path.write_text(content, encoding="utf-8")
     return path
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 class TestRegistryCompleteness:
-    """Positive-floor registry checks (must pass before any per-op test)."""
 
     def test_registry_is_non_empty(self):
-        """Registry populated after coordinator_core.ops import (positive floor)."""
         assert len(_REGISTRY) > 0
 
     def test_op_name_registered(self):
@@ -171,18 +138,13 @@ class TestRegistryCompleteness:
 
 
 class TestGoalMatchCandidates:
-    """Payload and ranking tests for goal.match_candidates."""
 
     def test_empty_store_directory_absent(self, tmp_path):
-        """No state/goals/ directory → empty candidates list."""
-        # Passing {} caused early-return on missing text before
-        # reaching _collect_candidates; use a real text value to exercise is_dir() guard.
         common_dir = _make_git_repo(tmp_path / "repo")
         result = _handler({"text": "legibility"}, repo_root=common_dir)
         assert result == {"candidates": []}
 
     def test_empty_store_directory_present_but_empty(self, tmp_path):
-        """state/goals/ exists but has no YAML files → empty candidates list."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         (repo_root / "state" / "goals").mkdir(parents=True)
@@ -190,12 +152,10 @@ class TestGoalMatchCandidates:
         assert result == {"candidates": []}
 
     def test_repo_root_none_returns_empty(self):
-        """repo_root=None → empty candidates without raising."""
         result = _handler({"text": "legibility"}, repo_root=None)
         assert result == {"candidates": []}
 
     def test_missing_text_param_returns_empty(self, tmp_path):
-        """params missing 'text' key → empty candidates list."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         _seed_goal(
@@ -209,7 +169,6 @@ class TestGoalMatchCandidates:
         assert result == {"candidates": []}
 
     def test_empty_text_param_returns_empty(self, tmp_path):
-        """params text='' → empty candidates list."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         _seed_goal(
@@ -223,7 +182,6 @@ class TestGoalMatchCandidates:
         assert result == {"candidates": []}
 
     def test_well_formed_goal_fields(self, tmp_path):
-        """Well-formed active goal → candidate carries {goal_id, title, score}."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         _seed_goal(
@@ -242,7 +200,6 @@ class TestGoalMatchCandidates:
         assert 0.0 <= entry["score"] <= 1.0
 
     def test_best_match_ranked_first(self, tmp_path):
-        """Text closely matching one goal's objective ranks it first."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         goals_dir = repo_root / "state" / "goals"
@@ -264,17 +221,12 @@ class TestGoalMatchCandidates:
         result = _handler({"text": "okr tracking legibility"}, repo_root=common_dir)
 
         assert len(result["candidates"]) == 2
-        # The legibility goal must rank first.
         assert result["candidates"][0]["goal_id"] == "okr-legibility"
         assert result["candidates"][0]["score"] >= result["candidates"][1]["score"]
-        # Score snapshot — regression gate: extraction refactor must produce byte-identical scores.
-        # Formula: 0.7 * SequenceMatcher.ratio() + 0.3 * token-overlap, rounded to 4 decimals.
-        # Re-derive via scripts/dev/capture_match_scores.py if the formula changes intentionally.
-        assert result["candidates"][0]["score"] == 0.6     # okr-legibility
-        assert result["candidates"][1]["score"] == 0.1318  # unrelated
+        assert result["candidates"][0]["score"] == 0.6
+        assert result["candidates"][1]["score"] == 0.1318
 
     def test_non_active_goals_excluded(self, tmp_path):
-        """Goals with status != 'active' are excluded from candidates."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         goals_dir = repo_root / "state" / "goals"
@@ -311,11 +263,9 @@ class TestGoalMatchCandidates:
         assert "g-abandoned" not in ids
 
     def test_malformed_yaml_quarantined_sibling_still_returned(self, tmp_path):
-        """Malformed YAML file is skipped; well-formed siblings are still returned."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         goals_dir = repo_root / "state" / "goals"
-        # Write a file with invalid YAML.
         bad_path = goals_dir / "bad.yaml"
         goals_dir.mkdir(parents=True, exist_ok=True)
         bad_path.write_text("---\nid: [unclosed bracket\ntitle: Bad\n---\n", encoding="utf-8")
@@ -334,15 +284,10 @@ class TestGoalMatchCandidates:
         assert len(ids) == 1
 
     def test_absent_status_warned_sibling_still_returned(self, tmp_path):
-        """Goal with no status field is skipped with warning; active sibling is returned."""
-        # Absent status is a data error distinct from
-        # achieved/abandoned; must warn so the operator can diagnose missing candidates.
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         goals_dir = repo_root / "state" / "goals"
         goals_dir.mkdir(parents=True, exist_ok=True)
-        # Write a goal with no status field at all (cannot use _seed_goal which always
-        # emits a status line).
         no_status_path = goals_dir / "no-status.yaml"
         no_status_path.write_text(
             "---\nid: g-nostatus\ntitle: No Status Goal\nobjective: missing status\nkey_results: []\n---\n",
@@ -364,9 +309,6 @@ class TestGoalMatchCandidates:
         assert len(ids) == 1
 
     def test_missing_id_field_quarantined(self, tmp_path):
-        """Goal with missing id field is quarantined; active sibling is still returned."""
-        # _seed_goal(id_val=None) produces a dict that
-        # passes YAML parse but trips the isinstance(id_val, str) guard.
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         goals_dir = repo_root / "state" / "goals"
@@ -392,9 +334,6 @@ class TestGoalMatchCandidates:
         assert len(ids) == 1
 
     def test_missing_title_field_quarantined(self, tmp_path):
-        """Goal with missing title field is quarantined; active sibling is still returned."""
-        # _seed_goal(title=None) produces a dict that
-        # passes YAML parse and id check but trips the isinstance(title_val, str) guard.
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         goals_dir = repo_root / "state" / "goals"
@@ -420,11 +359,9 @@ class TestGoalMatchCandidates:
         assert len(ids) == 1
 
     def test_key_results_text_contributes_to_score(self, tmp_path):
-        """A text matching only a KR's text field still surfaces the goal."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         goals_dir = repo_root / "state" / "goals"
-        # Goal whose objective is generic but has a distinctive KR text.
         _seed_goal(
             goals_dir,
             "g-kr.yaml",
@@ -440,7 +377,6 @@ class TestGoalMatchCandidates:
                 }
             ],
         )
-        # Control goal with no overlap.
         _seed_goal(
             goals_dir,
             "g-control.yaml",
@@ -449,14 +385,11 @@ class TestGoalMatchCandidates:
             objective="expand marketing reach into new demographics",
         )
 
-        # Use the near-verbatim KR text to ensure the SequenceMatcher ratio
-        # substantially exceeds the unrelated control goal's score.
         result = _handler(
             {"text": "reduce perceptual rendering latency below 100ms"}, repo_root=common_dir
         )
 
         assert len(result["candidates"]) == 2
-        # The goal with the matching KR text must rank first.
         assert result["candidates"][0]["goal_id"] == "g-kr"
 
     def test_compute_only_classification(self):

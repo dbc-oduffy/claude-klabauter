@@ -195,73 +195,33 @@ from typing import Any, Optional
 
 from coordinator_core.session import core as _session_core
 
-# ---------------------------------------------------------------------------
-# Bounded tail read — mirrors hooks/subagent_arrival_check.py's constants and
-# chunked-read shape exactly (see module docstring (a)).
-# ---------------------------------------------------------------------------
-# Generator-provenance declaration (generator_provenance.py). write_receiver_state
-# writes only `.git/coordinator-sessions/<sid>/receiver-state.json` -- git-internal
-# session-hub sibling state, never a tracked repo artifact.
 GENERATES = []
 
 _TAIL_CHUNK_BYTES = 8192
-_TAIL_MAX_CHUNKS = 32  # bounds the tail read at ~256KB from EOF
+_TAIL_MAX_CHUNKS = 32
 _TAIL_CAP_BYTES = _TAIL_MAX_CHUNKS * _TAIL_CHUNK_BYTES
 
-# Upper bound on how many trailing lines the ladder's control-line walk-back
-# may inspect once the tail bytes are split into lines. Generous relative to
-# the handful of control lines the walk-back is documented to skip past, while
-# still bounding the work done per invocation.
 _MAX_WALKBACK_LINES = 64
 
 # ALLOW-LIST of state-bearing line shapes (module docstring (c)) — the walk-back
-# treats everything NOT matching this as a control/metadata line to walk past,
-# never as something to classify. Inverted from a deny-list on 2026-08-30
-# (state/audits/2026-08-30-group-em-classifier-blindness.md): the transcript
-# line-type vocabulary is open and demonstrably growing (`atis-latch` appeared
-# on 40/48 sampled sessions the day it shipped with no code change here), so a
 # deny-list goes UNKNOWN-blind on every new addition while an allow-list only
-# ever degrades to "walk one more line back". `assistant` and `user` are
-# state-bearing by type; `system` is state-bearing ONLY for the three subtypes
-# the ladder itself models in `_classify_one` — every other `system` subtype
-# (and every other type entirely: `attachment`, `atis-latch`, `ai-title`,
-# `cost-state`, `mode`, `permission-mode`, `last-prompt`, `queue-operation`,
-# `file-history-snapshot`, `file-history-delta`, etc.) is walked past.
 _STATE_BEARING_SYSTEM_SUBTYPES = frozenset(
     {"away_summary", "stop_hook_summary", "turn_duration"}
 )
 
-# Step 2's grace window before an in-flight tool call downgrades from
 # PRODUCING:tool-in-flight to PAUSED:tool-unanswered. Inherited from the
-# spike's probe-paused.py:114-148 as a bare literal with no traceable
 # measurement basis — named here honestly as INHERITED-UNVERIFIED, not as a
-# calibrated constant. Do not cite this as measured.
 _TOOL_UNANSWERED_GRACE_SECONDS = 90
 
-# Tools whose stop_reason=="tool_use" arm resolves to PAUSED:asking-human
 # rather than PRODUCING:tool-in-flight (module docstring (c), step 2).
 _ASKING_HUMAN_TOOLS = frozenset({"AskUserQuestion", "ExitPlanMode"})
 
-# Literal sentinel recorded for a tool_result content block — never the
-# block's actual result payload (module docstring (b); AC9).
 _TOOL_RESULT_SENTINEL = "__TOOL_RESULT__"
 
-# ---------------------------------------------------------------------------
-# CPU cursor — gated behind an explicitly-underived constant (module
-# docstring (e)). C4 (a separate, later dispatch) derives a real threshold
-# from local samples taken under this machine's actual 50-70 session load and
-# replaces this pair. Anti-scope: do NOT seed this with the spike's 0.15 — see
-# the plan's Anti-scope section for why porting it is actively unsafe here.
-# ---------------------------------------------------------------------------
 _CPU_LEG_ENABLED = False
-_CPU_FLOOR_UNDERIVED = None  # type: Optional[float]
+_CPU_FLOOR_UNDERIVED = None
 
 _SIBLING_FILENAME = "receiver-state.json"
-
-
-# ---------------------------------------------------------------------------
-# (a) Bounded tail read
-# ---------------------------------------------------------------------------
 
 
 def _read_tail_lines(path: str, *, max_lines: int = _MAX_WALKBACK_LINES) -> tuple[list[str], bool]:
@@ -299,8 +259,6 @@ def _read_tail_lines(path: str, *, max_lines: int = _MAX_WALKBACK_LINES) -> tupl
                 fh.seek(pos)
                 buf = fh.read(read_size) + buf
                 chunks_read += 1
-                # Stop once enough newlines are present to have a decent chance at
-                # max_lines complete lines, OR the whole file has been consumed.
                 if buf.count(b"\n") > max_lines or pos == 0:
                     break
     except OSError:
@@ -310,8 +268,6 @@ def _read_tail_lines(path: str, *, max_lines: int = _MAX_WALKBACK_LINES) -> tupl
 
     text = buf.decode("utf-8", errors="replace")
     raw_lines = text.splitlines()
-    # The first line in the buffer may be a fragment (the chunk boundary landed
-    # mid-line) unless the read reached the true start of the file (pos == 0).
     if pos > 0 and raw_lines:
         raw_lines = raw_lines[1:]
     lines = [ln.strip() for ln in raw_lines if ln.strip()]
@@ -320,22 +276,8 @@ def _read_tail_lines(path: str, *, max_lines: int = _MAX_WALKBACK_LINES) -> tupl
     return lines[-max_lines:], cap_reached
 
 
-# ---------------------------------------------------------------------------
-# (b) Structural reduction
-# ---------------------------------------------------------------------------
-
-
 @dataclasses.dataclass(frozen=True)
 class _ReducedLine:
-    """The ENTIRE set of fields this module ever reads out of one transcript line.
-
-    No field here is capable of holding message prose — `tool_names` carries only
-    `content[].type == "tool_use"` block NAMES, and `has_tool_result` is a bare boolean
-    standing in for any `tool_result` block's presence (AC9: "structurally incapable of
-    holding prose"). There is no `text`, no `content`, no raw `message` field anywhere on
-    this dataclass — that absence is the privacy guarantee, not a filter applied to a
-    richer structure that happens to be discarded downstream.
-    """
 
     type: str
     subtype: str
@@ -348,27 +290,10 @@ class _ReducedLine:
 
     @property
     def has_tool_result(self) -> bool:
-        """True iff any content block was a tool_result — derived from the sentinel
-        marker tuple rather than a separate stored boolean, so there is exactly one
-        place (`tool_result_markers`) that records this fact."""
         return bool(self.tool_result_markers)
 
 
 def _reduce_line(raw_line: str) -> Optional[_ReducedLine]:
-    """Parse one raw JSONL line and reduce it to `_ReducedLine`, extracting structure
-    ONLY — never holding message text.
-
-    Returns None when `raw_line` is not valid JSON or does not parse to a JSON object;
-    this is the module's own "unparseable" signal, distinct from `_ReducedLine`'s
-    `parse_ok` field (which records whether the record's nested `message` sub-object, if
-    any, parsed as an object — a record can be valid top-level JSON while its `message`
-    is malformed).
-
-    Reduction happens as this function returns — the parsed `record` dict (which DOES
-    contain prose, e.g. `content[].text`) is entirely local to this function and is
-    never assigned into a name the caller can see; only the fields copied onto
-    `_ReducedLine` escape this function's scope.
-    """
     try:
         record: Any = json.loads(raw_line)
     except (json.JSONDecodeError, ValueError):
@@ -404,8 +329,6 @@ def _reduce_line(raw_line: str) -> Optional[_ReducedLine]:
                     if isinstance(name, str):
                         tool_names.append(name)
                 elif block_type == "tool_result":
-                    # The literal sentinel, never the block's own (possibly
-                    # prose-bearing) `content`/`output` payload (AC9).
                     tool_result_markers.append(_TOOL_RESULT_SENTINEL)
     elif message is not None:
         parse_ok = False
@@ -420,11 +343,6 @@ def _reduce_line(raw_line: str) -> Optional[_ReducedLine]:
         tool_result_markers=tuple(tool_result_markers),
         parse_ok=parse_ok,
     )
-
-
-# ---------------------------------------------------------------------------
-# (c) Verdict ladder
-# ---------------------------------------------------------------------------
 
 
 @dataclasses.dataclass(frozen=True)
@@ -471,40 +389,14 @@ def _select_last_substantive_line(reduced_lines: list[_ReducedLine]) -> Optional
 
 
 def _has_live_delegation_evidence(delegation_evidence: bool) -> bool:
-    """Thin pass-through — kept as its own function so the ladder's step 7 reads as a
-    named predicate rather than a bare parameter. The caller (the sensor op) is
-    responsible for arriving at this boolean, which as of 2026-08-30 it does by
-    merging any caller-supplied flag with `delegation_evidence_from_sidecar`'s mtime
-    read (see that function and `merge_delegation_evidence` below) — this function
-    itself stays a pure pass-through so `classify` remains independently testable
-    against a bare bool without needing a real sidecar directory on disk."""
     return bool(delegation_evidence)
 
 
-# Root cause (state/audits/2026-08-30-group-em-classifier-blindness.md § "Worth a
-# separate look"): `delegation_evidence` was ALWAYS False in production because
-# nothing ever computed it — `classify`'s step 7 has taken a caller-supplied bool
-# since it was written, and neither this module nor its hook wrapper (nor, so far as
-# this dispatch found, anything upstream in DoE-claude) ever populated one. The
-# parameter was not wired to a bug; it was wired to nothing. The functions below are
-# that missing producer: a cheap, already-on-disk liveness signal from the subagent
-# sidecar directory's mtimes, per the audit's recommendation 5.
-_DELEGATION_ACTIVITY_GRACE_SECONDS = 120  # matches subagent_arrival_check.py's own
+_DELEGATION_ACTIVITY_GRACE_SECONDS = 120
 # calibrated debounce window (that file's _DEBOUNCE_SECONDS, empirically derived
-# 2026-07-30 from 176,949 mid-run windows) — reused here as "recently active" rather
-# than re-derived, since it already answers the adjacent question "is this subagent
-# still mid-turn" from the same mtime-shaped evidence.
 
 
 def _subagents_dir_for(transcript_path: Optional[str]) -> Optional[str]:
-    """dirname(transcript_path)/stem(transcript_path)/subagents — the sidecar
-    directory a session's dispatched subagent transcripts live under. Mirrors
-    `hooks/subagent_arrival_check.py::_derive_subagent_transcript_path`'s path
-    shape exactly (same directory, minus the per-agent filename); not imported from
-    there because that function derives a single agent's file, not the directory,
-    and pulling in a hook module from a session-layer library would invert this
-    tree's dependency direction. Returns None when `transcript_path` is falsy —
-    there is nothing to derive a sidecar directory from."""
     if not transcript_path:
         return None
     directory = os.path.dirname(transcript_path)
@@ -629,15 +521,6 @@ def merge_delegation_evidence(payload_flag: bool, sidecar_signal: "bool | None |
 
 
 def parse_iso_timestamp(value: Any) -> Optional[datetime]:
-    """Parse a transcript record's ISO8601 `timestamp` to a tz-aware datetime.
-
-    `None` on anything that is not a non-empty parseable string -- missing
-    field, wrong type, malformed text. A naive result is assumed UTC. Never
-    raises. `group_em.read_pass._parse_iso_stamp` delegates here rather than
-    carrying its own copy: the dependency runs one way (group_em imports this
-    module, never the reverse), so this is the end of the arrow and the right
-    home for the single implementation.
-    """
     if not isinstance(value, str) or not value:
         return None
     text = value.strip()
@@ -713,14 +596,6 @@ def classify(
     last = _select_last_substantive_line(reduced_lines)
     if last is None:
         if not reduced_lines:
-            # Reachable causes, per state/audits/2026-08-30-group-em-classifier-
-            # blindness.md § 3: no transcript_path was supplied (the caller already
-            # collapsed that to []), the file was absent/unreadable, or it parsed to
-            # zero usable lines. This module cannot distinguish those three from an
-            # empty `reduced_lines` alone (the caller discards which one happened
-            # before this function ever sees it) — name the fact honestly rather than
-            # blaming a filter this module no longer carries (see
-            # `_select_last_substantive_line`'s docstring).
             verdict = Verdict(
                 "UNKNOWN",
                 "no lines to classify: transcript_path missing, or the file was "
@@ -739,10 +614,6 @@ def classify(
 
     is_paused_or_unknown = verdict.verdict.startswith("PAUSED") or verdict.verdict.startswith("UNKNOWN")
     if is_paused_or_unknown and _has_live_delegation_evidence(delegation_evidence):
-        # Step 7 override — OUR FIX over the spike (module docstring (c)): applies to
-        # UNKNOWN as well as PAUSED. Preserve the fallen-through UNKNOWN detail (AC4)
-        # even though the verdict itself is overridden, so the sibling file still
-        # records what the ladder actually saw.
         return Verdict(
             "PRODUCING",
             f"delegated (overrides {verdict.verdict}: {verdict.reason})",
@@ -755,7 +626,6 @@ def classify(
 def _classify_one(
     last: _ReducedLine, *, now_epoch: float, transcript_activity_epoch: Optional[float]
 ) -> Verdict:
-    """Steps 1-6 of the ladder, applied to the single last-substantive reduced line."""
     if last.type == "system" and last.subtype == "away_summary":
         return Verdict("PAUSED", "away")
 
@@ -791,14 +661,8 @@ def _classify_one(
     )
 
 
-# ---------------------------------------------------------------------------
-# (e) CPU cursor — non-blocking per-invocation delta, tiebreak only
-# ---------------------------------------------------------------------------
-
-
 @dataclasses.dataclass(frozen=True)
 class CpuCursor:
-    """One invocation's CPU-time sample pair, as persisted to the sibling file."""
 
     cpu_seconds: float
     wall_clock_epoch: float
@@ -831,17 +695,6 @@ def read_cpu_times_for_pid(pid: int) -> Optional[float]:
 
 
 def compute_cpu_cursor(pid: int, *, now_epoch: float) -> Optional[CpuCursor]:
-    """One non-blocking-per-call cpu_times() read, packaged as the (cpu_seconds,
-    wall_clock) pair this module persists. Returns None when the read failed (see
-    `read_cpu_times_for_pid`).
-
-    "Non-blocking" here means "does not sleep" — cpu_times() itself is a blocking
-    syscall/proc-read like any other, which is why callers route it through
-    asyncio.to_thread (see that function's own docstring). This function makes exactly
-    ONE such read; it never samples twice or waits between samples (that is the entire
-    point of the cursor replacing the spike's blocking double-sample — see module
-    docstring (e)).
-    """
     cpu_seconds = read_cpu_times_for_pid(pid)
     if cpu_seconds is None:
         return None
@@ -849,14 +702,6 @@ def compute_cpu_cursor(pid: int, *, now_epoch: float) -> Optional[CpuCursor]:
 
 
 def cpu_delta_rate(previous: Optional[CpuCursor], current: CpuCursor) -> Optional[float]:
-    """CPU-seconds-per-wall-second, normalised over the interval between two cursors.
-
-    Returns None when there is no previous cursor to diff against (first-ever
-    invocation for this session), or when the wall-clock interval is non-positive
-    (clock skew, or two invocations landing in the same epoch second) — a rate is not
-    computable in either case, and this function never divides by zero or returns a
-    negative/undefined rate.
-    """
     if previous is None:
         return None
     wall_delta = current.wall_clock_epoch - previous.wall_clock_epoch
@@ -864,9 +709,6 @@ def cpu_delta_rate(previous: Optional[CpuCursor], current: CpuCursor) -> Optiona
         return None
     cpu_delta = current.cpu_seconds - previous.cpu_seconds
     if cpu_delta < 0:
-        # A CPU-seconds regression means the counter source changed underneath us
-        # (process restart reusing the same pid, or a bogus previous sample) — not a
-        # negative rate, no signal.
         return None
     return cpu_delta / wall_delta
 
@@ -921,18 +763,10 @@ def resolve_verdict(
     )
 
 
-# ---------------------------------------------------------------------------
-# (d) Sibling-file writer + reader
-# ---------------------------------------------------------------------------
-
 _SAFE_SID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def _sibling_path(sid: str, cwd: Optional[str] = None) -> Optional[str]:
-    """Resolve `.git/coordinator-sessions/<sid>/receiver-state.json`, or None if the
-    session dir is unresolvable (not in a git repo) or `sid` is not a safe path
-    component. Every public read/write function in this module routes through here —
-    the single location-naming seam, matching session/grant.py's own convention."""
     if not sid or not _SAFE_SID_RE.match(sid):
         return None
     sdir = _session_core.session_dir(sid, cwd)
@@ -983,12 +817,6 @@ def write_receiver_state(
     path = _sibling_path(sid, cwd)
     if path is None:
         return False
-    # `ensure_session`, not `os.makedirs`: `_sibling_path` resolves
-    # `<hub>/<sid>/receiver-state.json`, so creating its parent here IS creating
-    # a session directory, and doing that without the record is what left
-    # sessions invisible to `liveness.live_session_ids` and unreapable by
-    # `ops/session/reap.py`. Same fail-closed contract as before -- an
-    # uncreatable session dir returns False.
     sdir = _session_core.ensure_session(sid, cwd)
     if not sdir or not os.path.isdir(sdir):
         return False
@@ -1027,22 +855,7 @@ def write_receiver_state(
     return True
 
 
-# ---------------------------------------------------------------------------
-# Public entry point: transcript path -> reduced lines
-# ---------------------------------------------------------------------------
-
-
 def reduce_transcript_tail(transcript_path: str) -> tuple[list[_ReducedLine], bool, bool]:
-    """Read + reduce the trailing lines of `transcript_path`.
-
-    Returns (reduced_lines oldest-first, any_unparseable, cap_reached). `reduced_lines`
-    is [] when the file is absent/unreadable/empty or every trailing line failed to
-    parse — callers treat that as ladder input yielding UNKNOWN via
-    `_select_last_substantive_line` returning None, never a raise.
-
-    Blocking (file I/O) — callers MUST invoke this via asyncio.to_thread(), never
-    directly from an async handler.
-    """
     raw_lines, cap_reached = _read_tail_lines(transcript_path)
     reduced: list[_ReducedLine] = []
     any_unparseable = False

@@ -108,10 +108,6 @@ class PriorityLedgerEntry(BaseModel):
     source: PriorityLedgerSource
     """The writing mechanism that produced this entry."""
 
-    # Nullable fields (D9 present-as-null, not optional) — the JSON schema
-    # permits omitting these keys entirely; the connector normalizes an
-    # absent key to null rather than dropping the field from the emitted
-    # record.
     set_by: str | None
     """Identifier of the session/agent/person that set this priority."""
     set_at: IsoDateTime | None

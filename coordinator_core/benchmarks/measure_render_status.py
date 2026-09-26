@@ -129,13 +129,6 @@ shape: a snapshot covers everything up to itself, never the live tail."""
 
 
 def _make_noise_event(idx: int, shard: int) -> dict:
-    """One synthetic background event carrying NO `axis` field -- skipped
-    by `tracker_projection._fold_axis_states`'s `if axis not in states:
-    continue` check in one dict-membership test, exactly the shape a real
-    non-transition tracker event (e.g. an `item_project_added` membership
-    edge) would take through that loop. Mirrors
-    `measure_read_events._make_event`'s shape (same field set) so the two
-    modules' background-event cost is comparable."""
     return {
         "id": f"evt-noise-shard{shard}-{idx:07d}-{uuid.uuid4().hex[:8]}",
         "observed_at": f"2026-07-28T00:00:{idx % 60:02d}.{idx % 1000:03d}Z",
@@ -148,11 +141,6 @@ def _make_noise_event(idx: int, shard: int) -> dict:
 
 
 def _make_transition_event(idx: int, *, item_id: str, axis: str, applied_hour: int) -> dict:
-    """One synthetic transition event on `(item_id, axis)`, field-shaped
-    like `tracker_transitions._emit`'s stored output (see that module's
-    docstring "Event fields (binding, closed list)") -- alternates
-    `to_state` between "open"/"closed"-style values so a real fold does
-    real per-event `to_state` assignment work, not a no-op comparison."""
     to_state = "closed" if idx % 2 == 0 else "reopened"
     return {
         "id": f"evt-transition-{item_id}-{axis}-{idx:07d}",
@@ -176,12 +164,6 @@ def _make_transition_event(idx: int, *, item_id: str, axis: str, applied_hour: i
 def _make_snapshot_event(
     *, item_id: str, axis: str, folded_event_ids: list, folded_to_state: str
 ) -> dict:
-    """One synthetic `kind: "snapshot"` event, field-shaped like
-    `tracker_transitions.build_snapshot_event`'s stored output (C5) --
-    `folded_event_ids` is the exact-identity skip set
-    `tracker_projection._fold_axis_states` consumes; `as_of_sequence`/
-    `as_of_applied_at` are provenance-only fields that fold never reads
-    (see that module's docstring), stamped here only for shape fidelity."""
     return {
         "id": f"evt-snapshot-{item_id}-{axis}",
         "item_id": item_id,
@@ -295,10 +277,6 @@ def _time_bare_import(module_name: str) -> float:
 
 
 def measure_bare_import(module_name: str, *, n: int = DEFAULT_N, warmup: int = DEFAULT_WARMUP) -> dict:
-    """Draw `warmup` discarded + `n` timed cold-start samples of a bare
-    `import <module_name>` subprocess and return reduced statistics --
-    same reduction shape as `measure`, so the two are directly comparable.
-    """
     for _ in range(warmup):
         _time_bare_import(module_name)
     samples_ms: List[float] = [_time_bare_import(module_name) for _ in range(n)]
@@ -330,10 +308,6 @@ def run_import_isolation_measurement(*, n: int = DEFAULT_N, warmup: int = DEFAUL
 
 
 def _time_probe(repo_root: Path, item_id: str) -> float:
-    """Time one cold spawn of `_render_status_probe` against `repo_root`,
-    from process-spawn to exit -- same shape as
-    `measure_read_events._time_probe`. Raises `RuntimeError` on a non-zero
-    exit; a probe failure is never silently dropped as a sample."""
     argv = [
         sys.executable,
         "-m",
@@ -368,11 +342,6 @@ def measure(
     n: int = DEFAULT_N,
     warmup: int = DEFAULT_WARMUP,
 ) -> dict:
-    """Materialize one fixture at (events_per_shard, shard_count),
-    compacted or not, draw `warmup` discarded + `n` timed cold-start
-    samples of `render_status` against it, and return the reduced
-    statistics. Fixture is always materialized under a fresh temp root and
-    removed in `finally` -- never points at the real repo `state/` tree."""
     tmp_root = Path(tempfile.mkdtemp(prefix="sat03-render-status-bench-"))
     try:
         total_events = materialize_fixture(
@@ -404,17 +373,6 @@ def measure(
 
 
 def run_c10_measurement(*, n: int = DEFAULT_N, warmup: int = DEFAULT_WARMUP) -> dict:
-    """Run the full C10 measurement (AC16, AC17): an uncompacted baseline
-    point, an uncompacted events-axis growth point (same shard count, for
-    the breach extrapolation), and the compacted point at the baseline
-    (events_per_shard, shard_count). Returns a dict carrying every AC16/
-    AC17 number plus the raw measured points for audit.
-
-    Resolves the DR-215 budget the same way `measure_read_events` does --
-    via `budget.resolve_budget`, tier default (`tracker.render_status` has
-    no per-op override in `budget-manifest.json`, matching
-    `tracker.read_events`'s own unlisted status there).
-    """
     manifest = budget_mod.load_manifest()
     budget = budget_mod.resolve_budget("tracker.render_status", "COMPUTE_ONLY", manifest)
     target_ms = budget["target_ms"]

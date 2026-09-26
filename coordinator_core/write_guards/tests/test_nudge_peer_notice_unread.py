@@ -125,6 +125,4 @@ def test_module_contract():
 def test_unsafe_session_id_is_silent_not_raised(tmp_path):
     root = _repo_root(tmp_path)
     payload = _payload("Write", "../escape", root)
-    # An advisory guard must never raise into the caller's write -- an
-    # unusable id degrades to "nothing to surface," same as no notices.
     assert guard.check(payload) is None

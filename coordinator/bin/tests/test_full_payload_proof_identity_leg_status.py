@@ -60,13 +60,6 @@ def _load_proof_module():
 
 proof = _load_proof_module()
 
-# The exact per-row advisory WARNING text `dispatch_percolate_pre_ci`
-# (coordinator/bin/publish.py) prints when a row with a non-empty
-# `dest_subdir` runs before its sibling toplevel row has published
-# `.github/` to a virgin destination -- the expected, ratified shape row 1
-# of a virgin klabauter-style publish produces. Deliberately reproduced
-# verbatim here (not imported) so a future wording drift in either file
-# shows up as a test failure pointing at THIS collision, not a silent pass.
 _PER_ROW_ADVISORY_SKIP_TEXT = (
     "  WARNING: engine-row: identity checker not found at "
     "/scratch/dest-repo/.github/scripts/check-persona-names.py — "
@@ -75,9 +68,6 @@ _PER_ROW_ADVISORY_SKIP_TEXT = (
     "destination yet).\n"
 )
 
-# The end-of-run leg's own `target_filtered=True` advisory WARNING --
-# genuinely a `skipped-advisory` end-of-run outcome, distinct from the
-# per-row text above.
 _END_OF_RUN_ADVISORY_SKIP_TEXT = (
     "  WARNING: end-of-run identity checker not found at "
     "/scratch/dest-repo/.github/scripts/check-persona-names.py — "
@@ -85,7 +75,6 @@ _END_OF_RUN_ADVISORY_SKIP_TEXT = (
     "published .github/ to this destination).\n"
 )
 
-# The end-of-run leg's own unfiltered hard-failure text.
 _END_OF_RUN_HARD_FAIL_TEXT = (
     "  Error: end-of-run identity check FAILED for /scratch/dest-repo: "
     "checker not found at .github/scripts/check-persona-names.py "
@@ -95,11 +84,6 @@ _END_OF_RUN_HARD_FAIL_TEXT = (
 
 
 class TestVirginDestinationRowLevelAdvisoryDoesNotMaskACleanEndOfRunLeg:
-    """The exact pass-1 shape: a row-level advisory skip fires (engine row,
-    expected), then the end-of-run leg runs afterward, finds the checker
-    (published by the toplevel row later in the same pass), and exits
-    clean and silent. Must classify as `ran-clean-silent`, never
-    `skipped-advisory` -- the property this fix pins."""
 
     def test_per_row_advisory_alone_is_not_misread_as_end_of_run_skip(self):
         stderr_text = _PER_ROW_ADVISORY_SKIP_TEXT
@@ -107,9 +91,6 @@ class TestVirginDestinationRowLevelAdvisoryDoesNotMaskACleanEndOfRunLeg:
         assert status["identity_check"] == "ran-clean-silent"
 
     def test_per_row_advisory_plus_unrelated_other_leg_chatter_still_clean(self):
-        # Realistic pass-1 shape: per-row identity advisory fires early,
-        # totally unrelated other-leg stderr chatter follows, the identity
-        # end-of-run leg itself never prints anything (it ran clean).
         stderr_text = (
             _PER_ROW_ADVISORY_SKIP_TEXT
             + "  NOTE: end-of-run unscanned-published check found a "
@@ -120,8 +101,6 @@ class TestVirginDestinationRowLevelAdvisoryDoesNotMaskACleanEndOfRunLeg:
 
 
 class TestGenuineEndOfRunOutcomesStillClassifyCorrectly:
-    """The fix must not blunt real end-of-run signal -- only the collision
-    with the per-row message is removed."""
 
     def test_genuine_end_of_run_filtered_advisory_skip_still_detected(self):
         status = proof._parse_end_of_run_leg_status(_END_OF_RUN_ADVISORY_SKIP_TEXT)
@@ -132,10 +111,6 @@ class TestGenuineEndOfRunOutcomesStillClassifyCorrectly:
         assert status["identity_check"] == "ran-failed"
 
     def test_both_per_row_advisory_and_genuine_end_of_run_skip_still_flagged(self):
-        # Belt-and-braces: even with the per-row noise present, a REAL
-        # end-of-run skip (filtered advisory or unfiltered hard fail) must
-        # still surface -- the fix narrows the marker, it does not disable
-        # detection of the end-of-run leg's own genuine skip text.
         stderr_text = _PER_ROW_ADVISORY_SKIP_TEXT + _END_OF_RUN_ADVISORY_SKIP_TEXT
         status = proof._parse_end_of_run_leg_status(stderr_text)
         assert status["identity_check"] == "skipped-advisory"

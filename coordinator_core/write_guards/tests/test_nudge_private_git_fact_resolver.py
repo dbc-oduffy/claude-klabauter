@@ -53,9 +53,6 @@ def _private_resolver_source(flag: str) -> str:
     )
 
 
-# --- FIRE SET: the three walk-backed forms ------------------------------
-
-
 @pytest.mark.parametrize(
     "flag,expected_symbol",
     [
@@ -66,9 +63,6 @@ def _private_resolver_source(flag: str) -> str:
     ],
 )
 def test_fires_on_each_walk_only_form_in_hot_path_module(flag, expected_symbol):
-    """`--absolute-git-dir` joined this list on 2026-08-19, moving out of the
-    silent set because `repo_root.absolute_git_dir` stopped spawning. The
-    silent set is membership in a real property, not a fixed list."""
     content = _private_resolver_source(flag)
     result = guard.check(
         _payload("Write", {"file_path": _HOT_PATH_FILE, "content": content})
@@ -79,12 +73,6 @@ def test_fires_on_each_walk_only_form_in_hot_path_module(flag, expected_symbol):
     assert expected_symbol in text
     assert flag in text
     # AC5 honesty, INVERTED 2026-08-19 and deliberately kept as an assertion
-    # rather than deleted. This used to read `assert "eliminates the spawn"
-    # not in text` -- because it did not: the seam fell back to a spawn when
-    # the walk found no `.git`. That fallback is gone for every form in this
-    # list, so the ban became a pin on an understatement. The property under
-    # test is unchanged -- the offer text must state what the seam actually
-    # does -- only the truth it has to match moved.
     assert "never spawns, on any path" in text
 
 
@@ -108,9 +96,6 @@ def test_fires_on_live_measured_path_format_absolute_git_common_dir_membership()
     assert result is not None
     text = result["hookSpecificOutput"]["additionalContext"]
     assert "coordinator_core.git.repo_root.git_common_dir" in text
-
-
-# --- SILENT SET: benign cases must not nag ------------------------------
 
 
 def test_silent_when_module_already_imports_the_shared_seam():

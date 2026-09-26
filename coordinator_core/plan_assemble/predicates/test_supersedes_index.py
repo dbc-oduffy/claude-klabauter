@@ -1,19 +1,3 @@
-"""
-coordinator_core.plan_assemble.predicates.test_supersedes_index — unit
-coverage for `supersedes_index.supersedes_plan`, chunk C7's row `:164`
-producer.
-
-Purpose: verify the reverse-index build/lookup against fixture plan
-directories (never the live `docs/plans/`), and pin the ruling this chunk
-must not re-litigate: no `supersedes:` key anywhere in the read/write path.
-
-Negative-spec:
-  - Does NOT read or write `coordinator_core/frontmatter/schemas/plan.schema.json`.
-  - Does NOT exercise the live repo's `docs/plans/` directory — every case
-    constructs its own fixture directory under `tmp_path`.
-
-Spec backlink: pln-plan-assemble-wave-2-the-predi-fad89b, chunk C7
-"""
 from __future__ import annotations
 
 from pathlib import Path

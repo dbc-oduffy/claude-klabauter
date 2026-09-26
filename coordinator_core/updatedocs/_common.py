@@ -41,17 +41,9 @@ class UpdatedocsTargetMissing(Exception):
         )
 
 
-# Bytes read from the head of each file when looking for its frontmatter
-# block, and the growth ceiling applied when the closing `---` hasn't
-# appeared yet (a long HTML-comment preamble can push the real frontmatter
-# past the first chunk -- growing avoids misreading a genuine status as
-# absent, which would wrongly inflate `indeterminate`).
 _HEAD_READ_BYTES = 8192
 _HEAD_READ_MAX_BYTES = 65536
 
-# A frontmatter delimiter line, standalone on its own line -- distinct from
-# an incidental run of dashes inside a markdown table/rule that can appear
-# well before the real closing delimiter and falsely look like "found it".
 _FM_DELIMITER_LINE = re.compile(rb"(?m)^---[ \t]*\r?$")
 
 

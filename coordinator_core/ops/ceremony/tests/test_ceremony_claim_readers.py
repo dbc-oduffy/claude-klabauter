@@ -101,10 +101,6 @@ def _init_repo_with_origin(tmp_path: Path) -> Path:
 
 
 def _seed_archived_handoff_no_mirror_claim(root: Path, name: str) -> Path:
-    """An archived handoff with predecessor: null and NO claimed_by/
-    consumed_by in its mirror frontmatter — the reverted-mirror half of the
-    desync. A live ledger claim (written separately) is the only signal a
-    ledger-first reader can see."""
     path = root / "archive" / "handoffs" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     fm = 'title: "Test Archived Handoff"\ncreated: 2026-01-01\nstatus: archived\npredecessor: null\n'
@@ -124,11 +120,6 @@ def _commit_unpushed(root: Path, message: str) -> None:
     _git(["add", "-A"], root)
     result = _git(["commit", "-m", message], root)
     assert result.returncode == 0, result.stderr
-
-
-# ---------------------------------------------------------------------------
-# resolver.py::detect_git_provenance_consumed
-# ---------------------------------------------------------------------------
 
 
 def test_a_detector_b_spoof_guard_fires_on_ledger_only_foreign_claim(tmp_path):
@@ -151,9 +142,6 @@ def test_a_detector_b_spoof_guard_fires_on_ledger_only_foreign_claim(tmp_path):
 
 
 def test_b_detector_b_own_desynced_handoff_still_binds(tmp_path):
-    """(b) The mirror has no claimant AND the ledger's live claim names THIS
-    session (sid) — the desync must not spuriously reject the session's own
-    predecessor."""
     repo = _init_repo_with_origin(tmp_path)
     _seed_archived_handoff_no_mirror_claim(repo, "desync-own.md")
     _commit_unpushed(repo, f"restore: recover archived handoff\n\nSession-Id: {_SID}")
@@ -169,10 +157,6 @@ def test_b_detector_b_own_desynced_handoff_still_binds(tmp_path):
 
 
 def test_dead_foreign_ledger_holder_degrades_and_binds(tmp_path):
-    """A ledger claim naming a foreign session that is NOT live must degrade
-    to 'no ledger claim' (resolve_claim_state's own posture) — with the
-    mirror also empty, the candidate binds to sid rather than being
-    falsely rejected as foreign."""
     repo = _init_repo_with_origin(tmp_path)
     _seed_archived_handoff_no_mirror_claim(repo, "dead-foreign.md")
     _commit_unpushed(repo, f"archive: ship handoff\n\nSession-Id: {_SID}")
@@ -187,17 +171,7 @@ def test_dead_foreign_ledger_holder_degrades_and_binds(tmp_path):
     assert warnings == []
 
 
-# ---------------------------------------------------------------------------
-# branch_resolution.py::_sanitize_consumed_handoffs -- regression proof this
-# site is already ledger-first via C2 (covered-by-C2, not re-fixed here).
-# ---------------------------------------------------------------------------
-
-
 def test_c_sanitize_consumed_handoffs_covered_by_c2_rejects_foreign_desync(tmp_path):
-    """(c) Same desync shape against `_sanitize_consumed_handoffs`'s ownership
-    check (line ~1059, `_get_handoff_consumed_by(str(hf_in_repo)) == sid`) --
-    proves C2's migration of the shared coverage leaf already makes this site
-    ledger-first with no edit needed here."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(["init", "-b", "main"], repo)
@@ -225,8 +199,6 @@ def test_c_sanitize_consumed_handoffs_covered_by_c2_rejects_foreign_desync(tmp_p
 
 
 def test_d_sanitize_consumed_handoffs_covered_by_c2_binds_own_desync(tmp_path):
-    """(d) Mirror-mute, ledger-live-own desync -- the session's own handoff
-    must still bind (not silently rejected into rejected[])."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(["init", "-b", "main"], repo)

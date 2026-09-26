@@ -1,25 +1,3 @@
-"""
-coordinator_core.hooks.test_agent_postuse_dispatch -- tests for the PostToolUse(Agent)
-fan-in dispatcher.
-
-Two obligations, and neither is about what the legs do -- that is covered by their own
-test files. This module owns only the composition:
-
-1. **Both legs actually fire.** Timing cannot see a dropped leg and neither can a
-   return-shape assertion: the fan-in returns `no_advisory()` whether it ran two legs,
-   one, or none, because both legs are write ops. A fold that silently stopped calling
-   one of its members would look identical in every other observable. That is the
-   AC15-shaped check -- a before/after population count, expressed here as "each leg was
-   invoked exactly once, with the params it was given".
-
-2. **A raising leg cannot suppress its sibling.** This is the one property the fan-in
-   can lose that the two separate processes it replaces had for free: a process boundary
-   isolates a crash, a shared `asyncio.gather` does not. Without
-   `return_exceptions=True` the first raising leg cancels the merge and the sibling's
-   on-disk write is lost.
-
-Spec backlink: coordinator_core/hooks/agent_postuse_dispatch.py (module under test).
-"""
 
 from __future__ import annotations
 
@@ -37,12 +15,6 @@ from coordinator_core.hooks._envelope import no_advisory, post_advisory  # noqa:
 
 @pytest.fixture
 def legs(monkeypatch):
-    """Replace both legs with recording stubs; yields the call log.
-
-    Patches `_LEGS` rather than the leg modules' own `run`, so the test pins the
-    composition this module performs and stays silent about how the legs are
-    implemented.
-    """
     calls: list[tuple[str, dict, object]] = []
 
     def _stub(label, result):
@@ -64,7 +36,6 @@ def legs(monkeypatch):
 
 
 def test_both_legs_fire_once_with_the_handler_params(legs):
-    """AC15 shape: a dropped leg is invisible in the return value, so count the calls."""
     calls = legs(("first", no_advisory()), ("second", no_advisory()))
 
     params = {"session_id": "test-session-fanin", "dispatched_agent_id": "abcdef123456"}
@@ -77,7 +48,6 @@ def test_both_legs_fire_once_with_the_handler_params(legs):
 
 
 def test_a_raising_leg_does_not_suppress_its_sibling(legs, capsys):
-    """The property the process boundary gave for free and `gather` does not."""
     calls = legs(("raiser", RuntimeError("audit log unwritable")), ("sibling", no_advisory()))
 
     result = asyncio.run(apd._handler({}, repo_root=None))
@@ -115,7 +85,6 @@ def test_two_advisory_texts_merge_in_leg_order(legs):
 
 
 def test_a_leg_returning_an_unexpected_shape_is_treated_as_silent(legs):
-    """A leg's own shape bug must not take down the fan-in or its sibling."""
     calls = legs(("odd", "not a dict"), ("sibling", no_advisory()))
 
     result = asyncio.run(apd._handler({}, repo_root=None))
@@ -125,7 +94,6 @@ def test_a_leg_returning_an_unexpected_shape_is_treated_as_silent(legs):
 
 
 def test_the_op_is_registered_and_eagerly_imported():
-    """Present-but-dead is the failure mode: a hooks op needs its eager-import entry."""
     from coordinator_core import hooks, ipc
 
     assert "coordinator_core.hooks.agent_postuse_dispatch" in hooks._EAGER_HOOK_MODULES
@@ -133,7 +101,6 @@ def test_the_op_is_registered_and_eagerly_imported():
 
 
 def test_scope_and_class_are_the_union_of_the_legs():
-    """A fan-in inherits the strictest member; this pins it as declared, not discovered."""
     from coordinator_core import op_scopes
     from coordinator_core.authz import classification
 
@@ -151,7 +118,6 @@ def test_scope_and_class_are_the_union_of_the_legs():
 
 
 def test_the_folded_legs_stay_registered_for_direct_callers():
-    """The fold is additive. Deregistering either leg is a separate, louder decision."""
     from coordinator_core import ipc
 
     assert ipc.get_op_handler("hooks.agent_completion_log") is not None

@@ -32,8 +32,6 @@ import pytest
 
 from coordinator_core.ops.register_discovered_repos import main
 
-# `env` is imported for its fixture registration, not called directly -- it
-# builds the fake `machine-local` on PATH and sandboxes every registry write.
 from coordinator_core.ops.test_register_discovered_repos import (  # noqa: F401
     _read_registry,
     _stub_discover,
@@ -66,11 +64,6 @@ def _write_installed_plugins(fake_home: Path, name: str, install_path: str) -> N
 def test_two_distinct_dirs_with_one_derived_key_keep_the_first(
     env, tmp_path, monkeypatch, capsys
 ):
-    """First-wins, not last-wins, and never silently.
-
-    First-wins is the shape that matches the module's standing only-if-absent
-    contract: a value already decided is not overwritten by a later one.
-    """
     first = str(tmp_path / "clone-a" / "example-retrieval-repo-plugin")
     second = str(tmp_path / "clone-b" / "example-retrieval-repo-plugin")
     os.makedirs(first)
@@ -90,15 +83,10 @@ def test_two_distinct_dirs_with_one_derived_key_keep_the_first(
 def test_platform_install_path_beats_a_discovered_bystander(
     env, tmp_path, monkeypatch, isolated_claude_home, capsys
 ):
-    """The reported failure end to end: discovery finds a clone, the platform
-    loads a different one, and the registry must name the platform's."""
     discovered = str(tmp_path / "code" / "example-retrieval-repo-plugin")
     live = str(tmp_path / "example-retrieval-repo-plugin")
     os.makedirs(discovered)
     os.makedirs(live)
-    # The plugin's declared NAME is `example-retrieval-repo`; its clone is named
-    # `example-retrieval-repo-plugin`. That mismatch is the reporting box's shape, and
-    # matching on the name rather than the clone basename would miss it.
     _write_installed_plugins(isolated_claude_home, "project-rag", live)
     _stub_discover(monkeypatch, [discovered])
     lib_dir, bin_dir = env
@@ -113,8 +101,6 @@ def test_platform_install_path_beats_a_discovered_bystander(
 def test_no_correction_when_discovery_already_agrees(
     env, tmp_path, monkeypatch, isolated_claude_home, capsys
 ):
-    """Agreement is silent — a warning on every correct install is noise that
-    trains operators to ignore the one that matters."""
     live = str(tmp_path / "example-retrieval-repo-plugin")
     os.makedirs(live)
     _write_installed_plugins(isolated_claude_home, "project-rag", live)
@@ -131,8 +117,6 @@ def test_no_correction_when_discovery_already_agrees(
 def test_absent_manifest_leaves_discovery_untouched(
     env, tmp_path, monkeypatch, isolated_claude_home
 ):
-    """A fresh box with no plugins installed is the normal state, not a fault:
-    no manifest means no opinion, never an error or a dropped registration."""
     repo = str(tmp_path / "dev" / "repo-alpha")
     os.makedirs(repo)
     _stub_discover(monkeypatch, [repo])
@@ -163,12 +147,6 @@ def test_malformed_manifest_is_no_opinion_not_a_crash(
 def test_retired_key_is_never_registered(
     env, tmp_path, monkeypatch, isolated_claude_home, capsys
 ):
-    """`repos.coordinator_claude` is retired by `setup_chain_walker` -- discovery
-    finding a `coordinator-claude` clone must not re-provision it.
-
-    Regression for the DoE-claude memo of 2026-09-02: the key came back on a box
-    where the operator had unset it, because install re-ran discovery.
-    """
     retired = str(tmp_path / "dev" / "coordinator-claude")
     keeper = str(tmp_path / "dev" / "repo-alpha")
     os.makedirs(retired)
@@ -188,12 +166,6 @@ def test_retired_key_is_never_registered(
 def test_retired_key_is_not_revived_via_platform_install_path(
     env, tmp_path, monkeypatch, isolated_claude_home
 ):
-    """The platform-preference step must not resurrect the retired key either.
-
-    `installed_plugins.json` records the `coordinator` plugin under a
-    `coordinator-claude`-basenamed path, which is exactly how the stray value
-    (`~/.claude`) reached the registry on the reporting box.
-    """
     plugin_path = str(isolated_claude_home / ".claude")
     _write_installed_plugins(isolated_claude_home, "coordinator", plugin_path)
     discovered = str(tmp_path / "dev" / "coordinator-claude")
@@ -210,8 +182,6 @@ def test_retired_key_is_not_revived_via_platform_install_path(
 def test_check_only_does_not_preview_a_retired_key(
     env, tmp_path, monkeypatch, isolated_claude_home, capsys
 ):
-    """Preview mode must agree with what registration would do -- otherwise the
-    operator is told a key is coming that never lands."""
     retired = str(tmp_path / "dev" / "coordinator-claude")
     os.makedirs(retired)
     _stub_discover(monkeypatch, [retired])

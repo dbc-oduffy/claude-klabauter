@@ -1,22 +1,4 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
-"""bin/tests/test_workweek_complete_close.py
-
-Purpose: unit tests for coordinator/bin/workweek-complete-close.py's
-`perform_archive_files` week_only/shard-cleanup gate and `_cmd_archive`'s
-git-add pathspec construction.
-
-Coverage:
-  test_week_only_leaves_shards_by_default
-  test_week_only_clean_shards_deletes_shards
-  test_has_pathspec_content_empty_dir_is_false
-  test_has_pathspec_content_dir_with_file_is_true
-  test_has_pathspec_content_missing_path_is_false
-
-Negative-spec: does not exercise git_commit_and_push or _cmd_archive's
-subprocess calls — those need a live git repo and are out of this bug's
-footprint (bug-backlog/2026-08-06-week-only-true-never-cleans-transient-re-2166541e05f2.yaml,
-bug-backlog/2026-09-06-workweek-complete-close-archive-git-adds-936cce8e903e.yaml).
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -27,7 +9,6 @@ _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
 def _load_module():
-    """Load workweek-complete-close.py by file path (hyphenated name bypass)."""
     spec = importlib.util.spec_from_file_location(
         "workweek_complete_close",
         _BIN_DIR / "workweek-complete-close.py",

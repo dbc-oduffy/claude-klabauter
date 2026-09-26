@@ -16,15 +16,6 @@ from typing import Any
 
 
 def aliased_param(params: dict, canonical: str, *aliases: str) -> Any:
-    """The value under `canonical` or the first present alias, `None` when no
-    spelling is present. Raises `ValueError` when two spellings disagree.
-
-    `None` is the only "absent" value: `False`/`0`/`""` under either spelling
-    count as present and participate in disagreement-checking. Fine for this
-    module's actual callers (path-shaped string params, where a falsy value
-    is never legitimate); a future caller aliasing a bool or count param
-    should confirm that's still what they want.
-    """
     found = [(key, params[key]) for key in (canonical, *aliases) if params.get(key) is not None]
     if not found:
         return None
@@ -38,7 +29,6 @@ def aliased_param(params: dict, canonical: str, *aliases: str) -> Any:
 
 
 def spellings(canonical: str, *aliases: str) -> str:
-    """`plan` (or `plan_path`) — the accepted spellings, for a refusal."""
     if not aliases:
         return canonical
     return f"{canonical} (or {', '.join(aliases)})"

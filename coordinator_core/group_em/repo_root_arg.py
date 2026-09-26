@@ -45,42 +45,18 @@ import os
 
 
 class RepoRootArgError(ValueError):
-    """A `--repo-root` this process must refuse rather than work around."""
+    pass
 
 
 def resolve_repo_root_arg(value: object) -> str:
-    """Validate a `--repo-root` argument; return it absolute and normalised.
-
-    Raises `RepoRootArgError` with an operator-facing message naming the
-    resolved path. Callers exit non-zero on it -- never warn and continue: the
-    whole failure this guards is a run that looked successful.
-    """
     if not isinstance(value, str) or not value.strip():
         raise RepoRootArgError("--repo-root is empty")
 
     raw = value.strip()
-    # `os.path.isabs` (ntpath) treats a driveless rooted path (`/foo/bar`) as
-    # absolute, then `abspath` resolves it against the PROCESS'S CURRENT
-    # DRIVE -- the identical "binds to wherever the process happens to be
-    # standing" hazard this module exists to close, just swapping drive for
-    # directory. `splitdrive` is the one extra check that closes it: a path
-    # this refusal accepts must name both a drive and a root.
-    #
-    # the drive requirement is a Windows-only hazard (`ntpath.splitdrive`).
-    # On POSIX, `os.path` is `posixpath`, whose `splitdrive` always returns
-    # an empty drive -- applying this check unconditionally refused every
-    # legitimate POSIX absolute root (fleet floor includes a MacBook Pro).
-    # Gate the drive requirement on the platform that motivates it; a UNC
-    # path (`\\server\share\...`) and a mapped drive both still produce a
-    # non-empty `drive` from `ntpath.splitdrive` on Windows, so this does
-    # not weaken the original catch.
     drive, _tail = os.path.splitdrive(raw)
     require_drive = os.name == "nt"
     if not os.path.isabs(raw) or (require_drive and not drive):
         resolved = os.path.abspath(raw)
-        # this message carried a causal explanation after the fact; the
-        # register wants one fact plus a terse alternative, WHY stays in this
-        # docstring, not the operator-facing line.
         raise RepoRootArgError(
             f"--repo-root {raw!r} is not an absolute, drive-anchored path; it "
             f"resolves to {resolved!r}. Pass forward slashes: X:/name"

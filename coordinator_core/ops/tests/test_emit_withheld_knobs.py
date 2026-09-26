@@ -27,15 +27,11 @@ import pytest
 from coordinator_core.locked_write import CONTENDED_LOCK_WAIT_ENV
 from coordinator_core.ops import emit_withheld_knobs as op
 
-# `percolate` is not importable until the op's path rung runs. Do it once here rather than
-# leaning on some earlier test having called a function that happens to do it — that made
-# this file pass or fail on execution order.
 op.ensure_percolate_on_path()
 
 _OP_SOURCE = Path(op.__file__).resolve()
 
 #: Every key a consumer may rely on. Adding one is additive and needs no SCHEMA_VERSION
-#: bump; removing or repurposing one does, which is what this pin exists to force.
 _REQUIRED_ENTRY_KEYS = frozenset(
     {
         "knob",
@@ -66,10 +62,6 @@ def _document() -> Dict[str, Any]:
 def _entries() -> List[Dict[str, Any]]:
     return cast(List[Dict[str, Any]], _document()["entries"])
 
-
-# ---------------------------------------------------------------------------
-# Name provenance — the assertions that make the artifact trustworthy.
-# ---------------------------------------------------------------------------
 
 def test_lock_wait_knob_is_read_from_its_owning_constant():
     """The emitted name IS `locked_write.CONTENDED_LOCK_WAIT_ENV`, not a copy of it.
@@ -111,10 +103,6 @@ def test_no_knob_name_is_hardcoded_in_the_emitter_source():
         assert "COORDINATOR_LOCK_WAIT_SECS" not in code, line
         assert "COORDINATOR_ALLOW_PERCOLATE_QUEUE" not in code, line
 
-
-# ---------------------------------------------------------------------------
-# Shape pin — a break here is a break in DoE's suite.
-# ---------------------------------------------------------------------------
 
 def test_document_carries_the_pinned_top_level_keys():
     assert set(_document()) == _REQUIRED_TOP_KEYS
@@ -170,10 +158,6 @@ def test_every_asserted_by_path_exists():
         for rel in entry["asserted_by"]:
             assert (repo_root / rel).is_file(), f"{entry['knob']} cites missing {rel}"
 
-
-# ---------------------------------------------------------------------------
-# Emission — determinism, the out-dir seam, and the refusals.
-# ---------------------------------------------------------------------------
 
 def test_emits_deterministic_bytes_into_the_out_dir_override(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv(op.OUT_DIR_ENV, str(tmp_path))
@@ -244,10 +228,6 @@ def test_refuses_to_emit_an_empty_set(tmp_path, monkeypatch, capsys):
     assert not (tmp_path / "withheld-knobs.json").exists()
     assert "refusing to emit an empty set" in capsys.readouterr().err
 
-
-# ---------------------------------------------------------------------------
-# The withheld knobs are actually withheld — the premise the artifact rests on.
-# ---------------------------------------------------------------------------
 
 def test_the_refusal_text_names_no_knob_the_registry_declares_withheld():
     """The artifact claims these knobs are not advertised on this path. Check the claim

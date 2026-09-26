@@ -66,11 +66,6 @@ EngineRootKind = Literal["published", "self-rooted", "none"]
 
 @dataclass(frozen=True)
 class InstallEngineRoot:
-    """The install's answer to "which engine root do I use?".
-
-    `root` is `None` iff `kind == "none"`; `remediation` is populated only
-    for `kind == "none"` and is `None` otherwise.
-    """
 
     kind: EngineRootKind
     root: Optional[Path]
@@ -89,12 +84,6 @@ _REMEDIATION = (
 
 
 def resolve_engine_root_for_install() -> InstallEngineRoot:
-    """Resolve the engine root the install must use for BOTH the warm
-    server and the door.
-
-    Composes exactly two existing resolvers (see module docstring). Never
-    raises.
-    """
     from coordinator_core.engine_root import published_engine_mirror_path
     from coordinator_core.warm.engine_root import current_engine_clone, is_engine_root
 

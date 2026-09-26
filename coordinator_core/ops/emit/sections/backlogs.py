@@ -34,27 +34,12 @@ from coordinator_core.ops.emit.context import EmitContext
 
 from ._shared import normalize_frontmatter
 
-# The three backlog families and their query-records.js --type tag, emitted in this order
-# (bash:605-609 concatenates bug, debt, improvement — order is load-bearing for the array).
 _BACKLOG_TYPES = ("bug", "debt", "improvement")
 
-# Valid severity enum for bug records (bash:578 P0..P3 select; B-F1 quarantine otherwise).
 _VALID_SEVERITY = frozenset({"P0", "P1", "P2", "P3"})
 
 
 def _query_records(ctx: EmitContext, type_tag: str) -> list[dict]:
-    """Call the native records-query seam for ``type_tag``; ``[]`` on any failure.
-
-    Parity: bash:553-555 ``node … 2>/dev/null || echo "[]"`` — a non-zero exit or unparseable
-    output degrades to an empty list, never aborts the emit. The native seam
-    (``ceremony.records_query.query_records``) raises ``ValueError``/``SystemExit`` on
-    unsupported input rather than returning a non-zero exit code, so those are the
-    fail-open triggers here instead of a subprocess returncode/JSON-decode check.
-
-    ``worktree_root`` mirrors the retired spawn's root resolution exactly: the same
-    ``ctx.subprocess_root or ctx.repo_root`` value the node call used for both its
-    ``--root`` flag and its subprocess ``cwd``.
-    """
     worktree_root = ctx.subprocess_root if ctx.subprocess_root is not None else ctx.repo_root
     try:
         parsed = _ceremony_query_records(type_tag, worktree_root, limit=0)
@@ -64,13 +49,10 @@ def _query_records(ctx: EmitContext, type_tag: str) -> list[dict]:
 
 
 def _has_required_fields(fm: dict) -> bool:
-    """True when id/created/status/title are all present as strings (bash:568-573 select)."""
     return all(isinstance(fm.get(k), str) for k in ("id", "created", "status", "title"))
 
 
 def _severity_valid(type_tag: str, fm: dict) -> bool:
-    """Severity gate (bash:575-579): non-bug always passes; bug passes when severity is
-    absent/null or a valid P0..P3 enum value."""
     if type_tag != "bug":
         return True
     severity = fm.get("severity")
@@ -78,7 +60,6 @@ def _severity_valid(type_tag: str, fm: dict) -> bool:
 
 
 def _build_record(ctx: EmitContext, type_tag: str, rec: dict) -> dict:
-    """Build one BacklogItemSummary (bash:580-600 jq object)."""
     fm = normalize_frontmatter(rec)
     path = rec.get("path")
     return {
@@ -98,10 +79,6 @@ def _build_record(ctx: EmitContext, type_tag: str, rec: dict) -> dict:
 
 
 def _build_malformed(type_tag: str, rec: dict) -> dict | None:
-    """Quarantine dict for one record, or None if the record is valid (bash:617-641).
-
-    Missing-field check wins over the severity check (elif), matching the bash order.
-    """
     fm = normalize_frontmatter(rec)
     path = rec.get("path")
     if not _has_required_fields(fm):
@@ -123,11 +100,6 @@ def _build_malformed(type_tag: str, rec: dict) -> dict | None:
 
 
 def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
-    """Collect BacklogItemSummary records + malformed quarantine across bug/debt/improvement.
-
-    Returns ``(records, malformed)`` with the three families concatenated in
-    bug → debt → improvement order (bash:609 / bash:648).
-    """
     records: list[dict[str, Any]] = []
     malformed: list[dict[str, Any]] = []
 

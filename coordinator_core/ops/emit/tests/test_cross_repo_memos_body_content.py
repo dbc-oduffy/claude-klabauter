@@ -1,16 +1,3 @@
-"""Regression tests — cross_repo_memos full `body` content emission (2026-07-24, C8).
-
-Plan: docs/plans/2026-07-24-cross-repo-memo-ownership-and-redesign.md § C8. C8 widens the
-C6 `decision_note`-only substance feed to the memo's FULL body content, so the fleet can
-content-search memo prose. ``records.query`` never returns body text (only
-``{path, frontmatter}``), so the section re-reads the source file directly
-(``_read_memo_body``) and bounds it (``_cap_body``) before emission — never unbounded, never
-silently dropped on an oversized body.
-
-These tests exercise the two new helpers directly, then ``_collect_bucket`` end-to-end
-against real on-disk memo files (unlike the query-failure-signal tests, which stub out
-``_collect_bucket``/``_query_records`` and never touch body content at all).
-"""
 
 from __future__ import annotations
 
@@ -53,11 +40,6 @@ def _write_memo(root: Path, rel_path: str, body_text: str, **frontmatter) -> Non
     full_path.write_text(content, encoding="utf-8")
 
 
-# ---------------------------------------------------------------------------
-# _cap_body — bounded, never dropped
-# ---------------------------------------------------------------------------
-
-
 def test_cap_body_passes_through_under_cap_unchanged():
     text = "Some memo body content."
     assert _cap_body(text) == text
@@ -78,11 +60,6 @@ def test_cap_body_none_on_blank_or_non_string():
     assert _cap_body("   ") is None
     assert _cap_body(None) is None
     assert _cap_body(123) is None
-
-
-# ---------------------------------------------------------------------------
-# _read_memo_body — re-reads the source file, strips frontmatter
-# ---------------------------------------------------------------------------
 
 
 def test_read_memo_body_strips_frontmatter_and_returns_body(tmp_path):
@@ -117,10 +94,6 @@ def test_read_memo_body_none_on_non_string_path(tmp_path):
     assert _read_memo_body(ctx, "") is None
 
 
-# UnicodeDecodeError (a ValueError subclass) was not caught
-# by the original `except OSError` guard, so a non-UTF-8 memo body crashed the whole
-# section's collect() rather than fail-opening to None. Regression test for the widened
-# `except (OSError, UnicodeDecodeError)` guard.
 def test_read_memo_body_none_on_non_utf8_file(tmp_path):
     rel_path = "cross-repo/inbox/2026-07-24-binary.md"
     full_path = tmp_path / rel_path
@@ -147,11 +120,6 @@ def test_read_memo_body_uses_subprocess_root_when_set(tmp_path):
 
     assert body is not None
     assert "Body under subprocess_root." in body
-
-
-# ---------------------------------------------------------------------------
-# _collect_bucket — end-to-end: body lands on the emitted record, bounded, never dropped
-# ---------------------------------------------------------------------------
 
 
 @patch("coordinator_core.ops.emit.sections.cross_repo_memos._query_records")
@@ -226,9 +194,6 @@ def test_collect_bucket_oversized_body_capped_not_dropped(mock_qr, tmp_path):
 
 @patch("coordinator_core.ops.emit.sections.cross_repo_memos._query_records")
 def test_collect_bucket_body_key_absent_when_source_file_unreadable(mock_qr, tmp_path):
-    """The `path` records.query returned no longer resolves to a readable file — the
-    record still emits (metadata fields intact); only `body` is absent (fail-open, not a
-    quarantine — distinct from the malformed-shape path)."""
     mock_qr.return_value = (
         [
             {

@@ -64,7 +64,7 @@ from coordinator_core.win_portability import no_console_creationflags
 import sys
 from typing import List, Optional
 
-_PROG = "find-polluter.sh"  # literal program-name prefix, matches the DoE filename
+_PROG = "find-polluter.sh"
 
 
 def _existence_detail(path: str) -> str:
@@ -82,8 +82,6 @@ def _existence_detail(path: str) -> str:
             capture_output=True,
             text=True,
             check=False,
-            # Windows portability convention applied
-            # inconsistently across this wave's siblings; align this call site.
             **no_console_creationflags(),
         )
         out = (result.stdout or "").rstrip("\n")
@@ -93,11 +91,6 @@ def _existence_detail(path: str) -> str:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    # Line-buffer stdout even when redirected to a file/pipe — without this,
-    # Python block-buffers stdout under non-tty redirection while stderr stays
-    # unbuffered, interleaving differently than the bash oracle's line-at-a-time
-    # `echo`. Content is identical either way; this keeps interleave order
-    # identical too (matters for `2>&1 | tee`-style consumers).
     try:
         sys.stdout.reconfigure(line_buffering=True)
     except (AttributeError, ValueError):
@@ -150,8 +143,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
-            # Windows portability convention applied
-            # inconsistently across this wave's siblings; align this call site.
             **no_console_creationflags(),
         )
 

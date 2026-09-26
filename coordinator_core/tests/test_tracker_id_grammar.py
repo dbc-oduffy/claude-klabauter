@@ -80,9 +80,7 @@ def test_uppercase_in_digest_does_not_match() -> None:
 
 
 def test_malformed_date_segment_does_not_match() -> None:
-    # 7 digits instead of 8 (YYYYMMD)
     assert not is_item_id("itm-2026081-fix-the-thing-a1b2c3-0123456789ab")
-    # non-digit character in the date
     assert not is_item_id("itm-2026081x-fix-the-thing-a1b2c3-0123456789ab")
 
 

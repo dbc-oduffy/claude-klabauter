@@ -1,55 +1,3 @@
-"""
-coordinator_core.write_guards.p4_checkout_before_edit — checkout-before-edit
-write guard (D5).
-
-Spec backlink: docs/plans/2026-09-12-perforce-second-class-commit-and-shelve.md
-§ C5, § D3, § D5, § D9.
-
-Marker check first, then a local stat, before any p4 spawn (D1: "detection is
-a declared marker, never a probe"). A writable target, a nonexistent target
-(a brand-new file has nothing to check out), or a git-only repo all allow
-with zero spawns. A read-only target in a marker repo runs
-``p4 -ztag fstat -T headType,otherOpen,otherLock`` (spawn 1), classifies the
-result, then either denies or runs ``p4 edit -c <CL>`` (spawn 2) to open the
-file into the session changelist — ≤2 p4 spawns total for this guard's own
-budget (D5). ``ensure_session_change``'s own mint spawn, when it fires, is
-C2's budget, not this row's.
-
-Deny conditions, in order:
-  1. The fstat spawn classifies to ``ticket_expired`` / ``refused(raw)``
-     (a runner timeout also folds into ``refused`` — see ``p4.runner``) —
-     deny with the one-line alternative, never allow-through (D5).
-  2. ``headType`` names a binary type — deny, naming no holder (binary is a
-     type property, not a lock).
-  3. ``headType`` carries ``+l`` (exclusive-open) AND ``otherOpen`` is
-     nonzero — deny, naming the holder off ``otherOpen0``.
-  4. ``otherLock`` is present — deny, naming the holder off ``otherLock0``.
-  5. The edit spawn itself classifies to ``ticket_expired`` / ``refused(raw)``
-     — deny with the one-line alternative, never allow-through (D5). The
-     checkout attempt already ran by this point; an operator unlock waives
-     the deny envelope this call returns, never the open attempt already
-     made (D5).
-
-Every deny points the agent back at its dispatching EM
-directly — no provider registry (D9). This does not contradict
-``p4.register_workspace``'s optional ``p4_checkout_tool``/``p4_submit_tool``
-slots (``p4/register.py``): a named tool SLOT, written once at registration
-time for an external cross-repo caller to read later, is not a runtime
-resolve-and-dispatch registry — nothing here or there resolves a tool from
-those slots at guard-deny time. Review: overengineering-reviewer F2.
-
-Deny, never ask, under bypassPermissions (D5). Covers Edit, Write, MultiEdit
-and NotebookEdit.
-
-Negative-spec:
-  - Never probes p4 for a writable target or a git-only repo — zero spawns.
-  - Never trusts a p4 exit code — classification is ``p4.runner.run``'s
-    contract, not this module's.
-  - Never allows through a classified ``ticket_expired`` / ``refused`` /
-    timeout outcome, from either the fstat or the edit spawn.
-  - Never runs an unscoped ``fstat``/``edit`` — every spawn here is scoped to
-    the one target path.
-"""
 
 from __future__ import annotations
 
@@ -67,12 +15,8 @@ from coordinator_core.write_guards._repo_root import resolve_repo_root
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
-PRIORITY = 41  # hard-deny band; next free slot after block_subagent_plan_body_write (40)
+PRIORITY = 41
 
-# Register B7: the earlier text ("Use the UE editor's checkout, or example-game-repo's
-# checkout tool, directly.") named tools outside this repo, so it read as a
-# remedy while naming nothing this caller can reach. The reachable move is to
-# stop and say so -- whoever can take the checkout is not this session.
 _ALTERNATIVE = "Use instead:\n  report to your EM: needs a checkout this session cannot take"
 
 
@@ -92,17 +36,12 @@ def _resolve_abs_path(file_path: str, repo_root: str) -> str:
 
 
 def _is_writable(abs_path: str) -> bool:
-    """A nonexistent target (a brand-new file) has nothing to check out and
-    is treated as writable — the same zero-spawn allow as an already-open
-    file."""
     if not os.path.exists(abs_path):
         return True
     return os.access(abs_path, os.W_OK)
 
 
 def _parse_ztag(stdout: str) -> Dict[str, str]:
-    """``p4 -ztag`` line shape: ``... <field> <value>`` (value omitted for a
-    bare flag field like a lock-held ``otherLock``)."""
     fields: Dict[str, str] = {}
     for line in (stdout or "").splitlines():
         if not line.startswith("... "):
@@ -116,9 +55,6 @@ def _parse_ztag(stdout: str) -> Dict[str, str]:
 
 
 def _lock_reason(fields: Dict[str, str]) -> Tuple[Optional[str], Optional[str]]:
-    """``(reason, holder)`` from parsed fstat fields, or ``(None, None)`` when
-    none of the three deny conditions (binary / +l&otherOpen / otherLock)
-    holds."""
     head_type = fields.get("headType", "")
     if "binary" in head_type:
         return "binary file", None
@@ -168,12 +104,6 @@ def _deny_plain(abs_path: str, detail: str) -> Dict[str, Any]:
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the checkout-before-edit guard against a PreToolUse payload.
-
-    Returns ``None`` (allow) or the nested hard-deny envelope. Fails open on
-    a missing file_path/repo_root — matching this family's convention that
-    an unresolvable write target or repo context is not this guard's call.
-    """
     tool_name = payload.get("tool_name") or ""
     if tool_name not in MATCHERS:
         return None
@@ -186,14 +116,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not repo_root:
         return None
 
-    # D1 marker check first — zero spawns either way.
     if not workspace.is_p4_repo(repo_root):
         return None
 
     abs_path = _resolve_abs_path(file_path, repo_root)
 
-    # Local stat before any p4 spawn — writable/nonexistent target allows
-    # with zero spawns.
     if _is_writable(abs_path):
         return None
 
@@ -209,9 +136,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         identity.client,
         ["-ztag", "fstat", "-T", "headType,otherOpen,otherLock", abs_path],
         cwd=repo_root,
-        # Explicit timeout stating
-        # this call site deliberately accepts the engine-wide default
-        # rather than inheriting it silently; value unchanged.
         timeout=runner.DEFAULT_TIMEOUT_S,
     )
     if fstat.error is not None:
@@ -234,8 +158,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         identity.client,
         ["edit", "-c", str(cl), abs_path],
         cwd=repo_root,
-        # Explicit timeout, same
-        # rationale as the fstat call above; value unchanged.
         timeout=runner.DEFAULT_TIMEOUT_S,
     )
     if edit.error is not None:

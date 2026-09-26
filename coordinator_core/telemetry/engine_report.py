@@ -67,12 +67,7 @@ def _percentile(sorted_vals: List[float], pct: float) -> Optional[float]:
     return sorted_vals[idx]
 
 
-# Note: `cost_census._percentile` is a verbatim sibling copy of this
-# function, not a call-through — `engine_report.py` imports
 # `MAX_ROWS_SCANNED` from `cost_census`, so `cost_census` delegating back
-# here would create an import cycle. Deliberate duplication; if you change
-# percentile logic in one copy, check the other.
-# (Review: coordinator:code-reviewer 388b423a — deferred, comment only.)
 
 
 def iter_sink_entries(
@@ -107,12 +102,7 @@ def iter_sink_entries(
         sink_paths = sink_generations(repo_root)
 
     rows_read = 0
-    # Hazard: max_rows is a global cap applied while reading OLDEST-first,
-    # so if it is ever hit mid-scan, the newest (live) generation could go
-    # entirely unread — a bounded reader should protect recency, not
     # truncate away from it. Unreachable today at MAX_ROWS_SCANNED =
-    # 2_000_000; revisit this ordering if that constant is ever tightened.
-    # (Review: coordinator:code-reviewer 388b423a — deferred, not re-ordered.)
     for path in reversed(list(sink_paths)):
         if rows_read >= max_rows:
             break
@@ -153,11 +143,6 @@ def _percentiles_for(vals: List[float]) -> dict:
 
 
 def latency_percentiles(entries: Iterable[dict]) -> dict:
-    """{"n", "p50_ms", "p90_ms", "p95_ms", "p99_ms", "max_ms"} across all
-    given entries, ignoring `op`. Only rows treated as "complete" (per
-    `op_latency`'s backward-reading rule: an absent `kind` is
-    `"complete"`, never `"started"`) with a numeric `elapsed_ms`
-    contribute."""
     vals: List[float] = []
     for entry in entries:
         if (entry.get("kind") or "complete") != "complete":
@@ -168,13 +153,6 @@ def latency_percentiles(entries: Iterable[dict]) -> dict:
     return _percentiles_for(vals)
 
 
-#: Coverage floor for `route_distribution`'s verdict, DR-328: today's live
-#: corpus carries `route` on 413/160,861 rows = 0.257% coverage. A
-#: `warm_share_of_routed` computed over that little coverage is a function
-#: of log age (how long ago the `route` field was added), not of routing
-#: itself, so the honest verdict below this floor is `"unknown"`, never
-#: `"ok"`. Set comfortably above today's measured ratio so it fires now,
-#: not only once the corpus has drifted further.
 _COVERAGE_FLOOR = 0.05
 
 
@@ -317,24 +295,10 @@ def warm_share_since(
     }
 
 
-#: The known `outcome` values a "complete" row carries (`op_latency.py`'s
-#: writer emits exactly one of these). Anything else is reported under
-#: `"other"` rather than silently dropped — an unrecognised outcome is a
-#: finding, not noise.
 _KNOWN_OUTCOMES = ("ok", "error", "timeout")
 
 
 def process_fanout(entries: Iterable[dict]) -> dict:
-    """{"ops": int, "distinct_pids": int, "ops_per_pid": float} overall,
-    plus the same shape per `op` under `"by_op"` — the direct measure of
-    "are we paying cold start per call" (the predecessor baton measured
-    5,984 distinct pids for 19,131 ops by hand).
-
-    Only rows treated as "complete" (an absent `kind` is `"complete"`, per
-    `op_latency`'s backward-reading rule) with a numeric-or-string `pid`
-    contribute. `ops_per_pid` is `0.0` when there are no distinct pids,
-    never a division error.
-    """
     pids: set = set()
     op_pids: Dict[str, set] = {}
     op_counts: Dict[str, int] = {}
@@ -397,19 +361,6 @@ def outcome_split(entries: Iterable[dict]) -> dict:
 
 
 def engine_telemetry_report(*, repo_root: Path, since: Optional[float] = None) -> dict:
-    """One aggregator returning every section this module offers over the
-    real sink at `repo_root`, plus `op_latency.pairing_summary`'s output —
-    so the baton's "reachable from the same surface rather than beside it"
-    requirement is met by composition (one parse of `iter_sink_entries`,
-    a separate `pairing_summary` call), not by a second bespoke parse.
-    Note: `pairing_summary`'s single-file `sink_path=` contract does NOT
-    apply here — called with `repo_root=` only, it resolves via
-    `sink_generations` and spans every rotated generation, same as
-    `iter_sink_entries` above, not just the live sink.
-    (Review: coordinator:code-reviewer 388b423a — docstring described
-    pre-C3 pairing_summary behavior; corrected to match the post-C3
-    rotation-spanning call actually made here.)
-    """
     entries = list(iter_sink_entries(repo_root=repo_root, since=since))
     return {
         "latency": latency_percentiles(entries),

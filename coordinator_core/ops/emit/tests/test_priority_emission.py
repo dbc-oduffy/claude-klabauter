@@ -25,8 +25,6 @@ from unittest.mock import patch
 from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.emit.sections import handoffs as handoffs_section
 
-# _write_node extracted to conftest.py
-# (shared across the five priority-ledger test modules that used a byte-for-byte copy).
 from coordinator_core.ops.emit.tests.conftest import _write_node  # noqa: F401
 
 
@@ -78,44 +76,16 @@ def _collect(
     return handoffs_section.collect(ctx)
 
 
-# ---------------------------------------------------------------------------
 # CONTRACT_VERSION — PART 3.
-# ---------------------------------------------------------------------------
 
 
 def test_contract_version_carries_the_priority_ledger_bump() -> None:
-    """The priority-ledger fields ship at or above 3.4.0 — they were never a major's payload.
-
-    Pinned as a floor rather than an equality: an equality assertion on the exact
-    minor was pinned to 3.4.0 and broke the moment a later review finding narrowed
-    pm_priority's type — a shape change that legitimately earned its own bump. That
-    churn is the test being wrong about what it was protecting, not the bump being
-    wrong.
-
-    The floor used to carry a second clause, `major == 3`, justified as "a major bump
-    breaks cockpit's ingest either direction". That clause was a PROXY, and DR-407
-    retired the premise under it: cockpit-contract 4.0.0 drops `file_attribution`
-    deliberately, and cockpit's `checkSchemaVersion()` hard-throwing on the major IS
-    the intended signal to re-vendor, with cockpit's own ratified assent on record
-    (they ratified the DROP 2026-08-22, superseding DR-021). Keeping `major == 3`
-    would have frozen the contract at major 3 forever to protect a fact about the
-    priority-ledger fields that a whole-version floor already states exactly.
-
-    What this test protects is unchanged and is the only thing it ever protected: the
-    priority-ledger fields are not retro-classified below 3.4.0. It says nothing about
-    whether a later major is permitted — that is DR-407's question, not this test's.
-    """
     from coordinator_core.contract.cockpit_schema.emit_schema import CONTRACT_VERSION
 
     version = tuple(int(part) for part in CONTRACT_VERSION.split("."))
     assert version >= (3, 4, 0), (
         f"priority-ledger fields require contract >= 3.4.0, got {CONTRACT_VERSION}"
     )
-
-
-# ---------------------------------------------------------------------------
-# Field presence — every record carries all four fields, defaulting to null.
-# ---------------------------------------------------------------------------
 
 
 @patch("coordinator_core.ops.emit.sections.handoffs.load_priority_ledger")
@@ -140,11 +110,6 @@ def test_fields_present_and_null_with_no_ledger_no_ancestry(mock_qr, mock_ll, tm
     assert r["suggested_priority"] is None
 
 
-# ---------------------------------------------------------------------------
-# Explicit ledger entry on the record itself.
-# ---------------------------------------------------------------------------
-
-
 @patch("coordinator_core.ops.emit.sections.handoffs.load_priority_ledger")
 @patch("coordinator_core.ops.emit.sections.handoffs._query_records")
 def test_explicit_entry_resolves_and_source_id_is_null(mock_qr, mock_ll, tmp_path: Path) -> None:
@@ -162,18 +127,7 @@ def test_explicit_entry_resolves_and_source_id_is_null(mock_qr, mock_ll, tmp_pat
     r = records[0]
     assert r["pm_priority"] == "urgent"
     assert r["pm_priority_origin"] == "explicit"
-    # source_id is null for "explicit" — it is populated ONLY when origin is
-    # "inherited" (the source IS this record itself in the explicit case, so
-    # a self-pointer would be redundant, not informative).
     assert r["pm_priority_source_id"] is None
-
-
-# ---------------------------------------------------------------------------
-# Inherited from nearest explicit ancestor — the worked example, at the
-# section-integration level (unit-level coverage lives in
-# test_priority_resolve.py; this confirms the SAME resolver is actually
-# wired into collect(), not a second implementation).
-# ---------------------------------------------------------------------------
 
 
 @patch("coordinator_core.ops.emit.sections.handoffs.load_priority_ledger")
@@ -204,12 +158,6 @@ def test_inherited_from_ancestor_source_id_is_ancestor_handoff_id(mock_qr, mock_
     assert b["pm_priority_source_id"] == "hnd-a-aaaaaa"
 
 
-# ---------------------------------------------------------------------------
-# suggested_priority passthrough — independent field, but also feeds the
-# resolver's own step-3 fallback when nothing explicit/inherited is found.
-# ---------------------------------------------------------------------------
-
-
 @patch("coordinator_core.ops.emit.sections.handoffs.load_priority_ledger")
 @patch("coordinator_core.ops.emit.sections.handoffs._query_records")
 def test_suggested_priority_passthrough_and_resolver_fallback(mock_qr, mock_ll, tmp_path: Path) -> None:
@@ -237,11 +185,7 @@ def test_suggested_priority_passthrough_and_resolver_fallback(mock_qr, mock_ll, 
     assert r["pm_priority_source_id"] is None
 
 
-# ---------------------------------------------------------------------------
-# Dangling ledger target — an entry whose target_id matches no emitted
 # handoff is REPORTED via the malformed bucket, never silently carried and
-# never turned into a record (PART 2, dangling-target contract).
-# ---------------------------------------------------------------------------
 
 
 @patch("coordinator_core.ops.emit.sections.handoffs.load_priority_ledger")
@@ -260,7 +204,7 @@ def test_dangling_handoff_target_reported_in_malformed(mock_qr, mock_ll, tmp_pat
         },
     )
 
-    assert len(records) == 1  # the dangling entry never becomes a record
+    assert len(records) == 1
     dangling_reasons = [m["reason"] for m in malformed if "hnd-ghost-999999" in m.get("reason", "")]
     assert len(dangling_reasons) == 1
     assert "dangling" in dangling_reasons[0]

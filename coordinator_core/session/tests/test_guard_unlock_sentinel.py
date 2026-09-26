@@ -1,19 +1,3 @@
-"""Tests for coordinator_core.session.guard_unlock_sentinel — the
-per-(session_id, guard_name) one-shot in-session operator unlock resolver.
-
-Covers AC8's resolver-level slice: one-shot semantics, path-traversal-shaped
-inputs sanitizing safely (never letting a separator through and never
-escaping the temp directory), and that `consume()` never raises on any
-failure mode. The engine-seam (write leg) and dispatcher-seam (bash leg)
-coverage lives in `write_guards/tests/` and `bash_guards/tests/` respectively
-— this file is resolver-only, does not import either engine.
-
-Isolation discipline: `tempfile.gettempdir` is monkeypatched to `tmp_path`
-for every test in this module (autouse fixture) so a failed test can never
-leave a live unlock sentinel in the real platform temp dir.
-
-Spec backlink: pln-in-session-operator-unlock-for-aa6cf9 § C1/C6.
-"""
 
 from __future__ import annotations
 
@@ -26,9 +10,6 @@ from coordinator_core.session import guard_unlock_sentinel as gus
 
 @pytest.fixture(autouse=True)
 def _isolated_tempdir(tmp_path, monkeypatch):
-    """Redirect every `sentinel_path()`/`consume()` call in this module to
-    `tmp_path` instead of the real platform temp dir — a stray sentinel is
-    real (if small) security residue on a developer machine."""
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
     yield
 
@@ -54,17 +35,9 @@ class TestSentinelPathShape:
         assert gus.sentinel_path(SID, GUARD) == gus.sentinel_path(SID, GUARD)
 
     def test_underscore_run_in_a_component_does_not_collide_across_the_join(self):
-        """Regression for the `__`-join collision: a literal `_` survives
-        `_sanitize_component` unmodified, so an underscore-based join was
-        not a true delimiter — `("a", "b__c")` and `("a__b", "c")` both
-        rendered to the same filename. `sentinel_path` now joins on `.`,
-        which sanitization always strips from raw components, so distinct
-        pairs can never collapse regardless of embedded underscores."""
         assert gus.sentinel_path("a", "b__c") != gus.sentinel_path("a__b", "c")
 
     def test_dot_in_a_component_does_not_collide_across_the_join(self):
-        """A literal `.` in either raw component is sanitized away before
-        the join, so it can never masquerade as the join separator."""
         assert gus.sentinel_path("a", "b.c") != gus.sentinel_path("a.b", "c")
 
 
@@ -132,17 +105,6 @@ class TestConsumeOneShotSemantics:
 
 
 class TestAnnotateDenyDoesNotNameACodename:
-    """AC6/register: the rendered deny text names no private-repo codename —
-    the DoE-source pointer branch is gone (§ EM ruling, branch B) and the
-    settings-root pointer is unconditional and codename-free.
-
-    UPDATED 2026-08-13 (C4d, docs/plans/2026-08-13-guard-messages-stop-
-    handing-agents-the-keys.md AC-2, item 9 in `annotate_deny`'s
-    docstring): `annotate_deny` no longer appends anything at all -- B8
-    (`message_register._rules`, leg (d)) fires on ANY doc/wiki pointer into
-    the override-key/unlock surface, so even the bare pointer sentence this
-    class used to assert PRESENT is gone. These tests now assert the
-    envelope is returned byte-identical instead."""
 
     def _fire(self, **kwargs):
         out = {"hookSpecificOutput": {"permissionDecisionReason": "denied: reason"}}
@@ -159,9 +121,6 @@ class TestAnnotateDenyDoesNotNameACodename:
         assert "example-doctrine-repo" not in reason
 
     def test_doe_checkout_present_no_longer_changes_the_pointer(self, tmp_path, monkeypatch):
-        """The DoE-checkout-present branch is gone: presence of a DoE
-        checkout on disk must not change the rendered text (now unchanged
-        either way, per item 9)."""
         import coordinator_core.doe_root_pointer as doe_root_pointer_mod
 
         doe_root = tmp_path / "doe-claude"
@@ -176,25 +135,11 @@ class TestAnnotateDenyDoesNotNameACodename:
         reason_without_checkout = out_without_checkout["hookSpecificOutput"]["permissionDecisionReason"]
 
         assert reason_with_checkout == reason_without_checkout
-        # 2026-09-03 (item 11): the rendered tail is now the guard NAME, so the
-        # byte-literal pin moved off "denied: reason". The invariant this test
-        # exists for is unchanged and asserted above: DoE-checkout presence must
-        # not change the text. Codename absence is re-asserted here directly.
         assert "DoE-claude" not in reason_with_checkout
         assert reason_with_checkout.startswith("denied: reason")
 
 
 class TestAnnotateDenyDoesNotInlineTheUnlockRecipe:
-    """AC-3/Task 1 revert (2026-08-13, C3): the 2026-08-12 regression
-    re-inlined the sentinel filename shape, drop location, and per-firing
-    session id/guard name into the rendered text. This class asserts the
-    reverted (pre-regression) shape: none of the recipe pieces render.
-
-    UPDATED 2026-08-13 (C4d, item 9): `test_doc_display_and_wiki_pointer_
-    are_rendered` used to assert those pointers PRESENT -- B8 (leg (d))
-    fires on that pointer sentence itself, so `annotate_deny` no longer
-    renders anything at all; that test now asserts the envelope is
-    returned byte-identical instead."""
 
     def _reason(self, **kwargs):
         out = {"hookSpecificOutput": {"permissionDecisionReason": "denied: reason"}}
@@ -222,18 +167,12 @@ class TestAnnotateDenyDoesNotInlineTheUnlockRecipe:
         assert GUARD in self._reason()
 
     def test_name_alone_does_not_assemble_the_recipe(self):
-        """The load-bearing invariant behind item 11: rendering the name is
-        safe only while the OTHER pieces stay absent. If a future edit
-        reintroduces `session_id` or the filename shape next to the name, the
-        recipe item 7 removed is back and this test is the tripwire."""
         reason = self._reason()
         assert GUARD in reason
         assert SID not in reason
         assert gus._SENTINEL_PREFIX not in reason
 
     def test_guard_reason_is_preserved_verbatim_as_the_prefix(self):
-        """The guard's own reason must still be the FIRST thing read (item 3's
-        ordering rule: reason first, annotation second)."""
         assert self._reason().startswith("denied: reason")
 
     def test_assembled_sentinel_path_literal_is_not_rendered(self, tmp_path, monkeypatch):
@@ -275,15 +214,6 @@ class TestAnnotateDenyAgentIdSuppression:
         assert reason == self._reason(agent_id="")
 
     def test_absent_agent_id_resolved_em_still_renders_nothing(self):
-        """Inverted 2026-08-13 (C4d, docs/plans/2026-08-13-guard-messages-
-        stop-handing-agents-the-keys.md AC-2, item 9 in annotate_deny's
-        docstring): a well-formed envelope (session_id present, agent_id
-        absent) resolves as a positively-resolved EM audience under
-        `resolves_em_audience` -- this used to be the condition that made
-        the block EMIT. `annotate_deny` no longer has any render step left
-        to gate (B8's leg (d) fires on even the bare doc/wiki pointer this
-        block used to carry), so a resolved EM audience now gets the reason
-        back byte-identical too, same as every other case."""
         reason = self._reason(agent_id="")
         assert reason.startswith("denied: reason")
         assert "human-only affordance" not in reason
@@ -303,10 +233,6 @@ class TestAnnotateDenyAgentIdSuppression:
         assert reason == self._reason(agent_id="")
 
     def test_exception_during_resolution_degrades_to_terse(self, monkeypatch):
-        """AC-3 inversion: the `except Exception: pass` branch used to fall
-        through to emit (old fail direction, item 5's docstring names this
-        exact branch). It now degrades: any exception during identity
-        resolution returns `out` unchanged."""
         import coordinator_core.session.identity as identity_mod
 
         def _raise(agent_id, session_id):

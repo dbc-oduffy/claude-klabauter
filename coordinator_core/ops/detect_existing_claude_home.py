@@ -77,9 +77,6 @@ import os
 import sys
 from typing import List, Optional, Tuple
 
-# ---------------------------------------------------------------------------
-# Target resolution
-# ---------------------------------------------------------------------------
 
 _CC_MANAGED_BAK_PATTERNS = ("*.bak", "*.bak-*")
 _CC_MANAGED_LITERAL_FILES = {
@@ -91,14 +88,8 @@ _CC_MANAGED_LITERAL_FILES = {
 }
 _CC_MANAGED_LITERAL_DIRS = {"repos", "marketplaces", "cache", "data"}
 
-# C3 markers (top-level, most-structural-first order preserved from the bash
-# oracle's `for _c3_marker in state machine-local coordinator.local.md
-# plugins/coordinator-claude` loop).
 _C3_MARKERS = ("state", "machine-local", "coordinator.local.md", "plugins/coordinator-claude")
 
-# U2 artifacts (order preserved from the bash oracle's `for _u2_artifact in
-# projects sessions todos shell-snapshots ide file-history statsig
-# history.jsonl settings.json` loop).
 _U2_ARTIFACTS = (
     "projects",
     "sessions",
@@ -130,25 +121,11 @@ def resolve_target(arg: Optional[str] = None, env: Optional[dict] = None) -> str
     return os.path.join(home, ".claude")
 
 
-# ---------------------------------------------------------------------------
-# Helper predicates (shared by the configured / used-vanilla tiers)
-# ---------------------------------------------------------------------------
-
-
 def _is_cc_managed_entry(name: str) -> bool:
-    """Claude-Code-managed basenames present on a fresh, zero-history install.
-
-    A vanilla Claude home is NOT empty: modern Claude Code bootstraps plugins/
-    with its own scaffolding on first run, BEFORE the user installs anything
-    (installed_plugins.json, known_marketplaces.json, blocklist.json,
-    plugin-catalog-cache.json, config.json, and the cache/ marketplaces/ repos/
-    data/ dirs). None of these are user-installed plugins, so they must NOT lift
-    a home to the "configured" tier.
-    """
-    if name.startswith("."):  # dotfiles: .refresh-log, .last_inuse_sweep, …
+    if name.startswith("."):
         return True
     if any(fnmatch.fnmatchcase(name, pat) for pat in _CC_MANAGED_BAK_PATTERNS):
-        return True  # backup copies (installed_plugins.json.bak-*)
+        return True
     if name in _CC_MANAGED_LITERAL_FILES:
         return True
     if name in _CC_MANAGED_LITERAL_DIRS:
@@ -174,17 +151,13 @@ def _installed_plugins_json_nonempty(target: str) -> bool:
         return False
     stripped = "".join(raw.split())
     if '"plugins":{}' in stripped:
-        return False  # explicit empty map → no installed plugins
+        return False
     if '"plugins":{' in stripped:
-        return True  # plugins object carries at least one entry
-    return False  # no plugins key at all (malformed/foreign file)
+        return True
+    return False
 
 
 def _has_installed_plugin(target: str) -> bool:
-    """A genuine user-installed plugin under plugins/, distinguished from CC's own
-    scaffolding via the deny-list above. Catches non-standard layouts (e.g. a
-    live-install checkout that drops plugin dirs directly under plugins/).
-    """
     plugins_dir = os.path.join(target, "plugins")
     try:
         entries = os.listdir(plugins_dir)
@@ -201,7 +174,7 @@ def _has_installed_plugin(target: str) -> bool:
             if os.path.isfile(entry):
                 return True
             if os.path.isdir(entry):
-                if os.listdir(entry):  # `ls -A`-equivalent nonempty check
+                if os.listdir(entry):
                     return True
         except OSError:
             print(f"skip: _has_installed_plugin: if os.path.isfile(entry): failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -210,9 +183,6 @@ def _has_installed_plugin(target: str) -> bool:
 
 
 def _plugins_dir_nonempty(target: str) -> bool:
-    """Is plugins/ present with anything at all inside (even if only CC scaffolding)?
-    Evidence that Claude Code has run here — a used-vanilla signal, not configured.
-    """
     plugins_dir = os.path.join(target, "plugins")
     try:
         return bool(os.listdir(plugins_dir))
@@ -221,11 +191,6 @@ def _plugins_dir_nonempty(target: str) -> bool:
     except OSError:
         print(f"skip: _plugins_dir_nonempty: return bool(os.listdir(plugins_dir)) failed: {sys.exc_info()[1]}", file=sys.stderr)
         return False
-
-
-# ---------------------------------------------------------------------------
-# Classification
-# ---------------------------------------------------------------------------
 
 
 def classify(target: str) -> Tuple[str, str, str]:
@@ -239,14 +204,9 @@ def classify(target: str) -> Tuple[str, str, str]:
     messaging only. Idempotency guards (never clobber CLAUDE.md, settings.json,
     registry files) MUST hold in every tier, including used-vanilla.
     """
-    # C1: git-tracked — deliberate version control of ~/.claude. Covers both
-    # the .git dir (repo root) and .git file (worktree/submodule). TARGET
-    # itself, not an ancestor, so a ~/.claude under a git-tracked $HOME is not
-    # a false hit.
     if os.path.exists(os.path.join(target, ".git")):
         return ("configured", "B", f"{target} is git-tracked (deliberate version control)")
 
-    # C2: a real installed plugin (CC's own record, or a non-scaffolding entry).
     if _installed_plugins_json_nonempty(target):
         return (
             "configured",
@@ -260,9 +220,6 @@ def classify(target: str) -> Tuple[str, str, str]:
             f"{target}/plugins/ contains a non-Claude-Code-managed plugin entry",
         )
 
-    # C3: coordinator / opinionated infrastructure — the "a setup like ours"
-    # fingerprint. Claude Code never creates any of these; their presence means
-    # a human (or the coordinator installer) deliberately structured this home.
     for marker in _C3_MARKERS:
         if os.path.exists(os.path.join(target, marker)):
             return (
@@ -271,19 +228,8 @@ def classify(target: str) -> Tuple[str, str, str]:
                 f"{target}/{marker} present (coordinator/opinionated infrastructure)",
             )
 
-    # ===========================================================================
     # Tier 2 — USED-VANILLA (Track A): Claude Code has run here, but nothing
-    # opinionated was set up. Install proceeds from effectively zero; the
-    # message acknowledges prior casual use without a clobber warning.
-    # ===========================================================================
 
-    # U1: a CLAUDE.md of any size. Casual hand-edits live in this tier by
-    # design — a hand-tuned CLAUDE.md alone does NOT make a home "configured"
-    # (per the taxonomy: "not git-tracked, only has changes in CLAUDE.md and
-    # past sessions"). Edge case (intentional): a CLAUDE.md carrying the
-    # coordinator `@import` line but with NO git/plugins/infra still
-    # classifies used-vanilla — the import alone is not opinionated
-    # *structure*. Reaching configured requires a C-tier signal.
     if os.path.isfile(os.path.join(target, "CLAUDE.md")):
         return (
             "used-vanilla",
@@ -291,7 +237,6 @@ def classify(target: str) -> Tuple[str, str, str]:
             f"{target}/CLAUDE.md present (hand-edited config, no structural setup)",
         )
 
-    # U2: session / runtime artifacts a prior Claude Code run leaves behind.
     for artifact in _U2_ARTIFACTS:
         if os.path.exists(os.path.join(target, artifact)):
             return (
@@ -300,8 +245,6 @@ def classify(target: str) -> Tuple[str, str, str]:
                 f"{target}/{artifact} present (Claude Code has run here)",
             )
 
-    # U3: CC plugin scaffolding present but holding no real plugin (the
-    # fresh-run case that previously false-positived into Track B).
     if _plugins_dir_nonempty(target):
         return (
             "used-vanilla",
@@ -309,24 +252,15 @@ def classify(target: str) -> Tuple[str, str, str]:
             f"{target}/plugins/ holds Claude-Code-managed scaffolding only",
         )
 
-    # ===========================================================================
     # Tier 3 — PRISTINE (Track A): no Claude Code artifacts at all. Never used.
-    # ===========================================================================
     return ("pristine", "A", f"{target} has no Claude Code artifacts — never used")
 
 
 def emit(state: str, track: str, reason: str) -> str:
-    """Format the classification result line (matches the bash oracle's `emit()`)."""
     return f"state={state} track={track} reason: {reason}"
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: resolve target, classify, print, always return 0.
-
-    Exit codes:
-      0 — always (classification result is in stdout, not exit code) — matches
-          the bash oracle's documented contract exactly.
-    """
     arg = argv[0] if argv else None
     target = resolve_target(arg)
     state, track, reason = classify(target)

@@ -123,7 +123,6 @@ deployment_state, so a non-terminal fixture measures a refusal, not the move.
 """
 
 ARGV = {
-    # A bare subcommand, not `[]` — see the floor note in the module docstring.
     "floor": ["chain-archive-handoff"],
     "supersede": [
         "supersede-archive-handoff",
@@ -139,19 +138,6 @@ ARGV = {
 
 
 def build_fixture(root: Path) -> None:
-    """Materialises the minimum corpus the op accepts.
-
-    All four of `branch`, `predecessor`, `category`, `summary` are required —
-    frontmatter validation refuses before the op is ever reached without them —
-    and the predecessor needs `claimed_by`, or DR-242's claimed-or-shipped gate
-    refuses first.
-
-    Fixture setup only -- the op measured by `sample()` below is the
-    `archive-stamp-cli` subprocess, timed separately via
-    `single_invocation_tree_process_time` -- see
-    `coordinator_core.benchmarks`'s module docstring, "Measured-window
-    discipline".
-    """
     hd = root / "state" / "handoffs"
     hd.mkdir(parents=True)
     (hd / "2026-08-27-probe-pred.md").write_text(_PRED, encoding="utf-8", newline="\n")
@@ -170,8 +156,6 @@ def sample(mode: str, out_dir: Path, idx: int) -> dict:
     root.mkdir()
     try:
         build_fixture(root)
-        # `cwd` IS the repo-root isolation — `archive_stamp._resolve_repo_root_for`
-        # resolves off it. No env var participates; do not add one back.
         res = single_invocation_tree_process_time(
             [sys.executable, str(CLI), *ARGV[mode]],
             env=dict(os.environ),
@@ -184,10 +168,6 @@ def sample(mode: str, out_dir: Path, idx: int) -> dict:
         )
         return res
     finally:
-        # A leak here is a live orphaned scratch repo on a box whose load norm
-        # is 50-70 concurrent sessions, and `ignore_errors=True` reported it as a
-        # clean teardown. Raising from `finally` chains rather than discards: an
-        # in-flight body exception is still shown as the __context__.
         rmtree_or_raise(tmp, label=f"handoff-baseline-{mode}-{idx}")
 
 
@@ -239,14 +219,10 @@ def main(argv: list[str]) -> int:
     report = measure(n, out_dir)
     problems = check(report)
     if problems:
-        # Per-sample stdout/stderr is the only evidence of WHY a sample failed,
-        # so it survives exactly the run that needs it.
         print(f"BASELINE REFUSED — per-sample stdio kept at {out_dir}", file=sys.stderr)
         for line in problems:
             print(f"  {line}", file=sys.stderr)
         return 1
-    # Success path only -- the refusal branch above returns before here,
-    # deliberately keeping per-sample stdio for the run that needed it.
     rmtree_or_raise(out_dir, label="handoff-baseline-out")
     print(json.dumps(report, indent=2))
     for mode, row in report.items():

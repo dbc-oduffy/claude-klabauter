@@ -32,7 +32,6 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent.parent)
 
 # Portable Windows console-suppression flag — resolves to CREATE_NO_WINDOW
-# (0x08000000) on Windows and 0 (no-op) on macOS/Linux.
 _NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
@@ -59,8 +58,6 @@ def _invoke(*args: str) -> subprocess.CompletedProcess:
 
 
 def test_repo_flag_refused_on_none_scoped_op():
-    """--repo on ping (scope="none") exits non-zero with a message naming the
-    op's scope and why the flag is meaningless for it — never a silent no-op."""
     result = _invoke("ping", "{}", "--repo", _PROJECT_ROOT)
 
     assert result.returncode != 0, (
@@ -81,9 +78,6 @@ def test_repo_flag_refused_on_none_scoped_op():
 
 
 def test_repo_flag_refused_on_another_none_scoped_op():
-    """The refusal is not ping-specific — a second 'none'-scoped op (cartography.tree)
-    is refused identically, proving the check keys off the registry scope table, not
-    a hardcoded op name."""
     result = _invoke("cartography.tree", "{}", "--repo", _PROJECT_ROOT)
 
     assert result.returncode != 0, (
@@ -125,8 +119,6 @@ def test_repo_flag_not_refused_on_worktree_scoped_op():
 
 
 def test_no_repo_flag_still_works_on_none_scoped_op():
-    """Omitting --repo entirely on a 'none'-scoped op is unaffected — the refusal
-    fires only when --repo is actually passed."""
     result = _invoke("ping", "{}")
 
     assert result.returncode == 0, (

@@ -84,9 +84,6 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _FM_LINE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)")
 _FM_BLOCK_RE = re.compile(r"^---\r?\n(.*?)\r?\n---", re.DOTALL)
 
-# subprocess.run timeout for the `git rev-parse` root probe (rule 2, porter
-# brief addendum): a single hung/prompting git invocation must never block
-# the /workday-start ceremony that surfaces this output.
 _GIT_TIMEOUT_SECS = 5
 
 
@@ -111,9 +108,6 @@ def _resolve_inbox_dir(cwd: Optional[str] = None) -> str:
 
 
 def _parse_frontmatter(text: str) -> dict:
-    """Flat key: value frontmatter extraction -- mirrors the oracle's inline
-    Python regex block exactly (no yaml.safe_load dependency).
-    """
     m = _FM_BLOCK_RE.match(text)
     if not m:
         return {}
@@ -130,11 +124,6 @@ def _parse_frontmatter(text: str) -> dict:
 
 
 def _qualify_memo(path: str) -> Optional[str]:
-    """Parse one memo file and return its "<band_rank>|<created>|<sender>|
-    <title>|<kind>" line, or None if it does not qualify. Mirrors the
-    oracle's embedded per-file Python subprocess block, minus the
-    subprocess hop (in-process here).
-    """
     try:
         with open(path, encoding="utf-8") as fh:
             content = fh.read()
@@ -173,10 +162,6 @@ def _qualify_memo(path: str) -> Optional[str]:
 
 
 def _age_days(created: str, today: date) -> int:
-    """Compute age in days from an ISO date string; 0 on any parse issue --
-    mirrors the oracle's positional-arg Python subprocess (arg-passed, not
-    shell-interpolated, per its own F15 note) collapsed in-process here.
-    """
     if not _DATE_RE.match(created):
         return 0
     try:
@@ -249,8 +234,6 @@ def main(argv: List[str]) -> int:
     if not memo_lines:
         return 0
 
-    # Full-string lexicographic sort over the pipe-joined line, byte-parity
-    # with the oracle's `sort` invocation (see module negative-spec).
     sorted_lines = sorted(memo_lines)
 
     output_lines: List[str] = []
@@ -268,13 +251,7 @@ def main(argv: List[str]) -> int:
         remaining = total - _MAX_ENTRIES
         print(f"({remaining} more — see {inbox_dir} for full list)")
 
-    # One footer line naming the close command, printed once regardless of
-    # how many memos qualified — NOT one command per memo (that would be up
     # to _MAX_ENTRIES-plus-remainder lines of noise on a boot-hot-path
-    # surface). Mirrors the outbox surfacer's "→ <verbs>" action-line
-    # convention (workday_start_cross_repo_memo_outbox_surface.py) but named
-    # once at the bottom rather than per-entry, since closing is a single
-    # command applied per memo path, not a set of bare verbs.
     print("  → close one: archive-stamp-cli resolve-memo <memo_path> [disposition-flags]")
 
     return 0

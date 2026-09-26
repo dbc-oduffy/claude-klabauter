@@ -59,10 +59,6 @@ def _commit(repo: Path, files: dict[str, str], message: str = "c") -> str:
     return _git("rev-parse", "HEAD", cwd=repo).stdout.strip()
 
 
-# ---------------------------------------------------------------------------
-# Falsifier (AC7 first sentence) -- written before the module.
-# ---------------------------------------------------------------------------
-
 def test_instance_3_partial_realization(tmp_path):
     repo = _init_repo(tmp_path / "repo")
     _commit(repo, {"README.md": "base"}, "base")
@@ -87,10 +83,6 @@ def test_instance_3_partial_realization(tmp_path):
     assert result["verdict"] == "ok"
     assert result["untouched_declared"] == ["coordinator/bin/session-claim-cli"]
 
-
-# ---------------------------------------------------------------------------
-# AC1: declared-surface extraction + normalization
-# ---------------------------------------------------------------------------
 
 class TestDeclaredSurface:
     def test_scoped_to_artifact_scalar(self):
@@ -135,10 +127,6 @@ class TestDeclaredSurface:
         ]
 
 
-# ---------------------------------------------------------------------------
-# AC2: None for absent/non-SHA realized_by; zero spawns.
-# ---------------------------------------------------------------------------
-
 class TestNoneCases:
     def test_absent_realized_by(self, tmp_path):
         with patch("subprocess.run") as mock_run:
@@ -153,7 +141,6 @@ class TestNoneCases:
             mock_run.assert_not_called()
 
     def test_scientific_notation_shaped_realized_by(self, tmp_path):
-        # 7.17e385-shaped: hex-looking but contains '.', fails the hex-only regex.
         with patch("subprocess.run") as mock_run:
             assert surface_advisory(
                 {"surface": "a.py", "realized_by": "7.17e385"}, tmp_path
@@ -175,10 +162,6 @@ class TestNoneCases:
         assert result["sha"] == sha.lower()
 
 
-# ---------------------------------------------------------------------------
-# AC2: no-declared-surface -- zero spawns even with a SHA-shaped realized_by.
-# ---------------------------------------------------------------------------
-
 def test_no_declared_surface_zero_spawns(tmp_path):
     repo = _init_repo(tmp_path / "repo")
     sha = _commit(repo, {"a.py": "x"}, "c")
@@ -192,10 +175,6 @@ def test_no_declared_surface_zero_spawns(tmp_path):
     }
     mock_run.assert_not_called()
 
-
-# ---------------------------------------------------------------------------
-# AC3: exactly one spawn when declared is non-empty and SHA-shaped.
-# ---------------------------------------------------------------------------
 
 def test_one_spawn_for_ok_verdict(tmp_path):
     repo = _init_repo(tmp_path / "repo")
@@ -219,10 +198,6 @@ def test_one_spawn_for_ok_verdict(tmp_path):
     assert "--format=" in argv
     assert argv[-1] == f"{sha}^{{commit}}"
 
-
-# ---------------------------------------------------------------------------
-# AC3 fixtures: merge, root, empty-commit, ambiguous-prefix, tree/blob-object.
-# ---------------------------------------------------------------------------
 
 class TestGitFixtures:
     def test_root_commit_full_tree(self, tmp_path):
@@ -309,10 +284,6 @@ class TestGitFixtures:
         assert result["reason"] == "advisory-failed"
 
 
-# ---------------------------------------------------------------------------
-# AC2: all six verdicts + adjacent-pair precedence.
-# ---------------------------------------------------------------------------
-
 class TestVerdictPrecedence:
     def test_no_declared_surface_over_unresolved_sha(self, tmp_path):
         repo = _init_repo(tmp_path / "repo")
@@ -366,20 +337,14 @@ class TestVerdictPrecedence:
         assert result["verdict"] == "out-of-surface"
 
 
-# ---------------------------------------------------------------------------
-# AC3: coverage import is function-local, not module-level.
-# ---------------------------------------------------------------------------
-
 def test_coverage_import_is_function_local(tmp_path):
     sys.modules.pop("coordinator_core.coverage", None)
     repo = _init_repo(tmp_path / "repo")
     sha = _commit(repo, {"real_file.py": "x"}, "base")
-    # `ok` branch never touches coverage.
     result = surface_advisory({"surface": "real_file.py", "realized_by": sha}, repo)
     assert result["verdict"] == "ok"
     assert "coordinator_core.coverage" not in sys.modules
 
-    # paper-realization branch imports it.
     sha2 = _commit(repo, {"docs/plans/x.md": "y"}, "planning")
     result2 = surface_advisory({"surface": "real_file.py", "realized_by": sha2}, repo)
     assert result2["verdict"] == "paper-realization"
@@ -391,9 +356,6 @@ def test_module_has_no_top_level_coverage_import():
     import inspect
 
     source = inspect.getsource(mod)
-    # Restrict to the code region (past the module docstring, which
-    # legitimately discusses `coverage` in prose): the first `def`/`class`
-    # onward, minus each function BODY's own local import lines.
     code_region = source.split("\ndef ", 1)[1] if "\ndef " in source else source
     top_level_lines = [
         line for line in code_region.splitlines() if not line.startswith((" ", "\t"))

@@ -46,26 +46,13 @@ EOLS = pytest.mark.parametrize("eol", ["\n", "\r\n"], ids=["lf", "crlf"])
 
 
 def _write_handoff(tmp_path, lines: list[str], eol: str) -> str:
-    """Write a handoff with EXACTLY the requested line ending.
-
-    ``newline=""`` disables Python's newline translation, so a ``\\r\\n``
-    fixture reaches disk as CRLF on every platform rather than being rewritten
-    to the host convention — without it the CRLF half of each parametrization
-    would silently degrade into a duplicate of the LF half on POSIX.
-    """
     path = tmp_path / "handoff.md"
     path.write_text(eol.join(lines), encoding="utf-8", newline="")
     return str(path)
 
 
-# ---------------------------------------------------------------------------
-# _parse_handoff_consumed_by — the claim-holder reader
-# ---------------------------------------------------------------------------
-
 @EOLS
 def test_empty_claimed_by_does_not_return_the_next_line(tmp_path, eol):
-    """The reproduction. Pre-fix this returned the STRING
-    ``'consumed_by: alice-session'`` as the claim holder."""
     path = _write_handoff(
         tmp_path,
         [
@@ -88,8 +75,6 @@ def test_empty_claimed_by_does_not_return_the_next_line(tmp_path, eol):
         f"claim holder {holder!r} contains a `key: value` separator — the "
         "reader has captured a whole frontmatter LINE, not a value"
     )
-    # `claimed_by` is empty, so the DR-084 transitional `consumed_by` fallback
-    # legitimately supplies the holder — as a VALUE, not as the raw line.
     assert holder == "alice-session"
 
 
@@ -136,10 +121,6 @@ def test_empty_claimed_by_does_not_capture_a_live_session_id(tmp_path, eol):
 
 @EOLS
 def test_claimed_by_wins_over_consumed_by_when_both_present(tmp_path, eol):
-    """Guards the DR-084 dual-tolerance precedence while the pad is being
-    changed underneath it: ``claimed_by`` wins even when ``consumed_by``
-    occurs EARLIER in the file (the dedicated-search-per-name property the
-    function's own docstring calls out)."""
     path = _write_handoff(
         tmp_path,
         [
@@ -169,9 +150,6 @@ def test_claimed_by_wins_over_consumed_by_when_both_present(tmp_path, eol):
     ids=["plain", "single-quoted", "double-quoted", "padded", "null", "none"],
 )
 def test_ordinary_values_survive_the_pad_change(tmp_path, line, expected, eol):
-    """Negative control: the non-empty readings the fix must NOT disturb,
-    including the quote-stripping and ``null``/``none`` sentinels the old
-    regex handled with ``.strip("\\"'")``."""
     path = _write_handoff(tmp_path, ["---", "id: h-3", line, "---", ""], eol)
 
     assert _parse_handoff_consumed_by(path) == expected
@@ -179,9 +157,6 @@ def test_ordinary_values_survive_the_pad_change(tmp_path, line, expected, eol):
 
 @EOLS
 def test_claimed_by_is_not_matched_by_a_longer_key(tmp_path, eol):
-    """The boundary lookahead that comes with routing through the canonical
-    primitive: ``claimed_by`` must not resolve against ``claimed_by_proxy:``.
-    The old fork had no lookahead at all, so a prefix key could match."""
     path = _write_handoff(
         tmp_path,
         ["---", "claimed_by_proxy: proxy-session", "---", ""],
@@ -191,17 +166,10 @@ def test_claimed_by_is_not_matched_by_a_longer_key(tmp_path, eol):
     assert _parse_handoff_consumed_by(path) is None
 
 
-# ---------------------------------------------------------------------------
-# _parse_handoff_deliverable_id — the literal-key sibling
-#
 # Invisible BY CONSTRUCTION to test_no_forked_frontmatter_key_regex.py, whose
-# narrowing (1) requires a runtime-interpolated key. These cases are the only
-# standing guard on this half.
-# ---------------------------------------------------------------------------
 
 @EOLS
 def test_empty_deliverable_id_does_not_return_the_next_line(tmp_path, eol):
-    """The second reproduction. Pre-fix this returned ``'status: open'``."""
     path = _write_handoff(
         tmp_path,
         ["---", "id: h-4", "deliverable_id:", "status: open", "---", "", "body"],
@@ -243,8 +211,6 @@ def test_empty_deliverable_id_does_not_capture_a_neighbouring_deliverable(tmp_pa
     ids=["plain", "quoted", "null", "tilde"],
 )
 def test_deliverable_id_ordinary_values_survive(tmp_path, line, expected, eol):
-    """Negative control, including the schema-legal ``null`` and ``~``
-    pre-backfill sentinels."""
     path = _write_handoff(tmp_path, ["---", line, "---", ""], eol)
 
     assert _parse_handoff_deliverable_id(path) == expected
@@ -252,7 +218,6 @@ def test_deliverable_id_ordinary_values_survive(tmp_path, line, expected, eol):
 
 @EOLS
 def test_deliverable_id_is_not_matched_by_a_longer_key(tmp_path, eol):
-    """Boundary lookahead on the literal-key half."""
     path = _write_handoff(
         tmp_path,
         ["---", "deliverable_id_source: dlv-wrong", "---", ""],
@@ -263,6 +228,4 @@ def test_deliverable_id_is_not_matched_by_a_longer_key(tmp_path, eol):
 
 
 def test_deliverable_id_missing_file_is_conservative_none(tmp_path):
-    """Unchanged contract: an unreadable path is conservative-None, never a
-    raise — the OSError guard must survive the routing change."""
     assert _parse_handoff_deliverable_id(str(tmp_path / "nope.md")) is None

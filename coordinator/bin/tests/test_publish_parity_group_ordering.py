@@ -80,8 +80,6 @@ def test_real_table_orders_every_entrypoint_row_before_the_emitter_row():
 
 
 def test_synthetic_additive_ordering_passes_the_assert():
-    """Sanity check on the assert's own logic, independent of the real
-    table: entrypoints-then-emitter (the shape C3 lands) must pass."""
     synthetic_rows = [
         f"{name}|mirror|publish-mirror:claude_klabauter|src|dst"
         for name in (*publish._KLABAUTER_PARITY_ENTRYPOINT_ROWS, publish._KLABAUTER_PARITY_EMITTER_ROW)
@@ -90,9 +88,6 @@ def test_synthetic_additive_ordering_passes_the_assert():
 
 
 def test_synthetic_inverted_table_fails_the_assert_with_the_reason():
-    """Emitter-first (the 2026-08-15 incident's own shape) must fail the
-    assert, and the failure must name WHY, not just that it failed — a
-    future reader deleting this check has to argue with the rationale."""
     synthetic_rows = [
         f"{name}|mirror|publish-mirror:claude_klabauter|src|dst"
         for name in (publish._KLABAUTER_PARITY_EMITTER_ROW, *publish._KLABAUTER_PARITY_ENTRYPOINT_ROWS)
@@ -101,10 +96,6 @@ def test_synthetic_inverted_table_fails_the_assert_with_the_reason():
 
 
 def test_synthetic_partial_target_subset_is_not_a_violation():
-    """A `--target` subset that resolves the emitter row but none of the
-    entrypoint rows is not a parity violation — the check only orders rows
-    that are actually PRESENT in this run, never a completeness demand on
-    the parity group's membership."""
     synthetic_rows = [
         f"{publish._KLABAUTER_PARITY_EMITTER_ROW}|mirror|publish-mirror:claude_klabauter|src|dst"
     ]
@@ -112,14 +103,6 @@ def test_synthetic_partial_target_subset_is_not_a_violation():
 
 
 def test_mains_preflight_refuses_the_synthetic_inverted_table(monkeypatch, tmp_path, capsys):
-    """Drive `publish.py::main()` itself (not just the helper in isolation)
-    with `load_targets` faked to return the emitter-first synthetic table,
-    and assert the run refuses before any row would publish: exit code 1
-    (a declined pre-sync gate, per `main`'s own exit-code contract — no row
-    has synced yet at this point, so this is NOT the post-publish
-    verification exit code 2), and a FATAL naming the ordering reason on
-    stderr.
-    """
     synthetic_rows = [
         f"{name}|mirror|publish-mirror:claude_klabauter|src|dst"
         for name in (publish._KLABAUTER_PARITY_EMITTER_ROW, *publish._KLABAUTER_PARITY_ENTRYPOINT_ROWS)

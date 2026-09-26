@@ -70,11 +70,6 @@ def _frontmatter(content: str) -> dict:
     return yaml.safe_load(fm_text)
 
 
-# ---------------------------------------------------------------------------
-# AC1 -- --summary
-# ---------------------------------------------------------------------------
-
-
 class ScaffoldHandoffSummaryTest(unittest.TestCase):
     def test_summary_supplied_replaces_the_placeholder(self):
         content = _cli._scaffold_handoff(title="t", branch="b", summary="did the thing")
@@ -98,11 +93,6 @@ class ScaffoldHandoffSummaryTest(unittest.TestCase):
         content = _cli._scaffold_handoff(title="t", branch="b", summary="x" * 140)
         fields = _frontmatter(content)
         self.assertEqual(fields["summary"], "x" * 140)
-
-
-# ---------------------------------------------------------------------------
-# AC2 -- --gated-open declares the blocker, readiness is DERIVED (C1)
-# ---------------------------------------------------------------------------
 
 
 class ScaffoldHandoffGatedOpenTest(unittest.TestCase):
@@ -139,11 +129,6 @@ class ScaffoldHandoffGatedOpenTest(unittest.TestCase):
         self.assertTrue(result["ok"], result.get("errors"))
 
 
-# ---------------------------------------------------------------------------
-# AC4 -- --gate-note is advisory only, NEVER flips readiness
-# ---------------------------------------------------------------------------
-
-
 class ScaffoldHandoffGateNoteTest(unittest.TestCase):
     def test_gate_note_alone_leaves_baton_pickup_ready(self):
         content = _cli._scaffold_handoff(
@@ -164,12 +149,6 @@ class ScaffoldHandoffGateNoteTest(unittest.TestCase):
         fields = _frontmatter(content)
         result = schema_validate.validate("handoff", fields)
         self.assertTrue(result["ok"], result.get("errors"))
-
-
-# ---------------------------------------------------------------------------
-# AC -- --gated-open and --gate-note combined is legal: a blocked baton that
-# also carries a note
-# ---------------------------------------------------------------------------
 
 
 class ScaffoldHandoffGatedOpenAndGateNoteCombinedTest(unittest.TestCase):
@@ -198,11 +177,6 @@ class ScaffoldHandoffGatedOpenAndGateNoteCombinedTest(unittest.TestCase):
         self.assertTrue(result["ok"], result.get("errors"))
 
 
-# ---------------------------------------------------------------------------
-# AC8 -- absent-flag byte-identity (both flags omitted together)
-# ---------------------------------------------------------------------------
-
-
 class ScaffoldHandoffAbsentFlagByteIdentityTest(unittest.TestCase):
     def test_both_flags_absent_is_byte_identical_to_no_new_kwargs(self):
         with_defaults = _cli._scaffold_handoff(title="t", branch="b")
@@ -212,16 +186,8 @@ class ScaffoldHandoffAbsentFlagByteIdentityTest(unittest.TestCase):
         self.assertEqual(with_defaults, with_explicit_none)
 
 
-# ---------------------------------------------------------------------------
-# AC3 -- all three flags are handoff-scoped, refused fail-loud for any other --type
-# ---------------------------------------------------------------------------
-
-
 class CliTypeScopingTest(unittest.TestCase):
     def _run(self, *extra_args: str) -> tuple[int, str]:
-        """Run `_cli.main()` in-process with `sys.argv` patched, standing in
-        for `proc.returncode`/`proc.stderr` -- see module docstring's STUB
-        disposition note."""
         argv = ["coordinator-doc-new", *extra_args]
         stderr_buf = io.StringIO()
         with unittest.mock.patch("sys.argv", argv):
@@ -252,14 +218,7 @@ class CliTypeScopingTest(unittest.TestCase):
         self.assertIn("--type goal", stderr)
 
 
-# ---------------------------------------------------------------------------
-# Asymmetry regression (C3 dispatch brief) -- the goal-seed/roadmap-seed/
 # roadmap-baton `blocking_notes: PLACEHOLDER` line is a gate NOTE under the
-# 2026-08-19 ruling, not a gate, and must not make a record un-pickup-ready.
-# C1's derive_readiness ignores blocking_notes entirely (consult_prose_gates=
-# False), so this falls out for free -- asserted here because it is the
-# regression a later well-meaning edit will introduce.
-# ---------------------------------------------------------------------------
 
 
 class SeedPlaceholderBlockingNotesDoesNotGateTest(unittest.TestCase):
@@ -278,9 +237,6 @@ class SeedPlaceholderBlockingNotesDoesNotGateTest(unittest.TestCase):
         self.assertIs(result["pickup_ready"], True)
 
     def test_goal_seed_and_roadmap_seed_scaffold_the_placeholder_note(self):
-        """Pins the fixture above against what the scaffolds actually emit --
-        if a later edit changes the placeholder text, this fails loud rather
-        than the fixture above silently drifting from reality."""
         goal_seed_content = _cli._scaffold_goal_seed(title="t", branch="b")
         roadmap_seed_content = _cli._scaffold_roadmap_seed(title="t", branch="b")
         for content in (goal_seed_content, roadmap_seed_content):

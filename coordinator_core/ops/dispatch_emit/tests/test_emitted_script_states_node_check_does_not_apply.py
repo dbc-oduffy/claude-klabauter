@@ -1,16 +1,3 @@
-"""Every emitted script opens with a narration that `node --check` will
-flag a top-level `return` in this file and that this is not a defect.
-
-Spec backlink: claude-klabauter#21, part 2. The emitted `.workflow.mjs`
-body runs a top-level `return` -- legal only because the Workflow runner
-executes the body directly (module docstring § Top-level body, never a
-defined-but-uninvoked wrapper). `node --check` has no way to know that and
-reports `SyntaxError: Illegal return statement` for every script this
-module emits; an operator running that check unprompted misreads it as a
-real defect. This test pins the narration comment's presence and position,
-and that it does not perturb the `export const meta` block `_workflow_
-contract.extract_meta_block` and `workflow.validate` both key on.
-"""
 
 from coordinator_core.ops._workflow_contract import extract_meta_block, run_checks, Severity
 from coordinator_core.ops.dispatch_emit.emit import (

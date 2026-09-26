@@ -1,19 +1,3 @@
-"""The two pytest configs must register the SAME marker set.
-
-`coordinator_core/pytest.ini` and the root `pyproject.toml`'s
-`[tool.pytest.ini_options]` are both live: pytest picks the config CLOSEST to the
-test-path argument, so `pytest coordinator_core/...` reads the former and a bare
-`pytest` from the project root reads the latter. A marker registered in only one
-resolves under only one invocation, emitting `PytestUnknownMarkWarning` under the
-other — and hard-failing under `--strict-markers`.
-
-This has already happened twice, both times found by hand: `cadence`/`pending_fix`/
-`designed_red` landed in pyproject.toml on 2026-07-22 and were missing from
-pytest.ini until 2026-07-28 (recorded in that file's own header), and
-`real_machine_mutation` landed in pyproject.toml on 2026-08-26 and was missing
-here until the warning surfaced minutes later. Both configs' headers warn about
-the trap; neither warning is an artifact. This test is.
-"""
 from __future__ import annotations
 
 import configparser
@@ -26,8 +10,6 @@ _PYPROJECT = _REPO_ROOT / "pyproject.toml"
 
 
 def _marker_names(raw_entries) -> set[str]:
-    """A marker entry is ``"<name>: <description>"`` — compare NAMES only, so a
-    reworded description in one config is not a failure."""
     names = set()
     for entry in raw_entries:
         entry = entry.strip()

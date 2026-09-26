@@ -21,8 +21,6 @@ from coordinator_core.ops.emit.context import _GIT_BACKED_SOURCE_KINDS, EmitCont
 from coordinator_core.ops.emit.resolvers import resolve_coordinator_root
 from coordinator_core.ops.emit.sections.lessons import collect
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -32,13 +30,6 @@ _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 def _make_ctx() -> EmitContext:
-    """Build an EmitContext pointed at the frozen fixture tree (frozen-fixture doctrine).
-
-    Mirrors test_emit_parity.build_emit_context() — subprocess_root redirects the lessons
-    producer's DATA reads to fixtures/root so collect() output is reproducible, while
-    coordinator_root stays the real coordinator plugin dir (the producer script itself must
-    be real; only the data root is frozen).
-    """
     fixture_root = _FIXTURES / "root"
     return EmitContext(
         repo_root=fixture_root,
@@ -54,9 +45,8 @@ def _make_ctx() -> EmitContext:
     )
 
 
-@pytest.mark.real_home  # live-tree parity oracle: resolves the real coordinator root
+@pytest.mark.real_home
 class TestLessonsProvenanceRefInvariant:
-    """D9 bidirectional invariant: ref is null for every non-git-backed source_kind."""
 
     def test_local_fs_records_have_null_ref(self) -> None:
         """Every record with source_kind not in _GIT_BACKED_SOURCE_KINDS must have ref=None.
@@ -79,12 +69,6 @@ class TestLessonsProvenanceRefInvariant:
                 )
 
     def test_source_kind_is_local_fs_in_fixture(self) -> None:
-        """Sanity anchor: the fixture's single lesson record is local_fs (the exact drift shape).
-
-        Pins the scenario this regression targets — if the fixture ever moves to a git-backed
-        source_kind, this test's failure signals the primary assertion above no longer exercises
-        the local_fs path and needs a fixture with a local_fs record re-added.
-        """
         ctx = _make_ctx()
         records, _malformed = collect(ctx)
         assert any(r["provenance"]["source_kind"] == "local_fs" for r in records), (

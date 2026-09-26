@@ -120,15 +120,6 @@ _merge_gate_mod = None
 
 
 def _load_merge_gate_module():
-    """Load `coordinator/bin/merge-gate-and-pr.py` by file path.
-
-    Same technique that file's own test suite already uses
-    (`coordinator/bin/tests/test_merge_gate_and_pr.py::_load_module`) --
-    the hyphenated filename is not import-able as a normal package member.
-    Cached at module scope: this module never authors a second verdict
-    computation, it only needs the one function `_run_gate_validate_invocable`
-    and the one function `_changed_files` that already live there.
-    """
     global _merge_gate_mod
     if _merge_gate_mod is not None:
         return _merge_gate_mod
@@ -142,11 +133,6 @@ def _load_merge_gate_module():
     _merge_gate_mod = mod
     return mod
 
-
-# ---------------------------------------------------------------------------
-# Token resolution -- env first, then gh's own credential file. Never a
-# shell-out (`gh auth token` is itself barred).
-# ---------------------------------------------------------------------------
 
 def _gh_hosts_path() -> Path:
     override = os.environ.get("GH_CONFIG_DIR")
@@ -164,12 +150,6 @@ def _gh_hosts_path() -> Path:
 
 
 def _gh_github_host_entry() -> Optional[dict]:
-    """Parse gh's `hosts.yml` and return its `github.com` mapping, or None.
-
-    Returns None -- never raises -- for every way the file can fail to yield
-    one: absent, unreadable, invalid YAML, not a mapping, or carrying no
-    `github.com` host entry.
-    """
     path = _gh_hosts_path()
     if not path.is_file():
         return None
@@ -199,12 +179,6 @@ def _token_from_gh_hosts_file() -> Optional[str]:
 
 
 def _gh_active_account() -> Optional[str]:
-    """The account name gh records as active for `github.com`, or None.
-
-    Names the Credential Manager target leg 4 reads. `user:` is gh's own
-    active-account key; the first key under `users:` is the fallback for a
-    hosts.yml written before that key existed.
-    """
     host_entry = _gh_github_host_entry()
     if host_entry is None:
         return None
@@ -233,25 +207,13 @@ def _decode_credential_blob(blob: bytes) -> Optional[str]:
         try:
             text = blob.decode(encoding).strip()
         except (UnicodeDecodeError, ValueError):
-            continue  # this encoding didn't decode; the next candidate encoding is tried
+            continue
         if text and text.isprintable():
             return text
     return None
 
 
 def _token_from_windows_credential_manager(*, platform: str = sys.platform) -> Optional[str]:
-    """Read gh's keyring-stored token via `advapi32!CredReadW`, or None.
-
-    An in-process DLL call through `ctypes` -- no subprocess, so nothing here
-    needs a shell-out carve-out. Returns None on every non-Windows host and
-    on every failure mode (DLL unavailable, target absent, blob undecodable,
-    a malformed target or ABI mismatch surfacing as `ctypes.ArgumentError`),
-    so the caller's fail-closed contract is unchanged.
-
-    `platform` is injectable (Review: coordinatorcode-reviewer Finding 1) so
-    tests can exercise the non-Windows branch without mutating the
-    process-wide `sys.platform` singleton.
-    """
     if platform != "win32":
         return None
 
@@ -299,10 +261,6 @@ def _token_from_windows_credential_manager(*, platform: str = sys.platform) -> O
                 target, _CRED_TYPE_GENERIC, 0, ctypes.byref(pointer)
             )
         except (OSError, ctypes.ArgumentError):
-            # A malformed target
-            # or ABI mismatch raises ctypes.ArgumentError, not OSError; catch
-            # both so leg 4 matches this module's "fails closed, never raises"
-            # docstring claim rather than propagating out of resolve_token().
             continue
         if not ok or not pointer:
             continue
@@ -321,11 +279,6 @@ def _token_from_windows_credential_manager(*, platform: str = sys.platform) -> O
 
 
 def resolve_token() -> Optional[str]:
-    """Resolve a GitHub token, env first, then gh's on-disk credential file.
-
-    Returns None if nothing resolves -- the caller MUST fail closed on that,
-    never fabricate or assume a token.
-    """
     for env_name in ("GITHUB_TOKEN", "GH_TOKEN"):
         value = os.environ.get(env_name)
         if value:
@@ -333,22 +286,7 @@ def resolve_token() -> Optional[str]:
     return _token_from_gh_hosts_file() or _token_from_windows_credential_manager()
 
 
-# ---------------------------------------------------------------------------
-# Verdict -> status mapping (whitelist).
-# ---------------------------------------------------------------------------
-
 def _changed_files_or_git_failure(commit_range: str) -> tuple[list[str], bool]:
-    """The ONE git spawn this module issues for changed-file listing --
-    mirrors `merge-gate-and-pr.py::_changed_files`'s exact command, but
-    additionally surfaces `proc.returncode` rather than folding a git
-    failure into "no changed files" the way that function's stdout-only
-    read does (the brief's named fix, Review: the Staff Engineer F1). This does not
-    call `mod._changed_files` afterwards -- that would be a second spawn
-    for the same information, which is exactly the kind of duplication
-    DR-344's spawn-count budget charges for.
-
-    Returns (changed_files, git_failed).
-    """
     from coordinator_core.git.run import run_git
 
     result = run_git(["diff", "--name-only", commit_range])
@@ -371,10 +309,6 @@ def compute_status(commit_range: str, repo_root: Optional[str] = None) -> tuple[
         return "failure", "coverage-gate: git diff failed while listing changed files"
 
     if not changed_files:
-        # No changed files is a real, benign case upstream (`cmd_coverage_gate`
-        # exits 0 for it) -- but this poster's whitelist requires an actual
-        # earned PASS verdict, not an absence of input, so this still reads
-        # as an indeterminate case rather than a silent success.
         return "failure", "coverage-gate: no changed files in range; nothing was measured"
 
     result = mod._run_gate_validate_invocable(changed_files, commit_range, root)
@@ -389,14 +323,7 @@ def compute_status(commit_range: str, repo_root: Optional[str] = None) -> tuple[
     return "failure", f"coverage-gate: verdict {verdict!r} -- {review.get('detail', '')}"[:140]
 
 
-# ---------------------------------------------------------------------------
-# POST to api.github.com -- naked urllib, no subprocess.
-# ---------------------------------------------------------------------------
-
 class PostResult:
-    """Outcome of a `post_coverage_status()` call. `posted` is False for
-    every fail-closed path (no token, rate-limited, HTTP error) -- a caller
-    must never read `posted=False` as `state=success`."""
 
     def __init__(self, posted: bool, state: Optional[str], reason: str):
         self.posted = posted
@@ -445,7 +372,6 @@ def _post_status(
     except urllib.error.HTTPError as exc:
         if exc.code in (403, 429):
             # Fail closed on rate-limit exhaustion -- an INDETERMINATE case,
-            # never retried, never degraded to "assume covered".
             return PostResult(
                 posted=False,
                 state=None,
@@ -457,15 +383,6 @@ def _post_status(
 
 
 def _no_token_reason() -> str:
-    """Unpostable-reason text for a fully-missed token ladder.
-
-    Platform-branched (Review: the two branches must not bleed into each
-    other's platform, coordinator_core/ops/tests/test_post_coverage_status.py):
-    leg 4 (Windows Credential Manager) is only reachable on `win32`, so
-    naming it as the operator's recourse anywhere else is a dead end. Reads
-    `sys.platform` at call time (not a def-time default) so a test's
-    `monkeypatch.setattr(pcs_mod.sys, "platform", ...)` takes effect.
-    """
     if sys.platform == "win32":
         return (
             "unpostable: no GitHub token resolved (GITHUB_TOKEN/GH_TOKEN env, "
@@ -484,10 +401,6 @@ def post_coverage_status(
     commit_range: str,
     repo_root: Optional[str] = None,
 ) -> PostResult:
-    """Compute the coverage-gate verdict for `commit_range` and POST it as a
-    commit status on `sha`. Fails closed (posts nothing) when no token
-    resolves -- never posts `state=success` on a missing capability.
-    """
     token = resolve_token()
     if not token:
         return PostResult(
@@ -498,10 +411,6 @@ def post_coverage_status(
     state, description = compute_status(commit_range, repo_root=repo_root)
     return _post_status(owner, repo, sha, state, description, token)
 
-
-# ---------------------------------------------------------------------------
-# CLI entry point.
-# ---------------------------------------------------------------------------
 
 def main(argv: list[str]) -> int:
     import argparse

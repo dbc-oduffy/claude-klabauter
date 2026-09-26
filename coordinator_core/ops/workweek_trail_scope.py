@@ -228,11 +228,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             on_unresolvable_ref="skip",
         )
     except _CoverageFatalError as exc:
-        # Verbatim-equivalent of the old bash-oracle exit-1 propagation: a
-        # fail-mode record-parse or git-ref-resolution failure already printed
-        # its own ERROR line to stderr (review_coverage_core.build_segments /
-        # _load_records) — surface as business failure, not transport failure,
-        # since this is now a same-process call with nothing to transport.
         print(f"ERROR: coordinator_core.ops.review_coverage_core failed: {exc}", file=sys.stderr)
         return EXIT_BUSINESS_FAIL
 
@@ -302,7 +297,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return EXIT_BUSINESS_FAIL
     session_short = sid[:8]
 
-    # Native microsecond-precision timestamp — see module docstring's timestamp note.
     now = datetime.now(timezone.utc)
     timestamp = now.strftime("%Y-%m-%d-%H%M%S-%f")
 

@@ -173,34 +173,17 @@ from coordinator_core.ops.fleet._memo_resolver import RegistryReadError, read_re
 
 _PROG = "consumer-corpus-preflight"
 
-# The vendored, authoritative copies of the two governing schemas — never DoE's tree.
 _SCHEMAS_DIR = Path(__file__).resolve().parent.parent.parent / "frontmatter" / "schemas"
 _HANDOFF_SCHEMA_PATH = _SCHEMAS_DIR / "handoff.schema.json"
 _ARCHIVED_HANDOFF_SCHEMA_PATH = _SCHEMAS_DIR / "handoff-archived.schema.json"
 
-# Path components that mark a record as archived, wherever they appear in its
-# path — the repo-root `archive/handoffs/` scan base itself, OR a nested
-# `archive/`/`.archive/` dir under `state/handoffs/`. See module docstring
-# "Live-vs-archived classification".
 _ARCHIVE_DIR_NAMES = frozenset({"archive", ".archive"})
 
 
 class PreflightOracleError(Exception):
-    """Raised when this pre-flight's own oracle (either the live or the
-    archived vendored `kind` enum) cannot be loaded — a missing/unparseable
-    schema file, or one with no `properties.kind.enum`. A pre-flight that
-    cannot load ITS oracle must not report green; callers that want a
-    degrade-to-note behavior (e.g. the re-vendor major-bump gate) must catch
-    this explicitly rather than letting a broken oracle look like "no
-    off-enum records found".
-    """
+    pass
 
 
-# Display name -> machine-local registry key SUFFIX (full key is "repos.<suffix>").
-# All seven real EM working trees this module scans. See module docstring
-# "Repo-set reconciliation" for why growing this set no longer risks silently
-# stranding a repo outside this oracle's field of view (an unclassified key,
-# not silence, is what a new/forgotten repo now produces).
 FLEET_REPO_KEYS: Dict[str, str] = {
     "DoE-claude": "doe_claude",
     "claude-klabauter": "claude_klabauter",
@@ -211,11 +194,8 @@ FLEET_REPO_KEYS: Dict[str, str] = {
     "example-market-data-repo": "example_market_data_repo",
 }
 
-# Every OTHER currently-known registered `repos.*` key that is NOT an EM
-# working tree, with a one-line reason. A registered key present in neither
 # this set nor FLEET_REPO_KEYS lands in the `unclassified` bucket and trips a
 # non-zero exit (see run_preflight) — extend this set (or FLEET_REPO_KEYS) the
-# moment that happens, rather than silently ignoring the new key.
 NON_FLEET_EXCLUDED_KEYS: Dict[str, str] = {
     "repos.example-smoke-test-fixture": "per-machine smoke-test fixture (registered path is /tmp scratch), not a repo",
     "repos.example-game-repo-python-audit": "UE consumer-project Saved/ scratch dir (python audit recall log), not a git working tree",
@@ -227,11 +207,8 @@ NON_FLEET_EXCLUDED_KEYS: Dict[str, str] = {
     "repos.example-sim-repo": "standalone product repo (example-sim-repo), not part of the coordinator EM fleet",
     "repos.example-voice-system": "standalone product repo (example-voice-system), not part of the coordinator EM fleet",
     "repos.example_store_repo": "standalone product repo (Example Store), not part of the coordinator EM fleet",
-    # 2026-09-06: five keys that had been sitting unclassified, blocking the
     # handoff 8.10.0 -> 10.0.0 major re-vendor. Each verified by RESOLVED PATH,
     # not by name — the two aliases below resolve to a tree FLEET_REPO_KEYS
-    # already scans under a different key, so promoting either would double-count
-    # that repo's corpus and silently inflate every count this oracle reports.
     "repos.claude_klabauter": "published engine mirror (percolate publish target), not an authoring EM working tree — its handoff corpus, if any, is a transformed copy of claude-klabauter's",
     "repos.example_doctrine_repo": "ALIAS: resolves to the same tree as repos.doe_claude, already scanned as DoE-claude — classifying it fleet would double-count that corpus",
     "repos.example-game-repo": "ALIAS: resolves to the same tree as repos.example_game_workbench_repo, already scanned as example-game-workbench-repo — classifying it fleet would double-count that corpus",
@@ -275,26 +252,10 @@ def _iter_handoff_md_files(repo_root: Path) -> List[Path]:
 
 
 def _is_archived_record(path: Path) -> bool:
-    """True if ``path`` is governed by the archived schema's enum, not the
-    live one — ANY path component literally named ``archive`` or ``.archive``,
-    covering both the repo-root ``archive/handoffs/`` scan base and a nested
-    ``archive/``/``.archive/`` dir under ``state/handoffs/`` alike. See module
-    docstring "Live-vs-archived classification" for why this is a directory-
-    shape rule rather than "which scan base produced this path".
-    """
     return any(part in _ARCHIVE_DIR_NAMES for part in path.parts)
 
 
 def _read_kind(path: Path) -> Optional[str]:
-    """Return the record's ``kind`` frontmatter scalar, comment-stripped and
-    quote-stripped, or ``None`` when the field is absent, the file has no
-    parseable frontmatter, or the file cannot be read.
-
-    Comment-aware via ``coordinator_core.dag._strip_inline_comment`` (the same
-    quote-aware primitive ``migrate_handoff_vocabulary._clean_scalar`` and
-    ``dag.referenced_by``'s own frontmatter reader use) — a trailing
-    ``kind: spinoff  # ...`` comment must not become part of the counted value.
-    """
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             text = fh.read()
@@ -314,17 +275,6 @@ def _read_kind(path: Path) -> Optional[str]:
 
 
 def scan_repo_kind_counts(repo_root: Path) -> Tuple[Dict[str, int], Dict[str, int]]:
-    """Count every handoff record under ``repo_root`` by its ``kind`` value,
-    split into the two governed populations.
-
-    Returns ``(live_counts, archived_counts)`` — every scanned file is
-    classified via ``_is_archived_record`` and its ``kind`` tallied into
-    exactly one of the two dicts. An absent ``kind`` is bucketed under the
-    literal string ``"<absent>"`` in whichever population it belongs to —
-    this is a VALID, expected corpus shape (the emitter defaults an absent
-    ``kind`` to ``session-handoff`` at read time), reported as its own
-    bucket, never silently folded into ``"session-handoff"`` or omitted.
-    """
     live: Dict[str, int] = {}
     archived: Dict[str, int] = {}
     for path in _iter_handoff_md_files(repo_root):
@@ -336,17 +286,6 @@ def scan_repo_kind_counts(repo_root: Path) -> Tuple[Dict[str, int], Dict[str, in
 
 
 def _load_kind_enum(schema_path: Path, label: str) -> List[str]:
-    """Load ``properties.kind.enum`` from a vendored schema file.
-
-    Fails loud (``PreflightOracleError``) rather than degrading — a pre-flight
-    that cannot load one of its two oracles must never silently skip that
-    enum's check and report green. Raised on: the file missing, the file
-    failing to parse as JSON, the parsed document not being an object,
-    ``properties.kind.enum`` being absent, or that value not being a
-    non-empty list of strings. ``label`` (e.g. ``"live handoff"``,
-    ``"archived handoff"``) is folded into the error message so a caller can
-    tell which of the two oracles broke.
-    """
     if not schema_path.is_file():
         raise PreflightOracleError(f"{label} schema not found at {schema_path}")
     try:
@@ -368,10 +307,6 @@ def _load_kind_enum(schema_path: Path, label: str) -> List[str]:
 
 
 def load_live_kind_enum(schema_path: Path = _HANDOFF_SCHEMA_PATH) -> List[str]:
-    """Load ``properties.kind.enum`` from the vendored LIVE handoff schema.
-
-    See ``_load_kind_enum`` for the shared fail-loud contract.
-    """
     return _load_kind_enum(schema_path, "live handoff")
 
 
@@ -472,9 +407,7 @@ def run_preflight() -> Dict[str, object]:
         exit_code is 1 iff ANY of unresolvable/unclassified/off_enum_live is
         non-empty. off_enum_archived NEVER contributes to exit_code.
     """
-    # Looked up via the module global (not a bound default) so a test/caller can
     # monkeypatch `_HANDOFF_SCHEMA_PATH`/`_ARCHIVED_HANDOFF_SCHEMA_PATH` and have
-    # this pick them up at call time.
     live_kind_enum = set(load_live_kind_enum(_HANDOFF_SCHEMA_PATH))
     archived_kind_enum = set(load_archived_kind_enum(_ARCHIVED_HANDOFF_SCHEMA_PATH))
 

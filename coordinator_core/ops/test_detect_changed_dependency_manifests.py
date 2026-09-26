@@ -1,10 +1,3 @@
-"""Tests for coordinator_core.ops.detect_changed_dependency_manifests.
-
-All git exercise runs against a throwaway repo created fresh under
-`tmp_path` per test — NEVER against this working repo. See module
-docstring for the op-key/contract this covers:
-`dependency.detect_changed_manifests`.
-"""
 from __future__ import annotations
 
 import os
@@ -22,8 +15,6 @@ from coordinator_core.ops.detect_changed_dependency_manifests import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -46,11 +37,6 @@ def _git(*args: str, cwd: Path, env: dict | None = None) -> subprocess.Completed
 
 @pytest.fixture(autouse=True)
 def _isolate_global_git_config(tmp_path, monkeypatch):
-    """Isolate from the ambient dev machine's global git config, mirroring
-    the same fixture in test_agent_worktree_sweep.py — this module's own
-    subprocess calls inherit os.environ, so the override must be process-
-    wide, not a one-off subprocess env=.
-    """
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
@@ -111,7 +97,6 @@ def test_manifest_changed_recently_is_detected_and_sorted_unique(tmp_path):
     _commit_file(root, "README.md", "hello\n")
     _commit_file(root, "package.json", "{}\n")
     _commit_file(root, "backend/requirements.txt", "flask\n")
-    # A second edit to the same manifest must not duplicate the entry.
     _commit_file(root, "package.json", '{"name": "x"}\n')
 
     result = detect(root, since_days=14)
@@ -149,10 +134,6 @@ def test_not_a_git_repo_returns_false_false_empty(tmp_path):
 
 
 def test_double_invocation_is_idempotent(tmp_path):
-    """AC7: a second invocation with identical inputs is a safe no-op that
-    returns a byte-identical result — no side effects to accumulate since
-    this op never writes.
-    """
     root = tmp_path / "repo"
     _init_repo(root)
     _commit_file(root, "package.json", "{}\n")
@@ -193,8 +174,6 @@ def test_handler_resolves_repo_root_from_params_and_coerces_since_days(tmp_path,
     if since_days_param is not None:
         params["since_days"] = since_days_param
 
-    # Handler is a plain sync `def`
-    # (engine auto-offloads via asyncio.to_thread), called directly.
     result = _handler(params, repo_root=None)
 
     assert result["has_manifests"] is True

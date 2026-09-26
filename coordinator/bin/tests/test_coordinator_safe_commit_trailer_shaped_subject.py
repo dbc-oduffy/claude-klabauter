@@ -1,13 +1,3 @@
-"""`coordinator-safe-commit.py::parse_args` -- issue #84 item 3: a background
-committer landed a commit whose message was ONLY trailers, no subject line.
-This pins the refusal: a subject whose key half is exactly one of the
-trailers this repo appends (`Session-Id`, `Deliverable-Id`, ...) is refused,
-while an ordinary conventional-commit-shaped subject (which also contains a
-colon) still parses.
-
-Loaded by file path (`importlib.machinery.SourceFileLoader`), matching this
-directory's existing hyphenated-module idiom.
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -67,7 +57,5 @@ def test_an_ordinary_subject_still_parses(subject):
 
 
 def test_a_hyphenated_tool_prefix_subject_is_not_a_trailer():
-    """`percolate-round: ...` reads like `Token-Token: value` but is the
-    repo's ordinary subject shape; only known trailer keys refuse."""
     mod = _load_cli_module()
     assert mod.parse_args(["percolate-round: seed check"]).subject == "percolate-round: seed check"

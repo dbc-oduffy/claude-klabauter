@@ -39,10 +39,6 @@ from coordinator_core.subagent_sandbox import provision_report
 from coordinator_core.subagent_sandbox.provision_report import _provision
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# The klabauter#47 section below spawns real `git init` processes (a real
-# repo is load-bearing there -- resolve_git_root's ambient-vs-explicit-cwd
-# distinction is the thing under test); the rest of this file stays spawn-free
-# via the identity-stub/hand-made-`.git` conventions its own docstring states.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _SNIPPET_NAME = "fixture-block"
@@ -66,10 +62,6 @@ _SNIPPET_BODY = (
 
 
 def _make_fixture_plugin_root(tmp_path: Path) -> Path:
-    """A synthetic plugin CONTENT root: `<root>/snippets/registry.toml` +
-    `<root>/snippets/<name>.md`, matching the shape
-    `resolve_plugin_root()` + `_assemble_contract_blocks` expect directly
-    under the resolved root (no extra `coordinator/` join)."""
     plugin_root = tmp_path / "plugin-root"
     snippets_dir = plugin_root / "snippets"
     snippets_dir.mkdir(parents=True)
@@ -107,10 +99,6 @@ def test_resolve_plugin_root_returns_none_on_full_miss(
         lambda: Path("does-not-exist-anywhere"),
         raising=False,
     )
-    # An EMPTY real directory, not a bogus path: the rung reads
-    # ``<machine_local_dir()>/.doe-root``, so the miss under test is "the
-    # pointer file is absent", exercising the resolver's own OSError leg
-    # rather than an unreadable-parent accident.
     machine_local = tmp_path / "machine-local"
     machine_local.mkdir()
     monkeypatch.setattr(
@@ -121,8 +109,6 @@ def test_resolve_plugin_root_returns_none_on_full_miss(
     )
 
     # No CLAUDE_PLUGIN_ROOT, an unresolvable claude_config_dir()-relative
-    # probe, and no .doe-root pointer -- every leg misses, so the resolver
-    # must fail open to None rather than raise or fabricate a path.
     assert provision_report.resolve_plugin_root() is None
 
 
@@ -133,26 +119,11 @@ def test_resolve_plugin_root_returns_none_on_full_miss(
 def test_assemble_contract_blocks_composes_regardless_of_session_cwd(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, session_cwd_name: str
 ) -> None:
-    """The two-repo control: a DoE-claude-SHAPED session cwd and an
-    unrelated one must both assemble the identical non-empty
-    `injected_prompt_blocks` string, since the snippet registry now
-    resolves off the plugin's own content root (env-injected), never off
-    the session's git_root.
-    """
     plugin_root = _make_fixture_plugin_root(tmp_path)
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
 
     session_cwd = tmp_path / session_cwd_name
     session_cwd.mkdir()
-    # A REAL `.git` entry, not a monkeypatched resolver. This test previously
-    # stubbed `provision_report.resolve_git_root` to an identity function; C2
-    # repointed root resolution at the non-spawning walker
-    # (`git.repo_root.show_toplevel`), so that stub stopped sitting on the call
-    # path and the walker correctly found no repo above a bare tmp dir.
-    # Pinning the behaviour to whichever resolver happens to be wired up is the
-    # proxy-probe failure this plan already hit once, in C4's own resolver;
-    # giving the fixture a real repo marker exercises the real path and stays
-    # true across any future repoint.
     (session_cwd / ".git").mkdir()
 
     payload = {
@@ -168,12 +139,6 @@ def test_assemble_contract_blocks_composes_regardless_of_session_cwd(
     assert assembled is not None
     assert "Fixture contract block body." in assembled
 
-
-# ---------------------------------------------------------------------------
-# klabauter#47 -- provisioning must key on the TARGET repo, never on this
-# process's own ambient cwd, and must REFUSE rather than guess when the
-# payload hands it no target at all.
-# ---------------------------------------------------------------------------
 
 _TARGET_REPORT_SIDECAR_TYPE = "coordinator:code-reviewer"
 
@@ -208,15 +173,6 @@ def _write_policy(path: Path) -> Path:
 def test_provision_refuses_rather_than_guessing_when_cwd_is_absent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The two-repo control that pins klabauter#47: an ambient repo the
-    calling PROCESS happens to be sitting in (`ambient_repo`, standing in
-    for a warm engine's own boot-time cwd, or any other real repo that just
-    is not this dispatch's target) must never receive a sidecar just
-    because `cwd` was omitted. `_provision` must return `None` and must
-    write NOTHING under `ambient_repo`, rather than resolving
-    `resolve_git_root(None)`'s documented ambient-process-cwd fallback and
-    silently filing the receipt there.
-    """
     ambient_repo = _init_git_repo(tmp_path / "ambient-repo")
     policy_path = _write_policy(tmp_path)
     monkeypatch.chdir(ambient_repo)
@@ -241,12 +197,6 @@ def test_provision_refuses_rather_than_guessing_when_cwd_is_absent(
 def test_provision_keys_on_the_explicit_target_repo_not_the_ambient_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Same two-repo control, explicit-cwd arm: with an ambient repo the
-    process is sitting in AND a distinct target repo passed explicitly as
-    `cwd`, the sidecar must land under the TARGET, never under the ambient
-    one -- the shape a multi-repo plan-blitz item needs (its dispatch's own
-    repo, regardless of the dispatching process's own directory).
-    """
     ambient_repo = _init_git_repo(tmp_path / "ambient-repo")
     target_repo = _init_git_repo(tmp_path / "target-repo")
     policy_path = _write_policy(tmp_path)

@@ -1,11 +1,3 @@
-"""
-Tests for coordinator_core.ops.goal_close_day — open period="day" enumeration
-scoped to (repo, coordinator_root_path), partitioned today/stale (§ C2), and the
-close-out write leg that re-appends a row at its same goal_id with a terminal
-status (§ C3).
-
-Spec backlink: pln-day-scoped-goal-close-out-life-69a25c § C2/C3
-"""
 
 from __future__ import annotations
 
@@ -159,8 +151,6 @@ def test_writes_nothing(tmp_path):
 
 
 def test_unparseable_today_override_falls_back_to_real_utc_today():
-    # No prior test exercised the try/except ValueError
-    # fallback branch; every other test passes a valid ISO `today=`.
     from datetime import datetime, timezone
 
     result = _resolve_today("not-a-date")
@@ -181,13 +171,6 @@ def test_unreadable_central_state_root_degrades_to_empty(tmp_path, monkeypatch):
 
     def _boom(path):
         # ACCEPTS EVERYTHING `os.scandir` ACCEPTS, because this replaces it
-        # process-wide. `os.scandir` takes an int file descriptor and bytes as
-        # well as a str/PathLike, and `Path(11)` raises TypeError -- so the
-        # narrowing check itself blew up on any unrelated caller that reached
-        # the stub with an fd. That caller exists: the autouse live-hub litter
-        # guard in conftest scans a directory at teardown, inside this
-        # monkeypatch's window, and both tests in this file ERRORed there
-        # deterministically rather than in the leg they were exercising.
         try:
             targeted = Path(path) == unreadable_root
         except TypeError:
@@ -203,11 +186,6 @@ def test_unreadable_central_state_root_degrades_to_empty(tmp_path, monkeypatch):
     assert result["today"] == []
     assert result["stale"] == []
     assert result["unreadable_error"] is not None
-
-
-# ---------------------------------------------------------------------------
-# close_day_goals (§ C3 — the mutating close-out write leg)
-# ---------------------------------------------------------------------------
 
 
 def _collapse_record(tmp_path: Path, goal_id: str, repo: str = REPO) -> dict | None:
@@ -345,9 +323,6 @@ def test_different_repo_row_is_out_of_scope_for_close(tmp_path):
 
 
 def test_reclosing_already_closed_row_raises_value_error(tmp_path):
-    # A decision naming an already-done/dropped goal_id
-    # must not resolve to a source row; accepting it would silently overwrite
-    # the terminal status already on the wire via the latest-wins collapse.
     _write_shard(tmp_path, [_row(goal_id="abc123def456", status="done")])
 
     with pytest.raises(ValueError):
@@ -358,9 +333,6 @@ def test_reclosing_already_closed_row_raises_value_error(tmp_path):
 
 
 def test_unreadable_central_state_root_fails_loud_on_write_leg(tmp_path, monkeypatch):
-    # The write leg's "fails loud on unreadable root"
-    # claim previously fired only incidentally via the generic "missing" check;
-    # this asserts the dedicated, correctly-diagnosed exception.
     unreadable_root = tmp_path / "unreadable"
     unreadable_root.mkdir()
     (unreadable_root / "goals-log.test-machine.jsonl").write_text(
@@ -373,13 +345,6 @@ def test_unreadable_central_state_root_fails_loud_on_write_leg(tmp_path, monkeyp
 
     def _boom(path):
         # ACCEPTS EVERYTHING `os.scandir` ACCEPTS, because this replaces it
-        # process-wide. `os.scandir` takes an int file descriptor and bytes as
-        # well as a str/PathLike, and `Path(11)` raises TypeError -- so the
-        # narrowing check itself blew up on any unrelated caller that reached
-        # the stub with an fd. That caller exists: the autouse live-hub litter
-        # guard in conftest scans a directory at teardown, inside this
-        # monkeypatch's window, and both tests in this file ERRORed there
-        # deterministically rather than in the leg they were exercising.
         try:
             targeted = Path(path) == unreadable_root
         except TypeError:
@@ -397,9 +362,6 @@ def test_unreadable_central_state_root_fails_loud_on_write_leg(tmp_path, monkeyp
 
 
 def test_lost_supersession_fails_loud(tmp_path):
-    # A source row whose declared_at is set far in the future beats any
-    # real-clock append written by close_day_goals — reproducing DEC-3 hazard 2
-    # (a close written on a machine whose clock trails the declaring machine).
     _write_shard(
         tmp_path,
         [_row(goal_id="abc123def456", status="active", declared_at="9999-12-31T23:59:59Z")],
@@ -408,7 +370,5 @@ def test_lost_supersession_fails_loud(tmp_path):
     with pytest.raises(GoalCloseDayLostSupersession):
         close_day_goals(tmp_path, REPO, {"abc123def456": "done"}, hostname="test-machine")
 
-    # The append still landed on disk (fail loud, not silently dropped) — but the
-    # collapse still reports the row open, matching the hazard being guarded.
     record = _collapse_record(tmp_path, "abc123def456")
     assert record["status"] == "active"

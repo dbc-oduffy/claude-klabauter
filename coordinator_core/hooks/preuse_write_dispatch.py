@@ -74,12 +74,6 @@ from coordinator_core.write_guards.engine import evaluate
 
 
 def _compose_skipped_guard_breadcrumb(skipped: "list[str]") -> str:
-    """Best-effort stderr breadcrumb naming write-guard module(s) that failed
-    to import and were skipped (fail-open for those guards only). Pure --
-    takes the skipped-name list, returns the string; `_handler` is the only
-    caller and the only place that prints it. Ported unchanged from the DoE
-    script's own helper of the same name/shape.
-    """
     return (
         "[preuse_write_dispatch] write-guard module(s) failed to import "
         f"and were skipped (fail-open for those guards only): {', '.join(skipped)}"
@@ -88,31 +82,18 @@ def _compose_skipped_guard_breadcrumb(skipped: "list[str]") -> str:
 
 @register_op("hooks.preuse_write_dispatch")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PreToolUse(Write|Edit|MultiEdit|NotebookEdit) op: evaluate every
-    registered write guard against this payload and return its verdict.
-
-    `params` is the flat PreToolUse payload as received — `evaluate()` reads
-    `tool_name`, `session_id`, `cwd`, `agent_id`, and whatever per-guard
-    fields each guard's own `check(payload)` looks at directly out of it, so
-    no field extraction happens at this seam.
-
-    A guard module that fails to import during this call's discovery pass is
-    named on stderr (best-effort, never affects the ALLOW/DENY decision) —
-    the runtime-visible half of the silent-import-failure fix `evaluate()`'s
-    own docstring describes (`skipped_out`).
-    """
     params = payload_of(params)
     skipped: list[str] = []
     try:
         out = evaluate(params, skipped_out=skipped)
     except Exception:
-        return no_advisory()  # any engine failure -> fail-open ALLOW
+        return no_advisory()
 
     try:
         if skipped:
             print(_compose_skipped_guard_breadcrumb(skipped), file=sys.stderr)
     except Exception:
-        pass  # stderr write failed; the evaluated result above still returns
+        pass
 
     if out is None:
         return no_advisory()

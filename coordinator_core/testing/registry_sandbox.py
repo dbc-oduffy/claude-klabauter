@@ -135,20 +135,10 @@ import warnings
 from pathlib import Path
 from typing import List, Optional
 
-# Files the machine-local registry ladder reads, in precedence order. Both are
-# copied into a sandbox so a sandboxed read is byte-identical to a live one.
 REGISTRY_FILENAMES = ("registry.local.toml", "registry.toml")
 
-# The one file a test must never modify: gitignored per-machine state whose only
-# witness is this tripwire.
 LIVE_REGISTRY_FILENAME = "registry.local.toml"
 
-#: A value written from inside a pytest temporary directory — the one content
-#: signature that identifies a TEST as the author of a registry write, because
-#: no process outside a pytest run has such a path to write.
-#: ``pytest-of-<user>/pytest-<n>/`` is ``tmp_path_factory``'s basetemp shape; the
-#: bare ``pytest-of-`` prefix is matched on its own so a differently-nested or
-#: ``--basetemp``-relocated temp dir still classifies correctly.
 _PYTEST_TMP_PATH_RE = re.compile(r"pytest-of-|[\\/]pytest-\d+[\\/]", re.IGNORECASE)
 
 
@@ -185,12 +175,6 @@ def live_registry_dir() -> Path:
 
 
 def snapshot_live_registry() -> Optional[bytes]:
-    """Return the live ``registry.local.toml`` bytes, or ``None`` when absent.
-
-    ``None`` is a meaningful state, not an error: a machine that has never run
-    ``machine-local set`` has no local registry, and a test that CREATES one is
-    exactly as much of a violation as a test that edits one.
-    """
     path = live_registry_dir() / LIVE_REGISTRY_FILENAME
     try:
         return path.read_bytes()
@@ -343,7 +327,6 @@ def fail_on_live_registry_write_fixture(request):
 
 
 def _lines(blob: Optional[bytes]) -> List[str]:
-    """Non-blank lines of a registry snapshot; ``[]`` for an absent file."""
     return [
         line
         for line in (blob or b"").decode("utf-8", "replace").splitlines()
@@ -352,9 +335,6 @@ def _lines(blob: Optional[bytes]) -> List[str]:
 
 
 def _added_lines(before: Optional[bytes], after: Optional[bytes]) -> List[str]:
-    """Lines present in ``after`` but not ``before`` — a cheap, dependency-free
-    stand-in for a diff, sufficient because registry writes are line-appends of
-    flat ``"key" = 'value'`` entries."""
     before_set = set(_lines(before))
     return [line for line in _lines(after) if line not in before_set]
 
@@ -372,7 +352,6 @@ def _removed_lines(before: Optional[bytes], after: Optional[bytes]) -> List[str]
 
 
 def _describe_change(added: List[str], removed: List[str]) -> str:
-    """Indented ``added:``/``removed:`` blocks for whichever side is non-empty."""
     blocks = []
     for label, group in (("added", added), ("removed", removed)):
         if group:

@@ -232,50 +232,20 @@ from coordinator_core.bash_guards import _dialect
 from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
-#: Review: code-reviewer -- Finding 5 (nit): these attributes are
-#: vestigial in `bash_guards` -- `dispatch.py` imports `check` explicitly
-#: and hardcodes ordering + `fail_closed` in its `guard_chain` literal
-#: rather than doing attribute-based discovery (only `write_guards/tests/`,
-#: a different guard family, reads `CLASS`). Pre-existing convention
-#: copied from that family, not new to this module; kept for readability,
 #: but `PRIORITY` in particular governs nothing here and duplicate values
-#: across modules (e.g. this file's own `42` vs another module's `41`) do
-#: not indicate real ordering -- see `dispatch.py`'s `guard_chain` list for
-#: the actual order. `CLASS` itself was deleted (C14f, 2026-08-06): this
 #: guard moved to ADVISORY_REWRITE on 2026-07-30 (H11(a)) and nothing in
-#: the repo ever read the `"hard-deny"` string, which had gone stale and
-#: actively contradicted this module's own "Does NOT deny" negative-spec.
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 42
 
-#: This guard's OWN escape hatch -- distinct from BX-16's
 #: ``COORDINATOR_ALLOW_GREP_VIA_BASH`` (which suppresses the auto-rewrite
-#: check, not this guard). Read inline at call time, never hoisted (this
-#: package's established ``_override`` convention -- see
-#: ``dispatch_checks._override``'s own docstring for why).
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD"
 
 _SHAPE_NAME = "grep-via-bash"
 
-#: PowerShell has no true alias for the grep family (`Select-String`/`sls`
-#: is a different VERB, not an alias collision -- see docs/reference/
-#: guard-dialect-coverage.md row 12). This guard's rewrite payload
-#: (`_grep_python_rewrite`, imported verbatim from BX-16 above) is shaped
-#: for POSIX grep's own SHORT-flag surface, not Select-String's
-#: (`-Pattern`, `-Context N,N`, `-SimpleMatch`, `-CaseSensitive`, ...) --
-#: the same "second, parallel flag grammar" problem
-#: `guard-dialect-coverage.md`'s row 21 (`guard_inprocess_search`) names for
-#: an identical rewrite dependency. Recognizing a Select-String/sls
-#: invocation here would let this guard SEE the shape without being able to
-#: safely translate it, so this module declares SILENT rather than guess a
-#: rewrite it cannot honestly offer (row 12's own instruction: "prefer
-#: SILENT to a guess").
 _POWERSHELL_GREP_FAMILY_BINARIES = ("Select-String", "sls")
 
 
 def _extract_command(payload: Dict[str, Any]) -> Optional[str]:
-    """Return the CRLF-normalized ``command`` string for a Bash PreToolUse
-    payload, or ``None`` if this payload is not a non-empty Bash call."""
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
     tool_input = payload.get("tool_input") or {}
@@ -286,10 +256,6 @@ def _extract_command(payload: Dict[str, Any]) -> Optional[str]:
 
 
 #: Why a command classified as GREP_VIA_BASH failed to qualify as
-#: substitutable residue -- kept distinct so the composed-advisory message
-#: never misdescribes WHICH test failed (AC-7: a message must not claim a
-#: command is chained/piped when the real reason is an untranslatable flag,
-#: or vice versa).
 _REASON_CHAINED = "chained"
 _REASON_UNTRANSLATABLE = "untranslatable"
 
@@ -308,62 +274,26 @@ def _substitutable_rewrite(tokens: list) -> Tuple[Optional[str], str]:
     """
     segments = _segments_from_tokens_with_pipe_flag(tokens)
     if len(segments) != 1:
-        return None, _REASON_CHAINED  # `;`/`&`-joined or piped -- composed
+        return None, _REASON_CHAINED
     seg_tokens, pipe_before = segments[0]
     if pipe_before or not seg_tokens:
-        return None, _REASON_CHAINED  # something pipes INTO this segment
+        return None, _REASON_CHAINED
     # `classify_command` only matches GREP_VIA_BASH by finding a grep-family
-    # binary in SOME segment; with exactly one segment here, that segment's
-    # first token is necessarily the grep-family binary the classifier
-    # found -- this is not re-derived, just asserted, to keep the reason
-    # taxonomy exhaustive without a third, practically-unreachable branch.
     assert any(_token_matches_binary(seg_tokens[0], b) for b in _GREP_FAMILY_BINARIES)
     parsed = _grep_flags_and_operands(seg_tokens)
     if parsed is None:
-        return None, _REASON_UNTRANSLATABLE  # long option / unrecognized short flag
+        return None, _REASON_UNTRANSLATABLE
     return _grep_python_rewrite(parsed), ""
 
 
 #: Short flags that are GENUINELY GNU-only among grep's recognized set --
-#: verified against macOS 26.5's `man grep` (BSD grep) on 2026-08-01 (C2,
-#: docs/plans/2026-08-01-advisory-firing-shape-predicate.md). Each entry
-#: below carries its own one-line rationale (asserted per-entry by
-#: ``TestGnuOnlyDenylistRationaleDocumented`` in this guard's test module,
-#: so a future addition cannot land undocumented):
-#:   - `P` (`--perl-regexp`, PCRE): BSD grep ships no PCRE engine at all --
-#:     outright absent, the highest-risk divergence (silently different
-#:     match semantics, not a hard error) among this set.
-#:   - `z` (NUL-separated records): outright absent on BSD grep -- unknown
-#:     option, hard error rather than silent divergence.
-#:   - `Z` (`--null`'s single-dash spelling elsewhere in the GNU grep
 #:     family): a SEMANTIC COLLISION, not just absence -- BSD `-Z` means
-#:     "force zgrep-style decompression," a different behavior under the
-#:     same letter, which is a sharper hazard than an unrecognized flag.
-#:   - `T` (`--initial-tab`): outright absent on BSD grep.
 #: See ``_GNU_ONLY_LONG_OPTS`` immediately below for the long-option half
-#: of the same denylist. See ``_has_gnu_only_construct``.
 _GNU_ONLY_SHORT_FLAGS = frozenset({"P", "z", "Z", "T"})
 
 #: DENYLIST, not an allowlist, of long options that are genuinely GNU-only
 #: on BSD/macOS grep -- replaces the prior ``_PORTABLE_LONG_OPTS``
-#: allowlist (C2, docs/plans/2026-08-01-advisory-firing-shape-predicate.md):
-#: an allowlist makes every unexamined flag a false positive by default
-#: (`--exclude-dir` and `--version`, both BSD-supported, fired under the
-#: old shape purely because neither was `--include`/`--exclude`), whereas
-#: BSD/macOS grep mirrors nearly all GNU long options per its own man page
 #: STANDARDS section -- the genuinely-divergent set is small, so enumerating
-#: it both fails safe (an unrecognized-but-actually-portable long option is
-#: silent, not a false positive) and is smaller to maintain. Derived
-#: 2026-08-01, macOS 26.5 `man grep` (BSD grep); re-verify against the
-#: target platform's own `man grep` if grep versions diverge from this
-#: baseline. Each entry's rationale (asserted per-entry by
-#: ``TestGnuOnlyDenylistRationaleDocumented``):
-#:   - `--perl-regexp`: long spelling of `-P` -- see that entry above.
-#:   - `--include-from`, `--exclude-from`: absent on BSD grep (BSD only
-#:     ships the base `--include`/`--exclude`, not the from-a-file forms).
-#:   - `--initial-tab`: long spelling of `-T` -- see that entry above.
-#:   - `--group-separator`, `--no-group-separator`: absent on BSD grep
-#:     (context-line separator customization is a GNU-only extension).
 _GNU_ONLY_LONG_OPTS = frozenset(
     {
         "--perl-regexp",
@@ -415,25 +345,6 @@ def _has_gnu_only_construct(tokens: list) -> bool:
 
 
 #: ALLOWLIST, not a blocklist, for a downstream token `_partial_pipe_rewrite`
-#: is willing to re-quote via `shlex.quote`. This is the second round of
-#: additions to what used to be a blocklist here (glob/variable/backtick/
-#: tilde characters); a blocklist reproduces the same failure every time a
-#: new construct is found (worklist Row G2 review, 2026-07-30 -- a bare
-#: redirection operator like `>` and brace expansion like `out.{txt,bak}`
-#: both slipped the prior blocklist, since neither contains `$*?`[` and
-#: neither starts with `~`). An allowlist inverts the burden: a token is
-#: only safe to re-quote if it is the kind of ordinary argv word
-#: `shlex.quote` leaves syntactically inert -- word characters, and the
-#: small set of punctuation (`@%+=:,./-`) that is common in flag values
-#: and paths and carries no shell meaning of its own. Anything else --
-#: `>`/`>>`/`<`/`<<`/`<<<` and their numbered/duplicating forms
-#: (`2>`, `&>`, `>&`, `N>`, `N>>`), `|&`, brace expansion (`{`/`}`), glob
-#: characters (`*`/`?`/`[`), variable/command substitution (`$`, `` ` ``),
-#: a leading `~`, or anything else not on the allowlist -- declines rather
-#: than risk re-quoting a token whose shell meaning `shlex.quote` would
-#: change. Declining is always the safe outcome (see `_partial_pipe_rewrite`
-#: docstring): a token this predicate does not recognize is treated as
-#: unsafe, not as "probably fine."
 _DOWNSTREAM_SAFE_TOKEN_RE = re.compile(r"^[\w@%+=:,./-]+$")
 
 
@@ -572,28 +483,10 @@ def _composed_advisory(
     this guard (or any future one) from silently regressing again.
     """
     if partial_rewrite:
-        # A real, runnable alternative -- see `_partial_pipe_rewrite`'s own
-        # "KNOWN LIMIT" paragraph for the honest caveat on stdout parity
         # this offer does NOT claim to guarantee. Embedded VERBATIM, not
-        # re-indented or re-wrapped: `expected_grep_rewrite in ctx`
-        # (this guard's own test suite) pins the exact bytes
-        # `_grep_python_rewrite` emits, and re-indenting a multi-line
-        # `python3 -c` script by a constant offset breaks its top-level
-        # statements (module-level code must start at column 0) --
-        # unrunnable is worse than over-budget. Not exemptable either:
         # `_BACKTICK_RE` (`` `([^`\n]+)` ``) never matches across a
-        # newline, so this guard's message-size floor is pinned by this
-        # rewrite's own length, not by wrapper prose -- see this guard's
         # C8 execution report for the measured floor. RECONFIRMED (C3,
-        # docs/plans/2026-09-11-trim-the-remaining-over-cap-guard-messages.md):
-        # even with every wrapper word stripped (no lede prefix, no
-        # fallback sentence, no override note) the two-segment fixture
-        # `grep -rn TODO src/ | wc -l` still measures ~323 prose bytes
-        # against a 220-byte cap -- the un-exemptable, non-indented first
-        # and last lines of the embedded rewrite alone exceed the cap on
-        # their own. Nothing in this file's remaining wrapper prose is the
         # cost; left over cap for adjudication (GUARD_MESSAGE_EXEMPTIONS is
-        # outside this row's `writes:`).
         lede = "%s one-fewer-fork replacement instead: %s" % (
             _SHAPE_NAME,
             partial_rewrite,
@@ -685,7 +578,7 @@ def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         cmd, _dialect.Dialect.POWERSHELL, guard_name="guard_grep_via_bash"
     )
     if tokens is None:
-        return None  # SILENT already recorded by `_dialect` for the parse failure
+        return None
 
     for seg_tokens, _pipe_before in _segments_from_tokens_with_pipe_flag(tokens):
         if seg_tokens and any(
@@ -713,22 +606,6 @@ def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 def check(
     payload: Dict[str, Any], host_is_windows: Optional[bool] = None
 ) -> Optional[Dict[str, Any]]:
-    """Evaluate the grep-via-Bash guard against a PreToolUse(Bash) payload.
-
-    Returns ``None`` for the overwhelming majority of matches (no match at
-    all; substitutable residue, which `grep-via-bash-rewrite` -- registered
-    earlier in `dispatch.py`'s guard chain -- already claims; or a composed
-    command with no real alternative to name), or an advisory-only envelope
-    (every platform, never a deny) for the narrow slice this guard still
-    has something actionable to say about -- see `_composed_advisory`.
-
-    ``host_is_windows`` stays on this signature for call-site compatibility
-    with `dispatch.py`'s existing keyword-forwarding; this guard no longer
-    branches on it (H11(a), 2026-07-30 -- see the module docstring).
-
-    PowerShell dialect (`payload["tool_name"] == "PowerShell"`) routes to
-    `_check_powershell` -- see that function's own docstring (row 12, C4c).
-    """
     if _dialect.dialect_from_tool_name(payload.get("tool_name") or "") is _dialect.Dialect.POWERSHELL:
         return _check_powershell(payload)
 
@@ -746,19 +623,4 @@ def check(
     # GREP_VIA_BASH is the highest-precedence shape in
     # `_shape_classifier.SHAPE_PRECEDENCE` -- `has_shape` true here means
     # `classification.primary.shape` is always GREP_VIA_BASH too, so this
-    # guard's message never misdescribes a command whose primary match is
-    # actually some other shape (AC-7).
-    #
-    # Substitutable residue (a full rewrite exists) is claimed by
-    # `grep-via-bash-rewrite` (dispatch_checks.check_grep_via_bash_rewrite),
-    # registered EARLIER in dispatch.py's guard chain -- this guard's own
-    # platform-conditioned deny/advise for that set was provably
-    # unreachable in production (0 denies on either platform across the
-    # full corpus) and was removed 2026-07-30 (H11(a)). Composed residue
-    # (a chained/piped command, or a genuine GNU-only construct) has
-    # nothing upstream to claim it -- `_evaluate_grep_via_bash_match`
-    # (shared with the PowerShell leg, C3) renders that advisory, or stays
-    # silent per design-as-offers when neither a real partial rewrite nor a
-    # genuine GNU/BSD divergence exists to name (H11(c) evidence: 99.67% of
-    # this guard's prior firing set was exactly that silent case).
     return _evaluate_grep_via_bash_match(classification, payload)

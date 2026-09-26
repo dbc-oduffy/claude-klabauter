@@ -47,17 +47,9 @@ from coordinator_core.session import day_branch_cut_lock
 
 pytestmark = [pytest.mark.slow, pytest.mark.spawns_process]
 
-# How many forced-simultaneous stamp() pairs to drive. Kept small: each pair
-# is two real OS processes plus a barrier rendezvous, and this file's whole
-# job is a bounded measurement, not a stress suite -- large N buys narrower
-# error bars on a number this research doc already reports as an order-of-
-# magnitude extrapolation, not a precision figure.
 _FORCED_PAIRS = 20
 
-# The three real cadences the predecessor handoff records, in seconds. Named
 # here as PARAMETERS with the observed value beside them (gated exit
-# criterion "no-single-machine-assumptions") -- never baked into
-# `watch_heartbeat.py` itself, which this file does not touch.
 CADENCE_MONITOR_SECONDS = 18.0
 CADENCE_OBSERVED_SECONDS = 80.0
 CADENCE_CRON_SECONDS = 23 * 60.0
@@ -127,11 +119,6 @@ def _run_forced_pair(tmp_path: Path, pair_index: int) -> tuple[bool, bool, float
     wrote_b, elapsed_b = results.get(f"writer-b-{pair_index}", (False, 0.0))
     final_record = watch_heartbeat._read_record(watch_heartbeat.watch_path(repo_root))
     # A COLLISION is: both writers believed they wrote (both `stamp()` calls
-    # returned True, i.e. neither declined the other), yet only one writer's
-    # identity survives on disk and the OTHER's record -- and everything it
-    # would have traced -- is gone with no `prior_*` naming it, because both
-    # read the SAME pre-replacement record before either replaced it. This
-    # is exactly the defect the module docstring's "NO LOCK SPANS
     # READ-DECIDE-WRITE" note describes.
     both_believed_written = bool(wrote_a and wrote_b)
     surviving_writer = final_record.get("writer_session_id") if isinstance(final_record, dict) else None
@@ -143,14 +130,6 @@ def _run_forced_pair(tmp_path: Path, pair_index: int) -> tuple[bool, bool, float
 
 
 def test_forced_simultaneous_two_writer_collision_rate_and_cost(tmp_path):
-    """Worst-case (forced-simultaneous) collision measurement, process time only.
-
-    Reports PROCESS TIME and a COUNT, never wall clock (anti-scope). The
-    result lands in the research doc; this test only ASSERTS the driver
-    itself behaves (never raises, writes a well-formed record, costs stay
-    bounded) -- it is not the acceptance oracle for any shipped guard,
-    because C1 ships no guard.
-    """
     both_written_count = 0
     collision_count = 0
     total_process_time = 0.0
@@ -163,33 +142,15 @@ def test_forced_simultaneous_two_writer_collision_rate_and_cost(tmp_path):
             collision_count += 1
         total_process_time += elapsed_a + elapsed_b
         total_calls += 2
-        # NEVER RAISES, NEVER GATES (module docstring) -- confirmed under
-        # forced-concurrent load, not just single-writer use.
         record = watch_heartbeat._read_record(
             watch_heartbeat.watch_path(str(tmp_path / f"pair-{i}"))
         )
         assert isinstance(record, dict)
 
     # THE BARRIER FORCES BOTH CHILDREN TO START stamp() AT THE SAME INSTANT --
-    # it does NOT force both to land inside the read-decide-write window
-    # together, because the window itself is sub-millisecond and OS
-    # scheduling jitter after the barrier release routinely lets one writer
-    # finish its whole read-decide-write-replace before the other even opens
     # the file. When that happens `is_fresh_and_foreign` correctly DECLINES
-    # the second writer -- not a collision, a correct decline (the exact
-    # mechanism `test_a_fresh_foreign_record_is_declined_and_survives_
-    # unchanged` in test_watch_heartbeat.py pins). A genuine collision needs
-    # BOTH reads to land before EITHER write lands, which this measurement
-    # shows is the minority outcome even under maximal forcing -- that
-    # empirical split IS the number this row exists to produce, and it is
-    # recorded verbatim in the research doc rather than asserted to a fixed
-    # value here (real OS scheduling, not this file, decides the split on
-    # any given run).
     assert 0 <= collision_count <= both_written_count <= _FORCED_PAIRS
     avg_call_process_time = total_process_time / total_calls
-    # Sanity bound only -- `stamp` is on a sub-500ms-end-to-end hot path
-    # (DR-344); a single call ballooning past that here would be a defect
-    # in this measurement's own environment, not a shipped-code finding.
     assert avg_call_process_time < 0.5
 
 
@@ -206,11 +167,6 @@ def test_forced_simultaneous_two_writer_never_collides_under_the_guard(tmp_path)
         _both_written, collided, _elapsed_a, _elapsed_b = _run_forced_pair(tmp_path, i)
         if collided:
             collision_count += 1
-    # C1's measured baseline (no guard): 9/20 (45%) forced-simultaneous pairs
-    # collided. At that rate 20 pairs colliding zero times by chance alone is
-    # vanishingly unlikely, which is exactly what makes this assertion a
-    # falsifier -- it fails on a reverted guard almost every run, and passes
-    # here because the guard now serializes the window.
     assert collision_count == 0
 
 
@@ -235,8 +191,6 @@ def test_locked_rmw_two_part_eligibility_gate():
     resolved = locked_write._lock_dir_path(repo_root)
     part1_elapsed = time.process_time() - t0
     assert resolved is not None
-    # Part 1 passes: resolution succeeds and costs effectively nothing
-    # (zero-spawn upward walk -- `git_common_dir`'s own docstring).
     assert part1_elapsed < 0.05
 
 
@@ -264,10 +218,6 @@ def test_day_branch_cut_lock_reuse_cost(tmp_path):
 
 
 def test_re_read_after_replace_cost(tmp_path):
-    """Cost candidate (1): re-read after `os.replace` and report the
-    mismatch. Cheapest candidate by construction -- one extra file read,
-    no lock, no retry.
-    """
     repo_root = str(tmp_path)
     os.makedirs(os.path.join(repo_root, "state"), exist_ok=True)
     watch_heartbeat.stamp(
@@ -282,10 +232,6 @@ def test_re_read_after_replace_cost(tmp_path):
 
 
 def test_compare_and_swap_content_hash_cost(tmp_path):
-    """Cost candidate (2): compare-and-swap on a content hash with one
-    retry. Costed as the hash computation over the written payload --
-    the cheapest CAS witness available without a new dependency.
-    """
     import hashlib
 
     repo_root = str(tmp_path)

@@ -43,9 +43,6 @@ pytestmark = [
 
 
 def test_zero_spawn_python_callable_reports_zero_beyond_the_root():
-    """A `sys.executable -c` root that spawns nothing must report exactly
-    1 process (itself) -- the shape the target close-leg test relies on
-    for its zero-spawn-census assertion."""
     result = batched_process_time_ms([sys.executable, "-c", "pass"], k=5)
     assert result["rc"] == 0, f"no-op driver did not exit 0: {result!r}"
     assert result["procs_per_call"] == 1.0, (
@@ -55,9 +52,6 @@ def test_zero_spawn_python_callable_reports_zero_beyond_the_root():
 
 
 def test_known_spawn_count_via_subprocess_popen():
-    """A root that calls `subprocess.run(['true'])` N=4 times must report
-    exactly N+1 (root plus each spawned `true`) -- exercises the
-    `subprocess.Popen` audit event specifically."""
     driver = (
         "import subprocess\n"
         "for _ in range(4):\n"
@@ -72,10 +66,6 @@ def test_known_spawn_count_via_subprocess_popen():
 
 
 def test_known_spawn_count_via_raw_os_fork():
-    """A root that calls bare `os.fork()` (bypassing `subprocess` entirely)
-    N=6 times, immediately reaping each child, must still report exactly
-    N+1 -- exercises the `os.fork` audit event, the lower-level primitive
-    a caller could reach without ever touching `subprocess.Popen`."""
     driver = (
         "import os\n"
         "for _ in range(6):\n"
@@ -93,11 +83,6 @@ def test_known_spawn_count_via_raw_os_fork():
 
 
 def test_non_python_root_counts_the_command_process_itself():
-    """A `cmd` that does not name `sys.executable` (a plain external binary)
-    cannot be run in-process (no interpreter to hook), so this child's own
-    act of launching it is itself a counted spawn -- `['true']` must report
-    exactly 2.0 (the measuring child, plus the `true` process it Popens),
-    never 1.0 (which would silently treat the command as free)."""
     result = batched_process_time_ms(["true"], k=3)
     assert result["rc"] == 0, f"['true'] root did not exit 0: {result!r}"
     assert result["procs_per_call"] == 2.0, (
@@ -107,17 +92,6 @@ def test_non_python_root_counts_the_command_process_itself():
 
 
 def test_orphaned_raw_fork_descendant_does_not_hang_the_read_loop(monkeypatch):
-    """Regression for review finding F1 (P1, demonstrated hang):
-    `_linux_one_invocation`'s pipe-EOF read loop previously had no bound,
-    so a root that forks a raw (non-exec) descendant outliving it kept
-    `write_fd` open past the root's own exit and blocked the read loop
-    indefinitely (reproduced directly: a 3s grandchild sleep hung the loop
-    for the full 3s). Monkeypatches the module's read-loop timeout down to
-    well under the grandchild's sleep so the fixed code fails fast with the
-    documented RuntimeError; wraps the whole test in a SIGALRM watchdog
-    (this repo carries no pytest-timeout plugin) so a regression back to
-    the pre-fix, unbounded `os.read` loop fails this test outright instead
-    of hanging the run."""
     from coordinator_core.benchmarks import process_time as pt
 
     monkeypatch.setattr(pt, "_LINUX_READ_LOOP_TIMEOUT_S", 1.0)
@@ -147,10 +121,6 @@ def test_orphaned_raw_fork_descendant_does_not_hang_the_read_loop(monkeypatch):
 
 
 def test_process_time_is_not_wall_clock():
-    """Same DR-344 negative-spec assertion `test_process_time_posix.py`
-    pins for Darwin, re-asserted for the Linux primitive: a near-zero-CPU
-    `sleep` must not read as a wall-clock value smuggled behind
-    `process_time_ms`."""
     result = batched_process_time_ms(["/bin/sh", "-c", "sleep 0.2"], k=1)
     assert result["rc"] == 0, f"sleep fixture did not exit 0: {result!r}"
     assert result["wall_ms"] >= 150.0, (

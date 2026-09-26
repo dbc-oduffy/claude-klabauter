@@ -71,10 +71,6 @@ def _write_repos_registry(reg_dir: Path, repos: dict) -> None:
 
 
 def _install_counting_run(monkeypatch) -> dict:
-    """Wraps the REAL `subprocess.run` to count calls -- never replaces its
-    behavior. Installed only around the measured `main()` call, never
-    during fixture setup, so setup I/O is never mistaken for the op's own
-    spawns."""
     call_count = {"n": 0}
     real_run = subprocess.run
 
@@ -87,9 +83,6 @@ def _install_counting_run(monkeypatch) -> dict:
 
 
 class TestWholeOpSpawnBudget:
-    """Three named shapes -- Tier-A-non-empty, Tier-A-empty/Tier-B, and
-    all-tiers-empty -- are genuinely different codepaths through `main()`,
-    not one shape parameterized three ways."""
 
     def test_tier_a_non_empty_branch_spawns_three(self, tmp_path, monkeypatch) -> None:
         """A + A.5 + merge. Tier A fires via the fast-path (non-hyphenated)
@@ -119,10 +112,7 @@ class TestWholeOpSpawnBudget:
         _write_repos_registry(reg_dir, {"realrepo": real_repo})
         monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
 
-        # Sanity check, run BEFORE the counting wrapper is installed (its own
-        # `_sort_unique` spawn must not pollute the measured count below):
-        # confirms Tier A actually fired via the fast path, not a fallback.
-        assert m._tier_a() == [f"X:\\{marker}"]  # abs-path-ok: synthetic nonexistent fixture marker, not a real machine path
+        assert m._tier_a() == [f"X:\\{marker}"]
 
         call_count = _install_counting_run(monkeypatch)
         rc = m.main([])
@@ -175,8 +165,6 @@ class TestWholeOpSpawnBudget:
         )
 
     def test_all_tiers_empty_spawns_zero(self, tmp_path, monkeypatch) -> None:
-        """A, A.5, and B all empty -- every `_sort_unique` call this shape
-        reaches sees an empty list and early-returns before spawning."""
         assert m._tier_a() == []
 
         monkeypatch.setattr(m, "_TIER_B_CANDIDATES", [str(tmp_path / "does-not-exist")])
@@ -199,9 +187,6 @@ class TestWholeOpSpawnBudget:
         )
 
     def test_existing_keys_still_present(self) -> None:
-        """Negative-spec pin: this file adds op-total keys, it does not
-        replace or rename the existing sub-path keys -- see this module's
-        docstring and the brief's hard constraint against renaming them."""
         budget_entry = _manifest_spawn_budget()
         assert budget_entry["per_call"] == 1
         assert budget_entry["machine_local_cli_elimination_calls"] == 0

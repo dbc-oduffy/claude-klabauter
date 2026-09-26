@@ -72,18 +72,7 @@ _B64_ARGV = base64.b64encode((HELPER + " -m x").encode()).decode()
 _HEX_ARGV = (HELPER + " -m x").encode().hex()
 
 
-# ---------------------------------------------------------------------------
-# The folder itself -- the two properties no verdict can express.
-# ---------------------------------------------------------------------------
-
-
 def test_folder_never_executes_the_payload(tmp_path):
-    """The whole safety argument, asserted rather than described: payloads
-    that WRITE A FILE, spawn, and import are folded, and the file does not
-    appear. The folder resolves only its own closed set of operators and
-    methods over values it already holds -- it never calls ``eval``,
-    ``exec``, ``ast.literal_eval``, ``open``, or anything the payload names.
-    """
     marker = tmp_path / "folder-executed-the-payload.txt"
     spelling = str(marker).replace("\\", "\\\\")
     payloads = [
@@ -99,10 +88,6 @@ def test_folder_never_executes_the_payload(tmp_path):
 
 
 def test_folder_resolves_the_assembly_shapes_it_claims():
-    """Mechanism 1's coverage, at the folder rather than the verdict: each
-    spelling below assembles the helper name out of parts, and each must
-    appear in the folded text.
-    """
     payloads = [
         "import os; os.system('scoped-git'+'-commit')",
         "import os; os.system('sc'+'oped-git'+'-commit')",
@@ -126,10 +111,6 @@ def test_folder_resolves_the_assembly_shapes_it_claims():
         assert "scoped-git-commit" in folded.text, payload
 
 
-#: The deep-concatenation row is the one whose bound `_fold_python_c_payload`
-#: does not own: `ast.parse` exhausts CPython's recursion limit before any
-#: `_FoldBudget` exists, so the entrypoint's `RecursionError` branch is what
-#: keeps this row in the same bucket as the rest.
 _FOLD_BOMB_PAYLOADS = [
     ("literal-repetition", "import os; os.system('a'*1000000000 + ' x')"),
     ("pow-repetition", "import os; os.system('a'*10**9 + ' x')"),
@@ -155,9 +136,6 @@ def test_folding_bomb_hits_a_bound_and_does_not_resolve(label, payload):
     outcome = {}
 
     def _call() -> None:
-        # Clears the memoizing cache every invocation -- in_process_time_ms
-        # may call this more than once to reach its measurement window, and
-        # a cache hit on a later call would silently mask a slow first one.
         guard._fold_python_c_payload.cache_clear()
         outcome["folded"] = guard._fold_python_c_payload(payload)
 
@@ -165,11 +143,6 @@ def test_folding_bomb_hits_a_bound_and_does_not_resolve(label, payload):
     folded = outcome["folded"]
     assert timing["process_time_ms"] < 2000.0, (label, timing["process_time_ms"])
     assert len(folded.text) <= guard._MAX_FOLDED_TOTAL_LEN
-    # The bomb's own value never resolves, so the sink it feeds is opaque --
-    # the deny route. Two refusal REASONS are in play and both are correct:
-    # a length/node bound tripping (`bounds_exceeded`), or the construct
-    # never being foldable at all (``**`` is not folded; a width-field
-    # template is refused before it is applied), which needs no bound.
     assert folded.opaque_sink_call is True
 
 
@@ -209,10 +182,6 @@ def test_bounds_are_the_documented_values():
 
 
 def test_unparseable_payload_folds_to_nothing_and_claims_nothing():
-    """Fail-closed direction at the entrypoint: source this folder cannot
-    parse yields no text and no sink claim, leaving the verdict to parts
-    13-15 exactly as before.
-    """
     guard._fold_python_c_payload.cache_clear()
     folded = guard._fold_python_c_payload("import ast; ast.parse('%s'" % HELPER)
     assert folded.parsed is False
@@ -221,18 +190,6 @@ def test_unparseable_payload_folds_to_nothing_and_claims_nothing():
 
 
 def _recursion_bomb_payload():
-    """A unary-minus chain, grown empirically until `ast.parse` actually
-    blows its depth guard on THIS interpreter -- probed at runtime rather
-    than pinned to a fixed term count or a fixed exception type, so neither
-    a raised recursion limit NOR a parser-implementation change (CPython
-    3.14's PEG parser replaced a pure recursion trip with a growable,
-    bounded stack that raises `MemoryError` instead of `RecursionError` for
-    the identical "too deep to parse safely" shape) can quietly turn the
-    test below into a no-op. A left-associative ``+`` chain (the prior
-    shape) no longer nests at all under 3.14's parser and never raises
-    anything at any practical length -- unary chains still recurse one
-    frame per level, which is what this needs.
-    """
     n = max(sys.getrecursionlimit() * 4, 2000)
     for _ in range(24):
         payload = "import os; os.system(%s1)" % ("-" * n)
@@ -250,12 +207,6 @@ def _recursion_bomb_payload():
 
 
 def test_recursion_bomb_is_a_bound_hit_not_an_unparseable_payload():
-    """The one bound the folder does not own: a payload too deeply nested
-    for `ast.parse` raises before any `_FoldBudget` exists. Reporting that
-    as "unparseable" fails OPEN -- parts 13-15 then decide on text that
-    never spells the identity -- so the entrypoint reports a BOUND instead,
-    which mechanism 2 denies on.
-    """
     payload = _recursion_bomb_payload()
     with pytest.raises((RecursionError, MemoryError)):
         ast.parse(payload)
@@ -268,10 +219,6 @@ def test_recursion_bomb_is_a_bound_hit_not_an_unparseable_payload():
 
 
 def test_recursion_bomb_command_denies(monkeypatch):
-    """The verdict the fold result exists to produce: the assembled command
-    carrying a recursion bomb DENIES for a subagent, where before the
-    RecursionError-as-unparseable fall-through ALLOWED it.
-    """
     base._denies(monkeypatch, 'python3 -c "%s"' % _recursion_bomb_payload())
 
 
@@ -286,17 +233,6 @@ def test_recursion_bomb_command_denies(monkeypatch):
     ],
 )
 def test_comprehension_into_a_sink_is_unresolved_and_denies(label, payload):
-    """DEFECT 3 of part 17, pinned at the folder: the inert leg PERMITS
-    comprehensions while this folder does not model them, which made a
-    comprehension an un-folded string channel into any callable -- the
-    ord-encoded helper name in each row below resolves to NOTHING, so neither
-    the literal reconstruction nor mechanism 1 can ever see it.
-
-    The requirement is the fail-closed direction, not the fold: unresolved
-    feeds mechanism 2, which denies. Evaluating comprehensions here was
-    considered and rejected -- it means running attacker-authored iteration
-    inside a PreToolUse hook, which `_fold_expr`'s negative spec forbids.
-    """
     guard._fold_python_c_payload.cache_clear()
     folded = guard._fold_python_c_payload(payload)
     assert "scoped-git-commit" not in folded.text, label
@@ -313,10 +249,6 @@ def test_comprehension_into_a_sink_is_unresolved_and_denies(label, payload):
     ],
 )
 def test_folder_refuses_every_comprehension_node_type(label, node_src):
-    """The same property at the node level, so a future editor adding one
-    comprehension form's folding cannot leave a sibling form as a silent
-    channel: all four resolve to the sentinel.
-    """
     import ast as _ast
 
     node = _ast.parse(node_src, mode="eval").body
@@ -337,10 +269,7 @@ def test_sink_sets_are_derived_from_part14_not_re_enumerated():
     assert "run" not in guard._OPAQUE_PROGRAM_SINK_ATTRIBUTE_NAMES
 
 
-# ---------------------------------------------------------------------------
-# Layer 2 -- end-to-end verdicts. The adversarial corpus: every row is a
 # real commit reached through text the payload ASSEMBLES.
-# ---------------------------------------------------------------------------
 
 _ASSEMBLY_COMMANDS = [
     ("concat-in-os-system", "python3 -c \"import os; os.system('scoped-git'+'-commit -m x')\""),
@@ -368,8 +297,6 @@ _ASSEMBLY_COMMANDS = [
         "python3 -c \"import os; os.system('python3 -m coordinator_core.invoke %s' + '_commit {}')\""
         % _OP[: -len("_commit")],
     ),
-    # Mechanism 2's rows: nothing resolves, so nothing can be matched on
-    # content -- these deny because the program cannot be known at all.
     ("environ-indirect", "python3 -c \"import os; os.system(os.environ['X'])\""),
     ("environ-indirect-commit-named", "python3 -c \"import os; os.system(os.environ['COMMIT_CMD'])\""),
     ("argv-indirect-exec", "python3 -c \"import sys; exec(open(sys.argv[1]).read())\""),
@@ -379,9 +306,7 @@ _ASSEMBLY_COMMANDS = [
     ("shell-true-opaque", "python3 -c \"import subprocess,os; subprocess.run(os.environ['X'], shell=True)\""),
 ]
 
-#: Boundary anchoring is the one thing folding must not take with it: a name
 #: ASSEMBLED into ``evil-scoped-git-commit`` is no more that helper than the
-#: contiguous spelling is.
 _BOUNDARY_NEGATIVE_COMMANDS = [
     ("evil-prefixed-assembled", "python3 -c \"import os; os.system('evil-scoped-git'+'-commit -m x')\""),
     (
@@ -391,11 +316,7 @@ _BOUNDARY_NEGATIVE_COMMANDS = [
     ),
 ]
 
-#: Realistic usage: commands a dispatched agent would plausibly run that
-#: mention commit-ish text. This corpus is the false-positive budget, and
-#: every row must ALLOW. It is the measurement that chose mechanism 2's
 #: shipped narrowing (`_OPAQUE_PROGRAM_SINK_ATTRIBUTE_NAMES`): with the
-#: brief's un-narrowed shape, four of these denied.
 _REALISTIC_COMMANDS = [
     (
         "pytest-one-test-file",
@@ -499,15 +420,7 @@ _REALISTIC_COMMANDS = [
 
 #: PART 18's PRICED COST, and the only two rows that left `_REALISTIC_
 #: COMMANDS` to get here. Both are ``subprocess.run([sys.executable, ...])``:
-#: an argv vector whose PROGRAM SLOT does not resolve, which part 18 refuses
-#: because an unresolved program is exactly what mechanism 2 exists for. They
-#: were measured at part 17 and the trade was TAKEN at a cost of two, not
-#: overlooked -- the decision is recorded at
 #: ``_ARGV_PROGRAM_SLOT_SINK_ATTRIBUTES`` in the guard. They are cheap: each
-#: bites only a command that BOTH routes through ``python3 -c`` AND mentions
-#: commit-ish text, and the workaround is to spell the program (``'python3'``)
-#: or to invoke pytest directly instead of through an interpreter payload --
-#: which the ``pytest-one-test-file`` row above still does, and still allows.
 _PART18_PRICED_DENY_COMMANDS = [
     (
         "pytest-argv-file",
@@ -520,11 +433,6 @@ _PART18_PRICED_DENY_COMMANDS = [
     ),
 ]
 
-#: Part 18's adversarial rows: an argv-vector sink that cannot be shown to
-#: name its own program. The first is the payload part 17 confirmed LIVE
-#: against the shipped guard -- part 17 closed the comprehension channel for
-#: folding, and the assembled name then landed in slot 0 of an argv vector
-#: nobody checked.
 _ARGV_SLOT0_DENY_COMMANDS = [
     (
         "part17-residual-bypass",
@@ -562,12 +470,6 @@ _ARGV_SLOT0_DENY_COMMANDS = [
     ),
 ]
 
-#: The other half of part 18's claim, and the reason it is a SLOT-0 rule
-#: rather than a re-widening: a vector whose program IS determinable stays
-#: allowed however it was built, and the three preserved shapes (keyword
-#: program, ``shell=True`` string form, non-list first argument) do not
-#: regress. Every row here mentions commit-ish text, so each really does
-#: reach the full matcher stage.
 _ARGV_SLOT0_ALLOW_COMMANDS = [
     (
         "constant-slot0-unresolved-later-slot",
@@ -606,12 +508,8 @@ _ARGV_SLOT0_ALLOW_COMMANDS = [
 
 
 #: PART 19 (2026-08-05) -- the four SINK-IDENTIFICATION gaps, each confirmed
-#: ``GUARD=ALLOW`` at the part-18 HEAD. Parts 16-18 all asked what a sink
 #: RECEIVED; none of these got that far, because the call was never
-#: recognised as a sink. Grouped by gap, with the alias/spelling variants
-#: that prove each fix is a rule rather than a patched spelling.
 _PART19_SINK_ID_DENY_COMMANDS = [
-    # Gap 1 -- an aliased import renamed the primitive out of reach.
     ("alias-run", "python3 -c \"from subprocess import run as r; import sys; r(sys.argv[1:])\""),
     (
         "alias-popen",
@@ -633,10 +531,8 @@ _PART19_SINK_ID_DENY_COMMANDS = [
         "unresolvable-rebinding",
         "python3 -c \"import os,sys; f=[os.system,print][int(sys.argv[1])]; f(sys.argv[2])\"",
     ),
-    # Gap 2 -- ("spawn","exec") matched with startswith, so posix_spawn missed.
     ("posix-spawn", "python3 -c \"import os; os.posix_spawn(os.environ['X'],[],{})\""),
     ("posix-spawnp", "python3 -c \"import os; os.posix_spawnp(os.environ['X'],[],{})\""),
-    # Gap 3 -- the program arrived by keyword, so the slot-0 rule never ran.
     ("args-keyword", "python3 -c \"import subprocess,sys; subprocess.run(args=sys.argv[1:])\""),
     (
         "popen-args-keyword",
@@ -647,7 +543,6 @@ _PART19_SINK_ID_DENY_COMMANDS = [
         "python3 -c \"import subprocess,json; d=json.load(open('c.json')); subprocess.run(**d)\"",
     ),
     # Gap 4 -- slot 0 was known, and it was an INTERPRETER running an
-    # unknown program.
     (
         "nested-python-c",
         "python3 -c \"import subprocess,os; subprocess.run(['python3','-c',os.environ['X']])\"",
@@ -671,11 +566,7 @@ _PART19_SINK_ID_DENY_COMMANDS = [
     ),
 ]
 
-#: Part 19's narrowness, row by row -- the shapes that must NOT move, because
-#: each is a spelling honest work uses and none of them hides a program.
-#: ``nested-resolvable-c-*`` is the load-bearing pair: a resolvable nested
 #: payload is RECURSED into, not blanket-refused, so it allows when its own
-#: contents allow.
 _PART19_SINK_ID_ALLOW_COMMANDS = [
     (
         "local-alias-run-unresolved-element",
@@ -715,13 +606,7 @@ _PART19_SINK_ID_ALLOW_COMMANDS = [
 ]
 
 
-#: PART 20 (2026-08-05) -- part 19's stated residual, closed. Both brief rows
-#: were confirmed ``GUARD=ALLOW`` at part 19's HEAD: ``subprocess.getoutput``
-#: and ``getstatusoutput`` run a shell command line, and fell between the
-#: argv door (they are not in that family) and the whole-command-text door
-#: (``subprocess`` is subtracted from the module leg). The alias rows are the
 #: load-bearing half -- they prove admission is by RESOLVED RECEIVER, so it
-#: cannot be evaded by renaming and does not depend on the spelling.
 _PART20_RECEIVER_QUALIFIED_DENY_COMMANDS = [
     (
         "getoutput-environ",
@@ -756,10 +641,6 @@ _PART20_RECEIVER_QUALIFIED_DENY_COMMANDS = [
 ]
 
 #: Part 20's NARROWNESS, and the reason the leg is receiver-qualified at all:
-#: ``getoutput`` is a name honest code hangs off its own objects. Each row
-#: here reaches a ``.getoutput``/bare ``getoutput`` that is NOT
-#: ``subprocess``'s, and each must still ALLOW -- a name-only admission would
-#: have denied all three for nothing.
 _PART20_RECEIVER_QUALIFIED_ALLOW_COMMANDS = [
     (
         "unrelated-module-receiver",
@@ -786,9 +667,6 @@ _PART20_RECEIVER_QUALIFIED_ALLOW_COMMANDS = [
     "label,cmd", _ASSEMBLY_COMMANDS, ids=[c[0] for c in _ASSEMBLY_COMMANDS]
 )
 def test_assembled_commit_command_denies(monkeypatch, label, cmd):
-    """Part 16's whole point: a commit reached through a name the payload
-    BUILDS -- or through a program nothing can name at all -- denies.
-    """
     base._denies(monkeypatch, cmd)
 
 
@@ -803,26 +681,13 @@ def test_boundary_anchoring_survives_folding(monkeypatch, label, cmd):
     "label,cmd", _REALISTIC_COMMANDS, ids=[c[0] for c in _REALISTIC_COMMANDS]
 )
 def test_realistic_command_still_allows(monkeypatch, label, cmd):
-    """The false-positive budget, row by row. A failure here is not a
-    detection improvement -- it is dispatched work becoming miserable, which
-    is the failure mode this corpus exists to make visible.
-    """
     base._allows(monkeypatch, cmd)
-
-
-# ---------------------------------------------------------------------------
-# Part 18 (2026-08-05) -- slot 0 of an argv vector is the PROGRAM slot.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "label,cmd", _ARGV_SLOT0_DENY_COMMANDS, ids=[c[0] for c in _ARGV_SLOT0_DENY_COMMANDS]
 )
 def test_argv_vector_with_unknown_program_slot_denies(monkeypatch, label, cmd):
-    """Part 18's claim, end-to-end through ``check()``: an argv-vector sink
-    whose slot 0 cannot be resolved starts a program nobody can name from the
-    text, and this seam does not start those on a subagent's behalf.
-    """
     base._denies(monkeypatch, cmd)
 
 
@@ -830,11 +695,6 @@ def test_argv_vector_with_unknown_program_slot_denies(monkeypatch, label, cmd):
     "label,cmd", _ARGV_SLOT0_ALLOW_COMMANDS, ids=[c[0] for c in _ARGV_SLOT0_ALLOW_COMMANDS]
 )
 def test_argv_vector_with_known_program_slot_still_allows(monkeypatch, label, cmd):
-    """The narrowness of that claim, row by row: slots 1..n keep part 16's
-    exemption, structurally-built vectors resolve rather than refuse, and the
-    three preserved shapes (keyword program, ``shell=True`` string form,
-    ``communicate`` stdin data) do not regress.
-    """
     base._allows(monkeypatch, cmd)
 
 
@@ -852,12 +712,6 @@ def test_priced_realistic_rows_now_deny(monkeypatch, label, cmd):
 
 
 def test_part18_moves_exactly_the_two_priced_realistic_rows(monkeypatch):
-    """Blast-radius pin in the same shape parts 14-17 use: with the slot-0 leg
-    forced off, every part-18 adversarial row comes back ALLOW and the two
-    priced rows come back ALLOW -- and NOTHING ELSE in any corpus here moves.
-    Widening the leg shows up as a diff in this test rather than as a quiet
-    change in what the guard denies.
-    """
     base._subagent(monkeypatch)
     rows = (
         [("assembly:" + label, cmd) for label, cmd in _ASSEMBLY_COMMANDS]
@@ -929,9 +783,7 @@ def test_argv_program_slot_resolves_only_what_it_claims(label, src, expected):
         assert result == expected, label
 
 
-# ---------------------------------------------------------------------------
 # Part 19 (2026-08-05) -- sink IDENTIFICATION, not slot resolution.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -940,11 +792,6 @@ def test_argv_program_slot_resolves_only_what_it_claims(label, src, expected):
     ids=[c[0] for c in _PART19_SINK_ID_DENY_COMMANDS],
 )
 def test_unidentified_sink_now_denies(monkeypatch, label, cmd):
-    """Part 19's claim, end-to-end through ``check()``: a call that reaches an
-    execution primitive is a sink however it was NAMED -- through an alias,
-    through a ``posix_``-prefixed family member, through the ``args=``
-    keyword, or one interpreter further down.
-    """
     base._denies(monkeypatch, cmd)
 
 
@@ -963,17 +810,8 @@ def test_identified_sink_with_a_knowable_program_still_allows(monkeypatch, label
 
 
 def _disable_part19(monkeypatch):
-    """Force every part-19 seam back to its part-18 behaviour, so the moving
-    set can be measured rather than asserted. Four seams, because part 19 is
-    four independent identification fixes: import-binding resolution, the
-    process-creation family match, vector location, and the nested
-    interpreter leg.
-    """
     monkeypatch.setattr(guard, "_payload_bindings", lambda tree: guard._EMPTY_BINDINGS)
     #: Spelled out rather than read off `_NON_INERT_ATTRIBUTE_PREFIXES`: part
-    #: 21 dropped the ``exec`` root, and this substitute must keep reproducing
-    #: PART 18's behaviour (both roots, plain ``startswith``) or the measured
-    #: baseline below silently drifts with a later edit.
     monkeypatch.setattr(
         guard,
         "_name_is_process_creation",
@@ -991,14 +829,6 @@ def _disable_part19(monkeypatch):
 
 
 def test_part19_moves_exactly_its_own_rows_and_no_corpus_row(monkeypatch):
-    """Blast-radius pin, in the shape parts 14-18 use, and the number that
-    chose this part's shipped scope: with all four part-19 seams forced off,
-    every row it introduces comes back ALLOW and NOTHING ELSE in any corpus
-    moves -- realistic usage included, so part 18's priced two stays two.
-    Sink identification was fixable without buying false positives; an edit
-    that starts moving realistic rows is a different trade and needs this
-    measurement re-run rather than an argument.
-    """
     base._subagent(monkeypatch)
     corpus = (
         [("assembly:" + label, cmd) for label, cmd in _ASSEMBLY_COMMANDS]
@@ -1038,10 +868,6 @@ def test_part19_moves_exactly_its_own_rows_and_no_corpus_row(monkeypatch):
         ("unresolvable-rebinding", "import os\nf = q[0]\nf(v)", {"os"}, {"f"}),
         ("rebound-import-name", "import os\nos = q\nos.system(v)", set(), {"os"}),
         ("def-bound-name", "def go():\n    pass\ngo()", set(), set()),
-        # PART 21 -- a name bound TWICE. Not one of the eleven rows above binds
-        # a name more than once, and that blind spot is exactly why a
-        # last-visit-wins map shipped: every one of these resolved to the
-        # SECOND, benign identity and the sink became invisible.
         (
             "shadowed-by-def-scope",
             "from subprocess import run as r\ndef f():\n    from json import loads as r\n"
@@ -1144,9 +970,6 @@ def test_a_name_bound_twice_keeps_both_identities(label, src, name, expected_tar
     assert bindings.imports[name] == expected_targets, label
 
 
-#: One shadowed-alias payload per leg the P0 defeated. They share one shape --
-#: a sink aliased at module level, the same alias rebound to a benign target in
-#: a nested statement that never runs -- because they shared one resolver.
 _PART21_SHADOWED_BINDING_SOURCES = [
     (
         "argv-slot-0",
@@ -1184,20 +1007,10 @@ _PART21_SHADOWED_BINDING_SOURCES = [
     ids=[c[0] for c in _PART21_SHADOWED_BINDING_SOURCES],
 )
 def test_shadowed_alias_still_denies_end_to_end(monkeypatch, label, src):
-    """The same defect at the VERDICT, one row per leg it defeated -- because
-    the resolver is shared, one shadowed binding re-opened all five at once.
-    """
     base._denies(monkeypatch, 'python3 -c "%s"' % src.replace('"', '\\"'))
 
 
 def test_honest_import_fallback_is_not_denied_by_the_union(monkeypatch):
-    """The measured reason part 21 UNIONS identities rather than moving a
-    multi-bound name to ``opaque``: ``opaque`` routes a call to the harshest
-    door unconditionally, so the honest ``try: import <fast> / except
-    ImportError: import <stdlib>`` shape -- two BENIGN identities -- would
-    have become a false deny. The union denies exactly when one of the
-    identities is a sink, and here none is.
-    """
     base._allows(
         monkeypatch,
         'python3 -c "import os\ntry:\n    import json as j\nexcept ImportError:\n'
@@ -1206,10 +1019,6 @@ def test_honest_import_fallback_is_not_denied_by_the_union(monkeypatch):
 
 
 def test_import_resolution_makes_an_alias_the_same_sink():
-    """Gap 1's rule stated directly rather than through a verdict: the
-    resolved identity of ``r`` in ``from subprocess import run as r`` is the
-    identity of ``subprocess.run``, at the sink-set level.
-    """
     import ast as _ast
 
     tree = _ast.parse("from subprocess import run as r\nr(v)")
@@ -1233,9 +1042,6 @@ def test_import_resolution_makes_an_alias_the_same_sink():
         ("respawn", False),
         ("read", False),
         ("splitext", False),
-        # PART 21: the ``exec`` root is gone, so these are no longer a FAMILY
-        # match. The os members are refused by enumeration instead -- pinned
-        # by `test_os_exec_family_is_enumerated_not_prefix_matched` below.
         ("execv", False),
         ("execvpe", False),
         ("posix_exec", False),
@@ -1261,11 +1067,6 @@ def test_process_creation_family_is_matched_at_a_name_boundary(name, expected):
 
 
 def test_os_exec_family_is_enumerated_not_prefix_matched():
-    """The other half of part 21's trade, so dropping the root cannot quietly
-    drop the family: every ``os.exec*`` member is still refused, now by NAME,
-    and still reaches both mechanism-2 sink sets through the same subtraction
-    the annotation-eval family uses.
-    """
     for name in guard._OS_EXEC_FAMILY_NAMES:
         assert not guard._name_is_process_creation(name), name
         assert guard._attribute_name_is_non_inert(name), name
@@ -1316,11 +1117,6 @@ _PART21_OS_EXEC_DENY_COMMANDS = [
     ids=[c[0] for c in _PART21_EXECUTE_COLLATERAL_ALLOW_COMMANDS],
 )
 def test_execute_collateral_now_allows(monkeypatch, label, cmd):
-    """The priced DENY -> ALLOW of part 21, row by row: a DB cursor call is
-    not a process spawn, and it was reaching the whole-command-text door --
-    which denies on ANY unresolved argument -- purely because its name starts
-    with ``exec``.
-    """
     base._allows(monkeypatch, cmd)
 
 
@@ -1330,10 +1126,6 @@ def test_execute_collateral_now_allows(monkeypatch, label, cmd):
     ids=[c[0] for c in _PART21_OS_EXEC_DENY_COMMANDS],
 )
 def test_os_process_creation_still_denies_after_the_root_drop(monkeypatch, label, cmd):
-    """The half that must NOT move with it: the real ``os`` process-creation
-    surface still denies an unresolved program, through the enumerated names
-    and the surviving ``spawn`` root.
-    """
     base._denies(monkeypatch, cmd)
 
 
@@ -1358,19 +1150,12 @@ def test_nested_interpreter_recursion_is_depth_bounded():
 
 
 def test_unparseable_nested_payload_is_unknown():
-    """A nested ``-c`` payload that does not parse is UNKNOWN, never "fine" --
-    the same fail-closed direction every bound in this part takes.
-    """
     assert guard._nested_python_source_has_opaque_sink(
         "import os; os.system('", guard._FoldBudget(), 1
     )
 
 
 def test_kwargs_splat_hides_the_program_slot():
-    """``subprocess.run(**opts)`` does not merely leave the program slot
-    unresolved -- it hides it, which `_argv_vector_argument` reports as its
-    own sentinel rather than as "no vector named".
-    """
     import ast as _ast
 
     splat = _ast.parse("run(**opts)").body[0].value
@@ -1380,10 +1165,6 @@ def test_kwargs_splat_hides_the_program_slot():
 
 
 def test_communicate_is_subtracted_from_the_program_slot_family():
-    """``communicate``'s first argument is stdin DATA, not argv, so a slot-0
-    rule there would refuse unresolved input handed to an already-started
-    process. The subtraction is named rather than implied.
-    """
     assert "communicate" in guard._ARGV_VECTOR_SINK_ATTRIBUTES
     assert "communicate" not in guard._ARGV_PROGRAM_SLOT_SINK_ATTRIBUTES
     assert guard._ARGV_PROGRAM_SLOT_SINK_ATTRIBUTES <= guard._ARGV_VECTOR_SINK_ATTRIBUTES
@@ -1392,10 +1173,7 @@ def test_communicate_is_subtracted_from_the_program_slot_family():
     )
 
 
-# ---------------------------------------------------------------------------
-# Part 20 (2026-08-05) -- the whole-command-text sinks that could only be
 # admitted RECEIVER-QUALIFIED.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -1404,11 +1182,6 @@ def test_communicate_is_subtracted_from_the_program_slot_family():
     ids=[c[0] for c in _PART20_RECEIVER_QUALIFIED_DENY_COMMANDS],
 )
 def test_receiver_qualified_shell_sink_denies(monkeypatch, label, cmd):
-    """Part 20's claim, end-to-end through ``check()``: ``subprocess.
-    getoutput``/``getstatusoutput`` hand a whole command line to a shell, so
-    an unresolved argument there is the same unknowable program
-    ``os.system(x)`` starts -- however the sink was spelled.
-    """
     base._denies(monkeypatch, cmd)
 
 
@@ -1485,12 +1258,6 @@ def test_constant_argument_is_judged_on_content_like_any_command_text_sink(
 def test_receiver_qualification_admits_only_a_resolved_subprocess_target(
     label, src, expected
 ):
-    """The leg at the node level, because the WHOLE deliverable is the
-    qualification rather than the two names: membership is keyed on the
-    canonical dotted target resolved through the payload's own bindings, so
-    every ``subprocess`` spelling is one rule and every other receiver --
-    unresolved, unrelated, or locally defined -- is not a sink here.
-    """
     import ast as _ast
 
     tree = _ast.parse(src)
@@ -1524,11 +1291,6 @@ def test_subprocess_shell_out_surface_is_audited_not_sampled():
         and issubclass(getattr(_subprocess, name), BaseException)
     }
     #: Windows-only: `STARTUPINFO` configures a `CreateProcess` call and
-    #: `Handle` wraps a Windows process/thread handle -- both are inputs to
-    #: the argv-vector family above, not sinks in their own right, and both
-    #: are absent from `dir(subprocess)` on POSIX. Gated the same way the
-    #: stdlib itself gates them (`sys.platform == "win32"`), so a POSIX run
-    #: of this audit still fails loudly if either name ever appears there.
     windows_only = {"STARTUPINFO", "Handle"} if sys.platform == "win32" else set()
     accounted = argv_family | command_line_family | non_executing | exceptions | {
         "CompletedProcess"
@@ -1541,11 +1303,6 @@ def test_subprocess_shell_out_surface_is_audited_not_sampled():
 
 
 def _disable_part20(monkeypatch):
-    """Force part 20's one seam back to part-19 behaviour, so the moving set
-    is measured rather than asserted. ONE seam, because part 20 is one
-    identification rule -- receiver-qualified admission -- and not a family of
-    fixes the way part 19 was.
-    """
     monkeypatch.setattr(
         guard, "_call_is_receiver_qualified_shell_sink", lambda func, bindings: False
     )
@@ -1553,13 +1310,6 @@ def _disable_part20(monkeypatch):
 
 
 def test_part20_moves_exactly_its_own_rows_and_no_corpus_row(monkeypatch):
-    """Blast-radius pin in the shape parts 14-19 use, and the measurement that
-    justified shipping the leg at all: with receiver-qualified admission forced
-    off, part 20's unresolved-argument rows come back ALLOW and NOTHING ELSE
-    moves -- realistic usage included, so part 18's priced two stays two, and
-    the legitimate-read corpus stays at zero. Name-only admission of
-    ``getoutput`` is exactly what would have shown up here as a cost.
-    """
     base._subagent(monkeypatch)
     corpus = (
         [("assembly:" + label, cmd) for label, cmd in _ASSEMBLY_COMMANDS]
@@ -1585,9 +1335,7 @@ def test_part20_moves_exactly_its_own_rows_and_no_corpus_row(monkeypatch):
     guard._fold_python_c_payload.cache_clear()
 
     moved = {label for label in live if live[label] and not before[label]}
-    #: ``getoutput-assembled-commit-identity`` is absent on purpose: its
     #: argument RESOLVES, so mechanism 1 already denied it on content before
-    #: part 20 identified the sink. It is a deny row, not a moving row.
     assert moved == {
         "part20-deny:" + label
         for label, _cmd in _PART20_RECEIVER_QUALIFIED_DENY_COMMANDS
@@ -1596,21 +1344,10 @@ def test_part20_moves_exactly_its_own_rows_and_no_corpus_row(monkeypatch):
     assert {label for label in live if before[label] and not live[label]} == set()
 
 
-#: Captured at import time so the substitute below can call the REAL resolver
-#: while it is the one monkeypatched over -- without this the seam recurses
-#: into itself.
 _REAL_PAYLOAD_BINDINGS = guard._payload_bindings
 
 
 def _last_visit_wins_bindings(tree):
-    """PART 21's seam, reverted: `_payload_bindings` as it shipped through
-    part 20 -- an ``imports`` map of ONE target per name, written with
-    last-``ast.walk``-visit-wins.
-
-    Reimplemented here rather than derived from the live function, for the
-    reason `_disable_part19` spells its own substitute out: a baseline that
-    reads the current implementation stops being a baseline.
-    """
     import ast as _ast
 
     real = _REAL_PAYLOAD_BINDINGS(tree)
@@ -1638,9 +1375,6 @@ def _last_visit_wins_bindings(tree):
 
 
 def _disable_part21_binding_union(monkeypatch):
-    """Force the binding resolver back to last-visit-wins, so part 21's P0
-    moving set is measured rather than asserted.
-    """
     monkeypatch.setattr(guard, "_payload_bindings", _last_visit_wins_bindings)
     guard._fold_python_c_payload.cache_clear()
 
@@ -1698,15 +1432,6 @@ def test_part21_moves_exactly_the_shadowed_rows_and_no_corpus_row(monkeypatch):
     assert {label for label in live if before[label] and not live[label]} == set()
 
 
-# ---------------------------------------------------------------------------
-# Measured blast radius -- the same pin shape parts 14 and 15 use.
-# ---------------------------------------------------------------------------
-
-#: Rows that move ALLOW -> DENY when part 16's two matchers are forced off
-#: (each has exactly one call site in ``check()``, so forcing them
-#: reproduces pre-part-16 behaviour byte-for-byte). Rows ABSENT here already
-#: denied through part 15 -- their assembled name happens to also appear as
-#: contiguous text.
 _PART16_MOVING_LABELS = frozenset(
     {
         "concat-in-os-system",
@@ -1734,9 +1459,6 @@ _PART16_MOVING_LABELS = frozenset(
     }
 )
 
-#: The subset of the above that mechanism 1 alone cannot reach -- nothing
-#: resolves, so there is no name to match and only the opaque-sink refusal
-#: can deny. Deleting mechanism 2 re-opens exactly these.
 _MECHANISM_2_ONLY_LABELS = frozenset(
     {
         "environ-indirect",
@@ -1782,12 +1504,6 @@ def _disable_part16(monkeypatch, mechanism_1=False, mechanism_2=False):
 
 
 def test_part16_corpus_moves_exactly_the_measured_set(monkeypatch):
-    """Blast-radius pin: measure every adversarial row with both mechanisms
-    live and with both forced off, and assert the moving set is EXACTLY the
-    enumerated one. ALLOW -> DENY only; a DENY -> ALLOW entry would mean a
-    new matcher had somehow suppressed an existing match, which it
-    structurally cannot.
-    """
     base._subagent(monkeypatch)
     live = _verdicts(_ASSEMBLY_COMMANDS)
     _disable_part16(monkeypatch)
@@ -1800,10 +1516,6 @@ def test_part16_corpus_moves_exactly_the_measured_set(monkeypatch):
 
 
 def test_mechanism_1_alone_reaches_every_resolvable_row(monkeypatch):
-    """The two mechanisms' division of labour, measured rather than
-    described: with mechanism 2 off, every row whose name the folder can
-    RESOLVE still denies, and exactly the unresolvable rows come back.
-    """
     base._subagent(monkeypatch)
     _disable_part16(monkeypatch, mechanism_1=True)
     with_m1_only = _verdicts(_ASSEMBLY_COMMANDS)
@@ -1812,21 +1524,12 @@ def test_mechanism_1_alone_reaches_every_resolvable_row(monkeypatch):
 
 
 def test_realistic_corpus_is_untouched_by_mechanism_1(monkeypatch):
-    """Mechanism 1's false-positive count is ZERO on the realistic corpus,
-    and this is why it ships whatever is decided about mechanism 2:
-    resolving a name and then matching it is not a widening of what counts
-    as a commit, only of where the guard can see one.
-    """
     base._subagent(monkeypatch)
     _disable_part16(monkeypatch, mechanism_1=True)
     assert not any(_verdicts(_REALISTIC_COMMANDS).values())
 
 
 def test_part16_moves_no_command_outside_the_python_c_family(monkeypatch):
-    """Scope claim, mechanically: forcing part 16's matchers off changes no
-    verdict in the sibling module's parity matrix outside the Python ``-c``
-    family.
-    """
     base._subagent(monkeypatch)
     outside = [c for c, _ in base._VERDICT_PARITY_MATRIX if not ("python" in c and "-c " in c)]
     live = [guard.check(base._payload(c, agent_type=base._SUBAGENT_TYPE)) is not None for c in outside]
@@ -1853,10 +1556,6 @@ def test_prefilter_widening_moves_no_pre_part16_verdict(monkeypatch):
 
 
 def test_inert_read_only_command_survives_folding(monkeypatch):
-    """The part-14 pair property, extended to part 16: an inert payload is
-    never folded at all, so a read-only command that merely NAMES the helper
-    still allows.
-    """
     for cmd in (
         "python3 -c \"import ast; ast.parse(open('%s').read())\"" % HELPER,
         "python3 -c \"print(open('%s').read())\"" % HELPER,
@@ -1868,20 +1567,12 @@ def test_inert_read_only_command_survives_folding(monkeypatch):
 
 
 def test_fold_matchers_ignore_a_real_shell_payload():
-    """Leg-scoping at the matcher: a genuine ``sh -c`` payload is not Python
-    source and never reaches the folder, even though its text names a commit
-    outright.
-    """
     assert not guard._has_folded_commit_identity("sh -c 'git commit -m x'")
     assert not guard._has_opaque_execution_sink("sh -c \"eval $CMD\"")
     assert list(guard._python_c_source_payloads("sh -c 'git commit -m x'")) == []
 
 
 def test_opaque_sink_message_names_a_resolvable_next_action():
-    """Message accuracy, which is why this leg has its own tag: mechanism 2
-    denies something a caller CAN re-spell, so it must not inherit the
-    literal-reconstruction message's "no re-spelling passes".
-    """
     from coordinator_core.bash_guards._message_size import (
         MESSAGE_PROSE_CAP_BYTES,
         measure_envelope,

@@ -26,19 +26,11 @@ from coordinator_core.trusted_root_guard import (
 
 
 def _guard_env(**overrides):
-    """Mirrors test_trusted_root_guard.py's _env() helper exactly, so the
-    parity fixtures below stay byte-identical to that module's corpus."""
     base = {"HOME": "/home/tester", "CLAUDE_HOME": "", "COORDINATOR_PLUGIN_ROOT_TRUSTED": ""}
     base.update(overrides)
     if base["CLAUDE_HOME"] == "":
         base.pop("CLAUDE_HOME")
     return base
-
-
-# ---------------------------------------------------------------------------
-# AC-2 regression test: resolve_operator_config NEVER calls the trust guard;
-# guard_plugin_root ALWAYS routes through it.
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_operator_config_never_invokes_trust_guard(tmp_path, monkeypatch):
@@ -93,12 +85,6 @@ def test_guard_plugin_root_always_routes_through_trust_guard(monkeypatch):
     assert calls[0]["mode"] == "fail-loud"
     assert calls[0]["root"] == "/home/tester/.claude/x"
     assert calls[0]["env"] == env
-
-
-# ---------------------------------------------------------------------------
-# guard_plugin_root <-> coordinator_trusted_root_guard byte-identical
-# verdict parity, reusing test_trusted_root_guard.py's fixture corpus.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -169,12 +155,6 @@ def test_guard_plugin_root_registry_doe_claude_anchor_parity(tmp_path):
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     registry_root = tmp_path / "from-registry"
-    # TOML literal string (single-quoted), not a basic (double-quoted) one:
-    # a Windows path's backslashes (`C:\Users\...`) are escape sequences in
-    # a basic string -- `\U` in particular is an invalid 8-hex-digit Unicode
-    # escape, so the TOML load raises and silently degrades to "no registry
-    # key" rather than resolving the value below. Literal strings process no
-    # escapes.
     (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
         f"\"repos.doe_claude\" = '{registry_root}'\n"
     )
@@ -191,8 +171,6 @@ def test_guard_plugin_root_registry_claude_klabauter_anchor_parity(tmp_path):
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
-    # TOML literal string -- see the sibling doe_claude parity test's comment
-    # above for why a basic (double-quoted) string breaks on a Windows path.
     (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
         f"\"repos.claude_klabauter\" = '{claude_klabauter_root}'\n"
     )
@@ -227,11 +205,6 @@ def test_guard_plugin_root_windows_backslash_traversal_rejected_parity(tmp_path)
     expected = coordinator_trusted_root_guard(mode="fail-open", root=root, env=env)
     assert guard_plugin_root(root, mode="fail-open", env=env) == expected
     assert expected is False
-
-
-# ---------------------------------------------------------------------------
-# resolve_operator_config — corruption checks
-# ---------------------------------------------------------------------------
 
 
 def _happy_env(tmp_path):
@@ -313,11 +286,6 @@ def test_resolve_operator_config_embedded_newline_from_list_registry_value_is_co
 
 
 def test_resolve_operator_config_claude_klabauter_bin_missing_subdir_is_corrupt(tmp_path):
-    # `claude_klabauter_bin` is DERIVED
-    # (`os.path.join(claude_klabauter_root, "coordinator", "bin")`), not read from a
-    # sentinel file, so its corruption path is structurally different from
-    # the other three fields — a valid `claude_klabauter_root` whose `coordinator/bin`
-    # subdirectory simply does not exist on disk.
     env, settings_home, claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)
     shutil.rmtree(claude_klabauter_root / "coordinator" / "bin")
 
@@ -327,7 +295,6 @@ def test_resolve_operator_config_claude_klabauter_bin_missing_subdir_is_corrupt(
 
 def test_resolve_operator_config_settings_home_whitespace_only_is_corrupt(tmp_path):
     # `COORDINATOR_SETTINGS_HOME` pointed
-    # at a whitespace-only path.
     env, _settings_home, _claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)
     env["COORDINATOR_SETTINGS_HOME"] = "   "
 
@@ -337,17 +304,11 @@ def test_resolve_operator_config_settings_home_whitespace_only_is_corrupt(tmp_pa
 
 def test_resolve_operator_config_settings_home_nonexistent_is_corrupt(tmp_path):
     # `COORDINATOR_SETTINGS_HOME` pointed
-    # at a path that does not exist as a directory on disk.
     env, _settings_home, _claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)
     env["COORDINATOR_SETTINGS_HOME"] = str(tmp_path / "no-such-settings-home")
 
     with pytest.raises(OperatorConfigError, match="settings_home"):
         resolve_operator_config(env=env)
-
-
-# ---------------------------------------------------------------------------
-# probe_engine_reachability — claude-klabauter#31 item 2
-# ---------------------------------------------------------------------------
 
 
 def test_probe_engine_reachability_reachable_via_registry_reports_its_rung(tmp_path):
@@ -397,7 +358,6 @@ def test_probe_engine_reachability_unreachable_names_runnable_remediation_script
     assert verdict.root is None
     assert verdict.remediation is not None
     assert "scripts/setup.py" in verdict.remediation
-    # Cold-path remediation names a runnable script, never a slash command.
     assert not verdict.remediation.lstrip().startswith("/")
     assert "/coordinator:" not in verdict.remediation
 

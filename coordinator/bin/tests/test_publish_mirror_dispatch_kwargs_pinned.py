@@ -92,36 +92,16 @@ def _load_publish_module():
 
 publish = _load_publish_module()
 
-# The one name deliberately excluded from the pin -- see module docstring.
 _STRUCTURALLY_SEPARATE_KWARGS = frozenset({"changed_paths"})
 
 #: Excluded for a DIFFERENT reason than `_STRUCTURALLY_SEPARATE_KWARGS`, and the
-#: distinction is the whole point of keeping two sets. `changed_paths` is not part
-#: of the `bind_kwargs` contract at all. `foreign_dir_names` IS a mirror-dispatch
 #: kwarg -- it is simply one this repo must never make REQUIRED of a consumer's
-#: `sync_mirror`. Two copies of `publish_sync.py` can win
-#: `_resolve_publish_sync_module_path` (this repo's engine copy, or a percolate
-#: root's own override such as DoE-claude's `setup/publish_sync.py`) and the two
-#: cannot land a new parameter atomically. Putting this name in `bind_kwargs`
-#: would make `check_publish_sync_contract` reject whichever copy lags, taking a
-#: live publish path down -- the exact fail-closed-on-skew shape the incident in
-#: this module's docstring describes, inverted onto the copy that is behind rather
-#: than ahead. `dispatch_mirror_like` passes it only when a runtime signature probe
-#: says the resolved module accepts it, so its absence from the two pins below is
-#: intentional and is itself pinned by
-#: `test_foreign_dir_names_is_deliberately_absent_from_bind_kwargs`.
 _DELIBERATELY_OPTIONAL_KWARGS = frozenset({"foreign_dir_names"})
 
 _PIN_EXCLUSIONS = _STRUCTURALLY_SEPARATE_KWARGS | _DELIBERATELY_OPTIONAL_KWARGS
 
 
 def _expected_mirror_kwargs_from_real_signature() -> frozenset[str]:
-    """Introspection-derived expected set, never a hand-copied literal:
-    every keyword-only parameter `percolate.publish_sync.sync_mirror`
-    actually accepts, minus the structurally-separate `changed_paths` leg
-    and the deliberately-optional `foreign_dir_names` leg (§ each
-    exclusion set's own comment -- they are excluded for different
-    reasons and must not be merged)."""
     sig = inspect.signature(publish_sync.sync_mirror)
     keyword_only = {
         p.name
@@ -159,11 +139,6 @@ def test_mirror_bind_kwargs_table_matches_the_real_sync_mirror_signature():
 
 
 def test_dispatch_mirror_like_call_site_passes_exactly_the_pinned_set(tmp_path):
-    """Drives the REAL `dispatch_mirror_like` call path (not a table read):
-    captures the actual kwargs a `mirror`-mode dispatch passes to
-    `sync_mirror`, with every `accepts_*` flag armed so the call site's
-    full potential kwarg set is exercised, and pins it against the
-    introspection-derived expected set."""
     captured: dict[str, object] = {}
 
     def _capturing_sync_mirror(src_dir, dst_dir, ignore, dry_run, **kwargs):
@@ -241,17 +216,6 @@ def test_foreign_dir_names_is_deliberately_absent_from_bind_kwargs():
 
 
 def test_call_site_passes_foreign_dir_names_when_armed_and_module_accepts(tmp_path):
-    """Pins the live leg the two exclusion-based pins cannot see. Subtracting
-    a name from an equality assertion makes that assertion blind to it in
-    BOTH directions: a call site that silently stopped passing
-    `foreign_dir_names` would leave those pins green while every sibling
-    row's published directory became sweepable again — a silent regression,
-    which is exactly the failure mode this parameter exists to prevent (a
-    wrong or missing entry hands a destination subdirectory to nobody: no
-    row sweeps it, no row refreshes it).
-
-    So drive the real dispatch with the flag armed AND the module reporting
-    that it accepts the parameter, and assert the value arrives."""
     captured: dict[str, object] = {}
 
     def _capturing_sync_mirror(
@@ -300,11 +264,6 @@ def test_call_site_passes_foreign_dir_names_when_armed_and_module_accepts(tmp_pa
 
 
 def test_call_site_omits_foreign_dir_names_when_module_lacks_it(tmp_path):
-    """The version-skew arm. When the resolved `publish_sync` copy does not
-    take the parameter, the kwarg must not be passed AT ALL — not passed as
-    `None`. A copy that lags is a supported state, not a broken one: it
-    behaves exactly as it did before the parameter existed, which is what
-    lets the two copies land in either order."""
     captured: dict[str, object] = {}
 
     def _legacy_sync_mirror(src_dir, dst_dir, ignore, dry_run, **kwargs):

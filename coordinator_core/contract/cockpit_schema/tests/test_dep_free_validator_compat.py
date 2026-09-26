@@ -35,21 +35,11 @@ from coordinator_core.frontmatter.schema_validate import _validate_json_schema_n
 
 
 def _validate_record(record: dict, schema: dict):
-    """Twin of DoE `bin/lib/schema.js`'s `validateRecord(record, schema)` —
-    ported minus the schema-version gate (irrelevant here: cockpit-emitted
-    schemas carry no `x-schema-version`) and cross-field rules (keyed on
-    `x-schema-name`, which cockpit-emitted schemas never carry — see
-    `_apply_cross_field_rules`'s empty-list default). Phase 1 (shape
-    validation via the JSON Schema subset) is the entirety of what this test
-    exercises, matching `validateRecord`'s behavior on a cockpit schema
-    1:1."""
     errors = _validate_json_schema_node(record, schema, schema, "")
     return {"ok": len(errors) == 0, "errors": errors}
 
 
 def test_validate_record_resolves_defs_ref_schema():
-    """Schema uses $defs to define a shared type; the top-level property
-    references it via $ref."""
     schema_with_defs = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -74,8 +64,6 @@ def test_validate_record_resolves_defs_ref_schema():
 
 
 def test_validate_record_handles_nullable_required_field_anyof_null():
-    """Schema with a required field that is nullable (anyOf: [type, null]) —
-    mirrors the pattern used by branch.schema.json fields like merge_base_sha."""
     schema_with_nullable_required = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",

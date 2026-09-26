@@ -80,7 +80,6 @@ def test_non_settings_json_paths_are_not_selected(rel_path):
     ],
 )
 def test_fixture_path_suppresses_the_parse_error(rel_path):
-    """The original incident: a truncated fixture must not hard-block the repo."""
     assert _fixture_suppressible_detail(rel_path, _PARSE_ERROR) is True
 
 
@@ -93,14 +92,9 @@ def test_fixture_path_suppresses_the_parse_error(rel_path):
     ],
 )
 def test_fixture_path_does_not_suppress_a_real_leak(rel_path):
-    """The over-grant the first fix shipped: a machine path under a fixtures
-    tree still blocks. Without this, the guard can be dodged by filing the
-    leaking file one directory deeper."""
     assert _fixture_suppressible_detail(rel_path, _LEAK) is False
 
 
 @pytest.mark.parametrize("detail", [_PARSE_ERROR, _LEAK])
 def test_non_fixture_path_suppresses_nothing(detail):
-    """A live settings surface gets no suppression of any kind -- including the
-    parse error, which on a real settings.json is a finding, not noise."""
     assert _fixture_suppressible_detail(".claude/settings.json", detail) is False

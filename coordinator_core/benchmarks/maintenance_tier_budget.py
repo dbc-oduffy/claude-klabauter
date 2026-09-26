@@ -1,28 +1,3 @@
-"""
-coordinator_core.benchmarks.maintenance_tier_budget -- the 500ms-per-tier
-brightline oracle for `coordinator_core.ops.git_maintenance`.
-
-Purpose: this used to live inside the plan-lifecycle artifact
-`docs/plans/2026-08-30-ceremony-driven-git-maintenance.falsifier.py`, loaded
-by `coordinator_core/ops/test_git_maintenance.py` via a hardcoded
-`importlib` path into `docs/plans/`. Closed plans are archived to
-`archive/specs/YYYY-MM/` and nothing moves a plan's `.falsifier.py` sidecar
-alongside its `.md` when that happens -- so archiving that plan would have
-silently broken a cadence-tier test for a fact (the per-tier process-time
-budget) that has nothing to do with the plan document's own lifecycle. The
-oracle now lives here, in `coordinator_core/` proper, and the falsifier
-imports it from here -- the dependency runs one way, repo owns the oracle,
-the plan artifact borrows it, never the reverse.
-
-`os.chdir` NOTE (checked, not a defect, kept here for whoever changes the
-test runner next): `_apply_coordinator_registration` mutates and restores
-`os.getcwd()` via try/finally, and every caller here runs it sequentially,
-never concurrently, so this is safe under pytest-xdist's process-based `-n`
-workers (each worker is a separate process; no two tests share one process's
-cwd). This would race under a THREAD-based parallel runner. If this suite
-ever moves to one, this function needs a lock or a `cwd=` kwarg on the git
-calls instead of a chdir.
-"""
 from __future__ import annotations
 
 import os
@@ -34,23 +9,11 @@ from coordinator_core.git.run import run_git
 
 SCRATCH_ROOT = Path(tempfile.gettempdir()) / "coordinator-falsifier"
 
-# How the brightline conjunct amortises. `git maintenance run` is not
-# idempotent, so amortisation cannot come from repeats; it comes from N
-# independent COLD samples, each against its own freshly-churned repo. See
-# check_maintenance_tier_budget's docstring, note (2b).
 _TIER_BUDGET_SAMPLES = 3
 _TIER_BUDGET_CHURN = 200
 
-# `_churn` and `_make_throwaway_clone` below spawn git only to build each
-# sample's FIXTURE (a freshly-churned throwaway repo), timed separately via
-# `batched_process_time_ms` -- see `coordinator_core.benchmarks`'s module
-# docstring, "Measured-window discipline". Migrated per G7
-# (test_shared_git_runner.py).
-
 
 def _apply_coordinator_registration(repo: Path) -> None:
-    """Invoke coordinator's OWN registration path against `repo` -- the two
-    writers an install runs, nothing hand-rolled here."""
     from coordinator_core.install import git_perf_config
     from coordinator_core.ops import configure_git
 
@@ -84,10 +47,6 @@ def _churn(repo: Path, commits: int) -> None:
       a newline does not gain a second one in the blob.
     """
     branch = run_git(["symbolic-ref", "--short", "HEAD"], cwd=str(repo)).stdout.strip()
-    # A detached HEAD used to fall back to a
-    # hardcoded "refs/heads/master" guess. Say-so-don't-guess: fail loud
-    # instead, naming the repo that could not resolve a branch, rather than
-    # silently fast-importing onto a possibly-nonexistent ref.
     if not branch:
         raise RuntimeError(
             "maintenance_tier_budget._churn: %s is on a detached HEAD; "
@@ -115,10 +74,6 @@ def _churn(repo: Path, commits: int) -> None:
 
 
 def _make_throwaway_clone() -> Path:
-    """A brand-new, freshly-inited git repo under the scratch dir -- stands
-    in for one registered coordinator worktree. Never touches the live
-    claude-klabauter .git.
-    """
     work = Path(tempfile.mkdtemp(prefix="falsifier-worktree-", dir=str(SCRATCH_ROOT)))
     run_git(["init", "-q"], cwd=str(work))
     (work / "seed.txt").write_text("seed\n", encoding="utf-8", newline="\n")
@@ -210,8 +165,6 @@ def check_maintenance_tier_budget(repo: Path):
         return False, "maintenance-tier entrypoint not importable: %s" % exc
 
     def _legs_for(tier, target):
-        # Mirrors `run_tier`'s own order: for "weekly", prune runs BEFORE the
-        # `--schedule=weekly` maintenance-run leg (see docstring above).
         out = []
         if tier == "weekly":
             out.append(["git", "-C", str(target), "prune", "--expire=%s" % gm._PRUNE_EXPIRE])

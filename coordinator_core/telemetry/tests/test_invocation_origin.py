@@ -28,25 +28,18 @@ def test_undeclared_caller_reads_as_production(monkeypatch):
 
 
 def test_pytest_stamp_is_detected_without_an_explicit_declaration(monkeypatch):
-    """Tests self-identify, so the ones that forget to declare cannot contaminate.
-
-    An opt-in-only tag fails exactly where it matters: the test files that never
-    remember to declare are the ones quietly inflating an op's count.
-    """
     monkeypatch.delenv(op_latency.ORIGIN_ENV, raising=False)
     monkeypatch.setenv(op_latency._PYTEST_ENV, "some/test.py::test_thing (call)")
     assert op_latency.invocation_origin() == op_latency.TEST
 
 
 def test_explicit_declaration_beats_the_pytest_stamp(monkeypatch):
-    """A benchmark driven from inside a test is benchmark traffic, not test traffic."""
     monkeypatch.setenv(op_latency._PYTEST_ENV, "some/test.py::test_thing (call)")
     monkeypatch.setenv(op_latency.ORIGIN_ENV, op_latency.BENCHMARK)
     assert op_latency.invocation_origin() == op_latency.BENCHMARK
 
 
 def test_unrecognised_declaration_degrades_rather_than_raising(monkeypatch):
-    """Never breaks dispatch: a bad label costs one mislabelled row, never an op."""
     monkeypatch.delenv(op_latency._PYTEST_ENV, raising=False)
     monkeypatch.setenv(op_latency.ORIGIN_ENV, "wishful-thinking")
     assert op_latency.invocation_origin() == op_latency.PRODUCTION
@@ -70,7 +63,6 @@ def test_stale_pytest_env_without_pytest_running_reads_as_production(monkeypatch
 
 
 def test_benchmark_declaration_does_not_overwrite_a_more_specific_one(monkeypatch):
-    """`declare_benchmark_origin` uses setdefault deliberately."""
     from coordinator_core.benchmarks import declare_benchmark_origin
 
     monkeypatch.setenv(op_latency.ORIGIN_ENV, op_latency.TEST)
@@ -79,11 +71,6 @@ def test_benchmark_declaration_does_not_overwrite_a_more_specific_one(monkeypatc
 
 
 def test_spawn_counter_is_monotonic_and_read_as_a_delta():
-    """The absolute value carries no information; only a delta does.
-
-    Asserted because a reader tempted to use the absolute count would be reading
-    every spawn by every op the process served before the one it cares about.
-    """
     start = spawn_counter.spawn_count()
     spawn_counter.bump()
     spawn_counter.bump(3)
@@ -92,14 +79,6 @@ def test_spawn_counter_is_monotonic_and_read_as_a_delta():
 
 
 def test_spawn_counter_under_concurrency_never_over_counts():
-    """The counter's whole justification is a specific concurrency tradeoff.
-
-    `bump()` is not atomic, so concurrent bumps may lose increments (the
-    accepted tradeoff over locking the git hot path) but must NEVER report
-    more than the sum of what was attempted. Asserting `<=` rather than `==`
-    pins that loss is possible and bounded in direction, without asserting
-    the flaky opposite of the documented design.
-    """
     start = spawn_counter.spawn_count()
     n_threads = 20
     bumps_per_thread = 50

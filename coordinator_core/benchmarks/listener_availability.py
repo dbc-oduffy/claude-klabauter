@@ -181,20 +181,6 @@ def report(sink: Path) -> Dict[str, Any]:
         else:
             current["end"] = row.get("t")
             current["samples"] += 1
-    # A run's duration is BOUNDED, never a point figure, and reporting it as
-    # one was a real defect: `(end - start)` spans first-down-sample to
-    # last-down-sample, so it silently excludes the whole unobserved interval
-    # on each side. A single-sample outage came out as 0.0 minutes -- a real
-    # outage rounding to no outage at all -- and a genuine 89s outage and a
-    # genuine 31s outage both printed ~30s at a 30s interval. Both figures were
-    # quoted cross-repo against a decision record before anyone noticed.
-    #
-    # What the samples actually establish for a run of k down samples spaced
-    # `interval` apart: down for AT LEAST (k-1)*interval (the observed span)
-    # and AT MOST (k+1)*interval (the last up sample before it through the
-    # first up sample after it). `interval` is derived from the median
-    # inter-sample delta rather than read from config, so a report over a sink
-    # someone sampled at a different rate is still described in its own terms.
     deltas = sorted(
         b - a
         for a, b in zip(
@@ -214,9 +200,6 @@ def report(sink: Path) -> Dict[str, Any]:
         }
         for run in runs
     ]
-    # Ranked on the UPPER bound: this figure answers "how long could the hook
-    # have been silently not firing", and the honest answer to that is the
-    # worst case the samples do not exclude.
     out["longest_outage_at_most_secs"] = max(
         (r["at_most_secs"] for r in out["outage_runs"]), default=0.0
     )
@@ -232,9 +215,6 @@ def report(sink: Path) -> Dict[str, Any]:
     if probes:
         probes_sorted = sorted(probes)
         mid = len(probes_sorted) // 2
-        # even-n median averaged the two
-        # middle values instead of taking the upper-median, which read one
-        # sample off on this already-noisy peer-load metric.
         if len(probes_sorted) % 2 == 0:
             median = (probes_sorted[mid - 1] + probes_sorted[mid]) / 2.0
         else:

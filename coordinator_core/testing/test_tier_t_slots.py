@@ -23,13 +23,6 @@ from coordinator_core.testing import tier_t_slots
 
 @pytest.fixture(autouse=True)
 def isolated_settings_home(tmp_path, monkeypatch):
-    """Point the semaphore at a per-test settings home.
-
-    Without this every test in this file contends with the real box-wide
-    semaphore -- and, worse, with whatever else is running on the developer's
-    machine, which is exactly the kind of shared-state coupling this module
-    exists to bound.
-    """
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     yield
 
@@ -39,12 +32,6 @@ def _take(n, owner="owner"):
 
 
 def test_cap_is_derived_not_constant():
-    """K comes from the repo's worker-cap formula, so it adapts per machine.
-
-    Imported from ``install``, not ``diagnostics``: the latter is absent from
-    the published engine's restricted tree, where this code actually runs. See
-    ``tier_t_slots``' module docstring.
-    """
     from coordinator_core.install.derive_worker_cap import derive_cap
 
     assert tier_t_slots.slot_cap() == max(1, int(derive_cap()))
@@ -60,14 +47,12 @@ def test_semaphore_admits_exactly_k_then_refuses():
 
 
 def test_concurrent_acquisitions_occupy_distinct_slots():
-    """The regression that reads correct: a bound of K over one occupied slot."""
     cap = tier_t_slots.slot_cap()
     slots = _take(cap)
     assert len({s.index for s in slots}) == cap
 
 
 def test_one_owner_may_hold_several_slots_and_each_is_counted():
-    """Same-owner re-entrancy would undercount the box; it must not apply here."""
     if tier_t_slots.slot_cap() < 2:
         pytest.skip("needs a cap of at least 2")
     a = tier_t_slots.acquire_slot("same", "pytest a.py")
@@ -88,7 +73,6 @@ def test_release_frees_exactly_one_slot_and_it_is_reusable():
 
 
 def test_release_by_a_foreign_lease_does_not_free_the_real_holder():
-    """One caller must not be able to free another's slot."""
     real = tier_t_slots.acquire_slot("real", "pytest a.py")
     forged = tier_t_slots.Slot(index=real.index, token="forged#deadbeef", owner="forged")
     tier_t_slots.release_slot(forged)
@@ -120,7 +104,6 @@ def test_held_slot_yields_none_when_full_and_releases_nothing():
 
 
 def test_occupancy_names_who_is_holding():
-    """A deny that can only report a count cannot tell an operator what to do."""
     tier_t_slots.acquire_slot("session-abc", "pytest a.py")
     taken, cap, holders = tier_t_slots.occupancy()
     assert taken == 1 and cap == tier_t_slots.slot_cap()
@@ -129,7 +112,6 @@ def test_occupancy_names_who_is_holding():
 
 
 def test_read_path_never_raises_on_a_broken_state_dir(monkeypatch):
-    """A resource control that can explode takes the guard down with it."""
     monkeypatch.setattr(tier_t_slots, "slot_path", lambda i: (_ for _ in ()).throw(OSError("boom")))
     assert tier_t_slots.free_slots() >= 0
     assert tier_t_slots.occupancy()[0] == 0

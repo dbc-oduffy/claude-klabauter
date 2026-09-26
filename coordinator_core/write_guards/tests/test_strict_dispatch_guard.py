@@ -1,8 +1,3 @@
-"""Behavioral tests for
-coordinator_core.write_guards.block_em_strict_dispatch_code_write -- the
-OPT-IN `strict_dispatch` hard-deny guard -- and the engine's env gate that
-keeps it out of discovery when unflagged.
-"""
 
 from __future__ import annotations
 
@@ -181,8 +176,6 @@ def test_unexpected_exception_returns_none(monkeypatch, repo_root):
 
 
 def test_newest_sizing_by_mtime_wins_over_touch_order(monkeypatch, repo_root):
-    # The touch record keeps first-touch order: re-sizing a.yaml after b.yaml
-    # leaves a.yaml first in the list, yet it is the newest verdict.
     _stub_repo_root(monkeypatch, repo_root)
     _stub_not_subagent(monkeypatch)
     sizings = repo_root / "state" / "sizings"

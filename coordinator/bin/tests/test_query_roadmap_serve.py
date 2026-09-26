@@ -48,7 +48,6 @@ query_roadmap_serve = importlib.import_module("query-roadmap-serve")
 
 
 def _dag(**overrides):
-    """`assemble_roadmap_dag`'s return shape -- the six keys it documents."""
     payload = {
         "nodes": [
             {
@@ -73,7 +72,6 @@ def _dag(**overrides):
 
 
 def _run(dag, roadmap_id="sedge-2026-08-06"):
-    """Drive `main` with every resolver and the producer stubbed."""
     with mock.patch.object(
         query_roadmap_serve, "resolve_repo_root_or_exit", return_value="/repo/match"
     ), mock.patch.object(
@@ -115,8 +113,6 @@ class TestArgparse(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 2)
 
     def test_no_list_mode_is_offered(self):
-        """Negative-spec: no `--all`/`--list` batch mode (overengineering
-        finding 3 -- ship the contract the committed caller uses)."""
         for flag in ("--all", "--list", "--roadmap-ids"):
             with self.subTest(flag=flag), redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as ctx:
@@ -150,8 +146,6 @@ class TestWireShape(unittest.TestCase):
         self.assertEqual(json.loads(out)["roadmap_id"], "qsub-2026-07-10")
 
     def test_critical_path_survives_to_stdout(self):
-        """Deliberate deviation from the spike verdict's "drop it" -- their
-        wire type declares it and their suite pins it. See module docstring."""
         _, out = _run(_dag(critical_path=["sedge-01", "sedge-06"]))
         self.assertEqual(json.loads(out)["critical_path"], ["sedge-01", "sedge-06"])
 
@@ -180,8 +174,6 @@ class TestUnsubstantiatedZeroRule(unittest.TestCase):
         self.assertTrue(printed["scan_incomplete"])
 
     def test_genuinely_empty_roadmap_keeps_its_real_zero(self):
-        """The discriminator. Without this, nulling every zero would pass the
-        test above while destroying the distinction the rule exists to draw."""
         _, out = _run(
             _dag(
                 nodes=[],
@@ -196,8 +188,6 @@ class TestUnsubstantiatedZeroRule(unittest.TestCase):
         self.assertEqual(printed["roll_up"], {"total": 0, "by_status": {}, "pct_shipped": None})
 
     def test_partial_scan_that_found_nodes_keeps_its_roll_up(self):
-        """A short count is still a real count; `scan_incomplete` is what
-        flags it. Nulling here would discard data we actually have."""
         _, out = _run(
             _dag(
                 roll_up={"total": 1, "by_status": {"shipped": 1}, "pct_shipped": 100.0},
@@ -212,8 +202,6 @@ class TestUnsubstantiatedZeroRule(unittest.TestCase):
 
 class TestFailurePaths(unittest.TestCase):
     def test_producer_exception_exits_1_and_prints_nothing_to_stdout(self):
-        """Never a silent empty-but-well-formed exit 0 -- cockpit's caller
-        cannot tell that from a genuinely empty roadmap."""
         with mock.patch.object(
             query_roadmap_serve, "resolve_repo_root_or_exit", return_value="/repo/match"
         ), mock.patch.object(

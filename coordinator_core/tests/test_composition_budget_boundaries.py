@@ -37,9 +37,6 @@ from coordinator_core.contract import apply_base
 
 
 def _budget(*, disposition: str = FAIL_LOUD, breached: bool = True) -> CompositionBudget:
-    """A `CompositionBudget` whose elapsed ceiling is already breached
-    (or not) at construction time, via an injected clock — no real sleep
-    needed. `max_invocations=None` so only the elapsed ceiling is live."""
     ticks = iter([0.0] + ([100.0] if breached else [0.0]) * 50)
 
     def clock() -> float:
@@ -65,11 +62,6 @@ def _compensator_spy(calls: list[str]):
         calls.append(directive["id"])
 
     return _compensator
-
-
-# ---------------------------------------------------------------------------
-# Breach message shape
-# ---------------------------------------------------------------------------
 
 
 class TestBreachMessageShape:
@@ -98,11 +90,6 @@ class TestBreachMessageShape:
         assert "unit='pre_mutation'" in msg
 
 
-# ---------------------------------------------------------------------------
-# apply_base ladder: breach-before-first-mutation / breach-after-last
-# ---------------------------------------------------------------------------
-
-
 class TestApplyBaseBoundaries:
     def test_breach_before_first_mutation_never_dispatches_a_handler(
         self, tmp_path: Path
@@ -128,24 +115,10 @@ class TestApplyBaseBoundaries:
     def test_breach_after_last_mutation_keeps_rc_ok_and_does_not_abort(
         self, tmp_path: Path
     ) -> None:
-        """The budget breaches only once elapsed time has passed the
-        ceiling -- by construction (clock ticks 0.0 at start, then jumps
-        to 100.0 on every subsequent read), the pre-mutation check (first
-        clock read after __post_init__'s own read) is still within
-        budget, every directive dispatches normally, and the breach is
-        observed only at the post-loop boundary."""
         clock_calls = {"n": 0}
 
         def clock() -> float:
-            # First call is __post_init__'s _start read (0.0). Every
-            # call after that returns 0.0 until the post-mutation
-            # boundary check, which is the LAST elapsed_secs() read this
-            # test cares about -- simulate "still fast" for pre-mutation
-            # and mid-directive checks, then "slow" once, at the very end.
             clock_calls["n"] += 1
-            # start(0) + pre-mutation elapsed_secs(1) + mid-directive
-            # elapsed_secs(2..N) all read fast; post-mutation boundary is
-            # the final read this test triggers.
             if clock_calls["n"] <= 3:
                 return 0.0
             return 100.0
@@ -247,12 +220,6 @@ class TestApplyBaseBoundaries:
     def test_a_declining_compensator_is_not_recorded_as_a_successful_rollback(
         self, tmp_path: Path
     ) -> None:
-        """Downstream of ada42cb429f2 (`_run_compensators` return-value
-        contract): a compensator that runs, decides not to act, and signals
-        that via an explicit `False` return must be distinguished from both
-        a genuine success (`None`, today's universal registered-compensator
-        return) and a genuine failure (a raise) -- never folded into
-        `succeeded: True` merely because it did not raise."""
 
         def ok_handler(args: list[str], repo_root: Path) -> dict[str, Any]:
             return {"ok": True}
@@ -285,10 +252,6 @@ class TestApplyBaseBoundaries:
     def test_no_mid_mutation_abort_all_directives_still_dispatch(
         self, tmp_path: Path
     ) -> None:
-        """A budget that breaches partway through (after the first
-        directive's mid-directive advisory) must NOT abort the remaining
-        directives -- advisory_check never raises, never affects control
-        flow. Every directive dispatches and lands."""
         dispatched: list[str] = []
 
         def handler(args: list[str], repo_root: Path) -> dict[str, Any]:
@@ -300,11 +263,7 @@ class TestApplyBaseBoundaries:
             {"id": "d2", "cli": "noop", "args": ["two"]},
             {"id": "d3", "cli": "noop", "args": ["three"]},
         ]
-        # Budget with an already-breached elapsed ceiling but
         # skip-and-surface disposition, wired as an ADVISORY-only budget
-        # via a max_invocations ceiling that never trips the pre-mutation
-        # boundary (aggregate_elapsed_budget=None) so we isolate: does a
-        # mid-directive advisory breach abort dispatch? It must not.
         budget = CompositionBudget(
             composition_id="test-composition-3",
             aggregate_elapsed_budget=None,
@@ -344,13 +303,6 @@ class TestApplyBaseBoundaries:
         assert "budget_breach" not in report_a
 
 
-# ---------------------------------------------------------------------------
-# apply_halt ladder: breach-before-first-mutation / breach-after-last,
-# exercised through the three call-shaped primitives a ceremony
-# assembler's own loop would invoke.
-# ---------------------------------------------------------------------------
-
-
 class TestApplyHaltBoundaries:
     def test_pre_mutation_breach_reports_directive_failed_shape(self) -> None:
         budget = _budget(breached=True)
@@ -369,8 +321,6 @@ class TestApplyHaltBoundaries:
         msg = apply_halt.budget_check_post_mutation(budget)
         assert msg is not None
         assert "unit='post_mutation'" in msg
-        # apply_halt itself never returns an rc here -- a caller invoking
-        # this after its own loop finished successfully keeps whatever rc
         # that loop already computed (never PARTIAL_MUTATION/DIRECTIVE_FAILED).
 
     def test_post_mutation_no_breach_returns_none_and_prints_nothing(
@@ -382,31 +332,18 @@ class TestApplyHaltBoundaries:
         assert captured.err == ""
 
     def test_mid_directive_advisory_never_raises_and_never_aborts(self) -> None:
-        budget = _budget(breached=True)  # already past the elapsed ceiling
+        budget = _budget(breached=True)
         # Must not raise, regardless of disposition=FAIL_LOUD.
         apply_halt.budget_advisory_mid_directive(budget, "some-directive")
         assert budget.invocation_count == 1
         assert "some-directive" in budget.breached_units
 
     def test_mid_directive_advisory_none_budget_is_a_no_op(self) -> None:
-        # Must not raise when no budget is wired at all.
         apply_halt.budget_advisory_mid_directive(None, "some-directive")
 
     def test_breach_never_reaches_a_compensation_pass(self) -> None:
-        """apply_halt owns no loop/compensator concept of its own -- this
-        pins the structural guarantee instead: `budget_check_pre_mutation`
-        and `budget_check_post_mutation` return a message/None and never
-        themselves invoke anything resembling `_run_compensators` (which
-        does not exist in this module at all, by its own negative-spec)."""
         assert not hasattr(apply_halt, "_run_compensators")
         assert not hasattr(apply_halt, "compensators")
-
-
-# ---------------------------------------------------------------------------
-# Instrumentation-error isolation: an exception from an injected on_count
-# (or any budget-internal machinery other than BudgetBreach) must not take
-# the run down.
-# ---------------------------------------------------------------------------
 
 
 class TestInstrumentationErrorIsolation:

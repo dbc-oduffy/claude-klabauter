@@ -185,7 +185,6 @@ def _extract_frontmatter_stamp(text: str, stamp_key: str) -> tuple[Optional[str]
     if isinstance(value, (_datetime.datetime, _datetime.date)):
         # YAML auto-parses an unquoted ISO-8601 scalar into a date/datetime
         # object rather than a string; re-serialize it back to ISO-8601
-        # rather than rejecting a plainly well-formed frontmatter stamp.
         value = value.isoformat()
     if not isinstance(value, str) or not value:
         return None, f"artifact frontmatter has no readable string {stamp_key!r}"
@@ -193,13 +192,6 @@ def _extract_frontmatter_stamp(text: str, stamp_key: str) -> tuple[Optional[str]
 
 
 def extract_stamp(artifact_full_path: Path, stamp_key: str) -> tuple[Optional[str], str]:
-    """Read `<stamp_key>` from *artifact_full_path*'s own content.
-
-    `.json` artifacts are read as a top-level key; anything else is read as
-    a `---`-delimited frontmatter block at the top of the file. Never
-    raises: any failure (missing file, unreadable encoding, malformed
-    JSON/YAML, absent key) returns `(None, detail)`.
-    """
     if not artifact_full_path.is_file():
         return None, f"artifact not found: {artifact_full_path}"
 
@@ -290,7 +282,6 @@ def compute_repo_staleness(repo_root: Optional[Path] = None) -> dict[str, dict[s
 
 @dataclass(frozen=True)
 class VendoredPair:
-    """A peer(DoE-claude)-owned artifact claude-klabauter only reads, never writes."""
 
     artifact: str
     sources: tuple[str, ...]
@@ -300,8 +291,6 @@ class VendoredPair:
 VENDORED_PAIRS: tuple[VendoredPair, ...] = (
     VendoredPair(
         artifact="coordinator/hooks/effective-delivery.json",
-        # Its generator (`coordinator_core.ops.session.emit_effective_delivery`)
-        # now lives in the engine; the DoE-side input it reads is hooks.json.
         sources=("coordinator/hooks/hooks.json",),
         stamp_block="x-effective-delivery",
     ),
@@ -345,18 +334,11 @@ def resolve_peer_repo_path() -> Optional[Path]:
             if (candidate / PEER_REPO_SENTINEL).is_file():
                 return candidate
         except OSError:
-            # candidate root unreadable; try the next candidate
             continue
     return None
 
 
 def _extract_vendored_stamp(artifact_full_path: Path, stamp_block: str) -> tuple[Optional[dict], str]:
-    """Read the `{stamp_block}` block's `generated_from_sha` /
-    `generated_from_dirty_tree` from *artifact_full_path*'s own JSON content.
-
-    Never raises: any failure (missing file, unreadable encoding, malformed
-    JSON, absent/malformed block or fields) returns `(None, detail)`.
-    """
     if not artifact_full_path.is_file():
         return None, f"vendored artifact not found: {artifact_full_path}"
 
@@ -407,7 +389,6 @@ def compute_vendored_pair_staleness(peer_repo_root: Path, pair: VendoredPair) ->
         return {"artifact": pair.artifact, "verdict": Verdict.UNSTAMPED, "detail": detail}
 
     sha = stamp["sha"]
-    # foreign-identity: SUBJECT — provenance cite; the DoE-claude SHA/commit reference is the payload of the message (audit row 29)
     cite = f"DoE-claude@{sha}"
 
     if stamp["dirty"]:
@@ -454,7 +435,6 @@ def compute_vendored_staleness() -> dict[str, dict[str, Any]]:
     """
     peer_root = resolve_peer_repo_path()
     if peer_root is None:
-        # foreign-identity: SUBJECT — provenance cite; the DoE-claude SHA/commit reference is the payload of the message (audit row 29)
         return {
             "<DoE-claude clone unresolved>": {
                 "artifact": None,
@@ -465,7 +445,6 @@ def compute_vendored_staleness() -> dict[str, dict[str, Any]]:
 
     results: dict[str, dict[str, Any]] = {}
     for pair in VENDORED_PAIRS:
-        # foreign-identity: SUBJECT — provenance cite; the DoE-claude SHA/commit reference is the payload of the message (audit row 29)
         results[f"DoE-claude:{pair.artifact}"] = compute_vendored_pair_staleness(peer_root, pair)
     return results
 

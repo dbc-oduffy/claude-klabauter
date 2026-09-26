@@ -75,19 +75,10 @@ _SYNTHESIZER_SLUG = "zoli"
 
 
 class StaffSessionAssembleError(ValueError):
-    """Raised for a malformed input, an unresolvable doctrine-side read, or
-    a missing/incomplete routing.md roster section — a usage/data-contract
-    error, never a business-logic divergence (this module has no fork/
-    divergence concept, only resolve-or-fail-loud)."""
+    pass
 
 
 def _resolve_content_root() -> str:
-    """Resolves the coordinator content root via the shared
-    resolve-coordinator-clone `--for-content` resolver — works on a pure OSS
-    install (no DoE-claude clone present), unlike the former
-    `read_doe_root_pointer()`-based resolution which only ever resolved a
-    DoE clone and left `/staff-session` roster resolution unreachable on an
-    OSS-only machine."""
     from coordinator_core.resolve_coordinator_clone import (
         ResolveCoordinatorCloneError,
         resolve_content_root,
@@ -116,9 +107,6 @@ def _strip_md_cell(cell: str) -> str:
 
 
 def _strip_full_backtick_wrap(cell: str) -> str:
-    """Strips a SINGLE full backtick-wrap (`` `x` `` -> `x`) but leaves a
-    multi-token cell like "`the Staff Engineer` + `sid`" untouched — that cell is parsed
-    by `_split_pair_cell`'s own regex, which needs the backticks intact."""
     cell = cell.strip()
     if len(cell) >= 2 and cell.startswith("`") and cell.endswith("`") and cell.count("`") == 2:
         return cell[1:-1]
@@ -129,9 +117,6 @@ _SEPARATOR_RE = re.compile(r"^:?-+:?$")
 
 
 def _parse_pipe_table_data_rows(table_lines: list[str]) -> list[tuple[str, str]]:
-    """Parses the DATA rows of a 2-column markdown pipe table — callers pass
-    only the rows after the header + `|---|---|` separator have already been
-    dropped (see `_extract_table_after_heading`)."""
     rows: list[tuple[str, str]] = []
     for line in table_lines:
         line = line.strip()
@@ -178,7 +163,6 @@ def _extract_table_after_heading(text: str, heading: str) -> list[str]:
 
 def _parse_section(text: str, heading: str) -> dict[str, str]:
     table_lines = _extract_table_after_heading(text, heading)
-    # First two lines are the header row and the `|---|---|` separator.
     rows = _parse_pipe_table_data_rows(table_lines[2:])
     if not rows:
         raise StaffSessionAssembleError(
@@ -191,11 +175,6 @@ _PAIR_SLUG_RE = re.compile(r"`([a-z0-9_-]+)`")
 
 
 def _split_pair_cell(cell: str) -> list[str]:
-    """Splits a "`reviewer-a` + `reviewer-b`" default-pair cell into
-    ["reviewer-a", "reviewer-b"]. The slugs here are illustrative of the SHAPE
-    only -- do not restore real persona names, which reach the public mirror
-    verbatim: this line's own bare-quoted persona name defeated the substitution
-    pass and was one of the two findings that blocked the 2026-08-25 publish."""
     slugs = _PAIR_SLUG_RE.findall(cell)
     if not slugs:
         raise StaffSessionAssembleError(f"malformed default-pair cell: {cell!r}")
@@ -203,9 +182,6 @@ def _split_pair_cell(cell: str) -> list[str]:
 
 
 def load_roster_tables(routing_md_text: str) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
-    """Parses all three doctrine-side roster tables out of routing.md's text.
-    Exposed standalone (not just inlined into resolve_roster) so a caller —
-    or a test fixture — can parse once and inspect the raw tables."""
     domain_pair = _parse_section(routing_md_text, _HEADING_DOMAIN_PAIR)
     agent_file = _parse_section(routing_md_text, _HEADING_AGENT_FILE)
     subagent_type = _parse_section(routing_md_text, _HEADING_SUBAGENT_TYPE)
@@ -372,9 +348,6 @@ def main(argv: list[str]) -> int:
         print(f"{prog}: {exc}", file=sys.stderr)
         return EXIT_USAGE
     except Exception as exc:  # noqa: BLE001 - structural backstop, mirrors sizing_assemble
-        # Transport failure: compute never ran, so nothing goes on stdout —
-        # the exit code is the only evidence (completion-evidence contract,
-        # DR-442). Matches `backlog_grind_assemble.main`'s shape.
         print(f"{prog}: unexpected failure: {exc}", file=sys.stderr)
         return EXIT_TRANSPORT_FAIL
 

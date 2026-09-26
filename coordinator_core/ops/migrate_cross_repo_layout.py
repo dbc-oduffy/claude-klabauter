@@ -77,7 +77,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 _CREATIONFLAGS = no_console_creationflags()
 
-_GIT_TIMEOUT = 30  # seconds — bounded per porter-brief addendum §2 (loop over disk-authored set)
+_GIT_TIMEOUT = 30
 
 
 def _run_git(args: List[str], timeout: int = _GIT_TIMEOUT) -> "subprocess.CompletedProcess[str]":
@@ -97,39 +97,12 @@ def _is_tracked(repo_root: str, relpath: str) -> bool:
 
 
 def _move_one(repo_root: str, src: str, dst: str, session_id: str = "") -> bool:
-    """Move src -> dst via `git mv` (tracked) or plain move + `git add` (untracked).
-
-    Returns True on success, False on any failure (mirrors the bash oracle's
-    `git mv` / `mv` / `git add` failure branches, each of which is fatal and
-    causes the caller to exit 2).
-
-    Untracked branch (plan docs/plans/2026-08-06-relocation-re-declares-the-
-    touch-claim.md, C5d): routed through
-    coordinator_core.session.scope.relocate_touched_path when *session_id*
-    resolved to something non-empty, so a T-claim this session holds on the
-    untracked source (new content this session may have authored — exactly
-    the shape invisible to git's own rename tracking) is re-declared at the
-    destination rather than left to strand. relocate_touched_path itself
-    does not catch a shutil.move failure (see its own docstring), so that
-    failure still surfaces as the OSError this function has always caught
-    here, preserving the existing skip/return-False contract unchanged. Any
-    OTHER failure reaching the helper (e.g. its internal claim-bookkeeping)
-    degrades to the plain shutil.move this branch used before C5d, mirroring
-    the fail-open pattern coordinator_core/ops/priority_drain.py::_move and
-    coordinator_core/percolate/rewrite_basename.py::_do_rename already use
-    for this same helper — a migration step already committed to moving a
-    file must never fail, or behave differently, because of a claim-
-    bookkeeping nicety. A falsy *session_id* (unresolved/no live session)
-    takes the plain move directly, same as before C5d.
-    """
     rel_src = os.path.relpath(src, repo_root)
     rel_dst = os.path.relpath(dst, repo_root)
 
     if _is_tracked(repo_root, rel_src):
         result = _run_git(["git", "-C", repo_root, "mv", rel_src, rel_dst])
         if result.returncode == 0:
-            # DR-276: declared AFTER the git-mv lands — dst is the final
-            # write site for the tracked branch.
             declare_write(dst)
         return result.returncode == 0
 
@@ -153,29 +126,11 @@ def _move_one(repo_root: str, src: str, dst: str, session_id: str = "") -> bool:
 
     result = _run_git(["git", "-C", repo_root, "add", rel_dst])
     if result.returncode == 0:
-        # DR-276: declared AFTER the move lands at its destination — dst is
-        # the real, final write site (never rel_src, never a temp path);
-        # relocate_touched_path (untracked branch) re-declares the T-claim
-        # at dst internally, but this declaration is the uniform one that
-        # covers BOTH the git-mv and plain-move/git-add branches above.
         declare_write(dst)
     return result.returncode == 0
 
 
 def _is_tracked_batch(repo_root: str, rel_paths: List[str]) -> set:
-    """Batched form of `_is_tracked` — one `git ls-files --error-unmatch`
-    spawn covering every pathspec in `rel_paths`, rather than one spawn per
-    path. Mirrors `coordinator_core.ops.fleet._findings_reap._is_tracked_batch`
-    (same primitive, ported sync/non-Path here rather than imported, since
-    that module's own version is async and Path-keyed for its fleet callers).
-
-    `git ls-files --error-unmatch` evaluates every named pathspec even when
-    some are unmatched — an unmatched entry only ever adds an extra stderr
-    line, never a short-circuit — so a single call's stdout is exactly the
-    tracked subset of `rel_paths`. Returns that subset as a set of the
-    matched relpath strings; an empty/None input returns an empty set
-    without spawning.
-    """
     if not rel_paths:
         return set()
     result = _run_git(["git", "-C", repo_root, "ls-files", "--error-unmatch", *rel_paths])
@@ -224,12 +179,10 @@ def _move_batch(
         if result.returncode != 0:
             return False, [rel_src for rel_src in tracked_rel_srcs]
         for src, dst, _rel_src in tracked_items:
-            # DR-276: declared AFTER the git-mv lands — dst is the final
-            # write site for the tracked branch.
             declare_write(dst)
 
     if untracked_items:
-        moved_dsts: List[Tuple[str, str]] = []  # (dst, rel_dst)
+        moved_dsts: List[Tuple[str, str]] = []
         for src, dst, rel_src in untracked_items:
             rel_dst = os.path.relpath(dst, repo_root)
             moved = False
@@ -261,7 +214,6 @@ def _move_batch(
         if result.returncode != 0:
             return False, [rel_src for _s, _d, rel_src in untracked_items]
         for dst, _rel_dst in moved_dsts:
-            # DR-276: declared AFTER the move lands at its destination.
             declare_write(dst)
 
     return True, []
@@ -289,7 +241,6 @@ def _usage_text() -> str:
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: arg parse, root resolution, Phase 1/2/3 migration, summary, rc."""
     explicit_root: Optional[str] = None
 
     rest = list(argv)
@@ -327,15 +278,11 @@ def main(argv: List[str]) -> int:
         print(f"ERROR: repo root does not exist: {repo_root}", file=sys.stderr)
         return 1
 
-    # Confirm the resolved/explicit root is actually inside (or at) a git repo.
     check = _run_git(["git", "-C", repo_root, "rev-parse", "--show-toplevel"])
     if check.returncode != 0:
         print(f"ERROR: {repo_root} is not a git repository.", file=sys.stderr)
         return 1
 
-    # Resolved ONCE per main() call, not per-file — every move below belongs
-    # to the same invoking session; see _move_one's docstring for why an
-    # unresolvable ("") session id takes the plain-move path directly.
     session_id = resolve_session_id(repo_root)
 
     cross_repo_dir = os.path.join(repo_root, "cross-repo")
@@ -349,14 +296,8 @@ def main(argv: List[str]) -> int:
     inbox_moves = 0
     archive_moves = 0
 
-    # Phase 1: flat cross-repo/*.md (non-README) -> cross-repo/inbox/
-    #
     # Batch primitive (test_no_unbatched_per_item_git_spawn.py _KNOWN_SITES
-    # evidence): the collision check stays per-item and spawn-free
-    # (`os.path.exists`, unchanged) -- ONLY the git-spawning leg (`_move_one`
-    # per src) is collapsed. Every item in a phase shares the same
     # destination DIRECTORY, so `_move_batch` runs it as one batched
-    # trackedness probe plus one `git mv`/`git add` for the whole phase.
     inbox_items: List[Tuple[str, str, str]] = []
     for src in sorted(glob.glob(os.path.join(cross_repo_dir, "*.md"))):
         if not os.path.isfile(src):
@@ -384,7 +325,6 @@ def main(argv: List[str]) -> int:
         print(f"  inbox: {os.path.basename(src)}")
         inbox_moves += 1
 
-    # Phase 2: archive/cross-repo/* -> cross-repo/archive/
     if os.path.isdir(legacy_archive_dir):
         archive_items: List[Tuple[str, str, str]] = []
         for filename in sorted(os.listdir(legacy_archive_dir)):
@@ -412,7 +352,6 @@ def main(argv: List[str]) -> int:
             print(f"  archive: {os.path.basename(src)}")
             archive_moves += 1
 
-    # Phase 3: remove the now-empty top-level archive/cross-repo/ directory.
     archive_removed = False
     if os.path.isdir(legacy_archive_dir):
         remaining = len(os.listdir(legacy_archive_dir))

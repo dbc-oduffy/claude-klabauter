@@ -30,8 +30,6 @@ from textwrap import dedent
 
 import pytest
 
-# Import guard — fires all @register_op(...) side-effects, including
-# "records.query", before the handler is imported below.
 import coordinator_core.ops  # noqa: F401 — populates _REGISTRY
 
 from coordinator_core.frontmatter.schema_validate import (
@@ -43,11 +41,6 @@ from coordinator_core.frontmatter.schema_validate import (
 from coordinator_core.ops.records_query import _handler
 from coordinator_core.win_portability import no_console_creationflags
 
-# Two of this module's tests seed a real git repo so `--type roadmap`
-# exercises the actual records-query collection path (glob walk +
-# _load_record), not a stubbed reader — this module's purpose is the
-# two-surface (schema + consumer glob) consequence, which only a real
-# collection call can catch. Mirrors coordinator_core/ops/tests/test_records_query.py.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _SCHEMAS_DIR = Path(__file__).parent.parent / "schemas"
@@ -115,9 +108,6 @@ def test_sprint_path_overview_matches_roadmap_schema_via_match_schema():
 
 
 def test_sprint_path_overview_is_returned_by_a_real_query_records_call(tmp_path: Path):
-    """The half schema validation alone cannot catch: `--type roadmap` must
-    actually collect a nested sprint-path overview, not just admit it as
-    schema-valid."""
     worktree = tmp_path / "repo"
     git_dir = _make_git_repo(worktree)
     overview_dir = worktree / "state" / "roadmap" / "claude-klabauter-strangler" / "sprint-1"

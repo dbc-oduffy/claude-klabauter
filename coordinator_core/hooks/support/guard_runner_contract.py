@@ -131,36 +131,21 @@ from dataclasses import dataclass, field
 from pathlib import PureWindowsPath
 from typing import FrozenSet, Optional, Tuple
 
-#: Greppable registry token for this contract.
 TRIPWIRE_TOKEN = "GUARD-ON-RUNNER-CONTRACT"
 
-#: The channel names a guard's verdict is expressed in, mirrored from
 #: `message_envelope.py`'s `CHANNEL_STOP` / `CHANNEL_ADDITIONAL_CONTEXT` /
 #: `CHANNEL_DENY` constants (NOT re-imported here -- this module stays
-#: import-free at module scope beyond the standard library). Only
 #: CHANNEL_ADDITIONAL_CONTEXT and CHANNEL_DENY are relevant to the
 #: PreToolUse write-path runner this contract targets; CHANNEL_STOP is a
-#: Stop-family shape out of scope here.
 CHANNEL_ADDITIONAL_CONTEXT = "additional_context"
 CHANNEL_DENY = "deny"
 
-#: Environment variable that puts a guard's own `message_envelope.emit()`
-#: call into measurement mode -- mirrored from `message_envelope.py`'s
 #: `MEASURE_ENV_VAR` for the same import-free-module-scope reason as the
-#: channel constants above. Per clause 9, the runner does NOT special-case
-#: this variable: measurement mode is standalone-invocation-only.
 MEASURE_ENV_VAR = "COORDINATOR_HOOK_MESSAGE_MEASURE"
 
-#: Forbidden-construct grep patterns a conformance test applies to every
-#: enrolled guard's source text, per clauses 2-4 and 8. Each value is a
-#: plain substring/regex fragment, not a compiled pattern.
 FORBIDDEN_OS_EXIT = r"os\._exit"
 FORBIDDEN_ATEXIT = r"atexit\."
 FORBIDDEN_CHDIR = r"os\.chdir"
-#: A `sys.path.insert` occurring AFTER the module's own import block is
-#: forbidden (clause 8); one at TOP of a module, before other imports, is
-#: an existing self-resolution idiom and is exempt -- the conformance test
-#: locates the import block's end and only flags a later occurrence.
 FORBIDDEN_LATE_PATH_INSERT = r"sys\.path\.insert"
 
 
@@ -201,35 +186,6 @@ class GuardScopeDescriptor:
     basenames: FrozenSet[str] = field(default_factory=frozenset)
 
     def matches(self, target_path: Optional[str]) -> bool:
-        """Pure, import-free scope check. `target_path` is the raw
-        (possibly `None`) path string extracted from the hook payload --
-        this function does no filesystem I/O and imports nothing beyond
-        what this module already imports at the top.
-
-        `directory_substrings` are declared forward-slash-only, but
-        `target_path` is a raw payload string that on Windows is
-        backslash-separated -- a bare `in` check against the declared
-        substring silently under-matches every Windows call. Normalized to
-        forward slashes for the directory-substring check only (host
-        -neutral: a no-op on a POSIX path, which already uses `/`);
-        `path_suffixes` needs no such normalization since `endswith` on a
-        filename suffix does not depend on the separator.
-
-        `basenames`, when declared, is checked FIRST and independently: a
-        match there returns `True` immediately, regardless of
-        `path_suffixes`/`directory_substrings` -- an OR, not an AND, with
-        the suffix+directory pair. The basename is extracted from the same
-        separator-normalized path the directory-substring check uses, so a
-        config-file target matches on both POSIX and backslash-separated
-        Windows payload strings.
-
-        Residual, unclosed by this or any separator-normalization scheme:
-        `PureWindowsPath` parses `\\` as a separator unconditionally, on
-        every host, so a POSIX path whose leaf genuinely contains a literal
-        backslash character (legal, if unusual, on POSIX) is still mangled
-        here. This function does not claim to close that case; it only
-        fixes the Windows-payload under-match described above.
-        """
         if not target_path:
             return False
         if not self.path_suffixes and not self.directory_substrings and not self.basenames:
@@ -254,13 +210,6 @@ class GuardScopeDescriptor:
         return True
 
 
-#: The enrolment list a conformance test sources its guard corpus from.
-#: Filenames only (no directory prefix) -- NAMES the future hook-body
-#: modules W4-C5/C6 land, not files present in this chunk's footprint. See
-#: this module's own docstring, "ported ... verbatim", for why the list is
-#: carried here unchanged rather than emptied: it is contract vocabulary a
-#: later wave's bodies must conform to, not a live import target of this
-#: module.
 ENROLLED_GUARD_MODULES: Tuple[str, ...] = (
     "guard-oss-payload-locality.py",
     "nudge-plan-test-surface-tier.py",
@@ -274,15 +223,6 @@ ENROLLED_GUARD_MODULES: Tuple[str, ...] = (
     "guard-handoff-summary-cap-on-write.py",
 )
 
-#: `guard-doctrine-changelog-prose.py`'s `GuardScopeDescriptor`. The guard's
-#: REAL scope is a `.md` file under one of five fixed governed doctrine
-#: trees, or a `*.schema.json` file directly inside the doctrine schemas
-#: dir, or a repo-root `coordinator.local.md` -- both reachable only by
-#: importing that (not-yet-landed) module, exactly the cost this descriptor
-#: exists to defer. This descriptor is a strict superset (it does not
-#: additionally exclude the `tests/`/`fixtures/` subdirectory carve-out the
-#: real predicate applies, nor enforce a "direct children only"
-#: restriction), so it can never under-match.
 DOCTRINE_CHANGELOG_PROSE_SCOPE_DESCRIPTOR = GuardScopeDescriptor(
     guard_module="guard-doctrine-changelog-prose.py",
     path_suffixes=frozenset({".md", ".schema.json"}),
@@ -298,12 +238,6 @@ DOCTRINE_CHANGELOG_PROSE_SCOPE_DESCRIPTOR = GuardScopeDescriptor(
 )
 
 
-#: `guard-doctrine-surface-ratio.py`'s `GuardScopeDescriptor`. The guard's
-#: REAL scope is a `.md` file under one of the same five governed doctrine
-#: trees (`.schema.json` is NOT one of the measured surfaces this guard
-#: prices, unlike the changelog-prose guard's own scope, so it is
-#: deliberately absent from `path_suffixes` here). A strict superset of the
-#: real predicate, so it can never under-match.
 GUARD_DOCTRINE_SURFACE_RATIO_SCOPE_DESCRIPTOR = GuardScopeDescriptor(
     guard_module="guard-doctrine-surface-ratio.py",
     path_suffixes=frozenset({".md"}),
@@ -317,16 +251,6 @@ GUARD_DOCTRINE_SURFACE_RATIO_SCOPE_DESCRIPTOR = GuardScopeDescriptor(
 )
 
 
-#: `check-claude-md-size.py`'s `GuardScopeDescriptor`. The guard's REAL
-#: scope is the union of a size-budget check (a governed `CLAUDE.md` at
-#: exactly two locations) and an admission-gate check (a small fixed set of
-#: governed authoring surfaces). Every one of those concrete paths ends
-#: with exactly one of three basenames -- `CLAUDE.md`,
-#: `em-operating-doctrine.md`, `agent-role-dispatched.md` -- the tightest
-#: sound superset available without importing either predicate's machinery.
-#: This guard's verdict travels via captured STDERR, not the stdout-JSON
-#: envelope the other enrolled guards use -- see `RegisteredGuard`'s own
-#: docstring in `guard_runner.py` for that seam.
 CHECK_CLAUDE_MD_SIZE_SCOPE_DESCRIPTOR = GuardScopeDescriptor(
     guard_module="check-claude-md-size.py",
     path_suffixes=frozenset(

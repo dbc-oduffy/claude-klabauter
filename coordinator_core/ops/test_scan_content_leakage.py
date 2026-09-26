@@ -31,9 +31,6 @@ from __future__ import annotations
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Import guard — MUST precede any test so @register_op fires first.
-# ---------------------------------------------------------------------------
 import coordinator_core.ops.scan_content_leakage  # noqa: F401 — fires @register_op
 
 from coordinator_core.ipc import _REGISTRY
@@ -88,8 +85,7 @@ def test_clean_tree_all_empty_not_blocked(tmp_path):
 
 def test_high_tier_credential_shape_blocks(tmp_path):
     root = tmp_path / "pub"
-    # Constructed, not literal — a GitHub-PAT-shaped token.
-    token = "ghp_" + "A1b2C3d4" * 3  # 24 chars after the prefix
+    token = "ghp_" + "A1b2C3d4" * 3
     _write(root, "snippets/example.md", f"token = {token}\n")
     result = _scan(root)
     assert result["blocked"] is True
@@ -118,7 +114,7 @@ def test_medium_tier_internal_path_and_email_do_not_block(tmp_path):
 
 def test_low_tier_commit_sha_informational_only(tmp_path):
     root = tmp_path / "pub"
-    sha = "0123456789abcdef" * 2 + "01234567"  # 40 hex chars
+    sha = "0123456789abcdef" * 2 + "01234567"
     _write(root, "docs/changelog.md", f"Fixed in {sha} last week.\n")
     result = _scan(root)
     assert result["blocked"] is False
@@ -134,11 +130,10 @@ def test_binary_file_skipped_with_note_sweep_completes(tmp_path):
     binary = root / "assets" / "logo.png"
     binary.parent.mkdir(parents=True)
     binary.write_bytes(b"\x89PNG\xff\xfe\x00\x01invalid-utf8\xff")
-    sha = "abcdef0123456789" * 2 + "abcdef01"  # 40 hex chars
+    sha = "abcdef0123456789" * 2 + "abcdef01"
     _write(root, "docs/notes.md", f"deadline commit {sha}\n")
     result = _scan(root)
     assert result["skipped"] == ["assets/logo.png"]
-    # The sweep completed past the binary file and still scanned the text file.
     assert len(result["low"]) == 1
 
 
@@ -178,9 +173,6 @@ def test_operator_identity_tokens_not_scanned_here(tmp_path):
 
 
 def test_double_invocation_identical_result(tmp_path):
-    """AC7/CC-4 idempotency proof: read-only sweep — the second call with
-    identical inputs returns an identical result (inherent, per the module's
-    DEC-7 note)."""
     root = tmp_path / "pub"
     token = "xoxb-" + "1234567890-abc"
     _write(root, "docs/a.md", f"slack {token}\n")

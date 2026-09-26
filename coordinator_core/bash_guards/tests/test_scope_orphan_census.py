@@ -1,11 +1,3 @@
-"""Tests for coordinator_core.bash_guards.scope_orphan_census.
-
-Every row runs against a real, isolated `tmp_path` git repo -- never the
-Claude-klabauter checkout, whose live `.git/coordinator-sessions/` logs are
-exactly the moving-target corpus this module exists to make re-runnable
-rather than snapshot. See scope_orphan_census.py's module docstring for the
-cause taxonomy asserted here.
-"""
 
 from __future__ import annotations
 
@@ -17,9 +9,6 @@ import pytest
 from coordinator_core.bash_guards import scope_orphan_census as census_mod
 from coordinator_core.git.run import GitResult
 
-# Spawns a real external process (git, for repo fixture setup and tracked-at-
-# HEAD checks); runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -76,9 +65,6 @@ def _commit_with_session_trailer(repo: Path, filename: str, session_id: str) -> 
     _git(repo, "commit", "-q", "-m", f"msg for {filename}\n\nSession-Id: {session_id}\n")
 
 
-# --- log parsing / iteration -------------------------------------------------
-
-
 def test_iter_orphan_events_reads_only_owner_orphan_lines(repo: Path):
     _write_log(
         repo,
@@ -130,9 +116,6 @@ def test_malformed_line_is_skipped_not_raised(repo: Path):
     )
     events = list(census_mod.iter_orphan_events(str(repo)))
     assert [e.path for e in events] == ["ok.txt"]
-
-
-# --- cause classification -----------------------------------------------------
 
 
 def test_classify_archival_sink(repo: Path):
@@ -229,11 +212,6 @@ def test_classify_unrecorded_write_when_tracked_at_head(repo: Path):
 
 
 def test_classify_prefix_match_alone_falls_through_to_unrecorded_write(repo: Path, monkeypatch):
-    # C7b: prefix membership alone is no longer sufficient. This mirrors the
-    # first-run misfiling -- 13 of 15 `undeclared-op-output` members were
-    # `state/sizings/*.yaml` files a heredoc wrote directly, with no exact
-    # literal and no touch-record claim, merely living under a directory
-    # some op also names.
     ops_dir = repo / "coordinator_core" / "ops"
     ops_dir.mkdir(parents=True)
     (ops_dir / "some_op.py").write_text(
@@ -315,9 +293,6 @@ def test_op_output_prefix_cache_is_populated_after_first_call(repo: Path):
     census_mod._op_output_prefix_cache = None
 
 
-# --- census aggregation --------------------------------------------------------
-
-
 def test_run_census_buckets_counts_by_cause_path_session(repo: Path):
     _write_log(
         repo,
@@ -365,9 +340,6 @@ def test_run_census_every_cause_key_present_even_when_zero(repo: Path):
 
 
 def test_run_census_new_unexplained_cause_lands_in_genuinely_unowned(repo: Path, monkeypatch):
-    # A path that is untracked, absent from op-output prefixes, AND absent
-    # from disk cannot be a real "unrecorded write" -- it must fall to the
-    # residue bucket rather than being silently absorbed elsewhere.
     monkeypatch.setattr(
         census_mod, "_git_tracked_at_head", lambda git_root, path: True
     )
@@ -383,12 +355,6 @@ def test_run_census_new_unexplained_cause_lands_in_genuinely_unowned(repo: Path,
         log_path="",
     )
     assert census_mod.classify_cause(str(repo), event) == "genuinely-unowned"
-
-
-# --- coverage (state/bug-backlog/2026-08-28-the-scope-guard-s-instrument-is-
-# absent-f-d1921a288f7b.yaml remedy (b): a by_cause zero must never be
-# readable as a population rate without the coverage denominator beside it)
-# ------------------------------------------------------------------------
 
 
 def test_run_census_coverage_counts_session_dirs_against_committing_sessions(repo: Path):
@@ -408,9 +374,6 @@ def test_run_census_coverage_counts_session_dirs_against_committing_sessions(rep
 
 
 def test_run_census_coverage_present_even_with_no_session_dirs_at_all(repo: Path):
-    # The exact shape the row's body describes: a session dir count of 0
-    # against a nonzero committing-session count must surface as a coverage
-    # ratio, not read like a clean `by_cause` census of zero foreign paths.
     _commit_with_session_trailer(repo, "a.txt", "sess-aaa")
 
     result = census_mod.run_census(str(repo))
@@ -422,9 +385,6 @@ def test_run_census_coverage_present_even_with_no_session_dirs_at_all(repo: Path
 
 
 def test_run_census_coverage_ratio_is_none_when_no_committing_sessions(repo: Path):
-    # The seed commit fixture carries no Session-Id trailer, so the
-    # denominator is 0 -- must read as "unknown", never as a divide-by-zero
-    # or a false 100%.
     result = census_mod.run_census(str(repo))
 
     assert result.coverage["committing_sessions"] == 0
@@ -471,9 +431,6 @@ def test_to_dict_round_trips_all_fields(repo: Path):
     assert payload["members"]["archival-sink"][0]["session_id"] == "sess-1"
 
 
-# --- CLI ----------------------------------------------------------------------
-
-
 def test_main_prints_json_for_day(repo: Path, capsys):
     _write_log(
         repo,
@@ -484,9 +441,6 @@ def test_main_prints_json_for_day(repo: Path, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert '"archival-sink": 1' in out
-
-
-# --- --since ---------------------------------------------------------------
 
 
 def test_since_excludes_events_before_the_instant(repo: Path):

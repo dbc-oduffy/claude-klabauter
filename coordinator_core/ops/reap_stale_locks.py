@@ -77,7 +77,7 @@ Prior bash implementation: coordinator/bin/coordinator-reap-stale-locks (DoE-cla
 
 from __future__ import annotations
 
-GENERATES = []  # removes only stale .git/index.lock, .git/next-index-*.lock, .git/objects/maintenance.lock -- never a tracked repo artifact
+GENERATES = []
 
 import os
 import subprocess
@@ -134,13 +134,8 @@ def _git_common_dir(git_dir: Path, cwd: Optional[Path] = None) -> Path:
 
 def _append_log(reap_log: Path, message: str) -> None:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    # Force LF regardless of platform newline
-    # translation; the bash oracle's `>>` redirection always appends a literal LF,
-    # including on Windows/MSYS, so default text-mode writes (which would emit CRLF
-    # on native Windows Python) would break byte-for-byte log parity.
     with open(reap_log, "a", encoding="utf-8", newline="\n") as f:
         f.write(f"[{ts}] {message}\n")
-    # DR-276: declared AFTER the write lands, never before — the contract is a
     # report of what was ACTUALLY written, not of an intended surface.
     declare_write(reap_log)
 
@@ -152,14 +147,6 @@ def stale_and_stable(
     no_sleep: bool,
     on_wait: Optional[Callable[[], None]] = None,
 ) -> bool:
-    """Return True iff `lock` is older than `age_floor` AND its (mtime, size) are
-    unchanged across the re-sample window. Returns False if absent, fresh, or
-    actively mutating.
-
-    `on_wait`, when given, replaces the real sleep entirely — the injectable resample
-    seam tests use to simulate a mutating writer deterministically, without paying
-    real wall-clock time.
-    """
     if not lock.exists():
         return False
     now = _now_epoch()
@@ -190,14 +177,12 @@ def do_reap(
     no_sleep: bool,
     on_wait: Optional[Callable[[], None]] = None,
 ) -> int:
-    """Attempt to reap `lock`. Returns 0 (reaped), 1 (rm failed — hard error), or
-    2 (present but not stale/stable, or absent)."""
     if not stale_and_stable(lock, age_floor, stability_sec, no_sleep, on_wait):
         return 2
     try:
         lock.unlink()
     except FileNotFoundError:
-        pass  # already absent -- equivalent to reaped, falls through to the success log below
+        pass
     except OSError:
         _append_log(reap_log, f"FAILED to reap {label}: {lock} (rm failed)")
         print(f"{_PREFIX}: ERROR — rm failed on {lock}", file=sys.stderr)
@@ -228,11 +213,6 @@ def _env_float(name: str, default: float) -> float:
 
 
 def main(argv: list[str]) -> int:
-    # The bash oracle never inspects $@ at all;
-    # an argparse-based flag surface printed the docstring to stdout on --help and
-    # exited 2 on any stray arg, both violating the "no stdout" / byte-for-byte
-    # parity contract documented above. `argv` is intentionally unused, matching
-    # the oracle exactly.
     del argv
 
     age_sec = _env_int("COORDINATOR_LOCK_REAP_AGE_SEC", _DEFAULT_AGE_SEC)

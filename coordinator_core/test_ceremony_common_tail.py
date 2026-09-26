@@ -35,8 +35,6 @@ import coordinator_core.workweek_complete.brief as workweek_brief
 from coordinator_core.ceremony_common.tail import build_ceremony_close_tail
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -58,17 +56,11 @@ def test_build_ceremony_close_tail_shape():
     assert [entry["id"] for entry in tail] == ["d_step_x_post_command_hook"]
     (hook,) = tail
     assert hook["cli"] == "coordinator-ceremony-hook"
-    # 2026-07-26 arg-mismatch audit, class (c): the hook reads its one
-    # positional (argv[0]) as the ceremony name — `args=[]` always resolved
-    # an empty ceremony and silently no-opped regardless of caller.
     assert hook["args"] == ["workday-complete"]
     assert hook["depends_on"] is None
     assert hook["already_satisfied"] is False
     assert "hard_block" not in hook
 
-    # The post-command-hook step is NOT best-effort — it never carried the
-    # key. The one entry that did was the emission-cadence directive, gone
-    # with the artifact (2026-08-22 CUT).
     assert "best_effort" not in hook
 
 
@@ -83,8 +75,6 @@ def test_workday_complete_tail_directives():
     assert hook["depends_on"] is None
     assert hook["cli"] in workday_brief.CONSUMES_MANIFEST
 
-    # workday's assembler never stamps hard_block onto anything — the
-    # invariant a silent regression in the refactor could break.
     assert "hard_block" not in hook
 
 
@@ -97,18 +87,11 @@ def test_workweek_complete_tail_directives():
     assert hook["depends_on"] is None
     assert hook["cli"] in workweek_brief.CONSUMES_MANIFEST
 
-    # workweek's uniform post-build pass stamps hard_block onto EVERY
-    # directive it builds, tail included — the tail directive is not a
-    # hard-block gate, so it must read False, never missing.
     assert hook["hard_block"] is False
-
 
 
 def test_workday_brief_envelope_contains_tail(monkeypatch):
     # Suite-root autouse fixture quarantines HOME/USERPROFILE per test (see
-    # coordinator_core/conftest.py); resolve_operator_config() legitimately
-    # fails against that quarantine. Stub it so brief() proceeds — mirrors
-    # test_baton_assemble.py's own resolve_operator_config spy pattern.
     monkeypatch.setattr(workday_brief, "resolve_operator_config", lambda **_: {})
     exit_code, envelope = workday_brief.brief()
     assert exit_code == int(workday_brief.WorkdayExitCode.SUCCESS)

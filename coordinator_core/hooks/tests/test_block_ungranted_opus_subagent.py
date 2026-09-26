@@ -1,9 +1,3 @@
-"""coordinator_core.hooks.tests.test_block_ungranted_opus_subagent -- coverage
-for the PreToolUse(Agent) Opus/Fable persona-or-grant gate, and the seam it
-composes into on `block_unenumerated_agent_type.check()`.
-
-Spec backlink: state/audits/2026-09-18-why-the-opus-subagent-guard-did-not-fire.md
-"""
 
 from __future__ import annotations
 
@@ -53,17 +47,12 @@ def _write_transcript(tmp_path: Path, *, model: str, extra_lines: "list[str]" = 
     return str(path)
 
 
-# ---------------------------------------------------------------------------
-# check() -- deny / pass, pins + transcript injected
-# ---------------------------------------------------------------------------
-
-
 def _assert_rewritten_to_sonnet(envelope, payload: dict) -> None:
     assert envelope is not None
     hso = envelope["hookSpecificOutput"]
     assert "permissionDecision" not in hso
     assert hso["updatedInput"] == {**payload["tool_input"], "model": "sonnet"}
-    assert "model" not in payload["tool_input"]  # a new object, never a mutation
+    assert "model" not in payload["tool_input"]
 
 
 def test_general_purpose_no_model_under_opus_parent_rewrites_to_sonnet(
@@ -151,7 +140,6 @@ def test_opus_pinned_persona_passes_with_explicit_model_opus(monkeypatch: pytest
 
 
 def test_fork_under_opus_parent_passes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """PM ruling 2026-09-18: a fork is a new EM session, a named exception."""
     _patch_pins(monkeypatch, {})
     transcript = _write_transcript(tmp_path, model="claude-opus-4-1-20250805")
     assert mod.check(_agent_payload("fork", transcript_path=transcript)) is None
@@ -191,7 +179,6 @@ def test_non_agent_tool_name_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_absent_subagent_type_under_opus_parent_rewrites_to_sonnet(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # The harness runs an omitted type as general-purpose; the gate must too.
     _patch_pins(monkeypatch, {})
     transcript = _write_transcript(tmp_path, model="claude-opus-5-5[1m]")
     payload = {
@@ -211,8 +198,6 @@ def test_payload_level_model_field_used_before_transcript(monkeypatch: pytest.Mo
 
 
 def test_sonnet_pinned_type_with_explicit_opus_override_denies(monkeypatch: pytest.MonkeyPatch) -> None:
-    # This module's own gate would deny this on its own merits (opus, no
-    # persona pin) even without the sibling's pin-fidelity deny firing first.
     _patch_pins(
         monkeypatch,
         {"coordinator:executor": {"model": "sonnet", "_source_path": "x"}},
@@ -220,11 +205,6 @@ def test_sonnet_pinned_type_with_explicit_opus_override_denies(monkeypatch: pyte
     envelope = mod.check(_agent_payload("coordinator:executor", model="opus"))
     assert envelope is not None
     assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-
-# ---------------------------------------------------------------------------
-# Composition -- block_unenumerated_agent_type.check() chains both legs.
-# ---------------------------------------------------------------------------
 
 
 def test_composed_seam_rewrites_via_opus_gate_when_pin_leg_is_silent(
@@ -303,7 +283,6 @@ def test_composed_seam_pin_deny_short_circuits_before_opus_gate(
     assert envelope is not None
     reason = envelope["hookSpecificOutput"]["permissionDecisionReason"]
     assert "sonnet" in reason and "opus" in reason
-    # The pin-fidelity reason, not the opus-gate's own reason shape.
     assert "cost-and-role invariant" in reason
 
 

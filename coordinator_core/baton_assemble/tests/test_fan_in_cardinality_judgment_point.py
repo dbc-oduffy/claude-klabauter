@@ -18,20 +18,12 @@ import pytest
 import coordinator_core.baton_assemble as ba
 from coordinator_core.test_baton_assemble import _FAKE_OPERATOR_CONFIG, _init_repo, _write_artifact
 
-# `_init_repo` (imported above) spawns real git to build the repo `ba.brief()`
-# reads -- `brief()`'s lineage/claim resolution walks real `.git/` state
-# (coordinator-sessions handoff-claims, commit history), which no mock stands
 # in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue
-# and is explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 @pytest.fixture(autouse=True)
 def _stub_operator_config(monkeypatch):
-    """Restated per-module (autouse fixtures do not cross module boundaries)
-    -- `brief()` calls `resolve_operator_config()` unconditionally. Mirrors
-    `test_j_continuation_vs_fork_excise.py`'s own fixture of the same name."""
     monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
 
 
@@ -131,6 +123,4 @@ class TestFanInCardinalityJudgmentPointDoesNotFireOnSinglePredecessor:
         ids = {j["id"] for j in without_fan_in["judgment_points"]}
         assert "j-fan-in-cardinality" not in ids
 
-        # AC-4: byte-identical repeated computation for a single-predecessor
-        # session -- this stub's change must not perturb this path at all.
         assert without_fan_in == with_fan_in_disabled_again

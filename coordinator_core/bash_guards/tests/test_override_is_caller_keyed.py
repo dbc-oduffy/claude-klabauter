@@ -109,9 +109,6 @@ def test_all_override_call_sites_thread_payload_or_hook_payload(monkeypatch):
     import re
 
     src = inspect.getsource(dc)
-    # Exclude the function's own `def _override(...)` definition line --
-    # match only a call (preceded by something other than `def `), not the
-    # definition itself.
     call_sites = [
         m.start()
         for m in re.finditer(r"(?<!def )_override\(", src)
@@ -119,9 +116,6 @@ def test_all_override_call_sites_thread_payload_or_hook_payload(monkeypatch):
     assert call_sites, "expected at least one _override(...) call site"
 
     for pos in call_sites:
-        # Scan forward from the call site to its matching close paren,
-        # tolerating the multi-line call shapes present in this file
-        # (e.g. the amend-flag check split across three lines).
         depth = 0
         i = pos + len("_override(") - 1
         end = None
@@ -171,18 +165,6 @@ def test_check_runaway_find_accepts_payload_kwarg(monkeypatch):
         payload={"env": {"COORDINATOR_ALLOW_FIND_ROOT": "1"}},
     )
     assert allowed is None, "payload-carried override should have allowed"
-
-
-# ---------------------------------------------------------------------------
-# The shell-c unwrap recursion -- the path the two tests above do NOT reach.
-#
-# `rm -rf $(cat targets.txt)` denies on the subshell-target branch and
-# `find / -name '*.py'` denies on the root-anchor branch; neither ever enters
-# `_shell_c_unwrap_payloads`. The recursion was where the payload was actually
-# being dropped (loop variable named `payload` shadowing the parameter, so the
-# recursive call re-scanned with caller context gone and `_override` fell back
-# to ambient env). These two pin the fix at ad0b39cac against that exact shape.
-# ---------------------------------------------------------------------------
 
 
 def test_destructive_rm_forwards_payload_through_shell_c_unwrap(monkeypatch):

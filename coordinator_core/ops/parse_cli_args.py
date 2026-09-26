@@ -65,30 +65,12 @@ _ONLY_FLAG_NAMES: Tuple[str, ...] = ("--only",)
 
 
 def _flag_pattern(flag_names: List[str]) -> re.Pattern:
-    """Build a regex matching any of `flag_names` followed by an optional
-    whitespace-delimited value token.
-
-    Flag names are escaped and alternated longest-first so a shorter flag
-    name that is a prefix of a longer one (e.g. `--for` vs `--for-date`)
-    never shadows the longer match. The value group is non-greedy and
-    stops at the next whitespace run or end-of-string, mirroring the
-    `sed -En` extraction the oracle fence ran.
-    """
     escaped = sorted((re.escape(name) for name in flag_names), key=len, reverse=True)
     alternation = "|".join(escaped)
     return re.compile(rf"(?P<flag>{alternation})(?:\s+(?P<value>\S+))?")
 
 
 def parse_flag(arguments: str, flag_names: List[str]) -> Tuple[Optional[str], Optional[str]]:
-    """Find the first occurrence of any name in `flag_names` within
-    `arguments` and return `(value, matched_flag)`.
-
-    `value` is the whitespace-delimited token immediately following the
-    matched flag, or `None` when the flag has no following token (trailing
-    flag, or immediately followed by another `--flag`). `matched_flag` is
-    the literal flag name that matched (from `flag_names`, not a normalized
-    form), or `None` if nothing matched.
-    """
     if not arguments or not flag_names:
         return None, None
     match = _flag_pattern(flag_names).search(arguments)

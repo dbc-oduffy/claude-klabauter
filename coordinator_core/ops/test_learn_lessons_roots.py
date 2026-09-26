@@ -1,7 +1,3 @@
-"""Characterization + parity tests for coordinator_core.ops.learn_lessons_roots.
-
-Spec backlink: docs/plans/2026-06-19-portability-tracked-per-machine-config.md § C1
-"""
 
 from __future__ import annotations
 
@@ -16,19 +12,6 @@ from coordinator_core.testing.fake_machine_local import write_fake_machine_local
 
 
 def _make_machine_local(bin_dir: Path, repos: dict, publish_targets=(), extra=None) -> Path:
-    """Write a fake cross-platform `machine-local` CLI supporting `keys` / `get <key>`.
-
-    repos: {short_key: path} -> registers as `repos.<short_key>`.
-    publish_targets: iterable of (name, type, source, dest) 4-tuples for
-      `get publish.targets` (pipe-joined, one per line).
-    extra: additional {key: value} pairs beyond repos.* (e.g. denylist keys).
-
-    Delegates the platform-correct on-disk shape (bare shim on POSIX,
-    `.cmd` launcher + co-located `.py` body on Windows) to
-    `coordinator_core.testing.fake_machine_local.write_fake_machine_local` --
-    see that module's docstring for why a raw `#!/bin/sh`/`#!/usr/bin/env
-    bash` stub cannot be exec'd directly by Windows `CreateProcess`.
-    """
     extra_dict = extra or {}
     python_body = f"""
 import json
@@ -82,9 +65,6 @@ sys.exit(_main())
 def _env_for(tmp_path: Path) -> dict:
     env = dict(os.environ)
     env["CLAUDE_HOME"] = str(tmp_path)  # CLAUDE_HOME overrides $HOME, per oracle
-    # No DoE content root in these tests -- _coordinator_state_root_central()
-    # degrades to "" (script not found), config_path becomes bogus and is
-    # correctly skipped (isfile() False) -- exercises the negative-spec path.
     env.pop("COORDINATOR_ROOT", None)
     env.pop("CLAUDE_PLUGIN_ROOT", None)
     return env
@@ -132,14 +112,6 @@ class TestPositive:
         assert lines[0] == str(claude_home)
 
     def test_registry_roots_resolve_via_dump_only_fixture(self, tmp_path: Path):
-        """Multi-item regression, T3 h4-ops-b deferred item: a fake
-        machine-local that answers ONLY `dump --prefix repos --format json`
-        (no `keys`, no per-key `get`) still resolves every repos.* root.
-        FAILS against the pre-batch enumerate-then-`get` implementation --
-        that code path calls `keys` (returns nothing here) then `get` per
-        key (never reached), so it would see zero registry roots. Confirmed
-        by the dispatching agent via local revert-and-rerun; see run report.
-        """
         claude_home = tmp_path / ".claude"
         claude_home.mkdir(parents=True)
         repo_a = tmp_path / "repo-a"
@@ -237,7 +209,6 @@ sys.exit(_main())
         claude_home.mkdir(parents=True)
         dup = tmp_path / "dup-repo"
         dup.mkdir()
-        # Two registry keys resolving to the SAME dir -- must dedup to one line.
         _make_machine_local(
             claude_home / "bin",
             repos={"a_dup": str(dup), "b_dup": str(dup)},
@@ -251,12 +222,6 @@ sys.exit(_main())
         assert lines.count(str(dup)) == 1
 
     def test_supplemental_sentinel_roots_appended(self, tmp_path: Path):
-        """C11 (2026-07-21): `_coordinator_state_root_central` is now a native
-        in-process call to `coordinator_state_root(central=True)` rather than a
-        shell-out to a fake `coordinator-state-root.sh` -- monkeypatch the
-        call-site directly rather than driving the full native resolution chain
-        (the engine root / machine-local registry) through env, matching the
-        equivalent stand-in pattern in test_central_run_due.py."""
         claude_home = tmp_path / ".claude"
         claude_home.mkdir(parents=True)
         central_state = tmp_path / "central-state"
@@ -290,7 +255,6 @@ sys.exit(_main())
 
 class TestNegative:
     def test_no_machine_local_emits_only_claude_home(self, tmp_path: Path):
-        """OSS fresh-install: no machine-local at all -- graceful degradation."""
         claude_home = tmp_path / ".claude"
         claude_home.mkdir(parents=True)
 

@@ -32,9 +32,6 @@ from coordinator_core.contract.cockpit_schema.tests.conftest import (
 
 
 def _project_goal_artifact_to_wire(a: dict[str, Any]) -> dict[str, Any]:
-    """Reference projection encoding the C11 field map exactly — NOT the
-    production emitter. Exists so the field map is an executable, testable
-    spec rather than prose."""
     wire: dict[str, Any] = {
         "goal_id": a["goal_id"],
         "repo": a["repo"],
@@ -46,16 +43,12 @@ def _project_goal_artifact_to_wire(a: dict[str, Any]) -> dict[str, Any]:
         "text": f"{a['goal_id']}: {a['objective']}",
         "status": a["status"],
         "provenance": a["provenance"],
-        # D9: present-as-null when absent — the key is ALWAYS emitted.
         "parent_goal_id": a.get("parent_goal_id"),
     }
 
-    # weekly_perceptible: absent-when-absent (1:1 passthrough, no OR-over-KRs).
     if "weekly_perceptible" in a:
         wire["weekly_perceptible"] = a["weekly_perceptible"]
 
-    # key_results[] -> key_results_status[]: absent-when-absent; drop
-    # evidence_source + per-KR weekly_perceptible, keep {id,text,kind,status}.
     if "key_results" in a:
         wire["key_results_status"] = [
             {"id": kr["id"], "text": kr["text"], "kind": kr["kind"], "status": kr["status"]}
@@ -88,11 +81,6 @@ def _base_authoring_artifact() -> dict[str, Any]:
     }
 
 
-# ===========================================================================
-# weekly_perceptible
-# ===========================================================================
-
-
 def test_weekly_perceptible_true_is_1to1_passthrough_no_or_over_krs():
     artifact = {
         **_base_authoring_artifact(),
@@ -108,7 +96,6 @@ def test_weekly_perceptible_true_is_1to1_passthrough_no_or_over_krs():
         ],
     }
     wire = _project_goal_artifact_to_wire(artifact)
-    # Goal-level flag is NOT derived from (OR'd over) per-KR weekly_perceptible.
     assert wire["weekly_perceptible"] is True
     assert zod_safe_parse_ok(Goal, wire)
 
@@ -136,11 +123,6 @@ def test_weekly_perceptible_absent_on_authoring_stays_absent_on_wire():
     wire = _project_goal_artifact_to_wire(_base_authoring_artifact())
     assert "weekly_perceptible" not in wire
     assert zod_safe_parse_ok(Goal, wire)
-
-
-# ===========================================================================
-# key_results[] -> key_results_status[]
-# ===========================================================================
 
 
 def test_key_results_drops_evidence_source_and_per_kr_weekly_perceptible():
@@ -178,11 +160,6 @@ def test_key_results_absent_leaves_key_results_status_absent_on_wire():
     assert zod_safe_parse_ok(Goal, wire)
 
 
-# ===========================================================================
-# parent_goal_id D9 present-as-null
-# ===========================================================================
-
-
 def test_no_parent_goal_id_on_authoring_emits_null_on_wire_and_passes():
     artifact = _base_authoring_artifact()
     assert "parent_goal_id" not in artifact
@@ -198,12 +175,6 @@ def test_declared_parent_goal_id_passes_through_1to1():
     wire = _project_goal_artifact_to_wire(artifact)
     assert wire["parent_goal_id"] == "2026-Q3-okr-close-the-loop"
     assert zod_safe_parse_ok(Goal, wire)
-
-
-# ===========================================================================
-# fleet keying — non-meta repo emits its own period=week goals keyed on
-# owner-qualified repo + declared_by_machine
-# ===========================================================================
 
 
 def test_two_distinct_repos_same_machine_produce_distinct_independently_valid_goals():
@@ -230,8 +201,6 @@ def test_two_distinct_repos_same_machine_produce_distinct_independently_valid_go
     assert zod_safe_parse_ok(Goal, wire_a)
     assert zod_safe_parse_ok(Goal, wire_b)
 
-    # Owner-qualified repo + declared_by_machine is the join anchor (C12) —
-    # distinct repos must not collapse onto the same key.
     assert wire_a["repo"] != wire_b["repo"]
     assert wire_a["declared_by_machine"] == wire_b["declared_by_machine"]
     assert wire_a["goal_id"] != wire_b["goal_id"]

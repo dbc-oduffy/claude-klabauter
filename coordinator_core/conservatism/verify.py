@@ -30,14 +30,6 @@ from coordinator_core.conservatism import (
 
 __all__ = ["assert_safe_direction_holds"]
 
-# A bare `except Exception: return` on a
-# RAISE check cannot distinguish the declared refusal from an unrelated bug
-# triggered incidentally inside `undeterminable()`. `expect_raises` narrows
-# the accepted exception type(s) when the caller supplies it. Left `None` it
-# is STILL a legitimate, documented call shape (not silently the old weak
-# behaviour): the docstring says so explicitly, and every RAISE call site
-# should supply it where the specimen's refusal has a known exception family.
-
 
 def _matches_anchor(declaration, result: Any) -> bool:
     if declaration.anchor is None:

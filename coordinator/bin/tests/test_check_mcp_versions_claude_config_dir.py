@@ -1,10 +1,3 @@
-"""test_check_mcp_versions_claude_config_dir.py — regression coverage for
-check-mcp-versions.py's `_settings_path()`/`_marker_path()` routing through
-coordinator_core._settings_home.claude_config_dir() instead of a hand-rolled
-`os.path.expanduser("~") / ".claude"` join.
-
-Spec backlink: cross-repo/inbox/2026-08-14-example-retrieval-repo-em-claude-home-routing-gap-c6-claude-klabauter-sites.md
-"""
 from __future__ import annotations
 
 import importlib.util

@@ -22,11 +22,6 @@ from typing import Any
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Path setup — mirrors test_cc_invoke_warm_in_process.py's own layout.
-# test file: coordinator/bin/tests/test_cc_invoke_probe_spawn_ordering.py
-# module:    coordinator/bin/lib/cc_invoke.py
-# ---------------------------------------------------------------------------
 _TESTS_DIR = Path(__file__).resolve().parent
 _BIN_DIR = _TESTS_DIR.parent
 _LIB_DIR = _BIN_DIR / "lib"
@@ -40,10 +35,6 @@ pytestmark = pytest.mark.cadence
 
 
 def _install_fake_module(monkeypatch, name: str, **attrs: Any) -> types.ModuleType:
-    """Install a fake module under `sys.modules[name]`, restored by monkeypatch.
-
-    Mirrors test_cc_invoke_warm_in_process.py's own helper of the same name.
-    """
     module = types.ModuleType(name)
     for key, value in attrs.items():
         setattr(module, key, value)
@@ -52,8 +43,6 @@ def _install_fake_module(monkeypatch, name: str, **attrs: Any) -> types.ModuleTy
 
 
 def _install_warm_hit(monkeypatch, result: dict[str, Any]) -> None:
-    """Wire `coordinator_core.warm.{settings,client}` so a warm reach is a hit
-    returning `{"jsonrpc": "2.0", "id": 1, "result": result}`."""
 
     def _fake_try_warm_dispatch(msg):
         return {"jsonrpc": "2.0", "id": 1, "result": result}
@@ -70,8 +59,6 @@ def _install_warm_hit(monkeypatch, result: dict[str, Any]) -> None:
 
 
 def _forbid_resolve_op_timeouts(monkeypatch) -> None:
-    """Patch `_resolve_op_timeouts` to fail loud if the cold-spawn's own
-    ceiling computation is ever reached on a warm hit."""
 
     def _fail(*args, **kwargs):
         raise AssertionError(
@@ -83,9 +70,6 @@ def _forbid_resolve_op_timeouts(monkeypatch) -> None:
 
 
 def test_cc_invoke_warm_hit_never_enters_resolve_op_timeouts(monkeypatch):
-    """A live warm hit through `cc_invoke()` returns the served result without
-    ever calling `_resolve_op_timeouts` (and therefore never computing
-    `_op_timeout_ceiling`)."""
     _install_warm_hit(monkeypatch, {"ok": True})
     _forbid_resolve_op_timeouts(monkeypatch)
 
@@ -95,7 +79,6 @@ def test_cc_invoke_warm_hit_never_enters_resolve_op_timeouts(monkeypatch):
 
 
 def test_cc_invoke_bare_warm_hit_never_enters_resolve_op_timeouts(monkeypatch):
-    """Same guarantee for `cc_invoke_bare()`."""
     _install_warm_hit(monkeypatch, {"ok": True})
     _forbid_resolve_op_timeouts(monkeypatch)
 
@@ -105,9 +88,6 @@ def test_cc_invoke_bare_warm_hit_never_enters_resolve_op_timeouts(monkeypatch):
 
 
 def test_cc_invoke_cold_path_still_computes_ceiling_on_a_miss(monkeypatch):
-    """Sanity check on the other side: a warm MISS still reaches
-    `_op_timeout_ceiling` (proves the forbid-helper above is a real probe, not
-    a vacuous pass) — asserted via a sentinel append, not wall time."""
     _install_fake_module(
         monkeypatch, "coordinator_core.warm.settings", is_warm_enabled=lambda: False
     )

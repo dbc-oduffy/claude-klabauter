@@ -110,10 +110,6 @@ from coordinator_core.contract.decision_object.envelope import extend_exit_codes
 if TYPE_CHECKING:
     from coordinator_core.composition_budget import CompositionBudget
 
-#: The four halt-contract exit-code members every ceremony-close assembler's
-#: apply half raises beyond the fixed `SUCCESS = 0` anchor. Values are the
-#: ceremony family's own convention (workday/workweek's identical ladders),
-#: not `apply_base`'s or any other lineage's numbering.
 CEREMONY_HALT_EXIT_CODES: dict[str, int] = {
     "HALTED_AT_JUDGMENT": 1,
     "DIRECTIVE_FAILED": 2,
@@ -123,11 +119,7 @@ CEREMONY_HALT_EXIT_CODES: dict[str, int] = {
 
 
 #: Reverse-lookup over `CEREMONY_HALT_EXIT_CODES` PLUS the fixed `SUCCESS = 0`
-#: anchor every `build_ceremony_halt_exit_codes` enum also carries (via
 #: `extend_exit_codes`) -- `CEREMONY_HALT_EXIT_CODES` itself holds only rungs
-#: 1-4, so a bare inversion of it would label every successful ceremony
-#: `None` (docs/plans/2026-09-11-half-the-compositions-do-not-finish-clea.md
-#: § C1).
 _CEREMONY_EXIT_LABELS: dict[int, str] = {0: "SUCCESS"}
 _CEREMONY_EXIT_LABELS.update({v: k for k, v in CEREMONY_HALT_EXIT_CODES.items()})
 
@@ -174,25 +166,12 @@ def build_ceremony_halt_exit_codes(name: str) -> Type[enum.IntEnum]:
 
 
 class UnrecognizedDirective(RuntimeError):
-    """Raised when a directive names a `cli` outside a caller's closed
-    dispatch table.
-
-    A ceremony-close assembler's dispatch table is closed BY DESIGN — an
-    unknown `cli` value is a brief/apply drift bug (the directive-producing
-    half emitted an id the directive-consuming half never registered), not
-    a runtime condition to route through the halt contract's ordinary
-    per-directive `failed` bookkeeping. Callers raise this from their own
-    `_dispatch_directive`-equivalent before ever invoking a handler, so the
-    failure is visible at the exact directive whose `cli` is unrecognized.
-    """
+    pass
 
 
 def _disposition_resolves_directive(
     judgment_point: dict[str, Any], chosen_value: str, directive_id: str
 ) -> bool:
-    """The value-aware predicate: true iff `chosen_value` names a real entry
-    in `judgment_point["dispositions"]` AND that entry's `resolves` list
-    contains `directive_id` — never merely "a disposition was picked."""
     for entry in judgment_point.get("dispositions", []):
         if entry.get("value") == chosen_value:
             return directive_id in entry.get("resolves", [])
@@ -200,15 +179,6 @@ def _disposition_resolves_directive(
 
 
 def _normalize_depends_on(value: Any) -> list[str]:
-    """Byte-mirror of `coordinator_core.contract.apply_base.normalize_
-    depends_on` — this module's own Negative-spec commits to never
-    importing `apply_base`, so the None|str|list normalization is
-    deliberately copied rather than shared. Keep in sync with the source
-    if it ever changes: `depends_on` accepts `None`, a single id
-    (`str`), or a list of ids per `schemas/decision-object.schema.json`
-    `$defs/directive/properties/depends_on`, and the list form was the
-    unhandled case that raised `TypeError: cannot use 'list' as a dict
-    key` before this fix (Finding 3, `staff-eng` review 2026-07-27)."""
     if value is None:
         return []
     if isinstance(value, str):
@@ -222,16 +192,6 @@ def assert_disjoint_dependency_namespaces(
     judgment_points_by_id: dict[str, dict[str, Any]],
     directive_ids: "frozenset[str] | set[str]",
 ) -> None:
-    """`depends_on` is a UNION namespace — a member names either a live
-    judgment-point id or a sibling directive id in the same envelope
-    (Finding 1, `staff-eng` review 2026-07-27: four other assemblers
-    already emit the directive-id form, consumed by
-    `contract.apply_base.directive_gate_open`). `_directive_gate_open`
-    below resolves a `depends_on` member by trying the judgment-point
-    namespace first; that ordering is only safe because the two
-    namespaces are asserted disjoint HERE, once per envelope, rather than
-    left as an accident of lookup order. Call this once per brief-
-    consumption (not per directive) before running the gate."""
     overlap = set(judgment_points_by_id) & set(directive_ids)
     assert not overlap, (
         f"judgment-point and directive id namespaces overlap: {sorted(overlap)!r} "
@@ -290,10 +250,7 @@ def _directive_gate_open(
                 return False
             continue
         if dep in directive_ids:
-            # Ordering/data dependency — never gates here. See docstring.
             continue
-        # Unknown in both namespaces — fail closed (deliberately stricter
-        # than apply_base's fail-open on this same case).
         return False
     return True
 

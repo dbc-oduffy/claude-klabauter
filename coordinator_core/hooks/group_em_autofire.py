@@ -71,9 +71,6 @@ _PM_CALL_DEFAULT = "resolving this is the PM's call"
 
 
 def render_additional_context(payload: dict) -> str:
-    """Render the injected turn context from `groupem.enter`'s composed
-    return dict. A refusal renders as loudly as a success (see module
-    docstring's refusal clause)."""
     nomination = (payload or {}).get("nomination")
     nomination_error = (payload or {}).get("nomination_error")
 
@@ -178,32 +175,25 @@ def render_additional_context(payload: dict) -> str:
 
 
 def _normalize_command_name(name: object) -> str:
-    """`normalize_command_name` plus DoE source's leading-`/` strip — the
-    shared `skill_invocation.normalize_command_name` (ported W4-C4) does not
-    strip a literally-typed leading slash, and this hook's own DoE source
-    did; preserved here rather than widening the shared helper out of this
-    chunk's footprint."""
     if not isinstance(name, str):
         return ""
     return normalize_command_name(name.lstrip("/"))
 
 
 def compute_context(payload: dict) -> Optional[str]:
-    """Compute the `additionalContext` prose, or None on a non-matching
-    command / no session id / unresolvable op handler."""
     if _normalize_command_name(payload.get("command_name")) not in _GROUP_EM_COMMAND_NAMES:
-        return None  # not a group-em invocation -- silent pass
+        return None
 
     session_id = payload.get("session_id")
     if not isinstance(session_id, str) or not session_id:
-        return None  # no id to claim under
+        return None
 
     cwd = payload.get("cwd")
     repo_root = cwd if isinstance(cwd, str) and cwd else os.getcwd()
 
     handler = get_op_handler("groupem.enter")
     if handler is None:
-        return None  # transport failure -- op unresolvable, fail open
+        return None
 
     try:
         entered = handler(
@@ -211,7 +201,7 @@ def compute_context(payload: dict) -> Optional[str]:
             repo_root=Path(repo_root),
         )
     except Exception:
-        return None  # fail open -- engine leg raised
+        return None
 
     if not isinstance(entered, dict) or not entered:
         return None
@@ -221,14 +211,6 @@ def compute_context(payload: dict) -> Optional[str]:
 
 @register_op("hooks.group_em_autofire")
 def _handler(params: dict, repo_root=None) -> dict:
-    """IPC/dispatch_message adapter over `compute_context()`. `params` IS
-    the raw UserPromptExpansion payload dict.
-
-    Returns `context_only("UserPromptExpansion", ...)` when a group-em verb
-    was matched and entry produced a renderable result; `no_advisory()`
-    otherwise (silent pass — matches the DoE source's own fail-open
-    contract).
-    """
     params = payload_of(params)
     try:
         additional_context = compute_context(params)

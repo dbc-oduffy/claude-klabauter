@@ -1,13 +1,3 @@
-"""Tests for `_build_judgment_points` carrying per-option guidance
-(AC4/AC5) via the shared `build_disposition` constructor (AC3).
-
-`j-self-honesty`, `j-pm-auth`, and `j-continuation-vs-fork` carry non-empty
-guidance on every disposition; `recommendation` stays `None` on all three
-(structurally, via `build_untrusted_gate_judgment_point`'s no-parameter
-signature -- unchanged by this addition).
-
-Spec backlink: pln-build-disposition-carries-per-399055
-"""
 
 from __future__ import annotations
 
@@ -64,9 +54,6 @@ class TestContinuationVsForkGuidance:
 
 
 class TestNoGuidanceDispositionsUnaffected:
-    """AC3 routes j-dirty-tree-case-c through `build_disposition` too, but
-    Out-of-scope explicitly withholds guidance text for it this pass -- its
-    shape must stay exactly as before."""
 
     def test_dirty_tree_case_c_disposition_carries_no_guidance(self):
         attribution = {"degraded": False, "mine": ["a.txt"], "residue_count": 1}

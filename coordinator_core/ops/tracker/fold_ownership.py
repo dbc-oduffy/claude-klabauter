@@ -94,9 +94,6 @@ _GITHUB_ID_NAMESPACE = "github_id"
 def _resolve_contributor_slug(
     person_id: str, *, github_id_by_person: dict[str, str]
 ) -> Optional[str]:
-    """Return *person_id*'s `contributor_slug`, or `None` when no
-    `github_id` alias resolves to it (absent case per the dispatch brief:
-    the slug is null, the person is still returned by internal id)."""
     raw_value = github_id_by_person.get(person_id)
     if raw_value is None:
         return None
@@ -153,9 +150,7 @@ def fold_ownership(item_id: str, *, repo_root: Path) -> dict:
     return {"item_id": item_id, "owners": owners}
 
 
-# ---------------------------------------------------------------------------
 # JSON-RPC handler
-# ---------------------------------------------------------------------------
 
 
 @register_op("tracker.fold_ownership")
@@ -192,7 +187,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     common_dir = Path(repo_root)
     worktree = main_worktree_root(common_dir)
 
-    # D3: optional repo_root consistency check (contract §3.3 doctrine).
     mismatch = check_repo_root(params.get("repo_root"), common_dir)
     if mismatch:
         raise ValueError(f"tracker.fold_ownership: {mismatch}")

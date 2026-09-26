@@ -1,18 +1,3 @@
-"""
-coordinator_core.hooks._payload — flat-scalar input field helpers for advisory hook ops.
-
-Contract: mcp_tool hooks receive ONLY the fields declared in their hooks.json ``input:``
-section. An undeclared field, or one whose substitution expression is unresolvable,
-arrives as "" (empty string). Treat "" as ABSENT — never as a real value. This module
-provides ``field()`` and ``present()`` to enforce that contract consistently across all
-hook handlers.
-
-Negative-spec:
-    Do NOT treat "" as a valid non-absent value. The mcp_tool hook forwarding contract
-    guarantees "" means "field was not set or not resolvable" — not an empty user input.
-
-Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § D5
-"""
 
 from __future__ import annotations
 
@@ -37,8 +22,6 @@ def field(params: dict, key: str) -> str:
     value = params.get(key, "")
     if value is None:
         return ""
-    # str(True)="True" breaks "== 'true'" comparisons;
-    # normalize bools to lowercase before str() conversion.
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)

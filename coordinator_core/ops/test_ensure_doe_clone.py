@@ -23,8 +23,6 @@ import coordinator_core.ops.ensure_doe_clone as edc
 from coordinator_core.ops.ensure_doe_clone import main
 
 # SPAWN-RATCHET Rule 2/4: main() below is a real-spawn wrapper (`subprocess.call
-# (["git", "clone", ...])`) reached by nearly every test in this file. See
-# coordinator_core/tests/test_no_new_spawning_tests.py.
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
@@ -76,10 +74,6 @@ def _isolated_env(monkeypatch, tmp_path):
     monkeypatch.delenv("REPO_DOE_CLAUDE_URL", raising=False)
     monkeypatch.delenv("COORDINATOR_NON_INTERACTIVE", raising=False)
     monkeypatch.setenv("PATH", "")
-    # Scratch-scoped, always-empty-unless-seeded registry dir -- shields every
-    # test from the operator's REAL machine-local registry (C7b). A test that
-    # needs a specific registry value seeds it into this same directory via
-    # `_seed_registry(tmp_path, ...)`.
     empty_registry = tmp_path / "ml-registry"
     empty_registry.mkdir(exist_ok=True)
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(empty_registry))
@@ -130,8 +124,6 @@ def test_check_only_would_clone_when_resolved_but_absent(tmp_path, monkeypatch, 
 
     rc = main(["--check-only"])
 
-    # Resolved but absent is a genuinely stale/not-yet-cloned state -- fail
-    # loud rather than silently reporting an always-green 0.
     assert rc == 1
     assert f"doe_clone: check failed: {clone} absent (would clone)" in capsys.readouterr().out
     assert not clone.exists()
@@ -186,9 +178,6 @@ def test_trailing_slash_stripped(tmp_path, monkeypatch, capsys):
 
 
 def test_git_dir_without_coordinator_reports_distinct_failure(tmp_path, monkeypatch, capsys):
-    """A `.git` clone of something that is NOT coordinator-claude (no
-    `coordinator/` subdir) must not be reported ready, and must not fall
-    through to `git clone` over the existing non-empty directory."""
     clone = tmp_path / "doe-clone"
     (clone / ".git").mkdir(parents=True)
     monkeypatch.setenv("REPO_DOE_CLAUDE", str(clone))
@@ -200,5 +189,4 @@ def test_git_dir_without_coordinator_reports_distinct_failure(tmp_path, monkeypa
     assert "doe_clone: failed" in out
     assert "coordinator/" in out
     assert "not coordinator-claude" in out
-    # Must not have attempted a clone over the existing directory.
     assert list(clone.iterdir()) == [clone / ".git"]

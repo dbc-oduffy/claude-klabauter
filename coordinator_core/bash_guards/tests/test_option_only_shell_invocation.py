@@ -61,20 +61,12 @@ SCRIPT_OPERAND = [
     "bash -",
 ]
 
-#: Attached-form (`--opt=value`) shapes, 2026-08-22 security-review finding:
 #: an argv made ENTIRELY of these was misclassified option-only and ALLOWED,
-#: since each token starts with `-` and the pre-fix scan never split the
-#: `=`. `--rcfile=`/`--init-file=` source an unexamined file on shell start.
 ATTACHED_VALUE_SCRIPT_OPERAND = [
     "bash --rcfile=/tmp/evil.rc --norc",
     "bash --init-file=/tmp/evil.rc",
     "sh --rcfile=/tmp/evil.rc",
 ]
-
-
-# ---------------------------------------------------------------------------
-# The operand predicate itself
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -108,16 +100,11 @@ def test_operand_argv_has_a_script_operand(args):
 
 
 def test_end_of_options_marker_makes_a_dash_token_an_operand():
-    # `bash -- --version` runs a script NAMED `--version`; the `--` ends
-    # bash's own option parsing, so the following token is an operand even
-    # though it starts with `-`.
     assert guard._has_script_operand(["--", "--version"]) is True
     assert guard._has_script_operand(["--"]) is False
 
 
 def test_lone_dash_counts_as_an_operand():
-    # `bash -` reads the script from stdin -- content this guard cannot
-    # examine, so the shape stays classified.
     assert guard._has_script_operand(["-"]) is True
 
 
@@ -130,15 +117,7 @@ def test_lone_dash_counts_as_an_operand():
     ],
 )
 def test_attached_value_long_option_is_a_script_operand(args):
-    # Regression, 2026-08-22: `--rcfile=<file>` is a SINGLE token starting
-    # with `-`, so it fell into the "pure option, skip" branch and an argv
-    # made entirely of such tokens was misread as option-only.
     assert guard._has_script_operand(args) is True
-
-
-# ---------------------------------------------------------------------------
-# block_subagent_destructive_action — both passes
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("cmd", OPTION_ONLY)
@@ -180,8 +159,6 @@ def test_tokenized_pass_denies_attached_value_long_option(cmd):
 
 
 def test_subagent_guard_allows_bash_version_end_to_end():
-    # The reporter's live trace: a subagent running `bash --version` on a
-    # preflight path was denied outright.
     payload = {
         "tool_name": "Bash",
         "tool_input": {"command": "bash --version"},
@@ -194,19 +171,11 @@ def test_subagent_guard_allows_bash_version_end_to_end():
 
 
 def test_bash_c_treatment_is_unchanged_by_the_operand_rule():
-    # `-c` is claimed by the bundled-`-c` branch ahead of the operand check
-    # in every caller; an inline payload is still unwrapped and classified
-    # on its own terms, and an inert one still allows.
     inert = guard._evaluate_wrapper_indirection("bash -c 'echo hello'")
     assert inert is None
     hostile = guard._evaluate_wrapper_indirection("bash -c 'git push --force'")
     assert hostile is not None
     assert "-c '<inline>'" in hostile
-
-
-# ---------------------------------------------------------------------------
-# Sentinel creation detector
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("cmd", OPTION_ONLY)
@@ -229,17 +198,8 @@ def test_sentinel_creation_denies_attached_value_long_option(cmd):
     assert "interpreter-invoked script" in reason
 
 
-# ---------------------------------------------------------------------------
-# Sentinel removal detector
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize("cmd", OPTION_ONLY)
 def test_sentinel_removal_allows_option_only_invocation(cmd):
-    # This detector's opaque-wrapper advisory is additionally gated on the
-    # sentinel being mentioned in the full command text, so the mention is
-    # supplied by a leading read segment -- without it the case would pass
-    # for the wrong reason, even unfixed.
     mentioning = f"cat {SENTINEL} && {cmd}"
     verdict, _reason, _cls = SentinelRemovalDetector(SENTINEL).evaluate(mentioning)
     assert verdict == VERDICT_ALLOW

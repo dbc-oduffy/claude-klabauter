@@ -1,10 +1,3 @@
-# guard-not-a-hook-entrypoint
-# Native git pre-commit hook, not a hooks.<name> op. Same shape and same
-# reasoning as its W4-C7 sibling `guard_phantom_staged_deletion_precommit.py`:
-# a PreToolUse guard fires before any commit exists and sees one tool call,
-# so it cannot know which paths the commit will actually carry. At
-# pre-commit time the staged set for THIS commit exists and is directly
-# readable.
 """Native git pre-commit hook: Layer 1 leg 1b of the doctrinal surface
 weight ratchet -- the ONLY enforcing leg (leg 1a,
 `coordinator_core.hooks.guard_doctrine_surface_ratio`, is advisory-only).
@@ -104,16 +97,11 @@ REPO_ROOT = Path.cwd()
 
 _NULL_OID = "0" * 40
 
-#: A single surface/file's net addition under this floor is deferred, not
-#: forgiven -- see `_apply_sub_floor_and_bill`.
 _SUB_FLOOR_BYTES = 512
 
 _RATIO_PRICED_SURFACES = frozenset({"wiki", "commands", "snippets"})
 _ADMISSION_PRICED_SURFACES = frozenset({"wiki", "commands", "snippets", "agents", "skills"})
 
-#: Leg 1b's OWN mutable operational state (the sub-floor accumulator) --
-#: fleet-wide per-machine state, never doctrine content. See module
-#: docstring's "on-disk home" note.
 _ACCUMULATOR_STATE_PATH = machine_local_dir() / "doctrine-surface-ratio-accumulator.json"
 
 _ACCUMULATOR_KEY_BY_SCOPE = {
@@ -121,16 +109,10 @@ _ACCUMULATOR_KEY_BY_SCOPE = {
     CREDIT_SCOPE_FILE: "sub_floor_accumulator_file",
 }
 
-#: git.exe is a console-subsystem child on Windows and is not exempt from
-#: the pop-window discipline even under redirected capture_output.
 _NO_CONSOLE_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _load_split_recognizer():
-    """See module docstring's `_load_split_recognizer` note. Raises on any
-    resolution/load failure -- the caller's own try/except already treats
-    that as "no sanctioned split recognized this commit" (fail-open,
-    scoped to the ratio predicate only)."""
     repo_root = _resolve_doctrine_repo_root()
     if repo_root is None:
         raise ModuleNotFoundError("doctrine-plane repo root not resolvable")
@@ -361,7 +343,7 @@ def _save_baseline(baseline: dict) -> None:
         try:
             os.unlink(tmp_path)
         except OSError:
-            pass  # best-effort tmp-file cleanup ahead of the re-raise below
+            pass
         raise
 
 
@@ -369,7 +351,7 @@ def _persist_baseline_fail_open(baseline: dict) -> None:
     try:
         _save_baseline(baseline)
     except Exception:
-        pass  # named fail-open: a persist failure must not block the commit
+        pass
 
 
 def _build_tier_of(rows: "list[tuple[int, int, str]]"):
@@ -522,7 +504,7 @@ def main() -> int:
                 return 1
             return 0
     except Exception:
-        pass  # sanctioned-path filtering failed; fall through and admit unfiltered rows
+        pass
 
     try:
         admission_denials = _new_file_admission_denials(rows)

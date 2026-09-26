@@ -69,10 +69,6 @@ _MIRROR_DIR_NAME = "claude-klabauter"
 
 
 def is_stamped_engine_root(candidate: Path) -> bool:
-    """True when `candidate` carries a readable, non-empty
-    `coordinator_core/_engine_stamp`. Never raises — a read failure is
-    `False`, the fail-closed direction for a predicate gating a registration.
-    """
     try:
         root = Path(candidate)
         if not (root / "coordinator_core").is_dir():
@@ -92,7 +88,6 @@ def _own_root() -> "Path | None":
 
 
 def discover_published_mirror() -> "Path | None":
-    """This op's own tree, if it is a stamped `claude-klabauter` root."""
     try:
         root = _own_root()
         if root is None:
@@ -112,27 +107,27 @@ def _handler(params: dict, repo_root=None) -> dict:
         return no_advisory()
 
     if resolution_class == _RESOLUTION_RESOLVED_ENGINE:
-        return no_advisory()  # already healthy -- no read, no write, no spawn
+        return no_advisory()
 
     try:
         if root and is_stamped_engine_root(Path(root)):
-            return no_advisory()  # a live tree that IS a usable build
+            return no_advisory()
     except Exception:
         return no_advisory()
 
     mirror = discover_published_mirror()
     if mirror is None:
-        return no_advisory()  # nothing on this box to register
+        return no_advisory()
 
     try:
         if registry_get(_REGISTRY_KEY):
-            return no_advisory()  # a real install (or an operator) already wrote it
+            return no_advisory()
     except Exception:
         return no_advisory()
 
     try:
         registry_set(_REGISTRY_KEY, str(mirror))
     except Exception:
-        pass  # best-effort registration; a failed write just leaves the key unset for a later run
+        pass
 
     return no_advisory()

@@ -45,7 +45,6 @@ class TestMechanicalDenylistPrefixNotSubstring:
     def test_subject_containing_but_not_prefixed_by_memo_token_is_not_denylisted(
         self,
     ) -> None:
-        # "memo:" appears mid-subject, not as a prefix — must not match.
         assert not _is_mechanical_subject(
             "feat: land handoff-memo: rendering fix",
             _MECHANICAL_DENYLIST,
@@ -65,7 +64,6 @@ class TestMechanicalDenylistPrefixNotSubstring:
         )
 
     def test_handoff_transition_family_still_matches_as_substring(self) -> None:
-        # The one documented substring exception — must still match mid-subject.
         assert _is_mechanical_subject(
             "chore: handoff.transition: ship h-123",
             _MECHANICAL_DENYLIST,

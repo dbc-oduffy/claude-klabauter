@@ -61,29 +61,21 @@ def test_prompt_directs_the_executor_to_the_row_body():
 
 
 def test_prompt_forbids_improvising_the_spec():
-    """A row's body carries constraints its title cannot. An executor that
-    cannot read the row must stop, not reconstruct."""
     prompt = _row_prompt(_ROW, _PLAN)
     assert "BLOCKED" in prompt
     assert "negative spec" in prompt.lower()
 
 
 def test_prompt_is_more_than_id_and_title():
-    """The regression this file exists to prevent."""
     title_only = f"Execute {_ROW.id}: {_ROW.title}"
     assert _row_prompt(_ROW, _PLAN) != title_only
 
 
 def test_absent_plan_path_still_composes():
-    """``plan_path`` is optional only so callers composing from
-    already-derived waves keep working — it degrades to the old shape rather
-    than raising."""
     assert _row_prompt(_ROW).endswith(f"\n\nExecute {_ROW.id}: {_ROW.title}")
 
 
 def test_emitted_script_carries_the_spec_pointer_for_every_row():
-    """End-to-end through ``compose_script``: the pointer must survive
-    composition, not merely exist in the helper."""
     from coordinator_core.ops.dispatch_emit.emit import compose_script
 
     other = WaveRow(
@@ -105,18 +97,7 @@ def test_emitted_script_carries_the_spec_pointer_for_every_row():
     assert "id: C11" in script
 
 
-# ---------------------------------------------------------------------------
-# The absolute-vs-relative decision point.
-#
-# Review finding (slice 3, 2026-08-19): the repo-relative conversion originally
-# lived inline in `emit_script` guarded by `if repo_root is not None`, so a
-# None repo_root -- documented as reachable per-request in op.py -- or a plan
 # on a different drive silently put an ABSOLUTE drive-lettered path into every
-# executor prompt. That is the AC12 concrete-path-citation hazard the code's
-# own comment claimed to be avoiding, and nothing went red.
-#
-# Negative-spec: `_spec_path_for_prompt` must never return an absolute path.
-# ---------------------------------------------------------------------------
 
 from pathlib import Path
 
@@ -132,13 +113,11 @@ def test_relative_to_repo_root_when_supplied():
 
 
 def test_no_repo_root_still_yields_a_relative_path():
-    """The reachable case that used to leak an absolute path."""
     got = _spec_path_for_prompt(Path('X:/claude-klabauter/docs/plans/p.md'), None)
     assert not got.is_absolute(), f'leaked an absolute path: {got}'
 
 
 def test_plan_off_the_repo_root_still_yields_a_relative_path():
-    """`relative_to` raises when the plan is on another mount/drive."""
     got = _spec_path_for_prompt(
         Path('Z:/elsewhere/docs/plans/p.md'), Path('X:/claude-klabauter')
     )
@@ -147,15 +126,10 @@ def test_plan_off_the_repo_root_still_yields_a_relative_path():
 
 
 def test_never_returns_a_drive_letter():
-    """The property that matters, stated directly."""
     for root in (None, Path('X:/claude-klabauter'), Path('Z:/other')):
         got = _spec_path_for_prompt(Path('X:/claude-klabauter/docs/plans/p.md'), root)
         assert ':' not in got.as_posix(), f'drive letter survived for root={root}: {got}'
 
-
-# ---------------------------------------------------------------------------
-# Plan-context preamble (AC12/AC13/AC16).
-# ---------------------------------------------------------------------------
 
 _PLAN_WITH_GOAL = """---
 title: "A plan with a goal"
@@ -202,16 +176,12 @@ def test_derive_plan_context_reads_title_goal_and_problem():
 
 
 def test_derive_plan_context_goal_is_none_when_no_goal_section():
-    """AC13: a plan with no goal statement carries `goal=None`, never a
-    placeholder string."""
     ctx = derive_plan_context(_PLAN_WITHOUT_GOAL, fallback_title="fallback")
     assert ctx.goal is None
     assert ctx.problem_excerpt == "Nothing observes whether the change worked."
 
 
 def test_preamble_omits_goal_line_when_goal_is_none():
-    """AC13, restated as a negative-spec on the composed preamble string: no
-    `Goal:` line, no placeholder, no empty heading."""
     ctx = PlanContext(title="T", goal=None, problem_excerpt="P")
     preamble = _plan_context_preamble(ctx)
     assert "Goal:" not in preamble
@@ -225,8 +195,6 @@ def test_preamble_carries_goal_line_when_present():
 
 
 def test_preamble_is_bounded_by_a_hard_character_cap():
-    """The preamble is spliced into EVERY row's `agent(...)` call, so it must
-    be bounded structurally, not by instruction alone."""
     from coordinator_core.ops.dispatch_emit.emit import (
         _PLAN_CONTEXT_PREAMBLE_CHAR_CAP,
     )
@@ -243,12 +211,11 @@ def test_preamble_is_bounded_by_a_hard_character_cap():
 def test_row_prompt_splices_the_preamble_ahead_of_the_spec_pointer():
     ctx = PlanContext(title="A plan with a goal", goal="Ship it", problem_excerpt="P")
     prompt = _row_prompt(_ROW, _PLAN, ctx)
-    assert prompt.index("Plan: A plan with a goal") < prompt.index("Your spec is the row")
+    assert prompt.index("Plan: A plan with a goal") < prompt.index("Your focus is the row")
     assert "Goal: Ship it" in prompt
 
 
 def test_row_prompt_without_plan_context_is_unchanged():
-    """`plan_context=None` (the default) never alters the pre-existing shape."""
     assert _row_prompt(_ROW, _PLAN, None) == _row_prompt(_ROW, _PLAN)
 
 
@@ -298,15 +265,11 @@ def test_derive_plan_context_reads_the_prime_exit_criterion_statement():
 
 
 def test_derive_plan_context_exit_criterion_is_none_when_plan_declares_none():
-    """Fail-soft by omission, matching `goal`: a plan predating the
-    prime-exit-criterion shape carries `None`, never a placeholder."""
     ctx = derive_plan_context(_PLAN_WITH_GOAL, fallback_title="fallback")
     assert ctx.exit_criterion is None
 
 
 def test_derive_plan_context_survives_unparseable_frontmatter():
-    """An emit that dies on one plan's malformed frontmatter is worse than an
-    emit that loses one preamble line."""
     ctx = derive_plan_context(
         _PLAN_WITH_MALFORMED_FRONTMATTER, fallback_title="fallback"
     )
@@ -320,8 +283,6 @@ def test_preamble_omits_the_criterion_line_when_absent():
 
 
 def test_preamble_puts_the_criterion_ahead_of_the_problem_excerpt():
-    """An executor reading only the top of its prompt should have what must
-    be observably true before it has the history of what was wrong."""
     ctx = PlanContext(
         title="T",
         goal="G",
@@ -337,15 +298,7 @@ def test_row_prompt_carries_the_criterion_to_the_executor():
     ctx = derive_plan_context(_PLAN_WITH_EXIT_CRITERION, fallback_title="fallback")
     prompt = _row_prompt(_ROW, _PLAN, ctx)
     assert "Exit criterion: Every executor prompt emitted" in prompt
-    assert prompt.index("Exit criterion:") < prompt.index("Your spec is the row")
-
-
-# ---------------------------------------------------------------------------
-# Write-tool-only rule (klabauter#24): a Bash write leaves no session claim,
-# so `track_touched_files` never records it and the dispatched commit agent
-# refuses the path as an orphan. Executor rows only -- never the commit
-# prompt, which does not write repo files at all.
-# ---------------------------------------------------------------------------
+    assert prompt.index("Exit criterion:") < prompt.index("Your focus is the row")
 
 
 def test_row_prompt_forbids_bash_writes():
@@ -355,8 +308,6 @@ def test_row_prompt_forbids_bash_writes():
 
 
 def test_row_prompt_names_the_resave_for_cli_written_files():
-    """A CLI a row runs (memo send, probe) writes unclaimed output; without the
-    re-save the committer withholds it and the lane halts."""
     prompt = _row_prompt(_ROW, _PLAN)
     assert "A file a CLI you run writes into your footprint is unclaimed" in prompt
     assert "Write it back unchanged with the Write tool" in prompt

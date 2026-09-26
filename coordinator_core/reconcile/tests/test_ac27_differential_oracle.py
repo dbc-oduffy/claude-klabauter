@@ -26,8 +26,6 @@ import pytest
 from coordinator_core.reconcile import ac27_differential_oracle as oracle
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -47,9 +45,6 @@ def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
 
 @pytest.fixture()
 def corpus_repo(tmp_path: Path) -> Path:
-    """A tmp git repo shaped like a fleet repo's handoff corpus root
-    (state/handoffs/ + archive/handoffs/ + archive/completed/), ready for a
-    commit at HEAD and further uncommitted edits."""
     root = tmp_path / "corpus-repo"
     root.mkdir()
     _git(root, "init", "-q")
@@ -112,8 +107,6 @@ def test_corpus_axis_flags_migration_that_moves_prose_out_of_gate_dependency(
         """,
     )
     # Deliberately left UNCOMMITTED -- the corpus axis compares the last
-    # commit against the working tree, the shape an in-flight migration
-    # takes before it lands.
 
     monkeypatch.setattr(oracle, "REPO_KEYS", (("repos.fixture", "FixtureRepo"),))
     monkeypatch.setattr(oracle, "_resolve_repo_root", lambda _key: corpus_repo)
@@ -132,8 +125,6 @@ def test_corpus_axis_flags_migration_that_moves_prose_out_of_gate_dependency(
 def test_corpus_axis_does_not_report_appeared_or_disappeared_as_deltas(
     corpus_repo: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A baton absent at one corpus state has no verdict pair to compare --
-    it must land in `appeared`/`disappeared`, never in `deltas`."""
     _write_handoff(
         corpus_repo, "state/handoffs/only-at-old.md",
         """
@@ -145,8 +136,6 @@ def test_corpus_axis_does_not_report_appeared_or_disappeared_as_deltas(
         """,
     )
     _commit_all(corpus_repo, "seed only-at-old")
-    # Remove it from the working tree (uncommitted) -- simulates the baton
-    # shipping/archiving out of the awaiting_gate set between corpus states.
     (corpus_repo / "state" / "handoffs" / "only-at-old.md").unlink()
 
     _write_handoff(
@@ -159,7 +148,6 @@ def test_corpus_axis_does_not_report_appeared_or_disappeared_as_deltas(
         gate_dependency: "some other prose"
         """,
     )
-    # Left uncommitted -- did not exist at the old ref.
 
     monkeypatch.setattr(oracle, "REPO_KEYS", (("repos.fixture", "FixtureRepo"),))
     monkeypatch.setattr(oracle, "_resolve_repo_root", lambda _key: corpus_repo)
@@ -176,15 +164,6 @@ def test_corpus_axis_does_not_report_appeared_or_disappeared_as_deltas(
 def test_check_transitive_import_isolation_flags_only_the_diverged_path(
     tmp_path: Path,
 ) -> None:
-    """Slice-s7 review finding: `_check_transitive_import_isolation`'s reuse
-    of `cat_file_batch_objects` (the `[pre-specs...] + [post-specs...]`
-    index recovery, `i` / `n+i`) was entirely unexercised. Two covered
-    paths, only one diverged between the two pinned shas -- a broken index
-    recovery (e.g. `n+i` off by one, or only the first path ever checked)
-    would either miss the real divergence or misattribute it to the wrong
-    path; this asserts both: exactly one warning, naming the path that
-    actually changed, silent on the one that did not.
-    """
     root = tmp_path / "iso-repo"
     root.mkdir()
     _git(root, "init", "-q")
@@ -196,8 +175,7 @@ def test_check_transitive_import_isolation_flags_only_the_diverged_path(
     _git(root, "commit", "-q", "-m", "pre")
     pre_sha = _git(root, "rev-parse", "HEAD").stdout.strip()
 
-    (root / "module_a.py").write_text("A = 2\n", encoding="utf-8")  # diverges
-    # module_b.py left untouched -- must stay silent.
+    (root / "module_a.py").write_text("A = 2\n", encoding="utf-8")
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "-m", "post")
     post_sha = _git(root, "rev-parse", "HEAD").stdout.strip()
@@ -216,9 +194,6 @@ def test_check_transitive_import_isolation_flags_only_the_diverged_path(
 def test_check_transitive_import_isolation_silent_when_byte_identical(
     tmp_path: Path,
 ) -> None:
-    """Companion negative case: no divergence anywhere in the covered path
-    set must produce an empty warnings list, not a false positive from the
-    batched read."""
     root = tmp_path / "iso-repo-clean"
     root.mkdir()
     _git(root, "init", "-q")
@@ -229,7 +204,7 @@ def test_check_transitive_import_isolation_silent_when_byte_identical(
     _git(root, "commit", "-q", "-m", "pre")
     pre_sha = _git(root, "rev-parse", "HEAD").stdout.strip()
 
-    (root / "unrelated.py").write_text("U = 1\n", encoding="utf-8")  # module_a.py untouched
+    (root / "unrelated.py").write_text("U = 1\n", encoding="utf-8")
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "-m", "post")
     post_sha = _git(root, "rev-parse", "HEAD").stdout.strip()
@@ -244,9 +219,6 @@ def test_check_transitive_import_isolation_silent_when_byte_identical(
 def test_run_both_axes_keeps_the_two_axes_under_distinct_keys(
     corpus_repo: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`run_both_axes` must never flatten evaluator-axis and corpus-axis
-    deltas into one shared list -- a reader has to be able to tell which
-    axis produced a given entry."""
     monkeypatch.setattr(oracle, "REPO_KEYS", (("repos.fixture", "FixtureRepo"),))
     monkeypatch.setattr(oracle, "_resolve_repo_root", lambda _key: corpus_repo)
 

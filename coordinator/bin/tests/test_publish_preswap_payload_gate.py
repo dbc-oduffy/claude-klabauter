@@ -46,16 +46,10 @@ def _load_publish_module():
 
 publish = _load_publish_module()
 
-# Real engine module (not a fake) -- these tests exist to prove the WIRING
-# fires a genuine hermetic subprocess check through the driver, not to
-# re-test `run_function_gate` itself (already covered by C4's own unit
-# test, `coordinator_core/percolate/tests/test_function_gate.py`).
 from coordinator_core.percolate import engine as pct_engine  # noqa: E402
 
 
 class _RealEngineClaudeKlabauter:
-    """Delegates only the C4 gate callables straight to the real engine
-    module -- everything else this fixture never touches."""
 
     run_function_gate = staticmethod(pct_engine.run_function_gate)
     run_parse_sweep = staticmethod(pct_engine.run_parse_sweep)
@@ -64,9 +58,6 @@ class _RealEngineClaudeKlabauter:
     mktcache_gate_env = staticmethod(pct_engine.mktcache_gate_env)
     run_entrypoint_gate = staticmethod(pct_engine.run_entrypoint_gate)
     enumerate_gate_entrypoints = staticmethod(pct_engine.enumerate_gate_entrypoints)
-    # Pinned to 1 for hermetic test determinism
-    # (also inherited by _NoOpEngineClaudeKlabauter below); not the production
-    # default, so tuning the real worker-cap default will NOT show up here.
     derive_worker_cap = staticmethod(lambda: 1)
 
 
@@ -78,10 +69,6 @@ class _EngineCtxStub:
 def _make_target(
     name: str, repo_root: Path, dest_subdir: str, *, source_dir: Path | None = None, mode: str = "mirror"
 ) -> "publish.ResolvedTarget":
-    """A `ResolvedTarget` whose `dest_dir` sits `dest_subdir` below a repo
-    root carrying a real `.git` marker -- `_dest_prefix_for` (the row's
-    `dest_subdir`/module-prefix, § this chunk's own brief) resolves off
-    that walk, so the marker is load-bearing, not decoration."""
     (repo_root / ".git").mkdir(parents=True, exist_ok=True)
     dest_dir = repo_root / dest_subdir if dest_subdir else repo_root
     return publish.ResolvedTarget(
@@ -92,11 +79,6 @@ def _make_target(
     )
 
 
-# ---------------------------------------------------------------------------
-# _function_gate_modules_and_search_paths_for_repo_root / _function_gate_
-# expected_seed_rel_paths_for_rel_root -- the rel_root/module-prefix fix
-# itself, direct unit tests, no subprocess.
-# ---------------------------------------------------------------------------
 class TestModulePrefixResolution:
     def test_toplevel_rel_root_is_unchanged_from_pre_fix_behavior(self, tmp_path):
         """`rel_root=""` (the end-of-run caller's own repo root) must resolve
@@ -120,12 +102,6 @@ class TestModulePrefixResolution:
         }
 
     def test_coordinator_core_row_mis_rooting_bug_named_in_brief(self, tmp_path):
-        """The EXACT miss the brief names: a `coordinator_core` row's
-        staging tree holds `data_root.py` at its own root. Probing it as if
-        it were a genuine repo root (rel_root="", the pre-fix call shape)
-        finds NOTHING -- decorative on the one row that matters. Probing it
-        with `rel_root="coordinator_core"` finds exactly the one seed
-        module the brief says is expected."""
         staging_dir = tmp_path / "staging"
         staging_dir.mkdir()
         (staging_dir / "data_root.py").write_text(
@@ -149,10 +125,6 @@ class TestModulePrefixResolution:
         assert search_paths == [""]
 
     def test_bare_seed_entries_out_of_scope_for_coordinator_core_rel_root(self, tmp_path):
-        """AC4's own example: the coordinator_core row must never pick up
-        the two lib-based entries even if (implausibly) files of those
-        names existed at its staging root -- they are out of SCOPE by
-        rel_path prefix, not merely absent."""
         staging_dir = tmp_path / "staging"
         staging_dir.mkdir()
         (staging_dir / "coordinator_registry.py").write_text("x = 1\n", encoding="utf-8")
@@ -165,11 +137,6 @@ class TestModulePrefixResolution:
         assert resolved == frozenset()
 
     def test_bin_row_prefix_out_of_scope_for_lib_entries(self, tmp_path):
-        """The `bin` row's real `dest_subdir` is `bin` (§ `setup/publish-
-        targets.portable`), not `coordinator/bin` -- so neither lib-based
-        seed entry (rooted at `coordinator/bin/lib/...`) is even in scope,
-        matching the brief's "four of six live rows... legitimately contain
-        no seed module" for this row specifically."""
         staging_dir = tmp_path / "staging"
         staging_dir.mkdir()
         (staging_dir / "cli-entry").write_text("print('hi')\n", encoding="utf-8")
@@ -180,12 +147,6 @@ class TestModulePrefixResolution:
         assert publish._function_gate_expected_seed_rel_paths_for_rel_root("bin") == frozenset()
 
     def test_coordinator_bin_row_keeps_bare_import_shape(self, tmp_path):
-        """A row whose `dest_subdir` genuinely is `coordinator/bin`
-        (`_dest_prefix_for` == "coordinator/bin") DOES bring the two
-        lib-based (bare-import) entries into scope, staged one level down
-        (`lib/coordinator_registry.py`) -- their module NAMES stay bare
-        (`coordinator_registry`), only their SEARCH DIR shifts to the
-        staged-relative `lib`."""
         staging_dir = tmp_path / "staging"
         lib_dir = staging_dir / "lib"
         lib_dir.mkdir(parents=True)
@@ -199,17 +160,6 @@ class TestModulePrefixResolution:
         assert "lib" in search_paths
 
     def test_flat_staging_dir_toplevel_expects_empty_set(self, tmp_path):
-        """state/dispatch-briefs/2026-08-26-the-preswap-gate-learns-the-
-        destinations-layout/SPEC.md item 1, constraint 3: a row whose
-        STAGED tree is flat at `rel_root == ""` (no top-level `coordinator/`
-        or `coordinator_core/` directory at all) resolves an EMPTY expected
-        set, not the three claude-klabauter-nested-layout `rel_path`s -- those are
-        spelled in claude-klabauter's own source tree (`coordinator/bin/lib/...`,
-        `coordinator_core/data_root.py`) and a flat staged tree can never
-        contain them at those literal paths, whatever `target.mode` the row
-        carries (§ EM feedback: `target.mode` alone is not the
-        discriminator -- `coordinator-claude`'s `mode == "mirror"` row
-        lands just as flat via its own `source_map`)."""
         staging_dir = tmp_path / "staging"
         staging_dir.mkdir()
         (staging_dir / "bin").mkdir()
@@ -219,14 +169,6 @@ class TestModulePrefixResolution:
         ) == frozenset()
 
     def test_mirror_mode_row_with_flat_source_map_expects_empty_set(self, tmp_path):
-        """The exact row the EM's feedback named: `coordinator-claude`
-        (`mode == "mirror"`, `source_map ==
-        "plugin-source:claude-klabauter/coordinator=bin,lib"`) lands at
-        `rel_root == ""` with a STAGED tree that never contains a
-        `coordinator/` directory -- its own source_map renames
-        `coordinator/bin`/`coordinator/lib` to the dest-relative top-level
-        names `bin`/`lib`. `target.mode == "mirror"` here, proving the
-        derivation is keyed on the row's own staged layout, not `mode`."""
         staging_dir = tmp_path / "staging"
         staging_dir.mkdir()
         (staging_dir / "bin").mkdir()
@@ -237,11 +179,6 @@ class TestModulePrefixResolution:
         ) == frozenset()
 
     def test_non_flat_toplevel_still_expects_all_three(self, tmp_path):
-        """Regression guard alongside the flat-staging narrowing above: a
-        genuine (non-flat) toplevel row -- `coordinator/` and
-        `coordinator_core/` both genuinely present at the staged root --
-        must keep demanding all three seed `rel_path`s, unchanged from
-        pre-fix behavior."""
         staging_dir = tmp_path / "staging"
         (staging_dir / "coordinator").mkdir(parents=True)
         (staging_dir / "coordinator_core").mkdir()
@@ -250,22 +187,11 @@ class TestModulePrefixResolution:
         ) == frozenset(rel_path for rel_path, _ in publish._FUNCTION_GATE_SEED_MODULES)
 
     def test_no_staging_dir_falls_back_to_pre_fix_behavior(self):
-        """`staging_dir=None` (the default) -- a caller that predates this
-        narrowing, or simply never supplies one -- must reproduce the
-        pre-fix "all three, unconditionally" toplevel expectation exactly,
-        never a silent empty-set degrade."""
         assert publish._function_gate_expected_seed_rel_paths_for_rel_root("") == frozenset(
             rel_path for rel_path, _ in publish._FUNCTION_GATE_SEED_MODULES
         )
 
     def test_staging_dir_is_a_noop_for_nonempty_rel_root(self, tmp_path):
-        """The staged-layout reconciliation only applies at `rel_root ==
-        ""` (§ item 1, constraint 2: the `coordinator_core` row's own
-        mis-rooting check stays keyed on `rel_root` alone) -- passing
-        `staging_dir` alongside a nonempty `rel_root` must not change the
-        expected set, even when that `staging_dir` itself has no
-        `coordinator_core/` directory (the exact shape the mis-rooting
-        probe stages: `data_root.py` at the staging root, not nested)."""
         staging_dir = tmp_path / "staging"
         staging_dir.mkdir()
         (staging_dir / "data_root.py").write_text("x = 1\n", encoding="utf-8")
@@ -274,9 +200,6 @@ class TestModulePrefixResolution:
         ) == frozenset({"coordinator_core/data_root.py"})
 
 
-# ---------------------------------------------------------------------------
-# dispatch_preswap_function_gate -- direct unit tests, REAL subprocess.
-# ---------------------------------------------------------------------------
 class TestDispatchPreswapFunctionGate:
     def test_clean_coordinator_core_row_passes(self, tmp_path):
         repo_root = tmp_path / "dest-repo"
@@ -291,9 +214,6 @@ class TestDispatchPreswapFunctionGate:
         assert ok is True
 
     def test_absolute_self_import_resolves_against_the_staged_package(self, tmp_path):
-        """`data_root.py` imports `coordinator_core._content_root_primitive` by
-        absolute name; the staging dir is named `.coordinator_core.publish-
-        staging-*`, so only binding it AS `coordinator_core` makes that resolve."""
         repo_root = tmp_path / "dest-repo"
         staging_dir = tmp_path / ".coordinator_core.publish-staging-x"
         staging_dir.mkdir()
@@ -323,10 +243,6 @@ class TestDispatchPreswapFunctionGate:
         assert "data_root" in captured.err
 
     def test_row_with_no_seed_module_in_scope_is_a_noop_pass(self, tmp_path):
-        """AC4's positive control: a row (`docs/reference`-shaped) whose
-        `dest_subdir` never brings any seed module into scope must PASS,
-        not be treated as a probe failure -- the bare-non-emptiness
-        alternative this chunk's brief explicitly forbids."""
         repo_root = tmp_path / "dest-repo"
         staging_dir = tmp_path / "staging"
         staging_dir.mkdir()
@@ -358,14 +274,6 @@ class TestDispatchPreswapFunctionGate:
         assert "does not equal the expected subset" in captured.err
 
     def test_flat_layout_toplevel_row_passes(self, tmp_path):
-        """state/dispatch-briefs/2026-08-26-the-preswap-gate-learns-the-
-        destinations-layout/SPEC.md item 1, constraint 3 (new coverage
-        item 1): a `target.mode == "flat-mirror"` row landing at
-        `dest_subdir == ""` -- `coordinator-claude-repo-root-install-md`'s
-        own shape -- must pass the pre-swap gate even though its staged
-        tree carries none of the three claude-klabauter-nested-layout seed
-        `rel_path`s at all (a genuinely flat mirror has no `coordinator/`
-        or `coordinator_core/` prefix to stage them under)."""
         repo_root = tmp_path / "dest-repo"
         staging_dir = tmp_path / "staging"
         staging_dir.mkdir()
@@ -396,12 +304,6 @@ class TestDispatchPreswapFunctionGate:
         assert "does not equal the expected subset" in captured.err
 
     def test_empty_staging_is_not_read_as_a_flat_payload(self, tmp_path, capsys):
-        """code-reviewer Finding 1 (P1): an empty `staging_dir` means the row
-        staged NOTHING, not that its payload is legitimately flat.
-        Directory-presence alone cannot separate those, so reading absence
-        as flat would let expected and resolved both collapse to the empty
-        set and swap a row whose payload never materialized -- the exact
-        total-staging-failure case this gate exists to catch."""
         repo_root = tmp_path / "dest-repo"
         staging_dir = tmp_path / "staging"
         staging_dir.mkdir()
@@ -414,16 +316,6 @@ class TestDispatchPreswapFunctionGate:
         assert "does not equal the expected subset" in captured.err
 
     def test_mirror_mode_row_flat_via_source_map_passes(self, tmp_path):
-        """EM feedback, new coverage requirement: `coordinator-claude`'s
-        main mirror row (`mode == "mirror"`, `dest_subdir == ""`,
-        `source_map == "plugin-source:claude-klabauter/coordinator=bin,
-        lib"`) must pass the pre-swap gate too -- this is the row that
-        `target.mode == "flat-mirror"` alone did NOT cover, and the memo's
-        own prediction of what would fail once the row cleared the
-        orphan-sweep guard. Its staged tree is genuinely flat (no
-        `coordinator/` directory -- the source_map already renamed it to
-        `bin`/`lib` before staging), same physical shape as the two
-        `flat-mirror`-mode rows, despite the different `mode` value."""
         repo_root = tmp_path / "dest-repo"
         staging_dir = tmp_path / "staging"
         staging_dir.mkdir()
@@ -436,9 +328,6 @@ class TestDispatchPreswapFunctionGate:
         assert ok is True
 
     def test_engine_claude_klabauter_none_asserts_narrowed_by_caller(self, tmp_path):
-        """Item 1 of the brief: this caller (unlike the end-of-run leg) has
-        no `not dry_run` narrowing of its own -- it must assert directly
-        rather than silently no-op on a `None` engine."""
         repo_root = tmp_path / "dest-repo"
         staging_dir = tmp_path / "staging"
         staging_dir.mkdir()
@@ -451,16 +340,7 @@ class TestDispatchPreswapFunctionGate:
             publish.dispatch_preswap_function_gate(_NoEngineCtx(), target, staging_dir)
 
 
-# ---------------------------------------------------------------------------
-# process_target wiring -- proves the gate is actually called, and called
-# BEFORE the swap: a failure must refuse the swap for that row (§ brief
-# "call the gate ... immediately before _swap_publish_staging_into_dest;
-# a failure refuses the swap for that row").
-# ---------------------------------------------------------------------------
 class _NoOpEngineClaudeKlabauter(_RealEngineClaudeKlabauter):
-    """Real gate callables (so a broken payload genuinely fails the gate
-    through the driver path), everything else a harmless no-op so
-    `process_target`'s percolate-engine phases never need a real store."""
 
     def resolve_target(self, store, name):
         return {
@@ -551,10 +431,7 @@ class TestPreswapGateWiredBeforeSwap:
         )
 
         assert swap_calls == [], "the swap must never fire when the pre-swap gate fails"
-        # `_ensure_dest_ready` may bootstrap an empty `dest_dir` ahead of the
-        # swap (a virgin mirror precondition, unrelated to this gate) -- the
         # INVARIANT under test is that no STAGED CONTENT ever lands there,
-        # not that the directory itself is absent.
         assert not (target.dest_dir / "data_root.py").exists(), (
             "staged content must never land in dest_dir on a refused row"
         )

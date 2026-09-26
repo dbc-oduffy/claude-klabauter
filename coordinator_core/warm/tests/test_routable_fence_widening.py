@@ -43,10 +43,6 @@ def test_a_compute_only_op_outside_the_prefixes_is_routable():
 
 
 def test_the_hook_prefixes_still_route():
-    """The widening is additive. A hook op is routable on its prefix alone,
-    without consulting the classifier -- the hot path did not get slower.
-    Uses hooks.track_touched_files (substitute for the retired
-    hooks.session_heartbeat example, same hooks.* prefix routing)."""
     assert hook_http.op_for_path(_path("hooks.track_touched_files")) == (
         "hooks.track_touched_files"
     )
@@ -59,20 +55,12 @@ def test_a_mutating_op_is_not_routable(op):
 
 
 def test_the_ceremony_namespace_stays_unroutable():
-    """The fence's original stated purpose, in its own words: a rewritten
-    registration must never reach `ceremony.*`. Asserted by namespace rather
-    than by a named op, because the op this was written against
-    (`ceremony.scoped_git_commit`) has since been killed and a test keyed to
-    a dead name proves nothing."""
     ceremony_ops = [op for op in OP_CLASSIFICATION if op.startswith("ceremony.")]
     assert ceremony_ops, "fixture drift: no ceremony.* ops in the map at all"
     assert [op for op in ceremony_ops if hook_http.op_for_path(_path(op))] == []
 
 
 def test_an_unclassified_op_is_denied_not_admitted():
-    """`classify` RAISES for an op absent from the map, and its docstring
-    requires HTTP dispatch to treat that as DENY. Silently treating an
-    unclassified op as a read is the privilege-escalation path it names."""
     assert hook_http.op_for_path(_path("totally.not.an.op")) is None
 
 
@@ -109,11 +97,6 @@ def test_the_widening_admits_reads_and_only_reads():
 
 
 def test_the_widening_is_not_silently_enormous():
-    """BLAST RADIUS, NAMED RATHER THAN ASSUMED. The widening roughly doubles
-    what the transport will route, and a number nobody states is a number
-    nobody notices growing. This is a tripwire on the ORDER of magnitude, not
-    a golden count -- adjust it deliberately, with a reason, never to make a
-    red test green."""
     newly_admitted = [
         op
         for op in OP_CLASSIFICATION
@@ -127,6 +110,4 @@ def test_the_widening_is_not_silently_enormous():
 
 
 def test_the_fence_still_refuses_a_nested_path():
-    """Widening the CLASS must not widen the SHAPE: a path with a slash in
-    the op segment is still refused, so the fence cannot be walked."""
     assert hook_http.op_for_path(_path("cutover.gate/../ceremony.scoped_git_commit")) is None

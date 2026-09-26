@@ -62,17 +62,8 @@ from coordinator_core.session.machinery_paths import share_dir as _share_dir
 
 _FALLBACK_COUNTS_FILENAME = "registry-fallback-counts.jsonl"
 
-#: The one escalation stage counted: the ops-wide sweep.
-#:
-#: There is a second stage in `_lazy_import_and_lookup` — the hooks-scoped
-#: escalation — and it is deliberately NOT emitted here. Every `hooks.*` key
 #: in `OP_MODULE_MAP` maps to the shared "coordinator_core.hooks" package, so
-#: the targeted step-1 import is always a no-op for them and that stage is
 #: their DESIGNED resolution path, measured firing on 100% of `hooks.*`
-#: dispatches. Since hooks fire on every tool call across every session on the
-#: box, counting it would write a record per tool call and bury the ops-wide
-#: cliff this file exists to surface. A `hooks.*` op that stage fails to
-#: resolve still falls through to the ops-wide sweep, which does count.
 STAGE_SAFE_FALLBACK = "safe-fallback"
 
 

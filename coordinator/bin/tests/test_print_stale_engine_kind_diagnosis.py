@@ -1,13 +1,3 @@
-"""test_print_stale_engine_kind_diagnosis — coverage for the publish-lag
-diagnosis helper in `cross-repo-memo.py`.
-
-The regex/set-difference
-diagnosis logic (`_print_stale_engine_kind_diagnosis`) had no test, so a
-regression in the engine's refusal-message format (or in the paren-group
-parsing) would silently stop firing with no signal.
-
-Run: python -m pytest coordinator/bin/tests/test_print_stale_engine_kind_diagnosis.py -q
-"""
 from __future__ import annotations
 
 import importlib.machinery

@@ -27,10 +27,6 @@ import pytest
 
 from coordinator_core.ops.session_context import resolve_current_session_id
 
-# ---------------------------------------------------------------------------
-# Env-var isolation: all tests run with the session-id env vars cleared unless
-# the test explicitly sets them.  Using monkeypatch ensures each test is isolated.
-# ---------------------------------------------------------------------------
 
 _ENV1 = "CLAUDE_SESSION_ID"
 _ENV2 = "CLAUDE_CODE_SESSION_ID"
@@ -54,7 +50,6 @@ class TestTier1Env:
         assert result == "sess-tier1-wins"
 
     def test_tier1_wins_over_sentinel(self, monkeypatch, tmp_path):
-        """Tier-1 env var wins even when a (now-ignored) sentinel file is present."""
         sentinel = tmp_path / ".git" / "coordinator-sessions" / ".current-session-id"
         sentinel.parent.mkdir(parents=True)
         sentinel.write_text("sess-from-sentinel\n", encoding="utf-8")
@@ -83,19 +78,15 @@ class TestTier2Env:
         sentinel.write_text("sess-from-sentinel", encoding="utf-8")
 
         monkeypatch.delenv(_ENV1, raising=False)
-        monkeypatch.setenv(_ENV2, "")  # empty → falls through, sentinel no longer consulted
+        monkeypatch.setenv(_ENV2, "")
 
         result = resolve_current_session_id(worktree_root=tmp_path)
         assert result is None
 
 
 class TestSentinelRemoved:
-    """Former tier-3: sentinel file at
-    {worktree_root}/.git/coordinator-sessions/.current-session-id — removed KS-2
-    2026-08-07. A present, well-formed sentinel must now be ignored entirely."""
 
     def test_sentinel_present_and_well_formed_is_ignored(self, monkeypatch, tmp_path):
-        """No env vars; sentinel file present with valid content → still None (ignored)."""
         monkeypatch.delenv(_ENV1, raising=False)
         monkeypatch.delenv(_ENV2, raising=False)
 
@@ -107,11 +98,9 @@ class TestSentinelRemoved:
         assert result is None
 
     def test_sentinel_missing_returns_none(self, monkeypatch, tmp_path):
-        """worktree_root given but sentinel file absent → None returned."""
         monkeypatch.delenv(_ENV1, raising=False)
         monkeypatch.delenv(_ENV2, raising=False)
 
-        # .git dir exists but no sentinel file inside
         (tmp_path / ".git" / "coordinator-sessions").mkdir(parents=True)
 
         result = resolve_current_session_id(worktree_root=tmp_path)
@@ -119,17 +108,14 @@ class TestSentinelRemoved:
 
 
 class TestNullPath:
-    """Null / unresolvable cases."""
 
     def test_null_when_no_env_no_sentinel(self, monkeypatch):
-        """No env vars, worktree_root=None → None returned."""
         monkeypatch.delenv(_ENV1, raising=False)
         monkeypatch.delenv(_ENV2, raising=False)
         result = resolve_current_session_id(worktree_root=None)
         assert result is None
 
     def test_null_when_worktree_root_none_and_no_env(self, monkeypatch):
-        """Skip sentinel tier when worktree_root=None; both env vars absent → None."""
         monkeypatch.delenv(_ENV1, raising=False)
         monkeypatch.delenv(_ENV2, raising=False)
         result = resolve_current_session_id(None)

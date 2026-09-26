@@ -82,23 +82,12 @@ def workspace(tmp_path):
 
 
 def _bind_common_dir(monkeypatch, common_dir: Path, holder_live: bool = True) -> None:
-    """Route archival.resolve_claim_state at a fixed common_dir, with ledger
-    holder liveness fixed, so tests don't need a real git repo or spawn a
-    subprocess."""
     bound = functools.partial(claim_state.resolve_claim_state, common_dir=common_dir)
     monkeypatch.setattr(archival, "resolve_claim_state", bound)
     monkeypatch.setattr(claim_state, "cs_claim_holder_live", lambda *_a, **_k: holder_live)
 
 
-# ---------------------------------------------------------------------------
-# AC15 fixture corpus — a mix of pre-change-True, pre-change-False, and the
-# widened ledger-only/mirror-reverted case.
-# ---------------------------------------------------------------------------
-
-
 def _corpus(handoffs_dir: Path):
-    """Yield (name, write_fn, ledger: Optional[(session_id, claimed_at)])
-    fixtures. `ledger` is None when no ledger claim dir should be written."""
     return [
         (
             "status-claimed.md",
@@ -175,7 +164,6 @@ def test_ac15_widen_never_relax_property(workspace, monkeypatch):
         pre_change_result = archival.claimed_or_shipped(archival._frontmatter(str(path)))
         post_change_result = archival.claimed_or_shipped_at_path(str(path))
 
-        # WIDEN, NEVER RELAX: every pre-change True stays True post-change.
         if pre_change_result:
             assert post_change_result is True, (
                 f"{name}: pre-change True but post-change False — RELAXED, "
@@ -183,8 +171,6 @@ def test_ac15_widen_never_relax_property(workspace, monkeypatch):
             )
 
         if name == "ledger-only-mirror-reverted.md":
-            # The widened case: pre-change (frontmatter-only) says False,
-            # post-change (ledger-first) says True.
             assert pre_change_result is False
             assert post_change_result is True
             saw_widened_true = True
@@ -196,9 +182,6 @@ def test_ac15_widen_never_relax_property(workspace, monkeypatch):
 
 
 def test_ledger_only_claim_dead_holder_does_not_widen(workspace, monkeypatch):
-    """The ledger side degrades to 'no claim' for a dead holder (mirrors
-    resolve_claim_state's own negative-spec) — a dead-holder ledger claim must
-    not cause claimed_or_shipped_at_path to widen to True."""
     common_dir, handoffs_dir = workspace
     _bind_common_dir(monkeypatch, common_dir, holder_live=False)
 
@@ -210,9 +193,6 @@ def test_ledger_only_claim_dead_holder_does_not_widen(workspace, monkeypatch):
 
 
 def test_shipped_in_frontmatter_only_unaffected_by_ledger(workspace, monkeypatch):
-    """The SHIPPED half has no ledger counterpart — a handoff with no ledger
-    claim at all but a shipped_in stamp must still return True via the
-    frontmatter-only path, unaffected by ledger resolution."""
     common_dir, handoffs_dir = workspace
     _bind_common_dir(monkeypatch, common_dir, holder_live=True)
 
@@ -233,8 +213,6 @@ def test_no_ledger_no_mirror_claim_stays_false(workspace, monkeypatch):
 
 
 def test_ledger_resolution_error_degrades_to_frontmatter_only(workspace, monkeypatch):
-    """Any error resolving the ledger side degrades to the pre-widening
-    frontmatter-only answer — fail-closed on the widening, never fail-open."""
     common_dir, handoffs_dir = workspace
 
     def _raise(*_a, **_k):
@@ -257,9 +235,6 @@ def test_missing_file_still_fails_closed(tmp_path):
 
 
 def test_claimed_or_shipped_pure_function_unchanged_by_this_chunk():
-    """Regression guard: claimed_or_shipped(fm) itself — the pure oracle this
-    test file uses as its pre-change baseline — is untouched by C10; only the
-    path-based wrapper widens."""
     fm = "status: claimed\n"
     assert archival.claimed_or_shipped(fm) is True
     fm_open = "status: open\n"
@@ -267,17 +242,8 @@ def test_claimed_or_shipped_pure_function_unchanged_by_this_chunk():
 
 
 def test_release_evidence_is_a_third_claimed_disjunct(monkeypatch=None):
-    """C3/Q2 (docs/reference/handoff-legal-state-table.md): `release_evidence`
-    — the durable, never-cleared timestamp `_unclaim` stamps on release (C2)
-    — is a THIRD claimed-disjunct, additive alongside status vocabulary and
-    claimed_at/claimed_by. This is what makes unclaim-then-supersede
-    reachable at all through the DR-242 gate: `_unclaim` strips status/
-    claimed_at/claimed_by entirely, so without this disjunct a released baton
-    has no on-disk fact answering "was this ever claimed"."""
     fm_released = "status: open\ndeployment_state: ready_to_fire\nrelease_evidence: 2026-09-11T00:00:00Z\n"
     assert archival.claimed_or_shipped(fm_released) is True
 
-    # Narrows nothing: an unclaimed, never-claimed record with no evidence at
-    # all is still False.
     fm_never_claimed = "status: open\ndeployment_state: ready_to_fire\n"
     assert archival.claimed_or_shipped(fm_never_claimed) is False

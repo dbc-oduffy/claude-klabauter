@@ -73,16 +73,6 @@ from coordinator_core.contract.cockpit_schema.entities.tracker_summary import Tr
 
 
 class MalformedRecords(BaseModel):
-    """
-    Malformed-record buckets — each bucket carries the raw JSON that failed
-    parse. `plans` and `lessons` buckets added in 1.0; tc-3/tc-4 emit wiring
-    requires quarantine slots or failed-record draining silently discards new
-    entity arrays. `cross_repo_memos` bucket added in 1.0 for quarantine-slot
-    consistency (C6-envelope).
-
-    Sub-component of SnapshotEnvelope — NOT registered in the entity registry
-    (not a top-level entity; no standalone fixture/schema emit required).
-    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -107,11 +97,6 @@ class MalformedRecords(BaseModel):
 
 
 class BacklogsEnvelope(BaseModel):
-    """
-    The nested backlogs object, one array per queue type.
-    Sub-component of SnapshotEnvelope — NOT registered in the entity registry
-    (not a top-level entity; no standalone fixture/schema emit required).
-    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -121,19 +106,6 @@ class BacklogsEnvelope(BaseModel):
 
 
 class CompletionRollups(BaseModel):
-    """
-    Period-keyed completion rollup arrays (C5 — the Staff Engineer F0 resolution).
-
-    Replaces the old single-object form (`{ week: WeekRollup | null, day:
-    DayRollup | null }`). Keyed-object-of-arrays sidesteps the
-    DayRollup/WeekRollup union discrimination footgun (structurally identical
-    discriminant-less shapes confuse Zod union parsing). Each period bucket is
-    an array so the snapshot can carry multiple rollup windows (e.g. current +
-    previous week) as queryable entries rather than a single latest-slot.
-
-    tc-3 emitter MUST emit the nested plural shape — not the old singular
-    `completion_rollup`.
-    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -142,95 +114,38 @@ class CompletionRollups(BaseModel):
 
 
 class SnapshotEnvelope(BaseModel):
-    """The top-level shape of every emitted cockpit snapshot."""
 
     model_config = ConfigDict(extra="forbid")
 
     # Sourced from CONTRACT_VERSION via the emitted bundle .version (the Staff Engineer
     # F1). Must be a semver string matching the exported CONTRACT_VERSION
-    # constant.
-    # Semver regex prevents silent version drift;
     # ties schema_version to CONTRACT_VERSION shape.
     schema_version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
     # ISO-8601 UTC wall-clock when the snapshot was assembled.
     emitted_at: IsoDateTime
-    # Hostname of the machine that ran the emitter.
     emitted_by_machine: str
-    # Fleet of coordinator roots observed in this snapshot (one-fleet-snapshot
-    # shape). Each row carries `repo` + `coordinator_root_path` + `owner` +
-    # `machine` for keying. Required array; emitter MUST emit `[]` when there
-    # are no entries rather than omitting the key (D9). An absent key fails
-    # parse.
     coordinator_roots: list[CoordinatorRoot]
-    # Active git branches across the fleet. A single branch is incoherent in
-    # a multi-root fleet snapshot — this replaces the singular `branch`
-    # field. Required array; emitter MUST emit `[]` when there are no entries
-    # rather than omitting the key (D9). An absent key fails parse.
     branches: list[Branch]
     handoffs: list[HandoffSummary]
-    # Period-keyed queryable arrays of completion rollups; replaces the
-    # former single latest-week/day object.
     completion_rollups: CompletionRollups
     backlogs: BacklogsEnvelope
     review_trail: list[ReviewTrail]
     routine_signals: list[RoutineSignal]
     goals_current: list[Goal]
-    # Plans summary, present-but-empty until tc-3 wires the emit section (D9).
     plans: list[PlanSummary]
-    # Lessons summary, present-but-empty until tc-3 wires the emit section (D9).
     lessons: list[LessonSummary]
-    # Outstanding cross-repo memos, metadata-only (no memo bodies; C6-envelope).
     cross_repo_memos: list[CrossRepoMemoSummary]
-    # Roadmap summaries, present-but-empty until B3 emitter wires the emit
-    # section (D9).
     roadmaps: list[RoadmapSummary]
-    # Tracker summaries, present-but-empty until B3 emitter wires the emit
-    # section (D9).
     trackers: list[TrackerSummary]
-    # Health-status summaries, present-but-empty until B3 emitter wires the
-    # emit section (D9).
     health: list[HealthStatusSummary]
-    # Decision-guide summaries, present-but-empty until the emit section
-    # wires it (D9).
     decision_guides: list[DecisionGuideSummary]
-    # Session-hierarchy summaries, present-but-empty until the emit section
-    # wires it (D9).
     session_hierarchies: list[SessionHierarchy]
-    # Initiative summaries — lightweight parent entities for work identity
-    # (D2). Present-but-empty until C4 emitter wires the initiatives SECTION
-    # (D9).
-    # Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § D2, C1.
     initiatives: list[InitiativeSummary]
-    # Executive summaries — per-repo "why this project matters" briefs (one
-    # per repo). Present-but-empty until SECTION 8.17 emitter wires
-    # exec_summaries (D9).
-    # Spec backlink: docs/wiki/exec-summary-artifact.md
     exec_summaries: list[ExecSummary]
-    # Competitor-summary facts (example-market-data-repo), present-but-empty until
-    # the producer emit section wires it (D9). v2.16.0.
     competitor_summaries: list[CompetitorSummary]
-    # Intelligence-signal facts (example-market-data-repo), present-but-empty
-    # until the producer emit section wires it (D9). v2.16.0.
     intelligence_signals: list[IntelligenceSignal]
-    # Roadmap DAG nodes — one record per stub per roadmap across the fleet.
-    # Present-but-empty until claude-klabauter wires the DAG emit section at Gate B
-    # (D9).
-    # Spec backlink: DoE-claude:pln-cockpit-contract-v2-6-0-initia-75ac93 § AC3
     roadmap_dag_nodes: list[RoadmapDagNode]
-    # Roadmap DAG edges — directed "blocks" relationships between stubs.
-    # Present-but-empty until claude-klabauter wires the DAG emit section at Gate B
-    # (D9).
-    # Spec backlink: DoE-claude:pln-cockpit-contract-v2-6-0-initia-75ac93 § AC3
     roadmap_dag_edges: list[RoadmapDagEdge]
-    # Backlog-trend time series (cockpit panel). Required non-null block;
-    # claude-klabauter's presence probe reads
-    # $defs['snapshot-envelope']['properties']['backlog_history'] and
-    # self-activates on this concrete shape. DoE emits a stub
-    # (generated_at:null, series:[]); claude-klabauter populates real series
-    # post-parity (D19 pattern).
-    # No MalformedRecords bucket — singleton object block, not an
-    # array-of-records (completion_rollups / backlogs precedent).
     backlog_history: BacklogHistory
-    # Narrative / LLM-generated view layer; null when not yet generated.
     narrative_views: Any | None
     malformed_records: MalformedRecords

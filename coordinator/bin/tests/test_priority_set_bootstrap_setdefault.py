@@ -61,7 +61,6 @@ class TestBootstrapImportsDoesNotClobberAPatchedName(unittest.TestCase):
         module = _load_module()
 
         # Fresh module load: none of _BOOTSTRAP_NAMES are bound yet (the
-        # module body itself stays inert -- C6k import-motion).
         for name in module._BOOTSTRAP_NAMES:
             self.assertNotIn(
                 name,

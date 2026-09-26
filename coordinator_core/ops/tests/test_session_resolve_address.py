@@ -38,10 +38,6 @@ def test_reachable_shape(monkeypatch):
     assert result["outcome"] == "reachable"
     assert result["session_id"] == "sid-a"
     # Ref-qualified UNCONDITIONALLY, even for a uniquely-named sole
-    # candidate: the harness refuses a bare name for a cross-session
-    # SendMessage target (reachability's module docstring, measured live
-    # 2026-08-13). Matched by shape rather than a literal digest so the
-    # test pins the contract, not a re-typed sha256 of the fixture socket.
     assert re.fullmatch(r"claude-klabauter-57 \[[0-9a-f]{6,12}\]", result["address"])
     assert result["reason"] is None
     assert result["candidates"] == []
@@ -82,10 +78,6 @@ def test_not_reachable_reason_reaches_the_wire(monkeypatch):
 
 
 def test_fallback_channel_reaches_the_wire_and_is_repo_conditional(monkeypatch, tmp_path):
-    """The op's own `repo_root` param drives the fallback pointer -- a
-    same-tree target gets `peer_notice.send`, a cross-repo target gets the
-    memo channel, threaded through as `this_repo_root` to `reachability.
-    resolve_address` unchanged."""
     this_repo = tmp_path / "this-repo"
     sibling_repo = tmp_path / "sibling-repo"
     (this_repo / "subdir").mkdir(parents=True)
@@ -104,11 +96,6 @@ def test_fallback_channel_reaches_the_wire_and_is_repo_conditional(monkeypatch, 
 
 
 def test_ambiguous_shape(monkeypatch):
-    # `ambiguous` cannot be produced through the live seam any more
-    # (harness_registry.snapshot() de-duplicates by sessionId at parse
-    # time -- see reachability.resolve_address's own docstring), so this
-    # test monkeypatches resolve_address itself and asserts the op is a
-    # faithful pass-through of an `ambiguous` ResolveResult's shape.
     from coordinator_core.ops import session_resolve_address as mod
     from coordinator_core.session.reachability import Candidate, ResolveResult
 
@@ -131,16 +118,7 @@ def test_ambiguous_shape(monkeypatch):
     assert result["candidates"][0]["address"] == "claude-klabauter-a1 [ab]"
 
 
-# ---------------------------------------------------------------------------
-# caller_messaging_gate — the calling session's own gate state
-# ---------------------------------------------------------------------------
-
 def test_caller_messaging_gate_is_present_on_every_outcome(monkeypatch):
-    """The gate block rides on the answer the reader already asked for.
-
-    A separate op they have to know to call is the "the operator remembers"
-    shape, not an artifact that discharges the rule.
-    """
     snap = {"sid-a": _record("claude-klabauter-57", "/sock/a.sock")}
     monkeypatch.setattr(hr, "snapshot", lambda: snap)
     monkeypatch.setattr(hr, "self_record", lambda: None)
@@ -161,8 +139,6 @@ def test_caller_messaging_gate_is_present_on_every_outcome(monkeypatch):
 
 
 def test_caller_messaging_gate_separates_asked_and_unbound_from_never_asked(monkeypatch):
-    """The whole point: `not_reachable` + `peer-messaging-unavailable` reads
-    identically in both states, and only one of them is a claude-klabauter defect."""
     snap = {"sid-live": _record("claude-klabauter-57", None)}
     monkeypatch.setattr(hr, "snapshot", lambda: snap)
     monkeypatch.setattr(hr, "self_record", lambda: None)
@@ -192,8 +168,6 @@ def test_caller_messaging_gate_separates_asked_and_unbound_from_never_asked(monk
 
 
 def test_caller_messaging_gate_does_not_change_outcome_reason_or_address(monkeypatch):
-    """`messaging_available()`/`resolve_address()` semantics are untouched --
-    the new signal is additive and never feeds back into the resolver."""
     snap = {"sid-a": _record("claude-klabauter-57", "/sock/a.sock")}
     monkeypatch.setattr(hr, "snapshot", lambda: snap)
     monkeypatch.setattr(hr, "self_record", lambda: None)

@@ -16,11 +16,6 @@ from typing import Annotated, Literal
 from pydantic import StringConstraints
 
 # ISO-8601 UTC datetime pattern, e.g. "2026-06-22T03:06:15Z" or
-# "2026-06-22T03:06:15+00:00". Regex copied verbatim from the committed Zod
-# `z.iso.datetime({ offset: true })` JSON Schema emission
-# (coordinator/cockpit-contract/schema/provenance-envelope.schema.json's
-# `observed_at` field) to preserve byte-identical accept/reject behavior —
-# accepts both the bare `Z` suffix and a numeric `+00:00`/`-00:00` offset.
 _ISO_DATETIME_PATTERN = (
     r"^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29"
     r"|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])"
@@ -32,8 +27,6 @@ _ISO_DATETIME_PATTERN = (
 IsoDateTime = Annotated[str, StringConstraints(pattern=_ISO_DATETIME_PATTERN)]
 """ISO-8601 UTC datetime, e.g. "2026-06-22T03:06:15Z". Emits `format: date-time`-equivalent."""
 
-# ISO calendar date, e.g. "2026-06-22" — same leap-year-aware date grammar as
-# the datetime pattern above, without the time-of-day suffix.
 _ISO_DATE_PATTERN = (
     r"^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29"
     r"|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])"

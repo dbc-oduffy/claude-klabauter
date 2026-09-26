@@ -21,13 +21,8 @@ from coordinator_core.roadmap.graph import (
     topo_number,
 )
 
-# ---------------------------------------------------------------------------
-# AC1 — topo-number-respects-dependency-order
-# ---------------------------------------------------------------------------
-
 
 def test_topo_number_respects_dependency_order_every_edge():
-    # DAG: B is a root; A blocked_by B; C blocked_by B; D blocked_by A and C.
     nodes = ["A", "B", "C", "D"]
     edges = [
         {"from": "A", "to": "B"},
@@ -47,16 +42,9 @@ def test_topo_number_respects_dependency_order_every_edge():
         num_dpnd = result["number"][edge["from"]]
         assert num_dep < num_dpnd
 
-    # order/number: independently re-derived from the oracle run:
-    # node coordinator/bin/lib/roadmap-graph.js
     assert result["order"] == ["B", "A", "C", "D"]
     assert result["number"] == {"B": 1, "A": 2, "C": 3, "D": 4}
     # sprintWave: this port DELIBERATELY diverges from the oracle here (see
-    # topo_number's docstring + graph.py's module Negative-spec) — the oracle's
-    # flat wave=depth+1 would give A and C (same depth) the identical wave 2,
-    # which fails audit.py's Audit 2 uniqueness gate. Same-depth siblings are
-    # spread across distinct waves instead, tie-broken by the same `cmp` used
-    # to order `order` (here: default nodes-array index, A before C).
     assert result["sprintWave"] == {
         "B": {"sprint": 1, "wave": 1},
         "A": {"sprint": 1, "wave": 2},
@@ -80,8 +68,6 @@ def test_topo_number_deterministic_across_repeated_calls():
 
 
 def test_topo_number_tie_break_by_stable_nodes_array_index():
-    # A and C are both unblocked once B is placed (same Kahn layer). Default
-    # tie-break uses original nodes-array index: A (index 0) before C (index 2).
     nodes = ["A", "B", "C", "D"]
     edges = [
         {"from": "A", "to": "B"},
@@ -93,11 +79,6 @@ def test_topo_number_tie_break_by_stable_nodes_array_index():
     pos_a = result["order"].index("A")
     pos_c = result["order"].index("C")
     assert pos_a < pos_c
-
-
-# ---------------------------------------------------------------------------
-# AC2 — wave-is-sprint-wave-monotone
-# ---------------------------------------------------------------------------
 
 
 def test_sprint_wave_strictly_lexicographically_increasing_along_edges():
@@ -112,7 +93,6 @@ def test_sprint_wave_strictly_lexicographically_increasing_along_edges():
         dpnd_lex = sw_dpnd["sprint"] * 10000 + sw_dpnd["wave"]
         assert dep_lex < dpnd_lex
 
-    # Independently re-derived from the oracle run.
     assert result["order"] == ["A", "B", "C"]
     assert result["sprintWave"] == {
         "A": {"sprint": 1, "wave": 1},
@@ -139,10 +119,6 @@ def test_wave_depth_increases_along_dependency_chain():
 
 
 def test_same_depth_siblings_get_distinct_waves_no_audit2_collision():
-    # A and C are same-depth siblings (both blocked_by B only) — the flat
-    # depth+1 assignment would collide them onto wave 2, which fails
-    # audit.py's Audit 2 (at most one ready_to_fire stub per (sprint, wave))
-    # the moment both are marked ready_to_fire. Regression pin for that fix.
     nodes = ["A", "B", "C", "D"]
     edges = [
         {"from": "A", "to": "B"},
@@ -159,10 +135,6 @@ def test_same_depth_siblings_get_distinct_waves_no_audit2_collision():
 
 
 def test_wave_monotone_non_decreasing_with_depth_audit5():
-    # Audit 5 (checked via check_dependency_order, exercised elsewhere in this
-    # module) requires wave to be strictly increasing along a declared edge;
-    # this pins the weaker, always-true structural invariant the fix must not
-    # break: wave never decreases as longest-path depth increases.
     nodes = ["A", "B", "C", "D", "E"]
     edges = [
         {"from": "A", "to": "B"},
@@ -172,16 +144,11 @@ def test_wave_monotone_non_decreasing_with_depth_audit5():
         {"from": "E", "to": "B"},
     ]
     result = topo_number(nodes, edges)
-    # Recompute depth independently via number/order relationship is not
-    # possible from the public return value alone, so assert the concrete
-    # depth-derived expectation directly: B is the sole root (depth 0); A, C, E
-    # are depth 1 (share no edge among themselves); D is depth 2.
     depth_by_label = {"B": 0, "A": 1, "C": 1, "E": 1, "D": 2}
     for edge in edges:
         dep, dpnd = edge["to"], edge["from"]
         assert depth_by_label[dpnd] >= depth_by_label[dep]
         assert result["sprintWave"][dpnd]["wave"] > result["sprintWave"][dep]["wave"]
-    # And every node still gets a unique wave slot.
     waves = [result["sprintWave"][label]["wave"] for label in nodes]
     assert len(waves) == len(set(waves))
 
@@ -194,11 +161,6 @@ def test_same_slot_dependency_is_a_slot_violation():
     result = check_dependency_order(stubs)
     assert result["ok"] is False
     assert any(v["reason"] == "same-or-inverted-slot" for v in result["violations"])
-
-
-# ---------------------------------------------------------------------------
-# AC3 — cycle-fails-loud
-# ---------------------------------------------------------------------------
 
 
 def test_topo_number_raises_roadmap_cycle_error_on_cyclic_dag():
@@ -235,11 +197,6 @@ def test_check_dependency_order_returns_nonnull_cycle_for_cyclic_stub_set():
     assert result["ok"] is False
 
 
-# ---------------------------------------------------------------------------
-# checkDependencyOrder — number-order violation
-# ---------------------------------------------------------------------------
-
-
 def test_number_order_inverted_produces_violation():
     stubs = [
         {"stub_id": "stub-a-2", "number": 2, "sprint": 1, "wave": 2, "blocked_by": ["stub-b-3"]},
@@ -263,11 +220,6 @@ def test_number_order_derived_from_stub_id_trailing_number():
     assert any(v["reason"] == "number-order" for v in result["violations"])
 
 
-# ---------------------------------------------------------------------------
-# checkDependencyOrder — unresolved edge
-# ---------------------------------------------------------------------------
-
-
 def test_unresolved_edge_produces_entry():
     stubs = [{"stub_id": "present-1", "sprint": 1, "wave": 2, "blocked_by": ["ghost-id"]}]
     result = check_dependency_order(stubs)
@@ -277,11 +229,6 @@ def test_unresolved_edge_produces_entry():
     assert u["from"] == "present-1"
     assert u["to"] == "ghost-id"
     assert u["reason"] == "unresolved-edge"
-
-
-# ---------------------------------------------------------------------------
-# checkDependencyOrder — same-or-inverted-slot violation
-# ---------------------------------------------------------------------------
 
 
 def test_same_or_inverted_slot_same_slot():
@@ -303,11 +250,6 @@ def test_same_or_inverted_slot_inverted():
     ]
     result = check_dependency_order(stubs)
     assert any(v["reason"] == "same-or-inverted-slot" for v in result["violations"])
-
-
-# ---------------------------------------------------------------------------
-# checkDependencyOrder — missing-sprint violation
-# ---------------------------------------------------------------------------
 
 
 def test_missing_sprint_on_dependent():
@@ -343,11 +285,6 @@ def test_missing_sprint_is_own_class_no_fallthrough():
     assert len(others) == 0
 
 
-# ---------------------------------------------------------------------------
-# checkDependencyOrder — clean result
-# ---------------------------------------------------------------------------
-
-
 def test_ok_true_when_all_edges_dependency_monotone():
     stubs = [
         {"stub_id": "a-1", "number": 1, "sprint": 1, "wave": 1},
@@ -359,14 +296,6 @@ def test_ok_true_when_all_edges_dependency_monotone():
     assert result["violations"] == []
     assert result["unresolved"] == []
     assert result["cycle"] is None
-
-
-# ---------------------------------------------------------------------------
-# checkDependencyOrder — `blocks:` referential integrity (C1). Parity case
-# for the same widening `coordinator_core.roadmap.audit.check_dependency_order`
-# gets, per this module's Negative-spec (a fresh, independent port, kept
-# parallel deliberately) and the C1 body's "widen BOTH copies" mandate.
-# ---------------------------------------------------------------------------
 
 
 def test_blocks_dangling_edge_produces_unresolved_entry_tagged_blocks():
@@ -388,10 +317,6 @@ def test_blocked_by_unresolved_entry_tagged_blocked_by():
 
 
 def test_blocks_resolved_edge_is_not_reported_and_not_ordering_checked():
-    # `blocks` resolving to a real stub_id must not surface as unresolved, and
-    # must NOT be fed into number/(sprint, wave) monotonicity -- a stub whose
-    # `blocks:` target has a HIGHER number/later slot (the normal, expected
-    # shape for the inverse edge) must not produce a spurious violation.
     stubs = [
         {"stub_id": "a-1", "number": 1, "sprint": 1, "wave": 1, "blocks": ["b-2"]},
         {"stub_id": "b-2", "number": 2, "sprint": 1, "wave": 2},

@@ -52,12 +52,6 @@ def test_unonboarded_without_workstreams_or_tracker(tmp_path: Path) -> None:
 
 
 def test_step_2_6_gate_unchanged_for_onboarded_repo_via_archive_arm(tmp_path: Path) -> None:
-    """Step 2.6's `archive/` arm is untouched by this chunk -- an onboarded
-    repo that only has `archive/` (no `state/workstreams/`, no tracker
-    file) still trips the gate exactly as before. Also calls `_is_onboarded`
-    on the same repo (Review: coordinator:code-reviewer P2) -- the original
-    version of this test asserted only the Step 2.6 arm, which is exactly
-    why it didn't catch the two gates disagreeing on this shape."""
     repo = tmp_path / "repo"
     (repo / "archive").mkdir(parents=True)
 
@@ -81,8 +75,6 @@ def test_step_2_6_gate_false_when_neither_signal_present(tmp_path: Path) -> None
 
 
 def test_signals_agree_across_both_gates(tmp_path: Path) -> None:
-    """The two gates must not drift: same repo, same disk state, same
-    onboarded verdict from both."""
     onboarded_repo = tmp_path / "onboarded"
     (onboarded_repo / "state" / "workstreams").mkdir(parents=True)
     assert _is_onboarded(str(onboarded_repo)) == completion_archive_predicate(onboarded_repo)
@@ -93,13 +85,6 @@ def test_signals_agree_across_both_gates(tmp_path: Path) -> None:
 
 
 def test_signals_agree_on_archive_only_repo(tmp_path: Path) -> None:
-    """This is the
-    case that actually disagreed before `archive/` was added to
-    `_is_onboarded`: an archive/-only repo (no state/workstreams/) used to
-    report `_is_onboarded() is False` while `completion_archive_predicate()
-    is True`, falsifying the "cannot drift apart" docstring claim. This
-    case would have caught the regression; the prior both-present/
-    both-absent pair above would not."""
     repo = tmp_path / "archive-only"
     (repo / "archive").mkdir(parents=True)
 

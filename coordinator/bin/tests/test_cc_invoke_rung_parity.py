@@ -42,11 +42,6 @@ from typing import Any
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Path setup — mirrors test_cc_invoke_py.py's own layout.
-# test file: coordinator/bin/tests/test_cc_invoke_rung_parity.py
-# module:    coordinator/bin/lib/cc_invoke.py
-# ---------------------------------------------------------------------------
 _TESTS_DIR = Path(__file__).resolve().parent
 _BIN_DIR = _TESTS_DIR.parent
 _LIB_DIR = _BIN_DIR / "lib"
@@ -62,9 +57,6 @@ pytestmark = pytest.mark.cadence
 
 
 def _dump_absent_proc() -> Any:
-    """A `--dump-op-timeouts` probe response feature-detected as "absent"
-    (older-engine shape) — mirrors test_cc_invoke_py.py's own helper so the
-    op-budget probe never diverts a test's own op spawn mock."""
     proc = unittest.mock.Mock()
     proc.returncode = 2
     proc.stdout = ""
@@ -78,8 +70,6 @@ def _is_dump_probe(argv: Any) -> bool:
 
 @pytest.fixture(autouse=True)
 def _isolate_op_timeout_state():
-    """Reset cc_invoke's once-per-process op-budget memoisation around every
-    test — same rationale as test_cc_invoke_py.py's identical fixture."""
     _mod._reset_op_timeout_cache()
     yield
     _mod._reset_op_timeout_cache()
@@ -187,11 +177,6 @@ class TestRung1aIndeterminateNeverSpawns(unittest.TestCase):
         self.assertIn(
             "delivered-but-unanswered mutation (read timeout)", str(ctx.exception)
         )
-        # A test that only asserts "raises something" does not discharge
-        # AC9a — the negative half (no spawn) is asserted via the raising
-        # `_run` above, which would have failed this test differently
-        # (AssertionError from inside `_run`, not the expected RuntimeError)
-        # had cc_invoke fallen through to the spawn.
 
     def test_cc_invoke_bare_raises_and_never_spawns(self) -> None:
         def _run(*args: Any, **kwargs: Any) -> Any:
@@ -217,11 +202,6 @@ class TestRung1aIndeterminateNeverSpawns(unittest.TestCase):
 
 
 class TestRung2ErrorEnvelopeClassification(unittest.TestCase):
-    """(2) A structural-pin error envelope raises StructuralPinError (by
-    type, matching the spawned path's rc==2 branch so a caller catching
-    StructuralPinError by name keeps taking that branch on a warm hit); a
-    generic error envelope raises plain RuntimeError, NOT StructuralPinError.
-    Neither test returns a value."""
 
     def test_structural_pin_envelope_raises_structural_pin_error(self) -> None:
         envelope = {
@@ -268,8 +248,6 @@ class TestRung2ErrorEnvelopeClassification(unittest.TestCase):
 
 
 class TestRung4MalformedEnvelope(unittest.TestCase):
-    """(4) A warm-served dict carrying neither `result` nor `error` raises —
-    applies the same envelope-parse rung unchanged to a warm hit."""
 
     def test_missing_result_and_error_raises(self) -> None:
         envelope = {"jsonrpc": "2.0", "id": 1}
@@ -328,10 +306,6 @@ class TestStderrSinkParityOnWarmServedRefusal(unittest.TestCase):
 
 
 class TestAC8ReachabilityOnlyOnWarmMiss(unittest.TestCase):
-    """AC8 (jointly with C1/C3): the two op spawn sites in this module
-    (cc_invoke, cc_invoke_bare) are reachable only on a warm miss or with
-    warm disabled — asserted directly, not left implied by the rung tests
-    above."""
 
     def test_cc_invoke_never_spawns_on_a_warm_hit(self) -> None:
         envelope = {"jsonrpc": "2.0", "id": 1, "result": {"x": 1}}
@@ -364,9 +338,6 @@ class TestAC8ReachabilityOnlyOnWarmMiss(unittest.TestCase):
         self.assertEqual(result, {"x": 1})
 
     def test_cc_invoke_spawns_only_when_warm_reports_a_miss(self) -> None:
-        """Reachability the OTHER direction: a miss (None) DOES reach the
-        spawn — pinning both halves of "reachable only on a miss" in one
-        place rather than trusting the rung-1 test above to imply it."""
         op_proc = unittest.mock.Mock()
         op_proc.returncode = 0
         op_proc.stdout = '{"jsonrpc": "2.0", "id": 1, "result": {"y": 2}}'

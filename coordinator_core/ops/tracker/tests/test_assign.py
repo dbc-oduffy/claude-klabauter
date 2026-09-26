@@ -1,20 +1,3 @@
-"""
-Tests for coordinator_core.ops.tracker.assign — tracker.assign.
-
-Coverage:
-  (a) registration — tracker.assign lands in the live registry on import.
-  (b) end-to-end add through the handler — writes an item_person_added
-      event via tracker_entities.emit_item_person_added.
-  (c) retract — the same triple, `retract: true`, writes an
-      item_person_retracted event via emit_item_person_retracted.
-  (d) invalid role — TrackerEntityError propagates, never swallowed.
-  (e) duplicate-triple refusal (AC9) propagates from tracker_entities.
-  (f) the write target is the LOCAL repo_root only (WRITE BOUND, DEC-11).
-  (g) four-surface registry wiring + a command-type dispatch_message smoke.
-
-Harness: asyncio.run() in sync test fns for handler-level tests — no
-pytest-asyncio dependency.
-"""
 
 from __future__ import annotations
 
@@ -24,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-# ---- Import guard: fires @register_op side-effect for tracker.assign. ----
 import coordinator_core.ops.tracker.assign  # noqa: F401
 
 from coordinator_core.ipc import _REGISTRY, dispatch_message
@@ -37,8 +19,6 @@ from coordinator_core.tracker_entities import TrackerEntityError
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-# Duplicated locally rather than imported — mirrors test_mint_person.py's
-# "avoid a third referencer" discipline.
 _EVENTS_DIR_RELPATH = "state/sovereign-tracker"
 _EVENTS_SHARD_GLOB = "events.*.jsonl"
 
@@ -48,7 +28,6 @@ def _run(coro):
 
 
 def _make_git_repo(root: Path) -> Path:
-    """Init a minimal git repository under *root* and return the repo root."""
     root.mkdir(parents=True, exist_ok=True)
 
     def _git(*args: str) -> None:
@@ -75,7 +54,6 @@ def _shard_files(repo: Path):
 
 
 def _make_item(repo: Path, item_id: str = "itm-20260820-item-abc123-def456789012") -> str:
-    """Seed a local item_created event so DEC-24's local-item check passes."""
     from coordinator_core.tracker_entities import emit_item_created
 
     emit_item_created(
@@ -88,18 +66,8 @@ def _make_item(repo: Path, item_id: str = "itm-20260820-item-abc123-def456789012
     return item_id
 
 
-# ---------------------------------------------------------------------------
-# (a) Import-guard floor assertion
-# ---------------------------------------------------------------------------
-
-
 def test_tracker_assign_registered():
     assert "tracker.assign" in _REGISTRY
-
-
-# ---------------------------------------------------------------------------
-# (b) End-to-end add
-# ---------------------------------------------------------------------------
 
 
 def test_handler_adds_item_person_edge(tmp_path):
@@ -121,11 +89,6 @@ def test_handler_adds_item_person_edge(tmp_path):
         "role": "assignee",
     }
     assert _shard_files(repo)
-
-
-# ---------------------------------------------------------------------------
-# (c) Retract
-# ---------------------------------------------------------------------------
 
 
 def test_handler_retracts_item_person_edge(tmp_path):
@@ -159,11 +122,6 @@ def test_handler_retracts_item_person_edge(tmp_path):
     }
 
 
-# ---------------------------------------------------------------------------
-# (d) Invalid role propagates
-# ---------------------------------------------------------------------------
-
-
 def test_handler_invalid_role_raises(tmp_path):
     repo = _make_git_repo(tmp_path / "repo")
     item_id = _make_item(repo)
@@ -175,11 +133,6 @@ def test_handler_invalid_role_raises(tmp_path):
                 repo_root=repo,
             )
         )
-
-
-# ---------------------------------------------------------------------------
-# (e) Duplicate-triple refusal propagates (AC9)
-# ---------------------------------------------------------------------------
 
 
 def test_handler_duplicate_triple_raises(tmp_path):
@@ -201,11 +154,6 @@ def test_handler_duplicate_triple_raises(tmp_path):
         )
 
 
-# ---------------------------------------------------------------------------
-# (f) Write target is the LOCAL repo_root only (WRITE BOUND)
-# ---------------------------------------------------------------------------
-
-
 def test_handler_writes_only_the_local_repo_root(tmp_path):
     local_repo = _make_git_repo(tmp_path / "local")
     other_repo = _make_git_repo(tmp_path / "other")
@@ -222,11 +170,6 @@ def test_handler_writes_only_the_local_repo_root(tmp_path):
     assert not (other_repo / _EVENTS_DIR_RELPATH).exists(), (
         "tracker.assign must never write into a different repo's own tree"
     )
-
-
-# ---------------------------------------------------------------------------
-# (g) Four-surface wiring + command-type smoke
-# ---------------------------------------------------------------------------
 
 
 def test_handler_repo_root_none_raises_runtime_error():

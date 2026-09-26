@@ -128,12 +128,6 @@ from coordinator_core.workday_complete.cockpit_contract_freshness import (
     compute_cockpit_contract_freshness,
 )
 
-# ---------------------------------------------------------------------------
-# Exit-code contract (brief-side, 0-3) — locally scoped to this compute half,
-# NOT shared with the apply half's own 0-4 enumeration (see apply.py's own
-# `WorkdayApplyExitCode`; computed-skills.md § Exit-code contract for a
-# mutating half requires each half to pin its own set).
-# ---------------------------------------------------------------------------
 WorkdayExitCode = extend_exit_codes(
     "WorkdayExitCode",
     BUSINESS_FAIL=1,
@@ -141,9 +135,6 @@ WorkdayExitCode = extend_exit_codes(
     TRANSPORT_FAIL=3,
 )
 
-#: The C1 consumes-manifest (plan § Tasks C1 body) — the CLOSED set of CLI
-#: names any `directives[].cli` value in this module is drawn from. Never
-#: extended ad hoc; a new mechanical step needs a manifest update first.
 CONSUMES_MANIFEST: tuple[str, ...] = (
     "workday-complete-args-and-validate",
     "workday-complete-reconcile",
@@ -166,54 +157,13 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
 )
 
 
-# Previously used `--show-toplevel`
-# and called `resolve_context(repo_root)` directly, bypassing
-# `main_worktree_root`; that scoped the read to the CURRENT worktree while
-# the write leg always scopes to the MAIN worktree, so a ceremony invoked
-# from a linked worktree could offer a goal_id that isn't an open row where
-# close-out actually writes. Now resolves `--git-common-dir` and routes
-# through `main_worktree_root`, matching every sibling `resolve_context()`
-# call site.
 def _resolve_repo_common_dir_for_ceremony(start: Optional[Path] = None) -> Optional[Path]:
-    """`git rev-parse --path-format=absolute --git-common-dir` for `start`
-    (default cwd) — the invoking repo's git common dir, i.e. `<main-worktree>
-    /.git` even when `start` is inside a LINKED worktree (git always resolves
-    `--git-common-dir` to the main worktree's `.git`, unlike `--show-toplevel`
-    which returns the CURRENT worktree's own root). Callers derive the main
-    worktree root via `main_worktree_root(common_dir)` before calling
-    `resolve_context` — same convention every other `resolve_context()` call
-    site in the tree follows (`ops/emit_cadence.py`, `ops/artifact_emit.py`,
-    `ops/goal_append.py`, `ops/goal_close_day.py`).
-    Returns `None` on any resolution failure — never raises; the caller
-    degrades to an empty open-day-goals partition (see
-    `_compute_open_day_goals`)."""
     cwd = start or Path.cwd()
     out = git_common_dir(str(cwd))
     return Path(out) if out else None
 
 
 def _compute_open_day_goals() -> dict[str, Any]:
-    """Read-only C2 leg for the day-goal close-out judgment point: open
-    `period: day` rows (today + stale), scoped to the invoking repo.
-
-    Never raises and never fails the ceremony (mandatory degradation
-    clause, module docstring) — an unresolvable repo root, or any
-    unexpected error resolving context/reading the wire, degrades to an
-    empty `{"today": [], "stale": [], "unreadable_error": <str>}`
-    partition. `collect_open_day_goals` itself already degrades an
-    unreadable `central_state_root` the same way; this wrapper only adds
-    the repo-root-resolution failure mode on top.
-
-    Resolves the MAIN worktree root via `main_worktree_root(common_dir)`
-    before calling `resolve_context` — never a bare `git rev-parse
-    --show-toplevel` result — so a `/workday-complete` invocation from a
-    linked worktree (a first-class, documented layout in this repo) reads
-    the SAME `state/` tree the write leg (`ops/goal_close_day.py`'s
-    `goal.close_day_apply` handler) writes to. Using the current worktree's
-    own root here would scope the read to a different `state/` shard than
-    the write, causing the judgment point to offer a `goal_id` that does not
-    exist as an open row where the close-out actually writes.
-    """
     common_dir = _resolve_repo_common_dir_for_ceremony()
     if common_dir is None:
         return {
@@ -241,21 +191,6 @@ def _open_day_goals_present(open_day_goals: dict[str, Any]) -> bool:
 
 
 def _main_worktree_root_for_directive() -> str:
-    """Main worktree root as a `str`, for directives whose CLI takes a `root`
-    positional (currently `d_step3_5_backfill_anchor_a0` ->
-    `workday-complete-backfill-anchor run <root>`).
-
-    Same resolution ladder as `_compute_open_day_goals`/
-    `_resolve_repo_common_dir_for_ceremony`: `git rev-parse --path-format=
-    absolute --git-common-dir` then `main_worktree_root(common_dir)` — never
-    a bare `Path.cwd()` and never `git rev-parse --show-toplevel`, since a
-    ceremony invoked from a LINKED worktree must resolve to the SAME `state/`
-    tree the write leg (here, the anchor CLI's own commit-and-write step)
-    addresses; `--show-toplevel` would instead scope to the current linked
-    worktree. Never raises and never fails the ceremony — degrades to `"."`
-    (the CLI's own cwd-relative fallback) on any resolution failure, matching
-    the defensive posture `_compute_open_day_goals`/`_compute_dirty_tree_verdict`
-    already take."""
     common_dir = _resolve_repo_common_dir_for_ceremony()
     if common_dir is None:
         return "."
@@ -265,18 +200,7 @@ def _main_worktree_root_for_directive() -> str:
         return "."
 
 
-# AC10 fix (2026-07-25 conformance-test sweep): `workday-complete-step2_5-
 # dirty-tree` was a CONSUMES_MANIFEST entry with no directive anywhere ever
-# naming it, AND `jp_step2_5_dirty_tree_ambiguous` was unconditionally
-# emitted every run (gating `d_step3_consolidate` behind an EM ask even on
-# a clean tree) — the manifest/emission contract test this AC required
-# caught both. Fixed by giving Step 2.5 the same "compute the real
-# condition, emit only when it's live" shape as C4's day-goal judgment
-# point: a directive that always runs the script's own auto-disposition
-# (clear-wins committed/gitignored unconditionally, same as the pre-
-# conversion skill body), plus a read-only DRY-RUN probe here that decides
-# whether ambiguous/source-tree paths remain and therefore whether the ask
-# is even live.
 def _compute_dirty_tree_verdict() -> dict[str, Any]:
     """Read-only probe of Step 2.5's typed, mutation-free classification
     (`coordinator_core.ops.workday_complete_step2_5_dirty_tree.
@@ -471,12 +395,6 @@ def _build_directives(
             args=[],
         ),
         _directive(
-            # Sub-reap (iii), the orphaned-claim-dir cull, was cut out of
-            # `session.reap`'s `_handler` by PM ruling 2026-08-22 (an
-            # irreversible `rm -rf` at boot, the busiest moment) and
-            # relocated to `session.reap_claims_for_repos` — this directive
-            # is the destination it was relocated to. No `depends_on`: an
-            # orphan cull has no live ask to wait on.
             "d_step2_66_reap_claims",
             cli="reap-claims-for-repos",
             args=[],
@@ -490,11 +408,6 @@ def _build_directives(
             "d_step3_consolidate",
             cli="workday-complete-step3-consolidate",
             args=[],
-            # Gated ONLY when dirty_tree_verdict found the tree genuinely
-            # ambiguous (AC10 fix) — a clean tree has no live ask to wait
-            # on, so this directive stays ungated (fires unconditionally)
-            # rather than permanently blocking on a JP that would never
-            # resolve to anything.
             depends_on=(
                 "jp_step2_5_dirty_tree_ambiguous"
                 if dirty_tree_verdict.get("ambiguous")
@@ -504,10 +417,6 @@ def _build_directives(
         _directive(
             "d_step3_5_backfill_scan",
             cli="workday-complete-backfill-scan",
-            # The producer was the last directive in this leg still resolving
-            # its root from the process cwd while both its consumers received
-            # one explicitly — under in-process dispatch that scanned whatever
-            # tree apply stood in and silently mis-drove both writers.
             args=[
                 "--lookback",
                 "14",
@@ -519,21 +428,7 @@ def _build_directives(
             "d_step3_5_backfill_anchor_a0",
             cli="workday-complete-backfill-anchor",
             # `run` declares a REQUIRED `root` positional (bin's
-            # `_cmd_run` parser) — omitting it always exited 2
-            # ("the following arguments are required: root"), so Phase-A0
-            # backfill anchoring never ran. `_main_worktree_root_for_directive`
-            # resolves the MAIN worktree root (never `Path.cwd()`/
-            # `--show-toplevel`) so this directive's write leg matches every
-            # other ceremony read/write pairing in this module.
-            # `--allow-empty`: `stdin_from` below already proves the scan
-            # landed this pass, so empty gap rows here genuinely mean a gapless
-            # window. Without the flag the CLI now refuses empty stdin rather
-            # than exiting 0 having anchored nothing — the silent-success shape
-            # this whole leg was reported for.
             args=["run", _main_worktree_root_for_directive(), "--allow-empty"],
-            # `run` also reads the Phase-A0 gap-row TSV on stdin (2026-07-26
-            # stdin-wiring fix) — `apply._execute_directives` feeds it the
-            # scan directive's own captured stdout.
             stdin_from="d_step3_5_backfill_scan",
         ),
         _directive(
@@ -546,12 +441,7 @@ def _build_directives(
             )
             + (["--only-mode"] if for_date and only_mode else [])
             + ([f"--scope-summary={scope_summary}"] if for_date and scope_summary else []),
-            # Gated: the >10-row backfill-cap PM ask, when live, must resolve
-            # before the oldest-first Phase-B wrap dispatches.
             depends_on="jp_step3_5_backfill_cap",
-            # `backfill-dispatch-rows` also reads the same gap-row TSV on
-            # stdin (2026-07-26 stdin-wiring fix) — same producer as the
-            # anchor directive above; both consume the scan's one output.
             stdin_from="d_step3_5_backfill_scan",
         ),
         _directive(
@@ -567,24 +457,11 @@ def _build_directives(
         _directive(
             "d_step7_5_prune_closed_bugs",
             cli="prune-closed-bugs",
-            # This op self-selects AND git-mv's closed bug-backlog entries —
-            # the only other data-loss-capable directive in the manifest
-            # besides cruft-sweep (arg-mismatch audit, class (d)/highest-
-            # severity subset #2). Its previous `args=[]` left it resolving
-            # root via `git rev-parse --show-toplevel` from the ceremony
-            # process's own cwd; explicit `--repo-root` matches every other
-            # write-leg directive in this module.
             args=["--repo-root", _main_worktree_root_for_directive()],
         ),
         _directive(
             "d_step8_improvement_queue_nudge",
             cli="workday-start-advisory-counters",
-            # `--repo-root` defaults to `.` (process cwd) — explicit here so
-            # a ceremony invoked from a linked worktree reads the SAME
-            # `state/` tree every other directive in this module resolves
-            # via `_main_worktree_root_for_directive` (arg-mismatch audit,
-            # class (d)); the CLI already accepted this flag, it was simply
-            # never supplied.
             args=[
                 "improvement-queue",
                 "--repo-root",
@@ -615,9 +492,6 @@ def _build_directives(
                         (decisions or {}).get("day_goal_closeout", {}), sort_keys=True
                     ),
                 ],
-                # Gated: jp_day_goal_closeout must resolve to "record" before
-                # the close-out append runs — an ungated directive would fire
-                # with empty/partial args (see this function's docstring).
                 depends_on="jp_day_goal_closeout",
             )
         )
@@ -835,13 +709,6 @@ def _build_judgment_points(
             reason="dispatch-decision",
             revalidate_at_dispatch=False,
             round_trip="round_trip",
-            # Action-class, explicitly decided (plan's C1b correction,
-            # premise-finding sidecar channel 3): the EM dispatches a Sonnet
-            # worker off this answer, with no directive and no gate --
-            # demoting it into narration would silence a real dispatch
-            # decision. `False`, not left unmarked, so this reads as a
-            # deliberate call rather than an oversight the census could
-            # otherwise flag.
             reportable=False,
         ),
         build_judgment_point(
@@ -867,8 +734,6 @@ def _build_judgment_points(
             reason="dispatch-decision",
             revalidate_at_dispatch=False,
             round_trip="round_trip",
-            # Action-class, explicitly decided -- see jp_step4b_analyst_
-            # dispatch's comment above.
             reportable=False,
         ),
         build_judgment_point(
@@ -895,8 +760,6 @@ def _build_judgment_points(
             reason="dispatch-decision",
             revalidate_at_dispatch=False,
             round_trip="round_trip",
-            # Action-class, explicitly decided -- see jp_step4b_analyst_
-            # dispatch's comment above.
             reportable=False,
         ),
         build_judgment_point(
@@ -925,9 +788,6 @@ def _build_judgment_points(
             reason="dispatch-decision",
             revalidate_at_dispatch=True,
             round_trip="terminal",
-            # Action-class, explicitly decided -- see jp_step4b_analyst_
-            # dispatch's comment above: answering this writes a health-
-            # ledger row directly, with no directive and no gate.
             reportable=False,
         ),
     ]
@@ -935,18 +795,6 @@ def _build_judgment_points(
 
 
 def _reported_narration_suffix(reported_judgment_points: list[dict[str, Any]]) -> str:
-    """Spec: docs/plans/2026-08-15-judgment-points-that-gate-nothing-stop-
-    being-questions.md. A point `partition_reportable`
-    classified as `reported` (gates no directive present on this envelope)
-    is demoted out of `judgment_points[]` but must not go silent -- its
-    question and its recommendation's `rationale` (when it carries one) are
-    folded into `narration` instead, so the EM still sees the fact without
-    being asked to answer a question that cannot change anything. No
-    envelope key is added for this -- `narration` is already free-form.
-    Returns `""` when `reported_judgment_points` is empty -- callers must
-    join conditionally (see `workweek_complete.brief._reported_narration`,
-    same shape).
-    """
     if not reported_judgment_points:
         return ""
     reported_bits = []
@@ -1026,12 +874,6 @@ def brief(
     except Exception as exc:  # noqa: BLE001 - mirrors pickup_assemble.brief's own backstop
         return int(WorkdayExitCode.TRANSPORT_FAIL), {"error": str(exc)}
 
-    # _build_directives/
-    # _build_judgment_points now consume live, disk-derived open_day_goals
-    # rows (previously pure static construction taking no arguments); widen
-    # this backstop to cover them so a malformed row can't crash the WHOLE
-    # /workday-complete assembly instead of degrading per the module's
-    # never-fail-the-ceremony mandate.
     try:
         open_day_goals = _compute_open_day_goals()
         dirty_tree_verdict = _compute_dirty_tree_verdict()
@@ -1046,12 +888,6 @@ def brief(
         judgment_points = _build_judgment_points(
             open_day_goals, dirty_tree_verdict, for_date=for_date
         )
-        # Scoped to recommendation-carrying points: a Tier-3 point
-        # (`recommendation=None`, reason `insufficient-evidence` or
-        # `pm-scoped-tradeoff`) is a question the engine deliberately must not
-        # answer. Its `resolves` names a directive that is not always emitted,
-        # so an unscoped partition would demote it out of `judgment_points[]`
-        # on exactly the runs where nothing else raises it.
         recommendation_carrying = [
             point for point in judgment_points if point.get("recommendation") is not None
         ]
@@ -1092,23 +928,6 @@ def brief(
 
 
 def main(argv: list[str]) -> int:
-    """`main()`'s `brief` dispatch — `--for-date DATE`, `--only`, and
-    `--scope-summary TEXT` are the only three options (mirrors
-    `pickup_assemble.brief`'s CLI shape at its simplest, extended with the
-    flags the DoE-side `workday-complete.md` Step 2 invocation now threads
-    through for a targeted wrap and for the user's day-summary prose);
-    prints the envelope as JSON. A malformed `--for-date` is a parser-level
-    usage error here (argparse's own `error()` -> exit 2), same effective
-    exit code as `brief()`'s own `WorkdayExitCode.USAGE` -- this front door
-    additionally catches it before ever calling `brief()` so the usage
-    message names the CLI flag, not the keyword argument.
-
-    `--scope-summary` is safe against a leading-dash value ONLY when the
-    caller supplies it as a single `--scope-summary=VALUE` token (the form
-    `workday-complete.md` Step 2 uses) -- a split `--scope-summary`, `VALUE`
-    two-token invocation is subject to the same argparse-misclassifies-a-
-    dash-prefixed-value hazard `_build_directives`'s docstring documents for
-    the directives this value is threaded into."""
     parser = argparse.ArgumentParser(prog="workday-complete-assemble brief", add_help=False)
     parser.add_argument("--for-date", dest="for_date", default=None)
     parser.add_argument("--only", dest="only_mode", action="store_true")

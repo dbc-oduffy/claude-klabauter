@@ -1,9 +1,3 @@
-"""
-test_round_trip — Round-trip contract test (AC: a validated instance
-round-trips through JSON serialize/deserialize on every entity).
-
-Pytest port of DoE `coordinator/cockpit-contract/test/round-trip.test.ts`.
-"""
 from __future__ import annotations
 
 from coordinator_core.contract.cockpit_schema.provenance import ProvenanceEnvelope
@@ -12,11 +6,6 @@ from coordinator_core.contract.cockpit_schema.entities.summaries import HandoffS
 from coordinator_core.contract.cockpit_schema.tests.conftest import (
     zod_safe_parse_ok,
 )
-
-
-# ===========================================================================
-# IsoDateTime accepts both Z and numeric offset
-# ===========================================================================
 
 
 def test_isodatetime_bare_z_suffix():
@@ -31,22 +20,12 @@ def test_isodatetime_no_offset_rejected():
     assert not zod_safe_parse_ok(IsoDateTime, "2026-06-22T03:06:15")
 
 
-# ===========================================================================
-# MachineSlug / OwnerSlug — empty string rejected
-# ===========================================================================
-
-
 def test_machine_slug_empty_string_rejected():
     assert not zod_safe_parse_ok(MachineSlug, "")
 
 
 def test_owner_slug_empty_string_rejected():
     assert not zod_safe_parse_ok(OwnerSlug, "")
-
-
-# ===========================================================================
-# HandoffStatus — superseded value is retired
-# ===========================================================================
 
 
 def test_handoff_status_superseded_rejected():
@@ -60,17 +39,6 @@ def test_handoff_status_open_accepted():
 def test_handoff_status_claimed_accepted():
     assert zod_safe_parse_ok(HandoffStatus, "claimed")
 
-
-# ===========================================================================
-# ProvenanceEnvelope — bidirectional ref-nullability invariant (D9/D1)
-#
-# Five-case matrix (spec: D1 task brief item 5):
-#   (a) github_graphql + real ref  → PASS   (git-backed, ref present)
-#   (b) local_fs + ref:null        → PASS   (non-git, ref null)
-#   (c) github_graphql + ref:null  → REJECT (git-backed, ref absent)
-#   (d) local_fs + real ref        → REJECT (non-git, ref present)
-#   (e) ref key omitted entirely   → REJECT (D9: nullable ≠ optional)
-# ===========================================================================
 
 _BASE_PROV = {
     "repo": "test-repo",
@@ -106,19 +74,6 @@ def test_provenance_e_ref_key_omitted_entirely_rejected():
     v = {**_BASE_PROV, "source_kind": "github_graphql"}
     assert not zod_safe_parse_ok(ProvenanceEnvelope, v)
 
-
-# ===========================================================================
-# ProvenanceEnvelope — anchorless guard (D26)
-#
-# Seven-case matrix (spec: 2026-07-14 provenance hardening task brief item 3):
-#   (1) repo:"" + entity_anchor:null                        → REJECT (anchorless)
-#   (2) repo:"" + {kind:"x", value:""}                       → REJECT (empty value)
-#   (3) repo:"" + {kind:"", value:"x"}                       → REJECT (empty kind)
-#   (4) repo:"" + {kind:"x", value:"y"}                      → PASS   (entity-anchored)
-#   (5) repo:"owner/repo" + entity_anchor:null                → PASS   (repo-anchored)
-#   (6) repo:"owner/repo" + {kind:"x", value:"y"} (composite)  → PASS   (both, well-formed)
-#   (7) repo:"owner/repo" + {kind:"", value:""}               → REJECT (malformed composite)
-# ===========================================================================
 
 _ANCHOR_BASE = {
     "source_kind": "local_fs",

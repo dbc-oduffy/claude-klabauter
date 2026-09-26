@@ -28,17 +28,8 @@ The parser's grammar wins: it defines what actually gets summed.
 
 import re
 
-# Canonical Session Ledger block, shared verbatim by every ledger-owing handoff author.
-# The comment's one-line grammar MUST stay the format ``parse_session_ledgers`` reads
 # (``_ONELINE_RE``) — do not fork this literal per-kind or per-caller.
-#
 # The `Nd / No` legend lines are load-bearing, not decoration. `_ONELINE_RE` binds those
-# fields as ``(?P<agent_dispatches>\d+)d`` / ``(?P<opus_dispatches>\d+)o`` — integer
-# COUNTS. Without the legend the token reads naturally as "N days", and on 2026-08-19 two
-# consecutive sessions on one chain both wrote durations (`0.3d`, `0.05d`); `\d+` rejects
-# them, every row failed to parse, and the chain reported `chain_sessions_with_ledger:
-# "0 of 1"` with zero LoE while looking perfectly well-formed to a reader. Do not trim
-# these lines back to the bare format string.
 SESSION_LEDGER_BLOCK_LINES: list[str] = [
     "## Session Ledger",
     "",
@@ -50,12 +41,7 @@ SESSION_LEDGER_BLOCK_LINES: list[str] = [
     "",
 ]
 
-# Canonical Session Ledger heading detector. Matches the parser's actual
-# accept-set (a literal single space after "##", no trailing anchor) so a
-# detection site cannot consider a heading "present" that the parser would
-# never recognize as ledger-summable, or vice versa. Usable both as
 # ``.search(text)`` (MULTILINE, any line in a larger document) and as
-# ``.match(line)`` (per-line, anchors to position 0 of the given string —
 # unaffected by the MULTILINE flag either way).
 SESSION_LEDGER_HEADING_RE = re.compile(r"^## Session Ledger", re.MULTILINE)
 

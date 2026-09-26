@@ -54,25 +54,11 @@ FIXTURE_FILES = {
         """
     ),
     "nested/deep.txt": "alpha nested\nbeta nested\n",
-    # Matches spaced >1 line apart within
-    # one file, to exercise -A/-B/-C group-separator ("--") insertion (F4). Deliberately
-    # uses a pattern ("zeta") not shared with any other fixture, so these files don't
-    # perturb the "alpha"-recursive-walk cases (e.g. `grep -rn alpha . | head -2`,
-    # which is order-sensitive on the number and identity of matching files).
     "spaced.txt": "one\nzeta two\nthree\nfour\nfive\nzeta six\nseven\n",
-    # F7(d): matches whose -A1 windows are adjacent (window1 end == window2 start - 1)
-    # -- must MERGE into one group with no "--" separator, not just avoid a false one.
     "adjacent.txt": "one zeta\ntwo\nthree zeta\nfour\n",
-    # F7(d): matches whose -A1/-B1 windows OVERLAP -- the shared line must render once,
-    # not twice.
     "overlap.txt": "l1\nl2 zeta\nl3 zeta\nl4\n",
 }
 
-#: Commands exercised differentially, tagged with whether their output order is part of
-#: the contract. Recursive-walk cases have no cross-implementation directory-order
-#: guarantee and compare as multisets; every other case's line order is significant
-#: (F6) and compares in-order, so an ordering bug or a missing/duplicated structural
-#: line (e.g. a dropped "--" separator, F4) cannot hide behind `sorted()`.
 CASES = [
     ("grep -n alpha notes.md", False),
     ("grep -rn alpha .", True),
@@ -90,28 +76,17 @@ CASES = [
     ("grep -n 'a | pipe' notes.md", False),
     ("grep -rnw alpha .", True),
     ("grep -rn nomatchanywhere .", True),
-    # F7(a): -c on a zero-match target must still print "0" (F1), not omit the line.
     ("grep -c nomatchanywhere notes.md", False),
     ("grep -c nomatchanywhere alpha.py beta.py", False),
-    # F7(a) sibling: -l on zero matches correctly omits the file (unaffected by F1).
     ("grep -l nomatchanywhere notes.md", False),
-    # F7(d): non-adjacent matches within one file under -A/-B/-C get a "--" separator.
     ("grep -n -A1 zeta spaced.txt", False),
-    # F7(d): adjacent windows merge -- no separator, no duplicated line.
     ("grep -n -A1 zeta adjacent.txt", False),
-    # F7(d): overlapping -A1/-B1 windows merge -- the shared line renders once.
     ("grep -n -A1 -B1 zeta overlap.txt", False),
-    # F7(f): multiple explicitly-named files exercises the filename-prefix rule outside
-    # the recursive-walk path.
     ("grep -n alpha alpha.py beta.py", False),
-    # B1 (2026-08-06 architecture-survey digest #1): a shell glob operand reaches this
     # seam UNEXPANDED, and was previously scanned as a literal filename -- yielding an
-    # authoritative "(no matches)" for a search that never ran. Differential by
-    # construction: the real command's shell expands the glob, ours must agree.
     ("grep -n alpha *.py", False),
     ("grep -n check *.py", False),
     ("grep -n alpha nested/*.txt", False),
-    # F7(g): -m/--max-count.
     ("grep -n -m1 zeta spaced.txt", False),
     ("grep -rn --max-count=1 alpha .", True),
 ]
@@ -149,16 +124,11 @@ def test_answer_matches_real_command(cmd, recursive, tree):
         pytest.skip("declined -- the real command runs unchanged, which is correct")
     _rc, theirs = _real(cmd, tree)
     if recursive:
-        # Recursive walks have no cross-implementation ordering guarantee; compare as
-        # multisets so a legitimate ordering difference is not reported as a defect.
         assert sorted(ours) == sorted(theirs), (
             "in-process answer disagrees with real command\n"
             "  command : %s\n  ours    : %r\n  real    : %r" % (cmd, ours, theirs)
         )
     else:
-        # F6: non-recursive/single-target output order IS part of the contract --
-        # sorting here would mask an ordering bug or a missing/duplicated structural
-        # line (e.g. a dropped "--" group separator) that sorts identically either way.
         assert ours == theirs, (
             "in-process answer disagrees with real command\n"
             "  command : %s\n  ours    : %r\n  real    : %r" % (cmd, ours, theirs)
@@ -167,13 +137,6 @@ def test_answer_matches_real_command(cmd, recursive, tree):
 
 @requires_posix_shell
 def test_wc_count_agrees_but_padding_deliberately_diverges(tree):
-    """`wc -l`: the VALUE must agree; BSD's width-8 padding deliberately does not.
-
-    Reproducing the host's padding would require probing the host's own `wc` -- a
-    process spawn, which is the cost this package exists to remove. Asserted as an
-    explicit, named divergence so it cannot later be mistaken for a defect or, worse,
-    silently "fixed" into a host probe.
-    """
     ours = _answered_body("grep -rn alpha . | wc -l", tree)
     assert ours is not None
     _rc, theirs = _real("grep -rn alpha . | wc -l", tree)
@@ -182,21 +145,10 @@ def test_wc_count_agrees_but_padding_deliberately_diverges(tree):
 
 
 def test_declines_when_grep_is_fed_by_upstream(tree):
-    """`<cmd> | grep` cannot be answered -- the input does not exist yet.
-
-    The upstream here must be a command this package does NOT serve. The original
-    spelling used `cat notes.md | grep alpha`, which was a faithful decline only for as
-    long as `cat` was unservable; once the read shapes are served (C1/C3) that pipeline
-    became a legitimate read-source + grep-stage answer, and the assertion started
-    encoding the absence of a feature rather than the rule it names. The RULE is what is
-    pinned here: an upstream whose output does not exist yet cannot feed an answer. A
-    served upstream is verified positively in `test_read_shapes_differential.py`.
-    """
     assert answer("curl https://example.com | grep alpha", cwd=str(tree)) is None
 
 
 def test_declines_on_semicolon_compound(tree):
-    """Other real work is sequenced around the grep; answering half would drop it."""
     assert answer("grep -n alpha notes.md ; echo done", cwd=str(tree)) is None
 
 
@@ -209,32 +161,19 @@ def test_declines_on_pcre(tree):
 
 
 def test_declines_bare_wc_no_flags(tree):
-    """F7(b)/F2: bare `wc` prints three numbers, not a line count -- must decline."""
     assert answer("grep -rn alpha . | wc", cwd=str(tree)) is None
 
 
 def test_declines_downstream_grep_context_flags(tree):
-    """F7(c)/F3: -A/-B/-C on a downstream filter grep is not derivable from already-
-    rendered piped lines -- must decline rather than silently drop the flag."""
     assert answer("grep -n alpha notes.md | grep -A1 nested", cwd=str(tree)) is None
 
 
 def test_declines_include_on_explicitly_named_target(tree):
-    """F7(e)/F5: --include/--exclude semantics genuinely diverge between GNU and BSD
-    grep for an explicitly-named (non-directory) target -- must decline rather than
-    pick a dialect."""
     assert answer("grep --include=*.py -n alpha notes.md", cwd=str(tree)) is None
 
 
 @requires_posix_shell
 def test_multi_path_glob_is_not_a_silent_empty_answer(tree):
-    """B1 regression, stated as the failure it closes rather than as a diff.
-
-    The defect was not "a glob answers slightly differently" -- it was that a glob
-    matching several files answered `(no matches)` with `[searched in-process:
-    1 file(s)]`, which reads as an authoritative negative. A refusal here would be
-    acceptable to the module's contract; a confident empty answer never is.
-    """
     text = answer("grep -n alpha *.py", cwd=str(tree))
     if text is None:
         pytest.fail("declining is legal in general, but this shape must stay answerable")
@@ -243,19 +182,14 @@ def test_multi_path_glob_is_not_a_silent_empty_answer(tree):
 
     _rc, theirs = _real("grep -n alpha *.py", tree)
     assert _answered_body("grep -n alpha *.py", tree) == theirs
-    # The filename prefix is a post-expansion property: two operands reach grep, so
-    # every line is prefixed even though the command as typed named one.
     assert all(line.startswith(("alpha.py:", "beta.py:")) for line in theirs)
 
 
 def test_declines_on_glob_matching_nothing(tree):
-    """Bash without `nullglob` passes the pattern through and grep exits 2 on stderr --
-    a shape this seam cannot reproduce, so it must refuse rather than print nothing."""
     assert answer("grep -n alpha *.rs", cwd=str(tree)) is None
 
 
 def test_declines_on_nonexistent_target(tree):
-    """Same stderr/exit-2 shape as an unmatched glob, reached by a plain operand."""
     assert answer("grep -n alpha does_not_exist.py", cwd=str(tree)) is None
 
 
@@ -270,13 +204,6 @@ def test_prunes_dot_git_by_default(tree):
 
 
 def test_declines_empty_answer_when_default_pruned_dir_could_hold_the_match(tree):
-    """DoE-claude#85 row 16: a plain repo-wide search must not confidently render
-    "(no matches)" when the only real match lives inside a default-pruned
-    directory (e.g. a `.venv`/`node_modules`/`dist` tree) this walk never looked
-    at -- that is a false "(no matches)" the caller cannot tell from a genuine one.
-    Contrast with `test_prunes_dot_git_by_default`: that fixture's match set is
-    NOT empty (other `alpha` hits exist outside `.git`), so it still answers.
-    """
     node_modules = tree / "node_modules"
     node_modules.mkdir()
     (node_modules / "pkg.js").write_text("needle only lives here\n")
@@ -284,18 +211,12 @@ def test_declines_empty_answer_when_default_pruned_dir_could_hold_the_match(tree
 
 
 def test_answers_empty_when_no_default_prune_dir_present(tree):
-    """The decline above is scoped to the pruning-caused-emptiness case -- a
-    genuinely empty result with nothing pruned still answers normally."""
     text = answer("grep -rn zzzznosuchneedle .", cwd=str(tree))
     assert text is not None
     assert text.startswith("(no matches)")
 
 
 def test_downstream_grep_filter_declines_on_truncated_upstream(tree, monkeypatch):
-    """DoE-claude#85 row 10: a downstream `| grep` filter over an upstream search
-    that hit a truncation cap must decline, not silently render a filtered result
-    computed over an incomplete match set -- see `_stage_grep_filter`'s own
-    `needs_complete_input=True` fix."""
     from coordinator_core.search import engine
 
     monkeypatch.setattr(engine, "MAX_MATCH_LINES", 1)
@@ -303,7 +224,6 @@ def test_downstream_grep_filter_declines_on_truncated_upstream(tree, monkeypatch
 
 
 def test_truncation_forces_refusal_for_aggregate_stage(tree, monkeypatch):
-    """A truncated search feeding `wc -l` would produce a confidently wrong count."""
     from coordinator_core.search import engine
 
     monkeypatch.setattr(engine, "MAX_MATCH_LINES", 1)
@@ -311,7 +231,6 @@ def test_truncation_forces_refusal_for_aggregate_stage(tree, monkeypatch):
 
 
 def test_truncation_is_tolerated_for_head(tree, monkeypatch):
-    """`head` only needs the leading lines, so a capped search still answers it."""
     from coordinator_core.search import engine
 
     monkeypatch.setattr(engine, "MAX_MATCH_LINES", 50)

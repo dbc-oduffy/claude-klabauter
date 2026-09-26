@@ -36,17 +36,8 @@ from typing import Optional
 
 import pytest
 
-# `_make_git_repo` spawns real git because the ancestry op resolves the
-# common_dir (.git path) of a real repo to locate `state/handoffs/*.md` —
-# no mock stands in for git's own repo-root/common-dir discovery. Each test
-# builds its own repo/handoff fixtures, so isolation cannot be hoisted to
-# module scope.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
-# ---------------------------------------------------------------------------
-# Import guard — fires ALL @register_op(...) side-effects, including
-# "handoff.lineage_ancestry".  MUST precede all test functions.
-# ---------------------------------------------------------------------------
 import coordinator_core.ops  # noqa: F401 — populates _REGISTRY
 
 from coordinator_core.ipc import _REGISTRY
@@ -64,15 +55,7 @@ assert _OP_NAME in _REGISTRY, (
 )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-
-
 def _make_git_repo(root: Path) -> Path:
-    """Create a minimal git repo at ``root`` and return its common_dir (.git path)."""
     root.mkdir(parents=True, exist_ok=True)
     _NO_WIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     subprocess.run(
@@ -106,12 +89,6 @@ def _seed_handoff(
     title: Optional[str] = None,
     origin_handoff: Optional[str] = None,
 ) -> Path:
-    """Write a ``state/handoffs/<filename>.md`` fixture file with YAML frontmatter.
-
-    ``origin_handoff`` is written verbatim as the frontmatter value when provided
-    (including sentinel strings like "none"/"null" for negative-path tests). When
-    omitted, no ``origin_handoff`` key is written at all (absent-field case).
-    """
     handoffs_dir.mkdir(parents=True, exist_ok=True)
     lines = ["---"]
     if title is not None:
@@ -128,13 +105,7 @@ def _seed_handoff(
     return path
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 class TestRegistryCompleteness:
-    """Positive-floor registry checks (must pass before any per-op test)."""
 
     def test_registry_is_non_empty(self):
         assert len(_REGISTRY) > 0
@@ -144,15 +115,12 @@ class TestRegistryCompleteness:
 
 
 class TestHandoffLineageAncestry:
-    """Ancestry-walk tests for handoff.lineage_ancestry."""
 
     def test_repo_root_none_returns_empty(self):
-        """repo_root=None -> empty ancestry without raising."""
         result = _handler({"handoff_id": "whatever"}, repo_root=None)
         assert result == {"ancestry": [], "terminated_early": ""}
 
     def test_missing_start_handoff_returns_empty(self, tmp_path):
-        """handoff_id/path that resolves to no file on disk -> empty ancestry."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         (repo_root / "state" / "handoffs").mkdir(parents=True)
@@ -160,14 +128,12 @@ class TestHandoffLineageAncestry:
         assert result == {"ancestry": [], "terminated_early": ""}
 
     def test_missing_params_returns_empty(self, tmp_path):
-        """Neither handoff_id nor path supplied -> empty ancestry."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         result = _handler({}, repo_root=common_dir)
         assert result == {"ancestry": [], "terminated_early": ""}
 
     def test_root_handoff_no_origin_handoff_field(self, tmp_path):
-        """A root handoff (no origin_handoff key at all) -> ancestry is just itself."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         handoffs_dir = repo_root / "state" / "handoffs"
@@ -181,7 +147,6 @@ class TestHandoffLineageAncestry:
         assert result["ancestry"][0]["title"] == "Root Handoff"
 
     def test_sentinel_origin_handoff_none_string(self, tmp_path):
-        """origin_handoff: none (sentinel) -> excluded from edges, ancestry is just itself."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         handoffs_dir = repo_root / "state" / "handoffs"
@@ -196,7 +161,6 @@ class TestHandoffLineageAncestry:
         assert result["ancestry"][0]["handoff_id"] == "sentinel-none"
 
     def test_sentinel_origin_handoff_null_string(self, tmp_path):
-        """origin_handoff: null (sentinel) -> excluded from edges, ancestry is just itself."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         handoffs_dir = repo_root / "state" / "handoffs"
@@ -211,7 +175,6 @@ class TestHandoffLineageAncestry:
         assert result["ancestry"][0]["handoff_id"] == "sentinel-null"
 
     def test_linear_ancestry_chain(self, tmp_path):
-        """fork -> parent -> grandparent chain, ordered fork-first."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         handoffs_dir = repo_root / "state" / "handoffs"
@@ -239,7 +202,6 @@ class TestHandoffLineageAncestry:
         assert titles == ["Fork", "Parent", "Grandparent"]
 
     def test_cycle_detected_does_not_hang(self, tmp_path):
-        """A -> B -> A origin_handoff cycle: terminated_early == 'lineage-cycle', no hang/crash."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         handoffs_dir = repo_root / "state" / "handoffs"
@@ -251,11 +213,9 @@ class TestHandoffLineageAncestry:
 
         assert result["terminated_early"] == "lineage-cycle"
         ids = [entry["handoff_id"] for entry in result["ancestry"]]
-        # Both nodes are visited exactly once before the cycle is detected.
         assert ids == ["a", "b"]
 
     def test_path_param_resolution(self, tmp_path):
-        """Explicit 'path' param (absolute) resolves the starting handoff."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         handoffs_dir = repo_root / "state" / "handoffs"
@@ -268,7 +228,6 @@ class TestHandoffLineageAncestry:
         assert result["ancestry"][0]["handoff_id"] == "fork-by-path"
 
     def test_handoff_id_preferred_over_path(self, tmp_path):
-        """When both handoff_id and path are given, handoff_id resolution is tried first."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         handoffs_dir = repo_root / "state" / "handoffs"
@@ -290,10 +249,6 @@ class TestHandoffLineageAncestry:
         assert classify("handoff.lineage_ancestry") is OpClass.COMPUTE_ONLY
 
     def test_missing_link_terminated_early(self, tmp_path):
-        """origin_handoff points at a file that does not exist -> terminated_early
-        == 'missing-link', and the fork's own entry is still in ancestry (dag.py
-        records a node before resolving its edges; accumulation continues past an
-        unresolvable edge — dag.py:629-631 vs. 641-647)."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         handoffs_dir = repo_root / "state" / "handoffs"
@@ -311,8 +266,6 @@ class TestHandoffLineageAncestry:
         assert ids == ["fork"]
 
     def test_relative_path_param_resolution(self, tmp_path):
-        """A worktree-relative 'path' (not absolute, not handoff_id) resolves via
-        the worktree_root-join branch in _resolve_start_path."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         handoffs_dir = repo_root / "state" / "handoffs"
@@ -327,9 +280,6 @@ class TestHandoffLineageAncestry:
         assert result["ancestry"][0]["handoff_id"] == "fork-by-path"
 
     def test_handoff_id_exclusive_not_fallback(self, tmp_path):
-        """A supplied-but-unresolvable handoff_id returns None immediately —
-        it does NOT fall through to a valid, resolvable 'path', proving
-        handoff_id is exclusive rather than merely tried-first-with-fallback."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         handoffs_dir = repo_root / "state" / "handoffs"
@@ -343,20 +293,14 @@ class TestHandoffLineageAncestry:
             repo_root=common_dir,
         )
 
-        # handoff_id was supplied but unresolvable -> None, never falls
-        # through to the valid path param.
         assert result == {"ancestry": [], "terminated_early": ""}
 
     def test_handoff_id_traversal_rejected(self, tmp_path):
-        """A handoff_id containing '../' traversal segments is rejected at
-        parse time (allowlist regex) rather than resolved — must not escape
-        state/handoffs/."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         handoffs_dir = repo_root / "state" / "handoffs"
         _seed_handoff(handoffs_dir, "root.md", title="Root Handoff")
 
-        # A secret file outside state/handoffs/ that a traversal could reach.
         secret = repo_root / "secret.md"
         secret.write_text("---\ntitle: \"Secret\"\n---\n", encoding="utf-8")
 
@@ -368,9 +312,6 @@ class TestHandoffLineageAncestry:
         assert result == {"ancestry": [], "terminated_early": ""}
 
     def test_path_outside_tree_rejected(self, tmp_path):
-        """An out-of-tree absolute 'path' (outside state/handoffs/ and
-        archive/handoffs/) is rejected by the post-resolve containment check,
-        not returned as the foreign file's contents."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         (repo_root / "state" / "handoffs").mkdir(parents=True)

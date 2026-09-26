@@ -43,13 +43,7 @@ import re
 from coordinator_core.bash_guards._helpers import operator_override_note
 
 #: Matches a pasteable assignment of any COORDINATOR_* key -- the exact
-#: shape this reshape removes. Deliberately broader than `_helpers.
 #: _VIOLATION_RE`-style `=1`-only matching in
-#: `test_no_handwritten_override_clauses.py`: THAT gate polices hand-written
-#: clauses elsewhere in the package; THIS test polices this one builder's
-#: own output against ANY assignment form (`=1`, `="..."`, or any other
-#: value), since the builder itself must never render one, regardless of
-#: what a hypothetical future value looked like.
 _ASSIGNMENT_RE = re.compile(r"\bCOORDINATOR_[A-Z0-9_]+=")
 
 

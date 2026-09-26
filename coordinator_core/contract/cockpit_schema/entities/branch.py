@@ -35,7 +35,6 @@ _MAX_SAFE_INTEGER = 9007199254740991
 
 
 class Branch(BaseModel):
-    """A single git ref observation."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -52,23 +51,14 @@ class Branch(BaseModel):
     owner: OwnerSlug
     coordinator_root_path: str
     name: str
-    # Observation key — tip SHA change = new observation.
     tip_sha: str
-    # Required when ahead_by present; null if not computed. Present-as-null (D9).
     merge_base_sha: str | None
-    # vs. default branch; null if not yet computed (REST compare not run).
     ahead_by: int | None = Field(ge=-_MAX_SAFE_INTEGER, le=_MAX_SAFE_INTEGER)
     behind_by: int | None = Field(ge=-_MAX_SAFE_INTEGER, le=_MAX_SAFE_INTEGER)
     # ISO-8601 UTC; committedDate on the tip commit.
     last_commit_at: IsoDateTime
     last_commit_message: str
-    # Parsed from work/{machine}/{date}; null if unparseable.
     machine_hint: str | None
-    # Parsed date segment; null if unparseable.
     date_hint: str | None
     provenance: ProvenanceEnvelope
-    # R5 content-hash change-signal (optional; sibling of provenance). Omitted by
-    # claude-klabauter for records with no resolvable single source file (rolled-up
-    # aggregates, empty-path computed records). Version-neutral optional —
-    # absent on all existing records. Spec: producer-contract § 3.3.
     content_hash: ContentHash | None = None

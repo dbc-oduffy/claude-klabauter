@@ -44,11 +44,9 @@ _cli = _load_cli_module()
 
 
 def _extract_ledger_block(content: str) -> str:
-    """Return the `## Session Ledger` heading through its trailing blank line, verbatim."""
     lines = content.split("\n")
     for i, line in enumerate(lines):
         if line == "## Session Ledger":
-            # Block is heading + blank + two comment lines + blank == 5 lines.
             return "\n".join(lines[i : i + 5])
     raise AssertionError("no '## Session Ledger' heading found in scaffolded content")
 
@@ -88,8 +86,6 @@ class SessionLedgerBlockIdenticalAcrossScaffoldersTest(unittest.TestCase):
 
     def test_comment_lines_match_the_oneline_grammar_parse_session_ledgers_reads(self):
         # AC6: the comment's declared grammar is the one _ONELINE_RE in
-        # session_ledger actually parses -- assert a scaffolded block's
-        # documented format string round-trips through that regex shape.
         from coordinator_core.session_ledger import aggregate_chain_loe
 
         sample_row = "2026-08-11 | abc123 | S | 1d / 0o | did the thing"

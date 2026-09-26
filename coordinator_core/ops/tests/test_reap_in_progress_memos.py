@@ -1,12 +1,3 @@
-"""
-Tests for coordinator_core.ops.reap_in_progress_memos — the return-data
-survey of cross-repo memos stranded at `status: in_progress` whose claiming
-session is no longer live (C6 of
-docs/plans/2026-09-11-handoff-lifecycle-one-legal-state-table.md).
-
-Every memo is built under `tmp_path`, never taken from a real record.
-Liveness is monkeypatched at `session_live`/`session_verdict`.
-"""
 
 from __future__ import annotations
 
@@ -55,7 +46,6 @@ def test_dead_holder_gives_one_release_and_names_the_deciding_arm(monkeypatch, r
 
 
 def test_live_holder_gives_no_release(monkeypatch, repo_root):
-    """Load-bearing: the case the 2026-08-22 handoff-reaper bug got wrong."""
     _write_memo(
         repo_root / "state/cross-repo/inbox", "a.md",
         status="in_progress", picked_up_by="live-session",
@@ -152,9 +142,6 @@ def test_apply_dispositions_reports_a_failed_release_rather_than_swallowing_it(m
 
 
 def test_zero_candidates_spawns_no_subprocess(repo_root):
-    """Zero `in_progress` candidates in the whole corpus. `survey()` never
-    imports `subprocess` at all (module-level absence, asserted directly),
-    so there is nothing to patch-and-catch a spawn with."""
     _write_memo(
         repo_root / "state/cross-repo/inbox", "a.md",
         status="open", picked_up_by="whoever",

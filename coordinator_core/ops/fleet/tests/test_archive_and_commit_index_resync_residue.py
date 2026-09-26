@@ -81,9 +81,6 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    # popup-intentional-last-resort — test-only real-git spawn, mirrors the
-    # governed real_git.py fixture's own unguarded pattern; no console window
-    # risk on the CI/dev platforms this suite runs on.
     return subprocess.run(
         ["git", *args],
         cwd=str(cwd),
@@ -98,9 +95,6 @@ def _run(coro):
 
 
 def _seed_repo_with_plan(tmp_path: Path, name: str) -> tuple[Path, Path, Path]:
-    """Init a throwaway repo with a committed plan file. Returns
-    (root, src, dst) — dst is the archival destination this test's single
-    Move targets, not yet created."""
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q", "-b", "main"], root)
@@ -119,9 +113,6 @@ def _seed_repo_with_plan(tmp_path: Path, name: str) -> tuple[Path, Path, Path]:
 
 
 class _FakeCompletedProc:
-    """Stand-in for asyncio.subprocess.Process exposing only what the resync
-    loop reads off a completed process: .returncode and an awaitable
-    .communicate()."""
 
     def __init__(self, returncode: int, stdout: bytes = b"", stderr: bytes = b"") -> None:
         self.returncode = returncode
@@ -133,10 +124,6 @@ class _FakeCompletedProc:
 
 
 def _fail_all_git_restore(monkeypatch):
-    """Every `git restore` invocation fails with a synthetic index.lock
-    contention error; every other git subcommand passes through to the real
-    asyncio.create_subprocess_exec unmodified. Retry budget shrunk so the
-    exhaustion case runs fast."""
     real_create = asyncio.create_subprocess_exec
 
     async def _side_effect(*args, **kwargs):
@@ -153,9 +140,6 @@ def _fail_all_git_restore(monkeypatch):
 
 
 def test_archive_and_commit_resync_exhaustion_is_reported(tmp_path, monkeypatch):
-    """A persistently-failing main-index resync still lands the commit, but
-    the acted[] item is annotated `index_resync_failed` — not silently
-    swallowed (the exact defect this fix closes)."""
     root, src, dst = _seed_repo_with_plan(tmp_path, "2026-01-01-my-plan.md")
     move = Move(src=src, dst=dst, candidate_id="docs/plans/2026-01-01-my-plan.md")
 
@@ -170,7 +154,6 @@ def test_archive_and_commit_resync_exhaustion_is_reported(tmp_path, monkeypatch)
     assert "index_resync_failed" in acted[0]
     assert acted[0]["index_resync_failed"]
 
-    # The commit itself is authoritative and unaffected by resync exhaustion.
     assert not src.exists()
     assert dst.exists()
     head_subject = _git(["log", "-1", "--format=%s"], root).stdout.strip()
@@ -178,8 +161,6 @@ def test_archive_and_commit_resync_exhaustion_is_reported(tmp_path, monkeypatch)
 
 
 def test_archive_and_commit_resync_success_has_no_residue_key(tmp_path):
-    """Ordinary success path: `index_resync_failed` is absent entirely — the
-    additive key must not perturb the frozen {id, archived: true} shape."""
     root, src, dst = _seed_repo_with_plan(tmp_path, "2026-01-02-my-plan.md")
     move = Move(src=src, dst=dst, candidate_id="docs/plans/2026-01-02-my-plan.md")
 

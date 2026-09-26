@@ -196,19 +196,9 @@ from coordinator_core.hooks.nudge_autonomous_askuserquestion import (
 from coordinator_core.ipc import register_op
 from coordinator_core.session import machinery_paths
 
-#: Corpus-mutator declaration (generator-provenance sweep): `_write_records`
-#: rewrites `state/subagent-share/<session_id>/next-move-ledger.jsonl` and
-#: `_drain_intake` deletes `.../obligations-inbound.jsonl` -- both filenames
-#: come from `machinery_paths.ledger_path`/`intake_path`, a session_id-keyed
 #: target set `GENERATES` cannot express (same corpus, same reasoning as
-#: `guard_advisory_counter.py`'s `MUTATES` sibling declaration).
 MUTATES = [".coordinator-local/subagent-share/**/*.jsonl"]
 
-# ---------------------------------------------------------------------------
-# Static seam table (emission side) -- verbatim port of the source script's
-# own table. See the source script's module docstring for the full rationale
-# behind each row; unchanged by this port.
-# ---------------------------------------------------------------------------
 
 _SEAM_SIZING_ROUTED = "sizing-routed"
 _SEAM_PLAN_REVIEW = "plan->review"
@@ -216,9 +206,6 @@ _SEAM_REVIEW_A1_A2 = "review-a1-a2"
 _SEAM_EXECUTE_WAVE = "execute->wave"
 _SEAM_PICKUP_NEXT_MOVE = "pickup->next-move"
 
-# route -> the literal next_action a routed sizing object machine-resolves.
-# `pm-decision` and `goal-setting` are deliberately absent -- their whole
-# point is that the next move is a PM call, not a machine-resolved one.
 _ROUTE_TERMINAL = {
     "dispatch": "Agent(coordinator:executor)",
     "spec-dispatch": "Agent(coordinator:executor)",
@@ -239,13 +226,7 @@ _APPETITE_DIVERGENCE_DETENT = "appetite_exceeded"
 _POST_SIZE_PROMPT_DETENT = "post_size_prompt_pending"
 
 
-# ---------------------------------------------------------------------------
-# Repo root / git dir resolution -- zero-spawn, per this chunk's own brief.
-# ---------------------------------------------------------------------------
-
-
 def _repo_root_for(cwd: Any) -> Optional[str]:
-    """Zero-spawn repo-root walk from `cwd` (never this process's own cwd)."""
     if not isinstance(cwd, str) or not cwd:
         return None
     try:
@@ -256,8 +237,6 @@ def _repo_root_for(cwd: Any) -> Optional[str]:
 
 
 def _git_dir_for(cwd: Any) -> Optional[str]:
-    """Zero-spawn git-dir resolution from `cwd`, via `resolve_git_dir` per the
-    dispatch brief -- never a hand-rolled `.git`-file-vs-directory walk."""
     repo_root = _repo_root_for(cwd)
     if repo_root is None:
         return None
@@ -267,25 +246,10 @@ def _git_dir_for(cwd: Any) -> Optional[str]:
         return None
 
 
-# ---------------------------------------------------------------------------
-# Ledger storage -- state/subagent-share/<session_id>/{next-move-ledger.jsonl,
-# obligations-inbound.jsonl}, repo-root relative. See module docstring's
 # "LEDGER LOCATION" for why this is NOT under the git dir.
-# ---------------------------------------------------------------------------
 
 _INTAKE_SCHEMA = 1
 _INTAKE_OPS = ("open", "progress", "blocked", "discharge")
-
-
-# Paths come from `session.machinery_paths` -- this module, `group_em.send_pass`
-# and `group_em.obligations` each carried the same join and the same filename
-# string, so a correction to one copy left the other two writing elsewhere.
-# That module is stdlib-only and does no import-time work: this hook is on the
-# per-turn path for every session on the box.
-#
-# Call
-# sites below now name `machinery_paths.<name>` directly; `_session_share_dir`
-# was an alias with no in-module caller and is dropped outright.
 
 
 def _read_records(repo_root: str, session_id: str) -> list:
@@ -302,7 +266,7 @@ def _read_records(repo_root: str, session_id: str) -> list:
                 try:
                     record = json.loads(line)
                 except Exception:
-                    continue  # per-line ledger parse; one malformed JSONL line must not abort the read
+                    continue
                 if isinstance(record, dict):
                     records.append(record)
     except OSError:
@@ -311,9 +275,6 @@ def _read_records(repo_root: str, session_id: str) -> list:
 
 
 def _write_records(repo_root: str, session_id: str, records: list) -> bool:
-    """Atomically replace the ledger file (temp file + `os.replace`, same
-    directory) -- atomic on both POSIX and Windows, closing the same
-    read-modify-write race DoE's own `_write_records` closes."""
     path = machinery_paths.ledger_path(repo_root, session_id)
     directory = os.path.dirname(path)
     tmp_path = None
@@ -329,7 +290,7 @@ def _write_records(repo_root: str, session_id: str, records: list) -> bool:
                 try:
                     os.close(tmp_fd)
                 except OSError:
-                    pass  # best-effort fd cleanup on the already-failing open path
+                    pass
                 raise
             with handle:
                 for record in records:
@@ -342,7 +303,7 @@ def _write_records(repo_root: str, session_id: str, records: list) -> bool:
                 try:
                     os.remove(tmp_path)
                 except OSError:
-                    pass  # best-effort tmp-file cleanup; a leftover tmp file does not affect correctness
+                    pass
     except (OSError, TypeError, ValueError):
         return False
     return True
@@ -355,8 +316,6 @@ def _now_iso() -> str:
 def _open_obligation(
     repo_root: str, session_id: str, obligation_id: str, seam: str, next_action: str
 ) -> bool:
-    """Idempotent against a re-observed seam-opening call: a no-op if an open
-    (undischarged) record with this `obligation_id` already exists."""
     records = _read_records(repo_root, session_id)
     for record in records:
         if record.get("obligation_id") == obligation_id and record.get("discharged_at") is None:
@@ -394,10 +353,6 @@ def _discharge_obligation(repo_root: str, session_id: str, obligation_id: str) -
 
 
 def _mark_fired(repo_root: str, session_id: str, obligation_id: str) -> bool:
-    """One-fire-per-obligation latch (source script's A6), race-closed the
-    same way DoE's own `mark_fired` is: tag this write with a private
-    one-shot token and re-read after the replace, so only the writer whose
-    token survives is told it won the latch."""
     records = _read_records(repo_root, session_id)
     changed = False
     token = uuid.uuid4().hex
@@ -449,13 +404,6 @@ def _validate_intake_row(row: Any, session_id: str) -> Optional[str]:
 
 
 def _apply_intake_row(repo_root: str, session_id: str, row: dict) -> Optional[bool]:
-    """Returns `True`/`False` for a committed write's outcome, or `None` for
-    a row that had nothing to write (already-open dedupe, no matching
-    obligation to discharge, or a progress/blocked no-op) -- distinct from a
-    write that was attempted and failed. Review: coordinator:code-reviewer
-    Finding 1 -- the caller needs this distinction to tell "nothing to do"
-    apart from "a write did not commit" before deciding whether the intake
-    file is safe to delete."""
     op = row["op"]
     obligation_id = row["obligation_id"]
     if op == "open":
@@ -473,22 +421,10 @@ def _apply_intake_row(repo_root: str, session_id: str, row: dict) -> Optional[bo
         if not has_match:
             return None
         return _discharge_obligation(repo_root, session_id, obligation_id)
-    # "progress" / "blocked" rows carry no observable effect on THIS op's own
-    # read surface (`_find_undischarged_unfired` only reads discharged_at /
-    # fired) -- accepted (not rejected) so a valid row of either kind is
-    # consumed rather than left to accumulate, but reported as a no-op.
     return None
 
 
 def _drain_intake(repo_root: str, session_id: str) -> None:
-    """Fold `obligations-inbound.jsonl` into the ledger, then delete it.
-
-    Simplified relative to DoE's own two-phase `.draining`-claim protocol --
-    see module docstring's "DRAIN INTAKE" section for why that crash-safety
-    dance has nothing left to protect against in this op's process model.
-    Never raises; a fold that cannot complete leaves the intake file in
-    place for the next Stop call on this session to retry.
-    """
     path = machinery_paths.intake_path(repo_root, session_id)
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
@@ -510,35 +446,22 @@ def _drain_intake(repo_root: str, session_id: str) -> None:
             try:
                 row = json.loads(line)
             except Exception:
-                continue  # per-line intake-row parse; one malformed JSONL line must not abort the drain
+                continue
             if _validate_intake_row(row, session_id) is not None:
                 continue
             outcome = _apply_intake_row(repo_root, session_id, row)
             if outcome is False:
                 any_write_failed = True
     except Exception:
-        # A fold that cannot commit keeps the file: rows survive to the next
-        # drain, where the replay is idempotent (open/discharge both dedupe).
         return
 
     if any_write_failed:
-        # A row failed to commit its write -- keep the file so the next Stop
-        # call on this session retries it (matches the exception-path
-        # guarantee above; see Finding 1).
         return
 
     try:
         os.remove(path)
     except OSError:
-        pass  # all rows already committed; a leftover intake file just gets re-drained next Stop
-
-
-# ---------------------------------------------------------------------------
-# Self-contained sizing-object resolution -- reads the session's touch-record
-# under the resolved GIT DIR (see module docstring) to find "the sizing
-# object THIS session routed", mirroring the source script's own
-# `_newest_touched_sizing_path` / `_sizing_route_and_exemption`.
-# ---------------------------------------------------------------------------
+        pass
 
 
 def _touch_record_jsonl_paths(session_dir: str) -> list:
@@ -557,32 +480,22 @@ def _touch_record_jsonl_paths(session_dir: str) -> list:
                 try:
                     row = json.loads(line)
                 except Exception:
-                    continue  # per-line touch-record parse; one malformed JSONL line must not abort the scan
+                    continue
                 if not isinstance(row, dict):
                     continue
                 rel = row.get("path")
                 if isinstance(rel, str) and rel:
                     paths.append(rel)
     except OSError:
-        pass  # touch-record.jsonl is optional; absence just yields no paths from this leg
+        pass
     return paths
 
 
 def _touched_txt_paths(session_dir: str) -> list:
-    """Sibling leg to `_touch_record_jsonl_paths`, kept as a separate call site
-    for `_newest_touched_sizing_path`'s source-then-recency fallback shape but
-    no longer reading the retired `touched.txt` — no non-test writer of that
-    file exists, so a raw open here always found nothing and every session's
-    own edits fell through to this leg reading as foreign. Reads the same
-    `touch-record.jsonl` this session actually writes."""
     return _touch_record_jsonl_paths(session_dir)
 
 
 def _newest_touched_sizing_path(git_dir: str, session_id: str) -> Optional[str]:
-    """Source-then-recency: the last new-file match wins; the legacy file is
-    consulted only when the new file has none. See the source script's own
-    docstring for why naive concatenation-then-last-match is wrong for a
-    partially-migrated session."""
     session_dir = os.path.join(git_dir, "coordinator-sessions", session_id)
 
     candidate = None
@@ -640,14 +553,7 @@ def _is_null_scalar(value) -> bool:
 
 
 def _sizing_route_and_exemption(repo_root: str, rel_path: str):
-    """Return (route, exempt). Any read failure returns (None, True) --
-    "cannot prove the exemption doesn't apply" fails toward silence."""
     try:
-        # Match every other
-        # read in this module (`_read_records`, `_touch_record_jsonl_paths`,
-        # `_touched_txt_paths`, `_drain_intake`), which decodes with
-        # errors="replace" rather than letting UnicodeDecodeError escape
-        # uncaught here.
         with open(
             os.path.join(repo_root, rel_path), "r", encoding="utf-8", errors="replace"
         ) as fh:
@@ -665,11 +571,6 @@ def _sizing_route_and_exemption(repo_root: str, rel_path: str):
     ) and _is_null_scalar(fork)
     xl_open = route == "pm-decision" and _is_null_scalar(xl_exit)
     return route, (fork_open or xl_open)
-
-
-# ---------------------------------------------------------------------------
-# Discharge matching.
-# ---------------------------------------------------------------------------
 
 
 def _split_call(next_action: str):
@@ -698,9 +599,6 @@ def _matches_next_action(next_action: str, tool_name, tool_input) -> bool:
 
 
 def _discharge_matching(repo_root: str, session_id: str, tool_name, tool_input) -> None:
-    """Cap discharge at the single OLDEST matching open record per call, so
-    one ambiguous terminal call never silently discharges an obligation it
-    did not actually satisfy (verbatim reasoning from the source script)."""
     for record in _read_records(repo_root, session_id):
         if record.get("discharged_at") is not None:
             continue
@@ -713,14 +611,9 @@ def _discharge_matching(repo_root: str, session_id: str, tool_name, tool_input) 
             return
 
 
-# ---------------------------------------------------------------------------
-# Emission (PostToolUse leg).
-# ---------------------------------------------------------------------------
-
-
 def _handle_post_tool_use(payload: Mapping) -> None:
     if payload.get("agent_id"):
-        return  # a subagent's own tool call, not the EM's
+        return
 
     session_id = payload.get("session_id")
     if not isinstance(session_id, str) or not session_id:
@@ -735,8 +628,6 @@ def _handle_post_tool_use(payload: Mapping) -> None:
     if not isinstance(tool_input, dict):
         tool_input = {}
 
-    # Discharge first -- this same call may close an obligation opened by an
-    # earlier turn, independent of anything it opens below.
     _discharge_matching(repo_root, session_id, tool_name, tool_input)
 
     if tool_name != "Skill":
@@ -781,24 +672,15 @@ def _handle_post_tool_use(payload: Mapping) -> None:
             _open_obligation(repo_root, session_id, _SEAM_SIZING_ROUTED, _SEAM_SIZING_ROUTED, next_action)
         return
 
-    # skill == "coordinator:plan" -- only the FULL "plan" terminal opens this
-    # obligation; "spec-dispatch" (or any other route) does not.
     if route == "plan":
         _open_obligation(repo_root, session_id, _SEAM_PLAN_REVIEW, _SEAM_PLAN_REVIEW, _REVIEW_TERMINAL)
-
-
-# ---------------------------------------------------------------------------
-# Stop leg -- reads the ledger and NOTHING ELSE (per source script's own
-# design intent: this hook infers nothing, it only reports an unresolved
-# obligation another observation already opened).
-# ---------------------------------------------------------------------------
 
 
 def _handle_stop(payload: Mapping) -> dict:
     if payload.get("agent_id"):
         return no_advisory()
     if payload.get("stop_hook_active"):
-        return no_advisory()  # avoid re-entering on our own already-fired Stop
+        return no_advisory()
 
     session_id = payload.get("session_id")
     if not isinstance(session_id, str) or not session_id:
@@ -811,7 +693,7 @@ def _handle_stop(payload: Mapping) -> dict:
     try:
         _drain_intake(repo_root, session_id)
     except Exception:
-        pass  # drain is best-effort; an undrained intake file is retried on the next Stop call
+        pass
 
     record = _find_undischarged_unfired(repo_root, session_id)
     if record is None:
@@ -827,8 +709,6 @@ def _handle_stop(payload: Mapping) -> dict:
         f"({record.get('seam', 'unknown-seam')}). Invoke it now: {next_action}"
     )
 
-    # A failed latch write degrades to a silent miss, never a repeat fire --
-    # a repeat is worse than a miss (source script's own Anti-scope).
     if not _mark_fired(repo_root, session_id, obligation_id):
         return no_advisory()
 
@@ -846,26 +726,8 @@ def _handle_stop(payload: Mapping) -> dict:
     return allow_advisory("Stop", text)
 
 
-# ---------------------------------------------------------------------------
-# Registered op -- dispatches by payload shape, per the source script's own
-# `main()` precedence rule (a truthy string `tool_name` always routes to
-# PostToolUse, even alongside a `transcript_path` key).
-# ---------------------------------------------------------------------------
-
-
 @register_op("hooks.watchdog_undischarged_next_move")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PostToolUse(Skill|Agent) + Stop: emit/discharge next-move obligations,
-    and report an undischarged-and-unfired one at Stop.
-
-    Every input this handler reads comes from `params["payload"]` -- never
-    from `os.environ` or this process's own `cwd`/session (see module
-    docstring's Trap 1). `repo_root` (the framework-supplied handler
-    argument) is unused -- this op is scope "none" and resolves its own repo
-    root from `payload["cwd"]`, matching every other payload-cwd-resolving
-    hooks.* op in this family (`nudge_autonomous_askuserquestion`,
-    `sessionend_archive_session`).
-    """
     payload = payload_of(params)
     try:
         tool_name = payload.get("tool_name")

@@ -210,41 +210,15 @@ MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 
 #: PRIORITY 46 -- unique within the HARD-DENY phase (checked against the
 #: full set of hard-deny modules' PRIORITY values at HEAD this session: 10,
-#: 20, 30, 40, 45, 50, 56, 65, 125, 130, 132 taken). Ordering rationale:
-#: this module governs the SAME artifact family (the write-grant surface)
 #: as ``block_unauthorized_claude_md_write`` (PRIORITY 45) -- slotting
-#: immediately after it keeps the two grant-adjacent hard-deny legs
-#: co-located in the phase's evaluation order, ahead of the unrelated
-#: ``block_consumed_handoff_edit`` (50) and ``block_memo_status_hand_edit``
-#: (56) legs that follow. The phase runs first-non-None-wins, so relative
-#: order among non-overlapping-path guards has no behavioral effect here --
-#: this is a readability/grouping choice, not a correctness requirement.
 PRIORITY = 46
 
-#: Reference-shape tool-name guard (mirrors every sibling write_guards
-#: module's defense-in-depth tool_name check).
 _INTERCEPTED_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
-#: Rare-use escape hatch — read the module docstring before invoking.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_SUBAGENT_GRANT_RECORD_WRITE"
 
 
-
 def _normalize_path(file_path: str) -> str:
-    """Backslash -> slash, collapse repeated slashes — same helper shape
-    as ``block_subagent_plan_body_write._normalize_path``, PLUS a UNC-root
-    preservation step that sibling does not need (no sibling call site
-    handles a network-hosted repo).
-
-    A leading ``//`` (or ``\\\\``, already backslash-converted above) marks
-    a UNC root (``\\\\server\\share\\...`` -> ``//server/share/...``) — the
-    doubled slash is semantically load-bearing there, not accidental
-    repetition. Detect it BEFORE the collapse and re-establish exactly one
-    extra leading slash afterward, so a UNC-rooted path and its
-    ``coordinator-sessions``-joined sibling both keep the same UNC marker
-    through this function rather than one silently losing it to
-    ``/server/share/...`` (see module docstring Negative-spec, UNC bullet).
-    """
     normalized = file_path.replace("\\", "/")
     is_unc = normalized.startswith("//")
     while "//" in normalized:
@@ -255,26 +229,6 @@ def _normalize_path(file_path: str) -> str:
 
 
 def _collapse_traversal(abs_path: str) -> str:
-    """Lexically collapse ``.``/``..`` segments in an already-absolute,
-    forward-slash-normalized candidate via ``posixpath.normpath`` — pure
-    string manipulation, no filesystem access (no ``stat``, no symlink
-    following, no spawn), safe to run unconditionally on the PreToolUse
-    hot path.
-
-    This is the fix for a real defect a prior integration pass introduced:
-    that pass rejected ANY ``..``-bearing candidate as an automatic match
-    (deny), on the theory that a lexical segment-count check cannot be
-    trusted once ``..`` is present. That is true, but "cannot be trusted
-    lexically" is a reason to RESOLVE before deciding, not a reason to
-    deny unconditionally — the prior shape denied every unrelated
-    ``..``-bearing write anywhere in the repo (e.g. ``../sibling/x.py``),
-    an unscoped false positive far worse than the narrow bypass it closed.
-    Collapsing here first means the containment/filename check downstream
-    runs against the path's real resolved location: a ``..``-bearing
-    candidate that resolves ONTO the grant record still denies (the
-    original bypass stays closed), and one that resolves anywhere else
-    now correctly allows.
-    """
     is_unc = abs_path.startswith("//")
     collapsed = posixpath.normpath(abs_path)
     if is_unc and not collapsed.startswith("//"):
@@ -283,7 +237,6 @@ def _collapse_traversal(abs_path: str) -> str:
 
 
 def _extract_file_path(payload: Dict[str, Any]) -> str:
-    """``file_path``, falling back to ``notebook_path`` for NotebookEdit."""
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         return ""
@@ -291,16 +244,6 @@ def _extract_file_path(payload: Dict[str, Any]) -> str:
 
 
 def _resolve_git_common_dir(cwd: Optional[str]) -> Optional[str]:
-    """Resolve ``cwd``'s repo's git COMMON dir without spawning ``git``.
-
-    Mirrors ``block_memo_status_hand_edit._resolve_git_common_dir``: first
-    resolves the repo root via the shared, non-spawning
-    ``resolve_repo_root``, then the common dir via the pure-Python
-    ``resolve_git_common_dir`` seam. Fails open (``None``) when the repo
-    root itself cannot be resolved — see module docstring's Negative-spec
-    for why that divergence from the spawning ``sessions_dir`` resolver is
-    harmless.
-    """
     repo_root = resolve_repo_root(cwd)
     if not repo_root:
         return None
@@ -399,16 +342,10 @@ def _deny_reason(file_path: str, payload: Optional[Dict[str, Any]] = None) -> st
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the grant-record write guard against a PreToolUse payload.
-
-    Returns ``None`` (allow) or the hard-deny envelope. See module
-    docstring "Allow-conditions" for the three pass-through cases.
-    """
     tool_name = payload.get("tool_name") or ""
     if tool_name not in _INTERCEPTED_TOOLS:
         return None
 
-    # (1) No agent_id -> EM-inline write -> allow.
     agent_id = payload.get("agent_id") or ""
     if not agent_id:
         return None

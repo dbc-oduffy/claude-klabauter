@@ -1,30 +1,3 @@
-"""
-coordinator_core.ops.session.tests.test_resolve_chain_terminal_disposition
-
-Coverage added under KS-5 (2026-08-07): the epoch-tail fabricated-id
-fallback (`_resolve_session_id`'s former P6 tier) was removed as strictly
-worse than the `.current-session-id` sentinel KS-3 removed just before it —
-a fabricated id is different on every invocation and indistinguishable to a
-downstream reader from a real one, so it silently promoted the
-"nothing resolved" case into a passing "open"/`chain_terminal: False`
-verdict that SKIPS the workstream-complete chain-end coverage gate.
-
-This module was reported missing from the shared worktree by a concurrent
-session on 2026-08-07 (see the KS-5 chunk brief); it did not exist before
-this commit. It exercises ONLY the unresolved-sid guard this chunk adds —
-`resolve_chain_terminal_disposition.py`'s dual-detector classification logic
-already has broader native-rewrite coverage elsewhere in the corpus (see
-that module's own spec backlinks); duplicating it here is out of scope.
-
-Spec backlink: coordinator_core/ops/session/resolve_chain_terminal_disposition.py
-
-Negative-spec:
-  - Does NOT exercise the dual-detector (live-claim / archive / git-provenance)
-    classification paths — those require a real claimed/archived handoff
-    fixture, out of scope for this chunk's unresolved-sid guard.
-  - Does NOT assert anything about the wsc-session-disposition.py CLI sibling
-    (coordinator/bin/tests/test_wsc_session_disposition.py covers that one).
-"""
 
 from __future__ import annotations
 
@@ -36,9 +9,6 @@ import pytest
 import coordinator_core.ops.session.resolve_chain_terminal_disposition as rctd
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# _make_repo spawns real git per test (init/config/add/commit); declared to
-# the spawn ratchet rather than grandfathered in its frozen baseline --
-# see coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -62,9 +32,6 @@ class TestResolveSessionIdUnresolvedTier:
         assert source == "unresolved"
 
     def test_no_tier_resolves_regression_guard_against_epoch_shape(self):
-        """Direct perturbation guard: a reverted fix would return a 6-digit
-        epoch-tail string here, which — being non-empty — would slip past
-        every `if not sid` guard downstream undetected."""
         sid, _ = rctd._resolve_session_id(None, None, {})
         assert not (len(sid) == 6 and sid.isdigit())
 
@@ -84,7 +51,6 @@ class TestClassifySyncUnresolvedGuard:
         repo = _make_repo(tmp_path)
         result = rctd._classify_sync(repo, None, {})
 
-        # The load-bearing property: this must NOT read as a passing gate.
         assert result["exit_code"] != 0
         assert result["disposition"] is None
         assert result["chain_terminal"] is False
@@ -98,12 +64,6 @@ class TestClassifySyncUnresolvedGuard:
         assert evidence["session_id_source"] == "unresolved"
 
     def test_unresolved_sid_never_spuriously_matches_an_unclaimed_handoff(self, tmp_path):
-        """Regression guard for the specific false-match hazard an empty sid
-        introduces: `_claim_holder` also returns "" for a genuinely unclaimed
-        handoff, so a naive `"" == sid` scan would read every unclaimed
-        record as "claimed by this session" if the unresolved-sid guard were
-        removed. Seed exactly that shape and prove the guard still fires
-        before any scan runs."""
         repo = _make_repo(tmp_path)
         handoffs_dir = repo / "state" / "handoffs"
         handoffs_dir.mkdir(parents=True)
@@ -119,9 +79,6 @@ class TestClassifySyncUnresolvedGuard:
         assert result["disposition"] is None
 
     def test_resolved_sid_path_unaffected_by_the_guard(self, tmp_path):
-        """Sanity: a normal resolved sid with nothing claimed still resolves
-        the pre-existing open/single-session verdict via exit_code 0 — the
-        guard only fires on a genuinely unresolved sid."""
         repo = _make_repo(tmp_path)
         result = rctd._classify_sync(repo, "real-session-id", {})
         assert result["exit_code"] == 0
@@ -132,13 +89,6 @@ class TestClassifySyncUnresolvedGuard:
 
 
 class TestDetectorBPositiveOwnership:
-    """2026-08-10 archive-leg touch-vs-consume incident (example-retrieval-repo memo
-    `2026-08-10-example-retrieval-repo-em-wsc-archive-leg-infers-consumption-from-a-
-    touch.md`). Mirrors the fix landed in this module's `bin` sibling
-    (`coordinator/bin/wsc-session-disposition.py::_foreign_consumer_guard`,
-    covered by `coordinator/bin/tests/test_wsc_session_disposition.py`) — the
-    two copies are independently maintained, so the regression needs a test on
-    each side, not one."""
 
     @staticmethod
     def _repo_with_archived_touch(tmp_path, sid, frontmatter, subject):
@@ -159,20 +109,10 @@ class TestDetectorBPositiveOwnership:
             check=True,
             **no_console_passthrough_kwargs(),
         )
-        # `_classify_sync`'s first arg is the git COMMON DIR, not the worktree
         # root (_OP_KEY_SCOPE = "common_dir"); it derives the worktree via
-        # `main_worktree_root`, which takes the parent. Handing it the worktree
-        # root instead silently classifies the parent directory — Detector B
-        # then fails its merge-base and is skipped, which reads as a clean
-        # "open" verdict rather than an error.
         return repo / ".git"
 
     def test_ownerless_looking_record_is_not_read_as_consumed(self, tmp_path):
-        """The observed shape: a live peer's baton whose ledger claim is
-        liveness-gated away and whose mirror carries `status: claimed` with no
-        `claimed_by:`, re-added by an ordinary-prose restore commit. Both
-        negative-evidence reads come back empty — which must now REJECT, not
-        fall through to acceptance."""
         sid = "ddadea9e-0000-0000-0000-000000000000"
         repo = self._repo_with_archived_touch(
             tmp_path,
@@ -194,11 +134,6 @@ class TestDetectorBPositiveOwnership:
         ), result["evidence"]["notes"]
 
     def test_own_claim_still_resolves_chain_terminal(self, tmp_path):
-        """Regression guard: positively-evidenced ownership must still resolve
-        chain-terminal — the tightening rejects only the no-evidence case.
-        Resolves via Detector A (the archived claim stamp), which is exactly
-        the point: an own-claim record never needs the git-provenance leg, so
-        tightening that leg cannot cost the legitimate path."""
         sid = "ddadea9e-0000-0000-0000-000000000000"
         repo = self._repo_with_archived_touch(
             tmp_path,
@@ -215,12 +150,6 @@ class TestDetectorBPositiveOwnership:
 
 
 class TestDetectorAMultipleClaimedArchivedHandoffs:
-    """2026-08-08 bug-backlog (`state/bug-backlog/2026-08-08-a-display-only-
-    chain-classifier-became-a-5325e659f324.yaml`): a chain_id that claimed
-    more than one archived predecessor handoff over its lifetime used to be
-    classified off the alphabetically-FIRST sorted match, regardless of
-    which claim was actually most recent — an unrelated older "closed" record
-    could outrank a later "continued" one for the same session."""
 
     def test_last_sorted_archived_claim_wins_not_the_first(self, tmp_path):
         sid = "chain-sid-multi-claim"

@@ -1,8 +1,3 @@
-"""
-Tests for coordinator_core.plan_assemble.predicates.shared_booleans.
-
-Spec backlink: pln-plan-assemble-wave-2-the-predi-fad89b, chunk C9
-"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -82,7 +77,7 @@ class TestNoCrossRepoContract:
         assert result["crossing_paths"] == ["../DoE-claude/coordinator/docs/wiki/x.md"]
 
     def test_absolute_path_outside_repo_root_crossing(self):
-        outside_path = "/opt/sibling-repos/DoE-claude/coordinator/docs/wiki/x.md"  # abs-path-ok: synthetic fixture path, not a real host path
+        outside_path = "/opt/sibling-repos/DoE-claude/coordinator/docs/wiki/x.md"
         result = collapse_no_cross_repo_contract(_context(scope=[outside_path]))
         assert result["no_cross_repo_contract"] is False
         assert result["crossing_paths"] == [outside_path]

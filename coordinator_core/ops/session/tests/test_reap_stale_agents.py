@@ -53,8 +53,6 @@ pytestmark = [pytest.mark.cadence]
 
 
 def _make_repo(repo: Path) -> Path:
-    """Real throwaway git repo (mirrors test_reap.py::_make_repo) — the C6
-    dirty-touched-path rail spawns a real `git status --porcelain`."""
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
@@ -70,8 +68,6 @@ _FRESH = 60
 
 
 def _agent_dir(sessions_dir: Path, aid: str, files: dict, age_sec: float) -> Path:
-    """Plant one agent dir holding ``files`` (name -> contents), aged by
-    setting every member's mtime ``age_sec`` into the past."""
     adir = sessions_dir / ".agents" / aid
     adir.mkdir(parents=True)
     when = time.time() - age_sec
@@ -121,8 +117,6 @@ def test_future_record_name_is_reaped_when_stale(tmp_path):
 
 
 def test_rotated_only_record_is_reaped_when_stale(tmp_path):
-    """Also prospective. A dir holding only ROTATED siblings still reaps — the
-    rotation suffix is one more filename a name-keyed predicate would miss."""
     sessions = tmp_path / "coordinator-sessions"
     _agent_dir(
         sessions, "agent-rotated",
@@ -136,15 +130,6 @@ def test_rotated_only_record_is_reaped_when_stale(tmp_path):
 
 
 def test_legacy_only_touched_txt_is_now_deferred_not_reaped(tmp_path):
-    """C6 (state/bug-backlog/2026-08-27-session-reap-sub-reap-ii-archives-an-
-    age-f0743291e7c9.yaml) flips this from the pre-C6 behaviour: a dir
-    carrying ONLY the retired ``touched.txt`` (no ``touch-record.jsonl``)
-    reads as empty through the current seam, not as "touched nothing" --
-    R3a (ported from ``reap_orphaned_agent_dirs``) now refuses it rather than
-    let mtime-only staleness carry a pre-migration dir with genuinely dirty
-    uncommitted work to archive. This is deliberate and matches
-    ``reap_orphaned_agent_dirs``'s own R3a posture for the identical shape —
-    the two reapers no longer disagree on this one dir."""
     sessions = tmp_path / "coordinator-sessions"
     adir = _agent_dir(sessions, "agent-legacy", {"touched.txt": "a.py\n"}, _STALE)
 
@@ -157,9 +142,6 @@ def test_legacy_only_touched_txt_is_now_deferred_not_reaped(tmp_path):
 
 
 def test_legacy_only_touched_txt_deferred_even_without_repo_root(tmp_path):
-    """R3a fires regardless of whether a repo_root is supplied — unlike the
-    R3 dirty-path check (which needs a working tree to compare against), R3a
-    is a pure filename/readability fact about the agent dir itself."""
     sessions = tmp_path / "coordinator-sessions"
     adir = _agent_dir(sessions, "agent-legacy-noroot", {"touched.txt": "a.py\n"}, _STALE)
 
@@ -172,9 +154,6 @@ def test_legacy_only_touched_txt_deferred_even_without_repo_root(tmp_path):
 
 @pytest.mark.spawns_process
 def test_dirty_touched_path_defers_reap(tmp_path):
-    """THE NAMED RISK (C6): a jsonl-recorded touched path that is still
-    dirty in the caller's working tree must not be archived out from under
-    it, even though the agent dir itself is stale by mtime."""
     repo = _make_repo(tmp_path / "repo")
     dirty_file = repo / "src" / "foo.py"
     dirty_file.parent.mkdir(parents=True)
@@ -183,11 +162,6 @@ def test_dirty_touched_path_defers_reap(tmp_path):
     subprocess.run(
         ["git", "commit", "-q", "-m", "init"], cwd=repo, check=True, **no_console_passthrough_kwargs()
     )
-    # Uncommitted edit to an already-tracked file — "M src/foo.py" in
-    # porcelain, the realistic shape of "genuinely dirty uncommitted work"
-    # (an untracked scratch dir reports as a collapsed "?? src/" instead,
-    # which is a different, directory-shaped match already covered by
-    # test_r3_dirty_touched_directory_prefix_match on the reused matcher).
     dirty_file.write_text("dirty\n", encoding="utf-8")
 
     sessions = repo / "coordinator-sessions"
@@ -216,9 +190,6 @@ def test_dirty_touched_path_defers_reap(tmp_path):
 
 @pytest.mark.spawns_process
 def test_clean_touched_path_is_still_reaped(tmp_path):
-    """The dirty-path refusal must not become a blanket new refusal: a
-    jsonl-recorded touched path that is NOT dirty in the working tree (git
-    status clean) is reaped exactly as before C6."""
     repo = _make_repo(tmp_path / "repo")
 
     sessions = repo / "coordinator-sessions"
@@ -244,8 +215,6 @@ def test_clean_touched_path_is_still_reaped(tmp_path):
 
 
 def test_fresh_agent_dir_is_kept(tmp_path):
-    """A dir written inside the staleness window is left alone — the fix must
-    not reap live sub-agents' bookkeeping out from under them."""
     sessions = tmp_path / "coordinator-sessions"
     adir = _agent_dir(
         sessions, "agent-fresh", {"touch-record.jsonl": '{"path":"c.py"}\n'}, _FRESH
@@ -258,10 +227,6 @@ def test_fresh_agent_dir_is_kept(tmp_path):
 
 
 def test_newest_member_decides_not_oldest(tmp_path):
-    """A dir whose record is ancient but which has RECENT activity in another
-    file is kept. Staleness is max-over-files, so an unrecognised-but-fresh
-    member defers the reap — the fail-closed-to-keep direction, and what makes
-    the next record rename unable to silently disable this sweep again."""
     sessions = tmp_path / "coordinator-sessions"
     adir = _agent_dir(
         sessions, "agent-mixed", {"touch-record.jsonl": '{"path":"d.py"}\n'}, _STALE
@@ -278,9 +243,6 @@ def test_newest_member_decides_not_oldest(tmp_path):
 
 
 def test_genuinely_empty_dir_is_removed(tmp_path):
-    """The empty-dir rmdir arm survives the rewrite — it is now reached only
-    when the dir holds no file at all, rather than competing with a
-    record-bearing dir whose record simply had an unfamiliar name."""
     sessions = tmp_path / "coordinator-sessions"
     adir = sessions / ".agents" / "agent-empty"
     adir.mkdir(parents=True)

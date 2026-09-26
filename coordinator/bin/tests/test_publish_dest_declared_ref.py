@@ -48,10 +48,6 @@ def _git(*args: str, cwd: Path) -> None:
 
 
 def _init_git_repo(root: Path, *, branch: str = "main") -> None:
-    """Real `git init` fixture, checked out on `branch` — never `cd` into the
-    clone from the TEST's own perspective either; all git calls below go via
-    `git -C`/`cwd=`, matching the module-under-test's own outside-the-clone
-    discipline."""
     root.mkdir(parents=True, exist_ok=True)
     _git("init", "-b", branch, cwd=root)
     _git("config", "user.email", "publish-dest-declared-ref-test@claude-klabauter.test", cwd=root)
@@ -76,7 +72,7 @@ def _load_publish_module():
 
 publish = _load_publish_module()
 
-_ROW_KEY = "some-other-mirror"  # deliberately not klabauter — see module docstring
+_ROW_KEY = "some-other-mirror"
 
 
 def _write_registry(registry_dir: Path, *, dest: Path, track_ref: str | None) -> None:
@@ -99,11 +95,6 @@ def _make_target(name: str, source_dir: Path, dest_dir: Path) -> "publish.Resolv
     )
 
 
-# ---------------------------------------------------------------------------
-# 1. Match — dest on the declared ref, row proceeds.
-# ---------------------------------------------------------------------------
-
-
 def test_dest_on_declared_ref_proceeds(tmp_path, monkeypatch):
     dest = tmp_path / "dest"
     _init_git_repo(dest, branch="candidate")
@@ -115,11 +106,6 @@ def test_dest_on_declared_ref_proceeds(tmp_path, monkeypatch):
     totals = publish.RunTotals()
 
     assert publish.assert_dest_on_declared_ref(target, totals) is True
-
-
-# ---------------------------------------------------------------------------
-# 2. Mismatch — refused, naming both the expected and actual ref.
-# ---------------------------------------------------------------------------
 
 
 def test_dest_mismatch_refuses_and_names_both_refs(tmp_path, monkeypatch, capsys):
@@ -137,13 +123,8 @@ def test_dest_mismatch_refuses_and_names_both_refs(tmp_path, monkeypatch, capsys
     combined = captured.out + captured.err
 
     assert result is False
-    assert "candidate" in combined  # expected
-    assert "main" in combined  # actual
-
-
-# ---------------------------------------------------------------------------
-# 3. Absent track_ref — hard-defaults to the remote default branch.
-# ---------------------------------------------------------------------------
+    assert "candidate" in combined
+    assert "main" in combined
 
 
 def test_absent_track_ref_defaults_to_remote_default_branch(tmp_path, monkeypatch):
@@ -167,11 +148,6 @@ def test_absent_track_ref_defaults_to_remote_default_branch(tmp_path, monkeypatc
     assert publish.assert_dest_on_declared_ref(target_bad, totals) is False
 
 
-# ---------------------------------------------------------------------------
-# 4. `origin/<branch>` form normalizes to the local branch name and matches.
-# ---------------------------------------------------------------------------
-
-
 def test_origin_prefixed_track_ref_normalizes_and_matches(tmp_path, monkeypatch):
     dest = tmp_path / "dest"
     _init_git_repo(dest, branch="candidate")
@@ -185,17 +161,11 @@ def test_origin_prefixed_track_ref_normalizes_and_matches(tmp_path, monkeypatch)
     assert publish.assert_dest_on_declared_ref(target, totals) is True
 
 
-# ---------------------------------------------------------------------------
-# 5. Unregistered dest — out of scope, proceeds.
-# ---------------------------------------------------------------------------
-
-
 def test_unregistered_dest_proceeds(tmp_path, monkeypatch):
     dest = tmp_path / "dest"
     _init_git_repo(dest, branch="whatever")
     registry_dir = tmp_path / "registry"
     registry_dir.mkdir(parents=True, exist_ok=True)
-    # No `publish.mirrors.*` entry at all names this dest.
     (registry_dir / "registry.toml").write_text(
         '[publish.mirrors]\n"unrelated-key.path" = "/nowhere"\n', encoding="utf-8"
     )
@@ -205,13 +175,6 @@ def test_unregistered_dest_proceeds(tmp_path, monkeypatch):
     totals = publish.RunTotals()
 
     assert publish.assert_dest_on_declared_ref(target, totals) is True
-
-
-# ---------------------------------------------------------------------------
-# 6. The gate runs before any write — no dispatch_mirror_like, no
-# _ensure_dest_ready mkdir, on a mismatched row driven through the real
-# `process_target` call site.
-# ---------------------------------------------------------------------------
 
 
 def test_gate_placement_precedes_every_write(tmp_path, monkeypatch):
@@ -224,14 +187,6 @@ def test_gate_placement_precedes_every_write(tmp_path, monkeypatch):
     _write_registry(registry_dir, dest=dest, track_ref="candidate")
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(registry_dir))
 
-    # C8's own placement (per its module comment) is BEFORE the one-shot
-    # `repo-cut` bootstrap, `_ensure_dest_ready`'s mkdir, and
-    # `dispatch_mirror_like` -- but AFTER `run_pre_sync_gates`, which runs
-    # unconditionally ahead of it in `process_target` and does not write to
-    # `target.dest_dir` itself. Stub it to a trivial passing gate rather than
-    # failing the test on it, so this test pins the load-bearing placement
-    # property (no write happens) without asserting a property C8 never
-    # claimed.
     def _fake_run_pre_sync_gates(target, *_args, **_kwargs):
         return publish.GateResult(proceed=True, source_dir=target.source_dir)
 
@@ -270,17 +225,6 @@ def test_gate_placement_precedes_every_write(tmp_path, monkeypatch):
     assert totals.processed == 0
 
 
-# ---------------------------------------------------------------------------
-# 7. Generic, not klabauter-specific (see `_ROW_KEY` at module scope, used by
-# every test above) — a klabauter-specific implementation would either fail
-# to resolve `some-other-mirror`'s row at all (falling through to
-# proceed=True everywhere, including the mismatch test) or hardcode a
-# klabauter branch name that would never match `candidate`/`main` here.
-# This test pins that by re-running the mismatch case with a second,
-# differently-named row key.
-# ---------------------------------------------------------------------------
-
-
 def test_check_is_generic_across_row_keys(tmp_path, monkeypatch, capsys):
     key = "yet-another-mirror"
     dest = tmp_path / "dest"
@@ -306,14 +250,6 @@ def test_check_is_generic_across_row_keys(tmp_path, monkeypatch, capsys):
     assert "staging" in combined
     assert "release" in combined
     assert key in combined
-
-
-# ---------------------------------------------------------------------------
-# 8. An engine-carrying mirror publishes to `candidate` only. A fresh clone
-# sits on its remote default (`main`) and a box without this machine's
-# registry declares no track_ref -- that pair must refuse, not default to
-# the remote default and land on main (klabauter main, 2026-09-08..10).
-# ---------------------------------------------------------------------------
 
 
 def _engine_setup_dir(tmp_path: Path) -> Path:

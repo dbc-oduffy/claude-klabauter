@@ -1,11 +1,3 @@
-"""Tests for coordinator_core.ops.doc_registry.
-
-Covers the three resolution shapes the reader's docstring commits to:
-all-absent (pure fleet defaults, and specifically that the default list is
-the four generics WITHOUT `coordinator/README.md`), full override (every
-key set, every field honoured), and partial override (one key set, the
-other three still default).
-"""
 
 from __future__ import annotations
 
@@ -83,7 +75,6 @@ def test_partial_override_one_key_set_others_default(tmp_path):
 
 
 def test_doe_claude_own_override_shape_dogfood(tmp_path):
-    """Mirrors the exact frontmatter DoE-claude's own coordinator.local.md declares (C4)."""
     _write_local_md(
         tmp_path,
         "human_facing_docs: [README.md, INSTALL.md, CONTEXT.md, CONTRIBUTING.md, "

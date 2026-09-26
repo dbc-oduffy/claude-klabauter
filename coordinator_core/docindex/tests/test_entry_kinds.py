@@ -1,4 +1,3 @@
-"""Tests for coordinator_core.docindex.entry_kinds :: readers + registry."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -111,7 +110,6 @@ retired: 2026-08-06
 
 
 def test_wiki_entry_exclude_when_retired_true_does_not_match_yaml_date(tmp_path):
-    # F-1 regression: {"retired": True} must never coerce-match a YAML date scalar.
     f = _write(
         tmp_path / "percolate.md",
         """---
@@ -136,8 +134,6 @@ system: worklife-ops
 ## worklife-ops
 """,
     )
-    # depends_on is absent and undeclared as excluded-fallback, but exclusion
-    # must short-circuit before the missing-field check fires.
     result = read_entry(f, "wiki-entry", WIKI_FIELDS, {"status": "retired"})
     assert result is None
 

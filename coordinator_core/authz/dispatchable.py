@@ -37,42 +37,14 @@ from __future__ import annotations
 
 import types
 
-# hand-edited only — mutation raises TypeError rather than silently
-# escalating an assembler's dispatch privilege at runtime. Copies
 # coordinator_core.authz.classification.OP_CLASSIFICATION's MappingProxyType shape
-# rather than inventing a new one. Keyed by assembler module name (e.g.
-# "pickup_assemble"); each value is the frozenset of op names (assembler-family) or
 # CONSUMES_MANIFEST script barewords (completion-family) that assembler may
-# dispatch. See docs/plans/2026-08-19-directives-name-an-op-not-a-cli.md
-# § The discriminator for the mixed end state.
-#
-# 2026-08-25: removed six phantom rows (present here, absent from the
 # assembler's own CONSUMES_MANIFEST — the oracle these entries are meant to
-# mirror), all residue of the 2026-08-23 kill pass (`c07062c99`):
-#   - "emit-cadence" (workday_complete, workstream_complete, workweek_complete)
-#     — killed outright, state/kill-ledger.md K-056; DR-351
-#     ("the emission is deleted, not halted" — PM: "I don't think we should
-#     have an emit at all. Cut it."). Never resurrect.
-#   - "wsc-tail" (workstream_complete) — state/kill-ledger.md K-046
 #     (`ceremony.wsc_tail`), REBUILD CANDIDATE, not yet rebuilt.
-#   - "reconcile-completion-commits" (workstream_complete) —
-#     state/kill-ledger.md K-054 (`completion.reconcile_commits`), REBUILD
 #     CANDIDATE, not yet rebuilt.
-#   - "session-claim-cli" (workstream_complete) — the CLI itself
-#     (`coordinator/bin/session-claim-cli.py`) is alive and directly
 #     callable, but the workstream_complete DIRECTIVE that used to name it
-#     (d-release-plan-claim / d-archive-session-claim) was removed as part of
-#     the same K-046 wsc_tail kill — `directives_commit_tail.py`'s own
-#     "Step 3.5 ... REMOVED" comment records this. workstream_complete no
-#     longer EMITS this bareword; the script surviving elsewhere does not
-#     make it dispatchable through this seam.
 ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.MappingProxyType({
-    # Completion family (C7, plan § The discriminator for the mixed end
-    # state) — script barewords, each a literal member of the named
     # module's own `CONSUMES_MANIFEST` (the single oracle for the set).
-    # These three tables' UNIT does not change (still `cli`-named, still
-    # in-process module load, never a registered op) — they gain only the
-    # admission CONTROL, via `apply_base.assert_dispatchable`.
     "workday_complete": frozenset({
         "workday-complete-args-and-validate",
         "workday-complete-reconcile",
@@ -104,25 +76,14 @@ ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.Ma
         "coordinator-fold-execution-record",
         "regenerate-orientation-cache",
         "check-machine-local-regeneratability",
-        # The close's mandatory terminal-baton drain (PM ruling 2026-09-03,
-        # cross-repo/inbox/2026-09-03-doe-claude-em-close-verbs-must-emit-a-
-        # terminal-handoff-drain-directive.md).
         "sweep-terminal-handoffs",
-        # The sizings sibling of the terminal-handoff drain above (C3,
-        # docs/plans/2026-09-03-close-verb-archival-stops-asking-for-wri.md):
-        # nothing else fired `fleet.archive_terminal_sizings` — this CLI is
-        # the only caller.
         "sweep-terminal-sizings",
         "review-brightline-gate",
         "freeze-review-diff",
         "fan-out-integrator",
         "classify-dispatch-shape",
-        # Plugin-local barewords (P036-T4,
-        # docs/plans/2026-09-07-directive-resolution-reaches-a-plugin-local-
-        # cli.md) — each also a literal member of
         # `workstream_complete.apply._PLUGIN_LOCAL_CLIS` and of
         # `workstream_complete.CONSUMES_MANIFEST` (T1b), never derived from
-        # either.
         "baton-chain-closure",
         "plan-reversibility-eligibility",
     }),
@@ -155,30 +116,13 @@ ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.Ma
         "workweek-complete-doc-verify",
         "tier-u-grant-cli",
     }),
-    # Assembler family (C5, plan § C5 / § The discriminator for the mixed
-    # end state) — `baton_assemble`'s two op-shaped verbs that resolve to a
     # REGISTERED op (measured live against
-    # `coordinator_core.authz.registration_quad._live_registry()`, C5's own
-    # discriminator decision, confirmed not re-derived). The other five
     # verbs in `baton_assemble/apply.py`'s `_CLI_DISPATCH` — including the
-    # op-shaped-but-NOT-registered `handoff.supersede_predecessor` — stay
-    # `cli`-named and are therefore never dispatched through this seam.
     "baton_assemble": frozenset({
         "handoff.stamp_phase",
         "handoff.author_fork",
     }),
-    # C5 (docs/plans/2026-09-11-the-lessons-pipeline-drains-without-a-ha.md)
-    # — `learn_lessons_pipeline.apply.apply()` dispatches through ONE
-    # `dispatch_table` covering both `cli`/`op` directive shapes
-    # (`execute_directives`), so this entry names the package's full
     # dispatchable surface: its `CONSUMES_MANIFEST` cli barewords
-    # (`extract-lessons`, `lessons-outbox-drain`, `age-sweep-lessons` — the
-    # three distinct scripts backing the five `cli:` directives `brief()`
-    # emits) plus the single `op:` verb, `stamp-run-complete`, that
-    # `resolve_op` gates through `assert_dispatchable` (§ this module's
-    # docstring; `resolve_cli` itself never consults this mapping, but the
-    # `op` verb absolutely needs the entry present or every dispatch of
-    # `d-stamp-run-complete` raises `UnrecognizedDirective`).
     "learn_lessons_pipeline": frozenset({
         "extract-lessons",
         "lessons-outbox-drain",

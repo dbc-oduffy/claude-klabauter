@@ -1,9 +1,3 @@
-"""Tests for coordinator_core.ops.poll_scratch_dir (op fanout.poll_scratch_dir).
-
-Wave-3 settlement B6 coverage: monotonic deadline loop, count-reached and timeout
-verdicts, missing-scratch_dir structured error (never a zero count), param
-validation, and the CC-4 double-invocation idempotency proof.
-"""
 from __future__ import annotations
 
 import pytest
@@ -93,9 +87,6 @@ def test_invalid_params_structured_error(bad):
 
 
 def test_double_invocation_identical_verdict(tmp_path):
-    """CC-4 idempotency proof: read-only — the second call with identical inputs
-    re-polls the same on-disk state and returns the same verdict/count (elapsed
-    is a measurement, compared only for validity)."""
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     (scratch / "r1.json").write_text("{}", encoding="utf-8")
@@ -115,18 +106,7 @@ def test_registered_under_op_key():
     assert get_op_handler("fanout.poll_scratch_dir") is _poll_scratch_dir
 
 
-# ---------------------------------------------------------------------------
-# Timeout ceiling — a caller may ask for LESS wait, never for more
-# ---------------------------------------------------------------------------
-
-
 class _FakeClock:
-    """Monotonic clock whose only advance is the sleeps the op itself asks for.
-
-    Nothing here waits in wall-clock time, so the loop's own arithmetic — not a
-    real timer — decides when the op returns, and an unclamped budget shows up
-    as a fake-clock reading in the thousands rather than as a slow test.
-    """
 
     def __init__(self) -> None:
         self.now = 0.0
@@ -177,9 +157,6 @@ def test_over_ceiling_poll_interval_is_clamped(tmp_path, fake_clock):
 
 
 def test_sleep_never_overshoots_the_deadline(tmp_path, fake_clock):
-    """The ceiling only bounds the block if the last sleep is clamped too — a
-    poll interval longer than the remaining budget would otherwise park the
-    dispatch worker well past the timeout the caller was told bounds it."""
     scratch = tmp_path / "scratch"
     scratch.mkdir()
 

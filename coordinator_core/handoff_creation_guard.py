@@ -71,7 +71,7 @@ PathLike = Union[str, os.PathLike]
 
 
 class HandoffArchivedTwinError(RuntimeError):
-    """Raised when a handoff-creation write would resurrect an already-archived record."""
+    pass
 
 
 def _archive_handoffs_dir(repo_root: PathLike) -> Path:
@@ -79,13 +79,6 @@ def _archive_handoffs_dir(repo_root: PathLike) -> Path:
 
 
 def find_archived_twin_by_filename(target_path: PathLike, repo_root: PathLike) -> Optional[Path]:
-    """Return the ``archive/handoffs/**/<basename>`` path sharing ``target_path``'s
-    basename, or ``None`` if no such file exists.
-
-    Checks both the sharded ``archive/handoffs/<YYYY-MM>/<basename>`` layout
-    (the normal case) and a direct ``archive/handoffs/<basename>`` (defensive
-    — tolerates an unsharded archive tree).
-    """
     basename = Path(target_path).name
     archive_dir = _archive_handoffs_dir(repo_root)
     if not archive_dir.is_dir():
@@ -130,27 +123,6 @@ def find_archived_twin_by_handoff_id(handoff_id: Optional[str], repo_root: PathL
 
 
 def _read_frontmatter_block(path: PathLike) -> Optional[str]:
-    """Read only the leading frontmatter fence block (``---`` ... ``---``) of
-    ``path``, streaming line-by-line and stopping at the closing fence — never
-    reading the file body.
-
-    Frontmatter is always the FIRST block of a handoff record (see
-    ``extract_frontmatter_scalar``'s own fence-anchored parse, which only
-    ever consults content up to the second ``---`` line and ignores
-    everything after). Reading the whole file to hand that function a body
-    it discards is pure waste — this reads exactly the same region
-    ``extract_frontmatter_scalar`` would use, and nothing more, so the
-    narrowing changes bytes-read only, never match outcome.
-
-    Conservative by construction: if the fence structure is malformed (no
-    opening ``---``, or a closing fence never found before EOF), the whole
-    file read so far is returned rather than ``None`` for "found a real
-    fence pair" — ``extract_frontmatter_scalar`` on that text degrades
-    identically to how it always has (it never required a closing fence
-    either; it simply keeps scanning until ``fence_count`` reaches 2, or EOF).
-    Returns ``None`` only on an ``OSError`` (unreadable file), preserving
-    the prior code's "skip on read failure" behavior.
-    """
     lines: list[str] = []
     fence_count = 0
     try:

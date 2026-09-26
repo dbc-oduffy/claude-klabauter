@@ -45,9 +45,6 @@ pytestmark = [pytest.mark.cadence]
 
 
 class _StubMergeGateModule:
-    """Stand-in for the real `merge-gate-and-pr.py` module, carrying only
-    the one function `compute_status` consumes -- `_run_gate_validate_invocable`.
-    Avoids re-executing (or re-testing) the real coverage engine."""
 
     def __init__(self, result: dict):
         self._result = result
@@ -73,11 +70,6 @@ def _patch_changed_files(monkeypatch, files, git_failed=False):
     )
 
 
-# ---------------------------------------------------------------------------
-# Whitelist: only verdict == "PASS" reaches state=success.
-# ---------------------------------------------------------------------------
-
-
 def test_verdict_pass_posts_success(monkeypatch):
     _patch_changed_files(monkeypatch, ["a.py"])
     _patch_gate(monkeypatch, {"verdict": "PASS", "detail": "covered"})
@@ -90,9 +82,6 @@ def test_verdict_pass_posts_success(monkeypatch):
 
 @pytest.mark.parametrize("verdict", ["ERROR", "UNAVAILABLE", "SKIPPED"])
 def test_verdict_error_unavailable_skipped_each_post_failure_naming_state(monkeypatch, verdict):
-    """The whitelist, not the exit-code blacklist: every non-PASS verdict
-    maps to `state=failure`, and the description names WHICH verdict fired
-    so an operator reading the GitHub status check does not have to guess."""
     _patch_changed_files(monkeypatch, ["a.py"])
     _patch_gate(monkeypatch, {"verdict": verdict, "detail": "x"})
 
@@ -113,9 +102,6 @@ def test_verdict_fail_posts_failure(monkeypatch):
 
 
 def test_missing_review_key_does_not_post_success(monkeypatch):
-    """`review` absent from `dimensions` entirely (not merely a falsy
-    verdict) must still map to `state=failure` -- a missing dimension is
-    not evidence of coverage."""
     _patch_changed_files(monkeypatch, ["a.py"])
     _patch_gate(monkeypatch, None)
 
@@ -125,17 +111,7 @@ def test_missing_review_key_does_not_post_success(monkeypatch):
     assert "review" in description
 
 
-# ---------------------------------------------------------------------------
-# `_changed_files_or_git_failure`: a git failure must never read as an
-# empty (and therefore benign-but-indeterminate) changed-files list.
-# ---------------------------------------------------------------------------
-
-
 def test_changed_files_git_failure_does_not_post_success(monkeypatch):
-    """A nonzero `git diff` returncode must short-circuit to `state=failure`
-    BEFORE the gate is ever consulted -- distinguished from a genuine empty
-    range, which is also `failure` but for a different, distinguishable
-    reason (see the next test)."""
     _patch_changed_files(monkeypatch, [], git_failed=True)
     gate_calls = []
     stub = _StubMergeGateModule(_dimensions_result({"verdict": "PASS"}))
@@ -169,17 +145,7 @@ def test_changed_files_genuine_empty_range_is_distinguished_from_git_failure(mon
     assert gate_calls == [], "an empty range must also short-circuit before consulting the gate's verdict engine"
 
 
-# ---------------------------------------------------------------------------
-# Token ladder: env -> hosts.yml -> Windows Credential Manager, fail closed.
-# ---------------------------------------------------------------------------
-
-
 def _isolate_ladder(monkeypatch, *, hosts_entry=None, cred_token=None):
-    """Cut `resolve_token`'s three lower legs off the live machine.
-
-    Every token test runs against injected state -- never this box's real
-    environment, real `hosts.yml`, or real credential store.
-    """
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.setattr(pcs_mod, "_gh_github_host_entry", lambda: hosts_entry)
@@ -281,14 +247,6 @@ def test_no_token_reason_names_export_remedy_on_non_windows_host(monkeypatch):
 
 
 def test_no_token_reason_names_credential_manager_on_windows(monkeypatch):
-    """THE ROW THIS TEST EXISTS FOR (state/bug-backlog/2026-08-28-...).
-
-    Windows sibling of the non-Windows case above: leg 4 (the in-process
-    keyring reader) IS reachable on `win32`, so the unpostable reason must
-    name the Windows Credential Manager rung instead of the export remedy
-    -- the two branches of `_no_token_reason()` must not bleed into each
-    other's platform.
-    """
     _isolate_ladder(monkeypatch)
     monkeypatch.setattr(pcs_mod.sys, "platform", "win32")
 
@@ -300,8 +258,6 @@ def test_no_token_reason_names_credential_manager_on_windows(monkeypatch):
 
 
 def test_credential_manager_leg_is_inert_off_windows():
-    # Inject the platform value
-    # rather than mutating the process-wide sys.platform singleton.
     assert pcs_mod._token_from_windows_credential_manager(platform="linux") is None
 
 

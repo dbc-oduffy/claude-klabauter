@@ -46,15 +46,10 @@ CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
 # Runs ahead of the generic schema-validation pair (advisory PRIORITY 100,
 # deny PRIORITY 5) so this narrower, sizing-specific block wins the "first
-# non-None advisory/deny wins" race before the generic warn fires for the
-# same violation.
 PRIORITY = 4
 
-#: Escape hatch — recovery-only, mirrors the sibling guards' override pattern.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_SIZING_SCHEMA_BLOCK"
 
-#: Path-tail match, mirroring sizing-object.schema.json's own `applies_to`
-#: ("state/sizings/*.yaml") — a single path segment, no subdirectories.
 _SIZING_PATH_RE = re.compile(r"(^|/)state/sizings/[^/]+\.ya?ml$", re.IGNORECASE)
 
 _SCHEMA_PATH = (
@@ -72,17 +67,6 @@ def _load_schema() -> Optional[dict]:
 def _compute_prospective_content(
     tool_name: str, tool_input: Dict[str, Any], abs_file_path: str
 ) -> Optional[str]:
-    """Write and MultiEdit share the sibling advisory guard's
-    `write_or_multiedit_content` verbatim. Edit is this guard's OWN branch,
-    not the sibling's: unlike the sibling (which probes `new_string`
-    verbatim), this guard applies the edit against the on-disk file,
-    returning None on a non-matching `old_string` -- the same
-    "cannot determine prospective content" stand-down MultiEdit already
-    has, extended to Edit because a sizing-object write is small enough
-    that reading the real file first is cheap and catches a stale
-    `old_string` this schema check would otherwise validate against wrong
-    content.
-    """
     if tool_name == "Edit":
         try:
             with open(abs_file_path, "r", encoding="utf-8") as fh:
@@ -138,7 +122,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         try:
             parsed = parse_yaml(prospective_content)
         except Exception:  # noqa: BLE001 — a parse failure is the generic
-            # schema-validation guard's territory, not this one's.
             return None
         if not isinstance(parsed, dict):
             return None
@@ -177,6 +160,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         }
     except Exception:  # noqa: BLE001 — fail-open on any unexpected error,
-        # mirroring every sibling hard-deny guard's fail-open-on-error
-        # discipline (never fail-closed on this guard's own internal error).
         return None

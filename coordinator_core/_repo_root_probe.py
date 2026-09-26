@@ -41,39 +41,14 @@ from coordinator_core.git.repo_root import show_toplevel
 
 _GIT_TIMEOUT = 10
 
-#: cwd (as returned by ``os.getcwd()`` at call time) -> resolved repo root.
-#: Only successful resolutions are stored — see module docstring.
 _REPO_ROOT_MEMO: Dict[str, str] = {}
 
 
 def reset_repo_root_memo() -> None:
-    """Test/diagnostic escape hatch — clears the process-scope cwd-keyed
-    memo. Callers' own cache-reset seams (``machine_resolver.
-    reset_git_user_email_cache`` / ``person_resolver.
-    reset_person_resolver_git_config_cache``) call this too, so a test that
-    already resets one of those gets this memo cleared as a side effect
-    without needing a third reset call threaded through every test."""
     _REPO_ROOT_MEMO.clear()
 
 
 def resolve_repo_root() -> Optional[str]:
-    """Resolve the current process cwd's git repo root, or ``None`` (not a
-    git repo, git missing, or a timeout — fail-open).
-
-    Delegates to ``coordinator_core.git.repo_root.show_toplevel`` rather
-    than spawning `git rev-parse --show-toplevel` itself (2026-08-16, chunk
-    C5 of docs/plans/2026-08-16-a-process-per-predicate.md). That seam walks
-    the parent chain for a `.git` entry and spawns only when the walk finds
-    none, so the ordinary case costs ~0.14ms instead of a ~13.6ms process.
-    This module's own memo predates that: it was added the same day to stop
-    re-spawning on cache HITS, which is the right fix for a probe that
-    always spawns and the wrong layer once the probe stops spawning at all.
-
-    The memo is kept regardless — it is now a dict lookup in front of a
-    walk rather than in front of a spawn, and it preserves this module's
-    only-successful-resolutions-are-memoized contract, which the delegate's
-    own memo does not duplicate for this key shape (ambient `os.getcwd()`).
-    """
     cwd_key = os.getcwd()
     cached = _REPO_ROOT_MEMO.get(cwd_key)
     if cached is not None:

@@ -33,10 +33,6 @@ import pytest
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
-# (module-name-for-loading, filename) — filename is the exact on-disk stem;
-# "workday-start-step0" has a same-prefix sibling
-# (workday-start-step0-reconcile.py) so the exact filename is spelled out
-# rather than glob-matched.
 _CARRIERS = [
     ("baton_drift_sweep", "baton-drift-sweep.py"),
     ("coordinator_harvest_deferrals", "coordinator-harvest-deferrals.py"),
@@ -59,14 +55,6 @@ def _load_by_path(module_name: str, filename: str):
     assert path.is_file(), f"carrier missing on disk: {path}"
     spec = importlib.util.spec_from_file_location(module_name, path)
     module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-    # Registered in sys.modules BEFORE exec, not just returned: a carrier
-    # defining a `@dataclass` needs `sys.modules[cls.__module__]` resolvable
-    # during class-body execution (stdlib `dataclasses._is_type` does a
-    # module lookup by name, not by the module object in hand) — omitting
-    # this raises `AttributeError: 'NoneType' object has no attribute
-    # '__dict__'` from inside `dataclasses.py`, unrelated to the carrier's
-    # own code, for any carrier that happens to use a string-annotated
-    # dataclass field.
     sys.modules[module_name] = module
     try:
         spec.loader.exec_module(module)  # type: ignore[union-attr]

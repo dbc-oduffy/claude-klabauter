@@ -35,11 +35,7 @@ def _is_dispatchable(assembler_name: str, op_name: str) -> bool:
 
 
 class TestShipsEmpty:
-    """C1 shipped this mapping empty except for entries a later migration chunk
-    adds. That is a claim about C1's OWN commit, not an invariant true of every
-    later state of the tree -- C7 has since populated the completion family, so
-    asserting emptiness here would be a false red the moment C7 lands, not a
-    check of anything C1 actually guarantees going forward."""
+    pass
 
 
 class TestAC8ClosingGuard:
@@ -99,11 +95,6 @@ class TestAC8ClosingGuard:
             f"refuse: {undispatchable!r}"
         )
 
-        # F5 (cold review 2026-08-19): the ⊇ half. An allowlist entry that is
-        # NOT a manifest member is a phantom name -- the mapping's own stated
-        # value is that "the declared dispatch surface stays enumerable and
-        # reviewed", which is false the moment it declares a surface that
-        # does not exist. `missing` above only ever caught the ⊆ direction.
         phantom = {
             name: sorted(set(ASSEMBLER_DISPATCHABLE.get(name, frozenset())) - set(manifest))
             for name, manifest in manifests_by_assembler.items()
@@ -128,9 +119,6 @@ class TestMutationRaises:
 
 
 class TestDefaultDenyControl:
-    """AC8: a planted op name absent from the mapping (whole assembler unknown, or
-    assembler known but op not in its set) is reported as not-dispatchable — not
-    merely 'fails to match the happy path'."""
 
     def test_planted_op_for_unknown_assembler_is_not_dispatchable(self) -> None:
         assert _is_dispatchable("planted_assembler", "planted.op") is False
@@ -144,11 +132,6 @@ class TestDefaultDenyControl:
     def test_planted_plugin_local_shaped_name_absent_from_the_set_is_not_dispatchable(
         self,
     ) -> None:
-        """A plugin-local-shaped bareword (unclaimed by the hand-literal
-        mapping) refuses default-deny exactly like any other unlisted name
-        — nothing about the two-root plugin-local model widens admission.
-        docs/plans/2026-09-07-directive-resolution-reaches-a-plugin-local-
-        cli.md, T5."""
         assert _is_dispatchable("workstream_complete", "not-a-real-plugin-local-cli") is False
 
 
@@ -169,16 +152,9 @@ class TestPluginLocalBarewordsPresent:
         assert {"baton-chain-closure", "plan-reversibility-eligibility"} <= set(entry)
 
 
-# The mixed-end-state discriminator (plan § The discriminator for the mixed end
 # state) is keyed by ASSEMBLER_DISPATCHABLE's assembler-name key, not by per-entry
-# name shape: the five assembler-family module names dispatch via `resolve_cli` /
-# `resolve_op` and their entries must be live registered ops; the three
-# completion-family module names dispatch via a private `_resolve_cli` built from
 # CONSUMES_MANIFEST and are validated by that membership check instead (already
-# asserted by workstream_complete/apply.py; not re-derived here). This split is
-# named explicitly rather than inferred from whether an entry happens to be in
 # `_REGISTRY`, so a genuine assembler-family phantom name cannot be
-# misclassified as a completion-family exemption.
 _COMPLETION_FAMILY_ASSEMBLERS = frozenset(
     {"workday_complete", "workstream_complete", "workweek_complete"}
 )

@@ -42,10 +42,6 @@ import cli_shared  # noqa: E402
 
 
 class _FakeKernel:
-    """Minimal stand-in for `_load_machine_local_kernel()`'s return value —
-    same shape as test_cli_shared_dump_repos_parity.py's `_FakeKernel`,
-    trimmed to just `resolve_one` (the only primitive `machine_local_get`
-    calls)."""
 
     EXIT_OK = 0
     EXIT_NOT_FOUND = 1
@@ -90,8 +86,6 @@ def test_data_home_prefers_registry_over_stamped_engine_root(monkeypatch, tmp_pa
 
 
 def test_data_home_falls_back_to_env_when_unstamped_and_unregistered(monkeypatch, tmp_path):
-    """An unstamped env override (a dev-pointed fixture, no engine build
-    stamp) is a legitimate data home when the registry has nothing."""
     _clear_env(monkeypatch)
     dev_root = tmp_path / "dev-checkout"
     dev_root.mkdir()
@@ -102,8 +96,6 @@ def test_data_home_falls_back_to_env_when_unstamped_and_unregistered(monkeypatch
 
 
 def test_data_home_unstamped_env_wins_over_registry(monkeypatch, tmp_path):
-    """Same precedence as the native write seam, so a harvest dedup scan
-    and the queue write it dedups resolve one root."""
     _clear_env(monkeypatch)
     dev_root = tmp_path / "dev-checkout"
     dev_root.mkdir()
@@ -114,8 +106,6 @@ def test_data_home_unstamped_env_wins_over_registry(monkeypatch, tmp_path):
 
 
 def test_data_home_refuses_stamped_env_when_unregistered(monkeypatch, tmp_path):
-    """A stamped override with NOTHING registered must resolve to None
-    (graceful WARN+skip), never silently answer the published mirror."""
     _clear_env(monkeypatch)
     stamped_root = tmp_path / "claude-klabauter"
     stamp_dir = stamped_root / "coordinator_core"
@@ -128,9 +118,6 @@ def test_data_home_refuses_stamped_env_when_unregistered(monkeypatch, tmp_path):
 
 
 def test_claude_klabauter_root_code_root_resolver_unchanged_env_first(monkeypatch, tmp_path):
-    """Negative-spec check: claude_klabauter_root() (the engine CODE-root resolver)
-    must keep its existing env-first precedence — this fix must not touch
-    that function's behaviour."""
     _clear_env(monkeypatch)
     stamped_root = tmp_path / "claude-klabauter"
     stamped_root.mkdir()

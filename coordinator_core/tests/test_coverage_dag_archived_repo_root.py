@@ -33,10 +33,7 @@ import pytest
 from coordinator_core import dag
 
 
-# ---------------------------------------------------------------------------
 # Fixture: clear dag._FRONTMATTER_CACHE between tests (mirrors test_dag_edge_kinds.py
-# convention — module-level cache state must not leak between test cases).
-# ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
 def clear_frontmatter_cache():
@@ -46,16 +43,8 @@ def clear_frontmatter_cache():
     dag._FRONTMATTER_CACHE.clear()
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def _write_handoff(path: Path, *, slug: str, status: str = "active",
                     predecessor: str = "none", **extra_fields: str) -> None:
-    """Write a minimal handoff file at path.
-
-    Extra keyword arguments are written as additional frontmatter fields.
-    """
     path.parent.mkdir(parents=True, exist_ok=True)
     extra_lines = "".join(f"{k}: {v}\n" for k, v in extra_fields.items())
     path.write_text(
@@ -70,10 +59,6 @@ def _write_handoff(path: Path, *, slug: str, status: str = "active",
 
 
 def _build_layout(tmp_path: Path, *, predecessor_ref: str) -> tuple:
-    """Build the standard repo layout used by all cases in this module.
-
-    Returns (root, closing_path, liveanc_path).
-    """
     root = tmp_path
     live_dir = root / "state" / "handoffs"
     archive_month_dir = root / "archive" / "handoffs" / "2026-07"
@@ -87,14 +72,8 @@ def _build_layout(tmp_path: Path, *, predecessor_ref: str) -> tuple:
     return root, closing_path, liveanc_path
 
 
-# ---------------------------------------------------------------------------
-# (a) Case A — month-nested start, bare-basename ref, explicit repo_root
-# ---------------------------------------------------------------------------
-
 class TestWalkForwardArchivedStartExplicitRepoRoot:
     def test_bare_basename_ref_resolves_live_ancestor(self, tmp_path):
-        """Month-nested start + bare-basename predecessor ref + explicit repo_root
-        resolves both the closing node and the live ancestor."""
         root, closing_path, liveanc_path = _build_layout(
             tmp_path, predecessor_ref="liveanc.md"
         )
@@ -116,8 +95,6 @@ class TestWalkForwardArchivedStartExplicitRepoRoot:
         )
 
     def test_repo_relative_ref_resolves_live_ancestor(self, tmp_path):
-        """Month-nested start + repo-relative predecessor ref
-        (`state/handoffs/liveanc.md`) + explicit repo_root resolves the live ancestor."""
         root, closing_path, liveanc_path = _build_layout(
             tmp_path, predecessor_ref="state/handoffs/liveanc.md"
         )
@@ -139,16 +116,8 @@ class TestWalkForwardArchivedStartExplicitRepoRoot:
         )
 
 
-# ---------------------------------------------------------------------------
-# (c) Case C — regression guard: the OLD bug (no explicit repo_root)
-# ---------------------------------------------------------------------------
-
 class TestWalkForwardArchivedStartInferredRepoRootRegression:
     def test_inferred_repo_root_fails_to_resolve_live_ancestor(self, tmp_path):
-        """Regression guard — without an explicit repo_root, walk_forward infers
-        repo_root two-dirs-up from the month-nested archive dir (WRONG: yields
-        <root>/archive, not <root>), so the live ancestor is NOT resolved. This is
-        exactly the bug that passing repo_root explicitly (coverage.py Step 1) fixes."""
         root, closing_path, liveanc_path = _build_layout(
             tmp_path, predecessor_ref="liveanc.md"
         )
@@ -156,14 +125,10 @@ class TestWalkForwardArchivedStartInferredRepoRootRegression:
         result = dag.walk_forward(
             str(closing_path),
             edge_kinds={"predecessor", "additional_predecessors"},
-            # No repo_root passed — reproduces the pre-fix call shape.
         )
 
         abs_liveanc = os.path.abspath(str(liveanc_path))
         if abs_liveanc in result["nodes"]:
-            # If the inferred-root path happens to still resolve (e.g. environment
-            # quirk), don't hard-fail — but this would mean the regression guard no
-            # longer demonstrates the divergence this test exists to document.
             pytest.fail(
                 "expected the inferred-repo_root (no explicit repo_root) call to FAIL "
                 "to resolve the live ancestor from a month-nested start — this is the "
@@ -176,15 +141,8 @@ class TestWalkForwardArchivedStartInferredRepoRootRegression:
         )
 
 
-# ---------------------------------------------------------------------------
-# (d) resolve_target direct unit case
-# ---------------------------------------------------------------------------
-
 class TestResolveTargetRootAnchoredLiveResolution:
     def test_bare_basename_and_repo_relative_both_resolve(self, tmp_path):
-        """resolve_target, called with handoff_dir set to the month-nested archive
-        dir and repo_root set to the true root, resolves BOTH ref conventions
-        (bare basename and repo-relative) to the live ancestor's absolute path."""
         root, _closing_path, liveanc_path = _build_layout(
             tmp_path, predecessor_ref="liveanc.md"
         )
@@ -206,40 +164,20 @@ class TestResolveTargetRootAnchoredLiveResolution:
         )
 
 
-# ---------------------------------------------------------------------------
-# (e) The premise that licensed deleting the archival live-children guard.
-#
-# 2026-08-28: the guard's last surviving arm kept a live `forked_from` child
-# (a spinoff) blocking archival, on the stated ground that archiving would
-# "strand that spinoff's own origin pointer (DR-224, AC4)". That citation does
-# not resolve — DR-224 contains no AC4, and its actual contract makes
 # has-children mean SUPERSEDE. The guard was deleted, but a guard whose stated
-# reason is false may still be load-bearing for an unstated one, so the
 # premise was MEASURED rather than argued. These tests pin that measurement so
-# a future reader can see what the deletion rests on instead of taking it on
-# the same trust the original claim asked for.
-# ---------------------------------------------------------------------------
 
 
 class TestSpinoffOriginSurvivesArchivalOfItsOrigin:
     def test_forked_from_resolves_before_and_after_the_origin_is_archived(
         self, tmp_path
     ):
-        """A spinoff's `forked_from` pointer resolves to its origin whether the
-        origin sits in state/handoffs/ or archive/handoffs/.
-
-        This is the exact move the archival path makes (a git mv between those
-        two trees), so if archiving stranded the pointer it would fail here.
-        """
         root = tmp_path
         live_dir = root / "state" / "handoffs"
         archive_month = root / "archive" / "handoffs" / "2026-08"
 
         origin = live_dir / "origin.md"
         _write_handoff(origin, slug="origin", predecessor="none")
-        # Schema rule A3a-3 forces a spinoff's `predecessor` to none; the
-        # forked_from edge is the ONLY way back, which is precisely why the
-        # stranding claim would have mattered had it been true.
         _write_handoff(
             live_dir / "spin.md", slug="spin", predecessor="none",
             forked_from="origin.md",
@@ -270,17 +208,6 @@ class TestSpinoffOriginSurvivesArchivalOfItsOrigin:
         assert "archive" in Path(after).parts
 
     def test_the_resolver_still_needs_an_explicit_repo_root(self, tmp_path):
-        """The honest limit on the test above, pinned so it is not overread.
-
-        Resolution survives archival only for callers that pass `repo_root`
-        explicitly. A caller that self-infers it two-dirs-up from an archived
-        node's own directory gets `<root>/archive` and resolves nothing — case
-        (c) in this module is that bug, and it predates the guard deletion.
-
-        Deleting the guard did not create that hazard; it increases how many
-        records are archived and therefore how often the hazard is reachable.
-        Any consumer added here must pass repo_root explicitly.
-        """
         root = tmp_path
         archive_month = root / "archive" / "handoffs" / "2026-08"
         _write_handoff(root / "state" / "handoffs" / "origin.md",
@@ -289,7 +216,7 @@ class TestSpinoffOriginSurvivesArchivalOfItsOrigin:
         _write_handoff(archived_spin, slug="spin", predecessor="none",
                        forked_from="origin.md")
 
-        wrong_root = archived_spin.parent.parent  # the two-up self-inference
+        wrong_root = archived_spin.parent.parent
         resolved = dag.resolve_target(
             "origin.md", str(archived_spin.parent), str(wrong_root),
             id_index={}, include_history_tier=False,

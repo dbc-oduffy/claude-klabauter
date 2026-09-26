@@ -58,26 +58,15 @@ _SIGNATURE = b"DIRC"
 _ENTRY_FIXED_LEN = 62
 _SUPPORTED_VERSION = 2
 
-#: Sentinel: remove this path from the index (a staged deletion).
-#:
-#: THE SAME OBJECT `tree_spine` uses, deliberately, not a private twin. The
-#: commit path builds ONE `assembled` dict and hands it to both
-#: `_rewrite_head_spine` and `splice_index`; two distinct `object()` sentinels
-#: would compare `is`-unequal and each leg would then try to unpack the
-#: other's marker as a `(mode, sha)` pair. Found by claude-klabauter-fd against
-#: a real staged deletion, which is the one shape that hits it.
 ABSENT = _ABSENT
 
 
 class IndexWriteError(Exception):
-    """The index could not be spliced. Never partial: raised BEFORE any
-    bytes reach `.git/index`, so the on-disk index is always either the
-    original or the fully-spliced result."""
+    pass
 
 
 class IndexWriteLockBusy(IndexWriteError):
-    """`.git/index.lock` already exists -- a peer is mid-write. The caller
-    retries or refuses; this module never waits and never steals a lock."""
+    pass
 
 
 class IndexStaleAfterCommit(IndexWriteError):
@@ -123,7 +112,6 @@ class IndexStaleAfterCommit(IndexWriteError):
 
 
 def _entry_span(raw: bytes, offset: int) -> Tuple[bytes, int]:
-    """`(name_bytes, end_offset)` for the entry starting at `offset`."""
     if offset + _ENTRY_FIXED_LEN > len(raw):
         raise IndexWriteError(f"truncated entry at offset {offset}")
     entry_start = offset
@@ -147,15 +135,6 @@ def _entry_span(raw: bytes, offset: int) -> Tuple[bytes, int]:
 
 
 def _build_entry(name: bytes, mode: int, sha_hex: str, st: os.stat_result) -> bytes:
-    """One v2 entry, laid out exactly as git writes it.
-
-    The stat fields are what git's own `ce_match_stat` compares a worktree
-    file against to answer "clean" without reading its bytes, so they must
-    describe the file as it is right now -- a wrong mtime here makes every
-    later `git status` re-hash the file (slow but correct), while a wrong
-    size can make it read clean when it is not (fast and WRONG). Both are
-    taken from one `stat()` of the file being recorded.
-    """
     sha = bytes.fromhex(sha_hex)
     if len(sha) != 20:
         raise IndexWriteError(f"bad blob sha for {name!r}: {sha_hex!r}")
@@ -184,57 +163,11 @@ def splice_index(
     repo: Union[str, Path],
     updates: Mapping[str, object],
 ) -> None:
-    """Apply `updates` to `.git/index` in place, spawn-free.
-
-    `updates` maps a repo-relative path to either `(mode, blob_sha_hex)` --
-    insert or replace that entry -- or the `ABSENT` sentinel, meaning remove
-    it (a staged deletion). A path already in the index is replaced in place;
-    a new path is inserted in git's own sort order (byte-wise on the name).
-
-    Every entry NOT named in `updates` is copied byte-for-byte from the index
-    that was read, so fields this codebase cannot model round-trip untouched.
-
-    Raises `IndexWriteLockBusy` if `.git/index.lock` exists. Raises
-    `IndexWriteError` before writing anything on any shape it refuses.
-
-    Raises `IndexStaleAfterCommit` when the final `os.replace` cannot land
-    because a peer holds `.git/index`. This one is NOT a before-writing
-    refusal like the two above, and callers must not treat it as one: this
-    function is called after the ref swap, so the commit has already landed
-    and only the index is stale. Retrying it commits the same work twice.
-
-    THE READ IS UNDER THE LOCK, AND THAT IS THE WHOLE POINT OF TAKING IT.
-    Every untouched entry is copied verbatim from the index this call read, so
-    the read is not a lookup -- it is the base revision of a read-modify-write
-    over state ~50 sessions share. Reading before acquiring the lock leaves the
-    classic lost update wide open: a peer commit landing between our read and
-    our write is silently reverted in the index, because our verbatim copy of
-    the older snapshot overwrites it. For a path the peer ADDED that is worse
-    than stale -- the path is in HEAD and absent from the index, which is
-    exactly the shape `git status` renders as a staged deletion (`D `) of a
-    file sitting on disk, and which a bare `git commit -a` by any session then
-    lands for real. `IndexWriteLockBusy` on its own does NOT close this: it
-    only reports that a peer held the lock at the instant we tried to write,
-    which says nothing about whether the snapshot we are about to write back
-    is still current. Holding the lock across read-modify-write is what closes
-    it. The cost is k `stat` calls inside the critical section (k = the paths
-    this commit touches, not the tree), which is why this is affordable at the
-    session count that makes it necessary.
-    """
     gitdir = resolve_git_dir(repo)
     index_path = gitdir / "index"
     lock_path = gitdir / "index.lock"
     root = Path(repo)
 
-    # Every splice caller (`commit_paths`, `stage_paths_in_process`,
-    # `refresh_stat_in_process`) writes `.git/index` without spawning git, so
-    # none of them get the orphaned-`index.lock` self-heal a raw `git`
-    # command line gets from `guard_reap_stale_git_lock`'s PreToolUse guard --
-    # that guard only recognizes a bare `git` in command position, and this
-    # is an in-process write, never a `git` argv at all
-    # (state/bug-backlog/2026-08-12-scoped-git-commit-is-not-a-raw-git-invoc-
-    # f4fff3a626fa.yaml's divergence). Best-effort and fail-open: see
-    # `lock_preflight.preflight_reap_stale_lock`'s own negative-spec.
     preflight_reap_stale_lock(str(root))
 
     try:
@@ -242,12 +175,6 @@ def splice_index(
     except FileExistsError as exc:
         raise IndexWriteLockBusy(f"{lock_path} exists -- a peer holds the index") from exc
 
-    # `os.fdopen` here, not down on the write path: every refusal below is
-    # raised with the lock held, and on Windows an open descriptor on
-    # `index.lock` makes the `finally`'s unlink fail -- which would leave a
-    # refused call holding the lock against every peer for the life of the
-    # process. The `with` closes it on the refusal paths too; the write path
-    # closes it before the rename, which is what `os.replace` needs anyway.
     try:
         with os.fdopen(fd, "wb") as handle:
             _splice_locked(handle, root, index_path, lock_path, updates)
@@ -266,9 +193,6 @@ def _splice_locked(
     lock_path: Path,
     updates: Mapping[str, object],
 ) -> None:
-    """The read-modify-write body of `splice_index`, run with `.git/index.lock`
-    already held and `handle` open on it. Split out so the lock's `finally`
-    cannot be separated from its acquisition by the length of the body."""
     try:
         raw = index_path.read_bytes()
     except FileNotFoundError:
@@ -339,27 +263,9 @@ def _splice_locked(
     body += hashlib.sha1(body).digest()
 
     handle.write(body)
-    # Closed BEFORE the rename, not by the caller's `with` after it: Windows
-    # refuses `os.replace` on a source file that still has an open descriptor,
-    # so leaving this to the context manager turns every write into the
-    # `IndexStaleAfterCommit` path. The caller's `with` still closes it on the
-    # refusal paths; a second close is a no-op.
     handle.close()
     if not _replace_with_retry(lock_path, index_path):
         # WAS UNWRAPPED, AND THAT BROKE THE DOCUMENTED CONTRACT. This
-        # function's own docstring promises `IndexWriteLockBusy` or
-        # `IndexWriteError`; the `try:` around this line carries only a
-        # `finally:`, so a Windows `PermissionError` escaped as neither and
-        # a caller written correctly against that contract still would not
-        # catch it. Captured at 2/200 with 12 concurrent committers.
-        #
-        # A LOST INDEX WRITE IS NOT A LOST COMMIT, and the distinction is
-        # the whole disposition here: `commit.py` splices the index AFTER
-        # the ref swap, deliberately (an index matching a commit that never
-        # landed is the same lie in the other direction), so reaching this
-        # line means the commit ALREADY LANDED. The failure leaves a stale
-        # index, not lost work, and the honest report says so rather than
-        # implying the commit failed.
         raise IndexStaleAfterCommit(
             f"{index_path} could not be updated -- a peer held it. The "
             f"commit LANDED; only the shared index is stale. `git status` "

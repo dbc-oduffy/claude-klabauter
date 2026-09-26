@@ -100,40 +100,17 @@ CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 PRIORITY = 132
 
-#: Advertised maintainer/test escape hatch — see module docstring for why
-#: this guard advertises it (unlike block_home_dir_memo_delivery's
-#: deliberately-unadvertised twin).
 OVERRIDE_ENV = "COORDINATOR_OVERRIDE_OSS_MIRROR_MEMO_GUARD"
 
-#: Tools whose tool_input names a file this guard must vet.
 _GUARDED_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 
-#: tool_input keys that can carry the target path, in probe order.
-#: NotebookEdit uses notebook_path; the rest use file_path.
 _PATH_KEYS = ("file_path", "notebook_path", "path")
 
 
-#: Both the legacy bare dirname and the current `state/`-nested one are
-#: guarded unconditionally, per this chunk's negative spec: this guard polices
-#: a FOREIGN root it has no authority to probe/resolve, so BOTH literals are
-#: pinned here rather than consulting `memo_corpus_root`/`receiver_inbox_root`
-#: (neither is authoritative over a foreign root, and a probing resolver would
-#: select one and stop watching the other).
 _CROSS_REPO_RELDIRS = ("cross-repo", "state/cross-repo")
 
 
 def _guarded_roots() -> "list[Path]":
-    """``<mirror-root>/cross-repo`` and ``<mirror-root>/state/cross-repo`` for
-    every publish-mirror this machine's registry currently resolves to a
-    ``.path``.
-
-    Reads via ``read_publish_mirrors()`` (the shared TOML-merge authority the
-    ``cross-repo-memo`` CLI's claude-klabauter-side resolver already uses) rather than
-    a second hand-rolled registry read. A mirror declared with no ``.path``
-    (not yet provisioned on this machine) contributes no root — nothing to
-    guard until the operator provisions it. Never raises: any read/parse
-    failure inside ``read_publish_mirrors()`` already degrades to ``{}``.
-    """
     roots: "list[Path]" = []
     seen: "set[Path]" = set()
     try:
@@ -203,6 +180,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         }
     except Exception:
-        # Fail-open on any unexpected error, matching every documented
-        # fail-open branch in the reference guard.
         return None

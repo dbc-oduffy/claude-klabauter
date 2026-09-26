@@ -136,25 +136,15 @@ from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_nam
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 CLASS = "hard-deny"
-#: Full command tool-name universe, same as `block_approval_sentinel_
-#: creation.py`'s own widened declaration (C4e) -- a direct reference to the
-#: shared universe, never a copy or re-wrap.
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
-#: The exact basename this guard protects -- the grant record C2
-#: (`coordinator_core/session/fleet_delegation.py`) writes at
-#: `settings_home() / "fleet-delegation.json"`. Never relaxed to a
 #: substring/prefix match -- an unrelated file that merely CONTAINS this
 #: string in a longer name is a DIFFERENT file and is not the grant record
-#: this guard is chartered to protect.
 _TARGET_BASENAME = "fleet-delegation.json"
 
-#: A `VAR=value` assignment token (bare, or the `VAR=value` half of an
-#: `export VAR=value` pair).
 _ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
 
-#: A `$VAR` or `${VAR}` dereference, anywhere inside a token.
 _VAR_REF_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
 
 
@@ -182,17 +172,10 @@ class _FleetDelegationDetector(SentinelCreationDetector):
     exactly as the approval-sentinel subclass's own copy is bound to its.
     """
 
-    #: Commands that can never create/modify the grant record through their
-    #: own normal operation (absent a redirect, checked separately and
-    #: first). Removal is always sanctioned; the rest are pure reads.
     _SAFE_ARGV0 = frozenset(
         {"rm", "cat", "ls", "stat", "test", "head", "tail", "wc", "file", "grep"}
     )
 
-    #: `git` subcommands that only read repo state -- identical allowlist to
-    #: `block_approval_sentinel_creation.py`'s own, for the identical reason
-    #: (verifying the grant record's ignore/attr status must not itself be
-    #: denied as a write).
     _SAFE_GIT_SUBCOMMANDS = frozenset(
         {
             "status", "diff", "log", "show", "ls-files", "rev-parse", "describe",
@@ -212,18 +195,9 @@ class _FleetDelegationDetector(SentinelCreationDetector):
 
     def __init__(self, target_basename: str) -> None:
         super().__init__(target_basename)
-        #: Variable names, tainted for the CURRENT `evaluate()` call only --
-        #: recomputed at the top of `evaluate()` from that call's own
-        #: command string, never carried over between calls.
         self._tainted_vars: "set[str]" = set()
 
     def _collect_tainted_vars(self, tokens: "list[str]") -> "set[str]":
-        """Scan every token of the (whole, not-yet-segmented) command for a
-        `VAR=value` assignment and return the set of tainted variable
-        names, iterated to a FIXED POINT -- direct mention, or dereference
-        of an already-tainted variable, same as
-        `block_approval_sentinel_creation._ApprovalSentinelDetector`'s own
-        copy of this method."""
         assignments: "list[tuple[str, str]]" = []
         for tok in tokens:
             m = _ASSIGN_RE.match(tok)
@@ -293,10 +267,6 @@ class _FleetDelegationDetector(SentinelCreationDetector):
         return super().evaluate(cmd)
 
     def _segment_denies(self, seg_tokens: "list[str]") -> bool:  # noqa: D401
-        """Default-deny override: a redirect into the grant record always
-        denies; otherwise a segment whose head command is NOT in the safe
-        set denies as soon as ANY of its tokens mentions the grant-record
-        basename -- subsumes the parent's enumerated-command rules 2-5."""
         if not seg_tokens:
             return False
         if self._redirect_target_denies(seg_tokens):
@@ -309,17 +279,10 @@ class _FleetDelegationDetector(SentinelCreationDetector):
         return self._segment_mentions_target(seg_tokens)
 
 
-#: Detection engine for this guard specifically -- see `_FleetDelegationDetector`
-#: docstring above for why this is a dedicated subclass rather than a shared-
-#: engine edit.
 _detector = _FleetDelegationDetector(_TARGET_BASENAME)
 
 
 def _evaluate(cmd: str, dialect: Optional[Dialect] = None):
-    """`dialect=None`/`Dialect.BASH` calls `_detector.evaluate(cmd)` directly
-    -- only a genuinely recognized non-bash dialect routes through the
-    dialect-aware entry point, same call shape as
-    `block_approval_sentinel_creation._evaluate`."""
     if dialect is None or dialect is Dialect.BASH:
         return _detector.evaluate(cmd)
     return _detector.evaluate_for_dialect(
@@ -328,11 +291,6 @@ def _evaluate(cmd: str, dialect: Optional[Dialect] = None):
 
 
 def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
-    # Deliberately does NOT echo `cmd` back into the message and does NOT
-    # name the target basename in the indirection branch -- both would
-    # print the exact bypass an eager agent could copy-paste. `cmd` stays
-    # accepted for call-site symmetry with the sibling guard, but is
-    # intentionally unused here.
     del cmd
     if reason_class == REASON_INDIRECTION:
         safe_shape = reason_kind.replace(_TARGET_BASENAME, "<the delegation grant>")
@@ -362,14 +320,6 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the fleet-delegation-grant-record-creation-ban gate against a
-    PreToolUse payload.
-
-    Returns `None` (allow) or the nested hard-deny envelope. Never
-    identity-gated -- fires for every caller including the main-loop EM.
-    """
-    # Deliberately no try/except here -- fail-CLOSED-on-exception is the
-    # dispatcher's job for hard-deny guards.
     tool_name = payload.get("tool_name") or ""
     if tool_name not in MATCHERS:
         return None
@@ -381,9 +331,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     cmd = cmd.replace("\r", "")
 
-    # NOTE: deliberately no raw-text pre-filter gate here, same reason as
-    # `block_approval_sentinel_creation.check`'s own note -- a partially-
-    # quoted spelling of the basename only reconstructs after tokenization.
     deny, reason_kind, reason_class = _evaluate(cmd, dialect)
     if not deny:
         return None

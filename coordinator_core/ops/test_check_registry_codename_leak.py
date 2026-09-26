@@ -1,7 +1,3 @@
-"""Tests for coordinator_core.ops.check_registry_codename_leak.
-
-Port of: check-registry-codename-leak.sh (DoE b5a4192c, 2026-07-20)
-"""
 from __future__ import annotations
 
 import os
@@ -107,16 +103,6 @@ def test_keepset_prefix_match_coordinator_claude(tmp_path):
 
 
 def test_machine_local_absent_no_override_warns_and_exits_zero(tmp_path, capsys, monkeypatch):
-    """`_resolve_registry_keys` reads `merged_flat_registry()` in-process
-    (zero-spawn cutover) rather than shelling out to `machine-local keys` --
-    there is no `machine-local` binary-presence check left to warn about, so
-    an absent/empty registry degrades silently to "no private codenames to
-    check", not a "machine-local not found" WARNING (that message belonged
-    to the pre-cutover subprocess path and no longer exists in production).
-    Patch the registry read directly (rather than starving PATH/HOME) so
-    this test's "empty registry" case does not depend on what machine-local
-    binaries or registry files happen to exist on the box running it.
-    """
     monkeypatch.setattr(
         "coordinator_core.ops.check_registry_codename_leak._merged_flat_registry",
         lambda: {},
@@ -133,14 +119,6 @@ def test_machine_local_absent_no_override_warns_and_exits_zero(tmp_path, capsys,
 
 
 def _write_registry_toml(path, *, repos_key: str) -> None:
-    """Write a minimal ``registry.toml`` declaring one ``repos.*`` key.
-
-    ``_resolve_registry_keys`` -> ``merged_flat_registry()`` reads this file
-    directly via ``tomllib`` (zero-spawn cutover — see
-    ``test_machine_local_absent_no_override_warns_and_exits_zero``'s
-    docstring); there is no ``machine-local`` CLI subprocess left to fixture
-    with a fake executable.
-    """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f'[repos]\n{repos_key} = "x"\n')
 
@@ -242,9 +220,6 @@ def _doe_claude_fixture(tmp_path):
 
 
 def test_no_exempt_absent_doe_claude_still_exempt_today(tmp_path, capsys):
-    """AC2 pin: fixture tree containing doe-claude-em, NO re-admission ->
-    exits 0. Regression guard on the global default (doe_claude stays kept
-    unless a target explicitly re-admits it)."""
     d = _doe_claude_fixture(tmp_path)
     rc = main([str(d)], env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.doe_claude"))
     assert rc == 0
@@ -253,8 +228,6 @@ def test_no_exempt_absent_doe_claude_still_exempt_today(tmp_path, capsys):
 
 
 def test_no_exempt_flag_reveals_doe_claude_leak(tmp_path, capsys):
-    """AC2: --no-exempt doe_claude re-admits the slug -> exit 1, hit report
-    cites the file in path:lineno:line shape."""
     d = _doe_claude_fixture(tmp_path)
     rc = main(
         ["--no-exempt", "doe_claude", str(d)],
@@ -268,16 +241,6 @@ def test_no_exempt_flag_reveals_doe_claude_leak(tmp_path, capsys):
 
 
 def _example_doctrine_repo_fixture(tmp_path):
-    """`repos.example_doctrine_repo` is a SECOND machine-local registry alias
-    for the same DoE-claude clone `repos.doe_claude` resolves to (verified
-    2026-08-13, `machine-local get` on both keys returns the identical path).
-    Before 2026-08-13 (571a4d78f535) it was ALSO this machine's own
-    depersonalize scrub placeholder for `doe_claude`, which was the only thing
-    exempting its literal text from the registry-codename leak-check --
-    dropping that mapping (because the PM ruling stopped scrubbing doe_claude)
-    silently reopened this second alias as a leak candidate, even though it
-    names the exact same PM-ratified-public sibling. § KEEPSET's own
-    `example_doctrine_repo` comment for the full incident."""
     d = tmp_path / "doe-alias"
     d.mkdir()
     (d / "notes.md").write_text(
@@ -287,11 +250,6 @@ def _example_doctrine_repo_fixture(tmp_path):
 
 
 def test_example_doctrine_repo_stays_exempt_default(tmp_path, capsys):
-    """Regression pin for the 2026-08-13 collateral leak (§ KEEPSET comment):
-    a fixture tree quoting the `example_doctrine_repo` registry alias, no
-    re-admission -> exits 0. `example_doctrine_repo` is a KEEPSET member for
-    the same reason `doe_claude` is -- both name the one PM-ratified-public
-    DoE-claude sibling, just under two different registered aliases."""
     d = _example_doctrine_repo_fixture(tmp_path)
     rc = main(
         [str(d)],
@@ -303,10 +261,6 @@ def test_example_doctrine_repo_stays_exempt_default(tmp_path, capsys):
 
 
 def test_no_exempt_flag_reveals_example_doctrine_repo_leak(tmp_path, capsys):
-    """--no-exempt example_doctrine_repo re-admits the slug -> exit 1, proving
-    the KEEPSET membership above is a real exemption (not an accidental no-op
-    from a typo'd/absent slug) exactly like doe_claude's own re-admission
-    pin."""
     d = _example_doctrine_repo_fixture(tmp_path)
     rc = main(
         ["--no-exempt", "example_doctrine_repo", str(d)],
@@ -338,8 +292,6 @@ def test_no_exempt_env_var_reveals_doe_claude_leak(tmp_path, capsys):
 
 
 def test_no_exempt_flag_and_env_var_union(tmp_path, capsys):
-    """Both channels union — either alone is sufficient, and passing both is
-    not an error (dict.fromkeys dedupes)."""
     d = _doe_claude_fixture(tmp_path)
     rc = main(
         ["--no-exempt", "doe_claude", str(d)],
@@ -352,10 +304,6 @@ def test_no_exempt_flag_and_env_var_union(tmp_path, capsys):
 
 
 def test_no_exempt_slug_not_in_keepset_raises_and_names_keepset(tmp_path, capsys):
-    """AC2 shape correction (NOT a status-quo pin): re-admitting a slug that
-    is not an exact KEEPSET member must raise loud, not silently no-op. A
-    `doe-claude` (hyphen) authoring slip against the `doe_claude` (underscore)
-    KEEPSET entry must not re-admit nothing and produce a green publish."""
     d = _doe_claude_fixture(tmp_path)
     rc = main(
         ["--no-exempt", "doe-claude", str(d)],
@@ -365,14 +313,12 @@ def test_no_exempt_slug_not_in_keepset_raises_and_names_keepset(tmp_path, capsys
     captured = capsys.readouterr()
     assert "not in KEEPSET" in captured.err
     assert "doe-claude" in captured.err
-    # error message names the valid KEEPSET members
     assert "project_rag" in captured.err
     assert "doe_claude" in captured.err
     assert "coordinator" in captured.err
 
 
 def test_no_exempt_env_var_slug_not_in_keepset_raises(tmp_path, capsys):
-    """Same shape correction via the env channel."""
     d = _doe_claude_fixture(tmp_path)
     rc = main(
         [str(d)],
@@ -388,7 +334,6 @@ def test_no_exempt_env_var_slug_not_in_keepset_raises(tmp_path, capsys):
 
 
 def test_unknown_flag_exits_two(tmp_path, capsys):
-    """Oracle parity: an unrecognized long-option exits 2 with usage."""
     d = tmp_path / "unk"
     d.mkdir()
     rc = main(["--bogus-flag", str(d)], env=_env())
@@ -398,8 +343,6 @@ def test_unknown_flag_exits_two(tmp_path, capsys):
 
 
 def test_no_exempt_flag_missing_value_exits_two(capsys):
-    """--no-exempt with no following value is a usage error, not an index
-    crash."""
     rc = main(["--no-exempt"], env=_env())
     assert rc == 2
     captured = capsys.readouterr()
@@ -407,8 +350,6 @@ def test_no_exempt_flag_missing_value_exits_two(capsys):
 
 
 def test_extra_positional_after_no_exempt_exits_two(tmp_path, capsys):
-    """Oracle parity: extra positionals still exit 2 even alongside
-    --no-exempt."""
     d = tmp_path / "extra"
     d.mkdir()
     rc = main(["--no-exempt", "doe_claude", str(d), "extra-positional"], env=_env())

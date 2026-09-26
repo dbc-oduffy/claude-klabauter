@@ -111,12 +111,8 @@ __all__ = [
 
 REDACTED_TOKEN = "<REDACTED>"
 
-# Volatility mechanism 1+2: flag-carryable (--deliverable-id / --branch).
 MINT_FIELDS: frozenset[str] = frozenset({"deliverable_id", "branch"})
 
-# Volatility mechanism 3: no carry path, always minted/derived fresh.
-# "run_id" (audit-record's run_id_placeholder field,
-# date-derived via _today() with no CLI carry path) was a real registry gap,
 # previously patched only in the C6 test's private _LOCAL_EXTRA_REDACT.
 TIME_FIELDS: frozenset[str] = frozenset(
     {
@@ -131,8 +127,6 @@ TIME_FIELDS: frozenset[str] = frozenset(
     }
 )
 
-# The closed set (AC5). No field name outside this union may be treated as
-# volatile by this module or any downstream conformance harness.
 VOLATILE_FIELDS: frozenset[str] = MINT_FIELDS | TIME_FIELDS
 
 
@@ -166,7 +160,6 @@ class FieldPolicy:
     value_field: str | None = None
 
     def resolved_field(self) -> str:
-        """The key into a ``resolved_field_values`` mapping for this field."""
         return self.value_field if self.value_field is not None else self.field
 
 
@@ -174,24 +167,7 @@ def _p(field: str, flag: str | None = None, *, value_field: str | None = None) -
     return FieldPolicy(field=field, injectable_flag=flag, value_field=value_field)
 
 
-# Per-type volatile-field policy — the closed set, exhaustive over all 22
-# extracted types (C2's templates/*.json). A type absent from this dict (or
-# present with an empty tuple) carries NO volatile fields at all — see
 # DETERMINISTIC_TYPES below for the two such types this audit found.
-#
-# Verified line-for-line against templates/*.json's declared frontmatter field
-# keys (not merely the oracle's ``main()``) — e.g. ``goal-seed`` carries
-# ``branch``/``handoff_id`` but NOT ``deliverable_id`` (excluded from the
-# oracle's ``_spine_types`` set) — a real asymmetry, not an omission.
-# ``roadmap-baton`` USED TO carry ``deliverable_id`` but NOT ``handoff_id``
-# (excluded from the oracle's handoff-id-minting doc_type tuple) — that
-# exclusion was a break-class defect (AC13, docs/plans/2026-08-01-baton-
-# spine-information-integrity.md § A5): minted roadmap batons carried
-# ``stub_id``/``deliverable_id`` with no ``handoff_id`` at all, so any
-# fleet-side consumer joining on ``handoff_id`` missed the entire
-# roadmap-baton record class. Fixed at the same commit as this comment —
-# ``roadmap-baton`` now carries ``handoff_id`` like every other
-# handoff-family doc_type below.
 _POLICY: dict[str, tuple[FieldPolicy, ...]] = {
     "audit-record": (
         _p("created"),
@@ -254,27 +230,14 @@ _POLICY: dict[str, tuple[FieldPolicy, ...]] = {
     "strategic-self-description": (),
 }
 
-# The one extracted type this audit found to be fully deterministic: no
-# minted id, no shellout-derived value, no wall-clock read anywhere in its
-# oracle scaffolder body or its extracted template. ``review-findings`` was
-# a second member until the 2026-07-24 schema unification made it
-# frontmatter-bearing (spawned_at is now wall-clock-derived) — see the
-# module docstring.
 DETERMINISTIC_TYPES: frozenset[str] = frozenset({"strategic-self-description"})
 
 
 def volatile_fields_for(doc_type: str) -> tuple[FieldPolicy, ...]:
-    """Return the closed volatile-field policy tuple for ``doc_type``.
-
-    Returns an empty tuple for a fully-deterministic type (or any doc_type this
-    registry has never heard of — callers distinguish the two via
-    ``template_format.available_template_types()``).
-    """
     return _POLICY.get(doc_type, ())
 
 
 def injectable_fields_for(doc_type: str) -> dict[str, str]:
-    """Return ``{field: cli_flag}`` for ``doc_type``'s flag-carryable fields."""
     return {
         p.field: p.injectable_flag
         for p in volatile_fields_for(doc_type)
@@ -283,36 +246,16 @@ def injectable_fields_for(doc_type: str) -> dict[str, str]:
 
 
 def redact_only_fields_for(doc_type: str) -> tuple[str, ...]:
-    """Return the field names for ``doc_type`` with no CLI carry path."""
     return tuple(p.field for p in volatile_fields_for(doc_type) if p.injectable_flag is None)
 
 
 def is_fully_deterministic(doc_type: str) -> bool:
-    """True when ``doc_type`` carries zero volatile fields (of either family)."""
     return len(volatile_fields_for(doc_type)) == 0
 
 
 def redact_values(
     resolved_field_values: Mapping[str, Any], doc_type: str, *, token: str = REDACTED_TOKEN
 ) -> dict[str, Any]:
-    """Redact ``doc_type``'s redact-only fields in a resolved-value mapping.
-
-    Applies to the SAME flat mapping shape ``render.render_document`` consumes —
-    intended for the internal-render side of a C6 comparison after rendering (or
-    equivalently, redact the resolved inputs before rendering both sides; either
-    application point yields the same redacted text since these fields are
-    ``value``/``present_as_null`` kinds with no other line dependent on them).
-    Leaves injectable fields (``deliverable_id``/``branch``) untouched — those
-    are normalized by DRIVING both sides with the same injected value instead,
-    not by redaction.
-
-    Redacts by each policy's ``resolved_field()`` (the mapping key), NOT by
-    ``field`` (the template's emitted YAML key) — a code-review finding caught
-    this function silently no-op'ing for ``problem-set`` (mapping key
-    ``created`` vs. emitted key ``date``), because it used to key off ``field``
-    directly, which only coincidentally matched the mapping for every OTHER
-    tracked type.
-    """
     out = dict(resolved_field_values)
     for policy in volatile_fields_for(doc_type):
         if policy.injectable_flag is not None:
@@ -365,9 +308,7 @@ def redact_text(text: str, doc_type: str, *, token: str = REDACTED_TOKEN) -> str
 
 
 class VolatilitySetError(AssertionError):
-    """Raised by ``assert_closed_set`` when the registry and the on-disk
-    templates disagree about which fields are volatile for some type.
-    """
+    pass
 
 
 def assert_closed_set(templates_directory: str | None = None) -> None:

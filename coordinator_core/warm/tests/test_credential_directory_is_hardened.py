@@ -51,16 +51,6 @@ posix_only = pytest.mark.skipif(
 
 @pytest.fixture
 def runtime_base(monkeypatch):
-    """A private runtime base, kept SHORT deliberately. Sibling suites here were
-    red on macOS for months because pytest's `tmp_path` is deep enough that the
-    derived socket path blows the `sun_path` budget; nothing in this file binds
-    a socket, but inheriting the habit costs nothing and the next test added
-    beside these might.
-
-    `/tmp` does not exist as a drive-relative root on Windows, so
-    `os.name == "nt"` falls back to the platform default temp root there
-    -- every caller of this fixture is `posix_only` today, but a future
-    one should not have to rediscover the guard."""
     base = Path(tempfile.mkdtemp(prefix="cred-", dir=None if os.name == "nt" else "/tmp"))
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(base))
     yield base
@@ -72,9 +62,6 @@ def _mode(path: Path) -> int:
 
 @posix_only
 def test_a_default_umask_still_produces_a_private_directory(runtime_base, monkeypatch):
-    """The exact condition the box was in. 022 is the default on essentially
-    every distribution and on macOS, so this is the ordinary case, not an edge
-    one -- which is why the defect reached every POSIX deployment at once."""
     previous = os.umask(0o022)
     try:
         directory = door_credential.ensure_directory_excludes_others()
@@ -87,8 +74,6 @@ def test_a_default_umask_still_produces_a_private_directory(runtime_base, monkey
 
 @posix_only
 def test_an_existing_0755_directory_is_repaired(runtime_base):
-    """Every box that already ran the old code is in this state -- the fix has
-    to reach them, not just be correct for a fresh install."""
     directory = door_credential.warm_dir()
     directory.mkdir(parents=True, exist_ok=True)
     os.chmod(directory, 0o755)
@@ -101,10 +86,6 @@ def test_an_existing_0755_directory_is_repaired(runtime_base):
 
 @posix_only
 def test_minting_a_secret_hardens_the_directory_it_mints_into(runtime_base):
-    """`ensure_secret` was the creation site: a bare `mkdir` with no mode. A
-    secret minted into a world-readable directory is not a secret, and the
-    assert that would have caught it runs at door boot -- possibly on another
-    process, possibly much later."""
     previous = os.umask(0o022)
     try:
         secret = door_credential.ensure_secret()
@@ -118,9 +99,6 @@ def test_minting_a_secret_hardens_the_directory_it_mints_into(runtime_base):
 
 @posix_only
 def test_the_secret_survives_hardening(runtime_base):
-    """Hardening is not rotation. An existing secret must come back untouched --
-    a live session's exported copy cannot be refreshed, so silently minting a
-    new one would stop authenticating it."""
     first = door_credential.ensure_secret()
     second = door_credential.ensure_secret()
 
@@ -146,7 +124,5 @@ def test_a_symlink_standing_in_for_the_directory_still_refuses(runtime_base):
 
 
 def test_the_hardener_is_exported_beside_the_assertion():
-    """They are a pair, and a caller that can reach one must be able to reach
-    the other -- `front_door.load_secret` calls both, in that order."""
     assert "ensure_directory_excludes_others" in door_credential.__all__
     assert "assert_directory_excludes_others" in door_credential.__all__

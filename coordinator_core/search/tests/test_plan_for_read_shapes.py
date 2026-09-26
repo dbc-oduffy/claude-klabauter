@@ -1,27 +1,3 @@
-"""Recognition tests for `answer.plan_for`'s read-shape branch (C3), plus an explicit
-regression that the pre-existing grep branch's plans are unchanged.
-
-Purpose: `plan_for` now recognizes two source classes -- grep-family invocations
-(unchanged, AC4) and `cat`/`head`/`tail`/`sed -n` read invocations (C1's parser, wired
-here). This file asserts recognition/decline AT THE `plan_for` LEVEL (what `AnswerPlan`
-gets built, and with what `Source`), not end-to-end rendered text -- that differential
-coverage already lives in `test_answer_differential.py` (grep) and
-`test_sources_read.py` (read parsing).
-
-PowerShell recognition (C10b) is covered at the bottom of this file, same level: what
-`plan_for(cmd, tool_name="PowerShell")` builds, keyed off `tool_name` rather than off
-`cmd`'s own basename table. Byte-fidelity coverage against a real PowerShell host is
-`test_powershell_shapes_differential.py`'s job, not this file's.
-
-Negative-spec:
-  - Does NOT re-assert the grep branch's differential correctness -- only that
-    `plan_for` still recognizes it and builds a `GrepSource` (AC4's own oracle covers
-    output fidelity).
-  - Does NOT test rendering (`_render`/`answer`) -- that is `test_answer_differential.py`
-    and any read-specific rendering coverage, out of this file's scope.
-  - Does NOT re-assert PowerShell byte-fidelity here -- see
-    `test_powershell_shapes_differential.py` for that oracle.
-"""
 
 from __future__ import annotations
 
@@ -36,9 +12,6 @@ from coordinator_core.search.sources_powershell import ChildItemSpec, ContentSpe
 def tree(tmp_path):
     (tmp_path / "notes.md").write_text("alpha appears here\nbeta appears here\n")
     return tmp_path
-
-
-# --------------------------------------------------------------------- recognition
 
 
 def test_recognizes_bare_cat(tree):
@@ -93,13 +66,7 @@ def test_recognition_is_not_gated_on_grep_via_bash_shape(tree):
     assert plan_for("cat notes.md") is not None
 
 
-# -------------------------------------------------------------------------- decline
-
-
 def test_declines_when_read_is_piped_into(tree):
-    """`<cmd> | cat FILE` -- `cat` still names its own operand here, but the
-    structural guard is segment-position-based (piped_into on the first segment),
-    mirroring the grep branch's identical refusal."""
     assert plan_for("echo hi | cat notes.md") is None
 
 
@@ -125,9 +92,6 @@ def test_declines_on_multi_file_head(tree):
 
 def test_declines_empty_command():
     assert plan_for("") is None
-
-
-# ------------------------------------------------------------------------------ ls
 
 
 def test_recognizes_bare_ls(tree):
@@ -167,9 +131,6 @@ def test_declines_ls_on_unsupported_flag(tree):
     assert plan_for("ls -l") is None
 
 
-# ------------------------------------------------------------- grep branch unchanged
-
-
 def test_grep_branch_plan_unchanged_bare(tree):
     plan = plan_for("grep -n alpha notes.md")
     assert plan is not None
@@ -190,12 +151,6 @@ def test_grep_branch_plan_unchanged_with_stage(tree):
 
 
 def test_grep_branch_still_declines_on_upstream_feed(tree):
-    """`<cmd> | grep` where the upstream is NOT itself a recognizable read source
-    still declines at the grep branch -- this regression is scoped to a plain
-    upstream, not `cat | grep`, which is now a legitimate read+filter-stage
-    combination (see module docstring; `test_answer_differential.py`'s identically
-    named case pre-dates read-source recognition and is now stale for that one
-    input, not for this one)."""
     assert plan_for("echo hi | grep alpha") is None
 
 
@@ -203,14 +158,7 @@ def test_grep_branch_still_declines_on_semicolon_compound(tree):
     assert plan_for("grep -n alpha notes.md ; echo done") is None
 
 
-# ------------------------------------------------------------------- powershell
-
-
 def test_bash_default_tool_name_never_recognizes_powershell_verbs(tree):
-    """`tool_name` defaults to `"Bash"` (backward compatible, every existing
-    caller unchanged) -- a `Get-Content`/`Get-ChildItem` token stream is not a
-    recognized bash verb at all under that default, so it declines rather than
-    silently mis-parsing."""
     assert plan_for("Get-Content notes.md") is None
     assert plan_for("Get-ChildItem") is None
 
@@ -241,11 +189,6 @@ def test_recognizes_get_childitem_bare(tree):
 
 
 def test_powershell_ls_alias_does_not_cross_wire_into_bash_ls(tree):
-    """`ls` is a live `Get-ChildItem` alias under PowerShell -- it must build a
-    `PowerShellSource`/`ChildItemSpec`, never an `LsSource`/`sources_listdir.LsSpec`
-    (module docstring negative-spec: cross-wiring the bash `ls` grammar onto a
-    PowerShell `ls` token stream is a confidently-wrong parse, not merely a
-    less-precise one)."""
     plan = plan_for("ls", tool_name="PowerShell")
     assert plan is not None
     assert isinstance(plan.source, PowerShellSource)
@@ -253,8 +196,6 @@ def test_powershell_ls_alias_does_not_cross_wire_into_bash_ls(tree):
 
 
 def test_powershell_cat_alias_does_not_cross_wire_into_bash_cat(tree):
-    """`cat` is a live `Get-Content` alias under PowerShell -- same discipline as
-    the `ls` case above, mirrored for the read verb."""
     plan = plan_for("cat notes.md", tool_name="PowerShell")
     assert plan is not None
     assert isinstance(plan.source, PowerShellSource)
@@ -270,9 +211,6 @@ def test_powershell_declines_on_unsupported_flag(tree):
 
 
 def test_powershell_declines_on_unrecognized_downstream_stage(tree):
-    """No PowerShell stage vocabulary exists (module docstring) -- a downstream
-    segment declines the whole plan via `build_stage`'s bash-verb-keyed lookup,
-    exactly as an unabsorbable bash stage would."""
     assert plan_for("Get-Content notes.md | Measure-Object", tool_name="PowerShell") is None
 
 

@@ -175,14 +175,7 @@ class TestNoNewSpawnOnEarlyRungs(unittest.TestCase):
         with (
             unittest.mock.patch.dict(os.environ, {"COORDINATOR_ENGINE_ROOT": "/from/env"}, clear=False),
             unittest.mock.patch("subprocess.run") as mock_run,
-            # Rung 1 delegates to the real gate, which reads
             # COORDINATOR_ENGINE_ROOT back unchanged when set. Forcing the
-            # same-tree branch keeps that real ordinary-import path
-            # deterministic regardless of whatever `sys.modules
-            # ["coordinator_core"]` state a peer test in this file (or the
-            # repo-root conftest's eager import) left cached — this test is
-            # about the no-new-spawn contract, not about which
-            # `_delegate_to_gate` branch is taken.
             unittest.mock.patch.object(
                 _engine_bootstrap_mod, "_is_same_tree_as_canonical", return_value=True
             ),
@@ -226,14 +219,6 @@ class TestNoNewSpawnOnEarlyRungs(unittest.TestCase):
             (checkout_root / "pyproject.toml").write_text(
                 "[project]\nname = \"stub\"\n", encoding="utf-8"
             )
-            # `_delegate_to_gate` needs a REAL, loadable
-            # `coordinator_core/engine_root.py` under the candidate defining a
-            # `coordinator_*_root_with_class` entry point — that is the
-            # contract `_load_foreign_gate_entry_point` (the foreign-candidate
-            # branch, forced below) actually exercises. A bare empty dir
-            # under-supplies what this code path requires and makes the test
-            # raise on an incomplete fixture rather than assert on rung 3's
-            # own behaviour.
             (core_dir / "engine_root.py").write_text(
                 "def coordinator_engine_root_with_class():\n"
                 "    return (%r, 'self-located-stub')\n" % str(checkout_root),
@@ -249,34 +234,15 @@ class TestNoNewSpawnOnEarlyRungs(unittest.TestCase):
                     os.environ, {"COORDINATOR_SETTINGS_HOME": str(settings_home)}, clear=False
                 ),
                 unittest.mock.patch.object(_mod, "__file__", fake_file),
-                # `_resolve_claude_klabauter_root` is a PLAIN ALIAS for
-                # `engine_bootstrap._resolve_engine_root` (same function
-                # object) — its bare-name `_machine_local_get(...)` call
-                # resolves through `engine_bootstrap`'s own module globals at
-                # call time, never through `cc_invoke`'s namespace, so the
-                # patch target must be the defining module.
                 unittest.mock.patch.object(
                     _engine_bootstrap_mod, "_machine_local_get", return_value=None
                 ) as mock_get,
-                # `_delegate_to_gate` branches on whether the candidate is the
-                # SAME tree `coordinator_core` is already cached from
-                # (`_is_same_tree_as_canonical`). That answer depends on
-                # ambient `sys.modules["coordinator_core"]` state left behind
-                # by whatever ran before this test in the process — order-
-                # dependent, and not what this test is about. Forcing the
-                # foreign-candidate branch makes rung 3's own behaviour
-                # deterministic regardless of run order, and is exercised for
-                # real via the on-disk `engine_root.py` stub above (not
-                # short-circuited).
                 unittest.mock.patch.object(
                     _engine_bootstrap_mod, "_is_same_tree_as_canonical", return_value=False
                 ),
             ):
                 resolved = _mod._resolve_claude_klabauter_root()
             self.assertEqual(os.path.realpath(resolved), os.path.realpath(str(checkout_root)))
-            # _machine_local_get is Rung 2's OWN existing spawn boundary (mocked
-            # here rather than left real); self-location itself calls it zero
-            # additional times.
             mock_get.assert_called_once()
 
 
@@ -311,17 +277,13 @@ def _make_fake_coordinator_core_with_class(root: str, resolution_class: str) -> 
     candidate_dir = tempfile.mkdtemp()
 
     cc_pkg = types.ModuleType("coordinator_core")
-    cc_pkg.__path__ = []  # mark as a package
+    cc_pkg.__path__ = []
     claude_klabauter_root_mod = types.ModuleType("coordinator_core.engine_root")
 
     def _fake_with_class():
         return (root, resolution_class)
 
     claude_klabauter_root_mod.coordinator_engine_root_with_class = _fake_with_class
-    # Deliberately do NOT define coordinator_claude_klabauter_root() on the fake module —
-    # if the call site regresses to the classless import, this fixture makes
-    # that regression raise ImportError/AttributeError instead of silently
-    # passing.
     sys.modules["coordinator_core"] = cc_pkg
     sys.modules["coordinator_core.engine_root"] = claude_klabauter_root_mod
     return candidate_dir
@@ -488,10 +450,7 @@ class TestDR326PublishedPointerWinsAtRung1_5(unittest.TestCase):
                     clear=False,
                 ),
                 unittest.mock.patch("subprocess.run") as mock_run,
-                # See test_rung1_env_var_no_spawn's identical note: rung 1
-                # delegates to the real gate (which reads
                 # COORDINATOR_ENGINE_ROOT back unchanged), and forcing the
-                # same-tree branch keeps that deterministic across run order.
                 unittest.mock.patch.object(
                     _engine_bootstrap_mod, "_is_same_tree_as_canonical", return_value=True
                 ),

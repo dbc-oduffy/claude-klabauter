@@ -1,9 +1,3 @@
-"""
-Tests for coordinator_core.claim_state — the ledger-first claim accessor.
-
-Spec backlink: pln-claim-state-make-the-ledger-th-6641e3
-§ Tasks, chunk C1 (AC1, AC2).
-"""
 
 from __future__ import annotations
 
@@ -90,10 +84,6 @@ def test_mirror_only_no_ledger(workspace):
 
 
 def test_disagreement_ledger_claims_mirror_does_not(workspace):
-    """AC2: the branch-switch-revert desync — ledger holds a live claim, the
-    mirror reverted to open. The accessor must report this as a distinct,
-    inspectable flag, resolving ledger-first (never silently trusting the
-    mirror's "open" answer)."""
     common_dir, handoff = workspace
     _write_claim_dir(common_dir, handoff.name, "sess-d", "2026-08-07T13:00:00Z")
     _write_handoff(handoff, status="open")
@@ -122,7 +112,6 @@ def test_ledger_holder_dead_degrades_to_mirror(workspace):
 
 
 def test_legacy_consumed_by_shape(workspace):
-    """DR-084: consumed_by is still accepted on the mirror side."""
     common_dir, handoff = workspace
     _write_handoff(handoff, consumed_by="sess-f", claimed_at="2026-08-07T15:00:00Z", status="claimed")
 
@@ -171,10 +160,6 @@ def test_handoff_claim_dir_path_shape(tmp_path):
 
 
 def test_no_subprocess_re_shelled_out_per_call(workspace, monkeypatch):
-    """COST constraint: `git_common_dir` is lru_cache'd and this accessor takes
-    an optional pre-resolved `common_dir` (matching `handoff_claim_dir`'s own
-    signature) — confirm no subprocess is spawned when common_dir is supplied,
-    and that git_common_dir itself is never even called in that path."""
     common_dir, handoff = workspace
     _write_handoff(handoff, status="open")
 
@@ -184,10 +169,6 @@ def test_no_subprocess_re_shelled_out_per_call(workspace, monkeypatch):
 
 
 def test_git_common_dir_is_lru_cached_when_common_dir_omitted(workspace):
-    """When common_dir IS omitted, resolution falls through to
-    lifecycle.git_common_dir, which is lru_cache'd process-wide — confirm the
-    cache decorator is present so repeated calls with the same argument do not
-    re-invoke the underlying (subprocess-spawning) resolver."""
     from coordinator_core.lifecycle import git_common_dir
 
     assert hasattr(git_common_dir, "cache_info"), (
@@ -198,11 +179,6 @@ def test_git_common_dir_is_lru_cached_when_common_dir_omitted(workspace):
 
 
 def test_malformed_session_id_degrades_not_raises(workspace):
-    """EM-authored P1: a ledger `session_id` file holding invalid UTF-8 raises
-    UnicodeDecodeError (a ValueError, NOT an OSError) out of the bare
-    `except OSError` guard — this must degrade to "no usable ledger evidence"
-    instead, per this accessor's entire degrade-not-raise contract. Blast
-    radius: ~25 readers migrated onto this accessor all assume it degrades."""
     common_dir, handoff = workspace
     claim_dir = common_dir / "coordinator-sessions" / "handoff-claims" / handoff.name
     claim_dir.mkdir(parents=True)
@@ -217,10 +193,6 @@ def test_malformed_session_id_degrades_not_raises(workspace):
 
 
 def test_malformed_claimed_at_degrades_not_raises(workspace):
-    """EM-authored P1 sibling: a malformed (invalid-UTF-8) `claimed_at` file
-    must also degrade, not raise — the ledger session_id is well-formed and
-    live here, so the record resolves with claimed_at coerced to None rather
-    than propagating a decode error."""
     common_dir, handoff = workspace
     claim_dir = common_dir / "coordinator-sessions" / "handoff-claims" / handoff.name
     claim_dir.mkdir(parents=True)
@@ -236,11 +208,6 @@ def test_malformed_claimed_at_degrades_not_raises(workspace):
 
 
 def test_disagreement_flag_narrower_than_full_holder_mismatch(workspace):
-    """Reviewer P2: `disagreement` is deliberately narrower than "any
-    ledger/mirror mismatch" — it flags ONLY ledger-live-mirror-empty, not a
-    both-present holder mismatch. A same-slot mismatch (ledger says sess-x,
-    mirror says sess-y) resolves with disagreement=False, but the mismatch
-    stays independently visible via ledger_holder/mirror_holder."""
     common_dir, handoff = workspace
     _write_claim_dir(common_dir, handoff.name, "sess-x", "2026-08-07T17:00:00Z")
     _write_handoff(handoff, claimed_by="sess-y", claimed_at="2026-08-07T16:00:00Z", status="claimed")
@@ -255,10 +222,6 @@ def test_disagreement_flag_narrower_than_full_holder_mismatch(workspace):
 
 
 def test_historical_claim_ignores_holder_liveness(workspace):
-    """`resolve_historical_claim` answers "was this ever claimed, and by whom",
-    so a DEAD holder is still the correct attribution — the exact case
-    `resolve_claim_state` correctly degrades to None on
-    (test_ledger_holder_dead_degrades_to_mirror above)."""
     common_dir, handoff = workspace
     _write_claim_dir(common_dir, handoff.name, "sess-dead", "2026-08-07T14:00:00Z")
     _write_handoff(handoff, status="open")
@@ -278,9 +241,6 @@ def test_historical_claim_absent_ledger_is_none(workspace):
 
 
 def test_historical_claim_never_consults_the_mirror(workspace):
-    """Negative-spec: the value of this accessor is the ledger half of the
-    pair. A mirror-only claim is not a ledger record and must not be reported
-    as one."""
     common_dir, handoff = workspace
     _write_handoff(handoff, claimed_by="sess-mirror", claimed_at="2026-08-07T09:00:00Z", status="claimed")
 
@@ -293,11 +253,6 @@ def test_historical_claim_missing_claimed_at_still_names_the_holder(workspace):
     _write_handoff(handoff, status="open")
 
     assert claim_state.resolve_historical_claim(handoff, common_dir=common_dir) == ("sess-noat", None)
-
-
-# ---------------------------------------------------------------------------
-# compare_claim_state — Track B (AC6, AC7, AC9).
-# ---------------------------------------------------------------------------
 
 
 def test_comparator_agree(workspace):
@@ -323,7 +278,7 @@ def test_comparator_ledger_only_reports_age_off_ledger_claimed_at(workspace):
 
     with mock.patch.object(claim_state, "cs_claim_holder_live", return_value=True):
         report = claim_state.compare_claim_state(
-            handoff, common_dir=common_dir, now=1786096800.0 + 60.0  # 2026-08-07T10:00:00Z + 60s
+            handoff, common_dir=common_dir, now=1786096800.0 + 60.0
         )
 
     assert report.verdict == "ledger-only"
@@ -351,7 +306,7 @@ def test_comparator_holder_mismatch_ages_off_ledger_side(workspace):
 
     with mock.patch.object(claim_state, "cs_claim_holder_live", return_value=True):
         report = claim_state.compare_claim_state(
-            handoff, common_dir=common_dir, now=1786096800.0 + 10.0  # ledger onset + 10s
+            handoff, common_dir=common_dir, now=1786096800.0 + 10.0
         )
 
     assert report.verdict == "holder-mismatch"
@@ -431,9 +386,6 @@ def test_comparator_bound_exceeded_is_a_named_reported_field(workspace):
 
 
 def test_comparator_composes_resolve_claim_state_not_a_second_read(workspace):
-    """AC6: composed over resolve_claim_state, not a second read of either
-    side — the gated ledger read (cs_claim_holder_live) is exercised exactly
-    once per compare_claim_state call."""
     common_dir, handoff = workspace
     _write_claim_dir(common_dir, handoff.name, "sess-a", "2026-08-07T10:00:00Z")
     _write_handoff(handoff, claimed_by="sess-a", claimed_at="2026-08-07T10:00:00Z", status="claimed")
@@ -445,9 +397,6 @@ def test_comparator_composes_resolve_claim_state_not_a_second_read(workspace):
 
 
 def test_comparator_never_touches_disagreement_flag(workspace):
-    """AC7 hard stop: the comparator is a new axis beside the
-    `disagreement` pin, not a replacement — resolve_claim_state's own flag
-    is unaffected by, and unread by, the comparator's verdict."""
     common_dir, handoff = workspace
     _write_claim_dir(common_dir, handoff.name, "sess-x", "2026-08-07T10:00:00Z")
     _write_handoff(handoff, claimed_by="sess-y", claimed_at="2026-08-07T09:00:00Z", status="claimed")
@@ -461,10 +410,6 @@ def test_comparator_never_touches_disagreement_flag(workspace):
 
 
 def test_import_cycle_stays_broken():
-    """Slice A P3: the C1 commit message claims an explicit import-cycle
-    smoke test was verified; no such test existed. This is that test — import
-    claim_state first, then every module the plan's anti-scope names as a
-    cycle risk, asserting none raises ImportError."""
     import coordinator_core.claim_state  # noqa: F401
     import coordinator_core.ops  # noqa: F401
     import coordinator_core.ops.fleet._common  # noqa: F401

@@ -1,21 +1,3 @@
-"""
-coordinator_core.orient_assemble.tests.test_em_environment_reportable — C5
-AC: `j-em-env-effort`/`j-em-env-model` (readers_clean_ops::_read_em_environment)
-name no directive, so `partition_reportable` (C1,
-`contract/decision_object/judgment.py`) classifies them `reported` at the
-`brief()` envelope seam in `coordinator_core/orient_assemble/__init__.py` —
-never inside `readers_clean_ops`, which only ever sees its own directives.
-
-Load-bearing note (why this chunk exists on its own): both points emit
-ONLY when EM effort is off `medium` OR the model is off Opus. A sweep run
-under default/ambient session conditions observes zero of them and would
-wrongly conclude they do not exist — exactly the under-count the plan
-names as the defect this chunk fixes. This test therefore FORCES both
-drift conditions explicitly (non-medium effort AND non-Opus model) rather
-than relying on whatever the ambient test-runner session happens to be.
-
-Spec backlink: docs/plans/2026-08-15-judgment-points-that-gate-nothing-stop-being-questions.md, chunk C5
-"""
 
 from __future__ import annotations
 
@@ -30,9 +12,6 @@ from coordinator_core.orient_assemble.readers_clean_ops import ReaderResult
 
 
 def _force_em_environment_drift(monkeypatch, tmp_path):
-    """Force BOTH drift conditions explicitly — non-medium effort AND a
-    non-Opus model — so the two `j-em-env-*` points are guaranteed to
-    emit regardless of the ambient session's real effort/model state."""
     monkeypatch.setenv("HOME", str(tmp_path / "does-not-exist"))
     monkeypatch.delenv("USERPROFILE", raising=False)
     monkeypatch.setattr(rco, "_resolve_effort", lambda proj, uc: ("high", "project"))
@@ -41,10 +20,6 @@ def _force_em_environment_drift(monkeypatch, tmp_path):
 
 
 def _quiet_everything_else(monkeypatch):
-    """Silence every OTHER `_read_*` probe in readers_clean_ops, and every
-    other reader family's `collect`, so the only judgment points in the
-    envelope are the two forced `j-em-env-*` points — isolates the
-    partition behavior under test from unrelated ambient findings."""
     monkeypatch.setattr(rco, "_scan_addon_health_run", lambda mode: ([], 0))
     monkeypatch.setattr(rco, "_read_memo_surface", lambda mode, *, repo_root=None: ReaderResult())
     monkeypatch.setattr(rco, "_read_rag_staleness", lambda: ReaderResult())
@@ -78,10 +53,6 @@ def test_em_environment_points_are_reported_not_asked_when_both_conditions_drift
 def test_em_environment_points_are_asked_not_reported_when_a_directive_names_them(
     monkeypatch, tmp_path
 ):
-    """Control case for the predicate itself (not this chunk's main claim):
-    a point stays `asked` when a directive depends on it, proving the
-    demotion is genuinely conditional on the directive relationship and
-    not an unconditional drop of these two ids."""
     _force_em_environment_drift(monkeypatch, tmp_path)
     _quiet_everything_else(monkeypatch)
 

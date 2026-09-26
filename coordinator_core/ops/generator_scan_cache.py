@@ -85,59 +85,14 @@ from coordinator_core.ops.generator_provenance import FileWrites
 
 _CACHE_FILENAME = "generator-scan-cache.json"
 _CONTENT_CACHE_FILENAME = "generator-content-cache.json"
-_CONTENT_HASH_DIGEST_SIZE = 16  # 128-bit blake2b -- collision-negligible for a correctness-only key
+_CONTENT_HASH_DIGEST_SIZE = 16
 
-#: 3 -> 4 (2026-09-06): `generator_provenance._extract_mutates` changed its
 #: SEMANTICS, not its shape -- it now resolves f-strings and names over the
-#: constants `session.machinery_paths` owns, so three `ops/fleet/memo_*`
 #: modules that previously scanned as `__MALFORMED__` -> UNDECLARED now report
-#: their real write targets. Entries are keyed on the SCANNED FILE's
-#: `(mtime_ns, size)`, which cannot see a change to the scanner itself: none of
-#: those modules was touched, so every reader would have kept being served the
-#: old verdict indefinitely. Bumping the schema is the only invalidation this
-#: store has for a scanner-semantics change, and it is what the version field
-#: is for. Bump it again on the next one.
-#:
-#: 4 -> 5 (2026-09-11, D5): `generator_provenance._call_is_write` and
-#: `_write_target_expr` now recognise the claiming seam's four names
-#: (`replace_text`/`replace_bytes`/`create_exclusive`/`append_claimed_line`,
-#: module-attribute or from-import form) as write sites, with their target
-#: at `args[0]` -- a scanner-semantics change exactly like the 3 -> 4 bump
-#: above, and for the same reason: no swept module's stat moves, so a stale
-#: entry would otherwise be served forever.
-#:
-#: Shared with the content cache (`generator-content-cache.json`) -- both
-#: files hold nothing but `FileWrites` produced by the same scanner, so one
-#: version field governs both stores. Bumping it means: (a) every stat-cache
-#: entry on every box goes cold on its next sweep (self-healing, no action
-#: needed -- `load` fails the version check and falls through to a fresh
-#: scan), and (b) the shipped content cache in this file's git history is
-#: ALSO now stale and must be regenerated in the SAME commit as whatever
-#: changed the scanner -- run
-#: `coordinator/bin/regenerate-generator-content-cache.py` and commit the
-#: result, or the fresh-clone cold path silently loses its speedup (every
-#: digest in the old-schema file fails `load_content_cache`'s version check
-#: and every stat-miss falls through to a full AST parse -- correct, never
-#: silently wrong, but back to paying the cost this store exists to avoid).
 _SCHEMA_VERSION = 5
 
 
 def _cache_path(repo_root: Path) -> Path:
-    """Resolve the cache file path from *repo_root* alone.
-
-    No home directory, no environment variable, no hardcoded drive letter --
-    the path is always `<machinery_root>/cache/generator-scan-cache.json`.
-
-    Resolved through `session.machinery_paths.cache_dir`, the declared owner
-    of that bucket, rather than the `("state", "cache", ...)` tuple this
-    module spelled by hand until 2026-09-06. That tuple was the pre-relocation
-    root: `machinery_paths` had already declared the cache bucket moved, so
-    this store kept writing to the retired one and the two diverged on disk
-    (a stale `.coordinator-local/cache/` copy beside a live `state/cache/`
-    one). Both are gitignored, so nothing failed loudly -- which is why it
-    survived. The schema bump beside this makes the cutover clean: no reader
-    can be served a pre-move entry regardless of which file it finds.
-    """
     from coordinator_core.session.machinery_paths import cache_dir
 
     return Path(cache_dir(str(repo_root))) / _CACHE_FILENAME
@@ -154,15 +109,6 @@ def _write_site_from_json(data: object) -> str | None:
 
 
 def file_writes_to_json(writes: FileWrites) -> dict:
-    """Serialize *writes* to a JSON-able mapping.
-
-    `generates`/`mutates` are already `json`-safe Python values (the raw
-    `ast.literal_eval` output a caller produced upstream -- a list, a
-    string sentinel, a dict, or None) and are stored as-is. `write_sites`
-    entries are already JSON-able (`str | None`) -- a site R1/R2/R5/R7
-    excludes never reaches `FileWrites.write_sites` in the first place, so
-    there is nothing left to filter here.
-    """
     return {
         "generates": writes.generates,
         "mutates": writes.mutates,
@@ -173,9 +119,6 @@ def file_writes_to_json(writes: FileWrites) -> dict:
 
 
 def file_writes_from_json(data: object) -> FileWrites:
-    """Inverse of `file_writes_to_json`. Raises on any malformed shape --
-    callers on the read path are expected to catch broadly, per this
-    module's fail-open contract at the store level."""
     if not isinstance(data, dict):
         raise ValueError("FileWrites entry is not a mapping")
     write_sites_raw = data["write_sites"]
@@ -213,15 +156,6 @@ def _entry_from_json(rel_path: str, data: object) -> tuple[str, dict] | None:
 
 
 def load(repo_root: Path) -> dict:
-    """Load the scan cache for *repo_root*.
-
-    Returns a mapping of `<posix rel path>` -> `{"mtime_ns": int, "size":
-    int, "writes": FileWrites}`. NEVER raises: a missing file, an unreadable
-    file, invalid or truncated JSON, a wrong schema value, or any malformed
-    entry each degrade to an empty mapping -- either for the whole file (a
-    top-level shape failure) or per-entry (a single bad entry is dropped,
-    the rest of a well-formed file is still usable).
-    """
     path = _cache_path(repo_root)
     try:
         raw = path.read_text(encoding="utf-8")
@@ -254,13 +188,6 @@ def load(repo_root: Path) -> dict:
 
 
 def save(repo_root: Path, entries: dict) -> None:
-    """Persist *entries* atomically. Swallows every write failure -- a
-    cache that cannot be written must not break the op that was only trying
-    to go faster. `entries` has the same shape `load` returns.
-
-    Written via a temp sibling in the same directory plus `os.replace`, so
-    a reader never observes a torn file even with concurrent writers.
-    """
     path = _cache_path(repo_root)
     payload = {
         "schema": _SCHEMA_VERSION,
@@ -288,45 +215,18 @@ def save(repo_root: Path, entries: dict) -> None:
             if tmp_path.exists():
                 tmp_path.unlink()
         except OSError:
-            # tmp file already gone; cache write already failed above regardless
             pass
 
 
 def content_hash(data: bytes) -> str:
-    """The content cache's key: a blake2b digest of *data*, hex-encoded.
-
-    128-bit (`digest_size=16`) rather than the default 512-bit -- this key is
-    a correctness-only dedup/lookup key, never a security boundary, and the
-    collision space that matters is "how many distinct file contents will
-    ever populate this store" (thousands, not billions), so 16 bytes is
-    ample margin at roughly half the stored-key size of a default digest.
-    Bytes in, not text -- callers hash the file's raw bytes, before any
-    encoding decision, so the same on-disk content always hashes identically
-    regardless of which caller (the production sweep, the regeneration
-    script) is doing the hashing.
-    """
     return hashlib.blake2b(data, digest_size=_CONTENT_HASH_DIGEST_SIZE).hexdigest()
 
 
 def _content_cache_path() -> Path:
-    """The shipped content cache lives beside THIS SOURCE FILE, never under
-    a repo's `machinery_root()` -- it is a git-committed artifact that ships
-    WITH the scanner, not per-repo derived state. `Path(__file__)` rather
-    than any `repo_root` argument: the content cache has no per-repo
-    identity at all, unlike the stat cache above."""
     return Path(__file__).resolve().parent / _CONTENT_CACHE_FILENAME
 
 
 def load_content_cache() -> dict[str, FileWrites]:
-    """Load the shipped, git-committed content-keyed cache.
-
-    Returns a mapping of `<blake2b hex digest>` -> `FileWrites`. NEVER
-    raises, for the same reason `load` never raises: a missing file, an
-    unreadable file, invalid or truncated JSON, a wrong schema version, or
-    a malformed entry all degrade to "no content cache, hash from scratch"
-    -- either for the whole file or per-entry, matching `load`'s own
-    granularity.
-    """
     path = _content_cache_path()
     try:
         raw = path.read_text(encoding="utf-8")
@@ -353,26 +253,12 @@ def load_content_cache() -> dict[str, FileWrites]:
         try:
             writes = file_writes_from_json(writes_data)
         except (ValueError, KeyError, TypeError):
-            # malformed entry in the content cache; drop it rather than fail the whole load
             continue
         entries[digest] = writes
     return entries
 
 
 def save_content_cache(entries: dict[str, FileWrites]) -> None:
-    """Persist *entries* atomically to the shipped content-cache file.
-
-    Production `discover_generators` NEVER calls this -- it only calls
-    `load_content_cache`. The only writer is
-    `coordinator/bin/regenerate-generator-content-cache.py`, run by a human
-    (or a ceremony) and committed deliberately, never on a per-sweep basis --
-    unlike the stat cache, this file is git-tracked, and a per-run writer
-    would mean every sweep dirties the working tree.
-
-    Keys are sorted before serialization so two regenerations over an
-    unchanged corpus produce byte-identical output -- a stable diff (or no
-    diff at all) rather than JSON key-order churn on every run.
-    """
     path = _content_cache_path()
     payload = {
         "schema": _SCHEMA_VERSION,
@@ -393,5 +279,4 @@ def save_content_cache(entries: dict[str, FileWrites]) -> None:
             if tmp_path.exists():
                 tmp_path.unlink()
         except OSError:
-            # tmp file already gone; cache write already failed above regardless
             pass

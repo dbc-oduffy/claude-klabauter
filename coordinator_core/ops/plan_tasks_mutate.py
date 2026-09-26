@@ -361,23 +361,8 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.wire_paths import rel_id
 
-# ---------------------------------------------------------------------------
-# Reply helpers
-# ---------------------------------------------------------------------------
-
 
 def _ok(applied: bool, message: str, *, warnings: Optional[list] = None) -> dict:
-    """Return exit_code=0 reply.
-
-    `warnings` (2026-08-16, untouched-invalid-row deadlock fix): a
-    (possibly empty/omitted) list of diagnostic strings surfaced alongside
-    a successful write — currently used to name pre-existing invalid rows
-    this mutation did NOT touch and therefore did not veto, mirroring the
-    `warnings` list shape `completion_ops.py` already establishes for
-    non-fatal diagnostics riding alongside a successful reply. Omitted
-    entirely (not an empty list) when there is nothing to report, so an
-    existing caller reading `applied`/`message` only sees no shape change.
-    """
     reply = {"exit_code": 0, "applied": applied, "message": message}
     if warnings:
         reply["warnings"] = warnings
@@ -385,36 +370,14 @@ def _ok(applied: bool, message: str, *, warnings: Optional[list] = None) -> dict
 
 
 def _err(message: str) -> dict:
-    """Return exit_code=1 reply (error; no write performed)."""
     return {"exit_code": 1, "applied": False, "error": message}
 
 
-# ---------------------------------------------------------------------------
-# Path resolution
-# ---------------------------------------------------------------------------
-
-
 class _PathNotContained(Exception):
-    """Raised by _resolve_path when plan_path escapes docs/plans/.
-
-    Mirrors handoff_transition.py::_PathNotContained (F0). Raised by
-    _resolve_path BEFORE locked_rmw is invoked; caught immediately outside the
-    mutate closure and mapped to {"exit_code": 1, "applied": False, "error": ...}
-    — the same exit_code=1/no-write outcome MutateAbort produces, but via a
-    dedicated exception rather than overloading MutateAbort for a pre-lock
-    path-resolution failure.
-    """
+    pass
 
 
 def _resolve_path(plan_path: str, worktree: Path) -> Path:
-    """Resolve plan_path to an absolute Path, contained under docs/plans/.
-
-    Absolute path -> used as-is. Relative path -> resolved against worktree
-    root (e.g. docs/plans/foo.md becomes <worktree>/docs/plans/foo.md).
-
-    Containment (F0): the resolved path MUST be under <worktree>/docs/plans/.
-    Raises _PathNotContained if the resolved path escapes that root.
-    """
     p = Path(plan_path)
     if not p.is_absolute():
         p = worktree / p
@@ -425,52 +388,28 @@ def _resolve_path(plan_path: str, worktree: Path) -> Path:
     return resolved
 
 
-# ---------------------------------------------------------------------------
-# Spine synthesis (add-task absent-spine sub-cases — F3)
-# ---------------------------------------------------------------------------
-
 _TASKS_HEADING_LINE = "## Tasks"
 _FENCE_OPEN = "```yaml plan-tasks\n"
 _FENCE_CLOSE = "\n```"
 
 
 def _has_tasks_heading(source: str) -> bool:
-    # Reuse body_blocks._compile_heading_re instead of
-    # a third hardcoded copy of the same heading regex; hoisted `import re` to
-    # module scope (F4).
     return _compile_heading_re("Tasks").search(source) is not None
 
 
 def _synthesize_fence_under_heading(source: str, body_yaml: str) -> str:
-    """Insert a fresh fence directly under the existing '## Tasks' heading.
-
-    Requires a '## Tasks' heading to already exist with no adjacent fence
-    (LocateStatus.ABSENT sub-case). Inserts the fence immediately after the
-    heading line, preserving everything else byte-for-byte.
-    """
     heading_re = _compile_heading_re("Tasks")
     match = heading_re.search(source)
-    assert match is not None  # caller has already verified the heading exists
+    assert match is not None
     insert_at = match.end()
     fenced = f"\n\n{_FENCE_OPEN}{body_yaml}{_FENCE_CLOSE}\n"
     return source[:insert_at] + fenced + source[insert_at:]
 
 
 def _synthesize_tasks_section(source: str, body_yaml: str) -> str:
-    """Append a fresh '## Tasks' section + fence at the end of the document.
-
-    Used only when no '## Tasks' heading exists at all.
-    """
-    # Collapsed dead-branch ternary (middle and final
-    # arms both produced "\n\n"; only two distinct outcomes exist) (F1/F6).
     separator = "" if source.endswith("\n\n") else "\n\n"
     section = f"{_TASKS_HEADING_LINE}\n\n{_FENCE_OPEN}{body_yaml}{_FENCE_CLOSE}\n"
     return source + separator + section
-
-
-# ---------------------------------------------------------------------------
-# Row validation
-# ---------------------------------------------------------------------------
 
 
 def _validate_row(row: dict, *, governed: bool = False, plan_created: Optional[str] = None) -> list:
@@ -550,42 +489,6 @@ def _validate_all(
     touched_ids: Optional[set] = None,
     plan_created: Optional[str] = None,
 ) -> list:
-    """Validate rows in `rows`; raise MutateAbort on the first invalid TOUCHED
-    row. Returns the list of ids of pre-existing invalid rows this call did
-    NOT touch (untouched-invalid diagnostic — empty list when there are
-    none), so a caller can surface them as a warning without vetoing the
-    write.
-
-    Shared uniformly by add-task's ABSENT and LOCATED
-    branches and by stamp's post-update validation loop (F3), replacing what
-    was previously an asymmetric shape (ABSENT validated only the single new
-    `task`, relying on `rows == []` making that equivalent to validating the
-    whole `new_rows` list — correct today by coincidence, not by invariant).
-
-    `governed` is PLAN-scoped and must be resolved by the caller from the
-    plan's frontmatter — no row can answer it. Default False is the legacy
-    predicate, i.e. today's behaviour exactly. `plan_created` (2026-08-19
-    fix) is likewise PLAN-scoped — the plan document's own `created`
-    frontmatter field, forwarded through to `_cf_plan_tasks_writes_declared`
-    (see that rule's docstring) so a hand-authored open row missing
-    `writes` is actually caught here, not only at `dispatch.emit`'s
-    preflight. Every verb below resolves it from `old_text`'s own
-    frontmatter, mirroring how `_resolve` already resolves `governed`.
-
-    `touched_ids` (2026-08-16, untouched-invalid-row deadlock fix — queue
-    entry for the live repro: two rows each schema-invalid for reasons
-    unrelated to the call in question deadlocked each other's repair,
-    because this function used to validate and veto on EVERY row in the
-    spine regardless of whether the mutation touched it. A row this
-    mutation did not write could not have made that row worse, so it must
-    not be able to block the write. `None` (the default) preserves the old
-    "validate every row, veto on any" behaviour for any caller that has not
-    been updated to pass it — every in-repo caller below now passes the
-    ids it actually wrote. A row IS "touched" if its id is in the set;
-    every row this call itself just wrote must always be in that set, so
-    invariant (1) — this op may never WRITE a newly-invalid row — is
-    unchanged.
-    """
     untouched_invalid: list = []
     for row in rows:
         errors = _validate_row(row, governed=governed, plan_created=plan_created)
@@ -600,12 +503,6 @@ def _validate_all(
 
 
 def _untouched_invalid_warnings(untouched_invalid: list) -> list:
-    """Render `_validate_all`'s untouched-invalid-row id list as the
-    `warnings` list `_ok` surfaces alongside a successful write — so a
-    repair does not silently normalize a broken spine into looking fine
-    (requirement 4 of the 2026-08-16 deadlock fix). Empty list in, empty
-    list out — `_ok` omits the key entirely when this is falsy.
-    """
     if not untouched_invalid:
         return []
     ids = ", ".join(repr(i) for i in untouched_invalid)
@@ -663,12 +560,6 @@ _PlanTasksDumper.add_representer(str, _plan_tasks_str_representer)
 
 
 def _dump_rows(rows: list) -> str:
-    """Re-serialize the row list per the pinned dump options (F1).
-
-    Uses `_PlanTasksDumper` (not the bare `yaml.safe_dump`/`SafeDumper`) so a
-    row's `body:` field round-trips as a literal block scalar instead of a
-    flattened, escaped single line — see `_plan_tasks_str_representer`.
-    """
     return yaml.dump(
         rows,
         Dumper=_PlanTasksDumper,
@@ -677,11 +568,6 @@ def _dump_rows(rows: list) -> str:
         allow_unicode=True,
         width=4096,
     )
-
-
-# ---------------------------------------------------------------------------
-# add-task
-# ---------------------------------------------------------------------------
 
 
 def _parse_rows_or_abort(body: str, verb: str) -> list:
@@ -719,13 +605,6 @@ def _parse_rows_or_abort(body: str, verb: str) -> list:
 
 
 def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> dict:
-    """Apply the add-task verb: append `task` as a new row to the task spine.
-
-    Routes the read-modify-write through locked_rmw for cross-process
-    serialisation. Domain-abort paths (malformed spine, duplicate id,
-    schema-invalid row) raise MutateAbort from inside the mutate closure so
-    the lock is released and no write occurs.
-    """
     try:
         path = _resolve_path(plan_path, worktree)
     except _PathNotContained as exc:
@@ -745,24 +624,13 @@ def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> di
                 "or a fence not directly under the '## Tasks' heading)"
             )
 
-        # PLAN-scoped context _validate_all forwards to the writes-declared
-        # cross-field rule (2026-08-19 fix) — resolved once per mutate call,
-        # mirroring how `_resolve` already resolves `governed` from the same
-        # frontmatter parse.
         plan_fm = parse_frontmatter(old_text).get("frontmatter")
         plan_created = plan_fm.get("created") if isinstance(plan_fm, dict) else None
-        # governed threaded into validation (2026-08-31 fix, cross-repo/archive/
-        # 2026-08-13-doe-claude-em-plan-tasks-mutate-governed-flag-asymmetry.md):
-        # mirrors `resolve`'s own resolution from the same frontmatter parse, so
-        # add-task and resolve agree on row validity for the same governed plan.
         governed = is_governed_plan(plan_fm) if isinstance(plan_fm, dict) else False
 
         if result.status is LocateStatus.ABSENT:
             rows: list = []
             new_rows = rows + [task]
-            # Validate new_rows uniformly via the
-            # shared _validate_all helper in both ABSENT and LOCATED branches,
-            # instead of validating `task` alone here (F3).
             try:
                 untouched_invalid = _validate_all(
                     new_rows, governed=governed, touched_ids={task["id"]}, plan_created=plan_created,
@@ -779,7 +647,6 @@ def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> di
             _state["warnings"] = _untouched_invalid_warnings(untouched_invalid)
             return new_text
 
-        # LOCATED
         rows = _parse_rows_or_abort(result.body, "add-task")
 
         existing_ids = {row.get("id") for row in rows if isinstance(row, dict)}
@@ -814,14 +681,6 @@ def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> di
     return _ok(_state["applied"], _state["message"], warnings=_state["warnings"])
 
 
-# ---------------------------------------------------------------------------
-# stamp
-# ---------------------------------------------------------------------------
-
-# D4 (2026-07-27): the three disposition fields are resolve's surface
-# exclusively. Reserving them in stamp closes the side door that would
-# otherwise let a caller bypass resolve's pm_approved gate by stamping
-# `disposition: spun_off` directly.
 _STAMP_RESERVED_DISPOSITION_FIELDS = frozenset(
     {"disposition", "disposition_ref", "disposition_detail"}
 )
@@ -883,24 +742,14 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
         if result.status is LocateStatus.ABSENT:
             raise MutateAbort("stamp: task spine is absent — nothing to stamp")
 
-        # PLAN-scoped context forwarded to the writes-declared cross-field
-        # rule (2026-08-19 fix) — see _add_task's identical resolution.
         plan_fm = parse_frontmatter(old_text).get("frontmatter")
         plan_created = plan_fm.get("created") if isinstance(plan_fm, dict) else None
-        # governed threaded into validation (2026-08-31 fix, cross-repo/archive/
-        # 2026-08-13-doe-claude-em-plan-tasks-mutate-governed-flag-asymmetry.md):
-        # mirrors `resolve`'s own resolution from the same frontmatter parse, so
-        # stamp and resolve agree on row validity for the same governed plan.
         governed = is_governed_plan(plan_fm) if isinstance(plan_fm, dict) else False
 
         rows = _parse_rows_or_abort(result.body, "stamp")
 
         rows_by_id = {row.get("id"): row for row in rows if isinstance(row, dict)}
 
-        # fail-loud on a duplicate id within one
-        # `updates` batch, mirroring add-task's fail-loud-dup discipline
-        # (EM decision: reject, not last-write-wins) (F2). Checked before any
-        # row mutation begins so an abort here leaves `rows` untouched.
         update_ids = [u["id"] for u in updates]
         seen: set = set()
         for uid in update_ids:
@@ -920,11 +769,6 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
                 row[field] = value
             stamped_ids.append(task_id)
 
-        # Reuse the shared _validate_all helper for
-        # stamp's final validation loop (F3), consistent with add-task.
-        # `touched_ids=set(stamped_ids)` (2026-08-16, untouched-invalid-row
-        # deadlock fix): a pre-existing invalid row this batch did not
-        # stamp must not veto the batch — see _validate_all's own docstring.
         try:
             untouched_invalid = _validate_all(
                 rows, governed=governed, touched_ids=set(stamped_ids), plan_created=plan_created,
@@ -952,61 +796,14 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
     return _ok(_state["applied"], _state["message"], warnings=_state["warnings"])
 
 
-# ---------------------------------------------------------------------------
-# resolve
-# ---------------------------------------------------------------------------
-
 # RETIRED 2026-07-29 — `_PM_APPROVAL_OFFER` lived here and is deliberately
-# not replaced with a new-field equivalent.
-#
-# It read: "stamp the row with pm_approved: true first (--verb stamp
-# --updates '[{"id": "<id>", "pm_approved": true}]'), then re-run resolve" —
-# a gate printing its own key, taped to its own door. The field it checked
-# was one the same agent could set one command earlier, and the refusal
-# helpfully supplied that command. The refusal TEXT was right; the offer
-# defeated it.
-#
-# Under the grouping-approval contract the offer has no honest analogue,
-# because there is no command an EM can run to approve a grouping — that is
-# the entire point of moving the signal to the plan's frontmatter. So the
-# refusals below name the one real next action (ask the PM) and reuse
 # `_GROUPING_APPROVAL_HINT` from schema_validate, which is written as an
-# offer — the better alternative on offer is "go get a decision" — without
-# softening the substance into a missing-field nit. A nit teaches a
-# well-meaning EM to satisfy the field, which reproduces this exact defect
-# one layer up.
-#
-# Contract: cross-repo/archive/2026-07-29-doe-claude-em-grouping-approval-contract.md
-# (actioned; moved from inbox/ to archive/) § "And a hard requirement on your
-# refusal messages."
 
-# LEGACY plans (no `grouping_approvals` key at all) have no groupings and no
 # `pm_utterance` field anywhere in their schema — `_GROUPING_APPROVAL_HINT`
-# above describes machinery that does not exist on the plan this branch
-# fires for (Review: code-reviewer Finding 4).
-#
 # REWRITTEN 2026-08-12 (DoE ruling, exit 1 —
-# cross-repo/inbox/2026-08-12-doe-claude-em-legacy-refusal-honesty-ruling.md;
 # tripwire A-REFUSAL-MAY-NOT-CLAIM-IMPOSSIBILITY-IT-CANNOT-ENFORCE). The
-# prior text carried the governed branch's impossibility claim ("there is
-# deliberately no command that satisfies this from inside the session") onto
-# a branch where a command does: `pm_approved` is a per-row boolean the same
-# agent can set via the `stamp` verb. The claim was false, and false in the
-# direction that costs the honest party everything and the self-certifying
-# party one extra call — example-cockpit-repo-em read it as impossibility, could
-# not record a verbatim PM ruling, and took a divergence (PM-ruled wont_do in
-# plan prose, spine row still `open`).
-#
-# So the protection moves from the mechanism layer to the honesty layer,
-# which is the strongest thing a self-settable boolean can carry: the
-# assertion recording the field MAKES leads, and the field is named after it,
-# never instead of it. Self-certification becomes a lie an agent has to tell
-# rather than a door it cannot find. This is NOT a relaxation into a
-# missing-field nit — "set this field to proceed" is the voice the retired
 # `_PM_APPROVAL_OFFER` banner below correctly killed, because it teaches a
 # well-meaning EM to satisfy the field. `_GROUPING_APPROVAL_HINT` above is
-# untouched by this ruling: its impossibility claim is TRUE, and the
-# membership digest is what makes it true.
 _LEGACY_PM_APPROVAL_HINT = (
     "Recording pm_approved: true on this row asserts that the PM ratified "
     "this specific cut. Nothing in this session can verify that, so stamping "
@@ -1014,29 +811,6 @@ _LEGACY_PM_APPROVAL_HINT = (
     "plan-tasks-stamp sets the field once they have ruled."
 )
 
-# All three CLOSED dispositions require an explicit caller-supplied
-# disposition_detail — D4: "the verbatim PM reasoning ... goes in
-# disposition_detail." coded is excluded (D3: not a scope decision, carries
-# no PM rationale to record). resolve refuses BEFORE dispatching
-# backlogged's harvest-CLI delegation, so an ungated call never produces a
-# queue/lesson side effect it would then need to unwind.
-#
-# `wont_do` ADDED 2026-08-05 (C2, break-class fix): the vendored schema's
-# own allOf branch 4 has required disposition_detail for wont_do since
-# before 1.3.0 (and forbidden disposition_ref alongside it), but this write
-# path never enforced it — a `wont_do` resolve with no detail passed this
-# gate clean and produced a row that was schema-invalid on the very next
-# validation pass. The stale claim this comment used to make ("already
-# enforced by the vendored schema at write time") was true of the SCHEMA,
-# never of THIS write path, which is the one that actually decides whether
-# resolve's write proceeds.
-#
-# Shape choice (spec backlink: DoE-claude:pln-plan-line-item-resolution-mode-16787c,
-# Defect 2 dispatch brief): a synthesised detail (e.g. "routed to <ref>")
-# would only restate disposition_ref, adding no information a reader doesn't
-# already have — so this requires the caller to supply real prose rather
-# than synthesizing a placeholder, matching the pm_approved gate's own
-# refuse-with-an-offer voice above.
 _PLAN_TASKS_DETAIL_REQUIRED_DISPOSITIONS = frozenset({'spun_off', 'backlogged', 'wont_do'})
 
 _DISPOSITION_DETAIL_OFFER = (
@@ -1045,21 +819,8 @@ _DISPOSITION_DETAIL_OFFER = (
     "--disposition-detail \"<why>\"), then re-run resolve"
 )
 
-# `case_against` (leg 1, 2026-08-06, plan
-# docs/plans/2026-08-06-deferrals-carry-both-sides.md): the SAME two
 # scope-cut dispositions as `_PLAN_TASKS_DETAIL_REQUIRED_DISPOSITIONS`
-# minus `spun_off` — nothing leaves the corpus on a spinoff, so there is
-# no scope cut to argue against, and widening this trigger set would
-# re-open a boundary the PM already ruled on 2026-08-05. Where
-# `disposition_detail` carries the case FOR closing (the EM's own
-# reasoning), `case_against` carries the case AGAINST — the strongest
-# honest argument for doing the work now — so a deferral surfaced to the
-# PM is a real decision, not an ID list the EM has already convinced
 # itself of. The vendored schema (1.6.0) makes this field REQUIRED via
-# an `allOf` conditional on the same trigger set, but is presence-only /
-# non-hard-failing at the schema layer (it checks the key exists, not
-# that its prose is non-vacuous) — this op is the hard-rejection
-# enforcement leg asked of claude-klabauter by that plan's C8 memo.
 _PLAN_TASKS_CASE_AGAINST_REQUIRED_DISPOSITIONS = frozenset({'backlogged', 'wont_do'})
 
 _CASE_AGAINST_OFFER = (
@@ -1068,13 +829,8 @@ _CASE_AGAINST_OFFER = (
     "--case-against \"<why not cut>\"), then re-run resolve"
 )
 
-# ---------------------------------------------------------------------------
-# resolve --backlogged delegation to coordinator-harvest-deferrals (C5)
-# ---------------------------------------------------------------------------
 
-# Fixed, Path(__file__)-relative script location — mirrors
 # coordinator_core.workday_complete.apply._CLI_SCRIPT_ROOT's established
-# in-process-CLI-load convention (never a brief/param-derived import target).
 _HARVEST_CLI_PATH = (
     Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "coordinator-harvest-deferrals.py"
 )
@@ -1128,10 +884,6 @@ def _load_harvest_module() -> ModuleType:
                 f"resolve: could not load coordinator-harvest-deferrals from {_HARVEST_CLI_PATH}"
             )
         module = importlib.util.module_from_spec(spec)
-        # Register in sys.modules BEFORE exec — mirrors
-        # workday_complete.apply._load_cli_module's identical fix (some
-        # coordinator/bin scripts resolve sys.modules[cls.__module__] during
-        # class-body execution; an unregistered module makes that lookup crash).
         sys.modules[module_name] = module
         try:
             spec.loader.exec_module(module)
@@ -1143,20 +895,6 @@ def _load_harvest_module() -> ModuleType:
 
 
 def _find_evidence_file(key: str, search_dirs: list) -> Optional[str]:
-    """Return the path of the `*.yaml` file under `search_dirs` whose
-    `evidence:` line contains `key`, or `None` if not found.
-
-    Mirrors coordinator-harvest-deferrals' own `_already_harvested` scan
-    (same evidence-line scoping) but returns the PATH instead of a bool.
-    `_run_queue_append` / `_run_lesson_promote` report success/failure only
-    — the standalone CLI itself only ECHOES the written path to stdout
-    (never returns it) — so the written entry's path is recovered here by
-    re-scanning for the row's own idempotency key immediately after
-    dispatch, rather than threading a return-path through the harvest
-    module's private dispatch functions (which would require editing that
-    module — out of this chunk's write-scope). This is new locator logic,
-    not a copy of the routing/change_kind-split mapping itself.
-    """
     for directory in search_dirs:
         if not directory:
             continue
@@ -1165,7 +903,7 @@ def _find_evidence_file(key: str, search_dirs: list) -> Optional[str]:
                 with open(path, encoding="utf-8") as fh:
                     content = fh.read()
             except OSError:
-                continue  # per-file loop; one unreadable yaml file is skipped, not fatal to the evidence-key search
+                continue
             for line in content.splitlines():
                 if line.strip().startswith("evidence:") and key in line:
                     return path
@@ -1173,20 +911,6 @@ def _find_evidence_file(key: str, search_dirs: list) -> Optional[str]:
 
 
 def _to_repo_relative(path: str, worktree: Path) -> str:
-    """Best-effort repo-relative rendering of `path` for `disposition_ref`
-    (DR-096: a single repo-relative path, enforced by
-    `_cf_plan_tasks_disposition_shape`'s `_is_single_repo_relative_path`
-    check). Falls back to `path` unchanged when it is not under `worktree`
-    — a central-scope (claude-klabauter) or lessons-outbox (DoE) write can legitimately
-    land in a different repo than the plan's own; an absolute cross-repo path
-    is still a single, unambiguous referent, just not one relative to THIS
-    plan's own worktree.
-    """
-    # A4 fix: `rel_id` (not `str(...relative_to(...))`) -- the latter
-    # renders with `os.sep`, so a Windows session would write
-    # `state\lessons\x.yaml` into the tracked plan-tasks spine.  DR-096's
-    # `_is_single_repo_relative_path` validator and every downstream reader
-    # key on the posix form.
     try:
         return rel_id(Path(path).resolve(), worktree.resolve())
     except ValueError:
@@ -1239,22 +963,6 @@ def _dispatch_spun_off(task_id: str, disposition_ref: Optional[str], worktree: P
 
 
 def _dispatch_backlogged(row: dict, task_id: str, plan_text: str, worktree: Path) -> str:
-    """Delegate a `disposition: backlogged` row to coordinator-harvest-
-    deferrals' own row-routing FOR THE SINGLE ROW (AC5) — one operation, not
-    two, from resolve's caller's point of view. Returns the (best-effort
-    repo-relative) path of the queue/lesson entry the row routed to, for
-    `disposition_ref`. Raises MutateAbort on any failure — missing plan_id,
-    unroutable change_kind, a failed dispatch, or the entry not locatable
-    afterward — so resolve aborts the WHOLE call (no disposition write is
-    ever half-completed against a queue/lesson write that didn't land, or
-    vice versa).
-
-    Idempotency: reuses the harvest CLI's own `_harvest_key(plan_id, row id)`
-    and `_already_harvested` dedup scan verbatim — a second `resolve
-    --backlogged` call on an already-routed row skips the dispatch and
-    relocates the SAME entry, so re-running resolve is a no-op on the
-    queue/lesson side (idempotent) while still succeeding on the spine side.
-    """
     harvest = _load_harvest_module()
 
     plan_id = harvest._parse_plan_id(plan_text)
@@ -1300,11 +1008,6 @@ def _dispatch_backlogged(row: dict, task_id: str, plan_text: str, worktree: Path
             "disposition was written."
         )
     return _to_repo_relative(found, worktree)
-
-
-# ---------------------------------------------------------------------------
-# D5 auto-repositioning (2026-08-06 ordering-deadlock fix)
-# ---------------------------------------------------------------------------
 
 
 def _plan_tasks_row_rank(row: dict) -> tuple:
@@ -1455,9 +1158,6 @@ def _resolve(
         if not r.get("disposition"):
             return _err("resolve: 'disposition' is required")
 
-    # Fail-loud on a duplicate id within one batch (mirrors stamp's F2
-    # discipline) — checked before the lock is even taken, same as the
-    # per-entry shape checks above.
     seen_ids: set = set()
     for r in resolutions:
         rid = r["id"]
@@ -1478,71 +1178,22 @@ def _resolve(
         if result.status is LocateStatus.ABSENT:
             raise MutateAbort("resolve: task spine is absent — nothing to resolve")
 
-        # RETIRED 2026-08-06 (D5 ordering-deadlock fix, queue
-        # state/bug-backlog/2026-08-06-plan-tasks-mutate-d5-ordering-
-        # deadlocks-c223a7208a5a.yaml) — a PRE-write refusal used to live
-        # here: "refuse before writing a new disposition onto a spine whose
         # EXISTING row order already violates D5", checked against
-        # `old_text` as a precondition on the spine's on-disk state.
-        #
-        # That precondition is what made the deadlock this fix exists for:
-        # a spine reaches "earlier rows coded, one open row trailing them"
-        # by ordinary forward progress (code C1, then C2, ... leaving the
-        # last row open) — but the do-suborder rule (open must sort above
-        # coded) calls that same, ordinary spine ALREADY invalid, so this
-        # precondition refused every subsequent resolve call on it
-        # regardless of what the call was trying to do. There was no
-        # un-resolve verb and no reorder verb, so no edit could satisfy the
-        # precondition before making the write it was meant to gate.
-        #
-        # It is also no longer NEEDED: `_reposition_rows_for_d5` below now
-        # runs a full stable sort of the batch's post-mutation `rows` by
-        # the identical rank tuple this precondition checked, on every
-        # resolve call — so the write this precondition used to guard
-        # against ("compounding an already-invalid ordering") cannot
-        # happen anymore; the write always ends in a D5-valid order
-        # regardless of what order the spine started in. Removing this
         # precondition does not relax D5's invariant on the RESULTING
-        # spine — that invariant is still enforced (the post-mutation
-        # check below), just no longer ALSO demanded of the spine as it
-        # stood before this call, which is the half of the old contract
-        # that was unsatisfiable.
         rows = _parse_rows_or_abort(result.body, "resolve")
 
         rows_by_id = {row.get("id"): row for row in rows if isinstance(row, dict)}
 
-        # Every id in the batch must exist BEFORE any check runs against a
-        # row's fields — an unknown id aborts the whole call.
         for r in resolutions:
             if rows_by_id.get(r["id"]) is None:
                 raise MutateAbort(f"resolve: task id not found: {r['id']!r}")
 
-        # Authorization gate: a CLOSED disposition is a scope decision and
-        # needs the PM's recorded assent. resolve never grants that itself —
-        # it only checks — and refuses without offering any way to satisfy
-        # the check from inside the session (see the retired
         # `_PM_APPROVAL_OFFER` banner above for why).
-        #
-        # Which signal carries the assent depends on the plan:
         #   - GOVERNED (frontmatter carries the `grouping_approvals` key at
-        #     all — bare presence, no schema_version conjunct; see
-        #     is_governed_plan's own docstring for why the version conjunct
-        #     was dropped 2026-07-29): each grouping touched by the batch
-        #     must read status: approved, and its digest must cover the
-        #     membership the WHOLE BATCH is about to produce.
-        #   - LEGACY (no `grouping_approvals` key): the per-row pm_approved
-        #     boolean, checked per row (no grouping to batch over).
         plan_fm = parse_frontmatter(old_text).get("frontmatter")
         governed = is_governed_plan(plan_fm) if isinstance(plan_fm, dict) else False
-        # PLAN-scoped context forwarded to the writes-declared cross-field
-        # rule (2026-08-19 fix) — see _add_task's identical resolution.
         plan_created = plan_fm.get("created") if isinstance(plan_fm, dict) else None
 
-        # id -> prospective (about-to-be-written) disposition for the WHOLE
-        # batch — this is what makes the digest check below cover the
-        # batch's full membership rather than one row at a time (C13's
-        # entire point: a set-granularity approval needs a set-granularity
-        # write to check against).
         new_disposition_by_id = {r["id"]: r["disposition"] for r in resolutions}
 
         def _prospective_rows() -> list:
@@ -1554,40 +1205,10 @@ def _resolve(
                 if isinstance(row, dict)
             ]
 
-        # Group the batch's CLOSED-disposition entries by grouping so a
-        # governed plan's per-grouping approval is checked exactly once per
-        # grouping touched, even when several rows in the batch land in the
-        # same grouping (or the batch spans more than one grouping).
-        #
-        # TWO SETS, picked by mode — never one set for both legs.
-        #
         # GOVERNED reads `_PLAN_TASKS_GOVERNED_PM_APPROVAL_GATED_DISPOSITIONS`
-        # ({backlogged, wont_do, spun_off}); LEGACY reads
         # `_PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS` ({backlogged,
-        # wont_do}). Both legs keyed on the LEGACY set until 2026-09-04,
-        # which left this write gate one member narrower than the lint that
-        # reads the same records: `check_plan_tasks_grouping_approval`
-        # (schema_validate.py) widened for `spun_off` on 2026-08-30 when
-        # plan.schema.json 2.13.0 was vendored carrying
-        # `grouping_approvals.spun_off`, and this gate did not follow. A
         # governed `spun_off` close therefore SUCCEEDED here and the record
-        # it produced then failed the lint — a write path minting
-        # lint-invalid plans, with the author left holding a warning and no
-        # sanctioned repair. Reported from example-cockpit-repo via DoE-claude.
-        #
-        # The two-set split is the same one the constants themselves carry
-        # (see their own banners): widening the LEGACY set in place would
-        # retroactively invalidate 16 `spun_off` rows across 10 legacy plans
-        # written correctly under DoE's 2026-08-05 relaxation, repairable
-        # only by forging `pm_approved` assent no PM gave. A governed plan
-        # opted into the block contract by carrying the key and can author a
-        # `spun_off` block; a legacy plan cannot.
-        #
-        # D5's ordering lint and its closed-section concept consult no
-        # disposition set at all — they run entirely off
         # `_PLAN_TASKS_GROUPING_BY_DISPOSITION` (schema_validate.py), which
-        # already maps `spun_off` to its own grouping. Neither set reaches
-        # them.
         _gated_dispositions = (
             _PLAN_TASKS_GOVERNED_PM_APPROVAL_GATED_DISPOSITIONS
             if governed
@@ -1613,12 +1234,6 @@ def _resolve(
                         f"grouping, which reads status {status!r}. {_GROUPING_APPROVAL_HINT}"
                     )
 
-                # The digest must cover the membership AFTER the WHOLE batch
-                # writes, not before it: the PM approves a cut-set, and
-                # every row in this grouping this batch is closing is part
-                # of the set they were shown. Checking a narrower (e.g.
-                # single-row) membership would refuse the very first
-                # application of a freshly approved multi-row cut-set.
                 fresh = compute_grouping_digest(_prospective_rows(), grouping)
                 if block.get("digest") != fresh:
                     raise MutateAbort(
@@ -1639,11 +1254,6 @@ def _resolve(
                         )
 
         # Defect 2 fix (see _PLAN_TASKS_DETAIL_REQUIRED_DISPOSITIONS docstring
-        # above): spun_off/backlogged/wont_do (C2, 2026-08-05) all require an
-        # explicit caller-supplied disposition_detail, refused with the same
-        # offer-shaped voice as the pm_approved gate. Runs BEFORE any
-        # backlogged/spun_off dispatch below so an ungated call never
-        # produces a queue/lesson write.
         for r in resolutions:
             disposition = r["disposition"]
             task_id = r["id"]
@@ -1660,12 +1270,6 @@ def _resolve(
 
         # case_against gate (leg 1, see _PLAN_TASKS_CASE_AGAINST_REQUIRED_
         # DISPOSITIONS docstring above): backlogged/wont_do also require an
-        # explicit caller-supplied case_against, refused in this op's own
-        # voice ahead of the vendored schema's presence-only check — a raw
-        # "required field missing" names the missing key, not what it is
-        # FOR. Runs alongside the disposition_detail gate, before any
-        # backlogged dispatch below, so an ungated call never produces a
-        # queue/lesson write.
         for r in resolutions:
             disposition = r["disposition"]
             task_id = r["id"]
@@ -1683,49 +1287,16 @@ def _resolve(
                     "cutting on the row."
                 )
 
-        # Every gate above has cleared for the WHOLE batch — only now does
-        # any row mutate or any dispatch side effect (backlogged/spun_off)
-        # fire.
-        #
-        # Phase 1: write every `disposition` field in the batch onto the
-        # REAL `rows` (not a synthetic copy) — neither `_dispatch_backlogged`
-        # nor `_dispatch_spun_off` reads a row's `disposition` field, so
-        # this is safe to do ahead of dispatch. `case_against` rides along
-        # in the same pass (rather than Phase 2, where `disposition_detail`
-        # lands) so the D5 gate below and the schema check after dispatch
-        # both see the finished row — neither dispatch function reads
-        # `case_against` either.
         for r in resolutions:
             rows_by_id[r["id"]]["disposition"] = r["disposition"]
             case_against = r.get("case_against")
             if case_against is not None:
                 rows_by_id[r["id"]]["case_against"] = case_against
 
-        # Phase 1b (2026-08-06, D5 ordering-deadlock fix): reposition the
-        # WHOLE spine into D5's required grouping order now that every
-        # batch row's new `disposition` has landed — see
-        # `_reposition_rows_for_d5`'s own docstring for why this must be
-        # part of the same write rather than a separate "reorder the rows"
-        # instruction (queue: state/bug-backlog/2026-08-06-plan-tasks-
-        # mutate-d5-ordering-deadlocks-c223a7208a5a.yaml). `rows_by_id`
-        # still keys the SAME row objects afterward — only the list's
-        # order changes, so every lookup below by id is unaffected.
         rows = _reposition_rows_for_d5(rows)
 
-        # Post-mutation D5 gate (C13, 2026-07-30): checked against the
         # spine as ACTUALLY mutated+repositioned above, before any
-        # dispatch runs — never on the rendered `new_text` afterward.
-        # `locked_rmw` covers the spine write only, so a D5 refusal raised
-        # after `_dispatch_backlogged` had already appended a queue/lesson
-        # entry would leave that entry on disk describing a deferral the
-        # spine never recorded (the defect
-        # `test_resolve_d5_refusal_fires_before_any_harvest_dispatch`
         # exists to prevent). Retained as a DEFENSIVE invariant assertion,
-        # not the correctness mechanism itself: `_reposition_rows_for_d5`
-        # is a stable sort keyed by the same rank tuple this lint checks,
-        # so a batch that reaches this point cannot actually fail it — the
-        # check exists to catch a future regression in that repositioning
-        # logic, not a case any caller of `resolve` can currently trigger.
         mutated_start, mutated_end = result.span
         mutated_text = old_text[:mutated_start] + _dump_rows(rows) + old_text[mutated_end:]
         mutated_ordering_error = check_plan_tasks_ordering(mutated_text)
@@ -1738,8 +1309,6 @@ def _resolve(
                 "_reposition_rows_for_d5. No disposition was written."
             )
 
-        # Phase 2: the D5 gate above has cleared against the real mutated
-        # spine — only now does any dispatch side effect fire.
         resolved_ids: list = []
         for r in resolutions:
             task_id = r["id"]
@@ -1748,20 +1317,7 @@ def _resolve(
             disposition_detail = r.get("disposition_detail")
             row = rows_by_id[task_id]
 
-            # C5 (AC5): backlogged delegates row-routing to coordinator-
-            # harvest-deferrals for THIS row and computes disposition_ref
-            # from the result — any caller-supplied disposition_ref is
-            # ignored for this disposition (see _dispatch_backlogged
-            # docstring).
-            #
-            # C12 (AC17): spun_off gets its own computed producer, one step
-            # lighter than backlogged's — the spinoff artifact is already
-            # created by a prior write this op does not own (`/spinoff`), so
             # `_dispatch_spun_off` VERIFIES the caller-supplied
-            # disposition_ref resolves to a real file and re-derives the
-            # canonical repo-relative form, rather than recording the
-            # caller's literal string unverified. See `_dispatch_spun_off`
-            # docstring.
             effective_ref = disposition_ref
             if disposition == "backlogged":
                 effective_ref = _dispatch_backlogged(row, task_id, old_text, worktree)
@@ -1774,26 +1330,6 @@ def _resolve(
                 row["disposition_detail"] = disposition_detail
             resolved_ids.append(task_id)
 
-        # `touched_ids=set(resolved_ids)` (2026-08-16, untouched-invalid-row
-        # deadlock fix — the live repro this fixes: two rows in the SAME
-        # spine each schema-invalid for reasons this batch did not touch
-        # deadlocked each other's repair, because this call used to
-        # validate and veto on every row in the spine. A row this batch
-        # did not resolve could not have been made worse by it, so it must
-        # not be able to block the write — see _validate_all's own
-        # docstring.
-        #
-        # If `resolved_ids` is incomplete relative to
-        # what Phase 1 already wrote in-memory (Phase 2 raised partway
-        # through a `_dispatch_backlogged`/`_dispatch_spun_off` call), that
-        # mismatch never reaches this line: `locked_rmw` discards `rows` and
-        # writes nothing on ANY exception, so the mutate() closure never
-        # returns and `_validate_all` is never called with the partial set.
-        # `touched_ids` precision here is NOT what protects invariant (1)
-        # ("never write a newly-invalid row") under partial failure —
-        # `locked_rmw`'s all-or-nothing exception boundary is. A future
-        # change there that lets a partial write through would silently
-        # reintroduce that risk without this file changing at all.
         try:
             untouched_invalid = _validate_all(
                 rows, governed=governed, touched_ids=set(resolved_ids), plan_created=plan_created,
@@ -1806,11 +1342,6 @@ def _resolve(
         start, end = result.span
         new_text = old_text[:start] + body_yaml + old_text[end:]
 
-        # Spine-resolution derivation (C1, 2026-08-14): "no row left open"
-        # is knowable ONLY here — the sole site where a row's `disposition`
-        # can move off `open` — so this is where the derived-landed check
-        # is computed, against the SAME `rows` just validated and about to
-        # be written, not a re-read of the (stale, pre-write) `old_text`.
         _state["all_resolved"] = all(
             _plan_tasks_row_disposition(row) != "open"
             for row in rows
@@ -1837,26 +1368,7 @@ def _resolve(
 
     result = _ok(_state["applied"], _state["message"], warnings=_state["warnings"])
 
-    # C1 (2026-08-14, "landed fires at spine resolution"): the resolve
-    # transaction above just committed. If it left no row `open`, derive
     # `status: landed` via the EXISTING sole writer
-    # (`execute_plan_assemble.close_out_and_stamp._stamp_plan_landed`) —
-    # this call site never writes `status:` itself and never reimplements
-    # that function's terminal-status/idempotency guards (see the plan's
-    # § Key decision: one writer, two callers). Imported lazily to avoid
-    # loading `execute_plan_assemble`'s module graph on every resolve call
-    # that doesn't need it.
-    #
-    # A stamp failure must not fail the row resolution the caller asked
-    # for (AC3-adjacent: the caller's resolve already applied) — reported
-    # in the result dict, never raised.
-    #
-    # `_stamp_plan_landed` is a leading-
-    # underscore "private" symbol imported across a module boundary. That
-    # is deliberate, not an oversight: the plan's one-writer decision (§
-    # Key decision above) requires calling this EXACT existing primitive
-    # rather than adding a public wrapper or a second implementation, so
-    # the cross-module privacy violation is knowingly accepted here.
     if _state["applied"] and _state["all_resolved"]:
         try:
             from coordinator_core.execute_plan_assemble.close_out_and_stamp import (
@@ -1876,9 +1388,7 @@ def _resolve(
     return result
 
 
-# ---------------------------------------------------------------------------
 # JSON-RPC handler
-# ---------------------------------------------------------------------------
 
 
 @register_op("plan.tasks.mutate")
@@ -1977,13 +1487,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return await asyncio.to_thread(_stamp, plan_path, updates, worktree, repo_root)
 
     if verb == "resolve":
-        # C13 (2026-07-30, batch resolve): a caller supplies EITHER the
-        # single-row id/disposition/disposition_ref/disposition_detail
-        # params (unchanged shape, unchanged behaviour — a batch of one),
-        # OR a `resolves` list for a multi-row atomic batch. The two shapes
-        # are mutually exclusive on the wire; `resolves` wins if both are
-        # present (a caller sending both is almost certainly a mistake, but
-        # there is exactly one sane reading: the explicit batch).
         resolves_param = params.get("resolves")
         if resolves_param is not None:
             if not isinstance(resolves_param, list) or not resolves_param:

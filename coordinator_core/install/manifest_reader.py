@@ -72,17 +72,11 @@ _PROBE_ARG_KEYS = ("path", "paths", "expr", "cmd")
 
 
 class NoPythonInterpreterError(RuntimeError):
-    """Raised when no functional Python 3.11+ interpreter can be resolved —
-    mirrors the bash original's remediation-message-then-exit-1 path
-    (_co_find_python's trailing ``return 1`` after printing to stderr)."""
+    pass
 
 
 class ManifestCorruptError(RuntimeError):
-    """Raised for every "manifest corrupt or missing" condition the bash
-    original maps to exit 1: missing file, JSON parse error, unreadable
-    file, missing required top-level field, unrecognised contract version,
-    or a non-array ``direct_deps``. Never silently treated as "all deps
-    OK" — callers MUST NOT catch-and-ignore this."""
+    pass
 
 
 def _probe_candidate(executable: str) -> bool:
@@ -113,19 +107,6 @@ def _probe_candidate(executable: str) -> bool:
 
 
 def _resolve_py_launcher_candidate(version_flag: str) -> Optional[str]:
-    """Resolve one `py [version_flag] -c "import sys;print(sys.executable)"`
-    candidate to a concrete absolute executable path, mirroring the bash
-    original's per-version-flag loop body. Returns None on any failure
-    (missing launcher, bad version, non-functional resolved interpreter) —
-    never a multi-word / malformed token.
-
-    Deliberate isolation boundary, not a candidate for an in-process
-    import — the whole point of this call is to ask the Windows `py`
-    launcher which concrete interpreter a version flag resolves to; that
-    interpreter is unknown and unverified until this probe runs, so it is
-    by construction not importable in-process. See
-    ``state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md``
-    for the recorded verdict."""
     argv = ["py"]
     if version_flag:
         argv.append(version_flag)
@@ -153,15 +134,6 @@ def _resolve_py_launcher_candidate(version_flag: str) -> Optional[str]:
 
 
 def find_python() -> str:
-    """Resolve a functional Python 3.11+ interpreter token, mirroring
-    _co_find_python's candidate order: python3 -> python -> (Windows only)
-    `py` launcher variants (-3.12, -3.11, -3, bare).
-
-    Returns a single invokable token (bare command name for the
-    python3/python branches, an absolute path for the py-launcher branch).
-    Raises NoPythonInterpreterError with the same OS-aware remediation text
-    the bash prints to stderr when no candidate is functional.
-    """
     if _probe_candidate("python3"):
         return "python3"
     if _probe_candidate("python"):
@@ -242,10 +214,6 @@ def resolve_manifest_path(repo_root: Optional[Union[str, Path]] = None) -> Path:
 
 
 def _load_manifest(manifest_path: Path) -> dict:
-    """Load + validate the manifest per the bash original's inline
-    `python -c` block — same field/version checks, same failure taxonomy,
-    all folded into ManifestCorruptError (mirrors the bash's uniform exit 1
-    for every corrupt-manifest branch)."""
     if not manifest_path.is_file():
         raise ManifestCorruptError(
             f"ERROR: manifest not found: {manifest_path}\n"
@@ -287,10 +255,6 @@ def _load_manifest(manifest_path: Path) -> dict:
 
 
 def _dep_to_record(dep: dict) -> dict:
-    """Build one output record for a single direct_dep entry, matching the
-    bash inline script's per-dep dict shape field-for-field (id, severity,
-    sibling_dir_name, upstream_url, functional_probe_kind,
-    functional_probe_args)."""
     probe = dep.get("functional_probe", {}) or {}
     probe_kind = probe.get("kind", "")
     probe_args = {key: probe[key] for key in _PROBE_ARG_KEYS if key in probe}
@@ -308,17 +272,6 @@ def manifest_read_ndjson(
     manifest_path: Optional[Union[str, Path]] = None,
     repo_root: Optional[Union[str, Path]] = None,
 ) -> List[str]:
-    """Read + validate agent-install-manifest.json and return one NDJSON
-    line (WITHOUT trailing newline; caller joins/prints as needed) per
-    direct_dep entry, mirroring _co_manifest_read_ndjson's per-dep record
-    shape and json.dumps(..., ensure_ascii=True) encoding byte-for-byte.
-
-    manifest_path resolution: explicit argument, else
-    resolve_manifest_path(repo_root) (layout-aware default). Raises
-    ManifestCorruptError on any of the corrupt-manifest conditions
-    documented on that exception — hard contract, never a silent
-    "all deps OK" default.
-    """
     if manifest_path is None:
         path = resolve_manifest_path(repo_root)
     else:

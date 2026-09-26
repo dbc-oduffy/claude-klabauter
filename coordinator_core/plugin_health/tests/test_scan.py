@@ -59,7 +59,7 @@ def test_scan_verdicts_red_amber_green_stale(tmp_path: Path) -> None:
     )
     _write_sentinel(plugins_root, "pluginC", {"verdict": "GREEN", "ran_at": "2020-01-01T00:00:00Z"})
 
-    now = 1893456000.0  # 2030-01-01, far enough past ran_at to be stale
+    now = 1893456000.0
     lines = scan_verdicts(plugins_root, consumer_root, "--red-and-stale", now, 86400)
 
     assert any("pluginA: doctor RED (p1,p2) — fix me." in l for l in lines)
@@ -94,7 +94,6 @@ def test_scan_verdicts_malformed_sentinel_red_and_stale_only(tmp_path: Path) -> 
 
 
 def test_scan_verdicts_orders_plugins_root_before_consumer_root(tmp_path: Path) -> None:
-    """Regression pin — see module docstring note above."""
     plugins_root = tmp_path / "zzz-plugins"
     consumer_root = tmp_path / "aaa-consumer"
     _write_sentinel(plugins_root, "pluginA", {"verdict": "RED", "ran_at": "2020-01-01T00:00:00Z"})
@@ -228,11 +227,6 @@ def test_check_sentinel_presence_at_least_one_sentinel(tmp_path: Path) -> None:
 
 
 def test_check_sentinel_presence_no_false_positive_after_settings_home_migration(tmp_path: Path) -> None:
-    """DR-072 regression (coordinator follow-on, same defect class as review
-    Finding 1): plugins installed under legacy plugins_root with sentinels
-    present ONLY in the settings-home plugins lane must NOT trigger the
-    "no doctor sentinels found ... run /coordinator:install" bootstrap nag —
-    that lane counts toward "a sentinel exists anywhere"."""
     plugins_root = tmp_path / "plugins"
     sh_plugins_root = tmp_path / "sh" / "plugins"
     (plugins_root / "pluginA").mkdir(parents=True)
@@ -262,16 +256,9 @@ def test_main_no_roots_present_returns_exit_0_silent(monkeypatch: pytest.MonkeyP
     assert captured.out == ""
 
 
-# ---------------------------------------------------------------------------
 # _resolve_roots — §4a CLAUDE_HOME convention + settings-home dual-read lane
-# ---------------------------------------------------------------------------
-#
-# Regression coverage for the scan.py/sentinel.py reader/writer divergence:
 # scan.py used to derive its roots from bare Path.home(), ignoring CLAUDE_HOME
-# entirely, while sentinel.py (the sibling writer) honoured it via
-# _resolve_claude_home. See docs/decisions — DR-072 (settings-home dual-read)
 # and machine-local-registry.md §4a (CLAUDE_HOME is a $HOME substitute, not
-# the .claude dir itself).
 
 
 def test_resolve_roots_honours_claude_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -313,13 +300,6 @@ def test_resolve_roots_explicit_overrides_suppress_settings_home_lane(
 
 
 def test_scan_verdicts_overrides_win_even_with_settings_home_collision(tmp_path: Path) -> None:
-    """End-to-end confirmation of the override-wins rule at the scan_verdicts
-    level: a REAL same-name sentinel is written under a real settings-home
-    path on disk, but the caller passes sh_plugins_root=None/sh_consumer_root
-    =None (as _resolve_roots produces under an explicit override) — proving
-    the None-guard suppresses a genuine collision, not merely the absence of
-    one. Without the guard (e.g. a bug that globbed sh_plugins_root
-    regardless of the None-arg), the sh-hint AMBER line would win instead."""
     plugins_root = tmp_path / "override-plugins"
     consumer_root = tmp_path / "override-consumer"
     sh_plugins_root = tmp_path / "sh" / "plugins"
@@ -342,11 +322,6 @@ def test_scan_verdicts_overrides_win_even_with_settings_home_collision(tmp_path:
     assert "legacy-hint" in lines[0]
     assert "sh-hint" not in lines[0]
     assert "RED" in lines[0]
-
-
-# ---------------------------------------------------------------------------
-# scan_verdicts — settings-home dual-read lane (DR-072)
-# ---------------------------------------------------------------------------
 
 
 def test_scan_verdicts_discovers_settings_home_only_sentinel(tmp_path: Path) -> None:

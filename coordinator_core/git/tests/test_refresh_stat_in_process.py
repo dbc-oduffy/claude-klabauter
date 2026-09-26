@@ -44,9 +44,6 @@ def _repo(tmp_path, autocrlf):
 
 
 def _commit_crlf_checkout(tmp_path):
-    """HEAD holds an LF blob; the worktree and the index's recorded size are
-    the CRLF checkout of it -- what any `git checkout`/ff-merge writes under
-    `core.autocrlf=true`."""
     repo = _repo(tmp_path, "true")
     (repo / "f.txt").write_bytes(_CRLF)
     _git(repo, "add", "f.txt")
@@ -85,9 +82,6 @@ def test_real_edit_is_never_refreshed(tmp_path):
 
 
 def test_lf_write_over_a_blob_committed_with_crlf_is_a_real_change(tmp_path):
-    """A blob stored WITH CRLF (`i/crlf`, 572 such paths at claude-klabauter)
-    checks an LF worktree in to a different blob -- git reports it modified,
-    so a refresh must leave it modified."""
     repo = _repo(tmp_path, "false")
     (repo / "f.txt").write_bytes(_CRLF)
     _git(repo, "add", "f.txt")

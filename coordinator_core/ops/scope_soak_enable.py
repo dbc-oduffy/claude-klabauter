@@ -25,7 +25,7 @@ Negative-spec:
 
 from __future__ import annotations
 
-GENERATES = []  # writes only .git/coordinator-sessions/.warn-mode-enabled-at inside the worktree's own .git directory
+GENERATES = []
 
 import os
 import sys
@@ -39,16 +39,6 @@ _SENTINEL_NAME = ".warn-mode-enabled-at"
 
 
 def enable(git_root: Optional[str] = None) -> Tuple[str, int]:
-    """Write (or report) the soak-clock sentinel.
-
-    git_root: injected repo root for test isolation; resolved via `git
-    rev-parse --show-toplevel` when omitted.
-
-    Returns (stdout_text, rc): rc is 0 on both the idempotent-already-started
-    path and the freshly-started path; 1 only when not inside a git repo (the
-    "not in a git repo" diagnostic is printed to stderr as a side effect,
-    mirroring the bash script, and stdout_text is empty in that case).
-    """
     if git_root is None:
         git_root = _resolve_git_root()
     if not git_root:
@@ -95,7 +85,6 @@ def enable(git_root: Optional[str] = None) -> Tuple[str, int]:
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry — scope-soak-enable takes no arguments."""
     text, rc = enable()
     if text:
         sys.stdout.write(text)

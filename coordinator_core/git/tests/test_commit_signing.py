@@ -1,5 +1,3 @@
-"""`commit.gpgsign` is porcelain-only -- these pin that every native
-commit-object seam replays it, and that resolving the answer never spawns."""
 
 import subprocess
 from pathlib import Path
@@ -67,8 +65,6 @@ def test_boolean_spellings(tmp_path, no_global_config, value, expected):
 
 
 def test_inline_comment_does_not_swallow_the_value(tmp_path, no_global_config):
-    """`gpgsign = true # note` is a form git accepts. Reading it as the token
-    `true # note` reports a signing repo as unsigned, which ships silently."""
     for body in (
         "[commit]\n\tgpgsign = true # fleet policy\n",
         "[commit]\n\tgpgsign = true ; fleet policy\n",
@@ -79,16 +75,12 @@ def test_inline_comment_does_not_swallow_the_value(tmp_path, no_global_config):
 
 
 def test_quoted_hash_is_part_of_the_value(tmp_path, no_global_config):
-    """A `#` inside quotes is literal, so it must not start a comment."""
     assert _strip_inline_comment('\tprogram = "/usr/bin/sign#1" # note').strip() == (
         'program = "/usr/bin/sign#1"'
     )
 
 
 def test_unrecognised_value_is_unknown_not_false(tmp_path, monkeypatch):
-    """The one wrong answer that ships silently is "signing is off". An
-    unparseable local value defers to the global config rather than
-    reporting a signing repo as unsigned."""
     home = tmp_path / "home"
     home.mkdir()
     (home / ".gitconfig").write_text("[commit]\n\tgpgsign = true\n", encoding="utf-8")
@@ -99,13 +91,11 @@ def test_unrecognised_value_is_unknown_not_false(tmp_path, monkeypatch):
 
 
 def test_valueless_key_is_true(tmp_path, no_global_config):
-    """git reads a bare `[commit] gpgsign` as true -- so does this."""
     _write_config(tmp_path, "[commit]\n\tgpgsign\n")
     assert _read_config_bool(tmp_path / ".git" / "config", "commit", "gpgsign") is True
 
 
 def test_resolution_spawns_nothing(tmp_path, no_global_config, monkeypatch):
-    """The resolver sits on the brightline path; the signature does not."""
     _write_config(tmp_path, "[commit]\n\tgpgsign = true\n")
 
     def _refuse(*args, **kwargs):
@@ -117,11 +107,6 @@ def test_resolution_spawns_nothing(tmp_path, no_global_config, monkeypatch):
 
 
 def test_signing_failure_warns_rather_than_raising(tmp_path, monkeypatch):
-    """DR-308: a signature that cannot be produced must never block the
-    commit. `write_signed_commit_object` reports `(None, warning)` so its
-    caller falls through to the same zero-spawn unsigned write it would
-    have used with `commit.gpgsign` off -- never a raise, which is how the
-    old contract (`SigningFailed`) could abort a commit outright."""
     monkeypatch.setattr(
         subprocess, "run",
         lambda *a, **k: subprocess.CompletedProcess(a[0], 1, b"", b"no signing key"),
@@ -136,9 +121,6 @@ def test_signing_failure_warns_rather_than_raising(tmp_path, monkeypatch):
 
 
 def test_message_bytes_reach_commit_tree_verbatim(tmp_path, no_global_config, monkeypatch):
-    """The native writers this stands in for write their message bytes
-    verbatim. A decode/re-encode here would make a non-UTF-8 body differ
-    between a signed and an unsigned commit of the same input."""
     captured = {}
 
     def _capture(args, **kwargs):
@@ -158,8 +140,6 @@ def test_message_bytes_reach_commit_tree_verbatim(tmp_path, no_global_config, mo
 
 
 def test_identity_is_pinned_for_author_and_committer(tmp_path, no_global_config, monkeypatch):
-    """A signed commit carries the same author and committer lines the native
-    path would have stamped -- same name, email and timestamp."""
     captured = {}
 
     def _capture(args, **kwargs):

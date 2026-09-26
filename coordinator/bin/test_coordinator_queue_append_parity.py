@@ -68,22 +68,15 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-# ---------------------------------------------------------------------------
-# Test infrastructure (mirrors test_coordinator_queue_append.py)
-# ---------------------------------------------------------------------------
-
 def _queue_append_script_path() -> str:
-    """Absolute path to coordinator-queue-append."""
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "coordinator-queue-append.py")
 
 
 def _lesson_promote_script_path() -> str:
-    """Absolute path to coordinator-lesson-promote."""
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "coordinator-lesson-promote.py")
 
 
 def _python() -> str:
-    """Return the Python interpreter running this test (Windows-compatible zero-probe)."""
     return sys.executable
 
 
@@ -92,7 +85,6 @@ def _run_queue_append(
     env: dict[str, str] | None = None,
     cwd: str | None = None,
 ) -> subprocess.CompletedProcess:
-    """Invoke coordinator-queue-append as a subprocess."""
     effective_env = {**os.environ}
     if env:
         effective_env.update(env)
@@ -110,7 +102,6 @@ def _run_lesson_promote(
     args: list[str],
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
-    """Invoke coordinator-lesson-promote as a subprocess."""
     effective_env = {**os.environ}
     if env:
         effective_env.update(env)
@@ -127,7 +118,6 @@ def _assert_accept(
     name: str,
     result: subprocess.CompletedProcess,
 ) -> bool:
-    """Assert that the CLI accepted (exit 0). Returns True if passed."""
     if result.returncode != 0:
         raise AssertionError(f"{name}: " + (f"expected exit 0 (accept) but got {result.returncode}. "
             f"stderr: {result.stderr!r}"))
@@ -139,19 +129,13 @@ def _assert_reject(
     name: str,
     result: subprocess.CompletedProcess,
 ) -> bool:
-    """Assert that the CLI rejected (exit non-zero). Returns True if passed."""
     if result.returncode == 0:
         raise AssertionError(f"{name}: " + ("expected non-zero exit (reject) but got 0"))
         return False
     return True
 
 
-# ---------------------------------------------------------------------------
-# Shared arg builders
-# ---------------------------------------------------------------------------
-
 def _debt_backlog_minimal_args() -> list[str]:
-    """Minimal valid debt-backlog args (all required fields per schema)."""
     return [
         "--schema", "debt-backlog",
         "--title", "Parity test debt entry",
@@ -165,7 +149,6 @@ def _debt_backlog_minimal_args() -> list[str]:
 
 
 def _bug_backlog_minimal_args() -> list[str]:
-    """Minimal valid bug-backlog args (all required fields per schema)."""
     return [
         "--schema", "bug-backlog",
         "--title", "Parity test bug entry",
@@ -178,7 +161,6 @@ def _bug_backlog_minimal_args() -> list[str]:
 
 
 def _improvement_queue_minimal_args() -> list[str]:
-    """Minimal valid improvement-queue args (all required fields per schema)."""
     return [
         "--schema", "improvement-queue",
         "--title", "Parity test improvement entry",
@@ -191,12 +173,7 @@ def _improvement_queue_minimal_args() -> list[str]:
     ]
 
 
-# ---------------------------------------------------------------------------
-# debt-backlog parity cases (5 subcases under 4 labeled cases: a, b, c, d, d2)
-# ---------------------------------------------------------------------------
-
 def test_debt_backlog_valid_minimal() -> None:
-    """Case (a): valid minimal debt-backlog → accept."""
     name = "debt-backlog (a) valid minimal → accept"
     with tempfile.TemporaryDirectory() as tmpdir:
         result = _run_queue_append(
@@ -209,7 +186,6 @@ def test_debt_backlog_valid_minimal() -> None:
 
 
 def test_debt_backlog_valid_full() -> None:
-    """Case (b): valid full debt-backlog (all optional fields present) → accept."""
     name = "debt-backlog (b) valid full → accept"
     with tempfile.TemporaryDirectory() as tmpdir:
         result = _run_queue_append(
@@ -222,7 +198,6 @@ def test_debt_backlog_valid_full() -> None:
                 "--risk", "Full risk description.",
                 "--proposed-action", "Full proposed action.",
                 "--from-repo", "test-repo-em",
-                # optional debt fields
                 "--severity", "P2",
                 "--evidence", "abc1234def5678",
                 "--surface", "bin/coordinator-queue-append",
@@ -238,7 +213,6 @@ def test_debt_backlog_valid_full() -> None:
 
 
 def test_debt_backlog_missing_required_field() -> None:
-    """Case (c): missing required field (--risk omitted) → reject."""
     name = "debt-backlog (c) missing required field (--risk) → reject"
     with tempfile.TemporaryDirectory() as tmpdir:
         result = _run_queue_append(
@@ -250,7 +224,6 @@ def test_debt_backlog_missing_required_field() -> None:
                 "--source", "daily-review/parity",
                 "--proposed-action", "Some action.",
                 "--from-repo", "test-repo-em",
-                # --risk is intentionally omitted
             ],
             env={"QUEUE_APPEND_OUTPUT_ROOT": tmpdir},
             cwd=tmpdir,
@@ -264,7 +237,6 @@ def test_debt_backlog_missing_required_field() -> None:
 
 
 def test_debt_backlog_invalid_status_enum() -> None:
-    """Case (d): invalid --status enum value → reject."""
     name = "debt-backlog (d) invalid --status bogus → reject"
     with tempfile.TemporaryDirectory() as tmpdir:
         result = _run_queue_append(
@@ -272,7 +244,7 @@ def test_debt_backlog_invalid_status_enum() -> None:
                 "--schema", "debt-backlog",
                 "--title", "T",
                 "--body", "B",
-                "--status", "bogus",  # not in {open, closed, deferred}
+                "--status", "bogus",
                 "--source", "daily-review/parity",
                 "--risk", "Some risk.",
                 "--proposed-action", "Some action.",
@@ -290,7 +262,6 @@ def test_debt_backlog_invalid_status_enum() -> None:
 
 
 def test_debt_backlog_invalid_severity_enum() -> None:
-    """Case (d2): invalid --severity enum value (P9 not in P0-P3) → reject."""
     name = "debt-backlog (d2) invalid --severity P9 → reject"
     with tempfile.TemporaryDirectory() as tmpdir:
         result = _run_queue_append(
@@ -303,7 +274,7 @@ def test_debt_backlog_invalid_severity_enum() -> None:
                 "--risk", "Some risk.",
                 "--proposed-action", "Some action.",
                 "--from-repo", "test-repo-em",
-                "--severity", "P9",  # not in {P0, P1, P2, P3}
+                "--severity", "P9",
             ],
             env={"QUEUE_APPEND_OUTPUT_ROOT": tmpdir},
             cwd=tmpdir,
@@ -316,12 +287,7 @@ def test_debt_backlog_invalid_severity_enum() -> None:
             pass
 
 
-# ---------------------------------------------------------------------------
-# bug-backlog parity cases (5 cases: a, b, c, d, e)
-# ---------------------------------------------------------------------------
-
 def test_bug_backlog_valid_minimal() -> None:
-    """Case (a): valid minimal bug-backlog → accept."""
     name = "bug-backlog (a) valid minimal → accept"
     with tempfile.TemporaryDirectory() as tmpdir:
         result = _run_queue_append(
@@ -334,7 +300,6 @@ def test_bug_backlog_valid_minimal() -> None:
 
 
 def test_bug_backlog_valid_full() -> None:
-    """Case (b): valid full bug-backlog (all optional fields present) → accept."""
     name = "bug-backlog (b) valid full → accept"
     with tempfile.TemporaryDirectory() as tmpdir:
         result = _run_queue_append(
@@ -346,7 +311,6 @@ def test_bug_backlog_valid_full() -> None:
                 "--surface", "coordinator/parity-test-full",
                 "--severity", "P1",
                 "--from-repo", "test-repo-em",
-                # optional bug fields
                 "--repro-steps", "1. Do X. 2. Observe Y.",
                 "--environment", "macOS + bash 5.2",
                 "--why-blocked", "Needs upstream fix.",
@@ -363,7 +327,6 @@ def test_bug_backlog_valid_full() -> None:
 
 
 def test_bug_backlog_missing_required_field() -> None:
-    """Case (c): missing required field (--severity omitted) → reject."""
     name = "bug-backlog (c) missing required field (--severity) → reject"
     with tempfile.TemporaryDirectory() as tmpdir:
         result = _run_queue_append(
@@ -374,7 +337,6 @@ def test_bug_backlog_missing_required_field() -> None:
                 "--status", "open",
                 "--surface", "coordinator/parity",
                 "--from-repo", "test-repo-em",
-                # --severity is intentionally omitted
             ],
             env={"QUEUE_APPEND_OUTPUT_ROOT": tmpdir},
             cwd=tmpdir,
@@ -388,7 +350,6 @@ def test_bug_backlog_missing_required_field() -> None:
 
 
 def test_bug_backlog_invalid_status_enum() -> None:
-    """Case (d): invalid --status enum value → reject."""
     name = "bug-backlog (d) invalid --status bogus → reject"
     with tempfile.TemporaryDirectory() as tmpdir:
         result = _run_queue_append(
@@ -396,7 +357,7 @@ def test_bug_backlog_invalid_status_enum() -> None:
                 "--schema", "bug-backlog",
                 "--title", "T",
                 "--body", "B",
-                "--status", "bogus",  # not in {open, closed, deferred, wontfix}
+                "--status", "bogus",
                 "--surface", "coordinator/parity",
                 "--severity", "P2",
                 "--from-repo", "test-repo-em",
@@ -426,7 +387,7 @@ def test_bug_backlog_wontfix_status_accepted() -> None:
                 "--schema", "bug-backlog",
                 "--title", "Known bug we will not fix",
                 "--body", "This issue is a known limitation and will not be addressed.",
-                "--status", "wontfix",  # explicitly in the bug-backlog status enum
+                "--status", "wontfix",
                 "--surface", "coordinator/parity",
                 "--severity", "P3",
                 "--from-repo", "test-repo-em",
@@ -438,12 +399,7 @@ def test_bug_backlog_wontfix_status_accepted() -> None:
         pass
 
 
-# ---------------------------------------------------------------------------
-# improvement-queue parity cases (5 cases: a, b, c, d, e)
-# ---------------------------------------------------------------------------
-
 def test_improvement_queue_valid_minimal() -> None:
-    """Case (a): valid minimal improvement-queue → accept."""
     name = "improvement-queue (a) valid minimal → accept"
     with tempfile.TemporaryDirectory() as tmpdir:
         result = _run_queue_append(
@@ -456,7 +412,6 @@ def test_improvement_queue_valid_minimal() -> None:
 
 
 def test_improvement_queue_missing_required_field() -> None:
-    """Case (b): missing required field (--surface omitted) → reject."""
     name = "improvement-queue (b) missing required field (--surface) → reject"
     with tempfile.TemporaryDirectory() as tmpdir:
         result = _run_queue_append(
@@ -468,7 +423,6 @@ def test_improvement_queue_missing_required_field() -> None:
                 "--proposed-action", "plugins/coordinator-claude/coordinator/",
                 "--change-kind", "skill-edit",
                 "--from-repo", "test-repo-em",
-                # --surface is intentionally omitted
             ],
             env={"QUEUE_APPEND_OUTPUT_ROOT": tmpdir},
             cwd=tmpdir,
@@ -500,7 +454,7 @@ def test_improvement_queue_invalid_change_kind() -> None:
                 "--status", "open",
                 "--surface", "plugins/coordinator-claude/coordinator/",
                 "--proposed-action", "plugins/coordinator-claude/coordinator/",
-                "--change-kind", "bogus",  # not in the improvement-queue enum
+                "--change-kind", "bogus",
                 "--from-repo", "test-repo-em",
             ],
             env={"QUEUE_APPEND_OUTPUT_ROOT": tmpdir},
@@ -541,7 +495,6 @@ def test_improvement_queue_queue_scope_central_accepted() -> None:
 
 
 def test_improvement_queue_queue_scope_project_accepted() -> None:
-    """Case (e): --queue-scope project → accept (valid scope value, default behavior)."""
     name = "improvement-queue (e) --queue-scope project → accept"
     with tempfile.TemporaryDirectory() as tmpdir:
         result = _run_queue_append(
@@ -552,10 +505,6 @@ def test_improvement_queue_queue_scope_project_accepted() -> None:
     if _assert_accept(name, result):
         pass
 
-
-# ---------------------------------------------------------------------------
-# coordinator-lesson-promote parity cases (4 cases: a, b, c, d)
-# ---------------------------------------------------------------------------
 
 def test_lesson_promote_valid() -> None:
     """Case (a): valid coordinator-lesson-promote invocation → accept.
@@ -580,7 +529,6 @@ def test_lesson_promote_valid() -> None:
 
 
 def test_lesson_promote_missing_title() -> None:
-    """Case (b): missing --title → reject (argparse required field)."""
     name = "coordinator-lesson-promote (b) missing --title → reject"
     with tempfile.TemporaryDirectory() as tmpdir:
         outbox = os.path.join(tmpdir, "state", "lessons-outbox")
@@ -601,7 +549,6 @@ def test_lesson_promote_missing_title() -> None:
 
 
 def test_lesson_promote_missing_change_kind() -> None:
-    """Case (c): missing --change-kind → reject (argparse required field)."""
     name = "coordinator-lesson-promote (c) missing --change-kind → reject"
     with tempfile.TemporaryDirectory() as tmpdir:
         outbox = os.path.join(tmpdir, "state", "lessons-outbox")
@@ -622,21 +569,6 @@ def test_lesson_promote_missing_change_kind() -> None:
 
 
 def test_lesson_promote_invalid_change_kind() -> None:
-    """Case (d): invalid --change-kind value → reject.
-
-    coordinator-lesson-promote uses argparse choices= for --change-kind (unlike
-    coordinator-queue-append which does post-parse validation in main()). argparse
-    exits 2 on a choices violation and names the valid values in the error message.
-
-    Valid change_kind values for coordinator-lesson-promote (current HEAD):
-    doctrine-edit, agent-prompt-edit, hook-edit, script-edit,
-    snippet-sync-update, wiki-new, wiki-append, skill-edit.
-
-    NOTE: this enum differs from the improvement-queue change_kind enum in
-    coordinator-queue-append (which lacks doctrine-edit and snippet-sync-update).
-    Both are hardcoded in their respective CLIs; loader-delegation will replace
-    them with a runtime load from coordinator/schemas/*.yaml.
-    """
     name = "coordinator-lesson-promote (d) invalid --change-kind bogus → reject"
     with tempfile.TemporaryDirectory() as tmpdir:
         outbox = os.path.join(tmpdir, "state", "lessons-outbox")
@@ -655,5 +587,4 @@ def test_lesson_promote_invalid_change_kind() -> None:
             raise AssertionError(f"{name}: " + (f"error output does not name valid change-kind values. stderr: {result.stderr!r}"))
         else:
             pass
-
 

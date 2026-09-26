@@ -162,23 +162,15 @@ _INTERPRETER_LITERALS = frozenset(
     {"python", "python3", "python.exe", "python3.exe", "py", "pythonw", "pythonw.exe"}
 )
 
-# A file with none of these cannot contain an interpreter-mediated site, so
-# it is never parsed. Applied in PYTHON at the parse site, never as a grep --
-# see `_suffix_arm_files` for the measurement that put it there.
 _INTERPRETER_FILE_TOKENS = ("sys.executable", "python", "run_path", "read_text")
 
 # Nor can a file carry a suffix DISPATCH without naming one of these: every
-# shape `_native_suffix_test` recognises reads the suffix through `.suffix`,
-# `splitext` or `endswith`.
 _SUFFIX_READ_FILE_TOKENS = (".suffix", "splitext", "endswith")
 
 _SOURCE_EXEC_CALLS = frozenset({"run_path", "spec_from_file_location", "exec", "compile"})
 
 _MAGIC_REFUSAL_TOKENS = ("NATIVE_IMAGE_MAGIC", "native_image", "is_native_image")
 
-# Suffixes a door image can actually occupy. A test that enumerates THESE and
-# treats the complement as Python is the defect the suffix arm detects. `.py`
-# is deliberately absent -- a positive `.py` test is the safe form.
 _NATIVE_IMAGE_SUFFIXES = frozenset({".exe", ".com"})
 _SUFFIX_ARM_FILE_TOKENS = tuple(sorted(_NATIVE_IMAGE_SUFFIXES))
 
@@ -188,9 +180,6 @@ _SUFFIX_DISPATCH_SHAPE = (
 
 _TEXT_ARM_SUFFIXES = frozenset({"", ".sh", ".bash", ".cmd", ".ps1", ".py"})
 
-# Prose corpora. They quote hook bodies and remediation commands verbatim by
-# the thousand; scanning them would report documentation of the defect as the
-# defect. Code lives outside these.
 _PROSE_DIR_PREFIXES = (
     "docs/",
     "state/",
@@ -200,20 +189,11 @@ _PROSE_DIR_PREFIXES = (
     ".structural-index/",
 )
 
-# The planted controls. The test module requires this directory to hold BOTH
-# defective and correct specimens and requires the guard to flag exactly the
-# defective ones -- a guard that can only ever print green is not evidence of
-# anything. The specimens carry a `.py.txt` suffix, so no collector, importer
-# or sibling guard reads them as source and this exclusion is belt-and-braces
-# rather than the only thing holding them out. Putting real code here to
-# silence a finding is the one abuse the exclusion admits, and the control
-# test's membership assertion is what closes it.
 CONTROL_FIXTURE_DIR = "coordinator_core/ops/tests/fixtures/native_door_handoff/"
 
 
 @dataclass(frozen=True)
 class Finding:
-    """One interpreter-mediated settings-home ``bin/`` site."""
 
     root_label: str
     relpath: str
@@ -225,14 +205,7 @@ class Finding:
         return f"  [{self.root_label}] {self.relpath}:{self.lineno} in {self.scope} -- {self.shape}"
 
 
-# ---------------------------------------------------------------------------
-# Expression shapes
-# ---------------------------------------------------------------------------
-
-
 def _dotted(node: ast.AST) -> str:
-    """Best-effort dotted text for a Name/Attribute/Call head. Empty when the
-    node is not name-shaped -- callers treat that as "no opinion"."""
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):
@@ -295,8 +268,6 @@ def _announces_its_own_extension(node: ast.AST) -> bool:
 
 
 def _is_composition(node: ast.AST) -> bool:
-    """True when ``node`` ITSELF composes a settings-home ``bin/`` path whose
-    final component does not announce its own interpreter."""
     if _shell_bin_literal(node) and not _announces_its_own_extension(node):
         return True
     if isinstance(node, ast.Call) and _dotted(node.func).endswith("path.join"):
@@ -319,13 +290,6 @@ _INNER_LINK_ATTR = "_ndh_inner_chain_link"
 
 
 def _mark_inner_chain_links(tree: ast.AST) -> None:
-    """Flag the non-final links of a ``a / "bin" / name`` chain.
-
-    ``settings_home() / "bin" / "x.json"`` contains, as its own left child,
-    the sub-chain ``settings_home() / "bin"`` -- which reads as a bare
-    composition and made every extension-bearing name a finding. Only the
-    outermost link is the path actually being composed.
-    """
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.BinOp)
@@ -337,8 +301,6 @@ def _mark_inner_chain_links(tree: ast.AST) -> None:
 
 
 def _contains_composition(node: ast.AST) -> bool:
-    """Memoized ON THE NODE, never on ``id()`` -- a freed-and-reused address
-    would silently corrupt the answer."""
     cached = getattr(node, _MEMO_ATTR, None)
     if cached is None:
         cached = not getattr(node, _INNER_LINK_ATTR, False) and _is_composition(node)
@@ -360,17 +322,10 @@ def _is_interpreter_expr(node: ast.AST) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
-# Scope walking
-# ---------------------------------------------------------------------------
-
 _NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 
 
 def _own_nodes(body: Sequence[ast.AST]) -> Iterable[ast.AST]:
-    """Every node belonging to THIS scope, never descending into a nested
-    def/class -- those are their own scopes with their own taint. Without
-    this, one site was reported once per enclosing scope."""
     stack: List[ast.AST] = [stmt for stmt in body if not isinstance(stmt, _NESTED_SCOPES)]
     while stack:
         node = stack.pop()
@@ -381,10 +336,6 @@ def _own_nodes(body: Sequence[ast.AST]) -> Iterable[ast.AST]:
 
 
 def _statement_lists(scope_node: ast.AST) -> Iterable[List[ast.stmt]]:
-    """Every statement list reachable from ``scope_node``'s own body -- the
-    body itself, plus every nested ``if``/``try``/``while``/``for``/``with``
-    body, ``orelse``, ``finalbody`` and exception-handler body -- without
-    crossing into a nested def/class scope."""
 
     def walk(body: List[ast.stmt]) -> Iterable[List[ast.stmt]]:
         yield body
@@ -403,21 +354,7 @@ def _statement_lists(scope_node: ast.AST) -> Iterable[List[ast.stmt]]:
         yield from walk(top)
 
 
-# ---------------------------------------------------------------------------
-# File-local taint
-# ---------------------------------------------------------------------------
-
-
 class _FileAnalysis:
-    """One parsed module and its file-local producer/parameter taint.
-
-    The taint is computed ONCE at construction, by a small fixpoint over this
-    file alone: which functions return a settings-home ``bin/`` path, which
-    parameter slots this file passes such a path into, and therefore which
-    names inside each scope hold one. Nothing crosses a file boundary -- see
-    the module negative-spec for the measurement that retired the repo-wide
-    form.
-    """
 
     def __init__(self, relpath: str, tree: ast.Module) -> None:
         self.relpath = relpath
@@ -440,9 +377,6 @@ class _FileAnalysis:
                 self._collect_scopes(name, stmt, stmt.body)
 
     def _settle(self) -> None:
-        """Two rounds: a producer discovered in round one seeds the parameter
-        slots found in round two. A third round has never changed an answer
-        on this corpus."""
         for _ in range(2):
             self._recompute()
             self.producers |= self._producer_names()
@@ -463,8 +397,6 @@ class _FileAnalysis:
             for stmt in self.own[index]
             if isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign))
         ]
-        # Two passes, so a name assigned from a name assigned later in the
-        # file still resolves.
         for _ in range(2):
             for stmt in assignments:
                 if isinstance(stmt, ast.Assign):
@@ -503,7 +435,6 @@ class _FileAnalysis:
         return False
 
     def _producer_names(self) -> Set[str]:
-        """Function names whose body returns a settings-home ``bin/`` path."""
         found: Set[str] = set()
         for index, (name, node, _body) in enumerate(self.scopes):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -516,7 +447,6 @@ class _FileAnalysis:
         return found
 
     def _tainted_params(self) -> Dict[str, Set[str]]:
-        """Callee name -> argument slots this file passes tainted."""
         found: Dict[str, Set[str]] = {}
         for index, _scope in enumerate(self.scopes):
             tainted = self.tainted[index]
@@ -536,9 +466,6 @@ class _FileAnalysis:
 
 
 def _param_names_for(node: ast.AST, slots: Set[str]) -> Set[str]:
-    """Map positional/keyword slot markers onto this definition's parameter
-    names, so a callee's body is analysed with its tainted parameters already
-    seeded."""
     if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return set()
     args = node.args
@@ -555,16 +482,7 @@ def _param_names_for(node: ast.AST, slots: Set[str]) -> Set[str]:
     return seeded
 
 
-# ---------------------------------------------------------------------------
-# Exemptions -- shapes 2 and 3, read at the flagged call site's own gate
-# ---------------------------------------------------------------------------
-
-
 def _is_header_sniff(node: ast.AST) -> bool:
-    """The gate reads the candidate's own first bytes and decides from them
-    -- ``shebang.startswith("#!")``, or a delegation to
-    ``launchable.resolve_launchable``. A native image has no ``#!`` line, so
-    a scope gated on one never hands an image to an interpreter."""
     if isinstance(node, ast.Call):
         dotted = _dotted(node.func)
         if dotted.endswith("resolve_launchable"):
@@ -600,10 +518,6 @@ def _is_positive_suffix_test(node: ast.AST) -> bool:
 
 
 def _is_exempt_among(own: List[ast.AST]) -> bool:
-    """Shapes 2 and 3, evaluated over a caller-chosen node set: a magic-byte
-    refusal, a header sniff, an exec-bit discrimination, or a positive ``.py``
-    test. Either one means the nodes PASSED IN already decide from the
-    artifact rather than from its name."""
     negated: Set[int] = set()
     for sub in own:
         if isinstance(sub, ast.UnaryOp) and isinstance(sub.op, ast.Not):
@@ -630,17 +544,10 @@ _EXIT_STMTS = (ast.Return, ast.Raise, ast.Continue, ast.Break)
 
 
 def _unconditionally_exits(body: List[ast.stmt]) -> bool:
-    """True iff ``body``'s last statement is a return/raise/continue/break --
-    reaching the code AFTER the ``if`` that owns this body therefore implies
-    the ``if``'s condition was false. A last-statement check, not a full
-    exhaustiveness analysis: enough for the guard-clause shape the live
-    exempted call sites use."""
     return bool(body) and isinstance(body[-1], _EXIT_STMTS)
 
 
 def _index_containing(stmts: List[ast.stmt], target: ast.AST) -> Optional[int]:
-    """Index of the statement in ``stmts`` that IS ``target`` or contains it,
-    without crossing into a nested def/class scope."""
     for index, stmt in enumerate(stmts):
         stack: List[ast.AST] = [stmt]
         while stack:
@@ -654,25 +561,6 @@ def _index_containing(stmts: List[ast.stmt], target: ast.AST) -> Optional[int]:
 
 
 def _enclosing_gate(scope_node: ast.AST, target: ast.AST) -> Optional[ast.AST]:
-    """The ``if``/``try`` that actually governs whether ``target`` runs, or
-    ``None`` when nothing does.
-
-    Two shapes, both drawn from the call sites this guard treats as
-    legitimately exempt:
-
-    1. **Literal nesting** -- ``target`` sits lexically inside an ``if``/
-       ``try`` body. The nearest such ancestor is the gate.
-    2. **Guard-clause / early-return** -- ``target`` sits AFTER an ``if``
-       whose body unconditionally exits, so that ``if`` governs it even
-       though ``target`` is not nested inside it.
-
-    Why the gate and not the enclosing function: an exemption evaluated over
-    the whole scope let an inert mention of an exemption token anywhere in a
-    function -- a dead branch, an unrelated ``.py`` suffix test -- clear a
-    completely unconditional, ungated handoff elsewhere in the same function.
-    Shape (2) is what keeps that fix from REDing the live exempted sites;
-    ``_session_claim_cli_argv`` is written exactly that way.
-    """
     nested = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
     parent: Dict[int, ast.AST] = {}
     stack: List[ast.AST] = [scope_node]
@@ -706,23 +594,13 @@ def _enclosing_gate(scope_node: ast.AST, target: ast.AST) -> Optional[ast.AST]:
 
 
 def _call_site_is_exempt(scope_node: ast.AST, target: ast.AST) -> bool:
-    """Exemption check scoped to the flagged call site, not the whole
-    function. No gate means nothing ties an exemption to this call, so it is
-    NOT exempt -- there is deliberately no whole-scope fallback."""
     gate = _enclosing_gate(scope_node, target)
     if gate is None:
         return False
     return _is_exempt_among(list(_own_nodes(list(ast.iter_child_nodes(gate)))))
 
 
-# ---------------------------------------------------------------------------
-# Suffix-dispatch arm
-# ---------------------------------------------------------------------------
-
-
 def _root_name(node: ast.AST) -> Optional[str]:
-    """The leftmost ``Name`` of an attribute/call/subscript chain --
-    ``script_path`` for ``str(script_path.suffix.lower())``."""
     seen = 0
     while seen < 12:
         seen += 1
@@ -757,9 +635,6 @@ def _reads_a_suffix(node: ast.AST) -> bool:
 
 
 def _module_string_groups(tree: ast.Module) -> Dict[str, Set[str]]:
-    """Module-level ``NAME = (".exe",)`` constants, so a test written against
-    a named tuple resolves to the same literals as an inline one. Module
-    scope only -- a value reassigned per call is not a constant."""
     groups: Dict[str, Set[str]] = {}
     for stmt in tree.body:
         if not isinstance(stmt, ast.Assign) or len(stmt.targets) != 1:
@@ -776,10 +651,6 @@ def _module_string_groups(tree: ast.Module) -> Dict[str, Set[str]]:
 
 
 def _native_suffix_test(node: ast.AST, groups: Dict[str, Set[str]]) -> Optional[str]:
-    """``<name>`` if ``node`` tests whether ``<name>``'s suffix is one of the
-    NATIVE-image suffixes, else None. The literal set must be non-empty and
-    must contain nothing but native-image suffixes -- a test mentioning
-    ``.py`` is the safe positive form and is never claimed here."""
 
     def _resolve(operand: ast.AST) -> Set[str]:
         literal = _const_str(operand)
@@ -818,9 +689,6 @@ def _native_suffix_test(node: ast.AST, groups: Dict[str, Set[str]]) -> Optional[
 
 
 def _interpreter_argv_over(node: ast.AST, name: str) -> Optional[ast.AST]:
-    """The argv literal inside ``node`` that prefixes an interpreter onto a
-    value derived from ``name``. Slot 1 only, for the reason ``_use_shape``
-    gives: a later element is an argument TO the script, not the script."""
     for sub in ast.walk(node):
         if not isinstance(sub, (ast.List, ast.Tuple)) or len(sub.elts) < 2:
             continue
@@ -832,9 +700,6 @@ def _interpreter_argv_over(node: ast.AST, name: str) -> Optional[ast.AST]:
 
 
 def _suffix_dispatch_sites(analysis: "_FileAnalysis") -> List[Tuple[str, ast.AST]]:
-    """``(scope name, argv node)`` for every negative-suffix dispatch in this
-    module. Independent of producers and params -- that independence is the
-    point of the arm."""
     groups = _module_string_groups(analysis.tree) if isinstance(analysis.tree, ast.Module) else {}
     sites: List[Tuple[str, ast.AST]] = []
     for index, (scope_name, scope_node, _body) in enumerate(analysis.scopes):
@@ -847,9 +712,6 @@ def _suffix_dispatch_sites(analysis: "_FileAnalysis") -> List[Tuple[str, ast.AST
                 tested = _native_suffix_test(stmt.test, groups)
                 if tested is None:
                     continue
-                # The false branch is `orelse` when written, and the
-                # statements AFTER the `if` when the true branch exits --
-                # the bare guard-clause shape the live defect used.
                 false_branch: List[ast.stmt] = list(stmt.orelse)
                 if not false_branch and _unconditionally_exits(stmt.body):
                     false_branch = list(stmts[position + 1 :])
@@ -861,23 +723,13 @@ def _suffix_dispatch_sites(analysis: "_FileAnalysis") -> List[Tuple[str, ast.AST
     return sites
 
 
-# ---------------------------------------------------------------------------
-# Defect shapes, and the Python-arm entry point
-# ---------------------------------------------------------------------------
-
-
 def _use_shape(analysis: "_FileAnalysis", node: ast.AST, tainted: Set[str]) -> Optional[str]:
     if isinstance(node, (ast.List, ast.Tuple)) and len(node.elts) >= 2:
-        # SLOT 1 ONLY. An interpreter's script is argv[1]; a later element is
-        # an argument TO that script, and flagging one reported a cache key
-        # passed to a same-named function as a launch.
         if _is_interpreter_expr(node.elts[0]) and analysis.is_tainted(node.elts[1], tainted):
             return "argv literal prefixes an interpreter onto a settings-home bin/ path"
     if isinstance(node, ast.Call):
         dotted = _dotted(node.func)
         leaf = dotted.rsplit(".", 1)[-1]
-        # `re.compile` is not `compile`. Builtins are matched undotted, the
-        # module-qualified forms by their own full name.
         builtin_form = dotted in {
             "exec",
             "compile",
@@ -952,46 +804,23 @@ def _analyse(relpath: str, text: str) -> Optional["_FileAnalysis"]:
 
 
 def classify_python_source(relpath: str, text: str, *, root_label: str = "<root>") -> List[Finding]:
-    """Findings for one Python source file. Pure: no I/O, no repo access.
-
-    The taint is file-local, so this is the WHOLE Python arm -- a planted
-    control and the live census see exactly the same analysis.
-    """
     analysis = _analyse(relpath, text)
     return [] if analysis is None else _findings_for(analysis, root_label)
 
 
 def producers_in_source(text: str) -> Set[str]:
-    """Function names in ``text`` that RETURN a settings-home ``bin/`` path.
-
-    Exposed so a test can assert the negative -- that a resolver returning
-    ``<settings-home>/bin/_machine_local.py`` is NOT a producer -- without
-    reaching into the analysis internals.
-    """
     analysis = _analyse("<source>", text)
     return set() if analysis is None else set(analysis.producers)
 
 
-# ---------------------------------------------------------------------------
-# Shell arm
-# ---------------------------------------------------------------------------
-
 _SHELL_BIN_RE = re.compile(
     r"(?:COORDINATOR_SETTINGS_HOME|coordinator-claude-settings)[^\n]{0,160}?/bin/"
 )
-# A shell assignment: `_T="..."`, `_fwd='...'`, `SCRIPT=...`.
 _SHELL_ASSIGN_RE = re.compile(r"""(?m)^[^\n]*?\b([A-Za-z_][A-Za-z0-9_]*)=["']?([^"'\n]*)""")
-# A Python assignment whose value names the settings home -- the emitted hook
-# interpolates such a name into its own shell body, so the shell variable's
-# provenance is only visible through it. Spans a few lines on purpose: the
-# live emitter writes the literal on the line after the `=`, so a single-line
-# pattern found no carrier and the shell arm went quiet.
 _PY_HOME_ASSIGN_RE = re.compile(
     r"""(?m)^[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[\s\S]{0,300}?"""
     r"""(?:COORDINATOR_SETTINGS_HOME|coordinator-claude-settings)"""
 )
-# `"$_PY" "$_T"`, `python3 "$_T"`, `%_py% "%_T%"` -- an interpreter running a
-# variable, with the variable captured.
 _SHELL_RUN_RES = (
     re.compile(r"""["']?\$\{?_?[Pp][Yy][A-Za-z0-9_]*\}?["']?\s+["']?\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"""),
     re.compile(r"""\bpython3?\b\s+["']?\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"""),
@@ -1048,24 +877,7 @@ def classify_text_source(relpath: str, text: str, *, root_label: str = "<root>")
     return []
 
 
-# ---------------------------------------------------------------------------
-# Root resolution and scanning
-# ---------------------------------------------------------------------------
-
-
 def _git(root: str, args: Sequence[str]) -> List[str]:
-    """Lines from one ``git`` invocation, or ``[]``.
-
-    Exit 1 is ``git grep``'s "no match", not a failure. Anything else -- a
-    root that is not a repo, a git that is not installed -- collapses to "no
-    candidate files" rather than raising: an operator pointing ``--root`` at
-    a plain directory gets a clean report, never a traceback.
-
-    Routed through ``coordinator_core.git.run.run_git`` rather than a private
-    ``subprocess.run``, which is the shape ``test_shared_git_runner::
-    test_no_new_private_git_runner_outside_the_frozen_inventory`` exists to
-    catch.
-    """
     result = run_git(["-C", root, *args])
     if result.returncode not in (0, 1):
         return []
@@ -1172,12 +984,6 @@ def _text_arm_files(root: str) -> List[str]:
 
 
 def scan_root(root: str, *, root_label: Optional[str] = None) -> List[Finding]:
-    """Every interpreter-mediated settings-home ``bin/`` site under ``root``.
-
-    Candidate selection is a fixed eight ``git grep`` invocations -- four for
-    the taint arm, three intersected for the suffix arm, one for the shell
-    arm. No process is spawned per file, and no file is parsed twice.
-    """
     label = root_label or os.path.basename(os.path.abspath(root))
     findings: List[Finding] = []
     analysed: Set[str] = set()
@@ -1198,10 +1004,6 @@ def scan_root(root: str, *, root_label: Optional[str] = None) -> List[Finding]:
         text = _read(root, relpath)
         if text is None:
             continue
-        # The interpreter precondition, applied here rather than as a third
-        # grep -- see `_suffix_arm_files` for why. A substring test over text
-        # already read is free; the grep that would have replaced it selected
-        # 2694 files on its cheapest token.
         if not any(token in text for token in _INTERPRETER_FILE_TOKENS):
             continue
         analysis = _analyse(relpath, text)
@@ -1229,17 +1031,6 @@ def scan_root(root: str, *, root_label: Optional[str] = None) -> List[Finding]:
 def resolve_roots(
     extra: Optional[Iterable[str]] = None,
 ) -> Tuple[List[Tuple[str, str]], List[str]]:
-    """``([(label, path), ...], [skip reason, ...])``.
-
-    This repo is always scanned. The DoE-claude plane is scanned when it
-    resolves through the engine's OWN resolver
-    (``coordinator_core.ops.coordinator_doe_root``, which walks the
-    documented rung chain: env override, machine-local ``repos.doe_claude``,
-    the ``.doe-root`` pointer, then the marketplace-cache rungs) -- no second
-    absolute path is hardcoded here and no resolver is reinvented. A box with
-    no DoE clone is a normal box: the skip and its reason are reported, and
-    the run stays green on the roots it did scan.
-    """
     roots: List[Tuple[str, str]] = []
     skips: List[str] = []
 
@@ -1258,7 +1049,7 @@ def resolve_roots(
             from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
 
             doe = coordinator_doe_root()
-        except Exception as exc:  # resolver unavailable is a skip, never a failure
+        except Exception as exc:
             doe, exc_text = None, str(exc)
             skips.append(f"DoE-claude: resolver unavailable ({exc_text})")
         else:

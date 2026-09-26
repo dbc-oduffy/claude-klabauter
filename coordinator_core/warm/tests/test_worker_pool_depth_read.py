@@ -47,14 +47,6 @@ def test_worker_pool_depth_reports_full_pool_size_on_fresh_boot():
 
 
 def test_worker_pool_depth_detects_a_guard_bypassing_die_off(monkeypatch):
-    """A death route that escapes `_worker_loop`'s own `except Exception`
-    guard -- here, a monkeypatched `_handle_connection` raising
-    `SystemExit`, a `BaseException` subclass `except Exception` does not
-    catch -- must actually be reflected as a depth drop. This is the
-    negative-arm T1's spec requires: not `_start_worker_pool(pool_size=n<30)`,
-    which only pins the counter's arithmetic, but a demonstrated real
-    die-off the instrument can see.
-    """
 
     def _fake_handle_connection(io, **kwargs):
         if io == "die":
@@ -76,15 +68,10 @@ def test_worker_pool_depth_detects_a_guard_bypassing_die_off(monkeypatch):
     while ctx.worker_pool_depth() == 3 and time.monotonic() < deadline:
         time.sleep(0.01)
 
-    assert ctx.worker_pool_depth() == 2  # the die-off is visible as a drop
+    assert ctx.worker_pool_depth() == 2
 
 
 def test_idle_tick_records_worker_pool_depth_through_telemetry(tmp_path, monkeypatch):
-    """`_idle_tick` records the live depth through
-    `telemetry.record_worker_pool_depth`, readable back via
-    `telemetry.worker_pool_depth_samples` -- the existing
-    `record_server_boot`/`server_boot_samples` append-log pattern T1's body
-    names, sampled on the idle watchdog's own bounded tick."""
     from coordinator_core.warm import idle, lifecycle
 
     lifecycle.reset_shutdown_guard_for_test()

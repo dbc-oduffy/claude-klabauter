@@ -43,30 +43,10 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _posix(p) -> str:
-    """POSIX-slash string form of a path for embedding in a bash
-    command-line string -- the tokenizer under test parses commands as
-    real bash/POSIX-sh syntax (backslash is an escape character), so a
-    native Windows ``str(Path)`` (backslash-separated) embedded directly
-    into a ``cmd`` string is not a realistic Bash-tool payload and
-    silently corrupts the path once tokenized (see bb48ce7's identical
-    fixture-realism finding on the write-bump test suite). Accepts a
-    ``Path`` or a plain ``str``."""
     return p.as_posix() if hasattr(p, "as_posix") else str(p).replace("\\", "/")
 
 
 def _run_via_real_shell(command: str, timeout: float = 10.0) -> subprocess.CompletedProcess:
-    """Execute `command` through an actual shell (`bash -c` on POSIX, the
-    Bash-tool's real execution path on macOS/Linux and -- per this
-    dispatch's own Windows-readiness verification -- Git Bash on a
-    Windows-with-Git-Bash host) rather than compiling the embedded script
-    in-process. This is the only way to prove the OUTER shell quoting
-    survives, not just that the inner Python is syntactically valid.
-
-    Explicitly routed through Git Bash on Windows: plain
-    `subprocess.run(shell=True)` there launches cmd.exe, a wholly
-    different tokenizer that cannot parse the `shlex.quote`-produced
-    (POSIX) outer quoting this suite exists to verify, and silently
-    reports "the filename... is incorrect" instead of running anything."""
     if platform.system() == "Windows":
         bash = shutil.which("bash")
         if bash is None:
@@ -79,7 +59,6 @@ def _run_via_real_shell(command: str, timeout: float = 10.0) -> subprocess.Compl
             **no_console_creationflags(),
         )
     return subprocess.run(
-        # popup-intentional-last-resort: shell=True spawns a cmd.exe
         # intermediary that CREATE_NO_WINDOW does not suppress; the
         # STARTUPINFO route is a separate, wider fix (review: code-reviewer).
         command, shell=True, capture_output=True, text=True, timeout=timeout,

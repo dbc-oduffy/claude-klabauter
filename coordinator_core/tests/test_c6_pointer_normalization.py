@@ -36,10 +36,7 @@ from coordinator_core.doe_root_pointer import read_doe_root_pointer
 from . import _baton_dag_oracle as oracle
 
 
-# ---------------------------------------------------------------------------
 # Fixture: clear dag._FRONTMATTER_CACHE between tests (mirrors test_dag_edge_kinds.py
-# convention).
-# ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
 def clear_frontmatter_cache():
@@ -59,10 +56,6 @@ def _write_handoff(path: Path, *, slug: str, status: str = "active", **extra_fie
         f"# Handoff body\n"
     )
 
-
-# ---------------------------------------------------------------------------
-# (a) Six value encodings, via resolve_target
-# ---------------------------------------------------------------------------
 
 class TestSixValueEncodings:
     @pytest.fixture
@@ -86,11 +79,6 @@ class TestSixValueEncodings:
         tmp_path, state_dir, parent = repo
         basename = parent.name
         raw = encode(basename, None)
-        # Mirror how dag._parse_frontmatter would have already stripped quotes —
-        # resolve_target is exercised directly here, so strip them the same way
-        # a real frontmatter read would have (quote-stripping is _parse_scalar's
-        # job, not resolve_target's; see six-encodings coverage via referenced_by
-        # below for the full parse-then-resolve path).
         target = raw.strip('"').strip("'")
         resolved = dag.resolve_target(target, str(state_dir), str(tmp_path))
         assert resolved == str(parent.resolve())
@@ -116,9 +104,6 @@ class TestSixValueEncodings:
         assert dag.resolve_target(None, str(state_dir), str(tmp_path)) is None
 
     def test_id_index_is_a_pure_addition_for_path_shaped_refs(self, repo):
-        """A path/filename-shaped ref resolves identically whether or not an
-        (irrelevant) id_index is supplied — id_index only intercepts refs that
-        do not end in '.md'."""
         tmp_path, state_dir, parent = repo
         basename = parent.name
         no_index = dag.resolve_target(basename, str(state_dir), str(tmp_path))
@@ -128,15 +113,8 @@ class TestSixValueEncodings:
         assert no_index == with_index == str(parent.resolve())
 
 
-# ---------------------------------------------------------------------------
-# (b) Id-suffixed field aliases — predecessor_id / origin_handoff_id
-# ---------------------------------------------------------------------------
-
 class TestIdSuffixedFieldAliases:
     def test_predecessor_id_only_is_now_resolved(self, tmp_path: Path):
-        """A child naming its parent ONLY via predecessor_id (no plain `predecessor`
-        field at all) is found by referenced_by — this is the C6 seam's core gap-fix.
-        """
         state_dir = tmp_path / "state" / "handoffs"
         state_dir.mkdir(parents=True)
         parent = state_dir / "2026-07-01_000000_parent.md"
@@ -158,8 +136,6 @@ class TestIdSuffixedFieldAliases:
         spinoff = state_dir / "2026-07-02_000000_spinoff.md"
         _write_handoff(spinoff, slug="spinoff", origin_handoff_id='"hnd-source-abc123"')
 
-        # Default edge_kinds does NOT include origin_handoff — ratified exclusion,
-        # untouched by this seam.
         default_result = dag.referenced_by(str(source), [str(source), str(spinoff)])
         assert str(spinoff.resolve()) not in default_result["referencedBy"]
 
@@ -169,9 +145,6 @@ class TestIdSuffixedFieldAliases:
         assert str(spinoff.resolve()) in explicit_result["referencedBy"]
 
     def test_stale_id_does_not_false_match(self, tmp_path: Path):
-        """An id ref that resolves to nothing (handoff_id not in the corpus) must
-        never fall back to matching some unrelated live node — fail-closed, not
-        fail-open, on an unresolvable id-shaped ref."""
         state_dir = tmp_path / "state" / "handoffs"
         state_dir.mkdir(parents=True)
         decoy = state_dir / "2026-07-01_000000_decoy.md"
@@ -185,10 +158,6 @@ class TestIdSuffixedFieldAliases:
         assert result["referenced"] is False
 
 
-# ---------------------------------------------------------------------------
-# (c) Differential-oracle agreement over the real DoE-claude + claude-klabauter corpora
-# ---------------------------------------------------------------------------
-
 def _corpus_agreement(root: str, fields, edge_kinds: Set[str]) -> None:
     live_paths, oracle_children = oracle.build_children_index(root, fields=fields)
     assert live_paths, f"expected a non-empty live handoff set under {root}"
@@ -196,29 +165,8 @@ def _corpus_agreement(root: str, fields, edge_kinds: Set[str]) -> None:
     all_corpus_paths = oracle.collect_corpus_paths(root)
     handoff_dir = os.path.dirname(all_corpus_paths[0])
 
-    # ONE forward pass over the corpus, then N in-memory lookups.
-    #
-    # This loop used to call `dag.referenced_by` per baton, and that function
-    # re-walks the ENTIRE live_set on every call -- one `_read_meta` per node
-    # per call, plus a second full pass to rebuild `id_index`. At 296 live
-    # batons over a 1236-file corpus that is ~730,000 file opens, and the test
-    # did not finish inside a 180s per-test timeout. Because it carries no
-    # tier marker it is selected by the FAST tier, so the whole tier stalled
-    # at ~36% and everything ordered after it never ran; under `-n` it
-    # presented as `node down: Not properly terminated`, which reads as
-    # flakiness rather than as one test that never returns.
-    #
-    # `build_reverse_edge_index` + `referenced_by_indexed` is the seam built
-    # for exactly this shape -- see that function's own docstring, which
-    # records the same defect measured on `session.boot_sweep`'s backstop
-    # (176 candidates over ~548 nodes = 96,534 file opens, 21.5s) and its
     # equivalence argument: the per-node work is target-INDEPENDENT, so it
-    # hoists verbatim and only the final comparison stays in the loop.
-    #
     # `_FRONTMATTER_CACHE` does not rescue the old shape and its absence is
-    # not the bug: it caches PARSING, while every `_read_meta` still does
-    # `read_bytes()` + sha256 by design to close a TOCTOU window. The cost is
-    # the reads, so the fix has to be asking fewer times.
     reverse_index = dag.build_reverse_edge_index(
         all_corpus_paths, handoff_dir=handoff_dir, edge_kinds=edge_kinds
     )
@@ -244,18 +192,6 @@ def _corpus_agreement(root: str, fields, edge_kinds: Set[str]) -> None:
 
 
 class TestForeignFamilyPointerIsNotRehomed:
-    """A pointer naming a non-baton family must not basename-recover onto a baton.
-
-    Regression: `state/handoffs/<name>.md` carrying
-    `predecessor: cross-repo/inbox/<name>.md` (the memo-pickup convention, where
-    the handoff inherits the memo's slug) resolved onto ITSELF once the memo was
-    archived out of `cross-repo/inbox/`, because resolve_target's stale-path
-    recovery tier probes `state/handoffs/<basename>` regardless of the directory
-    the ref names. `referenced_by` then reported the baton as its own referencer,
-    which blocks its archival forever. Fixture-backed rather than corpus-backed:
-    the differential-oracle tests below can only catch this while the offending
-    record happens to be in the live corpus.
-    """
 
     @pytest.fixture
     def repo(self, tmp_path: Path):
@@ -295,7 +231,6 @@ class TestForeignFamilyPointerIsNotRehomed:
         assert result["referenced"] is False
 
     def test_baton_family_ref_still_basename_recovers(self, repo):
-        """Negative control — the stale-path recovery this fix narrows still works."""
         tmp_path, state_dir, baton = repo
         parent = state_dir / "2026-07-01_000000_parent.md"
         _write_handoff(parent, slug="parent")
@@ -353,8 +288,6 @@ class TestReverseEdgeIndexCoverage:
             dag.referenced_by_indexed(
                 paths[0], index, edge_kinds={"origin_handoff"}
             )
-        # The message must name the gap AND the remedy -- a bare "invalid
-        # edge kind" would send a caller looking for a typo.
         assert "origin_handoff" in str(exc.value)
         assert "build_reverse_edge_index" in str(exc.value)
 
@@ -365,7 +298,6 @@ class TestReverseEdgeIndexCoverage:
             handoff_dir=os.path.dirname(paths[0]),
             edge_kinds={"origin_handoff"},
         )
-        # No raise, and the shape is unchanged.
         result = dag.referenced_by_indexed(
             paths[0], index, edge_kinds={"origin_handoff"}
         )
@@ -379,9 +311,7 @@ class TestReverseEdgeIndexCoverage:
             paths, handoff_dir=os.path.dirname(paths[0])
         )
         del index["edge_kinds"]
-        # A default kind still answers...
         dag.referenced_by_indexed(paths[0], index, edge_kinds={"predecessor"})
-        # ...and an uncovered one still refuses.
         with pytest.raises(ValueError):
             dag.referenced_by_indexed(
                 paths[0], index, edge_kinds={"origin_handoff"}

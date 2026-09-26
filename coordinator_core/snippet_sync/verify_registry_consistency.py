@@ -87,7 +87,6 @@ SNIPPET_NAMES: list[str] = [
 
 @dataclass
 class ConsistencyOutcome:
-    """Return value of `run()` — mirrors the bash script's stdout-lines + exit-code contract."""
 
     exit_code: int
     lines: list[str] = field(default_factory=list)
@@ -120,30 +119,19 @@ def _load_toml(registry_path: Path) -> dict:
             with registry_path.open("rb") as fh:
                 return tomli.load(fh)
     except ImportError as exc:
-        # Byte-parity: the oracle's Python heredoc catches ImportError under
-        # its blanket `except Exception as e: print(f"ERROR {e}")` — any
-        # parser-emitted ERROR line hits the generic early-exit-2 block.
         raise ConsistencyError(
             f"registry.toml parse failed: {type(exc).__name__}: {exc}", exit_code=2
         ) from exc
-    except Exception as exc:  # tomllib.TOMLDecodeError et al.
+    except Exception as exc:
         raise ConsistencyError(
             f"registry.toml parse failed: {type(exc).__name__}: {exc}", exit_code=2
         ) from exc
 
 
-#: Rendered version set for the `--list` / usage text. Derived, never restated.
 _SUPPORTED_VERSIONS_TEXT = ",".join(str(v) for v in _registry._SUPPORTED_SCHEMA_VERSIONS)
 
 
 def _read_registry(registry_toml: Path) -> dict[str, Any]:
-    """Parse + fully validate registry.toml, returning the raw registry dict.
-
-    The three locally-owned failures (absent file, unparseable TOML, absent
-    `schema_version`) carry this CLI's exit 2. Everything else — the supported
-    version set and every per-row field rule — is `registry.load_registry`'s
-    call, surfaced with its own `exit_code`.
-    """
     if not registry_toml.is_file():
         raise ConsistencyError(f"registry.toml not found at {registry_toml}", exit_code=2)
 
@@ -151,10 +139,6 @@ def _read_registry(registry_toml: Path) -> dict[str, Any]:
 
     schema_version = data.get("schema_version")
     if schema_version is None:
-        # Byte-parity oracle bug (see module negative-spec): a missing
-        # schema_version is an "ERROR ..." parser-output line, caught by the
-        # generic early-exit-2 block BEFORE the dedicated exit-3 check below
-        # ever runs. Exit 2, not 3.
         raise ConsistencyError("schema_version field missing from registry.toml", exit_code=2)
     if schema_version not in _registry._SUPPORTED_SCHEMA_VERSIONS:
         raise ConsistencyError(
@@ -166,20 +150,10 @@ def _read_registry(registry_toml: Path) -> dict[str, Any]:
     try:
         return _registry.load_registry(registry_toml)
     except _registry.RegistryError as exc:
-        # load_registry's exit 3 is unreachable — the version gate above already
-        # passed against the same tuple. Its exit 1 is a malformed row.
         raise ConsistencyError(str(exc), exit_code=exc.exit_code) from exc
 
 
 def _check_rows(data: dict[str, Any], plugin_root: Path) -> list[str]:
-    """FAIL lines for the per-row checks `load_registry` does not itself make:
-    enumerated-axis VALUES (`registry.get_snippet_meta`) and the v4
-    `eligible_glob` completeness check (`registry.eligible_glob_gaps`, which
-    touches the filesystem and is therefore a separate call by design).
-
-    Reported rather than raised: a value or completeness defect is drift this
-    verifier exists to enumerate, and one bad row must not hide the next.
-    """
     fails: list[str] = []
     for name in _registry.list_snippets(data):
         try:
@@ -196,7 +170,6 @@ def _check_rows(data: dict[str, Any], plugin_root: Path) -> list[str]:
 
 
 def list_checks() -> list[str]:
-    """`--list` mode: one line per check, in execution order."""
     out = [
         f"check:schema_version — registry.toml schema_version ∈ {{{_SUPPORTED_VERSIONS_TEXT}}} "
         f"(exit 3 on unknown/higher version)",
@@ -216,8 +189,6 @@ def list_checks() -> list[str]:
 
 
 def run(plugin_root: Path) -> ConsistencyOutcome:
-    """Run all checks against `plugin_root` (the DoE coordinator plugin root
-    — the directory containing `snippets/`)."""
     registry_toml = plugin_root / "snippets" / "registry.toml"
 
     data = _read_registry(registry_toml)

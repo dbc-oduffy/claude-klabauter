@@ -1,12 +1,3 @@
-"""
-test_new_entity_schemas — parse/reject tests for four entities across contract
-v2.1.0 (Roadmap/Tracker/HealthStatus) and v2.2.0 (DecisionGuideSummary).
-
-Pytest port of DoE `coordinator/cockpit-contract/test/new-entity-schemas.test.ts`.
-
-Spec backlink: docs/plans/2026-06-27-emit-new-record-types-producer-wiring.md § B4;
-docs/plans/2026-06-27-cockpit-emission-decision-guide-4th-type.md § C5
-"""
 from __future__ import annotations
 
 from coordinator_core.contract.cockpit_schema.entities.decision_guide_summary import (
@@ -36,10 +27,6 @@ PROV = {
     "entity_anchor": None,
 }
 
-
-# ===========================================================================
-# RoadmapSummary
-# ===========================================================================
 
 ROADMAP_VALID = {
     "repo": ".example-doctrine-mirror-repo",
@@ -128,10 +115,6 @@ def test_roadmap_summary_d9_nullable_field_omitted_entirely_rejected():
     assert not zod_safe_parse_ok(RoadmapSummary, bad)
 
 
-# ===========================================================================
-# TrackerSummary
-# ===========================================================================
-
 TRACKER_VALID = {
     "repo": ".example-doctrine-mirror-repo",
     "coordinator_root_path": ".",
@@ -180,9 +163,7 @@ def test_tracker_summary_d9_nullable_field_omitted_entirely_rejected():
     assert not zod_safe_parse_ok(TrackerSummary, bad)
 
 
-# ===========================================================================
 # HealthStatusSummary — AXIS DISTINCTION: status (lifecycle) vs health (posture)
-# ===========================================================================
 
 HEALTH_VALID = {
     "repo": ".example-doctrine-mirror-repo",
@@ -246,10 +227,6 @@ def test_health_status_summary_d9_nullable_field_omitted_entirely_rejected():
     del bad["owner"]
     assert not zod_safe_parse_ok(HealthStatusSummary, bad)
 
-
-# ===========================================================================
-# DecisionGuideSummary — SINGLE AXIS: lifecycle only (no posture axis, no health field)
-# ===========================================================================
 
 DECISION_GUIDE_VALID = {
     "repo": ".example-doctrine-mirror-repo",

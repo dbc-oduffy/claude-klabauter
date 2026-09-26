@@ -36,8 +36,6 @@ def test_a_qualified_findings_heading_is_still_a_findings_section(heading):
 
 
 def test_the_qualifier_is_not_left_in_the_body():
-    """The slice starts at the end of the heading LINE. A fixed-length offset
-    would leave the qualifier in the body and shift every boundary search."""
     body = m._extract_findings_section(_doc("## Findings table (plan order)"))
     assert body is not None
     assert "table (plan order)" not in body
@@ -45,12 +43,10 @@ def test_the_qualifier_is_not_left_in_the_body():
 
 
 def test_a_prose_mention_is_still_not_a_heading():
-    """The whole point of line-anchoring survives the qualifier."""
     assert m._extract_findings_section("Explaining the `## Findings` heading.\n") is None
 
 
 def test_a_different_word_is_not_a_findings_heading():
-    """`\\b` after the word, so a longer word does not match."""
     assert m._extract_findings_section(_doc("## Findingsomething")) is None
 
 
@@ -58,7 +54,5 @@ def test_a_different_word_is_not_a_findings_heading():
     "boundary", ["## Integrator Dispositions", "## Exit interview"]
 )
 def test_boundaries_stay_exact(boundary):
-    """A section boundary that tolerates a suffix is a section that can end in
-    the wrong place — `_find_heading`'s docstring records what each costs."""
     assert m._find_heading(f"{boundary} (partial)\n", boundary) is None
     assert m._find_heading(f"{boundary}\n", boundary) is not None

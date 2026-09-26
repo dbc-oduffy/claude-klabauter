@@ -1,10 +1,3 @@
-"""
-test_daily_branch.py — pytest coverage for coordinator_core.daily_branch.
-
-Port of: coordinator-daily-branch.sh (DoE 2fbe0e77, 2026-07-19)
-Covers branch-shape cases + sanitization edge cases (spaces, unicode,
-path-injection chars).
-"""
 
 from __future__ import annotations
 
@@ -25,33 +18,29 @@ from coordinator_core.daily_branch import (
 )
 
 
-# --- sanitize_slug -----------------------------------------------------------
-
 @pytest.mark.parametrize(
     "raw,expected",
     [
         ("machine-a", "machine-a"),
-        ("MACHINE-A", "machine-a"),                 # lowercased
-        ("Hello World", "hello-world"),             # space -> dash
-        ("a  b   c", "a-b-c"),                       # multi-space collapse
-        ("--leading-and-trailing--", "leading-and-trailing"),  # strip edges
-        ("foo___bar", "foo-bar"),                    # underscores -> dash, collapsed
-        ("a.b.c", "a-b-c"),                           # dots -> dash
-        ("café", "caf"),                              # unicode dropped -> stripped
-        ("naïve-señor", "na-ve-se-or"),              # unicode runs -> dash
-        ("../../etc/passwd", "etc-passwd"),          # path-injection chars -> dash + strip
-        ("a/b\\c", "a-b-c"),                          # slash + backslash -> dash
-        ("!!!", ""),                                  # all-nonslug -> empty
-        ("", ""),                                      # empty in, empty out
-        ("已经", ""),                                  # CJK -> empty
+        ("MACHINE-A", "machine-a"),
+        ("Hello World", "hello-world"),
+        ("a  b   c", "a-b-c"),
+        ("--leading-and-trailing--", "leading-and-trailing"),
+        ("foo___bar", "foo-bar"),
+        ("a.b.c", "a-b-c"),
+        ("café", "caf"),
+        ("naïve-señor", "na-ve-se-or"),
+        ("../../etc/passwd", "etc-passwd"),
+        ("a/b\\c", "a-b-c"),
+        ("!!!", ""),
+        ("", ""),
+        ("已经", ""),
         ("v1.2.3", "v1-2-3"),
     ],
 )
 def test_sanitize_slug(raw, expected):
     assert sanitize_slug(raw) == expected
 
-
-# --- is_work_branch / has_remote_prefix --------------------------------------
 
 @pytest.mark.parametrize(
     "name,expected",
@@ -97,8 +86,6 @@ def test_has_remote_prefix(name, expected):
     assert has_remote_prefix(name) is expected
 
 
-# --- parse_branch_span -------------------------------------------------------
-
 def test_parse_single_day():
     assert parse_branch_span("work/machine-a/2026-05-06") == (
         "2026-05-06",
@@ -114,7 +101,6 @@ def test_parse_span_same_month():
 
 
 def test_parse_span_month_roll():
-    # end-DD (03) < start-DD (28) -> advance month by one.
     assert parse_branch_span("work/machine-a/2026-05-28to03") == (
         "2026-05-28",
         "2026-06-03",
@@ -122,7 +108,6 @@ def test_parse_span_month_roll():
 
 
 def test_parse_span_year_roll():
-    # December -> January, year advances.
     assert parse_branch_span("work/machine-a/2026-12-30to02") == (
         "2026-12-30",
         "2027-01-02",
@@ -137,7 +122,6 @@ def test_parse_case_insensitive():
 
 
 def test_parse_end_equal_start_dd():
-    # end-DD == start-DD -> same month, no roll.
     assert parse_branch_span("work/m/2026-05-06to06") == ("2026-05-06", "2026-05-06")
 
 
@@ -148,13 +132,13 @@ def test_parse_end_equal_start_dd():
         "work/machine-a/feature-X",
         "hotfix/urgent",
         "main",
-        "work/machine-a/2026-13-01",   # month > 12
-        "work/machine-a/2026-05-32",   # day > 31
-        "work/machine-a/2026-00-15",   # month == 0
-        "work/machine-a/2026-05-00",   # day == 0
-        "work/machine-a/2026-5-6",     # non-zero-padded
-        "work//2026-05-06",            # empty machine segment
-        "work/a/b/2026-05-06",         # extra path segment
+        "work/machine-a/2026-13-01",
+        "work/machine-a/2026-05-32",
+        "work/machine-a/2026-00-15",
+        "work/machine-a/2026-05-00",
+        "work/machine-a/2026-5-6",
+        "work//2026-05-06",
+        "work/a/b/2026-05-06",
         "",
     ],
 )
@@ -166,15 +150,13 @@ def test_parse_none_input():
     assert parse_branch_span(None) is None
 
 
-# --- is_allowed_branch -------------------------------------------------------
-
 @pytest.mark.parametrize(
     "name",
     [
         "main",
         "MAIN",
         "work/machine-a/2026-05-06",
-        "work/MACHINE-A/2026-05-06",   # mixed case still allowed (shape oracle)
+        "work/MACHINE-A/2026-05-06",
         "work/machine-a/2026-05-06to09",
     ],
 )
@@ -196,15 +178,12 @@ def test_is_allowed_false(name):
     assert is_allowed_branch(name) is False
 
 
-# --- is_canonical_branch -----------------------------------------------------
-
 def test_canonical_accepts_lowercase():
     assert is_canonical_branch("work/machine-a/2026-05-06") is True
     assert is_canonical_branch("main") is True
 
 
 def test_canonical_rejects_mixed_case():
-    # Allowed shape, but non-canonical case -> rejected at creation time.
     assert is_allowed_branch("work/MACHINE-A/2026-05-06") is True
     assert is_canonical_branch("work/MACHINE-A/2026-05-06") is False
     assert is_canonical_branch("MAIN") is False
@@ -214,8 +193,6 @@ def test_canonical_rejects_disallowed():
     assert is_canonical_branch("feature/foo") is False
 
 
-# --- format_span_suffix ------------------------------------------------------
-
 def test_format_span_suffix_same_day():
     assert format_span_suffix("2026-05-06", "2026-05-06") == "2026-05-06"
 
@@ -223,8 +200,6 @@ def test_format_span_suffix_same_day():
 def test_format_span_suffix_span():
     assert format_span_suffix("2026-05-06", "2026-05-09") == "2026-05-06to09"
 
-
-# --- rename_target -----------------------------------------------------------
 
 def test_rename_target_zero_ahead_is_today_only():
     assert rename_target("machine-a", "2026-05-06", "2026-05-09", 0) == (
@@ -255,11 +230,8 @@ def test_rename_target_rejects_non_integer(bad):
         rename_target("m", "2026-05-06", "2026-05-09", bad)
 
 
-# --- should_prompt_rename ----------------------------------------------------
-
 def test_should_prompt_active_not_in_span():
     now = 1_000_000.0
-    # Last commit 1h ago (active), branch end != today -> prompt.
     assert should_prompt_rename(
         "work/machine-a/2026-05-06", "2026-05-09", now - 3600, now_epoch=now
     ) is True
@@ -274,7 +246,6 @@ def test_should_not_prompt_already_covers_today():
 
 def test_should_not_prompt_stale_commit():
     now = 1_000_000.0
-    # Last commit 72h ago -> stale, routes to A/B/C, no prompt.
     assert should_prompt_rename(
         "work/machine-a/2026-05-06", "2026-05-09", now - 72 * 3600, now_epoch=now
     ) is False
@@ -287,13 +258,9 @@ def test_should_not_prompt_unparseable_branch():
 
 def test_should_prompt_span_branch_not_covering_today():
     now = 1_000_000.0
-    # Span ends 05-09 but today is 05-12, recent commit -> prompt.
     assert should_prompt_rename(
         "work/machine-a/2026-05-06to09", "2026-05-12", now - 3600, now_epoch=now
     ) is True
-
-
-# --- configured_day_branch (PM ruling 2026-09-22) -----------------------------
 
 
 def test_is_allowed_accepts_designated_branch_any_shape():
@@ -301,8 +268,6 @@ def test_is_allowed_accepts_designated_branch_any_shape():
 
 
 def test_is_allowed_rejects_non_matching_when_designated():
-    # Designation present but this name doesn't match it, and it's not an
-    # ordinary work/* shape either -- still rejected.
     assert is_allowed_branch("feature/foo", "claude/compassionate-pascal-98ncw7") is False
 
 
@@ -311,17 +276,11 @@ def test_is_allowed_unaffected_when_no_designation():
 
 
 def test_is_canonical_accepts_designated_branch_verbatim_case():
-    # Designated branches are accepted verbatim -- no lowercase requirement,
-    # unlike the work/* shape (that fleet-wide invariant is unrelated: a
-    # harness-designated name is not this fleet's to re-case).
     assert is_canonical_branch("Claude/Mixed-Case", "Claude/Mixed-Case") is True
 
 
 def test_is_canonical_still_rejects_mixed_case_work_branch_when_designation_absent():
     assert is_canonical_branch("Work/Machine-A/2026-05-06", None) is False
-
-
-# --- read/record_configured_day_branch -----------------------------------
 
 
 def _init_bare_gitdir(tmp_path):

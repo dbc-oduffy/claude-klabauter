@@ -112,15 +112,11 @@ def test_bare_abstraction_catchalls_drop_structurally() -> None:
 
 
 def test_synonym_denylist_trap_is_closed() -> None:
-    """A catch-all NOT present in any hardcoded word list must still be
-    caught by the structural rule (bare token, no compound sibling)."""
     assert "stewardship" not in _BARE_ABSTRACTION_VOCAB
     result = curate_clusters({"stewardship": 40})
     v = result["verdicts"][0]
     assert v["verdict"] == "drop"
     assert "no compound domain-qualifier sibling" in v["reason"]
-    # high count does not rescue a structurally bare catch-all — PM ruling:
-    # "either shit deserves a home or it doesn't", not "unless it's popular".
 
 
 def test_bare_token_with_compound_sibling_merges_not_drops() -> None:
@@ -181,8 +177,6 @@ def test_determinism_same_input_twice_identical_output() -> None:
 
 
 def test_empty_input_is_loudly_degraded_not_a_clean_zero() -> None:
-    """The failure mode this op exists to prevent: an unparseable/empty
-    input must never look like "0 problems found"."""
     result = curate_clusters({})
     assert result["degraded"] is True
     assert result["verdicts"] == []
@@ -237,19 +231,15 @@ def test_downstream_consumer_contract_drop_and_merge_fields() -> None:
     `merge_target` presence are a stability commitment to a named sibling
     consumer, not incidental output. Exercises all three drop paths at once."""
     tag_counts = {
-        "N/A": 1,  # placeholder path
-        "stewardship": 4,  # bare token, no compound sibling
-        "audit-trail": 1,  # family total 1 < keep_threshold 2
-        "git-safety": 5,  # keep (canonical family member)
-        "git-mechanics": 2,  # merge into git-safety
+        "N/A": 1,
+        "stewardship": 4,
+        "audit-trail": 1,
+        "git-safety": 5,
+        "git-mechanics": 2,
     }
-    # Threshold pinned explicitly: this test asserts the FIELD contract, and
-    # must not become a hostage to how an omitted threshold is derived.
     result = curate_clusters(tag_counts, keep_threshold=2)
     assert result["degraded"] is False
 
-    # One verdict per raw input tag — the invariant that makes the drop set a
-    # filter over `verdicts` rather than a separately-maintained array.
     assert len(result["verdicts"]) == len(tag_counts)
     assert {v["tag"] for v in result["verdicts"]} == set(tag_counts)
 
@@ -262,23 +252,15 @@ def test_downstream_consumer_contract_drop_and_merge_fields() -> None:
     assert merged, "fixture must exercise the merge path"
     for v in merged:
         assert v["merge_target"], "a merge verdict must name its destination"
-        # canonical_slug is the tag's OWN slug, distinct from the destination.
         assert v["canonical_slug"] != v["merge_target"]
     assert merged[0]["merge_target"] == "git-safety"
 
 
 def test_keep_verdict_weights_nugget_volume_via_keep_threshold() -> None:
-    """The keep gate DOES weight per-tag nugget volume — summed across the
-    family, compared against `keep_threshold`. Consumer-visible consequence
-    (answered to doe-claude-em 2026-08-06): a caller wanting singleton-floor
-    semantics ("a 1-2 nugget cluster does not earn its own file") must pass
-    keep_threshold=3; the default of 2 drops only 1-nugget families."""
     two_nuggets = {"audit-trail": 2}
     assert curate_clusters(two_nuggets)["verdicts"][0]["verdict"] == "keep"
     assert curate_clusters(two_nuggets, keep_threshold=3)["verdicts"][0]["verdict"] == "drop"
 
-    # Volume is summed across the family, not judged per-tag: two count-1
-    # siblings clear a threshold neither would clear alone.
     family = curate_clusters({"audit-trail": 1, "audit-scope": 1})
     assert {v["verdict"] for v in family["verdicts"]} == {"keep", "merge"}
 
@@ -337,9 +319,6 @@ def test_op_reachable_via_registry_and_jsonrpc_dispatch() -> None:
 
 
 def test_handler_invalid_keep_threshold_falls_back_to_auto() -> None:
-    """An invalid explicit value (< 1) must reach the auto-derivation path,
-    not silently become 2 — a single-tag count-1 corpus auto-derives to 1
-    (100% drop share at threshold 2 exceeds the 25% cap), so it KEEPS."""
     result = _handler(
             {"tag_counts": {"distillation-log-schema": 1}, "keep_threshold": -3},
             repo_root=None,
@@ -373,9 +352,6 @@ def test_cold_start_corpus_no_threshold_supplied_auto_derives_to_1() -> None:
 
 
 def test_mature_corpus_no_threshold_supplied_stays_at_2() -> None:
-    """A mature-shaped corpus (families with real volume, low drop share at
-    threshold 2) must NOT flip to 1 just because keep_threshold was
-    omitted."""
     tags = {}
     for i in range(20):
         tags[f"tag{i}-primary"] = 5
@@ -414,21 +390,11 @@ def test_drop_cause_none_for_non_drop_verdicts() -> None:
 def test_nugget_drop_share_arithmetic() -> None:
     tags = {"git-safety": 3, "distillation-log-schema": 1}
     result = curate_clusters(tags, keep_threshold=2)
-    # git-safety(3) keeps, distillation-log-schema(1) drops -> 1/4 = 0.25
     assert result["nugget_drop_share"] == 0.25
 
 
 def test_auto_derivation_boundary_at_exactly_25_percent_stays_at_2() -> None:
-    """Regression guard for the strict `>` in `_resolve_keep_threshold`: a
-    corpus whose threshold-2 probe drops EXACTLY 25% of nuggets must stay at
-    threshold 2 (only a share that EXCEEDS the cap falls back to 1). Drives
-    the AUTO probe itself (no explicit threshold passed) — the arithmetic
-    test above (`test_nugget_drop_share_arithmetic`) pins an explicit
-    threshold and never exercises the auto path. Would fail if `>` were
-    swapped to `>=`."""
     tags = {"git-safety": 3, "distillation-log-schema": 1}
-    # git-safety(3) keeps at threshold 2, distillation-log-schema(1) drops
-    # -> drop_share = 1/4 = 0.25 exactly, at the cap, not exceeding it.
     result = curate_clusters(tags)
     assert result["threshold_applied"] == 2
     assert result["threshold_auto"] is True
@@ -436,11 +402,6 @@ def test_auto_derivation_boundary_at_exactly_25_percent_stays_at_2() -> None:
 
 
 def test_auto_derivation_zero_sum_tag_counts_falls_back_to_cold_start() -> None:
-    """A non-empty `tag_counts` whose values sum to zero (e.g. a tag recorded
-    with a zero nugget count) must not raise ZeroDivisionError — the
-    `total_nuggets == 0` guard in `_resolve_keep_threshold` routes it to the
-    cold-start fallback threshold, same as a genuinely empty corpus would if
-    it weren't caught earlier by the `degraded` check."""
     result = curate_clusters({"tag-a": 0})
     assert result["degraded"] is False
     assert result["threshold_applied"] == 1

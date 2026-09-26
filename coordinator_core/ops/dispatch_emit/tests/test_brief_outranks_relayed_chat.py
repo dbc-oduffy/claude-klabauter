@@ -1,15 +1,3 @@
-"""An emitted agent's prompt is its whole task; relayed chat never outranks it.
-
-Claude-klabauter#19, measured 2026-09-18: the harness relayed the driving
-session's chat turn ("I just changed your permissions to 'accept edits' --
-does that work?") into agents dispatched by emitted scripts. Five executors
-and two commit agents answered it, made zero tool calls, and three runs
-halted at commit phases whose refusal read as a clean stop.
-
-Two halves are pinned here: every prompt the emitter composes leads with the
-precedence clause, and a reply carrying no contract status is named as an
-unanswered brief rather than passing as a completed chunk.
-"""
 
 from __future__ import annotations
 

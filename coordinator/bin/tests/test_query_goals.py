@@ -1,23 +1,3 @@
-"""test_query_goals.py -- C1's own test surface for `coordinator/bin/
-query-goals.py`.
-
-Spec backlink: plan `2026-08-15-two-more-porter-trampolines-query-goals.md`
-§ C1.
-
-Pins, per C1's body: `--help`/`-h` exits 0 and states the
-`key_results_status` absent-when-absent disclosure; an unrecognized
-argument exits 2; a successful run prints `goals.collect(ctx)`'s records
-list as parseable JSON on stdout at exit 0; and a collect-side exception
--- including `GoalsStateRootUnreadable` -- exits 1 with the `query-goals: `
-stderr prefix, never a silent zero-goals exit 0. `--help`/`-h` and an
-unrecognized argument both go through `argparse`, which raises
-`SystemExit` (0 and 2 respectively) rather than returning -- matching
-`test_query_routine_signals.py`'s convention.
-
-`collect()` itself is stubbed throughout -- this suite never touches a
-real `central_state_root` or the wire-read glob/parse machinery (see
-`test_query_routine_signals.py`'s own stubbing pattern, mirrored here).
-"""
 from __future__ import annotations
 
 import io

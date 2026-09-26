@@ -23,11 +23,7 @@ from coordinator_core.ops.emit import resolvers
 from coordinator_core.ops.emit.resolvers import main
 from coordinator_core.win_portability import no_console_creationflags
 
-# Declared, not excused: this file spawns a real process (git/python) because
-# the property under test is that binary's own behaviour, which no fixture
 # stands in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
-# residue and is explicitly not the route for a new file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -92,7 +88,6 @@ def repo_with_origin(_shared_repo, monkeypatch):
 
 
 def test_main_calls_classify_shas_on_origin_main_exactly_once(repo_with_origin, monkeypatch, capsys):
-    """Many refs against origin/main -> ONE batched classification call, not one per ref."""
     calls: list[list[str]] = []
     real_classify = resolvers.classify_shas_on_origin_main
 
@@ -119,7 +114,6 @@ def test_main_calls_classify_shas_on_origin_main_exactly_once(repo_with_origin, 
 
 
 def test_main_never_calls_sha_on_origin_main(repo_with_origin, monkeypatch, capsys):
-    """The per-SHA oracle main() used to call per-ref must not be invoked anymore."""
 
     def _fail(*args, **kwargs):
         raise AssertionError("main() must not call sha_on_origin_main per ref anymore")
@@ -149,14 +143,9 @@ def test_main_still_reports_on_main_and_not_on_main_correctly(repo_with_origin, 
 
 
 def test_sha_absent_from_classified_map_degrades_to_not_on_main(repo_with_origin, monkeypatch, capsys):
-    """Explicit reconciliation (§ Anti-scope 25): a sha the batched call omits from its
-    returned map must NEVER be silently read as a resolved ON_MAIN classification —
-    it must degrade the same way an indeterminate (None) result does."""
     on_main_sha = repo_with_origin["on_main"]
 
     def _classify_dropping_entry(repo_root, shas):
-        # Simulate a classifier that returns a map missing the requested sha entirely
-        # (rather than an explicit False/None) -- the absence case this chunk pins.
         return {}
 
     monkeypatch.setattr(resolvers, "classify_shas_on_origin_main", _classify_dropping_entry)
@@ -170,8 +159,6 @@ def test_sha_absent_from_classified_map_degrades_to_not_on_main(repo_with_origin
 
 
 def test_main_resolves_all_refs_in_one_cat_file_batch_check_call(repo_with_origin, monkeypatch, capsys):
-    """Many refs -> ONE `git cat-file --batch-check` call, not one `git rev-parse` per ref
-    (amp-wave4 C11: `main -> resolve_ref`)."""
     calls: list[list[str]] = []
     real_run = resolvers.subprocess.run
 
@@ -196,8 +183,6 @@ def test_main_resolves_all_refs_in_one_cat_file_batch_check_call(repo_with_origi
 
 
 def test_resolve_refs_batch_maps_each_ref_to_its_sha_preserving_failures():
-    """`_resolve_refs_batch` on >=2 refs, including one unresolvable, keeps per-ref
-    correspondence rather than losing the failed entry's position."""
     repo_root = Path(".")
     refs = ["HEAD", "not-a-real-ref-xyz"]
     result = resolvers._resolve_refs_batch(repo_root, refs)
@@ -207,16 +192,6 @@ def test_resolve_refs_batch_maps_each_ref_to_its_sha_preserving_failures():
 
 
 def test_commit_age_labels_batch_covers_multiple_shas_in_one_call(repo_with_origin, monkeypatch):
-    """`_commit_age_labels_batch` resolves >=2 shas' ages via ONE `git show` call.
-
-    `_commit_age_labels_batch` spawns through `run_git` (`coordinator_core.git.run`),
-    which shells out via `subprocess.Popen` (a context manager, for the pipe-leak
-    reasoning documented on that call site) rather than `subprocess.run` — unlike the
-    other batching helpers in this module, which call `subprocess.run` directly. A
-    counting wrapper on `subprocess.run` therefore never observes this call and the
-    assertion beneath it silently passes on zero calls until strengthened; wrap
-    `Popen` instead, matching the primitive the callee actually uses.
-    """
     calls: list[list[str]] = []
     real_popen = resolvers.subprocess.Popen
 
@@ -236,8 +211,6 @@ def test_commit_age_labels_batch_covers_multiple_shas_in_one_call(repo_with_orig
 
 
 def test_unresolvable_ref_never_reaches_classify_call(repo_with_origin, monkeypatch, capsys):
-    """A ref that fails to resolve must be excluded from the batched sha set entirely, not
-    passed through as None/'' and misclassified."""
     calls: list[list[str]] = []
     real_classify = resolvers.classify_shas_on_origin_main
 

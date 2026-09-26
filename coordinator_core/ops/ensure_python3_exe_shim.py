@@ -127,28 +127,10 @@ _APPX_STUB_PROBE_TIMEOUT_S = 10
 
 
 def _is_windows() -> bool:
-    """OS gate. WSL reports the Linux platform value — correctly excluded,
-    mirroring the bash oracle's uname -s case (MINGW*/MSYS*/CYGWIN*/Windows*
-    only)."""
     return sys.platform.startswith("win")
 
 
 def _resolve_python_bin() -> str:
-    """Resolve the target interpreter to shim, in-process.
-
-    See module docstring "Direct-import adaptation" for the PythonPinInvalid
-    fallback rationale.
-
-    Requests the CONSOLE interpreter (``prefer_windowless=False``) and rejects a
-    windowless result via the same console-sibling defense-in-depth ladder as
-    ``coordinator_core.install.substrate._resolve_baked_python_bin`` -- this shim
-    is, like ``python3.cmd``, a general-purpose ``python3.exe`` any caller may
-    invoke with a live stdin pipe; see that function's docstring for the full
-    windowless-vs-console rationale and the originating incident. The
-    ``PythonPinInvalid`` -> ``sys.executable`` fallback above is guarded too:
-    ``sys.executable`` is itself windowless if this op ever runs under
-    ``pythonw``.
-    """
     from coordinator_core.pyresolve import (
         PythonPinInvalid,
         _WINDOWLESS_BASENAMES,
@@ -179,45 +161,10 @@ def _resolve_python_bin() -> str:
 
 
 def _is_appx_stub(path: Path) -> bool:
-    """True if `path` is a Windows Store App-Execution-Alias 0-byte
-    reparse-point stub rather than a real file: the OS resolves it
-    (`Path.exists()` true) but it isn't a regular file (`Path.is_file()`
-    false). Off Windows this on-disk shape does not occur, so an ordinary
-    file (or a nonexistent path) always evaluates False here — no
-    Windows-only branch needed for correctness on macOS/Linux.
-
-    Shared by `_install_shim()` (checked at the shim-install target) and
-    `_classify_python3()` (checked at the PATH-resolved `python3` target) —
-    same detection, two call sites, per DEC-7 / the op-classification
-    manifest row's instruction to reuse rather than re-derive it.
-    """
     return path.exists() and not path.is_file()
 
 
 def _exe_basename_pth_trap(py_exe: Path, py3_exe: Path) -> Optional[Path]:
-    """Detect the `._pth` executable-basename trap.
-
-    `._pth` files are looked up by the *executable's own basename*, not by
-    the DLL name. If `py_exe.parent` carries an executable-named
-    `python._pth` (python.org's normal embeddable-adjacent shape keys
-    isolation off `python.exe`'s own name), the freshly-hardlinked/copied
-    `python3.exe` will look for a `python3._pth` that does not exist — and
-    silently falls back to full registry + env + `site` path resolution
-    instead of raising. Isolated mode turns off with no error.
-
-    A DLL-named `pythonXX._pth` (e.g. `python312._pth`, the official
-    embeddable-distribution shape) is unaffected — that is looked up by DLL
-    name, so it applies identically to `python.exe` and `python3.exe`. Only
-    the executable-basename form is a trap; this must not flag the DLL-named
-    form.
-
-    Detection is entirely a function of `py_exe` (its parent dir + stem
-    build the `._pth` candidate); `py3_exe` is not inspected on disk here —
-    it supplies only the shim's name for the operator-facing message text at
-    the call site.
-
-    Returns the offending path if the trap is present, else None.
-    """
     candidate = py_exe.parent / f"{py_exe.stem}._pth"
     if candidate.is_file():
         return candidate
@@ -234,8 +181,6 @@ def _install_shim(python_bin: str, check_only: bool) -> int:
         )
         return 0
 
-    # Skip if the resolver fell back to the py/pyw launcher — those are
-    # registry-driven and don't have a stable on-disk directory to shim.
     if python_bin in _LAUNCHER_NAMES:
         print(
             f"{_LOG_PREFIX} resolver returned launcher ({python_bin}); skipping "
@@ -248,9 +193,6 @@ def _install_shim(python_bin: str, check_only: bool) -> int:
     py_exe = py_dir / _PYTHON_EXE_NAME
     py3_exe = py_dir / _PYTHON3_EXE_NAME
 
-    # The resolver may have returned the windowless-preferred binary. For
-    # the shim source we want the console binary — it lives next to the
-    # windowless one in every python.org install.
     if not py_exe.is_file():
         print(
             f"{_LOG_PREFIX} {_PYTHON_EXE_NAME} not found at {py_exe} (PYTHON_BIN={python_bin}); skipping",
@@ -258,23 +200,6 @@ def _install_shim(python_bin: str, check_only: bool) -> int:
         )
         return 0
 
-    # Pre-shim state guards.
-    #
-    # (0) The `._pth` executable-basename trap. See _exe_basename_pth_trap()
-    #     docstring: shimming here would silently produce a python3.exe that
-    #     is NOT isolated the way python.exe is, with no error at all. Fail
-    #     loud instead of installing a differently-behaving interpreter.
-    #
-    # This preflight is deliberately ahead
-    #     of the `already_valid` idempotency early-return below, not an
-    #     oversight of where it belongs. A byte-identical existing shim is
-    #     still wrongly isolated when the trap is present: the shim was
-    #     created before the trap-file appeared (or before this guard
-    #     existed), and a byte match only proves the shim mirrors
-    #     python.exe's bytes, not that it mirrors python.exe's isolation
-    #     behavior. Returning 0 on that byte match would restore exactly the
-    #     silent isolation-off failure this guard exists to catch, so it
-    #     must fire before, not after, the idempotency check.
     pth_trap = _exe_basename_pth_trap(py_exe, py3_exe)
     if pth_trap is not None:
         print(
@@ -288,10 +213,6 @@ def _install_shim(python_bin: str, check_only: bool) -> int:
         )
         return 1
 
-    # (a) AppX zero-byte reparse-point stub at the shim path (left over from
-    #     a Store Python install). Detect via _is_appx_stub() and direct the
-    #     operator to install-substrate.sh's AppX stub cleanup before
-    #     retrying.
     if _is_appx_stub(py3_exe):
         print(
             f"{_LOG_PREFIX} {py3_exe} exists but is not a regular file "
@@ -305,10 +226,6 @@ def _install_shim(python_bin: str, check_only: bool) -> int:
         )
         return 1
 
-    # (b) Stale copy after a patch upgrade. A hardlink auto-tracks the
-    #     source binary's inode, so it stays correct. A copy-fallback shim
-    #     does not — if the shim exists but its bytes differ from the
-    #     source, remove and re-shim.
     stale = False
     if py3_exe.is_file():
         try:
@@ -316,17 +233,14 @@ def _install_shim(python_bin: str, check_only: bool) -> int:
         except OSError:
             already_valid = False
         if already_valid:
-            return 0  # already valid — idempotent, nothing to do
+            return 0
         stale = True
 
-    # At this point the shim is absent or stale — a shim WILL be installed.
     # Honor CHECK_ONLY: report what would happen and return without
-    # mutating.
     if check_only:
         print(f"python3-exe-shim: check failed: {py3_exe} is stale or absent (would install)")
         return 1
 
-    # Real install path: remove stale copy (if any), then create shim below.
     if stale:
         print(
             f"{_LOG_PREFIX} existing {_PYTHON3_EXE_NAME} diverges from {_PYTHON_EXE_NAME} "
@@ -339,9 +253,6 @@ def _install_shim(python_bin: str, check_only: bool) -> int:
             print(f"skip: _install_shim: py3_exe.unlink() failed: {sys.exc_info()[1]}", file=sys.stderr)
             pass
 
-    # Hardlink equivalent of the Windows-native "link with hardlink" verb —
-    # os.link on Windows calls the Win32 hardlink-creation API directly; no
-    # elevation required on NTFS.
     try:
         os.link(py_exe, py3_exe)
         print(f"{_LOG_PREFIX} hardlinked {py3_exe} -> {_PYTHON_EXE_NAME}", file=sys.stderr)
@@ -349,10 +260,6 @@ def _install_shim(python_bin: str, check_only: bool) -> int:
     except OSError as link_exc:
         link_err = str(link_exc)
 
-    # Fallback: plain copy. Works across volumes and on non-NTFS (rare on
-    # Windows but possible on FAT32 USB installs). Copies do NOT auto-track
-    # the source binary's patch updates — the pre-shim diff guard above
-    # re-shims on next run if drift is detected.
     try:
         shutil.copy2(py_exe, py3_exe)
         print(
@@ -369,28 +276,6 @@ def _install_shim(python_bin: str, check_only: bool) -> int:
 
 
 def _classify_python3() -> dict:
-    """Three-way classify the PATH-resolved `python3`.
-
-    Returns {"classification": "not_found"|"ready"|"stub", "path": str|None}.
-
-    - "not_found": no `python3` resolves on PATH at all.
-    - "stub": PATH resolves to the AppX 0-byte reparse-point stub
-      (`_is_appx_stub()`), or the resolved path fails to run `--version`
-      cleanly (nonzero exit, OSError, or timeout) — the AppX stub's
-      characteristic failure-to-actually-execute-Python shape when the
-      reparse point itself doesn't trip the exists()/is_file() split on a
-      given filesystem view.
-    - "ready": a real interpreter that answers `--version` with exit 0.
-
-    No bash: PATH resolution is `shutil.which`, the version probe is a
-    direct list-form `subprocess.run` (no shell=True).
-
-    Deliberate isolation boundary — do not convert to an in-process import.
-    Mechanism: distinct interpreter — classifies an unverified PATH hit
-    (AppX stub detection); an in-process import cannot observe whether the
-    resolved path actually executes Python. See
-    state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md.
-    """
     resolved = shutil.which("python3")
     if not resolved:
         return {"classification": "not_found", "path": None}
@@ -405,8 +290,6 @@ def _classify_python3() -> dict:
             capture_output=True,
             timeout=_APPX_STUB_PROBE_TIMEOUT_S,
             stdin=subprocess.DEVNULL,
-            # `resolved` is an unverified PATH hit
-            # (could be an AppX stub or worse); guard against stdin-block hangs.
             **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):

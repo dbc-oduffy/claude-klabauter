@@ -32,25 +32,16 @@ from coordinator_core.ops.emit.context import (
     resolve_repo_name,
 )
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 _FAKE_SHA = "a" * 40
 
 
 def _make_ctx(repo_root: Path) -> EmitContext:
-    """Minimal EmitContext via positional constructor args (no live git required)."""
-    # Field order: repo_root, coordinator_root, state_root, git_branch, git_sha,
-    # git_sha_short, observed_at, hostname, repo_name
     return EmitContext(
         repo_root,
         repo_root,
@@ -64,12 +55,7 @@ def _make_ctx(repo_root: Path) -> EmitContext:
     )
 
 
-# ---------------------------------------------------------------------------
-# Tests for _remote_url_to_slug (unit)
-# ---------------------------------------------------------------------------
-
 class TestRemoteUrlToSlug:
-    """_remote_url_to_slug parses common git remote URL forms."""
 
     def test_ssh_form(self) -> None:
         assert _remote_url_to_slug("git@github.com:dbc-oduffy/.example-doctrine-mirror-repo.git") == "dbc-oduffy/.example-doctrine-mirror-repo"
@@ -87,34 +73,15 @@ class TestRemoteUrlToSlug:
         assert _remote_url_to_slug("not-a-url") is None
 
     def test_single_segment_url_returns_none(self) -> None:
-        """A URL with only one path segment (no owner prefix) returns None — not a valid slug.
-
-        e.g. https://github.com/myrepo — no owner component; returning a bare name would
-        be silently mis-keyed in rag (expects owner/repo format).
-        single-segment was returning parts[-1]; now returns None.
-        """
         assert _remote_url_to_slug("https://github.com/myrepo") is None
 
     def test_gitlab_three_segment_url_returns_last_two(self) -> None:
-        """A URL with 3+ path segments (GitLab subgroup) returns the last two segments.
-
-        This is a documented truncation — group/subgroup/repo → subgroup/repo.  The result
-        is plausible but not uniquely identifying; the coordinator_root_path field (AC12)
-        is the disambiguation anchor.  The test documents the known behaviour, not silence it.
-        Documents GitLab truncation (not a regression net for correctness).
-        """
         assert _remote_url_to_slug("https://gitlab.company.com/group/subgroup/repo") == "subgroup/repo"
 
 
-# ---------------------------------------------------------------------------
-# Tests for resolve_repo_name — slug from fixture remote
-# ---------------------------------------------------------------------------
-
 class TestResolveRepoName:
-    """resolve_repo_name() resolves slug from the emitting repo's git remote."""
 
     def test_resolves_slug_from_ssh_remote(self, tmp_path: Path) -> None:
-        """Slug is resolved correctly from an SSH-form git remote URL."""
         fixture_url = "git@github.com:dbc-oduffy/claude-klabauter.git"
 
         with patch("coordinator_core.ops.emit.context._run_git", return_value=fixture_url):
@@ -136,21 +103,12 @@ class TestResolveRepoName:
         assert result == META_REPO_NAME_FALLBACK
 
     def test_local_slug_when_no_remote(self, tmp_path: Path) -> None:
-        """Returns local/<basename> when the git remote cannot be resolved (air-gapped repo).
-
-        Valid dir + no remote → local-slug (not a raise).  Air-gapped repos must stay
-        observable (per-repo-emission-cutover AC5 Q-B hybrid).
-        """
         with patch("coordinator_core.ops.emit.context._run_git", return_value=None):
             result = resolve_repo_name(tmp_path)
 
         assert result == f"local/{tmp_path.name}"
 
     def test_local_slug_when_remote_url_unparseable(self, tmp_path: Path) -> None:
-        """Returns local/<basename> when the remote URL cannot be parsed into a slug.
-
-        Unparseable URL falls through _remote_url_to_slug → None → local slug (not a raise).
-        """
         with patch("coordinator_core.ops.emit.context._run_git", return_value="not-a-valid-remote-url"):
             result = resolve_repo_name(tmp_path)
 
@@ -189,12 +147,7 @@ class TestResolveRepoName:
             resolve_repo_name(non_existent)
 
 
-# ---------------------------------------------------------------------------
-# Tests for EmitContext.resolve() — propagates fail-loud
-# ---------------------------------------------------------------------------
-
 class TestEmitContextResolve:
-    """EmitContext.resolve() succeeds with local/<basename> when no remote is present."""
 
     def test_resolve_succeeds_with_local_slug_when_repo_has_no_remote(self, tmp_path: Path) -> None:
         """EmitContext.resolve() returns ctx.repo_name == local/<basename> when no remote.
@@ -215,16 +168,12 @@ class TestEmitContextResolve:
         ), patch(
             "coordinator_core.ops.emit.context._git_state_head_sha", return_value="b" * 40
         ):
-            # Positional args — see module docstring (no-rename gate note).
             ctx = EmitContext.resolve(tmp_path, tmp_path, tmp_path / "state")
 
         assert ctx.repo_name == f"local/{tmp_path.name}"
-        # D7a regression guard: a regression back to coordinator_root/state would fail this.
-        # central_state_root must be repo_root/state, not ~/.claude/state.
         assert ctx.central_state_root == tmp_path / "state"
 
     def test_resolve_succeeds_with_valid_remote(self, tmp_path: Path) -> None:
-        """EmitContext.resolve() builds a context with the emitting-repo slug on success."""
         fixture_url = "git@github.com:dbc-oduffy/claude-klabauter.git"
 
         def _fake_run_git(repo_root: Path, *args: str):
@@ -243,18 +192,10 @@ class TestEmitContextResolve:
         assert ctx.repo_root == tmp_path
         assert ctx.git_branch == "main"
         assert len(ctx.git_sha) == 40
-        # D7a regression guard: a regression back to coordinator_root/state would fail this.
-        # central_state_root must be repo_root/state, not ~/.claude/state.
         assert ctx.central_state_root == tmp_path / "state"
 
 
-# ---------------------------------------------------------------------------
-# Tests for _resolve_git_branch and git_sha spawn-free readers (C11)
-# ---------------------------------------------------------------------------
-
 class TestResolveGitBranchSpawnFree:
-    """``_resolve_git_branch`` mirrors ``git rev-parse --abbrev-ref HEAD`` without
-    spawning ``git`` — reads ``.git/HEAD`` directly via ``resolve_git_dir``."""
 
     def test_attached_branch_strips_refs_heads_prefix(self, tmp_path: Path) -> None:
         (tmp_path / ".git").mkdir()
@@ -278,8 +219,6 @@ class TestResolveGitBranchSpawnFree:
 
 
 class TestResolveOnRealRepoIsSpawnFreeForBranchAndSha:
-    """EmitContext.resolve() against THIS repo's real .git resolves git_branch/git_sha
-    without spawning ``git`` — the remote-URL lookup is the only remaining spawn."""
 
     def test_no_git_subprocess_spawned_for_branch_or_sha(self) -> None:
         import subprocess
@@ -297,8 +236,6 @@ class TestResolveOnRealRepoIsSpawnFreeForBranchAndSha:
         with patch("subprocess.run", side_effect=_spy_run):
             ctx = EmitContext.resolve(real_repo_root, real_repo_root, real_repo_root / "state")
 
-        # Only the remote-URL lookup (resolve_repo_name -> _run_git) may spawn git;
-        # branch/sha resolution must contribute zero subprocess.run calls.
         rev_parse_argvs = [
             argv for argv in spawned_argvs
             if isinstance(argv, list) and "rev-parse" in argv and "remote" not in argv
@@ -310,21 +247,17 @@ class TestResolveOnRealRepoIsSpawnFreeForBranchAndSha:
         assert ctx.git_sha != "unknown"
 
 
-# ---------------------------------------------------------------------------
 # Guard: META_REPO_NAME_FALLBACK is reached via normal resolution, not a catch
-# ---------------------------------------------------------------------------
 
 class TestMetaRepoFallbackIsOracleOnly:
     """META_REPO_NAME_FALLBACK holds the expected slug value but is never a runtime default."""
 
     def test_fallback_constant_holds_example_doctrine_mirror_repo_slug(self) -> None:
-        """The constant's value matches the expected ~/.claude origin slug."""
         assert META_REPO_NAME_FALLBACK == "dbc-oduffy/.example-doctrine-mirror-repo"
 
     def test_resolve_repo_name_reaches_fallback_value_via_normal_resolution(
         self, tmp_path: Path
     ) -> None:
-        """A repo whose origin URL resolves to the fallback value gets that slug normally."""
         fixture_url = f"git@github.com:{META_REPO_NAME_FALLBACK}.git"
 
         with patch("coordinator_core.ops.emit.context._run_git", return_value=fixture_url):

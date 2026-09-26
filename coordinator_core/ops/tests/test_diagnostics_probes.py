@@ -50,7 +50,6 @@ def test_probe_has_module_map_entry(op_key: str) -> None:
 
 @pytest.mark.parametrize("op_key", _PROBE_OPS)
 def test_probe_is_scoped_none(op_key: str) -> None:
-    """"none" is the whole point: a probe that needed a repo key would touch a repo."""
     assert _OP_KEY_SCOPE[op_key] == "none"
 
 
@@ -69,7 +68,6 @@ def test_always_refuses_raises_a_non_structural_error() -> None:
 
 
 def test_always_structural_pin_raises_a_structurally_wedged_error() -> None:
-    """The rc=2 rung: the duck-type marker ipc._handler_exception_error reads."""
     with pytest.raises(DiagnosticsStructuralPin):
         _always_structural_pin({}, repo_root=None)
     assert DiagnosticsStructuralPin.structurally_wedged is True
@@ -88,7 +86,6 @@ def test_structural_pin_error_maps_to_structural_pin_code() -> None:
 
 @pytest.mark.parametrize("op_key", _PROBE_OPS)
 def test_probes_ignore_params_and_repo_root(op_key: str) -> None:
-    """No param can steer a probe — an env/param-gated probe is not safe by construction."""
     handler = ipc.get_op_handler(op_key)
     hostile = {"path": "state/definitely-not-written.txt", "repo_root": "/nope"}
     if op_key == "diagnostics.always_succeeds":

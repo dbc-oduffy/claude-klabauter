@@ -105,7 +105,7 @@ MUTATES = [
     "state/improvement-queue/*.yaml",
     "state/lessons/*.yaml",
     "state/cross-repo-commitments/*.yaml",
-]  # date+slug+content-digest-keyed new entries; data-dependent filename set per schema
+]
 
 import datetime
 import functools
@@ -126,10 +126,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-# PARSE-only, never a serializer — the F2 pin (below, § YAML serialization
-# helpers) forbids yaml.dump/safe_dump on the write path; yaml.safe_load is
 # used exclusively by the C2 round-trip gate in _build_yaml to VALIDATE the
-# already-hand-composed document, never to construct it.
 import yaml
 
 from coordinator_core._claude_klabauter_root import _machine_local_get
@@ -140,24 +137,15 @@ from coordinator_core.ops.session_context import resolve_current_session_id
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Schema output directory routing
-# ---------------------------------------------------------------------------
 
-# CLI schema name aliases → schema-cli.js schema name.
-# "lessons" is presented to callers as --schema lessons but registered as lesson-entry.
 _SCHEMA_CLI_NAME: dict[str, str] = {
     "lessons": "lesson-entry",
 }
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 
 _SLUG_MAX_CHARS = 40
 _SUBPROCESS_TIMEOUT_SECS = 15
 
-# Env var overrides for test isolation.
 _QUEUE_APPEND_OUTPUT_ROOT_ENV = "QUEUE_APPEND_OUTPUT_ROOT"
 _CLAUDE_HOME_ENV = "CLAUDE_HOME"
 
@@ -194,8 +182,6 @@ def _output_root_override() -> "str | None":
     if op_latency.execution_route() != op_latency.IN_PROCESS:
         return None
     if _is_swept_tmp_root(override):
-        # A live tmp_path fixture always exists on disk; one that is gone is a
-        # snapshot a long-lived warm process inherited from a torn-down test.
         raise _StaleIsolationRoot(
             f"queue.append: {_QUEUE_APPEND_OUTPUT_ROOT_ENV}={override!r} resolves "
             f"under the system temp directory and no longer exists -- refusing a "
@@ -205,12 +191,6 @@ def _output_root_override() -> "str | None":
 
 
 def _is_swept_tmp_root(path: str) -> bool:
-    """True if `path` resolves under the OS temp directory and no longer
-    exists on disk. Mirrors `cli_shared._is_swept_tmp_root` (bin/lib) --
-    duplicated rather than imported, matching this module's existing
-    parity-by-duplication convention with the bash-era CLI (see e.g.
-    `_emit_yaml_field`'s own "Parity note").
-    """
     try:
         real = os.path.realpath(path)
         tmp = os.path.realpath(tempfile.gettempdir())
@@ -237,52 +217,16 @@ class _ClaudeKlabauterUnresolvable(RuntimeError):
     """
 
 
-# ---------------------------------------------------------------------------
-# schema_validate bridge (in-process — replaces the former schema-cli.js
-# subprocess bridge; see coordinator_core.frontmatter.schema_validate)
-# ---------------------------------------------------------------------------
-
-
-# _schema_cli_describe was called up to 5x per append for the
-# identical schema (unmemoized), each paying full Node process-startup cost; safe to
-# cache (Finding 1). The in-process schema_validate.describe() call is far cheaper
-# than the former Node subprocess spawn, but the memo is retained: it is now a pure
-# function of ``schema_name`` alone (no external path/env dependency to key on, since
-# describe() reads claude-klabauter's own fixed vendored schema set), so the cache stays trivially
-# correct and the repeat-call defense-in-depth pattern elsewhere in this module (see
-# ``_validate`` / ``append_queue_entry``) keeps paying off as cache hits, not re-work.
 def _schema_cli_describe(schema_name: str) -> dict:
-    """Describe ``schema_name`` via ``schema_validate.describe`` (in-process, cached).
-
-    Returns ``{required: [...], optional: [...], enums: {...}, applies_to: ...}`` with
-    ORDERED arrays preserving schema declaration order.
-
-    Raises:
-        RuntimeError — schema_validate.describe() rejects the schema name (wraps the
-            underlying ValueError so callers can keep a single except-RuntimeError
-            handling shape, matching the former subprocess-bridge error surface).
-    """
     return _schema_cli_describe_cached(schema_name)
 
 
 def _reset_schema_cli_cache() -> None:
-    """Test-only helper: clear the ``_schema_cli_describe`` memo.
-
-    The cache is interpreter-lifetime state; under pytest it must be dropped between
-    tests. Wired into the suite-root autouse reset in ``coordinator_core/conftest.py``.
-    """
     _schema_cli_describe_cached.cache_clear()
 
 
 @functools.lru_cache(maxsize=None)
 def _schema_cli_describe_cached(schema_name: str) -> dict:
-    """Call ``schema_validate.describe(schema_name)`` and cache the result.
-
-    CACHED (process-lifetime, ``functools.lru_cache``): the returned dict is a SHARED
-    object across all callers within this process — callers must treat it read-only
-    (``.get()`` / iteration only, never in-place mutation) or they will corrupt the
-    cached value for every subsequent caller.
-    """
     try:
         return schema_validate.describe(schema_name)
     except ValueError as exc:
@@ -307,27 +251,16 @@ def _output_dir_for_schema(schema_name: str) -> str:
     try:
         described = _schema_cli_describe(cli_name)
     except RuntimeError as exc:
-        # Do not relabel infra failures (node missing, timeout,
-        # non-JSON describe output) as "unknown schema": the schema may be perfectly
-        # valid and the operator would waste time checking spelling instead of their
-        # Node install. Surface the underlying cause text instead (Finding 5).
         raise ValueError(
             f"queue.append: could not resolve output dir for schema {schema_name!r}: {exc}"
         ) from exc
 
     applies_to = described.get("applies_to")
-    # This op only ever writes YAML queue entries (state/<dir>/
-    # *.yaml); the .yaml/state/ suffix requirement below is a deliberate scope boundary,
-    # not an accidental byproduct of the current 5 schemas' shape (Finding 3).
     if not applies_to or not isinstance(applies_to, str):
         raise ValueError(
             f"queue.append: schema {schema_name!r} has no usable applies_to location "
             f"(got {applies_to!r})."
         )
-    # Require a subdirectory segment under state/ (>= 2 slashes)
-    # so a malformed-but-suffix-matching applies_to like "state/*.yaml" (no queue
-    # subdirectory) fails the guard instead of silently dirname()-ing to top-level
-    # "state" (Finding 4).
     if (
         not applies_to.startswith("state/")
         or not applies_to.endswith("/*.yaml")
@@ -339,29 +272,12 @@ def _output_dir_for_schema(schema_name: str) -> str:
             f"entries)"
         )
 
-    # applies_to is a POSIX-style contract identifier ("state/<dir>/*.yaml"), not a
-    # filesystem path — os.path.dirname() alone leaves its forward slashes intact on
-    # Windows (ntpath treats "/" as a valid separator without rewriting it), which then
-    # mixes with the native "\\" from a later os.path.join(root, output_dir) call.
-    # normpath() coerces it to the platform's own separator before it is used to build
-    # a real on-disk path.
     return os.path.normpath(os.path.dirname(applies_to))
 
 
 def _schema_cli_validate(
     schema_name: str, fields: dict
 ) -> tuple[bool, list[schema_validate.ErrorDict]]:
-    """Validate ``fields`` against ``schema_name`` via ``schema_validate.validate`` (in-process).
-
-    Returns ``(ok, errors)`` — ``errors`` is the list of ``{field, error, hint}`` dicts
-    schema_validate.validate() returns on rejection (formerly a list of pre-flattened
-    "field: error" strings from schema-cli.js's stdout contract; callers below already
-    only inspect ``errors[0]``, which schema_validate returns as a structured dict with
-    an ``"error"`` key carrying the same message text the old regex matches targeted).
-
-    Raises:
-        RuntimeError — schema_validate.validate() rejects the schema name.
-    """
     try:
         result = schema_validate.validate(schema_name, fields)
     except ValueError as exc:
@@ -376,31 +292,7 @@ def _schema_cli_validate(
     return False, errors
 
 
-# ---------------------------------------------------------------------------
-# YAML serialization helpers (byte-parity with coordinator-queue-append)
-#
-# F2 pin: do NOT route through yaml.safe_dump or any YAML library — that would
-# normalize quoting, reorder keys, and silently break byte-parity (including the
-# unquoted ``created:`` date field, AC12).
-# ---------------------------------------------------------------------------
-
-
 def _yaml_quote_string(value: str) -> str:
-    """Wrap a string in double-quotes when it contains YAML-special characters.
-
-    Mirrors coordinator-queue-append._yaml_quote_string exactly.
-
-    Negative-spec: a whitespace-preceded ``#`` introduces an inline YAML comment at
-    ANY column; the ``(^|\\s)#`` scan covers both leading and embedded cases.
-    An unquoted ``2026-07-05`` date literal is NOT quoted — this is the AC12
-    unquoted-created: invariant. ``#`` is deliberately absent from the start-char
-    set below — the ``(^|\\s)#`` scan is the SOLE ``#`` gate, and its ``^`` branch
-    already covers a leading ``#``.
-
-    Start-char set covers every YAML indicator that cannot begin a plain scalar:
-    ``|>!&*{}[]'`` (backtick) ``"%@?,`` — plus a trailing ``:`` (a lone ``:`` is
-    also caught by this, since it both starts and ends with ``:``).
-    """
     if not value:
         return '""'
     needs_quoting = (
@@ -421,27 +313,12 @@ def _yaml_quote_string(value: str) -> str:
 
 
 def _yaml_block_scalar(value: str) -> str:
-    """Format a multi-line string as a YAML strip-chomped literal block scalar (``|-``).
-
-    Mirrors coordinator-queue-append._yaml_block_scalar.
-    Strip chomping (``|-``) matches migrate-queues-to-base.py:317 and preserves
-    exact byte-fidelity (clip chomping ``|`` adds a trailing newline on round-trip).
-    """
     lines = value.splitlines()
     indented = "\n".join("  " + line if line else "" for line in lines)
     return "|-\n" + indented
 
 
 def _emit_system_block(system: dict) -> str:
-    """Emit the ``system:`` provenance block with 2-space child indentation.
-
-    Field order (per spec): created_by_session (if present), created_by_agent
-    (if present), linked_sessions, linked_commits (if present), provenance_completeness.
-    Empty linked_sessions list emits as ``linked_sessions: []`` (not null key).
-
-    Mirrors coordinator-queue-append._emit_system_block exactly.
-    Spec backlink: docs/plans/2026-06-26-queue-schema-unify.md § C2 STEP 2
-    """
     child_lines: list[str] = []
     for k, v in system.items():
         if v is None:
@@ -460,15 +337,6 @@ def _emit_system_block(system: dict) -> str:
 
 
 def _emit_yaml_field(key: str, value) -> str:
-    """Emit a single YAML field line or block scalar, with type dispatch.
-
-    - None values are skipped (caller must check before calling).
-    - Multi-line strings → literal block scalar (``|-``).
-    - Lists → block sequence with 2-space indent.
-    - Scalars → quoted only when YAML-special.
-
-    Mirrors coordinator-queue-append._emit_yaml_field exactly.
-    """
     if value is None:
         return ""
     if isinstance(value, list):
@@ -484,19 +352,6 @@ def _emit_yaml_field(key: str, value) -> str:
 
 
 def _emit_block_map_list_field(key: str, items: list[dict], item_key: str = "text") -> str:
-    """Emit a YAML block-sequence of single-key mappings: ``- text: "..."`` per item.
-
-    ``items`` is a list of single-key dicts — the schema-validated in-memory shape
-    workstream ``deliverables`` fields carry. This is also the form
-    ``schema_validate.parse_yaml``'s list-item-mapping reader accepts. Distinct from
-    ``_emit_yaml_field``'s plain scalar-list branch (``- "value"``), which stays in
-    use for plain-string list fields (``specs``, ``dependency_annotations``).
-
-    Negative-spec: do NOT emit the inline flow-map form (``- {text: "..."}``) — the
-    frontmatter validator rejects it.
-
-    Mirrors coordinator-queue-append._emit_block_map_list_field exactly.
-    """
     if not items:
         return f"{key}: []"
     lines = [f"{key}:"]
@@ -506,17 +361,6 @@ def _emit_block_map_list_field(key: str, items: list[dict], item_key: str = "tex
 
 
 def _offending_field_for_yaml_error(exc: "yaml.YAMLError", line_owners: list[str]) -> str:
-    """Map a ``yaml.YAMLError``'s mark back to the field that composed that line.
-
-    ``line_owners[i]`` names the field key responsible for the i-th (0-indexed)
-    physical line of the document ``_build_yaml`` composed — see that
-    function's ``line_owners`` construction. Falls back to a placeholder when
-    the error carries no mark or the mark falls outside the tracked range
-    (should not happen for a document this module itself composed, but this
-    is diagnostic text, not a load-bearing invariant).
-
-    Mirrors coordinator-queue-append._offending_field_for_yaml_error exactly.
-    """
     mark = getattr(exc, "problem_mark", None) or getattr(exc, "context_mark", None)
     if mark is not None and 0 <= mark.line < len(line_owners):
         return line_owners[mark.line]
@@ -556,9 +400,6 @@ def _build_yaml(schema_name: str, fields: dict) -> str:
                 emit_order.append(opt)
 
     lines = []
-    # line_owners[i] names the field key that produced the i-th physical line
-    # of the eventual "\n".join(lines) document — the offending-field lookup
-    # the round-trip gate below uses to name a field in its raised error.
     line_owners: list[str] = []
     for key in emit_order:
         value = fields.get(key)
@@ -567,16 +408,6 @@ def _build_yaml(schema_name: str, fields: dict) -> str:
         if key == "system" and isinstance(value, dict):
             line = _emit_system_block(value)
         elif key == "deliverables" and isinstance(value, list):
-            # workstream.schema.json requires block-map items ({text: "..."}) —
-            # distinct from specs/dependency_annotations, which stay plain strings.
-            # The prior truthiness-gated
-            # dispatch (`value and isinstance(value[0], dict)`) fell through to
-            # _emit_yaml_field for an explicit empty list, which emits a bare
-            # "deliverables:\n" (parses as null, not []). Normalization upstream
-            # already guarantees dict-shape whenever the list is non-empty, so
-            # gating on isinstance(list) alone routes [] through
-            # _emit_block_map_list_field's own "if not items: return f'{key}: []'"
-            # shortcut instead.
             line = _emit_block_map_list_field(key, value)
         else:
             line = _emit_yaml_field(key, value)
@@ -597,34 +428,7 @@ def _build_yaml(schema_name: str, fields: dict) -> str:
     return document
 
 
-# ---------------------------------------------------------------------------
-# Content digest (collision guard — DR-213 D2(i) amendment)
-# ---------------------------------------------------------------------------
-
-
 def _content_digest(schema_name: str, fields: dict) -> str:
-    """Compute the 12-hex-char content digest used to disambiguate the output filename.
-
-    Reuses the in-repo ``_goal_id`` precedent (goal_append.py:77-86) at the algorithm
-    level (SHA-1, 12-hex truncation) but NOT at the key-construction level: the content-key
-    is a structured JSON serialization of the ordered semantic field-set, not a hand-joined
-    pipe-delimited string — see Review: code-reviewer below.
-
-    Field-set + normalization order (pinned, DR-213 D2(i) amendment — see plan
-    docs/plans/2026-07-08-concurrency-safe-strangled-op-writes.md § "The collision-guard
-    shape"):
-        1. Computed over the finalized ``fields`` dict MINUS the ``system`` key — excludes
-           provenance so cross-session writes of the same logical entry still dedup.
-        2. Fixed key order — reuses ``_build_yaml``'s ``emit_order`` construction (required
-           fields first, then optional fields in their declared schema-cli order) so the
-           same logical entry always yields the same content-key regardless of dict
-           iteration order.
-        3. Uses the same normalized ``fields["body"]`` value used for file content
-           (post-``\\n``→``\n`` normalization) — never the raw pre-normalization input.
-
-    NO disk read — the digest is computed entirely from in-hand params (DR-213 D4;
-    op remains write-always / additive-create, not a dedup pre-check).
-    """
     described = _schema_cli_describe(_SCHEMA_CLI_NAME.get(schema_name, schema_name))
     required: list[str] = described.get("required") or []
     optional: list[str] = described.get("optional") or []
@@ -635,28 +439,13 @@ def _content_digest(schema_name: str, fields: dict) -> str:
             if opt not in emit_order:
                 emit_order.append(opt)
 
-    # hand-joined "key=value" pipe strings had no delimiter
-    # escaping; free-text fields (body, risk, proposed_action, etc.) containing '|' or
-    # '=' could collide two distinct entries onto one digest. Structured JSON serialization
-    # handles internal escaping so no field value can inject a false separator (Finding 1).
     ordered_content = {key: fields.get(key) for key in emit_order if key != "system"}
     content_key = json.dumps(ordered_content, ensure_ascii=False, sort_keys=False)
     full_hash = hashlib.sha1(content_key.encode("utf-8")).hexdigest()
     return full_hash[:12]
 
 
-# ---------------------------------------------------------------------------
-# Slug and date helpers
-# ---------------------------------------------------------------------------
-
-
 def _slug_from_title(title: str) -> str:
-    """Sanitize a title into a filesystem-safe slug (40 chars max).
-
-    Mirrors coordinator-queue-append._slug_from_title:
-        lowercase → collapse non-[a-z0-9] runs to '-' → strip leading/trailing '-'
-        → truncate to 40 chars → rstrip('-') (truncation can leave trailing hyphen).
-    """
     slug = title.lower()
     slug = re.sub(r"[^a-z0-9]+", "-", slug)
     slug = slug.strip("-")
@@ -668,24 +457,9 @@ def _today_iso() -> str:
     return datetime.date.today().isoformat()
 
 
-# ---------------------------------------------------------------------------
-# Workstream-store filename-component validation (AC14, path-traversal guard)
-# ---------------------------------------------------------------------------
-
-# Conservative allowlist charset — mirrors coordinator-queue-append's
 # _WORKSTREAM_IDENTIFIER_RE exactly. No path separators, no leading dot/hyphen,
-# non-empty.
 _WORKSTREAM_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
-# `created` is a DATE, not a bare identifier — the identifier allowlist above is
-# the wrong oracle for it (dashes are load-bearing date separators, not an
-# arbitrary charset). Used by ``_validate_workstream_created`` below.
-#
-# `\d` on a str pattern matches any Unicode
-# category-Nd digit (fullwidth, Devanagari, etc.), not just [0-9]; and `.match()`
-# against a `$`-terminated pattern accepts one trailing "\n" that `.fullmatch()`
-# would reject. [0-9] (over re.ASCII) is more obviously scoped at this call site,
-# and .fullmatch() closes the trailing-newline gap without touching the pattern.
 _WORKSTREAM_CREATED_DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 
 
@@ -725,39 +499,11 @@ def _validate_workstream_created(value: str) -> None:
 
 
 def _validate_workstream_identifier(param_name: str, value: str) -> None:
-    """Reject path-traversal-shaped values for workstream-store filename components.
-
-    Applies to ``workstream_id`` / ``workstream`` / ``session`` — all three are
-    interpolated directly into filenames by ``_output_path``'s ``workstream`` /
-    ``workstream-event`` branches (Part 1). Rejects empty values, path separators,
-    ``".."`` segments, and leading dots via the allowlist charset above — fails
-    loud (``ValueError``) rather than silently sanitizing.
-
-    Ports coordinator-queue-append._validate_workstream_identifier: same regex,
-    same rejection surface, but raises ``ValueError`` instead of calling
-    ``parser.error`` — this op has no argparse parser. The regression net asserts
-    ``pytest.raises(ValueError, match=r"workstream_id")``, so the message MUST name
-    the offending parameter.
-
-    Callers MUST invoke this before any path construction (``_output_path``,
-    ``os.makedirs``, or either write-primitive helper below) — see the call site
-    in ``append_queue_entry``.
-
-    Spec backlink: pln-teach-the-native-queue-append--8bd701 § C4, AC14
-    """
-    # .match() against a `$`-anchored
-    # pattern lets a trailing "\n" through (Python's `$` is satisfied before a
-    # single trailing newline); .fullmatch() requires the whole string consumed.
     if not value or not _WORKSTREAM_IDENTIFIER_RE.fullmatch(value):
         raise ValueError(
             f"queue.append: {param_name} must match {_WORKSTREAM_IDENTIFIER_RE.pattern} "
             f"(no path separators, no leading dot, non-empty), got {value!r}"
         )
-
-
-# ---------------------------------------------------------------------------
-# Claude-Klabauter root and machine-local helpers
-# ---------------------------------------------------------------------------
 
 
 def _claude_home() -> str:
@@ -793,22 +539,12 @@ def _claude_klabauter_root() -> Optional[str]:
     Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC13
     """
     override = (coordinator_engine_root_env(__name__) or "").strip()
-    # The engine-root variable names where engine CODE runs from, which is the
-    # published mirror on a standard install; that is no data home, so a
-    # mirror-valued override falls through to the registry rungs below.
     if (
         override
         and op_latency.execution_route() == op_latency.IN_PROCESS
         and not _is_published_engine_mirror(override)
     ):
         return override
-    # Rung 1.5: the transform-proof key. Under the publish identifier
-    # transform the registry key in Rung 2 below is rewritten to name the
-    # published mirror, so the published engine resolves "the central repo"
-    # to itself and this write is lost. `engine.source_root` contains no repo
-    # token and survives publish intact, so the mirror-run engine reaches the
-    # live tree here rather than falling through to a refusal. Absent on a
-    # consumer install, where Rung 2 is already correct.
     source_root = _engine_source_root()
     if source_root:
         return source_root
@@ -817,24 +553,6 @@ def _claude_klabauter_root() -> Optional[str]:
 
 
 def _refuse_published_mirror(root: str) -> str:
-    """Refuse a resolved root that is the published engine mirror.
-
-    This op does NOT route through ``coordinator_core.state_root``, so it does
-    not inherit that module's published-mirror guard — it resolves its own root
-    and writes to it directly. Under the publish identifier transform the
-    registry key this resolver reads is rewritten to name the mirror, so the
-    published engine resolves "the central repo" to ITSELF and central-scope
-    entries land in a gitignored build artifact: exit 0, plausible printed
-    path, content readable by nobody. Two entries were lost that way before
-    anyone noticed, and only because one happened to trip an unrelated guard.
-
-    Raising ``_ClaudeKlabauterUnresolvable`` degrades through the op's existing
-    skip-with-reason path, so the caller gets the remediation instead of a
-    write it will never find again.
-
-    Spec backlink: state/bug-backlog/2026-08-20-central-scope-queue-entries-land-in-the-6a0c80dedc44.yaml
-    Inventory: state/audits/2026-08-21-transform-resolved-writer-inventory.md
-    """
     if not _is_published_engine_mirror(root):
         return root
     raise _ClaudeKlabauterUnresolvable(
@@ -876,18 +594,7 @@ def _claude_klabauter_root_unresolved_detail() -> str:
 
 
 def _same_path(a: str, b: str) -> bool:
-    """Thin alias onto ``coordinator_core.win_portability.same_path`` -- the
-    consolidated primitive (state/sizings/2026-08-07-path-equality-
-    consolidates-onto-one-prim.yaml). Promoted from realpath-only to
-    samefile-then-fallback semantics: broader (junction-aware) equality is
-    correct here since this call site only checks "is caller_worktree the
-    meta-repo home", where a junction-aliased home must compare equal."""
     return same_path(a, b)
-
-
-# ---------------------------------------------------------------------------
-# Output path resolution
-# ---------------------------------------------------------------------------
 
 
 def _output_path(
@@ -958,7 +665,6 @@ def _output_path(
     elif caller_worktree is not None:
         home = _claude_home()
         if _same_path(str(caller_worktree), home):
-            # Meta-repo caller → route to claude-klabauter (stop-the-rot taxonomy).
             claude_klabauter_root = _claude_klabauter_root()
             if claude_klabauter_root is None:
                 raise _ClaudeKlabauterUnresolvable(
@@ -967,11 +673,9 @@ def _output_path(
                 )
             base = os.path.join(claude_klabauter_root, output_dir)
         else:
-            # Sibling repo → per-repo state stays in the repo itself.
             base = os.path.join(str(caller_worktree), output_dir)
     else:
         # caller_worktree is None — _OP_KEY_SCOPE entry may be missing; fallback
-        # to claude-klabauter root (daemon context has no meaningful cwd anchor).
         claude_klabauter_root = _claude_klabauter_root()
         if claude_klabauter_root is None:
             raise _ClaudeKlabauterUnresolvable(
@@ -991,24 +695,7 @@ def _output_path(
     return os.path.join(base, filename)
 
 
-# ---------------------------------------------------------------------------
-# Validation
-# ---------------------------------------------------------------------------
-
-
 def _validate(schema_name: str, fields: dict) -> None:
-    """Validate field values against the schema via ``schema_validate.validate`` (in-process).
-
-    Mirrors coordinator-queue-append._validate.
-    Strips None/"" values before passing (absent keys = missing required fields).
-    """
-    # Fail-fast unknown-schema guard (its raise IS the check; the real output-dir
-    # computation happens later in _output_path).
-    # This duplicates the guard call in append_queue_entry and
-    # _output_path; intentional defense-in-depth across independently-callable boundaries
-    # (_validate and _output_path are each called on their own, e.g. in tests) — do not
-    # "simplify" this away. With Finding 1's memoization these repeat calls are cache
-    # hits, not extra re-derivation (Finding 2).
     _output_dir_for_schema(schema_name)
 
     effective_fields = {k: v for k, v in fields.items() if v is not None and v != ""}
@@ -1019,9 +706,6 @@ def _validate(schema_name: str, fields: dict) -> None:
         if not errors_list:
             raise ValueError("queue.append: validation failed (no error detail returned)")
 
-        # errors_list is schema_validate's structured [{field, error, hint}, ...] shape
-        # (see _schema_cli_validate docstring) — dispatch on the "error" text directly
-        # rather than regex-parsing a pre-flattened "field: error" string.
         first_error = errors_list[0]
         field = first_error.get("field")
         error_text = first_error.get("error", "")
@@ -1048,13 +732,7 @@ def _validate(schema_name: str, fields: dict) -> None:
         raise ValueError(f"queue.append: {field}: {error_text}")
 
 
-# ---------------------------------------------------------------------------
-# Write primitives (C4 — definition overwrite vs. event create-only)
-# ---------------------------------------------------------------------------
-
-# Bounded retry attempts before _write_out_path_excl fails loud. Mirrors
 # coordinator/bin/lib/cli_shared.COLLISION_RETRY_CAP verbatim (not imported —
-# this module has no dependency on the coordinator/bin/lib CLI-shared package).
 _COLLISION_RETRY_CAP = 1000
 
 
@@ -1096,36 +774,12 @@ def _write_out_path_overwrite(out_path: str, content: str) -> str:
         try:
             os.unlink(tmp_path)
         except OSError:
-            pass  # best-effort tempfile cleanup before re-raising the original failure below
+            pass
         raise
     return out_path
 
 
 def _write_out_path_excl(out_path: str, content: str) -> str:
-    """Write ``content`` to ``out_path`` using an exclusive-create + retry-with-suffix loop.
-
-    Ports coordinator-queue-append._write_out_path_excl (itself a thin wrapper
-    over ``bin/lib/cli_shared.write_path_excl``) — inlined here rather than
-    importing the CLI-shared module, since this engine module has no dependency
-    on ``coordinator/bin/lib``.
-
-    Wired to ``workstream-event`` only (C4): events are append-only-by-design,
-    so two events sharing a base path (same ``<date>-<workstream>-<session>``
-    key) must BOTH survive under distinct filenames rather than one silently
-    clobbering the other.
-
-    Negative-spec: do NOT swap this for a plain ``os.replace()``/``open("w")``
-    — that silently clobbers a same-key concurrent write. Do NOT swap this for
-    a bare fail-loud ``FileExistsError`` either — this op is a terminal writer
-    with no retry path of its own, so failing loud on the FIRST collision would
-    drop the entry rather than preserve it; retry-with-suffix is required.
-
-    Returns the actual path written (== ``out_path`` unless a collision suffix
-    was used).
-
-    Spec backlink: pln-teach-the-native-queue-append--8bd701 § C4
-    Parity oracle: coordinator/bin/lib/cli_shared.write_path_excl
-    """
     root, ext = os.path.splitext(out_path)
     candidate = out_path
     attempt = 1
@@ -1146,11 +800,6 @@ def _write_out_path_excl(out_path: str, content: str) -> str:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(content)
         return candidate
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 
 def append_queue_entry(
@@ -1239,52 +888,32 @@ def append_queue_entry(
         _ClaudeKlabauterUnresolvable — central scope and CLAUDE_KLABAUTER_ROOT unresolvable (caller
             catches and degrades gracefully).
     """
-    # Validate schema. Fail-fast unknown-schema guard (its raise IS the check; the
-    # real output-dir computation happens later in _output_path).
-    # Same intentional defense-in-depth as _validate's guard
-    # call below; see that call site's comment (Finding 2).
     _output_dir_for_schema(schema)
 
-    # Apply schema-specific status defaults.
     if schema == "lessons" and status is None:
         status = "open"
 
-    # Resolve created date.
     if created is None:
         created = _today_iso()
 
-    # Normalise body newlines (CLI does this for \\n → \n). body is optional
-    # (workstream-event does not declare a body property) — guard the None case.
     if body is not None:
         body = body.replace("\\n", "\n")
 
-    # Resolve session_id when not pre-supplied — via the canonical resolver,
-    # never a raw os.environ read. Under warm serving the process environment
-    # names the server's spawner rather than this request's caller, so an env
-    # read stamps queue entries with a stranger's authorship;
-    # `resolve_current_session_id` reads the per-request identity
-    # `warm.entry_seam.per_request_state` binds and falls through to the same
-    # env ladder cold.
     if session_id is None:
         session_id = (resolve_current_session_id() or "").strip()
 
-    # Resolve from_repo fallback. cross-repo-commitment forbids from_repo entirely
-    # (it uses committed_by for the sibling identity instead) — mirrors the DoE
-    # CLI's explicit strip of from_repo for this schema.
     if from_repo is None and schema != "cross-repo-commitment":
         if caller_worktree is not None:
             from_repo = os.path.basename(str(caller_worktree)) + "-em"
         else:
             from_repo = "unknown-sender-em"
 
-    # Build system provenance block.
     system: dict = {}
     if session_id:
         system["created_by_session"] = session_id
     if created_by_agent:
         system["created_by_agent"] = created_by_agent
     system["linked_sessions"] = [session_id] if session_id else []
-    # linked_commits: omitted — not available at write time.
     system["provenance_completeness"] = "complete" if session_id else "unknown"
 
     fields: dict = {
@@ -1320,24 +949,6 @@ def append_queue_entry(
         "system": system,
     }
 
-    # Contract-derived plumbing (G3/G4): merge any caller-supplied schema_fields
-    # the contract declares (required or optional) for THIS schema — e.g.
-    # workstream_id/workstream/field/value/sequence/session/deliverables/specs/
-    # dependency_annotations/supersedes/coordinator_root_path for the
-    # workstream/workstream-event schemas. Deliberately NOT a hand-maintained
-    # field-name list — see this function's docstring and _output_dir_for_schema
-    # (the in-file precedent for contract-derivation over a hand-copy). A key
-    # the contract does not declare for this schema is silently dropped here; a
-    # required field the caller omits still surfaces via _validate below.
-    # Safe to call describe() here without
-    # re-checking schema validity: _output_dir_for_schema(schema) above already
-    # fail-fasted (ValueError) if `schema` were unresolvable, so this describe()
-    # call can never be the first one to observe an unknown schema. Do not reorder
-    # this above that guard — the two describe() call sites raise different
-    # exception types for the same underlying failure (ValueError here vs.
-    # RuntimeError via _schema_cli_describe_cached), so a reorder would silently
-    # flip test_append_queue_entry_unknown_schema_raises_value_error's expected
-    # exception type (see Finding 4 in the reviewer sidecar).
     described = _schema_cli_describe(_SCHEMA_CLI_NAME.get(schema, schema))
     contract_field_names = set(described.get("required") or []) | set(
         described.get("optional") or []
@@ -1346,12 +957,6 @@ def append_queue_entry(
         if key in contract_field_names and key not in fields:
             fields[key] = value
         elif key not in contract_field_names:
-            # WARN, do not raise: an optional
-            # contract field not yet reflected in a stale schema cache would
-            # otherwise be rejected here even though it is legitimately valid
-            # (forward-compat), so a hard failure is the wrong shape. A warning
-            # still leaves a signal for a genuine typo (e.g. "supercedes" for
-            # "supersedes") instead of the field silently vanishing.
             logger.warning(
                 "queue.append: schema_fields key %r is not declared by schema %r "
                 "(required or optional) — dropping it silently would otherwise "
@@ -1361,71 +966,33 @@ def append_queue_entry(
             )
 
     # workstream.schema.json's deliverables is a BLOCK-MAP (object-with-text
-    # items), not a plain string list — mirror coordinator-queue-append's
-    # workstream branch conversion so schema_validate and _build_yaml's
-    # block-map emission see the same {"text": ...} shape regardless of
-    # whether the caller already supplied block-map dicts or plain strings.
     if fields.get("deliverables"):
         fields["deliverables"] = [
             item if isinstance(item, dict) else {"text": item}
             for item in fields["deliverables"]
         ]
 
-    # Path-traversal guard (AC14) — MUST run before any path construction
-    # (_output_path, os.makedirs, either write-primitive helper). workstream_id/
-    # workstream/session become filename components in _output_path's `workstream`
-    # / `workstream-event` branches (Part 1); reject traversal-shaped values here,
-    # before _content_digest/_output_path/os.makedirs are ever reached. Only
-    # validates a component when the caller actually supplied it — an absent
-    # required field still surfaces via _validate's own "missing required field"
-    # error below, not this guard.
     for _identifier_param in ("workstream_id", "workstream", "session"):
         _identifier_value = fields.get(_identifier_param)
         if _identifier_value is not None:
             _validate_workstream_identifier(_identifier_param, str(_identifier_value))
 
-    # `created` is also a filename component
-    # for `workstream-event` (_output_path's f"{created}-{workstream}-{session}.yaml"
-    # branch) but is a bare keyword param, never routed through schema_fields/the
-    # contract, so it sits outside the identifier-allowlist loop above. Validate it
-    # as an ISO date here, before _content_digest/_output_path/os.makedirs, mirroring
-    # the AC14 guard's placement discipline.
-    # `workstream`'s `created` is not a
-    # filename component (no traversal exposure), but is required and otherwise
-    # left asymmetrically unvalidated next to the discipline just applied above;
-    # validated here too for validation-coverage symmetry (informational only).
     if schema in ("workstream-event", "workstream"):
         _validate_workstream_created(str(created))
 
     # coordinator_root_path — THE LANDMINE (2026-07-22 fold-correctness outage).
-    # VALUE is the repo-root-relative form the cockpit contract declares: the
-    # literal "." for the auto-resolve case, byte-identical to what
     # coordinator-queue-append's _WORKSTREAM_STORE_SCHEMAS branch stamps (see
-    # that CLI's `coordinator_root_path = (...)` assignment comment). Only
-    # defaulted when the contract declares this field for `schema` (workstream /
-    # workstream-event today); a no-op for schemas that don't. NEVER derived
-    # from caller_worktree (that yields a basename — see from_repo's fallback
-    # above) and NEVER an absolute path (an absolute value minted a
-    # machine-specific coordinator_root_path -> a distinct repo_fk per
-    # machine/checkout for one logical repo -- the outage this must not
-    # re-arm). caller_worktree remains the filesystem anchor for the OUTPUT
-    # PATH (_output_path), never the source of this field's value. No
-    # `git rev-parse` shell-out here, ever.
     if "coordinator_root_path" in contract_field_names and not fields.get(
         "coordinator_root_path"
     ):
         fields["coordinator_root_path"] = "."
 
-    # Validate.
     _validate(schema, fields)
 
-    # Build YAML content (ordered string formatting — F2 / AC12).
     yaml_content = _build_yaml(schema, fields)
 
-    # Compute content digest (no disk read — in-hand params only, DR-213 D4).
     digest12 = _content_digest(schema, fields)
 
-    # Compute output path (_ClaudeKlabauterUnresolvable propagates to caller).
     out_path = _output_path(
         schema,
         title,
@@ -1439,34 +1006,17 @@ def append_queue_entry(
     )
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
-    # Write-primitive selection (C4). `workstream-event` is append-only-by-design
-    # (two events sharing a base path must BOTH survive) -> exclusive-create +
-    # retry-with-suffix (_write_out_path_excl). Every other schema — `workstream`
     # definitions (single-file-per-id, a second write REWRITES the canonical file)
-    # AND the five pre-existing content-keyed schemas (AC8, unchanged behavior) —
-    # keeps the write-temp + atomic-rename overwrite shape this module already used
-    # unconditionally before C4 (_write_out_path_overwrite).
     if schema == "workstream-event":
         final_path = _write_out_path_excl(out_path, yaml_content)
     else:
         final_path = _write_out_path_overwrite(out_path, yaml_content)
 
-    # Latent-bug fix (C4, in-scope carve-out): title is None for workstream-event
-    # (that schema declares no title property — see append_queue_entry's own
-    # docstring), so an unconditional _slug_from_title(title) call here raised
-    # AttributeError on title.lower() the moment C2/C3 made this schema's fields
-    # validate successfully (pre-C2/C3 a "missing required field" error always
-    # fired before this line was reached, masking the crash). slug is title-
-    # derived metadata only, never a filename component for either store schema
-    # (see _output_path's `workstream`/`workstream-event` branches) — None is a
-    # safe, correct result for a schema with no title.
     slug = _slug_from_title(title) if title is not None else None
     return {"out_path": final_path, "schema": schema, "slug": slug, "title": title}
 
 
-# ---------------------------------------------------------------------------
 # JSON-RPC handler
-# ---------------------------------------------------------------------------
 
 
 @register_op("queue.append")
@@ -1521,35 +1071,20 @@ def _queue_append_handler(
     On ``_ClaudeKlabauterUnresolvable``: logs WARN, returns ``{skipped: true, reason: "..."}``
     (exit 0 parity — graceful degrade per AC6).
     """
-    # Derive caller's worktree root from the socket-authoritative common_dir.
     caller_worktree: Optional[Path] = None
     if repo_root is not None:
         caller_worktree = main_worktree_root(repo_root)
 
-    # Resolve session_id: caller-authoritative param takes precedence, so
-    # provenance is authoritative at the call site. The fallback resolves
-    # through the canonical resolver rather than reading os.environ directly —
-    # under warm serving the process environment names the server's spawner,
-    # not this request's caller, and an env read here stamped queue entries
-    # with a stranger's authorship.
     session_id = params.get("session_id")
     if session_id is None:
         session_id = (resolve_current_session_id() or "").strip()
 
-    # Parse tags: accept list or comma-separated string.
     tags = params.get("tags")
     if isinstance(tags, str):
         tags = [t.strip() for t in tags.split(",") if t.strip()]
     elif tags is not None and not isinstance(tags, list):
         tags = None
 
-    # Every param name append_queue_entry's base signature already names
-    # explicitly (below) plus "tags" (parsed above). Anything else in `params`
-    # (workstream_id, workstream, field, value, sequence, session, deliverables,
-    # specs, dependency_annotations, supersedes, coordinator_root_path, or any
-    # future DoE schema field) passes through generically via **schema_fields —
-    # contract-derived acceptance happens inside append_queue_entry itself, not
-    # here (see its docstring). Deliberately NOT a hand-maintained field list.
     _NAMED_PARAM_KEYS = frozenset(
         {
             "schema",
@@ -1635,17 +1170,6 @@ def _queue_append_handler(
         )
         return {"skipped": True, "reason": str(exc)}
 
-    # Self-report scope-touch contract (design (b), 2026-08-04 — see
     # coordinator_core.ipc's module-level comment above `_SCOPE_TOUCH_PATHS_KEY`).
-    # `out_path` is the ONE file this call actually wrote (append_queue_entry's
-    # write primitive is a single write-temp + atomic-rename, never a partial
-    # write) — declare exactly that, never an intended/broader surface.
-    # `queue_scope == "central"` routes `out_path` to the claude-klabauter root
-    # regardless of the caller's own worktree; as of the 2026-08-04 F1 fix,
-    # `_record_self_reported_touches` anchors containment on the CALLER's OWN
-    # repo, so this declaration is SKIPPED (logged, never recorded) whenever
-    # the caller's worktree isn't the claude-klabauter root itself. Deliberate — see
-    # the ipc.py contract comment for why cross-repo recording was unsound.
-    # `dispatch_message` strips this key before the wire envelope is built.
     result["_scope_touch_paths"] = [result["out_path"]]
     return result

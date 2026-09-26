@@ -115,16 +115,10 @@ _OP_NAME = "gate_liveness.reconcile"
 
 
 class _PathNotContained(Exception):
-    """Mirrors plan_tasks_mutate._PathNotContained — plan_path escapes docs/plans/."""
+    pass
 
 
 def _resolve_path(plan_path: str, worktree: Path) -> Path:
-    """Resolve plan_path to an absolute Path, contained under docs/plans/.
-
-    Identical containment rule to `plan_tasks_mutate._resolve_path` (F0) —
-    reconcile writes through the same spine, so it is held to the same
-    boundary.
-    """
     p = Path(plan_path)
     if not p.is_absolute():
         p = worktree / p
@@ -140,13 +134,6 @@ def _err(message: str) -> dict:
 
 
 def _entry_citation(evidence: Any) -> Optional[dict]:
-    """Return the well-formed citation triple from a `discharged` verdict's
-    `evidence` dict, or None if it's missing a required sub-field.
-
-    `evidence` here is `_resolve_closure_key`'s third return value —
-    `{memo_path, evidence, landed_at}` — never re-derived, only checked for
-    completeness before this module will act on it.
-    """
     if not isinstance(evidence, dict):
         return None
     memo_path = evidence.get("memo_path")
@@ -169,20 +156,6 @@ def _closure_key_identity(closure_key: Any) -> Optional[tuple]:
 
 
 def _classify_entries(rows: list, records: list) -> tuple:
-    """Walk every `external_gate` entry across `rows`, resolving each
-    against `records` (the pre-lock `_scan_discharge_records` scan).
-
-    Returns `(candidates, citation_errors)`:
-      - `candidates`: list of `{row_id, closure_key, entry, resolver,
-        citation}` dicts for entries that resolved `discharged`, are not
-        already `cleared: true`, and carry a complete citation.
-      - `citation_errors`: list of human-readable strings, one per
-        `discharged` entry whose citation is incomplete — non-empty means
-        the WHOLE call refuses (module docstring).
-
-    Never includes a `holds`/`undetermined` entry in `candidates` — those
-    verdicts are simply skipped, not refused.
-    """
     candidates: list = []
     citation_errors: list = []
     for row in rows:
@@ -207,7 +180,7 @@ def _classify_entries(rows: list, records: list) -> tuple:
             if verdict != VERDICT_DISCHARGED:
                 continue
             if entry.get("cleared") is True:
-                continue  # already flipped — idempotent no-op, not a candidate
+                continue
             citation = _entry_citation(evidence)
             if citation is None:
                 identity = _closure_key_identity(closure_key)
@@ -230,9 +203,6 @@ def _classify_entries(rows: list, records: list) -> tuple:
 
 
 def _provenance_line(resolver: str, citation: dict, today: str) -> str:
-    """Render the appended `closure_evidence` provenance line — names
-    resolver, evidence, and date (module docstring), never re-derived
-    elsewhere."""
     return (
         f"[gate_liveness.reconcile {today}] resolver={resolver} "
         f"memo={citation.get('memo_path')} evidence={citation.get('evidence')}"
@@ -240,8 +210,6 @@ def _provenance_line(resolver: str, citation: dict, today: str) -> str:
 
 
 def _apply_flip(entry: dict, resolver: str, citation: dict, today: str) -> None:
-    """Mutate one `external_gate` entry in place: set `cleared: true` and
-    append the provenance line to `closure_evidence` (plain string field)."""
     entry["cleared"] = True
     line = _provenance_line(resolver, citation, today)
     existing = entry.get("closure_evidence")
@@ -267,13 +235,6 @@ def _proposed_flip_report(candidates: list, plan_path: Path) -> list:
 def reconcile_gate_liveness(
     plan_path_str: str, apply: bool, worktree: Path, repo_root: Path, today: str
 ) -> dict:
-    """Core reconcile logic, shared by the op handler and tests.
-
-    `plan_path_str` is resolved/contained exactly as `plan_tasks_mutate`'s
-    verbs resolve it (F0). `today` is caller-injected (never `date.today()`
-    called from inside this function) so tests control the stamped date
-    deterministically — mirrors `emit_discharge`'s own `today` param shape.
-    """
     try:
         path = _resolve_path(plan_path_str, worktree)
     except _PathNotContained as exc:
@@ -306,8 +267,6 @@ def reconcile_gate_liveness(
     if not candidates:
         return {"exit_code": 0, "applied": True, "flipped": []}
 
-    # Baseline snapshot for the precondition check — captured from the
-    # SAME unlocked read `candidates` was derived from (module docstring).
     baseline_by_row: dict = {}
     for c in candidates:
         baseline_by_row.setdefault(c["row_id"], []).append(
@@ -338,10 +297,6 @@ def reconcile_gate_liveness(
 
         plan_fm = parse_frontmatter(old_text).get("frontmatter")
         plan_created = plan_fm.get("created") if isinstance(plan_fm, dict) else None
-        # `_validate_all`'s own contract: `governed` is PLAN-scoped and must be
-        # resolved by the caller from frontmatter. Letting it default False
-        # validates a governed plan's touched rows against the LEGACY per-row
-        # schema variant, which can accept a row `_stamp` would reject.
         governed = is_governed_plan(plan_fm) if isinstance(plan_fm, dict) else False
 
         rows = yaml.safe_load(result.body) or []
@@ -449,12 +404,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     else:
         return _err(f"{_OP_NAME}: repo_root could not be resolved (no wire param, no injected worktree root)")
 
-    # "show_top" scope (op_scopes.py): the injected/wire repo_root IS the
-    # worktree root already — never main_worktree_root(repo_root), which
-    # expects a git COMMON dir (".git") as input (plan_tasks_mutate's
-    # "common_dir"-scoped verbs do that derivation; this op does not need
-    # it, mirroring gate_liveness.resolve's identical repo_root-as-worktree
-    # usage).
     worktree = resolved_root
     today = date.today().isoformat()
 

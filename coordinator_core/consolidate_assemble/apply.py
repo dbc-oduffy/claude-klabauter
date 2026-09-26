@@ -94,16 +94,12 @@ def _current_branch(repo_root: Path) -> str:
 
 
 def _unique_commit_shas(repo_root: Path, current: str, ref: str) -> list[str]:
-    """Oldest-first SHA list for `current..ref` — the order a cherry-pick
-    sequence must apply them in to preserve the original commit order."""
     proc = _run_git(["log", "--format=%H", "--reverse", f"{current}..{ref}"], repo_root)
     _fail("log", proc)
     return [line for line in proc.stdout.splitlines() if line.strip()]
 
 
 def _branch_exists_locally(name: str, repo_root: Path) -> bool:
-    """A remote-only branch has no `refs/heads/` entry; deleting it locally is
-    not a no-op but a hard git failure, so the local leg is skipped for it."""
     return _run_git(["show-ref", "--verify", "--quiet", f"refs/heads/{name}"], repo_root).returncode == 0
 
 
@@ -178,22 +174,9 @@ def _dispatch_cherry_pick_and_delete(args: list[str], repo_root: Path) -> dict[s
     remote = len(args) > 2 and args[2] == "origin"
     current = _current_branch(repo_root)
     shas = _unique_commit_shas(repo_root, current, ref)
-    # One `git cherry-pick` invocation carrying every sha (in the same
-    # oldest-first order `_unique_commit_shas` already returns) instead of
-    # one spawn per commit — git applies a multi-commit cherry-pick
-    # sequentially and stops at the first conflict/failure exactly like the
-    # former per-sha loop did, so `_fail` still reports the same failure at
-    # the same point. Guarded empty: `git cherry-pick` with no arguments is
-    # a usage error, not a no-op.
     if shas:
         proc = _run_git(["cherry-pick", *shas], repo_root)
         if proc.returncode != 0:
-            # A multi-commit cherry-pick that stops leaves a `.git/sequencer`
-            # directory the former one-sha-per-spawn form never created, and a
-            # repo left mid-sequence refuses the next cherry-pick in ANY session
-            # sharing this tree. See `_clean_cherry_pick_conflict` for the
-            # scoped cleanup this requires and why a tree-wide reset/abort is
-            # forbidden here.
             _clean_cherry_pick_conflict(repo_root)
         _fail("cherry-pick", proc)
     delete_detail = _delete_branch(name, remote, repo_root)
@@ -228,26 +211,9 @@ def _dispatch_fetch_prune(args: list[str], repo_root: Path) -> dict[str, Any]:
     return {"cli": "fetch-prune"}
 
 
-#: C6 discriminator decision (docs/plans/2026-08-19-directives-name-an-op-not-
-#: a-cli.md § C6 / § The discriminator for the mixed end state) — measured
-#: live against `coordinator_core.authz.registration_quad._live_registry()`
-#: this chunk: NONE of consolidate's six verbs (`delete-only`,
-#: `cherry-pick-and-delete`, `merge-and-delete`, `worktree-remove`,
-#: `worktree-prune`, `fetch-prune`) resolve to a registered op, so ALL SIX
-#: stay `cli`-named — none migrate to `op`. No new op is minted to force a
-#: migration (out of scope by name). Every one of the six is a `git`
-#: plumbing call the module's own `_run_git` makes directly off a
-#: hardcoded `["git", ...]` argv — never `bash`/`sh`, so
-#: `docs/reference/shell-out-carve-outs.md` (scoped to interpreter/shell
 #: spawns) does not apply — and none is a `CONSUMES_MANIFEST`-driven script
 #: module in the completion-family sense, so no `CONSUMES_MANIFEST` entry
 #: applies either. Consequently `ASSEMBLER_DISPATCHABLE`
-#: (coordinator_core/authz/dispatchable.py) gains NO `"consolidate_assemble"`
-#: entry from this chunk (C1's "ship it EMPTY except for entries actually
-#: migrated" — zero migrated here).
-#:
-#: THE closed dispatch table — every key is a literal string written here
-#: by hand, matching `consolidate_assemble.brief`'s `directives[].cli` values.
 _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     "delete-only": _dispatch_delete_only,
     "cherry-pick-and-delete": _dispatch_cherry_pick_and_delete,
@@ -265,10 +231,6 @@ def apply(
     my_email: Optional[str] = None,
     decisions: Optional[dict[str, Any]] = None,
 ) -> tuple[int, dict[str, Any]]:
-    """`apply [--session-id <id>] [--decisions <json>]` — recomputes the
-    brief in-process and executes its `directives[]` through
-    `apply_base.execute_directives` against this module's closed dispatch
-    table. Returns `(exit_code, report)`."""
     root = repo_root or Path.cwd()
     composition_budget = make_fleet_budget("consolidate_assemble")
 

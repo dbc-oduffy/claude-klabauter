@@ -32,8 +32,6 @@ import pytest
 from coordinator_core import dag
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -75,11 +73,6 @@ def _write_handoff(root: Path, rel_path: str, lines: list[str]) -> Path:
     return p
 
 
-# ---------------------------------------------------------------------------
-# (1) build_handoff_id_index
-# ---------------------------------------------------------------------------
-
-
 class TestBuildHandoffIdIndex:
     def test_maps_handoff_id_to_absolute_path(self, tmp_path):
         root = _init_repo(tmp_path)
@@ -111,16 +104,9 @@ class TestBuildHandoffIdIndex:
         root = _init_repo(tmp_path)
         nonexistent = str(root / "state" / "handoffs" / "does-not-exist.md")
 
-        # _read_meta returns {} on any I/O error — build_handoff_id_index
-        # must not raise, just skip it (no handoff_id in {}).
         index = dag.build_handoff_id_index([nonexistent])
 
         assert index == {}
-
-
-# ---------------------------------------------------------------------------
-# (2) resolve_target(..., id_index=...)
-# ---------------------------------------------------------------------------
 
 
 class TestResolveTargetIdIndex:
@@ -139,9 +125,6 @@ class TestResolveTargetIdIndex:
     def test_id_shaped_ref_not_in_index_falls_through_to_filename_tiers(self, tmp_path):
         root = _init_repo(tmp_path)
         handoff_dir = str(root / "state" / "handoffs")
-        # No file named "hnd-not-indexed" anywhere and no matching id_index
-        # entry -- must resolve to None, not raise or crash, and must not
-        # spuriously match an unrelated file on any tier.
         result = dag.resolve_target(
             "hnd-not-indexed", handoff_dir, str(root), id_index={}
         )
@@ -161,16 +144,8 @@ class TestResolveTargetIdIndex:
         assert without_index == with_none_index == str(target.absolute())
 
     def test_lazy_index_eligible_but_empty_converges_with_plain_empty_dict(self, tmp_path):
-        """`_LazyHandoffIdIndex.__bool__`
-        is always True, unlike a genuinely empty dict (falsy). Pin that this
-        divergence is harmless: an id-shaped ref against an eligible-but-
-        empty corpus resolves identically whether id_index is the lazy
-        stand-in (built on first `in` lookup, ends up empty) or a plain
-        already-built empty dict."""
         root = _init_repo(tmp_path)
         handoff_dir = str(root / "state" / "handoffs")
-        # No handoff_id anywhere in the corpus -- the lazy index, once built
-        # on first lookup, will be an empty dict, exactly like id_index={}.
         _write_handoff(root, "state/handoffs/no-id.md", ["title: no id here"])
 
         lazy_index = dag._LazyHandoffIdIndex(str(root))
@@ -184,9 +159,6 @@ class TestResolveTargetIdIndex:
         assert result_lazy == result_plain is None
 
     def test_md_suffixed_ref_never_consults_id_index_even_on_a_matching_key(self, tmp_path):
-        """A ref ending in '.md' is never treated as handoff_id-shaped, even
-        if it happens to also be a key in id_index — guards against an
-        id-shaped string colliding with a filename-shaped one."""
         root = _init_repo(tmp_path)
         decoy = _write_handoff(root, "state/handoffs/decoy.md", ["handoff_id: real.md"])
         real = _write_handoff(root, "state/handoffs/real.md", ["title: real file"])
@@ -195,14 +167,7 @@ class TestResolveTargetIdIndex:
 
         result = dag.resolve_target("real.md", handoff_dir, str(root), id_index=id_index)
 
-        # Must resolve via the filename tier to the REAL file, not the decoy
-        # id_index entry -- '.md'-suffixed refs skip the id_index lookup.
         assert result == str(real.absolute())
-
-
-# ---------------------------------------------------------------------------
-# (3) walk_forward integration — predecessor_id-only edge actually followed
-# ---------------------------------------------------------------------------
 
 
 class TestWalkForwardFollowsPredecessorIdAlias:
@@ -215,7 +180,6 @@ class TestWalkForwardFollowsPredecessorIdAlias:
             root,
             "state/handoffs/successor.md",
             [
-                # No `predecessor:` field at all -- only the id-suffixed alias.
                 "predecessor_id: hnd-pred-1",
             ],
         )
@@ -232,9 +196,6 @@ class TestWalkForwardFollowsPredecessorIdAlias:
         ]
 
     def test_edge_kinds_without_an_aliased_kind_skips_the_corpus_scan(self, tmp_path, monkeypatch):
-        """Perf guard named in the module comment: a caller restricted to an
-        edge kind with no id-suffixed alias (e.g. 'forked_from' alone) must
-        not pay for the repo-wide handoff_id scan at all."""
         root = _init_repo(tmp_path)
         start = _write_handoff(root, "state/handoffs/start.md", ["title: start"])
 
@@ -252,20 +213,7 @@ class TestWalkForwardFollowsPredecessorIdAlias:
         assert calls == []
 
 
-# ---------------------------------------------------------------------------
-# (4) Stale/dangling id — fail-closed, not a silent mismatch
-# ---------------------------------------------------------------------------
-
-
 class TestWalkForwardLazyIdIndexScan:
-    """Hot-path over-acquisition fix: an eligible-by-edge-kind walk that
-    never actually encounters an id-shaped ref must not pay for the
-    repo-wide handoff_id corpus scan at all — the scan is deferred to the
-    first id-shaped ref lookup, not performed up front just because the
-    edge kind is aliased.
-
-    Spec backlink: state/handoffs/2026-08-13-hot-path-over-acquisition.md
-    """
 
     def test_zero_id_shaped_refs_never_triggers_the_corpus_scan(self, tmp_path, monkeypatch):
         root = _init_repo(tmp_path)
@@ -273,9 +221,6 @@ class TestWalkForwardLazyIdIndexScan:
         successor = _write_handoff(
             root,
             "state/handoffs/successor.md",
-            # Only the filename-shaped 'predecessor' field -- no
-            # 'predecessor_id' anywhere in the walked nodes, so no
-            # id-shaped ref is ever encountered.
             ["predecessor: predecessor.md"],
         )
 
@@ -322,8 +267,6 @@ class TestWalkForwardLazyIdIndexScan:
             str(successor), edge_kinds={"predecessor"}, repo_root=str(root)
         )
 
-        # Exactly one scan even though the id-shaped ref is the resolution
-        # path -- memoized within the call, not re-scanned per lookup.
         assert len(calls) == 1
         assert result["terminatedEarly"] == ""
         assert str(predecessor.absolute()) in result["nodes"]
@@ -347,14 +290,7 @@ class TestDanglingIdFailsClosed:
         )
 
         assert result["terminatedEarly"] == "missing-link"
-        # Only the successor itself was resolvable -- the dangling id must
-        # not accidentally resolve to some unrelated node.
         assert result["orderedPaths"] == [str(successor.absolute())]
-
-
-# ---------------------------------------------------------------------------
-# (5) C9 #2 — raw 4KB-header id index (metas=None path)
-# ---------------------------------------------------------------------------
 
 
 class TestBuildHandoffIdIndexRawScan:
@@ -385,13 +321,10 @@ class TestBuildHandoffIdIndexRawScan:
         root = _init_repo(tmp_path)
         p = root / "state" / "handoffs" / "big.md"
         p.parent.mkdir(parents=True, exist_ok=True)
-        # Pad the frontmatter well past the 4KB scan window before the
-        # closing terminator, so the raw scan cannot find `---` inside its
-        # read window and must fall back to the full parser.
         padding = "\n".join(f"pad_field_{i}: value_{i}" for i in range(400))
         body = "---\nhandoff_id: hnd-big-1\n" + padding + "\n---\n\nbody\n"
         p.write_text(body, encoding="utf-8")
-        assert len(body[:4096].encode("utf-8")) == 4096  # sanity: window is exhausted
+        assert len(body[:4096].encode("utf-8")) == 4096
         assert "---" not in body[:4096].split("handoff_id", 1)[1][-50:]
 
         index = dag.build_handoff_id_index([str(p)])
@@ -406,14 +339,9 @@ class TestBuildHandoffIdIndexRawScan:
 
         index = dag.build_handoff_id_index([str(p)])
 
-        # The full parser strips the quotes; the raw regex must defer to it
-        # rather than index the literal quoted string.
         assert index == {"hnd-quoted-1": str(p.absolute())}
 
     def test_body_handoff_id_line_past_terminator_is_not_picked_up(self, tmp_path):
-        """Review 2026-09-12 (staff-eng): a `handoff_id:` line in the BODY
-        (past the closing frontmatter `---`) must not be picked up by the
-        raw scan -- the scan searches only bytes BEFORE the terminator."""
         root = _init_repo(tmp_path)
         p = root / "state" / "handoffs" / "body-id.md"
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -428,9 +356,6 @@ class TestBuildHandoffIdIndexRawScan:
         assert index == {}
 
     def test_short_frontmatter_body_quotes_handoff_id_in_prose_not_matched(self, tmp_path):
-        """Review 2026-09-12 (staff-eng): a SHORT frontmatter (terminator
-        well inside the 4KB window) whose BODY quotes a `handoff_id:` line
-        in prose must not have that body line matched by the scan."""
         root = _init_repo(tmp_path)
         p = root / "state" / "handoffs" / "prose-decoy.md"
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -464,20 +389,8 @@ class TestRawScanHandoffIdUnit:
         assert dag._raw_scan_handoff_id(str(missing)) is dag._RAW_SCAN_FALLBACK
 
 
-# ---------------------------------------------------------------------------
-# (6) C9 #2 review addenda (2026-09-12, peer who owns plan_gate's narrow
-# scanner) -- leading HTML-comment prologue skip, and a corpus-wide parity
-# pin against the general parser.
-# ---------------------------------------------------------------------------
-
-
 class TestRawScanSkipsLeadingHtmlCommentPrologue:
     def test_banner_before_frontmatter_does_not_defeat_the_raw_scan(self, tmp_path):
-        """dag._parse_frontmatter skips an optional leading HTML-comment
-        banner before the opening `---`; plan_gate._skip_leading_comments
-        exists for the identical case. A raw scan that starts matching at
-        byte 0 without this skip reads a banner record as having no
-        frontmatter at all and silently drops it from the index."""
         p = tmp_path / "banner.md"
         p.write_text(
             "<!-- generated, do not hand-edit -->\n"
@@ -497,27 +410,12 @@ class TestRawScanSkipsLeadingHtmlCommentPrologue:
             encoding="utf-8",
         )
 
-        # _parse_frontmatter also treats an unclosed leading comment as "no
-        # frontmatter" -- both readers agree this record has no handoff_id,
-        # so build_handoff_id_index's fallback to _read_meta produces {}.
         index = dag.build_handoff_id_index([str(p)])
 
         assert index == {}
 
 
 def test_raw_scan_agrees_with_the_general_parser_over_the_live_corpus():
-    """Parity pin, same shape as `roadmap/tests/test_plan_gate.py::
-    test_narrow_scan_agrees_with_the_general_parser` -- read this repo's
-    whole live+archived handoff corpus through both readers and assert
-    per-file agreement on `handoff_id`, the one field this scanner reads.
-
-    Read against a corpus rather than only a fixture on purpose: a
-    hand-built fixture only proves the scanner handles shapes its author
-    thought of, and a corpus-shaped disagreement (Review 2026-09-12,
-    staff-eng) is exactly the failure mode fixtures do not catch. Not a
-    committed sweep of assembled record semantics -- narrowly, the one
-    field `_raw_scan_handoff_id` reads.
-    """
     root = Path(__file__).resolve().parents[2]
     paths = dag.scan_repo_handoff_corpus(str(root))
     if not paths:
@@ -527,10 +425,6 @@ def test_raw_scan_agrees_with_the_general_parser_over_the_live_corpus():
     for p in paths:
         raw = dag._raw_scan_handoff_id(p)
         if raw is dag._RAW_SCAN_FALLBACK:
-            # A window-insufficient shape defers to the general parser by
-            # construction (build_handoff_id_index falls back to
-            # _read_meta for it) -- the two readers are the SAME reader
-            # for this file, nothing to compare.
             continue
         raw_value = raw if raw else None
 

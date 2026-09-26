@@ -170,7 +170,7 @@ from coordinator_core.coverage import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-_PROG = "review-brightline-gate.sh"  # literal program-name prefix — matches bash oracle stderr
+_PROG = "review-brightline-gate.sh"
 
 LOC_THRESHOLD = 500
 COMMITS_THRESHOLD = 5
@@ -182,42 +182,7 @@ _LOC_RE = re.compile(r"(\d+) insertion|(\d+) deletion")
 _TEST_DIR_RE = re.compile(r"(^|/)tests?/")
 
 
-# chain_oracle (C3) defensive file-granularity noise exclusion — a commit is
-# noise IFF every file it touches matches one of these path rules; a MIXED
-# commit keeps its code-path LOC and drops only the noise-path LOC. Two
-# categories per the C1 contract: generated/vendored artifacts, and
-# lifecycle/memo bookkeeping (handoffs, outboxes, lessons, trackers, pure
-# archive/ moves, review-trail JSON, subagent-share sidecars, ceremony
-# records, cross-repo inbox/archive memo files). Deliberately file-
-# granularity, not commit-message-prefix matching — see the module
-# docstring's chain_oracle negative-spec.
-#
-# state/review-trail/, state/subagent-share/, and state/ceremony/ were added
-# 2026-08-04 after field evidence showed `chain_oracle` inflating on
-# ceremony-emitted bookkeeping: one real chain range measured loc=15911
-# across 286 files, of which 227 files / 31043 insertions were pure
-# review-trail JSON, subagent-share sidecars, memo files, and handoff
-# frontmatter (59 files / ~9100 insertions were substantive code/tests/
-# docs) — reviewers_suggested=32 against plan_oracle=4, an inflated headline
-# easy to dismiss. `cross-repo/(inbox|archive)/` (the memo channel; see
-# `cross-repo/README.md`) is scoped to those two subdirs only, NOT the bare
-# `cross-repo/` prefix, so a hand-edit to `cross-repo/README.md` itself
-# stays reviewable. `state/[^/]+-outbox/` already covers
-# `state/memo-outbox/` via the existing `-outbox` alternation — verified,
-# not re-added. `state/sizings/` and `state/audits/` were measured and
 # EXCLUDED from this list: both carry human/EM-authored routing rationale
-# and analysis prose (scout_evidence, intent, audit findings), not
-# mechanical bookkeeping — see the memo backlink below for the full
-# before/after measurement on this repo.
-# Spec backlink: cross-repo/inbox/2026-08-04-example-retrieval-repo-em-brightline-partition-mandatory-does-not-halt.md
-#   § "Two smaller observations" — `chain_oracle` counts ceremony bookkeeping as reviewable LOC.
-#
-# The two memo schemas are matched by EXACT basename: both are pure output of
-# `emit_memo_schema.emit_schemas` (their headers declare `x-generated-by`), and
-# the authored change lives in the `.py` SSOT, already counted. Every other
-# `*.schema.json` here is hand-authored and must stay reviewable, so no
-# `.schema.json` suffix rule and no fixtures-directory rule: either would
-# silently suppress review of hand-authored content.
 _NOISE_BASENAMES = frozenset({
     "package-lock.json", "poetry.lock", "pnpm-lock.yaml", "bun.lockb",
     "cross-repo-memo.schema.json", "archived-memo.schema.json",
@@ -242,80 +207,28 @@ _NOISE_LIFECYCLE_RE = re.compile(
 )
 _NOISE_TRACKER_RE = re.compile(r"^docs/.*-tracker\.md$")
 
-# chain_oracle planning-artifact de-weight (C7, AC8) — a plan/research/
-# problem-framing document or its own sidecar is real review obligation
-# (unlike `_is_noise_path`, which drops LOC entirely), but it is NOT the
-# same review cost per line as code: a 2799-line plan drove the un-patched
-# chain_oracle to `1 + 2799//500 = 6`, a code-reviewer-count recommendation
-# against a plan whose own `plan_oracle` (which excludes doc-edit rows by
 # design — see `_CODE_BEARING_KINDS`) was 2. De-weight, not exclude:
-# `chain_loc` sums code-path LOC at full weight plus planning-artifact LOC
 # scaled by `_PLANNING_LOC_WEIGHT`, so a large plan still nudges the
-# recommendation upward without being read as if it were code.
-#
 # `_PLANNING_ARTIFACT_PATH_PREFIXES` and `_is_planning_artifact_path` are
-# imported from `coordinator_core.coverage` (both C2 and this module's own
-# chain_oracle now on disk) — a single source for the prefix list so the
-# brightline gate's reviewer-count heuristic and the coverage gate's
-# crediting classifier cannot disagree about which paths are planning
 # artifacts. `_PLANNING_LOC_WEIGHT` below stays LOCAL: it is brightline's
-# own de-weighting heuristic, not part of the shared classification.
-#
-# Do NOT wire the shared predicate into `_is_noise_path` — a planning-artifact
-# commit is not noise (AC9: the gate stays non-vacuous; a planning artifact
-# still owes a review), it is merely cheaper-per-line than code.
-# Spec backlink: pln-planning-artifacts-are-a-third-77111f § C7, AC8
-#
 # SUPERSEDED IN PART (C1a, 2026-08-12): `_is_prose_bearing_path` now runs
-# BEFORE this weight is ever applied (see the `countable` filter in
-# `_compute_chain_oracle`/`_compute_session_oracle_single`/the session-scoped
-# range path) and fully excludes `.md`/`.yaml`/`.yml` — every planning-
 # artifact path in practice, since all four `_PLANNING_ARTIFACT_PATH_PREFIXES`
-# hold only `.md` files today. This weight now only still applies to a
-# hypothetical non-prose-bearing file under a planning prefix (e.g. a binary
-# or `.json` sidecar) — a narrower but not dead case, and left as-is per this
 # module's Anti-scope ("leave `_PLANNING_LOC_WEIGHT`/`_is_planning_artifact_path`
-# exactly as they are").
-_PLANNING_LOC_WEIGHT = 0.2  # 1 planning-artifact LOC counts as 0.2 chain_loc
+_PLANNING_LOC_WEIGHT = 0.2
 
 
 _CHAIN_SHOW_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _CHAIN_NUMSTAT_RE = re.compile(r"^(-|\d+)\t(-|\d+)\t(.+)$")
-# `git show --raw`'s per-file line: `:oldmode newmode oldsha newsha STATUS[score]\told[\tnew]`.
-# Captures just the single-letter status (A/M/D/R/C) — the similarity score
-# suffix on R/C rows (e.g. `R100`) is discarded. See `_parse_show_numstat`.
 _CHAIN_RAW_STATUS_RE = re.compile(r"^:\d+ \d+ \S+ \S+ (\w)\d*\t")
 
-# AC2/AC3 (C2, 2026-08-12): change-substance weighting for the three
-# accumulation loops factored into `_accumulate_countable_rows` — a row's
-# raw added+deleted LOC is scaled by whether it is a content-identical
-# rename/move (AC2's explicit "breadth without burden" example) or genuine
-# authored content (create/modify/delete/renamed-with-edits), rather than
 # counted uniformly. MEASURED, not invented (AC3): over this branch's own
-# history (`origin/main..HEAD`, 362 commits, 1054 changed-file rows — 522
-# created, 502 modified, 1 deleted, 29 renamed), a three-way created/
 # modified/deleted split produced IDENTICAL totals to this two-way rename/
-# everything-else split (34553 either way): every renamed row in that
-# corpus was itself prose-bearing (`.md`/`.yaml`) and already excluded by
-# `_is_prose_bearing_path` before substance weighting runs, and the single
-# deletion was prose-bearing too. See the C2 dispatch report's AC3 table.
-# TWO constants, not three, per AC3's "do not force three to exist if two
-# suffice." Deletions are NOT exempted by this: a deleted file lands in
 # `_SUBSTANCE_WEIGHT_CONTENT` at full weight, same as a creation or a
-# modification — never zeroed.
-_SUBSTANCE_WEIGHT_RENAME = 0.0  # content-identical rename/move (status "R", 0 added + 0 deleted): already 0 raw LOC — named explicitly so the invariant is a deliberate constant, not an arithmetic accident of a+d
-_SUBSTANCE_WEIGHT_CONTENT = 1.0  # created / modified / deleted / renamed-with-edits: genuine authored change, counted at the code-loc baseline
+_SUBSTANCE_WEIGHT_RENAME = 0.0
+_SUBSTANCE_WEIGHT_CONTENT = 1.0
 
 
 def _substance_weight(status: str, added: int, deleted: int) -> float:
-    """AC2/AC3 change-substance weight for one numstat row. `status` is the
-    single-letter git raw status (`""` if `_parse_show_numstat` could not
-    pair a raw row to this numstat row — treated as content, the safe/
-    never-under-count direction). Only a content-identical rename (status
-    `"R"`, both counts zero) gets the reduced weight: a rename that also
-    edited lines is real authored change and stays at full weight, since
-    the added/deleted counts git reports for a rename already cover only
-    the genuinely changed lines, not the whole moved file."""
     if status == "R" and added == 0 and deleted == 0:
         return _SUBSTANCE_WEIGHT_RENAME
     return _SUBSTANCE_WEIGHT_CONTENT
@@ -349,12 +262,6 @@ def _run_git(args: List[str], cwd: Optional[str] = None) -> Tuple[str, int]:
 
 
 def classify_surface(path: str) -> str:
-    """Map a changed-file path to its review-surface bucket.
-
-    Rule order matches the bash awk chain verbatim — test-directory match is
-    checked FIRST, so a `tests/foo.py` file classifies as "test", not
-    "python".
-    """
     if _TEST_DIR_RE.search(path):
         return "test"
     if path.endswith(".sh"):
@@ -372,19 +279,10 @@ def classify_surface(path: str) -> str:
     return "other"
 
 
-#: Public alias — cross-module callers (e.g.
-#: `backlog_grind_assemble.readers_mise._measure_range`) import this name
-#: rather than the underscore-prefixed original, so this module can no
-#: longer assume `_classify_surface` is purely internal (review finding,
-#: 2026-08-04 review-integration pass). The private name stays working as
-#: an alias; every in-module caller below is unchanged.
 _classify_surface = classify_surface
 
 
 def _is_noise_path(path: str) -> bool:
-    """True iff `path` is a generated/vendored artifact or lifecycle/memo
-    bookkeeping file per the chain_oracle defensive-exclusion contract (C1
-    § step 4). Never raises — an empty/odd path simply falls through to False."""
     basename = path.rsplit("/", 1)[-1]
     if basename in _NOISE_BASENAMES:
         return True
@@ -435,14 +333,8 @@ def _is_prose_bearing_path(path: str) -> bool:
     return path.endswith(_PROSE_BEARING_EXTS)
 
 
-#: Ceremony-exhaust directories: substrate the CLOSE ITSELF writes, whose
-#: contents are an output of the ceremony rather than an input to review.
 #: DELIBERATELY NARROW — a directory earns a row here only if a close
-#: writes it as bookkeeping every time and a reviewer has nothing to read
-#: in it. `state/audits/` and `state/dispatch-briefs/` are NOT here and
 #: must not be added: those are session-AUTHORED content, and excluding
-#: them would suppress genuine review obligation, which is the one
-#: direction this predicate must never fail in.
 _CEREMONY_EXHAUST_RE = re.compile(
     r"^("
     r"state/tasks/"
@@ -485,11 +377,6 @@ def _is_ceremony_exhaust_path(path: str) -> bool:
 
 
 def _sum_loc(text: str) -> Tuple[int, bool]:
-    """Sum `N insertion`/`N deletion` occurrences in `text`.
-
-    Returns `(total, matched_any)`. `matched_any=False` is the die-silent
-    gate condition — see module negative-spec.
-    """
     matches = _LOC_RE.findall(text)
     if not matches:
         return 0, False
@@ -506,8 +393,6 @@ def _verdict(loc: int, commits: int, surfaces: int) -> str:
 
 
 def _current_branch() -> str:
-    """Best-effort abbreviated current branch name (`""` on any failure —
-    detached HEAD, not a repo, git missing). Never raises."""
     out, rc = _run_git(["rev-parse", "--abbrev-ref", "HEAD"])
     if rc != 0:
         return ""
@@ -665,15 +550,6 @@ def _accumulate_countable_rows(
         for added, deleted, path, status in countable:
             a = int(added) if added.isdigit() else 0
             d = int(deleted) if deleted.isdigit() else 0
-            # This two-step truncation (int() here,
-            # then int() again below) is safe from compounding rounding error
-            # ONLY because `_substance_weight` is 0-or-1 valued — the first
-            # `int()` is a no-op whenever weight=1.0 (nothing to truncate) and
-            # collapses row_loc to 0 whenever weight=0.0 (nothing left for the
-            # second int() to round). If a THIRD, fractional substance weight
-            # is ever added to this chain, this two-step shape stops being
-            # equivalent to a single combined multiply and should be
-            # collapsed to one `int()` over the full product at that point.
             row_loc = int((a + d) * _substance_weight(status, a, d))
             if _is_planning_artifact_path(path):
                 row_loc = int(row_loc * _PLANNING_LOC_WEIGHT)
@@ -726,7 +602,7 @@ def _resolve_session_floor(session_id: str) -> Optional[str]:
     shas = [line for line in shas_out.splitlines() if line.strip()]
     if not shas:
         return None
-    earliest = shas[-1]  # git log lists newest-first; the last line is oldest
+    earliest = shas[-1]
     return f"{earliest}^"
 
 
@@ -782,25 +658,6 @@ def _count_untrailered_commits(range_: str) -> int:
 
 
 def _measure_uncommitted_tree() -> Dict[str, object]:
-    """Measure the uncommitted working tree (staged + unstaged changes to
-    tracked files, against HEAD) via ONE git spawn: `git diff --numstat
-    HEAD`. `_session_scoped` falls back to this ONLY when its committed-
-    commit scan (including the session-aware floor retry) matches zero
-    commits: the ceremony that dispatches this gate mid-chain can run
-    BEFORE its own commit lands, so a zero-commit scan does not mean there
-    is nothing to review — it means the work is still sitting uncommitted,
-    which a commit-trailer scan structurally cannot see (P143-T1,
-    DoE-accepted).
-
-    Same noise/prose/ceremony-exhaust exclusion as the committed path
-    (`_is_noise_path`/`_is_prose_bearing_path`/`_is_ceremony_exhaust_path`),
-    so bookkeeping and doc-only edits still contribute nothing. `commits` is
-    always 0 here — an uncommitted diff has no commit boundary to count —
-    so only `loc`/`surfaces` can trip this leg's verdict.
-
-    Untracked files are deliberately NOT included: a second `git status
-    --porcelain` spawn to add them is not justified without evidence of a
-    live gap, and this stays a one-spawn measurement."""
     out, rc = _run_git(["diff", "--numstat", "HEAD"])
     loc = 0
     surfaces: Set[str] = set()
@@ -930,15 +787,6 @@ def _session_scoped(range_: str, session_id: str) -> int:
         )
         return 0
 
-    # Metric-wide noise exclusion (AC1) — same shape as `_compute_chain_oracle`:
-    # `--numstat` (not `--stat`) so a per-file noise path can be dropped
-    # before loc/files/surfaces accumulate, and a fully-noise commit
-    # contributes to NEITHER loc, files, commits, nor surfaces, rather than
-    # only loc. Reuses `_parse_show_numstat` (the chain-oracle parser) rather
-    # than a fourth diffstat parser. `--raw` (C2) additionally recovers each
-    # row's git status letter for AC2/AC3 change-substance weighting — see
-    # `_accumulate_countable_rows`, the shared helper this used to duplicate
-    # inline.
     show_out, rc2 = _run_git(["show", "--raw", "--numstat", "--format=%H", *filtered_shas])
     if rc2 != 0:
         print(
@@ -950,7 +798,7 @@ def _session_scoped(range_: str, session_id: str) -> int:
     per_commit = _parse_show_numstat(show_out)
     total_raw_rows = sum(len(rows) for rows in per_commit.values())
     if total_raw_rows == 0:
-        return 1  # die-silent gate (loc=/files=) — see module negative-spec
+        return 1
 
     accumulated = _accumulate_countable_rows(per_commit, filtered_shas, track_files=True)
     loc = int(accumulated["loc"])  # type: ignore[arg-type]
@@ -964,36 +812,9 @@ def _session_scoped(range_: str, session_id: str) -> int:
     verdict = _verdict(loc, commits, surfaces)
 
     # ATTRIBUTION COVERAGE (2026-08-30). A session-scoped verdict is only as
-    # sound as the trailer it filters on, and this gate had no way to tell an
-    # honest zero from a blind one. `filtered_to > 0` does not establish that
-    # the filter SAW the session: it establishes that something matched.
-    #
-    # Two live routes write no usable attribution, so this is not hypothetical:
-    # `ceremony.commit_v2` appends no `Session-Id` trailer at all, and the
-    # generated git-hook ladder that runs `coordinator-prepare-commit-msg` is
-    # `.exe`-blind under MinGit's sh (state/bug-backlog/2026-08-29-git-hook-
-    # script-ladder-is-exe-blind-so-au-2b59782d53ef.yaml — fixed in the
-    # generator, but no hook already on disk is ever regenerated, so it is
-    # still live in any repo that has not reinstalled). A session whose commits
     # were written through either one is INVISIBLE to `--grep`, while some
-    # other session's trailered commit in the same range still matches.
-    #
-    # Measured specimen (DoE, 2026-08-30): a close of 2,234 gross LOC across 12
-    # commits and 8 surfaces reported `filtered_to=1 ... VERDICT=single-
-    # reviewer-ok`. Eleven of those commits carried no trailer to match.
-    #
     # SCOPED TO THE PERMISSIVE DIRECTION ONLY. Incomplete attribution can only
-    # ever hide work, never invent it, so it cannot turn a mandatory partition
     # into a spurious one — a PARTITION-MANDATORY verdict is already the
-    # conservative action and stands unchanged. It is `single-reviewer-ok` that
-    # must not be issued over a range the gate could not fully attribute: that
-    # is the under-review direction, and the sessions it affects are exactly
-    # the ones that will never notice. This also leaves AC1 intact — a
-    # prose-only close whose commits ARE all trailered still resolves
-    # `commits=0 VERDICT=single-reviewer-ok`, because the gate genuinely looked.
-    #
-    # Merges are excluded from the census: they carry no trailer by
-    # construction and are not a session's authored work.
     if verdict == "single-reviewer-ok":
         untrailered = _count_untrailered_commits(range_)
         if untrailered:
@@ -1021,7 +842,7 @@ def _unfiltered(range_: str) -> int:
     shortstat_out, _rc = _run_git(["diff", "--shortstat", range_])
     loc, matched = _sum_loc(shortstat_out)
     if not matched:
-        return 1  # die-silent gate (loc=) — see module negative-spec
+        return 1
 
     name_only_out, _rc2 = _run_git(["diff", "--name-only", range_])
     name_lines = name_only_out.splitlines()
@@ -1041,10 +862,6 @@ def _unfiltered(range_: str) -> int:
 
 
 def main(argv: List[str]) -> int:
-    # `--from-handoff` (the chain+plan two-oracle mode) is REMOVED —
-    # state/kill-ledger.md K-007, 2026-08-19, PM ruling. It was reachable
-    # only from `wsc-coverage-gate-runner.py brightline-gate`, itself
-    # removed. The session-scoped and unfiltered modes below are untouched.
     if argv and argv[0] == "--from-handoff":
         print(
             f"{_PROG}: --from-handoff was removed (state/kill-ledger.md K-007, "

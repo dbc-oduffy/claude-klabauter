@@ -101,12 +101,7 @@ from coordinator_core.bash_guards.dispatch_checks import (
 )
 from coordinator_core.conservatism import SafeDirection, declares_safe_direction
 
-#: Subcommands that take the worktree ``index.lock`` -- git's index-writing
-#: set (decided 2026-08-12 per the P2 backlog entry cited in the module
 #: docstring's SUBCOMMAND COVERAGE section). Deliberately still an explicit
-#: closed list, not derived from git's own subcommand vocabulary: an
-#: unlisted subcommand simply does not fire this guard, fail-closed, rather
-#: than this guard guessing at git's internals.
 _LOCK_TAKING_SUBCOMMANDS = frozenset({
     "add", "commit", "status", "diff", "mv", "stash",
     "checkout", "switch", "restore", "reset", "merge", "rebase",
@@ -114,25 +109,14 @@ _LOCK_TAKING_SUBCOMMANDS = frozenset({
     "submodule", "read-tree", "update-index", "sparse-checkout",
 })
 
-#: Separator characters that split ``cmd`` into candidate git segments --
 #: same vocabulary ``guard_no_optional_locks._SEP_TOKEN_CHARS`` uses, not
-#: imported from there since that name is that module's own private detail.
 _SEP_CHARS = frozenset(";&|")
 
-#: Bound on the upward directory walk used to find an enclosing ``.git``
-#: when no ``-C``/``--git-dir`` override is present (see module docstring's
 #: COST DISCIPLINE section) -- large enough for any real repo nesting depth,
-#: small enough to guarantee termination even on a pathological ``cwd``.
 _MAX_UPWARD_WALK = 64
 
 
 def _split_segments(cmd: str) -> List[str]:
-    """Cheap, non-tokenizing segment split on top-level ``;``/``&&``/``||``/
-    ``|`` -- good enough to locate a *candidate* git segment for the
-    subcommand check below, which itself re-parses the segment properly via
-    ``_seg_git_invocation``. Does not attempt quote-awareness -- a
-    false-positive candidate segment simply fails the subsequent resolution
-    (fail-closed, no-op) rather than mis-firing."""
     segs: List[str] = []
     current: List[str] = []
     for ch in cmd:
@@ -195,17 +179,12 @@ def _seg_git_invocation(seg: str) -> Optional[Tuple[str, Optional[str], Optional
             if tok in _GIT_GLOBAL_OPT_NO_ARG_SIMPLE:
                 i += 1
                 continue
-            # Unrecognized flag -- consumption shape unknown, do not guess.
             return None
         return tok, dash_c, git_dir
     return None
 
 
 def _find_lock_taking_git_invocation(cmd: str) -> Optional[Tuple[Optional[str], Optional[str]]]:
-    """Return ``(dash_c_value, git_dir_value)`` for the first segment of
-    ``cmd`` that resolves to a lock-taking git subcommand (constraint 6 --
-    fire only for git invocations that take the index lock, not every Bash
-    call), else ``None``."""
     for seg in _split_segments(cmd):
         if "git" not in seg:
             continue
@@ -315,17 +294,6 @@ def _reap_candidate_locks(git_dir: Path) -> None:
     anchor=lambda attempted: attempted is False,
 )
 def check_reap_stale_git_lock(cmd: str, cwd: str, session_id: str = "") -> Optional[dict]:
-    """PreToolUse guard: self-heals an orphaned ``.git/index.lock`` (and its
-    ``next-index-*.lock``/``objects/maintenance.lock`` siblings) ahead of a
-    raw lock-taking git invocation. Always returns ``None`` (allow, command
-    unchanged) -- this guard's only effect is the on-disk reap side effect
-    performed before returning; see module docstring for why it is never a
-    rewrite/advisory.
-
-    Fail-open (constraint 5): any exception in the body below is swallowed
-    and treated identically to "nothing to reap" -- the git command
-    proceeds either way, reaped or not.
-    """
     try:
         if not cmd or "git" not in cmd:
             return None

@@ -80,11 +80,6 @@ from coordinator_core.ops.session.guard_settings_integrity import (
 
 
 def _extract_context(result) -> "Optional[str]":
-    """Accepts either envelope shape a composed leg may return: the
-    `hookSpecificOutput.additionalContext` shape (`context_only`/
-    `no_advisory`) every `hooks.*` leg uses, or the `{"text": str}` shape
-    the `session.*` IPC ops (`guard_settings_integrity`,
-    `guard_hooks_kill_switch_detail`) use."""
     if not isinstance(result, dict):
         return None
     text = result.get("text")
@@ -103,10 +98,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
     payload = dict(payload)
     leg_params = {"payload": payload}
 
-    # Align with postuse_stop_family_
-    # dispatch.py::_call_leg's inspect.isawaitable handling instead of
-    # hand-picking bare-await vs. _run_sync per leg; a future sync->async
-    # flip on any leg's handler no longer needs a matching edit here.
     texts: "list[str]" = []
     for leg_call in (
         lambda: _sessionstart_bin_drift_refresh_handler(leg_params),
@@ -121,7 +112,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
             if inspect.isawaitable(result):
                 result = await result
         except Exception:
-            continue  # per-leg dispatch; one failing leg must not block the other legs' banners
+            continue
         text = _extract_context(result)
         if text:
             texts.append(text)

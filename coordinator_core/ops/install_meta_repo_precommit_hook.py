@@ -201,7 +201,7 @@ Negative-spec (still-intentional behavior, not a residual bug):
 
 from __future__ import annotations
 
-GENERATES = []  # writes only $HOME/.claude's .git/hooks/pre-commit (and post-merge/post-checkout), never tracked
+GENERATES = []
 
 import os
 import re
@@ -219,11 +219,6 @@ from coordinator_core.session.declared_writes import declare_write
 from coordinator_core import meta_repo_identity as _meta_repo_identity
 from coordinator_core import py_probe_sh as _py_probe_sh
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
-# Cross-package import of the SSOT doc-pointer display string (same
-# precedent write_guards already uses for operator_override_note itself) --
-# emitted hook-body remediation text points readers at the doc that
-# enumerates these keys, never names a key inline (B6/B8, see
-# docs/wiki/guard-messaging.md § Register).
 from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY
 
 _PROG = "install-meta-repo-precommit-hook"
@@ -231,17 +226,12 @@ _PROG = "install-meta-repo-precommit-hook"
 
 @dataclass(frozen=True)
 class _Gate:
-    marker: str        # presence key: substring searched for in the hook body to find this gate's region
-    filename: str      # bin/ filename (relative to the resolved bin dir)
-    kind: str          # "python" or "bash" — selects which interpreter resolution/guard applies
-    label: str         # human label for the BLOCKED banner
+    marker: str
+    filename: str
+    kind: str
+    label: str
     override_env: str  # env var that bypasses a CANNOT-RUN block (missing script/interpreter)
-    # currency key: bumped whenever this gate's emitted body changes; see "Versioned regions"
-    # below — marker presence alone no longer means "installed and current", only "installed at
-    # some version". Defaulted (not left required) so a test/caller building an ad-hoc _Gate
-    # inline for a one-off scenario isn't forced to pick a version number that means nothing to
     # that scenario — every REGISTRY entry still states its version explicitly (see registries
-    # below), the default only covers call sites that don't care.
     version: int = 1
 
 
@@ -271,17 +261,6 @@ _GATE_REGISTRY: List[_Gate] = [
         version=2,
     ),
 ]
-# 2026-08-25 -- `detect-staged-rollback` DROPPED out of this registry
-# entirely (not merely retired to a stale version), per peer session
-# doe-claude-33 / PM ruling on their side: "Drop the gate. Do NOT keep a
-# minimal op alive for us." This module installs `~/.claude`'s hook (Claude
-# Central / the meta-repo), NOT DoE-claude's own tree -- DoE-claude has no
-# pre-commit hook at all and never has, so this affects one of Claude
-# Central's gates only. Orphan-region removal (see "Orphaned regions" below)
-# means an already-installed hook's `detect-staged-rollback` region is
-# spliced out on the next install run against this registry -- this does not
-# fix an already-installed hook by itself (nothing in this repo can), it
-# makes the next regeneration correct.
 
 
 def _bin_dir() -> Path:
@@ -297,12 +276,6 @@ def _bin_dir() -> Path:
 
 
 def _canon(path: str) -> str:
-    """Canonicalize a path the same way the bash oracle's canon() did.
-
-    Bash: `(cd "$1" 2>/dev/null && pwd -P) || echo ""` — requires $1 to be an
-    existing, cd-able directory; resolves symlinks. Returns "" on any failure
-    so a failed canon never matches a non-empty expected path.
-    """
     if not path:
         return ""
     try:
@@ -315,22 +288,10 @@ def _canon(path: str) -> str:
 
 
 def _git_toplevel(target: str) -> Optional[str]:
-    """Resolve the repo root for `target` via `git -C <target> rev-parse --show-toplevel`.
-
-    Returns None on any git failure (not a git repo, git missing, etc.) —
-    parity with the bash oracle's `|| { ...skip...; exit 0; }` branch.
-    """
     return _show_toplevel(cwd=target)
 
 
 def _atomic_write(path: str, content: str) -> None:
-    """Write `content` to `path` atomically: write to a `.tmp.<pid>` sibling, then rename.
-
-    A concurrent git-commit never reads a torn hook. Every caller in this
-    module chmods 0o755 right after — a git hook must be executable to fire
-    at all, so this always forces the one mode a hook actually needs rather
-    than trying to preserve whatever bits an earlier file happened to carry.
-    """
     tmp_path = f"{path}.tmp.{os.getpid()}"
     with open(tmp_path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(content)
@@ -340,19 +301,6 @@ def _atomic_write(path: str, content: str) -> None:
 
 
 def _strip_trailing_exit0(text: str) -> str:
-    """Strip a bare trailing `exit 0` line so gates appended after it are not
-    dead code.
-
-    A `sh` script that already returned never reaches anything appended past
-    it. The pre-rewrite installer blindly concatenated new gate blocks onto
-    the end of the file, which silently made every appended gate unreachable
-    whenever the base hook (ours from an earlier run, or a human's custom
-    hook) ended in an explicit `exit 0` — the exact same "guard present but
-    inert" shape as the missing-script defect, just at hook-assembly time
-    instead of runtime. Every hook this installer writes now re-adds exactly
-    one trailing `exit 0` at the true end, so this strip-then-reappend keeps
-    that invariant regardless of how many times gates get appended.
-    """
     rstripped = text.rstrip("\n")
     lines = rstripped.split("\n") if rstripped else []
     if lines and lines[-1].strip() == "exit 0":
@@ -363,43 +311,11 @@ def _strip_trailing_exit0(text: str) -> str:
     return result
 
 
-# ---------------------------------------------------------------------------
-# Versioned regions — upgrade awareness.
-#
-# Before this: `marker not in existing_text` was the ENTIRE installed-ness
-# test (see `_install_or_append_hook`'s pre-2026-07-28-later history). A gate
-# whose marker survived but whose BODY had since changed — an older
-# implementation, a since-fixed bug, a changed invocation — was reported
-# "already installed" and left exactly as it was. There was no upgrade path
-# at all short of deleting the hook by hand.
-#
-# Fix: each gate's emitted block carries a `# gate-version: N` stamp (written
-# by `_gate_block`, immediately below its stable `# --- Gate: ... ---` header
-# comment). "Installed" now splits into two independent questions:
-#   - present?  `_marker_is_installed(existing_text, gate.marker)` (was the
-#     bare `gate.marker in existing_text` test before the 2026-08-25
-#     comment-only-mention fix; see that function's own docstring).
-#   - current?  the LOCATED region for that marker contains today's
-#     `_gate_version_line(gate)` (new).
-# marker-absent -> append (as before). marker-present + current -> no-op.
-# marker-present + stale -> replace THAT gate's region in place, leaving
-# every other gate's region and any human content untouched.
-# ---------------------------------------------------------------------------
-
 def _gate_version_line(gate: _Gate) -> str:
     return f"# gate-version: {gate.version}"
 
 
 def _gate_script_line(gate: _Gate, bin_dir: Path) -> str:
-    """The exact `_gate_script=` assignment this installer emits for `gate`.
-
-    ONE source of truth for two readers: `_gate_block()` writes it into the
-    hook, and `_gate_is_stale()` reads it back to decide whether an installed
-    region still points where this engine lives. Deriving both from here is
-    what keeps "what we emit" and "what we consider current" from drifting —
-    a drift that is invisible by construction, since the only symptom is a
-    gate that silently stays stale forever.
-    """
     return f'_gate_script="{"/".join([bin_dir.as_posix(), gate.filename])}"'
 
 
@@ -557,29 +473,9 @@ def _replace_stale_gate_regions(text: str, stale_gates: List[_Gate], bin_dir: Pa
     return text
 
 
-# ---------------------------------------------------------------------------
-# Orphaned regions — a gate RETIRED out of the registry entirely (not merely
-# bumped to a new version) leaves its region behind in any hook already
-# installed on a machine before the retirement landed. Versioned-region
-# upgrade-awareness (above) only ever asks "is this registry entry's region
-# current", so a marker that is no longer in the registry at all is invisible
-# to `missing_gates`/`stale_gates` and was left untouched forever -- exactly
-# the gap named when `coordinator-precommit-exec-bit-check` was retired
-# (2026-07-29): the gate script file is deleted, but an already-installed
-# hook's region still shells out to it, so every commit on that machine would
 # hit the missing-script CANNOT-RUN branch (loud BLOCKED, `exit 1`) from then
-# on -- a strictly worse outcome than the neutralized no-op hook it replaced.
-# `_remove_orphaned_gate_regions` closes that gap generically: any region
-# whose header names a marker absent from the CURRENT registry is spliced
-# out, so retiring a gate converges an already-installed hook back to a
-# clean state on its next install run, the same way adding or upgrading one
-# does.
-# ---------------------------------------------------------------------------
 
 def _find_all_gate_markers(text: str) -> List[str]:
-    """Return every gate marker named by a `# --- Gate: ... (<marker>) ---`
-    header currently present in `text`, in file order (duplicates possible
-    only in a hand-edited/corrupted hook; callers dedupe as needed)."""
     header_re = re.compile(r"^[ \t]*# --- Gate: .*\(([^)]*)\) ---\s*$")
     markers: List[str] = []
     for line in text.splitlines():
@@ -611,13 +507,7 @@ def _remove_orphaned_gate_regions(text: str, current_markers: "set[str]") -> Tup
         try:
             region = _find_gate_region(text, marker)
         except RuntimeError as exc:
-            # Ambiguous boundary (no blank-line terminator, or it crosses
-            # into a sibling gate's header) -- the same "refuse to guess"
-            # posture _find_gate_region documents for stale-gate
-            # replacement. Left in place: it will surface as a loud
             # CANNOT-RUN BLOCKED finding on the gate's next commit instead
-            # (missing script), which is recoverable; silently corrupting
-            # an unbounded splice is not.
             print(f"{_PROG}: skipping orphan removal for {marker!r}: {exc}", file=sys.stderr)
             continue
         if region is None:
@@ -632,55 +522,10 @@ def _remove_orphaned_gate_regions(text: str, current_markers: "set[str]") -> Tup
 
 
 def _py_resolve_line() -> str:
-    """POSIX `sh` interpreter probe, resolved in-order (python3, python, py)
-    and skipping any hit resolved under `WindowsApps` — a candidate whose
-    path contains that segment (case-insensitively, mirroring
-    `pyresolve._is_store_python`'s `"windowsapps" in path.lower()` check) is
-    the Microsoft Store's non-functional App Execution Alias stub, not a
-    real interpreter; `.cmd` launchers generated by `gen-launcher-shim.py`
-    already filter it (`findstr /I /C:"\\WindowsApps\\"`, walking every
-    `where python.exe` hit rather than only the first) — this mirrors that
-    filter for the emitted `sh` probe, which previously had none and would
-    invoke the stub instead of falling through to a real interpreter.
-
-    Deliberately walks `$PATH` by hand (POSIX `sh` has no `command -v -a`;
-    that flag is a bash/GNU extension) rather than taking `command -v`'s
-    single first hit — the realistic Windows topology this guards is a
-    WindowsApps alias for the SAME candidate name (e.g. `python`) earlier on
-    PATH than a real python.org install of that same name later on PATH, so
-    a design that only falls through to the NEXT NAME on a stub hit (as
-    `pyresolve.py`'s Step-2 `_which()`-per-name loop does, for the
-    in-process case where PATH re-probing per directory isn't needed) would
-    never reach the real interpreter. Probes both the bare candidate and a
-    `.exe`-suffixed form per directory since MSYS/git-bash resolves the
-    extension via `command -v` but a manual `-x` file test does not.
-    No-op on POSIX, where the `WindowsApps` path component never appears.
-
-    Delegates to `coordinator_core.py_probe_sh` rather than hand-rolling the
-    probe — see that module's docstring for the "why one shared
-    implementation" reasoning, and `install_claude_klabauter_precommit_hook.
-    _py_resolve_line`, which shares the same helper. Only the probe is
-    shared; the surrounding gate-block machinery stays independently
-    duplicated (this module's own docstring, "Kept as an independent
-    module").
-
-    The shared form is not a byte-for-byte copy of the inline version it
-    replaces, and the difference is deliberate: the skip test is a pure
-    `case` glob (`*/[Ww][Ii][Nn]...[Ss]/*`) instead of
-    `case "$(printf '%s' "$_py_exe" | tr '[:upper:]' '[:lower:]')"`. Both
-    match `WindowsApps` case-insensitively, but the glob costs no process
-    spawn, where the `tr` form forked a subshell PLUS `tr` for every
-    candidate in every `$PATH` directory. That is emitted into a
-    pre-commit hook, so it ran on every commit — precisely the Windows
-    process-spawn tax this repo treats as break-class rather than as a
-    micro-optimisation."""
     return _py_probe_sh.python_probe_lines("_py")
 
 
 # Named env var for the bash-kind group-level CANNOT-RUN escape hatch, spelled
-# the same way the per-gate override_env fields are (D2, 2026-07-28) — see
-# _bash_group_lines' docstring for why this replaced the old silent
-# `command -v bash || exit 0` shape.
 _BASH_MISSING_OVERRIDE_ENV = "COORDINATOR_OVERRIDE_PRECOMMIT_BASH_MISSING"
 
 
@@ -773,19 +618,10 @@ def _gate_block(gate: _Gate, bin_dir: Path) -> List[str]:
         ]
 
     def _finding_branch() -> List[str]:
-        # Deliberately does NOT honor gate.override_env: unlike the
         # CANNOT-RUN cases above (missing script/interpreter — the gate
-        # never got to run at all), this branch fires only once the gate
-        # script HAS run and returned nonzero — a real finding (or the
-        # script's own exit-2 transport failure). The wrapper-level override
-        # is PM-ruled to bypass only "could not run", never a genuine
-        # finding (see this function's own docstring); a gate that wants its
-        # findings to be overridable exposes its OWN content-check override
         # (as detect-staged-rollback's COORDINATOR_OVERRIDE_PRECOMMIT_MASS_
         # DELETION does internally, before this wrapper ever sees a nonzero
         # code). This is exit-code CLAMPING only: any nonzero `$_gate_rc`
-        # (1, 2, or a future surprise value) surfaces as exactly 1, never the
-        # raw code — see module docstring's "Exit-code clamping".
         return [
             f'    echo "pre-commit: BLOCKED -- gate [{gate.label}] ({gate.marker}) reported a problem '
             '(exit code $_gate_rc) -- see output above." >&2',
@@ -798,18 +634,7 @@ def _gate_block(gate: _Gate, bin_dir: Path) -> List[str]:
         script_line,
         'if [ ! -f "$_gate_script" ]; then',
     ]
-    # Names the runnable script, never "the coordinator installer": a hook
-    # is generated once and then outlives the tree it was generated from, so
-    # the two ways a gate script goes missing are a partial install and a
     # later commit RETIRING that gate. In the second case a vague pointer
-    # sends the operator at an installer the retiring commit may itself have
-    # deleted -- which is exactly what happened when C3 removed
-    # `detect-staged-rollback` together with its installer, leaving every
-    # unmerged clone blocked under a remediation naming something that no
-    # longer existed (state/bug-backlog/2026-08-26-a-deleted-gate-script-
-    # blocks-every-commit-in-an-unmerged-clone.yaml). Naming both routes,
-    # restore and remove, keeps the retired-gate case runnable from the
-    # error text alone.
     lines += _cannot_run_branch(
         "missing script $_gate_script",
         "run coordinator/bin/install-meta-repo-precommit-hook.py to restore it, "
@@ -830,10 +655,6 @@ def _gate_block(gate: _Gate, bin_dir: Path) -> List[str]:
         lines += _finding_branch()
         lines += ["  fi", "fi"]
     elif gate.kind == "bash":
-        # Bash presence is guaranteed by the group-level carve-out
-        # (`command -v bash || exit 0`) already run before any bash-kind
-        # gate reaches here, so there is no separate missing-interpreter
-        # branch to duplicate it.
         lines += [
             "else",
             '  bash "$_gate_script"',
@@ -849,15 +670,6 @@ def _gate_block(gate: _Gate, bin_dir: Path) -> List[str]:
 
 
 def _hook_body(bin_dir: Path, gates: List[_Gate]) -> str:
-    """Assemble a full hook body for exactly `gates` (in registry order).
-
-    Python-kind gates are bash-free by construction and run first,
-    unconditionally — the same "survive on a bash-less box" property the
-    2026-07-28 platform/settings gates were built for. Bash-kind gates (none
-    currently registered — see module docstring) are grouped behind the
-    documented `command -v bash || exit 0` carve-out so their absence stays
-    visibly distinct from a missing-script BLOCKED failure.
-    """
     python_gates = [g for g in gates if g.kind == "python"]
     bash_gates = [g for g in gates if g.kind == "bash"]
 
@@ -884,18 +696,10 @@ def _hook_body(bin_dir: Path, gates: List[_Gate]) -> str:
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
 # post-merge / post-checkout — the RECEIVING-side leg of the 2026-07-28
-# incident cluster. Every gate above fires on the SENDING side (pre-commit)
 # or the AUTHORING side (gen_settings_hooks' own kill-switch check); the
 # incident's actual TRANSMISSION was a `git merge`/`git pull` on the
-# receiving machine, which had no guard at all until this registry.
-# `coordinator-precommit-foreign-platform-check`'s own docstring names this
-# gap explicitly. Shares `_Gate`/`_gate_block`/`_hook_body` with the
-# pre-commit registry above (same shape, different hook filenames + gate
-# list) — adding a post-sync gate is a registry entry here, exactly like
 # adding a pre-commit gate is a registry entry in `_GATE_REGISTRY`.
-# ---------------------------------------------------------------------------
 
 _POST_SYNC_GATE_REGISTRY: List[_Gate] = [
     _Gate(
@@ -912,34 +716,6 @@ _POST_SYNC_HOOK_FILENAMES = ("post-merge", "post-checkout")
 
 
 def _marker_is_installed(text: str, marker: str) -> bool:
-    """Is `marker` present as a REAL gate in `text`, rather than merely as a
-    substring somewhere in it?
-
-    2026-08-25 fix. Membership used to be a bare ``marker in existing_text``.
-    That is true for a marker mentioned in a COMMENT, which silently made the
-    gate un-installable forever: it fell out of `missing_gates` (never
-    appended) and out of `stale_gates` too (no locatable region, so
-    `_gate_is_stale` correctly declines to guess), leaving a registry entry
-    that could never reach the hook. Observed on `~/.claude`'s pre-commit,
-    whose header comment documents that a hand-written
-    `check-no-illegal-paths.sh` was removed — that sentence alone suppressed
-    the `check-no-illegal-paths` gate on every reinstall. Found by
-    `doe-claude-5a` after regenerating that hook, 2026-08-25.
-
-    Presence means either of:
-      - a locatable `# --- Gate: ... (<marker>) ---` region, or
-      - the marker on the CODE portion of a line — the part before any
-        `#` comment, whether the line is comment-only or code with a
-        trailing inline comment.
-
-    The second arm is what preserves the deliberate leave-it-alone behaviour
-    for a legacy or hand-authored hook that references the marker inside a
-    script PATH on a real command line (see `stale_gates`' own note): those
-    are still treated as present and are never clobbered. Only a mention
-    confined entirely to comment text — whole-line or trailing — now counts
-    as absent, and the match against the code portion is word-bounded so one
-    marker can never cross-match as a substring of another.
-    """
     if _find_gate_region(text, marker) is not None:
         return True
     marker_re = re.compile(r"(?<![\w-])" + re.escape(marker) + r"(?![\w-])")
@@ -1052,34 +828,12 @@ def _install_or_append_hook(repo_root: str, hook_filename: str, gates: List[_Gat
     else:
         existing_text = ""
 
-    # Orphan removal — a gate retired OUT of the registry entirely (not
-    # merely bumped) leaves a dead region behind in any hook installed
-    # before the retirement landed; that region still shells out to a now-
-    # deleted script, which would BLOCK every future commit rather than stay
-    # silent. See `_remove_orphaned_gate_regions`'s own docstring. Runs
-    # before missing/stale classification so both are computed against the
-    # already-cleaned text.
     orphaned_gates: List[str] = []
     if hook_exists and existing_text:
         current_markers = {g.marker for g in gates}
         existing_text, orphaned_gates = _remove_orphaned_gate_regions(existing_text, current_markers)
 
     missing_gates = [g for g in gates if not _marker_is_installed(existing_text, g.marker)]
-    # Present-but-stale: marker survived AND its region is locatable (a
-    # `# --- Gate: ... ---` header this module itself would have emitted),
-    # but that region's body no longer carries today's version stamp — see
-    # "Versioned regions" above _gate_version_line. A gate whose marker is
-    # present via raw substring match but whose region can't be located at
-    # all (e.g. a legacy/hand-authored hook that predates the header-comment
-    # shape, or references the marker only inside a script PATH) is left
-    # alone rather than guessed-at — "stale" is only ever a claim this
-    # module can back with a located, replaceable region.
-    #
-    # `bin_dir` is passed so a region that still carries today's version
-    # stamp but points at an engine location that no longer exists counts as
-    # stale too — see `_gate_is_stale`'s "THE PATH AXIS". Without it, moving
-    # the engine clone wedges every commit and reinstalling reports "current"
-    # while fixing nothing.
     stale_gates = [
         g
         for g in gates
@@ -1097,12 +851,6 @@ def _install_or_append_hook(repo_root: str, hook_filename: str, gates: List[_Gat
         print(f"{_PROG}: installed {hook_path}.", file=sys.stderr)
         return 0
 
-    # Existing hook, and at least one gate is missing and/or stale. First
-    # replace every stale gate's region IN PLACE (surgical — see
-    # _replace_stale_gate_regions), then run the append path for whatever's
-    # still genuinely absent, exactly as before. Strip any trailing bare
-    # `exit 0` so appended blocks are reachable, then re-add exactly one at
-    # the end.
     working_text = existing_text
     if stale_gates:
         working_text = _replace_stale_gate_regions(working_text, stale_gates, bin_dir)
@@ -1121,11 +869,6 @@ def _install_or_append_hook(repo_root: str, hook_filename: str, gates: List[_Gat
             addition_lines.append("")
 
     if missing_bash:
-        # Each append gets its own self-contained bash-presence guard (see
-        # _bash_group_lines) rather than relying on a prior guard already in
-        # the file — the guard is now a full if/else block, not a standalone
-        # short-circuit line, so there is no single substring to detect and
-        # reuse across append events.
         addition_lines.extend(_bash_group_lines(missing_bash, bin_dir))
         addition_lines.append("")
 
@@ -1173,11 +916,6 @@ def _default_target() -> Optional[str]:
 
 
 def _resolve_meta_repo_target(target: Optional[str]) -> Optional[str]:
-    """Shared identity guard: resolve `target` to the meta-repo root, or None
-    if it is not a git repo / not the meta-repo. `target=None` means "the
-    caller named no target" and resolves the meta-repo from the environment
-    (`_default_target`), never from cwd. Both `main()` and `main_post_sync()`
-    apply this identically before touching any hook file."""
     if target is None:
         target = _default_target()
         if target is None:
@@ -1264,8 +1002,6 @@ def main_install_all(argv: List[str]) -> int:
     return rc_pre or rc_post
 
 
-# Relocated out of the import block
-# (previously split two contiguous import statements) to sit beside
 # WRITE_SURFACE, which reads it.
 _SENDING_HOOK_FILENAME = "pre-commit"
 """The sending-side hook filename `main()` installs `_GATE_REGISTRY` into.

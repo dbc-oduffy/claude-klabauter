@@ -108,11 +108,8 @@ from coordinator_core.ops.fleet._common import main_worktree_root
 
 _LOG = logging.getLogger(__name__)
 
-#: The two sanctioned handoff_phase values (DoE contract; schema enum).
 _VALID_PHASES = ("continuation", "execution")
 
-#: The four-field execution-authorization stamp, byte-identical to the
-#: pinned convention (plan-execute-session-split.md § Pinned conventions).
 _EXEC_FIELDS = (
     "execution_authorized_by",
     "execution_authorized_at",
@@ -120,12 +117,8 @@ _EXEC_FIELDS = (
     "execution_authorized_note",
 )
 
-#: The optional four-field restamp record (docs/plans/2026-09-23-exec-
-#: authorized-restamp-shape.md § Design; C3). Present on the plan only when an
-#: EM restamp has landed on top of the PM authorization. Copied onto the
 #: execution handoff verbatim, all-or-none, beside _EXEC_FIELDS — mirrors
 #: exec_auth_stamp.RESTAMP_FIELDS byte-for-byte (not imported, to keep this
-#: op's plan-read free of a review_assemble dependency).
 _RESTAMP_FIELDS = (
     "execution_restamped_by",
     "execution_restamped_at",
@@ -133,41 +126,22 @@ _RESTAMP_FIELDS = (
     "execution_restamped_note",
 )
 
-#: Vendored handoff schema path — relative to this file's package location
 #: (mirrors handoff_transition.py's _SCHEMA_PATH).
 _SCHEMA_PATH: Path = (
     Path(__file__).parent.parent / "frontmatter" / "schemas" / "handoff.schema.json"
 )
 
 
-# ---------------------------------------------------------------------------
-# Reply helpers
-# ---------------------------------------------------------------------------
-
-
 def _ok(applied: bool, message: str) -> dict:
-    """Return exit_code=0 reply."""
     return {"exit_code": 0, "applied": applied, "message": message}
 
 
 def _err(message: str) -> dict:
-    """Return exit_code=1 reply (error; no write performed)."""
     _LOG.warning("handoff.stamp_phase: %s", message)
     return {"exit_code": 1, "applied": False, "error": message}
 
 
-# ---------------------------------------------------------------------------
-# Post-mutation validation gate (mirrors handoff_transition.py's _validate_fm)
-# ---------------------------------------------------------------------------
-
-
 def _validate_fm(fm_text: str) -> list:
-    """Parse fm_text as YAML and validate against the vendored handoff schema.
-
-    Returns a (possibly empty) list of error dicts.  Empty → valid.  Catches
-    YAML parse errors and surfaces them as a synthetic error entry, exactly as
-    handoff_transition.py's _validate_fm does.
-    """
     try:
         fm_dict = yaml.safe_load(fm_text) or {}
     except Exception as exc:  # noqa: BLE001
@@ -175,28 +149,7 @@ def _validate_fm(fm_text: str) -> list:
     return validate_frontmatter(fm_dict, _SCHEMA_PATH)
 
 
-# ---------------------------------------------------------------------------
-# Plan-frontmatter read helper
-# ---------------------------------------------------------------------------
-
-
 def _read_plan_exec_fields(plan_path: Path) -> tuple[dict, dict]:
-    """Read the execution_authorized_* quartet, and the optional restamp
-    quartet, off a plan's frontmatter.
-
-    execution_authorized_sha (and, when present, execution_restamped_from_sha)
-    are read as OPAQUE STRING FIELDS and never recomputed / git-hash-object'd
-    (anti-scope, load-bearing — that content-binding check is /pickup's
-    premise-verification job). Raises MutateAbort (via the caller, translated
-    to exit_code=1) if the plan file cannot be parsed or any of the four
-    execution_authorized_* values is missing/empty.
-
-    Returns (exec_values, restamp_values). restamp_values is empty when the
-    plan carries none of the four execution_restamped_* fields (the common
-    case — no EM restamp has landed); schema_validate's
-    _cf_execution_restamp_quartet already enforces all-or-none on the plan
-    itself, so a present field implies the other three are present too.
-    """
     try:
         text = plan_path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -208,11 +161,6 @@ def _read_plan_exec_fields(plan_path: Path) -> tuple[dict, dict]:
 
     values: dict = {}
     missing = []
-    # Unquoted read: execution_authorized_at is an ISO timestamp whose colons
-    # trip serialize_yaml_scalar's structural-quoting, so the plan may carry it
-    # single-quoted. Reading it raw would re-serialize a quoted value on the
-    # handoff (escalating '' escaping on every re-stamp) and would never compare
-    # equal to the handoff's own value in the D1 convergence check below.
     for field in _EXEC_FIELDS:
         value = read_fm_field_unquoted(split.fm_text, field)
         if value is None or not str(value).strip():
@@ -236,12 +184,7 @@ def _read_plan_exec_fields(plan_path: Path) -> tuple[dict, dict]:
 
 
 class _PlanReadError(Exception):
-    """Raised when the cited plan's frontmatter cannot supply the four-field stamp."""
-
-
-# ---------------------------------------------------------------------------
-# Op handler
-# ---------------------------------------------------------------------------
+    pass
 
 
 @register_op("handoff.stamp_phase")
@@ -304,8 +247,6 @@ async def _handler(
             "sole v1 value-source for the execution_authorized_* stamp)"
         )
 
-    # P9: repo_root is required to derive the worktree root (common_dir scope
-    # keying guarantees the command-type invoker always supplies --repo; see
     # ipc.py's _OP_KEY_SCOPE["handoff.stamp_phase"] = "common_dir").
     if repo_root is None:
         return _err(
@@ -315,7 +256,6 @@ async def _handler(
 
     worktree = main_worktree_root(repo_root)
 
-    # Resolve + confine handoff_path to <worktree>/state/handoffs/.
     hp = Path(handoff_path_raw)
     if not hp.is_absolute():
         hp = worktree / hp
@@ -325,7 +265,6 @@ async def _handler(
     if not hp.is_file():
         return _err(f"handoff not found on disk: {handoff_path_raw}")
 
-    # Resolve + confine plan_path to <worktree>/docs/plans/ (execution phase only).
     plan_path: Optional[Path] = None
     if phase == "execution":
         pp = Path(plan_path_raw)
@@ -342,11 +281,6 @@ async def _handler(
     )
 
 
-# ---------------------------------------------------------------------------
-# Blocking RMW body (offloaded via asyncio.to_thread — DR-212 D3 async-loop mandate)
-# ---------------------------------------------------------------------------
-
-
 def _stamp_phase(
     handoff_path: Path,
     phase: str,
@@ -354,16 +288,10 @@ def _stamp_phase(
     handoff_path_raw: str,
     repo_root: Path,
 ) -> dict:
-    """Blocking RMW body — resolves target field values then locks/mutates/writes.
-
-    Reads the plan's four execution_authorized_* fields BEFORE acquiring the
-    handoff's file lock (read-only, no lock needed for the plan file) so a
-    plan-read failure fails loud without ever touching the handoff file.
-    """
     exec_values: dict = {}
     restamp_values: dict = {}
     if phase == "execution":
-        assert plan_path is not None  # guaranteed by caller when phase=execution
+        assert plan_path is not None
         try:
             exec_values, restamp_values = _read_plan_exec_fields(plan_path)
         except _PlanReadError as exc:
@@ -379,8 +307,6 @@ def _stamp_phase(
             )
 
         # Pre-write guard (H-CROSS-EXEC-2): handoff_phase requires kind==session-handoff.
-        # Checked BEFORE the write is attempted, rather than relying on the
-        # post-mutation validate gate alone to catch a wrong-kind target.
         kind = read_fm_field(split.fm_text, "kind")
         if kind != "session-handoff":
             raise MutateAbort(
@@ -389,8 +315,6 @@ def _stamp_phase(
                 f"{handoff_path_raw}"
             )
 
-        # Idempotency (D1): full-target-state convergence — all intended fields
-        # already equal intended values → no-op. Not "is handoff_phase present?".
         current_phase = read_fm_field(split.fm_text, "handoff_phase")
         already_converged = current_phase == phase
         if already_converged and phase == "execution":
@@ -398,11 +322,6 @@ def _stamp_phase(
                 if read_fm_field_unquoted(split.fm_text, field) != intended:
                     already_converged = False
                     break
-        # D1 convergence, extended (C3): the restamp quartet is part of full
-        # target state too. When the plan carries the quartet, the handoff
-        # must carry the same four values; when the plan carries none, the
-        # handoff must carry none (a stale quartet from a prior restamp that
-        # has since been cleared on the plan is not converged).
         if already_converged and phase == "execution":
             if restamp_values:
                 for field, intended in restamp_values.items():
@@ -420,31 +339,18 @@ def _stamp_phase(
                 f"{handoff_path_raw} already handoff_phase:{phase} "
                 f"(full target state) — no-op"
             )
-            return old_text  # byte-identical → locked_rmw skips the write
+            return old_text
 
         fm = split.fm_text
 
-        # handoff_phase — replace if present (phase re-stamp), insert after
-        # 'kind' if absent.
         if read_fm_field(fm, "handoff_phase") is not None:
             fm = replace_fm_field(fm, "handoff_phase", phase)
         else:
             fm = insert_fm_field(fm, "handoff_phase", phase, after_key="kind")
 
-        # Execution-only: write the four-field stamp, anchored in order right
-        # after handoff_phase (each insert/replace re-reads fm so the anchor
-        # chain stays valid across the loop — mirrors _consume's insert-if-
-        # absent re-read discipline in handoff_transition.py).
         if phase == "execution":
             anchor = "handoff_phase"
             for field in _EXEC_FIELDS:
-                # Defense-in-depth: exec_values is provably complete here today
-                # (_read_plan_exec_fields raises _PlanReadError on any missing
-                # field, ~260 lines away — see module docstring), but a bare
-                # exec_values[field] KeyError would escape this closure's own
-                # except (neither MutateAbort/LockTimeout/OSError). Guard
-                # locally so a future refactor of that invariant fails loud
-                # here too, not with an unhandled exception.
                 value = exec_values.get(field)
                 if value is None:
                     raise MutateAbort(
@@ -459,10 +365,6 @@ def _stamp_phase(
                     fm = insert_fm_field(fm, field, value, after_key=anchor)
                 anchor = field
 
-            # Restamp quartet (C3): copy it onto the handoff when the plan
-            # carries it, or remove any stale copy when the plan carries
-            # none. The quartet stays optional throughout — a plan without
-            # one stamps exactly as today.
             if restamp_values:
                 for field in _RESTAMP_FIELDS:
                     value = restamp_values.get(field)
@@ -483,8 +385,6 @@ def _stamp_phase(
                     if read_fm_field(fm, field) is not None:
                         fm = remove_fm_field(fm, field)
 
-        # Post-mutation schema validation gate — raise MutateAbort to skip the
-        # write (mirrors handoff.transition; handoff.stamp has no such gate).
         errors = _validate_fm(fm)
         if errors:
             details = format_validation_errors(errors)

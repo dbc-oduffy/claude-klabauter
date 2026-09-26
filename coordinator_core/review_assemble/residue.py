@@ -122,34 +122,14 @@ from coordinator_core.resolve_coordinator_clone import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-#: The four legal values of a segment's `surface:` frontmatter field.
-#: `shared` applies to every resolved surface; `plan`/`diff`/`roadmap` apply
-#: only when that surface is the one actually resolved this call.
 SEGMENT_SURFACES: tuple[str, ...] = ("plan", "diff", "roadmap", "shared")
 
-#: The three legal values of an explicit `--surface` argument — deliberately
 #: narrower than `SEGMENT_SURFACES` (no `shared`; a caller resolves to a
-#: concrete surface, never to the segment-authoring category). `roadmap` is
-#: reachable ONLY via an explicit `--surface roadmap` — there is no
-#: inference rule for it (no artifact-shape or diff-based heuristic infers
-#: `roadmap`); a caller that has already resolved a roadmap surface passes
-#: it explicitly, same as `plan`/`diff`.
 EXPLICIT_SURFACES: tuple[str, ...] = ("plan", "diff", "roadmap")
 
-#: Windows console-window suppression, matching every other subprocess
-#: call site this package touches (`baton_assemble/__init__.py`,
-#: `baton_assemble/apply.py`) — this repo ships to a Windows-primary
-#: audience (DR-148); a bare `subprocess.run` spawning `git` without this
-#: flag flashes a console window on every invocation.
 _NO_CONSOLE = no_console_creationflags()
 
 
-#: The review-side name for the shared segment-loader's failure type — an
-#: alias, not a subclass, so every existing `except ResidueAssembleError`
-#: call site keeps catching fail-louds raised by the shared loader
-#: (`coordinator_core.contract.residue_segments`) as well as the ones this
-#: module raises directly (e.g. zero applicable segments after filtering).
-#: One exception hierarchy, not two.
 ResidueAssembleError = SegmentLoadError
 
 
@@ -162,14 +142,10 @@ class ResidueUsageError(RuntimeError):
     state is even touched."""
 
 
-#: The one true residue directory, relative to the content root — the
-#: `segment_dir` parameter this module passes to the shared loader.
 _RESIDUE_SEGMENT_DIR = "skills/review/residue"
 
 
 def _residue_dir(content_root: Path) -> Path:
-    """Resolve the one true residue directory relative to *content_root*:
-    ``<content-root>/skills/review/residue``."""
     return content_root / _RESIDUE_SEGMENT_DIR
 
 
@@ -202,9 +178,6 @@ def resolve_repo_root(start: Optional[Path] = None) -> Optional[Path]:
 
 
 def _diff_is_nonempty(repo_root: Path) -> bool:
-    """True when `git diff --stat HEAD` against *repo_root* produces any
-    output. Read-only (no mutation, no fetch) — mirrors the read-only-git
-    posture every computed-skill engine holds."""
     try:
         result = subprocess.run(
             ["git", "diff", "--stat", "HEAD"],
@@ -228,8 +201,6 @@ def _artifact_is_plan_shaped(artifact_arg: str) -> bool:
 
 
 def _ambiguous_surface_judgment_point(artifact_arg: Optional[str]) -> dict[str, Any]:
-    """Build the judgment point this module raises on genuine surface
-    ambiguity — an offer of `plan`/`diff` dispositions, never a verdict."""
     evidence = (
         f"artifact argument {artifact_arg!r} did not resolve to docs/plans/ or a "
         ".md path" if artifact_arg is not None

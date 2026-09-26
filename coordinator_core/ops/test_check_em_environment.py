@@ -31,8 +31,6 @@ def _mk_home(tmp_path: Path, name: str, effort: str | None) -> Path:
 
 def _mk_transcript(tmp_path: Path, name: str, model: str) -> Path:
     p = tmp_path / name
-    # No space after the colons — matches the bash oracle's compact fixture
-    # format and the "model":"..." regex both the bash and Python ports match.
     p.write_text('{"message":{"model":"%s"}}\n' % model, encoding="utf-8")
     return p
 

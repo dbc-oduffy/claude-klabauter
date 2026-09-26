@@ -213,42 +213,16 @@ from coordinator_core.group_em import watch_heartbeat
 from coordinator_core.group_em import watch_spool
 from coordinator_core.session.receiver_state import read_receiver_state
 
-#: Keep the watcher's own duty cycle far under the load norm's 200ms-needs-
 #: a-fix line: the poll interval is 1000x the MEASURED `snapshot()` cost
-#: (arm-time, this box), so the watcher spends well under 0.1% of wall time
-#: reading the registry. Floored at 5s so a near-zero measured cost (the
-#: registry read is a handful of small JSON files) never tightens the loop
-#: toward a busy-poll -- 5s is itself well inside the load norm for a
-#: zero-subprocess, in-process read. `main` prints the resulting interval on
-#: `ARMED`, never a chosen round number standing alone.
 _POLL_INTERVAL_FLOOR_SECONDS = 5.0
 _POLL_INTERVAL_MEASURED_MULTIPLIER = 1000.0
 
-# `_poll_interval_seconds`
-# is measured exactly once, at arm time, and reused unchanged for the rest of
-# the session. A single transient arm-time spike (disk contention, the box
-# momentarily at 50-70 concurrent sessions) can commit the watch to an
-# unreasonably long cadence with no correction for the rest of the session --
-# a measurement taken once cannot be trusted to be representative forever.
-# This ceiling bounds how far one bad sample can push the interval; it does
-# NOT introduce periodic re-measurement inside the loop (that would be a
-# design change to the backoff, considered and deliberately not done here).
 _POLL_INTERVAL_CEILING_SECONDS = 300.0
 
-#: `send_pass.build_send_digest`'s own default -- the watch reuses the SAME
-#: clock rather than a second cooldown window, per the module docstring.
 _COOLDOWN_SECONDS = send_pass.DEFAULT_COOLDOWN_SECONDS
 
-#: Measured (C6 brief): 145 files, `os.scandir` 0.16ms median / 0.34ms max,
-#: reading the first 14 lines of every file 9.4ms total. Frontmatter's
-#: `status:` key is always inside the first 14 lines of every memo this
-#: repo has ever written; 14 is a generous margin over the observed max
-#: (title/from/to/created/status is 5 lines in), not a tight fit.
 _INBOX_FRONTMATTER_HEAD_LINES = 14
 
-#: The one status value that counts as OPEN for this count. Every other
-#: value (`actioned`, `delivered`, `draft`, `draft-awaiting-pm-relay`,
-#: `superseded`) is not a pending item this instrument reports on.
 _INBOX_OPEN_STATUS = "open"
 
 
@@ -261,10 +235,6 @@ def _inbox_frontmatter_status(path: str) -> Optional[str]:
     an unreadable memo is not an open one, but it is also not silently
     dropped from `total_count` -- the caller counts the file either way.
     """
-    # UnicodeDecodeError is a
-    # ValueError subclass, not OSError; an undecodable memo must degrade to
-    # None per this function's own contract, not propagate through
-    # `_inbox_counts`'s uncaught per-entry call and abort the poll tick.
     try:
         with open(path, "r", encoding="utf-8") as fh:
             for i, line in enumerate(fh):
@@ -279,28 +249,6 @@ def _inbox_frontmatter_status(path: str) -> Optional[str]:
 
 
 def _inbox_counts(repo_root: str) -> tuple[int, int, float]:
-    """`(open_count, total_count, taken_at_epoch)` for `repo_root`'s inbox.
-
-    A COUNT WITHOUT THE INSTANT IT WAS TAKEN IS THE DEFECT, NOT A NICETY
-    (C6 brief) -- two correct readings minutes apart cost real
-    reconciliation time when neither carries when it was struck. The
-    instant is read at the START of the scan, before either count is
-    known, so a caller that logs it alongside the counts is dating the
-    read, not the report.
-
-    An absent or unreadable inbox directory answers `(0, 0, taken_at)`
-    rather than raising -- the same posture as `load_prev_parked`'s
-    absent-file answer: a poll that has not yet seen an inbox is not a
-    poll error.
-
-    Resolves `memo_corpus_root` fresh on every call rather than caching the
-    inbox path at module import -- this watcher runs for hours, launched by
-    another Group EM, and is not restarted as part of a migration
-    procedure, so a process-lifetime binding here would freeze at whatever
-    root existed at import and never observe a later migration. The extra
-    `is_dir()`-backed resolution is free against the tick's own seconds-scale
-    budget.
-    """
     taken_at_epoch = time.time()
     corpus_root = memo_corpus.memo_corpus_root(str(repo_root))
     inbox_dir = os.path.join(corpus_root, "inbox")
@@ -319,16 +267,6 @@ def _inbox_counts(repo_root: str) -> tuple[int, int, float]:
 
 
 def _inbox_line(open_count: int, total_count: int, taken_at_epoch: float) -> str:
-    """One INBOX line: count + population name + struck instant, spelled
-    `counts_struck_at`, not a bespoke `taken_at` (C6 brief, C5's ownership).
-
-    `render_struck_count`
-    is inlined here, its one remaining production consumer. The helper existed to
-    stop three surfaces spelling count+population+instant three ways; DoE-claude's
-    contract ruling took `summary_line` off it and the ARMED line spells its own
-    divergent format, so the unification premise no longer held and the helper was
-    surviving on the finding that created it.
-    """
     population = f"inbox memos open, of {total_count} total"
     return (
         f"INBOX {open_count} ({population}) "
@@ -336,41 +274,14 @@ def _inbox_line(open_count: int, total_count: int, taken_at_epoch: float) -> str
     )
 
 
-#: The carried parked map, next to the heartbeat record it accompanies. A held
-#: poll loop keeps `prev_parked` in memory for the life of the session; a
-#: single-tick wake (`--once`, `tick_once`) has no memory at all, and a
-#: transition is a DIFF -- with no prior tick to diff against, every wake sees
-#: either an empty prior (flagging nothing, since `transitions` requires
-#: membership in both) or the whole roster (flagging everyone). Neither is the
-#: answer, so the prior tick is written down.
 _PARKED_STATE_RELATIVE_PATH = os.path.join("state", "group-em-watch-parked.json")
 
-#: What `--once` promises the reader about the NEXT wake, when its caller does
-#: not say. The Group-EM's cron floor is ~23 minutes (the group-em entry
-#: sequence's own cadence), so a wake that named the poll loop's few-second
-#: interval instead would stamp a deadline it cannot meet and read STALE to
-#: every other session within the minute -- the watch reporting itself absent
-#: while working correctly.
 _CRON_FLOOR_INTERVAL_SECONDS = 23 * 60.0
 
 #: `watch_heartbeat._STAMP_FORMAT`, matched deliberately: a reader comparing a
-#: GONE line's `last_seen` against the heartbeat record's `last_tick_at`
-#: should not have to reconcile two renderings of the same instant.
 _GONE_STAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 def _measure_snapshot_ms(repo_root: str) -> tuple[float, list]:
-    """Time one `fetch_live_agents` call on THIS box; return (ms, agents).
-
-    Re-measures rather than trusting the plan's cited 4.6ms cold -- that
-    number was measured on a different box, on a different tick, and this
-    module's poll interval is derived from ITS OWN measurement so the
-    denominator printed on `ARMED` is always this box's own evidence.
-
-    Returns the enumeration itself, not just its length. The arm sequence
-    needs one more fact out of it -- the Group-EM's own display name, for the
-    heartbeat's self-description leg -- and re-reading the registry to get a
-    string this call already held would bill the box twice for one answer.
-    """
     started = time.monotonic()
     agents = read_pass.fetch_live_agents(repo_root)
     elapsed_ms = (time.monotonic() - started) * 1000.0
@@ -378,13 +289,6 @@ def _measure_snapshot_ms(repo_root: str) -> tuple[float, list]:
 
 
 def _holder_name(agents: list, session_id: Optional[str]) -> Optional[str]:
-    """The Group-EM's display name off an enumeration already in hand, or None.
-
-    Resolved ONCE, at arm time. Never per tick: a name on the heartbeat is
-    self-description for a reader that cannot reach this box's registry, and
-    paying a registry read every tick to keep a string fresh would put the
-    load norm's cost on the cheapest thing the watch does.
-    """
     if not session_id:
         return None
     for agent in agents:
@@ -395,12 +299,6 @@ def _holder_name(agents: list, session_id: Optional[str]) -> Optional[str]:
 
 
 def _poll_interval_seconds(snapshot_ms: float) -> float:
-    """Derive the poll interval from this tick's measured `snapshot_ms`.
-
-    See the module-level constants' docstring for the derivation. Never a
-    chosen round number standing alone -- it is always a function of a
-    measurement taken this call.
-    """
     derived = (snapshot_ms / 1000.0) * _POLL_INTERVAL_MEASURED_MULTIPLIER
     bounded = max(_POLL_INTERVAL_FLOOR_SECONDS, derived)
     return min(_POLL_INTERVAL_CEILING_SECONDS, bounded)
@@ -450,13 +348,6 @@ def _classify_all(
     agents: Iterable[dict[str, Any]],
     now: Optional[datetime] = None,
 ) -> dict[str, dict[str, Any]]:
-    """`{session_id: classify_peer(...) verdict}` for every peer with a usable id.
-
-    One call per peer into `read_pass.classify_peer` -- the shared ladder,
-    never a second one. A peer with no usable `sessionId` cannot be keyed and
-    is dropped from the map entirely (it can never transition, so it can
-    never need a line).
-    """
     verdicts: dict[str, dict[str, Any]] = {}
     for peer in agents:
         session_id = peer.get("sessionId")
@@ -467,14 +358,6 @@ def _classify_all(
 
 
 def transitions(prev: dict[str, bool], cur: dict[str, bool]) -> list[str]:
-    """Peers that moved not-parked -> parked this tick, sorted for determinism.
-
-    Membership in BOTH maps is required -- a peer absent from `prev` (a
-    spawn, including one born already parked) or absent from `cur` (an exit)
-    never appears here, matching the module docstring's transition table.
-    `parked -> parked` (both `True`) and `not-parked -> not-parked` (both
-    `False`) are excluded by the boolean comparison itself.
-    """
     return sorted(
         session_id
         for session_id, parked_now in cur.items()
@@ -483,31 +366,10 @@ def transitions(prev: dict[str, bool], cur: dict[str, bool]) -> list[str]:
 
 
 def gone(prev: dict[str, bool], cur: dict[str, bool]) -> list[str]:
-    """Peers present on the prior tick and absent from this one, sorted.
-
-    The mirror of `transitions`, and the same shape of answer: a pure
-    set-difference over two already-computed maps, no roster read, no
-    liveness probe, no `status`. Membership in `prev` and absence from `cur`
-    IS the event -- see the module docstring for what that absence does and
-    does not claim, and for why an unreadable registry must raise upstream
-    rather than arrive here as an empty `cur`.
-
-    `prev`'s VALUES are unread. Whether a peer was parked or working when it
-    was last seen changes nothing about its having left; the parked map is
-    reused as the prior peer set only because it is already the thing this
-    module carries across ticks, not because parking is part of the
-    predicate.
-    """
     return sorted(session_id for session_id in prev if session_id not in cur)
 
 
 def _obligation_summary(repo_root: str, session_id: str) -> str:
-    """The PARKED line's obligations field -- NAMES, never a count.
-
-    `None` (no ledger at all -- a producer coverage gap) renders literally
-    `no ledger`, distinct from `[]` (a ledger with nothing currently owed,
-    `none`) per `obligations.for_peer`'s own negative spec.
-    """
     records = obligations.for_peer(repo_root, session_id)
     if records is None:
         return "no ledger"
@@ -521,15 +383,6 @@ def _obligation_summary(repo_root: str, session_id: str) -> str:
 
 
 def _stamped_age_seconds(repo_root: str, session_id: str, now: datetime) -> Optional[float]:
-    """The reader's own `stamped_at` age in seconds, or `None` if unreadable.
-
-    Read directly rather than trusting `verdict["reason"]` to carry it --
-    the reader record may not exist at all (fallback-leg peers), and even
-    when it does, `classify_peer`'s verdict dict does not surface the raw
-    stamp. `read_pass._staleness_seconds` is the same private arithmetic
-    `classify_peer` already uses for its own stale-snapshot cross-check;
-    reused here rather than duplicated.
-    """
     record = read_receiver_state(session_id, repo_root)
     if record is None:
         return None
@@ -566,10 +419,6 @@ def _transcript_idle_seconds(
     only then is a read paid here -- a first read, not a second.
     """
     if activity_epoch is None:
-        # a bare `_` loses the reader's cue that the discarded element is a
-        # trust/confidence flag, not just "the other tuple slot". `_trusted`
-        # documents the discard; Pyright's unused-variable complaint is
-        # satisfied because it still starts with `_`.
         activity_epoch, _trusted = read_pass.transcript_activity_epoch(
             session_id, cwd or repo_root
         )
@@ -590,13 +439,6 @@ def _cooldown_active(
     peer_session_id: str,
     now: float,
 ) -> bool:
-    """Is this peer within `send_pass`'s own offer cooldown right now?
-
-    Reads the SAME log and SAME key `build_send_digest` arms on every offer
-    (module docstring: "a peer answered on either path is answered on
-    both") -- never a second mechanism and never an operator-maintained mute
-    list.
-    """
     log = send_pass.read_send_log(repo_root, caller_session_id)
     key = send_pass.offer_key(caller_session_id, peer_session_id)
     remaining = send_pass._cooldown_remaining(log, key, now, _COOLDOWN_SECONDS)
@@ -751,21 +593,6 @@ def _refuse_if_already_armed(
     writer_session_id: str,
     now_epoch: Optional[float] = None,
 ) -> None:
-    """Raise `WatchAlreadyHeldError` iff a FRESH, FOREIGN holder already
-    holds this repo's watch; otherwise return silently.
-
-    Reads the SAME on-disk record `watch_heartbeat.stamp` reads before its
-    own decline, via the same tolerant reader (`_read_record` -- absent and
-    unreadable both answer "no record", which arms cleanly) and the SAME
-    shared predicate (`is_fresh_and_foreign`) C1 already exports for exactly
-    this reuse. A second freshness/foreignness opinion invented here would
-    drift from the write-side guard the first time either changed.
-
-    Never improvises a second poller and never arms anyway with a warning --
-    the module docstring's negative spec ("No re-arming step ... nothing in
-    this module fires itself") extends to this: an arm that cannot win the
-    check does not fall back to arming quietly, it refuses.
-    """
     now_epoch = time.time() if now_epoch is None else now_epoch
     record = watch_heartbeat._read_record(watch_heartbeat.watch_path(repo_root))
     if not watch_heartbeat.is_fresh_and_foreign(
@@ -783,12 +610,6 @@ def _refuse_if_already_armed(
 
 
 def _declination(session_id: str, gate: str, reason: str) -> dict[str, Any]:
-    """One heartbeat declination row.
-
-    `name` is always `None`: a name is an address that re-points, and the
-    record's reader already prefers the live registry row over any stored
-    copy (`watch_heartbeat`'s WHO THE HOLDER IS note).
-    """
     return {"session_id": session_id, "name": None, "gate": gate, "reason": reason}
 
 
@@ -863,27 +684,8 @@ def poll_once(
         for sid in cur_parked
     }
 
-    # GONE FIRST. A tick that reports a departure and a parking reads in the
-    # order the fleet changed: the peer that left is no longer a candidate
-    # for anything below, and a reader scanning `Monitor` output should not
-    # meet a PARKED line for a roster that has since shrunk.
-    # (accepted) -- GONE was previously gated on `report_gone`, a caller-set
-    # flag that suppressed this loop for a tick whose on-disk prior was
-    # judged too old. GONE is terminal and self-limiting (module docstring:
-    # a departed session id leaves `cur_parked` the tick it is reported and
-    # cannot recur for the same disappearance), so a burst after an outage is
-    # N truthful lines, once, never a repeating firehose -- the Monitor
-    # auto-stop failure mode this used to guard against belongs to `main`,
-    # which holds its own prior in memory and never reaches this on-disk
-    # path at all. Nothing replaces the gate.
     watched_repo = os.path.basename(os.path.abspath(str(repo_root))) or str(repo_root)
     for session_id in gone(prev_parked, cur_parked):
-        # The watcher's own id and the Group-EM's are excluded from BOTH
-        # rosters by `_current_agents`, so neither can appear here --
-        # unless the exclusion set itself changed between ticks (a wake
-        # given a different `--group-em-session-id` than the last one).
-        # That is a changed question, not a departed peer, and reporting
-        # the Group-EM as gone to the Group-EM is the worst way to say so.
         if session_id in (caller_session_id, group_em_session_id):
             continue
         prior = (prev_names or {}).get(session_id) or {}
@@ -935,25 +737,10 @@ def poll_once(
 
 
 def parked_state_path(repo_root: str) -> str:
-    """Absolute path of the carried parked map for `repo_root`."""
     return os.path.join(repo_root, _PARKED_STATE_RELATIVE_PATH)
 
 
 def load_prev_parked(repo_root: str) -> dict[str, bool]:
-    """The prior tick's `{session_id: parked}`, or `{}` when there is none.
-
-    Absent, unreadable, and malformed all answer `{}` -- the same answer as a
-    first tick. A wake that cannot read its own prior state must not be able to
-    turn that into a flood of PARKED lines for peers nobody just observed
-    changing: `transitions` requires membership in BOTH maps, so an empty prior
-    emits nothing and the NEXT wake reports the transitions honestly.
-
-    Deliberately NOT aged out. A prior map written hours ago is stale, but a
-    peer that parked in the meantime is exactly what the fleet wants surfaced,
-    late rather than never; the send-pass cooldown is what stops an
-    already-answered peer being raised twice, and it does that on its own
-    clock rather than this one.
-    """
     payload = _load_prev_record(repo_root)
     parked = payload.get("parked")
     if not isinstance(parked, dict):
@@ -966,16 +753,6 @@ def load_prev_parked(repo_root: str) -> dict[str, bool]:
 
 
 def load_prev_peers(repo_root: str) -> dict[str, dict[str, Any]]:
-    """The prior tick's `{session_id: {"name", "last_seen"}}`, or `{}`.
-
-    Projected off the SAME record `load_prev_parked` reads (see
-    `_load_prev_record`), tolerant of its absence: a record written before
-    this field existed carries `parked` and nothing else, and the honest
-    degrade is GONE lines without a name, never a refusal to report the
-    departure at all. The parked map alone is a sufficient prior peer SET
-    (`gone` reads only its keys); this adds only what the line needs to be
-    actionable.
-    """
     payload = _load_prev_record(repo_root)
     peers = payload.get("peers")
     if not isinstance(peers, dict):
@@ -988,16 +765,6 @@ def load_prev_peers(repo_root: str) -> dict[str, dict[str, Any]]:
 
 
 def _load_prev_record(repo_root: str) -> dict[str, Any]:
-    """Open, parse, and shape-check the carried prior-state record ONCE.
-
-    raised outside its own scope but flagged as staff-eng's -- `load_prev_parked`
-    and `load_prev_peers` used to each independently `open()`/`json.load()` the
-    same `parked_state_path(repo_root)` file, so `tick_once` paid two opens and
-    two parses of one small record on the same tick, and the record's shape was
-    asserted in two places that had to agree. One reader, two projections.
-    Absent, unreadable, and malformed all answer `{}` -- the same answer as a
-    first tick.
-    """
     try:
         with open(parked_state_path(repo_root), "r", encoding="utf-8") as fh:
             payload = json.load(fh)
@@ -1011,31 +778,10 @@ def save_prev_parked(
     parked: dict[str, bool],
     peers: Optional[dict[str, dict[str, Any]]] = None,
 ) -> bool:
-    """Write this tick's parked map for the next wake to diff against.
-
-    `peers` carries each seen peer's name and last-seen epoch forward, so the
-    NEXT tick can name a session that has left by then -- the one fact a
-    departed peer's line cannot re-derive.
-
-    Same posture as the heartbeat stamp it sits beside: returns False on I/O
-    failure, never raises. A lost map costs one tick's transitions, never the
-    watch.
-    """
     payload: dict[str, Any] = {"parked": dict(parked)}
     if peers is not None:
         payload["peers"] = dict(peers)
     return watch_heartbeat.write_atomic(parked_state_path(repo_root), payload)
-
-
-# ---------------------------------------------------------------------------
-# Boilerplate shared verbatim between `main` and `tick_once` -- hoisted per
-# overengineering-reviewer (finding #5, nitpick, accepted). The two entry
-# points are genuinely two lifecycles (loop-vs-exit, prior state on disk vs
-# in memory, loud vs swallowed failure -- see each docstring); only the
-# surrounding id-defaulting, emit closure, and error-line format were a
-# character-identical fork that would drift the first time one of them
-# changed and not the other.
-# ---------------------------------------------------------------------------
 
 
 def _resolve_caller_and_gem_ids(
@@ -1063,8 +809,6 @@ def _resolve_caller_and_gem_ids(
 
 
 def _emit_for(stream: TextIO) -> Callable[[str], None]:
-    """The `emit(line)` closure both entry points build over their own
-    resolved output stream -- print + flush, nothing else."""
 
     def emit(line: str) -> None:
         print(line, file=stream, flush=True)
@@ -1155,21 +899,11 @@ def tick_once(
 
     prev_parked = load_prev_parked(repo_root)
 
-    # ONE instant for the whole tick, captured before the classify and reused
-    # for the heartbeat stamp below -- `poll_once` would otherwise take its
-    # own. Not threaded into `_prune_spool`: `watch_spool.prune` takes its
-    # own `now_epoch` default and is a lazy, hysteresis-gated housekeeping
-    # call, not a per-tick drain against this instant (`watch_spool` module
     # docstring, "LAZY, WITH HYSTERESIS").
     tick_now = now if now is not None else datetime.now(timezone.utc)
 
     try:
-        # `prev_inbox_open=None`: a single-tick wake carries no memory
-        # across wakes (same posture as `prev_parked` in the module
         # docstring's CONCURRENT WAKES note) and there is no on-disk carry
-        # for this count today, so every `tick_once` wake is a first tick
-        # for the inbox line -- it never fires here, only on `main`'s held
-        # loop, which is the surface a rise is worth a line on.
         cur_parked, declinations, peer_notes, _cur_inbox_open = poll_once(
             repo_root,
             caller_session_id,
@@ -1186,21 +920,8 @@ def tick_once(
             pass
         return 1
 
-    # Emit happens
-    # inside `poll_once`, above, strictly BEFORE this persist step, and that
-    # ordering is deliberate, not incidental. Work both failure directions:
-    # if persistence raised AFTER a successful emit, the current order
-    # leaves the departed peer in the OLD prior map, so the next tick reports
     # it again (a DUPLICATE line); the reviewer's suggested reorder
-    # (persist-then-emit) would instead retire the peer from the map before
-    # any line was ever printed, so a persistence failure at that point loses
     # the departure SILENTLY -- the exact "fleet went quiet and nobody said
-    # so" failure this module exists to remove. A duplicate GONE is noise a
-    # reader can discard; a dropped one is not. Kept as emit-then-persist on
-    # that basis (accepted risk: `watch_heartbeat.write_atomic`, the thing
-    # `save_prev_parked`/`stamp` bottom out in, is contractually non-raising
-    # today; see `test_gone_emits_even_when_persistence_raises` below, which
-    # pins that emission does not depend on persistence succeeding).
     save_prev_parked(repo_root, cur_parked, peers=peer_notes)
     watch_heartbeat.stamp(
         repo_root,
@@ -1210,9 +931,6 @@ def tick_once(
         tick_source="cron",
         subscribed_peers=len(cur_parked),
         writer_session_id=caller_session_id,
-        # No `holder_name`: a wake makes no enumeration of its own, so it has
-        # no name to write. `stamp` carries the armed poller's forward rather
-        # than blanking it -- a cheaper answer than a registry read per wake.
     )
     _prune_spool(repo_root)
     return 0
@@ -1278,21 +996,12 @@ def main(
     )
 
     # LATE-BOUND, deliberately. `stream: TextIO = sys.stdout` freezes whatever
-    # stdout was at IMPORT time, so anything that replaces it afterwards -- a
-    # harness wrapping the stream, a test capturing it -- is written past rather
-    # than to. For a process whose entire product is its stdout lines, a stream
-    # captured before the caller existed is the wrong one by default.
     out = sys.stdout if stream is None else stream
     emit = _emit_for(out)
 
     snapshot_ms, agents = _measure_snapshot_ms(repo_root)
     peer_count = len(agents)
     # SAME EXCLUSION AS `_current_agents`, applied to the enumeration already in
-    # hand -- no second registry read. This is the number the heartbeat's
-    # `subscribed_peers` reports a few lines down (`stamp(subscribed_peers=
-    # len(cur_parked))`); printing it here too means a reader comparing the two
-    # never has to re-derive the caller-inclusion rule to explain an
-    # apparent off-by-one between them.
     excluding_caller = read_pass.enumerate_repo_peers(agents, caller_session_id)
     if group_em_session_id is not None and group_em_session_id != caller_session_id:
         excluding_caller = read_pass.enumerate_repo_peers(
@@ -1301,41 +1010,10 @@ def main(
     peer_count_excluding_caller = len(excluding_caller)
     holder_name = _holder_name(agents, group_em_session_id)
     interval = _poll_interval_seconds(snapshot_ms)
-    # The ARMED line is
-    # operator-facing; "denominator" is an internal metric name from the
-    # interval derivation and reads oddly next to "peers" on that surface.
-    # The repo NAME is read off `repo_root`, never written as a literal. A literal
-    # here is rewritten by the publish transform, so source says "claude-klabauter peers" and
-    # the shipped mirror says "claude-klabauter peers" -- and both are printed
-    # whatever `--repo-root` the operator passed. doe-claude-80 measured it against
-    # the published engine 2026-08-31: --repo-root X:/DoE-claude printed "3
-    # claude-klabauter peers", X:/claude-klabauter printed "14 claude-klabauter peers".
-    # The COUNTS tracked the flag correctly, so only the label lied. That is the worse
-    # half: a Group EM arming for DoE reads a foreign repo name beside a plausible
-    # count and the honest conclusion is that the watch is pointed at the wrong repo,
-    # so the failure lands as a stand-down rather than an error.
     resolved_root = os.path.abspath(str(repo_root))
     watched_repo = os.path.basename(resolved_root) or str(repo_root)
     # THE RESOLVED PATH GOES ON THE LINE, not just the derived name -- the
-    # name alone survives a mangled root and reads healthy anyway; full
-    # incident: `repo_root_arg`'s module docstring. `_cli` refuses that root
-    # outright; this is the second line of defence for callers that reach
-    # `main` without passing through it.
-    #
-    # This
-    # comment used to retell the incident (mangled path, publish-mirror
-    # consequence) at full length, the third of four full retellings across
-    # this diff. Reduced to a pointer.
-    # ROSTER NAME AND STRUCK INSTANT, beside the count. `peer_count` includes
-    # this caller (see `_current_agents`'s docstring -- this measurement runs
-    # BEFORE the watcher excludes itself), which is the opposite population
-    # from the heartbeat's `subscribed_peers` (caller excluded). Naming both
-    # here, plus the instant this enumeration was taken, is what lets a reader
-    # tell a real fleet change from a gap inferred between two differently-
-    # defined lines (module's C5 note).
     armed_struck_epoch = time.time() if now_epoch is None else now_epoch
-    # External module, use the
-    # promoted public name; `_iso` is the private alias `iso_instant` retired.
     armed_struck_at = watch_heartbeat.iso_instant(armed_struck_epoch)
     emit(
         f"ARMED peer_count={peer_count} {watched_repo} peers at {resolved_root}, "
@@ -1346,24 +1024,13 @@ def main(
     )
 
     prev_parked: dict[str, bool] = {}
-    # Held in memory alongside `prev_parked`, for the same reason and with
-    # the same lifetime.
     prev_names: dict[str, dict[str, Any]] = {}
-    # `None` until the first tick strikes a count -- the honest no-prior
-    # answer, same as `prev_parked` starting empty. Held for the loop's
-    # life, same lifetime as `prev_parked`/`prev_names` above.
     prev_inbox_open: Optional[int] = None
     iterations = 0
     while max_iterations is None or iterations < max_iterations:
         declinations: list = []
         tick_now = datetime.now(timezone.utc)
         try:
-            # The loop
-            # used to reassign `prev_parked` from this return, so every line
-            # below it read the CURRENT map under a name saying previous, and
-            # `subscribed_peers` in particular reported a coverage figure whose
-            # own variable name argued it was stale. The rebind to `prev_parked`
-            # is the last statement of the iteration, where it means what it says.
             cur_parked, declinations, peer_notes, cur_inbox_open = poll_once(
                 repo_root,
                 caller_session_id,
@@ -1374,42 +1041,18 @@ def main(
                 prev_names=prev_names,
                 prev_inbox_open=prev_inbox_open,
             )
-            # A stamp failure is a missed tick, never a reason to stop
-            # watching -- `stamp` returns False rather than raising, and the
-            # next tick rewrites the whole record anyway.
-            #
-            # `emit`
-            # inside `poll_once`, above, runs before `prev_parked`/
-            # `prev_names` are rebound below, same deliberate emit-then-
-            # persist ordering as `tick_once` (see the matching comment
-            # there for the two failure directions worked out in full):
-            # kept because a duplicate GONE next tick is strictly cheaper to
-            # read than a silently dropped one, and today's persistence path
-            # (`watch_heartbeat.write_atomic`) does not raise in practice.
             stamped = watch_heartbeat.stamp(
                 repo_root,
                 holder_session_id=group_em_session_id or "",
                 declinations=declinations,
                 interval_seconds=interval,
                 # THE PEERS THIS TICK ACTUALLY LOOKED AT, never the default 1.
-                # A watch subscribed to one peer and a watch covering the whole
-                # repo were indistinguishable from every artifact on disk:
-                # measured 2026-09-01 by the Group-EM of this repo, whose record
-                # read `subscribed_peers: 1` against a live population of 10-18.
-                # A coverage figure nobody writes is a coverage figure nobody
-                # can question.
                 subscribed_peers=len(cur_parked),
                 holder_name=holder_name,
                 writer_session_id=caller_session_id,
             )
             if not stamped:
                 # ITEM 1 (the memo's gated ask): DISPLACED-WATCH TEARDOWN.
-                # A same-holder writer or `tick_source` mismatch is the same
-                # crown's other instrument declining and stays a quiet
-                # decline (`displacement_record` returns `None` for both) --
-                # this only fires on a HOLDER mismatch, the E1/E2 shape the
-                # memo reproduces: a successor entered and took the record,
-                # and this watch is no longer the one to keep polling it.
                 displaced_by = watch_heartbeat.displacement_record(
                     repo_root, group_em_session_id or "", caller_session_id
                 )
@@ -1421,21 +1064,8 @@ def main(
             prev_names = peer_notes
             prev_inbox_open = cur_inbox_open
         except Exception:
-            # Reporting
-            # an error must never be able to fail worse than the error itself.
-            # A broken stream at the moment a poll raises would otherwise
-            # propagate out of `main` uncaught, ending the watch silently --
-            # exactly the "indistinguishable from a quiet repo" failure this
             # module's COVERAGE contract exists to prevent.
-            #
-            # This
-            # catches `stamp`'s `ValueError` on an invalid `tick_source`
-            # identically to a genuine I/O miss, printing both as the same
             # POLL-ERROR line. That collapse is deliberate for now: both call
-            # sites pass a fixed, valid literal (`"cron"`/the loop's own
-            # constant), so the ValueError branch is dead code today, a
-            # caller bug rather than an environmental failure. Revisit if
-            # `tick_source` ever becomes caller-controlled.
             try:
                 emit(_poll_error_line())
             except Exception:
@@ -1498,10 +1128,6 @@ def _cli(argv: "list[str] | None" = None) -> int:
         help="Session arming the watch. Defaults to the harness's own session id; "
              "never guessed from roster shape.",
     )
-    # Pre-2026-09-01 spelling; accepted, unadvertised. Rationale + retirement
-    # condition: group_em/tests/test_deprecated_crown_flag_alias.py
-    # Collapsed duplicated 9-line rationale
-    # to a pointer; full argument lives in the test file (also the delete unit).
     parser.add_argument(
         "--group-em-session-id",
         dest="group_em_session_id",
@@ -1552,9 +1178,6 @@ def _cli(argv: "list[str] | None" = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    # REFUSE A ROOT THIS PROCESS CANNOT STAND ON, before anything reads or
-    # writes through it. An unarmable root used to arm: `peer_count=0` is what a
-    # quiet repo and an unreadable one both print, and the run exited 0.
     try:
         args.repo_root = repo_root_arg.resolve_repo_root_arg(args.repo_root)
     except repo_root_arg.RepoRootArgError as exc:
@@ -1562,24 +1185,10 @@ def _cli(argv: "list[str] | None" = None) -> int:
         return 2
 
     if args.status:
-        # STATUS ANSWERS FOR A HUMAN, and takes no lock, no roster read, no
-        # poll. The record already distinguishes a quiet live watch from a dead
-        # one and from a repo nobody ever armed; before this flag the only
-        # reader of that distinction was another program, so a person asking
-        # "is my watch alive?" got the harness's `idle` -- which every one of
-        # the three states prints. Exit code carries the same three states for
-        # a caller that cannot read prose; 2 is UNKNOWN, never a pass.
         liveness = watch_heartbeat.read_liveness(args.repo_root)
         print(watch_heartbeat.human_verdict(liveness))
         if liveness["verdict"] == watch_heartbeat.VERDICT_ARMED:
-            # ITEM 2 (`--status` false-alive with no process check). A fresh
             # deadline is STALENESS evidence only -- it says the record's
-            # writer kept its own promise, never that the process behind it
-            # is still there. `process_confirmed_alive` is the single-machine
-            # PID witness (never used for item 1's cross-machine holder
-            # question -- see that function's own docstring); anything short
-            # of a confirmed-alive answer must not report ALIVE on
-            # arithmetic alone.
             if watch_heartbeat.process_confirmed_alive(liveness) is not True:
                 print(
                     "  (the record is fresh, but the process that wrote it "
@@ -1591,9 +1200,6 @@ def _cli(argv: "list[str] | None" = None) -> int:
         return 1 if liveness["verdict"] == watch_heartbeat.VERDICT_STALE else 2
 
     if args.once:
-        # A single-shot wake reports its own failure through the exit code --
-        # there is no loop to carry on into, and a wake that exits 0 having
-        # done nothing is the false-green this mode exists to remove.
         return tick_once(
             args.repo_root,
             caller_session_id=args.caller_session_id,
@@ -1609,13 +1215,9 @@ def _cli(argv: "list[str] | None" = None) -> int:
             group_em_session_id=args.group_em_session_id,
         )
     except KeyboardInterrupt:
-        # A stopped Monitor is an ordinary end, not a failure -- exit quietly so
-        # the run does not read as a crash in whatever armed it.
         return 0
     except WatchAlreadyHeldError as exc:
         # NON-ZERO AND NAMED, never a silent no-op: an arm that quietly does
-        # nothing is indistinguishable from an arm that worked, the exact
-        # defect class this refusal exists to remove.
         print(f"group-em-watch: {exc}", file=sys.stderr)
         return 1
     return 0

@@ -58,12 +58,6 @@ publish = _load_publish_module()
 
 @pytest.fixture(autouse=True)
 def _clear_caches():
-    """`_required_pathspec_for_toplevel`/`_git_materialize_ref` are both
-    memoized for the process lifetime by design (the exact property C5
-    relies on: one shadow tree serving both `run_pre_sync_gates` and
-    `dispatch_percolate_inject`). Clear both module-level caches around
-    every test so one test's computed pathspec / extracted shadow can never
-    leak into the next."""
     publish._REQUIRED_PATHSPEC_CACHE.clear()
     publish._MATERIALIZED_REF_CACHE.clear()
     yield
@@ -86,12 +80,6 @@ def _resolved_inject_srcs() -> "list[str]":
     percolate_root, _rung = publish._resolve_percolate_root_and_rung()
     setup_dir = percolate_root / "setup"
     return publish._all_inject_srcs_resolved(setup_dir, percolate_root)
-
-
-# ---------------------------------------------------------------------------
-# AC1: the pathspec covers every contributing root AND every resolved
-# inject src for the archived toplevel.
-# ---------------------------------------------------------------------------
 
 
 def test_pathspec_covers_every_contributing_root_and_inject_src():
@@ -120,13 +108,7 @@ def test_pathspec_covers_every_contributing_root_and_inject_src():
         assert entry in pathspec, f"inject src {src} missing from pathspec: {pathspec}"
 
 
-# ---------------------------------------------------------------------------
-# AC2: an inject src that would have been dropped by naive
-# contributing-roots-only scoping is present in the pathspec — pin the
-# regression the prior executor correctly feared, using the
 # cockpit-contract/LICENSE shape (a real production inject entry, declared
-# in percolate-store.yaml `!`-excluded from its row's own allowlist).
-# ---------------------------------------------------------------------------
 
 
 def test_inject_src_not_covered_by_contributing_roots_alone_is_present():
@@ -151,8 +133,6 @@ def test_inject_src_not_covered_by_contributing_roots_alone_is_present():
     assert license_src.exists(), f"resolved inject src does not exist on disk: {license_src}"
 
     # The regression this pins: LICENSE's containing directory is not a
-    # subtree of any contributing root at all — a naive
-    # contributing-roots-only pathspec would never include it.
     assert not any(
         root in license_src.resolve().parents or root == license_src.resolve()
         for root in contributing_roots
@@ -163,11 +143,6 @@ def test_inject_src_not_covered_by_contributing_roots_alone_is_present():
         f"cockpit-contract/LICENSE inject src {entry!r} missing from pathspec — the exact "
         f"shared-shadow regression C5's dispatch brief names: {pathspec}"
     )
-
-
-# ---------------------------------------------------------------------------
-# AC3: `.percolate-ignore` is named explicitly in the pathspec.
-# ---------------------------------------------------------------------------
 
 
 def test_percolate_ignore_named_explicitly_per_covered_root():
@@ -186,13 +161,6 @@ def test_percolate_ignore_named_explicitly_per_covered_root():
         assert entry in pathspec, f"{ignore_file} not named explicitly: {pathspec}"
 
 
-# ---------------------------------------------------------------------------
-# AC4: fail-loud on an uncovered required root — an empty pathspec for
-# THIS repo's own toplevel raises rather than silently falling back to
-# full-tree.
-# ---------------------------------------------------------------------------
-
-
 def test_empty_pathspec_for_own_toplevel_fails_loud(monkeypatch):
     monkeypatch.setattr(publish, "load_targets", lambda *a, **k: [])
     monkeypatch.setattr(publish, "_all_inject_srcs_resolved", lambda *a, **k: [])
@@ -201,22 +169,9 @@ def test_empty_pathspec_for_own_toplevel_fails_loud(monkeypatch):
         publish._required_pathspec_for_toplevel(publish._REPO_ROOT)
 
 
-# ---------------------------------------------------------------------------
-# F1 regression (Review: code-reviewer): a contributing root tracked at
-# `sha` but absent from the LIVE working tree at pathspec-compute time
-# must still appear in the pathspec — the pre-fix code gated coverage on
-# `.is_dir()`/`.exists()` against the working tree, not `sha`, and would
-# silently drop it.
-# ---------------------------------------------------------------------------
-
-
 def test_root_tracked_at_sha_but_absent_from_working_tree_is_still_covered(tmp_path, monkeypatch):
     # `_required_pathspec_for_toplevel` only scopes `toplevel == _REPO_ROOT`
-    # (§ docstring: any other toplevel is "not this pathspec's business").
     # Point `_REPO_ROOT` at a disposable throwaway repo for the duration of
-    # this test so the fix is exercised through the same code path
-    # `_extract_git_archive` actually uses, without touching this repo's
-    # real tree.
     root = tmp_path / "tracked-repo"
     root.mkdir()
     subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True, creationflags=_NO_WINDOW)
@@ -264,13 +219,6 @@ def test_root_tracked_at_sha_but_absent_from_working_tree_is_still_covered(tmp_p
 
 
 def test_foreign_toplevel_is_not_scoped_and_does_not_fail_loud(tmp_path):
-    """A git toplevel this repo's own configuration declares no coverage
-    for (a throwaway repo, e.g. the one `test_publish_git_archive_eol_
-    regimes.py` builds directly to exercise `_extract_git_archive` in
-    isolation) is explicitly NOT this pathspec's business (dispatch
-    brief) — `_required_pathspec_for_toplevel` returns an empty tuple for
-    it rather than raising, so `_extract_git_archive` falls through to its
-    pre-C5 full-tree behavior for that toplevel unchanged."""
     root = tmp_path / "throwaway-repo"
     root.mkdir()
     subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True, creationflags=_NO_WINDOW)
@@ -299,12 +247,6 @@ def test_foreign_toplevel_is_not_scoped_and_does_not_fail_loud(tmp_path):
     assert pathspec == ()
 
 
-# ---------------------------------------------------------------------------
-# Full-tree-vs-scoped measurement (informational, not an AC gate) — the
-# dispatch brief asks for real numbers, not estimates.
-# ---------------------------------------------------------------------------
-
-
 def test_scoped_extraction_covers_fewer_files_than_full_tree():
     sha = publish._git_rev_parse(publish._REPO_ROOT, "HEAD")
     assert sha is not None
@@ -313,11 +255,6 @@ def test_scoped_extraction_covers_fewer_files_than_full_tree():
     try:
         scoped_files = sum(1 for _ in shadow.rglob("*") if _.is_file())
         assert scoped_files > 0
-        # The measured full-tree count (docs/plans/2026-08-21-the-payload-
-        # proves-itself-before-it-overwrites-the-engine.md, this repo's own
-        # `git ls-files | wc -l`-adjacent scale) is in the 30k+ range; the
-        # scoped extraction must land well under it without pinning an
-        # exact, drift-prone count.
         assert scoped_files < 15000, (
             f"scoped extraction pulled {scoped_files} files — expected well under the "
             "31,213-file full-tree baseline"

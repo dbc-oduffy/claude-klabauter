@@ -30,15 +30,12 @@ from pathlib import Path
 
 import pytest
 
-# Import guard — MUST precede any test so @register_op fires first.
 import coordinator_core.ops.completion_ops  # noqa: F401 — fires @register_op
 
 from coordinator_core import claim_state as _claim_state_module
 from coordinator_core.ops.completion_ops import day_coverage_sweep
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -71,9 +68,6 @@ def _make_git_repo(tmp_path: Path) -> Path:
     (repo / "state" / "handoffs" / ".gitkeep").write_text("", encoding="utf-8")
     (repo / "archive" / "completed" / ".gitkeep").write_text("", encoding="utf-8")
     _git(repo, "add", "-A")
-    # Pinned to a date well outside any test's swept `day` — the sweep is
-    # UTC-day-scoped (`_day_commit_log`), so an undated init commit landing
-    # on "today" would otherwise pollute both partitions' commit counts.
     subprocess.run(
         ["git", "commit", "-m", "chore: initial skeleton"],
         cwd=str(repo),
@@ -87,8 +81,6 @@ def _make_git_repo(tmp_path: Path) -> Path:
 
 
 def _seed_desynced_open_handoff(repo: Path, name: str) -> Path:
-    """A `status: claimed` handoff with NO `claimed_by` on the mirror — only
-    a separately-written claim ledger entry carries the true holder."""
     path = repo / "state" / "handoffs" / name
     content = '---\ntitle: "Desynced Handoff"\nstatus: claimed\n---\n\n# Body.\n'
     path.write_text(content, encoding="utf-8")
@@ -96,9 +88,6 @@ def _seed_desynced_open_handoff(repo: Path, name: str) -> Path:
 
 
 def _write_ledger_claim(repo: Path, handoff_name: str, holder_session_id: str) -> Path:
-    """<common_dir>/coordinator-sessions/handoff-claims/<handoff_name>/session_id
-    — the same dir shape `coordinator_core.claim_state.handoff_claim_dir`
-    derives."""
     claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / handoff_name
     claim_dir.mkdir(parents=True, exist_ok=True)
     (claim_dir / "session_id").write_text(holder_session_id, encoding="utf-8")
@@ -138,11 +127,6 @@ def _today() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
 
-# ---------------------------------------------------------------------------
-# (a) Desynced ledger-only claim — commit reclassified in_flight, not orphaned
-# ---------------------------------------------------------------------------
-
-
 def test_desynced_ledger_claim_reclassifies_in_flight_not_orphaned(tmp_path, monkeypatch):
     repo = _make_git_repo(tmp_path)
     day = _today()
@@ -158,11 +142,6 @@ def test_desynced_ledger_claim_reclassifies_in_flight_not_orphaned(tmp_path, mon
     assert result["orphaned_count"] == 0, result
     assert result["in_flight_count"] == 1, result
     assert result["total_commits"] == 1, result
-
-
-# ---------------------------------------------------------------------------
-# (b) Genuine orphan — no ledger claim, no mirror claim — stays orphaned
-# ---------------------------------------------------------------------------
 
 
 def test_genuine_orphan_still_reported_orphaned(tmp_path, monkeypatch):

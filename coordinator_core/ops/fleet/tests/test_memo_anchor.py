@@ -1,16 +1,3 @@
-"""Tests for `coordinator_core.ops.fleet._memo_anchor`.
-
-Spawns real `git` (`init`, `commit`, `pack-refs`, `gc`) against `tmp_path`
-repos to prove the anchor survives the two operations that would otherwise
-reap it -- packing and garbage collection -- which a faked object store
-cannot demonstrate. Per the spawn ratchet
-(`coordinator_core/tests/test_no_new_spawning_tests.py`), the module-level
-form is required here rather than per-function marks: `_git`/`_init_repo`
-are non-test spawners, so a per-function mark on the `test_*` functions
-alone would be inert against Rule 4's condition (ii).
-
-Spec backlink: docs/plans/2026-09-11-memo-deliveries-survive-the-receiver-s-o.md, chunk C3
-"""
 from __future__ import annotations
 
 import subprocess
@@ -148,9 +135,9 @@ def test_rejected_filename_returns_none(tmp_path, bad_filename):
     [
         "",
         "not-hex-at-all-not-hex-at-all-not-hexxx",
-        "abc123",  # too short
-        "a" * 41,  # too long
-        "A" * 40,  # uppercase, refused rather than normalised
+        "abc123",
+        "a" * 41,
+        "A" * 40,
     ],
 )
 def test_rejected_sha_returns_none(tmp_path, bad_sha):
@@ -169,9 +156,6 @@ def test_resolved_anchor_survives_gc_prune_now_with_no_branch_reaching_it(tmp_pa
     blob_sha = write_anchor(repo / ".git", "gc-memo.md", commit_sha, b"survives gc")
     assert blob_sha is not None
 
-    # Confirm no branch reaches the blob: it is reachable ONLY via the
-    # anchor ref, not via HEAD/any branch tip. `--branches` excludes the
-    # anchor namespace itself, unlike `--all`.
     branch_tree_shas = _git(["rev-list", "--objects", "--branches"], cwd=repo).stdout
     assert blob_sha not in branch_tree_shas
 
@@ -186,27 +170,14 @@ def test_anchor_ref_prefix_shape():
     assert ANCHOR_REF_PREFIX == "refs/coordinator/inbox/"
 
 
-# ---------------------------------------------------------------------------
-# A lost CAS whose ref already equals the
-# intended blob (a peer wrote the identical anchor first) must not be
-# reported as a loss.
-# ---------------------------------------------------------------------------
-
-
 def test_lost_cas_where_ref_already_matches_returns_the_sha(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     _init_repo(repo)
     commit_sha = _seed_commit(repo)
 
-    # A peer already anchored these exact bytes under this exact
-    # filename/commit -- so the ref is already correctly pointed.
     first_sha = write_anchor(repo / ".git", "raced-memo.md", commit_sha, b"same payload")
     assert first_sha is not None
 
-    # This call's own CAS is forced to report a loss (simulating a peer's
-    # write landing between this call's read of `current` and its own CAS
-    # attempt) -- but the ref it re-reads afterward already equals the blob
-    # this call itself would have written, since the bytes are identical.
     import coordinator_core.ops.fleet._memo_anchor as anchor_module
 
     monkeypatch.setattr(anchor_module, "cas_ref", lambda *a, **k: False)
@@ -228,8 +199,6 @@ def test_lost_cas_with_a_genuine_mismatch_still_returns_none(tmp_path, monkeypat
 
     monkeypatch.setattr(anchor_module, "cas_ref", lambda *a, **k: False)
 
-    # No peer has written anything under this ref -- a forced CAS loss here
-    # is a genuine loss, not a same-anchor race, and must stay None.
     result = write_anchor(repo / ".git", "never-written-memo.md", commit_sha, b"x")
 
     assert result is None

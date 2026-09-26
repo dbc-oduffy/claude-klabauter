@@ -89,14 +89,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# 25 MiB: sizes one generation to ~3-4 days of the observed op-latency
-# growth rate (51 MB / 7 days ~= 7.3 MB/day) at the documented 50-70
-# concurrent-session load norm -- see module docstring arithmetic above.
 _ROTATE_THRESHOLD_BYTES = 25 * 1024 * 1024
 
-# Current file + 3 rotated generations ~= 12-16 days of op-latency history
-# at ~100 MiB worst case for that one sink -- meaningfully more than one
-# incident window without being unbounded. See module docstring arithmetic.
 _MAX_GENERATIONS = 4
 
 _logger = None
@@ -111,12 +105,6 @@ def _log():
 
 
 def _generation_path(sink: Path, generation: int) -> Path:
-    """Path for generation ``generation`` of ``sink`` -- ``0`` is the live
-    file itself (``X.jsonl``), ``1..K`` are rotated (``X.1.jsonl``, ...).
-
-    Splits on the LAST suffix only, so ``op-latency.jsonl`` rotates to
-    ``op-latency.1.jsonl`` rather than losing its extension.
-    """
     if generation == 0:
         return sink
     return sink.with_name(f"{sink.stem}.{generation}{sink.suffix}")
@@ -128,20 +116,6 @@ def rotate_if_needed(
     threshold_bytes: int = _ROTATE_THRESHOLD_BYTES,
     max_generations: int = _MAX_GENERATIONS,
 ) -> bool:
-    """Rotate ``sink`` if its current size is at or above ``threshold_bytes``.
-
-    No-op (returns ``False``) if ``sink`` does not exist or is smaller than
-    the threshold -- the overwhelmingly common case, and cheap: exactly one
-    ``os.stat``. Otherwise cascades generations old-to-new via ``os.replace``
-    (oldest generation beyond ``max_generations`` is deleted, never any
-    other), then renames the live file to generation 1, leaving the caller's
-    next append to recreate a fresh, empty ``sink`` from scratch -- see
-    module docstring's concurrency negative-spec for why that is safe under
-    concurrent appenders.
-
-    Never raises -- see module docstring's "Never raises" negative-spec.
-    Returns ``True`` iff a rotation actually happened.
-    """
     try:
         try:
             size = sink.stat().st_size
@@ -182,10 +156,6 @@ def rotate_if_needed(
         return False
 
 
-#: The five known unbounded sinks under ``<git_common_dir>/coordinator-
-#: sessions/logs/`` -- see module docstring purpose paragraph. Named here so
-#: a single cadence-site call (``rotate_all_known_sinks``) can sweep every
-#: one of them without each caller re-enumerating the list.
 _KNOWN_SINK_NAMES = (
     "op-latency.jsonl",
     "agent-audit.jsonl",

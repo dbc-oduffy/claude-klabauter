@@ -1,16 +1,3 @@
-"""test_percolate_gate — pytest tests for coordinator/bin/percolate-gate.py.
-
-Covers the three ported gate-logic subcommands (branch0-gate, scan-secrets,
-inverse-drift) against the contract documented in percolate-gate.py's module
-docstring, itself a direct port of the fences in DoE-claude
-coordinator/skills/percolate/SKILL.md (Branch 0, Step 2c, Step 2d). The
-former `run-pre-ci-hooks` subcommand (Step 5a) was removed 2026-07-24 once
-the declarative engine-side pre-ci guard (`publish.py`'s
-`dispatch_percolate_pre_ci`) reached parity — see docs/plans/2026-07-24-
-extirpate-orphaned-claude-central-publish-shell.md.
-
-Run: python -m pytest coordinator/bin/tests/test_percolate_gate.py -q
-"""
 from __future__ import annotations
 
 import contextlib
@@ -24,15 +11,7 @@ from typing import List
 
 import pytest
 
-# Declared, not excused: the `inverse-drift` tests below spawn real `git`
-# processes because the property under test is real commit-log/rev-parse
-# plumbing (marker-mode anchor resolution, stale-marker fallback) that no
-# mock stands in for. `_init_dest_repo` is invoked per-test, not hoisted to
-# module scope, because each test layers its own distinct commit history on
-# top (mutation-heavy), so a shared repo would leak state across tests. The
 # spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
-# explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
@@ -51,8 +30,6 @@ _mod = _load_module()
 
 
 def _run_cli(args: list[str]):
-    """Invoke main() in-process, capturing stdout/exit code (mirrors the
-    check-*.py test convention of exercising the module's own main())."""
     import io
     import contextlib
 
@@ -61,10 +38,6 @@ def _run_cli(args: list[str]):
         rc = _mod.main(args)
     return rc, buf.getvalue()
 
-
-# ---------------------------------------------------------------------------
-# branch0-gate
-# ---------------------------------------------------------------------------
 
 def _make_percolate_root(tmp_path: Path, target: str, with_hooks: bool = True) -> tuple[Path, Path]:
     percolate_root = tmp_path / "percolate-root"
@@ -108,8 +81,6 @@ def test_branch0_gate_missing_target_entry(tmp_path):
 
 
 def _make_multi_row_root(tmp_path: Path, rows: list[tuple[str, str]]) -> Path:
-    """Seed a percolate root with `rows` of (target, dest) — the shape a real
-    mirror has: several registered targets whose dests nest under one root."""
     percolate_root = tmp_path / "percolate-root"
     setup_dir = percolate_root / "setup"
     setup_dir.mkdir(parents=True)
@@ -153,15 +124,10 @@ def test_branch0_gate_routes_a_multi_row_mirror_to_coordinator_publish(tmp_path)
     route = [line for line in out.splitlines() if line.startswith("route:")]
     assert len(route) == 1, out
     assert "coordinator-publish" in route[0]
-    # Every registered row matched, so the route names no rows back -- only the
-    # typed word, which publish.py resolves as a mirror alias (466e418198) so
-    # the route line runs verbatim.
     assert route[0].rstrip().endswith("coordinator-publish klabauter")
 
 
 def test_branch0_gate_route_names_a_partial_match_explicitly(tmp_path):
-    """When the match is a SUBSET of what is registered, the bare command would
-    publish more than the operator asked for, so the row names are required."""
     rows = _MIRROR_ROWS + [("other-mirror-lib", "X:/other-mirror/lib")]
     percolate_root = _make_multi_row_root(tmp_path, rows)
     rc, out = _run_cli(
@@ -192,7 +158,6 @@ def test_branch0_gate_does_not_route_across_separate_destinations(tmp_path):
 
 
 def test_branch0_gate_names_the_single_near_miss(tmp_path):
-    """One match is a partially-typed name, not a routing question."""
     percolate_root = _make_multi_row_root(tmp_path, _MIRROR_ROWS)
     rc, out = _run_cli(
         ["branch0-gate", "docs-install", "--percolate-root", str(percolate_root)]
@@ -202,8 +167,6 @@ def test_branch0_gate_names_the_single_near_miss(tmp_path):
 
 
 def test_branch0_gate_typo_falls_through_to_registered_names(tmp_path):
-    """A genuine typo matches nothing and must NOT be routed anywhere — the
-    registered list is what distinguishes 'mistyped' from 'never registered'."""
     percolate_root = _make_multi_row_root(tmp_path, _MIRROR_ROWS)
     rc, out = _run_cli(
         ["branch0-gate", "claude-klabautr", "--percolate-root", str(percolate_root)]
@@ -215,8 +178,6 @@ def test_branch0_gate_typo_falls_through_to_registered_names(tmp_path):
 
 
 def test_shares_one_destination_is_path_segment_aware():
-    """`X:/mirror-two` must not read as nested under `X:/mirror` just because
-    the string starts the same way."""
     assert _mod._shares_one_destination(["X:/m", "X:/m/a", "X:/m/b/c"]) is True
     assert _mod._shares_one_destination(["X:/mirror", "X:/mirror-two"]) is False
     assert _mod._shares_one_destination([r"X:\m", "X:/m/a"]) is True
@@ -224,21 +185,12 @@ def test_shares_one_destination_is_path_segment_aware():
 
 
 def test_shares_one_destination_is_case_insensitive():
-    """`X:/Foo` and `x:/foo` are the same directory on Windows -- casing must
-    not make them read as two destinations."""
     assert _mod._shares_one_destination(["X:/Foo", "x:/foo/a"]) is True
     assert _mod._shares_one_destination(["X:/Mirror", "x:/MIRROR-two"]) is False
 
 
 def test_shares_one_destination_does_not_conflate_sharp_s():
-    """Review (code-reviewer on d062782b): `.casefold()` maps `ß` to `ss`, so
-    `X:/aß` and `X:/ass/sub` — two genuinely distinct directories — collapse
-    to the same string and read as nested. The comparison therefore uses
-    `.lower()`, which leaves `ß` alone and matches the simple case mapping
-    Windows uses for path equality. Root selection independently avoids any
-    shortest-string ordering assumption."""
     assert _mod._shares_one_destination(["X:/a\u00df", "X:/ass/sub"]) is False
-    # The genuinely-nested case still resolves, casefold length change and all.
     assert _mod._shares_one_destination(["X:/a\u00df", "X:/A\u00df/sub"]) is True
 
 
@@ -268,14 +220,8 @@ def test_branch0_gate_missing_ignore_file(tmp_path):
     assert "MISSING_IGNORE" in out
 
 
-# ---------------------------------------------------------------------------
-# scan-secrets
-# ---------------------------------------------------------------------------
-
 def test_scan_secrets_high_hit_blocks(tmp_path):
     target_file = tmp_path / "leaky.md"
-    # Assembled at runtime so this source file carries no credential shape: the
-    # publish round's own leak scan reads the published copy of this test.
     token = "sk" + "-" + "abcdefghijklmnopqrstuvwx"
     target_file.write_text(f"here is a token: {token}\n", encoding="utf-8")
     file_list = tmp_path / "files.txt"
@@ -285,7 +231,6 @@ def test_scan_secrets_high_hit_blocks(tmp_path):
     assert rc == 2
     assert "HIGH" in out
     assert "sk-a..." in out
-    # The full secret must not appear verbatim in the redacted panel.
     assert token not in out
 
 
@@ -352,7 +297,7 @@ def test_scan_secrets_identity_machine_local_rung_present_no_note(tmp_path, monk
 
     setup_dir = tmp_path / "setup"
     setup_dir.mkdir()
-    identity_file = setup_dir / ".percolate-identity"  # deliberately absent
+    identity_file = setup_dir / ".percolate-identity"
 
     target_file = tmp_path / "clean.md"
     target_file.write_text("nothing interesting here\n", encoding="utf-8")
@@ -369,15 +314,13 @@ def test_scan_secrets_identity_machine_local_rung_present_no_note(tmp_path, monk
 
 
 def test_scan_secrets_identity_both_rungs_absent_note_fires(tmp_path, monkeypatch):
-    """Both rungs absent -- the NOTE must still fire with its actionable
-    remediation text (genuine-absence case, not regressed by the ladder)."""
     settings_home = tmp_path / "settings-home"
     settings_home.mkdir()
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
 
     setup_dir = tmp_path / "setup"
     setup_dir.mkdir()
-    identity_file = setup_dir / ".percolate-identity"  # absent on both rungs
+    identity_file = setup_dir / ".percolate-identity"
 
     target_file = tmp_path / "clean.md"
     target_file.write_text("nothing interesting here\n", encoding="utf-8")
@@ -393,10 +336,6 @@ def test_scan_secrets_identity_both_rungs_absent_note_fires(tmp_path, monkeypatc
 
 
 def test_tier_medium_python_decorator_not_classified_as_email(tmp_path):
-    """A Python decorator line (`@pytest.mark.parametrize(`) has no local
-    part before `@` — only leading whitespace — so it must not collide with
-    the email-shape alternative, while a real email-shaped identity string
-    on another line still does."""
     target_file = tmp_path / "test_something.py"
     target_file.write_text(
         "@pytest.mark.parametrize(\"x\", [1, 2])\n"
@@ -416,8 +355,6 @@ def test_tier_medium_python_decorator_not_classified_as_email(tmp_path):
 
 
 def test_tier_medium_reserved_test_domain_exempted(tmp_path):
-    """An RFC 2606 reserved test domain (`example.com`) in a fixture is not
-    flagged, but a structurally identical real-shaped domain still is."""
     target_file = tmp_path / "test_fixture.py"
     target_file.write_text(
         '_git(repo, "config", "user.email", "test@example.com")\n'
@@ -434,12 +371,6 @@ def test_tier_medium_reserved_test_domain_exempted(tmp_path):
 
 
 def test_tier_medium_reserved_domain_exemption_is_suffix_anchored(tmp_path):
-    """RFC 2606 exemption must anchor `test`/`invalid`/`localhost` to the
-    domain's complete final label, never a bare-word prefix match (regression
-    introduced by commit 1e99fb2b194f, fixed here). Domains that merely
-    START with a reserved word are real-looking and must still be flagged;
-    only a genuine reserved TLD suffix, or the exact example.com/.net/.org
-    forms, is exempt."""
     target_file = tmp_path / "test_fixture.py"
     target_file.write_text(
         '_git(repo, "config", "user.email", "user@test-domain.com")\n'
@@ -455,11 +386,9 @@ def test_tier_medium_reserved_domain_exemption_is_suffix_anchored(tmp_path):
 
     rc, out = _run_cli(["scan-secrets", "--files", str(file_list)])
     assert rc == 0
-    # Prefix-only matches of a reserved word must still be flagged.
     assert "user@test-domain.com" in out
     assert "user@invalid-corp.io" in out
     assert "user@localhost.internal.io" in out
-    # Genuine reserved-TLD suffixes remain exempt.
     assert "user@foo.test" not in out
     assert "user@sub.example.test" not in out
     assert "user@bar.invalid" not in out
@@ -473,10 +402,6 @@ def _gating_panel(out: str) -> str:
 
 
 def test_tier_medium_placeholders_and_marked_paths_do_not_gate(tmp_path):
-    """Placeholder segments, the RFC 2606 `.example` TLD, and a same-line
-    `abs-path-ok: <reason>` name no machine or person -- every line here is a
-    shape that recurred in the gating panel on every percolate round, and none
-    may reach it."""
     target_file = tmp_path / "docstrings.py"
     target_file.write_text(
         "renders `X:/a` as `X:\\a`\n"
@@ -498,10 +423,6 @@ def test_tier_medium_placeholders_and_marked_paths_do_not_gate(tmp_path):
 
 
 def test_tier_medium_concrete_paths_and_identities_still_gate(tmp_path):
-    """The discharge rules are keyed on the rooted segment and a reasoned
-    marker, never on the file: a real repo segment, a real projects slug, a
-    real email, a bare reason-less marker, an email beside a path marker, and
-    a concrete path sharing a line with a placeholder all still gate."""
     lines = [
         "moved to `X:/claude-klabauter`",
         'registry_set("repos.k", "/x/claude-klabauter")',
@@ -525,9 +446,6 @@ def test_tier_medium_concrete_paths_and_identities_still_gate(tmp_path):
 
 
 def test_tier_medium_interior_root_and_forge_service_addresses_do_not_gate(tmp_path):
-    """A `/x/` sitting MID-path names a ref namespace, not the `x` drive, and a
-    public-forge SSH service address names a service, not a person -- both
-    recurred in the gating panel across whole rounds and neither may reach it."""
     target_file = tmp_path / "shapes.py"
     target_file.write_text(
         '`"delete refs/x/old blobsha"` or `"create refs/x/new blobsha"`\n'
@@ -544,9 +462,6 @@ def test_tier_medium_interior_root_and_forge_service_addresses_do_not_gate(tmp_p
 
 
 def test_tier_medium_real_identities_and_rooted_paths_still_gate(tmp_path):
-    """The two widenings are structural, not literal: a real person at a forge
-    host, the forge service account at a NON-forge host, a drive-rooted path,
-    and a path-rooted `/x/<repo>` all still gate."""
     lines = [
         "contact someone@company.com for access",
         "author someone@github.com owns it",
@@ -568,10 +483,6 @@ def test_tier_medium_real_identities_and_rooted_paths_still_gate(tmp_path):
 
 
 def test_tier_medium_placeholder_under_an_extension_does_not_gate(tmp_path):
-    """An extension is a TYPE, not a name: `y.md` is the placeholder `y`.
-
-    `/x/y.md` is a synthetic fixture path in both segments -- it names nothing
-    on any machine -- and recurred in the gating panel across three rounds."""
     target_file = tmp_path / "fixtures.py"
     target_file.write_text(
         'assert _compose("/x/y.md", is_named=True) == _compose("/x/y.md")\n'
@@ -591,11 +502,6 @@ def test_tier_medium_placeholder_under_an_extension_does_not_gate(tmp_path):
 
 
 def test_tier_medium_real_stem_under_an_extension_still_gates(tmp_path):
-    """Only the stem's own placeholder shape discharges it.
-
-    A real stem under any extension gates, the rooted segment is still what the
-    rule reads -- so `/x/cross-repo/archive/a.md` gates on `cross-repo`, never on
-    its placeholder leaf -- and `/x/claude-klabauter` is untouched."""
     lines = [
         'registry_set("repos.k", "/x/claude-klabauter")',
         'archived to "/x/cross-repo/archive/a.md"',
@@ -654,10 +560,6 @@ def test_scan_secrets_peer_repo_extension(tmp_path):
     assert rc == 0
     assert "project-rag" in out.split("MEDIUM")[1]
 
-
-# ---------------------------------------------------------------------------
-# inverse-drift
-# ---------------------------------------------------------------------------
 
 def _init_dest_repo(tmp_path: Path) -> Path:
     dest = tmp_path / "dest"
@@ -733,11 +635,6 @@ def test_inverse_drift_marker_stale_falls_back(tmp_path):
 
     percolate_root = tmp_path / "percolate-root"
     (percolate_root / "setup" / "percolate-state").mkdir(parents=True)
-    # A genuinely malformed/unresolvable marker (not a full 40-hex SHA) —
-    # `git rev-parse --verify` treats a syntactically valid 40-hex string as
-    # verified without checking object-database presence (a git quirk the
-    # bash oracle's `git rev-parse --verify "$since_ref"` shares faithfully),
-    # so the stale case needs a marker git genuinely can't resolve at all.
     (percolate_root / "setup" / "percolate-state" / "alpha.lastsync").write_text(
         "not-a-real-ref-anywhere", encoding="utf-8"
     )
@@ -786,10 +683,6 @@ def test_inverse_drift_no_marker_30day_fallback_no_hits(tmp_path):
     assert "anchor_mode: 30day-fallback" in out
     assert "Inverse drift" not in out
 
-
-# ---------------------------------------------------------------------------
-# list-targets
-# ---------------------------------------------------------------------------
 
 def _make_multi_target_percolate_root(tmp_path: Path) -> Path:
     percolate_root = tmp_path / "percolate-root"
@@ -854,11 +747,6 @@ def test_list_targets_no_targets_registered_errors_to_stderr(tmp_path):
     assert err_buf.getvalue() != ""
 
 
-# ---------------------------------------------------------------------------
-# resolve-root
-# ---------------------------------------------------------------------------
-
-
 def test_resolve_root_bare_prints_path_only(monkeypatch, tmp_path):
     resolved = tmp_path / "some-root"
     resolved.mkdir()
@@ -906,18 +794,7 @@ def test_resolve_root_ladder_failure_writes_stderr_verbatim_no_stdout(monkeypatc
     assert err.strip() == message
 
 
-# ---------------------------------------------------------------------------
-# Step 2d — pathspec batching and source-path mapping
-#
-# Both regressions here were live defects, found 2026-08-11 while running the
-# klabauter republish: the check crashed on Windows for any target with a few
-# hundred files, and — once it stopped crashing — matched nothing at all,
-# because the file list it is handed is built from SOURCE paths.
-# ---------------------------------------------------------------------------
-
-
 def _run_cli_capturing_stderr(args: list[str]):
-    """_run_cli captures stdout only; Step 2d's fail-loud path writes stderr."""
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         rc = _mod.main(args)
@@ -944,7 +821,6 @@ def drift_repo(tmp_path: Path) -> Path:
 def test_git_log_batched_survives_a_pathspec_set_over_the_windows_cmdline_cap(
     drift_repo: Path,
 ) -> None:
-    """>32767 chars of pathspec must not raise WinError 206."""
     names = [f"file_{i:04d}_{'p' * 60}.py" for i in range(600)]
     for name in names:
         (drift_repo / name).write_text("x\n", encoding="utf-8")
@@ -956,7 +832,6 @@ def test_git_log_batched_survives_a_pathspec_set_over_the_windows_cmdline_cap(
     base = _mod._drift_log_cmd_base(drift_repo)
     lines = _mod._git_log_batched(base, ["--since=30 days ago"], names).drift_lines
 
-    # One commit touched every path; the union must not report it 600 times.
     assert len(lines) == 1
     assert "bulk add" in lines[0]
 
@@ -1006,12 +881,6 @@ def _drift_cli(repo: Path, tmp_path: Path, anchor: str, names: List[str], *extra
 def test_inverse_drift_excludes_the_publishers_own_commits_but_reports_a_hand_edit(
     drift_repo: Path, tmp_path: Path
 ) -> None:
-    """Stamped publish commits in the window are the publisher's, not drift.
-
-    Every round's own commit landed after the anchor, so each round listed
-    the one before it. With a stale anchor that grew to 231 commits on
-    claude-klabauter, all of them stamped publishes, and it fired Step 3.
-    """
     anchor = _head(drift_repo)
     _commit_file(drift_repo, "seed.txt", "published v2\n", f"percolate publish: alpha (1 file(s)){_STAMP}")
     _commit_file(drift_repo, "other.txt", "hand fix\n", "dest-side hand fix")
@@ -1029,9 +898,6 @@ def test_inverse_drift_excludes_the_publishers_own_commits_but_reports_a_hand_ed
 def test_inverse_drift_drops_a_hand_edit_a_later_publish_rewrote(
     drift_repo: Path, tmp_path: Path
 ) -> None:
-    """A hand edit a later publish already rewrote is gone from HEAD, so this
-    sync has nothing of it left to overwrite. A hand edit on a path no later
-    publish touched is still live, and still reported."""
     anchor = _head(drift_repo)
     _commit_file(drift_repo, "seed.txt", "hand edit, since overwritten\n", "overwritten hand edit")
     _commit_file(drift_repo, "live.txt", "hand edit, still live\n", "live hand edit")
@@ -1048,8 +914,6 @@ def test_inverse_drift_drops_a_hand_edit_a_later_publish_rewrote(
 def test_inverse_drift_a_hand_edit_after_the_last_publish_is_still_drift(
     drift_repo: Path, tmp_path: Path
 ) -> None:
-    """Supersession runs one way. A hand edit landing AFTER a publish to the
-    same path is exactly what the next sync overwrites."""
     anchor = _head(drift_repo)
     _commit_file(drift_repo, "seed.txt", "published\n", f"percolate publish: alpha (1 file(s)){_STAMP}")
     _commit_file(drift_repo, "seed.txt", "hand fix on top\n", "hand fix on top of a publish")
@@ -1063,7 +927,6 @@ def test_inverse_drift_a_hand_edit_after_the_last_publish_is_still_drift(
 def test_inverse_drift_recognises_the_stamps_earlier_spelling(
     drift_repo: Path, tmp_path: Path
 ) -> None:
-    """Mirror history before 2026-09-04 carries `[source <sha12>]`."""
     anchor = _head(drift_repo)
     _commit_file(drift_repo, "seed.txt", "published\n", "percolate publish: alpha (1 file(s)) [source 0123456789ab]")
 
@@ -1077,8 +940,6 @@ def test_inverse_drift_recognises_the_stamps_earlier_spelling(
 def test_inverse_drift_a_stamp_mid_subject_is_not_a_publisher_commit(
     drift_repo: Path, tmp_path: Path
 ) -> None:
-    """The stamp is anchored at the subject's end. A hand commit that quotes
-    one, e.g. a revert of a publish, stays drift."""
     anchor = _head(drift_repo)
     _commit_file(drift_repo, "seed.txt", "hand\n", f"Revert \"percolate publish: alpha{_STAMP}\" by hand")
 
@@ -1116,11 +977,6 @@ def test_inverse_drift_json_verdict_counts_exclusions_and_lists_only_drift(
 def test_inverse_drift_maps_source_paths_onto_the_dest_tree(
     drift_repo: Path, tmp_path: Path
 ) -> None:
-    """A source-built file list must still match dest history.
-
-    The pre-fix code appended unresolvable paths verbatim, so git matched
-    nothing and the gate reported "no drift" no matter what had landed.
-    """
     (drift_repo / "seed.txt").write_text("changed in dest\n", encoding="utf-8")
     _git(drift_repo, "commit", "-qam", "dest-authored fix")
 

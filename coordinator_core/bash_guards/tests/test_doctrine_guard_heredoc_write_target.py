@@ -123,8 +123,6 @@ def test_data_heredoc_to_ungoverned_target_allows(label, cmd):
 
 
 def test_strip_data_heredoc_bodies_keeps_program_body_live():
-    """The stripper's own contract: a stdin-program heredoc's body stays
-    inline, a data heredoc's body is stripped to nothing."""
     program = "python3 <<'PY'\nopen('x', 'w')\nPY"
     assert guard._strip_data_heredoc_bodies(program) == program
 

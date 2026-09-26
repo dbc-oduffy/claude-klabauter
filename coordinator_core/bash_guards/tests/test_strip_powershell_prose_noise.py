@@ -40,11 +40,6 @@ _WORKTREE_ADD_RE = re.compile(r"\bworktree\b.*\badd\b")
 
 
 class TestHasErrorFormPassesThrough:
-    """Plain, unquoted command text -- nothing here-string- or
-    quote-shaped -- must be returned with no content lost, since there is
-    nothing to strip. Mirrors the `&> out.txt` `has_error=True` shape the
-    module docstring already measured; this helper's job on that route is
-    to leave the free-text residue intact for the caller's own scan."""
 
     def test_redirect_form_unchanged(self):
         text = "git status &> out.txt"
@@ -55,9 +50,6 @@ class TestHasErrorFormPassesThrough:
 
 
 class TestHereStringBodyStripped:
-    """A here-string body containing `git stash drop` must not surface
-    that phrase in the residue -- it is DATA the caller wrote, not a
-    command being issued."""
 
     def test_literal_here_string_body_stripped(self):
         text = "$doc = @'\nthis writeup mentions git stash drop as history\n'@"
@@ -71,8 +63,6 @@ class TestHereStringBodyStripped:
 
 
 class TestDoubleQuotedSpanStripped:
-    """A double-quoted span containing `worktree add` must not surface
-    that phrase in the residue."""
 
     def test_double_quoted_span_stripped(self):
         text = 'Write-Output "do not run git worktree add here"'
@@ -82,10 +72,6 @@ class TestDoubleQuotedSpanStripped:
 
 
 class TestHazardProseNotDenied:
-    """The real-world shape doe-claude hit today: a hazard-documenting
-    prose string naming a destructive git command inside a quoted block.
-    Once stripped, a caller's free-text pattern for the destructive verb
-    must NOT fire -- this must not deny."""
 
     def test_hazard_prose_in_double_quotes_does_not_match(self):
         text = (
@@ -118,18 +104,12 @@ class TestRealCommandResemblingProseStillDenies:
         assert _WORKTREE_ADD_RE.search(result)
 
     def test_quoted_prose_alongside_real_unquoted_command_still_denies(self):
-        """A command line that BOTH quotes hazard prose AND issues a real
-        unquoted destructive command -- the real command must still be
-        visible after the quoted portion is stripped."""
         text = 'Write-Output "do not run git stash drop"; git stash drop'
         result = strip_powershell_prose_noise(text)
         assert _STASH_DROP_RE.search(result)
 
 
 class TestWordSeamNotGlued:
-    """A stripped span is replaced with a space, never deleted outright,
-    so two words that were only adjacent because of an intervening quoted
-    span never glue into an accidental match across the seam."""
 
     def test_stripped_span_leaves_a_separator(self):
         text = 'echo"mid"word'
@@ -138,9 +118,6 @@ class TestWordSeamNotGlued:
 
 
 class TestUnterminatedQuoteConsumesToEnd:
-    """An unterminated quote (no real closing quote anywhere) consumes to
-    the end of the text -- fail-closed for a scanner, rather than
-    guessing a boundary."""
 
     def test_unterminated_double_quote_strips_to_end(self):
         text = 'Write-Output "this never closes git stash drop'

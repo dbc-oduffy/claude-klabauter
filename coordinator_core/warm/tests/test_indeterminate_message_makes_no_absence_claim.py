@@ -1,15 +1,3 @@
-"""
-coordinator_core.warm.tests.test_indeterminate_message_makes_no_absence_claim
--- pins the retraction of the false "no trace means safe to re-run" claim
-and the fire-and-forget/fail-closed message selection
-(docs/decisions/DR-442-completion-evidence-is-the-engine-s-record-not-the-
-side-effect.md).
-
-Spec backlink: docs/plans/2026-09-23-completion-evidence-contract.md § C3
-
-Test convention: pytest. Invoke via
-``pytest coordinator_core/warm/tests/test_indeterminate_message_makes_no_absence_claim.py -v``
-"""
 
 from __future__ import annotations
 

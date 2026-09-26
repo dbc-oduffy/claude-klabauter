@@ -76,29 +76,15 @@ from coordinator_core.ops.dispatch_emit.op import (
 from coordinator_core.ops.dispatch_emit.queue_emit import QueuePathEscapeError
 from coordinator_core.session.core import resolve_session_id
 
-#: `--out` must land on the ONE surface this CLI is licensed to write over:
-#: a fireable Workflow script. Every other extension is either a doc/spine
-#: (`.md`, clobberable committed prose) or an unrelated file this CLI has
-#: no business overwriting at all.
 _REQUIRED_OUT_SUFFIX = ".workflow.mjs"
 
-#: Exit codes. 0 emission/restamp/fire succeeded; 1 a data/refusal error
-#: (mutually-exclusive params, foreign emission, foreign restamp session,
-#: no-receipt-to-restamp, a non-zero-ERROR emit verdict); 2 usage error
-#: (missing required flag, unresolvable combination).
 EXIT_OK = 0
 EXIT_DATA_ERROR = 1
 EXIT_USAGE = 2
 
-# Exceptions `_dispatch_emit` and `restamp` raise as data/refusal errors —
 # mapped to EXIT_DATA_ERROR, never re-derived here.
-# A bare `ValueError` for a missing required param
-# (e.g. `_dispatch_emit`'s `plan_path`/`output_path`/`profile_dir` checks)
 # lands here as EXIT_DATA_ERROR even though this module's own pre-checks
 # above return EXIT_USAGE for the identical logical error. Not reachable
-# today (every required-param case is pre-checked before `_dispatch_emit`
-# ever raises), but a future required param added on only one side would
-# fire this latent taxonomy mismatch.
 _DATA_ERRORS = (
     InventoryPathConflictError,
     QueuePlanConflictError,
@@ -112,15 +98,10 @@ _DATA_ERRORS = (
 
 
 class _ProfileDirUnresolved(Exception):
-    """No ``--profile-dir`` given and the default location holds no such profile."""
+    pass
 
 
 def _default_profile_dir(profile: str) -> str:
-    """``<coordinator content root>/queue-profiles`` — where the plugin payload
-    carries the DoE-authored profiles every published command emits against
-    without naming a directory. Refuses when ``<profile>.yaml`` is not there, so
-    the error names the probed path rather than surfacing as a bare
-    FileNotFoundError from ``load_profile``."""
     from coordinator_core.resolve_coordinator_clone import (
         ResolveCoordinatorCloneError,
         resolve_content_root,
@@ -226,26 +207,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _default_repo_root_from_cwd() -> "Optional[Path]":
-    """Walk up from the process cwd to the nearest ``.git`` -- the same
-    per-ancestor walk ``op.py :: _repo_root_for_plan`` already does for the
-    plan route, mirrored here for the queue route.
-
-    The queue route's own ``--repo-root``/``target_root`` requirement
-    (``op.py :: QueueRootMissingError``) is real -- ``queue``/``run_dir``
-    containment needs SOME root -- but every published skill's queue-route
-    call omits ``--repo-root`` and still worked before this CLI resolved
-    ``repo_root`` at all, because callers ran it FROM the repo whose queue
-    it was closing. Defaulting from cwd restores that documented call
-    rather than widening the guard: an explicit ``--repo-root`` still wins
-    outright, and a cwd with no ``.git`` ancestor returns ``None``, which
-    keeps today's ``QueueRootMissingError`` refusal exactly as it is now.
-
-    Negative-spec: never shells out (``git rev-parse``) -- a plain parent
-    walk, matching the no-tree-survey discipline the sibling function
-    documents. Never applied to the plan/inventory route, whose own
-    negative-spec (module docstring) keeps ``--repo-root`` genuinely
-    optional and prompt-anchoring only.
-    """
     try:
         here = Path.cwd()
     except OSError:
@@ -376,9 +337,6 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         print("emit-dispatch-workflow: ERROR — --out is required", file=sys.stderr)
         return EXIT_USAGE
 
-    # refuse before anything is written. A ``--out`` naming a
-    # committed spine (or any other non-script path) wrote the emitted
-    # script's TEXT into it and exited 0.
     out_path = Path(args.out_path)
     if not out_path.name.endswith(_REQUIRED_OUT_SUFFIX):
         print(
@@ -408,11 +366,6 @@ def main(argv: "Optional[list[str]]" = None) -> int:
 
     repo_root = Path(args.repo_root).resolve() if args.repo_root else None
     if repo_root is None and is_queue_route:
-        # the queue route's own containment requires SOME root
-        # (op.py :: QueueRootMissingError) -- default it from cwd's own
-        # worktree so the documented call (no --repo-root) works, mirroring
-        # the plan route's own cwd-independent anchor
-        # (op.py :: _repo_root_for_plan).
         repo_root = _default_repo_root_from_cwd()
 
     params: dict = {"force": args.force, "output_path": args.out_path}

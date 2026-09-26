@@ -52,39 +52,15 @@ from pathlib import Path
 from typing import Any, Optional
 
 
-# Negative-spec — these three are imported LAZILY, inside the functions that use
-# them, and must not be restored to module scope. Importing this package is an
-# unavoidable side effect of importing its `cli` leaf (Python executes a parent
-# package before its submodule), so anything at THIS module's scope is paid by
-# the warm entry point that AC1 exists to keep cheap. Measured: the heavy graph
-# was 14.3ms of the leaf's 16.7ms import, ~85% of the cost AC1 forbids. Every
-# call site is inside a function body already; nothing here needs them eagerly.
-#
-# Measured honestly: removing this graph moved the leaf's import from 16.7ms to
-# 15.8ms cumulative. The saving is ~1ms, NOT the ~85% an earlier reading of the
-# cumulative number claimed -- most of the 13.2ms the package still costs is
-# stdlib (`dataclasses`, `subprocess`, `pathlib`, `inspect`) plus the editable-
-# install path finder, shared with every other importer and not attributable
-# here. The reason to keep this lazy is that it makes AC1's stated property
-# actually TRUE, not that it bought back measurable time.
-
-# ---------------------------------------------------------------------------
-# Exit-code contract — locally scoped to this compute-only half, NOT shared
-# with `apply_base`'s mutating-half contract (per computed-skills.md
-# § Exit-code contract, every compute/apply pair defines its own).
-# ---------------------------------------------------------------------------
 EXIT_OK = 0
 EXIT_BUSINESS_FAIL = 1
 EXIT_USAGE = 2
 EXIT_TRANSPORT_FAIL = 3
 
-#: Branch-state trichotomy (AC — "branch-state trichotomy").
 BRANCH_STATE_CLEAN = "clean"
 BRANCH_STATE_NEEDS_RECOVERY = "needs-recovery"
 BRANCH_STATE_DIVERGED = "diverged"
 
-#: Repo-root-relative path to the node ceremony-gate test entrypoint this
-#: module's `d0` directive preserves as the first hard-gate (chunk C6 AC).
 NODE_CEREMONY_TEST_RELPATH = ("coordinator", "tests", "plugin-ecosystem", "run.js")
 
 def node_ceremony_gate_entrypoint(repo_root: Path) -> Path:
@@ -126,9 +102,7 @@ def portability_sweep_entrypoint() -> Path:
 
 
 class _TransportFailure(Exception):
-    """Raised when `brief()` cannot resolve a git worktree root or the git
-    plumbing it reads fails outright — distinct from a business-fail (a
-    resolvable repo whose branch state is merely `diverged`)."""
+    pass
 
 
 def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
@@ -142,10 +116,6 @@ def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
 
 
 def resolve_repo_root(start: Optional[Path] = None) -> Optional[Path]:
-    """Resolves the enclosing git worktree root from `start` (defaults to
-    cwd) via `coordinator_core.git.repo_root.show_toplevel` — the shared
-    cwd-keyed memoized resolution seam. Returns `None` on any failure (not
-    inside a worktree, git unavailable) rather than raising."""
     cwd = start or Path.cwd()
     from coordinator_core.git.repo_root import show_toplevel  # noqa: PLC0415
 
@@ -154,20 +124,6 @@ def resolve_repo_root(start: Optional[Path] = None) -> Optional[Path]:
 
 
 def compute_branch_state(repo_root: Path) -> str:
-    """Computes the clean/needs-recovery/diverged trichotomy from the local
-    ahead/behind count against `origin/main` (`git rev-list --left-right
-    --count origin/main...HEAD`, read-only — no fetch performed here; the
-    skill's own Step 1.5 fetch is what keeps `origin/main` current).
-
-    - 0 behind, 0 ahead -> `clean` (nothing to merge).
-    - behind > 0 -> `needs-recovery` (local main is stale; the skill's
-      Step 0's recovery-branch dance applies).
-    - behind == 0 and ahead > 0 -> `diverged` (this branch carries unmerged
-      work against a current main — the normal merge-in-flight state).
-
-    Falls back to `diverged` (the safest — most-checked — assumption) on
-    any git-plumbing failure the caller has not already turned into a
-    `_TransportFailure` (e.g. no `origin/main` ref resolvable locally)."""
     try:
         proc = _run_git(["rev-list", "--left-right", "--count", "origin/main...HEAD"], repo_root)
     except (OSError, subprocess.SubprocessError):
@@ -216,18 +172,6 @@ def compute_version_bump_proposal(repo_root: Path, *, tag_prefix: str = "v") -> 
 
 
 def _parse_version_tag(value: str, tag_prefix: str) -> Optional[tuple[int, int, int]]:
-    """Parses `value` against the exact `<tag_prefix>MAJOR.MINOR.PATCH`
-    shape `compute_version_bump_proposal` itself parses (three dot-
-    separated all-ASCII-digit segments after `tag_prefix`) — returns `None`
-    on any mismatch rather than raising, so callers can turn a bad override
-    into a loud business-fail instead of a stack trace.
-
-    Segments are checked `seg.isascii() and seg.isdigit()`, not bare
-    `seg.isdigit()` — Python's `str.isdigit()` is True for non-ASCII decimal
-    digits too (e.g. Arabic-Indic `٣`), which `int()` also parses, so a
-    bare `isdigit()` check alone would let a non-ASCII-digit override
-    through validation. (Review: code-reviewer — Finding: `_parse_version_
-    tag`'s `seg.isdigit()` accepts non-ASCII digits.)"""
     if not value or not value.startswith(tag_prefix):
         return None
     body = value[len(tag_prefix):]
@@ -237,16 +181,6 @@ def _parse_version_tag(value: str, tag_prefix: str) -> Optional[tuple[int, int, 
     return tuple(int(seg) for seg in segments)  # type: ignore[return-value]
 
 
-#: Declared disposition VALUES on `version_bump_final` that a bare string
-#: normalizes to a plain `{"disposition": <value>}` rather than an
-#: `override` — kept as a literal tuple, not read back off
-#: `build_judgment_points`, so `normalize_decisions` never has to build a
-#: judgment point (with its lazy `decision_object.judgment` import) just to
-#: normalize a decisions map. `override` itself is excluded on purpose — a
-#: bare string naming "override" literally has no `value` to carry, so it
-#: stays on the existing any-other-string-is-an-override path below and
-#: fails loud through `_resolve_version_override` as a malformed override,
-#: same as before this chunk.
 _VERSION_BUMP_FINAL_BARE_DECLINE = ("decline",)
 
 
@@ -293,12 +227,6 @@ def normalize_decisions(decisions: Optional[dict[str, Any]]) -> dict[str, Any]:
 def _resolve_version_override(
     decisions: dict[str, Any], tag_prefix: str
 ) -> tuple[Optional[str], Optional[str]]:
-    """Reads an already-`normalize_decisions`-normalized `decisions` map
-    for a `version_bump_final` override. Returns `(override_tag, None)`
-    when a well-formed override is present, `(None, None)` when no
-    override disposition is set at all (the `confirmed`/default path),
-    and `(None, error_message)` when an override IS present but fails
-    `_parse_version_tag` — never a silent fallback to the proposal."""
     entry = (decisions or {}).get("version_bump_final")
     if not isinstance(entry, dict) or entry.get("disposition") != "override":
         return None, None
@@ -309,31 +237,10 @@ def _resolve_version_override(
             f"version_bump_final override {value!r} does not match "
             f"the required {tag_prefix}MAJOR.MINOR.PATCH shape"
         )
-    # Reconstructed from the parsed (int, int, int) tuple, NOT the raw
-    # input string — the raw string is what reaches `git tag` verbatim
-    # (`cut_tag_input`/`d2`'s `cut-tag` arg), so this also normalizes away
-    # a leading-zeros shape (e.g. "v01.02.03") that `_parse_version_tag`
-    # accepts but is atypical/non-canonical semver. (Review: code-reviewer
-    # — Findings: raw-string-verbatim-to-git-tag risk, leading-zeros gap.)
     major, minor, patch = parsed
     return f"{tag_prefix}{major}.{minor}.{patch}", None
 
 
-#: Maps a `gate_verdicts` scaffold key to the directive id
-#: `merge_assemble.apply.apply` actually dispatches for it (C3 AC —
-#: `apply()` reads this from `execute_directives`' already-in-hand
-#: `report["results"]`/`report["failed_directive"]`, never re-derives
-#: state execute_directives has already discarded). There is no
-#: `active_branch_guard` directive anywhere in `build_directives` — no
-#: active-branch gate exists in this ceremony, so that key was removed
-#: from the scaffold below rather than left dangling with no CLI to fill
-#: it in (C3 exit (b) judgment for this one key; exit (a) taken for the
-#: gates that DO have a directive — see this module's C3 audit
-#: entry in state/audits/2026-08-08-judgment-point-evidence-merge-assemble.md).
-#: K-001 (state/kill-ledger.md): `coverage_gate`/`d3` removed — the
-#: directive it named (`merge-gate-and-pr coverage-gate`) no longer
-#: exists; `d3` is retired rather than renumbered, so `d4` onward keep
-#: their existing ids.
 GATE_DIRECTIVE_IDS: dict[str, str] = {
     "portability_sweep": "d5",
     "check_no_illegal_paths": "d6",
@@ -369,27 +276,6 @@ def build_gate_verdicts_scaffold() -> dict[str, str]:
 def build_judgment_points(
     *, portability_sweep_result: Optional[str] = None
 ) -> list[dict[str, Any]]:
-    """The judgment residue this chunk's AC names verbatim: ship-verdict,
-    CI-failure interpretation, version-bump final number (PM-confirmed),
-    portability disposition, merge-conflict resolution. Every entry pins
-    `recommendation: None` (AC5c/AC5d discipline shared with `pickup_
-    assemble` and `apply_base`'s own negative-spec: `recommendation` is
-    advisory content for a human/EM reader, never a control-flow input) and
-    is built via the shipped `build_judgment_point`/`build_disposition`
-    constructors (Review: code-reviewer — Finding 1) rather than a hand-
-    rolled dict literal; every `id`/`dispositions`/`recommendation` value
-    is unchanged from the prior hand-rolled shape.
-
-    `portability_sweep_result` is the two-invocation seam: d5 now runs
-    UNGATED (its `depends_on` no longer names `portability_disposition`) and
-    FEEDS this judgment point rather than being gated behind it. On the
-    first pass no sweep result exists yet, so the `portability_disposition`
-    evidence honestly names that (compute-time-scoped, not a permanent
-    claim — d5 already ran, or is about to, in this same apply() pass). On
-    the re-run, the caller threads the sweep's real finding — surfaced in
-    the halted pass's own report — back in as `decisions["portability_sweep_
-    result"]`; `brief()` passes it through here so the disposition is
-    offered against that REAL result, not the point's own absence."""
     from coordinator_core.contract.decision_object.judgment import (  # noqa: PLC0415
         build_disposition,
         build_judgment_point,
@@ -482,30 +368,10 @@ def build_judgment_points(
     ]
 
 
-#: D4 fix default — `pr-body`'s `--ship-verdict` is required TEXT
-#: (`cmd_pr_body` does `args.ship_verdict.rstrip("\n")` directly into the PR
-#: body, it is not a path). d4 only ever dispatches once the `ship_verdict`
-#: judgment point has actually resolved to the `"ship"` disposition
-#: (`disposition_resolves_directive` gates it) — this default names that
-#: fact rather than inventing rationale text `build_directives` has no way
-#: to know at compute time. A caller with real rationale to attach threads
-#: it via `decisions["ship_verdict"]["value"]` (same override shape as
-#: `version_bump_final`, see `_resolve_ship_verdict_text`).
-#: The canonical dashed ceremony name, stamped into the grant record's
-#: `ceremony` field by `d_grant_write` and matched by `d_grant_handback`'s
-#: `--only-ceremony` guard. One constant so the two can never drift: a
-#: mismatch turns the handback into a silent no-op and leaves the grant live
-#: past the ceremony — the unbounded-grant defect the write exists to bound.
 _CEREMONY_NAME = "merging-to-main"
 
 #: Stored VERBATIM in the grant record's `note` (`write_tier_u_grant` never
-#: normalizes it), so an auditor reading a live grant can tell what minted
-#: it. Under `/workweek-complete` Step 16's nested invocation this write
 #: REPLACES workweek's grant (one grant file per session); the guard then
-#: resolves the nesting correctly — this ceremony's handback matches and
-#: fires, and workweek's outer handback finds nothing of its own and
-#: no-ops. Both of workweek's Tier-U consumers fire before Step 16, so
-#: nothing downstream of the replacement needs the outer grant.
 _TIER_U_GRANT_NOTE = (
     "implicit ceremony grant: /merging-to-main — minted after the node "
     "ceremony gate, handed back at d_grant_handback once the post-merge "
@@ -535,13 +401,6 @@ def _resolve_ship_verdict_text(decisions: dict[str, Any]) -> str:
 
 
 def _resolve_release_notes_text(decisions: dict[str, Any], *, cut_tag: str) -> str:
-    """Reads an optional free-text override off `decisions["release_notes"]`
-    (a bare string, or `{"value": "<text>"}` — same two accepted shapes as
-    `version_bump_final`/`normalize_decisions`, checked directly here since
-    `release_notes` gates nothing and so has no judgment-point entry of its
-    own to share). Falls back to a computed default naming the resolved
-    release tag — the "computable" value the EM's brief names — when no
-    override is supplied."""
     entry = (decisions or {}).get("release_notes")
     if isinstance(entry, str) and entry.strip():
         return entry
@@ -734,14 +593,6 @@ def build_directives(
 def _assert_resolves_depends_on_invariant(
     directives: list[dict[str, Any]], judgment_points: list[dict[str, Any]]
 ) -> None:
-    """Structural assertion (C2 AC): every `resolves` id named by any
-    disposition across `judgment_points` must name a directive whose own
-    `depends_on` contains that judgment point's `id`. A dangling `resolves`
-    edge — a judgment point claiming to unblock a directive that no longer
-    (or never did) gate on it — is exactly the defect class this chunk
-    fixes for `portability_disposition`/`d5`; this assertion is what keeps
-    a future edit from reintroducing it silently, here or at any other
-    judgment point/directive pair in this module."""
     depends_on_by_directive_id = {
         directive["id"]: set(directive.get("depends_on") or [])
         for directive in directives
@@ -752,10 +603,6 @@ def _assert_resolves_depends_on_invariant(
             for directive_id in disposition.get("resolves") or []:
                 gating = depends_on_by_directive_id.get(directive_id, set())
                 if point_id not in gating:
-                    # A bare `assert` is stripped under `python -O`, degrading
-                    # this guard to silence on the exact defect it exists to
-                    # catch (precedent: c90b638a5, and claude_klabauter_root.py's
-                    # shim-spec check).
                     raise RuntimeError(
                         f"judgment point {point_id!r} resolves directive "
                         f"{directive_id!r}, but that directive's depends_on "
@@ -828,17 +675,6 @@ def brief(
         and version_bump_final_entry.get("disposition") == "decline"
     )
     if declined_version_bump:
-        # `decline` resolves nothing (no `resolves` on the disposition,
-        # `build_judgment_points`) — d2 stays blocked exactly as it does
-        # when the point is left unanswered, so there is no tag to freeze
-        # into its args yet.
-        #
-        # This leaves `cut_tag_input = None`, so `build_directives` falls
-        # back to its `f"{tag_prefix}0.0.0"` sentinel in d2's args — but that
-        # sentinel is unreachable: d2 stays gated on `version_bump_final` and
-        # `_apply_force_bypass` remaps only d0, so it can never fire while
-        # declined. A footgun for a reader of the raw directive list, not a
-        # live bug (Review: code-reviewer — Finding 3).
         cut_tag_input = None
     else:
         cut_tag_input = override_tag if override_tag is not None else version_bump.get("proposed")

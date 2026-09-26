@@ -61,41 +61,15 @@ from typing import Any, Optional
 from coordinator_core.session import machinery_paths
 
 #: Valid intake ops, mirroring DoE's own closed `_INTAKE_OPS` vocabulary at
-#: the landed sha. Kept as our own tuple rather than importing theirs --
-#: this plane conforms to the wiki contract, not to a cross-repo import.
 _INTAKE_OPS = ("open", "progress", "blocked", "discharge")
 
 _INTAKE_SCHEMA = 1
 
-#: Corpus-mutator declaration (generator-provenance sweep): `record` appends
-#: to `.coordinator-local/subagent-share/<session-id>/obligations-inbound.jsonl` -- one
 #: file per session id, a data-dependent set GENERATES cannot name. Same
-#: extension-scoped glob convention as the sibling counters in this tree
-#: (`guard_advisory_counter.py`, `engine_provenance_counter.py`).
 MUTATES = [".coordinator-local/subagent-share/**/*.jsonl"]
-
-# The filenames and the share-directory join live in `session.machinery_paths`.
-# This module used to retype both AND reach into `send_pass`'s private
-# namespace for the join -- one string typo apart from reading a different
-# file than the module writing it.
-#
-# Call
-# sites below now name `machinery_paths.<name>` directly rather than rebinding
-# aliases, which restored the private-looking-but-foreign symbol the
-# consolidation existed to remove.
 
 
 def for_peer(repo_root: str, session_id: str) -> Optional[list[dict[str, Any]]]:
-    """This peer's open, unfired obligation records, or `None` with no ledger.
-
-    Mirrors `send_pass.undischarged_obligations`'s own read exactly (same
-    path, same "discharged_at is None and not fired" predicate, same
-    malformed-line-skips-not-crashes degrade) but returns the records
-    themselves rather than a count -- the NAMES behind the count, which
-    nothing before this chunk exposed. `None` (no ledger file) and `[]` (a
-    ledger that owes nothing right now) are deliberately distinct; see the
-    module docstring's negative spec.
-    """
     if not machinery_paths.safe_session_id(session_id):
         return None
     path = machinery_paths.ledger_path(repo_root, session_id)
@@ -122,9 +96,6 @@ def for_peer(repo_root: str, session_id: str) -> Optional[list[dict[str, Any]]]:
 
 
 def _validate_row(row: dict[str, Any]) -> Optional[str]:
-    """None if `row` is well-formed against the wiki contract, else a short
-    reason -- checked here so this plane never appends a row its own producer
-    already knows the consumer will quarantine."""
     if row.get("schema") != _INTAKE_SCHEMA:
         return "unsupported schema"
     if not isinstance(row.get("session_id"), str) or not row["session_id"]:

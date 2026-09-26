@@ -60,15 +60,6 @@ def _lock_for(module_name: str) -> threading.Lock:
 
 @contextmanager
 def held_during_load(module_name: str) -> Iterator[None]:
-    """Blocks a second concurrent caller for the same `module_name` until
-    the first caller's `with` block exits, so at most one thread is ever
-    mid-way through registering-then-executing a module under that name.
-
-    The caller is responsible for re-checking its own cache immediately
-    after entry (a concurrent caller may have already finished the load
-    while this one waited for the lock) — this primitive only serializes,
-    it never memoizes.
-    """
     lock = _lock_for(module_name)
     with lock:
         yield

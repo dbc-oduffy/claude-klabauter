@@ -41,8 +41,6 @@ if _LIB_DIR not in sys.path:
 
 
 def _load_module(filename: str, modname: str):
-    """Load one of the hyphenated bin/ scripts as an importable module by
-    file path (hyphens in the filename make a bare `import` impossible)."""
     path = os.path.join(_BIN_DIR, filename)
     spec = importlib.util.spec_from_file_location(modname, path)
     module = importlib.util.module_from_spec(spec)
@@ -62,8 +60,6 @@ def _verdict(verdict: str, resolved_root, sid="sess-x", session_root=None):
 
 
 class _ResolverBranchingMixin:
-    """Shared assertions for a script's zero-arg repo-root resolver
-    function, run against every module under test."""
 
     module = None
     resolver_name = "_resolve_repo_root"
@@ -106,11 +102,6 @@ class _ResolverBranchingMixin:
         self.assertEqual(root, "/repo/unresolved")
 
     def test_unresolved_with_no_root_never_refuses(self):
-        """No git root at all (AC4): the resolver function itself must
-        never raise/exit here -- some scripts fall back to os.getcwd(),
-        others propagate None/exit to their own caller further up (that
-        caller-level behavior is pre-existing and out of C5's scope; this
-        only asserts the resolver call site itself doesn't refuse)."""
         v = _verdict("UNRESOLVED", None, sid=None)
         with mock.patch.object(
             self.module, "resolve_checked_repo_root", return_value=(None, v)
@@ -119,9 +110,6 @@ class _ResolverBranchingMixin:
                 root = self._resolver()()
                 self.assertEqual(root, os.getcwd())
             else:
-                # sys.exit(2) is the documented failure path when no root
-                # resolves at all -- pre-existing behavior, not a new
-                # refusal introduced by the checked-resolver repoint.
                 with self.assertRaises(SystemExit):
                     self._resolver()()
 
@@ -134,8 +122,6 @@ class TestAppendPlanSession(_ResolverBranchingMixin, unittest.TestCase):
     module = _load_module("append-plan-session.py", "c5_append_plan_session")
 
     def test_unresolved_with_no_root_never_refuses(self):
-        """This script's resolver returns None rather than exiting --
-        caller (main()) maps that to exit 1, not the resolver itself."""
         v = _verdict("UNRESOLVED", None, sid=None)
         with mock.patch.object(
             self.module, "resolve_checked_repo_root", return_value=(None, v)
@@ -165,8 +151,6 @@ class TestCoordinatorSessionLoe(_ResolverBranchingMixin, unittest.TestCase):
     resolver_name = "_resolve_git_root"
 
     def test_unresolved_with_no_root_never_refuses(self):
-        """This script's resolver returns None rather than exiting --
-        caller (main()) maps that to 'not inside a git repo', exit 1."""
         v = _verdict("UNRESOLVED", None, sid=None)
         with mock.patch.object(
             self.module, "resolve_checked_repo_root", return_value=(None, v)

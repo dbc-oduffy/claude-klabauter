@@ -74,20 +74,10 @@ from typing import Optional
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet import _sweep_receipt
 
-# Outcomes that mean the sweep actually ran to completion — used both to
-# stamp `last_success_at` and to STOP a trailing failure-streak count (any
-# outcome other than "failed" breaks the streak; these are simply the two
-# outcomes additionally eligible to set `last_success_at`).
 _SUCCESS_OUTCOMES = frozenset({"applied", "nothing-to-do"})
 
 
 def _read_rows(path: Path) -> list:
-    """Read every parseable JSONL row from `path`, oldest-first.
-
-    Never raises: an absent file, an unreadable file, and any individual
-    unparseable line all degrade to "skip it" rather than aborting the whole
-    read — see module negative-spec.
-    """
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
@@ -111,13 +101,6 @@ def _read_rows(path: Path) -> list:
 
 
 def _summarize(rows: list) -> list:
-    """Reduce oldest-first `rows` to one summary dict per `sweep` key.
-
-    `rows` are assumed to already be in the file's on-disk (append) order —
-    oldest first — since `_sweep_receipt.record_sweep_outcome` only ever
-    appends. Per-sweep state is folded in that same order so "last" naturally
-    means "most recently appended", with no separate sort step.
-    """
     by_sweep: dict = {}
     order: list = []
 

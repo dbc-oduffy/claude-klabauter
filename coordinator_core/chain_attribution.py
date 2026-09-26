@@ -64,25 +64,12 @@ from typing import Callable, Dict, FrozenSet, Iterable, List, Mapping, Optional,
 
 from coordinator_core.session_attribution import GitLogFailed
 
-#: Same DI contract session_attribution.GitRunner documents: a "never
-#: raises, returns (rc, stdout, stderr)" helper. Injected rather than owned
-#: here so a caller's existing subprocess conventions (Windows
 #: CREATE_NO_WINDOW, stdin=DEVNULL, etc.) and its existing test-time
-#: monkeypatch hook keep working unchanged.
 GitRunner = Callable[[List[str], Optional[str]], Tuple[int, str, str]]
 
-#: Shape-validates a session_id before it is interpolated into a `--grep`
-#: pattern. `session_id` arrives from on-disk records including the archive
-#: union; unvalidated, a value like `.*` matches every commit and silently
-#: over-credits a peer's range (adjudication § 10.7 item 3). Mirrors
-#: coverage.py's own `_UUID_RE` shape (hex + hyphen), not imported from there
-#: to avoid a coupling this module's remit does not need.
 _UUID_RE = re.compile(r"^[0-9a-fA-F][0-9a-fA-F-]+[0-9a-fA-F]$")
 
-#: Record separator for the one-walk format string below. `\x1e` framing (not
-#: line-based splitting) is what lets a multi-valued Session-Id trailer —
 #: which `%(trailers:...,valueonly)` emits as ONE LINE PER MATCHING TRAILER —
-#: be detected as ambiguous instead of silently truncated to its first line.
 _RECORD_SEP = "\x1e"
 _FIELD_SEP = "\x1f"
 
@@ -91,26 +78,6 @@ _LOG_FORMAT = f"%H{_FIELD_SEP}%P{_FIELD_SEP}%(trailers:key=Session-Id,valueonly)
 
 @dataclass(frozen=True)
 class CommitAttribution:
-    """One commit's attribution evidence from a single window walk.
-
-    `trailer_session_id is None` means the commit carries NO Session-Id
-    trailer at all — distinct from a trailer naming a (single or ambiguous)
-    session, and distinct from the commit being absent from a
-    `bulk_commit_attribution_map` result entirely (which means "outside the
-    walked window", nothing else). That three-way distinction is the entire
-    semantic difference between P1 (`Dict[str, str]`-shaped,
-    untrailered-vs-absent collapsed) and P2, and must never collapse to a
-    two-way one (adjudication § 10.7 item 4).
-
-    `trailer_ambiguous=True` marks a commit whose Session-Id trailer atom
-    contained MORE THAN ONE value (multi-valued trailer) — this module's
-    fail-closed posture treats such a commit as foreign to every session,
-    including its own, unlike `session_session_attribution`'s first-wins
-    posture for the same shape. When ambiguous, `trailer_session_id` is set
-    to the first value only for diagnostic/display purposes — attribution
-    logic MUST check `trailer_ambiguous` first, never infer non-ambiguity
-    from `trailer_session_id` being non-None.
-    """
 
     sha: str
     trailer_session_id: Optional[str]
@@ -277,30 +244,10 @@ def unattributed_foreign_shas(
     cache: Dict[Tuple[str, Optional[str]], FrozenSet[str]],
     run: GitRunner,
 ) -> FrozenSet[str]:
-    """P2 per-range: commits `own_session_id` cannot be shown to have authored.
-
-    Mirrors `session_attribution.trailer_foreign_shas`'s signature exactly —
-    same DI `cache` and `run` seams, same `GitLogFailed` propagation posture
-    — so a caller swaps one for the other without touching its subprocess
-    conventions. NOT a rename or edit of that function (adjudication § 10.7
-    item 5); this is a distinct sibling with a distinct (stricter) posture on
-    ambiguous multi-valued trailers.
-
-    A commit is foreign iff it is a merge, OR its Session-Id trailer names a
-    different session, OR its Session-Id trailer is ambiguous (multi-valued),
-    OR it is untrailered and not grep-attributed to `own_session_id`.
-
-    Cached per (sha_range, own_session_id) in the caller-supplied `cache`.
-    Raises `GitLogFailed` on any backing `git log` subprocess failure — never
-    swallowed to an empty result (adjudication § 10.7 item 7).
-    """
     key = (sha_range, own_session_id)
     if key in cache:
         return cache[key]
     window = bulk_commit_attribution_map(sha_range, cwd, run)
-    # bulk_grep_attributed_shas
-    # now returns List[str] in git log order; frozenset ONCE here at the one
-    # call site that needs O(1) membership, not a permanent second function.
     grep_attributed = frozenset(bulk_grep_attributed_shas(sha_range, own_session_id, cwd, run))
     result = foreign_shas_from_window(window.keys(), own_session_id, window, grep_attributed)
     cache[key] = result
@@ -381,7 +328,6 @@ def foreign_shas_from_window(
             if attribution.trailer_session_id != own_session_id:
                 foreign.add(sha)
             continue
-        # Untrailered — fall back to the grep signal.
         if sha not in grep_attributed:
             foreign.add(sha)
     return frozenset(foreign)

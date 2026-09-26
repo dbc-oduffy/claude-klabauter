@@ -1,13 +1,3 @@
-"""Tests for spine_read._has_uncleared_execution_gate's clearing rule.
-
-docs/plans/2026-08-20-gate-readers-stop-self-clearing.md AC1/AC2: a gate is
-cleared ONLY by an explicit ``cleared: true``; ``closure_evidence`` is
-purely descriptive and never clears anything on its own, however truthy.
-Table-driven over the four shapes named in that plan's § Problem, plus the
-``blocks: ac-closure`` and fail-closed-``blocks`` cases already asserted
-elsewhere in ``test_spine_read.py`` and re-asserted here against the new
-clearing rule specifically.
-"""
 
 from __future__ import annotations
 
@@ -34,7 +24,6 @@ def _write_plan(tmp_path, body: str):
       closure_evidence: >-
         Not yet received.
 """,
-            # This is the defect row (AC1): presence of closure_evidence
             # alone used to clear the gate (ADMITTED). It must now withhold.
             False,
         ),
@@ -46,7 +35,6 @@ def _write_plan(tmp_path, body: str):
       closure_evidence: >-
         Not yet received.
 """,
-            # Already withheld before this change; must stay withheld.
             False,
         ),
         (
@@ -54,7 +42,6 @@ def _write_plan(tmp_path, body: str):
             """      condition: their thing must ship first
       blocks: execution
 """,
-            # Already withheld before this change; must stay withheld.
             False,
         ),
         (
@@ -63,8 +50,6 @@ def _write_plan(tmp_path, body: str):
       blocks: execution
       cleared: true
 """,
-            # Already the clearing path before this change, and after this
-            # change it is the ONLY clearing path.
             True,
         ),
     ],
@@ -85,9 +70,6 @@ def test_four_clearing_shapes(tmp_path, case_id, gate_entry_yaml, expect_dispatc
 
 
 def test_blocks_ac_closure_never_withholds_regardless_of_cleared(tmp_path):
-    # blocks: ac-closure holds only a named acceptance criterion open, not
-    # the row's execution -- this must stay true under the new rule exactly
-    # as it did under the old one, with no cleared: true present at all.
     body = """\
 - id: C1
   title: only an acceptance criterion is gated
@@ -107,9 +89,6 @@ def test_blocks_ac_closure_never_withholds_regardless_of_cleared(tmp_path):
 def test_absent_or_unrecognized_blocks_resolves_to_execution_and_withholds(
     tmp_path, blocks_value
 ):
-    # Fail closed: only the literal "ac-closure" spares a row. An absent or
-    # unrecognized `blocks` resolves to execution, so a typo cannot silently
-    # disarm the gate -- asserted here against the new clearing rule too.
     blocks_line = "" if blocks_value is None else f"      blocks: {blocks_value}\n"
     body = (
         "- id: C1\n"

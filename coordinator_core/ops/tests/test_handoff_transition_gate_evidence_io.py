@@ -38,9 +38,6 @@ from coordinator_core.ops import handoff_transition as ht
 
 @pytest.fixture(autouse=True)
 def _clean_cache():
-    """Every test starts and ends with an empty module-level cache -- this
-    dict is process-global state, and a leaked entry from one test would
-    silently change whether the next test's request is a cache hit."""
     ht._gate_evidence_leg_cache.clear()
     yield
     ht._gate_evidence_leg_cache.clear()
@@ -55,8 +52,6 @@ def _observation(read_ok=True, observed="x", error=None):
 
 
 class TestSweepMemoization:
-    """The AC1b-motivating case: a sweep re-declaring the same fact on many
-    handoffs pays live I/O once, not N times."""
 
     def test_same_request_two_different_leg_ids_hits_resolve_leg_once(self, monkeypatch):
         calls = []
@@ -68,7 +63,7 @@ class TestSweepMemoization:
         monkeypatch.setattr(ht, "resolve_leg", _fake_resolve_leg)
 
         leg_a = _leg("leg-on-handoff-one")
-        leg_b = _leg("leg-on-handoff-two")  # different leg_id, same fact
+        leg_b = _leg("leg-on-handoff-two")
 
         ht._reresolve_gate_evidence_leg(leg_a, "2026-08-26")
         ht._reresolve_gate_evidence_leg(leg_b, "2026-08-26")
@@ -95,9 +90,6 @@ class TestSweepMemoization:
     def test_read_gate_evidence_resolved_across_many_handoffs_shares_one_call(
         self, monkeypatch, tmp_path
     ):
-        """The real caller shape: N `awaiting_gate` handoffs on disk all
-        gating on the SAME sibling fact must pay resolve_leg once for the
-        whole sweep, not once per handoff."""
         calls = []
 
         def _fake_resolve_leg(request):
@@ -175,8 +167,6 @@ class TestTtlExpiry:
         leg = _leg("leg-1")
         ht._reresolve_gate_evidence_leg(leg, "2026-08-26")
 
-        # TTL is 0: the entry is stamped in the past relative to "now" the
-        # instant it is checked, so the very next lookup must be a live miss.
         time.sleep(0.01)
         ht._reresolve_gate_evidence_leg(_leg("leg-2", ref=leg["ref"]), "2026-08-26")
 
@@ -207,9 +197,6 @@ class TestSizeCapOverflow:
         ht._gate_evidence_leg_cache_put(("b",), _observation())
         assert len(ht._gate_evidence_leg_cache) == 2
 
-        # This third put crosses the cap: the crude, documented behaviour is
-        # a whole-cache clear, then insert the new entry -- never an
-        # unbounded dict.
         ht._gate_evidence_leg_cache_put(("c",), _observation())
 
         assert len(ht._gate_evidence_leg_cache) == 1
@@ -240,11 +227,6 @@ class TestCacheKeyExcludesLegId:
 
 
 class TestReplaceFmArrayFieldBlockSequence:
-    """Item 55: `_replace_fm_array_field` used to substitute only the `key:`
-    line via `_fm_key_line_pattern(key).sub(...)`, stranding a pre-existing
-    block-sequence's `- item` continuation lines below the new flow-sequence
-    line -- invalid YAML. It now routes through `_locate_nested_block` so
-    the whole span (key line + continuation block) is replaced as one."""
 
     def test_block_sequence_continuation_lines_are_removed_not_stranded(self):
         fm = "id: h1\nblocked_by:\n  - stub-a\n  - stub-b\nstatus: open\n"
@@ -278,11 +260,6 @@ class TestReplaceFmArrayFieldBlockSequence:
 
 
 class TestInsertFmArrayFieldBlockSequence:
-    """Item 55 (second assumption): `_insert_fm_array_field` used to anchor on
-    `after_key`'s OWN line end (`_fm_key_line_pattern(after_key).search(fm).end()`),
-    landing the new line in the MIDDLE of `after_key`'s continuation block
-    when `after_key` itself is a legal block sequence on disk. It now anchors
-    on `_locate_nested_block(fm, after_key)`'s whole span."""
 
     def test_insert_lands_after_anchors_whole_block_sequence_not_inside_it(self):
         fm = "id: h1\nblocked_by:\n  - stub-a\n  - stub-b\nstatus: open\n"

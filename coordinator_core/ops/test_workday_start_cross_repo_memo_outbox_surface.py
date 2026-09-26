@@ -1,11 +1,3 @@
-"""
-Tests for coordinator_core.ops.workday_start_cross_repo_memo_outbox_surface.
-
-Port of: workday-start-cross-repo-memo-outbox-surface.sh (DoE b5a4192c,
-2026-07-20). Cases mirror the DoE bash test suite (test-outbox-stale-nudge.sh,
-DoE 894d4bc6, 2026-07-22) plus additional negative and edge cases exercised
-during the port (see the golden-oracle snapshot captured for this port).
-"""
 
 from __future__ import annotations
 
@@ -26,20 +18,11 @@ from coordinator_core.ops.fleet._memo_anchor import ANCHOR_REF_PREFIX, write_anc
 from coordinator_core.ops.workday_start_cross_repo_memo_outbox_surface import main
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
-
-# ---------------------------------------------------------------------------
-# Gone-delivery fixtures — mirrors coordinator_core/ops/fleet/tests/
-# test_memo_send.py's own git-repo/registry factories (same pattern, kept
-# local rather than imported to avoid a cross-test-file coupling for what is
-# a handful of lines).
-# ---------------------------------------------------------------------------
 
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(
@@ -262,11 +245,7 @@ def test_nongit_no_override_no_arg_silent(tmp_path, monkeypatch):
     assert out == ""
 
 
-# ---------------------------------------------------------------------------
-# C5 sibling: gone-delivery sweep (2026-09-11 fix 1 — the sweep gets a
 # trigger). Same `main()`/`_run` harness; `COORDINATOR_OUTBOX_DIR` points at
-# an empty dir throughout so only the gone-delivery leg is under test.
-# ---------------------------------------------------------------------------
 
 def test_no_deliveries_at_all_silent(tmp_path, monkeypatch):
     sender_repo = _make_sender_git_repo(tmp_path)
@@ -283,9 +262,6 @@ def test_no_deliveries_at_all_silent(tmp_path, monkeypatch):
 
 
 def test_verified_delivery_silent_nothing_gone(tmp_path, monkeypatch):
-    """A ledger row whose commit is still a real object in the receiver must
-    produce no line — the surfacer is silent when nothing is gone, never
-    '0 gone deliveries'."""
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
     claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -335,14 +311,11 @@ def test_gone_delivery_emits_one_nudge_naming_topic_receiver_and_resend(
     assert "lost-one" in out
     assert "example-retrieval-repo-em" in out
     assert gone_sha in out
-    assert "refs/heads/main" in out  # names the ref it landed on
-    assert "memo.send" in out  # the way through: re-run memo.send
+    assert "refs/heads/main" in out
+    assert "memo.send" in out
 
 
 def test_gone_delivery_with_delivery_branch_names_the_ref(tmp_path, monkeypatch):
-    """delivery_branch is the reader this field was added for: the nudge
-    names WHERE the delivery landed, distinguishing 'the branch we landed on
-    was rewritten' from 'the object vanished outright'."""
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
     claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -369,8 +342,6 @@ def test_gone_delivery_with_delivery_branch_names_the_ref(tmp_path, monkeypatch)
 def test_gone_delivery_without_delivery_branch_names_no_ref_and_no_none(
     tmp_path, monkeypatch
 ):
-    """A ledger row written before delivery_branch existed must read as
-    UNKNOWN, never imply a mismatch or print the literal 'None'."""
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
     claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -384,7 +355,6 @@ def test_gone_delivery_without_delivery_branch_names_no_ref_and_no_none(
         "to": "example-retrieval-repo-em",
         "topic": "lost-no-branch",
         "delivery_commit_sha": gone_sha,
-        # no delivery_branch key — pre-field ledger row
     }])
 
     rc, out = _run(
@@ -393,7 +363,7 @@ def test_gone_delivery_without_delivery_branch_names_no_ref_and_no_none(
     assert rc == 0
     assert "lost-no-branch" in out
     assert "None" not in out
-    assert "landed on" not in out  # no ref clause at all when unrecorded
+    assert "landed on" not in out
 
 
 def test_not_checkable_delivery_emits_no_line(tmp_path, monkeypatch):
@@ -402,7 +372,7 @@ def test_not_checkable_delivery_emits_no_line(tmp_path, monkeypatch):
     a nudge that cries wolf on that verdict recreates the defect this
     closes."""
     sender_repo = _make_sender_git_repo(tmp_path)
-    claude_home = _make_claude_home(tmp_path, {})  # no receivers registered
+    claude_home = _make_claude_home(tmp_path, {})
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     outbox = tmp_path / "empty-outbox"
     outbox.mkdir()
@@ -422,16 +392,7 @@ def test_not_checkable_delivery_emits_no_line(tmp_path, monkeypatch):
     assert out == ""
 
 
-# ---------------------------------------------------------------------------
-# C7 sibling: the restorable-delivery nudge, alongside gone. A fresh
-# restorable row is silent (the anchor's ordinary window); one still
-# restorable a day later is news.
-# ---------------------------------------------------------------------------
-
 def test_fresh_restorable_delivery_is_silent(tmp_path, monkeypatch):
-    """A restorable row sent moments ago is the ordinary in-flight state
-    between 'anchor written' and 'receiver's next workday-start restores
-    it' — surfacing it immediately would nudge on every send."""
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
     claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -462,10 +423,6 @@ def test_fresh_restorable_delivery_is_silent(tmp_path, monkeypatch):
 
 
 def test_stale_restorable_delivery_emits_nudge(tmp_path, monkeypatch):
-    """A restorable row still outstanding after 1 day is news at workday
-    start, alongside gone — and its nudge names an action the SENDER can
-    take (ping the receiver to run a workday-start), never a re-send
-    suggestion: the memo is anchored, so re-sending fixes nothing."""
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
     claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})

@@ -1,9 +1,3 @@
-"""Tests for coordinator_core.ops.verify_no_console_flash.
-
-Covers the fail-closed contract on an unreadable candidate file: an
-unreadable file must never be silently reported as "0 matches" / clean —
-see the module's `_grep_file` docstring and the Tier 2 fence in `main`.
-"""
 from __future__ import annotations
 
 import io
@@ -32,8 +26,6 @@ def test_grep_file_returns_hits_for_readable_file(tmp_path):
 
 
 def test_grep_file_raises_on_unreadable_file(tmp_path):
-    """An unreadable file must raise, not silently return [] (which would
-    be indistinguishable from 'read fine, zero matches')."""
     path = _write(tmp_path, "unreadable.sh", "python3 -c 'print(1)'\n")
     os.chmod(path, 0o000)
     try:
@@ -64,9 +56,6 @@ def test_scan_collects_unreadable_paths_and_still_scans_readable_siblings(tmp_pa
 
 
 def test_main_fails_closed_when_a_candidate_file_is_unreadable(tmp_path, monkeypatch):
-    """The overall gate must report non-clean (exit 1) when a target file
-    could not be scanned -- never silently 'OK' because it found 0 matches
-    in files it happened to be able to read."""
     coord_root = tmp_path / "coordinator-claude"
     bin_dir = coord_root / "bin"
     bin_dir.mkdir(parents=True)

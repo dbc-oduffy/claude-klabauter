@@ -1,24 +1,3 @@
-"""
-Unit tests for the settings-home resolution seam's CLI and Python resolver
-surfaces (T6-T14).
-
-Port of: coordinator/lib/tests/test-settings-home.sh (T6-T14).
-
-T1-T5 (the former lib/settings-home.sh direct-source coverage) already live
-as a pytest port in coordinator/tests/test_settings_home.py — not
-re-ported here, per that file's own docstring.
-
-The bash oracle this replaces targeted
-coordinator/templates/bin/coordinator-settings-home, a path that no longer
-exists (the CLI moved to coordinator/bin/coordinator-settings-home, an
-extensionless Python entry point — verified: running the bash oracle today
-produces "FATAL: required file not found" at the old path). This port
-targets the current, live CLI location instead of reproducing the stale
-path.
-
-Spec backlink: DoE-claude:pln-relocate-durable-coordinator-s-d48415 § C1
-Port backlink: docs/plans/2026-08-13-grind-the-posix-exec-baseline-to-zero.md
-"""
 
 from __future__ import annotations
 
@@ -29,8 +8,6 @@ from pathlib import Path
 
 import pytest
 
-# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
-# cadence suite is the separate threshold ruling, not this declaration.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -41,18 +18,7 @@ _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 CLAUDE_HOME_PY = _REPO_ROOT / "coordinator" / "lib" / "claude-home" / "_claude_home.py"
 
-# coordinator/bin/coordinator-settings-home in THIS repo is a bare-name
-# forwarder to a harness-injected ~/.claude/bin copy (per its own docstring:
 # "Forwards to the CLAUDE_HOME-resolved ~/.claude/bin/coordinator-settings-home"),
-# not the resolver itself — verified: invoking it against a scratch HOME
-# raises "resolver not installed ... run /coordinator:setup". The actual
-# resolver (the bash oracle's original target, once at
-# templates/bin/coordinator-settings-home) lives only in the DoE-claude
-# sibling repo now — same cross-repo boundary as detect-hardware.sh/
-# spawn-hidden.sh's caller class (this repo's own CLAUDE.md: "Discovery-
-# resolved surfaces ... belong in coordinator-claude, not here"). T6-T8
-# resolve it via the DoE-claude root pointer and skip (not fail) when that
-# sibling checkout is unavailable on this machine.
 _CLI_REL = "coordinator/templates/bin/coordinator-settings-home"
 
 
@@ -121,10 +87,6 @@ def test_t6_cli_no_args_prints_settings_home_path(tmp_path):
 
 
 def test_t7_cli_check_divergent_homes_nonzero(tmp_path):
-    # Both machine-local dirs must carry actual content — an empty dir now
-    # counts as a completed-migration husk, not a second content home (see
-    # _is_absent_or_empty_husk in both the CLI resolver and _claude_home.py),
-    # so this fixture writes a marker file into each to trigger divergence.
     home_dir = tmp_path / "home"
     settings_dir = tmp_path / "settings"
     (home_dir / ".claude" / "machine-local").mkdir(parents=True)
@@ -195,19 +157,8 @@ def test_t12_python_machine_local_delegates_to_settings_home(tmp_path):
 
 
 def test_t13_python_machine_local_warns_but_continues_on_divergent_realpaths(tmp_path):
-    # See test_t7's comment: both dirs need content, not just existence, to
-    # register as divergent under current _is_absent_or_empty_husk semantics.
-    #
     # DELIBERATE BEHAVIOR CHANGE from the bash oracle's T13 (which asserted
-    # fail-loud/non-zero): _claude_home.py's `machine-local` subcommand no
-    # longer fails loud on divergence. It now WARNS on stderr and continues,
-    # deterministically preferring settings-home — verified by direct
-    # invocation; the tool's own stderr message says so explicitly
     # ("DIVERGENT MACHINE-LOCAL HOMES — CONTINUING, preferring settings-home
-    # (new)... the substrate->settings-home migration is now performed
-    # natively by the coordinator install step"). This is intentional product
-    # evolution, not a latent bug — the port asserts CURRENT behavior rather
-    # than reproducing the stale fail-loud assertion.
     home_dir = tmp_path / "t13" / "home"
     settings_dir = tmp_path / "t13" / "settings"
     (home_dir / ".claude" / "machine-local").mkdir(parents=True)

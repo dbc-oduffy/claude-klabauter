@@ -60,13 +60,6 @@ try:
 except ImportError:  # pragma: no cover -- mirrors test_advisory_fire_counter.py's own import
     AdvisoryValue = None
 
-# Unit-level, no external process spawned anywhere in this file (AC7 pins
-# that explicitly) -- matches the marker set neighbouring pure-unit guard
-# test files in this directory use (e.g. test_check_heredoc_repo_write_
-# advise.py, test_advisory_fire_counter.py, neither of which carries
-# `spawns_process`/`cadence`; those two markers are reserved in this
-# directory for tests that shell out to a real `git` binary, which this
-# file never does).
 _SESSION_ID = "c2-write-claim-record-probe"
 
 
@@ -93,9 +86,7 @@ def _sink_bytes(root, session_id=_SESSION_ID) -> bytes:
     return sink.read_bytes() if sink.exists() else b""
 
 
-# ---------------------------------------------------------------------------
 # AC1 -- one VERB_TOUCH claim per recovered shape.
-# ---------------------------------------------------------------------------
 
 _AC1_SHAPES = [
     pytest.param("cat > f.py <<'EOF'\nhello\nEOF", "f.py", id="heredoc"),
@@ -120,13 +111,6 @@ def test_ac1_one_touch_claim_per_recovered_shape(tmp_path, cmd, expected_path):
     touches = [e for e in events if e.verb == VERB_TOUCH]
     assert len(touches) == 1, f"expected exactly one TOUCH for {cmd!r}, got {events}"
     assert touches[0].path == expected_path
-
-
-# ---------------------------------------------------------------------------
-# AC2 / AC3 -- written adjacently on purpose. They pull in opposite
-# directions (silence on a deny vs. a record on an advisory-allow) so a
-# future edit to the seam cannot satisfy one by breaking the other.
-# ---------------------------------------------------------------------------
 
 
 def _payload_json(cmd, session_id, cwd):
@@ -159,8 +143,6 @@ def _fake_hard_deny_entry(name="fake-hard-deny-guard"):
 
 
 def test_ac2_denied_command_records_nothing(tmp_path, monkeypatch):
-    """A command the guard chain DENIES must record no claim at all -- the
-    sink must be byte-unchanged (not merely "no new TOUCH for this path")."""
     root = _repo(tmp_path)
     monkeypatch.setattr(
         dispatch, "_build_guard_chain", lambda *a, **k: [_fake_hard_deny_entry()]
@@ -181,12 +163,6 @@ def test_ac2_denied_command_records_nothing(tmp_path, monkeypatch):
 
 
 def test_ac3_advisory_only_outcome_does_record(tmp_path, monkeypatch):
-    """The headline case: `cat-heredoc-write-advise` fires (an ALLOW,
-    advisory envelope) -- the recorder must still claim the write, because
-    the advisory return path IS an allow. Wraps the REAL
-    dispatch_checks.check_cat_heredoc_write_advise (not a constant lambda),
-    so this proves the actual advisory fires on the actual command text,
-    not just that the wrapper's plumbing is reachable."""
     root = _repo(tmp_path)
     cmd = "cat > f.py <<'EOF'\nhello\nEOF"
 
@@ -214,12 +190,6 @@ def test_ac3_advisory_only_outcome_does_record(tmp_path, monkeypatch):
     )
 
 
-# ---------------------------------------------------------------------------
-# AC4 -- never over-claims: out-of-repo target, and an un-named path, are
-# both absent.
-# ---------------------------------------------------------------------------
-
-
 def test_ac4_out_of_repo_redirect_target_is_never_claimed(tmp_path):
     root = _repo(tmp_path)
     outside = str(tmp_path / "elsewhere" / "f.py")
@@ -239,11 +209,6 @@ def test_ac4_unnamed_path_is_never_claimed(tmp_path):
     assert "peer-untouched.py" not in touched
 
 
-# ---------------------------------------------------------------------------
-# AC5 -- sed -i claims the FILE, never the edit script.
-# ---------------------------------------------------------------------------
-
-
 def test_ac5_sed_inplace_claims_file_not_script(tmp_path):
     root = _repo(tmp_path)
     record_write_claims("sed -i 's/a/b/' f.py", _SESSION_ID, root, denied=False)
@@ -257,22 +222,14 @@ def test_ac5_sed_inplace_claims_file_not_script(tmp_path):
     "cmd,expected",
     [
         # THE REGRESSION THIS EXISTS FOR. The first shape of
-        # `_is_claimable_target` judged the token alone against
         # `_SED_SCRIPT_RE` and silently dropped any path starting `s`/`y`
-        # whose second character recurred before a letters-only tail --
-        # which is most of `state/*.txt`. It shipped green because AC5
-        # above happens to use `f.py`, a name outside the bad class, and it
-        # was caught only by running the offer end-to-end. A dropped claim
         # is INVISIBLE: the file just quietly fails to make the commit,
-        # which is the exact bug this module exists to fix, so every case
         # here asserts the CLAIMING direction.
         ("cat >> state/e2e-probe-bash-write.txt", "state/e2e-probe-bash-write.txt"),
         ("cat >> state/x.txt", "state/x.txt"),
         ("echo hi > scripts/s.txt", "scripts/s.txt"),
         ("echo hi > systems/y.txt", "systems/y.txt"),
         ("echo hi > yesterday.txt", "yesterday.txt"),
-        # ...and the head-verb gate means a `sed`-shaped token under a
-        # NON-sed head is still a path, not a script.
         ("cat >> s/a/b/c.txt", "s/a/b/c.txt"),
     ],
 )
@@ -287,11 +244,6 @@ def test_ac5_sed_filter_never_drops_a_real_path(tmp_path, cmd, expected):
 
 
 def test_ac5_sed_file_operand_survives_even_in_the_bad_shape(tmp_path):
-    """The `sed` head-verb gate alone was not enough: conditions 1 and 2 both
-    hold for `sed -i 's/a/b/' state/x.txt`, so its own file operand was still
-    dropped. Existence is what discriminates -- `sed -i` can only edit a file
-    that is already there, so a real operand exists and a script never does.
-    """
     root = _repo(tmp_path)
     target = os.path.join(root, "state")
     os.makedirs(target, exist_ok=True)
@@ -303,16 +255,8 @@ def test_ac5_sed_file_operand_survives_even_in_the_bad_shape(tmp_path):
     assert "s/a/b/" not in claimed, claimed
 
 
-# ---------------------------------------------------------------------------
-# AC6 -- never raises, never flips the verdict: an unwritable sink and a
-# `None` root must be indistinguishable, from the CALLER's perspective, from
-# the un-recorded case.
-# ---------------------------------------------------------------------------
-
-
 def test_ac6_none_root_never_raises_and_records_nothing():
-    # No repo at all -- `root=None` is the documented short-circuit.
-    record_write_claims("echo hi > f.py", _SESSION_ID, None, denied=False)  # must not raise
+    record_write_claims("echo hi > f.py", _SESSION_ID, None, denied=False)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits only")
@@ -323,16 +267,12 @@ def test_ac6_unwritable_sink_directory_never_raises(tmp_path):
     original_mode = os.stat(sid_dir).st_mode
     try:
         os.chmod(sid_dir, 0o000)
-        record_write_claims("echo hi > f.py", _SESSION_ID, root, denied=False)  # must not raise
+        record_write_claims("echo hi > f.py", _SESSION_ID, root, denied=False)
     finally:
         os.chmod(sid_dir, original_mode)
 
 
 def test_ac6_recorder_never_flips_the_guard_verdict(tmp_path, monkeypatch):
-    """Drive the SEAM (not the bare recorder) with a sink directory made
-    unwritable, and with `root=None` (an unresolvable cwd) -- either way the
-    guard's own returned envelope must be identical to the un-recorded
-    (healthy-sink) baseline."""
     entry = GuardEntry(
         "fake-allow-guard",
         lambda: None,
@@ -343,12 +283,9 @@ def test_ac6_recorder_never_flips_the_guard_verdict(tmp_path, monkeypatch):
     monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: [entry])
     cmd = "echo hi > f.py"
 
-    # Baseline: healthy sink, resolvable root.
     root = _repo(tmp_path, name="healthy")
     baseline = dispatch.evaluate_payload_json(_payload_json(cmd, _SESSION_ID, root))
 
-    # root=None -- cwd resolves to nothing (`_show_toplevel` walk finds no
-    # `.git` from an unrelated empty dir).
     no_root_dir = str(tmp_path / "no-repo-here")
     os.makedirs(no_root_dir)
     out_no_root = dispatch.evaluate_payload_json(
@@ -370,11 +307,6 @@ def test_ac6_recorder_never_flips_the_guard_verdict(tmp_path, monkeypatch):
         finally:
             os.chmod(sid_dir, original_mode)
 
-
-# ---------------------------------------------------------------------------
-# AC7 -- cost stays within budget: <5ms total over a ~20-command corpus, and
-# no subprocess spawned by the recorder itself.
-# ---------------------------------------------------------------------------
 
 _AC7_CORPUS = [
     "cat > f1.py <<'EOF'\nhi\nEOF",
@@ -398,18 +330,6 @@ _AC7_CORPUS = [
     "cat f14.py",
     "echo hi > f15.py",
 ]
-
-
-# ---------------------------------------------------------------------------
-# C1 (docs/plans/2026-08-30-the-guard-s-own-remediation-route-hides.md) --
-# `python`/`python3 <scratchpad-script.py>` claims the in-repo write target
-# the SCRIPT FILE names, closing the blind spot on the guard's own
-# remediation route (write a script to scratch, run it by path) for the
-# inline `-c`/heredoc denial. All cases here monkeypatch `_all_temp_roots`
-# (the SAME seam `_write_bump_applicability` already exposes for exactly
-# this reason) to point at a `tmp_path`-built scratchpad root, never a
-# literal `/tmp` or a drive letter -- Windows/macOS/Linux all first-class.
-# ---------------------------------------------------------------------------
 
 
 def _scratchpad(tmp_path) -> str:
@@ -492,7 +412,7 @@ def test_c1_scratchpad_script_over_size_cap_claims_nothing(tmp_path, monkeypatch
 
     script = os.path.join(scratch, "fix.py")
     with open(script, "w", encoding="utf-8") as fh:
-        fh.write("open('f.py', 'w').write('hi')\n")  # well over 16 bytes
+        fh.write("open('f.py', 'w').write('hi')\n")
 
     record_write_claims(f"python3 {script}", _SESSION_ID, root, denied=False)
     assert _touched_paths(root) == set()
@@ -517,19 +437,11 @@ def test_c1_unreadable_or_vanished_script_raises_nothing(tmp_path, monkeypatch):
     _patch_temp_roots(monkeypatch, scratch)
 
     missing_script = os.path.join(scratch, "gone.py")
-    record_write_claims(f"python3 {missing_script}", _SESSION_ID, root, denied=False)  # must not raise
+    record_write_claims(f"python3 {missing_script}", _SESSION_ID, root, denied=False)
     assert _touched_paths(root) == set()
 
 
-# ---------------------------------------------------------------------------
-# C1 P1/P2 (docs/plans/2026-08-30-the-guard-s-own-remediation-route-hides.md,
-# review round): each row of the reviewer's measured table -- a case-folded
-# head verb, a version-pinned interpreter, a value-taking flag ahead of the
 # script operand, and a chained invocation naming two DIFFERENT scripts.
-# `env python3 <script>` is deliberately NOT included here -- the reviewer's
-# claim about it was wrong (already covered by `interpreter-payload`-style
-# depth-0 resolution) and this round records that, it does not "fix" it.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -602,10 +514,6 @@ def test_c1_chained_invocation_claims_both_different_targets(tmp_path, monkeypat
 
 
 def test_c1_env_python3_already_claims_without_a_fix(tmp_path, monkeypatch):
-    """Ground-truth correction: the reviewer's claim that `env python3
-    <script>` drops its claim was wrong -- it already resolves via the same
-    depth-0 walk (`env` is transparent to `resolve_command_positions`). This
-    pins the already-correct behaviour so it cannot regress."""
     root = _repo(tmp_path)
     scratch = _scratchpad(tmp_path)
     _patch_temp_roots(monkeypatch, scratch)
@@ -619,17 +527,6 @@ def test_c1_env_python3_already_claims_without_a_fix(tmp_path, monkeypatch):
 
 
 def test_ac7_cost_under_5ms_total_and_no_subprocess(monkeypatch):
-    # Deliberately NOT pytest's own `tmp_path` (which lands under the OS
-    # user-profile temp dir): on this box that path is under real-time
-    # antivirus scanning and measured 15-20x slower per file-append than
-    # this same code against a directory under the repo's own drive
-    # (73-107ms vs. 4-4.5ms for this exact 20-command corpus, reproduced
-    # repeatedly) -- an artifact of WHERE the sink lives, not of the
-    # recorder's own cost. A repo-drive scratch dir isolates the
-    # measurement from that artifact; every real `.git/coordinator-
-    # sessions/` sink this module ever writes to lives on the repo's own
-    # drive, never the OS temp drive, so this is also the representative
-    # location.
     scratch_root = Path(__file__).resolve().parents[3] / ".pytest_ac7_scratch"
     scratch_root.mkdir(exist_ok=True)
     work_dir = Path(tempfile.mkdtemp(dir=str(scratch_root)))
@@ -641,7 +538,7 @@ def test_ac7_cost_under_5ms_total_and_no_subprocess(monkeypatch):
         try:
             scratch_root.rmdir()
         except OSError:
-            pass  # sibling test's own tempdir may still be present
+            pass
 
 
 def _run_ac7_timing(root, monkeypatch):
@@ -654,26 +551,9 @@ def _run_ac7_timing(root, monkeypatch):
 
     monkeypatch.setattr(subprocess.Popen, "__init__", _tracking_popen_init)
 
-    # Warm the lazy, per-call imports `record_write_claims` performs
-    # (`bump_outside_repo_write`, `session.touch_record`) once before timing
-    # -- a one-time process-level import cost, not a per-call recorder cost,
-    # and every real caller of this module already pays it once per process
-    # too (Python caches the module after the first import).
     record_write_claims("echo warm > warm.py", f"{_SESSION_ID}-warmup", root, denied=False)
     spawned.clear()
 
-    # Min-of-3 over real disk appends, against a 20ms (1ms/command) bound.
-    # Both numbers are measured, not derived: 12 passes on this repo ran
-    # min 5.41 / median 6.08 / max 9.48ms, and the worst min-of-3 across
-    # disjoint triples was 7.57ms -- so the bound carries ~2.6x margin over
-    # the worst sampled reading, not the 4x a bare min-vs-bound comparison
-    # suggests. It replaced a 5ms bound that WAS the measured cost and went
-    # red about one run in two.
-    #
-    # `assert not spawned` is what catches a subprocess. The wall-clock leg
-    # is a coarse tripwire for the other two regression shapes, and it does
-    # trip: injecting one directory walk per command costs 546ms measured,
-    # 27x the bound. It is not a tight budget and is not meant to be.
     def _corpus_pass() -> None:
         for i, cmd in enumerate(_AC7_CORPUS):
             record_write_claims(cmd, f"{_SESSION_ID}-{i}", root, denied=False)
@@ -689,8 +569,6 @@ def _run_ac7_timing(root, monkeypatch):
     )
 
 
-# --- C1: resolve_read_targets -----------------------------------------------
-# Spec backlink: docs/plans/2026-09-02-a-write-that-discards-what-you-never-
 # saw.md, chunk C1. TEMPLATE table from that chunk's own body, verbatim.
 
 
@@ -722,8 +600,6 @@ def test_c1_resolve_read_targets_other_shapes(cmd, expected):
 
 
 def test_c1_resolve_read_targets_sed_inplace_is_not_a_read():
-    """`sed -i` is a WRITE, already owned by `_iter_write_sink_candidates`
-    -- resolving it here too would double-claim the same path."""
     assert resolve_read_targets("sed -i 's/a/b/' a.py") == []
 
 

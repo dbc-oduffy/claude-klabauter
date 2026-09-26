@@ -40,8 +40,6 @@ from coordinator_core.ops.emit.context import EmitContext
 
 from ._shared import normalize_frontmatter
 
-# HealthStatusLifecycle (status axis) and HealthPosture (health axis) enum members — the two
-# orthogonal validation gates the bash applies.
 _STATUS_ENUM = frozenset({"active", "archived"})
 _HEALTH_ENUM = frozenset({"HEALTHY", "WATCH", "ACTION", "CRITICAL"})
 
@@ -69,7 +67,6 @@ def _query_health_records(ctx: EmitContext) -> list[dict]:
 
 
 def _is_valid(fm: dict) -> bool:
-    """Required-fields-present + dual-enum gate (bash select at lines 1961-1968)."""
     title = fm.get("title")
     created = fm.get("created")
     status = fm.get("status")
@@ -85,7 +82,6 @@ def _is_valid(fm: dict) -> bool:
 
 
 def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
-    """Build (records, malformed) for HealthStatusSummary from query-records output."""
     raw = _query_health_records(ctx)
 
     records: list[dict] = []

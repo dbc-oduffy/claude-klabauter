@@ -25,10 +25,6 @@ import pytest
 
 import coordinator_core.pickup_brief as pa
 
-# Real-git spawn in the fixture (git init/add/commit) is load-bearing —
-# `brief()`'s classifiers read actual git-tracked repo state. Declares the
-# spawn per the ratchet's Rule 2(b) marker escape (coordinator_core/tests/
-# test_no_new_spawning_tests.py) rather than an allowlist entry.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -59,25 +55,6 @@ def _seed_handoff(repo: Path, name: str) -> Path:
 
 
 def _snapshot(root: Path) -> set[tuple[str, int, int]]:
-    """(relative-path, mtime_ns, size) for every regular file under `root`.
-
-    The ONE filtered entry is CPython's own import-machinery bytecode cache:
-    a file whose immediate parent directory is literally named
-    `__pycache__` AND whose suffix is `.pyc` — the exact shape CPython
-    writes when this test process imports `coordinator_core`, not anything
-    `brief()` does. Both conditions are required together so the filter
-    cannot be widened by accident: a stray `.pyc` written outside a
-    `__pycache__` directory, or any non-`.pyc` file that happens to live
-    under one, is NOT excluded and will still be caught as churn.
-
-    Nothing else is filtered, deliberately. `brief()` DOES spawn git
-    (`_run_git`, reached from `_branch_age_days` / `_git_log_oneline`), so
-    read-side housekeeping churn under `.git/` is not impossible a priori —
-    it simply does not occur for the read-only plumbing commands `brief()
-    ` issues. If it ever appears, that is the finding this test exists to
-    surface, not noise to launder away: widening this filter to restore
-    green would delete the invariant the file is here to pin.
-    """
     snap: set[tuple[str, int, int]] = set()
     for path in root.rglob("*"):
         if not path.is_file():
@@ -96,10 +73,6 @@ class TestBriefReadOnlyAcrossWorktreeAndGitCommonDir:
         _seed_handoff(repo, "h1.md")
 
         git_dir = repo / ".git"
-        # `_snapshot(repo)` already spans `.git/` — its paths are relative to
-        # `repo`, so it is NOT set-subtractable against a `git_dir`-relative
-        # snapshot. Both roots are asserted, the second at its own path base
-        # so a failure names the offending file relative to the git dir.
         tree_before = _snapshot(repo)
         git_before = _snapshot(git_dir)
 

@@ -62,7 +62,6 @@ def _parse_ops(raw: Optional[str]) -> Optional[List[str]]:
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    """Purpose: isolate argparse wiring so `main()` stays testable/readable."""
     parser = argparse.ArgumentParser(
         prog=_CLI_PROG_NAME,
         description=(
@@ -92,20 +91,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 
 def _stamp_baseline_id(record: ConformanceRecord) -> ConformanceRecord:
-    """Return a copy of `record` with `baseline_id` set to
-    `<code_sha>:<op>:<run_id>` -- an independently addressable store-entry
-    key distinct from `run_id` (which scopes a whole run's shared floor
-    draw, not one op's store entry). `ConformanceRecord` is frozen, so this
-    produces a new instance via `dataclasses.replace` rather than mutating.
-    """
     baseline_id = f"{record.code_sha}:{record.op}:{record.run_id}"
     return dataclasses.replace(record, baseline_id=baseline_id)
 
 
 def _build_summary(records: List[ConformanceRecord], store_path: Path) -> dict:
-    """Assemble the JSON run-summary written to --out: verdict counts,
-    per-op headline stats, and the baseline store path records were
-    appended to."""
     verdict_counts: dict = {}
     for record in records:
         verdict_counts[record.verdict] = verdict_counts.get(record.verdict, 0) + 1
@@ -118,7 +108,6 @@ def _build_summary(records: List[ConformanceRecord], store_path: Path) -> dict:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """CLI entrypoint. Returns the process exit code (0 on success)."""
     declare_benchmark_origin()
     parser = _build_arg_parser()
     args = parser.parse_args(argv)

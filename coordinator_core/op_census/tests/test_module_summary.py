@@ -1,14 +1,3 @@
-"""coordinator_core.op_census.tests.test_module_summary — tests for the
-cached per-module AST summary (C1).
-
-Covers: correctness of the per-file summary (function names, spawn sites,
-line count), cache-miss/hit revalidation against a caller-owned index (via
-`cache.read_disk_revalidated`), disk index round-trip (`load_index`/
-`save_index`), unparseable-file fail-closed behaviour, and a warm-path
-process-time assertion (§ Measured basis).
-
-Spec backlink: state/dispatch-briefs/2026-08-21-the-census-that-cannot-miss-an-op/C1.md
-"""
 
 from __future__ import annotations
 
@@ -89,7 +78,7 @@ def test_index_hit_never_reparses(tmp_path: Path, monkeypatch):
 
     index: dict = {}
     first = summarize_paths([f], index=index)[str(f)]
-    assert (str(f), None) not in index  # sanity: index is populated, not the sentinel shape
+    assert (str(f), None) not in index
     assert str(f) in index
 
     calls = []
@@ -105,7 +94,7 @@ def test_index_hit_never_reparses(tmp_path: Path, monkeypatch):
 
     second = summarize_paths([f], index=index)[str(f)]
 
-    assert calls == []  # unchanged body -> zero recompute calls
+    assert calls == []
     assert second == first
 
 
@@ -154,21 +143,6 @@ def test_load_index_corrupt_file_returns_empty(tmp_path: Path):
 
 
 def test_warm_revalidate_process_time_within_budget(tmp_path: Path):
-    """Warm-path process-time assertion (§ Measured basis).
-
-    Synthetic corpus, not the real ~475-file coordinator_core/ tree (real-tree
-    timing would make this test's pass/fail depend on repo growth over time,
-    not on op_census's own mechanism) — 40 small modules revalidated after a
-    cold build. Measures `time.process_time()`, never wall clock (CLAUDE.md
-    § The brightline: "Process time and spawn count, never wall clock — wall
-    clock measures peer load"), which is what actually makes this robust
-    under § Load norm's shared-machine contention: process time is unaffected
-    by peer scheduling pressure, so the bound can stay tight rather than
-    loose. (Review: staff-eng Finding 7 — the prior wall-clock measurement
-    called itself "the 500ms brightline," which is a different, unrelated
-    figure; this is a tight, process-time bound on a 40-file synthetic warm
-    revalidate.)
-    """
     paths = []
     for i in range(40):
         f = tmp_path / f"mod_{i}.py"
@@ -176,10 +150,10 @@ def test_warm_revalidate_process_time_within_budget(tmp_path: Path):
         paths.append(f)
 
     index: dict = {}
-    summarize_paths(paths, index=index)  # cold build, off the measured path
+    summarize_paths(paths, index=index)
 
     start = time.process_time()
-    summarize_paths(paths, index=index)  # warm revalidate
+    summarize_paths(paths, index=index)
     elapsed_ms = (time.process_time() - start) * 1000
 
     assert elapsed_ms < 100, (

@@ -70,10 +70,7 @@ if str(_REPO_ROOT) not in sys.path:
 from coordinator_core.ops.percolate_identity_check import run_identity_check  # noqa: E402
 
 
-# A synthetic stand-in for `.github/scripts/check-persona-names.py`. Behavior:
 # exit 1 with a planted (non-real) finding string when SENTINEL_NAME exists
-# next to it in the destination tree, exit 0 with a pass summary otherwise.
-# Deliberately carries no real persona name or fleet codename.
 _SENTINEL_NAME = "PLANTED-FINDING-SENTINEL"
 _SYNTHETIC_CHECKER = f'''\
 import pathlib
@@ -99,11 +96,6 @@ def _write_checker(dest: Path) -> Path:
 
 
 class _IdentityCheckClaudeKlabauter:
-    """Minimal `ClaudeKlabauterPercolate`-shaped fake wired to the REAL
-    `run_identity_check` for `run_identity_check` itself, but stubbing
-    every other engine surface `dispatch_percolate_pre_ci` also calls
-    (`resolve_target`, `run_percolate`) with an always-clean phase result --
-    isolates this test to the identity-check fold-in specifically."""
 
     def resolve_target(self, store, name):
         return {"hooks": [], "file_surface": {}, "guards": [], "inject": []}
@@ -164,32 +156,26 @@ class TestIdentityCheckGatePassesCleanTree:
     def test_clean_tree_passes(self, tmp_path):
         target = _target(tmp_path)
         _write_checker(target.dest_dir)
-        # No sentinel file -- synthetic checker exits 0.
 
         claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
         publish.dispatch_percolate_pre_ci(
             _ctx(claude_klabauter_engine), tmp_path / "store.yaml", target, tmp_path / "src", None
-        )  # must not raise
+        )
 
 
 class TestIdentityCheckGateAbsentScriptIsALoudSkip:
     def test_absent_checker_script_is_a_skip_not_a_pass(self, tmp_path):
         target = _target(tmp_path)
-        # No `.github/scripts/check-persona-names.py` at all.
 
         claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
         result = run_identity_check(str(target.dest_dir))
         assert result == {"ran": False, "skipped": True, "exit_code": None, "findings": ""}
 
-        # And the gate itself must not raise -- a skip is neither a pass nor
-        # a failure entry in guard_results, it is simply not present.
         publish.dispatch_percolate_pre_ci(
             _ctx(claude_klabauter_engine), tmp_path / "store.yaml", target, tmp_path / "src", None
         )
 
     def test_skip_is_printed_loudly_not_silent(self, tmp_path, capsys):
-        """The root bug this fix closes: a skip must never read as clean.
-        Even though the gate stays advisory, the skip has to be visible."""
         target = _target(tmp_path)
 
         claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
@@ -226,9 +212,6 @@ class TestIdentityCheckGateResolvesDestSubdirToRepoRoot:
         (repo_root / _SENTINEL_NAME).write_text("x", encoding="utf-8")
 
         claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
-        # Must NOT raise -- and must not even run the checker -- even though
-        # the repo root's checker would fail if it ran: the per-row leg is
-        # gone for this row shape, deferred to the end-of-run leg instead.
         publish.dispatch_percolate_pre_ci(
             _ctx(claude_klabauter_engine), tmp_path / "store.yaml", target, tmp_path / "src", None
         )
@@ -237,33 +220,18 @@ class TestIdentityCheckGateResolvesDestSubdirToRepoRoot:
         assert "end-of-run identity scan" in captured.err
 
     def test_subdir_row_never_raises_regardless_of_repo_root_checker_state(self, tmp_path):
-        """No checker at all at the repo root, for a `dest_subdir` row: also
-        must not raise -- pre_ci simply has nothing to do for this row shape
-        any more, clean tree or planted finding alike (§ test above)."""
         target = _target_with_subdir(tmp_path)
-        # No `.github/scripts/check-persona-names.py` anywhere.
         claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
         publish.dispatch_percolate_pre_ci(
             _ctx(claude_klabauter_engine), tmp_path / "store.yaml", target, tmp_path / "src", None
-        )  # must not raise
+        )
 
 
-# ---------------------------------------------------------------------------
-# End-of-run leg — `dispatch_end_of_run_identity_check`, direct unit tests.
-# ---------------------------------------------------------------------------
 class TestEndOfRunIdentityCheckLeg:
-    """Direct tests of `dispatch_end_of_run_identity_check` -- the function
-    `main()` calls once per distinct destination repo root after every row
-    has synced (§ that function's own docstring for why the per-row leg
-    alone cannot close this gap: row declaration order in
-    `setup/publish-targets.portable` means the engine row's per-row check
-    can run before the toplevel row has ever published `.github/`)."""
 
     def test_unfiltered_skip_is_hard_failure(self, tmp_path):
         repo_root = tmp_path / "repo"
         (repo_root / ".git").mkdir(parents=True)
-        # No `.github/scripts/check-persona-names.py` at all -- the virgin-
-        # destination shape.
 
         claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
         ctx = _ctx(claude_klabauter_engine)
@@ -298,7 +266,6 @@ class TestEndOfRunIdentityCheckLeg:
         repo_root = tmp_path / "repo"
         (repo_root / ".git").mkdir(parents=True)
         _write_checker(repo_root)
-        # No sentinel -- synthetic checker exits 0.
 
         claude_klabauter_engine = _IdentityCheckClaudeKlabauter()
         ctx = _ctx(claude_klabauter_engine)
@@ -308,10 +275,6 @@ class TestEndOfRunIdentityCheckLeg:
         assert ok is True
 
     def test_nonzero_exit_is_hard_failure_even_when_filtered(self, tmp_path, capsys):
-        """A `--target`-scoped run degrades a MISSING checker to advisory,
-        but a checker that actually RAN and found something must never be
-        excused by the same scoping -- that's what keeps a filtered debug
-        publish from being unfailable (task brief requirement 3)."""
         repo_root = tmp_path / "repo"
         (repo_root / ".git").mkdir(parents=True)
         _write_checker(repo_root)
@@ -328,10 +291,6 @@ class TestEndOfRunIdentityCheckLeg:
         assert "PLANTED-FINDING-SENTINEL" in captured.err
 
     def test_multiple_distinct_repo_roots_each_checked(self, tmp_path):
-        """One clean repo root plus one virgin repo root in the same run --
-        the run-wide result must reflect the WORST of the two, and both
-        must actually have been visited (proven by the clean one's presence
-        not masking the virgin one's failure)."""
         clean_root = tmp_path / "clean-repo"
         (clean_root / ".git").mkdir(parents=True)
         _write_checker(clean_root)
@@ -347,22 +306,7 @@ class TestEndOfRunIdentityCheckLeg:
         assert ok is False
 
 
-# ---------------------------------------------------------------------------
-# End-of-run leg — full `publish.main()` wiring.
-# ---------------------------------------------------------------------------
 class _StubClaudeKlabauter:
-    """Same shape as `_IdentityCheckClaudeKlabauter` -- real `run_identity_check`,
-    trivial everything else -- but named separately since these tests don't
-    go through `dispatch_percolate_pre_ci` at all (`process_target` is
-    stubbed to a no-op below, isolating `main()`'s end-of-run wiring from
-    the per-row engine-phase machinery, which has its own dedicated
-    coverage elsewhere). `file_surface` names `*.md`/`*.py` so
-    `dispatch_end_of_run_unscanned_published_check` (which calls the REAL
-    `coordinator_core.percolate.surface.iter_surface_files` directly, not
-    this stub's own `iter_surface_files` below) sees these fixtures' plain
-    `.md`/`.py` content as in-surface -- an empty `file_surface` would make
-    every published file "unscanned" and fail that leg regardless of what
-    this test is actually exercising."""
 
     def resolve_target(self, store, name):
         return {
@@ -382,44 +326,17 @@ class _StubClaudeKlabauter:
         return run_identity_check(dest)
 
     def run_parse_sweep(self, repo_root):
-        # `dispatch_end_of_run_function_gate` (chunk C4B, added after this
-        # fixture was authored) calls this unconditionally for every reached
-        # repo root once a run has zero failed rows — sibling gap noted in
-        # `test_publish_row_isolation.py`'s `_FakeClaudeKlabauter` docstring. A
-        # parse-clean, zero-file sweep result is a no-op for this file's own
-        # identity-check assertions.
         return type("ParseResult", (), {"ok": True, "failures": [], "scanned": 0})()
 
     def enumerate_gate_entrypoints(self, repo_root):
-        # `dispatch_end_of_run_entrypoint_gate` (chunk C3, same sibling gap)
-        # calls this unconditionally too. This fixture's repo roots ship no
-        # entrypoints, so an empty tuple short-circuits that gate's loop.
         return ()
 
 
 def _fake_process_target_succeeds(target, setup_dir, totals, **kwargs):
-    # `main()`'s row loop (§ the row-honesty fix, `test_publish_skipped_row_
-    # not_counted_succeeded.py`) treats "`process_target` did not raise AND
-    # `totals.processed` did not advance" as a FAILED row — a `None`-
-    # returning no-op fake (this fixture's original shape) therefore marks
-    # every row FAILED before any end-of-run gate (the thing this file
-    # actually tests) is ever reached. Advance `totals.processed` to model
-    # the row genuinely landing, matching every other `main()`-driving
-    # publish test fixture in this package.
     totals.processed += 1
 
 
 def _stub_dest_refresh(monkeypatch) -> None:
-    """Neutralise the destination-refresh precondition (PM ruling 2026-09-02).
-
-    `publish.main` brings every destination level with its origin before the
-    first row materializes anything, and fail-closes on a dest whose checked-out
-    branch has no upstream tracking ref (§ `percolate.dest_refresh.
-    refresh_dest_from_origin`). This fixture's dest repo is a bare tmp tree, not
-    a clone, so that refusal fires and returns 1 before the identity leg runs.
-
-    Patched on the engine module rather than on `publish`, because `main`
-    imports the callable from `percolate.dest_refresh` at call time."""
     publish._bootstrap_engine()
     from percolate import dest_refresh as _dest_refresh
 
@@ -433,14 +350,6 @@ def _stub_dest_refresh(monkeypatch) -> None:
 
 
 def _stub_assembled_mirror_leg(monkeypatch) -> None:
-    """Hold the assembled-mirror end-of-run leg inert.
-
-    `dispatch_end_of_run_assembled_mirror_gate` runs a real `pytest
-    --collect-only` against the destination tree and refuses any root whose
-    collection finds no tests and carries no entry in THIS repo's
-    `setup/publish-allowlist-declarations.yaml`. A synthetic fixture tree is
-    neither, so the leg would fail every `main()` run here on live-repo state
-    unrelated to the identity leg under test."""
     monkeypatch.setattr(
         publish, "dispatch_end_of_run_assembled_mirror_gate", lambda *a, **k: True
     )
@@ -479,15 +388,8 @@ def _wire_main_preconditions(monkeypatch, *, setup_dir: Path, rows: list) -> Non
 
 
 class TestEndOfRunIdentityCheckMainWiring:
-    """`publish.main()` end-to-end, with everything except the end-of-run
-    identity-check leg stubbed inert (§ `_wire_main_preconditions`)."""
 
     def _rows_for(self, repo_root: Path, *, engine_name="engine-row", toplevel_name="engine-row-toplevel") -> list:
-        # Mirrors the real `setup/publish-targets.portable` shape: the
-        # engine row (non-empty `dest_subdir`) declared BEFORE the toplevel
-        # row (empty `dest_subdir`, i.e. `dest_dir == repo_root`). Neither
-        # `dest_dir` needs to exist on disk -- `_dest_repo_root` only walks
-        # for a `.git` entry, which only `repo_root` itself carries.
         return [
             f"{engine_name}|mirror|{repo_root / 'src-engine'}|{repo_root / 'coordinator_core'}",
             f"{toplevel_name}|flat-mirror|{repo_root / 'src-toplevel'}|{repo_root}",
@@ -498,7 +400,6 @@ class TestEndOfRunIdentityCheckMainWiring:
         setup_dir.mkdir(parents=True)
         repo_root = tmp_path / "dest-repo"
         (repo_root / ".git").mkdir(parents=True)
-        # No `.github/scripts/check-persona-names.py` published yet.
 
         _wire_main_preconditions(monkeypatch, setup_dir=setup_dir, rows=self._rows_for(repo_root))
 
@@ -513,7 +414,7 @@ class TestEndOfRunIdentityCheckMainWiring:
         setup_dir.mkdir(parents=True)
         repo_root = tmp_path / "dest-repo"
         (repo_root / ".git").mkdir(parents=True)
-        _write_checker(repo_root)  # published by the (stubbed) toplevel row already.
+        _write_checker(repo_root)
 
         _wire_main_preconditions(monkeypatch, setup_dir=setup_dir, rows=self._rows_for(repo_root))
 
@@ -536,9 +437,6 @@ class TestEndOfRunIdentityCheckMainWiring:
         assert "check-persona-names.py exited 1" in captured.err
 
     def test_target_filtered_run_missing_checker_stays_advisory(self, tmp_path, monkeypatch, capsys):
-        """A `--target engine-row` debug publish never reaches the toplevel
-        row, so it legitimately never sees `.github/` -- must not hard-fail
-        on that alone (task brief requirement 3)."""
         setup_dir = tmp_path / "percolate-root" / "setup"
         setup_dir.mkdir(parents=True)
         repo_root = tmp_path / "dest-repo"
@@ -557,7 +455,6 @@ class TestEndOfRunIdentityCheckMainWiring:
         setup_dir.mkdir(parents=True)
         repo_root = tmp_path / "dest-repo"
         (repo_root / ".git").mkdir(parents=True)
-        # Virgin destination -- if the leg fired, this would fail loudly.
 
         _wire_main_preconditions(monkeypatch, setup_dir=setup_dir, rows=self._rows_for(repo_root))
 

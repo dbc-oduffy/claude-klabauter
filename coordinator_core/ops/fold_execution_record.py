@@ -95,8 +95,6 @@ _PROG = "coordinator-fold-execution-record"
 
 _DATE_PREFIX_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}-")
 _SLUG_VALID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-# re.ASCII constrains \s to the same [\t\n\x0b\f\r ]
-# class as bash's POSIX [[:space:]], matching the oracle rather than Python's
 # default Unicode-whitespace superset (e.g. NEL, LINE/PARAGRAPH SEPARATOR).
 _CHUNKS_SECTION_ENTER_RE = re.compile(r"^##\s+Chunks", re.ASCII)
 _HEADING2_RE = re.compile(r"^##\s", re.ASCII)
@@ -115,9 +113,6 @@ def _derive_plan_slug(plan_path: str) -> str:
 
 
 def _resolve_git_root(plan_path: str) -> str:
-    """Mirror the bash oracle's two-rung repo-root resolver: `git rev-parse
-    --show-toplevel` from the plan's directory, then a logical (non-symlink-
-    resolving) grandparent-of-plan-dir fallback."""
     plan_dir = os.path.dirname(plan_path) or "."
     candidate = show_toplevel(plan_dir)
     if candidate:
@@ -131,14 +126,9 @@ def _resolve_git_root(plan_path: str) -> str:
 
 
 def _parse_chunk_ac_map(plan_text: str) -> Dict[str, str]:
-    """Parse the plan's ## Chunks section for `### C<N>[suffix] — <label>`
-    subsection headings, returning {lowercased chunk-id: trimmed AC label}."""
     chunk_ac_map: Dict[str, str] = {}
     in_chunks_section = False
-    # str.splitlines() treats a wider set of Unicode
     # characters as line boundaries (e.g. NEL, LINE/PARAGRAPH SEPARATOR) than
-    # bash's `while IFS= read -r line` (splits on \n only). split("\n") mirrors
-    # the oracle's newline-only semantics.
     for line in plan_text.split("\n"):
         if _CHUNKS_SECTION_ENTER_RE.match(line):
             in_chunks_section = True
@@ -157,9 +147,6 @@ def _parse_chunk_ac_map(plan_text: str) -> Dict[str, str]:
 
 
 def _extract_frontmatter_chunk(lines: List[str]) -> str:
-    """Extract the `chunk:` frontmatter value between the first and second exact
-    "---" lines; first match wins, unmatched runs return "" (fallback to
-    filename-derived chunk-id lives in the caller)."""
     n = 0
     for line in lines:
         if line == "---":
@@ -179,8 +166,6 @@ def _extract_frontmatter_chunk(lines: List[str]) -> str:
 
 
 def _extract_observations_body(lines: List[str]) -> List[str]:
-    """Extract lines under a `## Observations` heading (prefix-matched, so
-    `## Observations & Notes` variants qualify) until the next `## ` heading."""
     in_obs = False
     out: List[str] = []
     for line in lines:
@@ -196,8 +181,6 @@ def _extract_observations_body(lines: List[str]) -> List[str]:
 
 
 def _trim_blank_lines(lines: List[str]) -> List[str]:
-    """Drop leading blank lines (before the first non-whitespace line) and
-    trailing blank lines; interior blank lines are preserved verbatim."""
     trimmed: List[str] = []
     found = False
     for line in lines:
@@ -211,11 +194,6 @@ def _trim_blank_lines(lines: List[str]) -> List[str]:
 
 
 def _is_trivial_observation(obs_body: str) -> bool:
-    """True if `obs_body` is empty/whitespace-only or one of the oracle's
-    recognized trivial tokens (n/a, none, em-dash, hyphen)."""
-    # Sibling of the :92-94 \s-regex finding: mirrors
-    # the oracle's `${obs_body//[[:space:]]/}` (ASCII-only ${space} class), not
-    # Python's default Unicode-whitespace \s.
     trimmed = re.sub(r"\s+", "", obs_body, flags=re.ASCII)
     if not trimmed:
         return True
@@ -223,17 +201,11 @@ def _is_trivial_observation(obs_body: str) -> bool:
 
 
 def _title_case_slug(plan_slug: str) -> str:
-    """Mirror the bash oracle's awk title-case: replace '-' with ' ', split on
-    whitespace (collapsing/trimming runs), uppercase each word's first char and
-    leave the remainder of the word unchanged."""
     words = plan_slug.replace("-", " ").split()
     return " ".join(w[:1].upper() + w[1:] for w in words)
 
 
 def _collect_sidecar_files(subagent_share_dir: str, plan_slug: str) -> List[str]:
-    """Mirror `find <dir> -mindepth 2 -maxdepth 2 -name "<slug>.*.md" | sort`:
-    exactly one level of session directories under subagent-share/, matched
-    files sorted by full path for deterministic output."""
     pattern = f"{plan_slug}.*.md"
     matches: List[str] = []
     try:
@@ -246,13 +218,8 @@ def _collect_sidecar_files(subagent_share_dir: str, plan_slug: str) -> List[str]
         try:
             file_entries = list(os.scandir(session_entry.path))
         except OSError:
-            # session dir unreadable/gone; nothing to fold from it
             continue
         for file_entry in file_entries:
-            # fnmatch.fnmatch() case-normalizes via
-            # os.path.normcase() (no-op on POSIX, but case-insensitive on Windows),
-            # diverging from the oracle's always-case-sensitive `find -name`.
-            # fnmatchcase() forces byte-consistent matching on every platform.
             if file_entry.is_file() and fnmatch.fnmatchcase(file_entry.name, pattern):
                 matches.append(file_entry.path)
     matches.sort()
@@ -260,8 +227,6 @@ def _collect_sidecar_files(subagent_share_dir: str, plan_slug: str) -> List[str]
 
 
 def _parse_args(argv: List[str]) -> Tuple[Optional[str], Optional[str], Optional[int]]:
-    """Return (plan_path, desc_flag, error_exit_code). error_exit_code is None on
-    success; when set, the caller has already written the diagnostic to stderr."""
     plan_path: Optional[str] = None
     desc_flag: Optional[str] = None
     i = 0
@@ -301,8 +266,6 @@ def _parse_args(argv: List[str]) -> Tuple[Optional[str], Optional[str], Optional
 
 
 def main(argv: List[str]) -> int:
-    """CLI entrypoint — see module docstring for the full contract (flags,
-    exit codes, SKIP sentinel)."""
     plan_path, desc_flag, err = _parse_args(argv)
     if err is not None:
         return err
@@ -334,8 +297,6 @@ def main(argv: List[str]) -> int:
         print("<!-- coordinator-fold-execution-record: SKIP repo-root-unresolvable -->")
         return 0
 
-    # Both share roots -- see machinery_paths.share_roots. The first extant
-    # root names the SKIP/report path; sidecars are collected from all of them.
     _share_dirs = [d for d in _share_roots(git_root) if os.path.isdir(d)]
     subagent_share_dir = _share_dirs[0] if _share_dirs else _share_roots(git_root)[0]
     if not _share_dirs:
@@ -368,8 +329,6 @@ def main(argv: List[str]) -> int:
             continue
         try:
             with open(sidecar, "r", encoding="utf-8", errors="replace") as fh:
-                # split("\n") only, mirroring the
-                # oracle's newline-only line-splitting (see _parse_chunk_ac_map).
                 lines = fh.read().split("\n")
         except OSError:
             continue

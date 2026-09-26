@@ -1,10 +1,3 @@
-"""An engine commit refuses a path Windows cannot check out.
-
-`block_illegal_filename` guards only Write/Edit tool calls; an op writes
-in-process and commits through `_commit_via_head_spine`, which runs no hook.
-Driven through `commit_authored_new_file`, the in-process committer an op creates a file with,
-against a real throwaway repo.
-"""
 
 from __future__ import annotations
 
@@ -51,9 +44,6 @@ def test_a_legal_path_lands(tmp_path):
 
 
 def test_a_deletion_is_never_refused():
-    # Use the real deletion sentinel
-    # git_native assembles, not a synthetic object(), so this tests the
-    # actual integration point rather than only the predicate's contract.
     assert commit_path_legality.illegal_path_refusal({"a:b.md": git_native._ABSENT}) is None
 
 

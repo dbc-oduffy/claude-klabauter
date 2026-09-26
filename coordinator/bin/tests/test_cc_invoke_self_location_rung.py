@@ -53,8 +53,6 @@ _BIN_DIR = _TESTS_DIR.parent
 _LIB_DIR = _BIN_DIR / "lib"
 _CC_INVOKE_PY = _LIB_DIR / "cc_invoke.py"
 _MLIR_PY = _LIB_DIR / "machine_local_impl_resolve.py"
-# cc_invoke.py imports this at module top since the resolver-ladder split; a
-# synthetic checkout without it dies on ModuleNotFoundError before any rung runs.
 _ENGINE_BOOTSTRAP_PY = _LIB_DIR / "engine_bootstrap.py"
 
 if str(_LIB_DIR) not in sys.path:
@@ -63,22 +61,14 @@ if str(_LIB_DIR) not in sys.path:
 import cc_invoke as _mod  # noqa: E402  (import after path setup)
 
 
-# Declared, not excused: this file spawns real processes because the behaviour under
 # test IS the spawn. _BASELINE is shrink-only pre-existing residue and is explicitly
-# not the route for a new file -- test_no_new_spawning_tests.py Rule 2.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
 ]
 
 
-
-# ---------------------------------------------------------------------------
-# Hermetic env — drop every var this ladder (or a sibling ladder) could read,
-# by scanning os.environ rather than trusting a fixed list (a fixed list is
-# exactly the kind of thing that silently drifts as new *_ROOT/CLAUDE*/
 # COORDINATOR_* vars are introduced elsewhere in the tree).
-# ---------------------------------------------------------------------------
 
 _DROP_PREFIXES = ("REPO_", "CLAUDE", "COORDINATOR_")
 _DROP_EXACT = ("CLAUDE_KLABAUTER_ROOT", "DOE_ROOT")
@@ -101,11 +91,6 @@ def _hermetic_child_env(isolated_home: str, extra: dict[str, str] | None = None)
         "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
         "PYTHONIOENCODING": "utf-8",
     }
-    # Belt-and-braces: scan the ambient environment for anything matching the
-    # drop set and confirm none of it leaked into the dict above (it can't,
-    # since the dict is hand-built) — this loop exists so a future edit that
-    # switches this function to `dict(os.environ)` + strip is caught by the
-    # assertion below rather than silently reintroducing ambient leakage.
     for key in list(env):
         assert not any(key.startswith(p) for p in _DROP_PREFIXES) or key in (
             "CLAUDE_HOME",
@@ -140,8 +125,6 @@ def _build_checkout(root: Path, shape: str) -> tuple[Path, Path]:
     the shape's own nesting depth under `coordinator/bin/lib/`.
     """
     if shape == "mktcache":
-        # Mirrors a real marketplace-cache install's depth:
-        # ~/.claude/plugins/cache/coordinator-claude/coordinator/<version>/...
         checkout_root = (
             root / "plugins" / "cache" / "coordinator-claude" / "coordinator" / "1.2.3"
         )
@@ -154,19 +137,9 @@ def _build_checkout(root: Path, shape: str) -> tuple[Path, Path]:
     lib_dir.mkdir(parents=True)
     (checkout_root / "coordinator_core").mkdir(parents=True)
     (checkout_root / "pyproject.toml").write_text("[project]\nname = \"stub\"\n", encoding="utf-8")
-    # docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C6: every
     # DISPATCH-axis candidate rung (env, registry, self-location) now
     # DELEGATES its final answer to coordinator_core.engine_root's own
-    # coordinator_engine_root_with_class() instead of returning the candidate
-    # verbatim — so a fixture whose sole purpose is to be self-located must
-    # also be a real enough package for that delegation to succeed. This stub
-    # answers exactly what the real function would on a single-tree box with
     # no CLAUDE_KLABAUTER_ROOT/registry/published mirror: the checkout root itself.
-    # A regular package (``__init__.py`` present), not an implicit namespace
-    # package: this box has a real, ambiently-importable ``coordinator_core``
-    # (editable install) elsewhere on ``sys.path`` — a namespace-package stub
-    # would lose the module search to that real package regardless of
-    # ``sys.path`` insertion order, silently exercising the wrong module.
     (checkout_root / "coordinator_core" / "__init__.py").write_text("", encoding="utf-8")
     (checkout_root / "coordinator_core" / "engine_root.py").write_text(
         "def coordinator_engine_root_with_class():\n"
@@ -249,13 +222,9 @@ def test_explicit_claude_klabauter_root_wins_over_self_location_on_the_locator_a
     """
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        # The self-locatable checkout the new rung would resolve to if reached.
         checkout_root, cc_invoke_copy = _build_checkout(tmp_path, "flat")
 
         # A second, distinct, EXISTING checkout directory — CLAUDE_KLABAUTER_ROOT
-        # is expected to win outright over self-location on the LOCATOR axis.
-        # Deliberately marker-only (no coordinator_core/engine_root.py): this
-        # is exactly resolve_engine_root()'s isdir-only gate, unlike the
         # DISPATCH-axis delegation the sibling raise-path test below exercises.
         other_root = tmp_path / "other-existing-checkout"
         (other_root / "coordinator_core").mkdir(parents=True)
@@ -309,8 +278,6 @@ def test_dispatch_axis_env_still_wins_but_now_via_delegation_not_verbatim_trust(
     """
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        # A self-locatable, REAL checkout the terminal rung could otherwise
-        # resolve to — never reached here, because Rung 1 wins first.
         checkout_root, cc_invoke_copy = _build_checkout(tmp_path, "flat")
 
         other_root = tmp_path / "other-existing-checkout"

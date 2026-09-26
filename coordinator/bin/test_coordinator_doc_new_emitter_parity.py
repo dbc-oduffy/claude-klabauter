@@ -82,19 +82,10 @@ from coordinator_core.win_portability import no_console_creationflags  # noqa: E
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-# Types that must NOT be smoke-invoked via this test's minimal-args shape,
-# each with a logged reason. Empty by design — every currently-known type
-# has been verified safe to invoke with `--title smoke --out <tmpfile>`
-# (delegated types fail fast via the sibling CLI's own argparse; sidecar and
-# audit/memo/run-report types fail fast on their own required-arg checks).
-# Add an entry here ONLY when a future type cannot be smoke-invoked safely
-# (e.g. it performs a genuinely destructive or network-dependent action even
-# on required-arg failure) — never as a way to silence a real emitter gap.
 _EXPLICIT_SKIPS: dict[str, str] = {}
 
 
 def _repo_bin_dir() -> str:
-    """Absolute path to the coordinator/bin directory this test lives in."""
     return os.path.dirname(os.path.abspath(__file__))
 
 
@@ -157,16 +148,6 @@ def _required_args_for(doc_type: str) -> list[str]:
 
 
 def _invoke_scaffold(doc_type: str, out_path: str) -> tuple[int, str]:
-    """Invoke coordinator-doc-new --type <doc_type> with minimal common args plus
-    whatever type-specific required args _required_args_for() supplies, so the
-    invocation reaches the type's own dispatch branch rather than dying at an
-    earlier, unrelated required-arg check (Finding 2).
-
-    Returns (returncode, combined stdout+stderr). Uses the same interpreter
-    running this test (sys.executable) rather than relying on PATH resolution.
-    creationflags is the portable Windows-console-popup guard (resolves to a
-    no-op 0 on non-Windows platforms).
-    """
     cmd = [
         sys.executable,
         _cli_path(),
@@ -189,14 +170,6 @@ def _invoke_scaffold(doc_type: str, out_path: str) -> tuple[int, str]:
 
 
 def test_no_unreachable_doc_type_across_known_types() -> None:
-    """For every manifest-derived known --type, the scaffold must never fall
-    through to the `raise AssertionError(f"unreachable doc_type: ...")`
-    backstop in coordinator-doc-new's main() dispatch chain.
-
-    A type reaching its own required-arg validation error (or scaffolding
-    cleanly) both count as PASS — this test isolates the missing-emitter-
-    branch defect class only, not full per-type argument coverage.
-    """
     known_types = sorted(_known_types())
     if not known_types:
         raise AssertionError(
@@ -226,21 +199,6 @@ def test_no_unreachable_doc_type_across_known_types() -> None:
 
 
 def test_review_findings_divergence_parses_as_object() -> None:
-    """review-findings' scaffolded `divergence` field must parse as an object
-    under this repo's restricted YAML parser, not a raw string.
-
-    Regression net for the flow-style defect fixed alongside this test:
-    `_scaffold_review_findings` (coordinator-doc-new) previously emitted
-    `divergence: {diverged: false}` (flow-style mapping) instead of block
-    style. coordinator_core.frontmatter.schema_validate.parse_yaml does not
-    support flow-style mappings (documented restriction — see that module's
-    docstring and _scaffold_run_report's docstring in coordinator-doc-new) and
-    parses a flow-style value as a raw string, tripping the run-report
-    schema's object-shaped `divergence` check
-    (type object, required [diverged]) on every scaffolded review-findings
-    sidecar. Block style (key on its own line, nested `diverged:` indented
-    below) is the only shape that round-trips through parse_yaml as a dict.
-    """
     repo_root = os.path.dirname(os.path.dirname(_repo_bin_dir()))
     if repo_root not in sys.path:
         sys.path.insert(0, repo_root)

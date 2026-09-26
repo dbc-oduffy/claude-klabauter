@@ -29,9 +29,6 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-# --------------------------------------------------------------------------- fixture helpers
-
-
 def _run_git_or_raise(repo_root: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", "-C", str(repo_root), *args],
@@ -82,12 +79,7 @@ def _append(repo_root: Path, handoff_id: str, sha: str, **kwargs) -> None:
     assert ok, f"fixture append_entry failed for sha={sha}"
 
 
-# --------------------------------------------------------------------------- close row
-
-
 def test_close_row_from_ledger_entry(tmp_path: Path) -> None:
-    """A ledger entry carrying ``closes`` yields one CLOSE row per item_id, with
-    ``reachable_on_default_branch`` resolved True when the sha is an origin/main ancestor."""
     _init_repo(tmp_path)
     sha = _commit(tmp_path, "fix: close an item", "content-1\n")
     _mark_origin_main(tmp_path, sha)
@@ -121,13 +113,7 @@ def test_multiple_item_ids_yield_multiple_close_rows(tmp_path: Path) -> None:
     assert {(r["sha"], r["item_id"]) for r in records} == {(sha, "RECS-1"), (sha, "RECS-2")}
 
 
-# --------------------------------------------------------------------------- revert row (AC9)
-
-
 def test_revert_row_joins_across_ledger_files(tmp_path: Path) -> None:
-    """A revert entry's ``reverts_sha`` joins against ANOTHER entry's ``closes`` list even
-    when the two are recorded under different handoff_id ledger files (AC9, D4/D8) --
-    the join is over the whole-corpus glob, not a single file."""
     _init_repo(tmp_path)
     closure_sha = _commit(tmp_path, "fix: close an item", "content-1\n")
     revert_sha = _commit(tmp_path, "revert: undo it", "content-2\n")
@@ -155,8 +141,6 @@ def test_revert_row_joins_across_ledger_files(tmp_path: Path) -> None:
 
 
 def test_revert_of_untracked_sha_yields_no_revert_row(tmp_path: Path) -> None:
-    """A ``reverts_sha`` naming a sha with no matching ``closes`` row anywhere in the ledger
-    produces no revert row (AC17) -- fails safe, never an error."""
     _init_repo(tmp_path)
     revert_sha = _commit(tmp_path, "revert: nothing tracked", "content-1\n")
     _mark_origin_main(tmp_path, revert_sha)
@@ -169,11 +153,7 @@ def test_revert_of_untracked_sha_yields_no_revert_row(tmp_path: Path) -> None:
     assert records == []
 
 
-# --------------------------------------------------------------------------- reachability tri-state (AC4)
-
-
 def test_reachability_false_when_sha_not_on_origin_main(tmp_path: Path) -> None:
-    """A close row whose sha is NOT an ancestor of origin/main resolves False, not null."""
     _init_repo(tmp_path)
     main_sha = _commit(tmp_path, "chore: base", "content-1\n")
     _mark_origin_main(tmp_path, main_sha)
@@ -193,7 +173,6 @@ def test_reachability_null_when_origin_main_unresolvable(tmp_path: Path) -> None
     False (DECISION-1)."""
     _init_repo(tmp_path)
     sha = _commit(tmp_path, "fix: close an item", "content-1\n")
-    # deliberately no _mark_origin_main call
     _append(tmp_path, "hnd-a", sha, closes=["RECS-9"])
 
     ctx = _closure_test_ctx(tmp_path)
@@ -204,12 +183,7 @@ def test_reachability_null_when_origin_main_unresolvable(tmp_path: Path) -> None
     assert records[0]["reachable_on_default_branch"] is None
 
 
-# --------------------------------------------------------------------------- AC6: no history scan
-
-
 def test_collect_issues_exactly_one_reachability_spawn_and_no_history_scan(tmp_path: Path) -> None:
-    """``collect()`` issues exactly ONE subprocess -- the bounded ``rev-list origin/main``
-    reachability call -- never a ``git log`` history scan (AC6, pinned by test)."""
     _init_repo(tmp_path)
     sha = _commit(tmp_path, "fix: close an item", "content-1\n")
     _mark_origin_main(tmp_path, sha)
@@ -231,8 +205,6 @@ def test_collect_issues_exactly_one_reachability_spawn_and_no_history_scan(tmp_p
 
 
 def test_empty_ledger_returns_empty_lists_not_raising(tmp_path: Path) -> None:
-    """No ledger files at all (fresh repo, or one with no ledger-wired commits) returns
-    ``([], [])`` -- never raises."""
     _init_repo(tmp_path)
     ctx = _closure_test_ctx(tmp_path)
 
@@ -242,12 +214,7 @@ def test_empty_ledger_returns_empty_lists_not_raising(tmp_path: Path) -> None:
     assert malformed == []
 
 
-# --------------------------------------------------------------------------- AC11: per-repo scoping
-
-
 def test_every_row_repo_matches_ctx_repo_name(tmp_path: Path) -> None:
-    """Every emitted row's ``repo`` equals ``ctx.repo_name`` -- per-repo scoped by
-    construction (AC11), asserted rather than assumed."""
     _init_repo(tmp_path)
     closure_sha = _commit(tmp_path, "fix: close an item", "content-1\n")
     revert_sha = _commit(tmp_path, "revert: undo it", "content-2\n")
@@ -263,12 +230,7 @@ def test_every_row_repo_matches_ctx_repo_name(tmp_path: Path) -> None:
     assert all(r["repo"] == ctx.repo_name for r in records)
 
 
-# --------------------------------------------------------------------------- malformed sha shape
-
-
 def test_malformed_sha_shape_is_quarantined_not_emitted(tmp_path: Path) -> None:
-    """A ledger entry whose sha fails the 40-lowercase-hex shape check is quarantined into
-    ``malformed`` rather than emitted with a corrupt identity key."""
     _init_repo(tmp_path)
     good_sha = _commit(tmp_path, "fix: close an item", "content-1\n")
     _mark_origin_main(tmp_path, good_sha)

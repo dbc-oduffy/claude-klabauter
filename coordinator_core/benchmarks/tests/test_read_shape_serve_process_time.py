@@ -103,12 +103,6 @@ def _require_supported_platform() -> None:
 
 
 def _min_process_time_ms(fn: Callable[[], object]) -> float:
-    """Batch-amortised in-process CPU time for one direct call to `fn`, via
-    the shared `in_process_time_ms` primitive (C6) -- retains this module's
-    own call-site name/shape (a bare per-call ms float) while delegating
-    the actual measurement to the adaptive-window primitive rather than a
-    per-call min-of-N sample, which can read 0.0 below the process-time
-    tick (see module docstring)."""
     return in_process_time_ms(fn)["process_time_ms"]
 
 
@@ -118,24 +112,7 @@ def _write(path: str, data: bytes) -> None:
 
 
 def _cmd_path(path) -> str:
-    """Render a filesystem path the way it must appear INSIDE a Bash command
-    string: forward slashes, never a Windows backslash. The command string
-    goes through `_shape_classifier.classify_command`'s POSIX `shlex`
-    tokenizer, which treats a bare backslash as an escape character --
-    `cat C:\\Users\\...\\f.txt` tokenizes as `C:UsersF.txt` (abs-path-ok:
-    illustrative example path in a docstring, not a citation of this box),
-    not the intended path. A real Bash-tool payload on this box is spelled the same way
-    (forward slashes), so this is not a test-only workaround."""
     return str(path).replace("\\", "/")
-
-
-# ---------------------------------------------------------------------------
-# Cost 1 -- the parse-then-decline cost on a read-shaped command that does
-# NOT end up qualifying, over a corpus that covers both decline stages: a
-# parse-time decline (`plan_for` returns None, no filesystem touched) and a
-# produce-time decline (`plan_for` builds a plan, but `answer()`'s call into
-# `ReadSpec.produce` declines once it actually resolves/stats the operand).
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture()
@@ -152,13 +129,10 @@ def decline_corpus(tmp_path):
     _write(str(other), b"content\n")
 
     return {
-        # Parse-time declines: `plan_for` itself returns None, no `os.stat`.
         "unmodeled_flag": "cat -e %s" % _cmd_path(small),
         "multiple_operands_head": "head -n 5 %s %s" % (_cmd_path(small), _cmd_path(other)),
         "unsupported_sed_program": "sed -e 's/a/b/' %s" % _cmd_path(small),
         "stdin_operand": "cat -",
-        # Produce-time declines: `plan_for` builds a plan; `answer()`'s call
-        # into `execute()`/`produce()` is what actually declines.
         "missing_file": "cat %s" % _cmd_path(tmp_path / "does-not-exist.txt"),
         "oversized_file": "cat %s" % _cmd_path(oversized),
         "glob_operand": "cat %s" % _cmd_path(tmp_path / "*.txt"),
@@ -179,9 +153,6 @@ def decline_corpus(tmp_path):
 )
 def test_declining_read_shape_process_time_corpus(decline_corpus, tmp_path, label):
     cmd = decline_corpus[label]
-    # Verify the corpus row actually declines before timing it -- a corpus
-    # entry that silently starts qualifying would otherwise measure the
-    # serve cost under a decline label without failing loud.
     assert answer(cmd, cwd=str(tmp_path)) is None, (
         f"{label}: expected this row to decline (return None), it did not -- "
         "corpus row no longer measures a decline path"
@@ -191,12 +162,6 @@ def test_declining_read_shape_process_time_corpus(decline_corpus, tmp_path, labe
         f"{label}: declining read-shape process time {best_ms:.3f}ms exceeds "
         f"the {_DECLINE_PATH_CEILING_MS}ms budget"
     )
-
-
-# ---------------------------------------------------------------------------
-# Cost 2a -- the serve cost itself, in-process, at increasing file sizes up
-# to the render cap.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -220,13 +185,6 @@ def test_serve_cost_stays_under_ceiling_up_to_the_render_cap(tmp_path, size_byte
     )
 
 
-# ---------------------------------------------------------------------------
-# Cost 2b -- the serve cost against the fork it replaces, via a REAL `cat`
-# through the resolved POSIX shell. Names whether a crossover file size
-# exists inside the render cap (AC9's own ask), or shows there isn't one.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 @requires_posix_shell
@@ -244,11 +202,6 @@ def test_serve_cost_stays_far_under_the_fork_it_replaces_at_the_render_cap(tmp_p
     )
     fork_ms = fork_result["process_time_ms"]
 
-    # No crossover inside the render cap: even at the cap's own byte ceiling,
-    # where the in-process read+decode is at its most expensive, serving
-    # stays cheaper than the fork it replaces. If this regresses, that is the
-    # file size AC9 asks this file to name -- it currently does not exist
-    # inside the cap.
     assert serve_ms < fork_ms, (
         f"at {MAX_RENDER_BYTES - 1} bytes (the render cap): in-process serve "
         f"({serve_ms:.3f}ms process time) is no longer cheaper than the real "
@@ -256,14 +209,6 @@ def test_serve_cost_stays_far_under_the_fork_it_replaces_at_the_render_cap(tmp_p
         f"procs_per_call={fork_result['procs_per_call']}) -- a crossover file "
         "size now exists inside the render cap and AC9 requires naming it"
     )
-
-
-# ---------------------------------------------------------------------------
-# Cost 2c -- the stat-gate decline above the render cap must be O(1): the
-# guard C1's dispatch brief names ("an unbounded read of an 800MB log is an
-# in-hook stall or an OOM") only holds if declining never grows with the
-# file's actual size.
-# ---------------------------------------------------------------------------
 
 
 def test_decline_above_the_render_cap_is_flat_regardless_of_how_far_over(tmp_path):

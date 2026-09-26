@@ -66,9 +66,6 @@ def _register_published(ml_dir: Path, published_root: Path) -> None:
 
 
 def test_unstamped_published_root_is_not_usable(tmp_path, _registry):
-    """A directory that exists AND carries `coordinator_core/` — the OLD
-    "registered and usable" bar in full — is still denied once it lacks a
-    valid engine stamp."""
     published_root = tmp_path / "published"
     (published_root / "coordinator_core").mkdir(parents=True)
 
@@ -79,9 +76,6 @@ def test_unstamped_published_root_is_not_usable(tmp_path, _registry):
 
 
 def test_empty_stamp_file_is_not_usable(tmp_path, _registry):
-    """A present-but-empty stamp file is a partial-write artifact, not a
-    valid stamp — `is_engine_root`'s own contract (C2) is "readable and
-    non-empty"; this shim-standalone twin must match it."""
     published_root = tmp_path / "published"
     (published_root / "coordinator_core").mkdir(parents=True)
     (published_root / "coordinator_core" / "_engine_stamp").write_text(
@@ -95,9 +89,6 @@ def test_empty_stamp_file_is_not_usable(tmp_path, _registry):
 
 
 def test_stamped_published_root_is_usable(tmp_path, _registry):
-    """Once a valid, non-empty stamp is present, the same root resolves —
-    proves the gate is additive (stamp required ON TOP OF the pre-existing
-    dir/coordinator_core checks), not a replacement for them."""
     published_root = tmp_path / "published"
     (published_root / "coordinator_core").mkdir(parents=True)
     _write_stamp(published_root)
@@ -109,13 +100,8 @@ def test_stamped_published_root_is_usable(tmp_path, _registry):
 
 
 def test_dispatch_denies_unstamped_engine_falls_through_to_live_tree(tmp_path, _registry, monkeypatch):
-    """`resolve_claude_klabauter_root_with_class()`: an unstamped published engine is
-    never a legitimate dispatch answer — if a live working tree also
-    resolves, the ladder must land there, not on the unstamped published
-    root, in every step (1 and 3 alike) that would otherwise have reached
-    for it."""
     published_root = tmp_path / "published"
-    (published_root / "coordinator_core").mkdir(parents=True)  # no stamp
+    (published_root / "coordinator_core").mkdir(parents=True)
 
     live_root = tmp_path / "live"
     live_root.mkdir()
@@ -144,11 +130,8 @@ def test_dispatch_denies_unstamped_engine_falls_through_to_live_tree(tmp_path, _
 
 
 def test_dispatch_denies_unstamped_engine_raises_when_no_live_tree(tmp_path, _registry):
-    """With NO live-tree rung resolvable either, an unstamped published
-    engine must not be handed out as a last resort — the ladder raises
-    `ClaudeKlabauterResolutionError` rather than dispatching to an unstamped root."""
     published_root = tmp_path / "published"
-    (published_root / "coordinator_core").mkdir(parents=True)  # no stamp
+    (published_root / "coordinator_core").mkdir(parents=True)
 
     (_registry.ml_dir / "registry.local.toml").write_text(
         f'"repos.claude_klabauter" = \'{published_root.as_posix()}\'\n',
@@ -161,9 +144,6 @@ def test_dispatch_denies_unstamped_engine_raises_when_no_live_tree(tmp_path, _re
 
 
 def test_dispatch_uses_stamped_engine_as_last_resort(tmp_path, _registry):
-    """Positive control for the prior test: the SAME shape, but stamped —
-    resolves `resolved-engine` at the published root via the step-3
-    last-resort branch (no live-tree rung resolvable at all)."""
     published_root = tmp_path / "published"
     (published_root / "coordinator_core").mkdir(parents=True)
     _write_stamp(published_root)
@@ -181,11 +161,6 @@ def test_dispatch_uses_stamped_engine_as_last_resort(tmp_path, _registry):
 
 
 def test_resolve_claude_klabauter_bin_dir_locator_axis_unaffected_by_stamp(tmp_path, _registry):
-    """DR-326's LOCATOR axis (`resolve_claude_klabauter_bin_dir()`) stays single-tier,
-    live-tree-only, and untouched by the stamp rule — it never even looks at
-    `repos.claude_klabauter`. A live tree with no coordinator/bin/ sentinel
-    still fails the way it always has (a locator-shaped error), independent
-    of whether any published engine anywhere is stamped."""
     live_root = tmp_path / "live"
     live_root.mkdir()
     (_registry.ml_dir / "registry.local.toml").write_text(

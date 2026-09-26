@@ -189,40 +189,19 @@ from coordinator_core.conservatism import SafeDirection, declares_safe_direction
 
 CLASS = "hard-deny"
 # Widened 2026-08-19 (subagent-boundary MATCHERS parity, see
-# docs/reference/guard-tool-name-membership.md): this guard is registered
 # ADVISORY_REWRITE/fail_closed=False (see module docstring) and fails OPEN
-# on any name shape it cannot evaluate ("FAIL OPEN ON A NAME THIS GUARD
 # NEVER ACTUALLY SAW" above) -- no spurious-deny risk from unparseable
-# PowerShell input.
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 42
 
-#: Longlived branch prefixes this guard deliberately does NOT deny -- see
 #: module docstring "THE CANONICAL-SHAPE PREDICATE".
 SANCTIONED_LONGLIVED_PREFIXES = ("migration/", "release/", "feature/")
 
-#: Cheap pre-filter -- a candidate creation-shaped invocation must at least
-#: mention one of these subcommand words; gates whether the more expensive
-#: tokenized pass below runs at all.
 _PRE_FILTER_RE = re.compile(r"\b(checkout|switch|branch)\b")
 
 #: ALLOWLIST of `git branch` flags that may accompany a genuine CREATION
-#: invocation without changing its classification -- `-f`/`--force`
-#: (overwrite-if-exists) and `-t`/`--track`/`--no-track` (upstream-tracking
-#: mode set at creation time). ANY OTHER flag (rename, delete, copy, list,
-#: or anything this project has not audited) routes to non-create/allow --
-#: see module docstring "WHAT THIS DENIES". Deliberately an allowlist, not
-#: a blocklist of known-non-create flags: a blocklist misses git's
-#: long-form spellings (`--delete`, `--move`, `--copy`) and fails toward
-#: "creation, deny" on any flag it hasn't enumerated, which is the wrong
-#: direction -- Review: coordinator:code-reviewer P1, Finding 2.
 _BRANCH_CREATE_COMPATIBLE_FLAGS = frozenset({"-f", "--force", "-t", "--track", "--no-track"})
 
-#: `git checkout`/`git switch` creation flags -- the token immediately
-#: following one of these is the target branch name. `git switch` also
-#: accepts the long-form `--create`/`--force-create` spellings of `-c`/
-#: `-C` (Review: coordinator:code-reviewer P1, Finding 3 -- these were
-#: absent, so `git switch --create <name>` bypassed the guard entirely).
 _CHECKOUT_CREATE_FLAGS = frozenset({"-b", "-B"})
 _SWITCH_CREATE_FLAGS = frozenset({"-c", "-C", "--create", "--force-create"})
 
@@ -279,10 +258,6 @@ def _deny(name: str, configured_day_branch: Optional[str] = None) -> bool:
 def _extract_checkout_switch_target(
     tokens: List[str], create_flags: frozenset
 ) -> Optional[str]:
-    """Return the token immediately following the first `create_flags`
-    member found in `tokens[2:]` (the argv slice after `git <subcommand>`),
-    or `None` if no such flag is present or it carries no following
-    argument."""
     for i in range(2, len(tokens)):
         if tokens[i] in create_flags:
             return tokens[i + 1] if i + 1 < len(tokens) else None
@@ -309,10 +284,6 @@ def _extract_branch_target(tokens: List[str]) -> Optional[str]:
 def _classify_segment(
     tokens: List[str], configured_day_branch: Optional[str] = None
 ) -> Optional[str]:
-    """Return the offending (denied) branch name for one resolved
-    command-position segment's `tokens`, or `None` (allow -- not a
-    creation-shaped git invocation, or the target name is safe/unsafe to
-    evaluate per the predicates above)."""
     if len(tokens) < 2:
         return None
     if not token_matches_binary(tokens[0], "git"):
@@ -358,7 +329,7 @@ def _canonical_example(today: str) -> str:
 
 
 def _advisory_reason(cmd: str, name: str) -> str:
-    del cmd  # no longer echoed -- see message-size trim below
+    del cmd
     today = local_day()
     canonical = _canonical_example(today)
     return (
@@ -386,14 +357,6 @@ def _advisory_reason(cmd: str, name: str) -> str:
     anchor=lambda result: result is None,
 )
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the noncanonical-branch-creation gate against a PreToolUse
-    payload. Returns `None` (allow, no comment) or the nested advisory
-    `allow` envelope (`additionalContext`, never `permissionDecision:
-    "deny"` -- see module summary). Never identity-gated -- fires for every
-    caller including the main-loop EM (see module docstring).
-    """
-    # Deliberately no try/except -- fail-CLOSED-on-exception is the
-    # dispatcher's job for a CLASS = "hard-deny" guard (see module
     # docstring "NEGATIVE SPEC 4").
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
@@ -407,29 +370,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not _PRE_FILTER_RE.search(cmd):
         return None
 
-    # REPO SCOPING -- see module docstring "REPO SCOPING". Must run before
-    # any name predicate; an out-of-scope repo allows unconditionally.
     git_root = resolve_git_root(payload.get("cwd"))
     if not _is_hazard_repo(git_root or ""):
         return None
 
-    # Dialect-aware Start-Process expansion (C8,
-    # pln-the-destructive-core-learns-the-she): this entry's `matchers`
     # already declares `COMMAND_TOOL_NAMES` but `resolve_command_positions`
-    # is a Bash-shaped tokenizer with no PowerShell awareness, so a
-    # `Start-Process git -ArgumentList 'checkout','-b','fix-thing'`
-    # invocation resolves to a segment headed by `Start-Process`, never
-    # `git`, and `_classify_segment` below never even reaches the name
-    # predicate -- even though the base `git checkout -b` argv is
-    # byte-identical across dialects. Fails OPEN by construction (see
     # `MATCHERS` comment above), so this is a missed advisory, never a
-    # spurious one. Same narrow fix as the sibling deny-capable entries:
-    # for a PowerShell payload only, tokenize via `_dialect.tokenize_
-    # command` and run the SAME `expand_start_process_invocations` pass,
-    # then rejoin the expanded tokens back into text so `resolve_command_
-    # positions` (unchanged, still exercised byte-for-byte on the BASH leg)
-    # sees the target's real argv in command position. A PowerShell parse
-    # failure leaves `cmd` untouched.
     _bncbc_dialect = dialect_from_tool_name(payload.get("tool_name"))
     if _bncbc_dialect is Dialect.POWERSHELL:
         _bncbc_ps_tokens = tokenize_command(

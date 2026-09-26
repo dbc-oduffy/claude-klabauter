@@ -81,17 +81,10 @@ __all__ = [
 
 
 def is_worker(config) -> bool:
-    """Whether `config` belongs to an xdist worker rather than the controller."""
     return getattr(config, "workerinput", None) is not None
 
 
 def get_basetemp(config) -> Optional[str]:
-    """Read the session's basetemp without ever creating one.
-
-    Returns `None` when no test in this session used `tmp_path`/
-    `tmp_path_factory` — deliberately reads the private `_basetemp` attr
-    rather than calling `getbasetemp()`, which creates a directory on a miss.
-    """
     factory = getattr(config, "_tmp_path_factory", None)
     if factory is None:
         return None
@@ -102,11 +95,6 @@ def get_basetemp(config) -> Optional[str]:
 
 
 def is_under_basetemp(path_str: Optional[str], basetemp_parts: Sequence[str]) -> bool:
-    """Whether `path_str` has `basetemp_parts` as a strict path-component prefix.
-
-    A component comparison (`Path.parts`), not a string prefix — so
-    `.../pytest-2` never matches `.../pytest-20`.
-    """
     if not path_str:
         return False
     try:
@@ -120,7 +108,6 @@ def is_under_basetemp(path_str: Optional[str], basetemp_parts: Sequence[str]) ->
 
 
 def collect_ancestor_pids(pid: int) -> set:
-    """The pids of every ancestor of `pid` (never including `pid` itself)."""
     ancestors: set = set()
     if psutil is None:
         return ancestors
@@ -139,15 +126,6 @@ def find_orphans(
     session_start_time: float,
     own_username: Optional[str],
 ) -> List["psutil.Process"]:
-    """Two-stage scan for same-user, session-new processes rooted under `basetemp`.
-
-    Stage one (cheap): same user, `create_time() >= session_start_time`,
-    excluding this process and every one of its ancestors. Stage two
-    (expensive): only for stage-one survivors, read `cwd()`/`cmdline()` and
-    keep those with a basetemp-rooted path-component match on either.
-    `AccessDenied`/`NoSuchProcess` are ignored at every step — a process that
-    vanished or is unreadable is not an orphan this reap can act on.
-    """
     if psutil is None:
         return []
     basetemp_parts = Path(basetemp).parts
@@ -185,12 +163,6 @@ def find_orphans(
 
 
 def reap_processes(procs: Sequence["psutil.Process"]) -> List[Tuple[int, List[str]]]:
-    """Terminate every proc in `procs`, then kill whatever is still alive after 1s.
-
-    Returns `(pid, argv)` pairs for every process this call attempted to
-    reap, captured before termination so a dead process's argv is still
-    reportable.
-    """
     if psutil is None:
         return []
     reaped: List[Tuple[int, List[str]]] = []
@@ -215,8 +187,6 @@ def reap_processes(procs: Sequence["psutil.Process"]) -> List[Tuple[int, List[st
 
 
 def pytest_sessionfinish(session, exitstatus) -> None:  # noqa: ARG001 - exitstatus never touched
-    """Reap any process orphaned under this session's basetemp. Never raises, never
-    touches `exitstatus` — a broken scan must not become a new gate failure mode."""
     try:
         config = session.config
         if is_worker(config):

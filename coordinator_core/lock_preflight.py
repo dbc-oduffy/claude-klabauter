@@ -87,10 +87,6 @@ import os
 
 
 def preflight_reap_stale_lock(worktree_root: str) -> None:
-    """Best-effort orphaned-`.git/index.lock` self-heal, run once before a
-    commit seam's own git call(s) land on the pre-flight path. See this
-    module's docstring for the full contract and negative-spec.
-    """
     try:
         git_entry = os.path.join(worktree_root, ".git")
         try:
@@ -103,9 +99,6 @@ def preflight_reap_stale_lock(worktree_root: str) -> None:
                 return
         elif not os.path.exists(git_entry):
             return
-        # else: `.git` is a file (linked worktree / submodule) -- the real
-        # git dir cannot be resolved cheaply, so the sweep is called
-        # unconditionally to let it resolve it correctly.
         from coordinator_core.ops import reap_stale_locks
 
         reap_stale_locks.main([])

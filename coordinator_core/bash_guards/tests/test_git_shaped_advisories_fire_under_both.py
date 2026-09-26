@@ -123,7 +123,7 @@ class TestReapStaleGitLockBothDialects:
         assert bash_lock.exists()
         assert ps_lock.exists()
 
-        assert bash_entry.fn() is None  # side-effect-only guard: always allow
+        assert bash_entry.fn() is None
         assert ps_entry.fn() is None
 
         assert not bash_lock.exists(), "Bash-dialect call did not reap the aged lock"
@@ -143,12 +143,6 @@ class TestBlockDevRepoSentinelRemovalAdvisoryBothDialects:
         assert "PowerShell" in entry.matchers
 
     def test_git_rm_sentinel_advises_identically_under_both_dialects(self, tmp_path):
-        """`git rm <sentinel>` is a foreign-binary-argv shape spelled
-        identically in both dialects (C1's audit rule) -- the guard's own
-        `check_advisory` was already dialect-aware before this chunk (see
-        its `dispatch.py` registration comment); this proves the widened
-        `matchers` gate now actually lets the PowerShell-tagged payload
-        reach that pre-existing dialect leg."""
         cmd = "git rm %s" % self.SENTINEL
         bash_entry = _entry(_chain(cmd, "sess-a", str(tmp_path), "Bash"), self.NAME)
         ps_entry = _entry(_chain(cmd, "sess-b", str(tmp_path), "PowerShell"), self.NAME)

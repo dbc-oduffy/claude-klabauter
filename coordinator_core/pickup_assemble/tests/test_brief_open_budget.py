@@ -1,21 +1,3 @@
-"""
-coordinator_core.pickup_assemble.tests.test_brief_open_budget
-
-Purpose: pins AC4 (docs/plans/2026-08-21-rebuild-the-three-ceremony-
-assemblers.md) — no op in scope may read a whole corpus to answer a
-question about one artifact. Open count per `brief()` call must stay
-UNDER 250, versus the 9,818 measured before C2/C3 deleted
-`compute_competing_claim`/`compute_commit_reality`/`compute_successor_handoffs`
-(the three unread, corpus-walking computations).
-
-This is the regression guard for the whole class, not just chunk C3 — a
-future re-introduction of a per-artifact corpus scan anywhere in
-`pickup_assemble` trips this budget, not just the three deleted call
-sites.
-
-Counts via a `builtins.open` wrapper (the interface named in C3's own
-dispatch brief), installed for the duration of one `brief()` call only.
-"""
 
 from __future__ import annotations
 
@@ -27,19 +9,11 @@ import pytest
 
 import coordinator_core.pickup_brief as pa
 
-# Real-git spawn in the fixture (git init/add/commit) — `brief()`'s
-# classifiers read actual git-tracked repo state. Declares the spawn per
-# the ratchet's Rule 2(b) marker escape (coordinator_core/tests/
-# test_no_new_spawning_tests.py) rather than an allowlist entry.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
 ]
 
-# AC4: "open count per op is under 250" — ratified flat, unchanged, over
-# the dispute that it may be arithmetically tight for a brief that reads
-# stamps (docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md
-# line 111).
 _AC4_OPEN_BUDGET = 250
 
 

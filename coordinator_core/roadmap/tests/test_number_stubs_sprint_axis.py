@@ -1,11 +1,3 @@
-"""
-coordinator_core.roadmap.tests.test_number_stubs_sprint_axis — C5a coverage:
-topo_number's sprint-axis caller work in run_default_mode (AC21) plus the
-sprint-descriptor/stub_id disjointness invariant primitive (AC7).
-
-Spec backlink: docs/plans/2026-08-21-engine-half-of-the-roadmap-sprint-spine-split.md
-§ C5a.
-"""
 
 from __future__ import annotations
 
@@ -19,10 +11,6 @@ from coordinator_core.roadmap.number_stubs import (
     main,
     parse_edges_file,
 )
-
-# ---------------------------------------------------------------------------
-# parse_edges_file — @N sprint tag / fromSprint,toSprint extraction (AC21)
-# ---------------------------------------------------------------------------
 
 
 def test_parse_edges_file_line_form_sprint_tag_on_edge_sides():
@@ -63,13 +51,6 @@ def test_parse_edges_file_json_form_no_sprint_fields_has_empty_sprints():
     assert parsed["sprints"] == {}
 
 
-# ---------------------------------------------------------------------------
-# run_default_mode (via main) — author-assigned sprints stamped onto
-# sprintWave, byte-parity-preserving default, and fail-loud on a
-# non-dependency-monotone author assignment (AC21).
-# ---------------------------------------------------------------------------
-
-
 def _rows(out: str):
     rows = {}
     for ln in out.splitlines():
@@ -105,7 +86,6 @@ def test_default_mode_stamps_author_assigned_sprint_values(tmp_path, capsys):
     assert rows["BASE"]["sprint"] == 1
     assert rows["WIDGET"]["sprint"] == 2
     assert rows["GADGET"]["sprint"] == 2
-    # Within sprint 2, wave still increases dependency-before-dependent.
     assert rows["WIDGET"]["wave"] < rows["GADGET"]["wave"]
 
 
@@ -113,7 +93,6 @@ def test_default_mode_sprint_axis_order_is_dependency_monotone_across_sprints(
     tmp_path, capsys
 ):
     edges_file = tmp_path / "edges.txt"
-    # BASE ships in sprint 1; WIDGET (which depends on BASE) in sprint 2.
     edges_file.write_text("WIDGET@2 <- BASE@1\n", encoding="utf-8")
 
     rc = main([str(edges_file)])
@@ -129,8 +108,6 @@ def test_default_mode_dependency_assigned_later_sprint_than_dependent_fails_loud
     tmp_path, capsys
 ):
     edges_file = tmp_path / "edges.txt"
-    # BASE (the dependency, must ship first) tagged sprint 2, but its
-    # dependent WIDGET tagged sprint 1 -- inverted, not dependency-monotone.
     edges_file.write_text("WIDGET@1 <- BASE@2\n", encoding="utf-8")
 
     with pytest.raises(SystemExit) as excinfo:
@@ -154,11 +131,6 @@ def test_default_mode_json_form_stamps_from_to_sprint_fields(tmp_path, capsys):
     rows = _rows(out)
     assert rows["ALPHA"]["sprint"] == 1
     assert rows["BETA"]["sprint"] == 2
-
-
-# ---------------------------------------------------------------------------
-# assert_sprint_descriptor_stub_disjoint — AC7 fail-loud collision invariant
-# ---------------------------------------------------------------------------
 
 
 def test_disjoint_ids_pass_silently():

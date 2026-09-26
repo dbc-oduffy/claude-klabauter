@@ -1,19 +1,3 @@
-"""Tests for coordinator_core.bash_guards.block_stash_destruction.
-
-Covers the DENY (`drop`/`clear`) vs ALLOW (everything else) second-level `git
-stash` subcommand split, the deliberate NON-default-deny posture on an
-unrecognized token, the `pop`/`apply` carve-out, chaining/env-assignment/
-wrapper/`sh -c` shell shapes, the flag-value false-positive class positional
-matching exists to avoid (`git stash push -m drop -- <paths>`), heredoc-body
-stripping, and that the guard is NOT identity-gated -- it fires with or
-without `agent_id`/`agent_type` present, unlike its identity-gated sibling
-`block_subagent_destructive_action`, which exempts the main-loop EM and is the
-entire reason this module exists.
-
-Pure Python -- no shell spawns, no git repo required.
-
-Spec backlink: coordinator_core/bash_guards/block_stash_destruction.py
-"""
 
 from __future__ import annotations
 
@@ -126,9 +110,6 @@ class TestPopApplyCarveOut:
 
 
 class TestFlagValueFalsePositives:
-    """The class that `remaining[0]` positional matching exists to avoid: a
-    flag VALUE that reads as a deny verb. A scan that skipped leading flags to
-    find the "real" subcommand would deny all of these."""
 
     def test_push_with_drop_as_message_allows(self):
         assert guard.check(_payload("git stash push -m drop -- src/x.py")) is None
@@ -177,15 +158,6 @@ class TestShellShapes:
 
 
 class TestPowerShellIdiomDialectNeutral:
-    """C4a (guard-dialect-coverage.md row 2): this guard gates on
-    `_normalize_executable_basename(...) != "git"` -- the external `git`
-    exe, byte-identical in both shell dialects. No `_dialect.py` import
-    exists in this module (confirmed by grep), so a PowerShell-idiom
-    surrounding shape (`;` chain instead of `&&`) reaches the SAME
-    tokenizer and must reach the SAME verdict.
-
-    Spec backlink: docs/reference/guard-dialect-coverage.md row 2 (C4a).
-    """
 
     def test_semicolon_chained_powershell_style_denies(self):
         _reason(guard.check(_payload("Get-Location; git stash drop")))
@@ -195,8 +167,6 @@ class TestPowerShellIdiomDialectNeutral:
 
 
 class TestHeredocBodies:
-    """A heredoc body is stdin DATA, never shell command text. Persisting a
-    document whose prose quotes `git stash drop` must not deny."""
 
     def test_heredoc_prose_quoting_the_verb_allows(self):
         cmd = (
@@ -216,9 +186,6 @@ class TestHeredocBodies:
         _reason(guard.check(_payload(cmd)))
 
     def test_real_invocation_after_heredoc_denies_when_separator_is_explicit(self):
-        """The same shape with a `;` separator -- the segmentation the shared
-        tokenizer DOES handle -- denies today, showing the guard's own
-        classification is sound and the gap above is purely the newline seam."""
         cmd = (
             "cat <<EOF > notes.md\n"
             "some prose\n"
@@ -229,9 +196,6 @@ class TestHeredocBodies:
 
 
 class TestNotIdentityGated:
-    """The entire reason this module exists: `block_subagent_destructive_
-    action` fails OPEN when no subagent identity resolves, exempting the
-    main-loop EM."""
 
     def test_denies_with_no_identity_fields_at_all(self):
         _reason(guard.check(_payload("git stash drop")))
@@ -318,14 +282,9 @@ class TestApplyAdvisory:
         assert guard.check_apply_advisory(_payload("git stash push")) is None
 
     def test_apply_advisory_does_not_disturb_the_deny_leg(self):
-        # `check` (drop/clear) is a separate registered leg -- `apply` must
-        # never trip it.
         assert guard.check(_payload("git stash apply")) is None
 
     def test_flag_value_false_positive_class_does_not_fire(self):
-        # Positional matching: the literal word `apply` as a FLAG VALUE
-        # (not the second-level subcommand) must not misclassify -- mirrors
-        # `TestAllowSet`'s own `-m drop` case for the deny leg.
         assert (
             guard.check_apply_advisory(
                 _payload("git stash push -m apply -- src/apply_handler.py")

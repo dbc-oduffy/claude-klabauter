@@ -1,32 +1,3 @@
-"""
-coordinator_core.ops.test_run_pip_audit
-
-Characterization tests for the "ci.run_pip_audit" op
-(coordinator_core.ops.run_pip_audit) — the pip-audit external-tool wrapper
-replacing the DoE agents/dep-cve-auditor.md:68 fence.
-
-subprocess.run is monkeypatched throughout: these tests must not require
-pip-audit to actually be installed (per the plan's chunk design note).
-
-Coverage:
-  (a) registered under exactly "ci.run_pip_audit" on import
-  (b) missing/blank lockfile_path raises ValueError naming the param
-  (c) nonexistent lockfile_path raises ValueError
-  (d) happy path: pip-audit JSON payload flattened into findings,
-      vulnerable_count == len(findings), extra_index_detected reflects the
-      caller-supplied param (never re-derived from the lockfile)
-  (e) clean/no-vulnerabilities payload → empty findings, count 0
-  (f) non-JSON stdout (garbled/empty-tool-crash output) raises RuntimeError
-  (g) extra_index_url, when supplied, is forwarded as --extra-index-url in
-      the invoked argv; when absent, no such flag appears
-  (h) invocation is a direct list-argv subprocess of sys.executable — never
-      a shell string (shell=False by construction; no bash/sh anywhere)
-  (i) idempotency (AC7): double invocation with identical inputs and an
-      identical mocked subprocess result returns an identical response
-
-Spec backlink: pln-coordinator-ops-buildout-from--903224
-§ Wave 2 (run cluster)
-"""
 
 from __future__ import annotations
 
@@ -35,9 +6,6 @@ import subprocess
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Import guard — MUST precede any test so @register_op fires first.
-# ---------------------------------------------------------------------------
 import coordinator_core.ops.run_pip_audit  # noqa: F401 — fires @register_op
 
 from coordinator_core.ipc import _REGISTRY
@@ -167,11 +135,6 @@ def test_non_json_stdout_raises_runtime_error(tmp_path, monkeypatch):
 
 
 def test_empty_stdout_with_nonzero_exit_raises_runtime_error(tmp_path, monkeypatch):
-    """Empty stdout + non-zero exit (tool
-    absent/crashed, e.g. "No module named pip_audit") previously fell
-    through to the falsy-stdout branch and silently substituted a
-    clean-scan payload, indistinguishable from a genuine zero-vuln result.
-    This must raise, not return a false-clean result."""
     lockfile = _make_lockfile(tmp_path)
     monkeypatch.setattr(
         subprocess,
@@ -186,9 +149,6 @@ def test_empty_stdout_with_nonzero_exit_raises_runtime_error(tmp_path, monkeypat
 
 
 def test_empty_stdout_with_zero_exit_is_treated_as_clean(tmp_path, monkeypatch):
-    """Empty stdout paired with a zero exit code is a legitimate clean scan,
-    not an invocation failure — the F1 fix only guards the non-zero-exit
-    shape."""
     lockfile = _make_lockfile(tmp_path)
     monkeypatch.setattr(
         subprocess,
@@ -259,9 +219,6 @@ def test_invocation_is_list_argv_of_sys_executable_no_shell(tmp_path, monkeypatc
 
 
 def test_subprocess_run_carries_timeout(tmp_path, monkeypatch):
-    """pip-audit is a live network call
-    (advisory endpoint); an unresponsive network must not wedge the op
-    forever. Assert a timeout= is passed on every invocation."""
     lockfile = _make_lockfile(tmp_path)
     captured = {}
 
@@ -290,9 +247,6 @@ def test_subprocess_timeout_raises_runtime_error(tmp_path, monkeypatch):
 
 
 def test_double_invocation_identical_result(tmp_path, monkeypatch):
-    """AC7 idempotency proof: pip-audit is read-only against the lockfile and
-    the advisory database — two calls with identical inputs and an
-    identical (mocked) tool result return an identical response."""
     lockfile = _make_lockfile(tmp_path)
     monkeypatch.setattr(
         subprocess,

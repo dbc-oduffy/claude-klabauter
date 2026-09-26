@@ -86,20 +86,10 @@ from typing import Any, Optional
 
 from coordinator_core.bash_guards._override_log_path import _override_log_path
 
-GENERATES = []  # appends a line to the runtime override log and creates its sink directory — an append-only audit trail of events, never regenerated and never stale relative to sources
+GENERATES = []
 
 
 def environment_stands_the_bump_down(env: Optional[Any] = None):
-    """The capability that decides whether a write-confinement bump is a real
-    rule HERE -- or `None` when it applies normally.
-
-    Returns the falsy `fleet_present` `Capability` (whose `.evidence` names
-    why) when the bump should stand down, so callers can put that evidence
-    into both the operator notice and the durable audit line. Returns `None`
-    when the bump applies as written.
-
-    Fail open: an unimportable or unhappy capability layer returns `None`.
-    """
     try:
         from coordinator_core.environment import capability
 
@@ -112,14 +102,6 @@ def environment_stands_the_bump_down(env: Optional[Any] = None):
 def stand_down_reason(
     guard_label: str, target_repo: str, session_repo: str, evidence: str
 ) -> str:
-    """The operator-facing notice text for a stood-down bump.
-
-    Says three things and stops, per this repo's message register: what was
-    allowed, why the rule does not hold here, and the standing preference
-    that survives the stand-down. It is NOT a permission prompt and offers no
-    override key -- the write has already been allowed by the time a caller
-    prints this.
-    """
     return (
         "%s: allowed a write into %s from a session anchored at %s.\n"
         "Cross-repo write gating does not apply on this host: %s. "
@@ -208,8 +190,6 @@ def log_environment_stand_down(
             fh.write(line)
         _mirror_to_durable_sink(Path(git_root), line, sink_basename)
     except OSError as exc:
-        # The write proceeds regardless -- but it is now unrecorded, so say
-        # so rather than standing down silently.
         print(
             "write-bump stand-down: failed to write audit log: %s" % exc,
             file=sys.stderr,
@@ -217,10 +197,6 @@ def log_environment_stand_down(
 
 
 def _mirror_to_durable_sink(git_root: Path, line: str, sink_basename: str) -> None:
-    """Second copy of the stand-down line into a TRACKED path, when there is a
-    git remote to carry it off the box. Best-effort in every direction: the
-    `.git` copy has already landed, so a failure here costs redundancy, never
-    the record."""
     try:
         from coordinator_core.environment import capability
 

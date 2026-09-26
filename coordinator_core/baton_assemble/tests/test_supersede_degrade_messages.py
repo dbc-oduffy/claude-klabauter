@@ -69,8 +69,6 @@ def test_placeholder_refusal_names_handoff_transition_supersede_and_claim_first(
     assert "handoff.transition" in stderr
     assert "verb=supersede" in stderr
     assert "claimed first" in stderr
-    # Never presents the wrapper's own directive as an invocable op in prose —
-    # the structured `cli` field is a separate, unchanged carrier (AC3).
     assert "run `handoff.supersede_predecessor`" not in stderr
     assert "invoke `handoff.supersede_predecessor`" not in stderr
 
@@ -83,8 +81,6 @@ def test_housekeeping_off_refusal_names_handoff_transition_supersede_and_claim_f
 
     successor_rel = "state/handoffs/successor-housekeeping-off.md"
     _write(tmp_path / successor_rel, "---\ntitle: successor\n---\n\n# Successor\n")
-    # CLAIMED, so the DR-242 gate passes and the dispatcher reaches the
-    # op-composition seam under test (mirrors TestAKilledArchiveTransitionDegradesToo).
     _write_artifact(tmp_path / _PRED_REL, list(_PREDECESSOR_FM))
 
     def _suspended(op_name, params, repo_root):
@@ -106,9 +102,6 @@ def test_housekeeping_off_refusal_names_handoff_transition_supersede_and_claim_f
 
 
 def test_dispatch_table_and_cli_field_stay_unchanged_by_this_ac():
-    """Negative pin (AC3's own scope note): the structured `cli` field and
-    the dispatch-table registration are mechanism, not prose, and this AC
-    governs message text only."""
     from coordinator_core.baton_assemble import apply as ba_apply_mod
 
     assert "handoff.supersede_predecessor" in ba_apply_mod._CLI_DISPATCH

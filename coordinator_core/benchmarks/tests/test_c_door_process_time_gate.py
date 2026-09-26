@@ -84,12 +84,6 @@ def test_batched_process_time_ms_unsupported_platform_raises_not_implemented(mon
     ),
 )
 def test_c_door_k20_batched_process_time_under_brightline_bar():
-    """Placeholder for the Windows/Darwin K=20 door batch gate. Authored
-    against the identity-stamped door binary (`door.exe` via
-    `door.image-identity.txt`/`door.exe.provenance.json` on Windows, an
-    install-path-built `door_posix` on Darwin) by whichever T4 run lands on
-    one of those platforms; this Linux run skips it rather than fabricate a
-    number this box's instrument cannot produce."""
     pytest.skip(
         "Not authored on this run (Linux, sys.platform=%r). The K=20 door "
         "batch call and its <50ms assertion belong here on a Windows or "

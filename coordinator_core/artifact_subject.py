@@ -1,48 +1,3 @@
-"""Artifact subject-matter classifier: given the path of a coordinator
-working-data artifact, classifies its SUBJECT MATTER as one of engine,
-doctrine, or cross-cutting. The discriminator is what the artifact is
-ABOUT, not where it physically lives on disk. Subject-matter is the
-routing key used by coordinator_state_root to place doctrine artifacts in
-the DoE plane and engine artifacts in the claude-klabauter plane.
-
-Spec backlinks:
-    docs/plans/2026-07-04-doe-authoring-repo-build-subject-matter-.md § W2.2
-    docs/wiki/state-placement-law.md § Plan Homes
-Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
-    (residual clean-slate wave; this module is NOT wired to the classifier's
-    consumers yet)
-
-Classification contract:
-
-    engine        — artifact is ABOUT engine internals: coordinator_core/**,
-                    pcore roadmap, claude-klabauter's own install-chain node (NOT the
-                    coordinator install skill), MCP/resident-service
-                    research, memos addressed TO claude-klabauter.
-
-    doctrine      — artifact is ABOUT coordinator doctrine: skills, hooks,
-                    agents, ceremonies, coordinator plugin source
-                    (plugins/coordinator-claude/coordinator/**), meta-repo
-                    doctrine surfaces (CLAUDE.md, CLAUDE.local.md,
-                    docs/decisions/, docs/wiki/), coordinator install skill /
-                    commands/install.md. Default class for everything else
-                    coordinator.
-
-    cross-cutting — artifact genuinely spans BOTH planes; requires an
-                    explicit human routing decision. Never silently
-                    auto-routed.
-
-Install-chain disambiguation (required by spec):
-    claude-klabauter's own install script                       -> engine
-    coordinator install skill / commands/install.md    -> doctrine
-    Discriminator: whose install it is (subject), not the shared word
-    "install".
-
-Negative-spec: this module does NOT attempt to detect all possible
-cross-cutting artifacts — that is undecidable from path alone. It catches
-the explicitly-named patterns from the plan (DR-207-shaped, fleet-spine
-emitter-binding). Truly undecidable paths that match none of the patterns
-fall through to the engine/doctrine heuristics.
-"""
 from __future__ import annotations
 
 import re
@@ -55,11 +10,6 @@ class Subject:
 
 
 class CrossCuttingArtifact(Exception):
-    """Raised by classify_or_raise when the artifact is cross-cutting.
-
-    Carries the remediation message a caller would otherwise have to
-    reconstruct itself.
-    """
 
     def __init__(self, path: str, message: str):
         super().__init__(message)
@@ -68,16 +18,9 @@ class CrossCuttingArtifact(Exception):
 
 
 _CROSS_CUTTING_PATTERNS = (
-    # Bash oracle's `case` alternation matches only
-    # the two literal casings `DR-207`/`dr-207` (no case-insensitive flag set);
     # re.IGNORECASE was an undocumented broadening past the faithful-repro
-    # contract this migration wave holds itself to. Tightened to exact parity.
-    re.compile(r"DR-207|dr-207"),  # DR-207-shaped: spans both planes
-    re.compile(r"fleet-spine.*emitter"),  # fleet-spine emitter-binding
-    # standalone *emitter-binding* covers any artifact whose name signals
-    # a spine/emit straddle that doesn't carry the fleet-spine prefix (e.g. a future
-    # cockpit-emitter-binding plan). The fleet-spine pattern above catches
-    # the primary known instance; this is the catch-all for the class.
+    re.compile(r"DR-207|dr-207"),
+    re.compile(r"fleet-spine.*emitter"),
     re.compile(r"emitter-binding"),
 )
 
@@ -139,7 +82,6 @@ def classify(path: str) -> str:
 
 
 def remediation_message(path: str) -> str:
-    """The stderr diagnostic for a cross-cutting artifact."""
     return (
         f"coordinator_artifact_subject: cross-cutting artifact detected — '{path}'\n"
         "  This artifact spans both doctrine and engine planes. It cannot be\n"

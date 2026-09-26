@@ -1,18 +1,3 @@
-"""
-coordinator_core.contract.tests.test_residue_segments — pytest for the
-shared, caller-agnostic segment loader factored out of
-`coordinator_core.review_assemble.residue`.
-
-Deliberately exercises the loader with a filter key OTHER than `surface`
-(`case`, mirroring `/handoff`'s own frontmatter shape) — proving the
-parameterisation is real, not re-testing review's own values (that stays
-`coordinator_core/review_assemble/test_residue.py`'s job, unedited, as the
-behaviour-preservation oracle).
-
-Run: python -m pytest coordinator_core/contract/tests/test_residue_segments.py -q
-
-Spec backlink: pln-factor-the-residue-segment-loa-e63300, chunk C1
-"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -59,11 +44,6 @@ def _make_segment_dir(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return content_root
-
-
-# ---------------------------------------------------------------------------
-# Happy path — parameterised on a filter key other than `surface`.
-# ---------------------------------------------------------------------------
 
 
 def test_load_and_select_round_trip_with_non_surface_filter_key(tmp_path: Path) -> None:
@@ -117,13 +97,8 @@ def test_loaded_segment_carries_filter_key_and_class(tmp_path: Path) -> None:
     assert by_id["compaction-reminder"]["class"] in SEGMENT_CLASSES
 
 
-# ---------------------------------------------------------------------------
-# Fail-loud coverage — AC3's checklist, no silent skip on any of them.
-# ---------------------------------------------------------------------------
-
-
 def test_missing_segment_directory_is_fail_loud(tmp_path: Path) -> None:
-    content_root = tmp_path / "content-root"  # never created
+    content_root = tmp_path / "content-root"
     with pytest.raises(SegmentLoadError) as excinfo:
         load_segments(content_root, SEGMENT_DIR, filter_key="case", legal_values=LEGAL_CASES)
     assert "residue directory not found" in str(excinfo.value)

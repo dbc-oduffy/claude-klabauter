@@ -43,7 +43,6 @@ from pathlib import Path
 
 import pytest
 
-# ---- Import guard: fires @register_op side-effect for tracker.assert_code_complete. ----
 import coordinator_core.ops.tracker.completion_policy  # noqa: F401
 
 from coordinator_core.ipc import _REGISTRY, dispatch_message
@@ -63,7 +62,6 @@ def _run(coro):
 
 
 def _make_git_repo(root: Path) -> Path:
-    """Init a minimal git repository under *root* and return the repo root."""
     root.mkdir(parents=True, exist_ok=True)
 
     def _git(*args: str) -> None:
@@ -97,18 +95,8 @@ def _make_item(repo_root: Path, *, title: str = "Widget", body: str = "Do the th
     return item_id
 
 
-# ---------------------------------------------------------------------------
-# (a) Import-guard floor assertion
-# ---------------------------------------------------------------------------
-
-
 def test_tracker_assert_code_complete_registered():
     assert "tracker.assert_code_complete" in _REGISTRY
-
-
-# ---------------------------------------------------------------------------
-# (b) handler-level
-# ---------------------------------------------------------------------------
 
 
 def test_handler_repo_root_none_raises_runtime_error():
@@ -164,12 +152,6 @@ def test_handler_returns_degraded_envelope_on_mismatched_params_repo_root(tmp_pa
     assert result["asserted"] is False
 
 
-# ---------------------------------------------------------------------------
-# (c) assert smoke — full classifier truth table lives in
-#     coordinator_core/tests/test_tracker_completion_policy.py
-# ---------------------------------------------------------------------------
-
-
 def test_handler_asserts_auto_tier_when_trailer_bound_and_reachable(tmp_path):
     repo = _make_git_repo(tmp_path / "repo")
     item_id = _make_item(repo)
@@ -214,15 +196,7 @@ def test_handler_asserts_suggest_tier_when_not_reachable(tmp_path):
     assert result["tier"] == "suggest"
 
 
-
 def test_handler_defaults_to_verify_with_effort_and_never_auto_asserts(tmp_path):
-    """Omitting `closure_fidelity` must degrade to suggest, never auto.
-
-    This is the op-surface leg of the plan's headline guarantee: the inputs
-    below (trailer_bound + reachable) are exactly the ones that yield `auto`
-    for an auto-observable item, so a regression that reinstated an
-    auto-observable default would flip this to `auto` and be caught here.
-    """
     repo = _make_git_repo(tmp_path / "repo")
     item_id = _make_item(repo)
 
@@ -261,10 +235,7 @@ def test_handler_rejects_unknown_closure_fidelity(tmp_path):
         )
 
 
-# ---------------------------------------------------------------------------
-# (d) five-surface wiring + command-type smoke (C11's own body: registry,
 #     classification, scope, module_map, _EAGER_OP_MODULES)
-# ---------------------------------------------------------------------------
 
 
 def test_registered_in_registry_map():

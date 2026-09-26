@@ -399,58 +399,18 @@ from coordinator_core.write_guards.block_subagent_plan_body_write import (
 )
 
 
-# W3 FIX 1 (2026-07-15, security parity break): the shared _helpers.resolve_effective_types() re-exports
-# subagent_sandbox.engine._canonical_agent_id, whose named-teammate leg returns the RAW
-# `a<name>-<16hex>` agent_id instead of the bash-canonical `<name>@session-<short>` form.
 # For NAMED-TEAMMATE dispatches that keys the wrong back-pointer dir, subagent_type
-# resolves empty, and this guard FAILS OPEN where legacy bash DENIES. This module imports
 # the ALREADY-CORRECT canonical resolver (write_guards.block_subagent_plan_body_write._resolve_subagent_identity)
-# instead, per the same workaround that guard already uses -- see its own docstring.
 CLASS = "hard-deny"
 
-# Generator-provenance declaration (generator_provenance.py). This module's
-# only real write is _log_fail_open, appending to
-# settings_home()/state/destructive-guard-fail-open.log -- settings-home
-# rooted, outside the tracked repo tree.
 GENERATES = []
-# Widened 2026-08-19 (C7, docs/plans/2026-08-19-the-held-guard-cohort-
-# becomes-dialect-safe.md AC2/AC12) -- LAST of this cohort's flips,
-# deliberately ordered after C3 (this module's own `_evaluate_powershell_
-# destructive`, AC10) landed and its classifier tests + the AC5 anchored
-# differential were re-run green immediately before this change. A
-# dispatched subagent choosing the PowerShell tool instead of Bash
-# previously bypassed this guard entirely (see
-# docs/reference/guard-tool-name-membership.md section 3, now superseded by
-# this flip). The prior held-Bash-only rationale was that the `_evaluate_
-# legacy` free-text fallback (`if tokens is None: return _evaluate_legacy
-# (cmd)`) was only verified closed for POSIX shapes, not PowerShell's
-# here-string/backtick-escape shapes -- `_evaluate_powershell_destructive`
-# (C3) is the dedicated PowerShell-dialect classifier that resolves that gap
-# ahead of this widen, so `tokens is None` no longer routes a PowerShell
-# payload through the POSIX-only legacy fallback.
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 40
 
-# ---------------------------------------------------------------------------
-# Layer 1 -- dangerous-surface probes.
 # re.MULTILINE so ^/$ anchor per-line, mirroring `grep -qE ... <<< "$VAR"`'s
-# per-line evaluation of a possibly-multi-line herestring.
-#
 # BOUNDARY-CLASS WIDEN (2026-07-21 review, Findings 1 & 2): a real shell
-# treats a bare word identically whether or not it is quoted (`'bash' x`
-# runs `bash x`) and treats `$(`/a backtick/`(` immediately preceding a word
-# as a command-substitution/subshell boundary (`$(git push --force)` runs
-# `git push --force` for its side effect regardless of what the captured
-# stdout is subsequently used for). The original class -- `[;&|\s]` only --
-# missed both, so a quoted OR substitution-wrapped verb slipped past every
 # Layer-1 surface probe (and the paired Layer-2 `_RM_DENY_RE`/recursive-flag
 # probes) with zero identity-resolution cost. `_BOUNDARY_PRE`/`_BOUNDARY_POST`
-# are shared by ALL boundary-anchored probes below -- git/rm/chmod/
-# recursive-flag/rm-deny/wrapper -- not just the new wrapper probe, since
-# they all share the exact same defect. This is a normalize-the-boundary-
-# class fix, not a per-probe patch: fixing it once here fixes it everywhere
-# the shared constants are used.
-# ---------------------------------------------------------------------------
 _QUOTE_OPEN_CHARS = "'\"`("
 _QUOTE_CLOSE_CHARS = "'\"`)"
 _BOUNDARY_PRE = r"(?:^|[;&|\s" + re.escape(_QUOTE_OPEN_CHARS) + r"])"
@@ -466,152 +426,48 @@ _RECURSIVE_FLAG_RE = re.compile(
     re.MULTILINE,
 )
 
-# rm layer-2 deny (reference hook line 456) -- evaluated against the FULL
 # CMD_NORM, NOT per-segment (deliberate divergence from the git surface).
 _RM_DENY_RE = re.compile(
     _BOUNDARY_PRE + r"rm(?:\s+-[a-zA-Z]*[rRfF][a-zA-Z]*|\s+--recursive|\s+--force)",
     re.MULTILINE,
 )
 
-# ---------------------------------------------------------------------------
-# Indirection-wrapper probe (2026-07-21 addition -- see module docstring
 # "INDIRECTION-WRAPPER HARDENING"). Cheap, boundary-anchored, same style as
-# the git/rm/chmod probes above: catches bash/sh/zsh/python[3]/env/xargs
-# invoked as a bare word, so Layer 1 can gate identity-resolution cost on
-# EITHER a destructive-verb surface OR a wrapper surface. The
-# `python3?(?:\.\d+)*` branch also catches versioned interpreter binaries
-# (`python3.11`, `python3.12.1`, ...) at the raw-text gate (Finding 4,
-# 2026-07-21 review) -- see `_normalize_interpreter_basename` below for the
-# matching normalization on the tokenized path.
-# ---------------------------------------------------------------------------
 _WRAPPER_PROBE_RE = re.compile(
     _BOUNDARY_PRE + r"(?:bash|sh|zsh|python3?(?:\.\d+)*|env|xargs)" + _BOUNDARY_POST,
     re.MULTILINE,
 )
 
-#: Interpreters whose `-c <string>` shape this guard reliably unwraps and
-#: recurse-matches (memo's explicit examples: `sh -c '...'`, `python -c
-#: '...'`).
 _C_FLAG_INTERPRETERS = frozenset({"bash", "sh", "zsh", "python", "python3"})
 
-#: Interpreters whose BARE `<file>` argv shape (no `-c`) is denied outright
-#: -- memo's enumerated `bash|sh|zsh <file>` bullet ONLY. Deliberately does
-#: NOT include python/python3: `python3 -m pytest`, `python3 script.py
-#: --flag` etc. are common, entirely legitimate subagent invocations with no
-#: memo-cited bypass shape behind them; over-blocking those was a real
-#: regression caught while smoke-testing this guard against its own repo's
-#: pytest invocation (2026-07-21). Only shell interpreters get the
-#: outright-deny-on-bare-file treatment; python's ONLY denied shape is `-c`.
 _SHELL_FILE_INTERPRETERS = frozenset({"bash", "sh", "zsh"})
 
-#: Depth cap against pathological/adversarial nesting (`env env env ...`).
-#: A legitimate subagent command never nests this deep; this is a fail-closed
-#: backstop, not a claim of completeness.
 _MAX_INDIRECTION_DEPTH = 4
 
-#: Bundled-or-standalone `-c` short flag, e.g. `-c`, `-ic`, `-ci` (Finding 3,
-#: 2026-07-21 review): Python's CLI parser accepts bundled short flags, so
-#: `python3 -ic '<payload>'` behaves as `python3 -i -c '<payload>'` -- an
-#: exact `tokens[1] == "-c"` check misses this entirely.
 _BUNDLED_C_FLAG_RE = re.compile(r"^-[a-zA-Z]*c[a-zA-Z]*$")
 
-#: Versioned python interpreter basename (`python3.11`, `python3.12.1`, ...)
-#: normalized to its unversioned form (`python3`) for the
 #: `_C_FLAG_INTERPRETERS`/`_SHELL_FILE_INTERPRETERS` membership checks below
-#: -- Finding 4, 2026-07-21 review.
 _PYTHON_VERSION_SUFFIX_RE = re.compile(r"^(python3?)(?:\.\d+)+$")
 
 #: `.`/`source` builtins execute a script IN-PROCESS -- same blast radius as
-#: `bash <file>` (2026-07-21 security-audit finding #5).
 _SOURCE_VERBS = frozenset({".", "source"})
 
-# ---------------------------------------------------------------------------
 # MACHINE-LOCAL REGISTRY WRITE DENY (2026-08-03, this change, DR-125
-# implementation -- docs/decisions/DR-125-subagent-bash-confinement-two-
-# classes.md, DoE-claude). Confirmed live (code-reviewer Finding 3,
-# narrow-subagent-commit-confinement-two-classes.md chunk C2 review): once
 # `coordinator:executor` left `_helpers._CONFINED_FINDINGS_AGENTS`,
-# `machine-local set/array-append/array-set/migrate-publish-mirrors`
-# reachability depended SOLELY on that allowlist-confinement guard -- no
-# guard in `bash_guards/` or `write_guards/` named `machine-local` at all.
-# `machine-local set` writes the `repos.*`/`publish.*` TOML registry that
-# OTHER trusted tooling (cross-repo-memo path resolution,
-# concrete-path-citation remediation text) reads as ground truth for
-# absolute-path resolution -- poisoning it redirects those consumers at an
-# attacker-chosen path. DR-125 Ruling 1 already scopes the confined
 # perimeter to MACHINE-DEGRADING actions and commits; corrupting a registry
-# other tooling trusts for path resolution is machine-degrading, so this is
-# implementing that ruling, not a new PM decision.
-#
-# Keyed on COMMAND SHAPE for EVERY resolved subagent type (not on
 # `_CONFINED_FINDINGS_AGENTS` membership) -- deliberately stronger than the
-# pre-C2 state, where the executor was denied only incidentally via
-# allowlist confinement, and consistent with how this module already
-# handles force-push/stash/reset: the harm lives in the command, not in
-# who ran it.
-#
-# Subcommand list verified against the real CLI
-# (`<settings-home>/bin/_machine_local.py`'s `main()` subparser dispatch
-# table), not guessed from a partial list: `get`/`has`/`keys`/`path`/`dir`
 # are READ-ONLY (how a subagent legitimately resolves a sibling-repo path)
-# and MUST stay reachable; `set`/`array-append`/`array-set`/
-# `migrate-publish-mirrors` are the only members that mutate the on-disk
-# registry.
-#
-# Reuses this module's existing segmentation/normalization machinery --
-# `_evaluate_tokenized`'s per-segment `norm_head` resolution already
-# tolerates a path-prefixed spelling (`/usr/local/bin/machine-local`) and a
-# Windows `.cmd` twin via `_normalize_executable_basename`, `-c`/`env`
-# interpreter-wrapping via that same function's existing recursive-unwrap
-# branches, and `;`/`&&`/`||`/`|` segmentation via `_segments_from_tokens`
-# -- no new matcher/segmenter is authored here. An unparseable command
-# already fails CLOSED via the existing `tokens is None` branch (denies as
-# a wrapper-indirection surface for any resolved subagent), so no separate
-# fail-closed path is needed for this addition either.
-# ---------------------------------------------------------------------------
 _MACHINE_LOCAL_WRITE_SUBCOMMANDS = frozenset(
     {"set", "array-append", "array-set", "migrate-publish-mirrors"}
 )
 
-#: An `argv[0]`-position token that is an unexpanded shell variable reference
-#: or command substitution (`$V`, `${V}`, `$(...)`) -- 2026-07-21 security-
-#: audit finding #3. The guard does NOT attempt to statically resolve the
-#: referenced value (that would require executing the shell); it denies
-#: outright instead.
 _ARGV0_UNRESOLVED_RE = re.compile(r"^\$")
 
-# ---------------------------------------------------------------------------
 # SETTINGS-HOME BIN NARROW EXEMPTION (2026-07-27 addition, authorized by PM
-# ruling -- this is a doctrine/guard-inconsistency fix, not a security
-# loosening). `coordinator/CLAUDE.md` mandates every skill/command/agent
-# fence invoke a settings-home CLI as literally
 # ``"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/<cli>"``
 # -- an unresolved-`$VAR`-in-argv0 shape that `_ARGV0_UNRESOLVED_RE` above
-# denies outright, so a subagent that follows the doctrine it was handed gets
-# blocked by this guard. Mirrors the sibling guard
-# `block_reviewer_bash_outside_allowlist._first_token_is_allowlisted_binary`'s
-# reasoning: the BINARY NAME is what matters for identity, and here it is
-# statically known (the trailing `/bin/<name>` path segment) even though the
-# directory prefix is an unresolved env var -- so this is narrowing, not
-# defeating, the "don't statically resolve an unresolved value" rule.
-#
-# Narrow by construction (each clause closes one bypass a broader match
-# would open):
 #   - the var name must be EXACTLY `COORDINATOR_SETTINGS_HOME` (any other
-#     variable, e.g. `$FOO/bin/x`, is NOT exempt and still denies);
-#   - a `:-` default is permitted ONLY with the documented literal default
-#     `$HOME/.coordinator-claude-settings` / `${HOME}/.coordinator-claude-settings`
 #     -- `${COORDINATOR_SETTINGS_HOME:-/tmp/evil}/bin/x` is an
-#     attacker-choosable command via the `:-` fallback and is NOT exempt;
-#   - the tail after the resolved prefix must be exactly one `/bin/<name>`
-#     path segment with no further `/` -- blocks path traversal
-#     (`/bin/../../evil`) and blocks embedding a second, unresolved
-#     expansion in the tail;
-#   - `<name>` is restricted to `[A-Za-z0-9_.-]+` -- no shell metacharacters,
-#     no command substitution, no further `$`/backtick.
-# Any command-substitution shape (`$(...)`, backticks) anywhere in argv0
-# still fails to match this pattern (it requires the literal `$VAR`/`${VAR}`
-# token forms only) and falls through to the existing unresolved-argv0 deny.
 _SETTINGS_HOME_DEFAULT_RE = r"\$(?:HOME|\{HOME\})/\.coordinator-claude-settings"
 _SETTINGS_HOME_BIN_EXEMPT_RE = re.compile(
     r"^\$(?:"
@@ -635,70 +491,23 @@ def _is_settings_home_bin_argv0(argv0: str) -> bool:
 
 
 def _normalize_interpreter_basename(name: str) -> str:
-    """Strip a trailing dotted-version suffix from a python interpreter
-    basename (`python3.11` -> `python3`, `python3.12.1` -> `python3`) so
-    versioned interpreter binaries are recognized identically to the bare
-    `python3` form. Non-python names, and bare `python`/`python3` with no
-    suffix, pass through unchanged.
-    """
     m = _PYTHON_VERSION_SUFFIX_RE.match(name)
     return m.group(1) if m else name
 
 
-# ---------------------------------------------------------------------------
 # INVOCATION-HEAD NORMALIZATION (2026-07-25 fix -- closes a gap found during
-# the 2026-07-21 verb-anchoring review; case-folding added 2026-07-28,
-# Finding 1). `_normalize_executable_basename` is EXACT-basename
-# normalization, never substring matching: `gitk`, `git-foo`, and `mygit`
-# normalize to themselves unchanged and never equal `git` -- only a
-# basename that IS `git`/`git.exe`/`GIT.EXE`/... (modulo suffix/case)
-# normalizes to `git`. This is the same "identify the actual operation,
-# never resolve uncertainty to ALLOW" theme as the 2026-07-21
-# boundary-anchor widen.
-#
-# 2026-07-29: moved to `_command_tokenizer.normalize_executable_basename`
-# (imported above, re-exported under this module's prior private name) --
-# this was previously a duplicate-maintained copy alongside
-# `block_subagent_commit.py`'s own, which had silently drifted (missing the
-# case-fold step). See `_command_tokenizer.py`'s module docstring for the
-# consolidation rationale and `tests/test_shared_command_tokenizer_contract.py`
-# for the contract that now pins this.
-# ---------------------------------------------------------------------------
 
 
-#: Matches an argv0-shaped raw token at a genuine invocation-HEAD position
-#: only -- the very start of the command, or immediately following a
-#: `;`/`&`/`|`/newline segment separator (each segment's own argv0) -- so a
-#: Windows backslash path can be identified BEFORE any shlex tokenization
 #: runs. UNLIKE the shared `_BOUNDARY_PRE` used by the Layer-1 surface
-#: probes above, this deliberately does NOT treat plain whitespace or a bare
-#: quote char as a boundary on its own (2026-07-25 review fix, P2(a)): doing
-#: so let this pre-pass rewrite ANY word in the command whose basename
-#: normalized to `git` -- including a mention several arguments deep, e.g.
-#: the commit-message path in `git commit -m "see C:\notes\git.exe for
-#: details"` -- which is scope creep against this function's own
-#: docstring/name ("Rewrite a Windows path token", singular, positional).
-#: The optional leading whitespace/quote-open char after the separator is
-#: still consumed so a quoted or indented argv0 (`  "C:\...git.exe" push`)
 #: is still recognized -- only the POSITION that can start a match narrowed,
-#: not the shape of what it matches there.
 _ARGV0_HEAD_BOUNDARY_PRE = (
     r"(?:\A|[;&|\n])\s*(?:[" + re.escape(_QUOTE_OPEN_CHARS) + r"])?"
 )
 _RAW_HEAD_TOKEN_RE = re.compile(r"(" + _ARGV0_HEAD_BOUNDARY_PRE + r")([^\s;&|]+)")
 
 
-#: Basenames whose Windows backslash-path argv0 form must be rewritten to
-#: forward-slash BEFORE shlex tokenization runs (see
-#: `_normalize_windows_wrapper_argv0` docstring). `git` was the original
-#: (2026-07-25) member; widened here (A2 fix) to every basename
 #: `_WRAPPER_PROBE_RE` itself recognizes as an indirection-wrapper
-#: interpreter -- `C:\Windows\System32\bash.exe -c '<payload>'` and
-#: `C:\Python311\python.exe -c '<payload>'` are the memo's own explicit
-#: bypass examples, and both die at the SAME shlex-eats-backslashes root
-#: cause `git.exe` did. `python3` stands in for the whole
 #: `_PYTHON_VERSION_SUFFIX_RE` family (`python3.11`, ...) via
-#: `_normalize_interpreter_basename` in the membership check below.
 _WINDOWS_ARGV0_NORMALIZE_BASENAMES = frozenset(
     {"git", "bash", "sh", "zsh", "python", "python3", "env", "xargs"}
 )
@@ -746,116 +555,23 @@ def _normalize_windows_wrapper_argv0(cmd: str) -> str:
     return _RAW_HEAD_TOKEN_RE.sub(_rewrite, cmd)
 
 
-# ---------------------------------------------------------------------------
 # SPACED-WINDOWS-PATH ARGV0 HOLE (2026-07-28, this change).
 # `_RAW_HEAD_TOKEN_RE` above stops its raw-token capture at the FIRST
 # WHITESPACE (`[^\s;&|]+`), so an argv0 head whose Windows path contains a
-# space -- `C:\Program Files\Git\bin\git.exe`, git-for-Windows' DEFAULT
 # install location, not an exotic edge case -- is only ever PARTIALLY
-# captured (`C:\Program`), never recognized as a member of
 # `_WINDOWS_ARGV0_NORMALIZE_BASENAMES`, and left completely unrewritten.
-# Downstream `shlex.split` then does one of two things, NEITHER of which
-# lands "git"/"bash"/... at argv0 position:
-#   - backslash-separated (`C:\Program Files\Git\bin\git.exe`): POSIX shlex
-#     eats each backslash as an escape character, mangling the path into
-#     TWO garbage tokens (`C:Program`, `FilesGitbingit.exe`) with no
-#     recognizable basename;
-#   - forward-slash-separated (`C:/Program Files/Git/bin/git.exe`): no
 #     escape-eating, but the UNQUOTED embedded space is still a real shlex
-#     word-boundary, so the path splits into `C:/Program` (argv0) and
-#     `Files/Git/bin/git.exe` (argument) regardless -- this module's
-#     `_evaluate_tokenized`/`_git_subcommand_and_remaining_for_segment`
 #     check ONLY `seg_tokens[0]`/`working[0]` (an argv0-POSITION identity
-#     check, not a position-independent scan), so the correctly-suffixed
-#     second fragment is never inspected as a candidate executable at all.
-# So THIS GUARD evaluates the mangled tokens and sees no `git` at argv0,
-# hence does not itself deny.
-#
 # RECONCILED 2026-07-29 (code-reviewer Finding 1, cross-guard contradiction
-# with `block_subagent_commit.py`'s sibling analysis of the identical
-# shape) -- correction to the framing above, not to the fix: this was
-# originally labelled a "P0 security fix" on the premise that the guard's
-# own silent-allow verdict means the underlying `git rebase`/`git push`
 # ACTUALLY EXECUTES on a real Windows box -- i.e. that some invocation path
-# resolves via raw `CreateProcess` successive-space-delimited-prefix
-# resolution once this guard fails to deny. That premise does not hold for
-# this project's actual harness: the Bash tool's execution shell on
-# Windows is Git Bash / MSYS bash (see `docs/wiki/bash-on-windows-
-# gotchas.md`, DoE-claude) -- a genuine POSIX shell whose own `exec` does
-# real word-splitting/backslash-escape processing BEFORE resolving an
-# executable, and hands `CreateProcess` an already-resolved, already-quoted
-# application name (never a raw, un-split command line with
-# `lpApplicationName=NULL`, which is the specific precondition the
-# successive-prefix hazard requires). So the SAME unquoted spaced path that
-# mangles into garbage tokens for THIS GUARD'S classifier also mangles into
-# garbage tokens for the REAL invoking shell -- the underlying `git`
-# invocation itself fails to execute, independent of whether this guard
-# denies it. There is no confirmed live exploit chain behind this fix on
-# this harness's actual execution model; treat it as defense-in-depth
-# classifier hardening (fail-closed on an ambiguous/malformed argv0 shape,
-# and correctness for a security-relevant guard) rather than a fix for a
-# demonstrated bypass. The fix itself is unchanged and still worth keeping
-# for that reason -- ported into `block_subagent_commit.py` on the same
-# reconciled basis (see that module's 2026-07-29-part-3 docstring entry).
-#
 # A REFERENCE FIX for exactly this argv0-head-path shape already exists in
-# `dispatch_checks._normalize_windows_git_path_head`/
 # `_WINDOWS_GIT_PATH_HEAD_RE` (committed `6bb7a8c4`) -- it captures the
 # WHOLE head-position path INCLUDING embedded-space components via a
-# non-greedy `(?:[^\\/\r\n]+?[\\/])*` component walk (space is not excluded
-# from that character class, only the path separators and newlines are), so
-# "Program Files" survives as part of ONE captured path instead of being a
-# tokenizer boundary. NOT imported here: `dispatch_checks.py` already
-# imports `_normalize_executable_basename` FROM this module (see this
 # module's own W3-FIX-1 comment block near the top and this file's import
-# block) -- a reverse import would be a direct two-module circular import,
-# confirmed by inspection, not assumed. Mirrored instead, and widened from
 # `git`-only to every basename `_WINDOWS_ARGV0_NORMALIZE_BASENAMES`
-# recognizes (the reference function only ever needed `git`, since its
-# caller `_command_really_invokes` is git-specific; this module's argv0
-# hardening already covers bash/sh/zsh/python[3]/env/xargs for the
-# no-space case via `_normalize_windows_wrapper_argv0` above, so the same
-# widening applies here for consistency).
-#
-# Mirroring alone (bare backslash->forward-slash conversion, matching the
-# reference function's own `_rewrite` byte-for-byte) is NOT sufficient for
-# THIS module, though it is sufficient for the reference's own caller.
-# `dispatch_checks._command_really_invokes` deliberately tolerates the
-# residual unquoted-space split after conversion (its own docstring: "that
-# is harmless here... the second fragment's OWN basename is still `git.exe`")
-# because IT scans every token in the split for a recognized basename,
 # position-independent. THIS module's argv0-head checks are POSITIONAL
-# (`seg_tokens[0]`/`working[0]` only, by design -- see `_evaluate_tokenized`
 # module comment "IDENTIFIES ... at each segment's argv[0] TOKEN position,
-# never a raw-substring match"), so a bare separator-only rewrite would
-# still leave the corrected path split into TWO tokens by the embedded
-# space and still miss it at argv0. The rewrite below additionally
 # single-quotes an UNQUOTED path that contains whitespace, so the whole
-# space-containing path lands as ONE shlex token at argv0 -- an ALREADY
-# double/single-quoted path (`"C:\Program Files\...\git.exe" push`) is left
-# with its existing quoting, since POSIX shlex already keeps a quoted
-# multi-word span as one token (confirmed: the pre-existing
-# `test_windows_git_exe_quoted_double_with_space_denies` test passes today,
-# unaffected by this whole gap, precisely because the caller already
-# quoted it).
-# ---------------------------------------------------------------------------
-#: `[\\/]{1,2}` (not a single `[\\/]`) -- Review: code-reviewer, Finding 4
-#: (P2, 2026-07-28): a UNC path (`\\server\share\Git\bin\git.exe`) opens
-#: with TWO leading backslashes, not one. The original single-separator
-#: anchor could consume only the first, and the component-repetition group
-#: (`[^\\/\r\n]+?[\\/]`, which requires >=1 non-separator char before its
-#: own separator) cannot consume a SECOND separator immediately following
-#: the first with zero characters between them -- so the whole match failed
-#: at the anchor position and a spaced UNC path fell through unrewritten to
-#: the older pass, which itself does not handle an embedded space either
-#: (see module comment above `_normalize_windows_argv0_head_path_with_spaces`
-#: for why a bare separator-only rewrite is insufficient for spaced paths).
-#: Widening the anchor to accept ONE OR TWO leading separators closes this
-#: without opening anything new: a drive-letter or single-rooted path still
-#: has exactly one separator present to match (the `{1,2}` quantifier is
-#: greedy but there is nothing more to consume), so `C:\Program Files\...`
-#: and `/usr/bin/git` are unaffected; only a genuine two-separator UNC/
-#: double-slash head now also matches.
 _WINDOWS_ARGV0_HEAD_PATH_RE = re.compile(
     r"(?P<sep>\A|[;&|\n])(?P<ws>\s*)(?P<q>[\"']?)"
     r"(?P<path>(?:[A-Za-z]:)?[\\/]{1,2}(?:[^\\/\r\n]+?[\\/])*"
@@ -902,41 +618,14 @@ def _normalize_windows_argv0_head_path_with_spaces(cmd: str) -> str:
     return _WINDOWS_ARGV0_HEAD_PATH_RE.sub(_rewrite, cmd)
 
 
-#: Exact `-n`/`--noexec` flag tokens (bug fix, 2026-07-21: state/bug-backlog/
-#: 2026-07-21-subagent-guard-false-positive-bash-n-syn-5ef6ef52e2f9.yaml).
 #: `-n`/`--noexec` puts bash/sh/zsh into READ-BUT-DO-NOT-EXECUTE mode -- the
-#: shell parses the target for syntax errors and exits WITHOUT running a
-#: single line of it, so `bash -n <script>` is safe regardless of what the
-#: script contains. Matched as an EXACT standalone token only (never a
-#: bundled short flag, never a substring of a filename): `bash weird-n-
-#: name.sh` tokenizes to one `weird-n-name.sh` token that is never equal to
-#: `-n`, so a filename cannot collide with this allowlist.
 _NOEXEC_FLAG_TOKENS = frozenset({"-n", "--noexec"})
 
 #: A long option's ATTACHED-value form (`--rcfile=/tmp/x`, `--init-file=x`),
-#: matched as a whole token. Used by `_has_script_operand` below to treat any
-#: such token as operand-bearing regardless of which option precedes the
-#: `=` -- deliberately a shape match, not a named allowlist of "options that
-#: source/execute" (`--rcfile`, `--init-file`, ...): a named list fails open
-#: the moment bash grows a value-taking option nobody enumerated, which is
-#: exactly the bug this fixes (2026-08-22).
 _LONG_OPT_WITH_VALUE_RE = re.compile(r"^--[A-Za-z][A-Za-z0-9-]*=")
 
 
 def _has_noexec_flag_before_script(interpreter_args: List[str]) -> bool:
-    """True if `-n`/`--noexec` appears among the shell's OWN option tokens,
-    before the script-path argument, in `interpreter_args` (the tokens AFTER
-    the interpreter name -- e.g. `["-n", "foo.sh"]` for `bash -n foo.sh`).
-
-    Only scans up to the first non-option token (or a literal `--`
-    end-of-options marker): bash stops parsing its OWN options at the first
-    argument that doesn't start with `-`, and everything from that point on
-    becomes `$1`, `$2`, ... INSIDE the invoked script, not a flag governing
-    whether bash executes it. `bash foo.sh -n` therefore does NOT match --
-    `-n` there is a positional argument fed TO the script (which still runs
-    normally); scanning past the script token would turn this allowlist
-    into a trivial bypass (`bash malicious.sh -n` slipping through denial).
-    """
     for tok in interpreter_args:
         if tok == "--":
             break
@@ -1006,15 +695,6 @@ def _has_script_operand(interpreter_args: List[str]) -> bool:
 
 
 def _strip_env_prefix(tokens: List[str]) -> List[str]:
-    """Strip a leading ``env`` invocation down to the real command tokens.
-
-    Approximate on purpose (does not consume a `-u NAME`/`-C DIR`-style
-    flag's operand as part of the flag) -- this guard is a compensating
-    control, not an airtight ``env(1)`` parser (memo: "I am not asking you
-    to make the parser airtight"). Returns ``tokens`` unchanged if the first
-    token is not literally ``env``; returns ``[]`` if nothing follows the
-    stripped prefix.
-    """
     if not tokens or tokens[0] != "env":
         return tokens
     i = 1
@@ -1066,37 +746,12 @@ def _unwrap_and_classify(payload: str, depth: int) -> Optional[str]:
 
 
 def _evaluate_wrapper_indirection(cmd_text: str, depth: int = 0) -> Optional[str]:
-    """Subagent-scoped indirection-wrapper pass (2026-07-21 addition).
-
-    Per-segment (quote-aware `;`/`&`/`|` split via `_tokenize_full_command`/
-    `_segments_from_tokens`, same as the tokenized authoritative pass --
-    2026-07-26 fix, see inline comment below): classifies the wrapper shape.
-    Returns a deny_kind label describing the FIRST denying segment, or
-    ``None`` if no segment denies.
-    """
     if depth > _MAX_INDIRECTION_DEPTH:
         return "indirection nesting too deep (fails closed)"
 
-    # Quote-aware segmentation (2026-07-26 fix): a naive `re.split(r"[;&|\n]+",
-    # cmd_text)` split on the raw text -- as this function did until now --
-    # breaks a `;`/`&`/`|` that is INSIDE a quoted argument value (e.g.
-    # `--title "some title; with a semicolon"`) into two bogus segments, one
-    # of which is a dangling unterminated-quote fragment. That fragment still
     # matched `_WRAPPER_PROBE_RE` (it retained the `python3`/`bash`/etc.
-    # token) and then failed `shlex.split`, tripping the fail-closed
-    # "unparseable indirection wrapper" branch on a perfectly ordinary quoted
-    # value -- a false positive, not a real indirection attempt. Reuse the
-    # same punctuation-aware tokenizer the authoritative tokenized pass uses
-    # (`_tokenize_full_command`/`_segments_from_tokens`): it treats an
-    # unquoted `;`/`&`/`|` as a real separator but keeps a quoted one attached
-    # to its word, so a genuine command-chaining `;` outside quotes still
-    # yields a separate segment (and still denies below) while one embedded
-    # in a quoted value does not.
     all_tokens = _tokenize_full_command(cmd_text)
     if all_tokens is None:
-        # Whole command is unparseable (unterminated quote / trailing
-        # backslash) -- fail CLOSED, same posture as before, just evaluated
-        # once over the full command instead of per naively-split segment.
         return "unparseable indirection wrapper (fails closed)"
 
     for tokens, _pipe_before in _segments_from_tokens(all_tokens):
@@ -1118,23 +773,11 @@ def _evaluate_wrapper_indirection(cmd_text: str, depth: int = 0) -> Optional[str
             return "xargs <cmd> (command assembled from stdin -- indirection wrapper)"
 
         if head_base in _C_FLAG_INTERPRETERS:
-            # Bug fix (2026-07-21): a parse-only `-n`/`--noexec` syntax check
-            # executes NOTHING, so it is safe regardless of the target
-            # file's content -- check this BEFORE the `-c`/bare-file
-            # classification below so `bash -n foo.sh` allows outright
-            # instead of falling into the `<file> (interpreter-invoked
-            # script)` outright-deny shape.
             if head_base in _SHELL_FILE_INTERPRETERS and _has_noexec_flag_before_script(
                 tokens[1:]
             ):
                 continue
 
-            # Finding 3 (2026-07-21 review): scan ALL of tokens[1:] for a
-            # bundled-or-standalone `-c` flag (`-c`, `-ic`, `-ci`, ...), not
-            # just an exact `tokens[1] == "-c"` -- Python's CLI parser
-            # accepts bundled short flags, so `python3 -ic '<payload>'`
-            # behaves as `python3 -i -c '<payload>'` and an exact-token
-            # check misses it entirely.
             c_flag_positions = [
                 i for i in range(1, len(tokens)) if _BUNDLED_C_FLAG_RE.match(tokens[i])
             ]
@@ -1143,11 +786,6 @@ def _evaluate_wrapper_indirection(cmd_text: str, depth: int = 0) -> Optional[str
                 if idx + 1 < len(tokens):
                     inline_payload = tokens[idx + 1]
                 else:
-                    # `-c` present but no distinguishable operand token --
-                    # position not reliably determined, so route the whole
-                    # remaining segment through the classifier rather than
-                    # silently allowing (over-block-over-miss posture, same
-                    # as the outright-deny shapes below).
                     inline_payload = " ".join(shlex.quote(t) for t in tokens[idx + 1 :]) or seg
                 verdict = _unwrap_and_classify(inline_payload, depth + 1)
                 if verdict is not None:
@@ -1160,22 +798,10 @@ def _evaluate_wrapper_indirection(cmd_text: str, depth: int = 0) -> Optional[str
                     f"{head_base} <file> (interpreter-invoked script -- "
                     "indirection wrapper, script content unexamined)"
                 )
-            # python/python3 without `-c` (e.g. `python3 -m pytest`,
-            # `python3 script.py --flag`) is NOT an enumerated bypass shape
-            # -- allow, do not fall through to recursion (recursing on
             # UNCHANGED text would just re-match this same branch forever,
-            # eventually hitting the depth cap and denying anyway -- the
-            # opposite of the intended "not an enumerated shape" outcome).
             continue
 
-        # `head_base` is neither `xargs` nor a `-c`/file-shaped interpreter.
-        # Only recurse if `env`-stripping actually made progress (the
-        # remaining tokens differ from the original segment) -- e.g.
-        # `env FOO=1 <nested-wrapper>` chains resolving back to a direct
-        # destructive-verb check. A bare, non-wrapper command that merely
         # matched the cheap `_WRAPPER_PROBE_RE` via an unrelated substring
-        # is NOT re-recursed on unchanged text (same infinite-recursion
-        # hazard as the python fallthrough above).
         if was_env_wrapped:
             remainder = " ".join(shlex.quote(t) for t in tokens)
             verdict = _unwrap_and_classify(remainder, depth + 1)
@@ -1185,32 +811,11 @@ def _evaluate_wrapper_indirection(cmd_text: str, depth: int = 0) -> Optional[str
     return None
 
 
-# ---------------------------------------------------------------------------
-# Layer 2 -- per-segment git checks.
-# ---------------------------------------------------------------------------
 _CHECKOUT_KEYWORD_RE = re.compile(r"\bcheckout\b")
 _CHECKOUT_DASHDASH_RE = re.compile(r"\bcheckout\b.*--(?:\s|$)")
 _CHECKOUT_PATHSPEC_RE = re.compile(r"\bcheckout\b\s+[A-Za-z0-9_.-]*/[A-Za-z0-9_./-]*")
 
 # Anchored to an actual `git restore` SUBCOMMAND invocation (`git`, then
-# optional bare short/long global flags, then `restore` as the next word) --
-# NOT the bare word `restore` appearing anywhere in the segment's free text.
-# Fix for a live false positive: `git commit -m "restore the carve-out"`
-# (the word "restore" inside a quoted commit-message operand, nowhere near
-# an actual subcommand position) was denied as "git restore (working tree)"
-# by this legacy free-text classifier. `block_subagent_commit.py`'s own
-# module docstring documents this collision under "Known pre-existing
-# false-positive NOT inherited here" -- this is that fix, applied at the
-# source. Accepted narrow gap (module's existing accepted-tradeoff style,
-# see e.g. the cross-segment-dataflow note above): a global flag that
-# consumes a separate value token before the subcommand (`git -C <dir>
-# restore ...`) is no longer matched here -- this legacy path is reached
-# only for a genuinely unparseable segment or a `strict=False` indirection-
-# payload scan (see `_git_subcommand_and_remaining_for_segment`), where a
-# real `-C <dir>` shape is vanishingly rare; a real shell segment with a
-# clean `-C` invocation shlex-tokenizes fine and is already handled by the
-# anchored classifier (`_evaluate_git_segment_anchored`'s `subcmd ==
-# "restore"` branch), never reaching this fallback at all.
 _RESTORE_KEYWORD_RE = re.compile(r"\bgit\b(?:\s+--?[\w-]+)*\s+restore\b")
 _RESTORE_WORKTREE_RE = re.compile(r"(?:-W|--worktree)(?:\s|$)")
 _RESTORE_STAGED_RE = re.compile(r"(?:--staged|(?:^|\s)-S(?:\s|$))")
@@ -1221,16 +826,7 @@ _RESET_REF_RE = re.compile(r"(?:HEAD|@\{|[0-9a-f]{7,40}|/)")
 _DASHDASH_SEP_RE = re.compile(r"--(?:\s|$)")
 
 _STASH_POP_APPLY_RE = re.compile(r"\bstash\b.*\b(?:pop|apply)\b")
-#: `stash` subcommands OTHER than the sweep-everything push/bare shape --
-#: read-only (`list`/`show`) or a different write shape entirely
-#: (`branch`/`create`/`store`/`save`) not targeted by the 2026-07-26
 #: unscoped-stash-gap-close fix (module docstring "UNSCOPED-STASH GAP
-#: CLOSE"). `pop`/`apply`/`drop`/`clear` are deliberately NOT here -- they
-#: are matched (and returned on) by their own dedicated regexes above/below.
-#: `save` is deliberately ABSENT (2026-07-28): `git stash save [<msg>]` is the
-#: pre-2.16 deprecated spelling of `git stash push [-m <msg>]` with identical
-#: working-tree effect, so listing it here as a non-sweep "other action"
-#: exempted a real unscoped sweep from the rule below.
 _STASH_OTHER_ACTION_WORD_RE = re.compile(
     r"\bstash\b\s+(?:list|show|branch|create|store)\b"
 )
@@ -1285,12 +881,6 @@ def _seg_forcing_form_scan_text(seg: str) -> str:
     if "<<" in seg:
         return seg
     if _exceeds_tokenizable_ceiling(seg):
-        # DoS bound inherited from `_command_tokenizer`, not a local tuning
-        # knob -- the same bound every other direct shlex site in this
-        # package carries. Returning `seg` whole is this function's own
-        # documented fail-CLOSED answer, identical to the heredoc and
-        # untokenizable branches around it, so an over-ceiling segment is
-        # scanned in full by the caller's regex rather than narrowed.
         return seg
     try:
         tokens = shlex.split(seg, posix=True)
@@ -1315,33 +905,14 @@ _CLEAN_FD_RE = re.compile(
 )
 
 #: LEGACY-PATH `worktree`/`remote` second-level classification (2026-07-25
-#: fix, P2(b) -- supersedes the prior minimal patch of the same date).
 #: `worktree`/`remote` used to sit in `_SAFE_VERB_RE` below as BARE VERBS
-#: with no second-level-subcommand check at all, so ANY form -- mutating or
-#: not -- free-text-matched the bare word and fell through to the
-#: safe-forward allowlist uninspected. A first pass added
 #: `_WORKTREE_MUTATE_RE`/`_REMOTE_MUTATE_RE` to deny the KNOWN-mutating
-#: forms, but left an unenumerated `git worktree <novel-verb>` falling
 #: through to `_SAFE_VERB_RE` and allowing -- i.e. still allow-by-default on
-#: anything not on the closed mutating list, which is exactly the
-#: enumeration-plus-ambiguity-routing combination that let the `--namespace`
-#: P0 reach production (a not-yet-enumerated future git worktree/remote verb
-#: is unreachable via the anchored path's default-deny, but IS reachable via
-#: legacy through an unenumerated global flag forcing ambiguous routing).
-#:
 #: INVERTED here per the same "unknown means deny, not allow" fix already
-#: applied to the anchored classifier -- but WITHOUT argv-position
-#: extraction (deliberately not restructuring legacy into a tokenizer): a
 #: lightweight `_NEXT_WORD_AFTER_RE` capture of whatever plain word
-#: immediately follows the literal `worktree`/`remote` token (still free
-#: text, just a single extra regex step, not shlex/argv walking) is checked
 #: against the small READ-ONLY sets below; anything else -- an unrecognized
-#: word, OR one of the already-known mutating words -- denies. No
-#: following word at all (bare `git worktree`/`git remote`) allows, matching
 #: the anchored path's bare-invocation behavior. `_WORKTREE_MUTATE_RE`/
 #: `_REMOTE_MUTATE_RE` are kept ONLY for their more specific deny-reason
-#: text on the already-known forms; the next-word fallback below is what
-#: actually closes the default-deny gap.
 _WORKTREE_MUTATE_RE = re.compile(
     r"\bworktree\b.*\b(?:add|remove|prune|move|repair|unlock|lock)\b"
 )
@@ -1350,10 +921,6 @@ _REMOTE_MUTATE_RE = re.compile(
 )
 _WORKTREE_WORD_RE = re.compile(r"\bworktree\b")
 _REMOTE_WORD_RE = re.compile(r"\bremote\b")
-#: The single plain word immediately following (whitespace-separated) the
-#: position this is `.match()`-ed at -- used anchored at `worktree`'s/
-#: `remote`'s own match-end so it captures the very next token, not just
-#: any later word in the segment.
 _NEXT_WORD_AFTER_RE = re.compile(r"\s+(\S+)")
 _LEGACY_WORKTREE_READONLY = frozenset({"list"})
 _LEGACY_REMOTE_READONLY = frozenset({"-v", "show", "get-url"})
@@ -1373,135 +940,51 @@ _CONFIG_GET_RE = re.compile(r"--get\b")
 _GIT_WORD_RE = re.compile(r"\bgit\b")
 
 #: 2026-07-25 P0 fix (this dispatch, "SAFE-FORWARD OPTION-SURFACE HARDENING"
-#: in the module docstring) -- new verb-level option gates for the
 #: ANCHORED path only, matched against ``remaining_text`` (the argv slice
-#: after the subcommand, joined -- NEVER ``seg``, so a pre-subcommand
-#: GLOBAL option sharing a letter, e.g. ``git -C <path> branch x``, cannot
-#: false-trip a subcommand-local check here).
-#: checkout/switch: `-f`/`--force` throws away uncommitted local
-#: modifications (confirmed via `git checkout -h`/`git switch -h`) --
 #: reuses the already-defined `_DASH_F_OR_FORCE_RE` (branch's generic
-#: bundled-`-f`/`--force` detector) rather than a third copy.
 _SWITCH_DISCARD_CHANGES_RE = re.compile(r"--discard-changes\b")
 #: checkout `-B` / switch `-C` create-OR-RESET an existing branch even if
-#: it already exists ("create/reset and checkout/switch a branch" per
-#: `git checkout -h`/`git switch -h`) -- same silent-ref-overwrite shape as
-#: `git branch -M`/`-C` below.
 _CHECKOUT_DASH_B_RE = re.compile(r"(?:^|\s)-[a-zA-Z]*B[a-zA-Z]*(?:\s|$)")
 _SWITCH_DASH_C_RE = re.compile(r"(?:^|\s)-[a-zA-Z]*C[a-zA-Z]*(?:\s|$)")
-#: `git branch -M`/`-C` (uppercase) force-move/force-copy EVEN IF the target
-#: branch already exists (confirmed via `git branch -h`: "-M  move/rename a
-#: branch, even if target exists"; "-C  copy a branch, even if target
-#: exists"), silently destroying the pre-existing ref.
 _BRANCH_FORCE_MOVE_OR_COPY_UPPER_RE = re.compile(
     r"(?:^|\s)-[a-zA-Z]*[MC][a-zA-Z]*(?:\s|$)"
 )
-#: `-m`/`--move`/`-c`/`--copy` combined with `-f`/`--force` achieves the
-#: same effect as `-M`/`-C` respectively (confirmed via `git branch -h`:
-#: "-f, --force  force creation, move/rename, deletion").
 _BRANCH_MOVE_OR_COPY_RE = re.compile(
     r"(?:^|\s)-[a-zA-Z]*[mc][a-zA-Z]*(?:\s|$)|--move\b|--copy\b"
 )
 
 
-# ---------------------------------------------------------------------------
 # SUBCOMMAND-ANCHORED CLASSIFICATION (2026-07-25 false-positive fix).
 # Root cause: every `_..._WORD_RE`/`_..._KEYWORD_RE` regex above (checkout,
-# restore, reset, stash, rebase, commit, push, branch, tag, reflog,
-# filter-branch, clean, pull, merge, switch, config) is a raw `\bword\b`
-# search over the WHOLE segment text -- a hyphen is a word-boundary
 # character, so it cannot distinguish the real invoked SUBCOMMAND from the
-# same word appearing as an operand, a quoted argument, or a hyphenated
-# sibling subcommand. Two confirmed false positives, both DENIED as
-# "git merge (not --ff-only)" on disk before this fix:
-#   - `git grep -n "some-hyphenated-token"` (the pattern argument merely
 #     CONTAINS the word "merge")
-#   - `git merge-base --is-ancestor A B` (the hyphen is a word boundary, so
-#     `\bmerge\b` matches inside `merge-base`)
-# `_git_subcommand_for_segment` below determines the REAL subcommand -- the
-# first non-flag token following `git`, skipping git's own global options
-# -- via `shlex` tokenization, and `_evaluate_git_segment_anchored` gates
-# each verb-identity check on THAT token instead of a free-text regex
-# search. The flag/argument-detection regexes (`--ff-only`, `--hard`,
 # `-D`, ...) are UNCHANGED -- only the "is this segment invoking verb X"
-# gate moved from free-text to argv position; scanning for a flag anywhere
-# in a segment already known to invoke the right subcommand carries none of
-# the mention-vs-invocation ambiguity a bare verb-word search does.
-#
 # FAIL-CLOSED on shlex failure: an unparseable segment (unbalanced quoting)
 # falls back to `_evaluate_git_segment_legacy` -- the ORIGINAL free-text
-# classifier, unchanged -- rather than being newly allowed. The legacy
-# classifier is intentionally left untouched (including its own
 # `_SAFE_VERB_RE`, which does NOT get the new read-only-verb additions
-# below) so "fall back to today's behavior" means exactly that.
-# ---------------------------------------------------------------------------
 
-#: git global options that consume a following token as their argument
-#: (space-separated form only -- `-C <path>`, `-c <key>=<value>`).
 _GIT_GLOBAL_OPT_WITH_ARG = frozenset({"-C", "-c"})
 
-#: git global options KNOWN to take no argument at all -- a closed,
-#: explicitly-enumerated allowlist. Deliberately small: this is NOT an
-#: attempt to enumerate git's full global-option surface (see the
-#: unrecognized-flag fail-over below for why that enumeration is the wrong
-#: shape of fix).
 _GIT_GLOBAL_OPT_NO_ARG = frozenset(
     {"--no-pager", "-P", "--bare", "--literal-pathspecs", "--paginate", "--no-optional-locks"}
 )
 
-#: `--git-dir`/`--work-tree` accept EITHER `--foo=value` (one token, handled
-#: by the generic `"=" in tok` self-contained-value branch below) or
-#: `--foo value` (two tokens) -- the two-token form must be explicitly
-#: enumerated here or a space-separated form misresolves the next token as
-#: the subcommand.
 _GIT_GLOBAL_OPT_SPACE_FORM = frozenset({"--git-dir", "--work-tree"})
 
 
-#: Sentinel returned by `_git_subcommand_and_remaining_for_segment` in the
 #: `subcmd` slot when the segment's COMMAND-POSITION head (after peeling any
-#: leading subshell-open `(` tokens and an `env`-prefix, see
-#: `_strip_leading_subshell_and_env`) resolves to something other than
-#: `git` -- i.e. the word "git" may still appear elsewhere in the segment
-#: (a quoted regex alternation, a grep pattern operand, a filename like
-#: `git-crypt`), but this segment does not INVOKE git. Distinct from
-#: `subcmd is None` (bare `git`/global-flags-only invocation, e.g. `git -C x`
-#: with no further subcommand) -- that case still routes through
-#: `_evaluate_git_segment_anchored`'s default-deny ladder unchanged. Distinct
-#: also from `parse_ok is False` (shlex genuinely could not tokenize the
-#: segment, or an unrecognized global flag made the real subcommand
-#: unresolvable) -- that case still fails over to the free-text legacy
 #: classifier. See module docstring "COMMAND-POSITION GIT-TOKEN FIX".
 _NOT_A_GIT_INVOCATION = object()
 
 #: `parse_ok=False` sentinel distinguishing the INLINE-INTERPRETER
 #: CARVE-OUT branch (a `-c`-flagged interpreter head with a bundled `-c`
-#: flag -- `python3 -c '...'`, `bash -c '...'`, ...) from a genuinely
-#: unparseable REAL shell segment. Both route to the legacy free-text
-#: classifier (fail-closed on the specific destructive-verb patterns is
-#: unchanged for both), but `_evaluate_git_segment` uses this sentinel to
-#: suppress ONLY legacy's terminal "unrecognized git verb (default-deny)"
 #: catchall for this branch -- see `_evaluate_git_segment`'s "INDIRECTION-
 #: PAYLOAD CATCHALL FIX" docstring entry: an interpreter `-c` payload is
-#: not real shell syntax, so the bare free-text presence of "git" here
-#: carries no invocation meaning, the same reasoning already applied to
-#: `_unwrap_and_classify`'s `strict=False` recursive scan.
 _INTERPRETER_C_PAYLOAD_AMBIGUOUS = object()
 
-#: Passthrough wrapper binaries that run their remaining argv unchanged --
-#: see `_strip_leading_subshell_and_env`'s BX-13 fix comment. Same set
 #: `dispatch_checks.py`'s `_BYPASS_PREFIX` already tolerates.
-#: Widened (2026-07-29, code-reviewer Finding 3): `setsid`, `strace`, `doas`,
-#: and `busybox` were unrecognized passthrough wrappers -- `setsid git
-#: worktree add ../wt-1 x` landed the resolved command-position head on
-#: `setsid` (never `git`), which is the SAME "unrecognized wrapper binary
-#: hides the real command" defect this set exists to close, just via a
 #: different binary name. This is still an ENUMERATED allowlist, not a
-#: structural fix -- see the finding's own discussion of why a
-#: command-position-anchored classifier could instead fall back to the
-#: legacy free-text scanner (deny-capable, not allow-outright) on an
 #: UNRECOGNIZED head rather than only on a genuine parse failure; that
-#: broader change is out of scope for this pass and is called out
-#: separately, not silently deferred.
 _PASSTHROUGH_WRAPPERS = frozenset(
     {
         "sudo", "command", "time", "exec", "nice", "nohup", "ionice", "timeout",
@@ -1509,20 +992,8 @@ _PASSTHROUGH_WRAPPERS = frozenset(
     }
 )
 
-#: BX-14 fix (2026-07-29, confirmed live via the real dispatcher): the peel
-#: below tolerated the wrapper BINARY token but never the wrapper's OWN
-#: argument(s) -- `timeout 30 git rebase -i HEAD~3`, `ionice -c2 git stash`,
-#: `stdbuf -oL git worktree add ...` all landed the resolved head on
-#: `30`/`-c2`/`-oL` (never `git`), so the wrapped command still ran for real
-#: while this guard (and every guard/module importing this shared peel,
-#: including `block_worktree_creation.py`) allowed. Same flag-set
 #: `dispatch_checks.py`'s `_BYPASS_WRAPPER_ARG_FLAGS` uses for the identical
-#: gap in `check_no_verify` -- own-module copy (no-cross-module-coupling
-#: convention).
-#: `_skip_wrapper_own_argv` itself now lives in `_command_tokenizer.py`
-#: (2026-07-30, M8 consolidation) -- imported above rather than
 #: hand-maintained here; this was the ORIGINAL of the five hand-maintained
-#: copies (see that module's own docstring for the full history).
 
 
 def _strip_leading_subshell_and_env(tokens: List[str]) -> List[str]:
@@ -1553,36 +1024,13 @@ def _strip_leading_subshell_and_env(tokens: List[str]) -> List[str]:
             working = [head[1:]] + working[1:]
             continue
         # BRACE-GROUPING FIX (2026-07-29, code-reviewer Finding 1, confirmed
-        # live): `{ git push --force; }` was never peeled here -- only a
         # subshell-open `(` was. Bash's `{ ... }` grouping REQUIRES a space
-        # after `{` (it is a reserved word, not an operator like `(`), so
-        # `shlex.split` always yields it as its OWN token (`{cmd` glued is
-        # not valid shell syntax and shlex leaves it as one opaque token that
-        # never equals `{`, so there is no glued form to additionally peel,
-        # unlike the subshell-open case above). Peeling it here exposes the
-        # true command-position head exactly as the `(` peel does -- e.g.
-        # `{ git push --force; }` splits (by the caller's own `;`/`&`/`|`
-        # segmenter) into a `{ git push --force` segment and a bare `}`
-        # segment; peeling `{` off the first lands `git` at command
-        # position, restoring the anchored classifier's deny ladder for
-        # every destructive verb this guard exists to block.
         if head == "{":
             working = working[1:]
             continue
-        # BX-13 fix (2026-07-29, confirmed live): a BARE `VAR=value`
-        # assignment with no `env` keyword (`FOO=1 git rebase -i HEAD~3`)
-        # was never peeled here -- only a literal `env` invocation was
-        # (`_strip_env_prefix` below returns tokens unchanged unless
-        # `tokens[0] == "env"`) -- so the resolved command-position head was
-        # `FOO=1`, never `git`, and the segment fell through as "not a git
-        # invocation" while the wrapped command still ran for real.
         if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", head):
             working = working[1:]
             continue
-        # BX-13 fix (2026-07-29, confirmed live): a no-op passthrough
-        # wrapper (`nice git rebase -i HEAD~3`) was never peeled either --
-        # same root cause as the bare-assignment case immediately above,
-        # different token shape.
         head_base = _normalize_executable_basename(head)
         if head_base in _PASSTHROUGH_WRAPPERS:
             working = working[1:]
@@ -1635,39 +1083,16 @@ def _real_git_subcommand(
             i += 2
             continue
         if tok.startswith("--") and "=" in tok:
-            # Self-contained `--foo=value` -- carries its own value in one
-            # token, so consuming exactly this token is unambiguous
-            # regardless of whether we recognize the flag name.
             i += 1
             continue
         if tok.startswith("-"):
-            # Unrecognized `-`/`--`-prefixed token with argument shape
             # UNCERTAIN (could be a bare no-arg flag, or a flag that
-            # consumes the next token as its value -- e.g. `--namespace`,
-            # `--super-prefix`, `--config-env`, `--exec-path`, or any future
-            # git global option not enumerated above). Do not guess --
-            # fail this segment over to the legacy classifier.
             return None, True, []
         return tok, False, argv_after_git[i + 1 :]
     return None, False, []
 
 
 #: Matches a shell OR PowerShell redirection OPERATOR at the start of a
-#: token: an optional leading fd digit, then one of --
-#:   `>`, `>>`, `&>`, `&>>`   -- output-direction (bash): covers `2>&1`
-#:                               (operator "2>", target "&1" glued on), `>|`,
-#:                               `>&2`, `2>&-` too -- the group only anchors
-#:                               a PREFIX, so anything starting with digit*
-#:                               then `>` or `&>` matches regardless of what
-#:                               follows.
-#:   `<`, `<<`, `<<<`, `<>`   -- input-direction (bash): plain redirect,
-#:                               heredoc marker, herestring, read-write open.
-#:   `*>`, `*>>`              -- PowerShell all-streams redirect; `*` is not
-#:                               a valid bash redirection lead so this is
-#:                               additive, never a bash false-positive.
-#: `re.match` anchors this at position 0 without requiring the whole token to
-#: be consumed, since a target is often glued onto the same shlex token as
-#: its operator (`>/dev/null`, `</dev/null`).
 _REDIRECTION_OP_RE = re.compile(r"^(?:\d*(?:>>?|&>>?|<{1,3}|<>)|\*>>?)")
 
 
@@ -1713,12 +1138,8 @@ def _strip_leading_redirection_tokens(tokens: "List[str]") -> "List[str]":
         if not match:
             break
         if match.end() < len(tokens[i]):
-            # Target glued onto this same token (e.g. "2>&1", ">/dev/null") --
-            # nothing more to consume for this operator.
             i += 1
         else:
-            # Bare operator token (e.g. ">", "2>", "&>") -- its target, if
-            # present, is the NEXT token; consume both.
             i += 1
             if i < n:
                 i += 1
@@ -1783,10 +1204,6 @@ def _git_subcommand_and_remaining_for_segment(
     that don't need `remaining_after_subcommand`.
     """
     if _exceeds_tokenizable_ceiling(seg):
-        # DoS bound inherited from `_command_tokenizer`, not a local tuning
-        # knob -- `parse_ok=False` routes the caller to the legacy free-text
-        # classifier (default-deny), the same branch an unterminated quote
-        # already reaches.
         return None, False, []
     try:
         tokens = shlex.split(seg, posix=True)
@@ -1805,32 +1222,12 @@ def _git_subcommand_and_remaining_for_segment(
 
     working = _strip_leading_subshell_and_env(tokens)
     if not working:
-        # Nothing left in command position (e.g. `env` with no trailing
-        # command, or an empty/whitespace-only segment) -- not a git
-        # invocation, but not a parse failure either.
         return _NOT_A_GIT_INVOCATION, True, []
     base = _normalize_executable_basename(working[0])
     if base != "git":
         # INLINE-INTERPRETER CARVE-OUT (2026-07-28, part of the
         # "COMMAND-POSITION GIT-TOKEN FIX"): a command-position head that IS
-        # a `-c`-flagged interpreter (`python`/`python3`/`bash`/`sh`/`zsh`)
-        # is NOT eligible for the confident allow-outright shortcut, even
-        # though its OWN argv0 is not `git`. Confirmed live: `python -c
-        # 'subprocess.run(["git", "push", "--force"])'` shlex-tokenizes its
-        # inline payload into a glued, non-command-shaped token list that
-        # neither this function's strict path NOR the dedicated
-        # indirection-unwrap machinery (`_evaluate_wrapper_indirection`'s
         # `_WRAPPER_PROBE_RE`, gapped on a `/`-preceded interpreter name;
-        # `_evaluate_tokenized`'s nested recursion, which never reuses the
-        # git-specific classifier) currently resolves to a real `git`
-        # command-position token -- the ONLY thing that still catches this
-        # live exploit is the LEGACY free-text fallback matching `push`/
-        # `--force` inside the quoted payload text. Shortcutting to allow
-        # here would silently reopen that hole. Fails this segment over to
-        # legacy (`parse_ok=False`) instead of allowing outright -- the
-        # SAME conservative "ambiguous means legacy, never a guess" posture
-        # `_real_git_subcommand` already uses for an unrecognized global
-        # flag, applied to a distinct but analogous ambiguity.
         interp_base = _normalize_interpreter_basename(base)
         if interp_base in _C_FLAG_INTERPRETERS and any(
             _BUNDLED_C_FLAG_RE.match(tok) for tok in working[1:]
@@ -1844,43 +1241,13 @@ def _git_subcommand_and_remaining_for_segment(
 
 
 def _git_subcommand_for_segment(seg: str) -> "tuple[Optional[str], bool]":
-    """Original 2-tuple public form of
-    `_git_subcommand_and_remaining_for_segment` -- ``(subcommand_or_None,
-    parse_ok)``, dropping `remaining_after_subcommand`. Kept as its own
-    function (not just documented as "ignore the third value") so existing
-    direct callers/tests keep their exact original call shape. Always
-    strict (real shell command semantics) -- there is no legacy caller of
-    this 2-tuple form that needs the non-strict recursive-payload variant.
-    """
     subcmd, parse_ok, _remaining = _git_subcommand_and_remaining_for_segment(seg)
     return subcmd, parse_ok
 
 
 #: Read-only git verbs safe to allow outright -- ANCHORED path only (the
 #: legacy `_SAFE_VERB_RE` fallback deliberately keeps its original list, see
-#: module comment above). `merge-base` and `grep` are the two verbs behind
-#: the confirmed false positives; `ls-remote`, `blame`, `shortlog`,
-#: `cat-file`, `for-each-ref`, `name-rev`, `check-ignore` are added
-#: alongside them -- each reads repo state and cannot mutate it.
-#:
-#: `symbolic-ref` is deliberately NOT in this set: `git symbolic-ref HEAD
-#: refs/heads/evil` repoints HEAD, and `git symbolic-ref --delete <ref>`
-#: deletes a symbolic ref -- both mutate refs (confirmed empirically
-#: 2026-07-25; git itself happens to refuse `--delete HEAD` specifically,
-#: but the verb mutates in general, e.g. `refs/remotes/origin/HEAD`). It
-#: was added here unflagged in a prior pass and is being removed, not
-#: special-cased on `--delete`/argument-count -- that would reintroduce the
-#: free-text-flag-sniffing disease this anchored classifier exists to cure.
-#: The read-only use case (current branch name) is already covered by the
-#: safe-listed `rev-parse`: `git rev-parse --abbrev-ref HEAD`.
-#:
-#: `worktree`/`remote` are deliberately NOT in this set either (2026-07-25
-#: fix): both were blanket-safe-listed here as BARE VERBS with no
-#: inspection of their SECOND-level subcommand, so `git worktree remove`,
-#: `git worktree prune`, `git remote remove origin`, `git remote set-url`,
-#: etc. all passed uninspected. They are now classified on the second-level
 #: token below (`_WORKTREE_MUTATING_SUBCOMMANDS`/`_REMOTE_MUTATING_SUBCOMMANDS`)
-#: instead of being blanket-allowed here.
 _SAFE_GIT_SUBCOMMANDS = frozenset(
     {
         "add",
@@ -1907,22 +1274,12 @@ _SAFE_GIT_SUBCOMMANDS = frozenset(
     }
 )
 
-#: `git worktree` SECOND-level subcommand classification (2026-07-25 fix).
-#: `list` is the only read-only second-level subcommand; a bare `git
-#: worktree` (no second-level token) also lists and is read-only. Every
-#: other second-level subcommand mutates the working-tree/worktree-registry
 #: state and is denied; an UNRECOGNIZED second-level token is denied too
-#: (default-deny, consistent with the top-level rule) -- see
-#: `_evaluate_git_segment_anchored`.
 _WORKTREE_MUTATING_SUBCOMMANDS = frozenset(
     {"add", "remove", "prune", "move", "repair", "unlock", "lock"}
 )
 
-#: `git remote` SECOND-level subcommand classification (2026-07-25 fix).
-#: `-v`/`show`/`get-url` are read-only; a bare `git remote` (no second-level
-#: token) also lists and is read-only. Every enumerated mutating form is
 #: denied; an UNRECOGNIZED second-level token is denied too (default-deny)
-#: -- see `_evaluate_git_segment_anchored`.
 _REMOTE_READONLY_SUBCOMMANDS = frozenset({"-v", "show", "get-url"})
 _REMOTE_MUTATING_SUBCOMMANDS = frozenset(
     {
@@ -2007,27 +1364,7 @@ def _evaluate_git_segment_anchored(
     if subcmd == "stash":
         # 2026-07-26 fix (module docstring "UNSCOPED-STASH GAP CLOSE"): bare
         # `git stash`, the IMPLICIT-push flag-only form (`git stash -u`), and
-        # explicit `git stash push` all sweep every uncommitted change on the
-        # shared tree unless scoped with a `--`-delimited pathspec.
-        # `pop`/`apply` already returned above; `list`/`show`/`branch`/
-        # `create`/`store` are a different subcommand entirely (not this
-        # rule's concern) and fall through unchanged.
-        #
-        # 2026-07-28: `save` was grouped with `create`/`store` above and is
-        # now handled as a sweep shape instead -- `git stash save [<msg>]` is
-        # the pre-2.16 deprecated spelling of `git stash push [-m <msg>]`,
-        # identical working-tree effect, so excluding it left a live bypass
-        # of this very rule. Found by review of the EM-path sibling fix
-        # (dispatch_checks.check_destructive_git_revert), which had inherited
-        # the same misclassification from here; both are corrected together
-        # so the subagent-path and EM-path guards do not diverge.
         # 2026-08-22 fix (UNSCOPED-STASH GAP, REOPENED): strip a leading
-        # redirection (`2>&1`, `>/dev/null`, ...) before reading the first
-        # real argument -- see `_strip_leading_redirection_tokens`'s own
-        # docstring. Without this, `git stash 2>&1` tokenized `remaining` to
-        # `["2>&1"]`; that token is neither `None`, `"push"`/`"save"`, nor
-        # `-`-prefixed, so `is_push_or_bare` went False and a bare stash-push
-        # sailed through to the safe-forward allowlist below, unscoped.
         stash_remaining = _strip_leading_redirection_tokens(remaining)
         stash_head = stash_remaining[0] if stash_remaining else None
         is_push_or_bare = (
@@ -2073,16 +1410,7 @@ def _evaluate_git_segment_anchored(
 
     # --- SAFE-FORWARD ALLOWLIST -- reached only if none of the above
     # matched. Any git subcommand not enumerated here is DEFAULT-DENIED:
-    # the load-bearing "novel verb denied for not being allowlisted"
-    # property, now keyed on the real argv subcommand rather than a
-    # free-text match.
-    #
     # 2026-07-25 P0 fix: `_SAFE_GIT_SUBCOMMANDS` used to return `None`
-    # (allow) unconditionally here -- confirmed live: `git show
-    # --output=<path> HEAD` / `git log --output=<path>` both write an
-    # arbitrary file. `find_git_diff_family_write_flag` (shared with
-    # `block_reviewer_bash_outside_allowlist` via `_helpers`) now gates
-    # every member on `remaining` before allowing.
     if subcmd in _SAFE_GIT_SUBCOMMANDS:
         bad_option = find_git_diff_family_write_flag(remaining)
         if bad_option is not None:
@@ -2096,25 +1424,14 @@ def _evaluate_git_segment_anchored(
         return None
     if subcmd == "pull":
         # 2026-07-25 P0 fix: `_FF_ONLY_RE.search(seg)` searched the WHOLE
-        # segment text, so `--ff-only` mentioned inside a quoted `-m`
-        # message operand granted the allow for a real non-fast-forward
-        # pull. Exact-token membership against `remaining` (already
-        # shlex-tokenized by `_real_git_subcommand`) fixes this: a quoted
-        # multi-word operand is ONE token that can never equal the literal
-        # `--ff-only` flag token.
         if "--ff-only" in remaining:
             return None
         return "git pull (not --ff-only)"
     if subcmd == "merge":
-        # Same fix as `pull` above -- confirmed live exploit: `git merge -m
-        # "we prefer --ff-only merges" feat` used to allow via the
-        # free-text search matching the flag NAME inside the quoted commit
-        # message.
         if "--ff-only" in remaining:
             return None
         return "git merge (not --ff-only)"
     if subcmd == "push":
-        # Forcing forms already denied above; anything else on push is safe.
         return None
     if subcmd in ("checkout", "switch"):
         return None
@@ -2128,75 +1445,31 @@ def _evaluate_git_segment_anchored(
         return None
     if subcmd == "config":
         # 2026-07-25 P0 fix: `_CONFIG_GET_RE.search(seg)` searched the
-        # WHOLE segment text, so `--get` mentioned inside a quoted config
-        # VALUE operand granted the allow for a real config WRITE.
-        # Confirmed live exploit: `git config alias.lg "log --get"`. Same
-        # exact-token fix as pull/merge above -- `config`'s value operand
         # is POSITIONAL (preceded by no flag at all), so a
-        # freetext-operand-flag-stripping approach (e.g.
-        # `dispatch_checks._seg_excluding_freetext_operands`, which only
-        # strips `-m`/`--message`-flagged operands) would NOT have covered
-        # this shape; the exact-token check against the already-tokenized
-        # `remaining` argv handles both uniformly.
         if "--get" in remaining:
             return None
         return "git config (not --get)"
     if subcmd == "mv":
-        # Classified explicitly rather than falling through to the
-        # default-deny below, SOLELY to earn a named forward path in
-        # `_deny_message` — the verdict is unchanged (still denied).
-        # 2026-07-25 DoE memo asked for a per-dispatch `git mv` carve-out
-        # after an executor authorized by its brief to move one archived
-        # lesson file fell back to filesystem `mv`. Declined, and this is
-        # the reasoning: `git mv A B` is exactly `mv A B` plus `git add A B`,
-        # and the `git add` half is precisely what the EM-only staging lock
-        # exists to withhold — on a shared tree, a subagent writing the
-        # index is what lets a peer's bare `git commit` absorb work nobody
-        # reviewed. Nothing is lost by declining: git detects renames by
-        # content similarity at commit time, so the EM's own `git add` of
-        # both paths records the rename identically. The executor's `mv`
         # fallback was the INTENDED path, not a workaround — it only read
-        # as a gap because this guard denied it as an "unrecognized verb"
-        # without ever naming the alternative.
         return "git mv (index-mutating rename)"
 
     return "unrecognized git verb (default-deny)"
 
 
 #: Action-only counterparts of `_STASH_POP_APPLY_RE`/`_STASH_DROP_CLEAR_RE`
-#: for the anchored path -- subcommand identity is already confirmed via
-#: argv position, so only the action word itself needs a text search.
 _POP_APPLY_ACTION_RE = re.compile(r"\b(?:pop|apply)\b")
 _DROP_CLEAR_ACTION_RE = re.compile(r"\b(?:drop|clear)\b")
 
 
-# ---------------------------------------------------------------------------
 # TOKENIZED AUTHORITATIVE PASS (2026-07-21 security-audit hardening,
-# findings #1-#6). Structural root cause: the git/rm/chmod/chown
 # verb-identification above (`_GIT_SURFACE_RE`/`_RM_SURFACE_RE`/
 # `_CHMOD_CHOWN_RE`/`_evaluate_git_segment`'s raw-text entry) matches a raw
-# substring over the command TEXT -- any trick that stops the destructive
 # verb's literal characters from appearing CONTIGUOUS defeats it (`r''m`,
-# `ch"m"od`, `r\m`). This pass tokenizes with `shlex` (which correctly
-# reconstructs the intended word from all three obfuscations) and matches the
-# resulting argv[0] TOKEN against the verb/surface lists instead -- this is
 # now the AUTHORITATIVE identification path; the raw-text probes above are
-# kept as a cheap pre-filter/defense-in-depth (OR'd in at the call site,
-# `check()`) but are never the SOLE gate.
-#
 # This pass is purely ADDITIVE alongside every raw-regex path above and the
-# existing `_evaluate_wrapper_indirection`/`_unwrap_and_classify` machinery
-# (both left untouched) -- it only WIDENS what Layer 2 denies, exactly like
-# the 2026-07-21 boundary-anchor widen it sits beside.
-#
-# 2026-07-29: `_tokenize_full_command`/`_segments_from_tokens` moved to
-# `_command_tokenizer.py` (imported above, re-exported under this module's
-# prior private names) -- see that module's docstring for why.
-# ---------------------------------------------------------------------------
 
 
 class _TokenSurfaces:
-    """Accumulator for `_evaluate_tokenized`'s single-pass classification."""
 
     __slots__ = (
         "is_git",
@@ -2244,12 +1517,8 @@ def _evaluate_tokenized(cmd_text: str, depth: int = 0) -> _TokenSurfaces:
 
         argv0 = seg_tokens[0]
         if _ARGV0_UNRESOLVED_RE.match(argv0) and not _is_settings_home_bin_argv0(argv0):
-            # Finding #3: unexpanded $VAR/${VAR}/$(...) in argv[0] position --
-            # deny outright, do NOT attempt to statically resolve the
             # referenced value. EXEMPTION: the doctrine-mandated settings-home
             # CLI form (see `_SETTINGS_HOME_BIN_EXEMPT_RE` above) is narrowly
-            # excluded -- its binary name is statically known even though the
-            # directory prefix is an unresolved env var.
             result.is_wrapper = True
             if result.deny_kind is None:
                 result.deny_kind = (
@@ -2273,13 +1542,6 @@ def _evaluate_tokenized(cmd_text: str, depth: int = 0) -> _TokenSurfaces:
 
         head_base = _normalize_executable_basename(working[0])
         norm_head = _normalize_interpreter_basename(head_base)
-        # Reconstruct with shlex.quote per token, not a bare join -- a bare
-        # join is lossy (a raw quote char in an already-unquoted token, e.g.
-        # a commit message with an apostrophe, can make the downstream
-        # re-shlex.split() spuriously fail and misroute the call to the
-        # legacy free-text fallback, which can then false-positive-deny on
-        # a legacy-recognized destructive word inside the message text).
-        # shlex.quote makes the round-trip lossless.
         seg_norm_text = " ".join(shlex.quote(tok) for tok in working)
 
         if norm_head == "git":
@@ -2305,9 +1567,6 @@ def _evaluate_tokenized(cmd_text: str, depth: int = 0) -> _TokenSurfaces:
         if norm_head == "machine-local":
             # See module comment above `_MACHINE_LOCAL_WRITE_SUBCOMMANDS`
             # (MACHINE-LOCAL REGISTRY WRITE DENY). The subcommand is
-            # `working[1]` -- the CLI's own subparser has no top-level
-            # option that precedes it (see `_machine_local.py main()`), so
-            # this is an exact-token check, not a free-text search.
             result.is_machine_local = True
             if len(working) >= 2 and working[1] in _MACHINE_LOCAL_WRITE_SUBCOMMANDS:
                 if result.deny_kind is None:
@@ -2323,7 +1582,6 @@ def _evaluate_tokenized(cmd_text: str, depth: int = 0) -> _TokenSurfaces:
             continue
 
         if norm_head in _SOURCE_VERBS:
-            # Finding #5.
             result.is_wrapper = True
             if result.deny_kind is None:
                 result.deny_kind = (
@@ -2333,7 +1591,6 @@ def _evaluate_tokenized(cmd_text: str, depth: int = 0) -> _TokenSurfaces:
             continue
 
         if norm_head == "eval":
-            # Finding #6.
             result.is_wrapper = True
             if len(working) < 2:
                 ev_verdict: Optional[str] = "eval with no operand (fails closed)"
@@ -2355,9 +1612,6 @@ def _evaluate_tokenized(cmd_text: str, depth: int = 0) -> _TokenSurfaces:
             continue
 
         if norm_head in _SHELL_FILE_INTERPRETERS and pipe_before:
-            # Finding #4: bare interpreter fed via stdin pipe -- deny
-            # regardless of token count, since piped content is never
-            # present in the command text.
             result.is_wrapper = True
             if result.deny_kind is None:
                 result.deny_kind = (
@@ -2368,14 +1622,6 @@ def _evaluate_tokenized(cmd_text: str, depth: int = 0) -> _TokenSurfaces:
 
         if norm_head in _C_FLAG_INTERPRETERS:
             result.is_wrapper = True
-            # Bug fix (2026-07-21): a parse-only `-n`/`--noexec` syntax
-            # check executes NOTHING, so it is safe regardless of the
-            # target file's content -- checked BEFORE the `-c`/bare-file
-            # classification below so `bash -n foo.sh` allows outright
-            # (mirrors the identical fix in `_evaluate_wrapper_indirection`
-            # above; kept as two call sites, not refactored into one, since
-            # this tokenized pass is deliberately additive/parallel to the
-            # raw-text pass per this section's module comment).
             if norm_head in _SHELL_FILE_INTERPRETERS and _has_noexec_flag_before_script(
                 working[1:]
             ):
@@ -2414,41 +1660,10 @@ def _evaluate_tokenized(cmd_text: str, depth: int = 0) -> _TokenSurfaces:
     return result
 
 
-#: Heredoc operator + delimiter word (`<<EOF`, `<< EOF`, `<<-EOF`, `<<'EOF'`,
-#: `<<"EOF"`, `<<\EOF`). A heredoc BODY is stdin DATA, never shell command
-#: tokens, so the destructive-verb probes must not scan it -- prose containing
-#: the bare word `git`/`rm`/`chmod` inside a benign `cat > file <<EOF … EOF`
-#: write is data, not a git command (2026-07-23 false-positive: a
-#: code-reviewer's findings prose mentioning "git" was denied as an
-#: "unrecognized git verb"). Herestrings (`<<<`) have no body and are
-#: intentionally NOT matched.
-#: The optional leading `\` (`\\?`) recognizes the POSIX backslash-escaped
-#: delimiter spelling (`<<\EOF`), equivalent in effect to `<<'EOF'` (disables
-#: parameter/backtick expansion inside the body) -- a common way to write a
-#: non-expanding heredoc that this regex previously missed entirely (no quote
-#: character follows `<<`, so the old `(['\"]?)` group matched zero-width and
-#: the next required char class `[A-Za-z_]` failed against the literal `\`).
-#: Missing this meant such a heredoc's body was never stripped and was
-#: rescanned as live command text -- the exact false-deny class this module's
-#: heredoc-stripping was introduced to close, just for one untested spelling.
 _HEREDOC_OP_RE = re.compile(r"<<-?\s*\\?(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
 
 def _strip_heredoc_bodies(cmd: str) -> str:
-    """Remove heredoc BODY lines (stdin data) from ``cmd``, keeping the
-    command line that introduces each heredoc and dropping everything from the
-    next line through the closing delimiter line (inclusive).
-
-    A heredoc feeds literal data to a command's stdin; its content is never
-    executed as shell commands, so the destructive-verb classifiers must not
-    treat verbs appearing inside it as commands. Anti-bypass: this does NOT
-    reduce protection against an interpreter fed BY a heredoc (``bash <<EOF …
-    EOF``) -- after the body is stripped, the residual ``bash <<'EOF'`` still
-    matches the wrapper probe and is denied as an interpreter-invoked-script
-    indirection wrapper. Multiple heredocs queued on one line are consumed in
-    order. Closing-delimiter match is line-stripped equality, which covers both
-    ``<<`` and tab-stripping ``<<-`` for this compensating control's purposes.
-    """
     lines = cmd.split("\n")
     out: List[str] = []
     i = 0
@@ -2460,7 +1675,7 @@ def _strip_heredoc_bodies(cmd: str) -> str:
         for delim in [m.group(2) for m in _HEREDOC_OP_RE.finditer(line)]:
             while i < n and lines[i].strip() != delim:
                 i += 1
-            if i < n:  # consume the closing delimiter line too
+            if i < n:
                 i += 1
     return "\n".join(out)
 
@@ -2541,13 +1756,9 @@ def _evaluate_git_segment(seg: str, strict: bool = True) -> Optional[str]:
         seg, strict=strict
     )
     if not parse_ok:
-        # Suppress legacy's terminal catchall for either (a) the recursive
         # `-c`-payload scan (`strict=False`), or (b) the INLINE-INTERPRETER
         # CARVE-OUT sentinel (a `-c`-flagged interpreter head even in
         # `strict=True` mode -- `_INTERPRETER_C_PAYLOAD_AMBIGUOUS`) -- both
-        # are non-shell-syntax payload text, not a real shell segment. A
-        # genuinely unparseable REAL shell segment (`subcmd is None` here)
-        # keeps the catchall unchanged.
         default_deny_on_unmatched = strict and subcmd is not _INTERPRETER_C_PAYLOAD_AMBIGUOUS
         return _evaluate_git_segment_legacy(
             seg, default_deny_on_unmatched=default_deny_on_unmatched
@@ -2585,7 +1796,6 @@ def _evaluate_git_segment_legacy(
     destructive-verb check ABOVE the catchall is unaffected either way.
     """
     # --- WORKING-TREE-CLOBBER DENY SET (checked before the general
-    # verb-allowlist walk) ---------------------------------------------
     if _CHECKOUT_KEYWORD_RE.search(seg):
         if _CHECKOUT_DASHDASH_RE.search(seg) or _CHECKOUT_PATHSPEC_RE.search(seg):
             return "git checkout <pathspec>"
@@ -2604,12 +1814,7 @@ def _evaluate_git_segment_legacy(
 
     # 2026-07-26 fix (module docstring "UNSCOPED-STASH GAP CLOSE"): bare
     # `git stash`, the IMPLICIT-push flag-only form (`git stash -u`), and
-    # explicit `git stash push` all sweep every uncommitted change on the
-    # shared tree unless scoped with a `--`-delimited pathspec. `pop`/
-    # `apply` already returned above; `drop`/`clear` return later (own
-    # check, unaffected); `list`/`show`/`branch`/`create`/`store`/`save`
     # (`_STASH_OTHER_ACTION_WORD_RE`) are a different subcommand entirely
-    # and fall through unchanged.
     if (
         _STASH_WORD_RE.search(seg)
         and not _STASH_OTHER_ACTION_WORD_RE.search(seg)
@@ -2618,7 +1823,6 @@ def _evaluate_git_segment_legacy(
     ):
         return "git stash (unscoped)"
 
-    # --- Incident-class verbs -- unconditional deny ---------------------
     if _REBASE_RE.search(seg):
         return "git rebase"
     if _HARD_FLAG_RE.search(seg) and _RESET_WORD_RE.search(seg):
@@ -2648,12 +1852,7 @@ def _evaluate_git_segment_legacy(
     if _REMOTE_MUTATE_RE.search(seg):
         return "git remote <mutate>"
 
-    # P2(b) fix (2026-07-25): fail CLOSED on an unrecognized worktree/remote
     # second-level form instead of falling through to `_SAFE_VERB_RE`'s
-    # generic bare-verb match (worktree/remote are no longer in that set --
-    # see its comment above). These ALWAYS return -- allow or deny -- so a
-    # worktree/remote segment can never reach the generic allowlist below
-    # uninspected.
     worktree_match = _WORKTREE_WORD_RE.search(seg)
     if worktree_match is not None:
         next_word = _NEXT_WORD_AFTER_RE.match(seg, worktree_match.end())
@@ -2670,7 +1869,6 @@ def _evaluate_git_segment_legacy(
 
     # --- SAFE-FORWARD ALLOWLIST -- reached only if none of the above
     # matched. Any git verb not enumerated here is DEFAULT-DENIED: the
-    # load-bearing "novel verb denied for not being allowlisted" property.
     if _SAFE_VERB_RE.search(seg):
         return None
     if _PULL_WORD_RE.search(seg):
@@ -2682,7 +1880,6 @@ def _evaluate_git_segment_legacy(
             return None
         return "git merge (not --ff-only)"
     if _PUSH_WORD_RE.search(seg):
-        # Forcing forms already denied above; anything else on push is safe.
         return None
     if _SWITCH_WORD_RE.search(seg):
         return None
@@ -2700,11 +1897,6 @@ def _evaluate_git_segment_legacy(
         return "git config (not --get)"
 
     if not default_deny_on_unmatched:
-        # strict=False caller (`-c`-payload indirection scan): the segment
-        # mentions "git" as free text but matched none of the specific
-        # destructive-verb patterns above -- no argv-shaped git invocation
-        # was ever confirmed here (see `_evaluate_git_segment`'s docstring
-        # entry). Allow rather than default-deny on bare word presence.
         return None
 
     return "unrecognized git verb (default-deny)"
@@ -2821,17 +2013,6 @@ def _git_mv_corrected_command(cmd: str) -> Optional[str]:
 
 
 def _is_opaque_indirection(wrapper_verdict: str) -> bool:
-    """True when `wrapper_verdict` names a wrapper shape whose PAYLOAD this
-    guard genuinely never saw (a script file's content, xargs-assembled
-    stdin, an unparseable/too-deep wrapper, or an unresolved `$VAR`/`$(...)`
-    reference) -- the over-block C18d/census flips to advisory. False for a
-    `-c`/`eval`-recursed shape where `_unwrap_and_classify`/
-    `_evaluate_tokenized` actually unwrapped a REAL destructive git/rm/
-    chmod-chown-R/machine-local match inside the payload -- those embed a
-    `' -> '` arrow to the resolved deny_kind (e.g. "bash -c '<inline>' ->
-    rm -r/-f (recursive or force)") and stay hard-denied: the destructive
-    core the guard actually examined and confirmed, not an over-block.
-    """
     return " -> " not in wrapper_verdict
 
 
@@ -3066,51 +2247,16 @@ def _build_reason(
     )
 
 
-# ---------------------------------------------------------------------------
 # FAIL-OPEN OBSERVABILITY (2026-07-29 addition, pure addition -- see module
 # docstring FAIL-POSTURE section for the three fail-open branches this
-# instruments). Root cause: `check()` returning `None` (allow) writes
-# nothing anywhere, so a Layer-1-flagged destructive command that then
-# fails open at the identity gate leaves zero trace -- confirmed exploitable
-# via ordinary, non-adversarial multi-repo dispatch (a subagent's Bash call
-# lands in a repo other than the one it was dispatched from, so the
 # per-repo back-pointer the SECONDARY leg reads was never written there).
-# See DoE-claude state/audits/2026-07-29-destructive-git-guard-inconsistency.md.
-#
 # This section is OBSERVABILITY ONLY -- it never changes an allow/deny
-# verdict. It only ever runs on a command Layer 1 has ALREADY flagged as
-# touching a dangerous surface (git/rm/chmod-chown-R/wrapper-indirection),
-# preserving the module's cost-gating design intent: an ordinary subagent
-# Bash call (ls/grep/python/cat) never reaches this code, and it costs
-# nothing extra beyond the log write itself -- no additional
-# `resolve_git_root` subprocess spawn is introduced on the EM main-loop
-# path (branch `no-agent-id-key` logs with git_root left unresolved rather
-# than paying a spawn to fill it in, since that branch fires for the
-# EM's own top-level Bash calls too and this module structurally never
-# adds identity-resolution cost there).
-# ---------------------------------------------------------------------------
 _FAIL_OPEN_LOG_RELPATH = ("state", "destructive-guard-fail-open.log")
 _NOT_ATTEMPTED = "<not-attempted>"
 
-#: Rotation cap for the fail-open log (measured incident: 80,204,921 bytes /
-#: 182,671 lines, unbounded, still appending -- see this change's plan). 5MB
-#: is small enough that a stat+rename never approaches the PreToolUse
-#: brightline (CLAUDE.md § The brightline), and large enough that rotation
-#: fires on the order of thousands of records rather than every few dozen.
 _FAIL_OPEN_LOG_MAX_BYTES = 5 * 1024 * 1024
-#: Rotated generations kept alongside the live file (`.1` newest rotated,
-#: `.3` oldest) -- a small fixed count, matching the module's "cheap and
-#: bounded" observability design intent rather than a full retention policy.
 _FAIL_OPEN_LOG_MAX_GENERATIONS = 3
 
-#: Narrowest match for the synthetic-session shape observed polluting the
-#: production log (measured incident: ~110 one-record synthetic sessions in
-#: a single 14-minute window). This is the literal prefix minted by
-#: `coordinator_core.bash_guards.tests.guard_message_corpus` (`"guard-
-#: message-corpus-%s" % uuid.uuid4().hex` and its `-audience-` variant) --
-#: that module is this package's own test corpus and the only known writer
-#: of this shape; no broader test/synthetic sentinel convention exists
-#: elsewhere in this package to follow instead.
 _SYNTHETIC_CORPUS_SESSION_PREFIX = "guard-message-corpus-"
 
 
@@ -3138,21 +2284,6 @@ def _fail_open_log_path() -> Path:
 
 
 def _rotate_fail_open_log_if_oversized(log_path: Path) -> None:
-    """Best-effort size-based rotation, stat-and-rename only -- never a scan
-    or line count of the log body (PreToolUse hot path, CLAUDE.md § The
-    brightline). MUST NEVER raise, deny, or delay the guard verdict: this is
-    called from inside `_log_fail_open`'s own best-effort `try`, and every
-    step here is independently wrapped so one failed rename (e.g. a
-    concurrent peer session mid-rotation on the same shared machine) cannot
-    prevent the remaining shifts or the caller's own append from proceeding.
-
-    Standard oldest-first logrotate shape: drop generation N, shift N-1..1
-    up by one, then move the live file to generation 1. `os.replace` (not
-    `Path.rename`) throughout -- POSIX `rename(2)` and Windows `MoveFileEx`
-    both make `os.replace` an atomic overwrite-if-exists, unlike
-    `Path.rename`, which raises `FileExistsError` on Windows when the
-    destination is already present.
-    """
     try:
         if log_path.stat().st_size < _FAIL_OPEN_LOG_MAX_BYTES:
             return
@@ -3253,11 +2384,6 @@ def _log_fail_open(
 
 
 def _sanitize_command(cmd: str) -> str:
-    """Strip tab/CR/LF/FF/VT to a space,
-    strip ASCII control chars 0x00-0x1F (``tr -d '\\000-\\037'`` -- 0x7F DEL
-    is deliberately NOT stripped, matching the bash range), truncate to 200
-    chars with a trailing ``...`` marker.
-    """
     cmd_safe = re.sub(r"[\t\r\n\f\v]", " ", cmd)
     cmd_safe = "".join(ch for ch in cmd_safe if ord(ch) >= 0x20)
     if len(cmd_safe) > 200:
@@ -3267,65 +2393,19 @@ def _sanitize_command(cmd: str) -> str:
     return cmd_safe
 
 
-# ---------------------------------------------------------------------------
 # POWERSHELL-DIALECT DESTRUCTIVE-VERB CLASSIFIER (2026-08-07, this change --
-# C4d of docs/plans/2026-08-07-guards-reach-a-verdict-on-powershell-or-stay-
-# silent.md; see docs/reference/guard-dialect-coverage.md row 16, "the
 # expensive one"). A SEPARATE classifier from the Bash Layer 1/2 machinery
-# above -- not a widening of it -- because the ~25 raw-text regexes above are
-# anchored on literal Bash-shaped punctuation/quoting and, per the spike
-# verdict record (docs/research/spike-verdicts/2026-08-07-powershell-guard-
-# detection-and-tokenizer-mechanism.md, "shlex(posix=True) on PowerShell is
-# actively wrong"), feeding PowerShell text through this module's `shlex`-
-# based tokenizer (`_evaluate_tokenized`/`_tokenize_full_command`) mangles
-# Windows paths and can raise outright. This classifier instead tokenizes via
-# `_dialect.resolve_segments_for_dialect` (tree-sitter-pwsh), which already
-# records SILENT on any parse failure/grammar gap (see `_dialect.py`'s own
-# `_powershell_tokens` docstring) -- this module adds no second SILENT path
-# for that case, it only adds verb/flag recognition on top of a tokenizer
-# that already declines to rule when it cannot.
-#
 # `rm` IS included in `_PS_REMOVE_VERBS` below, despite C3 finding 1
-# (guard-dialect-coverage.md "Scope and method") naming it as an
-# already-covered alias collision: that finding's "already covered" claim
 # rests on the Bash-leg raw-text `_RM_SURFACE_RE`/`_RM_DENY_RE` pair running
-# unconditionally -- true when `tool_name == "Bash"`, but this classifier is
 # reached ONLY for `Dialect.POWERSHELL` (a SEPARATE branch off `check()`,
-# never falling through to the Bash-leg regexes at all -- see module comment
-# above `check()`), so a real `tool_name == "PowerShell"` dispatch carrying
-# `rm -Recurse -Force <path>` would otherwise see NEITHER classifier. Adding
-# `rm` here is therefore genuinely new coverage for the PowerShell leg, not
-# a duplicate of the Bash leg's (unreached, for this dialect) coverage --
-# confirmed live via `test_powershell_rm_alias_denies_via_existing_dialect_
-# neutral_probe`'s own name update / test comment. `mv`/`cp` are NOT added:
-# neither Move-Item nor Copy-Item is in this guard's v1 destructive-surface
-# scope (git/rm/chmod-chown-R only, per the module docstring's own Anti-scope
-# note), so their PowerShell aliases carry no more coverage obligation here
-# than the bare `mv`/`cp` binaries do on the Bash leg. This classifier covers
-# the verbs the spike measured returning bare `None`: `Remove-Item`/`ri`/
-# `rd`/`del`/`rm` (recursive-or-force delete), `icacls` (permission
-# modification, always dangerous), and `Stop-Process` (process termination,
-# always dangerous) -- see the dispatching brief's "Required work" list.
-#
 # FLAG-SHAPE: PowerShell has no clustered short flags (`rm -rf` cannot
-# execute there at all -- confirmed live, "A parameter cannot be found that
 # matches parameter name 'rf'") and parameter names PREFIX-MATCH, so a
-# literal `-rf`/`-Recurse`/`-Force` matcher has zero recall. `_ps_has_flag`
-# below matches a PREFIX SET (`-r*`, `-fo*`) case-insensitively, plus the
-# legacy cmd.exe-alias slash flags (`/s`, `/f`) `rd`/`del` accept when
-# PowerShell resolves them via its own cmd-compatibility shims.
 _PS_REMOVE_VERBS = frozenset({"remove-item", "ri", "rd", "del", "erase", "rm"})
 _PS_ICACLS_VERBS = frozenset({"icacls"})
 _PS_STOP_PROCESS_VERBS = frozenset({"stop-process"})
 
 
 def _ps_has_flag_prefix(tokens: List[str], dash_prefixes: tuple, slash_exact: frozenset) -> bool:
-    """True if any of ``tokens`` is a `-`-prefixed flag whose lowercased text
-    starts with one of ``dash_prefixes`` (PowerShell prefix-matching, e.g.
-    `-r` matches `-Recurse`/`-r`; `-fo` matches `-Force`/`-fo`), OR an exact
-    lowercased match in ``slash_exact`` (the legacy cmd.exe-alias slash-flag
-    spelling `rd`/`del` accept, e.g. `/s`, `/f`).
-    """
     for tok in tokens:
         low = tok.lower()
         if low.startswith("-") and any(low.startswith(p) for p in dash_prefixes):
@@ -3366,23 +2446,6 @@ def _ps_normalize_verb_token(tok: str) -> str:
 
 
 def _ps_resolve_head_verb(tokens: List[str]) -> tuple:
-    """Resolve the destructive-verb candidate and the remaining argument
-    tokens from a PowerShell segment's token stream, unwinding the two
-    call-operator forms this classifier must see through in addition to a
-    direct invocation:
-
-      - `&('Remove-Item') ...` / `&("Remove-Item") ...` -- the call
-        operator applied to a parenthesized, quoted verb literal. Segmented
-        as `['(', "'Remove-Item'", ')', ...]` (the leading `&` is already
-        consumed as a statement-boundary token by segmentation).
-      - `&(Get-Command Remove-Item) ...` -- the call operator applied to a
-        `Get-Command` lookup. Segmented as
-        `['(', 'Get-Command', 'Remove-Item', ')', ...]`.
-
-    Returns `(verb_lower, rest_tokens)`; `verb_lower` is `""` if no verb
-    candidate could be resolved (caller's membership checks then simply
-    miss, same as today's behavior for an unrecognized head).
-    """
     if not tokens:
         return "", []
 
@@ -3502,69 +2565,21 @@ def _evaluate_powershell_destructive(cmd_norm: str) -> Optional[str]:
     return None
 
 
-# ---------------------------------------------------------------------------
 # POWERSHELL GIT-DESTRUCTIVE PARITY PORT (2026-08-19, C3 of docs/plans/
-# 2026-08-19-the-held-guard-cohort-becomes-dialect-safe.md). Prior to this
-# change, `_evaluate_powershell_destructive` above covered only
 # `_PS_REMOVE_VERBS`/`_PS_ICACLS_VERBS`/`_PS_STOP_PROCESS_VERBS` -- the Bash
-# leg's git deny ladder (`_evaluate_git_segment_anchored`, hard reset, force
-# push, checkout/switch discarding worktree state, branch -D, clean -fdx,
-# unscoped stash, filter-branch/filter-repo, worktree/remote/reflog mutation,
-# pull/merge not --ff-only, config not --get, etc. -- the full enumerated
-# ladder at lines ~1735-1948) sits on a `shlex`-tokenized path PowerShell
 # text never reaches (`check()` routes `Dialect.POWERSHELL` to
-# `_check_powershell`, never through the Bash-leg `_evaluate_git_surface`
-# call at the bottom of `check()`), so a real `tool_name == "PowerShell"`
-# dispatch carrying `git push --force` / `git reset --hard` / `git clean
-# -fdx` / ... saw NEITHER classifier and allowed silently.
-#
 # THIS IS A PORT, NOT A REIMPLEMENTATION: `git` is an external executable on
-# both dialects -- PowerShell passes its own argv through to `git.exe`
 # UNINTERPRETED (no cmdlet-style parameter-name prefix-matching applies to
 # an external command's own flags, unlike `_PS_REMOVE_VERBS`'s cmdlet-prefix
-# concern above), so git's subcommand/flag GRAMMAR is byte-identical
-# regardless of which shell invoked it. The existing anchored deny ladder
-# (`_evaluate_git_segment_anchored`) and its subcommand resolver
-# (`_real_git_subcommand`, itself already dialect-agnostic -- it operates on
 # a `List[str]`, never on shell-shaped text) are therefore REUSED VERBATIM
-# here, not duplicated: this function's only job is to get from
-# tree-sitter-pwsh's token stream to the same `(seg_text, subcmd,
-# remaining)` shape the Bash leg already builds via `shlex`, then hand off
-# to the identical classifier -- true byte-for-byte parity, not a
-# lookalike second implementation that could drift.
-#
 # MATCHERS IS NOT WIDENED HERE (AC12, deliberately deferred to a later
-# chunk in the same plan): this function is reachable ONLY via
-# `_check_powershell`, itself reachable only when `dialect_from_tool_name`
 # already resolved `Dialect.POWERSHELL` -- i.e. only when `MATCHERS`
-# already admits the calling tool name for SOME other reason. This chunk
-# makes the guard correct once reached; it does not change reachability.
-# ---------------------------------------------------------------------------
 
 
 _PS_LEGACY_SEPARATOR_RE = re.compile(r"[;\n]|&&|\|\||\|")
 
 
 def _evaluate_legacy_powershell_git(text):
-    """PowerShell-shaped free-text fallback for the `tokens is None` route
-    (AC3 / Conventions (a)), parallel in shape and posture to
-    `block_stash_destruction._evaluate_legacy_powershell`.
-
-    NEVER routes to `_evaluate_git_segment_legacy` (bash-shaped free text,
-    the spurious-deny source this plan exists to kill). It strips
-    here-string bodies and quoted spans via
-    `_dialect.strip_powershell_prose_noise` (C2), then re-runs the SAME
-    anchored ladder the parsed path uses (`_real_git_subcommand` +
-    `_evaluate_git_segment_anchored`) over the residue, so a
-    hazard-documenting prose string quoting `git reset --hard` does not
-    read as an issued command while a real invocation still denies.
-
-    Load-bearing, not defensive: `--` is not valid PowerShell, so every
-    `git checkout -- <path>` form fails to tokenize and arrives here.
-    Returning ``None`` on this route -- the state this function replaces --
-    let those forms ALLOW under PowerShell while denying under Bash, the
-    exact covered-but-permissive guard AC12's ordering exists to prevent.
-    """
     stripped = strip_powershell_prose_noise(text)
     for raw_segment in _PS_LEGACY_SEPARATOR_RE.split(stripped):
         seg = raw_segment.strip()
@@ -3720,12 +2735,6 @@ def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             subagent_type_present=subagent_type_computed,
             subagent_type=subagent_type,
         )
-        # No resolved kind at all -- same posture as the Bash leg: this is a
-        # known subagent (raw_agent_id present) whose KIND could not be
-        # determined. The PowerShell leg's verb table has no allow-forward
-        # path (every recognized verb is always-dangerous or flag-gated
-        # already), so an unresolved kind still denies below -- there is no
-        # equivalent of the Bash leg's Layer-2 allowlist to fall through to.
 
     if effective_type == "AMBIGUOUS":
         deny_kind = "ambiguous-identity"
@@ -3758,39 +2767,16 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not cmd:
         return None
 
-    # CRLF normalize (Windows/Git-Bash jq.exe text-mode quirk -- redundant
-    # per-check strip, per recipe section (c) "double-strip discipline").
     cmd_norm = cmd.replace("\r", "")
 
-    # Heredoc bodies are stdin DATA, not shell commands -- strip them before
-    # classification so benign prose containing a destructive verb word (a
-    # code-reviewer's findings mentioning "git", a doc heredoc saying "rm")
-    # is not mis-denied. Anti-bypass: an interpreter FED by a heredoc
-    # (`bash <<EOF … EOF`) still denies -- the residual `bash <<'EOF'` matches
-    # the wrapper probe. `cmd_safe` for the deny reason still uses the
-    # original `cmd`, so the operator sees the real command text.
     cmd_norm = _strip_heredoc_bodies(cmd_norm)
 
     # 2026-07-28 fix (SPACED-WINDOWS-PATH ARGV0 HOLE, see the module comment
     # above `_WINDOWS_ARGV0_HEAD_PATH_RE`): quote-and-normalize an UNQUOTED
-    # Windows argv0-head path that contains an embedded-space component
-    # (`C:\Program Files\Git\bin\git.exe`) BEFORE the no-space-only pass
-    # below, so the whole path lands as one `shlex` token instead of
-    # splitting on the space.
     cmd_norm = _normalize_windows_argv0_head_path_with_spaces(cmd_norm)
 
-    # 2026-07-25 fix, widened 2026-07-28 (A2) -- see
-    # `_normalize_windows_wrapper_argv0` docstring: rewrite a Windows
-    # backslash-path invocation head (`C:\path\to\git.exe`,
-    # `C:\Windows\System32\bash.exe`, `C:\Python311\python.exe`) to its
-    # forward-slash equivalent BEFORE any shlex tokenization runs, so it
-    # survives shlex's escape-processing intact and is recognized downstream
-    # the same as a bare `git`/`bash`/`python3`/... head.
     cmd_norm = _normalize_windows_wrapper_argv0(cmd_norm)
 
-    # ------------------------------------------------------------------
-    # LAYER 1 -- dangerous-surface detection, BEFORE identity resolution.
-    # ------------------------------------------------------------------
     is_git_surface = bool(_GIT_SURFACE_RE.search(cmd_norm))
     is_rm_surface = bool(_RM_SURFACE_RE.search(cmd_norm))
     is_chmod_chown_r_surface = False
@@ -3798,15 +2784,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         is_chmod_chown_r_surface = True
     # 2026-07-21 addition (see module docstring "INDIRECTION-WRAPPER
     # HARDENING"): a fourth Layer-1 probe, cheap and boundary-anchored like
-    # the three above, so identity resolution also gates on wrapper shapes
-    # that hide a destructive verb from the literal-token probes.
     is_wrapper_surface = bool(_WRAPPER_PROBE_RE.search(cmd_norm))
 
-    # 2026-07-21 security-audit hardening (findings #1-#6): the tokenized
-    # authoritative pass runs unconditionally -- the raw-text probes above
-    # can never be the SOLE gate, since a quote-obfuscated verb (`r''m`,
-    # `ch"m"od`, `r\m`) or an unresolved-indirection/eval/source/bare-pipe-
-    # interpreter shape may match NONE of them.
     tok_surfaces = _evaluate_tokenized(cmd_norm)
     is_git_surface = is_git_surface or tok_surfaces.is_git
     is_rm_surface = is_rm_surface or tok_surfaces.is_rm
@@ -3814,8 +2793,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     is_wrapper_surface = is_wrapper_surface or tok_surfaces.is_wrapper
     # MACHINE-LOCAL REGISTRY WRITE DENY (see module comment above
     # `_MACHINE_LOCAL_WRITE_SUBCOMMANDS`) -- tokenized-only surface, no raw-
-    # text pre-probe: `_evaluate_tokenized` already runs unconditionally
-    # above, so a separate cheap regex would gate nothing further here.
     is_machine_local_surface = tok_surfaces.is_machine_local
 
     if not (
@@ -3827,12 +2804,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     ):
         return None
 
-    # No agent_id at all -> top-level EM Bash call -> allow, before paying
-    # any identity-resolution cost (reference hook line 160). Logged
-    # WITHOUT resolving git_root (see `_log_fail_open` docstring) so this
-    # branch -- which fires on ordinary EM main-loop traffic, not just
-    # subagent traffic -- never pays a `resolve_git_root` subprocess spawn
-    # it didn't already pay before this observability addition.
     if "agent_id" not in payload:
         _log_fail_open(
             "no-agent-id-key",
@@ -3843,9 +2814,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         )
         return None
 
-    # ------------------------------------------------------------------
     # IDENTITY AXIS -- DUAL OR-resolver via the shared engine helper.
-    # ------------------------------------------------------------------
     git_root = resolve_git_root(payload.get("cwd"))
     raw_agent_id = payload.get("agent_id") or ""
     session_id = payload.get("session_id") or ""
@@ -3858,29 +2827,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         subagent_type_computed = True
 
     # Empty AGENT_ID (raw_agent_id present but unparseable to either accepted
-    # id shape) no longer fail-open-allows (fixed 2026-07-30): raw_agent_id
-    # presence already established this IS a subagent above -- an id that
-    # fails to canonicalize is a second lookup-miss on the SAME "what kind"
-    # question, not a fresh answer to "is this a subagent". It no longer
-    # short-circuits to allow here; the PRIMARY (`agent_type`) leg may still
-    # resolve a kind below even when canonicalization failed, so whether
-    # this is actually a kind-resolution failure is decided once, after
-    # `effective_type` is computed, not here.
     effective_type = agent_type or subagent_type or ""
     # AMBIGUOUS on the SECONDARY leg overrides a populated PRIMARY leg
-    # unconditionally (guards against a stale/spoofed PRIMARY masking a
-    # real collision).
     if subagent_type == "AMBIGUOUS":
         effective_type = "AMBIGUOUS"
 
-    # No resolved type via EITHER resolver -- same fix: this is still a known
-    # subagent (raw_agent_id present), just one whose KIND we could not
-    # determine (empty git_root, or a missing/unreadable/malformed
-    # backpointer chain). Falls through into LAYER 2's default-deny rather
-    # than returning allow; Layer 2's classification does not depend on
     # `effective_type` except for the AMBIGUOUS override above, which cannot
-    # fire here since `subagent_type` was never computed without a resolved
-    # `agent_id` + `git_root`.
     kind_unresolved = not effective_type
     if kind_unresolved:
         branch = (
@@ -3900,15 +2852,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             subagent_type_present=subagent_type_computed,
             subagent_type=subagent_type,
         )
-        # The signal itself is emitted below, at EITHER of this function's
-        # two reachable exits (Layer 2 can still allow OR deny on an
-        # unresolved kind -- its classification does not gate on
         # effective_type except the AMBIGUOUS override above), with the
-        # exact verdict this call is about to return.
 
-    # ------------------------------------------------------------------
-    # LAYER 2 -- default-deny with safe-forward allowlist.
-    # ------------------------------------------------------------------
     deny = False
     deny_kind = ""
 
@@ -3922,8 +2867,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 deny = True
                 deny_kind = verdict
 
-        # Tokenized authoritative fallback (findings #1/#2): catches a
-        # quote-obfuscated git verb the raw-text evaluator above missed.
         if not deny and tok_surfaces.is_git and tok_surfaces.deny_kind:
             deny = True
             deny_kind = tok_surfaces.deny_kind
@@ -3947,10 +2890,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 deny = True
                 deny_kind = f"indirection: {wrapper_verdict}"
 
-        # Tokenized authoritative fallback (findings #3-#6): unresolved
-        # variable/command-substitution indirection, eval, source/`.`, and a
-        # bare interpreter fed via stdin pipe -- shapes the raw-text wrapper
-        # probe/evaluator above cannot see at all.
         if not deny and tok_surfaces.is_wrapper and tok_surfaces.deny_kind:
             deny = True
             deny_kind = f"indirection: {tok_surfaces.deny_kind}"
@@ -3968,20 +2907,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     cmd_safe = _sanitize_command(cmd)
 
-    # RESHAPE (2026-08-06, docs/plans/2026-08-06-apply-guard-class-census.md
-    # C18d): the destructive core (a git/rm/chmod-chown-R/machine-local
-    # match this guard actually SAW, directly or resolved via a `-c`/`eval`
-    # recursion -- see `_is_opaque_indirection`) stays a hard deny,
-    # unchanged. An OPAQUE indirection-wrapper shape -- the guard never saw
-    # the payload at all -- no longer denies outright; it advises instead.
     # `GuardEntry` registration (band CONFINEMENT_DENY, fail_closed=True) is
     # UNCHANGED -- this branch returns an allow+additionalContext envelope
-    # from the same registered `check()`, the same shape
-    # `block_dev_repo_sentinel_removal`'s prior single-function design used
-    # (see `dispatch.py`'s own comment on that guard, cited verbatim in this
-    # module's dispatching brief) before that guard was split into two
-    # registrations -- here it stays one, per the brief's explicit
-    # instruction not to touch this guard's `dispatch.py` entry.
     if deny_kind.startswith("indirection: "):
         wrapper_shape = deny_kind[len("indirection: "):]
         if _is_opaque_indirection(wrapper_shape):

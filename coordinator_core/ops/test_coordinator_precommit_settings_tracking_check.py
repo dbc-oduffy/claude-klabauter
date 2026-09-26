@@ -27,8 +27,6 @@ from pathlib import Path
 from coordinator_core.win_portability import no_console_creationflags
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -114,13 +112,6 @@ def test_override_bypasses_the_new_markers_too(tmp_path):
 
 
 # --- 2026-08-11: glob lens (`_TRACKED_SIDECAR_GLOBS`) coverage --------------
-#
-# Reproduces the five paths from the DoE-claude cross-repo memo
-# (2026-08-11-doe-claude-em-two-gaps-that-let-machine-local-files-stay-tracked.md
-# § "1.") that were tracked in a live `~/.claude` while this guard's original
-# exact-basename lens ran clean — three of them byte-identical to files the
-# exact lens DOES protect, the other two plugin-manifest snapshots nested
-# alongside them in the same backup directory.
 
 _GLOB_EVIDENCE_PATHS = (
     "settings.json.bak-2026-08-07-dead-hooks",
@@ -148,9 +139,6 @@ def test_glob_lens_catches_each_evidenced_backup_path(tmp_path):
 
 
 def test_glob_lens_leaves_an_unrelated_nested_json_clean(tmp_path):
-    """Negative control for the glob lens: a normal JSON file at depth,
-    with no settings/plugin-manifest-shaped basename, must pass clean —
-    otherwise the glob lens would prove nothing by blocking everything."""
     meta, home = _make_meta_repo(tmp_path)
     nested = meta / "docs" / "notes" / "example.json"
     nested.parent.mkdir(parents=True, exist_ok=True)

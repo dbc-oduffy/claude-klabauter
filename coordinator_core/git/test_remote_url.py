@@ -1,14 +1,3 @@
-"""Tests for coordinator_core.git.remote_url.
-
-Spec backlink: docs/plans/2026-08-16-a-process-per-predicate.md, chunk C3.
-
-Real throwaway git repos (tmp_path + `git init`/`git remote add`), one
-fixture per test -- consistent with the repo-wide convention documented in
-`coordinator_core/ops/tests/test_staleness_git.py` and this package's own
-`test_repo_root.py`. This module has no walk/memo path to unit-test with a
-fake `.git` layout (see `remote_url.py`'s docstring -- it always spawns), so
-every test here exercises the real `git` binary.
-"""
 
 from __future__ import annotations
 
@@ -82,14 +71,6 @@ def test_get_remote_url_timeout_returns_none(tmp_path, monkeypatch):
 
 
 def test_get_remote_url_matches_real_git_rev_parse_toplevel_scoped(tmp_path):
-    """resolve()-equality against `git rev-parse --show-toplevel`, comparing
-    resolved PATHS never strings (Windows forward-vs-backslash trap) -- this
-    is a sanity check that this module's spawn runs in the same resolved
-    repo `git rev-parse` itself resolves to, not a test of the URL string
-    (per the brief: path-equality cannot stand in for a URL-derivation
-    test, which is why the other tests above assert on the URL value
-    directly).
-    """
     repo = _init_repo(tmp_path)
     _run_git(["remote", "add", "origin", "https://example.invalid/o/r.git"], repo)
 
@@ -158,11 +139,6 @@ def test_get_remote_url_respects_insteadof_rewrite(tmp_path):
 
 
 def test_get_remote_url_absent_to_present_within_one_process(tmp_path):
-    """No-memo correctness (brief's absent-to-present obligation): a remote
-    added mid-process must be visible on the very next call -- this module
-    keeps no cwd-keyed memo (unlike `repo_root`), so there is nothing to
-    clear and nothing that can serve a stale `None` here.
-    """
     repo = _init_repo(tmp_path)
     assert remote_url.get_remote_url("origin", cwd=str(repo)) is None
     _run_git(["remote", "add", "origin", "https://example.invalid/o/r.git"], repo)

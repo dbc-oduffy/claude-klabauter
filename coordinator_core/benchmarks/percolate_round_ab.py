@@ -120,38 +120,14 @@ _TIMING_ROUND_CPU_RE = re.compile(
 
 
 def round_command(target: str) -> List[str]:
-    """The one invocation shape this module ever runs. `--dry-run` and
-    `--no-commit` are not parameters -- a caller who wants to measure a
-    real, destination-mutating round needs a different, explicitly-
-    authorized tool, not a flag on this one (§ module docstring)."""
     return [sys.executable, str(_PUBLISH_PY), target, "--dry-run", "--no-commit"]
 
 
 def measure_round_gate(target: str = _DEFAULT_TARGET, *, k: int = 1) -> dict:
-    """AC1/AC2/AC3's gating figures. `k` defaults to 1: a percolate round
-    dry-run costs ~20s of process time / ~50-70s wall per invocation on this
-    box (state/audits/2026-08-23-percolate-round-process-time-census.md).
-    `batched_process_time_ms` amortises over k to recover sub-tick precision
-    near a Windows job object's ~15.6ms quantisation -- irrelevant at a
-    20,000ms+ scale, so k=1 avoids multiplying a round-scale cost across a
-    shared box for precision this figure does not need. A caller after
-    tighter confidence can pass a larger k explicitly.
-
-    Returns `batched_process_time_ms`'s own dict unmodified: process_time_ms,
-    wall_ms (context only), procs_per_call, rc, k.
-    """
     return batched_process_time_ms(round_command(target), k=k, cwd=str(_REPO_ROOT))
 
 
 def capture_phase_breakdown(target: str = _DEFAULT_TARGET) -> dict:
-    """Runs the round ONCE more, directly (not through the job-object
-    primitive, which sends stdout to DEVNULL), to parse production's own
-    already-printed `[timing]` lines. This is not a second timing surface --
-    it parses process_time/perf_counter data production code already
-    computed and printed; this function contributes no new measurement
-    mechanism. Figures returned here are driver-only (exclude subprocess
-    CPU) and are reported as context, never as a gate.
-    """
     proc = subprocess.run(
         round_command(target),
         cwd=str(_REPO_ROOT),
@@ -201,10 +177,6 @@ def capture_phase_breakdown(target: str = _DEFAULT_TARGET) -> dict:
 
 
 def run_ab(target: str = _DEFAULT_TARGET, *, k: int = 1) -> dict:
-    """Convenience entry point combining both measurements for one target.
-    Used by both the CLI below and by C5 (old-vs-new verdict), which reruns
-    this against the rebuilt round and records the after-figures beside
-    this chunk's baseline."""
     return {
         "target": target,
         "command": round_command(target),
@@ -212,11 +184,6 @@ def run_ab(target: str = _DEFAULT_TARGET, *, k: int = 1) -> dict:
         "breakdown": capture_phase_breakdown(target),
     }
 
-
-
-# ---------------------------------------------------------------------------
-# Real-round mode -- a REAL (non-dry-run) round against a disposable clone
-# ---------------------------------------------------------------------------
 
 _REAL_ROUND_PY = _REPO_ROOT / "coordinator" / "bin" / "percolate-round.py"
 _PERCOLATE_GATE_PY = _REPO_ROOT / "coordinator" / "bin" / "percolate-gate.py"
@@ -269,9 +236,6 @@ def _real_machine_local_dump() -> dict:
 
 
 def resolve_live_mirror_path() -> Path:
-    """Resolves the live klabauter mirror -- READ ONLY, never the
-    destination of anything this module runs. `repos.claude_klabauter` is
-    the exact key the C5 dispatch brief named."""
     dump = _real_machine_local_dump()
     raw = dump.get("repos.claude_klabauter")
     if not raw:
@@ -376,26 +340,12 @@ def _git(args: List[str], *, cwd: Optional[Path] = None, remote: bool = False) -
 
 
 def _onerror_clear_readonly(func, path, exc_info):
-    """`shutil.rmtree` handler: a `.git` object file cloned from a
-    read-only-flagged source can carry the read-only attribute on Windows,
-    which blocks unlink outright. Clear it and retry once."""
     os.chmod(path, stat.S_IWRITE)
     func(path)
 
 
 @contextlib.contextmanager
 def _disposable_clone(scratch_root: Path) -> Iterator[dict]:
-    """Provisions a disposable TWO-HOP clone of the live klabauter mirror
-    under `scratch_root` and deletes it unconditionally on exit.
-
-    Two hops (bare "origin" clone, then a working clone OF that bare
-    clone), not one: this way nothing this harness runs ever has the live
-    mirror as a git remote at all -- belt-and-braces against a push
-    reaching it, on top of `--no-publish` stopping the round before any
-    push runs at all. Both clones are local (`file://`-equivalent path
-    clones), so provisioning never touches the network and never touches
-    the live mirror beyond a read.
-    """
     live_mirror = resolve_live_mirror_path()
     if not live_mirror.is_dir():
         raise RuntimeError(
@@ -466,20 +416,10 @@ def _assert_dest_is_scratch(target: str, env: dict, work_dir: Path) -> str:
 
 
 def real_round_command(target: str) -> List[str]:
-    """`--no-publish`: stops before `git push` (still runs commit + CI
-    smoke against the disposable clone -- see module docstring). `--yes`:
-    non-interactive, skips the Step 3 confirmation prompt this harness has
-    no TTY to answer."""
     return [sys.executable, str(_REAL_ROUND_PY), target, "--no-publish", "--yes"]
 
 
 def round_module_command(target: str, *, no_commit: bool = False) -> List[str]:
-    """`python -m coordinator_core.percolate.round <target>` -- the C3
-    in-process six-step driver's own CLI (`round.py :: _cli_main`), never
-    `percolate-round.py`/`publish.py`. No `--no-publish` flag exists because
-    this driver never pushes at all (§ round.py module docstring, `commit`
-    is the only git-touching step); `--no-commit` is the nearest analogue,
-    for a caller that wants the write without the commit."""
     cmd = [sys.executable, "-m", "coordinator_core.percolate.round", target]
     if no_commit:
         cmd.append("--no-commit")
@@ -493,13 +433,6 @@ def measure_round_module_gate(
     scratch_root: Optional[Path] = None,
     no_commit: bool = False,
 ) -> dict:
-    """Same disposable-clone provisioning and same `_assert_dest_is_scratch`
-    safety check `measure_real_round_gate` uses (reused unchanged, not
-    duplicated) -- only the measured COMMAND differs: `round_module_command`
-    (round.py's own CLI) instead of `real_round_command`
-    (`percolate-round.py`). This is what lets `--engine round` measure the
-    C3 driver as a genuinely live, standalone path -- never through
-    `publish.py` for the sync, never against the live mirror."""
     root = scratch_root or _default_scratch_root()
     with _disposable_clone(root) as clone:
         overrides = {key: str(clone["work_dir"]) for key in _MACHINE_LOCAL_KEYS_TO_REDIRECT}
@@ -524,19 +457,6 @@ def _default_scratch_root() -> Path:
 def measure_real_round_gate(
     target: str = _DEFAULT_TARGET, *, k: int = 1, scratch_root: Optional[Path] = None
 ) -> dict:
-    """AC2's real-round gate figure. Provisions one fresh disposable clone,
-    runs the round through it exactly once via `batched_process_time_ms`
-    (the same shared primitive `measure_round_gate` uses -- no second timing
-    surface), and tears the clone down unconditionally. `k` defaults to 1:
-    a real round is strictly more expensive than the dry-run subset, and
-    each additional `k` provisions no new clone (the SAME clone would be
-    reused across k invocations inside `batched_process_time_ms`, which
-    `--delta` would then read as "already published" on invocation 2+ and
-    skip -- so k>1 here would silently measure something cheaper than a
-    real round, not a more precise one). Callers wanting a second real
-    sample should call this function again, which provisions its own fresh
-    clone.
-    """
     root = scratch_root or _default_scratch_root()
     with _disposable_clone(root) as clone:
         overrides = {key: str(clone["work_dir"]) for key in _MACHINE_LOCAL_KEYS_TO_REDIRECT}
@@ -630,10 +550,6 @@ def capture_real_round_phase_breakdown(
 def run_real_round_ab(
     target: str = _DEFAULT_TARGET, *, k: int = 1, scratch_root: Optional[Path] = None
 ) -> dict:
-    """Combines a real-round gate measurement and a real-round phase-
-    breakdown capture, EACH against its own fresh disposable clone (see
-    both functions' docstrings for why sharing one clone across the two
-    would corrupt the second measurement via `--delta`)."""
     root = scratch_root or _default_scratch_root()
     return {
         "target": target,

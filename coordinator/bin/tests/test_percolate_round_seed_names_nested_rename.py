@@ -1,7 +1,3 @@
-"""`_published_seed_names` maps a seed entry through the target's basename
-renames at any depth, keeping the directory -- the same rule the publish
-transform applies, so a nested renamed wiki page matches its published name.
-"""
 from __future__ import annotations
 
 import importlib.util

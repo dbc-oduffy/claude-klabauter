@@ -1,35 +1,3 @@
-"""test_records_query_scan_scope.py -- C7 test surface for the two
-out-of-package repo-scope sites that had no parameter to thread:
-`records_query.py::_resolve_repo_root`/`query_records` (item a) and
-`workday-start-handoff-triage.py::_git_last_commit_epochs_batch` (item b).
-
-Spec backlink: docs/plans/2026-08-06-one-repo-scope-convention-for-the-
-orient_assemble-reader-family.md, chunk C7 (dispatch brief:
-state/dispatch-briefs/2026-08-06-orient-assemble-reader-repo-scope/C7.md).
-
-Item (a) is narrower than the plan originally priced: `_resolve_repo_root`
-already delegated to `repo_identity.resolve_checked_repo_root` (C1's checked
-resolver) before this chunk -- the work here is giving both
-`_resolve_repo_root` and `query_records` the same `explicit_root` keyword
-and forwarding it down, with default `None` preserving every existing
-caller's resolution byte-for-byte (director-review correction, F1,
-2026-08-29).
-
-Item (b) adds a `cwd` parameter to `_git_last_commit_epochs_batch`, threaded
-from the already-parameterised `plans_dir` at its one call site
-(`find_stale_executing_plans`), so the batched `git log` subprocess runs
-against the CALLER's repo rather than inheriting the process's cwd.
-
-Negative-spec:
-    - Does NOT re-test `resolve_checked_repo_root`'s own verdict-construction
-      machinery -- that is C1's `test_checked_repo_resolver.py`. This module
-      tests only the NEW keyword's threading (passed through, not dropped).
-    - Does NOT re-test `_git_last_commit_epochs_batch`'s per-path commit
-      resolution semantics -- that is `test_workday_start_handoff_triage.py`
-      (pre-existing, left untouched). This module tests only that `cwd` is
-      honoured and that omitting it preserves current (process-cwd-relative)
-      resolution exactly.
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -42,10 +10,6 @@ from unittest import mock
 
 import pytest
 
-# Declared, not excused: the cwd-threading tests below spawn real git
-# processes because the behaviour under test IS which repo the spawn runs
-# against -- see test_workday_start_handoff_triage.py's identical pytestmark
-# for the sibling precedent this follows.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -75,7 +39,6 @@ def _verdict(verdict: str, resolved_root, sid="sess-x", session_root=None):
 
 
 class TestResolveRepoRootExplicitRootThreading(unittest.TestCase):
-    """AC: passed root honoured; omitting it preserves current resolution."""
 
     def test_explicit_root_forwarded_to_checked_resolver(self):
         with mock.patch.object(
@@ -89,8 +52,6 @@ class TestResolveRepoRootExplicitRootThreading(unittest.TestCase):
         self.assertEqual(root, "/repo/pinned")
 
     def test_omitted_explicit_root_preserves_existing_resolution(self):
-        """Default `None` must reach the checked resolver unchanged -- this
-        is the existing (pre-C7) call shape, byte-for-byte."""
         with mock.patch.object(
             records_query,
             "resolve_checked_repo_root",
@@ -103,9 +64,6 @@ class TestResolveRepoRootExplicitRootThreading(unittest.TestCase):
 
 
 class TestQueryRecordsExplicitRootThreading(unittest.TestCase):
-    """query_records() gets the same keyword and forwards it to
-    `_resolve_repo_root` -- verified via the resolved repo_root reaching
-    `route_mutation`'s third positional."""
 
     def test_query_records_forwards_explicit_root(self):
         with mock.patch.object(
@@ -169,9 +127,6 @@ def _write_and_commit(repo_dir, rel_path, content, message):
 
 
 class TestGitLastCommitEpochsBatchCwdThreading(unittest.TestCase):
-    """AC: passed cwd is honoured (git runs against the given repo, not the
-    process cwd); omitting cwd preserves current process-cwd-relative
-    resolution exactly."""
 
     def test_cwd_param_scopes_git_to_the_given_repo(self):
         import tempfile
@@ -186,7 +141,6 @@ class TestGitLastCommitEpochsBatchCwdThreading(unittest.TestCase):
             _write_and_commit(repo_dir, "docs/plans/a.md", "---\nstatus: executing\n---\n", "add a")
 
             # Process cwd is a DIFFERENT, non-git directory -- without cwd
-            # threading this must fail to resolve (no git repo there).
             prior_cwd = os.getcwd()
             os.chdir(other_td)
             try:

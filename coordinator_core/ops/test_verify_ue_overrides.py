@@ -49,9 +49,6 @@ _FULLY_ENABLED = {
 }
 
 
-#: The global settings file's passing shape: every UE key explicitly off.
-#: An ABSENT key passes too (see `_global_settings_is_ue_off`); this spells
-#: them out so the test distinguishes "off" from "never written".
 _GLOBAL_UE_OFF = {
     "example-game-repo-control@example-game-workbench-repo": False,
     "example-game-repo@example-game-workbench-repo": False,
@@ -67,20 +64,13 @@ def _setup_success_tree(tmp_path):
         d.mkdir(parents=True, exist_ok=True)
     _write_settings(str(example_game_repo_dir / ".claude" / "settings.json"), _FULLY_ENABLED)
     _write_settings(str(example_retrieval_repo / ".claude" / "settings.json"), _FULLY_ENABLED)
-    # The GLOBAL file is UE-OFF, and that is the passing shape. It used to be
     # seeded `_FULLY_ENABLED` here because the verifier demanded `true` in it --
-    # the exact state per-project gating forbids, which is why a correct machine
-    # reported three WRONG lines on every close ceremony.
     _write_settings(str(home / ".claude" / "settings.json"), _GLOBAL_UE_OFF)
     return example_game_repo_dir, example_retrieval_repo, home
 
 
 @pytest.fixture(autouse=True)
 def _isolated_registry(monkeypatch, tmp_path):
-    """Scratch-scoped, always-empty-unless-seeded registry dir -- shields
-    every test from the operator's REAL machine-local registry (C7b). A test
-    that needs a specific key seeds it into this same directory via
-    `_seed_registry(tmp_path, ...)`."""
     empty_registry = tmp_path / "ml-registry"
     empty_registry.mkdir(exist_ok=True)
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(empty_registry))
@@ -105,7 +95,6 @@ def test_no_ue_repo_registered_is_not_applicable(monkeypatch, tmp_path, capsys):
 
 
 def test_partial_registration_walks_only_what_is_registered(monkeypatch, tmp_path, capsys):
-    """One UE repo registered and correct passes; the absent ones are not drift."""
     example_game_repo_dir, _example_retrieval_repo, home = _setup_success_tree(tmp_path)
     _seed_registry(tmp_path, **{"repos.example_game_workbench_repo": str(example_game_repo_dir)})
     monkeypatch.setenv("HOME", str(home))
@@ -145,11 +134,6 @@ def test_missing_settings_json(monkeypatch, tmp_path, capsys):
     assert rc == 1
     err = capsys.readouterr().err
     assert "MISSING:" in err
-    # The bash `~/.claude/bin/claude-ue-bootstrap.sh` remediation was retired
-    # by the C5 native port (unrunnable on every machine as the old message
-    # named it) -- the surviving remediation names the ported CLI directly,
-    # no `.sh` suffix (see verify_ue_overrides.py's own inline comment at
-    # the MISSING: print site).
     assert "claude-ue-bootstrap" in err
 
 
@@ -227,12 +211,6 @@ def test_success_all_expected(monkeypatch, tmp_path, capsys):
 
 
 def test_a_ue_enabled_global_settings_file_is_the_drift(monkeypatch, tmp_path, capsys):
-    """The inverse assertion, and the whole point of the 2026-08-31 correction:
-    `~/.claude/settings.json` enabling a UE plugin is drift, not compliance.
-
-    Origin: cross-repo/archive/2026-08-14-doe-claude-em-ue-override-verifier-
-    asserts-global-true.md.
-    """
     example_game_repo_dir, example_retrieval_repo, home = _setup_success_tree(tmp_path)
     _write_settings(str(home / ".claude" / "settings.json"), _FULLY_ENABLED)
     _seed_registry(
@@ -253,7 +231,6 @@ def test_a_ue_enabled_global_settings_file_is_the_drift(monkeypatch, tmp_path, c
 
 
 def test_a_global_settings_file_with_no_ue_keys_passes(monkeypatch, tmp_path, capsys):
-    """Absent is not enabled — an unwritten key must not read as drift."""
     example_game_repo_dir, example_retrieval_repo, home = _setup_success_tree(tmp_path)
     _write_settings(str(home / ".claude" / "settings.json"), {})
     _seed_registry(

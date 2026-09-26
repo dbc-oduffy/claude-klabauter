@@ -29,10 +29,6 @@ ARCHIVE_HANDOFFS_REL = "archive/handoffs/2026-08"
 
 
 def _colliding_names_with_differing_bytes(dir_a: Path, dir_b: Path) -> list[str]:
-    """Names present as a regular file in both dirs with different bytes.
-
-    Read-only: never writes, deletes, or moves anything under either dir.
-    """
     if not dir_a.is_dir() or not dir_b.is_dir():
         return []
     names_a = {p.name for p in dir_a.iterdir() if p.is_file()}

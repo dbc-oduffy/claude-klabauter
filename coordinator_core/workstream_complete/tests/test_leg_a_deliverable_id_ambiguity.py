@@ -1,16 +1,3 @@
-"""Regression for leg A's zero-candidate vs multi-candidate `deliverable_id`
-join: both cases previously collapsed into the identical "does not resolve
-to exactly one" `not-applicable` verdict, silently treating a real
-collision the same as nothing-to-look-at.
-
-Spec backlink: cross-repo/archive/2026-08-08-doe-claude-em-leg-a-correction-
-our-premise-was-wrong-keep-the-verdict-fix.md (ask 1).
-
-Negative-spec: a `deliverable_id` absent entirely from frontmatter is the
-genuine nothing-to-look-at case and MUST still resolve `not-applicable` --
-this test pins that this member's fix does not widen the `indeterminate`
-verdict to that case too.
-"""
 from __future__ import annotations
 
 from pathlib import Path

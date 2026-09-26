@@ -39,7 +39,6 @@ from coordinator_core.bash_guards.guard_doctrine_surface_bash_write import (
     is_denied_bash_write,
 )
 
-#: Assembled, never written contiguously -- see the module negative-spec.
 _STEM = "CLAUDE"
 _SUFFIX = ".md"
 _GOVERNED = _STEM + _SUFFIX
@@ -51,7 +50,6 @@ def _denied(cmd: str) -> bool:
 
 
 def test_the_live_bypass_is_closed() -> None:
-    """The exact shape measured through the armed hook on 2026-08-31."""
     cmd = 'N=%s; echo probe > "$S/$N%s"' % (_STEM, _SUFFIX)
     assert _denied(cmd) is True
 
@@ -62,33 +60,25 @@ def test_the_braced_deref_form_is_closed() -> None:
 
 
 def test_an_alias_chain_is_followed() -> None:
-    """`A=<stem>; B=$A` must resolve `$B` too -- otherwise closing the direct
-    form just moves the bypass one assignment further out."""
     cmd = 'A=%s; B=$A; echo x > "$B%s"' % (_STEM, _SUFFIX)
     assert _denied(cmd) is True
 
 
 def test_the_suffix_may_come_from_a_variable_too() -> None:
-    """Splitting the OTHER way round is the same class."""
     cmd = 'E=%s; echo x > "%s$E"' % (_SUFFIX, _STEM)
     assert _denied(cmd) is True
 
 
 def test_a_contiguous_governed_write_still_denies() -> None:
-    """The counterpart: expansion must not have disturbed the ordinary path."""
     assert _denied("echo x > %s" % (_GOVERNED,)) is True
 
 
 def test_an_unrelated_variable_write_is_untouched() -> None:
-    """The false-positive guard. A command that assigns and writes, but whose
-    resolved target is not governed, must be judged exactly as before."""
     cmd = 'N=notes; echo x > "$N%s"' % (_SUFFIX,)
     assert _denied(cmd) is False
 
 
 def test_a_read_of_a_governed_name_via_a_variable_is_not_a_write() -> None:
-    """Expansion widens what the guard can SEE, never what it denies. A
-    resolved command with no write to a governed sink stays allowed."""
     cmd = "N=%s; cat \"$N%s\"" % (_STEM, _SUFFIX)
     assert _denied(cmd) is False
 
@@ -99,10 +89,6 @@ def test_a_read_of_a_governed_name_via_a_variable_is_not_a_write() -> None:
     ids=["cmd-subst", "backtick", "glob-star", "glob-question"],
 )
 def test_an_unknowable_value_is_not_guessed_at(value: str) -> None:
-    """A value whose runtime content cannot be read off the text is NOT
-    collected. Guessing is how a guard starts denying commands for a reason
-    it cannot state, and the deny message would name a target that never
-    existed."""
     cmd = 'N=%s; echo x > "$N%s"' % (value, _SUFFIX)
     assert _denied(cmd) is False
 
@@ -119,15 +105,11 @@ def test_an_environment_variable_this_command_did_not_assign_is_left_alone() -> 
 
 
 def test_expansion_is_a_no_op_without_assignments() -> None:
-    """Nothing to resolve means the command is returned unchanged -- the
-    cheap path, and the one almost every command takes."""
     cmd = "echo hello > out.txt"
     assert _expand_local_assignments(cmd) == cmd
 
 
 def test_only_the_first_token_of_an_assignment_is_the_value() -> None:
-    """`N=foo bar` assigns `foo` and runs `bar`. Taking the whole tail would
-    swallow the next command into the value."""
     assert _local_assignment_values(["N=foo bar"]) == {"N": "foo"}
 
 
@@ -137,6 +119,4 @@ def test_quoted_assignment_values_are_unwrapped() -> None:
 
 
 def test_expansion_terminates_on_a_self_referential_assignment() -> None:
-    """A bounded loop, asserted rather than assumed: a guard that can spin is
-    a guard that can hang the hook, and this one runs on every Bash call."""
     assert _expand_local_assignments("A=$B; B=$A; echo x") is not None

@@ -71,12 +71,6 @@ class Verdict(enum.Enum):
 
 
 class AuthorshipVerdict(NamedTuple):
-    """``verdict`` plus the raw walk reason string that produced it, so a
-    refusal can name which rung failed without the caller re-deriving it.
-    ``reason`` is the underlying ``walk-hit:*`` / ``walk-miss:*`` string
-    ``_find_windows_claude_ancestor`` produced — carried through unmodified
-    from the reused ``core.py`` machinery, on both platforms.
-    """
 
     verdict: Verdict
     reason: str
@@ -159,18 +153,9 @@ def authorship_verdict(start_pid: Optional[int] = None) -> AuthorshipVerdict:
         return AuthorshipVerdict(Verdict.AGENT, reason)
 
     if _IS_WINDOWS:
-        # Every walk-miss:* reason refuses on Windows — the reused walk's
-        # vocabulary has no clean/ambiguous split for this module to lean
-        # on (see authorship_verdict's docstring).
         return AuthorshipVerdict(Verdict.UNRESOLVED, reason)
 
-    # POSIX draws the clean/ambiguous line Windows does not: a climb that
-    # reaches the TOP of the process tree with no harness ancestor found
     # (walk-miss:no-parent) is a COMPLETED climb and the only clean HUMAN
-    # answer this mechanism has. depth-exhausted means the climb hit its
-    # bound while the chain was still going — a harness ancestor could
-    # still sit above the cap — so that stays ambiguous, along with every
-    # other miss reason (an unreadable rung, etc).
     if reason == "walk-miss:no-parent":
         return AuthorshipVerdict(Verdict.HUMAN, reason)
     return AuthorshipVerdict(Verdict.UNRESOLVED, reason)

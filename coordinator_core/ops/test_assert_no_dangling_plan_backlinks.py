@@ -1,8 +1,3 @@
-"""
-Tests for coordinator_core.ops.assert_no_dangling_plan_backlinks.
-
-Spec backlink: archive/specs/2026-06/2026-06-23-programmatic-terminal-plan-archival.md § AC9 / C6
-"""
 from __future__ import annotations
 
 import os
@@ -13,8 +8,6 @@ import pytest
 from coordinator_core.ops.assert_no_dangling_plan_backlinks import main, run_gate, scan_missing_ids
 from coordinator_core.ops.spec_backlink_resolve import resolve
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -41,8 +34,6 @@ def _fm(title: str, plan_id: str = None, deliverable_id: str = None) -> str:
 
 
 def _make_moved_plan_tree(root: str) -> None:
-    # C5-fix: both records carry a real id -- mint-at-creation is wired into
-    # main()'s default flow now, so a shared fixture without ids would trip
     # MISSING-ID on every test that reuses this helper.
     _write(
         root,
@@ -217,14 +208,6 @@ def test_fix_leaves_prose_mention_untouched(tmp_path):
 
 
 def test_fix_partial_failure_diagnosed_on_stderr(tmp_path, monkeypatch, capsys):
-    """A `--fix` run where a citation's `_fix_file` call fails must not print
-    "healed N ..." without also naming the shortfall: the stdout summary
-    line only counts citations `_fix_file` actually reported success for, so
-    a caller reading just that line could previously mistake "healed 0" for
-    "there was nothing to heal". `main()`'s post-fix rescan already catches
-    this particular fixture via the id/path-form axes (rc stays 1 — that
-    fail-closed contract is unchanged), but the shortfall is now also named
-    on stderr instead of only being inferable from the count."""
     root = str(tmp_path)
     _make_moved_plan_tree(root)
     target = "coordinator/wiki/citer1.md"
@@ -295,11 +278,6 @@ def test_unreadable_candidate_file_fails_loud_even_with_zero_hits(tmp_path, caps
     assert "blocked.md" in captured.err
 
 
-# ---------------------------------------------------------------------------
-# C5: id-form axis + path-form-outside-grandfathering axis.
-# ---------------------------------------------------------------------------
-
-
 def test_id_form_resolving_to_nothing_fails(tmp_path, capsys):
     root = str(tmp_path)
     os.makedirs(os.path.join(root, "archive", "specs"))
@@ -347,10 +325,6 @@ def test_id_form_resolving_to_ambiguity_fails(tmp_path, capsys):
 
 
 def test_id_form_resolving_to_nothing_fails_with_no_archive_specs_dir(tmp_path, capsys):
-    """Review-integration P1: the id-form axis must run even when
-    archive/specs/ does not exist yet -- a corpus that has never archived a
-    plan can still carry a dangling id-form citation, and the gate must not
-    report OK on an axis it never evaluated."""
     root = str(tmp_path)
     assert not os.path.isdir(os.path.join(root, "archive", "specs"))
     _write(
@@ -400,12 +374,6 @@ def test_ungrandfathered_path_form_fails(tmp_path, capsys):
     assert "docs/plans/2026-03-01-qux-plan.md" in captured.err
 
 
-# ---------------------------------------------------------------------------
-# C5: mint-at-creation assertion (standalone -- not wired into main()'s
-# default flow, see module docstring).
-# ---------------------------------------------------------------------------
-
-
 def test_scan_missing_ids_flags_plan_with_no_id(tmp_path):
     root = str(tmp_path)
     _write(root, "docs/plans/2026-04-01-no-id-plan.md", "---\ntitle: No id\n---\n# No id\n")
@@ -432,9 +400,6 @@ def test_scan_missing_ids_ignores_sidecar_and_undated_docs(tmp_path):
 
 
 def test_default_flow_flags_new_plan_missing_id(tmp_path, capsys):
-    """C5-fix gap 2: mint-at-creation must gate the default flow, not just
-    --check-mint -- a new plan landing without plan_id/deliverable_id fails
-    a plain `main(["--root", root])` invocation."""
     root = str(tmp_path)
     os.makedirs(os.path.join(root, "archive", "specs"))
     _write(root, "docs/plans/2026-04-05-no-id-plan.md", "---\ntitle: No id\n---\n# No id\n")
@@ -446,9 +411,6 @@ def test_default_flow_flags_new_plan_missing_id(tmp_path, capsys):
 
 
 def test_default_flow_ignores_review_sidecar_and_undated_doc(tmp_path):
-    """C5-fix gap 2: the default-flow mint check must not fire on the
-    legitimate exclusions the backfill itself never mints onto -- a review
-    sidecar and an undated non-plan doc under docs/plans/."""
     root = str(tmp_path)
     os.makedirs(os.path.join(root, "archive", "specs"))
     _write(root, "docs/plans/INDEX.md", "# Index\n")
@@ -472,22 +434,9 @@ def test_check_mint_cli_mode_fails_on_missing_id(tmp_path, capsys):
     assert "2026-04-03-uncovered.md" in captured.err
 
 
-# ---------------------------------------------------------------------------
-# C5 AC7: archive-round-trip + wiring into fleet.archive_completed_plans' act
-# phase.
-# ---------------------------------------------------------------------------
-
-
 def test_archive_round_trip_id_citation_survives_and_gate_stays_clean(tmp_path):
-    """Simulates the exact move fleet.archive_completed_plans' act phase
-    performs (docs/plans/<name>.md -> archive/specs/YYYY-MM/<name>.md) for a
-    plan carrying a real plan_id, then re-resolves an id-form citation to it
-    from a THIRD file. The id-form citation must still resolve post-move
-    (the whole point of C1's resolver), and run_gate (the function wired
-    into the act phase, C5 point 4) must report the corpus clean."""
     root = str(tmp_path)
     os.makedirs(os.path.join(root, "archive", "specs", "2026-05"))
-    # Pre-move state: live plan at docs/plans/.
     plan_rel = "docs/plans/2026-05-01-moved-plan.md"
     _write(root, plan_rel, _fm("Moved plan", plan_id="pln-moved-plan-444444"))
     _write(
@@ -496,30 +445,18 @@ def test_archive_round_trip_id_citation_survives_and_gate_stays_clean(tmp_path):
         "spec_backlink: pln-moved-plan-444444\n",
     )
 
-    # Pre-move: id-form citation resolves to the live docs/plans/ path.
     outcome = resolve(Path(root), "pln-moved-plan-444444")
     assert outcome["outcome"] == "hit"
     assert outcome["path"].replace(os.sep, "/").endswith(plan_rel)
 
-    # Simulate the archive move (git-mv equivalent for this test's purposes).
     dest_rel = "archive/specs/2026-05/2026-05-01-moved-plan.md"
     os.rename(os.path.join(root, plan_rel), os.path.join(root, dest_rel))
 
-    # Post-move: the id-form citation still resolves — now to the archive path.
     outcome_after = resolve(Path(root), "pln-moved-plan-444444")
     assert outcome_after["outcome"] == "hit"
     assert outcome_after["path"].replace(os.sep, "/").endswith(dest_rel)
 
-    # The gate wired into the act phase (run_gate) reports the corpus clean:
-    # the id-form citation resolves, there's no leftover path-form citation
-    # to heal, and no ungrandfathered path-form citation either.
     assert run_gate(root) == 0
 
 
 # GRAVESTONE (TF-20260923-bb-066): test_archive_plans_act_phase_wires_the_citation_gate
-# deleted. The inline post-move backlink gate it pinned measured ~5.2s on
-# archive_plans' normal path, over the DR-344 500ms kill bar
-# (docs/decisions/DR-344-the-brightline-process-budget-for-claude-klabauter.md). The
-# requirement (a post-move dangling-plan-backlink audit for archive_plans)
-# survives as an open bug row, to be met by a first-principles plan — not by
-# restoring this inline call.

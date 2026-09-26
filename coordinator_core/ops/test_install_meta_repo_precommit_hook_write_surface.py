@@ -64,8 +64,6 @@ def test_hook_gate_region_entries_derived_from_registries_not_restated():
         assert entry.kind == "hook-gate-region"
         assert entry.end_marker is None
 
-    # Compare via the marker string itself extracted with the same regex
-    # `_find_gate_region()` uses, rather than trusting our own construction.
     header_re = re.compile(r"^# --- Gate: .*\(([^)]*)\) ---$")
     for entry in pre_commit_entries:
         m = header_re.match(entry.begin_marker)
@@ -79,9 +77,6 @@ def test_hook_gate_region_entries_derived_from_registries_not_restated():
 
 
 def test_begin_marker_byte_matches_gate_block_emission():
-    """The declared `begin_marker` must byte-match the header line
-    `_gate_block()` actually renders — read back from `_gate_block()`
-    itself, not a parallel format string, so the two can never drift."""
     gate_clause = target.WRITE_SURFACE.clauses[0]
     bin_dir_stub = target.Path("stub-bin")
 

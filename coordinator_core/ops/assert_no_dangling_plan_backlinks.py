@@ -164,11 +164,6 @@ from coordinator_core.ops.spec_backlink_resolve import (
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.win_portability import leaf_spawn_creationflags
 
-# Generator-provenance declaration (generator_provenance.py). The --fix path
-# rewrites whichever tracked .md file anywhere in the repo still carries a
-# dangling spec_backlink citation after a plan archival move (repo-wide .md
-# scan, see `_iter_all_md_files`/git-ls-files-scoped candidate gathering
-# above) -- the file set is data-dependent, so declared MUTATES rather than
 # a fixed GENERATES artifact.
 MUTATES = ["**/*.md"]
 
@@ -177,7 +172,6 @@ _LOG = logging.getLogger(__name__)
 _PLAN_STEM_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[a-z0-9.-]+$")
 _BACKLINK_LINE_RE = re.compile(r"spec.?backlink", re.IGNORECASE)
 _PLAN_PATH_RE = re.compile(r"docs/plans/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9.-]+\.md")
-# `pln-<slug>-<hash>` / `dlv-<slug>-<hash>`, optionally `<repo>:`-qualified.
 _ID_TOKEN_RE = re.compile(
     r"(?:[A-Za-z0-9_.-]+:)?(?:pln|dlv)-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?",
     re.IGNORECASE,
@@ -190,32 +184,17 @@ _EXCLUDED_ROOT_PREFIXES = (
     "scratch/",
     "scratchpad/",
     "node_modules/",
-    # Received cross-repo memos are a peer's authored words delivered into this
-    # tree, not citations this repo writes. Same rationale as `archive/`: the
-    # artifact records what a sender said, so "fixing" an unqualified id inside
-    # one would falsify the record rather than repair a citation. A memo body is
-    # also un-actionable here by construction — the sender owns the text, and
-    # this repo has no authority to rewrite it.
-    #
     # NEGATIVE-SPEC: this scopes the gate to text this repo authors; it does NOT
-    # relax the citation rule. A bare foreign id in claude-klabauter-authored prose (a
-    # plan body, a wiki page, source) still fails, and must be repo-qualified
-    # per `docs/wiki/spec-backlink-convention.md`.
     "cross-repo/",
 )
 
 
 def _is_sidecar(basename_md: str) -> bool:
-    """A plan-shaped basename with an extra dot in its stem is a sidecar
-    (<plan-stem>.<tag>.md), not a plan itself."""
     stem = basename_md[:-3] if basename_md.endswith(".md") else basename_md
     return "." in stem
 
 
 def _is_excluded_path(rel_path: str) -> bool:
-    """Mirrors the bash oracle's two exclusion checks:
-    `case "/$file" in */archive/*|*/dist/*) continue;; esac` (anywhere in
-    path) and `case "$file" in tasks/*|state/*) continue;; esac` (root only)."""
     slashed = "/" + rel_path
     if "/archive/" in slashed or "/dist/" in slashed:
         return True
@@ -249,21 +228,11 @@ def _git_tracked_md_files(root: str) -> Optional[List[str]]:
         return None
     raw = proc.stdout.decode("utf-8", errors="replace")
     paths = [p for p in raw.split("\0") if p]
-    # `--cached` lists index entries even when a concurrent session's
-    # uncommitted edit has staged-added-then-working-tree-deleted a path
-    # (git status "AD") -- filter to files that actually exist on disk so
-    # this candidate set matches the os.walk fallback's own semantics (it
-    # can only ever see files that are actually there).
     existing = [p for p in paths if os.path.isfile(os.path.join(root, p))]
     return sorted(p.replace(os.sep, "/") for p in existing)
 
 
 def _find_all_md_files(root: str) -> List[str]:
-    """Root-relative, forward-slash, sorted .md paths under `root` (all
-    trees included -- exclusion is applied by the caller per-hit, matching
-    the bash oracle's grep-then-filter order). Sourced from git when
-    possible (see `_git_tracked_md_files`); falls back to a full
-    filesystem walk otherwise."""
     tracked = _git_tracked_md_files(root)
     if tracked is not None:
         return tracked
@@ -280,8 +249,6 @@ def _find_all_md_files(root: str) -> List[str]:
 
 
 def _build_moved_plan_map(root: str) -> Dict[str, str]:
-    """basename -> root-relative archive/specs/... path, for every plan that
-    now lives under archive/specs/ AND no longer lives at docs/plans/<base>."""
     archive_specs = os.path.join(root, "archive", "specs")
     mvpath: Dict[str, str] = {}
     for rel in _find_all_md_files(archive_specs):
@@ -290,7 +257,7 @@ def _build_moved_plan_map(root: str) -> Dict[str, str]:
         if _is_sidecar(base):
             continue
         if os.path.exists(os.path.join(root, "docs", "plans", base)):
-            continue  # still live -> not moved
+            continue
         mvpath[base] = full_rel
     return mvpath
 
@@ -346,21 +313,13 @@ def _scan_dangling(
                 base = os.path.basename(match)
                 dest = mvpath.get(base)
                 if not dest:
-                    continue  # cited plan not moved
+                    continue
                 key = (rel_file, base)
                 if key in seen_pairs:
                     continue
                 seen_pairs.add(key)
                 results.append((rel_file, match, base, dest))
     return results
-
-
-# ---------------------------------------------------------------------------
-# C5: id-form axis + path-form-outside-grandfathering axis.
-# Both driven by C1's resolver; the index is built exactly ONCE per
-# invocation (never per-citation) -- see spec_backlink_resolve's own
-# "does not glob per-citation" negative-spec, mirrored here.
-# ---------------------------------------------------------------------------
 
 
 def _iter_backlink_lines(root: str):
@@ -380,7 +339,6 @@ def _iter_backlink_lines(root: str):
             with open(full_path, "r", encoding="utf-8", errors="replace") as fh:
                 lines = fh.readlines()
         except OSError:
-            # an unreadable file cannot be scanned for backlinks; skip it
             continue
         for line in lines:
             if _BACKLINK_LINE_RE.search(line):
@@ -411,10 +369,6 @@ def scan_id_form_citations(
             seen.add(key)
             if ":" in token:
                 _repo, _sep, bare_id = token.partition(":")
-                # Mirrors spec_backlink_resolve.resolve()'s own qualifier
-                # validation (Review: code-reviewer P3) -- an unrecognized
-                # `<repo>:` qualifier is a typed miss, never silently routed
-                # to the DoE-claude peer index.
                 if _repo != _RECOGNIZED_PEER_REPO:
                     outcome = {"outcome": "miss"}
                 else:
@@ -458,29 +412,7 @@ def scan_path_form_ungrandfathered(
     return results
 
 
-# ---------------------------------------------------------------------------
-# C5: mint-at-creation assertion (standalone -- see module docstring
-# "Negative-spec" for why this is NOT wired into main()'s default flow).
-# ---------------------------------------------------------------------------
-
-
 def scan_missing_ids(root: str) -> List[str]:
-    """Return root-relative paths of every `docs/plans/`/`archive/specs/`
-    record carrying NEITHER `plan_id` NOR `deliverable_id`.
-
-    Reuses `backfill_deliverable_spine`'s own exclusion predicates
-    (`is_sidecar_plan`, the review-sidecar regex, the dated-prefix check for
-    `docs/plans/`) rather than re-deriving rules that would drift from the
-    backfill's own carry/skip logic -- an undated `docs/plans/` document
-    (INDEX.md, README.md, config-slash-*.md, ...) and a review sidecar are
-    never real plan records and must never trip this check. A record
-    carrying the one authored `plan_id: null  # stamped by a real /plan run
-    — do NOT hand-fabricate` placeholder also does not trip it:
-    `extract_plan_id` reads that comment-bearing line as a non-empty string
-    (not a bare YAML null), the same "already has an id" read the backfill's
-    own `run_plan_id_leg` relies on to skip it -- this function reuses that
-    exact reader rather than re-deriving null detection.
-    """
     missing: List[str] = []
     for base_dir, recursive in (
         (os.path.join(root, "docs", "plans"), False),
@@ -511,7 +443,7 @@ def scan_missing_ids(root: str) -> List[str]:
             if _REVIEW_SIDECAR_RE.search(base_name):
                 continue
             if artifact_class == "plan" and not _BACKFILL_DATE_PREFIX_RE.match(base_name):
-                continue  # undated docs/plans/ document -- not a real plan record
+                continue
             plan_id = extract_plan_id(full_path, artifact_class)
             deliverable_id = extract_deliverable_id(full_path, artifact_class)
             if not plan_id and not deliverable_id:
@@ -519,24 +451,7 @@ def scan_missing_ids(root: str) -> List[str]:
     return missing
 
 
-# ---------------------------------------------------------------------------
-# --fix: naked-Python literal replace (C5 -- perl -i -pe removed, not in the
-# closed shell-out carve-out list).
-# ---------------------------------------------------------------------------
-
-
 def _fix_file(full_path: str, src: str, dst: str) -> bool:
-    r"""Literal-replace docs/plans/<base> -> <dest>, ONLY on spec_backlink
-    convention lines. Faithful naked-Python port of the bash oracle's perl
-    one-liner (`s/\Q$ENV{SRC}\E/$ENV{DST}/g if /spec.?backlink/i`) -- the
-    perl form used `quotemeta` (literal match), so this is a literal
-    `str.replace`, NOT `re.sub`.
-
-    `newline=""` on both the read and the write preserves the file's
-    original line endings byte-for-byte (Windows CRLF included) rather than
-    normalizing to `\n` -- important since this function may touch files
-    authored on either platform.
-    """
     try:
         with open(full_path, "r", encoding="utf-8", errors="replace", newline="") as fh:
             content = fh.read()
@@ -554,7 +469,7 @@ def _fix_file(full_path: str, src: str, dst: str) -> bool:
         out_lines.append(line)
 
     if not changed:
-        return True  # nothing on a spec_backlink line to heal in this file
+        return True
 
     try:
         with open(full_path, "w", encoding="utf-8", newline="") as fh:
@@ -563,7 +478,6 @@ def _fix_file(full_path: str, src: str, dst: str) -> bool:
         print(f"ERROR: could not write {full_path} for --fix: {exc}", file=sys.stderr)
         return False
 
-    # DR-276: declared AFTER the in-place edit lands, never before.
     declare_write(full_path)
     return True
 
@@ -598,18 +512,8 @@ def main(argv: List[str]) -> int:
     if not root:
         return 0
 
-    # C5-fix: mint-at-creation is now part of the default gate, run before
-    # the archive/specs early-return so an id-less docs/plans/ record still
-    # fails even in a corpus with no archive/specs/ tree yet.
     missing_ids = scan_missing_ids(root)
 
-    # C5-fix (P1, review-integration): the id-form and path-form-ungrandfathered
-    # axes must ALSO run before the archive/specs early-return below — a corpus
-    # that has never archived a plan (no archive/specs/ tree yet) can still
-    # carry a dangling pln-/dlv- id-form citation or an ungrandfathered
-    # path-form citation, and this gate must never report those axes as "OK"
-    # when it in fact never evaluated them. Only the moved-plan (mvpath/hits)
-    # axis genuinely has nothing to check without archive/specs/.
     worktree_root = Path(root)
     local_index = _build_backlink_index(worktree_root)
     id_failures = scan_id_form_citations(root, worktree_root, local_index)
@@ -630,8 +534,6 @@ def main(argv: List[str]) -> int:
     hits = _scan_dangling(root, mvpath, unreadable)
 
     # BEHAVIOUR CHANGE (2026-07-22, break-class fix): restores this AC9 gate's
-    # intended assertion — an incomplete scan can never be reported as "no
-    # dangling backlinks" (see _scan_dangling docstring).
     if unreadable:
         for rel_file in unreadable:
             print(f"UNSCANNABLE: {rel_file}", file=sys.stderr)
@@ -642,12 +544,8 @@ def main(argv: List[str]) -> int:
         )
         return 1
 
-    # Dedup (review-integration P2): a citation still at docs/plans/<base> for
     # a plan that has since moved is DANGLING (via `hits`, remediation:
-    # --fix). Without this filter the SAME (rel_file, cited_path) pair would
     # also surface under UNGRANDFATHERED-PATH (path_ungrandfathered's
-    # basename-fallback HIT), with a conflicting "should be id-form"
-    # remediation -- one citation, one failure header.
     dangling_pairs = {(rel_file, match) for rel_file, match, _base, _dest in hits}
     path_ungrandfathered = [
         entry for entry in path_ungrandfathered
@@ -672,12 +570,6 @@ def main(argv: List[str]) -> int:
                 "could not be healed (see ERROR lines above) — re-run --fix after resolving",
                 file=sys.stderr,
             )
-        # Latent-bug fix (C5-fix, same function): id_failures/
-        # path_ungrandfathered were computed on PRE-fix file content. A
-        # citation this loop just healed (docs/plans/... -> archive/specs/
-        # ...) no longer matches the docs/plans/ path-form pattern, so it
-        # must not be reported as a failure from a scan that predates the
-        # write. Rescan post-fix rather than trusting the stale snapshot.
         post_fix_index = _build_backlink_index(worktree_root)
         post_fix_id_failures = scan_id_form_citations(root, worktree_root, post_fix_index)
         post_fix_path_ungrandfathered = scan_path_form_ungrandfathered(root, worktree_root, post_fix_index)
@@ -730,8 +622,6 @@ def _report_id_and_path_failures(
     id_failures: List[Tuple[str, str, str]],
     path_ungrandfathered: List[Tuple[str, str, str]],
 ) -> bool:
-    """Print the id-form and path-form-ungrandfathered failure blocks to
-    stderr. Returns True iff either axis has >=1 failure."""
     if id_failures:
         for rel_file, token, outcome in id_failures:
             print(f"UNRESOLVED-ID in: {rel_file}", file=sys.stderr)

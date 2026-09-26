@@ -24,11 +24,7 @@ import inspect
 import re
 
 # IMPORTANT: coordinator_core.ops._eager_import_all() MUST run before coordinator_core.ipc._REGISTRY
-# is read. Since the 2026-08-22 lazy-ops-unconditional change, a bare `import
-# coordinator_core.ops` no longer triggers any register_op() side-effects — package-init
-# registers nothing at all. Only _eager_import_all() (or a targeted per-op import) populates
 # _REGISTRY. Skipping this leaves _REGISTRY == {} and makes any registry-size assertion
-# vacuously green (the Staff Engineer F0 — the vacuous-pass hazard).
 import coordinator_core.ops
 import coordinator_core.ops.fleet.memo_draft
 import coordinator_core.ops.fleet.memo_compose
@@ -45,16 +41,7 @@ from coordinator_core.authz.classification import (
 )
 
 
-# ---------------------------------------------------------------------------
-# classify() fail-closed tests (AC4/F1)
-# ---------------------------------------------------------------------------
-
 class TestClassify:
-    # Parametrize so each op gets its own pass/fail signal; a broken
-    # "ping" classification no longer masks a simultaneously broken "cutover.gate".
-    # handoff.has_live_children was the third pcore-03 beachhead op until it was
-    # DELETED 2026-08-27 (kill ledger K-113, 200ms sweep). Its compute survives
-    # undecorated in ops/handoff_children.py; the dispatchable op does not.
     @pytest.mark.parametrize("op_name", ["ping", "cutover.gate"])
     def test_known_ops_return_correct_class(self, op_name: str) -> None:
         assert classify(op_name) is OpClass.COMPUTE_ONLY
@@ -82,22 +69,13 @@ class TestClassify:
             classify("")
 
     def test_partial_match_raises_key_error(self) -> None:
-        # "ping" is known but "pin" is not — no prefix matching
         with pytest.raises(KeyError):
             classify("pin")
 
 
-# ---------------------------------------------------------------------------
-# Drift-guard (AC4 / the Staff Engineer F0) — detect-then-fail-loud gate
-#
-# This test is the CI half of the fail-closed doctrine. It ensures that every op
 # registered in the live _REGISTRY has a classification in OP_CLASSIFICATION.
-# A future op added to coordinator_core.ops without a classification entry will
 # cause this test to fail loud rather than silently pass as COMPUTE_ONLY.
-#
-# Import order is load-bearing: coordinator_core.ops must be imported before reading
 # coordinator_core.ipc._REGISTRY (done at module level above — see the IMPORTANT note).
-# ---------------------------------------------------------------------------
 
 class TestDriftGuard:
     """Detect-then-fail-loud gate: every registered op must have a classification."""
@@ -115,14 +93,7 @@ class TestDriftGuard:
             "leaving _REGISTRY empty and making drift assertions vacuously green."
         )
 
-    # The strict-xfail marker that stood here recorded 65 ops registered without an
     # OP_CLASSIFICATION entry (debt-backlog
-    # state/debt-backlog/2026-07-23-authz-drift-guard-ops-registered-without-52137f1ff6b9.yaml,
-    # PM-ratified under DR-208 § "Fail-closed runtime semantic"). Its own exit
-    # condition was "draining the 65 XPASSes this test and forces removal of the
-    # marker" — C17 of docs/plans/2026-08-20-a-refusal-cannot-exit-zero.md drained the
-    # last of them, so the marker is removed rather than left to XPASS-fail. The
-    # predicate below was never rewritten and is unchanged; it is now simply green.
     def test_all_registered_ops_are_classified(self) -> None:
         """Every op name in the live _REGISTRY has an entry in OP_CLASSIFICATION.
 
@@ -173,61 +144,24 @@ class TestDriftGuard:
             )
 
 
-# ---------------------------------------------------------------------------
-# Three-way registration-count reconciliation (C3,
-# docs/plans/2026-08-15-warm-engine-retires-the-per-invocation-cold-start.md § C3)
-#
 # The plan chunk that authored this section asked whether the live _REGISTRY /
 # OP_MODULE_MAP / _OP_KEY_SCOPE counts disagree for a legitimate reason or because
-# a registration surface has an undetected hole. Re-derived at C3 integration time
-# (not trusted from any earlier prose figure, which drifts as the tree moves):
-#
 #   live _REGISTRY size                          254
 #   OP_MODULE_MAP size (ops/_registry_map.py)     252 -> 254 after this chunk
 #   _OP_KEY_SCOPE size (op_scopes.py)             254
 #   OP_CLASSIFICATION size (authz/classification.py) 245
-#
-# Disposition of each gap:
-#
 #  * OP_MODULE_MAP was short two entries — "peer_notice.send" / "peer_notice.check"
 #    were registered (present in _REGISTRY, _OP_KEY_SCOPE, OP_CLASSIFICATION) but
 #    never added to OP_MODULE_MAP. This IS the class of gap coordinator_core.authz.
-#    registration_quad.check_registration_quad() exists to catch, and it does catch
 #    it (both op_keys surface as OP_MODULE_MAP-missing QuadViolations, unfiltered by
-#    either known-debt ledger) — it was simply outstanding, not undetected. Fixed in
-#    this chunk (coordinator_core/ops/_registry_map.py); the regression test below
-#    pins it shut. Per _registry_map.py's own docstring this gap degraded silently
-#    to the eager-import fallback rather than breaking dispatch, which is why the
-#    live system stayed correct while the map itself lagged.
-#
 #  * The live-_REGISTRY-vs-OP_CLASSIFICATION gap (254 vs 245, 9 unclassified at C3
-#    time) is the SAME gap test_all_registered_ops_are_classified below already
-#    covers via a strict xfail against coordinator_core.authz.registration_quad's
 #    frozen `_KNOWN_UNCLASSIFIED_OPS_DEBT` baseline (65 entries recorded
-#    2026-07-25; most have since been individually classified without the debt
-#    entry being pruned, which is a known-shrinking-not-growing direction the
-#    baseline's own never-grows guard in test_registration_quad.py enforces — that
-#    guard, and pruning the now-stale entries, is registration_quad.py's file, not
-#    this chunk's writable scope). test_all_registered_ops_are_classified itself
-#    is NOT a hole: it is a strict xfail with a named owning debt-backlog entry
-#    (state/debt-backlog/2026-07-23-authz-drift-guard-ops-registered-without-
-#    52137f1ff6b9.yaml) and it xfails (not xpasses) at C3 HEAD — see
-#    `test_registry_is_non_empty`'s sibling assertions above for the vacuous-pass
-#    guard that would catch a silently-empty registry masking this.
-#
 #  * The remaining _REGISTRY vs OP_MODULE_MAP/_OP_KEY_SCOPE parity (254 == 254 for
 #    _OP_KEY_SCOPE; 254 == 254 for OP_MODULE_MAP once the peer_notice.* fix above
-#    lands) has no unexplained residue: every registered op now has one of "common_
 #    dir" / "show_top" / "none" in _OP_KEY_SCOPE and a lazy-import module path in
 #    OP_MODULE_MAP, which is what C12's MUTATING/COMPUTE_ONLY partition (downstream
 #    of OP_CLASSIFICATION, not this section) depends on being trustworthy for.
-#
-# Three residual QuadViolations found by check_registration_quad() at C3 time
-# (app_session.launch / app_session.census / app_session.teardown missing
 # OP_CLASSIFICATION) live in coordinator_core/authz/classification.py, outside
-# this chunk's writable file list — reported to the dispatching EM as a residual,
-# not fixed here.
-# ---------------------------------------------------------------------------
 
 class TestOpModuleMapRegistrationCoverage:
     """OP_MODULE_MAP (the lazy-import performance seam) covers every op the live
@@ -306,16 +240,8 @@ class TestOpModuleMapRegistrationCoverage:
         )
 
 
-# ---------------------------------------------------------------------------
-# memo.send classification tests (strang-03 C3)
-#
 # AC3 (strang-03): memo.send is classified MUTATING.
 # The HTTP-gate test (test_memo_send_http_gate_fires) and the _OP_KEY_SCOPE routing-seam
-# test (test_memo_send_scope_is_common_dir) are removed with the UDS-auth / per-request
-# routing machinery (DR-215/C8 and C5 respectively).
-#
-# Spec backlink: pln-strang-03-cross-repo-memo-send-40d84e § C3
-# ---------------------------------------------------------------------------
 
 class TestMemoSendClassification:
     """memo.send classifies MUTATING."""
@@ -338,15 +264,8 @@ class TestMemoSendClassification:
         )
 
 
-# ---------------------------------------------------------------------------
-# deliverable.rollup classification tests (factsupply-op C3)
-#
 # AC: deliverable.rollup is classified COMPUTE_ONLY (read-only resolver, zero git subprocess).
 # Both the OP_CLASSIFICATION membership and the live _REGISTRY membership are asserted
-# explicitly — the drift-guard >= N floor is not weakened; these are additive assertions.
-#
-# Spec backlink: pln-claude-klabauter-deliverable-spine-fact--cd004e § C3
-# ---------------------------------------------------------------------------
 
 class TestDeliverableRollupClassification:
     """deliverable.rollup classifies COMPUTE_ONLY and is registered."""
@@ -377,35 +296,15 @@ class TestDeliverableRollupClassification:
         )
 
 
-# ---------------------------------------------------------------------------
-# memo.draft / memo.compose classification tests (2026-07-21 review, Finding 1
-# of the memo-clean-split-op-coverage slice review)
-#
-# Both ops write a file (memo.draft: O_EXCL create; memo.compose: os.replace
-# in-place edit) and were previously self-contradictingly classified
 # COMPUTE_ONLY. This section pins the corrected MUTATING classification and
-# adds a write-signal drift-guard so a future self-contradicting entry for
-# these two ops fails loud rather than silently regressing.
-#
-# Spec backlink: pln-memo-tool-rebuild-claude-klabauter-owns--bd5745 § C7
-# Decision:      docs/decisions/DR-208-invoke-op-authz-model.md § 5 (fail-closed)
-# ---------------------------------------------------------------------------
 
-# Modules whose handler is asserted to write disk (Q1/Q3 YES) and therefore must
 # never be classified COMPUTE_ONLY. Narrowly scoped to the two ops this finding
-# concerns, not a repo-wide AST sweep — see the module-level docstring TODO below
-# for the broader-scan follow-up this narrower check does not attempt.
 _MEMO_WRITE_OP_MODULES = {
     "memo.draft": coordinator_core.ops.fleet.memo_draft,
     "memo.compose": coordinator_core.ops.fleet.memo_compose,
 }
 _MEMO_WRITE_OP_MODULES__SUBJECT_CLASS = "op-name"
 
-# Grep-level write-signal pattern: os.open with a write/create flag, open(...) in
-# a write/append/exclusive-create text mode, or os.replace (atomic write-in-place).
-# This is a source-text signal, not a full AST data-flow proof — sufficient to
-# catch "this module's own source contains a disk-write call" regressions, which
-# is exactly the shape Finding 1 identified (an entry whose own five-question
 # affirmation says YES to writing but is classified COMPUTE_ONLY anyway).
 _WRITE_SIGNAL_RE = re.compile(
     r"os\.open\([^)]*O_(?:CREAT|WRONLY|EXCL|APPEND|TRUNC)"

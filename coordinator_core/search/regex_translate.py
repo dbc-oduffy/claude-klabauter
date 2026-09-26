@@ -184,18 +184,8 @@ import re
 import string
 from typing import Dict, List, Optional, Tuple
 
-#: The three dialects `translate()` accepts. Anything else is a caller bug,
-#: not a "refuse" case -- `translate()` raises `ValueError` for an
-#: unrecognized dialect rather than silently returning `None` for it (a
-#: caller passing a typo'd dialect name should see a loud failure, not a
-#: quiet "always refused").
 _VALID_DIALECTS = frozenset({"basic", "extended", "fixed"})
 
-#: Python `re` character-class metacharacters that must be escaped
-#: whenever they appear as a literal MEMBER inside a translated `[...]`
-#: class (POSIX bracket expressions have no escape mechanism of their
-#: own -- backslash is an ordinary member -- so every literal member this
-#: module emits must be made class-safe for Python's own syntax).
 _CLASS_METACHARS = frozenset("\\]^-")
 
 
@@ -210,11 +200,6 @@ def _escape_class_member(c: str) -> str:
 
 
 def _build_posix_class_map() -> Dict[str, str]:
-    """POSIX `[:name:]` -> Python character-class-body fragment (the
-    text that goes INSIDE `[...]`, already escaped for that context).
-    Built programmatically from `string.*` rather than hand-typed, so the
-    `punct` fragment's escaping can't silently drift from
-    `_escape_class_member`'s own rule."""
     punct_frag = "".join(_escape_class_member(c) for c in string.punctuation)
     return {
         "alpha": "a-zA-Z",
@@ -234,22 +219,10 @@ def _build_posix_class_map() -> Dict[str, str]:
 
 _POSIX_CLASS_MAP = _build_posix_class_map()
 
-#: Matches a POSIX bracket sub-token -- class (`[:name:]`), collating
-#: symbol (`[.x.]`), or equivalence class (`[=x=]`) -- at a given offset.
 _BRACKET_SUBTOKEN_RE = re.compile(r"\[([:.=])")
 
 
 def _translate_bracket_expression(pattern: str, start: int) -> Optional[Tuple[str, int]]:
-    """Translate one POSIX bracket expression (`pattern[start] == '['`)
-    into a Python `re` character class. Returns `(python_class_source,
-    index_just_past_the_closing_']')`, or `None` to refuse -- an
-    unterminated bracket expression, or one containing a collating
-    symbol/equivalence class (no Python `re` equivalent exists for
-    either).
-
-    Shared verbatim between BRE and ERE callers -- bracket-expression
-    grammar does not differ between the two POSIX regex flavors.
-    """
     n = len(pattern)
     j = start + 1
     if j >= n:
@@ -262,7 +235,7 @@ def _translate_bracket_expression(pattern: str, start: int) -> Optional[Tuple[st
     first_member = True
     while True:
         if j >= n:
-            return None  # unterminated bracket expression
+            return None
         c = pattern[j]
         if c == "]" and not first_member:
             j += 1
@@ -275,7 +248,7 @@ def _translate_bracket_expression(pattern: str, start: int) -> Optional[Tuple[st
             if end == -1:
                 return None
             if kind != ":":
-                return None  # collating symbol / equivalence class -- refuse
+                return None
             name = pattern[j + 2 : end]
             frag = _POSIX_CLASS_MAP.get(name)
             if frag is None:
@@ -284,10 +257,6 @@ def _translate_bracket_expression(pattern: str, start: int) -> Optional[Tuple[st
             j = end + 2
             first_member = False
             continue
-        # A '-' range needs at least one more member char and a
-        # non-']' character on the far side to be a range rather than a
-        # literal '-' (POSIX: '-' is literal only as first/last member;
-        # mid-list it forms a range with its neighbors).
         if j + 2 < n and pattern[j + 1] == "-" and pattern[j + 2] != "]":
             lo, hi = c, pattern[j + 2]
             body.append(_escape_class_member(lo) + "-" + _escape_class_member(hi))
@@ -300,9 +269,6 @@ def _translate_bracket_expression(pattern: str, start: int) -> Optional[Tuple[st
     return "[" + ("^" if negate else "") + "".join(body) + "]", j
 
 
-#: `\{n,m\}` (BRE) / `{n,m}` (ERE, unescaped) interval-bound validator --
-#: `{n}`, `{n,}`, `{n,m}`, all digit bounds. Python `re`'s own `{...}`
-#: syntax accepts the identical three forms, so a validated interval
 #: passes through UNCHANGED (no digit-by-digit re-emission needed).
 _INTERVAL_RE = re.compile(r"^\{[0-9]+(,[0-9]*)?\}$")
 
@@ -327,26 +293,14 @@ def _valid_interval(spec: str) -> bool:
 
 
 def _interval_is_unbounded(spec: str) -> bool:
-    """`spec` is a `{...}` substring already confirmed `_valid_interval`.
-    `True` for an open-ended `{n,}` (no upper bound) -- the same
-    unbounded-repetition class as bare `*`/`+` for Finding-1 nested-
-    quantifier ReDoS-refusal purposes. `{n}` and `{n,m}` are bounded and
-    return `False`."""
     inner = spec[1:-1]
     return "," in inner and inner.split(",", 1)[1] == ""
 
 
-#: Backslash-escapes BRE recognizes as meaning "the literal character"
-#: (never as an operator) -- `\.` `\*` `\^` `\$` `\[` `\]` `\\`.
 _BRE_LITERAL_ESCAPES = frozenset(".*^$[]\\")
 
-#: Backslash-escapes ERE recognizes as meaning "the literal character"
-#: for its own (bare-operator) metacharacter set, plus the four BRE
-#: shares with it (`. * ^ $ [ ] \`) unioned in by the caller.
 _ERE_LITERAL_ESCAPES = frozenset(".*^$[]\\(){}|+?")
 
-#: BRE-only escaped operators: `\( \) \| \+ \?` (group/alternation/GNU
-#: quantifier extensions) map to their Python `re` bare-operator form.
 _BRE_ESCAPED_OPERATORS = {
     "(": "(",
     ")": ")",
@@ -356,63 +310,31 @@ _BRE_ESCAPED_OPERATORS = {
 }
 
 #: Bare characters that are ORDINARY LITERALS in BRE but OPERATORS in
-#: Python `re` -- must be escaped on output. `{`/`}` are handled
-#: separately (interval detection), not through this table.
 _BRE_BARE_LITERALS = frozenset("+?()|")
 
 
 def _translate_basic(pattern: str) -> Optional[str]:
-    """Translate one POSIX BRE pattern. See module docstring for the
-    positional rules this implements (`*`/`^`/`$` context-sensitivity,
-    operator/literal polarity inversion), and for the two
-    quantifier-stacking / nested-quantifier negative-spec items this
-    function enforces via `last_was_quantifier` / `group_unbounded_stack`
-    / `pending_group_unbounded` below."""
     out: List[str] = []
     i, n = 0, len(pattern)
-    at_expr_start = True  # true at pattern start and right after \( or \|
+    at_expr_start = True
     paren_depth = 0
-    groups_opened = 0  # total groups opened so far -- backreference range check
+    groups_opened = 0
     #: `group_unbounded_stack[-1]` is `True` once the CURRENTLY OPEN
-    #: group's own top-level content has emitted an unbounded quantifier
-    #: (bare `*`-as-operator, `\+`, or an open-ended `\{n,\}`). Consulted
-    #: when that group closes, to detect `\(a\+\)\+`-shaped ReDoS
-    #: constructs (module docstring negative-spec).
     group_unbounded_stack: List[bool] = []
-    #: `True` immediately after emitting a group-close whose own
-    #: top-level content was unbounded -- valid only for the single next
-    #: token (any other atom/operator resets it to `False`).
     pending_group_unbounded = False
-    #: `True` immediately after emitting a quantifier operator (`*`, `+`,
-    #: `?`, or a closed `{n,m}` interval) -- used to refuse a quantifier
-    #: stacked directly on another quantifier (module docstring
-    #: negative-spec).
     last_was_quantifier = False
     while i < n:
         c = pattern[i]
         if c == "\\":
             if i + 1 >= n:
-                return None  # trailing lone backslash -- malformed
+                return None
             nc = pattern[i + 1]
             if nc in ("+", "?") and (at_expr_start or last_was_quantifier):
-                # A quantifier operator with no preceding atom to repeat
-                # (pattern start, right after \(/\|, or -- stacked
-                # directly on another quantifier, e.g. `a\+\?`) --
-                # translating it unchanged produces either an invalid
-                # Python `re` source ("nothing to repeat") or, for the
-                # stacked case, a VALID Python source that means
-                # something else entirely (`+?` is Python's LAZY
-                # quantifier, not "quantify a quantifier") -- exactly the
-                # silent-reinterpretation class this module exists to
-                # prevent. Refusing outright is the safe choice either
-                # way -- it never risks emitting a Python source that
-                # compiles to something OTHER than what the operator
-                # meant.
                 return None
             if nc in _BRE_ESCAPED_OPERATORS:
                 if nc == ")":
                     if paren_depth == 0:
-                        return None  # unbalanced -- close with no open
+                        return None
                     paren_depth -= 1
                     had_unbounded = group_unbounded_stack.pop() if group_unbounded_stack else False
                     out.append(_BRE_ESCAPED_OPERATORS[nc])
@@ -439,11 +361,6 @@ def _translate_basic(pattern: str) -> Optional[str]:
                     i += 2
                     continue
                 if nc == "+":
-                    # Unbounded quantifier operator. Finding 1: refuse if
-                    # it is directly quantifying a just-closed group whose
-                    # own top-level content already had an unbounded
-                    # quantifier -- the `(a+)+` ReDoS shape (see module
-                    # docstring negative-spec).
                     if pending_group_unbounded:
                         return None
                     if group_unbounded_stack:
@@ -454,10 +371,7 @@ def _translate_basic(pattern: str) -> Optional[str]:
                     last_was_quantifier = True
                     i += 2
                     continue
-                # nc == "?" -- bounded (0-or-1) quantifier; Finding 1 does
                 # not apply (only an UNBOUNDED outer quantifier is a
-                # ReDoS risk), but it still consumes the "preceding atom"
-                # slot and counts as a quantifier for stacking purposes.
                 out.append(_BRE_ESCAPED_OPERATORS[nc])
                 at_expr_start = False
                 pending_group_unbounded = False
@@ -466,7 +380,7 @@ def _translate_basic(pattern: str) -> Optional[str]:
                 continue
             if nc == "{":
                 if at_expr_start or last_was_quantifier:
-                    return None  # interval quantifier with no atom / stacked quantifier
+                    return None
                 close = pattern.find("\\}", i + 2)
                 if close == -1:
                     return None
@@ -475,7 +389,7 @@ def _translate_basic(pattern: str) -> Optional[str]:
                     return None
                 unbounded = _interval_is_unbounded(spec)
                 if unbounded and pending_group_unbounded:
-                    return None  # Finding 1: `\(a\+\)\{2,\}`-shaped ReDoS
+                    return None
                 if unbounded and group_unbounded_stack:
                     group_unbounded_stack[-1] = True
                 out.append(spec)
@@ -485,10 +399,10 @@ def _translate_basic(pattern: str) -> Optional[str]:
                 last_was_quantifier = True
                 continue
             if nc == "}":
-                return None  # stray \} with no matching \{ -- malformed
+                return None
             if nc in "123456789":
                 if int(nc) > groups_opened:
-                    return None  # Finding 3: backreference to a group never opened
+                    return None
                 out.append("\\" + nc)
                 i += 2
                 at_expr_start = False
@@ -502,7 +416,7 @@ def _translate_basic(pattern: str) -> Optional[str]:
                 pending_group_unbounded = False
                 last_was_quantifier = False
                 continue
-            return None  # unknown escape (\d \w \< \> \b ...) -- refuse
+            return None
         if c == "[":
             translated = _translate_bracket_expression(pattern, i)
             if translated is None:
@@ -521,9 +435,6 @@ def _translate_basic(pattern: str) -> Optional[str]:
                 last_was_quantifier = False
                 i += 1
                 continue
-            # Operator use -- Finding 2 (stacked on a preceding quantifier)
-            # and Finding 1 (unbounded-quantifying a just-closed group
-            # whose own top-level content was already unbounded).
             if last_was_quantifier:
                 return None
             if pending_group_unbounded:
@@ -538,20 +449,10 @@ def _translate_basic(pattern: str) -> Optional[str]:
             continue
         if c == "^":
             if at_expr_start and i != 0:
-                # Anchor-vs-literal here is NOT portable: GNU grep treats `^` right
-                # after `\(`/`\|` as an anchor, POSIX and BSD grep treat it as a
-                # literal. We cannot be faithful to both from one translation, and the
-                # host's grep is not knowable without spawning one -- which is the cost
-                # this package exists to remove. Refuse instead of picking a dialect.
                 return None
             if at_expr_start:
                 out.append("^")
-                at_expr_start = True  # GNU: '*' right after an anchoring
-                # leading '^' is STILL literal -- a leading anchor does
-                # not consume the "start of expression" position for
-                # asterisk purposes (verified by this module's
-                # differential suite: `grep '^*x'` matches literal
-                # `*x` at line start, not "zero-or-more of nothing").
+                at_expr_start = True
             else:
                 out.append("\\^")
                 at_expr_start = False
@@ -561,10 +462,6 @@ def _translate_basic(pattern: str) -> Optional[str]:
             continue
         if c == "$":
             if i != n - 1 and pattern[i + 1 : i + 3] in ("\\)", "\\|"):
-                # Same portability split as `^` above, and the one this module's own
-                # differential harness caught live on
-                # `\.cmd$\|\.md$\|\.ps1$\|__pycache__`: GNU reads each `$` as an anchor,
-                # BSD as a literal, and the two select different lines. Refuse.
                 return None
             out.append("$" if i == n - 1 else "\\$")
             at_expr_start = False
@@ -592,31 +489,19 @@ def _translate_basic(pattern: str) -> Optional[str]:
         last_was_quantifier = False
         i += 1
     if paren_depth != 0:
-        return None  # unbalanced -- open group(s) never closed
+        return None
     return "".join(out)
 
 
-#: ERE bare operators that map straight through to Python `re` unchanged
-#: -- ERE and Python agree on bare-operator polarity (unlike BRE), so no
-#: inversion is needed for this set.
 _ERE_BARE_OPERATORS = frozenset("()|+?")
 
 
 def _translate_extended(pattern: str) -> Optional[str]:
-    """Translate one POSIX ERE pattern. ERE's bare-operator polarity
-    already agrees with Python `re` for `( ) | + ?` -- the translation
-    work here is narrower than BRE: interval detection for `{...}`,
-    bracket-expression translation, and the same `*`/`^`/`$` positional
-    rules BRE has (GNU ERE keeps them, it does not make `^`/`$`
-    unconditional anchors -- verified by this module's differential
-    suite, not merely assumed from POSIX text). See `_translate_basic`'s
-    docstring for what `last_was_quantifier` / `group_unbounded_stack` /
-    `pending_group_unbounded` guard against -- identical shape here."""
     out: List[str] = []
     i, n = 0, len(pattern)
     at_expr_start = True
     paren_depth = 0
-    groups_opened = 0  # total groups opened so far -- backreference range check
+    groups_opened = 0
     group_unbounded_stack: List[bool] = []
     pending_group_unbounded = False
     last_was_quantifier = False
@@ -635,14 +520,14 @@ def _translate_extended(pattern: str) -> Optional[str]:
                 continue
             if nc in "123456789":
                 if int(nc) > groups_opened:
-                    return None  # Finding 3: backreference to a group never opened
-                out.append("\\" + nc)  # GNU ERE backreference extension
+                    return None
+                out.append("\\" + nc)
                 i += 2
                 at_expr_start = False
                 pending_group_unbounded = False
                 last_was_quantifier = False
                 continue
-            return None  # \d \w \< \> \b and any other GNU/Perl shorthand
+            return None
         if c == "[":
             translated = _translate_bracket_expression(pattern, i)
             if translated is None:
@@ -661,9 +546,6 @@ def _translate_extended(pattern: str) -> Optional[str]:
                 last_was_quantifier = False
                 i += 1
                 continue
-            # Operator use -- Finding 2 (stacked on a preceding quantifier)
-            # and Finding 1 (unbounded-quantifying a just-closed group
-            # whose own top-level content was already unbounded).
             if last_was_quantifier:
                 return None
             if pending_group_unbounded:
@@ -677,9 +559,6 @@ def _translate_extended(pattern: str) -> Optional[str]:
             i += 1
             continue
         if c == "^":
-            # Same non-portable anchor position as the BRE path -- refuse rather than
-            # pick GNU's or BSD's reading. See the BRE `^`/`$` branches for the full
-            # reasoning and the pattern that caught it.
             if at_expr_start and i != 0:
                 return None
             if at_expr_start:
@@ -710,26 +589,11 @@ def _translate_extended(pattern: str) -> Optional[str]:
             continue
         if c in "+?":
             if at_expr_start or last_was_quantifier:
-                # No preceding atom to quantify (pattern start, or right
-                # after '(' / '|'), OR stacked directly on another
-                # quantifier (e.g. `a++`, which Python 3.11+ parses as
                 # the POSSESSIVE quantifier -- a silent reinterpretation,
-                # not a compile error). Observed live on a real corpus
-                # pattern, `state/subagent-share/(?!93c086f0)`: the local
-                # `grep -E` (BSD/macOS) rejects it ("repetition-operator
-                # operand invalid") rather than treating it as literal.
-                # Translating it unchanged would hand Python `re` the
                 # substring `(?!...)`, which Python parses as a NEGATIVE
                 # LOOKAHEAD -- valid syntax with a completely different
-                # meaning than the operator ever had. That reinterpretation
-                # risk, not just the one observed grep disagreement, is
-                # why this refuses unconditionally rather than trying to
-                # special-case just the lookahead spelling.
                 return None
             if c == "+" and pending_group_unbounded:
-                # Finding 1: unbounded-quantifying a just-closed group
-                # whose own top-level content was already unbounded --
-                # the `(a+)+` ReDoS shape.
                 return None
             if c == "+" and group_unbounded_stack:
                 group_unbounded_stack[-1] = True
@@ -751,7 +615,7 @@ def _translate_extended(pattern: str) -> Optional[str]:
             continue
         if c == ")":
             if paren_depth == 0:
-                return None  # unbalanced -- close with no open
+                return None
             paren_depth -= 1
             had_unbounded = group_unbounded_stack.pop() if group_unbounded_stack else False
             out.append(c)
@@ -771,12 +635,7 @@ def _translate_extended(pattern: str) -> Optional[str]:
             close = pattern.find("}", i + 1)
             valid = close != -1 and _valid_interval(pattern[i : close + 1])
             if not valid:
-                # Not a well-formed interval -- POSIX/GNU ERE treats a
-                # bare '{' that doesn't open a valid interval as a
                 # literal '{' REGARDLESS of position (Finding 5: this
-                # must be checked before any at-expr-start refusal, since
-                # a `{` that can never be an interval was never a
-                # quantifier candidate in the first place).
                 out.append("\\{")
                 at_expr_start = False
                 pending_group_unbounded = False
@@ -784,11 +643,11 @@ def _translate_extended(pattern: str) -> Optional[str]:
                 i += 1
                 continue
             if at_expr_start or last_was_quantifier:
-                return None  # interval quantifier with no atom / stacked quantifier
+                return None
             spec = pattern[i : close + 1]
             unbounded = _interval_is_unbounded(spec)
             if unbounded and pending_group_unbounded:
-                return None  # Finding 1: `(a+){2,}`-shaped ReDoS
+                return None
             if unbounded and group_unbounded_stack:
                 group_unbounded_stack[-1] = True
             out.append(spec)
@@ -810,21 +669,11 @@ def _translate_extended(pattern: str) -> Optional[str]:
         last_was_quantifier = False
         i += 1
     if paren_depth != 0:
-        return None  # unbalanced -- open group(s) never closed
+        return None
     return "".join(out)
 
 
 def translate(pattern: str, dialect: str) -> Optional[str]:
-    """Return a Python `re` SOURCE STRING equivalent to `pattern` under
-    `dialect` (`'basic'` | `'extended'` | `'fixed'`), or `None` if no
-    faithful translation exists. See the module docstring for the full
-    rule set and negative-spec (what is deliberately never translated).
-
-    Raises `ValueError` for a `dialect` outside the three recognized
-    names -- a caller passing an unrecognized dialect has a bug of its
-    own; that is not the same class of "no faithful translation" this
-    function's `None` return communicates.
-    """
     if dialect not in _VALID_DIALECTS:
         raise ValueError("unrecognized dialect: %r" % (dialect,))
     if dialect == "fixed":

@@ -1,23 +1,3 @@
-"""
-coordinator_core.pickup_assemble.tests.test_artifact_is_a_plan_traversal
-
-Purpose: pins `_artifact_is_a_plan`'s normalization against a `..`-traversal
-misclassification.
-
-`artifact_path.replace(chr(92),
-"/").lstrip("./")` strips a character SET, not a literal prefix: a
-traversal-shaped input like `"../../docs/plans/x.md"` has its leading run of
-`.`/`/` characters collapsed away entirely, leaving `"docs/plans/x.md"`,
-which then wrongly satisfies `startswith(_plan_dirs())` and is classified as
-an in-tree plan. Through `brief()` this was masked by
-`_repo_relative_artifact_path`'s traversal rejection upstream, but
-`coordinator_core/pickup_assemble/stamp_check.py`'s standalone
-`pickup-assemble stamp-check <plan-path>` CLI verb calls
-`compute_execution_stamp_match` (and therefore `_artifact_is_a_plan`)
-directly from argv, with no such upstream guard — this path is live, not
-dead, contrary to the premise an earlier review pass reached before
-`stamp_check.py`'s second call site was found.
-"""
 from __future__ import annotations
 
 import coordinator_core.pickup_assemble as pa

@@ -1,18 +1,3 @@
-"""The commit brief must tell its agent that a foreign dirty path is not its business.
-
-Concurrent emitted runs share one working tree. A commit agent that reads
-`git status --porcelain` with no pathspec sees every peer run's in-flight
-edits, and the stranded-work rule — which is about paths THIS wave's own
-reports name — reads, to an agent that did not notice the distinction, as
-grounds to refuse. Measured 2026-09-19 on four concurrent runs in one repo:
-three separate commit phases refused over paths belonging to a different
-emitted run, and every one of those runs halted with nothing delivered. Two
-runs refusing over each other's paths deliver nothing at all.
-
-Negative spec: this does not pin wording. It pins that the brief says the
-scoping rule at all, in a form an agent reading only this paragraph can act
-on — a peer's path is not committed, not refused over, not reported.
-"""
 
 from __future__ import annotations
 

@@ -56,15 +56,10 @@ _REPO_ROOT = _BIN_DIR.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-# The general entrypoint's filename carries hyphens, so it is loaded by path rather
-# than imported by name — the same importlib pattern bin/tests/ already uses to load
-# these scripts. Loading it (instead of re-implementing two of its steps) is the
-# point of this file: one mechanism, two entrypoints.
 _GENERAL_SCRIPT = _BIN_DIR / "claude-klabauter-revendor-schema.py"
 
 
 def _load_general():
-    """Load bin/claude-klabauter-revendor-schema.py as a module. Fails loud if it is missing."""
     spec = importlib.util.spec_from_file_location(
         "_claude_klabauter_revendor_schema", _GENERAL_SCRIPT
     )
@@ -75,9 +70,6 @@ def _load_general():
         )
         sys.exit(1)
     mod = importlib.util.module_from_spec(spec)
-    # Registered in sys.modules BEFORE exec_module: @dataclass resolves its own
-    # class's __module__ through sys.modules, and an unregistered module makes that
-    # lookup return None mid-decoration.
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     return mod

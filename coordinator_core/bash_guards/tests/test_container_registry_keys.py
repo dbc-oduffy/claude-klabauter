@@ -36,8 +36,6 @@ from coordinator_core.bash_guards import _write_bump_applicability as applicabil
 
 
 def _load_git_hook_install():
-    """Load the sibling holder by path -- it lives under `coordinator/bin/lib`,
-    which is not an importable package from here."""
     root = Path(__file__).resolve().parents[3]
     path = root / "coordinator" / "bin" / "lib" / "git_hook_install.py"
     spec = importlib.util.spec_from_file_location("_ghi_for_container_keys", path)
@@ -57,17 +55,11 @@ def test_container_registry_keys_agree_across_holders():
 
 
 def test_every_container_key_carries_the_repos_prefix():
-    """A key outside the `repos.` namespace would be excluded from an
-    enumeration that never looked at it -- a no-op row, and a sign the set is
-    being used for something other than its stated job."""
     for key in applicability._CONTAINER_REGISTRY_KEYS:
         assert key.startswith(applicability._REGISTRY_REPOS_PREFIX), key
 
 
 def test_container_key_is_skipped_by_the_repo_root_enumeration(monkeypatch, tmp_path):
-    """The behaviour, driven through a fixture registry rather than the live
-    one: a container key's value must not appear among the enumerated roots,
-    while an ordinary `repos.*` entry in the same file still does."""
     registry = tmp_path / "registry.toml"
     fleet = tmp_path / "fleet"
     repo = fleet / "a-real-repo"
@@ -87,8 +79,6 @@ def test_container_key_is_skipped_by_the_repo_root_enumeration(monkeypatch, tmp_
 
 
 def test_a_path_under_the_container_is_not_a_registered_repo(monkeypatch, tmp_path):
-    """The consequence that made this break-class: with the container
-    enumerated, every sibling of every checkout answered True here."""
     registry = tmp_path / "registry.toml"
     fleet = tmp_path / "fleet"
     repo = fleet / "a-real-repo"

@@ -179,8 +179,6 @@ def locate_fenced_block(
     if fence_match is None:
         return LocateResult(status=LocateStatus.MALFORMED, body=None, span=None)
 
-    # Offsets computed against scan_text are identical to offsets against
-    # source (comment blanking is length-preserving), so re-slice the
     # ORIGINAL source with the same span to return the un-blanked body.
     body_start, body_end = fence_match.span(1)
     offset = heading_match.end()

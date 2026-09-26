@@ -53,11 +53,6 @@ def _write_registry(tmp_path: Path, live_path: str) -> Path:
     return ml
 
 
-# ---------------------------------------------------------------------------
-# source_is_live — the three surviving triggers
-# ---------------------------------------------------------------------------
-
-
 def test_source_is_live_env_override(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_CURRENCY_SOURCE_IS_LIVE", "1")
     _no_subprocess_allowed(monkeypatch)
@@ -100,11 +95,6 @@ def test_no_version_txt_not_a_worktree_falls_back_to_source_is_live(tmp_path, mo
     monkeypatch.setattr(rc, "_run", _fake_run)
     result = rc.release_currency_probe("coordinator", "o/r", install_root)
     assert result == "source_is_live"
-
-
-# ---------------------------------------------------------------------------
-# behind-clone / current (git-worktree, no version.txt)
-# ---------------------------------------------------------------------------
 
 
 def test_behind_clone_positive_count(tmp_path, monkeypatch):
@@ -167,11 +157,6 @@ def test_worktree_fetch_failure_is_offline(tmp_path, monkeypatch):
     monkeypatch.setattr(rc, "_run", _fake_run)
     result = rc.release_currency_probe("coordinator", "o/r", install_root)
     assert result == "offline"
-
-
-# ---------------------------------------------------------------------------
-# version.txt present -> current / behind / differs / offline
-# ---------------------------------------------------------------------------
 
 
 _SHA_LOCAL = "a" * 40
@@ -311,39 +296,22 @@ def test_force_offline_shim_short_circuits(tmp_path, monkeypatch):
     assert result == "offline"
 
 
-# ---------------------------------------------------------------------------
-# Highest-tag selection (the Staff Engineer F4 — numeric-prefix-only, NOT PEP440)
-# ---------------------------------------------------------------------------
-
-
 def test_highest_tag_picks_numeric_major_minor_patch():
     assert rc._select_highest_tag(["v1.2.0", "v1.10.0", "v1.9.0"]) == "v1.10.0"
 
 
 def test_highest_tag_prerelease_co_present_with_release_locks_lexical_tiebreak():
-    # the Staff Engineer F4: numeric key ties (2,14,0) for both tags; the bash pipeline's
     # trailing `sort | tail -1` then breaks the tie LEXICALLY on the raw tag
-    # string, and "v2.14.0-rc1" (longer, shares the "v2.14.0" prefix) sorts
-    # after "v2.14.0" — so the prerelease wins the tie. PEP440 would order the
-    # release above its prerelease; this native port must NOT do that.
     result = rc._select_highest_tag(["v2.14.0-rc1", "v2.14.0"])
     assert result == "v2.14.0-rc1"
 
 
 def test_highest_tag_ignores_build_metadata_suffix():
-    # Numeric key ties (1,0,0) for both tags; the lexical tie-break then picks
-    # the longer string (mirrors the prerelease tie-break's reasoning above) --
-    # "v1.0.0+build.5" sorts after its "v1.0.0" prefix.
     assert rc._select_highest_tag(["v1.0.0+build.5", "v1.0.0"]) == "v1.0.0+build.5"
 
 
 def test_highest_tag_empty_list_returns_none():
     assert rc._select_highest_tag([]) is None
-
-
-# ---------------------------------------------------------------------------
-# Annotated-tag ^{} peel
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_tag_sha_prefers_peeled_annotated_sha(monkeypatch):
@@ -372,11 +340,6 @@ def test_resolve_tag_sha_falls_back_to_lightweight_ref(monkeypatch):
     assert result == _SHA_LOCAL
 
 
-# ---------------------------------------------------------------------------
-# Merge-base ancestry / tag allowlist gate — direct unit coverage
-# ---------------------------------------------------------------------------
-
-
 def test_check_ancestry_false_without_git_dir(tmp_path):
     assert rc._check_ancestry(str(tmp_path), _SHA_LOCAL, _SHA_TAG) is False
 
@@ -399,11 +362,6 @@ def test_check_ancestry_true(tmp_path, monkeypatch):
 )
 def test_tag_allowlist_gate(tag, ok):
     assert bool(rc._TAG_ALLOWLIST_RE.match(tag)) is ok
-
-
-# ---------------------------------------------------------------------------
-# probe_p19 — result -> ProbeNote mapping + _absent remap (the Staff Engineer F6)
-# ---------------------------------------------------------------------------
 
 
 def _sentinel_module():
@@ -430,9 +388,6 @@ def test_probe_p19_maps_current_to_empty(tmp_path, monkeypatch):
 
 
 def test_probe_p19_maps_offline_to_distinguishable_note(tmp_path, monkeypatch):
-    """offline must not collapse into the same [] as current — a
-    doctor-last-run.json reader needs to tell "checked, current" apart from
-    "network unreachable, never checked"."""
     sentinel_mod = _sentinel_module()
     monkeypatch.setattr(
         "coordinator_core.plugin_health.release_currency.release_currency_probe",
@@ -502,10 +457,6 @@ def test_probe_p19_import_error_maps_to_absent(tmp_path, monkeypatch):
 
 
 def test_source_is_live_live_path_only_in_tracked_registry(tmp_path, monkeypatch):
-    """Per-key fallthrough: live_path declared only in the tracked
-    registry.toml is honored even when a registry.local.toml exists without
-    the key (previously .local-only -- the tracked declaration was
-    invisible)."""
     monkeypatch.delenv("COORDINATOR_CURRENCY_SOURCE_IS_LIVE", raising=False)
     install_root = tmp_path / "install"
     install_root.mkdir()

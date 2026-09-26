@@ -169,52 +169,20 @@ class _Undeclared:
 
 UNDECLARED = _Undeclared()
 
-# Every closed `disposition` value per coordinator_core/frontmatter/schemas/
-# plan-tasks.schema.json — `open` (and an absent disposition, which the
-# schema defaults to `open`) is the only dispatchable state. Named once here
-# so the filter site never re-spells the literals.
 NON_DISPATCHABLE_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "wont_do"})
 
 # The schema's COMPLETE enum -- the closed values plus `open`. Named
-# separately because the two sets answer different questions, and conflating
-# them is what let an unrecognized value dispatch: membership in
 # NON_DISPATCHABLE_DISPOSITIONS answers "is this row done", while membership
-# here answers "is this a disposition at all".
 KNOWN_DISPOSITIONS = NON_DISPATCHABLE_DISPOSITIONS | {"open"}
 
-# external_gate literals per coordinator_core/frontmatter/schemas/
-# plan-tasks.schema.json (external-cross-repo-gate, 1.8.0). Named once here
-# so _has_uncleared_execution_gate never re-spells them.
 _GATE_BLOCKS_AC_CLOSURE = "ac-closure"
 _GATE_CLOSURE_EVIDENCE_KEY = "closure_evidence"
 _GATE_CLEARED_KEY = "cleared"
 
-# The observed authoring near-miss the row this refuses was filed over: a
-# plausible-looking key that reads as a cross-repo blocker declaration but
-# is not one plan-tasks.schema.json defines, and that no reader anywhere in
-# this pipeline (or DoE-claude's emit-dispatch-workflow.py) consults. Named
-# once here so the refusal in read_spine never re-spells it.
 _UNDECLARED_GATE_KEY = "awaiting_gate"
 
 
 def _is_operator_row(raw: dict) -> bool:
-    """True when this row declares a HUMAN must run it.
-
-    Opt-IN, and the asymmetry is deliberate: only the literal string
-    ``"operator"`` excludes. An absent value, ``"agent"``, ``None``, or any
-    unrecognised value dispatches exactly as before, so no plan written before
-    this field existed changes behaviour, and a typo (``"human"``,
-    ``"Operator"``) fails toward the old default rather than silently pulling
-    a row out of the run. A row that vanishes from a wave map is far harder to
-    notice than one dispatched to an agent that reports it cannot proceed.
-
-    Blocks like an uncleared ``external_gate``, NOT like ``deferred``. The
-    distinction is the one ``read_spine``'s docstring already draws: a
-    deferred or closed row's work is DONE, so a dependent's edge onto it is
-    satisfied; an operator row's work has NOT run at emit time, so a dependent
-    dispatched now would run against work that does not exist. It therefore
-    joins ``blocked_ids`` and propagates transitively.
-    """
     return raw.get("execution_mode") == "operator"
 
 
@@ -305,18 +273,9 @@ def _has_uncleared_execution_gate(raw: dict, extra_gates: tuple = ()) -> bool:
     entries.extend(extra_gates)
     for entry in entries:
         if not isinstance(entry, dict):
-            # Covers shape (b) too: a plain string in a row-level list has
-            # no way to declare `cleared: true` or `blocks: ac-closure`, so
-            # it falls into this same fail-loud, always-gates branch.
             return True
-        # `cleared: true` is the ONLY clearing path; only the literal True
-        # counts, so a malformed or absent value never clears the gate no
-        # matter what `closure_evidence` says.
         if entry.get(_GATE_CLEARED_KEY) is True:
             continue
-        # Fail closed: only the literal ac-closure spares a row. An absent,
-        # None, or unrecognized `blocks` resolves to execution, so a typo
-        # cannot silently disarm the gate.
         if entry.get("blocks") != _GATE_BLOCKS_AC_CLOSURE:
             return True
     return False
@@ -377,54 +336,15 @@ class DanglingDependencyError(SpineReadError):
 
 
 class MalformedDependencyEdgeError(SpineReadError):
-    """Raised when a ``depends_on`` entry is not an object with a ``chunk``
-    key — a bare string, a bare scalar, or a dict missing the key.
-
-    Distinct from ``DanglingDependencyError``: that error means a real
-    chunk id was named and did not resolve; this one means the edge was
-    never shaped well enough to name a chunk id in the first place, so
-    reporting it as an unresolvable chunk ``None`` would blame the wrong
-    layer. Names the offending edge value and the required shape:
-    ``{chunk: <row id>, gate_kind: <kind>[, note: ...]}``.
-
-    When ``schema_validate.check_plan_tasks_source``'s preflight finds the
-    spine's first row-order schema error under ``depends_on``, this error
-    carries THAT message instead of a hand-rolled one — the shipped
-    validator's diagnosis is more precise (e.g. it names an out-of-enum
-    ``gate_kind`` this module does not itself check) and is preferred
-    whenever it is available for the failure at hand.
-    """
+    pass
 
 
 class InvalidFieldTypeError(SpineReadError):
-    """Raised when ``writes:``/``reads:``/``depends_on:`` is declared as a
-    non-list value (scalar or other container), instead of a list.
-
-    ``writes: some/path.py`` (a bare string) is not coerced to
-    ``["some/path.py"]`` — coercion is the tempting fix and the wrong one: a
-    spine that declares a scalar is a spine whose author does not know the
-    field is a list, and guessing for them hides that. Left uncaught, a
-    scalar string iterates into single characters downstream (a str is
-    itself an iterable of its own characters), silently corrupting any
-    overlap comparison built on it.
-    """
+    pass
 
 
 class UndeclaredGateKeyError(SpineReadError):
-    """Raised when a row carries ``awaiting_gate``, a key that reads like a
-    cross-repo gate declaration but plan-tasks.schema.json does not define
-    and this pipeline never reads (module docstring point 6).
-
-    The row object sets no ``additionalProperties: false``, so
-    ``awaiting_gate`` validates clean and, left tolerant like every other
-    field here, would dispatch exactly as though the row carried no gate at
-    all — the author's intended blocker silently discarded. Refusing here,
-    at emit time, is the one point the author is still present to fix it,
-    matching the row's own preferred remedy over a schema-level alias:
-    state/bug-backlog/2026-08-28-awaiting-gate-is-read-by-nothing-an-unde-de280708447e.yaml.
-    Names the row and points the author at ``external_gate``, the one gate
-    key this pipeline (and DoE-claude's wave-builder) actually reads.
-    """
+    pass
 
 
 class InvalidRowIdError(SpineReadError):
@@ -445,27 +365,11 @@ class InvalidRowIdError(SpineReadError):
 
 
 class FileShapedPrefixError(SpineReadError):
-    """Raised when a ``writes_under:`` entry is not a string ending in ``/``
-    or ``\\`` (module docstring point 5). A file-shaped entry names one file,
-    which belongs in ``writes:``."""
+    pass
 
 
 class AmbiguousExternalGateError(SpineReadError):
-    """Raised when a plan-frontmatter ``external_gate`` entry cannot be
-    honoured unambiguously (claude-klabauter#43, Shape 1).
-
-    A frontmatter ``external_gate`` entry is legible to this reader only
-    when it is a mapping carrying a ``row:`` key whose value names a real
-    row id in this spine — that is the one shape the issue asks for. Every
-    other frontmatter shape is refused rather than silently ignored, because
-    a gate declared where nothing reads it is the exact failure this error
-    exists to close: a real cross-repo-write authorization gate silently not
-    applying to the row it was written for is worse than a refused emit.
-    Refused shapes: the top-level ``external_gate`` key present but not a
-    list; a list entry that is not a mapping; a mapping entry whose ``row:``
-    value is missing, non-string, or does not match any row id in this
-    spine. Names the offending row (when determinable) and the entry.
-    """
+    pass
 
 
 class EmitterRow(NamedTuple):
@@ -523,23 +427,6 @@ class EmitterRow(NamedTuple):
 
 
 def _frontmatter_external_gates(source: str, row_ids: set) -> dict:
-    """Resolve plan-frontmatter ``external_gate`` entries onto the row ids
-    they name via ``row:`` (claude-klabauter#43, Shape 1).
-
-    Returns ``{row_id: [entry, ...]}`` for every entry that resolves. A
-    frontmatter with no ``external_gate`` key at all, no frontmatter, or
-    unparseable frontmatter YAML all return ``{}`` — this reader adds a new
-    thing it looks AT, never a new way for an ordinary plan to fail to read.
-    An entry with no ``row:`` key is out of this function's scope (a
-    plan-wide gate no row-level reader claims) and is skipped, not refused.
-
-    Every other shape is refused via ``AmbiguousExternalGateError`` — see
-    that class's docstring for the exact list — because a gate that names
-    no resolvable row, or a value under ``external_gate`` this reader cannot
-    parse as a gate list at all, is a gate this reader cannot honour, and
-    honouring it silently as "no gate" is the one outcome claude-klabauter#43
-    exists to close.
-    """
     split = split_frontmatter(source)
     if split is None:
         return {}
@@ -567,9 +454,6 @@ def _frontmatter_external_gates(source: str, row_ids: set) -> dict:
             )
         row_id = entry.get("row")
         if row_id is None:
-            # No row: key -- not claimed by this reader; skip rather than
-            # refuse, since it may be a plan-wide gate no row-level check
-            # applies to.
             continue
         if not isinstance(row_id, str) or row_id not in row_ids:
             raise AmbiguousExternalGateError(
@@ -655,18 +539,6 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
 
     raw_rows = result.rows
 
-    # depends_on schema-shape preflight: `check_plan_tasks_source` returns
-    # at most the FIRST row-order schema error in the whole spine (its own
-    # documented contract), so this only fires when THAT error happens to
-    # be under `depends_on` — a row with some other shape problem ahead of
-    # it in file order suppresses this and falls through to the tolerant
-    # checks below, unchanged. When it does fire, it is strictly a better
-    # diagnosis than anything this module derives on its own (module
-    # docstring point 2): the shipped validator, not a coercion artefact.
-    # Skipped entirely when no row declares depends_on at all — the most
-    # common spine shape — since there is then no depends_on-shape error
-    # for the full schema+cross-field validator to find, and running it
-    # anyway would spend that cost on every emit for no possible payoff.
     if any(isinstance(raw, dict) and raw.get("depends_on") for raw in raw_rows):
         schema_error = check_plan_tasks_source(source)
         if schema_error is not None and schema_error["field"].startswith("depends_on"):
@@ -675,10 +547,6 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                 f"{schema_error['error']} ({schema_error['hint']})"
             )
 
-    # id presence/uniqueness (finding: coordinator:code-reviewer wsc-A,
-    # ecb99d36, P1). Validated once here, up front, so every downstream
-    # consumer (wave_map's predecessor-dict-keyed-by-id foremost among them)
-    # inherits a guarantee rather than re-deriving it.
     seen_ids: set[str] = set()
     for raw in raw_rows:
         row_id = raw.get("id")
@@ -698,10 +566,6 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
 
     row_ids = seen_ids
 
-    # claude-klabauter#43 Shape 1: resolve frontmatter-declared gates onto
-    # the row ids they name, once, up front -- this raises
-    # AmbiguousExternalGateError before any row is read, matching every
-    # other refusal in this function (fail loud before emitting anything).
     frontmatter_gates = _frontmatter_external_gates(source, row_ids)
 
     rows: list[EmitterRow] = []
@@ -709,10 +573,7 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
         row_id = raw.get("id")
         writes = raw.get("writes")
         if writes is None:
-            # Absent key AND present-but-empty value (`writes:` with no
             # scalar/list, or `writes: null`) both collapse to UNDECLARED —
-            # AC2 admits exactly two states, never a third (see module
-            # docstring point 1).
             writes = UNDECLARED
         elif not isinstance(writes, list):
             raise InvalidFieldTypeError(
@@ -733,12 +594,6 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                         "which does not end in a path separator. A single file "
                         "belongs in `writes:`."
                     )
-            # Normalize a
-            # Windows-authored `\`-spelled prefix to `/` here, once, so every
-            # downstream stage (wave_map's PurePosixPath-based containment
-            # checks foremost) sees a directory it can reason about. git
-            # itself accepts `/` on Windows, so nothing downstream loses
-            # anything by never seeing the backslash spelling.
             writes_under = tuple(prefix.replace("\\", "/") for prefix in writes_under)
             if writes is UNDECLARED:
                 writes = []
@@ -759,9 +614,6 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
 
         for edge in depends_on:
             if not isinstance(edge, dict) or "chunk" not in edge:
-                # The edge was never shaped well enough to name a chunk id
-                # at all — never coerce this into DanglingDependencyError
-                # with a fabricated `None` (module docstring point 2).
                 raise MalformedDependencyEdgeError(
                     f"row {row_id!r} depends_on entry {edge!r} is not an "
                     "object with a chunk key; depends_on entries must be "
@@ -785,10 +637,6 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                 agent_model=raw.get("agent_model"),
                 body=raw.get("body") or "",
                 writes_under=writes_under,
-                # Tolerant like every non-fail-loud field here: only a real
-                # bool is a declaration. Anything else (a string, a null, a
-                # typo'd key) leaves it None and the prose fallback answers,
-                # rather than making a malformed value mean False.
                 verification_runs=(
                     raw["verification_runs"]
                     if isinstance(raw.get("verification_runs"), bool)
@@ -798,19 +646,11 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
             )
         )
 
-    # Non-dispatchable exclusion, split into two sets by whether the
-    # exclusion reason means the row's work is DONE (satisfied) or NOT YET
-    # RUN (blocked) -- see the docstring for why those are not
-    # interchangeable. Computed after depends_on referent resolution
-    # against the full row-id set above, so an edge onto either set never
-    # dangles.
     satisfied_ids: set[str] = set()
     blocked_ids: set[str] = set()
     for raw in raw_rows:
         disposition = raw.get("disposition")
         deferred = raw.get("deferred", False)
-        # An absent disposition is `open` per the schema default and is the
-        # ordinary shape -- only a PRESENT, unrecognized value refuses.
         if disposition is not None and disposition not in KNOWN_DISPOSITIONS:
             raise UnknownDispositionError(
                 f"row {raw.get('id')!r} has disposition {disposition!r}, which is "
@@ -819,11 +659,6 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                 f"{', '.join(sorted(KNOWN_DISPOSITIONS))}). A row that shipped in "
                 "a commit is 'coded'."
             )
-        # raw.get("id") cannot be None here: the id presence/uniqueness
-        # loop above already required every raw["id"] to be a non-empty
-        # string before this loop runs. Keep the two loops in that
-        # order -- reordering them reintroduces a possible None into
-        # these sets with no signal.
         if exclusions is not None:
             _reason = None
             if disposition in NON_DISPATCHABLE_DISPOSITIONS:
@@ -844,10 +679,6 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                 )
 
         if disposition in NON_DISPATCHABLE_DISPOSITIONS or deferred is True:
-            # Checked ahead of the gate below by construction (elif): a row
-            # excluded for both reasons resolves as satisfied, not blocked
-            # (docstring point above) -- its work shipped, so a stale gate
-            # on a done row is bookkeeping, not a live blocker.
             satisfied_ids.add(raw.get("id"))
         elif (
             _has_uncleared_execution_gate(raw, tuple(frontmatter_gates.get(raw.get("id"), ())))
@@ -855,22 +686,12 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
         ):
             blocked_ids.add(raw.get("id"))
 
-    # Transitive closure over depends_on: a row depending, directly or
-    # through any chain, on a blocked row has not had its own predecessor
-    # run either, so it is equally blocked -- promoting it into a wave
-    # would dispatch it against work that does not exist yet. Propagation
-    # stops at a satisfied row: that row's edge onto the blocked row is
-    # stripped below exactly like any other satisfied edge, so nothing
-    # blocked leaks through a row whose own work already shipped.
     dependents: dict[str, list[str]] = {}
     for row in rows:
         for edge in row.depends_on:
             if not isinstance(edge, dict):
                 continue
             chunk = edge.get("chunk")
-            # A malformed edge with no `chunk` cannot name a predecessor, so
-            # it can neither carry nor block propagation -- skip rather than
-            # bucketing every such edge under a single None key.
             if isinstance(chunk, str) and chunk:
                 dependents.setdefault(chunk, []).append(row.id)
 
@@ -900,14 +721,6 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
 
 
 def executable_body(title: str, body: str) -> bool:
-    """Whether a row hands its executor something to do.
-
-    Judged on ``EmitterRow.body``, the exact text the emitter composes into the
-    executor's prompt, so every caller -- the prep gate (claude-klabauter#20) and
-    the plan-blitz minting check (coordinator-claude#48) -- agrees with dispatch.
-    A body that only restates the title is the "apply the fix" / "apply the fix"
-    shape that certified and then blocked at dispatch.
-    """
     words = _body_words(body)
     return bool(words) and words != _body_words(title)
 

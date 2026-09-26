@@ -89,11 +89,6 @@ from coordinator_core.git.repo_root import git_dir as _git_dir_seam
 
 
 def _diff_probe_failed_message(probe: str) -> str:
-    """Shared wording for the three fail-loud abort sites (`git diff` x2, `git ls-files
-    -m` x1) so the text and the failing probe name never drift apart.
-    # Was duplicated verbatim across three call
-    # sites, one of which (the ls-files branch) named the wrong probe; extracted to keep
-    # the wording and the probe name coupled at a single definition."""
     return (
         f"coordinator-renormalize-index: ERROR — {probe} failed; "
         "aborting to avoid misclassifying real edits as phantoms"
@@ -101,12 +96,6 @@ def _diff_probe_failed_message(probe: str) -> str:
 
 
 def _git_rev_parse_git_dir(cwd: Optional[str] = None) -> Optional[str]:
-    # `git rev-parse --git-dir` output is always a clean ASCII path (never an arbitrary
-    # filename byte sequence), so text=True is safe here -- unlike _git_diff_name_only /
-    # _git_ls_files_modified below, which decode manually with surrogateescape because
-    # their NUL-list output can contain arbitrary filename bytes.
-    # Mixed text=True/manual-decode style read as an
-    # oversight rather than a deliberate per-output choice; this comment disambiguates.
     git_dir = _git_dir_seam(cwd)
     if not git_dir:
         return None
@@ -114,8 +103,6 @@ def _git_rev_parse_git_dir(cwd: Optional[str] = None) -> Optional[str]:
 
 
 def _git_diff_name_only(cwd: Optional[str] = None) -> Optional[Set[str]]:
-    """Real worktree-vs-index content diffs (renormalize-aware). None on a hard
-    subprocess/git failure -- the caller must fail loud rather than misclassify."""
     try:
         proc = subprocess.run(
             ["git", "diff", "--name-only", "-z"],
@@ -155,10 +142,6 @@ def _path_exists_in_worktree(cwd: str, rel_path: str) -> bool:
 
 
 def _git_add_pathspec_from_stdin(paths: List[str], cwd: Optional[str] = None) -> bool:
-    """Stage exactly `paths` via NUL-safe pathspec-from-stdin (never shell-globbed, never
-    flag-parsed -- safe for leading-dash / space-containing names). Returns True on a
-    clean git exit, False if git reported any failure (--ignore-errors still refreshes
-    the rest best-effort)."""
     payload = b"\0".join(p.encode("utf-8", errors="surrogateescape") for p in paths) + b"\0"
     try:
         proc = subprocess.run(
@@ -181,11 +164,6 @@ def _git_add_pathspec_from_stdin(paths: List[str], cwd: Optional[str] = None) ->
 
 
 def main(argv: List[str], cwd: Optional[str] = None) -> int:
-    """CLI entrypoint: coordinator-renormalize-index.
-
-    `cwd` lets callers/tests target a specific repo without chdir-ing the process;
-    defaults to the process's current working directory when omitted.
-    """
     check_only = bool(argv) and argv[0] == "--check"
 
     git_dir = _git_rev_parse_git_dir(cwd)
@@ -200,9 +178,6 @@ def main(argv: List[str], cwd: Optional[str] = None) -> int:
 
     modified = _git_ls_files_modified(cwd)
     if modified is None:
-        # Was mislabeled as "git diff failed" even
-        # though this branch is the git-ls-files probe; disclosed divergence documented
-        # in the module docstring's negative-spec section.
         print(_diff_probe_failed_message("git ls-files -m"), file=sys.stderr)
         return 1
 
@@ -229,12 +204,6 @@ def main(argv: List[str], cwd: Optional[str] = None) -> int:
         )
         return 0
 
-    # `os.sep` is '\\' on Windows, but
-    # `git rev-parse --git-dir` always emits forward-slash paths on every platform, and
-    # an absolute Windows git-dir is drive-letter-prefixed (C:/repo/.git), never
-    # backslash-prefixed. `startswith(os.sep)` was False for both a relative git-dir AND
-    # an absolute Windows one, silently double-joining the latter onto cwd.
-    # `os.path.isabs` handles both POSIX and Windows absolute forms correctly.
     if not os.path.isabs(git_dir) and cwd:
         git_dir_abs = os.path.join(cwd, git_dir)
     else:
@@ -269,16 +238,7 @@ def main(argv: List[str], cwd: Optional[str] = None) -> int:
         return 0
 
     # CATASTROPHE GUARD (defence-in-depth, mirrors the oracle's own re-check comment):
-    # `m = len(safe)` makes `m == 0` and `not safe` the same condition on the same
-    # unmutated list today, so this re-check is unreachable by construction as written.
-    # It is kept anyway as a second guard immediately adjacent to the `git add` call --
-    # an empty pathspec to `git add --pathspec-from-file=-` means "add everything" (≈
-    # `git add .`), absorbing the entire concurrent tree, so this guards against a
-    # *future* edit inserting code between the `m == 0` check above and the pipe below
-    # that could repopulate/mutate `safe`.
-    # Flagged as dead code; annotated with the
     # defense-in-depth rationale rather than dropped, per the oracle's own CATASTROPHE
-    # GUARD comment at coordinator-renormalize-index:175-179.
     if not safe:
         print(
             "coordinator-renormalize-index: internal — SAFE empty at staging step "

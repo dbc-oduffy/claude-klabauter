@@ -100,7 +100,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     common_dir = Path(repo_root)
     worktree = main_worktree_root(common_dir)
 
-    # D3: optional repo_root consistency check (contract §3.3 doctrine).
     mismatch = check_repo_root(params.get("repo_root"), common_dir)
     if mismatch:
         return {

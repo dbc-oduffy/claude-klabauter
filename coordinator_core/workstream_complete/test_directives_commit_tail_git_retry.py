@@ -1,20 +1,3 @@
-"""test_directives_commit_tail_git_retry — pins the bounded retry wrapper
-`_run_git_ok_retrying` added around `_chunked_committed_paths`'s per-chunk
-git spawn.
-
-Spec backlink: docs/problems/2026-08-11-a-dispatched-coordinator-executor-is-
-den.md ("The gap" — 85a36676a converted `_chunked_committed_paths` from
-fail-open to fail-closed with no retry, so a single momentary lock collision
-on this machine's documented load norm aborted the whole `/workstream-
-complete` commit tail). This file pins the fix: a transient failure followed
-by success resolves cleanly, and a persistent failure still raises
-`PeerAttributionUnavailable` — fail-closed preserved, not weakened.
-
-No real git spawn — `_spawn_git`/`time.sleep` are monkeypatched directly, so
-this file is fast and does not need `pytest.mark.spawns_process`.
-
-Run: python3 -m pytest coordinator_core/workstream_complete/test_directives_commit_tail_git_retry.py -q -p no:randomly
-"""
 
 from __future__ import annotations
 
@@ -27,10 +10,6 @@ from coordinator_core.workstream_complete import directives_commit_tail as _tail
 
 @pytest.fixture(autouse=True)
 def _no_real_sleep(monkeypatch):
-    # Backoff correctness is not what this file pins (the constants'
-    # docstring is) — real sleeps would just slow the suite down for no
-    # signal. Still asserts sleep WAS called the right number of times
-    # below, via a counting stub rather than skipping it silently.
     calls = []
     monkeypatch.setattr(_tail.time, "sleep", lambda seconds: calls.append(seconds))
     return calls
@@ -87,11 +66,6 @@ def test_immediate_success_does_not_sleep(_no_real_sleep, monkeypatch):
 
 
 def test_exhausted_retry_raises_peer_attribution_unavailable_end_to_end(_no_real_sleep, monkeypatch):
-    """The one seam the reviewer flagged as untested: drive a persistent
-    `_spawn_git` failure all the way through `_chunked_committed_paths`
-    itself (not a `_run_git_ok_retrying` monkeypatch stand-in), so
-    retry-then-raise is covered end to end rather than pinned only at the
-    downstream raise-on-`None` contract."""
     attempts = []
 
     def _fake_spawn_git(repo_root, args):
@@ -116,8 +90,6 @@ def test_deadline_stops_starting_new_attempts_once_budget_spent(_no_real_sleep, 
 
     def _fake_spawn_git(repo_root, args):
         attempts.append(args)
-        # Each attempt "costs" more than the whole deadline budget by
-        # itself, simulating a near-timeout hang rather than a fast fail.
         clock[0] += _tail._GIT_RETRY_DEADLINE_SECONDS + 1.0
         return 128, "", "fatal: Unable to create '.git/index.lock': File exists."
 
@@ -128,8 +100,6 @@ def test_deadline_stops_starting_new_attempts_once_budget_spent(_no_real_sleep, 
     )
 
     assert result is None
-    # The deadline was already spent after attempt 1 finished, so no
-    # second or third attempt is started — without the deadline this would
     # be `_GIT_RETRY_ATTEMPTS` (3).
     assert len(attempts) == 1
 

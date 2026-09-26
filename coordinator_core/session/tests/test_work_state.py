@@ -34,9 +34,6 @@ import coordinator_core.claim_state as claim_state_mod
 import coordinator_core.session.work_state as ws
 from coordinator_core.win_portability import no_console_creationflags
 
-#: Repo root derived from this file's own location (never a hardcoded
-#: drive/host path) — coordinator_core/session/tests/test_work_state.py is
-#: three levels below the repo root.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -54,7 +51,7 @@ def _code_lines(func) -> list[str]:
     fn = tree.body[0]
     body = fn.body
     if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant):
-        body = body[1:]  # drop the docstring statement
+        body = body[1:]
     lines: list[str] = []
     for stmt in body:
         segment = ast.get_source_segment(source, stmt) or ""
@@ -69,10 +66,6 @@ def _write_handoff(tmp_path: Path, name: str, body: str, *, archived: bool = Fal
     p.write_text(body, encoding="utf-8")
     return p
 
-
-# ---------------------------------------------------------------------------
-# AC1 — held/unclaimed partition, frame-free row shape
-# ---------------------------------------------------------------------------
 
 def test_held_and_unclaimed_partition(tmp_path):
     _write_handoff(
@@ -217,10 +210,6 @@ Body.
     assert result["held"][0]["holder_live"] is True
 
 
-# ---------------------------------------------------------------------------
-# AC3 — archival expressed by scan root, not a filter
-# ---------------------------------------------------------------------------
-
 def test_archived_record_is_invisible_never_scanned(tmp_path):
     _write_handoff(
         tmp_path,
@@ -239,20 +228,6 @@ Body.
     result = ws.build_work_state(tmp_path)
     assert result == {"held": [], "unclaimed": [], "review_due": []}
 
-
-# The removed
-# `test_build_work_state_scan_root_is_single_glob_no_second_filter` asserted
-# `"archive" not in source text`, a spelling assertion (red on a pure rename
-# of the archive-index helper; green against a real archive filter spelled
-# any other way, and there is no "glob" in this function at all -- it uses
-# `collect_live_handoff_paths`, `iterdir()`-based, deliberately not `glob()`).
-# `test_archived_record_is_invisible_never_scanned` already covers the real
-# behavioural claim (an archived record is never emitted) end-to-end.
-
-
-# ---------------------------------------------------------------------------
-# AC3b — gate_notes verbatim shape, blocking_notes never gates readiness
-# ---------------------------------------------------------------------------
 
 def test_blocking_notes_present_with_empty_blocked_by_still_lands_in_unclaimed(tmp_path):
     _write_handoff(
@@ -284,10 +259,6 @@ def test_gate_notes_absent_shape():
 
     assert _gate_notes({}) == {"present": False, "text": None, "passed": None}
 
-
-# ---------------------------------------------------------------------------
-# AC3c + mandatory string-coercion test — VALUE not truthiness
-# ---------------------------------------------------------------------------
 
 def test_stamp_disagrees_and_blocked_by_empty_list_read_by_value_not_truthiness(tmp_path):
     """`blocked_by: []` must parse to an actual empty list (vacuously freed,
@@ -338,10 +309,6 @@ Body.
     assert len(result["unclaimed"]) == 1
     assert "stamp_disagrees" not in result["unclaimed"][0]
 
-
-# ---------------------------------------------------------------------------
-# AC3 — readiness is consumed, never derived; four buckets over `basis`
-# ---------------------------------------------------------------------------
 
 def test_still_blocked_never_lands_in_unclaimed(tmp_path):
     _write_handoff(
@@ -414,19 +381,12 @@ Body.
     assert result["held"] == []
     assert result["unclaimed"] == []
     assert [row["path"] for row in result["review_due"]] == ["state/handoffs/review.md"]
-    # Carries the same identifying fields an unclaimed row would, so a reader
-    # can act on the prompt without a second lookup.
     assert result["review_due"][0]["gate_notes"] == {
         "present": False,
         "text": None,
         "passed": None,
     }
 
-
-# ---------------------------------------------------------------------------
-# AC3 — pickup_ready frontmatter is never a readiness INPUT (only ever
-# compared against the producer's own computed verdict for stamp_disagrees)
-# ---------------------------------------------------------------------------
 
 def test_pickup_ready_never_drives_eligibility_only_stamp_comparison():
     """Every raw-frontmatter `pickup_ready` read in this module's source is
@@ -435,14 +395,6 @@ def test_pickup_ready_never_drives_eligibility_only_stamp_comparison():
     the PRODUCER's own computed verdict key, never a second frontmatter
     read standing in for it (the second-gate-evaluator shape this module's
     docstring forbids)."""
-    # The removed third arm
-    # (`"stamped_pickup_ready" in stripped`) subsumed the second exact-
-    # expression arm entirely, so it constrained the local variable's NAME
-    # rather than the expression: it would happily admit a future
-    # `stamped_pickup_ready = ready.get("pickup_ready")` (the exact
-    # forbidden-frontmatter-drives-eligibility shape this test exists to
-    # forbid), and renaming the variable with no behaviour change would
-    # break it. Two exact-expression arms only.
     lines = [l for l in _code_lines(ws.build_work_state) if "pickup_ready" in l]
     assert lines, "expected at least the producer-key + stamp-comparison lines"
     for line in lines:
@@ -493,10 +445,6 @@ Body.
     assert calls == [1]
 
 
-# ---------------------------------------------------------------------------
-# AC8 — send_message_address "" vs None+reason distinction
-# ---------------------------------------------------------------------------
-
 def test_send_message_address_none_with_reason_when_messaging_unavailable(tmp_path, monkeypatch):
     _write_handoff(
         tmp_path,
@@ -513,7 +461,7 @@ Body.
     )
 
     def _fake_resolve(sids, snapshot=None):
-        return {}, False  # messaging box-wide unavailable
+        return {}, False
 
     monkeypatch.setattr(
         "coordinator_core.session.reachability.resolve_addresses_bulk_with_availability",
@@ -545,7 +493,7 @@ Body.
     )
 
     def _fake_resolve(sids, snapshot=None):
-        return {}, True  # messaging available box-wide, this peer just unresolved
+        return {}, True
 
     monkeypatch.setattr(
         "coordinator_core.session.reachability.resolve_addresses_bulk_with_availability",
@@ -558,11 +506,6 @@ Body.
     assert row["send_message_address"] == ""
     assert row["send_message_address_unavailable_reason"] is None
 
-
-# ---------------------------------------------------------------------------
-# AC13 — light corroborating standalone-import check (full subprocess
-# assertion lives in the sibling C1a file, test_work_state_imports.py)
-# ---------------------------------------------------------------------------
 
 def test_session_work_state_imports_standalone_without_ops_light_check():
     result = subprocess.run(

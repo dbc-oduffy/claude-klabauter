@@ -55,7 +55,6 @@ import coordinator_registry as reg  # noqa: E402
 
 
 def _repo_bin_dir() -> str:
-    """Absolute path to the coordinator/bin directory this test lives in."""
     return _REPO_BIN_DIR
 
 
@@ -64,16 +63,6 @@ def _cross_repo_memo_path() -> str:
 
 
 def _pickup_skill_path() -> str:
-    """Resolve pickup/SKILL.md — co-located rung first, DoE-clone rung second.
-
-    Rung 1 (co-located): schemas/skills sitting beside bin/ under the same
-    coordinator root — true for any layout that hasn't split skills out.
-    Rung 2 (split-repo, current claude-klabauter layout): skills/ live only in the DoE
-    clone post-2026-07-20 retirement; resolved via coordinator_registry's
-    shared doe_root() helper (env -> env -> machine-local), never a
-    hardcoded absolute path. Raises reg._DoeUnresolvable if neither rung
-    resolves — callers must catch and skip, not hard-fail.
-    """
     local = os.path.join(
         os.path.dirname(_repo_bin_dir()), "skills", "pickup", "SKILL.md"
     )
@@ -105,15 +94,6 @@ def _parse_valid_kinds_from_cli(path: str) -> set[str]:
 
 
 def _parse_pinned_enum_from_skill(path: str) -> set[str]:
-    """Extract the M3 'Pinned enum:' pipe-delimited list from pickup/SKILL.md.
-
-    Matches the exact declaration shape:
-        **Pinned enum:** `ask | consult | fyi | proposal`
-
-    Asserts the shape occurs exactly once — a second occurrence elsewhere in
-    SKILL.md (e.g. a worked example echoing the enum) would otherwise be
-    silently ignored by `re.search`, which only ever returns the first match.
-    """
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
     occurrences = content.count("**Pinned enum:**")

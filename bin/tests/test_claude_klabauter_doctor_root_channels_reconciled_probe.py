@@ -45,11 +45,6 @@ _BIN_PROBE = _REPO_ROOT / "bin" / "claude-klabauter-doctor-probe.py"
 
 
 def _load_probe_module() -> Optional[ModuleType]:
-    """Import bin/claude-klabauter-doctor-probe.py as a fresh module via importlib.
-
-    Mirrors `test_claude_klabauter_doctor_new_probes.py::_load_probe_module` -- see
-    that file for why the module is pre-registered in `sys.modules`.
-    """
     if not _BIN_PROBE.exists():
         return None
     key = "claude_klabauter_doctor_probe_root_channels_reconciled_unit"
@@ -95,9 +90,6 @@ class TestRootChannelsReconciledProbe:
         assert "claude_klabauter" in result.data
 
     def test_disagreement_is_degraded_not_broken(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A channel split is an operator data condition, never a hard FAIL --
-        see the probe's own docstring: which path is real is not this
-        probe's call to make."""
         mod = _require_module()
         message = "registry repos.claude_klabauter and pointer .claude-klabauter-root disagree."
         fake_reconcile_module = SimpleNamespace(
@@ -114,9 +106,6 @@ class TestRootChannelsReconciledProbe:
         assert result.required is False
 
     def test_reconcile_failure_degrades_to_skipped_info(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The oracle raising (e.g. an unreadable registry) must never crash
-        the doctor run -- INFO + skipped=True, per every other probe's
-        bootstrap-failure invariant."""
         mod = _require_module()
 
         def _raise():

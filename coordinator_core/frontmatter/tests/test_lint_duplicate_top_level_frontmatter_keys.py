@@ -1,23 +1,3 @@
-"""`lint-frontmatter` must not report `valid` on a file whose duplicate
-top-level YAML key silently discarded a field.
-
-Regression: `parse_yaml`/`parse_frontmatter` last-key-wins on a repeated
-mapping key (same blind spot as PyYAML's `safe_load` — this repo's frontmatter
-parser is a hand-rolled port of schema.js's `parseYaml`, not PyYAML, but it
-builds its result the same way: `result[key] = value`, silently). A handoff
-with `origin_plan_id:` written twice parsed clean and `lint-frontmatter --file`
-printed `valid`, even though the second (often scaffold-default) occurrence
-had silently overwritten the real value.
-
-Row: 2026-08-07-lint-frontmatter-passes-duplicate-yaml-keys.
-
-Fix shape: `parse_frontmatter` now also returns `duplicate_keys` (top-level
-only — see schema_validate module docstring's "Post-port addition" note), and
-both `_run_single_file_check` and `_run_tree_walk` fold a `frontmatter` field
-error per duplicate key into their violation output. `parse_yaml`'s own
-last-key-wins construction of the returned dict is intentionally unchanged —
-this only makes the overwrite detectable, it does not change which value wins.
-"""
 
 from __future__ import annotations
 
@@ -46,7 +26,6 @@ Body.
 
 
 class TestParseYamlDuplicateTopLevelKeys:
-    """Pure-function coverage: `parse_yaml`'s dup_keys collector."""
 
     def test_no_duplicates_collector_stays_empty(self):
         dup_keys: list[str] = []
@@ -64,10 +43,6 @@ class TestParseYamlDuplicateTopLevelKeys:
         assert dup_keys == ['origin_plan_id']
 
     def test_three_occurrences_collected_on_each_repeat(self):
-        """`parse_yaml`'s raw collector appends on every repeat (once for the
-        2nd occurrence, again for the 3rd) — deduplication to a single entry
-        per key is `parse_frontmatter`'s job (see
-        TestParseFrontmatterDuplicateTopLevelKeys), not parse_yaml's."""
         dup_keys: list[str] = []
         parse_yaml('a: 1\na: 2\na: 3\n', dup_keys=dup_keys)
         assert dup_keys == ['a', 'a']
@@ -78,15 +53,9 @@ class TestParseYamlDuplicateTopLevelKeys:
         assert dup_keys == ['a', 'b']
 
     def test_default_collector_is_none_and_is_a_no_op(self):
-        # Every pre-existing call site (load_schemas among them) calls
-        # parse_yaml with no dup_keys argument — must not raise or change
-        # the returned value.
         assert parse_yaml('title: x\ntitle: y\n') == {'title': 'y'}
 
     def test_nested_mapping_duplicate_key_is_out_of_scope(self):
-        """Only the document's own top-level scope is tracked (see module
-        docstring) — a duplicate inside a nested mapping value is a known
-        non-goal of this pass, not a missed case."""
         dup_keys: list[str] = []
         value = parse_yaml('outer:\n  a: 1\n  a: 2\ntitle: x\n', dup_keys=dup_keys)
         assert value == {'outer': {'a': 2}, 'title': 'x'}
@@ -100,7 +69,6 @@ class TestParseYamlDuplicateTopLevelKeys:
 
 
 class TestParseFrontmatterDuplicateTopLevelKeys:
-    """`parse_frontmatter`'s duplicate_keys field — the row's exact repro."""
 
     def test_duplicate_key_reported_alongside_last_wins_value(self):
         doc = (
@@ -132,8 +100,6 @@ class TestParseFrontmatterDuplicateTopLevelKeys:
 
 
 class TestLintSingleFileReportsDuplicateTopLevelKey:
-    """CLI-level regression: `lint-frontmatter --file` on the row's exact
-    shape must stop printing `valid`."""
 
     def test_duplicate_key_on_an_otherwise_valid_handoff_is_a_violation(self, tmp_path, capsys):
         from coordinator_core.frontmatter import schema_validate
@@ -153,7 +119,6 @@ class TestLintSingleFileReportsDuplicateTopLevelKey:
         assert "duplicate top-level key 'origin_plan_id'" in out
 
     def test_no_duplicate_key_still_reports_valid(self, tmp_path, capsys):
-        """Regression guard: the fix must not false-positive on a clean file."""
         from coordinator_core.frontmatter import schema_validate
 
         target = tmp_path / 'clean-handoff.md'
@@ -166,13 +131,8 @@ class TestLintSingleFileReportsDuplicateTopLevelKey:
         assert 'valid' in out
 
     def test_duplicate_key_reported_even_when_no_schema_matches_the_path(self, tmp_path, capsys):
-        """A duplicate key is a defect independent of schema resolution — must
-        not fall through to the "no schema matches ... nothing to validate"
-        exit-0 path (that fallthrough was this row's exact bug)."""
         from coordinator_core.frontmatter import schema_validate
 
-        # An unregistered `kind` plus a path no glob claims: match_schema
-        # returns None, so pre-fix this hit the "nothing to validate" branch.
         doc = (
             '---\n'
             'kind: totally-unregistered-kind\n'

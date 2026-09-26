@@ -31,11 +31,6 @@ from coordinator_core.hooks.support import (
 )
 
 
-# ---------------------------------------------------------------------------
-# message_envelope
-# ---------------------------------------------------------------------------
-
-
 class TestMessageEnvelope:
     def test_compose_strips_and_requires_nonempty_prose(self):
         msg = message_envelope.compose("  hello  ")
@@ -110,11 +105,6 @@ class TestMessageEnvelope:
         assert '"hookEventName":"PreToolUse"' in out
 
 
-# ---------------------------------------------------------------------------
-# skill_invocation
-# ---------------------------------------------------------------------------
-
-
 class TestSkillInvocation:
     def test_normalize_command_name_strips_namespace(self):
         assert skill_invocation.normalize_command_name("coordinator:pickup") == "pickup"
@@ -175,11 +165,6 @@ class TestSkillInvocation:
         parsed = json.loads(rendered)
         assert parsed["hookSpecificOutput"]["hookEventName"] == "UserPromptExpansion"
         assert parsed["hookSpecificOutput"]["additionalContext"] == "text"
-
-
-# ---------------------------------------------------------------------------
-# guard_runner + guard_runner_contract
-# ---------------------------------------------------------------------------
 
 
 class TestGuardRunner:
@@ -266,12 +251,8 @@ class TestGuardRunner:
         assert guard_runner.verdict_to_envelope({"additionalContext": ""}) is None
 
     def test_real_guard_registry_is_empty(self):
-        # W4-C3 lands the runner mechanism only; enrolled bodies are a
-        # later wave's `writes:` (W4-C5/C6). An empty registry here is the
-        # correct landing state, not an oversight — see module docstring.
-        assert guard_runner_contract.ENROLLED_GUARD_MODULES  # contract vocabulary, non-empty
+        assert guard_runner_contract.ENROLLED_GUARD_MODULES
         # No live REAL_GUARD_REGISTRY symbol is asserted non-empty: it is
-        # deliberately empty in this chunk.
 
 
 class TestGuardScopeDescriptor:
@@ -309,7 +290,6 @@ class TestGuardScopeDescriptor:
             directory_substrings=("some/dir/",),
             basenames=frozenset({"coordinator.local.md"}),
         )
-        # basename matches even though the suffix+dir pair would not.
         assert d.matches("repo-root/coordinator.local.md") is True
 
     def test_prebuilt_descriptors_match_expected_shapes(self):
@@ -328,11 +308,6 @@ class TestGuardScopeDescriptor:
         assert not guard_runner_contract.CHECK_CLAUDE_MD_SIZE_SCOPE_DESCRIPTOR.matches(
             "/repo/other.md"
         )
-
-
-# ---------------------------------------------------------------------------
-# stop_family_runner + stop_family_runner_contract
-# ---------------------------------------------------------------------------
 
 
 class TestStopFamilyRunner:
@@ -372,19 +347,12 @@ class TestStopFamilyRunner:
         assert stop_family_runner.REAL_STOP_FAMILY_REGISTRY == ()
 
     def test_build_stop_family_entries_scope_gates_before_import(self):
-        # A registry entry whose descriptor never matches must not appear
-        # in the built entries (and therefore is never invoked/imported).
         descriptor = stop_family_runner_contract.STOP_FAMILY_SCOPE_DESCRIPTORS
         assert isinstance(descriptor, dict)
         entries = stop_family_runner.build_stop_family_entries(
             registry=(), raw_payload_text="{}", payload={"tool_input": {"file_path": "x.md"}}
         )
         assert entries == []
-
-
-# ---------------------------------------------------------------------------
-# sentinel_write_guard
-# ---------------------------------------------------------------------------
 
 
 class TestSentinelWriteGuard:
@@ -418,11 +386,6 @@ class TestSentinelWriteGuard:
         assert callable(sentinel_write_guard.reconstruct_after)
 
 
-# ---------------------------------------------------------------------------
-# session_hub
-# ---------------------------------------------------------------------------
-
-
 class TestSessionHub:
     def test_session_id_is_real_accepts_uuid4_shape(self):
         assert session_hub.session_id_is_real("12345678-1234-1234-1234-123456789012") is True
@@ -448,11 +411,6 @@ class TestSessionHub:
         target = tmp_path / "hub" / session_id
         assert session_hub.ensure_session_dir(str(target), session_id) is True
         assert session_hub.ensure_session_dir(str(target), session_id) is True
-
-
-# ---------------------------------------------------------------------------
-# forwarder_resolve
-# ---------------------------------------------------------------------------
 
 
 class TestForwarderResolve:
@@ -485,16 +443,10 @@ class TestForwarderResolve:
         assert argv == [sys.executable, str(script), "--flag"]
 
     def test_forwarder_argv_native_image_launched_bare_despite_no_suffix(self, tmp_path):
-        # Mach-O magic bytes (64-bit little-endian), per is_native_image.
         native = tmp_path / "mytool"
         native.write_bytes(b"\xcf\xfa\xed\xfe" + b"\x00" * 16)
         argv = forwarder_resolve.forwarder_argv(native)
         assert argv == [str(native)]
-
-
-# ---------------------------------------------------------------------------
-# __init__ package shape
-# ---------------------------------------------------------------------------
 
 
 class TestPackageShape:

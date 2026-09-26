@@ -133,14 +133,10 @@ class ScaffoldSpinoffLoudFailureTest(unittest.TestCase):
             with mock.patch.object(_cli, "_resolve_session_id", return_value="em-unknown"):
                 with self.assertRaises(SystemExit):
                     _cli._scaffold_spinoff(title="t", branch="b")
-        # _resolve_spinoff_workstream runs after the authoring_session gate in
-        # source order; a raise before it means it was never reached.
         _workstream_mock.assert_not_called()
 
 
 class ResolveSpinoffWorkstreamTest(unittest.TestCase):
-    """`_resolve_spinoff_workstream` itself, every engine seam mocked at the
-    point of use -- no live repo, no live handoff corpus, no git spawn."""
 
     def test_resolves_workstream_off_the_held_baton(self):
         with tempfile.TemporaryDirectory(prefix="spinoff-workstream-") as tmpdir:

@@ -38,9 +38,6 @@ import pytest
 
 from coordinator_core.git import commit as gcommit
 
-# Spawns real external `git` processes as its oracle/fixture setup (never
-# inside the commit_paths call under test); runs at cadence, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -48,13 +45,6 @@ pytestmark = [
 
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
-# Windows git resolves a hook by trying, in order: the exact filename, then
-# (via its own shebang-less .exe/.cmd/.bat/.sh handling through msys sh) a
-# script it can actually execute. A python-scripted hook with a `.py`
-# extension is not one git will exec directly on any platform, so the hook
-# body is a tiny shell script invoked via the extensionless conventional
-# name, which git's hook runner executes through `sh` on every platform
-# (Windows git ships its own `sh.exe` for exactly this).
 _HOOK_BODY = "#!/bin/sh\ntouch \"$(dirname \"$0\")/../../hook-fired.sentinel\"\n"
 
 
@@ -83,7 +73,6 @@ def _repo_with_hook(tmp_path: Path, hook_name: str) -> Path:
 
 
 def _sentinel(repo: Path) -> Path:
-    # matches `../../hook-fired.sentinel` relative to `.git/hooks/<name>`
     return repo / "hook-fired.sentinel"
 
 
@@ -118,8 +107,6 @@ def test_commit_paths_runs_no_hooks(tmp_path, hook_name):
     repo = _repo_with_hook(tmp_path, hook_name)
     sentinel = _sentinel(repo)
 
-    # Establish the control first, in this same repo/hook pairing, then
-    # clear the sentinel so the commit_paths leg below starts clean.
     (repo / "control.txt").write_text("control\n", encoding="utf-8", newline="\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "control commit")

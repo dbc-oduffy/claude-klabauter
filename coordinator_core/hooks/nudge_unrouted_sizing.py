@@ -378,96 +378,43 @@ from coordinator_core.session.scope import (
     parse_touch_event,
 )
 
-# `asyncio`, `yaml`, and `subagent_arrival_check._handler` are imported LAZILY
-# (inside the functions that need them) rather than at module load — see F2:
-# those imports cost ~44ms combined and were previously paid on every turn-end
-# of every EM session, including the overwhelmingly common case where no
-# sizing-object was written this session at all. `_arrival_check` starts as
-# None and is populated on first use by `_get_arrival_check()`; kept as a
-# module-level name (rather than a purely local import) so tests can still
-# monkeypatch `m._arrival_check` directly.
-# (Review: eng-director/the Director of Engineering F2.)
 _arrival_check = None
 
 
 def _get_arrival_check():
-    """Return `subagent_arrival_check._handler`, importing it on first use.
-
-    Module-level caching keeps the lazy import a one-time cost per process,
-    while still allowing tests to monkeypatch `_arrival_check` directly —
-    once it is non-None (real or a test double), this returns it as-is.
-    """
     global _arrival_check
     if _arrival_check is None:
         from coordinator_core.hooks.subagent_arrival_check import _handler
         _arrival_check = _handler
     return _arrival_check
 
-# ---------------------------------------------------------------------------
-# Sizing-object match criteria — all four must hold (schema:
-# coordinator/schemas/sizing-object.schema.json, DoE-claude repo).
-# ---------------------------------------------------------------------------
 
-# Membership rule, not a fixed count: routes whose room an EM can enter WITHOUT a
-# PM utterance. `goal-setting` and `roadmap` are excluded because DoE-claude's
-# `coordinator/skills/{goal-setting,roadmap-planning}/SKILL.md` frontmatter marks
 # each `description: "PM-GATED. ..."` — see the module docstring's Negative-spec
-# section for the full account, including why "PM-gated" is not the right blanket
-# label for every excluded route (`shape` is PM-collaborative, not frontmatter-
-# gated) and the caveat that this rule's truth for goal-setting/roadmap rests on
-# another repo's frontmatter, unpinnable by any test here.
 _ROUTABLE_ROUTES = frozenset({"plan", "spec-dispatch", "dispatch"})
 
 _SIZING_PATH_RE = re.compile(r"^state/sizings/[^/]+\.ya?ml$")
 
-# The appetite<->estimate divergence signal. `coordinator_core.sizing_assemble.
-# route()` emits this detent and leaves `fork` null; `fork` is filled later, by
-# the sizing skill, once the PM has picked. So THIS is the field to read for
-# "is an appetite fork open" — never `fork`'s nullity, which is null on both
-# sides of that question. Kept as a named constant so the coupling to
 # `sizing_assemble.DETENT_ENUM` is greppable from either side.
 _APPETITE_DIVERGENCE_DETENT = "appetite_exceeded"
 
-# The post-size, M+ open-appetite-question halt. `coordinator_core.sizing_assemble.
-# route()` emits this detent (appetite absent, resized t-shirt M/L/XL) and leaves
-# `fork` null — the PM has not yet answered the open "shall we go with that or
 # split/cut/what's up?" question. Same shape as `_APPETITE_DIVERGENCE_DETENT`
-# above: read the DETENT, never `fork`'s nullity. Kept as a named constant so the
 # coupling to `sizing_assemble.DETENT_ENUM` is greppable from either side.
 _POST_SIZE_PROMPT_DETENT = "post_size_prompt_pending"
 
-# route -> the coordinator:plan skill both plan-shaped routes resolve to.
 _SKILL_BY_ROUTE = {
     "plan": "coordinator:plan",
     "spec-dispatch": "coordinator:plan",
 }
 
-# ---------------------------------------------------------------------------
 # seam: plan->execute-plan — a SEPARATE evaluator from the sizing->room seam
 # above (not a member of `_ROUTABLE_ROUTES`; see the boundary test
-# `test_execute_plan_is_never_a_routable_route` and the negative-spec in the
-# module docstring). Only ever consulted once `execution_authorized_by` is
-# present on the candidate plan's frontmatter — see
-# `_plan_execution_authorized_and_active`.
-# ---------------------------------------------------------------------------
 
 _PLAN_PATH_RE = re.compile(r"^docs/plans/[^/]+\.md$")
 
-# Statuses this seam treats as "authorized and still in flight" — the ONLY
-# statuses that can reach a fire. Anything else (an unrecognised value such as
-# `shipped`, which appears on 9 real plans but is absent from
-# plan.schema.json's status enum, every terminal status, or a missing/blank
-# status) defaults to silence by simply not being a member of this set; no
-# separate unknown-status branch is needed because membership-testing an
-# allow-list already IS that branch.
 _PLAN_ROUTABLE_STATUSES = frozenset({"approved", "executing"})
 
 _EXECUTE_PLAN_SKILL = "coordinator:execute-plan"
 
-# Route-referent base vocabulary for the plan->execute-plan seam's text half.
-# The specific plan's own slug is appended per-candidate (see
-# `_execute_plan_referent_regex`) so the co-occurrence check also recognises
-# the plan being named by its filename stem, not only by skill/route nouns.
 _EXECUTE_PLAN_REFERENT_BASE = r"coordinator:execute-plan|execute-plan|execute the plan"
 
 _TAIL_WINDOW_BYTES = 512_000
@@ -475,10 +422,6 @@ _TAIL_WINDOW_BYTES = 512_000
 _MAX_TRACK_MIN_ENV = "RUNTIME_TRIPWIRE_MAX_TRACK_MIN"
 _DEFAULT_MAX_TRACK_MIN = 90
 
-# Per-model runtime-threshold env vars — same names and same defaults as
-# runtime-tripwire-em-check.py's `_runtime_threshold_minutes` (DoE-claude repo), so
-# the two surfaces cannot silently drift apart on what "still within a plausible
-# runtime" means for a given model.
 _OPUS_MIN_ENV = "RUNTIME_TRIPWIRE_OPUS_MIN"
 _SONNET_MIN_ENV = "RUNTIME_TRIPWIRE_SONNET_MIN"
 _HAIKU_MIN_ENV = "RUNTIME_TRIPWIRE_HAIKU_MIN"
@@ -488,13 +431,6 @@ _DEFAULT_HAIKU_MIN = 10
 
 
 def _runtime_threshold_minutes(model: str) -> int:
-    """Per-model plausible-runtime threshold, in minutes. Unknown/empty -> Opus default.
-
-    Byte-faithful port of runtime-tripwire-em-check.py's own `_runtime_threshold_minutes`
-    (same env vars, same defaults, same 1M-context-variant and family-substring
-    matching) — kept as a literal port, not a paraphrase, so the two surfaces answer
-    "how long is this model plausibly still working" identically.
-    """
     model = model or ""
     opus_default = int(os.environ.get(_OPUS_MIN_ENV, str(_DEFAULT_OPUS_MIN)) or _DEFAULT_OPUS_MIN)
     sonnet_default = int(
@@ -514,23 +450,8 @@ def _runtime_threshold_minutes(model: str) -> int:
         return haiku_default
     return opus_default
 
-# ---------------------------------------------------------------------------
 # Text half — a single POSITIVE forward-intent gate, no suppressor. A completion
-# report is already excluded on its own (it carries no forward-intent tell, so the
-# gate simply never opens for it) — see module docstring's "Text half" section for
-# why no suppressor is needed, and why that is a stronger discharge of the cited
-# lesson than a correctly-ordered suppressor would be.
-#
-# The tell alone is NOT sufficient (F4): it must co-occur, in the same sentence
-# (bounded to a ~120-char window either side, for a long unpunctuated sentence),
 # with a ROUTE REFERENT — the resolved route's own skill name or route noun. A
-# forward-intent phrase with no route referent nearby is route-agnostic prose
-# ("Next I'll need your call on X") that a legitimate PM-question stop can
-# contain just as easily as the incident this op targets.
-# (Review: eng-director/the Director of Engineering F3 + F4 — probed live: 11/12 realistic incident
-# phrasings missed the old regex, and 3/5 realistic legitimate-stop phrasings
-# fired it; both are one precision story, fixed together.)
-# ---------------------------------------------------------------------------
 
 _CURLY_APOSTROPHE_RE = re.compile("[’ʼ]")
 
@@ -551,8 +472,6 @@ _FORWARD_INTENT_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Route referent — the resolved route's own skill name or route noun. Required
-# to co-occur with a forward-intent tell before this op fires at all (F4).
 _ROUTE_REFERENT_RE = re.compile(
     r"coordinator:plan|coordinator:sizing|\bplan\b|spec-dispatch|\bdispatch\b|\bsizing\b",
     re.IGNORECASE,
@@ -567,15 +486,6 @@ _EXECUTE_PLAN_REFERENT_WINDOW_CHARS = _ROUTE_REFERENT_WINDOW_CHARS
 
 
 def _execute_plan_referent_regex(rel_path: str) -> re.Pattern:
-    """Return the route-referent regex for one candidate plan.
-
-    Base vocabulary (`coordinator:execute-plan`, `execute-plan`, `execute the
-    plan`) plus the candidate's own filename slug (e.g.
-    `2026-07-31-narrate-then-stop-discharge` for
-    `docs/plans/2026-07-31-narrate-then-stop-discharge.md`), so a tell naming
-    the plan by slug also co-occurrence-matches. Built per-candidate rather
-    than as a module-level constant because the slug is candidate-specific.
-    """
     slug = Path(rel_path).stem
     pattern = _EXECUTE_PLAN_REFERENT_BASE
     if slug:
@@ -584,11 +494,6 @@ def _execute_plan_referent_regex(rel_path: str) -> re.Pattern:
 
 
 def _sentence_bounds(text: str, pos: int) -> tuple[int, int]:
-    """Return the (start, end) offsets of the sentence in `text` containing `pos`.
-
-    Sentence boundaries are `.`, `!`, `?`. Text with no such punctuation is one
-    sentence spanning the whole string.
-    """
     start = 0
     for boundary in _SENTENCE_END_RE.finditer(text, 0, pos):
         start = boundary.end()
@@ -622,11 +527,6 @@ this turn — the gate is satisfied, so stopping just costs a turn. Use instead:
 
 
 def _session_key(payload: dict) -> tuple[str, bool]:
-    """Return (filesystem-safe session discriminator, whether a true session_id was present).
-
-    Mirrors nudge_harness_directive_dispatch._session_key verbatim — same fallback
-    shape, same F7 degradation signal.
-    """
     sid = payload.get("session_id")
     if isinstance(sid, str) and sid.strip():
         safe = re.sub(r"[^A-Za-z0-9_-]", "", sid.strip())
@@ -636,10 +536,6 @@ def _session_key(payload: dict) -> tuple[str, bool]:
 
 
 def _repo_root(payload: dict) -> str | None:
-    """Return the repo root directory (the one holding a `.git` entry), or None.
-
-    Mirrors nudge_harness_directive_dispatch._repo_root verbatim.
-    """
     cwd = payload.get("cwd") or os.getcwd()
     if not isinstance(cwd, str):
         return None
@@ -654,11 +550,6 @@ def _repo_root(payload: dict) -> str | None:
 
 
 def _resolve_git_dir(dot_git: str) -> str | None:
-    """Return the real git directory for a `.git` path, or None if unusable.
-
-    Mirrors nudge_harness_directive_dispatch._resolve_git_dir verbatim (worktree/
-    submodule `.git`-FILE gitdir: pointer resolution).
-    """
     if os.path.isdir(dot_git):
         return dot_git
     try:
@@ -677,10 +568,6 @@ def _resolve_git_dir(dot_git: str) -> str | None:
 
 
 def _sentinel_path(payload: dict) -> str | None:
-    """Return the once-per-session sentinel path, or None when no repo root is resolvable.
-
-    Mirrors nudge_harness_directive_dispatch._sentinel_path verbatim, own filename.
-    """
     probe = _repo_root(payload)
     if probe is None:
         return None
@@ -696,10 +583,6 @@ def _sentinel_path(payload: dict) -> str | None:
 
 
 def _claim_fire(sentinel: str | None) -> bool:
-    """Atomically claim the once-per-session fire slot; return True iff this call won it.
-
-    Mirrors nudge_harness_directive_dispatch._claim_fire verbatim.
-    """
     if not sentinel:
         return True
     try:
@@ -714,19 +597,12 @@ def _claim_fire(sentinel: str | None) -> bool:
 
 
 def _tail_text(path: str, max_bytes: int = _TAIL_WINDOW_BYTES) -> str:
-    """Return the last `max_bytes` of `path`, decoded, or "" on any I/O failure.
-
-    Same bounded binary-seek technique as
-    nudge_harness_directive_dispatch.last_assistant_text: seek to the tail window,
-    discard the partial line the seek lands inside, decode with errors="replace".
-    Deliberately bounded — never reads a multi-MB transcript whole.
-    """
     try:
         size = os.path.getsize(path)
         with open(path, "rb") as fh:
             if size > max_bytes:
                 fh.seek(size - max_bytes)
-                fh.readline()  # discard the partial line the seek landed inside
+                fh.readline()
             raw = fh.read()
         return raw.decode("utf-8", errors="replace")
     except OSError:
@@ -734,20 +610,6 @@ def _tail_text(path: str, max_bytes: int = _TAIL_WINDOW_BYTES) -> str:
 
 
 def _session_has_dispatched(session_id: str, repo_root: str) -> bool:
-    """Return True iff this session has direct on-disk evidence of an Agent dispatch.
-
-    Same evidence file as nudge_harness_directive_dispatch._session_has_dispatched:
-    track_dispatched_agents.py's `dispatched-agents.txt`, keyed by the RAW session_id
-    (that writer does not sanitize the directory name — see track_dispatched_agents.py
-    and track_touched_files.py, both of which use `session_id` unmodified as the
-    directory component). Resolved via git_common_dir so a worktree session's
-    bookkeeping is read from the MAIN worktree's `.git`, matching the writer's own
-    resolution.
-
-    Fail-open by design: any ambiguity (unresolvable common dir, unreadable file)
-    returns False — i.e. the `route: dispatch` nudge still fires. Suppressing a
-    genuine nudge on an unreadable file is the worse failure.
-    """
     try:
         common_dir = git_common_dir(Path(repo_root))
     except Exception:
@@ -822,29 +684,14 @@ def _session_touched_lines(session_id: str, repo_root: str) -> list[str]:
 
 
 def _session_touched_sizing_files(session_id: str, repo_root: str) -> list[str]:
-    """Return the repo-relative state/sizings/*.yaml paths touched.txt records for this session."""
     return [ln for ln in _session_touched_lines(session_id, repo_root) if _SIZING_PATH_RE.match(ln)]
 
 
 def _session_touched_plan_files(session_id: str, repo_root: str) -> list[str]:
-    """Return the repo-relative docs/plans/*.md paths touched.txt records for this session.
-
-    Same evidence mechanism as `_session_touched_sizing_files` — the plan->execute-plan
-    seam's own near-free state-gate (checked before any plan frontmatter is even opened).
-    """
     return [ln for ln in _session_touched_lines(session_id, repo_root) if _PLAN_PATH_RE.match(ln)]
 
 
 def _load_sizing_object(repo_root: str, rel_path: str) -> dict | None:
-    """Parse `<repo_root>/<rel_path>` as YAML and return it, or None on any failure.
-
-    None covers: file absent/unreadable, malformed YAML, or a parsed value that is
-    not a dict — every one of these means "cannot prove the exemptions don't apply",
-    which this op treats as silence (see module docstring).
-
-    `yaml` is imported lazily here rather than at module load — see F2, this is
-    the near-free-guard-first reorder's other half.
-    """
     import yaml
 
     try:
@@ -924,21 +771,6 @@ def _matches_criteria(obj: dict) -> bool:
 
 
 def _load_plan_frontmatter(repo_root: str, rel_path: str) -> dict | None:
-    """Parse the YAML frontmatter block of `<repo_root>/<rel_path>` and return it, or None.
-
-    None covers: file absent/unreadable, no leading `---` frontmatter fence, an
-    unterminated fence, malformed YAML, or a parsed value that is not a dict —
-    every one of these reads as "cannot prove `execution_authorized_by` is
-    present," which this seam treats as silence, matching
-    `_load_sizing_object`'s own fail-toward-silence posture on its hard
-    exemption reads (see module docstring).
-
-    Unlike a pure-YAML sizing-object, a plan file is Markdown with a YAML
-    frontmatter block delimited by a `---` line, the block itself, and a
-    second `---` line — this extracts only that block before handing it to
-    the SAME lazy `yaml.safe_load` the sizing seam already uses (F2's lazy-import
-    posture is reused, not re-derived).
-    """
     import yaml
 
     try:
@@ -991,32 +823,16 @@ def _plan_execution_authorized_and_active(fm: dict) -> bool:
 
 
 def _execute_plan_invoked(payload: dict) -> bool:
-    """Return True iff there is evidence `coordinator:execute-plan` was invoked this session.
-
-    Same evidence and technique as the sizing->room seam's `_room_invoked`
-    plan/spec-dispatch branch: a `Skill` tool_use naming the target skill in
-    the transcript tail window, via the shared `_skill_invoked` helper — no
-    second transcript-scanning function is authored for this seam.
-    """
     transcript_path = payload.get("transcript_path")
     if not isinstance(transcript_path, str) or not transcript_path:
         return False
     try:
         return _skill_invoked(transcript_path, frozenset({_EXECUTE_PLAN_SKILL}))
     except Exception:
-        # Advisory op — a transcript-parse surprise must never raise. Treated as
-        # "no evidence found" (fires), matching _room_invoked's own asymmetry.
         return False
 
 
 def _skill_invoked(transcript_path: str, target_skills: frozenset[str]) -> bool:
-    """Return True iff a `Skill` tool_use naming one of `target_skills` appears in the
-    tail window of `transcript_path`.
-
-    Scans every assistant entry in the tail window (not only the final one) for a
-    `tool_use` content block named `Skill` whose `input.skill` matches. Any parse
-    failure on a line is skipped, never raised.
-    """
     text = _tail_text(transcript_path)
     if not text:
         return False
@@ -1027,7 +843,7 @@ def _skill_invoked(transcript_path: str, target_skills: frozenset[str]) -> bool:
         try:
             entry = json.loads(line)
         except ValueError:
-            continue  # malformed transcript line; skip it
+            continue
         if not isinstance(entry, dict) or entry.get("type") != "assistant":
             continue
         msg = entry.get("message")
@@ -1081,13 +897,6 @@ def _is_subagent_session(session_id: str, repo_root: str) -> bool:
 
 
 def _dispatch_rows(session_id: str, repo_root: str) -> list[tuple[str, str, int]]:
-    """Parse `dispatched-agents.txt` into (agent_id, model, dispatched_at) rows.
-
-    Same tab-separated shape and same tolerant-parse rules as
-    runtime-tripwire-em-check.py's own read of this file: a missing/non-numeric
-    `dispatched_at` (legacy record) or a zero timestamp is skipped, never raised on.
-    Any I/O failure (absent file, unresolvable common dir) returns [].
-    """
     try:
         common_dir = git_common_dir(Path(repo_root))
     except Exception:
@@ -1194,7 +1003,7 @@ def _session_has_in_flight_dispatch(payload: dict, session_id: str, repo_root: s
     for agent_id_row, model, dispatched_at in _dispatch_rows(session_id, repo_root):
         elapsed_min = (now - dispatched_at) // 60
         if elapsed_min >= max_track_minutes:
-            continue  # aged past the hard staleness cap -- never tracked as in-flight
+            continue
 
         try:
             result = asyncio.run(
@@ -1207,25 +1016,16 @@ def _session_has_in_flight_dispatch(payload: dict, session_id: str, repo_root: s
         state = result.get("state") if isinstance(result, dict) else None
 
         if state == "arrived":
-            continue  # confirmed done -- never in-flight, regardless of elapsed time
+            continue
         if state == "running":
-            return True  # confirmed live -- in-flight until the hard cap above
+            return True
 
-        # "unknown" (or an arrival-check failure, folded into the same tier): no
-        # positive signal either way -- bound to the tighter per-model window.
         if elapsed_min < _runtime_threshold_minutes(model):
             return True
     return False
 
 
 def _final_message_text(payload: dict) -> str:
-    """Return the text of the turn's final assistant message, or "".
-
-    Prefers the harness-supplied `last_assistant_message`; falls back to
-    `nudge_harness_directive_dispatch.last_assistant_text`'s own bounded tail-read
-    over `transcript_path` — imported and reused directly rather than re-derived,
-    matching that sibling's own documented preference for this exact fallback shape.
-    """
     supplied = payload.get("last_assistant_message")
     if isinstance(supplied, str) and supplied.strip():
         return supplied
@@ -1284,12 +1084,6 @@ def _text_trips_tell(text: str, referent_re: "re.Pattern[str]" = _ROUTE_REFERENT
 
 
 def _room_invoked(payload: dict, session_id: str, repo_root: str, route: str) -> bool:
-    """Return True iff there is evidence the route's own room was entered this session.
-
-    `plan` / `spec-dispatch` -> a Skill tool_use naming coordinator:plan in the
-    transcript tail window. `dispatch` -> dispatched-agents.txt evidence, the same
-    signal nudge_harness_directive_dispatch._session_has_dispatched reads.
-    """
     if route == "dispatch":
         return _session_has_dispatched(session_id, repo_root)
 
@@ -1302,8 +1096,6 @@ def _room_invoked(payload: dict, session_id: str, repo_root: str, route: str) ->
     try:
         return _skill_invoked(transcript_path, frozenset({skill_name}))
     except Exception:
-        # Advisory op — a transcript-parse surprise must never raise. Treated as
-        # "no evidence found" (fires), per the module docstring's stated asymmetry.
         return False
 
 
@@ -1317,13 +1109,9 @@ def _build_plan_message(rel_path: str, status: object) -> str:
 
 
 def _find_sizing_candidate(session_id: str, repo_root: str) -> tuple[str, dict] | None:
-    """Return the first (rel_path, sizing-object) this session touched that matches
-    the sizing->room seam's criteria, or None. Near-free `touched.txt` gate first
-    (F2) — no YAML is opened at all when nothing was touched under state/sizings/.
-    """
     touched_sizing_paths = _session_touched_sizing_files(session_id, repo_root)
     if not touched_sizing_paths:
-        return None  # criterion 1: express-lane / no sizing-object this session
+        return None
     for rel_path in sorted(touched_sizing_paths):
         obj = _load_sizing_object(repo_root, rel_path)
         if obj is not None and _matches_criteria(obj):
@@ -1332,10 +1120,6 @@ def _find_sizing_candidate(session_id: str, repo_root: str) -> tuple[str, dict] 
 
 
 def _find_plan_candidate(session_id: str, repo_root: str) -> tuple[str, dict] | None:
-    """Return the first (rel_path, plan-frontmatter) this session touched that is
-    execution-authorized and still active (seam: plan->execute-plan), or None.
-    Near-free `touched.txt` gate first, mirroring `_find_sizing_candidate`.
-    """
     touched_plan_paths = _session_touched_plan_files(session_id, repo_root)
     if not touched_plan_paths:
         return None
@@ -1347,53 +1131,28 @@ def _find_plan_candidate(session_id: str, repo_root: str) -> tuple[str, dict] | 
 
 
 def op(payload: dict) -> dict | None:
-    """Stop advisory: nudge an EM that resolved a route (sizing->room, or an
-    already execution-authorized plan->execute-plan) and stopped without
-    entering it.
-
-    Returns ``{"message": <str>}`` when either seam should fire, ``None``
-    otherwise. Transport is owned by the caller (the DoE-resident stdin/stderr
-    shim) — this op decides only *whether* to speak, matching
-    nudge_harness_directive_dispatch's own transport-seam split.
-
-    Both seams share the universal guards below (env switch, stop_hook_active,
-    agent_id, the fire-once sentinel, EM-discriminator, in-flight-dispatch) and
-    the ONE shared fire-once sentinel slot — see "Seam naming" in the module
-    docstring for why a shared slot was chosen over one-per-seam. The
-    sizing->room seam is checked first (the original, still the more common
-    case); the plan->execute-plan seam is checked only if the sizing seam
-    found no candidate at all, never as a fallback after a found-but-suppressed
-    sizing candidate (each turn-end fires for at most one seam).
-
-    Never raises on well-formed OR malformed input.
-    """
     if not isinstance(payload, dict):
         return None
     if payload.get("stop_hook_active"):
-        return None  # this Stop came from a hook block — re-firing would loop
+        return None
     if payload.get("agent_id"):
-        return None  # a dispatched subagent holds no dispatch authority
+        return None
 
     if os.environ.get("COORDINATOR_UNROUTED_SIZING_NUDGE_OFF") == "1":
         return None
 
     sentinel = _sentinel_path(payload)
     if sentinel and os.path.exists(sentinel):
-        return None  # fast-path skip; the real (atomic) gate is _claim_fire below
+        return None
 
     repo_root = _repo_root(payload)
     if repo_root is None:
-        return None  # cannot prove a sizing-object/plan was written this session
+        return None
 
     raw_session_id = payload.get("session_id")
     if not isinstance(raw_session_id, str) or not raw_session_id.strip():
-        return None  # no session_id -> no way to key touched.txt / dispatched-agents.txt
+        return None
 
-    # Near-free state reads FIRST (F2): a small file read plus a compiled regex
-    # scan per seam, cheaper than the subagent/in-flight checks below, which each
-    # pay for an event loop, a transcript tail-read, or a lazy asyncio/yaml
-    # import. The overwhelmingly common case (neither seam has a candidate this
-    # session) exits here without ever touching those heavier guards.
     sizing_candidate = _find_sizing_candidate(raw_session_id, repo_root)
     plan_candidate = None
     if sizing_candidate is None:
@@ -1401,15 +1160,11 @@ def op(payload: dict) -> dict | None:
     if sizing_candidate is None and plan_candidate is None:
         return None
 
-    # Only now, with a genuinely matching candidate on disk (either seam), pay
-    # for the subagent/in-flight checks (event loop + transcript reads) — see
-    # F2. Shared across both seams: an EM-discriminator or in-flight-dispatch
-    # answer does not depend on which seam found the candidate.
     if _is_subagent_session(raw_session_id, repo_root):
-        return None  # house-authoritative EM-discriminator: this is a subagent's own Stop
+        return None
 
     if _session_has_in_flight_dispatch(payload, raw_session_id, repo_root):
-        return None  # legitimate wait: a dispatch is still running this session
+        return None
 
     if sizing_candidate is not None:
         rel_path, obj = sizing_candidate
@@ -1419,24 +1174,24 @@ def op(payload: dict) -> dict | None:
             return None
 
         if not _text_trips_tell(_final_message_text(payload)):
-            return None  # state alone is not enough -- no live forward-intent tell this turn
+            return None
 
         if not _claim_fire(sentinel):
-            return None  # lost the race to another concurrent Stop for this session
+            return None
 
         message = _build_message(route, rel_path)
     else:
         rel_path, fm = plan_candidate
 
         if _execute_plan_invoked(payload):
-            return None  # coordinator:execute-plan was already invoked this session
+            return None
 
         referent_re = _execute_plan_referent_regex(rel_path)
         if not _text_trips_tell(_final_message_text(payload), referent_re):
-            return None  # state alone is not enough -- no live forward-intent tell this turn
+            return None
 
         if not _claim_fire(sentinel):
-            return None  # lost the race to another concurrent Stop for this session
+            return None
 
         message = _build_plan_message(rel_path, fm.get("status"))
 
@@ -1446,14 +1201,6 @@ def op(payload: dict) -> dict | None:
             "\n[nudge] (sentinel is invocation-scoped: no session_id was"
             " present, so this nudge may repeat.)\n"
         )
-    # Routed through the shared envelope-builder chokepoint (coordinator_core.
-    # _hook_envelope) so this op's message is captured by the C6 instrumentation
-    # seam, same as every other prose-carrying hook op. op()'s own external
-    # contract ({"message": <str>}, consumed by the DoE-resident stdin/stdout
-    # shim per this function's docstring) is unchanged: the builder's
-    # additionalContext is extracted back out immediately, so the returned
-    # message text is byte-identical to before this routing — no envelope
-    # shape is exposed past this point.
     envelope = context_only("Stop", message)
     return {"message": envelope["hookSpecificOutput"]["additionalContext"]}
 

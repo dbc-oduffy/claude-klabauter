@@ -1,13 +1,3 @@
-"""Tests for coordinator_core.ops.resolve_mcp_server_cli_path
-(op mcp.resolve_server_cli_path).
-
-Covers success resolution (cli_path/project_root extraction from a
-`mcpServers.<name>.args` list), each failure mode (missing file, malformed
-JSON, missing server, missing/empty args, no .py/cli-suffixed arg), the
-async register_op handler contract, and the CC-4/AC7 double-invocation
-idempotency proof (pure read-only parse — a second call with identical
-inputs is a no-op that yields byte-identical output).
-"""
 from __future__ import annotations
 
 import json

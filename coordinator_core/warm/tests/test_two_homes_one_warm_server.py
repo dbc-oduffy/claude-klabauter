@@ -70,13 +70,6 @@ _ECHO_METHOD = "test.echo_settings_home"
 
 
 def _register_echo_op() -> None:
-    """Register the write-free `test.echo_settings_home` op, idempotently.
-
-    Ignores `params` entirely and touches nothing but `_settings_home.
-    settings_home()` -- same write-free discipline `diagnostics_probes.py`
-    documents for its own trio, for the same reason: this handler's only
-    job is to be trustworthy by inspection.
-    """
     from coordinator_core._settings_home import settings_home
     from coordinator_core.ipc import register_op
 
@@ -87,18 +80,6 @@ def _register_echo_op() -> None:
 
 
 def _worker_init() -> None:
-    """`ProcessPoolExecutor(initializer=...)` target for this module's own
-    pool -- runs the real production boot step, then layers on the one
-    test-only op registration. Module-level (not a closure) so it survives
-    pickling across the `spawn` start method Windows uses.
-
-    Also re-arms `coordinator_core.conftest`'s own dispatch-axis stamp-gate
-    opt-in (`ipc.allow_unstamped_dispatch()`) -- `pytest_configure` sets that
-    flag once, in-process, in the pytest process; a `spawn`-started worker is
-    a fresh interpreter that never ran it, so without this every dispatch
-    through this suite's own unstamped working tree would refuse with -32005
-    before ever reaching the settings-home axis this module exists to test.
-    """
     server._worker_process_init()
     from coordinator_core.ipc import allow_unstamped_dispatch
 
@@ -111,9 +92,6 @@ def _caller_for(home: Optional[str]) -> server.CallerContext:
 
 
 def _make_pool_ctx() -> "server._ServerContext":
-    """A real `_ServerContext` carrying a real `ProcessPoolExecutor`, built
-    exactly as `_ensure_dispatch_pool` builds the production one except for
-    the `initializer=` swap documented above."""
     ctx = server._ServerContext.__new__(server._ServerContext)
     ctx._pool_outstanding = server.InFlightCounter()
     ctx._dispatch_pool = concurrent.futures.ProcessPoolExecutor(
@@ -145,11 +123,6 @@ def _resolves_its_own_home(dispatch_call: Callable[[dict, str], dict], home: str
 
 
 def test_two_callers_are_served_warm_concurrently_through_the_real_pool(tmp_path):
-    """The prime exit criterion itself: two callers naming different homes,
-    served through `_ServerContext._pool_dispatch` and a live worker
-    process, each resolving its own claimed home -- neither refused, neither
-    observing the other's home.
-    """
     ctx = _make_pool_ctx()
     try:
         home_a = str(tmp_path / "home-a")
@@ -167,9 +140,6 @@ def test_two_callers_are_served_warm_concurrently_through_the_real_pool(tmp_path
         assert resolved_a, "caller A was refused or did not resolve its own claimed home"
         assert resolved_b, "caller B was refused or did not resolve its own claimed home"
 
-        # Direct re-check against each response, so a leaked value that
-        # happened to equal `home` by coincidence (e.g. both resolving the
-        # server's own ambient home) cannot pass the boolean predicate above.
         response_a = ctx._pool_dispatch(_echo_msg(3), caller=_caller_for(home_a))
         response_b = ctx._pool_dispatch(_echo_msg(4), caller=_caller_for(home_b))
         assert response_a["result"]["settings_home"] == home_a
@@ -182,21 +152,11 @@ def test_two_callers_are_served_warm_concurrently_through_the_real_pool(tmp_path
 
 
 def test_the_check_discriminates_against_the_pre_fix_shape(tmp_path):
-    """Pinned failing leg (staff-eng Finding 5). The SAME
-    `_resolves_its_own_home` predicate, run against the shape that predates
-    both C2's refusal and C3's per-request isolation -- a bare
-    `dispatch_message` call carrying no per-request identity binding at all
-    -- must go RED: that shape answers every claim with the process's own
-    ambient home, never the caller's. Without this leg a green real-pool
-    test proves only that the harness runs, not that it discriminates.
-    """
     _register_echo_op()
 
     from coordinator_core.ipc import dispatch_message
 
     def _pre_fix_dispatch_call(msg: dict, home: str) -> dict:
-        # No per_request_state, no settings_home threading at all -- exactly
-        # the shape every dispatch leg had before this plan's C2/C3.
         return asyncio.run(dispatch_message(msg, caller="pre-fix-shape-test"))
 
     other_home = str(tmp_path / "genuinely-different-settings-home")

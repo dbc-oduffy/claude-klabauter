@@ -28,9 +28,6 @@ from pathlib import Path
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Import guard — MUST precede any test so @register_op fires first.
-# ---------------------------------------------------------------------------
 import coordinator_core.ops.cartography_file_index  # noqa: F401 — fires @register_op
 
 from coordinator_core.ipc import _REGISTRY
@@ -42,8 +39,6 @@ from coordinator_core.cartography.file_index import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -56,11 +51,6 @@ assert _OP_NAME in _REGISTRY, (
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture()
@@ -98,11 +88,6 @@ def git_repo(tmp_path: Path) -> Path:
     return root
 
 
-# ---------------------------------------------------------------------------
-# system_for_path
-# ---------------------------------------------------------------------------
-
-
 def test_system_for_path_top_level_directory():
     assert system_for_path("coordinator_core/ops/foo.py") == "coordinator_core"
     assert system_for_path("state/handoffs/foo.md") == "state"
@@ -119,11 +104,6 @@ def test_system_for_path_dotdir_top_level():
 
 def test_system_for_path_deeply_nested():
     assert system_for_path("a/b/c/d/e.py") == "a"
-
-
-# ---------------------------------------------------------------------------
-# build_file_index
-# ---------------------------------------------------------------------------
 
 
 def test_build_file_index_shape(git_repo):
@@ -160,12 +140,6 @@ def test_build_file_index_absent_scope_unchanged(git_repo):
 
 
 def test_build_file_index_default_untracked_arm_unchanged(git_repo):
-    """Paired no-change assertion (C6): the existing registered-op caller
-    (ops/cartography_file_index.py) never passes `include_untracked`, so
-    leaving it at its default must be byte-identical to output before the
-    arm existed — an untracked file planted in the fixture must NOT appear
-    unless the arm is explicitly turned on.
-    """
     (git_repo / "scratch_untracked.txt").write_text("untracked\n", encoding="utf-8")
 
     default_call = build_file_index(git_repo)
@@ -181,11 +155,6 @@ def test_build_file_index_zero_unmapped_over_this_repo():
     assert result["file_count"] > 0
     assert result["unmapped_count"] == 0
     assert len(result["index"]) == result["file_count"]
-
-
-# ---------------------------------------------------------------------------
-# Op handler
-# ---------------------------------------------------------------------------
 
 
 def test_op_missing_target_root_raises_value_error():

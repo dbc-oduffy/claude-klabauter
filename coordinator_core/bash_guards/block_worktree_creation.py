@@ -171,48 +171,19 @@ CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
-#: Cheap pre-filter (mirrors the sibling module's Layer-1 posture): a
-#: negative lookbehind excludes a `worktree` immediately preceded by a word
-#: character or hyphen, so `--worktree`/`-Wworktree`-shaped flag text does
-#: NOT count as a candidate `git worktree` invocation on its own -- the real
-#: subcommand-vs-flag disambiguation still happens in the anchored tokenized
-#: pass below; this only gates whether that (more expensive) pass runs at
-#: all.
 _WORKTREE_WORD_RE = re.compile(r"(?<![\w-])worktree\b")
 
-#: Second-level `git worktree` subcommand classification -- see module
 #: docstring "DELIBERATE ALLOW-LIST" / "DENY set" sections for the full
-#: rationale on each member.
 _DENY_SUBCOMMANDS = frozenset({"add", "move", "repair", "lock", "unlock"})
 _ALLOW_SUBCOMMANDS = frozenset({"list", "remove", "prune"})
 
-#: The single plain word immediately following (whitespace-separated) a
-#: `worktree` match position -- used only by the narrow legacy fallback
-#: below.
 _NEXT_WORD_AFTER_RE = re.compile(r"\s+(\S+)")
 
 #: A bare leading `VAR=value` shell assignment token (`GIT_TRACE=1 git
-#: worktree add ...`) -- `_strip_leading_subshell_and_env` (imported from
-#: the sibling module) only peels a literal `env` word prefix, not a bare
-#: assignment with no `env` keyword, so this guard's own command-position
-#: resolution needs its own skip for the assignment-prefix shape (mirrors
-#: `_sentinel_creation_guard.py`'s `_env_skip_index`).
 _ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
-#: Passthrough wrapper binaries that run their remaining argv unchanged
-#: (BX-13 fix, 2026-07-29, confirmed live): `nice git worktree add ...` was
-#: never recognized -- `_strip_leading_subshell_and_env` only peels `env`/
-#: a subshell-open, and this guard's own `_skip_leading_env_assignments`
-#: only peeled a bare `VAR=value` token, so the resolved argv0 landed on
-#: `nice` (not `git`) and the invocation allowed while still creating the
 #: worktree for real. Same set `dispatch_checks.py`'s `_BYPASS_PREFIX`
-#: already tolerates.
-#: Widened (2026-07-29, code-reviewer Finding 3) -- see the sibling copy in
-#: `block_subagent_destructive_action.py` for the full rationale: `setsid`/
-#: `strace`/`doas`/`busybox` were unrecognized passthrough wrappers, so
-#: `setsid git worktree add ../wt-1 x` landed the resolved head on `setsid`
-#: (never `git`) and the worktree was still created for real.
 _PASSTHROUGH_WRAPPERS = frozenset(
     {
         "sudo", "command", "time", "exec", "nice", "nohup", "ionice", "timeout",
@@ -220,26 +191,10 @@ _PASSTHROUGH_WRAPPERS = frozenset(
     }
 )
 
-#: Shell interpreters whose `-c <string>` argument is executed, not inert
-#: text -- see `_evaluate`'s BX-13 fix comment.
 _C_FLAG_SHELL_INTERPRETERS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
-
-#: BX-14 fix (2026-07-29, confirmed live via the real dispatcher): the skip
-#: below tolerated the wrapper BINARY token but never the wrapper's OWN
-#: argument(s) -- `timeout 30 git worktree add ...`, `ionice -c2 git
-#: worktree add ...`, `stdbuf -oL git worktree add ...` all landed argv0 on
-#: `30`/`-c2`/`-oL` (not `git`), so the worktree was still created for real
-#: while this guard allowed. `_skip_wrapper_own_argv` itself now lives in
-#: `_command_tokenizer.py` (2026-07-30, M8 consolidation) -- imported above
-#: rather than hand-maintained here; see that module's own docstring for the
-#: five-copy history this closes.
 
 
 def _skip_leading_env_assignments(tokens: "list[str]") -> "list[str]":
-    """Return `tokens` with any leading `VAR=value`-shaped tokens AND any
-    leading no-op passthrough wrapper tokens (`nice`/`time`/etc., plus that
-    wrapper's OWN argument(s) -- see `_skip_wrapper_own_argv`) removed,
-    exposing the true command-position head."""
     i = 0
     n = len(tokens)
     while i < n:
@@ -256,11 +211,6 @@ def _skip_leading_env_assignments(tokens: "list[str]") -> "list[str]":
 
 
 def _classify_worktree_subcommand(second: Optional[str]) -> Optional[str]:
-    """Return a deny_kind label for the second-level `git worktree`
-    subcommand `second` (the token immediately following `worktree`), or
-    `None` (allow). `second is None` -- bare `git worktree` -- allows: it
-    lists worktrees, same as the explicit `list` form.
-    """
     if second is None:
         return None
     if second in _ALLOW_SUBCOMMANDS:
@@ -285,14 +235,6 @@ def _evaluate_legacy(text: str) -> Optional[str]:
 
 
 def _evaluate(cmd: str) -> Optional[str]:
-    """Primary classification: tokenize the full command (quote-aware,
-    `;`/`&`/`|`-segmented -- reused from the sibling module, see module
-    docstring "Shell-shape handling"), and for each segment, resolve the
-    REAL git subcommand from argv position via `_real_git_subcommand`
-    (which itself skips git's own global options). Falls back to
-    `_evaluate_legacy`, scoped to the offending segment/command text only,
-    on an unparseable segment or an unrecognized-global-option ambiguity.
-    """
     tokens = _tokenize_full_command(cmd)
     if tokens is None:
         return _evaluate_legacy(cmd)
@@ -301,40 +243,15 @@ def _evaluate(cmd: str) -> Optional[str]:
         if not seg_tokens:
             continue
 
-        # 2026-07-28): scanning
-        # every token in the segment for the first `git`-basename match
-        # (the pre-fix behavior here) treats a non-command-position
-        # MENTION of "git" (an argument to another command, e.g. `echo git
-        # worktree add x`) as an invocation -- the exact false-positive
         # class `block_subagent_destructive_action.py`'s "COMMAND-POSITION
         # GIT-TOKEN FIX" closes for its own sibling checks, in this same
-        # diff, but that fix was never applied to this guard. Reuse the
-        # SAME command-position discipline (`_strip_leading_subshell_and_
-        # env` peels a leading subshell-open `(` / `env` prefix so the
-        # remaining head token is the true command-position executable)
-        # instead of a position-independent token scan.
         working = _strip_leading_subshell_and_env(seg_tokens)
         working = _skip_leading_env_assignments(working)
         if not working:
             continue
 
-        # BX-13 fix (2026-07-29, confirmed live): `sh -c 'git worktree add
-        # ...'` (or `bash -c`/`zsh -c`/etc.) was never unwrapped -- the
-        # quoted `-c` argument tokenizes as ONE shlex word, so `working[0]`
-        # was the shell interpreter itself, never `git`, and the segment was
-        # silently skipped while the wrapped command still created the
-        # worktree for real. Unwrap and recurse into the SAME `_evaluate` on
-        # the nested payload text.
-        #
         # BUNDLED-`-c`-FLAG FIX (2026-07-29, code-reviewer Finding 2,
-        # confirmed live): the exact-token `"-c" in working[1:]` test missed
-        # a BUNDLED short flag -- `sh -ic 'git worktree add ...'` tokenizes
-        # its second token as the literal string `-ic`, which is never
-        # exactly `"-c"`, so the unwrap never fired and the quoted payload
         # was never re-scanned. `_BUNDLED_C_FLAG_RE` (imported from the
-        # sibling destructive-action guard, which already fixed this exact
-        # gap for its own `-c` detection) matches any bundled-or-standalone
-        # `-c` short flag (`-c`, `-ic`, `-ci`, ...).
         head_base = _normalize_executable_basename(working[0])
         if head_base in _C_FLAG_SHELL_INTERPRETERS:
             c_flag_positions = [
@@ -371,13 +288,6 @@ def _evaluate(cmd: str) -> Optional[str]:
 
 
 def _ps_normalize_token(tok: str) -> str:
-    """Normalize a single PowerShell token to its plain comparison spelling:
-    strip a surrounding quote first (`_dialect._strip_ps_quotes`'s own
-    "verbatim quoted span" contract -- see Convention (b) cited in this
-    module's docstring), THEN remove a no-op backtick escape, matching
-    `block_subagent_destructive_action._ps_normalize_verb_token`'s own
-    order.
-    """
     return _strip_ps_quotes(tok).replace("`", "")
 
 
@@ -401,15 +311,6 @@ def _evaluate_powershell_legacy(text: str) -> Optional[str]:
 
 
 def _evaluate_powershell(cmd: str) -> Optional[str]:
-    """PowerShell-dialect leg of classification: tokenize AND segment via
-    `_dialect.resolve_segments_for_dialect` (quote-aware, `;`/`&`-segmented
-    -- see `_dialect.py`'s own "Output shape"), and for each segment resolve
-    the REAL git subcommand from argv position exactly like the bash leg
-    (`_real_git_subcommand`, dialect-agnostic -- it operates on a
-    `List[str]`, never on shell-shaped text). Falls back to
-    `_evaluate_powershell_legacy` on an unparseable segment/command or an
-    unrecognized-global-option ambiguity, per Convention (a).
-    """
     segments = resolve_segments_for_dialect(
         cmd, Dialect.POWERSHELL, guard_name="block_worktree_creation"
     )
@@ -420,18 +321,11 @@ def _evaluate_powershell(cmd: str) -> Optional[str]:
         if not seg_tokens:
             continue
 
-        # Command-position discipline (same reasoning as the bash leg's own
-        # comment above `_evaluate`): normalize every token's quoting BEFORE
-        # any comparison, per Convention (b).
         clean = [_ps_normalize_token(t) for t in seg_tokens]
         working = _skip_leading_env_assignments(clean)
         if not working:
             continue
 
-        # `sh -c '...'`/`bash -c '...'` typed from a PowerShell call --
-        # Convention (c): the payload is Bash even under a PowerShell outer
-        # call, so the recursive call below is the Bash-shaped `_evaluate`,
-        # never a PowerShell re-entry. `powershell -Command "..."` is NOT in
         # `_C_FLAG_SHELL_INTERPRETERS` at all, so it never reaches here.
         head_base = _normalize_executable_basename(working[0])
         if head_base in _C_FLAG_SHELL_INTERPRETERS:
@@ -452,11 +346,6 @@ def _evaluate_powershell(cmd: str) -> Optional[str]:
         subcmd, ambiguous, remaining = _real_git_subcommand(working[1:])
         if ambiguous:
             # Built from the QUOTE-NORMALIZED tokens, never `shlex.quote` over
-            # the raw PowerShell spans: `shlex.quote('"worktree"')` yields
-            # `'"worktree"'`, which `strip_powershell_prose_noise` then strips
-            # entirely as a quoted span -- deleting the word the scanner is
-            # looking for and dropping a real deny (slice-B review P1b,
-            # reproduced). `block_stash_destruction` already does it this way.
             seg_text = " ".join(working)
             verdict = _evaluate_powershell_legacy(seg_text)
             if verdict is not None:
@@ -485,17 +374,6 @@ def _deny_reason(deny_kind: str) -> str:
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the worktree-creation-ban gate against a PreToolUse payload.
-
-    Returns `None` (allow) or the nested hard-deny envelope. Never
-    identity-gated -- fires for every caller including the main-loop EM
-    (see module docstring).
-    """
-    # Deliberately no try/except here -- fail-CLOSED-on-exception is the
-    # dispatcher's job for hard-deny guards (dispatch.py's guard_chain
-    # fail_closed=True entries route an uncaught exception through its
-    # crash-deny wrapper); catching and swallowing an unexpected error into
-    # a silent allow here would defeat that contract.
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
 
@@ -508,14 +386,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     dialect = dialect_from_tool_name(payload.get("tool_name") or "")
 
     if dialect is Dialect.POWERSHELL:
-        # PowerShell has no POSIX heredoc syntax -- the bash leg's
-        # `_strip_heredoc_bodies` does not apply here. A quoted/here-string
-        # `worktree` mention is inherently safe against this cheap
-        # pre-filter too: when the tokenizer parses cleanly, a quoted span
         # is ONE atomic token (`_ATOMIC_ARGUMENT_NODE_TYPES`), never split
-        # into separate `git`/`worktree`/`add` words a segment's head could
-        # resolve to, so the real classification below never misreads
-        # prose as an invocation on the parses-cleanly route.
         if not _WORKTREE_WORD_RE.search(cmd):
             return None
         deny_kind = _evaluate_powershell(cmd)
@@ -529,32 +400,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         }
 
-    # Heredoc bodies are stdin DATA, not shell command text -- strip them
-    # before classification (same fix already applied by the sibling
-    # `block_subagent_destructive_action.py`/`_sentinel_creation_guard.py`,
-    # reusing THEIR `_strip_heredoc_bodies`, not a new copy). Without this,
-    # a benign `cat <<EOF > review.md ... EOF` persisting a document whose
-    # PROSE happens to contain the words "git worktree add" (or names this
-    # guard's own filename) could tokenize its heredoc body as if it were
-    # live shell text: an unquoted `;`/`|` inside that prose starts a new
-    # `_segments_from_tokens` segment, and if the next body word after that
-    # punctuation is literally "git", the segment's head resolves to "git"
-    # and the guard misreads document prose as a real invocation (observed
-    # live, 2026-07-29: a reviewer's findings heredoc denied on exactly this
-    # shape -- see `state/bug-backlog/2026-07-29-worktree-guard-false-
-    # denies-documents-naming-guard-files.yaml` in DoE-claude). Anti-bypass:
-    # an interpreter FED by a heredoc (`bash <<'EOF' ... EOF`) is untouched
-    # by this strip -- the residual `bash <<'EOF'` line survives and, if it
-    # independently contains a real `git worktree add` invocation outside
-    # the heredoc, still denies.
-    #
-    # discipline) -- the deny-reason display below no longer echoes the raw
-    # `cmd` at all (message-size compression dropped that line and the
-    # `_deny_reason` parameter that carried it); it names only the resolved
-    # `deny_kind` class (e.g. "git worktree add"). This comment previously
-    # promised per-invocation command visibility that no longer exists --
-    # corrected to match current behavior rather than leaving the stale
-    # promise in place.
     cmd_for_classification = _strip_heredoc_bodies(cmd)
 
     if not _WORKTREE_WORD_RE.search(cmd_for_classification):

@@ -1,27 +1,3 @@
-"""test_backfill_anchor_descendant_tip.py — path-scoped test suite for
-`workday-complete-backfill-anchor.py`'s `compute_descendant_tip` (chunk T1 of
-docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-gate.md).
-
-Covers the replacement of the former O(n^2) pairwise `git merge-base
---is-ancestor` walk with one `git rev-list --topo-order` walk over the whole
-candidate set plus one ancestor-closure walk from the leading candidate.
-Pins behavioural equivalence against the old pairwise semantics: a >2-way
-fixture with a genuine partial order (one common ancestor with two divergent
-branch tips plus a strict descendant of one of them), a duplicate-candidate
-case, a total-order case, and the absence-reconciliation contract for a SHA
-that resolves via `rev-parse` but cannot appear in the `rev-list` output.
-
-Collected by pytest. RENAMED 2026-08-22 from
-`test_workday_complete_backfill_anchor.py`: that basename also exists at
-`coordinator/tests/`, and with neither directory carrying an `__init__.py`
-pytest aborts the whole session with "import file mismatch" rather than
-collecting either file. The sibling is NOT a duplicate of this suite — it
-covers the CLI's `descendant-tip`/`run` subcommands end to end, where this one
-covers `compute_descendant_tip` in process. Do not re-merge them under one
-basename.
-
-Spec backlink: pln-kill-the-n-1-git-spawn-class-a-88897a § T1
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -32,9 +8,7 @@ import time
 
 import pytest
 
-# Declared, not excused: this file spawns real processes because the behaviour under
 # test IS the spawn. _BASELINE is shrink-only pre-existing residue and is explicitly
-# not the route for a new file -- test_no_new_spawning_tests.py Rule 2.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -56,22 +30,12 @@ def _pass(label: str) -> None:
 
 
 def _fail(label: str, detail: str = "") -> None:
-    """Raises, deliberately.
-
-    This file arrived from the hand-rolled-runner migration with `_fail`
-    incrementing a counter and returning, and every case shaped as
-    `if wrong: _fail(...); return`. Under pytest a returning `_fail` makes the
-    case PASS on exactly the branch that proves it broken — eight cases pinning
-    nothing while reporting green. The counter/`_main` reporting path is gone;
-    pytest owns the verdict now.
-    """
     global FAIL
     FAIL += 1
     raise AssertionError(f"{label}: {detail}" if detail else label)
 
 
 def _load_module():
-    """Import workday-complete-backfill-anchor.py as a fresh module object."""
     path = os.path.join(SCRIPT_DIR, "workday-complete-backfill-anchor.py")
     spec = importlib.util.spec_from_file_location("workday_complete_backfill_anchor_under_test", path)
     mod = importlib.util.module_from_spec(spec)
@@ -107,11 +71,6 @@ def _commit(repo_dir, rel_path, content, message):
     return _git(repo_dir, "rev-parse", "HEAD").strip()
 
 
-# ===========================================================================
-# compute_descendant_tip: topo-order walk parity with the old pairwise
-# `git merge-base --is-ancestor` semantics.
-# ===========================================================================
-
 def test_single_candidate_short_circuits(tmp_path):
     mod = _load_module()
     _init_repo(tmp_path)
@@ -137,7 +96,6 @@ def test_no_sha_resolves_returns_none(tmp_path):
 
 
 def test_total_order_picks_furthest_forward(tmp_path):
-    """Linear chain c1 -> c2 -> c3: c3 dominates both others."""
     mod = _load_module()
     _init_repo(tmp_path)
     c1 = _commit(tmp_path, "a.txt", "1\n", "c1")
@@ -165,11 +123,6 @@ def test_duplicate_candidate_deduped_and_resolved(tmp_path):
 
 
 def test_partial_order_three_plus_candidates_diverged_returns_none(tmp_path):
-    """>2 candidates with a genuine partial order: one common ancestor base,
-    two divergent branch tips (neither an ancestor of the other), plus a
-    third candidate that is a strict descendant of only ONE branch tip. No
-    single candidate dominates all others -> None, same as the old pairwise
-    walk on an unresolved divergence."""
     mod = _load_module()
     _init_repo(tmp_path)
     base = _commit(tmp_path, "base.txt", "base\n", "base")
@@ -182,8 +135,6 @@ def test_partial_order_three_plus_candidates_diverged_returns_none(tmp_path):
     _git(tmp_path, "checkout", "-q", "-b", "branch-b")
     branch_b_tip = _commit(tmp_path, "b.txt", "b\n", "on branch b")
 
-    # Candidates: descendant_of_a (descends from branch_a_tip, NOT branch_b_tip),
-    # branch_b_tip (incomparable with both branch-a commits).
     tip = mod.compute_descendant_tip(
         str(tmp_path), [descendant_of_a, branch_b_tip, branch_a_tip]
     )
@@ -197,11 +148,6 @@ def test_partial_order_three_plus_candidates_diverged_returns_none(tmp_path):
 
 
 def test_partial_order_three_plus_candidates_dominant_found(tmp_path):
-    """>2 candidates, genuine partial order, but this time the candidate set
-    DOES contain a dominant tip: base, a divergent sibling branch tip that is
-    NOT itself a candidate (only used to create real divergence in the repo
-    graph), and a strict descendant of branch-a that also merges branch-b in,
-    making it a descendant of all three candidates."""
     mod = _load_module()
     _init_repo(tmp_path)
     base = _commit(tmp_path, "base.txt", "base\n", "base")
@@ -216,7 +162,6 @@ def test_partial_order_three_plus_candidates_dominant_found(tmp_path):
     _git(tmp_path, "merge", "-q", "--no-edit", "branch-a")
     merge_tip = _git(tmp_path, "rev-parse", "HEAD").strip()
 
-    # Candidates: base, branch_a_tip, branch_b_tip, merge_tip (descendant of all three).
     tip = mod.compute_descendant_tip(
         str(tmp_path), [base, branch_a_tip, branch_b_tip, merge_tip]
     )
@@ -230,11 +175,6 @@ def test_partial_order_three_plus_candidates_dominant_found(tmp_path):
 
 
 def test_missing_topo_output_is_not_silently_ignored(tmp_path, monkeypatch=None):
-    """A resolved candidate SHA that `git rev-list --topo-order` fails to
-    list (simulated here by monkeypatching wc.git_out to drop one entry from
-    the topo-order output) must be reconciled explicitly as a resolution
-    failure (None), never silently read as 'not the dominant candidate' and
-    passed over."""
     mod = _load_module()
     _init_repo(tmp_path)
     c1 = _commit(tmp_path, "a.txt", "1\n", "c1")
@@ -245,7 +185,6 @@ def test_missing_topo_output_is_not_silently_ignored(tmp_path, monkeypatch=None)
     def _fake_git_out(*args, **kwargs):
         out = real_git_out(*args, **kwargs)
         if args[:3] == ("-C", str(os.path.abspath(str(tmp_path))), "rev-list") and "--topo-order" in args:
-            # Drop c2 from the topo-order output to simulate an unresolved ref.
             lines = [line for line in out.splitlines() if line != c2]
             return "\n".join(lines)
         return out
@@ -266,12 +205,6 @@ def test_missing_topo_output_is_not_silently_ignored(tmp_path, monkeypatch=None)
 
 
 def test_wall_clock_faster_than_pairwise_baseline(tmp_path):
-    """Wall-clock, both orders, fresh process per measurement, pessimistic
-    arm (more candidates = worse for O(n^2)). Not a profiler measurement —
-    two subprocess invocations of the CLI's `descendant-tip` subcommand
-    timed end to end. This is a smoke check the new path is not egregiously
-    slower, not a strict regression gate (wall-clock is noisy on shared
-    CI/dev machines); a generous multiplier avoids flaking on a loaded box."""
     mod = _load_module()
     _init_repo(tmp_path)
     shas = []

@@ -89,7 +89,6 @@ def _strip_known_suffix(repo_part: str) -> str:
 
 
 def _decode_drive_prefix(repo_part: str) -> Optional[Tuple[str, str]]:
-    """Return (drive, rest) trying the triple-dash form before the double-dash form."""
     if len(repo_part) >= 4 and repo_part[0].isalpha() and repo_part[1:4] == "---":
         return repo_part[0], repo_part[4:]
     if len(repo_part) >= 3 and repo_part[0].isalpha() and repo_part[1:3] == "--":
@@ -110,7 +109,6 @@ def _is_skipped_name(name: str) -> bool:
 
 
 def _decode_one(name: str) -> Optional[Tuple[str, str]]:
-    """Decode one encoded directory basename to (shortname, candidate_path), or None to skip."""
     if _is_skipped_name(name):
         return None
 
@@ -131,8 +129,6 @@ def _decode_one(name: str) -> Optional[Tuple[str, str]]:
     candidate_path = f"{drive_lower}:/{shortname}"
 
     if shortname == "Users" and "claude" in rest:
-        # Users--<user>---claude -> reproduce bash's `^Users--([^-]+)---claude` regex
-        # against the raw `rest` string exactly (not a split()-based approximation).
         m = re.match(r"^Users--([^-]+)---claude", rest)
         if m and "claude" in rest:
             username = m.group(1)
@@ -149,7 +145,6 @@ def _decode_one(name: str) -> Optional[Tuple[str, str]]:
 
 
 def _run(projects_dir: str) -> Tuple[List[str], List[str], int]:
-    """Returns (stdout_lines, stderr_lines, exit_code)."""
     stdout_lines: List[str] = []
     stderr_lines: List[str] = []
 
@@ -186,12 +181,7 @@ def _run(projects_dir: str) -> Tuple[List[str], List[str], int]:
     stdout_lines = [line for _, line in sorted(stdout_lines, key=lambda pair: pair[0])]
 
     if not seen:
-        # Reproduces the bash oracle's pre-existing "unbound variable" crash on
-        # `${#seen[@]}` for an empty associative array under `set -u` — see
         # module docstring Negative-spec. The INTENDED WARNING message below
-        # is dead code in the original .sh and is never reached; kept here only
-        # as documentation of intent, not as emitted output.
-        # WARNING — zero candidates decoded from {projects_dir}  (unreachable in oracle)
         return stdout_lines, stderr_lines, 1
 
     count = len(seen)

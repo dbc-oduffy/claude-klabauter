@@ -1,16 +1,3 @@
-"""
-Tests for `coordinator_core.ops._sizing_citation.resolve_sizing_citation` and
-for the `assert_plan_sizing_citation` gate reading through it.
-
-The defect under test: `fleet.archive_terminal_sizings` moves a terminal
-sizing to `archive/sizings/<month>/` and rewrites no citation, so every plan
-citing it went dangling — loudly at the gate, silently at
-`dispatch_emit.derive_review_tier`. The FK is archive-agnostic by design, the
-same posture `plan.schema.json`'s `predecessor_handoff` already states.
-
-Neither leg spawns a process: `main` is always called with an explicit
-`--root`, so `git.repo_root.show_toplevel` is never reached.
-"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -42,11 +29,6 @@ def _write_plan(root: Path, cited: str | None = _CITED) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# resolve_sizing_citation
-# ---------------------------------------------------------------------------
-
-
 def test_live_path_resolves(tmp_path: Path):
     live = _write(tmp_path, _CITED, _SIZING_BODY)
     assert resolve_sizing_citation(tmp_path, _CITED) == live.resolve()
@@ -71,8 +53,6 @@ def test_neither_path_resolves_returns_none(tmp_path: Path):
 
 
 def test_ambiguous_archive_match_refuses(tmp_path: Path):
-    """Two same-basename archived records: the resolver cannot say which one
-    the plan meant, so it treats the match exactly like no match."""
     for month in ("2026-07", "2026-08"):
         _write(tmp_path, f"archive/sizings/{month}/2026-08-01-example.yaml", _SIZING_BODY)
     assert resolve_sizing_citation(tmp_path, _CITED) is None
@@ -95,11 +75,6 @@ def test_absolute_citation_refuses(tmp_path: Path):
     absolute = outside / "escape.yaml"
     absolute.write_text(_SIZING_BODY, encoding="utf-8")
     assert resolve_sizing_citation(root, absolute.as_posix()) is None
-
-
-# ---------------------------------------------------------------------------
-# assert_plan_sizing_citation reading through the fallback
-# ---------------------------------------------------------------------------
 
 
 def test_gate_passes_on_a_citation_whose_sizing_was_archived(tmp_path: Path, capsys):

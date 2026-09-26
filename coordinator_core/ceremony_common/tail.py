@@ -41,23 +41,6 @@ from typing import Any
 def build_ceremony_close_tail(
     *, post_command_hook_id: str, ceremony_name: str
 ) -> list[dict[str, Any]]:
-    """Builds the ceremony-close tail: the post-command hook directive.
-    Callers pass their own step-numbered id (workday:
-    `d_step10_5_post_command_hook`; workweek: `d_step13_5_post_command_hook`) —
-    this module owns the shape (cli/args/depends_on/already_satisfied),
-    never the numbering. `ceremony_name` is the canonical dashed ceremony
-    name (`"workday-complete"` / `"workweek-complete"`) —
-    `coordinator-ceremony-hook.py` reads it as its one positional arg
-    (`argv[0]`) to resolve which `coordinator.local.md` key to dispatch;
-    omitting it (the pre-2026-07-26 shape, `args=[]`) always resolved an
-    empty ceremony name and silently no-opped regardless of which ceremony
-    ran it (arg-mismatch audit, class (c)).
-
-    The emission-cadence directive this tail used to carry second was
-    removed with the emission artifact itself (2026-08-22 CUT); the tail is
-    a one-element list rather than a scalar so a future close step lands
-    here without re-shaping every caller.
-    """
     return [
         {
             "id": post_command_hook_id,

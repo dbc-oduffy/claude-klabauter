@@ -88,21 +88,10 @@ from coordinator_core.ipc import register_op
 
 _META_OPEN = "export const meta = {"
 
-# Top-level `args` declarations in the SOURCE. Matched at column zero only:
-# an `args` bound inside a function is an ordinary parameter and shadows
-# nothing this op writes, so refusing on it would refuse correct scripts.
 _ARGS_DECLS = ("const args", "let args", "var args")
 
 
 def _meta_block_end(lines: list[str], open_index: int) -> Optional[int]:
-    """Index of the line closing the meta literal, or None if it never closes.
-
-    The block is closed by a `}` at column zero — the same shape the contract
-    checker and every fleet script already use. Brace counting is deliberately
-    NOT used: the meta literal contains description and detail strings full of
-    braces in prose, and a counter over those is the kind of parser that is
-    right until one phase detail mentions a template literal.
-    """
     for i in range(open_index + 1, len(lines)):
         if lines[i].startswith("}"):
             return i
@@ -110,7 +99,6 @@ def _meta_block_end(lines: list[str], open_index: int) -> Optional[int]:
 
 
 def bind_args(source: str, args: dict, source_path: str = "<source>") -> str:
-    """Compose the standalone script text. Pure; raises ValueError on refusal."""
     lines = source.splitlines()
 
     open_index = None

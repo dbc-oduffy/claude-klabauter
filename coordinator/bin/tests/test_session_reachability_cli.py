@@ -1,28 +1,3 @@
-"""test_session_reachability_cli.py — unit test for
-coordinator/bin/session-reachability-cli.py, the CLI trampoline over
-coordinator_core.session.reachability / peer_roster / artifact_owner.
-
-Fixture-based via a stub of the CLI's own `_import_modules` seam -- this
-suite never depends on this machine's real live peer list, and never
-requires the engine root to resolve. Uses `types.SimpleNamespace` fixtures
-rather than the real dataclasses, so this suite pins the CLI's OWN
-attribute-access contract (session_id/name/ref/address/... ) independently
-of coordinator_core.session's internal dataclass shapes -- same
-independence session-liveness-cli's own test suite has from
-coordinator_core.session.liveness.
-
-Asserted per subcommand: one happy-path case whose JSON stdout round-trips
-through `json.loads` and carries the expected fields, one usage-error case
-(exit 2), and (for resolve-address) the "own_session" outcome maps through
-identically to "reachable" -- neither is special-cased.
-
-Loaded by file path (`importlib.machinery.SourceFileLoader`) --
-same load idiom as test_session_liveness_cli.py's `_load_cli_module`.
-
-Spec backlink: cross-repo/inbox/2026-08-13-doe-claude-em-peer-roster-
-doctrine-reply.md § Counter 1, state/handoffs/2026-08-13-session-owner-
-reachability-registry.md.
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -77,10 +52,6 @@ def stub_import_modules():
         artifact_owner=None,
         messaging_gate=_real_messaging_gate,
     ):
-        # `messaging_gate` defaults to the REAL module rather than a stub: it
-        # is a pure read of a mapping this fixture does not touch, so no test
-        # needs to fake it, and defaulting it to `None` would make every
-        # existing resolve-address case fail on an unrelated attribute error.
         _cli._import_modules = lambda: (
             reachability,
             peer_roster,
@@ -91,10 +62,6 @@ def stub_import_modules():
     yield _apply
     _cli._import_modules = orig
 
-
-# ---------------------------------------------------------------------------
-# resolve-address
-# ---------------------------------------------------------------------------
 
 def test_resolve_address_reachable_happy_path(stub_import_modules, capsys):
     result = _resolve_result("reachable", session_id="peer-sid", address="peer-repo-ab12 [abcdef]")
@@ -113,11 +80,6 @@ def test_resolve_address_reachable_happy_path(stub_import_modules, capsys):
         "reason": None,
         "candidates": [],
     }
-    # Popped rather than pinned to a value: the gate block is about the
-    # CALLING session, so its `state` depends on the environment this suite
-    # runs under, not on the stubbed resolver result. Its SHAPE is the
-    # contract here; its values are pinned in
-    # coordinator_core/session/tests/test_messaging_gate.py.
     assert set(gate) == {"state", "requested", "inbox_bound", "note"}
 
 
@@ -135,8 +97,6 @@ def test_resolve_address_own_session_maps_through_unchanged(stub_import_modules,
 
 
 def test_resolve_address_not_reachable_exits_0(stub_import_modules, capsys):
-    # not_reachable is a legitimate answer, not an error -- never a
-    # nonzero exit (module header comment's exit-code table).
     result = _resolve_result("not_reachable", reason="no-live-record")
     reachability = types.SimpleNamespace(resolve_address=lambda sid: result)
     stub_import_modules(reachability=reachability)
@@ -149,11 +109,6 @@ def test_resolve_address_not_reachable_exits_0(stub_import_modules, capsys):
 
 
 def test_resolve_address_not_reachable_reasons_are_distinguishable(stub_import_modules, capsys):
-    # The whole point of the `reason` slot on this surface: a session that
-    # is live and busy but unaddressable must not print the same thing as
-    # a session that does not exist. Both are `outcome == "not_reachable"`,
-    # so `outcome` alone cannot carry the distinction -- the CLI's own
-    # stdout has to.
     unaddressable = _resolve_result("not_reachable", reason="peer-messaging-unavailable")
     stub_import_modules(reachability=types.SimpleNamespace(resolve_address=lambda sid: unaddressable))
     assert _cli.main(["resolve-address", "live-but-unaddressable-sid"]) == 0
@@ -170,10 +125,6 @@ def test_resolve_address_not_reachable_reasons_are_distinguishable(stub_import_m
 
 
 def test_resolve_address_reason_is_passed_through_never_re_derived(stub_import_modules, capsys):
-    # The resolver owns the classification. The CLI must not synthesize a
-    # reason from `outcome`, nor tolerate its absence with a default --
-    # a serializer reading `result.reason` through `getattr(..., None)`
-    # would silently report "no reason" for a resolver that had one.
     result = _resolve_result("not_reachable", reason="peer-inbox-absent")
     stub_import_modules(reachability=types.SimpleNamespace(resolve_address=lambda sid: result))
 
@@ -210,10 +161,6 @@ def test_resolve_address_missing_arg_exits_2(stub_import_modules):
     assert rc == 2
 
 
-# ---------------------------------------------------------------------------
-# peer-roster
-# ---------------------------------------------------------------------------
-
 def _peer_row(**overrides):
     base = dict(
         session_id="peer-sid",
@@ -246,8 +193,6 @@ def test_peer_roster_happy_path(stub_import_modules, capsys):
 
     assert rc == 0
     assert captured["repo_root"] is None
-    # `raise_on_failure=True` is what keeps an unreadable registry from
-    # degrading to a roster indistinguishable from a genuinely empty one.
     assert captured["raise_on_failure"] is True
     payload = json.loads(capsys.readouterr().out)
     assert payload["rows"][0]["session_id"] == "peer-sid"
@@ -274,10 +219,6 @@ def test_peer_roster_repo_flag_forwards_verbatim(stub_import_modules, capsys):
 
 
 def test_peer_roster_rows_carry_messaging_available(stub_import_modules, capsys):
-    # An `address: null` row with no other signal reads as "this peer is
-    # gone". `messaging_available: false` is what tells the reader the
-    # harness's cross-session inbox is unbound box-wide instead -- so it
-    # has to reach the CLI's own stdout, on every row.
     rows = [
         _peer_row(session_id="peer-a", address=None, messaging_available=False),
         _peer_row(session_id="peer-b", address=None, messaging_available=False),
@@ -292,9 +233,6 @@ def test_peer_roster_rows_carry_messaging_available(stub_import_modules, capsys)
     payload = json.loads(capsys.readouterr().out)
     assert [r["messaging_available"] for r in payload["rows"]] == [False, False]
     assert all(r["address"] is None for r in payload["rows"])
-    # Negative-spec: not a per-row reachability claim. A `True` value with
-    # an unresolved address is the per-peer case and must serialize just as
-    # faithfully -- the CLI never reconciles the two into one field.
     stub_import_modules(
         peer_roster=types.SimpleNamespace(
             build_roster=lambda repo_root, *, raise_on_failure=False: [
@@ -309,9 +247,6 @@ def test_peer_roster_rows_carry_messaging_available(stub_import_modules, capsys)
 
 
 def test_peer_roster_row_serializer_carries_every_dataclass_field(stub_import_modules, capsys):
-    # Guards the drop this CLI's separate serializer is prone to: it is a
-    # hand-written mirror of the op veneer, so a field added to `PeerRow`
-    # lands on the wire only if this dict is edited too.
     stub_import_modules(
         peer_roster=types.SimpleNamespace(
             build_roster=lambda repo_root, *, raise_on_failure=False: [_peer_row()]
@@ -346,10 +281,6 @@ def test_peer_roster_repo_flag_missing_value_exits_2(stub_import_modules):
     assert rc == 2
 
 
-# ---------------------------------------------------------------------------
-# artifact-owner
-# ---------------------------------------------------------------------------
-
 def test_artifact_owner_happy_path(stub_import_modules, capsys):
     owner_result = _resolve_result("reachable", session_id="owner-sid", address="owner-repo-ab12 [abcdef]")
     owner_record = types.SimpleNamespace(
@@ -378,9 +309,6 @@ def test_artifact_owner_happy_path(stub_import_modules, capsys):
 
 
 def test_artifact_owner_file_error_exits_0(stub_import_modules, capsys):
-    # A read/parse failure degrades to owners=[] with file_error set --
-    # never a nonzero exit (this is a read, not a resolution failure of
-    # this trampoline itself).
     artifact_result = types.SimpleNamespace(
         artifact_path="nope.md", owners=[], file_error="[Errno 2] No such file or directory: 'nope.md'"
     )
@@ -401,10 +329,6 @@ def test_artifact_owner_missing_arg_exits_2(stub_import_modules):
     assert rc == 2
 
 
-# ---------------------------------------------------------------------------
-# Cross-cutting
-# ---------------------------------------------------------------------------
-
 def test_missing_subcommand_exits_2():
     rc = _cli.main([])
     assert rc == 2
@@ -417,9 +341,6 @@ def test_unknown_subcommand_exits_2(stub_import_modules):
 
 
 def test_help_flag_exits_0_without_importing():
-    # --help must short-circuit before _import_modules is ever called --
-    # asserted by NOT stubbing it and confirming no ImportError/attribute
-    # error surfaces (mirrors session-liveness-cli's own --help contract).
     rc = _cli.main(["--help"])
     assert rc == 0
 
@@ -434,10 +355,7 @@ def test_transport_failure_maps_to_exit_3(stub_import_modules, monkeypatch):
 
 
 def test_resolve_address_runtime_raise_maps_to_exit_3(stub_import_modules, capsys):
-    # A runtime raise from the wrapped resolve_address call (e.g. a
-    # harness_registry.snapshot() I/O error) is a state the module header's
     # exit-code table names exhaustively as _TRANSPORT_FAIL -- never an
-    # uncaught traceback exiting 1 where JSON was promised on stdout.
     def _raise(sid):
         raise OSError("registry directory unreadable")
 
@@ -483,12 +401,6 @@ def test_artifact_owner_runtime_raise_maps_to_exit_3(stub_import_modules, capsys
 
 
 def test_resolve_address_carries_caller_messaging_gate(stub_import_modules, capsys):
-    # A `not_reachable` / `peer-messaging-unavailable` pair reads identically
-    # whether nothing on this box ever asked the harness to open its
-    # cross-session inbox or whether this session asked and it did not open.
-    # Only the second is a claude-klabauter defect, and only this block separates them
-    # -- three repos read the collapsed rendering as "the remote GrowthBook
-    # flag is still off" and one planned around a human relay on it.
     result = _resolve_result("not_reachable", reason="peer-messaging-unavailable")
     stub_import_modules(
         reachability=types.SimpleNamespace(resolve_address=lambda sid: result),
@@ -511,10 +423,6 @@ def test_resolve_address_carries_caller_messaging_gate(stub_import_modules, caps
 
 
 def test_caller_messaging_gate_is_serialized_by_the_owning_module(stub_import_modules, capsys):
-    # Serialized through `messaging_gate.to_dict`, never hand-rolled here --
-    # that is what keeps this trampoline and
-    # coordinator_core/ops/session_resolve_address.py from drifting on the
-    # payload shape, which the module header pins as a contract.
     seen = {}
 
     def _to_dict(gate):
@@ -534,9 +442,6 @@ def test_caller_messaging_gate_is_serialized_by_the_owning_module(stub_import_mo
 
 
 def test_peer_roster_rows_do_not_carry_the_caller_gate(stub_import_modules, capsys):
-    # The gate block is self-scoped. A roster row is about a PEER, whose
-    # environment is not knowable from here -- attaching it there would be
-    # the confidently-wrong shape reachability.py's Anti-scope forbids.
     peer_roster = types.SimpleNamespace(
         build_roster=lambda repo_root, *, raise_on_failure=False: [_peer_row()]
     )

@@ -115,12 +115,9 @@ except ImportError:  # pragma: no cover - degrade gracefully if module moves
 
 HOOK_NAME = "platform-localize"
 
-# Extension points -- kept empty to match the oracle 1:1 (see negative-spec).
 EXTERNAL_MARKETPLACES: Dict[str, str] = {
-    # Example: "my-addon": "repos.my_addon",
 }
 PLUGIN_INFRA_REQUIREMENTS: Dict[str, str] = {
-    # Example: "my-plugin@my-marketplace": "repos.my_repo",
 }
 
 COORDINATOR_MP = "coordinator-claude"
@@ -128,15 +125,9 @@ COORDINATOR_GITHUB_REPO = "dbc-oduffy/coordinator-claude"
 
 _REGISTRY_LINE_RE = re.compile(r'^"?([^"=]+)"?\s*=\s*"([^"]*)"')
 
-#: Generator-provenance declaration: this install-time localizer patches
 #: settings.local.json / known_marketplaces.json under CLAUDE_HOME (the
-#: operator's ~/.claude), entirely outside this repo's tracked tree.
 GENERATES: list = []
 
-
-# ---------------------------------------------------------------------------
-# unit1 -- registry.local.toml read + marketplace discovery
-# ---------------------------------------------------------------------------
 
 def resolve_registry_paths(env: Optional[Dict[str, str]] = None) -> List[str]:
     """Resolve the machine-local registry file paths, precedence-ordered
@@ -159,10 +150,6 @@ def resolve_registry_paths(env: Optional[Dict[str, str]] = None) -> List[str]:
 
 
 def read_registry(registry_paths: List[str]) -> Dict[str, str]:
-    """Per-key precedence merge over the precedence-ordered registry files:
-    an earlier file's non-empty value wins; later files fill keys the earlier
-    ones left absent or empty (empty-string-is-miss, matching
-    `machine_resolver.registry_get`)."""
     merged: Dict[str, str] = {}
     for path in registry_paths:
         for key, val in read_registry_local_toml(path).items():
@@ -172,7 +159,6 @@ def read_registry(registry_paths: List[str]) -> Dict[str, str]:
 
 
 def read_registry_local_toml(registry_local_path: str) -> Dict[str, str]:
-    """Simple line parser mirroring the oracle: only `key = "value"` rows."""
     registry: Dict[str, str] = {}
     if not os.path.isfile(registry_local_path):
         return registry
@@ -186,15 +172,11 @@ def read_registry_local_toml(registry_local_path: str) -> Dict[str, str]:
                 if m:
                     registry[m.group(1).strip()] = m.group(2).strip()
     except OSError as exc:
-        # isfile() above already confirmed the path exists, so a failure
-        # here (permission, race deletion, I/O error) is a genuine anomaly
-        # rather than the ordinary "no registry yet" case -- worth naming.
         sys.stderr.write(f"[{HOOK_NAME}] registry read failed for {registry_local_path}: {exc}\n")
     return registry
 
 
 def repo_available(registry: Dict[str, str], key: str) -> bool:
-    """Check if a registry repo key points to a directory that exists on disk."""
     val = registry.get(key, "").strip()
     return bool(val and os.path.isdir(val))
 
@@ -217,10 +199,6 @@ def discover_marketplace_dirs(plugins_dir: str, registry: Dict[str, str]) -> Dic
     return marketplace_dirs
 
 
-# ---------------------------------------------------------------------------
-# unit2 -- settings.local.json + known_marketplaces.json patch
-# ---------------------------------------------------------------------------
-
 def read_json_file(path: str) -> Dict[str, Any]:
     if not os.path.isfile(path):
         return {}
@@ -232,13 +210,6 @@ def read_json_file(path: str) -> Dict[str, Any]:
 
 
 def atomic_write(path: str, content: str) -> None:
-    """Write content to path atomically via tmp + os.replace.
-
-    Preserves the target's prior permission bits (A5 hardened rule) when a
-    file already exists at `path` -- os.replace does not carry mode bits
-    from a freshly-`open(...,"w")`-ed temp file, so a bare os.replace would
-    silently strip any non-default mode on rewrite.
-    """
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8", newline="\n") as f:
@@ -285,7 +256,6 @@ def build_local_settings(
 
 
 def write_settings_local_if_changed(settings_local_path: str, local_settings: Dict[str, Any]) -> bool:
-    """Returns True if a write occurred."""
     new_content = json.dumps(local_settings, indent=2) + "\n"
     existing_content = ""
     if os.path.isfile(settings_local_path):
@@ -293,11 +263,6 @@ def write_settings_local_if_changed(settings_local_path: str, local_settings: Di
             with open(settings_local_path, encoding="utf-8") as f:
                 existing_content = f.read()
         except OSError as exc:
-            # isfile() above already confirmed the path exists, so this is
-            # a genuine anomaly (permission, race deletion, I/O error), not
-            # ordinary "no settings.local.json yet" -- existing_content
-            # stays "" and the write below self-heals by overwriting, but
-            # the anomaly is still worth naming.
             sys.stderr.write(f"[{HOOK_NAME}] settings.local.json read failed for {settings_local_path}: {exc}\n")
     if new_content != existing_content:
         atomic_write(settings_local_path, new_content)
@@ -404,8 +369,6 @@ def patch_known_marketplaces(
     plugins_dir: str,
     claude_home: str,
 ) -> Tuple[bool, List[str]]:
-    """Patch known_marketplaces.json in place on disk. Returns
-    (write_occurred, warning_messages)."""
     existing_km = read_json_file(known_mp_path)
     now_iso = _now_iso()
     warnings: List[str] = []
@@ -427,10 +390,6 @@ def patch_known_marketplaces(
 
     return changed, warnings
 
-
-# ---------------------------------------------------------------------------
-# entrypoint
-# ---------------------------------------------------------------------------
 
 def run(claude_home: str, plugins_dir: str, settings_local_path: str, known_mp_path: str, registry_paths: List[str]) -> None:
     registry = read_registry(registry_paths)

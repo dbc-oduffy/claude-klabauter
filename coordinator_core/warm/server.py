@@ -179,10 +179,6 @@ from __future__ import annotations
 
 import concurrent.futures
 import faulthandler
-# `concurrent.futures.process` is a LAZY submodule attribute: referencing it as
-# `concurrent.futures.process.BrokenProcessPool` inside an `except` clause raises
-# AttributeError until something has already built a ProcessPoolExecutor. Imported
-# eagerly so the recovery path cannot fail on the way to handling a failure.
 from concurrent.futures.process import BrokenProcessPool
 import json
 import multiprocessing
@@ -219,15 +215,7 @@ from dataclasses import replace
 from coordinator_core.warm.caller_context import CallerContext
 from coordinator_core.warm.engine_root import current_engine_clone
 from coordinator_core.warm.entry_seam import per_request_state
-# Reached into directly, not duplicated, despite this module's own
-# negative-spec preferring a local copy for a one-line peer computation
-# (see `_engine_clone_root`'s docstring): `_op_may_mutate`'s fail-closed
 # classification and `WARM_DISPATCH_INDETERMINATE`'s error code are
-# safety-critical to keep byte-identical between client and server -- a
-# drifted copy here could let the two sides disagree about which ops are
-# safe to re-run, which is exactly the double-execution hazard this
-# import exists to prevent. `client.py` does not import this module (see
-# its own module docstring), so this edge is acyclic.
 from coordinator_core.warm.client import (
     MUTATION_READ_DEADLINE_SECS,
     WARM_DISPATCH_INDETERMINATE,
@@ -250,7 +238,6 @@ __all__ = [
 # UNTRUSTED CALLER ERROR -- a request carrying no `_engine_token` at all.
 # Distinct from `skew.ENGINE_SKEW` (-32002, a PRESENT token that disagrees
 # with this server's live one) and from `ipc.STRUCTURAL_PIN_ERROR` (-32001):
-# neither fires here, because there is no token to compare. Next free slot
 # in the app-defined range JSON-RPC 2.0 §5.1 reserves (`ipc.py`'s own
 # comment); `WARM_DISPATCH_INDETERMINATE` already claimed -32004.
 UNTRUSTED_CALLER_ERROR = -32003
@@ -259,187 +246,57 @@ UNTRUSTED_CALLER_ERROR = -32003
 # `COORDINATOR_SETTINGS_HOME` this server does not serve. Next free slot after
 # -32007 (`ipc.ENTRYPOINT_NOT_WARM_LOADABLE_ERROR`); mirrored in
 # `warm/door/door_core.h` as `JSONRPC_SETTINGS_HOME_MISMATCH`, which is what lets
-# the native door classify it as provably undispatched and run the call cold.
-# Distinct from every code above it in kind: those are statements about the
-# REQUEST (unparseable, untrusted, skewed, not warm-loadable); this one is a
-# statement about THIS SERVER -- the request is well-formed and authorized, and
-# this process simply is not the one that can answer it.
 SETTINGS_HOME_MISMATCH_ERROR = -32008
 
 # DISPATCH KEY TOMBSTONED -- `dispatch_ack.AckStore.admit` refused this key:
-# it is already in the store (admitted, stamped, or tombstoned), or it is at
-# or below the store's `low_water_ns`/before its `boot_ns`. Distinct from
 # `WARM_DISPATCH_INDETERMINATE`: that code means "outcome unknown, do not
-# re-run"; this one means "this exact key has already been asked about (or
-# admitted) once", which is a caller replaying a frame it should not replay.
-# Deliberately absent from `door_core.c :: is_provably_undispatched` (C2 of
-# the spec plan) -- the door mints a fresh key every call, so a
-# door-originated frame never meets this code, and adding it there would
 # license a cold re-run the door has no basis for. Next free slot after
-# -32008.
 DISPATCH_KEY_TOMBSTONED_ERROR = -32009
 
-# The `warm.request_status` method name -- intercepted in `_serve_line`
-# before `admit`/`dispatch`, never submitted to the pool (contract § 9).
 _REQUEST_STATUS_METHOD = "warm.request_status"
 
-# The private, wire-invisible field a pre-handler refusal inside
-# `_pool_dispatch_worker` marks its own returned envelope with (contract §
-# 3) -- the same rides-the-returned-dict shape `_stderr` already uses.
-# `_pool_dispatch`'s done-callback pops it before the response is written to
-# the connection; it never reaches the wire. No refusal path inside
-# `_pool_dispatch_worker` sets it today (the only pre-handler step there is
-# `_repair_settings_home_to_pristine`, which repairs and does not refuse) --
-# this constant and the done-callback branch that consumes it exist so a
-# future refusal there is covered by construction, per C3's own body.
 _NOT_DISPATCHED_MARKER = "_ack_not_dispatched"
 
-# One `AckStore` per resident engine process (contract § 2) -- constructed at
-# module import time, which is this accept process's own boot. Never
-# disk-backed, never shared across processes: `_pool_dispatch_worker` runs
 # in a SEPARATE process and cannot see this object at all (contract § 1,
-# § 2) -- only the accept process that owns this module instance admits,
-# stamps, or answers a poll.
 _ack_store = dispatch_ack.AckStore()
 
-# How often the idle watchdog re-checks `idle.should_demote` -- independent
-# of request arrival (module docstring's "idle demotion" ownership note).
 # Small relative to both `idle.ZERO_SERVED_DEADLINE_SECS` (90s) and
 # `idle.DEFAULT_IDLE_MINUTES` (15min) so a stranded, zero-invocation server
-# demotes close to its deadline rather than one extra poll interval late.
 _IDLE_WATCHDOG_POLL_SECS = 5.0
 
 # Mirrors `_winapi.ERROR_PIPE_CONNECTED` (535) -- a client already connected
-# before this instance's own `ConnectNamedPipe` call was posted, which is a
-# WIN for a synchronous server, not a failure (the same "already connected"
-# race non-overlapped named-pipe servers always have to tolerate).
 _ERROR_PIPE_CONNECTED = 535
 
 _PIPE_BUFFER_BYTES = 65536
 
 # PENDING LISTENER POOL SIZE -- problem 3 of docs/problems/2026-08-19-the-
-# warm-engine-serves-one-caller-at-a-t.md: `_accept_and_replenish` posts
-# exactly one replacement per accepted connection, so a server that starts
-# with a single pending instance stays at exactly one pending instance for
 # its whole life, regardless of demand. `PIPE_UNLIMITED_INSTANCES` is
-# already passed at both creation sites (this module and `election.py`) --
-# the transport permits a pool, the accept chain just never asked for one.
-#
-# Formula, inputs named (per `docs/wiki/cost-budgets-and-the-kill-
-# disposition.md`'s "derive the bound, don't fit a constant to what the
-# code got away with"): `docs/wiki/machine-load-norm.md` already carries a
-# standing design assumption for exactly this question -- "estimate lock
-# hold time as though 30 callers are queued" -- sized against the same
-# 50-70-average/24-floor load norm this server runs under. A pending
-# listener is a structurally identical bet: how many simultaneous
-# contenders should one shared, short-lived resource be built to absorb
-# without degrading into false-absence errors. Reusing that number rather
-# than deriving a second one keeps the fleet's concurrency assumptions in
-# one place instead of two that can drift apart.
-#
-# Cost per pending instance, so the tradeoff stays legible: one blocked OS
-# thread (parked in a synchronous `ConnectNamedPipe` syscall -- see module
 # docstring's "TRANSPORT MODEL") plus one named-pipe kernel object with a
 # `_PIPE_BUFFER_BYTES` (64 KiB) read+write buffer. 30 of each is a few MB
-# of thread-stack reservation and ~2 MB of pipe buffer, paid only while a
-# server is resident and reclaimed in full by `os._exit(0)` on shutdown --
-# cheap against the alternative this row exists to close: contention being
-# misread as "no server" and converted into spawns (problem 2).
 PENDING_LISTENER_POOL_SIZE = 30
 
-# WORKER POOL SIZE -- the accept-and-queue chunk's own bound (docs/plans/
-# 2026-08-19-the-fired-path-reaches-the-engine.md § C5, R6/R7): the
 # committed baseline (`931d50905`) bounds ACCEPTANCE to
 # `PENDING_LISTENER_POOL_SIZE` pending listeners, but each accept chain
-# still handles its own connection's dispatch inline on the SAME thread
-# that just accepted it, while a fresh replacement thread is spawned
-# immediately for the next accept -- so the set of threads doing dispatch
-# work grows by one per connection under load, unbounded, exactly the
-# shape AC7 forbids ("bounded to a named worker count rather than growing
-# one handler thread per accepted connection"). This constant is that
-# named bound: `_ServerContext._enqueue_connection` puts every accepted
-# connection's `io` object on one `queue.Queue`, and exactly
 # `WORKER_POOL_SIZE` long-lived worker threads (`_worker_loop`) drain it,
-# so dispatch concurrency is capped independently of how fast connections
-# are accepted.
-#
-# Sized against the same `docs/wiki/machine-load-norm.md` standing
 # assumption `PENDING_LISTENER_POOL_SIZE` reuses ("estimate lock hold time
-# as though 30 callers are queued") -- this is the sibling question for
-# the OTHER shared, short-lived resource (a dispatch worker rather than a
-# pending listener): how many simultaneous dispatches should this server
-# be built to absorb before excess arrivals wait in the queue rather than
-# being dropped or spawning an unbounded thread. Reusing the number rather
-# than deriving a second one keeps the fleet's concurrency assumptions in
-# one place. Per this row's own body (P4): the queue's product is
-# guaranteed acceptance and bounded fan-out damage, NOT lower latency --
-# p50 still rises at every worker count P4's prototype swept (1/2/4/8), so
-# this value is a damage bound, not a throughput tune.
 WORKER_POOL_SIZE = 30
 
 # DISPATCH PROCESS POOL SIZE -- C6's own row (docs/plans/2026-08-19-the-fired-
-# path-reaches-the-engine.md), gated on C1's verdict
-# (docs/research/warm-engine-premise/c1-binding-constraint.md): Arm A proved
-# the p50 rise (1.25ms -> 29.17ms across 1->32 threads) reproduces with ZERO
-# transport in the loop -- it is GIL contention inside `dispatch_message`
-# itself running on N concurrent Python THREADS, not the accept/pipe chain.
-# Restructuring the per-request `asyncio.run()` call cannot remove this: the
-# GIL serializes CPU-bound bytecode execution regardless of how many event
-# loops or threads submit work to it, so bytecode-level dispatch concurrency
-# needs OS-level process isolation, not a different threading shape. Reusing
 # `WORKER_POOL_SIZE` keeps one bound instead of a second independently-tuned
-# constant -- the process pool replaces the SAME dispatch-concurrency budget
 # `WORKER_POOL_SIZE` already names (C5's accept-and-queue chunk), it does not
-# add a second one on top of it.
-#
 # CORE-COUNT CAP. `WORKER_POOL_SIZE` bounds an I/O-bound resource -- pending
-# listeners / accept slots -- where 30 costs a kernel handle apiece. This pool
 # bounds OS PROCESSES, each of which preloads the op registry
-# (`_worker_process_init`) and was measured at ~78 MB RSS.
-# `ProcessPoolExecutor` spawns lazily per `submit()` up to `max_workers`, so on
-# a small box a burst of concurrent dispatches materialises all 30: a
-# 4-core/16 GB container was observed holding 1 parent + 30 children, ~2.4 GB
-# of RSS, for a pool that C1's own measurement says plateaus at roughly
-# core-count concurrency ("~1000-1100/s from 4 threads up", module docstring).
-# Oversubscribing 4 cores 7.5x buys no throughput and is not the damage bound
-# the constant above is reasoning about. Capping at the core count leaves every
 # box with >=30 cores exactly where it was, and leaves WORKER_POOL_SIZE /
 # PENDING_LISTENER_POOL_SIZE / ACCEPTOR_POOL_SIZE -- the cheap I/O-bound bounds
-# that genuinely answer "how many queued callers" -- untouched.
 DISPATCH_PROCESS_POOL_SIZE = min(WORKER_POOL_SIZE, max(1, os.cpu_count() or 1))
 
 # ACCEPTOR POOL SIZE -- the POSIX accept layer's own bound
-# (`_ServerContext._start_acceptor_pool`). Reuses
 # `PENDING_LISTENER_POOL_SIZE` rather than deriving a second number,
-# because it answers the same question that constant answers on Windows:
-# how many simultaneous arrivals should this server be able to take off
-# the kernel at once. It is NOT the same THING, and reading it as one
-# would misprice both. A Windows pending listener is a kernel pipe
-# instance plus a blocked thread, and its count caps how many clients can
-# connect at all before they see a busy error. A POSIX acceptor is only a
-# blocked thread: the kernel's own `listen()` backlog
 # (`election.UNIX_LISTEN_BACKLOG`, 128) is what caps simultaneous
-# arrivals, and this constant caps only how fast they are drained off it
-# into the shared queue. Sized alike because the load norm behind both is
-# the same one (docs/wiki/machine-load-norm.md's "as though 30 callers are
-# queued"); named separately because the cost per unit and the failure
-# mode at the bound are not.
 ACCEPTOR_POOL_SIZE = PENDING_LISTENER_POOL_SIZE
 
 
 class InFlightCounter:
-    """Thread-safe in-flight request counter.
-
-    The `in_flight_count` callable `warm.lifecycle.begin_shutdown` /
-    `drain_and_exit` poll to learn when a drain has completed -- one
-    instance per server process, incremented when a connection's request is
-    accepted for processing and decremented as soon as that request's
-    response has been written (not when the connection object is closed),
-    so a request that itself triggers the drain (a skew-evicting request)
-    has already released its own slot before `drain()` starts polling for
-    zero -- see `_serve_line`'s `_release` closure, which is the one call
-    site that matters for avoiding a self-deadlock here.
-    """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -468,9 +325,6 @@ class _FrameError(Exception):
 
 
 def _engine_clone_root() -> Path:
-    """This server process's own resolved engine-clone root -- collapsed
-    onto the single shared definition, `engine_root.current_engine_clone()`
-    (plan 2026-08-19-an-engine-root-is-a-stamped-build § C3)."""
     return current_engine_clone()
 
 
@@ -519,15 +373,6 @@ def _parse_frame(raw_line: bytes) -> dict:
 
 
 def _spawn_count_or_none() -> Optional[int]:
-    """Process-local spawn count, or ``None`` on any failure.
-
-    Mirrors `coordinator_core.ipc._spawn_count_or_none`'s shape (try/except,
-    `None`-not-`0` on failure) for the two `warm/server.py` telemetry sites
-    below. `spawn_counter.spawn_count()` is documented never to raise, but
-    that safety lives in `spawn_counter.py`'s own contract, not here -- wrap
-    for defense-in-depth so a future violation of that contract costs one
-    telemetry row, never a dispatch.
-    """
     try:
         return _spawn_counter.spawn_count()
     except Exception:
@@ -535,29 +380,12 @@ def _spawn_count_or_none() -> Optional[int]:
 
 
 def _spawn_delta(start: Optional[int], end: Optional[int]) -> Optional[int]:
-    """Spawns between two readings, or ``None`` if either end is unavailable.
-
-    Mirrors `coordinator_core.ipc._spawn_delta`. Trusts, without re-asserting,
-    that `spawn_counter`'s own negative spec holds ("not reset between ops,
-    ever") -- if that global were ever reset mid-measurement this could
-    return a negative delta; not a bug given that contract, but a dependency
-    this function does not defend on its own.
-    """
     if start is None or end is None:
         return None
     return end - start
 
 
 def _stamp_dispatch_outcome(dispatch_key: str, response: Any) -> None:
-    """Stamp `dispatch_key`'s terminal outcome from a handler's own returned
-    envelope (contract § 3). A -32004 here is `ipc._dispatch_message_impl`'s
-    own internal op-timeout (`_timeout_error_envelope`) -- distinguishable
-    from every other error only by that shared code -- and stamps
-    `abandoned`, which reads as unknowable-final, never as `finished`. Any
-    other error stamps `error` (the code travels with the stamp); a result
-    stamps `result`. Never raises: a malformed `response` is treated as
-    `result` rather than crashing the dispatch leg on the caller's behalf.
-    """
     error = response.get("error") if isinstance(response, dict) else None
     if isinstance(error, dict):
         if error.get("code") == WARM_DISPATCH_INDETERMINATE:
@@ -650,32 +478,11 @@ def _run_dispatch(
     from coordinator_core.telemetry.op_latency import new_correlation_id
 
     # THE SETTINGS-HOME GATE (C2, docs/plans/2026-08-31-the-settings-home-
-    # crosses-the-warm-boundary.md). Gated on `isolated=False` -- an isolated
-    # call already gets the caller's home mirrored into its own process's
-    # `os.environ` for the block's duration (`per_request_state`'s own sixth
-    # axis, below), so it needs no refusal; it is the SHARED, unisolated
-    # process (this accept-thread call, or `_pool_dispatch`'s own
-    # `BrokenProcessPool` fallback) that cannot honour two callers' homes at
-    # once and must say so instead of silently answering against its own.
-    # Checked BEFORE any op work -- before `per_request_state` is even
-    # opened -- so a refused request provably never reached `dispatch_
-    # message`; see `_settings_home_refusal`'s own docstring for why that
-    # placement is what lets `door_core.c :: is_provably_undispatched`
-    # re-run the call cold. Moved here from `_serve_line` (C2's own body):
-    # a check that ran only in `_serve_line` never covered the default
-    # `dispatch=` leg `_handle_connection` carries when no explicit
-    # `dispatch=self._pool_dispatch` is bound, nor the fallback above, both
-    # of which call THIS function directly.
     if not isolated and caller is not None and caller.settings_home is not None:
         from coordinator_core._settings_home import settings_home as _resolve_settings_home
 
         served_home = str(_resolve_settings_home())
         if not settings_home_claim.claims_agree(caller.settings_home, served_home):
-            # This gate runs strictly before `dispatch_message` is ever
-            # called (this function's own "BEFORE dispatch" docstring
-            # note) -- the handler provably never ran, so the outcome
-            # stamped for `dispatch_key` is `not-dispatched`, never `error`
-            # (contract § 3).
             if dispatch_key is not None:
                 _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_NOT_DISPATCHED)
             return _settings_home_refusal(msg.get("id") if isinstance(msg, dict) else None, caller.settings_home, served_home)
@@ -684,40 +491,16 @@ def _run_dispatch(
     _handler_stdout = _io.StringIO()
     _handler_stderr = _io.StringIO()
     # C9: process-time measured on THIS thread only, but `WORKER_POOL_SIZE`
-    # threads in this accept process share one interpreter and one
-    # `time.process_time()` clock -- a delta taken here can include CPU spent
     # dispatching a DIFFERENT op on a sibling thread during the same
-    # wall-clock span. That makes this figure process-wide, never this op's
-    # own uncontaminated CPU (contrast `_pool_dispatch_worker` below, which
-    # runs alone in its own process) -- recorded under
     # MEASUREMENT_SCOPE_PROCESS_WIDE so no consumer can mistake it for a
-    # per-op figure. See `coordinator_core.ipc.record_op_process_time`'s own
-    # docstring for the full rationale. The spawn-count delta below is
-    # equally process-wide for the same reason -- `spawn_counter` is one
-    # process-global counter, so a sibling thread's spawns during this same
-    # window land inside this thread's delta too; a reader must apply this
-    # row's own `measurement_scope` to `spawns` exactly as it does to
-    # `process_ms`.
     _t_start = _time.time()
     _process_start = _time.process_time()
     _spawn_start = _spawn_count_or_none()
     _caller_route = "coordinator_core.warm.server._run_dispatch"
-    # Minted here, not inside dispatch_message, so this function's own
-    # process-time row below can carry the SAME corr_id as the
-    # started/complete rows dispatch_message records for this call, making the
-    # two row families for one dispatch joinable on that shared id.
     _corr_id = new_correlation_id()
     session_id = caller.session_id if caller is not None else None
     caller_pid = caller.pid if caller is not None else None
     env_for_bind = caller.env if caller is not None else None
-    # `session_id`/`settings_home` are ALSO passed (not only `env`): a
-    # `CallerContext` built directly (e.g. via `resolve_caller_context`,
-    # bypassing `_serve_line`'s `merge_env_axis` join) carries these two
-    # fields but no `env` mapping -- `per_request_state`'s own merge folds
-    # them in exactly as it does for any other caller of the legacy kwargs.
-    # `caller.env` (when present) already supersedes them for `_serve_line`
-    # callers, since `merge_env_axis` derives `caller.session_id`/
-    # `caller.settings_home` FROM the merged env in the first place.
     try:
         with per_request_state(
             env=env_for_bind,
@@ -750,29 +533,7 @@ def _run_dispatch(
         )
 
     # The op's diagnostic lines ride the TRANSPORT frame, never `result` — the
-    # wire envelope is frozen (contract §2.1) and a setup error is defined to
-    # carry no reason field inside it. `_stderr` is a sibling of `result`,
-    # popped by `warm.client` before the response reaches any consumer, so
-    # nothing downstream of the client can observe a shape a cold spawn lacks.
-    # Without this the reason dies on the SERVER's stderr and a warm-served
     # refusal is mute — see `entry_seam`'s DIAGNOSTIC-axis note for the report
-    # that found it. Captured stdout is appended after the existing
-    # diagnostics lines, same field, same relay -- see this function's own
-    # "STDOUT CAPTURE" note above.
-    #
-    # STDERR CAPTURE (C6, root cause 1). `emit_diagnostic`'s 3 call sites are
-    # not the only place a well-formed-but-refusing op writes its diagnostic
-    # sentence to `sys.stderr` -- 1512 other sites across the tree do the same
-    # thing directly, and none of them will ever be migrated (see this
-    # chunk's own body: bridging real stderr covers all 1512 without touching
-    # any of them). Without this capture those sentences land on THIS
-    # process's own stderr, which a resident, normally-detached warm server
-    # has no reader for, and `cc_invoke.route_mutation`'s `RouteMutationError.
-    # op_stderr` -- built from the child's captured stderr on the cold path --
-    # is silently empty on the warm path instead. Folded into the SAME
-    # `_stderr` sibling field as stdout and `diagnostics`, so `warm.client`'s
-    # existing unconditional pop-and-relay (line ~777) needs no second wire
-    # change to carry it through.
     _captured = _handler_stdout.getvalue()
     _captured_stderr = _handler_stderr.getvalue()
     _stderr_lines = list(diagnostics)
@@ -867,21 +628,12 @@ def _pool_dispatch_worker(msg: dict, caller: Optional[CallerContext]) -> dict:
     diagnostics: list = []
     _handler_stdout = _io.StringIO()
     _handler_stderr = _io.StringIO()
-    # C9: this function runs entirely inside a `ProcessPoolExecutor` worker
-    # process, one task at a time by the pool's own contract (this
-    # function's own docstring above) -- a `time.process_time()` delta taken
-    # around the dispatch call is that op's own CPU, uncontaminated by any
     # peer (peers run in SEPARATE worker processes). Recorded under
     # MEASUREMENT_SCOPE_PER_OP_PROCESS -- contrast `_run_dispatch` above,
-    # whose accept-process threads share one interpreter and one clock.
     _t_start = _time.time()
     _process_start = _time.process_time()
     _spawn_start = _spawn_count_or_none()
     _caller_route = "coordinator_core.warm.server._pool_dispatch_worker"
-    # Minted here, not inside dispatch_message, so this function's own
-    # process-time row below can carry the SAME corr_id as the
-    # started/complete rows dispatch_message records for this call, making the
-    # two row families for one dispatch joinable on that shared id.
     _corr_id = new_correlation_id()
     session_id = caller.session_id if caller is not None else None
     caller_pid = caller.pid if caller is not None else None
@@ -918,11 +670,6 @@ def _pool_dispatch_worker(msg: dict, caller: Optional[CallerContext]) -> dict:
             caller=_caller_route,
         )
 
-    # STDERR CAPTURE (C6) -- same rationale as `_run_dispatch`'s own note:
-    # this worker's real `sys.stderr` (bound to `os.devnull` by
-    # `_bind_null_std_streams` under a `pythonw.exe` spawn) is where the
-    # other 1512 non-`emit_diagnostic` sites write, and it has no reader
-    # unless captured here.
     _captured = _handler_stdout.getvalue()
     _captured_stderr = _handler_stderr.getvalue()
     _stderr_lines = list(diagnostics)
@@ -935,12 +682,8 @@ def _pool_dispatch_worker(msg: dict, caller: Optional[CallerContext]) -> dict:
     return response
 
 
-#: Ceiling on how long `_pool_dispatch` blocks its connection thread waiting for
 #: a pool worker's result. NEGATIVE SPEC: never longer than the client's own
 #: `MUTATION_READ_DEADLINE_SECS` -- a longer server deadline just holds a
-#: thread for a caller that already gave up. ONE ceiling for every op,
-#: deliberately: per-op ceilings would shave the abandoned-read residue at the
-#: cost of a second deadline table that can disagree with the client's.
 _POOL_RESULT_DEADLINE_SECS = MUTATION_READ_DEADLINE_SECS
 
 
@@ -958,8 +701,6 @@ _POOL_BROKEN_INDETERMINATE_MESSAGE = (
 
 
 #: A DETERMINATE refusal: the request queued past `_POOL_RESULT_DEADLINE_SECS`
-#: and was cancelled before any worker picked it up. Worded so it cannot be read
-#: as the outcome-unknown case, because the two demand opposite responses.
 _POOL_NOT_STARTED_MESSAGE = (
     "warm dispatch not started: the request waited {0:.0f}s in the warm engine's "
     "dispatch queue and was withdrawn before any worker ran it. Nothing was "
@@ -1004,11 +745,6 @@ def _stamp_pool_future(dispatch_key: str, future: "concurrent.futures.Future") -
         _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_WORKER_LOST)
         return
     if exc is not None:
-        # Some other worker-side exception `_pool_dispatch_worker` itself
-        # never returns as an envelope (should not happen in practice --
-        # that function's own contract is to always return a dict). Leave
-        # unstamped rather than guess at an outcome vocabulary this store
-        # does not define.
         return
     try:
         result = future.result()
@@ -1078,12 +814,7 @@ def _declare_execution_route() -> None:
     os.environ[op_latency.ROUTE_ENV] = op_latency.WARM_SERVER
 
 
-#: Test-isolation overrides an op honours only in a CALLING process
 #: (`op_latency.execution_route() == IN_PROCESS`), never in a long-lived
-#: server that inherited them from whoever spawned it. Defense in depth
-#: alongside each op's own route check (`queue_append._output_root_override`,
-#: `queue_promote._outbox_root_override`) -- dropped here so a future op that
-#: forgets its own route check still cannot read a stale one. Enumerated by
 #: grepping `PYTEST_CURRENT_TEST` across `coordinator_core/ops`.
 _TEST_HARNESS_ENV_KEYS = (
     "PYTEST_CURRENT_TEST",
@@ -1123,22 +854,13 @@ def _scrub_caller_prefixed_env() -> None:
 
 
 #: Filename in the per-clone svc dir that a stack dump is written to. A SEPARATE
-#: file from `telemetry.jsonl`, which is one row per server LIFE -- a dump is
-#: free-form multi-thread text, appended at an operator's request, and mixing the
-#: two would make neither parseable.
 STACK_DUMP_FILENAME = "stack-dump.txt"
 
-#: Module-level so the file object outlives `_register_stack_dump_signal`'s frame.
 #: `faulthandler.register` keeps only a file DESCRIPTOR; if the object it came
-#: from is garbage-collected the fd closes and the handler writes into a closed
-#: or, worse, a recycled descriptor.
 _STACK_DUMP_FILE = None
 
 
 def _stack_dump_path(engine_root=None):
-    """`<svc dir>/stack-dump.txt` -- beside the breadcrumb, never inside the
-    engine clone (`breadcrumb.svc_dir`'s own ruling: `state/` must not exist in
-    a publish mirror, and the engine runs out of one)."""
     return breadcrumb.svc_dir(engine_root) / STACK_DUMP_FILENAME
 
 
@@ -1176,14 +898,9 @@ def _register_stack_dump_signal(engine_root=None) -> "str | None":
     try:
         path = _stack_dump_path(engine_root)
         path.parent.mkdir(parents=True, exist_ok=True)
-        # Line-buffered and append: several dumps over one server life must
-        # accumulate rather than truncate, and a handler firing mid-write must
-        # not leave the previous dump half-flushed.
         _STACK_DUMP_FILE = open(path, "a", buffering=1, encoding="utf-8", newline="\n")
         faulthandler.register(sig, file=_STACK_DUMP_FILE, all_threads=True, chain=False)
     except Exception:  # noqa: BLE001 -- see docstring; a server that cannot describe itself still serves
-        # Close before dropping the
-        # reference so a failure after open() doesn't leak the fd.
         if _STACK_DUMP_FILE is not None:
             _STACK_DUMP_FILE.close()
         _STACK_DUMP_FILE = None
@@ -1255,10 +972,6 @@ def _wait_for_parent_exit(parent_pid: int) -> None:
         SYNCHRONIZE = 0x00100000
         INFINITE = 0xFFFFFFFF
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        # Declared, not left to ctypes' default int marshalling: a HANDLE is
-        # pointer-width, and only Windows' documented "handle values are
-        # 32-bit-significant" guarantee makes the undeclared form work by
-        # accident. Saying so costs three lines and removes the accident.
         kernel32.OpenProcess.argtypes = [
             ctypes.c_uint32,
             ctypes.c_int,
@@ -1312,38 +1025,6 @@ def _exit_with_parent(parent_pid: int) -> None:
 
 
 def _bind_null_std_streams() -> None:
-    """Give this process writable `sys.stdout`/`sys.stderr` when they are `None`.
-
-    Purpose: a `pythonw.exe`-spawned process (see
-    `_suppress_pool_worker_consoles`) has no console and CPython sets both
-    standard streams to `None`. Op handlers are ordinary library code written
-    against a real interpreter: 138 call sites across 34 modules in
-    `coordinator_core/ops/` reach for the stream OBJECT
-    (`sys.stderr.write(...)`, `.flush()`), which raises `AttributeError` on
-    `None`. Warm-served, that surfaces to the caller as a bare
-    `-32603 Internal error: AttributeError` with an empty stderr, and cold
-    dispatch of the same op succeeds — a divergence between the warm and cold
-    paths, which the warm engine is not allowed to introduce.
-
-    Reported by example-cockpit-repo-em 2026-08-20 against
-    `query-records --type plan`, whose `_apply_plan_filename_filter` warning
-    is one such site; `plan` was simply the first type on their list that
-    writes a diagnostic at all.
-
-    Rebinds to `os.devnull` rather than a buffer: these diagnostics have no
-    reader in a detached worker, and an in-memory sink would grow unbounded
-    for the life of a resident pool.
-
-    Negative-spec:
-        - Does NOT touch a stream that is already bound. A worker that DOES
-          have real stdio (any non-`pythonw` spawn, and every cold-dispatch
-          process) keeps it, so no diagnostic that reaches an operator today
-          is redirected to devnull by this.
-        - Does NOT close or replace `sys.__stdout__`/`sys.__stderr__`.
-        - Is NOT a substitute for an op emitting an operator-facing
-          diagnostic through `logging` or its own result payload. It removes a
-          crash, not the reason those 138 sites are the wrong seam.
-    """
     for name in ("stdout", "stderr"):
         if getattr(sys, name, None) is None:
             setattr(sys, name, open(os.devnull, "w", encoding="utf-8", newline="\n"))
@@ -1389,15 +1070,6 @@ def _repair_settings_home_to_pristine() -> None:
 
 
 def _worker_process_init() -> None:
-    """`ProcessPoolExecutor`'s `initializer=` -- runs once per worker
-    process, before that process ever dispatches a request, so the
-    703ms-first-dispatch op-registry import (`_preload_op_registry`'s own
-    docstring) is paid by a process nobody is waiting for rather than by
-    whichever request happens to land on a freshly-started worker first.
-    Mirrors the main process's own boot-time preload (`main()` step, before
-    `_ServerContext.serve_forever`) for the SAME reason, on the process that
-    now actually does the dispatching.
-    """
     global _worker_pristine_settings_home
     _worker_pristine_settings_home = os.environ.get("COORDINATOR_SETTINGS_HOME")
 
@@ -1684,15 +1356,6 @@ def _serve_line(
         return
 
     if version_state.is_skewed(client_token):
-        # WHICH AXIS, not just that one fired. `is_skewed` evaluates both and
-        # leaves the deciding set behind precisely so this row can name it --
-        # axis 1 (token) means a publish stranded this server, axis 2 (source)
-        # means something edited engine source in the clone serving the fleet,
-        # and an undifferentiated `skew` count sends the next reader at
-        # whichever one they already suspected. `getattr` because
-        # `version_state` is an injected seam here, and a test double
-        # predating `last_skew_axes` must not start failing on an attribute it
-        # has no reason to carry.
         axes = getattr(version_state, "last_skew_axes", ())
         record_exit(
             telemetry.EXIT_REASON_SKEW,
@@ -1708,57 +1371,20 @@ def _serve_line(
         )
         return
 
-    # The field is POPPED, not merely read, like `_engine_token` and
-    # `_caller` above it: `dispatch_message` validates the envelope it is
-    # handed, and transport metadata must never reach an op's params. The
-    # claim itself is carried forward by joining it onto `caller` rather than
-    # compared here -- the comparison now lives in `_run_dispatch`, gated on
-    # `isolated=False`, so it covers every unisolated dispatch leg (the
-    # default `dispatch=` this function itself carries, AND `_pool_dispatch`'s
-    # own `BrokenProcessPool` fallback), not only the one leg `_serve_line`
-    # happens to sit in front of. See `_settings_home_refusal`'s own docstring
-    # for why pre-dispatch placement is load-bearing, and `_run_dispatch`'s
-    # for the new gate itself.
-    #
-    # Costs nothing when nothing is claimed: `request_claim` is a dict lookup
-    # and this server's own `settings_home()` is never resolved here at all
-    # any more -- resolution happens, if at all, inside `_run_dispatch`, once
-    # a claim is actually present on `caller`. The ordinary invocation -- no
-    # override anywhere, which is every user-path call -- still pays exactly
-    # one `dict.pop`.
     claimed_home = settings_home_claim.request_claim(msg)
     msg.pop(settings_home_claim.SETTINGS_HOME_FIELD, None)
     caller = replace(caller, settings_home=claimed_home)
 
     # THE ONE DECLARED-ENV-SET AXIS (C4). Pops the envelope-level `_env`
-    # object (the new door legs' emission, C2/C3) the same way `_caller` and
-    # `_settings_home` are popped above, and folds it onto `caller` via
     # `caller_context.merge_env_axis` -- which DUAL-READS: a request
-    # carrying `_env` uses it verbatim, a request carrying only the legacy
-    # `_caller`/`_settings_home` fields (every `warm.client`/`warm.hook_http`
-    # request today, since neither producer moves to `_env` in this plan --
-    # see `test_envelope_producer_parity.py`) has an equivalent env axis
-    # synthesized from what was already joined onto `caller` above. Popped
-    # unconditionally, even when absent (`None`), so `dispatch_message`
-    # never sees transport metadata leak into an op's params.
     env_payload = msg.pop("_env", None)
     caller = caller_context.merge_env_axis(caller, env_payload)
 
     # THE DISPATCH-ACK KEY (contract § 1, § 9). Popped the same way
-    # `_engine_token`/`_caller`/`_settings_home`/`_env` are popped above --
-    # transport metadata, never an op param. Absent for an unkeyed frame
-    # (an old door, or an old client caught in a rollout skew window): that
-    # frame is dispatched exactly as before this contract existed, and
-    # recorded nowhere (contract § 1).
     dispatch_key = msg.pop("_dispatch_key", None)
     method = msg.get("method") if isinstance(msg, dict) else None
 
     # POLL INTERCEPT (D5, contract § 9). Answered directly from `AckStore`
-    # in THIS accept process, before `admit` and before `dispatch` --
-    # `warm.request_status` is never submitted to the pool (a pool worker
-    # cannot see this process's memory) and never itself subject to
-    # `admit`'s tombstone/skew refusal, so a poll always resolves to one of
-    # the four states, never a -32004.
     if method == _REQUEST_STATUS_METHOD:
         params = msg.get("params")
         poll_key = params.get("key") if isinstance(params, Mapping) else None
@@ -1781,12 +1407,6 @@ def _serve_line(
 
     # ADMIT (D2, D3). Only non-COMPUTE_ONLY methods are recorded, matching
     # `_op_may_mutate`'s own fail-closed rule -- a COMPUTE_ONLY dispatch is
-    # free to re-run and gets no record. Runs AFTER every refusal above that
-    # already proves a frame was never dispatched (untrusted caller, skew)
-    # and BEFORE `dispatch(...)` -- the settings-home refusal is NOT one of
-    # these; it fires later, inside `_run_dispatch`/`_pool_dispatch`'s
-    # `BrokenProcessPool` fallback, and is covered by the `not-dispatched`
-    # stamp there instead (contract § 2).
     if dispatch_key is not None and _op_may_mutate(method):
         try:
             admitted = _ack_store.admit(dispatch_key, method)
@@ -1823,10 +1443,6 @@ def _serve_line(
 
     try:
         # UNKEYED FRAMES CALL `dispatch` EXACTLY AS BEFORE THIS CONTRACT
-        # EXISTED (contract § 1) -- no `dispatch_key=` kwarg at all when
-        # none was sent, so a caller-injected `dispatch=` fake predating
-        # this contract (`test_server_loop.py` et al, none of which accept
-        # a `dispatch_key` kwarg) keeps working unchanged.
         if dispatch_key is not None:
             response = dispatch(msg, caller=caller, dispatch_key=dispatch_key)
         else:
@@ -1883,12 +1499,6 @@ def _handle_connection(
             in_flight.exit()
 
     def _write_flushed(data: bytes) -> None:
-        # A skew-detected write is immediately followed by `close_listener`
-        # and (synchronously, same thread) `drain` -> possibly `os._exit(0)`
-        # -- an unflushed buffered write would never reach the pipe before
-        # the process dies. Every write on this path flushes explicitly
-        # rather than relying on `io.close()`'s implicit flush, which may
-        # never run for exactly that reason.
         io.write(data)
         io.flush()
 
@@ -1932,10 +1542,6 @@ def _create_pipe_instance(name: str, sid: str) -> int:
     import _winapi
 
     # `_PIPE_READMODE_BYTE` is imported, never redefined: `election` carries
-    # the argument and the 8192-byte `-32004` defect it closes, and this site
-    # and `election.elect`'s first-instance creation must not drift. Imported
-    # inside the function for the same reason `_build_security_attributes` is
-    # -- this module is on the resident server's path, not on a caller's.
     from coordinator_core.warm.election import (
         _PIPE_READMODE_BYTE,
         _build_security_attributes,
@@ -1977,11 +1583,6 @@ def _close_handle(handle: int) -> None:
 
 
 def _wrap_handle(handle: int) -> Any:
-    """Wrap a connected pipe HANDLE into the same blocking file-object API
-    the client already reads/writes (`warm.client._open_pipe`), via
-    `msvcrt.open_osfhandle` + `os.fdopen` -- verified end-to-end on this
-    box before landing (throwaway probe, discarded per this repo's probe
-    discipline)."""
     import msvcrt
 
     fd = msvcrt.open_osfhandle(handle, os.O_RDWR | os.O_BINARY)
@@ -1989,26 +1590,11 @@ def _wrap_handle(handle: int) -> Any:
 
 
 def _wrap_socket(conn: Any) -> Any:
-    """POSIX counterpart of `_wrap_handle`: an accepted unix-socket
-    connection as the SAME blocking file-object API `_handle_connection`
-    already drives (`readline` / `write` / `flush` / `close`).
-
-    `conn.close()` immediately after `makefile` is the documented CPython
-    idiom, not a bug: `socket.makefile` takes its own reference to the
-    underlying fd, so the socket stays open until the file object is
-    closed too. Dropping the socket object here is what makes
-    `_handle_connection`'s single `io.close()` in its `finally` release
-    the whole connection -- without it, every served request would leak a
-    socket object for the life of a resident server.
-    """
     io = conn.makefile("rwb")
     conn.close()
     return io
 
 
-#: How long a draining acceptor waits for a late caller's request frame
-#: before dropping it. The caller writes its frame immediately after
-#: connecting, so this bounds only a stalled peer's hold on an acceptor.
 _DRAIN_REFUSAL_READ_SECS = 2.0
 
 
@@ -2056,22 +1642,6 @@ def _refuse_while_draining(conn: Any, *, server_sha: Optional[str]) -> None:
 
 
 class _ServerContext:
-    """Boot-scoped server state: the pipe name, the ACL identity, the
-    version state constructed once, the in-flight counter every connection
-    thread shares, this server life's `warm.telemetry.ServerTelemetry`, and
-    the idle-demotion watchdog.
-
-    `close_listener` / `_drain` are the two callables `_serve_line` binds
-    into `warm.skew.evict_on_skew` for the skew-eviction path; the SAME
-    `close_listener` and a `begin_shutdown`-bound `_idle_tick` are what the
-    idle-demotion watchdog below uses -- both triggers share the single
-    `warm.lifecycle` shutdown guard, so whichever fires first is the only
-    one that ever reaches `_ctx_shutdown`/`os._exit`.
-
-    `engine_root` is threaded through only so `_ctx_shutdown` can unlink
-    THIS clone's breadcrumb (`warm.breadcrumb.svc_dir`'s own per-clone
-    resolution) rather than assuming the caller's cwd.
-    """
 
     def __init__(
         self,
@@ -2088,12 +1658,6 @@ class _ServerContext:
     ):
         self.name = name
         self.sid = sid
-        # POSIX only, both None on Windows: the listening unix socket this
-        # server owns and the path it is bound to, held so `_ctx_shutdown`
-        # can remove that path -- ownership-checked, see there. Every
-        # pre-existing construction omits both and keeps its exact prior
-        # behaviour, which is what `test_server_loop.py`'s direct
-        # `_ServerContext(...)` builds depend on.
         self.listen_socket = listen_socket
         self.endpoint_path = endpoint_path
         self._endpoint_identity = (
@@ -2101,29 +1665,12 @@ class _ServerContext:
         )
         self.version_state = version_state
         self.engine_root = engine_root
-        # The generation token this server's pipe name was built from
-        # (`main()` computes it once and passes it here rather than having
-        # this class re-derive it, so the retirement predicate compares
         # against the token actually EMBEDDED in `self.name` and cannot
-        # drift from it). `None` disables the superseded arm entirely --
-        # the shape every test that constructs a context directly gets,
-        # keeping the idle watchdog's behaviour unchanged for them.
         self.boot_token = boot_token
-        # AC4 (docs/plans/2026-09-06-the-p90-reopens-on-a-measurement-not-a-
-        # rebuild.md, P023-C3): carried through from `main`'s own
-        # `spawn_epoch`/`listener_at` locals solely so `_record_accept_ready`
-        # can compute a third boot timestamp without re-deriving either --
-        # both `None` on every pre-existing construction (including every
-        # direct `_ServerContext(...)` in `test_server_loop.py`), which is
-        # what makes `_record_accept_ready` a no-op for them.
         self.spawn_epoch = spawn_epoch
         self.listener_at = listener_at
         self.in_flight = InFlightCounter()
-        # Pool tasks submitted and not yet settled, counted by the future's
-        # own done-callback rather than by the connection thread. The two
-        # diverge exactly when it matters: a connection thread gives up at
         # `_POOL_RESULT_DEADLINE_SECS` and releases its `in_flight` slot while
-        # the worker process is still running the op. See `drain_outstanding`.
         self._pool_outstanding = InFlightCounter()
         self.telemetry = telemetry.ServerTelemetry()
         self._queue: "queue.Queue[Any]" = queue.Queue()
@@ -2131,30 +1678,10 @@ class _ServerContext:
         self._listening = True
         self._stopped = threading.Event()
         self._idle_watchdog_stop = threading.Event()
-        # `warm.push_cadence`'s THE REPO SET: every distinct worktree root
-        # this server has actually served (`_serve_line`'s
-        # `record_served_repo`), never a disk scan. A `dict` preserves
-        # first-served order (Python 3.7+) purely for deterministic test
-        # output -- iteration order carries no other meaning here, every
-        # sweep visits the whole set.
         self._served_repos_lock = threading.Lock()
         self._served_repos: "dict[Path, None]" = {}
-        # Lazily constructed -- see `_ensure_dispatch_pool`. Left `None`
-        # until a real worker thread actually dispatches through it, so a
-        # test that constructs a `_ServerContext` (or even starts the
-        # worker-thread pool) without ever letting a request reach
-        # `_pool_dispatch` -- the common shape across this module's own
-        # test suite, which monkeypatches `_handle_connection` directly --
-        # never pays for real OS process spawns it does not exercise.
         self._dispatch_pool: Optional["concurrent.futures.ProcessPoolExecutor"] = None
         self._dispatch_pool_lock = threading.Lock()
-        # T1 (docs/plans/2026-09-06-warm-engine-survival-and-door-
-        # measurement.md): the pool bookkeeping `_start_worker_pool` keeps
-        # so `worker_pool_depth()` has something to count. Written once, at
-        # boot, by `_start_worker_pool` alone -- never appended to or
-        # mutated from any other thread -- so `worker_pool_depth()` reading
-        # it from the idle-watchdog thread needs no lock; each `Thread`
-        # object's own `is_alive()` is what varies, not this list.
         self._worker_threads: "list[threading.Thread]" = []
 
     def close_listener(self) -> None:
@@ -2187,19 +1714,10 @@ class _ServerContext:
         self.telemetry.record_invocation(warm=warm)
 
     def record_served_repo(self, repo_root: Any) -> None:
-        """Record one more envelope-carried worktree root into this
-        server's served-repo set -- `warm.push_cadence.on_idle_tick`'s
-        `served_repos` callable (bound via `self.served_repos`) reads this
-        set live on every sweep tick.
-        """
         with self._served_repos_lock:
             self._served_repos[Path(repo_root)] = None
 
     def served_repos(self) -> list:
-        """A snapshot list of every worktree root recorded so far -- a
-        live read at call time, never a value captured once at boot, per
-        `warm.push_cadence.ServedReposFn`'s own contract.
-        """
         with self._served_repos_lock:
             return list(self._served_repos.keys())
 
@@ -2255,31 +1773,16 @@ class _ServerContext:
                 return future.result(timeout=_POOL_RESULT_DEADLINE_SECS)
             except concurrent.futures.TimeoutError:
                 # NEGATIVE SPEC: CANCEL FIRST. `Future.cancel()` succeeds only
-                # on a task no worker has picked up, so a successful cancel
-                # proves the op never ran -- a determinate answer, not the
-                # outcome-unknown shape.
                 if future.cancel():
                     if dispatch_key is not None:
                         _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_NOT_DISPATCHED)
                     return _pool_not_started_envelope(msg)
-                # The task STARTED and is still running: genuinely
-                # indeterminate. `ipc._timeout_error_envelope` classifies via
-                # the same fail-closed `_op_may_mutate` the BrokenProcessPool
-                # branch below uses, so this does not duplicate that predicate.
-                #
                 # NEGATIVE SPEC: NEVER KILL THE WORKER. It may be
-                # mid-mutation, and killing it converts a slow op into a
-                # half-applied one. This bounds how long THIS connection
-                # thread is held, not how long the op runs.
                 return _timeout_error_envelope(
                     msg.get("method"), _POOL_RESULT_DEADLINE_SECS, msg.get("id")
                 )
         except BrokenProcessPool:
             # A ProcessPoolExecutor whose worker died is broken PERMANENTLY --
-            # every later submit() on that instance raises, so without this
-            # the first dead worker fails every request the server ever
-            # receives for its whole idle life. Drop the corpse so the next
-            # request rebuilds a fresh pool.
             with self._dispatch_pool_lock:
                 broken = self._dispatch_pool
                 self._dispatch_pool = None
@@ -2289,71 +1792,25 @@ class _ServerContext:
                 except Exception:
                     pass
 
-            # A dead worker's `future.result()` raises BrokenProcessPool for
-            # its OWN future too, not only for later submissions -- a worker
             # that crashed mid-dispatch may have already PERFORMED the op
-            # (mutation included) before dying with the result unsent. For a
             # COMPUTE_ONLY op that ambiguity is free to resolve by re-running:
-            # degrading to the pre-C6 GIL-bound path costs latency under
-            # concurrency and nothing else (C1's measurement is why the pool
-            # exists, not a reason to prefer a failed dispatch over a slow
             # one). For a MUTATING op it is not free -- re-running here would
-            # be the server unilaterally re-executing a possibly-already-done
-            # mutation, the exact double-execution class this module's own
-            # per-request-state docstring and `warm.client`'s delivered-then-
-            # ambiguous ladder both exist to prevent (a `git commit` that ran
-            # twice under two Commit-Tokens, 2026-08-19). Return the honest
-            # refusal instead; `warm.client`'s pass-through surfaces it to the
-            # caller unchanged, same as a client-detected indeterminate case.
             if _op_may_mutate(msg.get("method")):
                 if dispatch_key is not None:
                     _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_WORKER_LOST)
                 return _pool_broken_indeterminate_envelope(msg)
-            # `isolated=False`, explicitly: this fallback runs the op IN
-            # THIS process, on this connection's own accept-thread -- the
-            # exact threaded, unisolated shape the spike measured 8/8
-            # contaminated (C3's own body) -- so it must take no `os.environ`
-            # borrow, only the thread-safe ContextVar bind. `dispatch_key` is
             # never non-None here in practice: only a MUTATING method is ever
-            # admitted (§ below), and this branch runs only for a
             # COMPUTE_ONLY one -- passed through anyway so this fallback's
-            # own behaviour matches `_run_dispatch`'s general contract, and
-            # existing callers of `_run_dispatch` predating this contract
-            # never expect the kwarg at all.
             if dispatch_key is not None:
                 return _run_dispatch(msg, caller=caller, isolated=False, dispatch_key=dispatch_key)
             return _run_dispatch(msg, caller=caller, isolated=False)
 
     def _ctx_shutdown(self) -> None:
-        """Step 3 of `warm.lifecycle`'s sequence: flush the log, unlink the
-        breadcrumb, close pipe handles. `os._exit(0)` (step 4, run
-        immediately after this by `lifecycle._run_tail`) reclaims every
-        open pipe handle at the OS level regardless, so this step's own
-        work is exactly the two on-disk artifacts this server life owns --
-        never raises, per both `telemetry.flush()`'s and
-        `breadcrumb.unlink_breadcrumb()`'s own "never raises" contracts.
-        """
         self._idle_watchdog_stop.set()
         self.telemetry.flush(engine_root=self.engine_root)
-        # Ownership-checked: a superseded generation reaching this point
         # is exiting while its SUCCESSOR owns the clone's single
-        # breadcrumb, and an unconditional unlink would delete the live
-        # successor's entry. See `breadcrumb.unlink_breadcrumb`.
         breadcrumb.unlink_breadcrumb(self.engine_root, owner_pid=os.getpid())
-        # POSIX only. `os._exit(0)` closes the listening socket at the OS
-        # level either way, but it does NOT remove the socket FILE, and a
-        # file left behind is the corpse every future `bind()` fails
-        # against (`warm.election`'s module docstring). Removing it here
-        # is what keeps the successor's election a plain bind rather than
-        # a probe-and-reclaim.
-        #
-        # Ownership-checked for exactly the reason the breadcrumb unlink
-        # above is: a superseded generation reaching this point may be
         # exiting while a SUCCESSOR already owns this path, and an
-        # unconditional unlink would delete the live successor's endpoint
-        # -- leaving a healthy server bound to an unlinked inode that no
-        # client can reach. `unlink_if_owned` compares (st_dev, st_ino)
-        # against what this server bound.
         if self.listen_socket is not None:
             try:
                 self.listen_socket.close()
@@ -2362,10 +1819,6 @@ class _ServerContext:
         if self.endpoint_path is not None:
             election.unlink_if_owned(self.endpoint_path, self._endpoint_identity)
         if self._dispatch_pool is not None:
-            # Best-effort, mirroring every other step in this method's own
-            # "never raises" contract -- `os._exit(0)` (lifecycle's next
-            # step) reclaims the worker processes at the OS level regardless
-            # of whether this shutdown call itself completes cleanly.
             try:
                 self._dispatch_pool.shutdown(wait=False, cancel_futures=True)
             except Exception:  # noqa: BLE001
@@ -2445,12 +1898,7 @@ class _ServerContext:
             served_count=self.telemetry.served_count,
             token_stale=lambda: token_stale,
         ):
-            # Which arm fired decides the recorded reason, and the two are
-            # not interchangeable in the telemetry record -- see
             # `warm.telemetry`'s EXIT_REASON_SUPERSEDED note. Use the
-            # captured verdict rather than inferring from `should_demote`:
-            # a superseded server is usually ALSO past some deadline, so
-            # the arms overlap and only the specific read distinguishes them.
             self.record_exit(
                 telemetry.EXIT_REASON_SUPERSEDED
                 if token_stale
@@ -2463,19 +1911,7 @@ class _ServerContext:
             in_flight_count=self.drain_outstanding,
             ctx_shutdown=self._ctx_shutdown,
         )
-        # `warm.push_cadence`'s cadence counter, on this SAME tick -- see
-        # that module's HOST section. Placed AFTER `demote_if_idle` so a
-        # tick that actually demotes never runs a sweep of its own here
-        # (the process has already `os._exit`ed inside `begin_shutdown` by
-        # the time control would reach this line): the idle-tick sweep and
-        # the mandatory exit-path sweep (`_final_sweep`, wired via
-        # `lifecycle.set_final_sweep_hook`) are deliberately two disjoint
-        # code paths, never double-invoked for the same tick.
         push_cadence.on_idle_tick(served_repos=self.served_repos)
-        # T1: record this tick's live worker count through the existing
-        # `record_server_boot`/`server_boot_samples` append-log pattern --
-        # a read of live state on this already-bounded tick, never a new
-        # sampling process or loop (CLAUDE.md § Load norm).
         telemetry.record_worker_pool_depth(
             depth=self.worker_pool_depth(), pid=os.getpid(), engine_root=self.engine_root
         )
@@ -2495,54 +1931,10 @@ class _ServerContext:
         )
 
     def _idle_watchdog_loop(self) -> None:
-        """Runs on its OWN thread, independent of the accept loop -- the
-        whole point (module docstring: idle demotion "must fire even when
-        the accept loop never receives a single connection"). `Event.wait`
-        both sleeps and gives `_ctx_shutdown` a way to end this thread
-        promptly once some OTHER trigger has already won the shutdown
-        guard, rather than polling `idle.should_demote` needlessly past
-        that point (harmless either way -- `demote_if_idle` no-ops once
-        `lifecycle`'s single-shot guard is spent -- but there is no reason
-        to keep ticking).
-        """
         while not self._idle_watchdog_stop.wait(_IDLE_WATCHDOG_POLL_SECS):
             self._idle_tick()
 
     def _record_accept_ready(self) -> None:
-        """Third boot-ready timestamp (AC4, `docs/plans/2026-09-06-the-p90-
-        reopens-on-a-measurement-not-a-rebuild.md`, P023-C3).
-
-        `_record_own_boot` (this file's module-level helper, called from
-        `main`/`_run_guarded` BEFORE either `serve_forever`/
-        `serve_forever_unix` runs) already writes two intervals through
-        `telemetry.record_server_boot`: spawn -> endpoint bound
-        (`listener_secs`) and spawn -> op-registry preloaded
-        (`ready_secs`) -- both instants pass well before a single worker
-        thread or accept thread/pool exists. This method is the SECOND
-        recorded call the plan's AC4 offers as one of three threading
-        options (over a new return value or a mutable context field): it
-        re-uses `record_server_boot`'s existing two field names on a
-        SECOND row for this pid rather than inventing a third field, since
-        this row's `writes` footprint does not touch `warm/telemetry.py`.
-        `listener_secs` is repeated unchanged (same interval, same value);
-        `ready_secs` on THIS row is re-measured at the point this method
-        actually runs -- immediately before the blocking `_stopped.wait()`
-        tail, i.e. once `_start_worker_pool` and the accept layer
-        (`_start_pending_listener_pool` / `_start_acceptor_pool`) and the
-        idle watchdog are all already started. That is the third, distinct
-        time point: it answers how much of boot is worker/accept-thread
-        startup PAST the op-registry preload the first row's `ready_secs`
-        already covers -- letting a reader partition boot time into
-        server-side (this file) vs. not-server-side, without asserting it
-        explains the 4-5s residue (AC4 is independent of AC7's PM verdict).
-
-        A no-op when `spawn_epoch` is `None` -- unstamped spawns (every
-        direct `_ServerContext(...)` test construction) never call
-        `telemetry.record_server_boot` here, matching `_record_own_boot`'s
-        own guard. Best-effort and silent on any other failure, for the
-        same reason `_record_own_boot` is: an instrument must never be why
-        a server fails to boot.
-        """
         if self.spawn_epoch is None:
             return
         try:
@@ -2600,9 +1992,6 @@ class _ServerContext:
         self._start_worker_pool()
         self._start_pending_listener_pool(first_handle)
         threading.Thread(target=self._idle_watchdog_loop, daemon=True).start()
-        # AC4: the accept layer (this pool) is now up, so this is the
-        # earliest point the accept loop is actually ready to accept
-        # connections -- see `_record_accept_ready`'s own docstring.
         self._record_accept_ready()
         self._stopped.wait()
 
@@ -2635,19 +2024,12 @@ class _ServerContext:
         self._start_worker_pool()
         self._start_acceptor_pool(listen_socket)
         threading.Thread(target=self._idle_watchdog_loop, daemon=True).start()
-        # AC4: the accept layer (this pool) is now up, so this is the
-        # earliest point the accept loop is actually ready to accept
-        # connections -- see `_record_accept_ready`'s own docstring.
         self._record_accept_ready()
         self._stopped.wait()
 
     def _start_acceptor_pool(
         self, listen_socket: Any, *, pool_size: int = ACCEPTOR_POOL_SIZE
     ) -> None:
-        """Start `pool_size` acceptor threads on one listening unix socket.
-        Split out of `serve_forever_unix` for the same isolated-exercise
-        reason `_start_pending_listener_pool` is split out of
-        `serve_forever`."""
         for _ in range(pool_size):
             threading.Thread(
                 target=self._acceptor_loop, args=(listen_socket,), daemon=True
@@ -2709,18 +2091,6 @@ class _ServerContext:
             self._enqueue_connection(io)
 
     def _start_worker_pool(self, *, pool_size: int = WORKER_POOL_SIZE) -> None:
-        """Start `pool_size` long-lived dispatch worker threads, each
-        running `_worker_loop` forever. Split out of `serve_forever` for
-        the same isolated-exercise reason `_start_pending_listener_pool`
-        is: a boot-time step that should be drivable in a test without also
-        blocking on `self._stopped.wait()`.
-
-        Each started `Thread` is appended to `self._worker_threads` -- T1's
-        pool bookkeeping, read back by `worker_pool_depth()`. A second call
-        (no production caller does this today) would grow the list past
-        `pool_size`, which is correct: it reflects a real second pool
-        having been started, not a bug in the count.
-        """
         for _ in range(pool_size):
             thread = threading.Thread(target=self._worker_loop, daemon=True)
             thread.start()
@@ -2819,14 +2189,6 @@ class _ServerContext:
     def _start_pending_listener_pool(
         self, first_handle: int, *, pool_size: int = PENDING_LISTENER_POOL_SIZE
     ) -> None:
-        """Start `first_handle`'s accept chain plus `pool_size - 1` further
-        ones, each on its own daemon thread. Split out of `serve_forever`
-        so this boot-time pool-creation step is exercisable in isolation
-        (`test_server_loop.py`) without also driving the idle watchdog or
-        blocking on `self._stopped.wait()`. See `serve_forever`'s own
-        docstring for the invariant this establishes and the shutdown
-        interaction.
-        """
         threading.Thread(target=self._accept_and_replenish, args=(first_handle,), daemon=True).start()
         for _ in range(pool_size - 1):
             try:
@@ -2894,18 +2256,6 @@ class _ServerContext:
 
 
 def _self_stable_pid_start_epoch() -> Optional[int]:
-    """This process's own birth instant, in the SAME derivation
-    `coordinator_core.session.core.stable_pid_alive` compares a stored
-    breadcrumb value against (`_win_create_time_epoch`'s own docstring:
-    "the SAME comparison now used on both platforms"). Reached into
-    directly, mirroring `_create_pipe_instance`'s reach into
-    `election._build_security_attributes` (module docstring's negative
-    -spec) -- a second, independently-derived epoch here risks disagreeing
-    with the read side by exactly the tolerance window `stable_pid_alive`
-    exists to police. Returns `None` if this process's own pid cannot be
-    read (should not happen for a live self-lookup, but the breadcrumb
-    writer treats it the same as any other unavailable field).
-    """
     from coordinator_core.session.core import _win_create_time_epoch
 
     try:
@@ -2970,20 +2320,6 @@ def main() -> int:
 
 
 class _Elected(NamedTuple):
-    """What a boot-election arm hands back.
-
-    EXACTLY ONE OF `first_handle` / `listen_socket` IS EVER SET, and which
-    one names the transport this process won. `_run_guarded` dispatches on
-    THAT rather than re-reading the platform, so the serve call is narrowed
-    by the same value it consumes -- a static reader and the interpreter
-    agree, and neither `serve_forever` nor `serve_forever_unix` can be
-    reached with the other platform's `None`. A result with neither set is
-    a construction bug and raises rather than serving nothing.
-
-    A NamedTuple rather than a bare 5-tuple: the positional unpack read the
-    same for both arms while meaning opposite things in two slots, which is
-    exactly the shape a later edit transposes silently.
-    """
 
     endpoint: str
     identity: str
@@ -3010,16 +2346,6 @@ def _elect_windows_pipe(repo_root: Path, token: str) -> _Elected:
 
 
 def _elect_unix_socket_endpoint(repo_root: Path, token: str) -> _Elected:
-    """POSIX arm of the boot election. Same return shape as
-    `_elect_windows_pipe`, with the slots swapped: `first_handle` always
-    None here, a listening socket and the path it is bound to instead.
-
-    `identity` carries `election.current_user_id()` -- the uid, the identity
-    analog of the SID. It reaches `_ServerContext.sid`, where its ONLY
-    Windows consumer (`_create_pipe_instance`'s ACL) is on a code path this
-    platform never takes; it is carried anyway so the context's identity
-    field is populated rather than a lie or a `None` on POSIX.
-    """
     uid = election.current_user_id()
     path = election.socket_path(token, engine_clone=repo_root)
     listen_socket = election.elect_unix_socket(path)
@@ -3040,12 +2366,6 @@ def _run_guarded() -> int:
     this one with a different endpoint under it.
     """
     repo_root = _engine_clone_root()
-    # The spawner's clock at the instant it launched this process, if this
-    # process was launched by a route that stamps it (`warm.client._spawn_once`
-    # does; a SessionStart warm_start does not). None means "unmeasurable from
-    # here", and `_record_own_boot` writes nothing rather than inventing a
-    # start -- an invented t0 would be indistinguishable from a measured one in
-    # the file that exists to settle how long boot takes.
     spawn_epoch = _spawn_epoch_from_env()
     token = skew.compute_client_token(repo_root)
     on_windows = sys.platform == "win32"
@@ -3057,26 +2377,12 @@ def _run_guarded() -> int:
             else _elect_unix_socket_endpoint(repo_root, token)
         )
     except election.ElectionLost as lost:
-        # `lost.endpoint` is the contested name/path, carried on the
-        # exception because the election arm raises before it can return
-        # one. The wording stays platform-specific: on Windows this is the
-        # exact line the operator's logs have carried since C30.
         endpoint_word = "pipe" if on_windows else "socket"
         print(
             f"[warm-server] election lost for {lost.endpoint!r}; another server already "
             f"owns this generation's {endpoint_word}, exiting",
             file=sys.stderr,
         )
-        # THE ONE EXIT THAT REACHED NO FILE. The print above is the whole
-        # historical record of a failed succession, and `spawn_detached`
-        # opens this process's stderr as DEVNULL, so it reaches nothing --
-        # every exit-reason census in the 2026-08-26 succession
-        # investigation is over surviving rows only, censored upward
-        # (docs/research/2026-08-26-repo-warm-succession.md § 5.1). A
-        # same-token successor locked out by a draining predecessor lands
-        # here, so this row is the instrument any fix to that ordering is
-        # verified against. Written before, not instead of, the exit-0:
-        # losing is still not an error.
         telemetry.record_election_lost(
             endpoint=lost.endpoint,
             token=token,
@@ -3087,7 +2393,6 @@ def _run_guarded() -> int:
         return 0
 
     # ELECTION IS THE FIRST INSTANT A CLIENT CAN CONNECT: the endpoint exists
-    # from here on, so this is where "spawn -> connectable" stops running.
     listener_at = time.time()
 
     version_state = skew.ServerVersionState(repo_root)
@@ -3109,8 +2414,6 @@ def _run_guarded() -> int:
 
     _stack_dump_remedy = _register_stack_dump_signal(repo_root)
     print(
-        # Parens make the truthy branch
-        # unambiguous against the ternary's precedence on a skim.
         ("[warm-server] stack dump: " + _stack_dump_remedy)
         if _stack_dump_remedy
         else "[warm-server] stack dump: unavailable -- no SIGUSR1 on this platform; "
@@ -3122,49 +2425,13 @@ def _run_guarded() -> int:
 
     _preload_op_registry()
 
-    # ...and this is the first instant a connection gets a PROMPT answer:
-    # `_preload_op_registry` above is the ~703ms of imports that would
-    # otherwise land on whichever caller arrived first. Both instants are
-    # recorded because a client that reaches the first still waits for the
-    # second.
-    #
     # RECORDED BEFORE `ensure_listener`, MOVED 2026-08-26. This call used to sit
-    # below that block, so every `ready_secs` on disk silently included up to
     # `supervisor.HEALTH_CHECK_TIMEOUT_SECS` of somebody else's health probe --
-    # a cost that has nothing to do with whether THIS server can answer, in the
-    # one row that exists to say when it can. The succession investigation
-    # reasoned from `ready_secs` throughout and never saw it, because its
-    # sandbox had no stale discovery record to make the probe wait.
     _record_own_boot(spawn_epoch, listener_at, repo_root)
 
-    # C2 (docs/plans/2026-08-25-the-http-listener-gets-something-keeping-it-up.md):
-    # this pipe server is the one resident, per-machine, elected process the box
-    # runs, so its own boot -- past its OWN election, never before -- is what gives
-    # the http listener a supervisor that is itself supervised. Lazy-imported: a
-    # module-level `from coordinator_core.warm import supervisor` would be
-    # circular, since `supervisor.py` itself imports `InFlightCounter`/`_serve_line`
-    # from this module.
-    #
     # ON ITS OWN THREAD, MOVED OFF THE CRITICAL PATH 2026-08-26. `ensure_listener`
     # is documented never to wait; it waits up to `HEALTH_CHECK_TIMEOUT_SECS`
-    # (2.0s) inside `check_health`, a synchronous `urlopen`, whenever a discovery
-    # record names a live pid whose listener has hung (see that function's own
-    # corrected docstring, and `docs/research/2026-08-26-repo-warm-succession.md`
-    # § 4). Paid here, it lands on the successor's time-to-answerable during
-    # exactly the window a caller is already waiting out a predecessor's drain.
-    #
     # NOTHING DEPENDS ON THE ORDERING, which is what makes this safe rather than
-    # merely faster: the return value is ignored by contract, and the OTHER
-    # production call site (`warm/entry_seam.py :: _trigger_listener_boot`, C3)
-    # exists precisely to cover the case this one does not -- neither process
-    # running. The two are redundant coverage of one goal, not a chain, so the
-    # worst case here is that the http listener starts a few hundred ms later
-    # and the next hook fire nudges it anyway.
-    #
-    # The try/except stays despite the thread: a daemon thread's uncaught
-    # exception would print a traceback to a stderr `spawn_detached` opens as
-    # DEVNULL, and this boot sequence must not take "documented never to raise"
-    # on faith -- the same reason the breadcrumb write above is wrapped.
     def _ensure_http_listener() -> None:
         try:
             from coordinator_core.warm import supervisor
@@ -3190,12 +2457,6 @@ def _run_guarded() -> int:
     )
 
     # Dispatch on WHICH ENDPOINT WAS WON, not on the platform read again.
-    # The value that decides is the value that gets passed, so the
-    # not-None check IS the narrowing -- there is no path on which
-    # `serve_forever` sees a POSIX `None` or `serve_forever_unix` a
-    # Windows one. An election that returned neither served nothing and
-    # exited 0 silently before this branch existed; it now dies audibly,
-    # which is what `main`'s STEP 0 guard is for.
     if elected.first_handle is not None:
         ctx.serve_forever(elected.first_handle)
     elif elected.listen_socket is not None:
@@ -3208,9 +2469,6 @@ def _run_guarded() -> int:
 
 
 def _spawn_epoch_from_env() -> "float | None":
-    """This process's spawn instant as stamped by its spawner, or None when
-    unstamped or unparseable. Never raises: a malformed value means the
-    measurement is unavailable, which is exactly what None already says."""
     raw = os.environ.get(telemetry.SPAWN_EPOCH_ENV)
     if not raw:
         return None
@@ -3223,20 +2481,6 @@ def _spawn_epoch_from_env() -> "float | None":
 def _record_own_boot(
     spawn_epoch: "float | None", listener_at: float, repo_root: Path
 ) -> None:
-    """Write this server's own boot durations, if its spawn was stamped.
-
-    THE NUMBER NO CLIENT CAN OBSERVE. A client sees only that a server was
-    absent at the moments it happened to ask, so every client-derived estimate
-    of boot is censored by its own call pattern -- which is why
-    `client-cold.jsonl` supports two readings of this box's outages that
-    disagree by 9x on the median, and why the server-succession gaps in
-    `telemetry.jsonl` are bounded the other way (the next server does not start
-    until a caller arrives to trigger a spawn, so those gaps measure caller
-    absence as much as boot). This process is the only one that can time the
-    interval with no caller in it at all.
-
-    Best-effort and silent on failure, matching the breadcrumb write it sits
-    beside: an instrument must never be why a server fails to boot."""
     if spawn_epoch is None:
         return
     try:

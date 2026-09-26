@@ -24,9 +24,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* =========================================================================
- * SHA-1 -- public-domain shape, byte buffer in, 20-byte digest out.
- * ========================================================================= */
 
 typedef struct {
     uint32_t state[5];
@@ -99,7 +96,7 @@ static void sha1_final(sha1_ctx *ctx, unsigned char out[20]) {
     while (ctx->buflen != 56) sha1_update(ctx, &zero, 1);
     unsigned char lenbuf[8];
     for (int i = 0; i < 8; i++) lenbuf[i] = (unsigned char)(bitlen >> (56 - 8 * i));
-    /* append length directly -- bypass sha1_update's own bitlen accounting */
+    
     memcpy(ctx->buf + ctx->buflen, lenbuf, 8);
     sha1_block(ctx, ctx->buf);
     for (int i = 0; i < 5; i++) {
@@ -124,9 +121,6 @@ void sha1_hex16(const unsigned char *data, size_t len, char out[17]) {
     out[16] = '\0';
 }
 
-/* =========================================================================
- * Sidecar trailing-whitespace trim -- see door_core.h for why it lives here.
- * ========================================================================= */
 
 size_t trim_sidecar_trailing(char *buf, size_t len) {
     while (len > 0 &&
@@ -137,9 +131,6 @@ size_t trim_sidecar_trailing(char *buf, size_t len) {
     return len;
 }
 
-/* =========================================================================
- * The per-invocation escape hatch -- see door_core.h for the full contract.
- * ========================================================================= */
 
 int door_env_value_is_falsy(const char *value) {
     if (!value) return 0;
@@ -155,9 +146,6 @@ int door_env_value_is_falsy(const char *value) {
            strcmp(lower, "no") == 0 || strcmp(lower, "off") == 0;
 }
 
-/* =========================================================================
- * Growable byte buffer
- * ========================================================================= */
 
 int buf_init(buf_t *b, size_t initial_cap) {
     b->data = (char *)malloc(initial_cap);
@@ -211,12 +199,6 @@ int buf_append_json_escaped(buf_t *b, const char *s, size_t len) {
     return 1;
 }
 
-/* =========================================================================
- * Minimal JSON reader -- tailored to exactly the fixed envelope the server
- * emits. Depth-aware (skips nested strings/objects/arrays correctly) so it
- * never mistakes stdout CONTENT that happens to contain the text `"error"`
- * for a top-level error key.
- * ========================================================================= */
 
 typedef struct { const char *p, *end; } cursor_t;
 
@@ -252,9 +234,7 @@ static int parse_json_string(cursor_t *c, buf_t *out) {
                     char hex[5] = { c->p[1], c->p[2], c->p[3], c->p[4], 0 };
                     unsigned int cp = (unsigned int)strtoul(hex, NULL, 16);
                     c->p += 4;
-                    /* Encode as UTF-8. Surrogate pairs (stdout/stderr are
-                     * plain text, astral chars are rare but possible) are
-                     * handled by re-entering on a trailing low surrogate. */
+                    
                     if (cp >= 0xD800 && cp <= 0xDBFF &&
                         c->p + 6 < c->end && c->p[1] == '\\' && c->p[2] == 'u') {
                         char hex2[5] = { c->p[3], c->p[4], c->p[5], c->p[6], 0 };
@@ -296,14 +276,12 @@ static int parse_json_string(cursor_t *c, buf_t *out) {
             c->p++;
         }
     }
-    if (c->p >= c->end) return 0; /* unterminated string -- malformed */
-    c->p++; /* closing quote */
+    if (c->p >= c->end) return 0; 
+    c->p++; 
     return 1;
 }
 
-/* Skips one JSON value of any type at `c->p`, leaving `c->p` just past it.
- * Used to walk past sibling members this reader does not care about,
- * without needing a general-purpose value model. */
+
 static int skip_json_value(cursor_t *c) {
     skip_ws(c);
     if (c->p >= c->end) return 0;
@@ -326,7 +304,7 @@ static int skip_json_value(cursor_t *c) {
         }
         return depth == 0;
     }
-    /* number / true / false / null -- run to the next structural char */
+    
     while (c->p < c->end && *c->p != ',' && *c->p != '}' && *c->p != ']' &&
            *c->p != ' ' && *c->p != '\t' && *c->p != '\n' && *c->p != '\r') {
         c->p++;
@@ -344,10 +322,7 @@ static int parse_json_int(cursor_t *c, long *out) {
     return 1;
 }
 
-/* Parses a `{"stdout":..., "stderr":..., "exit_code":...}` object (member
- * order not assumed) starting at `c->p` (which must be '{'). Unknown members
- * are skipped, not rejected -- the server's envelope is free to carry more
- * fields than this door reads. */
+
 static int parse_result_object(cursor_t *c, result_fields_t *rf) {
     skip_ws(c);
     if (c->p >= c->end || *c->p != '{') return 0;
@@ -386,9 +361,7 @@ static int parse_result_object(cursor_t *c, result_fields_t *rf) {
     }
 }
 
-/* Parses a `{"code": <int>, "message": ...}` error object (member order not
- * assumed, "message" and any other member skipped) starting at `c->p`.
- * Fills `*code_out` only when a `code` member is present. */
+
 static int parse_error_object(cursor_t *c, long *code_out, int *have_code_out) {
     skip_ws(c);
     if (c->p >= c->end || *c->p != '{') return 0;
@@ -446,11 +419,7 @@ int parse_response_envelope(
 
         if (key.len == 5 && memcmp(key.data, "error", 5) == 0) {
             free(key.data);
-            /* A malformed error object still means "this was an error
-             * envelope, not a success" -- *have_error_out stays whatever
-             * parse_error_object managed to fill (possibly still 0, if it
-             * failed before reaching "code"), which correctly routes to the
-             * conservative refusal rather than a false "safe" verdict. */
+            
             parse_error_object(&c, error_code_out, have_error_out);
             return 0;
         }
@@ -467,11 +436,6 @@ int parse_response_envelope(
     return saw_result && rf->have_stdout && rf->have_stderr && rf->have_exit_code;
 }
 
-/* =========================================================================
- * Caller-declared stdin payload -- see door_core.h for the full contract
- * (the mode gate, the bound's rationale, and why autodetection is
- * rejected).
- * ========================================================================= */
 
 door_stdin_status_t door_drain_stdin_bounded(
     door_stdin_reader_t reader, void *reader_ctx, buf_t *out, size_t max_bytes
@@ -480,19 +444,13 @@ door_stdin_status_t door_drain_stdin_bounded(
     for (;;) {
         long n = reader(reader_ctx, chunk, sizeof(chunk));
         if (n < 0) return DOOR_STDIN_READ_ERROR;
-        if (n == 0) return DOOR_STDIN_READ_OK; /* end of stream */
-        /* Checked BEFORE the append -- a too-large payload never has any
-         * of its excess bytes copied into `out`. This is what makes the
-         * refusal a refusal rather than a truncation. */
+        if (n == 0) return DOOR_STDIN_READ_OK; 
+        
         if (out->len + (size_t)n > max_bytes) return DOOR_STDIN_READ_TOO_LARGE;
         if (!buf_append(out, chunk, (size_t)n)) return DOOR_STDIN_READ_ERROR;
     }
 }
 
-/* =========================================================================
- * The stdin-bound params route -- see door_core.h for why this argv shape
- * is decided pre-delivery rather than served warm.
- * ========================================================================= */
 
 int door_argv_declares_params_stdin(int argc, const char *const *argv) {
     if (argv == NULL) return 0;
@@ -500,9 +458,7 @@ int door_argv_declares_params_stdin(int argc, const char *const *argv) {
         const char *arg = argv[i];
         if (arg == NULL) continue;
         if (strcmp(arg, DOOR_PARAMS_FILE_STDIN_JOINED) == 0) return 1;
-        /* The separated pair. `i + 1 < argc` is the "no value" guard --
-         * a trailing bare flag is argparse's error to report, not this
-         * door's route to change. */
+        
         if (strcmp(arg, DOOR_PARAMS_FILE_FLAG) == 0 && i + 1 < argc &&
             argv[i + 1] != NULL &&
             strcmp(argv[i + 1], DOOR_PARAMS_FILE_STDIN_VALUE) == 0) {
@@ -653,9 +609,6 @@ int build_hook_deny_envelope(buf_t *out, const char *reason) {
     return ok;
 }
 
-/* =========================================================================
- * The safety classification -- see door_core.h for the full source trail.
- * ========================================================================= */
 
 int is_provably_undispatched(long code) {
     return code == JSONRPC_PARSE_ERROR || code == JSONRPC_INVALID_REQUEST ||

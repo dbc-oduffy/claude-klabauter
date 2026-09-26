@@ -206,9 +206,6 @@ class WriteSurfaceEntry:
 
 @dataclass(frozen=True)
 class StaticClause:
-    """The STATIC declaration form: a literal, enumerable tuple of
-    `WriteSurfaceEntry` values. The natural fit for a writer whose surface
-    is already a fixed constant in source."""
 
     entries: tuple[WriteSurfaceEntry, ...] = field(default_factory=tuple)
     effect: str = "write"
@@ -216,21 +213,6 @@ class StaticClause:
 
 @dataclass(frozen=True)
 class ShapedClause:
-    """The SHAPED declaration form: a discovery mechanism plus an entry
-    template, for a writer whose surface is computed at runtime (a
-    platform branch, a consent gate, or a discovered input set) rather
-    than enumerable in source.
-
-    `discovered_by` is free text naming the function/mechanism that
-    computes the surface (e.g. `"discover_working_repos"`,
-    `"_derive_agent_helper_target_map"`). `entry_template` is a
-    `WriteSurfaceEntry` whose `key`/`path` may contain template
-    placeholders (e.g. `"repos.<derived-key>"`) describing the shape
-    entries take without enumerating them. Reserved for a key set that is
-    genuinely unknowable in source — not for a known, literal key set that
-    is merely written conditionally (platform branch, consent gate); that
-    case stays `StaticClause` with the condition carried in `reason=`.
-    """
 
     discovered_by: str
     entry_template: WriteSurfaceEntry
@@ -263,9 +245,6 @@ class WriteSurfaceDeclaration:
 
 @dataclass(frozen=True)
 class ValidationError:
-    """One structured problem found in a `WriteSurfaceDeclaration`, keyed
-    to the clause/entry index it came from so a caller can report it
-    without re-deriving location."""
 
     writer_id: str
     clause_index: int

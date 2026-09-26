@@ -27,9 +27,6 @@ from coordinator_core.ops import install_health_run
 
 @pytest.fixture
 def settings_bin(tmp_path, monkeypatch):
-    """Points the leg at a throwaway settings-home. The leg reads
-    `settings_home()` at call time, so patching the name this module
-    imported is what redirects it."""
     home = tmp_path / "settings-home"
     (home / "bin").mkdir(parents=True)
     monkeypatch.setattr(install_health_run, "settings_home", lambda: home)
@@ -37,8 +34,6 @@ def settings_bin(tmp_path, monkeypatch):
 
 
 def test_the_leg_is_registered():
-    """An unregistered leg is not a check. It runs LAST, after every leg
-    that can change what it reads."""
     names = [name for name, _ in install_health_run._NATIVE_LEGS]
     assert "check-launch-chain-intact" in names
     assert names[-1] == "check-launch-chain-intact"
@@ -53,9 +48,6 @@ def test_a_healthy_trampoline_passes(settings_bin):
 
 
 def test_a_native_image_wearing_the_name_fails(settings_bin, capsys):
-    """The 2026-09-02 shape: the multi-name forwarder install hardlinked the
-    native door over the trampoline, and `claude --dangerously-skip-
-    permissions` stopped working box-wide."""
     (settings_bin / "claude-doe").write_bytes(b"\xcf\xfa\xed\xfe\x0c\x00\x00\x01 a door image")
 
     assert install_health_run.check_launch_chain_intact("p", "m") == 1
@@ -72,15 +64,11 @@ def test_a_native_image_wearing_the_name_fails(settings_bin, capsys):
     [b"\x7fELF\x02\x01\x01", b"MZ\x90\x00", b"\xca\xfe\xba\xbe\x00\x00"],
 )
 def test_every_native_image_format_is_caught(settings_bin, magic):
-    """Windows is first-class and Linux is on the roadmap -- a check that
-    only knows Mach-O would pass on the platforms it was not written on."""
     (settings_bin / "claude-doe").write_bytes(magic + b" not a trampoline")
     assert install_health_run.check_launch_chain_intact("p", "m") == 1
 
 
 def test_a_readable_launcher_that_never_execs_fails(settings_bin):
-    """The other half of the same defect: a text file under the right name
-    that cannot reach a launch is no better than a binary one."""
     (settings_bin / "claude-doe").write_text(
         "#!/usr/bin/env python3\nprint('hello')\n", encoding="utf-8"
     )
@@ -88,10 +76,6 @@ def test_a_readable_launcher_that_never_execs_fails(settings_bin):
 
 
 def test_the_generated_forwarder_is_judged_by_the_wrapper_it_execs(settings_bin, tmp_path):
-    """install-substrate writes a generic forwarder under this name before
-    Step 3.5b lays the wrapper over it, and the forwarder launches by exec'ing
-    the engine's `claude-doe.py` -- so that file, not the forwarder, carries
-    the proof. A forwarder to a wrapper that cannot launch still fails."""
     (settings_bin / "claude-doe").write_text(
         "from _resolve_claude_klabauter import exec_cli\nexec_cli(\"claude-doe.py\")\n",
         encoding="utf-8",
@@ -108,19 +92,10 @@ def test_the_generated_forwarder_is_judged_by_the_wrapper_it_execs(settings_bin,
 
 
 def test_an_absent_launcher_is_not_a_failure(settings_bin):
-    """The wrapper install is advisory in `scripts/setup.py`, so a
-    settings-home that never had one is a different leg's concern -- the
-    same posture `check_door_provenance` takes for "no-door". This leg
-    refuses a launcher that EXISTS and cannot launch."""
     assert install_health_run.check_launch_chain_intact("p", "m") == 0
 
 
 def test_a_passing_leg_says_nothing(settings_bin, capsys):
-    """Silent on success, both branches of it -- an orchestrator whose
-    healthy legs each announce themselves is one whose failing leg is read
-    past. `test_empty_dir_exits_zero_silent` holds the whole orchestrator to
-    this, and it is the register `docs/wiki/guard-messaging.md` asks for:
-    one fact, once, and only when there is a fact."""
     assert install_health_run.check_launch_chain_intact("p", "m") == 0
     (settings_bin / "claude-doe").write_text("exec claude --plugin-dir x\n", encoding="utf-8")
     assert install_health_run.check_launch_chain_intact("p", "m") == 0

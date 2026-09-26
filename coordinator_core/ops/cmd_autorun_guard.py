@@ -108,21 +108,10 @@ _LOG_PREFIX = "[cmd-autorun-guard]"
 
 
 def _is_windows() -> bool:
-    """OS gate — mirrors `coordinator_core.ops.ensure_python3_exe_shim._is_windows`.
-    WSL reports the Linux platform value and is correctly excluded (WSL has
-    no cmd.exe / no Win32 registry of its own)."""
     return sys.platform.startswith("win")
 
 
 def _read_autorun() -> Optional[str]:
-    """Read `HKCU\\Software\\Microsoft\\Command Processor\\AutoRun`.
-
-    Returns the current string value, or ``None`` if the value (or the key)
-    does not exist. Never raises on absence — only a genuine unexpected
-    registry error propagates. Isolated as its own function (rather than
-    inlined) so tests can monkeypatch this directly and never touch a real
-    HKCU hive, on any platform (including non-Windows, where `winreg` does
-    not exist at all)."""
     import winreg
 
     try:
@@ -134,11 +123,6 @@ def _read_autorun() -> Optional[str]:
 
 
 def _write_autorun(value: str) -> None:
-    """Set `HKCU\\Software\\Microsoft\\Command Processor\\AutoRun` to
-    `value` (creating the key if absent — `Command Processor` under HKCU
-    always exists in practice on a real Windows profile, but
-    `CreateKeyEx` degrades gracefully either way). REG_SZ, matching the
-    type Windows itself uses for this value."""
     import winreg
 
     with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, _AUTORUN_KEY) as key:
@@ -146,10 +130,6 @@ def _write_autorun(value: str) -> None:
 
 
 def _delete_autorun() -> None:
-    """Delete the `AutoRun` value entirely (not merely set it to ``""``) —
-    see module docstring § Idempotency for why an empty-string value is not
-    equivalent to no value at all. No-op (does not raise) if already
-    absent."""
     import winreg
 
     try:
@@ -158,7 +138,6 @@ def _delete_autorun() -> None:
         ) as key:
             winreg.DeleteValue(key, _AUTORUN_VALUE_NAME)
     except FileNotFoundError:
-        # value already absent is the desired end state
         pass
 
 
@@ -183,16 +162,6 @@ def _macro_present_as_token(current: str) -> bool:
 
 
 def _classify(current: Optional[str]) -> str:
-    """Three-way classification of the current AutoRun value against our
-    macro — see module docstring § Idempotency.
-
-    - "uncovered": AutoRun unset or empty.
-    - "covered": our macro text is present as a `_JOIN`-delimited token
-      (the exact shape `write_cmd_autorun_guard` composes).
-    - "foreign_present": AutoRun is set to something that does not contain
-      our macro as a delimited token (an operator's own AutoRun content,
-      even if it happens to embed the macro text as a substring).
-    """
     if not current:
         return "uncovered"
     if _macro_present_as_token(current):
@@ -201,14 +170,6 @@ def _classify(current: Optional[str]) -> str:
 
 
 def detect_cmd_autorun_coverage() -> dict:
-    """Read-only probe — no mutation, no consent gating needed (mirrors
-    `ensure_python3_exe_shim`'s own read-only `_classify_python3`, DEC-7
-    idempotency note: identical PATH/registry state always yields the same
-    classification).
-
-    Returns ``{"classification": "not_windows"|"uncovered"|"covered"|
-    "foreign_present", "current_value": str|None}``.
-    """
     if not _is_windows():
         return {"classification": "not_windows", "current_value": None}
     current = _read_autorun()
@@ -216,11 +177,6 @@ def detect_cmd_autorun_coverage() -> dict:
 
 
 def _refuse_if_disabled(what: str) -> Optional[str]:
-    """Deferred import of the shared belt-and-braces gate — see module
-    docstring § Hard machine-mutation gate for why this is deferred rather
-    than a module-level import (mirrors `shell_rc_guard.py`'s own documented
-    reason: avoiding an import-time cycle through
-    `coordinator_core.install.substrate`)."""
     from coordinator_core.install import substrate as _substrate_mod
 
     return _substrate_mod._refuse_machine_mutation(
@@ -267,15 +223,6 @@ def write_cmd_autorun_guard(check_only: bool = False) -> dict:
 
 
 def strip_cmd_autorun_guard(check_only: bool = False) -> dict:
-    """Reverse `write_cmd_autorun_guard` — the uninstall leg for this
-    surface. Removes only our macro text (plus one adjacent `" & "`, either
-    side); any other AutoRun content the operator or another tool wrote is
-    left untouched. Deletes the value outright if our macro was the entire
-    content (see module docstring § Idempotency).
-
-    Returns ``{"classification": <pre-strip classification>, "modified":
-    bool, "would_modify": bool}``.
-    """
     if not _is_windows():
         return {"classification": "not_windows", "modified": False, "would_modify": False}
 
@@ -283,13 +230,9 @@ def strip_cmd_autorun_guard(check_only: bool = False) -> dict:
     classification = _classify(current)
 
     if classification in ("uncovered", "not_windows", "foreign_present"):
-        # "foreign_present" means AutoRun is set but does not contain our
-        # macro — nothing of ours to strip, and rewriting it (even to the
-        # same bytes) would be a needless registry write plus a dishonest
-        # "modified": True. Preserve third-party AutoRun content untouched.
         return {"classification": classification, "modified": False, "would_modify": False}
 
-    assert current is not None  # classification == "covered" implies current is truthy
+    assert current is not None
 
     remainder = current.replace(f"{_JOIN}{_DESIRED_MACRO}", "")
     remainder = remainder.replace(f"{_DESIRED_MACRO}{_JOIN}", "")

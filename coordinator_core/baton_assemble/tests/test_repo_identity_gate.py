@@ -1,15 +1,3 @@
-"""C3 (docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md) —
-wiring `compute_repo_identity_gate` into `baton_assemble.brief` and
-`baton_assemble.apply.apply` at each's own `root = repo_root or
-resolve_repo_root()` line.
-
-Fixture construction pattern is reused from C1's own
-`coordinator_core/pickup_assemble/tests/test_repo_identity_gate.py` (AC6:
-real registry JSON records on disk under a fabricated `<claude-config>/
-sessions/` dir, real directories with a real `.git` marker for the
-plausibility band — never a monkeypatch of `compute_repo_identity_gate`'s
-own return value).
-"""
 
 from __future__ import annotations
 
@@ -24,21 +12,13 @@ from coordinator_core.baton_assemble import apply as ba_apply
 from coordinator_core.session import harness_registry as hr
 from coordinator_core.test_baton_assemble import _FAKE_OPERATOR_CONFIG, _write_artifact
 
-# `ba.brief`/`ba_apply.apply` (called below with `repo_root=None`) reach
-# `resolve_repo_root`, which shells out to real git to resolve the checkout
-# root against the real `.git` marker this file's fixtures construct -- the
 # MISMATCH/UNRESOLVED gate verdicts under test depend on that real
 # resolution, no mock stands in for it. The spawn ratchet's `_BASELINE` is
-# shrink-only pre-existing residue and is explicitly not the route for this
-# file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 @pytest.fixture(autouse=True)
 def _stub_operator_config(monkeypatch):
-    """Restated per-module (autouse fixtures do not cross module boundaries)
-    -- `brief()` calls `resolve_operator_config()` unconditionally. Mirrors
-    `test_deliverable_collision_warn.py`'s own fixture of the same name."""
     monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
 
 
@@ -79,8 +59,6 @@ def _patch_pid_env(monkeypatch, pid, create_time=0.0, hit=True):
 
 
 def _rig_mismatch(tmp_path, monkeypatch, sid="sess-c3-mismatch", pid=9001):
-    """A real anchor/root divergence: registry record's `cwd` is a real,
-    plausible directory OUTSIDE `repo_root`. Returns `repo_root`."""
     repo_root = tmp_path / "repo"
     foreign_root = tmp_path / "foreign"
     _make_repo(repo_root)

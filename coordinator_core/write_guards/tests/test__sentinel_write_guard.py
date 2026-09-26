@@ -1,9 +1,3 @@
-"""Behavioral tests for coordinator_core.write_guards._sentinel_write_guard
--- the shared sentinel-path helper consumed by guard-worktree-sentinel-
-write, guard-settings-json-write, and guard-doctrine-surface-edits.
-
-Spec backlink: DoE-claude:pln-hook-fan-in-fold-the-pretoolus-27c1e9 (chunk C3)
-"""
 
 from __future__ import annotations
 
@@ -141,9 +135,6 @@ class TestSentinelWriteDenial:
         )
 
     def test_missing_payload_keyword_raises_type_error(self):
-        """No default -- a call site missed by the C4c migration must fail
-        loudly at call time, never silently keep the pre-migration,
-        payload-blind shape."""
         import pytest
 
         with pytest.raises(TypeError):

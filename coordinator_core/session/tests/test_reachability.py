@@ -1,12 +1,3 @@
-"""
-coordinator_core.session.tests.test_reachability — resolver test suite.
-
-Spec backlink: `state/handoffs/2026-08-13-session-owner-reachability-registry.md` § 1/§ 4
-
-Every fixture is built via `monkeypatch.setattr(harness_registry, ...)` --
-this suite never reads the operator's real `~/.claude/sessions` (mirrors
-`session/tests/test_harness_registry.py`'s own discipline).
-"""
 
 from __future__ import annotations
 
@@ -32,12 +23,6 @@ def _full12(socket: str) -> str:
 
 class TestReachableOutcome:
     def test_unique_name_still_resolves_with_ref_qualified_address(self, monkeypatch):
-        # The harness refuses a bare name for a cross-session SendMessage
-        # target even when it is uniquely named among live peers -- measured
-        # live 2026-08-13 (ListAgents showed one row named
-        # "claude-klabauter-87" among 40 peers, no collision, and the harness
-        # still demanded the ref-qualified form). Ref-qualification is
-        # therefore unconditional, not collision-gated.
         socket = "/tmp/cc-socks/57557.sock"
         snap = {
             "sid-a": _record("claude-klabauter-57", socket),
@@ -77,11 +62,7 @@ class TestReachableOutcome:
 
 class TestRefWideningLoop:
     def test_widens_past_six_hex_chars_on_prefix_collision(self, monkeypatch):
-        # Replaces a probe-and-`pytest.skip`
-        # search for a real sha256 collision with a monkeypatched
         # `_full_hash12` carrying a HARDCODED 6-hex-prefix collision, so the
-        # widening branch is deterministically exercised on every run and
-        # this test can never silently skip.
         full_a = "aaaaaa000000"
         full_b = "aaaaaa111111"
         monkeypatch.setattr(
@@ -125,23 +106,8 @@ class TestNotReachable:
 
 
 class TestAmbiguousContractShape:
-    """Prefix matching was removed 2026-08-13 (never in spec; § 1's
-    governing criterion is "accepts owner ids in every recording
-    convention already in the tree", all of which record full UUIDs).
-    `harness_registry.snapshot()` is `sessionId`-keyed and de-duplicates
-    same-`sessionId` files at parse time (its own docstring: "the later
-    one in `Path.glob`'s OS-dependent iteration order wins"), so an
-    exact-match lookup can never yield more than one candidate through
-    this seam today. These tests construct the `ambiguous` shape directly
-    against `_resolve_one`/`Candidate`, pinning the outcome's documented
-    contract rather than an input that can no longer produce it live --
-    see `resolve_address`'s own docstring negative-spec.
-    """
 
     def test_unresolvable_candidate_address_is_none_not_the_raw_uuid(self, monkeypatch):
-        # A candidate lacking a usable
-        # name/socket must never surface its raw session id as `.address`,
-        # which would print as though it were a real SendMessage address.
         snap = {
             "5d3d5763-aaaa": _record("claude-klabauter-a1", "/sock/a.sock"),
             "5d3d5763-bbbb": _record(None, None),
@@ -161,9 +127,6 @@ class TestAmbiguousContractShape:
     def test_unresolvable_candidate_name_and_ref_are_empty_string_not_none(
         self, monkeypatch
     ):
-        # Pins Candidate's stated contract:
-        # `name`/`ref` are "" (not None) for the same unresolvable slot whose
-        # `.address` is None -- the two fields signal differently on purpose.
         snap = {
             "5d3d5763-aaaa": _record("claude-klabauter-a1", "/sock/a.sock"),
             "5d3d5763-bbbb": _record(None, None),
@@ -222,10 +185,7 @@ class TestOwnSession:
     def test_socket_env_match_classifies_own_session_when_self_record_declines(
         self, monkeypatch
     ):
-        # Regression test for the measured defect: self_record() declines
         # (e.g. CLAUDE_PID env-miss:name-mismatch on a correct pid) but the
-        # socket env var matches the resolved record's own socket -- must
-        # still classify own_session, not silently degrade to reachable.
         snap = {
             "self-sid": _record("claude-klabauter-84", "/sock/self.sock"),
         }
@@ -251,8 +211,6 @@ class TestOwnSession:
         assert result.session_id == "sid-a"
 
     def test_none_socket_record_and_unset_env_never_match(self, monkeypatch):
-        # The None == None trap: a record with no messaging_socket_path and
-        # an unset env var must NOT be classified own_session.
         snap = {
             "sid-a": _record("claude-klabauter-57", None),
         }
@@ -317,10 +275,6 @@ class TestDegradedRegistrySources:
 
 
 class TestResolveCandidates:
-    """2026-08-13 live-peer-roster § 2: the public seam
-    `resolve_candidates()`, built for `coordinator_core.session.peer_roster`
-    -- must not change `resolve_address`'s own behavior (covered by every
-    other class in this file, unmodified)."""
 
     def test_resolves_every_live_session_in_the_snapshot(self, monkeypatch):
         snap = {
@@ -358,8 +312,6 @@ class TestResolveCandidates:
 
 
 class TestResolveAdvisoryAddress:
-    """`resolve_advisory_address` — the shared bare-string resolution core
-    both `baton_assemble` and `pickup_assemble` format on top of."""
 
     def test_reachable_returns_bare_address(self, monkeypatch):
         snap = {"sid-a": _record("claude-klabauter-57", "/sock/a.sock")}
@@ -394,8 +346,6 @@ class TestResolveAdvisoryAddress:
 
 
 class TestResolveAddressesBulk:
-    """`resolve_addresses_bulk` — one snapshot for the whole roster, per
-    `pickup_assemble.compute_competing_claim`'s performance requirement."""
 
     def test_resolves_every_id_off_one_snapshot_call(self, monkeypatch):
         snap = {
@@ -441,9 +391,6 @@ class TestResolveAddressesBulk:
 
 
 class TestReplayTodayCase:
-    """§ Acceptance criteria: "the today-case is replayed end to end: given
-    the claim-release baton's `claimed_by`, the resolver returns an address
-    with no human disambiguation"."""
 
     def test_claimed_by_uuid_resolves_to_one_address(self, monkeypatch):
         claimed_by = "5739c815-7df8-4798-baab-5caa9c19a2d5"
@@ -461,24 +408,10 @@ class TestReplayTodayCase:
 
 
 class TestNotReachableReasonIsNamed:
-    """The `not_reachable` arm must not collapse "no such live session"
-    into "this harness cannot address anyone".
-
-    Measured live 2026-08-14 (Claude Code 2.1.232, Windows): 44/44
-    `<claude-config>/sessions/*.json` records omit `messagingSocketPath`
-    because the harness's cross-session-inbox gate is off, so every peer
-    resolved to `not_reachable` with no way for a caller to tell that
-    apart from a dead/absent session. These pin the distinction, not the
-    gate's current state -- each fixture builds the registry shape it
-    asserts about.
-    """
 
     def test_live_record_without_socket_reports_messaging_unavailable(
         self, monkeypatch
     ):
-        # The fleet-wide shape: the target IS live and named, and NOTHING
-        # in the registry carries a socket. "No such session" would be a
-        # false statement about a live, busy peer.
         snap = {
             "sid-live": _record("claude-klabauter-11", None),
             "sid-other": _record("claude-klabauter-22", None),
@@ -501,9 +434,6 @@ class TestNotReachableReasonIsNamed:
         assert result.reason == reachability.NotReachableReason.NO_LIVE_RECORD
 
     def test_socketless_peer_among_socketed_peers_is_a_peer_fact(self, monkeypatch):
-        # Messaging IS available here -- one peer simply never registered
-        # an inbox. Reporting the harness-wide reason would send the reader
-        # after a capability that is already working.
         snap = {
             "sid-bound": _record("claude-klabauter-11", "/sock/a.sock"),
             "sid-unbound": _record("claude-klabauter-22", None),
@@ -594,10 +524,7 @@ class TestFallbackChannel:
     def test_absent_cwd_never_crashes_and_defaults_to_memo_channel(
         self, monkeypatch, tmp_path
     ):
-        # An unconfirmed location must not be read as "same tree" -- a
         # wrong PEER_NOTICE pointer sends the reader down a channel that
-        # structurally cannot deliver, worse than the collapsed-reason
-        # defect this field exists to close.
         this_repo = tmp_path / "this-repo"
         this_repo.mkdir()
         snap = {
@@ -615,7 +542,6 @@ class TestFallbackChannel:
         self, monkeypatch, tmp_path
     ):
         # NO_LIVE_RECORD: there is no target to compare a working tree
-        # against at all -- not this field's arm, no fallback_channel.
         snap = {"sid-live": _record("claude-klabauter-11", "/sock/a.sock")}
         monkeypatch.setattr(hr, "snapshot", lambda: snap)
         monkeypatch.setattr(hr, "self_record", lambda: None)
@@ -677,11 +603,6 @@ class TestMessagingAvailablePredicate:
 
 
 class TestNoSubstituteRefWhenSocketAbsent:
-    """Anti-scope: a socketless record must never acquire a manufactured
-    address. The harness hashes its own live socket path and nothing else,
-    so any stand-in (`sessionId`, `pid`, `cwd`) yields an address the
-    harness refuses -- "a confident wrong address is worse than no
-    address"."""
 
     def test_socketless_record_is_omitted_from_resolve_candidates(self):
         snap = {
@@ -705,12 +626,6 @@ class TestNoSubstituteRefWhenSocketAbsent:
 
 
 class TestWarmServedOwnSession:
-    """Regression coverage for `state/bug-backlog/2026-08-30-self-record-
-    decides-self-inside-the-warm-door-3c91d0af7e42.yaml`: under a warm-
-    served request `harness_registry.self_record()` is pid-keyed off the
-    SERVER's own environment, i.e. whoever spawned it -- so before this fix
-    a warm-served request resolved the SPAWNER's id as `own_session` and
-    left the real caller's own id reading as `reachable` (a peer)."""
 
     def test_resolve_address_own_session_follows_carried_identity(self, monkeypatch):
         from coordinator_core.session import core as session_core
@@ -723,8 +638,6 @@ class TestWarmServedOwnSession:
         }
         monkeypatch.setattr(hr, "snapshot", lambda: snap)
         # The spawner's own ambient CLAUDE_PID still resolves via
-        # self_record() -- a real, correctly pid-keyed match, just for the
-        # wrong session.
         monkeypatch.setattr(hr, "self_record", lambda: (spawner_sid, snap[spawner_sid]))
 
         with session_core.warm_served_request(True):

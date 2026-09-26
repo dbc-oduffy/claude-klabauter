@@ -99,17 +99,12 @@ def _register_published(ml_dir: Path, published_root: Path) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Rung: registry key (`repos.claude_klabauter`) — the published-engine rung.
-# ---------------------------------------------------------------------------
-
-
 def test_registry_key_rung_denies_an_unstamped_published_root(tmp_path, registry, shim):
     """An ambient registry entry pointing at an unstamped directory must
     never resolve as the engine — `_resolve_published_engine` (C5) is the
     ONE place this rung's answer comes from."""
     published_root = tmp_path / "published"
-    (published_root / "coordinator_core").mkdir(parents=True)  # no stamp
+    (published_root / "coordinator_core").mkdir(parents=True)
 
     _register_published(registry.ml_dir, published_root)
 
@@ -129,12 +124,7 @@ def test_registry_key_rung_allows_a_stamped_published_root(tmp_path, registry, s
     assert shim._resolve_published_engine(registry.ml_dir) == published_root.as_posix()
 
 
-# ---------------------------------------------------------------------------
 # Rung: env var (`CLAUDE_KLABAUTER_ROOT`) — cc_invoke Rung 1 and the shared gate's own
-# Rung 1. Ambient by construction: every fired session inherits its parent's
-# environment. C6 closed this by no longer letting cc_invoke answer the
-# candidate verbatim — every candidate is delegated through the single gate.
-# ---------------------------------------------------------------------------
 
 
 def test_env_var_rung_no_longer_returns_its_candidate_verbatim(cc_invoke_mod):
@@ -149,12 +139,7 @@ def test_env_var_rung_no_longer_returns_its_candidate_verbatim(cc_invoke_mod):
     assert "_delegate_to_gate(existing" in source
 
 
-# ---------------------------------------------------------------------------
-# Rung: self-location (`__file__`) — cc_invoke's terminal Rung 3. Preserved
-# on the LOCATOR axis (Hard constraint 2: a script run by name must still
 # find its own tree) but banned from answering the DISPATCH question
-# directly — its candidate must also be delegated through the gate.
-# ---------------------------------------------------------------------------
 
 
 def test_self_location_rung_no_longer_returns_its_candidate_verbatim(cc_invoke_mod):
@@ -204,34 +189,15 @@ def test_locator_axis_keeps_self_location_deliberately():
     assert "__file__" in source
 
 
-# ---------------------------------------------------------------------------
-# Rung: pointer file (`.claude-klabauter-root` / `.claude-klabauter-live-root`) — cc_invoke's
-# Rung 1.5, the one documented direct-return exception. Safe only because the
-# published pointer is written by the same install pass that registers a
-# STAMPED mirror (C5's `_resolve_published_engine` is what makes that
-# registration mean anything) — this test pins that the exception still
-# exists in exactly this shape, so a future edit does not silently widen it.
-# ---------------------------------------------------------------------------
-
-
 def test_pointer_file_rung_is_the_one_documented_direct_return(cc_invoke_mod):
     source = inspect.getsource(cc_invoke_mod._resolve_claude_klabauter_root)
     assert "return _published_pointer_val" in source
     assert "return _pointer_val" in source
-    # Neither pointer rung is delegated -- that is the documented exception,
-    # not a bug; C6's own test (test_cc_invoke_no_ambient_live_tree.py) pins
-    # the same fact. Cross-checked here so this guard's enumeration is
-    # complete without re-deriving that test's fixtures.
     assert "_delegate_to_gate(_published_pointer_val" not in source
     assert "_delegate_to_gate(_pointer_val" not in source
 
 
-# ---------------------------------------------------------------------------
-# Rung: cwd — `_session_repo_root()`'s `Path.cwd()` walk. Never itself a
 # candidate for "which engine executes" -- it only feeds the STRUCTURAL
-# discriminant (`_is_claude_klabauter_source_tree`) that decides whether to prefer the
-# published engine, never returned as a resolved root in its own right.
-# ---------------------------------------------------------------------------
 
 
 def test_cwd_rung_never_feeds_the_dispatch_answer_directly(shim):
@@ -258,7 +224,7 @@ def test_cwd_rung_cannot_resolve_an_unstamped_tree_via_the_structural_gate(
     cwd cannot be used to smuggle an unstamped tree in as "the engine" by
     manipulating which tree the session appears to be inside."""
     published_root = tmp_path / "published"
-    (published_root / "coordinator_core").mkdir(parents=True)  # unstamped
+    (published_root / "coordinator_core").mkdir(parents=True)
 
     live_root = tmp_path / "live"
     live_root.mkdir()
@@ -276,13 +242,6 @@ def test_cwd_rung_cannot_resolve_an_unstamped_tree_via_the_structural_gate(
     assert root != published_root.as_posix()
 
 
-# ---------------------------------------------------------------------------
-# exec_cli's C4b fallback (C13) -- the missing-target branch must not reach
-# for a second, live-tree-only root once the resolved root (whichever class
-# answered) misses a target on disk.
-# ---------------------------------------------------------------------------
-
-
 def test_exec_cli_no_longer_falls_back_to_resolve_claude_klabauter_bin_dir(shim):
     """C13: a missing target under the resolved root fails loud (127) naming
     the ONE root tried -- it must not call `resolve_claude_klabauter_bin_dir()` (the
@@ -298,16 +257,6 @@ def test_exec_cli_no_longer_falls_back_to_resolve_claude_klabauter_bin_dir(shim)
         "resolve_claude_klabauter_bin_dir() -- that would resurrect the C4b fallback."
     )
     assert "C13" in source
-
-
-# ---------------------------------------------------------------------------
-# The ambient/deliberate boundary, both directions, on the one rung with a
-# clean in-process fixture for it (registry key / published engine): an
-# ambient (unstamped) registration cannot resolve, and a deliberate
-# (stamped) one still does -- see the two registry-key tests above, which
-# together ARE this boundary. This test asserts the pairing explicitly so a
-# future edit that breaks only one half is caught by name.
-# ---------------------------------------------------------------------------
 
 
 def test_ambient_and_deliberate_registry_answers_diverge_only_on_the_stamp(

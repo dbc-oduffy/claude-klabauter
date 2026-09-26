@@ -26,7 +26,6 @@ chunk C6.
 import sys
 from pathlib import Path
 
-# Same sys.path convention as the sibling C2 test file in this directory.
 _COORDINATOR_LIB = Path(__file__).resolve().parents[2]
 if str(_COORDINATOR_LIB) not in sys.path:
     sys.path.insert(0, str(_COORDINATOR_LIB))
@@ -59,9 +58,6 @@ def test_module_with_a_matching_test_is_not_reported_missing(tmp_path):
 
 
 def test_module_with_no_test_anywhere_is_not_reported_missing(tmp_path):
-    """The whole point of comparing against the source tree: a module that
-    never had a test anywhere (source included) must not be reported —
-    only a test that exists in source but stayed home is actionable."""
     tree = tmp_path / "tree"
     source = tmp_path / "source"
     _touch(tree / "orphan_subject.py")
@@ -75,8 +71,6 @@ def test_module_with_no_test_anywhere_is_not_reported_missing(tmp_path):
 
 
 def test_test_that_stayed_home_is_reported(tmp_path):
-    """The one case this gate exists to catch: source carries a test for
-    the shipped subject, but the mirror does not."""
     tree = tmp_path / "tree"
     source = tmp_path / "source"
     _touch(tree / "left_behind.py")
@@ -91,10 +85,6 @@ def test_test_that_stayed_home_is_reported(tmp_path):
 
 
 def test_matching_is_by_stem_not_directory_adjacency(tmp_path):
-    """The assembled mirror routinely ships a module and its test at
-    different depths (module at tree root, test under `tests/`) — a
-    directory-adjacency requirement would misreport every one of those as
-    missing."""
     tree = tmp_path / "tree"
     source = tmp_path / "source"
     _touch(tree / "foo.py")
@@ -134,8 +124,6 @@ def test_init_and_conftest_are_excluded_from_the_examined_population(tmp_path):
 
 
 def test_test_files_themselves_are_never_counted_as_subjects(tmp_path):
-    """A test file with no corresponding "test of the test" must never be
-    reported missing — only non-test modules are subjects."""
     tree = tmp_path / "tree"
     source = tmp_path / "source"
     _touch(tree / "test_lonely.py")
@@ -147,9 +135,6 @@ def test_test_files_themselves_are_never_counted_as_subjects(tmp_path):
 
 
 def test_denominator_never_collapses_zero_missing_with_zero_examined(tmp_path):
-    """Pins the parent plan's own abstention warning directly: an empty
-    tree and a fully-covered tree both report `missing == ()`, but must
-    stay distinguishable via `examined_count`."""
     empty_tree = tmp_path / "empty_tree"
     empty_tree.mkdir()
     empty_source = tmp_path / "empty_source"
@@ -192,9 +177,6 @@ def test_multiple_missing_modules_are_all_reported_and_sorted(tmp_path):
 
 
 def test_source_root_accepts_multiple_roots(tmp_path):
-    """A destination repo root can be fed by more than one row, each with
-    its own source_dir (publish.py's rows_by_repo_root) — the function
-    must accept a sequence and union their test stems."""
     tree = tmp_path / "tree"
     source_a = tmp_path / "source_a"
     source_b = tmp_path / "source_b"
@@ -209,9 +191,6 @@ def test_source_root_accepts_multiple_roots(tmp_path):
 
     assert report.examined_count == 2
     assert report.missing == ("from_a.py", "from_b.py")
-
-
-# --- format_test_coverage_warning: always states the denominator -----------
 
 
 def test_format_warning_states_denominator_when_nothing_is_missing():
@@ -231,8 +210,6 @@ def test_format_warning_lists_each_missing_module():
 
 
 def test_format_warning_zero_examined_is_distinguishable_from_zero_missing():
-    """The abstention shape itself: "0 missing over 0 examined" must never
-    read the same as a genuine clean pass."""
     abstained = format_test_coverage_warning(ModuleTestCoverageReport(examined_count=0, missing=()))
     clean = format_test_coverage_warning(ModuleTestCoverageReport(examined_count=5, missing=()))
     assert abstained != clean

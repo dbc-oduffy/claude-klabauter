@@ -128,10 +128,6 @@ _OP_KEY = "fleet.delete_superseded_decisions"
 
 _FAMILY = "decision-record"
 
-# Live-surface pathspecs the citation-stranding refusal searches. A module-
-# level literal tuple, per the plan's own binding decision — everything else
-# (archive/, state/, docs/plans/, docs/research/, docs/problems/, tasks/,
-# generated indexes) counts as history and is deliberately excluded.
 _LIVE_SURFACE_PATHSPECS: Tuple[str, ...] = (
     "coordinator_core",
     "coordinator",
@@ -144,22 +140,10 @@ _LIVE_SURFACE_PATHSPECS: Tuple[str, ...] = (
 
 _REASON_MAX_ID_FLOOR = "max-id-floor"
 
-# Matches a DR id at the head of a decision-record filename, e.g.
-# "DR-233-merge-gate-....md" -> "233". Same numeric-id shape
-# coordinator_core/ops/docgen/dr_allocator.py parses, restated locally
-# (bounded, filename-only) rather than importing that module — this op only
-# needs the corpus maximum, not full allocation semantics.
 _DR_ID_RE = re.compile(r"^DR-(\d+)-")
 
-# Non-anchored variant for extracting a numeric id out of a successor
-# pointer, which may be spelled as a bare id ("DR-300") rather than a
-# filename ("DR-300-foo.md") — both `superseded_by:`/`supersedes:`
-# frontmatter fields and a citation line's prose use the bare form.
 _DR_ID_ANY_RE = re.compile(r"DR-(\d+)")
 
-# Recovery pointer carried once per deleted entry in the result payload and
-# once in the sweep receipt's `detail` — never in the commit body (F1 option
-# (b); rm_and_commit is called with subject= only).
 _RECOVERY_SENTENCE_TEMPLATE = (
     "Removed from the working tree; stays in git history: "
     "git log --diff-filter=D -- {path}"
@@ -188,22 +172,12 @@ class _Candidate:
 
 
 def _scan_superseded(worktree_root: Path) -> Tuple[List[_Candidate], int]:
-    """Scan docs/decisions/*.md for status:superseded records and the corpus max id.
-
-    Returns (candidates, max_id). max_id is the highest numeric DR id found
-    among EVERY record in docs/decisions/*.md (not just superseded ones) —
-    the ids `dr_allocator.allocate_dr_number` would compute max+1 from.
-
-    One bounded frontmatter read per file (status, superseded_by,
-    supersedes) — no full-body read, no per-record spawn.
-    """
     decisions_dir = _decisions_dir(worktree_root)
     candidates: List[_Candidate] = []
     max_id = 0
     if not decisions_dir.is_dir():
         return candidates, max_id
 
-    # Pass 1: gather every record's status/superseded_by, and the corpus max id.
     all_records: List[Tuple[Path, str, Optional[str], Optional[str]]] = []
     for path in sorted(decisions_dir.glob("*.md")):
         if path.name == "README.md":
@@ -216,9 +190,7 @@ def _scan_superseded(worktree_root: Path) -> Tuple[List[_Candidate], int]:
         supersedes = parse_frontmatter_field(path, "supersedes")
         all_records.append((path, status or "", superseded_by, supersedes))
 
-    # Pass 2: index supersedes: pointers so a victim with no own
-    # superseded_by can still resolve a successor via the reverse edge.
-    supersedes_of: Dict[str, str] = {}  # victim id-string -> successor rel path
+    supersedes_of: Dict[str, str] = {}
     for path, _status, _sb, supersedes in all_records:
         if supersedes:
             supersedes_of[str(supersedes).strip()] = path.name
@@ -229,9 +201,6 @@ def _scan_superseded(worktree_root: Path) -> Tuple[List[_Candidate], int]:
         num = _dr_number(path.name)
         successor = superseded_by
         if not successor:
-            # Fall back to the reverse supersedes: edge, keyed off this
-            # record's own DR id token (filename-derived, matching how
-            # supersedes: fields cite an id).
             stem_id = path.name.split("-", 2)
             token = f"DR-{stem_id[1]}" if len(stem_id) > 1 else None
             if token and token in supersedes_of:
@@ -243,10 +212,6 @@ def _scan_superseded(worktree_root: Path) -> Tuple[List[_Candidate], int]:
 
 
 def _successor_filename(successor: Optional[str]) -> Optional[str]:
-    """Normalize a successor pointer (a DR id token or a bare filename) to a
-    filename fragment usable for the same-file / same-line exemption checks.
-    Returns None when the successor is absent or unresolvable.
-    """
     if not successor:
         return None
     return successor
@@ -256,12 +221,6 @@ async def _live_citations(
     worktree_root: Path,
     candidates: List[_Candidate],
 ) -> Dict[str, List[str]]:
-    """ONE batched `git grep` over every candidate id at once.
-
-    Returns {candidate_rel: [path:line, ...]} for every candidate with at
-    least one non-exempt live citation. Spawns nothing when `candidates` is
-    empty.
-    """
     if not candidates:
         return {}
 
@@ -287,7 +246,6 @@ async def _live_citations(
         **no_console_creationflags(),
     )
     out, stderr = await proc.communicate()
-    # git grep exits 1 on "no matches" — not an error; exit >=2 is a real failure.
     if proc.returncode not in (0, 1):
         _LOG.warning(
             "fleet.delete_superseded_decisions: git grep failed (rc=%s): %s",
@@ -302,7 +260,6 @@ async def _live_citations(
     for line in out.decode(errors="replace").splitlines():
         if not line:
             continue
-        # git grep -n output: "<path>:<lineno>:<content>"
         parts = line.split(":", 2)
         if len(parts) < 3:
             continue
@@ -313,7 +270,6 @@ async def _live_citations(
             candidate = id_to_candidate.get(mid)
             if candidate is None:
                 continue
-            # Exempt: hit is in the victim's own file.
             if hit_path == candidate.rel or Path(hit_path).name == candidate.path.name:
                 continue
             successor = _successor_filename(candidate.successor)
@@ -322,13 +278,8 @@ async def _live_citations(
                 m = _DR_ID_ANY_RE.search(successor)
                 if m:
                     succ_num = int(m.group(1))
-            # Exempt: hit is in the successor's own FILE (the live pointer) —
-            # decided by numeric id (the successor pointer is commonly a bare
-            # "DR-300" id, not a filename), matched against the hit path's
-            # own leading DR id.
             if succ_num is not None and _dr_number(Path(hit_path).name) == succ_num:
                 continue
-            # Exempt: the same line also names the successor id.
             if succ_num is not None and f"DR-{succ_num}" in content:
                 continue
             hits.setdefault(candidate.rel, []).append(f"{hit_path}:{hit_lineno}")
@@ -337,13 +288,6 @@ async def _live_citations(
 
 
 def _handle_preview(worktree_root: Path, cap: int) -> Tuple[dict, List[dict]]:
-    """T1 preview: enumerate superseded records, apply the max-id-floor and
-    citation-stranding refusals, cap-slot the survivors oldest-filename-first.
-
-    Returns (dry_run_result, scan_skipped) — scan_skipped mirrors every
-    excluded superseded record with a named reason, for the sweep receipt's
-    own diagnostics (not part of the frozen wire envelope).
-    """
     import asyncio
 
     candidates, max_id = _scan_superseded(worktree_root)
@@ -385,10 +329,6 @@ def _handle_preview(worktree_root: Path, cap: int) -> Tuple[dict, List[dict]]:
 
 
 def _handle_act(worktree_root: Path, candidate_ids: List[str], cap: int) -> dict:
-    """T3 act: re-verify each candidate_id at act time (status, max-id floor,
-    citation refusal), delete up to `cap` via rm_and_commit, and carry the
-    git-history recovery sentence once per deleted entry.
-    """
     import asyncio
 
     decisions_dir = _decisions_dir(worktree_root)
@@ -406,8 +346,6 @@ def _handle_act(worktree_root: Path, candidate_ids: List[str], cap: int) -> dict
 
         c = by_rel.get(cid)
         if c is None:
-            # Act-time status drift: no longer classifies as superseded (or
-            # not under docs/decisions/ at all) — never delete on ambiguity.
             status = parse_frontmatter_status(target)
             skipped.append({
                 "id": cid,
@@ -428,8 +366,6 @@ def _handle_act(worktree_root: Path, candidate_ids: List[str], cap: int) -> dict
         to_delete = [c for c in to_delete if c.rel not in hits]
 
     to_delete = to_delete[:cap]
-    # Excess beyond cap is simply not included in to_delete; no separate
-    # reason string is required by spec.
 
     acted: List[dict] = []
     failed: List[dict] = []

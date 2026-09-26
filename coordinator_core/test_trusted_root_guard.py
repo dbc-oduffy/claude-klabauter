@@ -1,10 +1,3 @@
-"""Tests for coordinator_core.trusted_root_guard — parity checks against the
-documented trust-core + mode tails.
-
-Port of: coordinator-trusted-root-guard.sh (DoE bd8cc0e9, 2026-07-22)
-Bash-parity fixture backlink: Port of: test-trusted-root-guard.sh
-  (DoE bd8cc0e9, 2026-07-22)
-"""
 
 from __future__ import annotations
 
@@ -30,9 +23,6 @@ def _env(**overrides):
     if base["CLAUDE_HOME"] == "":
         base.pop("CLAUDE_HOME")
     return base
-
-
-# --- is_trusted: trust-core predicate -------------------------------------
 
 
 def test_trusted_under_dot_claude_prefix():
@@ -66,8 +56,6 @@ def test_doe_root_itself_is_trusted(tmp_path):
 def test_doe_root_trailing_slash_normalized(tmp_path):
     home = tmp_path
     (home / ".claude").mkdir()
-    # Hand-edited sentinel with a trailing slash should not cause a `//`
-    # false-reject against the checked root.
     (home / ".claude" / ".doe-root").write_text(str(tmp_path / "DoE-claude") + "/\n")
     env = {"HOME": str(home)}
     assert is_trusted(str(tmp_path / "DoE-claude" / "coordinator"), env=env)
@@ -82,22 +70,11 @@ def test_doe_root_trailing_slash_normalized(tmp_path):
     "test_windows_separator_and_case_normalization below.",
 )
 def test_doe_root_only_single_trailing_slash_stripped(tmp_path):
-    # Bash `${_cc_doe%/}` strips exactly ONE
-    # trailing slash, unlike `.rstrip("/")` which strips all of them. A
-    # pathological hand-edit with `//` leaves one `/` behind on both sides
-    # of the port, which means the *same* double-slash-required prefix
-    # match applies to a normally-single-slashed candidate root -- matching
-    # the oracle's own quirk byte-for-byte rather than silently
-    # over-normalizing it away.
     home = tmp_path
     (home / ".claude").mkdir()
     (home / ".claude" / ".doe-root").write_text(str(tmp_path / "DoE-claude") + "//\n")
     env = {"HOME": str(home)}
-    # A single-trailing-slash strip leaves ".../DoE-claude/" as doe_root, so
-    # the prefix check requires a DOUBLE slash -- a normally-formed child
-    # path (single slash) does NOT match, reproducing the oracle's quirk.
     assert not is_trusted(str(tmp_path / "DoE-claude" / "coordinator"), env=env)
-    # The double-slash-prefixed form does match.
     assert is_trusted(str(tmp_path / "DoE-claude") + "//coordinator", env=env)
 
 
@@ -114,25 +91,16 @@ def test_windows_separator_and_case_normalization(tmp_path):
     home = tmp_path
     (home / ".claude").mkdir()
     doe = tmp_path / "DoE-claude"
-    # Sentinel spelled with forward slashes, as the pointer generator writes it.
     (home / ".claude" / ".doe-root").write_text(str(doe).replace("\\", "/") + "\n")
     env = {"HOME": str(home)}
 
-    # Backslashed child path must be trusted despite the spelling mismatch.
     assert is_trusted(str(doe / "coordinator"), env=env)
-    # Drive-letter / path case must not matter on a case-insensitive filesystem.
     assert is_trusted(str(doe / "coordinator").upper(), env=env)
-    # A sibling that merely shares a name prefix must NOT be trusted.
     assert not is_trusted(str(tmp_path / "DoE-claude-evil" / "coordinator"), env=env)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows path-spelling normalization")
 def test_windows_backslash_traversal_is_rejected(tmp_path):
-    """The `..` traversal guard must fire on Windows separators too.
-
-    The check was `"/.." in root`, which silently missed `\\..` — so the
-    documented `$HOME/.claude/../../tmp/evil` bypass was open on Windows.
-    """
     env = {"HOME": str(tmp_path)}
     assert not is_trusted(str(tmp_path / ".claude") + "\\..\\..\\tmp\\evil", env=env)
 
@@ -150,14 +118,6 @@ def test_registry_repos_doe_claude_ranks_above_doe_root_file_mirrors(tmp_path):
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     registry_root = tmp_path / "from-registry"
-    # TOML literal string (single-quoted), not a basic (double-quoted) one:
-    # a Windows path's backslashes (`C:\Users\...`) are escape sequences in
-    # a basic string -- `\U` in particular is an invalid 8-hex-digit Unicode
-    # escape, so tomllib raises on load and `_load_toml` (which swallows
-    # parse errors, see machine_resolver.py) silently degrades to "no
-    # registry key", not "the value below". Literal strings process no
-    # escapes, matching test_doe_root_pointer.py's own `_write_registry`
-    # helper.
     (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
         f"\"repos.doe_claude\" = '{registry_root}'\n"
     )
@@ -177,16 +137,9 @@ def test_registry_repos_doe_claude_ranks_above_doe_root_file_mirrors(tmp_path):
 
 
 def test_registry_repos_claude_klabauter_is_trusted_anchor(tmp_path):
-    """The claude-klabauter repo's own root — where the trust-check call sites
-    themselves now live — must be trusted via the registry-resolved
-    `repos.claude_klabauter` key, mirroring the `repos.doe_claude` anchor."""
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
-    # TOML literal string (single-quoted) -- see the sibling
-    # test_registry_repos_doe_claude_ranks_above_doe_root_file_mirrors's
-    # comment above for why a basic (double-quoted) string breaks on a
-    # Windows path.
     (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
         f"\"repos.claude_klabauter\" = '{claude_klabauter_root}'\n"
     )
@@ -199,8 +152,6 @@ def test_registry_repos_claude_klabauter_is_trusted_anchor(tmp_path):
 
 
 def test_registry_repos_claude_klabauter_durable_pointer_file_fallback(tmp_path):
-    """Absent the registry key, the durable `.claude-klabauter-live-root` pointer file
-    under machine-local/ still resolves the anchor."""
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
@@ -213,9 +164,6 @@ def test_registry_repos_claude_klabauter_durable_pointer_file_fallback(tmp_path)
 
 
 def test_absent_repos_claude_klabauter_key_degrades_cleanly(tmp_path):
-    """No registry key and no durable pointer file — the claude-klabauter anchor
-    contributes nothing, and the guard falls back to the existing
-    three-anchor behavior (never crashes, never widens trust)."""
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
 
@@ -250,8 +198,6 @@ def test_a_flat_clone_root_is_trusted_as_itself_not_only_its_children(tmp_path):
 
 
 def test_the_engine_root_is_trusted_as_itself(tmp_path):
-    """Same widening on the engine anchor: a bin script invoked with the engine
-    clone's own root as its plugin root must not false-reject its own repo."""
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
@@ -264,11 +210,6 @@ def test_the_engine_root_is_trusted_as_itself(tmp_path):
 
 
 def test_the_widening_stops_at_the_anchor_never_reaches_its_parent(tmp_path):
-    """The equality arm must not be readable as "the anchor's neighbourhood".
-
-    A parent directory, an unrelated sibling, and a sibling sharing a name
-    prefix all stay untrusted — the whole point of the anchor.
-    """
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     clone = tmp_path / "clones" / "coordinator-claude"
@@ -284,8 +225,6 @@ def test_the_widening_stops_at_the_anchor_never_reaches_its_parent(tmp_path):
 
 
 def test_the_marketplace_anchor_stays_descendants_only(tmp_path):
-    """`~/.claude` is a container, not a plugin root: the equality arm is
-    deliberately NOT extended to anchor 1."""
     env = {"HOME": str(tmp_path)}
     assert not is_trusted(str(tmp_path / ".claude"), env=env)
     assert is_trusted(str(tmp_path / ".claude" / "plugins"), env=env)
@@ -297,10 +236,7 @@ def test_traversal_segment_rejected_even_under_trusted_prefix():
 
 
 def test_dotdot_prefixed_basename_false_reject_documented():
-    # Documented pre-existing edge case in the bash trust-core: a
     # dotdot-PREFIXED (not traversal) segment like `..cache` still matches
-    # the `*"/.."*` glob and is rejected, even though it is not a real `..`
-    # traversal. Faithfully reproduced, not "fixed", per port instructions.
     env = _env()
     assert not is_trusted("/home/tester/.claude/..cache", env=env)
 
@@ -311,26 +247,16 @@ def test_plugin_root_trusted_env_opt_out():
 
 
 def test_plugin_root_trusted_env_opt_out_overrides_traversal_reset():
-    # Faithfully reproduced bash trust-core ordering, NOT "fixed": the
-    # bash sourced-lib applies the traversal reset (`_cc_trusted=0`) BEFORE
     # the `COORDINATOR_PLUGIN_ROOT_TRUSTED=1` opt-out check, so the
-    # explicit developer opt-out is applied last and DOES override the
-    # traversal guard. This is documented as intentional in the bash
-    # header ("sanctioned --plugin-dir spike opt-out") — the opt-out is a
-    # deliberate full bypass, not merely of the prefix anchors.
     env = _env(COORDINATOR_PLUGIN_ROOT_TRUSTED="1")
     assert is_trusted("/home/tester/.claude/../../tmp/evil", env=env)
 
 
 # --- home resolution: USERPROFILE rung (F2 regression, 2026-07-28) --------
-#
 # F2 (machine-a install dogfood): the guard's home chain was CLAUDE_HOME ->
 # HOME with no USERPROFILE rung. HOME is a POSIX convention; native Windows
 # shells (PowerShell, cmd.exe) set USERPROFILE instead. With home empty,
-# _settings_home_dir_from_env returned "" and EVERY rung of _doe_root was
-# skipped -- including the canonical registry rung whose value was present
 # and correct. Every PRE-EXISTING test in this file injects HOME, so this
-# configuration was unreachable by the suite -- these tests inject ONLY
 # USERPROFILE, reproducing a native-Windows shell invocation.
 
 
@@ -403,9 +329,6 @@ def test_mode_unrecognized_raises_value_error():
         coordinator_trusted_root_guard(mode="fail-quiet", root="/tmp/evil", env=env)
 
 
-# --- fail-loud tail ---------------------------------------------------
-
-
 def test_fail_loud_trusted_returns_true():
     env = _env()
     assert coordinator_trusted_root_guard(
@@ -451,11 +374,6 @@ def test_fail_loud_diagnostics_show_empty_anchor_and_caveat_override(capsys, tmp
 
 
 def test_fail_loud_diagnostics_show_resolved_anchors_when_present(capsys, tmp_path):
-    """When every anchor resolves, the diagnostic block still prints the
-    resolved values (so a genuinely untrusted root is diagnosable too), and
-    the EMPTY-anchor caveat should not fire. Uses the durable-file rungs
-    (not the registry rung) to stay independent of the pre-existing,
-    Windows-only registry-read failures tracked separately in this suite."""
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     settings_home_dir = tmp_path / "settings-home"
@@ -482,9 +400,6 @@ def test_fail_loud_or_exit_untrusted_calls_sys_exit(capsys):
     assert exc_info.value.code == 1
 
 
-# --- fail-open tail -----------------------------------------------------
-
-
 def test_fail_open_trusted_returns_true_no_stderr(capsys):
     env = _env()
     result = coordinator_trusted_root_guard(
@@ -495,7 +410,7 @@ def test_fail_open_trusted_returns_true_no_stderr(capsys):
 
 
 def test_fail_open_untrusted_existing_dir_warns(tmp_path, capsys):
-    root = str(tmp_path)  # exists, non-empty, untrusted
+    root = str(tmp_path)
     env = _env()
     result = coordinator_trusted_root_guard(mode="fail-open", root=root, env=env)
     assert result is False
@@ -530,30 +445,11 @@ def test_fail_open_untrusted_nonexistent_root_stays_silent(capsys):
 
 def test_fail_open_never_raises():
     env = _env()
-    # Contrast with fail-loud: fail-open must never raise/exit, even on an
-    # untrusted, security-relevant root.
     result = coordinator_trusted_root_guard(mode="fail-open", root="/tmp/evil", env=env)
     assert result is False
 
 
-# --- staff-eng review F4: arms the widening's own suite did not cover ---------
-
-
 def test_an_empty_anchor_never_trusts_anything(tmp_path):
-    """The bypass the widening's other arms do NOT catch.
-
-    `_at_or_under`'s equality arm makes an EMPTY anchor catastrophic: `root_cmp
-    == ""` is true for an empty root, and `startswith("" + "/")` trusts every
-    absolute path on the box. The only thing standing between that and the
-    predicate is the `if doe_root and` / `if claude_klabauter_root and` guard in
-    `is_trusted`. Verified by mutation: dropping the `doe_root and` conjunct
-    turns 16 arms in this module red, this one among them. So the conjunct is
-    not solely pinned here — what this arm adds is a DIRECT statement of the
-    property, in the degenerate shape (`""`, `"/"`, an arbitrary absolute path)
-    that the incidental 13 do not name. A reader triaging those 16 failures
-    should not have to infer "the empty anchor trusts everything" from a
-    marketplace-cache fixture that failed for an unrelated reason.
-    """
     env = {"HOME": str(tmp_path / "home")}
 
     assert not is_trusted("", env=env)
@@ -562,10 +458,6 @@ def test_an_empty_anchor_never_trusts_anything(tmp_path):
 
 
 def test_a_root_only_registry_value_does_not_trust_the_whole_filesystem(tmp_path):
-    """`/` as an anchor is the degenerate case of the above, reached through a
-    real surface rather than an absent one: `_doe_root` strips exactly one
-    trailing slash, collapsing `"/"` to `""`, which the emptiness guard then
-    catches. That collapse is load-bearing and was previously unpinned."""
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
@@ -596,9 +488,6 @@ def test_the_engine_anchor_has_the_same_negative_boundary_as_the_doe_anchor(tmp_
 
 
 def test_a_traversal_under_a_widened_anchor_is_still_refused(tmp_path):
-    """The traversal reset is global and runs AFTER both anchor arms. Pinned
-    under a WIDENED anchor specifically: the equality arm is new, and a reader
-    could reasonably wonder whether it short-circuits the reset."""
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     engine = tmp_path / "clones" / "claude-klabauter"
@@ -609,9 +498,6 @@ def test_a_traversal_under_a_widened_anchor_is_still_refused(tmp_path):
 
     assert not is_trusted(f"{engine}/..", env=env)
     assert not is_trusted(f"{engine}/../../tmp/evil", env=env)
-
-
-# --- anchor 4: the served plugin mirror, a key of its own -------------------
 
 
 def _write_plugin_mirror_registry(tmp_path, mirror_root, *, doe_root=None):
@@ -629,10 +515,6 @@ def _write_plugin_mirror_registry(tmp_path, mirror_root, *, doe_root=None):
 
 
 def test_the_served_plugin_mirror_is_a_trust_anchor_of_its_own(tmp_path):
-    """A cloud container serves a flat published mirror while `repos.doe_claude`
-    names the authoring tree that carries the doctrine corpus the mirror does not
-    publish. Without this anchor the mirror — the thing every session in that
-    container RUNS — is untrusted the moment the authoring key stops naming it."""
     mirror = tmp_path / "coordinator-claude-mirror"
     authoring = tmp_path / "authoring-tree"
     settings_home_dir = _write_plugin_mirror_registry(tmp_path, mirror, doe_root=authoring)
@@ -640,7 +522,6 @@ def test_the_served_plugin_mirror_is_a_trust_anchor_of_its_own(tmp_path):
 
     assert is_trusted(str(mirror), env=env)
     assert is_trusted(str(mirror / "coordinator"), env=env)
-    # The authoring anchor still stands on its own, unchanged.
     assert is_trusted(str(authoring), env=env)
 
 
@@ -655,21 +536,12 @@ def test_the_mirror_anchor_has_the_same_negative_boundary_as_the_others(tmp_path
 
 
 def test_a_slash_dotdot_poisoned_anchor_value_is_neutralized_by_the_global_reset(tmp_path):
-    """reviewer-S3, Finding 2. A registry anchor VALUE containing a
-    literal "/.." (operator error or attacker-controlled) is never scrubbed at
-    resolution -- `_plugin_mirror_root` is purely textual per DR-148. It is
-    inert only because any root that would MATCH such a poisoned anchor
-    necessarily itself contains "/..", which trips the global reset in
-    `is_trusted` unconditionally. Pinned so a future reader does not
-    "simplify" that reset away believing it only guards anchor 1."""
     mirror = tmp_path / "legit" / ".." / "evil-mirror"
     settings_home_dir = _write_plugin_mirror_registry(tmp_path, mirror)
     env = {"HOME": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
 
     poisoned_anchor = str(mirror)
     assert "/.." in poisoned_anchor.replace(os.sep, "/")
-    # Even the anchor value itself, which would otherwise self-match via
-    # `_at_or_under`, is refused -- the reset applies unconditionally.
     assert not is_trusted(poisoned_anchor, env=env)
     assert not is_trusted(str(mirror / "coordinator"), env=env)
 
@@ -686,10 +558,6 @@ def test_an_absent_mirror_key_contributes_nothing_and_never_raises(tmp_path):
 def test_diagnostics_name_the_mirror_anchor_without_calling_its_absence_the_defect(
     capsys, tmp_path
 ):
-    """The key is absent on every machine where the served and authoring trees are
-    one directory, which is most of them. It must be VISIBLE in a rejection, and
-    must not be listed among the empty anchors that are "very likely the actual
-    defect" — that sends a maintainer hunting a key their box correctly lacks."""
     settings_home_dir = _write_plugin_mirror_registry(
         tmp_path, tmp_path / "mirror", doe_root=tmp_path / "authoring"
     )

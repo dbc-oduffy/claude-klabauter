@@ -91,29 +91,16 @@ __all__ = ["QueueEmission", "QueuePathEscapeError", "emit_queue_script"]
 
 
 class QueuePathEscapeError(ValueError):
-    """Raised when `run_dir` or a `queue` directory resolves outside `repo_root`.
-
-    Mirrors `op.py :: PathEscapeError`'s shape for the plan route's
-    `output_path`/`target_root` pair, applied here to the queue route's
-    read-side directories -- both are the same
-    `coordinator_core.ops._path_guard.contained_path` containment check.
-    """
+    pass
 
 
 class QueueEmission(NamedTuple):
-    """`emit_queue_script`'s return: the composed script text plus the
-    receipt extras `op.py` writes beside it (module docstring)."""
 
     script: str
     receipt_extras: dict
 
 
 def _resolved_batch_sizes(resolved_knobs: Mapping[str, Any]) -> dict:
-    """The `batch_sizes` `select_rows` records on the frozen `Manifest` --
-    the resolved `batch_size` knob, reshaped to the `{batch_key: int}` (or
-    `{"default": int}`) mapping `Manifest.batch_sizes` is typed as. Recorded
-    honestly off the SAME resolved knob `grind_compose._group_into_batches`
-    groups by, never a second, independently-computed value."""
     batch_size = resolved_knobs.get("batch_size", 4)
     if isinstance(batch_size, Mapping):
         return dict(batch_size)
@@ -127,15 +114,6 @@ def _reemit_argv(
     queue: Sequence[Path],
     overrides: Optional[Mapping[str, Any]],
 ) -> list:
-    """The argv list `emit-dispatch-workflow.py` re-runs to re-derive this
-    same script from the same queue/profile/appetite/overrides inputs --
-    never the resolved knobs, which are a DERIVED fact, not an input; re-
-    deriving from the resolved value rather than the raw override would mask
-    a profile-preset change on re-emit.
-
-    The entrypoint itself (``emit-dispatch-workflow.py``) is the argv's
-    first element -- a runnable argv, not a bare flag list a caller has to
-    know to prepend a command onto first."""
     argv: list = [
         "emit-dispatch-workflow.py",
         "--profile", profile,
@@ -157,7 +135,7 @@ def _reemit_argv(
 def emit_queue_script(
     profile: str,
     appetite: str = "standard",
-    overrides: Optional[Mapping[str, Any]] = None,  # keys ⊆ {"where", "limit", "budget_tokens"}
+    overrides: Optional[Mapping[str, Any]] = None,
     *,
     queue: Sequence[Path],
     profile_dir: Path,
@@ -167,13 +145,6 @@ def emit_queue_script(
     agent_type_host: Optional[str] = None,
     preamble: Optional[str] = None,
 ) -> QueueEmission:
-    """Turn a profile, an appetite and one or more queue directories into one
-    composed queue-grind script plus its receipt extras. See module docstring.
-
-    ``preamble`` forwards straight to ``grind_compose.
-    compose_grind_script`` -- see that function's own docstring. Never
-    opened, parsed or otherwise interpreted here.
-    """
     repo_root = Path(repo_root).resolve()
 
     guarded_run_dir = contained_path(Path(run_dir), [repo_root])

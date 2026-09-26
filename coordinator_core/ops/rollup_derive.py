@@ -88,7 +88,7 @@ from typing import List
 
 from coordinator_core.ops.parse_resolves_trailer import run as _parse_resolves_run
 
-_PROG = "rollup-derive"  # literal program-name prefix — matches oracle stderr
+_PROG = "rollup-derive"
 
 _USAGE = """Usage: rollup-derive.sh <artifact-id>
 
@@ -124,7 +124,6 @@ def _is_inside_git_repo() -> bool:
 
 
 def _candidate_shas(artifact_id: str) -> List[str]:
-    """Substring-match candidates via `git log --grep` (over-inclusive by design; see module docstring)."""
     r = _run_git(
         ["log", "--all", "--format=%H", f"--grep=Resolves: {artifact_id}", "--fixed-strings"]
     )
@@ -134,31 +133,6 @@ def _candidate_shas(artifact_id: str) -> List[str]:
 
 
 def _batch_primary_trailers(shas: List[str]) -> dict:
-    """Resolve the PRIMARY `Resolves:` trailer values for a batch of candidate
-    commit SHAs in ONE ``git log`` call, replacing the per-candidate
-    ``parse_resolves_trailer.run`` spawn pair.
-
-    This is an OBJECT question (trailer content at a caller-supplied SHA),
-    not a RANGE question — ``git log --no-walk`` resolves each argv SHA
-    independently and never merges them into one ancestry/reachability set
-    expression, so it batches unconditionally (Anti-scope 1/2/4; the forbidden
-    shape is ``git rev-list A..B C..D``, not this). Mirrors
-    ``emit/sections/handoffs._resolve_shipped_in_dates``'s
-    ``--no-walk=unsorted --ignore-missing`` shape and C13's
-    ``_batch_commit_timestamps`` precedent (Anti-scope 25's reconciliation
-    reference), not re-derived here.
-
-    ``--ignore-missing`` makes an unresolvable SHA silently ABSENT from
-    stdout (exit 0) rather than an error. Each record is delimited by a
-    literal ``\\x1e`` (record separator) so a multi-value ``Resolves:``
-    trailer's own embedded newlines never get mistaken for a record
-    boundary; within a record, ``\\x1f`` (unit separator) splits the full
-    40-char SHA from its trailer-value lines. A requested SHA absent from
-    the returned dict (never resolved, or resolved with zero trailer lines)
-    is the caller's signal to fall back to the per-commit primitive — the
-    same "absent means try the fallback" contract the original per-candidate
-    ``parse_resolves_trailer.run`` had for an empty primary result.
-    """
     if not shas:
         return {}
     ordered = sorted(set(shas))
@@ -191,15 +165,6 @@ def _batch_primary_trailers(shas: List[str]) -> dict:
 
 
 def _derive_resolving(artifact_id: str) -> tuple[List[str], List[str]]:
-    """Return (resolving_shas, untrailered_shas).
-
-    The second element is the malformed-trailer population: candidates whose
-    raw message matched but for which NEITHER parse rung yielded any
-    `Resolves:` trailer at all. It is the only drop reason a caller can act on
-    — a candidate dropped because its trailer named a different artifact-id is
-    the correct prefix-sharing narrowing and is deliberately absent here (see
-    the module docstring's malformed-trailer diagnostic paragraph).
-    """
     candidates = _candidate_shas(artifact_id)
     if not candidates:
         return [], []
@@ -213,10 +178,6 @@ def _derive_resolving(artifact_id: str) -> tuple[List[str], List[str]]:
         if values:
             resolved[candidate_sha] = artifact_id in values
         else:
-            # Absent or empty primary result -- mirrors the original
-            # per-candidate parse_resolves_trailer.run's own primary-then-
-            # fallback rung (Negative-spec: the case-insensitive fallback
-            # asymmetry is inherited, not fixed here).
             fallback_needed.append(candidate_sha)
 
     for candidate_sha in fallback_needed:
@@ -250,7 +211,6 @@ def _shipped_rc(resolving_shas: List[str]) -> int:
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: arg validation, derivation, token emission, return rc."""
     if not argv or argv[0] in ("--help", "-h"):
         print(_USAGE)
         return 0 if argv else 1

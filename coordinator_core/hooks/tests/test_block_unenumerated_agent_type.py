@@ -1,22 +1,3 @@
-"""coordinator_core.hooks.tests.test_block_unenumerated_agent_type -- coverage
-for the PreToolUse(Agent) unenumerated-`subagent_type` deny guard.
-
-Two families of test here:
-    - Controlled roster tests (tmp_path fixtures + `resolve_roster(doe_root=...,
-      home=...)` injection) -- isolate the deny/allow/fail-closed/override
-      logic from this machine's real DoE-claude checkout and `~/.claude`
-      state.
-    - ONE live-resolution regression test, run against the REAL DoE-claude
-      sibling checkout and this machine's real `~/.claude/plugins/`, that
-      pins the three-source union directly (AC3): `Explore`, `Plan`,
-      `general-purpose`, and `game-dev:staff-game-dev` must all resolve as
-      members. Without this, a re-narrowing of `resolve_roster()` back to
-      the coordinator-authored two sources would ship silently even though
-      every controlled test above still passes (they inject a synthetic
-      roster and never touch the real union path at all).
-
-Spec backlink: pln-deny-unenumerated-agent-types-e56d1b § C1
-"""
 
 from __future__ import annotations
 
@@ -40,11 +21,6 @@ def _patch_opus_gate_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     dedicated test module, `test_block_ungranted_opus_subagent.py`.
     """
     monkeypatch.setattr(opus_gate_mod, "check", lambda payload: None)
-
-
-# ---------------------------------------------------------------------------
-# Fixtures — a synthetic DoE-claude-shaped tree under tmp_path.
-# ---------------------------------------------------------------------------
 
 
 def _write_policy_yaml(doe_root: Path, extra_type: str = "coordinator:executor") -> None:
@@ -88,35 +64,25 @@ def _write_agent_md(path: Path, name: str) -> None:
 
 @pytest.fixture()
 def plugin_home(tmp_path: Path) -> Path:
-    """A synthetic `~/.claude` tree exercising all FOUR plugin layouts
-    (see `_load_plugin_roster`'s docstring), plus the `_pre-refresh-
-    snapshots` exclusion, in one fixture so `test_resolve_roster_unions_all_three_sources`
-    below pins the whole union in a single assertion.
-    """
     home = tmp_path / "home"
     plugins = home / ".claude" / "plugins"
 
-    # Leg 1 -- repo-style: <repo>/<namespace>/agents/*.md
     _write_agent_md(plugins / "example-game-workbench-repo" / "game-dev" / "agents" / "staff-game-dev.md", "staff-game-dev")
 
-    # Leg 2 -- cache-style: cache/<marketplace>/<plugin>/<version>/agents/*.md
     _write_agent_md(
         plugins / "cache" / "claude-plugins-official" / "feature-dev" / "abdaf0fadd68" / "agents" / "code-explorer.md",
         "code-explorer",
     )
-    # a second cached version of the SAME plugin -- must union, not overwrite
     _write_agent_md(
         plugins / "cache" / "claude-plugins-official" / "feature-dev" / "0371a29ed35d" / "agents" / "code-explorer.md",
         "code-explorer",
     )
 
-    # Leg 3 -- marketplace-style: marketplaces/<marketplace>/plugins/<plugin>/agents/*.md
     _write_agent_md(
         plugins / "marketplaces" / "claude-plugins-official" / "plugins" / "agent-sdk-dev" / "agents" / "sdk-reviewer.md",
         "sdk-reviewer",
     )
 
-    # Leg 4 -- manifest: installed_plugins.json installPath (+ plugin/ nesting)
     manifest_install_root = tmp_path / "manifest-installs" / "project-rag"
     _write_agent_md(manifest_install_root / "plugin" / "agents" / "example-retrieval-repo-researcher.md", "example-retrieval-repo-researcher")
     plugins.mkdir(parents=True, exist_ok=True)
@@ -134,7 +100,6 @@ def plugin_home(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
 
-    # a snapshot dir that must NEVER resurrect a deleted agent into the roster
     _write_agent_md(
         plugins / "_pre-refresh-snapshots" / "game-dev" / "agents" / "deleted-ghost.md", "deleted-ghost"
     )
@@ -149,11 +114,6 @@ def _agent_payload(subagent_type: str, name: str = "", prompt: str = "do the thi
     return {"tool_name": "Agent", "tool_input": tool_input}
 
 
-# ---------------------------------------------------------------------------
-# resolve_roster() — controlled roster tests
-# ---------------------------------------------------------------------------
-
-
 def test_resolve_roster_unions_all_three_sources(doe_root: Path, plugin_home: Path) -> None:
     roster, reason = mod.resolve_roster(doe_root=str(doe_root), home=str(plugin_home))
     assert reason is None
@@ -163,12 +123,11 @@ def test_resolve_roster_unions_all_three_sources(doe_root: Path, plugin_home: Pa
     assert "Explore" in roster
     assert "Plan" in roster
     assert "general-purpose" in roster
-    # (c) plugin leg -- all four layouts represented
-    assert "game-dev:staff-game-dev" in roster  # leg 1, repo-style
-    assert "feature-dev:code-explorer" in roster  # leg 2, cache-style
-    assert "agent-sdk-dev:sdk-reviewer" in roster  # leg 3, marketplace-style
-    assert "example-retrieval-repo:example-retrieval-repo-researcher" in roster  # leg 4, manifest + plugin/ nesting
-    assert "game-dev:deleted-ghost" not in roster  # snapshot dir excluded
+    assert "game-dev:staff-game-dev" in roster
+    assert "feature-dev:code-explorer" in roster
+    assert "agent-sdk-dev:sdk-reviewer" in roster
+    assert "example-retrieval-repo:example-retrieval-repo-researcher" in roster
+    assert "game-dev:deleted-ghost" not in roster
 
 
 def test_repo_style_plugin_leg_alone(tmp_path: Path) -> None:
@@ -189,7 +148,7 @@ def test_cache_style_plugin_leg_alone(tmp_path: Path) -> None:
     )
     names = mod._cache_style_plugin_roster(home / ".claude" / "plugins")
     assert "feature-dev:code-explorer" in names
-    assert "abdaf0fadd68:code-explorer" not in names  # the concrete regression: version, not plugin
+    assert "abdaf0fadd68:code-explorer" not in names
 
 
 def test_marketplace_style_plugin_leg_alone(tmp_path: Path) -> None:
@@ -252,7 +211,7 @@ def test_resolve_roster_doe_root_unresolved_fails_closed() -> None:
 
 def test_resolve_roster_policy_yaml_missing_fails_closed_as_missing(tmp_path: Path) -> None:
     root = tmp_path / "doe-claude"
-    _write_agents_dir(root, ["executor"])  # policy yaml deliberately absent
+    _write_agents_dir(root, ["executor"])
     roster, reason = mod.resolve_roster(doe_root=str(root), home=None)
     assert roster is None
     assert "subagent-sandbox-policy.yaml" in reason
@@ -275,27 +234,17 @@ def test_resolve_roster_policy_yaml_unparseable_fails_closed_as_unparseable(tmp_
 
 def test_resolve_roster_agents_dir_missing_fails_closed(tmp_path: Path) -> None:
     root = tmp_path / "doe-claude"
-    _write_policy_yaml(root)  # agents dir deliberately absent
+    _write_policy_yaml(root)
     roster, reason = mod.resolve_roster(doe_root=str(root), home=None)
     assert roster is None
     assert "coordinator" in reason and "agents" in reason
     assert "MISSING ENTIRELY" in reason
 
 
-# ---------------------------------------------------------------------------
-# Mirror-clone layout — content at the root, not nested under `coordinator/`.
-#
-# A dev clone nests plugin content under `coordinator/`; a marketplace/OSS-
-# mirror clone holds it directly at the root. Both roster sources probed only
-# the first shape and fail CLOSED, so on a mirror install the guard reported
 # "roster source MISSING ENTIRELY (path/install defect)" and refused every
-# `coordinator:*` dispatch — including `coordinator:executor`. Reproduced on
-# the 2026-09-05 Linux cloud dogfood.
-# ---------------------------------------------------------------------------
 
 
 def _write_mirror_tree(root: Path, extra_type: str = "coordinator:executor") -> None:
-    """The same two artifacts a dev clone carries, at the mirror's own depth."""
     root.mkdir(parents=True, exist_ok=True)
     (root / "subagent-sandbox-policy.yaml").write_text(
         "report_sidecar:\n"
@@ -325,7 +274,6 @@ def test_resolve_roster_reads_a_mirror_clone_holding_content_at_the_root(tmp_pat
 
 
 def test_resolve_roster_still_prefers_the_dev_clone_nesting(doe_root: Path) -> None:
-    """The added candidate must not displace the nested shape it probes first."""
     roster, reason = mod.resolve_roster(doe_root=str(doe_root), home=None)
     assert reason is None
     assert roster is not None
@@ -333,7 +281,6 @@ def test_resolve_roster_still_prefers_the_dev_clone_nesting(doe_root: Path) -> N
 
 
 def test_resolve_roster_missing_in_both_shapes_still_fails_closed(tmp_path: Path) -> None:
-    """Widening the probe must not soften the genuine install defect."""
     root = tmp_path / "empty"
     root.mkdir()
     roster, reason = mod.resolve_roster(doe_root=str(root), home=None)
@@ -343,22 +290,16 @@ def test_resolve_roster_missing_in_both_shapes_still_fails_closed(tmp_path: Path
 
 
 def test_resolve_roster_plugin_dir_absent_degrades_not_fatal(doe_root: Path) -> None:
-    # No plugin_home fixture at all — real DoE sources present, home unresolved.
     roster, reason = mod.resolve_roster(doe_root=str(doe_root), home=None)
     assert reason is None
     assert roster is not None
     assert "coordinator:executor" in roster
-    assert "Explore" in roster  # harness builtins still present
-
-
-# ---------------------------------------------------------------------------
-# check() — deny / allow / override, roster injected via monkeypatch
-# ---------------------------------------------------------------------------
+    assert "Explore" in roster
 
 
 def _patch_roster(monkeypatch: pytest.MonkeyPatch, roster, reason=None) -> None:
     def _fake_resolve_roster(*, doe_root=None, home=None):
-        del doe_root, home  # signature-compatible stand-in; args intentionally unused
+        del doe_root, home
         return (roster, reason)
 
     monkeypatch.setattr(mod, "resolve_roster", _fake_resolve_roster)
@@ -491,22 +432,11 @@ def test_absent_subagent_type_resolves_to_harness_default(monkeypatch: pytest.Mo
     monkeypatch.setattr(opus_gate_mod, "check", lambda payload: seen.append(payload) or None)
     payload = {"tool_name": "Agent", "tool_input": {"prompt": "no type given"}}
     assert mod.check(payload) is None
-    assert seen == [payload]  # composed model legs ran, not skipped
+    assert seen == [payload]
     assert mod.resolve_subagent_type(payload["tool_input"]) == "general-purpose"
 
 
-# ---------------------------------------------------------------------------
-# Live-resolution regression test (AC3) — no roster injection, real sources.
-# ---------------------------------------------------------------------------
-
-
 def _live_doe_root_or_skip() -> str:
-    """Resolve the DoE sibling checkout the same way production does --
-    `read_doe_root_pointer()` (registry, then durable/legacy pointer file).
-    A literal root here named one machine's drive and skipped these two
-    live-regression tests on every other host, silently; the resolver
-    reaches the checkout wherever it actually is. Still skips (never
-    silently passes) when the pointer is unset or the tree is absent."""
     resolved = read_doe_root_pointer()
     if not resolved:
         pytest.skip("DoE-claude root pointer unresolved on this host")
@@ -517,32 +447,20 @@ def _live_doe_root_or_skip() -> str:
 
 @pytest.mark.real_home
 def test_live_roster_allows_harness_builtins_and_regression_plugin_types() -> None:
-    # real_home: read-only oracle against the real ~/.claude/plugins tree --
-    # see coordinator_core/conftest.py's _quarantine_real_home docstring.
-    # Without this marker the suite-root autouse fixture redirects
     # HOME/USERPROFILE into a per-test quarantine dir, and this test would
-    # always see an empty plugin roster regardless of the code under test.
     doe_root = _live_doe_root_or_skip()
     roster, reason = mod.resolve_roster(doe_root=doe_root)
     assert reason is None, reason
     assert roster is not None
     for expected in ("Explore", "Plan", "general-purpose"):
         assert expected in roster, f"{expected!r} missing from live roster — three-source union regressed"
-    # The concrete regression a coordinator measurement caught live (cache/
-    # dir wrongly excluded, namespace read from the wrong path segment):
     assert "example-retrieval-repo:example-retrieval-repo-researcher" in roster
     assert "feature-dev:code-explorer" in roster
 
 
 @pytest.mark.real_home
 def test_live_roster_allows_via_check_not_just_resolve_roster(monkeypatch: pytest.MonkeyPatch) -> None:
-    # real_home: see the marker note on the sibling test above.
     doe_root = _live_doe_root_or_skip()
-    # check() calls resolve_roster() with no args (real resolution); pin the
-    # DoE root deterministically via read_doe_root_pointer rather than
-    # relying on this pytest process's own registry/env state, matching the
-    # coordinator's ask that this test be deterministic in the one
-    # environment that matters.
     monkeypatch.setattr(mod, "read_doe_root_pointer", lambda: doe_root)
     _patch_opus_gate_noop(monkeypatch)
     for subagent_type in (

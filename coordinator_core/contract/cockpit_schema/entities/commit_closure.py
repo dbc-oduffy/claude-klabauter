@@ -38,11 +38,9 @@ from coordinator_core.contract.cockpit_schema.provenance import ContentHash, Pro
 
 
 class CommitClosure(BaseModel):
-    """One `(repo, item_id, sha)` commit-closure-reference fact."""
 
     model_config = ConfigDict(extra="forbid")
 
-    # Connector-injected registry shortname (per-repo emission scope anchor).
     repo: str = Field(
         description=(
             "Owner-qualified repo identity: '<owner>/<repo>'. Owner carries the "
@@ -53,36 +51,12 @@ class CommitClosure(BaseModel):
             "owner-qualified string is the canonical cross-entity join anchor."
         )
     )
-    # Connector-injected — matches other per-repo emission entities. Additive,
-    # NOT part of the (repo, item_id, sha) logical identity.
     coordinator_root_path: str
     provenance: ProvenanceEnvelope
-    # Work-item identifier extracted from the commit's Closes: trailer.
     item_id: str
     sha: str = Field(pattern=r"^[0-9a-f]{40}$", description="Full 40-char commit SHA.")
-    # True/false = resolved reachability on origin/main; null = indeterminate
-    # (no local origin/main ref at all — the porter never fetches; a fetch-unavailable
-    # degrade case existed only while `envelope.fetch_origin_main` did, and that leg was
-    # deleted 2026-08-21 per docs/problems/2026-08-21-the-over-budget-timeout-hitlist.md
-    # § G5, before this comment was corrected) — never coerced to false.
     reachable_on_default_branch: bool | None
 
-    # C3 (DR-318 §D4/D8, revised 2026-08-18 after review finding F4). Null on an ordinary
-    # close row (a Closes:-trailer match). Non-null on a REVERT row: the sha of the OTHER
-    # commit this row's own `sha` verifiably reverts, per git's own auto-generated "This
-    # reverts commit <sha>" body line (never a `Reverts:` trailer — nothing in git or this
-    # tree produces one; that earlier design is withdrawn, see DR-318 §D4). Presence of this
-    # field is the sole revert/close distinguishing marker (no separate boolean flag).
-    #
-    # Its non-null value is ALSO the transitive-binding fact D8 states: the reverted commit
-    # (this field's value) was itself exact-match `Closes:`-trailer-bound to `item_id` — that
-    # is how the joined-against close row was produced — and this row's own `sha` is verified
-    # to revert it. C2's evidence builder reads this field to set `trailer_bound=True` on the
-    # revert arm for that transitive reason (AC5b), never reusing the assert arm's row-match
-    # justification (AC5a), which does not hold on this arm.
-    #
-    # Optional/default-None so ordinary close rows (which never carry this key) validate
-    # under this model's `extra="forbid"`.
     reverts_sha: str | None = Field(
         default=None,
         pattern=r"^[0-9a-f]{40}$",
@@ -93,11 +67,6 @@ class CommitClosure(BaseModel):
         ),
     )
 
-    # resolvers.py's version-gated
-    # _stamp_content_hash walks every SECMAP dotpath (including commit_closures,
-    # already wired) and unconditionally attaches content_hash once
-    # schema_version >= 2.5.0; extra="forbid" would reject the stamped record
-    # without this field, matching every sibling per-repo entity.
     content_hash: ContentHash | None = None
     """
     R5 content-hash change-signal (optional; sibling of provenance). Omitted by

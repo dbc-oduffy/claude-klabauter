@@ -23,16 +23,10 @@ from coordinator_core.ops.verify_no_console_flash import (
 
 
 def _make_root(tmp_path: Path) -> Path:
-    """Build a `<root>/coordinator-claude/{bin,hooks}` fixture tree."""
     coord = tmp_path / "coordinator-claude"
     (coord / "bin").mkdir(parents=True)
     (coord / "hooks").mkdir(parents=True)
     return tmp_path
-
-
-# ---------------------------------------------------------------------------
-# Clean-fixture: exit 0 (mirrors oracle Test 1)
-# ---------------------------------------------------------------------------
 
 
 def test_clean_fixture_exits_zero(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
@@ -57,18 +51,12 @@ def test_clean_fixture_exits_zero(tmp_path: Path, capsys: pytest.CaptureFixture)
     assert "OK:" in out
 
 
-# ---------------------------------------------------------------------------
-# Seeded-violation fixture: exit 1, per-shape assertions (mirrors oracle Test 2)
-# ---------------------------------------------------------------------------
-
-
 def test_violation_fixture_exits_one_all_shapes_caught(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
     root = _make_root(tmp_path)
     coord = root / "coordinator-claude"
 
-    # Shape (1)+(2): variable-interpreter WITH heredoc
     (coord / "bin" / "drift-like.sh").write_text(
         "#!/bin/bash\n"
         "_lookup_source_subpath() {\n"
@@ -79,11 +67,8 @@ def test_violation_fixture_exits_one_all_shapes_caught(
         "PYEOF\n"
         "}\n"
     )
-    # Shape (3): bare literal python3
     (coord / "bin" / "bare-literal.sh").write_text("#!/bin/bash\npython3 my_script.py\n")
-    # Shape (4): node -e
     (coord / "bin" / "node-e.sh").write_text('#!/bin/bash\nnode -e "console.log(\'hi\')"\n')
-    # Shape (5): hooks.json with bare node command — architecturally exempt
     (coord / "hooks" / "hooks.json").write_text(
         '{"hooks": [{"name": "frontmatter-validator", "event": "PreToolUse", '
         '"command": "node hooks/scripts/validate-frontmatter-schema.js"}]}\n'
@@ -96,7 +81,6 @@ def test_violation_fixture_exits_one_all_shapes_caught(
     assert "UNSUPPRESSED" in out and ("PYTHON" in out or "python" in out)
     assert "UNSUPPRESSED" in out and "python3" in out
     assert "UNSUPPRESSED" in out and "node" in out
-    # hooks.json command-field spawns are architecturally exempt: not flagged.
     assert "hooks.json" not in out
 
 
@@ -123,11 +107,6 @@ def test_bare_pwsh_without_windowstyle_hidden_flagged(
     (coord / "bin" / "ps-bare.sh").write_text('#!/bin/bash\npwsh -Command "Get-Process"\n')
     rc = main([str(root)])
     assert rc == 1
-
-
-# ---------------------------------------------------------------------------
-# File-level allow marker (mirrors verify-no-console-flash-file-allow.bats)
-# ---------------------------------------------------------------------------
 
 
 def test_bare_python_c_spawn_flagged(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
@@ -173,11 +152,6 @@ def test_pure_comment_mentioning_pwsh_not_flagged(
     assert "OK:" in out
 
 
-# ---------------------------------------------------------------------------
-# Edge cases not in the DoE oracle suite but load-bearing for the port
-# ---------------------------------------------------------------------------
-
-
 def test_nonexistent_root_exits_clean(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     rc = main([str(tmp_path / "does-not-exist")])
     out = capsys.readouterr().out
@@ -186,10 +160,6 @@ def test_nonexistent_root_exits_clean(tmp_path: Path, capsys: pytest.CaptureFixt
 
 
 def test_default_root_used_when_argv_empty(capsys: pytest.CaptureFixture) -> None:
-    # No assertion on content (real $HOME/.claude/plugins tree may or may not
-    # exist in CI) — only that main() does not raise on an empty argv, i.e.
-    # the ROOT-defaulting branch (mirrors bash `${1:-$HOME/.claude/plugins}`)
-    # is reachable and returns a valid rc.
     rc = main([])
     capsys.readouterr()
     assert rc in (0, 1)
@@ -213,11 +183,6 @@ class TestIsSuppressed:
         assert _is_suppressed(line) is False
 
     def test_drive_letter_path_extraction_does_not_crash(self) -> None:
-        # Regression pin (code-reviewer F7 in the bash oracle): the
-        # drive-letter-safe strip (`:[0-9]+:.*$`) must not raise on a
-        # synthetic Windows-shaped path, even though it can't resolve on
-        # POSIX (os.path.isfile is False, so the file-allow branch just
-        # falls through — no crash is the assertion).
         line = 'C:/path/file.sh:42:    python -c "code"'
         assert _is_suppressed(line) is False
 

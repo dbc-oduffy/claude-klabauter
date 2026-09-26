@@ -1,18 +1,3 @@
-"""
-coordinator_core.session.tests.test_grant — tests for
-coordinator_core.session.grant, the Tier-U full-suite authorization-grant
-writer/reader (DR-088 layer 5).
-
-Fixtures build real ``tmp_path`` git repos with monkeypatch isolation,
-mirroring the sibling ``test_shape.py`` / ``test_liveness.py`` idiom in this
-package (``_make_repo`` / ``_write_session`` helpers, ``cwd=`` threaded
-explicitly rather than a chdir). Liveness is driven by writing/omitting
-``meta.json``'s ``last_activity`` field, exactly as ``test_liveness.py``
-does for its Layer-2 recency cases.
-
-Spec backlink: cross-repo/inbox/2026-07-23-claude-central-em-dr088-grant-spec-and-layer2-seam.md § Ask 2
-Spec backlink: DoE-claude docs/decisions/DR-088-test-breadth-ladder-tiered-invocation-authority.md § Decision, layer 5
-"""
 
 from __future__ import annotations
 
@@ -26,15 +11,7 @@ import pytest
 from coordinator_core.session import core, grant
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Every test in this file builds its repo via `_make_repo(tmp_path)`, spawning
-# real git (init/config/add/commit) because the production code under test --
-# `core.git_root()`, consulted when resolving where grant state lives -- reads
-# real git state that no mock stands in for. `tmp_path` is function-scoped
-# and tests write grant/session state under reused session ids, so the repo
-# fixture stays per-test rather than hoisted to module scope. The spawn
 # ratchet's `_BASELINE` is shrink-only pre-existing residue and is explicitly
-# not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -64,14 +41,10 @@ def _write_session_meta(repo, sid, meta: dict):
 
 
 def _live_session(repo, sid):
-    """A session whose meta.json makes it read LIVE (fresh last_activity,
-    no stable_pid -> Layer-2 recency path)."""
     return _write_session_meta(repo, sid, {"pid": "999", "last_activity": core.now_iso()})
 
 
 def _dead_session(repo, sid):
-    """A session whose meta.json makes it read DEAD (last_activity far in
-    the past, no stable_pid -> Layer-2 recency path, stale)."""
     return _write_session_meta(
         repo, sid, {"pid": "999", "last_activity": "2000-01-01T00:00:00Z"}
     )
@@ -79,11 +52,6 @@ def _dead_session(repo, sid):
 
 def _grant_file(repo, sid):
     return Path(repo) / ".git" / "coordinator-sessions" / sid / "tier-u-grant.json"
-
-
-# ---------------------------------------------------------------------------
-# write_tier_u_grant — round-trip, verbatim note, atomicity
-# ---------------------------------------------------------------------------
 
 
 class TestWriteTierUGrant:
@@ -170,21 +138,13 @@ class TestWriteTierUGrantValidation:
             grant.write_tier_u_grant("pm", "", session_id="s1", cwd=str(repo))
 
     def test_unresolvable_session_returns_false_not_raise(self, tmp_path):
-        # Not a git repo at all -> core.session_dir resolves nothing.
         ok = grant.write_tier_u_grant(
             "pm", "ask", session_id="s1", cwd=str(tmp_path / "not-a-repo")
         )
         assert ok is False
 
 
-# ---------------------------------------------------------------------------
-# check_tier_u_grant — the four DR-088 semantics
-# ---------------------------------------------------------------------------
-
-
 class TestCheckTierUGrantLiveness:
-    """Semantic 2 — liveness, not presence. The single most important test:
-    a grant left behind by a crashed session must NOT authorize anything."""
 
     def test_live_session_with_valid_grant_is_granted(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -196,27 +156,15 @@ class TestCheckTierUGrantLiveness:
 
     def test_dead_session_grant_reads_ungranted(self, tmp_path):
         repo = _make_repo(tmp_path)
-        # Session was live at write time...
         _live_session(repo, "s1")
         grant.write_tier_u_grant("pm", "ask before crash", session_id="s1", cwd=str(repo))
-        # ...then crashed (meta.json now shows stale recency).
         _dead_session(repo, "s1")
         granted, record = grant.check_tier_u_grant(cwd=str(repo), session_id="s1")
         assert granted is False
-        # Record is still returned for audit/denial quoting.
         assert record is not None
         assert record["note"] == "ask before crash"
 
     def test_meta_less_session_falls_back_to_dir_mtime_and_is_treated_live(self, tmp_path):
-        # No meta.json at all for the granting session (e.g. cs_init hasn't
-        # flushed yet), but the grant file exists. liveness.session_live's
-        # meta-less fallback (DoE 642195ba / 88929bea, see liveness.py) reads
-        # dir mtime as the recency source rather than defaulting to
-        # confirmed-dead -- a session mid-init is presumed live, not dead.
-        # This is Layer-2 recency behavior this module inherits verbatim,
-        # not a grant-specific rule; freshly created dirs therefore read
-        # GRANTED here (contrast with test_dead_session_grant_reads_ungranted,
-        # where the dir mtime IS stale).
         sdir = Path(repo := _make_repo(tmp_path)) / ".git" / "coordinator-sessions" / "s1"
         sdir.mkdir(parents=True)
         (sdir / "tier-u-grant.json").write_text(
@@ -236,11 +184,6 @@ class TestCheckTierUGrantLiveness:
         assert granted is True
 
     def test_meta_less_but_stale_dir_mtime_reads_ungranted(self, tmp_path):
-        # Same meta-less shape as above, but the grant file's mtime (the
-        # ONLY regular file in the dir, so it drives the recency fallback)
-        # is backdated past the 30-min liveness boundary -- a genuinely
-        # stale meta-less dir must still read DEAD (liveness.py's own
-        # docstring: "a genuinely stale meta-less dir still reads DEAD").
         repo = _make_repo(tmp_path)
         sdir = Path(repo) / ".git" / "coordinator-sessions" / "s1"
         sdir.mkdir(parents=True)
@@ -258,25 +201,21 @@ class TestCheckTierUGrantLiveness:
             ),
             encoding="utf-8",
         )
-        old_epoch = 946684800  # 2000-01-01T00:00:00Z
+        old_epoch = 946684800
         os.utime(gfile, (old_epoch, old_epoch))
         granted, _record = grant.check_tier_u_grant(cwd=str(repo), session_id="s1")
         assert granted is False
 
 
 class TestCheckTierUGrantNoGlob:
-    """Semantic 3 — path-scoped read, NEVER glob: a sibling session's LIVE
-    grant must not authorize the calling session."""
 
     def test_sibling_live_grant_does_not_authorize_caller(self, tmp_path):
         repo = _make_repo(tmp_path)
         _live_session(repo, "s-sibling")
         _live_session(repo, "s-caller")
-        # Sibling holds a perfectly valid, live grant.
         grant.write_tier_u_grant(
             "pm", "sibling's own ask", session_id="s-sibling", cwd=str(repo)
         )
-        # Caller has NO grant of its own.
         granted, record = grant.check_tier_u_grant(cwd=str(repo), session_id="s-caller")
         assert granted is False
         assert record is None
@@ -344,7 +283,7 @@ class TestCheckTierUGrantFailClosed:
         )
         granted, record = grant.check_tier_u_grant(cwd=str(repo), session_id="s1")
         assert granted is False
-        assert record is not None  # still returned for audit quoting
+        assert record is not None
 
     def test_ceremony_cross_field_violation_reads_ungranted(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -415,13 +354,7 @@ class TestCheckTierUGrantFailClosed:
         assert record is None
 
 
-# ---------------------------------------------------------------------------
-# read_tier_u_grant — raw reader, no liveness gate
-# ---------------------------------------------------------------------------
-
-
 class TestRevokeTierUGrant:
-    """revoke_tier_u_grant — round trip, idempotence, sibling isolation."""
 
     def test_write_check_revoke_check_round_trip(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -445,7 +378,6 @@ class TestRevokeTierUGrant:
         ok = grant.revoke_tier_u_grant(cwd=str(repo), session_id="s1")
         assert ok is True
 
-        # Double-revoke is still success.
         ok_again = grant.revoke_tier_u_grant(cwd=str(repo), session_id="s1")
         assert ok_again is True
 
@@ -474,10 +406,6 @@ class TestRevokeTierUGrant:
 
 
 class TestGuardedCeremonyHandback:
-    """`revoke_tier_u_grant(only_ceremony=...)` — the guarded handback a
-    ceremony must use (cross-repo/inbox/2026-08-04-doe-claude-em-ceremony-
-    grants-belong-in-code-not-prose.md § 1). Takes back only what THIS
-    ceremony minted; anything else survives and the call still succeeds."""
 
     def test_handback_removes_own_ceremony_grant(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -492,9 +420,6 @@ class TestGuardedCeremonyHandback:
         assert not _grant_file(repo, "s1").exists()
 
     def test_handback_never_destroys_a_pm_grant(self, tmp_path):
-        """The defect the guard exists to prevent: a bare ceremony-end
-        `revoke` unlinks whatever the session holds, silently destroying a
-        live PM grant."""
         repo = _make_repo(tmp_path)
         _live_session(repo, "s1")
         grant.write_tier_u_grant("pm", "the PM said run it", session_id="s1", cwd=str(repo))
@@ -542,9 +467,6 @@ class TestGuardedCeremonyHandback:
         assert ok is True
 
     def test_handback_leaves_an_unattributable_record_alone(self, tmp_path):
-        """Malformed JSON cannot be attributed to this ceremony, so the
-        guard's default — leave it — applies rather than destroying a record
-        whose provenance is unknown."""
         repo = _make_repo(tmp_path)
         _live_session(repo, "s1")
         grant_file = _grant_file(repo, "s1")
@@ -558,8 +480,6 @@ class TestGuardedCeremonyHandback:
         assert grant_file.exists()
 
     def test_unguarded_revoke_shape_is_unchanged(self, tmp_path):
-        """`only_ceremony=None` is the pre-existing PM/session-owner path:
-        unconditional unlink, whoever minted it."""
         repo = _make_repo(tmp_path)
         _live_session(repo, "s1")
         grant.write_tier_u_grant(
@@ -581,7 +501,6 @@ class TestReadTierUGrant:
         _live_session(repo, "s1")
         grant.write_tier_u_grant("pm", "ask", session_id="s1", cwd=str(repo))
         _dead_session(repo, "s1")
-        # raw reader is NOT liveness-gated -- record is still returned.
         record = grant.read_tier_u_grant(cwd=str(repo), session_id="s1")
         assert record is not None
         assert record["note"] == "ask"

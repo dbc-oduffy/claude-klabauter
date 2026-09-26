@@ -41,45 +41,15 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-#: The marker that makes a FLAT directory a coordinator content root. A flat
-#: clone without its own plugin manifest is not one, and must keep failing —
-#: the same gate `resolve_coordinator_clone` uses for its flat-layout rung, not
-#: a second spelling of the concept.
 FLAT_CONTENT_ROOT_MARKER = (".claude-plugin", "plugin.json")
 
 
 def content_root_for(doe_root) -> Path | None:
-    """The coordinator CONTENT root inside a resolved DoE root, either layout.
-
-    THE ONE PLACE THIS JOIN BELONGS. Two live layouts hold coordinator content,
-    and a caller that knows only one is broken on the other:
-
-      <doe_root>/coordinator/     the private authoring tree
-      <doe_root>/ (flat)          the published mirror
-
-    Returns the content root, or None when `doe_root` is empty or holds neither
-    layout. Never raises and never returns a path that does not exist — so a
-    predicate call site reads `content_root_for(root) is not None`, and a path
-    call site joins onto the result after a None check.
-
-    Private layout is probed FIRST, so a private-tree root resolves exactly as
-    it always did — this widens nothing for an existing caller.
-
-    Must stay behaviourally identical to its twin in the other tree — same
-    two-candidate order, same marker — for the same reason `data_root()`
-    carries that constraint (AC4).
-    """
     if not doe_root:
         return None
     if isinstance(doe_root, Path):
         base = doe_root
     else:
-        # rstrip("/\\") alone collapses "/" or
-        # "//" to "", and Path("") resolves to the process cwd, silently
-        # probing cwd instead of failing closed on a degenerate root. Fall
-        # back to the un-stripped string when stripping empties it, so an
-        # all-slash root stays anchored at the filesystem root (where the
-        # marker/private-dir checks below correctly find nothing).
         raw = str(doe_root)
         base = Path(raw.rstrip("/\\") or raw)
     private = base / "coordinator"
@@ -91,21 +61,6 @@ def content_root_for(doe_root) -> Path | None:
 
 
 def content_root_or_private(doe_root) -> str:
-    """`content_root_for`, falling back to the private-shape join.
-
-    The shape ~10 call sites
-    across `coordinator/bin/` actually needed (`content_root_for`, falling
-    back to `<doe_root>/coordinator` when neither layout is present) was
-    written once, module-locally, as `_shared.py::_content_root_or_private`,
-    then hand-re-derived at each of those ~10 sites with a copy-pasted
-    rationale comment. Promoted here as the one public spelling both twins
-    and every call site route through.
-
-    The fallback is a REAL requirement, not a redundant branch: it preserves
-    each caller's own "candidate does not exist on disk" diagnostic, which
-    would otherwise regress to a bare `None` with no path to name. Only the
-    per-site hand-expansion was the defect — the fallback itself stays.
-    """
     content = content_root_for(doe_root)
     if content is not None:
         return str(content)

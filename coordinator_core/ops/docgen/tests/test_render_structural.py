@@ -139,9 +139,6 @@ def test_render_module_source_calls_no_write_or_subprocess_primitives():
     forbidden = {"write_text", "write_bytes", "system", "Popen", "run", "call", "check_call", "check_output"}
     hit = call_names & forbidden
     assert not hit, f"render.py source calls forbidden write/subprocess primitives: {hit}"
-    # `open` is used (read-only, for template loading via template_format) — assert
-    # every direct `open(...)` call site in this module is read-mode, not merely
-    # absent, since a bare name-check above wouldn't distinguish read from write.
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "open":
             mode_arg = None

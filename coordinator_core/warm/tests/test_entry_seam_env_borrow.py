@@ -39,7 +39,6 @@ def _set_spawner_env(monkeypatch):
 
 
 def test_carried_identity_isolated_sets_top_tier_and_pops_lower_tiers_and_pid(monkeypatch):
-    """The decisive production case: `_pool_dispatch_worker`'s own binding."""
     _set_spawner_env(monkeypatch)
 
     with per_request_state(session_id=_CALLER, warm_served=True, isolated=True):
@@ -48,7 +47,6 @@ def test_carried_identity_isolated_sets_top_tier_and_pops_lower_tiers_and_pid(mo
         assert "CLAUDE_CODE_SESSION_ID" not in os.environ
         assert "CLAUDE_PID" not in os.environ
 
-    # Restored, byte-for-byte, once the block closes.
     assert os.environ["COORDINATOR_SESSION_ID"] == _SPAWNER_COORDINATOR
     assert os.environ["CLAUDE_SESSION_ID"] == _SPAWNER_CLAUDE
     assert os.environ["CLAUDE_CODE_SESSION_ID"] == _SPAWNER_CLAUDE_CODE
@@ -56,9 +54,6 @@ def test_carried_identity_isolated_sets_top_tier_and_pops_lower_tiers_and_pid(mo
 
 
 def test_no_carried_identity_isolated_strips_every_name(monkeypatch):
-    """Warm-served, isolated, door sent no identity: absent, never the
-    owner's — `session.core.carried_session_id()`'s omit-never-substitute
-    contract, mirrored onto the env axis."""
     _set_spawner_env(monkeypatch)
 
     with per_request_state(warm_served=True, isolated=True):
@@ -72,10 +67,6 @@ def test_no_carried_identity_isolated_strips_every_name(monkeypatch):
 
 
 def test_not_isolated_leaves_os_environ_untouched(monkeypatch):
-    """The `BrokenProcessPool` fallback's own disposition: a carried identity
-    still binds the ContextVar (not asserted here — this pins the env axis
-    only), but `os.environ` -- shared with every other in-flight connection
-    on this leg -- must never be written or popped."""
     _set_spawner_env(monkeypatch)
     before = dict(os.environ)
 
@@ -86,9 +77,6 @@ def test_not_isolated_leaves_os_environ_untouched(monkeypatch):
 
 
 def test_non_uuid_session_id_isolated_treated_as_no_carried_identity(monkeypatch):
-    """A malformed value crossing the wire must never be trusted onto the
-    env axis either -- same fail-safe direction as `session_identity_
-    override`'s own gate."""
     _set_spawner_env(monkeypatch)
 
     with per_request_state(session_id="not-a-uuid", warm_served=True, isolated=True):
@@ -115,11 +103,6 @@ def test_restore_unwinds_even_when_the_block_raises(monkeypatch):
 
 
 def test_carried_pid_isolated_binds_the_callers_pid(monkeypatch):
-    """The defect state/bug-backlog/2026-08-30-the-warm-seam-pops-claude-pid-
-    but-never-6eb63e46643b.yaml names: the wire has carried
-    `CallerContext.pid` since C1b, but the seam only ever POPPED the name, so
-    `harness_registry.self_record()` resolved neither the caller nor the
-    engine owner. Carried, it must resolve the CALLER."""
     _set_spawner_env(monkeypatch)
 
     with per_request_state(
@@ -132,9 +115,6 @@ def test_carried_pid_isolated_binds_the_callers_pid(monkeypatch):
 
 
 def test_carried_pid_binds_on_its_own_axis_without_a_session_id(monkeypatch):
-    """`self_record()` keys off the pid alone, so a request carrying one and
-    not the other still closes the defect it can -- the two axes are
-    independent, not a single carried-identity flag."""
     _set_spawner_env(monkeypatch)
 
     with per_request_state(caller_pid="90210", warm_served=True, isolated=True):
@@ -147,9 +127,6 @@ def test_carried_pid_binds_on_its_own_axis_without_a_session_id(monkeypatch):
 
 @pytest.mark.parametrize("bad", ["", "not-a-pid", "-1", "12a", " 42"])
 def test_non_digit_carried_pid_pops_rather_than_binds(monkeypatch, bad):
-    """Same fail-safe direction as the non-UUID session id: a value that
-    fails its own shape gate is "no carried identity" on this axis, never
-    mirrored into `os.environ` where every ambient reader would trust it."""
     _set_spawner_env(monkeypatch)
 
     with per_request_state(caller_pid=bad, warm_served=True, isolated=True):

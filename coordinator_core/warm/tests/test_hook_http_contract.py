@@ -12,8 +12,6 @@ import json
 from coordinator_core.warm import hook_http
 
 
-# -- Obligation 1: a deny survives the round trip with its reason intact -----------------
-
 def test_deny_carries_its_reason_verbatim():
     """The reason reaches the model. A generic string turns an explained refusal into an
     unexplained one, which is what agents route around."""
@@ -50,8 +48,6 @@ def test_no_objection_does_not_emit_an_explicit_allow():
     out = hook_http.interpret_result("PreToolUse", frame)
     assert "permissionDecision" not in out["hookSpecificOutput"]
 
-
-# -- Obligation 2: the caller's env travels on the event, never from this process --------
 
 def test_payload_env_comes_from_the_event():
     event = {
@@ -101,8 +97,6 @@ def test_build_request_carries_no_engine_token():
     assert frame["method"] == "guard.evaluate"
 
 
-# -- Obligation 3: a guard that could not run never reads as one that passed -------------
-
 def test_error_envelope_is_not_read_as_a_verdict():
     """`try_warm_dispatch` counts any well-formed JSON-RPC response as a served hit,
     INCLUDING an error. An unregistered op returns METHOD_NOT_FOUND and a naive caller
@@ -145,9 +139,6 @@ def test_blocking_events_are_distinguished_from_advisory_ones():
     assert hook_http.is_blocking_event("PreToolUse")
     assert not hook_http.is_blocking_event("PostToolUse")
     assert not hook_http.is_blocking_event(None)
-
-
-# -- plugin_root residency: the docstring must not overclaim caller-side computation ------
 
 
 def test_payload_from_event_docstring_names_the_ambient_residual():

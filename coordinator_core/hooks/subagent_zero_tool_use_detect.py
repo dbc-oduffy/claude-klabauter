@@ -59,18 +59,11 @@ from coordinator_core.hooks.subagent_review_mark import _handler as _subagent_re
 from coordinator_core.hooks.subagent_zero_tool_use import _handler as _subagent_zero_tool_use_handler
 from coordinator_core.ipc import register_op
 
-# Path-traversal guard for session_id before it is used to build filesystem
 # paths -- mirrors the source script's own `_ID_CHARSET_RE`.
 _ID_CHARSET_RE = re.compile(r"^[A-Za-z0-9_@-]+$")
 
 
 def _is_dispatched_this_session(git_root: "Optional[str]", session_id: str, agent_id: str) -> bool:
-    """AC4/DEC-3 own-session filter. Reads
-    `<common_dir>/coordinator-sessions/<session_id>/dispatched-agents.txt`
-    (the sanctioned shared 4-column TSV oracle) and returns True only when
-    `agent_id` appears as the first column of some row. Any failure to
-    resolve the common dir, read the file, or parse a row fails CLOSED —
-    this filter's whole purpose is to exclude peer-session agents."""
     if not git_root or not session_id or not agent_id:
         return False
     if not _ID_CHARSET_RE.match(session_id):
@@ -98,14 +91,6 @@ def _is_dispatched_this_session(git_root: "Optional[str]", session_id: str, agen
 
 @register_op("hooks.subagent_zero_tool_use_detect")
 async def _handler(params: dict, repo_root=None) -> dict:
-    """SubagentStop: gate on `agent_type` + own-session membership, then
-    compose the three landed detect/mark/sensor legs. Always returns
-    `no_advisory()` — see module docstring (DEC-4).
-
-    `repo_root` (the framework-supplied handler argument) is unused — this
-    op resolves its own repo root/common dir from `params["payload"]["cwd"]`,
-    matching every other payload-cwd-resolving `hooks.*` op in this family.
-    """
     payload = payload_of(params)
 
     agent_type = payload.get("agent_type")
@@ -131,8 +116,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
     if not _is_dispatched_this_session(git_root, session_id, agent_id):
         return no_advisory()
 
-    # AC10: agent_transcript_path is authoritative; transcript_path is a
-    # decoy (the PARENT session's transcript) and must never be read here.
     agent_transcript_path = payload.get("agent_transcript_path")
     if not isinstance(agent_transcript_path, str):
         agent_transcript_path = ""
@@ -154,14 +137,14 @@ async def _handler(params: dict, repo_root=None) -> dict:
     try:
         await _subagent_zero_tool_use_handler(leg_params, repo_root=common_dir)
     except Exception:
-        pass  # producer-only leg; its verdict is never consumed by this dispatcher
+        pass
 
     try:
         await _subagent_review_mark_handler(
             dict(leg_params, cwd=cwd), repo_root=common_dir
         )
     except Exception:
-        pass  # producer-only leg; its verdict is never consumed by this dispatcher
+        pass
 
     try:
         await _receiver_state_sensor_handler(
@@ -173,6 +156,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
             repo_root=common_dir,
         )
     except Exception:
-        pass  # producer-only leg; its verdict is never consumed by this dispatcher
+        pass
 
     return no_advisory()

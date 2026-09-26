@@ -51,25 +51,13 @@ def _deny_reason(out: Any) -> str:
     return out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-# ---------------------------------------------------------------------------
-# AC1 / AC2 -- runaway-find is the qualifying deny-class oracle.
-# ---------------------------------------------------------------------------
-
-
-
-
 def _probe(cmd: str, tool_name: str, session_id: str = "probe", env: Optional[Dict[str, Any]] = None) -> Any:
     payload = {
         "tool_name": tool_name,
         "tool_input": {"command": cmd},
         "session_id": session_id,
         "cwd": ".",
-        # AC2/AC3: pinned explicitly, never left to inherit ambient os.environ
-        # -- several guards below (`runaway-find` included, F4) read a
         # `COORDINATOR_ALLOW_*`/`COORDINATOR_OVERRIDE_*` opt-out straight out
-        # of `payload["env"]`, and an un-pinned probe would silently pass
-        # under whatever override happens to be set in THIS process's own
-        # ambient environment.
         "env": {} if env is None else env,
     }
     return evaluate_payload_json(json.dumps(payload))
@@ -108,9 +96,6 @@ def test_ac1_ac2_powershell_find_root_denies_via_runaway_find():
     assert "find" in reason, reason
     assert "anchored at" in reason, reason
 
-    # Negative control: the SAME probe, disarmed via `runaway-find`'s own
-    # pre-existing override leg -- proves the deny above is conditioned on
-    # the override state, not an artifact of some other guard entirely.
     overridden = _probe(
         "find / -name foo", "PowerShell", env={"COORDINATOR_ALLOW_FIND_ROOT": "1"}
     )
@@ -120,15 +105,10 @@ def test_ac1_ac2_powershell_find_root_denies_via_runaway_find():
         "runaway-find, invalidating this oracle"
     )
 
-    # Sanity: the same probe under the native "Bash" label already denied
-    # before this chunk existed -- confirms the oracle fires at all.
     assert _is_deny(_probe("find / -name foo", "Bash"))
 
 
-# ---------------------------------------------------------------------------
-# AC3 -- head-tail-plumbing-rewrite is now stale (widened by a peer chunk);
 # grep-via-bash-rewrite replaces it as the ADVISORY_REWRITE-band oracle.
-# ---------------------------------------------------------------------------
 def test_ac3_powershell_grep_rewrite_advisory_fires_via_matcher_widening():
     """AC3: a corroborating ADVISORY oracle proves the normalization reaches
     matcher selection for the `ADVISORY_REWRITE` band too, not only
@@ -182,11 +162,6 @@ def test_ac3_powershell_grep_rewrite_advisory_fires_via_matcher_widening():
         "earlier-registered guard shadows this oracle" % (shadowed,)
     )
 def test_ac4_bash_labelled_payload_reaches_every_guard_identically():
-    """A payload already carrying `tool_name="Bash"` must see the identical
-    verdict before and after this chunk -- verified by running the SAME two
-    oracle commands used above under `tool_name="Bash"` and confirming they
-    match what a pre-C1 caller would have seen (deny / advisory-allow), i.e.
-    the normalization is a no-op for the native label it already recognizes."""
     find_out = _probe("find / -name foo", "Bash")
     assert _is_deny(find_out)
     assert "anchored at" in _deny_reason(find_out)
@@ -196,34 +171,10 @@ def test_ac4_bash_labelled_payload_reaches_every_guard_identically():
     assert hso.get("permissionDecision") == "allow"
     assert "Auto-rewritten: 'grep' via Bash" in hso.get("additionalContext", "")
 
-    # A command no guard in this suite cares about must still allow silently
-    # under "Bash", exactly as before.
     assert _probe("echo hello world", "Bash") is None
 
 
-# ---------------------------------------------------------------------------
-# AC5 -- the load-bearing regression test.
-# ---------------------------------------------------------------------------
 def test_ac5_start_process_git_stash_drop_still_denies_and_payload_is_untouched():
-    """The regression this whole plan exists to prevent: a payload-mutating
-    normalization (rewriting `payload["tool_name"]` from `"PowerShell"` to
-    `"Bash"`) would make `dialect_from_tool_name(payload["tool_name"])`
-    return `Dialect.BASH` inside `check_destructive_git_revert`, which would
-    then never call `expand_start_process_invocations` and go SILENT on
-    `Start-Process git -ArgumentList 'stash','drop'`. Measured at HEAD before
-    this chunk existed: PowerShell-labelled call already denied (ec's C8);
-    the payload-mutating shape this plan explicitly rejected would have
-    deleted that deny.
-
-    Two assertions:
-      1. the probe still denies, with `check_destructive_git_revert`'s own
-         distinctive text;
-      2. `payload["tool_name"]` as SEEN BY the check function is
-         byte-identical to what the caller sent (monkeypatches the shared
-         helper `check_destructive_git_revert`/`check_destructive_git_revert_
-         advisory` both delegate to, to capture the `hook_payload` kwarg
-         without calling either check function directly).
-    """
     verb1, verb2 = "stash", "drop"
     cmd = "Start-Process git -ArgumentList '%s','%s'" % (verb1, verb2)
 
@@ -250,9 +201,6 @@ def test_ac5_start_process_git_stash_drop_still_denies_and_payload_is_untouched(
     )
 
 
-# ---------------------------------------------------------------------------
-# AC6 -- (a) hostile-payload behavioural; (b) ast structural.
-# ---------------------------------------------------------------------------
 def test_ac11_advisory_envelope_still_collapses_to_no_objection_on_the_http_leg():
     """An advisory (allow+context) envelope for a Bash-only guard, probed
     under ANY `tool_name` (including the now-armed `PowerShell` case this
@@ -273,26 +221,7 @@ def test_ac11_advisory_envelope_still_collapses_to_no_objection_on_the_http_leg(
         )
 
 
-# ---------------------------------------------------------------------------
-# AC15 -- the thesis test: one payload each, both arm, from the same fix.
-# ---------------------------------------------------------------------------
 def test_ac15_thesis_dialect_aware_and_bash_only_both_deny_under_powershell():
-    """The plan's whole thesis, converted from derivation to measurement:
-    with C1 landed, a SINGLE `tool_name="PowerShell"` payload each denies
-    for two structurally different reasons --
-
-      1. the dialect-aware conversion (`Start-Process git -ArgumentList
-         'stash','drop'`) needs the NATIVE label intact
-         (`dialect_from_tool_name(payload["tool_name"])` must still see
-         `"PowerShell"`, never a rewritten `"Bash"`);
-      2. the Bash-only entry (`find / -name foo`) needs the MATCHER
-         universe widened (a Bash-only `matchers=("Bash",)` guard must still
-         be reached for a `PowerShell`-labelled call).
-
-    Both arming from the same C1 mechanism -- a local gating value plus an
-    untouched payload -- is what converts D1 (deleting DoE's
-    `_rearm_command_tool_name`) from a trade into a pure gain; this is the
-    number the DoE memo (C3/C4) carries."""
     verb1, verb2 = "stash", "drop"
     dialect_aware_cmd = "Start-Process git -ArgumentList '%s','%s'" % (verb1, verb2)
     bash_only_cmd = "find / -name foo"

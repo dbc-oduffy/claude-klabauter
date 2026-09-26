@@ -61,14 +61,10 @@ from coordinator_core.bash_guards._helpers import operator_override_note
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
-PRIORITY = 171  # advisory band; next slot after nudge_prose_queue_append (170)
+PRIORITY = 171
 
-#: Escape hatch (reference hook lines 25-27, 44-46).
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_COMPLETION_MONOLITH"
 
-#: Legacy monolith tail match: archive/completed/<YYYY-MM>.md (reference hook
-#: line 96). Never matches archive/completed/legacy/* (extra segment) or
-#: archive/completed/YYYY-MM/*.md (extra segment after YYYY-MM).
 _MONOLITH_RE = re.compile(r"archive/completed/[0-9]{4}-[0-9]{2}\.md$")
 
 
@@ -79,8 +75,6 @@ def _extract_file_path(tool_name: str, tool_input: Dict[str, Any]) -> str:
 
 
 def _normalize(file_path: str) -> str:
-    """Backslash -> forward slash, then collapse slash runs (reference hook
-    lines 74-87 / F5 fix)."""
     normalized = file_path.replace("\\", "/")
     while "//" in normalized:
         normalized = normalized.replace("//", "/")
@@ -89,7 +83,6 @@ def _normalize(file_path: str) -> str:
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
-        # Honor escape hatch first (reference hook lines 43-46).
         if os.environ.get(_OVERRIDE_ENV_VAR, "0") == "1":
             return None
 
@@ -128,7 +121,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         }
     except Exception:
-        # Fail-open on any unexpected error — mirrors the reference hook's
-        # fail-open-on-error discipline (never fail-closed on a hard guard's
-        # own internal error).
         return None

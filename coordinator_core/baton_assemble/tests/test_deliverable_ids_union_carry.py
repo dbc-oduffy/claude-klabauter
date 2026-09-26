@@ -1,20 +1,3 @@
-"""coordinator_core.baton_assemble.tests.test_deliverable_ids_union_carry
-
-Plan: docs/plans/2026-08-19-batons-unify-into-one-successor.md, C2.
-
-`resolve_lineage` now attaches `lineage["deliverable_ids"]` /
-`lineage["plan_ids"]` -- the ordered, deduplicated union of the primary
-rung's own id followed by each additional predecessor's OWN id (read off
-ITS OWN frontmatter, never the primary's). Order is the FAN-IN order
-`lineage["additional_predecessors"]` already finalizes (caller-argv order
-then ledger-discovery order), not sorted and not earliest-claimed order.
-Both keys follow this module's existing optional-array convention: `None`,
-never `[]`, when fewer than 2 distinct ids result (AC3/AC4) -- this chunk
-(C2) is the ONLY place the 2+ threshold is decided.
-
-Run: python3 -m pytest
-coordinator_core/baton_assemble/tests/test_deliverable_ids_union_carry.py -q
-"""
 
 from __future__ import annotations
 
@@ -30,8 +13,6 @@ from coordinator_core.test_baton_assemble import (
     _write_artifact,
 )
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -40,8 +21,6 @@ pytestmark = [
 
 @pytest.fixture(autouse=True)
 def _stub_operator_config(monkeypatch):
-    """Restated per-module (autouse fixtures do not cross module boundaries)
-    -- mirrors the sibling `test_deliverable_collision_warn.py` fixture."""
     monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
     monkeypatch.setattr(ba_apply, "_resolve_claude_klabauter_bin", lambda: _REPO_CLAUDE_KLABAUTER_BIN)
 
@@ -54,10 +33,6 @@ def _write_predecessor(
         f"origin_plan_id: {plan_id}",
     ]
     if handoff_id:
-        # Own `handoff_id` -- makes `resolve_lineage`'s `is_own_handoff_
-        # record` discriminator fire so `lineage["predecessor"]` is set to
-        # THIS artifact's own path (needed for the primary rung's plan_ids
-        # read; see this artifact's own `origin_plan_id` above).
         lines.append(f"handoff_id: {handoff_id}")
     return _write_artifact(root / rel, lines)
 
@@ -143,14 +118,6 @@ def test_single_predecessor_leaves_both_keys_none(tmp_path):
 
 
 def test_frontmatter_less_additional_predecessor_leg_is_skipped_not_fatal(tmp_path):
-    """A leg that resolves to a real, live file but carries no
-    `deliverable_id` (empty frontmatter) reads back `""` from
-    `_read_frontmatter_field` -- never raises -- and is skipped, matching
-    `_scan_deliverable_collision`'s own guard over the same read. This is
-    the "unreadable predecessor" case the brief names: a path that FAILS
-    to resolve at all is a different, fail-loud path
-    (`_resolve_qualified_path_or_raise`), exercised elsewhere; this test
-    is scoped to the frontmatter-read guard `_deliverable_id_for` owns."""
     primary = _write_predecessor(
         tmp_path,
         "state/handoffs/primary.md",

@@ -1,29 +1,3 @@
-"""test_workday_start_advisory_counters — pytest tests for
-workday-start-advisory-counters.py (WDS-3: DoE-claude /workday-start bash-block
-extirpation — improvement-queue depth, push-failure log stats, local-only-ahead
-branch check, all ported to one naked-Python CLI).
-
-Coverage:
-  improvement-queue
-    - central resolved, entries present, oldest = earliest dated filename.
-    - central unresolved (coordinator_state_root_central() returns "") -> error
-      field populated, count 0 — "surface to PM, do not report the queue as
-      empty" contract.
-    - local dir absent -> present False, count 0.
-    - `recurring` per-entry field (>=3) surfaced from both central and local
-      queues; bool values excluded (bool is an int subtype in Python).
-    - cross-repo-commitments: open-count + oldest-days computed from `observed`.
-  push-failures
-    - delegates to coordinator_core.ops.workday_surface_auto_push_failure_stats
-      (this test monkeypatches that function, not its internals — this file's
-      own job is only the CLI's argv/stdout/error-degrade plumbing around it).
-  local-ahead
-    - branch not work/*|feature/* -> eligible False, no git calls made.
-    - branch ahead of origin -> ahead_count computed from `origin/<branch>..HEAD`.
-    - branch absent on origin -> no_origin True, ahead_count = all local commits.
-
-Run: python3 -m pytest coordinator/bin/tests/test_workday_start_advisory_counters.py -q
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -34,21 +8,13 @@ from pathlib import Path
 
 import pytest
 
-# Declared, not excused: 3 of this file's tests (test_local_ahead_*) spawn a real git
-# process because the property under test is git's own ahead-count/no-origin
-# resolution against a real branch/remote, which no mock stands in for. Each builds
-# its own small repo (3-9 git calls) exercising a genuinely different branch/remote
-# scenario, so there is no shared state to hoist to module scope without conflating
 # those scenarios. The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue
-# and is explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _BIN_DIR = Path(__file__).parent.parent
 
 
 def _load_module():
-    """Load workday-start-advisory-counters.py by file path (hyphenated name)."""
     spec = importlib.util.spec_from_file_location(
         "workday_start_advisory_counters",
         _BIN_DIR / "workday-start-advisory-counters.py",
@@ -70,10 +36,6 @@ def _init_git_repo(path: Path) -> None:
     subprocess.run(["git", "add", "README.md"], cwd=str(path), check=True)
     subprocess.run(["git", "commit", "--quiet", "-m", "seed"], cwd=str(path), check=True)
 
-
-# ---------------------------------------------------------------------------
-# improvement-queue
-# ---------------------------------------------------------------------------
 
 def test_improvement_queue_central_resolved_and_oldest(tmp_path, monkeypatch):
     central_state = tmp_path / "central-state"
@@ -178,10 +140,6 @@ def test_improvement_queue_commitments_open_count_and_oldest_days(tmp_path, monk
     assert result["commitments"]["oldest_days"] >= 0
 
 
-# ---------------------------------------------------------------------------
-# push-failures
-# ---------------------------------------------------------------------------
-
 def test_push_failures_delegates_to_engine_op(tmp_path, monkeypatch):
     called_with = {}
 
@@ -225,10 +183,6 @@ def test_push_failures_engine_error_degrades_to_error_field(tmp_path, monkeypatc
     assert "boom" in result["error"]
 
 
-# ---------------------------------------------------------------------------
-# local-ahead
-# ---------------------------------------------------------------------------
-
 def test_local_ahead_ineligible_branch_skips_git_network_calls(tmp_path):
     _init_git_repo(tmp_path)
     subprocess.run(["git", "checkout", "--quiet", "-b", "main"], cwd=str(tmp_path), check=True)
@@ -253,7 +207,7 @@ def test_local_ahead_no_origin_counts_all_local_commits(tmp_path):
     assert result["branch"] == "work/testmachine/2026-07-23"
     assert result["eligible"] is True
     assert result["no_origin"] is True
-    assert result["ahead_count"] == 2  # seed commit + second commit
+    assert result["ahead_count"] == 2
 
 
 def test_local_ahead_ahead_of_origin_counts_delta(tmp_path):
@@ -284,10 +238,6 @@ def test_local_ahead_ahead_of_origin_counts_delta(tmp_path):
     assert result["ahead_count"] == 1
     assert result["fetch_error"] is None
 
-
-# ---------------------------------------------------------------------------
-# stale-stashes (AC5)
-# ---------------------------------------------------------------------------
 
 def test_stale_stashes_delegates_to_engine_op(tmp_path, monkeypatch):
     called_with = {}
@@ -338,10 +288,6 @@ def test_stale_stashes_engine_error_degrades_to_error_field(tmp_path, monkeypatc
     assert result["stale"] == []
     assert "boom" in result["error"]
 
-
-# ---------------------------------------------------------------------------
-# CLI plumbing — end-to-end via main(), stdout is one JSON line, always exit 0
-# ---------------------------------------------------------------------------
 
 def test_main_improvement_queue_prints_one_json_line_and_exits_zero(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(

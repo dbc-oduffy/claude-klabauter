@@ -35,11 +35,6 @@ pytestmark = [pytest.mark.cadence]
 
 
 class _FakeIO:
-    """Same shape as `test_server_loop.py`'s `_FakeIO` -- a blocking-file
-    stand-in backed by an in-memory line queue, except `readline` can be
-    made to BLOCK on an `threading.Event` rather than returning
-    immediately, so a frame can be held "unread" on its connection thread
-    while a second connection's thread polls concurrently."""
 
     def __init__(self, lines, *, hold: threading.Event | None = None):
         self._lines = list(lines)
@@ -98,9 +93,6 @@ def _run_connection(io_obj, *, dispatch, in_flight=None):
 
 
 def _poll(key: str) -> dict:
-    """Poll `key` through the real `_serve_line` intercept on its own
-    connection -- never a direct `AckStore.status()` call -- so the oracle
-    exercises the actual production route a caller uses."""
     io_obj = _FakeIO([_frame(method="warm.request_status", extra={"params": {"key": key}})])
     _run_connection(io_obj, dispatch=lambda *_a, **_k: pytest.fail("poll must never reach dispatch"))
     [response] = _written(io_obj)
@@ -109,21 +101,9 @@ def _poll(key: str) -> dict:
 
 @pytest.fixture(autouse=True)
 def _fresh_ack_store(monkeypatch):
-    """Each test gets its own `AckStore` -- the production one is a
-    module-level singleton, and tests must not see each other's keys.
-    `boot_ns=0` so small test key mint-times are never misread as minted
-    before this store's boot."""
     store = dispatch_ack.AckStore(boot_ns=0)
     monkeypatch.setattr(server, "_ack_store", store)
     return store
-
-
-# ---------------------------------------------------------------------------
-# Case 1 -- the 2026-09-01 incident, reproduced deterministically: a
-# mutating frame held unread on connection A while connection B polls its
-# key must answer not_received, and releasing the frame afterward must be
-# refused, never dispatched.
-# ---------------------------------------------------------------------------
 
 
 def test_held_frame_polled_then_released_never_double_dispatches(_fresh_ack_store):
@@ -140,8 +120,6 @@ def test_held_frame_polled_then_released_never_double_dispatches(_fresh_ack_stor
     t_a = threading.Thread(target=_run_connection, kwargs=dict(io_obj=io_a, dispatch=_dispatch, in_flight=in_flight_a))
     t_a.start()
 
-    # Connection A's readline is blocked -- the frame is genuinely unread,
-    # not merely unrun, mirroring a frame sitting in a pipe buffer.
     time.sleep(0.1)
     assert not handler_ran.is_set()
 
@@ -149,9 +127,6 @@ def test_held_frame_polled_then_released_never_double_dispatches(_fresh_ack_stor
     assert status["state"] == dispatch_ack.STATE_NOT_RECEIVED
     assert status["outcome"] == dispatch_ack.OUTCOME_NOT_DISPATCHED
 
-    # Release the held frame: it must now be refused (tombstoned by the
-    # poll above), and the handler must never run -- the exact race the
-    # 2026-09-01 double execution found, closed.
     hold.set()
     t_a.join(timeout=5)
 
@@ -159,15 +134,7 @@ def test_held_frame_polled_then_released_never_double_dispatches(_fresh_ack_stor
     [response] = _written(io_a)
     assert response["error"]["code"] == server.DISPATCH_KEY_TOMBSTONED_ERROR
 
-    # A second poll of the same key still answers not_received -- the
-    # tombstone is stable, not a one-shot answer.
     assert _poll(key)["state"] == dispatch_ack.STATE_NOT_RECEIVED
-
-
-# ---------------------------------------------------------------------------
-# Case 2 -- executing: the handler is blocked on an Event, and a
-# simultaneous poll on a second connection answers `executing`.
-# ---------------------------------------------------------------------------
 
 
 def test_poll_during_execution_answers_executing(_fresh_ack_store):
@@ -184,7 +151,7 @@ def test_poll_during_execution_answers_executing(_fresh_ack_store):
     t_a = threading.Thread(target=_run_connection, kwargs=dict(io_obj=io_a, dispatch=_dispatch))
     t_a.start()
 
-    assert entered.wait(timeout=5)  # the handler is genuinely running, not merely admitted
+    assert entered.wait(timeout=5)
 
     status = _poll(key)
     assert status["state"] == dispatch_ack.STATE_EXECUTING
@@ -192,15 +159,6 @@ def test_poll_during_execution_answers_executing(_fresh_ack_store):
     release.set()
     t_a.join(timeout=5)
     assert _written(io_a)[0]["result"] == "ok"
-
-
-# ---------------------------------------------------------------------------
-# Case 3 -- finished: the handler returns, and the poll answers `finished`
-# with the outcome. The sibling completion-evidence contract answers what
-# `finished` proves about the mutation for this method; the oracle also
-# confirms the method has a defined evidence class, so the "finished"
-# answer this poll gives is one the sibling contract can interpret.
-# ---------------------------------------------------------------------------
 
 
 def test_poll_after_completion_answers_finished_with_outcome(_fresh_ack_store, monkeypatch):
@@ -215,10 +173,6 @@ def test_poll_after_completion_answers_finished_with_outcome(_fresh_ack_store, m
 
     monkeypatch.setattr(ipc_module, "dispatch_message", _fake_dispatch_message)
 
-    # Uses the REAL default `dispatch=server._run_dispatch` (not a fake) --
-    # stamping the outcome on completion happens inside `_run_dispatch`
-    # itself, not at the `_serve_line` seam, so this case must exercise the
-    # production stamp leg, not a hand-rolled dispatch stand-in.
     io_a = _FakeIO([_frame(id_="a", method=method, extra={"_dispatch_key": key})])
     server._handle_connection(
         io_a,
@@ -234,21 +188,11 @@ def test_poll_after_completion_answers_finished_with_outcome(_fresh_ack_store, m
     assert status["state"] == dispatch_ack.STATE_FINISHED
     assert status["outcome"] == dispatch_ack.OUTCOME_RESULT
 
-    # The sibling contract has a defined answer for this method -- what a
-    # `finished` state may be taken to prove.
     assert evidence_class(method) is not None
-
-
-# ---------------------------------------------------------------------------
-# Case 4 -- restart: a new store whose boot_ns is after the key's mint
-# answers unknowable(engine-restarted).
-# ---------------------------------------------------------------------------
 
 
 def test_poll_after_engine_restart_answers_unknowable_engine_restarted(monkeypatch):
     key = "1-400"
-    # A store booted strictly after the key's mint time -- the key predates
-    # this engine's own birth, exactly as a restart would leave it.
     restarted_store = dispatch_ack.AckStore(boot_ns=1_000)
     monkeypatch.setattr(server, "_ack_store", restarted_store)
 
@@ -257,34 +201,20 @@ def test_poll_after_engine_restart_answers_unknowable_engine_restarted(monkeypat
     assert status["reason"] == dispatch_ack.REASON_ENGINE_RESTARTED
 
 
-# ---------------------------------------------------------------------------
-# Case 5 -- evicted: capacity 2 and three keys; the first key answers
-# unknowable(expired).
-# ---------------------------------------------------------------------------
-
-
 def test_poll_of_an_evicted_key_answers_unknowable_expired(monkeypatch):
     store = dispatch_ack.AckStore(capacity=2, boot_ns=0)
     monkeypatch.setattr(server, "_ack_store", store)
 
     assert store.admit("1-500", "ceremony.commit_v2")
     assert store.admit("1-501", "ceremony.commit_v2")
-    assert store.admit("1-502", "ceremony.commit_v2")  # evicts key 1-500
+    assert store.admit("1-502", "ceremony.commit_v2")
 
     status = _poll("1-500")
     assert status["state"] == dispatch_ack.STATE_UNKNOWABLE
     assert status["reason"] == dispatch_ack.REASON_EXPIRED
 
-    # A key that survived eviction still answers normally.
     status_survivor = _poll("1-501")
     assert status_survivor["state"] == dispatch_ack.STATE_EXECUTING
-
-
-# ---------------------------------------------------------------------------
-# Case 6 -- cold: the registered op handler (reached only on the cold or
-# pool path, where no AckStore is visible) answers
-# unknowable(no-resident-engine), and never not_received.
-# ---------------------------------------------------------------------------
 
 
 def test_cold_handler_answers_unknowable_no_resident_engine():

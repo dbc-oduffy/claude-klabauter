@@ -1,10 +1,3 @@
-"""Tests for the ledger reader / intake appender (chunk C1).
-
-Covers the C1 negative spec: `None`-vs-`[]` preserved on `for_peer`, the
-intake appender's row shape against the wiki contract, and validation
-rejecting shapes the consumer would quarantine before this plane ever writes
-them.
-"""
 
 from __future__ import annotations
 

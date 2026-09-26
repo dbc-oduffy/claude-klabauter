@@ -47,14 +47,6 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _posix(p) -> str:
-    """POSIX-slash string form of a path for embedding in a bash
-    command-line string -- the tokenizer under test parses commands as
-    real bash/POSIX-sh syntax (backslash is an escape character), so a
-    native Windows ``str(Path)`` (backslash-separated) embedded directly
-    into a ``cmd`` string is not a realistic Bash-tool payload and
-    silently corrupts the path once tokenized (see bb48ce7's identical
-    fixture-realism finding on the write-bump test suite). Accepts a
-    ``Path`` or a plain ``str``."""
     return p.as_posix() if hasattr(p, "as_posix") else str(p).replace("\\", "/")
 
 
@@ -63,10 +55,6 @@ def _payload_prefix() -> str:
 
 
 def _run_rewrite(cmd: str) -> str:
-    """Compile `cmd` via `check_grep_via_bash_rewrite`, execute the embedded
-    script in-process, and return its stdout -- `None` (as a sentinel via
-    pytest.skip is wrong here; return the Python `None` object) if no
-    rewrite was offered (a dialect-unsafe pattern was correctly refused)."""
     out = dc.check_grep_via_bash_rewrite(cmd)
     if out is None:
         return None
@@ -81,23 +69,6 @@ def _run_rewrite(cmd: str) -> str:
 
 
 def _run_real(cmd: str, timeout: float = 10.0) -> str:
-    """Execute the RAW command string through an actual shell -- must go
-    through the shell (not an argv list), so backslash-escaping etc. is
-    resolved by the shell exactly as it would be for the original command
-    dispatch_checks tokenizes (an argv list bypasses the shell entirely and
-    would hand grep a literal backslash the shell would otherwise strip,
-    producing a false divergence that is a test-harness bug, not a
-    production one).
-
-    Explicitly routed through Git Bash on Windows: `dispatch_checks`
-    tokenizes `cmd` as bash/POSIX-sh, where a backslash before an ordinary
-    character strips it and passes the character on literally (e.g. `\\.`
-    reaches `grep` as a bare `.`). Plain `subprocess.run(shell=True)` on
-    Windows launches cmd.exe instead, which does NOT treat backslash as an
-    escape character at all -- `\\.` reaches `grep` unchanged, a genuinely
-    different argument than what a real Bash-tool invocation would produce,
-    and a false divergence against the rewrite (which mirrors the bash
-    tokenizer's own stripping)."""
     if platform.system() == "Windows":
         bash = shutil.which("bash")
         if bash is None:
@@ -107,7 +78,6 @@ def _run_real(cmd: str, timeout: float = 10.0) -> str:
         , **no_console_creationflags())
     else:
         result = subprocess.run(
-            # popup-intentional-last-resort: shell=True spawns a cmd.exe
             # intermediary that CREATE_NO_WINDOW does not suppress; the
             # STARTUPINFO route is a separate, wider fix (review: code-reviewer).
             cmd, shell=True, capture_output=True, text=True, timeout=timeout,
@@ -115,29 +85,11 @@ def _run_real(cmd: str, timeout: float = 10.0) -> str:
     return result.stdout
 
 
-#: `lineno:content` -- real `grep`'s shape for a single-file invocation.
 _BARE_LINE_RE = re.compile(r"^(\d+):(.*)$")
-#: `path:lineno:content` -- the rewrite always prefixes the path. The path
-#: part is `.*?` and NOT `[^:]*`: on Windows the path carries its own drive
-#: colon (`C:/Users/...`), which a colon-excluding class cannot span, so the
-#: whole line fell through unparsed and was compared against a parsed tuple
-#: from the other side. That is not a grep-dialect divergence at all -- it is
-#: this normalizer failing to normalize -- and it is what kept four
-#: differential-execution cases red under `pending_fix` on Windows while the
-#: rewrite under test was producing byte-identical MATCHES.
 _PATH_LINE_RE = re.compile(r"^.*?:(\d+):(.*)$")
 
 
 def _lines_of(txt: str):
-    """Normalize `path:lineno:content` / `lineno:content` output (the
-    rewrite always includes the path; real `grep` omits it for a
-    single-file invocation) down to a comparable ``{(lineno, content)}``
-    set.
-
-    The bare form is tried FIRST, before the path-prefixed one. Order is
-    load-bearing, not stylistic: content containing its own `:<digits>:`
-    would let the path-prefixed pattern consume a real content colon as the
-    separator and report a line number taken from the matched text."""
     out = set()
     for line in txt.splitlines():
         if not line:
@@ -168,15 +120,8 @@ def fixture_file(tmp_path):
     return p
 
 
-# ---------------------------------------------------------------------------
-# Patterns that MUST be refused (dialect-ambiguous) -- no rewrite offered,
-# never a silently-wrong translation.
-# ---------------------------------------------------------------------------
-
-
 class TestRefusesRatherThanGuesses:
     def test_founding_incident_pattern_refused(self, fixture_file):
-        """The EXACT command shape that produced the incident."""
         cmd = 'grep -n "^| AC-3 \\|^| AC-4 \\|^| AC-5 " %s' % fixture_file
         assert dc.check_grep_via_bash_rewrite(cmd) is None
 
@@ -198,13 +143,6 @@ class TestRefusesRatherThanGuesses:
         assert dc.check_grep_via_bash_rewrite("grep -n a(b)c %s" % fixture_file) is None
 
     def test_posix_bracket_class_refused_regex_dialects(self, fixture_file):
-        """`[[:alpha:]]` has no Python `re` equivalent as a REGEX
-        construct -- refused for every dialect that parses it as a regex
-        (basic/extended/rust). `fgrep`/`grep -F` is deliberately excluded:
-        under `-F` there IS no regex parsing at all, so the bracket-class
-        TEXT is itself just a literal string to search for, and `re.escape`
-        translates it faithfully (covered by `test_fixed_dialect_bracket_
-        class_text_is_literal_not_refused`, below)."""
         for binary in ("grep", "egrep", "rg"):
             cmd = '%s -n "[[:alpha:]]" %s' % (binary, fixture_file)
             assert dc.check_grep_via_bash_rewrite(cmd) is None, binary
@@ -215,27 +153,16 @@ class TestRefusesRatherThanGuesses:
         )
 
     def test_fixed_flag_with_extended_flag_refused(self, fixture_file):
-        """`-E -F` together: real grep lets the LAST one on the command
-        line win; this rewrite has no ordering information from an
-        unordered flag set, so it refuses rather than guesses which wins."""
         cmd = "grep -EFn a+b %s" % fixture_file
         assert dc.check_grep_via_bash_rewrite(cmd) is None
 
     def test_perl_shorthand_escape_refused_in_every_dialect(self, fixture_file):
-        # Single-quoted in the command TEXT (not merely an `r"..."` Python
         # literal) -- an UNQUOTED `\d` would have its backslash stripped by
-        # the shell-mimicking tokenizer before the pattern operand is even
-        # extracted (bare backslash-before-ordinary-char is a no-op escape
-        # in POSIX shell quoting), silently turning this into "d+" and
-        # testing the wrong thing entirely.
         for binary in ("grep", "egrep"):
             cmd = "%s -n '\\d+' %s" % (binary, fixture_file)
             assert dc.check_grep_via_bash_rewrite(cmd) is None, binary
 
     def test_mid_pattern_bare_caret_basic_dialect_refused(self, fixture_file):
-        """Finding 5: `grep -n 'a^b'` (BRE: literal substring `a^b`) must be
-        refused, not silently compiled as a Python `re` mid-string anchor
-        that can never match."""
         cmd = "grep -n a^b %s" % fixture_file
 
         assert dc.check_grep_via_bash_rewrite(cmd) is None
@@ -245,9 +172,6 @@ class TestRefusesRatherThanGuesses:
         assert dc.check_grep_via_bash_rewrite(cmd) is None
 
     def test_trailing_dollar_basic_dialect_still_safe(self, fixture_file):
-        """`$` AT the pattern's own last character is a real anchor in BOTH
-        BRE and Python `re` -- must still be offered, unlike the mid-pattern
-        case above."""
         assert dc.check_grep_via_bash_rewrite("grep -n plain$ %s" % fixture_file) is not None
 
 
@@ -266,12 +190,6 @@ class TestGrepDashWRefusedRatherThanSilentlyDropped:
         assert dc.check_grep_via_bash_rewrite("grep -wrn plain %s" % fixture_file) is None
 
 
-# ---------------------------------------------------------------------------
-# Patterns that MUST be offered, and MUST match the real binary's output
-# byte-for-byte (line/content set) -- differential execution, not reading.
-# ---------------------------------------------------------------------------
-
-
 class TestDifferentialExecutionMatchesRealBinary:
     @staticmethod
     def _assert_matches(binary, flags, pattern, fixture_file):
@@ -283,16 +201,6 @@ class TestDifferentialExecutionMatchesRealBinary:
         assert rewritten is not None, "expected a rewrite for: %s" % cmd
         assert _lines_of(real) == _lines_of(rewritten), (cmd, real, rewritten)
 
-    #: These four were carried as `pending_fix` in
-    #: state/bash-guards/known-red.json group "dispatch-checks-windows-path",
-    #: attributed to a `check_grep_via_bash_rewrite` `os.path.join` defect.
-    #: That attribution was wrong. Retired 2026-09-01 after measuring the
-    #: rewrite's actual output: the MATCHES were already byte-identical to
-    #: real `grep`'s on every one of them, and the sole divergence was in
-    #: `_lines_of` -- this file's own normalizer -- which could not span the
-    #: drive colon in a Windows path and so left the rewrite's line unparsed
-    #: while parsing `grep`'s. A red test does not establish where the defect
-    #: is; it establishes that two sides disagree, and here one of the two
     #: sides was the instrument. See `_PATH_LINE_RE`.
     def test_dot_metachar_basic(self, fixture_file):
         self._assert_matches("grep", "-n", ".", fixture_file)
@@ -323,13 +231,6 @@ class TestDifferentialExecutionMatchesRealBinary:
 
     def test_anchors_basic_dialect_safe(self, fixture_file):
         self._assert_matches("grep", "-n", "^plain", fixture_file)
-
-
-# ---------------------------------------------------------------------------
-# `-e`/`-f` (lowercase) are real grep flags with unrelated argument-taking
-# meanings ("-e PATTERN", "-f FILE") -- must never be folded into the
-# dialect-flag vocabulary alongside `-E`/`-F`.
-# ---------------------------------------------------------------------------
 
 
 class TestLowercaseEfNotDialectFlags:

@@ -40,11 +40,6 @@ def _no_ignore():
 
 
 def _seed(tmp_path: Path) -> "tuple[Path, Path]":
-    """A mirror-mode row whose renamed payload lives under `tests/`, mirroring the shape
-    that surfaced the gap: the source supplies `test_source_name.py`, and the destination
-    already holds the published `test_published_name.py` a prior pass's rename produced.
-    A genuine nested orphan (`test_retired.py`, in neither the source nor any rename
-    table) rides along so the exemption is shown to narrow the sweep, not disable it."""
     src = tmp_path / "src"
     dst = tmp_path / "dst"
     (src / "tests").mkdir(parents=True)
@@ -59,10 +54,6 @@ def _seed(tmp_path: Path) -> "tuple[Path, Path]":
 
 class TestNestedRenameExemption:
     def test_a_nested_published_rename_target_survives_the_sweep(self, tmp_path):
-        """The whole point: the destination's copy of last pass's rename output is
-        absent from the source by construction (only the destination copy is ever
-        renamed), so without the exemption it is indistinguishable from a dropped file
-        and gets reaped every round."""
         src, dst = _seed(tmp_path)
 
         publish_sync.sync_mirror(
@@ -76,7 +67,6 @@ class TestNestedRenameExemption:
         assert (dst / "tests" / "test_published_name.py").is_file()
 
     def test_a_genuine_nested_orphan_is_still_reaped(self, tmp_path):
-        """The exemption narrows the sweep by name; it does not switch it off."""
         src, dst = _seed(tmp_path)
 
         publish_sync.sync_mirror(
@@ -90,9 +80,6 @@ class TestNestedRenameExemption:
         assert not (dst / "tests" / "test_retired.py").exists()
 
     def test_the_source_file_is_still_copied_under_its_source_name(self, tmp_path):
-        """The exemption must not suppress the copy leg -- the content-transform pass
-        renames what sync deposits, so a source file that never lands never gets
-        renamed either."""
         src, dst = _seed(tmp_path)
 
         publish_sync.sync_mirror(
@@ -106,12 +93,6 @@ class TestNestedRenameExemption:
         assert (dst / "tests" / "test_source_name.py").is_file()
 
     def test_an_unknown_exemption_set_preserves_the_prior_reap(self, tmp_path):
-        """`None` means "the caller could not enumerate renames" -- most commonly a
-        publish whose engine failed to import. The per-plugin loop has always deleted
-        unconditionally, so unknown must keep meaning "behave exactly as before" rather
-        than quietly retiring the sweep. (The top-level sweep fails CLOSED on the same
-        input instead, because it is opt-in and its blast radius is a row's whole top
-        level -- the asymmetry is deliberate, not an oversight.)"""
         src, dst = _seed(tmp_path)
 
         publish_sync.sync_mirror(src, dst, _no_ignore(), False)
@@ -120,10 +101,6 @@ class TestNestedRenameExemption:
         assert not (dst / "tests" / "test_retired.py").exists()
 
     def test_the_exemption_matches_on_basename_not_on_relative_path(self, tmp_path):
-        """The exemption set is basenames (a basename rename never moves a file between
-        directories) while this loop's `rel_path` is plugin-relative and can carry
-        directory components -- a rel_path comparison would silently never match for
-        anything below the plugin's own root."""
         src, dst = _seed(tmp_path)
         (src / "tests" / "deep").mkdir()
         (dst / "tests" / "deep").mkdir()

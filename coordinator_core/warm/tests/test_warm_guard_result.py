@@ -52,8 +52,6 @@ def test_hit_true_with_error_envelope_is_guard_did_not_run() -> None:
 
 
 def test_error_key_present_but_null_is_not_treated_as_error() -> None:
-    """A response with an explicit `"error": null` alongside a `result` is not an error envelope
-    -- only a non-None `error` value trips the trap."""
     response = {"error": None, "result": {"permissionDecision": "deny", "permissionDecisionReason": "no"}}
     disposition, reason = interpret(True, response)
     assert disposition == DENY
@@ -73,8 +71,6 @@ def test_deny_propagates_reason_verbatim() -> None:
     ids=["missing", "empty", "whitespace", "int", "list", "dict"],
 )
 def test_deny_with_unusable_reason_still_denies_with_substitute(bad_reason: Any) -> None:
-    """A deny we cannot explain is still a deny -- never downgraded to a pass. The module
-    supplies its own substitute reason rather than propagating the unusable one."""
     result: dict[str, Any] = {"permissionDecision": "deny"}
     if bad_reason is not None:
         result["permissionDecisionReason"] = bad_reason
@@ -85,15 +81,12 @@ def test_deny_with_unusable_reason_still_denies_with_substitute(bad_reason: Any)
 
 
 def test_empty_result_with_no_decision_key_is_no_objection() -> None:
-    """{} with no permissionDecision key is the contract's deliberate no-objection shape."""
     disposition, reason = interpret(True, {"result": {}})
     assert disposition == NO_OBJECTION
     assert reason is None
 
 
 def test_literal_allow_is_guard_did_not_run_never_a_verdict() -> None:
-    """The contract never sends a literal "allow". Receiving one means the peer is not the op we
-    think it is -- decline to propagate a permission we cannot account for."""
     disposition, reason = interpret(True, {"result": {"permissionDecision": "allow"}})
     assert disposition == GUARD_DID_NOT_RUN
     assert reason is None
@@ -166,8 +159,6 @@ _JUNK_SHAPES = [
 @pytest.mark.parametrize("response", _JUNK_SHAPES)
 @pytest.mark.parametrize("hit", [True, False])
 def test_interpret_never_raises_and_always_returns_a_known_disposition(hit: bool, response: Any) -> None:
-    """Totality: interpret() must never raise. A parser that raises on an unexpected payload
-    fails the hook open just as surely as one that treats an error as a pass."""
     disposition, reason = interpret(hit, response)
     assert disposition in (DENY, NO_OBJECTION, GUARD_DID_NOT_RUN)
     if disposition != DENY:

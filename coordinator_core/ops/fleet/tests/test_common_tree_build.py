@@ -83,8 +83,6 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    # popup-intentional-last-resort — test-only real-git spawn; see module
-    # docstring for why a mock cannot stand in for this assertion.
     return subprocess.run(
         ["git", *args],
         cwd=str(cwd),
@@ -107,7 +105,6 @@ def _init_repo(root: Path) -> None:
 
 
 def test_archive_and_commit_preserves_exec_bit_from_head(tmp_path: Path) -> None:
-    """AC-10: a `100755` HEAD entry lands at dst as `100755`, not `100644`."""
     root = tmp_path / "repo"
     _init_repo(root)
 
@@ -117,9 +114,6 @@ def test_archive_and_commit_preserves_exec_bit_from_head(tmp_path: Path) -> None
     src.write_text("---\nstatus: claimed\n---\n\nBody.\n", encoding="utf-8")
 
     _git(["add", "-A"], root)
-    # Force the exec bit into the index/HEAD regardless of the host
-    # filesystem's own permission bits (NTFS carries none) -- this is the
-    # authoritative way to make git itself believe this blob is 100755.
     _git(["update-index", "--chmod=+x", "state/handoffs/2026-08-01-exec.md"], root)
     _git(["commit", "-q", "-m", "seed: executable handoff"], root)
 
@@ -150,10 +144,6 @@ def test_archive_and_commit_preserves_exec_bit_from_head(tmp_path: Path) -> None
 def test_archive_and_commit_restage_src_content_is_current_disk_not_head(
     tmp_path: Path,
 ) -> None:
-    """A restage_src=True move commits dst's CURRENT on-disk bytes, never
-    HEAD's stale blob for src -- the new build hashes dst fresh via
-    `git hash-object`, it does not reuse HEAD's sha the way it reuses HEAD's
-    mode."""
     root = tmp_path / "repo"
     _init_repo(root)
 
@@ -164,9 +154,6 @@ def test_archive_and_commit_restage_src_content_is_current_disk_not_head(
     _git(["add", "-A"], root)
     _git(["commit", "-q", "-m", "seed: handoff"], root)
 
-    # Author fresh content on disk, uncommitted -- exactly what a
-    # restage_src=True caller (e.g. a terminality stamp) does immediately
-    # before queuing the archival move.
     fresh_content = "---\nstatus: claimed\ndeployment_state: shipped\n---\n\nBody.\n"
     src.write_text(fresh_content, encoding="utf-8")
 
@@ -196,8 +183,6 @@ def test_archive_and_commit_restage_src_content_is_current_disk_not_head(
 def test_assembled_commit_is_noop_true_when_assembled_matches_head(
     tmp_path: Path,
 ) -> None:
-    """AC-7 re-siting: an `assembled` dict whose every entry already matches
-    HEAD's tree is detected as a no-op, spawn-free."""
     root = tmp_path / "repo"
     _init_repo(root)
 
@@ -210,28 +195,18 @@ def test_assembled_commit_is_noop_true_when_assembled_matches_head(
     mode = int(head_mode_sha[0], 8)
     sha = head_mode_sha[2]
 
-    # The guard TAKES a spine rather than reading one (2026-08-27) -- its
-    # caller walks HEAD once for src union dst and hands the result down, so
-    # a single walk here covers every path the four cases below assert on.
-    # Built with the real `read_tree_spine` rather than a hand-shaped dict:
-    # the guard's contract is "whatever read_tree_spine returns", and a fixture
-    # that cannot express the real shape is not coverage of it.
     spine = read_tree_spine(root, ["tracked.txt", "never-tracked.txt"])
     assert spine is not None
 
-    # Byte-identical to what HEAD already records -- no real change.
     noop_assembled = {"tracked.txt": (mode, sha)}
     assert _assembled_commit_is_noop(spine, noop_assembled) is True
 
-    # A genuinely different sha for the same path IS a real change.
     real_change_assembled = {"tracked.txt": (mode, "0" * 40)}
     assert _assembled_commit_is_noop(spine, real_change_assembled) is False
 
-    # A deletion of a path that does not exist in HEAD is also a no-op.
     absent_noop = {"never-tracked.txt": _ABSENT}
     assert _assembled_commit_is_noop(spine, absent_noop) is True
 
-    # A deletion of a path HEAD DOES track is a real change.
     real_deletion = {"tracked.txt": _ABSENT}
     assert _assembled_commit_is_noop(spine, real_deletion) is False
 
@@ -262,8 +237,6 @@ def test_assembled_commit_is_noop_extra_spine_keys_are_inert(
     mode = int(head_mode_sha[0], 8)
     sha = head_mode_sha[2]
 
-    # Wider than assembled's keys -- includes "unrelated.txt", which no
-    # assertion below ever looks up.
     wide_spine = read_tree_spine(root, ["tracked.txt", "unrelated.txt"])
     assert wide_spine is not None
 
@@ -277,14 +250,6 @@ def test_assembled_commit_is_noop_extra_spine_keys_are_inert(
 def test_assembled_commit_is_noop_key_missing_from_spine_reads_as_absent_from_head(
     tmp_path: Path,
 ) -> None:
-    """Documents CURRENT behaviour for a key in `assembled` that the spine
-    was never walked for (code-reviewer nit, 2026-08-27): the docstring says
-    a spine narrower than `assembled`'s keys "is a caller bug that reads as
-    'entry absent from HEAD'" -- a narrowed walk (a future edit dropping a
-    key source from the union that builds the spine) would silently look
-    like every such path is a brand-new add, never surfacing as its own
-    error. This pins that exact reading so a future change to it is visible
-    here rather than silently passing."""
     root = tmp_path / "repo"
     _init_repo(root)
 
@@ -293,29 +258,17 @@ def test_assembled_commit_is_noop_key_missing_from_spine_reads_as_absent_from_he
     _git(["add", "-A"], root)
     _git(["commit", "-q", "-m", "seed"], root)
 
-    # Spine walked for a path that is NOT "never-added.txt" -- assembled
-    # below names a key the spine was never built for at all.
     narrow_spine = read_tree_spine(root, ["tracked.txt"])
     assert narrow_spine is not None
 
-    # A real (mode, sha) entry for a key absent from the spine reads as a
-    # genuine add -- NOT a no-op, and NOT an error of its own. This is the
-    # silent-misbehaviour shape a narrowed walk would produce for a real key.
     assembled_with_missing_key = {"never-added.txt": (0o100644, "1" * 40)}
     assert _assembled_commit_is_noop(narrow_spine, assembled_with_missing_key) is False
 
-    # A deletion (_ABSENT) of a key absent from the spine still reads as a
-    # no-op -- "nothing there to delete" is correct regardless of why the
-    # spine never covered that key.
     assembled_absent_delete = {"never-added.txt": _ABSENT}
     assert _assembled_commit_is_noop(narrow_spine, assembled_absent_delete) is True
 
 
 def _patch_counting_hash_object(monkeypatch):
-    """Counts calls to `_hash_object_stdin_paths` -- the ONE git spawn left
-    anywhere in `archive_and_commit`'s build, and only for a `restage_src=
-    True` subset (C1). Mirrors test_archive_and_commit_batched_drift_and_
-    restage.py's identical helper."""
     orig = _common_mod._hash_object_stdin_paths
     calls = {"n": 0, "argv_lens": []}
 
@@ -331,9 +284,6 @@ def _patch_counting_hash_object(monkeypatch):
 def test_all_restage_src_false_batch_spawns_zero_hash_object_calls(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """AC-1: a batch made entirely of restage_src=False (the common archival
-    shape) issues ZERO `git hash-object` spawns -- head_entry[1] supplies
-    every blob sha directly, spawn-free."""
     root = tmp_path / "repo"
     _init_repo(root)
 
@@ -373,9 +323,6 @@ def test_all_restage_src_false_batch_spawns_zero_hash_object_calls(
 def test_mixed_batch_spawns_hash_object_once_scoped_to_restage_subset(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """AC-1: a batch with both restage_src=False and restage_src=True moves
-    issues exactly ONE hash-object spawn, covering only the restage_src=True
-    dst -- never the restage_src=False ones."""
     root = tmp_path / "repo"
     _init_repo(root)
 
@@ -388,8 +335,6 @@ def test_mixed_batch_spawns_hash_object_once_scoped_to_restage_subset(
     _git(["add", "-A"], root)
     _git(["commit", "-q", "-m", "seed: two handoffs"], root)
 
-    # Fresh, uncommitted content -- what a restage_src=True caller authors
-    # immediately before queuing the move.
     stamped.write_text(
         "---\nstatus: claimed\ndeployment_state: shipped\n---\n\nstamped.\n",
         encoding="utf-8",
@@ -423,10 +368,6 @@ def test_mixed_batch_spawns_hash_object_once_scoped_to_restage_subset(
 def test_restage_src_true_committed_blob_matches_hash_object_on_crlf_content(
     tmp_path: Path,
 ) -> None:
-    """AC-4: a restage_src=True move's committed blob is the FRESH,
-    filter-correct hash of dst's on-disk content -- a CRLF-bearing file's
-    committed blob equals `git hash-object`'s own answer for that content,
-    with no in-process hashing anywhere in the diff."""
     root = tmp_path / "repo"
     _init_repo(root)
 
@@ -440,8 +381,6 @@ def test_restage_src_true_committed_blob_matches_hash_object_on_crlf_content(
     fresh_content = b"---\r\nstatus: claimed\r\ndeployment_state: shipped\r\n---\r\n\r\nBody.\r\n"
     src.write_bytes(fresh_content)
 
-    # git's own answer for this exact content, filter-correct (respects
-    # core.autocrlf/.gitattributes the same way `git add`/`git commit` would).
     expected_sha = _git(["hash-object", "--path", str(src.relative_to(root)), str(src)], root).stdout.strip()
 
     dst = root / "archive" / "handoffs" / "2026-08" / src.name
@@ -469,9 +408,6 @@ def test_restage_src_true_committed_blob_matches_hash_object_on_crlf_content(
 def test_restage_src_false_untracked_at_head_src_lands_in_failed(
     tmp_path: Path,
 ) -> None:
-    """`head_entry is None` for a restage_src=False move is a refusal, not a
-    default: an untracked-at-HEAD src fails with a named reason, its
-    os.replace is reversed, and a sibling clean move is unaffected."""
     root = tmp_path / "repo"
     _init_repo(root)
 
@@ -482,7 +418,6 @@ def test_restage_src_false_untracked_at_head_src_lands_in_failed(
     _git(["add", "-A"], root)
     _git(["commit", "-q", "-m", "seed: clean handoff"], root)
 
-    # Untracked at HEAD -- written to disk but never staged or committed.
     untracked = handoffs / "2026-08-02-untracked.md"
     untracked.write_text("---\nstatus: claimed\n---\n\nuntracked.\n", encoding="utf-8")
 
@@ -503,9 +438,7 @@ def test_restage_src_false_untracked_at_head_src_lands_in_failed(
     assert failed[0]["id"] == moves[1].candidate_id
     assert "untracked-at-head" in failed[0]["reason"]
 
-    # The untracked move's os.replace was reversed -- src restored, dst gone.
     assert untracked.exists()
     assert not _dst(untracked).exists()
-    # The clean move landed normally.
     assert not clean.exists()
     assert _dst(clean).exists()

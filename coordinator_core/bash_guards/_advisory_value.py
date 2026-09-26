@@ -1,21 +1,3 @@
-"""coordinator_core.bash_guards._advisory_value -- per-guard OS-aware
-advisory classification and the emit-time suppression predicate, wired
-into ``dispatch.evaluate_payload_json``'s loop by H4
-(docs/plans/2026-07-30-os-aware-guard-advisory-defaults.md).
-
-Own module, not appended to ``dispatch.py``, so ``_blanket_disarm.py`` can
-import it without the circular-import problem it already has to dodge for
-``GuardBand`` (``_blanket_disarm.py`` imports ``GuardBand`` FROM
-``dispatch.py`` at its own module top level; ``dispatch.py`` in turn needs
-``AdvisoryValue`` for ``GuardEntry``'s ``advisory_value`` field). Putting
-``AdvisoryValue`` here, in a module that imports nothing from ``dispatch``,
-means ``dispatch.py`` -> ``_advisory_value.py`` is one-directional -- no new
-deferred-import workaround is needed the way ``_blanket_disarm.py`` needs one
-for ``GuardBand``.
-
-Spec backlink: DoE-claude:pln-os-aware-guard-advisory-defaul-060dbe
-(DoE-claude) row H1.
-"""
 
 from __future__ import annotations
 

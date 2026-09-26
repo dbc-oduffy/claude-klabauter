@@ -41,19 +41,13 @@ PREDECESSOR_CONSUMED = "predecessor-consumed"
 LEGACY_PREDECESSOR_CONSUMED = "chain-terminal"
 
 # A memo-attributed predecessor consume -- distinct from PREDECESSOR_CONSUMED
-# (which is Detector-chain-attributed). This value is new and has no history:
-# it never enters the dual-vocabulary read-alias machinery above and gets no
-# legacy alias of its own.
 MEMO_PREDECESSOR = "memo-predecessor"
 
 VALID = frozenset(
     {SINGLE_SESSION, PREDECESSOR_CONSUMED, LEGACY_PREDECESSOR_CONSUMED, MEMO_PREDECESSOR}
 )
 
-# Flipped by C6 to the canonical spelling. The legacy spelling stays
-# permanently recognised on read via canonicalize() -- see module docstring.
 # Governs emission of the PREDECESSOR_CONSUMED concept only -- MEMO_PREDECESSOR
-# is a distinct disposition selector, not a spelling of this token.
 WRITE_TOKEN = PREDECESSOR_CONSUMED
 
 _CANONICAL_MAP = {
@@ -81,35 +75,13 @@ def canonicalize(value: str) -> str:
         ) from None
 
 
-# ---------------------------------------------------------------------------
 # ESCALATE-ONLY env override — shared by every WSC disposition resolver
-# ---------------------------------------------------------------------------
-#
-# Spec backlink: cross-repo memo (claude-klabauter commit 1b07cded) fixed a
 # break-class defect where every WSC_DISPOSITION/WSC_CONSUMED_HANDOFF remedy
-# string told the operator to export the override, but resolve_disposition
-# (coordinator/bin/wsc-session-disposition.py) never read either variable
-# back — an inert remedy. That fix established the override contract this
-# module now centralises for every OTHER resolver in the WSC disposition
-# family (coordinator_core.ops.ceremony.branch_resolution's Branch 1), so a
-# second independently-maintained copy cannot drift the same way again.
-#
 # The override is deliberately ESCALATE-ONLY -- a review-coverage gate an
-# env var can waive is not a gate:
 #   - A positive value (canonical PREDECESSOR_CONSUMED, or the permanently-
 #     recognised legacy alias LEGACY_PREDECESSOR_CONSUMED; case-insensitive,
-#     whitespace-stripped) wins outright, ahead of every detector.
 #   - WSC_DISPOSITION=SINGLE_SESSION is REFUSED as a downgrade -- a
-#     positively-detected consume is never suppressed by an env var. The
-#     detector chain runs normally with a WARN explaining the refusal.
-#   - An unrecognised non-empty value is ignored with a WARN naming the
-#     accepted values. Never fails hard -- this is a ceremony pre-step.
 #   - WSC_CONSUMED_HANDOFF set without a positive WSC_DISPOSITION does not
-#     flip disposition -- NOTE and ignore.
-#
-# Negative-spec: do NOT add a path where the override can suppress or
-# downgrade a disposition the detector chain would otherwise reach -- the
-# override may only ever cause MORE gates to run, never fewer.
 
 
 @dataclass(frozen=True)

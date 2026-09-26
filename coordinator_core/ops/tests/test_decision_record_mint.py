@@ -105,12 +105,6 @@ def test_date_named_file_frontmatter_id_is_not_shadowed_by_filename_digits(tmp_p
 
 
 def test_date_named_file_plus_stale_reservation_never_returns_claimed_id(tmp_path: Path) -> None:
-    """Regression: reproduces the full issue #85 repro shape — a date-named
-    `.md` record carrying the claimed id in frontmatter, PLUS a stale
-    reservation sitting at the same claimed number. Minting twice in a row
-    must never hand back `DR-2050` (already claimed by the .md file) or
-    `DR-2051` (claimed by the stale reservation) a second time.
-    """
     decisions = tmp_path / "docs" / "decisions"
     decisions.mkdir(parents=True)
     (decisions / "DR-2026-09-10-live-tree-currency-disposition.md").write_bytes(
@@ -119,8 +113,6 @@ def test_date_named_file_plus_stale_reservation_never_returns_claimed_id(tmp_pat
 
     reservations_dir = _reservations_dir(tmp_path)
     reservations_dir.mkdir(parents=True)
-    # A live (unexpired) reservation already sitting at 2051 — mirrors a
-    # concurrent/prior mint that reserved but never wrote its DR file yet.
     _reservation_path(reservations_dir, 2051).write_bytes(b'{"reserved_at": "now"}\n')
 
     first = mint_next_dr_id(tmp_path)
@@ -164,13 +156,8 @@ def test_handler_missing_repo_root_errors(tmp_path: Path) -> None:
 
 
 def test_exhausted_attempts_raises(tmp_path: Path, monkeypatch) -> None:
-    # Force every candidate in [1, 3] to already be taken while making the
-    # floor-selection scan itself report 0 (as if a genuinely concurrent
     # scan-vs-create race kept losing) -- the shape `_MAX_MINT_ATTEMPTS`
-    # exists to bound, not a state the ordinary floor-then-create path can
-    # reach on its own (see module docstring: the scan only picks a cheap
     # STARTING point, so a stale scan result is exactly the case this
-    # function must not spin forever on).
     monkeypatch.setattr(
         "coordinator_core.ops.decision_record_mint._MAX_MINT_ATTEMPTS", 3
     )
@@ -185,10 +172,6 @@ def test_exhausted_attempts_raises(tmp_path: Path, monkeypatch) -> None:
     with pytest.raises(RuntimeError):
         mint_next_dr_id(tmp_path)
 
-
-# ---------------------------------------------------------------------------
-# Concurrency proof — real OS processes racing the same worktree.
-# ---------------------------------------------------------------------------
 
 _WORKER_SNIPPET = """
 import sys

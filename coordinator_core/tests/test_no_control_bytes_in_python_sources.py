@@ -72,8 +72,6 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -103,14 +101,6 @@ the same defence."""
 
 
 def _scan(repo_root: Path) -> list[str]:
-    """Return the tracked `*.py` paths under `repo_root` carrying a control
-    byte, as `git grep -l` reports them.
-
-    Fails loud rather than empty on anything that is not a clean hit/no-hit:
-    `git grep` exits 0 with matches, 1 with none, and >1 on a real error
-    (notably a git built without PCRE, where `-P` is refused). Treating a
-    refusal as "no matches" would rebuild the dead instrument this guard
-    exists to catch."""
     proc = subprocess.run(
         [
             "git",
@@ -151,13 +141,6 @@ def test_no_tracked_python_source_carries_a_control_byte():
 
 
 def test_scanner_sees_a_planted_control_byte(tmp_path):
-    """The guard proves it can fire -- see the module docstring's WHY block
-    for the dead-instrument failure this proves against.
-
-    The fixture COMMITS. `git grep` against a repo with no HEAD reports no
-    matches for a worktree file that is merely staged, so an uncommitted
-    fixture would make this test pass for the wrong reason and take the
-    proof with it."""
     repo = tmp_path / "planted"
     repo.mkdir()
 
@@ -187,24 +170,6 @@ def test_scanner_sees_a_planted_control_byte(tmp_path):
 
 
 def test_a_scan_that_could_not_run_raises_rather_than_reading_clean(tmp_path):
-    """`_scan`'s `returncode > 1` arm, exercised against the real binary.
-
-    Restored after two reviewers disagreed about it, and the disagreement was
-    settled by measurement rather than by preference. The overengineering pass
-    argued the arm needed no test of its own because a git that cannot honour
-    `-P` would make the other two tests raise anyway. That is true only on a
-    machine that has such a git, and this fleet has none -- so on every machine
-    that actually runs this suite the arm had no coverage at all. Measured by
-    deleting the `raise` outright: both surviving tests still passed. A
-    fail-loud branch nothing exercises can be deleted silently, which is the
-    same shape as the dead assertion this whole module exists to prevent.
-
-    Exercised through a real `git grep` rather than a faked exit code, which
-    answers the reviewer's actual objection: a monkeypatched 128 only feeds the
-    branch the constant it tests for. A directory that is not a git repository
-    makes the real binary exit 128 on its own, so this pins the behaviour end
-    to end -- and a scan that returned `[]` here, rather than raising, would be
-    reporting a clean tree it never looked at."""
     not_a_repo = tmp_path / "bare"
     not_a_repo.mkdir()
 

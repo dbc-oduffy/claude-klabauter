@@ -66,9 +66,7 @@ def test_writes_present_but_empty_value_collapses_to_undeclared(tmp_path):
     plan_path = _write_plan(tmp_path, body)
     rows = {row.id: row for row in read_spine(plan_path)}
 
-    # A present-but-empty writes: value is a third state AC2 forbids — it
     # must collapse to the same UNDECLARED sentinel as an absent key, never
-    # leak through as None.
     assert rows["C1"].writes is UNDECLARED
     assert rows["C2"].writes is UNDECLARED
 
@@ -127,14 +125,6 @@ def test_dangling_depends_on_raises(tmp_path):
 
 
 def test_dangling_depends_on_error_is_a_spine_read_error(tmp_path):
-    # Review-B MAJOR: composition_graph.py's chunk_overlap/path_rename_or_move
-    # catch `except SpineReadError` around read_spine and degrade to
-    # undetermined(...) on any unreadable spine. DanglingDependencyError must
-    # be a SpineReadError subclass — not merely a ValueError — or a dangling
-    # depends_on edge raises uncaught through that predicate instead of
-    # degrading like every other spine-read failure. Assert the subclass
-    # relationship explicitly so a future edit re-narrowing the base class
-    # is caught here, not downstream.
     body = """\
 - id: C1
   title: depends on a chunk that does not exist
@@ -150,22 +140,7 @@ def test_dangling_depends_on_error_is_a_spine_read_error(tmp_path):
 
 
 def test_truthy_non_list_depends_on_raises_a_spine_read_error(tmp_path):
-    # Review-B MAJOR (the actual regression): commit ab7df1af0's schema-shape
-    # preflight fires on a TRUTHY non-list depends_on (e.g. a dict where a
-    # list belongs) before spine_read's own `elif not isinstance(depends_on,
-    # list)` check ever runs, raising MalformedDependencyEdgeError instead of
-    # InvalidFieldTypeError -- but only once the row otherwise satisfies the
-    # base schema's required fields (here: `change_kind`, matching
-    # `test_schema_shape_preflight_raises_with_validator_message` above);
-    # without it, the preflight's first hit is the unrelated missing-field
-    # error and this module's own InvalidFieldTypeError check fires instead
-    # (also a SpineReadError, but not the regression this test targets).
     # Either way is fine PROVIDED MalformedDependencyEdgeError is itself a
-    # SpineReadError -- composition_graph.py's `except SpineReadError:
-    # return undetermined(...)` sites must still catch it. Assert the
-    # subclass relationship, not the concrete class: that is the actual
-    # contract this test protects, and pinning only the concrete class would
-    # let a future edit re-detach it from SpineReadError unnoticed.
     body = """\
 - id: C1
   title: depends_on declared as a dict instead of a list
@@ -179,8 +154,6 @@ def test_truthy_non_list_depends_on_raises_a_spine_read_error(tmp_path):
 
     with pytest.raises(SpineReadError) as excinfo:
         read_spine(plan_path)
-    # Pin the actual regression path too: the preflight, not spine_read's
-    # own coercion check, must be what fires here (see comment above).
     assert isinstance(excinfo.value, MalformedDependencyEdgeError)
 
 
@@ -226,10 +199,6 @@ def test_reads_and_depends_on_default_to_empty_list(tmp_path):
 
 
 def test_duplicate_id_raises_invalid_row_id_error(tmp_path):
-    # A duplicate
-    # id silently collapsed wave_map._predecessors' dict-keyed-by-id graph
-    # instead of raising; the fix is to fail loud here, once, for every
-    # downstream consumer.
     body = """\
 - id: C1
   title: first
@@ -270,10 +239,6 @@ def test_non_string_id_raises_invalid_row_id_error(tmp_path):
 
 
 def test_falsy_scalar_reads_raises_instead_of_silently_coercing(tmp_path):
-    # `reads:` used
-    # `raw.get("reads") or []`, which silently coerced a falsy-but-invalid
-    # declared value (e.g. `reads: 0`) to `[]` instead of raising, an
-    # asymmetry with `writes:`'s explicit `is None` check.
     body = """\
 - id: C1
   title: reads declared as a falsy scalar
@@ -445,9 +410,6 @@ def test_external_gate_blocks_ac_closure_does_not_exclude_row(tmp_path):
 
 def test_external_gate_with_closure_evidence_now_excludes_row(tmp_path):
     # INVERTED by the joint gate-reader bump (2026-08-20). `closure_evidence`
-    # is authored when the evidence has NOT arrived, so its natural content
-    # describes what is being awaited -- and under the retired rule that
-    # description cleared its own gate. Only `cleared: true` clears now.
     body = """\
 - id: C1
   title: gate cleared
@@ -467,13 +429,6 @@ def test_external_gate_with_closure_evidence_now_excludes_row(tmp_path):
 
 
 def test_cleared_false_overrides_closure_evidence_and_excludes_row(tmp_path):
-    # plan-tasks.schema.json 1.9.0: `cleared` asserts whether the gate IS
-    # discharged; `closure_evidence` only names how that was or will be
-    # verified. An explicit `cleared: false` therefore outranks evidence.
-    # Regression: the reader ignored `cleared` entirely, so a status note
-    # parked in `closure_evidence` silently disarmed the gate it documented
-    # -- found against sat-06 C4, a row that writes into a sibling repo's
-    # tree, gated on a DR still at `status: proposed`.
     body = """- id: C1
   title: gate documented but NOT discharged
   surface: some/surface
@@ -492,10 +447,7 @@ def test_cleared_false_overrides_closure_evidence_and_excludes_row(tmp_path):
 
 
 def test_cleared_absent_means_uncleared_whatever_evidence_is_named(tmp_path):
-    # The 1.9.0 bump was the additive half only and left `closure_evidence`
-    # clearing on its own. The joint two-repo bump its x-bump-note deferred
     # has now landed, so absence of `cleared` means UNCLEARED -- which is what
-    # the schema always said the field meant.
     body = """- id: C1
   title: gate cleared by evidence, no cleared key
   surface: some/surface
@@ -515,9 +467,6 @@ def test_cleared_absent_means_uncleared_whatever_evidence_is_named(tmp_path):
 
 def test_cleared_non_true_value_does_not_clear(tmp_path):
     # The fail-closed posture SURVIVES the bump and gets stronger. Before, a
-    # malformed `cleared` fell through to closure_evidence and the row was
-    # admitted; now only the literal True clears, so a malformed value cannot
-    # clear a gate at all -- matching this module's posture for `blocks`.
     body = """- id: C1
   title: malformed cleared value
   surface: some/surface
@@ -537,9 +486,6 @@ def test_cleared_non_true_value_does_not_clear(tmp_path):
 
 
 def test_live_row_depends_on_gated_row_is_also_excluded(tmp_path):
-    # A gated predecessor's work has not run -- unlike a satisfied
-    # (shipped/deferred) predecessor, its dependent is NOT known-satisfied
-    # and must not be promoted into a wave with the edge merely stripped.
     body = """\
 - id: C1
   title: blocked predecessor
@@ -561,8 +507,6 @@ def test_live_row_depends_on_gated_row_is_also_excluded(tmp_path):
 
 
 def test_transitive_dependent_of_gated_row_is_excluded_two_hops_out(tmp_path):
-    # C1b gated -> C3 depends on C1b -> C7 depends on C3. C7 never
-    # references C1b directly; the exclusion must propagate through C3.
     body = """\
 - id: C1b
   title: gated predecessor
@@ -590,8 +534,6 @@ def test_transitive_dependent_of_gated_row_is_excluded_two_hops_out(tmp_path):
 
 
 def test_coded_rows_dependent_is_still_promoted_with_edge_stripped(tmp_path):
-    # Must not regress: a satisfied (shipped) exclusion still only strips
-    # the edge -- the dependent stays dispatchable.
     body = """\
 - id: C1
   title: shipped predecessor
@@ -612,10 +554,6 @@ def test_coded_rows_dependent_is_still_promoted_with_edge_stripped(tmp_path):
 
 
 def test_row_both_coded_and_gated_resolves_as_satisfied_not_blocked(tmp_path):
-    # A row that is both closed-disposition AND carries an uncleared gate
-    # resolves as satisfied: its work shipped, so the stale gate is
-    # bookkeeping, not a live blocker -- its dependent is edge-stripped and
-    # kept, not excluded.
     body = """\
 - id: C1
   title: shipped but with a stale uncleared gate
@@ -639,9 +577,6 @@ def test_row_both_coded_and_gated_resolves_as_satisfied_not_blocked(tmp_path):
 
 
 def test_row_gated_with_blocks_ac_closure_is_still_scheduled(tmp_path):
-    # `blocks: ac-closure` never counts as an execution-blocking gate (see
-    # _has_uncleared_execution_gate) -- a dependent on such a row is
-    # neither excluded nor edge-stripped.
     body = """\
 - id: C1
   title: only an acceptance criterion is gated
@@ -723,11 +658,6 @@ def test_malformed_external_gate_entry_bare_string_gates_without_raising(tmp_pat
 
 
 def test_bare_string_depends_on_entry_raises_malformed_dependency_edge_error(tmp_path):
-    # Audit A2: a bare-string edge used to coerce to `chunk=None` and raise
-    # DanglingDependencyError naming an id that was never looked at. This
-    # row omits `change_kind`, so the schema-shape preflight's first hit is
-    # the unrelated missing-required-field error (not depends_on-prefixed)
-    # and is ignored — this exercises spine_read's OWN malformed-edge check.
     body = """\
 - id: C1
   title: depends_on entry is a bare string, not a mapping
@@ -743,7 +673,6 @@ def test_bare_string_depends_on_entry_raises_malformed_dependency_edge_error(tmp
     message = str(excinfo.value)
     assert "C1" in message
     assert "C2" in message
-    # The coercion artefact this fix removes: chunk=None must never appear.
     assert "None" not in message
 
 
@@ -785,10 +714,6 @@ def test_scalar_depends_on_entry_raises_malformed_dependency_edge_error(tmp_path
 
 
 def test_schema_shape_preflight_raises_with_validator_message(tmp_path):
-    # Audit A3: when the row otherwise satisfies the base schema's required
-    # fields (id/title/change_kind/surface), the depends_on shape preflight
-    # via schema_validate.check_plan_tasks_source fires FIRST and its own
-    # diagnosis — not spine_read's hand-rolled one — is what gets raised.
     body = """\
 - id: C1
   title: depends_on entry is a bare string, not a mapping
@@ -808,11 +733,6 @@ def test_schema_shape_preflight_raises_with_validator_message(tmp_path):
 
 
 def test_schema_shape_preflight_catches_out_of_enum_gate_kind_for_free(tmp_path):
-    # Audit follow-up: an out-of-enum gate_kind is not itself checked by
-    # spine_read, but the schema-shape preflight catches it for free WHEN
-    # every row otherwise satisfies the base required-field schema — the
-    # gate_kind enum lives on the same depends_on[].gate_kind schema node
-    # the preflight already consults.
     body = """\
 - id: C0
   title: predecessor
@@ -837,12 +757,6 @@ def test_schema_shape_preflight_catches_out_of_enum_gate_kind_for_free(tmp_path)
 
 
 def test_out_of_enum_gate_kind_passes_silently_when_other_required_fields_absent(tmp_path):
-    # Residual gap, deliberately NOT fixed here: check_plan_tasks_source
-    # returns only its FIRST row-order error, and this row (like every
-    # other fixture in this file) omits `change_kind` — that missing-field
-    # error is not depends_on-prefixed, so the preflight is silent and
-    # spine_read's own reader, which never inspects gate_kind's value,
-    # lets `banana` straight through unchallenged.
     body = """\
 - id: C0
   title: predecessor
@@ -879,12 +793,6 @@ def test_unrecognized_blocks_value_still_excludes(tmp_path):
     assert read_spine(plan_path) == []
 
 
-# --- An unrecognized disposition refuses instead of dispatching ---
-# example-retrieval-repo-ue-addon-em, 2026-08-20: `disposition: done` is schema-invalid AND
-# fell through the closed-value membership test, so a reconciliation pass using a
-# plausible-but-wrong word dispatched exactly as if no reconciliation had run.
-
-
 def test_an_unknown_disposition_refuses_rather_than_dispatching(tmp_path):
     body = """\
 - id: C1
@@ -901,12 +809,10 @@ def test_an_unknown_disposition_refuses_rather_than_dispatching(tmp_path):
     message = str(excinfo.value)
     assert "'C1'" in message
     assert "'done'" in message
-    # The correction is readable off the error, not only out of the schema.
     assert "coded" in message
 
 
 def test_unknown_disposition_error_is_a_spine_read_error(tmp_path):
-    # Callers catching SpineReadError must not miss this one.
     body = """\
 - id: C1
   title: bad value
@@ -920,8 +826,6 @@ def test_unknown_disposition_error_is_a_spine_read_error(tmp_path):
 
 @pytest.mark.parametrize("disposition", sorted(KNOWN_DISPOSITIONS))
 def test_every_schema_disposition_is_accepted(tmp_path, disposition):
-    # Guards the two sets drifting apart: a value the schema adds that this
-    # module does not learn would refuse every spine using it.
     body = f"""\
 - id: C1
   title: schema-legal row
@@ -932,12 +836,7 @@ def test_every_schema_disposition_is_accepted(tmp_path, disposition):
   surface: some/surface
 """
     plan_path = _write_plan(tmp_path, body)
-    read_spine(plan_path)  # must not raise
-
-
-# ---------------------------------------------------------------------------
-# execution_mode: a row a human must run
-# ---------------------------------------------------------------------------
+    read_spine(plan_path)
 
 
 def test_operator_row_is_not_dispatched():
@@ -970,7 +869,6 @@ def test_operator_blocks_like_a_gate_not_like_a_deferral():
     from coordinator_core.ops.dispatch_emit import spine_read
 
     src = inspect.getsource(spine_read.read_spine)
-    # The operator predicate sits on the gate arm, beside the gate check.
     import re
 
     assert re.search(r"_has_uncleared_execution_gate\(raw\b[^\n]*\)\s*or _is_operator_row\(raw\)", src)
@@ -997,4 +895,4 @@ def test_operator_rows_are_called_out_separately_from_other_exclusions():
         {"id": "C3", "reason": "deferred", "detail": "deferred: true"},
     ])
     assert "C3" in out
-    assert "OWED WORK" not in out  # no operator row -> no owed-work banner
+    assert "OWED WORK" not in out

@@ -192,15 +192,6 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
 )
 
-#: Basename of the site-packages pointer file. Retired 2026-08-18
-#: (docs/plans/2026-08-18-retire-coordinator-venv.md chunk C2): this module
-#: no longer writes ``<settings-home>/bin/hook-sitepackages.txt`` -- see the
-#: module docstring's "No rung resolves" section. The constant itself is
-#: kept (not deleted) because ``substrate.py``'s Step 3e orphan-prune union
-#: (``_install_bin_resolvers``) still needs it to recognize and prune a
-#: stale pointer left on a pre-migration box -- an unregistered name is
-#: never a prune candidate in the first place, so deleting the constant
-#: would strand that file outside the mechanism meant to clean it up.
 SITEPACKAGES_POINTER_NAME = "hook-sitepackages.txt"
 
 
@@ -211,46 +202,15 @@ _NETWORK_ERROR_RE = re.compile(
     re.IGNORECASE,
 )
 
-#: Single source of truth for the venv's non-editable pip deps and the
-#: matching health-probe import names — ``_install_deps`` and
-#: ``_venv_healthy`` both derive from these two tuples so the installed dep
-#: set and the acceptance oracle cannot drift apart (a venv missing a dep the
-#: oracle doesn't probe for silently passes health and never rebuilds).
-#: ``coordinator_whoami`` is installed separately (editable, from
-#: ``whoami_pkg``) but probed here alongside the pip-installed deps.
-#:
 #: ``PyYAML`` is declared here EXPLICITLY even though ``coordinator_whoami``'s
-#: own ``pyproject.toml`` already floors PyYAML at 6.0 as a transitive dep
-#: (so ``pip install -e {whoami_pkg}/`` already pulls it in today) — several
-#: coordinator-claude hook scripts (``enforce-agent-dispatch-mode.py``,
-#: ``handoff-segment-inject.py``, ``_oss_operative_strings.py``) ``import
-#: yaml`` at module level and run under this venv's interpreter on every hook
-#: fire (``_hook_venv_inject.py``), so this is a genuine first-class,
-#: hook-path dependency of THIS venv, not an incidental transitive of
-#: whoami's own needs — it must survive independently of whoami's declared
 #: deps ever changing. ``jsonschema``/``rfc3339-validator`` stay UNDECLARED
-#: here on purpose: nothing outside ``coordinator_whoami`` imports them
-#: directly on the hook path (checked: no hook script does), so they remain
-#: genuinely transitive and need no probe of their own.
 _VENV_PIP_DEPS = ("pydantic>=2", "psutil>=5.9", "PyYAML>=6.0")
 _VENV_IMPORT_PROBES = ("coordinator_whoami", "pydantic", "psutil", "yaml")
 
-#: Single source of truth for the machine-local registry key `_set_pin`
-#: writes and `_clear_dangling_pin` deletes -- both read this constant
 #: rather than restating the literal, and `WRITE_SURFACE` below declares
-#: against it too, so all three cannot drift apart independently.
 _PIN_KEY = "coordinator.python"
 
-#: Single source of truth for the machine-local registry key that names
-#: this venv's own interpreter -- `_set_pin` writes it unconditionally at
-#: every success leg and `_clear_dangling_pin` deletes it, both reading this
 #: constant rather than restating the literal, and `WRITE_SURFACE` below
-#: declares against it too, so all three cannot drift apart independently.
-#: Additive split from `_PIN_KEY` (docs/plans/2026-08-10-reconcile-the-
-#: coordinator-python-pin-contracts.md): `_PIN_KEY` is the operator's
-#: general-purpose interpreter pin (read by `pyresolve.resolve_python_bin`);
-#: this key is the narrower "which interpreter is THIS venv" pointer that
-#: `ensure_venv` genuinely owns and may always overwrite.
 _WHOAMI_PIN_KEY = "coordinator.whoami_python"
 
 _VENV_TREE_CLAUSE_INDEX = 0
@@ -260,11 +220,6 @@ build-lock clauses are `StaticClause`s and need no resolution."""
 
 
 def _record_resolution(clause_index: int, entries) -> None:
-    """Deferred-import wrapper over `resolution_journal.record_resolution`
-    — see `clone_sibling_repo._record_resolution`'s docstring for why a
-    module-level import of `resolution_journal` is not used here (this
-    module is transitively reachable from `coordinator_core.ops`'s eager
-    op-registration walk via its own downstream import graph)."""
     from coordinator_core.install import resolution_journal
 
     resolution_journal.record_resolution("ensure-venv", clause_index, entries)
@@ -273,12 +228,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
     writer_id="ensure-venv",
     source_module="coordinator_core.install.ensure_venv",
     clauses=(
-        # clauses[0] -- the venv tree itself. `ensure_coordinator_venv` creates
-        # (`_create_venv`) and pip-populates (`_install_deps`) a virtualenv
-        # rooted at `<settings_home>/.coordinator-venv/`; its contents depend
         # on what gets installed (`_VENV_PIP_DEPS` plus the editable
-        # `coordinator_whoami` package), so this is SHAPED -- a discovery
-        # mechanism naming the tree, not an enumerated site-packages listing.
         ShapedClause(
             discovered_by="ensure_coordinator_venv (settings_home_path / '.coordinator-venv')",
             entry_template=WriteSurfaceEntry(
@@ -286,8 +236,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 path="<settings-home>/.coordinator-venv/",
             ),
         ),
-        # clauses[1] -- the machine-local interpreter-pin key, written
-        # idempotently by `_set_pin` once the venv is healthy/rebuilt.
         StaticClause(
             entries=(
                 WriteSurfaceEntry(
@@ -297,12 +245,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 ),
             ),
         ),
-        # clauses[2] -- the same key, DELETED by `_clear_dangling_pin` when a
-        # build fails and `clear_pin_on_failure=True` (substrate.py's C10a-3
-        # call site opts in; an advisory caller like maximalist.py does not).
-        # A dangling pin pointing at a just-removed venv is worse than no
-        # pin, so this is a genuine `effect="delete"` surface in its own
-        # right, not folded into clauses[1].
         StaticClause(
             effect="delete",
             entries=(
@@ -314,9 +256,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 ),
             ),
         ),
-        # clauses[3] -- the whoami-owned key, written unconditionally by
-        # `_set_pin` at every success leg (additive split from clauses[1] --
-        # docs/plans/2026-08-10-reconcile-the-coordinator-python-pin-contracts.md).
         StaticClause(
             entries=(
                 WriteSurfaceEntry(
@@ -326,10 +265,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 ),
             ),
         ),
-        # clauses[4] -- the same whoami key, DELETED by `_clear_dangling_pin`
-        # under the same `clear_pin_on_failure` opt-in, independently of
-        # whether clauses[2]'s general-pin delete fires (each key's clear
-        # decision reads only its own current value).
         StaticClause(
             effect="delete",
             entries=(
@@ -341,12 +276,6 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 ),
             ),
         ),
-        # clauses[5] -- the build-lock sidecar. `ensure_coordinator_venv` opens
-        # `<venv_dir>.lock` with `O_CREAT` and never unlinks it: the advisory
-        # flock releases on close, but the FILE persists on the machine after
-        # a successful install. A transient lock cleaned up in-run would be
-        # out of this manifest's remit; one that outlives the run is a
-        # durable surface uninstall has to account for.
         StaticClause(
             entries=(
                 WriteSurfaceEntry(
@@ -382,14 +311,11 @@ reaches no surface beyond the pin keys: it gates only the
 
 
 class EnsureVenvError(RuntimeError):
-    """Mirrors a bash ``exit 1`` failure in the ported oracle."""
+    pass
 
 
 class EnsureVenvContention(EnsureVenvError):
-    """Raised when the build lock is already held by another process.
-
-    Fail-loud, immediate (no polling) — mirrors the bash mkdir-mutex
-    contention contract exactly (see module docstring)."""
+    pass
 
 
 def _is_windows_shell() -> bool:
@@ -433,7 +359,6 @@ def _quiet_output(argv) -> str:
 
 
 def venv_python_path(venv_dir: Path) -> Path:
-    """Cross-platform VENV_PY: ``Scripts/python.exe`` on Windows, ``bin/python`` on POSIX."""
     if _is_windows_shell():
         return venv_dir / "Scripts" / "python.exe"
     return venv_dir / "bin" / "python"
@@ -463,9 +388,6 @@ def _venv_healthy(venv_py: Path) -> bool:
             **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
-        # Routine on a fresh/rebuilding venv (exec missing, probe hangs) —
-        # False here just means "not healthy yet", which the caller rebuilds;
-        # not worth a diagnostic on every normal first-install run.
         return False
     return proc.returncode == 0
 
@@ -527,19 +449,6 @@ def _resolve_whoami_pkg(
 
 
 def _validate_general_pin(path: str) -> bool:
-    """True iff ``path -c 'import sys'`` succeeds — the same probe command as
-    ``pyresolve._validate_interpreter``, reimplemented locally (not imported)
-    so this module's own isolation-boundary discipline (module docstring)
-    stays self-contained and this chunk's scope stays to the two files it
-    owns. Deliberately diverges from that sibling in two ways: this version
-    bounds the subprocess with ``timeout=15`` and treats
-    ``subprocess.TimeoutExpired`` as invalid (a hung validation probe must
-    not hang venv provisioning), and it does NOT memoize — ``pyresolve``'s
-    caches per-process because it is consulted on every ``resolve_python_bin``
-    call, while this helper runs at most a few times per
-    ``ensure_coordinator_venv`` invocation, so the cache's staleness risk
-    (a since-fixed interpreter still reading as invalid) isn't worth taking on.
-    (Review: coordinator:code-reviewer, ff5e2a42, finding 1.)"""
     if not path:
         return False
     try:
@@ -555,18 +464,6 @@ def _validate_general_pin(path: str) -> bool:
 
 
 def _should_write_general_pin(current: str, venv_py: Path) -> bool:
-    """Shared predicate consulted by BOTH ``_set_pin`` (mutating) and the
-    ``check_only`` branch of ``_ensure_coordinator_venv_impl`` (AC4) — one
-    call site deciding whether a non-``check_only`` run would write
-    ``_PIN_KEY``, not two hand-matched conditionals (the defect this chunk
-    fixes).
-
-    True when ``current`` is empty, already names ``venv_py``, carries the
-    doubled ``/.claude/.claude/`` marker, or fails ``-c 'import sys'``
-    validation — each a case where the existing value cannot be a deliberate
-    operator choice worth preserving. False when ``current`` is a healthy
-    interpreter naming anything else: that is the operator's pin, and it
-    survives the run untouched (AC1)."""
     venv_py_str = str(venv_py)
     if not current:
         return True
@@ -621,25 +518,6 @@ def _set_pin(ml_cli: Optional[list], venv_py: Path) -> None:
 
 
 def _clear_dangling_pin(ml_cli: Optional[list], venv_py: Path) -> None:
-    """Invalidate a ``coordinator.python`` and/or ``coordinator.whoami_python``
-    pin left pointing at ``venv_py`` after a rebuild attempt failed and the
-    (partial) venv was removed.
-
-    A dangling pin is worse than no pin at all: ``pyresolve.resolve_python_bin``
-    treats a found-but-broken pin as a hard failure and never falls through to
-    OS-detect (deliberately, so a genuinely misconfigured pin fails loud rather
-    than silently). Left in place, a single failed rebuild would turn every
-    subsequent coordinator invocation into a hard failure instead of degrading
-    to the pre-venv OS-detect fallback. Clearing (not merely leaving) the pin
-    restores that fallback. Graceful degradation when the CLI is absent (same
-    contract as ``_set_pin``) — this is advisory cleanup, never a raise.
-
-    The two keys' clear decisions are independent (AC5): each is cleared only
-    when ITS OWN current value names the destroyed ``venv_py`` — a general
-    pin the operator set of their own accord must not be cleared merely
-    because the (unconditionally-written) whoami pin happened to be
-    dangling.
-    """
     if ml_cli is None:
         return
     venv_py_str = str(venv_py)
@@ -772,10 +650,6 @@ def _swap_in_new_venv(venv_dir: Path, build_dir: Path) -> None:
 def _create_venv(base_py: str, venv_dir: Path) -> None:
     proc = _run([base_py, "-m", "venv", str(venv_dir)], timeout=VENV_CREATE_SECS)
     if proc.returncode != 0:
-        # `_run` captures, so the interpreter's own reason for refusing is available
-        # here rather than discarded into a window-less console. Last line only: venv
-        # failures are usually one line, and the exit code alone has sent more than one
-        # reader hunting for a cause that was right there.
         detail = (proc.stderr or proc.stdout or "").strip().splitlines()
         suffix = f" -- {detail[-1]}" if detail else ""
         raise EnsureVenvError(
@@ -785,17 +659,6 @@ def _create_venv(base_py: str, venv_dir: Path) -> None:
 
 
 def _install_deps(venv_py: Path, whoami_pkg: Path) -> None:
-    """One pip invocation, network-vs-generic failure classification
-    preserved (AC B6). Caller removes the partial venv on failure.
-
-    Deliberate isolation boundary, not a candidate for an in-process
-    import — this runs ``pip install`` against the target venv's own
-    interpreter (``venv_py``), which is by construction a different
-    interpreter/venv than the one running this module; there is no
-    in-process equivalent of installing into another interpreter's
-    site-packages. See
-    ``state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md``
-    for the recorded verdict."""
     try:
         proc = subprocess.run(
             [str(venv_py), "-m", "pip", "install", "-e", f"{whoami_pkg}/", *_VENV_PIP_DEPS],
@@ -847,26 +710,6 @@ def ensure_coordinator_venv(
     site: str = "ensure-coordinator-venv",
     clear_pin_on_failure: bool = False,
 ) -> str:
-    """Thin wrapper around ``_ensure_coordinator_venv_impl`` -- see that
-    function's docstring for the actual venv-ensure mechanics and
-    status-word contract.
-
-    Retired 2026-08-18 (docs/plans/2026-08-18-retire-coordinator-venv.md
-    chunk C2): this wrapper used to also publish
-    ``<settings-home>/bin/hook-sitepackages.txt`` on every real
-    (non-dry-run) success exit -- DoE's hook-injection ladder's rung 2. That
-    publication is retired outright, not repointed: the target state of
-    "repoint the pointer at the machine interpreter" is unreachable through
-    every rung of DoE's ``_hook_venv_inject.py::_resolve_site_packages``
-    ladder, not just this one (see module docstring). The deliberate
-    end-state is no rung resolves -- ``_coord_hook_inject`` writes its
-    declined-injection stderr banner on every hook fire, and third-party
-    imports resolve because the hook itself now runs under the machine
-    interpreter, not because a rung pointed it at a venv.
-
-    ``check_only=True`` (dry-run) exits are excluded on purpose -- a
-    check-only invocation must not mutate disk.
-    """
     result = _ensure_coordinator_venv_impl(
         plugin_root,
         settings_home_path,
@@ -887,45 +730,13 @@ def _ensure_coordinator_venv_impl(
     site: str = "ensure-coordinator-venv",
     clear_pin_on_failure: bool = False,
 ) -> str:
-    """Idempotently ensure the coordinator venv exists and is healthy.
-
-    Returns one of ``"ready"``, ``"rebuilt"``, ``"would-rebuild"``,
-    ``"would-write"`` (AC B3). Raises :class:`EnsureVenvError` (or its
-    :class:`EnsureVenvContention` subclass on lock contention) on any
-    failure — callers decide their own disposition (fatal / fallback /
-    advisory); this function never exits the process itself.
-
-    ``clear_pin_on_failure`` (default ``False``): whether a build failure may
-    blank an existing ``coordinator.python`` registry pin that names the
-    just-destroyed venv (see ``_clear_dangling_pin``). Defaults OFF because
-    this call's own disposition-neutral module docstring promises "the
-    surrounding disposition stays at each call site" — a mutation of
-    persistent registry state on failure is exactly such a disposition, so it
-    must be opted INTO by a caller that has actually reasoned about it, not
-    fire unconditionally underneath every caller including advisory ones.
-    Pass ``True`` from a genuinely fatal-disposition caller (no fallback venv
-    to fall back on) where leaving the dangling pin in place would otherwise
-    turn one failed rebuild into every subsequent coordinator invocation
-    hard-failing (see ``_clear_dangling_pin``'s own docstring) — this was
-    ``ensure_coordinator_venv``'s only behavior prior to this parameter, and
-    ``substrate.py``'s C10a-3 call site still opts in for exactly that
-    reason. An advisory caller (e.g. ``maximalist.py`` Step 6, which reports
-    the failure as non-fatal and continues either way) should NOT opt in --
-    an advisory phase failing is not a decision to degrade persisted
-    registry state (2026-07-28 install-dogfood friction log, finding F7's
-    "second-order damage").
-    """
     plugin_root = Path(plugin_root)
     settings_home_path = Path(settings_home_path)
 
-    # Trusted-root guard runs before ANY venv mutation, incl. --check
-    # (mirrors the bash script's unconditional guard placement) (AC B9).
     coordinator_trusted_root_guard(mode="fail-loud", root=str(plugin_root), site=site)
 
     # CLAUDE_HOME /.claude-suffix guard (fail loud) — doubled-path precondition.
     # Separator-agnostic: a Windows CLAUDE_HOME arrives backslash-separated
-    # (e.g. "...\.claude"), so a bare "/.claude" suffix check silently misses
-    # the doubled-path precondition on Windows.
     claude_home_norm = claude_home.replace("\\", "/") if claude_home else claude_home
     if claude_home_norm and claude_home_norm.rstrip("/").endswith("/.claude"):
         raise EnsureVenvError(
@@ -956,7 +767,6 @@ def _ensure_coordinator_venv_impl(
             return "ready"
         return "would-rebuild"
 
-    # Fast path: already healthy — no mutation.
     if _venv_healthy(venv_py):
         _set_pin(ml_cli, venv_py)
         _record_resolution(
@@ -976,8 +786,6 @@ def _ensure_coordinator_venv_impl(
                 "venv; retry in a moment"
             )
 
-        # Re-check health after acquiring the lock — another session may
-        # have finished building while we waited for it.
         if _venv_healthy(venv_py):
             _set_pin(ml_cli, venv_py)
             _record_resolution(
@@ -985,11 +793,6 @@ def _ensure_coordinator_venv_impl(
             )
             return "ready"
 
-        # Never mutate the live tree in place (module docstring: readers with
-        # no lock of their own execute out of it right now). The replacement
-        # is built at a fresh sibling path and only swapped into position
-        # once it is fully healthy — a build failure here leaves whatever
-        # was already at `venv_dir` (healthy or not) completely untouched.
         _sweep_orphaned_swap_dirs(venv_dir)
         build_dir = _build_dir_for(venv_dir)
         build_venv_py = venv_python_path(build_dir)
@@ -1006,15 +809,6 @@ def _ensure_coordinator_venv_impl(
             whoami_pkg = _resolve_whoami_pkg(plugin_root, ml_cli)
             _install_deps(build_venv_py, whoami_pkg)
 
-            # The swap below is documented as happening "once fully healthy"
-            # -- enforce that claim rather than trusting a zero exit code
-            # from the two subprocesses above, which is strictly weaker than
-            # the acceptance oracle (`_venv_healthy`): a `pip install` can
-            # exit 0 while leaving a probed module unimportable. Routed
-            # through the same `except EnsureVenvError:` cleanup below so a
-            # failed probe gets exactly the same build_dir removal /
-            # dangling-pin accounting as a failed create/install, not a
-            # parallel copy of that logic.
             if not _venv_healthy(build_venv_py):
                 raise EnsureVenvError(
                     "[ensure-coordinator-venv] ERROR: freshly-built venv failed the "
@@ -1022,13 +816,6 @@ def _ensure_coordinator_venv_impl(
                 )
         except EnsureVenvError:
             shutil.rmtree(build_dir, ignore_errors=True)
-            # Only the just-built (never-published) tree was touched above —
-            # `venv_dir` itself, if anything was there before this attempt,
-            # is exactly as it was. A dangling pin is cleared only when
-            # `venv_dir` genuinely resolves to nothing (see
-            # `_clear_dangling_pin`'s docstring: "a rebuild attempt failed
-            # and the (partial) venv was removed" — no longer this run's
-            # invariant when a pre-existing tree survives untouched).
             if clear_pin_on_failure and not venv_dir.is_dir():
                 _clear_dangling_pin(ml_cli, venv_py)
             if venv_dir.is_dir():
@@ -1051,5 +838,5 @@ def _ensure_coordinator_venv_impl(
             try:
                 _plat_unlock(fd)
             except OSError:
-                pass  # best-effort unlock; os.close(fd) below and process exit release it regardless
+                pass
         os.close(fd)

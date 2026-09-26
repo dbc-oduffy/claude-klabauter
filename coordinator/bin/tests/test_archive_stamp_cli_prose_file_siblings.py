@@ -71,8 +71,6 @@ _MULTILINE = "first line\nsecond line\nthird line"
 
 
 class _RecordingMod:
-    """Stand-in for coordinator_core.archive_stamp, recording the exact
-    argument tuples each verb was translated into."""
 
     def __init__(self):
         self.correct_calls: list[tuple] = []
@@ -133,16 +131,6 @@ class CorrectHandoffBodyTest(_ProseFlagTestBase):
         )
 
     def test_multiline_new_string_is_refused_not_truncated(self):
-        """The measured incident, inverted into an assertion: the value that
-        silently became its own first line must now be a hard refusal naming
-        the file sibling — and NOTHING may reach the op.
-
-        --new-string is the arm asserted because it is the less obvious one:
-        it carries allow_empty=True, so this pins that permitting an EMPTY
-        value did not also permit a truncated one. --old-string reaches the
-        identical `_resolve_prose` -> `refuse_newline_argv` path with no
-        allow_empty, and had a test asserting exactly this against exactly
-        that path."""
         rc = _cli.main(
             [
                 "correct-handoff-body", "state/handoffs/h.md",
@@ -179,9 +167,6 @@ class CorrectHandoffBodyTest(_ProseFlagTestBase):
         self.assertEqual(self.stub.correct_calls, [])
 
     def test_empty_new_string_stays_legal(self):
-        """Deleting the matched region is what an empty replacement MEANS
-        here. `allow_empty=True` at that one call site is the reason; if this
-        case ever goes red, a transport fix has silently changed the verb."""
         rc = _cli.main(
             [
                 "correct-handoff-body", "state/handoffs/h.md",
@@ -286,10 +271,6 @@ class RepairReasonTest(_ProseFlagTestBase):
 
 class UnclaimNoteFileTest(_ProseFlagTestBase):
     def test_note_file_survives_the_leftover_flag_guard(self):
-        """`unclaim-handoff` hard-refuses any leftover `--flag` in its tail,
-        because an unrecognized flag used to become the park note verbatim.
-        `--note-file` must be stripped BEFORE that guard — otherwise the guard
-        rejects the very escape its own usage line now advertises."""
         rc = _cli.main(
             [
                 "unclaim-handoff", "state/handoffs/h.md",
@@ -408,10 +389,6 @@ class DispositionNoteFileSiblingTest(_ProseFlagTestBase):
         )
 
     def test_decision_note_file_survives_interleaving_with_other_flags(self):
-        # Trimmed to the one fact this case
-        # uniquely pins (resolution survives interleaving with unrelated
-        # flags); the resolved-tail/no-`-file`-token facts are already covered
-        # by test_every_prose_disposition_flag_has_a_working_sibling.
         note_path = self._write("a note with 'quotes' and spaces")
         rc = _cli.main(
             [
@@ -473,9 +450,6 @@ class DispositionNoteFileSiblingTest(_ProseFlagTestBase):
         self.assertEqual(self.stub.action_calls, [])
 
     def test_multiline_file_note_reaches_the_engine_for_its_own_refusal(self):
-        """The file leg does not smuggle a multi-line note past the engine, and
-        this CLI does not duplicate the engine's refusal either. The value
-        arrives intact; `_validate_disposition` is the one that says no."""
         rc = _cli.main(
             [
                 "action-memo", "cross-repo/inbox/m.md",
@@ -512,12 +486,6 @@ class DispositionNoteFileSiblingTest(_ProseFlagTestBase):
         )
 
     def test_a_note_whose_text_is_a_flag_name_is_not_re_read_as_a_flag(self):
-        """The membership-scan trap the positional walk exists to avoid.
-
-        `--decision-note --actioned-note` is a note whose literal text is
-        another flag's name. `_parse_disposition_args` consumes it as a VALUE,
-        so anything here that scanned by membership would strip a pair the
-        engine never saw and change what lands."""
         rc = _cli.main(
             [
                 "action-memo", "cross-repo/inbox/m.md",
@@ -533,18 +501,9 @@ class DispositionNoteFileSiblingTest(_ProseFlagTestBase):
         self.assertEqual(rc, 2)
         self.assertEqual(self.stub.action_calls, [])
 
-    # Before
-    # the fix, the positional walk tracked "consumed as a value" only for the
-    # three prose flags, so a non-prose 2-token flag's value (or missing-value
-    # slot) landing on a prose flag's name got misread as a fresh pair and the
-    # tail was silently rewritten. These pin the walk against the engine's full
     # `_DISPOSITION_FLAGS`/`_DISPOSITION_BOOL_FLAGS` vocabulary, not just the
-    # three prose ones.
 
     def test_a_non_prose_flags_value_that_looks_like_a_prose_flag_is_untouched(self):
-        """`--realized-by`'s VALUE is literally `--decision-note`. The walk must
-        consume it as `--realized-by`'s value, verbatim, never as the start of
-        a fresh prose pair."""
         rc = _cli.main(
             [
                 "action-memo", "cross-repo/inbox/m.md",
@@ -556,11 +515,6 @@ class DispositionNoteFileSiblingTest(_ProseFlagTestBase):
         self.assertEqual(tail, ("--realized-by", "--decision-note"))
 
     def test_a_missing_value_before_a_prose_file_flag_is_forwarded_unmangled(self):
-        """`--decision` is missing its value; the next token is a prose flag's
-        `-file` sibling. The walk must consume `--decision-note-file` as
-        `--decision`'s (bogus) value -- exactly what the untouched tail would
-        hand the engine -- rather than resolving it as a note and rewriting
-        the tail."""
         note_path = self._write("orphaned note")
         rc = _cli.main(
             [
@@ -573,8 +527,6 @@ class DispositionNoteFileSiblingTest(_ProseFlagTestBase):
         self.assertEqual(tail, ("--decision", "--decision-note-file", note_path))
 
     def test_another_non_prose_flags_value_that_looks_like_a_prose_flag_is_untouched(self):
-        """Same class as above with a different 2-token engine flag
-        (`--distill-fate`), so the coverage is about the class, not one flag."""
         rc = _cli.main(
             [
                 "action-memo", "cross-repo/inbox/m.md",

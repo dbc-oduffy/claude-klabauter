@@ -57,9 +57,6 @@ from coordinator_core.bash_guards import block_subagent_guard_grant
 from coordinator_core.bash_guards import block_noncanonical_branch_creation
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns real `git` subprocesses (the revert guard's own status/toplevel
-# oracles) -- cadence-gated, matching the sibling
-# `test_check_destructive_git_revert_stash.py`'s own pytestmark.
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -76,9 +73,6 @@ def _powershell_payload() -> dict:
 
 @pytest.fixture()
 def repo_with_peer_work(tmp_path: Path) -> Path:
-    """Same shape as the sibling stash-regression fixture: a committed
-    baseline plus a peer's uncommitted, tracked, git-unrecoverable edit --
-    the exact state an unscoped `git stash` silently sweeps."""
     repo = tmp_path / "shared-tree"
     (repo / "state").mkdir(parents=True)
     subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
@@ -112,9 +106,6 @@ class TestDestructiveGitRevertConvertedForPowerShell:
     def test_bash_verdict_parity_same_command_without_start_process(
         self, repo_with_peer_work: Path
     ) -> None:
-        """Bash verdict parity: the un-wrapped, byte-equivalent Bash
-        invocation of the same intent already denies -- the PowerShell fix
-        must reach the identical verdict, not a new one."""
         cmd = "git -C %s stash" % repo_with_peer_work
         result = check_destructive_git_revert(cmd)
         assert result is not None
@@ -123,8 +114,6 @@ class TestDestructiveGitRevertConvertedForPowerShell:
     def test_start_process_powershell_non_sweep_subcommand_allows(
         self, repo_with_peer_work: Path
     ) -> None:
-        """Parity in the other direction too: a non-sweep stash subcommand
-        (`list`) must not newly deny once the PowerShell expansion runs."""
         cmd = "Start-Process git -ArgumentList '-C','%s','stash','list'" % repo_with_peer_work
         result = check_destructive_git_revert(cmd, payload=_powershell_payload())
         assert result is None
@@ -142,13 +131,6 @@ class TestDestructiveGitRevertConvertedForPowerShell:
 
 
 class TestDestructiveGitRevertAdvisoryNoChangeVerdict:
-    """The ONE genuine no-change verdict left in the nine-entry census:
-    `destructive-git-revert-advisory` is a thin wrapper over
-    `_check_destructive_git_revert_full`, the SAME function
-    `destructive-git-revert`'s hard-deny leg calls -- so the first C8 pass's
-    `Start-Process` expansion fix already covers this advisory leg too. No
-    separate detection change needed; pinned here so the shared-function fix
-    does not silently regress for this leg specifically."""
 
     def test_start_process_powershell_stash_advises(self, repo_with_peer_work: Path) -> None:
         from coordinator_core.bash_guards.dispatch_checks import (
@@ -157,23 +139,13 @@ class TestDestructiveGitRevertAdvisoryNoChangeVerdict:
 
         cmd = "Start-Process git -ArgumentList '-C','%s','stash'" % repo_with_peer_work
         result = check_destructive_git_revert_advisory(cmd, payload=_powershell_payload())
-        # The hard-deny leg (tested above) already denies this shape, and
-        # `_check_destructive_git_revert_full` never returns both halves
-        # non-None for the same call (Review: staff-eng, Finding 0) -- the
-        # advisory leg is `None` here precisely because the deny leg fired
-        # first for the SAME underlying fixed function, not because
-        # detection regressed. Parity is what matters: both legs see the
-        # expanded argv identically.
         deny_result = check_destructive_git_revert(cmd, payload=_powershell_payload())
         assert deny_result is not None
-        assert result is None  # advisory never shadows the hard-deny (Finding 0)
+        assert result is None
 
     def test_bash_and_powershell_reach_identical_verdict_on_non_deny_shape(
         self, repo_with_peer_work: Path
     ) -> None:
-        """A non-sweep subcommand (`list`) reaches the advisory floor
-        identically under both dialects -- same shared-function fix, same
-        no-op-vs-fire parity as the deny leg's own test above."""
         bash_cmd = "git -C %s stash list" % repo_with_peer_work
         ps_cmd = "Start-Process git -ArgumentList '-C','%s','stash','list'" % repo_with_peer_work
         from coordinator_core.bash_guards.dispatch_checks import (
@@ -213,11 +185,6 @@ class TestGitCommitSafeCommitAdviseConverted:
         assert result is not None
 
     def test_unparseable_powershell_does_not_deny(self) -> None:
-        """AC4 -- an unparseable PowerShell payload is silence, never a
-        deny (this check is advisory-only, `fail_closed=False`; a
-        `tokenize_command` failure leaves `cmd` untouched and the
-        pre-existing Bash-shaped pipeline runs on the raw text, exactly as
-        before this change)."""
         cmd = "Start-Process git -ArgumentList 'commit', '-m', @'\nunterminated"
         result = check_git_commit_safe_commit_advise(cmd, payload={"tool_name": "PowerShell"})
         assert result is None or (
@@ -310,8 +277,6 @@ class TestBlockSubagentGrantAcquisitionConverted:
 
 
 class TestBlockSubagentGuardGrantConverted:
-    """Near-exact port of `TestBlockSubagentGrantAcquisitionConverted` --
-    same gap, same fix, different gated CLI (`em_guard_grant`)."""
 
     def _payload(self, cmd, tool_name):
         return {

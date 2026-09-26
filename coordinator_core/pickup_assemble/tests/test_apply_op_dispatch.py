@@ -40,8 +40,6 @@ def test_pickup_cli_verbs_are_the_expected_closed_set() -> None:
 
 
 class TestNoneOfPickupsVerbsAreRegisteredOps:
-    """The C4 discriminator finding, checked live rather than only asserted
-    in a comment: none of pickup's three verbs resolve to a registered op."""
 
     def test_none_resolve_via_live_registry(self) -> None:
         registry = _live_registry()
@@ -53,16 +51,12 @@ class TestNoneOfPickupsVerbsAreRegisteredOps:
 
 
 class TestZeroEntriesMigrated:
-    """C1's "ship it EMPTY except for entries actually migrated" — zero
-    migrated here, so pickup_assemble must carry no entry at all."""
 
     def test_pickup_assemble_has_no_assembler_dispatchable_entry(self) -> None:
         assert "pickup_assemble" not in ASSEMBLER_DISPATCHABLE
 
 
 class TestResolveCliUnitUnchanged:
-    """The unit did not change for any of the three verbs — `resolve_cli`
-    still resolves each to its existing hand-written adapter."""
 
     @pytest.mark.parametrize("verb", _PICKUP_CLI_VERBS)
     def test_resolve_cli_still_resolves_each_verb(self, verb: str) -> None:
@@ -75,10 +69,6 @@ class TestResolveCliUnitUnchanged:
 
 
 class TestResolveOpReachesNothingForPickupsVerbs:
-    """AC8's shape: attempting to dispatch any of pickup's three verbs via
-    the `op` seam (`resolve_op`) — the path a directive would need to use to
-    treat them as op-named — is refused, since none is allowlisted for
-    `pickup_assemble` (in fact no `pickup_assemble` entry exists at all)."""
 
     @pytest.mark.parametrize("verb", _PICKUP_CLI_VERBS)
     def test_resolve_op_refuses_each_verb(self, verb: str) -> None:

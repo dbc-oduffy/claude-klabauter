@@ -24,12 +24,6 @@ EmissionScope = Literal["per-repo", "fleet-derived", "fleet-authored"]
 
 
 class FleetAuthoredAuthority(BaseModel):
-    """
-    Designated-emitter authority for a fleet-authored synthesis (case 3).
-    Because a synthesis is divergent text across emitters, a content hash will
-    NOT collapse it; a single designated emitter is the disambiguator.
-    Per-repo emissions omit it.
-    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -45,7 +39,6 @@ class FleetAuthoredAuthority(BaseModel):
 
 
 class PerRepoEmission(BaseModel):
-    """Case 1: owner-qualified `repo` + `provenance`."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -61,7 +54,6 @@ class PerRepoEmission(BaseModel):
 
 
 class FleetDerivedEmission(BaseModel):
-    """Case 2: `content_hash` natural key."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -70,7 +62,6 @@ class FleetDerivedEmission(BaseModel):
 
 
 class FleetAuthoredEmission(BaseModel):
-    """Case 3: `authority` designated-emitter."""
 
     model_config = ConfigDict(extra="forbid")
 

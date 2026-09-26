@@ -57,11 +57,6 @@ from coordinator_core.bash_guards.dispatch_checks import (
 
 
 def _build_fixture(root: Path) -> None:
-    """Two matching files and one non-matching, across two directory levels.
-
-    `sub/b.txt` has NO trailing newline -- the discriminator between counting
-    newline characters (`wc -l`: 1) and counting iterated lines (2), and the
-    file `cat` was silently terminating."""
     (root / "sub").mkdir(parents=True, exist_ok=True)
     (root / "a.txt").write_bytes(b"one\ntwo\n")
     (root / "sub" / "b.txt").write_bytes(b"three\nfour")
@@ -69,12 +64,10 @@ def _build_fixture(root: Path) -> None:
 
 
 def _rewrite_body(command: str) -> str:
-    """The python source `check_find_exec_rewrite` would hand the operator."""
     parsed = _bt_parse_find_exec_segment(shlex.split(command))
     assert parsed is not None, "fixture command must parse as a find -exec segment"
     rewrite = _bt_find_exec_python_rewrite(parsed)
     assert rewrite is not None, "fixture command must be translatable"
-    # `<python3> -c <quoted body>` -- the body is the final token.
     return shlex.split(rewrite)[-1]
 
 
@@ -86,7 +79,6 @@ def _run_rewrite(command: str, cwd: Path, monkeypatch: pytest.MonkeyPatch) -> st
     return buf.getvalue()
 
 
-#: `(label, command, golden)` -- golden is the measured real-`find` stdout.
 _OUTPUT_CASES: List[Tuple[str, str, str]] = [
     ("cat", "find . -name '*.txt' -exec cat {} \\;", "one\ntwo\nthree\nfour"),
     ("wc-l", "find . -name '*.txt' -exec wc -l {} \\;", "2 ./a.txt\n1 ./sub/b.txt\n"),
@@ -108,10 +100,6 @@ def test_rewrite_output_matches_real_find(
 def test_cat_rewrite_appends_nothing_to_a_file_without_a_trailing_newline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The single-file case, isolated. With one match there is no
-    concatenation to get wrong, so a per-file trailing newline is the ONLY
-    thing that can differ -- and it is the defect that survives a
-    multi-file test written carelessly enough to strip whitespace."""
     (tmp_path / "only.txt").write_bytes(b"no trailing newline")
     out = _run_rewrite("find . -name '*.txt' -exec cat {} \\;", tmp_path, monkeypatch)
     assert out == "no trailing newline"
@@ -120,8 +108,6 @@ def test_cat_rewrite_appends_nothing_to_a_file_without_a_trailing_newline(
 def test_wc_rewrite_counts_newlines_not_iterated_lines(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`wc -l` counts newline characters. A file of three unterminated
-    words on one line is 0, not 1."""
     (tmp_path / "only.txt").write_bytes(b"a b c")
     out = _run_rewrite("find . -name '*.txt' -exec wc -l {} \\;", tmp_path, monkeypatch)
     assert out == "0 ./only.txt\n"
@@ -130,9 +116,6 @@ def test_wc_rewrite_counts_newlines_not_iterated_lines(
 def test_rm_rewrite_still_removes_exactly_the_matches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Silencing the progress line must not silence the work. The effect is
-    the half of `rm` that was always correct, and dropping a `print` is
-    exactly the edit that could take the loop body with it."""
     _build_fixture(tmp_path)
     _run_rewrite("find . -name '*.txt' -exec rm {} \\;", tmp_path, monkeypatch)
     survivors = sorted(

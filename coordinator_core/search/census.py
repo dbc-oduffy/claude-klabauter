@@ -64,33 +64,17 @@ from typing import List, Optional, Sequence
 
 from coordinator_core.search.engine import Unanswerable
 
-#: Sized from C0's spike measurement (docs/research/2026-09-10-in-process-census-
-#: evaluator-spike.md § (c)): ~1.5us/entry measured against this repo's own working
-#: tree (40.9ms p50 / 26,055 entries), so 100,000 entries costs roughly 150ms --
-#: comfortably under DR-344's per-guard slice with headroom, and well short of the
-#: ~330,000-entry knee the spike extrapolates for a full unfiltered walk to approach
-#: the whole chain's 500ms brightline. A tree that exceeds this bails to `Unanswerable`
-#: mid-walk (never a truncated or wrong census) rather than occupying the hook past its
-#: budget -- the exact constant is this chunk's to set per the spike's own closing note,
-#: not re-derived from a guess.
 WALK_BUDGET_ENTRIES = 100_000
 
-#: Redirection operators that must decline the whole segment if present as an exact
-#: token -- checked before any flag/operand parsing, same discipline
-#: `sources_listdir.py`'s `_reject_redirection_and_substitution` applies to `ls`.
 _REDIRECT_TOKENS = frozenset({
     ">", ">>", "<", "<<", "<<<", "2>", "&>", "|&",
 })
 
-#: Substring markers of command/process substitution -- checked as substrings because
-#: the shared tokenizer does not split `$(...)`/`` `...` ``/`<(...)` off from an
-#: adjoining token. Mirrors `sources_listdir.py`'s identical constant.
 _SUBSTITUTION_MARKERS = ("$(", "`", "<(", "$")
 
 
 @dataclass
 class FindCensusSpec:
-    """A parsed `find`-census invocation: path, optional name glob, files-only."""
 
     path: str = "."
     name_pattern: Optional[str] = None
@@ -106,15 +90,6 @@ def _reject_redirection_and_substitution(tokens: Sequence[str]) -> None:
 
 
 def parse_find_census_segment(tokens: Sequence[str]) -> FindCensusSpec:
-    """Parse a `find`-invocation segment into a FindCensusSpec, or raise Unanswerable.
-
-    Recognizes only the shape C0's differential oracle measured faithful: a bare path
-    operand (default `.`), at most one `-name PATTERN` (`fnmatch.fnmatchcase`,
-    case-sensitive -- matches real `find` on every platform), and at most one
-    `-type f` -- exactly. Everything else declines by name; see the module docstring's
-    Negative-spec for why `-type d` is a decline here rather than a reproduction of the
-    generator's own latent bug.
-    """
     if not tokens:
         raise Unanswerable("empty find segment")
     binary = os.path.basename(tokens[0])
@@ -198,15 +173,6 @@ def run(spec: FindCensusSpec, cwd: str = ".") -> List[str]:
         def _matches(name: str) -> bool:
             return spec.name_pattern is None or fnmatch.fnmatchcase(name, spec.name_pattern)
 
-        # Real `find` always visits the starting point itself as its own
-        # first entry (a directory, so excluded when `only_files` is set,
-        # same as every other directory this walk sees) -- `os.walk` never
-        # yields its own root as one of the (root, dirs, files) triples it
-        # produces, so it must be added here explicitly or a bare
-        # `find .`/`find DIR` census silently drops one entry real `find`
-        # prints. `os.path.basename` of the operand itself (not a joined
-        # path) is what `-name` matches against, matching real find's own
-        # basename-of-the-argument behavior for the start point.
         if not spec.only_files and _matches(os.path.basename(os.path.normpath(spec.path))):
             scanned += 1
             if scanned > WALK_BUDGET_ENTRIES:

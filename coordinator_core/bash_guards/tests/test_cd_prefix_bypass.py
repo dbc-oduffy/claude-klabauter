@@ -137,19 +137,10 @@ from coordinator_core.bash_guards import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
-
-
-# ---------------------------------------------------------------------------
-# Shared dispatcher-decision helper -- the ONE path every test below drives
-# through. Never call a guard's own `check()` in isolation for a bypass
-# claim; that is exactly what this row exists to rule out as sufficient.
-# ---------------------------------------------------------------------------
 
 
 def _decision(command: str, **payload_extra) -> str:
@@ -181,63 +172,24 @@ def _decision(command: str, **payload_extra) -> str:
     return "advisory"
 
 
-#: Subagent-identity payload fields shared by every identity-gated guard's
-#: `_payload` helper across this package's own per-guard test files.
 _SUBAGENT_IDENTITY = {"agent_id": "deadbeef0123", "agent_type": "coordinator:executor"}
 
 
 def _wire_subagent_identity(monkeypatch, module, subagent_type: str) -> None:
-    """Seam-patch identity resolution directly on `module` -- the same
-    pattern each guard's own test file already uses -- so the DENY path
-    fires without a real git repo/back-pointer chain on disk. Works
-    unchanged through `dispatch.evaluate_payload_json` because `dispatch.py`
-    imports the bound `check` function, which still resolves these names as
-    ITS OWN module's globals at call time.
-    """
     monkeypatch.setattr(module, "resolve_git_root", lambda cwd: "/fake/git-root")
     monkeypatch.setattr(
         module, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123"
     )
     # `expected_em_session_id` is OPTIONAL in production (added 2026-08-14 as a
-    # review finding, so the resolved identity can be cross-checked against the
-    # dispatching EM's session). The double must accept it: a stub narrower than
-    # the real signature raises TypeError at call time, which surfaces as the
-    # guard erroring rather than as the verdict under test. `**kw` (not a
-    # named `expected_em_session_id=""` param) so the double survives the NEXT
-    # signature change too, not just this one -- same convention already used
-    # by the sibling double in
-    # `test_block_reviewer_bash_outside_allowlist_named_dispatch_effective_type.py`'s
-    # `_capturing(git_root, agent_id, **kw)`.
     monkeypatch.setattr(
         module,
         "_read_backpointer_subagent_type",
         lambda git_root, agent_id, **kw: subagent_type,
     )
-    # The stubbed `/fake/git-root` is not a sandbox: a guard whose DENY path
-    # also appends a per-session audit log (`block_subagent_plan_body_bash_write
-    # ._write_block_log`) would `mkdir -p /fake/git-root/.git/coordinator-sessions/
-    # <sid>/`, which on Windows resolves against the CURRENT DRIVE and leaves a
-    # real `<drive>:\fake\` tree behind on every run. `raising=False` -- only
-    # some guards carry this seam. Sibling stubs in each guard's own test file
-    # (`test_block_subagent_plan_body_bash_write.py::_stub`) do the same.
     monkeypatch.setattr(module, "_write_block_log", lambda *a, **kw: None, raising=False)
     # `block-reviewer-bash-outside-allowlist` sits early in CONFINEMENT_DENY and
-    # reads the SAME payload identity every caller of this helper supplies, so
-    # in a quarantined test home it answers for guards it is not being asked
-    # about. In production it does not confine `coordinator:executor` at all:
     # DR-125 removed that type from `_helpers._CONFINED_FINDINGS_AGENTS`, no
-    # `bash_policy:` key confines it, and leg 3
-    # (`is_confined_by_roster_absence`) excludes it because the dispatch-seam
-    # roster enumerates it. Under the suite's home quarantine that roster is
     # UNRESOLVABLE -- `resolve_roster()` finds no DoE-root pointer -- and leg 3
-    # then fails CLOSED by design, denying every executor command regardless of
-    # what the cell under test is probing. That turns an advisory cell red and,
-    # worse, can hand a deny-asserting cell a green from the wrong guard.
-    # Restoring leg 3's production answer keeps each cell attributable to its
-    # own guard; it changes no guard's shipped behaviour. Same seam and
-    # rationale as `test_block_reviewer_bash_outside_allowlist.py`'s own
-    # `_stub_roster_absence_leg` fixture. Types the roster genuinely confines
-    # (`coordinator:code-reviewer`) are unaffected -- leg 2 still confines them.
     monkeypatch.setattr(
         reviewer_guard, "is_confined_by_roster_absence", lambda effective_type: False
     )
@@ -260,30 +212,9 @@ def _wrap_variants(cmd: str) -> Dict[str, str]:
         "env_wrapper": "env %s" % cmd,
         "nice_wrapper": "nice %s" % cmd,
         "time_wrapper": "time %s" % cmd,
-        # `shlex.quote` (not a naive `'sh -c "%s"' % cmd`) -- several base
-        # commands below already contain embedded double- or single-quoted
-        # spans (`-m "msg"`, `find / -name '*.pyc'`), and a naive wrap
-        # produces broken/nested quoting that is a TEST bug, not a guard
-        # finding, indistinguishable from a real bypass in the assertion
-        # output unless the wrapping itself is quote-safe.
         "sh_dash_c_wrapper": "sh -c %s" % shlex.quote(cmd),
         "bash_dash_c_wrapper": "bash -c %s" % shlex.quote(cmd),
         "env_sh_dash_c_wrapper": "env sh -c %s" % shlex.quote(cmd),
-        # Folded in from the former `_new_attack_shapes` quarantine
-        # (code-reviewer Findings 1-4, 2026-07-29) -- brace-grouping, a
-        # bundled `-c` short flag, and an unrecognized-wrapper-binary
-        # passthrough. This file's docstring used to justify keeping these
-        # OUT of the shared matrix on the grounds that a confirmed-live
-        # bypass of a hard-deny (`check_no_verify` did not resolve command
-        # position through any of the three) "would turn an out-of-scope,
-        # not-yet-fixed gap into a spurious test failure here." That
-        # reasoning was itself the finding (staff-eng review 2026-07-29,
-        # Finding 2): a red cell naming a live confinement hole is the
-        # correct artifact, not a spurious failure to be engineered around.
-        # Every guard class in this file now runs all three shapes
-        # unconditionally; a guard still open to one is recorded via
-        # `known_bypasses` on its own `_assert_bypass_resistant` call, naming
-        # the live gap, never by omitting the shape from this dict.
         "brace_grouping": "{ %s; }" % cmd,
         "sh_ic_bundled_wrapper": "sh -ic %s" % shlex.quote(cmd),
         "setsid_wrapper": "setsid %s" % cmd,
@@ -291,12 +222,6 @@ def _wrap_variants(cmd: str) -> Dict[str, str]:
 
 
 def _nice_bare_numeric_shape(cmd: str) -> Dict[str, str]:
-    """`nice`'s bare-numeric niceness form (Finding 4) -- kept separate from
-    `_new_attack_shapes` since it is only meaningful for a base command that
-    is itself the wrapped target (all guard bases in this file qualify), not
-    a guard-selection concern; split out purely for a clearer per-shape name
-    in a failing assertion.
-    """
     return {"nice_bare_numeric_wrapper": "nice -19 %s" % cmd}
 
 
@@ -379,13 +304,6 @@ def _assert_advisory_resistant(
         )
 
 
-# ---------------------------------------------------------------------------
-# Guards whose matcher needs no identity resolution and no filesystem/git
-# fixture -- these fire on command TEXT alone, so the shared `_decision`
-# helper is used directly.
-# ---------------------------------------------------------------------------
-
-
 class TestNoVerify:
     def test_bypass_matrix(self):
         base = 'git commit --no-verify -m "msg"'
@@ -403,11 +321,6 @@ class TestNoVerify:
 
 
 class TestDestructiveGitOrphanSubshellResolvedReset:
-    """CHECK 1 (`git reset --hard <subshell-resolved-target>`) -- the one
-    deny branch in this guard needing no real git repo at all: a
-    `$(...)`/backtick-resolved reset target cannot be verified safe by
-    construction, regardless of whether the target exists.
-    """
 
     def test_bypass_matrix(self):
         _assert_bypass_resistant(_decision, "git reset --hard $(echo HEAD~3)")
@@ -436,9 +349,6 @@ class TestDestructiveGitOrphanShellCWrapperBypass:
         assert _decision("/bin/sh -c 'git reset --hard $(echo HEAD~3)'") == "deny"
 
     def test_sh_c_wrapped_unrelated_command_still_allows(self):
-        """Negative control: the unwrap must not turn every `sh -c` payload
-        into a deny -- only one that is itself a real destructive-git shape.
-        """
         assert _decision('sh -c "echo hello"') == "allow"
 
     def test_inert_prose_about_git_reset_still_allows(self):
@@ -449,12 +359,6 @@ class TestDestructiveGitOrphanShellCWrapperBypass:
         assert _decision('echo "reviewing git reset --hard conventions"') == "allow"
 
     def test_no_agent_id_path_is_the_reproduced_one(self):
-        """`_decision` with no `payload_extra` already omits `agent_id` --
-        this guard is not identity-gated, so asserting that explicitly
-        documents the untagged path is the one this test suite covers,
-        matching the live-bypass reproduction (main-loop / unidentified
-        caller, `block_subagent_destructive_action`'s identity-gated unwrap
-        never runs)."""
         payload = {
             "tool_name": "Bash",
             "tool_input": {"command": "sh -c 'git reset --hard $(echo HEAD~3)'"},
@@ -469,26 +373,6 @@ class TestDestructiveGitOrphanShellCWrapperBypass:
 
 
 class TestCdPrefixShellCUnwrapGap:
-    """BX-13 follow-up (2026-08-17): `_shell_c_unwrap_payloads` looked for
-    the wrapper interpreter ONLY at token position 0 of the command it was
-    handed. A `cd /tmp && sh -c '<payload>'` (or any other separator ahead
-    of the wrapper) tokenized to `['cd', '/tmp', '&&', 'sh', '-c',
-    '<payload>']`; position 0 is `cd`, so the wrapper was never found and
-    the payload was never unwrapped/re-scanned -- a live bypass of every
-    one of the six checks that share this helper (`check_no_verify`,
-    `check_destructive_git_orphan`, `check_destructive_rm`,
-    `_check_destructive_git_revert_full`, `check_blanket_git_add`,
-    `check_runaway_find`), confirmed live against `check_destructive_git_
-    orphan` via direct probe before this fix landed.
-
-    Covers the shared helper (`dispatch_checks._shell_c_unwrap_payloads`),
-    not one single check: the `cd &&` shape against `check_destructive_git_
-    orphan`, a second separator (`;`) against the same check, a
-    quoted-separator negative control (the `&&` must not be treated as a
-    boundary when it is DATA inside a quoted string), and the same `cd &&`
-    shape against a SECOND call site (`check_destructive_rm`) so the fix is
-    pinned as the shared-helper fix it is, not a single-check patch.
-    """
 
     def test_cd_and_prefixed_sh_c_wrapped_subshell_reset_denied(self):
         assert (
@@ -503,59 +387,36 @@ class TestCdPrefixShellCUnwrapGap:
         )
 
     def test_quoted_ampersand_ampersand_is_not_a_segment_boundary(self):
-        """Negative control: `&&` INSIDE a quoted string is data, not a
-        separator -- the fix must not treat every quoted occurrence of a
-        separator character as a segment boundary, which would turn this
-        into a false deny (echo's argument is inert prose, never executed).
-        """
         assert (
             _decision('echo "cd /tmp && sh -c \'git reset --hard HEAD~3\'"')
             == "allow"
         )
 
     def test_cd_and_prefixed_sh_c_wrapped_rm_denied(self):
-        """Second call site (`check_destructive_rm`) hit by the same
-        shared-helper gap -- pins the fix at the helper, not one check."""
         assert (
             _decision("cd /tmp && sh -c 'rm -rf $(echo /tmp/some-target)'")
             == "deny"
         )
 
     def test_dollar_paren_wrapped_sh_c_reset_denied(self):
-        """LIVE BYPASS (2026-08-17, follow-up): a wrapper hidden inside an
-        unquoted `$(...)` command substitution was invisible to
-        `_shell_c_unwrap_payloads` -- the shared tokenizer has no
-        `$(...)`-aware grouping, so `$(sh` glues onto one token and the
-        segment loop's head-of-segment wrapper check never sees `sh`.
-        `echo $(sh -c '<payload>')` genuinely executes the subshell, so this
-        must deny exactly like the un-substituted `sh -c '<payload>'` form.
-        """
         assert (
             _decision("echo $(sh -c 'git reset --hard $(echo HEAD~3)')")
             == "deny"
         )
 
     def test_backtick_wrapped_sh_c_reset_denied(self):
-        """Same shape, backtick form of command substitution."""
         assert (
             _decision("echo `sh -c 'git reset --hard $(echo HEAD~3)'`")
             == "deny"
         )
 
     def test_single_quoted_dollar_paren_is_literal_data_not_substitution(self):
-        """Negative control: a `$(...)` INSIDE single quotes is literal
-        text, never executed -- must not be unwrapped/re-scanned, which
-        would turn this into a false deny (the whole thing is one inert
-        echo argument)."""
         assert (
             _decision("echo '$(sh -c \"git reset --hard $(echo HEAD~3)\")'")
             == "allow"
         )
 
     def test_nested_dollar_paren_wrapped_sh_c_reset_denied(self):
-        """Nesting: the wrapper sits inside a `$(...)` that is itself
-        nested inside an outer `$(...)` -- must unwrap to the existing
-        depth bound, not require unbounded nesting support."""
         assert (
             _decision(
                 "echo $(echo $(sh -c 'git reset --hard $(echo HEAD~3)'))"
@@ -564,11 +425,6 @@ class TestCdPrefixShellCUnwrapGap:
         )
 
     def test_double_quoted_dollar_paren_wrapped_sh_c_reset_denied(self):
-        """A wrapper's own `-c` payload can legitimately contain a
-        `$(...)` a downstream check still needs verbatim -- confirms the
-        segment loop keeps scanning raw `cmd`, not a neutralized copy that
-        would blank the subshell-resolved-target marker `check_destructive_
-        git_orphan`'s CHECK 1 relies on to deny on sight."""
         assert (
             _decision('/bin/sh -c "git reset --hard $(echo HEAD~3)"')
             == "deny"
@@ -576,24 +432,6 @@ class TestCdPrefixShellCUnwrapGap:
 
 
 class TestQuotedParenDesyncBypass:
-    """P0 (2026-08-17, tokenizer quote-desync): `_extract_command_
-    substitutions`'s (`_command_tokenizer.py`) inner paren-balance walk
-    tracked only `\\`/`(`/`)`, never quote state -- unlike the outer walk in
-    the SAME function. A quoted `)` inside a substitution's real content
-    (`$(echo ')' ; sh -c '<payload>')`) desynced the depth counter and
-    truncated the extracted span BEFORE the true closing paren, silently
-    dropping everything after that point from `subs` -- including the
-    `sh -c '<payload>'` this file's sibling class already proves gets
-    recursively re-scanned when the substitution is extracted whole.
-
-    The bug bites only when the SEGMENT loop cannot independently split the
-    text into its own segment (outer double quotes keep the whole thing one
-    shlex token) AND a quoted paren desyncs the substitution walk -- the
-    unquoted-outer sibling below is the control proving the segment loop's
-    own real shlex splitting was masking the same underlying desync (it
-    happens to still deny via the segment loop finding `sh` at a fresh
-    segment head after the real, unquoted `;`), not fixing it.
-    """
 
     def test_quoted_paren_inside_double_quoted_substitution_still_denies(self):
         payload = "git reset --hard $(echo HEAD~3)"
@@ -601,22 +439,12 @@ class TestQuotedParenDesyncBypass:
         assert _decision(cmd) == "deny"
 
     def test_quoted_paren_inside_unquoted_substitution_still_denies(self):
-        """Control: same quoted-paren desync shape, but with the `$(...)`
-        left unquoted at the outer level -- the segment loop's own shlex
-        split already exposes the `;`-separated `sh -c` segment
-        independently, so this must deny regardless of the substitution
-        walk's own fix, confirming the double-quoted case above is the one
-        the fix actually closes."""
         payload = "git reset --hard $(echo HEAD~3)"
         cmd = "echo $(echo ')' ; sh -c '" + payload + "')"
         assert _decision(cmd) == "deny"
 
 
 class TestDestructiveRmSubshellResolvedTarget:
-    """The one `check_destructive_rm` deny branch needing no real files on
-    disk: a recursive `rm` whose target is subshell-resolved cannot be
-    verified safe by construction.
-    """
 
     def test_bypass_matrix(self):
         base = "rm -rf $(echo /tmp/some-target)"
@@ -650,7 +478,6 @@ class TestRunawayFind:
 
 
 class TestBlockWorktreeCreation:
-    """Not identity-gated (fires for every caller, EM included)."""
 
     def test_bypass_matrix(self):
         base = "git worktree add ../wt-1 feature-branch"
@@ -662,11 +489,6 @@ class TestBlockWorktreeCreation:
 
 
 class TestBlockApprovalSentinelCreation:
-    """Not identity-gated. Own per-guard test file already covers a subset
-    of this matrix (`TestReachableThroughTheDispatchChain`) -- repeated here
-    for this row's uniform per-guard enumeration plus the wrapper shapes
-    that file does not cover (`nice`, `time`, `env sh -c`).
-    """
 
     def test_bypass_matrix(self):
         base = "touch .coordinator-doctrine-edit-approved"
@@ -678,9 +500,6 @@ class TestBlockApprovalSentinelCreation:
 
 
 class TestBlockWorktreeSentinelCreation:
-    """Not identity-gated. Same rationale as the approval-sentinel sibling
-    directly above.
-    """
 
     def test_bypass_matrix(self):
         base = "touch .coordinator-override-worktree-guard"
@@ -708,12 +527,6 @@ class TestCheckRawPidLiveness:
         _assert_advisory_resistant(_decision, "kill -0 1234")
 
 
-# ---------------------------------------------------------------------------
-# Identity-gated hard-denies -- seam-patched exactly like their own per-guard
-# test files, then driven through the real dispatcher.
-# ---------------------------------------------------------------------------
-
-
 class TestBlockSubagentPlanBodyBashWrite:
     """C13/C14 flipped this guard CONFINEMENT_DENY -> ADVISORY_REWRITE (see
     `TestCheckRawPidLiveness`'s docstring for the shared rationale). Review:
@@ -739,12 +552,8 @@ class TestBlockReviewerBashOutsideAllowlist:
                 cmd, agent_id="deadbeef0123", agent_type="coordinator:code-reviewer"
             )
 
-        # `curl` is outside the reviewer's Bash allowlist (`ls`/`cat`/`head`/
         # `tail`/`wc`/`find`/`file`/`stat`/`grep` -- see `_READONLY_FS_
         # BINARIES` -- are all IN it, so a base command must avoid every
-        # member or this asserts a false "baseline must deny" failure that
-        # is a test-authoring bug, not a guard finding). Any confined
-        # agent's non-allowlisted command must deny, prefix-reshaped or not.
         _assert_bypass_resistant(decide, "curl https://example.com")
 
 
@@ -786,11 +595,6 @@ class TestBlockSubagentCommit:
 
 
 class TestSubagentCommitShellCWrapperBypass:
-    """The confirmed-live bypass this file's investigation found and this
-    change fixed (see module docstring). Pinned as its own class -- not
-    merely folded into the matrix above -- so a future regression here reads
-    as "the BX-13 live finding came back", not as one row of an opaque loop.
-    """
 
     def test_sh_c_wrapped_git_commit_now_denies(self, monkeypatch):
         _wire_subagent_identity(monkeypatch, commit_guard, "coordinator:executor")
@@ -820,9 +624,6 @@ class TestSubagentCommitShellCWrapperBypass:
         assert result == "deny"
 
     def test_sh_c_wrapped_unrelated_command_still_allows(self, monkeypatch):
-        """Negative control: the unwrap must not turn EVERY `sh -c` payload
-        into a deny -- only one that is itself a real git-commit invocation.
-        """
         _wire_subagent_identity(monkeypatch, commit_guard, "coordinator:executor")
         result = _decision('sh -c "echo hello"', **_SUBAGENT_IDENTITY)
         assert result == "allow"
@@ -849,11 +650,6 @@ class TestSubagentCommitShellCWrapperBypass:
     def test_reverse_order_env_then_wrapper_coordinator_safe_commit_still_denies(
         self, monkeypatch
     ):
-        """Companion negative control for the fix above: the reverse stacking
-        order already denied even before the fix (the one-shot `env` check
-        ran before the wrapper loop) -- pinned so a future regression in
-        either order shows up distinctly.
-        """
         _wire_subagent_identity(monkeypatch, commit_guard, "coordinator:executor")
         result = _decision(
             "env nice FOO=1 coordinator-safe-commit -m x", **_SUBAGENT_IDENTITY
@@ -861,25 +657,11 @@ class TestSubagentCommitShellCWrapperBypass:
         assert result == "deny"
 
     def test_quoted_prose_about_commit_via_echo_still_allows(self, monkeypatch):
-        """Negative control, different failure direction: `echo`'s quoted
-        argument is inert text (not executed), so it must NOT be unwrapped
-        and re-scanned the way a shell interpreter's `-c` argument is -- the
-        false-positive class this guard's own heredoc/quoting fix already
-        guards, re-confirmed here through the real dispatcher.
-        """
         _wire_subagent_identity(monkeypatch, commit_guard, "coordinator:executor")
         result = _decision(
             'echo "reviewing git commit conventions"', **_SUBAGENT_IDENTITY
         )
         assert result == "allow"
-
-
-# ---------------------------------------------------------------------------
-# Real-git-repo-backed guards (`check-destructive-git-clean`, the `stash` verb
-# of `check-destructive-git-revert`) -- driven via an explicit `git -C <repo>`
-# in the attacked command text, so the attack variants below are ALSO a
-# `-C`-immune-to-`cd`-reshaping regression check for free.
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture()
@@ -909,10 +691,7 @@ def _git_repo_with_loadbearing_state(tmp_path: Path) -> Path:
         **no_console_creationflags(),
     )
 
-    # Uncommitted tracked edit -- what an unscoped `git stash` sweeps.
     tracked.write_text("committed baseline\nuncommitted edit\n", encoding="utf-8")
-    # Untracked load-bearing file -- what `git clean` would destroy
-    # unrecoverably (no commit, no stash, no reflog for an untracked file).
     (repo / "state" / "untracked-loadbearing.md").write_text("scratch\n", encoding="utf-8")
     return repo
 
@@ -951,15 +730,6 @@ class TestDestructiveGitRevertStashRealRepo:
         )
 
 
-# ---------------------------------------------------------------------------
-# check-blanket-git-add -- cwd-anchored to `~/.claude`, resolved via the
-# dispatcher process's OWN `os.getcwd()` rather than the payload `cwd` (a
-# separate, out-of-scope resolution-source defect -- see module docstring).
-# Seam-patch `_run_git`/`os.path.expanduser` directly so the deny path fires
-# without actually being inside that real directory.
-# ---------------------------------------------------------------------------
-
-
 class TestBlanketGitAdd:
     def test_bypass_matrix(self, monkeypatch, tmp_path: Path):
         fake_meta_root = tmp_path / "home" / ".claude"
@@ -989,15 +759,6 @@ class TestBlanketGitAdd:
                 ),
             },
         )
-
-
-# ---------------------------------------------------------------------------
-# check-test-suite-invocation -- reuses its own test file's fixture shape
-# (a resolved git root with a `pyproject.toml` `testpaths` config, subagent
-# `agent_id` present). Its own suite already pins one cd-prefix regression
-# (`test_subagent_cd_prefix_is_ignored`); this file adds the remaining
-# wrapper-binary shapes for this row's uniform per-guard coverage.
-# ---------------------------------------------------------------------------
 
 
 class TestCheckTestSuiteInvocation:

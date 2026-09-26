@@ -70,9 +70,6 @@ def _init_repo(tmp_path: Path) -> Path:
 
 
 def test_filter_reports_the_class_it_dropped(tmp_path):
-    """The count reaches the caller, not just stderr. A stderr line above a
-    green verdict is not a report — the same ruling `_round_warnings` was
-    written to enforce."""
     repo = _init_repo(tmp_path)
     (repo / ".gitignore").write_text("*.pyc\n", encoding="utf-8")
     (repo / "cached.pyc").write_text("x", encoding="utf-8")
@@ -87,8 +84,6 @@ def test_filter_reports_the_class_it_dropped(tmp_path):
 
 
 def test_a_declared_nothing_round_and_a_filtered_to_empty_round_differ(tmp_path):
-    """Both end with an empty pathspec. Only one of them is a no-op, and the
-    warning is what tells them apart."""
     repo = _init_repo(tmp_path)
     (repo / ".gitignore").write_text("*.pyc\n", encoding="utf-8")
     (repo / "cached.pyc").write_text("x", encoding="utf-8")
@@ -109,15 +104,10 @@ def test_a_declared_nothing_round_and_a_filtered_to_empty_round_differ(tmp_path)
     warning = _mod._filter_drop_warning(real_drops)
     assert warning is not None
     assert "1 gitignored at dest" in warning
-    # Names the count and the class, never a bare number: an operator reading
-    # the verdict block has to be able to act on it without the stderr scroll.
     assert "dropped from the commit" in warning
 
 
 def test_the_warning_reaches_the_verdict_block():
-    """`_round_warnings` is what the verdict COUNTS and NAMES. A drop warning
-    that never reaches it leaves `warnings: 0` on a round that carried
-    nothing."""
     assert (
         _mod._round_warnings(
             has_review_warnings=False, residual_warning=None, filter_drop_warning=None
@@ -141,8 +131,6 @@ def test_the_warning_reaches_the_verdict_block():
 
 
 def test_no_filter_drops_is_the_shape_every_return_path_hands_back():
-    """The empty-`seen` early return and a real filtered run agree on shape,
-    so no caller has to branch on `None` before it can count."""
     assert _mod._no_filter_drops() == {
         "gitignored": 0,
         "absent_deletion": 0,
@@ -153,12 +141,6 @@ def test_no_filter_drops_is_the_shape_every_return_path_hands_back():
 
 
 def test_gitignored_residue_no_row_wrote_is_named_but_not_a_warning(tmp_path):
-    """The claude-klabauter 2026-09-11 shape: the root flat-mirror row's
-    on-disk declaration walk swept up `.pytest_cache/`, `.claude/` and
-    `*.bak` files sitting untracked and gitignored in the mirror. None is
-    publish payload, so dropping them loses nothing -- they are counted in
-    their own class and kept out of the verdict's warning count. A
-    gitignored path the run DID report writing stays a counted drop."""
     repo = _init_repo(tmp_path)
     (repo / ".gitignore").write_text("*.bak\n", encoding="utf-8")
     (repo / "junk.bak").write_text("x", encoding="utf-8")
@@ -179,8 +161,6 @@ def test_gitignored_residue_no_row_wrote_is_named_but_not_a_warning(tmp_path):
 
 
 def test_declared_only_untracked_path_that_is_not_ignored_is_still_carried(tmp_path):
-    """The residue class must not swallow a refused round's stranded payload:
-    untracked, unreported, NOT gitignored -- it stays in the pathspec."""
     repo = _init_repo(tmp_path)
     (repo / "stranded.py").write_text("x = 1\n", encoding="utf-8")
     seen = {str(repo / "stranded.py"): (_mod._DECLARED_ONLY_TAG, "stranded.py")}
@@ -192,21 +172,6 @@ def test_declared_only_untracked_path_that_is_not_ignored_is_still_carried(tmp_p
 
 
 def test_an_ignored_path_is_one_git_add_would_refuse(tmp_path):
-    """Why the ignore branch STAYS, recorded as a test rather than a claim.
-
-    The filed row proposed that `check-ignore` answers "is this ignored" when
-    the question is "did the author mean to exclude it", and that a `!`
-    negation inside an excluded directory makes those differ. It does make
-    them differ in INTENT — and not in what git will do: git never descends
-    into an excluded directory, so the negation does not re-include the file
-    and `git add` refuses it exactly as `check-ignore` predicted. Dropping it
-    loses no commit that could otherwise have happened.
-
-    The two legs agree in the other direction too (`check-ignore` is
-    index-aware, so it reports nothing for a TRACKED file matching an ignore
-    pattern, and the filter leaves it in). The defect this file pins was never
-    the drop; it was the round reporting the drop as a no-op.
-    """
     repo = _init_repo(tmp_path)
     (repo / ".gitignore").write_text("build/\n!build/keep/\n", encoding="utf-8")
     (repo / "build" / "keep").mkdir(parents=True)
@@ -228,26 +193,6 @@ def test_an_ignored_path_is_one_git_add_would_refuse(tmp_path):
 
 
 def test_a_negation_matching_nothing_never_drops_the_file_it_names(tmp_path):
-    """Third `.gitignore` negation shape, distinct from the two above.
-
-    `build/` + `!build/keep/` (a real re-include) and `build/*` +
-    `!build/keep/` both involve a negation that DOES something. This memo's
-    trigger did not: `*.local.toml` + `!*.toml.example` over a file named
-    `keep.toml.example`, which `*.local.toml` never matched in the first
-    place (it requires the name to END in `.local.toml`). The negation is a
-    no-op -- nothing was ignored to begin with -- and the file was never
-    excluded (`git status` reports it `??`, untracked-not-ignored).
-
-    `_filter_commit_pathspec` is check-ignore-driven (§ its own docstring:
-    "git check-ignore is index-aware ... an ignored path here is one `git
-    add` would refuse"), so this shape was never actually reachable through
-    this filter -- check-ignore answers the real question regardless of an
-    inert `!` line. Pinned here because the corpus had two shapes covered and
-    a third, structurally different one (inert negation, no re-include, no
-    prior exclusion) unpinned -- see
-    2026-08-28-doe-claude-em-our-negation-instance-was-a-no-op-and-still-
-    broke-the-commit.md.
-    """
     repo = _init_repo(tmp_path)
     (repo / ".gitignore").write_text("*.local.toml\n\n!*.toml.example\n", encoding="utf-8")
     (repo / "keep.toml.example").write_text("x", encoding="utf-8")

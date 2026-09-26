@@ -98,8 +98,6 @@ from coordinator_core.reconcile.handoff_corpus import (  # noqa: E402
     _is_open,
 )
 
-#: (registry key, human label) for the five fleet repos this oracle spans. Order
-#: is report-display order only -- not load-bearing.
 REPO_KEYS: Tuple[Tuple[str, str], ...] = (
     ("repos.doe_claude", "DoE-claude"),
     ("repos.claude_klabauter", "claude-klabauter"),
@@ -108,51 +106,15 @@ REPO_KEYS: Tuple[Tuple[str, str], ...] = (
     ("repos.example_market_data_repo", "example-market-data-repo"),
 )
 
-#: gate_eval.py at the commit immediately BEFORE C4 landed -- the parent of
-#: 8c41e3ea ("C9+C4: lineage is not gating; reconcile the two evaluators and
-#: widen once"). `evaluate_gate_triage` and `_classify_blocked_by` already exist
-#: at this SHA (c23d9a91 landed them earlier); what does NOT yet exist is
-#: `_is_structured_gate`, the C4 prose-dominance rule inside `evaluate_gate`, the
-#: C5 `continued_into` chase, the C6 external-gate evidence class, and the C7
-#: `resolved_without_baton` disposition read.
 PRE_C4_SHA = "578c47d3"
 
-#: gate_eval.py as of C5+C6+C7 landing (7e69ecc1, "chase continuations, wire
-#: external-gate evidence, dispose danglers") -- the post-widening evaluator
-#: this plan's C12 GATE / AC27 names explicitly. Commits after this one that
-#: touch gate_eval.py (C19+C19c, da7e3fe4) are docstring/path-attachment fixes,
-#: not verdict-logic changes -- this oracle deliberately pins to 7e69ecc1 rather
-#: than HEAD because AC27's own text names "post-C7", not "current".
 POST_C7_SHA = "7e69ecc1"
 
-#: 2026-08-05 provenance note: DR-266 (docs/plans/2026-07-26-gate-resolution-widen-
-#: and-migrate.md's follow-on, DoE-claude) adds a `contradiction` key to
-#: `evaluate_gate`'s prose-dominance return dict when `staleness_evidence` is not
-#: None, and re-routes `evaluate_gate_triage`'s review-due path -- both landing
 #: strictly AFTER POST_C7_SHA. This oracle's evaluator axis loads `gate_eval.py`
 #: ONLY at PRE_C4_SHA and POST_C7_SHA (never HEAD, per the module docstring's
-#: negative-spec), so a `run()` pass over the current tree cannot see the
-#: DR-266 delta at all -- zero flips here is NOT evidence DR-266 introduced no
-#: verdict change; it is the oracle's pinned window ending before DR-266 begins.
 #: Do not repin POST_C7_SHA (or add a third pinned sha) to chase this: whether
-#: this window should widen again is a scoping decision for whoever next reasons
-#: about AC27's coverage, not a side effect of landing DR-266 itself. Also note
-#: this oracle's `run()`/`_evaluate` never calls `evaluate_gate_triage` at any
-#: sha -- it differentials `evaluate_gate` against itself across the two pinned
-#: snapshots, so the triage-side half of DR-266 is outside this oracle's
-#: comparison shape entirely, independent of which shas are pinned.
-#:
-#: The evaluator the corpus axis pins for BOTH corpus states it compares. Reuses
-#: the evaluator-axis's own post-widening snapshot rather than importing
-#: `gate_eval` live -- see the module docstring's negative-spec on why HEAD is
-#: unsafe to import here while sibling chunks are mid-edit on it.
 CORPUS_AXIS_EVALUATOR_SHA = POST_C7_SHA
 
-#: `git ls-tree` roots this oracle reads the handoff corpus from at an older ref
-#: -- mirrors the three trees `_collect_open_handoffs` /
-#: `_collect_all_handoffs_for_gate_index` walk live (state/handoffs/ plus both
-#: archive roots), so the ref-based read sees the same corpus shape the live
-#: read does, just at a different point in the tree's history.
 _CORPUS_TREE_ROOTS: Tuple[str, ...] = ("state/handoffs", "archive/handoffs", "archive/completed")
 
 
@@ -179,13 +141,7 @@ def _load_gate_eval_at(claude_klabauter_root: Path, sha: str, module_name: str) 
     return module
 
 
-#: Review: coordinator:code-reviewer -- modules `gate_eval.py` imports beyond
-#: stdlib/typing. Only `gate_eval.py`'s OWN source is time-travelled by
-#: `_load_gate_eval_at` (see that function's docstring); anything it imports
-#: resolves through the process's live `sys.modules`, i.e. the CURRENT
 #: working-tree version, not the version pinned at PRE_C4_SHA/POST_C7_SHA.
-#: This tuple is the cheap divergence guard's coverage list, not full
-#: transitive-import isolation -- see `_check_transitive_import_isolation`.
 _GATE_EVAL_TRANSITIVE_IMPORT_PATHS: Tuple[str, ...] = (
     "coordinator_core/lifecycle_constants.py",
 )
@@ -209,14 +165,6 @@ def _check_transitive_import_isolation(
     full import graph) -- see that tuple's docstring.
     """
     warnings: List[str] = []
-    # ONE `git cat-file --batch` feed for every (sha, path) pair this check
-    # needs, via `cat_file_batch_objects` — the same promoted primitive
-    # `_gated_batons_for_repo_at_ref` uses below — instead of one `git show`
-    # spawn per path per sha. Each `<rev>:<path>` spec resolves independently
-    # (no set-algebra hazard, per that helper's own docstring), so batching
-    # here changes no comparison outcome: a missing/unreadable blob still
-    # resolves to None on its own slot, exactly like `_git_show_blob`'s
-    # returncode-!=-0 -> None contract.
     objects = [f"{pre_sha}:{p}" for p in _GATE_EVAL_TRANSITIVE_IMPORT_PATHS] + [
         f"{post_sha}:{p}" for p in _GATE_EVAL_TRANSITIVE_IMPORT_PATHS
     ]

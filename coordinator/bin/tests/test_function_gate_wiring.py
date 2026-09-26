@@ -49,10 +49,6 @@ def _load_publish_module():
 
 publish = _load_publish_module()
 
-# Real engine module (not a fake) -- these tests exist to prove the WIRING
-# fires a genuine hermetic subprocess failure through the driver, not to
-# re-test `run_function_gate` itself (already covered by C4's
-# `coordinator_core/percolate/tests/test_function_gate.py`).
 from coordinator_core.percolate import engine as pct_engine  # noqa: E402
 
 
@@ -78,10 +74,6 @@ def _write_clean_gate_tree(root: Path) -> None:
 
 
 def _write_broken_gate_tree(root: Path) -> None:
-    """The deliberately broken payload fixture AC3 asks for: a published
-    `coordinator_registry.py` that cannot import at all -- the exact shape
-    C4's gate exists to catch (a scrub/depersonalize/publish-time defect
-    that leaves the shipped module unimportable)."""
     lib_dir = root / "coordinator" / "bin" / "lib"
     lib_dir.mkdir(parents=True)
     (lib_dir / "coordinator_registry.py").write_text(
@@ -89,12 +81,7 @@ def _write_broken_gate_tree(root: Path) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# dispatch_end_of_run_function_gate -- direct unit tests, REAL subprocess.
-# ---------------------------------------------------------------------------
 class _RealEngineClaudeKlabauter:
-    """Delegates only the C4 callables the gate needs, straight to the
-    real engine module -- everything else this fixture never touches."""
 
     run_function_gate = staticmethod(pct_engine.run_function_gate)
     run_parse_sweep = staticmethod(pct_engine.run_parse_sweep)
@@ -134,9 +121,6 @@ class TestEndOfRunFunctionGateLeg:
         assert "coordinator_registry" in captured.err
 
     def test_target_filtered_broken_module_still_hard_fails(self, tmp_path, capsys):
-        """Pins the stated judgement call: unlike the identity/install-doc
-        legs, --target filtering does NOT downgrade a real import failure
-        to advisory here."""
         repo_root = tmp_path / "repo"
         _write_broken_gate_tree(repo_root)
 
@@ -200,37 +184,8 @@ class TestEndOfRunFunctionGateLeg:
         assert ok is True
 
 
-# ---------------------------------------------------------------------------
-# Director-of-Engineering ruling -- the synthetic coordinator-registry
-# manifest rung (`publish._synthetic_registry_manifest_overrides`,
-# `dispatch_end_of_run_function_gate`'s own docstring "WHAT THIS GATE
 # ACTUALLY ASSERTS" section). Reproduces the actual class-2 failure a bare
-# engine mirror hit (`state/audits/2026-08-10-klabauter-gate-failure-
-# classes.md`): the REAL `coordinator_registry.py`, hermetically gated with
-# no coordinator-claude install anywhere in the environment, previously
-# failed by construction with `FileNotFoundError: coordinator_registry:
-# manifest not found`. `_write_bare_engine_mirror_gate_tree` copies the REAL
-# module (never a synthetic stand-in) so these tests exercise the actual
-# manifest-bootstrap ladder the ruling is about, not a re-test of the
-# hand-rolled stubs `_write_clean_gate_tree` uses elsewhere in this file.
-# ---------------------------------------------------------------------------
 def _write_bare_engine_mirror_gate_tree(root: Path) -> None:
-    """A bare engine-mirror payload shaped like `claude-klabauter`: ships the
-    REAL `coordinator_registry.py` (copied verbatim from this repo's own
-    `coordinator/bin/lib/`, the same module
-    `test_gate_fires_hermetically_on_synthetic_manifest_fixture`
-    (`coordinator_core/percolate/tests/test_function_gate.py`) imports
-    directly) plus the real, load-bearing import-time chain it walks to reach
-    the `.doe-root` pointer rung (`machine_local_impl_resolve.py` beside it,
-    and `read_doe_root_pointer.py` + `settings_home.py` at the co-located
-    `coordinator/lib/` layout `_mp_doe_root_pointer_rung` probes first) -- but
-    never ships `coordinator/schemas/coordinator-registry.manifest.json`
-    itself, since that artifact is DoE-claude's, delivered only via a
-    coordinator-claude plugin install. Every OTHER top-level dependency
-    `coordinator_registry.py` reaches for (`coordinator_core.*`) is imported
-    LAZILY inside functions wrapped in a swallow-and-return-empty contract,
-    so this copy is sufficient to reach the real manifest-bootstrap ladder at
-    import time without dragging in the rest of the repo."""
     bin_lib_dir = root / "coordinator" / "bin" / "lib"
     bin_lib_dir.mkdir(parents=True)
     coordinator_lib_dir = root / "coordinator" / "lib"
@@ -303,17 +258,7 @@ class TestFunctionGateSyntheticManifestRung:
         assert "coordinator_registry" in captured.err
 
 
-# ---------------------------------------------------------------------------
-# publish.main() wiring -- proves the leg is actually invoked by the driver
-# on a broken payload, dry-run never fires it, and a clean payload still
-# passes end-to-end (the wiring under test here, not run_function_gate
-# itself -- C4 already unit-tested the callable).
-# ---------------------------------------------------------------------------
 class _StubClaudeKlabauter:
-    """Trivial fake `ClaudeKlabauterPercolate` for every phase call EXCEPT the two
-    C4 gate callables, which delegate to the real engine module so a
-    broken fixture genuinely fails the gate through the driver path (not a
-    mocked pass/fail)."""
 
     run_function_gate = staticmethod(pct_engine.run_function_gate)
     run_parse_sweep = staticmethod(pct_engine.run_parse_sweep)
@@ -343,20 +288,6 @@ class _StubClaudeKlabauter:
 
 
 def _stub_dest_refresh(monkeypatch) -> None:
-    """Neutralise the destination-refresh precondition (PM ruling 2026-09-02).
-
-    `publish.main` brings every destination level with its origin before the
-    first row materializes anything, and fail-closes on a dest whose checked-out
-    branch has no upstream tracking ref (§ `percolate.dest_refresh.
-    refresh_dest_from_origin`). These fixtures' dest repos are bare tmp trees,
-    not clones, so that refusal fires and returns 1 before any gate leg runs --
-    which is why this belongs in the precondition helper for the same reason
-    every other entry there does: this file's subject is the gate wiring, not
-    the refresh.
-
-    Patched on the engine module rather than on `publish`, because `main`
-    imports the callable from `percolate.dest_refresh` at call time.
-    """
     publish._bootstrap_engine()
     from percolate import dest_refresh as _dest_refresh
 
@@ -370,15 +301,6 @@ def _stub_dest_refresh(monkeypatch) -> None:
 
 
 def _stub_assembled_mirror_leg(monkeypatch) -> None:
-    """Hold the assembled-mirror end-of-run leg inert.
-
-    `dispatch_end_of_run_assembled_mirror_gate` runs a real `pytest
-    --collect-only` against the destination tree and refuses any root whose
-    collection finds no tests and carries no entry in THIS repo's
-    `setup/publish-allowlist-declarations.yaml`. A synthetic fixture tree is
-    neither, so the leg fails every `main()` run here on live-repo state that
-    has nothing to do with the leg under test -- and it is not the leg under
-    test in any of these classes (its own wiring lives with C3's suite)."""
     monkeypatch.setattr(
         publish, "dispatch_end_of_run_assembled_mirror_gate", lambda *a, **k: True
     )
@@ -447,7 +369,7 @@ class TestFunctionGateMainWiring:
         setup_dir = tmp_path / "percolate-root" / "setup"
         setup_dir.mkdir(parents=True)
         repo_root = tmp_path / "dest-repo"
-        _write_broken_gate_tree(repo_root)  # would fail loudly if the leg fired
+        _write_broken_gate_tree(repo_root)
 
         _wire_main_preconditions(monkeypatch, setup_dir=setup_dir, rows=_single_row("t", repo_root))
 
@@ -457,13 +379,6 @@ class TestFunctionGateMainWiring:
         assert "function gate" not in captured.err
 
 
-# ---------------------------------------------------------------------------
-# dispatch_end_of_run_entrypoint_gate -- chunk C3's own wiring: pins that
-# C2's `run_entrypoint_gate` has a production caller (§ EM remit-extension,
-# "a gate with no caller passing its own unit tests is exactly the shape we
-# just caught"), and pins the derived worker cap / enforced aggregate budget
-# this chunk's own AC4 is about.
-# ---------------------------------------------------------------------------
 import sys as _sys  # noqa: E402
 
 
@@ -508,8 +423,6 @@ class TestEndOfRunEntrypointGateLeg:
         assert ok is True
 
     def test_non_starting_entrypoint_is_a_hard_failure(self, tmp_path, capsys):
-        """AC3's own negative test: a deliberately broken entrypoint in a
-        scratch payload turns the gate red."""
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         _write_broken_entrypoint_tree(repo_root)
@@ -545,9 +458,6 @@ class TestEndOfRunEntrypointGateLeg:
         assert ok is True
 
     def test_worker_cap_is_derived_not_hardcoded(self, tmp_path, monkeypatch):
-        """AC4 (a): the cap must respond to a monkeypatched core/RAM figure,
-        not be a literal pinned in the call site -- a test asserting a fixed
-        number would defeat its own purpose (§ this chunk's brief item 1)."""
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         _write_clean_entrypoint_tree(repo_root)
@@ -577,21 +487,15 @@ class TestEndOfRunEntrypointGateLeg:
         )
 
     def test_worker_cap_formula_carries_both_terms(self, monkeypatch):
-        """AC4 (a), the specific regression named in the brief: a cap that
-        silently drops the RAM term must fail this test. Pins `derive_worker_
-        cap` itself (the canonical two-term formula this chunk reuses, §
-        `coordinator_core/diagnostics/contained_run.py`) against a
-        monkeypatched psutil so both the core term AND the RAM term are
-        provably load-bearing, not just the core term alone."""
         from coordinator_core.diagnostics import contained_run
 
         class _FakeVirtualMemory:
-            available = 1 * (1024 ** 3)  # 1 GiB -- deliberately tiny
+            available = 1 * (1024 ** 3)
 
         class _FakePsutil:
             @staticmethod
             def cpu_count(logical=False):
-                return 64  # deliberately huge core count
+                return 64
 
             @staticmethod
             def virtual_memory():
@@ -599,17 +503,9 @@ class TestEndOfRunEntrypointGateLeg:
 
         monkeypatch.setitem(_sys.modules, "psutil", _FakePsutil())
         cap = contained_run.derive_worker_cap()
-        # physical_cores/2 = 32; usable_ram_gb*1024/150 = 1024/150 ~= 6.8 -> floor 6.
-        # If the RAM term were dropped, this would be 32, not 6 -- the exact
-        # regression shape this test pins.
         assert cap == 6, f"expected the RAM term to bind (cap=6), got {cap}"
 
     def test_aggregate_budget_is_enforced_not_merely_accepted(self, tmp_path, monkeypatch):
-        """AC4 (b), the load-bearing half: an already-elapsed aggregate
-        budget must turn entrypoints that have not yet been dispatched into
-        reported failures, not merely be accepted as an unused kwarg. Forces
-        `time.monotonic` to report the budget as already exhausted before
-        the first entrypoint dispatches."""
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         _write_clean_entrypoint_tree(repo_root)
@@ -619,8 +515,6 @@ class TestEndOfRunEntrypointGateLeg:
 
         def _budget_already_blown(*args, **kwargs):
             calls["n"] += 1
-            # First call establishes start_time; every subsequent call (the
-            # pre-dispatch budget check) reports it as already far exceeded.
             if calls["n"] == 1:
                 return real_monotonic()
             return real_monotonic() + 10_000.0
@@ -637,17 +531,7 @@ class TestEndOfRunEntrypointGateLeg:
         )
 
 
-# ---------------------------------------------------------------------------
-# Director-of-Engineering ruling, entrypoint-gate leg -- mirrors
-# `TestFunctionGateSyntheticManifestRung` above for `dispatch_end_of_run_
 # entrypoint_gate`. The function gate and entrypoint gate are TWO SEPARATE
-# end-of-run legs (§ that function's own docstring); staging the synthetic
-# manifest rung for one does not wire the other -- a bare engine mirror's
-# shipped entrypoints spawn their own subprocesses, each hitting the same
-# `coordinator_registry: manifest not found` FileNotFoundError the function
-# gate hit before its own fix (§ state/audits/2026-08-10-klabauter-gate-
-# failure-classes.md, class 2, 11/12 entrypoint-gate failures this class).
-# ---------------------------------------------------------------------------
 def _write_bare_engine_mirror_entrypoint_tree(root: Path) -> None:
     """A bare engine-mirror payload shaped like `claude-klabauter`: one
     shipped bare entrypoint (`coordinator/bin/mirror-cli`) that imports the
@@ -789,7 +673,7 @@ class TestEntrypointGateMainWiring:
         setup_dir.mkdir(parents=True)
         repo_root = tmp_path / "dest-repo"
         _write_clean_gate_tree(repo_root)
-        _write_broken_entrypoint_tree(repo_root)  # would fail loudly if the leg fired
+        _write_broken_entrypoint_tree(repo_root)
 
         _wire_main_preconditions(monkeypatch, setup_dir=setup_dir, rows=_single_row("t", repo_root))
 
@@ -799,21 +683,10 @@ class TestEntrypointGateMainWiring:
         assert "entrypoint gate" not in captured.err
 
 
-# ---------------------------------------------------------------------------
-# dispatch_end_of_run_functional_identifier_output_drift_check -- wiring
-# tests for MAJOR-2 of state/review-findings/2026-08-08-codename-free-
-# partitioned/slice-D-drift-store.md ("nothing calls the gate; it is a
-# library, not a gate"). Real `coordinator_core.percolate.store` functions
-# (not fakes) -- these tests exist to prove the WIRING fires a genuine
-# drift detection through the driver, not to re-test
-# `find_functional_identifier_output_drift_in_tree` itself.
-# ---------------------------------------------------------------------------
 from coordinator_core.percolate import store as pct_store  # noqa: E402
 
 
 class _ResolvedTargetStub:
-    """Minimal stand-in for `publish.ResolvedTarget` -- only the two fields
-    `dispatch_end_of_run_functional_identifier_output_drift_check` reads."""
 
     def __init__(self, name, source_dir, dest_dir):
         self.name = name
@@ -822,7 +695,6 @@ class _ResolvedTargetStub:
 
 
 class _DriftEngineClaudeKlabauter:
-    """Delegates only the two drift callables to the real store module."""
 
     find_functional_identifier_output_drift_in_tree = staticmethod(
         pct_store.find_functional_identifier_output_drift_in_tree
@@ -922,7 +794,6 @@ class TestFunctionalIdentifierOutputDriftMainWiring:
         setup_dir.mkdir(parents=True)
         source_dir, dest_dir = _write_drifted_pair(tmp_path)
         _write_clean_gate_tree(dest_dir)  # FUNCTION gate leg must still pass so
-        # this test isolates the drift leg's own fatal-ness, not a coincidental
         # FUNCTION-gate failure on an otherwise-empty dest tree.
 
         class _StubClaudeKlabauterWithDrift(_StubClaudeKlabauter):
@@ -942,27 +813,9 @@ class TestFunctionalIdentifierOutputDriftMainWiring:
             setup_dir=setup_dir,
             rows=[f"t|mirror|{source_dir}|{dest_dir}"],
         )
-        # `_wire_main_preconditions` overwrites `_import_claude_klabauter_percolate` with the
-        # plain `_StubClaudeKlabauter` -- reassert the drift-capable stub after it.
         monkeypatch.setattr(publish, "_import_claude_klabauter_percolate", lambda: _StubClaudeKlabauterWithDrift())
 
         rc = publish.main([])
-        # STOOD DOWN, deliberately: `main()` does not call the drift leg. This
-        # assertion is inverted from what it pins on a live leg, and that is the
-        # point -- re-enabling the leg in `publish.py` flips this test red, so
-        # nobody re-enables it silently.
-        #
-        # Why it is stood down (docs/research/spike-verdicts/
-        # 2026-08-08-drift-gate-discriminator-position-validity.md): measured over
-        # all 7 real targets the leg reports 7236 pairs containing 0 defects, and
-        # the SyntaxError-across-15-files defect it exists to catch is not
-        # reportable by it under ANY discriminator -- `_extract_functional_tokens`
-        # classifies both sides of that pair as 'mention' and never emits them.
-        # Live, it blocks every publish while detecting nothing.
-        #
-        # The leg itself remains correct and is still exercised directly by
-        # TestEndOfRunFunctionalIdentifierOutputDriftLeg above; only its call
-        # from `main()` is withdrawn.
         assert rc == 0
         captured = capsys.readouterr()
         assert "functional-identifier output-drift check FAILED" not in captured.err

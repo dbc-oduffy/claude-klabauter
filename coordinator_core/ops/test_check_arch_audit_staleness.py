@@ -26,11 +26,6 @@ import pytest
 from coordinator_core.ops import check_arch_audit_staleness as caas
 
 
-# ---------------------------------------------------------------------------
-# _compute_staleness — pure predicate over a ledger file, parity-critical
-# ---------------------------------------------------------------------------
-
-
 def _write_ledger(tmp_path: Path, body: str) -> Path:
     ledger = tmp_path / "health-ledger.md"
     ledger.write_text(body, encoding="utf-8")
@@ -53,8 +48,6 @@ def test_stale_on_none_placeholder(tmp_path):
 
 
 def test_stale_on_unparseable_free_text(tmp_path):
-    """Negative-spec: shape-mismatched text is STALE, not UNKNOWN — reproduces
-    the bash oracle's two-stage regex-then-date-parse split verbatim."""
     ledger = _write_ledger(tmp_path, "**Last targeted audit:** not-a-date\n")
     assert caas._compute_staleness(ledger, today=date(2026, 7, 16)) == "STALE"
 
@@ -78,11 +71,6 @@ def test_unknown_on_missing_ledger(tmp_path):
 def test_clamps_future_date_to_zero_distance(tmp_path):
     ledger = _write_ledger(tmp_path, "**Last targeted audit:** 2026-07-20\n")
     assert caas._compute_staleness(ledger, today=date(2026, 7, 16)) == "FRESH"
-
-
-# ---------------------------------------------------------------------------
-# _resolve_state_root — env-override seam and meta-repo/sibling-repo routing
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_state_root_honours_test_override(monkeypatch):
@@ -121,11 +109,6 @@ def test_resolve_state_root_no_git_root_returns_none(monkeypatch):
     assert caas._resolve_state_root() is None
 
 
-# ---------------------------------------------------------------------------
-# main() — end-to-end, exit code and stdout parity
-# ---------------------------------------------------------------------------
-
-
 def test_main_prints_stale_and_returns_zero(monkeypatch, tmp_path, capsys):
     _write_ledger(tmp_path, "**Last targeted audit:** (none)\n")
     monkeypatch.setattr(caas, "_resolve_state_root", lambda: str(tmp_path))
@@ -147,11 +130,6 @@ def test_main_always_exits_zero_even_on_fresh(monkeypatch, tmp_path, capsys):
     rc = caas.main([])
     assert rc == 0
     assert capsys.readouterr().out.strip() in {"FRESH", "STALE"}
-
-
-# ---------------------------------------------------------------------------
-# --root argv path (Finding 2, slicecheck-arch-weekly-staleness-root-thread)
-# ---------------------------------------------------------------------------
 
 
 def test_main_root_flag_bypasses_resolve_state_root(monkeypatch, tmp_path, capsys):
@@ -181,8 +159,6 @@ def test_main_no_root_falls_through_to_resolve_state_root(monkeypatch, tmp_path,
 
 
 def test_main_blank_root_treated_as_absent_not_ambient_cwd(monkeypatch, capsys):
-    """Finding 1 (P1): --root "" must route to _resolve_state_root(), not
-    fall through to Path("") which resolves against ambient process cwd."""
     monkeypatch.setattr(caas, "_resolve_state_root", lambda: None)
     rc = caas.main(["--root", ""])
     assert rc == 0

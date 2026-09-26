@@ -212,7 +212,4 @@ class TestDenyUnsafeGitSubcommands:
         _reason(guard.check(_payload("git checkout HEAD -- %s" % TARGET)))
 
     def test_git_stash_pop_denies_when_mentioning_target(self):
-        # `git stash pop` can restore a file at the grant-record path --
-        # not on the safe-subcommand allowlist, so it falls through to the
-        # mention-based deny like any other unrecognized git subcommand.
         _reason(guard.check(_payload("git stash pop -- %s" % TARGET)))

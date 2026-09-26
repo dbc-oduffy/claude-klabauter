@@ -88,15 +88,12 @@ from coordinator_core.write_guards.nudge_windows_subprocess_popup import (
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
-PRIORITY = 190  # advisory/deny-offer band; next slot after 172 (see block_dev_side_mirror_wiki.py)
-# -- 180 is free (bump_out_of_repo_tool_write.py moved to the hard-deny
+PRIORITY = 190
 # band's PRIORITY 135 when its CLASS flipped; see that module's own
 # PRIORITY comment).
 
 _CARVE_OUT_DOC = "docs/reference/shell-out-carve-outs.md"
 
-#: Naked-Python equivalent offered per SpawnKind — see module docstring
-#: "MESSAGE ORDER" item 1.
 _ALTERNATIVE_BY_KIND: Dict[SpawnKind, str] = {
     SpawnKind.SHELL_BINARY: (
         "instead of a bash/sh/powershell/cmd argv[0], call the target "
@@ -156,15 +153,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         # This guard is scoped to SHELL-SHAPED spawns only (module name and
         # docstring) — a PLAIN_SPAWN site (any other subprocess/exec call)
-        # is not the shape this offer addresses; C3's test gate covers the
-        # full site inventory, this advisory targets the shell-shaped subset.
         shell_shaped = [
             s for s in sites if s.kind in (SpawnKind.SHELL_BINARY, SpawnKind.SHELL_TRUE)
         ]
         if not shell_shaped:
             return None
 
-        # Lead with the alternative for the FIRST (lowest-ordinal) site's
         # kind — one advisory envelope per PreToolUse response (INTERFACE.md).
         primary_kind = shell_shaped[0].kind
         reason = _reason_for(primary_kind, file_path, len(shell_shaped))
@@ -176,6 +170,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         }
     except Exception:
-        # Fail-OPEN on any unexpected error — this guard offers only on a
-        # positive shell-shaped-spawn match, never on an error.
         return None

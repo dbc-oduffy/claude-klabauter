@@ -130,64 +130,23 @@ from coordinator_core._hook_envelope import COORDINATOR_PROVENANCE_MARKER
 from coordinator_core.bash_guards._helpers import COMMAND_LINE_LABEL
 from coordinator_core.bash_guards._write_bump_marker import resolve_gitdir
 
-# `_alternative_liveness` is imported LAZILY, inside `terse_alternative_text`
-# below, rather than at module scope: `_alternative_liveness` transitively
-# imports `dispatch` (via `block_disarm_marker_sentinel_creation` ->
-# `_blanket_disarm` -> `dispatch.GuardBand`), and `dispatch` imports THIS
-# module at module scope -- a top-level import here would be a circular
-# import, breaking on whichever module happens to load first.
 
 #: Matches a `COMMAND_LINE_LABEL`-labeled line (any leading whitespace, any
-#: spacing between the label and the value) so it can be stripped from
-#: `additionalContext` before hashing -- see `advisory_dedupe_key`'s
 #: docstring and the module docstring's "NORMALIZATION" note. Built
 #: from the shared `_helpers.COMMAND_LINE_LABEL` constant rather than a
-#: hand-typed `"Command:"` literal -- a relabel at
-#: the builder site now moves this pattern automatically instead of silently
 #: reverting dedupe to command-instance keying. `re.MULTILINE` so `^`/`$`
-#: anchor per line, not just at the string's ends.
 _COMMAND_LINE_RE = re.compile(r"^[ \t]*" + re.escape(COMMAND_LINE_LABEL) + r"[ \t]*.*$", re.MULTILINE)
 
-#: HOMED HERE, not in `_alternative_liveness`, because `terse_alternative_text`
-#: runs on the PreToolUse hot path and these two values are all it ever needed
-#: from that module. `_alternative_liveness` executes
-#: `discover_write_guard_names()` at import time, which pulls in
-#: `write_guards.engine` and through it the entire `coordinator_core.ops`
-#: registry -- 480-710ms of process time, charged to DR-344's 500ms budget on
-#: every repeat firing of the fleet's most-fired advisory. The lazy import that
 #: used to sit inside `terse_alternative_text` avoided the CIRCULAR-import
-#: problem noted above but not the COST one: deferring an import does not make
-#: it cheaper, it only moves when it is paid, and here it was paid on the hot
-#: path. `_alternative_liveness` re-exports both names from here, so its own
-#: readers are unaffected.
-#:
 #: Deliberately BROADER than `_alternative_liveness._ALT_CUE_RE` (it also
-#: matches a bare mid-sentence "instead") because a false-positive window only
-#: WIDENS where backtick spans get a chance to classify, while a false-negative
-#: cue silently drops a real alternative -- see that constant's own comment for
-#: the full reasoning, which this move does not change.
 _CUE_WINDOW_RE = re.compile(r"(Use instead:?|Did you mean|Run this instead|Example:|\binstead\b)", re.IGNORECASE)
 _CUE_WINDOW_MAX_CHARS = 600
 
-#: Subdirectory (of the resolved gitdir) markers live under -- namespaced
-#: away from `_write_bump_marker.py`'s own root-level `allow-xrepo-write-*`
-#: markers so a directory listing of one never needs to filter the other's
-#: entries.
 _DEDUPE_SUBDIR = "advisory-dedupe"
 
-#: Best-effort write-path reap threshold (see module docstring, "REAPING").
-#: 48h, not a shorter window: this machine runs long-lived sessions across a
-#: day-plus, and a too-short window would reap a still-live session's own
-#: markers, re-enabling the exact repetition this module exists to remove.
 _STALE_SESSION_DIR_AGE_SECONDS = 48 * 60 * 60
 
 #: Cost throttle (module docstring, "THROTTLED") -- `_sweep_stale_session_
-#: dirs` only runs when `<gitdir>/advisory-dedupe/`'s own mtime is at least
-#: this old. 30 minutes: far shorter than the 48h reap window (so a stale
-#: directory is never meaningfully delayed in being reaped), but long
-#: enough that the O(sibling sessions) listing/stat work this throttles
-#: cannot recur more than twice an hour regardless of how many
-#: (guard, shape) pairs fire across however many concurrent sessions.
 _SWEEP_THROTTLE_SECONDS = 30 * 60
 
 
@@ -326,24 +285,12 @@ def degrade_advisory_envelope(envelope: Optional[Dict[str, Any]]) -> Optional[Di
         return None
 
 
-#: `session_id` charset gate -- `session_id`
 #: is used directly as a path COMPONENT (`_session_dedupe_dir`), then
-#: `mkdir(parents=True)`/`touch()`'d into. `_write_bump_marker.py`'s
-#: precedent module never needed a sanitizer for its own marker because it
 #: embeds the session id inside a FILENAME (`f"{MARKER_PREFIX}{session_id}"`,
-#: traversal-inert), not a directory-path component -- that safety does not
-#: transfer to this module's different on-disk shape. Not agent-controllable
-#: today (`session_id` is harness-supplied, never derived from tool input),
-#: so this is defense-in-depth, not a live hole. Same charset every other
-#: session-id-shaped identifier in this package already uses.
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 
 
 def _valid_session_id(session_id: str) -> bool:
-    """``True`` iff `session_id` is safe to use as a single path component.
-    Fails OPEN like every other predicate in this module -- an invalid id
-    means "treat as not-yet-advised" (``already_advised`` returns ``False``)
-    and "skip the write" (``mark_advised`` no-ops), never a raise."""
     return bool(_SESSION_ID_RE.match(session_id))
 
 
@@ -352,13 +299,6 @@ def _session_dedupe_dir(gitdir: Path, session_id: str) -> Path:
 
 
 def already_advised(gitdir: Optional[Path], session_id: str, shape_key: Optional[str]) -> bool:
-    """``True`` iff this exact ``(session_id, shape_key)`` marker already
-    exists under the resolved ``gitdir``.
-
-    Fail-open, unconditionally (module docstring): ``gitdir is None``, an
-    empty ``session_id``/``shape_key``, or any ``OSError`` probing the
-    marker path all return ``False`` -- "not yet advised", never a raise.
-    """
     if gitdir is None or not session_id or not shape_key:
         return False
     if not _valid_session_id(session_id):
@@ -405,17 +345,6 @@ def mark_advised(gitdir: Optional[Path], session_id: str, shape_key: Optional[st
         pass
 
 
-#: Dedicated throttle sentinel -- a plain
-#: empty file under `<gitdir>/advisory-dedupe/`, written ONLY by
-#: `_maybe_sweep_stale_session_dirs` itself. `mark_advised`'s own `mkdir` of
-#: a NEW session directory also bumps the `advisory-dedupe/` root's own
-#: mtime, which used to BE the throttle clock -- under this repo's
-#: documented 50-70-concurrent-session load norm, new sessions arrive
-#: continuously, so that shared clock was reset by the very activity it was
-#: meant to throttle and the sweep effectively never ran (corroborated: 30
-#: unreaped session directories on disk). A sentinel file nothing else ever
-#: touches decouples "when did the sweep last run" from "when was a sibling
-#: entry last created".
 _LAST_SWEEP_SENTINEL = ".last-sweep"
 
 
@@ -467,12 +396,6 @@ def _maybe_sweep_stale_session_dirs(gitdir: Path, current_session_id: str) -> in
 
 
 def _rotate_known_logs(gitdir: Path) -> None:
-    """Best-effort rotation of the four known unbounded log sinks under
-    `<gitdir>/coordinator-sessions/logs/` -- see
-    `coordinator_core.telemetry.log_rotation` module docstring. Swallows
-    every exception; a rotation defect must never surface through the
-    advisory-dedupe path it piggybacks on.
-    """
     try:
         from coordinator_core.telemetry.log_rotation import rotate_all_known_sinks
 

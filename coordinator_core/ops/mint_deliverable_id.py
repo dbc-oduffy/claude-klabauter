@@ -79,14 +79,6 @@ def mint(
     stub_id: Optional[str] = None,
     slug: Optional[str] = None,
 ) -> Tuple[str, str]:
-    """Mint or carry a deliverable_id. Returns (result, path_label).
-
-    path_label is one of "carry" / "mint-from-stub" / "mint-from-slug" —
-    matches the bash oracle's stderr-logged path names verbatim.
-
-    Raises ValueError if zero or more than one of the three arguments is a
-    non-empty string (mirrors the bash script's mutual-exclusivity check).
-    """
     selected = [v for v in (deliverable_id, stub_id, slug) if v]
     if len(selected) == 0:
         raise ValueError("one of deliverable_id, stub_id, or slug is required")
@@ -126,7 +118,6 @@ Exit:   0 on success, 1 on usage error.\
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: mirrors the bash script's --deliverable-id/--stub-id/--slug/--help flags."""
     deliverable_id = ""
     stub_id = ""
     slug = ""

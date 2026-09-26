@@ -105,53 +105,25 @@ from coordinator_core.ops.queue_family import load_family_records
 
 __all__ = ["ReaderResult", "collect"]
 
-#: the one cadence this reader self-gates on — the seam calls every reader
-#: unconditionally for every cadence and trusts each to self-gate (mirrors
-#: `orient_assemble.readers_health_reaper`'s day-cadence-only gating, one
-#: layer up: there the gate is a cadence VALUE test, here it is a cadence
 #: IDENTITY test, since this reader owns exactly one of backlog-grind's five
-#: mirror surfaces rather than a severity-tuned subset of a shared one).
 _CADENCE = "debt-triage"
 
-#: D-4's one retained piece of local tuning — see the module docstring.
 _SUPPRESSED_CLUSTER_SIGNAL = "directory"
 
 
 @dataclass(frozen=True)
 class ReaderResult:
-    """One reader family's contribution to the backlog-grind decision-object
-    envelope. Shape modeled on (not imported from — a separate package
-    cannot reach across without a shared module neither this chunk nor its
-    four siblings is scoped to author) `coordinator_core.orient_assemble.
-    reader_result.ReaderResult`: same two fields, same defaults, same
-    frozen-dataclass shape. `coordinator_core.test_backlog_grind_assemble`
-    (C1) pins this as a duck-typed shape — `directives`/`judgment_points`
-    attributes — rather than a concrete imported type, precisely so C2/C3
-    are free to choose (or not choose) a single shared dataclass across all
-    five readers without this file needing to change either way."""
 
     directives: list[dict[str, Any]] = field(default_factory=list)
     judgment_points: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _resolve_repo_root() -> Optional[Path]:
-    """Discover the calling repo's worktree root via `git rev-parse
-    --show-toplevel` from cwd — the same resolution `orient_assemble.
-    readers_clean_ops` already uses (`_wt_repo_root()`, imported here under
-    its private name to match that established precedent rather than
-    inventing a second resolver). Returns `None` when no git repo is
-    discoverable (fresh/non-repo cwd) — callers treat that as "nothing to
-    read", never a crash."""
     root = _wt_repo_root()
     return Path(root) if root else None
 
 
 def _open_records(records: list[dict]) -> list[dict]:
-    """Filter a `load_family_records` result down to entries whose
-    `status` is not `closed` — `closed` entries are already archived out of
-    the active triage surface by construction, but a defensive filter here
-    costs nothing and protects against a stray un-archived `status: closed`
-    entry still sitting in the live directory."""
     return [r for r in records if (r.get("frontmatter") or {}).get("status") != "closed"]
 
 
@@ -167,14 +139,6 @@ def _severity_breakdown(records: list[dict]) -> dict[str, int]:
 
 
 def _cross_reference_overlap(debt_records: list[dict], bug_records: list[dict]) -> list[dict]:
-    """Step 1b's mechanical subset: flag debt/bug entry pairs whose
-    frontmatter `surface` values match EXACTLY. This is deliberately
-    narrower than the skill's own "file path or description similarity"
-    test — description similarity is a semantic judgment the EM applies at
-    Step 1b itself, not a mechanical predicate this reader can resolve; an
-    exact-surface match is the unambiguous subset that IS a disk predicate,
-    so only that subset is surfaced here as pre-computed evidence for the
-    EM's own similarity pass, never a substitute for it."""
     overlaps: list[dict] = []
     for debt in debt_records:
         debt_surface = (debt.get("frontmatter") or {}).get("surface")
@@ -279,18 +243,6 @@ def _build_batched_pm_gate(
 
 
 def collect(cadence: str, *, run_id: Optional[str] = None) -> ReaderResult:
-    """Compute this reader family's directives/judgment_points for
-    `cadence`. Self-gates to `debt-triage` only — every other cadence
-    returns an empty `ReaderResult()`, per the seam's contract of calling
-    every reader unconditionally and trusting each to self-gate.
-
-    `run_id` names which run of the ASKING surface is asking. This reader
-    has no per-run record family to resolve it against, so it accepts the
-    parameter and ignores it: the seam threads it to all five readers
-    uniformly for every cadence (`__init__.py`'s negative-spec against a
-    per-surface branch), and self-gating on it is each reader's own job,
-    exactly as self-gating on `cadence` is.
-    """
     if cadence != _CADENCE:
         return ReaderResult()
 

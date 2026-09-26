@@ -1,20 +1,3 @@
-"""
-coordinator_core.session.tests.test_holder_goal_state
-
-Purpose: pins `holder_evidence`'s `holder_goal_state` disambiguation
-(2026-08-13, state/handoffs/2026-08-13-session-goal-field-has-no-writer.md
-AC3) — the sibling key that distinguishes "no goal declared" (a genuine
-empty `goal` on a readable meta.json) from "unreadable" (no holder_sid, no
-session dir, or the fail-soft exception path), so a null/empty `holder_goal`
-no longer reads ambiguously as either.
-
-Relocated (2026-08-19, docs/plans/2026-08-19-fleet-work-state-who-holds-
-which-baton.md, chunk C1a) alongside `holder_evidence.py`'s move from
-`coordinator_core.pickup_assemble` to `coordinator_core.session`.
-
-Run (from the repo root): python -m pytest
-coordinator_core/session/tests/test_holder_goal_state.py -q
-"""
 from __future__ import annotations
 
 import json
@@ -104,10 +87,6 @@ class TestHolderGoalState:
     def test_exception_after_goal_resolved_preserves_declared_goal(
         self, tmp_path, monkeypatch
     ):
-        """An exception in the
-        transcript/recent-paths block (which runs after holder_goal is
-        already resolved) must not discard a genuinely `declared` goal
-        down to `unreadable`."""
         repo = tmp_path / "repo"
         _init_repo(repo)
         _seed_session(repo, "sess-late-boom", "pickup: already read")
@@ -115,11 +94,6 @@ class TestHolderGoalState:
         def _boom(*args, **kwargs):
             raise RuntimeError("simulated transcript-resolution failure")
 
-        # `_resolve_transcript` is imported function-local inside
-        # `holder_evidence()` (2026-08-19 relocation, chunk C1a — see that
-        # function's docstring note on why), so the patch target is the
-        # source module it is imported FROM at call time, not a
-        # module-level name on `holder_evidence.py` itself.
         monkeypatch.setattr(
             "coordinator_core.ops.check_em_environment._resolve_transcript",
             _boom,

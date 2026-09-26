@@ -1,5 +1,3 @@
-"""Unit tests for coordinator_core.bin_lib_binding — see its module
-docstring for the two-root invariant this leaf enforces."""
 
 from __future__ import annotations
 
@@ -14,9 +12,6 @@ from coordinator_core import bin_lib_binding
 
 @pytest.fixture(autouse=True)
 def _isolate_sys_path_and_modules():
-    """The engine bin is already bound by the root conftest by the time
-    tests run, so remove it here and restore both `sys.path` and
-    `sys.modules["lib"]` exactly, in `finally`."""
     saved_path = list(sys.path)
     saved_lib = sys.modules.get("lib")
     engine_bin = bin_lib_binding._ENGINE_BIN_DIR
@@ -55,11 +50,6 @@ def test_a_correctly_bound_lib_is_left_alone():
 def test_a_foreign_namespace_lib_is_evicted_and_a_following_import_binds_ours(tmp_path):
     foreign_lib_dir = tmp_path / "lib"
     foreign_lib_dir.mkdir()
-    # A namespace package -- no __init__.py -- reproduces the pywin32 shape
-    # this leaf's docstring names, without depending on pywin32. Built
-    # directly (a bare `find_spec("lib")` would merge in any OTHER "lib"
-    # namespace portion already reachable on the ambient sys.path) so this
-    # module's __path__ names only the tmp dir.
     from types import ModuleType as _ModuleType
 
     foreign_module = _ModuleType("lib")
@@ -100,7 +90,6 @@ def test_a_foreign_bin_dir_is_never_durably_bound(tmp_path):
     assert sys.modules.get("lib") is modules_lib_before
     assert str(other_bin) not in sys.path
 
-    # A following bind of the engine bin is still a no-op.
     assert bin_lib_binding.ensure_bin_lib_bound(engine_bin) is True
     assert sys.path == path_before
 

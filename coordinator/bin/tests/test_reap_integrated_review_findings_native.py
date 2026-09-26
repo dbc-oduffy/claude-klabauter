@@ -23,25 +23,15 @@ from typing import Any, Dict
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
-# ---------------------------------------------------------------------------
-# Module import — filename uses hyphens AND a .sh polyglot-trampoline
-# extension, so importlib.util file-path loading is required (mirrors
-# test_check_install_divergence.py's pattern for hyphenated bin/ scripts).
-# ---------------------------------------------------------------------------
 _BIN_DIR = Path(__file__).parent.parent
 
 
 def _load_reap_module():
-    # Explicit SourceFileLoader: spec_from_file_location can't infer a loader
-    # for a .sh polyglot-trampoline path, leaving spec.loader None (mirrors
-    # test_cross_repo_memo.py's pattern for the extensionless dispatcher).
     from importlib.machinery import SourceFileLoader
 
     loader = SourceFileLoader(
@@ -58,8 +48,6 @@ _mod = _load_reap_module()
 
 @pytest.fixture()
 def git_repo(tmp_path, monkeypatch):
-    """A hermetic git-init'd repo, chdir'd into — `_reap_native` resolves the
-    repo root via `git rev-parse --show-toplevel` against the process cwd."""
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
@@ -124,12 +112,6 @@ def test_reap_native_transport_runtime_error_squashed_to_exit_0(git_repo, monkey
     assert "WARN" in out.err
     assert "transport error" in out.err
     assert "skipping (non-blocking)" in out.err
-
-
-# ---------------------------------------------------------------------------
-# F8 — --summary: raw JSON dump suppressed, a capped sample printed instead;
-# summary_limit is forwarded to the op as a param.
-# ---------------------------------------------------------------------------
 
 
 def test_reap_native_summary_passes_limit_param_and_suppresses_raw_json(git_repo, monkeypatch, capsys):

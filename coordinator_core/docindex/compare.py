@@ -77,45 +77,23 @@ __all__ = [
 
 
 class CompareError(ValueError):
-    """Raised when the document carries no recognizable sentinel pair.
-
-    Mirrors ``render.RenderError``'s message shape — the two modules read the
-    same sentinel format, one writing it, the other reading it back.
-    """
+    pass
 
 
 @dataclass(frozen=True)
 class OnDiskNotIndexed:
-    """A row present in the on-disk region with no matching recorded entry.
-
-    Attributes:
-        identity: the row's rendered identity-field cell (entry_fields[0]).
-    """
 
     identity: str
 
 
 @dataclass(frozen=True)
 class IndexedNotOnDisk:
-    """A recorded entry with no matching row in the on-disk region.
-
-    Attributes:
-        identity: the entry's rendered identity-field cell (entry_fields[0]).
-    """
 
     identity: str
 
 
 @dataclass(frozen=True)
 class FieldChanged:
-    """One declared field whose on-disk cell disagrees with a fresh render.
-
-    Attributes:
-        identity: the owning row's rendered identity-field cell.
-        field: the declared frontmatter field name (``EntryField.field``).
-        on_disk: the cell text currently in the document.
-        indexed: the cell text a fresh render of the recorded entry produces.
-    """
 
     identity: str
     field: str
@@ -155,35 +133,14 @@ class CompareResult:
 
     @property
     def has_drift(self) -> bool:
-        """True when this is ordinary drift (never a hand-edit) and the
-        on-disk region disagrees with a fresh render in some named way."""
         return not self.hand_edit and bool(self.added or self.removed or self.changed)
 
 
 def region_digest(region_bytes: bytes) -> str:
-    """Return the sha256 hex digest of ``region_bytes``.
-
-    The digest half AC6b's zero-spawn fast-tier leg calls on its own, with no
-    spec, no entries, and no directory read — matches render.py's own
-    ``hashlib.sha256(region_text.encode("utf-8")).hexdigest()`` computation
-    exactly, so a digest computed here and one stamped there are directly
-    comparable.
-    """
     return hashlib.sha256(region_bytes).hexdigest()
 
 
 def extract_region(document_text: str) -> tuple[str, str]:
-    """Parse ``document_text``'s sentinel pair and return
-    ``(region_text, recorded_digest)``.
-
-    ``region_text`` is exactly the bytes render.py digested and digested
-    OUTSIDE its own span (the text strictly between the two sentinel lines,
-    newline-terminated) — recomputing its digest via ``region_digest`` and
-    comparing to ``recorded_digest`` is the AC12 hand-edit predicate.
-
-    Raises ``CompareError`` naming the missing/malformed sentinel, mirroring
-    ``render.RenderError``'s own message shape for the same document shape.
-    """
     open_idx = document_text.find(OPEN_SENTINEL)
     if open_idx == -1:
         raise CompareError(
@@ -214,8 +171,6 @@ _ROW_SPLIT_RE = re.compile(r"(?<!\\)\|")
 
 
 def _split_row(line: str) -> list[str]:
-    """Invert render.py's row rendering (``"| " + " | ".join(cells) + " |"``,
-    with a literal ``|`` inside a cell escaped as ``\\|``) back into cells."""
     parts = _ROW_SPLIT_RE.split(line)
     if parts and parts[0] == "":
         parts = parts[1:]
@@ -225,8 +180,6 @@ def _split_row(line: str) -> list[str]:
 
 
 def _region_rows(region_text: str) -> list[list[str]]:
-    """Split a rendered region's table body into per-row cell lists, skipping
-    the header row and its ``|---|`` separator (the first two lines)."""
     lines = [line for line in region_text.splitlines() if line.strip()]
     return [_split_row(line) for line in lines[2:]]
 
@@ -236,15 +189,6 @@ def compare(
     spec: IndexSpec,
     entries: Sequence[Mapping[str, object]],
 ) -> CompareResult:
-    """Compare ``document_text``'s on-disk region against a fresh render of
-    ``entries`` under ``spec``.
-
-    Pure: a function of (document_text, spec, entries) -> CompareResult.
-    Raises ``CompareError`` when ``document_text`` carries no recognizable
-    sentinel pair, or ``render.RenderError`` when an entry lacks a value for
-    a field its index declares (the same error a real emit would raise —
-    never silently swallowed here).
-    """
     region_text, recorded_digest = extract_region(document_text)
     actual_digest = region_digest(region_text.encode("utf-8"))
 

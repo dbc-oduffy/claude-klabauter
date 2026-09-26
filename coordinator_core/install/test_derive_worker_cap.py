@@ -1,10 +1,3 @@
-"""Tests for the per-box worker-cap derivation and the resolver seam.
-
-The load-bearing property is not "the formula is right" -- that is
-``compute_parallelism_cap``'s own test's job -- but that the number a test run
-actually obeys is an *output* of the formula, resolved against the host that
-will run it rather than read from a constant every clone shares.
-"""
 
 from __future__ import annotations
 
@@ -28,12 +21,6 @@ from coordinator_core.resolve_validation_cmd import (
 FAST = "python3 -m pytest -m 'not cadence' -n auto --maxprocesses=7 --timeout=300"
 
 
-# --- the derivation itself ---------------------------------------------------
-
-
-# --- command rewriting -------------------------------------------------------
-
-
 def test_existing_ceiling_is_replaced():
     assert "--maxprocesses=12" in apply_cap_to_command(FAST, 12)
     assert "--maxprocesses=7" not in apply_cap_to_command(FAST, 12)
@@ -50,8 +37,6 @@ def test_logical_is_an_auto_detected_request_too():
 
 
 def test_a_command_with_no_worker_request_is_left_alone():
-    """`--maxprocesses` is a one-sided min(); without an auto-detected request
-    it means nothing, and inventing one would change what the command runs."""
     cmd = "python3 -m pytest -m 'not pending_fix' --timeout=300"
     assert apply_cap_to_command(cmd, 12) == cmd
 
@@ -62,9 +47,6 @@ def test_an_explicit_worker_count_is_not_a_request_for_the_host_core_count():
 
 
 def test_a_duplicated_ceiling_flag_cannot_defeat_the_cap():
-    """argparse is last-wins, so rewriting only the first `--maxprocesses`
-    would leave the command running at the second one and the ceiling
-    silently defeated -- the one failure this module exists to prevent."""
     out = apply_cap_to_command("pytest -n auto --maxprocesses=7 --maxprocesses=9", 2)
     assert out == "pytest -n auto --maxprocesses=2 --maxprocesses=2"
 
@@ -75,8 +57,6 @@ def test_rewriting_is_idempotent():
 
 
 def test_a_worker_request_inside_a_quoted_marker_expression_is_not_a_real_request():
-    """A literal `-n auto` inside a quoted `-k`/`-m`
-    expression is not a worker request and must not be misdetected or rewritten."""
     cmd = 'pytest -k "not -n auto" -m "not cadence"'
     assert apply_cap_to_command(cmd, 12) == cmd
 
@@ -101,12 +81,7 @@ def test_an_unterminated_quote_fails_open_not_closed():
     assert out == 'pytest -n auto -k "unterminated --maxprocesses=12'
 
 
-# --- the box-resolved seam ---------------------------------------------------
-
-
 def test_changed_hardware_resolves_to_a_different_number(monkeypatch):
-    """AC: re-deriving on a box whose hardware changed yields a different cap,
-    with nobody editing a file."""
     for cores, ram, expected in ((24, 96.0, 12), (4, 15.0, 2), (12, 24.0, 6)):
         monkeypatch.setattr(dwc, "default_physical_cores", lambda c=cores: c)
         monkeypatch.setattr(dwc, "default_usable_ram_gb", lambda r=ram: r)
@@ -115,11 +90,7 @@ def test_changed_hardware_resolves_to_a_different_number(monkeypatch):
         assert f"--maxprocesses={expected}" in resolved
 
 
-# --- declared fail direction -------------------------------------------------
-
-
 def _no_ram_figure():
-    """What `default_usable_ram_gb` does on a host without psutil."""
     raise ImportError("psutil is required for the usable-RAM figure")
 
 
@@ -143,9 +114,6 @@ def test_an_unreadable_host_keeps_the_committed_ceiling():
         assert cap_command_for_this_box(FAST) == (FAST, None)
 
 
-# --- the resolver consumes it ------------------------------------------------
-
-
 def _repo_with(tmp_path, fast: str):
     (tmp_path / "coordinator.local.md").write_text(
         f'---\nproject_type: general\nfast_test_cmd: "{fast}"\n---\n',
@@ -165,8 +133,6 @@ def test_the_resolver_hands_back_this_box_s_cap(tmp_path, monkeypatch):
 
 
 def test_the_tracked_config_is_not_rewritten(tmp_path, monkeypatch):
-    """The committed value is one constant shared by every clone; the ceiling
-    resolves per box precisely so this file never has to carry a box's answer."""
     monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
     root = _repo_with(tmp_path, FAST)
     before = (root / "coordinator.local.md").read_bytes()
@@ -183,7 +149,6 @@ def test_the_env_var_escape_hatch_is_capped_too(tmp_path, monkeypatch):
 
 
 def test_a_configured_command_without_a_worker_request_is_untouched(tmp_path, monkeypatch):
-    """Parity: the resolver returns non-xdist commands exactly as before."""
     monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
     cmd = "python3 -m pytest --timeout=300"
     resolved = cs_resolve_fast_test_cmd(str(_repo_with(tmp_path, cmd)))
@@ -200,8 +165,6 @@ def _repo_with_full(tmp_path, full: str):
 
 
 def test_full_tier_env_var_step_applies_the_cap(monkeypatch):
-    """`cs_resolve_full_test_cmd`'s own env-var
-    step must apply the cap directly, not only via its Step-3 fast fallback."""
     monkeypatch.setenv("COORDINATOR_FULL_TEST_CMD", FAST)
     monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
     monkeypatch.setattr(dwc, "default_physical_cores", lambda: 12)
@@ -229,9 +192,6 @@ def test_an_unreadable_host_still_resolves_a_command(tmp_path, monkeypatch):
         resolved = cs_resolve_fast_test_cmd(str(root))
     assert resolved.exit_code == 0
     assert resolved.cmd == FAST
-
-
-# --- the runnable surface ----------------------------------------------------
 
 
 def test_main_reports_the_derived_cap(capsys):

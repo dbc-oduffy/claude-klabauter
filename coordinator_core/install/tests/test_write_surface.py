@@ -1,13 +1,3 @@
-"""
-coordinator_core.install.tests.test_write_surface
-
-Behavioural tests for the write-surface declaration protocol
-(coordinator_core.install.write_surface). Covers the four design
-requirements from the spec as behaviour, not shape assertions.
-
-Spec backlink: pln-writer-declared-write-surface-49d3bd,
-chunk C1
-"""
 
 from __future__ import annotations
 
@@ -74,8 +64,6 @@ def test_shaped_clause_round_trips_without_a_literal_key_list() -> None:
     assert isinstance(clause, ShapedClause)
     assert clause.discovered_by == "discover_working_repos"
     assert clause.entry_template.key == "repos.<derived-key>"
-    # A shaped clause never carries an entries list — this is the round
-    # trip proof that it isn't secretly the static form in disguise.
     assert not hasattr(clause, "entries")
 
 

@@ -126,7 +126,7 @@ a fresh `item_closure_fidelity_set` event with a different value rather than
 a retract-then-add pair — see the emitter docstring below."""
 
 _ITEM_ID_SLUG_MAX = 32
-_ITEM_ID_NONCE_HEX_LEN = 6  # secrets.token_hex(3) == 6 hex chars
+_ITEM_ID_NONCE_HEX_LEN = 6
 _ITEM_ID_DIGEST_LEN = 12
 
 
@@ -223,30 +223,14 @@ def mint_item_id(
             "YYYY-MM-DD date — cannot mint an item id from it"
         )
     date_part = created_at[:10].replace("-", "")
-    # Re-strip after the 32-char re-truncation (mirrors machine_slug's own
-    # collapse-then-strip pattern): _slug_from_title already stripped its
-    # OWN leading/trailing '-', but this module's second, tighter
     # truncation to _ITEM_ID_SLUG_MAX can re-expose a '-' at the new
-    # boundary (Review: code-reviewer c2a5a195 Finding 1 — a title whose
-    # slug places a '-' at/near index 32 minted a doubled/trailing hyphen
-    # that the charset check never caught, since '-' is itself allowed).
     slug = _slug_from_title(title)[:_ITEM_ID_SLUG_MAX].strip("-")
     if not slug:
-        # An all-punctuation title slugs to empty; a bare '<date>--<nonce>'
-        # id is a doubled-hyphen grammar violation just the same as the
-        # truncation case above. Raise rather than silently substitute a
-        # placeholder segment, so a caller notices the title carried no
-        # id-worthy content instead of getting a surprising slug later.
         raise TrackerEntityError(
             f"title {title!r} slugs to an empty string — cannot mint an "
             "item id with no slug segment"
         )
     if nonce is not None:
-        # An explicit nonce was
-        # accepted with no length/hex validation, silently breaking the
-        # documented nonce6 grammar segment for a malformed caller-supplied
-        # value; only the whole-id charset check ran, which tolerates any
-        # [a-z0-9-] string here.
         if not re.match(rf"^[0-9a-f]{{{_ITEM_ID_NONCE_HEX_LEN}}}$", nonce):
             raise TrackerEntityError(
                 f"explicit nonce {nonce!r} must be exactly "
@@ -271,14 +255,6 @@ def mint_item_id(
 
 
 def item_created(item_id: str, *, title: str, body: str, created_at: str) -> dict:
-    """Construct the structurally status-free ``item`` payload (AC1).
-
-    The returned mapping carries exactly ``id`` / ``title`` / ``body`` /
-    ``created_at`` and nothing else — no ``status`` key can appear in the
-    output because this constructor is the sole place an ``item`` payload's
-    key set is decided, and it never accepts nor forwards one. Cockpit
-    §4.1: "NO status column here. Status is projected from event logs."
-    """
     return {
         "kind": "item_created",
         "id": item_id,
@@ -408,8 +384,6 @@ def item_person_retracted(item_id: str, person_id: str, role: str) -> dict:
     }
 
 
-# --- sat-05: person/alias/merge payload constructors (DEC-40/DEC-42/DEC-44) ---
-
 ALIAS_NAMESPACES: frozenset[str] = frozenset(
     {"transcript_name", "email", "git_author", "display", "github", "github_id"}
 )
@@ -436,17 +410,6 @@ def reject_invalid_namespace(namespace: str, *, action: str) -> None:
 
 
 def normalize_alias(namespace: str, raw_value: str) -> str:
-    """Normalize an alias's raw value per DEC-44, keyed on *namespace*.
-
-    ``email``, ``git_author``, and ``github`` are stripped and casefolded
-    (identity is case-insensitive for those namespaces — GitHub handles
-    are case-insensitive but case-preserving, so presentation case lives
-    in the ``display`` alias, not here). ``display`` and
-    ``transcript_name`` are stripped only — case is significant for a
-    human-facing display form. ``github_id`` is stripped only because it
-    is a numeric id, for which casefolding is a no-op that would only
-    imply a case-sensitivity question the value cannot have.
-    """
     stripped = raw_value.strip()
     if namespace in ("email", "git_author", "github"):
         return stripped.casefold()
@@ -454,18 +417,10 @@ def normalize_alias(namespace: str, raw_value: str) -> str:
 
 
 def mint_person_id() -> str:
-    """Mint a permanent-for-life ``person.id`` as a UUID4 string.
-
-    Deliberately does NOT reuse ``mint_item_id``'s slug+nonce+digest
-    grammar — that grammar encodes a ``title`` and a ``created_at`` this
-    entity does not have. DEC-42's immutability is a property of never
-    re-minting a person id once assigned, not of the id's format.
-    """
     return str(uuid.uuid4())
 
 
 def person_created(person_id: str, *, display_name: str) -> dict:
-    """Construct a ``person_created`` event payload."""
     return {
         "kind": "person_created",
         "person_id": person_id,
@@ -515,20 +470,12 @@ def person_alias_retracted(person_id: str, namespace: str, raw_value: str) -> di
 
 
 def person_merged(from_id: str, into_id: str, actor: str) -> dict:
-    """Construct a ``person_merged`` event payload.
-
-    ``from_id`` is the losing (superseded) person id; ``into_id`` is the
-    surviving id; ``actor`` records who/what performed the merge.
-    """
     return {
         "kind": "person_merged",
         "from_id": from_id,
         "into_id": into_id,
         "actor": actor,
     }
-
-
-# --- C2: the emission layer — payload -> stored event -> append_event ---
 
 
 def _stamp_applied_at() -> str:
@@ -549,27 +496,6 @@ def _stamp_applied_at() -> str:
 
 
 def _mint_event_id(kind: str, item_id_or_pair: object, payload: dict, applied_at: str) -> str:
-    """Mint the entity EVENT id per DEC-20 — distinct from ``item.id``.
-
-    Format: ``evt-<machine_slug()>-<digest12>``, where ``digest12`` is a
-    SHA-256 hexdigest prefix (12 hex chars) over the canonical JSON of
-    ``(kind, item_id_or_pair, payload, applied_at)``.
-
-    ``applied_at`` (the DEC-19 microsecond stamp) is folded into the digest
-    input as the per-event nonce: a bare digest over ``(kind, item,
-    project)`` alone would re-derive the SAME id on the third call of an
-    ``add -> retract -> re-add`` sequence (the digest input depends only on
-    payload), and ``append_event``'s own-shard duplicate pass would then
-    raise ``TrackerStoreDuplicateIdError``, making AC14's toggle case
-    unimplementable. Folding in ``applied_at`` lands three distinct
-    timestamps and therefore three distinct ids (AC14).
-
-    This deliberately does NOT reuse sat-01b's ``<machine>-fold-<digest>``
-    marker-id shape (`tracker_store.fold_observed_set`) — that shape
-    intentionally drops the nonce because machine-qualification alone
-    supplies uniqueness for its idempotent-re-fold case, which is exactly
-    the property this grammar must NOT have.
-    """
     canonical = json.dumps(
         (kind, item_id_or_pair, payload, applied_at), sort_keys=True
     )
@@ -580,35 +506,12 @@ def _mint_event_id(kind: str, item_id_or_pair: object, payload: dict, applied_at
 
 
 def _emit(payload: dict, *, item_id_or_pair: object, repo_root: Path) -> dict:
-    """Turn a C1 payload into a stored event with exactly ONE
-    ``tracker_store.append_event`` call (DEC-15: one membership change, one
-    event, one lock acquisition — never nested).
-
-    Stamps ``applied_at`` via the single shared helper (DEC-19), mints the
-    event's own ``id`` via ``_mint_event_id`` (DEC-20), and sets
-    ``observed_at`` to the same stamp — emission IS the observation for
-    every entity event this module mints; there is no independently
-    observed upstream fact to carry a different value.
-
-    ``item_created``'s payload uses the key ``id`` for the *item's*
-    permanent-for-life identity (AC1, DEC-16) — a name that collides with
-    the field ``append_event`` requires for the EVENT's own DR-241 id
-    (DEC-20). This helper renames that key to ``item_id`` in the STORED
-    event only; the pure ``item_created`` constructor's return value
-    (tested directly by AC1) is untouched. Every other C1 payload already
-    names its own-identity fields distinctly (``project_id``, ``item_id``),
-    so no rename is needed for them.
-    """
     kind = payload["kind"]
     applied_at = _stamp_applied_at()
     event_id = _mint_event_id(kind, item_id_or_pair, payload, applied_at)
 
     event = dict(payload)
     if kind == "item_created" and "id" in event:
-        # Gate the rename on the
-        # payload's kind, not on key presence, so a future payload
-        # constructor with an unrelated 'id'-named field is never silently
-        # (and incorrectly) renamed.
         event["item_id"] = event.pop("id")
     event["id"] = event_id
     event["applied_at"] = applied_at
@@ -648,7 +551,6 @@ def _require_local_item(item_id: str, *, repo_root: Path) -> None:
 def emit_item_created(
     item_id: str, *, title: str, body: str, created_at: str, repo_root: Path
 ) -> dict:
-    """Build an ``item_created`` payload (C1) and append it as one event."""
     payload = item_created(item_id, title=title, body=body, created_at=created_at)
     return _emit(payload, item_id_or_pair=item_id, repo_root=repo_root)
 
@@ -664,14 +566,6 @@ def emit_project_created(project_id: str, *, name: str, repo_root: Path) -> dict
 
 
 def emit_item_project_added(item_id: str, project_id: str, *, repo_root: Path) -> dict:
-    """Build an ``item_project_added`` payload (C1) and append it as one
-    event.
-
-    Refuses (raises ``TrackerEntityError``) before emitting if *item_id*
-    is not this repo's own (DEC-24, AC17) — checked via
-    ``_require_local_item`` prior to the single ``append_event`` call, so a
-    foreign-repo edge never reaches the store at all.
-    """
     _require_local_item(item_id, repo_root=repo_root)
     payload = item_project_added(item_id, project_id)
     return _emit(
@@ -680,11 +574,6 @@ def emit_item_project_added(item_id: str, project_id: str, *, repo_root: Path) -
 
 
 def emit_item_project_retracted(item_id: str, project_id: str, *, repo_root: Path) -> dict:
-    """Build an ``item_project_retracted`` payload (C1) and append it as
-    one event.
-
-    Same DEC-24/AC17 foreign-repo refusal as ``emit_item_project_added``.
-    """
     _require_local_item(item_id, repo_root=repo_root)
     payload = item_project_retracted(item_id, project_id)
     return _emit(
@@ -711,18 +600,6 @@ def emit_item_closure_fidelity_set(
     """
     payload = item_closure_fidelity_set(item_id, closure_fidelity)
     return _emit(payload, item_id_or_pair=item_id, repo_root=repo_root)
-
-
-# --- C4: item_person emission — three-part (item_id, person_id, role) key ---
-#
-# AC9 coverage for this surface (two distinct roles admitted simultaneously,
-# exact-duplicate-triple rejection, retract-then-readd not a duplicate,
-# different persons/same role not duplicates, invalid role rejected by both
-# add and retract, null person_id tolerated) lives in
-# coordinator_core/tests/test_tracker_projection.py, not in this module's
-# test file — see that module's six test_ac9_* functions. (Review:
-# code-reviewer c2a5a195 Finding 2 — flagged as untested from this slice's
-# diff alone; the coverage exists, just in the sibling test module.)
 
 
 def _item_person_edge_present(
@@ -797,9 +674,6 @@ def emit_item_person_added(
 def emit_item_person_retracted(
     item_id: str, person_id: str | None, role: str, *, repo_root: Path
 ) -> dict:
-    """Build an ``item_person_retracted`` payload (C1) and append it as one
-    event over the same ``(item_id, person_id, role)`` natural key
-    (DEC-18)."""
     payload = item_person_retracted(item_id, person_id, role)
     return _emit(
         payload,
@@ -808,30 +682,12 @@ def emit_item_person_retracted(
     )
 
 
-# --- C2: person emission — emitters, alias-collision refusal, merge
-# idempotency and cycle guard (DEC-40/DEC-42/DEC-43/DEC-44) ---
-#
-# All three write-time guards below scan `tracker_store.read_events`
-# directly, never `tracker_projection`'s folds — `tracker_projection`
 # already imports `RESERVED_PROJECT_ID` from this module, so the reverse
-# edge is a circular import, not a style preference. This mirrors
-# `_require_local_item`/`_item_person_edge_present`'s existing precedent in
-# this same module. The C3 fold (`fold_person_registry`/`resolve_person`)
-# does not exist yet and, when it lands, will live in `tracker_projection` —
-# it is never imported from here.
 
 
 def _alias_owner(
     namespace: str, normalized_value: str, *, repo_root: Path
 ) -> str | None:
-    """Fold this repo's own `person_alias_added`/`person_alias_retracted`
-    events restricted to ONE `(namespace, normalized_value)` pair, in
-    `read_events`' own ratified order, and return the `person_id` currently
-    holding that alias, or ``None`` if it is unclaimed.
-
-    Direct `read_events` scan only — see the module-section note above on
-    why this never reaches into `tracker_projection`.
-    """
     owner: str | None = None
     for event in tracker_store.read_events(repo_root=repo_root):
         if (
@@ -840,11 +696,6 @@ def _alias_owner(
         ):
             continue
         if event.get("kind") == "person_alias_added":
-            # A malformed add
-            # event missing person_id would silently become "unclaimed"
-            # (None), indistinguishable from a real absence, rather than
-            # raising as this event passes through the same _emit path as
-            # person_merged (P1) with the same string-id guarantee.
             person_id = event.get("person_id")
             if not isinstance(person_id, str):
                 raise TrackerEntityError(
@@ -858,26 +709,12 @@ def _alias_owner(
 
 
 def _person_merge_map(*, repo_root: Path) -> dict[str, str]:
-    """Fold this repo's own `person_merged` events into a flat
-    ``from_id -> into_id`` mapping, one hop per entry.
-
-    Multi-hop chains (``a -> b -> c``) are resolved by the caller walking
-    this map, not by this function — kept as a single flat scan so both
-    ``emit_person_merged`` guards (idempotency and cycle) share one read of
-    the event stream's shape.
-    """
     mapping: dict[str, str] = {}
     for event in tracker_store.read_events(repo_root=repo_root):
         if event.get("kind") != "person_merged":
             continue
         from_id = event.get("from_id")
         into_id = event.get("into_id")
-        # A missing/non-string
-        # from_id or into_id was silently dropped rather than raised, which
-        # would let the AC5 idempotency guard and AC7 cycle guard both miss
-        # an existing tombstone/edge for a malformed event already on disk.
-        # This module's convention (_require_local_item) is to raise, never
-        # silently skip, malformed input.
         if not (isinstance(from_id, str) and isinstance(into_id, str)):
             raise TrackerEntityError(
                 f"malformed person_merged event {event.get('id')!r}: "
@@ -889,13 +726,6 @@ def _person_merge_map(*, repo_root: Path) -> dict[str, str]:
 
 
 def _resolves_to(start_id: str, target_id: str, merge_map: dict[str, str]) -> bool:
-    """Walk ``merge_map`` from *start_id* and return whether the chain ever
-    reaches *target_id*.
-
-    Cycle-safe by construction: each hop consumes one map entry via a
-    ``visited`` set, so a malformed cyclic map (which this guard exists to
-    prevent from ever being written) cannot loop this walk forever.
-    """
     current = start_id
     visited: set[str] = set()
     while current in merge_map and current not in visited:
@@ -907,7 +737,6 @@ def _resolves_to(start_id: str, target_id: str, merge_map: dict[str, str]) -> bo
 
 
 def emit_person_created(person_id: str, *, display_name: str, repo_root: Path) -> dict:
-    """Build a ``person_created`` payload (C1) and append it as one event."""
     payload = person_created(person_id, display_name=display_name)
     return _emit(payload, item_id_or_pair=person_id, repo_root=repo_root)
 
@@ -963,34 +792,6 @@ def emit_person_alias_retracted(
 
 
 def emit_person_merged(from_id: str, into_id: str, actor: str, *, repo_root: Path) -> dict:
-    """Build a ``person_merged`` payload (C1) and append it as one event.
-
-    Two write-time guards run before the single ``append_event`` call, so a
-    refused merge never reaches the store:
-
-    - **Idempotency (AC5, DEC-43).** Refuses if *from_id* is already
-      retired by an existing ``person_merged`` tombstone naming it as the
-      losing id. This mirrors ``emit_item_person_added``'s exact-duplicate
-      refusal pattern rather than inventing a new one.
-      ``append_event``'s own duplicate pass cannot catch a replay of this
-      case: ``_mint_event_id`` folds ``applied_at`` (the DEC-19
-      microsecond nonce) into the event id digest, so a second
-      ``person_merged(from_id, into_id, actor)`` call — even with byte-
-      identical arguments — mints a distinct event id and would sail
-      straight past the store's own uniqueness check.
-
-    - **Cycle guard (AC7, DEC-42).** Refuses if *into_id* already resolves,
-      through the existing merge chain, back to *from_id* — i.e. merging
-      ``from_id`` into ``into_id`` would close a cycle. This guard is an
-      ergonomics check only, NOT the correctness guarantee against
-      cross-shard merge cycles — the real guarantee is DEC-42's fold-time
-      cycle-edge drop, landing in C3 (``tracker_projection``). Each
-      machine's write-side guard here passes against its own shard only;
-      git merges per-machine shards by design, so a cross-shard cycle
-      (machine A merges ``a->b`` while machine B concurrently merges
-      ``b->a``, then the shards are git-merged) remains reachable in
-      ordinary two-machine operation and this guard cannot see it.
-    """
     merge_map = _person_merge_map(repo_root=repo_root)
     if from_id in merge_map:
         raise TrackerEntityError(

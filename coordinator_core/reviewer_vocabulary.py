@@ -90,9 +90,7 @@ prefix before testing membership (``review_trail_write.normalize_reviewer``,
 _bare_type`` all do this for the identical purpose).
 """
 
-#: The closed set of agent types whose dispatch counts as a delegate review.
 #: Re-exported by ``review_trail_write`` as ``_DELEGATE_REVIEWERS`` for every
-#: existing by-name consumer; new consumers should import it from here.
 DELEGATE_REVIEWERS = frozenset(
     {
         "code-reviewer",
@@ -106,10 +104,6 @@ DELEGATE_REVIEWERS = frozenset(
     }
 )
 
-#: The set of agent types whose dispatch counts toward the close-time review
 #: receipt floor. Derived from ``DELEGATE_REVIEWERS``, never re-spelled — see
-#: the module docstring's "No second, diverging reviewer set" passage for why
-#: a derived superset does not reintroduce the drift hazard that passage
-#: forbids. Adding a name here does NOT arm commit credit; adding a name to
 #: ``DELEGATE_REVIEWERS`` does.
 CLOSE_RECEIPT_REVIEWERS = DELEGATE_REVIEWERS | {"overengineering-reviewer"}

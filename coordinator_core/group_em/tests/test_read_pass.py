@@ -30,15 +30,7 @@ def _agent(session_id="peer-1", status="idle", cwd=REPO_ROOT):
     return {"sessionId": session_id, "status": status, "cwd": cwd}
 
 
-# ---------------------------------------------------------------------------
-# reader / fallback split
-# ---------------------------------------------------------------------------
-
-
 def test_reader_leg_used_when_record_present():
-    # `stamped_at` is fresh here -- a real record always carries it (see
-    # `write_receiver_state`); this fixture is updated to that real shape by
-    # defect B's fail-closed idle-side staleness guard, not weakened by it.
     now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
     with mock.patch.object(
         read_pass,
@@ -78,17 +70,7 @@ def test_reader_paused_contradicted_by_live_busy_status():
     assert verdict["candidate"] is False
 
 
-# ---------------------------------------------------------------------------
-# defect B -- idle-side stale-snapshot guard (mid-work peer must never be a
-# candidate on either leg)
-# ---------------------------------------------------------------------------
-
-
 def test_stale_paused_snapshot_with_idle_status_not_a_candidate():
-    # Real shape from state/audits/2026-08-30-group-em-cooldown-vs-candidacy-
-    # window.md: peer 30342983 was offered mid-turn on a reader snapshot
-    # stamped ~210s earlier (above the p50=108s pin) while the harness read
-    # `idle`. This must never be a candidate.
     now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
     stamped_at = (now - timedelta(seconds=210)).isoformat().replace("+00:00", "Z")
     with mock.patch.object(
@@ -116,14 +98,6 @@ def test_fresh_paused_snapshot_with_idle_status_is_still_a_candidate():
 
 
 def test_stale_snapshot_but_transcript_still_reinstates_the_candidate():
-    """A parked peer is not disqualified for having sat still.
-
-    `receiver-state.json` is written at turn end, so a genuinely parked
-    session's snapshot only ages. Judging on age alone permanently hid every
-    peer idle longer than the p50 pin -- exactly the peers a Group EM exists
-    to surface. Evidence of stillness (transcript untouched since the
-    snapshot) reinstates candidacy however old the snapshot is.
-    """
     now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
     stamped_at = (now - timedelta(seconds=3600)).isoformat().replace("+00:00", "Z")
     with mock.patch.object(
@@ -137,12 +111,6 @@ def test_stale_snapshot_but_transcript_still_reinstates_the_candidate():
 
 
 def test_stale_snapshot_with_moved_transcript_stays_out_defect_b_preserved():
-    """The mid-turn peer defect B exists for is still never a candidate.
-
-    Audit peer 30342983 was mid-turn on a ~210s-old snapshot while the
-    harness read `idle`. A transcript newer than the snapshot is that peer:
-    it has acted since, so the snapshot is genuinely misleading.
-    """
     now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
     stamped_at = (now - timedelta(seconds=210)).isoformat().replace("+00:00", "Z")
     with mock.patch.object(
@@ -156,7 +124,6 @@ def test_stale_snapshot_with_moved_transcript_stays_out_defect_b_preserved():
 
 
 def test_unreadable_transcript_leaves_the_age_verdict_standing():
-    """No evidence of stillness is never read AS stillness."""
     now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
     stamped_at = (now - timedelta(seconds=210)).isoformat().replace("+00:00", "Z")
     with mock.patch.object(
@@ -192,11 +159,7 @@ def test_missing_stamped_at_fails_closed_not_a_candidate():
     assert verdict["candidate"] is False
 
 
-# ---------------------------------------------------------------------------
 # defect 4 -- a frozen PRODUCING reader verdict must not silently hide a
-# stopped peer from the roster (state/dispatch-briefs/2026-08-31-the-group-
-# em-tick-carries-standing-obligations/C7.md)
-# ---------------------------------------------------------------------------
 
 
 def test_stale_producing_snapshot_resolves_unknown_and_unclassifiable():
@@ -248,7 +211,6 @@ def test_stale_producing_snapshot_reaches_the_roster_payload_though_not_a_candid
 
 
 def test_producing_snapshot_not_moved_since_stays_producing_not_unclassifiable():
-    """No evidence the frozen verdict has gone stale -- must not be flagged."""
     now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
     stamped_at = (now - timedelta(seconds=3600)).isoformat().replace("+00:00", "Z")
     with mock.patch.object(
@@ -267,8 +229,6 @@ def test_producing_snapshot_not_moved_since_stays_producing_not_unclassifiable()
 
 
 def test_producing_snapshot_indeterminate_movement_stays_producing_not_unclassifiable():
-    """`None` (unreadable transcript / unparseable stamp) leaves the frozen
-    verdict standing -- never manufactured into a stale/unclassifiable claim."""
     now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
     with mock.patch.object(
         read_pass,
@@ -282,16 +242,6 @@ def test_producing_snapshot_indeterminate_movement_stays_producing_not_unclassif
         verdict = read_pass.classify_peer(REPO_ROOT, _agent(status="idle"), now=now)
     assert verdict["state"] == read_pass.STATE_PRODUCING
     assert verdict["unclassifiable"] is False
-
-
-# ---------------------------------------------------------------------------
-# classifier collapse (overengineering review finding 1): the fallback leg's
-# idle arm now calls receiver_state.reduce_transcript_tail + receiver_state.classify
-# directly, rather than carrying a second bounded reader/classifier. These
-# tests exercise `classify_fallback_status` against real `_ReducedLine`s
-# produced by `receiver_state.reduce_transcript_tail` over a real tmp
-# transcript file -- no private receiver_state helper is touched directly.
-# ---------------------------------------------------------------------------
 
 
 def _write_transcript(tmp_path, records):
@@ -322,12 +272,6 @@ def test_classify_fallback_status_unknown_on_empty(tmp_path):
 
 
 def test_classify_fallback_status_atis_latch_burst_does_not_mask_real_line(tmp_path):
-    # The atis-latch gap the local classifier used to carry: a burst of
-    # control lines pushed the real last-substantive line out of the narrower
-    # 40-line window. receiver_state's wider 64-line/256KB window plus its
-    # allow-list walk-back (skip past unrecognised types rather than stopping
-    # on them) recovers the real line -- verifying the collapse actually
-    # closes the gap rather than assuming it.
     records = [{"type": "system", "subtype": "turn_duration"}]
     records += [{"type": "atis-latch", "atis": ""} for _ in range(35)]
     reduced = _reduced_lines_for(tmp_path, records)
@@ -360,9 +304,7 @@ def test_classify_fallback_status_user_line_still_producing(tmp_path):
     assert state == read_pass.STATE_PRODUCING
 
 
-# ---------------------------------------------------------------------------
 # PRODUCING peers are never candidates, on either leg
-# ---------------------------------------------------------------------------
 
 
 def test_producing_peer_excluded_on_reader_leg():
@@ -437,11 +379,6 @@ def test_caller_excluded_from_own_roster():
     assert roster == []
 
 
-# ---------------------------------------------------------------------------
-# in-engine roster enumeration, no subprocess spawn
-# ---------------------------------------------------------------------------
-
-
 def _peer_row(session_id="peer-1", status="idle", cwd=REPO_ROOT, is_self=False):
     from coordinator_core.session.peer_roster import PeerRow
 
@@ -467,10 +404,6 @@ def test_fetch_live_agents_sources_peer_roster_not_a_subprocess():
     ) as fake_build_roster:
         agents = read_pass.fetch_live_agents(REPO_ROOT)
     # BOTH REFUSALS DEFAULT OFF, asserted rather than omitted. The two flags
-    # (added 2026-09-01 for `watch.gone`, which cannot tell an unreadable
-    # registry from an empty one) are forwarded on every call, so this pin
-    # would break silently if a future edit flipped a default and turned every
-    # existing caller's quiet `[]` into a raise.
     fake_build_roster.assert_called_once_with(
         repo_root=REPO_ROOT, raise_on_failure=False, raise_on_empty_snapshot=False
     )
@@ -480,10 +413,6 @@ def test_fetch_live_agents_sources_peer_roster_not_a_subprocess():
 
 
 def test_fetch_live_agents_empty_when_build_roster_empty():
-    # `build_roster`'s own contract degrades an internal failure to `[]`
-    # rather than raising (default `raise_on_failure=False`) -- this is the
-    # observable shape `fetch_live_agents` sees for that degrade, since it
-    # adds no extra try/except of its own on top of `build_roster`'s.
     with mock.patch.object(read_pass.peer_roster, "build_roster", return_value=[]):
         assert read_pass.fetch_live_agents(REPO_ROOT) == []
 
@@ -508,21 +437,7 @@ def test_module_imports_no_subprocess_and_defines_no_command_constant():
     assert "subprocess" not in getattr(module, "__dict__", {})
 
 
-# ---------------------------------------------------------------------------
-# the transcript clock: mtime is not an activity clock
-#
-# Measured 2026-08-31 across 228 transcripts touched in the prior day: 101 had
-# an mtime running ahead of their own newest timestamped record by more than a
-# minute, worst case 16 hours. These tests build the defect's own shape on
-# disk -- a real transcript with untimestamped bookkeeping rows appended and
-# mtime pushed forward -- so the assertion and the failure mode live in the
-# same place.
-# ---------------------------------------------------------------------------
-
-
 def _write_clock_transcript(tmp_path, session_id, cwd, records, mtime_epoch=None):
-    """Write a transcript where the harness would put it, optionally forcing
-    the mtime forward the way a bookkeeping rewrite does."""
     import os
 
     projects = tmp_path / "projects" / read_pass._PATH_SEP_RE.sub("-", cwd)
@@ -547,9 +462,6 @@ def _patch_transcript_root(monkeypatch, tmp_path):
 
 
 def test_activity_epoch_ignores_an_mtime_pushed_forward_by_bookkeeping(tmp_path, monkeypatch):
-    """The measured incident: a peer ends its turn, does nothing for twelve
-    minutes, and an untimestamped bookkeeping write moves mtime ~7 minutes
-    forward. The activity clock must still report the turn's own timestamp."""
     _patch_transcript_root(monkeypatch, tmp_path)
     last_real = datetime(2026, 8, 31, 15, 40, 48, tzinfo=timezone.utc)
     _write_clock_transcript(
@@ -574,7 +486,6 @@ def test_activity_epoch_ignores_an_mtime_pushed_forward_by_bookkeeping(tmp_path,
 def test_activity_epoch_falls_back_to_mtime_untrusted_when_nothing_is_timestamped(
     tmp_path, monkeypatch
 ):
-    """An upper bound, marked as one -- never silently promoted to evidence."""
     _patch_transcript_root(monkeypatch, tmp_path)
     _write_clock_transcript(
         tmp_path, "peer-no-stamps", REPO_ROOT, [{"type": "cost-state"}], mtime_epoch=1000.0
@@ -587,16 +498,11 @@ def test_activity_epoch_falls_back_to_mtime_untrusted_when_nothing_is_timestampe
 
 
 def test_activity_epoch_is_none_when_the_transcript_is_absent(tmp_path, monkeypatch):
-    """`None` must never be read as "has not moved" or as an age of zero."""
     _patch_transcript_root(monkeypatch, tmp_path)
     assert read_pass.transcript_activity_epoch("peer-missing", REPO_ROOT) == (None, False)
 
 
 def test_moved_since_is_not_answered_from_an_untrusted_clock(tmp_path, monkeypatch):
-    """The stale-snapshot guard reinstates a candidate on evidence of
-    stillness. Answering "moved" from a bookkeeping rewrite suppressed exactly
-    the parked peer it was reinstating, so an untrusted clock answers `None`
-    (cannot establish) and leaves the age verdict standing."""
     _patch_transcript_root(monkeypatch, tmp_path)
     stamp = datetime(2026, 8, 31, 15, 0, 0, tzinfo=timezone.utc)
     _write_clock_transcript(
@@ -611,8 +517,6 @@ def test_moved_since_is_not_answered_from_an_untrusted_clock(tmp_path, monkeypat
 
 
 def test_moved_since_still_answers_true_on_a_real_later_record(tmp_path, monkeypatch):
-    """The guard keeps working on genuine evidence -- the correction removes
-    unearned freshness, it does not blind the check."""
     _patch_transcript_root(monkeypatch, tmp_path)
     stamp = datetime(2026, 8, 31, 15, 0, 0, tzinfo=timezone.utc)
     later = (stamp + timedelta(seconds=90)).isoformat().replace("+00:00", "Z")
@@ -626,10 +530,6 @@ def test_moved_since_still_answers_true_on_a_real_later_record(tmp_path, monkeyp
 def test_moved_since_answers_false_from_an_untrusted_clock_that_never_passed_the_stamp(
     tmp_path, monkeypatch
 ):
-    """The bias is one-directional: a bookkeeping rewrite can only push mtime
-    FORWARD, so an untrusted mtime at or before the stamp bounds the peer's
-    true last activity at or before it too. That is real evidence of stillness
-    and reinstates the candidate; only the forward direction is unsafe."""
     _patch_transcript_root(monkeypatch, tmp_path)
     stamp = datetime(2026, 8, 31, 15, 0, 0, tzinfo=timezone.utc)
     _write_clock_transcript(
@@ -644,8 +544,6 @@ def test_moved_since_answers_false_from_an_untrusted_clock_that_never_passed_the
 
 
 def test_classify_peer_threads_its_activity_epoch_onto_the_verdict(tmp_path, monkeypatch):
-    """So the watch can report idle time without re-reducing the same tail in
-    the same tick (coordinator:code-reviewer, P2 double read)."""
     _patch_transcript_root(monkeypatch, tmp_path)
     last_real = datetime(2026, 8, 31, 15, 40, 48, tzinfo=timezone.utc)
     _write_clock_transcript(
@@ -668,15 +566,6 @@ def test_classify_peer_threads_its_activity_epoch_onto_the_verdict(tmp_path, mon
 
 
 def test_the_projection_carries_the_peer_name_it_used_to_drop(monkeypatch):
-    """A projection that silently narrows its source is invisible downstream.
-
-    `PeerRow.name` is populated upstream and this mapping dropped it, so
-    `watch._holder_name` -- written to put the Group-EM's name on the heartbeat
-    for a reader that cannot reach this box's registry -- could only ever
-    return None, and `state/group-em-watch.json` read `holder_name: null` on
-    every tick including ones its own watch stamped. Established by
-    doe-claude-27, 2026-09-01.
-    """
     row = types.SimpleNamespace(
         session_id="peer-1", status="idle", cwd=REPO_ROOT, name="claude-klabauter-65"
     )
@@ -690,19 +579,10 @@ def test_the_projection_carries_the_peer_name_it_used_to_drop(monkeypatch):
 
 
 def test_build_roster_is_exported_under_the_name_the_doctrine_plane_calls():
-    """The cross-plane contract names `build_roster`; entry calls it by that
-    name and degrades a raised leg into `Roster: 0 peer(s)`. Exporting only
-    the shortlist made an AttributeError look like a quiet fleet -- reported
-    on two repos the same day, each with four live peers.
-    """
     assert callable(getattr(read_pass, "build_roster", None))
 
 
 def test_the_candidate_shortlist_is_a_subset_of_the_full_roster(monkeypatch):
-    """`build_candidate_roster` filters `build_roster` rather than
-    re-enumerating: two enumerations of one population can disagree between
-    the calls, and the digest is specified to run over the FULL population.
-    """
     agents = [
         {"sessionId": "caller", "cwd": "/repo", "name": "self", "status": "busy"},
         {"sessionId": "peer-a", "cwd": "/repo", "name": "a", "status": "idle"},
@@ -720,10 +600,6 @@ def test_the_candidate_shortlist_is_a_subset_of_the_full_roster(monkeypatch):
 
 
 class TestIsAdmitted:
-    """AC 7c: `is_admitted` is the ONE admission-predicate definition in the
-    tree (chunk C1) -- pinned against all four verdict shapes so a later
-    caller (the ops-layer `roster_excluded` complement, or a fifth admission
-    signal) cannot drift from `build_candidate_roster`'s own filter."""
 
     def test_candidate_is_admitted(self):
         verdict = {"candidate": True, "unclassifiable": False, "contradicted": False}
@@ -742,9 +618,6 @@ class TestIsAdmitted:
         assert read_pass.is_admitted(verdict) is False
 
     def test_build_candidate_roster_calls_through_is_admitted(self, monkeypatch):
-        """Regression pin for AC 7c's "exactly ONE definition" claim: if
-        `build_candidate_roster` ever stops calling `is_admitted`, a stubbed
-        `is_admitted` that always returns True/False must change its output."""
         agents = [{"sessionId": "peer-a", "cwd": "/repo", "status": "idle"}]
         monkeypatch.setattr(read_pass, "is_admitted", lambda verdict: True)
         admitted_all = read_pass.build_candidate_roster(
@@ -759,10 +632,6 @@ class TestIsAdmitted:
 
 
 class TestFallbackStatusFallThroughNamesWhatItSaw:
-    """An absent status and an unrecognized one are different facts, and the
-    reason string is all a reader gets. Reporting both as "unrecognized" sent
-    one investigation down a transcript to establish that a brand-new session
-    simply had not written receiver-state.json yet."""
 
     @pytest.mark.parametrize("status", [None, ""], ids=["none", "empty"])
     def test_absent_status_says_absent(self, status):
@@ -770,14 +639,11 @@ class TestFallbackStatusFallThroughNamesWhatItSaw:
         assert (state, reason) == (read_pass.STATE_UNKNOWN, "status-absent")
 
     def test_unrecognized_status_names_the_value_it_could_not_map(self):
-        """Without the value, the next reader re-derives it from a transcript."""
         state, reason = read_pass.classify_fallback_status("wedged", reduced_lines=[])
         assert state == read_pass.STATE_UNKNOWN
         assert reason == "unrecognized-status:wedged"
 
     def test_case_variant_of_a_known_status_is_not_silently_absent(self):
-        """`BUSY` is a missing arm, not a missing status -- the old shared
-        string made those two indistinguishable."""
         state, reason = read_pass.classify_fallback_status("BUSY", reduced_lines=[])
         assert (state, reason) == (read_pass.STATE_UNKNOWN, "unrecognized-status:BUSY")
 
@@ -789,11 +655,6 @@ class TestFallbackStatusFallThroughNamesWhatItSaw:
 
 
 class TestShellIsAnExecutingStatus:
-    """`shell` reaches the ladder only from the registry -- `claude agents
-    --json` renders it as `busy` -- so the missing arm was invisible from the
-    surface a reader would naturally sample. Measured 2026-09-02: 5 of 28 live
-    sessions were in it, two of them claude-klabauter peers, all classified
-    UNKNOWN and therefore invisible to the parked derivation."""
 
     def test_shell_classifies_as_producing_and_names_itself(self):
         assert read_pass.classify_fallback_status("shell", reduced_lines=[]) == (
@@ -802,9 +663,6 @@ class TestShellIsAnExecutingStatus:
         )
 
     def test_the_reason_still_distinguishes_which_executing_status_it_saw(self):
-        """Collapsing both onto one reason would hide which surface the row
-        came from, and the registry/CLI split is the whole reason this arm was
-        missing for as long as it was."""
         _, busy = read_pass.classify_fallback_status("busy", reduced_lines=[])
         _, shell = read_pass.classify_fallback_status("shell", reduced_lines=[])
         assert busy != shell
@@ -818,9 +676,6 @@ class TestShellIsAnExecutingStatus:
     def test_a_live_shell_contradicts_a_stored_paused_verdict_as_busy_does(
         self, tmp_path, monkeypatch
     ):
-        """The same one-word gap sat on the primary leg: a peer whose stored
-        record says PAUSED while the harness reports it executing is
-        contradicted, and `shell` is that claim exactly as `busy` is."""
         monkeypatch.setattr(
             read_pass,
             "read_receiver_state",

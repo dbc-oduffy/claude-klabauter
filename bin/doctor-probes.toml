@@ -1,79 +1,24 @@
-# bin/doctor-probes.toml
-#
-# Declarative probe manifest — SSOT for per-probe metadata consumed by the
-# static diagnostic probe engine (bin/claude-klabauter-doctor-probe.py).
-#
-# Spec backlink: pln-rebuild-claude-klabauter-doctor-as-a-pro-f6bd22 § C5
-# Doctrine: ~/.claude/plugins/coordinator-claude/coordinator/docs/wiki/doctor-probe-design.md
-#
-# REQUIRED / OPTIONAL split (PM-directed, the Staff Engineer F2):
-#   required = true  — core probes; SKIP/BROKEN counts in worst-of reduction.
-#                      An all-SKIP on required probes yields DEGRADED (never PASS).
-#   required = false — coordinator-dependent probes; when coordinator-claude is absent,
-#                      these SKIP-as-advisory (surface in data.missing_optional /
-#                      warnings), NOT DEGRADED. DEGRADED is reserved for genuine
-#                      failures when coordinator IS present.
-#
-# Field definitions (host field names adopted verbatim for cross-repo parity;
-# severity_if_fail / remediation / restart_gated are additive claude-klabauter fields
-# mirroring coordinator's bin/doctor-probes.toml):
-#   id               — Probe id; join key to bin/claude-klabauter-doctor-probe.py probe names.
-#   cluster          — Symptom group (claude-klabauter-domain enum):
-#                        registry = engine-root resolution and machine-local key health
-#                        install  = coordinator_core import, engine bootstrap, and
-#                                   command-type health (version, debris)
-#                        dispatch = command-type entrypoint smoke (spawn-per-call path)
-#   weight           — Resource cost (NOT latency):
-#                        cheap    = file reads / env checks; no subprocess, no network
-#                        standard = short-lived subprocess (python -c, CLI, process scan)
-#                        heavy    = live MCP handshake / server spawn / live HTTP
-#   interactivity    — Agent interaction model:
-#                        silent = runs silently, no user prompt
-#                        assert = asserts a condition, surfaces finding
-#                        prompt = consent-gated; requires user confirmation before fix
-#   fix              — "none" (all fixes are handled via the skill's Branch B
-#                      single-entry-point; no numbered recover-step catalog yet) or
-#                      a terse description of the deterministic fix step available.
-#   symptom_keywords — Free-text tags for triage / symptom matching.
-#   triage           — true iff this probe runs on a `--triage` run of the probe script.
-#                      INVARIANT: triage=true ==> weight in {"cheap", "standard"}
-#                      (never "heavy" — no live MCP calls in the cheap first-pass).
-#   body             — Module:callable reference.
-#                        bin/<script>:<fn> — static probe script entry point
-#                      Informational join-key only; the skill invokes via subprocess,
-#                      not by direct import.
-#   required         — (bool) true = core probe; false = coordinator-dependent optional.
-#                      See REQUIRED / OPTIONAL split above.
-#   severity_if_fail — {error, degraded} — claude-klabauter-local; drives RED/AMBER verdict.
-#                        error    = BROKEN verdict on failure; fleet-wide symptom.
-#                        degraded = DEGRADED verdict on failure; capability unavailable.
-#   remediation      — One-line operator next-step on failure.
-#                      NOT the emitted text: the probe engine reads `cluster` and the
-#                      triage/required flags off this manifest, never `remediation`/`fix`.
-#                      What an operator actually reads is the `remediation=` kwarg on the
-#                      probe's own `_ProbeResult` in bin/claude-klabauter-doctor-probe.py. These two
-#                      fields are a hand-maintained second copy, and a second copy drifts:
-#                      claude-klabauter.publish.provenance still named a route that cannot publish
-#                      this mirror for as long as it took to notice (corrected 2026-09-01,
-#                      one day after 22562a7b fixed the live string). Change the module
-#                      first; mirror it here in the same commit.
-#   restart_gated    — (optional bool, default false) true iff this probe tests a surface
-#                      that only materializes AFTER a Claude Code restart. A restart-gated
-#                      probe failing PRE-restart is expected, not a configuration error;
-#                      the same probe failing POST-restart is a real DEGRADED finding.
-#
-# Triage invariant: triage=true probe MUST be weight in {cheap, standard}.
-# Restart-gated probes may be triage=true, but a restart_gated=true probe CANNOT
-# serve as the sole functional-headline probe in the triage set.
-# The dispatch-smoke (claude-klabauter.invoke.smoke) is the functional-headline triage probe:
-# it exercises the real production path (spawn-per-call + registry resolve + dispatch)
-# and surfaces bootstrap failures invisible to pure import checks. When
-# claude-klabauter.invoke.smoke is absent or skipped (required=false), claude-klabauter.core.import
-# serves as the static-headline triage probe.
 
-# ---------------------------------------------------------------------------
-# Cluster: registry — engine-root resolution and machine-local key health
-# ---------------------------------------------------------------------------
+
+# REQUIRED / OPTIONAL split (PM-directed, the Staff Engineer F2):
+
+#                      An all-SKIP on required probes yields DEGRADED (never PASS).
+
+
+#                      warnings), NOT DEGRADED. DEGRADED is reserved for genuine
+
+
+#                      INVARIANT: triage=true ==> weight in {"cheap", "standard"}
+
+
+#                      See REQUIRED / OPTIONAL split above.
+
+
+#                        degraded = DEGRADED verdict on failure; capability unavailable.
+
+
+#                      the same probe failing POST-restart is a real DEGRADED finding.
+
 
 [[probe]]
 id = "claude-klabauter.root.resolve"
@@ -95,27 +40,15 @@ weight = "cheap"
 interactivity = "assert"
 fix = "none (on a cold box, run scripts/setup.py --claude-klabauter-live-root <path>; on a warm/registry-resolved box, gen-claude-klabauter-root-pointer.py is the install-time alternative)"
 symptom_keywords = ["claude-klabauter-live-root pointer absent", "stale pointer", "bash-fallback subprocess hang", "Windows per-invoke latency", "5s timeout", "gen-claude-klabauter-root-pointer.py", "cold box no registry", "setup.py --claude-klabauter-live-root"]
-# triage=true: file-read-only presence/content check (no subprocess, no network) is
-# cheap enough for every bare invocation, and surfaces the dominant Windows per-invoke
-# latency cause (bash-fallback engine-root resolution) as early as possible.
+
+
 triage = true
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_root_pointer"
 required = false
 severity_if_fail = "degraded"
 remediation = "On a cold box (no registry to resolve from), run scripts/setup.py --claude-klabauter-live-root <path> to populate <settings-home>/machine-local/.claude-klabauter-live-root; on a warm/registry-resolved box, gen-claude-klabauter-root-pointer.py is the install-time alternative"
 
-# claude-klabauter.root.channels_reconciled -- do the several places this box writes a
-# root down AGREE, and does each name a path that is actually here? Distinct
-# from claude-klabauter.root.pointer above, which compares ONE pointer file against the
-# ladder answer this script resolved; this probe compares the channels against
-# EACH OTHER (registry key, pointer file, publish-destination key), which is
-# the comparison neither resolver performs. Built from two same-day incidents
-# (2026-08-22): a correct repos.claude_klabauter coexisting silently with a
-# foreign-platform .claude-klabauter-root until every settings-home bin/ live
-# op failed, and two claude-klabauter-live-root ladders that disagree by construction.
-# Consumes the shared oracle coordinator_core.root_channel_reconcile, whose own
-# CLI is the runnable remediation. weight = "cheap": file reads and registry
-# TOML reads only, no subprocess.
+
 [[probe]]
 id = "claude-klabauter.root.channels_reconciled"
 cluster = "registry"
@@ -123,8 +56,8 @@ weight = "cheap"
 interactivity = "assert"
 fix = "none (correct whichever channel is wrong -- which of two paths is real is an operator decision, never a guess)"
 symptom_keywords = ["pointer disagrees with registry", "root resolution disagreement", "wrong drive letter", "path from another machine", "no engine build stamp", "engine root does not exist", "synced ~/.claude meta-repo"]
-# triage=true: cheap, and a channel split is upstream of the dispatch failures
-# an operator actually arrives with -- surfacing it late costs a whole session.
+
+
 triage = true
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_root_channels_reconciled"
 required = false
@@ -138,10 +71,8 @@ weight = "cheap"
 interactivity = "assert"
 fix = "none (run a percolate round; publish.py writes the provenance record at round end)"
 symptom_keywords = ["published engine stale", "which revision is dispatched", "publish provenance unknown", "DR-326", "stale dispatch", "commits behind published build"]
-# triage=true: a file read plus one bounded `git rev-list --count` call is cheap
-# enough for the bare-invocation triage set, and directly answers the question that
-# caused the DR-326 stale-dispatch incident (a consumer could not tell "running the
-# fix" from "running an hour-old build").
+
+
 triage = true
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_publish_provenance"
 required = false
@@ -155,10 +86,8 @@ weight = "standard"
 interactivity = "assert"
 fix = "machine-local set repos.claude_klabauter <resolved-root>"
 symptom_keywords = ["repos.claude_klabauter not registered", "machine-local key absent", "CLAUDE_KLABAUTER_ROOT unresolved", "cc_invoke dispatch fails to resolve CLAUDE_KLABAUTER_ROOT", "CLAUDE_KLABAUTER_ROOT is set but is NO LONGER HONOURED"]
-# triage=false: this probe checks the machine-local registry key, which is a
-# coordinator-soft-dep surface. On coordinator-absent installs the key is not
-# needed and the probe SKIPs-as-advisory. Running it in triage on those machines
-# would surface an advisory every time — noise without signal.
+
+
 triage = false
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_registry_key"
 required = false
@@ -172,22 +101,18 @@ weight = "cheap"
 interactivity = "silent"
 fix = "none"
 symptom_keywords = ["engine.target not yet rolled out", "repos.claude_klabauter registered without engine.target", "not-yet-rolled-out set", "AC20"]
-# triage=false: purely informational (see body) -- never a functional-headline
-# probe and no live path depends on its outcome.
+
+
 triage = false
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_engine_target_rollout"
 required = false
-# severity_if_fail is notional (staff-eng C8 review, Finding 12): this
+
 # probe's own status is always INFO, never DEGRADED -- C8's body: "It
-# reports, never blocks." Kept for schema completeness (the enum admits no
-# INFO value); matches the resident-debris probe's same convention below.
+
+
 severity_if_fail = "degraded"
 remediation = "Run python3 scripts/setup.py to write the install-class engine.target default (candidate on a box with the claude-klabauter or DoE source tree, main otherwise)"
 
-# ---------------------------------------------------------------------------
-# Cluster: install — coordinator_core import, engine bootstrap, and
-#                    command-type health (version, debris)
-# ---------------------------------------------------------------------------
 
 [[probe]]
 id = "claude-klabauter.core.import"
@@ -202,20 +127,12 @@ required = true
 severity_if_fail = "error"
 remediation = "Verify coordinator_core/ directory exists in CLAUDE_KLABAUTER_ROOT (run: python3 -c 'import coordinator_core' from CLAUDE_KLABAUTER_ROOT); re-clone if missing"
 
-# claude-klabauter.dialect_guard.armed -- "is the PowerShell dialect guard
-# (coordinator_core/bash_guards/_dialect.py) actually able to parse
-# PowerShell, under the interpreter(s) that run bash guard hooks?" That
-# module's ImportError -> SILENT routing is legal at runtime by design (a
+
 # guard declining to rule, not crashing) -- but a DISARMED state going
-# undetected forever is the defect this probe exists to end. Verified
-# 2026-08-17: ARMED under the settings-home .coordinator-venv, SILENT under
-# both Homebrew and python.org machine python3 -- hooks.json runs guard
-# hooks under bare `python3`, so checking only the probe's own interpreter
-# would miss the disarmed case entirely. Does NOT arm the guard (a later
-# chunk's job); reports state only. required=false: disarmed is the
-# CURRENT, still-legal runtime state, so this must never punish an
+
+
 # otherwise-healthy install to a required DEGRADED. weight = "standard":
-# each checked interpreter is a bounded (10s) subprocess spawn.
+
 [[probe]]
 id = "claude-klabauter.dialect_guard.armed"
 cluster = "install"
@@ -229,19 +146,9 @@ required = false
 severity_if_fail = "degraded"
 remediation = "Install tree_sitter and tree_sitter_pwsh under the named interpreter(s): <interpreter> -m pip install tree_sitter tree_sitter_pwsh. See the durable record path in this probe's data.durable_record for prior occurrences."
 
-# claude-klabauter.settings_home.complete -- "is <settings-home>
-# (~/.coordinator-claude-settings) actually populated?" Population was
-# emergent before C5 (docs/plans/2026-08-17-machine-first-install-surface.md):
-# bin/ forwarders, .percolate-identity, the machine-local registry, and the
-# .claude-klabauter-live-root pointer each landed via their own step with no single
-# verified statement of completeness. Shares its check
-# (coordinator_core.install.settings_home_report) with scripts/setup.py's
-# own "Install: settings-home completeness" report line -- one oracle, not
-# two that can drift. required=false: an incomplete settings home is a
-# real, currently-reachable partial-install state, not a broken engine --
-# this must never punish an otherwise-healthy install to a required
+
 # DEGRADED. weight = "cheap": pure Path.exists()/dir-listing reads, no
-# subprocess spawn.
+
 [[probe]]
 id = "claude-klabauter.settings_home.complete"
 cluster = "install"
@@ -255,20 +162,7 @@ required = false
 severity_if_fail = "degraded"
 remediation = "Re-run scripts/setup.py from claude-klabauter -- its 'Install: settings-home completeness' step re-lands the missing members. See this probe's data.fixed_missing / data.forwarder_missing_count for what is absent."
 
-# claude-klabauter.entrypoints.path_resolved -- do `coordinator-invoke` and
-# `coordinator-cockpit-emit-schema` actually RESOLVE and EXECUTE on PATH?
-# (docs/plans/2026-08-17-machine-first-install-surface.md § C3). The pip
-# console scripts from C2 land in a Scripts/bin dir that is deliberately
-# NOT added to PATH (it also carries bare python3/pip3); C3 instead emits
-# coordinator/bin/*.py trampolines, forwarded by substrate's existing
-# agent-helper mechanism into the already-PATH'd settings-home bin/. This
-# probe is the "chain-walk" consumer of the shared oracle
-# (coordinator_core.install.path_resolution_report) -- the "standalone
-# script" consumer is that module's own CLI. required=false: a resolution
-# failure just means the forwarder step hasn't landed yet, or PATH hasn't
-# been refreshed in this shell (a PATH write only takes effect in a NEW
-# shell) -- not a broken engine. weight = "standard": spawns a fresh login
-# shell (POSIX) / a direct child process (Windows) per entrypoint.
+
 [[probe]]
 id = "claude-klabauter.entrypoints.path_resolved"
 cluster = "install"
@@ -289,25 +183,23 @@ weight = "cheap"
 interactivity = "assert"
 fix = "none (debris is harmless; remove stale sentinel/socket paths via the advised cleanup command)"
 symptom_keywords = ["stale coordinator debris", "retired daemon sentinel", "socket dir stale", "coordinator-service sentinel", "orphaned tmp socket", "retired resident debris"]
-# triage=true: debris detection is cheap (file path checks only) and surfaces a
-# cleanup advisory when stale paths are present. The probe always returns INFO on
+
+
 # debris-found (never BROKEN/DEGRADED) — it does NOT drag overall verdict below PASS.
-# Surfaces in data.warnings, not data.red_probes or data.amber_probes.
+
 # NOT DEGRADED: stale resident debris is harmless (no running process attaches to it
-# post-DR-215); INFO class matches the analogous version-drift advisory treatment.
+
 triage = true
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_resident_debris"
-# Review: code-reviewer (F4) — changed required=true → required=false to match INFO-only semantics.
+
 # This probe emits INFO on debris-found, never BROKEN/DEGRADED. With required=true, a probe-itself
 # crash (not debris-found but the probe code erroring) would drag verdict to DEGRADED via
-# severity_if_fail=degraded — inconsistent with purely-advisory purpose. required=false ensures:
+
 # (a) probe crash → treated as advisory SKIP, not DEGRADED; (b) probe is excluded from the
 # all-SKIP-required-probes → DEGRADED rule; (c) aligned with wiki's INFO-only classification.
 required = false
-# severity_if_fail is notional: this probe emits INFO on debris-found (not FAIL), so
-# the verdict reduction never reaches severity_if_fail. Kept for schema completeness.
-# If the probe itself errors (probe-crash, not debris-found), it emits a SKIP/advisory
-# envelope — severity_if_fail does not apply because required=false treats SKIP as advisory.
+
+
 severity_if_fail = "degraded"
 remediation = "Stale resident debris is harmless but can be cleaned: remove .git/coordinator-service/ sentinels and /tmp/coordinator-svc-<uid>/ sockets (uid is your numeric user id)"
 
@@ -318,19 +210,16 @@ weight = "cheap"
 interactivity = "assert"
 fix = "none (inspect flagged files and rm if confirmed junk — operator judgment, not a deterministic auto-fix)"
 symptom_keywords = ["runaway file", "disk bloat", "large untracked file", "worktree bloat", "365GB", "mis-quoted redirect"]
-# triage=true: a metadata-only filesystem walk (os.walk + stat, no subprocess/network)
-# is cheap enough to run on every `--triage` run of the probe script. Defense-in-depth
-# against untracked runaway/junk files (motivating incident: a 365 GB untracked file
-# named `correct?*` sat in the repo root for days from a mis-quoted shell redirect).
+
+
 # The probe always returns INFO on large-file-found (never BROKEN/DEGRADED) — it does
-# NOT drag overall verdict below PASS. Surfaces in data.warnings, not data.red_probes
-# or data.amber_probes.
+
+
 triage = true
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_worktree_bloat"
 required = true
-# severity_if_fail is notional: this probe emits INFO on large-file-found (not FAIL), so
-# the verdict reduction never reaches severity_if_fail. Kept for schema completeness,
-# matching the analogous claude-klabauter.resident.debris entry.
+
+
 severity_if_fail = "degraded"
 remediation = "Inspect each flagged large file and rm it if confirmed junk (e.g. output from a mis-quoted shell redirect)"
 
@@ -347,19 +236,13 @@ required = true
 severity_if_fail = "error"
 remediation = "A retired coordinator_core submodule is still importable (e.g. coordinator_core.client); re-clone or run git clean to remove stale .pyc/__init__ artifacts from the retired submodule path"
 
-# ---------------------------------------------------------------------------
-# Cluster: dispatch — command-type entrypoint smoke (spawn-per-call path)
-# ---------------------------------------------------------------------------
 
 # FUNCTIONAL HEADLINE PROBE (triage-invariant):
-# This probe exercises the real production dispatch path: python3 -m coordinator_core.invoke
-# runs the spawn-per-call command-type engine, resolves repo_root, populates the registry,
+
+
 # and dispatches the cheapest registered COMPUTE_ONLY op (ping). A GREEN result proves the
-# entrypoint CAN dispatch — NOT that a live session IS connected (post-DR-215 there is no
-# resident process; session-binding is not a concept here). A SKIP or BROKEN result emits
-# a parseable verdict envelope; it never produces a bare crash.
-# required=false: optional probe; a purely-static run (spawn skipped or failed) degrades
-# gracefully — the overall verdict is not held to BROKEN on this probe alone.
+
+
 [[probe]]
 id = "claude-klabauter.invoke.smoke"
 cluster = "dispatch"
@@ -380,25 +263,18 @@ weight = "standard"
 interactivity = "assert"
 fix = "none (ensure the claude-klabauter-live-root pointer is present so per-invoke resolution avoids the bash-fallback subprocess; see claude-klabauter.root.pointer)"
 symptom_keywords = ["invoke round-trip slow", "per-invoke latency over budget", "bash-fallback subprocess hang", "hook budget exceeded", "Windows per-invoke latency", "invoke timeout"]
-# triage=true: a single bounded (5 s timeout) subprocess round-trip is cheap enough
-# for the bare-invocation triage set and surfaces the dominant Windows per-invoke
-# latency regression directly as a measurement, not just a static presence check.
+
+
 triage = true
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_invoke_latency"
 required = false
 severity_if_fail = "degraded"
 remediation = "Ensure the claude-klabauter-live-root pointer is present (see claude-klabauter.root.pointer probe) so per-invoke resolution avoids the bash-fallback subprocess; see docs/plans/2026-07-14-claude-klabauter-windows-portability.md"
 
-# ---------------------------------------------------------------------------
-# Cluster: install — draft-staleness nudge (strategic.generate consumer seam)
-# ---------------------------------------------------------------------------
 
 # OPTIONAL, NEVER-FATAL probe (DEC-5 nudge, not a scheduler): checks whether
-# state/strategic/self-description.draft.yaml exists and, if it does, whether it
-# is older than the newest state/week-changelog/*.md entry (stale). A MISSING
-# draft is NOT a fault — the draft is not required for a healthy install; it is
-# only produced on demand by strategic.generate. This probe surfaces a one-line
-# nudge, it never drags the overall verdict below PASS.
+
+
 [[probe]]
 id = "claude-klabauter.strategic.draft_staleness"
 cluster = "install"
@@ -406,50 +282,28 @@ weight = "cheap"
 interactivity = "assert"
 fix = "none (nudge only — run strategic.generate to refresh the draft, or the DoE refresh ceremony to reconcile it)"
 symptom_keywords = ["strategic draft stale", "self-description draft out of date", "strategic.generate not run recently", "week-changelog newer than draft"]
-# triage=false: this is a nudge surfaced on full runs and /workday-start, not part
-# of the bare-invocation triage set (no functional-headline signal here).
+
+
 triage = false
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_strategic_draft_staleness"
 required = false
 severity_if_fail = "degraded"
 remediation = "Run strategic.generate to refresh state/strategic/self-description.draft.yaml, then invoke the DoE refresh ceremony to reconcile it against the canonical self-description.yaml"
 
-# ---------------------------------------------------------------------------
-# Cluster: install — vendored-schema drift watch (DoE pin currency)
-# ---------------------------------------------------------------------------
 
 # OPTIONAL, NEVER-GATING probe: compares every schema vendored under
-# coordinator_core/frontmatter/schemas/ against DoE HEAD via the non-gating
-# check_schema_drift_advisory (aggregated by
-# coordinator_core.frontmatter.schema_drift_watch). Closes the 2026-07-22 class
-# defect where that advisory had ZERO callers and a vendored improvement-queue
-# schema sat ~12h behind DoE until a sibling repo's CLI rejected a value that was
-# valid on their surface.
-#
-# THIS PROBE IS THE CADENCE. It is triage=true precisely because /workday-start's
-# consumer (coordinator_core.ops.check_claude_klabauter_doctor_sentinel) reads
-# state/doctor-last-run.json, and ONLY --triage and full runs write that sentinel —
-# a triage=false drift watch would never reach the daily surface, i.e. would be
-# wiring in name only. Weight is "standard": one short-lived `git show` per vendored
-# schema (12 today), no network, honouring the triage invariant (cheap|standard).
-#
+
+
 # Verdict shape: DRIFT -> DEGRADED (AMBER + re-vendor hint); DoE clone present but
 # unreadable -> DEGRADED worded as INDETERMINATE (never a false drift claim, never a
-# silent green); no DoE clone on this machine at all -> SKIP-as-advisory (not
-# applicable, e.g. fresh install or CI without the sibling checked out).
-#
+
+
 # TWO-ORACLE WARNING — why the remediation names a script and not `cp`. This probe
-# compares against DoE HEAD; the GATING tamper-check (check_schema_drift(..., ref=...)
-# in coordinator_core/frontmatter/tests/test_schema_validate.py) compares against a
+
+
 # per-schema pinned SHA in _QUEUE_SCHEMA_PINS. Copying DoE's file in by hand satisfies
-# this probe and BREAKS that gate. That is not hypothetical: on 2026-07-28 an installing
-# agent followed the previous `cp`-shaped remediation verbatim, watched this probe go
-# green at 13/13, and simultaneously turned check_schema_drift red
-# (state/audits/2026-07-28-windows-install-dogfood-friction.md § F3). The remediation
-# below names bin/claude-klabauter-revendor-schema.py, which re-vendors the bytes AND moves the
-# pin in one verified, rolled-back-on-failure operation — CLAUDE.md's discharge test
-# ("for every rule, what artifact discharges it?"). Do NOT reduce it back to a copy
-# instruction: prose that hands the operator half the job discharges nothing.
+
+
 [[probe]]
 id = "claude-klabauter.schema.vendor_drift"
 cluster = "install"
@@ -463,23 +317,7 @@ required = false
 severity_if_fail = "degraded"
 remediation = "ADVISORY, never gating — this probe is required=false and cannot break an install; action it on its own cadence. To fix: python3 bin/claude-klabauter-revendor-schema.py <name> --dry-run, then re-run without --dry-run (add --reason '<why>' if it reports a pin move, and --ack-major if it reports a MAJOR advance). That entrypoint writes the vendored bytes AND updates the gating pin in coordinator_core/frontmatter/tests/test_schema_validate.py::_QUEUE_SCHEMA_PINS in one verified operation, then re-checks both. Do NOT cp the schema in by hand — this probe compares against DoE HEAD but the gating tamper-check compares against that pinned SHA, so a hand copy turns this probe green while breaking check_schema_drift."
 
-# ---------------------------------------------------------------------------
-# Cluster: install — generator/output staleness cadence
-# (docs/plans/2026-08-13-generator-output-staleness-detector.md § Tasks id C5)
-# ---------------------------------------------------------------------------
 
-# THIS PROBE IS THE CADENCE, same rationale as claude-klabauter.schema.vendor_drift — the
-# --triage envelope already writes state/doctor-last-run.json, and DoE's
-# /workday-start already reads it via coordinator_core.ops.check_claude_klabauter_doctor_sentinel,
-# so wiring this probe surfaces generator/output staleness daily with NO change to any
-# DoE-owned surface. weight = "standard" because compute_all_staleness spawns `git log`
-# per declared pair on the local leg, and the vendored leg (compute_vendored_staleness)
-# also shells to `git` against the resolved peer clone; triage = true is permitted at
-# that weight per the manifest invariant above (triage=true ==> weight in {cheap,
-# standard}).
-#
-# AC7: this probe REPORTS, it does not GATE — never a non-zero process exit, a commit
-# hook, or a test that goes red on a STALE verdict in the live repo.
 [[probe]]
 id = "claude-klabauter.generator.output_staleness"
 cluster = "install"
@@ -493,31 +331,13 @@ required = false
 severity_if_fail = "degraded"
 remediation = "ADVISORY, never gating — this probe is required=false and cannot break an install. A STALE entry names the drifted pair in `detail`; re-run the generator that emits that artifact to refresh it, then re-run this probe. An UNDECLARED or INDETERMINATE entry means coverage or resolution is incomplete, not that regeneration is owed — see the entry's own `detail` for the specific cause."
 
-# ---------------------------------------------------------------------------
-# Cluster: install — cross-repo-commitments ledger re-resolution (C12b)
-# ---------------------------------------------------------------------------
 
 # OPTIONAL, NEVER-GATING probe: re-resolves every state/cross-repo-commitments/
-# record's evidence: string live against its committing sibling's disk via
-# coordinator_core.reconcile.commitments_recheck. Closes the exact staleness
-# named in docs/plans/2026-07-26-structured-sibling-evidence-gates.md § C12b:
-# a structured ledger record whose own title read "(now satisfied)" beside
-# status: open, thirteen days on, because nothing ever re-checked it.
-#
-# THIS PROBE IS THE CADENCE, same rationale as claude-klabauter.schema.vendor_drift
-# immediately above: triage=true because /workday-start's consumer
-# (coordinator_core.ops.check_claude_klabauter_doctor_sentinel) reads
-# state/doctor-last-run.json, and only --triage and full runs write that
-# sentinel — a triage=false re-resolver would never reach the daily surface.
-# Deliberately NOT wired to handoff.reconcile_open/gate-recheck (C4/C8): those
-# are hand-invoked verbs, and wiring re-resolution to one would reproduce the
-# exact "nothing re-resolves on its own" pathology this probe exists to close.
-#
-# Verdict shape: any record's evidence resolves truthy while its own status is
+
+
 # still "open" -> DEGRADED (AMBER, actionable mismatch named); everything else
-# (including "no evidence yet", "sibling unreadable", "already fulfilled") ->
-# PASS — this probe never auto-flips a record's status (D5), so a mismatch is
-# a nudge, not a failure to remediate on its own.
+
+
 [[probe]]
 id = "claude-klabauter.commitments.recheck"
 cluster = "install"
@@ -531,29 +351,10 @@ required = false
 severity_if_fail = "degraded"
 remediation = "Review the named state/cross-repo-commitments/<entry>.yaml record(s) — evidence: now resolves truthy while status: is still open; if genuinely satisfied, flip status: by hand (this probe never auto-mutates it)."
 
-# ---------------------------------------------------------------------------
-# Cluster: dispatch — orphaned execnet gateway detection (aborted xdist runs)
-# ---------------------------------------------------------------------------
 
 # OPTIONAL, process-table-read-only probe: flags execnet gateway (pytest -n worker)
-# processes whose controller has died without reaping them — the residual leak that
-# survives even after process-group teardown closes every catchable abort, because a
-# SIGKILL of the runner cannot run any handler (spike-proven: 2 of 2 orphaned on
-# SIGKILL, no teardown can close this in-process). See
-# docs/plans/2026-08-13-reap-orphaned-execnet-gateways.md § C2 and
-# docs/research/spike-verdicts/2026-08-13-execnet-gateway-reap-on-abort.md.
-#
-# AC4 (the single most likely way to get this wrong, observed LIVE during the spike,
-# not hypothetical): four gateway processes matching the execnet signature were seen
-# under a live controller — a peer's healthy in-flight run on this 50-70-concurrent-
-# session box. This probe reports ONLY gateways with NO live controller; a raw
-# command-line count (the shape the originating memo proposed) would have flagged
-# those four healthy workers as a leak.
-#
-# weight = "standard": psutil.process_iter/pid_exists process-table reads, no
-# subprocess spawn — satisfies the anti-scope "must NOT spawn anything" constraint.
-# triage = true is then permissible under the stated invariant (triage ⇒ weight in
-# {cheap, standard}).
+
+
 [[probe]]
 id = "claude-klabauter.execnet.orphaned_gateways"
 cluster = "dispatch"
@@ -567,27 +368,15 @@ required = false
 severity_if_fail = "degraded"
 remediation = "Confirm the named pid(s) are not your own in-flight pytest -n run, then terminate them directly. A gateway under a live controller is never flagged (AC4) — only a gateway whose controller has died is reported."
 
-# claude-klabauter.launch.shim_chain -- "will bare `claude` load the coordinator plugin in a
-# NEW shell?". That question had no automated answer, and its failure mode is silent
-# by construction: coordinator's own SessionStart hooks cannot report that coordinator
-# failed to load, because they do not run when it does not load. The check has to live
-# in a surface that runs WITHOUT a session, which is this one.
-#
-# Two silent shapes, both observed live on 2026-08-14 (see
+
 # docs/reference/interactive-launch-chain.md): a DISABLED profile block (wired source
 # line commented out, so claude() is never defined), and a WRONG-DIALECT shim (bash
-# bytes in claude-doe-shim.ps1, whose profile block is present and correct -- every
-# other check calls that install healthy).
-#
-# Shape-conditioned: SKIPs when no DoE clone resolves, i.e. the marketplace population
-# that never has this chain. `required` is set PER RESULT in the body, not by the
+
+
 # `required` key below -- the SKIP path returns required=False (a skipped REQUIRED probe
 # reduces to DEGRADED, which would punish every marketplace install for lacking a chain
-# it should not have), while the real-failure paths return required=True and exit 1 from
-# --step-zero. On a box that HAS this chain, a shim that cannot define claude() means
-# every session runs without coordinator; an install that then calls itself healthy is
-# the failure this probe exists to end. weight = "cheap": two file reads, no subprocess
-# -- so triage = true is permissible under the stated invariant.
+
+
 [[probe]]
 id = "claude-klabauter.launch.shim_chain"
 cluster = "install"
@@ -601,21 +390,7 @@ required = false
 severity_if_fail = "degraded"
 remediation = "Re-render the shim: python3 <engine-clone>/coordinator/bin/gen-claude-doe-shim.py --shell powershell --template <doe-root>/coordinator/templates/shell/claude-doe-shim.ps1.tmpl (use --shell bash and the .sh.tmpl on POSIX). Then open a NEW shell -- an already-open one holds the old profile."
 
-# ---------------------------------------------------------------------------
-# THIS PROBE IS THE CADENCE, same rationale as claude-klabauter.schema.vendor_drift and its
-# siblings above: triage=true because /workday-start's consumer
-# (coordinator_core.ops.check_claude_klabauter_doctor_sentinel) reads
-# state/doctor-last-run.json, and only --triage and full runs write that sentinel.
-#
-# K-006 (state/kill-ledger.md): the heartbeat was removed; this probe guards the
-# premise of that removal -- that the stable_pid miss rate is currently 0% (a
-# session whose stable_pid capture misses reads DEAD on the Layer-2 recency path
-# while still alive, becoming reap-eligible), previously completely unwatched.
-# Threshold: ANY single miss alerts (not a rate -- see
-# coordinator_core/session/stable_pid_watch.py module docstring for why). weight =
-# "cheap": one directory listing plus one meta.json read per session dir, no
-# subprocess -- triage = true is permissible under the stated invariant.
-# ---------------------------------------------------------------------------
+
 [[probe]]
 id = "claude-klabauter.session.stable_pid_miss"
 cluster = "install"
@@ -629,29 +404,13 @@ required = false
 severity_if_fail = "degraded"
 remediation = "ADVISORY, never gating -- this probe is required=false and cannot break an install. One or more sessions are missing stable_pid capture (or its birth-instant witness) -- the F0 hazard K-006 ruled safe-to-deregister-heartbeat-because-0%% is live again. The probe's `detail`/`data.misses` names the affected session(s) and reason (`empty` or `no_witness`); investigate coordinator_core/session/core.py::init before assuming this is transient."
 
-# claude-klabauter.warm.residency -- enumerates resident coordinator_core/warm/server.py
-# processes via psutil.process_iter cmdline matching and classifies each as
+
 # REACHABLE or ORPHAN using a hand-rolled connect-and-close pipe primitive
-# (`_warm_check_pipe_reachable`, mirroring client.py's own anti-storm exception
-# table), composed with `election.pipe_name(..., engine_clone=<that server's
+
+
 # resolved engine root>)` passed EXPLICITLY -- pipe_name's default computes
-# THIS repo's own pipe name, which is wrong for a server that may be running
-# from a different engine clone (the whole point of this classification).
-#
-# AC7: resident-but-unaddressable is reported as ORPHAN, not silently PASS.
-# AC9: breadcrumb absence/corruption enriches per-server state as
-# "cannot_tell", never "no server running" -- the breadcrumb is one file per
-# clone, clobbered per generation, and is never read to enumerate population.
-# AC10: the orphan condition names NO remediation action -- the only stop
-# mechanism targets the current breadcrumb-elected server, not a specific
-# orphaned pid, and naming it here would risk killing the live server 50-70
-# sessions are using while leaving the orphan running.
-#
-# weight = "standard": psutil.process_iter reads plus a bounded, per-server
-# named-pipe connect-and-close -- no subprocess spawn. This primitive is
-# Windows-only (OSError.winerror does not exist on POSIX); on POSIX the probe
-# reports "cannot tell" (skipped) rather than misreading an unrelated
-# exception type as an answer.
+
+
 [[probe]]
 id = "claude-klabauter.warm.residency"
 cluster = "warm"
@@ -665,24 +424,10 @@ required = false
 severity_if_fail = "degraded"
 remediation = "No automated remediation is named -- the only stop mechanism targets the current, breadcrumb-elected server, not a specific orphaned pid; naming it here would risk killing the live server 50-70 sessions are using while leaving the named orphan(s) running. Investigate the named pid(s) manually before acting."
 
-# claude-klabauter.warm.generation -- compares the pipe-name token segment recorded in
-# the resident server's breadcrumb (`breadcrumb.read_breadcrumb`) against a
-# freshly recomputed `skew.compute_client_token(engine_root)`. PURE LOCAL
-# READ: never connects (no `_warm_check_pipe_reachable` call, unlike
-# claude-klabauter.warm.residency above) and never elects (`election.elect()` is never
-# called -- it mutates, contesting the first named-pipe instance). Does not
-# use `ServerVersionState.is_skewed` either: that triggers a throttled (2s)
-# source-hash refresh, not a zero-cost read.
-#
-# Attribution note (baton AC6, "resident engine predates last mirror
-# publish"): this probe's stale-token reading covers the resident-vs-publish
-# angle; `claude-klabauter.publish.provenance` (pre-existing) answers the
-# published-vs-source half.
-#
+
 # AC8: a stale token is reported (DEGRADED) without a connect attempt.
-#
-# weight = "standard": one breadcrumb file read plus one stat-only token
-# fingerprint -- no subprocess, no connect, no named-pipe interaction.
+
+
 [[probe]]
 id = "claude-klabauter.warm.generation"
 cluster = "warm"
@@ -697,28 +442,17 @@ severity_if_fail = "degraded"
 remediation = "A stale generation drains on its own via warm.idle's superseded-generation arm once a fresh server binds; no direct action is named here."
 
 # claude-klabauter.warm.route_share -- TRANSLATES coordinator_core.telemetry.engine_report
-# .route_distribution's verdict into the closed probe-status enum; does not
-# re-parse the op-latency sink (engine_report.iter_sink_entries is the reader,
-# built once so this probe and any other consumer read the same answer).
-#
+
+
 # Translation: reader verdict "ok" -> PASS; "degraded" -> DEGRADED (reserved
-# by the reader for a future share-threshold check, not emitted today);
-# "unknown" -> skipped=True + required=True (never PASS, never FAIL). At
-# today's ~0.257% route coverage (DR-328) the honest reading is "cannot
-# tell" -- a probe that renders FAIL off it is as wrong as one that renders
-# PASS. Never emits INFO: an INFO verdict is dropped by the envelope's
-# worst-of reduction, which would let an otherwise-all-PASS probe set render
-# overall PASS despite this probe having nothing to say -- the reader's own
-# "ok"/"degraded"/"unknown" vocabulary is reported in data.reader_verdict,
+
+
 # never assigned to status (the closed, versioned STATUS_VOCAB enum).
-#
-# required=false (manifest footer): this is a coordinator-dependent optional
-# probe for the stub-synthesis path only -- the runtime _ProbeResult.required
-# on the skipped/unknown path is stated explicitly as True in the probe body
-# (F6, same convention as claude-klabauter.warm.generation immediately above), so it
+
+
 # still reduces to DEGRADED, never drops out silently.
-#
-# weight = "standard": reads the op-latency sink file(s) across rotated
+
+
 # generations (bounded by MAX_ROWS_SCANNED) -- no subprocess, no network.
 [[probe]]
 id = "claude-klabauter.warm.route_share"
@@ -733,24 +467,13 @@ required = false
 severity_if_fail = "degraded"
 remediation = "This probe reports 'cannot tell' (skipped) when route coverage is below the reader's floor -- that is the honest reading at today's coverage, not a fault. See data.route_distribution / data.reader_verdict for the coverage figures."
 
-# claude-klabauter.warm.roundtrip -- a LIVE hit/miss probe: does one warm-pipe round-trip
-# (coordinator_core.warm.client.try_warm_dispatch) actually reach the resident
-# server, and how long does it take? SPLIT OUT OF C6 (staff-eng review, F2): this
-# is a real shape change to the probe engine (an explicit run-time opt-in gate),
-# not a manifest tweak. weight/triage alone still do NOT stop a probe from
-# running: the selector became a PRE-RUN gate (docs/plans/2026-08-19-the-selector
+
 # -gates-before-the-run.md), so a SELECTION excludes a probe from running, but a
-# default run selects nothing and runs everything -- which is the case this
-# opt-in exists for. weight = "heavy" (a live connection
-# attempt, not a static read), and per the manifest invariant above
-# (triage=true ==> weight in {cheap, standard}) that makes triage = false the
-# only legal value here -- but per the same brief, weight/triage no longer gate
+
+
 # EXECUTION at all; the new `--include-live-roundtrip` flag
-# (`run_probes(include_live_roundtrip=...)`) does. Without that flag this probe
-# reports skipped=True (never an INFO stub, never a silent absence from
-# `--cluster warm`'s membership) and attempts no connection at all -- a human
-# running `--cluster warm --include-live-roundtrip` is the only path that
-# exercises it for real.
+
+
 [[probe]]
 id = "claude-klabauter.warm.roundtrip"
 cluster = "warm"

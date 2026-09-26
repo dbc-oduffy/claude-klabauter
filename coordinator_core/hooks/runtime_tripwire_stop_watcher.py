@@ -90,28 +90,15 @@ from coordinator_core.hooks.support.session_hub import session_id_is_real
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-# Windows CreateProcess flags (no-op values on POSIX; only used when os.name == "nt").
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
 _CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 
 
-# ---------------------------------------------------------------------------
-# Shared thresholds (ported inline from the former bash thresholds lib --
-# self-contained per the packaging constraint; no cross-language sourcing).
-# ---------------------------------------------------------------------------
-
 def runtime_threshold_minutes(model: str) -> int:
-    """Per-model runtime ceiling in integer minutes. Mirrors the former bash
-    thresholds lib's runtime_threshold_minutes() exactly, including
-    the "unknown/empty model -> Opus default" fail-safe direction (a too-large
-    threshold only delays a nudge; a too-small one fires spuriously)."""
     m = model or ""
     opus_default = int(os.environ.get("RUNTIME_TRIPWIRE_OPUS_MIN", "25"))
     sonnet_default = int(os.environ.get("RUNTIME_TRIPWIRE_SONNET_MIN", "12"))
     haiku_default = int(os.environ.get("RUNTIME_TRIPWIRE_HAIKU_MIN", "10"))
-    # Explicit 1M-context variants matched before bare family arms (mirrors
-    # bash's *\[1m\]*|*-1m* case arm ordering -- must precede *sonnet*/*opus*
-    # to avoid misclassifying a 1M-context Sonnet as plain Sonnet).
     if "[1m]" in m or "-1m" in m:
         return opus_default
     if "opus" in m:
@@ -122,10 +109,6 @@ def runtime_threshold_minutes(model: str) -> int:
         return haiku_default
     return opus_default
 
-
-# ---------------------------------------------------------------------------
-# Windows-safe, read-only PID liveness (see module docstring -- NOT kill -0).
-# ---------------------------------------------------------------------------
 
 def _pid_alive(pid: int) -> bool:
     if pid <= 0:
@@ -155,15 +138,11 @@ def _pid_alive(pid: int) -> bool:
         except ProcessLookupError:
             return False
         except PermissionError:
-            return True  # exists, just not owned by us
+            return True
         except Exception:
             return False
         return True
 
-
-# ---------------------------------------------------------------------------
-# stdin read w/ hang guard (mirrors bash's `timeout 2 cat` Windows Git-Bash guard)
-# ---------------------------------------------------------------------------
 
 def _read_stdin(timeout: float = 2.0) -> str:
     box = {"data": ""}
@@ -181,9 +160,6 @@ def _read_stdin(timeout: float = 2.0) -> str:
 
 
 def _git_root() -> str:
-    """Zero-spawn walk only -- see module docstring's adaptation note.
-    Source script's own spawn fallback (`git rev-parse --show-toplevel`) is
-    dropped, not merely deferred."""
     try:
         return show_toplevel(os.getcwd()) or ""
     except Exception:
@@ -203,10 +179,6 @@ def _agent_completed(completion_log: Path, agent_id: str) -> bool:
 
 
 def _parse_dispatch_row(line: str) -> Optional[tuple]:
-    """Returns (agent_id, model, dispatched_at:int) or None if the row is
-    unusable -- mirrors the bash while-read loop's skip conditions (empty
-    agentId, non-numeric or zero dispatched_at). Tolerates legacy short rows
-    (1-col / 3-col) same as the writer's documented tolerance."""
     fields = line.rstrip("\n").split("\t")
     agent_id = fields[0] if len(fields) > 0 else ""
     model = fields[1] if len(fields) > 1 else ""
@@ -221,23 +193,16 @@ def _parse_dispatch_row(line: str) -> Optional[tuple]:
     return (agent_id, model, dispatched_at)
 
 
-# ---------------------------------------------------------------------------
-# Default (Stop-event) mode
-# ---------------------------------------------------------------------------
-
 def main() -> int:
     try:
         return _main_impl()
     except Exception:
-        # Fail-open: any unexpected error in the synchronous arming path must
-        # never block the Stop event or leave Claude Code waiting on us.
         return 0
 
 
 def _main_impl() -> int:
     hook_input_raw = _read_stdin(2.0)
 
-    # --- Step 1: stop_hook_active loop-guard (MUST be first check) ---
     stop_hook_active = False
     payload: dict = {}
     try:
@@ -270,21 +235,9 @@ def _main_impl() -> int:
         session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
     if not session_id:
         return 0
-    # The PID lock, the dispatch file, and every sentinel below live under
-    # `<hub>/<session_id>/`. A session id the hub gate will not accept has no
-    # lock to take and must not mint a directory trying (see `_session_hub`),
-    # so the watcher stands down the same way a live lock-holder makes it
-    # stand down -- silent, never launched.
     if not session_id_is_real(session_id):
         return 0
 
-    # --- Step 4: Per-session PID lock ---
-    # Rooted at the git COMMON dir (see `_resolve_git_common_dir`'s
-    # docstring), never `<git_root>/.git` -- that path is a FILE in a
-    # worktree, so the pre-fix join silently never persisted the lock/
-    # dispatch-tracking/completion-log paths below. Fail-open: an
-    # unresolvable common dir is treated the same as an unresolvable
-    # git_root above -- silent pass, never build a path from "".
     common_dir = _resolve_git_common_dir(git_root)
     if not common_dir:
         return 0
@@ -304,10 +257,8 @@ def _main_impl() -> int:
         except Exception:
             existing_pid = 0
         if _pid_alive(existing_pid):
-            return 0  # live watcher already running; do not stack
-        # stale lock -- overwritten below once the new watcher is launched.
+            return 0
 
-    # --- Step 5: dispatch/completion paths ---
     dispatch_file = sessions_dir / session_id / "dispatched-agents.txt"
     completion_log = sessions_dir / "logs" / "agent-audit.jsonl"
 
@@ -315,13 +266,12 @@ def _main_impl() -> int:
         try:
             lock.unlink(missing_ok=True)
         except Exception:
-            pass  # best-effort lock cleanup; a stale lock is resolved by the next run's staleness check
+            pass
         return 0
 
     max_track_minutes = int(os.environ.get("RUNTIME_TRIPWIRE_MAX_TRACK_MIN", "90"))
     now = int(time.time())
 
-    # --- Step 6: earliest still-tracked agent ---
     earliest_agent_id = ""
     earliest_model = ""
     earliest_dispatched_at = 0
@@ -350,7 +300,7 @@ def _main_impl() -> int:
         try:
             lock.unlink(missing_ok=True)
         except Exception:
-            pass  # best-effort lock cleanup; a stale lock is resolved by the next run's staleness check
+            pass
         return 0
 
     # --- Step 7: compute SLEEP_SEC ---
@@ -359,7 +309,6 @@ def _main_impl() -> int:
     target_epoch = earliest_dispatched_at + threshold_sec
     sleep_sec = max(0, target_epoch - now)
 
-    # --- Step 8: launch detached watcher; write ITS pid to the lock ---
     watch_argv = [
         sys.executable,
         os.path.abspath(__file__),
@@ -380,19 +329,11 @@ def _main_impl() -> int:
             lock.write_text(str(child_pid), encoding="utf-8", newline="\n")
         except Exception as exc:
             sys.stderr.write(f"RUNTIME TRIPWIRE: lock write failed ({lock}): {exc}\n")
-    # else: launch failed -- fail-open, leave any prior (already-checked-stale)
-    # lock content in place rather than risk writing a garbage PID; the next
-    # Stop event will re-attempt (stale lock still reaps cleanly next time).
 
-    # --- Parent exits 0 immediately ---
     return 0
 
 
 def _spawn_detached(argv: list) -> Optional[int]:
-    """Launch argv as a detached background process that outlives this parent.
-    Explicitly inherits this process's own stdout/stderr handles into the
-    child (see module docstring -- the fd-inheritance trick the wake path
-    depends on). Returns the child PID, or None on failure (fail-open)."""
     common_kwargs = dict(
         stdin=subprocess.DEVNULL,
         stdout=sys.stdout,
@@ -408,10 +349,6 @@ def _spawn_detached(argv: list) -> Optional[int]:
                     **common_kwargs,
                 )
             except OSError:
-                # Current job object forbids breakaway -- best-effort retry
-                # without it (see module docstring KNOWN RISK paragraph: the
-                # detached child may still die with the parent's job in this
-                # branch; nothing further can be done from user-mode code).
                 proc = subprocess.Popen(argv, creationflags=flags, **common_kwargs)
         else:
             proc = subprocess.Popen(argv, start_new_session=True, **common_kwargs)
@@ -419,10 +356,6 @@ def _spawn_detached(argv: list) -> Optional[int]:
     except Exception:
         return None
 
-
-# ---------------------------------------------------------------------------
-# --watch mode: the detached child. Sleeps, rechecks, clears or wakes.
-# ---------------------------------------------------------------------------
 
 def _watch_main(args: list) -> int:
     try:
@@ -437,7 +370,7 @@ def _watch_main(args: list) -> int:
             sleep_sec_s,
         ) = args
     except ValueError:
-        return 0  # malformed invocation -- fail-open, nothing to clean up
+        return 0
 
     lock = Path(lock_s)
     dispatch_file = Path(dispatch_file_s)
@@ -467,9 +400,9 @@ def _watch_main(args: list) -> int:
                     continue
                 recheck_elapsed = (recheck_now - dispatched_at) // 60
                 if recheck_elapsed >= max_track_minutes:
-                    break  # over-age by wake time -- treat as cleared
+                    break
                 if _agent_completed(completion_log, earliest_agent_id):
-                    break  # completed -- still_tracked stays False
+                    break
                 still_tracked = True
                 break
 
@@ -490,10 +423,8 @@ def _watch_main(args: list) -> int:
         sys.stderr.flush()
 
         _rm_lock(lock)
-        return 2  # asyncRewake signal
+        return 2
     except Exception:
-        # Fail-open even in the detached child: never leave an orphaned lock,
-        # never risk a spurious wake on an internal error.
         _rm_lock(lock)
         return 0
 
@@ -502,7 +433,7 @@ def _rm_lock(lock: Path) -> None:
     try:
         lock.unlink(missing_ok=True)
     except Exception:
-        pass  # teardown helper; a lock left behind is resolved by the next run's staleness check
+        pass
 
 
 if __name__ == "__main__":

@@ -67,21 +67,10 @@ __all__ = [
     "_attributes_pattern_matches",
 ]
 
-#: Gitattributes filename consulted at every directory level between the
-#: repo root and a path's own directory, mirroring git's own attribute-file
-#: search order. Deliberately NOT the full set git consults --
-#: `core.attributesFile` (a global path) is out of reach without a config
-#: walk this module's budget cannot afford.
 _LOCAL_ATTRIBUTES_FILENAME = ".gitattributes"
 
 
 def _read_config_core_autocrlf(config_path: Path) -> Optional[str]:
-    """Best-effort `[core] autocrlf = ...` read from one git config file.
-    A full git-config parser is out of scope for a fast-path check whose
-    failure just means "take the ladder", never a wrong blob. Returns the
-    LAST `autocrlf` value found in the `[core]` section (git's own
-    last-wins precedence within one file), lower-cased, or `None` if the
-    file is unreadable or carries no such key."""
     try:
         text = config_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -101,21 +90,9 @@ def _read_config_core_autocrlf(config_path: Path) -> Optional[str]:
 
 
 def _system_gitconfig_paths() -> Tuple[Path, ...]:
-    """Candidate SYSTEM git config locations, resolved without a spawn.
-
-    C3d: Git for Windows writes `core.autocrlf=true` into the SYSTEM config
-    (`<install>/etc/gitconfig`), NOT into the repo config and NOT into
-    `~/.gitconfig`. A chain that reads only repo-local and global therefore
-    resolves `False` on a stock Windows install, the caller refuses every
-    CR-bearing path, and a verified-correct in-process blob write never
-    executes. The ordering `shutil.which` gives us also covers a
-    non-default install prefix, which a hardcoded `C:\\Program Files`
-    would miss.  # abs-path-ok: illustrative example in a docstring, not a real path"""
     candidates: List[Path] = []
     git_exe = shutil.which("git")
     if git_exe:
-        # <prefix>/bin/git.exe -> <prefix>/etc/gitconfig, and Git for
-        # Windows' own <prefix>/mingw64/etc/gitconfig.
         bin_dir = Path(git_exe).resolve().parent
         prefix = bin_dir.parent
         candidates.append(prefix / "etc" / "gitconfig")
@@ -154,9 +131,6 @@ def _repo_autocrlf_true(root: Path) -> bool:
     else:
         system_paths = _system_gitconfig_paths()
 
-    # LAST WINS, which is git's own precedence and the opposite of a
-    # first-hit return. Read every layer low-to-high and keep overwriting:
-    # system, then global, then repo-local.
     value: Optional[str] = None
     for config_path in (
         *system_paths,
@@ -193,21 +167,6 @@ def _attributes_pattern_matches(pattern: str, rel_to_attrs_dir: str) -> bool:
 
 
 def _text_attribute_pinned(root: Path, normalized: str) -> Optional[str]:
-    """`None` when no repo-local attributes file assigns `text`, `-text`,
-    `text=...`, or `eol=...` to `normalized`, else a diagnostic naming the
-    file and the pattern that does.
-
-    Same traversal, same candidate ordering, same safe-direction bias as
-    `_clean_filter_may_apply` (carried, not re-derived) -- an `[attr]`
-    macro line carrying any of these tokens refuses the path outright,
-    same as that function's `filter=` macro case: resolving macro
-    expansion is a second pass this function does not implement.
-    `_autocrlf_checkin_normalize`'s corpus was only run against paths with
-    NO forced text/eol/binary attribute (git's default `text=auto`
-    disposition under `core.autocrlf=true`) -- a path this function flags
-    is a disposition the spike never measured, so a caller refuses it to
-    the spawn ladder rather than guessing that the auto heuristic still
-    applies."""
     parent = Path(normalized).parent
     parts = [] if parent == Path(".") else list(parent.parts)
 
@@ -273,9 +232,6 @@ def _clean_filter_may_apply(root: Path, normalized: str) -> Optional[str]:
     parent = Path(normalized).parent
     parts = [] if parent == Path(".") else list(parent.parts)
 
-    #: `(attributes file, the target path relative to that file's directory)`
-    #: -- `.git/info/attributes` patterns are rooted at the repo, the same
-    #: as a root `.gitattributes`.
     candidates = [(resolve_git_dir(root) / "info" / "attributes", normalized)]
     for depth in range(len(parts) + 1):
         candidates.append(

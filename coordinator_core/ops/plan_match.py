@@ -50,38 +50,11 @@ _LOG = logging.getLogger(__name__)
 
 
 def _collect_plans(plans_dir: Path) -> List[dict]:
-    """Enumerate ``docs/plans/*.md`` as ``[{id, title, text}]`` items for ranking.
-
-    For each well-formed plan document the ``id`` field is the ``plan_id`` frontmatter
-    value when present, otherwise the filename stem.  The ``text`` field (haystack) is
-    the plan's ``title`` lowercased — sufficient for a "which plan did you mean?" picker.
-
-    Files with YAML parse errors, non-dict frontmatter, or missing ``title`` fields are
-    quarantined -- accounted in ONE summary WARNING per scan, with the per-file
-    detail at DEBUG (``match_core.QuarantineLog``; see its docstring for the
-    stderr-flood incident that motivated the collapse).  Files without ``plan_id`` frontmatter use the
-    filename stem as the id (graceful fallback — many plans predate the ``plan_id`` field).
-
-    Returns ``[]`` when ``plans_dir`` is absent (graceful-absent, mirrors
-    ``goals_match.py._collect_goals`` / ``initiatives_serve.py._collect_initiatives``).
-
-    Negative-spec:
-    - Does NOT mutate any file or coordinator substrate.
-    - Does NOT raise on missing/unreadable/malformed files — quarantines them.
-    - Only reads ``docs/plans/*.md``; no cross-repo lookup.
-    - The returned ``id`` key is the generic enumerator key; ``_handler`` remaps it to
-      the ``plan_id`` wire key so the op's output shape is well-typed.
-    """
     items: List[dict] = []
 
     if not plans_dir.is_dir():
         return items
 
-    # One WARNING per scan, not per skipped file -- see `QuarantineLog`. The
-    # ~100 plan sidecars living in docs/plans/ (*.review.md, *.prior-art-
-    # check.md, *.plan-coverage-check.md, *.node-map.md) are not plans and are
-    # skipped on every single enumeration; the per-file lines they produced
-    # buried `baton-assemble apply`'s own verdict in its callers' stderr.
     quarantine = QuarantineLog("plan.match_candidates", _LOG)
 
     for fpath in sorted(plans_dir.glob("*.md")):
@@ -89,13 +62,10 @@ def _collect_plans(plans_dir: Path) -> List[dict]:
         quarantine.scanned()
         try:
             raw = fpath.read_text(encoding="utf-8").replace("\r\n", "\n")
-            # Extract only the frontmatter block (between first and second "---" line).
             if raw.startswith("---\n"):
                 parts = raw.split("---\n", 2)
                 fm_text = parts[1]
             else:
-                # No frontmatter block — not a plan; generated indexes (e.g. INDEX.md)
-                # land in docs/plans/ as bare markdown and must not be YAML-parsed whole.
                 quarantine.skip(fname, "no YAML frontmatter block")
                 continue
             fm = yaml.safe_load(fm_text)
@@ -112,12 +82,10 @@ def _collect_plans(plans_dir: Path) -> List[dict]:
             quarantine.skip(fname, "missing required field: title")
             continue
 
-        # plan_id frontmatter is preferred; filename stem is the graceful fallback.
         plan_id_val = fm.get("plan_id")
         if not isinstance(plan_id_val, str) or not plan_id_val:
             plan_id_val = fpath.stem
 
-        # Haystack: title is sufficient for a "which plan did you mean?" picker.
         haystack = title_val.lower()
 
         items.append({"id": plan_id_val, "title": title_val, "text": haystack})
@@ -164,7 +132,7 @@ def _handler(
         return {"candidates": []}
 
     if repo_root is not None:
-        worktree_root = main_worktree_root(repo_root)  # router common_dir → worktree root
+        worktree_root = main_worktree_root(repo_root)
     else:
         _LOG.warning(
             "plan.match_candidates: no repo_root resolved — "
@@ -173,9 +141,6 @@ def _handler(
         return {"candidates": []}
 
     plans_dir = worktree_root / "docs" / "plans"
-    # _collect_plans returns [{id, title, text}] using the generic enumerator protocol.
-    # rank_candidates returns [{id, title, score}]; remap id→plan_id to produce the
-    # wire key (plan.match_candidates emits "plan_id", not "id").
     raw = rank_candidates(text, _collect_plans(plans_dir))
     candidates = [
         {"plan_id": entry["id"], "title": entry["title"], "score": entry["score"]}

@@ -104,10 +104,8 @@ from coordinator_core.ipc import register_op
 
 logger = logging.getLogger(__name__)
 
-#: Subdirectory of hooks_root that holds the pre-CI hook files (fence layout).
 _PRE_CI_SUBDIR = "pre-ci"
 
-#: Max characters of a failing hook's stderr replayed into the log.
 _STDERR_LOG_TAIL = 2000
 
 
@@ -137,12 +135,8 @@ def _run_pre_ci_hooks(params: dict, repo_root: Optional[Path] = None) -> dict:
     hooks_dir = Path(hooks_root_raw) / _PRE_CI_SUBDIR
 
     if not hooks_dir.is_dir():
-        # Fence parity: "If no pre-ci directory exists or it's empty, skip
-        # silently" — absence of hooks is a valid, healthy state.
         return {"hooks_run": [], "aborted_at": None, "exit_code": 0}
 
-    # Python-only contract enforcement — BEFORE any hook runs, so a mixed
-    # dir executes nothing (settlement B3 fail-loud, no-degradation-story).
     sh_files = sorted(p.name for p in hooks_dir.glob("*.sh") if p.is_file())
     if sh_files:
         raise ValueError(

@@ -18,10 +18,6 @@ v2.md, chunk C2.
 
 from __future__ import annotations
 
-#: Transcribed from this repo's own root `.gitattributes` -- the patterns
-#: that govern this repo's real checkin surface. Kept to the directives
-#: that matter for checkin conversion (`text`/`-text`/`eol=`); the prose
-#: comments in the real file are not fixture-relevant.
 REAL_GITATTRIBUTES = (
     "*.cmd text eol=crlf\n"
     "*.ps1 text eol=crlf\n"

@@ -1,18 +1,3 @@
-"""
-coordinator_core.session.tests.test_grant_directive_check — tests for the
-`check` verb `run_grant_directive` (coordinator_core.session.grant_directive)
-gained in P071-C2.
-
-Unit-scoped against monkeypatched `check_tier_u_grant` /
-`_ungranted_record_failing_gate` rather than a real git-backed session
-fixture: `check`'s own contract is "delegate to the existing predicate and
-name the gate on denial" — the predicate and the gate-naming diagnostic
-already carry their own fixtures (`test_grant.py`,
-`test_grant_deny_distinguishes_a_live_record.py`). This file's job is the
-verb's argv parsing and exit/message mapping, which needs neither.
-
-Spec backlink: docs/plans/2026-09-11-grant-and-validation-gates-fire-from-the.md (P071-C2)
-"""
 
 from __future__ import annotations
 
@@ -50,10 +35,6 @@ def test_check_granted_is_exit_ok_with_no_message(monkeypatch):
 
 
 def test_check_no_record_names_absence_directly(monkeypatch):
-    """`check_tier_u_grant` returns `(False, None)` when no sid resolves or
-    no grant file exists — the review note's case the gate-naming helper
-    cannot explain (it needs a real record). Named directly, not routed
-    through the helper."""
     monkeypatch.setattr(grant_directive, "check_tier_u_grant", lambda: (False, None))
     code, message = grant_directive.run_grant_directive(["check"])
     assert code == grant_directive.EXIT_FALSE
@@ -61,9 +42,6 @@ def test_check_no_record_names_absence_directly(monkeypatch):
 
 
 def test_check_denied_with_record_names_the_gate(monkeypatch):
-    """A denial with a real record routes through
-    `_ungranted_record_failing_gate` (lazy-imported inside the deny branch
-    only) so the message names WHICH gate rejected it — seed AC3."""
     record = {"granted_by": "pm", "session_id": "other-sid"}
     monkeypatch.setattr(grant_directive, "check_tier_u_grant", lambda: (False, record))
     monkeypatch.setattr(
@@ -76,9 +54,6 @@ def test_check_denied_with_record_names_the_gate(monkeypatch):
 
 
 def test_check_spawns_no_subprocess(monkeypatch):
-    """Zero process spawns — the same in-process shape `grant`/`revoke`
-    already hold (module docstring: no `tier-u-grant-cli` subprocess is
-    introduced by this plan)."""
     calls = []
     original_run = subprocess.run
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: calls.append(a) or original_run(*a, **k))
@@ -88,8 +63,6 @@ def test_check_spawns_no_subprocess(monkeypatch):
 
 
 def test_unknown_verb_still_usage():
-    """Regression guard: adding `check` must not disturb the existing
-    unknown-verb fallthrough."""
     code, message = grant_directive.run_grant_directive(["bogus"])
     assert code == grant_directive.EXIT_USAGE
     assert "bogus" in message

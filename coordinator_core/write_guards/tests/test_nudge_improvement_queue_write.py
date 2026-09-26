@@ -52,7 +52,6 @@ def _clear_punt_env():
 
 
 class TestGateOnToolAndPath:
-    """Non-write tools and non-queue paths clear silently (None)."""
 
     @pytest.mark.parametrize(
         "tool_name,tool_input",
@@ -69,8 +68,6 @@ class TestGateOnToolAndPath:
 
 
 class TestQueueWriteDenied:
-    """Write/MultiEdit to a queue file (structured YAML or legacy prose) denies
-    with the five-question friction message."""
 
     def test_yaml_write_deny(self):
         result = guard.check(
@@ -83,10 +80,6 @@ class TestQueueWriteDenied:
             )
         )
         reason = _advisory_context(result)
-        # 2026-07-30 escape-mechanism rework: the five questions moved out of
-        # the inline deny text to docs/reference/queue-admission-five-questions.md
-        # (see that module's docstring) -- the deny text now points there and
-        # leads with the content-based `justification:` escape instead.
         assert "queue-admission-five-questions.md" in reason
         assert "justification:" in reason
         assert "state/improvement-queue/new-item.yaml" in reason
@@ -115,8 +108,6 @@ class TestQueueWriteDenied:
 
 class TestYamlEditIsLowerFriction:
     def test_edit_yaml_no_deny(self):
-        """Field-level Edit to an existing structured YAML entry passes
-        silently -- only new-entry Writes get the nudge."""
         result = guard.check(
             _payload(
                 "Edit",
@@ -131,19 +122,8 @@ class TestYamlEditIsLowerFriction:
 
 
 class TestMultiEditJustificationScopeIsWholeCall:
-    """`_gather_new_content()` joins every edit's
-    `new_string` for a MultiEdit call, so a `justification:` line attached to
-    one edit satisfies the escape for a co-occurring, unrelated, unjustified
-    entry in the SAME call. This is a documented, KEPT trade (module
-    docstring: "a single MultiEdit call is one atomic write"), not a bug --
-    this test pins the adversarial shape explicitly so the next reader sees
-    it was a deliberate choice, not an oversight nobody exercised."""
 
     def test_justification_on_one_edit_escapes_unjustified_sibling_edit(self):
-        """Adversarial shape: two edits in one MultiEdit call, only one of
-        which carries a non-trivial `justification:` line. Current, KEPT
-        behavior: the write is allowed, because the guard scans the joined
-        text of the whole call, not each edit independently."""
         result = guard.check(
             _payload(
                 "MultiEdit",
@@ -193,10 +173,6 @@ class TestPuntEscapeHatch:
 
 
 class TestAuthoringSkillSuppression:
-    """A transcript tail showing an active authoring-skill invocation suppresses
-    the deny to None (reference hook lines 196-214) -- mirrors
-    test_hooks_roundtrip.py's test_unauthorized_handoff_command_tag_in_transcript_suppresses
-    / ..._coordinator_skill_in_tail_suppresses convention for nudge_unauthorized_handoff."""
 
     def _write_transcript(self, tmp_path: Path, tail: str) -> str:
         transcript = tmp_path / "transcript.jsonl"
@@ -288,8 +264,6 @@ class TestBlockScalarJustificationIsNotTrivial:
         )
 
     def test_empty_block_scalar_justification_still_denies(self):
-        """A block-scalar header with no following indented content is an
-        empty justification -- still trivial, still nudged."""
         result = guard.check(
             _payload(
                 "Write",

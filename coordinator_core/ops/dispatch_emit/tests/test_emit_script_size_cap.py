@@ -32,11 +32,6 @@ def _wave_row(id_, writes):
 
 
 def _n_row_waves(n: int) -> list:
-    """`n` single-row waves, each writing its own distinct path -- the
-    smallest fixture shape existing dispatch_emit tests build a spine from
-    (`test_emit.py::_two_wave_fixture`), repeated to grow the composed
-    script past the cap.
-    """
     return [
         [_wave_row(f"C{i}", [f"coordinator_core/ops/dispatch_emit/fixture_{i}.py"])]
         for i in range(n)

@@ -1,25 +1,3 @@
-"""test_cli_timeout_ceiling_clamp.py — the ceiling guard for the two
-`coordinator/bin/` doors that expose a `--timeout` flag over a locked mutating
-op: `priority-set.py` (priority.set) and `set-goal-kr-status.py`
-(goal.set_kr_status).
-
-Purpose: the CLI flag is the front door an EM actually types at. The op-side
-clamp (coordinator_core/ops/tests/test_lock_timeout_ceiling_clamp.py) is the
-authority and holds regardless of what these doors send, but a door that
-forwards an over-ask verbatim tells its caller nothing — these cases pin that
-each door clamps at the point of entry AND says so on stderr, so the over-ask is
-answered where it was made rather than silently downstream.
-
-Both doors are loaded by file path (hyphenated filenames are not importable),
-mirroring test_priority_set_no_cwd_gate.py's loader.
-
-Negative-spec:
-  - Does NOT assert the ceiling's VALUE. The number is a judgement call that may
-    be re-ruled; what must never regress is that a caller cannot exceed whatever
-    it currently is.
-  - Does NOT spawn the op — `cc_invoke` is never reached; these cases exercise
-    argument handling only.
-"""
 
 from __future__ import annotations
 
@@ -87,15 +65,7 @@ def test_unparseable_timeout_exits_one(door):
     assert exc.value.code == 1
 
 
-# ---------------------------------------------------------------------------
-# The clamp must sit on the path that actually builds the op params — a helper
-# nothing calls would pass every case above and ship an unbounded door.
-# ---------------------------------------------------------------------------
-
-
 def _sent_params(module, argv: list[str]) -> dict:
-    """Drive module.main(argv) with cc_invoke and repo resolution stubbed, and
-    return the params dict the door tried to send."""
     captured: dict = {}
 
     def _fake_cc_invoke(op_key, params, cwd_repo_root):

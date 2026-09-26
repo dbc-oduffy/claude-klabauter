@@ -1,33 +1,3 @@
-"""
-coordinator_core.reconcile.handoff_corpus — the shared live+archived handoff
-corpus walker.
-
-Extracted (C2a, pln-reconcile-open-comes-back-under-the-bar) out of
-`coordinator_core.ops.handoff_reconcile` ahead of that op's C2b deletion
-(DR-344 kill bar). `_collect_all_handoffs_for_gate_index` is documented,
-in its own docstring below, as "the one shared walker for the live+archived
-handoff corpus; nothing else should re-implement it" — six non-test modules
-import from it or its supporting symbols (`ops/ownership_index.py`,
-`ops/handoff_gate_aging.py`, `ops/handoff_children.py`,
-`ops/handoff_transition.py` (two sites), `reconcile/ac27_differential_
-oracle.py`, `session/work_state.py`), none of which are the killed op's own
-decision logic (auto-ship/gate-cascade routing, D1 conservation, D2 dry-run
-resolution) — this module separates the substrate those six importers
-actually depend on from the op's decision logic, which stays behind (and is
-retired) in `handoff_reconcile.py` itself.
-
-Negative-spec:
-  - Does NOT contain any of `handoff_reconcile.py`'s auto-ship/gate-cascade
-    routing, D1 conservation-assertion, or D2 dry-run-resolution logic —
-    those are the killed op's own decision logic, not shared substrate, and
-    are not extracted here.
-  - Does NOT re-implement the corpus walk a second time anywhere in this
-    tree — every consumer of the live+archived handoff corpus routes through
-    `_collect_all_handoffs_for_gate_index` (or the lower-level
-    `_walk_archive_md_files` it shares with `_collect_all_handoff_paths` in
-    `handoff_reconcile.py`, which stays behind since its one caller,
-    C6 chain-walk liveness, is decision logic being deleted).
-"""
 
 from __future__ import annotations
 
@@ -44,31 +14,12 @@ from coordinator_core.ops.fleet._common import collect_live_handoff_paths
 
 _LOG = logging.getLogger(__name__)
 
-#: deployment_state values that remove a handoff from the open set even when
-#: status is still "open" (read-tolerant fallback: "active") — mirrors
-#: archive_handoffs.py's terminal-set values, applied here on the open-set
-#: side of the two-axis predicate (see `_is_open`'s docstring). Value lives
-#: in coordinator_core.lifecycle_constants (SSOT, DR-084 C3).
 _CLOSED_DEPLOYMENT_STATES = HANDOFF_TERMINAL_DEPLOYMENT
 
-#: the single deployment_state that keeps a status in {claimed, consumed}
-#: handoff OPEN — the archive-complement of archive_handoffs.py's
-#: _is_terminal Branch A (status in {claimed, consumed} AND deployment_state
-#: != in_flight is terminal/closed), so deployment_state==in_flight is the
-#: sole non-terminal carve-out.
 _CONSUMED_OPEN_DEPLOYMENT_STATE = "in_flight"
 
 _AWAITING_GATE_STATE = "awaiting_gate"
 
-#: D1 severed-observer gate — the two frontmatter fields that together count
-#: as a "recorded disposition" for a previously-surfaced candidate. Both must
-#: be non-empty strings (mirrors handoff_stamp.py's
-#: _repair_archived_shipped_in_handler mandatory-`reason` precedent) — a bare
-#: acknowledgement flag with no reason would recreate the exact
-#: operator-remembers gap D1 exists to close. Read/write side for these two
-#: fields stays in `handoff_reconcile.py` (D1 decision logic); the constants
-#: are shared here because `handoff_transition._record_disposition` imports
-#: them so the read/write sides cannot drift apart on spelling.
 _DISPOSITION_FIELD = "reconcile_disposition"
 _DISPOSITION_REASON_FIELD = "reconcile_disposition_reason"
 
@@ -106,7 +57,6 @@ def _is_open(meta: Dict[str, Any]) -> bool:
 
 
 def _collect_open_handoffs(worktree_root: Path) -> List[Dict[str, Any]]:
-    """Enumerate state/handoffs/*.md and return parsed frontmatter dicts for the open set."""
     open_handoffs: List[Dict[str, Any]] = []
     for path in collect_live_handoff_paths(worktree_root):
         meta = _read_meta(str(path))
@@ -129,23 +79,6 @@ def _walk_archive_md_files(
     on_file: Callable[[Path], Optional[_WalkT]],
     on_scan_error: Callable[[OSError], None],
 ) -> "tuple[List[_WalkT], List[str]]":
-    """Shared `archive/handoffs/` walker: os.walk(onerror=...) + `.md` filter +
-    scan_errors bookkeeping, parameterized by a per-file callback.
-
-    Factored out of
-    `_collect_all_handoffs_for_gate_index` and `_collect_all_handoff_paths`
-    (the latter stays in `handoff_reconcile.py`), which were near-duplicate
-    `os.walk(archive_dir, onerror=...)` implementations differing only in
-    what they do with a successfully-read entry and their warning message
-    wording. Both delegate here; `on_scan_error` still lets each caller log
-    its own subsystem-specific scan-gap rationale.
-
-    NOTE: uses os.walk(onerror=...), NOT rglob("*.md") — Path.glob()'s selector
-    silently swallows PermissionError while walking (verified: unreadable dir ->
-    glob() yields an empty iterator, no exception), which made a bare
-    `except OSError` here dead code for the exact permission-denied case it was
-    meant to guard (mirrors roadmap_dag.py's `_collect_stub_paths` fix).
-    """
     results: List[_WalkT] = []
     scan_errors: List[str] = []
     if not archive_dir.is_dir():
@@ -170,34 +103,6 @@ def _walk_archive_md_files(
 def _collect_all_handoffs_for_gate_index(
     worktree_root: Path,
 ) -> "tuple[List[Dict[str, Any]], List[str]]":
-    """Return (all_handoffs, scan_errors) — parsed frontmatter dicts, each
-    carrying its own `_path` (mirroring `_collect_open_handoffs`'s convention),
-    for the live+archived union. Consumed by gate_eval's `blocked_by` stub-id
-    resolution (durable-id survives the archive move) and by the
-    session-ownership index built over the same corpus
-    (`ownership_index.build_ownership_index`, which resolves claim-store
-    basenames against THIS function's output rather than re-walking the
-    corpus itself — this is the one shared walker for the live+archived
-    handoff corpus; nothing else should re-implement it).
-
-    Walks `state/handoffs/` (live) + `archive/handoffs/` + `archive/completed/`
-    (both archive roots via the shared `_walk_archive_md_files` os.walk
-    helper — never `rglob`, which silently swallows PermissionError; see that
-    function's own docstring). `scan_errors` is non-empty whenever EITHER
-    archive subtree could not be fully scanned — an unreadable subtree here
-    means gate_eval's `blocked_by` stub-id lookup (or the ownership index's
-    basename resolution) may be missing an archived record, which must not be
-    indistinguishable from "that record genuinely does not exist".
-
-    This function is called by
-    THREE independent consumers per invocation cycle (gate_eval's blocked_by
-    resolution, ownership_index.build_ownership_index, and
-    ac27_differential_oracle.py), each re-walking + re-copying the full
-    live+archived corpus rather than sharing one materialized result within
-    a single ceremony run. Not flagged as a performance P-anything (no
-    evidence this is hot-path/latency-sensitive here) — worth a look for
-    whoever eventually profiles `/workstream-complete`.
-    """
     all_handoffs: List[Dict[str, Any]] = []
     for path in collect_live_handoff_paths(worktree_root):
         meta = _read_meta(str(path))
@@ -237,22 +142,9 @@ def _collect_all_handoffs_for_gate_index(
     return all_handoffs, scan_errors
 
 
-# ---------------------------------------------------------------------------
-# _build_blocker_index — C2 (plan 2026-08-30-the-gate-brief-reads-a-list-
-# where-the-record-wrote-one)
-# ---------------------------------------------------------------------------
-
-#: Bytes of a candidate file's HEAD read before falling back to a full read.
-#: Measured against the live 1165-record corpus (dispatch brief, C2): 72-82ms
-#: to build the index at this size vs. 1005ms for the equivalent full-YAML
-#: index, with `missing_ids=0, extra_ids=0, path_mismatch=0` — 8192/16384
 #: produce IDENTICAL output, so this is the measured floor, not a guess.
 _BLOCKER_INDEX_HEAD_BYTES = 4096
 
-#: `^(stub_id|handoff_id):` id lines, extracted from the (possibly truncated)
-#: frontmatter head. Trailing comments and empty/null id values do not occur
-#: in the corpus (measured 0 each, dispatch brief) — no further coercion is
-#: applied beyond `unquote_yaml_scalar` below.
 _BLOCKER_ID_LINE_RE = re.compile(rb"^(?:stub_id|handoff_id):[ \t]*(.*?)[ \t]*$", re.MULTILINE)
 
 
@@ -295,8 +187,6 @@ def _frontmatter_head_bytes(path: Path) -> Optional[bytes]:
     if idx != -1:
         return head[:idx]
     if len(head) < _BLOCKER_INDEX_HEAD_BYTES:
-        # The whole file fit in the truncated read and still carries no
-        # closing fence — there is nothing more to fetch.
         return head
     try:
         full = path.read_bytes()
@@ -309,15 +199,6 @@ def _frontmatter_head_bytes(path: Path) -> Optional[bytes]:
 
 
 def _blocker_ids_in_head(head: bytes) -> List[str]:
-    """Every `stub_id`/`handoff_id` value in a frontmatter head, unquoted.
-
-    MUST route the raw regex capture through `unquote_yaml_scalar` before use
-    as an index key — measured (dispatch brief C2): 625 of 653
-    `^stub_id:`/`^handoff_id:` lines in the live+archived corpus carry a
-    quoted value (`stub_id: "sat-06"`), and an unquoted key means 96% of
-    lookups resolve as `unresolvable`, the exact dangling-ref symptom C3
-    argues cannot happen.
-    """
     ids: List[str] = []
     for match in _BLOCKER_ID_LINE_RE.finditer(head):
         raw = match.group(1).decode("utf-8", errors="replace").strip()
@@ -370,12 +251,6 @@ def _build_blocker_index(repo_root: Path) -> "tuple[Dict[str, List[Path]], List[
     def _index_file(path: Path) -> None:
         head = _frontmatter_head_bytes(path)
         if head is None:
-            # A directory-level walk found `path`, but reading it failed
-            # (locked/permission-denied) — the exact per-FILE instance of
-            # the "unreadable subtree" hazard `scan_errors` already tracks
-            # at directory granularity (Review: code-reviewer — Finding 1).
-            # A blocker id that only this file names must come back
-            # `scan_incomplete`, never a silent `unresolvable`.
             scan_errors.append(f"{path}: unreadable (frontmatter head read failed)")
             return
         for blocker_id in _blocker_ids_in_head(head):

@@ -1,12 +1,3 @@
-"""coordinator/bin/hook-run.py hands its own process environment to the payload.
-
-The harness's hook event carries no `env`, and `payload_from_event` never
-falls back to ambient environment, so every per-session guard override used to
-reach the op as "not requested". hook-run's own environment IS the caller's on
-both legs (cold: the hook process; served: the isolated borrow of what the door
-carried), so it supplies `env` -- and `payload_from_event` filters it to the
-override prefixes, so nothing else crosses.
-"""
 
 from __future__ import annotations
 

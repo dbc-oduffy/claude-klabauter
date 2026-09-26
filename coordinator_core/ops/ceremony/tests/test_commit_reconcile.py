@@ -1,19 +1,3 @@
-"""
-coordinator_core.ops.ceremony.tests.test_commit_reconcile
-
-Tests for `_reconcile_landed_despite_failure`, extracted from
-`test_commit_pipeline.py` (lines 5369-5643 at the module's pre-delete HEAD)
-alongside the C4 extraction of `commit_reconcile.py` out of the dying
-`commit_pipeline.py` (docs/plans/2026-08-29-the-push-subsystem-leaves-and-
-then-the-pipeline-can-go.md).
-
-Coverage: the two predicate fixes (W3/W3b, `scoped_git_commit.py`) widened
-what counts as landed, but could not help a `CommitOutcome` that says
-`landed=False` in the first place. `_reconcile_landed_despite_failure` is
-that repair, and these pin both halves of it: it must recover OUR commit,
-and it must never adopt anyone else's. Live incident: 26ce6a671 (peer
-1021e7bf, 2026-08-19).
-"""
 
 from __future__ import annotations
 
@@ -55,8 +39,6 @@ def _rev_parse_head(repo: Path) -> str:
 
 
 def _seed_commit_with_token(repo: Path, token: str, rel_path: str) -> str:
-    """Lands a real commit carrying `Commit-Token: <token>` and returns its
-    sha -- the shape `_reconcile_landed_despite_failure` searches for."""
     _seed_file(repo, rel_path, "content\n")
     _git(["add", "--", rel_path], repo)
     _git(["commit", "-q", "-m", f"subject\n\nCommit-Token: {token}"], repo)
@@ -64,9 +46,6 @@ def _seed_commit_with_token(repo: Path, token: str, rel_path: str) -> str:
 
 
 def test_reconcile_recovers_the_sha_of_a_commit_that_landed_despite_failure(tmp_path):
-    """The repair: `git commit` reported failure (a timeout synthesizes
-    `returncode=-1` in `git_native._git`) but the commit is really in
-    `pre_sha..HEAD` under this call's own token, so the reconcile names it."""
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "seed")
     _git(["add", "--", "README.md"], repo)
@@ -85,10 +64,6 @@ def test_reconcile_recovers_the_sha_of_a_commit_that_landed_despite_failure(tmp_
 
 
 def test_reconcile_never_adopts_a_peer_commit_in_the_same_window(tmp_path):
-    """The safety property, and the one that matters on a shared branch: a
-    peer commit landing in the SAME `pre_sha..HEAD` window carries a
-    different token, so the reconcile must return None rather than claim it.
-    Adopting it would report someone else's work as this call's own."""
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "seed")
     _git(["add", "--", "README.md"], repo)
@@ -105,8 +80,6 @@ def test_reconcile_never_adopts_a_peer_commit_in_the_same_window(tmp_path):
 
 
 def test_reconcile_returns_none_when_nothing_landed(tmp_path):
-    """A genuine failure stays a failure -- the ordinary case, and the one
-    that must not regress into a phantom success."""
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "seed")
     _git(["add", "--", "README.md"], repo)
@@ -145,10 +118,6 @@ def test_reconcile_falls_back_to_a_bounded_window_without_a_pre_sha(tmp_path):
 
 
 def test_reconcile_fallback_window_still_never_adopts_a_peer_commit(tmp_path):
-    """The safety property must survive the widening: with no `pre_sha` at all,
-    a peer's commit sitting in the fallback window carries a different token, so
-    the search still finds nothing. Widening the RANGE never widens what counts
-    as ours."""
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "seed")
     _git(["add", "--", "README.md"], repo)
@@ -193,38 +162,10 @@ def test_reconcile_fallback_resolves_a_real_bounded_base_when_history_exceeds_th
     assert found.range_spec.endswith("..HEAD")
 
 
-# `test_reconcile_finds_a_commit_that_predates_its_own_pre_sha` (deleted): it
-# pinned a WIDENED second `git log` pass on the `pre_sha`-present path,
-# reached only when the bounded `pre_sha..HEAD` pass found nothing -- which
-# includes the ordinary already-committed no-op, the commonest failure-path
-# outcome there is, making that pass a near-full-history walk on the cheap
-# common case (measured: a filtered `git log -n --grep` does not bound the
 # walk, only the output -- see `_RECONCILE_FALLBACK_WINDOW_COMMITS`'s own
-# comment). The shape it modelled -- this call's own commit landing OUTSIDE
-# its own `pre_sha..HEAD` range -- was never an ordering fault inside
-# `commit()`: `rev_parse_head()` genuinely always runs before
-# `commit_scoped()`. The real cause was the warm-engine client re-executing
-# an already-delivered mutation, so a SECOND execution read `pre_sha` AFTER a
-# FIRST execution had already committed -- fixed at the root this session in
-# `coordinator_core/warm/client.py`. With one execution per invocation,
-# `pre_sha` is an ancestor of this call's own commit by construction, so the
-# shape this test modelled can no longer occur, and the pass that defended
-# against it is gone -- see `_reconcile_landed_despite_failure`'s own
-# docstring for the full reasoning. See
-# `test_reconcile_regression_pre_sha_path_issues_exactly_one_git_log` below
-# for its replacement guard.
 
 
 def test_reconcile_fallback_ignores_a_token_merely_quoted_in_a_message_body(tmp_path):
-    """The one thing the fallback's wider-than-bounded search admits that the
-    `pre_sha`-present path's plain substring match does not: a commit whose
-    message QUOTES a token rather than carrying it as its own trailer --
-    which this defect's own investigation notes do, repeatedly. The fallback
-    anchors the match to a whole trailer line, so a quoted mention is not
-    adopted.
-
-    Without the anchor this test adopts the quoting commit and reports
-    someone else's work as this call's own."""
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "seed")
     _git(["add", "--", "README.md"], repo)
@@ -283,12 +224,6 @@ def test_reconcile_finds_our_commit_even_when_the_caller_named_an_untouched_path
 
 
 def test_reconcile_regression_pre_sha_path_issues_exactly_one_git_log(tmp_path, monkeypatch):
-    """Regression guard for this finding: with `pre_sha` present, the reconcile
-    must issue exactly ONE `git log` call and never fall through to a second,
-    wider search -- the near-full-history walk this finding closed. Proven
-    against the ordinary "nothing of ours landed" outcome, the commonest
-    failure-path shape there is and the one the removed second pass used to
-    run on every time."""
     from coordinator_core.ops.ceremony import git_native
 
     repo = _init_repo(tmp_path)

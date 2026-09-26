@@ -1,26 +1,3 @@
-"""Tests for `coordinator_core.search.census` that assert against REAL `find`.
-
-AC13's differential oracle for C1 (docs/plans/2026-08-21-the-advisory-band-gets-
-smaller-cheaper-and-honest.md): the in-process evaluator and the real `find` pipeline
-run over the SAME fixture trees, and the two are asserted identical (sorted, per
-`census.py`'s own documented choice to leave sorting to the caller, matching
-`guard_head_tail_rewrite`'s SORTED-for-determinism policy) -- never a faked oracle.
-Methodology transfers from `coordinator_core/git/tests/test_git_state_against_real_
-git.py`: every test here spawns a real `find` binary through a module-level helper,
-so this file carries the module-level `pytestmark` the spawn ratchet requires (a
-per-function mark is inert to it -- see AC11), tiered onto `cadence` on its own,
-away from the plain-Python parser tests in `test_census_declines.py`-shaped
-counterparts colocated with this module's own recognition unit tests.
-
-Corpus, minimum per AC13: traversal order (sorted comparison, not raw order --
-`find`'s own order is not guaranteed reproducible, same choice the generator this
-module replaces already made); a bare path; `-name` glob semantics; `-type f`;
-hidden files; a `-type d` shape that must DECLINE (Unanswerable), not answer; an
-`-exec`/redirection/substitution shape that must also decline; and an empty result.
-
-Negative spec: nothing here may be de-tiered by faking `find`. A test that stops
-needing the real binary belongs beside `census.py`'s own parser unit tests, not here.
-"""
 
 from __future__ import annotations
 
@@ -82,7 +59,7 @@ class TestCensusMatchesRealFind:
         got = sorted(census.run(spec, cwd=tmp_path))
         want = _real_find([".", "-name", "*.txt"], cwd=tmp_path)
         assert got == want
-        assert got  # non-empty -- the match actually exercises something
+        assert got
 
     def test_type_f_matches(self, tmp_path):
         _fixture_tree(tmp_path)
@@ -124,8 +101,6 @@ class TestCensusMatchesRealFind:
 
 
 class TestCensusDeclinesUncertifiedShapes:
-    """Corpus-uncovered per C0's spike -- must stay `Unanswerable` (AC4/AC13),
-    never guess at an equivalent."""
 
     def test_type_d_declines(self, tmp_path):
         _fixture_tree(tmp_path)

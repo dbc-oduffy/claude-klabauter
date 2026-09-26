@@ -1,26 +1,3 @@
-"""Hook mode runs the guard cold when the engine is unreachable.
-
-Subject: `door_posix.c :: hook_fall_through` (its Windows twin in `door.c` is
-the same shape and is exercised by `test_door_stdin_mode.py` on Windows).
-
-Before this, hook mode answered every fall-through with a blanket deny, so an
-idle-demoted or dead engine denied every Bash call on the box until some other
-process happened to respawn it. Every fall-through is pre-delivery or
-provably undispatched, so nothing has evaluated the hook yet; the door now
-runs the same entrypoint cold with the payload on its stdin and relays the
-verdict.
-
-Pinned: a cold verdict is relayed byte-for-byte with the payload delivered
-intact; a cold leg that exits nonzero, or exits 0 with nothing on stdout,
-passes LOUDLY -- no `permissionDecision`, a `systemMessage` and model-facing
-`additionalContext` saying the guard did not run. An unreachable engine never
-denies (DoE-claude coordinator/docs/wiki/coordinator-tripwires/
-an-unreachable-engine-passes-loudly-never-denies.md), and an unrun guard never
-reads as one that passed.
-
-No live server: the runtime base is a fresh directory, so the connect fails
-and the door takes the fall-through.
-"""
 
 from __future__ import annotations
 
@@ -142,10 +119,6 @@ def test_no_cold_entrypoint_passes_loudly(door, tmp_path, runtime_base):
     [("PostToolUse", True), ("SessionEnd", False), (None, False)],
 )
 def test_the_loud_pass_names_the_payloads_own_event(door, tmp_path, runtime_base, event, has_hso):
-    """`hook-run` serves every hook event through this door, not only
-    PreToolUse. A wrong `hookEventName` fails the harness's validation and
-    `SessionEnd` rejects `hookSpecificOutput` outright, so the envelope carries
-    the payload's own event, or only the `systemMessage` when it has none."""
     root = _make_stub_engine_root(tmp_path)
     (root / "coordinator" / "bin" / "coordinator-invoke.py").unlink(missing_ok=True)
     payload = {"tool_name": "Bash"}

@@ -1,19 +1,3 @@
-"""
-coordinator_core.subagent_sandbox.tests.test_provision_report_touch_claim --
-proves provision_report.py's four `open(doc_path, "x")` sites (session-keyed
-nonce path, session-keyed provision_key path, plan-derivable path) now
-record a `session.scope.touch()` claim for the dispatching session, closing
-the same in-process-writer hole `test_in_process_writer_claim_path.py`
-closes for `provision_report._provision` via its own entrypoint.
-
-Fixtures mirror the existing `test_provision_report.py`'s `git_repo` /
-`policy_path` conventions (real `git init`'d tmp_path repo, so
-`resolve_git_root` behaves exactly as it does against a production
-checkout).
-
-Spec backlink: pln-in-process-engine-writers-decl-33016a C2
-Module under test: coordinator_core/subagent_sandbox/provision_report.py
-"""
 
 from __future__ import annotations
 
@@ -32,8 +16,6 @@ from coordinator_core.subagent_sandbox.provision_report import _provision
 from coordinator_core.subagent_sandbox.provision_report import main as provision_main
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -46,8 +28,6 @@ BARE_HEX_AGENT_ID = "abc123def4567890"
 
 @pytest.fixture
 def git_repo(tmp_path: Path) -> Path:
-    """A real, empty git repo rooted at tmp_path (mirrors
-    test_provision_report.py's identical fixture)."""
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True,
@@ -94,11 +74,6 @@ def _run(payload: dict, policy_path: Path, git_root: Path, monkeypatch: pytest.M
     envelope = json.loads(captured.out.splitlines()[0])
     return envelope["report_sidecar"]
 
-
-# ---------------------------------------------------------------------------
-# Each written sidecar reaches compute_offer(session)["safe_paths"] --
-# the session whose spawn wrote it must be able to commit it.
-# ---------------------------------------------------------------------------
 
 def test_nonce_path_sidecar_reaches_safe_paths(
     git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
@@ -161,16 +136,10 @@ def test_plan_derivable_path_sidecar_reaches_safe_paths(
     )
 
 
-# ---------------------------------------------------------------------------
-# AC6: no claim call materializes a session dir that did not already exist
-# (the phantom-live-peer guard) -- this session's dir is NEVER created here.
-# ---------------------------------------------------------------------------
-
 def test_no_claim_when_dispatching_session_dir_absent_no_phantom_peer(
     git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
     session_id = "sess-touch-claim-no-init"
-    # Deliberately never calling session_core.init(session_id, ...) here.
 
     rel_path = _run(_payload(session_id=session_id), policy_path, git_repo, monkeypatch, capsys)
     assert (git_repo / rel_path).is_file()

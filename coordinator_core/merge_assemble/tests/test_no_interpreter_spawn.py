@@ -53,9 +53,7 @@ import pytest
 
 from coordinator_core.merge_assemble import apply as ma_apply
 
-#: The four handlers C2 converted in-process. Names come straight from the
 #: module's own `_CLI_DISPATCH` table and its decision comment above it —
-#: not re-derived here.
 _CONVERGED_HANDLER_NAMES = (
     "_dispatch_merge_recovery_and_tag_cut",
     "_dispatch_portability_sweep",
@@ -63,10 +61,6 @@ _CONVERGED_HANDLER_NAMES = (
     "_dispatch_tier_u_grant",
 )
 
-#: Handlers that still spawn by design (each with a docstring naming why it
-#: was excluded from C2's conversion) or that spawn a genuine external
-#: program with no import path. Listed here only so a future edit that
-#: mislabels one as "converged" is caught: this set and
 #: `_CONVERGED_HANDLER_NAMES` must partition `_CLI_DISPATCH`'s handler set.
 _STILL_SPAWNING_HANDLER_NAMES = (
     "_dispatch_node_ceremony_gate",

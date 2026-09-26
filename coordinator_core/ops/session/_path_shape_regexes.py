@@ -43,16 +43,6 @@ from __future__ import annotations
 
 import re
 
-# A real drive letter is never preceded by a word character; `https:` always
-# is (the `s` before the `:` is itself preceded by the alnum `p`). The
-# trailing negative lookahead excludes the string-escape false positive
-# described in the module docstring above: a bare escape-letter/digit
-# standing alone as the entire "segment" after the separator is not a real
-# path component. `(?![A-Za-z0-9_\-])` after the candidate escape char is
-# what discriminates "the whole segment is just this one escape char" from
-# "this is a real segment that happens to START with one of these letters".
-# The escape-letter set mirrors Python/JSON string-escape letters: n t r b
-# f v, plus the digit 0 (null-byte escape).
 WIN_DRIVE_RE = re.compile(
     r"(?<![A-Za-z0-9_])[A-Za-z]:[\\/](?![ntrbfv0](?![A-Za-z0-9_\-]))"
 )

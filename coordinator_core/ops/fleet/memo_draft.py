@@ -95,9 +95,6 @@ from coordinator_core.ops.fleet._memo_compose import (
 
 _MODE = "draft"
 
-# Generator-provenance: O_EXCL-creates a NEW draft at the CALLING repo's own
-# .coordinator-local/memo-outbox/<topic>.md -- one file per topic, a
-# data-dependent set of tracked paths.
 MUTATES = [".coordinator-local/memo-outbox/*.md"]
 
 
@@ -110,25 +107,10 @@ def outbox_dir(caller_worktree: Path) -> Path:
 
 
 def legacy_outbox_dir(caller_worktree: Path) -> Path:
-    """The RETIRED outbox dir for `caller_worktree` -- `state/memo-outbox/`.
-    Read-only fallback: content staged here before the 2026-09-03 repoint is
-    still resolved by `resolve_outbox_draft_path`, never written to fresh."""
     return Path(_machinery_paths.legacy_memo_outbox_dir(str(caller_worktree)))
 
 
 def resolve_outbox_draft_path(caller_worktree: Path, topic: str) -> Path:
-    """Locate `<topic>.md` for `caller_worktree`'s outbox: the new
-    `.coordinator-local/memo-outbox/` root first, the retired
-    `state/memo-outbox/` root second, falling back to the new root's path
-    (not-yet-existing -- the create case) when neither has it.
-
-    Read-compatibility for the 2026-09-03 outbox relocation: every WRITE in
-    this op family (memo.draft/memo.compose/memo.send/
-    memo.reconcile_outbox) targets the new root only, but hundreds of drafts
-    and this repo's whole `sent/` history still sit at the old one, so a
-    reader that only checked the new root would silently go blind to all of
-    them.
-    """
     new_path = outbox_dir(caller_worktree) / f"{topic}.md"
     if new_path.exists():
         return new_path
@@ -139,25 +121,6 @@ def resolve_outbox_draft_path(caller_worktree: Path, topic: str) -> Path:
 
 
 def merged_outbox_drafts(caller_worktree: Path) -> list[Path]:
-    """Every `*.md` draft in `caller_worktree`'s outbox, merged across the new
-    `.coordinator-local/memo-outbox/` root and the retired `state/memo-outbox/`
-    root (2026-09-03 relocation). Sorted by filename within each root; new-root
-    entries first.
-
-    A topic present at BOTH roots surfaces the new-root copy only -- the new
-    root is canonical and a same-topic file can only exist at both if a caller
-    hand-placed one, not through this op family's own writes.
-
-    Read-only: `Path.glob` re-reads each directory fresh on every call -- no
-    caching, no persisted index (Q-d store-less-ness invariant). A missing
-    outbox directory at either root yields no candidates from that root, not
-    an error.
-
-    Single shared implementation of
-    the dual-root merge previously copy-pasted verbatim into
-    memo_list_outbox._enumerate_outbox_candidates and
-    memo_reconcile_outbox._reconcile.
-    """
     new_dir = outbox_dir(caller_worktree)
     legacy_dir = legacy_outbox_dir(caller_worktree)
 
@@ -173,23 +136,7 @@ def merged_outbox_drafts(caller_worktree: Path) -> list[Path]:
     )
     return [*new_paths, *legacy_paths]
 
-# Placeholder body written into a fresh draft — guides the human/agent toward
-# memo.compose (fill in body) then memo.send (deliver). Mirrors DoE's
-# _cmd_draft placeholder comment.
-#
-# The summary-cap sentence below (2026-07-26 draft-time-discoverability fix,
-# cross-repo/inbox/2026-07-26-doe-claude-em-memo-send-summary-cap-
 # discoverable-at-draft-time.md) surfaces `_SUMMARY_MAX_CHARS` in the body the
-# author is actually editing. A trailing YAML comment on the `summary:` line
-# itself (the memo's first-suggested shape) was tried and rejected: both
-# `coordinator_core.frontmatter.primitives.read_fm_field` and DoE's
-# `cross-repo-memo` CLI `_parse_outbox_file` are line-oriented, no-comment-
-# aware parsers — a trailing `# ...` on the summary line reads back as part
-# of the field's VALUE (verified: `read_fm_field` returns
-# '""  # one line, <= 120 chars' for a `summary: ""  # one line, <= 120
-# chars` line), corrupting every downstream reader (memo.compose's summary
-# re-derivation, the CLI's outbox validator). The body placeholder has no
-# such parsing contract, so the notice lives here instead.
 _BODY_PLACEHOLDER = (
     "<!-- Compose your memo body here (memo.compose), then deliver it via "
     "memo.send. -->\n"
@@ -216,32 +163,11 @@ _BODY_PLACEHOLDER = (
 )
 
 
-# ---------------------------------------------------------------------------
-# scoped_to validation — mirrors memo_send._validate_scoped_to (2026-07-21 fix,
-# routed via the memo.draft "silently drops scoped_to" break-class finding —
-# same defect class as memo.send's C9/A11 unknown-frontmatter-key drop). The
 # _SCOPED_TO_KNOWN_SUBKEYS frozenset is IMPORTED from memo_send (single source
 # of truth for the sub-key shape); the error MESSAGES here are deliberately
-# memo.draft-namespaced rather than reusing memo_send._validate_scoped_to
-# directly — that function's error text is hardcoded "memo.send: ..." and
-# would misattribute a draft-time failure to the send op. The validation
-# LOGIC (presence-triggered completeness: scoped_to absent entirely passes;
 # scoped_to present must be the COMPLETE triple — artifact + exactly one of
-# version|sha + seam — or the draft fails loud) is a byte-for-byte mirror.
-#
-# Negative-spec: does NOT accept a partial triple as "good enough" (same
-# rejection as memo.send) — a draft carrying an incomplete pin is exactly the
-# shape this gate exists to reject, never coerced into "treat as absent" or
-# "treat as complete".
-# ---------------------------------------------------------------------------
 
 def _validate_scoped_to(dry_run: bool, value: Any):
-    """Validate the optional `scoped_to` param; return None on pass, else an error envelope.
-
-    See module-level comment above this function for the full rationale
-    (mirrors memo_send._validate_scoped_to's logic with memo.draft-namespaced
-    error messages).
-    """
     if value is None:
         return None
     if not isinstance(value, dict):
@@ -295,51 +221,23 @@ def _validate_scoped_to(dry_run: bool, value: Any):
     return None
 
 
-# ---------------------------------------------------------------------------
-# Owner-display-name advisory (2026-09-25 defect item 3, DoE-claude memo
-# state/cross-repo/inbox/2026-09-25-doe-claude-em-engine-friction-sizing-
-# scaffold-memo-owner-safe-commit-emit-cap.md) — a session display name
-# (`<repo>-<nn>`, e.g. Example-retrieval-repo-26) gets reused across sessions, so
-# naming an owner by display name alone leaves a later reader unable to
-# find who was actually meant. WARN (advisory, still writes) when
-# free text names a display name with no session id (UUID) or claim
-# reference nearby — mirrors the summary-cap advisory split
-# (validate_explicit_summary / summary_cap_advisory above): draft-time
-# text is still editable, so it advises rather than refuses.
-#
-# Negative-spec: never refuses at draft (matches the summary-cap split —
-# hard refusal, if any, belongs at memo.compose/memo.send, not here), and
-# never matches an ordinary hyphenated technical term (sha-256, utf-8) —
-# the pattern is restricted to KNOWN repo-name prefixes, not a bare
-# `\w+-[0-9a-f]{1,3}` sweep.
-# ---------------------------------------------------------------------------
-
-#: Known repo prefixes this fleet actually mints session display names for
-#: (`<repo>-<nn>` convention) — restricts the digit-suffix match below to
-#: real repo names so an ordinary hyphenated technical term never matches.
 _KNOWN_REPO_PREFIXES = (
     "project-rag", "claude-klabauter", "doe-claude", "coordinator-claude",
     "claude-klabauter",
 )
 
-#: `<repo>-<suffix>` where suffix is 1-3 hex/digit chars (display-name
-#: convention, e.g. Example-retrieval-repo-26, claude-klabauter-6e, doe-claude-c0).
 _DISPLAY_NAME_RE = re.compile(
     r"\b(?:%s)-[0-9a-f]{1,3}\b" % "|".join(re.escape(p) for p in _KNOWN_REPO_PREFIXES),
     re.IGNORECASE,
 )
 
-#: A UUID (session id) anywhere nearby qualifies the mention as traceable.
 _UUID_RE = re.compile(
     r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
     re.IGNORECASE,
 )
 
-#: A claim-reference qualifier nearby (claim ref, session id, etc.).
 _CLAIM_REF_RE = re.compile(r"\bclaim\b|\bsession[\s-]?id\b", re.IGNORECASE)
 
-#: How far (chars, either side) a UUID/claim-ref may sit and still qualify
-#: a display-name mention.
 _DISPLAY_NAME_PROXIMITY_CHARS = 80
 
 
@@ -371,7 +269,6 @@ def detect_unqualified_display_names(text: Optional[str]) -> list:
 
 
 def owner_name_advisory(op: str, names: list) -> Optional[str]:
-    """One fact plus a terse alternative; None when `names` is empty."""
     if not names:
         return None
     return (
@@ -380,30 +277,6 @@ def owner_name_advisory(op: str, names: list) -> Optional[str]:
     )
 
 
-# ---------------------------------------------------------------------------
-# Optional receiver classification (classify_receiver: true) — C5 AC5 addition
-#
-# Reuses the SAME resolution authority memo.send uses (_memo_resolver) so a
-# draft that classifies "clean" here is guaranteed to classify "clean" at
-# send time too — the two verbs can never disagree about whether `to` resolves.
-#
-# Negative-spec: does NOT change the portable-draft default. This function is
-# ONLY called when the caller explicitly passes classify_receiver: true — the
-# default (absent/False) path never calls it, preserving the "unresolved
-# receivers still draft" fallthrough documented in the module docstring.
-# ---------------------------------------------------------------------------
-
-#: rejection_class enum — the ONLY four values this module ever emits on the
-#: `rejection_class` envelope key (2026-07-21 cross-repo split, DoE
-#: claude-central-em consult; ambiguous-receiver added same day after PM
-#: review caught the invariant gap in the initial three-value cut — an
-#: undiscriminated fourth branch made "present iff classification rejection"
-#: false as documented). Stable, greppable, cross-repo-contract strings:
-#: a consumer that has never read our source must be able to branch on these
-#: without parsing log text. Do NOT reuse a value across two different causes,
-#: and do NOT rename an existing value once a consumer depends on it — treat
-#: this tuple as append-only. `publish_target_rejected` is retired, not
-#: reusable: a publish-mirror `to` now routes to its owner instead.
 REJECTION_CLASS_UNKNOWN_RECEIVER = "unknown_receiver"
 REJECTION_CLASS_REGISTRY_ERROR = "registry_error"
 REJECTION_CLASS_AMBIGUOUS_RECEIVER = "ambiguous_receiver"
@@ -464,9 +337,6 @@ def _classify_receiver_for_draft(to: str, dry_run: bool):
 
     owner = _reroute_owner(to)
     if owner:
-        # A publish mirror or redirect alias is not a receiver; its owner is. Returned as a str so
-        # the draft's `to:` carries the owner, the same substitution the
-        # did-you-mean auto-accept below makes.
         return owner
 
     try:
@@ -486,11 +356,11 @@ def _classify_receiver_for_draft(to: str, dry_run: bool):
         return result
 
     if inbox_dir is not None:
-        return None  # resolves cleanly as typed — proceed
+        return None
 
     unique_match = _unique_nearest_receiver(to, all_repos)
     if unique_match is not None:
-        return unique_match  # unambiguous did-you-mean — auto-accept, proceed
+        return unique_match
 
     suggestion = _suggest_nearest_receiver(to, all_repos)
     suggestion_clause = f" Did you mean {suggestion!r}?" if suggestion else ""
@@ -505,50 +375,7 @@ def _classify_receiver_for_draft(to: str, dry_run: bool):
     return result
 
 
-# ---------------------------------------------------------------------------
-# Param validation
-# ---------------------------------------------------------------------------
-
 def _validate_draft_params(params: dict):
-    """Validate memo.draft params; return an 11-tuple or a build_setup_error_result dict.
-
-    Required: dry_run (bool), topic (slug), to (str), title (str), kind
-    (validated against the DR-214/D2-6 enum; required since 2026-08-25 to
-    match memo.send's own gate — see the inline note at the check).
-    Optional: summary,
-    scoped_to (validated via presence-triggered completeness, see _validate_scoped_to),
-    classify_receiver (bool, default False — see _classify_receiver_for_draft),
-    in_reply_to (str, optional — normalized to a bare basename via
-    memo_send._normalize_in_reply_to; NOT existence-checked at draft time —
-    that gate is send-time only, see memo_send._validate_in_reply_to_exists,
-    since a draft may be staged before the sender's own inbox/archive state
-    is settled), space (str, optional — see memo_send._validate_space_param),
-    supersedes (str | list[str], optional — see
-    memo_send._validate_supersedes_param).
-
-    Returns (dry_run, topic, to, title, summary, kind, scoped_to,
-    classify_receiver, in_reply_to, space, supersedes, summary_cap_advisory,
-    display_name_advisory)
-    on success, or an exit_code:1 setup-error envelope dict on any
-    validation failure. These are plain param-validation failures, NOT
-    receiver-classification rejections — the envelope this function returns
-    NEVER carries a `rejection_class` field (see _classify_receiver_for_draft
-    / _memo_draft's Returns section for that invariant).
-
-    `summary_cap_advisory` (str | None) is the message from
-    `_memo_summary.validate_explicit_summary("draft", summary)` — None when
-    summary is absent or within cap, else the over-cap message. An over-cap
-    explicit summary no longer fails this function loud (2026-08-07 warn-at-
-    draft split) — the caller (`_memo_draft`) decides how to surface the
-    advisory and keep the original text recoverable without writing it into
-    `summary:` (AC1, AC2).
-
-    `display_name_advisory` (str | None) is
-    `owner_name_advisory("memo.draft", detect_unqualified_display_names(...))` scanned
-    over `title` + `summary` — None when neither names an unqualified session
-    display name, else the advisory message. Never fails this function loud —
-    same warn-not-refuse posture as summary_cap_advisory.
-    """
     dry_run = params.get("dry_run")
     if not isinstance(dry_run, bool):
         return build_setup_error_result(
@@ -582,26 +409,12 @@ def _validate_draft_params(params: dict):
         )
 
     summary: Optional[str] = params.get("summary") or None
-    # 2026-08-07 warn-at-draft split (docs/plans/2026-08-07-memo-summary-cap-
     # warn-at-draft.md § C2): an over-cap EXPLICITLY authored summary no
-    # longer fails the draft loud — memo.compose/memo.send still hard-refuse
-    # (unchanged, Anti-scope), but memo.draft is a staging step the author
-    # can still edit before delivery, so it advises instead. The advisory
-    # message (None when summary is absent or in-cap) is carried through to
     # the handler via this tuple's last element; the ORIGINAL summary text
-    # is also returned unchanged here — the handler, not this function,
-    # decides how to keep it out of `summary:` while still writing it
-    # somewhere recoverable (AC1, AC2).
     summary_cap_advisory = validate_explicit_summary("draft", summary)
 
     # `kind` is REQUIRED here, matching memo.send's own gate on the same
-    # field. Drafting without it mints an artifact this op's own send verb
-    # will refuse — nine such drafts had to be backfilled by hand
-    # (state/bug-backlog/2026-08-25-the-memo-outbox-does-not-clean-itself-up-
-    # after-a-send.yaml). Defaulting to `ask` is the wrong half to give: the
     # reader-side `ask` default exists for RECEIVED memos that predate the
-    # field, and ask/proposal are premise-bearing, so a silently-mislabelled
-    # fyi buys a real sender-side premise check it never needed.
     kind: Optional[str] = params.get("kind") or None
     if kind is None:
         return build_setup_error_result(
@@ -640,15 +453,7 @@ def _validate_draft_params(params: dict):
             )
         in_reply_to = _normalize_in_reply_to(in_reply_to_raw)
 
-    # space / supersedes (2026-07-28) — the two sender-declared fields the
-    # inbox-blitz proposal asked for, offered here so a drafting EM is prompted
-    # for them at authoring time rather than having to hand-add them after
-    # memo.send. Both are deliberately un-vocabulary-checked: `space` is a
-    # grouping hint the receiver may override, and a supersession reference is
-    # a memo basename this op cannot resolve (the sender's draft may name a
     # memo in the RECEIVER's tree). Shape checks only — validation shared with
-    # memo.send (Review: code-reviewer Finding 2, slice 1) via
-    # memo_send._validate_space_param / _validate_supersedes_param.
     supersedes, supersedes_error = _validate_supersedes_param(
         _MODE, params.get("supersedes"), dry_run,
     )
@@ -669,10 +474,6 @@ def _validate_draft_params(params: dict):
         display_name_advisory,
     )
 
-
-# ---------------------------------------------------------------------------
-# Composition — draft frontmatter (status: draft; placeholder body)
-# ---------------------------------------------------------------------------
 
 def compose_draft_frontmatter(
     *,
@@ -756,9 +557,6 @@ def compose_draft_frontmatter(
     if in_reply_to:
         lines.append(f"in_reply_to: {_yaml_quote(in_reply_to)}")
     if supersedes:
-        # Mirrors _compose_memo's own rendering: a list becomes a real nested
-        # YAML sequence via _render_extra_field, never a _yaml_quote'd scalar
-        # that would round-trip as one bogus reference instead of N.
         if isinstance(supersedes, list):
             lines.append(_render_extra_field("supersedes", supersedes))
         else:
@@ -771,27 +569,12 @@ def compose_draft_frontmatter(
     return "\n".join(lines) + "\n"
 
 
-# ---------------------------------------------------------------------------
-# File write helper — O_EXCL, fail-loud on existing draft
-# ---------------------------------------------------------------------------
-
 def _write_draft_file(target_path: Path, content: str) -> None:
-    """Write draft content to target_path with O_EXCL-style exclusive create.
-
-    Raises:
-        FileExistsError: if target_path already exists — fail-loud (mirrors
-            DoE _cmd_draft: an existing draft is edited via memo.compose or
-            removed via discard, never silently clobbered by a second draft call).
-    """
     target_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(target_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
         f.write(content)
 
-
-# ---------------------------------------------------------------------------
-# Handler
-# ---------------------------------------------------------------------------
 
 @register_op("memo.draft")
 def _memo_draft(params: dict, repo_root=None) -> dict:
@@ -934,7 +717,7 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
     """
     validated = _validate_draft_params(params)
     if isinstance(validated, dict):
-        return validated  # exit_code:1 setup-error envelope
+        return validated
 
     (dry_run, topic, to, title, summary, kind, scoped_to, classify_receiver,
      in_reply_to, space, supersedes, summary_cap_advisory,
@@ -943,20 +726,14 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
     if classify_receiver:
         classification = _classify_receiver_for_draft(to, dry_run)
         if isinstance(classification, dict):
-            return classification  # exit_code:1 setup-error envelope
+            return classification
         if isinstance(classification, str):
-            # Unique did-you-mean auto-accept (2026-07-24 papercut fix) —
-            # substitute the resolved id so the draft's `to:` frontmatter and
             # the acted-envelope `to` field both carry the RESOLVED receiver,
-            # never the caller's unresolved literal. The CLI diffs the acted
-            # envelope's `to` against the raw `--to` it sent to print the
-            # "resolved 'X' -> 'Y'" stderr note — see _cmd_draft.
             to = classification
 
     if repo_root is None:
         return build_setup_error_result(
             _MODE, dry_run,
-            # Error named the retired write root; corrected to canonical.
             "memo.draft: no repo_root supplied — memo.draft writes into the CALLING "
             "repo's own .coordinator-local/memo-outbox/ and requires a resolved worktree "
             "(common_dir-keyed op).",
@@ -981,24 +758,10 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
                 "use memo.compose to edit it."
                 if collision_exists else None
             ),
-            # Additive, non-fatal notice (2026-08-07 warn-at-draft split —
-            # mirrors _classify_receiver_for_draft's rejection_class additive
-            # field): present iff the explicit `summary` param is over cap.
-            # Never blocks the draft — see `summary_cap_advisory` below for
-            # the act-path handling of the same condition.
             "summary_cap_advisory": summary_cap_advisory,
-            # Additive, non-fatal notice: present iff title/summary names a
-            # session display name with no session id/claim ref nearby.
-            # Never blocks the draft.
             "display_name_advisory": display_name_advisory,
         }])
 
-    # ── act path ──────────────────────────────────────────────────────────
-    # from_id is resolved (and, when defaulted, compose-time-asserted) only
-    # here — the dry-run preview above never renders `from:` at all, so a
-    # dry-run call on a machine where the caller's own repo is not yet
-    # registered must still preview cleanly (unchanged from before this
-    # fix); only an actual WRITE risks shipping an unaddressable sender.
     try:
         from_id: str = _resolve_and_assert_sender_id(
             params.get("from_id"), root=str(caller_worktree)
@@ -1016,15 +779,7 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
             ),
         }])
 
-    # 2026-08-07 warn-at-draft split (AC1, AC2): an over-cap explicit summary
-    # is NEVER written into `summary:` (that would be the silent truncation
-    # this surface exists to prevent) — it is withheld from
     # compose_draft_frontmatter (which then writes SUMMARY_PLACEHOLDER, same
-    # as the no-summary-supplied case) and instead preserved verbatim in the
-    # draft BODY, ahead of the usual placeholder, so the author can recover
-    # and shorten it at memo.compose time. summary_cap_advisory (already
-    # computed by _validate_draft_params) rides the acted-item envelope
-    # unchanged either way.
     frontmatter_summary = summary if summary_cap_advisory is None else None
     body_prefix = ""
     if summary_cap_advisory is not None:
@@ -1065,24 +820,11 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
         _MODE,
         [{
             "id": str(target_path), "written": True, "topic": topic, "to": to,
-            # Additive, non-fatal notice (2026-08-07 warn-at-draft split) —
-            # present iff the explicit `summary` param was over cap; the
-            # draft was still written (see body_prefix above for where the
-            # original text landed). Never present on a clean draft.
             "summary_cap_advisory": summary_cap_advisory,
-            # Additive, non-fatal notice (2026-09-25 owner-display-name
-            # advisory) — present iff title/summary named a session display
-            # name with no session id/claim ref nearby. Never blocks the
-            # draft (see detect_unqualified_display_names /
-            # owner_name_advisory above).
             "display_name_advisory": display_name_advisory,
         }],
         [],
         [],
     )
-    # Scope-touch declaration (2026-08-05 engine-ops-declare-what-they-write
-    # plan, C1) — memo.draft creates exactly one state/memo-outbox/ path per
-    # successful call; see coordinator_core/ops/queue_append.py's own
-    # `_scope_touch_paths` line for the reference pattern this follows.
     result["_scope_touch_paths"] = [str(target_path)]
     return result

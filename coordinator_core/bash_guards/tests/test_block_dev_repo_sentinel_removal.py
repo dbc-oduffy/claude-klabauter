@@ -28,12 +28,6 @@ from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY
 
 SENTINEL = ".coordinator-dev-repo"
 
-#: Same bridge-to-C8 gate as `test_command_tokenizer_length_ceiling.py`'s
-#: own `requires_powershell_grammar` -- the PowerShell cases below need
-#: `tree-sitter-pwsh` actually importable; C8 (not this cohort) is what
-#: declares it in `[project].dependencies`. Absence is covered separately
-#: by the unmarked ImportError->SILENT case in `_dialect.py`'s own test
-#: surface, not re-derived here.
 _GRAMMAR_PRESENT = all(
     importlib.util.find_spec(name) is not None
     for name in ("tree_sitter", "tree_sitter_pwsh")
@@ -116,10 +110,6 @@ class TestDirectRemovalDenies:
         _deny_reason(guard.check(_payload("rm .COORDINATOR-DEV-REPO")))
 
     def test_windows_separator_path_denies(self):
-        # A backslash-separated path (Windows separator form) -- not a
-        # literal machine path, purely a separator-style probe. Built with
-        # doubled backslashes so a single backslash survives shlex's own
-        # posix-mode escape handling in the tokenized command text.
         sep = chr(92) * 2
         cmd = "rm relative%sdir%s%s" % (sep, sep, SENTINEL)
         _deny_reason(guard.check(_payload(cmd)))
@@ -136,8 +126,6 @@ class TestDirectRemovalDenies:
 
 
 class TestPassSet:
-    """The regression tests that matter most -- ordinary work must not
-    false-trip this guard."""
 
     def test_rm_unrelated_file_allows(self):
         assert guard.check(_payload("rm somefile.txt")) is None
@@ -162,8 +150,6 @@ class TestPassSet:
         assert guard.check(_payload("cat %s" % SENTINEL)) is None
 
     def test_mv_as_destination_allows(self):
-        """Creation shape -- out of THIS guard's scope (the sentinel-
-        creation guard's territory)."""
         assert guard.check(_payload("mv something %s" % SENTINEL)) is None
 
 
@@ -179,13 +165,10 @@ class TestAdvisoryOnUnexaminableIndirection:
 
     def test_xargs_check_leg_allows_with_no_content(self):
         # The CONFINEMENT_DENY leg must not shadow anything for this input
-        # -- it returns bare `None`, not the advisory envelope.
         assert guard.check(_payload("echo %s | xargs rm" % SENTINEL)) is None
 
     def test_bare_file_interpreter_unrelated_allows(self):
         out = guard.check_advisory(_payload("bash /tmp/some-script.sh"))
-        # Unrelated to the sentinel -- a bare interpreter file with no
-        # sentinel mention anywhere is allowed outright.
         assert out is None
 
     def test_stdin_piped_interpreter_advisory(self):
@@ -226,14 +209,6 @@ class TestDenyMessageDiscipline:
 
     def test_deny_reason_advertises_override(self):
         # RETARGETED (2026-08-17, override-key message-register ruling): a
-        # guard message names the guard that fired and nothing else about
-        # its override -- no key, no assignment form
-        # (docs/reference/guard-override-keys.md, opening sentence). This
-        # deny message renders via the shared `operator_override_note`
-        # helper, which no longer interpolates the bare key or any
-        # assignment form -- it points to the reference doc instead.
-        # Asserting a pasteable `KEY=1` literal was stale against that
-        # doctrine.
         reason = _deny_reason(guard.check(_payload("rm %s" % SENTINEL)))
         # RETARGETED 2026-08-30 (DR-290 form 1 -> form 2).
         assert OVERRIDE_KEYS_DOC_DISPLAY in reason
@@ -255,9 +230,6 @@ class TestNotIdentityGated:
 
 
 class TestReachableThroughTheDispatchChain:
-    """Guard-level tests are not sufficient -- `offer-git-c`'s allow+
-    updatedInput short-circuit would hide an ordering bug (same class of
-    bug the sibling sentinel guards were found and fixed for)."""
 
     @staticmethod
     def _decision(command):
@@ -274,7 +246,6 @@ class TestReachableThroughTheDispatchChain:
         return "allow"
 
     def test_bare_rm_denied_end_to_end(self):
-        # Deny leg retired (C13); the sole registered leg now advises
         # instead of denying -- see module's own "CLASS-CENSUS CONVERSION".
         assert self._decision("rm %s" % SENTINEL) == "advisory"
 
@@ -288,8 +259,6 @@ class TestReachableThroughTheDispatchChain:
         assert self._decision("rm somefile.txt") == "allow"
 
     def test_registered_ahead_of_offer_git_c(self):
-        # Still must not fall through to offer-git-c's bare rewrite --
-        # advisory now, not deny, but not a silent allow either.
         assert self._decision("cd /repo && rm %s" % SENTINEL) == "advisory"
 
 
@@ -304,7 +273,6 @@ class TestAdvisoryLegAtItsNewChainPosition:
     proven live-reachable there, plus the non-shadowing property the audit
     calls out as undefended."""
 
-    #: The three trigger shapes verified reachable in the audit.
     _TRIGGER_SHAPES = [
         "bash s.sh  # %s" % SENTINEL,
         "echo %s | xargs rm" % SENTINEL,
@@ -368,8 +336,6 @@ class TestAdvisoryLegAtItsNewChainPosition:
         cmd = "echo %s | xargs rm; git stash drop" % SENTINEL
         payload = _payload(cmd)
 
-        # This guard's own (unregistered) `check()` must not shadow
-        # anything for this input.
         assert guard.check(payload) is None
 
         chain = dispatch._build_guard_chain(
@@ -387,9 +353,6 @@ class TestAdvisoryLegAtItsNewChainPosition:
         )
         names = [e.name for e in chain]
         start = 0
-        # Walk the entire chain -- proves nothing before the first later
-        # deny (including this guard's own advisory entry) returns an
-        # allow-with-content envelope that would have masked it.
         first_non_none = None
         for i in range(start, len(chain)):
             envelope = chain[i].fn()
@@ -402,8 +365,6 @@ class TestAdvisoryLegAtItsNewChainPosition:
         assert hso["permissionDecision"] == "deny", (name, envelope)
         assert "updatedInput" not in hso
 
-        # And the overall end-to-end decision is a deny too, not an
-        # accidental allow.
         out = dispatch.evaluate_payload_json(
             json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}})
         )
@@ -446,9 +407,6 @@ class TestPowerShellDialect:
 
     @requires_powershell_grammar
     def test_rm_alias_still_denies_under_powershell(self):
-        # `rm` is a real PowerShell alias -- already covered by alias
-        # collision, not a new matcher; proven here under the PowerShell
-        # dialect specifically, not just the bash leg above.
         out = guard.check_advisory(_payload("rm %s" % SENTINEL, tool_name="PowerShell"))
         _advisory_text(out)
 
@@ -470,18 +428,11 @@ class TestPowerShellDialect:
 
     @requires_powershell_grammar
     def test_git_rm_denies_under_powershell(self):
-        # git rm/mv is a dialect-neutral external exe -- already correct,
-        # exercised here under the PowerShell dialect's own tokenizer to
-        # prove the tokenizer swap did not regress it.
         out = guard.check_advisory(_payload("git rm %s" % SENTINEL, tool_name="PowerShell"))
         _advisory_text(out)
 
     @requires_powershell_grammar
     def test_unlink_alias_has_no_powershell_equivalent_and_allows(self):
-        # `unlink` is a bash-only spelling with no PowerShell alias at all
-        # -- under the PowerShell dialect it must not deny/advise (it
-        # cannot execute in PowerShell in the first place), unlike its
-        # bash-leg coverage in TestDirectRemovalDenies.
         assert (
             guard.check_advisory(_payload("unlink %s" % SENTINEL, tool_name="PowerShell"))
             is None
@@ -531,11 +482,7 @@ class TestPowerShellIndirectionDeclinesRatherThanClean:
 
     @requires_powershell_grammar
     def test_env_wrapped_direct_removal_still_denies_not_silent(self):
-        # `_env_skip_index` already walks past a leading `env`/`VAR=value`
-        # prefix to the real argv0 -- this is fully examinable and denies
         # DIRECTLY, the control proving the shape check does not
-        # over-classify an env-prefixed but otherwise plain command as
-        # unresolved indirection.
         with _verdict.collecting() as silences:
             out = guard.check_advisory(
                 _payload("env FOO=bar rm %s" % SENTINEL, tool_name="PowerShell")
@@ -545,9 +492,6 @@ class TestPowerShellIndirectionDeclinesRatherThanClean:
 
     @requires_powershell_grammar
     def test_ordinary_command_does_not_record_silent(self):
-        """A genuinely clean, non-wrapper PowerShell command must NOT
-        record SILENT -- only actual indirection shapes do; this is the
-        control proving the shape check is not over-firing."""
         with _verdict.collecting() as silences:
             out = guard.check_advisory(_payload("Get-ChildItem", tool_name="PowerShell"))
         assert out is None

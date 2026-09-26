@@ -186,7 +186,6 @@ __all__ = [
 
 
 class Disposition(enum.Enum):
-    """Exactly three states. Never a fourth — see module docstring."""
 
     OVER_BAR = "over_bar"
     UNDER_BAR = "under_bar"
@@ -213,13 +212,6 @@ class NoDataReason(enum.Enum):
 
 @dataclasses.dataclass(frozen=True)
 class AxisResult:
-    """One op's disposition on one axis.
-
-    `no_data_reason` is required if and only if `disposition` is `NO_DATA` —
-    enforced in `__post_init__` so a `NO_DATA` result can never be
-    constructed without a reason, and a non-`NO_DATA` result can never carry
-    a stray one.
-    """
 
     disposition: Disposition
     p50_ms: Optional[float] = None
@@ -234,14 +226,8 @@ class AxisResult:
             raise ValueError("no_data_reason is only valid for a NO_DATA disposition")
 
 
-#: DR-344 § the kill bar: >=500ms is "not holding" (whether the 500ms-1s
-#: refactor-or-kill zone or the >1s kill zone) — the three-state rule
-#: compresses that two-tier breach shape to a single `over_bar`, verdicts
-#: about which zone stay out of this evidence module (plan § Anti-scope).
 PROCESS_TIME_BAR_MS: float = 500.0
 
-#: DR-344 constraint 3: "the cost to *get to* the warm engine must be under
-#: 50ms."
 INVOCATION_TAX_BAR_MS: float = 50.0
 
 
@@ -312,8 +298,6 @@ def handler_elapsed_by_op(
         mx = max(values)
         if p50 >= bar_ms or mx >= bar_ms:
             # Wall clock cannot support an OVER_BAR verdict (module
-            # docstring) -- report as not-established rather than a breach
-            # this axis is not sound to claim.
             results[op] = AxisResult(
                 disposition=Disposition.NO_DATA,
                 no_data_reason=NoDataReason.NOT_ESTABLISHED_UNDER_LOAD,
@@ -328,20 +312,8 @@ def handler_elapsed_by_op(
     return results
 
 
-#: Canary op module. `coordinator_core.ops` never imports this module as
-#: part of its own package init UNLESS an eager 55-module sweep ran — so
-#: its presence in the child's `sys.modules` after the probe import is proof
-#: registration was NOT lazy, distinguishing a genuine trampoline-cold-path
-#: sample from a silently-reverted bare-interpreter one.
 _TAX_PROBE_CANARY_MODULE = "coordinator_core.ops.ping"
 
-#: The measurement script run by `measure_invocation_tax_ms`. Reports the
-#: CHILD's own `time.process_time()` around importing the op registry, plus
-#: `module_count` and `canary_op_imported` so the caller can PROVE the child
-#: actually reached the shape it asked for rather than assuming it (see
-#: `measure_invocation_tax_ms`'s arming check). Deliberately never
-#: `os.times()` (child fields are always `0.0` on Windows — see module
-#: docstring).
 _TAX_PROBE_SCRIPT = (
     "import json, sys, time\n"
     "t0 = time.process_time()\n"
@@ -487,16 +459,7 @@ def invocation_tax_dispositions(
     measured_tax_ms: Optional[float] = None,
     bar_ms: float = INVOCATION_TAX_BAR_MS,
 ) -> Dict[str, AxisResult]:
-    """Per-op invocation-tax disposition from a single measured floor.
-
-    Invocation tax is not a per-op telemetry field (see module docstring) —
-    it is one measured value applied uniformly to every op named in `ops`.
-    `measured_tax_ms` should come from `measure_invocation_tax_ms`
-    (injectable here so tests never pay a real subprocess spawn). `None` or
-    NaN reports `NO_DATA`/`never_observed` for every op rather than
-    fabricating a number.
-    """
-    if measured_tax_ms is None or measured_tax_ms != measured_tax_ms:  # NaN check, no math import
+    if measured_tax_ms is None or measured_tax_ms != measured_tax_ms:
         return {
             op: AxisResult(disposition=Disposition.NO_DATA, no_data_reason=NoDataReason.NEVER_OBSERVED)
             for op in ops

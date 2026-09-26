@@ -41,15 +41,12 @@ from coordinator_core.ipc import register_op
 
 @register_op("hooks.guard_host_subagent_bash_spawn_shapes")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PreToolUse(Bash|PowerShell) op: deny a dispatched subagent's
-    in-process-answerable spawn shape on a host that declares the deny
-    policy."""
     params = payload_of(params)
 
     try:
         result = check(params)
     except Exception:
-        return no_advisory()  # any resolution failure -> fail-open ALLOW
+        return no_advisory()
 
     if result is None:
         return no_advisory()

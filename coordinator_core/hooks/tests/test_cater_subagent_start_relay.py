@@ -37,10 +37,7 @@ from coordinator_core.hooks.cater_subagent_start import (
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 ELIGIBLE_TYPE = "coordinator:code-reviewer"
-#: Bare-hex, unnamed-agent id shape (>=12 hex chars) -- accepted by both
-#: track_dispatched_agents._valid_agent_id and subagent_sandbox.engine's
 #: _canonical_agent_id / _BARE_HEX_RE, and passed through UNCHANGED by both
-#: (no teammate-form normalization to reason about here).
 AGENT_ID = "abcdef0123456789"
 SESSION_ID = "session-relay-1"
 
@@ -66,16 +63,11 @@ def policy_path(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def _policy_env(monkeypatch: pytest.MonkeyPatch, policy_path: Path) -> None:
-    """`compose_catering` always resolves policy via `load_policy(None)`'s
-    own cascade -- the env-var rung is this fixture's control point."""
     monkeypatch.setenv("SUBAGENT_SANDBOX_POLICY", str(policy_path))
 
 
 @pytest.fixture(autouse=True)
 def _no_role_append(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Isolate from whatever plugin happens to be installed on the machine
-    running this test -- role framing fails open to "" and stays out of the
-    way of the assertions below, which are about the sidecar leg."""
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-claude-config"))
 
 
@@ -89,11 +81,6 @@ def _bookkeeping_params() -> dict:
 
 
 def _cater_params(cwd: str) -> dict:
-    # Deliberately NO agent_type: the sidecar leg's eligibility check
-    # (_resolve_sidecar_leg) OR-resolves agent_type with subagent_type, and
-    # subagent_type is resolvable ONLY through the back-pointer
-    # hooks.track_dispatched_agents just wrote -- the exact seam the plan
-    # names.
     return {
         "agent_id": AGENT_ID,
         "session_id": SESSION_ID,
@@ -104,10 +91,6 @@ def _cater_params(cwd: str) -> dict:
 def _additional_context(result: dict) -> str:
     return result.get("hookSpecificOutput", {}).get("additionalContext", "")
 
-
-# ---------------------------------------------------------------------------
-# Registration -- no second registration (Anti-scope)
-# ---------------------------------------------------------------------------
 
 def test_cater_op_registered_under_documented_name_alongside_bookkeeping() -> None:
     """Both ops must be reachable off the SAME `ipc._REGISTRY` the
@@ -136,15 +119,7 @@ def test_cater_op_registered_under_documented_name_alongside_bookkeeping() -> No
     assert ipc._REGISTRY.get("hooks.track_dispatched_agents") is not None
 
 
-# ---------------------------------------------------------------------------
-# Order -- pinned, not left to timing
-# ---------------------------------------------------------------------------
-
 def test_bookkeeping_first_caters_the_named_dispatch_via_backpointer(git_repo: Path) -> None:
-    """Bookkeeping op FIRST (the documented order): the back-pointer it
-    writes is in place by the time the cater op reads it, so the eligible
-    type resolved purely through `subagent_type` gets its sidecar offer (or
-    at minimum the miss notice -- never silence)."""
     results = ipc.dispatch_ops_from_hook(
         [
             ("hooks.track_dispatched_agents", _bookkeeping_params()),
@@ -192,10 +167,6 @@ def test_reversed_order_fails_to_cater_the_named_dispatch(git_repo: Path) -> Non
     for result in results:
         assert not isinstance(result, ipc.HookDispatchError), result
 
-    # Cater op ran first: no back-pointer exists yet, so it resolves
-    # neither agent_type nor subagent_type -- the dispatch that genuinely
-    # lost its sidecar, and it is told so rather than left to read silence
-    # as ineligibility.
     context = _additional_context(results[0])
     assert SIDECAR_MISS_NOTICE_LEAD in context, context
     assert SIDECAR_MISS_MARKER in context, context
@@ -208,10 +179,6 @@ def test_reversed_order_fails_to_cater_the_named_dispatch(git_repo: Path) -> Non
 def test_sequential_not_concurrent_same_result_regardless_of_python_scheduling(
     git_repo: Path,
 ) -> None:
-    """dispatch_ops_from_hook awaits each op to completion before starting the
-    next (module contract, not an implementation detail) -- run the
-    bookkeeping-first case twice and require byte-identical additionalContext,
-    ruling out a race that only sometimes reads the back-pointer."""
     first = ipc.dispatch_ops_from_hook(
         [
             ("hooks.track_dispatched_agents", _bookkeeping_params()),
@@ -229,11 +196,3 @@ def test_sequential_not_concurrent_same_result_regardless_of_python_scheduling(
 
     assert _additional_context(first[1]) == _additional_context(second[1])
 
-
-# test_module_is_eagerly_imported_by_the_hooks_package lived here. It asserted
-# list membership for this ONE module; that is now covered for EVERY hooks
-# module declaring @register_op by
-# tests/test_eager_hook_modules_covers_every_register_op.py, which additionally
-# resolves the declarations from source with `ast` rather than relying on this
-# file's own module-scope import. Deleted rather than left alongside it: two
-# guards over the same invariant drift, and the narrower one goes.

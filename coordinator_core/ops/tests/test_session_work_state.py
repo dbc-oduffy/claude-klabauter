@@ -15,12 +15,6 @@ from coordinator_core.authz.registration_quad import check_registration_quad
 
 
 def test_veneer_converts_injected_common_dir_to_the_worktree_root(monkeypatch, tmp_path):
-    """The op's scope is "common_dir", so the engine injects `<worktree>/.git`,
-    NOT the worktree root. `build_work_state` scans `<root>/state/handoffs`, so
-    passing the injected value straight through makes this op return an empty
-    readout for every repo — which is exactly how it shipped, and what no test
-    caught, because every other test here stubs `build_work_state` or calls it
-    directly with a tmp_path. Pin the conversion, not the pass-through."""
     captured = {}
 
     def _fake_build_work_state(repo_root):
@@ -36,8 +30,6 @@ def test_veneer_converts_injected_common_dir_to_the_worktree_root(monkeypatch, t
 
 
 def test_absent_repo_root_is_a_well_formed_empty_answer_never_a_raise():
-    """Mirrors handoff.columns / records.query: absent repo_root degrades to an
-    empty payload carrying all three buckets, rather than raising."""
     assert sws_op._session_work_state({}, repo_root=None) == {
         "held": [],
         "unclaimed": [],
@@ -46,9 +38,6 @@ def test_absent_repo_root_is_a_well_formed_empty_answer_never_a_raise():
 
 
 def test_veneer_ignores_params_repo_root(monkeypatch, tmp_path):
-    """Unlike session.peer_roster, this op takes repo_root ONLY as the
-    engine-injected kwarg -- a wire-level params["repo_root"] must be
-    ignored, never used as an override."""
     captured = {}
 
     def _fake_build_work_state(repo_root):

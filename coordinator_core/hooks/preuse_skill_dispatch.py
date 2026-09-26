@@ -131,8 +131,6 @@ REGISTRY: Tuple[SkillLeg, ...] = (
 
 
 def _extract_context_text(envelope) -> Optional[str]:
-    """Narrow a leg op's returned envelope down to its bare
-    `additionalContext` text, or `None` when it has nothing to say."""
     if not isinstance(envelope, dict):
         return None
     hso = envelope.get("hookSpecificOutput")
@@ -145,10 +143,6 @@ def _extract_context_text(envelope) -> Optional[str]:
 
 
 async def _run_leg(leg: SkillLeg, params: dict) -> Optional[str]:
-    """Import and run ONE matched leg, returning its extracted advisory
-    text or `None`. Any exception (import failure — a not-yet-landed
-    sibling module — or the leg's own crash) propagates to the caller's own
-    per-leg isolation."""
     import asyncio
     import importlib
 
@@ -162,8 +156,6 @@ async def _run_leg(leg: SkillLeg, params: dict) -> Optional[str]:
 
 @register_op("hooks.preuse_skill_dispatch")
 async def _handler(params: dict, repo_root=None) -> dict:
-    """PreToolUse(Skill) op: run every verb-matched leg and concatenate
-    their advisory text into one context-only envelope."""
     params = payload_of(params)
 
     inv = read_invocation(params)
@@ -178,7 +170,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     for leg in matched:
         try:
             text = await _run_leg(leg, params)
-        except BaseException as exc:  # fail-open for this leg alone
+        except BaseException as exc:
             try:
                 print(
                     "preuse_skill_dispatch: leg=%s raised %s: %s — its sibling legs are "
@@ -186,7 +178,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
                     file=sys.stderr,
                 )
             except Exception:
-                pass  # stderr write failed; the fail-open skip above still stands
+                pass
             continue
         if text:
             parts.append(text)

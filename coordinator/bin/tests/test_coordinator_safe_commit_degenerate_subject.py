@@ -1,12 +1,3 @@
-"""test_coordinator_safe_commit_degenerate_subject.py -- pins the parse_args
-refusal for a subject too short to be legible in `git log --oneline`/blame/
-bisect output (state/bug-backlog/2026-08-28-an-engine-commit-path-landed-152-
-lines-under-the-subject-x.yaml).
-
-Loaded by file path (`importlib.machinery.SourceFileLoader`), matching this
-directory's existing hyphenated-module idiom (see
-test_coordinator_safe_commit_pathspec_batch.py).
-"""
 from __future__ import annotations
 
 import importlib.machinery

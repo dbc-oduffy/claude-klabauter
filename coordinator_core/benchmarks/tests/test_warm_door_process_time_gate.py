@@ -237,12 +237,6 @@ _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _candidate_source_roots() -> list[Path]:
-    """Stamped-engine-root candidates to hardlink FROM, in preference
-    order. An explicit env override always wins (a different box's clone
-    layout); otherwise the sibling `claude-klabauter` published-mirror
-    directory next to this live tree's own parent -- the only warm-capable
-    build this box conventionally has (this live tree itself carries no
-    stamp, DR-315 §2)."""
     override = os.environ.get(_ENGINE_ROOT_OVERRIDE_ENV)
     if override:
         return [Path(override)]
@@ -251,7 +245,6 @@ def _candidate_source_roots() -> list[Path]:
 
 
 def _resolve_stamped_source_root() -> Optional[Path]:
-    """First candidate that is a valid, stamped engine root, or None."""
     for candidate in _candidate_source_roots():
         if candidate.is_dir() and is_engine_root(candidate):
             return candidate
@@ -259,15 +252,6 @@ def _resolve_stamped_source_root() -> Optional[Path]:
 
 
 def _hardlink_coordinator_core(source_root: Path, isolated_root: Path) -> int:
-    """Hardlinks `source_root/coordinator_core` into
-    `isolated_root/coordinator_core`, skipping `__pycache__` (stale
-    cross-invocation bytecode is not worth carrying, and would itself be a
-    fresh compile on first import either way). Returns the file count.
-
-    `os.link` requires both paths on the SAME VOLUME -- `isolated_root`'s
-    caller is responsible for placing it beside `source_root`, never in the
-    platform default temp directory (routinely a different drive here).
-    """
     n = 0
     src_pkg = source_root / "coordinator_core"
     for root, dirs, files in os.walk(src_pkg):
@@ -282,9 +266,6 @@ def _hardlink_coordinator_core(source_root: Path, isolated_root: Path) -> int:
 
 
 def _wait_for_live_breadcrumb(isolated_root: Path, deadline_secs: float) -> Optional[dict]:
-    """Polls (bounded, wall clock) for a PID-alive breadcrumb under
-    `isolated_root`. Returns the breadcrumb dict on success, None on
-    timeout -- never raises."""
     deadline = time.time() + deadline_secs
     while time.time() < deadline:
         crumb = breadcrumb.read_breadcrumb(engine_root=isolated_root)
@@ -298,9 +279,6 @@ def _wait_for_live_breadcrumb(isolated_root: Path, deadline_secs: float) -> Opti
 
 
 def _terminate(pid: int) -> None:
-    """Best-effort direct-signal stop, mirroring `warm-engine-stop.py`'s
-    fallback mechanism -- no graceful ask needed, this server has exactly
-    ONE client (this fixture)."""
     import psutil
 
     try:
@@ -356,81 +334,20 @@ def warm_engine_root() -> Iterator[Path]:
                 proc.terminate()
             except OSError:
                 pass
-        # The breadcrumb pid is NOT the whole process set this fixture owns.
-        # `server.py`'s boot starts a daemon thread calling
-        # `supervisor.ensure_listener`, which spawns the http listener
         # DETACHED -- so terminating the server above leaves that supervisor
-        # running out of this clone, holding it open, and the `rmtree` below
-        # then fails silently. Reap by ROOT, which is the only predicate a
-        # deliberately-reparented process still answers to.
         reaped = reap_processes_under(tmp_parent)
-        # The breadcrumb does NOT live inside `isolated_root` -- `svc_dir`
-        # resolves it under the machine-global, per-clone-hash runtime base
         # (`%LOCALAPPDATA%/coordinator/warm/<clone_hash>/`, see
-        # `breadcrumb.svc_dir`'s own docstring), so rmtree-ing the temp
-        # clone alone leaves that directory behind forever -- a permanent,
-        # ever-growing stray naming a server that will never exist again.
         # Safe to remove UNCONDITIONALLY here (never `unlink_breadcrumb`'s
-        # ownership-checked partial case): `isolated_root` is a freshly
-        # `mkdtemp`'d path unique to THIS run, so its derived clone hash can
-        # by construction never collide with a real clone's, and this run
-        # is the only possible writer of anything under it.
         shutil.rmtree(breadcrumb.svc_dir(engine_root=isolated_root), ignore_errors=True)
         rmtree_or_raise(tmp_parent, label="warm_engine_root", reaped=reaped)
 
 
-# =========================================================================
 # MACOS ISOLATED SERVER FIXTURE
-# =========================================================================
-#
-# NOT A PORT of `warm_engine_root` above. That fixture's Windows-only pieces
 # -- `_CREATE_NO_WINDOW`, `election.pipe_name`'s SID-scoped named pipe, the
-# job-object accounting `batched_process_time_ms` reads -- have no POSIX
-# equivalent to port; `process_time.py`'s own Darwin arm (kqueue +
-# `os.wait4`) is a different measurement mechanism entirely, already wired
-# through `batched_process_time_ms`/`batched_process_time_quantiles` and
-# reused here unmodified. What DOES port, verbatim, is the isolation
-# strategy: `_candidate_source_roots`, `_resolve_stamped_source_root`, and
-# `_hardlink_coordinator_core` above are already platform-agnostic (no
-# Windows-only calls in any of the three), so this fixture calls them
-# directly rather than duplicating them.
-#
 # THE PLATFORM-SPECIFIC HALF -- election. `server.py::main()` dispatches
-# its own election arm on `sys.platform`, so booting the isolated server is
-# the SAME `python -m coordinator_core.warm.server` invocation as the
-# Windows fixture; the server itself takes the `_elect_unix_socket_endpoint`
-# branch (`election.socket_path` + `election.elect_unix_socket`) with no
-# caller-side branching needed here.
-#
-# THE TRAP THIS FIXTURE MUST NOT REPEAT -- read
-# `test_door_read_deadline_posix.py`'s `runtime_base` fixture docstring
-# FIRST (dispatch brief). pytest's own `tmp_path` on macOS roots under
-# `/private/var/folders/<2>/<12>/T/pytest-of-<user>/pytest-<n>/...`, ~130
-# bytes before `<svc dir>/<token>.sock` is appended -- 178 bytes measured
 # there against the 100-byte `SUN_PATH_MAX_BYTES` budget
-# (`election.socket_path`), so every socket-bearing invocation would raise
-# `SocketPathTooLongError` before the door -- or here, before
-# `election.elect_unix_socket` inside the spawned server -- is ever
-# reached. `_short_runtime_base` below is that module's `runtime_base`
-# fixture, reused rather than re-derived (same root selection: `/tmp` before
-# `tempfile.gettempdir()`, `realpath`'d because `/tmp` is itself a symlink
-# to `/private/tmp` on macOS and the projected-length check must measure
-# the path the kernel will actually see).
-#
-# WHY THE RUNTIME BASE IS SET ON THE TEST PROCESS TOO, NOT ONLY THE
-# SPAWNED SERVER'S ENV -- `breadcrumb.svc_dir`/`_runtime_base` reads
 # `COORDINATOR_WARM_RUNTIME_BASE` out of `os.environ` at CALL time, and
-# `read_breadcrumb`/`socket_path` are called both by this fixture (polling
-# for the boot breadcrumb) and by the `python -m coordinator_core.invoke
-# ping` child each test spawns (env=None in `batched_process_time_ms`
-# inherits `os.environ` at call time, per that module's own docstring). One
 # `os.environ[breadcrumb.RUNTIME_BASE_ENV]` set for this fixture's whole
-# lifetime, saved and restored in `finally`, keeps the boot-poller, the
-# teardown's `svc_dir` cleanup, and every ping invocation this module's
-# tests spawn all resolving the SAME socket path -- a mismatch here is the
-# exact "door finds nothing, falls through to cold dispatch forever, every
-# surface stays green while the warm engine is silently unreachable" defect
-# `breadcrumb._runtime_base`'s own docstring names.
 def _spawn_orphaned_server_darwin(isolated_root: Path, env: dict) -> int:
     """Boots `python -m coordinator_core.warm.server` fully DETACHED from
     this test process's own process table entry, and returns the grandchild
@@ -487,9 +404,6 @@ def _spawn_orphaned_server_darwin(isolated_root: Path, env: dict) -> int:
             os._exit(0)
     os.close(write_fd)
     os.waitpid(pid, 0)
-    # The immediate child has already exited (waitpid above), which closes
-    # its copy of `write_fd` -- so this read returns EOF (b"") the moment
-    # the pid bytes have been delivered, with no delimiter needed.
     data = b""
     while True:
         chunk = os.read(read_fd, 64)
@@ -575,16 +489,7 @@ def warm_engine_root_darwin() -> Iterator[Path]:
             _terminate(int(crumb["pid"]))
         elif server_pid is not None:
             _terminate(server_pid)
-        # Same detached-supervisor rationale as `warm_engine_root`'s teardown
-        # above -- and it applies with MORE force here, not less: this
-        # fixture's own server is already double-forked out of this process's
-        # table by construction, so parentage was never available to reap by.
         reaped = reap_processes_under(tmp_parent)
-        # Same rationale as `warm_engine_root`'s teardown above: `svc_dir`
-        # resolves outside `isolated_root` (now under the short
-        # `runtime_base`, not the operator's real runtime base -- see the
-        # env override above), so it needs its own removal, and it is safe
-        # to remove unconditionally for the same freshly-minted-path reason.
         shutil.rmtree(breadcrumb.svc_dir(engine_root=isolated_root), ignore_errors=True)
         shutil.rmtree(runtime_base, ignore_errors=True)
         rmtree_or_raise(tmp_parent, label="warm_engine_root_darwin", reaped=reaped)
@@ -620,13 +525,6 @@ def test_warm_door_process_time_is_under_the_ceiling(warm_engine_root):
 
 
 def test_warm_door_is_not_dramatically_costlier_than_cold(warm_engine_root):
-    """Secondary/informational assertion only (per the handoff's own
-    finding that a strict warm-cheaper-than-cold comparison is too weak a
-    gate on its own -- it passed comfortably the same session the door cost
-    121ms). This does not require warm to beat cold; it only bounds warm
-    from being pathologically WORSE than cold, which would indicate the
-    warm path picked up extra per-call cost the cold path does not pay.
-    """
     warm = batched_process_time_ms(_invoke_ping_cmd(), k=K_INVOCATIONS, cwd=str(warm_engine_root))
     cold_env = dict(os.environ)
     cold_env["COORDINATOR_WARM"] = "0"
@@ -677,9 +575,6 @@ def test_warm_door_process_time_is_under_the_ceiling_darwin(warm_engine_root_dar
 
 
 def test_warm_door_is_not_dramatically_costlier_than_cold_darwin(warm_engine_root_darwin):
-    """macOS twin of `test_warm_door_is_not_dramatically_costlier_than_cold`
-    -- same secondary/informational bound, same slack, against the isolated
-    unix-socket server instead of the isolated named-pipe one."""
     warm = batched_process_time_ms(
         _invoke_ping_cmd(), k=K_INVOCATIONS, cwd=str(warm_engine_root_darwin)
     )

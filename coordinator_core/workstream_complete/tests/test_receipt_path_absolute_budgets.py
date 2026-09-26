@@ -73,34 +73,15 @@ from coordinator_core.subagent_sandbox.provision_report import (
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
-# ---------------------------------------------------------------------------
-# Close leg -- brief()'s whole process tree, job-accounted.
-# ---------------------------------------------------------------------------
 
 _REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
-#: 400ms absolute ceiling (AC12), against a measured ~300-365ms baseline
-#: (§ Performance plan) -- ~100ms headroom, still inside the 500ms
-#: brightline. Never derived from a prior run of THIS file.
 CLOSE_LEG_PROCESS_TIME_CEILING_MS: float = 400.0
 
-#: `brief()` must issue zero Python-issued subprocess spawns beyond the
-#: fixture-setup git calls, which the fixture builds ONCE, OUTSIDE the
-#: timed driver (see `_build_close_leg_fixture` below) -- the driver itself
-#: only ever calls `brief()`. Counted via job-object process count, which
-#: sees EVERY spawned process, not only ones whose argv[0] is `git`
-#: (`test_gate_path_spawn_budget.py`'s own instrument is argv-filtered to
-#: `git` specifically; this one is not).
 CLOSE_LEG_SPAWN_CENSUS_CEILING: int = 0
 
 K_INVOCATIONS = 10
 
-#: Driver reads its fixture's repo root from argv[1] -- the fixture is
-#: built once, before timing starts, never inside the timed process (a
-#: `git init`/`git commit` sequence run k times INSIDE the measured
-#: process would inflate both the process-time and spawn-count figures
-#: with fixture-setup cost this leg's brief() call never pays in
-#: production).
 _CLOSE_LEG_DRIVER = (
     "import sys\n"
     "from pathlib import Path\n"
@@ -121,14 +102,6 @@ _CLOSE_LEG_DRIVER = (
 
 
 def _build_close_leg_fixture(repo: Path) -> None:
-    """A real git repo carrying the seeded session claim dir --
-    `test_gate_path_spawn_budget.py`'s own fixture (and its module
-    docstring) established that `brief()` call 1 (no `stage_paths`) reaches
-    a true zero-git-spawn fast path only when a claim dir for the session
-    id exists; a bare `tmp_path` with no `.git` at all falls through
-    `resolve_session_start_time`'s 5-candidate `merge-base`/`log` ladder
-    and spawns 6 git processes measuring THAT ladder's cost, not brief()'s
-    real fast path. Built once here, never inside the timed driver."""
     ncw = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True, creationflags=ncw)
     subprocess.run(
@@ -148,16 +121,6 @@ def _build_close_leg_fixture(repo: Path) -> None:
 
 
 def test_close_leg_process_tree_stays_under_400ms_with_zero_spawns(tmp_path: Path):
-    """AC12: one live `brief()` call, run as a real subprocess so
-    `batched_process_time_ms`'s job-object accounting has an actual process
-    tree to measure -- process time under the absolute 400ms ceiling, and
-    the job object's own process count (root interpreter + every process it
-    spawns, not merely `git`-named ones) derives to exactly 0 spawns.
-
-    The fixture repo is built ONCE, before any timing starts; the k
-    repeated driver invocations below re-read the SAME repo (matches
-    `batched_process_time_ms`'s own "re-runs the SAME argv k times" idiom
-    elsewhere in this repo) -- `decisions={}` call 1 does not mutate it."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _build_close_leg_fixture(repo)
@@ -184,10 +147,6 @@ def test_close_leg_process_tree_stays_under_400ms_with_zero_spawns(tmp_path: Pat
         "catches a non-git spawn `test_gate_path_spawn_budget.py` never sees."
     )
 
-
-# ---------------------------------------------------------------------------
-# Dispatch leg -- provision_report._provision's review-receipt splice.
-# ---------------------------------------------------------------------------
 
 REVIEWER_TYPE = "coordinator:code-reviewer"
 NON_REVIEWER_ELIGIBLE_TYPE = "coordinator:executor"
@@ -243,13 +202,6 @@ def _run_modules_probe(argv) -> "set[str]":
 
 
 def test_dispatch_leg_receipt_splice_imports_nothing_new():
-    """AC12b(i): the receipt path (a delegate-reviewer dispatch, which
-    reaches `_splice_review_receipt`) must import no module that a
-    non-reviewer eligible dispatch (which reaches `_is_close_receipt_reviewer`
-    and stops there, per `_provision`'s own unconditional call to it on
-    every eligible dispatch) does not already load. Measured as a set
-    difference in two fresh interpreters, never inspected by reading the
-    source -- a real import graph, not an assumption about one."""
     baseline_modules = _run_modules_probe(_MODULES_BASELINE_ARGV)
     receipt_modules = _run_modules_probe(_MODULES_RECEIPT_ARGV)
 
@@ -281,11 +233,6 @@ def test_dispatch_leg_receipt_splice_never_reaches_resolve_owner_or_baton_assemb
 
 
 def test_dispatch_leg_receipt_splice_issues_zero_subprocess_spawns():
-    """AC12b(iii): a `subprocess.Popen.__init__` census (same choke-point
-    idiom as `test_gate_path_spawn_budget.py`'s own `_wrap_popen_for_git_
-    spawn_count`, generalised to every spawn, not only `git`) around the
-    exact compose-and-splice call the dispatch-time receipt performs, in
-    this process -- no subprocess tree needed to prove ZERO children exist."""
     calls: "list[list[str]]" = []
     real_init = subprocess.Popen.__init__
 
@@ -309,11 +256,6 @@ def test_dispatch_leg_receipt_splice_issues_zero_subprocess_spawns():
     )
 
 
-#: AC12b(iv): < 1ms marginal cost, absolute -- against the plan's own
-#: measured 0.0005ms marginal over a 0.1932ms compose+write (§ Performance
-#: plan). Re-measured below rather than quoted, per this plan's own
-#: discipline; the ceiling itself stays the fixed literal AC12b names, not
-#: a multiple of whatever this file happens to observe.
 DISPATCH_LEG_MARGINAL_COST_CEILING_MS: float = 1.0
 
 _MARGINAL_MEASURE_REPS = 200

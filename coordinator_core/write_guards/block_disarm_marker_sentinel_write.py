@@ -101,24 +101,8 @@ CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 PRIORITY = 130
 
-#: The exact basename this guard protects -- imported from `_blanket_
-#: disarm.py`, the module that defines what "the disarm marker" means, so
-#: this module and the Bash-leg sibling and `_blanket_disarm.py` itself can
-#: never independently drift on the string.
 _SENTINEL_NAME = MARKER_BASENAME
 
-#: Deny reason -- deliberately withholds the sentinel basename and any
-#: override incantation (see module docstring "Deny message discipline").
-#:
-#: 2026-08-13 (docs/plans/2026-08-13-guard-messages-stop-handing-agents-
-#: the-keys.md, C4c): the prior text named the sanctioned creation route as
-#: "via !-prefixed prompt" -- a CLI-invocation-shaped clause naming a
-#: concrete unlock mechanism. Removed unconditionally, for every audience:
-#: AC-1 bans a CLI invocation / any statement that an unlock exists from a
-#: subagent-audience render, and AC-2 caps an EM-audience render at "a key,
-#: path, or command" only via a wiki pointer -- this guard has no doc
-#: pointer to substitute (no override env var backs this sentinel), so the
-#: clause has no audience-safe form and is dropped rather than gated.
 _DENY_REASON = (
     "[disarm-marker guard] BLOCKED: this file disarms the guard suite; no "
     "self-grant.\n"
@@ -129,11 +113,6 @@ _DENY_REASON = (
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the disarm-marker-write-ban gate against a PreToolUse
-    payload.
-
-    Returns `None` (allow) or the nested hard-deny envelope.
-    """
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
 

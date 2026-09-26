@@ -35,8 +35,6 @@ __all__ = ["render_row", "append_row", "append_rows"]
 
 @dataclass(frozen=True)
 class LogAppendResult:
-    """Outcome of an append_row call: the rendered row text and whether a new
-    `## Run <id>` header was opened (vs. joining an existing run's block)."""
 
     row_text: str
     header_opened: bool
@@ -69,20 +67,6 @@ def append_row(
     fate: str,
     run_id: str,
 ) -> LogAppendResult:
-    """Append exactly one canonical row for (path, disposition, fate, run_id) to
-    `log_path`, grouped under `## Run <run_id>`.
-
-    - If `log_path` does not exist, it is created with a fresh `## Run <run_id>` header
-      followed by the row.
-    - If `log_path` exists and already has a `## Run <run_id>` header, the row is appended
-      immediately after that run's last existing row (before the next `## Run` header or
-      EOF) — never duplicating the header.
-    - If `log_path` exists but has no `## Run <run_id>` header yet, a new header block is
-      appended at end-of-file.
-
-    Raises ValueError via `render_row` on an invalid disposition/empty field — no row is
-    written in that case.
-    """
     row_text = render_row(path, disposition, fate, run_id)
 
     if not log_path.exists():
@@ -100,22 +84,10 @@ def append_rows(
     log_path: Path,
     rows: list[dict[str, str]],
 ) -> list[LogAppendResult]:
-    """Append MANY canonical rows to `log_path` in one invocation, all-or-nothing.
-
-    Each row is a dict with keys `path`, `disposition`, `fate`, `run_id` (same semantics
-    as `append_row`; rows in one batch may carry different run_ids and each is grouped
-    under its own `## Run <run_id>` block per the `append_row` rules).
-
-    Validation is atomic: EVERY row is rendered through `render_row` BEFORE any write —
-    one invalid row (bad disposition, empty field, missing key) raises ValueError naming
-    the offending row index, and NOTHING is written. On success the file is written
-    exactly once. An empty batch raises ValueError (a no-op batch is a caller bug, not
-    a silent success).
-    """
     if not rows:
         raise ValueError("append_rows: empty batch — at least one row is required")
 
-    rendered: list[tuple[str, str]] = []  # (row_text, run_id)
+    rendered: list[tuple[str, str]] = []
     for idx, row in enumerate(rows):
         try:
             missing = [k for k in ("path", "disposition", "fate", "run_id") if k not in row]
@@ -146,9 +118,6 @@ def append_rows(
 
 
 def _insert_row_text(original_text: str, row_text: str, run_id: str) -> tuple[str, bool]:
-    """Pure text transform shared by append_row/append_rows: insert `row_text` into
-    `original_text` under `## Run <run_id>` (joining an existing block or opening a new
-    one at EOF). Returns (new_text, header_opened). Performs no I/O."""
     if not original_text:
         return f"## Run {run_id}\n{row_text}\n", True
 
@@ -168,9 +137,6 @@ def _insert_row_text(original_text: str, row_text: str, run_id: str) -> tuple[st
             break
 
     if run_header_line_idx is None:
-        # No existing header for this run — open a new block at EOF.
-        # Removed dead
-        # `needs_leading_blank` local; it was computed but never referenced.
         separator = "\n" if original_text.endswith("\n") else "\n\n"
         new_text = f"{original_text}{separator}## Run {run_id}\n{row_text}\n"
         return new_text, True

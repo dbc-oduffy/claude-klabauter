@@ -1,36 +1,3 @@
-"""Tests for the in-session operator unlock intercept in
-`coordinator_core.write_guards.engine.evaluate` — the write leg of C2.
-
-Exercises the real hard-deny cohort end-to-end through `engine.evaluate`
-(not a mocked guard), using `block_worktree_sentinel_write` as the live
-target guard — same shape as the working smoke script this test suite is
-modeled on. Covers AC8's write-leg slice: absent-sentinel deny, present-
-sentinel one-shot grant, per-guard isolation, per-session isolation, and
-fail-closed on an unresolvable session id.
-
-`block_worktree_sentinel_write` replaces the original `block_dev_repo_
-sentinel_write` target guard (2026-08-06, docs/plans/2026-08-06-apply-
-guard-class-census.md C12 reclassified the latter to CLASS = "advisory").
-An advisory guard never reaches the hard-deny phase in `engine.evaluate`,
-so it no longer consults the unlock sentinel at all — the property this
-module exists to prove (absent/present/one-shot/per-guard/per-session/
-fail-closed unlock semantics) can only be observed through a guard that is
-still `CLASS = "hard-deny"`. `block_worktree_sentinel_write` is exactly
-that: same `_sentinel_write_guard` mechanism, same shape, untouched by the
-census flip. `TestAdvisoryGuardNeverConsultsUnlock` below separately pins
-the now-advisory guard's own behavior so that flip stays covered too.
-
-A hook envelope that is merely non-`None` is NOT necessarily a deny — the
-advisory phase also returns an envelope — so every assertion here checks
-`out["hookSpecificOutput"]["permissionDecision"]` explicitly rather than
-`out is not None`.
-
-Isolation discipline: `tempfile.gettempdir` is monkeypatched to `tmp_path`
-for every test in this module (autouse fixture) so a failed test can never
-leave a live unlock sentinel in the real platform temp dir.
-
-Spec backlink: pln-in-session-operator-unlock-for-aa6cf9 § C2/C6.
-"""
 
 from __future__ import annotations
 
@@ -71,8 +38,6 @@ def _is_deny(out):
 
 
 class TestAbsentSentinelDenies:
-    """The most important test in the set — it is the one that fails
-    loudly if someone later widens the unlock by accident."""
 
     def test_no_sentinel_denies(self):
         out = engine.evaluate(_payload("sess-1"))
@@ -115,8 +80,6 @@ class TestPerSessionIsolation:
 
 class TestUnresolvableSessionIdFailsClosed:
     def test_missing_session_id_denies_even_with_a_sentinel_on_disk(self):
-        # Sentinel keyed to the empty-string session id -- if the engine
-        # ever coerced a missing session_id to "", this would wrongly grant.
         gus.sentinel_path("", GUARD_NAME).write_text("", encoding="utf-8")
         out = engine.evaluate(_payload(None))
         assert _is_deny(out)
@@ -128,14 +91,6 @@ class TestUnresolvableSessionIdFailsClosed:
 
 
 class TestAdvisoryGuardNeverConsultsUnlock:
-    """`block_dev_repo_sentinel_write` (2026-08-06 census flip, C12) is now
-    `CLASS = "advisory"` and never reaches `engine.evaluate`'s hard-deny
-    phase, so it never calls `guard_unlock_sentinel.consume` — an unlock
-    sentinel written for it is inert and is never touched by evaluation.
-    This is the flip's actual, intended effect; it is not a fail-closed
-    regression to guard against, since the property "an unresolvable
-    session id must not grant" only has meaning for a guard whose outcome
-    an unlock sentinel could otherwise change."""
 
     def _advisory_payload(self, session_id):
         return _payload(

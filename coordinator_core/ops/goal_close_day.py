@@ -82,29 +82,14 @@ from coordinator_core.ops.emit.resolvers import resolve_context
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.goal_append import append_goal
 
-# Terminal status written when a decision names this literal string; every other
-# decision value (including a missing/blank/typo'd one) closes ``dropped`` — DEC-1's
-# "any row not explicitly named done is closed dropped" rule, enforced here so no
-# caller can accidentally infer a wrong-but-plausible "done" from something other
-# than an exact, human-supplied "done".
 _DONE_LITERAL = "done"
 
-# Statuses that count as CLOSED — every other status (including "active",
-# "superseded", or an absent field) counts as open. Mirrors the literal
-# "status not in {done, dropped}" spec, not the contract's full GoalStatus set.
 _CLOSED_STATUSES = frozenset({"done", "dropped"})
 
-# Row fields copied verbatim onto every returned row, in addition to goal_id/text/
-# repo/coordinator_root_path/period/period_value — present-when-present, never
-# defaulted (matches the wire's D9 absent-when-absent field map).
 _PASSTHROUGH_FIELDS = ("parent_goal_id", "key_results_status", "weekly_perceptible")
 
 
 def _resolve_today(today_param: Optional[str]) -> date:
-    """Resolve the "today" reference date: an ISO ``today_param`` when given and
-    parseable, else the real UTC-today (goals-log timestamps are UTC, per
-    ``goal_append.py::_utc_now``).
-    """
     if today_param:
         try:
             return date.fromisoformat(today_param)
@@ -126,10 +111,6 @@ def _project_row(goal_id: str, record: dict, *, default_repo: str = "") -> dict:
     row = {
         "goal_id": goal_id,
         "text": record.get("text", ""),
-        # Must match the filter's own default_repo
-        # (collect_open_day_goals's `record.get("repo", default_repo) != repo`)
-        # so a legacy no-repo row scoped in via a non-empty default_repo is
-        # projected back with the repo it was actually matched under, not "".
         "repo": record.get("repo", default_repo),
         "coordinator_root_path": record.get("coordinator_root_path", "."),
         "period": record.get("period", ""),
@@ -214,37 +195,14 @@ def collect_open_day_goals(
 
 
 class GoalCloseDayLostSupersession(RuntimeError):
-    """Raised when a close-out append did not win the wire's latest-wins collapse.
-
-    The tie-break is a strict ``>`` on second-granularity ``declared_at`` off the
-    LOCAL clock (see ``wire_read.read_and_collapse``), and the fleet is
-    three-shard (machine-b-local, machine-b-lan, machine-a) — a close written on a
-    machine whose clock trails the declaring machine can lose the collapse and
-    the row silently never closes. This op re-reads through the collapse as a
-    runtime postcondition and raises this rather than reporting success on that
-    outcome — see ``close_day_goals()``.
-    """
+    pass
 
 
 class GoalCloseDayRootUnreadable(RuntimeError):
-    """Raised when ``central_state_root`` could not be scanned on the write leg.
-
-    ``before.unreadable_error`` was previously never
-    inspected, so an unscannable root surfaced only incidentally as the generic
-    "no open in-scope wire row" ``ValueError`` from the ``missing`` check below,
-    misdiagnosing a permission/IO problem as a caller-supplied-bad-goal_id
-    problem. Checked explicitly, right after the first ``read_and_collapse``
-    call, so the real cause is named.
-    """
+    pass
 
 
 def _terminal_status(raw_decision: object) -> str:
-    """Normalize one caller-supplied decision value to ``"done"`` or ``"dropped"``.
-
-    DEC-1: only an EXACT ``"done"`` closes done; every other value — a typo, a
-    blank, an unrelated string, ``None`` — closes ``dropped``. Never widened to an
-    inference over anything but the caller's own explicit label.
-    """
     return _DONE_LITERAL if raw_decision == _DONE_LITERAL else "dropped"
 
 
@@ -257,69 +215,11 @@ def close_day_goals(
     hostname: Optional[str] = None,
     default_repo: str = "",
 ) -> dict:
-    """Close a set of open day goals by re-appending each at its SAME ``goal_id``
-    with a terminal status.
-
-    Parameters:
-        central_state_root     — directory scanned for ``goals-log.*.jsonl`` shards
-                                 (passed straight through to
-                                 ``wire_read.read_and_collapse`` and to
-                                 ``goal_append.append_goal`` as an explicit
-                                 override — never defaulted via
-                                 ``resolve_context()``).
-        repo                   — the requesting repo slug. Used BOTH to scope which
-                                 collapsed row a ``goal_id`` decision resolves
-                                 against, and — for a resolved row — as the exact
-                                 value re-appended (never defaulted).
-        decisions               — ``{goal_id: raw_decision}``. ``raw_decision`` is
-                                 normalized per DEC-1 (see ``_terminal_status``):
-                                 exactly ``"done"`` closes done, anything else
-                                 closes dropped. An empty/absent mapping writes
-                                 NOTHING (DEC-2) — this function returns before
-                                 touching disk OR reading the wire at all, so the
-                                 fail-loud postures below (unreadable root,
-                                 unknown/not-open goal_id) never fire on an
-                                 empty/absent decision set.
-        coordinator_root_path  — the requesting coordinator root, same scoping
-                                 role as ``repo`` above. Default ``"."``.
-        hostname                — machine hostname override passed through to
-                                 every ``append_goal()`` call (test seam).
-        default_repo            — passed through to ``read_and_collapse`` for
-                                 legacy rows with no ``repo`` field.
-
-    Returns:
-        {"closed": [{"goal_id", "status", "log_file"}, ...]}
-
-    Raises:
-        GoalCloseDayRootUnreadable: ``central_state_root`` could not be scanned
-            (permission-denied, etc.) on the pre-write read — checked explicitly
-            so this is distinguished from the "goal_id not found" case below
-            rather than surfacing as a misdiagnostic ``ValueError``.
-        ValueError: a decision names a ``goal_id`` with no open, in-scope
-            collapsed row on the wire — either it was never declared, is already
-            superseded out of scope, or is already ``done``/``dropped`` (closing
-            an already-closed row would silently overwrite its terminal status
-            via the latest-wins collapse — a caller bug, not a degrade
-            condition).
-        GoalCloseDayLostSupersession: after every append, a re-read through the
-            SAME collapse does not report the row at its intended terminal
-            status — the append landed on disk but was NOT selected by the
-            latest-wins tie-break (DEC-3 hazard 2, clock skew). Fails loud rather
-            than returning success, per this module's write-leg posture (see
-            module docstring) — this is a RUNTIME postcondition on every call,
-            not a test-only assertion.
-
-    Never edits, rewrites, or deletes a prior row (DEC-3): every close is a
-    fresh append via ``goal_append.append_goal()``; the wire is append-only.
-    """
     if not decisions:
         return {"closed": []}
 
     before = read_and_collapse(Path(central_state_root), default_repo=default_repo)
     if before.unreadable_error is not None:
-        # Checked explicitly rather than left to the
-        # incidental "every requested goal_id lands in `missing`" path below,
-        # which reported a misdiagnostic "no open in-scope wire row" message.
         raise GoalCloseDayRootUnreadable(
             f"goal.close_day_apply: {central_state_root!r} could not be scanned "
             f"({before.unreadable_error}) — refusing to close-out against an "
@@ -335,11 +235,6 @@ def close_day_goals(
         if record.get("coordinator_root_path", ".") != coordinator_root_path:
             continue
         if not _row_is_open(record):
-            # A decision naming an already-done/dropped
-            # goal_id must NOT resolve to a source row; re-appending it would
-            # silently overwrite the terminal status already on the wire via
-            # the latest-wins collapse, rewriting the exact audit history the
-            # append-only model exists to protect.
             continue
         source_by_goal_id[log_row.goal_id] = record
 
@@ -377,10 +272,6 @@ def close_day_goals(
             }
         )
 
-    # Runtime postcondition (AC6): re-read through the SAME collapse and verify
-    # every decision's row now reports its terminal status. A writer-only check
-    # is insufficient — the defect class this guards against is a writer whose
-    # output never reached the reader (clock-skew tie-break loss).
     after = read_and_collapse(Path(central_state_root), default_repo=default_repo)
     after_status_by_goal_id = {
         log_row.goal_id: log_row.record.get("status")
@@ -404,9 +295,7 @@ def close_day_goals(
     return {"closed": closed}
 
 
-# ---------------------------------------------------------------------------
 # JSON-RPC handlers
-# ---------------------------------------------------------------------------
 
 
 @register_op("goal.close_day")
@@ -446,9 +335,6 @@ def _goal_close_day(params: dict, repo_root: Optional[Path] = None) -> dict:
         params.get("repo") or ctx.repo_name,
         coordinator_root_path=params.get("coordinator_root_path", "."),
         today=params.get("today"),
-        # Matches sections/goals.py:74's convention so a
-        # legacy no-repo row is attributed to the current repo instead of
-        # silently falling out of scope via the "" != repo filter.
         default_repo=ctx.repo_name,
     )
 
@@ -505,7 +391,5 @@ def _goal_close_day_apply(params: dict, repo_root: Optional[Path] = None) -> dic
         params.get("repo") or ctx.repo_name,
         params.get("decisions") or {},
         coordinator_root_path=params.get("coordinator_root_path", "."),
-        # Matches sections/goals.py:74's convention; see
-        # goal.close_day's handler above for the same fix.
         default_repo=ctx.repo_name,
     )

@@ -1,18 +1,3 @@
-r"""The ``Plan:`` line of every executor brief must name the plan, not a YAML
-comment in its frontmatter.
-
-THE DEFECT THIS CLOSES. ``_plan_title`` searched ``^#\s+(.+)$`` over the whole
-file. A YAML comment and a Markdown H1 are the same characters, so on any plan
-whose frontmatter leaves an optional key commented out the first match is
-inside the frontmatter block. ``coordinator-doc-new --type plan`` — the default
-scaffold — emits exactly that, which makes this fleet-wide rather than one bad
-plan: ``docs/plans/2026-09-05-workflow-trampoline.md`` opened every brief with
-``Plan: problem_set: inline               # ratified problem-set slug or``
-(doe-claude-em, 2026-09-05).
-
-Negative-spec: the frontmatter block is never a source of H1 candidates, no
-matter how many ``#`` lines it carries.
-"""
 
 from coordinator_core.ops.dispatch_emit.emit import derive_plan_context
 
@@ -50,7 +35,6 @@ No H1 anywhere in the body.
 
 
 def test_body_h1_outranks_frontmatter_title():
-    """The H1 is what a reader of the rendered brief sees as the plan's name."""
     text = """---
 title: "Stale frontmatter title"
 ---

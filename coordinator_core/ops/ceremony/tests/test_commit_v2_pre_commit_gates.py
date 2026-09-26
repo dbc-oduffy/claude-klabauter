@@ -41,8 +41,6 @@ import pytest
 from coordinator_core.ops.ceremony import commit_v2
 from coordinator_core.ops.ceremony.commit_gates import GateOutcome
 
-# Spawns real external `git` processes; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -234,10 +232,6 @@ def test_declared_deletion_fast_path_never_reads_the_index(tmp_path: Path, monke
         {
             "paths": [],
             "deleted_paths": ["other.md"],
-            # Same reason as test_declared_staged_deletion_commits: the fixture's
-            # file was added one commit ago, so P2d's rollback gate sees ABSENT
-            # returning at depth 2. Unrelated to the index-read property asserted
-            # here, but the commit has to reach that code to assert it.
             "declared_reverts": ["other.md"],
             "message": "declared delete\n",
         },
@@ -258,7 +252,7 @@ def test_staged_deletion_outside_scope_does_not_refuse(tmp_path: Path):
     _git(["add", "--", "other.md"], repo)
     _git(["commit", "-q", "-m", "add other"], repo)
 
-    _stage_delete(repo, "other.md")  # a peer's staged deletion, out of scope
+    _stage_delete(repo, "other.md")
     rel = _edit(repo, "seed.md")
     before = _head(repo)
 
@@ -286,7 +280,6 @@ def test_a_plain_rename_is_not_an_undeclared_deletion(tmp_path: Path):
     _git(["add", "--", "before.md"], repo)
     _git(["commit", "-q", "-m", "add before.md"], repo)
 
-    # A content-preserving rename, staged as git itself would stage one.
     _git(["mv", "before.md", "after.md"], repo)
     before = _head(repo)
 
@@ -322,7 +315,7 @@ def test_an_unreadable_index_refuses_rather_than_passing(tmp_path: Path, monkeyp
     _git(["add", "--", "other.md"], repo)
     _git(["commit", "-q", "-m", "add other"], repo)
 
-    _stage_delete(repo, "other.md")  # undeclared + absent => a real candidate
+    _stage_delete(repo, "other.md")
     before = _head(repo)
 
     def _raise(*a, **k):

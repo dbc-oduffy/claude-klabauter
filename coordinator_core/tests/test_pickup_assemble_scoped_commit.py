@@ -38,8 +38,6 @@ from coordinator_core import pickup_assemble as pa  # noqa: E402
 from coordinator_core.pickup_assemble import apply as pa_apply  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -58,7 +56,6 @@ def _git(args, cwd):
 
 @pytest.fixture()
 def repo() -> Path:
-    """A throwaway git repo with one initial commit, so HEAD exists."""
     with tempfile.TemporaryDirectory() as td:
         root = Path(td).resolve()
         _git(["init", "-q"], root)
@@ -71,8 +68,6 @@ def repo() -> Path:
 
 
 def test_run_git_add_actually_stages(repo: Path):
-    """`_run_git(["add", ...])` must spawn real git and stage the path —
-    not degrade to the read-model's empty-stderr non-zero fallback."""
     (repo / "artifact.md").write_text("body\n")
     proc = pa._run_git(["add", "--", str(repo / "artifact.md")], repo)
     assert proc.returncode == 0, f"add degraded: rc={proc.returncode} stderr={proc.stderr!r}"
@@ -84,8 +79,6 @@ def test_run_git_add_actually_stages(repo: Path):
 
 
 def test_run_git_rev_parse_head_returns_sha(repo: Path):
-    """`rev-parse HEAD` must resolve to the current commit SHA (read-model or
-    spawn) — a returncode-1 here silently strands `_scoped_commit`'s SHA."""
     proc = pa._run_git(["rev-parse", "HEAD"], repo)
     assert proc.returncode == 0, f"rev-parse HEAD degraded: stderr={proc.stderr!r}"
     real = subprocess.run(
@@ -96,9 +89,6 @@ def test_run_git_rev_parse_head_returns_sha(repo: Path):
 
 
 def test_scoped_commit_commits_new_artifact(repo: Path):
-    """The break-class repro: `_scoped_commit` on a freshly-written artifact
-    must stage+commit it and return the new SHA — not raise on a silent
-    empty-stderr `git add` failure."""
     rel = "state/handoffs/2026-07-23_example-handoff.md"
     target = repo / rel
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -120,8 +110,6 @@ def test_scoped_commit_commits_new_artifact(repo: Path):
 
 
 def test_scoped_commit_scopes_to_the_one_path(repo: Path):
-    """A pre-existing staged peer file must survive `_scoped_commit`
-    uncommitted — the pathspec must not widen (AC10)."""
     peer = repo / "peer.txt"
     peer.write_text("peer\n")
     _git(["add", "--", "peer.txt"], repo)
@@ -131,7 +119,6 @@ def test_scoped_commit_scopes_to_the_one_path(repo: Path):
     sha = pa_apply._scoped_commit(repo, rel, "handoff", "artifact.md", ["d1"])
     assert sha is not None
 
-    # peer.txt was staged but NOT part of this commit's pathspec — still staged.
     still_staged = subprocess.run(
         ["git", "-C", str(repo), "diff", "--cached", "--name-only"],
         capture_output=True, text=True, timeout=30,

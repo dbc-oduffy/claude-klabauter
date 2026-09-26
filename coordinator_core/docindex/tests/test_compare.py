@@ -1,10 +1,3 @@
-"""
-Tests for coordinator_core.docindex.compare (C2b).
-
-Spec backlink:
-  claude-klabauter: docs/plans/2026-08-14-registry-indexes-are-emitted-from-their-directory.md,
-                  plan-spine id C2b
-"""
 from __future__ import annotations
 
 import hashlib
@@ -179,7 +172,5 @@ def test_compare_accepts_pre_read_text_never_reads_paths():
     spec = _spec([("system", "System")])
     entries = [{"system": "a"}]
     doc = _rendered_doc(spec, entries)
-    # compare() takes document text and entries directly — no path argument
-    # exists on its signature, so this call succeeding at all is the proof.
     result = compare(doc, spec, entries)
     assert isinstance(result, CompareResult)

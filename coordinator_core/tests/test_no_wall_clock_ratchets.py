@@ -117,16 +117,8 @@ from coordinator_core.spawn_policy.marker_check import marker_call_nodes
 
 _DELIBERATE_WALL_CLOCK_MARKER = "pytest.mark.deliberate_wall_clock"
 
-#: pytest's own compiled-in default, plus the dot-directory and `.egg`
-#: shapes it also prunes -- honoured during the walk (not filtered after)
-#: so an excluded subtree is never descended into at all.
 _NORECURSEDIRS = {"_darcs", "CVS", "{arch}", "build", "dist", "node_modules", "venv"}
 
-#: Raw byte substrings that MUST be present for a file to even be a
-#: candidate -- a cheap prefilter ahead of `ast.parse`, not a classifier.
-#: `from time import` catches an aliased `perf_counter`/`monotonic`/`time`
-#: import whose call site elsewhere in the file may read only the bare
-#: (unqualified) name.
 _WALL_TOKENS = (
     b"perf_counter",
     b"monotonic",
@@ -147,18 +139,7 @@ class Finding:
     lineno: int
 
 
-# --------------------------------------------------------------------- #
-# alias resolution
-# --------------------------------------------------------------------- #
-
-
 def _collect_aliases(tree: ast.Module) -> tuple[dict[str, str], dict[str, str]]:
-    """`(module_aliases, name_aliases)`: `module_aliases` maps a local
-    name bound by `import time [as X]` to `"time"`; `name_aliases` maps a
-    local name bound by `from time import perf_counter [as X]` to the
-    real attribute name (`"perf_counter"`). Module-level imports only --
-    the common case for every synthetic and live shape this guard scans.
-    """
     module_aliases: dict[str, str] = {}
     name_aliases: dict[str, str] = {}
     for node in tree.body:
@@ -182,11 +163,6 @@ def _is_wall_call(call: ast.Call, module_aliases: dict[str, str], name_aliases: 
     return False
 
 
-# --------------------------------------------------------------------- #
-# taint evaluation
-# --------------------------------------------------------------------- #
-
-
 def _expr_taint(
     node: ast.expr,
     env: dict[str, str],
@@ -194,7 +170,6 @@ def _expr_taint(
     name_aliases: dict[str, str],
     func_returns: dict[str, str],
 ) -> str | None:
-    """Returns `"stamp"`, `"duration"`, `"collection"`, or `None`."""
     if isinstance(node, ast.Call):
         if _is_wall_call(node, module_aliases, name_aliases):
             return "stamp"
@@ -250,7 +225,6 @@ def _scan_function(
     name_aliases: dict[str, str],
     func_returns: dict[str, str],
 ) -> tuple[list[int], str | None]:
-    """Returns `(violation_linenos, return_taint)` for one function body."""
     env: dict[str, str] = {}
     linenos: list[int] = []
     return_taint: str | None = None
@@ -312,11 +286,6 @@ def _compute_return_taints(
     return returns
 
 
-# --------------------------------------------------------------------- #
-# discharge
-# --------------------------------------------------------------------- #
-
-
 def _is_discharged(calls: list[ast.Call]) -> bool:
     for call in calls:
         for kw in call.keywords:
@@ -334,11 +303,6 @@ def _function_discharged(func: ast.FunctionDef | ast.AsyncFunctionDef, class_dis
     if class_discharged:
         return True
     return _is_discharged(marker_call_nodes(decorators=func.decorator_list, marker=_DELIBERATE_WALL_CLOCK_MARKER))
-
-
-# --------------------------------------------------------------------- #
-# per-source scan
-# --------------------------------------------------------------------- #
 
 
 def _scan_source(text: str, path: str) -> list[Finding]:
@@ -372,11 +336,6 @@ def _scan_source(text: str, path: str) -> list[Finding]:
                     findings.extend(Finding(path, f"{node.name}.{item.name}", ln) for ln in linenos)
 
     return findings
-
-
-# --------------------------------------------------------------------- #
-# real-tree walk
-# --------------------------------------------------------------------- #
 
 
 def _walk_testpaths(repo_root: Path) -> list[Path]:
@@ -436,11 +395,6 @@ def test_no_undischarged_wall_clock_ratchets():
             + "\nMeasure through coordinator_core/benchmarks/process_time.py, "
             "or declare pytest.mark.deliberate_wall_clock(reason=\"...\")."
         )
-
-
-# --------------------------------------------------------------------- #
-# self-tests over synthetic sources
-# --------------------------------------------------------------------- #
 
 
 def _findings(text: str) -> list[Finding]:

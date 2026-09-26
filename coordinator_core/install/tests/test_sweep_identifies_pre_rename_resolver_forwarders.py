@@ -65,8 +65,6 @@ def test_current_marker_constant_matches_the_agnostic_pattern():
 
 
 def test_sweep_protects_a_current_forwarder_with_a_renamed_resolver(sweepable):
-    """Condition 2 still gates the pattern match: a name in this run's write
-    set survives even though its body matches."""
     name = "still-installed"
     kept = sweepable / name
     kept.write_text(_forwarder_body(name, "_resolve_claude_klabauter"), encoding="utf-8")
@@ -77,8 +75,6 @@ def test_sweep_protects_a_current_forwarder_with_a_renamed_resolver(sweepable):
 
 
 def test_sweep_leaves_an_unrelated_python_script_alone(sweepable):
-    """Positive identification, never absence-implies-orphan -- a hand-authored
-    script that does not carry this module's generated import line survives."""
     decoy = sweepable / "someones-own-tool"
     decoy.write_text("#!/usr/bin/env python3\nprint('not ours')\n", encoding="utf-8")
 
@@ -88,8 +84,6 @@ def test_sweep_leaves_an_unrelated_python_script_alone(sweepable):
 
 
 def test_sweep_leaves_a_lookalike_import_of_another_symbol_alone(sweepable):
-    """The pattern is the generated import LINE, not the resolver name alone --
-    importing something else from a resolver module is not this family."""
     decoy = sweepable / "imports-something-else"
     decoy.write_text(
         "#!/usr/bin/env python3\nfrom _resolve_claude_klabauter import claude_klabauter_root\n", encoding="utf-8"
@@ -101,12 +95,6 @@ def test_sweep_leaves_a_lookalike_import_of_another_symbol_alone(sweepable):
 
 
 def test_publisher_only_forwarder_survives_a_mirror_derived_write_set(sweepable):
-    """The regression the resolver-agnostic marker exposed: a published-engine
-    install run derives its write set from the MIRROR's `coordinator/bin/`,
-    which lacks every publisher-only and otherwise-unpublished CLI. Those
-    forwarders resolve against the live working tree at call time and are not
-    orphans -- passing the live tree's names through `extra_protected_names`
-    is what keeps condition 2 from handing them to the sweep."""
     name = "percolate-push"
     kept = sweepable / name
     kept.write_text(_forwarder_body(name, "_resolve_claude_klabauter"), encoding="utf-8")

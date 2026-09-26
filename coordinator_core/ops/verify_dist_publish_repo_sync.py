@@ -86,15 +86,6 @@ _SUBPROCESS_TIMEOUT_SECS = 15
 
 
 def _load_percolate_ignore(path: Path) -> set:
-    """Read a .percolate-ignore file into a set of relative-path strings.
-
-    Skips blank lines and '#'-prefixed comment lines, mirroring the bash
-    oracle's `case "$line" in ''|'#'*) continue ;; esac` filter. A Python
-    set replaces the oracle's tempfile+grep-qxF workaround (that workaround
-    existed only to emulate an associative array on bash 3.2 — an
-    implementation detail, not observable behavior; set membership is the
-    same outward semantics as `grep -qxF`).
-    """
     ignored: set = set()
     if not path.is_file():
         return ignored
@@ -106,11 +97,6 @@ def _load_percolate_ignore(path: Path) -> set:
 
 
 def _run_machine_local(binary: str, key: str) -> Optional[str]:
-    """Run `<binary> get <key>` with a hard timeout and no stdin; return
-    stripped stdout, or None on any failure (nonzero exit, timeout, empty
-    output) — mirrors the bash oracle's `... 2>/dev/null || true` fail-soft
-    shape, which the caller then re-checks for emptiness.
-    """
     try:
         result = subprocess.run(
             [binary, "get", key],
@@ -162,13 +148,8 @@ def _resolve_publish_repo_root() -> Optional[str]:
         )
         return None
 
-    # Settings-home is the canonical install (DR-072); the legacy ~/.claude/bin
-    # rung below it was retired 2026-07-28 and is kept only for machines that
-    # predate the move. settings-home/bin is not on PATH by default, so without
-    # this rung the ladder above reached only a directory that no longer exists.
     settings_binary = os.path.join(str(settings_home()), "bin", "machine-local")
     # home_dir() (CLAUDE_HOME, else Path.home()) rather than os.path.expanduser("~")
-    # directly, for consistency with the other two resolvers on this same rung
     # — both resolve to the same Windows-safe (USERPROFILE-aware) value here.
     home_binary = os.path.join(str(home_dir()), ".claude", "bin", "machine-local")
     fallback_binary = next(
@@ -218,14 +199,6 @@ class _Counters:
 
 
 def _check_pair(src: Path, dst: Path, rel: str, counters: _Counters, out: List[str]) -> None:
-    """Compare one source file against its publish-repo counterpart.
-
-    Byte-identity check (not a content-aware diff) — mirrors the bash
-    oracle's `diff -q "$src" "$dst"`. Uses filecmp.cmp(shallow=False) to
-    force a full content comparison (shallow=True would trust os.stat
-    metadata, which a publish.sh rsync run could touch without changing
-    content, producing a false OK).
-    """
     if not dst.is_file():
         out.append(f"{'MISSING':<10} {rel}")
         counters.missing += 1
@@ -260,10 +233,6 @@ def _scan_target(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """CLI entry: resolve roots, verify both flat-mirror targets, print
-    report + summary, return the business exit code (0/1/2 — see module
-    docstring; never returns anything else).
-    """
     plugin_root_env = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if not plugin_root_env:
         print(

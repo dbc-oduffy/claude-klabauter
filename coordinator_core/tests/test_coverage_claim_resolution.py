@@ -53,8 +53,6 @@ def workspace(tmp_path):
 
 
 def test_parse_handoff_consumed_by_ledger_only_mirror_reverted(workspace):
-    """The shared leaf: ledger has a live claim, mirror does not (the
-    branch-switch-revert desync). Ledger must win."""
     common_dir, handoff = workspace
     _write_claim_dir(common_dir, handoff.name, "sess-ledger", "2026-08-07T10:00:00Z")
     _write_handoff(handoff, status="open")
@@ -66,8 +64,6 @@ def test_parse_handoff_consumed_by_ledger_only_mirror_reverted(workspace):
 
 
 def test_get_handoff_consumed_by_ledger_only_mirror_reverted(workspace):
-    """AC3, path 1: _get_handoff_consumed_by must resolve the ledger-only
-    claim, not the reverted-to-open mirror."""
     common_dir, handoff = workspace
     _write_claim_dir(common_dir, handoff.name, "sess-ledger", "2026-08-07T10:00:00Z")
     _write_handoff(handoff, status="open")
@@ -105,8 +101,6 @@ def test_handoff_session_live_ledger_only_mirror_reverted(workspace):
 
 
 def test_get_handoff_consumed_by_mirror_only_still_works(workspace):
-    """No ledger claim at all — falls back to the frontmatter mirror,
-    unchanged from pre-migration behavior."""
     common_dir, handoff = workspace
     _write_handoff(handoff, claimed_by="sess-mirror", status="claimed")
 
@@ -116,7 +110,6 @@ def test_get_handoff_consumed_by_mirror_only_still_works(workspace):
 
 
 def test_get_handoff_consumed_by_legacy_consumed_by_still_works(workspace):
-    """DR-084 dual-tolerance survives the migration on the mirror-fallback leg."""
     common_dir, handoff = workspace
     _write_handoff(handoff, consumed_by="sess-legacy", status="claimed")
 
@@ -147,9 +140,6 @@ def test_handoff_session_live_unclaimed_conservative_live(workspace):
 
 
 def test_get_handoff_consumed_by_unreadable_returns_none_conservative(tmp_path):
-    """Read/parse failure degrades to None (conservative-live default) —
-    resolve_claim_state itself swallows the OSError rather than raising, so
-    this exercises the fallback branch through the real (non-mocked) path."""
     missing = tmp_path / "state" / "handoffs" / "does-not-exist.md"
 
     result = coverage._get_handoff_consumed_by(str(missing))
@@ -158,11 +148,6 @@ def test_get_handoff_consumed_by_unreadable_returns_none_conservative(tmp_path):
 
 
 def test_parse_handoff_consumed_by_unreadable_file_raises(tmp_path):
-    """C2-fix: unlike an absent claim (degraded quietly), an unreadable
-    handoff file must still RAISE at the shared leaf — this is the exact
-    distinction test_coverage_dag_silent_fallback_guards.py depends on.
-    _get_handoff_consumed_by (above) catches this and degrades to None for
-    its own external contract; the leaf itself must not swallow it."""
     missing = tmp_path / "state" / "handoffs" / "does-not-exist.md"
 
     with pytest.raises(OSError):
@@ -170,8 +155,6 @@ def test_parse_handoff_consumed_by_unreadable_file_raises(tmp_path):
 
 
 def test_parse_handoff_consumed_by_absent_claim_degrades_quietly(workspace):
-    """Contrast case for the test above: file IS readable, no claim in
-    either ledger or mirror — must degrade to None, not raise."""
     common_dir, handoff = workspace
     _write_handoff(handoff, status="open")
 

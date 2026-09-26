@@ -97,9 +97,6 @@ def _write_registry_record(sessions_dir: Path, filename: str, session_id: str, p
 
 
 def _make_repo(root: Path) -> None:
-    """Real directory + real `.git` marker -- sufficient for the
-    plausibility band; no actual `git init` needed (repo_root.show_toplevel
-    walks for the entry, non-spawning -- see coordinator_core/git/repo_root.py)."""
     root.mkdir(parents=True, exist_ok=True)
     (root / ".git").mkdir(parents=True, exist_ok=True)
 
@@ -179,7 +176,6 @@ class _RepoIdentityHarness(unittest.TestCase):
         self._setenv("CLAUDE_CODE_SESSION_ID", sid)
 
     def _setup_mismatch(self, tmp_path: Path, sid: str, pid: int) -> tuple[Path, Path]:
-        """Real anchor (cwd) diverges from the real registry-resolved root."""
         repo_root = tmp_path / "repo"
         foreign_root = tmp_path / "foreign"
         _make_repo(repo_root)

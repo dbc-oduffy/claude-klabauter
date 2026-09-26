@@ -104,11 +104,6 @@ from coordinator_core.contract.decision_object.judgment import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Lessons / governing-plan reconciliation (census Steps 1, 1.2, 2, 2.4, 2.4b)
-# ---------------------------------------------------------------------------
-
-
 def build_lesson_worth_capturing_judgment_point(
     capture_resolves_ids: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -144,17 +139,11 @@ def build_lesson_worth_capturing_judgment_point(
             "qualitative call over session memory, not computable from a fixed predicate"
         ),
         revalidate_at_dispatch=False,
-        # `resolves` is resolver-populated: an empty list here means the
-        # `decisions` slice is not filled in yet, not that this point gates
-        # nothing. Exempts it from the `_emit` unclassified-scan; it is not a
-        # `reportable` classification and must never be used as one.
         resolves_computed=True,
     )
 
 
 def build_lesson_scope_classification_judgment_point() -> dict[str, Any]:
-    """Step 1.2: universal-vs-project-specific + `--change-kind` selection.
-    Both require reading the lesson's own substance."""
     return build_judgment_point(
         {
             "disposition": "project-specific",
@@ -179,17 +168,11 @@ def build_lesson_scope_classification_judgment_point() -> dict[str, Any]:
             "require reading the lesson's substance, not a disk-computable fact"
         ),
         revalidate_at_dispatch=False,
-        # (review-integration slice B) action-class: the question asks
-        # "and which --change-kind enum value applies?" -- the EM must
-        # produce a value it then supplies to `lesson-add`, an input the EM
-        # generates rather than a label the engine records.
         reportable=False,
     )
 
 
 def build_plan_doc_content_update_judgment_point() -> dict[str, Any]:
-    """Step 2: which plan sections read as stale and need a review/outcomes
-    update. "Clearly stale" and the outcomes summary are both authorial."""
     return build_judgment_point(
         {
             "disposition": "update-now",
@@ -210,10 +193,6 @@ def build_plan_doc_content_update_judgment_point() -> dict[str, Any]:
             "in prose is authorial, not a fixed predicate"
         ),
         revalidate_at_dispatch=False,
-        # (C2 redo, same plan) action-class: `update-now` means the EM
-        # literally edits the governing plan doc on disk -- a concrete write,
-        # no directive gates it, so the answer must keep asking rather than
-        # be silently narrated away.
         reportable=False,
     )
 
@@ -247,17 +226,11 @@ def build_plan_vs_reality_reconcile_judgment_point() -> dict[str, Any]:
             "judgment"
         ),
         revalidate_at_dispatch=False,
-        # (C2 redo) action-class: `annotate-divergence` means the EM writes a
-        # SHIPPED annotation into the plan doc -- a concrete disk edit with
-        # no directive behind it.
         reportable=False,
     )
 
 
 def build_enablement_vs_opportunistic_deferral_judgment_point() -> dict[str, Any]:
-    """Step 2.4b: classify each improvement-queue entry this session
-    created as opportunistic-improvement vs load-bearing-feature-
-    completion."""
     return build_judgment_point(
         {
             "disposition": "opportunistic-defer",
@@ -286,19 +259,8 @@ def build_enablement_vs_opportunistic_deferral_judgment_point() -> dict[str, Any
             "own tells are illustrative, not diagnostic"
         ),
         revalidate_at_dispatch=False,
-        # (review-integration slice B) action-class: `load-bearing-promote`
-        # obligates an action, not a relabel -- it means this queued item
-        # gates the feature this session is calling complete end-to-end, and
-        # that obligates either shipping the enabler or withdrawing the
-        # completeness claim. Demoted to narration, the EM is never asked and
-        # can close a session with an inert feature reading as done.
         reportable=False,
     )
-
-
-# ---------------------------------------------------------------------------
-# Completion-entry residue (census Steps 2.6, 2.6.7, 2.6.8, 2.6b)
-# ---------------------------------------------------------------------------
 
 
 def build_completion_nature_classification_judgment_point() -> dict[str, Any]:
@@ -335,11 +297,6 @@ def build_completion_nature_classification_judgment_point() -> dict[str, Any]:
 
 
 def build_completion_entry_prose_judgment_point() -> dict[str, Any]:
-    """The one point behind three re-triggers in the source SKILL: Step
-    2.6's TITLE + body, Step 2.6.8's one-sentence append, and Step 2.6b's
-    one-liner (including its fail-open manual-fallback path) -- all the
-    same authorial summarization act, collapsed into one judgment_point
-    per the governing plan's instruction."""
     return build_judgment_point(
         {
             "disposition": "drafted",
@@ -365,9 +322,6 @@ def build_completion_entry_prose_judgment_point() -> dict[str, Any]:
 
 
 def build_commit_significance_filter_judgment_point() -> dict[str, Any]:
-    """Step 2.6.7, self-declared "Judgment filter" in the source SKILL:
-    group related commits, skip trivial ones, skip silently if nothing
-    substantive shipped."""
     return build_judgment_point(
         {
             "disposition": "significant",
@@ -392,50 +346,10 @@ def build_commit_significance_filter_judgment_point() -> dict[str, Any]:
     )
 
 
-# ---------------------------------------------------------------------------
-# Memo lifecycle / scratch disposition (census Steps 2.65, 2.67, 2.7)
-# ---------------------------------------------------------------------------
-
-
 def build_memo_resolution_attribution_judgment_point(
     resolved_resolves_ids: list[str] | None = None,
     attribution_signals: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Step 2.65: which open memos did this session's commits resolve.
-
-    Source text: "non-automatable... no reliable programmatic signal
-    connects commits to memo resolution." That premise is STALE as of the
-    2026-07-30 doe-claude-em cross-repo memo (`cross-repo/archive/2026-07-30-
-    doe-claude-em-wsc-review-trail-passthrough-and-memo-attribution.md`):
-    three signals this engine itself writes DO connect commits to memo
-    resolution — `picked_up_by == sid`, `realized_by` matching a commit SHA
-    in this session's range, and an inbox->archive `git mv` landing as an
-    `R100` rename in range (`directives_memo_lifecycle.
-    compute_memo_resolution_attribution` computes the union). This is
-    therefore now `build_judgment_point` (tier 2, a `recommendation` is
-    permitted), NOT `build_untrusted_gate_judgment_point` — the untrusted-
-    gate classification rested on the evidence being another session's memo
-    prose; it is now this engine's own computation over fields this engine
-    itself wrote, which is exactly the trusted-caller case
-    (`coordinator_core.contract.decision_object.judgment`'s own docstring:
-    a trusted caller "is allowed to say what it would do"). This narrows the
-    question, it does NOT remove it: a memo resolved without any of the
-    three signals firing (no archive move, no stamp) is exactly the
-    residual the EM must still be asked to confirm, so the point still
-    fires and still asks — see the not-resolved branch below.
-
-    `resolved_resolves_ids` MUST be the caller's `directives_memo_lifecycle.
-    memo_flip_resolves_ids(dispositions)` — the basename-suffixed
-    `d-flip-memo-status:<basename>` ids. See the lesson point above for why
-    the unsuffixed base can never open the gate.
-
-    `attribution_signals` MUST be the caller's `directives_memo_lifecycle.
-    compute_memo_resolution_attribution(repo_root, sid)` — one dict per
-    memo with at least one signal firing, `{"path", "basename", "signals"}`.
-    An empty (or `None`) list recommends `not-resolved`; a non-empty list
-    recommends `resolved`, with `evidence` naming each memo and which
-    signal(s) fired for it.
-    """
     signals = list(attribution_signals or [])
     if signals:
         disposition = "resolved"
@@ -474,18 +388,11 @@ def build_memo_resolution_attribution_judgment_point(
             "EM must confirm"
         ),
         revalidate_at_dispatch=False,
-        # `resolves` is resolver-populated: an empty list here means the
-        # `decisions` slice is not filled in yet, not that this point gates
-        # nothing. Exempts it from the `_emit` unclassified-scan; it is not a
-        # `reportable` classification and must never be used as one.
         resolves_computed=True,
     )
 
 
 def build_do_now_memo_violation_check_judgment_point() -> dict[str, Any]:
-    """Step 2.65: scan for an `ask` memo accepted-in-word but not landed
-    (evasive phrasing like "will land before X"). Tier 3: the evidence is
-    another party's decision-note prose."""
     return build_untrusted_gate_judgment_point(
         id="do-now-memo-violation-check",
         question=(
@@ -507,9 +414,6 @@ def build_do_now_memo_violation_check_judgment_point() -> dict[str, Any]:
 
 
 def build_scratch_disposition_per_file_judgment_point() -> dict[str, Any]:
-    """Step 2.67: for each session-authored scratch file, `git rm` or
-    write a one-line justify-keep reason. Source text: "default is
-    delete", with example (non-exhaustive) reasons for keeping."""
     return build_judgment_point(
         {
             "disposition": "delete",
@@ -530,21 +434,11 @@ def build_scratch_disposition_per_file_judgment_point() -> dict[str, Any]:
             "to a predicate -- the source text gives example reasons, not exhaustive rules"
         ),
         revalidate_at_dispatch=False,
-        # (C2 redo, premise-finding sidecar channel 3) action-class: the
-        # answer decides whether a file is `git rm`'d -- no directive, no
-        # gate, but the EM must still DO something on the answer. Named
-        # explicitly by the plan's premise-finding sidecar as evidence the
-        # channel-3 gap is real.
         reportable=False,
     )
 
 
 def build_predecessor_distill_fate_judgment_point() -> dict[str, Any]:
-    """Step 2.7: backfill a predecessor's missing `distill_fate:` based on
-    how its open loop actually resolved. Mirrors pickup's own
-    ratification-escalation shape -- terminal, not round-trip, per that
-    precedent's own reasoning (each disposition's CLI args are enumerable
-    in advance)."""
     return build_judgment_point(
         {
             "disposition": "commitment",
@@ -571,21 +465,11 @@ def build_predecessor_distill_fate_judgment_point() -> dict[str, Any]:
             "predecessor's work actually resolved'"
         ),
         revalidate_at_dispatch=False,
-        # (C2 redo) action-class: the answer is backfilled into the
-        # predecessor handoff's own `distill_fate:` frontmatter -- a
-        # concrete disk write to another file, with no directive gating it.
         reportable=False,
     )
 
 
-# ---------------------------------------------------------------------------
-# Session hygiene (census Steps 2.8, 2.95, 2.96)
-# ---------------------------------------------------------------------------
-
-
 def build_pinboard_note_content_judgment_point() -> dict[str, Any]:
-    """Step 2.8: what, if anything, the next session start MUST see and
-    would otherwise lose."""
     return build_judgment_point(
         {
             "disposition": "nothing-to-pin",
@@ -611,9 +495,6 @@ def build_pinboard_note_content_judgment_point() -> dict[str, Any]:
 
 
 def build_orientation_doc_row_updates_judgment_point() -> dict[str, Any]:
-    """Step 2.8: project-tracker / action-items / docs-index row updates
-    -- the same identify-affected-rows-and-write-the-update shape, three
-    times over."""
     return build_judgment_point(
         {
             "disposition": "rows-identified-and-drafted",
@@ -638,18 +519,11 @@ def build_orientation_doc_row_updates_judgment_point() -> dict[str, Any]:
             "not derivable from a fixed rule"
         ),
         revalidate_at_dispatch=False,
-        # (C2 redo) action-class: the recommended disposition itself is
-        # "rows-identified-and-drafted" -- the EM must write those drafted
-        # rows into the tracker/action-items/docs-index, a concrete edit
-        # with no directive behind it.
         reportable=False,
     )
 
 
 def build_cross_cutting_check_judgment_point() -> dict[str, Any]:
-    """Step 2.95: "anything cross-cutting Step 2.9 wouldn't have
-    surfaced?" -- a self-check across install-surface/security/docs/lessons
-    and any other affected surface."""
     return build_judgment_point(
         {
             "disposition": "nothing-found",
@@ -674,18 +548,11 @@ def build_cross_cutting_check_judgment_point() -> dict[str, Any]:
             "the definition of judgment residue"
         ),
         revalidate_at_dispatch=False,
-        # (C2 redo) acknowledgement-class: same shape as the plan's own
-        # motivating example (the archived-ancestor-batons "if that wasn't
-        # right, check on it" self-check) -- the recommended answer
-        # ("nothing-found") is a pure backstop scan result the EM merely
-        # notes; demoting it loses nothing.
         reportable=True,
     )
 
 
 def build_inline_waiver_recognition_judgment_point() -> dict[str, Any]:
-    """Step 2.96: recognize "the EM has explicitly waived it with a
-    one-line rationale" as satisfying a completeness-checklist item."""
     return build_judgment_point(
         {
             "disposition": "no-waiver-found",
@@ -707,30 +574,13 @@ def build_inline_waiver_recognition_judgment_point() -> dict[str, Any]:
             "is not a structured-data lookup as currently specified"
         ),
         revalidate_at_dispatch=False,
-        # (C2 redo) acknowledgement-class: this is a recall check over the
-        # session's own transcript ("did this actually happen"), not a
-        # decision that triggers a distinct EM action -- the checklist item
-        # itself is resolved elsewhere regardless of this answer.
         reportable=True,
     )
-
-
-# ---------------------------------------------------------------------------
-# Review residue (census Step 2.9/2.9b -- D-3's 8-point set, PM-ratified
-# "go hard" mechanical extraction, these 8 the only survivors)
-# ---------------------------------------------------------------------------
 
 
 def build_review_partition_strategy_judgment_point(
     partition_resolves_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    """No mechanical rule is given for slicing a diff into coherent review
-    chunks -- the genuine architectural-partitioning call.
-
-    `partition_resolves_ids` MUST be the caller's `directives_review.
-    review_partition_resolves_ids(review_partition)` — the per-slice
-    suffixed ids. See `build_lesson_worth_capturing_judgment_point` for why
-    the unsuffixed base can never open the gate."""
     return build_judgment_point(
         {
             "disposition": "by-package-boundary",
@@ -756,10 +606,6 @@ def build_review_partition_strategy_judgment_point(
             "slices -- the genuine architectural-partitioning call"
         ),
         revalidate_at_dispatch=False,
-        # `resolves` is resolver-populated: an empty list here means the
-        # `decisions` slice is not filled in yet, not that this point gates
-        # nothing. Exempts it from the `_emit` unclassified-scan; it is not a
-        # `reportable` classification and must never be used as one.
         resolves_computed=True,
     )
 
@@ -767,11 +613,6 @@ def build_review_partition_strategy_judgment_point(
 def build_reviewer_count_on_oracle_disagreement_judgment_point(
     partition_resolves_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    """On tier B/none oracle disagreement, the EM must record an actual
-    reviewer-count decision cross-checked against findings artifacts.
-
-    `partition_resolves_ids`: see `build_review_partition_strategy_
-    judgment_point`."""
     return build_judgment_point(
         {
             "disposition": "multi-reviewer-fan-out",
@@ -793,18 +634,11 @@ def build_reviewer_count_on_oracle_disagreement_judgment_point(
             "oracles disagree -- genuinely no single correct computed answer"
         ),
         revalidate_at_dispatch=False,
-        # `resolves` is resolver-populated: an empty list here means the
-        # `decisions` slice is not filled in yet, not that this point gates
-        # nothing. Exempts it from the `_emit` unclassified-scan; it is not a
-        # `reportable` classification and must never be used as one.
         resolves_computed=True,
     )
 
 
 def build_shared_schema_touch_check_judgment_point() -> dict[str, Any]:
-    """Row 3's third disjunct: judging whether a touched file counts as a
-    "shared schema/seam" -- semantic classification, not a path-pattern
-    predicate as written."""
     return build_judgment_point(
         {
             "disposition": "shared-seam-touched",
@@ -823,18 +657,11 @@ def build_shared_schema_touch_check_judgment_point() -> dict[str, Any]:
         evidence="touched paths against the repo's known shared-schema/seam surfaces",
         reason='semantic classification of a file\'s role, not a path-pattern predicate as written',
         revalidate_at_dispatch=False,
-        # (C2 redo) action-class: a "shared-seam-touched" answer widens the
-        # review's blast radius (e.g. drives reviewer-count-on-oracle-
-        # disagreement's own fan-out call) -- the EM must actually widen
-        # dispatch/coverage on this answer, not merely record a fact.
         reportable=False,
     )
 
 
 def build_governing_spec_identification_judgment_point() -> dict[str, Any]:
-    """Row 3-6 sessions: name the spec(s) that govern this session's work
-    in the reviewer brief -- a recall/matching judgment, not a computed
-    lookup as stated."""
     return build_judgment_point(
         {
             "disposition": "identified",
@@ -855,18 +682,11 @@ def build_governing_spec_identification_judgment_point() -> dict[str, Any]:
             "recall/matching judgment, not a computed lookup as stated"
         ),
         revalidate_at_dispatch=False,
-        # (C2 redo) action-class: when torn, the plan directs choosing
-        # False. This answer is copied verbatim into the reviewer dispatch
-        # brief the EM authors -- the EM must actually write that citation
-        # into the brief on the answer, not merely record an opinion.
         reportable=False,
     )
 
 
 def build_finding_tradeoff_escalation_check_judgment_point() -> dict[str, Any]:
-    """Fix every finding including nitpicks; escalate to the PM only on a
-    "real tradeoff" -- the break-vs-direction discriminator applied to one
-    review finding."""
     return build_judgment_point(
         {
             "disposition": "fix-now",
@@ -888,18 +708,11 @@ def build_finding_tradeoff_escalation_check_judgment_point() -> dict[str, Any]:
             "judgment call coordinator doctrine names throughout -- not mechanizable here"
         ),
         revalidate_at_dispatch=False,
-        # (C2 redo, premise-finding sidecar channel 3) action-class: the
-        # answer decides whether the PM is escalated to at all -- no
-        # directive, no gate, but the EM must still DO something on the
-        # answer. Named explicitly by the plan's premise-finding sidecar.
         reportable=False,
     )
 
 
 def build_shallow_row3_waive_check_judgment_point() -> dict[str, Any]:
-    """The EM retains waive authority on "genuinely shallow" row-3 diffs;
-    test is diff shape, deliberately left un-mechanized as a backstop
-    against ceremony-avoidance bias."""
     return build_judgment_point(
         {
             "disposition": "proceed-with-tier",
@@ -921,9 +734,6 @@ def build_shallow_row3_waive_check_judgment_point() -> dict[str, Any]:
             "a backstop against ceremony-avoidance"
         ),
         revalidate_at_dispatch=False,
-        # (C2 redo) action-class: "waive" means the EM skips dispatching the
-        # extra review tier -- a concrete behavioral decision (does the
-        # extra review happen or not), no directive behind it.
         reportable=False,
     )
 
@@ -931,37 +741,6 @@ def build_shallow_row3_waive_check_judgment_point() -> dict[str, Any]:
 def build_review_dispatch_vehicle_choice_judgment_point(
     partition_resolves_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    """The EM MAY run the partition via the review-wave background
-    Workflow instead of hand-dispatching -- a discretionary vehicle
-    choice, bounded and optional but still a real "which mechanism" call.
-
-    RETIRED GROUND, recorded because it stood here from 2026-08-16 until
-    2026-08-31 and reads as current if you do not know it moved: this
-    recommendation used to rest on the Workflow vehicle bypassing sidecar
-    provisioning -- the provisioner ran in a `PreToolUse` hook matched on
-    the `Agent` tool, a Workflow-internal ``agent()`` spawn is not an
-    `Agent` tool call, so a ``report_sidecar``-eligible reviewer arrived
-    with no ``sidecar_path`` and correctly refused to review. That is no
-    longer true. Catering was retired from that hook at DoE `10cd4cda9`
-    (2026-08-21) and `SubagentStart` is now the sole catering path for
-    every child, Agent-tool and Workflow ``agent()`` spawn alike -- see
-    ``coordinator_core/hooks/cater_subagent_start.py``. Both vehicles
-    provision identically today.
-
-    The recommendation stays `hand-dispatch`, on the ground that survives:
-    a hand dispatch is observable while it runs, so a reviewer that stops
-    or returns empty is seen and re-dispatched within the same round,
-    where a background wave surfaces the same failure only at collection.
-    That is a weaker reason than the provisioning one it replaces, and it
-    is deliberately not restated as a strong one. Flipping the default to
-    `review-wave-workflow` now needs its own evidence -- a measured
-    comparison of the two vehicles post-`SubagentStart` -- and NOT merely
-    the observation that the old objection died. Nobody has run that
-    comparison; until someone does, the default is a weak preference, not
-    a finding.
-
-    `partition_resolves_ids`: see `build_review_partition_strategy_
-    judgment_point`."""
     return build_judgment_point(
         {
             "disposition": "hand-dispatch",
@@ -986,17 +765,11 @@ def build_review_dispatch_vehicle_choice_judgment_point(
             "optional, but still a real 'which mechanism' call"
         ),
         revalidate_at_dispatch=False,
-        # `resolves` is resolver-populated: an empty list here means the
-        # `decisions` slice is not filled in yet, not that this point gates
-        # nothing. Exempts it from the `_emit` unclassified-scan; it is not a
-        # `reportable` classification and must never be used as one.
         resolves_computed=True,
     )
 
 
 def build_quota_retry_vs_escalate_judgment_point() -> dict[str, Any]:
-    """"The EM decides retry vs escalate based on retry budget" -- bounded
-    but genuinely situational."""
     return build_judgment_point(
         {
             "disposition": "retry",
@@ -1018,28 +791,11 @@ def build_quota_retry_vs_escalate_judgment_point() -> dict[str, Any]:
             "genuinely situational"
         ),
         revalidate_at_dispatch=False,
-        # (C2 redo) action-class: the answer decides whether the EM retries
-        # the dispatch or escalates -- a concrete next action either way, no
-        # directive gates it.
         reportable=False,
     )
 
 
-# ---------------------------------------------------------------------------
-# Concurrent-EM / commit / tail residue (census Steps 3.0, 3, 3.5, 4)
-# ---------------------------------------------------------------------------
-
-
 def build_concurrent_peer_attribution_judgment_point() -> dict[str, Any]:
-    """Step 3.0: before disposing of a case-(c) file, judge whether an
-    active peer session plausibly owns it, using ambiguous signals. Source
-    text: "ask... default to treating the path as case (c)... rather than
-    guessing peer-vs-orphan" -- an acknowledged-ambiguous call over
-    another session's activity. Tier 3 (evidence is peer-authored, not
-    this engine's own computation) AND freshness-sensitive: a peer can
-    claim-and-push between brief-compute time and dispatch time, mirroring
-    pickup's own positive-liveness predicate -- the one point in this
-    module carrying `revalidate_at_dispatch=True`."""
     return build_untrusted_gate_judgment_point(
         id="concurrent-peer-attribution",
         question="Does an active peer session plausibly own this ambiguous file?",
@@ -1058,9 +814,6 @@ def build_concurrent_peer_attribution_judgment_point() -> dict[str, Any]:
 
 
 def build_unattributable_file_disposition_judgment_point() -> dict[str, Any]:
-    """Step 3.0's case-(c) disposition ladder: for a genuinely
-    unattributable file, choose commit-with-provenance /
-    stash-with-provenance / explicit-leave-it-owned-by-X."""
     return build_judgment_point(
         {
             "disposition": "leave-it-owned-by-x",
@@ -1087,16 +840,11 @@ def build_unattributable_file_disposition_judgment_point() -> dict[str, Any]:
             "and risk -- not reducible to a rule"
         ),
         revalidate_at_dispatch=False,
-        # (C2 redo) action-class: every disposition here is itself a
-        # concrete disk action (commit, stash, or leave a note) the EM must
-        # carry out -- no directive gates any of the three.
         reportable=False,
     )
 
 
 def build_session_work_summary_judgment_point() -> dict[str, Any]:
-    """Step 4: 1-2 sentence "work done" summary -- authorial synthesis of
-    the whole session."""
     return build_judgment_point(
         {
             "disposition": "drafted",
@@ -1120,9 +868,6 @@ def build_session_work_summary_judgment_point() -> dict[str, Any]:
 
 
 def build_flag_severity_classification_judgment_point() -> dict[str, Any]:
-    """Step 4: classify any flagged item as break-class (fix-by-default)
-    vs direction-class (ask PM) before listing it -- applying the
-    discriminator requires reading the specific finding."""
     return build_judgment_point(
         {
             "disposition": "break-class",
@@ -1145,39 +890,14 @@ def build_flag_severity_classification_judgment_point() -> dict[str, Any]:
             "findings requires reading them, not a fixed rule"
         ),
         revalidate_at_dispatch=False,
-        # (C2 redo) action-class: per fleet doctrine, break-class is
-        # fix-by-default -- the recommended answer directly obligates the EM
-        # to fix the item, the same shape as
-        # finding-tradeoff-escalation-check (fix-now vs escalate-to-pm).
         reportable=False,
     )
 
 
-# build_stage_paths_missing_judgment_point (jp-stage-paths-missing) —
-# REMOVED (ceremony.wsc_tail kill, 2026-08-23): existed solely to gate
-# `d-run-wsc-tail`, which no longer exists.
-
-
-# ---------------------------------------------------------------------------
-# No-commit row disposition (DoE-claude docs/plans/2026-07-29-pm-approved-
-# provenance-write-time-closure-gate.md, chunk C13 -- NOT part of the C2f
-# census above; a later addition, its own judgment point, kept out of
 # `JUDGMENT_POINT_BUILDERS` deliberately -- see that tuple's own docstring
-# for why it is scoped to the 29-point C2f census and this builder is not
-# one of those 29)
-# ---------------------------------------------------------------------------
 
 
-#: Plain-language reason strings for every join-provenance value the
-#: `close_out_and_stamp._determine_shipped` oracle can report OTHER than
-#: `"joined"` -- deliberately a LOCAL mirror of that module's own
 #: `_JOIN_PROVENANCE_REASON` mapping (this module's negative-spec forbids
-#: importing/reading/calling git-adjacent machinery from `close_out_and_
-#: stamp.py`; these are the four literal provenance-value strings that
-#: module's own docstring documents as its stable contract, not live code
-#: this module reaches into). Used by `build_no_commit_row_disposition_
-#: judgment_point` to reframe its own `evidence` text when the join itself
-#: -- not the underlying work -- is why a row reads as no-covering-commit.
 _JOIN_PROVENANCE_UNATTRIBUTABLE_REASON = {
     "no_join_key": (
         "the governing plan's own frontmatter carries no deliverable_id: "
@@ -1205,69 +925,6 @@ def build_no_commit_row_disposition_judgment_point(
     no_commit_row_ids: list[str] | None = None,
     join_provenance: str = "joined",
 ) -> dict[str, Any] | None:
-    """AC21/AC21b: a task-spine row this session's commit-coverage oracle
-    found no covering commit for must not resolve to a silent "it's
-    deferred" -- the PM's own words: "right the way at workstream-complete
-    there are guards to say 'hey what about this thing without a commit'
-    and the EM thinks 'of course no commit, it's deferred, ugh, what is
-    this stupid guard anyway'." Verification against the running code
-    found no such guard anywhere in `workstream_complete/{apply,
-    judgments,__init__}.py` before this chunk -- this is BUILD, not harden.
-
-    Returns `None` when `no_commit_row_ids` is empty/`None` -- mirrors
-    every other conditionally-emitted point in this module (e.g.
-    `build_stage_paths_missing_judgment_point`'s former caller-side `if not
-    decisions.get(...)` gate, before that builder's removal in the
-    ceremony.wsc_tail kill, 2026-08-23): a caller only invokes this builder once it
-    already knows there is something to ask about, so an empty list here
-    is the "nothing to surface" case, not an error.
-
-    `no_commit_row_ids` is the CALLER's already-computed list of
-    commit-required spine-row ids (disposition `open`/`coded`, per
-    `coordinator_core.execute_plan_assemble.close_out_and_stamp.
-    _commit_required_chunk_ids`) that the SAME module's `_determine_shipped`
-    /`_committed_chunk_shas` commit-coverage oracle found no covering
-    commit for -- reused, not reimplemented (this module's own
-    negative-spec forbids reading disk or calling git; the oracle that
-    does both lives in `close_out_and_stamp.py` and is the `/execute-plan`
-    Phase 4 close-out's own completeness check, already proven against a
-    multi-repo, multi-plan corpus).
-
-    `join_provenance` (cross-repo memo fix -- see `_determine_shipped`'s own
-    widened docstring for the four values it can carry) is the SAME
-    oracle's own join-provenance verdict for the plan `no_commit_row_ids`
-    was computed against, threaded straight through by the caller. This
-    reframes `evidence` ONLY -- a reporting separation, never a sixth
-    silent exit: the judgment still fires unconditionally whenever
-    `no_commit_row_ids` is non-empty, regardless of `join_provenance`, and
-    the five named dispositions below are unchanged. Default `"joined"`
-    preserves this builder's pre-existing evidence wording for every
-    caller that does not (yet) thread the value through.
-
-    Five named exits, matching the five-exit ruling
-    (cross-repo/inbox/2026-08-05-doe-claude-em-plan-tasks-five-exits-
-    ruling.md, ask 3; `python3 coordinator/bin/plan-tasks-resolve --id <row-id>
-    ...`) rather than the pre-ruling three -- ships (a commit lands,
-    `disposition: coded`, via `--coded <sha>` -- no PM word), spun-off (a
-    row moved off this plan -- to a new plan via `--spun-off <ref>` or an
-    existing one via `--moved-to <plan-path>` -- `disposition: spun_off`,
-    relaxed at DoE `bd0475fd5`/schema 1.4.0 -- no PM word), backlogged
-    (`disposition: backlogged` via `--backlogged` -- a PM word is
-    required, retained by PM ruling), wont-do (`disposition: wont_do` via
-    `--wont-do` -- a PM word is required, retained by PM ruling), or
-    carried-forward (written into the successor baton's `carried_items[]`
-    with a `carry_id`, `handoff_carry_gate.evaluate_gate`'s existing
-    undeclared-state refusal applying unchanged -- carry DEPTH is not
-    refused, see DR-278). "Deferred, ignore the guard"
-    is deliberately not a sixth disposition -- that silent exit is exactly
-    what this point exists to close off, per the plan's own Anti-scope:
-    this is not a hard block on finishing a workstream with rows
-    genuinely `open` and carried (AC22), it only removes the SILENT sixth
-    exit. A non-`"joined"` `join_provenance` does NOT introduce a sixth
-    disposition either -- the EM still answers shipped/spun-off/
-    backlogged/wont-do/carried-forward, now with evidence text that
-    correctly names an unjoinable key rather than implying the rows are
-    unshipped."""
     if not no_commit_row_ids:
         return None
     row_line = ", ".join(sorted(no_commit_row_ids))
@@ -1339,15 +996,7 @@ def build_no_commit_row_disposition_judgment_point(
     )
 
 
-#: Every builder in this module, in census emission order (lessons/plan ->
-#: completion -> memo/scratch -> session hygiene -> review -> commit/tail).
-#: `__init__.py` (C3) imports this tuple to populate `judgment_points[]`
-#: alongside the two pre-existing standing points it already builds
-#: directly. Exactly 29 entries -- kept in sync with this module's own
-#: docstring roster; a mismatch here is an authoring bug, not a intentional
-#: subset. `build_no_commit_row_disposition_judgment_point` (C13, a later
 #: plan) is DELIBERATELY excluded -- see its own docstring's section
-#: banner for why.
 JUDGMENT_POINT_BUILDERS: tuple[Callable[[], dict[str, Any]], ...] = (
     build_lesson_worth_capturing_judgment_point,
     build_lesson_scope_classification_judgment_point,
@@ -1379,11 +1028,6 @@ JUDGMENT_POINT_BUILDERS: tuple[Callable[[], dict[str, Any]], ...] = (
     build_flag_severity_classification_judgment_point,
 )
 
-# 28, not the governing plan's original 29 (`build_commit_message_authoring_
-# judgment_point` — commit-message-authoring — REMOVED, ceremony.wsc_tail
-# kill, 2026-08-23: its only `resolves` target, `d-run-wsc-tail`, no longer
-# exists, and nothing else reads decisions["subject"]/["prose"] any more —
-# see `directives_commit_tail.py`'s module docstring).
 assert len(JUDGMENT_POINT_BUILDERS) == 28, (
     f"JUDGMENT_POINT_BUILDERS must carry exactly 28 entries (29 minus "
     f"commit-message-authoring, removed with ceremony.wsc_tail), got "

@@ -51,18 +51,12 @@ from coordinator_core.bash_guards import (
 
 
 def _full_deny_message() -> str:
-    # discipline) -- `agent_id` dropped from `_deny_reason`'s signature, it
-    # was a dead parameter since message-size compression stopped echoing
-    # it (see that function's own docstring).
     return guard._deny_reason(
         "coordinator:code-reviewer", "some denied command", "some reason"
     )
 
 
 def _sole_line_matching(text: str, pattern: str) -> str:
-    """Return the one line of ``text`` matching ``pattern``, failing loud on
-    zero or multiple matches -- either shape means the message was reformatted
-    and the enumeration this suite checks can no longer be located."""
     matches = [line for line in text.splitlines() if re.search(pattern, line)]
     assert len(matches) == 1, (
         f"expected exactly one line matching {pattern!r}, found {len(matches)}: "
@@ -77,25 +71,18 @@ def _split_enumeration(raw: str, separator: str) -> List[str]:
 
 
 def test_offer_block_git_subcommands_match_the_enforced_set():
-    """The "Did you mean" git line offers exactly the read-only subcommands
-    the guard admits -- no missing offer, no offer for a subcommand that in
-    fact denies."""
     line = _sole_line_matching(_full_deny_message(), r"^\s+git show / diff /")
     offered = set(_split_enumeration(line.strip()[len("git ") :].rstrip(". "), "/"))
     assert offered == set(guard._GIT_READONLY_SUBCOMMANDS)
 
 
 def test_offer_block_fs_binaries_match_the_enforced_set():
-    """Likewise for the read-only filesystem binary line."""
     line = _sole_line_matching(_full_deny_message(), r"^\s+ls / cat / head /")
     offered = set(_split_enumeration(line.strip().rstrip(". "), "/"))
     assert offered == set(guard._READONLY_FS_BINARIES)
 
 
 def test_pipeline_segment_reason_enumerations_match_the_enforced_sets():
-    """``_pipeline_segment_deny_reason`` carries its own second copy of both
-    Tier A enumerations -- the copy most likely to be forgotten, since it is
-    reached only on a pipeline denial."""
     reason = guard._pipeline_segment_deny_reason("cowsay moo")
     git_run = re.search(r"show/diff/log[a-z\-/]*", reason)
     fs_run = re.search(r"ls/cat/head[a-z/]*", reason)
@@ -140,9 +127,6 @@ def test_metacharacter_enumeration_lists_every_unconditional_deny(text_name):
 
 
 def test_find_write_flag_examples_are_real_members_of_the_denylist():
-    """The offer block names two ``find`` write/execute flags by example; both
-    must actually be denied. (Subset, not equality -- the message says "such
-    as", so it is deliberately not exhaustive.)"""
     line = _sole_line_matching(_full_deny_message(), r"write/execute flag such as")
     named = set(re.findall(r"-[a-z]+", line.split("such as", 1)[1]))
     assert named, f"no example flags found in {line!r}"
@@ -150,9 +134,6 @@ def test_find_write_flag_examples_are_real_members_of_the_denylist():
 
 
 def test_scaffolder_offer_matches_the_enforced_tier_b_contract():
-    """Every Tier B invocation form the message offers names the binary the
-    guard admits and carries the argument it requires -- a stale offer here is
-    a trap, sending a confined agent to run a command that will deny."""
     message = _full_deny_message()
     offered_forms = [
         line.strip()

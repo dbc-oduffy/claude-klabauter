@@ -93,7 +93,6 @@ def declared(src, flag):
         span = src[start:end]
         if not re.search(r'action\s*=\s*["\']store_(true|false)["\']', span):
             return True
-    # hand-rolled: compared against, indexed, or membership-tested
     for pat in (r'==\s*["\']--%s["\']', r'["\']--%s["\']\s*==',
                 r'\.index\(\s*["\']--%s["\']', r'["\']--%s["\']\s+in\s',
                 r'get\(\s*["\']--%s["\']', r'\[\s*["\']--%s["\']\s*\]'):
@@ -102,15 +101,6 @@ def declared(src, flag):
     return False
 
 def _refusing_helpers(src):
-    """Names of same-file functions whose own body calls `refuse_newline_argv`.
-
-    A file that centralises its refusal in one helper -- which is the shape
-    this plan's C1 pushes every entrypoint toward -- passes the flag name to
-    the HELPER, and the helper passes a variable to `refuse_newline_argv`.
-    Nothing in that file ever writes `refuse_newline_argv(..., "--reason")`,
-    so a literal-match predicate reports the flag unrefused while it is in
-    fact refused on every invocation.
-    """
     names = []
     defs = [(m.start(), m.group(1)) for m in re.finditer(r'^def (\w+)\(', src, re.M)]
     for i, (pos, name) in enumerate(defs):
@@ -120,16 +110,7 @@ def _refusing_helpers(src):
     return names
 
 # Functions in `coordinator_core.argv_fidelity` that THEMSELVES call
-# refuse_newline_argv on their inline argument. Membership is a claim about
-# that module's source and is pinned by test_prose_flag_transport_coverage.py
-# -- adding a name here that does not refuse silently re-opens the over-credit
-# staff-eng finding 1 closed.
-#
 # resolve_body is DELIBERATELY ABSENT and must stay absent. Verified at source
-# and stated in resolve_optional_prose's own docstring: resolve_body does NOT
-# call refuse_newline_argv; only resolve_optional_prose wires the two together.
-# Crediting resolve_body would mark a flag refused that accepts newlines --
-# the precise false-negative direction this instrument exists to prevent.
 _REFUSING_SEAM_FUNCS = ("resolve_optional_prose",)
 
 def _seam_refusers(src):
@@ -182,8 +163,6 @@ def flag_refused(src, flag):
     return False
 
 def flag_legged(src, flag):
-    """Rule 2 file-leg presence (informational only -- see module docstring:
-    which flags Rule 2 applies to is not yet a checkable predicate)."""
     return bool(re.search(r'["\']--%s-file["\']' % re.escape(flag), src))
 
 def scan(root):

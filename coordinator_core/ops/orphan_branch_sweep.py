@@ -140,11 +140,6 @@ def _git(
 
 
 def _strip_branch_list_line(line: str) -> str:
-    """Mirror `sed 's|^[[:space:]]*||; s|^origin/||; s|^remotes/origin/||'` exactly.
-
-    Faithfully reproduces the oracle's bug: only leading whitespace is stripped,
-    NOT git's `"* "` current-branch marker. See module negative-spec.
-    """
     stripped = re.sub(r"^[ \t]*", "", line)
     stripped = re.sub(r"^origin/", "", stripped)
     stripped = re.sub(r"^remotes/origin/", "", stripped)
@@ -177,11 +172,6 @@ def _rev_parse(ref: str, cwd: _PathLike = None) -> str | None:
 
 
 def _rev_list_count(*args: str, cwd: _PathLike = None) -> int:
-    """`git rev-list --count <args...>`. Callers pass either a single `a..b` range
-    expression, or separate positional revs (e.g. `tip_sha`, `^main`) — git requires
-    the latter as distinct argv entries; combining them into one string (e.g.
-    `f"{tip_sha} ^{main_ref}"`) is a shell-quoting-shaped bug that raises
-    'ambiguous argument' and was caught by this port's parity test."""
     res = _git(["rev-list", "--count", *args], cwd=cwd)
     if res.returncode != 0:
         return 0
@@ -224,12 +214,6 @@ def _emit_result(
     min_rank: int,
     out: Any = None,
 ) -> None:
-    # `out` is resolved HERE, not via a `sys.stdout`-valued default parameter —
-    # a default bound at function-definition (import) time captures a stale
-    # reference that survives `sys.stdout` being swapped later (e.g. by a
-    # test's `capsys`/`capfd` fixture), silently routing output around the
-    # capture. Caught by this port's own test suite when capsys.readouterr()
-    # returned empty despite pytest's own capture panel showing output.
     if out is None:
         out = sys.stdout
     if _severity_rank(severity) < min_rank:
@@ -315,7 +299,6 @@ def main(argv: list[str]) -> int:
             print(f"Unknown argument: {arg}", file=sys.stderr)
             return 1
 
-    # Guard: must be inside a git repo.
     if _run(["git", "rev-parse", "--is-inside-work-tree"]).returncode != 0:
         return 0
 
@@ -340,25 +323,10 @@ def main(argv: list[str]) -> int:
     main_ref = _main_ref()
     head_sha = _rev_parse("HEAD")
 
-    # Pre-resolve each branch's tip sha (same _tip_sha_for call, same
-    # per-branch count/order as before — just hoisted ahead of the
-    # severity loop so its results can seed one batched author/committer
-    # read below instead of two `git log -1 ...` spawns per branch).
     branch_tip_sha: dict[str, str | None] = {
         branch: _tip_sha_for(branch) for branch in sorted(seen_branches)
     }
 
-    # Batch author-email + committer-date for every distinct resolved tip
-    # sha in one `git log --no-walk` call (amplification hitlist T2
-    # g2-ops-b). `--no-walk` yields exactly one line per named commit
-    # (never its ancestry) using the identical `%ae`/`%ct` format already
-    # used per-branch, so a batch hit is byte-identical to today's
-    # single-item call — no `%(authoremail)` angle-bracket reformatting to
-    # account for. On a whole-command failure this falls back to today's
-    # per-branch `_git` calls unchanged (never blanks every branch from
-    # one bad exit code); a branch whose sha is merely absent from a
-    # *successful* batch (or has an unparseable field) keeps the exact
-    # pre-existing per-item defaults (`""` / `now`).
     distinct_shas = sorted({sha for sha in branch_tip_sha.values() if sha})
     tip_meta: dict[str, tuple[str, str]] = {}
     batch_ok = False
@@ -373,17 +341,6 @@ def main(argv: list[str]) -> int:
                 sha, author_email, committer_ts = parts
                 tip_meta[sha] = (author_email, committer_ts)
 
-    # Batch ahead-count for every branch against main_ref in one `git
-    # for-each-ref --format=%(ahead-behind:<main_ref>)` call (amplification
-    # gate key ('main', '_git'), replacing the unconditional per-branch
-    # `git rev-list --count main_ref..tip_sha` this loop used to run every
-    # time main_ref is resolvable). One base ref (main_ref) shared by every
-    # branch, unlike the frozen anti-forgery-gate case where per-branch
-    # ranges could not be unioned — here each row of the batch reply is an
-    # independent ahead/behind pair for that ref alone, so there is no
-    # cross-branch exclusion to collide. On a whole-command failure, or an
-    # unparseable/missing row, this falls back to today's exact per-branch
-    # `_rev_list_count` call for that branch (never a blanket zero).
     branch_ahead: dict[str, int] = {}
     ahead_batch_ok = False
     if main_ref is not None and seen_branches:
@@ -422,16 +379,6 @@ def main(argv: list[str]) -> int:
                     elif f"refs/remotes/origin/{b}" in ahead_by_ref:
                         branch_ahead[b] = ahead_by_ref[f"refs/remotes/origin/{b}"]
 
-    # Batch every branch's PR lookup into one unscoped `gh pr list` call
-    # (amplification gate key ('main', '_run')) — 2026-08-19 adversarial
-    # re-verification's named primitive for this site
-    # (`state/ledgers/wave4-dispositions/second-reader.md` row C7): an
-    # unscoped `gh pr list --json ...,headRefName` plus client-side
-    # filter-by-branch, replacing the per-branch `gh pr list --head
-    # <branch>`. Grouped by headRefName, each branch keeps the identical
-    # `prs[:5][-1]` selection its old per-branch `--limit 5` call used. On
-    # a whole-command failure or unparseable JSON, this falls back to
-    # today's exact per-branch `gh pr list --head <branch>` call.
     prs_by_branch: dict[str, list[dict]] = {}
     gh_batch_ok = False
     if gh_available and seen_branches:
@@ -520,16 +467,7 @@ def main(argv: list[str]) -> int:
                 else:
                     prs = []
             if prs:
-                # Highest PR number, never a list position. `gh pr list` orders
-                # newest-first, so the `prs[-1]` this replaces selected the
-                # OLDEST of the five most recent PRs for the branch -- which
                 # made the CRITICAL classification unclearable by its own
-                # remedy: opening a fresh PR for the post-merge commits prepends
-                # to the list and is never the element read, so the sweep kept
-                # reporting the long-merged PR and kept firing. Selecting by
-                # `number` is also order-independent, which matters because the
-                # batched and per-branch `gh` paths above are not guaranteed to
-                # agree on ordering.
                 p = max(prs, key=lambda pr: pr.get("number") or 0)
                 pr_number = p.get("number", "")
                 pr_state = p.get("state", "") or ""
@@ -549,9 +487,6 @@ def main(argv: list[str]) -> int:
                             [ln for ln in log_res.stdout.splitlines() if ln.strip()]
                         )
 
-        # ---------------------------------------------------------------
-        # Classify severity
-        # ---------------------------------------------------------------
         severity = "OK"
 
         if pr_state == "MERGED" and orphan_after_merge > 0:
@@ -590,9 +525,7 @@ def main(argv: list[str]) -> int:
     return 0
 
 
-# ---------------------------------------------------------------------------
 # C1c quartet — JSON-RPC ops (see module docstring "Registered JSON-RPC ops").
-# ---------------------------------------------------------------------------
 
 
 def _resolve_repo_dir(params: dict, repo_root: Optional[Path], key: str = "repo_root") -> _PathLike:
@@ -612,14 +545,6 @@ def _resolve_repo_dir(params: dict, repo_root: Optional[Path], key: str = "repo_
 
 
 def compute_descendant_tip(candidate_tips: list[str], cwd: _PathLike = None) -> dict:
-    """Walk *candidate_tips*, returning the one that is a descendant of (or
-    equal to) every other candidate via `git merge-base --is-ancestor`.
-
-    Mirrors `workday-complete.md:464`'s per-date actual_tips walk: when no
-    single tip dominates every other (the branches diverged), there is no
-    correct answer — report `diverged: true` with a null `descendant_tip`
-    rather than guessing one.
-    """
     tips = [t for t in candidate_tips if t]
     if not tips:
         return {"descendant_tip": None, "diverged": False}
@@ -664,17 +589,6 @@ _QUALIFYING_WORK_FEATURE_RE = re.compile(r"^(work|feature)/")
 
 
 def detect_unpushed_commits(branch: Optional[str], cwd: _PathLike = None) -> dict:
-    """Compare local HEAD (or *branch*) against its `origin/<branch>` ref.
-
-    Branch-prefix gate mirrors `workday-start.md:979`: only `work/*` and
-    `feature/*` branches are in scope for this check (the "current work
-    session" branch families). A non-qualifying branch is reported as-is
-    with `ahead_count: 0` rather than silently substituting a different
-    branch.
-
-    Does NOT `git fetch` — see module docstring negative-spec; this reads
-    whatever `origin/<branch>` ref is already present locally.
-    """
     resolved_branch = branch or _current_branch(cwd=cwd)
     if not resolved_branch:
         return {"branch": "", "ahead_count": 0, "has_origin": False}
@@ -712,14 +626,6 @@ _BRANCH_LIST_MARKER_RE = re.compile(r"^[* ]*")
 
 
 def list_unmerged_work_branches(machine: str, main_ref: str, cwd: _PathLike = None) -> list[str]:
-    """`git branch --list "work/*" --no-merged <main_ref>`, filtered to the
-    branches scoped to *machine* (`work/<machine>/...`), case-insensitively.
-
-    Native replacement for `workday-start-internals.md:197`'s
-    `grep -i "^[* ]*work/${MACHINE}/"` — same case-fold + machine-scoping
-    semantics via `str.lower()`, no `grep` dependency (that pipeline's own
-    comment flags bash's `shopt nocasematch` as non-portable).
-    """
     res = _git(["branch", "--list", "work/*", "--no-merged", main_ref], cwd=cwd)
     if res.returncode != 0:
         return []
@@ -751,15 +657,6 @@ async def _list_unmerged_work_handler(params: dict, repo_root: Optional[Path] = 
 def verify_commit_in_review_window(
     commit_sha: str, lower_bound_sha: str, upper_bound_sha: str, cwd: _PathLike = None
 ) -> dict:
-    """Inclusive-upper / exclusive-lower ancestry check for *commit_sha*.
-
-    A commit is "in window" iff it is strictly AFTER `lower_bound_sha`
-    (exclusive — the lower bound itself does not count as covered) and AT OR
-    BEFORE `upper_bound_sha` (inclusive — equal to the upper bound counts).
-    Named, tested helper per the oracle rationale (`plan-delivery-audit/
-    SKILL.md:93`) rather than re-deriving this boundary logic inline each
-    audit run.
-    """
     if commit_sha == lower_bound_sha:
         lower_ok = False
     else:

@@ -41,8 +41,6 @@ def test_server_environ_override_is_not_seen_by_a_forwarded_event(monkeypatch):
 
 
 def test_caller_override_is_seen_when_the_event_carries_it(monkeypatch):
-    """The other direction: a legitimate per-session override must survive the trip, or
-    the warm path silently strips operators of a control they are entitled to."""
     monkeypatch.delenv("COORDINATOR_ALLOW_RM", raising=False)
 
     payload = hook_http.payload_from_event(
@@ -53,8 +51,6 @@ def test_caller_override_is_seen_when_the_event_carries_it(monkeypatch):
 
 
 def test_caller_override_wins_over_a_conflicting_server_environ(monkeypatch):
-    """Both present and disagreeing. The CALLER's value is the answer -- the server's
-    environ is not a participant in this decision at all."""
     monkeypatch.setenv("COORDINATOR_ALLOW_RM", "0")
 
     payload = hook_http.payload_from_event(
@@ -65,8 +61,6 @@ def test_caller_override_wins_over_a_conflicting_server_environ(monkeypatch):
 
 
 def test_caller_absence_wins_over_a_permissive_server_environ(monkeypatch):
-    """The inverse, and the safety-relevant direction: the server is permissive, the
-    caller is not, and the guard must side with the caller."""
     monkeypatch.setenv("COORDINATOR_ALLOW_RM", "1")
 
     payload = hook_http.payload_from_event(
@@ -77,9 +71,6 @@ def test_caller_absence_wins_over_a_permissive_server_environ(monkeypatch):
 
 
 def test_forwarder_emits_env_even_when_the_caller_set_nothing(monkeypatch):
-    """The mechanism the two tests above rest on. If the forwarder omitted `env` entirely
-    on a caller with no overrides, `_override` would fall back to ambient environment and
-    the disarm would return -- so the empty mapping is load-bearing, not a formality."""
     monkeypatch.setenv("COORDINATOR_ALLOW_RM", "1")
 
     payload = hook_http.payload_from_event({"hook_event_name": "PreToolUse"})

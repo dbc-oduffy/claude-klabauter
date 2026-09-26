@@ -82,11 +82,6 @@ def _write_doc(tmp_path: Path, rel_path: str, status: str | None, body: str = "c
     return target
 
 
-# --------------------------------------------------------------------------------------
-# 1. AC1-equivalent: the real incident -- status: approved + all ACs met -> fires.
-# --------------------------------------------------------------------------------------
-
-
 class TestAllAcsMetFires:
     def test_all_acs_met_status_approved_plus_instruction_fires(self, tmp_path):
         rel = "docs/plans/2026-08-03-scope-guard-peer-claim-release.md"
@@ -99,18 +94,12 @@ class TestAllAcsMetFires:
         assert "met" in text.lower()
 
     def test_all_acs_met_non_terminal_status_still_fires(self, tmp_path):
-        """The AC-table leg is sufficient on its OWN -- status need not be terminal."""
         rel = "docs/plans/2026-08-04-draft-but-all-acs-met.md"
         _write_doc(tmp_path, rel, "draft", body=_AC_TABLE_ALL_MET)
         result = guard.check(
             _payload("Edit", rel, cwd=str(tmp_path), old_string="x", new_string=_INSTRUCTION_TEXT)
         )
         _advisory_text(result)
-
-
-# --------------------------------------------------------------------------------------
-# 2. Pre-existing terminal-status leg -- must not regress.
-# --------------------------------------------------------------------------------------
 
 
 class TestFiresOnTerminalStatus:
@@ -136,9 +125,6 @@ class TestFiresOnTerminalStatus:
         result = guard.check(
             _payload("Write", "docs/problems/2026-07-01-issue.md", cwd=str(tmp_path))
         )
-        # Write has no delta -- falls back to whole-body classification; the
-        # fixture body ("content") carries no instruction tell, so this is
-        # silent unless we give it instruction-shaped content.
         assert result is None
         _write_doc(
             tmp_path, "docs/problems/2026-07-01-issue.md", "implemented", body=_INSTRUCTION_TEXT
@@ -178,11 +164,6 @@ class TestFiresOnTerminalStatus:
         _advisory_text(result)
 
 
-# --------------------------------------------------------------------------------------
-# 3. Genuinely live plan -> silent regardless of content.
-# --------------------------------------------------------------------------------------
-
-
 class TestSilentOnLivePlan:
     @pytest.mark.parametrize(
         "status", ["draft", "executing", "ready_to_fire", "open"]
@@ -217,11 +198,6 @@ class TestSilentOnLivePlan:
         assert result is None
 
 
-# --------------------------------------------------------------------------------------
-# 4. Terminal plan + correspondence-shaped edit -> silent (new behaviour).
-# --------------------------------------------------------------------------------------
-
-
 class TestSilentOnCorrespondence:
     def test_terminal_plan_with_correspondence_edit_is_silent(self, tmp_path):
         rel = "docs/plans/2026-08-03-scope-guard-peer-claim-release.md"
@@ -234,18 +210,10 @@ class TestSilentOnCorrespondence:
         assert result is None
 
     def test_terminal_status_no_content_change_is_silent(self, tmp_path):
-        """A terminal plan with an edit that carries no instruction tell at all
-        (e.g. no new_string supplied) does not fire -- content discrimination
-        applies to every firing tool, not just Edit."""
         rel = "docs/plans/2026-07-01-example.md"
         _write_doc(tmp_path, rel, "implemented", body="plain correspondence, no tells")
         result = guard.check(_payload("Edit", rel, cwd=str(tmp_path)))
         assert result is None
-
-
-# --------------------------------------------------------------------------------------
-# 5. Terminal plan + instruction-shaped edit -> fires, names a real live alternative.
-# --------------------------------------------------------------------------------------
 
 
 class TestNamesRealLiveAlternative:
@@ -280,15 +248,7 @@ class TestNamesRealLiveAlternative:
         assert "state/sizings/" in text
 
 
-# --------------------------------------------------------------------------------------
-# 6. Malformed/absent frontmatter, non-existent file, non-plan path -> silent.
-# --------------------------------------------------------------------------------------
-
-
 class TestSizingCandidateStatusFilter:
-    """2026-08-10 (docs/plans/2026-08-10-a-terminal-status-for-a-declined-sizing.md
-    § C2, AC2): the offer must not hand back a terminal (declined/superseded/shipped)
-    sizing-object as if it were a live alternative."""
 
     def test_declined_sizing_is_not_offered(self, tmp_path):
         rel = "docs/plans/2026-08-03-sizing-topic-overlap.md"
@@ -327,7 +287,7 @@ class TestSizingCandidateStatusFilter:
         )
         text = _advisory_text(result)
         assert terminal_rel not in text
-        assert "state/sizings/<topic>.yaml" in text  # generic fallback, no live candidate found
+        assert "state/sizings/<topic>.yaml" in text
 
     def test_terminal_sizing_with_inline_enum_comment_trailer_is_excluded(self, tmp_path):
         """2026-08-10 fix: `_SIZING_STATUS_RE` used to anchor `$` right after the
@@ -360,8 +320,6 @@ class TestSizingCandidateStatusFilter:
         assert declined_rel not in text
 
     def test_sizing_status_regex_matches_repro_strings_directly(self):
-        """Pins the exact two strings from the confirmed repro against the regex
-        itself, independent of the candidate-scan plumbing above."""
         m1 = guard._SIZING_STATUS_RE.search(
             "status: routed  # draft | sized | routed | superseded"
         )
@@ -385,7 +343,6 @@ class TestSizingCandidateStatusFilter:
         assert m.group(1) == "open"
 
     def test_sized_sizing_is_still_offered(self, tmp_path):
-        """A non-terminal status (`sized`, `routed`, `draft`) is unaffected by the filter."""
         rel = "docs/plans/2026-08-03-sizing-topic-overlap.md"
         _write_doc(tmp_path, rel, "approved", body=_AC_TABLE_ALL_MET)
 
@@ -446,11 +403,6 @@ class TestSilentOnMissingOrNoFrontmatter:
         assert result is None
 
 
-# --------------------------------------------------------------------------------------
-# 7. Internal error -> silent, never raises.
-# --------------------------------------------------------------------------------------
-
-
 class TestNeverRaises:
     @pytest.mark.parametrize(
         "payload",
@@ -488,11 +440,6 @@ class TestNeverEmitsPermissionDecision:
         assert "permissionDecision" not in result["hookSpecificOutput"]
 
     def test_module_never_returns_permission_decision_key(self, tmp_path):
-        """AC-4: no code path in check() emits a permissionDecision key --
-        sweep every terminal-status/path/tool combination the guard fires
-        on and assert the key is absent from each returned envelope (a
-        docstring-source grep is too strict, since the module's own
-        docstring explains the advisory-only contract in prose)."""
         for status in ("implemented", "shipped", "superseded"):
             for subdir in ("plans", "problems", "research"):
                 rel = f"docs/{subdir}/2026-07-01-{status}.md"

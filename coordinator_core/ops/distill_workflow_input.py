@@ -55,7 +55,6 @@ __all__ = [
 ]
 
 #: Required top-level fields of the CONSUMER (Workflow script) input shape —
-#: the drift-detection reference this module's contract test asserts against.
 CONSUMER_TOP_LEVEL_FIELDS: tuple[str, ...] = (
     "runId",
     "repoRoot",
@@ -75,32 +74,6 @@ def translate_to_workflow_input(
     repo_root: str,
     format_hints: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Translate a distill.scope scope-manifest (producer shape) into the
-    Workflow script's consumer shape.
-
-    Five field translations (the five that disagreed pre-adapter):
-      - ``run_id`` -> ``runId``
-      - flat-list ``batches`` -> ``[{batchId, files, description, formatHints}]``
-        (batchId is "batch-<1-based index>", stable and deterministic — never
-        derived from wallclock or content hash)
-      - ``wiki_slugs`` (list of {"slug","path"}) -> ``wikiSlugs`` (flat
-        slug -> path object map), via distill_scope.wiki_slugs_as_dict — the
-        one converter that already shipped pre-this-op.
-      - (new) ``repoRoot`` — the producer never emits this; the caller
-        (whichever op/CLI invokes this translation after distill.scope) must
-        supply it explicitly. Never inferred from cwd inside this pure
-        translation function.
-      - (new) ``batch_count`` / ``total_file_count`` — first-class integrity
-        fields (see module docstring), computed from the SAME ``batches`` list
-        being translated, never independently re-scanned.
-
-    ``format_hints`` is applied uniformly to every emitted batch (defaults to
-    an empty dict — this op does not invent format-hint content; that is a
-    caller/consumer concern).
-
-    Fails loud via check_schema_version when ``manifest["schema_version"]`` is
-    a newer-than-known forward version this translation cannot safely read.
-    """
     check_schema_version(manifest)
     hints = dict(format_hints) if format_hints is not None else {}
 

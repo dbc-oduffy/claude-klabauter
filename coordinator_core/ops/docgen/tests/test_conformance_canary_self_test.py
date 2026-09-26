@@ -1,28 +1,3 @@
-"""coordinator_core.ops.docgen.tests.test_conformance_canary_self_test — proves
-``test_conformance_canary``'s own escalation logic across the full
-(DoE present/absent) x (env var set/unset) matrix, without depending on the
-running machine's actual DoE-clone presence.
-
-Purpose: the canary (`test_conformance_canary.py`) exists specifically to turn
-a silent skip into a loud failure when it should have run and didn't — a bug
-in the canary's OWN escalation logic (`_environment_requires_doe_clone`, or
-the fail/skip branching in the parametrized test) would silently defeat that
-purpose while still reporting green, exactly the class of problem the canary
-exists to catch one level up. This module exercises the canary's decision
-function directly with monkeypatched env vars and a synthetic resolver (never
-the real `resolve_doe_clone`/`doe_root_and_present`), so it is deterministic on
-every machine — including this repo's own dev boxes, which DO have DoE
-resolvable and would otherwise make the "absent" cells of the matrix
-unreachable without a mock.
-
-Matrix (asserted below):
-  - absent + unset  -> SKIP  (documented optional-skip lane)
-  - absent + set    -> FAIL  (silent-skip class the canary exists to catch)
-  - present + unset -> SKIP  (not required, so not even attempted)
-  - present + set   -> PASS  (no skip, no fail)
-
-Spec backlink: pln-strang-12-document-generation--75a7eb § C6 (AC5)
-"""
 
 from __future__ import annotations
 
@@ -87,11 +62,6 @@ def test_present_and_set_passes(monkeypatch: pytest.MonkeyPatch, env_var: str) -
 def test_falsy_env_values_do_not_trigger_requirement(
     monkeypatch: pytest.MonkeyPatch, falsy_value: str
 ) -> None:
-    """Mirrors the canary's exact truthiness set (`{"1", "true", "yes"}`,
-    case-insensitive after `.strip().lower()`) — this must be the ONLY
-    truthiness rule in the repo for this env-var pair, not a second, subtly
-    different one authored here.
-    """
     monkeypatch.setenv("CLAUDE_KLABAUTER_REQUIRE_DOE_CONFORMANCE", falsy_value)
     monkeypatch.delenv("CI", raising=False)
     assert canary._environment_requires_doe_clone() is False

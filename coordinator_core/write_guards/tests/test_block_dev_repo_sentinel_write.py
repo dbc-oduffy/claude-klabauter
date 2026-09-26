@@ -1,8 +1,3 @@
-"""Tests for coordinator_core.write_guards.block_dev_repo_sentinel_write.
-
-Spec backlink: coordinator_core/write_guards/block_dev_repo_sentinel_write.py
-Precedent test shape: coordinator_core/write_guards/tests/test__sentinel_write_guard.py
-"""
 
 from __future__ import annotations
 

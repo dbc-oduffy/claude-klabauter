@@ -92,12 +92,6 @@ from coordinator_core.win_portability import (
 
 
 class UnsupportedRecordTypeError(ValueError):
-    """Raised when a record type's glob cannot be expressed by this module.
-
-    Carries the full supported-type list so callers can report it directly —
-    per AC5, "a type whose glob cannot be expressed exactly raises a named
-    error listing what IS supported."
-    """
 
     def __init__(self, record_type: str, supported: list[str]):
         self.record_type = record_type
@@ -108,11 +102,7 @@ class UnsupportedRecordTypeError(ValueError):
         )
 
 
-# Synthetic types (`handoff-ledger`, `research-claim`) yield N records per
-# source FILE — `records_query._collect_files` is never called for them (see
 # `_SYNTHETIC_TYPES`'s own docstring); there is no one-file-one-record glob
-# for this module to walk, so they are excluded from the supported set rather
-# than silently mishandled.
 _UNSUPPORTED_HISTORY_TYPES: frozenset[str] = records_query._SYNTHETIC_TYPES
 
 
@@ -140,9 +130,6 @@ def _type_directory_pathspec_one(record_type: str) -> str:
             break
         fixed.append(part)
     if len(fixed) == len(parts):
-        # No wildcard segment anywhere (e.g. 'docs/project-tracker.md') — the
-        # last segment is a literal filename, not a directory; a pathspec
-        # names the containing directory instead.
         fixed = fixed[:-1]
     return '/'.join(fixed)
 
@@ -184,18 +171,6 @@ def _resolve_record_files_one(worktree_root: Path, record_type: str) -> frozense
 
 
 def resolve_record_files(worktree_root: Path, record_type: str | Sequence[str]) -> frozenset[str]:
-    """The EXACT set of on-disk files ``record_type``'s glob matches.
-
-    Reuses ``records_query._collect_files`` (the same walker
-    ``records.query`` itself uses) rather than re-deriving glob-matching
-    semantics — the single place where the AC5a git-vs-Python ``*`` hazard is
-    avoided rather than re-encoded a second time to drift out of sync.
-
-    Returns worktree-relative POSIX paths (``/``-separated on every
-    platform, including Windows) so the set is directly comparable against
-    git's own path output. A sequence of types returns the UNION across all
-    members (P083-C4); a bare string keeps the single-type contract.
-    """
     if isinstance(record_type, str):
         return _resolve_record_files_one(worktree_root, record_type)
     union: frozenset[str] = frozenset()
@@ -222,15 +197,6 @@ def _resolve_record_files_by_type(worktree_root: Path, types: list[str]) -> dict
 def partition_known_files(
     candidate_paths: list[str], known_files: frozenset[str],
 ) -> tuple[list[str], list[str]]:
-    """Split ``candidate_paths`` into (known, unknown) against ``known_files``.
-
-    Pure post-filter — the AC5 "post-filter that pass's output in Python
-    against the collected set exactly" step. ``candidate_paths`` order is
-    preserved within each output list; no git call, no I/O. Applied by the
-    caller (C1b) to a ``git log``-reported path list, which is why this
-    over-collection removal happens AFTER the git pass rather than by
-    trusting a narrower pathspec up front (AC5a).
-    """
     known: list[str] = []
     unknown: list[str] = []
     for path in candidate_paths:
@@ -241,45 +207,12 @@ def partition_known_files(
 def untracked_record_paths(
     known_files: frozenset[str], tracked_paths: frozenset[str],
 ) -> frozenset[str]:
-    """Files present on disk (`known_files`) but absent from `tracked_paths`.
-
-    AC5b: an on-disk record file git has never tracked (e.g. a fresh,
-    uncommitted record) must be reported with an explicit
-    empty/untracked marker rather than silently reading as "zero events" —
-    the same outcome a genuinely-empty-but-tracked record would show. This
-    function only computes the set; the marker itself is applied by the
-    history-assembly caller (C1b), which is the only stage with both this
-    set and the per-file event list in hand.
-    """
     return frozenset(known_files) - frozenset(tracked_paths)
 
 
-# --------------------------------------------------------------------------
-# C1c — field policy per record type.
-# --------------------------------------------------------------------------
-#
 # Data only, selecting which frontmatter fields are of INTEREST for a given
-# type — never whether transitions are emitted at all, which stays uniform
-# across every type per C1b's extractor. No branch here suppresses a real
-# transition: a type absent from this table (or a field absent from its
-# tuple) still has its transitions extracted by `derive_type_history`; this
-# table exists for callers that want to narrow a report to the fields that
-# matter for a type, not for the extractor itself.
-#
-# Measured on this corpus 2026-08-20 (pairing `-`/`+` within a commit,
-# comment-stripped, wipe commits excluded, per C1b), ACROSS ALL HISTORY:
-# `sizing-object` shows 319 real transitions and `decision` shows 14. This
 # surface reports the CURRENT-RECORDS-ONLY subset, so the sizing figure it
-# returns is ~202, not ~319 -- 114 belong to paths archived out of
-# `state/sizings/`. Two scopes, two numbers, both correct; see the
 # CURRENT-RECORDS-ONLY SCOPE note in the module docstring. `decision` is 14
-# under both scopes. Earlier drafts cited 315 for the all-history sizing
-# count with no scope qualifier; 319 is the re-measured value — `proposed->accepted` x9,
-# `accepted->superseded` x3, `superseded->accepted` x1, `draft->proposed` x1.
-# The asymmetry is a volume fact (14 vs 315), not a presence fact — a
-# type-policy branch that suppressed `decision` `status` transitions would
-# discard exactly the 3 supersession events the source memo asked for, so no
-# such branch exists here or anywhere else in this module.
 _FIELD_POLICY: dict[str, tuple[str, ...]] = {
     "sizing-object": ("status",),
     "decision": ("status", "supersedes", "superseded_by"),
@@ -297,23 +230,11 @@ def fields_of_interest(record_type: str) -> tuple[str, ...]:
     return _FIELD_POLICY.get(record_type, ())
 
 
-# --------------------------------------------------------------------------
-# C1b — single-pass git log derivation.
-# --------------------------------------------------------------------------
-
 # `_COMMIT_SEP`/`_FIELD_SEP` are the actual bytes git EMITS for `%x00`/`%x01`
-# in its own placeholder syntax — used to split the captured OUTPUT. The
-# `--format=` argv string passed TO git must instead spell those placeholders
-# out literally (`%x00`, not a raw NUL byte, which `CreateProcess` rejects as
-# an embedded null in an argv element).
 _COMMIT_SEP = "\x00"
 _FIELD_SEP = "\x01"
 _LOG_FORMAT = "%x00%H%x01%an%x01%aI"
 
-# Frontmatter field line, column 0 only (no leading whitespace) — see module
-# docstring's "Hunk-position bound" for why this also satisfies the
-# YAML-whole-file "require column 0" requirement uniformly, with no
-# type-specific branch.
 _FIELD_LINE_RE = re.compile(r'^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$')
 _HUNK_HEADER_RE = re.compile(r'^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@')
 _DIFF_GIT_RE = re.compile(r'^diff --git a/(.*) b/(.*)$')
@@ -322,15 +243,6 @@ _FRONTMATTER_LINE_BOUND = 60
 
 
 def _run_git_log_pass(worktree_root: Path, pathspec: str | list[str]) -> str:
-    """The one git spawn per call (AC2, widened by P083-C4 to per-CALL rather
-    than per-type): ``git log -p -U0`` over one or more directory pathspecs,
-    sentinel-framed header, decoded permissively so a stray non-UTF8 byte in
-    old history never aborts the whole pass.
-
-    Multiple pathspecs after ``--`` are a git OR, not a second walk — this is
-    the single walk P083-C4 asks for: the caller's UNION of per-type
-    pathspecs goes in argv as one list, never one invocation per type.
-    """
     pathspecs = [pathspec] if isinstance(pathspec, str) else list(pathspec)
     result = subprocess.run(
         ["git", "log", f"--format={_LOG_FORMAT}", "-p", "-U0", "--", *pathspecs],
@@ -356,12 +268,6 @@ def _iter_commit_blocks(raw: str):
         try:
             sha, author, committed_at = header.split(_FIELD_SEP)
         except ValueError:
-            # A header that does not split into exactly three fields means the
-            # frame is not what we think it is (an author name carrying the
-            # separator byte, a corrupted object). Dropping it silently would let
-            # a record whose whole history was excluded report `events: []` --
-            # indistinguishable from a record that genuinely never changed. A
-            # wrong-but-plausible history is worse than a loud failure.
             raise ValueError(
                 'record_history: unparseable commit header in the git log frame '
                 f'({header[:120]!r}) -- refusing to silently drop the commit, '
@@ -371,7 +277,6 @@ def _iter_commit_blocks(raw: str):
 
 
 def _split_file_sections(diff_text: str) -> list[list[str]]:
-    """Split one commit's patch text into per-file ``diff --git`` sections."""
     sections: list[list[str]] = []
     current: list[str] | None = None
     for line in diff_text.split("\n"):
@@ -387,18 +292,9 @@ def _split_file_sections(diff_text: str) -> list[list[str]]:
 
 
 def _normalize_field_value(raw_value: str) -> str:
-    """Strip an inline YAML comment and surrounding quotes (F5).
-
-    ``status: sized  # draft | sized | routed | shipped | declined``
-    normalizes to ``sized`` so a comment-only edit compares equal to its
-    prior value and is dropped as a non-transition by the caller.
-    """
     stripped = raw_value.strip()
     quote = stripped[0] if stripped[:1] in ("'", '"') else None
     if quote:
-        # Quoted: the comment can only start after the CLOSING quote, so a '#'
-        # inside the quotes is data. Splitting on '#' first would truncate
-        # `status: "url#fragment"` to `"url` and call it a value change.
         end = stripped.find(quote, 1)
         if end != -1:
             return stripped[1:end]
@@ -416,10 +312,6 @@ def _maybe_capture_field(content: str, line_no: int | None, out: dict[str, str])
 
 
 def _parse_file_section(lines: list[str]) -> dict:
-    """Parse one ``diff --git`` section: path identity, add/delete/rename
-    markers, and the raw removed/added frontmatter field values (F2, F4,
-    F6) — pairing and comment-stripping happen in the caller, uniformly,
-    once every field from every hunk in this file's diff has been seen."""
     diff_match = _DIFF_GIT_RE.match(lines[0]) if lines else None
     old_path = diff_match.group(1) if diff_match else None
     new_path = diff_match.group(2) if diff_match else None
@@ -471,9 +363,6 @@ def _parse_file_section(lines: list[str]) -> dict:
 
 
 def _pair_field_transitions(removed: dict[str, str], added: dict[str, str]) -> dict[str, dict[str, str]]:
-    """Pair same-commit ``-field:``/``+field:`` values into transitions
-    (F2a), dropping any pair that compares equal after comment/quote
-    stripping (F5)."""
     changes: dict[str, dict[str, str]] = {}
     for field in set(removed) | set(added):
         old_raw = removed.get(field)
@@ -544,9 +433,6 @@ def derive_type_history(
                 continue
             parsed.append((sha, author, committed_at, info))
 
-    # Pass A: build the full rename-chain alias map before grouping any
-    # event, so an event recorded before a later rename still resolves to
-    # the file's final canonical path (F6) rather than a stale one.
     alias: dict[str, str] = {}
     for _sha, _author, _committed_at, info in parsed:
         if info["is_rename"] and info["old_path"] and info["path"]:
@@ -566,8 +452,6 @@ def derive_type_history(
             continue
         group = groups.setdefault(canonical, {"adds": [], "events": []})
         if info["is_new"]:
-            # `since` never bounds an add — created_at stays a whole-history
-            # fact regardless of the event window (P083-C4 R2).
             group["adds"].append((committed_at, author))
             continue
         if info["is_deleted"]:
@@ -611,72 +495,11 @@ def derive(
     worktree_root: Path | None = None,
     since: str | None = None,
 ) -> list[dict]:
-    """AC1's named entry point: the record-history derivation for one or
-    several types (P083-C4).
-
-    Thin keyword-first alias over :func:`derive_type_history`. The name and
-    signature are contract, not preference: `record_history.derive(record_type=...)`
-    is what AC1 specifies and what example-cockpit-repo-em was handed as the
-    consumer-facing shape ahead of this surface existing, so renaming it is a
-    cross-repo break rather than a local refactor. A bare string keeps that
-    shape exactly; a sequence is the P083-C4 widening.
-    """
     root = Path(worktree_root) if worktree_root is not None else Path.cwd()
     return derive_type_history(root, record_type, since=since)
 
 
-# --------------------------------------------------------------------------
-# C5 — cross-repo pass measurement + AC10 queried-root labelling.
-# --------------------------------------------------------------------------
-#
-# Measured 2026-08-20 (evidence transcribed into this plan's body by C5b, per
-# C5's own dispatch brief) across every root `fleet.work_state ::
-# _resolve_active_sibling_paths` returned on this box: 16 candidate roots, 1
-# SKIPPED (a registered `repos.*` entry that is `is_dir()` but not a git
-# worktree — `_resolve_active_sibling_paths` does not itself filter on that,
-# per staff-eng F11), 15 WALKED. Spawn count was exactly 1 per walked root
-# regardless of that root's corpus size (AC9's root-scoped budget,
-# reconciled against AC2's corpus-scoped one below). Peak patch bytes
-# ranged 0..11_683_642 (this repo, `sizing-object`) — the same order as the
-# 11.6MB this plan's Problem section already called "comfortable"; no
-# walked root crossed a threshold that would make buffering the full patch
-# text (as `_run_git_log_pass` does today via `capture_output=True`)
-# unsafe. No streaming change is made in this chunk as a result — the
-# module keeps buffering — but the ceiling this measurement names for a
-# FUTURE corpus is ~50MB peak patch bytes per root (roughly 4x the largest
-# measured value): a root whose `_run_git_log_pass` stdout crosses that
-# should switch to `Popen` + incremental read, contained entirely inside
-# C1b's parser (`_iter_commit_blocks` already consumes framed blocks
-# sequentially, so streaming is an input-source change, not a parsing-model
-# change) — a follow-up chunk's concern, not a code change this
-# measurement's own numbers require yet.
-#
-# AC2 vs AC9 budget reconciliation (staff-eng F11): AC2's spawn budget is
-# corpus-scoped — 1 spawn per pathspec, WITHIN one repo, independent of how
-# many records that repo holds. AC9's is root-scoped — this section's own
-# `derive_across_roots` issues exactly one `derive_type_history` call (and
-# therefore exactly one git spawn, per AC2) per WALKED root, independent of
-# how many roots are queried. Restated as one budget rather than two
-# implicitly-equated ones: "≤1 spawn per walked root, and that 1 is itself
-# independent of corpus size" — corpus-size-independence and root-count
-# growth are orthogonal axes, and neither is allowed to make the other's
-# spawn count grow.
-
-
 def _is_git_worktree(root: Path) -> bool:
-    """True iff `root` is a git worktree `git` itself will accept a `log`
-    call against.
-
-    `_resolve_active_sibling_paths` filters candidate roots on `is_dir()`
-    only (staff-eng F11) -- a registered `repos.*` entry can be a real,
-    existing, non-git directory. Handing such a root straight to
-    `_run_git_log_pass` exits `git log` with rc=128 (`CalledProcessError`,
-    since that call passes `check=True`); this predicate is the walk-only
-    pre-check that routes such a root to SKIPPED before that spawn, mirroring
-    `fleet.work_state`'s own `_walk_git_common_dir` pre-check discipline
-    rather than treating a caught rc=128 as "empty" (which would make
-    AC10's queried-root count over-report).
-    """
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--is-inside-work-tree"],
@@ -691,28 +514,6 @@ def _is_git_worktree(root: Path) -> bool:
 
 
 def derive_across_roots(roots: list[Path], record_type: str) -> dict:
-    """AC9/AC10: derive `record_type` history across every root in `roots`,
-    labelled by how many were actually queried.
-
-    A non-git-worktree root (`_is_git_worktree` false) is SKIPPED rather
-    than walked -- never silently reported as an empty-but-walked repo
-    (staff-eng F11). `queried_root_count` is the count of roots actually
-    walked, never the count of candidate roots handed in, so a caller
-    cannot present this as a claim about every registered sibling when some
-    were skipped (AC10's "never presented as a 31-repo fleet claim").
-
-    Returns ``{"record_type", "queried_root_count", "roots_walked",
-    "roots_skipped", "roots_failed", "repos"}`` where ``repos`` maps each
-    walked root's POSIX path to that root's `derive_type_history` result, and
-    ``roots_skipped``/``roots_failed`` are lists of ``{"root", "reason"}``.
-
-    A root whose git pass RAISES is recorded in ``roots_failed`` and does not
-    abort the pass: losing every already-walked root to one bad sibling would
-    make a multi-root answer all-or-nothing. ``roots_failed`` is deliberately
-    distinct from ``roots_skipped`` -- skipped means "not a worktree, never
-    walked", failed means "walked and errored", and collapsing them would
-    reintroduce the over-report AC10 exists to prevent.
-    """
     walked: list[str] = []
     skipped: list[dict[str, str]] = []
     failed: list[dict[str, str]] = []
@@ -766,10 +567,6 @@ def _records_history(params: dict, repo_root: Path | None = None) -> dict:
             + ", ".join(sorted(supported_record_types()))
         )
     since = params.get("since")
-    # No Path.cwd() fallback: warm-served handlers run in a shared server
-    # process, so cwd is the SERVER's, not the caller's worktree -- a missing
-    # root would silently derive against the wrong repo and return a
-    # plausible answer. Fail loudly instead.
     root_arg = params.get("root") or repo_root
     if not root_arg:
         raise ValueError(
@@ -782,9 +579,6 @@ def _records_history(params: dict, repo_root: Path | None = None) -> dict:
     records = derive(record_type=record_type, worktree_root=root, since=since)
 
     if not is_multi:
-        # AC5b needs both halves: what is on disk now, and what the git pass
-        # actually reported history for. A record in the first and not the
-        # second is untracked, not quiet.
         on_disk = resolve_record_files(root, record_type)
         with_history = frozenset(
             r["path"] for r in records if r.get("created_at") is not None
@@ -794,10 +588,6 @@ def _records_history(params: dict, repo_root: Path | None = None) -> dict:
             "record_type": record_type,
             "root": root.as_posix(),
             "records": records,
-            # AC5b: a record present on disk but untracked has NO history,
-            # which is not the same fact as a tracked record that never
-            # changed. Both would otherwise read as `events: []`; this names
-            # the first explicitly.
             "untracked": untracked,
         }
 

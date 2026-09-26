@@ -71,10 +71,6 @@ def _no_filter_side_effects(monkeypatch):
 
 
 def _symlinks_supported() -> bool:
-    """`hasattr(os, "symlink")` is True on Windows regardless of privilege --
-    the call itself raises `OSError`/`WinError 1314` there without Developer
-    Mode or elevation. The only portable check is attempting a real symlink
-    and skipping on failure."""
     import os
     import tempfile
 
@@ -90,10 +86,6 @@ def _symlinks_supported() -> bool:
 
 
 def test_unprocessed_row_live_files_never_named_for_removal(tmp_path, monkeypatch):
-    """Witness class 1 (the dispatch brief's measured witness): a row this
-    invocation did not process (absent from `published_dest_dirs`) must
-    contribute nothing to the removal side, no matter how wide `head_tree`
-    is -- `row_scope` excludes it entirely."""
     _no_filter_side_effects(monkeypatch)
     repo_root = tmp_path / "repo"
     _init_repo_with_files(
@@ -113,10 +105,6 @@ def test_unprocessed_row_live_files_never_named_for_removal(tmp_path, monkeypatc
 
 
 def test_binary_in_declared_directory_never_named_for_removal(tmp_path, monkeypatch):
-    """Witness class 2 (`door.exe`'s shape): a non-transform-eligible payload
-    file, tracked at HEAD inside a published dest dir, must be protected by
-    the WIDENED `declared_payload` (AC2) -- present here to stand in for what
-    publish.py's manifest-write block would have enumerated on disk."""
     _no_filter_side_effects(monkeypatch)
     repo_root = tmp_path / "repo"
     _init_repo_with_files(
@@ -136,21 +124,6 @@ def test_binary_in_declared_directory_never_named_for_removal(tmp_path, monkeypa
 
 
 def test_genuinely_stale_path_inside_row_scope_is_named_for_removal(tmp_path, monkeypatch):
-    """Positive control: a path inside the row's OWN published scope, tracked
-    at HEAD, genuinely absent from `declared_payload`, AND already gone from
-    the worktree -- the class the removal side exists to catch -- must still
-    be named.
-
-    The worktree deletion is load-bearing, not fixture noise. This test
-    originally left `stale.txt` on disk and asserted it was named anyway;
-    `_refuse_removals_present_on_disk` (added by a concurrent session after
-    this test landed) correctly refuses that, and the refusal is right for a
-    reason measured independently: `explicit_stage` runs `git add -- <paths>`,
-    which expresses a deletion only when the path is GONE from the worktree.
-    On a path still present and clean it is a pure no-op, so naming one puts
-    an entry in the pathspec that silently accomplishes nothing. The premise
-    of the old assertion was wrong, not the guard.
-    """
     _no_filter_side_effects(monkeypatch)
     repo_root = tmp_path / "repo"
     _init_repo_with_files(
@@ -160,8 +133,6 @@ def test_genuinely_stale_path_inside_row_scope_is_named_for_removal(tmp_path, mo
             "row_a/stale.txt": "no longer part of the payload",
         },
     )
-    # Committed at HEAD above, then removed from the worktree -- exactly the
-    # state a round leaves behind when source stops publishing a path.
     (repo_root / "row_a" / "stale.txt").unlink()
     manifest = _mod._RoundManifest(
         round_id="r1",
@@ -173,10 +144,6 @@ def test_genuinely_stale_path_inside_row_scope_is_named_for_removal(tmp_path, mo
 
 
 def test_empty_published_dest_dirs_yields_empty_removal_set(tmp_path, monkeypatch):
-    """A manifest with no fourth set (an old manifest on disk, `frozenset()`
-    default) must make the removal side fire on NOTHING -- the safe
-    fail-direction named in the dispatch brief, exercised even with the gate
-    forced on."""
     _no_filter_side_effects(monkeypatch)
     repo_root = tmp_path / "repo"
     _init_repo_with_files(
@@ -193,14 +160,6 @@ def test_empty_published_dest_dirs_yields_empty_removal_set(tmp_path, monkeypatc
 
 
 def test_removal_side_fires_at_the_shipped_flag_value(tmp_path):
-    """The flag is ON (PM, 2026-08-26), so a genuinely stale in-scope path IS
-    named with no monkeypatching -- this test previously pinned the opposite
-    and is inverted rather than deleted, so the flip is visible in the file's
-    own history.
-
-    `stale.txt` is removed from the worktree because that is the only state a
-    commit can express a deletion from; a path still on disk is refused by
-    `_refuse_removals_present_on_disk`, which its own test covers."""
     repo_root = tmp_path / "repo"
     _init_repo_with_files(
         repo_root,
@@ -220,16 +179,6 @@ def test_removal_side_fires_at_the_shipped_flag_value(tmp_path):
     not _symlinks_supported(), reason="platform cannot create a symlink here (no privilege/Developer Mode)"
 )
 def test_broken_symlink_is_refused_not_reaped(tmp_path, monkeypatch):
-    """A TRACKED symlink whose target is missing must be REFUSED by
-    `_refuse_removals_present_on_disk`, never named for removal.
-
-    This is the one file class where "not on disk" is a statement about the
-    symlink's TARGET rather than about the path itself: `os.path.exists`
-    follows the link and reads absent, so an `exists`-based refusal waves the
-    candidate through and the removal side deletes a path that is perfectly
-    present. `lexists` asks about the link. Zero tracked symlinks sit on
-    either mirror today -- this pins the behaviour for the round that
-    introduces the first one."""
     import os
 
     _no_filter_side_effects(monkeypatch)
@@ -268,10 +217,6 @@ def test_leg_a_does_not_reap_a_broken_symlink(tmp_path):
     deletion of a symlink that is perfectly present."""
     import os
 
-    # `row_b`, deliberately: with the flag ON, a present path inside
-    # `row_scope` is refused by the GATED leg before Leg A is reached, and the
-    # test would pass for the wrong reason. Leg A iterates `manifest.removed`
-    # directly and ignores `row_scope`, so publishing only `row_a` isolates it.
     repo_root = tmp_path / "repo"
     _init_repo_with_files(repo_root, {"row_a/foo.txt": "hello", "row_b/keep.txt": "k"})
     link = repo_root / "row_b" / "link.txt"
@@ -313,8 +258,6 @@ def test_stranded_root_swap_prior_stands_down_the_removal_side(tmp_path, monkeyp
 
 
 def test_stranded_prior_removed_lets_the_round_proceed_as_before(tmp_path, monkeypatch):
-    """AC7's second half: with the strand removed, the same fixture proceeds
-    exactly as it would have without this guard."""
     _no_filter_side_effects(monkeypatch)
     repo_root = tmp_path / "repo"
     _init_repo_with_files(repo_root, {"row_a/foo.txt": "hello"})
@@ -366,8 +309,6 @@ def test_percolate_bookkeeping_tracked_at_head_is_never_a_removal_candidate(
     manifest = _mod._RoundManifest(
         round_id="r1",
         declared_payload=frozenset({"row_a/foo.txt"}),
-        # A flat-mirror row's dest_dir IS the mirror root, so the whole tree is
-        # in scope -- the shape the coordinator-claude mirror actually uses.
         published_dest_dirs=frozenset({"."}),
     )
     pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))[0]
@@ -378,14 +319,6 @@ def test_percolate_bookkeeping_tracked_at_head_is_never_a_removal_candidate(
 def test_source_retired_path_still_on_disk_is_left_to_leg_a_not_leg_b(
     tmp_path, monkeypatch, capsys
 ):
-    """AC8 -- the Leg A/B deadlock (§ P146-C4). `whoami/a.md` .. `whoami/c.md`
-    are tracked at dest HEAD, present on disk, absent from `declared_payload`,
-    inside `row_scope`, and all in `manifest.removed`. Without the
-    `retired_on_disk` subtraction, Leg B's `_refuse_removals_present_on_disk`
-    raises for the same three paths Leg A already reports and would abort
-    every round against this mirror forever. With it: no raise, none of the
-    three named in the pathspec, and Leg A's existing still-on-disk stderr
-    line fires with count 3."""
     _no_filter_side_effects(monkeypatch)
     repo_root = tmp_path / "repo"
     _init_repo_with_files(
@@ -410,11 +343,6 @@ def test_source_retired_path_still_on_disk_is_left_to_leg_a_not_leg_b(
 
 
 def test_undeclared_on_disk_path_not_in_removed_still_raises(tmp_path, monkeypatch):
-    """AC9 -- the same fixture as AC8 plus `live.md`: tracked, on disk,
-    undeclared, inside `row_scope`, but NOT in `manifest.removed`. This one
-    is not this round's own positive retirement, so it must still raise,
-    naming only `live.md` and none of the `whoami/` paths -- AC6's recurrence
-    catch stays intact."""
     _no_filter_side_effects(monkeypatch)
     repo_root = tmp_path / "repo"
     _init_repo_with_files(

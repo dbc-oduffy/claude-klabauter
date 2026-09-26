@@ -56,11 +56,6 @@ from coordinator_core.distill.manifest_schema import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Fixtures / builders
-# ---------------------------------------------------------------------------
-
-
 def _sample_scope_manifest() -> dict:
     return make_scope_manifest(
         run_id="2026-07-23-10h00",
@@ -119,22 +114,12 @@ def _sample_curation_status() -> dict:
     )
 
 
-# ---------------------------------------------------------------------------
-# (a) schema_version_shape
-# ---------------------------------------------------------------------------
-
-
 def test_schema_version_is_int_and_first_key():
     assert isinstance(SCHEMA_VERSION, int)
     for manifest in (_sample_scope_manifest(), _sample_disposal_manifest(), _sample_curation_status()):
         keys = list(manifest.keys())
         assert keys[0] == "schema_version"
         assert manifest["schema_version"] == SCHEMA_VERSION
-
-
-# ---------------------------------------------------------------------------
-# (b)-(d) roundtrip
-# ---------------------------------------------------------------------------
 
 
 def test_scope_manifest_roundtrip():
@@ -153,11 +138,6 @@ def test_curation_status_roundtrip():
     manifest = _sample_curation_status()
     reloaded = json.loads(json.dumps(manifest))
     assert validate_curation_status(reloaded) == []
-
-
-# ---------------------------------------------------------------------------
-# (e)-(g) AC3 structural teeth
-# ---------------------------------------------------------------------------
 
 
 def test_disposal_eligible_row_requires_nonempty_guards_run():
@@ -181,11 +161,6 @@ def test_disposal_guard_receipt_verdict_enum():
     assert any("verdict" in e for e in errors)
 
 
-# ---------------------------------------------------------------------------
-# (h)-(k) stamp field-group + sha (F3)
-# ---------------------------------------------------------------------------
-
-
 def test_stamp_field_only_edit_preserves_sha():
     manifest = _sample_disposal_manifest()
     sha_before = compute_manifest_sha(manifest)
@@ -207,7 +182,6 @@ def test_body_field_edit_changes_sha():
 def test_partial_stamp_is_validation_error():
     manifest = _sample_disposal_manifest()
     manifest["disposal_authorized_by"] = "dónal"
-    # only one of the four fields present
     errors = validate_disposal_manifest(manifest)
     assert any("all-four-or-none" in e for e in errors)
 
@@ -231,20 +205,10 @@ def test_stamp_classification_helpers():
     assert not stamp_partial(full)
 
 
-# ---------------------------------------------------------------------------
-# (l) canonical bytes stability under key-order shuffle
-# ---------------------------------------------------------------------------
-
-
 def test_canonical_bytes_stable_under_key_order():
     manifest = _sample_disposal_manifest()
     shuffled = {k: manifest[k] for k in reversed(list(manifest.keys()))}
     assert canonical_manifest_bytes(manifest) == canonical_manifest_bytes(shuffled)
-
-
-# ---------------------------------------------------------------------------
-# (m)-(o) schema_version consumption gate
-# ---------------------------------------------------------------------------
 
 
 def test_check_schema_version_raises_on_forward_version():
@@ -256,7 +220,7 @@ def test_check_schema_version_raises_on_forward_version():
 
 def test_check_schema_version_silent_on_match():
     manifest = _sample_disposal_manifest()
-    assert check_schema_version(manifest) is None  # no raise, no return value
+    assert check_schema_version(manifest) is None
 
 
 def test_check_schema_version_raises_on_missing():
@@ -264,11 +228,6 @@ def test_check_schema_version_raises_on_missing():
     del manifest["schema_version"]
     with pytest.raises(ManifestSchemaError):
         check_schema_version(manifest)
-
-
-# ---------------------------------------------------------------------------
-# (p) missing top-level required field caught by each validator
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(

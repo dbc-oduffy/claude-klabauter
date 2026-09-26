@@ -1,14 +1,3 @@
-"""
-Tests for coordinator_core's PEP 562 lazy re-export __getattr__.
-
-Purpose: prove the ratified cross-repo import contract (DR § AC-1b — six names
-importable both as `from coordinator_core import X` and `coordinator_core.X`)
-survives making the cache and authz.token re-exports lazy, and that the write
-surface (write_tokens/generate_token) stays unreachable through this module.
-
-Spec backlink: dispatch brief "Cut the cold-import cost of
-coordinator_core/__init__.py" (2026-07-27), coordinator_core/__init__.py.
-"""
 
 from __future__ import annotations
 
@@ -17,8 +6,6 @@ import sys
 
 import pytest
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -72,7 +59,7 @@ def test_write_surface_is_not_promoted():
         try:
             getattr(coordinator_core, bad_name)
         except AttributeError:
-            pass  # expected outcome under test; the else clause fails if it's missing
+            pass
         else:
             raise AssertionError(f"expected AttributeError for {bad_name!r}")
 

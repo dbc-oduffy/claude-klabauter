@@ -66,7 +66,7 @@ def test_load_setup_template_manifest_exec_files_subset_of_files(tmp_path):
 
 
 def test_load_setup_template_manifest_missing_file_raises(tmp_path):
-    claude_klabauter_root = tmp_path  # no coordinator/lib/setup-templates-manifest.py written
+    claude_klabauter_root = tmp_path
     with pytest.raises(SubstrateFatalError, match="not found"):
         _load_setup_template_manifest(claude_klabauter_root)
 
@@ -90,14 +90,13 @@ def test_load_setup_template_manifest_missing_attr_raises(tmp_path):
     )
     claude_klabauter_root = _write_manifest(tmp_path, body=body)
     files, exec_files, hook_files = _load_setup_template_manifest(claude_klabauter_root)
-    # Missing attribute degrades to an empty list, not a crash — only
     # SETUP_TEMPLATE_FILES is a hard precondition (see docstring).
     assert files == ["publish.sh"]
     assert hook_files == []
 
 
 def test_load_setup_template_manifest_syntax_error_raises_loud_not_traceback(tmp_path):
-    body = "SETUP_TEMPLATE_FILES: list = [\n"  # unterminated literal -> SyntaxError
+    body = "SETUP_TEMPLATE_FILES: list = [\n"
     claude_klabauter_root = _write_manifest(tmp_path, body=body)
     with pytest.raises(SubstrateFatalError, match="failed to import"):
         _load_setup_template_manifest(claude_klabauter_root)

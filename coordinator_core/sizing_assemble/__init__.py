@@ -246,31 +246,13 @@ from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
     build_scaffold_directive,
 )
 
-# C4: the shared constructor's (C1) per-type required-flag computation for
-# this host's one emitted row (coordinator_core/ops/doctype_hosts.py, keyed
-# (type="sizing-object", ceremony="sizing-assemble"), module=this package).
-# `--title` is `sizing-object`'s one caller-facing content field, and it is
-# NOT free text supplied fresh at scaffold time: it is `resolved["title"]`
-# -- `route()`'s `name` param, else a word-capped label of its `intent`
-# (the PM's ask verbatim, often a whole utterance -- never the title or
-# path uncapped). Optional here (never `required=True`): both are optional
-# on `route()`, and the real CLI's own placeholder-title arm
-# covers the caller who genuinely has none -- but see `route()`'s own
-# `--title` validation, which refuses a placeholder for `--type
 # sizing-object` at write time; that refusal is the EXECUTOR's problem
-# (dispatches the emitted directive), never this compute half's to guess
-# a title in place of.
 _SIZING_OBJECT_FLAG_SPEC: tuple[Flag, ...] = (
     Flag("--title", "title", required=False),
 )
 
 
 def _slug(text: str) -> str:
-    """Lowercase-dash slug, mirroring `coordinator-doc-new._slug_from_title`'s
-    observable shape closely enough for a computed (never free-text)
-    `--out` default -- same small helper `roadmap_planning_assemble._slug`
-    duplicates rather than importing (one hierarchy per consumer, no
-    cross-package private-helper dependency)."""
     out = []
     prev_dash = False
     for ch in text.lower():
@@ -283,9 +265,6 @@ def _slug(text: str) -> str:
     return "".join(out).strip("-") or "untitled"
 
 
-# Caps for the intent-derived fallback label. `intent` is the PM's words
-# verbatim and can run to a paragraph; the title and filename slug must stay a
-# short label either way.
 _LABEL_MAX_WORDS = 8
 _SLUG_MAX_CHARS = 60
 
@@ -308,20 +287,12 @@ def _capped_slug(text: str) -> str:
     if len(slug) <= _SLUG_MAX_CHARS:
         return slug
     cut = slug[:_SLUG_MAX_CHARS]
-    # Break on a word boundary when one exists in the kept span.
     return (cut.rsplit("-", 1)[0] if "-" in cut else cut).strip("-") or "untitled"
 
 
 def _sizing_object_scaffold_directive(
     intent: Optional[str], name: Optional[str] = None
 ) -> dict[str, Any]:
-    """C4: emits the `sizing-object` scaffold directive through the shared
-    constructor -- called from every `route()` arm EXCEPT `express_lane`
-    (D3: "no sizing-object litter for trivial asks", AC7's costs-~zero
-    ergonomics). `--out` is computed the same way
-    `coordinator-doc-new._default_output_path` computes it for `--type
-    sizing-object` (`state/sizings/<today>-<slug>.yaml`), never left to the
-    CLI's own default so `already_satisfied` (AC4) can be computed here."""
     root = Path.cwd()
     today = date.today().isoformat()
     title = _short_label(name, intent)
@@ -338,13 +309,7 @@ def _sizing_object_scaffold_directive(
         root=root,
     )
 
-# Reuses the loe.tshirt XS-XXL enum + weights verbatim (schema-mandated, D1.2
-# — "do not invent a parallel scale"). See coordinator/schemas/
-# completion-entry.schema.json loe.tshirt for the canonical source. XXL is
-# the sixth notch (2026-08-07 sizing-ladder-xxl-notch-and-goal-setting-route
-# plan, C1) — it routes to `goal-setting`, not `pm-decision`; see
 # `_BASE_ROUTE_BY_TSHIRT`'s HARD GATE comment for why a new KEY is an
-# extension of this table's domain, not an override of it.
 TSHIRT_ORDER = ["XS", "S", "M", "L", "XL", "XXL"]
 TSHIRT_WEIGHT = {"XS": 1, "S": 2, "M": 4, "L": 8, "XL": 16, "XXL": 32}
 
@@ -365,153 +330,40 @@ DETENT_ENUM = (
     "goal_setting_pm_gated",
     # APPENDED AT THE END, in this order, never re-sorted — enum ORDER is
     # load-bearing against DoE's EQUAL_VERSION_SHAPE_DRIFT gate, and the
-    # vendored schema's `detents.items.enum` must carry these two values in
-    # exactly this position (cross-repo memo 2026-08-10-doe-claude-em-sizing-
-    # guard-flags.md; same append discipline as the XXL notch's widen).
     "boundary_counted_in_notch",
     "scout_evidence_mention_count",
-    # Same append-at-the-end discipline as the two above (2026-08-11
-    # routine-ask-sized-XL incident). Order is load-bearing against DoE's
     # EQUAL_VERSION_SHAPE_DRIFT gate — never re-sort.
     "intent_em_elaborated",
     "precedent_shipped_before",
     "probe_raise_on_substrate_condition",
-    # Appended by doe-claude-em's counter (cross-repo memo 2026-08-11-doe-
-    # claude-em-sizing-intent-landed-1-11-0-and-one-counter.md), stamped
-    # 1.12.0. Closes an honesty gradient the three above opened:
-    # `substrate-condition` costs the EM the raise while `ask-scope` cost
-    # nothing and was recorded nowhere queryable, making the notch-preserving
-    # answer the free, unmarked one. Now both answers leave a mark and only
-    # one moves the size.
     "probe_raise_ask_scope_asserted",
-    # Appended per the breadth arm (cross-repo memo 2026-08-12-doe-claude-em-
-    # sizing-breadth-arm.md, adopted). Same append-at-the-end discipline as
-    # every widen above — never re-sort; order is load-bearing against DoE's
     # EQUAL_VERSION_SHAPE_DRIFT gate.
     "probe_raise_on_breadth",
 )
 
 PREMISE_PROVENANCE_ENUM = ("executed", "read", "not-applicable", "unrecorded")
 
-# "Did a cross-repo boundary, memo, relay, or assent gate contribute to this
-# notch?" Two values, not three: the memo/co-design discriminator that decides
-# whether a `yes` is collapsible is the EM's to apply, not this module's (see
-# the module docstring's Boundary-in-notch note).
 BOUNDARY_IN_NOTCH_ENUM = ("yes", "no")
 
-# What KIND of thing the accompanying `scout_evidence` counts. A mention-count
-# (grep hits for a literal) and a change-set (files that actually change) are
-# routinely conflated, and the conflation reads HIGH — which is the direction
-# with no downstream net (see the sizing skill's § Tentativeness is not the
-# safe direction).
 SCOUT_EVIDENCE_KIND_ENUM = ("mention-count", "change-set", "site-count")
 
-# Is the recorded `intent` the PM's own words, or the EM's restatement of them?
-# The skill has always required verbatim ("populating `intent` (the PM's ask,
-# verbatim)"), but nothing checked it, because until now this module never
-# received the intent at all — it sized a t-shirt letter with the ask nowhere in
-# frame. An EM restatement is where silent scope growth lands: the motivating
-# incident sized "commit it and push it" as a three-clause intent naming a
-# per-item publish review and a structural-gap fix the PM never asked for.
 INTENT_SOURCE_ENUM = ("pm-verbatim", "em-elaborated")
 
-# Has this operation shipped in this repo before? The single strongest available
-# collapse signal, and the one the lobby had no input for: a repeat of an
-# operation whose runbook already exists and has landed is dispatch-shaped
 # almost by construction. `shipped-before` is ADVISORY, never an auto-collapse —
-# a repeat can genuinely be larger this time (a migration rides along, the
-# contract changed), and this module cannot see which, so auto-collapsing would
-# resize on an unread discriminator exactly as the boundary_in_notch
-# negative-spec forbids.
 PRECEDENT_ENUM = ("shipped-before", "novel")
 
-# What a `--probe-signal raise` is actually based on: the ASK's scope, the
 # SUBSTRATE's condition, or the touchpoint BREADTH. These are different claims
-# and only the first is a size signal. Finding problems in the area you are
-# about to touch does not make the requested work bigger — in the motivating
-# incident every one of four scout_evidence items described the mirror's
-# health (orphaned tests, a stray allowlist row, an uncommitted backlog) and
-# none described the ask, which remained "commit and push". `breadth` is the
-# third claim (cross-repo memo 2026-08-12-doe-claude-em-sizing-breadth-arm.md,
-# adopted into DoE's sizing SKILL.md § *A touchpoint count is not a depth
-# read*): a raise resting solely on "there are many sites" is a dispatch
-# SHAPE, not a size signal, and moving the notch on it is as untrue as
-# `substrate-condition` is. `breadth` is a typed claim of UNIFORM breadth —
-# sites that each need their own call, or that interact, are depth wearing a
-# count and size normally under `ask-scope`; the engine cannot see which, so
-# the EM applies that discriminator by choosing the value, same as it does
-# for `substrate-condition`.
 PROBE_RAISE_BASIS_ENUM = ("ask-scope", "substrate-condition", "breadth")
 
-# Detent name for each suppressing basis. `ask-scope` is deliberately absent —
-# it is the non-suppressing basis and is named via `probe_raise_ask_scope_
-# asserted` on a separate, unrelated predicate below. Total over exactly the
-# two bases `_apply_symmetric_resize` suppresses on.
 _PROBE_RAISE_SUPPRESSION_DETENT = {
     "substrate-condition": "probe_raise_on_substrate_condition",
     "breadth": "probe_raise_on_breadth",
 }
 
-# Appetite budget ceiling, expressed as the heaviest tshirt weight the
-# budget comfortably absorbs without the estimate being flagged as
-# exceeding it. Small/medium/large map onto the same coarse bands the
-# sizing skill's gut-read step already uses.
-#
 # DELIBERATELY NOT widened for XXL (2026-08-07 sizing-ladder-xxl-notch-and-
-# goal-setting-route plan, C1 Part B): `large` topping out at "XL" is what
-# makes an XXL correctly read `appetite_exceeded` against the largest
-# budget. Widening this to include "XXL" would silence exactly the
-# divergence signal the lobby exists to surface — do not "fix" this.
 _APPETITE_CEILING_TSHIRT = {"small": "S", "medium": "M", "large": "XL"}
 
-# Base route by resolved tshirt weight, before the D5 shape-entry gate is
-# applied to the "large" (L/XL) band. This IS the routing table AC4/AC6
-# require to live in the engine, not in skill prose.
-#
-# EM-ratified interpretation of the boundary the plan delegates to this
-# engine (D4) without dictating specific tshirt cuts (Finding 3, code-reviewer
-# 2026-07-24): XS = trivial -> dispatch (no plan ceremony earned); M/L =
-# decision-weight -> plan (schema `route` description: "plan= decision-weight
-# work needing coordinator:plan"). No PM ask required for that original cut
-# — the plan explicitly delegates the table's specific cuts to the engine,
-# this is that delegation being exercised.
-#
-# S and XL were re-cut by explicit PM direction (2026-07-30), narrowing the
-# original XS/S and L/XL bands: S now routes `spec-dispatch` — a light plan
-# artifact (substrate verification + scaffold-plus-commit + cross-plan
-# conflict scan still run; the four-lens body composition and the Opus plan
-# review do not) — rather than sharing XS's no-artifact dispatch. XL no
-# longer auto-routes `roadmap`; it routes `pm-decision`, because
-# initiative-scale work has four legitimate exits (split / shape / roadmap /
-# accept_multi_session) and picking one of them without the PM is exactly
-# the in-the-head routing this table exists to discharge — see `route()`'s
-# `xl_exit` handling and the module docstring's "Route table" note.
-#
-# HARD GATE — this table has no named-reason override and no ratifier
-# (PM directive 2026-07-30). Two sanctioned correction mechanisms already
-# exist, and both change the *input* (the size) rather than the *output*
-# (the route): `_apply_symmetric_resize`, which fires before the route
-# resolves, and the plan->sizing return edge (the caller's job, not this
-# module's), which fires after substrate verification has produced real
-# evidence. A free-text route override on top of this table would restore
-# exactly the in-the-head routing the lobby exists to discharge — if the
-# route feels wrong, the size read was wrong: fix the size, with evidence,
-# and let the table re-resolve. XL is not an exception: `pm-decision` is a
-# routed outcome, and the PM's pick lands in `xl_exit` — that is not an
-# override of this map, it is the map's own designed terminal for XL.
-#
 # Adding a KEY for a new size (XXL, below) is an EXTENSION of this table's
-# domain, not an override of the HARD GATE above — the gate governs the
-# output for a given size, not the set of sizes the table has an opinion
-# about. XXL routes straight to `goal-setting` rather than halting at
-# `pm-decision` because XL has FOUR legitimate exits (split / shape /
-# roadmap / accept_multi_session) and picking one without the PM is exactly
-# the in-the-head routing this table exists to discharge — whereas XXL has
-# ONE room, so routing it is a determinate map, not a guess. The relocated
-# PM gate is made observable by the `goal_setting_pm_gated` detent proposed
-# in C0 (2026-08-07 sizing-ladder-xxl-notch-and-goal-setting-route plan) and
-# recorded by C2 below — this comment does not claim the gate "relocates"
-# as an already-true fact independent of that detent existing.
 _BASE_ROUTE_BY_TSHIRT = {
     "XS": "dispatch",
     "S": "spec-dispatch",
@@ -524,29 +376,17 @@ _BASE_ROUTE_BY_TSHIRT = {
 _LARGE_TSHIRTS = ("L", "XL", "XXL")
 
 # "M and above" — any TSHIRT_ORDER notch added above M MUST be added here
-# too. See state/sizings/2026-08-07-sizing-ladder-xxl-notch-and-goal-setting.yaml
 # (XXL notch). Distinct from `_LARGE_TSHIRTS` above —
-# that band gates the premise-provenance advisory; this one gates the
-# post-size open-appetite prompt. Do not couple the two (see the appetite
-# plan's Anti-scope).
 _POST_SIZE_PROMPT_TSHIRTS = ("M", "L", "XL", "XXL")
 
-# "M and above" — gates the premise-provenance advisory detent ONLY
 # (premise_unproven / premise_not_applicable). Distinct from `_LARGE_TSHIRTS`
-# above: that tuple ALSO gates the shape-route condition
 # `(resized_tshirt in _LARGE_TSHIRTS and jtbd_unclear)`, so widening
 # `_LARGE_TSHIRTS` itself to include "M" would silently reroute an M-sized
-# jtbd_unclear sizing from `plan` to `shape` — a routing regression nobody
-# asked for. Do not merge these two constants back together; the detent
-# needs M, the route gate must not have it (cross-repo memo
-# 2026-08-08-doe-claude-em-premise-detent-m-sized-plans.md).
 _PREMISE_DETENT_TSHIRTS = ("M", "L", "XL", "XXL")
 
 
 class SizingAssembleError(ValueError):
-    """Raised for a malformed input to route() — a usage error, not a
-    business-logic divergence (divergence is expressed via `fork`, never an
-    exception)."""
+    pass
 
 
 def _validate_tshirt(tshirt: str) -> None:
@@ -557,36 +397,17 @@ def _validate_tshirt(tshirt: str) -> None:
 
 
 def _step_tshirt(tshirt: str, delta: int) -> str:
-    # Clamp mechanism unchanged by the XXL notch (2026-08-07 sizing-ladder-
-    # xxl-notch-and-goal-setting-route plan, C1 Part B) — it correctly
-    # bounds a one-notch step to the ladder's ends. Behaviour DOES change,
-    # though: a `raise` probe at XL was a no-op before the sixth notch
-    # (clamped at the old top) and is now a promotion XL -> XXL ->
-    # `goal-setting`. This is the substrate fact C2's `xxl_unprobed`
-    # predicate is built on.
     idx = TSHIRT_ORDER.index(tshirt)
     new_idx = max(0, min(len(TSHIRT_ORDER) - 1, idx + delta))
     return TSHIRT_ORDER[new_idx]
 
 
 def _validate_appetite(appetite: Optional[str]) -> None:
-    """Fails loud on a malformed `appetite` regardless of whether the
-    caller's branch will end up consuming it — same unconditional-validation
-    property as `_validate_probe_signal` / `_validate_premise_provenance`:
-    optional, validated when present, fails loud unconditionally. Appetite is
-    no longer collected before a size is delivered (PM directive
-    2026-08-07); `None` is the default, expected path, not a malformed
-    input."""
     if appetite is not None and appetite not in APPETITE_ENUM:
         raise SizingAssembleError(f"appetite must be one of {APPETITE_ENUM}, got {appetite!r}")
 
 
 def _validate_probe_signal(probe_signal: Optional[str]) -> None:
-    """Fails loud on a malformed `probe_signal` regardless of whether the
-    caller's branch (e.g. express_lane) will end up consuming it — every
-    other malformed-input path in this module validates unconditionally;
-    probe_signal must not be the one exception (Finding 5, code-reviewer
-    2026-07-24)."""
     if probe_signal is not None and probe_signal not in ("collapse", "raise"):
         raise SizingAssembleError(
             f"probe_signal must be one of (None, 'collapse', 'raise'), got {probe_signal!r}"
@@ -594,11 +415,6 @@ def _validate_probe_signal(probe_signal: Optional[str]) -> None:
 
 
 def _validate_premise_provenance(premise_provenance: Optional[str]) -> None:
-    """Fails loud on a malformed `premise_provenance` regardless of whether
-    the caller's branch (e.g. express_lane) will end up consuming it — same
-    unconditional-validation property as `_validate_probe_signal` (Finding 5,
-    code-reviewer 2026-07-24): validation fires BEFORE the express_lane
-    short-circuit, not only on paths that reach detent computation."""
     if premise_provenance is not None and premise_provenance not in PREMISE_PROVENANCE_ENUM:
         raise SizingAssembleError(
             f"premise_provenance must be one of (None, {PREMISE_PROVENANCE_ENUM}), "
@@ -607,10 +423,6 @@ def _validate_premise_provenance(premise_provenance: Optional[str]) -> None:
 
 
 def _validate_boundary_in_notch(boundary_in_notch: Optional[str]) -> None:
-    """Fails loud on a malformed `boundary_in_notch` regardless of whether the
-    caller's branch (e.g. express_lane) will end up consuming it — same
-    unconditional-validation property as `_validate_probe_signal` /
-    `_validate_premise_provenance` (Finding 5, code-reviewer 2026-07-24)."""
     if boundary_in_notch is not None and boundary_in_notch not in BOUNDARY_IN_NOTCH_ENUM:
         raise SizingAssembleError(
             f"boundary_in_notch must be one of (None, {BOUNDARY_IN_NOTCH_ENUM}), "
@@ -619,12 +431,6 @@ def _validate_boundary_in_notch(boundary_in_notch: Optional[str]) -> None:
 
 
 def _validate_scout_evidence_kind(scout_evidence_kind: Optional[str]) -> None:
-    """Fails loud on a malformed `scout_evidence_kind` regardless of whether
-    the caller's branch (e.g. express_lane) will end up consuming it — same
-    unconditional-validation property as `_validate_boundary_in_notch` above.
-
-    Validates the KIND discriminator only. It never inspects `scout_evidence`
-    itself — see the module docstring's negative-spec on free-text parsing."""
     if scout_evidence_kind is not None and scout_evidence_kind not in SCOUT_EVIDENCE_KIND_ENUM:
         raise SizingAssembleError(
             f"scout_evidence_kind must be one of (None, {SCOUT_EVIDENCE_KIND_ENUM}), "
@@ -633,7 +439,6 @@ def _validate_scout_evidence_kind(scout_evidence_kind: Optional[str]) -> None:
 
 
 def _validate_intent_source(intent_source: Optional[str]) -> None:
-    """Same unconditional-validation property as every sibling validator here."""
     if intent_source is not None and intent_source not in INTENT_SOURCE_ENUM:
         raise SizingAssembleError(
             f"intent_source must be one of (None, {INTENT_SOURCE_ENUM}), got {intent_source!r}"
@@ -641,7 +446,6 @@ def _validate_intent_source(intent_source: Optional[str]) -> None:
 
 
 def _validate_precedent(precedent: Optional[str]) -> None:
-    """Same unconditional-validation property as every sibling validator here."""
     if precedent is not None and precedent not in PRECEDENT_ENUM:
         raise SizingAssembleError(
             f"precedent must be one of (None, {PRECEDENT_ENUM}), got {precedent!r}"
@@ -649,7 +453,6 @@ def _validate_precedent(precedent: Optional[str]) -> None:
 
 
 def _validate_probe_raise_basis(probe_raise_basis: Optional[str]) -> None:
-    """Same unconditional-validation property as every sibling validator here."""
     if probe_raise_basis is not None and probe_raise_basis not in PROBE_RAISE_BASIS_ENUM:
         raise SizingAssembleError(
             f"probe_raise_basis must be one of (None, {PROBE_RAISE_BASIS_ENUM}), "
@@ -662,39 +465,6 @@ def _apply_symmetric_resize(
     probe_signal: Optional[str],
     probe_raise_basis: Optional[str] = None,
 ) -> tuple[str, bool, bool]:
-    """Applies the Finding-2-mandated symmetric resize. Returns (resized_tshirt,
-    changed, raise_suppressed). `probe_signal` is None (no probe ran / gut-read
-    stands), "collapse" (over-read, move one band down), or "raise" (under-read,
-    move one band up) — supplied by the caller's on-demand substrate probe.
-    Assumes `probe_signal` was already validated by `_validate_probe_signal`.
-
-    A `raise` declared as `probe_raise_basis="substrate-condition"` OR
-    `"breadth"` is NOT applied, and the third return element reports the
-    suppression so the caller can fire the matching detent
-    (`probe_raise_on_substrate_condition` / `probe_raise_on_breadth`).
-
-    Why this one auto-suppresses when `boundary_in_notch="yes"` deliberately
-    does NOT (module docstring's negative-spec): that negative-spec turns on
-    the engine being unable to see the discriminator — a counted boundary is
-    collapsible only when no co-design is involved, and `yes` does not say
-    which, so collapsing would resize on an UNREAD discriminator. Here the
-    caller has already applied the discriminator by choosing the value:
-    `substrate-condition` states, as a typed claim, that the raise rests on
-    the area's condition rather than the ask's scope, and `breadth` states,
-    as a typed claim, that it rests on a count of UNIFORM touchpoints rather
-    than the ask's scope — in both cases the claimed basis is not a size
-    signal by definition. Suppressing therefore resizes on a READ
-    discriminator, which is the sanctioned `_apply_symmetric_resize`
-    correction mechanism working as designed, not a Hard Gate violation — the
-    SIZE changes and the route re-resolves from the table, exactly as
-    § Hard Gate prescribes. An EM whose ask genuinely did grow says
-    `ask-scope` and keeps the raise; that assertion is recorded and
-    falsifiable, which is the point. `breadth` names UNIFORM breadth only —
-    non-uniform breadth (sites that each need their own call, or that
-    interact) is depth wearing a count and belongs under `ask-scope`, sizing
-    normally; the engine cannot tell the two apart, so this suppression
-    trusts the EM's choice of value exactly as it does for
-    `substrate-condition`."""
     if probe_signal is None:
         return tshirt, False, False
     if probe_signal == "collapse":
@@ -706,13 +476,7 @@ def _apply_symmetric_resize(
     return resized, resized != tshirt, False
 
 
-#: The stage chain each route commits a session to, and who owns it.
-#: A route the LOBBY owns runs its chain here and closes at a terminal; a route
-#: that names a ROOM records an entry task and stops, because that room's own
 #: skill owns everything after it. Keyed on every member of `ROUTE_ENUM` — the
-#: table is exhaustive by construction (`_assert_stage_table_total` below), so a
-#: route added to the enum without a chain fails at import rather than emitting
-#: a recorder that silently stops one stage early.
 _LOBBY_CHAINS = {
     "dispatch": ["the work"],
     "spec-dispatch": [
@@ -723,22 +487,13 @@ _LOBBY_CHAINS = {
     "plan": ["plan", "plan review", "execute-plan"],
 }
 
-#: Routes whose chain belongs to the room they name, not to the lobby. The
-#: entry row is all the lobby can honestly record: what the room does next is
-#: that skill's to decide, and a chain guessed here would be a recorder full of
-#: stages nobody agreed to.
 _ROOM_ENTRY = {
     "shape": "enter coordinator:shape",
     "roadmap": "enter coordinator:roadmap-planning",
     "goal-setting": "enter coordinator:goal-setting (PM-gated)",
-    # Not a room: the engine sets `pm_decision_pending` and never picks among
-    # the XL exits, so the entry row is the surfacing itself.
     "pm-decision": "surface the XL exits to the PM; record the pick in xl_exit",
 }
 
-#: Terminal by SIZE, never by route: XS/S close at `quick-wrap`, M and above at
-#: `/workstream-complete`. Read against the RESIZED t-shirt — a probe that moved
-#: the notch moved the terminal with it.
 _LIGHT_TERMINAL_TSHIRTS = ("XS", "S")
 
 
@@ -808,20 +563,12 @@ def stages(resolved_route: str, resized_tshirt: str) -> dict:
 
 
 def _render_d_lobby_lane(resolved_route: str, tshirt: str) -> str:
-    """Projects `d-lobby-lane`'s served arm from `stages()` — never a stored string.
-
-    Lobby-owned routes render the full chain in order; room-owned routes render
-    the single entry row `stages()` already names as the instruction.
-    """
     chain = stages(resolved_route, tshirt)
     return " / ".join(chain["rows"])
 
 
 #: DECISION POINTS the sizing band actually discriminates, never lane prose —
 #: every served arm is PROJECTED at call time from values `route()` has
-#: already computed, so no arm text exists in two places. Exactly one of
-#: `render`/`judgment_input` per entry (never both, never neither); enforced
-#: at import by `_assert_disposition_registry_total()` below.
 DISPOSITION_REGISTRY = (
     {
         "id": "d-lobby-lane",
@@ -842,12 +589,6 @@ DISPOSITION_REGISTRY = (
 
 
 def _assert_disposition_registry_total() -> None:
-    """Every registry entry is exactly-one-of served/declined, never neither/both.
-
-    Import-time rather than call-time, mirroring `_assert_stage_table_total`
-    directly above: an entry that is neither served nor explicitly declined
-    fails here, not at the call site of a session already under way.
-    """
     for entry in DISPOSITION_REGISTRY:
         has_render = "render" in entry
         has_judgment = "judgment_input" in entry
@@ -872,18 +613,6 @@ def dispositions(
     *,
     pre_resize_tshirt: bool = False,
 ) -> dict[str, Any]:
-    """The arm that applies at this route/tshirt, or the named judgment that
-    stops the engine short — never an exception, never an empty/falsy value.
-
-    Returns ``{"served": [...], "no_arm": [...]}``. Each served element is
-    ``{id, decision_point, arm, basis}``; each no_arm element is
-    ``{id, decision_point, judgment_input, basis}``.
-
-    `pre_resize_tshirt` marks the express-lane call site, where the resize has
-    not run yet: the tshirt fed to `basis` is the raw validated value, and
-    that basis notes the stage it was read at so it is never mistaken for the
-    resized value on the standard lane.
-    """
     served: list[dict[str, Any]] = []
     no_arm: list[dict[str, Any]] = []
     for entry in DISPOSITION_REGISTRY:
@@ -997,17 +726,10 @@ def route(
             "intent": intent,
             "resolved_estimate": {"tshirt": tshirt, "provisional": True},
             "scout_evidence": scout_evidence,
-            # Emitted on this arm too, even though D3 persists no object: the
-            # express lane still runs work and still closes, and a field that
-            # is absent here would make absence mean two different things to
-            # the caller reading it.
             "stages": stages("dispatch", tshirt),
             "dispositions": dispositions("dispatch", tshirt, pre_resize_tshirt=True),
             "narration": "Express lane: trivial ask, no sizing ceremony.",
             "next_move": "Dispatch directly. No sizing-object persisted (D3).",
-            # C4: D3 never scaffolds -- present and empty, never absent, so
-            # `directives` means the same thing (a checked list) on every
-            # arm of this function.
             "directives": [],
         }
 
@@ -1024,14 +746,8 @@ def route(
 
     resized_weight = TSHIRT_WEIGHT[resized_tshirt]
 
-    # `fork` stays None from this module always — appetite_exceeded is the
     # sole divergence signal. `fork` is the sizing skill's RESOLUTION slot,
-    # filled only once the PM has picked cut_to_fit vs raise_appetite (see
-    # module docstring's "Appetite<->estimate reconciliation" note).
     fork: Optional[str] = None
-    # `xl_exit` stays None from this module always — same design as `fork`
-    # (see negative-spec). The sizing skill fills it once the PM has picked
-    # one of the four XL exits.
     xl_exit: Optional[str] = None
     if appetite is not None:
         ceiling_tshirt = _APPETITE_CEILING_TSHIRT[appetite]
@@ -1052,36 +768,15 @@ def route(
     if resolved_route == "pm-decision":
         detents.append("pm_decision_pending")
 
-    # `goal_setting_pm_gated` (2026-08-07 sizing-ladder-xxl-notch-and-goal-
-    # setting-route plan, C0 item 2 / C2): the observable marker equivalent
-    # to `pm_decision_pending` above, for the relocated PM gate — an XXL
-    # sizing-object otherwise carries no machine-readable sign that
-    # `coordinator:goal-setting` is PM-gated (the earlier claim that "the PM
-    # gate relocates into the room" was true in prose but false in this
-    # module's observable output; this detent is the fix). Advisory only,
-    # same append shape as every other detent here — never alters `route`.
     if resolved_route == "goal-setting":
         detents.append("goal_setting_pm_gated")
 
-    # `xxl_unprobed` (same plan, C2 item 2, Key-decision section — the
     # ACCEPTED counter-proposal to DoE's originally specced
-    # `probe_signal is None and not scout_evidence`, inbound memo
-    # `2026-08-07-doe-claude-em-xxl-notch-four-answers.md` item 1). Testing
-    # `probe_signal is None` reads "a probe ran, therefore the size is
     # trustworthy" — but `--probe-signal raise` is a caller ASSERTION, not
-    # evidence, and `_step_tshirt`'s clamp (see its own comment) means a
-    # raise probe reaches XXL from either `--tshirt XL` (promotion) or
-    # `--tshirt XXL` (no-op clamp) — both are the exact false-HIGH this
-    # advisory exists to catch, and DoE's original predicate exempts both.
     # This predicate tests `scout_evidence` EMPTINESS only, never its
-    # contents (module docstring's negative-spec).
     if resized_tshirt == "XXL" and not scout_evidence:
         detents.append("xxl_unprobed")
 
-    # Premise-provenance detent (advisory, warn-never-block — DR-068
-    # precedent): keyed on RESIZED size, never resolved route, so it fires
-    # identically on shape/pm-decision/goal-setting/plan L/XL/XXL (see
-    # module docstring).
     if resized_tshirt in _PREMISE_DETENT_TSHIRTS:
         if premise_provenance == "read":
             detents.append("premise_unproven")
@@ -1089,51 +784,21 @@ def route(
             detents.append("premise_not_applicable")
 
     # Boundary-in-notch detent (advisory, warn-never-block). DELIBERATELY not
-    # gated on `resized_tshirt` — unlike the premise detents directly above.
-    # The size is the thing a counted boundary is suspected of having
-    # inflated, so gating the check on that size would exempt exactly the
-    # reads this exists to catch: the motivating incident was an S sized XL,
-    # which any high-side gate would have caught only by accident and any
-    # M-and-above gate would have exempted once the collapse landed.
     if boundary_in_notch == "yes":
         detents.append("boundary_counted_in_notch")
 
-    # Scout-evidence-kind detent (advisory, warn-never-block). Tests the TYPED
-    # KIND only — never the contents or the length of `scout_evidence` (module
-    # docstring's negative-spec). `change-set` and `site-count` fire nothing:
-    # they are the answers that describe evidence already qualified.
     if scout_evidence_kind == "mention-count":
         detents.append("scout_evidence_mention_count")
 
-    # Intent-source detent (advisory). Not size-gated, for the same reason
-    # `boundary_counted_in_notch` is not: the size is what an elaborated intent
-    # is suspected of having inflated, so gating on it would exempt the reads
-    # this exists to catch.
     if intent_source == "em-elaborated":
         detents.append("intent_em_elaborated")
 
-    # Precedent detent (advisory). Fires at every size — a shipped-before
-    # operation reading M is as much worth a second look as one reading XL.
     if precedent == "shipped-before":
         detents.append("precedent_shipped_before")
 
-    # Raise-suppressed detent. Unlike every other advisory in this module, a
-    # suppressing basis answer DID change the size (the raise was not
-    # applied) — see `_apply_symmetric_resize` for why that is a read
-    # discriminator rather than an unread one. The route still comes from the
-    # table, so § Hard Gate holds. Two bases suppress now (substrate-condition,
-    # breadth), so the detent NAME is selected from `probe_raise_basis` —
-    # total over the suppressing bases, since `raise_suppressed` alone can no
-    # longer disambiguate which one fired.
     if raise_suppressed:
         detents.append(_PROBE_RAISE_SUPPRESSION_DETENT[probe_raise_basis])
 
-    # The symmetric mark on the OTHER answer. Advisory, and unlike its
-    # counterpart it changes nothing — the raise it names has already been
-    # applied. Its whole job is to make the assertion findable: an EM claiming
-    # the ask itself grew is making a falsifiable claim, and falsifiable needs
-    # someone able to go looking. Without this, the answer that preserves the
-    # notch was the free and invisible one.
     if probe_signal == "raise" and probe_raise_basis == "ask-scope":
         detents.append("probe_raise_ask_scope_asserted")
 
@@ -1149,23 +814,7 @@ def route(
         narration_bits.append(f"-> route={resolved_route}.")
     narration = " ".join(narration_bits)
 
-    # Precedence, in order (settled design §3/§4; goal-setting branch added
-    # 2026-08-07 sizing-ladder-xxl-notch-and-goal-setting-route plan, C2):
-    #   1. appetite_exceeded + pm-decision together -> ONE combined message,
-    #      so the EM makes a single PM ask rather than two separate ones.
-    #   2. appetite_exceeded alone -> unchanged cut-vs-raise fork message.
-    #      NOTE (review-integrator, appetite plan P1 fix): this arm also
-    #      catches the goal-setting route (an XXL never resolves
-    #      pm-decision, so rule 1 never fires for it) -- the goal-setting/
     #      PM-gated framing is APPENDED to this arm's text below rather than
-    #      going unreachable; see the append block right after this chain.
-    #   3. pm-decision alone -> surface the XL exits.
-    #   4. goal-setting -> OKR-programme framing, PM-gated. Only reached when
-    #      appetite is absent/conforming -- reachable, not shadowed, when
-    #      rule 2 above doesn't claim the cell first.
-    #   5. shape -> unchanged.
-    #   6. spec-dispatch -> light-plan-lane framing.
-    #   7. else -> unchanged generic "Route to X."
     if "appetite_exceeded" in detents and resolved_route == "pm-decision":
         next_move = (
             "Estimate exceeds the appetite budget AND resolves to an XL. Make ONE combined "
@@ -1205,18 +854,6 @@ def route(
     else:
         next_move = f"Route to {resolved_route}."
 
-    # Goal-setting framing, appended when the goal_setting_pm_gated detent
-    # fired but rule 2 above (appetite_exceeded alone) already claimed the
-    # base next_move text for this cell -- an XXL never resolves
-    # pm-decision, so rule 1's combined-ask arm never applies here; without
-    # this append the goal-setting/PM-gated framing the XXL plan's C2 item
-    # 3(b) specced would silently drop for a caller who volunteers an
-    # appetite (review-integrator P1 fix, coordinator:code-reviewer
-    # 2026-08-07). APPEND, not a new precedence branch — matches the
-    # append-not-reorder discipline the other advisories below use, and
-    # keeps the closed cut_to_fit/raise_appetite fork text intact (AC6: the
-    # volunteered-appetite path keeps that closed fork, unlike the absent-
-    # appetite open question).
     if "goal_setting_pm_gated" in detents and "appetite_exceeded" in detents:
         next_move += (
             " This also resolves to goal-setting (XXL, OKR-programme scale) — route to "
@@ -1224,33 +861,7 @@ def route(
             "fork above."
         )
 
-    # Open appetite prompt — appended to whichever branch above was selected
-    # (never a new precedence branch), matching the advisory appends below.
-    #
-    # NOT suppressed at `resolved_route == "pm-decision"`. The appetite plan
-    # (2026-08-07-appetite-leaves-the-front-of-sizing, C1 item 6) specced a
-    # suppression there, resting on the premise that the pm-decision branch
-    # "already asks the PM to pick among split/shape/roadmap/
-    # accept_multi_session, and `split` is one of those four exits". The XXL
-    # plan (2026-08-07-sizing-ladder-xxl-notch-and-goal-setting-route, C2
-    # item 4) landed second and DROPPED `split` from that branch's enumerated
-    # exits — invalidating the premise the suppression stood on. Net effect
-    # at XL: the detent fired but next_move carried no open question at all,
-    # so an EM reading only next_move never asked it. XL is the size where
-    # "want to split it?" is the likeliest PM answer, so that was the worst
-    # cell to lose it in.
-    #
-    # The fix keeps BOTH rulings: `split` stays out of the enumerated exits
     # (XXL plan's call — it is a vocabulary value in XL_EXIT_ENUM, not a
-    # menu item), and the open question returns as ONE bundled ask rather
-    # than a second independent one — the same combined-ask shape precedence
-    # rule #1 uses for appetite_exceeded + pm-decision. AC6a still holds:
-    # the pm-decision branch text is imperative and asks nothing, so the
-    # appended question is the only PM-facing question in next_move.
-    #
-    # Ordered BEFORE the xxl_unprobed/premise advisories: those are
-    # explicitly non-actionable ("does not alter the route above"), so a
-    # live PM question after them would read as qualified by them.
     if "post_size_prompt_pending" in detents:
         if resolved_route == "pm-decision":
             next_move += (
@@ -1264,12 +875,7 @@ def route(
                 "cut it, what's up?"
             )
 
-    # `xxl_unprobed` advisory statement — appended to whichever branch above
-    # was selected, BEFORE the premise-provenance advisory (2026-08-07
-    # sizing-ladder-xxl-notch-and-goal-setting-route plan, C2 item 5
-    # ordering: route text -> appetite question -> xxl_unprobed -> premise
     # advisory). ADVISORY, warn-never-block (DR-277) — never withholds the
-    # route above.
     if "xxl_unprobed" in detents:
         next_move += (
             " ADVISORY (warn, never block; does not alter the route above): "
@@ -1278,12 +884,7 @@ def route(
             "spike-result artifact."
         )
 
-    # Premise-provenance advisory statement — appended to whichever branch
-    # above was selected (never a new branch in the precedence chain).
     # ADVISORY, stated in words: it is discharged by citing inline evidence
-    # that the mechanism was executed, never by producing a spike-result
-    # artifact (structural-in-mechanism, never-in-ceremony — memo PM ruling
-    # 2). Never withholds the route above; warn, never block (DR-068).
     if "premise_unproven" in detents:
         next_move += (
             " ADVISORY (warn, never block; does not alter the route above): "
@@ -1300,10 +901,7 @@ def route(
             "spike-result artifact."
         )
 
-    # Boundary-in-notch advisory statement — appended after the premise
-    # advisory, same append-not-reorder discipline as every advisory above.
     # States the DISCRIMINATOR the engine cannot apply (memo vs co-design)
-    # rather than a verdict, because the flag's two values do not carry it.
     if "boundary_counted_in_notch" in detents:
         next_move += (
             " ADVISORY (warn, never block; does not alter the route above): "
@@ -1316,9 +914,6 @@ def route(
             "justification naming the unconverged contract."
         )
 
-    # Scout-evidence-kind advisory statement — appended last. Names the
-    # specific arithmetic error (a mention-count read as a change-set), not a
-    # generic "check your evidence".
     if "scout_evidence_mention_count" in detents:
         next_move += (
             " ADVISORY (warn, never block; does not alter the route above): "
@@ -1329,9 +924,6 @@ def route(
             "Discharge by citing the change-set, or collapse the estimate."
         )
 
-    # Raise-suppressed statement. Stated FIRST of the new appends because,
-    # unlike its neighbours, it reports a size that already changed rather than
-    # a caution about one that did not.
     if "probe_raise_on_substrate_condition" in detents:
         next_move += (
             f" NOTE (this one DID change the size): the probe raise was NOT applied — "
@@ -1390,26 +982,14 @@ def route(
         "detents": detents,
         "fork": fork,
         "xl_exit": xl_exit,
-        # Echoed, never parsed (same passthrough contract as `scout_evidence`).
-        # The point is purely that the ask and the size now appear in ONE frame:
-        # an `intent` of "commit it and push it" sitting beside a resolved XL is
-        # self-evidently wrong to any reader, and before this field existed
-        # there was no frame in which those two facts met.
         "intent": intent,
         "resolved_estimate": {"tshirt": resized_tshirt, "provisional": True},
-        # The lobby's flight recorder, computed rather than transcribed. Rides
-        # the return `route()` already produces, so the caller reads the chain
-        # in the same frame as the route that implies it and pays no second
-        # process to get it.
         "stages": stages(resolved_route, resized_tshirt),
         "dispositions": dispositions(resolved_route, resized_tshirt),
         "scout_evidence": scout_evidence,
         "narration": narration,
         "next_move": next_move,
-        # C4: every non-express-lane arm persists a sizing object (D1/D2 --
         # the object is minted regardless of RESOLVED route; only D3's
-        # short-circuit above skips it), so this directive is unconditional
-        # here rather than gated on `resolved_route`.
         "directives": [_sizing_object_scaffold_directive(intent, name)],
     }
 
@@ -1543,9 +1123,6 @@ def main(argv: list[str]) -> int:
         print(f"{prog}: {exc}", file=sys.stderr)
         return EXIT_USAGE
     except Exception as exc:  # noqa: BLE001 - structural backstop, mirrors pickup_assemble
-        # Transport failure: compute never ran, so nothing goes on stdout —
-        # the exit code is the only evidence (completion-evidence contract,
-        # DR-442). Matches `backlog_grind_assemble.main`'s shape.
         print(f"{prog}: unexpected failure: {exc}", file=sys.stderr)
         return EXIT_TRANSPORT_FAIL
 

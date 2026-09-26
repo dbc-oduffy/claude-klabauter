@@ -49,13 +49,7 @@ import sys
 
 
 class ArgvFidelityError(ValueError):
-    """Raised by resolve_body / refuse_newline_argv on a caller-facing failure.
-
-    A ValueError subclass so a caller that only expects ValueError (e.g. an
-    existing broad except clause) still catches it; callers that want the
-    argparse-shaped usage+message+exit-2 behaviour catch it explicitly and
-    call parser.error(str(exc)).
-    """
+    pass
 
 
 def resolve_body(
@@ -65,28 +59,6 @@ def resolve_body(
     flag_name: str = "--body",
     allow_empty: bool = False,
 ) -> str:
-    """Resolve a body from either an argv value or a file, losslessly.
-
-    Exactly one of `body` / `body_file` must be provided -- both present or
-    both absent raises ArgvFidelityError. `body_file` of "-" reads stdin
-    (the Unix curl/tar/git convention); any other `body_file` value is read
-    as a UTF-8 file path. An unreadable path, or a resolved body that is
-    empty (or all-whitespace), raises ArgvFidelityError rather than
-    returning a hollow record.
-
-    `flag_name` names the argv-value flag in error messages (e.g. "--body");
-    the file-transport flag is always derived as f"{flag_name}-file".
-
-    `allow_empty` exists for ONE shape: a replacement text whose emptiness is
-    the caller's intent, not a hollow record. `archive-stamp-cli correct-
-    handoff-body --new-string ""` deletes the matched region, and that verb
-    accepted an empty replacement before it gained a file sibling -- refusing
-    it here would be a behaviour regression introduced by a transport fix.
-    It does NOT relax the mutual-exclusion or required-one rules above, and
-    it must never be set for a flag whose emptiness means "the caller forgot"
-    (a body, a title, a memo). Default False so the hollow-record refusal
-    stays the rule and the exception is always written down at the call site.
-    """
     body_file_flag = f"{flag_name}-file"
 
     if body is not None and body_file is not None:
@@ -117,7 +89,7 @@ def resolve_body(
             )
         return resolved
 
-    assert body is not None  # narrowed by the two guards above
+    assert body is not None
     if not body.strip() and not allow_empty:
         raise ArgvFidelityError(f"{flag_name} must not be empty.")
     return body
@@ -182,25 +154,6 @@ def refuse_newline_argv(
     flag_name: str,
     remedy: str | None = None,
 ) -> None:
-    """Raise ArgvFidelityError if `value` contains a newline.
-
-    `value` is expected to be an argv-sourced string (e.g. args.body) --
-    file-sourced text is never passed here, since a file is expected to
-    carry real newlines. Does nothing when `value` is None (flag absent).
-
-    `remedy` names what the caller should do instead, for the flags that
-    earn the refusal but have NO `-file` sibling. The default message
-    assumes one exists and names it, which is right for most callers and
-    WRONG for a flag deliberately denied a file leg -- it would send the
-    operator to a flag that does not exist, a worse failure than the one
-    being refused. That is not hypothetical: `coordinator-doc-new --title`
-    is denied a file leg because the id-mint path cannot carry a newline
-    losslessly, and it hand-rolled its own `parser.error` specifically to
-    avoid this function's message. A caller forced to route around the seam
-    is also invisible to the transport probe, which credits a flag as
-    refused only where it can see the seam -- so the wrong message cost a
-    correct refusal its coverage as well as its accuracy.
-    """
     if value is None:
         return
     if "\n" in value:

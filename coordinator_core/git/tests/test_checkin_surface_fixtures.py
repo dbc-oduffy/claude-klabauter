@@ -83,10 +83,6 @@ def _init_common(repo: Path) -> None:
 
 @pytest.fixture
 def checkin_repo_factory(tmp_path: Path) -> Callable[[str], Path]:
-    """`(name) -> repo_root` seeded with this repo's real `.gitattributes`
-    pins, `core.autocrlf=true`, `core.fileMode=false`, and one committed
-    seed (`.gitattributes` itself) so `HEAD` exists before a shape test
-    commits its own file."""
 
     def _make(name: str = "repo") -> Path:
         repo = tmp_path / name
@@ -113,10 +109,6 @@ def lf_only_repo_factory(tmp_path: Path) -> Callable[[str], Path]:
         return repo
 
     return _make
-
-
-# ---------------------------------------------------------------------------
-# Shared assertions -- THREE things, never collapsed.
 
 
 def _assert_status_clean(repo: Path) -> None:
@@ -152,9 +144,6 @@ def _write_worktree(repo: Path, rel_path: str, content: bytes) -> Path:
 
 
 def _commit_shape(repo: Path, rel_path: str, content: bytes, message: str) -> None:
-    """Write, `hash-object` (BEFORE `add`, so the oracle reads the same
-    worktree bytes the commit is about to convert), `add`, `commit` -- the
-    sequence every shape test below shares."""
     _write_worktree(repo, rel_path, content)
     expected = _hash_object_sha(repo, rel_path)
     _git(["add", "--", rel_path], cwd=repo)
@@ -170,10 +159,6 @@ LF_CONTENT = b"line one\nline two\nline three\n"
 CRLF_CONTENT = b"line one\r\nline two\r\nline three\r\n"
 
 
-# ---------------------------------------------------------------------------
-# The six measured shapes, plus the mixed batch.
-
-
 def test_shape_plain_lf(checkin_repo_factory):
     repo = checkin_repo_factory("plain_lf")
     _commit_shape(repo, "src/plain_lf.txt", LF_CONTENT, "plain LF")
@@ -187,8 +172,6 @@ def test_shape_plain_crlf(checkin_repo_factory):
     _assert_status_clean(repo)
     _assert_fsck_clean(repo)
     # The point of this shape: unpinned CRLF content is NORMALIZED to LF on
-    # checkin under core.autocrlf=true, so the committed blob must differ
-    # from a raw hash of the CRLF bytes as written.
     committed = _committed_blob_sha(repo, "src/plain_crlf.txt")
     raw_header = f"blob {len(CRLF_CONTENT)}\0".encode("ascii")
     import hashlib
@@ -210,7 +193,6 @@ def test_shape_binary_pin(checkin_repo_factory):
     _commit_shape(repo, rel, CRLF_CONTENT, "-text golden")
     _assert_status_clean(repo)
     _assert_fsck_clean(repo)
-    # The point of this shape: `-text` stores the RAW bytes, unconverted.
     committed = _committed_blob_sha(repo, rel)
     raw_header = f"blob {len(CRLF_CONTENT)}\0".encode("ascii")
     import hashlib
@@ -239,8 +221,6 @@ def test_shape_deletion(checkin_repo_factory):
 
 
 def test_shape_mixed_batch_pinned_and_plain(checkin_repo_factory):
-    """Two pinned paths and two plain paths, staged and committed together --
-    the mixed-batch shape the chunk's own body names."""
     repo = checkin_repo_factory("mixed_batch")
     pinned_cmd = "coordinator/bin/mixed.cmd"
     pinned_sh = "scripts/mixed.sh"
@@ -269,10 +249,6 @@ def test_shape_mixed_batch_pinned_and_plain(checkin_repo_factory):
     _assert_fsck_clean(repo)
 
 
-# ---------------------------------------------------------------------------
-# The negative test -- the point of the row.
-
-
 def test_lf_only_fixture_fails_a_shape_the_real_corpus_passes(lf_only_repo_factory):
     """A deliberately LF-only fixture (no `.gitattributes` at all) MUST
     misclassify the `-text`-shaped golden path that the real corpus (see
@@ -295,9 +271,6 @@ def test_lf_only_fixture_fails_a_shape_the_real_corpus_passes(lf_only_repo_facto
 
     raw_sha = hashlib.sha1(raw_header + CRLF_CONTENT).hexdigest()
 
-    # The real corpus (test_shape_binary_pin) asserts committed == raw_sha.
-    # Under the LF-only fixture, with no -text pin, that equality FAILS --
-    # the content was normalized instead of stored raw.
     assert committed != raw_sha, (
         "LF-only fixture unexpectedly preserved raw CRLF bytes for a "
         "goldens-shaped path -- the negative fixture stopped discriminating"

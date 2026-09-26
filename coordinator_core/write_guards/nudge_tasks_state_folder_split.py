@@ -114,17 +114,9 @@ from typing import Any, Dict, Optional, Tuple
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
-PRIORITY = 140  # deny-offer: runs after the structural block_* guards (≤90)
+PRIORITY = 140
 
-#: STEMS+GLOBS — transcribed verbatim (order and wording) from
-#: docs/wiki/coordinator-tripwires.md § tasks-state-folder-split's
-#: "Always-on `state/` substrate (enumerated allowlist)" line. Each entry is
-#: (label-as-written-in-the-wiki, is_directory_form, is_category_word).
-#: is_directory_form mirrors the wiki's own trailing "/" spelling for
-#: directory surfaces; is_category_word marks the three tokens (trackers,
-#: queues, ledgers) that are generic category words rather than literal
 #: on-disk basenames — see module docstring "DETECTION" for the distinct
-#: matching rule each class gets.
 _SURFACE_TOKENS: Tuple[Tuple[str, bool, bool], ...] = (
     ("orientation_cache", False, False),
     ("lessons", False, False),
@@ -143,26 +135,15 @@ _SURFACE_TOKENS: Tuple[Tuple[str, bool, bool], ...] = (
     ("improvement-queue", True, False),
 )
 
-#: Category-word -> singular substring to search for within the first path
-#: segment's basename (case-insensitive). "trackers"/"queues"/"ledgers" in
-#: the wiki are plural category words; the real on-disk basenames
-#: (handoff-tracker.md, improvement-queue/, health-ledger.md) carry the
-#: singular form.
 _CATEGORY_SINGULAR = {
     "trackers": "tracker",
     "queues": "queue",
     "ledgers": "ledger",
 }
 
-#: ``tasks/<sid>/`` per-session completeness-checklist mirror exemption —
-#: session ids in this repo are hex-and-hyphen, >= 8 characters (see module
 #: docstring EXEMPTION).
 _SESSION_ID_RE = re.compile(r"^[0-9a-f-]{8,}$", re.IGNORECASE)
 
-#: ``tasks/`` path-segment anchor — mirrors nudge_baton_body_bar's
-#: anchoring discipline (a leading path prefix, or a bare repo-relative
-#: path) so a substring coincidence like ``vendor/mytasks/lessons.md`` does
-#: not false-positive.
 _TASKS_PREFIX_RE = re.compile(r"(?:^|/)tasks/(.+)$")
 
 
@@ -174,15 +155,6 @@ def _extract_file_path(payload: Dict[str, Any]) -> str:
 
 
 def _first_segment_and_stem(remainder: str) -> Tuple[str, str]:
-    """Split the post-``tasks/`` remainder into (first_segment, file_stem).
-
-    ``file_stem`` strips a single trailing extension from the first segment
-    when it is the LAST segment (a bare file directly under ``tasks/``,
-    e.g. ``lessons.md``); for a multi-segment remainder (e.g.
-    ``handoffs/2026-07-27_foo.md``) ``file_stem`` equals the first segment
-    unchanged, since the directory name itself carries no extension to
-    strip.
-    """
     parts = remainder.split("/", 1)
     first_segment = parts[0]
     if len(parts) == 1:
@@ -249,7 +221,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not first_segment:
             return None
 
-        # tasks/<sid>/ per-session mirror exemption (see module docstring).
         if _SESSION_ID_RE.match(first_segment):
             return None
 
@@ -265,6 +236,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         }
     except Exception:
-        # Fail-OPEN on any unexpected error -- this guard offers only on a
-        # positive surface match, never on an error.
         return None

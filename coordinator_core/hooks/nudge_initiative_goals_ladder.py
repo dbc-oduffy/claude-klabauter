@@ -60,9 +60,6 @@ from coordinator_core.hooks._envelope import no_advisory, payload_of, post_advis
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.ipc import get_op_handler, register_op
 
-#: See state/relocations/guard-message-cap/nudge-initiative-goals-ladder.py.md
-#: for the full explanation this hook's message used to spell out inline
-#: (docs/plans/2026-08-02-guard-message-character-cap.md § C6).
 _WIKI_ANCHOR = (
     "coordinator/docs/wiki/guard-message-concision.md"
     "#initiative-goals-nudge-remedies"
@@ -70,9 +67,6 @@ _WIKI_ANCHOR = (
 
 
 async def _resolve_goal_candidates(repo_root: str, text: str) -> list:
-    """In-process call into `goal.match_candidates`. Fail-open at every
-    step (unresolvable op / handler exception / non-list result) -> [] — a
-    nudge with no suggestions is still a valid, safe nudge."""
     if not text:
         return []
 
@@ -100,7 +94,6 @@ async def _resolve_goal_candidates(repo_root: str, text: str) -> list:
 
 
 def _compose_nudge_message(initiative_id: str, candidate_ids: List[str], candidate_ids_str: str):
-    """Pure message composer, routed through `message_envelope.compose`."""
     if candidate_ids_str:
         first_id = candidate_ids[0] if candidate_ids else ""
         goal_ref = first_id
@@ -126,7 +119,6 @@ def _extract_write_fields(params: dict) -> tuple:
         content_raw = tool_input.get("new_string")
     content = ""
     if isinstance(content_raw, str) and content_raw:
-        # Mirrors `head -60` (first 60 lines of the extracted content).
         content = "\n".join(content_raw.splitlines()[:60])
     return tool_name, file_path, content
 
@@ -163,7 +155,7 @@ async def _handle(params: dict) -> dict:
                 goals_val = goals_line_re.sub("", line, count=1)
                 goals_val = goals_val.lstrip(" \t")
                 if goals_val not in ("null", "", "[]", "~"):
-                    return no_advisory()  # non-empty value -- suppress
+                    return no_advisory()
                 break
 
         list_item_re = re.compile(r"^[ \t]+-")
@@ -230,9 +222,6 @@ async def _handle(params: dict) -> dict:
 
 @register_op("hooks.nudge_initiative_goals_ladder")
 async def _handler(params: dict, repo_root=None) -> dict:
-    """PostToolUse(Write|Edit) op: advise (never deny/block) when a written
-    initiative has no `goals` field and the repo carries goal(s) to attach.
-    """
     params = payload_of(params)
     try:
         return await _handle(params)

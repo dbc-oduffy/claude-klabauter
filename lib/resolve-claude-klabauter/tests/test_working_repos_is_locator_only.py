@@ -76,31 +76,14 @@ resolve_claude_klabauter = _load_shim()
 
 
 def _make_claude_klabauter_fixture(root: Path) -> None:
-    """Minimal on-disk shape ``_validate_bin_dir`` (not exercised directly by
-    these tests, but ``resolve_claude_klabauter_root_with_class``'s callers expect a
-    real-looking root) and ``os.path.isdir`` checks accept."""
     (root / "coordinator_core").mkdir(parents=True)
 
 
 def _make_published_engine_fixture(root: Path) -> None:
-    """A registered, USABLE published engine.
-
-    The stamp is not decoration: since
-    docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C5, an engine
-    root is a stamped build and `_resolve_published_engine` denies an unstamped
-    root. A fixture that creates only `coordinator_core/` resolves
-    `live-working-tree`, so a test asserting `resolved-engine` fails for a
-    reason that has nothing to do with what it is testing.
-    """
     (root / "coordinator_core").mkdir(parents=True)
     (root / "coordinator_core" / "_engine_stamp").write_text(
         "sha:0000000000000000000000000000000000000000\n", encoding="utf-8"
     )
-
-
-# ---------------------------------------------------------------------------
-# The retirement itself
-# ---------------------------------------------------------------------------
 
 
 def test_is_engine_working_repo_is_removed():
@@ -115,19 +98,9 @@ def test_structural_gate_is_present():
     assert hasattr(resolve_claude_klabauter, "_is_claude_klabauter_source_tree")
 
 
-# ---------------------------------------------------------------------------
-# No resolution path branches on repo identity
-# ---------------------------------------------------------------------------
-
-
 def test_working_repos_membership_alone_does_not_exempt_a_different_session(
     tmp_path: Path, monkeypatch
 ):
-    """A session registered BY NAME under ``engine.working_repos.*`` — the
-    retired discriminant's own positive case — still diverts to the
-    published engine when its own root is not the resolved live tree.
-    Membership in the locator namespace is not consulted by the gate at
-    all."""
     ml_dir = tmp_path / "machine-local"
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
@@ -142,12 +115,7 @@ def test_working_repos_membership_alone_does_not_exempt_a_different_session(
 
     (ml_dir / "registry.local.toml").write_text(
         f'"repos.claude_klabauter" = \'{published_root}\'\n'
-        # Registered as a "working repo" by name -- the exact fact that used
-        # to exempt this session from diverting. It no longer does.
         f'"engine.working_repos.claude_klabauter" = \'{session_root}\'\n'
-        # engine.target must be readable for the divert to fire at all
-        # (AC20) -- this fixture isolates the identity discriminant, not
-        # the target-presence one (that has its own dedicated test).
         '"engine.target" = \'candidate\'\n',
         encoding="utf-8",
     )
@@ -163,9 +131,6 @@ def test_working_repos_membership_alone_does_not_exempt_a_different_session(
 def test_no_working_repos_entry_needed_when_session_is_the_live_root(
     tmp_path: Path, monkeypatch
 ):
-    """The flip side: a session whose own root IS the resolved live tree
-    resolves live-working-tree with NO ``engine.working_repos.*`` entry
-    registered anywhere — the structural check needs nothing enumerated."""
     ml_dir = tmp_path / "machine-local"
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
@@ -188,12 +153,6 @@ def test_no_working_repos_entry_needed_when_session_is_the_live_root(
 
 
 def test_absent_engine_target_does_not_divert_regardless_of_identity(tmp_path: Path, monkeypatch):
-    """AC20: `engine.target` unreadable (never written -- every machine
-    installed before C8) MUST NOT divert even when the structural gate
-    independently confirms the session is NOT the live tree. Divert
-    requires BOTH conjuncts; identity alone (confirmed False) is not
-    sufficient, matching the "not yet rolled out, never a silent opt-in"
-    rule this repo's C3/C8 chunks established."""
     ml_dir = tmp_path / "machine-local"
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
@@ -206,8 +165,6 @@ def test_absent_engine_target_does_not_divert_regardless_of_identity(tmp_path: P
     session_root = tmp_path / "session-repo"
     session_root.mkdir()
 
-    # repos.claude_klabauter registered, session confirmed NOT the live
-    # tree, but no "engine.target" key anywhere.
     (ml_dir / "registry.local.toml").write_text(
         f'"repos.claude_klabauter" = \'{published_root}\'\n', encoding="utf-8"
     )
@@ -223,18 +180,7 @@ def test_absent_engine_target_does_not_divert_regardless_of_identity(tmp_path: P
     assert cls == resolve_claude_klabauter.RESOLUTION_LIVE_WORKING_TREE
 
 
-# ---------------------------------------------------------------------------
-# Locator callers still find their root
-# ---------------------------------------------------------------------------
-
-
 def test_setup_chain_walker_locator_rung_still_resolves(tmp_path: Path, monkeypatch):
-    """``setup_chain_walker.py``'s ``engine.working_repos.doe_claude`` rung
-    is untouched by this chunk (locator-use, never exemption-use) — thin
-    smoke check that it still resolves a candidate off that registry key.
-    The exhaustive case matrix (publish-mirror rejection, missing positive
-    evidence, flag/env precedence, ...) lives in
-    ``coordinator_core/ops/test_setup_chain_walker.py`` and is unaffected."""
     loader = importlib.machinery.SourceFileLoader(
         "_c4_setup_chain_walker_under_test", str(_SETUP_CHAIN_WALKER_PATH)
     )
@@ -268,11 +214,6 @@ def test_setup_chain_walker_locator_rung_still_resolves(tmp_path: Path, monkeypa
 
 
 def test_percolate_liveops_preflight_locator_still_resolves_source_tree(tmp_path: Path):
-    """``percolate-liveops-preflight.py`` now imports
-    ``_resolve_claude_klabauter.py::_resolve_claude_klabauter_root`` directly (C4: no longer a
-    second, independently-coded scan over ``engine.working_repos.*``) —
-    confirm the import wiring resolves and the function it pulled in is the
-    SAME shim this file already loaded, not a stale/duplicate copy."""
     loader = importlib.machinery.SourceFileLoader(
         "_c4_percolate_preflight_under_test", str(_PREFLIGHT_PATH)
     )
@@ -280,12 +221,6 @@ def test_percolate_liveops_preflight_locator_still_resolves_source_tree(tmp_path
     preflight = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     loader.exec_module(preflight)
 
-    # Each test module loads `_resolve_claude_klabauter.py` fresh by file path (no
-    # shared `sys.modules` entry across the two loaders here), so the
-    # imported names are not `is`-identical objects -- compare by source
-    # file + qualname instead, which is what actually matters: the
-    # preflight script pulled its resolver from THIS file, not a stale or
-    # duplicated copy living elsewhere.
     actual = os.path.normpath(preflight._resolve_claude_klabauter_source_root.__code__.co_filename)
     assert actual == os.path.normpath(str(_SHIM_PATH))
     assert preflight._resolve_claude_klabauter_source_root.__qualname__ == "_resolve_claude_klabauter_root"

@@ -161,9 +161,6 @@ def _cf_claude_config_dir_or_none() -> Optional[str]:
     except ValueError:
         return None
 
-# Published-manifest relpath (OSS flat layout). The private DoE-repo layout
-# nests the same relpath under `coordinator/`. Shared by the codename-free
-# rung ladder's acceptance gate below.
 _CF_MANIFEST_RELPATH = os.path.join("schemas", "coordinator-registry.manifest.json")
 
 
@@ -297,10 +294,6 @@ def repo_root_from_plugin_root_candidate(
         raw = candidate
         stripped = raw.rstrip("/\\")
         if len(stripped) == 2 and stripped[1] == ":" and raw != stripped:
-            # Bare drive root (e.g. "C:\\") -- rstrip would turn it into "C:", a
-            # drive-relative path on Windows, not the drive root. Leave the
-            # original value alone; the isdir()/manifest gates downstream reject
-            # it either way (a drive root never satisfies the manifest gate).
             stripped = raw
     elif drive_root_guard == "normpath":
         stripped = os.path.normpath(candidate).rstrip("/\\")
@@ -329,11 +322,6 @@ def repo_root_from_plugin_root_candidate(
 
 
 def _cf_repo_root_from_plugin_root_candidate(candidate: str) -> str:
-    """This module's own call shape onto `repo_root_from_plugin_root_candidate()`
-    — drive_root_guard="preserve", basename_compare="normcase",
-    manifest_relpath_fallback=True, allow_unchanged_fallback=True (all
-    defaults). Kept as a private alias so this module's own call sites and
-    test module need no rename."""
     return repo_root_from_plugin_root_candidate(candidate)
 
 
@@ -370,38 +358,6 @@ def _cf_flat_layout_probe() -> Optional[str]:
 
 
 def _cf_marketplace_cache_rung() -> Optional[str]:
-    """Codename-free rung: Claude Code's REAL marketplace-install location —
-    `<claude_home>/plugins/cache/coordinator-claude/coordinator/<version>/`,
-    newest version wins (numeric compare, DR-148-safe).
-
-    F1 fix (2026-08-08, hermetic-ac-reverify) -- this rung existed in the two
-    bin/-side twins (`coordinator_registry.py::_mp_marketplace_cache_rung`,
-    `coordinator/bin/lib/coordinator_data_root.py::_cdr_marketplace_cache_rung`)
-    but was never ported to this third, engine-plane copy, so
-    `coordinator_doe_root()` (and every coordinator_core caller that chains
-    through it, including `coordinator_core.data_root`) returned None on a
-    real marketplace-cache install while the bin/-side resolvers both
-    succeeded -- see F1 in
-    state/review-findings/2026-08-08-successor-partitioned/hermetic-ac-reverify.md.
-
-    Duplicated inline rather than imported from either bin/-side twin
-    (matching this module's own `_cf_flat_layout_probe()` precedent above --
-    `coordinator/bin/lib/` is not on coordinator_core's import path, and
-    reaching sideways into a sibling tree's bin/lib/ is exactly the coupling
-    DR-047 exists to avoid; see `coordinator_core/data_root.py`'s module
-    docstring for the same reasoning applied one layer up).
-
-    Home resolution delegates to `_settings_home.claude_config_dir()` (P174-C2),
-    matching `_cf_flat_layout_probe()`'s own delegation above -- not
-    `machine_local_impl_resolve.claude_home()` -- that helper lives in
-    `coordinator/bin/lib/`, the same cross-tree import this module's
-    docstring already declines for `_cf_flat_layout_probe()`.
-
-    Resolves to the repo root directly (OSS-flat shaped: schemas/ sits
-    directly under the version dir) -- gated by `_cf_manifest_present` like
-    every other candidate in this ladder, so no normalization is needed
-    before that gate.
-    """
     claude_dir = _cf_claude_config_dir_or_none()
     if not claude_dir:
         return None
@@ -500,43 +456,22 @@ def _resolve_via_clone_root_script() -> Optional[str]:
         return None
 
 
-#: The ladder rung that answered `coordinator_doe_root_in_process()`, published
-#: as provenance (see `resolve_plugin_cli_script_root()`'s caller in
-#: `cli_dispatch.py`). Nothing in the full ladder (`coordinator_doe_root()`,
-#: `Optional[str]`-returning) can supply this -- it is the reason the
-#: in-process entry point exists as a separately-named function rather than a
-#: boolean parameter on the shared one.
 DoeRootRung = Literal["env", "repos.doe_claude", "plugin.mirrors.live_path", "codename-free"]
 
 
 def _resolve_doe_root_rungs_1_to_275() -> Tuple[Optional[str], Optional["DoeRootRung"]]:
-    """Rungs 1, 2, 2.5 and 2.75 only, unmemoized -- shared by both
-    `coordinator_doe_root_in_process()` and `coordinator_doe_root()` (the
-    latter falls through to rung 3 on a miss; this helper never does). Never
-    reaches `_resolve_via_clone_root_script()`'s `subprocess.run`."""
     existing = os.environ.get("REPO_DOE_CLAUDE", "")
     if existing:
         return existing, "env"
 
-    # Rung 2: machine-local registry (canonical, DR-071).
     resolved = _machine_local_get("repos.doe_claude")
     if resolved:
         return resolved, "repos.doe_claude"
 
-    # Rung 2.5: fallback to plugin.mirrors.coordinator-claude.live_path.
     resolved_fallback = _machine_local_get("plugin.mirrors.coordinator-claude.live_path")
     if resolved_fallback:
         return resolved_fallback, "plugin.mirrors.live_path"
 
-    # Rung 2.75: codename-free ladder (C1B) -- see module docstring.
-    # B2 (MAJOR, 2026-08-08) -- this ladder was previously
-    # placed AHEAD of rungs 2/2.5, so a stale marketplace install or
-    # pointer file could outrank DR-071's canonical registry anchor
-    # on a private dev box. DR-071 ratifies repos.doe_claude as the
-    # authoritative anchor and explicitly demotes .doe-root beneath
-    # it; nothing in DR-071 blesses placing this ladder ahead of the
-    # registry rungs. Moved below 2/2.5 -- still fully load-bearing
-    # on a genuine OSS box, where rungs 2/2.5 always return None.
     codename_free_root = _cf_codename_free_root()
     if codename_free_root is not None:
         return codename_free_root, "codename-free"
@@ -547,26 +482,15 @@ def _resolve_doe_root_rungs_1_to_275() -> Tuple[Optional[str], Optional["DoeRoot
 # Module-scope memo replacing the retired `os.environ["REPO_DOE_CLAUDE"]` export as
 # the same-process re-resolution guard (see module docstring § DECISION REVERSAL).
 # `_DOE_ROOT_RESOLVED` distinguishes "not yet attempted" from "attempted, resolved to
-# None" so a hard failure is not re-shelled once per call either.
 _RESOLVED_DOE_ROOT: Optional[str] = None
 _DOE_ROOT_RESOLVED: bool = False
 
-# Separate memo pair for `coordinator_doe_root_in_process()` -- holds the full
-# `(root, rung)` tuple. Never read or written by the full-ladder pair above
 # (see module docstring, "IN-PROCESS ENTRY POINT").
 _IN_PROCESS_DOE_ROOT: Tuple[Optional[str], Optional["DoeRootRung"]] = (None, None)
 _IN_PROCESS_DOE_ROOT_RESOLVED: bool = False
 
 
 def _reset_doe_root_cache() -> None:
-    """Test-only helper: clear both the `coordinator_doe_root()` and
-    `coordinator_doe_root_in_process()` process-scope memos.
-
-    Exists because the memo is interpreter-lifetime state: under pytest the first
-    test to resolve would otherwise pin the value for every later test. Mirrors
-    ``coordinator_core.liveness._reset_live_ids_cache``. Wired into the suite-root
-    autouse reset in ``coordinator_core/conftest.py``.
-    """
     global _RESOLVED_DOE_ROOT, _DOE_ROOT_RESOLVED
     global _IN_PROCESS_DOE_ROOT, _IN_PROCESS_DOE_ROOT_RESOLVED
     _RESOLVED_DOE_ROOT = None
@@ -630,8 +554,6 @@ def coordinator_doe_root() -> Optional[str]:
     global _RESOLVED_DOE_ROOT, _DOE_ROOT_RESOLVED
 
     # Rung 1: REPO_DOE_CLAUDE already set in environment (operator override).
-    # Checked ahead of the memo: the env var is the authoritative override, and a
-    # cached value must never shadow it.
     existing = os.environ.get("REPO_DOE_CLAUDE", "")
     if existing:
         return existing
@@ -641,8 +563,6 @@ def coordinator_doe_root() -> Optional[str]:
 
     resolved_root, _rung = _resolve_doe_root_rungs_1_to_275()
     if resolved_root is None:
-        # Rung 3: native resolve_coordinator_clone port.
-        # Rung 4 (hard failure) is `resolved_root` staying None here.
         resolved_root = _resolve_via_clone_root_script()
 
     _RESOLVED_DOE_ROOT = resolved_root
@@ -662,12 +582,6 @@ _REMEDIATION = (
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """CLI-shaped wrapper for parity testing against the bash oracle: prints the
-    resolved path to stdout (no trailing newline, matching the oracle's
-    `printf '%s'`) and returns 0, or writes the remediation block to stderr and
-    returns 1. Not the primary call shape (Python callers should import
-    `coordinator_doe_root()` directly) -- provided so this module is independently
-    exercisable/parity-testable the same way the bash oracle's function is."""
     root = coordinator_doe_root()
     if root is None:
         sys.stderr.write(_REMEDIATION)

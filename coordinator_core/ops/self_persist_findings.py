@@ -101,20 +101,7 @@ from coordinator_core.locked_write import LockTimeout, locked_rmw
 _LOG = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Repo-root discovery for the locked_rmw lock sidecar
-# ---------------------------------------------------------------------------
-
-
 def _find_repo_root(target: Path) -> Optional[Path]:
-    """Walk upward from target's parent looking for a ``.git`` entry.
-
-    Returns the first ancestor directory containing a ``.git`` file-or-directory
-    (a linked worktree's ``.git`` is a file; a main checkout's is a directory —
-    either satisfies ``locked_rmw``'s ``repo_root`` contract, since it only needs
-    a path inside the repo to resolve ``git rev-parse --git-common-dir`` against).
-    Returns None if no such ancestor exists (target_path is not inside any git repo).
-    """
     node = target.parent
     while True:
         if (node / ".git").exists():
@@ -123,11 +110,6 @@ def _find_repo_root(target: Path) -> Optional[Path]:
         if parent == node:
             return None
         node = parent
-
-
-# ---------------------------------------------------------------------------
-# Op handler
-# ---------------------------------------------------------------------------
 
 
 @register_op("findings.self_persist_fallback")
@@ -168,8 +150,6 @@ async def _handler(
 
     def _mutate(old_text: str) -> str:
         if old_text == content:
-            # Idempotent rerun: return unchanged text so locked_rmw's
-            # byte-identical-skip (step 6) makes this a true no-op write.
             return old_text
         _written[0] = True
         return content
@@ -210,12 +190,6 @@ async def _handler(
     }
 
 
-# ---------------------------------------------------------------------------
-# Error-shape helper
-# ---------------------------------------------------------------------------
-
-
 def _err(msg: str) -> dict:
-    """Return an exit_code=1 error reply dict."""
     _LOG.warning("findings.self_persist_fallback: %s", msg)
     return {"exit_code": 1, "written": False, "bytes_written": 0, "error": msg}

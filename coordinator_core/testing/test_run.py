@@ -1,25 +1,3 @@
-"""
-coordinator_core.testing.test_run — scoped tests for the subprocess
-executor + ThreadPool aggregation engine (`run.py`, C2).
-
-Purpose: exercises AC3 (per-suite invocation shape), AC4 (aggregate
-overall_ok), AC6 (parallel dispatch + worker cap), and the DEC-10
-fail-loud / Finding-5 timeout discipline, against hermetic `tmp_path`
-fixture suites (never committed dummies — Finding 9).
-
-Port source: none — net-new (DR-059 harness authoring).
-Spec backlink: pln-claude-klabauter-python-full-test-runner-f8ca5a § C2
-
-Negative-spec:
-    - Does NOT write any dummy `test_*.py` / `.test.py` fixture file anywhere
-      under `coordinator_core/` — every fixture suite used here is
-      materialized under pytest's `tmp_path` at runtime only (Finding 9). A
-      committed failing dummy would permanently red claude-klabauter's own suite
-      (`testpaths=["coordinator_core"]`, `python_files=["test_*.py"]`).
-    - Does NOT assert on wall-clock speedup from parallelism (flaky) — the
-      worker-cap test instead monkeypatches `os.cpu_count()` and asserts on
-      the *computed* cap, not on timing.
-"""
 
 from __future__ import annotations
 
@@ -44,11 +22,6 @@ def _write(path: Path, content: str) -> Path:
 
 def _suite(path: Path, runner_kind: str, family: str) -> Suite:
     return Suite(family=family, path=path, runner_kind=runner_kind)
-
-
-# ---------------------------------------------------------------------------
-# AC3 — per-suite invocation shape (py-nonnative, py-native batching)
-# ---------------------------------------------------------------------------
 
 
 def test_py_nonnative_suite_passing(tmp_path: Path) -> None:
@@ -80,7 +53,6 @@ def test_py_native_batch_single_invocation_passing(tmp_path: Path) -> None:
         _suite(p2, "pytest", "py-native"),
     ]
     results = run_suites(suites, repo_root=tmp_path)
-    # DEC-5: all py-native suites collapse into exactly ONE dispatched result.
     assert len(results) == 1
     assert results[0].suite is None
     assert results[0].exit_code == 0
@@ -129,11 +101,6 @@ def test_node_suite_failing(tmp_path: Path) -> None:
     assert results[0].exit_code != 0
 
 
-# ---------------------------------------------------------------------------
-# AC4 — aggregate overall_ok
-# ---------------------------------------------------------------------------
-
-
 def test_overall_ok_true_when_all_pass(tmp_path: Path) -> None:
     passing = _write(tmp_path / "pass.test.py", "import sys\nsys.exit(0)\n")
     suites = [_suite(passing, "python3", "py-nonnative")]
@@ -156,11 +123,6 @@ def test_overall_ok_empty_results_is_true() -> None:
     assert overall_ok([]) is True
 
 
-# ---------------------------------------------------------------------------
-# AC6 — worker cap honored (parallel dispatch)
-# ---------------------------------------------------------------------------
-
-
 def test_worker_cap_default_uses_half_cpu_count(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("os.cpu_count", lambda: 8)
     assert _resolve_worker_count(unit_count=10, jobs=None) == 4
@@ -173,7 +135,6 @@ def test_worker_cap_floors_at_one(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_worker_cap_bounded_by_unit_count(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("os.cpu_count", lambda: 32)
-    # cap would be 16, but only 2 units exist -> min(2, 16) == 2
     assert _resolve_worker_count(unit_count=2, jobs=None) == 2
 
 
@@ -208,11 +169,6 @@ def test_parallel_dispatch_runs_all_suites(tmp_path: Path) -> None:
     assert overall_ok(results) is True
 
 
-# ---------------------------------------------------------------------------
-# Timeout discipline (Finding 5) — TimeoutExpired surfaces as FAILED, not skipped
-# ---------------------------------------------------------------------------
-
-
 def test_timeout_surfaces_as_failed_not_skipped(tmp_path: Path) -> None:
     slow = _write(tmp_path / "slow.test.py", "import time\ntime.sleep(5)\n")
     suites = [_suite(slow, "python3", "py-nonnative")]
@@ -233,11 +189,6 @@ def test_timeout_failure_included_in_overall_ok(tmp_path: Path) -> None:
     assert overall_ok(results) is False
 
 
-# ---------------------------------------------------------------------------
-# DEC-10 — missing runner surfaces as FAILED (rc 127), never masked as skip
-# ---------------------------------------------------------------------------
-
-
 def test_unknown_runner_kind_raises(tmp_path: Path) -> None:
     ghost = _write(tmp_path / "ghost.test.py", "import sys\nsys.exit(0)\n")
     suite = _suite(ghost, "definitely-not-a-real-runner-kind", "py-nonnative")
@@ -248,9 +199,6 @@ def test_unknown_runner_kind_raises(tmp_path: Path) -> None:
 def test_missing_runner_binary_surfaces_as_failed_rc_127(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Simulate a missing runner binary by pointing PATH somewhere empty, so
-    # `node` resolves to nothing. DEC-10: this must surface as a FAILED
-    # SuiteResult (rc 127), never a silently-masked skip.
     fake = _write(tmp_path / "example.test.js", "// noop\n")
     suites = [_suite(fake, "node", "js-suffix")]
     empty_bin = tmp_path / "empty-bin"

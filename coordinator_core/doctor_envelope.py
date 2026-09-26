@@ -32,9 +32,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-# ---------------------------------------------------------------------------
-# Closed verdict enum — string constants
-# ---------------------------------------------------------------------------
 
 BROKEN: str = "BROKEN"
 """Hard failure — the probe found a condition that prevents correct operation."""
@@ -51,25 +48,16 @@ An all-INFO result is not a health confirmation; the overall verdict is INFO, no
 PASS: str = "PASS"
 """Healthy — the probe confirmed the condition is correct."""
 
-#: Tuple of the four closed-enum verdict values, exported in the envelope ``status_vocab``.
 #: This is the authoritative set; do not extend it without bumping ``ENVELOPE_SCHEMA_VERSION``.
 STATUS_VOCAB: tuple[str, ...] = (BROKEN, DEGRADED, INFO, PASS)
 
-#: Schema version for the envelope dict emitted by build_envelope().
-#: Bump when the probe-row or top-level envelope shape changes in a breaking way.
 ENVELOPE_SCHEMA_VERSION: int = 1
 
-# Synthetic sentinel written into probes[] for a skipped probe in the output.
 # NOT in STATUS_VOCAB — it carries no health verdict and is never a worst-of contributor.
 _SKIP_SENTINEL: str = "SKIP"
 
 # Worst-of rank table (higher = worse).  INFO and _SKIP_SENTINEL are intentionally absent.
 _RANK: Dict[str, int] = {BROKEN: 3, DEGRADED: 2, PASS: 1}
-
-
-# ---------------------------------------------------------------------------
-# ProbeResult dataclass
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -116,11 +104,6 @@ class ProbeResult:
     skipped: bool = False
 
 
-# ---------------------------------------------------------------------------
-# Verdict reducer
-# ---------------------------------------------------------------------------
-
-
 def reduce_overall(results: List[ProbeResult]) -> str:
     """Reduce a list of ProbeResult instances to a single overall verdict.
 
@@ -160,12 +143,10 @@ def reduce_overall(results: List[ProbeResult]) -> str:
                 # Required probe that was skipped → counts as DEGRADED (no false green).
                 s = DEGRADED
             else:
-                # Optional probe that was skipped → advisory only; excluded from worst-of.
                 continue
         else:
             s = r.status
             if s == INFO:
-                # INFO is excluded from worst-of — neutral observation, not a health claim.
                 continue
 
         rank = _RANK.get(s, 0)
@@ -173,16 +154,9 @@ def reduce_overall(results: List[ProbeResult]) -> str:
             best = s
 
     if best is None:
-        # All contributors were INFO, all probes were optional-skipped, or the list was
-        # empty — no health confirmation was made; return INFO (not PASS).
         return INFO
 
     return best
-
-
-# ---------------------------------------------------------------------------
-# Envelope builder
-# ---------------------------------------------------------------------------
 
 
 def build_envelope(results: List[ProbeResult]) -> Dict[str, Any]:
@@ -232,7 +206,6 @@ def build_envelope(results: List[ProbeResult]) -> Dict[str, Any]:
         if r.skipped:
             if r.required:
                 # Required probe skipped → elevate to DEGRADED in the output row so the
-                # displayed status matches what reduce_overall counted it as.
                 probe_rows.append(
                     {
                         "probe": r.probe,
@@ -244,7 +217,6 @@ def build_envelope(results: List[ProbeResult]) -> Dict[str, Any]:
                 )
             else:
                 # Optional probe skipped → advisory surface; use _SKIP_SENTINEL in
-                # the row so readers can distinguish an advisory skip from a real PASS.
                 missing_optional.append(r.probe)
                 warnings.append(
                     f"optional probe skipped (coordinator-dependent or prerequisite absent):"

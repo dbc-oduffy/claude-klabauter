@@ -52,12 +52,6 @@ from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
 )
 from coordinator_core.session.machinery_paths import SHARE_RELDIR
 
-# C6: the shared constructor's (C1) per-type required-flag computation for
-# this host's one emitted row (coordinator_core/ops/doctype_hosts.py --
-# keyed (type="run-report", ceremony="execute-plan-assemble"),
-# module=this package). `--agent-type` is optional on the real parser
-# (defaults to "executor" when omitted there); `--plan`/`--chunk` are both
-# required.
 _RUN_REPORT_FLAG_SPEC: tuple[Flag, ...] = (
     Flag("--plan", "plan_path", required=True),
     Flag("--chunk", "chunk_id", required=True),
@@ -127,14 +121,6 @@ def brief(
     agent_type: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> dict[str, Any]:
-    """C6: this module's own scaffold-emission compute -- distinct from
-    `close_out_and_stamp`'s write surface. Returns `{"directives": [...]}`:
-    a `run-report` directive when the caller has resolved BOTH `plan_path`
-    and `chunk_id` (the dispatch ledger row this scaffold is provisioned
-    for), else an empty list -- additive and gated, same shape as
-    `roadmap_planning_assemble.brief`'s C3 precedent, so a caller
-    supplying neither is unaffected.
-    """
     directives: list[dict[str, Any]] = []
     if plan_path and chunk_id:
         directives.append(

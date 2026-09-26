@@ -15,8 +15,6 @@ from coordinator_core.ops import fold_execution_record as fer
 from coordinator_core.testing import symlink_capability
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -83,10 +81,6 @@ def _sidecar_content(chunk_id: str, obs_body: str) -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# plan_slug derivation parity (shared idiom with fan-out-dispatch.py)
-# ---------------------------------------------------------------------------
-
 @pytest.mark.parametrize(
     "filename, expected",
     [
@@ -114,10 +108,6 @@ def test_slug_valid_regex_rejects_uppercase_and_underscore():
     assert not fer._SLUG_VALID_RE.match("plan_slug")
     assert not fer._SLUG_VALID_RE.match("-leading-dash")
 
-
-# ---------------------------------------------------------------------------
-# SKIP sentinel emission
-# ---------------------------------------------------------------------------
 
 def test_skip_plan_not_found(tmp_path, capsys):
     rc = fer.main(["--plan", str(tmp_path / "nope.md")])
@@ -157,15 +147,7 @@ def test_skip_repo_root_unresolvable(tmp_path, capsys, monkeypatch):
     assert "cannot resolve repo root" in out.err
 
 
-# ---------------------------------------------------------------------------
-# _resolve_git_root: real (non-monkeypatched) fallback path
-# ---------------------------------------------------------------------------
-
 def test_resolve_git_root_fallback_grandparent_no_git(tmp_path):
-    # Fills a fidelity-critical coverage gap: every
-    # other test drives the `git rev-parse` success rung; this exercises the
-    # real logical grandparent-of-plan-dir fallback (no git repo anywhere in
-    # the ancestor chain), not a monkeypatched stand-in.
     non_git_root = tmp_path / "not-a-repo"
     plan_dir = non_git_root / "docs" / "plans"
     plan_dir.mkdir(parents=True)
@@ -178,10 +160,6 @@ def test_resolve_git_root_fallback_grandparent_no_git(tmp_path):
 
 @symlink_capability.requires_symlink_capability
 def test_resolve_git_root_fallback_does_not_resolve_symlinks(tmp_path):
-    # Locks in the module docstring's explicit
-    # negative-spec claim ("never resolves symlinks when falling back to the
-    # grandparent-of-plan-dir heuristic"): the returned fallback path must
-    # retain the symlinked directory component, not the realpath target.
     real_target = tmp_path / "real-target"
     real_target.mkdir()
     symlinked_root = tmp_path / "symlinked-root"
@@ -228,10 +206,6 @@ def test_skip_all_observations_trivial(tmp_path, capsys):
     assert out.err == ""
 
 
-# ---------------------------------------------------------------------------
-# Argument validation
-# ---------------------------------------------------------------------------
-
 def test_missing_plan_flag_is_usage_error(capsys):
     rc = fer.main([])
     assert rc == 1
@@ -262,10 +236,6 @@ def test_unexpected_positional_errors(capsys):
     assert "unexpected positional argument: stray" in capsys.readouterr().err
 
 
-# ---------------------------------------------------------------------------
-# Sidecar discovery + sort order determinism
-# ---------------------------------------------------------------------------
-
 def test_sidecar_discovery_sort_order_deterministic(tmp_path):
     repo, plan_path = _make_repo_with_plan(tmp_path, "2026-07-13-my-plan.md", _PLAN_BODY)
     _write(_sidecar_path(repo, "session-zzz", "my-plan", "c2"), _sidecar_content("c2", "obs2"))
@@ -287,10 +257,6 @@ def test_sidecar_discovery_ignores_non_matching_names(tmp_path):
     assert len(found) == 1
     assert "my-plan.c1.md" in found[0]
 
-
-# ---------------------------------------------------------------------------
-# Section extraction / blank-trim / title-case
-# ---------------------------------------------------------------------------
 
 def test_parse_chunk_ac_map_ignores_headings_outside_chunks_section():
     ac_map = fer._parse_chunk_ac_map(_PLAN_BODY)
@@ -350,10 +316,6 @@ def test_title_case_slug_collapses_whitespace_and_preserves_rest_case():
     assert fer._title_case_slug("my-cool-plan") == "My Cool Plan"
     assert fer._title_case_slug("aBc-def") == "ABc Def"
 
-
-# ---------------------------------------------------------------------------
-# Full success path
-# ---------------------------------------------------------------------------
 
 def test_full_success_emits_part_a_and_part_b(tmp_path, capsys):
     repo, plan_path = _make_repo_with_plan(tmp_path, "2026-07-13-my-plan.md", _PLAN_BODY)

@@ -61,8 +61,6 @@ def posture(monkeypatch, tmp_path):
         monkeypatch.setenv("CLAUDE_HOME", str(home))
         yield module
     finally:
-        # Never popped, a stale module
-        # loaded from a sibling repo's file otherwise outlives this test.
         sys.modules.pop("_doe_posture_under_test", None)
 
 
@@ -73,17 +71,10 @@ def _resolve(module, repo_root):
 
 
 def test_anchor_constant_is_a_valid_posture(posture):
-    """An anchor outside the enum would make every failure path return an
-    invalid value -- the pins below would still be green and every caller
-    would be wrong. Asserted behaviourally, name-free (Review:
-    overengineering-reviewer -- the constant-name axis was a workaround for
-    a name coupling this file otherwise disclaims)."""
     assert _ANCHOR in posture._VALID_POSTURES
 
 
 def test_control_a_valid_declaration_resolves_to_something_else(posture, tmp_path):
-    """The control run. Without this, a `resolve_posture` hardcoded to return
-    "precision" would pass every assertion in this file."""
     root = tmp_path / "control"
     root.mkdir()
     (root / "coordinator.local.md").write_text(
@@ -157,8 +148,6 @@ class _ExplodingPathOs:
 
 
 def test_arbitrary_exception_in_the_body_returns_the_anchor(posture, monkeypatch, tmp_path):
-    """The docstring promises the contract holds for ANY exception in the
-    resolution body, not just the two guarded I/O paths."""
     root = tmp_path / "explode"
     root.mkdir()
     monkeypatch.setattr(posture, "os", _ExplodingPathOs())

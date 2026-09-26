@@ -28,10 +28,6 @@ from unittest.mock import patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Import guard — fires @register_op("handoff.has_live_children") as a side-effect.
-# MUST precede any test function so the registry is populated before assertions.
-# ---------------------------------------------------------------------------
 import coordinator_core.ops.handoff_children  # noqa: F401 — fires @register_op
 
 from coordinator_core.ipc import _REGISTRY
@@ -43,11 +39,6 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 _OP_NAME = "handoff.has_live_children"
 # INVERTED 2026-08-27 (kill ledger K-113). The op was deleted under the 200ms
 # sweep; `_handoff_has_live_children` survives UNDECORATED because
-# handoff_close_origin_stub._try_close resolves it in-process and needs the
-# `children` payload `has_live_children_many` does not return. The tests below
-# exercise that compute and stay valuable — what must no longer be true is the
-# registration. Asserting the negative keeps this file a guard against the
-# decorator being restored rather than a stale import check.
 assert _OP_NAME not in _REGISTRY, (
     f"{_OP_NAME!r} is in _REGISTRY — it was killed under the 200ms bar and must "
     "not re-register. Restoring @register_op on handoff_children puts a deleted "
@@ -55,18 +46,11 @@ assert _OP_NAME not in _REGISTRY, (
 )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _run(coro):
-    """Run an async coroutine synchronously — no pytest-asyncio needed."""
     return asyncio.run(coro)
 
 
 def _make_git_repo(tmp_path: Path) -> Path:
-    """Create a minimal git repo and return the repo root (main worktree root)."""
     repo = tmp_path / "repo"
     repo.mkdir()
 
@@ -87,16 +71,10 @@ def _make_git_repo(tmp_path: Path) -> Path:
 
 
 def _seed_handoff(repo: Path, subdir: str, name: str) -> Path:
-    """Write a minimal handoff markdown file at repo/subdir/name."""
     path = repo / subdir / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("---\ntitle: \"Test\"\nstatus: open\n---\n\nBody.\n", encoding="utf-8")
     return path
-
-
-# ---------------------------------------------------------------------------
-# (a) Registry assertion
-# ---------------------------------------------------------------------------
 
 
 def test_op_registered():
@@ -104,14 +82,7 @@ def test_op_registered():
     assert _OP_NAME in _REGISTRY
 
 
-# ---------------------------------------------------------------------------
-# (b)/(c)/(d) Path-containment guard on `candidate`
-# ---------------------------------------------------------------------------
-
-
 def test_candidate_traversal_rejected(tmp_path):
-    """A candidate with '../' traversal segments escaping state/handoffs/ and
-    archive/handoffs/ is rejected — exit_code=2 (fail-closed indeterminate)."""
     repo = _make_git_repo(tmp_path)
     (repo / "state" / "handoffs").mkdir(parents=True)
     secret = repo / "secret.md"
@@ -133,8 +104,6 @@ def test_candidate_traversal_rejected(tmp_path):
 
 
 def test_candidate_out_of_tree_absolute_rejected(tmp_path):
-    """An out-of-tree absolute candidate (outside state/handoffs/ and
-    archive/handoffs/) is rejected — exit_code=2."""
     repo = _make_git_repo(tmp_path)
     (repo / "state" / "handoffs").mkdir(parents=True)
     outside = tmp_path / "outside" / "secret.md"
@@ -157,8 +126,6 @@ def test_candidate_out_of_tree_absolute_rejected(tmp_path):
 
 
 def test_candidate_in_state_handoffs_passes_guard(tmp_path):
-    """An in-tree candidate under state/handoffs/ resolves and proceeds past the
-    containment guard (reaches the real live-set / reverse-membership logic)."""
     repo = _make_git_repo(tmp_path)
     candidate_path = _seed_handoff(repo, "state/handoffs", "candidate.md")
     _seed_handoff(repo, "state/handoffs", "other.md")
@@ -174,7 +141,6 @@ def test_candidate_in_state_handoffs_passes_guard(tmp_path):
             )
         )
 
-    # No handoff references candidate.md -> not indeterminate, safe-to-archive verdict.
     assert result["exit_code"] in (0, 1), (
         f"in-tree candidate must pass the containment guard and reach a definite "
         f"verdict, not exit_code=2; got {result!r}"

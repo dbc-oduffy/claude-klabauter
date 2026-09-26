@@ -1,12 +1,3 @@
-"""Tests for coordinator_core.ops.check_auto_reconcile.
-
-Golden oracle (Port of: check-auto-reconcile.sh, DoE b5a4192c, 2026-07-20),
-snapshotted 2026-07-16 -- this module owns only the dispatch slice (repo-root
-resolution + in-process handoff.reconcile_open call); the envelope-parsing and
-rendering slice stays DoE-side (see that repo's own bin test), so these tests
-cover get_response()'s infrastructure-failure silent-skip contract and main()'s
-stdout passthrough, not rendering.
-"""
 
 from __future__ import annotations
 
@@ -16,8 +7,6 @@ import pytest
 
 from coordinator_core.ops import check_auto_reconcile
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -136,11 +125,6 @@ def test_resolve_own_repo_root_returns_none_outside_git_repo(tmp_path, monkeypat
 def test_resolve_own_repo_root_targets_invoking_repo_not_claude_klabauter(
     tmp_path, monkeypatch
 ):
-    """Regression for the mistargeted-corpus defect: resolution MUST follow
-    the invoking process's cwd, never this module's own on-disk location
-    (always inside claude-klabauter's checkout) -- see _resolve_own_repo_root()'s
-    docstring and this module's negative-spec.
-    """
     import subprocess
 
     from coordinator_core.win_portability import no_console_passthrough_kwargs
@@ -164,10 +148,6 @@ def test_resolve_own_repo_root_targets_invoking_repo_not_claude_klabauter(
 def test_get_response_stamps_origin_worktree_from_cwd_not_module_location(
     tmp_path, monkeypatch
 ):
-    """End-to-end: get_response()'s _origin_worktree must be the invoking
-    repo (cwd), never derived from Path(__file__) (which always resolves
-    inside claude-klabauter's own checkout).
-    """
     import subprocess
 
     from coordinator_core.win_portability import no_console_passthrough_kwargs

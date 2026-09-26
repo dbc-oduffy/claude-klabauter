@@ -16,16 +16,7 @@ Spec backlink: pln-strang-09-memo-transition-op-s-fec3a1 § C2
 from __future__ import annotations
 
 
-# ---------------------------------------------------------------------------
-# Registry non-vacuity (mirrors test_http_invoke.py guard — prevents silent
-# "method not found" false-negatives from an empty registry).
-# ---------------------------------------------------------------------------
-
 # `import coordinator_core.ops` stopped populating _REGISTRY on its own when that
-# package's eager-import block was retired (2026-08-22, import-path-costs-nothing sprint —
-# see its __init__ docstring): dispatch now targets one op module, and the ~50 test modules
-# asserting the registry at import time were left asserting an empty dict. _eager_import_all
-# is the sanctioned full-registration entry point that block became.
 from coordinator_core.ops import _eager_import_all
 import coordinator_core.ipc as _ipc
 
@@ -39,9 +30,7 @@ assert len(_ipc._REGISTRY) >= 2, (
 from coordinator_core.authz.classification import OpClass, classify  # noqa: E402
 
 
-# ---------------------------------------------------------------------------
 # (1) Classification — classify("memo.transition") == OpClass.MUTATING
-# ---------------------------------------------------------------------------
 
 class TestMemoTransitionClassification:
     def test_classify_memo_transition_is_mutating(self) -> None:
@@ -64,8 +53,3 @@ class TestMemoTransitionClassification:
             "add a 'show_top' entry in _OP_KEY_SCOPE in coordinator_core/ipc.py"
         )
 
-
-# (2) HTTP 403 dispatch-gate test (test_memo_transition_rw_token_returns_403) removed by C5
-# (DR-215): the HTTP invoke transport was retired. Gate 6 (single-writer-queue) enforcement
-# via _dispatch_line is no longer present in the command-type engine.
-# Backlink: docs/decisions/DR-215-coordinator-core-command-type-execution-model.md

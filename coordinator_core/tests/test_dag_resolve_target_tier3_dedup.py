@@ -1,23 +1,3 @@
-"""
-coordinator_core.tests.test_dag_resolve_target_tier3_dedup — Regression coverage for the
-resolve_target() tier-3 dedup pass (2026-07-23 follow-up to the boot_sweep 10s-timeout
-memoization fix in 2159bc1c).
-
-resolve_target()'s tier-3 block queries `target` itself, then re-derives each entry of
-candidates[] as repo-relative and queries those too. When `target` is already a
-repo-relative archive path, several re-derived candidates collapse to the SAME
-repo-relative string already asked (or to a structurally-doubled prefix that can never
-match). This module verifies:
-  (1) a repo-relative archive ref resolves identically before and after the dedup change
-      (the anti-regression case);
-  (2) the tier-3 block issues no duplicate ever_tracked/_git_path_ever_tracked lookups
-      for a single resolve_target() call;
-  (3) a ref that genuinely only resolves via a re-derived candidate (not the raw target)
-      still resolves — guards against over-trimming.
-
-Spec backlink: cross-repo/inbox/2026-07-23-claude-central-em-boot-sweep-10s-timeout.md
-(follow-up tidiness pass, not the original perf fix)
-"""
 
 from __future__ import annotations
 
@@ -26,11 +6,6 @@ from pathlib import Path
 
 import pytest
 
-# `_init_repo`/`_commit_file` spawn real git because `resolve_target`'s
-# tier-3 dedup pass drives real `ever_tracked`/`_git_path_ever_tracked`
-# object-database lookups — the dedup count and cache-hit assertions require
-# a genuine git history, not a mocked one. Each test builds its own repo, so
-# isolation is not hoisted to module scope.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 from coordinator_core import dag
@@ -66,17 +41,11 @@ def _commit_file(root: Path, rel_path: str, content: str = "x") -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# (1) Anti-regression: a repo-relative archive ref, deleted from disk but
-#     present in git history, resolves to 'git-history' identically.
-# ---------------------------------------------------------------------------
-
 class TestSameResultBeforeAndAfterDedup:
     def test_repo_relative_archive_ref_resolves_via_git_history(self, tmp_path):
         root = _init_repo(tmp_path)
         rel_path = "archive/handoffs/2026-07/foo.md"
         _commit_file(root, rel_path)
-        # Remove from disk so only tier 3 (git history) can resolve it.
         (root / rel_path).unlink()
         subprocess.run(["git", "add", "--", rel_path], cwd=root, check=True, **no_console_passthrough_kwargs())
         subprocess.run(
@@ -90,10 +59,6 @@ class TestSameResultBeforeAndAfterDedup:
 
         assert result == "git-history"
 
-
-# ---------------------------------------------------------------------------
-# (2) No duplicate ever_tracked lookups within a single resolve_target() call.
-# ---------------------------------------------------------------------------
 
 class TestNoDuplicateLookups:
     def test_tier3_issues_no_duplicate_git_path_ever_tracked_calls(self, tmp_path):
@@ -110,8 +75,6 @@ class TestNoDuplicateLookups:
         dag._git_path_ever_tracked = counting
         try:
             handoff_dir = str(root / "state" / "handoffs")
-            # A never-existed archive-relative ref forces every tier-3 candidate
-            # to be exhausted (all return False), maximizing lookup surface.
             dag.resolve_target(
                 "archive/handoffs/2026-07/never-existed.md", handoff_dir, str(root)
             )
@@ -123,19 +86,6 @@ class TestNoDuplicateLookups:
             f"call, got calls={calls}"
         )
 
-
-# ---------------------------------------------------------------------------
-# (4) Memoization correctness, tested directly at the _memoized_ever_tracked
-#     unit: a repeat ask for a key that resolved True must return the stored
-#     True, not a stale/default False — regardless of how many times, or in
-#     what order, it's asked. This is deliberately NOT routed through
-#     resolve_target(), because every current resolve_target() call site
-#     returns immediately on a True result — a "seen set, return False on
-#     repeat" guard and a "memoize the real result" guard are behaviourally
-#     indistinguishable through resolve_target()'s existing call sites today.
-#     Testing the helper directly is what makes correctness independent of
-#     that call-site structure, present or future.
-# ---------------------------------------------------------------------------
 
 class TestMemoReturnsStoredTrueNotStaleFalse:
     def test_repeat_ask_for_tracked_key_returns_true_not_false(self, tmp_path):
@@ -184,17 +134,9 @@ class TestMemoReturnsStoredTrueNotStaleFalse:
         )
 
 
-# ---------------------------------------------------------------------------
-# (3) Over-trimming guard: a ref that only resolves via a re-derived
-#     candidate (not the raw target string) must still resolve.
-# ---------------------------------------------------------------------------
-
 class TestReDerivedCandidateStillResolves:
     def test_bare_basename_ref_resolves_via_rederived_archive_candidate(self, tmp_path):
         root = _init_repo(tmp_path)
-        # Tracked only under archive/handoffs/<basename>, not under the bare
-        # basename itself — resolvable only by re-deriving candidates[] (the
-        # `archive/handoffs/<basename>` candidate) as repo-relative.
         rel_path = "archive/handoffs/bar.md"
         _commit_file(root, rel_path)
         (root / rel_path).unlink()

@@ -59,21 +59,6 @@ class UsageError(Exception):
 
 
 def parse_apply_argv(argv: list[str]) -> dict[str, Any]:
-    """Parses `merge-assemble apply`'s argv into a params dict —
-    `session_id`/`decisions`/`force`/`tag_prefix`, the same keys the op
-    adapters read — ported as-is from `main_apply`'s existing loop,
-    including its two multi-token helpers:
-
-    - `detect_conflicting_payload_channels(argv)`, called before the token
-      loop, rejecting `--decisions`/`--decisions-file` supplied together.
-    - `resolve_json_payload_flag(argv, i)`, whose `.consumed`/`.error`
-      protocol resolves either channel at the current token and advances
-      `i` by `.consumed`.
-
-    Raises `UsageError` (message `None` or a diagnostic string) on any
-    usage error, matching `main_apply`'s existing `_usage(...)` return
-    path exactly — including the payload-channel conflict and malformed-
-    JSON cases, which `main_apply` also routes through `_usage`."""
     session_id: Optional[str] = None
     decisions: Optional[dict[str, Any]] = None
     force = False
@@ -116,6 +101,4 @@ def parse_apply_argv(argv: list[str]) -> dict[str, Any]:
 
 
 def print_apply_result(report: dict[str, Any]) -> None:
-    """Prints `report` byte-identical to today's
-    `json.dumps(report, indent=2, sort_keys=True)`."""
     print(json.dumps(report, indent=2, sort_keys=True))

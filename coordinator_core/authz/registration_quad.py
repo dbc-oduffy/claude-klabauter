@@ -98,19 +98,12 @@ import importlib
 import pkgutil
 from typing import Mapping
 
-# ---------------------------------------------------------------------------
-# Target file paths — where an operator must add a missing entry. Repo-root-
-# relative, POSIX-separated (matches every other spec-backlink path convention
-# in this repo; not a filesystem path resolved at runtime).
-# ---------------------------------------------------------------------------
 _CLASSIFICATION_FILE = "coordinator_core/authz/classification.py"
 _OP_KEY_SCOPE_FILE = "coordinator_core/op_scopes.py"
 _OP_MODULE_MAP_FILE = "coordinator_core/ops/_registry_map.py"
 _EAGER_OP_MODULES_FILE = "coordinator_core/ops/__init__.py"
 
-# Surface name -> target file path, in canonical quad-check order. "Quad" now
 # undercounts (five surfaces as of _EAGER_OP_MODULES coverage) but the name and
-# public symbol are load-bearing for existing callers — see module docstring.
 _SURFACE_FILES: Mapping[str, str] = {
     "OP_CLASSIFICATION": _CLASSIFICATION_FILE,
     "_OP_KEY_SCOPE": _OP_KEY_SCOPE_FILE,
@@ -136,15 +129,6 @@ class QuadViolation:
 
 
 def _is_test_like_module_name(dotted_name: str) -> bool:
-    """True for a test/fixture-shaped module name the discovery walk must not import
-    as if it were a production op module.
-
-    Structural exclusion (a `tests` package component, a `test_*.py` leaf, or
-    `conftest.py`) rather than a name skip-list — mirrors
-    `coordinator_core.tests.test_dispatch_message._is_test_like_module_name` exactly,
-    duplicated here rather than imported from a test module (production code must not
-    import from `tests/`).
-    """
     parts = dotted_name.split(".")
     leaf = parts[-1]
     return "tests" in parts or leaf.startswith("test_") or leaf == "conftest"
@@ -190,8 +174,6 @@ def _discover_all_ops() -> list[str]:
     return imported
 
 
-# one-line purpose docstring per helper, matching
-# the RAG-bait convention every other function in this file already follows.
 def _live_registry() -> Mapping[str, object]:
     """Live `_REGISTRY` table, deferred-imported to keep this module's own import cheap."""
     from coordinator_core.ipc import _REGISTRY
@@ -268,12 +250,7 @@ def check_registration_quad(
     op) — that is a different failure shape, owned by
     `coordinator_core/ops/tests/test_registry_map_sync.py`, not this quad check.
     """
-    # Only `registry` depends on the ops-tree
     # discovery walk (op modules self-register into `_REGISTRY` via import-time side
-    # effect). `classification`/`scope`/`module_map` are plain dict literals that
-    # populate on their own defining module's import and never need the walk; gating
-    # them on `needs_discovery` made a caller supplying three of four params still
-    # pay the full walk to resolve the fourth.
     if registry is None:
         _discover_all_ops()
 
@@ -317,33 +294,11 @@ def check_registration_quad(
     return violations
 
 
-# ---------------------------------------------------------------------------
 # Known-incomplete-registrations allowlist — DEBT LEDGER, NOT AN EXEMPTION POLICY.
-#
-# Frozen 2026-08-11, measured by calling check_registration_quad() directly on
-# HEAD (70 live QuadViolation entries at the time). Owning bug-backlog entry:
-# state/bug-backlog/2026-08-11-check-registration-quad-is-red-on-70-ops-0c14fa26f522.yaml
-#
-# This exists ONLY to restore the gate's signal (a check red-by-default on 70
-# pre-existing ops enforces nothing) — it forgives exactly the recorded gap per
-# op, nothing more: an op on this list that is ALSO missing a surface NOT
-# recorded here still trips the gate (see `_prune_known_incomplete` below,
-# which subtracts only the recorded surfaces from `surfaces_missing`). This is
 # distinct from `_KNOWN_UNCLASSIFIED_OPS_DEBT` above (a narrower,
-# classification-only ledger from a separate, earlier debt-backlog entry with
-# its own never-grows guard) — this ledger additionally covers ops missing
 # `_OP_KEY_SCOPE` and/or `OP_MODULE_MAP`, which that older ledger has no shape
-# for.
-#
-# Nothing should ever be ADDED to this mapping. An entry comes OFF it only by
-# landing the real registration surface(s) it names (with, for
 # OP_CLASSIFICATION specifically, the five-question affirmation
-# `classification.py`'s own convention requires) and deleting the entry — never
-# by an executor's local judgment call. The remaining 70 ops (67 missing only
 # OP_CLASSIFICATION, tracked by `_KNOWN_UNCLASSIFIED_OPS_DEBT` above; the 6
-# below needing a fuller registration) still need that real work; this ledger
-# buys back the gate's legibility, it does not do the work.
-# ---------------------------------------------------------------------------
 _KNOWN_INCOMPLETE_REGISTRATIONS: Mapping[str, tuple[str, ...]] = {
     "distill.curate_clusters": ("OP_MODULE_MAP",),
     "memo.fate_backfill": ("OP_MODULE_MAP",),
@@ -428,13 +383,7 @@ def filter_known_violations(
     return result
 
 
-# ---------------------------------------------------------------------------
 # Known-debt baseline — the 65 op-keys registered but missing an OP_CLASSIFICATION
-# entry, measured at integration time (2026-07-25, full-walk discovery). See module
-# docstring for the three-tier-convention citation, owning debt-backlog entry, and
-# fix path. A real addition here is a plan amendment, never an executor's local call
-# — `test_registration_quad.py` asserts this set never grows.
-# ---------------------------------------------------------------------------
 _KNOWN_UNCLASSIFIED_OPS_DEBT: frozenset[str] = frozenset(
     {
         "baton.resolve_path_and_repo",

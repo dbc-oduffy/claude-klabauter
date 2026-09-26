@@ -1,11 +1,3 @@
-"""Tests for coordinator_core.install.clone_sibling_repo.
-
-All git invocations here run against throwaway repos created fresh under
-pytest's `tmp_path` fixture — never the working claude-klabauter repo. The
-source repo is a plain (non-bare) local checkout with one commit, cloned via
-`clone_idempotent()`'s own `git clone` subprocess into a sibling `tmp_path`
-directory, exercising the real git binary end-to-end rather than mocking it.
-"""
 from __future__ import annotations
 
 import subprocess
@@ -21,8 +13,6 @@ from coordinator_core.install.clone_sibling_repo import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -45,8 +35,6 @@ def _run_git(args: list[str], cwd: Path) -> None:
 
 
 def _make_source_repo(tmp_path: Path) -> Path:
-    """A throwaway local git repo (one commit) to clone from — lives entirely
-    under tmp_path, never touches the working repo."""
     src = tmp_path / "source-repo"
     src.mkdir()
     _run_git(["init"], cwd=src)
@@ -70,9 +58,6 @@ def test_fresh_clone_reports_cloned_true(tmp_path):
 
 
 def test_second_invocation_is_a_safe_no_op(tmp_path):
-    """AC7 — double-invocation with identical inputs is idempotent: the
-    second call must not re-clone, must not error, and must not mutate the
-    already-present checkout."""
     src = _make_source_repo(tmp_path)
     target = tmp_path / "cloned" / "sibling"
 
@@ -89,9 +74,6 @@ def test_second_invocation_is_a_safe_no_op(tmp_path):
 
 
 def _make_existing_clone(tmp_path: Path, remote_url: str, name: str = "existing") -> Path:
-    """A target dir with a genuine `.git` directory and `origin` set to
-    `remote_url` — simulates an already-cloned target for the already-present
-    branch, distinct from `_make_source_repo`'s role as the clone source."""
     target = tmp_path / name
     target.mkdir()
     _run_git(["init"], cwd=target)
@@ -100,8 +82,6 @@ def _make_existing_clone(tmp_path: Path, remote_url: str, name: str = "existing"
 
 
 def test_already_present_with_matching_remote_short_circuits(tmp_path):
-    """AC — the already-present branch adopts the target only after
-    confirming its `origin` remote matches `repo_url`."""
     target = _make_existing_clone(tmp_path, "https://example.invalid/repo.git")
 
     result = clone_idempotent("https://example.invalid/repo.git", str(target))
@@ -118,8 +98,6 @@ def test_already_present_remote_url_normalizes_trailing_git_and_slash(tmp_path):
 
 
 def test_already_present_with_mismatched_remote_raises_loudly(tmp_path):
-    """AC — a `.git` directory whose `origin` points elsewhere is refused,
-    not silently adopted (the C10 wrong-repo hazard)."""
     target = _make_existing_clone(tmp_path, "https://example.invalid/wrong-repo.git")
 
     with pytest.raises(CloneSiblingRepoError):
@@ -158,10 +136,6 @@ def test_missing_git_executable_raises_clone_sibling_repo_error(tmp_path, monkey
 
 
 def test_already_present_origin_read_with_git_missing_raises_not_none(tmp_path):
-    """A `git` that will not spawn must not be reported as "this clone has no
-    origin" -- that answer would send `clone_idempotent` into its identity
-    refusal naming a mismatch nobody observed. See `_existing_origin_url`'s
-    negative spec."""
     target = tmp_path / "existing-git-missing"
     target.mkdir()
     _run_git(["init"], cwd=target)
@@ -180,7 +154,6 @@ def test_already_present_origin_read_with_git_missing_raises_not_none(tmp_path):
 
 
 def test_already_present_origin_read_timeout_raises_not_none(tmp_path):
-    """Same negative spec, the other unaskable-question case."""
     target = tmp_path / "existing-origin-timeout"
     target.mkdir()
     _run_git(["init"], cwd=target)
@@ -202,9 +175,6 @@ def test_registered_handler_dispatches_to_clone_idempotent(tmp_path):
     src = _make_source_repo(tmp_path)
     target = tmp_path / "cloned" / "via-handler"
 
-    # Handler is a plain sync `def`
-    # (engine auto-offloads via asyncio.to_thread), called directly rather
-    # than via asyncio.run.
     result = _clone_idempotent({"repo_url": str(src), "target_dir": str(target)})
 
     assert result == {"cloned": True, "already_present": False, "path": str(target)}
@@ -215,12 +185,6 @@ def test_registered_handler_requires_both_params():
         _clone_idempotent({"repo_url": "x"})
     with pytest.raises(ValueError):
         _clone_idempotent({"target_dir": "y"})
-
-
-# ---------------------------------------------------------------------------
-# resolution-journal wiring (C7 of docs/research/2026-08-06-install-receipt-
-# persistence-design.md) — this writer's sole ShapedClause (index 0).
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture

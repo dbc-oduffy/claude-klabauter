@@ -86,7 +86,6 @@ def derive_cutoff(runs_dir: Path) -> Optional[str]:
             if not (entry / "COMPLETE").is_file():
                 continue
         except OSError:
-            # entry unreadable/gone; treat as not a completed run
             continue
         cutoff = name[len(dir_prefix):]
     return cutoff

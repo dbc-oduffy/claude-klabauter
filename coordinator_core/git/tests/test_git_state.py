@@ -56,14 +56,14 @@ def _encode_varint(value: int) -> bytes:
 def _entry_fixed(mode: int, sha_hex: str, stage: int, name_len: int, extended: bool) -> bytes:
     fixed = struct.pack(
         ">IIIIIIIIII",
-        0, 0,  # ctime s/ns
-        0, 0,  # mtime s/ns
-        0,     # dev
-        0,     # ino
+        0, 0,
+        0, 0,
+        0,
+        0,
         mode,
-        0,     # uid
-        0,     # gid
-        0,     # size
+        0,
+        0,
+        0,
     )
     fixed += bytes.fromhex(sha_hex)
     flags = ((stage & 0x3) << 12) | min(name_len, 0x0FFF)
@@ -76,8 +76,6 @@ def _entry_fixed(mode: int, sha_hex: str, stage: int, name_len: int, extended: b
 
 
 def _build_index(entries, *, version=2, extensions=b""):
-    """`entries`: list of dicts with keys mode(int), sha(hex str), name(str),
-    stage(int, default 0), extended(bool, default False)."""
     out = _SIGNATURE + struct.pack(">II", version, len(entries))
     prev_name = b""
     for e in entries:
@@ -105,7 +103,7 @@ def _build_index(entries, *, version=2, extensions=b""):
             padding = (8 - (entry_len % 8)) % 8
             out += fixed + name + b"\x00" + (b"\x00" * padding)
     out += extensions
-    out += b"\x00" * 20  # fake trailing checksum, never verified
+    out += b"\x00" * 20
     return out
 
 
@@ -119,10 +117,6 @@ def _write_index(gitdir: Path, raw: bytes) -> Path:
 def _plain_repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     return tmp_path
-
-
-# ---------------------------------------------------------------------------
-# Version parsing
 
 
 def test_read_index_v2_matches_entries(tmp_path):
@@ -172,10 +166,6 @@ def test_read_index_v4_prefix_compression(tmp_path):
     assert snap["dir/beta.txt"].sha == "3" * 40
     assert snap["dir/symlink"].mode == 0o120000
     assert snap["dir/gitlink-submodule"].mode == 0o160000
-
-
-# ---------------------------------------------------------------------------
-# Fail-loud paths
 
 
 def test_bad_signature_fails_loud(tmp_path):
@@ -239,10 +229,6 @@ def test_missing_index_file_returns_empty_snapshot_not_an_error(tmp_path):
     assert snap.stat_identity is None
 
 
-# ---------------------------------------------------------------------------
-# Path shapes
-
-
 def test_path_with_space(tmp_path):
     repo = _plain_repo(tmp_path)
     raw = _build_index([{"mode": 0o100644, "sha": "1" * 40, "name": "has space.txt"}])
@@ -271,10 +257,6 @@ def test_staged_deletion_absent_path_not_in_snapshot(tmp_path):
     assert "removed.txt" not in snap
 
 
-# ---------------------------------------------------------------------------
-# stat identity / no-cache
-
-
 def test_stat_identity_differs_after_index_mutated_between_calls(tmp_path):
     repo = _plain_repo(tmp_path)
     raw1 = _build_index([{"mode": 0o100644, "sha": "1" * 40, "name": "a.txt"}])
@@ -297,11 +279,6 @@ def test_stat_identity_differs_after_index_mutated_between_calls(tmp_path):
 
 
 def test_read_index_outside_scope_stays_fresh_on_every_call(tmp_path):
-    """No `index_read_cache_scope()` open -> every ordinary call re-reads,
-    exactly the pre-C2 behaviour. Same shape as
-    `test_stat_identity_differs_after_index_mutated_between_calls` above,
-    named separately so the C2 cache-scope tests below have a clear
-    "baseline, unchanged" neighbour."""
     repo = _plain_repo(tmp_path)
     raw1 = _build_index([{"mode": 0o100644, "sha": "1" * 40, "name": "a.txt"}])
     index_path = _write_index(repo / ".git", raw1)
@@ -317,12 +294,6 @@ def test_read_index_outside_scope_stays_fresh_on_every_call(tmp_path):
 
 
 def test_read_index_cache_scope_serves_second_call_from_first_read(tmp_path):
-    """C2 AC3: inside `index_read_cache_scope()`, a SECOND ordinary
-    `read_index(repo)` call does not observe a write that happened to the
-    on-disk index between the two calls -- it is served from the first
-    call's snapshot, proving the within-call cache actually short-circuits
-    the second parse rather than merely returning an equal-by-coincidence
-    result."""
     repo = _plain_repo(tmp_path)
     raw1 = _build_index([{"mode": 0o100644, "sha": "1" * 40, "name": "a.txt"}])
     index_path = _write_index(repo / ".git", raw1)
@@ -340,14 +311,11 @@ def test_read_index_cache_scope_serves_second_call_from_first_read(tmp_path):
 
         snap2 = read_index(repo)
 
-    assert "b.txt" not in snap2  # served from snap1, not re-parsed
+    assert "b.txt" not in snap2
     assert snap1.stat_identity == snap2.stat_identity
 
 
 def test_read_index_scope_does_not_leak_across_scopes(tmp_path):
-    """A fresh `index_read_cache_scope()` never inherits a prior scope's
-    cached snapshot -- each `with` block starts empty (module docstring:
-    "no cross-call persistence anywhere in this module")."""
     repo = _plain_repo(tmp_path)
     raw1 = _build_index([{"mode": 0o100644, "sha": "1" * 40, "name": "a.txt"}])
     index_path = _write_index(repo / ".git", raw1)
@@ -370,15 +338,12 @@ def test_read_index_scope_does_not_leak_across_scopes(tmp_path):
 
 
 def test_read_index_fresh_true_bypasses_an_open_cache_scope(tmp_path):
-    """C2 AC3's uncached leg: `read_index(repo, fresh=True)` inside an open
-    `index_read_cache_scope()` still issues a real read -- the compare-and-
-    swap invariant `_agree_branch_cas_refusal` depends on."""
     repo = _plain_repo(tmp_path)
     raw1 = _build_index([{"mode": 0o100644, "sha": "1" * 40, "name": "a.txt"}])
     index_path = _write_index(repo / ".git", raw1)
 
     with index_read_cache_scope():
-        cached = read_index(repo)  # populates the cache
+        cached = read_index(repo)
         assert "b.txt" not in cached
 
         raw2 = _build_index(
@@ -390,17 +355,11 @@ def test_read_index_fresh_true_bypasses_an_open_cache_scope(tmp_path):
         index_path.write_bytes(raw2)
 
         fresh_snap = read_index(repo, fresh=True)
-        assert "b.txt" in fresh_snap  # real read, not the cached miss
+        assert "b.txt" in fresh_snap
 
         # A subsequent ordinary call still returns the ORIGINAL cached
-        # snapshot -- `fresh=True` does not silently refresh the scope's
-        # cache entry for later ordinary callers.
         still_cached = read_index(repo)
         assert "b.txt" not in still_cached
-
-
-# ---------------------------------------------------------------------------
-# read_index_stat_identity -- the stat-only accessor, C6
 
 
 def test_read_index_stat_identity_matches_read_index_fresh(tmp_path):
@@ -429,8 +388,6 @@ def test_read_index_stat_identity_sharedindex_sibling_fails_loud(tmp_path):
 
 
 def test_read_index_stat_identity_never_reads_or_parses_index_body(tmp_path, monkeypatch):
-    """The whole point of this accessor: it must never touch `read_bytes()`
-    or `_parse_index_bytes()` -- only `Path.stat()`."""
     from coordinator_core.git import git_state
 
     repo = _plain_repo(tmp_path)
@@ -448,22 +405,14 @@ def test_read_index_stat_identity_never_reads_or_parses_index_body(tmp_path, mon
 
 
 def test_read_index_stat_identity_never_populates_the_call_cache(tmp_path):
-    """Unconditionally fresh: even inside an open `index_read_cache_scope()`,
-    a subsequent ordinary `read_index()` call must not be served a value
-    this accessor's own read produced."""
     repo = _plain_repo(tmp_path)
     raw = _build_index([{"mode": 0o100644, "sha": "1" * 40, "name": "a.txt"}])
     _write_index(repo / ".git", raw)
 
     with index_read_cache_scope():
         read_index_stat_identity(repo)
-        cached = read_index(repo)  # first ordinary call in this scope
-        assert "a.txt" in cached  # a real parse happened; the cache wasn't
-        # silently pre-populated by the stat-only accessor's own call.
-
-
-# ---------------------------------------------------------------------------
-# head_branch -- the spawn-free `git rev-parse --abbrev-ref HEAD`
+        cached = read_index(repo)
+        assert "a.txt" in cached
 
 
 def test_head_branch_symref_strips_refs_heads(tmp_path):
@@ -474,8 +423,6 @@ def test_head_branch_symref_strips_refs_heads(tmp_path):
 
 
 def test_head_branch_keeps_slashes_in_the_name(tmp_path):
-    """`work/machine-a/2026-08-18to20` is the shape this repo actually runs on --
-    only the `refs/heads/` prefix is stripped, never the rest of the path."""
     repo = _plain_repo(tmp_path)
     (repo / ".git" / "HEAD").write_text("ref: refs/heads/work/machine-a/x\n", encoding="utf-8")
 
@@ -483,8 +430,6 @@ def test_head_branch_keeps_slashes_in_the_name(tmp_path):
 
 
 def test_head_branch_detached_reports_HEAD(tmp_path):
-    """`--abbrev-ref` answers the literal string `HEAD` when detached; that is
-    git's own answer, not a sentinel this reader invented."""
     repo = _plain_repo(tmp_path)
     (repo / ".git" / "HEAD").write_text("a" * 40 + "\n", encoding="utf-8")
 
@@ -522,13 +467,8 @@ def test_head_branch_empty_head_returns_none(tmp_path):
     assert head_branch(repo) is None
 
 
-# ---------------------------------------------------------------------------
-# head_sha
-
-
 def test_unborn_branch_no_head_returns_none(tmp_path):
     repo = _plain_repo(tmp_path)
-    # No HEAD file at all -- an unborn repo before `git init` writes one.
     assert head_sha(repo) is None
 
 
@@ -565,10 +505,6 @@ def test_head_sha_symref_no_ref_no_packed_refs_returns_none(tmp_path):
     (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
 
     assert head_sha(repo) is None
-
-
-# ---------------------------------------------------------------------------
-# Linked worktree: index/HEAD are worktree-private, packed-refs is shared
 
 
 def test_linked_worktree_reads_private_index_and_head_not_main(tmp_path):
@@ -616,12 +552,6 @@ def test_linked_worktree_head_symref_falls_back_to_shared_packed_refs(tmp_path):
 
 
 def test_linked_worktree_head_symref_resolves_loose_ref_from_common_dir(tmp_path):
-    # refs/heads/* are never worktree-private -- the loose ref for a branch
-    # tip must be read from the SHARED common dir, not the worktree-private
-    # gitdir, even though HEAD itself lives in the private gitdir. Before
-    # the fix this read `(gitdir / ref)` (worktree-private), which misses
-    # for any unpacked branch tip and silently falls through to
-    # packed-refs, returning None or a stale sha.
     main_common = tmp_path / "main" / ".git"
     private_gitdir = main_common / "worktrees" / "wt"
     private_gitdir.mkdir(parents=True)
@@ -639,11 +569,6 @@ def test_linked_worktree_head_symref_resolves_loose_ref_from_common_dir(tmp_path
     (repo_root / ".git").write_text(f"gitdir: {private_gitdir}\n", encoding="utf-8")
 
     assert head_sha(repo_root) == "l" * 40
-
-
-# ---------------------------------------------------------------------------
-# head_blobs -- the early return that reaches no repo and spawns nothing.
-# Its real-git siblings live in `test_git_state_against_real_git.py`.
 
 
 @pytest.mark.spawns_process

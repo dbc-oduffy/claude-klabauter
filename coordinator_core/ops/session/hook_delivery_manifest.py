@@ -71,14 +71,8 @@ SUPPORTED_VERSIONS = frozenset({1})
 MAX_FIELD_LEN = 200
 
 # Same shape as `guard_settings_integrity._TAIL_KEY_RE`: last two
-# path segments, forward-slash-joined. Used only to validate that a
-# `script`/carrier-key field is already in tail-key normal form —
-# never to compute one from a raw command token (that stays this
-# module's caller's job, via `_tail_key`, to avoid a circular import).
 _TAIL_KEY_SHAPE_RE = re.compile(r"^[^/\s]+/[^/\s]+$")
 
-# Printable-only, single-line contract (C1): reject anything with a
-# control/escape character, not merely `\n`/`\r`.
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
@@ -86,9 +80,6 @@ _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 class ManifestGuard:
     id: str
     script: str
-    # contract-mandated field (per
-    # docs/reference/hook-delivery-manifest.md), stored/exposed only; no
-    # matcher logic consumes this yet (a separate plan owns that).
     tool_names: Tuple[str, ...] = ()
 
 
@@ -105,10 +96,6 @@ class HookDeliveryManifest:
     carriers: Mapping[str, Tuple[ManifestGuard, ...]] = field(default_factory=dict)
     direct: Tuple[ManifestGuard, ...] = ()
     retired: Tuple[RetiredGuard, ...] = ()
-    # A script tail key maps to ALL guard ids delivered under it, not one.
-    # The contract's tail key is the last two path segments, so a fan-in
-    # module hosting N distinct guards normalizes N ids onto one key by
-    # design (`bash_guards/dispatch_checks.py`, 16 guards).
     script_index: Mapping[str, Tuple[str, ...]] = field(default_factory=dict)
     unaccounted: Tuple[str, ...] = ()
     detail: str = ""
@@ -164,16 +151,9 @@ def _sanitize_tool_names(raw: object) -> Tuple[Optional[Tuple[str, ...]], bool]:
 
 
 def _parse_guard_entry(raw: object) -> Tuple[Optional[ManifestGuard], bool]:
-    """Returns `(guard_or_None, malformed)`. `malformed` is `True` when
-    `raw` itself is present but fails a required-field check (`id`,
-    `script`, or `tool_names` — C1 requires all three per entry); the
-    caller escalates that to a manifest-level `malformed` state rather
-    than silently dropping the entry."""
     if not isinstance(raw, dict):
         return (None, True)
     guard_id, id_violated = _sanitize_field(raw.get("id"))
-    # `_script_violated` is redundant with `script is None` (`_sanitize_tail_key`
-    # returns `None` exactly on violation) — discarded intentionally.
     script, _ = _sanitize_tail_key(raw.get("script"))
     tool_names, tool_names_violated = _sanitize_tool_names(raw.get("tool_names"))
     if id_violated or script is None or tool_names_violated:
@@ -185,11 +165,7 @@ def _parse_retired_entry(raw: object) -> Optional[RetiredGuard]:
     if not isinstance(raw, dict):
         return None
     guard_id, id_violated = _sanitize_field(raw.get("id"))
-    # `_script_violated` is redundant with `script is None` (`_sanitize_tail_key`
-    # returns `None` exactly on violation) — discarded intentionally.
     script, _ = _sanitize_tail_key(raw.get("script"))
-    # `_reason_violated` is not fatal to the entry — `reason` degrades via
-    # truncate-and-mark, per C1's per-field contract.
     reason, _ = _sanitize_field(raw.get("reason"))
     if id_violated or script is None:
         return None
@@ -200,21 +176,6 @@ def read_hook_delivery_manifest(
     hooks_json: object,
     declared_script_keys: Sequence[str],
 ) -> HookDeliveryManifest:
-    """Parse the `x-effective-delivery` block out of the already-parsed
-    `effective-delivery.json` dict `hooks_json` (param name kept for the
-    manifest's own historical shape; the sidecar carries only this one
-    key), and degrade to a typed `state` for every bad case rather than
-    raising. `declared_script_keys` are the plugin-side script tail keys
-    `hooks.json` itself declares, already `_tail_key`-normalized by the
-    caller — used only to compute `stale` (C1's exhaustiveness
-    requirement)."""
-    # `declared_script_keys` is caller-
-    # supplied like everything else this reader touches; a non-iterable
-    # (e.g. `None`) must degrade, not raise, per the never-raise contract.
-    # Element-level garbage (e.g. an unhashable `dict`/`list` element) is a
-    # same-shaped hazard one level deeper: the `key not in accounted` set
-    # membership test below hashes `key`, so a non-string, unhashable
-    # element must be dropped here rather than surviving to that probe.
     if not isinstance(declared_script_keys, (list, tuple)):
         declared_script_keys = ()
     else:
@@ -251,13 +212,6 @@ def read_hook_delivery_manifest(
 
     carriers: Dict[str, Tuple[ManifestGuard, ...]] = {}
     script_index: Dict[str, List[str]] = {}
-    # A repeated script tail key is NOT a defect: the contract's tail key is
-    # the last two path segments, so a fan-in module hosting N distinct
-    # guards collapses N ids onto one key by construction, and a guard
-    # delivered by two paths (a direct registration plus a carrier's carry)
-    # is a real, declarable shape that must not be hidden by dropping either
-    # side. What IS a defect is the same guard id declared twice within ONE
-    # delivery surface — a double-registration the sender can act on.
     duplicate_within_surface: Optional[Tuple[str, str]] = None
     ids_by_surface: Dict[str, Set[str]] = {}
 
@@ -328,12 +282,6 @@ def read_hook_delivery_manifest(
     retired_t = tuple(retired)
 
     retired_scripts = {r.script for r in retired_t}
-    # The contract requires each GUARD to appear in exactly one of
-    # carriers/direct/retired; a guard both live and retired degrades to
-    # `malformed` rather than silently coexisting. Keyed on the guard id,
-    # not the script tail key: a fan-in module can legitimately host a
-    # retired guard alongside live ones under the one key, and keying on
-    # the key would call that a contradiction when it is the normal case.
     live_ids = {guard_id for ids in script_index.values() for guard_id in ids}
     live_and_retired_overlap = live_ids & {r.id for r in retired_t}
     if live_and_retired_overlap:

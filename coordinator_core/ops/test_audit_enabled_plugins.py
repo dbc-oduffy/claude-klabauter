@@ -1,7 +1,3 @@
-"""Tests for coordinator_core.ops.audit_enabled_plugins.
-
-Port of: audit-enabled-plugins.sh (DoE b5a4192c, 2026-07-20)
-"""
 from __future__ import annotations
 
 import json
@@ -69,8 +65,8 @@ def test_drift_flags_unjustified_plugins(tmp_path, capsys):
     assert "enabledPlugins drift advisory" in out
     assert "web-dev@marketplace: enabled, but not justified" in out
     assert "unknown-plugin@marketplace: enabled, but not justified" in out
-    assert "coordinator@marketplace" not in out.split("\n", 1)[1]  # not flagged
-    assert "game-dev@marketplace" not in out  # disabled (false), never considered
+    assert "coordinator@marketplace" not in out.split("\n", 1)[1]
+    assert "game-dev@marketplace" not in out
     assert "Full uninstall = " in out
 
 
@@ -120,7 +116,7 @@ def test_default_repo_root_is_cwd(tmp_path, capsys, monkeypatch):
         ("mcp-server-dev", "", "mcp-server", True),
         ("mcp-server-dev", "", "mcp-plugin", True),
         ("mcp-server-dev", "", "other", False),
-        ("plugin-dev", "meta", "", True),  # via caller's meta short-circuit, not this fn
+        ("plugin-dev", "meta", "", True),
         ("plugin-dev", "", "claude-plugin", True),
         ("plugin-dev", "", "", False),
         ("nonexistent-plugin", "web", "web", False),
@@ -128,8 +124,6 @@ def test_default_repo_root_is_cwd(tmp_path, capsys, monkeypatch):
 )
 def test_is_justified_matrix(plugin, pt, tags, expected):
     if plugin == "plugin-dev" and pt == "meta":
-        # _is_justified itself does not special-case meta (main()'s caller-level
-        # short-circuit is what handles it) — verify the raw predicate result here.
         assert _is_justified(plugin, pt, tags) is True
         return
     assert _is_justified(plugin, pt, tags) is expected
@@ -141,9 +135,5 @@ def test_parse_stack_tags_inline_list():
 
 
 def test_parse_stack_tags_block_list():
-    # Faithful bash-oracle quirk: block-list form yields a LEADING space (the
-    # "stack_tags:" line's empty `rest` still emits one awk `print` + newline
-    # before the first tag) — verified against the live bash oracle during the
-    # port's parity gate. See module docstring negative-spec.
     fm = "project_type: web\nstack_tags:\n  - web\n  - typescript\nother_key: x"
     assert _parse_stack_tags(fm) == " web typescript "

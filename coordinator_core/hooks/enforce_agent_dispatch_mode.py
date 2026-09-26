@@ -84,11 +84,8 @@ from coordinator_core.hooks.support.plan_path_bridge import (
 from coordinator_core.hooks.support.worktree_isolation_strip import compute_strip
 from coordinator_core.ipc import register_op
 
-# --- Concern I: teammate-name path-segment refusal. See module docstring. ---
 _TEAMMATE_NAME_PATH_UNSAFE_RE = re.compile(r"[\\/]")
 
-# --- Autonomy rank table (least -> most) ---
-# plan=0 < default=manual=1 < acceptEdits=2 < auto=3 < dontAsk=4 < bypassPermissions=5
 _MODE_RANK = {
     "plan": 0,
     "default": 1,
@@ -119,18 +116,12 @@ def _teammate_name_deny_message(name: str) -> Optional[str]:
 
 @register_op("hooks.enforce_agent_dispatch_mode")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PreToolUse(Agent) op: the sole `updatedInput` emitter for mode
-    elevation, worktree-isolation stripping, named-dispatch stripping, and
-    foreground-dispatch rerouting. See module docstring for concern order.
-    """
     params = payload_of(params)
     data: Any = params
 
     tool_input = data.get("tool_input")
     tool_input_dict = tool_input if isinstance(tool_input, dict) else {}
 
-    # Concern I — computed unconditionally, before anything else; wins
-    # outright over every other concern.
     teammate_name_deny_message: Optional[str] = None
     _name_value = tool_input_dict.get("name")
     if isinstance(_name_value, str):
@@ -139,7 +130,6 @@ def _handler(params: dict, repo_root=None) -> dict:
         except Exception:
             teammate_name_deny_message = None
 
-    # Escape hatch: short-circuits Concern A's computation ONLY.
     mode_ok_escape = bool(os.environ.get("COORDINATOR_AGENT_MODE_OK"))
 
     parent_mode = data.get("permission_mode") or ""
@@ -153,21 +143,16 @@ def _handler(params: dict, repo_root=None) -> dict:
         if parent_rank >= 0 and child_rank >= 0 and parent_rank >= 3 and child_rank < parent_rank:
             need_mode_elevation = True
 
-    # Concern E — computed unconditionally; never gated by the mode escape
-    # hatch.
     try:
         worktree_strip_result = compute_strip(tool_input_dict)
     except Exception:
         worktree_strip_result = None
 
-    # Concern F — computed unconditionally; a "deny" result wins outright.
     try:
         named_dispatch_result = compute_named_dispatch_result(tool_input_dict)
     except Exception:
         named_dispatch_result = None
 
-    # Concern G — computed unconditionally; a "deny" result wins outright,
-    # same precedence tier as Concern F's own.
     try:
         foreground_result = compute_foreground_reroute(
             tool_input_dict.get("run_in_background"),
@@ -178,7 +163,6 @@ def _handler(params: dict, repo_root=None) -> dict:
     except Exception:
         foreground_result = None
 
-    # Concern H — pure side effect, deliberately outside the emit-gate.
     try:
         record_plan_path(
             str(data.get("session_id") or ""),
@@ -187,7 +171,7 @@ def _handler(params: dict, repo_root=None) -> dict:
             data.get("cwd"),
         )
     except Exception:
-        pass  # best-effort side record; must never block dispatch enforcement
+        pass
 
     if teammate_name_deny_message is not None:
         return deny("PreToolUse", teammate_name_deny_message)

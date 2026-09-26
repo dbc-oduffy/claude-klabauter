@@ -53,8 +53,6 @@ pytestmark = [
 _BIN_DIR = Path(__file__).resolve().parent.parent
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-# Multi-line LF body — a single line with no trailing newline is too short
-# for autocrlf/eol conversion to have anything to act on.
 _LF_BODY = b"line one\nline two\nline three\n"
 
 
@@ -123,18 +121,13 @@ def _blob_bytes(root: Path, sha: str, rel_path: str) -> bytes:
     return result.stdout
 
 
-# ---------------------------------------------------------------------------
-# 1. Attribute-free regime — `core.autocrlf=false` is the load-bearing flag.
-# ---------------------------------------------------------------------------
-
-
 def test_extract_git_archive_matches_blob_bytes_attribute_free_regime(tmp_path):
     root = tmp_path / "repo-attr-free"
     _init_risky_repo(root, autocrlf="true")
     rel_path = "vendored/LICENSE"
     sha = _commit_lf_file(root, rel_path)
     expected = _blob_bytes(root, sha, rel_path)
-    assert b"\r\n" not in expected  # sanity: committed blob is genuinely LF
+    assert b"\r\n" not in expected
 
     shadow_dir = publish._extract_git_archive(root, sha)
     try:
@@ -144,11 +137,6 @@ def test_extract_git_archive_matches_blob_bytes_attribute_free_regime(tmp_path):
         import shutil
 
         shutil.rmtree(shadow_dir, ignore_errors=True)
-
-
-# ---------------------------------------------------------------------------
-# 2. Explicit `text=auto` regime — `core.eol=lf` is the load-bearing flag.
-# ---------------------------------------------------------------------------
 
 
 def test_extract_git_archive_matches_blob_bytes_text_auto_regime(tmp_path):
@@ -157,7 +145,7 @@ def test_extract_git_archive_matches_blob_bytes_text_auto_regime(tmp_path):
     rel_path = "dist/payload.txt"
     sha = _commit_lf_file(root, rel_path, gitattributes="dist/payload.txt text=auto\n")
     expected = _blob_bytes(root, sha, rel_path)
-    assert b"\r\n" not in expected  # sanity: committed blob is genuinely LF
+    assert b"\r\n" not in expected
 
     shadow_dir = publish._extract_git_archive(root, sha)
     try:
@@ -167,18 +155,6 @@ def test_extract_git_archive_matches_blob_bytes_text_auto_regime(tmp_path):
         import shutil
 
         shutil.rmtree(shadow_dir, ignore_errors=True)
-
-
-# ---------------------------------------------------------------------------
-# 3. Empirical proof each flag is independently load-bearing, per the
-# docstring's own measured claims: attribute-free path is fixed by
-# `autocrlf=false` alone and untouched by `eol=lf` alone; text=auto path is
-# fixed by `eol=lf` alone and untouched by `autocrlf=false` alone. Drives
-# `git archive` directly (bypassing `_extract_git_archive`) with each flag
-# combination so a future edit that silently drops one flag from the real
-# function is caught by tests 1/2 above, while this test independently
-# confirms the flags are not redundant with each other.
-# ---------------------------------------------------------------------------
 
 
 def _archive_member_bytes(root: Path, sha: str, rel_path: str, git_c_args: list[str]) -> bytes:
@@ -195,7 +171,6 @@ def _archive_member_bytes(root: Path, sha: str, rel_path: str, git_c_args: list[
 
 
 def test_git_archive_flags_are_independently_load_bearing(tmp_path):
-    # --- attribute-free regime: autocrlf=false matters, eol=lf is inert ---
     root_a = tmp_path / "repo-a"
     _init_risky_repo(root_a, autocrlf="true")
     rel_a = "vendored/LICENSE"
@@ -203,22 +178,21 @@ def test_git_archive_flags_are_independently_load_bearing(tmp_path):
     expected_a = _blob_bytes(root_a, sha_a, rel_a)
 
     bare_a = _archive_member_bytes(root_a, sha_a, rel_a, [])
-    assert b"\r\n" in bare_a  # corrupted without any -c override
+    assert b"\r\n" in bare_a
 
     eol_only_a = _archive_member_bytes(root_a, sha_a, rel_a, ["-c", "core.eol=lf"])
-    assert b"\r\n" in eol_only_a  # eol=lf alone does NOT fix this regime
+    assert b"\r\n" in eol_only_a
 
     autocrlf_only_a = _archive_member_bytes(
         root_a, sha_a, rel_a, ["-c", "core.autocrlf=false"]
     )
-    assert autocrlf_only_a == expected_a  # autocrlf=false alone DOES fix it
+    assert autocrlf_only_a == expected_a
 
     both_a = _archive_member_bytes(
         root_a, sha_a, rel_a, ["-c", "core.autocrlf=false", "-c", "core.eol=lf"]
     )
     assert both_a == expected_a
 
-    # --- text=auto regime: eol=lf matters, autocrlf=false is inert ---
     root_b = tmp_path / "repo-b"
     _init_risky_repo(root_b, autocrlf="false")
     rel_b = "dist/payload.txt"
@@ -226,15 +200,15 @@ def test_git_archive_flags_are_independently_load_bearing(tmp_path):
     expected_b = _blob_bytes(root_b, sha_b, rel_b)
 
     bare_b = _archive_member_bytes(root_b, sha_b, rel_b, [])
-    assert b"\r\n" in bare_b  # corrupted without any -c override
+    assert b"\r\n" in bare_b
 
     autocrlf_only_b = _archive_member_bytes(
         root_b, sha_b, rel_b, ["-c", "core.autocrlf=false"]
     )
-    assert b"\r\n" in autocrlf_only_b  # autocrlf=false alone does NOT fix this regime
+    assert b"\r\n" in autocrlf_only_b
 
     eol_only_b = _archive_member_bytes(root_b, sha_b, rel_b, ["-c", "core.eol=lf"])
-    assert eol_only_b == expected_b  # eol=lf alone DOES fix it
+    assert eol_only_b == expected_b
 
     both_b = _archive_member_bytes(
         root_b, sha_b, rel_b, ["-c", "core.autocrlf=false", "-c", "core.eol=lf"]

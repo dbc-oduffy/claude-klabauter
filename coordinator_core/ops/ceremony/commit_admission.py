@@ -69,12 +69,6 @@ def _blob_text(common_dir: Path, sha: str) -> Optional[str]:
 
 
 def governed_surface_refusal(root: Path, assembled: Mapping[str, object]) -> Optional[str]:
-    """`None` when the commit touches no ledgered governed surface or every one
-    it touches is admitted; otherwise the refusal text, one line per surface.
-
-    `assembled` is `_commit_via_head_spine`'s own `{path: (mode, sha) |
-    _ABSENT}` -- any value that is not a `(mode, sha)` pair is a deletion.
-    """
     root = Path(root)
     governed = [
         path
@@ -122,9 +116,6 @@ def _incomplete(path: str, exc: Exception) -> str:
 
 
 def governed_write_refusal(root: Path, path: str, old_text: str, new_text: str) -> Optional[str]:
-    """`None` when replacing `old_text` with `new_text` at repo-relative `path` is
-    admitted, or when `path` is not a ledgered governed surface; otherwise the
-    refusal text. Fails closed."""
     root = Path(root)
     if path not in GOVERNED_AUTHORING_SURFACES or not resolve_ledger_path(root, path).is_file():
         return None
@@ -136,10 +127,6 @@ def governed_write_refusal(root: Path, path: str, old_text: str, new_text: str) 
 
 
 def uncommitted_surface_refusals(root: Path) -> List[str]:
-    """One refusal line per ledgered governed surface whose working-tree text
-    differs from HEAD in a way admission refuses. A surface with no HEAD blob
-    counts as growth from empty; a surface missing from the working tree is a
-    deletion, which is a shrink, and is always admitted."""
     root = Path(root)
     governed = [p for p in GOVERNED_AUTHORING_SURFACES if resolve_ledger_path(root, p).is_file()]
     if not governed:
@@ -152,17 +139,7 @@ def uncommitted_surface_refusals(root: Path) -> List[str]:
         if not live.is_file():
             continue
         try:
-            # `.replace("\r\n", "\n")` -- a git blob is LF-normalized
             # content (git's own storage convention); the WORKING-TREE
-            # read is not, and on a Windows checkout with the common
-            # `core.autocrlf=true` default, git rewrites every LF back to
-            # CRLF on checkout. Comparing the two unnormalized would read
-            # that checkout-time rewrite alone as "every line grew" on an
-            # otherwise byte-identical, untouched file -- a false refusal
-            # this fleet's "Windows is first-class" bar does not allow
-            # (CLAUDE.md's Runtime conventions). `commit_authored_content`'s
-            # own callers pass content in-process, never round-tripping a
-            # checkout, so this is the one read site that needs it.
             new_text = live.read_bytes().decode("utf-8", errors="replace").replace("\r\n", "\n")
             old_entry = old_blobs.get(path)
             old_text = "" if old_entry is None else _blob_text(common_dir, old_entry[1])

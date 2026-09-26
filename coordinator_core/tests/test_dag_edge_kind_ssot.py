@@ -48,7 +48,6 @@ def _csv_to_set(csv: str) -> set[str]:
 
 class TestArchivalContinuationEdgeKindSSOT:
     def test_archival_and_continuation_are_distinct(self) -> None:
-        """The two SSOT constants differ by exactly `forked_from`."""
         assert dag.ARCHIVAL_EDGE_KINDS - dag.CONTINUATION_EDGE_KINDS == {"forked_from"}
         assert dag.CONTINUATION_EDGE_KINDS - dag.ARCHIVAL_EDGE_KINDS == set()
 
@@ -64,18 +63,11 @@ class TestArchivalContinuationEdgeKindSSOT:
         assert set(coverage._CONTINUATION_EDGE_KINDS) == set(dag.CONTINUATION_EDGE_KINDS)
 
     def test_referenced_by_default_matches_archival(self) -> None:
-        """`dag.referenced_by`'s own inline default (the bottom-layer archival
-        default every other representation ultimately funnels into) agrees
-        with the SSOT constant it was rewritten to reference."""
         empty_result = dag.referenced_by(
             target="/nonexistent/target.md",
             live_set=[],
             handoff_dir="/nonexistent",
         )
-        # A live_set of [] can never reference anything — this call only
-        # exercises the edge_kinds=None default-substitution branch without
-        # needing real files on disk; the assertion below is on the
-        # constant itself, not this call's return value.
         assert empty_result["referenced"] is False
         assert dag.ARCHIVAL_EDGE_KINDS == frozenset(
             {"predecessor", "additional_predecessors", "forked_from"}

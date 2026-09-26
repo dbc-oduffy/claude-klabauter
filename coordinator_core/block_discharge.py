@@ -60,15 +60,10 @@ _LEDGER_DIRNAME = os.path.join("state", "block-discharge")
 
 
 class InvalidSessionId(ValueError):
-    """Raised when a caller-supplied `session_id` is not a safe filename component."""
+    pass
 
 
 def _ledger_path(repo_root: str, session_id: str) -> str:
-    # session_id is joined straight into a
-    # filesystem path with no validation at any entry point. Reject anything
-    # containing a path separator or a leading '.' rather than silently
-    # joining, since this is the one place `state/block-discharge/<id>.jsonl`
-    # is constructed and DoE imports record_fire directly.
     if not session_id or "/" in session_id or "\\" in session_id or session_id.startswith("."):
         raise InvalidSessionId(f"unsafe session_id: {session_id!r}")
     return os.path.join(repo_root, _LEDGER_DIRNAME, session_id + ".jsonl")
@@ -88,12 +83,7 @@ def _append_record(path: str, record: dict) -> bool:
         directory = os.path.dirname(path)
         os.makedirs(directory, exist_ok=True)
         line = (json.dumps(record, sort_keys=True) + "\n").encode("utf-8")
-        # coordinator_core.atomic_append is the one atomic-multi-process-append
         # primitive: plain os.open(..., O_APPEND) is both non-atomic under
-        # concurrent writers on Windows (CRT emulates it via seek+write) AND
-        # silently rewrites '\n' to '\r\n' there (CRT text-mode translation),
-        # even for already-encoded bytes. Reuse rather than re-open-code either
-        # fix here.
         atomic_append.append_line(path, line)
         return True
     except OSError:
@@ -101,12 +91,6 @@ def _append_record(path: str, record: dict) -> bool:
 
 
 def _read_one(path: str) -> tuple:
-    """Return `(records, skipped_count)` for one ledger file. A malformed or
-    truncated line (e.g. a container torn down mid-write) is skipped and
-    counted rather than aborting the read -- an unreadable ledger is an
-    unresolved audit, not a clean one, and the skip count lets a checker
-    report that and exit non-zero instead of reading a partial ledger as if
-    it were complete."""
     records: list = []
     skipped = 0
     try:
@@ -130,12 +114,6 @@ def _read_one(path: str) -> tuple:
 
 
 def record_fire(repo_root: str, session_id: str, guard: str, reason: str) -> Optional[str]:
-    """Append a `fire` record and return its freshly minted nonce.
-
-    Best-effort: on a write failure this returns `None` -- a sentinel, never
-    a nonce it could not durably record -- so a write failure cannot convert
-    a block into a crash, and cannot mint a nonce that will never be
-    honourable (nothing durable exists for it to join against)."""
     nonce = uuid.uuid4().hex
     record = {
         "kind": "fire",
@@ -154,14 +132,6 @@ def record_fire(repo_root: str, session_id: str, guard: str, reason: str) -> Opt
 
 
 def record_discharge(repo_root: str, session_id: str, nonce: str, action: str) -> bool:
-    """Append a `discharge` record for `nonce`, and return whether it was
-    recorded.
-
-    Returns False if no `fire` record in this session's ledger carries
-    `nonce` -- an invented nonce cannot self-discharge. `action` may be a
-    reasoned no-op or a disputed-block explanation; this function (and any
-    `check`-side reader) deliberately does not adjudicate `action` content --
-    it exists so a human reader can see the agent's account."""
     try:
         path = _ledger_path(repo_root, session_id)
         records, _skipped = _read_one(path)
@@ -185,14 +155,6 @@ def record_discharge(repo_root: str, session_id: str, nonce: str, action: str) -
 
 
 def read_ledger(repo_root: str, session_id: Optional[str] = None) -> tuple:
-    """Return `(records, skipped_count)` -- the read side a `check` CLI
-    verb uses.
-
-    `session_id=None` reads every session's ledger under
-    `state/block-discharge/` and aggregates both the records and the skip
-    count; a given `session_id` reads just that one file. Missing directory
-    or missing file is not an error -- it is an empty, clean ledger (nothing
-    has fired yet)."""
     if session_id is not None:
         return _read_one(_ledger_path(repo_root, session_id))
 

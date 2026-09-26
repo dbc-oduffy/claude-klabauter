@@ -1,12 +1,3 @@
-"""
-coordinator_core.session.tests.test_peer_roster — live peer roster test suite.
-
-Spec backlink: `state/handoffs/2026-08-13-live-peer-roster.md` §§ 1-3, AC.
-
-Every fixture is built via `monkeypatch.setattr(harness_registry, ...)` --
-this suite never reads the operator's real `~/.claude/sessions` (mirrors
-`session/tests/test_reachability.py`'s own discipline).
-"""
 
 from __future__ import annotations
 
@@ -67,9 +58,6 @@ class TestCwdFiltering:
         assert {r.session_id for r in rows} == {"sid-a"}
 
     def test_sibling_prefix_that_is_not_a_real_subdirectory_is_excluded(self, monkeypatch):
-        # "/repo/claude-klabauter-other" shares the string prefix "/repo/claude-klabauter" but is
-        # NOT a subdirectory of "/repo/claude-klabauter" -- containment must be
-        # path-separator-aware, not a bare string startswith.
         snap = {
             "sid-a": _record("other", "/sock/a.sock", cwd="/repo/claude-klabauter-other"),
         }
@@ -82,11 +70,6 @@ class TestCwdFiltering:
     def test_symlinked_cwd_resolves_to_the_same_repo_as_a_real_root(
         self, monkeypatch, tmp_path
     ):
-        # P2 (Review: code-reviewer): a harness-reported `cwd` reached
-        # through a symlink (e.g. macOS `/tmp` -> `/private/tmp`) must still
-        # match a `repo_root` given as the resolved real path -- realpath
-        # must run on BOTH sides, or a live peer silently drops off the
-        # roster.
         real_root = tmp_path / "real_repo"
         real_root.mkdir()
         link_root = tmp_path / "link_repo"
@@ -114,11 +97,7 @@ class TestCwdFiltering:
 
 class TestRefAddressStabilityUnderFiltering:
     def test_filtered_out_session_still_widens_the_kept_sessions_ref(self, monkeypatch):
-        # AC "Critical": ref/name-collision must be computed over the WHOLE
-        # snapshot, never a filtered subset. Two sessions named identically
         # ("claude-klabauter-89") live in DIFFERENT repos -- filtering must not change
-        # the surviving row's ref/address relative to what an unfiltered
-        # caller would see for that same session id.
         snap = {
             "sid-in": _record("claude-klabauter-89", "/sock/in.sock", cwd="/repo/claude-klabauter"),
             "sid-out": _record("claude-klabauter-89", "/sock/out.sock", cwd="/repo/other"),
@@ -136,9 +115,6 @@ class TestRefAddressStabilityUnderFiltering:
         assert {r.session_id for r in rows} == {"sid-in"}
         row = rows[0]
 
-        # Filtering must not have changed the address relative to the
-        # unfiltered resolution -- both must show the widened, ref-qualified
-        # form (the bare name collides in the WHOLE snapshot).
         assert row.address == unfiltered_candidates["sid-in"].address
         assert row.address.startswith("claude-klabauter-89 [")
 
@@ -154,8 +130,6 @@ class TestRefAddressStabilityUnderFiltering:
 
         rows = peer_roster.build_roster("/repo/claude-klabauter")
         assert len(rows) == 1
-        # The filtered-out session never appears as a row, but the surviving
-        # row still carries the qualifier its (invisible) collision forced.
         assert rows[0].session_id == "sid-in"
         assert "[" in rows[0].address
 
@@ -202,12 +176,7 @@ class TestSelfRow:
     def test_self_record_none_falls_back_to_messaging_socket_env_match(
         self, monkeypatch
     ):
-        # The reproduced live defect: `self_record()` declines (e.g. the
-        # pid resolver's `env-miss:name-mismatch` leg) even though
         # `CLAUDE_PID` was correct -- the roster must still find `self` via
-        # the second, independent signal `reachability._socket_env_self_match`
-        # uses, exactly mirroring `reachability.resolve_address`'s own
-        # fallback.
         snap = {
             "self-sid": _record("claude-klabauter-84", "/sock/self.sock", cwd="/repo/claude-klabauter"),
             "peer-sid": _record("claude-klabauter-99", "/sock/peer.sock", cwd="/repo/claude-klabauter"),
@@ -239,9 +208,6 @@ class TestSelfRow:
     def test_self_socket_env_empty_string_never_matches_none_socket(
         self, monkeypatch
     ):
-        # Negative-spec parity with `reachability._socket_env_self_match`:
-        # an empty/missing env var must never coincidentally match a record
-        # whose `messaging_socket_path` is also falsy/None.
         snap = {
             "sid-a": _record(None, None, cwd="/repo/claude-klabauter"),
         }
@@ -255,12 +221,6 @@ class TestSelfRow:
 
 
 class TestWarmServedSelfRow:
-    """Regression coverage for `state/bug-backlog/2026-08-30-self-record-
-    decides-self-inside-the-warm-door-3c91d0af7e42.yaml`: under a warm-
-    served request `harness_registry.self_record()` is pid-keyed off the
-    SERVER's own environment, i.e. whoever spawned it -- so before this fix
-    a warm-served request marked the spawner's row `is_self=True` and left
-    the real caller's own row reading as a peer."""
 
     def test_carried_identity_wins_over_spawner_pid_match(self, monkeypatch):
         from coordinator_core.session import core as session_core
@@ -273,8 +233,6 @@ class TestWarmServedSelfRow:
         }
         monkeypatch.setattr(hr, "snapshot", lambda: snap)
         # The spawner's own ambient CLAUDE_PID still resolves via
-        # self_record() -- exactly the live defect: it is a real, correctly
-        # pid-keyed match, just for the wrong session.
         monkeypatch.setattr(hr, "self_record", lambda: (spawner_sid, snap[spawner_sid]))
 
         with session_core.warm_served_request(True):
@@ -337,9 +295,6 @@ class TestEmptyOrAbsentRegistry:
         assert rows[0].self_determination == "unresolved"
 
     def test_snapshot_exception_reraised_when_raise_on_failure(self, monkeypatch):
-        # Defect 5: a caller opting into raise_on_failure=True must see the
-        # registry-unreadable failure distinctly from an empty roster --
-        # default behaviour (above test) is unaffected.
         def _raise():
             raise RuntimeError("registry unreadable")
 
@@ -370,18 +325,12 @@ class TestEmptyOrAbsentRegistry:
     def test_empty_snapshot_still_returns_empty_list_even_with_raise_on_failure(
         self, monkeypatch
     ):
-        # A genuinely empty snapshot (no live peers) is not a failure -- it
-        # must still return [] even when raise_on_failure=True, distinct
-        # from an internal exception.
         monkeypatch.setattr(hr, "snapshot", lambda: {})
         monkeypatch.setattr(hr, "self_record", lambda: None)
 
         assert peer_roster.build_roster("/repo/claude-klabauter", raise_on_failure=True) == []
 
     def test_empty_snapshot_raises_when_raise_on_empty_snapshot(self, monkeypatch):
-        # the owning module's own suite must prove this contract directly,
-        # not only via the integration test two modules away
-        # (test_watch.py::test_an_empty_box_wide_snapshot_raises_rather_than_reading_as_a_drained_fleet).
         monkeypatch.setattr(hr, "snapshot", lambda: {})
         monkeypatch.setattr(hr, "self_record", lambda: None)
 
@@ -393,9 +342,6 @@ class TestEmptyOrAbsentRegistry:
     def test_empty_snapshot_still_returns_empty_list_by_default_when_raise_on_empty_snapshot_absent(
         self, monkeypatch
     ):
-        # Sibling to the raise case above -- pins the DEFAULT (flag absent or
-        # explicitly False) so a future edit cannot silently flip which arm
-        # is the default without breaking a test.
         monkeypatch.setattr(hr, "snapshot", lambda: {})
         monkeypatch.setattr(hr, "self_record", lambda: None)
 

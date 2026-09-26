@@ -43,10 +43,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# os.name, not platform.system(): the latter's first call costs ~28ms on Windows
-# (measured 2026-08-08) because it resolves the full uname/win32_ver triple, and
-# this module sits on the engine's per-invocation import path where that lands on
-# every one of the ~85ms-floor invocations. os.name is a preset constant.
 IS_WINDOWS = os.name == "nt"
 
 
@@ -119,11 +115,6 @@ def append_line(sink: "Path | str", encoded: bytes) -> None:
     else:
         fd = os.open(sink_str, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
     try:
-        # os.write() is not guaranteed to write the full buffer in one call
-        # (short writes are POSIX-legal); loop until all bytes land so a
-        # short write can never surface as a partial/corrupted line under
-        # contention. Each individual os.write() call remains the atomic
-        # unit — this loop only guards against having to make more than one.
         view = memoryview(encoded)
         while view:
             n = os.write(fd, view)

@@ -1,24 +1,3 @@
-"""
-Read-from-disk consumed shapes — the coordinator-artifact summaries the
-connector (tc-4) / emitter (tc-3) extract from each repo's `state/` tree and
-the store (tc-5) ingests for the cross-repo census. Pydantic port of DoE
-`coordinator/cockpit-contract/src/entities/summaries.ts` (Zod source).
-
-These are part of the frozen C5-consumable field set (tc-2 stub §
-Specification): a field gap here forces a re-run of tc-3 AND tc-4, so the
-full set is pinned now. `repo` + `coordinator_root_path` are injected by the
-connector/emitter (the on-disk frontmatter does not carry which repo it was
-read from). Provenance is mandatory, as on every cockpit fact.
-
-RoadmapStatus/RoadmapSummary, TrackerStatus/TrackerSummary, and
-HealthStatusLifecycle/HealthPosture/HealthStatusSummary are re-exported by
-the TS source from sibling files (roadmap-summary.ts, tracker-summary.ts,
-health-status-summary.ts) rather than defined here — this module re-exports
-the already-ported sibling modules' symbols for parity, though Python's
-import model does not force the TS split.
-
-Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
-"""
 from __future__ import annotations
 
 from typing import Annotated, Literal
@@ -56,10 +35,8 @@ __all__ = [
 ]
 
 # JS Number.MIN_SAFE_INTEGER / MAX_SAFE_INTEGER — the bounds Zod's
-# `z.number().int()` emits on every integer field (§ 1 of the T4e port recipe).
 _SafeInt = Annotated[int, Field(ge=-9007199254740991, le=9007199254740991)]
 
-# ── Handoff summary (from state/handoffs/*.md frontmatter) ──────────────────
 
 HandoffStatus = Literal["open", "claimed"]
 """
@@ -117,21 +94,7 @@ Spec backlink: `docs/plans/2026-06-26-retire-superseded-handoff-status.md` § C4
 HandoffKind = Literal[
     "session-handoff", "spinoff", "spinoff-roadmap", "recovery",
     "spinoff-goal", "spinoff-roadmap-creator",
-    # Retained deliberately after spike-result stopped being a LIVE handoff kind
-    # (DoE handoff.schema.json 3.0.0). The cockpit `handoffs` array is NOT
-    # live-only: it carries archived records too, and an archived record may
-    # carry any historical kind — the same reason handoff-archived.schema.json
-    # keeps this value permanently. Narrowing it here silently DROPS archived
-    # spike-result records from the emission rather than failing loudly.
     "spike-result",
-    # D1 baton-kind vocabulary rename targets (2026-07-29): "spinoff-roadmap"
-    # -> "roadmap-baton", "spinoff-roadmap-creator" -> "roadmap-seed",
-    # "spinoff-goal" -> "goal-seed". ADDED, not substituted — this same
-    # archived-record non-narrowing rule that keeps "spike-result" permanently
-    # also keeps every pre-rename token (including the three being retired on
-    # the live surface) permanently: an archived record may carry any
-    # historical kind, and narrowing here would silently drop it from the
-    # emission instead of failing loudly.
     "roadmap-baton", "roadmap-seed", "goal-seed",
 ]
 """
@@ -163,13 +126,6 @@ Spec backlink: DoE-claude:pln-baton-kind-vocabulary-one-axis-d1ce8f § D2/C3a.
 """
 
 
-# ProducerOpIdentity is defined in coordinator_core.producer_vocab (imported
-# above) — a leaf module with no third-party imports, so that
-# session.producer_resolve can validate against it without pulling pydantic
-# and the cockpit-contract package onto the handoff-creation hot path. See
-# that module's docstring for the full machine-minted/hand-authored contract
-# (carried across verbatim from what used to live here).
-
 ProducerTypedCommand = Literal["other-command", "unresolved"]
 """
 Named-literal half of `HandoffSummary.producer.typed_command`'s value space.
@@ -185,17 +141,6 @@ Spec backlink: docs/plans/2026-08-12-producer-axis-on-the-baton-contract.md § C
 
 
 class ForeignOriginTriple(BaseModel):
-    """
-    A foreign-kind origin reference — for origin kinds whose artifacts are
-    NOT themselves emitted as HandoffSummary rows (goal, roadmap-creator, and
-    any future ceremony rungs). We emit the full `{id, kind, label}` triple
-    so cockpit can render without a stub-less dangle back to a record it
-    doesn't ingest.
-
-    Spec backlink: DoE-claude:pln-structured-originating-session-8b505c § C7;
-    shape mirrors cockpit's hand-authored swap seam (example-cockpit-repo
-    `src/lib/contract/ancestry-origin.ts` `foreignOriginTripleSchema`).
-    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -211,16 +156,6 @@ class ForeignOriginTriple(BaseModel):
 
 
 class _HandoffProducer(BaseModel):
-    """
-    Namespaced record of who/what produced a handoff, along two independent
-    axes. Both axes must round-trip, and the combination of the two must
-    keep three states distinguishable: "no ceremony ran" (`op_identity ==
-    "hand-authored"`), "session typed nothing this turn" (`typed_command ==
-    None`), and "the field stopped resolving" (`typed_command ==
-    "unresolved"`) — these must never collapse into a single null.
-
-    Spec backlink: docs/plans/2026-08-12-producer-axis-on-the-baton-contract.md § C6a.
-    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -257,7 +192,6 @@ Spec backlink: `pln-handoff-lifecycle-vocabulary-o-22ada6` § C6.
 
 
 class _ShippedIn(BaseModel):
-    """Resolved commit sha + date when the workstream shipped. Anonymous nested shape (inlined, no $ref)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -266,10 +200,6 @@ class _ShippedIn(BaseModel):
 
 
 class _AcceptanceCriteria(BaseModel):
-    """
-    Metadata-only progress ratio: done/total acceptance-criterion count.
-    Anonymous nested shape (inlined, no $ref).
-    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -340,20 +270,6 @@ class HandoffSummary(BaseModel):
     """
     provenance: ProvenanceEnvelope
 
-    # Optional (true absence-allowed) AND `.nullable()` — the ONE
-    # `.nullable().optional()` combo observed in this corpus (Zod source:
-    # `z.array(z.string()).nullable().optional()` / `z.string().nullable().
-    # optional()`): absent-on-omit AND null-tolerant-when-present. Unlike a
-    # plain `.optional()` field (unwrapped to bare T by emit_schema.py's
-    # `_unwrap_optional_non_nullable`), this genuinely keeps the
-    # `anyOf: [T, null]` shape — the `x-zod-nullable-optional` marker below
-    # tells that unwrap pass to leave it alone; the marker itself never
-    # reaches the emitted JSON Schema (stripped by `_strip_pydantic_noise`).
-    # NOTE: no `Field(description=...)` here — the Zod source carries a
-    # JSDoc `/** ... */` comment (Python docstring below, dev-facing only)
-    # but never calls `.describe()`, so the committed schema.json carries
-    # no `description` keyword for either field; adding one would be a
-    # port-introduced field this entity's Zod source never emits.
     additional_predecessors: list[str] | None = Field(
         default=None,
         json_schema_extra={"x-zod-nullable-optional": True},
@@ -388,8 +304,6 @@ class HandoffSummary(BaseModel):
     tolerated from producers that emit the key explicitly without a value.
     """
 
-    # Deliverable spine identity fields (D9 present-as-null).
-    # Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § C1.
     deliverable_id: str | None
     """Durable join key — minted at the earliest artifact, carried verbatim by all downstream artifacts of the same deliverable. Null during the pre-backfill window."""
     plan_id: str | None
@@ -419,15 +333,6 @@ class HandoffSummary(BaseModel):
     records. Spec: producer-contract § 3.3.
     """
 
-    # ── Ancestry-origin fields (D9 present-as-null) ──────────────────────
-    # Spec backlink: DoE-claude:pln-structured-originating-session-8b505c § C7.
-    #
-    # Per-kind residency split (ratified, DoE contract-shape decision — do not
-    # re-open): session/handoff/plan_id are EMITTED kinds (a HandoffSummary
-    # row or, for plan_id, a resolvable id already carried elsewhere in this
-    # contract) so a bare id suffices for cockpit to resolve. origin_goal_id
-    # is a FOREIGN kind (goal records are not emitted in this contract) so we
-    # emit the full `{id, kind, label}` triple to avoid a stub-less dangle.
 
     origin_session: str | None
     """The session UUID that spawned this artifact. Bare id (emitted-kind). D9: nullable, never optional."""
@@ -480,11 +385,6 @@ class HandoffSummary(BaseModel):
     predecessor-defaults-to-none.md
     """
 
-    # ── Wire-level handoff_id derivation (C4) ────────────────────────────
-    # Spec backlink: emit/sections/handoffs.py `collect()` — see that module's
-    # docstring for the full rationale (basename-not-provenance.path keying,
-    # cross-repo collision guard, and why this has no direct precedent in the
-    # origin_*/filename-as-identity families).
     handoff_id: str
     """
     Stable identity key for this handoff record: the authored `hnd-<slug>-<6hex>`
@@ -496,11 +396,6 @@ class HandoffSummary(BaseModel):
     """Which case produced `handoff_id`: `authored` (frontmatter carried a valid
     `hnd-<slug>-<6hex>` id) or `derived` (synthesized from (repo, basename))."""
 
-    # ── Priority-ledger resolution (derived, C6a) ────────────────────────
-    # Spec backlink: DoE-claude:pln-priority-ledger-durable-pm-pri-817d40 § C6a. All four
-    # populated by `coordinator_core.ops.emit.priority_resolve.resolve_priority`
-    # — the SOLE resolution implementation (see that module's docstring); this
-    # section never re-walks the predecessor spine or re-implements the walk.
     pm_priority: Literal["urgent", "high", "medium", "low"] | None
     """Resolved effective priority for this handoff (`urgent`/`high`/`medium`/`low`,
     or null when unset/ambiguous/explicitly-cleared), per the nearest-explicit-
@@ -533,10 +428,6 @@ class HandoffSummary(BaseModel):
     through unresolved — the resolution algorithm's own step-3 fallback
     input, not itself a resolved value. D9: nullable, never optional."""
 
-    # ── Producer axis (C6a) ───────────────────────────────────────────────
-    # Spec backlink: docs/plans/2026-08-12-producer-axis-on-the-baton-contract.md § C6a.
-    # Model + emit pass-through only — the resolver that supplies the value
-    # is a separate chunk; this field carries null until that chunk lands.
     producer: _HandoffProducer | None
     """
     Namespaced op_identity/typed_command producer record — see
@@ -544,18 +435,8 @@ class HandoffSummary(BaseModel):
     present-as-null, never an absent key — `extra="forbid"` makes an
     unknown emitted key a hard validation failure)."""
 
-    # ── Human axis (C9, activation-gated) ───────────────────────────────
-    # Spec backlink: docs/plans/2026-08-19-the-tracker-names-an-owner.md § C9, § The
-    # hazard. NEW prefixed keys, never a value on `owner` — PM ruling, 2026-08-19.
     # Genuinely OPTIONAL (true absence-allowed) AND nullable, same
-    # `x-zod-nullable-optional` combo as `additional_predecessors`/`forked_from`/
-    # `disposed_successors` above: the emit sections (ops/emit/sections/handoffs.py)
-    # omit these keys entirely while `_shared.human_axis_vendored()` is False, and a
-    # bare `.optional()` (unwrapped to non-nullable T by emit_schema.py's
-    # `_unwrap_optional_non_nullable`) would lose the ability to distinguish
-    # "not yet vendored" (absent) from "vendored, no value resolved" (null) once the
     # switch flips. MINOR-bump-additive: see emit_schema.py's CONTRACT_VERSION
-    # changelog comment for the 3.12.0 -> 3.13.0 row.
     human_assignee: str | None = Field(
         default=None,
         json_schema_extra={"x-zod-nullable-optional": True},
@@ -595,8 +476,6 @@ class HandoffSummary(BaseModel):
     Spec backlink: docs/plans/2026-09-24-human-owner-on-handoffs.md § C2.
     """
 
-
-# ── Backlog item summary (debt / bug / improvement YAML) ────────────────────
 
 BacklogType = Literal["debt", "bug", "improvement"]
 
@@ -685,15 +564,6 @@ class BacklogItemSummary(BaseModel):
     records. Spec: producer-contract § 3.3.
     """
 
-
-# ── Review-trail record (from state/review-trail/*.json) ────────────────────
-#
-# NOTE — intentionally dropped on-disk fields: the on-disk review-trail JSON
-# also carries `scope` (chain|session), `scope_kind` (diff|plan|integration),
-# and `session_id` (the authoring session). These fields are consumed
-# elsewhere for scope accounting but are NOT emitted to this
-# cockpit entity. Do not add them to the pydantic model without a
-# tc-3/tc-4/tc-5 migration plan.
 
 ReviewVerdict = Literal["ok", "warn", "blocked", "waived"]
 

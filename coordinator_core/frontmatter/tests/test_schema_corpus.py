@@ -72,11 +72,6 @@ class TestAnswersByMarkersNotByCount:
         assert published_subset_reason(repo / "coordinator" / "schemas") is None
 
     def test_authoring_sentinel_beats_the_published_marker(self, tmp_path):
-        """An authoring checkout carries BOTH markers — it is the tree the
-        mirror is published FROM — so marker order is load-bearing, not
-        incidental. Probed the other way round, this root would be reported as
-        a published subset and the gate it feeds would stand down on the one
-        tree it exists to check."""
         root = tmp_path / "flat-authoring"
         _populate(root / "schemas", 3)
         _mark_published(root)
@@ -85,15 +80,6 @@ class TestAnswersByMarkersNotByCount:
         assert published_subset_reason(root / "schemas") is None
 
     def test_a_large_corpus_under_no_marker_makes_no_claim(self, tmp_path):
-        """The count is reported, never consulted: a big unmarked dir earns no
-        published-subset claim, the same way a small marked one earns no
-        fault. No count threshold exists to tune.
-
-        The
-        companion tiny-corpus arm was removed. After the F1 collapse the count
-        is computed only INSIDE the already-answered published branch, so no
-        code path can branch on it: the no-threshold rule holds by construction
-        and this arm is the pin for the unmarked direction."""
         root = tmp_path / "somewhere"
         _populate(root / "schemas", 10)
 
@@ -113,16 +99,12 @@ class TestAnswersByMarkersNotByCount:
 
 class TestLiveResolvedCorpusIsAnswered:
     def test_the_resolved_data_root_corpus_answers_without_raising(self):
-        """Whatever this machine resolves — authoring tree, published mirror, or
-        neither — the answer is a reason string or None, never an exception and
-        never a silent pass-through. This is the arm that would have caught the
-        container case without knowing which shape the container is."""
         from coordinator_core.data_root import data_root
 
         try:
             resolved = data_root("schemas")
         except RuntimeError:
-            return  # no coordinator content root on this box — nothing to answer
+            return
 
         reason = published_subset_reason(resolved)
         assert reason is None or (isinstance(reason, str) and reason)

@@ -1,9 +1,3 @@
-"""Tests for state/bug-backlog/2026-08-28-awaiting-gate-is-read-by-nothing-
-an-unde-de280708447e.yaml: `awaiting_gate` is a plausible-looking key that
-plan-tasks.schema.json does not declare and no reader in this pipeline
-consults. Read tolerantly (the pre-fix behaviour), a row carrying it and no
-`external_gate` validates clean and dispatches exactly as though unblocked.
-"""
 
 from __future__ import annotations
 

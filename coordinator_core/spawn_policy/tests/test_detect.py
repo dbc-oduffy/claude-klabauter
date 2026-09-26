@@ -1,8 +1,3 @@
-"""Tests for coordinator_core.spawn_policy.detect.
-
-Fixtures are inline source strings — this module owns its own fixtures per
-the C1 brief; it does not depend on C2's carve-out register landing.
-"""
 
 from __future__ import annotations
 
@@ -124,10 +119,7 @@ def test_shell_true_via_variable():
 
 
 def test_shell_true_via_kwargs_spread():
-    # Defect 2: opaque **kwargs forwarding with no explicit `shell=` at the
     # call site is SHELL_UNKNOWN, not SHELL_TRUE — a `shell=` value could be
-    # present but is not statically visible. See test_kwargs_forwarding_*
-    # below for the full fixture set this EM ruling covers.
     sites = sites_in_source(
         _src(
             """
@@ -255,9 +247,6 @@ def test_os_execv_execvp():
 
 
 def test_os_execve_recognized():
-    """`os.execve(path, argv, env)` has the same argv-bearing-first-positional
-    shape as the already-tracked `os.execv` and was the sole gap left by
-    fb813252f's stdlib-exec enumeration."""
     sites = sites_in_source(
         _src(
             """
@@ -449,8 +438,6 @@ def test_local_helper_indirection_one_hop():
         ),
         "m.py",
     )
-    # one site inside _run itself (dynamic — argv is a bare param there)
-    # plus one resolved site at the call site inside f.
     helper_sites = [s for s in sites if s.enclosing == "_run"]
     caller_sites = [s for s in sites if s.enclosing == "f"]
     assert len(helper_sites) == 1
@@ -461,7 +448,6 @@ def test_local_helper_indirection_one_hop():
 
 
 def test_local_helper_indirection_does_not_crash_on_deeper_chains():
-    # a second hop (g -> _run) is out of scope but must not crash.
     sites = sites_in_source(
         _src(
             """
@@ -479,8 +465,6 @@ def test_local_helper_indirection_does_not_crash_on_deeper_chains():
         ),
         "m.py",
     )
-    # No crash; the outer f() -> g() call is not a recognized spawn site
-    # because g is not itself a resolved one-hop helper of a recognized call.
     assert all(s.path == "m.py" for s in sites)
 
 
@@ -571,9 +555,6 @@ def test_sites_in_source_raises_on_parse_failure():
 
 
 def test_sites_in_source_never_swallows_syntax_error_as_clean():
-    # The exact inherited bug: `except SyntaxError: return []` (or False).
-    # There must be no path through sites_in_source that reports an
-    # unparseable file as having zero sites instead of raising.
     with pytest.raises(SpawnParseError):
         sites_in_source("this is not ) python (", "broken2.py")
 
@@ -610,9 +591,6 @@ def test_walk_repo_excludes_scratch_but_counts_suppressed(tmp_path: pathlib.Path
     assert sites[0].path == "pkg/real.py"
     assert isinstance(excluded, ExcludedReport)
     assert excluded.paths == ["scratch"]
-    # suppressed_site_count counts excluded FILES, not sites: excluded files
-    # are never parsed (see test_walk_repo_excludes_dir_with_invalid_syntax
-    # below for why), so a per-site count is not knowable without parsing.
     assert excluded.suppressed_site_count == 1
 
 
@@ -646,8 +624,6 @@ def test_walk_repo_propagates_parse_error(tmp_path: pathlib.Path):
 def test_walk_repo_excludes_dir_with_invalid_syntax_without_crashing(
     tmp_path: pathlib.Path,
 ):
-    # Defect 3: an excluded dir must never be parsed at all, so a
-    # syntactically invalid file inside it cannot crash the walk.
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "real.py").write_text(
         _src(
@@ -672,13 +648,8 @@ def test_walk_repo_excludes_dir_with_invalid_syntax_without_crashing(
 
 
 def test_sites_in_source_still_raises_for_non_excluded_invalid_file():
-    # The fail-loud contract for non-excluded files must survive intact —
-    # this fix narrows WHICH files get parsed, it does not add a swallow path.
     with pytest.raises(SpawnParseError):
         sites_in_source("def f(:\n    pass", "pkg/broken.py")
-
-
-# --- Extensionless naked-Python discovery (P1: coordinator/bin/ shape) -----
 
 
 def test_walk_repo_discovers_extensionless_shebang_script(tmp_path: pathlib.Path):
@@ -741,7 +712,6 @@ def test_walk_repo_ignores_non_python_shebang(tmp_path: pathlib.Path):
 
 
 def test_walk_repo_shebang_probe_survives_binary_file(tmp_path: pathlib.Path):
-    # A binary file with no suffix must not crash the walk or its shebang probe.
     (tmp_path / "blob").write_bytes(bytes(range(256)))
 
     sites, _ = walk_repo(tmp_path)
@@ -768,10 +738,6 @@ def test_walk_repo_excludes_extensionless_script_in_excluded_dir(
 
     sites, excluded = walk_repo(tmp_path)
 
-    # Directory-level exclusion applies before any read, same as for *.py —
-    # the excluded extensionless script is never opened, so it does not
-    # inflate suppressed_site_count either (that count is *.py-file-only,
-    # a pre-existing contract this fix does not change).
     assert sites == []
     assert excluded.paths == ["scratch"]
     assert excluded.suppressed_site_count == 0
@@ -780,10 +746,6 @@ def test_walk_repo_excludes_extensionless_script_in_excluded_dir(
 def test_walk_repo_discovers_extensionless_docstring_script_under_bin(
     tmp_path: pathlib.Path,
 ):
-    # Regression: coordinator/bin/static-check and friends are extensionless
-    # AND shebang-less by design (opened via `python3 coordinator/bin/<name>`,
-    # never executed directly), so the shebang-only admission rule left them
-    # permanently invisible to the walk.
     bin_dir = tmp_path / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
     (bin_dir / "static-check").write_text(
@@ -833,9 +795,6 @@ def test_walk_repo_discovers_extensionless_comment_preamble_script_under_bin(
 def test_walk_repo_ignores_extensionless_comment_led_non_python_file_under_bin(
     tmp_path: pathlib.Path,
 ):
-    # Regression: a comment-opening but NON-Python config file under bin/
-    # (e.g. `.percolate-ignore`) must not be admitted just because its first
-    # line looks like a Python comment -- it has to actually parse.
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / ".percolate-ignore").write_text(
@@ -852,9 +811,6 @@ def test_walk_repo_ignores_extensionless_comment_led_non_python_file_under_bin(
 def test_walk_repo_ignores_extensionless_docstring_script_outside_bin(
     tmp_path: pathlib.Path,
 ):
-    # The preamble check is bounded to `bin/` directories -- a docstring-led
-    # extensionless file elsewhere in the repo must stay invisible, same as
-    # before this fix.
     (tmp_path / "README").write_text(
         '"""\nThis looks like a module docstring but is not under bin/.\n"""\n'
     )
@@ -867,13 +823,6 @@ def test_walk_repo_ignores_extensionless_docstring_script_outside_bin(
 def test_walk_repo_ignores_non_extensionless_docstring_script_under_bin(
     tmp_path: pathlib.Path,
 ):
-    # Regression: the bin/ preamble+parse carve-out is scoped to genuinely
-    # extensionless files (the naked-Python-CLI convention), not to "any
-    # suffix other than .py". A file that already carries a non-.py suffix
-    # -- e.g. an editor backup or snapshot copy left beside a real script --
-    # must stay invisible even when its head and body both parse as Python,
-    # or every such stray file under bin/ double-counts the original's
-    # spawn sites.
     bin_dir = tmp_path / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
     (bin_dir / "some-tool.py.orig").write_text(
@@ -961,9 +910,6 @@ def test_shell_true_literal_still_shell_true():
         "m.py",
     )
     assert sites[0].kind == SpawnKind.SHELL_TRUE
-
-
-# --- Defect 1: single-static-binding local variable resolution ------------
 
 
 def test_shutil_which_bound_local_variable_resolves_to_shell_binary():
@@ -1089,11 +1035,7 @@ def test_function_parameter_argv0_stays_dynamic():
     assert sites[0].kind == SpawnKind.PLAIN_SPAWN
 
 
-# --- Documented gaps: _resolve_argv0 has no case for these node shapes.
 # Safe-direction (falls to <dynamic> -> never misclassified as PLAIN_SPAWN's
-# opposite), but a class-attribute-held shell binary, subscript lookup, or
-# ternary is currently invisible under-detection. Fixtures pin the CURRENT
-# (accepted-gap) behavior so a future change is a deliberate, visible diff.
 
 
 def test_attribute_argv0_falls_to_dynamic():
@@ -1147,12 +1089,7 @@ def test_ternary_argv0_falls_to_dynamic():
     assert sites[0].kind == SpawnKind.PLAIN_SPAWN
 
 
-# --- Documented over-detection: a helper's own `shell=` param echoing its
-# default (`def _run(a, shell=False): subprocess.run(a, shell=shell)`) is a
-# Name, not a Constant, so _shell_signal_from_call returns "true"
 # unconditionally — every caller through the helper is marked SHELL_TRUE
-# even when no caller overrides the default. Over-detection, safe direction;
-# fixture confirms the false-positive stays bounded to one hop.
 
 
 def test_helper_shell_kwarg_echoing_own_default_is_over_detected_as_shell_true():
@@ -1172,18 +1109,10 @@ def test_helper_shell_kwarg_echoing_own_default_is_over_detected_as_shell_true()
     )
     caller_sites = [s for s in sites if s.enclosing == "f"]
     assert len(caller_sites) == 1
-    # Over-detected: the real default is False and no caller overrides it,
-    # but the helper's own `shell=shell` is opaque to the detector.
     assert caller_sites[0].kind == SpawnKind.SHELL_TRUE
 
 
-# --- Regression: 84cec279 review — false-negative evasions --------------
-
-
 def test_functools_partial_shell_true_binding_is_detected():
-    # Prior bug: `functools.partial(subprocess.run, shell=True)` bound to a
-    # module-level name, then called, produced ZERO detected sites — not a
-    # downgrade, a complete blind spot.
     sites = sites_in_source(
         _src(
             """
@@ -1243,8 +1172,6 @@ def test_functools_partial_aliased_import_is_detected():
 
 
 def test_functools_partial_call_override_takes_precedence():
-    # Real functools semantics: a call-time `shell=` keyword overrides the
-    # partial's bound one.
     sites = sites_in_source(
         _src(
             """
@@ -1317,7 +1244,6 @@ def test_os_execlp_and_execvpe_are_detected():
 
 
 def test_binop_string_concat_argv0_resolves_correctly():
-    # Prior bug: "ba" + "sh" resolved argv0 to "ba" (a confidently WRONG
     # concrete value), misclassifying a real shell binary as PLAIN_SPAWN.
     sites = sites_in_source(
         _src(
@@ -1352,8 +1278,6 @@ def test_binop_string_concat_via_variable_binding_resolves_correctly():
 
 
 def test_list_concat_still_resolves_after_binop_fix(tmp_path=None):
-    # Regression guard: the string-concat fix must not break the
-    # pre-existing list-concat resolution (`["bash"] + extra`).
     sites = sites_in_source(
         _src(
             """
@@ -1393,8 +1317,6 @@ def test_dist_no_longer_in_default_exclude():
 
 def test_walk_repo_no_longer_excludes_dist_directory(tmp_path: pathlib.Path):
     # 84cec279 finding: `dist` in DEFAULT_EXCLUDE hid this repo's own
-    # git-tracked percolate publish-mirror source. `dist` must be walked
-    # like any other production directory now.
     dist_dir = tmp_path / "dist" / "mirror-native"
     dist_dir.mkdir(parents=True)
     (dist_dir / "real.py").write_text(

@@ -1,9 +1,3 @@
-"""Tests for ``coordinator_core.ops.review_mint.compose.compose``.
-
-Spec: ``docs/plans/2026-08-19-review-mints-its-own-gated-workflow.md`` task C2.
-Pure unit tests against inline `Stage` fixtures -- no file I/O, no fragment
-parsing (that is C1's `roster.parse_stages`, exercised separately).
-"""
 
 import pytest
 
@@ -123,11 +117,6 @@ def test_abort_policy_returns_ac5_shaped_object():
 
 
 def test_non_gate_agent_completes_without_schema_or_branch():
-    """AC6: an agent with no blocking verdict still completes and never
-    triggers a branch -- modelled here as a non-gate stage, since whether an
-    agent CAN block is `blocking_verdicts` data C2 never reads (see module
-    docstring) -- that discrimination is the caller's `gate_policy` closure,
-    exercised in `test_roundtrip.py` (C5) against the real fragment."""
     stages = [Stage(agents=["coordinator:docs-checker"], gate=False)]
     out = compose(stages, _PROMPT, _PHASE_TITLE, _disarmed_policy)
     _, block = out[0]
@@ -141,10 +130,6 @@ def test_empty_stage_list_refuses_loudly():
 
 
 def test_gate_stage_schema_carries_run_nonce_and_marks_it_required():
-    """AC12 leg 2: the shared schema literal grows a `run_nonce` field,
-    required alongside `verdict`, for every gate-stage agent call --
-    unconditionally, since dispatch.emit's own gate stage reuses the same
-    literal (see compose.py module docstring)."""
     stages = [Stage(agents=["coordinator:prior-art-checker"], gate=True)]
     out = compose(stages, _PROMPT, _PHASE_TITLE, _disarmed_policy)
     _, block = out[0]
@@ -160,10 +145,6 @@ def test_gate_stage_prompt_carries_the_run_nonce_when_supplied():
 
 
 def test_non_gate_stage_prompt_never_carries_a_run_nonce():
-    """AC12 anti-scope: only a gate stage has a verdict to refuse -- a
-    non-gate stage's prompt is untouched even when the caller supplies a
-    run_nonce (mirrors run-report family exemption at the stage-type
-    level, not per-agent)."""
     stages = [Stage(agents=["coordinator:review-integrator"], gate=False)]
     out = compose(stages, _PROMPT, _PHASE_TITLE, _disarmed_policy, run_nonce="deadbeef01234567")
     _, block = out[0]
@@ -171,14 +152,11 @@ def test_non_gate_stage_prompt_never_carries_a_run_nonce():
 
 
 def test_run_nonce_omitted_by_default_leaves_prompt_unmodified():
-    """A caller that never passes run_nonce (dispatch.emit's already-landed
-    C4 call site) still gets `run_nonce` in the schema literal (shared
-    constant), but the prompt itself carries no injected value."""
     stages = [Stage(agents=["coordinator:prior-art-checker"], gate=True)]
     out = compose(stages, _PROMPT, _PHASE_TITLE, _disarmed_policy)
     _, block = out[0]
-    assert "run_nonce:" in block  # schema field, unconditional
-    assert "\\n\\nrun_nonce:" not in block  # but no injected literal value
+    assert "run_nonce:" in block
+    assert "\\n\\nrun_nonce:" not in block
 
 
 def test_no_model_key_anywhere():

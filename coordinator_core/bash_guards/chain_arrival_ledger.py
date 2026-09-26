@@ -91,42 +91,17 @@ from coordinator_core._settings_home import settings_home
 
 _LEDGER_FILENAME = "chain-arrival-ledger.jsonl"
 
-#: Size cap, per generation, before rotation kicks in. Deliberately small --
-#: this file answers a point-in-time question ("did the chain run for THIS
-#: session recently"), not a historical archive; a few hundred KB of recent
-#: arrivals is ample.
 _ROTATE_MAX_BYTES = 512 * 1024
 
-#: Fixed number of rotated generations kept alongside the live file
-#: (``chain-arrival-ledger.jsonl.1`` .. ``.<N>``). Bounded from birth -- total
-#: disk footprint per session directory is capped at
 #: ``(_ROTATE_GENERATIONS + 1) * _ROTATE_MAX_BYTES`` regardless of how long a
-#: session lives or how many calls it makes.
 _ROTATE_GENERATIONS = 3
 
-#: Settings-home-rooted, machine-scoped, NOT `<repo_root>/state/...`, for the
-#: reason `block_subagent_destructive_action._fail_open_log_path` states for
-#: its own sibling log: a git root is frequently unresolvable on exactly the
-#: calls this exists to record, and subagent traffic routinely spans several
-#: repos in one session. A repo-rooted ledger reintroduces the ambiguity this
-#: module exists to remove -- a missing record would mean EITHER "the chain
-#: never ran" OR "the chain ran in a directory with no resolvable git root",
-#: and the whole value here is that absence has exactly one meaning.
 _LEDGER_RELPATH = ("state", "chain-arrival-ledger")
 
-#: Corpus-mutator declaration (generator-provenance sweep). Rooted at the
-#: settings home, so this pattern is machine-scoped and matches nothing in
-#: any repo tree.
 MUTATES = ["state/chain-arrival-ledger/**/chain-arrival-ledger.jsonl*"]
 
 
 def _rotate_if_oversize(path: Path) -> None:
-    """Cheap, best-effort rotation: stat the live file only, never read its
-    bytes. Any failure here (permission race, concurrent renamer, missing
-    file between the stat and the rename) is swallowed by the caller -- this
-    function may raise, and does so deliberately, so its own try/except stays
-    visible at the single call site rather than doubly nested here.
-    """
     try:
         size = path.stat().st_size
     except FileNotFoundError:
@@ -147,22 +122,6 @@ def _rotate_if_oversize(path: Path) -> None:
 def record_chain_arrival(
     session_id: str, has_agent_id: bool, cwd: Optional[str] = None
 ) -> None:
-    """Append one ``{"session_id", "at", "has_agent_id"}`` record marking that
-    this PreToolUse evaluation reached ``dispatch.py``'s guard chain.
-
-    NEVER RAISES. No-op (not an error) when ``session_id`` is empty/
-    unresolvable -- same posture as every
-    sibling per-session counter in this package (``guard_advisory_counter``).
-    A write failure (unwritable directory, disk full, a rotation race) is
-    caught and swallowed HERE, not left to the caller, because the caller
-    (``dispatch.py``) is the guard chain itself: this call must be a pure
-    side effect with zero ability to turn a would-be allow into a deny, or a
-    would-be deny into a crash-deny detour.
-
-    ``has_agent_id`` is the raw ``bool(payload.get("agent_id"))`` presence
-    the caller already computed -- this function does not resolve or
-    re-derive it.
-    """
     if not session_id:
         return
     try:

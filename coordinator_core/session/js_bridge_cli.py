@@ -137,29 +137,10 @@ def _cmd_claim_path(args: List[str]) -> int:
             f"pass a repo-relative path or use `self-claim <path>`\n"
         )
         return 0
-    # The caller names a legacy ``touched.txt``; the claim goes to that dir's
-    # ``touch-record.jsonl`` sink instead. No claim reader unions the old
-    # dialect any more (2026-08-26) -- a write in it would be a claim nothing
-    # can see, which is the inverted-safety shape ``claim_index`` was repaired
-    # for.
-    #
-    # ``session_id`` is NOT validated by ``encode_line`` -- it writes an empty
-    # ``sid`` with no complaint; only ``decode_line`` rejects one, on READ.
-    # A write-side empty id therefore lands a claim every reader degrades on,
-    # indistinguishable from claiming nothing, so THIS call site is the only
-    # place the emptiness check can happen. ``os.path.normpath`` first so a
-    # trailing separator on ``touched_file`` doesn't leave the last real path
-    # segment sitting in ``os.path.dirname``'s result (dirname alone strips
-    # only one trailing slash, not a whole segment).
     claim_dir = os.path.dirname(os.path.normpath(touched_file))
     dir_name = os.path.basename(claim_dir)
     is_agent_dir = os.path.basename(os.path.dirname(claim_dir)) == ".agents"
     session_id = _agent_owner_sid(claim_dir) if is_agent_dir else dir_name
-    # Guard covers BOTH branches: an agent dir with no readable back-pointer
-    # and a non-agent ``touched_file`` with no directory component (bare
-    # filename) both resolve to a falsy id here, and either one must be
-    # refused rather than written -- a guessed/empty claimant is the exact
-    # inverted-safety shape this seam exists to close.
     if not session_id:
         sys.stderr.write(
             f"js_bridge_cli: no attributable claimant for {touched_file!r} "
@@ -174,9 +155,6 @@ def _cmd_claim_path(args: List[str]) -> int:
             agent_id=dir_name if is_agent_dir else None,
             verb=touch_record.VERB_TOUCH,
             path=normalized or "",
-            # A declared hold, not an observation: `claim-path` exists for
-            # writers outside the Edit/Write hook, and its claim must keep
-            # refusing a peer's commit exactly as it did before the axis.
             kind=touch_record.KIND_WRITE,
         )
     except (OSError, ValueError) as exc:
@@ -187,7 +165,6 @@ def _cmd_claim_path(args: List[str]) -> int:
 
 
 def _agent_owner_sid(agent_dir: str) -> str:
-    """First line of the agent dir's ``em-session-id.txt``, or ``""``."""
     try:
         with open(os.path.join(agent_dir, "em-session-id.txt"), encoding="utf-8") as fh:
             return fh.readline().strip()

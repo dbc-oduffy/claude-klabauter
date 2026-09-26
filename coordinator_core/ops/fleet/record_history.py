@@ -77,28 +77,12 @@ from coordinator_core.ops.record_history import (
 
 
 def _require_supported(record_type: str) -> None:
-    """Validate `record_type` up front, raising the SAME
-    `UnsupportedRecordTypeError` `records.history` raises via
-    `record_history._require_supported` -- so an unsupported type reads
-    identically through both seams. Checked here explicitly (rather than
-    left to `derive_across_roots`'s own per-walked-root call into
-    `derive_type_history`) because an empty/all-skipped root set would
-    otherwise let an unsupported type through silently: zero walked roots
-    means `derive_type_history` -- and therefore its own validation -- is
-    never reached at all.
-    """
     supported = supported_record_types()
     if record_type not in supported:
         raise UnsupportedRecordTypeError(record_type, sorted(supported))
 
 
 def build_fleet_record_history(record_type: str) -> dict:
-    """Aggregate `derive_across_roots(record_type=...)` across every active,
-    deduped sibling (per `_resolve_active_sibling_paths`).
-
-    Validates `record_type` first (`_require_supported`, above) and returns
-    `derive_across_roots`'s result dict unchanged.
-    """
     _require_supported(record_type)
     roots = _resolve_active_sibling_paths()
     return derive_across_roots(roots, record_type)

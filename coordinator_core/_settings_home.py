@@ -98,28 +98,11 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-#: Set by `coordinator_core/conftest.py::_quarantine_real_home` to this
-#: process's REAL (pre-quarantine) settings-home path, for every test NOT
-#: marked `@pytest.mark.real_home`. Never set outside pytest. See
-#: `settings_home()`'s own check below and `RealSettingsHomeLeakError`.
 FORBID_REAL_SETTINGS_HOME_ENV = "_COORDINATOR_TEST_FORBID_REAL_SETTINGS_HOME"
 
 
 class RealSettingsHomeLeakError(RuntimeError):
-    """Raised by `settings_home()` when, under pytest, it is about to return
-    this operator's REAL settings home from a test that never opted into
-    that with `@pytest.mark.real_home`.
-
-    2026-09-18: a pytest run of the install suite wrote 371 launchers into
-    the REAL `~/.coordinator-claude-settings/bin`, and an in-place forwarder
-    write on top of that collapsed every one of them onto a single inode --
-    every CLI on the box exec'd whatever forwarder was written last. The
-    write-side half of that incident is fixed at its source (commit
-    44e3702c84, `_write_agent_forwarder`); this is the read-side backstop --
-    a test that resolves the real settings home without declaring it refuses
-    LOUDLY instead of silently mutating live machine config the next time
-    some other call site gets this wrong.
-    """
+    pass
 
 
 def _check_not_the_forbidden_real_home(resolved: Path) -> None:
@@ -181,20 +164,6 @@ def reject_doubled_claude_home(var: str, raw: str) -> None:
 
 
 def _require_rooted(var: str, raw: str) -> Path:
-    """Return `Path(raw)`, or raise ValueError if it would anchor at the cwd.
-
-    A rooted path ('/srv/x', 'C:\\Users\\x', '\\\\server\\share') is accepted; a
-    relative one ('foo', 'C:foo') is not. On Windows a drive letter alone is NOT
-    absolute — 'C:foo' means "foo relative to the cwd on drive C:" — so the test
-    is `is_absolute() or root`, which accepts a POSIX-style rooted path under a
-    Windows interpreter while still rejecting the drive-relative form.
-
-    Ported from coordinator/lib/claude-home/_claude_home.py::home_dir/settings_home,
-    the one resolver in the tri-plane that already validated both overrides.
-    Empty is deliberately NOT an error: empty-means-unset is this module's pinned
-    contract (tests/test_settings_home.py), and only the cwd-relative foot-gun is
-    being closed here.
-    """
     p = Path(raw)
     if not (p.is_absolute() or p.root):
         raise ValueError(
@@ -270,7 +239,6 @@ def settings_home_child_env(base_env: dict) -> dict:
 
 
 def machine_local_dir() -> Path:
-    """Resolve the `machine-local/` directory under the settings-home root."""
     return settings_home() / "machine-local"
 
 
@@ -303,24 +271,12 @@ def resolve_machine_local_cli() -> Optional[str]:
         return found
     names = ("machine-local", "machine-local.cmd", "machine-local.exe")
     roots = [settings_home() / "bin"]
-    # Legacy rung: the pre-settings-home install location, still live on boxes
-    # installed before the move.
     claude_home = os.environ.get("CLAUDE_HOME", "").strip()
     roots.append((Path(claude_home) if claude_home else home_dir()) / ".claude" / "bin")
     for root in roots:
         for name in names:
             candidate = root / name
             try:
-                # `os.access(candidate, os.X_OK)` lies on Windows -- it
-                # returns True for any readable file regardless of actual
-                # executability -- so gating the bare-name (no-extension)
-                # candidate on it there would wrongly accept a non-exec
-                # `machine-local` file before this loop ever reaches the
-                # `.cmd`/`.exe` names Windows actually installs (same
-                # defect shape as `_alternative_liveness.py`'s
-                # `_resolve_on_path_or_settings_home`). Skip the bare-name
-                # POSIX-exec candidate entirely on Windows so the loop
-                # falls through to the extensioned names instead.
                 if (
                     os.name != "nt"
                     and candidate.is_file()
@@ -330,7 +286,7 @@ def resolve_machine_local_cli() -> Optional[str]:
                 if os.name == "nt" and candidate.suffix and candidate.is_file():
                     return str(candidate)
             except OSError:
-                continue  # candidate path unreadable; try the next one
+                continue
     return None
 
 
@@ -363,37 +319,10 @@ def _is_windows() -> bool:
 
 
 def normalize_native_path(raw):
-    """Convert an MSYS/Cygwin mount-form path ('/x/...' or '/cygdrive/x/...') to
-    native Windows drive form ('X:/...') so native-Windows node / py.exe /
-    Path.exists consumers resolve it. No-op on POSIX (os.name != 'nt') and on
-    already-native paths ('X:/...', 'X:\\...'). Returns a Path.
-
-    Rationale: a leading '/x/...' handed to a native-Windows process resolves as
-    drive-relative 'X:\\x\\...' (doubled drive) — the .doe-root / repos.doe_claude
-    mis-resolution bug. Mirrors the `cygpath -m` normalization used on the write side.
-    """
     return Path(native_path_form(raw))
 
 
 def native_path_form(raw: str) -> str:
-    r"""`normalize_native_path` for callers that must hand a STRING onward — the
-    mount-form repair when one applies, the caller's own string byte-identical
-    when none does.
-
-    Exists because no spelling built on `normalize_native_path`'s return value is
-    identity-preserving on Windows: `str()` of it renders `X:/a` as `X:\a`, and
-    `.as_posix()` flips every separator on a native `C:\Users\x` that needed no
-    repair at all — and `Path` additionally eats a trailing separator. Write
-    seams that persist this value — the `repos.doe_claude` registry key, the
-    `.doe-root` pointer file — would then churn their stored form for every
-    caller, not just the MSYS ones. So this is the primitive and
-    `normalize_native_path` is the `Path`-returning wrapper over it; the
-    mount-form regex lives here, once.
-
-    Negative-spec: NOT a general path canonicalizer. It resolves nothing,
-    expands nothing, and strips no trailing separator — the sole transform is
-    the MSYS/Cygwin mount-form repair, gated to `os.name == "nt"`.
-    """
     s = str(raw)
     if not _is_windows():
         return s
@@ -404,24 +333,10 @@ def native_path_form(raw: str) -> str:
 
 
 def legacy_machine_local_dir() -> Path:
-    """Resolve the pre-migration `~/.claude/machine-local` legacy location.
-
-    Distinct from `machine_local_dir()` (the new settings-home-rooted
-    location) — used only by `check_machine_local_divergence()` to compare
-    the two candidate homes.
-    """
     return _home_dir() / ".claude" / "machine-local"
 
 
 def _is_absent_or_empty_husk(path: Path) -> bool:
-    """True when `path` carries no machine-local state — absent, or a directory
-    left behind empty by a completed migration.
-
-    An empty directory is not a second content home: nothing can be read from
-    it, so treating it as one turns a finished migration into a fail-loud.
-    A dangling symlink and an unreadable directory both count as no-state too —
-    neither yields content to diverge over.
-    """
     try:
         if not path.exists():
             return True
@@ -431,10 +346,7 @@ def _is_absent_or_empty_husk(path: Path) -> bool:
 
 
 class SettingsHomeDivergenceError(RuntimeError):
-    """Raised when both the legacy and new machine-local homes exist and
-    their resolved (symlink-following) paths diverge — mirrors the shell
-    original's fail-loud `_check_machine_local_divergence` exit-1 path.
-    """
+    pass
 
 
 def check_machine_local_divergence() -> None:

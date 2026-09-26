@@ -62,13 +62,9 @@ def _is_advisory_envelope(result: dict) -> bool:
 
 
 class TestCaseAWholeFileSuppressionOutsideFragment:
-    """DR-077 Case A -- suppression present in the file but outside the
-    edited fragment must clear, not deny."""
 
     def test_edit_fragment_only_unsuppressed_call_but_file_has_suppression(self, tmp_path: Path):
         target = tmp_path / "run.py"
-        # The whole file (post-edit) IS suppressed -- the creationflags line
-        # lives outside what the Edit fragment itself contains.
         target.write_text(
             'import subprocess\n'
             'HELPER = 1\n'
@@ -92,10 +88,6 @@ class TestCaseAWholeFileSuppressionOutsideFragment:
         )
 
     def test_fragment_scoped_extraction_alone_would_have_denied(self, tmp_path: Path):
-        """Sanity check that this really is a false-positive-fixed case: the
-        OLD fragment-only extraction (what _extract_fragment returns) does
-        NOT contain the suppression, proving the fix is whole-file reads,
-        not a coincidence."""
         fragment = guard._extract_fragment("Edit", {"new_string": "HELPER = 2"})
         assert "creationflags" not in fragment
 
@@ -161,11 +153,6 @@ class TestCaseCDocstringOnlyProse:
         )
 
     def test_write_pure_prose_file_still_surfaces_but_only_as_advisory(self):
-        """Residual case: a file with NO code anywhere has nothing for
-        whole-file context to reveal, so the intent-aware regex still fires
-        on the literal substrings -- documented here as expected, since
-        DR-077's guarantee is "advisory, not deny", not "never fires on
-        prose". This must NEVER be a permissionDecision:"deny"."""
         payload = _payload("Write", {"file_path": "helper.py", "content": _DOCSTRING_ONLY})
         result = guard.check(payload)
         assert result is not None
@@ -236,9 +223,6 @@ class TestFailOpen:
             },
         )
 
-        # Fragment-scoped fallback still contains the unsuppressed call, so
-        # this should still surface -- the point is no exception, not a
-        # particular verdict.
         result = guard.check(payload)
         assert result is not None
         assert _is_advisory_envelope(result)
@@ -279,8 +263,6 @@ class TestFailOpen:
 class TestSizeCap:
     def test_oversized_file_falls_back_to_fragment_without_raising(self, tmp_path: Path):
         target = tmp_path / "big.py"
-        # Whole file is oversized AND (deliberately) does not itself contain
-        # the console-spawn tokens near the edit -- only the fragment does.
         target.write_text("x = 1\n" * (guard._MAX_WHOLE_FILE_BYTES // 4))
         assert target.stat().st_size > guard._MAX_WHOLE_FILE_BYTES
 
@@ -308,10 +290,6 @@ class TestSizeCap:
 
 
 class TestAsyncioSubprocessFamily:
-    """Spinoff 2026-08-07-windows-popup-guard-blind-to-git-and-asyncio.md
-    Part 2 -- the guard's call-site regex previously matched only
-    subprocess.run/Popen/os.system and was structurally blind to the
-    entire asyncio spawn family (asyncio.create_subprocess_exec/_shell)."""
 
     def test_unsuppressed_asyncio_create_subprocess_exec_is_flagged(self):
         content = (
@@ -389,9 +367,6 @@ class TestGitTargetPolicing:
     git.exe are now policed like any other console-subsystem target."""
 
     def test_unsuppressed_git_spawn_is_flagged(self):
-        """The exact refuting Case-5 shape from the measurement audit:
-        subprocess.run(["git", ...], capture_output=True) with no
-        creationflags."""
         content = (
             'import subprocess\n'
             'result = subprocess.run(\n'
@@ -449,10 +424,6 @@ class TestDetachedProcessIsNotSuppression:
         assert _is_advisory_envelope(result)
 
     def test_detached_process_ored_with_create_no_window_is_still_flagged(self):
-        """The load-bearing case -- this spelling LOOKS suppressed and is not.
-
-        Two live engine sites shipped exactly this and passed the guard.
-        """
         content = (
             'import subprocess\n'
             'flags = 0\n'
@@ -480,11 +451,6 @@ class TestDetachedProcessIsNotSuppression:
         assert _is_advisory_envelope(result)
 
     def test_correct_windowless_form_still_clears(self):
-        """The disqualifier must not make the guard unsatisfiable.
-
-        This is the shape the three fixed sites now carry; if this ever starts
-        failing, the guard is demanding something no caller can spell.
-        """
         content = (
             'import subprocess\n'
             'flags = 0\n'
@@ -496,12 +462,6 @@ class TestDetachedProcessIsNotSuppression:
         assert guard.check(payload) is None
 
     def test_prose_mentioning_detached_process_does_not_disqualify(self):
-        """A docstring explaining the rule must not trip it.
-
-        The disqualifier runs on the triple-quote-stripped scope for exactly
-        this reason -- otherwise every negative-spec documenting the ban would
-        flag its own correctly-suppressed file.
-        """
         content = (
             'import subprocess\n'
             '"""Never use DETACHED_PROCESS here: it leaves the child\n'
@@ -542,9 +502,6 @@ class TestSuppressionDocstringProseFalseNegative:
         assert _is_advisory_envelope(result)
 
     def test_genuinely_suppressed_spawn_with_docstring_still_clears(self):
-        """Sanity companion: a real suppression OUTSIDE the docstring still
-        clears -- proves the triple-quote strip is suppression-scoped, not a
-        blanket regression of true suppression detection."""
         content = (
             '"""Helper module.\n'
             '\n'
@@ -569,9 +526,6 @@ class TestSuppressionDocstringProseFalseNegative:
 
 
 class TestBareSubprocessFamilyWordBoundary:
-    """[P3] review finding -- the bare (unqualified) create_subprocess_*
-    alternative had no left word-boundary and could substring-match inside a
-    longer identifier."""
 
     def test_longer_identifier_containing_create_subprocess_exec_not_matched(self):
         content = (

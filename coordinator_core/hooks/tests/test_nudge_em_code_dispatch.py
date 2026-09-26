@@ -1,22 +1,3 @@
-"""
-Tests for coordinator_core.hooks.nudge_em_code_dispatch, scoped to chunk C5
-(plan docs/plans/2026-08-01-advisory-firing-shape-predicate.md): the `op()`
-size-floor semantic-bypass mechanism (AC6) and the dispatch-brief TODO drop
-(AC6, AC10).
-
-Subject under test: `op()` only — the async `_handler` (pcore-04 mcp_tool op)
-never receives old_string/new_string/content per this module's own MultiEdit
-negative-spec, so it has nothing to classify and is out of C5's scope.
-
-The invariants worth pinning, in priority order:
-  1. A semantic-bypass edit (whitespace-only, comment-only, single-token
-     rename, no-op) suppresses the nudge on Edit, MultiEdit (ALL entries must
-     qualify), and Write (against the pre-write on-disk content).
-  2. A substantive edit still fires post-fix (AC10) and the emitted dispatch
-     brief carries no `[TODO` placeholder anywhere (AC6).
-  3. Ambiguous/unreadable cases (new file with no on-disk baseline, malformed
-     edit fields) do NOT qualify for the bypass — fail toward the nudge.
-"""
 
 from __future__ import annotations
 
@@ -37,22 +18,12 @@ from coordinator_core.hooks.nudge_em_code_dispatch import (
 
 @pytest.fixture(autouse=True)
 def _outside_f7_carveout_scope(monkeypatch):
-    """C5's remit is the size-floor/TODO fix, not the F7 bootstrap/out-of-repo
-    carve-out (a different, already-landed bypass). All fixture paths below are
-    synthetic (`/repo/...`) so the real F7 walk would treat every one of them as
-    outside a git work-tree and bypass the nudge for the wrong reason — pin that
-    carve-out off so these tests exercise only the bypasses C5 owns.
-    """
     monkeypatch.setattr(_mod, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
 
 
 def _advisory_text(result: dict) -> str:
     return result["hookSpecificOutput"]["additionalContext"]
 
-
-# --------------------------------------------------------------------------------------
-# Unit-level predicates.
-# --------------------------------------------------------------------------------------
 
 def test_whitespace_only_diff_true() -> None:
     assert _is_whitespace_only_diff("x = 1\n", "x = 1\n\n") is True
@@ -77,8 +48,6 @@ def test_comment_only_diff_false_when_code_line_changes() -> None:
 
 
 def test_comment_only_diff_false_when_no_change() -> None:
-    # No changed lines at all — not a "comment-only diff", the no-op case is
-    # handled separately by _is_semantic_bypass_edit's old == new short-circuit.
     assert _is_comment_or_docstring_only_diff("# note\n", "# note\n") is False
 
 
@@ -101,10 +70,6 @@ def test_semantic_bypass_edit_covers_noop() -> None:
 def test_semantic_bypass_edit_false_on_substantive_change() -> None:
     assert _is_semantic_bypass_edit("def f():\n    return 1", "def f():\n    return compute(x)") is False
 
-
-# --------------------------------------------------------------------------------------
-# op() — Edit shape.
-# --------------------------------------------------------------------------------------
 
 def test_edit_whitespace_only_suppresses_nudge() -> None:
     payload = {
@@ -148,10 +113,6 @@ def test_edit_substantive_change_fires_and_brief_has_no_todo() -> None:
     assert "[TODO" not in text
     assert "module.py" in text
 
-
-# --------------------------------------------------------------------------------------
-# op() — MultiEdit shape: ALL entries must qualify.
-# --------------------------------------------------------------------------------------
 
 def test_multiedit_all_bypass_suppresses_nudge() -> None:
     payload = {
@@ -201,10 +162,6 @@ def test_multiedit_malformed_entry_does_not_bypass() -> None:
     assert op(payload) is not None
 
 
-# --------------------------------------------------------------------------------------
-# op() — Write shape: baseline read from disk (PreToolUse fires before the write).
-# --------------------------------------------------------------------------------------
-
 def test_write_whitespace_only_against_disk_content_suppresses_nudge(tmp_path) -> None:
     target = tmp_path / "module.py"
     target.write_text("x = 1\n", encoding="utf-8")
@@ -236,8 +193,6 @@ def test_write_substantive_change_against_disk_content_fires(tmp_path) -> None:
 
 
 def test_write_brand_new_file_never_bypasses(tmp_path) -> None:
-    """No on-disk baseline to diff against — fails toward the nudge, not toward
-    silently suppressing it on unreadable/nonexistent content."""
     target = tmp_path / "does-not-exist-yet.py"
     payload = {
         "tool_name": "Write",
@@ -249,10 +204,6 @@ def test_write_brand_new_file_never_bypasses(tmp_path) -> None:
     }
     assert op(payload) is not None
 
-
-# --------------------------------------------------------------------------------------
-# Dispatch-brief content: no TODO placeholders anywhere, regardless of shape (AC6).
-# --------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
     "tool_name,tool_input",
@@ -288,10 +239,6 @@ def test_dispatch_brief_never_contains_todo_placeholder(tool_name, tool_input) -
     assert "[TODO" not in text
     assert "acceptance-criteria" not in text
 
-
-# --------------------------------------------------------------------------------------
-# Registration.
-# --------------------------------------------------------------------------------------
 
 def test_op_is_registered() -> None:
     import coordinator_core.hooks  # noqa: F401 — triggers registration side-effects

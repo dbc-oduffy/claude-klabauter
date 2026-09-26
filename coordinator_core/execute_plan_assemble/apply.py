@@ -81,11 +81,6 @@ from coordinator_core.telemetry.composition_record import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-# ---------------------------------------------------------------------------
-# Exit-code contract — composed from apply_base, shared by every apply/
-# dispatch half. NOT inherited from any brief-shaped 0/1/2/3 contract; this
-# module has no `brief()` half at all.
-# ---------------------------------------------------------------------------
 APPLY_EXIT_OK = apply_base.APPLY_EXIT_OK
 APPLY_EXIT_HALTED_AT_JUDGMENT = apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT
 APPLY_EXIT_CLAIM_DENIED = apply_base.APPLY_EXIT_CLAIM_DENIED
@@ -96,8 +91,6 @@ UnrecognizedDirective = apply_base.UnrecognizedDirective
 
 _NO_CONSOLE = no_console_creationflags()
 
-#: `coordinator/bin/` under THIS engine clone — resolved from this module's
-#: own file location, never from a target repo's `repo_root`.
 _BIN_DIR = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
 
 
@@ -139,8 +132,6 @@ def _dispatch_pickup_assemble(args: list[str], repo_root: Path) -> dict[str, Any
 
 
 def _dispatch_review_exec_auth_stamp(args: list[str], repo_root: Path) -> dict[str, Any]:
-    """d2 — `review-exec-auth-stamp authorize-invocation <plan-path>
-    --typed-command /execute-plan`. Launcher-spawn shape (§ `_run_bin_py`)."""
     if not args or args[0] != "authorize-invocation":
         raise UnrecognizedDirective(f"review-exec-auth-stamp: unrecognized verb {args[:1]!r}")
     proc = _run_bin_py("review-exec-auth-stamp", args, repo_root)
@@ -152,9 +143,6 @@ def _dispatch_review_exec_auth_stamp(args: list[str], repo_root: Path) -> dict[s
 
 
 def _dispatch_session_claim_cli(args: list[str], repo_root: Path) -> dict[str, Any]:
-    """d3 — `session-claim-cli claim-plan <slug> --for-execution`.
-    Launcher-spawn shape (§ `_run_bin_py`); mirrors
-    `baton_assemble.apply._dispatch_session_claim_cli`."""
     if not args or args[0] != "claim-plan":
         raise UnrecognizedDirective(f"session-claim-cli: unrecognized verb {args[:1]!r}")
     proc = _run_bin_py("session-claim-cli", args, repo_root)
@@ -166,16 +154,6 @@ def _dispatch_session_claim_cli(args: list[str], repo_root: Path) -> dict[str, A
 
 
 def _emit_out_path(repo_root: Path, plan_path: str) -> Path:
-    """Builds `<plan-basename>.<session-id>.workflow.mjs` under a
-    session-scoped directory of `repo_root`, per the sent memo's adopted
-    remedy (state/memo-outbox/sent/emitter-repo-root-guard-landed-and-a-
-    script-path-collision.md § 3): the emitter's own `--out` default is a
-    deterministic function of the plan basename alone, so two sessions
-    emitting the same plan would overwrite each other absent an explicit,
-    session-differentiated `--out`. Reads the session id off the ACTIVE
-    `apply_base.session_identity()` context this module's own `apply()`
-    entered — never `os.environ` directly (two overlapping warm dispatches
-    must not share this value)."""
     scoped = apply_base.current_session_env()
     session_id = None
     for var in apply_base.SESSION_ENV_VARS:
@@ -193,11 +171,6 @@ def _emit_out_path(repo_root: Path, plan_path: str) -> Path:
 
 
 def _dispatch_emit_dispatch_workflow(args: list[str], repo_root: Path) -> dict[str, Any]:
-    """d4 — the workflow emit. `emit-dispatch-workflow.py` has ZERO claude-klabauter
-    launchers (plugin-local in DoE-claude), so it cannot be a bare `cli:`
-    string; this handler resolves the DoE-claude sibling root itself and
-    spawns that script directly — never `dispatch.emit`/`emit_script` (see
-    this module's own negative-spec)."""
     if not args or args[0] != "--plan":
         raise UnrecognizedDirective(f"emit-dispatch-workflow: unrecognized args {args!r}")
     if len(args) != 2:
@@ -229,11 +202,6 @@ def _dispatch_emit_dispatch_workflow(args: list[str], repo_root: Path) -> dict[s
     return {"cli": "emit-dispatch-workflow", "args": list(args), "out": str(out_path)}
 
 
-#: THE closed dispatch table — every key a literal string written here by
-#: hand. Its key set is exactly the four Phase-1 verbs
-#: `pre_execution_directives()` ever emits, and in particular contains
-#: neither `mint-deliverable-id` nor `advance-tracker-status` (§ module
-#: docstring negative-spec; C3 pins this from outside).
 _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     "pickup-assemble": _dispatch_pickup_assemble,
     "review-exec-auth-stamp": _dispatch_review_exec_auth_stamp,
@@ -243,17 +211,10 @@ _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
 
 
 def _resolve_cli(cli_name: str) -> Callable[[list[str], Path], dict[str, Any]]:
-    """The one seam `directives[].cli` ever passes through. Closed over a
-    literal dict — an unrecognized name raises before any directive in the
-    run has executed."""
     return apply_base.resolve_cli(_CLI_DISPATCH, cli_name)
 
 
 def _resolve_repo_root(start: Optional[Path] = None) -> Optional[Path]:
-    """Resolves the enclosing git worktree root via
-    `coordinator_core.git.repo_root.show_toplevel` — the shared cwd-keyed
-    memoized resolution seam every other assembler's own `resolve_repo_root`
-    wraps. Returns `None` on any failure rather than raising."""
     cwd = start or Path.cwd()
     top = show_toplevel(str(cwd))
     return Path(top) if top else None
@@ -316,8 +277,6 @@ def apply(
 
 
 def main(argv: list[str]) -> int:
-    """`execute-plan-assemble apply <plan-path> [--autonomous]
-    [--session-id <id>]`"""
     import json
 
     if not argv or argv[0] in ("--help", "-h"):

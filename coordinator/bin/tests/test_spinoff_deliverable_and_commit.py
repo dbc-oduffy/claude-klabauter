@@ -1,23 +1,3 @@
-"""test_spinoff_deliverable_and_commit — pytest coverage for
-spinoff-deliverable-and-commit.py.
-
-Purpose: exercises the two concerns ported out of DoE-claude
-coordinator/skills/spinoff/SKILL.md into coordinator/bin/spinoff-deliverable-and-commit.py:
-  1. resolve-origin-handoff-id — C2 ID-companion, same-file resolve.
-  2. commit-scope — scope: block extraction (awk port) + fail-loud-on-empty +
-     scoped commit including the handoff file.
-
-Negative-spec: there is deliberately NO coverage of a `resolve-deliverable`
-subcommand or a local `resolve_deliverable_and_initiative`. That forked carry
-function was removed (AC9) because it carried a parent artifact's
-`deliverable_id` unconditionally, contradicting the 2026-08-05 PM ruling that a
-`kind: spinoff` baton mints its own id — `baton_assemble.resolve_lineage` owns
-that branch, and `deliverable_carry.py` forbids a second copy of the function.
-Re-adding such a test means re-adding the defect.
-
-Spec backlink: coordinator/skills/spinoff/SKILL.md § "origin_handoff_id:" (C2
-               block), § "Step 4: Commit" — DoE-claude
-"""
 from __future__ import annotations
 
 import importlib.util
@@ -27,15 +7,7 @@ import sys
 
 import pytest
 
-# Declared, not excused: the commit-scope CLI tests below spawn real
-# `git`/CLI-subprocess processes because the property under test is the
-# real end-to-end CLI contract (exit codes, real `git add`/`commit` on a
-# scratch repo) -- no mock stands in for that. `_init_repo` is called
-# per-test, not hoisted to module scope, since each test drives its own
-# commit/scope scenario against a fresh repo. The spawn ratchet's
 # `_BASELINE` is shrink-only pre-existing residue and is explicitly not
-# the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -68,11 +40,6 @@ def _load_ops():
     from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
 
     return read_frontmatter_field
-
-
-# ---------------------------------------------------------------------------
-# resolve_origin_handoff_id (C2)
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_origin_handoff_id_reads_handoff_id_from_named_file(tmp_path):
@@ -116,11 +83,6 @@ def test_cli_resolve_origin_handoff_id_emits_shell_assignment(tmp_path):
     assert proc.stdout.strip() == "ORIGIN_HANDOFF_ID=hnd-cli-check"
 
 
-# ---------------------------------------------------------------------------
-# extract_scope_paths (Step 4 awk port)
-# ---------------------------------------------------------------------------
-
-
 def test_extract_scope_paths_basic_block():
     text = "\n".join(
         [
@@ -157,11 +119,6 @@ def test_extract_scope_paths_missing_block_returns_empty():
 def test_extract_scope_paths_empty_block_returns_empty():
     text = "\n".join(["scope:", "workstream: bar"])
     assert _module.extract_scope_paths(text) == []
-
-
-# ---------------------------------------------------------------------------
-# commit-scope CLI (Step 4 fail-loud + scoped git add/commit)
-# ---------------------------------------------------------------------------
 
 
 def _init_repo(repo_dir):

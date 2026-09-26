@@ -41,8 +41,6 @@ def _git(*args: str, cwd: Path) -> subprocess.CompletedProcess:
 
 
 def _init_repo_with_pack(path: Path) -> Path:
-    """Inits a repo, commits one file, then `git repack -ad` to force every
-    object into a single pack -- returns the resulting `.idx` path."""
     path.mkdir(parents=True, exist_ok=True)
     _git("init", "-q", "-b", "main", cwd=path)
     _git("config", "user.email", "t@t", cwd=path)
@@ -61,10 +59,8 @@ def _init_repo_with_pack(path: Path) -> Path:
 
 
 def _bump_mtime(path: Path) -> None:
-    """Forces a distinguishable `st_mtime_ns` so a same-size rewrite still
-    changes the memo key -- some filesystems have coarse mtime resolution."""
     st = path.stat()
-    new_ns = st.st_mtime_ns + 10_000_000_000  # +10s, well past any FS granularity
+    new_ns = st.st_mtime_ns + 10_000_000_000
     os.utime(path, ns=(new_ns, new_ns))
 
 
@@ -84,8 +80,6 @@ def test_second_call_returns_memoized_object_not_a_fresh_parse(tmp_path: Path) -
     assert key in _PACK_INDEX_CACHE
 
     second = _parse_pack_index(idx_path)
-    # Identity, not just equality: the cache hit must return the exact same
-    # object rather than re-parsing an equivalent one.
     assert second is first
 
 
@@ -96,14 +90,7 @@ def test_rewritten_pack_index_invalidates_the_memo(tmp_path: Path) -> None:
     assert original is not None
     original_shas = original.shas
 
-    # Add a second commit and re-repack -- git repack -ad against the same
-    # repo produces a NEW pack (new content, new sha-derived filename), but
-    # to prove the memo keys off the FILE the caller is asking about (not
     # something derived once and cached forever) we overwrite the ORIGINAL
-    # idx_path in place with the new index bytes, simulating a pack
-    # rewritten at a stable path (git repack -adk without pruning old names
-    # is one real-world path to this; the point under test is the memo, not
-    # git's own naming scheme).
     (tmp_path / "second.md").write_text("second\n", encoding="utf-8")
     _git("add", "-A", cwd=tmp_path)
     _git("commit", "-qm", "second", cwd=tmp_path)
@@ -114,12 +101,6 @@ def test_rewritten_pack_index_invalidates_the_memo(tmp_path: Path) -> None:
     assert len(new_idx_paths) == 1
     new_bytes = new_idx_paths[0].read_bytes()
 
-    # `git repack -ad` deletes the superseded pack/idx once everything is
-    # folded into the new one, so `idx_path` no longer exists at this
-    # point -- write the new index bytes back at that same path (a stable
-    # path being rewritten in place is the shape under test, not git's own
-    # pack-naming scheme) and force a distinguishable mtime so the memo key
-    # changes even if the filesystem's mtime clock is coarse.
     idx_path.write_bytes(new_bytes)
     _bump_mtime(idx_path)
 
@@ -127,8 +108,6 @@ def test_rewritten_pack_index_invalidates_the_memo(tmp_path: Path) -> None:
     assert reparsed is not None
     assert reparsed is not original
     assert reparsed.shas != original_shas
-    # The new index must contain more objects than the original one-commit
-    # pack (a second commit + its tree + its blob were added).
     assert reparsed.fanout[255] > original.fanout[255]
 
 
@@ -138,9 +117,6 @@ def test_corrupted_rewrite_at_same_path_is_not_served_stale(tmp_path: Path) -> N
     original = _parse_pack_index(idx_path)
     assert original is not None
 
-    # Corrupt the file in place (bad magic) -- a real analog of a pack
-    # being rewritten mid-lifecycle to something this parser can't read.
-    # git leaves pack/idx files read-only on Windows; chmod before write.
     idx_path.chmod(0o644)
     idx_path.write_bytes(b"\x00" * 32)
     _bump_mtime(idx_path)
@@ -150,10 +126,6 @@ def test_corrupted_rewrite_at_same_path_is_not_served_stale(tmp_path: Path) -> N
 
 
 def test_distinct_mtime_size_keys_do_not_collide(tmp_path: Path) -> None:
-    """Two distinct real packs never share a `(path, mtime, size)` key by
-    construction (distinct paths), but this asserts the cache correctly
-    holds independent entries for each rather than only ever caching one
-    global result."""
     repo_a = tmp_path / "a"
     repo_b = tmp_path / "b"
     idx_a = _init_repo_with_pack(repo_a)
@@ -176,7 +148,5 @@ def test_distinct_mtime_size_keys_do_not_collide(tmp_path: Path) -> None:
     assert parsed_a.pack_path != parsed_b.pack_path
     assert parsed_a.shas != parsed_b.shas
 
-    # Re-fetch both -- each must return its own memoized entry, not the
-    # other's.
     assert _parse_pack_index(idx_a) is parsed_a
     assert _parse_pack_index(idx_b) is parsed_b

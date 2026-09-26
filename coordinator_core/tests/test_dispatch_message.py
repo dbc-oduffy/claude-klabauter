@@ -49,12 +49,7 @@ from coordinator_core.ipc import (
 from coordinator_core.ops.emit.validate import ContractPinError
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def _run(coro):
-    """Run an async coroutine synchronously — no pytest-asyncio needed."""
     return asyncio.run(coro)
 
 
@@ -83,14 +78,11 @@ class _RegistryScope:
                 _REGISTRY[name] = old
 
 
-
 def _sync_handler(params: dict, ctx=None, repo_root=None) -> dict:
-    """Trivial sync handler: echo params back under 'echo' key."""
     return {"echo": params}
 
 
 async def _async_handler(params: dict, ctx=None, repo_root=None) -> dict:
-    """Trivial async handler: echo params back under 'async_echo' key."""
     return {"async_echo": params}
 
 
@@ -126,16 +118,10 @@ _TEST_HANDLERS = {
     "test.raise_structural": _raising_structural_handler,
 }
 
-# Sentinel ctx — handlers above never use ctx; None is safe.
 _CTX = None
 
 
-# ---------------------------------------------------------------------------
-# dispatch_message — result path
-# ---------------------------------------------------------------------------
-
 def test_valid_sync_method_returns_result():
-    """Valid request with sync handler → result dict with echoed id and handler output."""
     msg = {"jsonrpc": "2.0", "id": 42, "method": "test.sync", "params": {"x": 1}}
     with _RegistryScope(_TEST_HANDLERS):
         d = _run(dispatch_message(msg))
@@ -147,7 +133,6 @@ def test_valid_sync_method_returns_result():
 
 
 def test_valid_async_method_returns_result():
-    """Valid request with async handler → result dict invoked correctly."""
     msg = {"jsonrpc": "2.0", "id": 7, "method": "test.async", "params": {"k": "v"}}
     with _RegistryScope(_TEST_HANDLERS):
         d = _run(dispatch_message(msg))
@@ -157,7 +142,6 @@ def test_valid_async_method_returns_result():
 
 
 def test_absent_params_defaults_to_empty_dict():
-    """When 'params' key is absent, handler receives {} (not None)."""
     received = {}
 
     def _capture(params, ctx=None, repo_root=None):
@@ -172,17 +156,12 @@ def test_absent_params_defaults_to_empty_dict():
 
 
 def test_id_echoed_as_none_when_absent():
-    """When 'id' is absent from request, result echoes id as None."""
     msg = {"jsonrpc": "2.0", "method": "test.sync", "params": {}}
     with _RegistryScope(_TEST_HANDLERS):
         d = _run(dispatch_message(msg))
     assert d["id"] is None
     assert "result" in d
 
-
-# ---------------------------------------------------------------------------
-# dispatch_message — error paths
-# ---------------------------------------------------------------------------
 
 def test_invalid_jsonrpc_version_returns_32600():
     """jsonrpc != '2.0' → INVALID_REQUEST (-32600)."""
@@ -284,8 +263,6 @@ def test_handler_raises_structural_error_returns_32001():
     assert d["error"]["code"] == STRUCTURAL_PIN_ERROR
     assert d["error"]["code"] != INTERNAL_ERROR
     assert d["id"] == 12
-    # The exception's own message (which already states the remediation for a real
-    # ContractPinError) is preserved verbatim, unlike the generic class-name-only
     # INTERNAL_ERROR message.
     assert "deliberate structural test failure — pin desync" in d["error"]["message"]
 
@@ -328,9 +305,7 @@ def test_handler_raises_plain_value_error_still_returns_32603():
     )
 
 
-# ---------------------------------------------------------------------------
 # PRECEDENCE test — jsonrpc version checked BEFORE params type
-# ---------------------------------------------------------------------------
 
 def test_version_checked_before_params():
     """jsonrpc='1.0' with bad params (int) → -32600 (version gate fires first, not params gate).
@@ -347,10 +322,7 @@ def test_version_checked_before_params():
     )
 
 
-
-# ---------------------------------------------------------------------------
 # PRECEDENCE test — params type checked BEFORE method type
-# ---------------------------------------------------------------------------
 
 def test_params_checked_before_method():
     """params=[1,2] (not dict) with method=999 (not str) → -32602 (params gate fires first).
@@ -370,10 +342,7 @@ def test_params_checked_before_method():
     )
 
 
-# ---------------------------------------------------------------------------
 # C1a — _ORIGIN_WORKTREE_FIELD constant and wire-level acceptance
-# Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C1a
-# ---------------------------------------------------------------------------
 
 def test_origin_worktree_field_constant_defined():
     """_ORIGIN_WORKTREE_FIELD constant is defined with the correct value.
@@ -399,7 +368,6 @@ def test_dispatch_missing_origin_worktree():
         "id": 99,
         "method": "test.no_worktree",
         "params": {},
-        # deliberately no "_origin_worktree" field
     }
 
     def _handler(params, ctx=None, repo_root=None):
@@ -415,17 +383,7 @@ def test_dispatch_missing_origin_worktree():
     assert d["result"] == {"ok": True}
 
 
-# ---------------------------------------------------------------------------
-# ctx threading — handler receives the ctx passed to dispatch_message
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# C1b-ii — resolve_request_repo + per-request repo threading
-# Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C1b
-# ---------------------------------------------------------------------------
-
 def test_resolve_request_repo_present():
-    """resolve_request_repo extracts and resolves _origin_worktree from a message dict."""
     msg = {
         "jsonrpc": "2.0", "id": 1, "method": "test.op",
         _ORIGIN_WORKTREE_FIELD: "/tmp/some/repo",
@@ -433,34 +391,28 @@ def test_resolve_request_repo_present():
     result = resolve_request_repo(msg)
     assert result is not None
     assert isinstance(result, Path)
-    # Resolved path should be canonical (Path.resolve() applied)
     assert result == Path("/tmp/some/repo").resolve()
 
 
 def test_resolve_request_repo_absent():
-    """resolve_request_repo returns None when _origin_worktree is absent."""
     msg = {"jsonrpc": "2.0", "id": 1, "method": "test.op", "params": {}}
     result = resolve_request_repo(msg)
     assert result is None
 
 
 def test_resolve_request_repo_empty_string():
-    """resolve_request_repo returns None when _origin_worktree is an empty string."""
     msg = {"jsonrpc": "2.0", "id": 1, "method": "test.op", _ORIGIN_WORKTREE_FIELD: ""}
     result = resolve_request_repo(msg)
     assert result is None
 
 
 def test_resolve_request_repo_non_string():
-    """resolve_request_repo returns None when _origin_worktree is not a string."""
     msg = {"jsonrpc": "2.0", "id": 1, "method": "test.op", _ORIGIN_WORKTREE_FIELD: 42}
     result = resolve_request_repo(msg)
     assert result is None
 
 
-
 def test_handler_receives_none_repo_when_absent():
-    """dispatch_message passes None as repo_root when _origin_worktree is absent."""
     received: dict = {}
 
     def _repo_capture(params, ctx=None, repo_root=None):
@@ -472,7 +424,6 @@ def test_handler_receives_none_repo_when_absent():
         "id": 11,
         "method": "test.repo_capture_none",
         "params": {},
-        # No _origin_worktree field
     }
     with _RegistryScope({"test.repo_capture_none": _repo_capture}):
         d = _run(dispatch_message(msg))
@@ -483,12 +434,6 @@ def test_handler_receives_none_repo_when_absent():
         f"got {received.get('repo_root')!r}"
     )
 
-
-
-# ---------------------------------------------------------------------------
-# C1c — AC-1b op-keying table + AC-1c fail-loud
-# Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C1c
-# ---------------------------------------------------------------------------
 
 def test_keying_missing_origin_worktree_for_common_dir_op():
     """A common_dir-scoped op with no _origin_worktree → INVALID_PARAMS (-32602).
@@ -502,11 +447,10 @@ def test_keying_missing_origin_worktree_for_common_dir_op():
         "id": 20,
         "method": "hooks.track_touched_files",
         "params": {},
-        # deliberately no "_origin_worktree"
     }
 
     def _stub(params, ctx=None, repo_root=None):
-        return {"ok": True}  # should not be reached
+        return {"ok": True}
 
     with _RegistryScope({"hooks.track_touched_files": _stub}):
         d = _run(dispatch_message(msg))
@@ -533,13 +477,11 @@ def test_emit_op_requires_origin_worktree(tmp_path, exercise_suspended_op):
     the old "bypassed_key=True" (repo_root=None) assertion is the exact regression we guard.
     Spec: docs/plans/2026-07-07-per-repo-emission-cutover.md § C3 / AC1
     """
-    # Without _origin_worktree → should fail loud (common_dir-scoped, key required)
     msg_no_worktree = {
         "jsonrpc": "2.0",
         "id": 21,
         "method": "goal.append",
         "params": {},
-        # deliberately no "_origin_worktree"
     }
 
     def _stub(params, ctx=None, repo_root=None):
@@ -556,7 +498,6 @@ def test_emit_op_requires_origin_worktree(tmp_path, exercise_suspended_op):
         f"Missing routing key must return INVALID_PARAMS (-32602); got {d['error']['code']}"
     )
 
-    # With a valid git worktree → dispatch succeeds and handler receives non-None repo_root
     msg_with_worktree = {
         "jsonrpc": "2.0",
         "id": 22,
@@ -587,7 +528,6 @@ def test_keying_none_op_ignores_origin_worktree():
         "id": 22,
         "method": "ping",
         "params": {},
-        # deliberately no "_origin_worktree"
     }
 
     def _stub(params, ctx=None, repo_root=None):
@@ -604,8 +544,6 @@ def test_keying_none_op_ignores_origin_worktree():
     )
 
 
-
-
 def test_keying_unresolvable_key_fail_loud(tmp_path):
     """common_dir-scoped op with _origin_worktree pointing to a non-git path → INVALID_PARAMS.
 
@@ -616,7 +554,6 @@ def test_keying_unresolvable_key_fail_loud(tmp_path):
     Uses hooks.track_touched_files (common_dir scope, substitute for the retired
     hooks.session_heartbeat example) with a real but non-git tmp dir.
     """
-    # tmp_path exists but is not inside any git repository — git_common_dir will fail
     non_git_dir = tmp_path / "not-a-git-repo"
     non_git_dir.mkdir()
     msg = {
@@ -628,7 +565,7 @@ def test_keying_unresolvable_key_fail_loud(tmp_path):
     }
 
     def _stub(params, ctx=None, repo_root=None):
-        return {"ok": True}  # must not be reached
+        return {"ok": True}
 
     with _RegistryScope({"hooks.track_touched_files": _stub}):
         d = _run(dispatch_message(msg))
@@ -640,7 +577,6 @@ def test_keying_unresolvable_key_fail_loud(tmp_path):
         f"Unresolvable key must return INVALID_PARAMS (-32602), "
         f"not INTERNAL_ERROR or other code; got {d['error']['code']}"
     )
-    # Must NOT silently pick a default repo (the error message must be informative)
     assert "routing key" in d["error"]["message"].lower() or \
            "unresolvable" in d["error"]["message"].lower() or \
            "_origin_worktree" in d["error"]["message"], (
@@ -668,21 +604,17 @@ def test_resolve_op_repo_key_emit_ops_require_worktree():
 
 
 def test_resolve_op_repo_key_none_returns_none():
-    """resolve_op_repo_key returns None for none-scoped ops regardless of request_repo."""
     assert resolve_op_repo_key("ping", None) is None
     assert resolve_op_repo_key("hooks.suggest_sonnet_research", None) is None
     assert resolve_op_repo_key("ping", Path("/some/path")) is None
 
 
 def test_resolve_op_repo_key_show_top_returns_request_repo(tmp_path):
-    """resolve_op_repo_key returns the request_repo directly for show_top-scoped ops."""
     result = resolve_op_repo_key("coverage.gate", tmp_path)
-    # tmp_path is a real directory; for show_top, we return request_repo directly
     assert result == tmp_path
 
 
 def test_resolve_op_repo_key_common_dir_missing_raises():
-    """resolve_op_repo_key raises ValueError for common_dir-scoped ops with None request_repo."""
     try:
         resolve_op_repo_key("hooks.track_touched_files", None)
     except ValueError as exc:
@@ -731,20 +663,11 @@ def test_dispatch_message_preuse_bash_dispatch_degrades_instead_of_denying():
 
 
 def test_never_deny_on_missing_key_ops_stay_fail_loud_scoped():
-    """The degrade set is a narrow allowlist, not every hooks.* op -- a
-    correctness-sensitive hook (hooks.track_touched_files) must not be in it."""
     assert "hooks.track_touched_files" not in ipc._NEVER_DENY_ON_MISSING_KEY_OPS
     assert "hooks.preuse_bash_dispatch" in ipc._NEVER_DENY_ON_MISSING_KEY_OPS
 
 
 def _is_test_like_module_name(dotted_name: str) -> bool:
-    """True for a test/fixture-shaped module name the coverage walk must not treat as an op.
-
-    Matches the house shape for test discovery (a `tests` package component, a
-    `test_*.py` leaf, or `conftest.py`) rather than naming individual modules — a
-    module that legitimately registers an op never has one of these shapes, so this
-    is a structural exclusion, not a skip list.
-    """
     parts = dotted_name.split(".")
     leaf = parts[-1]
     return "tests" in parts or leaf.startswith("test_") or leaf == "conftest"
@@ -779,28 +702,10 @@ def _import_all_ops_tree_modules() -> list:
 
 
 def _find_unclassified_ops(registered_names, scope_table) -> list:
-    """Names present in `registered_names` but absent from `scope_table`, sorted.
-
-    Factored out of the test body so the plant-a-violation self-test
-    (test_gate_detects_a_planted_unclassified_op) exercises the exact same
-    classification logic the real coverage test below trusts — per DEC-4's mandate
-    (extended to C0d) that a gate must be proven to FAIL on a planted violation before
-    it is trusted to pass on a clean tree.
-    """
     return sorted(name for name in registered_names if name not in scope_table)
 
 
 def test_gate_detects_a_planted_unclassified_op():
-    """Plant a synthetic unclassified op key and assert the coverage check catches it.
-
-    DEC-4's plant-a-violation discipline, extended to C0d (same self-test discipline
-    mandated for C0b/C0c): a gate that only ever runs against an already-clean tree
-    proves nothing about whether it would catch a real regression. This proves
-    _find_unclassified_ops flags a planted violation BEFORE
-    test_op_key_scope_table_covers_all_registered_ops is trusted to rely on it against
-    the real registry — without this, F1's failure mode (an op silently defaulted to
-    "none" scope by omission) recurs on op 65.
-    """
     planted_name = "test.planted_unclassified_op_c0d"
     assert planted_name not in _OP_KEY_SCOPE, (
         "planted sentinel name collides with a real _OP_KEY_SCOPE entry — "
@@ -859,17 +764,7 @@ def test_op_key_scope_table_covers_all_registered_ops():
     )
 
 
-
-
-
-# ---------------------------------------------------------------------------
-# C3 — AC-3: request-level fault containment
-# Tests: per-request timeout, blocking-handler isolation, BaseException absorption
-# Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C3
-# ---------------------------------------------------------------------------
-
 from coordinator_core.warm.client import WARM_DISPATCH_INDETERMINATE
-
 
 
 def test_compute_only_op_timeout_stays_a_flat_internal_error():
@@ -927,10 +822,10 @@ def test_timeout_poison_request():
     # Patch DISPATCH_TIMEOUT_SECS for the duration of this test
     import coordinator_core.ipc as _ipc
     orig_timeout = _ipc.DISPATCH_TIMEOUT_SECS
-    _ipc.DISPATCH_TIMEOUT_SECS = 0.05  # 50ms — fast enough for the suite, long enough to be real
+    _ipc.DISPATCH_TIMEOUT_SECS = 0.05
 
     async def _async_slow(params, ctx=None, repo_root=None):
-        await asyncio.sleep(60)  # stall — timeout fires first
+        await asyncio.sleep(60)
         return {"should_not_reach": True}
 
     async def _async_fast(params, ctx=None, repo_root=None):
@@ -952,10 +847,7 @@ def test_timeout_poison_request():
         _ipc.DISPATCH_TIMEOUT_SECS = orig_timeout
 
     # Slow handler must have timed out. `test.slow` is not in OP_CLASSIFICATION,
-    # and `_op_may_mutate` fail-closes an unknown op to True, so the timeout is
     # reported as INDETERMINATE rather than as a flat failure (F1, 2026-08-27 --
-    # see `ipc._timeout_error_envelope`). The op may have run to completion in its
-    # abandoned thread; saying "failed" here is what got a landed commit retried.
     assert "error" in slow_result, (
         f"Slow (stalled) handler must return an error; got result: {slow_result.get('result')}"
     )
@@ -968,7 +860,6 @@ def test_timeout_poison_request():
         f"got {slow_result['error']['message']!r}"
     )
 
-    # Fast handler must have completed normally — event loop was not wedged
     assert "result" in fast_result, (
         f"Fast handler must complete while slow handler is stalled; "
         f"got error: {fast_result.get('error')}"
@@ -1000,10 +891,10 @@ def test_blocking_handler_does_not_wedge_loop():
     import time as _time
     import coordinator_core.ipc as _ipc
     orig_timeout = _ipc.DISPATCH_TIMEOUT_SECS
-    _ipc.DISPATCH_TIMEOUT_SECS = 2.0  # generous — blocking handler finishes in 0.5s
+    _ipc.DISPATCH_TIMEOUT_SECS = 2.0
 
     def _sync_blocking(params, ctx=None, repo_root=None):
-        _time.sleep(0.3)  # BLOCKS — actual thread sleep, not asyncio
+        _time.sleep(0.3)
         return {"blocked": True}
 
     def _sync_fast(params, ctx=None, repo_root=None):
@@ -1023,7 +914,6 @@ def test_blocking_handler_does_not_wedge_loop():
     finally:
         _ipc.DISPATCH_TIMEOUT_SECS = orig_timeout
 
-    # Both must complete — the non-blocking request resolves concurrently
     assert "result" in block_result, (
         f"Blocking handler must complete and return a result; got error: {block_result.get('error')}"
     )
@@ -1060,28 +950,15 @@ def test_base_exception_absorbed():
         f"Expected INTERNAL_ERROR (-32603) for SystemExit handler; "
         f"got code {d['error']['code']}"
     )
-    # The error message should reference the exception type, not be a bare str(SystemExit)
     assert "SystemExit" in d["error"]["message"] or "Internal error" in d["error"]["message"], (
         f"Error message should reference the exception class; "
         f"got {d['error']['message']!r}"
     )
 
 
-# ---------------------------------------------------------------------------
-# Per-op timeout overrides — ceremony.* rows retired by DEC-2 of
-# docs/plans/2026-07-22-wsc-tail-sub-2s-invoke-budget.md (a dispatch timeout is
-# a runaway guard, not a performance budget; the <2s ruling is a KPI test).
-# Historical: state/improvement-queue/2026-07-13-ceremony-wsc-commit-reliably-times-out-o-62330efd3dd4.yaml
-#
-# `ceremony.scoped_git_commit`'s own 150.0s override row (added after DEC-2, for the
-# same op DEC-2 had just un-widened) was itself revoked 2026-08-21 by the ceremony
 # budget (DR-348) — see ipc.CEREMONY_BUDGET_SECS and
-# coordinator_core/tests/test_ceremony_budget_ratchet.py, which is now the sole
-# authority on ceremony.* op timeouts. The tests below therefore assert every
 # ceremony.* method resolves at-or-below CEREMONY_BUDGET_SECS, not at the global
-# default — the clamp in `_timeout_for` applies whether or not an override row
 # exists, so a ceremony op no longer falls all the way to DISPATCH_TIMEOUT_SECS.
-# ---------------------------------------------------------------------------
 
 def test_timeout_for_resolves_per_op_override():
     """Unlisted, non-ceremony ops fall to the global runaway guard.
@@ -1192,9 +1069,7 @@ def test_near_miss_timeout_env_warns(caplog):
     )
 
     # A legitimate future COORDINATOR_* var that merely
-    # mentions "timeout" in passing (not shaped like the real knob) must NOT fire.
     # A bare substring test ("COORDINATOR" in key and "TIMEOUT" in key) would have
-    # nagged on this; the narrowed suffix-shaped match must not.
     caplog.clear()
     with caplog.at_level(_logging.WARNING, logger="coordinator_core.ipc"):
         ipc._warn_on_near_miss_timeout_env(
@@ -1207,26 +1082,8 @@ def test_near_miss_timeout_env_warns(caplog):
     )
 
 
-# ---------------------------------------------------------------------------
-# Dispatch-axis stamp gate (state/handoffs/2026-08-21_103635_reaching-the-
-# warm-engine.md) -- `dispatch_message` must refuse when the currently-
-# imported `coordinator_core` is not rooted in a stamped engine build,
-# UNLESS the explicit, process-local opt-in was set. This suite's own
-# `conftest.py::pytest_configure` already calls `allow_unstamped_dispatch()`
-# once for the whole session (the suite dispatches against the live tree by
-# design), so every test below that wants to see the REFUSED behaviour must
-# flip `ipc._unstamped_dispatch_allowed` off itself via `monkeypatch` --
-# which reverts automatically at that test's own teardown, never leaking
-# into a later test.
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(autouse=True)
 def _reset_stamp_verdict_cache():
-    """Every test in this section gets a clean memoized-verdict slate --
-    `_is_dispatch_engine_stamped` caches its answer at module scope, so a
-    test that monkeypatches the underlying predicate must not leave a stale
-    verdict for the next one."""
     ipc._reset_engine_stamped_verdict_for_test()
     yield
     ipc._reset_engine_stamped_verdict_for_test()
@@ -1236,7 +1093,6 @@ def test_stamp_gate_refuses_when_unstamped_and_opt_in_off(monkeypatch):
     """THE GATE ITSELF: an unstamped root, opt-in off -> refused with
     UNSTAMPED_ENGINE_ROOT_ERROR, and the handler never runs (the whole
     point -- a refused dispatch must not have executed anything)."""
-    # Pinned explicitly rather than inherited from the live default: this
     # test asserts the REFUSING branch, so it must not silently turn into a
     # no-op assertion if `ipc._STAMP_GATE_ARMED` is ever flipped off.
     monkeypatch.setattr(ipc, "_STAMP_GATE_ARMED", True)
@@ -1251,15 +1107,12 @@ def test_stamp_gate_refuses_when_unstamped_and_opt_in_off(monkeypatch):
 
     assert response["error"]["code"] == ipc.UNSTAMPED_ENGINE_ROOT_ERROR
     assert response["id"] == 1
-    assert calls == []  # handler never invoked
+    assert calls == []
     assert "coordinator-invoke" in response["error"]["message"]
     assert "--allow-unstamped-dispatch" in response["error"]["message"]
 
 
 def test_stamp_gate_allows_when_stamped(monkeypatch):
-    """A stamped root dispatches normally even with the opt-in off -- the
-    gate's own no-op path, proving it does not refuse everything."""
-    # Pinned explicitly rather than inherited from the live default: this
     # test asserts the REFUSING branch, so it must not silently turn into a
     # no-op assertion if `ipc._STAMP_GATE_ARMED` is ever flipped off.
     monkeypatch.setattr(ipc, "_STAMP_GATE_ARMED", True)
@@ -1276,10 +1129,6 @@ def test_stamp_gate_allows_when_stamped(monkeypatch):
 
 
 def test_stamp_gate_bypassed_by_explicit_opt_in(monkeypatch):
-    """An unstamped root still dispatches when the explicit opt-in is set --
-    the manual-testing carve-out, exercised via the SAME public function
-    conftest.py and the CLI flag both call."""
-    # Pinned explicitly rather than inherited from the live default: this
     # test asserts the REFUSING branch, so it must not silently turn into a
     # no-op assertion if `ipc._STAMP_GATE_ARMED` is ever flipped off.
     monkeypatch.setattr(ipc, "_STAMP_GATE_ARMED", True)
@@ -1297,13 +1146,6 @@ def test_stamp_gate_bypassed_by_explicit_opt_in(monkeypatch):
 
 
 def test_stamp_verdict_is_memoized_across_dispatches(monkeypatch, tmp_path):
-    """`_is_dispatch_engine_stamped` must pay the resolution cost ONCE per
-    process, not per dispatch -- see its own docstring's brightline note
-    (measured ~21ms process time to even IMPORT the shared predicate this
-    module deliberately does not use here). Proven by counting real stat
-    calls across three dispatches with the opt-in off (so the gate is
-    actually consulted each time)."""
-    # Pinned explicitly rather than inherited from the live default: this
     # test asserts the REFUSING branch, so it must not silently turn into a
     # no-op assertion if `ipc._STAMP_GATE_ARMED` is ever flipped off.
     monkeypatch.setattr(ipc, "_STAMP_GATE_ARMED", True)
@@ -1331,5 +1173,4 @@ def test_stamp_verdict_is_memoized_across_dispatches(monkeypatch, tmp_path):
             assert "error" not in response
 
     assert calls["n"] == 1
-
 

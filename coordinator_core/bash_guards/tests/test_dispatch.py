@@ -64,11 +64,6 @@ def _deny_reason(out: Any) -> str:
     return out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-# ---------------------------------------------------------------------------
-# AC1 / AC2 -- runaway-find is the qualifying deny-class oracle.
-# ---------------------------------------------------------------------------
-
-
 def test_ac2_ac7_negative_oracles_are_disqualified_or_stale():
     """Pins the disqualification/staleness claims the two tests above rely
     on, so a future editor cannot silently believe `destructive-rm`,
@@ -98,11 +93,6 @@ def test_ac2_ac7_negative_oracles_are_disqualified_or_stale():
         "| head -20` probe) could replace grep-via-bash-rewrite as the AC3 "
         "oracle"
     )
-
-
-# ---------------------------------------------------------------------------
-# AC4 -- a "Bash" payload is unaffected (no double-normalization).
-# ---------------------------------------------------------------------------
 
 
 def test_ac6b_derivation_site_is_a_bare_membership_test_no_conditional_gate():
@@ -152,8 +142,6 @@ def test_ac6b_derivation_site_is_a_bare_membership_test_no_conditional_gate():
         % ([ast.dump(n) for n in real_offenders],)
     )
 
-    # Positive control: a synthetic gated variant must trip the same
-    # detector, proving it is not vacuously passing.
     synthetic = ast.parse(
         textwrap.dedent(
             """
@@ -165,21 +153,13 @@ def test_ac6b_derivation_site_is_a_bare_membership_test_no_conditional_gate():
     synthetic_offenders = _offending_nodes(synthetic.value)
     assert synthetic_offenders, "positive control failed to trip its own detector"
 
-    # The Compare node itself (the membership test) must be exactly the
     # `in` comparison against COMMAND_TOOL_NAMES -- not an equality against
-    # a bare string literal (which would also trip
-    # test_no_hardcoded_tool_name_literal_survives_in_a_comparison in
-    # test_tool_name_membership.py).
     test_node = assign_node.value.test
     assert isinstance(test_node, ast.Compare), ast.dump(test_node)
     assert len(test_node.ops) == 1 and isinstance(test_node.ops[0], ast.In), ast.dump(test_node)
     assert isinstance(test_node.comparators[0], ast.Name), ast.dump(test_node)
     assert test_node.comparators[0].id == "COMMAND_TOOL_NAMES", ast.dump(test_node)
 
-
-# ---------------------------------------------------------------------------
-# AC7 -- oracle liveness.
-# ---------------------------------------------------------------------------
 
 def test_ac7_oracle_liveness_runaway_find_and_grep_rewrite_still_bash_only():
     """Fails loudly, rather than turning this suite's evidence into a silent
@@ -213,18 +193,9 @@ def test_ac7_oracle_liveness_runaway_find_and_grep_rewrite_still_bash_only():
         "ADVISORY_REWRITE entry and update test_ac3... accordingly"
     )
 
-    # Also asserts the recorded Bash-only population count doesn't drift
-    # silently against the live chain (mirrors AC7's own second clause).
     bash_only_names = {e.name for e in chain if tuple(e.matchers) == ("Bash",)}
     assert "runaway-find" in bash_only_names
     assert "grep-via-bash-rewrite" in bash_only_names
-
-
-# ---------------------------------------------------------------------------
-# bug-backlog 2026-08-18-powershell-text-reaches-the-posix-tokeni-ea6ff0baddab
-# -- the M5 resolve-once pre-pass must not posix-tokenize raw PowerShell text
-# ahead of any guard's own dialect resolution.
-# ---------------------------------------------------------------------------
 
 
 def test_m5_resolve_once_prepass_skips_posix_tokenize_for_powershell_payload(monkeypatch):

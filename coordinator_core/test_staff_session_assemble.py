@@ -1,17 +1,3 @@
-"""
-coordinator_core.test_staff_session_assemble — co-located pytest for
-coordinator_core.staff_session_assemble.
-
-Covers: domain-signal -> default-pair resolution, explicit --slug override,
-The Director of Engineering-cannot-debate rejection, unknown-domain-signal / unknown-slug
-fail-loud errors, and — the load-bearing case per plan AC17 — a fixture
-that pins reading the doctrine-side roster data from a routing.md-shaped
-text (via the `routing_md_text` test seam) rather than a hardcoded dict:
-mutating the fixture text changes the resolved roster, proving there is no
-compiled-in fallback copy.
-
-Run: python -m pytest coordinator_core/test_staff_session_assemble.py -q
-"""
 from __future__ import annotations
 
 import pytest
@@ -116,9 +102,6 @@ def test_missing_domain_signal_and_slugs_rejected():
 
 
 def test_reads_doctrine_side_data_not_a_hardcoded_copy():
-    """Pins the F1/AC17 contract: mutating the fixture routing.md text
-    changes the resolved roster — there is no compiled-in fallback dict a
-    caller could silently drift from the doctrine-side data."""
     mutated = _FIXTURE_ROUTING_MD.replace(
         "coordinator/agents/staff-eng.md", "coordinator/agents/renamed-staff-eng.md"
     )
@@ -143,10 +126,6 @@ def test_missing_section_heading_is_fail_loud():
 
 def test_cli_main_prints_json_roster(capsys):
     exit_code = ssa.main(["--slug", "patrik", "--session-mode", "plan"])
-    # No routing_md_text seam on the CLI path — this will hit the real
-    # doctrine-side read, which fails today (routing.md has no
-    # Staff-Session Roster section yet, C9 not landed) — assert the
-    # documented fail-loud usage-error contract rather than a live parse.
     assert exit_code == ssa.EXIT_USAGE
     captured = capsys.readouterr()
     assert "staff-session-assemble" in captured.err

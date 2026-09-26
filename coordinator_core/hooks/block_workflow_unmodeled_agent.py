@@ -102,17 +102,10 @@ _IDENTIFIER_CHARS = frozenset(
 )
 
 
-# ---------------------------------------------------------------------------
 # Doctrine-plane asset resolution — see module docstring "ADAPTATION".
-# ---------------------------------------------------------------------------
 
 
 def _resolve_doctrine_asset(*rel_parts: str) -> Optional[Path]:
-    """Locate a doctrine-plane asset (`coordinator/<rel_parts...>`) this
-    engine does not ship — same probe order as
-    `oss_operative_strings._resolve_mcp_topology_path`: the installed
-    plugin content root, then the `.doe-root` pointer for a dev-clone box.
-    Returns `None` on no match at any rung."""
     try:
         from coordinator_core._settings_home import claude_config_dir
         from coordinator_core.data_root import content_root_for
@@ -153,16 +146,7 @@ def _review_signals_path() -> Optional[Path]:
     return _resolve_doctrine_asset("contract", "review-signals.json")
 
 
-# ---------------------------------------------------------------------------
-# String/comment-aware JS scanner — verbatim port.
-# ---------------------------------------------------------------------------
-
-
 def _scan_masks(script: str) -> "tuple[bytearray, bytearray]":
-    """Single-pass, string-AND-comment-aware JS scanner — returns
-    `(string_mask, comment_mask)`, one bit per character of `script`. See
-    source module's own docstring for the full 2026-07-23 desync fix
-    rationale this scan encodes; unchanged here."""
     n = len(script)
     string_mask = bytearray(n)
     comment_mask = bytearray(n)
@@ -230,7 +214,6 @@ def _scan_masks(script: str) -> "tuple[bytearray, bytearray]":
             i += 1
             continue
 
-        # kind == "template"
         ch = script[i]
         if ch == "\\" and i + 1 < n:
             string_mask[i] = 1
@@ -418,18 +401,11 @@ def _count_agent_modeled_with_types(buf: str) -> "tuple[int, int, list[Optional[
     return agent_n, modeled_n, agent_types
 
 
-# ---------------------------------------------------------------------------
-# agentType -> tier resolution and review-roster exemption.
-# ---------------------------------------------------------------------------
-
 _COORDINATOR_AGENT_TYPE_PREFIX = "coordinator:"
 _FRONTMATTER_MODEL_RE = re.compile(r"^model:\s*(\S+)\s*$", re.MULTILINE)
 
 
 def _tier_walked_agent_types() -> "frozenset[str]":
-    """Fails CLOSED to the empty set on a missing/malformed/unresolvable
-    fragment — see source docstring: an unreadable contract exempts
-    nobody."""
     try:
         path = _roster_fragment_path()
         if path is None:
@@ -452,7 +428,6 @@ def _tier_walked_agent_types() -> "frozenset[str]":
 
 
 def _signal_selected_agent_types() -> "frozenset[str]":
-    """Same fail-CLOSED-to-empty-set posture as `_tier_walked_agent_types`."""
     try:
         path = _review_signals_path()
         if path is None:
@@ -479,11 +454,6 @@ def _rostered_agent_types() -> "frozenset[str]":
 
 
 def _resolve_call_site_tier(agent_type: Optional[str]) -> Optional[str]:
-    """Resolve one call site's captured `agentType:` literal to the model
-    tier its own agent definition declares. Returns `None` on ANY
-    resolution failure — no agentType captured, unresolvable agents dir, a
-    name resolving to no file, or a definition with no frontmatter
-    `model:` key."""
     if not agent_type:
         return None
     name = agent_type
@@ -510,17 +480,10 @@ def _resolve_call_site_tier(agent_type: Optional[str]) -> Optional[str]:
     return m.group(1).strip().lower()
 
 
-# ---------------------------------------------------------------------------
-# Session-model detection.
-# ---------------------------------------------------------------------------
-
 _MODEL_LINE_RE = re.compile(r'"model"\s*:\s*"(claude-[^"]*)"')
 
 
 def _detect_opus(transcript_path: str) -> bool:
-    """Grep the first literal "model":"claude-..." occurrence — same
-    detection idiom as the source's context-pressure advisory. Streams
-    line-by-line and stops on the first match."""
     if not transcript_path or not os.path.isfile(transcript_path):
         return False
     try:
@@ -538,9 +501,6 @@ _OVERRIDE_SENTINEL_NAME = ".coordinator-override-workflow-model-guard"
 
 
 def _sentinel_override_active() -> bool:
-    """Repo-root sentinel-file override — `coordinator_core.git.repo_root.
-    show_toplevel` (zero-spawn) replaces the source's in-process-walk-then-
-    subprocess-fallback; see module docstring."""
     try:
         root = show_toplevel()
     except Exception:
@@ -558,11 +518,6 @@ def _env_value(env: object, key: str) -> Optional[str]:
         return None
     value = env.get(key)
     return value if isinstance(value, str) else None
-
-
-# ---------------------------------------------------------------------------
-# Message composers.
-# ---------------------------------------------------------------------------
 
 
 def _compose_zero_modeled_deny_reason(agent_n: int, env: object = None) -> str:
@@ -600,8 +555,6 @@ def _compose_partial_modeled_context(
 
 @register_op("hooks.block_workflow_unmodeled_agent")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PreToolUse(Workflow) op: gate an Opus-session Workflow launch whose
-    `agent()` calls carry no `model:`/rostered `agentType:` cost signal."""
     params = payload_of(params)
     env = params.get("env")
     if _env_value(env, "COORDINATOR_OVERRIDE_WORKFLOW_MODEL_GUARD") == "1":

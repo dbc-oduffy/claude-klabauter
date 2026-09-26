@@ -1,11 +1,3 @@
-"""
-Tests for coordinator_core.frontmatter.baton_class's `canonical_kind` and
-`kind_values_for_canonical` — the C4 baton-kind-vocabulary migration's
-single normaliser and query-term helper (see that module's own "Vocabulary
-bridge" section).
-
-Spec backlink: DoE-claude:pln-baton-kind-vocabulary-one-axis-d1ce8f § C4
-"""
 
 from __future__ import annotations
 
@@ -55,24 +47,11 @@ def test_kind_values_for_canonical_no_alias_returns_canonical_only():
 
 
 def test_kind_values_for_canonical_covers_every_alias_target():
-    # Every retired->successor pair in the alias table must be reachable
-    # from kind_values_for_canonical(successor) — the query-string helper
-    # (audit.py / number_stubs.py) trusts this to cover the full live
-    # vocabulary without a second hand-authored copy of the pairing.
     for retired, canonical in _PRE_RENAME_ALIASES.items():
         assert retired in kind_values_for_canonical(canonical)
 
 
 def test_every_handoff_kind_except_spike_result_has_a_baton_class_mapping_entry():
-    """Schema-parity guard (Finding 3, 28a20f28 review): `baton_class()` nulls
-    on ANY `kind` absent from the vendored schema's `x-baton-class.mapping`,
-    not only `spike-result` — the field docstring's `spike-result` framing
-    describes TODAY's `HandoffKind` enum (the one kind currently unmapped),
-    not the derivation's actual contract. A future `HandoffKind` addition
-    landed without a matching mapping entry would silently null with no
-    signal; this is the tripwire that catches that at test time instead of
-    relying on `test_handoff_kind_baton_widen.py`'s union-widen check, which
-    only asserts the enum grows, never that new members stay mapped."""
     mapping = _load_mapping()
     for kind in typing.get_args(HandoffKind):
         if kind == "spike-result":

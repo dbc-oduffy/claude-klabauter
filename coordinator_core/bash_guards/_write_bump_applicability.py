@@ -182,83 +182,25 @@ from coordinator_core.write_guards._case_fold_path import (
     strip_extended_length_prefix,
 )
 
-# `guard_memory_store_cap` (used only inside `is_agent_memory_store_path` below)
-# is NOT imported at module scope -- it pulls in `coordinator_core.ops._path_guard`,
-# which forces `coordinator_core.ops.__init__`'s `_eager_import_all()` to run,
-# which in turn eagerly imports `coordinator_core.hooks` -- see
-# `test_bash_guards_avoid_hooks_package.py` and `block_subagent_commit.py`'s own
-# "Do NOT import from `coordinator_core.hooks`" note. Deferred to a function-local
-# import so merely importing this module (or evaluating a command that never
-# reaches `is_agent_memory_store_path`) never pays that cost.
 
-#: Prefix every enumerated registry key must carry to be treated as a
-#: registered-repo entry -- mirrors `repos.doe_claude` / `repos.claude_klabauter`
-#: shape but widened, per this module's docstring, to ALL `repos.*` keys
-#: rather than those two named ones.
-# Generator-provenance declaration (generator_provenance.py).
-# record_applicability_event appends to session_dir(...)/write_bump_
-# applicability_log, under .git/coordinator-sessions/ -- untracked
-# session-scoped state, never a tracked repo artifact.
 GENERATES = []
 
 _REGISTRY_REPOS_PREFIX = "repos."
 
 #: `repos.*` keys whose value is a CONTAINER of repos, not a repo. They carry
-#: the prefix but not its semantics, and enumerating one as a repo root is a
-#: correctness bug, not a cosmetic one: `repos.fleet_root` resolves to a bare
-#: drive root on this box, so `target_is_registered_repo` answered True for
-#: EVERY path on that drive, and rule B7's foreign-root leg (which reads this
-#: same enumeration) compiled it to a two-character, case-insensitive
-#: drive-letter pattern -- reporting the tail of the English word "prefi|x:|"
-#: as an absolute foreign repo root. Measured 2026-08-30.
-#:
-#: The concept is NOT new here: `coordinator/bin/lib/git_hook_install.py`
 #: already carries `_CONTAINER_REGISTRY_KEYS` with the identical membership
-#: and reasoning (its heal sweep would otherwise report a correct entry as a
-#: broken repo). Duplicated rather than imported because this module sits on
-#: the PreToolUse hot path and must not pull `coordinator/bin/lib` into its
-#: import graph; `test_container_registry_keys_agree_across_holders` pins the
-#: two copies together so they cannot drift silently.
 _CONTAINER_REGISTRY_KEYS = frozenset({"repos.fleet_root"})
 
-#: Prefix every enumerated registry key must carry to be treated as a
-#: publish-destination entry -- `publish.mirrors.<name>.path` /
 #: `publish.mirrors.<name>.owner`, disjoint from `_REGISTRY_REPOS_PREFIX` by
-#: construction (verified at HEAD -- see plan's § Design). C1
-#: (docs/plans/2026-08-03-narrow-write-confinement-bump.md).
 _REGISTRY_PUBLISH_MIRRORS_PREFIX = "publish.mirrors."
 
-#: Value-key suffixes under a `publish.mirrors.<name>.*` entry. The ROOTS
-#: reader (`_all_publish_destinations`) keys on `.path` ONLY, never
-#: `.owner` -- membership decides the verdict, `owner` only informs C2's
-#: copy (plan § Design, § Anti-scope: "Do not gate the verdict on
-#: `owner`").
 _PUBLISH_PATH_SUFFIX = ".path"
 _PUBLISH_OWNER_SUFFIX = ".owner"
 
-#: Append-only observability log filename (AC18), sibling to C0's own
-#: single-value `write_bump_launch_cwd` record under the same per-session
 #: directory. Deliberately a SEPARATE file: C0's record is a single scalar
-#: overwritten idempotently at SessionStart, and appending log lines into
-#: it would break that single-value contract for every reader of this
-#: package's other modules.
 _APPLICABILITY_LOG_FILENAME = "write_bump_applicability_log"
 
 
-#: AC11 / merged-in DoE source numbering C9 (see plan's § "Substrate
-#: re-verification" and drift D9) landed the extended-length-prefix strip
-#: as a private helper scoped to THIS module's own comparison only ("not a
-#: repo-wide sweep ... that sweep is the sibling anchor plan's own proposed
-#: standalone plan to own"). `state/handoffs/2026-08-03-windows-extended-
-#: length-prefix-desync.md` is that sweep: the strip now lives once in
-#: `write_guards._case_fold_path.strip_extended_length_prefix`, folded into
-#: `casefold_path` itself. This name stays as a re-export (not a second
-#: implementation) so existing call sites/tests here are unaffected. It
-#: exists SOLELY for AC11 test back-compat (tests reference
-#: `applicability._strip_windows_extended_length_prefix` by this name) --
-#: production code always uses `strip_extended_length_prefix` directly (see
-#: `_resolve_path` below). A future cleanup pass renaming the tests can
-#: drop this alias. Review: code-reviewer cb2c4bcd, Finding 3.
 _strip_windows_extended_length_prefix = strip_extended_length_prefix
 
 
@@ -290,18 +232,10 @@ def _resolve_path(raw: str) -> Optional[str]:
 
 
 def _is_under(candidate_cf: str, parent_cf: str) -> bool:
-    """Case-folded prefix containment: `candidate_cf` equals `parent_cf`
-    or sits under it. Both inputs are ALREADY resolved+case-folded by
-    `_resolve_path` -- this helper does no I/O itself."""
     parent_stripped = parent_cf.rstrip("/")
     return candidate_cf == parent_stripped or candidate_cf.startswith(parent_stripped + "/")
 
 
-#: Public alias. This helper now has a cross-package consumer
-#: (`write_guards.bump_out_of_repo_tool_write` imports it directly, not
-#: merely a sibling in this same package) -- `_is_under` stays as an alias
-#: so that existing `from ..._write_bump_applicability import _is_under`
-#: call sites (bash_guards' own C4/C5 modules) do not need to change.
 is_under = _is_under
 
 
@@ -554,11 +488,6 @@ def is_agent_memory_store_path(path: str) -> bool:
             continue
         suffix = target_cf[len(root_cf.rstrip("/")):].lstrip("/")
         parts = suffix.split("/") if suffix else []
-        # `parts[0]` is the project slug, `parts[1]` must be the `memory`
-        # dir itself -- at least two parts required (a bare `<slug>/memory`
-        # directory write, with nothing beneath it, still counts), matching
-        # `guard_memory_store_cap`'s own dir-name comparison convention
-        # (case-insensitive via the already-casefolded `target_cf`/`suffix`).
         if len(parts) >= 2 and parts[1] == _MEMORY_DIRNAME.casefold():
             return True
     return False
@@ -823,15 +752,6 @@ def bump_applies(
 def session_anchor_has_git_repo(
     session_id: str, cwd: Optional[str] = None, env: Optional[dict] = None
 ) -> bool:
-    """True iff the session's anchored launch directory is itself inside a
-    git repo. False (fail open, in the sense of "treat as the no-repo
-    case") when the anchor is unresolvable OR `git rev-parse --git-dir`
-    fails against it (`_write_bump_marker.resolve_gitdir`, itself already
-    fail-open, supplies the git-dir resolution -- not reimplemented here).
-    Callers use this for the second no-bump condition: when this returns
-    `False`, outside-repo writes never bump, and cross-repo writes bump
-    only against a `target_is_registered_repo` target.
-    """
     anchor = resolve_launch_anchor(session_id, cwd=cwd, env=env)
     if not anchor:
         return False
@@ -874,21 +794,6 @@ def _all_registered_repo_roots(env: Optional[dict] = None) -> list:
 
 
 def target_is_registered_repo(target_root: str, env: Optional[dict] = None) -> bool:
-    """Is `target_root` inside (or equal to) any `repos.*` entry in the
-    machine-local registry?
-
-    Used only for the second no-bump condition -- when the session's own
-    anchor is in no git repo (`session_anchor_has_git_repo` is `False`),
-    per § "Where the bump does not fire": a fresh, unregistered scaffold
-    tree writes freely, but a commit into a registry-known repo still
-    bumps.
-
-    Fail open: `False` (not registered, so the caller does not bump) when
-    `target_root` is empty/unresolvable, or when the registry cannot be
-    read at all (`_all_registered_repo_roots` already degrades to `[]` in
-    that case) -- per the plan's own § text, "If the registry is
-    unreadable, nothing bumps."
-    """
     target_cf = _resolve_path(target_root) if target_root else None
     if target_cf is None:
         return False
@@ -962,16 +867,6 @@ def _all_publish_destinations(env: Optional[dict] = None) -> list:
 
 
 def _all_publish_destination_roots(env: Optional[dict] = None) -> list:
-    """Every `publish.mirrors.*.path` value across the merged registry --
-    roots-only view of `_all_publish_destinations`, mirroring
-    `_all_registered_repo_roots`'s own shape for callers that need only the
-    path set. `target_is_publish_destination` is that caller (see its own
-    docstring).
-
-    `env` is accepted for call-site symmetry, unused for the same reason
-    `_all_publish_destinations`/`_all_registered_repo_roots` leave it
-    unused -- see those docstrings.
-    """
     return [path for path, _owner in _all_publish_destinations(env=env)]
 
 
@@ -1015,13 +910,6 @@ def target_is_publish_destination(target_root: str, env: Optional[dict] = None) 
 
 
 def publish_destination_owner(target_root: str, env: Optional[dict] = None) -> str:
-    """The registered `owner` of the `publish.mirrors.*` entry `target_root`
-    falls under, or `""` when `target_root` is not a publish destination
-    (mirrors `target_is_publish_destination`'s own membership test) or the
-    registry cannot be read. Consumed by C2's copy for context only -- see
-    `target_is_publish_destination`'s docstring: `owner` never gates the
-    verdict, only informs the message.
-    """
     target_cf = _resolve_path(target_root) if target_root else None
     if target_cf is None:
         return ""
@@ -1067,14 +955,6 @@ def record_applicability_event(
         return
     if not sdir:
         return
-    # An applicability log line is not a session and must never mint one:
-    # this used to `mkdir(parents=True, exist_ok=True)` `<hub>/<session_id>`,
-    # and `liveness.live_session_ids` enumerates every non-denylisted child of
-    # that hub as a SESSION, so a diagnostic write manufactured a phantom,
-    # record-less session. `session/core.py::ensure_session` is the ONE
-    # constructor. The line itself is preserved, not dropped: an unknown
-    # session's line lands in the denylisted `no-session` bucket, the same
-    # fallback `bash_guards/_override_log_path` uses and for the same reason.
     log_dir = Path(sdir)
     if not log_dir.is_dir():
         log_dir = log_dir.parent / NO_SESSION_BUCKET
@@ -1089,6 +969,4 @@ def record_applicability_event(
         ) as f:
             f.write(line)
     except Exception:
-        # Fail open, unconditionally -- see module docstring. A missed log
-        # line is never a reason to alter or block the write it describes.
         pass

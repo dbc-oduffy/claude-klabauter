@@ -33,15 +33,7 @@ _TRACKED = [
     "percolate-hooks/README.md",
 ]
 
-# A publish_sync.py body that satisfies would_refuse() against every
 # PUBLISH_MODES entry point (sync_mirror, sync_flat_mirror, sync_repo_cut)
-# plus load_ignore — the "would not be refused" baseline every test below
-# starts from and mutates one entry point at a time. Deliberately NO
-# **kwargs catch-all on the entry points whose bind_kwargs the regression
-# below removes a name from: would_refuse()/accepted_keywords() treats a
-# real **kwargs as "absorbs anything" (mirrors bind_partial's own
-# leniency), so a catch-all would mask exactly the drop this fixture
-# exists to exercise.
 _CONTRACT_SATISFYING_PUBLISH_SYNC = textwrap.dedent(
     """
     def sync_mirror(copy_file, renamed_dir_names, sweep_top_level_orphans, renamed_file_names):
@@ -58,8 +50,6 @@ _CONTRACT_SATISFYING_PUBLISH_SYNC = textwrap.dedent(
     """
 )
 
-# Same shape, minus copy_file on sync_mirror — the actual production
-# regression (copy_file dropped from sync_mirror's signature).
 _CONTRACT_REFUSING_PUBLISH_SYNC = textwrap.dedent(
     """
     def sync_mirror(renamed_dir_names, sweep_top_level_orphans, renamed_file_names):
@@ -76,9 +66,6 @@ _CONTRACT_REFUSING_PUBLISH_SYNC = textwrap.dedent(
     """
 )
 
-# Contract-satisfying, but with an extra helper function and extra
-# defaulted parameters not present in the sibling copies — the
-# "arbitrary body differences" the would-refuse bar must tolerate.
 _CONTRACT_SATISFYING_WITH_EXTRAS = textwrap.dedent(
     """
     def _locate_percolate_lib():
@@ -118,9 +105,6 @@ def _write_tracked(dirpath: Path, relpaths, content_by_relpath=None) -> None:
 
 @pytest.fixture(autouse=True)
 def _percolate_on_path():
-    """`check_pairs()` imports `percolate.publish_sync_contract` lazily; make
-    sure the real claude-klabauter `coordinator/lib` is on sys.path for every test in
-    this module, mirroring what `main()` does via `_ensure_percolate_on_path`."""
     coordinator_lib = Path(__file__).resolve().parents[2] / "coordinator" / "lib"
     inserted = str(coordinator_lib) not in sys.path
     if inserted:
@@ -220,13 +204,7 @@ def test_unset_plugin_root_makes_main_fail_loud_not_cwd_fallback(monkeypatch, ca
     assert "CLAUDE_PLUGIN_ROOT is unset" in captured.err
 
 
-# --- P077-C2: source leg + contract leg -------------------------------
-
-
 def test_regression_stale_twin_copy_file_dropped_from_sync_mirror(tmp_path):
-    """The acceptance test for this plan: a template and a live
-    publish_sync.py, byte-identical, whose sync_mirror lacks copy_file.
-    Must exit 1 and name publish_sync.py, sync_mirror and copy_file."""
     templates, live, source = _make_dirs(tmp_path)
     tracked = ["publish_sync.py"]
     _write_tracked(
@@ -283,14 +261,11 @@ def test_no_false_positive_on_arbitrary_body_differences(tmp_path):
     lines, rc = check_pairs(templates, live, tracked, source_setup=source)
     assert rc == 0
     assert not any(l.startswith("CONTRACT_REFUSE") for l in lines)
-    # The two copies differ byte-for-byte, but publish_sync.py is judged by
-    # would-refuse on this leg, never a byte compare.
     assert not any(l.startswith("SOURCE_MISMATCH") and "publish_sync.py" in l for l in lines)
 
 
 def test_no_source_tree_skips_source_legs_but_template_contract_still_runs(tmp_path):
     templates, live, source = _make_dirs(tmp_path)
-    # source dir deliberately not created.
     tracked = ["publish_sync.py"]
     _write_tracked(
         templates, tracked, {"publish_sync.py": _CONTRACT_REFUSING_PUBLISH_SYNC}
@@ -303,7 +278,6 @@ def test_no_source_tree_skips_source_legs_but_template_contract_still_runs(tmp_p
     skip_lines = [l for l in lines if l.startswith("SOURCE_SKIPPED")]
     assert len(skip_lines) == 1
     assert not any(l.startswith("SOURCE_") and not l.startswith("SOURCE_SKIPPED") for l in lines)
-    # Template-side contract leg still runs and still refuses.
     assert rc == 1
     assert any(l.startswith("CONTRACT_REFUSE") and "template" in l for l in lines)
 
@@ -314,7 +288,6 @@ def test_template_canonical_file_with_no_repo_root_copy_does_not_fail(tmp_path):
     tracked = [".percolate-identity.example"]
     _write_tracked(templates, tracked)
     _write_tracked(live, tracked)
-    # source has no copy of this relpath at all.
 
     lines, rc = check_pairs(templates, live, tracked, source_setup=source)
     assert rc == 0

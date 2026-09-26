@@ -50,12 +50,6 @@ def test_both_dispatch_paths_share_one_engine_anchored_bin_dir():
 
 
 def test_in_process_dispatch_never_looks_under_a_consumer_repo(tmp_path: Path):
-    """`tmp_path` stands in for a consumer repo: no `coordinator/bin/` at
-    all, exactly as in example-retrieval-repo, example-retrieval-repo-ue-addon, DoE-claude and
-    example-game-workbench-repo. The producer name below does not exist in the
-    engine either, so the resolution still misses — but the miss must name
-    the ENGINE path, not the consumer one. Under the defect this asserted
-    path was `tmp_path/coordinator/bin/...`."""
     assert not (tmp_path / "coordinator" / "bin").exists()
 
     with pytest.raises(ma_apply.UnrecognizedDirective) as exc:
@@ -66,11 +60,6 @@ def test_in_process_dispatch_never_looks_under_a_consumer_repo(tmp_path: Path):
 
 
 def test_converged_handlers_resolve_producers_present_in_the_engine(tmp_path: Path):
-    """The three verbs C2 converted must be resolvable while running a
-    ceremony against a repo that is not the engine. `portability-sweep` is
-    excluded: it has no producer on any box (see
-    `_dispatch_portability_sweep`'s docstring), so its absence is the
-    designed `already_satisfied` path, not this defect."""
     for script_name in ("merge-recovery-and-tag-cut", "check-no-illegal-paths"):
         resolved = ma_apply._BIN_DIR / f"{script_name}.py"
         assert resolved.is_file(), f"{script_name} missing from the engine's coordinator/bin"

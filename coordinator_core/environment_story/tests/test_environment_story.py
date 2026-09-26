@@ -51,13 +51,6 @@ from coordinator_core.environment_story import stories as ess  # noqa: F401  (im
 from coordinator_core.environment_story import story as es
 
 
-# ---------------------------------------------------------------------------
-# Registry isolation -- `es._registry` is module-global and `stories`
-# registers `ephemeral-cloud-vm` into it at import time. Snapshot/restore
-# around every test, same rationale as the DoE original.
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(autouse=True)
 def _isolate_registry():
     snapshot = dict(es._registry)
@@ -75,12 +68,6 @@ def _all_composed_stories():
     stories_by_name = {es.STRICTEST_STORY.name: es.STRICTEST_STORY}
     stories_by_name.update(es._registry)
     return list(stories_by_name.values())
-
-
-# ---------------------------------------------------------------------------
-# The moved package carries no `omission_ledger` import and no `__main__`
-# regeneration block -- the AC this chunk's spec states explicitly.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -141,10 +128,6 @@ def test_moved_package_has_no_main_regeneration_block(module):
     )
 
 
-# ---------------------------------------------------------------------------
-# 1. No composed story's prose contains an environment conditional.
-# ---------------------------------------------------------------------------
-
 CONDITIONAL_ADDRESS_PATTERNS: tuple[str, ...] = (
     r"if you( a|')re in",
     r"if this is a",
@@ -191,10 +174,7 @@ def test_no_composed_story_prose_contains_environment_conditional():
         )
 
 
-# ---------------------------------------------------------------------------
 # 2. An unrecognised environment resolves to STRICTEST_STORY, through the
-#    real selection seam.
-# ---------------------------------------------------------------------------
 
 
 def test_unrecognised_environment_resolves_to_strictest_through_selection_seam(
@@ -209,12 +189,6 @@ def test_unrecognised_environment_resolves_to_strictest_through_selection_seam(
     assert story.name == "strictest"
 
 
-# ---------------------------------------------------------------------------
-# 3. The two marker names differ from each other and from the posture
-#    marker.
-# ---------------------------------------------------------------------------
-
-
 def test_environment_story_marker_differs_from_itself_and_from_posture():
     posture_marker_start = "<!-- coordinator:posture:start -->"
     posture_marker_end = "<!-- coordinator:posture:end -->"
@@ -224,12 +198,6 @@ def test_environment_story_marker_differs_from_itself_and_from_posture():
     assert sel.MARKER_END != posture_marker_end
     assert sel.MARKER_START != posture_marker_end
     assert sel.MARKER_END != posture_marker_start
-
-
-# ===========================================================================
-# GuardEnforcementJoin -- the reader class, exercised directly (see module
-# docstring for the two emitter-seam tests that did not port).
-# ===========================================================================
 
 
 def _doc(**overrides):

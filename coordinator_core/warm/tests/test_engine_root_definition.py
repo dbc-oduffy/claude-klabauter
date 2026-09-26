@@ -1,14 +1,3 @@
-"""
-coordinator_core.warm.tests.test_engine_root_definition
-
-Spec backlink: docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C2
-
-Pins the single definition this plan collapses seven duplicated
-`Path(__file__).resolve().parents[2]` computations onto: a directory is an
-engine root iff it carries a valid `coordinator_core/_engine_stamp`. C2 is
-definition only -- no fail-closed raise here (that is C4) and no rewired
-caller (that is C3), so these tests exercise `engine_root` in isolation.
-"""
 
 from pathlib import Path
 

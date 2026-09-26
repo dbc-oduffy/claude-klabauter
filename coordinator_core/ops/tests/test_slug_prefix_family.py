@@ -1,15 +1,3 @@
-"""
-coordinator_core.ops.tests.test_slug_prefix_family — pytest for the
-slug-prefix-family collision predicate (C4:
-docs/plans/2026-08-14-baton-closes-when-its-plan-ships.md).
-
-Pinned against this plan's own motivating incident (§ Problem's 40/42/45
-triple) — `cascade_backstop_sweep`'s own test module (AC7) shares this exact
-fixture so a drift between the two call sites is one shared test's
-regression, not two independently-green suites silently disagreeing.
-
-Run (from repo root): python3 -m pytest coordinator_core/ops/tests/test_slug_prefix_family.py -q
-"""
 
 from __future__ import annotations
 
@@ -18,9 +6,6 @@ from coordinator_core.ops.slug_prefix_family import (
     is_slug_prefix_family,
 )
 
-# This plan's § Problem table, verbatim: one shared source string
-# ("coordinator-ops-buildout-from-fence-inventory") cut at three different
-# truncation lengths (40/42/45) before the mint-time hash suffix.
 ID_45 = "dlv-coordinator-ops-buildout-from-fence-inventory-df74c5"
 ID_42 = "dlv-coordinator-ops-buildout-from-fence-invent-903224"
 ID_40 = "dlv-coordinator-ops-buildout-from-fence-inve-fc3678"
@@ -40,14 +25,9 @@ class TestIsSlugPrefixFamily:
         assert is_slug_prefix_family("dlv-alpha-workstream-111111", "dlv-beta-workstream-222222") is False
 
     def test_a_common_short_word_prefix_is_not_a_false_positive(self):
-        # "coord" is a literal prefix of "coordinator", but neither slug is a
-        # PREFIX of the other in full — the shared root diverges immediately
-        # after, so this must not read as one family.
         assert is_slug_prefix_family("dlv-coord-alpha-111111", "dlv-coordinator-beta-222222") is False
 
     def test_ids_with_no_hash_suffix_still_compare_on_their_slug(self):
-        # mint-from-stub shape (`dlv-<stub_id>`, no trailing -<6hex>) — the
-        # predicate must not raise, and still compares literally.
         assert is_slug_prefix_family("dlv-stub-alpha", "dlv-stub-alpha-extended") is True
 
     def test_empty_or_bare_prefix_never_matches(self):

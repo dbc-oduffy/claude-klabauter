@@ -131,18 +131,11 @@ class MutatingOpRefusal(RuntimeError):
 
 
 class LevelExceedsCapError(RuntimeError):
-    """Raised when a requested concurrency level exceeds the computed
-    parallelism cap and no override was supplied."""
+    pass
 
 
 @dataclass(frozen=True)
 class MachineState:
-    """One point-in-time reading of machine pressure.
-
-    `readable=False` means the reading itself failed (e.g. psutil raised) --
-    callers MUST treat this as "cannot prove headroom", never as "assume
-    headroom is fine" (fail-closed escape-hatch contract).
-    """
 
     readable: bool
     free_ram_gb: Optional[float] = None
@@ -163,18 +156,9 @@ class MachineState:
 
 
 def read_machine_state() -> MachineState:
-    """Default machine-state reader -- psutil-backed, cross-platform
-    (including native Windows; see module docstring for why psutil over a
-    PowerShell subprocess). Never raises: any failure is captured into
-    `MachineState(readable=False, error=...)` so the escape hatch can fail
-    closed instead of propagating an exception mid-wave.
-    """
     try:
         import psutil
     except ImportError as exc:  # pragma: no cover -- psutil is a declared,
-        # always-required dependency (pyproject.toml); this branch only
-        # fires on a broken/incomplete install, which is exactly a case the
-        # escape hatch must fail closed on, not silently proceed past.
         return MachineState(readable=False, error=f"psutil unavailable: {exc!r}")
 
     try:
@@ -208,11 +192,6 @@ def evaluate_escape_hatch(
     max_cpu_percent: float,
     max_process_count: int,
 ) -> tuple[bool, str]:
-    """Returns (ok, reason). ok=False means abort the run.
-
-    Fails CLOSED: `state.readable is False` is always `(False, ...)` --
-    an unreadable machine state can never be interpreted as headroom.
-    """
     if not state.readable:
         return False, f"machine state unreadable: {state.error}"
     if state.free_ram_gb is not None and state.free_ram_gb < min_free_ram_gb:
@@ -225,11 +204,6 @@ def evaluate_escape_hatch(
 
 
 def compute_parallelism_cap(physical_cores: int, usable_ram_gb: float) -> int:
-    """min(physical_cores/2, usable_RAM_GB*1024/150MB), floored, minimum 1.
-
-    Doctrine formula -- docs/wiki/machine-load-norm.md /
-    docs/reference/test-tiers.md. Recomputed per box, never hardcoded.
-    """
     if physical_cores < 1:
         raise ValueError(f"compute_parallelism_cap: physical_cores must be >= 1, got {physical_cores!r}")
     if usable_ram_gb <= 0:
@@ -249,8 +223,6 @@ def compute_parallelism_cap(physical_cores: int, usable_ram_gb: float) -> int:
     ),
 )
 def default_physical_cores() -> int:
-    """Best-effort physical-core count; falls back to os.cpu_count() (logical)
-    if psutil is unavailable or returns None (some virtualized/CI hosts)."""
     try:
         import psutil
 
@@ -271,17 +243,12 @@ def default_physical_cores() -> int:
     ),
 )
 def default_usable_ram_gb() -> float:
-    """Best-effort total system RAM in GB via psutil; fails loud (raises) if
-    psutil is unavailable -- there is no safe fallback for this figure and a
-    silently wrong cap defeats the whole escape-hatch contract."""
     import psutil
 
     return psutil.virtual_memory().total / (1024 ** 3)
 
 
 def validate_levels(levels: List[int], cap: int, override_cap: bool) -> None:
-    """Fails loud on: empty list, non-positive/duplicate levels, non-ascending
-    order, or any level above `cap` (unless `override_cap`)."""
     if not levels:
         raise ValueError("validate_levels: levels must be non-empty")
     if len(set(levels)) != len(levels):
@@ -310,10 +277,6 @@ def refuse_if_not_compute_only(op: str) -> None:
 
 
 def _percentile(sorted_samples: List[float], pct: float) -> float:
-    """Nearest-rank-with-interpolation percentile -- same convention as
-    coordinator_core.benchmarks.harness._percentile (not imported directly to
-    avoid a cross-module coupling for a five-line pure function; kept
-    byte-for-byte identical in behavior)."""
     if not sorted_samples:
         raise ValueError("_percentile: empty sample list")
     if len(sorted_samples) == 1:
@@ -337,10 +300,6 @@ class LevelResult:
 
     def summary(self) -> dict:
         if not self.samples_ms:
-            # A level that took zero valid samples is a failed measurement, not a
-            # measurement of zero. Without the reason here the caller reads
-            # `aborted: false` with no numbers and no cause -- indistinguishable
-            # from an instrument that ran clean.
             return {
                 "level": self.level,
                 "n": 0,
@@ -367,13 +326,6 @@ class LevelResult:
             "abort_reason": self.abort_reason,
             "machine_state_at_waves": self.state_at_wave_start,
         }
-        # A partly-invalid level still owes its reason. `first_invalid_reason`
-        # is captured whenever ANY sample invalidates, but until now it only
-        # reached the summary on the all-invalid branch -- so "8 valid, 2
-        # invalid" surfaced a bare count with the cause dropped, and a reader
-        # comparing p50s across levels had no way to see that two children
-        # died. Emitted here only when something actually invalidated, so a
-        # clean level's summary is unchanged.
         if self.invalid_count and self.first_invalid_reason is not None:
             summary["first_invalid_reason"] = self.first_invalid_reason
         return summary
@@ -543,11 +495,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """CLI entrypoint. Resolves `--op`'s params/`--repo` via the shared
-    op_fixtures registry (same fixture materialization as harness.run()) so
-    a worktree-scoped op (e.g. ceremony.session_instructions) gets real
-    params, not the bare-op default. Materializes at most one fixture repo
-    for the whole CLI invocation and always tears it down, even on abort."""
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 

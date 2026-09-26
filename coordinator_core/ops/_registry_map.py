@@ -24,55 +24,24 @@ from __future__ import annotations
 
 from typing import Dict
 
-# op-name -> dotted module path whose import triggers that op's register_op(...)
-# side-effect. Some modules register multiple related ops (e.g. coordinator_core.hooks
-# registers all 10 hooks.* ops in one import) — those ops share the same module value.
-#
-# Every key here must ALSO be reachable from the eager-import path
 # (coordinator_core/ops/__init__.py::_EAGER_OP_MODULES), or the op registers only under
-# whichever import order happens to pull its module in — see coordinator_core/hooks/
-# __init__.py for the order-dependent drift-guard failure that shape produces.
 OP_MODULE_MAP: Dict[str, str] = {
     "ping":                                   "coordinator_core.ops.ping",
     "invoke.from_argv":                       "coordinator_core.ops.invoke_from_argv",
     "cutover.gate":                           "coordinator_core.ops.cutover_gate",
     "cutover.advance":                        "coordinator_core.ops.cutover_advance",
     "git.maintenance":                        "coordinator_core.ops.git_maintenance",
-    # decision_record.mint_id / decision_record.release_id — one module registers
-    # both ops, same shared-value shape as the hooks.* / spec_backlink.* blocks.
-    # Spec: state/improvement-queue/2026-08-23-nothing-allocates-dr-numbers-so-a-
-    # plan-s-7aa417a58bce.yaml
     "decision_record.mint_id":                "coordinator_core.ops.decision_record_mint",
     "decision_record.release_id":             "coordinator_core.ops.decision_record_mint",
     "handoff.blocked_by_dependents":          "coordinator_core.ops.handoff_children",
-    # peer_notice.send / peer_notice.check — same-repo peer-contention notice channel
     # (see op_scopes.py::_OP_KEY_SCOPE's peer_notice.* entries, both "common_dir"),
-    # each registered by its own
     # owning module. Registered in _REGISTRY and _OP_KEY_SCOPE/OP_CLASSIFICATION but
-    # absent from this map until C3's three-way reconciliation (docs/plans/
-    # 2026-08-15-warm-engine-retires-the-per-invocation-cold-start.md § C3) — a real
     # registry_map.py::OP_MODULE_MAP gap, not a deliberate omission; per this
-    # module's docstring the absence degraded silently to the eager-import
-    # fallback rather than breaking dispatch, which is why it went unnoticed.
     "peer_notice.send":                       "coordinator_core.ops.peer_notice_send",
     "peer_notice.check":                      "coordinator_core.ops.peer_notice_check",
     "op_census.breaches":                     "coordinator_core.ops.op_budget_breaches",
-    # freshness.commit_delta — workday-start doc/test/bug-sweep commit-delta
-    # producer (docs/plans/2026-09-10-cartography-churn-producer-and-staleness-
-    # registrations.md § C3).
     "freshness.commit_delta":                 "coordinator_core.ops.freshness_commit_delta",
-    # coordinator_core.hooks registers all 16 hooks.* ops (6 advisory + 8 bookkeeping
-    # + 1 pull/poll arrival-check + 1 subagent-fabrication check) in a single module
-    # import. This package-level
-    # granularity (one shared module value for all 15 keys, rather than a per-op
-    # owning submodule) IS the correct mapping here, not a stand-in for a finer
-    # split — confirmed C2 (docs/plans/2026-08-06-windows-hot-path-less-work-per-
-    # interpreter.md): under the lazy hooks channel (C1), importing the shared
-    # "coordinator_core.hooks" value alone is a lazy-gated no-op that registers
-    # nothing, so ipc._lazy_import_and_lookup adds a hooks-scoped fallback stage
-    # (coordinator_core.hooks._eager_import_all()) ahead of the ops-wide SAFE
     # FALLBACK, rather than repointing these entries to nonexistent per-op
-    # submodules.
     "hooks.nudge_foreground_agent_dispatch":  "coordinator_core.hooks",
     "hooks.nudge_named_agent_report_delivery": "coordinator_core.hooks",
     "hooks.nudge_em_code_dispatch":           "coordinator_core.hooks",
@@ -98,17 +67,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.watchdog_undischarged_next_move":  "coordinator_core.hooks",
     "hooks.plan_persistence_check":           "coordinator_core.hooks",
     "hooks.runtime_tripwire_em_check":        "coordinator_core.hooks",
-    # hooks.stop_dispatch (C3, docs/plans/2026-08-31-six-hook-scripts-become-engine-ops.md).
-    # The four sibling residue/
-    # wrapper keys this module also defined (guard_kira_verdict_routed,
-    # stop_em_report_altitude, nudge_harness_directive_dispatch,
-    # nudge_unrouted_sizing) had no consumer anywhere in claude-klabauter or
-    # DoE-claude and were removed; re-add the day something actually names
-    # one of them.
     "hooks.stop_dispatch":                    "coordinator_core.hooks",
-    # W4-C16: wave 4's hook bodies (W4-C5..C14), same shared-module shape as
-    # every hooks.* row above -- one coordinator_core.hooks import registers
-    # all of them.
     "hooks.check_claude_md_size":             "coordinator_core.hooks",
     "hooks.derive_global_doctrine_live_copy": "coordinator_core.hooks",
     "hooks.derive_setup_copies":              "coordinator_core.hooks",
@@ -214,38 +173,19 @@ OP_MODULE_MAP: Dict[str, str] = {
     "plan.persist_capture":                   "coordinator_core.ops.plan_capture_persist",
     "handoff.match_candidates":               "coordinator_core.ops.handoff_match",
     "initiative.serve_set":                   "coordinator_core.ops.initiatives_serve",
-    # roadmap.link_stubs — DR-264, chunk C4 (docs/plans/2026-08-05-roadmap-graph-
-    # enforcement-gap.md): the first op that AUTHORS a blocked_by/blocks
-    # roadmap-dependency edge (reciprocal, two-file compound transaction).
     "roadmap.link_stubs":                     "coordinator_core.ops.roadmap_link_stubs",
-    # roadmap.plan_gate — the READ twin of roadmap.link_stubs: link_stubs authors
-    # the blocked_by edge, plan_gate says what that edge currently permits, split
-    # into a planning gate and an execution gate.
     "roadmap.plan_gate":                      "coordinator_core.ops.roadmap_plan_gate",
-    # roadmap.blitz_land — the WRITE twin of roadmap.plan_gate: executes a
-    # wave's verdicts and emits the next wave, so the loop needs no operator.
     "roadmap.blitz_land":                     "coordinator_core.ops.roadmap_blitz_land",
     # plan.prep_gate — the mise-prep authoring bar, REPORTED per class. Read twin
-    # of plan.stamp_prepped; the DoE-side runnable half is
-    # coordinator/bin/mise-prep-gate.py and the two must agree.
     "plan.prep_gate":                         "coordinator_core.ops.plan_prep_gate",
-    # plan.stamp_prepped — the ONLY writer of the four-field mise-prep attest.
-    # Refuses unless plan.prep_gate passes over the bytes it is about to stamp.
     "plan.stamp_prepped":                     "coordinator_core.ops.plan_stamp_prepped",
     "queue.append":                           "coordinator_core.ops.queue_append",
     "queue.cluster":                          "coordinator_core.ops.queue_cluster",
     "queue.promote":                          "coordinator_core.ops.queue_promote",
     "memo.list":                              "coordinator_core.ops.fleet.memo_list",
     "memo.draft":                             "coordinator_core.ops.fleet.memo_draft",
-    # memo.send — rebuilt 2026-08-25 (docs/plans/2026-08-25-memo-send-three-
-    # writes-and-one-commit-th.md § C2) after the 2026-08-23 kill (K-050).
-    # NOT a resurrection of the killed module — three-write shape only.
     "memo.send":                              "coordinator_core.ops.fleet.memo_send",
     "memo.check_deliveries":                  "coordinator_core.ops.fleet.memo_send",
-    # memo.heal_inbox — C5, docs/plans/2026-09-11-memo-deliveries-survive-the-
-    # receiver-s-o.md: receiver-side self-heal over `refs/coordinator/inbox/*`
-    # anchors (C3). Separate module from memo_send.py by design — see
-    # memo_heal.py's own module docstring.
     "memo.heal_inbox":                        "coordinator_core.ops.fleet.memo_heal",
     "memo.reconcile_outbox":                  "coordinator_core.ops.fleet.memo_reconcile_outbox",
     "memo.compose":                           "coordinator_core.ops.fleet.memo_compose",
@@ -253,9 +193,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "memo.blitz_buckets":                     "coordinator_core.ops.fleet.memo_blitz_buckets",
     "memo.check_addressee":                   "coordinator_core.ops.fleet.memo_check_addressee",
     "deliverable.rollup":                     "coordinator_core.ops.deliverable_rollup",
-    # spec_backlink.resolve / spec_backlink.rewrite — one module registers both ops,
-    # same shared-value shape as the hooks.* block above.
-    # Spec: pln-spec-backlinks-cite-a-stable-d-451b3e § C1
     "spec_backlink.resolve":                  "coordinator_core.ops.spec_backlink_resolve",
     "spec_backlink.rewrite":                  "coordinator_core.ops.spec_backlink_resolve",
     "sizing.decline":                          "coordinator_core.ops.sizing_decline",
@@ -423,9 +360,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "tracker.push_suggestion":                "coordinator_core.ops.tracker.push_suggestion",
     "priority.set":                           "coordinator_core.ops.priority_set",
     "priority.drain":                         "coordinator_core.ops.priority_drain",
-    # diagnostics.* — the three write-free transport-failure probes; one shared
-    # owning module, same many-keys-one-value shape as the hooks.* entries above.
-    # Spec: docs/plans/2026-08-07-safe-target-for-transport-failure-probes.md § C1
     "diagnostics.always_succeeds":            "coordinator_core.ops.diagnostics_probes",
     "diagnostics.always_refuses":             "coordinator_core.ops.diagnostics_probes",
     "diagnostics.always_structural_pin":      "coordinator_core.ops.diagnostics_probes",
@@ -435,10 +369,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "install.detect_cmd_autorun_coverage":    "coordinator_core.ops.cmd_autorun_guard",
     "install.write_cmd_autorun_guard":        "coordinator_core.ops.cmd_autorun_guard",
     "install.strip_cmd_autorun_guard":        "coordinator_core.ops.cmd_autorun_guard",
-    # app_session.* — launch/census/teardown against a consuming repo's local
-    # dev app; one shared owning module, same many-keys-one-value shape as
-    # the hooks.* block above.
-    # Spec: docs/plans/2026-08-15-app-session-launch-census-teardown-ops.md § C3
     "app_session.launch":                     "coordinator_core.ops.app_session",
     "app_session.census":                     "coordinator_core.ops.app_session",
     "app_session.teardown":                   "coordinator_core.ops.app_session",
@@ -449,26 +379,14 @@ OP_MODULE_MAP: Dict[str, str] = {
     "merge_assemble.apply":                    "coordinator_core.merge_assemble.ops",
     "baton_assemble.brief":                    "coordinator_core.baton_assemble.ops",
     "baton_assemble.apply":                    "coordinator_core.baton_assemble.ops",
-    # C7 (docs/plans/2026-09-12-perforce-second-class-commit-and-shelve.md):
-    # workspace registration writer + the read-only session-state seam DoE's
-    # H5 skill step and example-game-repo's C12 both call. Two separate owning
-    # modules, not a shared-value pair like the hooks.* block above.
     "p4.register_workspace":                   "coordinator_core.p4.register",
     "p4.session_state":                        "coordinator_core.p4.session_state",
-    # C5 (docs/plans/2026-09-11-the-lessons-pipeline-drains-without-a-ha.md):
-    # value is the `<package>.ops` module path, mirroring
-    # `merge_assemble.apply` above — not `__init__`/`apply` directly.
     "learn_lessons_pipeline.brief":             "coordinator_core.learn_lessons_pipeline.ops",
     "learn_lessons_pipeline.apply":             "coordinator_core.learn_lessons_pipeline.ops",
-    # C9 (docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md): the closed
     # queue-grind op list the vocabulary's SOURCE_OPS/VERIFY_OPS/REGENERATE_OPS
-    # (C1) resolve to — one shared owning module, same many-keys-one-value
-    # shape as the learn_lessons_pipeline.* pair above.
     "lessons.extract":                          "coordinator_core.ops.grind_ops",
     "lessons.verify_extraction":                "coordinator_core.ops.grind_ops",
     "doctrine.surface_split_regenerate":        "coordinator_core.ops.grind_ops",
-    # C4 (docs/plans/2026-09-23-warm-dispatch-reconcile.md): the poll op named
-    # in a -32004 envelope's dispatch-ack contract.
     "warm.request_status":                      "coordinator_core.ops.warm_request_status",
 }
 

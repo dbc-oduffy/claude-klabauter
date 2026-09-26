@@ -75,14 +75,6 @@ class _FakeRecord:
 
 
 def _lookup_returning(expected_sid: str, name: str | None):
-    """Stub `harness_registry.lookup` that ALSO asserts which sid it was asked for.
-
-    The plain-return stub the pre-2026-08-30 suite used could not have caught this
-    defect: `self_record()` took no argument, so a stub returning a fixed record was
-    indistinguishable from one keyed off the spawner's pid. Keying the fake on the
-    argument is what makes "the name belongs to the session the uuid names" testable
-    at all -- a stub that ignores its sid re-opens the exact hole.
-    """
 
     def _lookup(sid):
         if sid != expected_sid:
@@ -152,8 +144,6 @@ class ResolvePlanAuthorTest(unittest.TestCase):
 
 
 class ResolvePlanAuthorUuidTest(unittest.TestCase):
-    """The uuid half is the point: a display name collides between live
-    sessions and nothing recovers it afterwards. See `_resolve_plan_author`."""
 
     def test_author_line_is_resolvable_to_a_session(self):
         sid = "aac212bc-ea6b-4172-bd9f-b885f156c033"
@@ -232,7 +222,6 @@ class ResolveSessionDisplayNameTest(unittest.TestCase):
             self.assertIsNone(_cli._resolve_session_display_name("sid-123"))
 
     def test_returns_none_for_the_unknown_sentinel_without_touching_the_registry(self):
-        """No sid means no lookup -- never a registry scan that could match a peer."""
         with mock.patch(
             "coordinator_core.session.harness_registry.lookup",
             side_effect=AssertionError("registry must not be consulted for em-unknown"),
@@ -303,9 +292,6 @@ class ScaffoldSpinoffAuthoringSessionTest(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 1)
 
     def test_workstream_resolves_off_the_held_baton(self):
-        """2026-08-21: `workstream` is no longer a hand-typed placeholder --
-        it resolves via `_resolve_spinoff_workstream` (dedicated coverage in
-        test_coordinator_doc_new_spinoff_resolvable_fields.py)."""
         with mock.patch.object(
             _cli, "_resolve_session_id", return_value="bc1ca482-6b06-4943-ab49-92c9b35482ad"
         ), mock.patch.object(
@@ -323,18 +309,6 @@ if __name__ == "__main__":
 
 
 class AuthoringSessionStaysMachineReadableTest(unittest.TestCase):
-    """The readable session name must never land on the `authoring_session:`
-    line itself.
-
-    Regression: a trailing `# name` comment on that line was returned AS PART OF
-    THE VALUE by every line-based frontmatter reader that does not strip
-    comments — including `session_ledger.aggregate_chain_loe ::
-    extract_frontmatter_field`, whose caller `_resolve_fallback_session_id`
-    then attributed chain LoE to a session id that does not exist. Two other
-    readers happened to be comment-safe, which is what made the break look
-    absent. Keeping the name on its OWN line removes the whole class: a reader
-    keyed on `^authoring_session:` cannot match a comment-only line.
-    """
 
     def _emit(self):
         with mock.patch.object(_cli, "_resolve_session_id", return_value="bc1ca482-6b06-4943-ab49-92c9b35482ad"), \

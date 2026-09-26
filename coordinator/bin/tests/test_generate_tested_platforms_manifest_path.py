@@ -31,7 +31,6 @@ _HELPER_PATH = _BIN_DIR / "generate-tested-platforms.py"
 
 
 def _load_module(path: Path, module_name: str):
-    """Load the extension-less/hyphenated helper as a Python module for testing."""
     loader = importlib.machinery.SourceFileLoader(module_name, str(path))
     spec = importlib.util.spec_from_loader(module_name, loader)
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]

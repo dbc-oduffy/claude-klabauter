@@ -41,10 +41,6 @@ _FRONTMATTER = (
 )
 
 # ORDERING-violating: a `backlogged` (defer) row precedes an `open` (do)
-# row. Legacy plan (no `grouping_approvals` key), so the grouping-approval
-# leg has nothing to say about this source — the violation is ordering
-# only. Byte-for-byte the same fixture shape as
-# coordinator_core/frontmatter/tests/test_plan_tasks_spine_sequence.py's
 # `_ORDERING_VIOLATING`.
 _ORDERING_VIOLATING = (
     "```yaml plan-tasks\n"
@@ -75,9 +71,6 @@ _CLEAN = (
 )
 
 # MULTI-DEFECT, ordering-VALID: two per-row shape defects (bad change_kind,
-# bad disposition), no ordering violation — isolates the per-row leg's
-# all-rows accumulation from the ordering leg the two guards now disagree
-# on declaring.
 _MULTI_DEFECT_ORDERING_VALID = (
     "```yaml plan-tasks\n"
     "- id: C1\n"
@@ -116,10 +109,6 @@ def _write_and_check(guard, tmp_path, tasks_block):
 
 
 class TestOrderingLegSplitByGuard:
-    """The D5 gap the baton names: an ordering-violating spine now warns
-    through the advisory guard (the leg it gains here) and stays silent —
-    NOT a block — through the deny guard, which deliberately still omits
-    `"ordering"` (Anti-scope row 1)."""
 
     def test_advisory_warns_on_ordering_violation(self, tmp_path):
         result = _write_and_check(advisory_guard, tmp_path, _ORDERING_VIOLATING)
@@ -131,9 +120,6 @@ class TestOrderingLegSplitByGuard:
         assert "disposition" in text and "backlogged" in text
 
     def test_deny_does_not_block_on_ordering_violation(self, tmp_path):
-        # STRICT mode is the deny sibling's own upgraded-to-render mode for
-        # this leg family; even there, the deny guard never runs "ordering"
-        # (declared without it) so this source is silent through it.
         result = _write_and_check(deny_guard, tmp_path, _ORDERING_VIOLATING)
         assert result is None
 
@@ -160,9 +146,6 @@ class TestMultiDefectAllRowsAccumulationUnchanged:
         result = _write_and_check(deny_guard, tmp_path, _MULTI_DEFECT_ORDERING_VALID)
         assert result is not None
         hso = result["hookSpecificOutput"]
-        # Schema-shape findings are always-advisory as of the 2026-08-06
-        # ruling — rendered by THIS module only under STRICT, but still as
-        # an `additionalContext` warning, never a `permissionDecision`.
         assert "permissionDecision" not in hso
         text = hso["additionalContext"]
         assert "tasks[C1].change_kind" in text
@@ -200,11 +183,7 @@ class TestSpineLegDeclarationDesyncRegression:
     edit beside a one-value code edit, never a silent desync.
     """
 
-    # name -> (legs, legs_out_of_band) this test EXPECTS that site to
-    # declare. `test_actual_declarations_match_expected` below captures what
     # each site ACTUALLY passes to the driver at call time (never read off
-    # source text) and compares against this map — so a change at any of
-    # the three call sites without a matching edit here fails loud.
     _EXPECTED = {
         "deny guard (_plan_tasks_spine_errors)": (
             ("integrity", "per_row"),
@@ -275,21 +254,11 @@ class TestSpineLegDeclarationDesyncRegression:
         assert captured["legs_out_of_band"] == expected_out_of_band
 
     def test_deny_guard_omits_ordering_deliberately(self):
-        """Anti-scope row 1: 14 in-corpus plans fail the ordering lint today;
-        a deny-side leg would make those unwritable on next edit — a
-        PM-gated follow-up, not this change."""
         legs, out_of_band = self._EXPECTED["deny guard (_plan_tasks_spine_errors)"]
         assert "ordering" not in legs
         assert "ordering" not in out_of_band
 
     def test_check_plan_tasks_source_omits_integrity_deliberately(self):
-        """check_plan_tasks_source reaches rows through the lenient
-        `_plan_tasks_spine_rows` fallback (silent None on a malformed fence
-        or unparseable block); adding "integrity" would make it newly
-        return an error on sources it passes today, and
-        `spine_read.read_spine` consults it as an order-sensitive single-error
-        preflight — a behavioural change to a live emitter path, not a
-        consolidation."""
         legs, out_of_band = self._EXPECTED["check_plan_tasks_source"]
         assert "integrity" not in legs
         assert "integrity" not in out_of_band

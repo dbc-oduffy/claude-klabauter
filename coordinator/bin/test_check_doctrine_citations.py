@@ -1,15 +1,3 @@
-"""test_check_doctrine_citations.py — Tier T tests for check-doctrine-citations.py.
-
-Fixtures a synthetic three-tree corpus (doe_root, doe_coordinator, claude-klabauter)
-under a temp directory rather than walking the live DoE-claude / claude-klabauter
-repos, per the spike's measured ground truth
-(docs/research/spike-verdicts/2026-08-29-doctrine-document-citation-resolution.md):
-8 DoE-vs-consumer filename collisions and 2 intra-DoE filename collisions.
-
-Negative-spec: does NOT invoke resolve-repo-path.py or any subprocess (always
-passes --no-default-trees equivalents via `use_default_trees=False`, or the
-CLI's --tree overrides), and does NOT walk any live repo path.
-"""
 from __future__ import annotations
 
 import contextlib
@@ -28,7 +16,6 @@ _module = importlib.util.module_from_spec(_spec)
 sys.modules["check_doctrine_citations"] = _module
 _spec.loader.exec_module(_module)
 
-# The 8 DoE-vs-consumer collisions and 2 intra-DoE collisions the spike measured.
 DOE_VS_CLAUDE_KLABAUTER_COLLISIONS = [
     "baton-lifecycle.md",
     "cockpit-contract.md",
@@ -38,7 +25,7 @@ DOE_VS_CLAUDE_KLABAUTER_COLLISIONS = [
     "test-infrastructure.md",
     "write-confinement.md",
 ]
-DOE_VS_CLAUDE_KLABAUTER_PLANS_COLLISION = "INDEX.md"  # plans/INDEX.md
+DOE_VS_CLAUDE_KLABAUTER_PLANS_COLLISION = "INDEX.md"
 INTRA_DOE_COLLISIONS = ["DIRECTORY_GUIDE.md", "doctor-proportionality.md"]
 
 
@@ -49,8 +36,6 @@ def _write(path: str, content: str = "placeholder\n") -> None:
 
 
 class FixtureCorpus:
-    """Builds a temp dir with doe_root/, doe_coordinator/, claude-klabauter/ trees and
-    a separate corpus/ dir holding the .md files whose citations get scanned."""
 
     def __init__(self, tmp: str):
         self.tmp = tmp
@@ -95,10 +80,6 @@ class ResolvableCitationTests(unittest.TestCase):
         self.fixture = FixtureCorpus(self._tmpdir.name)
 
     def test_uniquely_resolvable_bare_citation_is_still_flagged_unanchored(self):
-        # Anchoring supersedes existence: a bare citation is flagged even
-        # when it happens to resolve to exactly one tree on this machine --
-        # that is precisely the false-safety the anchoring rule exists to
-        # refuse (see module docstring's "Anchoring supersedes existence").
         self.fixture.write_corpus_file(
             "doc.md", "See docs/wiki/only-in-claude-klabauter.md for detail.\n"
         )
@@ -120,8 +101,6 @@ class ResolvableCitationTests(unittest.TestCase):
         self.assertEqual(code, 0, msg=findings)
 
     def test_unresolvable_bare_citation_exits_nonzero_and_names_it_unanchored(self):
-        # A bare citation is reported unanchored (the primary class) before
-        # existence is ever consulted -- it never reaches "unresolvable".
         self.fixture.write_corpus_file(
             "doc.md", "See docs/wiki/does-not-exist-anywhere.md.\n"
         )
@@ -146,9 +125,6 @@ class ResolvableCitationTests(unittest.TestCase):
         self.assertIn("unresolvable", findings[0])
 
     def test_prefixed_citation_missing_in_its_named_tree_is_unresolvable_never_a_fallback(self):
-        # coordinator/ names doe_coordinator explicitly; only-in-claude-klabauter.md
-        # exists in claude-klabauter, not doe_coordinator, so this must refuse rather
-        # than silently falling back to the claude-klabauter tree.
         self.fixture.write_corpus_file(
             "doc.md", "See coordinator/docs/wiki/only-in-claude-klabauter.md.\n"
         )
@@ -166,10 +142,6 @@ class AmbiguousCitationTests(unittest.TestCase):
         self.fixture = FixtureCorpus(self._tmpdir.name)
 
     def test_each_doe_vs_claude_klabauter_collision_is_reported_unanchored(self):
-        # Bare form: the anchoring rule (primary) catches this before the
-        # collision would even reach "ambiguous" (secondary) -- see
-        # test_each_doe_vs_claude_klabauter_collision_anchored_is_reported_ambiguous
-        # for the anchored-form case that still exercises "ambiguous".
         for name in DOE_VS_CLAUDE_KLABAUTER_COLLISIONS:
             with self.subTest(name=name):
                 fixture = FixtureCorpus(tempfile.mkdtemp())
@@ -185,9 +157,6 @@ class AmbiguousCitationTests(unittest.TestCase):
                 self.assertIn("claude-klabauter", findings[0])
 
     def test_each_doe_vs_claude_klabauter_collision_anchored_is_still_ambiguous(self):
-        # An anchored citation with an unmapped prefix (bare "/") still
-        # exercises the secondary ambiguity check -- ambiguity is not
-        # retired by the anchoring rule, only demoted to secondary.
         for name in DOE_VS_CLAUDE_KLABAUTER_COLLISIONS:
             with self.subTest(name=name):
                 fixture = FixtureCorpus(tempfile.mkdtemp())
@@ -226,9 +195,6 @@ class AmbiguousCitationTests(unittest.TestCase):
                 self.assertIn("doe_coordinator", findings[0])
 
     def test_silence_on_a_bad_citation_is_a_test_failure(self):
-        # Regression guard: if a future change made the lint quiet on an
-        # ambiguous citation (e.g. exit 0 with an empty findings list), this
-        # assertion is the one that must fail, not silently pass.
         self.fixture.write_corpus_file("doc.md", "See docs/wiki/cross-repo.md.\n")
         code, findings, excluded, unresolved = _module.run(
             [self.fixture.corpus], self.fixture.tree_roots, use_default_trees=False
@@ -372,9 +338,6 @@ class IllustrativeFormExclusionTests(unittest.TestCase):
         self.assertIn("1 illustrative citation(s) excluded", buf.getvalue())
 
     def test_genuine_citation_alongside_illustrative_ones_still_resolves_correctly(self):
-        # The real hit from the coordinator's report: research-sweep.md's
-        # genuine (anchored) citation must survive next to illustrative
-        # siblings and not be excluded as illustrative itself.
         self.fixture.write_corpus_file(
             "research-sweep.md",
             "Template: docs/research/YYYY-MM-DD-{topic-slug}-nlm.md\n"
@@ -388,8 +351,6 @@ class IllustrativeFormExclusionTests(unittest.TestCase):
 
 
 class ConsumerRootModeTests(unittest.TestCase):
-    """--consumer-root answers 'does this citation resolve from where the
-    agent actually stands', not 'does it resolve given the whole map'."""
 
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -413,7 +374,6 @@ class ConsumerRootModeTests(unittest.TestCase):
         self.assertIn("doe_coordinator", findings[0])
 
     def test_citation_that_resolves_under_consumer_root_as_written_passes(self):
-        # only-in-claude-klabauter.md exists at the literal path under claude-klabauter itself.
         self.fixture.write_corpus_file("doc.md", "See docs/wiki/only-in-claude-klabauter.md.\n")
         code, findings, excluded, unresolved = _module.run(
             [self.fixture.corpus],
@@ -425,8 +385,6 @@ class ConsumerRootModeTests(unittest.TestCase):
         self.assertEqual(findings, [])
 
     def test_citation_dead_everywhere_is_not_reported_as_dead_from_consumer(self):
-        # A genuine dangler (dead in DoE too) is not this bucket's concern —
-        # find_dead_from_consumer only reports what's ALIVE in DoE.
         self.fixture.write_corpus_file(
             "doc.md", "See coordinator/docs/wiki/does-not-exist-anywhere.md.\n"
         )
@@ -452,9 +410,6 @@ class ConsumerRootModeTests(unittest.TestCase):
 
     def test_anchored_plugin_root_citation_is_never_dead_from_consumer(self):
         # ${CLAUDE_PLUGIN_ROOT}/ is harness-expanded, cwd-independent by
-        # construction -- the consumer-cwd question this mode asks does not
-        # apply to it, even though its target exists only in a DoE tree and
-        # is absent under consumer_root (self.fixture.claude-klabauter) verbatim.
         self.fixture.write_corpus_file(
             "doc.md", "See ${CLAUDE_PLUGIN_ROOT}/docs/wiki/only-in-coordinator.md.\n"
         )
@@ -470,9 +425,6 @@ class ConsumerRootModeTests(unittest.TestCase):
         self.assertEqual(findings, [])
 
     def test_unanchored_citation_alongside_anchored_one_is_still_reported(self):
-        # Same fixture, but pairs the exempt anchored citation with a bare
-        # citation resolving only in DoE -- the anchored one must not
-        # suppress the genuine finding for its unanchored neighbor.
         self.fixture.write_corpus_file(
             "doc.md",
             "See ${CLAUDE_PLUGIN_ROOT}/docs/wiki/only-in-coordinator.md "
@@ -493,13 +445,6 @@ class ConsumerRootModeTests(unittest.TestCase):
 
 
 class DefaultTreeResolutionFailureTests(unittest.TestCase):
-    """P1: a default tree (doe_root / doe_coordinator) that fails to resolve
-    must never be silently dropped from the candidate set — that degraded
-    mode is exactly the failure this lint exists to catch, reproduced
-    inside the lint itself. Only the default-tree resolution path is
-    exercised here (use_default_trees=True); everything else stays
-    fixtured, and `_resolve_repo_path_shortname` is monkeypatched so no
-    subprocess is actually spawned in this test."""
 
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -553,8 +498,6 @@ class DefaultTreeResolutionFailureTests(unittest.TestCase):
 
 
 class ConfigErrorTests(unittest.TestCase):
-    """P2: --no-default-trees with zero --tree flags configures nothing to
-    scan against — a usage error (exit 2), not "every citation failed."""
 
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -576,27 +519,19 @@ class ConfigErrorTests(unittest.TestCase):
         self.assertNotIn("citation(s) failed to resolve unambiguously", buf.getvalue())
 
     def test_no_default_trees_with_a_tree_override_does_not_hit_the_config_error(self):
-        # This test's contract is narrowly "the config-error exit (2) is
-        # avoided when a --tree override is supplied" -- it does not assert
-        # full citation resolution, since the corpus's bare citation is now
-        # separately flagged unanchored (exit 1) by the anchoring rule.
         self.fixture.write_corpus_file("doc.md", "See docs/wiki/only-in-claude-klabauter.md.\n")
         argv = [
             "check-doctrine-citations.py",
             "--corpus",
             self.fixture.corpus,
             "--no-default-trees",
-            f"--tree=claude-klabauter={self.fixture.claude_klabauter}",
+            f"--tree=claude-klabauter={self.fixture.claude-klabauter}",
         ]
         code = _module.main(argv)
         self.assertNotEqual(code, 2)
 
 
 class ConsumerModeDotDotTraversalTests(unittest.TestCase):
-    """Finding 4: a `../../`-prefixed citation must never perform a real
-    filesystem traversal out of consumer_root when checked for literal
-    existence — the census counted 5 citations of this shape, so it is a
-    real corpus shape, not a hypothetical."""
 
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -604,11 +539,6 @@ class ConsumerModeDotDotTraversalTests(unittest.TestCase):
         self.fixture = FixtureCorpus(self._tmpdir.name)
 
     def test_dotdot_citation_does_not_silently_pass_via_traversal_outside_consumer_root(self):
-        # Plant a decoy two levels above claude-klabauter's own root at exactly the
-        # path a naive os.path.join(consumer_root, "../../docs/wiki/x.md")
-        # traversal would land on. If the fix regresses, this decoy makes
-        # the citation silently resolve as "correct as written" instead of
-        # being checked against the DoE trees.
         decoy_root = os.path.dirname(os.path.dirname(self.fixture.claude_klabauter))
         _write(os.path.join(decoy_root, "docs", "wiki", "only-in-coordinator.md"))
         self.fixture.write_corpus_file(
@@ -620,8 +550,6 @@ class ConsumerModeDotDotTraversalTests(unittest.TestCase):
             use_default_trees=False,
             consumer_root=self.fixture.claude_klabauter,
         )
-        # only-in-coordinator.md genuinely exists only in doe_coordinator —
-        # the decoy must not cause this to be silently treated as resolved.
         self.assertEqual(code, 1, msg=findings)
         self.assertEqual(len(findings), 1)
         self.assertIn("only-in-coordinator.md", findings[0])
@@ -642,17 +570,6 @@ class ConsumerModeDotDotTraversalTests(unittest.TestCase):
 
 
 class UnscannableCorpusPathTests(unittest.TestCase):
-    """A `--corpus` path that does not exist, or that names a file rather
-    than a directory, must refuse (exit 2) rather than reach the scan as an
-    empty contribution.
-
-    Negative-spec: `os.walk()` yields nothing and raises nothing for either
-    shape, so without this refusal the tool reports a clean corpus it never
-    opened — the exact silent-skip this lint exists to catch, committed by
-    the lint itself. Found by pointing `--corpus` at a single file by
-    accident, not by the code review that was specifically looking for this
-    class of defect.
-    """
 
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -719,16 +636,9 @@ class PluginRootAnchorTests(unittest.TestCase):
         self.assertEqual(findings, [])
 
     def test_plugin_root_anchor_is_never_reported_as_leading_slash_absolute(self):
-        # The false-positive class this fix corrects: the `}` boundary must
-        # never be mis-captured as a bare `/` prefix that then resolves
-        # (or fails to) against the wrong, unmapped bucket.
         self.fixture.write_corpus_file(
             "doc.md", "See ${CLAUDE_PLUGIN_ROOT}/docs/wiki/only-in-coordinator.md.\n"
         )
-        # Deliberately omit a plugin_root tree entry -- the citation is
-        # unresolvable, but it must be reported against the `plugin_root`
-        # tree name specifically, never left ambiguous against unrelated
-        # trees the way a mis-parsed bare "/" prefix would be.
         code, findings, excluded, unresolved = _module.run(
             [self.fixture.corpus], self.fixture.tree_roots, use_default_trees=False
         )
@@ -739,9 +649,6 @@ class PluginRootAnchorTests(unittest.TestCase):
         self.assertIn("only-in-coordinator.md", findings[0])
 
     def test_plugin_root_need_not_equal_repo_root(self):
-        # A plugin root that is a subdirectory distinct from any registered
-        # repo root (e.g. an install dir under a marketplace source) must
-        # still resolve correctly -- plugin root is never assumed == repo root.
         install_dir = os.path.join(self._tmpdir.name, "some-marketplace-install", "plugin")
         os.makedirs(os.path.join(install_dir, "docs", "wiki"), exist_ok=True)
         with open(os.path.join(install_dir, "docs", "wiki", "installed-only.md"), "w", encoding="utf-8") as fh:
@@ -778,9 +685,6 @@ class PluginRootAnchorTests(unittest.TestCase):
 
 
 class TestFixtureTreeExclusionTests(unittest.TestCase):
-    """A path under tests/fixtures/ is an artifact read as an oracle, not a
-    doctrine citation a session is meant to follow -- excluded from the
-    scanned corpus entirely, distinct from tests/ prose more broadly."""
 
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -800,8 +704,6 @@ class TestFixtureTreeExclusionTests(unittest.TestCase):
         self.assertEqual(excluded, 0)
 
     def test_citation_inside_tests_but_not_fixtures_is_still_scanned(self):
-        # Narrower than excluding all of tests/: a genuine doctrine citation
-        # in test prose (not under a fixtures/ subdir) is still caught.
         self.fixture.write_corpus_file(
             os.path.join("tests", "some_test_doc.md"),
             "See docs/wiki/does-not-exist-anywhere.md.\n",
@@ -825,10 +727,6 @@ class TestFixtureTreeExclusionTests(unittest.TestCase):
 
 
 class TemplateCorpusWideningTests(unittest.TestCase):
-    """`_iter_corpus_files` must scan `*.template` files (README.md.template
-    and siblings) alongside `*.md` -- a citation written verbatim into a
-    consumer repo's README at repo-setup time must not be invisible to this
-    lint solely because of its file extension."""
 
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -858,15 +756,6 @@ class TemplateCorpusWideningTests(unittest.TestCase):
 
 
 class RepoRelativeNonDocsCitationTests(unittest.TestCase):
-    """`snippets/`, `pipelines/`, and `templates/` citations are the same
-    defect as a bare `docs/wiki/` one and were invisible to this lint
-    (2026-08-30, doe-claude-em memo `doctrine-citation-form-is-claude-plugin-
-    root`): both forms resolve only with cwd = the citing repo's root. The
-    core pattern was `docs/<section>/...` only, so a repo-relative citation
-    prefixed with the citing repo's own top-level directory name -- 40 sites
-    in DoE-claude's `coordinator/{commands,skills,agents}` corpus at the time
-    of the memo -- passed a scan that reported clean without ever having
-    matched them."""
 
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -916,9 +805,6 @@ class RepoRelativeNonDocsCitationTests(unittest.TestCase):
 
     def test_dot_md_followed_by_a_further_extension_is_not_a_citation(self):
         # `templates/<name>.md.tmpl` names a TEMPLATE, not the document --
-        # without the extension boundary the core backtracks to `.md` and
-        # reports a dead citation to a file nobody wrote (this fired live on
-        # DoE-claude's commands/install.md:175 render-template invocation).
         self.fixture.write_corpus_file(
             "doc.md", "render-template coordinator/templates/onboarding.md.tmpl -o out\n"
         )
@@ -927,8 +813,6 @@ class RepoRelativeNonDocsCitationTests(unittest.TestCase):
         self.assertEqual(findings, [])
 
     def test_trailing_sentence_punctuation_still_ends_a_citation(self):
-        # The extension boundary must reject `.md.tmpl` without also
-        # rejecting an ordinary citation at the end of a sentence.
         self.fixture.write_corpus_file("doc.md", "See snippets/absent.md, then stop.\n")
         code, findings, excluded, unresolved = self._run()
         self.assertEqual(code, 1, msg=findings)
@@ -936,18 +820,11 @@ class RepoRelativeNonDocsCitationTests(unittest.TestCase):
         self.assertIn("snippets/absent.md", findings[0])
 
     def test_unrelated_top_level_directory_is_not_matched(self):
-        # Deliberately narrow: only the three doc-bearing directories the
-        # memo named widen the core. `hooks/`, `bin/`, `state/` and friends
-        # carry code paths, not doctrine citations, and matching them would
-        # turn every incidental path mention into a finding.
         self.fixture.write_corpus_file("doc.md", "Edit hooks/scripts/does-not-exist.md.\n")
         code, findings, excluded, unresolved = self._run()
         self.assertEqual(code, 0, msg=findings)
 
     def test_word_ending_in_templates_is_not_matched(self):
-        # `ci-templates/` merely ENDS in `templates` -- a substring match on
-        # the bare alternative would misparse it as a doctrine citation to a
-        # directory nobody named (code-reviewer Finding 1).
         self.fixture.write_corpus_file("doc.md", "See ci-templates/foo.md.\n")
         code, findings, excluded, unresolved = self._run()
         self.assertEqual(code, 0, msg=findings)
@@ -966,9 +843,6 @@ class RepoRelativeNonDocsCitationTests(unittest.TestCase):
         self.assertEqual(findings, [])
 
     def test_dotless_extension_run_on_is_not_a_citation(self):
-        # `docs/wiki/foo.mdx` backtracks to `.md` with no intervening dot --
-        # the lookahead must reject a bare following alnum too, not only
-        # dot+alnum (code-reviewer Finding 2).
         self.fixture.write_corpus_file("doc.md", "See docs/wiki/foo.mdx for details.\n")
         code, findings, excluded, unresolved = self._run()
         self.assertEqual(code, 0, msg=findings)
@@ -976,10 +850,6 @@ class RepoRelativeNonDocsCitationTests(unittest.TestCase):
 
 
 class InProcessResolveRepoPathTests(unittest.TestCase):
-    """`_resolve_repo_path_shortname` must resolve via an in-process import
-    of resolve-repo-path.py -- never a `python <script>` subprocess -- and
-    must still fail loud (named tree, non-zero exit, reason in output) when
-    a shortname does not resolve."""
 
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()

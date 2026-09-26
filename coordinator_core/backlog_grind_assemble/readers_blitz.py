@@ -155,35 +155,12 @@ from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops.queue_family import load_family_records
 from coordinator_core.orient_assemble.reader_result import ReaderResult
 
-#: This reader's own cadence identity — one of the five surface-identity
 #: cadences `coordinator_core.test_backlog_grind_assemble._CADENCES`
-#: enumerates. `collect()` below is a no-op ReaderResult for every other
-#: cadence string; the seam (C3) never branches on cadence itself.
 _CADENCE = "bug-blitz"
 
-#: The standing commit-readiness judgment-point id every bug-blitz commit
-#: directive this surface's runtime builds must `depends_on` — see the
-#: module docstring's review-gate risk constraint. Public and documented
-#: (no leading underscore) because `apply.py`'s `_build_wave_path_directives`
-#: reaches across the module boundary to wire the same gate onto its own
-#: CLI-driven `--wave-path` commit path — cross-module use, not an
-#: internal-only implementation detail.
 #: Review: code-reviewer — F4: was module-private (`_COMMIT_READINESS_JP_ID`)
-#: with no `__all__`/docstring export; `apply.py` reached across the module
-#: boundary into it anyway, so a future rename here would silently break
-#: that caller with no ImportError. Promoted to a public name.
 COMMIT_READINESS_JP_ID = "j-bug-blitz-commit-readiness"
 
-#: bug-blitz.md's own fixed template text for the Phase 3 step 1 executor
-#: dispatch prompt, ported verbatim as constants rather than re-derived —
-#: mirrors `readers_mise.py`'s identically-shaped constants (AC26, item
-#: #43; "mise-en-place item #19 is the same shape" per the plan's C2
-#: body). Only the parts that are genuinely fixed across every item live
-#: here; the item-specific parts Phase 3 step 1 names (severity, file:line,
-#: description, recommended fix, footprint) are NOT computed at
-#: `collect()` boot time — they are filled in by whoever renders this
-#: template at actual per-item dispatch time, exactly as
-#: `readers_mise.py` leaves `[item-id]`/`[list]` unfilled.
 _DISK_FIRST_VERIFICATION_PREAMBLE = (
     "Reply with `DONE: <path>` ONLY after you have confirmed the file "
     "exists at the path above (use Read or Bash `ls` to verify). If you "
@@ -223,12 +200,6 @@ _DONE_SUMMARY_CONSTRAINT_TEMPLATE = executor_return_contract.done_summary_constr
     ),
 )
 
-#: bug-blitz.md Phase 2.1's canonical spinoff frontmatter/body schema,
-#: ported verbatim as a rendering template (AC26, item #32) — see
-#: `commands/spinoff.md` for the generic `/spinoff` frontmatter shape this
-#: mirrors, and the module docstring's `build_spinoff_handoff` section for
-#: why `deployment_state: ready_to_fire` and `status: active` are
-#: hard-coded here rather than caller-supplied.
 _SPINOFF_FRONTMATTER_TEMPLATE = """---
 title: {title}
 created: {created}
@@ -245,35 +216,10 @@ scope:
 
 
 def _repo_root() -> Optional[str]:
-    """Resolve the calling repo's worktree root via
-    `coordinator_core.git.repo_root.show_toplevel` against process cwd —
-    the shared cwd-keyed memoized resolution seam. Returns `None` on any
-    resolution failure (not a git repo, `git` absent, timeout) rather than
-    raising — a boot-time reader degrades to an empty `ReaderResult`, it
-    never crashes the seam.
-    """
     return show_toplevel()
 
 
 def is_item_live(repo_root: Path, path: str) -> bool:
-    """Cheap pre-dispatch liveness predicate for one bug-backlog item's
-    cited surface (the row this predicate discharges: "Add a cheap
-    pre-dispatch liveness predicate to the reader (cited path exists) so
-    stale entries are disqualified before an executor is paid for" —
-    bug-blitz item, `state/bug-backlog/` lifecycle). Path-exists only —
-    never a `git`/subprocess spawn (DR-344's per-op budget).
-
-    `path` is repo-relative, exactly as a record's `surface` field cites
-    it. A file OR directory that exists counts as live. Any I/O failure
-    (permission, decode) counts as NOT live — a predicate that cannot
-    confirm liveness does not vouch for it.
-
-    Public (no leading underscore) so the live per-item dispatch caller
-    (bug-blitz.md Phase 3 step 1, or any future in-process caller with an
-    already-resolved single path) can reuse the exact same check
-    `queue_select.select_rows` uses for its own dispatch-time decline —
-    one predicate, not two independently-drifting implementations.
-    """
     try:
         return (repo_root / path).exists()
     except OSError:
@@ -281,28 +227,6 @@ def is_item_live(repo_root: Path, path: str) -> bool:
 
 
 def bare_cited_surface(surface: Optional[str]) -> Optional[str]:
-    """Returns `surface` unchanged when it is ALREADY nothing but a single
-    repo-relative path, and `None` otherwise.
-
-    Deliberately does NOT parse or extract a path out of freeform prose
-    (`"shared-worktree commit discipline; state/ index hygiene"`,
-    `"x.py::func, other.py"`, `"docs/architecture/*.md; the atlas page
-    writer (unidentified)"`) — `collect()`'s own negative-spec forbids
-    inventing fix-target paths, and guessing at a substring of a compound
-    `surface` field is exactly that invention. Mirrors `readers_debt.py`'s
-    `_cross_reference_overlap` precedent: "an exact-surface match is the
-    unambiguous subset that IS a disk predicate" — here, a `surface`
-    field that IS already nothing but a path is the unambiguous subset
-    this reader may safely evaluate for liveness; every other shape is
-    left alone (never disqualified) rather than guessed at.
-
-    Public (no leading underscore), same reason as `is_item_live`: the
-    dispatch-time selector (`coordinator_core.ops.dispatch_emit.queue_select
-    .select_rows`) reaches across the module boundary to apply this same
-    unambiguous-subset test to a queue row's own `surface` field, BEFORE
-    that row ever reaches a dispatched executor — the row's own ask
-    ("disqualifying stale entries before a Sonnet spawn is paid for").
-    """
     if not surface:
         return None
     stripped = surface.strip()
@@ -316,18 +240,6 @@ def bare_cited_surface(surface: Optional[str]) -> Optional[str]:
 
 
 def _read_backlog_readiness() -> ReaderResult:
-    """Bug-backlog presence/count (via `load_family_records`, AC6) folded
-    into the standing commit-readiness judgment point's evidence.
-
-    Always emits `j-bug-blitz-commit-readiness` when this reader's cadence
-    fires — even on an empty/absent backlog — because a run with zero
-    backlog items can still commit `TF-*` test-failure fixes (Phase 0.7)
-    that this reader has no visibility into at boot time; the gate is a
-    standing precondition for ANY autonomous bug-blitz commit this run,
-    not a backlog-count-conditional one. `apply.py` only ever needs the
-    gate if a commit directive actually depends on it — an unresolved,
-    unreferenced judgment point is inert, not an error.
-    """
     repo_root_str = _repo_root()
     if repo_root_str is None:
         backlog_note = "state/bug-backlog/: repo root unresolved (not a git checkout?)"
@@ -356,13 +268,6 @@ def _read_backlog_readiness() -> ReaderResult:
 
 
 def _read_executor_dispatch_template() -> ReaderResult:
-    """Emits AC26's fixed executor dispatch-prompt template as a
-    directive (bug-blitz item #43) — mirrors `readers_mise.py`'s
-    `_read_executor_dispatch_template` exactly (same call site shape,
-    surface-specific constant text). Fires unconditionally whenever this
-    reader is asked, independent of backlog-emptiness above: the template
-    is dispatch-time utility content, not gated on there being open
-    backlog work right now."""
     return ReaderResult(
         directives=[
             build_executor_dispatch_prompt_template_emission(
@@ -381,19 +286,6 @@ def _read_executor_dispatch_template() -> ReaderResult:
 
 
 def _tier_u_grant_flow() -> ReaderResult:
-    """Bug-blitz's own Tier-U-gated path (Phase 0.6: the full test-suite
-    invocation `commands/bug-blitz.md:54-55` asks the PM to authorize
-    before running) plus the confirm-green `check` recheck those same
-    lines say the one session-scoped grant already covers, with no second
-    ask. Built via `directives.build_tier_u_grant_flow` /
-    `build_tier_u_grant_check` — the shared C2 builders — never re-derived
-    locally, mirroring `readers_sweep.py::_tier_u_grant_flow`.
-
-    The check directive carries no second judgment point (it consumes the
-    token the grant judgment point already gated) and its `depends_on`
-    points at the grant's own write-directive id, never the judgment-point
-    id, so it cannot dispatch before the token exists.
-    """
     repo_root_str = _repo_root()
     if repo_root_str is None:
         open_count = 0
@@ -489,14 +381,6 @@ def _render_spinoff_handoff_body(
     cross_ref: str,
     why_blocked: str,
 ) -> str:
-    """Pure function rendering bug-blitz's ~40-line spinoff-handoff
-    authoring template (frontmatter + canonical body-section skeleton +
-    trailing marker) from fields a live run already holds. Every section
-    is either the backlog entry's own verbatim `body`/`cross_ref`/
-    `why_blocked` fields or a mechanical restatement of the ids/reason
-    already passed in — see the module docstring's negative-spec on why
-    this never invents judgment content beyond that.
-    """
     scope_list = list(scope)
     scope_yaml = "\n".join(f"  - {path}" for path in scope_list) if scope_list else "  - []"
     frontmatter = _SPINOFF_FRONTMATTER_TEMPLATE.format(
@@ -631,20 +515,6 @@ def build_verifier_dispatch(
 
 
 def collect(cadence: str, *, run_id: Optional[str] = None) -> ReaderResult:
-    """Compute this reader's directives/judgment_points for `cadence`.
-
-    Self-gates internally: a no-op `ReaderResult()` for every cadence
-    other than `"bug-blitz"` — the seam (C3) calls every C3a-C3e reader
-    unconditionally for every cadence and trusts each to self-gate (mirrors
-    `orient_assemble.readers_health_reaper`'s day-cadence-only gating).
-
-    `run_id` names which run of the ASKING surface is asking. This reader
-    has no per-run record family to resolve it against, so it accepts the
-    parameter and ignores it: the seam threads it to all five readers
-    uniformly for every cadence (`__init__.py`'s negative-spec against a
-    per-surface branch), and self-gating on it is each reader's own job,
-    exactly as self-gating on `cadence` is.
-    """
     if cadence != _CADENCE:
         return ReaderResult()
 

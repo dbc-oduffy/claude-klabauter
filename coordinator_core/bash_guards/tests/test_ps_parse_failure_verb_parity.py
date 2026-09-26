@@ -27,18 +27,12 @@ import pytest
 
 from coordinator_core.bash_guards import block_subagent_destructive_action as guard
 
-#: (parseable spelling, the same command made untokenizable). `&> out.txt` is
-#: the documented `has_error=True` form, so the second column genuinely takes
-#: the parse-failure route rather than merely looking like it should.
 _PAIRS = [
     ("Remove-Item -Recurse -Force ./state", "Remove-Item -Recurse -Force ./state &> out.txt"),
     ("Stop-Process -Force -Name claude", "Stop-Process -Force -Name claude &> out.txt"),
     ("icacls ./state /grant everyone:F", "icacls ./state /grant everyone:F &> out.txt"),
 ]
 
-#: Hazard-documenting prose must not deny on either route -- the false-positive
-#: class this cohort exists to kill. Fixing fail-open by denying everything
-#: would trade one defect for a worse one.
 _PROSE = [
     'Write-Output "never run Remove-Item -Recurse -Force here"',
     "echo 'Stop-Process -Force is destructive' &> out.txt",

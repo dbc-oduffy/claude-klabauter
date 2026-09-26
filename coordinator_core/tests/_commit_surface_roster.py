@@ -41,12 +41,8 @@ COMMIT_SURFACE_FILES = {
         "named in the pre-revision scope and still live at HEAD (473 lines).",
 }
 
-# Every OTHER non-test .py module under coordinator_core/git/ and coordinator_core/ops/ceremony/ at
 # HEAD (2026-09-10 census), each with a one-line reason it is not in COMMIT_SURFACE_FILES. This is
-# the constant that makes the curated roster honest and the drift test (C1) possible: a module in
-# neither constant is a narration holder nobody classified.
 EXCLUDED_MODULES = {
-    # coordinator_core/git/
     "coordinator_core/git/__init__.py":
         "package marker; not a narration holder.",
     "coordinator_core/git/action_guard.py":
@@ -92,7 +88,6 @@ EXCLUDED_MODULES = {
         "scope:.",
     "coordinator_core/git/tree_spine.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
-    # coordinator_core/ops/ceremony/
     "coordinator_core/ops/ceremony/__init__.py":
         "package marker; not a narration holder.",
     "coordinator_core/ops/ceremony/branch_resolution.py":
@@ -144,13 +139,7 @@ EXCLUDED_MODULES = {
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
 }
 
-# ONE policy, named here, and nothing else may define it -- every consumer (this module's own
-# deletable_partition(), the fast-tier ratchet, and the dated audit script) calls the functions
-# below rather than defining a second regex, keyword list, case policy or window.
 
-# The census regex, verbatim -- yields 257 marker-carrying lines across the roster at HEAD. NOT
-# the wider was/previously/formerly/... clause: that reading yields 445 on identical input and is
-# not what AC1's arithmetic is denominated on.
 MARKER_REGEX = re.compile(
     r"(\b20[0-9]{2}-[0-9]{2}-[0-9]{2}\b|\bDR-[0-9]{2,5}\b|\bC[0-9]{2,4}\b|docs/(plans|briefs|decisions)/)"
 )
@@ -164,8 +153,6 @@ KEYWORD_REGEX = re.compile("|".join(re.escape(k) for k in KEYWORDS), re.IGNORECA
 
 WINDOW = 6
 
-# The enumerated, closed list of names C2's fourth protected class keys on. Not an open discovery
-# clause -- a false negative here is a silent deletion of a gravestone.
 DELETED_SYMBOLS = (
     "ceremony.commit",
     "ceremony.scoped_git_commit",
@@ -175,15 +162,10 @@ DELETED_SYMBOLS = (
 
 
 def deleted_symbols():
-    """Return the closed list of names that must never disappear from the roster's narration."""
     return list(DELETED_SYMBOLS)
 
 
 def classify(path):
-    """Move the falsifier's tokenize-based classifier here verbatim.
-
-    Returns a dict of executable / comment / docstring / total line counts for `path`.
-    """
     with open(path, "r", encoding="utf-8") as f:
         src = f.read()
     lines = src.splitlines()
@@ -191,7 +173,7 @@ def classify(path):
 
     code_lines = set()
     comment_lines = set()
-    string_lines = set()  # docstrings and other standalone string-literal statements
+    string_lines = set()
 
     toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
 

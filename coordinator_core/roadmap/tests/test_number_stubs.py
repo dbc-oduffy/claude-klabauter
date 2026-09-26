@@ -26,10 +26,6 @@ from coordinator_core.roadmap.number_stubs import (
     run_state_mode,
 )
 
-# ---------------------------------------------------------------------------
-# parse_edges_file / derive_nodes
-# ---------------------------------------------------------------------------
-
 
 def test_parse_edges_file_line_form_with_comments_and_isolated_node():
     content = "# comment\nWIDGET <- BASE\nGADGET <- WIDGET\nLONER\n"
@@ -42,11 +38,6 @@ def test_parse_edges_file_line_form_with_comments_and_isolated_node():
 
 
 def test_parse_edges_file_malformed_line_is_a_hard_error(capsys):
-    """Was ``test_parse_edges_file_malformed_line_skipped``. A line containing
-    ``<-`` with an empty side is an *attempted* edge; the old warn-and-skip
-    silently changed the DAG and the WARNING went unread in a
-    transcribe-by-hand authoring flow.
-    """
     content = "<- BASE\nWIDGET <- BASE\n"
     with pytest.raises(SystemExit) as excinfo:
         parse_edges_file(content)
@@ -65,9 +56,6 @@ def test_parse_edges_file_malformed_right_side_is_a_hard_error(capsys):
 
 
 def test_parse_edges_file_multiline_zero_edge_file_is_refused(capsys):
-    """A whole file in the wrong notation used to parse as N isolated nodes and
-    zero edges, then print a confident, wrong numbering at exit 0.
-    """
     content = "WIDGET blocked_by BASE\nGADGET blocked_by WIDGET\n"
     with pytest.raises(SystemExit) as excinfo:
         parse_edges_file(content)
@@ -80,9 +68,6 @@ def test_parse_edges_file_multiline_zero_edge_file_is_refused(capsys):
 
 
 def test_parse_edges_file_zero_edge_refusal_ignores_comments_and_blanks(capsys):
-    """The >1-line floor counts non-comment, non-blank lines only — a single
-    isolated node buried in comments stays legal.
-    """
     parsed = parse_edges_file("# header\n\nLONER\n\n# trailer\n")
     assert parsed["edges"] == []
     assert parsed["isolatedNodes"] == ["LONER"]
@@ -100,9 +85,6 @@ def test_parse_edges_file_single_isolated_node_still_legal():
 
 
 def test_parse_edges_file_isolated_node_alongside_an_edge_still_legal():
-    """The refusal is scoped to *zero* edges — an isolated node in a file that
-    also carries real edges is a legitimate authoring case.
-    """
     parsed = parse_edges_file("WIDGET <- BASE\nLONER\n")
     assert parsed["edges"] == [{"from": "WIDGET", "to": "BASE"}]
     assert parsed["isolatedNodes"] == ["LONER"]
@@ -123,17 +105,11 @@ def test_parse_edges_file_json_malformed_entry_exits_1():
 
 
 def test_parse_edges_file_json_form_behaviour_unchanged_by_line_form_refusals(capsys):
-    """The line-form refusals are scoped to the line form. The JSON branch
-    already failed loud (exit 1, "looks like JSON but failed to parse") and
-    keeps that exit code and message shape — a caller may be reading it.
-    """
     with pytest.raises(SystemExit) as excinfo:
         parse_edges_file('[{"from": "BETA", "to": ')
     assert excinfo.value.code == 1
     assert "ERROR: file looks like JSON but failed to parse" in capsys.readouterr().err
 
-    # An empty JSON array yields zero edges and does NOT trip the line-form
-    # zero-edge refusal — the JSON branch returns before that check.
     assert parse_edges_file("[]") == {"edges": [], "isolatedNodes": [], "sprints": {}}
 
 
@@ -160,11 +136,6 @@ def test_derive_nodes_includes_isolated_nodes():
     assert nodes == ["LONER"]
 
 
-# ---------------------------------------------------------------------------
-# Default-mode CLI byte-parity (against a captured oracle run)
-# ---------------------------------------------------------------------------
-
-# Captured via: node coordinator/bin/roadmap-number-stubs.js <line-form fixture>
 _ORACLE_DEFAULT_MODE_OUTPUT = (
     "# Roadmap stub linearization\n"
     "# Transcribe these values into stub frontmatter (number, sprint, wave).\n"
@@ -239,11 +210,6 @@ def test_default_mode_sprint_1_and_increasing_wave(tmp_path, capsys):
     assert rows["A"]["wave"] < rows["B"]["wave"] < rows["C"]["wave"]
 
 
-# ---------------------------------------------------------------------------
-# CLI usage-error / exit-code contract
-# ---------------------------------------------------------------------------
-
-
 def test_main_no_args_exits_2(capsys):
     rc = main([])
     assert rc == 2
@@ -287,11 +253,6 @@ def test_main_check_malformed_run_id_exits_2(capsys):
     assert "must match" in err
 
 
-# ---------------------------------------------------------------------------
-# --check mode against on-disk stub fixtures
-# ---------------------------------------------------------------------------
-
-
 def _write_stub(
     path: Path,
     roadmap_id: str,
@@ -302,10 +263,6 @@ def _write_stub(
     blocked_by=None,
     kind: str = "spinoff-roadmap",
 ) -> None:
-    # `kind` defaults to the retired
-    # spelling for byte-parity with existing callers; new tests below pass
-    # `kind="roadmap-baton"` to prove `run_check_mode` actually finds
-    # canonical-spelling stubs (the live defect the `where=` fix closed).
     lines = [
         "---",
         f'title: "Test stub {stub_id}"',
@@ -361,7 +318,6 @@ def test_check_mode_clean_stub_set_exits_0(tmp_path, monkeypatch, capsys):
 def test_check_mode_violation_exits_1(tmp_path, monkeypatch, capsys):
     handoffs = tmp_path / "state" / "handoffs"
     handoffs.mkdir(parents=True)
-    # b-2 blocked_by a-1 but shares the same (sprint, wave) slot — violation.
     _write_stub(handoffs / "stub-a-1.md", "rm-check2", "stub-a-1", 1, 1, 1)
     _write_stub(
         handoffs / "stub-b-2.md", "rm-check2", "stub-b-2", 2, 1, 1, blocked_by=["stub-a-1"]
@@ -391,13 +347,7 @@ def test_main_check_dispatches_to_run_check_mode(tmp_path, monkeypatch, capsys):
     assert "No roadmap-baton (spinoff-roadmap) stubs found for roadmap_id=rm-check3" in out
 
 
-# ---------------------------------------------------------------------------
-# Canonical `kind: roadmap-baton` spelling — Review: code-reviewer (P1,
-# Finding 1). Every fixture above seeds the RETIRED `kind: spinoff-roadmap`
-# spelling, which already matched the pre-fix hardcoded `kind=spinoff-roadmap`
 # literal — so none exercise `_ROADMAP_BATON_KIND_WHERE`'s `kind in (...)`
-# term against the canonical spelling the live defect was about.
-# ---------------------------------------------------------------------------
 
 
 def test_check_mode_canonical_kind_roadmap_baton_is_found(tmp_path, monkeypatch, capsys):
@@ -426,8 +376,6 @@ def test_check_mode_canonical_kind_roadmap_baton_is_found(tmp_path, monkeypatch,
 def test_check_mode_dual_spelling_both_legacy_and_canonical_found(
     tmp_path, monkeypatch, capsys
 ):
-    # Dual-acceptance is the contract: a mid-migration roadmap can carry BOTH
-    # spellings, and run_check_mode must find both.
     handoffs = tmp_path / "state" / "handoffs"
     handoffs.mkdir(parents=True)
     _write_stub(
@@ -447,11 +395,6 @@ def test_check_mode_dual_spelling_both_legacy_and_canonical_found(
     out = capsys.readouterr().out
     assert rc == 0
     assert "2 stub(s) checked" in out
-
-
-# ---------------------------------------------------------------------------
-# --state mode — awaiting_gate/ready_to_fire/gate_dependency readiness resolver
-# ---------------------------------------------------------------------------
 
 
 def _write_state_stub(
@@ -604,13 +547,6 @@ def test_main_state_malformed_run_id_exits_2(capsys):
     assert "must match" in err
 
 
-# ---------------------------------------------------------------------------
-# C1/C2/C7 — edges.txt reconciliation (AC1/AC2/AC4/AC10) and query-failure-
-# vs-clean-result exit-code discipline (AC3/AC11).
-# Spec backlink: pln-roadmap-dependency-graph-close-6192fb § C1/C2/C6/C7.
-# ---------------------------------------------------------------------------
-
-
 def _write_edges_file(directory: Path, filename: str, lines) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     (directory / filename).write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -619,16 +555,9 @@ def _write_edges_file(directory: Path, filename: str, lines) -> None:
 def test_check_mode_ac10_mid_flight_edges_txt_only_dependency_now_fails(
     tmp_path, monkeypatch, capsys
 ):
-    """AC10 headline regression: reproduces the inbound memo's exact scenario —
-    a mid-flight stub whose dependency exists only in edges.txt, never in stub
-    frontmatter blocked_by. Before C1, --check reported OK (0) here because
-    edges.txt was never read. It must now fail loud (non-zero).
-    """
     handoffs = tmp_path / "state" / "handoffs"
     handoffs.mkdir(parents=True)
     _write_stub(handoffs / "stub-a-1.md", "rm-ac10", "stub-a-1", 1, 1, 1)
-    # stub-b-2 carries NO blocked_by in frontmatter — the dependency on
-    # stub-a-1 is only ever declared in edges.txt below.
     _write_stub(handoffs / "stub-b-2.md", "rm-ac10", "stub-b-2", 2, 1, 1)
 
     _write_edges_file(
@@ -641,9 +570,6 @@ def test_check_mode_ac10_mid_flight_edges_txt_only_dependency_now_fails(
 
     monkeypatch.setattr(mod, "resolve_root", lambda: str(tmp_path))
 
-    # Pre-C1 baseline sanity: frontmatter alone carries zero edges, and with
-    # no edges check_dependency_order trivially reports ok — this is exactly
-    # the "OK: dependency order is valid" the memo's reproduction hit.
     rc = run_check_mode("rm-ac10")
     err = capsys.readouterr().err
 
@@ -669,8 +595,6 @@ def test_check_mode_c1_carried_greater_than_declared_is_not_a_failure(
         blocked_by=["stub-a-1", "stub-b-2"],
     )
 
-    # edges.txt declares only ONE of the three frontmatter-carried edges.
-    # Frontmatter carrying more than edges.txt declares must not be a failure.
     _write_edges_file(
         tmp_path / "state" / "roadmap" / "rm-c1-carry",
         "edges.txt",
@@ -745,8 +669,6 @@ def test_check_mode_c1_multi_match_glob_skips_reconciliation_visibly(
     assert "2 candidate edges files found" in out
     assert "cannot establish which is authoritative" in out
     assert "skipping edges.txt reconciliation" in out
-    # The reconciliation is skipped, not counted — the OK line must not carry
-    # an edges.txt read-count when it was never established.
     assert "edge(s) read from edges.txt" not in out
     assert "OK: dependency order is valid" in out
 
@@ -754,11 +676,6 @@ def test_check_mode_c1_multi_match_glob_skips_reconciliation_visibly(
 def test_check_mode_c1_unmaterialized_label_does_not_manufacture_divergence(
     tmp_path, monkeypatch, capsys
 ):
-    """An edges.txt row whose endpoints never resolved to on-disk stubs (a
-    clusters.md-authored planning label that was later merged/abandoned) must
-    not be counted toward the declared-edge total, and so must not manufacture
-    a divergence FAIL.
-    """
     handoffs = tmp_path / "state" / "handoffs"
     handoffs.mkdir(parents=True)
     _write_stub(handoffs / "stub-a-1.md", "rm-c1-ghost", "stub-a-1", 1, 1, 1)
@@ -789,12 +706,6 @@ def test_check_mode_c1_unmaterialized_label_does_not_manufacture_divergence(
 def test_check_mode_c1_ac2_declared_only_edge_does_not_reach_check_dependency_order(
     tmp_path, monkeypatch, capsys
 ):
-    """AC2 negative assertion: a declared-only edges.txt edge must never enter
-    the graph handed to check_dependency_order. Constructed so that IF the
-    edges.txt-only edge (stub-a-1 blocked_by stub-a-3, i.e. reversed order)
-    were merged into the check graph it would trip a number-order violation —
-    asserting on behaviour (no such violation appears), not just a count.
-    """
     handoffs = tmp_path / "state" / "handoffs"
     handoffs.mkdir(parents=True)
     _write_stub(handoffs / "stub-a-1.md", "rm-c1-ac2", "stub-a-1", 1, 1, 1)
@@ -807,10 +718,6 @@ def test_check_mode_c1_ac2_declared_only_edge_does_not_reach_check_dependency_or
         blocked_by=["stub-a-1", "stub-a-2"],
     )
 
-    # Declares a reversed edge never present in frontmatter: stub-a-1
-    # blocked_by stub-a-3. If merged into the check graph this would require
-    # number(stub-a-3) < number(stub-a-1) -- 3 < 1 -- a number-order
-    # violation. carried (3) >= declared (1) so no reconciliation FAIL either.
     _write_edges_file(
         tmp_path / "state" / "roadmap" / "rm-c1-ac2",
         "edges.txt",
@@ -852,10 +759,6 @@ def test_check_mode_c2_both_queries_fail_returns_2(tmp_path, monkeypatch, capsys
 def test_check_mode_c2_one_query_fails_plus_empty_result_returns_2(
     tmp_path, monkeypatch, capsys
 ):
-    """AC3 / F3 hole: a raised live query plus an empty (successful) archived
-    result must be distinguished from the both-raised case AND from a genuine
-    clean empty result — both must return 2, but with different stderr text.
-    """
     (tmp_path / "state" / "handoffs").mkdir(parents=True)
 
     import coordinator_core.roadmap.number_stubs as mod
@@ -874,7 +777,6 @@ def test_check_mode_c2_one_query_fails_plus_empty_result_returns_2(
     assert rc == 2
     assert "ERROR: could not establish roadmap state" in err
     assert "the live roadmap-baton query raised and the other corpus returned no results" in err
-    # Distinct from the both-raised case's message.
     assert "both the live and archived roadmap-baton queries raised" not in err
 
 
@@ -920,16 +822,6 @@ def test_state_mode_c7_one_query_fails_plus_empty_result_returns_2(
     assert "the live roadmap-baton query raised and the other corpus returned no results" in err
     assert "both the live and archived roadmap-baton queries raised" not in err
 
-
-# ---------------------------------------------------------------------------
-# Third distinct branch of the C2/C7
-# exit-code change: exactly one corpus raises but the OTHER corpus returns
-# real (non-empty) results. `_roadmap_state_error_exit` must NOT exit(2) here
-# — the surviving corpus's results are usable — but the run must still WARN
-# that results are partial, and (check-mode only) skip edges.txt
-# reconciliation against an admittedly-incomplete stub_id set rather than
-# print a misleadingly-confident OK/FAIL against it.
-# ---------------------------------------------------------------------------
 
 _ONE_RAISES_NONEMPTY_FIXTURE = [
     {

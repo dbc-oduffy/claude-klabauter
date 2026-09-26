@@ -68,15 +68,9 @@ class TestPowerShellSelectObjectFirstLast:
         assert "updatedInput" not in out["hookSpecificOutput"]
 
     def test_longer_chain_silent_not_advised_or_rewritten(self):
-        # No rewrite offered, AND no advisory: this branch has already
-        # computed that no rewrite would help, so the guard stays silent
-        # rather than nag (see the guard module's own comment at this
-        # branch, backlinking the fleet-wide fire-volume memo).
         assert _ps_rewrite("ls . | Sort-Object | Select-Object -First 5") is None
 
     def test_unrecognized_upstream_generator_silent_not_advised(self):
-        # Same silencing as the longer-chain case above -- no rewrite
-        # possible, so no advisory either.
         assert _ps_rewrite("Get-Process | Select-Object -First 5") is None
 
     def test_no_select_object_at_all_is_a_genuine_clean(self):
@@ -86,8 +80,6 @@ class TestPowerShellSelectObjectFirstLast:
         assert _ps_rewrite("") is None
 
     def test_bash_leg_unchanged_when_dialect_omitted(self):
-        # No `dialect` argument at all -- must reproduce the exact
-        # pre-existing bash-only behavior (AC4).
         out = guard.check_head_tail_plumbing_rewrite("find . -type f | head -n 5")
         assert out is not None
         assert "updatedInput" in out["hookSpecificOutput"]
@@ -102,9 +94,6 @@ def _payload(cmd, cwd):
 
 
 class TestFindCensusServesInProcess:
-    """C1: on a `payload` carrying a real `tool_input`, a `find`-census
-    shape `coordinator_core.search.census` certifies (AC13/AC14) is SERVED
-    in-process (AC3) instead of rewritten into a `python3 -c` one-liner."""
 
     def _fixture(self, tmp_path):
         (tmp_path / "a.txt").write_text("one\n")
@@ -148,9 +137,6 @@ class TestFindCensusServesInProcess:
         )
 
     def test_shape_census_declines_falls_back_to_generator_rewrite(self, tmp_path):
-        # `-type d` is a certified-declined shape (module docstring's own
-        # Negative-spec) -- census.py raises Unanswerable, so this must fall
-        # back to the existing generator rewrite, not crash or return None.
         census_dir = self._fixture(tmp_path)
         cmd = "find %s -type d | head -n 5" % census_dir
         out = guard.check_head_tail_plumbing_rewrite(cmd, payload=_payload(cmd, tmp_path))
@@ -172,10 +158,6 @@ class TestFindCensusServesInProcess:
         out = guard.check_head_tail_plumbing_rewrite(
             cmd, dialect=_dialect.Dialect.POWERSHELL, payload=_payload(cmd, tmp_path)
         )
-        # `ls` upstream stays the existing generator (census.py answers
-        # `find` only) -- this asserts the PowerShell leg still rewrites
-        # (unaffected), a regression guard for the shared `_bt_serve_find_
-        # census` call site added at this branch.
         assert out is not None
         assert "updatedInput" in out["hookSpecificOutput"]
 

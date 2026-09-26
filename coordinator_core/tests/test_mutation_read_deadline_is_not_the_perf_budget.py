@@ -20,15 +20,10 @@ _CEREMONY_OPS = ("ceremony.commit_v2", "ceremony.close", "ceremony.scoped_git_co
 
 
 def test_the_dispatch_budget_still_clamps_ceremony_ops():
-    """The half that must NOT change. Widening this would be a budget
-    widening, which is what DR-344 forbids and what this change is not."""
     for op in _CEREMONY_OPS:
         assert _timeout_for(op) == CEREMONY_BUDGET_SECS
 
 
 def test_the_read_deadline_does_not_inherit_that_clamp():
-    """The half that was wrong. A delivered mutation is read for longer than
-    the op is budgeted to take, because the question is whether the answer
-    arrives, not whether the op was fast."""
     for op in _CEREMONY_OPS:
         assert mutation_read_deadline_for(op) > CEREMONY_BUDGET_SECS

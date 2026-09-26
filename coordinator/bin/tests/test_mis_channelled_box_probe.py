@@ -144,15 +144,11 @@ def test_detached_head_is_undeterminable_and_degrades_to_pass(tmp_path, monkeypa
 
 
 def test_read_current_branch_boot_zero_spawn(tmp_path, monkeypatch):
-    """The `.git/HEAD` reader itself never touches `subprocess`."""
     tree = _make_git_head(tmp_path, "candidate")
 
     def _forbidden(*args, **kwargs):
         raise AssertionError("must not spawn a subprocess")
 
-    # The stated purpose is "must not spawn a subprocess", which is broader
-    # than `.run` alone: a future switch to check_output/Popen would slip a
-    # run-only guard silently. Ban the whole spawning surface.
     for _name in ("run", "Popen", "check_output", "check_call", "call"):
         monkeypatch.setattr(_mod.subprocess, _name, _forbidden, raising=False)
 

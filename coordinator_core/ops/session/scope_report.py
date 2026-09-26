@@ -202,11 +202,7 @@ from coordinator_core.session import core
 from coordinator_core.session.liveness import live_session_ids
 from coordinator_core.win_portability import no_console_creationflags
 
-#: Bound on the orphan-adoption dirtiness probe (state/bug-backlog/
-#: 2026-08-29-orphan-adoption-admits-a-clean-path.yaml). A single `git
-#: status --porcelain` call over the small, caller-supplied set of
 #: OWNERSHIP_UNCLAIMED candidates -- never a tree enumeration -- so a slow
-#: or wedged git cannot stall the commit hot path past the brightline.
 _ORPHAN_DIRTY_PROBE_TIMEOUT_SECONDS = 2.0
 
 
@@ -238,9 +234,6 @@ def _dirty_unclaimed_paths(cwd: Optional[str], candidates: Sequence[str]) -> Opt
         return None
     dirty: set = set()
     for line in result.stdout.splitlines():
-        # Porcelain v1: two status chars, one space, then the path (or
-        # "old -> new" for a rename, where the NEW path is what a caller's
-        # pathspec would name).
         path = line[3:]
         if " -> " in path:
             path = path.split(" -> ", 1)[1]
@@ -248,30 +241,6 @@ def _dirty_unclaimed_paths(cwd: Optional[str], candidates: Sequence[str]) -> Opt
     return dirty
 
 #: Orphan ADOPTION is enabled — orphan *diagnosis* has shipped since
-#: 2026-08-03, and staff-eng R1 (2026-08-03, re-review pass 2) is now closed:
-#: `ScopeResult.indeterminate` (`coordinator_core.session.scope`) covers the
-#: non-candidate shape the earlier `orphans - skipped_paths` subtraction
-#: alone could not — a dirty path never adopted as a candidate this call
-#: (`started_at` in the future or unreadable, or an mtime predating session
-#: start) used to bypass `compute_scope` Step 4 entirely, get no `skipped`
-#: counterpart for that subtraction to remove, and reach `orphans` even
-#: while a live peer's claim set was unreadable. `compute_offer` now returns
-#: `orphans: []` outright whenever `ScopeResult.indeterminate` is set (any
-#: unreadable claim set, or an unresolved agent-race overlap, this call) —
-#: see `safe_commit_offer.compute_offer`'s own docstring for the full
-#: accounting, including why the whole call's orphan set is withheld rather
-#: than just the specific candidate.
-#:
-#: Residual, NOT closed by this fix (deliberately out of scope — see
-#: `ScopeResult.indeterminate`'s own docstring and `compute_scope`'s own
-#: docstring for where it is documented): the pre-existing liveness-
-#: enumeration partial under-report. A peer claim released by that residual
-#: never sets `unreadable_other_sessions` or `agent_race_paths`, so it never
-#: sets `indeterminate` either — it shares R1's shape (an orphan reaching
-#: adoption despite an unresolved peer claim) but is not covered by this
-#: gate, because nothing marks that call as degraded. This is what makes it
-#: a genuine residual rather than an oversight; do not chase it as part of
-#: this constant.
 _ORPHAN_ADOPTION_ENABLED = True
 
 
@@ -425,26 +394,7 @@ def assert_paths_in_session_scope(
         return False, "paths is empty"
 
     # THE OWNERSHIP LEG, REBUILT (2026-08-21) on `claim_index.classify_paths`
-    # -- one zero-spawn index rebuild, answering this pathspec directly.
-    #
-    # It replaces a `compute_offer` composition that cost 73 processes and
-    # 5,609ms of CPU per call, on the COMMIT HOT PATH, and was stood down
-    # entirely between `e927d9463` and this change (the suspension is over;
-    # a dispatched committer is again prevented from committing a peer's
-    # path). The old shape needed TWO offers -- one for the verdict, one
-    # with the caller's own pathspec as `extra_candidates` purely so a
-    # holder could be NAMED for a path this session never touched -- because
-    # `compute_scope` could only answer about paths it had already adopted
-    # as candidates. `classify_paths` answers about any path put to it, so
-    # the second offer, and with it the whole class of bug where the two get
-    # merged into one membership test, no longer exists to be gotten wrong.
-    #
     # The allow-list polarity is UNCHANGED (see "Allow-list polarity" in this
-    # module's docstring): allowed means positively attributed to THIS
-    # session, never "not proven foreign". `classify_paths` is fail-closed in
-    # both its directions -- an aborted walk yields neither `mine` nor
-    # `unclaimed`, and a peer claim denies whether or not the holder is still
-    # live -- so an empty or degraded index denies rather than admits.
     try:
         answer = claim_index.classify_paths(
             session_id, [p for p in paths if isinstance(p, str)], cwd=cwd
@@ -452,44 +402,20 @@ def assert_paths_in_session_scope(
     except Exception as exc:  # noqa: BLE001 - fail-closed on ANY error beneath
         return False, "claim_index.classify_paths raised: %s" % (exc,)
 
-    # staff-eng F2/F3 - `allow_orphans` takes effect only given
-    # positive evidence `session_id` names a real, previously-initialized
-    # session (see this function's own docstring paragraph). A fabricated
-    # id, or a bare directory some non-tracked writer created with no
-    # `meta.json`, degrades this to the same strict allow-list as
-    # `allow_orphans=False` - never to a wider one.
     verified_caller = (
         allow_orphans
         and _ORPHAN_ADOPTION_ENABLED
         and _session_has_positive_evidence(session_id, cwd)
     )
 
-    # staff-eng R3 - an `allow_orphans` request this call did not
-    # honor (because `_session_has_positive_evidence` failed) must not read
-    # the same as "you never asked". Threaded through so
-    # `_classify_denied_path` can name it distinctly.
     orphan_adoption_requested_but_unverified = allow_orphans and not verified_caller
 
-    # An aborted walk is this gate's `indeterminate`: same meaning as
-    # `ScopeResult.indeterminate` carried before -- "this call's claim reads
-    # were degraded, so a path's classification is unresolved rather than
-    # unrecognized" -- and it is what stops a denial from being narrated as
-    # "the system has never heard of this path".
     call_indeterminate = not answer.complete
 
-    # `already_clean` (Half 2 of the mixed-pathspec fix) -- advisory naming
-    # only, never a bypass: a path here still goes through the ordinary
-    # allow-list membership test below exactly like any other path.
     already_clean_set = set(already_clean) if already_clean else set()
 
-    # state/bug-backlog/2026-08-29-orphan-adoption-admits-a-clean-path.yaml:
-    # doctrine defines an orphan as dirty AND claimed by nobody;
     # OWNERSHIP_UNCLAIMED is a pure claim-ledger verdict with no dirtiness
-    # component. A bounded `git status --porcelain` over ONLY the
     # OWNERSHIP_UNCLAIMED candidates -- never the whole tree, and only when
-    # the arm is actually in play -- narrows adoption back to that
-    # definition. A probe failure fails CLOSED (empty dirty set), never
-    # open, matching the allow-list polarity the rest of this gate holds.
     unclaimed_candidates = (
         [
             p
@@ -527,13 +453,7 @@ def assert_paths_in_session_scope(
     if not denied_paths:
         return True, ""
 
-    # `_classify_denied_path` reads ONE key (`excluded`) and the orphan list,
-    # and its three claimed-by branches -- including the earned-liveness
-    # wording every downstream consumer discriminates on via
     # `CLAIMED_BY_SENTINELS` -- are the operator-facing contract. It is fed
-    # from the same answer that produced the verdict rather than from a
-    # second, wider offer: nothing here can widen what was already decided,
-    # because the classification runs only over paths already denied.
     classification_offer = {
         "excluded": [
             {
@@ -582,12 +502,6 @@ def assert_paths_in_session_scope(
         ),
     )
 
-    # A path several peers hold gets ONE holder named by
-    # `_classify_denied_path` (its claimed-by branches take a single sid, and
-    # the earned-liveness wording only survives on a bare token). The rest
-    # would otherwise vanish from the refusal -- a silent omission in exactly
-    # the message an operator uses to decide who to go and talk to -- so they
-    # are named here instead of being dropped.
     multi_held = [
         (p, answer.by_path[p].peers)
         for p in denied_paths
@@ -632,28 +546,6 @@ def _format_pathspec_list(entries: list) -> str:
 
 
 def _session_has_positive_evidence(session_id: str, cwd: Optional[str]) -> bool:
-    """True iff `session_id` names a session directory that actually exists
-    on disk AND carries a `meta.json` — the artifact
-    `coordinator_core.session.core.init` writes, which every session that
-    ever went through the real touch-tracked hot path
-    (`coordinator_core.session.scope.touch`'s lazy-init fallback) already
-    has. Review: staff-eng F2/F3 — this is the positive-evidence check
-    `allow_orphans` is gated on; see `assert_paths_in_session_scope`'s own
-    docstring for why a bare directory (or none at all) is not enough.
-
-    This is a MISTAKE guard, not
-    an authentication check: it requires evidence a session was initialized
-    through the tracked hot path, which raises the cost of a fabricated
-    identity from "invent a string" to "create a directory and a file" for a
-    caller who already has repo write access by construction. It does not
-    hold against an adversary willing to do that — see
-    `assert_paths_in_session_scope`'s own docstring for the corrected claim
-    about what this closes (the accidental/naive shape and the F3 live
-    incident), not a stronger one.
-
-    Never raises — an unresolvable/unreadable path is "no evidence", the
-    fail-closed answer.
-    """
     try:
         sdir = core.session_dir(session_id, cwd)
     except Exception:
@@ -663,93 +555,22 @@ def _session_has_positive_evidence(session_id: str, cwd: Optional[str]) -> bool:
     return os.path.isfile(os.path.join(sdir, "meta.json"))
 
 
-#: `_classify_denied_path`'s own return values, named as module-level
-#: constants (2026-08-04, staff-eng F1 fix) so a caller downstream of this
-#: module -- `block_subagent_commit.py`'s `_ownership_leg_summary`, which
-#: caps the threaded reason at a fixed byte budget far shorter than these
 #: full sentences -- can rely on the DISCRIMINATING word (`orphan`,
-#: `include_orphans ignored`, `indeterminate`) surviving truncation by
-#: construction, because it is the FIRST word/phrase in the string, not
-#: buried after an already-over-budget preamble. Word order only: the
 #: classification SEMANTICS these four strings express are unchanged from
-#: before this fix (verified against every consumer of
-#: `assert_paths_in_session_scope` -- see this module's own history --
-#: before landing; none pattern-matches on word order, only on the presence
-#: of `"include_orphans ignored"` as a substring).
 _CLASSIFICATION_INCLUDE_ORPHANS_IGNORED = (
     "include_orphans ignored — orphan, but this session has no "
     "initialization record"
 )
-#: The REMEDY half of the two classifications below, appended rather than
-#: interleaved (2026-08-31, `state/handoffs/2026-08-30-the-commit-path-scoped-
-#: commits-the-share.md` owed item 4: "give the unanswerable refusal a runnable
-#: remedy and a message distinguishable from a genuine peer conflict").
-#:
-#: `docs/wiki/guard-messaging.md` § Register: one fact, once, plus a terse
-#: alternative. The fact was already here and is unchanged; what was missing is
-#: the alternative. And per this repo's cold-path rule, a remediation names a
 #: RUNNABLE SCRIPT, never a slash command -- what fires before a session exists
-#: cannot be fixed by the surface that just failed.
-#:
-#: `session-claim-cli who-claims-path <path>` is that script (a `bin/`
-#: forwarder, on PATH). It is the right one specifically because its answer
-#: space matches the distinction this classification is about: rc=0 with rows
-#: names live/dead holders, rc=0 with NO rows is a determinate "nobody holds
-#: it", and rc=1 prints "could not be determined ... NOT a verdict that the
-#: path is unclaimed" plus the `abort_cause`. That is exactly the
-#: indeterminate-vs-unclaimed split an operator cannot make from the refusal
-#: alone, answered by a command rather than by reasoning.
-#:
 #: TRUNCATION IS EXPECTED AND CORRECT HERE. `block_subagent_commit.py`'s
-#: `_ownership_leg_summary` caps the threaded reason at ~70 bytes, so the
-#: remedy is cut in that path -- which is why it goes at the END and the
-#: discriminating token stays FIRST (see the word-order note above, and
-#: `test_indeterminate_call_names_the_degradation` which pins that the
-#: capped path still carries "indeterminate"/"adoption withheld"). The
-#: remedy is for the reader of the FULL string; the capped reader needs the
-#: discriminator, not the command.
 _REMEDY_WHO_CLAIMS = " — run: session-claim-cli who-claims-path <path>"
 
-#: Carries the remedy for the same reason its siblings do, and it was the
-#: only one of the four without it. The discriminator stays FIRST so the
-#: ~70-byte cap in `block_subagent_commit._ownership_leg_summary` keeps it.
-#:
-#: WHAT THIS DOES AND DOES NOT MEAN, because a dispatched committer reads it
-#: as "your writes were rejected" and that is not what it says. It reports
-#: that NO touch record in the index covers this path. A dispatched agent's
-#: writes are NOT excluded by being an agent's: `claim_index.rebuild()`
-#: resolves each agent's claims onto its owning EM session through the
-#: `.agents/<agent_id>/em-session-id.txt` back-pointer, so an executor's
-#: write and its EM's commit are the SAME claimant by construction. That is
-#: the sanctioned attribution path, and it needs nothing at dispatch time.
-#:
-#: So an orphan verdict on a path an agent demonstrably wrote means the touch
-#: record is missing or unattributable, not that attribution was refused --
-#: the writer bypassed the Edit/Write hot path (an engine CLI or a shell
-#: redirect writes no touch record), or its agent dir carries no resolvable
-#: owner, in which case `_agent_owner_sid` contributes NO claims and the
-#: path reads exactly as if nobody had touched it. Those two are
-#: indistinguishable from this string, which is why the remedy is a command
-#: and not a sentence: `who-claims-path` answers determinately-unclaimed
-#: (rc=0, no rows) against could-not-determine (rc=1) where reasoning cannot.
-#:
-#: Asked and answered for an emitted workflow's commit phase, 2026-09-01,
-#: cross-repo/archive/2026-08-28-doe-claude-em-workflow-commit-phase-cannot-
-#: commit-executor-writes.md.
 _CLASSIFICATION_ORPHAN = (
     "orphan — no session holds a claim on it" + _REMEDY_WHO_CLAIMS
 )
 
 #: PUBLIC, and a CROSS-MODULE CONTRACT of the same class as
 #: :data:`CLAIMED_BY_PREFIX`: the lead of the one classification below that
-#: reports an ABSENCE OF A VERDICT rather than a verdict. The consumer is
-#: `coordinator_core.bash_guards.block_subagent_commit`, which stands its
-#: commit gate down when a denial is wholly indeterminate (a claim index that
-#: could not answer is not a claim index reporting nobody) and must be able
-#: to tell that apart from every determinate classification in this block.
-#: Tested through :func:`denial_is_wholly_indeterminate`, never by a consumer
-#: re-spelling the literal — the reason string is this module's vocabulary and
-#: a second copy of it in a guard is the drift shape
 #: :data:`CLAIMED_BY_PREFIX`'s own comment records.
 INDETERMINATE_PREFIX = "indeterminate — adoption withheld"
 
@@ -759,16 +580,7 @@ _CLASSIFICATION_INDETERMINATE = (
     "window), so this path's own classification is unresolved, not that it "
     "is unrecognized" + _REMEDY_WHO_CLAIMS
 )
-#: `compute_offer` is NOT the mechanism any more and has not been since
-#: 2026-08-21, when the ownership leg was rebuilt on
-#: `claim_index.classify_paths` (see that rebuild's own comment in
-#: `assert_paths_in_session_scope`). Naming a retired function in
 #: OPERATOR-FACING text sends a reader to grep for something that will not
-#: explain their refusal -- the same stale-citation shape the 2026-08-30
-#: baton is re-homing elsewhere in this path. States the condition instead,
-#: and carries the same runnable remedy: "never classified" and "genuinely
-#: unclaimed" are the two readings, and `who-claims-path` is what separates
-#: them.
 _CLASSIFICATION_UNCLASSIFIED = (
     "unclaimed — no claim record names this path" + _REMEDY_WHO_CLAIMS
 )
@@ -777,44 +589,18 @@ _CLASSIFICATION_ALREADY_CLEAN = (
 )
 
 #: PUBLIC, and a CROSS-MODULE CONTRACT (2026-08-07): the prefix every
-#: peer-claimed classification `_classify_denied_path` returns is built from,
-#: and the substring a consumer tests to tell "a holder was actually found"
-#: apart from every other deny classification above. Named consumer:
-#: `coordinator_core.ops.ceremony.scoped_git_commit.
 #: _include_orphans_ineffective_note`, which appends prose ASSERTING the
-#: denied paths are claimed by another session — an assertion it can only
-#: earn by finding this prefix in the already-computed deny reason, since it
-#: mints no ownership oracle of its own. That module imports this constant
-#: (falling back to the literal, since it must stay importable), so the two
-#: modules cannot drift apart by one editing its own copy of the string.
-#:
 #: Same discipline, different axis, as the `_CLASSIFICATION_*` block above:
 #: those exist so the DISCRIMINATING word survives `block_subagent_commit`'s
-#: byte-budget truncation by being placed FIRST; this exists so a
 #: discriminating substring is guaranteed BY CONSTRUCTION rather than by two
-#: modules independently agreeing on a literal. Changing this string is a
-#: two-module change — grep for the fallback literal in
-#: `scoped_git_commit.py` before touching it.
-#:
 #: SUBSTRING COLLISION — this prefix ALONE is not a safe membership test.
 #: `_CLASSIFICATION_ORPHAN` used to read "orphan — dirty but claimed by no
-#: session", which contained this prefix mid-sentence while meaning the exact
-#: INVERSE of a holder being found. It no longer does (2026-08-21: the leg
-#: stopped reading dirtiness, so asserting it became unearned, and the
-#: reworded string happens to drop the collision too) — but the collision is
-#: a property of the prefix, not of any one classification string, and the
-#: next one written from the same vocabulary reintroduces it. Consumers test
 #: :data:`CLAIMED_BY_SENTINELS` below instead; this prefix is for
 #: CONSTRUCTION.
 CLAIMED_BY_PREFIX = "claimed by "
 
-#: The membership test a consumer actually uses: the full, unambiguous lead
 #: of each claimed-by branch, DERIVED from `CLAIMED_BY_PREFIX` rather than
-#: re-spelled, so the two cannot drift and a fourth branch built the same way
-#: is matched by construction. No sentinel is a substring of any
 #: `_CLASSIFICATION_*` string, which is what makes this safe where the bare
-#: prefix is not — the collision is designed out rather than argued away by
-#: another module's reachability.
 CLAIMED_BY_SENTINELS = tuple(
     CLAIMED_BY_PREFIX + suffix for suffix in ("live session ", "session ")
 )
@@ -838,13 +624,7 @@ def deny_reason_names_a_holder(deny_reason: str) -> bool:
 
 
 #: Every classification in the `_CLASSIFICATION_*` block that is a VERDICT
-#: about a path — a holder was found, or the claim ledger determinately names
-#: nobody, or the path is clean at HEAD. DERIVED from those constants (each
-#: sliced at its appended remedy) rather than re-spelled, for the reason
 #: :data:`CLAIMED_BY_SENTINELS` is derived from :data:`CLAIMED_BY_PREFIX`: a
-#: hand-copied second list of these strings is what drifts when one of them is
-#: reworded. `"not a string"` is `_classify_denied_path`'s non-str arm, which
-#: has no constant of its own.
 _DETERMINATE_CLASSIFICATION_LEADS = CLAIMED_BY_SENTINELS + tuple(
     classification.split(_REMEDY_WHO_CLAIMS)[0]
     for classification in (
@@ -1059,32 +839,6 @@ def _classify_denied_path(
 
 @register_op("session.scope_report")
 def _handler(params: dict, repo_root=None) -> dict:
-    """session.scope_report — read-only report of THIS session's own scope.
-
-    Op scope "none" (mirrors session.record_pickup / session.reap_claims_
-    for_repos): the `repo_root` handler arg is unused (always None for
-    scope-"none" ops). This op resolves its own target via wire params only.
-
-    params:
-      session_id (str, optional): explicit session id. Falls back to
-                                   `coordinator_core.session.core.resolve_session_id(cwd)`
-                                   (the calling session's own id) when absent.
-      cwd        (str, optional): working directory passed through to both
-                                   session-id resolution and `compute_offer`.
-
-    Returns, straight from `compute_offer`, and mutates nothing:
-      session_id     str
-      safe_paths     List[str]
-      excluded       List[{"path": str, "reason": str}]
-      orphans        List[str]
-      indeterminate  bool
-
-    On an unresolvable session_id (no explicit param, and
-    `resolve_session_id` returns empty), returns an error envelope instead:
-      {"session_id": "", "safe_paths": [], "excluded": [],
-       "error": "session_id could not be resolved"}
-    — never raises; read-only either way.
-    """
     cwd = params.get("cwd")
     session_id = params.get("session_id") or core.resolve_session_id(cwd)
     if not session_id:

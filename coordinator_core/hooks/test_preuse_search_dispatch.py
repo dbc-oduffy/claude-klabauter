@@ -1,4 +1,3 @@
-"""Tests for coordinator_core.hooks.preuse_search_dispatch."""
 
 from __future__ import annotations
 
@@ -89,7 +88,7 @@ def test_search_path_resolves_index(indexed_repo, tmp_path_factory):
 
 def test_unindexed_repo_is_silent(tmp_path):
     (tmp_path / ".git").mkdir()
-    (tmp_path / ".project-rag").mkdir()  # config-only dir, as ~/.project-rag/ is
+    (tmp_path / ".project-rag").mkdir()
     assert m._handler(_payload(tmp_path, pattern="_resolve_registry_key")) == m.no_advisory()
 
 

@@ -52,30 +52,26 @@ def _load_module():
     return module
 
 
-# One planted violation per `BANNED` entry, IN ORDER. Each must be a bare,
-# boundary-clean occurrence of that entry's token so it is unambiguous which
-# pattern it is meant to trip.
 _VIOLATIONS: list[str] = [
-    "Zol" + "i",  # persona: Zol[ií]
-    "the Data Science Reviewer",  # persona
-    "Pal" + "i",  # persona: Pal[ií]
-    "the Staff Engineer",  # persona
-    "the Game Dev Reviewer",  # persona (case-sensitive)
-    "the UX Reviewer",  # persona (case-sensitive)
-    "the VP-Product Reviewer",  # persona (case-sensitive)
-    "nimb" + "alyst",  # codename
-    "gastown" + "hall",  # codename
-    "mak" + "ima",  # fleet codename
-    "opti" + "con",  # fleet codename
-    "holo" + "deck",  # fleet codename
-    "del" + "phi",  # fleet codename
-    "project" + "-" + "rag",  # fleet codename
-    "o" + "duffy",  # operator identity: o['’]?duffy
+    "Zol" + "i",
+    "the Data Science Reviewer",
+    "Pal" + "i",
+    "the Staff Engineer",
+    "the Game Dev Reviewer",
+    "the UX Reviewer",
+    "the VP-Product Reviewer",
+    "nimb" + "alyst",
+    "gastown" + "hall",
+    "mak" + "ima",
+    "opti" + "con",
+    "holo" + "deck",
+    "del" + "phi",
+    "project" + "-" + "rag",
+    "o" + "duffy",
 ]
 
 
 def _bracket(token: str) -> str:
-    """Wrap TOKEN with plain-space boundaries so it is unambiguously bounded."""
     return f" {token} "
 
 
@@ -117,24 +113,12 @@ def test_each_prefilter_matches_at_least_its_own_full_pattern():
 
 
 def test_prefilter_still_matches_the_escape_adjacent_boundary_case():
-    """The `_LEAD` second alternative (`(?<=\\\\[A-Za-z])`) is the false-negative
-    class `test_check_persona_names_escape_adjacent.py` closes. Stripping
-    `_LEAD` must not lose coverage of that same boundary shape: a token glued
-    to a backslash-escape must still trip the prefilter, since the prefilter
-    has no lookbehind at all and therefore imposes no boundary requirement on
-    the left side -- it is a strict superset by construction, but this pins
-    that property on the exact boundary shape the escape fix exists for.
-    """
     module = _load_module()
     for (label, pattern), prefilter, token in zip(
         module.BANNED, module._PREFILTERS, _VIOLATIONS
     ):
         text = 'r"\\b' + token + '\\b"'
         if not pattern.search(text):
-            # Case-sensitive short tokens (the Game Dev Reviewer/the UX Reviewer/the VP-Product Reviewer) plus multi-word/space
-            # entries may not reassemble cleanly glued to `\\b...\\b` without
-            # their own internal separators; only assert the superset
-            # property where the full pattern itself actually fires here.
             continue
         assert prefilter.search(text), (
             f"prefilter for {label!r} lost the escape-adjacent match its "
@@ -156,15 +140,6 @@ def test_prefilter_strips_exactly_the_lead_prefix_when_present():
     assert sample.pattern.startswith(module._LEAD)
     derived = module._prefilter_for(sample)
     assert derived.pattern == sample.pattern[len(module._LEAD):]
-
-
-# ---------------------------------------------------------------------------
-# The union gate and the lazy permitted-span computation. Both are pure cost
-# reductions layered on top of the per-pattern prefilter above: neither may
-# change a single finding, and the union gate in particular runs BEFORE every
-# other check, so a union narrower than the fifteen it stands in for would
-# silently suppress a real leak on every line of every publish.
-# ---------------------------------------------------------------------------
 
 
 def test_union_gate_matches_whenever_any_individual_prefilter_does():
@@ -221,10 +196,6 @@ def test_union_gate_short_circuits_only_lines_with_no_possible_match():
 
 
 def test_permitted_spans_still_suppress_when_computed_lazily():
-    """`permitted_spans` is now built on the first ban match rather than up
-    front. The suppression it provides must be unchanged: a permitted span on
-    an attribution surface still swallows the match inside it.
-    """
     module = _load_module()
     handle = "dbc-" + "example-operator"
     slug = f"see github.com/{handle}/some-repo for details"

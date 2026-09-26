@@ -46,11 +46,7 @@ from typing import Dict, Optional
 
 from coordinator_core.benchmarks.timer import SUBPROCESS_CREATIONFLAGS, SUBPROCESS_TIMEOUT_S
 
-# ---------------------------------------------------------------------------
-# Fixture repo paths
-# ---------------------------------------------------------------------------
 
-# The checked-in, git-free content tree consumed by materialize_fixture_repo().
 FIXTURE_CONTENT_DIR: Path = Path(__file__).parent / "fixtures" / "repo"
 
 _SESSION_ID = "bench-session-001"
@@ -94,14 +90,7 @@ def materialize_fixture_repo(dest: Optional[Path] = None) -> Path:
     _run_git(dest, ["add", "-A"])
     _run_git(dest, ["commit", "-q", "-m", "bench-fixture: seed synthetic repo state"])
 
-    # coverage.gate's default range is `git merge-base origin/main HEAD..HEAD` — it
     # needs a real origin/main ref to resolve non-INDETERMINATE, and a second commit
-    # gives git rev-list an actual chain to walk (representative of real invocation
-    # cost, not a degenerate single-commit no-op). A local bare "origin" remote is
-    # sufficient; no network access required.
-    # Nested INSIDE dest (not a dest.parent
-    # sibling) so harness.run()'s single `shutil.rmtree(worktree_root)` cleans this up
-    # too; a sibling path previously escaped that cleanup and leaked one bare repo per run.
     origin_dir = dest / ".bench-origin.git"
     _run_git(dest, ["clone", "-q", "--bare", str(dest), str(origin_dir)])
     _run_git(dest, ["remote", "add", "origin", str(origin_dir)])
@@ -138,16 +127,6 @@ def materialize_fixture_repo(dest: Optional[Path] = None) -> Path:
 
 
 def _run_git(cwd: Path, args: list) -> None:
-    """Run a git subprocess in ``cwd``, raising loudly on any non-zero exit.
-
-    Purpose: fixture materialization must fail loud, never silently produce a
-    half-initialized repo that later ops would smoke-fail against for the wrong
-    reason (a broken fixture, not a broken op). ``git`` is a GUI-subsystem binary
-    on Windows (exempt from the console-popup guard by convention), but the
-    portable ``creationflags`` form is applied anyway — zero-cost, no-op off
-    Windows, and keeps this call site pattern-consistent with every other
-    subprocess call in this package.
-    """
     try:
         result = subprocess.run(
             ["git", *args],
@@ -159,9 +138,6 @@ def _run_git(cwd: Path, args: list) -> None:
             creationflags=SUBPROCESS_CREATIONFLAGS,
         )
     except subprocess.TimeoutExpired as exc:
-        # A hung git subprocess (e.g.
-        # blocked on a lock file) must fail loud like any other fixture-
-        # materialization error, not wedge the run forever.
         raise RuntimeError(
             f"op_fixtures: git {' '.join(args)} timed out after "
             f"{SUBPROCESS_TIMEOUT_S}s in {cwd}: {exc}"
@@ -174,26 +150,14 @@ def _run_git(cwd: Path, args: list) -> None:
 
 
 def common_dir(worktree_root: Path) -> Path:
-    """Return the ``--repo`` value for the 13 ``common_dir``-keyed worktree ops."""
     return worktree_root / ".git"
 
 
 def show_top_dir(worktree_root: Path) -> Path:
-    """Return the ``--repo`` value for ``coverage.gate`` (the sole ``show_top`` op)."""
     return worktree_root
 
 
-# ---------------------------------------------------------------------------
-# Op fixture registry
-#
-# scope: "bare"     — invoked WITHOUT --repo (4 none/central-scoped ops).
-#        "worktree" — invoked WITH --repo (14 worktree-scoped ops).
-# repo_key: for scope="worktree" only — "common_dir" or "show_top"; selects which
-#           of common_dir()/show_top_dir() the harness must pass as --repo.
-# ---------------------------------------------------------------------------
-
 COMPUTE_ONLY_FIXTURES: Dict[str, dict] = {
-    # --- 4 bare/none-scoped ops (ping + 3 advisory hooks) ---------------------
     "ping": {
         "params_json": "{}",
         "scope": "bare",
@@ -210,7 +174,6 @@ COMPUTE_ONLY_FIXTURES: Dict[str, dict] = {
         "params_json": '{"tool_name": "Bash", "tool_input": {"command": "git status"}}',
         "scope": "bare",
     },
-    # --- 14 worktree-scoped ops ------------------------------------------------
     "commit.anchors": {
         "params_json": f'{{"session_id": "{_SESSION_ID}", "nature": "chore"}}',
         "scope": "worktree",
@@ -233,9 +196,6 @@ COMPUTE_ONLY_FIXTURES: Dict[str, dict] = {
     },
     "handoff.has_live_children": {
         # __WORKTREE__ is substituted by params_json_for() with the materialized fixture
-        # repo's absolute worktree root — a bare relative candidate resolves against the
-        # *invoking process's cwd* (contained_path's Path.resolve() semantics), not the
-        # fixture worktree, and would spuriously fail the containment check.
         "params_json": (
             '{"candidate": "__WORKTREE__/state/handoffs/' + _HANDOFF_ID + '.md"}'
         ),
@@ -286,10 +246,6 @@ COMPUTE_ONLY_FIXTURES: Dict[str, dict] = {
 
 
 def repo_arg_for(op: str, worktree_root: Path) -> Optional[Path]:
-    """Resolve the ``--repo`` argument value for ``op`` given a materialized worktree root.
-
-    Returns ``None`` for bare-scoped ops (no ``--repo`` is passed at all).
-    """
     entry = COMPUTE_ONLY_FIXTURES[op]
     if entry["scope"] == "bare":
         return None
@@ -317,9 +273,4 @@ def params_json_for(op: str, worktree_root: Path) -> str:
     of reading ``COMPUTE_ONLY_FIXTURES[op]["params_json"]`` directly.
     """
     template = COMPUTE_ONLY_FIXTURES[op]["params_json"]
-    # Windows-safe: str(worktree_root) yields backslash-separated paths, and a
-    # plain str.replace splices those raw backslashes into a JSON string
-    # literal, producing invalid escapes (e.g. `\U`, `\A`) that break the
-    # child process's JSON parse. as_posix() is forward-slash and therefore
-    # valid unescaped JSON content; Windows path APIs accept forward slashes.
     return template.replace(_WORKTREE_TOKEN, worktree_root.as_posix())

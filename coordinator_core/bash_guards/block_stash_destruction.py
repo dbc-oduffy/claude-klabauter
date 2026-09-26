@@ -186,49 +186,19 @@ from coordinator_core.bash_guards._dialect import (
 )
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
-# WIDENED 2026-08-19 (C6, docs/plans/2026-08-19-the-held-guard-cohort-
-# becomes-dialect-safe.md): the prior `("Bash",)` hold existed because the
-# `tokens is None -> _evaluate_legacy(cmd)` free-text fallback is bash-
-# shaped and fails CLOSED on unparseable input, and PowerShell's here-
-# string/backtick-escape shapes defeat the `shlex`-based tokenizer feeding
-# it. The PowerShell leg below (`_evaluate_powershell`) never reaches that
-# bash-shaped fallback -- its own `tokens is None` route goes to
-# `_evaluate_legacy_powershell`, which strips here-string bodies and quoted
-# spans via `_dialect.strip_powershell_prose_noise` (C2) before scanning,
-# per Conventions (a). Same cohort, same plan: `block_worktree_creation.py`,
-# `block_subagent_stash_creation.py`, `block_subagent_destructive_action.py`.
 CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
-#: `dispatch.py` hardcodes chain ordering explicitly, so this value governs
-#: nothing at runtime; it matches the sibling non-identity-gated guards
-#: (`block_worktree_creation`, the two sentinel guards) it is registered
-#: alongside.
 PRIORITY = 41
 
-#: Cheap pre-filter gating whether the (more expensive) anchored tokenized
-#: pass runs at all. A bare word match is sufficient here -- unlike the
-#: worktree guard, there is no `--stash` flag anywhere in git's surface that
-#: would need excluding by lookbehind.
 _STASH_WORD_RE = re.compile(r"\bstash\b")
 
-#: The two irrecoverable second-level `git stash` subcommands -- see module
-#: docstring "WHY DROP/CLEAR AND NOT POP/APPLY". Everything else allows.
 _DENY_SUBCOMMANDS = frozenset({"drop", "clear"})
 
-#: The single plain word immediately following (whitespace-separated) a
-#: `stash` match position -- used only by the narrow legacy fallback below.
 _NEXT_WORD_AFTER_RE = re.compile(r"\s+(\S+)")
 
 #: A bare leading `VAR=value` shell assignment token (`GIT_TRACE=1 git stash
-#: drop`) -- `_strip_leading_subshell_and_env` only peels a literal `env` word
-#: prefix, not a bare assignment, so command-position resolution needs its own
-#: skip for the assignment-prefix shape.
 _ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
-#: Passthrough wrapper binaries that run their remaining argv unchanged. Same
-#: set the sibling guards tolerate; without it `nice git stash drop` resolves
-#: its head to `nice` (never `git`) and the drop happens for real while this
-#: guard allows.
 _PASSTHROUGH_WRAPPERS = frozenset(
     {
         "sudo", "command", "time", "exec", "nice", "nohup", "ionice", "timeout",
@@ -236,15 +206,10 @@ _PASSTHROUGH_WRAPPERS = frozenset(
     }
 )
 
-#: Shell interpreters whose `-c <string>` argument is executed, not inert text.
 _C_FLAG_SHELL_INTERPRETERS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 
 
 def _skip_leading_env_assignments(tokens: "list[str]") -> "list[str]":
-    """Return `tokens` with any leading `VAR=value`-shaped tokens AND any
-    leading no-op passthrough wrapper tokens (plus that wrapper's OWN
-    argument(s), via `_skip_wrapper_own_argv`) removed, exposing the true
-    command-position head."""
     i = 0
     n = len(tokens)
     while i < n:
@@ -299,17 +264,6 @@ def _evaluate_legacy(
 
 
 def _evaluate(cmd: str, classify=_classify_stash_subcommand) -> Optional[str]:
-    """Primary classification: tokenize the full command (quote-aware,
-    `;`/`&`/`|`-segmented), and for each segment resolve the REAL git
-    subcommand from argv position via `_real_git_subcommand`. Falls back to
-    `_evaluate_legacy`, scoped to the offending segment text only, on an
-    unparseable segment or an unrecognized-global-option ambiguity.
-
-    `classify` -- see `_evaluate_legacy`'s docstring above; threaded through
-    unchanged so `check_apply_advisory` gets the identical shell-shape/
-    tokenization handling this function's callers already rely on, without
-    a second copy of the walk.
-    """
     tokens = _tokenize_full_command(cmd)
     if tokens is None:
         return _evaluate_legacy(cmd, classify)
@@ -318,20 +272,12 @@ def _evaluate(cmd: str, classify=_classify_stash_subcommand) -> Optional[str]:
         if not seg_tokens:
             continue
 
-        # Command-position discipline: a non-command-position MENTION of
-        # `git` (an argument to another command, e.g. `echo git stash drop`)
-        # must not read as an invocation.
         working = _strip_leading_subshell_and_env(seg_tokens)
         working = _skip_leading_env_assignments(working)
         if not working:
             continue
 
-        # `sh -c 'git stash drop'` tokenizes its quoted payload as ONE shlex
-        # word, so the head is the interpreter and the segment would be
-        # skipped while the wrapped command drops for real. Unwrap and recurse
-        # into the SAME `_evaluate` on the nested payload text.
         # `_BUNDLED_C_FLAG_RE` matches bundled short flags (`-ic`, `-ci`) too,
-        # which an exact `"-c" in working[1:]` test misses.
         head_base = _normalize_executable_basename(working[0])
         if head_base in _C_FLAG_SHELL_INTERPRETERS:
             c_flag_positions = [
@@ -359,15 +305,9 @@ def _evaluate(cmd: str, classify=_classify_stash_subcommand) -> Optional[str]:
         if subcmd != "stash":
             continue
 
-        # `remaining[0]`, never a flag-skipping scan -- see module docstring
         # "CLASSIFICATION IS `remaining[0]`". 2026-08-23 fix (same
         # UNSCOPED-STASH GAP shape as the sibling create-side guards, see
-        # `_strip_leading_redirection_tokens`'s docstring): this module never
-        # applied the strip, so `git stash 2>&1 drop` displaced `remaining[0]`
-        # to `"2>&1"`, `_classify_stash_subcommand` allowed it as an
         # unrecognized token (this module's own DELIBERATE ALLOW-LIST), and
-        # the irrecoverable `drop`/`clear` this guard exists to catch sailed
-        # through.
         stash_remaining = _strip_leading_redirection_tokens(remaining)
         second = stash_remaining[0] if stash_remaining else None
         verdict = classify(second)
@@ -380,22 +320,6 @@ def _evaluate(cmd: str, classify=_classify_stash_subcommand) -> Optional[str]:
 def _evaluate_legacy_powershell(
     text: str, classify=_classify_stash_subcommand
 ) -> Optional[str]:
-    """PowerShell-shaped free-text fallback for the `tokens is None` route
-    (AC3 / Conventions (a)) -- NEVER routes to `_evaluate_legacy` above
-    (bash-shaped free text, the exact spurious-deny source this plan exists
-    to kill). Strips here-string bodies (`@'...'@`/`@"..."@`) and quoted
-    spans via `_dialect.strip_powershell_prose_noise` (C2) before scanning,
-    so a hazard-documenting prose string quoting `git stash drop` -- the
-    doe-claude shape this plan's Problem section names -- does not read as
-    an issued command. Still DENIES on a hit, per PM ruling: fail-closed
-    posture preserved, no widening of exposure. A dropped deny here is peer
-    stash data loss (module docstring, 2026-07-30 incident) -- the reason
-    this route strips rather than allows outright.
-
-    `classify` -- see `_evaluate_legacy`'s docstring; threaded through so
-    `check_apply_advisory` reuses this exact PowerShell-shaped fallback
-    unchanged.
-    """
     stripped = strip_powershell_prose_noise(text)
     for m in _STASH_WORD_RE.finditer(stripped):
         nxt = _NEXT_WORD_AFTER_RE.match(stripped, m.end())
@@ -449,8 +373,6 @@ def _evaluate_powershell(cmd: str, classify=_classify_stash_subcommand) -> Optio
             if c_flag_positions:
                 idx = c_flag_positions[0]
                 if idx + 1 < len(clean):
-                    # Recurse into the BASH evaluator on the `-c` payload --
-                    # never `_evaluate_powershell` (Conventions (c)).
                     verdict = _evaluate(clean[idx + 1], classify)
                     if verdict is not None:
                         return verdict
@@ -470,8 +392,6 @@ def _evaluate_powershell(cmd: str, classify=_classify_stash_subcommand) -> Optio
         if subcmd != "stash":
             continue
 
-        # `remaining[0]` is already quote-normalized (part of `clean`).
-        # 2026-08-23 fix -- see the Bash leg's identical comment above.
         stash_remaining = _strip_leading_redirection_tokens(remaining)
         second = stash_remaining[0] if stash_remaining else None
         verdict = classify(second)
@@ -498,16 +418,6 @@ def _deny_reason(cmd: str, deny_kind: str) -> str:
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Evaluate the stash-destruction gate against a PreToolUse payload.
-
-    Returns `None` (allow) or the nested hard-deny envelope. Never
-    identity-gated -- fires for every caller including the main-loop EM
-    (see module docstring).
-    """
-    # Deliberately no try/except -- fail-CLOSED-on-exception is the
-    # dispatcher's job for hard-deny guards (its `guard_chain` fail_closed=True
-    # entries route an uncaught exception through the crash-deny wrapper).
-    # Swallowing an unexpected error into a silent allow here defeats that.
     tool_name = payload.get("tool_name") or ""
     dialect = dialect_from_tool_name(tool_name)
     if dialect is None:
@@ -519,10 +429,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     cmd = cmd.replace("\r", "")
 
-    # Heredoc bodies are stdin DATA, not shell command text. The deny-reason
     # display below still uses the ORIGINAL `cmd` so the operator sees what
-    # they actually ran. `_strip_heredoc_bodies` matches bash `<<`-shaped
-    # syntax only -- a no-op on PowerShell text carrying no such marker.
     cmd_for_classification = _strip_heredoc_bodies(cmd)
 
     if not _STASH_WORD_RE.search(cmd_for_classification):
@@ -545,13 +452,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 #: `apply`-ONLY -- see module docstring "APPLY ADVISORY LEG" (below,
-#: appended 2026-08-30). Never `pop`: `pop` is the EM's own sanctioned
-#: restore path (see "WHY DROP/CLEAR AND NOT POP/APPLY" above) and a
-#: successful pop already shows the operator their content landed in the
-#: tree, so there is nothing left to nudge. `apply` is the shape the
-#: incident this leg answers actually used -- an unmodified stack position
-#: checked for a clean return, read as "nothing unique in the stash",
-#: which `apply` cannot tell you (see `_advisory_reason` below).
 _ADVISORY_APPLY_KIND = "git stash apply"
 
 

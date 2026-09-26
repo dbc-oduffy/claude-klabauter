@@ -59,8 +59,6 @@ _GOVERNED_MD = _STEM + ".md"
 _IDENTIFIERS = (_GOVERNED_MD.lower(), "em-operating-" + "doctrine.md")
 
 
-#: `(id, command, target)` -- every shape real bash resolves to a write of
-#: the governed surface. `target` is what the redirect read must recover.
 _JOINED_SHAPES = [
     pytest.param('echo p > "S/%s"' % _GOVERNED_MD, id="plain"),
     pytest.param('echo p > "S/CLAU""DE.md"', id="quote-split-pair-already-closed"),
@@ -73,8 +71,6 @@ _JOINED_SHAPES = [
 
 @pytest.mark.parametrize("command", _JOINED_SHAPES)
 def test_a_joined_governed_name_reaches_the_prefilter(command: str) -> None:
-    """The prefilter is what failed. A command real bash resolves to a
-    governed write must be SEEN, whatever a sink leg then decides."""
     assert _mentions_governed_identifier(command, _IDENTIFIERS) is True
 
 
@@ -90,10 +86,6 @@ def test_the_redirect_target_recovers_the_whole_governed_name(command: str) -> N
     assert _GOVERNED_MD.lower() in target.lower()
 
 
-#: The guard the widened fold must not cost. Whitespace-separated words are
-#: two arguments in shell; folding across them would invent governed
-#: mentions in ordinary commands, and an invented mention on the hot path is
-#: paid by every Bash call in the fleet.
 _MUST_NOT_BE_INVENTED = [
     pytest.param("grep 'claude' 'md' docs/", id="two-quoted-args-with-space"),
     pytest.param("git status --short", id="no-quotes-at-all"),
@@ -107,6 +99,4 @@ def test_whitespace_separated_words_are_still_not_joined(command: str) -> None:
 
 
 def test_a_quoted_target_containing_spaces_still_parses() -> None:
-    """A quote with whitespace beside it is not word-internal, so the
-    widened rule leaves it alone and a spaced target still reads whole."""
     assert _redirect_target_token('echo p > "my notes.md"') == "my notes.md"

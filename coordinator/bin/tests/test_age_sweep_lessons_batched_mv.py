@@ -1,17 +1,3 @@
-"""test_age_sweep_lessons_batched_mv.py -- multi-item coverage for
-`age-sweep-lessons.py::_batched_git_mv_into_dir` (amplification burn-down,
-`state/ledgers/wave4-dispositions/c1.md`, key
-`age-sweep-lessons.py::main -> run`).
-
-A single-item test passes identically before and after a batching change --
-see the plan's own warning about `_own_frozen_diff_shas`. These tests assert
-the CALL COUNT (one `subprocess.run` per BATCH, not per source) and the
-byte-budget chunk boundary, never just the end-to-end return value.
-
-Loaded by file path (`importlib.machinery.SourceFileLoader`), matching this
-directory's existing hyphenated-module idiom (see
-test_percolate_liveops_preflight.py::_load_cli_module).
-"""
 from __future__ import annotations
 
 import importlib.machinery
@@ -33,7 +19,6 @@ def _load_cli_module():
 
 
 def test_multi_item_batch_is_one_subprocess_call(monkeypatch, tmp_path):
-    """N sources sharing one destination directory -> ONE `git mv` call, not N."""
     mod = _load_cli_module()
     calls: list[list[str]] = []
 
@@ -56,9 +41,6 @@ def test_multi_item_batch_is_one_subprocess_call(monkeypatch, tmp_path):
 
 
 def test_byte_budget_chunk_boundary_splits_into_multiple_calls(monkeypatch, tmp_path):
-    """A source list whose total length exceeds the argv budget must split into
-    multiple `git mv` calls -- never a single call over the Windows
-    `CreateProcess` cap, and never silently dropping a source."""
     mod = _load_cli_module()
     monkeypatch.setattr(mod, "_GIT_MV_BATCH_BUDGET", 40)
     calls: list[list[str]] = []

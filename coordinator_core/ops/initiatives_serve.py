@@ -42,26 +42,10 @@ from coordinator_core.ops.fleet._common import main_worktree_root
 
 _LOG = logging.getLogger(__name__)
 
-# Valid status values — mirrors the emit porter canonical-4.
 _VALID_STATUS = frozenset({"active", "paused", "shipped", "abandoned"})
 
 
 def _collect_initiatives(initiatives_dir: Path) -> List[dict]:
-    """Read ``state/initiatives/*.yaml`` and build the serve-set payload.
-
-    Returns a list of ``{id, label, status, target_date, shape}`` dicts, one per
-    well-formed initiative file.  Files missing required ``id`` or ``label`` fields
-    are skipped with a warning (graceful-absent, mirrors the emit porter quarantine
-    contract).
-
-    Shape derivation: ``ongoing`` iff ``target_date`` is null, else ``completion``.
-
-    Negative-spec:
-    - Does NOT mutate the store.
-    - Does NOT raise on missing/unreadable files — quarantines them with a warning.
-    - Does NOT use ``_simple_yaml_load`` for any array-bearing YAML (stub handoffs) —
-      this function reads only flat ``state/initiatives/*.yaml`` files.
-    """
     results: List[dict] = []
 
     if not initiatives_dir.is_dir():
@@ -94,9 +78,6 @@ def _collect_initiatives(initiatives_dir: Path) -> List[dict]:
         if raw_status in _VALID_STATUS:
             status_val = raw_status
         else:
-            # Log a warning for present-but-unrecognised status so
-            # callers receiving status:null can distinguish "absent" from "rejected value"
-            # (mirrors the missing-id/label quarantine warning pattern in this function).
             if raw_status is not None:
                 _LOG.warning(
                     "initiative.serve_set: %s has unrecognised status %r — coercing to null",
@@ -105,9 +86,8 @@ def _collect_initiatives(initiatives_dir: Path) -> List[dict]:
                 )
             status_val = None
 
-        target_date = fm.get("target_date")  # ISO-date string or None
+        target_date = fm.get("target_date")
 
-        # Shape derivation: ongoing iff target_date is null, else completion.
         shape = "ongoing" if target_date is None else "completion"
 
         results.append(
@@ -148,9 +128,8 @@ def _handler(
     - repo_root (router-supplied git common dir) → main_worktree_root(repo_root)
     - Neither → return empty list with logged warning (empty is safe for a dropdown)
     """
-    # Derive the worktree root from the router-supplied common dir.
     if repo_root is not None:
-        worktree_root = main_worktree_root(repo_root)  # router common_dir → worktree root
+        worktree_root = main_worktree_root(repo_root)
     else:
         _LOG.warning(
             "initiative.serve_set: no repo_root resolved — "

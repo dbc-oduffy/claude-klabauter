@@ -50,12 +50,8 @@ def _load_harvest_module():
 
 
 def test_hung_child_on_one_row_does_not_abandon_the_rest():
-    """A TimeoutExpired on row 1's write dispatch must not prevent rows 2/3
-    from being dispatched, and must not raise out of `_harvest()`."""
     module = _load_harvest_module()
 
-    # Never resolve to None — force both write-seam dispatchers down the
-    # "call subprocess.run" path rather than the "CLI not found" early-out.
     module._resolve_cli_cmd = lambda name: [sys.executable, "-c", "pass"]
 
     calls = {"n": 0}

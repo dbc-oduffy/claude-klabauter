@@ -90,13 +90,11 @@ from coordinator_core.session.scope import restate_touched_path, restate_touched
 
 _DATE_PREFIX = re.compile(r"^(\d{4}-\d{2}-\d{2})")
 
-#: (step_name, params_key) — the settled two-step order.
 _STEP_DATED_RESULT = "dated_result"
 _STEP_PAPER_TRAIL = "paper_trail"
 
 
 def _err(error: str, **extra) -> dict:
-    """Structured error envelope (exit_code 1) naming the paths involved."""
     out = {"exit_code": 1, "restructured": False, "new_dir": "",
            "steps_applied": [], "error": error}
     out.update(extra)
@@ -109,11 +107,6 @@ def _date_prefix_of(name: str) -> Optional[str]:
 
 
 def _classify_step(src: Path, dest: Path) -> str:
-    """Return one of 'pending' | 'done' | 'both_present' | 'both_absent'.
-
-    The settled four-state table (settlement A5) — every step is classified
-    through this single function so no rename can bypass the table.
-    """
     src_present = src.exists()
     dest_present = dest.exists()
     if src_present and not dest_present:
@@ -128,22 +121,11 @@ def _classify_step(src: Path, dest: Path) -> str:
 def _resolve_step_src(
     raw: str, worktree: Path, research_dir: Path
 ) -> Tuple[Optional[Path], Optional[str]]:
-    """Resolve a caller-supplied step-source path, contained to docs/research/.
-
-    Relative paths resolve against the worktree root. Returns (path, None) or
-    (None, error_reason). A path that has already been moved (src absent) must
-    still be expressible, so containment is checked on the resolved-lexical
-    parent chain via ``contained_path`` against the research root — an absent
-    path under the root is fine; an escape is not.
-    """
     if not raw:
         return None, "empty path"
     candidate = Path(raw)
     if not candidate.is_absolute():
         candidate = worktree / candidate
-    # contained_path resolves symlinks and fails closed; an absent-but-contained
-    # path still resolves lexically under the root on all supported platforms
-    # (Python >= 3.6 resolve(strict=False)).
     resolved = contained_path(candidate, [research_dir])
     if resolved is None:
         return None, (
@@ -161,30 +143,6 @@ def _restructure_sync(
     paper_trail_raw: str,
     session_id: str,
 ) -> dict:
-    """Sync body: path resolution + the two ``os.rename`` calls (and the
-    ``topic_dir.mkdir``) live here, off the event loop — the async
-    ``_handler`` below runs this under ``asyncio.to_thread`` (AC-3 Gap-3;
-    matches A2/A3/A4's pattern).
-
-    Claim restatement (state/bug-backlog stranded-touch-claim shape, this
-    op widened to close it): for each step about to be renamed, THIS
-    session's claim (if any) on the step's descendants/self is re-declared
-    onto the post-move path BEFORE that step's ``os.rename`` runs --
-    :func:`restate_touched_tree` for ``paper_trail`` (a directory tree),
-    :func:`coordinator_core.session.scope.restate_touched_path` for
-    ``dated_result`` (a single file). Both are pure ``touched.txt``
-    read+append operations with no
-    filesystem side effect of their own, so calling them ahead of the
-    rename does not disturb the crash/rerun step protocol below: a crash
-    between a restatement call and its step's ``os.rename`` leaves an
-    extra, harmless standing claim on a path the step hasn't moved to yet
-    (the rerun still finds that step "pending" and completes it
-    normally); a crash AFTER the rename but before the NEXT step's
-    restatement leaves that next step's claim, if any, to be re-declared
-    on the rerun exactly as it would be on a fresh call. ``session_id``
-    empty/unresolvable degrades every restatement call to a no-op -- the
-    renames themselves are unconditional either way.
-    """
     result_src, reason = _resolve_step_src(dated_result_raw, worktree, research_dir)
     if result_src is None:
         return _err(f"dated_result_path: {reason}")
@@ -214,7 +172,6 @@ def _restructure_sync(
     ]
 
     # Classify ALL steps before mutating ANYTHING — an error state on either
-    # step aborts the whole invocation with zero writes from this call.
     states = {}
     for step_name, src, dest in steps:
         state = _classify_step(src, dest)
@@ -301,15 +258,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     research_dir = worktree / "docs" / "research"
     topic_dir = research_dir / topic_slug
 
-    # Resolved ONCE per call, matching coordinator_core.ops.
-    # migrate_cross_repo_layout.main's convention: both renames below
-    # belong to the same invoking session, and an unresolvable ("") id
-    # degrades every claim-restatement call to a no-op while the renames
-    # themselves still proceed unconditionally.
     session_id = resolve_session_id(str(worktree))
 
-    # Blocking I/O (os.rename, plus stat-heavy path resolution) — off the
-    # event loop (AC-3 Gap-3 / async-handler-discipline).
     return await asyncio.to_thread(
         _restructure_sync,
         worktree,

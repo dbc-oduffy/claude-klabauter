@@ -1,19 +1,3 @@
-"""
-coordinator_core.orient_assemble.tests.test_read_only_guarantee — C3
-AC(c): every reader family performs ZERO disk mutation and ZERO `git
-fetch` while computing `collect(cadence)`.
-
-Strategy: monkeypatch every disk-write primitive (`Path.write_text`,
-`Path.write_bytes`, `os.remove`, `os.replace`, `os.unlink`) to raise
-`AssertionError` if invoked, and wrap `subprocess.run` to record every
-invocation and reject any command whose argv contains the literal token
-`"fetch"`. Underlying reads are monkeypatched to deterministic, fast
-stand-ins (this file is not a live-environment smoke test — it is a
-hermetic guarantee check) so the guard actually exercises each reader's
-own code path rather than timing out against real environment state.
-
-Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420, chunk C3
-"""
 
 from __future__ import annotations
 
@@ -35,7 +19,6 @@ from coordinator_core.orient_assemble.readers_clean_ops import ReaderResult
 
 @pytest.fixture
 def forbid_disk_mutation(monkeypatch):
-    """Fail the test loudly if any write/delete primitive is invoked."""
 
     def _forbidden(name):
         def _raise(*args, **kwargs):
@@ -52,7 +35,6 @@ def forbid_disk_mutation(monkeypatch):
 
 @pytest.fixture
 def forbid_git_fetch(monkeypatch):
-    """Wrap `subprocess.run` to reject any argv containing the literal 'fetch'."""
     real_run = subprocess.run
     calls: list[list[str]] = []
 
@@ -108,10 +90,6 @@ def test_health_reaper_collect_is_read_only_including_the_accepted_dry_run_subpr
     monkeypatch.setattr(rhr, "_read_working_repo_registration", lambda: ReaderResult())
     monkeypatch.setattr(rhr, "_read_ceremony_hook", lambda cadence: ReaderResult())
     monkeypatch.setattr(rhr, "_read_marker_freshness", lambda cadence: ReaderResult())
-    # The one accepted subprocess (reap-orphaned-in-flight-handoffs.py --dry-run)
-    # must never be a `fetch`, and must not itself write to disk — replaced
-    # with a fixture that proves the reader only interprets stdout, not a
-    # real subprocess.run passthrough (avoids a slow real dry-run per test run).
     monkeypatch.setattr(rhr, "_read_reaper_dry_run", lambda repo_root=None: ReaderResult())
 
     for cadence in ("session", "day", "week"):
@@ -121,37 +99,7 @@ def test_health_reaper_collect_is_read_only_including_the_accepted_dry_run_subpr
 
 
 def test_reaper_dry_run_reader_never_spawns_a_subprocess(monkeypatch, forbid_git_fetch):
-    """Zero-spawn contract, matching the sibling
-    `test_working_repo_registration_reader_never_spawns_a_subprocess` below.
 
-    This test used to assert the WEAKER property that the reader's one
-    accepted `subprocess.run` never carried `fetch` in argv. That accepted
-    subprocess no longer exists: `_read_reaper_dry_run` calls
-    `reap_in_flight_claims.survey()` in-process, and
-    `readers_health_reaper`'s own negative-spec now reads "Does NOT spawn a
-    subprocess anywhere in this module." The old form did not merely go
-    stale, it went VACUOUS -- it patched `subprocess.run`, which the reader
-    never calls, so its inner `assert "fetch" not in argv` never executed
-    and the guarantee went unasserted. No spawn is the stronger claim: it
-    forecloses `fetch` along with everything else.
-
-    It was also non-deterministic. With the stub bypassed, the real
-    `survey()` walked the live corpus, so `assert result.directives == []`
-    held only while this repo happened to carry no orphaned in_flight
-    handoff -- it failed the moment one existed. `_reap_survey` is stubbed
-    here so the assertion is about the reader, not about corpus weather.
-
-    Negative-spec: does NOT stub `_read_reaper_dry_run` wholesale -- the
-    real function's directive construction must run, or this asserts
-    nothing about the code under test.
-    """
-
-    # Assert zero-spawn through `forbid_git_fetch`'s OWN wrapper, which records
-    # every `subprocess.run` argv. Re-patching `subprocess.run` here would
-    # overwrite that fixture's patch (fixtures run first), leaving its list
-    # unconditionally empty and the assertion below vacuous -- the exact defect
-    # class this test was written to retire, in a new shape. Review: code-reviewer
-    # Finding 2.
     seen_roots = []
     monkeypatch.setattr(
         rhr,
@@ -166,11 +114,10 @@ def test_reaper_dry_run_reader_never_spawns_a_subprocess(monkeypatch, forbid_git
         f"reaper-dry-run reader must be zero-spawn; observed {forbid_git_fetch!r}"
     )
     # No threaded root supplied: falls back to _CLAUDE_KLABAUTER_ROOT, never _REPO_ROOT
-    # (retired name) -- the split this chunk exists to enforce.
     assert seen_roots == [rhr._CLAUDE_KLABAUTER_ROOT]
 
     seen_roots.clear()
-    threaded_root = "some-other-repo-root"  # abs-path-ok: opaque sentinel, not a real filesystem path
+    threaded_root = "some-other-repo-root"
     result = rhr._read_reaper_dry_run(threaded_root)
     assert seen_roots == [threaded_root], (
         "_read_reaper_dry_run must pass the threaded root to _reap_survey, "
@@ -179,8 +126,6 @@ def test_reaper_dry_run_reader_never_spawns_a_subprocess(monkeypatch, forbid_git
 
 
 def test_reaper_dry_run_reader_is_quiet_when_the_corpus_is_clean(monkeypatch, forbid_git_fetch):
-    """The other half of the above: nothing to reap must emit no directive,
-    or every orientation grows a permanent empty nudge."""
 
     seen_roots = []
     monkeypatch.setattr(
@@ -193,16 +138,12 @@ def test_reaper_dry_run_reader_is_quiet_when_the_corpus_is_clean(monkeypatch, fo
     assert seen_roots == [rhr._CLAUDE_KLABAUTER_ROOT]
 
     seen_roots.clear()
-    threaded_root = "some-other-repo-root"  # abs-path-ok: opaque sentinel, not a real filesystem path
+    threaded_root = "some-other-repo-root"
     assert rhr._read_reaper_dry_run(threaded_root).directives == []
     assert seen_roots == [threaded_root]
 
 
 def test_working_repo_registration_reader_never_spawns_a_subprocess(forbid_git_fetch, monkeypatch):
-    """Zero-spawn contract (spec backlink: `workday-start-health-probes.py`
-    `working-repo-registration` subcommand docstring) -- this reader must
-    never be the assembler's second accepted subprocess; assert any
-    subprocess.run call anywhere in the call path raises."""
 
     def _forbidden_run(*_args, **_kwargs):
         raise AssertionError("working-repo-registration reader must be zero-spawn")

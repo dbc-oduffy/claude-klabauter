@@ -127,39 +127,14 @@ __all__ = [
 
 StrPath = Union[str, "os.PathLike[str]"]
 
-# Windows' own default PATHEXT, used only when the environment does not define
-# one (a bare `cmd.exe`/PowerShell session always has PATHEXT set; the default
-# here matters only for a stripped-down sim/test environment or a POSIX host
-# asked to model Windows semantics for a foreign-platform path).
 _DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
 
 
 def _is_windows() -> bool:
-    """Platform check as a seam, not an inline ``os.name`` read at every call
-    site -- mirrors ``coordinator_core.launchable._is_windows``'s own reasoning:
-    a single patchable function lets a test exercise both branches on one host
-    without touching ``pathlib``'s own OS-keyed class selection."""
     return os.name == "nt"
 
 
 def _pathext_list() -> List[str]:
-    """The active PATHEXT list, uppercased, dot-prefixed, in resolution order.
-
-    Reads the real environment when present (a real Windows session always has
-    one); falls back to CPython's own documented default set when absent, so
-    this function behaves identically whether called on real Windows or under
-    a POSIX host modelling Windows semantics with ``PATHEXT`` unset.
-
-    Split on a literal ``;`` -- deliberately NOT ``os.pathsep``. ``PATHEXT``'s
-    own separator is always ``;`` on Windows (it IS ``os.pathsep`` when the
-    host really is Windows), but this function must also work correctly when
-    ``_is_windows()`` has been monkeypatched to model Windows semantics on a
-    POSIX host, where the real ``os.pathsep`` is ``:`` -- splitting on it
-    there would corrupt every multi-entry PATHEXT value. The one place in
-    this module that intentionally does NOT use ``os.pathsep`` for a
-    PATH-shaped split, and it does so because the separator being modelled
-    is fixed by the Windows convention, not by the host running this code.
-    """
     raw = os.environ.get("PATHEXT", _DEFAULT_PATHEXT)
     return [ext.upper() for ext in raw.split(";") if ext]
 
@@ -220,36 +195,10 @@ def is_executable(path: StrPath) -> bool:
 
 
 def same_path(a: StrPath, b: StrPath) -> bool:
-    """True if ``a`` and ``b`` resolve to the same filesystem entry
-    (cross-platform), never raising.
-
-    Consolidates twelve independently-authored copies of this exact check
-    found across this plane (probe: ``state/sizings/2026-08-07-path-equality-
-    consolidates-onto-one-prim.yaml``) that collapsed to two semantic
-    families -- ``samefile``-then-fallback (the stronger of the two) and
-    realpath+normcase-only. This function is the samefile-first family,
-    chosen as the ONE primitive because it is strictly more correct:
-    ``os.path.samefile`` detects hardlink/junction/bind-mount aliases that a
-    realpath-only comparison misses, and that gap is load-bearing on
-    Windows, where the settings home is commonly reached through a
-    junction -- two paths that are the SAME directory via a junction hop
-    must compare equal, and only ``samefile`` (which stats both paths and
-    compares device+inode / file-index) can see that; ``realpath`` alone can
-    resolve to different strings for the two aliases depending on which
-    hop the caller's path went through.
-
-    Tries ``os.path.samefile`` first (requires both paths to exist); falls
-    back to ``os.path.normcase(os.path.realpath(...))`` string comparison
-    when either path is absent or unreadable, so an unregistered/not-yet-
-    cloned repo path never raises. The realpath fallback is itself guarded
-    -- any exception resolving either path returns ``False`` rather than
-    propagating, matching every existing per-site copy's "never raises"
-    contract.
-    """
     try:
         return os.path.samefile(a, b)
     except Exception:
-        pass  # path absent/unreadable; fall through to the realpath comparison below
+        pass
     try:
         return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
     except Exception:
@@ -257,38 +206,14 @@ def same_path(a: StrPath, b: StrPath) -> bool:
 
 
 def split_path_list(value: str) -> List[str]:
-    """Split a PATH-style list on ``os.pathsep`` (``:`` on POSIX, ``;`` on
-    Windows) -- never a hardcoded ``":"``, which fails open (returns the whole
-    string as one un-split element) on Windows and is how a strangler-facade
-    seam-detection check silently read "seam absent" there."""
     return value.split(os.pathsep)
 
 
 def join_path_list(parts: Iterable[str]) -> str:
-    """Join a PATH-style list on ``os.pathsep`` -- the write-side twin of
-    ``split_path_list``, same rationale."""
     return os.pathsep.join(parts)
 
 
 def split_path(value: str, sep: str = "/", maxsplit: int = -1, *, from_right: bool = False) -> List[str]:
-    """Split a path-shaped string into segments, folding backslash to ``/``
-    first so a native Windows path, a POSIX path, and an MSYS/Git-Bash
-    mount-form path all split into the same segment shape.
-
-    ``"X:\\\\DoE-claude\\\\coordinator".split("/")`` (no fold) returns a single
-    one-element list -- there is no ``"/"`` in the string at all -- which is
-    exactly the F8 defect: a caller expecting ``(parent, leaf)`` from a
-    ``rsplit("/", 1)`` silently got the whole string back unsplit, and a
-    downstream tree-membership check double-counted the same clone. Folding
-    first makes ``split_path("X:\\\\DoE-claude\\\\coordinator", maxsplit=1,
-    from_right=True)`` behave the same as it would for the POSIX-form
-    equivalent.
-
-    ``from_right`` selects ``rsplit`` semantics (matches the ``.rsplit("/", n)``
-    shape the lint's forward-slash rule targets) vs. the default left-to-right
-    ``split``. Pure string transform -- no filesystem access, no existence
-    check; see module docstring § Negative-spec.
-    """
     folded = value.replace("\\", "/")
     if from_right:
         return folded.rsplit(sep, maxsplit)
@@ -296,13 +221,6 @@ def split_path(value: str, sep: str = "/", maxsplit: int = -1, *, from_right: bo
 
 
 def _model_windows_split(value: str, maxsplit: int = -1, *, from_right: bool = False) -> Sequence[str]:
-    """Test-only cross-check helper: independently derive the expected split
-    result via ``PureWindowsPath``-shaped reasoning (backslash treated as a
-    separator regardless of host OS), so ``test_win_portability.py`` can
-    assert ``split_path`` agrees with a SECOND, differently-derived
-    computation rather than re-asserting its own output. Not part of the
-    public primitive surface -- ``__all__`` omits it deliberately.
-    """
     normalized = str(PureWindowsPath(value.replace("/", "\\"))).replace("\\", "/")
     if from_right:
         return normalized.rsplit("/", maxsplit)
@@ -379,10 +297,6 @@ def no_console_creationflags() -> dict:
     import subprocess
 
     # getattr with a fallback, not a bare attribute access: CREATE_NO_WINDOW
-    # only exists on subprocess when the REAL host is Windows. _is_windows()
-    # is this module's documented monkeypatch seam (see its own docstring),
-    # so a test exercising this branch on a real POSIX host must not raise
-    # AttributeError reaching for a Windows-only constant that isn't there.
     return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
@@ -431,12 +345,7 @@ def leaf_spawn_creationflags() -> dict:
 
     import subprocess
 
-    # getattr with a fallback, not a bare attribute access -- same
-    # monkeypatch-seam reason `no_console_creationflags()` documents:
     # `DETACHED_PROCESS` only exists on `subprocess` when the REAL host is
-    # Windows, and `_is_windows()` is this module's documented patchable
-    # seam, so a test exercising this branch on a real POSIX host must not
-    # raise `AttributeError` reaching for a Windows-only constant.
     return {"creationflags": getattr(subprocess, "DETACHED_PROCESS", 0)}
 
 
@@ -495,25 +404,11 @@ def no_console_passthrough_kwargs() -> dict:
         if fd >= 0:
             kwargs[key] = fd
         else:
-            # A fileno-less stream (the in-process warm-server path) can
-            # return a negative fd from a *successful* fileno() call rather
-            # than raising -- omitting the kwarg here left subprocess.run
-            # default the stream to None, which silently inherits THIS
-            # process's real OS-level handle instead of the warm server's
-            # redirected stream. Route it through PIPE instead, same as the
-            # raising branch above, so the child's output is captured onto
-            # the returned CompletedProcess rather than lost.
             kwargs[key] = subprocess.PIPE
     return kwargs
 
 
 def _has_usable_fileno(stream: object) -> bool:
-    """True if ``stream`` carries a real OS-level file descriptor
-    ``subprocess`` can inherit directly. Mirrors ``coordinator/lib/
-    spawn-hidden.py::_resolve_stdio_stream``'s own fileno probe (same
-    ``AttributeError``/``ValueError``/``OSError`` guard shape), but that
-    function's DEVNULL fallback is the wrong disposition for
-    ``run_forwarding`` below -- see that function's docstring."""
     fileno = getattr(stream, "fileno", None)
     if fileno is None:
         return False
@@ -611,22 +506,10 @@ def run_forwarding(argv: Sequence[str], *, stdout: object = None, stderr: object
     if (forward_stdout is not None or forward_stderr is not None) and not (
         "text" in run_kwargs or "encoding" in run_kwargs or run_kwargs.get("universal_newlines")
     ):
-        # A capture-buffer target is always a text stream (io.StringIO) --
-        # decode the child's output the same way `subprocess.run` would if
-        # the caller had asked for text mode explicitly, unless the caller
-        # already made an explicit text/encoding choice of its own.
         run_kwargs["text"] = True
 
-    # Console suppression, chosen from what the stdio wiring above actually
-    # settled on, and never overriding a caller who asked for creationflags of
-    # its own. The two helpers are not interchangeable here: with at least one
     # of stdin/stdout/stderr set, CPython sets STARTF_USESTDHANDLES and the
-    # flag alone is safe; with NONE set, the child would bind its handles to
     # the window-less console CREATE_NO_WINDOW allocates and its output would
-    # be lost — which is the exact defect this function exists to prevent, so
-    # that branch takes the passthrough helper instead. Gates:
-    # `coordinator_core/tests/test_no_bare_hot_path_spawn.py` and
-    # `test_no_output_swallowing_no_console_spawn.py`.
     if "creationflags" not in run_kwargs:
         wires_stdio = any(
             key in run_kwargs for key in ("stdin", "stdout", "stderr", "capture_output")
@@ -634,12 +517,6 @@ def run_forwarding(argv: Sequence[str], *, stdout: object = None, stderr: object
         console_kwargs = (
             no_console_creationflags() if wires_stdio else no_console_passthrough_kwargs()
         )
-        # Assigned key-by-key rather than via `.update()`: the `NAME["creationflags"] = ...`
-        # subscript shape is one `test_no_bare_hot_path_spawn.py` resolves through to the
-        # `**run_kwargs` splat below, and an `.update()` call reads to that AST-only gate
-        # as an unresolvable splat, i.e. bare. Absent on POSIX (both helpers contribute no
-        # `creationflags` there), so nothing hands `subprocess.run` a Windows-only kwarg
-        # off Windows.
         if "creationflags" in console_kwargs:
             run_kwargs["creationflags"] = console_kwargs["creationflags"]
         for key, value in console_kwargs.items():
@@ -647,25 +524,10 @@ def run_forwarding(argv: Sequence[str], *, stdout: object = None, stderr: object
                 run_kwargs.setdefault(key, value)
 
     # RESIDUAL ARM, closed 2026-08-25. Reached when the caller wires no stdio at
-    # all AND `no_console_passthrough_kwargs()` contributed no fds either, which
-    # happens precisely when `sys.stdout`/`sys.stderr` are themselves fileno-less
-    # — the capture-buffer caller `workday_complete.apply._invoke_cli_main`
-    # creates exactly that. `run_kwargs` then carries `creationflags` and no
     # stream key, so CPython omits `STARTF_USESTDHANDLES` and the child's output
-    # goes into the window-less console and is lost.
-    #
-    # Capture-and-forward rather than DEVNULL, matching this function's own stated
-    # preference and what it already does for every other fileno-less target: the
-    # output reaches whatever `sys.stdout`/`sys.stderr` currently are, capture
-    # buffer included, instead of being discarded. Surfaced by
-    # `test_no_output_swallowing_no_console_spawn.py` once that gate learned to
-    # resolve alias splats — this site was invisible to it before.
     if "creationflags" in run_kwargs and not any(
         key in run_kwargs for key in ("stdin", "stdout", "stderr", "capture_output")
     ):
-        # Function-local, like this function's own `import subprocess` above and
-        # for the same reason: this module's docstring promises stdlib-only
-        # `os`/`pathlib` at import time, safe to import before the venv exists.
         import sys as _sys
 
         run_kwargs["stdout"] = subprocess.PIPE
@@ -676,15 +538,8 @@ def run_forwarding(argv: Sequence[str], *, stdout: object = None, stderr: object
         if forward_stderr is None:
             forward_stderr = _sys.stderr
 
-    # popup-intentional-last-resort -- NOT a popup exemption in spirit: this call
     # provably wires stdio, but does so by BUILDING `run_kwargs` above rather than
-    # by spelling a literal `stdout=`/`stderr=` kwarg here, and the swallowing gate
-    # is static-AST-only by design. The block immediately above is the proof, and it
-    # is unconditional: on any path where `creationflags` is present and no stream
-    # key is, this function installs PIPEs and forwards them. Tagging is the honest
-    # disposition -- the alternative is teaching an AST gate to interpret dict
-    # mutation, which is how a static gate starts lying about dynamic code.
-    proc = subprocess.run(  # popup-intentional-last-resort
+    proc = subprocess.run(
         argv, **run_kwargs
     )
 

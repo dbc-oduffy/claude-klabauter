@@ -73,22 +73,11 @@ import pytest
 from coordinator_core.session import core, scope
 from coordinator_core.win_portability import no_console_creationflags
 
-# Every test in this file spawns real subprocesses (git init/config/commit
-# for the fixture repo, plus writer/CLI child processes under test) --
-# genuine process-boundary behaviour (Windows append-mode file-handle
-# semantics, cross-process `held_lock` contention) that no in-process mock
-# or thread stands in for; two threads in ONE process do not contend for the
-# same OS-level advisory lock the way two independent processes do (verified
-# during authoring -- a same-process thread pair never observed the lock as
 # held). The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue
-# and is explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# Ambient session-identity env vars that would let the pytest-hosting
-# session's own identity leak into a spawned writer/CLI subprocess.
 _SESSION_ENV_VARS = ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "COORDINATOR_SESSION_ID")
 
 
@@ -116,16 +105,6 @@ def _clean_env(extra: Optional[dict] = None) -> dict:
 
 
 def _sink_as_legacy_text(session_dir) -> str:
-    """One claimant's touch record, rendered as old-dialect lines, or ``""``.
-
-    Reads through the C0 union seam
-    (``scope._read_touch_record_as_legacy_lines``) rather than the raw sink,
-    so the substance assertions below stay written against the record's
-    CONTENT -- "did this session's own declared path land here, and did a
-    peer's not" -- rather than against whichever filename holds it. The seam
-    re-renders both dialects into the same ``'<verb> <ts> <path>'`` form, so
-    a substring check for a path means exactly what it meant pre-cutover.
-    """
     sink = Path(session_dir) / scope._TOUCH_RECORD_FILENAME
     lines, _degraded = scope._read_touch_record_as_legacy_lines(sink)
     return "\n".join(lines) + ("\n" if lines else "")
@@ -170,49 +149,8 @@ def _write_writer_script(tmp_path: Path, name: str, template: str) -> Path:
 
 
 class TestPostAC17AtomicAppendNeedsNoLock:
-    """The post-AC17 concurrency invariant, replacing the three
-    ``test_ac2_*`` cases BY NAME:
-
-      - ``test_ac2_concurrent_declarations_lost_deterministically_without_lock``
-      - ``test_ac2_concurrent_declarations_serialize_with_lock_and_peer_observes_it_held``
-      - ``test_ac2_lock_contention_past_production_timeout_degrades_to_unlocked_append``
-
-    All three asserted properties of an application-level lock that
-    ``scope.py :: touch`` no longer takes. AC17 deleted the dedup-scan-then-
-    append two-step region the lock existed to serialize; ``touch`` now reads
-    ``del lock`` -- the parameter is accepted and ignored purely for call-site
-    signature compatibility -- and delegates to ``touch_record.append_event``
-    -> ``atomic_append.append_line``, which opens the sink fresh by path and
-    performs ONE O(1) write syscall per event.
-
-    So there is no multi-step region for a lock to protect and no
-    lseek-then-write window for a line to be lost in. The old trio could not
-    be repointed, only retired: their rendezvous harness patched
-    ``scope.open`` to intercept the append-mode open, and the write no longer
-    goes through ``scope.open`` at all, so writer A never reached the
-    rendezvous and all three failed before their own assertions ran. Teaching
-    the harness to patch ``touch_record.open`` instead would have made them
-    green while still asserting a deleted lock works -- a passing guard over
-    nothing, which is the exact failure mode the ``..._no_duplicate`` rename
-    in this corpus already corrected once.
-
-    What replaces them is the property that actually changed and is worth
-    guarding: two concurrent same-session declarations BOTH land, with no
-    lock, because the append is atomic. That is a positive, testable claim,
-    and it fails loudly if anyone reintroduces a read-modify-write on this
-    path.
-    """
 
     def test_concurrent_same_session_declarations_both_land_unlocked(self, tmp_path):
-        """Two real processes declare different paths into the SAME session
-        record at the same time, with no application-level lock anywhere.
-
-        Both must survive. Under the pre-AC17 lseek+write shape this is
-        precisely the race that lost a line; under a single atomic append per
-        event there is nothing to lose. Real subprocesses rather than threads,
-        so the concurrency genuinely straddles a process boundary the way the
-        retired trio's did -- the guarantee moved, the rigour should not.
-        """
         repo = tmp_path / "repo"
         repo.mkdir()
         _make_repo(repo)
@@ -222,9 +160,6 @@ class TestPostAC17AtomicAppendNeedsNoLock:
         script = _write_writer_script(
             tmp_path, "plain_writer.py", _PLAIN_WRITER_SCRIPT_TEMPLATE
         )
-        # `sent_open` is the shared starting gun: both writers block on it and
-        # are released together, so their appends genuinely overlap instead of
-        # being serialized by process-startup skew.
         gun = tmp_path / "go.flag"
         procs = []
         for name in ("alpha.txt", "beta.txt"):
@@ -262,10 +197,6 @@ class TestPostAC17AtomicAppendNeedsNoLock:
 
 
 def test_ac3_peer_session_write_never_recorded_into_this_sessions_touched(tmp_path):
-    """AC3: two concurrent sessions writing into the same tree at once --
-    each session's `touched.txt` must contain ONLY its own declared paths,
-    never the peer's.
-    """
     repo = tmp_path / "repo"
     repo.mkdir()
     _make_repo(repo)
@@ -276,7 +207,7 @@ def test_ac3_peer_session_write_never_recorded_into_this_sessions_touched(tmp_pa
 
     script = _write_writer_script(tmp_path, "writer_ac3.py", _PLAIN_WRITER_SCRIPT_TEMPLATE)
     sent_open = tmp_path / "ac3.flag"
-    sent_open.write_text("1")  # no rendezvous needed here -- run both immediately
+    sent_open.write_text("1")
 
     proc_mine: Optional[subprocess.Popen] = None
     proc_peer: Optional[subprocess.Popen] = None
@@ -328,15 +259,6 @@ _AC1_CLI_OP_SCRIPT = textwrap.dedent(
 
 
 def test_ac1_file_written_by_cli_appears_in_writing_sessions_touched(tmp_path):
-    """AC1, durable: a file written by a `coordinator/bin/`-style CLI --
-    routed through the SAME `cli_entry.run_op_main` in-process seam every
-    real trampoline uses, and run as a real spawned `python` process, not an
-    in-process call -- appears in the writing session's `touched.txt`.
-    Turns the spike's one-off Leg A observation
-    (docs/research/spike-verdicts/2026-08-14-cli-process-boundary-write-attribution.md,
-    recorded event `T 2026-08-14T20:05:18.591426Z artifacts/leg_a.txt`) into
-    a re-runnable guard against the shipped seam.
-    """
     repo = tmp_path / "repo"
     repo.mkdir()
     _make_repo(repo)

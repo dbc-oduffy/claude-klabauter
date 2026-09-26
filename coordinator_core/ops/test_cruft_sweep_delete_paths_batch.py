@@ -36,16 +36,11 @@ class _FakeCompleted:
 
 
 def test_multi_target_batch_deletes_only_files_the_fake_rm_actually_touches(tmp_path, monkeypatch):
-    """Outcome is read off `exists()` per target, never off the subprocess
-    call's own success -- mirrors `_delete_path`'s contract, applied to a
-    batch of >1. Only `a` and `c` are pre-deleted here to prove each
-    target's own post-hoc existence check drives its own verdict."""
     a, b, c = (tmp_path / n for n in ("a.txt", "b.txt", "c.txt"))
     for p in (a, b, c):
         _touch(p)
 
     def _fake_run(argv, **kwargs):
-        # Simulate `rm -rf` really only having removed a and c.
         a.unlink(missing_ok=True)
         c.unlink(missing_ok=True)
         return _FakeCompleted(0)
@@ -72,7 +67,7 @@ def test_large_batch_is_split_into_fixed_size_chunks(tmp_path, monkeypatch):
     calls = []
 
     def _fake_run(argv, timeout=None, **kwargs):
-        calls.append((len(argv) - 2, timeout))  # argv[0:2] == ["rm", "-rf"]
+        calls.append((len(argv) - 2, timeout))
         for a in argv[2:]:
             Path(a).unlink(missing_ok=True)
         return _FakeCompleted(0)
@@ -84,8 +79,6 @@ def test_large_batch_is_split_into_fixed_size_chunks(tmp_path, monkeypatch):
     assert len(calls) == 2
     assert calls[0][0] == cruft_sweep._DELETE_BATCH_CHUNK_SIZE
     assert calls[1][0] == 3
-    # Every chunk's timeout is the SAME flat bound regardless of how many
-    # targets it carries -- the DR-349 fix. A per-item multiplier here
     # (`_DELETE_TIMEOUT_SECS * len(chunk)`) would make these two differ.
     assert calls[0][1] == float(cruft_sweep._DELETE_TIMEOUT_SECS)
     assert calls[1][1] == float(cruft_sweep._DELETE_TIMEOUT_SECS)
@@ -95,10 +88,6 @@ def test_large_batch_is_split_into_fixed_size_chunks(tmp_path, monkeypatch):
 
 
 def test_one_chunk_timing_out_does_not_stop_later_chunks(tmp_path, monkeypatch):
-    """A stuck/timed-out chunk must not block chunks after it -- the
-    liveness property amp-s1 #1 asked for. The first chunk's targets stay
-    on disk (undeleted, so `False`); the second chunk still runs and
-    succeeds."""
     n = cruft_sweep._DELETE_BATCH_CHUNK_SIZE + 2
     targets = [tmp_path / f"t{i}.txt" for i in range(n)]
     for p in targets:
@@ -124,11 +113,6 @@ def test_one_chunk_timing_out_does_not_stop_later_chunks(tmp_path, monkeypatch):
     assert all(results[str(p)] is True for p in second_chunk)
     assert all(p.exists() for p in first_chunk)
     assert not any(p.exists() for p in second_chunk)
-
-
-# ---------------------------------------------------------------------------
-# DR-349 § 4 -- the deletion phase derives its bound from the sweep's deadline
-# ---------------------------------------------------------------------------
 
 
 def test_chunk_timeout_is_clamped_to_the_watchdog_remainder(tmp_path, monkeypatch):
@@ -159,9 +143,6 @@ def test_chunk_timeout_is_clamped_to_the_watchdog_remainder(tmp_path, monkeypatc
 def test_exhausted_watchdog_skips_the_spawn_but_still_reports_every_target(
     tmp_path, monkeypatch
 ):
-    """Past the deadline no `rm -rf` is spawned at all -- the phase stops
-    occupying the box -- and every target still gets a verdict from its own
-    post-hoc `exists()` check, so the return shape is unchanged."""
     a, b = (tmp_path / n for n in ("a.txt", "b.txt"))
     _touch(a)
     _touch(b)
@@ -199,7 +180,5 @@ def test_watchdog_env_knob_may_lower_the_ceiling_but_never_raise_it(monkeypatch)
 
 
 def test_watchdog_remaining_is_floored_at_zero():
-    """`remaining()` is handed straight to `min()`; a negative remainder would
-    silently invert the clamp into a widening."""
     assert cruft_sweep._Watchdog(ceiling_secs=-10.0).remaining() == 0.0
     assert cruft_sweep._Watchdog(ceiling_secs=30.0).remaining() > 0.0

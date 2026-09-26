@@ -44,8 +44,6 @@ def test_no_entry_is_left_unclassified() -> None:
 
 
 def test_authority_prose_does_not_override_a_landed_status() -> None:
-    """`closed out by C1g` is authority prose, not a CLOSED status — the K-012
-    misclassification this window guards against."""
     entries = kli.parse_ledger(
         _entry("**LANDED** - **Date:** 2026-08-21 - **Authority:** plan F-1; chunks C1a-C1j, closed out by C1g")
     )
@@ -117,8 +115,6 @@ def test_a_convicted_op_already_gone_is_contested_not_silently_landed() -> None:
 
 
 def test_a_marker_late_in_a_status_field_does_not_earn_a_population() -> None:
-    """A status runs to 260 chars. A phrase that far in is prose about some
-    other entry, not this entry's own disposition."""
     late = "removed" + (" filler" * 30) + " then rebuilt elsewhere, not by this repo"
     entries = kli.parse_ledger(_entry(late, title="`fleet.late_marker_op`"))
     kli.classify(entries, live_ops=frozenset({"fleet.late_marker_op"}), suspended_ops=frozenset())
@@ -148,9 +144,6 @@ def test_cross_plane_cut_must_say_so_in_the_status() -> None:
     kli.classify(unstated, live_ops=frozenset({"hooks.example_op"}), suspended_ops=frozenset())
     assert unstated[0].population == "CONTESTED"
 
-    # K-006's rewritten wording (AC-P3-4): a status stating removal in BOTH
-    # planes, with the op absent, lands rather than reading as an unstated
-    # cross-plane cut.
     both_planes = kli.parse_ledger(
         _entry(
             "removed — both planes: DoE-claude deregistered it 2026-08-16 "
@@ -168,7 +161,6 @@ def test_rebuilt_must_say_so_and_must_actually_be_live() -> None:
     kli.classify(live, live_ops=frozenset({"memo.example_send"}), suspended_ops=frozenset())
     assert live[0].population == "REBUILT"
 
-    # A rebuild the registry cannot corroborate is a defect report, not a pass.
     absent = kli.parse_ledger(text)
     kli.classify(absent, live_ops=frozenset(), suspended_ops=frozenset())
     assert absent[0].population == "CONTESTED"
@@ -254,7 +246,6 @@ def test_withdrawn_is_its_own_population_and_the_op_must_survive() -> None:
     kli.classify(live, live_ops=frozenset({"records.example_history"}), suspended_ops=frozenset())
     assert live[0].population == "WITHDRAWN"
 
-    # The invariant runs the opposite way to REBUILT's: a withdrawn nomination
     # asserts the op SURVIVED, so an absent op means something cut it anyway.
     absent = kli.parse_ledger(text)
     kli.classify(absent, live_ops=frozenset(), suspended_ops=frozenset())
@@ -263,9 +254,6 @@ def test_withdrawn_is_its_own_population_and_the_op_must_survive() -> None:
 
 
 def test_withdrawn_is_not_reachable_by_prose_late_in_a_status() -> None:
-    """The marker is windowed to the status opening. A landed entry whose prose
-    mentions a withdrawn objection must stay LANDED — otherwise the population
-    is reachable by any entry that discusses one."""
     entries = kli.parse_ledger(
         _entry(
             "**LANDED** (`abc1234`) — the objection raised at review was later "
@@ -278,9 +266,6 @@ def test_withdrawn_is_not_reachable_by_prose_late_in_a_status() -> None:
 
 
 def test_report_renders_every_population_the_classifier_produced() -> None:
-    """The section order is a preference list, not an allowlist. A population
-    missing from it used to be dropped from the report entirely, so an entry
-    that vanished read exactly like an entry that did not exist."""
     text = _entry(
         "WITHDRAWN — the nomination was wrong.", title="`records.example_history`"
     ) + _entry("**LANDED**", key="K-901", title="`session.gone_op`")
@@ -331,7 +316,7 @@ def test_join_scans_nomination_shaped_populations_only(monkeypatch) -> None:
     assert scanned_names == [{"fleet.candidate_op", "fleet.convicted_op"}]
     assert candidate.cross_repo_hits == [hit]
     assert convicted.cross_repo_hits == []
-    assert landed.cross_repo_hits == []  # never populated — LANDED is terminal
+    assert landed.cross_repo_hits == []
 
 
 def test_join_skips_entries_with_no_op_name(monkeypatch) -> None:
@@ -364,9 +349,6 @@ def test_render_reports_cross_repo_hits_for_nomination_shaped_entries() -> None:
 
 
 def test_render_section_prints_scanned_none_found_when_clean() -> None:
-    """AC5: the section is never silently absent — a clean scan still prints
-    an explicit line, so its absence can never be mistaken for a scan that
-    never ran."""
     landed = _make_entry(population="LANDED", op_name="fleet.landed_op")
     report = kli.render([landed], heading_count=1)
     assert "## CROSS-REPO EVIDENCE" in report
@@ -399,8 +381,6 @@ def test_fail_on_cross_repo_evidence_absent_leaves_exit_unchanged(monkeypatch) -
 
 
 def test_fail_on_contested_stays_byte_identical(monkeypatch, capsys) -> None:
-    """AC6: `--fail-on-contested` is a live sibling plan's exit-criterion
-    oracle and must not gain the new failure mode or change its stderr shape."""
     entry = _make_entry(population="CONTESTED", op_name="fleet.contested_op")
     entry.notes = ["status line matched no population rule"]
     monkeypatch.setattr(kli, "build", lambda ledger: ([entry], 1))
@@ -430,12 +410,7 @@ def test_both_fail_flags_together_exit_1_if_either_fires(monkeypatch, capsys) ->
     assert "CROSS-REPO-EVIDENCE K-901" in err
 
 
-# --- Disposition-first status entries (handoff 2026-08-29, Next Steps 5) ------
-#
-# An entry that opens with its disposition in bold instead of labelling it read
 # as an EMPTY status, matched no rule, and rendered CONTESTED -- a defect report
-# about the ledger for a disposition the ledger states plainly. K-066 was this
-# shape and was fixed at the entry; these pin the reading rather than the entry.
 
 
 def _entry_body(text):
@@ -460,8 +435,6 @@ def test_labelled_status_still_wins_over_a_leading_bold_run():
 
 
 def test_a_bold_section_heading_is_not_read_as_a_disposition():
-    """`**Cut scope:**` opens with a disposition word and is a heading. Equality
-    against the vocabulary, not a prefix test, is what separates them."""
     entry = _entry_body("**Cut scope:** three call sites and their tests\n")
     assert entry.status_text == ""
 
@@ -476,8 +449,6 @@ def test_an_entry_stating_no_disposition_still_reaches_contested():
 
 
 def test_the_vocabulary_is_derived_from_the_marker_tuples():
-    """Assembled from the tuples rather than restated, so a marker added there is
-    reachable here in the same edit -- the drift that opened this gap twice."""
     from coordinator_core.op_census import kill_ledger_inventory as k
 
     for marker in k._LANDED_MARKERS + k._NON_CUT_MARKERS + k._WITHDRAWN_MARKERS:
@@ -502,8 +473,6 @@ def test_fate_entries_carries_heading_keys_and_fate(tmp_path) -> None:
 
 
 def test_fate_entries_never_reaches_live_op_names_or_classify(tmp_path, monkeypatch) -> None:
-    """The light accessor's whole point: it must not pay the eager op-package
-    import that `_live_op_names()`/`classify()` carry."""
     ledger = tmp_path / "kill-ledger.md"
     ledger.write_text(_fate_entry("LIVE"), encoding="utf-8")
 
@@ -516,8 +485,6 @@ def test_fate_entries_never_reaches_live_op_names_or_classify(tmp_path, monkeypa
 
 
 def test_fate_entries_on_a_missing_ledger_raises_not_returns_empty(tmp_path) -> None:
-    """Absence must be distinguishable from zero findings — a caller that cannot
-    `pytest.skip` (C2's detector) must not read `[]` as "no leak here"."""
     missing = tmp_path / "does-not-exist" / "kill-ledger.md"
     with pytest.raises(kli.LedgerAbsent):
         kli.fate_entries(missing)

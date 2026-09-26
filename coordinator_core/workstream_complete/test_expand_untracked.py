@@ -26,26 +26,15 @@ from coordinator_core import workstream_complete as wsc
 
 
 def test_ordinary_file_passes_through_as_itself(tmp_path):
-    """A plain untracked file expands to exactly itself — the expansion is a
-    directory carve-out, not a rewrite of the ordinary path."""
     (tmp_path / "real.py").write_text("x = 1\n", encoding="utf-8")
     assert wsc._expand_untracked(tmp_path, "real.py") == ["real.py"]
 
 
 def test_missing_path_stays_a_populated_singleton(tmp_path):
-    """A path that does not exist must stay a one-entry list so `_count_lines`
-    still resolves it to `None` and the four-tuple still collapses.
-
-    Negative-spec: NOT `[]`. An empty expansion is the shape a naive
-    `if not target.exists(): return []` would produce, and it would silently
-    score an unreadable path as zero LOC instead of propagating the
-    measurement failure."""
     assert wsc._expand_untracked(tmp_path, "ghost.py") == ["ghost.py"]
 
 
 def test_directory_expands_to_the_files_beneath_it(tmp_path):
-    """`git status --porcelain` reports a wholly-untracked directory as one
-    trailing-slash entry; that entry must become its member files."""
     brief = tmp_path / "briefs" / "a-brief"
     brief.mkdir(parents=True)
     (brief / "one.py").write_text("a = 1\n", encoding="utf-8")
@@ -61,9 +50,6 @@ def test_directory_expands_to_the_files_beneath_it(tmp_path):
 
 
 def test_walk_stops_at_the_shared_budget(tmp_path):
-    """The budget is a single counter shared across one measurement's whole
-    untracked list, so several large sibling directories compound against ONE
-    bound rather than each getting a fresh one."""
     for name in ("first", "second"):
         target = tmp_path / name
         target.mkdir()
@@ -81,8 +67,6 @@ def test_walk_stops_at_the_shared_budget(tmp_path):
 
 
 def test_absent_budget_walks_the_whole_directory(tmp_path):
-    """`budget=None` is unbounded — the parameter is opt-in, so callers that
-    do not pass one are unaffected."""
     target = tmp_path / "many"
     target.mkdir()
     for i in range(20):
@@ -94,11 +78,6 @@ def test_absent_budget_walks_the_whole_directory(tmp_path):
 
 
 def test_symlinked_subdirectory_is_not_followed(tmp_path):
-    """A symlink loop must terminate rather than walk forever.
-
-    Pinned rather than inherited: `Path.rglob`'s symlink behaviour is
-    CPython-version-sensitive, which is why the implementation states
-    `os.walk(followlinks=False)` explicitly."""
     target = tmp_path / "tree"
     target.mkdir()
     (target / "real.py").write_text("x = 1\n", encoding="utf-8")
@@ -113,9 +92,6 @@ def test_symlinked_subdirectory_is_not_followed(tmp_path):
 
 
 def test_unwalkable_directory_returns_none(tmp_path, monkeypatch):
-    """An `OSError` raised DURING the walk (permission denied on a
-    subdirectory, or the tree vanishing mid-iteration) must return `None` so
-    the caller collapses the measurement rather than under-counting it."""
     target = tmp_path / "tree"
     target.mkdir()
     (target / "real.py").write_text("x = 1\n", encoding="utf-8")

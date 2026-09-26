@@ -70,9 +70,6 @@ from typing import List, Optional, Tuple
 from coordinator_core._settings_home import home_dir
 from coordinator_core.win_portability import same_path
 
-#: The one hook chain DR-310 is about — see plan Out-of-scope: "Cancellations of hooks
-#: other than PreToolUse:Bash, unless they fall out for free." They do not fall out for
-#: free here (the denominator itself is Bash-tool_use-shaped), so this stays a hard filter.
 _TARGET_HOOK_NAME = "PreToolUse:Bash"
 
 HOOK_CANCEL_SCAN_BUDGET_BYTES = 64 * 1024 * 1024
@@ -85,10 +82,6 @@ with corpus growth, not by feel."""
 
 @dataclass(frozen=True)
 class HookCancellationRate:
-    """One scan's result. ``denominator`` is Bash tool_use entries seen in the scanned
-    (budget-bounded) window; ``cancelled`` is PreToolUse:Bash cancellation attachments seen
-    in that same window. ``rate`` is ``None`` when ``denominator`` is 0 (undefined, not
-    zero) -- see module docstring's fail-open paragraph."""
 
     cancelled: int
     denominator: int
@@ -103,12 +96,6 @@ class HookCancellationRate:
 
 
 def _encode_project_dir_name(repo_root: Path) -> str:
-    """Replicate Claude Code's ``<claude-home>/projects/`` directory-name encoding for
-    *repo_root*: every path separator and drive-letter colon becomes ``-``. Heuristic, by
-    the same admission ``coordinator_core.ops.decode_claude_projects_dir`` already makes
-    for the inverse direction -- encoding has drifted across harness versions there, and
-    may again. A miss here degrades to "no directory found" (see
-    ``_project_transcripts_dir``), never a wrong-repo scan."""
     raw = str(repo_root)
     out = []
     for ch in raw:
@@ -120,9 +107,6 @@ def _encode_project_dir_name(repo_root: Path) -> str:
 
 
 def _project_transcripts_dir(repo_root: Path) -> Optional[Path]:
-    """Resolve the single ``<claude-home>/projects/<encoded-repo-root>`` directory for
-    *repo_root*, or None when it does not exist -- never a fleet-wide fallback scan (see
-    module docstring's SCOPE paragraph)."""
     projects_root = home_dir() / ".claude" / "projects"
     candidate = projects_root / _encode_project_dir_name(repo_root)
     if candidate.is_dir():
@@ -133,11 +117,6 @@ def _project_transcripts_dir(repo_root: Path) -> Optional[Path]:
 def _select_bounded_transcripts(
     project_dir: Path, budget_bytes: int
 ) -> Tuple[List[Path], int]:
-    """Return (paths, total_bytes) for *project_dir*'s ``*.jsonl`` transcripts, newest
-    mtime first, stopping once *budget_bytes* would be exceeded (module docstring's BOUNDED
-    WORK paragraph). Always includes at least the single newest file, even if it alone
-    exceeds the budget -- a budget of zero usable files would silently under-report rather
-    than bound anything."""
     entries: List[Tuple[float, Path, int]] = []
     try:
         for p in project_dir.glob("*.jsonl"):
@@ -162,10 +141,6 @@ def _select_bounded_transcripts(
 
 
 def _line_matches_repo(last_cwd: Optional[str], repo_root: Path) -> bool:
-    """True when *last_cwd* (the most recent ``cwd`` field seen in this transcript) is
-    this repo's root, or when no ``cwd`` has been seen yet (fail open: count rather than
-    silently drop when the field is simply absent from a line, matching this module's
-    fail-open posture elsewhere)."""
     if last_cwd is None:
         return True
     try:
@@ -175,10 +150,6 @@ def _line_matches_repo(last_cwd: Optional[str], repo_root: Path) -> bool:
 
 
 def _scan_one_transcript(path: Path, repo_root: Path) -> Tuple[int, int]:
-    """Stream *path* line-by-line, returning (cancelled, denominator) counts for lines
-    whose most-recently-seen ``cwd`` matches *repo_root*. Never raises -- an unreadable
-    file or an unparseable line is skipped, matching every other transcript reader in this
-    tree (e.g. ``session.receiver_state.reduce_transcript_tail``)."""
     cancelled = 0
     denominator = 0
     last_cwd: Optional[str] = None
@@ -233,9 +204,6 @@ def _scan_one_transcript(path: Path, repo_root: Path) -> Tuple[int, int]:
 def scan_hook_cancellation_rate(
     repo_root: Path, *, budget_bytes: int = HOOK_CANCEL_SCAN_BUDGET_BYTES
 ) -> HookCancellationRate:
-    """Scan *repo_root*'s own transcripts (bounded per module docstring) and return the
-    cancelled/denominator/rate result. Never raises: a missing/unreadable corpus resolves
-    to ``HookCancellationRate(0, 0, 0, 0)`` (rate ``None``, section omitted by the caller)."""
     project_dir = _project_transcripts_dir(repo_root)
     if project_dir is None:
         return HookCancellationRate(0, 0, 0, 0)

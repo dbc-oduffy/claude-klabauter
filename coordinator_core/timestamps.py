@@ -44,14 +44,6 @@ UNREADABLE_AGE = "age unreadable"
 
 
 def age_seconds(stamp: Any, now_epoch: Optional[float] = None) -> Optional[float]:
-    """Seconds between `stamp` and now, or `None` when the record cannot say.
-
-    Parses the stamp as the UTC it declares. Accepts both shapes this tree
-    writes -- a trailing `Z` and an explicit `+00:00` offset, with or without
-    microseconds. A naive stamp returns `None` rather than being assumed UTC:
-    a stamp that never said which zone it meant is exactly the input this
-    module exists to stop people guessing about.
-    """
     if not isinstance(stamp, str) or not stamp:
         return None
     try:
@@ -69,7 +61,6 @@ def age_seconds(stamp: Any, now_epoch: Optional[float] = None) -> Optional[float
 
 
 def age_phrase(seconds: float) -> str:
-    """`41 minutes`, `3 seconds` -- a duration a reader takes without a unit key."""
     seconds = max(0.0, seconds)
     if seconds < 90:
         return f"{seconds:.0f} seconds"
@@ -78,12 +69,6 @@ def age_phrase(seconds: float) -> str:
     return f"{seconds / 3600:.1f} hours"
 
 
-# This pair (plus `day_phrase`) is a
-# general calendar-age facility with exactly one caller in the tree today
-# (`with_age_date`, itself serving only `relocation_ledger.retired_at`).
-# Kept private rather than deleted: privatizing matches the module's actual
-# exported surface to its actual consumers without foreclosing a second date
-# field, which is the trigger to re-generalise, not the first.
 def _age_days(stamp: Any, now_epoch: Optional[float] = None) -> Optional[float]:
     """Days between a `YYYY-MM-DD` calendar date and now, or `None`.
 
@@ -110,7 +95,6 @@ def _age_days(stamp: Any, now_epoch: Optional[float] = None) -> Optional[float]:
 
 
 def _day_phrase(days: float) -> str:
-    """`today`, `1 day`, `36 days` -- a whole-day count, never a false decimal."""
     whole = int(max(0.0, days))
     if whole == 0:
         return "today"
@@ -135,13 +119,6 @@ def with_age_date(stamp: Any, now_epoch: Optional[float] = None) -> str:
 
 
 def with_age(stamp: Any, now_epoch: Optional[float] = None) -> str:
-    """The stamp as stored, followed by how long ago that was.
-
-    The rendering every reader-facing surface should use in place of a bare
-    field value. A stamp that cannot be aged still renders, marked, rather than
-    being suppressed -- a reader who can see the raw value can still act on it,
-    and a missing field would hide that the record carried anything at all.
-    """
     age = age_seconds(stamp, now_epoch)
     if age is None:
         return f"{stamp} ({UNREADABLE_AGE})"

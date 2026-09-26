@@ -1,21 +1,3 @@
-"""2026-08-21 rebuild-the-three-ceremony-assemblers plan, C13: the
-`_scan_deliverable_collision` corpus walk stops reading whole handoff bodies
-to check one frontmatter field.
-
-Spec backlink: `docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md`
-§ C13 ("baton-assemble -- the uniqueness check stops walking 170 files per
-mint"). The scan itself is warn-only and stays a full `state/handoffs/`
-walk by design (§ C13 body: doctrinally distinct from R1's link-discovery
-target, not deleted) -- this chunk fixes ONLY the read cost per candidate,
-via `_read_frontmatter_bounded`, not which files get scanned or what the
-scan decides.
-
-Negative-spec: does NOT test `_scan_deliverable_collision`'s collision
-semantics (terminal-state boundary, ancestor-chain exclusion, roadmap-baton
-skip, AC4 byte-identical write) -- those stay pinned by
-`test_deliverable_collision_warn.py`, unchanged by this fix and deliberately
-not re-asserted here.
-"""
 
 from __future__ import annotations
 
@@ -27,11 +9,6 @@ import coordinator_core.baton_assemble as ba
 def _write_handoff_with_body(
     root: Path, rel: str, deliverable_id: str, deployment_state: str, body_bytes: int
 ) -> Path:
-    """A `state/handoffs/*.md` candidate whose BODY (after the closing `---`)
-    is padded to `body_bytes` -- the bulk `_read_frontmatter`'s whole-file
-    read used to pull off disk for nothing, since the scan only ever reads
-    `deliverable_id`/`status`/`deployment_state`/`claimed_by` out of the
-    frontmatter block itself."""
     path = root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     fm = (
@@ -46,9 +23,6 @@ def _write_handoff_with_body(
 
 
 class TestBoundedReaderMatchesFullReader:
-    """`_read_frontmatter_bounded` must return the SAME frontmatter text
-    `_read_frontmatter` does, for both a large-bodied file and the edge
-    cases the unbounded reader already handles (no file, no frontmatter)."""
 
     def test_bounded_read_matches_full_read_for_a_large_body(self, tmp_path):
         candidate = _write_handoff_with_body(
@@ -77,10 +51,6 @@ class TestBoundedReaderMatchesFullReader:
 
 
 class TestBoundedReadStaysUnderBudget:
-    """The regression guard for the whole class (C14 extends this same
-    axis on `builtins.open` count / process time across the three ops) --
-    here, scoped to THIS scan: reading a large-bodied corpus must not pull
-    the bodies off disk."""
 
     def test_scan_reads_far_fewer_bytes_than_the_corpus_body_size(self, tmp_path, monkeypatch):
         body_bytes = 50_000
@@ -125,9 +95,6 @@ class TestBoundedReadStaysUnderBudget:
         )
 
     def test_scan_still_finds_a_collision_after_a_large_bodied_earlier_candidate(self, tmp_path):
-        """The bounded reader must not short-circuit correctness: a large
-        body on one candidate must not prevent the loop from reaching and
-        reading a LATER candidate that actually collides."""
         _write_handoff_with_body(
             tmp_path, "state/handoffs/a-large-no-hit.md", "DEL-OTHER", "in_flight", 50_000
         )

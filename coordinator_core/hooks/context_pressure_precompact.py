@@ -94,28 +94,14 @@ from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks._payload import field
 
-# Canonical session_id charset — anchored full-match, NOT re.search. A widened
-# charset (e.g. forgetting to anchor, or allowing '/') reopens a path-traversal
-# write into the temp dir. Do not relax this pattern.
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_@-]+$")
 
-#: Generator-provenance declaration: _write_sentinel/_write_state_snapshot
-#: write compaction-occurred-<sid> / compaction-state-<sid>.md under
-#: tempfile.gettempdir() — outside the repo tree, never a tracked artifact.
 GENERATES: list = []
 
-# Overall output cap on the state-snapshot file — mirrors the bash oracle's
-# trailing `| head -100`. This is a TOTAL cap across all sections combined,
-# applied last, on top of each section's own per-section cap below.
 _TOTAL_LINE_CAP = 100
 
 
 def _run_git(args: List[str], cwd: Optional[str] = None) -> str:
-    """Run a git subcommand, returning stripped stdout or "" on any failure.
-
-    Mirrors the bash oracle's `git ... 2>/dev/null || true` pattern — never
-    raises, never surfaces stderr.
-    """
     import subprocess
 
     from coordinator_core.win_portability import no_console_creationflags
@@ -126,13 +112,6 @@ def _run_git(args: List[str], cwd: Optional[str] = None) -> str:
             cwd=cwd,
             capture_output=True,
             text=True,
-            # House value (`bash_guards.dispatch_checks._run_git`), not a local
-            # choice. The 2026-08-05 hot-path hardening incident that produced
-            # `test_hot_path_subprocess_timeouts.py` was a Windows box degraded by
-            # exactly this shape -- a `timeout=10` sitting on a hook path against a
-            # house value of 2.0. A git read that has not answered in 2s is a defect
-            # to find, not a wait to extend, and this call already degrades to "" on
-            # expiry rather than propagating.
             timeout=2.0,
             **no_console_creationflags(),
         )
@@ -144,12 +123,6 @@ def _run_git(args: List[str], cwd: Optional[str] = None) -> str:
 
 
 def _extract_ids(raw: str) -> Tuple[str, str]:
-    """Extract (session_id, transcript_path) from the raw PreCompact JSON payload.
-
-    Native `json` — no jq-present/jq-absent fork (see module docstring). Any
-    parse failure or missing field returns "" for that field, matching the
-    bash oracle's `// empty` jq fallback semantics.
-    """
     try:
         data = json.loads(raw)
     except Exception:
@@ -162,13 +135,6 @@ def _extract_ids(raw: str) -> Tuple[str, str]:
 
 
 def _write_sentinel(tmpdir: str, session_id: str, transcript_path: str) -> None:
-    """Write the critical-path sentinel file.
-
-    Content is the pre-compaction transcript byte size (bare integer) or an
-    empty string when the transcript is missing/unreadable — consumed by
-    `coordinator_core.hooks.postuse_advisory_dispatch` to suppress
-    false-positive emissions (its `line.isdigit()` check tolerates both).
-    """
     pre_size = ""
     if transcript_path and os.path.isfile(transcript_path):
         try:
@@ -197,7 +163,7 @@ def _build_tasks_section(session_id: str) -> List[str]:
                 with f.open(encoding="utf-8") as fh:
                     data = json.load(fh)
             except Exception:
-                continue  # skip an unreadable/malformed task file; the rest of the tasks section still renders
+                continue
             if not isinstance(data, dict):
                 continue
             subj = data.get("subject")
@@ -265,14 +231,6 @@ def _build_handoffs_section(state_root: str) -> List[str]:
     return lines
 
 
-# Both scriptPath and runId are echoed back verbatim into the PreCompact
-# state-snapshot markdown, which is read back into agent context after
-# compaction and trusted as harness-authored state -- a value carrying a
-# quote, backtick, or newline could otherwise break out of the rendered line
-# and inject fabricated lines. Reject
-# either outright rather than merely escaping: this text is a paste-ready
-# command, not free-form prose, so a control character means the captured
-# value is already suspect.
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
@@ -317,18 +275,6 @@ def _render_resume_call(run: dict) -> str:
 
 
 def _build_workflow_runs_section(tmpdir: str, session_id: str) -> List[str]:
-    """`## Active Workflow Runs` -- one line per persisted run-id capture
-    (postuse_advisory_dispatch.py's `_persist_workflow_run_record`, written at
-    `Workflow` PostToolUse fire time) for THIS session, so a `/compact` that
-    kills a background run's context still leaves the harness's `wf_…` id
-    (and the resume call it composes) recoverable from disk.
-
-    Known gap, named rather than silently assumed: there is no persisted
-    "finished" signal in this cohort's scope, so every record found for this
-    session is treated as active/not-finished -- a completed run's record
-    still renders here until the temp file is cleaned up by the OS or a
-    later chunk adds a finish marker.
-    """
     lines = ["", "## Active Workflow Runs"]
     if not session_id:
         lines.append("(none)")
@@ -356,19 +302,6 @@ def _build_workflow_runs_section(tmpdir: str, session_id: str) -> List[str]:
 
 
 def _write_state_snapshot(tmpdir: str, session_id: str) -> None:
-    """Write the best-effort state-snapshot file.
-
-    Wrapped so ANY failure here never propagates — the sentinel (already
-    written by `_write_sentinel`) is the critical path; this is pure
-    best-effort context enrichment. Mirrors the bash oracle's
-    `( ... ) 2>/dev/null || true` subshell isolation.
-
-    Repo root comes from `coordinator_core.git.repo_root.show_toplevel`, which
-    resolves by parent walk instead of a spawn. Its None-on-failure result is
-    normalized to "" here so `_resolve_state_root`'s documented non-git edge
-    case (a literal "/state" that simply globs to nothing) is preserved
-    byte-for-byte rather than becoming "None/state".
-    """
     try:
         from coordinator_core.git import repo_root as _repo_root_seam
 
@@ -390,8 +323,6 @@ def _write_state_snapshot(tmpdir: str, session_id: str) -> None:
             fh.write("\n".join(capped))
             fh.write("\n")
     except Exception:
-        # Best-effort — never let a state-snapshot failure surface. Sentinel
-        # write already completed; that is the contract this hook must keep.
         pass
 
 
@@ -415,12 +346,9 @@ def run(raw_stdin: str) -> None:
         session_id, transcript_path = _extract_ids(raw_stdin)
 
         if not session_id:
-            return  # fail-open: no session_id, can't write sentinel
+            return
 
         if not _SESSION_ID_RE.fullmatch(session_id):
-            # Security: reject ids containing path-traversal characters
-            # (notably '/' and '..') before any path construction. Treat as
-            # absent — same behavior as the missing-session_id path above.
             return
 
         import tempfile
@@ -430,22 +358,11 @@ def run(raw_stdin: str) -> None:
         _write_sentinel(tmpdir, session_id, transcript_path)
         _write_state_snapshot(tmpdir, session_id)
     except Exception:
-        # Defense-in-depth — run() must never raise into the DoE stub's
-        # fail-open wrapper. Every internal step already contains its own
-        # errors; this is a final backstop, not the primary control.
         pass
 
 
 @register_op("hooks.context_pressure_precompact")
 def _handler(params: dict, repo_root=None) -> dict:
-    """IPC/dispatch_message adapter over `run()` — flat-scalar input, thin
-    JSON-reconstruction shim so both call shapes (direct `run(raw_json)` and
-    dispatch-routed `_handler(params_dict)`) execute identical logic.
-
-    Always returns `no_advisory()` — the product is the on-disk write
-    side-effect (mirrors `track_touched_files.py`'s "never blocks" contract);
-    PreCompact output is ignored by Claude Code regardless.
-    """
     params = payload_of(params)
     session_id = field(params, "session_id")
     transcript_path = field(params, "transcript_path")

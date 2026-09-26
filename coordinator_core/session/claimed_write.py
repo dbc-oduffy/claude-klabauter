@@ -83,7 +83,6 @@ from coordinator_core.session.declared_writes import declare_write
 
 __all__ = ["replace_text", "replace_bytes", "create_exclusive", "append_claimed_line"]
 
-# Bounded retry attempts before create_exclusive(retry_suffix=True) fails loud.
 # Mirrors ops/queue_append.py::_COLLISION_RETRY_CAP.
 _COLLISION_RETRY_CAP = 1000
 
@@ -159,10 +158,6 @@ def create_exclusive(
                 ) from None
             candidate = f"{root}-{attempt}{ext}"
             continue
-        # Write via raw os.write + os.close rather than wrapping the fd in a
-        # file object -- keeps this module's grep-vocabulary (AC2, one
-        # replace primitive) clean of the create-and-wrap idiom the delegated
-        # replace primitive uses for an unrelated reason.
         try:
             view = memoryview(encoded)
             while view:

@@ -86,12 +86,6 @@ def _stage_argv_env(label: str) -> Tuple[list, Dict[str, str]]:
 
 
 def _round_half_up_percentile(ordered: List[float], pct: float) -> float:
-    """Same round-half-up nearest-rank convention as
-    `process_time.batched_process_time_quantiles` (that module's own
-    docstring on why plain `round()` -- ties-to-even -- is the wrong
-    tie-break here), reimplemented locally because that function only
-    quantiles its own `process_time_ms` samples and this module additionally
-    needs the same convention applied to `wall_ms`."""
     import math
 
     if len(ordered) == 1:
@@ -103,12 +97,6 @@ def _round_half_up_percentile(ordered: List[float], pct: float) -> float:
 
 @dataclass(frozen=True)
 class StageCost:
-    """One stage's process-time AND wall-time quantiles, `n` samples, EACH
-    spawned individually (k=1 per `batched_process_time_ms` call -- never
-    multiple children inside one job object/wait loop), per the dispatch
-    brief's explicit instruction that the wall column must not be a
-    batching artifact the way `measure_derived_floor`'s own k=20 wall
-    reading is."""
 
     label: str
     process_time_p50_ms: float
@@ -161,13 +149,6 @@ def measure_stage_costs(n: int = 15) -> List[StageCost]:
             )
         )
     return out
-
-
-# ---------------------------------------------------------------------------
-# Guard-registration partition: does each registered entry's own closure
-# read the per-call command/payload at all, or could its answer in principle
-# be evaluated once per session?
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -275,10 +256,6 @@ def classify_guard_registration() -> List[GuardCallVariance]:
         if not m:
             continue
         name = m.group(1)
-        # Comment text stripped before the cmd/payload/session_id check --
-        # see this function's own docstring for why (prose describing a
-        # called function's internals routinely names these identifiers
-        # without the registration line itself reading them).
         code_window = "\n".join(line.split("#", 1)[0] for line in window_lines)
         reads_cmd = bool(re.search(r"\bcmd\b", code_window))
         reads_payload = bool(re.search(r"\bpayload\b", code_window))
@@ -293,14 +270,6 @@ def classify_guard_registration() -> List[GuardCallVariance]:
             )
         )
     return out
-
-
-# ---------------------------------------------------------------------------
-# Filesystem-probe enumeration: what does the chain do per call that is not
-# CPU (dispatch brief, citing a since-deleted nudge guard's own ~8-fs-op
-# audit -- docs/plans/2026-08-21-the-advisory-band-gets-smaller-cheaper-
-# and-honest.md C5)?
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)

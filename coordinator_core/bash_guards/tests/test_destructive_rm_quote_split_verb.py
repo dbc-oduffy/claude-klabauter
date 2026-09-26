@@ -31,9 +31,6 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch_checks
 
-#: Resolved from this file, never hardcoded: the guard resolves targets against
-#: the payload's `cwd`, and a drive-letter literal here would be wrong on every
-#: other host in the fleet.
 CWD = str(Path(__file__).resolve().parents[3])
 TARGET = "state/handoffs"
 
@@ -46,9 +43,6 @@ SPLIT_VERB_CASES = [
     ("split with a wrapper in front", f"sudo 'r''m' -rf {TARGET}"),
 ]
 
-#: Commands that must stay allowed. `form`/`perms` are the shape a naive
-#: quote-strip could turn into a spurious `rm` word; the commit message is the
-#: shape where `rm` appears as prose rather than as a verb.
 ALLOWED_CASES = [
     ("absent target", "rm -rf /tmp/definitely-not-here-12345"),
     ("not a delete at all", f"ls -la {TARGET}"),
@@ -89,19 +83,12 @@ def test_a_quote_split_rm_verb_is_still_recognised(label: str, cmd: str) -> None
 
 @pytest.mark.parametrize("label,cmd", ALLOWED_CASES, ids=[c[0] for c in ALLOWED_CASES])
 def test_the_widened_scan_does_not_over_deny(label: str, cmd: str) -> None:
-    """The widened word scan decides only whether to LOOK. Everything
-    downstream still requires a real rm segment, an existing target, and
-    uncommitted work under it, so a spurious word cannot produce a deny."""
     assert _verdict(cmd) is None, (
         f"{label}: the widened rm scan denied a command it should not -- {cmd!r}"
     )
 
 
 def test_the_detector_and_its_own_fast_path_agree() -> None:
-    """The defect in one line: `_rm_is_rm_segment` already read segments
-    quote-stripped and said yes, while the `\\brm\\b` gate in front of it said
-    no and returned before the detector ever ran. Asserted directly so the two
-    cannot drift apart again without a test failing."""
     split = f"'r''m' -rf {TARGET}"
     assert dispatch_checks._rm_is_rm_segment(split) is True
     if _verdict(f"rm -rf {TARGET}") is None:

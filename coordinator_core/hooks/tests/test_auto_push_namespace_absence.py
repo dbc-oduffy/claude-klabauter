@@ -33,22 +33,13 @@ from __future__ import annotations
 
 from coordinator_core.hooks import auto_push
 
-#: The full C8 gravestone list -- every name here must be ABSENT from
-#: `dir(auto_push)`. Sourced from the brief's two reachability traces:
-#: the `_hold_window` retraction-window cascade (itself, plus the helpers
-#: whose sole caller it was) and the per-commit detached-respawn cascade
-#: (`_detach_and_run`/`spawn_detached_push`, plus their sole-caller
-#: helpers). `_resolve_python_exe` is deliberately NOT in this list -- it
-#: survives via `_invoke_cockpit_publish` (see that function's docstring).
 _GRAVESTONED_NAMES = (
-    # `_hold_window` cascade.
     "_hold_window",
     "_branch_diverged_no_spawn",
     "_shared_branch_live_count",
     "_peer_commit_within_window",
     "_read_ref_sha_no_spawn",
     "_remote_is_ancestor_no_spawn",
-    # per-commit detached-respawn cascade.
     "_detach_and_run",
     "spawn_detached_push",
     "_claude_klabauter_package_root",
@@ -69,10 +60,4 @@ def test_gravestoned_names_absent_from_auto_push_namespace():
 
 
 def test_resolve_python_exe_survives_as_a_named_exception():
-    """`_resolve_python_exe` is the one name shared with the respawn cascade
-    that is NOT gravestoned -- it survives via `_invoke_cockpit_publish`.
-    Pinned separately so a future over-broad deletion sweep across the
-    respawn helpers is caught here rather than silently taking this one
-    down with it.
-    """
     assert hasattr(auto_push, "_resolve_python_exe")

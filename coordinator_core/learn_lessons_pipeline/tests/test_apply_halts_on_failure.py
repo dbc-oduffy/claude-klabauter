@@ -1,9 +1,3 @@
-"""Tests for `coordinator_core.learn_lessons_pipeline.apply` — AC1's halt
-(§ D3): a non-zero exit from any dispatched directive stops every later
-directive from dispatching at all.
-
-Spec backlink: docs/plans/2026-09-11-the-lessons-pipeline-drains-without-a-ha.md § C4
-"""
 
 from __future__ import annotations
 
@@ -16,9 +10,6 @@ from coordinator_core.contract import apply_base
 from coordinator_core.learn_lessons_pipeline import CONSUMES_MANIFEST
 from coordinator_core.learn_lessons_pipeline import apply as llp_apply
 
-#: The six directives in C3's own emitted order/shape — id, cli-or-op, args,
-#: depends_on. Mirrors `build_directives`'s output closely enough to drive
-#: the real dispatch ladder without depending on `brief()`'s own I/O.
 _DIRECTIVES: list[dict[str, Any]] = [
     {
         "id": "d-extract-lessons",
@@ -75,9 +66,6 @@ def _admit_stamp_op(monkeypatch):
 
 
 class _FakeDispatch:
-    """A monkeypatched dispatch table over the real ladder shape: each
-    entry records `(cli_or_op_name, args)` into `calls` and raises for any
-    call whose `args[0]` is in `fail_on`."""
 
     def __init__(self, fail_on: frozenset[str] = frozenset()) -> None:
         self.calls: list[tuple[str, list[str]]] = []
@@ -178,15 +166,6 @@ def test_unknown_op_raises_rather_than_dispatching(monkeypatch):
 
 
 def test_real_load_of_age_sweep_lessons_exercises_the_bin_import_path(tmp_path):
-    """Loads `age-sweep-lessons.py` for real (not monkeypatched) and calls
-    `main([])` in-process — proves `_ensure_import_path`'s bin-dir/`lib`
-    eviction wiring actually runs for this CLI, per C4's body ("At least
-    one C4 test loads age-sweep-lessons.py for real ... so this import
-    path is actually exercised"). No `--before`/`--days`/`path` argv means
-    `main` still reaches its own argparse rejection (exit 2) AFTER the
-    `import lib` / `cc_invoke.ensure_engine_on_path` bootstrap has already
-    run without raising — that bootstrap succeeding is what this test is
-    for."""
     llp_apply._LOADED_MODULES.pop("age-sweep-lessons", None)
     with pytest.raises(RuntimeError, match=r"age-sweep-lessons exited"):
         llp_apply._dispatch_age_sweep_lessons([], tmp_path)

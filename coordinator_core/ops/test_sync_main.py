@@ -1,8 +1,3 @@
-"""Characterization + parity tests for coordinator_core.ops.sync_main.
-
-Port of: sync-main.sh (DoE b5a4192c, 2026-07-20), ~124 lines.
-Spec backlink: archive/specs/2026-05-01-orphan-branch-prevention.md § 1.1.5
-"""
 from __future__ import annotations
 
 import subprocess
@@ -28,15 +23,6 @@ def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def _make_origin_and_clone(tmp_path: Path) -> tuple[Path, Path]:
-    """Build a bare `origin` repo + a clone with `main` checked out and a
-    commit, mirroring a real work-branch-creation-site precondition."""
-    # -b main pins the bare origin's default branch explicitly rather than
-    # relying on the box's init.defaultBranch config (which may be "main"
-    # or the legacy "master") -- without this, a clone of the (initially
-    # empty) origin auto-checks-out whatever the box-default branch name
-    # is, and a later `checkout -b main origin/main` either collides with
-    # an already-checked-out local "main" or fails to find "origin/main"
-    # at all, depending on the box.
     origin = tmp_path / "origin.git"
     origin.mkdir()
     subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True, **no_console_passthrough_kwargs())
@@ -45,8 +31,6 @@ def _make_origin_and_clone(tmp_path: Path) -> tuple[Path, Path]:
     subprocess.run(["git", "clone", "-q", str(origin), str(clone)], check=True, **no_console_passthrough_kwargs())
     _git(clone, "config", "user.email", "test@example.com")
     _git(clone, "config", "user.name", "Test")
-    # -B (not -b): the empty-origin clone may already have "main" checked
-    # out (unborn) as its default branch; -B resets/creates it either way.
     _git(clone, "checkout", "-q", "-B", "main")
     (clone / "README.md").write_text("hello\n")
     _git(clone, "add", "README.md")
@@ -165,10 +149,6 @@ def test_strict_hard_errors_when_far_behind_main(tmp_path, capsys, monkeypatch):
 
     _git(clone, "checkout", "-q", "-b", "work/testmachine/2026-01-01")
 
-    # 51 empty commits on main, made in a single visit (checkout in/out once
-    # rather than per-commit) -- only the commit COUNT matters to
-    # `git rev-list --count HEAD..main`, not file content, so this collapses
-    # ~204 spawns (checkout+add+commit+checkout x51) down to 53.
     _git(clone, "checkout", "-q", "main")
     for i in range(51):
         _git(clone, "commit", "-q", "--allow-empty", "-m", f"commit {i}")
@@ -187,9 +167,6 @@ def test_non_strict_warns_when_far_behind_main(tmp_path, capsys, monkeypatch):
 
     _git(clone, "checkout", "-q", "-b", "work/testmachine/2026-01-01")
 
-    # See test_strict_hard_errors_when_far_behind_main: only the commit
-    # count matters, so empty commits made in one branch-visit collapse the
-    # spawn count from ~204 to 53.
     _git(clone, "checkout", "-q", "main")
     for i in range(51):
         _git(clone, "commit", "-q", "--allow-empty", "-m", f"commit {i}")

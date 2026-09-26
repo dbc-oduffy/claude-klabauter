@@ -66,7 +66,6 @@ _BIN_PROBE = _REPO_ROOT / "bin" / "claude-klabauter-doctor-probe.py"
 
 
 def _load_probe_module() -> Optional[ModuleType]:
-    """Import bin/claude-klabauter-doctor-probe.py as a fresh module via importlib."""
     if not _BIN_PROBE.exists():
         return None
     _KEY = "claude_klabauter_doctor_probe_route_share_probe_unit"
@@ -109,7 +108,6 @@ def _is_parseable_probe_result(r: object) -> bool:
 
 
 class TestWarmRouteShareProbe:
-    """_run_probe_warm_route_share() — AC5, AC5b, AC13."""
 
     def test_claude_klabauter_root_none_never_uses_info(self) -> None:
         mod = _require_module()
@@ -182,17 +180,12 @@ class TestWarmRouteShareProbe:
     def test_widens_from_1h_to_6h_to_24h_and_reports_effective_window(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AC2/AC3 — enough rows exist to clear the minimum only once the
-        window widens to 6h; the reported `effective_window_secs` matches
-        the horizon that actually supplied the verdict, and `data`'s
-        `route_distribution` figure reflects that (not the widest) window."""
         mod = _require_module()
 
         from coordinator_core.telemetry import engine_report
 
         now = time.time()
         min_rows = mod._ROUTE_MIN_COMPLETE_ROWS
-        # Too few rows inside 1h; enough once widened to 6h.
         entries = [
             self._make_entry(t_start=now - 1800, route="warm_server")
             for _ in range(min_rows - 10)
@@ -208,25 +201,19 @@ class TestWarmRouteShareProbe:
 
         result = mod._run_probe_warm_route_share(tmp_path)
 
-        assert result.data["effective_window_secs"] == 21600  # 6h
+        assert result.data["effective_window_secs"] == 21600
         assert result.data["route_distribution"]["complete"] == min_rows + 10
         assert result.status == mod._PASS
 
     def test_refusal_fires_on_window_diluted_by_unstamped_writer(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AC3 — a window above the row-count minimum but whose rows are
-        mostly unstamped (`route is None`) still refuses a verdict, because
-        coverage over that window is below the reader's own floor. This is
-        NOT the row-count refusal — it is the coverage-floor refusal."""
         mod = _require_module()
 
         from coordinator_core.telemetry import engine_report
 
         now = time.time()
         min_rows = mod._ROUTE_MIN_COMPLETE_ROWS
-        # Well above the row-count minimum, but almost entirely unstamped —
-        # coverage is far below the reader's floor.
         entries = [
             self._make_entry(t_start=now - 100, route=None)
             for _ in range(min_rows * 4)
@@ -251,9 +238,6 @@ class TestWarmRouteShareProbe:
     def test_pass_on_fully_stamped_above_minimum_window_regardless_of_log_age(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AC3 — the refusal is NOT a function of the age of the log: a
-        fully-stamped window above the minimum row count PASSES even though
-        every row sits near the 24h edge of the widest horizon."""
         mod = _require_module()
 
         from coordinator_core.telemetry import engine_report
@@ -278,11 +262,6 @@ class TestWarmRouteShareProbe:
     def test_untimestamped_routeless_row_survives_every_window_without_sinking_verdict(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AC3 — a row with no `t_start` and no `route` is kept by
-        `iter_sink_entries`'s own `since` rule (numeric-`t_start` rows only
-        are filtered) at every horizon, but — being unstamped — it counts
-        toward `complete`/`unstamped`, never toward `by_route`, so it cannot
-        degrade an otherwise-healthy window's verdict."""
         mod = _require_module()
 
         from coordinator_core.telemetry import engine_report
@@ -303,17 +282,12 @@ class TestWarmRouteShareProbe:
         result = mod._run_probe_warm_route_share(tmp_path)
 
         assert result.status == mod._PASS
-        # The untimestamped row is counted (survives every window) but does
-        # not sink coverage below the floor.
         assert result.data["route_distribution"]["complete"] == min_rows + 6
         assert result.data["route_distribution"]["unstamped"] == 1
 
     def test_all_time_is_populated_and_differs_from_windowed(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AC4 — `data["all_time"]` is populated and differs from the
-        windowed figure when old, out-of-window rows exist alongside a
-        healthy recent window."""
         mod = _require_module()
 
         from coordinator_core.telemetry import engine_report
@@ -343,7 +317,6 @@ class TestWarmRouteShareProbe:
     def test_ok_verdict_is_pass_and_reader_verdict_never_in_status(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AC13 — reader's "ok" verdict lands in data, not in status."""
         mod = _require_module()
 
         from coordinator_core.telemetry import engine_report

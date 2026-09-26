@@ -31,9 +31,6 @@ import pytest
 from coordinator_core.session import claim_index, claims, core, scope, touch_record
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# `_make_repo` spawns real git (init/config/add/commit) because the
-# production code under test resolves the git-common-dir via a real repo,
-# mirroring test_claims.py's own spawn-marking convention for this fixture.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -62,11 +59,6 @@ def _set_me(monkeypatch, sid="em-sid"):
 
 
 def _make_agent_dir_with_touch(repo, agent_id, owner_sid, path):
-    """Construct `.agents/<agent_id>/` with an `em-session-id.txt`
-    back-pointer to *owner_sid* and a `touch-record.jsonl` T-event for
-    *path* — the row's own foreign-uuid scenario: the claim row is filed
-    under the AGENT's directory name (its uuid), never under *owner_sid*
-    directly."""
     adir = Path(repo) / ".git" / "coordinator-sessions" / ".agents" / agent_id
     adir.mkdir(parents=True, exist_ok=True)
     (adir / "em-session-id.txt").write_text(owner_sid + "\n", encoding="utf-8")

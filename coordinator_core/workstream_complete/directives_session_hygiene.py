@@ -267,20 +267,9 @@ from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.ops.ceremony.wsc_disposition import PREDECESSOR_CONSUMED, canonicalize
 from coordinator_core.ops.parse_completeness_item import parse_completeness_item
 
-# ---------------------------------------------------------------------------
-# Step 2.8 — orientation-pinboard append (real CLI, real directive)
-# ---------------------------------------------------------------------------
 
 _PINBOARD_CLI = "regenerate-orientation-cache"
 
-#: Mirrors `coordinator_core.orientation.regenerate_cache.patch_pinboard_only`'s
-#: own write-time transform (`_first_line(pinboard)[:400]`) exactly, so the
-#: `already_satisfied` comparison below never compares a raw multi-line/
-#: >400-char `pinboard_note` against a first-line/400-char-truncated
-#: `existing_pinboard_line` — that mismatch would only make the check report
-#: `False` (unnecessary re-write) for a note the write path would actually
-#: land byte-identically, never the unsafe direction (Review: coordinator:
-#: code-reviewer flagged the untruncated comparison, P3).
 _PINBOARD_WRITE_TRUNCATE_CHARS = 400
 
 
@@ -351,10 +340,6 @@ def build_pinboard_directive(
     return directive
 
 
-# ---------------------------------------------------------------------------
-# Step 2.95 sub-check — machine-local regeneratability (real CLI, real directive)
-# ---------------------------------------------------------------------------
-
 _MACHINE_LOCAL_REGEN_CLI = "check-machine-local-regeneratability"
 
 
@@ -384,10 +369,6 @@ def build_machine_local_regeneratability_directive() -> dict[str, Any]:
         "already_satisfied": False,
     }
 
-
-# ---------------------------------------------------------------------------
-# Terminal-handoff drain — the close's archival step (real CLI, real directive)
-# ---------------------------------------------------------------------------
 
 _TERMINAL_HANDOFF_SWEEP_CLI = "sweep-terminal-handoffs"
 
@@ -436,10 +417,6 @@ def build_terminal_handoff_sweep_directive() -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# Terminal-sizings drain — the sizings sibling of the drain above
-# ---------------------------------------------------------------------------
-
 _TERMINAL_SIZING_SWEEP_CLI = "sweep-terminal-sizings"
 
 
@@ -482,19 +459,9 @@ def build_terminal_sizing_sweep_directive() -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# Step 2.96 — completeness-checklist advisory WARN (read-only computed gate)
-# ---------------------------------------------------------------------------
-
 _WAIVED_ITEM_KEY = "waived_items"
 _DONE_TASK_KEY = "completed_checklist_task_ids"
 
-#: The `decisions` keys `compute_completeness_checklist_gate` reads —
-#: declared once so a caller (`__init__.py`'s `preflight.decisions_template`
-#: composition) can import and union this tuple rather than hand-copying
-#: the key list. See AC3
-#: (docs/plans/2026-07-29-workstream-complete-the-envelope-names-t.md):
-#: the arg-builder and the template read this SAME constant.
 FREE_VALUE_KEYS: tuple[str, ...] = (
     _WAIVED_ITEM_KEY,
     _DONE_TASK_KEY,
@@ -514,31 +481,6 @@ class CompletenessChecklistGate(NamedTuple):
     unverified_count: int
     warn_text: Optional[str]
     summary_line: str
-    #: Four-way split over what `applies=False` was standing in for,
-    #: matching `directives_spine_worklist.OpenSpineRowGate.verdict` /
-    #: `__init__.LandedReconciliationGate.verdict`. `applies` alone
-    #: collapses three distinct cases into one payload shape: the close
-    #: is not chain-terminal (nothing to check), the chain-terminal
-    #: handoff carries no `completeness_checklist:` field (nothing to
-    #: check), and the close IS chain-terminal but the consumed handoff
-    #: text never arrived (should have checked, could not). The last of
-    #: those is not theoretical: `__init__._read_consumed_handoff_text`
-    #: degrades an unreadable/missing/archived-away handoff to `None`,
-    #: and the cadence sweeps archive handoffs routinely — a
-    #: chain-terminal close over an archived-away handoff would
-    #: otherwise read as "all verified / not applicable" with no trace
-    #: that the gate never looked.
-    #:
-    #:   "indeterminate"  — chain-terminal disposition, but no consumed
-    #:                      handoff text to check (unreadable, missing,
-    #:                      or archived away)
-    #:   "not-applicable" — not chain-terminal, or the consumed handoff
-    #:                      carries no `completeness_checklist:` field
-    #:   "clean"          — items parsed, all verified
-    #:   "open"           — items parsed, at least one unverified
-    #:
-    #: Advisory only, exactly like `applies`: `verdict` adds no judgment
-    #: point, no dependency edge, and no exit code.
     verdict: str = "not-applicable"
 
 
@@ -554,11 +496,6 @@ or mark the corresponding Tasks-API task done after verifying."""
 
 
 def _parse_checklist_items(raw_items: Iterable[str]) -> list[tuple[str, str, str]]:
-    """Parses every raw `completeness_checklist:` line via the shared
-    single-source grammar. A malformed item is skipped (surfaced to the
-    caller's diagnostics is out of this gate's scope — the frontmatter
-    schema validator is the load-bearing malformed-input gate, not this
-    advisory WARN), not fatal to the rest of the checklist."""
     parsed: list[tuple[str, str, str]] = []
     for raw in raw_items:
         try:
@@ -581,37 +518,6 @@ def compute_completeness_checklist_gate(
     consumed_handoff_basename: str = "",
     decisions: Optional[Mapping[str, Any]] = None,
 ) -> CompletenessChecklistGate:
-    """Step 2.96, all three census sub-steps in one read-only computation:
-
-    1. Opt-in gate + locate + parse (`d-parse-completeness-checklist`):
-       fires only when `disposition == "chain-terminal"` AND the consumed
-       handoff's frontmatter carries a non-empty `completeness_checklist:`
-       sequence — an ordinary continuation handoff (no such field) is a
-       silent no-op, matching the SKILL's own three-condition gate.
-    2. Cross-reference + count (`d-count-unverified-checklist-items`): an
-       item is verified if its assertion text appears in the caller's
-       `decisions["waived_items"]` set (an explicit inline waiver this
-       session) or its ordinal position appears in
-       `decisions["completed_checklist_task_ids"]` (the Tasks-API done
-       set the pickup step instantiated) — absence of either is
-       unverified, including the cross-conversation case where no Task
-       record is visible (absence of a Task is NOT proof of completion,
-       per the SKILL's own cross-conversation note).
-    3. Emit the fixed WARN template (`d-emit-completeness-warn`): only
-       when at least one item is unverified; `warn_text` is `None`
-       otherwise.
-
-    Returns `CompletenessChecklistGate(applies=False, ...)` with an empty
-    item tuple and `warn_text=None` when the opt-in gate does not fire —
-    `summary_line` is still populated with the "not applicable" Step 4
-    one-liner in that case. `verdict` splits that `applies=False` shape
-    four ways (see `CompletenessChecklistGate.verdict`): `not-applicable`
-    when the close is not chain-terminal or the consumed handoff carries
-    no `completeness_checklist:` field; `indeterminate` when the close IS
-    chain-terminal but no consumed handoff text arrived to check (an
-    unreadable, missing, or archived-away handoff); `clean` when every
-    parsed item verified; `open` when at least one did not.
-    """
     decisions = decisions or {}
     waived_items = frozenset(str(x) for x in decisions.get(_WAIVED_ITEM_KEY, ()))
     done_task_ids = frozenset(str(x) for x in decisions.get(_DONE_TASK_KEY, ()))
@@ -667,21 +573,9 @@ def compute_completeness_checklist_gate(
     )
 
 
-# ---------------------------------------------------------------------------
-# AC3 — section-scoped acceptance-criteria checkbox parser (pure text parse)
-# ---------------------------------------------------------------------------
-
-#: Reused verbatim from ops/emit/sections/handoffs.py's own module-level
-#: constants (see Anti-scope: do NOT reuse `_acceptance_criteria` itself,
-#: which counts every checkbox in the whole body regardless of heading and
-#: does its own file read — only these two line-matcher patterns are
-#: shared).
 _AC_DONE_RE = re.compile(r"^[ \t\r\n\f\v]*- \[[xX]\]")
 _AC_OPEN_RE = re.compile(r"^[ \t\r\n\f\v]*- \[ \]")
 
-#: ATX heading line: 1-6 leading `#` characters, a space, then the heading
-#: text. Group 1's length is the heading's nesting level (fewer `#` ==
-#: higher/shallower in the document tree).
 _ATX_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 _ACCEPTANCE_CRITERIA_PREFIX = "acceptance criteria"
@@ -707,11 +601,6 @@ def _locate_acceptance_criteria_section(lines: list[str]) -> Optional[tuple[int,
 
 
 def _iter_acceptance_criteria_section_lines(lines: list[str], start_index: int, section_level: int) -> Iterable[str]:
-    """Yields the body lines of an already-located AC section (see
-    `_locate_acceptance_criteria_section`), stopping at the next ATX heading
-    whose level is <= `section_level`, and skipping any line inside a
-    ``` fenced code block — a fenced example table/checkbox row must not be
-    counted by either parser (Review: coordinator:code-reviewer Finding 6)."""
     in_fence = False
     for line in lines[start_index:]:
         heading_match = _ATX_HEADING_RE.match(line)
@@ -786,29 +675,11 @@ def parse_consumed_handoff_acceptance_criteria(text: str) -> Optional[dict[str, 
     return {"done": done, "total": total, "open": total - done}
 
 
-# The status column is found by NAME, never by position. Measured over
-# docs/plans/ on 2026-08-26: 265 of 313 AC tables carry a column literally
-# headed "status", 7 head it "state" -- a true synonym, added to this set --
-# and the remaining 68 head their third column "verified by", "discharged
-# by", "oracle", "evidence", or "instrument" -- none of which is a status,
-# and several of which hold a chunk id (C8, C2) or a prose instruction.
-# Reading the last cell positionally misclassified every one of those, which
-# is why this is a named lookup and why a table without the column is
 # UNREADABLE rather than guessed at. The set stays closed at exactly these
-# two names: "state" is genuinely the same concept as "status", but none of
-# the five non-status headers above is, and widening this set to catch them
-# would reintroduce the same misclassification the named lookup exists to
-# prevent.
 _AC_TABLE_STATUS_HEADERS = frozenset({"status", "state"})
 
 _AC_TABLE_ROW_RE = re.compile(r"^\|\s*(AC[0-9][A-Za-z0-9]*)\s*\|")
-# Leading tokens in a status cell recognised as OPEN or DONE. Measured over
-# `docs/plans/*.md` on 2026-08-26: the leading token of every `| ACn |` row's
 # last cell spans ~300 DISTINCT tokens (703 'open', 596 'met', 465 '☐', 269
-# 'pending', 246 '☑', 103 '✅', 97 'done', then a long prose tail — 'the', 'a',
-# 'not', ...). No allowlist closes an open set that long, and the Unicode
-# checkbox glyphs are a MAJOR spelling, not an edge case — see the module's
-# three-outcome contract on `parse_plan_acceptance_criteria_table`.
 _AC_TABLE_OPEN_TOKENS = frozenset({"open", "partial", "pending", "blocked", "todo", "wip", "n/a", "☐"})
 _AC_TABLE_DONE_TOKENS = frozenset({
     "met", "done", "closed", "complete", "completed", "shipped", "waived",
@@ -899,10 +770,6 @@ def parse_plan_acceptance_criteria_table(text: str) -> Optional[dict[str, int]]:
             continue
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
         if not _AC_TABLE_ROW_RE.match(line):
-            # Not an AC row. It may be the header that names the status column.
-            # Header detection is the whole ballgame -- see the docstring: the
-            # LAST cell is a status in only some plans, and is a chunk id, a
-            # verification method, or an evidence pointer in the rest.
             if status_column is None and any(
                 cell.casefold() in _AC_TABLE_STATUS_HEADERS for cell in cells
             ):
@@ -913,9 +780,6 @@ def parse_plan_acceptance_criteria_table(text: str) -> Optional[dict[str, int]]:
             continue
         total += 1
         if status_column is None or status_column >= len(cells):
-            # No column is NAMED status (or this row is too short to carry it).
-            # There is nothing here to read, and guessing at a positional cell
-            # is what produced wrong answers before. Unreadable, by design.
             unreadable += 1
             continue
         cell = cells[status_column]

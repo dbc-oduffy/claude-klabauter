@@ -1,19 +1,3 @@
-"""
-coordinator_core.plan_assemble.predicates.test_concurrent_preflight — unit
-tests for `concurrent_preflight`, row `:83`'s Layer 0 leaf reader.
-
-Purpose: exercise both legs (today-dated-plan collision, `source_memo:`
-collision) against a fixture plan directory and a fixture git history —
-never the live tree, per this chunk's Test surface note.
-
-Negative-spec:
-  - Does NOT touch the live `docs/plans/` directory or the real repo's git
-    history — every fixture is built under a `tmp_path`-rooted repo.
-  - Does NOT assert a disposition/verdict field exists — the module never
-    emits one; tests assert raw evidence shape only.
-
-Spec backlink: pln-plan-assemble-wave-2-the-predi-fad89b, chunk C10
-"""
 from __future__ import annotations
 
 import subprocess
@@ -26,8 +10,6 @@ from coordinator_core.plan_assemble.predicates.concurrent_preflight import (
 
 import pytest
 
-# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
-# cadence suite is the separate threshold ruling, not this declaration.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
@@ -198,11 +180,6 @@ def test_source_memo_body_mention_fallback(tmp_path: Path) -> None:
 
 
 def test_source_memo_body_only_line_is_not_a_frontmatter_hit(tmp_path: Path) -> None:
-    """Regression: a plan whose BODY prose quotes `source_memo: <same
-    basename>` verbatim (e.g. documenting another plan's frontmatter in
-    prose) must not be picked up by the frontmatter-hit path — only the
-    body-mention fallback bucket, since the line never appears inside the
-    real `---`-delimited frontmatter block."""
     _init_repo(tmp_path)
     plans_dir = tmp_path / "docs" / "plans"
     plans_dir.mkdir(parents=True)

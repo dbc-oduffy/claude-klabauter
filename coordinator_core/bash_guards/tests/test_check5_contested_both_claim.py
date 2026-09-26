@@ -1,22 +1,3 @@
-"""Check 5 -- a path claimed by BOTH this session and a live peer must say so.
-
-WHY THIS EXISTS. `compute_scope` computes `my_scope` as `own claims − ⋃(LIVE
-peers' claims ∩ dirty)`, so a path this session genuinely recorded drops out of
-`my_scope` the moment a live peer also claims it, and lands on Check 5's
-foreign-owner arm. That arm's text said the path was "staged but not in this
-session's touch list" -- false in this case -- and offered "record it as touched
-first", which cannot work: recording it again puts it right back in the
-subtracted set.
-
-The cost is not cosmetic. Measured live 2026-08-30 (`state/bug-backlog/
-2026-08-30-the-warm-engine-touch-records-a-session-9c5555208afd.yaml`): after
-the warm engine misfiled three of a close's own artifacts under a peer, the
-author appended correct entries for all three and the deny was unchanged. A
-remedy that visibly does not work teaches its reader that it does not work, and
-the reader unstaged and abandoned the files. Both assertions below are about
-that: the message must name the contention, and must NOT print the remedy that
-cannot clear it.
-"""
 
 from __future__ import annotations
 
@@ -30,8 +11,6 @@ from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_creationflags
 
-# Spawns a real external `git` process; runs at cadence gates, not per-commit.
-# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -54,9 +33,6 @@ def _init_repo(tmp_path: Path) -> str:
 
 
 def _push_started_at_to_future(root: str, sid: str) -> None:
-    """Same helper as `test_check5_deny_by_default.py`: keeps `compute_scope`'s
-    mtime fallback from auto-adopting a freshly-staged file, so every claim in
-    this suite is explicit."""
     sdir = Path(root) / ".git" / "coordinator-sessions" / sid
     future = datetime.fromtimestamp(
         datetime.now(timezone.utc).timestamp() + 3600, tz=timezone.utc
@@ -81,11 +57,6 @@ def _claim(root: str, sid: str, path: str) -> None:
 
 
 def _stage_contested(tmp_path: Path, root: str, sid: str, peer_sid: str) -> None:
-    """`sub/contested.txt` claimed by BOTH sessions -- the misattribution shape.
-
-    `sub/mine.txt` is uncontested and present so the commit is a normal
-    directory-pathspec commit rather than a single-path one.
-    """
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub" / "mine.txt").write_text("mine\n", encoding="utf-8")
     (tmp_path / "sub" / "contested.txt").write_text("mine too\n", encoding="utf-8")
@@ -117,7 +88,6 @@ class TestContestedBothClaim:
         assert "not in this session's touch list" not in reason, reason
 
     def test_deny_does_not_offer_the_remedy_that_cannot_clear_it(self, tmp_path):
-        """The specific sentence the live instance followed and abandoned."""
         root = _init_repo(tmp_path)
         sid, peer_sid = "my-sess", "peer-sess"
         assert core.init(sid, cwd=root)
@@ -134,8 +104,6 @@ class TestContestedBothClaim:
         assert "record it as touched first" not in reason, reason
 
     def test_unclaimed_foreign_path_keeps_the_original_message(self, tmp_path):
-        """Negative control: a path this session never claimed is still rendered
-        as absent-from-the-touch-list, with its own (working) remedy intact."""
         root = _init_repo(tmp_path)
         sid, peer_sid = "my-sess", "peer-sess"
         assert core.init(sid, cwd=root)

@@ -1,12 +1,3 @@
-"""Tests for ``coordinator_core.roadmap.pm_gate_signal`` -- detect-pm-gate-signal.
-
-Covers: the vendored fragment loads and stays byte-identical to the DoE
-source (skipped, not failed, when the sibling clone is unresolvable on this
-machine -- the pin is a drift guard, not a hard cross-repo dependency for
-CI); the three detection legs and the ``named-stakeholder`` judgment floor;
-the ``blocked_by`` exclusion and the deprecated ``gate_dependency`` scan; and
-the advisory, non-exhaustive shape of ``detect()``'s return value.
-"""
 
 from __future__ import annotations
 
@@ -125,12 +116,6 @@ def test_named_stakeholder_floor_surfaces_a_judgment_point_not_a_decision(
 def test_named_stakeholder_floor_terms_carry_no_peer_team_or_person_identity(
     fragment: dict,
 ) -> None:
-    """AC20's structural pin, mirroring DoE's ``test_supplied_fragments.py``:
-    asserts the floor's TERM LIST ITSELF carries no peer-team or person
-    identity, not just that one example string fails to fire. The behavioral
-    test above pins a single non-firing example; this pins the invariant it
-    relies on, so an upstream fragment edit that slips e.g. "coordinator-em"
-    into the floor fails here instead of passing silently."""
     leg = next(
         leg for leg in fragment["legs"] if leg["id"] == "named-stakeholder"
     )

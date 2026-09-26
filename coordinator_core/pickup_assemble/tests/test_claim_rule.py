@@ -48,10 +48,6 @@ pytestmark = [
 
 @pytest.fixture(autouse=True)
 def _reset_registry_snapshot_cache():
-    # Same cross-file leak guard as test_brief_claim_lease.py (Review:
-    # coordinator:code-reviewer P2) — this file exercises claim_holder_live
-    # via a real (monkeypatched) liveness module, which routes through
-    # liveness's per-process registry-snapshot memoization.
     liveness_mod._registry_snapshot_cache = None
     yield
     liveness_mod._registry_snapshot_cache = None
@@ -92,9 +88,6 @@ def _write_claim(
     *,
     age_minutes: int | None,
 ) -> Path:
-    """Hand-build a claim dir naming `holder_sid`. `age_minutes=None` omits
-    `claimed_at` entirely — one of the "no real baton" branches proving age
-    is not consulted even when unreadable."""
     cdir = _claim_dir(repo, class_, basename)
     cdir.mkdir(parents=True, exist_ok=True)
     (cdir / "pid").write_text("4242\n", encoding="utf-8")
@@ -114,8 +107,6 @@ def _write_claim(
 
 @pytest.fixture
 def holder_reads_live(monkeypatch):
-    """Force `compute_claim_grant`'s liveness resolution — R4's ONE registry
-    check — without a real second process/session."""
 
     def _set(value: bool | Exception) -> None:
         def _fake(*_a, **_k):
@@ -130,8 +121,6 @@ def holder_reads_live(monkeypatch):
 
 @pytest.fixture
 def as_self(monkeypatch):
-    """Make `compute_claim_grant`'s self-identity check resolve True — the
-    claimant IS this session, orthogonal to the R4 three-outcome table."""
 
     def _set(value: bool) -> None:
         monkeypatch.setattr(liveness_mod, "claim_held_by_me", lambda *a, **k: value)
@@ -140,7 +129,6 @@ def as_self(monkeypatch):
 
 
 def test_no_claim_dir_grants(tmp_path, as_self):
-    """Row 1: no claimant at all -> GRANT."""
     as_self(False)
     repo = tmp_path / "repo"
     _init_repo(repo)
@@ -156,8 +144,6 @@ def test_no_claim_dir_grants(tmp_path, as_self):
 
 
 def test_claim_dir_with_no_recorded_session_id_grants(tmp_path, as_self):
-    """Row 1 variant: a claim dir exists but names no holder -> still
-    "no claimant", GRANT."""
     as_self(False)
     repo = tmp_path / "repo"
     _init_repo(repo)
@@ -175,8 +161,6 @@ def test_claim_dir_with_no_recorded_session_id_grants(tmp_path, as_self):
 
 
 def test_claimant_is_self_grants_held_by_self(tmp_path, as_self):
-    """Identity pre-check: the recorded claimant IS this session -> GRANT,
-    `held_by_self: True` — a session can never contend with itself."""
     as_self(True)
     repo = tmp_path / "repo"
     _init_repo(repo)
@@ -236,10 +220,6 @@ def test_not_live_peer_claimant_is_granted_with_warning(
 def test_unresolvable_liveness_is_granted_with_warning(
     tmp_path, as_self, holder_reads_live
 ):
-    """Row 3 variant: liveness could not be resolved at all (an
-    OSError/ValueError from the liveness check) collapses to the SAME
-    outcome as not-live — an evidence gap is never treated as proof of
-    liveness."""
     as_self(False)
     holder_reads_live(OSError("meta.json unreadable"))
     repo = tmp_path / "repo"
@@ -276,9 +256,6 @@ def test_live_but_ancient_claim_still_denied(tmp_path, as_self, holder_reads_liv
 def test_claimant_with_no_claimed_at_resolves_on_liveness_only(
     tmp_path, as_self, holder_reads_live
 ):
-    """No-real-baton exercise (2/2): a claim dir with no `claimed_at` file
-    at all (unreadable/missing age) still resolves purely off liveness —
-    never treated as evidence of staleness or of freshness."""
     as_self(False)
     holder_reads_live(False)
     repo = tmp_path / "repo"

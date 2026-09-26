@@ -18,14 +18,7 @@ import pytest
 from coordinator_core import environment as env_mod
 
 
-# ---------------------------------------------------------------------------
-# 1. Env per call.
-# ---------------------------------------------------------------------------
-
-
 def test_env_is_read_per_call_not_from_module_state():
-    """The whole point: two callers in ONE process, different env, different
-    answers. A module-scope cache makes this impossible, silently."""
     remote = {"CLAUDE_CODE_ENTRYPOINT": "remote"}
     workstation = {"CLAUDECODE": "1", "COORDINATOR_SETTINGS_HOME": "/nonexistent-home"}
 
@@ -35,8 +28,6 @@ def test_env_is_read_per_call_not_from_module_state():
 
 
 def test_override_arrives_through_the_passed_env(monkeypatch):
-    """The override must be reachable from a per-call env — under a warm
-    daemon the caller's environ is not the daemon's."""
     monkeypatch.delenv("COORDINATOR_CAP_FLEET_PRESENT", raising=False)
     forced = env_mod.capability(
         "fleet_present", {"CLAUDE_CODE_ENTRYPOINT": "remote", "COORDINATOR_CAP_FLEET_PRESENT": "1"}
@@ -54,8 +45,6 @@ def test_a_typo_in_an_override_is_ignored_not_read_as_false():
 
 
 def test_engine_installed_accepts_more_than_one_witness(tmp_path):
-    """The earlier probe stat-ed `settings.json` alone and read "not
-    installed" on a box whose settings home held `machine-local/` and more."""
     home = tmp_path / "settings-home"
     (home / "machine-local").mkdir(parents=True)
     cap = env_mod.capability("engine_installed", {"COORDINATOR_SETTINGS_HOME": str(home)})
@@ -70,8 +59,6 @@ def test_engine_not_installed_when_no_witness_is_present(tmp_path):
 
 
 def test_durable_repo_probes_for_a_real_remote(tmp_path, monkeypatch):
-    """It returned a hardcoded True with no consumer. It now answers a
-    question, and the stand-down audit leg consults it."""
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     (repo / ".git" / "config").write_text("[core]\n", encoding="utf-8")
@@ -84,14 +71,7 @@ def test_durable_repo_probes_for_a_real_remote(tmp_path, monkeypatch):
     assert env_mod.capability("durable_repo", {}).value is True
 
 
-# ---------------------------------------------------------------------------
-# 3. Fail open, and cost.
-# ---------------------------------------------------------------------------
-
-
 def test_a_raising_probe_degrades_permissive_without_a_caller_handler(monkeypatch):
-    """The module's own promise, not the consumers'. A third consumer that
-    trusts the docstring and omits its own try/except must still be safe."""
     def boom(env, **kw):
         raise RuntimeError("probe exploded")
 
@@ -107,8 +87,6 @@ def test_unknown_capability_is_permissive_not_an_exception():
 
 
 def test_asking_for_one_capability_never_runs_another(monkeypatch, tmp_path):
-    """Laziness is a cost property: `fleet_present` is on the PreToolUse hot
-    path and must never trigger `durable_repo`'s file-reading probe."""
     ran = []
     real = env_mod._PROBES["durable_repo"]
 
@@ -133,7 +111,6 @@ def test_probing_spawns_no_subprocess(monkeypatch):
 
 
 def test_capabilities_report_is_immutable():
-    """It is a shared view; a caller mutating it must not corrupt anyone."""
     caps = env_mod.capabilities({})
     with pytest.raises(TypeError):
         caps["fleet_present"] = None

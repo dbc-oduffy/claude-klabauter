@@ -1,14 +1,3 @@
-"""The unresolved review-scale arm reports `None`, not a measured `False`.
-
-`_unresolved` carried `partition_mandatory=False` on the very arm whose own
-reason says "row 4 cannot be ruled out". A caller reading that field alone —
-and it is the field callers read alone — could not tell a genuinely small diff
-from an unmeasured 976-LOC/26-commit one, and the arm exits 0. Fail-open on a
-gate `workstream-complete`'s SKILL.md calls mandatory.
-
-Origin: cross-repo/inbox/2026-08-31-example-retrieval-repo-ue-addon-em-review-scale-gate-
-fails-open.md.
-"""
 
 from coordinator_core.workstream_complete import directives_review
 

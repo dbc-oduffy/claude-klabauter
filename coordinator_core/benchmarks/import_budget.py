@@ -63,12 +63,6 @@ _PROBE_TIMEOUT_S = 30
 
 
 class ImportCost(NamedTuple):
-    """One fresh-interpreter measurement of an entrypoint's import cost.
-
-    `own_module_count` is the `coordinator_core.*` share of `module_count`
-    (`module_count - own_module_count` is therefore the stdlib/third-party share).
-    `None` only when parsing a two-field line from an older probe.
-    """
 
     entrypoint: str
     module_count: int
@@ -77,7 +71,6 @@ class ImportCost(NamedTuple):
 
 
 def load_manifest(manifest_path: Path = _MANIFEST_PATH) -> dict:
-    """Load and parse the import-budget manifest JSON document from disk."""
     import json
 
     with open(manifest_path, "r", encoding="utf-8") as fh:
@@ -85,11 +78,6 @@ def load_manifest(manifest_path: Path = _MANIFEST_PATH) -> dict:
 
 
 def resolve_ceiling(entrypoint: str, manifest: Optional[dict] = None) -> int:
-    """Resolve the module-count ceiling for `entrypoint`.
-
-    Raises `KeyError` if no manifest entry exists for the entrypoint -- fail loud rather than
-    silently skipping the assertion.
-    """
     if manifest is None:
         manifest = load_manifest()
     entrypoints = manifest.get("entrypoints", {})
@@ -143,12 +131,6 @@ def measure_import_subprocess(entrypoint: str, python: Optional[str] = None) -> 
 
 
 def resolve_baseline_python(entrypoint: str, manifest: Optional[dict] = None) -> Optional[str]:
-    """Resolve the interpreter version an entrypoint's baseline was measured under.
-
-    Returns `None` for an entry that predates the field (2026-08-17). Missing is a
-    diagnostic gap, not a gate failure -- `resolve_ceiling` stays the sole gating
-    resolver, so a `None` here can never turn a green ceiling red.
-    """
     if manifest is None:
         manifest = load_manifest()
     entry = manifest.get("entrypoints", {}).get(entrypoint)
@@ -158,23 +140,10 @@ def resolve_baseline_python(entrypoint: str, manifest: Optional[dict] = None) ->
 
 
 def running_python_version() -> str:
-    """This interpreter's `<major>.<minor>.<micro>`, the shape recorded in the manifest."""
     return ".".join(str(part) for part in sys.version_info[:3])
 
 
 def interpreter_drift_note(entrypoint: str, manifest: Optional[dict] = None) -> str:
-    """Render the interpreter-drift clause for a ceiling-breach message, or ''.
-
-    Why this exists: the breach message used to assert "a failure here means a real
-    import-cost regrowth, not a tight-pin false positive". On 2026-08-17 that was
-    false and cost an investigation -- `coordinator_core.ipc` breached 56 with no
-    code change, because Python 3.14 routed `bz2`/`lzma` onto the new `compression`
-    package that `shutil` -> `tempfile` drags in, growing the stdlib graph under a
-    baseline frozen on an earlier interpreter. A module-count ceiling is
-    interpreter-version-sensitive by construction; the gate stays a hard block
-    (a stdlib module costs the same Windows per-file AV scan as one of ours), but it
-    must not name only one of the two possible causes.
-    """
     baseline_python = resolve_baseline_python(entrypoint, manifest=manifest)
     running = running_python_version()
     if baseline_python is None:

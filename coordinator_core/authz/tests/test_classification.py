@@ -19,11 +19,6 @@ from coordinator_core.authz.classification import OpClass, classify
 
 
 class TestNudgeAutonomousAskuserquestion:
-    """C2 — the first hot-path reconstructable unit built against
-    docs/reference/warm-hook-migration.md. Routability (the `hooks.` prefix)
-    and authz classification are independent obligations (staff-eng finding
-    6) — this test asserts the classification half explicitly, since no
-    routing test ever calls `_is_compute_only` for a prefixed op."""
 
     def test_classifies_compute_only(self) -> None:
         assert classify("hooks.nudge_autonomous_askuserquestion") is OpClass.COMPUTE_ONLY

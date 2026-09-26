@@ -73,58 +73,24 @@ from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.win_portability import no_console_creationflags
 
-GENERATES = []  # writes only <settings-home>/machine-local/.doe-root, outside any git tree
+GENERATES = []
 
-_PROG = "gen-doe-root-pointer.py"  # literal program-name prefix; this module IS the implementation now (not a bash oracle to byte-match)
+_PROG = "gen-doe-root-pointer.py"
 
-#: Operator kill switch for real-machine-state mutation. Spelled here rather than
-#: imported from `install.substrate` (its definition site) on purpose: this module
-#: is on the install hot path and importing `substrate` for one string would drag
-#: its whole import cost in — measured with `python3 -X importtime` on 2026-08-26:
-#: this module 14.97ms cumulative, `install.substrate` 24.94ms, so the import would
-#: cost more than the module it is added to. `test_gen_doe_root_pointer.py` pins the
-#: two spellings equal, so the duplication cannot drift silently.
 _MUTATION_DISABLE_ENV = "COORDINATOR_DISABLE_MACHINE_MUTATION"
 
-#: Opt back IN to writing the operator's live pointer from under pytest.
 _LIVE_WRITE_ALLOW_ENV = "COORDINATOR_ALLOW_LIVE_DOE_ROOT_WRITE"
 
 
 def _resolve_machine_local() -> Optional[str]:
-    """Locate the `machine-local` CLI -- PATH, then `<settings-home>/bin`.
-    See `_settings_home.resolve_machine_local_cli` for why PATH alone is not
-    enough on the box that just ran the install."""
     return resolve_machine_local_cli()
 
 
 def _resolve_doe_root() -> "tuple[Optional[str], int]":
-    """Resolve the DoE clone root. Returns (root_or_None, exit_code_on_failure).
-
-    On success returns (root, 0). On failure returns (None, 1) after printing a
-    stderr diagnostic + remediation hint, mirroring the bash oracle's two-tier
-    resolution (env override, then machine-local registry).
-    """
-    # Tier 1: explicit env override (install sandbox tests / operator pin).
-    # Normalized like tier 2: an override exported by a Git-Bash caller carries
-    # the MSYS mount form (`/x/DoE-claude`), and the pointer this writes is read
-    # almost exclusively by native-Windows node / py.exe processes, which resolve
-    # a leading `/x/` as drive-relative `X:\x\...`. Tier 2 is normalized upstream
-    # by `machine-local get`'s own repos.* branch; without this the two tiers
-    # would disagree on path form for the same clone. No-op off Windows.
     env_override = os.environ.get("REPO_DOE_CLAUDE", "")
     if env_override:
         return native_path_form(env_override), 0
 
-    # Tier 2: machine-local registry. Tries `registry_get` first, in-process
-    # and zero-spawn (see `coordinator_core.machine_resolver.registry_get`),
-    # then falls back to the `machine-local get repos.doe_claude` CLI on a
-    # miss -- `registry_get` alone doesn't reach the CLI's autodiscovery/
-    # `path-exceptions.toml` rungs, and this repo's own `.coordinator-dev-repo`
-    # marker proves autodiscovery is live for repos.doe_claude on a real
-    # machine (2026-08-16 review finding). The fallback also restores this
-    # module's own negative-spec above ("shells out to the `machine-local`
-    # CLI... so the registry-merge logic has exactly one implementation"),
-    # which the zero-spawn-only conversion had silently broken.
     resolved_raw = _registry_get("repos.doe_claude") or ""
     if resolved_raw:
         return native_path_form(resolved_raw), 0
@@ -209,22 +175,10 @@ def _pointer_file() -> str:
 
 
 def _seed_plugin_mirror_source_path(doe_root: str) -> None:
-    """Dual-seed ``plugin.mirrors.coordinator-claude.source_path`` from the same
-    resolved ``doe_root`` value the pointer file was just written from — the two
-    must never drift apart (see module docstring's callers / install.md step
-    3.5a.1). Absent-only, idempotent; prints its own ``plugin_mirror_source_path:``
-    contract row. Silent-skip (with a row) if ``machine-local`` is not on PATH —
-    this is a best-effort convenience seed, not a hard requirement of writing the
-    pointer itself.
-    """
     ml_bin = _resolve_machine_local()
     if ml_bin is None:
         print("plugin_mirror_source_path: skipped (machine-local not found)")
         return
-    # Read tier: in-process (zero-spawn -- see
-    # `coordinator_core.machine_resolver.registry_get`) rather than shelling
-    # out to `machine-local get`. The write tier below still shells out --
-    # no in-process write substitute exists.
     if _registry_get("plugin.mirrors.coordinator-claude.source_path"):
         print("plugin_mirror_source_path: ready (no-op)")
         return
@@ -362,7 +316,6 @@ def main(argv: List[str]) -> int:
             print("  --graceful-skip-unresolved  Exit 0 with a 'skipped' row (not fail-loud) when", file=sys.stderr)
             print("                              repos.doe_claude cannot be resolved on the live path.", file=sys.stderr)
             return 0
-        # else: silently ignored -- see docstring.
 
     doe_root, rc = _resolve_doe_root()
     if doe_root is None:
@@ -375,7 +328,6 @@ def main(argv: List[str]) -> int:
             return 0
         return rc
 
-    # Strip any trailing slash for a canonical single-line value.
     doe_root = doe_root.rstrip("/")
 
     if not os.path.isdir(doe_root):
@@ -388,11 +340,6 @@ def main(argv: List[str]) -> int:
         print("doe_root_pointer: failed (see stderr for gen-doe-root-pointer.py output)")
         return 1
 
-    # Two live layouts (overengineering-reviewer finding 3 — was a fourth
-    # hand-expanded copy of content_root_for; the pointer write itself is the
-    # only genuinely local fact here):
-    #   <doe_root>/coordinator/                   private authoring tree
-    #   <doe_root>/.claude-plugin/plugin.json      published flat mirror
     if content_root_for(doe_root) is None:
         print(
             f'{_PROG}: no coordinator-claude content found under "{doe_root}" '
@@ -423,9 +370,6 @@ def main(argv: List[str]) -> int:
                 print(f"doe_root_pointer: check: {pointer_file} up to date (no-op)")
                 return 0
 
-        # code-reviewer (2026-07-17 Finding 1, ported from gen_claude_doe_launcher.py:247-249)
-        # — hardcoded POSIX "/tmp" fallback crashed --check-only on real Windows (no TMPDIR there).
-        # tempfile.gettempdir() resolves TMPDIR/TEMP/TMP per-platform.
         fd, tmp_path = tempfile.mkstemp(prefix="gen-doe-root-pointer.", dir=tempfile.gettempdir())
         try:
             with os.fdopen(fd, "w", newline="\n") as fh:
@@ -457,7 +401,6 @@ def main(argv: List[str]) -> int:
                 print(f"skip: main: os.remove(tmp_path) failed: {sys.exc_info()[1]}", file=sys.stderr)
                 pass
 
-    # Live write path: idempotent -- skip if the pointer already holds the correct value.
     if os.path.isfile(pointer_file):
         try:
             with open(pointer_file, encoding="utf-8") as fh:
@@ -465,7 +408,6 @@ def main(argv: List[str]) -> int:
         except OSError:
             existing = ""
         if existing == doe_root:
-            # Already correct -- no-op (no mtime churn, no race).
             print("doe_root_pointer: ready (no-op)")
             _seed_plugin_mirror_source_path(doe_root)
             return 0
@@ -474,12 +416,7 @@ def main(argv: List[str]) -> int:
     if refusal:
         print(f"{_PROG}: refusing to write {pointer_file}: {refusal}", file=sys.stderr)
         if not os.environ.get("PYTEST_CURRENT_TEST"):
-            # A REAL install reaching this is nearly always an accident — an
             # ambient COORDINATOR_DISABLE_MACHINE_MUTATION left exported by a
-            # prior debug session or a wrapping harness. `run_required_py` treats
-            # rc 0 as success, so a one-line stderr note inside a "required"
-            # phase is exactly the thing an operator scrolls past. Say it loudly
-            # on STDOUT, where the Phase-7 status table is read.
             print(
                 f"{_PROG}: WARNING — the .doe-root pointer was NOT written. "
                 f"Unset {_MUTATION_DISABLE_ENV} and re-run if that was not "
@@ -492,14 +429,11 @@ def main(argv: List[str]) -> int:
     if pointer_dir and not os.path.isdir(pointer_dir):
         os.makedirs(pointer_dir, exist_ok=True)
 
-    # Atomic write: write to a sibling temp file then rename into place.
     fd, tmp_live = tempfile.mkstemp(prefix=".doe-root.tmp.", dir=pointer_dir or ".")
     try:
         with os.fdopen(fd, "w", newline="\n") as fh:
             fh.write(doe_root + "\n")
         os.replace(tmp_live, pointer_file)
-        # DR-276: declared AFTER the write lands, at the FINAL destination,
-        # never the discarded tmp_live.
         declare_write(pointer_file)
     except OSError:
         try:

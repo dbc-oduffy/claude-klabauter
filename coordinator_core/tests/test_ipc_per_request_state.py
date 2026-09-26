@@ -76,10 +76,6 @@ class _RegistryScope:
                 _REGISTRY[name] = old
 
 
-# ---------------------------------------------------------------------------
-# Defect 1 — declared-writes isolation under overlapping dispatch
-# ---------------------------------------------------------------------------
-
 def test_overlapping_dispatch_declared_writes_do_not_cross_contaminate():
     """Two concurrently-running dispatches each see only their own declared
     writes — the misattributed-write-claim failure C11 names.
@@ -158,9 +154,7 @@ def test_declared_writes_var_reset_after_dispatch_completes():
     )
 
 
-# ---------------------------------------------------------------------------
 # Defect 2 — DISPATCH_TIMEOUT_SECS resolved per-request, not at import
-# ---------------------------------------------------------------------------
 
 def test_resolve_dispatch_timeout_secs_reads_env_live(monkeypatch):
     """`_resolve_dispatch_timeout_secs()` picks up a live env-var change on
@@ -204,9 +198,7 @@ def test_resolve_dispatch_timeout_secs_ignores_unparsable_env(monkeypatch):
     assert ipc._resolve_dispatch_timeout_secs() == ipc.DISPATCH_TIMEOUT_SECS
 
 
-# ---------------------------------------------------------------------------
 # Defect 2, continued — _OP_TIMEOUT_OVERRIDES stays live after the change
-# ---------------------------------------------------------------------------
 
 def test_op_timeout_overrides_still_resolve_after_per_request_change(monkeypatch):
     """An `_OP_TIMEOUT_OVERRIDES` row keeps resolving to its table value
@@ -225,27 +217,9 @@ def test_op_timeout_overrides_still_resolve_after_per_request_change(monkeypatch
     monkeypatch.setitem(ipc._OP_TIMEOUT_OVERRIDES, "test.widened", 42.0)
     monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", "5")
     assert ipc._timeout_for("test.widened") == 42.0
-    # A method NOT in the override table still tracks the live global knob.
     assert ipc._timeout_for("ping") == 5.0
 
 
-# ---------------------------------------------------------------------------
-# Dispatch-timeout ratchet — every override is monotonically non-increasing.
-# docs/wiki/cost-budgets-and-the-kill-disposition.md
-# ---------------------------------------------------------------------------
-
-# Each row's high-water mark. A timeout may be LOWERED freely (that is the
-# direction this repo wants and no test should stand in its way); raising one
-# requires editing this table, which is the point — the edit is the argument,
-# made in a diff a reviewer sees, rather than a one-character change to a dict
-# literal that reads as routine tuning.
-#
-# `ceremony.scoped_git_commit`'s 150.0s row lived here until 2026-08-21, when the
-# ceremony budget (DR-348) revoked it outright rather than lowering it — a
-# ceremony op's ceiling is no longer this table's business at all. That budget
-# owns every `ceremony.*` method by prefix, present or future, and ratchets on
-# its own schedule; see `coordinator_core/tests/test_ceremony_budget_ratchet.py`.
-# This table now governs only non-ceremony override rows.
 _TIMEOUT_HIGH_WATER_SECS: dict = {}
 
 
@@ -291,27 +265,11 @@ def test_timeout_high_water_table_covers_every_override():
     )
 
 
-# ---------------------------------------------------------------------------
-# The global knob is narrow-only — the half of the ratchet that was vacuous.
-#
 # The two ratchet tests above sweep `_OP_TIMEOUT_OVERRIDES`, which is empty and
-# has been since DEC-2. They pass by iterating nothing. That is not a latent
-# guard waiting for a row: it is a guard aimed at the surface nobody uses, while
 # the surface everybody uses -- `COORDINATOR_DISPATCH_TIMEOUT_SECS`, re-read live
-# on every request, effective with no restart, settable from any sibling repo --
 # carried no ceiling at all. `COORDINATOR_DISPATCH_TIMEOUT_SECS=420` was obeyed
-# immediately, and the ratchet above had nothing to say about it.
-#
-# The tests below put the knob itself under the ratchet. Same rule as every other
-# budget here: it may be LOWERED freely, and raising it is an edit to a pinned
-# literal that a reviewer reads as the argument it is.
-# ---------------------------------------------------------------------------
 
-#: The built-in default's high-water mark, as an independent second literal --
 #: deliberately NOT `ipc.DISPATCH_TIMEOUT_SECS`, since importing the value under
-#: test would make this file agree with any number whatsoever. Lowering the engine
-#: default below this is permitted and needs no edit here; raising it above 30s
-#: fails the suite.
 _GLOBAL_TIMEOUT_HIGH_WATER_SECS = 30.0
 
 

@@ -1,7 +1,3 @@
-"""Tests for `session.record_homes` -- path shapes and the read-side
-pattern only, per its own negative-spec (owns paths, never creates a
-directory, never does import-time I/O).
-"""
 
 from __future__ import annotations
 
@@ -20,11 +16,6 @@ _ALLOWLIST_PATH = os.path.join(
     _REPO_ROOT_ON_DISK, "docs", "reference", "state-corpus-allowlist.txt"
 )
 
-#: The machinery relocation set `machinery_paths.py` already owns and the
-#: allowlist itself deliberately excludes -- same set
-#: `test_machinery_paths.test_every_tracked_state_first_segment_is_on_the_allowlist`
-#: carries. `record_homes.HOMES` must never declare one of these: it would
-#: be a second owner for a home `machinery_paths.py` already has.
 _MACHINERY_RELOCATION_SET = {
     "subagent-share",
     "review-trail",
@@ -73,7 +64,7 @@ def test_module_never_creates_a_directory(tmp_path):
         "state\\handoffs\\foo.md",
         ".coordinator-local/handoffs/foo.md",
         ".coordinator-local\\handoffs\\foo.md",
-        "X:\\repo\\state\\handoffs\\foo.md",  # abs-path-ok: test fixture, not a real host path
+        "X:\\repo\\state\\handoffs\\foo.md",
         "/repo/state/handoffs/foo.md",
     ],
 )
@@ -102,12 +93,6 @@ def test_home_pattern_raises_key_error_for_undeclared_kind():
 
 
 def test_every_declared_home_appears_on_the_allowlist():
-    """The write side of the agreement: every `HOMES` segment must be a
-    line the allowlist already names. A segment declared here that the
-    allowlist does not name is either a typo in `record_homes.py` or a new
-    kind that has not actually landed on disk yet -- either way, this
-    module must not silently win over the allowlist.
-    """
     allowlist = _read_allowlist()
     missing = sorted(set(record_homes.HOMES) - allowlist)
     assert not missing, (
@@ -118,11 +103,6 @@ def test_every_declared_home_appears_on_the_allowlist():
 
 
 def test_no_declared_home_is_a_machinery_relocation_bucket():
-    """The converse of the exclusion this module's own docstring states:
-    `HOMES` must never declare a segment `machinery_paths.py` already
-    owns. A segment appearing in both would be two owners for one home,
-    exactly the ambiguity this plan exists to remove.
-    """
     overlap = sorted(set(record_homes.HOMES) & _MACHINERY_RELOCATION_SET)
     assert not overlap, (
         f"record_homes.HOMES declares machinery-relocation segment(s) "

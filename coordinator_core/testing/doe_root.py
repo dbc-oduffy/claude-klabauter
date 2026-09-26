@@ -67,10 +67,5 @@ def resolve_doe_root() -> str:
 
 
 def doe_root_and_present() -> tuple[str, bool]:
-    """Convenience pairing for the common `skipif(not present)` call-site shape.
-
-    Returns `(root, is_present)` where `is_present` is True iff `root` is
-    non-empty AND resolves to an existing directory on disk.
-    """
     root = resolve_doe_root()
     return root, bool(root) and os.path.isdir(root)

@@ -48,12 +48,10 @@ class TestHardDenyShortCircuitStopsImporting:
     def test_guard_past_the_winning_hard_deny_is_never_imported(self, monkeypatch):
         # block_illegal_filename (PRIORITY 20) fires before
         # block_confined_agent_write (PRIORITY 48) in real PRIORITY order --
-        # pick two real, already-shipped guard modules so this exercises the
-        # actual AST metadata scan, not a fake _Guard.
         _unload("block_illegal_filename")
         _unload("block_confined_agent_write")
 
-        payload = _payload(file_path="/repo/bad:name.txt")  # NTFS-illegal ':' char
+        payload = _payload(file_path="/repo/bad:name.txt")
         out = engine.evaluate(payload)
 
         assert out is not None, "expected block_illegal_filename to fire"

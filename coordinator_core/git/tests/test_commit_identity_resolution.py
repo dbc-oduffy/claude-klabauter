@@ -39,11 +39,6 @@ _ENV_KEYS = (
 
 @pytest.fixture
 def no_env_identity(monkeypatch):
-    """The shape a cloud session actually runs: no `GIT_*` identity at all.
-
-    Also clears the per-process memo on the way in AND out, so this fixture
-    cannot be decided by whichever test resolved identity first.
-    """
     for key in _ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
     commit_mod._CONFIG_IDENTITY_MEMO.clear()
@@ -53,7 +48,6 @@ def no_env_identity(monkeypatch):
 
 @pytest.fixture
 def isolated_config(tmp_path, monkeypatch, no_env_identity):
-    """A git-config world with nothing in it but what a test writes."""
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "global-gitconfig"))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
@@ -78,18 +72,9 @@ def _popen_spy(monkeypatch):
     return seen
 
 
-# ---------------------------------------------------------------------------
-# The cost invariant -- the one the existing zero-spawn file cannot see.
-# ---------------------------------------------------------------------------
-
-
 def test_identity_resolves_with_zero_spawns_when_env_is_absent(
     isolated_config, monkeypatch
 ):
-    """The regression that matters. Reading identity must not put a process
-    on the commit path, and the env-var short circuit must not be what makes
-    that true -- so the env vars are gone before this runs.
-    """
     _write(isolated_config / "global-gitconfig", "[user]\n\tname = Cfg\n\temail = c@x\n")
     seen = _popen_spy(monkeypatch)
 
@@ -105,13 +90,7 @@ def test_identity_is_memoized_across_repeated_resolves(isolated_config):
     assert len(commit_mod._CONFIG_IDENTITY_MEMO) == 1
 
 
-# ---------------------------------------------------------------------------
-# Precedence.
-# ---------------------------------------------------------------------------
-
-
 def test_env_outranks_config(isolated_config, monkeypatch):
-    """git's own precedence: an explicit env override beats config."""
     _write(isolated_config / "global-gitconfig", "[user]\n\tname = Cfg\n\temail = c@x\n")
     monkeypatch.setenv("GIT_COMMITTER_NAME", "EnvName")
     monkeypatch.setenv("GIT_COMMITTER_EMAIL", "env@x")
@@ -124,13 +103,10 @@ def test_repo_local_config_outranks_global(isolated_config):
     repo = isolated_config / "repo"
     _write(repo / ".git" / "config", "[user]\n\temail = local@x\n")
     commit_mod._CONFIG_IDENTITY_MEMO.clear()
-    # Only email is overridden locally; the name still comes from global.
     assert commit_mod._identity(repo) == ("Global", "local@x")
 
 
 def test_the_two_fields_resolve_independently(isolated_config, monkeypatch):
-    """A config carrying only one field must contribute it, not be discarded
-    because its partner is missing."""
     _write(isolated_config / "global-gitconfig", "[user]\n\temail = only@x\n")
     monkeypatch.setenv("GIT_COMMITTER_NAME", "FromEnv")
     commit_mod._CONFIG_IDENTITY_MEMO.clear()
@@ -138,16 +114,7 @@ def test_the_two_fields_resolve_independently(isolated_config, monkeypatch):
 
 
 def test_synthetic_fallback_survives_a_world_with_no_identity(isolated_config):
-    """Reaching the synthetic rung must still commit rather than refuse --
-    but it now means identity is genuinely absent, not merely configured
-    somewhere the function did not look.
-    """
     assert commit_mod._identity(None) == ("coordinator", "coordinator@local")
-
-
-# ---------------------------------------------------------------------------
-# Parsing.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -174,7 +141,6 @@ def test_user_section_parsing(tmp_path, body, expected):
 
 
 def test_a_later_section_ends_the_user_section(tmp_path):
-    """`name` under `[core]` after `[user]` must not be read as the user's."""
     path = tmp_path / "cfg"
     path.write_text(
         "[user]\n\temail = u@x\n[core]\n\tname = CoreName\n", encoding="utf-8"
@@ -183,17 +149,11 @@ def test_a_later_section_ends_the_user_section(tmp_path):
 
 
 def test_an_unreadable_config_is_none_not_an_exception(tmp_path):
-    """An unreadable config must never be a reason to refuse a commit."""
     assert commit_mod._user_section_identity(tmp_path / "does-not-exist") == (None, None)
     assert commit_mod._user_section_identity(tmp_path) == (None, None)
 
 
 def test_includes_are_not_followed_and_fall_through(isolated_config):
-    """Deliberate omission, pinned so nobody "fixes" it into a wrong guess:
-    following `includeIf` means reimplementing git's conditional-include
-    matching on a commit hot path, where getting it subtly wrong stamps a
-    WRONG identity instead of falling through to the visible synthetic one.
-    """
     included = isolated_config / "included-config"
     _write(included, "[user]\n\tname = Included\n\temail = inc@x\n")
     _write(

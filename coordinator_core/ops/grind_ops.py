@@ -84,25 +84,14 @@ from coordinator_core.ceremony_common.cli_dispatch import (
 )
 from coordinator_core.ipc import register_op
 
-#: The `coordinator/bin` directory holding the two backing scripts this
-#: module loads — resolved from THIS module's own location, never
-#: `repo_root` and never `Path.cwd()` (see `cli_dispatch.
-#: resolve_cli_script_root`'s own docstring for why: these scripts are
-#: ENGINE-provisioned, not part of the consumer repo this op operates on).
 _SCRIPT_ROOT = resolve_cli_script_root()
 
 _LOADED_MODULES: dict[str, ModuleType] = {}
 
-#: A `verify()` suspect/note line's leading `  {id}: ` prefix — same shape
-#: for both the notes block and the suspects block, so only the suspects
-#: block (after the `VERDICT: FAIL` header) is ever fed through this.
 _SUSPECT_LINE = re.compile(r"^  (\S+):")
 
 
 def _load(script_stem: str) -> ModuleType:
-    """Loads (once, cached) the named `coordinator/bin/<script_stem>.py`
-    module in-process via the shared `cli_dispatch.load_cli_module`
-    primitive — never a subprocess."""
     cached = _LOADED_MODULES.get(script_stem)
     if cached is not None:
         return cached
@@ -113,9 +102,6 @@ def _load(script_stem: str) -> ModuleType:
 
 
 def _resolve_path(repo_root: Optional[Path], value: str) -> Path:
-    """A params-supplied path resolves against the already-resolved
-    `repo_root` when relative, and is used verbatim when already absolute
-    — never against `Path.cwd()` (§ module docstring negative-spec)."""
     path = Path(value)
     if path.is_absolute() or repo_root is None:
         return path
@@ -126,10 +112,6 @@ def _resolve_path(repo_root: Optional[Path], value: str) -> Path:
 def _lessons_extract(
     params: dict[str, Any], repo_root: Optional[Path]
 ) -> dict[str, Any]:
-    """Source op: thin adapter over `extract-lessons.py::extract()`.
-    `shortname` defaults to `lessons_dir`'s parent directory name only
-    because `extract()` itself has no default for it; every other param
-    forwards verbatim."""
     module = _load("extract-lessons")
     lessons_dir = _resolve_path(repo_root, params["lessons_dir"])
     shortname = params.get("shortname") or lessons_dir.parent.name
@@ -158,23 +140,13 @@ def _parse_failing_ids(stderr_text: str) -> list[str]:
 
 
 class VerifyRefusalError(RuntimeError):
-    """Raised when `verify()` cannot ground the routing records at all — a
-    missing/unreadable `manifest` path, or `verify()`'s own exit 2 (bad
-    input: no `*-extracted-full.{yaml,json}` found under a directory
-    manifest). Distinct from a grounding failure (exit 1, `ok=False` with
-    `failing_ids`): a refusal means the check never ran, not that it ran
-    and found fabricated ids."""
+    pass
 
 
 @register_op("lessons.verify_extraction")
 def _lessons_verify_extraction(
     params: dict[str, Any], repo_root: Optional[Path]
 ) -> dict[str, Any]:
-    """Verify op: thin adapter over `extract-lessons.py::verify()`, the
-    DR-404 verify-op wire contract (params `{manifest, records}`, return
-    `{ok, failing_ids}`). `verify()`'s exit 2 (bad input) or a missing
-    `manifest` path raises `VerifyRefusalError` rather than returning
-    `ok=False`. Only stderr is captured (for `failing_ids`)."""
     module = _load("extract-lessons")
     extraction_path = _resolve_path(repo_root, params["manifest"])
     if not extraction_path.exists():
@@ -192,9 +164,6 @@ def _lessons_verify_extraction(
         with redirect_stderr(stderr_buf):
             exit_code = module.verify(extraction_path, routing_path)
     finally:
-        # tmp.close() is idempotent; call
-        # it unconditionally here so a json.dump failure before the happy
-        # path's own close() can't leak an open fd past the unlink below.
         tmp.close()
         Path(tmp.name).unlink(missing_ok=True)
 
@@ -212,11 +181,6 @@ def _lessons_verify_extraction(
 def _doctrine_surface_split_regenerate(
     params: dict[str, Any], repo_root: Optional[Path]
 ) -> dict[str, Any]:
-    """Regenerate op: thin adapter over `generate-doctrine-surface-
-    split.py::regenerate_split_dir()`. Refreshes only `README.md` from
-    `_preamble.md`, never body files. Returns `regenerate_split_dir()`'s
-    own exit contract (0 ok, 1 drift under `check_mode`, 2 not a split
-    directory, 3 dirty bodies refused) unchanged."""
     module = _load("generate-doctrine-surface-split")
     split_dir = _resolve_path(repo_root, params["split_dir"])
     check_mode = bool(params.get("check_mode", False))

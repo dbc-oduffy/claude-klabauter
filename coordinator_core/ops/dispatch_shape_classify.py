@@ -97,23 +97,15 @@ _GIT_TIMEOUT_SECS = 10
 
 _PROG = "classify-dispatch-shape.sh"
 
-# ---------------------------------------------------------------------------
-# F3: executor-class subagent_type filter
-# ---------------------------------------------------------------------------
 _EXECUTOR_EXACT = frozenset({"general-purpose", "coordinator:executor"})
 _EXECUTOR_PREFIX = "feature-dev:"
 
 
 def _is_executor_class(subagent_type: str) -> bool:
-    """Executor-class iff general-purpose OR coordinator:executor OR feature-dev:* (F3)."""
     if subagent_type in _EXECUTOR_EXACT:
         return True
     return subagent_type.startswith(_EXECUTOR_PREFIX)
 
-
-# ---------------------------------------------------------------------------
-# Unit 1 — arg parsing + declared parallel-permitted chunk count
-# ---------------------------------------------------------------------------
 
 def _resolve_plan_file(plan_slug: str, script_dir: Optional[str]) -> Optional[str]:
     """Resolve a plan slug to a docs/plans/ file.
@@ -158,17 +150,10 @@ _DEFERRED_TRUE_RE = re.compile(r"^[ \t]+deferred:[ \t]*true[ \t]*(#.*)?$")
 
 
 def _count_all_fence_opens(plan_text: str) -> int:
-    """Count every ```yaml plan-tasks``` fence-open line anywhere in the document
-    (not scoped to ## Tasks) — mirrors the oracle's unconstrained fence_hits pass,
-    which is how a malformed doc with a second fenced block elsewhere in the file
-    (e.g. under an unrelated heading) is detected as malformed."""
     return sum(1 for line in plan_text.splitlines() if _FENCE_OPEN_RE.match(line))
 
 
 def _extract_tasks_spine_lines(plan_text: str) -> List[str]:
-    """Extract the body lines of the single fenced ```yaml plan-tasks``` block that
-    appears directly under a `## Tasks` heading. Mirrors the oracle's awk state
-    machine (in_tasks / in_fence tracking with heading-boundary reset) line-for-line."""
     in_tasks = False
     in_fence = False
     lines: List[str] = []
@@ -192,12 +177,6 @@ def _extract_tasks_spine_lines(plan_text: str) -> List[str]:
 
 
 def _count_spine_nondeferred_rows(plan_text: str) -> int:
-    """Non-deferred `- id:` row count in the single ## Tasks fenced spine block.
-
-    Fail-open (returns 0) exactly as the oracle does: zero or more-than-one fenced
-    ```yaml plan-tasks``` blocks anywhere in the document, or an empty located
-    block, is malformed/absent — same as "no ledger table" did pre-repoint.
-    """
     fence_hits = _count_all_fence_opens(plan_text)
     spine_lines = _extract_tasks_spine_lines(plan_text)
     if fence_hits != 1 or not spine_lines:
@@ -223,10 +202,6 @@ def _count_spine_nondeferred_rows(plan_text: str) -> int:
     _flush()
     return total
 
-
-# ---------------------------------------------------------------------------
-# Unit 2 — session/agent-count resolution + signal evaluation
-# ---------------------------------------------------------------------------
 
 def _resolve_git_dir(near_path: str) -> Optional[str]:
     """Resolve the git-dir near `near_path`, falling back to resolving from the
@@ -362,8 +337,6 @@ def main(argv: List[str], *, script_dir: Optional[str] = None) -> int:
     try:
         plan_text = Path(plan_file).read_text(encoding="utf-8", errors="replace")
     except OSError:
-        # Fail-open, silently — mirrors the oracle's awk reading an unreadable
-        # file: no diagnostic, parallel_chunk_count resolves to 0 either way.
         return 0
 
     parallel_chunk_count = _count_spine_nondeferred_rows(plan_text)

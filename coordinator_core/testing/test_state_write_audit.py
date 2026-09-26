@@ -29,9 +29,6 @@ def test_module_never_installs_the_hook_on_import():
     assert swa.audit_hook_installed() is False
 
 
-# --- write-mode-char classification -----------------------------------
-
-
 def test_write_mode_chars_classify_as_write():
     for mode in ("w", "a", "x", "wb", "ab", "xb", "w+", "a+", "r+", "r+b"):
         record = swa.classify_event(
@@ -48,9 +45,6 @@ def test_read_mode_chars_are_not_a_write():
             "open", ("state/foo.txt", mode, None), [_CC_FRAME]
         )
         assert record is None, mode
-
-
-# --- O_* flag classification --------------------------------------------
 
 
 def test_write_flag_combinations_classify_as_write():
@@ -77,9 +71,6 @@ def test_o_rdonly_alone_is_not_a_write():
     assert record is None
 
 
-# --- os.rename ------------------------------------------------------------
-
-
 def test_os_rename_dst_under_state_is_a_write():
     record = swa.classify_event(
         "os.rename", ("/tmp/src.tmp", "state/foo.txt"), [_CC_FRAME]
@@ -96,9 +87,6 @@ def test_os_rename_dst_not_under_state_is_none():
     assert record is None
 
 
-# --- non-state paths --------------------------------------------------
-
-
 def test_non_state_path_is_none_even_for_a_write():
     record = swa.classify_event(
         "open", ("coordinator_core/foo.py", "w", None), [_CC_FRAME]
@@ -107,14 +95,10 @@ def test_non_state_path_is_none_even_for_a_write():
 
 
 def test_state_must_be_a_full_path_component():
-    # "reinstated" contains "state" as a substring, not a path component.
     record = swa.classify_event(
         "open", ("some/reinstated/foo.txt", "w", None), [_CC_FRAME]
     )
     assert record is None
-
-
-# --- unrelated events -------------------------------------------------
 
 
 def test_unrelated_event_is_none():
@@ -122,9 +106,6 @@ def test_unrelated_event_is_none():
         "os.remove", ("state/foo.txt",), [_CC_FRAME]
     )
     assert record is None
-
-
-# --- frame attribution --------------------------------------------------
 
 
 def test_attributes_to_innermost_and_outermost_coordinator_core_frame():
@@ -182,7 +163,6 @@ def test_atomic_append_and_replace_frames_are_never_attributed():
 
 
 def test_seam_frame_does_not_block_a_real_caller_above_it():
-    # innermost is the seam (excluded); the real writer is one frame out.
     record = swa.classify_event(
         "open",
         ("state/foo.txt", "w", None),
@@ -207,13 +187,7 @@ def test_non_coordinator_core_frame_is_excluded():
     assert record is None
 
 
-# --- pytest_addoption registers the CLI flag with the documented default ---
-
-
 def test_addoption_registers_expected_default(pytestconfig):
-    # The option is registered by this very test run only if the plugin is
-    # loaded with -p; when it is not, getoption() raises. Skip gracefully
-    # either way rather than asserting global test-run state.
     try:
         value = pytestconfig.getoption("state_write_audit_out")
     except (ValueError, LookupError):
@@ -225,6 +199,5 @@ def test_addoption_registers_expected_default(pytestconfig):
 
 
 def test_audit_hook_installed_reflects_module_state():
-    # Pure accessor; must not itself install anything.
     before = swa.audit_hook_installed()
     assert before in (True, False)
